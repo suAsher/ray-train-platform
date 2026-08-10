@@ -146,9 +146,106 @@ RayJob 渲染器以 `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` 这两个键�
 
 LocalQueue 由后端在提交任务时自动创建并绑定到 `kueue.clusterQueueName`，不需要手工建。
 
-## 8. 从 demo 模式切到生产模式
+## 8. 扩容：从 1 卡换成 3 台 8 卡
 
-当前部署是 `appEnv=development` + `demoMode=true` + `oidcRequired=false`，任何人不登录就是 `local` 租户的 SuperAdmin。切生产必须同时改这几项：
+**不需要重新部署平台，也不需要重新构建镜像。** 平台组件（API/前端/PostgreSQL）不占 GPU，扩容只涉及节点标签和配额三处配置。
+
+### 8.1 给新节点打标签
+
+Ray Pod 靠这个标签落到训练池，Kueue 的 ResourceFlavor 也用同一个标签：
+
+```bash
+kubectl label node <node-1> <node-2> <node-3> accelerator=nvidia-rtx-4090 --overwrite
+```
+
+如果新机器不是 4090，改用别的标签值，并同步改 `training.nodeSelector` 与 ResourceFlavor，两边必须一致。
+
+### 8.2 抬高 Kueue 配额
+
+当前是按 1 卡试验环境配的（`gpuQuota: 1`），必须改成实际容量：
+
+```bash
+kubectl patch clusterqueue cluster-gpu-queue --type=json -p='[{"op":"replace","path":"/spec/resourceGroups/0/flavors/0/resources","value":[{"name":"cpu","nominalQuota":"256"},{"name":"memory","nominalQuota":"1024Gi"},{"name":"nvidia.com/gpu","nominalQuota":"24"}]}]'
+```
+
+配额低于物理容量时，任务会一直卡在 `QUEUED` 而不报错——这是 Kueue 的正常行为，排查时先看这里。
+
+### 8.3 更新 Helm values
+
+```bash
+helm upgrade ray-platform ./helm/ray-train-platform -n ray-train-platform -f <你的 values> --set kueue.gpuQuota=24 --set kueue.cpuQuota=256 --set kueue.memoryQuota=1024Gi --set training.nodeSelector="accelerator=nvidia-rtx-4090" --wait
+```
+
+### 8.4 每个租户 namespace 补 Secret
+
+新租户或新 namespace 都要有 `tos-credentials`（见第 7 节），否则 Pod 停在 `CreateContainerConfigError`。
+
+### 8.5 移除旧的单卡节点
+
+先确认没有任务占用，再摘除：
+
+```bash
+kubectl drain 172.28.0.167 --ignore-daemonsets --delete-emptydir-data
+```
+
+平台自身的 Pod 目前用 `nodeSelector` 钉在这台机器上（`backend.nodeSelector`），摘除前要把这个约束改掉或去掉，否则 API 起不来。
+
+### 8.6 扩容后回归验证
+
+```bash
+API_URL=http://<portal> PLATFORM_PASSWORD=<密码> IMAGE=<镜像@sha256:...> python3 scripts/submit_smoke_job.py
+```
+
+再提交一个 3 worker × 8 卡的 24 卡任务，确认 Kueue 能一次性准入（gang scheduling），并实测多机 NCCL 带宽——这是 4090 集群最需要提前验证的一项，机间没有 RDMA 时通信会成为瓶颈。
+
+### 8.7 代码里仍然与规模相关的约束
+
+[backend/domain/training_job.go](../backend/domain/training_job.go) 对单任务规模有硬上限：worker ≤ 3、每 worker GPU ≤ 8、总卡数 ≤ 24。正好匹配目标硬件；**再往上扩容时需要改这三个数字并重新构建后端镜像**。
+
+---
+
+## 9. 正式版本发布流程
+
+调试完成后按语义化版本发布，不再用 `dev-*` 标签。
+
+### 9.1 提交并打标签
+
+```bash
+git add -A && git commit -m "feat: <变更说明>" && git tag -a v1.0.0 -m "V1 首个生产版本" && git push origin main --tags
+```
+
+### 9.2 构建带版本号的镜像
+
+```bash
+cd /root/ray-train-platform && BUILD_TARGETS=all IMAGE_TAG=v1.0.0 PUSH_IMAGE=true bash build-image.sh
+```
+
+脚本结束会打印每个镜像的 `@sha256` digest。**记录下来**：
+
+- `backend.image.tag` / `frontend.image.tag` 可以用 `v1.0.0`
+- `backend.workspaceImage` 和 `backend.sourceMaterializerImage` **必须**填 digest，后端的 `ValidatePinnedImage` 会拒绝可变 tag
+
+### 9.3 用版本号部署
+
+```bash
+helm upgrade ray-platform ./helm/ray-train-platform -n ray-train-platform -f values-prod.yaml --set backend.image.tag=v1.0.0 --set frontend.image.tag=v1.0.0 --wait --timeout 5m
+```
+
+### 9.4 记录发布信息
+
+每次发布把这些写进变更记录，便于回溯：集群与组件版本（VKE / KubeRay / Kueue）、四个镜像的 digest、GPU 驱动与 CUDA 版本、NCCL 实测带宽、PostgreSQL 备份恢复验证结果。
+
+回滚：
+
+```bash
+helm -n ray-train-platform rollback ray-platform
+```
+
+---
+
+## 10. 从 demo 模式切到生产模式
+
+当前部署是 `appEnv=development` + `demoMode=false` + `oidcRequired=false`，用本地账号登录。切生产需要改这几项：
 
 ```yaml
 backend:
