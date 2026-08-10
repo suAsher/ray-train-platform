@@ -31,25 +31,28 @@ type JobRepository interface {
 }
 
 type Handler struct {
-	repository       JobRepository
-	logs             LogProvider
-	metrics          MetricsProvider
-	allowAnonymous   bool
-	imageAllowlist   []string
-	gitAllowlist     []string
-	workspaces       WorkspaceStore
-	kubernetes       *k8s.Client
-	workspaceImage   string
-	rayVersion       string
-	serviceAccount   string
-	imagePullSecrets []string
-	idcClaim         string
-	idcMountPath     string
-	clusterQueue     string
-	admin            AdminStore
-	quota            QuotaStore
-	newID            func() (string, error)
-	submission       *SubmissionService
+	repository           JobRepository
+	logs                 LogProvider
+	metrics              MetricsProvider
+	allowAnonymous       bool
+	imageAllowlist       []string
+	gitAllowlist         []string
+	workspaces           WorkspaceStore
+	kubernetes           *k8s.Client
+	workspaceImage       string
+	rayVersion           string
+	serviceAccount       string
+	imagePullSecrets     []string
+	idcClaim             string
+	idcMountPath         string
+	clusterQueue         string
+	admin                AdminStore
+	quota                QuotaStore
+	workspacePepper      []byte
+	trainingNodeSelector map[string]string
+	workspaceUpstream    func(*domain.DevWorkspace) string
+	newID                func() (string, error)
+	submission           *SubmissionService
 }
 
 type LogProvider interface {
@@ -61,26 +64,28 @@ type MetricsProvider interface {
 }
 
 type Options struct {
-	AllowAnonymous    bool
-	Logs              LogProvider
-	Metrics           MetricsProvider
-	ImageAllowlist    []string
-	GitAllowlist      []string
-	Workspaces        WorkspaceStore
-	Kubernetes        *k8s.Client
-	WorkspaceImage    string
-	RayVersion        string
-	ServiceAccount    string
-	ImagePullSecrets  []string
-	IDCClaim          string
-	IDCMountPath      string
-	KueueClusterQueue string
-	Admin             AdminStore
-	Quota             QuotaStore
+	AllowAnonymous       bool
+	Logs                 LogProvider
+	Metrics              MetricsProvider
+	ImageAllowlist       []string
+	GitAllowlist         []string
+	Workspaces           WorkspaceStore
+	Kubernetes           *k8s.Client
+	WorkspaceImage       string
+	RayVersion           string
+	ServiceAccount       string
+	ImagePullSecrets     []string
+	IDCClaim             string
+	IDCMountPath         string
+	KueueClusterQueue    string
+	Admin                AdminStore
+	Quota                QuotaStore
+	WorkspacePepper      []byte
+	TrainingNodeSelector map[string]string
 }
 
 func NewHandler(repository JobRepository, options Options) *Handler {
-	handler := &Handler{repository: repository, logs: options.Logs, metrics: options.Metrics, allowAnonymous: options.AllowAnonymous, imageAllowlist: append([]string(nil), options.ImageAllowlist...), gitAllowlist: append([]string(nil), options.GitAllowlist...), workspaces: options.Workspaces, kubernetes: options.Kubernetes, workspaceImage: options.WorkspaceImage, rayVersion: options.RayVersion, serviceAccount: options.ServiceAccount, imagePullSecrets: append([]string(nil), options.ImagePullSecrets...), idcClaim: options.IDCClaim, idcMountPath: options.IDCMountPath, clusterQueue: options.KueueClusterQueue, admin: options.Admin, quota: options.Quota, newID: newJobID}
+	handler := &Handler{repository: repository, logs: options.Logs, metrics: options.Metrics, allowAnonymous: options.AllowAnonymous, imageAllowlist: append([]string(nil), options.ImageAllowlist...), gitAllowlist: append([]string(nil), options.GitAllowlist...), workspaces: options.Workspaces, kubernetes: options.Kubernetes, workspaceImage: options.WorkspaceImage, rayVersion: options.RayVersion, serviceAccount: options.ServiceAccount, imagePullSecrets: append([]string(nil), options.ImagePullSecrets...), idcClaim: options.IDCClaim, idcMountPath: options.IDCMountPath, clusterQueue: options.KueueClusterQueue, admin: options.Admin, quota: options.Quota, workspacePepper: append([]byte(nil), options.WorkspacePepper...), trainingNodeSelector: options.TrainingNodeSelector, newID: newJobID}
 	handler.submission = NewSubmissionService(repository, SubmissionServiceOptions{
 		ImageAllowlist: handler.imageAllowlist,
 		GitAllowlist:   handler.gitAllowlist,
@@ -99,6 +104,7 @@ func NewHandler(repository JobRepository, options Options) *Handler {
 type WorkspaceStore interface {
 	CreateWorkspace(context.Context, *domain.DevWorkspace, int64) error
 	GetWorkspace(context.Context, string, string) (*domain.DevWorkspace, error)
+	GetWorkspaceByUser(context.Context, string) (*domain.DevWorkspace, error)
 	UpdateWorkspaceState(context.Context, string, string, domain.WorkspaceState) error
 }
 

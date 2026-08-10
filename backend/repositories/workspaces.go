@@ -36,10 +36,30 @@ func (r *GormRepository) CreateWorkspace(ctx context.Context, workspace *domain.
 		return fmt.Errorf("workspace identity is required")
 	}
 	record := WorkspaceRecord{ID: workspace.ID, TenantID: workspace.TenantID, UserID: workspace.UserID, Name: workspace.Name, Namespace: workspace.Namespace, RayClusterName: workspace.RayClusterName, JupyterService: workspace.RayClusterName + "-head-svc", ObservedState: string(workspace.State), GPUCount: workspace.GPUCount, IdleTTLSeconds: idleTTLSeconds, ExpiresAt: workspace.ExpiresAt, SnapshotID: workspace.SnapshotID}
-	if err := r.db.WithContext(ctx).Create(&record).Error; err != nil {
-		return fmt.Errorf("create workspace: %w", err)
-	}
-	return nil
+	// dev_workspaces is unique per (tenant, user). A stopped or failed row is
+	// spent and must give way to the new launch, otherwise a user who stops
+	// their environment can never start another one. A live one is kept:
+	// replacing it would orphan its RayCluster and leak the GPU.
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing WorkspaceRecord
+		err := tx.Where("tenant_id = ? AND user_id = ?", workspace.TenantID, workspace.UserID).First(&existing).Error
+		switch {
+		case err == nil:
+			state := domain.WorkspaceState(existing.ObservedState)
+			if state != domain.WorkspaceStopped && state != domain.WorkspaceFailed {
+				return fmt.Errorf("a workspace is already active for this user")
+			}
+			if err := tx.Where("id = ?", existing.ID).Delete(&WorkspaceRecord{}).Error; err != nil {
+				return fmt.Errorf("clear stopped workspace: %w", err)
+			}
+		case !errors.Is(err, gorm.ErrRecordNotFound):
+			return fmt.Errorf("look up existing workspace: %w", err)
+		}
+		if err := tx.Create(&record).Error; err != nil {
+			return fmt.Errorf("create workspace: %w", err)
+		}
+		return nil
+	})
 }
 
 func (r *GormRepository) GetWorkspace(ctx context.Context, tenantID, userID string) (*domain.DevWorkspace, error) {
@@ -49,6 +69,17 @@ func (r *GormRepository) GetWorkspace(ctx context.Context, tenantID, userID stri
 			return nil, fmt.Errorf("workspace not found")
 		}
 		return nil, fmt.Errorf("get workspace: %w", err)
+	}
+	return record.toDomain(), nil
+}
+
+// GetWorkspaceByUser looks a workspace up by owner alone. The JupyterLab proxy
+// authorises with a workspace-scoped token that carries the user but not the
+// tenant, and the tenant is implied by the owner.
+func (r *GormRepository) GetWorkspaceByUser(ctx context.Context, userID string) (*domain.DevWorkspace, error) {
+	var record WorkspaceRecord
+	if err := r.db.WithContext(ctx).Where("user_id = ?", userID).Order("created_at DESC").First(&record).Error; err != nil {
+		return nil, fmt.Errorf("get workspace by user: %w", err)
 	}
 	return record.toDomain(), nil
 }

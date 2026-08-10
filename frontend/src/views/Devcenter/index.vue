@@ -10,12 +10,12 @@
           <p class="text-xs text-slate-400 mt-1">在单张 RTX 4090 上快速调通代码、验证 Loss 与模型逻辑；训练前请准备一个已写入 IDC 的不可变快照 ID。</p>
         </div>
 
-        <el-tag type="success">多租户隔离: Keycloak 当前租户</el-tag>
+        <el-tag type="success">多租户隔离：按当前登录租户</el-tag>
       </div>
 
       <el-form label-width="140px" label-position="left">
         <el-form-item label="登录用户">
-          <el-input value="由 Keycloak 当前会话确定" disabled />
+          <el-input :value="sessionLabel" disabled />
         </el-form-item>
 
         <el-form-item label="单卡调试资源">
@@ -51,9 +51,9 @@
 
       <!-- Actions: Open Jupyter OR Conversion to Distributed Job -->
       <div class="flex items-center justify-between pt-2">
-        <a :href="workspace.jupyter_url" target="_blank">
-          <el-button type="warning" icon="Link" class="!rounded-xl">打开在线 JupyterLab Web 调试界面</el-button>
-        </a>
+        <el-button type="warning" icon="Link" class="!rounded-xl" :loading="openingJupyter" @click="openJupyter">
+          打开在线 JupyterLab Web 调试界面
+        </el-button>
         <el-button type="danger" plain icon="CircleClose" @click="stopDev">停止工作区</el-button>
 
         <!-- THE KEY ONE-CLICK CONVERSION BUTTON -->
@@ -66,13 +66,39 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { apiGet, apiPost, apiDelete } from '../../api/client'
+import { session } from '../../stores/session'
 
 const router = useRouter()
 const workspace = ref(null)
+const openingJupyter = ref(false)
+const sessionLabel = computed(() => {
+  const user = session.value
+  return user ? `${user.username}（租户 ${user.tenantId}）` : '未登录'
+})
+
+/**
+ * JupyterLab opens in a new tab, and a plain navigation cannot carry the
+ * bearer token. Ask the API for a short-lived signed URL instead; the proxy
+ * exchanges it for a path-scoped cookie so Jupyter's own asset requests stay
+ * authorised.
+ */
+const openJupyter = async () => {
+  if (!workspace.value?.id) return
+  openingJupyter.value = true
+  try {
+    const { url } = await apiPost(`/api/v1/dev-workspaces/${workspace.value.id}/access`, {})
+    const separator = url.includes('?') ? '&' : '?'
+    window.open(`${url}${separator}subject=${encodeURIComponent(session.value?.subject || '')}`, '_blank', 'noopener')
+  } catch (error) {
+    ElMessage.error(error.message || '无法打开调试界面')
+  } finally {
+    openingJupyter.value = false
+  }
+}
 const snapshotId = ref('')
 
 const normalizeWorkspace = (value) => ({

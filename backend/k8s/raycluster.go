@@ -80,6 +80,7 @@ func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderO
 	if pullSecrets := renderImagePullSecrets(options.ImagePullSecrets); len(pullSecrets) > 0 {
 		head["template"].(map[string]any)["spec"].(map[string]any)["imagePullSecrets"] = pullSecrets
 	}
+	head["template"].(map[string]any)["spec"].(map[string]any)["nodeSelector"] = trainingNodeSelector(RenderOptions{NodeSelector: options.NodeSelector})
 	if options.ServiceAccount == "" {
 		delete(head["template"].(map[string]any)["spec"].(map[string]any), "serviceAccountName")
 	}
