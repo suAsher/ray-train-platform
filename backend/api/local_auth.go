@@ -1,0 +1,335 @@
+package api
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"ray-train-platform-backend/auth"
+	"ray-train-platform-backend/domain"
+	"ray-train-platform-backend/httpapi"
+)
+
+const (
+	maxLoginAttempts   = 5
+	loginLockoutWindow = 5 * time.Minute
+
+	// dummyPasswordHash is a valid bcrypt hash of an unguessable value. It is
+	// compared against when the username does not exist so that the failure
+	// path costs the same as a real password check.
+	dummyPasswordHash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
+)
+
+type LocalAuthStore interface {
+	FindLocalUserByUsername(ctx context.Context, username string) (domain.LocalUser, error)
+	CreateLocalUser(ctx context.Context, user domain.LocalUser) error
+	CountLocalUsers(ctx context.Context) (int64, error)
+	ListLocalUsers(ctx context.Context) ([]domain.LocalUser, error)
+	SetLocalUserPassword(ctx context.Context, userID, passwordHash string) error
+	CreateLocalSession(ctx context.Context, session domain.LocalSession, digest string) error
+	RevokeLocalSession(ctx context.Context, publicID string, revokedAt time.Time) error
+	EnsureIdentity(ctx context.Context, principal auth.Principal) error
+}
+
+type LocalAuthOptions struct {
+	Store           LocalAuthStore
+	Pepper          []byte
+	SessionLifetime time.Duration
+	Enabled         bool
+	OIDCConfigured  bool
+}
+
+type LocalAuthHandler struct {
+	store           LocalAuthStore
+	pepper          []byte
+	sessionLifetime time.Duration
+	enabled         bool
+	oidcConfigured  bool
+	attempts        *loginThrottle
+	newID           func() (string, error)
+	now             func() time.Time
+}
+
+func NewLocalAuthHandler(options LocalAuthOptions) *LocalAuthHandler {
+	lifetime := options.SessionLifetime
+	if lifetime <= 0 {
+		lifetime = 12 * time.Hour
+	}
+	return &LocalAuthHandler{
+		store: options.Store, pepper: append([]byte(nil), options.Pepper...),
+		sessionLifetime: lifetime, enabled: options.Enabled, oidcConfigured: options.OIDCConfigured,
+		attempts: newLoginThrottle(), newID: newRandomID, now: time.Now,
+	}
+}
+
+// RegisterPublicRoutes mounts endpoints that must be reachable before the
+// caller holds any credential.
+func (h *LocalAuthHandler) RegisterPublicRoutes(group *gin.RouterGroup) {
+	group.GET("/auth/providers", h.listProviders)
+	group.POST("/auth/login", h.login)
+}
+
+func (h *LocalAuthHandler) RegisterAuthenticatedRoutes(group *gin.RouterGroup) {
+	group.POST("/auth/logout", h.logout)
+	group.POST("/auth/password", h.changePassword)
+}
+
+type loginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type loginResponse struct {
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expiresAt"`
+	Username  string    `json:"username"`
+	TenantID  string    `json:"tenantId"`
+	Roles     []string  `json:"roles"`
+}
+
+func (h *LocalAuthHandler) listProviders(c *gin.Context) {
+	writeAuthSuccess(c, http.StatusOK, map[string]bool{"local": h.enabled, "oidc": h.oidcConfigured})
+}
+
+func (h *LocalAuthHandler) login(c *gin.Context) {
+	if !h.enabled || h.store == nil {
+		writeAuthError(c, http.StatusNotFound, "LOCAL_LOGIN_DISABLED", "local login is not enabled")
+		return
+	}
+	var request loginRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		writeAuthError(c, http.StatusBadRequest, "INVALID_JSON", "request body is invalid")
+		return
+	}
+	username := domain.NormalizeUsername(request.Username)
+	if username == "" || request.Password == "" {
+		writeAuthError(c, http.StatusBadRequest, "MISSING_CREDENTIALS", "username and password are required")
+		return
+	}
+	if !h.attempts.allow(username, h.now()) {
+		writeAuthError(c, http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "too many failed sign-in attempts, try again later")
+		return
+	}
+
+	user, lookupErr := h.store.FindLocalUserByUsername(c.Request.Context(), username)
+	// Always spend the bcrypt comparison, even when the account does not exist,
+	// so response timing cannot be used to enumerate usernames. The same
+	// generic error is returned for every failure reason.
+	passwordHash := user.PasswordHash
+	if lookupErr != nil {
+		passwordHash = dummyPasswordHash
+	}
+	passwordMatches := domain.VerifyPassword(passwordHash, request.Password)
+	if lookupErr != nil || user.Disabled || !passwordMatches {
+		h.attempts.fail(username, h.now())
+		writeAuthError(c, http.StatusUnauthorized, "INVALID_CREDENTIALS", "invalid username or password")
+		return
+	}
+	h.attempts.reset(username)
+
+	principal := auth.Principal{
+		Subject: user.ID, Username: user.Username, Email: user.Email,
+		TenantID: user.TenantID, Roles: user.Roles, AuthType: auth.AuthTypeLocal,
+	}
+	if err := h.store.EnsureIdentity(c.Request.Context(), principal); err != nil {
+		writeAuthError(c, http.StatusInternalServerError, "IDENTITY_PERSIST_FAILED", "could not persist identity")
+		return
+	}
+
+	sessionID, err := h.newID()
+	if err != nil {
+		writeAuthError(c, http.StatusInternalServerError, "ID_GENERATION_FAILED", "could not allocate session id")
+		return
+	}
+	issued, err := domain.IssueLocalSession(sessionID, user.ID, user.TenantID, h.sessionLifetime, h.pepper, h.now())
+	if err != nil {
+		writeAuthError(c, http.StatusInternalServerError, "SESSION_ISSUE_FAILED", "could not issue session")
+		return
+	}
+	if err := h.store.CreateLocalSession(c.Request.Context(), issued.LocalSession, issued.Digest); err != nil {
+		writeAuthError(c, http.StatusInternalServerError, "SESSION_PERSIST_FAILED", "could not persist session")
+		return
+	}
+
+	writeAuthSuccess(c, http.StatusOK, loginResponse{
+		Token: issued.Token, ExpiresAt: issued.ExpiresAt, Username: user.Username,
+		TenantID: user.TenantID, Roles: user.Roles,
+	})
+}
+
+func (h *LocalAuthHandler) logout(c *gin.Context) {
+	principal, ok := auth.PrincipalFromGin(c)
+	if !ok || principal.AuthType != auth.AuthTypeLocal {
+		writeAuthSuccess(c, http.StatusOK, map[string]bool{"loggedOut": true})
+		return
+	}
+	rawToken, err := auth.ExtractBearer(c.GetHeader("Authorization"))
+	if err != nil {
+		writeAuthError(c, http.StatusBadRequest, "INVALID_AUTHORIZATION", "authorization header is invalid")
+		return
+	}
+	publicID, err := domain.ParseLocalSessionPublicID(rawToken)
+	if err != nil {
+		writeAuthError(c, http.StatusBadRequest, "INVALID_SESSION", "session token is invalid")
+		return
+	}
+	if err := h.store.RevokeLocalSession(c.Request.Context(), publicID, h.now().UTC()); err != nil {
+		writeAuthError(c, http.StatusInternalServerError, "LOGOUT_FAILED", "could not revoke session")
+		return
+	}
+	writeAuthSuccess(c, http.StatusOK, map[string]bool{"loggedOut": true})
+}
+
+type changePasswordRequest struct {
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
+}
+
+func (h *LocalAuthHandler) changePassword(c *gin.Context) {
+	principal, ok := auth.PrincipalFromGin(c)
+	if !ok || principal.AuthType != auth.AuthTypeLocal {
+		writeAuthError(c, http.StatusForbidden, "LOCAL_SESSION_REQUIRED", "a local login is required to change the password")
+		return
+	}
+	var request changePasswordRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		writeAuthError(c, http.StatusBadRequest, "INVALID_JSON", "request body is invalid")
+		return
+	}
+	user, err := h.store.FindLocalUserByUsername(c.Request.Context(), principal.Username)
+	if err != nil || !domain.VerifyPassword(user.PasswordHash, request.CurrentPassword) {
+		writeAuthError(c, http.StatusUnauthorized, "INVALID_CREDENTIALS", "current password is incorrect")
+		return
+	}
+	hash, err := domain.HashPassword(request.NewPassword)
+	if err != nil {
+		writeAuthError(c, http.StatusBadRequest, "WEAK_PASSWORD", err.Error())
+		return
+	}
+	if err := h.store.SetLocalUserPassword(c.Request.Context(), user.ID, hash); err != nil {
+		writeAuthError(c, http.StatusInternalServerError, "PASSWORD_UPDATE_FAILED", "could not update password")
+		return
+	}
+	writeAuthSuccess(c, http.StatusOK, map[string]bool{"updated": true})
+}
+
+// EnsureBootstrapAdmin creates the first administrator when the local user
+// table is empty, so a fresh deployment is reachable without an external IdP.
+// It never rewrites an existing account, so restarting the API cannot reset a
+// password that an operator has since changed.
+func EnsureBootstrapAdmin(ctx context.Context, store LocalAuthStore, username, password, tenantID string) (bool, error) {
+	if store == nil || strings.TrimSpace(password) == "" {
+		return false, nil
+	}
+	count, err := store.CountLocalUsers(ctx)
+	if err != nil {
+		return false, fmt.Errorf("count local users: %w", err)
+	}
+	if count > 0 {
+		return false, nil
+	}
+	username = domain.NormalizeUsername(username)
+	if username == "" {
+		username = "admin"
+	}
+	if tenantID == "" {
+		tenantID = "local"
+	}
+	hash, err := domain.HashPassword(password)
+	if err != nil {
+		return false, fmt.Errorf("hash bootstrap password: %w", err)
+	}
+	id, err := newRandomID()
+	if err != nil {
+		return false, err
+	}
+	principal := auth.Principal{
+		Subject: id, Username: username, TenantID: tenantID,
+		Roles: []string{domain.RoleSuperAdmin}, AuthType: auth.AuthTypeLocal,
+	}
+	if err := store.EnsureIdentity(ctx, principal); err != nil {
+		return false, fmt.Errorf("ensure bootstrap tenant: %w", err)
+	}
+	user := domain.LocalUser{
+		ID: id, Username: username, TenantID: tenantID,
+		Roles: []string{domain.RoleSuperAdmin}, PasswordHash: hash,
+	}
+	if err := store.CreateLocalUser(ctx, user); err != nil {
+		return false, fmt.Errorf("create bootstrap admin: %w", err)
+	}
+	return true, nil
+}
+
+// loginThrottle slows down password guessing by locking a username out after
+// repeated failures. It is per-process, which is sufficient for the small
+// replica counts this platform runs.
+type loginThrottle struct {
+	mutex   sync.Mutex
+	entries map[string]*throttleEntry
+}
+
+type throttleEntry struct {
+	failures  int
+	lockedTil time.Time
+}
+
+func newLoginThrottle() *loginThrottle {
+	return &loginThrottle{entries: make(map[string]*throttleEntry)}
+}
+
+func (t *loginThrottle) allow(username string, now time.Time) bool {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+	entry, ok := t.entries[username]
+	if !ok {
+		return true
+	}
+	return !entry.lockedTil.After(now)
+}
+
+func (t *loginThrottle) fail(username string, now time.Time) {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+	entry, ok := t.entries[username]
+	if !ok {
+		entry = &throttleEntry{}
+		t.entries[username] = entry
+	}
+	entry.failures++
+	if entry.failures >= maxLoginAttempts {
+		entry.lockedTil = now.Add(loginLockoutWindow)
+		entry.failures = 0
+	}
+}
+
+func (t *loginThrottle) reset(username string) {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+	delete(t.entries, username)
+}
+
+func newRandomID() (string, error) {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return "", fmt.Errorf("generate id: %w", err)
+	}
+	return hex.EncodeToString(value), nil
+}
+
+// Sign-in responses carry credentials, so they must never be cached by a
+// browser or an intermediate proxy.
+func writeAuthSuccess(c *gin.Context, status int, data any) {
+	c.Header("Cache-Control", "no-store")
+	c.JSON(status, httpapi.Success(httpapi.RequestID(c.GetHeader("X-Request-ID")), data))
+}
+
+func writeAuthError(c *gin.Context, status int, code, message string) {
+	c.Header("Cache-Control", "no-store")
+	c.AbortWithStatusJSON(status, httpapi.Failure[any](httpapi.RequestID(c.GetHeader("X-Request-ID")), code, message))
+}

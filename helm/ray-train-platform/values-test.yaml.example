@@ -1,0 +1,79 @@
+# Non-production single-GPU smoke profile.
+# Copy this file, replace all image placeholders with immutable digests, and
+# use kubectl port-forward instead of exposing an Ingress.
+namespace: ray-train-platform
+
+global:
+  imagePullPolicy: IfNotPresent
+  imageRegistry: cr-cn-beijing.volces.com/ray-platform
+  imagePullSecrets: []
+
+backend:
+  replicaCount: 1
+  appEnv: development
+  oidcRequired: false
+  demoMode: true
+  sourceArtifactsEnabled: true
+  image:
+    repository: ray-train-backend
+    tag: "REPLACE_WITH_BACKEND_TAG"
+  database:
+    existingSecret: ray-platform-postgres
+    secretKey: DATABASE_URL
+  oidc:
+    issuerURL: "https://keycloak.test.invalid/realms/ai"
+    clientID: ray-training-platform-test
+    audience: ray-training-platform-api
+    groupPrefix: platform/tenants/
+  lokiURL: "http://loki.loki.svc.cluster.local:3100"
+  prometheusURL: "http://prometheus.monitoring.svc.cluster.local:9090"
+  imageAllowlist:
+    - cr-cn-beijing.volces.com/ray-platform/ray-test
+  gitAllowlist:
+    - github.com
+  workspaceImage: "REPLACE_WITH_WORKSPACE_IMAGE_DIGEST"
+  sourceMaterializerImage: "REPLACE_WITH_SOURCE_MATERIALIZER_IMAGE_DIGEST"
+  rayVersion: "2.35.0"
+  rayJobClusterSpecField: rayClusterSpec
+  rayJobServiceAccount: ""
+
+migrations:
+  enabled: true
+
+frontend:
+  replicaCount: 1
+  image:
+    repository: ray-train-frontend
+    tag: "REPLACE_WITH_FRONTEND_TAG"
+  runtimeConfig:
+    authRequired: false
+    keycloakURL: "https://keycloak.test.invalid"
+    keycloakRealm: ai
+    keycloakClientID: ray-training-platform-test
+
+ingress:
+  enabled: false
+
+kueue:
+  enabled: false
+  clusterQueueName: cluster-gpu-queue
+  resourceFlavorName: gpu-4090-flavor
+  gpuQuota: 1
+  cpuQuota: 16
+  memoryQuota: 64Gi
+
+storage:
+  enabled: false
+  existingClaim: ""
+
+networkPolicy:
+  enabled: false
+
+availability:
+  pdbEnabled: false
+  minAvailable: 1
+
+tos:
+  endpoint: ""
+  bucket: ""
+  secretName: ""

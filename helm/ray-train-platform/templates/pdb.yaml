@@ -1,0 +1,23 @@
+{{- if .Values.availability.pdbEnabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ray-train-backend
+  namespace: {{ .Values.namespace }}
+spec:
+  minAvailable: {{ .Values.availability.minAvailable }}
+  selector:
+    matchLabels:
+      app: ray-train-backend
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ray-train-frontend
+  namespace: {{ .Values.namespace }}
+spec:
+  minAvailable: {{ .Values.availability.minAvailable }}
+  selector:
+    matchLabels:
+      app: ray-train-frontend
+{{- end }}

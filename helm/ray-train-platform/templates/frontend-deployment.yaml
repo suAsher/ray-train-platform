@@ -1,0 +1,103 @@
+{{- if contains "REPLACE_WITH" .Values.frontend.image.tag }}{{- fail "frontend.image.tag must be replaced with an immutable release tag or digest" }}{{- end }}
+{{- /* Keycloak is optional: a deployment may run on local accounts alone. It is
+only validated when the Portal is configured to require SSO. */}}
+{{- if .Values.frontend.runtimeConfig.authRequired }}
+{{- if contains "example" .Values.frontend.runtimeConfig.keycloakURL }}{{- fail "frontend.runtimeConfig.keycloakURL must point to the organization's Keycloak when authRequired is true" }}{{- end }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ray-train-frontend-runtime
+  namespace: {{ .Values.namespace }}
+data:
+  runtime-config.js: |
+    window.__RAY_PLATFORM_CONFIG__ = {
+      authRequired: {{ .Values.frontend.runtimeConfig.authRequired }},
+      keycloakURL: {{ .Values.frontend.runtimeConfig.keycloakURL | quote }},
+      keycloakRealm: {{ .Values.frontend.runtimeConfig.keycloakRealm | quote }},
+      keycloakClientID: {{ .Values.frontend.runtimeConfig.keycloakClientID | quote }}
+    };
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ray-train-frontend
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: ray-train-frontend
+spec:
+  replicas: {{ .Values.frontend.replicaCount }}
+  selector:
+    matchLabels:
+      app: ray-train-frontend
+  template:
+    metadata:
+      labels:
+        app: ray-train-frontend
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: ray-train-frontend
+      {{- with .Values.frontend.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: frontend
+          image: "{{ .Values.global.imageRegistry }}/{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: 8080
+              name: http
+          volumeMounts:
+            - name: runtime-config
+              mountPath: /usr/share/nginx/html/runtime-config.js
+              subPath: runtime-config.js
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.frontend.resources | nindent 12 }}
+      volumes:
+        - name: runtime-config
+          configMap:
+            name: ray-train-frontend-runtime
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ray-train-frontend
+  namespace: {{ .Values.namespace }}
+spec:
+  type: {{ .Values.frontend.service.type }}
+  ports:
+    - port: {{ .Values.frontend.service.port }}
+      targetPort: http
+      name: http
+  selector:
+    app: ray-train-frontend

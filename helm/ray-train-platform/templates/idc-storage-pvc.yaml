@@ -1,0 +1,3 @@
+{{- if and .Values.storage.enabled (eq .Values.storage.existingClaim "") }}
+{{- fail "storage.existingClaim must reference an existing RWX PVC; V1 never provisions or mounts arbitrary hostPath" }}
+{{- end }}

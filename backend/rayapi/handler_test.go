@@ -1,0 +1,317 @@
+package rayapi
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"ray-train-platform-backend/api"
+	"ray-train-platform-backend/auth"
+	"ray-train-platform-backend/domain"
+	"ray-train-platform-backend/objectstore"
+	"ray-train-platform-backend/observability"
+	"ray-train-platform-backend/repositories"
+)
+
+type rayTestRepository struct {
+	jobs      []domain.TrainingJob
+	artifacts map[string]domain.SourceArtifact
+	created   *domain.TrainingJob
+	identity  int
+	canceled  string
+	reopens   int
+	limits    repositories.SourceArtifactLimits
+}
+
+func (repository *rayTestRepository) Create(_ context.Context, job *domain.TrainingJob, _ string) error {
+	copy := *job
+	repository.jobs = append(repository.jobs, copy)
+	repository.created = &copy
+	return nil
+}
+
+func (repository *rayTestRepository) Get(_ context.Context, tenantID, id string) (*domain.TrainingJob, error) {
+	for _, job := range repository.jobs {
+		if job.TenantID == tenantID && (job.ID == id || job.ExternalSubmissionID == id) {
+			copy := job
+			return &copy, nil
+		}
+	}
+	return nil, repositories.ErrSourceArtifactNotFound
+}
+
+func (repository *rayTestRepository) List(_ context.Context, filter domain.JobFilter) (domain.Page[domain.TrainingJob], error) {
+	items := make([]domain.TrainingJob, 0, len(repository.jobs))
+	for _, job := range repository.jobs {
+		if job.TenantID == filter.TenantID {
+			items = append(items, job)
+		}
+	}
+	limit := filter.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 200
+	}
+	start := filter.Offset
+	if start < 0 {
+		start = 0
+	}
+	if start > len(items) {
+		start = len(items)
+	}
+	end := start + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	return domain.Page[domain.TrainingJob]{Items: items[start:end], Limit: limit, Offset: start, Total: int64(len(items))}, nil
+}
+
+func (repository *rayTestRepository) SetDesiredState(_ context.Context, tenantID, id string, state domain.DesiredState) error {
+	for index, job := range repository.jobs {
+		if job.TenantID == tenantID && (job.ID == id || job.ExternalSubmissionID == id) {
+			repository.jobs[index].DesiredState = state
+			repository.canceled = tenantID + "/" + id
+			return nil
+		}
+	}
+	return repositories.ErrSourceArtifactNotFound
+}
+
+func (repository *rayTestRepository) EnsureIdentity(context.Context, auth.Principal) error {
+	repository.identity++
+	return nil
+}
+
+func (repository *rayTestRepository) CreateOrReuseSourceArtifactWithLimits(_ context.Context, artifact *domain.SourceArtifact, _ repositories.SourceArtifactLimits) (*domain.SourceArtifact, error) {
+	if repository.artifacts == nil {
+		repository.artifacts = make(map[string]domain.SourceArtifact)
+	}
+	for _, existing := range repository.artifacts {
+		if existing.TenantID == artifact.TenantID && existing.UserID == artifact.UserID && existing.SHA256 == artifact.SHA256 {
+			copy := existing
+			return &copy, nil
+		}
+	}
+	copy := *artifact
+	repository.artifacts[artifact.ID] = copy
+	return &copy, nil
+}
+
+func (repository *rayTestRepository) GetSourceArtifact(_ context.Context, tenantID, userID, artifactID string) (*domain.SourceArtifact, error) {
+	artifact, ok := repository.artifacts[artifactID]
+	if !ok || artifact.TenantID != tenantID || artifact.UserID != userID {
+		return nil, repositories.ErrSourceArtifactNotFound
+	}
+	copy := artifact
+	return &copy, nil
+}
+
+func (repository *rayTestRepository) MarkSourceArtifactReady(_ context.Context, tenantID, userID, artifactID string, completedAt time.Time) (*domain.SourceArtifact, error) {
+	artifact, err := repository.GetSourceArtifact(context.Background(), tenantID, userID, artifactID)
+	if err != nil {
+		return nil, err
+	}
+	ready, err := artifact.MarkReady(completedAt)
+	if err != nil {
+		return nil, err
+	}
+	repository.artifacts[artifactID] = ready
+	return &ready, nil
+}
+
+type rayTestStore struct {
+	objects map[string]objectstore.ObjectInfo
+	putErr  error
+	putBody []byte
+}
+
+func (store *rayTestStore) PresignPut(context.Context, string, string, int64, time.Duration) (objectstore.PresignedPut, error) {
+	return objectstore.PresignedPut{}, errors.New("not used")
+}
+
+func (store *rayTestStore) Head(_ context.Context, key string) (objectstore.ObjectInfo, error) {
+	info, ok := store.objects[key]
+	if !ok {
+		return objectstore.ObjectInfo{}, objectstore.ErrNotFound
+	}
+	return info, nil
+}
+
+func (store *rayTestStore) Put(_ context.Context, key, digest string, sizeBytes int64, body io.Reader) error {
+	if store.putErr != nil {
+		return store.putErr
+	}
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return err
+	}
+	store.putBody = append([]byte(nil), data...)
+	if store.objects == nil {
+		store.objects = make(map[string]objectstore.ObjectInfo)
+	}
+	store.objects[key] = objectstore.ObjectInfo{SizeBytes: sizeBytes, Metadata: map[string]string{"sha256": digest}}
+	return nil
+}
+
+func rayRouter(t *testing.T, repository *rayTestRepository, store *rayTestStore, principal auth.Principal) *gin.Engine {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	submission := api.NewSubmissionService(repository, api.SubmissionServiceOptions{NewID: func() (string, error) { return "job-ray", nil }})
+	handler, err := NewHandler(repository, store, submission, Options{SpoolDir: t.TempDir(), Logs: &recoveryLogs{lines: []observability.LogLine{{Line: "ray-sdk-log-marker"}}}, Now: func() time.Time { return time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC) }})
+	if err != nil {
+		t.Fatalf("new Ray API handler: %v", err)
+	}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("ray-platform-principal", principal)
+		c.Next()
+	})
+	handler.RegisterRoutes(router.Group("/ray"))
+	return router
+}
+
+func rayRequest(router http.Handler, method, path, body string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	if body != "" {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	return response
+}
+
+func raySubmitBody(packageName string) string {
+	return `{"entrypoint":"python train.py","submission_id":"raysubmit_test","runtime_env":{"working_dir":"gcs://` + packageName + `"},"metadata":{"ray-platform.image":"` + testImageDigest + `","ray-platform.worker-replicas":"1","ray-platform.gpus-per-worker":"1","ray-platform.cpu-per-worker":"8","ray-platform.memory-per-worker":"32Gi","ray-platform.queue":"tenant-a-gpu"}}`
+}
+
+func TestRayRoutesReturnRay235VersionAndFieldNames(t *testing.T) {
+	principal := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{"Engineer"}, AuthType: auth.AuthTypeOIDC}
+	response := rayRequest(rayRouter(t, &rayTestRepository{}, &rayTestStore{}, principal), http.MethodGet, "/ray/api/version", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("version status=%d body=%s", response.Code, response.Body.String())
+	}
+	var version map[string]string
+	if err := json.Unmarshal(response.Body.Bytes(), &version); err != nil {
+		t.Fatal(err)
+	}
+	if version["version"] != "2.35.0" || version["ray_version"] != "2.35.0" {
+		t.Fatalf("unexpected version response: %v", version)
+	}
+}
+
+func TestRayPackagePutHeadAndSubmitAreOwnerScoped(t *testing.T) {
+	principal := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{"Engineer"}, AuthType: auth.AuthTypeOIDC}
+	repository := &rayTestRepository{}
+	store := &rayTestStore{}
+	router := rayRouter(t, repository, store, principal)
+	packageName := testPackageSHA256 + ".zip"
+	payload := []byte("PK\x03\x04payload")
+	request := httptest.NewRequest(http.MethodPut, "/ray/api/packages/gcs/"+packageName, bytes.NewReader(payload))
+	request.Header.Set("Content-Length", "11")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("package put status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !bytes.Equal(store.putBody, payload) {
+		t.Fatalf("store body=%q, want %q", store.putBody, payload)
+	}
+	computed := sha256.Sum256(payload)
+	artifactID := rayPackageArtifactID(principal.TenantID, principal.Subject, packageName)
+	artifact, err := repository.GetSourceArtifact(context.Background(), principal.TenantID, principal.Subject, artifactID)
+	if err != nil || artifact.State != domain.SourceArtifactReady || artifact.SHA256 != hex.EncodeToString(computed[:]) {
+		t.Fatalf("package was not persisted as a ready canonical artifact: artifact=%+v err=%v", artifact, err)
+	}
+	if response = rayRequest(router, http.MethodHead, "/ray/api/packages/gcs/"+packageName, ""); response.Code != http.StatusOK {
+		t.Fatalf("package head status=%d", response.Code)
+	}
+	if response = rayRequest(router, http.MethodPost, "/ray/api/jobs/", raySubmitBody(packageName)); response.Code != http.StatusOK {
+		t.Fatalf("submit status=%d body=%s", response.Code, response.Body.String())
+	}
+	if repository.created == nil || repository.created.SubmissionOrigin != domain.SubmissionOriginRayCLI || repository.created.SourceArtifactID != artifactID || repository.created.Spec.Source.ArtifactSHA256 != artifact.SHA256 {
+		t.Fatalf("Ray submit did not use SubmissionService artifact flow: %+v", repository.created)
+	}
+	for _, endpoint := range []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodGet, path: "/ray/api/jobs/"},
+		{method: http.MethodGet, path: "/ray/api/jobs/raysubmit_test"},
+		{method: http.MethodGet, path: "/ray/api/jobs/raysubmit_test/logs"},
+		{method: http.MethodPost, path: "/ray/api/jobs/raysubmit_test/stop"},
+		{method: http.MethodDelete, path: "/ray/api/jobs/raysubmit_test"},
+	} {
+		if response = rayRequest(router, endpoint.method, endpoint.path, ""); response.Code != http.StatusOK {
+			t.Fatalf("%s %s status=%d body=%s", endpoint.method, endpoint.path, response.Code, response.Body.String())
+		}
+	}
+	if !strings.Contains(response.Body.String(), `"deleted":true`) {
+		t.Fatalf("delete response is not Ray-compatible: %s", response.Body.String())
+	}
+}
+
+func TestRayPackageHandlerRejectsUnsafeNamesAndUnboundedStreams(t *testing.T) {
+	principal := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{"Engineer"}, AuthType: auth.AuthTypeOIDC}
+	repository := &rayTestRepository{}
+	router := rayRouter(t, repository, &rayTestStore{}, principal)
+	for _, path := range []string{
+		"/ray/api/packages/s3/" + testPackageSHA256 + ".zip",
+		"/ray/api/packages/gcs/../x.zip",
+		"/ray/api/packages/gcs/working_dir.zip",
+	} {
+		response := rayRequest(router, http.MethodPut, path, "payload")
+		if response.Code != http.StatusBadRequest && response.Code != http.StatusNotFound {
+			t.Fatalf("unsafe package path %q returned %d", path, response.Code)
+		}
+	}
+	request := httptest.NewRequest(http.MethodPut, "/ray/api/packages/gcs/"+testPackageSHA256+".zip", strings.NewReader("payload"))
+	request.ContentLength = -1
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusLengthRequired || repository.artifacts != nil {
+		t.Fatalf("streaming upload status=%d artifacts=%v", response.Code, repository.artifacts)
+	}
+}
+
+func TestRayPackageAliasConflictDoesNotAssociateDifferentTransportNames(t *testing.T) {
+	principal := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{"Engineer"}, AuthType: auth.AuthTypeOIDC}
+	repository := &rayTestRepository{}
+	router := rayRouter(t, repository, &rayTestStore{}, principal)
+	payload := "PK\x03\x04same-content"
+	first := testPackageSHA256 + ".zip"
+	second := "_ray_pkg_" + testRayPackageSHA1 + ".zip"
+	if response := rayRequest(router, http.MethodPut, "/ray/api/packages/gcs/"+first, payload); response.Code != http.StatusOK {
+		t.Fatalf("first package status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := rayRequest(router, http.MethodPut, "/ray/api/packages/gcs/"+second, payload); response.Code != http.StatusConflict || strings.Contains(response.Body.String(), first) || strings.Contains(response.Body.String(), second) {
+		t.Fatalf("alias conflict status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestRayRoutesEnforcePATScopesAndTenantIsolation(t *testing.T) {
+	packageName := testPackageSHA256 + ".zip"
+	readOnly := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{"Engineer"}, AuthType: auth.AuthTypePAT, Scopes: []string{domain.PATScopeJobsRead}}
+	if response := rayRequest(rayRouter(t, &rayTestRepository{}, &rayTestStore{}, readOnly), http.MethodPut, "/ray/api/packages/gcs/"+packageName, "payload"); response.Code != http.StatusForbidden {
+		t.Fatalf("read-only PAT upload status=%d", response.Code)
+	}
+
+	repository := &rayTestRepository{}
+	writer := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{"Engineer"}, AuthType: auth.AuthTypeOIDC}
+	router := rayRouter(t, repository, &rayTestStore{}, writer)
+	if response := rayRequest(router, http.MethodPut, "/ray/api/packages/gcs/"+packageName, "payload"); response.Code != http.StatusOK {
+		t.Fatalf("owner upload status=%d", response.Code)
+	}
+	other := auth.Principal{Subject: "user-b", TenantID: "tenant-b", Roles: []string{"Engineer"}, AuthType: auth.AuthTypeOIDC}
+	if response := rayRequest(rayRouter(t, repository, &rayTestStore{}, other), http.MethodGet, "/ray/api/packages/gcs/"+packageName, ""); response.Code != http.StatusNotFound {
+		t.Fatalf("cross-tenant package lookup status=%d body=%s", response.Code, response.Body.String())
+	}
+}

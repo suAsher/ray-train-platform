@@ -1,0 +1,214 @@
+{{- if contains "REPLACE_WITH" .Values.backend.image.tag }}{{- fail "backend.image.tag must be replaced with an immutable release tag or digest" }}{{- end }}
+{{- /* The OIDC issuer only has to be real when OIDC is actually required; a
+local-account deployment never contacts Keycloak. */}}
+{{- if .Values.backend.oidcRequired }}
+{{- if contains "example" .Values.backend.oidc.issuerURL }}{{- fail "backend.oidc.issuerURL must point to the organization's Keycloak realm when oidcRequired is true" }}{{- end }}
+{{- end }}
+{{- if contains "REPLACE_WITH" .Values.backend.workspaceImage }}{{- fail "backend.workspaceImage must be replaced with a pinned workspace image" }}{{- end }}
+{{- if contains "REPLACE_WITH" .Values.backend.sourceMaterializerImage }}{{- fail "backend.sourceMaterializerImage must be replaced with a pinned source materializer image" }}{{- end }}
+{{- if not (regexMatch `^[^@[:space:]]+@sha256:[0-9a-fA-F]{64}$` .Values.backend.sourceMaterializerImage) }}{{- fail "backend.sourceMaterializerImage must use @sha256:<64 hex>" }}{{- end }}
+{{- if not (regexMatch `^[^@[:space:]]+@sha256:[0-9a-fA-F]{64}$` .Values.backend.workspaceImage) }}{{- fail "backend.workspaceImage must use @sha256:<64 hex>" }}{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ray-train-backend
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: ray-train-backend
+spec:
+  replicas: {{ .Values.backend.replicaCount }}
+  selector:
+    matchLabels:
+      app: ray-train-backend
+  template:
+    metadata:
+      labels:
+        app: ray-train-backend
+    spec:
+      serviceAccountName: ray-train-platform-sa
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: ray-train-backend
+      {{- with .Values.backend.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: backend
+          image: "{{ .Values.global.imageRegistry }}/{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: 8080
+              name: http
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: APP_ENV
+              value: {{ .Values.backend.appEnv | quote }}
+            - name: HTTP_ADDR
+              value: ":8080"
+            - name: PLATFORM_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "backend.database.existingSecret is required" .Values.backend.database.existingSecret }}
+                  key: {{ .Values.backend.database.secretKey }}
+            - name: OIDC_ISSUER_URL
+              value: {{ required "backend.oidc.issuerURL is required" .Values.backend.oidc.issuerURL | quote }}
+            - name: OIDC_CLIENT_ID
+              value: {{ required "backend.oidc.clientID is required" .Values.backend.oidc.clientID | quote }}
+            - name: OIDC_AUDIENCE
+              value: {{ required "backend.oidc.audience is required" .Values.backend.oidc.audience | quote }}
+            - name: OIDC_GROUP_PREFIX
+              value: {{ .Values.backend.oidc.groupPrefix | quote }}
+            - name: OIDC_REQUIRED
+              value: {{ .Values.backend.oidcRequired | quote }}
+            - name: DEMO_MODE
+              value: {{ .Values.backend.demoMode | quote }}
+            - name: PAT_PEPPER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "backend.pat.existingSecret is required" .Values.backend.pat.existingSecret }}
+                  key: PAT_PEPPER
+            - name: TRAINING_NODE_SELECTOR
+              value: {{ .Values.training.nodeSelector | quote }}
+            - name: LOCAL_AUTH_ENABLED
+              value: {{ .Values.backend.localAuth.enabled | quote }}
+            - name: LOCAL_SESSION_HOURS
+              value: {{ .Values.backend.localAuth.sessionHours | quote }}
+            - name: BOOTSTRAP_ADMIN_USERNAME
+              value: {{ .Values.backend.localAuth.bootstrapUsername | quote }}
+            - name: BOOTSTRAP_ADMIN_TENANT
+              value: {{ .Values.backend.localAuth.bootstrapTenant | quote }}
+            {{- if .Values.backend.localAuth.bootstrapSecret }}
+            # Only used the first time the local_users table is empty; later
+            # restarts never overwrite an existing account.
+            - name: BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.backend.localAuth.bootstrapSecret }}
+                  key: BOOTSTRAP_ADMIN_PASSWORD
+            {{- end }}
+            - name: LOKI_URL
+              value: {{ .Values.backend.lokiURL | quote }}
+            - name: PROMETHEUS_URL
+              value: {{ .Values.backend.prometheusURL | quote }}
+            - name: KUEUE_CLUSTER_QUEUE
+              value: {{ .Values.kueue.clusterQueueName | quote }}
+            - name: CORS_ORIGINS
+              value: {{ join "," .Values.backend.corsOrigins | quote }}
+            - name: RAY_VERSION
+              value: {{ .Values.backend.rayVersion | quote }}
+            - name: KUBERAY_RAYJOB_CLUSTER_SPEC_FIELD
+              value: {{ .Values.backend.rayJobClusterSpecField | quote }}
+            - name: RAY_JOB_SERVICE_ACCOUNT
+              value: {{ .Values.backend.rayJobServiceAccount | quote }}
+            - name: IMAGE_PULL_SECRETS
+              value: {{ include "ray-train-platform.imagePullSecretNames" . | quote }}
+            - name: RAY_IMAGE_ALLOWLIST
+              value: {{ join "," .Values.backend.imageAllowlist | quote }}
+            - name: GIT_ALLOWLIST
+              value: {{ join "," .Values.backend.gitAllowlist | quote }}
+            - name: WORKSPACE_IMAGE
+              value: {{ required "backend.workspaceImage is required" .Values.backend.workspaceImage | quote }}
+            - name: SOURCE_MATERIALIZER_IMAGE
+              value: {{ required "backend.sourceMaterializerImage is required" .Values.backend.sourceMaterializerImage | quote }}
+            - name: SOURCE_ARTIFACTS_ENABLED
+              value: {{ .Values.backend.sourceArtifactsEnabled | quote }}
+            - name: TOS_ENDPOINT
+              value: {{ .Values.tos.endpoint | quote }}
+            - name: TOS_BUCKET
+              value: {{ .Values.tos.bucket | quote }}
+            - name: TOS_SECRET_NAME
+              value: {{ .Values.tos.secretName | quote }}
+            - name: TOS_REGION
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required .Values.tos.secretName .Values.tos.secretName | quote }}
+                  key: region
+            - name: TOS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required .Values.tos.secretName .Values.tos.secretName | quote }}
+                  key: access-key
+            - name: TOS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required .Values.tos.secretName .Values.tos.secretName | quote }}
+                  key: secret-key
+            - name: TOS_SECURITY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required .Values.tos.secretName .Values.tos.secretName | quote }}
+                  key: security-token
+                  optional: true
+            - name: RAY_API_SPOOL_SIZE_BYTES
+              value: "3221225472"
+            - name: RAY_API_UPLOAD_MAX_CONCURRENT
+              value: "1"
+            - name: RAY_API_UPLOAD_RATE_LIMIT
+              value: "20"
+            - name: RAY_API_SPOOL_DIR
+              value: "/var/lib/ray-platform/ray-packages"
+            - name: IDC_STORAGE_ENABLED
+              value: {{ .Values.storage.enabled | quote }}
+            - name: IDC_EXISTING_CLAIM
+              value: {{ .Values.storage.existingClaim | quote }}
+            - name: IDC_STORAGE_CLASS
+              value: {{ .Values.storage.storageClass | quote }}
+            - name: IDC_MOUNT_PATH
+              value: {{ .Values.storage.mountPath | quote }}
+          volumeMounts:
+            - name: ray-api-spool
+              mountPath: /var/lib/ray-platform/ray-packages
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}
+      volumes:
+        - name: ray-api-spool
+          emptyDir:
+            sizeLimit: 3Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ray-train-backend
+  namespace: {{ .Values.namespace }}
+spec:
+  type: {{ .Values.backend.service.type }}
+  ports:
+    - port: {{ .Values.backend.service.port }}
+      targetPort: http
+      name: http
+  selector:
+    app: ray-train-backend

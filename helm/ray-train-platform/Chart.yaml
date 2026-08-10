@@ -1,0 +1,12 @@
+apiVersion: v2
+name: ray-train-platform
+description: Helm Chart for Ray Distributed Training Infrastructure Control Plane & Web Console
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - ray
+  - kubernetes
+  - distributed-training
+  - kueue
+  - 4090-gpu

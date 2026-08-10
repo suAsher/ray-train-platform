@@ -1,0 +1,70 @@
+# Test-only PostgreSQL. Uses emptyDir and must never be used for production.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: ray-train-platform
+  labels:
+    ray-train-platform/test: "true"
+spec:
+  selector:
+    app: ray-test-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: ray-train-platform
+  labels:
+    app: ray-test-postgres
+    ray-train-platform/test: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ray-test-postgres
+  template:
+    metadata:
+      labels:
+        app: ray-test-postgres
+        ray-train-platform/test: "true"
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: 172.28.0.167
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: platform
+            - name: POSTGRES_DB
+              value: platform
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ray-test-postgres-password
+                  key: POSTGRES_PASSWORD
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          emptyDir: {}

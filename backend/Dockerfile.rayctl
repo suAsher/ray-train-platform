@@ -1,0 +1,24 @@
+ARG GO_BUILDER_IMAGE=golang:1.24-alpine3.20
+FROM ${GO_BUILDER_IMAGE} AS builder
+
+ARG GOPROXY=https://goproxy.cn,direct
+ARG APK_MIRROR=https://repo.huaweicloud.com/repository/alpine
+
+WORKDIR /src
+
+RUN alpine_version="$(cut -d. -f1-2 /etc/alpine-release)" \
+  && printf '%s/v%s/main\n%s/v%s/community\n' "$APK_MIRROR" "$alpine_version" "$APK_MIRROR" "$alpine_version" > /etc/apk/repositories \
+  && apk add --no-cache ca-certificates
+
+COPY go.mod go.sum ./
+RUN go env -w GOPROXY="${GOPROXY}" && go mod download
+
+COPY . .
+RUN mkdir -p /out \
+  && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o /out/rayctl-linux-amd64 ./cmd/rayctl \
+  && CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o /out/rayctl-darwin-arm64 ./cmd/rayctl \
+  && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o /out/rayctl-windows-amd64.exe ./cmd/rayctl \
+  && sha256sum /out/rayctl-* > /out/SHA256SUMS
+
+FROM scratch AS release
+COPY --from=builder /out/ /

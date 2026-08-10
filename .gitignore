@@ -1,0 +1,21 @@
+# Dependencies and build output
+node_modules/
+frontend/dist/
+backend/bin/
+
+# Editor / OS noise
+.DS_Store
+*.orig
+*.bak
+*.new
+.tmp
+.claude/settings.local.json
+
+# Local databases and scratch state
+*.db
+.superpowers/
+
+# Never commit environment-specific values or credentials.
+# values.yaml holds only placeholders; per-environment overrides stay local.
+helm/ray-train-platform/values-*.yaml
+!helm/ray-train-platform/values-test.yaml.example

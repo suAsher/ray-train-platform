@@ -1,0 +1,114 @@
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: {{ WORKSPACE_NAME }}
+  namespace: {{ NAMESPACE }}
+  labels:
+    ray.io/dev-workspace: "true"
+    user.id: "{{ USER_ID }}"
+spec:
+  rayVersion: '2.35.0'
+  headGroupSpec:
+    rayStartParams:
+      dashboard-host: '0.0.0.0'
+      num-gpus: '0'
+    template:
+      spec:
+        containers:
+          - name: ray-head
+            image: {{ DOCKER_IMAGE }}
+            ports:
+              - containerPort: 6379
+                name: gcs
+              - containerPort: 8265
+                name: dashboard
+              - containerPort: 10001
+                name: client
+              - containerPort: 8888
+                name: jupyter
+            resources:
+              limits:
+                cpu: "8"
+                memory: "32Gi"
+              requests:
+                cpu: "4"
+                memory: "16Gi"
+            volumeMounts:
+              - mountPath: /dev/shm
+                name: dshm
+              - mountPath: /workspace
+                name: workspace-dir
+              - mountPath: /data/cache
+                name: local-cache-dir
+            env:
+              - name: RAY_DISABLE_DOCKER_CPU_WARNING
+                value: "1"
+              - name: JUPYTER_TOKEN
+                value: "{{ JUPYTER_TOKEN }}"
+            # Automatically start JupyterLab on Head Node
+            command: ["/bin/bash", "-c"]
+            args:
+              - |
+                ray start --head --dashboard-host=0.0.0.0 --num-gpus=0 &
+                pip install -q jupyterlab
+                jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token='{{ JUPYTER_TOKEN }}'
+        volumes:
+          - name: dshm
+            emptyDir:
+              medium: Memory
+              sizeLimit: 16Gi
+          - name: workspace-dir
+            hostPath:
+              path: /mnt/local-disk/workspaces/{{ USER_ID }}
+              type: DirectoryOrCreate
+          - name: local-cache-dir
+            hostPath:
+              path: /mnt/local-disk/cache
+              type: DirectoryOrCreate
+
+  workerGroupSpecs:
+    - groupName: dev-workers
+      replicas: {{ WORKER_REPLICAS }}
+      minReplicas: 1
+      maxReplicas: 4
+      rayStartParams:
+        num-gpus: '{{ GPUS_PER_WORKER }}'
+      template:
+        spec:
+          containers:
+            - name: ray-worker
+              image: {{ DOCKER_IMAGE }}
+              resources:
+                limits:
+                  cpu: "8"
+                  memory: "32Gi"
+                  nvidia.com/gpu: "{{ GPUS_PER_WORKER }}"
+                requests:
+                  cpu: "4"
+                  memory: "16Gi"
+                  nvidia.com/gpu: "{{ GPUS_PER_WORKER }}"
+              env:
+                - name: NCCL_P2P_DISABLE
+                  value: "1"
+                - name: NCCL_IB_DISABLE
+                  value: "1"
+              volumeMounts:
+                - mountPath: /dev/shm
+                  name: dshm
+                - mountPath: /workspace
+                  name: workspace-dir
+                - mountPath: /data/cache
+                  name: local-cache-dir
+          volumes:
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                sizeLimit: 16Gi
+            - name: workspace-dir
+              hostPath:
+                path: /mnt/local-disk/workspaces/{{ USER_ID }}
+                type: DirectoryOrCreate
+            - name: local-cache-dir
+              hostPath:
+                path: /mnt/local-disk/cache
+                type: DirectoryOrCreate

@@ -1,0 +1,291 @@
+#!/usr/bin/env bash
+#
+# Ray Training Platform multi-image build and push script.
+#
+# Default registry is the Aliyun test registry used by the development flow.
+# Override REGISTRY for another namespace or registry. The script never logs
+# in for you and never accepts credentials as arguments; use `docker login`
+# or an existing CI credential before PUSH_IMAGE=true.
+#
+# Examples:
+#   bash build-image.sh --help
+#   DRY_RUN=true bash build-image.sh
+#   PUSH_IMAGE=true IMAGE_TAG=test-20260809 bash build-image.sh
+#   BUILD_TARGETS=backend,frontend PUSH_IMAGE=true bash build-image.sh
+#   BUILD_TARGETS=test-training PUSH_IMAGE=true bash build-image.sh
+#
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+REGISTRY="${REGISTRY:-registry.cn-shanghai.aliyuncs.com/ashersu}"
+IMAGE_TAG="${IMAGE_TAG:-test-$(date -u +%Y%m%d-%H%M%S)}"
+BUILD_TARGETS_RAW="${BUILD_TARGETS:-all}"
+PUSH_IMAGE="${PUSH_IMAGE:-false}"
+USE_BUILDX="${USE_BUILDX:-false}"
+BUILD_PLATFORM="${BUILD_PLATFORM:-linux/amd64}"
+DRY_RUN="${DRY_RUN:-false}"
+NO_CACHE="${NO_CACHE:-false}"
+PULL_BASE_IMAGES="${PULL_BASE_IMAGES:-false}"
+
+GOPROXY_ARG="${GOPROXY:-https://goproxy.cn,direct}"
+NPM_REGISTRY_ARG="${NPM_REGISTRY:-https://registry.npmmirror.com}"
+APK_MIRROR_ARG="${APK_MIRROR:-https://repo.huaweicloud.com/repository/alpine}"
+GO_BUILDER_IMAGE_ARG="${GO_BUILDER_IMAGE:-swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/golang:1.25-alpine}"
+NODE_BUILDER_IMAGE_ARG="${NODE_BUILDER_IMAGE:-swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/node:20-alpine}"
+ALPINE_RUNTIME_IMAGE_ARG="${ALPINE_RUNTIME_IMAGE:-swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/alpine:3.20}"
+NGINX_RUNTIME_IMAGE_ARG="${NGINX_RUNTIME_IMAGE:-docker.m.daocloud.io/library/nginx:1.27-alpine}"
+RAY_BASE_IMAGE_ARG="${RAY_BASE_IMAGE:-docker.m.daocloud.io/rayproject/ray:2.35.0-py310}"
+
+trim() {
+  local value="${1:-}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+is_true() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+usage() {
+  cat <<'EOF'
+Ray Training Platform image builder
+
+Environment variables:
+  REGISTRY=registry.cn-shanghai.aliyuncs.com/ashersu
+  IMAGE_TAG=test-20260809
+  BUILD_TARGETS=all|backend,frontend,source-materializer,test-training
+  PUSH_IMAGE=false|true
+  USE_BUILDX=true|false
+  BUILD_PLATFORM=linux/amd64
+  DRY_RUN=false|true
+  NO_CACHE=false|true
+  PULL_BASE_IMAGES=false|true
+  GOPROXY=https://goproxy.cn,direct
+  NPM_REGISTRY=https://registry.npmmirror.com
+  APK_MIRROR=https://repo.huaweicloud.com/repository/alpine
+  GO_BUILDER_IMAGE=swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/golang:1.25-alpine
+  NODE_BUILDER_IMAGE=swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/node:20-alpine
+  ALPINE_RUNTIME_IMAGE=swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/alpine:3.20
+  NGINX_RUNTIME_IMAGE=docker.m.daocloud.io/library/nginx:1.27-alpine
+  RAY_BASE_IMAGE=docker.m.daocloud.io/rayproject/ray:2.35.0-py310
+
+Build targets:
+  backend             Go API/control-plane image
+  frontend            Vue/Nginx portal image
+  source-materializer Git/TOS/IDC workspace materializer image
+  test-training       Single-GPU smoke Ray image
+  all                 All four images (default)
+
+The script requires an authenticated Docker/BuildKit session when pushing.
+It prints remote image digests after a successful push.
+EOF
+}
+
+target_spec() {
+  case "$1" in
+    backend)
+      printf '%s\n' 'backend/Dockerfile|ray-train-backend|backend'
+      ;;
+    frontend)
+      printf '%s\n' 'frontend/Dockerfile|ray-train-frontend|frontend'
+      ;;
+    source-materializer)
+      printf '%s\n' 'images/source-materializer/Dockerfile|ray-source-materializer|images/source-materializer'
+      ;;
+    test-training)
+      printf '%s\n' 'images/test-training/Dockerfile|ray-test|images/test-training'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+normalize_targets() {
+  local raw target
+  if [ "$(trim "$BUILD_TARGETS_RAW")" = "all" ]; then
+    printf '%s\n' backend frontend source-materializer test-training
+    return
+  fi
+
+  IFS=',' read -r -a requested <<< "$BUILD_TARGETS_RAW"
+  for raw in "${requested[@]}"; do
+    target="$(trim "$raw")"
+    [ -n "$target" ] || continue
+    target_spec "$target" >/dev/null || {
+      echo "ERROR: unknown BUILD_TARGETS entry: $target" >&2
+      echo "       valid values: backend, frontend, source-materializer, test-training, all" >&2
+      exit 1
+    }
+    printf '%s\n' "$target"
+  done
+}
+
+run_or_print() {
+  if is_true "$DRY_RUN"; then
+    printf '+ '
+    printf '%q ' "$@"
+    printf '\n'
+  else
+    "$@"
+  fi
+}
+
+remote_digest() {
+  local image="$1"
+  local digest=""
+  if command -v docker >/dev/null 2>&1 && docker buildx version >/dev/null 2>&1; then
+    digest="$(docker buildx imagetools inspect "$image" 2>/dev/null | awk '$1 == "Digest:" { print $2; exit }' || true)"
+  fi
+  if [ -n "$digest" ]; then
+    printf '%s@%s' "$image" "$digest"
+  else
+    printf '%s' "$image"
+  fi
+}
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  usage
+  exit 0
+fi
+if [ "$#" -gt 0 ]; then
+  echo "ERROR: unknown argument: $1" >&2
+  echo "       use --help for configuration through environment variables" >&2
+  exit 1
+fi
+
+REGISTRY="${REGISTRY%/}"
+[ -n "$REGISTRY" ] || { echo 'ERROR: REGISTRY cannot be empty' >&2; exit 1; }
+[ -n "$IMAGE_TAG" ] || { echo 'ERROR: IMAGE_TAG cannot be empty' >&2; exit 1; }
+
+BUILD_TARGETS_LIST=()
+while IFS= read -r normalized_target; do
+  [ -n "$normalized_target" ] && BUILD_TARGETS_LIST+=("$normalized_target")
+done < <(normalize_targets)
+[ "${#BUILD_TARGETS_LIST[@]}" -gt 0 ] || { echo 'ERROR: BUILD_TARGETS is empty' >&2; exit 1; }
+
+if ! is_true "$DRY_RUN"; then
+  command -v docker >/dev/null 2>&1 || { echo 'ERROR: Docker is not installed' >&2; exit 1; }
+  docker info >/dev/null 2>&1 || { echo 'ERROR: Docker daemon is not available' >&2; exit 1; }
+  if is_true "$USE_BUILDX"; then
+    docker buildx version >/dev/null 2>&1 || { echo 'ERROR: Docker Buildx is required when USE_BUILDX=true' >&2; exit 1; }
+  fi
+fi
+
+echo '============================================='
+echo ' Ray Training Platform image build'
+echo '============================================='
+echo "Registry:       $REGISTRY"
+echo "Image tag:      $IMAGE_TAG"
+echo "Platform:       $BUILD_PLATFORM"
+echo "Buildx:         $USE_BUILDX"
+echo "Push:           $PUSH_IMAGE"
+echo "Dry run:        $DRY_RUN"
+echo "Go proxy:       $GOPROXY_ARG"
+echo "NPM registry:   $NPM_REGISTRY_ARG"
+echo "APK mirror:     $APK_MIRROR_ARG"
+echo "Go builder:     $GO_BUILDER_IMAGE_ARG"
+echo "Node builder:   $NODE_BUILDER_IMAGE_ARG"
+echo "Alpine runtime: $ALPINE_RUNTIME_IMAGE_ARG"
+echo "Nginx runtime:  $NGINX_RUNTIME_IMAGE_ARG"
+echo "Ray base:       $RAY_BASE_IMAGE_ARG"
+echo "Targets:        ${BUILD_TARGETS_LIST[*]}"
+echo ''
+
+for target in "${BUILD_TARGETS_LIST[@]}"; do
+  IFS='|' read -r dockerfile image_name context_dir <<< "$(target_spec "$target")"
+  dockerfile_path="$SCRIPT_DIR/$dockerfile"
+  context_path="$SCRIPT_DIR/$context_dir"
+  image="$REGISTRY/$image_name:$IMAGE_TAG"
+
+  [ -f "$dockerfile_path" ] || { echo "ERROR: missing Dockerfile: $dockerfile_path" >&2; exit 1; }
+  [ -d "$context_path" ] || { echo "ERROR: missing build context: $context_path" >&2; exit 1; }
+
+  echo "--- Building $target"
+  echo "    Image: $image"
+
+  if ! is_true "$USE_BUILDX"; then
+    # The legacy Docker builder supports ARG in FROM only for the first stage.
+    # Resolve the base-image variables into a temporary Dockerfile so later
+    # stages build correctly without requiring BuildKit/Buildx.
+    tmp_dockerfile=$(mktemp)
+    cp "$dockerfile_path" "$tmp_dockerfile"
+    sed -i \
+      -e "s|^FROM \${GO_BUILDER_IMAGE}|FROM $GO_BUILDER_IMAGE_ARG|" \
+      -e "s|^FROM \${NODE_BUILDER_IMAGE}|FROM $NODE_BUILDER_IMAGE_ARG|" \
+      -e "s|^FROM \${ALPINE_RUNTIME_IMAGE}|FROM $ALPINE_RUNTIME_IMAGE_ARG|" \
+      -e "s|^FROM \${NGINX_RUNTIME_IMAGE}|FROM $NGINX_RUNTIME_IMAGE_ARG|" \
+      -e "s|^FROM \${RAY_BASE_IMAGE}|FROM $RAY_BASE_IMAGE_ARG|" \
+      "$tmp_dockerfile"
+    dockerfile_path="$tmp_dockerfile"
+  fi
+
+  if is_true "$USE_BUILDX"; then
+    build_cmd=(docker buildx build
+      --platform "$BUILD_PLATFORM"
+      --file "$dockerfile_path"
+      --tag "$image"
+      --build-arg "GOPROXY=$GOPROXY_ARG"
+      --build-arg "NPM_REGISTRY=$NPM_REGISTRY_ARG"
+      --build-arg "APK_MIRROR=$APK_MIRROR_ARG"
+      --build-arg "GO_BUILDER_IMAGE=$GO_BUILDER_IMAGE_ARG"
+      --build-arg "NODE_BUILDER_IMAGE=$NODE_BUILDER_IMAGE_ARG"
+      --build-arg "ALPINE_RUNTIME_IMAGE=$ALPINE_RUNTIME_IMAGE_ARG"
+      --build-arg "NGINX_RUNTIME_IMAGE=$NGINX_RUNTIME_IMAGE_ARG"
+      --build-arg "RAY_BASE_IMAGE=$RAY_BASE_IMAGE_ARG"
+    )
+    is_true "$NO_CACHE" && build_cmd+=(--no-cache)
+    is_true "$PULL_BASE_IMAGES" && build_cmd+=(--pull)
+    if is_true "$PUSH_IMAGE"; then
+      build_cmd+=(--push)
+    else
+      build_cmd+=(--load)
+    fi
+    build_cmd+=("$context_path")
+  else
+    build_cmd=(docker build
+      --platform "$BUILD_PLATFORM"
+      --file "$dockerfile_path"
+      --tag "$image"
+      --build-arg "GOPROXY=$GOPROXY_ARG"
+      --build-arg "NPM_REGISTRY=$NPM_REGISTRY_ARG"
+      --build-arg "APK_MIRROR=$APK_MIRROR_ARG"
+      --build-arg "GO_BUILDER_IMAGE=$GO_BUILDER_IMAGE_ARG"
+      --build-arg "NODE_BUILDER_IMAGE=$NODE_BUILDER_IMAGE_ARG"
+      --build-arg "ALPINE_RUNTIME_IMAGE=$ALPINE_RUNTIME_IMAGE_ARG"
+      --build-arg "NGINX_RUNTIME_IMAGE=$NGINX_RUNTIME_IMAGE_ARG"
+      --build-arg "RAY_BASE_IMAGE=$RAY_BASE_IMAGE_ARG"
+    )
+    is_true "$NO_CACHE" && build_cmd+=(--no-cache)
+    is_true "$PULL_BASE_IMAGES" && build_cmd+=(--pull)
+    build_cmd+=("$context_path")
+  fi
+
+  run_or_print "${build_cmd[@]}"
+
+  if is_true "$PUSH_IMAGE" && ! is_true "$USE_BUILDX"; then
+    run_or_print docker push "$image"
+  fi
+
+  if is_true "$PUSH_IMAGE" && ! is_true "$DRY_RUN"; then
+    echo "    Digest: $(remote_digest "$image")"
+  fi
+
+  if ! is_true "$USE_BUILDX" && [ -n "${tmp_dockerfile:-}" ] && [ -f "$tmp_dockerfile" ]; then
+    rm -f "$tmp_dockerfile"
+  fi
+  echo "    Done:   $image"
+done
+
+echo ''
+echo 'Build complete.'
+if is_true "$PUSH_IMAGE"; then
+  echo 'Use the printed @sha256 digest for backend.workspaceImage and backend.sourceMaterializerImage.'
+else
+  echo 'Images were not pushed. Set PUSH_IMAGE=true after docker login to push them.'
+fi

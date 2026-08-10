@@ -1,0 +1,136 @@
+namespace: ray-train-platform
+
+global:
+  imagePullPolicy: IfNotPresent
+  imageRegistry: cr-cn-beijing.volces.com/ray-platform
+  imagePullSecrets: []
+
+backend:
+  replicaCount: 2
+  appEnv: production
+  oidcRequired: true
+  demoMode: false
+  sourceArtifactsEnabled: true
+  image:
+    repository: ray-train-backend
+    tag: "REPLACE_WITH_IMMUTABLE_TAG"
+  service:
+    type: ClusterIP
+    port: 8080
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+  database:
+    existingSecret: ray-platform-postgres
+    secretKey: DATABASE_URL
+  oidc:
+    issuerURL: "https://keycloak.idc.example/realms/ai"
+    clientID: ray-training-platform
+    audience: ray-training-platform-api
+    groupPrefix: platform/tenants/
+  # Secret holding PAT_PEPPER, the HMAC key for personal access tokens and
+  # local session tokens. Must contain at least 32 bytes.
+  pat:
+    existingSecret: ray-platform-pat
+  # Built-in username/password accounts. These work with or without Keycloak,
+  # so the platform is usable and testable without an external IdP.
+  localAuth:
+    enabled: true
+    sessionHours: 12
+    bootstrapUsername: admin
+    bootstrapTenant: local
+    # Secret holding BOOTSTRAP_ADMIN_PASSWORD, used only to create the very
+    # first administrator. Leave empty to skip bootstrapping.
+    bootstrapSecret: ray-platform-bootstrap-admin
+  lokiURL: "http://loki.logging.svc.cluster.local:3100"
+  prometheusURL: "http://prometheus.monitoring.svc.cluster.local:9090"
+  corsOrigins: []
+  imageAllowlist:
+    - cr-cn-beijing.volces.com/ray-platform/ray-train
+  gitAllowlist:
+    - git.example.com
+  workspaceImage: "REPLACE_WITH_IMMUTABLE_WORKSPACE_IMAGE"
+  sourceMaterializerImage: "REPLACE_WITH_IMMUTABLE_SOURCE_MATERIALIZER_IMAGE"
+  rayVersion: "2.35.0"
+  rayJobClusterSpecField: rayClusterSpec
+  # Training and debug Pods run in tenant namespaces. Leave empty unless a
+  # tenant-local, least-privilege ServiceAccount is provisioned separately.
+  rayJobServiceAccount: ""
+
+migrations:
+  enabled: true
+
+frontend:
+  replicaCount: 2
+  image:
+    repository: ray-train-frontend
+    tag: "REPLACE_WITH_IMMUTABLE_TAG"
+  service:
+    type: ClusterIP
+    port: 80
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 200m
+      memory: 256Mi
+
+  runtimeConfig:
+    authRequired: true
+    keycloakURL: "https://keycloak.idc.example"
+    keycloakRealm: ai
+    keycloakClientID: ray-training-platform
+
+ingress:
+  enabled: true
+  className: alb
+  host: ai-training.internal.example
+  annotations:
+    ingress.vke.volcengine.com/loadbalancer-type: private
+    ingress.vke.volcengine.com/loadbalancer-port: "80"
+    ingress.vke.volcengine.com/request-timeout: "3600"
+    ingress.vke.volcengine.com/keepalive-timeout: "3600"
+
+# Where Ray head and worker Pods are allowed to run. Comma-separated
+# key=value labels. Adding GPU machines only means labelling them the same way
+# and raising the Kueue quota below — no image rebuild.
+training:
+  nodeSelector: "accelerator=nvidia-rtx-4090"
+
+kueue:
+  enabled: false
+  clusterQueueName: cluster-gpu-queue
+  resourceFlavorName: gpu-4090-flavor
+  gpuQuota: 24
+  cpuQuota: 256
+  memoryQuota: 1024Gi
+
+storage:
+  enabled: true
+  existingClaim: idc-training-rwx
+  storageClass: ""
+  size: 2Ti
+  accessModes:
+    - ReadWriteMany
+  tenantNamespaces: []
+  mountPath: /mnt/idc
+
+networkPolicy:
+  enabled: true
+
+availability:
+  pdbEnabled: true
+  minAvailable: 1
+
+tos:
+  endpoint: "https://tos-cn-beijing.volces.com"
+  bucket: ""
+  secretName: "tos-credentials"
+
+postgres:
+  existingSecret: ray-platform-postgres

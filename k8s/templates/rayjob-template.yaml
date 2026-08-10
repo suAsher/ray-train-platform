@@ -1,0 +1,116 @@
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: {{ JOB_NAME }}
+  namespace: {{ NAMESPACE }}
+  labels:
+    kueue.x-k8s.io/queue-name: {{ QUEUE_NAME }}
+    ray.io/job-id: {{ JOB_ID }}
+spec:
+  submissionMode: K8sJobMode
+  entrypoint: {{ ENTRYPOINT_CMD }}
+  runtimeEnvYAML: |
+    env_vars:
+      PIP_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"
+      TOS_ENDPOINT: "{{ TOS_ENDPOINT }}"
+      TOS_BUCKET: "{{ TOS_BUCKET }}"
+  
+  rayClusterSpec:
+    rayVersion: '2.35.0'
+    headGroupSpec:
+      rayStartParams:
+        dashboard-host: '0.0.0.0'
+        num-gpus: '0'
+      template:
+        spec:
+          containers:
+            - name: ray-head
+              image: {{ DOCKER_IMAGE }}
+              resources:
+                limits:
+                  cpu: "8"
+                  memory: "32Gi"
+                requests:
+                  cpu: "4"
+                  memory: "16Gi"
+              volumeMounts:
+                - mountPath: /dev/shm
+                  name: dshm
+                - mountPath: /data/cache
+                  name: local-cache-dir
+              env:
+                - name: RAY_DISABLE_DOCKER_CPU_WARNING
+                  value: "1"
+          volumes:
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                sizeLimit: 16Gi
+            - name: local-cache-dir
+              hostPath:
+                path: /mnt/local-disk/cache
+                type: DirectoryOrCreate
+
+    workerGroupSpecs:
+      - groupName: worker-group
+        replicas: {{ WORKER_REPLICAS }}
+        minReplicas: {{ WORKER_REPLICAS }}
+        maxReplicas: {{ WORKER_REPLICAS }}
+        rayStartParams:
+          num-gpus: '{{ GPUS_PER_WORKER }}'
+        template:
+          spec:
+            containers:
+              - name: ray-worker
+                image: {{ DOCKER_IMAGE }}
+                securityContext:
+                  capabilities:
+                    add: ["SYS_PTRACE"]
+                resources:
+                  limits:
+                    cpu: "{{ WORKER_CPU_LIMIT }}"
+                    memory: "{{ WORKER_MEM_LIMIT }}"
+                    nvidia.com/gpu: "{{ GPUS_PER_WORKER }}"
+                  requests:
+                    cpu: "{{ WORKER_CPU_REQ }}"
+                    memory: "{{ WORKER_MEM_REQ }}"
+                    nvidia.com/gpu: "{{ GPUS_PER_WORKER }}"
+                env:
+                  # RTX 4090 NCCL Optimization Settings
+                  - name: NCCL_P2P_DISABLE
+                    value: "1"
+                  - name: NCCL_IB_DISABLE
+                    value: "1"
+                  - name: NCCL_CROSS_NIC
+                    value: "0"
+                  - name: NCCL_DEBUG
+                    value: "INFO"
+                  - name: PYTHONUNBUFFERED
+                    value: "1"
+                  # TOS / S3 Credentials
+                  - name: AWS_ACCESS_KEY_ID
+                    value: "{{ TOS_ACCESS_KEY }}"
+                  - name: AWS_SECRET_ACCESS_KEY
+                    value: "{{ TOS_SECRET_KEY }}"
+                  - name: TOS_ENDPOINT
+                    value: "{{ TOS_ENDPOINT }}"
+                volumeMounts:
+                  - mountPath: /dev/shm
+                    name: dshm
+                  - mountPath: /data/cache
+                    name: local-cache-dir
+                  - mountPath: /tmp/ray/spill
+                    name: local-spill-dir
+            volumes:
+              - name: dshm
+                emptyDir:
+                  medium: Memory
+                  sizeLimit: 32Gi
+              - name: local-cache-dir
+                hostPath:
+                  path: /mnt/local-disk/cache
+                  type: DirectoryOrCreate
+              - name: local-spill-dir
+                hostPath:
+                  path: /mnt/local-disk/ray_spill
+                  type: DirectoryOrCreate
