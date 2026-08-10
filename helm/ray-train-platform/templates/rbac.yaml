@@ -13,8 +13,13 @@ rules:
     resources: ["rayjobs", "rayclusters"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["kueue.x-k8s.io"]
-    resources: ["workloads", "clusterqueues"]
+    resources: ["workloads"]
     verbs: ["get", "list", "watch"]
+  # update is needed so the controller can keep the admission budget aligned
+  # with the labelled training nodes (Kueue has no capacity discovery).
+  - apiGroups: ["kueue.x-k8s.io"]
+    resources: ["clusterqueues"]
+    verbs: ["get", "list", "watch", "update", "patch"]
   - apiGroups: ["kueue.x-k8s.io"]
     resources: ["localqueues"]
     verbs: ["get", "list", "watch", "create"]

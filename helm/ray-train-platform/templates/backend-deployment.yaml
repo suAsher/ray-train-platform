@@ -90,6 +90,8 @@ spec:
                   key: PAT_PEPPER
             - name: TRAINING_NODE_SELECTOR
               value: {{ .Values.training.nodeSelector | quote }}
+            - name: KUEUE_AUTO_QUOTA
+              value: {{ .Values.kueue.autoQuota | quote }}
             - name: LOCAL_AUTH_ENABLED
               value: {{ .Values.backend.localAuth.enabled | quote }}
             - name: LOCAL_SESSION_HOURS

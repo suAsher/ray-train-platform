@@ -104,6 +104,11 @@ training:
 
 kueue:
   enabled: false
+  # Kueue's nominalQuota is a static field with no capacity discovery. With this
+  # on, the controller keeps it equal to the allocatable capacity of the nodes
+  # matching training.nodeSelector, so adding a machine only means labelling it.
+  # Turn it off if an operator wants to hand out a deliberately smaller budget.
+  autoQuota: true
   clusterQueueName: cluster-gpu-queue
   resourceFlavorName: gpu-4090-flavor
   gpuQuota: 24

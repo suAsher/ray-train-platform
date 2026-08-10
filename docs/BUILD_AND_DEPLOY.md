@@ -148,7 +148,7 @@ LocalQueue 由后端在提交任务时自动创建并绑定到 `kueue.clusterQue
 
 ## 8. 扩容：从 1 卡换成 3 台 8 卡
 
-**不需要重新部署平台，也不需要重新构建镜像。** 平台组件（API/前端/PostgreSQL）不占 GPU，扩容只涉及节点标签和配额三处配置。
+**不需要重新部署平台，也不需要重新构建镜像、更不需要手工改 Kueue 配额。** 正常情况下扩容就是一条 `kubectl label`。
 
 ### 8.1 给新节点打标签
 
@@ -160,21 +160,39 @@ kubectl label node <node-1> <node-2> <node-3> accelerator=nvidia-rtx-4090 --over
 
 如果新机器不是 4090，改用别的标签值，并同步改 `training.nodeSelector` 与 ResourceFlavor，两边必须一致。
 
-### 8.2 抬高 Kueue 配额
+### 8.2 Kueue 配额会自动跟上
 
-当前是按 1 卡试验环境配的（`gpuQuota: 1`），必须改成实际容量：
-
-```bash
-kubectl patch clusterqueue cluster-gpu-queue --type=json -p='[{"op":"replace","path":"/spec/resourceGroups/0/flavors/0/resources","value":[{"name":"cpu","nominalQuota":"256"},{"name":"memory","nominalQuota":"1024Gi"},{"name":"nvidia.com/gpu","nominalQuota":"24"}]}]'
-```
-
-配额低于物理容量时，任务会一直卡在 `QUEUED` 而不报错——这是 Kueue 的正常行为，排查时先看这里。
-
-### 8.3 更新 Helm values
+**不需要手工改配额。** 控制器每 5 秒把 ClusterQueue 的 `nominalQuota` 对齐到「带训练标签且 Ready 的节点」的 allocatable 总和，打完标签一个周期内就生效：
 
 ```bash
-helm upgrade ray-platform ./helm/ray-train-platform -n ray-train-platform -f <你的 values> --set kueue.gpuQuota=24 --set kueue.cpuQuota=256 --set kueue.memoryQuota=1024Gi --set training.nodeSelector="accelerator=nvidia-rtx-4090" --wait
+kubectl get clusterqueue cluster-gpu-queue -o jsonpath='{.spec.resourceGroups[0].flavors[0].resources}'
 ```
+
+日志里会有一行 `kueue quota synced from training pool: 3 nodes, 24 GPUs, 192 cores`。
+
+为什么需要平台来做：Kueue 的 `nominalQuota` 是 **required 的静态字段**，CRD 文档明确写着它「应当代表集群中可用于运行任务的资源」，也就是由运维负责维护，Kueue 本身**没有任何容量发现机制**。节点加入并打标签只让 K8s 可以调度、让 ResourceFlavor 能匹配，准入预算不会自己变。
+
+安全护栏：
+- 统计**排除** serverless 虚拟节点（VCI），它们上报的上千张卡是购买上限不是硬件
+- 统计**排除** NotReady 节点
+- 匹配不到任何节点时**拒绝写入**，保留上一次的预算并打日志，避免误清零把所有任务卡在 `QUEUED`
+- 配额已经正确时不发起写请求，不会churn API server
+
+想手工分配一个更小的预算（例如 24 卡只给团队 8 卡），关掉自动同步：
+
+```bash
+helm upgrade ray-platform ./helm/ray-train-platform -n ray-train-platform -f <values> --set kueue.autoQuota=false --wait
+```
+
+### 8.3 更新 Helm values（可选）
+
+只有在改了节点标签时才需要，两边必须一致：
+
+```bash
+helm upgrade ray-platform ./helm/ray-train-platform -n ray-train-platform -f <你的 values> --set training.nodeSelector="accelerator=nvidia-rtx-4090" --wait
+```
+
+ResourceFlavor 的 `nodeLabels` 也要同步改成一样的值。
 
 ### 8.4 每个租户 namespace 补 Secret
 

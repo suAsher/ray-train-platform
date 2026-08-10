@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -20,10 +21,51 @@ type JobStore interface {
 }
 
 type Reconciler struct {
-	store         JobStore
-	client        *Client
-	renderOptions RenderOptions
-	interval      time.Duration
+	store            JobStore
+	client           *Client
+	renderOptions    RenderOptions
+	interval         time.Duration
+	clusterQueueName string
+	autoQuota        bool
+	lastQuotaError   string
+}
+
+// QuotaSyncOptions turns on continuous alignment of the Kueue admission budget
+// with the measured training pool.
+type QuotaSyncOptions struct {
+	ClusterQueueName string
+	Enabled          bool
+}
+
+func (r *Reconciler) WithQuotaSync(options QuotaSyncOptions) *Reconciler {
+	r.clusterQueueName = options.ClusterQueueName
+	r.autoQuota = options.Enabled && options.ClusterQueueName != ""
+	return r
+}
+
+// syncClusterQueueQuota keeps the Kueue budget in step with the hardware so an
+// operator only has to label a new machine. Failures are logged once rather
+// than on every tick and never abort job reconciliation.
+func (r *Reconciler) syncClusterQueueQuota(ctx context.Context) {
+	if !r.autoQuota || r.client == nil {
+		return
+	}
+	capacity, err := r.client.TrainingPoolCapacity(ctx, r.renderOptions.NodeSelector)
+	if err == nil {
+		var changed bool
+		changed, err = r.client.SyncClusterQueueQuota(ctx, r.clusterQueueName, capacity)
+		if err == nil {
+			r.lastQuotaError = ""
+			if changed {
+				log.Printf("kueue quota synced from training pool: %d nodes, %d GPUs, %d cores", capacity.Nodes, capacity.GPUs, capacity.CPUMillis/1000)
+			}
+			return
+		}
+	}
+	if message := err.Error(); message != r.lastQuotaError {
+		r.lastQuotaError = message
+		log.Printf("kueue quota sync skipped: %v", err)
+	}
 }
 
 func NewReconciler(store JobStore, client *Client, renderOptions RenderOptions) *Reconciler {
@@ -34,6 +76,7 @@ func (r *Reconciler) Run(ctx context.Context) error {
 	if r == nil || r.store == nil || r.client == nil {
 		return fmt.Errorf("reconciler is not initialized")
 	}
+	r.syncClusterQueueQuota(ctx)
 	if err := r.ProcessOnce(ctx); err != nil {
 		return err
 	}
@@ -44,6 +87,7 @@ func (r *Reconciler) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
+			r.syncClusterQueueQuota(ctx)
 			if err := r.ProcessOnce(ctx); err != nil {
 				// A single transient Kubernetes or database error must not terminate the control loop.
 				continue

@@ -22,6 +22,7 @@ type Config struct {
 	PATEnabled                bool
 	PATPepper                 string
 	TrainingNodeSelector      map[string]string
+	KueueAutoQuota            bool
 	LocalAuthEnabled          bool
 	LocalSessionHours         int
 	BootstrapAdminUsername    string
@@ -130,6 +131,11 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.TrainingNodeSelector, err = parseLabelSelector("TRAINING_NODE_SELECTOR"); err != nil {
+		return Config{}, err
+	}
+	// Kueue cannot discover capacity, so the platform keeps the admission
+	// budget aligned with the labelled training nodes by default.
+	if cfg.KueueAutoQuota, err = parseBool("KUEUE_AUTO_QUOTA", true); err != nil {
 		return Config{}, err
 	}
 	cfg.BootstrapAdminUsername = envOr("BOOTSTRAP_ADMIN_USERNAME", "admin")

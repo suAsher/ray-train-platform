@@ -124,7 +124,7 @@ flowchart TB
 | 组件 | 状态 | 说明 |
 |---|---|---|
 | KubeRay Operator | ✅ | 1.3.0，启动时做 CRD 版本与字段校验 |
-| 调度与资源策略 | ✅ | Kueue 0.19 准入 + 租户 LocalQueue 自动创建 + `suspend` 门控 |
+| 调度与资源策略 | ✅ | Kueue 0.19 准入 + 租户 LocalQueue 自动创建 + `suspend` 门控 + ClusterQueue 配额按节点标签自动对齐 |
 | GPU 资源池 | ⚠️ | 代码与配额已按 3×8=24 设计，当前物理只有 1 卡 |
 | 调试节点隔离 | ⚠️ | 节点选择器已可配置，但训练/调试尚未拆成两个标签 |
 | LWS / Training Operator | ❌ | V1 不做，架构图标注为可选/按需 |
@@ -165,7 +165,7 @@ flowchart TB
 | 日志查看 | ⚠️ 接口就绪，缺 Loki 部署 |
 | GPU 资源调度 | ✅ Kueue 准入 + 配额 + 自动回收已验证 |
 | 交互式调试 | ⚠️ 基础可用，生命周期管理不全 |
-| 可扩容 | ✅ 扩容为配置变更，无需改代码（见 [BUILD_AND_DEPLOY.md](BUILD_AND_DEPLOY.md) 扩容章节） |
+| 可扩容 | ✅ 给新节点打上训练标签即可，配额自动跟随（见 [BUILD_AND_DEPLOY.md](BUILD_AND_DEPLOY.md) 第 8 节） |
 
 ---
 

@@ -236,11 +236,18 @@ func newKubernetesClient(cfg config.Config) (*k8s.Client, error) {
 	return k8s.NewClient(cfg)
 }
 
+func newReconcilerWithQuotaSync(repository *repositories.GormRepository, client *k8s.Client, cfg config.Config, options k8s.RenderOptions) *k8s.Reconciler {
+	return k8s.NewReconciler(repository, client, options).WithQuotaSync(k8s.QuotaSyncOptions{
+		ClusterQueueName: cfg.KueueClusterQueue,
+		Enabled:          cfg.KueueAutoQuota,
+	})
+}
+
 func newReconciler(repository *repositories.GormRepository, client *k8s.Client, cfg config.Config) *k8s.Reconciler {
 	if client == nil {
 		return nil
 	}
-	return k8s.NewReconciler(repository, client, k8s.RenderOptions{
+	return newReconcilerWithQuotaSync(repository, client, cfg, k8s.RenderOptions{
 		ClusterSpecField:        cfg.RayJobClusterSpecField,
 		RayVersion:              cfg.RayVersion,
 		ServiceAccount:          cfg.RayJobServiceAccount,
