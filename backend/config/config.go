@@ -23,6 +23,9 @@ type Config struct {
 	PATPepper                 string
 	TrainingNodeSelector      map[string]string
 	KueueAutoQuota            bool
+	MaxWorkerReplicas         int
+	MaxGPUsPerWorker          int
+	MaxTotalGPUs              int
 	LocalAuthEnabled          bool
 	LocalSessionHours         int
 	BootstrapAdminUsername    string
@@ -136,6 +139,16 @@ func Load() (Config, error) {
 	// Kueue cannot discover capacity, so the platform keeps the admission
 	// budget aligned with the labelled training nodes by default.
 	if cfg.KueueAutoQuota, err = parseBool("KUEUE_AUTO_QUOTA", true); err != nil {
+		return Config{}, err
+	}
+	// Job size ceilings track the fleet; raising them needs no rebuild.
+	if cfg.MaxWorkerReplicas, err = parseInt("MAX_WORKER_REPLICAS", 3); err != nil {
+		return Config{}, err
+	}
+	if cfg.MaxGPUsPerWorker, err = parseInt("MAX_GPUS_PER_WORKER", 8); err != nil {
+		return Config{}, err
+	}
+	if cfg.MaxTotalGPUs, err = parseInt("MAX_TOTAL_GPUS", 24); err != nil {
 		return Config{}, err
 	}
 	cfg.BootstrapAdminUsername = envOr("BOOTSTRAP_ADMIN_USERNAME", "admin")

@@ -149,14 +149,15 @@ func (s JobSpec) Validate() error {
 	if len(s.Entrypoint.Command) == 0 || strings.TrimSpace(s.Entrypoint.Command[0]) == "" {
 		return fmt.Errorf("entrypoint command is required")
 	}
-	if s.Resources.WorkerReplicas < 1 || s.Resources.WorkerReplicas > 3 {
-		return fmt.Errorf("workerReplicas must be between 1 and 3")
+	limits := CurrentResourceLimits()
+	if s.Resources.WorkerReplicas < 1 || s.Resources.WorkerReplicas > limits.MaxWorkerReplicas {
+		return fmt.Errorf("workerReplicas must be between 1 and %d", limits.MaxWorkerReplicas)
 	}
-	if s.Resources.GPUsPerWorker < 1 || s.Resources.GPUsPerWorker > 8 {
-		return fmt.Errorf("gpusPerWorker must be between 1 and 8")
+	if s.Resources.GPUsPerWorker < 1 || s.Resources.GPUsPerWorker > limits.MaxGPUsPerWorker {
+		return fmt.Errorf("gpusPerWorker must be between 1 and %d", limits.MaxGPUsPerWorker)
 	}
-	if s.Resources.WorkerReplicas*s.Resources.GPUsPerWorker > 24 {
-		return fmt.Errorf("total GPUs cannot exceed 24 in V1")
+	if s.Resources.WorkerReplicas*s.Resources.GPUsPerWorker > limits.MaxTotalGPUs {
+		return fmt.Errorf("total GPUs cannot exceed %d", limits.MaxTotalGPUs)
 	}
 	if strings.TrimSpace(s.Queue) == "" {
 		return fmt.Errorf("queue is required")

@@ -17,6 +17,7 @@ import (
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/config"
 	"ray-train-platform-backend/db"
+	"ray-train-platform-backend/domain"
 	"ray-train-platform-backend/httpapi"
 	"ray-train-platform-backend/k8s"
 	"ray-train-platform-backend/observability"
@@ -39,6 +40,11 @@ func main() {
 	if cfg.MigrationsOnly {
 		return
 	}
+	domain.SetResourceLimits(domain.ResourceLimits{
+		MaxWorkerReplicas: cfg.MaxWorkerReplicas,
+		MaxGPUsPerWorker:  cfg.MaxGPUsPerWorker,
+		MaxTotalGPUs:      cfg.MaxTotalGPUs,
+	})
 	repository := repositories.NewGormRepository(database)
 
 	kubeClient, err := newKubernetesClient(cfg)

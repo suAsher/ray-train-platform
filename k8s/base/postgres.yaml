@@ -1,0 +1,113 @@
+# PostgreSQL with durable storage.
+#
+# Replaces k8s/test/postgres.yaml, which uses emptyDir and loses every account,
+# job and audit record whenever the Pod moves. This one keeps data on an EBS
+# volume, so the database survives Pod restarts and node replacement.
+#
+# It is a StatefulSet rather than a Deployment: a Deployment with a
+# ReadWriteOnce volume can deadlock during a rolling update, because the new
+# Pod cannot attach the disk until the old one releases it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: ray-train-platform
+  labels:
+    app: postgres
+spec:
+  clusterIP: None
+  selector:
+    app: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: ray-train-platform
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      # No hostname pin, so the database can move to a surviving node when a
+      # machine is drained. It is still kept off serverless virtual-kubelet
+      # nodes: those cannot mount an EBS volume and cannot reach the internal
+      # image mirror.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node.kubernetes.io/instance-type
+                    operator: NotIn
+                    values: ["virtual-node"]
+                  - key: type
+                    operator: NotIn
+                    values: ["virtual-kubelet"]
+      securityContext:
+        fsGroup: 999
+        runAsUser: 999
+        runAsNonRoot: true
+      containers:
+        - name: postgres
+          image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/postgres:16-alpine
+          ports:
+            - containerPort: 5432
+              name: postgres
+          env:
+            - name: POSTGRES_DB
+              value: platform
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: ray-platform-postgres
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ray-platform-postgres
+                  key: POSTGRES_PASSWORD
+            # The image only initialises a fresh cluster when PGDATA is empty,
+            # and a mounted volume root is never empty (lost+found), so point
+            # it at a subdirectory.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d platform"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d platform"]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: ebs-ssd
+        resources:
+          requests:
+            storage: 50Gi

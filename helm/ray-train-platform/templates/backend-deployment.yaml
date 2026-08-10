@@ -37,6 +37,17 @@ spec:
           labelSelector:
             matchLabels:
               app: ray-train-backend
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node.kubernetes.io/instance-type
+                    operator: NotIn
+                    values: ["virtual-node"]
+                  - key: type
+                    operator: NotIn
+                    values: ["virtual-kubelet"]
       {{- with .Values.backend.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -90,6 +101,12 @@ spec:
                   key: PAT_PEPPER
             - name: TRAINING_NODE_SELECTOR
               value: {{ .Values.training.nodeSelector | quote }}
+            - name: MAX_WORKER_REPLICAS
+              value: {{ .Values.training.maxWorkerReplicas | quote }}
+            - name: MAX_GPUS_PER_WORKER
+              value: {{ .Values.training.maxGPUsPerWorker | quote }}
+            - name: MAX_TOTAL_GPUS
+              value: {{ .Values.training.maxTotalGPUs | quote }}
             - name: KUEUE_AUTO_QUOTA
               value: {{ .Values.kueue.autoQuota | quote }}
             - name: LOCAL_AUTH_ENABLED

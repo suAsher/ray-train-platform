@@ -198,17 +198,51 @@ ResourceFlavor 的 `nodeLabels` 也要同步改成一样的值。
 
 新租户或新 namespace 都要有 `tos-credentials`（见第 7 节），否则 Pod 停在 `CreateContainerConfigError`。
 
-### 8.5 移除旧的单卡节点
+### 8.5 替换节点：踢掉旧机器，换上新机器
 
-先确认没有任务占用，再摘除：
+平台自身（API / 前端 / PostgreSQL）已经不再绑定任何具体节点，可以在真实节点之间自由漂移，同时通过 nodeAffinity 排除 serverless 虚拟节点（VCI 挂不了 EBS，也拉不到内部镜像源）。
+
+PostgreSQL 使用 `ebs-ssd` 上的 PVC（[k8s/base/postgres.yaml](../k8s/base/postgres.yaml)），是 StatefulSet 而非 Deployment —— Deployment 配 ReadWriteOnce 卷做滚动更新会因为新旧 Pod 抢同一块盘而死锁。
+
+**替换前务必先备份**，即使有 PVC：
 
 ```bash
-kubectl drain 172.28.0.167 --ignore-daemonsets --delete-emptydir-data
+kubectl -n ray-train-platform exec postgres-0 -- pg_dump -U platform -d platform --clean --if-exists > backup-$(date +%Y%m%d-%H%M%S).sql
 ```
 
-平台自身的 Pod 目前用 `nodeSelector` 钉在这台机器上（`backend.nodeSelector`），摘除前要把这个约束改掉或去掉，否则 API 起不来。
+然后逐台替换（一次一台，让 PVC 有时间在新节点重新挂载）：
 
-### 8.6 扩容后回归验证
+```bash
+kubectl cordon <旧节点> && kubectl drain <旧节点> --ignore-daemonsets --delete-emptydir-data --timeout=10m
+```
+
+确认平台 Pod 都在新节点上跑起来、数据还在，再摘节点：
+
+```bash
+kubectl -n ray-train-platform get pods -o wide && kubectl -n ray-train-platform exec postgres-0 -- psql -U platform -d platform -c 'select count(*) from training_jobs;'
+```
+
+```bash
+kubectl delete node <旧节点>
+```
+
+> EBS 卷是可用区绑定的。新机器必须和旧机器在**同一个可用区**（当前是 `cn-shanghai-a`），否则 `postgres-0` 会一直 Pending，报无法挂载卷。跨可用区替换需要先 dump、删 PVC、在新可用区重建再 restore。
+
+### 8.6 单任务规模上限
+
+三台机器时默认值正好够用；**加到第 4 台及以上时**要一起抬高，否则单个任务最多还是只能用 3 worker：
+
+```bash
+helm upgrade ray-platform ./helm/ray-train-platform -n ray-train-platform -f <values> --set training.maxWorkerReplicas=6 --set training.maxTotalGPUs=48 --wait
+```
+
+| 值 | 默认 | 含义 |
+|---|---|---|
+| `training.maxWorkerReplicas` | 3 | 单任务最多几个 worker |
+| `training.maxGPUsPerWorker` | 8 | 每个 worker 最多几卡 |
+| `training.maxTotalGPUs` | 24 | 单任务总卡数上限 |
+
+### 8.7 扩容后回归验证
 
 ```bash
 API_URL=http://<portal> PLATFORM_PASSWORD=<密码> IMAGE=<镜像@sha256:...> python3 scripts/submit_smoke_job.py
@@ -216,11 +250,17 @@ API_URL=http://<portal> PLATFORM_PASSWORD=<密码> IMAGE=<镜像@sha256:...> pyt
 
 再提交一个 3 worker × 8 卡的 24 卡任务，确认 Kueue 能一次性准入（gang scheduling），并实测多机 NCCL 带宽——这是 4090 集群最需要提前验证的一项，机间没有 RDMA 时通信会成为瓶颈。
 
-### 8.7 代码里仍然与规模相关的约束
+### 8.8 完整检查清单
 
-[backend/domain/training_job.go](../backend/domain/training_job.go) 对单任务规模有硬上限：worker ≤ 3、每 worker GPU ≤ 8、总卡数 ≤ 24。正好匹配目标硬件；**再往上扩容时需要改这三个数字并重新构建后端镜像**。
-
----
+| 步骤 | 必须 | 说明 |
+|---|---|---|
+| 新节点打 `accelerator` 标签 | ✅ | 唯一必做的一步 |
+| 新节点与 PG 卷同可用区 | ✅ | 否则 postgres-0 Pending |
+| 备份数据库 | ✅ | 替换节点前 |
+| Kueue 配额 | ❌ 自动 | 控制器按标签节点自动对齐 |
+| 重建镜像 / 改 Helm | ❌ | 除非要抬高单任务规模上限 |
+| 租户 namespace 的 `tos-credentials` | ⚠️ | 只在新增租户时 |
+| 抬高 `training.max*` | ⚠️ | 只在超过 3 台机器时 |
 
 ## 9. 正式版本发布流程
 

@@ -101,6 +101,11 @@ ingress:
 # and raising the Kueue quota below — no image rebuild.
 training:
   nodeSelector: "accelerator=nvidia-rtx-4090"
+  # Largest single job the platform accepts. Defaults match a 3 × 8 fleet;
+  # raise them when machines are added — values change only, no rebuild.
+  maxWorkerReplicas: 3
+  maxGPUsPerWorker: 8
+  maxTotalGPUs: 24
 
 kueue:
   enabled: false

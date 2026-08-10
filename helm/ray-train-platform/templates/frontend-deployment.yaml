@@ -46,6 +46,17 @@ spec:
           labelSelector:
             matchLabels:
               app: ray-train-frontend
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node.kubernetes.io/instance-type
+                    operator: NotIn
+                    values: ["virtual-node"]
+                  - key: type
+                    operator: NotIn
+                    values: ["virtual-kubelet"]
       {{- with .Values.frontend.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

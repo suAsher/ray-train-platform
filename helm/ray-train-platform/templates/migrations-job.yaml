@@ -18,6 +18,19 @@ spec:
     spec:
       restartPolicy: OnFailure
       automountServiceAccountToken: false
+      # Migrations run as a pre-upgrade hook. Without this the Job can land on a
+      # serverless virtual node, fail to pull the image, and abort the release.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node.kubernetes.io/instance-type
+                    operator: NotIn
+                    values: ["virtual-node"]
+                  - key: type
+                    operator: NotIn
+                    values: ["virtual-kubelet"]
       {{- with .Values.backend.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
