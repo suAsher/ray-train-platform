@@ -68,9 +68,15 @@ func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderO
 			"securityContext":              securityContext,
 			"containers": []any{map[string]any{
 				"name": "ray-head", "image": options.Image, "imagePullPolicy": "IfNotPresent",
-				"command":      []any{"/bin/sh", "-c"},
-				"args":         []any{"ray start --head --dashboard-host=0.0.0.0 --num-gpus=0 & exec jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --ServerApp.token='' --ServerApp.base_url='" + strings.TrimRight(options.JupyterBasePath, "/") + "/'"},
-				"ports":        []any{map[string]any{"name": "jupyter", "containerPort": int64(8888)}, map[string]any{"name": "dashboard", "containerPort": int64(8265)}},
+				"command": []any{"/bin/sh", "-c"},
+				"args": []any{"ray start --head --dashboard-host=0.0.0.0 --num-gpus=0 & " +
+					"code-server --bind-addr 0.0.0.0:8443 --auth none --disable-telemetry /home/ray & " +
+					"exec jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --ServerApp.token='' --ServerApp.base_url='" + strings.TrimRight(options.JupyterBasePath, "/") + "/'"},
+				"ports": []any{
+					map[string]any{"name": "jupyter", "containerPort": int64(8888)},
+					map[string]any{"name": "vscode", "containerPort": int64(8443)},
+					map[string]any{"name": "dashboard", "containerPort": int64(8265)},
+				},
 				"resources":    map[string]any{"requests": map[string]any{"cpu": "4", "memory": "16Gi"}, "limits": map[string]any{"cpu": "8", "memory": "32Gi"}},
 				"volumeMounts": headMounts, "securityContext": containerSecurity,
 			}},
@@ -217,7 +223,7 @@ func (c *Client) EnsureWorkspaceService(ctx context.Context, namespace, clusterN
 	if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("get workspace service: %w", err)
 	}
-	_, err = services.Create(ctx, &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: serviceName, Namespace: namespace, Labels: map[string]string{"app.kubernetes.io/managed-by": "ray-train-platform", "ray.io/workspace-id": workspaceID}}, Spec: corev1.ServiceSpec{Selector: map[string]string{"ray.io/cluster": clusterName, "ray.io/node-type": "head"}, Ports: []corev1.ServicePort{{Name: "jupyter", Port: 8888}, {Name: "dashboard", Port: 8265}}}}, metav1.CreateOptions{})
+	_, err = services.Create(ctx, &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: serviceName, Namespace: namespace, Labels: map[string]string{"app.kubernetes.io/managed-by": "ray-train-platform", "ray.io/workspace-id": workspaceID}}, Spec: corev1.ServiceSpec{Selector: map[string]string{"ray.io/cluster": clusterName, "ray.io/node-type": "head"}, Ports: []corev1.ServicePort{{Name: "jupyter", Port: 8888}, {Name: "vscode", Port: 8443}, {Name: "dashboard", Port: 8265}}}}, metav1.CreateOptions{})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create workspace service: %w", err)
 	}

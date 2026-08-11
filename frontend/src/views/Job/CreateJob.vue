@@ -62,7 +62,17 @@
           </el-form-item>
 
           <el-form-item label="训练镜像 digest">
-            <el-input v-model="form.image" placeholder="registry.example.com/ray-train@sha256:<64位digest>" />
+            <el-select v-model="form.image" class="w-full" placeholder="选择训练运行环境" :loading="loadingImages" filterable allow-create>
+              <el-option v-for="image in trainingImages" :key="image.id" :label="image.name + (image.framework ? ` · ${image.framework}` : '')" :value="image.reference">
+                <div class="flex justify-between items-center gap-4">
+                  <span>{{ image.name }}<el-tag v-if="image.isDefault" size="small" type="success" effect="plain" class="ml-2">默认</el-tag></span>
+                  <span class="text-[11px] text-slate-500">{{ image.framework }}</span>
+                </div>
+              </el-option>
+            </el-select>
+            <p class="text-[11px] text-slate-500 mt-1">
+              {{ trainingImages.length ? '从管理员登记的镜像目录中选择，确保依赖环境一致；也可直接粘贴带 digest 的镜像。' : '镜像目录为空，请粘贴带 @sha256 digest 的镜像，或由管理员先登记镜像。' }}
+            </p>
             <div class="text-[11px] text-slate-500 mt-1">生产环境只允许不可变的 sha256 镜像，不接受 latest。</div>
           </el-form-item>
 
@@ -188,10 +198,11 @@
 </template>
 
 <script setup>
-import { reactive, computed, onMounted } from 'vue'
+import { reactive, ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { apiPost } from '../../api/client'
+import { fetchImages } from '../../api/catalog'
 
 const router = useRouter()
 const route = useRoute()
@@ -263,6 +274,22 @@ const applyPreset = (tpl) => {
   form.entrypoint = tpl.entrypoint
   ElMessage.success(`已成功加载预设模板: ${tpl.name}`)
 }
+
+const trainingImages = ref([])
+const loadingImages = ref(false)
+
+onMounted(async () => {
+  loadingImages.value = true
+  try {
+    trainingImages.value = await fetchImages('training')
+    const preferred = trainingImages.value.find((image) => image.isDefault) || trainingImages.value[0]
+    if (preferred && !form.image) form.image = preferred.reference
+  } catch {
+    trainingImages.value = []
+  } finally {
+    loadingImages.value = false
+  }
+})
 
 const submitJob = async () => {
   try {

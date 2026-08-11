@@ -30,6 +30,9 @@ type RenderOptions struct {
 	// NodeSelector pins Ray Pods to the GPU training pool. It is configuration
 	// so that adding machines or changing GPU model needs no code change.
 	NodeSelector map[string]string
+	// GitCredentialSecret names a Secret in the tenant namespace holding
+	// GIT_USERNAME/GIT_TOKEN for a private repository. Empty for public ones.
+	GitCredentialSecret string
 }
 
 // defaultTrainingNodeSelector matches the label the deployment guide asks
@@ -306,6 +309,14 @@ func sourceMaterializer(source domain.CodeSource, options RenderOptions) map[str
 		// safe.directory is passed per command rather than written with
 		// --global because the materializer image has no writable HOME.
 		git := "git -c safe.directory=/workspace"
+		if options.GitCredentialSecret != "" {
+			// Feed the token through an askpass helper. Putting it in the remote
+			// URL would persist it in .git/config and expose it in process
+			// arguments and error messages.
+			command += "printf '#!/bin/sh\\ncase \"$1\" in *Username*) echo \"$GIT_USERNAME\";; *) echo \"$GIT_TOKEN\";; esac\\n' > /tmp/askpass\n"
+			command += "chmod +x /tmp/askpass\n"
+			command += "export GIT_ASKPASS=/tmp/askpass GIT_TERMINAL_PROMPT=0\n"
+		}
 		command += git + " init /workspace\n"
 		command += git + " -C /workspace remote add origin " + shellQuote(source.URL) + "\n"
 		command += git + " -C /workspace fetch --depth 1 origin " + shellQuote(source.Commit) + "\n"
@@ -320,6 +331,16 @@ func sourceMaterializer(source domain.CodeSource, options RenderOptions) map[str
 		command += "cp -a " + shellQuote(idcMountPath+"/snapshots/"+source.Snapshot) + "/. /workspace/\n"
 	}
 	env := []any{}
+	if source.Type == "git" && options.GitCredentialSecret != "" {
+		for _, key := range []string{"GIT_USERNAME", "GIT_TOKEN"} {
+			env = append(env, map[string]any{
+				"name": key,
+				"valueFrom": map[string]any{"secretKeyRef": map[string]any{
+					"name": options.GitCredentialSecret, "key": key,
+				}},
+			})
+		}
+	}
 	if source.Type == "tos" {
 		env = append(env,
 			map[string]any{"name": "TOS_ENDPOINT", "value": options.TOSEndpoint},

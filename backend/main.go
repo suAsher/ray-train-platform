@@ -91,7 +91,7 @@ func main() {
 
 	logs := &observability.LokiClient{BaseURL: cfg.LokiURL}
 	metrics := &observability.PrometheusClient{BaseURL: cfg.PrometheusURL}
-	jobHandler := api.NewHandler(repository, api.Options{AllowAnonymous: cfg.DemoMode, Logs: logs, Metrics: metrics, ImageAllowlist: cfg.RayImageAllowlist, GitAllowlist: cfg.GitAllowlist, Workspaces: repository, Kubernetes: kubeClient, WorkspaceImage: cfg.WorkspaceImage, RayVersion: cfg.RayVersion, ServiceAccount: cfg.RayJobServiceAccount, ImagePullSecrets: cfg.ImagePullSecrets, IDCClaim: cfg.IDCExistingClaim, IDCMountPath: cfg.IDCMountPath, KueueClusterQueue: cfg.KueueClusterQueue, Admin: repository, Quota: repository, WorkspacePepper: []byte(cfg.PATPepper), TrainingNodeSelector: cfg.TrainingNodeSelector})
+	jobHandler := api.NewHandler(repository, api.Options{AllowAnonymous: cfg.DemoMode, Logs: logs, Metrics: metrics, ImageAllowlist: cfg.RayImageAllowlist, GitAllowlist: cfg.GitAllowlist, Workspaces: repository, Kubernetes: kubeClient, WorkspaceImage: cfg.WorkspaceImage, RayVersion: cfg.RayVersion, ServiceAccount: cfg.RayJobServiceAccount, ImagePullSecrets: cfg.ImagePullSecrets, IDCClaim: cfg.IDCExistingClaim, IDCMountPath: cfg.IDCMountPath, KueueClusterQueue: cfg.KueueClusterQueue, Admin: repository, Quota: repository, WorkspacePepper: []byte(cfg.PATPepper), TrainingNodeSelector: cfg.TrainingNodeSelector, Images: repository, GitCredentials: repository})
 	rayHandler, err := newRayAPIHandler(repository, jobHandler.SubmissionService(), logs, cfg)
 	if err != nil {
 		log.Fatalf("initialize Ray Jobs API compatibility: %v", err)
@@ -222,6 +222,8 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	oidcOnly := interactive
 	jobs.RegisterWorkspaceRoutes(oidcOnly)
 	jobs.RegisterAdminRoutes(oidcOnly)
+	jobs.RegisterImageRoutes(interactive)
+	jobs.RegisterGitCredentialRoutes(interactive)
 	oidcOnly.GET("/cluster/topology", clusterTopologyHandler(kubeClient))
 	if pats != nil {
 		pats.RegisterRoutes(oidcOnly)
@@ -246,7 +248,7 @@ func newKubernetesClient(cfg config.Config) (*k8s.Client, error) {
 }
 
 func newReconcilerWithQuotaSync(repository *repositories.GormRepository, client *k8s.Client, cfg config.Config, options k8s.RenderOptions) *k8s.Reconciler {
-	return k8s.NewReconciler(repository, client, options).WithQuotaSync(k8s.QuotaSyncOptions{
+	return k8s.NewReconciler(repository, client, options).WithGitCredentials(repository).WithQuotaSync(k8s.QuotaSyncOptions{
 		ClusterQueueName: cfg.KueueClusterQueue,
 		Enabled:          cfg.KueueAutoQuota,
 	})

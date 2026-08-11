@@ -11,6 +11,12 @@ import (
 	"ray-train-platform-backend/domain"
 )
 
+// GitCredentialResolver supplies the Secret name for a private repository, so
+// the renderer only wires a credential in when the tenant registered one.
+type GitCredentialResolver interface {
+	GitCredentialSecretFor(ctx context.Context, tenantID, repositoryURL string) string
+}
+
 type JobStore interface {
 	GetByID(context.Context, string) (*domain.TrainingJob, error)
 	ListReconcileCandidates(context.Context, int) ([]string, error)
@@ -27,6 +33,7 @@ type Reconciler struct {
 	interval         time.Duration
 	clusterQueueName string
 	autoQuota        bool
+	gitCredentials   GitCredentialResolver
 	lastQuotaError   string
 }
 
@@ -35,6 +42,11 @@ type Reconciler struct {
 type QuotaSyncOptions struct {
 	ClusterQueueName string
 	Enabled          bool
+}
+
+func (r *Reconciler) WithGitCredentials(resolver GitCredentialResolver) *Reconciler {
+	r.gitCredentials = resolver
+	return r
 }
 
 func (r *Reconciler) WithQuotaSync(options QuotaSyncOptions) *Reconciler {
@@ -149,7 +161,11 @@ func (r *Reconciler) ReconcileJob(ctx context.Context, jobID string) error {
 	if job.DesiredState == domain.DesiredCanceled {
 		return r.reconcileCancellation(ctx, job)
 	}
-	manifest, err := RenderRayJob(*job, r.renderOptions)
+	options := r.renderOptions
+	if r.gitCredentials != nil && job.Spec.Source.Type == "git" {
+		options.GitCredentialSecret = r.gitCredentials.GitCredentialSecretFor(ctx, job.TenantID, job.Spec.Source.URL)
+	}
+	manifest, err := RenderRayJob(*job, options)
 	if err != nil {
 		return err
 	}

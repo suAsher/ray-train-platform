@@ -51,6 +51,8 @@ type Handler struct {
 	workspacePepper      []byte
 	trainingNodeSelector map[string]string
 	workspaceUpstream    func(*domain.DevWorkspace) string
+	images               ImageStore
+	gitCredentials       GitCredentialStore
 	newID                func() (string, error)
 	submission           *SubmissionService
 }
@@ -82,10 +84,12 @@ type Options struct {
 	Quota                QuotaStore
 	WorkspacePepper      []byte
 	TrainingNodeSelector map[string]string
+	Images               ImageStore
+	GitCredentials       GitCredentialStore
 }
 
 func NewHandler(repository JobRepository, options Options) *Handler {
-	handler := &Handler{repository: repository, logs: options.Logs, metrics: options.Metrics, allowAnonymous: options.AllowAnonymous, imageAllowlist: append([]string(nil), options.ImageAllowlist...), gitAllowlist: append([]string(nil), options.GitAllowlist...), workspaces: options.Workspaces, kubernetes: options.Kubernetes, workspaceImage: options.WorkspaceImage, rayVersion: options.RayVersion, serviceAccount: options.ServiceAccount, imagePullSecrets: append([]string(nil), options.ImagePullSecrets...), idcClaim: options.IDCClaim, idcMountPath: options.IDCMountPath, clusterQueue: options.KueueClusterQueue, admin: options.Admin, quota: options.Quota, workspacePepper: append([]byte(nil), options.WorkspacePepper...), trainingNodeSelector: options.TrainingNodeSelector, newID: newJobID}
+	handler := &Handler{repository: repository, logs: options.Logs, metrics: options.Metrics, allowAnonymous: options.AllowAnonymous, imageAllowlist: append([]string(nil), options.ImageAllowlist...), gitAllowlist: append([]string(nil), options.GitAllowlist...), workspaces: options.Workspaces, kubernetes: options.Kubernetes, workspaceImage: options.WorkspaceImage, rayVersion: options.RayVersion, serviceAccount: options.ServiceAccount, imagePullSecrets: append([]string(nil), options.ImagePullSecrets...), idcClaim: options.IDCClaim, idcMountPath: options.IDCMountPath, clusterQueue: options.KueueClusterQueue, admin: options.Admin, quota: options.Quota, workspacePepper: append([]byte(nil), options.WorkspacePepper...), trainingNodeSelector: options.TrainingNodeSelector, images: options.Images, gitCredentials: options.GitCredentials, newID: newJobID}
 	handler.submission = NewSubmissionService(repository, SubmissionServiceOptions{
 		ImageAllowlist: handler.imageAllowlist,
 		GitAllowlist:   handler.gitAllowlist,
@@ -186,6 +190,28 @@ func (h *Handler) writeSubmissionError(c *gin.Context, principal auth.Principal,
 		}
 		h.writeError(c, http.StatusInternalServerError, "JOB_CREATE_FAILED", "could not create training job")
 	}
+}
+
+// imageIsPermitted checks the requested image against the catalogue first: once
+// an administrator publishes images, that catalogue is the allowlist. The
+// static config allowlist remains the fallback for deployments that have not
+// populated the catalogue yet.
+func (h *Handler) imageIsPermitted(c *gin.Context, tenantID, reference string) bool {
+	if h.images != nil {
+		if _, err := h.images.ImageByReference(c.Request.Context(), tenantID, domain.ImageKindTraining, reference); err == nil {
+			return true
+		}
+		catalog, err := h.images.ListImages(c.Request.Context(), tenantID, domain.ImageKindTraining)
+		if err == nil && len(catalog) > 0 {
+			h.writeError(c, http.StatusBadRequest, "IMAGE_NOT_ALLOWED", "the requested image is not in the platform image catalog")
+			return false
+		}
+	}
+	if !matchesAllowlist(reference, h.imageAllowlist) {
+		h.writeError(c, http.StatusBadRequest, "IMAGE_NOT_ALLOWED", "the requested image is not in the platform allowlist")
+		return false
+	}
+	return true
 }
 
 func (h *Handler) listJobs(c *gin.Context) {

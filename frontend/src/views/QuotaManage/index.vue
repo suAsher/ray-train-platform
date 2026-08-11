@@ -133,6 +133,143 @@
       </el-table>
     </div>
 
+    <!-- Image catalogue: the environments users can pick for jobs and debugging -->
+    <div class="bg-[#131826] p-6 rounded-2xl border border-slate-800/80 space-y-4 shadow-xl">
+      <div class="flex justify-between items-center">
+        <div>
+          <h4 class="text-sm font-bold text-white flex items-center gap-2">
+            <el-icon class="text-emerald-400"><Box /></el-icon> 镜像目录（训练 / 调试运行环境）
+          </h4>
+          <p class="text-[11px] text-slate-500 mt-1">用户在提交任务和启动调试环境时从这里选择，保证依赖环境一致且可复现。</p>
+        </div>
+        <el-button size="small" icon="Plus" @click="showAddImageModal = true">登记镜像</el-button>
+      </div>
+
+      <el-table :data="catalogImages" style="width: 100%" class="!bg-transparent text-xs" empty-text="尚未登记任何镜像">
+        <el-table-column prop="name" label="名称" min-width="150" />
+        <el-table-column prop="kind" label="用途" width="110">
+          <template #default="scope">
+            <el-tag size="small" :type="scope.row.kind === 'training' ? 'primary' : 'warning'" effect="plain">
+              {{ scope.row.kind === 'training' ? '训练' : '调试' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="framework" label="框架" width="120" />
+        <el-table-column prop="reference" label="镜像（digest）" min-width="260">
+          <template #default="scope">
+            <span class="font-mono text-[11px] text-slate-400 break-all">{{ scope.row.reference }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="范围" width="100">
+          <template #default="scope">
+            <el-tag size="small" effect="plain">{{ scope.row.tenantId ? '本团队' : '全平台' }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="90" align="right">
+          <template #default="scope">
+            <el-button type="danger" link size="small" @click="removeImage(scope.row.id)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
+
+    <!-- Private repository credentials -->
+    <div class="bg-[#131826] p-6 rounded-2xl border border-slate-800/80 space-y-4 shadow-xl">
+      <div class="flex justify-between items-center">
+        <div>
+          <h4 class="text-sm font-bold text-white flex items-center gap-2">
+            <el-icon class="text-blue-400"><Key /></el-icon> 私有 Git 仓库凭证
+          </h4>
+          <p class="text-[11px] text-slate-500 mt-1">令牌保存在租户 namespace 的 Kubernetes Secret 中，数据库只记录引用；拉取私有仓库时自动注入。</p>
+        </div>
+        <el-button size="small" icon="Plus" @click="showAddCredentialModal = true">添加凭证</el-button>
+      </div>
+
+      <el-table :data="gitCredentials" style="width: 100%" class="!bg-transparent text-xs" empty-text="尚未配置私有仓库凭证">
+        <el-table-column prop="name" label="名称" min-width="140" />
+        <el-table-column prop="host" label="Git 主机" min-width="180" />
+        <el-table-column prop="username" label="用户名" width="140" />
+        <el-table-column prop="secretName" label="Secret" min-width="180">
+          <template #default="scope"><span class="font-mono text-[11px] text-slate-400">{{ scope.row.secretName }}</span></template>
+        </el-table-column>
+        <el-table-column label="操作" width="90" align="right">
+          <template #default="scope">
+            <el-button type="danger" link size="small" @click="removeCredential(scope.row.id)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
+
+    <!-- Create a tenant: database row, namespace and Kueue queue in one step -->
+    <el-dialog v-model="showAddTenantModal" title="新建租户 / 团队" width="440px">
+      <el-form label-position="top" @submit.prevent>
+        <el-form-item label="租户 ID">
+          <el-input v-model="newTenant.id" placeholder="小写字母、数字或短横线，例如 team-a" />
+        </el-form-item>
+        <el-form-item label="显示名称">
+          <el-input v-model="newTenant.name" placeholder="例如 感知算法组" />
+        </el-form-item>
+        <el-form-item label="GPU 配额（卡）">
+          <el-input-number v-model="newTenant.gpuQuota" :min="0" :max="512" class="w-full" />
+        </el-form-item>
+        <p class="text-[11px] text-slate-500">将同时创建 Kubernetes namespace 与 Kueue 队列。</p>
+      </el-form>
+      <template #footer>
+        <el-button @click="showAddTenantModal = false">取消</el-button>
+        <el-button type="primary" :loading="creatingTenant" @click="submitTenant">创建</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="showAddImageModal" title="登记镜像" width="480px">
+      <el-form label-position="top" @submit.prevent>
+        <el-form-item label="名称">
+          <el-input v-model="newImage.name" placeholder="例如 PyTorch 2.4 + CUDA 12.1" />
+        </el-form-item>
+        <el-form-item label="用途">
+          <el-select v-model="newImage.kind" class="w-full">
+            <el-option label="训练任务" value="training" />
+            <el-option label="交互式调试" value="workspace" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="镜像（必须带 @sha256 digest）">
+          <el-input v-model="newImage.reference" placeholder="registry/repo@sha256:..." />
+        </el-form-item>
+        <el-form-item label="框架标注">
+          <el-input v-model="newImage.framework" placeholder="可选，例如 PyTorch / DeepSpeed" />
+        </el-form-item>
+        <div class="flex gap-6">
+          <el-checkbox v-model="newImage.isDefault">设为该用途的默认镜像</el-checkbox>
+          <el-checkbox v-model="newImage.shared" :disabled="!isSuperAdmin">全平台共享</el-checkbox>
+        </div>
+      </el-form>
+      <template #footer>
+        <el-button @click="showAddImageModal = false">取消</el-button>
+        <el-button type="primary" :loading="creatingImage" @click="submitImage">登记</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="showAddCredentialModal" title="添加私有仓库凭证" width="440px">
+      <el-form label-position="top" @submit.prevent>
+        <el-form-item label="名称">
+          <el-input v-model="newCredential.name" placeholder="例如 内网 GitLab" />
+        </el-form-item>
+        <el-form-item label="Git 主机">
+          <el-input v-model="newCredential.host" placeholder="git.example.com（只填主机名）" />
+        </el-form-item>
+        <el-form-item label="用户名">
+          <el-input v-model="newCredential.username" placeholder="留空则使用 git" />
+        </el-form-item>
+        <el-form-item label="访问令牌 / 密码">
+          <el-input v-model="newCredential.token" type="password" show-password placeholder="Personal Access Token" />
+        </el-form-item>
+        <p class="text-[11px] text-slate-500">令牌只写入 Kubernetes Secret，不会保存到平台数据库，也不会在接口中返回。</p>
+      </el-form>
+      <template #footer>
+        <el-button @click="showAddCredentialModal = false">取消</el-button>
+        <el-button type="primary" :loading="creatingCredential" @click="submitCredential">保存</el-button>
+      </template>
+    </el-dialog>
+
     <!-- Create a local account so a colleague can sign in without an IdP -->
     <el-dialog v-model="showAddUserModal" title="添加平台账号" width="440px">
       <el-form label-position="top" @submit.prevent>
@@ -159,9 +296,11 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { apiDelete, apiGet, apiPost } from '../../api/client'
+import { createGitCredential, createImage, createTenant, deleteGitCredential, deleteImage, fetchGitCredentials, fetchImages } from '../../api/catalog'
+import { roles } from '../../stores/session'
 
 const tenants = ref([])
 const users = ref([])
@@ -169,6 +308,105 @@ const showAddTenantModal = ref(false)
 const showAddUserModal = ref(false)
 const creatingUser = ref(false)
 const newUser = ref({ username: '', password: '', role: 'Engineer' })
+const catalogImages = ref([])
+const gitCredentials = ref([])
+const showAddImageModal = ref(false)
+const showAddCredentialModal = ref(false)
+const creatingTenant = ref(false)
+const creatingImage = ref(false)
+const creatingCredential = ref(false)
+const isSuperAdmin = computed(() => roles.value.includes('SuperAdmin'))
+const newTenant = ref({ id: '', name: '', gpuQuota: 24 })
+const newImage = ref({ name: '', kind: 'training', reference: '', framework: '', isDefault: false, shared: false })
+const newCredential = ref({ name: '', host: '', username: '', token: '' })
+
+const loadCatalog = async () => {
+  try {
+    catalogImages.value = await fetchImages()
+  } catch {
+    catalogImages.value = []
+  }
+  try {
+    gitCredentials.value = await fetchGitCredentials()
+  } catch {
+    gitCredentials.value = []
+  }
+}
+
+const submitTenant = async () => {
+  if (!newTenant.value.id) {
+    ElMessage.warning('请填写租户 ID')
+    return
+  }
+  creatingTenant.value = true
+  try {
+    await createTenant(newTenant.value)
+    ElMessage.success(`租户 ${newTenant.value.id} 已创建（含 namespace 与队列）`)
+    showAddTenantModal.value = false
+    newTenant.value = { id: '', name: '', gpuQuota: 24 }
+    await fetchTenants()
+  } catch (error) {
+    ElMessage.error(error.message || '创建租户失败')
+  } finally {
+    creatingTenant.value = false
+  }
+}
+
+const submitImage = async () => {
+  if (!newImage.value.name || !newImage.value.reference) {
+    ElMessage.warning('请填写名称与镜像地址')
+    return
+  }
+  creatingImage.value = true
+  try {
+    await createImage(newImage.value)
+    ElMessage.success('镜像已登记')
+    showAddImageModal.value = false
+    newImage.value = { name: '', kind: 'training', reference: '', framework: '', isDefault: false, shared: false }
+    await loadCatalog()
+  } catch (error) {
+    ElMessage.error(error.message || '登记镜像失败')
+  } finally {
+    creatingImage.value = false
+  }
+}
+
+const removeImage = async (id) => {
+  try {
+    await deleteImage(id)
+    await loadCatalog()
+  } catch (error) {
+    ElMessage.error(error.message || '删除镜像失败')
+  }
+}
+
+const submitCredential = async () => {
+  if (!newCredential.value.host || !newCredential.value.token) {
+    ElMessage.warning('请填写 Git 主机与访问令牌')
+    return
+  }
+  creatingCredential.value = true
+  try {
+    await createGitCredential(newCredential.value)
+    ElMessage.success('凭证已保存到 Kubernetes Secret')
+    showAddCredentialModal.value = false
+    newCredential.value = { name: '', host: '', username: '', token: '' }
+    await loadCatalog()
+  } catch (error) {
+    ElMessage.error(error.message || '保存凭证失败')
+  } finally {
+    creatingCredential.value = false
+  }
+}
+
+const removeCredential = async (id) => {
+  try {
+    await deleteGitCredential(id)
+    await loadCatalog()
+  } catch (error) {
+    ElMessage.error(error.message || '删除凭证失败')
+  }
+}
 
 const queuedJobs = ref([])
 
@@ -266,5 +504,6 @@ onMounted(() => {
   fetchTenants()
   fetchUsers()
   fetchQueuedJobs()
+  loadCatalog()
 })
 </script>

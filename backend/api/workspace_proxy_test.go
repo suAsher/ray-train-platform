@@ -116,8 +116,10 @@ func TestWorkspaceProxySetsPathScopedCookieFromQueryToken(t *testing.T) {
 	if cookie == nil {
 		t.Fatalf("expected the access cookie to be installed")
 	}
-	if cookie.Path != "/api/v1/dev-workspaces/ws-1/proxy/" {
-		t.Fatalf("cookie must be scoped to this workspace's proxy path, got %q", cookie.Path)
+	// Scoped to the workspace so both JupyterLab and code-server can use it,
+	// but not to the rest of the API.
+	if cookie.Path != "/api/v1/dev-workspaces/ws-1/" {
+		t.Fatalf("cookie must be scoped to this workspace, got %q", cookie.Path)
 	}
 	if !cookie.HttpOnly {
 		t.Fatalf("the access cookie must be HttpOnly")

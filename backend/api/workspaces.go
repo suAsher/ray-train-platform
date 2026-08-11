@@ -50,9 +50,9 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 		h.writeSuccess(c, http.StatusOK, existing)
 		return
 	}
-	image := request.Image
-	if image == "" {
-		image = h.workspaceImage
+	image, ok := h.resolveWorkspaceImage(c, principal.TenantID, request.Image)
+	if !ok {
+		return
 	}
 	if err := domain.ValidatePinnedImage(image); err != nil {
 		h.writeError(c, http.StatusBadRequest, "WORKSPACE_IMAGE_REQUIRED", err.Error())
@@ -96,6 +96,29 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 		return
 	}
 	h.writeSuccess(c, http.StatusAccepted, workspace)
+}
+
+// resolveWorkspaceImage takes the image the user picked from the catalogue,
+// falling back to the catalogue default and finally to the deployment-wide
+// image so an environment without a catalogue still works.
+func (h *Handler) resolveWorkspaceImage(c *gin.Context, tenantID, requested string) (string, bool) {
+	if h.images != nil {
+		if requested != "" {
+			image, err := h.images.ImageByReference(c.Request.Context(), tenantID, domain.ImageKindWorkspace, requested)
+			if err != nil {
+				h.writeError(c, http.StatusBadRequest, "IMAGE_NOT_ALLOWED", "the requested workspace image is not in the catalog")
+				return "", false
+			}
+			return image.Reference, true
+		}
+		if image, err := h.images.DefaultImage(c.Request.Context(), tenantID, domain.ImageKindWorkspace); err == nil {
+			return image.Reference, true
+		}
+	}
+	if requested != "" {
+		return requested, true
+	}
+	return h.workspaceImage, true
 }
 
 func (h *Handler) getWorkspace(c *gin.Context) {
@@ -158,17 +181,28 @@ func (h *Handler) stopWorkspace(c *gin.Context) {
 // session guard rejected the request first.
 func (h *Handler) RegisterWorkspaceProxyRoute(group *gin.RouterGroup) {
 	group.Any("/dev-workspaces/:id/proxy/*path", h.proxyWorkspace)
+	group.Any("/dev-workspaces/:id/vscode/*path", h.proxyWorkspaceVSCode)
+}
+
+// proxyWorkspaceVSCode forwards to code-server. It is a separate upstream port
+// rather than a path on JupyterLab, so the editors stay independent.
+func (h *Handler) proxyWorkspaceVSCode(c *gin.Context) {
+	// code-server serves from the root, so the proxy prefix is stripped. Its
+	// static assets and HTML load correctly this way; the editor's WebSocket
+	// session is still refused by code-server at this sub-path and needs
+	// either a dedicated hostname or VSCODE_PROXY_URI support.
+	h.proxyWorkspacePort(c, 8443, true)
 }
 
 const workspaceAccessCookie = "ray_workspace_access"
 
 // upstreamFor resolves the workspace's Jupyter service. It is a field so tests
 // can point the proxy at a local server instead of cluster DNS.
-func (h *Handler) upstreamFor(workspace *domain.DevWorkspace) string {
+func (h *Handler) upstreamForPort(workspace *domain.DevWorkspace, port int) string {
 	if h.workspaceUpstream != nil {
 		return h.workspaceUpstream(workspace)
 	}
-	return fmt.Sprintf("http://%s-head-svc.%s.svc.cluster.local:8888", workspace.RayClusterName, workspace.Namespace)
+	return fmt.Sprintf("http://%s-head-svc.%s.svc.cluster.local:%d", workspace.RayClusterName, workspace.Namespace, port)
 }
 
 // issueWorkspaceAccess mints the short-lived token the Portal puts in the
@@ -199,8 +233,11 @@ func (h *Handler) issueWorkspaceAccess(c *gin.Context) {
 		return
 	}
 	c.Header("Cache-Control", "no-store")
+	base := strings.TrimSuffix(workspace.JupyterURL, "/")
+	vscodeBase := strings.TrimSuffix(base, "/proxy") + "/vscode"
 	h.writeSuccess(c, http.StatusOK, map[string]string{
-		"url": strings.TrimSuffix(workspace.JupyterURL, "/") + "/?access_token=" + url.QueryEscape(token),
+		"url":       base + "/?access_token=" + url.QueryEscape(token),
+		"vscodeUrl": vscodeBase + "/?access_token=" + url.QueryEscape(token),
 	})
 }
 
@@ -236,9 +273,10 @@ func (h *Handler) workspacePrincipal(c *gin.Context) (string, bool) {
 		return "", false
 	}
 	if fromQuery {
-		// Scope the cookie to this workspace's proxy path so it cannot be
-		// replayed against another workspace or the rest of the API.
-		basePath := "/api/v1/dev-workspaces/" + workspaceID + "/proxy/"
+		// Scope the cookie to this workspace so both editors (/proxy and
+		// /vscode) can use it, while it stays unusable against another
+		// workspace or the rest of the API.
+		basePath := "/api/v1/dev-workspaces/" + workspaceID + "/"
 		http.SetCookie(c.Writer, &http.Cookie{
 			Name: workspaceAccessCookie, Value: token, Path: basePath,
 			HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: int(domain.WorkspaceAccessTokenTTL.Seconds()),
@@ -252,6 +290,13 @@ func (h *Handler) workspacePrincipal(c *gin.Context) (string, bool) {
 }
 
 func (h *Handler) proxyWorkspace(c *gin.Context) {
+	h.proxyWorkspacePort(c, 8888, false)
+}
+
+// proxyWorkspacePort is shared by both editors. stripPrefix is true for
+// code-server, which serves from the root, and false for JupyterLab, which is
+// configured with the proxy path as its base_url.
+func (h *Handler) proxyWorkspacePort(c *gin.Context, port int, stripPrefix bool) {
 	subject, ok := h.workspacePrincipal(c)
 	if !ok {
 		h.writeError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "authentication is required")
@@ -266,18 +311,34 @@ func (h *Handler) proxyWorkspace(c *gin.Context) {
 		h.writeError(c, http.StatusNotFound, "WORKSPACE_NOT_FOUND", "debug workspace was not found")
 		return
 	}
-	target, err := url.Parse(h.upstreamFor(workspace))
+	target, err := url.Parse(h.upstreamForPort(workspace, port))
 	if err != nil {
 		h.writeError(c, http.StatusBadGateway, "WORKSPACE_PROXY_FAILED", "invalid workspace service address")
 		return
 	}
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	// code-server derives its base path and websocket origin from these.
+	director := proxy.Director
+	proxy.Director = func(request *http.Request) {
+		director(request)
+		request.Header.Set("X-Forwarded-Proto", "http")
+		if request.Header.Get("X-Forwarded-Host") == "" {
+			request.Header.Set("X-Forwarded-Host", c.Request.Host)
+		}
+	}
 	proxy.ErrorHandler = func(writer http.ResponseWriter, _ *http.Request, _ error) {
 		writer.WriteHeader(http.StatusBadGateway)
 	}
 	// JupyterLab is started with --ServerApp.base_url set to this proxy path,
-	// so the prefix is forwarded rather than stripped. Rewriting it to "/"
-	// makes Jupyter answer 404 and emit links that break outside the proxy.
+	// so its prefix is forwarded rather than stripped. code-server serves from
+	// the root and needs the prefix removed instead.
+	if stripPrefix {
+		path := c.Param("path")
+		if path == "" {
+			path = "/"
+		}
+		c.Request.URL.Path = path
+	}
 	// The access credentials are removed so they never reach the upstream.
 	query := c.Request.URL.Query()
 	query.Del("access_token")

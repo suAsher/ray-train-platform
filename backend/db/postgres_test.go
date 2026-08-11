@@ -30,7 +30,7 @@ func TestMigrationVersionsEmbedded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("migrationVersions() error = %v", err)
 	}
-	if want := []int{1, 2, 3, 4}; !reflect.DeepEqual(versions, want) {
+	if want := []int{1, 2, 3, 4, 5}; !reflect.DeepEqual(versions, want) {
 		t.Fatalf("migrationVersions() = %v, want %v", versions, want)
 	}
 }

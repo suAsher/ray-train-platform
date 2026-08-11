@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"ray-train-platform-backend/auth"
+	"ray-train-platform-backend/domain"
 )
 
 const defaultTenantGPUQuota = 24
@@ -83,4 +85,35 @@ func sanitizeDNS(value string) string {
 		result = result[:50]
 	}
 	return result
+}
+
+// CreateTenant provisions a team row. It is separate from EnsureIdentity, which
+// upserts a tenant implicitly on login; this is the explicit administrative
+// path and refuses to overwrite an existing team.
+func (r *GormRepository) CreateTenant(ctx context.Context, tenant domain.Tenant) error {
+	if err := tenant.Validate(); err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	quota := tenant.GPUQuotaLimit
+	if quota <= 0 {
+		quota = defaultTenantGPUQuota
+	}
+	record := TenantRecord{
+		ID: tenant.ID, Name: tenant.Name, Namespace: tenant.Namespace,
+		LocalQueue: tenant.LocalQueue, GPUQuotaLimit: quota, MaxPriority: "normal",
+		CreatedAt: now, UpdatedAt: now,
+	}
+	var existing TenantRecord
+	err := r.db.WithContext(ctx).Where("id = ?", tenant.ID).First(&existing).Error
+	if err == nil {
+		return fmt.Errorf("tenant %q already exists", tenant.ID)
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return fmt.Errorf("check existing tenant: %w", err)
+	}
+	if err := r.db.WithContext(ctx).Create(&record).Error; err != nil {
+		return fmt.Errorf("create tenant: %w", err)
+	}
+	return nil
 }
