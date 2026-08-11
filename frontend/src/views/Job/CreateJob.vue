@@ -63,7 +63,7 @@
 
           <el-form-item label="训练镜像 digest">
             <el-select v-model="form.image" class="w-full" placeholder="选择训练运行环境" :loading="loadingImages" filterable allow-create>
-              <el-option v-for="image in trainingImages" :key="image.id" :label="image.name + (image.framework ? ` · ${image.framework}` : '')" :value="image.reference">
+              <el-option v-for="image in trainingImages" :key="image.id" :label="imageLabel(image)" :value="image.reference">
                 <div class="flex justify-between items-center gap-4">
                   <span>{{ image.name }}<el-tag v-if="image.isDefault" size="small" type="success" effect="plain" class="ml-2">默认</el-tag></span>
                   <span class="text-[11px] text-slate-500">{{ image.framework }}</span>
@@ -273,6 +273,17 @@ const applyPreset = (tpl) => {
   form.name = `${tpl.id}-run-${suffix}`
   form.entrypoint = tpl.entrypoint
   ElMessage.success(`已成功加载预设模板: ${tpl.name}`)
+}
+
+
+// The default marker belongs in the label: el-select only renders the option
+// slot while the dropdown is open, so a tag inside it is invisible once a
+// value is chosen.
+const imageLabel = (image) => {
+  const parts = [image.name]
+  if (image.framework) parts.push(image.framework)
+  const suffix = image.isDefault ? '（默认）' : ''
+  return `${parts.join(' · ')}${suffix}`
 }
 
 const trainingImages = ref([])

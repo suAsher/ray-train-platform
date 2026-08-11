@@ -58,7 +58,7 @@ Ray Training Platform image builder
 Environment variables:
   REGISTRY=registry.cn-shanghai.aliyuncs.com/ashersu
   IMAGE_TAG=test-20260809
-  BUILD_TARGETS=all|backend,frontend,source-materializer,test-training,workspace
+  BUILD_TARGETS=all|backend,frontend,source-materializer,test-training,workspace,train-pytorch
   PUSH_IMAGE=false|true
   USE_BUILDX=true|false
   BUILD_PLATFORM=linux/amd64
@@ -103,6 +103,9 @@ target_spec() {
     workspace)
       printf '%s\n' 'images/workspace/Dockerfile|ray-workspace|images/workspace'
       ;;
+    train-pytorch)
+      printf '%s\n' 'images/train-pytorch/Dockerfile|ray-train-pytorch|images/train-pytorch'
+      ;;
     *)
       return 1
       ;;
@@ -112,7 +115,7 @@ target_spec() {
 normalize_targets() {
   local raw target
   if [ "$(trim "$BUILD_TARGETS_RAW")" = "all" ]; then
-    printf '%s\n' backend frontend source-materializer test-training workspace
+    printf '%s\n' backend frontend source-materializer test-training workspace train-pytorch
     return
   fi
 
