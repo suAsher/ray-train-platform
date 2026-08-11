@@ -99,6 +99,15 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	}
 	entrypoint := append(append([]string{}, job.Spec.Entrypoint.Command...), job.Spec.Entrypoint.Args...)
 
+	// The submitter runs `ray job submit`, and Ray uploads the runtime env's
+	// working_dir from the submitter's own filesystem. It therefore needs the
+	// same materialized source as the cluster, or the driver gets an empty
+	// working directory.
+	submitterPod := podTemplate("ray-job-submitter", job.Spec.Image, "1", "2Gi", 0, job.Spec.Source, options, true)
+	// KubeRay wraps this template in a batch Job, whose pod spec requires an
+	// explicit restartPolicy; without it the submitter Job is rejected and the
+	// RayJob stalls in Initializing forever.
+	submitterPod["spec"].(map[string]any)["restartPolicy"] = "Never"
 	headPod := podTemplate("ray-head", job.Spec.Image, "4", "16Gi", 0, job.Spec.Source, options, true)
 	workerPod := podTemplate("ray-worker", job.Spec.Image, workerCPU, workerMemory, gpusPerWorker, job.Spec.Source, options, false)
 	addPodLabels(headPod, job.ID, job.TenantID)
@@ -138,7 +147,7 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 				"ray-train-platform/owner":  job.UserID,
 			},
 		},
-		"spec": jobSpecFields(job, clusterSpecField, clusterSpec, entrypoint),
+		"spec": jobSpecFields(job, clusterSpecField, clusterSpec, entrypoint, submitterPod),
 	}
 	return &unstructured.Unstructured{Object: jobObject}, nil
 }
@@ -147,7 +156,7 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 // Portal can capture the final status before KubeRay removes it.
 const defaultCleanupTTLSeconds int64 = 600
 
-func jobSpecFields(job domain.TrainingJob, clusterSpecField string, clusterSpec map[string]any, entrypoint []string) map[string]any {
+func jobSpecFields(job domain.TrainingJob, clusterSpecField string, clusterSpec map[string]any, entrypoint []string, submitterPod map[string]any) map[string]any {
 	cleanupTTL := job.Spec.CleanupPolicy.SuccessTTLSeconds
 	if cleanupTTL <= 0 {
 		cleanupTTL = defaultCleanupTTLSeconds
@@ -170,7 +179,8 @@ func jobSpecFields(job domain.TrainingJob, clusterSpecField string, clusterSpec 
 		// Kueue admits a workload by clearing suspend. A job created unsuspended
 		// would start immediately and bypass the tenant GPU quota. JobSpec
 		// validation guarantees a queue, so this always applies.
-		"suspend": true,
+		"suspend":              true,
+		"submitterPodTemplate": submitterPod,
 	}
 	if job.Spec.TimeoutSeconds > 0 {
 		spec["activeDeadlineSeconds"] = job.Spec.TimeoutSeconds

@@ -1,0 +1,155 @@
+# 正式部署 values 模板
+#
+# 复制成 values-prod.yaml 后逐项替换 <> 占位符。这个文件本身不含任何凭证：
+# 密码和密钥全部通过 Secret 注入，见 docs/DEPLOY_FROM_SCRATCH.md 第 3 节。
+#
+# 之所以用一份完整的 values 文件而不是一串 --set：测试环境累积了 30 多次
+# 修订的配置漂移，逐条纠正比从审阅过的基线重装更容易漏项。
+
+namespace: ray-train-platform
+
+global:
+  imagePullPolicy: IfNotPresent
+  # 内部镜像仓库
+  imageRegistry: <内部仓库地址>/<命名空间>
+  imagePullSecrets:
+    - name: <pull-secret 名称>
+
+backend:
+  # production 会强制要求数据库、Kubernetes 可用，并拒绝 demoMode
+  appEnv: production
+  replicaCount: 2
+  image:
+    repository: ray-train-backend
+    tag: v1.0.0
+  service:
+    type: ClusterIP
+    port: 8080
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { cpu: 2000m, memory: 4Gi }
+
+  database:
+    existingSecret: ray-platform-postgres
+    secretKey: DATABASE_URL
+
+  # 令牌签名密钥：PAT、本地会话、工作区访问共用，至少 32 字节
+  pat:
+    existingSecret: ray-platform-pat
+
+  # ---- 身份认证 ----------------------------------------------------------
+  # 两种模式二选一或并存：
+  # A) 只用本地账号：oidcRequired=false，localAuth.enabled=true
+  # B) 接企业 SSO：oidcRequired=true，并填真实 issuer
+  oidcRequired: false
+  demoMode: false
+  oidc:
+    issuerURL: <https://内部keycloak/realms/xxx>
+    clientID: ray-training-platform
+    audience: ray-training-platform-api
+    groupPrefix: platform/tenants/
+
+  localAuth:
+    enabled: true
+    sessionHours: 12
+    bootstrapUsername: admin
+    bootstrapTenant: platform
+    # 仅在 local_users 为空时创建首个管理员，重启不会覆盖已有账号
+    bootstrapSecret: ray-platform-bootstrap-admin
+
+  # ---- 来源与镜像白名单 --------------------------------------------------
+  # 镜像目录非空时它才是真正的 allowlist；这里作为目录为空时的兜底。
+  imageAllowlist:
+    - <内部仓库地址>/<命名空间>
+  gitAllowlist:
+    - <内部 Git 主机，如 git.internal.example>
+
+  # 必须是 @sha256 digest，构建脚本结束时会打印
+  workspaceImage: <内部仓库>/ray-workspace@sha256:<64位digest>
+  sourceMaterializerImage: <内部仓库>/ray-source-materializer@sha256:<64位digest>
+
+  rayVersion: "2.35.0"
+  rayJobClusterSpecField: rayClusterSpec
+  rayJobServiceAccount: ""
+  sourceArtifactsEnabled: true
+
+  # ---- 可观测性：指向内部服务，没部署就留空并知悉日志页不可用 ----------
+  lokiURL: <http://loki.内部地址:3100>
+  prometheusURL: <http://prometheus.内部地址:9090>
+
+  corsOrigins: []
+
+migrations:
+  enabled: true
+
+frontend:
+  replicaCount: 2
+  image:
+    repository: ray-train-frontend
+    tag: v1.0.0
+  service:
+    type: ClusterIP
+    port: 80
+  resources:
+    requests: { cpu: 200m, memory: 256Mi }
+    limits: { cpu: 1000m, memory: 1Gi }
+  runtimeConfig:
+    # 与 backend.oidcRequired 保持一致：true 时登录页出现 SSO 按钮
+    authRequired: false
+    keycloakURL: <https://内部keycloak>
+    keycloakRealm: <realm>
+    keycloakClientID: ray-training-platform
+
+ingress:
+  enabled: true
+  className: alb
+  host: <内网域名，如 ai-training.internal.example>
+  annotations:
+    ingress.vke.volcengine.com/loadbalancer-type: private
+    ingress.vke.volcengine.com/loadbalancer-port: "80"
+    # JupyterLab / code-server / 日志流都是长连接
+    ingress.vke.volcengine.com/request-timeout: "3600"
+    ingress.vke.volcengine.com/keepalive-timeout: "3600"
+
+# ---- 训练资源池 ----------------------------------------------------------
+training:
+  # Ray head 与 worker 都固定在带这个标签的节点上
+  nodeSelector: "accelerator=nvidia-rtx-4090"
+  # 单任务规模上限；超过 3 台机器时一并抬高
+  maxWorkerReplicas: 3
+  maxGPUsPerWorker: 8
+  maxTotalGPUs: 24
+
+kueue:
+  enabled: false
+  clusterQueueName: cluster-gpu-queue
+  resourceFlavorName: gpu-4090-flavor
+  # autoQuota 打开时，下面三个值会被控制器按实际节点容量覆盖
+  autoQuota: true
+  gpuQuota: 24
+  cpuQuota: 256
+  memoryQuota: 1024Gi
+
+storage:
+  enabled: true
+  existingClaim: <IDC RWX PVC 名称>
+  storageClass: ""
+  size: 2Ti
+  accessModes: ["ReadWriteMany"]
+  mountPath: /mnt/idc
+  tenantNamespaces: []
+
+tos:
+  endpoint: <https://内部对象存储endpoint>
+  bucket: <bucket 名>
+  secretName: tos-credentials
+
+postgres:
+  existingSecret: ray-platform-postgres
+
+networkPolicy:
+  enabled: true
+
+availability:
+  pdbEnabled: true
+  minAvailable: 1

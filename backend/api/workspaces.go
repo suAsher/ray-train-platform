@@ -50,7 +50,7 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 		h.writeSuccess(c, http.StatusOK, existing)
 		return
 	}
-	image, ok := h.resolveWorkspaceImage(c, principal.TenantID, request.Image)
+	image, ok := h.resolveWorkspaceImage(c, principal.TenantID, domain.NormalizeImageReference(request.Image))
 	if !ok {
 		return
 	}

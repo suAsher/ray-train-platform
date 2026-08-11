@@ -97,8 +97,9 @@ func (h *Handler) createImage(c *gin.Context) {
 		return
 	}
 	image := domain.PlatformImage{
-		ID: id, TenantID: tenantID, Name: request.Name, Reference: request.Reference,
-		Kind: request.Kind, Description: request.Description, Framework: request.Framework,
+		ID: id, TenantID: tenantID, Name: request.Name,
+		Reference: domain.NormalizeImageReference(request.Reference),
+		Kind:      request.Kind, Description: request.Description, Framework: request.Framework,
 		IsDefault: request.IsDefault, CreatedBy: principal.Subject,
 	}
 	if err := h.images.CreateImage(c.Request.Context(), image); err != nil {

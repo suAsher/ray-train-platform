@@ -4,10 +4,20 @@
 
 ## 文档
 
+**使用者**
+
+| 文档 | 内容 |
+|---|---|
+| [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | 算法工程师日常使用：提交任务、选镜像、调试环境、命令行提交 |
+| [docs/ADMIN_GUIDE.md](docs/ADMIN_GUIDE.md) | 管理员：建租户、建账号、镜像目录、私有仓库凭证、配额、巡检 |
+
+**平台与运维**
+
 | 文档 | 内容 |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构图、逐层实现状态、与原设计的差异、迭代建议 |
-| [docs/BUILD_AND_DEPLOY.md](docs/BUILD_AND_DEPLOY.md) | 构建、部署、登录配置、扩容、正式发版 |
+| [docs/DEPLOY_FROM_SCRATCH.md](docs/DEPLOY_FROM_SCRATCH.md) | 从零部署 / 换集群 / 换节点 / 切正式部署 |
+| [docs/BUILD_AND_DEPLOY.md](docs/BUILD_AND_DEPLOY.md) | 日常构建发布、登录配置、扩容、发版 |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 仓库结构、本地开发、已踩过的坑、常见改动怎么做 |
 | [docs/CLUSTER_DEPLOYMENT_GUIDE.md](docs/CLUSTER_DEPLOYMENT_GUIDE.md) | 集群前置条件、Keycloak/LDAP、IDC 存储 |
 

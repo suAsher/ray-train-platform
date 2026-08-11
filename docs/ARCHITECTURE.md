@@ -103,7 +103,7 @@ flowchart TB
 | 组件 | 状态 | 说明 |
 |---|---|---|
 | Web Portal | ✅ | Vue 3 + Element Plus，本地账号或 SSO 登录 |
-| CLI / Python SDK | ✅ | `rayctl`（[backend/rayctl](../backend/rayctl)）+ Ray Jobs API 兼容网关（[backend/rayapi](../backend/rayapi)），可直接用 `ray job submit` |
+| CLI / Python SDK | ⚠️ | Ray Jobs API 兼容网关已可达（`/ray/api/*`），版本握手与列任务正常；`ray job submit --working-dir` 因对象存储凭证无效返回 503 |
 | 管理员入口 | ✅ | 角色化导航，非管理员不渲染管理组；后端每个接口独立鉴权 |
 
 ### ② 训练平台控制面
@@ -116,7 +116,10 @@ flowchart TB
 | 元数据存储 | ✅ | PostgreSQL，版本化迁移 [backend/db/migrations](../backend/db/migrations) |
 | SSO / LDAP | ✅ | Keycloak OIDC（LDAP 由 Keycloak User Federation 负责，平台不碰 LDAP 密码） |
 | 本地账号登录 | ✅ | 与 OIDC 并行，无外部依赖即可使用 |
-| **任务模板中心** | ❌ | 未实现。当前提交需手填镜像 digest、commit、资源规格 |
+| 镜像目录 | ✅ | 管理员登记训练/调试镜像，用户下拉选择；强制 sha256 digest；非空时即为 allowlist |
+| 私有仓库凭证 | ✅ | 令牌只入 Kubernetes Secret，库中仅存引用，经 `GIT_ASKPASS` 注入 |
+| 租户自助创建 | ✅ | 一次建库记录 + namespace + Kueue 队列 |
+| **任务模板中心** | ⚠️ | 镜像目录已覆盖「运行环境」这一半；脚本模板与资源规格模板仍未做 |
 | Redis | ❌ | 未引入。架构图标注为可选，目前无会话/缓存需求 |
 
 ### ③ VKE 集群控制层
@@ -135,7 +138,9 @@ flowchart TB
 |---|---|---|
 | RayJob 批量训练 | ✅ | 已在真实 GPU 上跑通完整闭环 |
 | Head / Worker 编排 | ✅ | 均固定在训练节点池，避免落到 serverless 虚拟节点 |
-| Dev RayCluster | ⚠️ | 能创建、能起 Jupyter 代理；固定 1 卡，无空闲回收、无快照、无 SSH |
+| Dev RayCluster | ⚠️ | head 跑 JupyterLab + code-server，worker 持 GPU；JupyterLab 完全可用 |
+| VS Code (code-server) | ⚠️ | 界面与静态资源经代理正常，**WebSocket 会话在子路径下被 404**，需独立域名或 `VSCODE_PROXY_URI` |
+| 工作区生命周期 | ❌ | 无空闲 TTL 回收、无快照、无 SSH、固定 1 卡 |
 
 ### ⑤ 存储与数据层
 
@@ -173,9 +178,11 @@ flowchart TB
 
 架构图本身**没有需要修改的地方**，主体设计全部落地了。当前实现与图的差距集中在三处，都是「图上画了、代码还没做」而不是「设计走偏」：
 
-1. **任务模板中心**（图②）完全未实现——这是新用户上手门槛最高的一环。
-2. **可观测性整层**（图⑥）只做了查询侧，采集侧（Alloy/Loki/Prometheus/DCGM/Grafana）一个都没部署。
+1. **可观测性整层**（图⑥）只做了查询侧，采集侧（Alloy/Loki/Prometheus/DCGM/Grafana）一个都没部署——这是目前最大的空白。
+2. **任务模板中心**（图②）做了一半：镜像目录解决了「运行环境」，脚本模板和资源规格模板还没做。
 3. **Redis、LWS、Training Operator** 三个在图上就标注为「可选/按需」，V1 有意不做。
+
+另外两处被外部条件卡住，不是设计问题：对象存储凭证无效导致代码包上传与数据读写不可用；code-server 在子路径下的 WebSocket 限制导致 VS Code 只能看到界面。
 
 另有一处实现细节与图不同但更安全：图中 Head Pod 未标注节点约束，实际代码把 Head 也固定在训练节点池，避免它被调度到 VKE 的 serverless 虚拟节点（VCI）上导致 GCS 不可达。
 
@@ -183,9 +190,9 @@ flowchart TB
 
 ## 4. 建议的迭代顺序
 
-1. **补可观测性采集侧** —— 装 Loki + Alloy（保留 `platform_job_id` 标签）、Prometheus + DCGM。日志和 GPU 利用率是训练平台的刚需，现在是最大空白。
-2. **修复 TOS 凭据** —— 换上正确的 SK，打通数据集/Checkpoint 读写。
-3. **任务模板中心 + 简化提交表单** —— 让工程师不必手填 digest 和 commit。
+1. **修复对象存储凭据** —— 一处根因同时卡住三条线：`ray job submit` 的代码包上传、数据集读写、Checkpoint 归档。换上正确的 SK 即可，无需改代码。
+2. **补可观测性采集侧** —— 装 Loki + Alloy（保留 `platform_job_id` 标签）、Prometheus + DCGM。日志和 GPU 利用率是训练平台的刚需。
+3. **VS Code 独立域名** —— 给工作区分配 `vscode-<id>.内网域名`，绕开 code-server 的子路径限制。
 4. **任务事件时间线与产物归档** —— `job_events` / `job_artifacts` 两张表已建但无代码读写。
-5. **调试工作区生命周期** —— 空闲 TTL 回收、快照、转训练任务。
+5. **调试工作区生命周期** —— 空闲 TTL 回收、快照、一键固化成镜像。
 6. **CI 增强** —— 目前 CI 只构建镜像，不跑 `go test` / `npm run build` / `helm lint`。

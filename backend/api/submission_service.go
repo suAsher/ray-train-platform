@@ -31,6 +31,10 @@ type SourceArtifactLookup interface {
 type SubmissionQueueEnsurer func(context.Context, string, string, string) error
 
 type SubmissionServiceOptions struct {
+	// Images is the administrator-managed catalogue. When it holds any entry
+	// for the tenant it becomes the authoritative allowlist; ImageAllowlist is
+	// the fallback for deployments that have not populated it yet.
+	Images            ImageStore
 	ImageAllowlist    []string
 	GitAllowlist      []string
 	ClusterQueue      string
@@ -40,6 +44,7 @@ type SubmissionServiceOptions struct {
 
 type SubmissionService struct {
 	repository        JobRepository
+	images            ImageStore
 	imageAllowlist    []string
 	gitAllowlist      []string
 	clusterQueue      string
@@ -62,12 +67,29 @@ func NewSubmissionService(repository JobRepository, options SubmissionServiceOpt
 	}
 	return &SubmissionService{
 		repository:        repository,
+		images:            options.Images,
 		imageAllowlist:    append([]string(nil), options.ImageAllowlist...),
 		gitAllowlist:      append([]string(nil), options.GitAllowlist...),
 		clusterQueue:      strings.TrimSpace(options.ClusterQueue),
 		ensureTenantQueue: options.EnsureTenantQueue,
 		newID:             newID,
 	}
+}
+
+// imagePermitted resolves the requested image against the catalogue first. A
+// populated catalogue is the allowlist, so an administrator controls exactly
+// which environments can run without also editing deployment values.
+func (service *SubmissionService) imagePermitted(ctx context.Context, tenantID, reference string) bool {
+	if service.images != nil {
+		if _, err := service.images.ImageByReference(ctx, tenantID, domain.ImageKindTraining, reference); err == nil {
+			return true
+		}
+		catalog, err := service.images.ListImages(ctx, tenantID, domain.ImageKindTraining)
+		if err == nil && len(catalog) > 0 {
+			return false
+		}
+	}
+	return matchesAllowlist(reference, service.imageAllowlist)
 }
 
 func (service *SubmissionService) Submit(ctx context.Context, input SubmissionInput) (*domain.TrainingJob, error) {
@@ -81,7 +103,7 @@ func (service *SubmissionService) Submit(ctx context.Context, input SubmissionIn
 	if err != nil {
 		return nil, err
 	}
-	if !matchesAllowlist(spec.Image, service.imageAllowlist) {
+	if !service.imagePermitted(ctx, input.Principal.TenantID, spec.Image) {
 		return nil, ErrSubmissionImageNotAllowed
 	}
 	if spec.Source.Type == "git" && !matchesGitAllowlist(spec.Source.URL, service.gitAllowlist) {

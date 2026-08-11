@@ -168,6 +168,13 @@ func (s JobSpec) Validate() error {
 	return nil
 }
 
+// NormalizeImageReference trims surrounding whitespace. Digests are usually
+// pasted from a build log, and a trailing newline would otherwise turn into a
+// confusing "not in the allowlist" rejection.
+func NormalizeImageReference(image string) string {
+	return strings.TrimSpace(image)
+}
+
 func ValidatePinnedImage(image string) error {
 	if !digestImage.MatchString(image) {
 		return fmt.Errorf("image must be pinned by sha256 digest")
