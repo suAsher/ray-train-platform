@@ -157,7 +157,8 @@ flowchart TB
 |---|---|---|
 | 日志查询接口 | ✅ | [backend/observability/loki.go](../backend/observability/loki.go)，按 `platform_job_id` 生成受控 LogQL |
 | 指标查询接口 | ✅ | [backend/observability/prometheus.go](../backend/observability/prometheus.go) |
-| **Alloy / Loki 部署** | ❌ | 集群中未部署，日志接口取不到数据 |
+| Grafana Alloy 部署 | ✅ | 运行在 `monitoring` namespace（`alloy-p8j5t`），日志采集侧已就位 |
+| **Loki 部署** | ⚠️ | `loki` namespace 已建但为空；chart 与 values 已备在 `vke-cluster/loki/`，尚未安装。Alloy 目前无处投递，平台日志接口取不到数据 |
 | **Prometheus / DCGM 部署** | ❌ | 无 ServiceMonitor、无 GPU 指标采集 |
 | **Grafana 看板 / 告警规则** | ❌ | 未编写 |
 
@@ -191,7 +192,7 @@ flowchart TB
 ## 4. 建议的迭代顺序
 
 1. **修复对象存储凭据** —— 一处根因同时卡住三条线：`ray job submit` 的代码包上传、数据集读写、Checkpoint 归档。换上正确的 SK 即可，无需改代码。
-2. **补可观测性采集侧** —— 装 Loki + Alloy（保留 `platform_job_id` 标签）、Prometheus + DCGM。日志和 GPU 利用率是训练平台的刚需。
+2. **装 Loki** —— Alloy 已在跑，chart 也已备好（`vke-cluster/loki/`），装上并确认 Alloy 保留 `platform_job_id` 标签，日志页即可用。之后再补 Prometheus + DCGM。
 3. **VS Code 独立域名** —— 给工作区分配 `vscode-<id>.内网域名`，绕开 code-server 的子路径限制。
 4. **任务事件时间线与产物归档** —— `job_events` / `job_artifacts` 两张表已建但无代码读写。
 5. **调试工作区生命周期** —— 空闲 TTL 回收、快照、一键固化成镜像。

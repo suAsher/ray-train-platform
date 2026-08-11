@@ -122,11 +122,11 @@ kubectl -n ray-train-platform exec -i postgres-0 -- psql -U platform -d platform
 在构建机上（需要 Docker，且已 `docker login` 目标仓库）：
 
 ```bash
-rsync -az --delete --exclude node_modules --exclude dist --exclude .git ./ <构建机>:/root/ray-train-platform/
+rsync -az --delete --exclude node_modules --exclude dist --exclude .git ./ <构建机>:/opt/guofeng/vke-cluster/ray-platform/
 ```
 
 ```bash
-cd /root/ray-train-platform && REGISTRY=<你的仓库> BUILD_TARGETS=all IMAGE_TAG=v1.0.0 PUSH_IMAGE=true bash build-image.sh
+cd /opt/guofeng/vke-cluster/ray-platform && REGISTRY=<你的仓库> BUILD_TARGETS=all IMAGE_TAG=v1.0.0 PUSH_IMAGE=true bash build-image.sh
 ```
 
 会构建六个镜像：`backend`、`frontend`、`source-materializer`、`workspace`、`train-pytorch`、`test-training`。

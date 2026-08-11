@@ -2,7 +2,18 @@
 
 适用环境：火山云 VKE + KubeRay 1.3.0 + Kueue 0.19.0 + PostgreSQL + Nginx/Vue Portal。
 
-构建机：`root@14.103.49.106`（已安装 Docker 29.x、Node 20、helm、kubectl；kubeconfig 指向真实 VKE 集群；已 `docker login` 阿里云仓库）。构建机上没有 Go —— 后端在 Go builder 容器里编译，不需要本机装 Go。
+构建机：`root@14.103.49.106`（已安装 Docker 29.x、Node 20、helm、kubectl；kubeconfig 指向真实 VKE 集群；已 `docker login` 镜像仓库）。构建机上没有 Go —— 后端在 Go builder 容器里编译，不需要本机装 Go。
+
+**工作目录：`/opt/guofeng/vke-cluster/ray-platform`**。它是 `vke-cluster/` 集群资产树的一部分，同级还有：
+
+| 目录 | 内容 |
+|---|---|
+| `loki/` | Loki chart 与 values（**已准备，尚未安装**） |
+| `alloy/` | Grafana Alloy chart 与 values（**已部署**，运行在 `monitoring` namespace） |
+| `kueue/` | Kueue 资源清单 |
+| `ray-train-ingress.yaml` | 私网 ALB Ingress（host 仍是占位符 `train.xx.com`） |
+
+平台自身的所有构建部署操作都在 `ray-platform/` 子目录内执行。
 
 ---
 
@@ -40,7 +51,7 @@ cd frontend && npm ci && npm run build
 ## 2. 同步代码到构建机
 
 ```bash
-rsync -az --delete -e "ssh -i ~/.ssh/qomolo-desktop.pem" --exclude node_modules --exclude dist --exclude .git --exclude '*.orig' --exclude '*.bak' ./ root@14.103.49.106:/root/ray-train-platform/
+rsync -az --delete -e "ssh -i ~/.ssh/qomolo-desktop.pem" --exclude node_modules --exclude dist --exclude .git --exclude '*.orig' --exclude '*.bak' ./ root@14.103.49.106:/opt/guofeng/vke-cluster/ray-platform/
 ```
 
 ---
@@ -48,7 +59,7 @@ rsync -az --delete -e "ssh -i ~/.ssh/qomolo-desktop.pem" --exclude node_modules 
 ## 3. 构建并推送镜像
 
 ```bash
-cd /root/ray-train-platform && BUILD_TARGETS=backend,frontend IMAGE_TAG=dev-$(date -u +%Y%m%d-%H%M%S) PUSH_IMAGE=true bash build-image.sh
+cd /opt/guofeng/vke-cluster/ray-platform && BUILD_TARGETS=backend,frontend IMAGE_TAG=dev-$(date -u +%Y%m%d-%H%M%S) PUSH_IMAGE=true bash build-image.sh
 ```
 
 `build-image.sh` 的关键参数：
@@ -275,7 +286,7 @@ git add -A && git commit -m "feat: <变更说明>" && git tag -a v1.0.0 -m "V1 �
 ### 9.2 构建带版本号的镜像
 
 ```bash
-cd /root/ray-train-platform && BUILD_TARGETS=all IMAGE_TAG=v1.0.0 PUSH_IMAGE=true bash build-image.sh
+cd /opt/guofeng/vke-cluster/ray-platform && BUILD_TARGETS=all IMAGE_TAG=v1.0.0 PUSH_IMAGE=true bash build-image.sh
 ```
 
 脚本结束会打印每个镜像的 `@sha256` digest。**记录下来**：
