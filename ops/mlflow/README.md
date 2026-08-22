@@ -7,7 +7,7 @@
 - 命名空间：独立使用 `mlflow-system`，与训练平台控制面隔离。
 - 元数据：独立内置 PostgreSQL StatefulSet，使用独立 20Gi EBS PVC，不复用平台数据库。
 - Artifact：通过 FSX CSI 将 `vke-cluster/ray-train/platform/mlflow-artifacts/` 作为独立 RWX 文件系统根挂载给 MLflow。`kube-system/csi-fsx-node` DaemonSet 必须使用 `CREDENTIALS_TYPE=IRSA` 且 `ROLE_NAME_FOR_IRSA` 非空；MLflow Pod、PV、PVC 和 Ray Pod 均不包含 AK/SK 或 Secret 引用。
-- 可用性：2 个副本，跨 CPU 节点硬反亲和，PDB `minAvailable: 1`。
+- 可用性：2 个副本，使用 `accelerator=nvidia-rtx-4090` 且 `platform.wellspiking.ai/gpu-pool=production` 的生产 GPU 训练节点 CPU/内存并跨节点硬反亲和，PDB `minAvailable: 1`。MLflow 不申请 `nvidia.com/gpu`，不会占用训练卡；PostgreSQL 和轻量 ingest 仍放在 CPU/control-plane 节点。
 - 网络：全部为 ClusterIP。平台后端和 Prometheus 可访问 MLflow 5000；带平台托管标签的租户 namespace 只能访问 `mlflow-ingest:8080` 写入网关，不能直连 MLflow。数据库只允许 MLflow 与迁移 Job 访问。
 - 写入边界：网关只开放实验创建、run 创建/更新、参数、指标和 tag 写入所需接口；搜索、列表和 Artifact 下载一律拒绝。网关将 MLflow Python 客户端的 `/api/2.0/...` 请求翻译到 Tracking Server 的 `/mlflow/api/2.0/...` 子路径。平台后端用 HMAC 任务来源标签和数据库归属做二次校验。
 - 浏览器边界：MLflow Service 始终为 ClusterIP，不创建 NodePort、不创建独立 Ingress。Frontend 的 `/mlflow/` 路由进入 Backend；Backend 校验平台登录、交换一次性票据并代理完整 UI/API。
@@ -20,16 +20,16 @@
 - 并发安全：`deploy.sh` 使用 `mlflow-system/mlflow-deploy` Kubernetes Lease 串行化完整部署、验收、回滚和清理流程。采用 fail-closed 固定锁：任意非空 holder（无论存续多久）都会让第二次部署立即失败，不设过期时间、不自动接管。只有正常完成或已确认活动 Job/Pod 全部结束的既有路径，才会以读取到的 `resourceVersion` 清空自己的 holder；不删除 Lease，也不覆盖新的 holder。每个部署进程无条件生成新的随机 run-id，不接受外部固定值；每次 Job create 另外生成随机 request nonce，只有 name、run-id、nonce 与 UID 均匹配才能从不确定的 create 响应中恢复。
 - Job 清理栅栏：失败 Job 使用 UID precondition + `Foreground` 删除，并依次确认 Job 已 NotFound、`job-name` + `deploy-run-id` 对应 Pod 已全部消失。删除、等待或最终确认任一失败，都会保留 Lease 并转人工处置，不允许下一次部署与未终止 Job 交叉执行。
 - 中断安全：持有 Lease 时收到 `INT/TERM/HUP` 会立即标记为 fail-closed 并保留 Lease，分别以标准状态 `130/143/129` 退出，等待管理员确认 Job、Pod 和 Helm rollout 已终止后手动恢复；尚未获取 Lease 时仅按标准状态退出。
-- 节点挂载探测：`mlflow-fsx-probe` DaemonSet 会在每台 CPU 节点挂载 MLflow 正在使用的同一个 PVC，每 20 秒执行有 10 秒上限的 `stat -> 写入 -> 校验 -> 删除`。`mlflow-fsx-dns-probe` 使用与节点/FSX Agent 相同的 resolver 配置，验证通用 TOS 与桶 endpoint 的有效解析链，并在日志中分别标记两台 IDC DNS 和两台 VKE DNS 的退化。已调度节点的挂载或 DNS 失败 2 分钟后会触发独立告警；资源不足导致探测 Pod 无法调度时也会告警。部署会在变更 MLflow 前停止。探测器只告警，不会自动重启 FSX 或业务 Pod。
+- 节点挂载探测：`mlflow-fsx-probe` DaemonSet 会在每台 MLflow serving（当前即 GPU）节点挂载 MLflow 正在使用的同一个 PVC，每 20 秒执行有 10 秒上限的 `stat -> 写入 -> 校验 -> 删除`。`mlflow-fsx-dns-probe` 使用与节点/FSX Agent 相同的 resolver 配置，验证通用 TOS 与桶 endpoint 的有效解析链，并在日志中分别标记两台 IDC DNS 和两台 VKE DNS 的退化。已调度节点的挂载或 DNS 失败 2 分钟后会触发独立告警；资源不足导致探测 Pod 无法调度时也会告警。部署会在变更 MLflow 前停止。探测器只告警，不会自动重启 FSX 或业务 Pod。
 
 ### 探针状态和部署位置怎么判断
 
 - 探针显示 `0/1 Running`，表示 Pod 已经调度并且探测进程仍在运行，但最近一次 DNS 或 FSX 读写检查失败；这是故障信号，不是探针容器崩溃。
-- `Pending` 不等于 DNS 或 FSX 检查失败。先看 Pod Event；常见原因是节点 CPU/内存 request 已满、节点选择器不匹配或 Pod 反亲和。探针只有 5m CPU/8Mi request 仍无法调度时，说明控制面节点已经没有安全余量。
+- `Pending` 不等于 DNS 或 FSX 检查失败。先看 Pod Event；常见原因是节点 CPU/内存 request 已满、节点选择器不匹配或 Pod 反亲和。探针只有 5m CPU/8Mi request 仍无法调度时，说明当前 serving 节点已经没有安全余量。
 - `ContainerCreating` 并伴随 `MountVolume.SetUp failed ... input/output error`，表示该节点的 FSX/FUSE 挂载链路确实异常。旧 Pod 长时间 `Terminating` 通常也是失效的 FUSE mount 阻塞卸载，必须先按下面顺序恢复节点 Agent/CSI。
 - 当前两个探针在节点 DNS 与 FSX 稳定性问题彻底解决前仍有必要，不能直接删除；否则会失去节点级预警。不过永久 DaemonSet 在每个节点保持同一 PVC 的 FUSE mount，也会扩大失效挂载面。后续应改成输出独立 Prometheus 指标的轻量 DNS exporter，并把 FSX 读写改成有界的周期 canary/CronJob；替代告警和验收上线后再删除这两个 DaemonSet。
 
-MLflow 主服务应继续放在专用 CPU/control-plane 节点，**不应把 MLflow 长期迁移到 GPU 训练节点**。迁到 GPU 节点只会暂时绕过 CPU 节点容量或 FSX 故障，并让实验追踪可用性耦合到训练节点扩缩容、维护和资源争抢。生产上应保留两副本硬反亲和，同时为平台服务预留 CPU/内存 request 或扩容 CPU 节点；探测不应挤占业务保底容量，也不应依赖 GPU 池兜底。
+当前三个 8C/16Gi CPU 节点已经没有足够 request 余量，因此 MLflow 主服务固定调度到两台带 `gpu-pool=production` 的 180C/780Gi GPU 训练节点，使用其 CPU/内存余量，但不申请 GPU extended resource。双标签选择器会排除 legacy/test 4090 节点。两副本硬反亲和确保各占一台节点；即使训练任务申请满 16 张 GPU，MLflow 仍可使用预留的 500m CPU/1Gi 内存 request。GPU 节点维护或扩缩容前必须先确认 PDB 和至少一个 MLflow 副本可用。
 
 部署：
 
@@ -51,7 +51,7 @@ bash ops/mlflow/deploy.sh
 2. 先恢复该节点的 `fsx-agent`，确认 Agent 自身 Ready，且 `/usr/bin/fsx-health-check` 通过。
 3. 再滚动重建该节点的 `csi-fsx-node` Pod，确认所有容器 Ready。
 4. 只有在 Agent 和 CSI 恢复后，才滚动重建该节点上受影响的 MLflow Pod。已存在的 FUSE bind mount 不会因 CSI 恢复而自动重连，所以这一步不能省略。
-5. 等待 `mlflow-fsx-probe` 在所有 CPU 节点 Ready，然后执行 `bash ops/mlflow/verify.sh`。
+5. 等待 `mlflow-fsx-probe` 在所有 MLflow serving 节点 Ready，然后执行 `bash ops/mlflow/verify.sh`。
 
 可先用以下命令查看探测结果：
 

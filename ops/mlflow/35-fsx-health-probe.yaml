@@ -25,7 +25,8 @@ spec:
       imagePullSecrets:
         - name: harbor-registry
       nodeSelector:
-        platform.wellspiking.ai/pool: control-plane
+        accelerator: nvidia-rtx-4090
+        platform.wellspiking.ai/gpu-pool: production
       containers:
         - name: probe
           image: harbor.wellspiking.ai/hub/nginxinc/nginx-unprivileged@sha256:c3fed6436b61d2bf2201ec032c35c000871f7ed062dea5d586bc6bf4d0fdd140
@@ -130,7 +131,8 @@ spec:
       imagePullSecrets:
         - name: harbor-registry
       nodeSelector:
-        platform.wellspiking.ai/pool: control-plane
+        accelerator: nvidia-rtx-4090
+        platform.wellspiking.ai/gpu-pool: production
       containers:
         - name: probe
           image: harbor.wellspiking.ai/hub/nginxinc/nginx-unprivileged@sha256:c3fed6436b61d2bf2201ec032c35c000871f7ed062dea5d586bc6bf4d0fdd140
@@ -269,7 +271,7 @@ spec:
             severity: critical
             service: mlflow
           annotations:
-            summary: MLflow FSX mount is unavailable on one or more control-plane nodes
+            summary: MLflow FSX mount is unavailable on one or more serving nodes
             description: The node-level probe cannot complete a bounded stat/write/delete cycle. Check mlflow-fsx-probe Pod events, csi-fsx-node logs, and fsx-agent recovery state before restarting workloads.
         - alert: MLflowFSXProbeUnschedulable
           expr: max(kube_pod_status_unschedulable{namespace="mlflow-system",pod=~"mlflow-fsx-probe-.*"}) > 0
@@ -278,7 +280,7 @@ spec:
             severity: critical
             service: mlflow
           annotations:
-            summary: MLflow FSX health probe cannot schedule on every control-plane node
+            summary: MLflow FSX health probe cannot schedule on every serving node
             description: Check the pending probe Pod events for CPU, memory, Pod IP, taint, and node-affinity capacity problems. FSX health is unknown on nodes without a scheduled probe.
         - alert: MLflowFSXDNSUnavailable
           expr: sum((kube_pod_status_ready{namespace="mlflow-system",pod=~"mlflow-fsx-dns-probe-.*",condition="true"} == bool 0) and on(namespace,pod) (kube_pod_status_scheduled{namespace="mlflow-system",pod=~"mlflow-fsx-dns-probe-.*",condition="true"} == 1)) > 0
@@ -287,7 +289,7 @@ spec:
             severity: critical
             service: mlflow
           annotations:
-            summary: A control-plane node cannot resolve an FSX TOS endpoint through both configured IDC resolvers
+            summary: An MLflow serving node cannot resolve an FSX TOS endpoint through both configured IDC resolvers
             description: The effective node resolver chain cannot resolve both required TOS endpoints. The probe also logs per-resolver degradation for the two IDC and two VKE DNS servers. Restore DNS before recycling FSX mounts.
         - alert: MLflowFSXDNSProbeUnschedulable
           expr: max(kube_pod_status_unschedulable{namespace="mlflow-system",pod=~"mlflow-fsx-dns-probe-.*"}) > 0
@@ -296,7 +298,7 @@ spec:
             severity: critical
             service: mlflow
           annotations:
-            summary: MLflow FSX DNS probe cannot schedule on every control-plane node
+            summary: MLflow FSX DNS probe cannot schedule on every serving node
             description: Check the pending DNS probe Pod events. FSX endpoint DNS health is unknown on nodes without a scheduled probe.
         - alert: MLflowFSXProbeMissing
           expr: absent(kube_daemonset_status_desired_number_scheduled{namespace="mlflow-system",daemonset="mlflow-fsx-probe"})
@@ -315,4 +317,4 @@ spec:
             service: mlflow
           annotations:
             summary: MLflow FSX health probe has no target nodes
-            description: No node matches the probe selector. Restore the platform.wellspiking.ai/pool=control-plane node labels before relying on FSX health status.
+            description: No node matches the probe selector. Restore accelerator=nvidia-rtx-4090 and platform.wellspiking.ai/gpu-pool=production on the MLflow serving nodes before relying on FSX health status.

@@ -31,6 +31,22 @@ done <<<"$services"
   echo "MLflow does not have two available replicas" >&2
   exit 1
 }
+mlflow_accelerator_selector="$(kubectl -n "$NAMESPACE" get deployment mlflow -o jsonpath='{.spec.template.spec.nodeSelector.accelerator}')"
+mlflow_pool_selector="$(kubectl -n "$NAMESPACE" get deployment mlflow -o jsonpath='{.spec.template.spec.nodeSelector.platform\.wellspiking\.ai/gpu-pool}')"
+if [[ "$mlflow_accelerator_selector" != "nvidia-rtx-4090" || "$mlflow_pool_selector" != "production" ]]; then
+  echo 'MLflow deployment is not restricted to the production GPU worker pool' >&2
+  exit 1
+fi
+mlflow_pods="$(kubectl -n "$NAMESPACE" get pods -l 'app.kubernetes.io/name=mlflow,app.kubernetes.io/instance=mlflow' -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.nodeName}{"\n"}{end}')"
+while IFS=$'\t' read -r pod_name node_name; do
+  [[ -n "$pod_name" && -n "$node_name" ]] || continue
+  node_accelerator="$(kubectl get node "$node_name" -o jsonpath='{.metadata.labels.accelerator}')"
+  node_pool="$(kubectl get node "$node_name" -o jsonpath='{.metadata.labels.platform\.wellspiking\.ai/gpu-pool}')"
+  if [[ "$node_accelerator" != "nvidia-rtx-4090" || "$node_pool" != "production" ]]; then
+    echo "MLflow Pod ${pod_name} is running outside the production GPU worker pool: ${node_name}" >&2
+    exit 1
+  fi
+done <<<"$mlflow_pods"
 [[ "$(kubectl -n "$NAMESPACE" get deployment mlflow-ingest -o jsonpath='{.status.availableReplicas}')" == "2" ]] || {
   echo "MLflow ingest gateway does not have two available replicas" >&2
   exit 1
@@ -66,6 +82,10 @@ artifact_destination="$(kubectl -n "$NAMESPACE" get deployment mlflow -o jsonpat
   exit 1
 }
 mlflow_deployment="$(kubectl -n "$NAMESPACE" get deployment mlflow -o yaml)"
+if grep -Fq 'nvidia.com/gpu' <<<"$mlflow_deployment"; then
+  echo 'MLflow Pod requested an nvidia.com/gpu device' >&2
+  exit 1
+fi
 if grep -Eq 'AWS_|TOS_|MLFLOW_(S3|BOTO)|tos-credentials|mlflow-aws-config|/etc/mlflow/aws' <<<"$mlflow_deployment"; then
   echo 'MLflow Pod still contains AWS/TOS credentials or configuration' >&2
   exit 1
@@ -92,20 +112,20 @@ kubectl -n "$NAMESPACE" get networkpolicy mlflow-fsx-probe >/dev/null
 kubectl -n "$NAMESPACE" get networkpolicy mlflow-fsx-dns-probe >/dev/null
 fsx_dns_probe_desired="$(kubectl -n "$NAMESPACE" get daemonset mlflow-fsx-dns-probe -o jsonpath='{.status.desiredNumberScheduled}')"
 if [[ ! "$fsx_dns_probe_desired" =~ ^[1-9][0-9]*$ ]]; then
-  echo 'FSX DNS probe has no matching control-plane nodes' >&2
+  echo 'FSX DNS probe has no matching MLflow serving nodes' >&2
   exit 1
 fi
 [[ "$(kubectl -n "$NAMESPACE" get daemonset mlflow-fsx-dns-probe -o jsonpath='{.status.numberReady}')" == "$fsx_dns_probe_desired" ]] || {
-  echo 'MLflow FSX DNS probe is not Ready on every control-plane node' >&2
+  echo 'MLflow FSX DNS probe is not Ready on every MLflow serving node' >&2
   exit 1
 }
 fsx_probe_desired="$(kubectl -n "$NAMESPACE" get daemonset mlflow-fsx-probe -o jsonpath='{.status.desiredNumberScheduled}')"
 if [[ ! "$fsx_probe_desired" =~ ^[1-9][0-9]*$ ]]; then
-  echo 'FSX probe has no matching control-plane nodes' >&2
+  echo 'FSX probe has no matching MLflow serving nodes' >&2
   exit 1
 fi
 [[ "$(kubectl -n "$NAMESPACE" get daemonset mlflow-fsx-probe -o jsonpath='{.status.numberReady}')" == "$fsx_probe_desired" ]] || {
-  echo 'MLflow FSX probe is not Ready on every control-plane node' >&2
+  echo 'MLflow FSX probe is not Ready on every MLflow serving node' >&2
   exit 1
 }
 [[ "$(kubectl -n "$NAMESPACE" get pvc data-mlflow-postgres-0 -o jsonpath='{.status.phase}')" == "Bound" ]]

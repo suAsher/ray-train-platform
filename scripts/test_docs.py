@@ -140,8 +140,9 @@ class DocumentationContractTest(unittest.TestCase):
         for marker in (
             "`0/1 Running`",
             "`Pending` 不等于 DNS 或 FSX 检查失败",
-            "不应把 MLflow 长期迁移到 GPU 训练节点",
-            "探测不应挤占业务保底容量",
+            "MLflow 不申请 `nvidia.com/gpu`",
+            "PostgreSQL 和轻量 ingest 仍放在 CPU/control-plane 节点",
+            "所有 MLflow serving 节点 Ready",
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, runbook)

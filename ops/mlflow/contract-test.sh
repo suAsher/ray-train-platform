@@ -7,6 +7,7 @@ readonly NAMESPACE="${ROOT_DIR}/ops/mlflow/00-namespace.yaml"
 readonly DATABASE="${ROOT_DIR}/ops/mlflow/10-database.yaml"
 readonly STORAGE="${ROOT_DIR}/ops/mlflow/15-artifact-storage.yaml"
 readonly BOOTSTRAP="${ROOT_DIR}/ops/mlflow/20-bootstrap.yaml"
+readonly DB_UPGRADE="${ROOT_DIR}/ops/mlflow/22-db-upgrade.yaml"
 readonly ACCEPTANCE="${ROOT_DIR}/ops/mlflow/25-artifact-acceptance.yaml"
 readonly TRANSITION_POLICY="${ROOT_DIR}/ops/mlflow/29-storage-migration-policy.yaml"
 readonly POLICY="${ROOT_DIR}/ops/mlflow/30-policy.yaml"
@@ -31,6 +32,18 @@ grep -Fq -- '- --static-prefix={{ .Values.server.staticPrefix }}' <<<"$vendored_
 }
 
 grep -Fq 'replicaCount: 2' "$VALUES"
+grep -A1 '^nodeSelector:$' "$VALUES" | grep -Fq 'accelerator: nvidia-rtx-4090' || {
+  echo 'MLflow server must use CPU and memory from the GPU worker pool' >&2
+  exit 1
+}
+grep -A2 '^nodeSelector:$' "$VALUES" | grep -Fq 'platform.wellspiking.ai/gpu-pool: production' || {
+  echo 'MLflow server must be restricted to the production GPU worker pool' >&2
+  exit 1
+}
+if grep -Fq 'nvidia.com/gpu' "$VALUES"; then
+  echo 'MLflow server must not reserve a GPU device' >&2
+  exit 1
+fi
 grep -Fq '  staticPrefix: /mlflow' "$VALUES" || {
   echo 'MLflow must be served under server.staticPrefix /mlflow' >&2
   exit 1
@@ -232,7 +245,20 @@ grep -Fq 'kind: DaemonSet' "$FSX_PROBE"
 grep -Fq 'name: mlflow-fsx-probe' "$FSX_PROBE"
 grep -Fq 'name: mlflow-fsx-dns-probe' "$FSX_PROBE"
 grep -Fq 'claimName: mlflow-artifacts-irsa' "$FSX_PROBE"
-grep -Fq 'platform.wellspiking.ai/pool: control-plane' "$FSX_PROBE"
+grep -Fq 'accelerator: nvidia-rtx-4090' "$FSX_PROBE"
+grep -Fq 'accelerator: nvidia-rtx-4090' "$BOOTSTRAP"
+grep -Fq 'accelerator: nvidia-rtx-4090' "$ACCEPTANCE"
+grep -Fq 'platform.wellspiking.ai/gpu-pool: production' "$FSX_PROBE"
+grep -Fq 'platform.wellspiking.ai/gpu-pool: production' "$BOOTSTRAP"
+grep -Fq 'platform.wellspiking.ai/gpu-pool: production' "$ACCEPTANCE"
+grep -Fq 'platform.wellspiking.ai/pool: control-plane' "$DATABASE"
+grep -Fq 'platform.wellspiking.ai/pool: control-plane' "$POLICY"
+grep -Fq 'platform.wellspiking.ai/pool: control-plane' "$DB_UPGRADE"
+grep -Fq 'platform.wellspiking.ai/pool: control-plane' "$SMOKE"
+if grep -Fq 'nvidia.com/gpu' "$FSX_PROBE" "$BOOTSTRAP" "$ACCEPTANCE"; then
+  echo 'MLflow probes and acceptance jobs must not reserve a GPU device' >&2
+  exit 1
+fi
 grep -Fq 'dnsPolicy: Default' "$FSX_PROBE"
 grep -Fq 'nslookup "$endpoint" "$resolver"' "$FSX_PROBE"
 grep -Fq '192.168.110.61/32' "$FSX_PROBE"
@@ -263,12 +289,14 @@ grep -Fq 'readonly FSX_HEALTH_PROBE=' "$DEPLOY"
 grep -Fq 'kubectl apply -f "$FSX_HEALTH_PROBE"' "$DEPLOY"
 grep -Fq 'rollout status daemonset/mlflow-fsx-probe' "$DEPLOY"
 grep -Fq 'rollout status daemonset/mlflow-fsx-dns-probe' "$DEPLOY"
-grep -Fq 'FSX probe has no matching control-plane nodes' "$DEPLOY"
-grep -Fq 'FSX DNS probe has no matching control-plane nodes' "$DEPLOY"
+grep -Fq 'FSX probe has no matching MLflow serving nodes' "$DEPLOY"
+grep -Fq 'FSX DNS probe has no matching MLflow serving nodes' "$DEPLOY"
 grep -Fq 'daemonset mlflow-fsx-probe' "$VERIFY"
 grep -Fq 'daemonset mlflow-fsx-dns-probe' "$VERIFY"
-grep -Fq 'FSX probe has no matching control-plane nodes' "$VERIFY"
-grep -Fq 'FSX DNS probe has no matching control-plane nodes' "$VERIFY"
+grep -Fq 'FSX probe has no matching MLflow serving nodes' "$VERIFY"
+grep -Fq 'FSX DNS probe has no matching MLflow serving nodes' "$VERIFY"
+grep -Fq 'MLflow deployment is not restricted to the production GPU worker pool' "$VERIFY"
+grep -Fq 'MLflow Pod requested an nvidia.com/gpu device' "$VERIFY"
 grep -Fq 'mlflow-ingest.mlflow-system.svc.cluster.local:8080' "$SMOKE"
 grep -Fq 'MLFLOW_ARTIFACT_DOWNLOAD_BLOCKED' "$SMOKE"
 grep -Fq 'namespace: mlflow-system' "$SMOKE"

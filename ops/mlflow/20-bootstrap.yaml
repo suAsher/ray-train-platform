@@ -21,7 +21,8 @@ spec:
       imagePullSecrets:
         - name: harbor-registry
       nodeSelector:
-        platform.wellspiking.ai/pool: control-plane
+        accelerator: nvidia-rtx-4090
+        platform.wellspiking.ai/gpu-pool: production
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

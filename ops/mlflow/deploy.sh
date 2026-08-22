@@ -59,21 +59,21 @@ main() {
     --timeout="$TIMEOUT"
 
   # A one-shot Job can land on a healthy node and miss a stale node-local FUSE
-  # session. Keep one bounded read/write/delete probe on every control-plane
+  # session. Keep one bounded read/write/delete probe on every MLflow serving
   # node and require all of them to become Ready before changing MLflow.
   kubectl apply -f "$FSX_HEALTH_PROBE" >/dev/null
   kubectl -n "$NAMESPACE" rollout status daemonset/mlflow-fsx-dns-probe --timeout="$TIMEOUT"
   local fsx_dns_probe_desired
   fsx_dns_probe_desired="$(kubectl -n "$NAMESPACE" get daemonset mlflow-fsx-dns-probe -o jsonpath='{.status.desiredNumberScheduled}')"
   if [[ ! "$fsx_dns_probe_desired" =~ ^[1-9][0-9]*$ ]]; then
-    echo 'FSX DNS probe has no matching control-plane nodes' >&2
+    echo 'FSX DNS probe has no matching MLflow serving nodes' >&2
     exit 1
   fi
   kubectl -n "$NAMESPACE" rollout status daemonset/mlflow-fsx-probe --timeout="$TIMEOUT"
   local fsx_probe_desired
   fsx_probe_desired="$(kubectl -n "$NAMESPACE" get daemonset mlflow-fsx-probe -o jsonpath='{.status.desiredNumberScheduled}')"
   if [[ ! "$fsx_probe_desired" =~ ^[1-9][0-9]*$ ]]; then
-    echo 'FSX probe has no matching control-plane nodes' >&2
+    echo 'FSX probe has no matching MLflow serving nodes' >&2
     exit 1
   fi
 
