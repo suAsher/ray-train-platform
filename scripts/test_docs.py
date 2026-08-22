@@ -30,6 +30,7 @@ USER_FACING_DOCS = (
     ROOT / "docs" / "BEVFUSION_END_TO_END_GUIDE.md",
     ROOT / "docs" / "BEVFUSION_RUNBOOK.md",
 )
+BUILD_AND_DEPLOY = ROOT / "docs" / "BUILD_AND_DEPLOY.md"
 LINK = re.compile(r"(?<!!)\[[^]]+\]\(([^)]+)\)")
 
 
@@ -106,6 +107,38 @@ class DocumentationContractTest(unittest.TestCase):
         self.assertNotRegex(combined, r"rpt_[A-Za-z0-9_-]{20,}")
         self.assertNotIn("同版本接入工具包", combined)
         self.assertNotIn("内部工具包", combined)
+
+    def test_deployment_guide_is_portable_and_contains_no_private_operator_details(
+        self,
+    ) -> None:
+        deployment = BUILD_AND_DEPLOY.read_text(encoding="utf-8")
+
+        self.assertNotIn("/opt/guofeng/", deployment)
+        self.assertNotIn("qomolo-desktop", deployment)
+        self.assertNotIn("guofeng.su", deployment)
+        self.assertNotIn("/root/", deployment)
+        self.assertNotRegex(deployment, r"\broot@")
+        self.assertNotRegex(deployment, r"/(?:Users|home)/[A-Za-z0-9._-]+/")
+        self.assertNotRegex(deployment, r"(?:~|/[^\s]+)?/\.ssh/[^\s]+")
+        self.assertNotRegex(deployment, r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+        self.assertNotRegex(deployment, r"\bcert-[a-f0-9]{16,}\b")
+        self.assertNotRegex(deployment, r"glpat-[A-Za-z0-9_-]{12,}")
+        self.assertNotRegex(deployment, r"rpt_[A-Za-z0-9_-]{20,}")
+        self.assertNotRegex(deployment, r"AKLT[A-Za-z0-9+/=]{12,}")
+        self.assertNotIn("BEGIN PRIVATE KEY", deployment)
+
+        for portable_setting in (
+            "BUILD_USER='<ssh-user>'",
+            "BUILD_HOST='<build-host>'",
+            "SSH_KEY='<path-to-private-key>'",
+            "PLATFORM_REPO_ROOT='<absolute-build-directory>'",
+            "REGISTRY_PROJECT='<registry-project>'",
+            "CORPORATE_DNS_A='<dns-server-a>'",
+            "CORPORATE_DNS_B='<dns-server-b>'",
+            "CERTIFICATE_ID='<certificate-id>'",
+        ):
+            with self.subTest(portable_setting=portable_setting):
+                self.assertIn(portable_setting, deployment)
 
     def test_mlflow_native_dashboard_policy_is_explicit(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")

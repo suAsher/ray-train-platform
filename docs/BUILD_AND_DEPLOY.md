@@ -47,21 +47,50 @@ git show --stat --oneline v1.1.0
 
 ## 3. 同步到构建机并构建
 
-构建机工作目录：`/opt/guofeng/vke-cluster/ray-platform`。使用安全同步方式，不把
-`.git`、`node_modules`、构建产物或恢复备份同步进去：
+先在发布 shell 中填写本环境参数。尖括号占位符必须替换；不要把这组本地参数提交到
+Git。`PLATFORM_REPO_ROOT` 必须是构建机上的绝对目录，`REGISTRY_PROJECT` 是当前环境
+获准推送的 Harbor 项目：
 
 ```bash
+BUILD_USER='<ssh-user>'
+BUILD_HOST='<build-host>'
+SSH_KEY='<path-to-private-key>'
+PLATFORM_REPO_ROOT='<absolute-build-directory>'
+REGISTRY_PROJECT='<registry-project>'
+CORPORATE_DNS_A='<dns-server-a>'
+CORPORATE_DNS_B='<dns-server-b>'
+CERTIFICATE_ID='<certificate-id>'
+
+export BUILD_USER BUILD_HOST SSH_KEY PLATFORM_REPO_ROOT REGISTRY_PROJECT
+export CORPORATE_DNS_A CORPORATE_DNS_B CERTIFICATE_ID
+
+test -f "$SSH_KEY"
+case "$PLATFORM_REPO_ROOT" in
+  /*) ;;
+  *) echo 'PLATFORM_REPO_ROOT 必须是绝对目录' >&2; exit 2 ;;
+esac
+```
+
+先创建目标目录，再安全同步源码；不把 `.git`、`node_modules`、构建产物或恢复备份同步
+进去：
+
+```bash
+ssh -i "$SSH_KEY" "${BUILD_USER}@${BUILD_HOST}" \
+  "mkdir -p '$PLATFORM_REPO_ROOT'"
+
 rsync -az \
   --exclude .git --exclude .playwright-cli --exclude frontend/node_modules \
   --exclude frontend/dist --exclude output --exclude deploy/release-records \
-  -e "ssh -i ~/.ssh/qomolo-desktop.pem" \
-  ./ root@14.103.49.106:/opt/guofeng/vke-cluster/ray-platform/
+  -e "ssh -i $SSH_KEY" \
+  ./ "${BUILD_USER}@${BUILD_HOST}:${PLATFORM_REPO_ROOT}/"
 ```
 
-在构建机上创建新标签并推送：
+登录构建机后重新设置仓库根目录，再创建新标签并推送。后续所有部署命令也都从这个目录
+执行：
 
 ```bash
-cd /opt/guofeng/vke-cluster/ray-platform
+export PLATFORM_REPO_ROOT='<absolute-build-directory>'
+cd "${PLATFORM_REPO_ROOT:?set PLATFORM_REPO_ROOT to the checkout root}"
 IMAGE_TAG=prod-$(date -u +%Y%m%d-%H%M%S) \
 BUILD_TARGETS=backend,frontend,spk-rayjob,source-materializer,workspace,train-pytorch \
 PUSH_IMAGE=true USE_BUILDX=true \
@@ -87,18 +116,22 @@ Profile 是审阅对象：将环境 Profile 与代码一并提交到内部 Git�
 首次安装时，先在构建机的受保护目录准备 Secret 输入；日常升级已经存在的环境时跳过这一小节。模板不含真实凭据，填写后不得提交到 Git：
 
 ```bash
-install -d -m 700 /secure/ray-platform
-cp deploy/secrets.env.example /secure/ray-platform/production.env
-chmod 600 /secure/ray-platform/production.env
-vi /secure/ray-platform/production.env
+export PLATFORM_REPO_ROOT='<absolute-build-directory>'
+SECRETS_DIR='<protected-secrets-directory>'
+cd "${PLATFORM_REPO_ROOT:?set PLATFORM_REPO_ROOT to the checkout root}"
+
+install -d -m 700 "$SECRETS_DIR"
+cp deploy/secrets.env.example "$SECRETS_DIR/production.env"
+chmod 600 "$SECRETS_DIR/production.env"
+vi "$SECRETS_DIR/production.env"
 
 bash ops/platform/bootstrap-secrets.sh \
   --profile deploy/profiles/vke-cpu-ha.yaml \
-  --env-file /secure/ray-platform/production.env
+  --env-file "$SECRETS_DIR/production.env"
 ```
 
 ```bash
-cd /opt/guofeng/vke-cluster/ray-platform
+cd "${PLATFORM_REPO_ROOT:?set PLATFORM_REPO_ROOT to the checkout root}"
 
 # 首次部署，或专用 ALB 被重建后执行一次；它会创建/认领私网 ALB，待其 Running 后再创建 IngressClass。
 bash ops/platform/bootstrap-alb.sh --profile deploy/profiles/vke-cpu-ha.yaml --timeout 15m
@@ -111,8 +144,22 @@ bash ops/platform/verify.sh --profile deploy/profiles/vke-cpu-ha.yaml
 `--verify-fsx-irsa` 会创建两个隔离的临时前缀挂载探针并在退出时自动删除。新加入的 GPU
 节点第一次使用 TOS 时，FSX 的 TOS FUSE 守护进程可能发生一次冷启动；探针会在首个有界
 等待窗口失败后自动重试一次。若第二次仍失败，不要跳过门禁：先分别验证节点对企业 DNS
-`192.168.110.61`、`192.168.111.63` 的 TOS/STS 解析，再检查对应节点的 `fsx-agent` 与
-`csi-fsx-node` 事件。只有隔离探针通过后才允许发布或接纳该节点承载训练。
+的 TOS/STS 解析，再检查对应节点的 `fsx-agent` 与 `csi-fsx-node` 事件。DNS 地址和待解析
+域名来自当前环境配置，不写死在公开手册中：
+
+```bash
+CORPORATE_DNS_A='<dns-server-a>'
+CORPORATE_DNS_B='<dns-server-b>'
+TOS_DNS_NAME='<tos-private-endpoint-host>'
+STS_DNS_NAME='<sts-endpoint-host>'
+
+for dns_server in "$CORPORATE_DNS_A" "$CORPORATE_DNS_B"; do
+  dig +short @"$dns_server" "$TOS_DNS_NAME" | grep -q . || exit 1
+  dig +short @"$dns_server" "$STS_DNS_NAME" | grep -q . || exit 1
+done
+```
+
+只有隔离探针和 DNS 检查都通过后，才允许发布或接纳该节点承载训练。
 
 生产入口是私网 HTTPS `https://raytrain.wellspiking.ai`。ALB、IngressClass 与证书中心
 证书属于共享网络层，由 `bootstrap-alb.sh` 在 Helm 之外一次性管理；Helm 只升级平台
@@ -140,8 +187,15 @@ metadata:
 缺少 `proxy-body-size` 时，小请求和 `/healthz` 仍会正常，但实际代码目录上传会返回
 `413 Request Entity Too Large`。不要用 NodePort 绕过这个问题。
 
-证书由火山证书中心的 `cert-8fbe7f999bc3478483e8c8838c73b2b0` 绑定到专用 ALB；不要
-将 PEM 私钥复制进 Git 或 Kubernetes Secret。DNS 生效后，发布机验证：
+证书 ID 同样由环境参数提供，并写入 Profile 的 `ingress.tls.certificateId`；不要在公开
+文档固化资源 ID，也不要将 PEM 私钥复制进 Git 或 Kubernetes Secret：
+
+```bash
+CERTIFICATE_ID='<certificate-id>'
+test -n "$CERTIFICATE_ID"
+```
+
+专用 ALB 绑定证书且 DNS 生效后，发布机验证：
 
 ```bash
 curl -fsS https://raytrain.wellspiking.ai/healthz
@@ -170,11 +224,15 @@ grep 'spk-rayjob-linux-amd64$' SHA256SUMS | sha256sum -c -
 如需验证完整单卡训练：
 
 ```bash
+REGISTRY_PROJECT='<registry-project>'
+SECRETS_DIR='<protected-secrets-directory>'
+SMOKE_IMAGE_DIGEST='<sha256-digest>'
+
 bash ops/platform/verify.sh \
   --profile deploy/profiles/vke-cpu-ha.yaml --smoke \
   --api-url https://raytrain.wellspiking.ai \
-  --smoke-image harbor.wellspiking.ai/guofeng.su/ray-test@sha256:<digest> \
-  --env-file /secure/ray-platform/vke-test.env
+  --smoke-image "harbor.wellspiking.ai/${REGISTRY_PROJECT}/ray-test@sha256:${SMOKE_IMAGE_DIGEST}" \
+  --env-file "$SECRETS_DIR/vke-test.env"
 ```
 
 ### 三种提交入口验收
@@ -182,7 +240,8 @@ bash ops/platform/verify.sh \
 先在构建机完成 `spk-rayjob login`，再串行执行，避免验收任务抢占所有 GPU：
 
 ```bash
-IMAGE='harbor.wellspiking.ai/guofeng.su/ray-train-pytorch@sha256:db39733e3e5d301547286dd8f532dd2c78c16c4e0806e3e2096189d0696e5288'
+REGISTRY_PROJECT='<registry-project>'
+IMAGE="harbor.wellspiking.ai/${REGISTRY_PROJECT}/ray-train-pytorch@sha256:<approved-image-digest>"
 
 # 1. spk-rayjob：日常外部开发机入口
 cd examples/distributed-demo
@@ -200,9 +259,7 @@ bash scripts/e2e_native_ray_submit.sh --image "$IMAGE"
 bash scripts/e2e_portal_submit.sh --image "$IMAGE"
 ```
 
-2026-08-21 使用 `guofeng.su` 完成两个分支 × 三个入口共六个 `2×8 GPU` 任务；六项均为 `SUCCEEDED`。随后最终 BEVFusion r9 运行镜像
-`harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion@sha256:66b906d062870131121b07e4455783dc5f2913e285b29fdbb2cf1decc100f553`
-又通过代表性 `2×8` 回归任务 `job-56fbc0b27e9a5b5bc4491023`。这些任务确认代码随任务上传、Kueue 准入、KubeRay 自动建群、跨两台 RTX 4090 节点的 NCCL/DDP、公共数据读取、Loki 日志、验证和个人 checkpoint。完整任务 ID 见 [BEVFusion 代码改造与验收](BEVFUSION_CODE_CHANGES.md)。
+2026-08-21 使用普通平台验收用户完成两个分支 × 三个入口共六个 `2×8 GPU` 任务；六项均为 `SUCCEEDED`。随后最终 BEVFusion r9 运行镜像又通过代表性 `2×8` 回归任务。这些任务确认代码随任务上传、Kueue 准入、KubeRay 自动建群、跨两台 RTX 4090 节点的 NCCL/DDP、公共数据读取、Loki 日志、验证和个人 checkpoint。完整任务 ID 见 [BEVFusion 代码改造与验收](BEVFUSION_CODE_CHANGES.md)。
 
 revision 69 另用短时 1 卡任务验收了 RayCluster 自动创建和 Dashboard 访问链：Head Service 保持 `ClusterIP`，签名链接交换会话返回 302，Dashboard 页面、静态资源和 Ray 版本 API 均返回 200，写请求返回 405。验收任务已停止并清理 RayCluster。
 
@@ -213,7 +270,7 @@ revision 71 统一公共数据根为 `ray-train/public/`，校准 `local` 租户
 首次部署、升级 Prometheus Operator 或更新其固定镜像时，使用独立流程：
 
 ```bash
-cd /opt/guofeng/vke-cluster/ray-platform
+cd "${PLATFORM_REPO_ROOT:?set PLATFORM_REPO_ROOT to the checkout root}"
 bash ops/observability/prometheus-operator/deploy.sh
 ```
 
@@ -225,7 +282,7 @@ bash ops/observability/prometheus-operator/deploy.sh
 MLflow 首次安装或自身版本升级使用：
 
 ```bash
-cd /opt/guofeng/vke-cluster/ray-platform
+cd "${PLATFORM_REPO_ROOT:?set PLATFORM_REPO_ROOT to the checkout root}"
 bash ops/mlflow/deploy.sh
 bash ops/mlflow/verify.sh
 ```
@@ -277,7 +334,9 @@ training:
 保持 `dataSpaces.enabled=false`。验收需要 FSX CSI 的 `fsx-agent` 已绑定具备目标桶最小读写权限的 IAM 角色，然后在部署机执行：
 
 ```bash
-KUBECONFIG=/root/.kube/config \
+KUBECONFIG_PATH='<path-to-kubeconfig>'
+
+KUBECONFIG="$KUBECONFIG_PATH" \
 FSX_TOS_SERVER=tos-cn-shanghai.ivolces.com \
 FSX_TOS_REGION=cn-shanghai \
 FSX_TOS_BUCKET=shanghai-data-transfer \
