@@ -20,6 +20,9 @@ func IssueMLflowDashboardSession(tenantID, subject, nonce string, key []byte, no
 	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(subject) == "" || strings.TrimSpace(nonce) == "" {
 		return "", fmt.Errorf("tenant, subject and nonce are required")
 	}
+	if strings.ContainsRune(tenantID, '\x00') || strings.ContainsRune(subject, '\x00') || strings.ContainsRune(nonce, '\x00') {
+		return "", fmt.Errorf("tenant, subject and nonce must not contain NUL")
+	}
 	if err := validatePATPepper(key); err != nil {
 		return "", err
 	}
@@ -43,7 +46,7 @@ func VerifyMLflowDashboardSession(token, expectedTenantID, expectedSubject strin
 	}
 
 	payload, signatureText, found := strings.Cut(token, ".")
-	if !found || payload == "" || signatureText == "" || strings.Contains(signatureText, ".") {
+	if !found || payload == "" || signatureText == "" || len(signatureText) != sha256.Size*2 || strings.Contains(signatureText, ".") {
 		return fmt.Errorf("malformed MLflow dashboard session")
 	}
 	signature, err := hex.DecodeString(signatureText)
