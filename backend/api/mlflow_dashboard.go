@@ -27,6 +27,7 @@ const (
 	mlflowDashboardCookieName = "ray_mlflow_dashboard"
 	mlflowDashboardBasePath   = "/mlflow/"
 	mlflowDashboardTicketSize = 32
+	mlflowDashboardAllow      = "GET, HEAD, OPTIONS, POST, PUT, PATCH, DELETE"
 )
 
 type MLflowDashboardStore interface {
@@ -34,6 +35,12 @@ type MLflowDashboardStore interface {
 	ConsumeMLflowDashboardTicket(context.Context, string, time.Time) (repositories.MLflowDashboardTicketRecord, error)
 	CreateMLflowAuditLog(context.Context, repositories.MLflowAuditEvent) error
 }
+
+var mlflowDashboardTransport = func() http.RoundTripper {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DisableCompression = true
+	return transport
+}()
 
 func (h *Handler) RegisterMLflowDashboardAccessRoute(group *gin.RouterGroup) {
 	if h.mlflowDashboardEnabled {
@@ -81,6 +88,11 @@ func (h *Handler) issueMLflowDashboardAccess(c *gin.Context) {
 }
 
 func (h *Handler) proxyMLflowDashboard(c *gin.Context) {
+	if !isMLflowDashboardMethodAllowed(c.Request.Method) {
+		c.Header("Allow", mlflowDashboardAllow)
+		h.writeError(c, http.StatusMethodNotAllowed, "MLFLOW_DASHBOARD_METHOD_NOT_ALLOWED", "MLflow Dashboard request method is not allowed")
+		return
+	}
 	if _, present := c.Request.URL.Query()["access_token"]; present {
 		h.exchangeMLflowDashboardTicket(c)
 		return
@@ -110,6 +122,15 @@ func (h *Handler) proxyMLflowDashboard(c *gin.Context) {
 	h.serveMLflowDashboardProxy(c, target)
 }
 
+func isMLflowDashboardMethodAllowed(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	default:
+		return false
+	}
+}
+
 func isMLflowMutation(method string) bool {
 	switch method {
 	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
@@ -137,6 +158,7 @@ func (h *Handler) hasValidMLflowMutationOrigin(request *http.Request) bool {
 
 func (h *Handler) serveMLflowDashboardProxy(c *gin.Context, target *url.URL) {
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.Transport = mlflowDashboardTransport
 	originalDirector := proxy.Director
 	proxy.Director = func(request *http.Request) {
 		originalDirector(request)
@@ -144,6 +166,7 @@ func (h *Handler) serveMLflowDashboardProxy(c *gin.Context, target *url.URL) {
 		request.Header.Del("Authorization")
 		request.Header.Del("Cookie")
 		request.Header.Del("X-Forwarded-Access-Token")
+		request.Header.Del("Accept-Encoding")
 	}
 	proxy.ModifyResponse = func(response *http.Response) error {
 		response.Header.Del("Set-Cookie")

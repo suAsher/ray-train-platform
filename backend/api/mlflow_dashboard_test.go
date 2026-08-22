@@ -349,6 +349,67 @@ func TestMLflowDashboardProxyForwardsAllMethodsAndStripsBrowserCredentials(t *te
 	}
 }
 
+func TestMLflowDashboardProxyRemovesAcceptEncodingBeforeTextRewrite(t *testing.T) {
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	type acceptEncodingHeader struct {
+		value   string
+		present bool
+	}
+	seenAcceptEncoding := make(chan acceptEncodingHeader, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		acceptEncoding := request.Header.Get("Accept-Encoding")
+		_, present := request.Header["Accept-Encoding"]
+		seenAcceptEncoding <- acceptEncodingHeader{value: acceptEncoding, present: present}
+		w.Header().Set("Content-Type", "application/javascript")
+		if acceptEncoding != "" {
+			w.Header().Set("Content-Encoding", "gzip")
+		}
+		_, _ = io.WriteString(w, `fetch("/api/2.0/mlflow/runs/search")`)
+	}))
+	defer upstream.Close()
+
+	request := httptest.NewRequest(http.MethodGet, "/mlflow/static/app.js", nil)
+	request.Header.Set("Accept-Encoding", "gzip, br")
+	request.AddCookie(mlflowSessionCookie(t, now))
+	response := newMLflowResponseRecorder()
+	mlflowProxyRouter(newMLflowProxyTestHandler(newFakeMLflowDashboardStore(), now, upstream.URL)).ServeHTTP(response, request)
+
+	if got := <-seenAcceptEncoding; got.present || got.value != "" {
+		t.Fatalf("upstream Accept-Encoding = %q present=%t, want removed", got.value, got.present)
+	}
+	if response.Header().Get("Content-Encoding") != "" {
+		t.Fatalf("rewritten response remained encoded: %q", response.Header().Get("Content-Encoding"))
+	}
+	if got := response.Body.String(); got != `fetch("/mlflow/api/2.0/mlflow/runs/search")` {
+		t.Fatalf("JavaScript body was not rewritten: %q", got)
+	}
+}
+
+func TestMLflowDashboardProxyRejectsUnsupportedMethodsBeforeCredentials(t *testing.T) {
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	handler := newMLflowDashboardTestHandler(newFakeMLflowDashboardStore(), now)
+	const allowedMethods = "GET, HEAD, OPTIONS, POST, PUT, PATCH, DELETE"
+
+	t.Run(http.MethodTrace, func(t *testing.T) {
+		request := httptest.NewRequest(http.MethodTrace, "/mlflow/?access_token=not-a-valid-ticket", nil)
+		response := newMLflowResponseRecorder()
+		mlflowProxyRouter(handler).ServeHTTP(response, request)
+		if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != allowedMethods {
+			t.Fatalf("TRACE status=%d Allow=%q body=%s", response.Code, response.Header().Get("Allow"), response.Body.String())
+		}
+	})
+
+	t.Run(http.MethodConnect, func(t *testing.T) {
+		response := newMLflowResponseRecorder()
+		context, _ := gin.CreateTestContext(response)
+		context.Request = httptest.NewRequest(http.MethodConnect, "/mlflow/api/2.0", nil)
+		handler.proxyMLflowDashboard(context)
+		if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != allowedMethods {
+			t.Fatalf("CONNECT status=%d Allow=%q body=%s", response.Code, response.Header().Get("Allow"), response.Body.String())
+		}
+	})
+}
+
 func TestMLflowDashboardProxyRejectsCrossOriginMutationsBeforeUpstream(t *testing.T) {
 	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
 	var upstreamCalls atomic.Int32
