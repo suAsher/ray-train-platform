@@ -7,6 +7,7 @@ readonly PLATFORM_NAMESPACE="ray-train-platform"
 readonly RELEASE="mlflow"
 readonly CHART="${ROOT_DIR}/helm/vendor/mlflow-0.1.0.tgz"
 readonly VALUES="${ROOT_DIR}/ops/mlflow/values-vke.yaml"
+readonly ARTIFACT_STORAGE="${ROOT_DIR}/ops/mlflow/15-artifact-storage.yaml"
 readonly TIMEOUT="${MLFLOW_DEPLOY_TIMEOUT:-15m}"
 readonly CHART_SHA256="db32bf8f17be693a59f8c440d47a97fbea5a93c02d2b5e9ee1761efee50597e8"
 
@@ -27,10 +28,31 @@ copy_secret() {
     kubectl apply -f - >/dev/null
 }
 
-# Keep registry and TOS credentials isolated in the MLflow namespace. They are
-# copied without printing values and are never mounted into training Pods.
+# The image pull credential is the only platform Secret copied into MLflow.
 copy_secret harbor-registry
-copy_secret tos-credentials
+
+# FSX resolves this Secret from the platform namespace in the CSI node agent.
+# It is intentionally never copied or exposed to an MLflow workload.
+kubectl -n "$PLATFORM_NAMESPACE" get secret tos-fsx-credentials >/dev/null 2>&1 || {
+  echo "missing CSI credential: ${PLATFORM_NAMESPACE}/tos-fsx-credentials" >&2
+  exit 1
+}
+
+kubectl apply -f "$ARTIFACT_STORAGE" >/dev/null
+kubectl -n "$NAMESPACE" wait \
+  --for=jsonpath='{.status.phase}'=Bound \
+  pvc/mlflow-artifacts \
+  --timeout="$TIMEOUT"
+
+# Revoke the old server's direct TOS egress before removing its copied Secret
+# and before starting any migration or replacement server Pod.
+kubectl apply -f "${ROOT_DIR}/ops/mlflow/30-policy.yaml" >/dev/null
+
+# Remove credentials/config copied by the previous S3-backed deployment. The
+# new PV references only ray-train-platform/tos-fsx-credentials from CSI.
+kubectl -n "$NAMESPACE" delete job mlflow-tos-prefix-init --ignore-not-found >/dev/null
+kubectl -n "$NAMESPACE" delete secret tos-credentials --ignore-not-found >/dev/null
+kubectl -n "$NAMESPACE" delete configmap mlflow-aws-config --ignore-not-found >/dev/null
 
 # Generate the dedicated database credential once. Re-deployments preserve it.
 if ! kubectl -n "$NAMESPACE" get secret mlflow-database >/dev/null 2>&1; then
@@ -71,14 +93,13 @@ run_job() {
   fi
 }
 
-# Seed the object prefix so bucket policy/path mistakes fail before rollout.
-run_job mlflow-tos-prefix-init "${ROOT_DIR}/ops/mlflow/20-bootstrap.yaml"
+# Fail before rollout unless the prefix-scoped filesystem supports both writes
+# and deletes as the same uid/gid used by the MLflow server.
+run_job mlflow-artifact-storage-probe "${ROOT_DIR}/ops/mlflow/20-bootstrap.yaml"
 
 # Database migrations are serialized before the two server replicas start.
 run_job mlflow-db-upgrade "${ROOT_DIR}/ops/mlflow/22-db-upgrade.yaml"
 
-# Install the deny-by-default policy before the first server Pod exists.
-kubectl apply -f "${ROOT_DIR}/ops/mlflow/30-policy.yaml" >/dev/null
 helm upgrade --install "$RELEASE" "$CHART" \
   --namespace "$NAMESPACE" \
   --create-namespace \

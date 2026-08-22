@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: mlflow-tos-prefix-init
+  name: mlflow-artifact-storage-probe
   namespace: mlflow-system
   labels:
     app.kubernetes.io/name: mlflow
@@ -22,30 +22,37 @@ spec:
         - name: harbor-registry
       nodeSelector:
         platform.wellspiking.ai/pool: control-plane
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
-        - name: create-prefix
-          image: harbor.wellspiking.ai/guofeng.su/ray-tos-prefix-init:mlflow-20260821-r1@sha256:a147d025eea4216e272b330ea7abd836b805eaa3c2f6bfd163fe1a287fe13438
+        - name: probe
+          image: harbor.wellspiking.ai/guofeng.su/mlflow:v3.14.0-full@sha256:03c206d175084ee3f654a1353ab62ccd2e59048c54f9488f08cc4d8f5de0037d
           imagePullPolicy: IfNotPresent
-          env:
-            - name: TOS_ENDPOINT
-              value: https://tos-cn-shanghai.ivolces.com
-            - name: TOS_REGION
-              value: cn-shanghai
-            - name: TOS_BUCKET
-              value: vke-cluster
-            - name: TOS_PREFIXES
-              value: ray-train/platform/mlflow-artifacts/
-            - name: TOS_ACCESS_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: tos-credentials
-                  key: access-key
-            - name: TOS_SECRET_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: tos-credentials
-                  key: secret-key
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              probe=/mlflow-artifacts/.mlflow-write-delete-probe
+              trap 'rm -f "$probe"' EXIT
+              printf '%s\n' "$HOSTNAME" > "$probe"
+              test -s "$probe"
+              rm -f "$probe"
+              test ! -e "$probe"
+              trap - EXIT
+              printf '%s\n' 'MLflow artifact storage write/delete probe passed'
+          volumeMounts:
+            - name: mlflow-artifacts
+              mountPath: /mlflow-artifacts
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+      volumes:
+        - name: mlflow-artifacts
+          persistentVolumeClaim:
+            claimName: mlflow-artifacts

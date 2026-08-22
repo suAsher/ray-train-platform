@@ -40,49 +40,15 @@ mlflow:
     secretKeyRef:
       name: mlflow-database
       key: uri
-  artifactsDestination: s3://vke-cluster/ray-train/platform/mlflow-artifacts
-
-env:
-  # Only the MLflow server receives this Secret. Training Pods upload through
-  # the tracking API and never receive TOS AK/SK.
-  - name: AWS_ACCESS_KEY_ID
-    valueFrom:
-      secretKeyRef:
-        name: tos-credentials
-        key: access-key
-  - name: AWS_SECRET_ACCESS_KEY
-    valueFrom:
-      secretKeyRef:
-        name: tos-credentials
-        key: secret-key
-  - name: AWS_DEFAULT_REGION
-    valueFrom:
-      secretKeyRef:
-        name: tos-credentials
-        key: region
-  - name: MLFLOW_S3_ENDPOINT_URL
-    value: https://tos-s3-cn-shanghai.ivolces.com
-  # MLflow constructs its own botocore Config and therefore needs its native
-  # addressing-style option in addition to the standard AWS config file.
-  # Volcengine TOS rejects S3 path-style requests.
-  - name: MLFLOW_BOTO_CLIENT_ADDRESSING_STYLE
-    value: virtual
-  - name: AWS_CONFIG_FILE
-    value: /etc/mlflow/aws/config
-  - name: MLFLOW_ARTIFACT_UPLOAD_DOWNLOAD_TIMEOUT
-    value: "600"
+  artifactsDestination: file:///mlflow-artifacts
 
 extraVolumes:
-  - name: aws-config
-    configMap:
-      name: mlflow-aws-config
-      items:
-        - key: config
-          path: config
+  - name: mlflow-artifacts
+    persistentVolumeClaim:
+      claimName: mlflow-artifacts
 extraVolumeMounts:
-  - name: aws-config
-    mountPath: /etc/mlflow/aws
-    readOnly: true
+  - name: mlflow-artifacts
+    mountPath: /mlflow-artifacts
 
 metrics:
   enabled: true

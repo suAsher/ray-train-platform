@@ -5,8 +5,11 @@ readonly ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly VALUES="${ROOT_DIR}/ops/mlflow/values-vke.yaml"
 readonly NAMESPACE="${ROOT_DIR}/ops/mlflow/00-namespace.yaml"
 readonly DATABASE="${ROOT_DIR}/ops/mlflow/10-database.yaml"
+readonly STORAGE="${ROOT_DIR}/ops/mlflow/15-artifact-storage.yaml"
+readonly BOOTSTRAP="${ROOT_DIR}/ops/mlflow/20-bootstrap.yaml"
 readonly POLICY="${ROOT_DIR}/ops/mlflow/30-policy.yaml"
 readonly SMOKE="${ROOT_DIR}/ops/mlflow/40-smoke.yaml"
+readonly DEPLOY="${ROOT_DIR}/ops/mlflow/deploy.sh"
 readonly VERIFY="${ROOT_DIR}/ops/mlflow/verify.sh"
 readonly VENDORED_CHART="${ROOT_DIR}/helm/vendor/mlflow-0.1.0.tgz"
 readonly VENDORED_DEPLOYMENT="mlflow/templates/deployment.yaml"
@@ -36,15 +39,73 @@ grep -Fq 'kind: StatefulSet' "$DATABASE"
 grep -Fq 'name: mlflow-postgres' "$DATABASE"
 grep -Fq 'storageClassName: ebs-ssd' "$DATABASE"
 grep -Fq 'storage: 20Gi' "$DATABASE"
-grep -Fq 'artifactsDestination: s3://vke-cluster/ray-train/platform/mlflow-artifacts' "$VALUES"
-grep -Fq 'name: AWS_ACCESS_KEY_ID' "$VALUES"
-grep -Fq 'name: MLFLOW_S3_ENDPOINT_URL' "$VALUES"
-grep -Fq 'name: MLFLOW_BOTO_CLIENT_ADDRESSING_STYLE' "$VALUES"
-grep -Fq 'value: virtual' "$VALUES"
+if grep -Eq 'tos-credentials|AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|DEFAULT_REGION|CONFIG_FILE)|TOS_|MLFLOW_(S3|BOTO)' "$VALUES"; then
+  echo 'MLflow Pod must not receive shared TOS credentials or AWS/TOS environment variables' >&2
+  exit 1
+fi
+if grep -Eq 'mlflow-aws-config|aws-config|/etc/mlflow/aws' "$VALUES"; then
+  echo 'MLflow Pod must not mount an AWS configuration' >&2
+  exit 1
+fi
+grep -Fq 'artifactsDestination: file:///mlflow-artifacts' "$VALUES"
+grep -Fq 'name: mlflow-artifacts' "$VALUES"
+grep -Fq 'claimName: mlflow-artifacts' "$VALUES"
+grep -Fq 'mountPath: /mlflow-artifacts' "$VALUES"
+grep -Fq 'kind: PersistentVolume' "$STORAGE"
+grep -Fq 'name: mlflow-artifacts-pv' "$STORAGE"
+grep -Fq 'persistentVolumeReclaimPolicy: Retain' "$STORAGE"
+grep -Fq 'volumeHandle: mlflow-artifacts-pv' "$STORAGE"
+grep -Fq 'driver: fsx.csi.volcengine.com' "$STORAGE"
+grep -Fq 'bucket: vke-cluster' "$STORAGE"
+grep -Fq 'path: /ray-train/platform/mlflow-artifacts' "$STORAGE"
+grep -Fq 'secretName: tos-fsx-credentials' "$STORAGE"
+grep -Fq 'secretNamespace: ray-train-platform' "$STORAGE"
+grep -Fq 'tos_allow_delete=true' "$STORAGE"
+grep -Fq 'uid=1000' "$STORAGE"
+grep -Fq 'gid=1000' "$STORAGE"
+grep -Fq 'dir_mode=770' "$STORAGE"
+grep -Fq 'file_mode=660' "$STORAGE"
+grep -Fq 'name: mlflow-artifacts' "$STORAGE"
+grep -Fq 'namespace: mlflow-system' "$STORAGE"
+grep -Fq 'ReadWriteMany' "$STORAGE"
+grep -Fq 'storageClassName: ""' "$STORAGE"
+grep -Fq 'volumeName: mlflow-artifacts-pv' "$STORAGE"
+grep -Fq 'claimName: mlflow-artifacts' "$BOOTSTRAP"
+grep -Fq 'mountPath: /mlflow-artifacts' "$BOOTSTRAP"
+grep -Fq 'rm -f "$probe"' "$BOOTSTRAP"
+grep -Fq 'test ! -e "$probe"' "$BOOTSTRAP"
+if grep -Eq 'tos-credentials|AWS_|TOS_' "$BOOTSTRAP"; then
+  echo 'MLflow storage bootstrap must probe the PVC without object-store credentials' >&2
+  exit 1
+fi
+grep -Fq 'get secret tos-fsx-credentials' "$DEPLOY"
+grep -Fq '15-artifact-storage.yaml' "$DEPLOY"
+grep -Fq 'pvc/mlflow-artifacts' "$DEPLOY"
+grep -Fq 'delete job mlflow-tos-prefix-init' "$DEPLOY"
+if grep -Fq 'copy_secret tos-credentials' "$DEPLOY"; then
+  echo 'MLflow deployment must not copy the shared TOS credential' >&2
+  exit 1
+fi
+policy_apply_line="$(grep -nF 'kubectl apply -f "${ROOT_DIR}/ops/mlflow/30-policy.yaml"' "$DEPLOY" | cut -d: -f1)"
+credential_delete_line="$(grep -nF 'delete secret tos-credentials' "$DEPLOY" | cut -d: -f1)"
+storage_apply_line="$(grep -nF 'kubectl apply -f "$ARTIFACT_STORAGE"' "$DEPLOY" | cut -d: -f1)"
+storage_bound_line="$(grep -nF 'pvc/mlflow-artifacts' "$DEPLOY" | cut -d: -f1)"
+migration_line="$(grep -nF 'run_job mlflow-db-upgrade' "$DEPLOY" | cut -d: -f1)"
+helm_line="$(grep -nF 'helm upgrade --install' "$DEPLOY" | cut -d: -f1)"
+if ! (( storage_apply_line < storage_bound_line &&
+        storage_bound_line < policy_apply_line &&
+        policy_apply_line < credential_delete_line &&
+        credential_delete_line < migration_line &&
+        migration_line < helm_line )); then
+  echo 'MLflow deploy must bind storage and revoke direct TOS access before migration/Helm' >&2
+  exit 1
+fi
 grep -Fq 'mlflow.mlflow-system.svc.cluster.local:5000' "$VALUES"
 grep -Fq '172.28.*' "$VALUES"
-grep -Fq 'name: AWS_CONFIG_FILE' "$VALUES"
-grep -Fq 'addressing_style = virtual' "$POLICY"
+if grep -Eq 'mlflow-aws-config|addressing_style = virtual|cidr: 100\.64\.0\.0/10' "$POLICY"; then
+  echo 'MLflow policy must not configure S3 or permit direct TOS egress' >&2
+  exit 1
+fi
 grep -Fq 'name: mlflow-ingest' "$POLICY"
 grep -Fq 'return 403' "$POLICY"
 grep -Fq 'location = /api/2.0/mlflow/runs/log-batch' "$POLICY"
@@ -54,7 +115,6 @@ grep -Fq 'operator: Exists' "$POLICY"
 grep -Fq 'kubernetes.io/metadata.name: ray-train-platform' "$POLICY"
 grep -Fq 'app: ray-train-backend' "$POLICY"
 grep -Fq 'name: mlflow-postgres' "$POLICY"
-grep -Fq 'cidr: 100.64.0.0/10' "$POLICY"
 grep -Fq 'path: /metrics' "$POLICY"
 grep -Fq 'mlflow-ingest.mlflow-system.svc.cluster.local:8080' "$SMOKE"
 grep -Fq 'MLFLOW_ARTIFACT_DOWNLOAD_BLOCKED' "$SMOKE"
@@ -83,6 +143,12 @@ grep -Fq 'containers[?(@.name=="mlflow")].args' "$VERIFY" || {
   echo 'MLflow live verification must inspect the mlflow container args' >&2
   exit 1
 }
+grep -Fq 'pvc mlflow-artifacts' "$VERIFY"
+grep -Fq 'claimName' "$VERIFY"
+grep -Fq 'mountPath' "$VERIFY"
+grep -Fq 'MLFLOW_ARTIFACTS_DESTINATION' "$VERIFY"
+grep -Fq 'file:///mlflow-artifacts' "$VERIFY"
+grep -Fq 'AWS_|TOS_|MLFLOW_(S3|BOTO)' "$VERIFY"
 grep -Fq '/proxy/mlflow/health' "$VERIFY"
 grep -Fq ".spec.replicas" "$VERIFY"
 if grep -Fq 'get ingress' "$VERIFY"; then

@@ -1,0 +1,57 @@
+# This static volume exposes only MLflow's dedicated TOS prefix. The CSI node
+# agent consumes the credential; neither the PVC nor the MLflow Pod receives it.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mlflow-artifacts-pv
+  labels:
+    app.kubernetes.io/name: mlflow
+    app.kubernetes.io/component: artifact-storage
+    app.kubernetes.io/part-of: ray-train-platform
+spec:
+  capacity:
+    storage: 500Gi
+  accessModes:
+    - ReadWriteMany
+  volumeMode: Filesystem
+  storageClassName: ""
+  persistentVolumeReclaimPolicy: Retain
+  mountOptions:
+    - no_writeback_cache
+    - tos_allow_delete=true
+    - uid=1000
+    - gid=1000
+    - dir_mode=770
+    - file_mode=660
+  csi:
+    driver: fsx.csi.volcengine.com
+    # Keep this cluster-wide handle stable so repeated applies reuse the same
+    # prefix-scoped volume instead of provisioning a second artifact root.
+    volumeHandle: mlflow-artifacts-pv
+    volumeAttributes:
+      type: TOS
+      server: tos-cn-shanghai.ivolces.com
+      region: cn-shanghai
+      bucket: vke-cluster
+      path: /ray-train/platform/mlflow-artifacts
+      secretName: tos-fsx-credentials
+      secretNamespace: ray-train-platform
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mlflow-artifacts
+  namespace: mlflow-system
+  labels:
+    app.kubernetes.io/name: mlflow
+    app.kubernetes.io/component: artifact-storage
+    app.kubernetes.io/part-of: ray-train-platform
+spec:
+  accessModes:
+    - ReadWriteMany
+  volumeMode: Filesystem
+  storageClassName: ""
+  volumeName: mlflow-artifacts-pv
+  resources:
+    requests:
+      storage: 500Gi
