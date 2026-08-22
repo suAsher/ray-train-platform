@@ -53,6 +53,31 @@ type MLflowAuditEvent struct {
 	RequestID string
 }
 
+// AuthorizeMLflowDashboardPrincipal applies the same account-state semantics
+// as local session authentication. OIDC and demo identities do not have a
+// local_users row, so they must not be rejected merely because that row is
+// absent.
+func (r *GormRepository) AuthorizeMLflowDashboardPrincipal(ctx context.Context, principal auth.Principal) (bool, error) {
+	if strings.TrimSpace(principal.Subject) == "" || strings.TrimSpace(principal.TenantID) == "" {
+		return false, nil
+	}
+	switch principal.AuthType {
+	case auth.AuthTypeOIDC, auth.AuthTypeDemo:
+		return true, nil
+	case auth.AuthTypeLocal:
+		user, err := r.FindLocalUserByID(ctx, principal.Subject)
+		if errors.Is(err, ErrLocalUserNotFound) {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("verify local MLflow dashboard access: %w", err)
+		}
+		return !user.Disabled && user.TenantID == principal.TenantID, nil
+	default:
+		return false, nil
+	}
+}
+
 func (r *GormRepository) CreateMLflowDashboardTicket(ctx context.Context, record MLflowDashboardTicketRecord) error {
 	record.TenantID = strings.TrimSpace(record.TenantID)
 	record.UserID = strings.TrimSpace(record.UserID)

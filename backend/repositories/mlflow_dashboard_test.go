@@ -44,10 +44,63 @@ func mlflowDashboardTestRepositories(t *testing.T) (*GormRepository, *GormReposi
 	}
 
 	firstDatabase := open()
-	if err := firstDatabase.AutoMigrate(&MLflowDashboardTicketRecord{}, &AuditLogRecord{}); err != nil {
+	if err := firstDatabase.AutoMigrate(&MLflowDashboardTicketRecord{}, &AuditLogRecord{}, &LocalUserRecord{}); err != nil {
 		t.Fatalf("migrate MLflow dashboard database: %v", err)
 	}
 	return NewGormRepository(firstDatabase), NewGormRepository(open())
+}
+
+func TestAuthorizeMLflowDashboardPrincipalAllowsActiveLocalUser(t *testing.T) {
+	repository, _ := mlflowDashboardTestRepositories(t)
+	user := LocalUserRecord{ID: "local-user-a", Username: "alice", TenantID: "tenant-a", Disabled: false}
+	if err := repository.db.Create(&user).Error; err != nil {
+		t.Fatalf("create active local user: %v", err)
+	}
+
+	allowed, err := repository.AuthorizeMLflowDashboardPrincipal(context.Background(), auth.Principal{
+		Subject: user.ID, TenantID: user.TenantID, AuthType: auth.AuthTypeLocal,
+	})
+	if err != nil || !allowed {
+		t.Fatalf("active local user authorization: allowed=%t err=%v", allowed, err)
+	}
+}
+
+func TestAuthorizeMLflowDashboardPrincipalRejectsDisabledAndDecommissionedLocalUsers(t *testing.T) {
+	for _, state := range []string{"disabled", "decommissioned"} {
+		t.Run(state, func(t *testing.T) {
+			repository, _ := mlflowDashboardTestRepositories(t)
+			user := LocalUserRecord{ID: "local-user-a", Username: "alice", TenantID: "tenant-a"}
+			if state == "disabled" {
+				user.Disabled = true
+			} else {
+				decommissionedAt := time.Now().UTC()
+				user.DecommissionedAt = &decommissionedAt
+			}
+			if err := repository.db.Create(&user).Error; err != nil {
+				t.Fatalf("create %s local user: %v", state, err)
+			}
+
+			allowed, err := repository.AuthorizeMLflowDashboardPrincipal(context.Background(), auth.Principal{
+				Subject: user.ID, TenantID: user.TenantID, AuthType: auth.AuthTypeLocal,
+			})
+			if err != nil {
+				t.Fatalf("authorize %s local user: %v", state, err)
+			}
+			if allowed {
+				t.Fatalf("%s local user retained MLflow dashboard access", state)
+			}
+		})
+	}
+}
+
+func TestAuthorizeMLflowDashboardPrincipalAllowsOIDCWithoutLocalUserRecord(t *testing.T) {
+	repository, _ := mlflowDashboardTestRepositories(t)
+	allowed, err := repository.AuthorizeMLflowDashboardPrincipal(context.Background(), auth.Principal{
+		Subject: "oidc-subject-a", TenantID: "tenant-a", AuthType: auth.AuthTypeOIDC,
+	})
+	if err != nil || !allowed {
+		t.Fatalf("OIDC principal without local account: allowed=%t err=%v", allowed, err)
+	}
 }
 
 func validMLflowDashboardTicket(now time.Time) MLflowDashboardTicketRecord {

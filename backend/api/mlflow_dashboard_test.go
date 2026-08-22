@@ -26,11 +26,14 @@ import (
 )
 
 type fakeMLflowDashboardStore struct {
-	mu       sync.Mutex
-	tickets  map[string]repositories.MLflowDashboardTicketRecord
-	created  []repositories.MLflowDashboardTicketRecord
-	audits   []repositories.MLflowAuditEvent
-	auditErr error
+	mu               sync.Mutex
+	tickets          map[string]repositories.MLflowDashboardTicketRecord
+	created          []repositories.MLflowDashboardTicketRecord
+	audits           []repositories.MLflowAuditEvent
+	auditErr         error
+	accessAllowed    bool
+	accessErr        error
+	accessPrincipals []auth.Principal
 }
 
 type mlflowResponseRecorder struct {
@@ -62,7 +65,10 @@ func newMLflowResponseRecorder() *mlflowResponseRecorder {
 func (r *mlflowResponseRecorder) CloseNotify() <-chan bool { return r.closed }
 
 func newFakeMLflowDashboardStore() *fakeMLflowDashboardStore {
-	return &fakeMLflowDashboardStore{tickets: make(map[string]repositories.MLflowDashboardTicketRecord)}
+	return &fakeMLflowDashboardStore{
+		tickets:       make(map[string]repositories.MLflowDashboardTicketRecord),
+		accessAllowed: true,
+	}
 }
 
 func (s *fakeMLflowDashboardStore) CreateMLflowDashboardTicket(_ context.Context, record repositories.MLflowDashboardTicketRecord) error {
@@ -91,6 +97,13 @@ func (s *fakeMLflowDashboardStore) CreateMLflowAuditLog(_ context.Context, event
 	defer s.mu.Unlock()
 	s.audits = append(s.audits, event)
 	return s.auditErr
+}
+
+func (s *fakeMLflowDashboardStore) AuthorizeMLflowDashboardPrincipal(_ context.Context, principal auth.Principal) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.accessPrincipals = append(s.accessPrincipals, principal)
+	return s.accessAllowed, s.accessErr
 }
 
 func newMLflowDashboardTestHandler(store *fakeMLflowDashboardStore, now time.Time) *Handler {
@@ -304,12 +317,94 @@ func TestMLflowDashboardTicketExchangeRejectsExpiredTamperedAndMalformedTickets(
 }
 
 func mlflowSessionCookie(t *testing.T, now time.Time) *http.Cookie {
+	return mlflowSessionCookieForAuthType(t, now, auth.AuthTypeOIDC)
+}
+
+func mlflowSessionCookieForAuthType(t *testing.T, now time.Time, authType auth.AuthenticationType) *http.Cookie {
 	t.Helper()
-	token, err := domain.IssueMLflowDashboardSession("tenant-a", "user-a", "nonce-a", []byte(strings.Repeat("p", 32)), now, 8*time.Hour)
+	nonce := string(authType) + ":" + strings.Repeat("a", sha256.Size*2)
+	token, err := domain.IssueMLflowDashboardSession("tenant-a", "user-a", nonce, []byte(strings.Repeat("p", 32)), now, 8*time.Hour)
 	if err != nil {
 		t.Fatalf("issue dashboard session: %v", err)
 	}
 	return &http.Cookie{Name: mlflowDashboardCookieName, Value: token}
+}
+
+func TestMLflowDashboardProxyReauthorizesEveryCookieRequest(t *testing.T) {
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	for _, authType := range []auth.AuthenticationType{auth.AuthTypeLocal, auth.AuthTypeOIDC} {
+		t.Run(string(authType), func(t *testing.T) {
+			store := newFakeMLflowDashboardStore()
+			var upstreamCalls atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				upstreamCalls.Add(1)
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer upstream.Close()
+
+			router := mlflowProxyRouter(newMLflowProxyTestHandler(store, now, upstream.URL))
+			for requestNumber := 0; requestNumber < 2; requestNumber++ {
+				request := httptest.NewRequest(http.MethodGet, "/mlflow/", nil)
+				request.AddCookie(mlflowSessionCookieForAuthType(t, now, authType))
+				response := newMLflowResponseRecorder()
+				router.ServeHTTP(response, request)
+				if response.Code != http.StatusNoContent {
+					t.Fatalf("request %d status=%d body=%s", requestNumber+1, response.Code, response.Body.String())
+				}
+				if values := response.Header().Values("Set-Cookie"); len(values) != 0 {
+					t.Fatalf("request %d unexpectedly refreshed the dashboard session: %q", requestNumber+1, values)
+				}
+			}
+
+			if upstreamCalls.Load() != 2 {
+				t.Fatalf("upstream calls=%d, want 2", upstreamCalls.Load())
+			}
+			if len(store.accessPrincipals) != 2 {
+				t.Fatalf("authorization checks=%d, want one per request", len(store.accessPrincipals))
+			}
+			for _, principal := range store.accessPrincipals {
+				if principal.Subject != "user-a" || principal.TenantID != "tenant-a" || principal.AuthType != authType {
+					t.Fatalf("unexpected authorization principal: %+v", principal)
+				}
+			}
+		})
+	}
+}
+
+func TestMLflowDashboardProxyClearsCookieWhenLocalAccountLosesAccess(t *testing.T) {
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	for _, state := range []string{"disabled", "decommissioned"} {
+		t.Run(state, func(t *testing.T) {
+			store := newFakeMLflowDashboardStore()
+			store.accessAllowed = false
+			var upstreamCalls atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				upstreamCalls.Add(1)
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer upstream.Close()
+
+			request := httptest.NewRequest(http.MethodGet, "/mlflow/", nil)
+			request.AddCookie(mlflowSessionCookieForAuthType(t, now, auth.AuthTypeLocal))
+			response := newMLflowResponseRecorder()
+			mlflowProxyRouter(newMLflowProxyTestHandler(store, now, upstream.URL)).ServeHTTP(response, request)
+
+			if response.Code != http.StatusUnauthorized && response.Code != http.StatusForbidden {
+				t.Fatalf("status=%d, want 401 or 403; body=%s", response.Code, response.Body.String())
+			}
+			if upstreamCalls.Load() != 0 {
+				t.Fatalf("revoked account reached upstream %d times", upstreamCalls.Load())
+			}
+			cookies := response.Result().Cookies()
+			if len(cookies) != 1 {
+				t.Fatalf("clearing cookies=%d, want exactly one: %v", len(cookies), cookies)
+			}
+			cookie := cookies[0]
+			if cookie.Name != mlflowDashboardCookieName || cookie.Value != "" || cookie.Path != mlflowDashboardBasePath || cookie.MaxAge >= 0 || !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteStrictMode {
+				t.Fatalf("dashboard cookie was not securely cleared: %+v", cookie)
+			}
+		})
+	}
 }
 
 func newMLflowProxyTestHandler(store *fakeMLflowDashboardStore, now time.Time, upstream string) *Handler {

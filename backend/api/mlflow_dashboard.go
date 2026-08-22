@@ -24,11 +24,14 @@ import (
 )
 
 const (
-	mlflowDashboardCookieName = "ray_mlflow_dashboard"
-	mlflowDashboardBasePath   = "/mlflow/"
-	mlflowDashboardTicketSize = 32
-	mlflowDashboardAllow      = "GET, HEAD, OPTIONS, POST, PUT, PATCH, DELETE"
-	mlflowDashboardRewriteMax = 2 << 20
+	mlflowDashboardCookieName  = "ray_mlflow_dashboard"
+	mlflowDashboardBasePath    = "/mlflow/"
+	mlflowDashboardTicketSize  = 32
+	mlflowDashboardAllow       = "GET, HEAD, OPTIONS, POST, PUT, PATCH, DELETE"
+	mlflowDashboardRewriteMax  = 2 << 20
+	mlflowDashboardTicketOIDC  = byte('O')
+	mlflowDashboardTicketLocal = byte('L')
+	mlflowDashboardTicketDemo  = byte('D')
 )
 
 type mlflowDashboardPassThroughBody struct {
@@ -47,6 +50,7 @@ func (b *mlflowDashboardPassThroughBody) Close() error {
 type MLflowDashboardStore interface {
 	CreateMLflowDashboardTicket(context.Context, repositories.MLflowDashboardTicketRecord) error
 	ConsumeMLflowDashboardTicket(context.Context, string, time.Time) (repositories.MLflowDashboardTicketRecord, error)
+	AuthorizeMLflowDashboardPrincipal(context.Context, auth.Principal) (bool, error)
 	CreateMLflowAuditLog(context.Context, repositories.MLflowAuditEvent) error
 }
 
@@ -78,11 +82,19 @@ func (h *Handler) issueMLflowDashboardAccess(c *gin.Context) {
 		h.writeError(c, http.StatusServiceUnavailable, "MLFLOW_DASHBOARD_UNAVAILABLE", "MLflow Dashboard access is not configured")
 		return
 	}
+	authMarker, ok := mlflowDashboardAuthMarker(principal.AuthType)
+	if !ok {
+		h.writeError(c, http.StatusForbidden, "INTERACTIVE_LOGIN_REQUIRED", "an interactive user login is required")
+		return
+	}
 	randomTicket := make([]byte, mlflowDashboardTicketSize)
 	if _, err := io.ReadFull(h.mlflowDashboardRandom, randomTicket); err != nil {
 		h.writeError(c, http.StatusInternalServerError, "MLFLOW_DASHBOARD_ACCESS_FAILED", "could not issue MLflow Dashboard access")
 		return
 	}
+	// Bind the opaque one-time ticket to its interactive authentication source.
+	// The remaining 31 random bytes still provide 248 bits of entropy.
+	randomTicket[0] = authMarker
 	rawTicket := base64.RawURLEncoding.EncodeToString(randomTicket)
 	tokenHash := sha256.Sum256([]byte(rawTicket))
 	now := h.mlflowDashboardNow().UTC()
@@ -118,12 +130,16 @@ func (h *Handler) proxyMLflowDashboard(c *gin.Context) {
 	}
 	claims, err := domain.VerifyMLflowDashboardSessionClaims(cookie.Value, h.mlflowDashboardPepper, h.mlflowDashboardNow())
 	if err != nil {
+		h.clearMLflowDashboardCookie(c)
 		h.writeError(c, http.StatusUnauthorized, "MLFLOW_DASHBOARD_AUTH_REQUIRED", "open MLflow Dashboard from the authenticated application")
 		return
 	}
 
 	startedAt := h.mlflowDashboardNow()
 	defer h.auditMLflowDashboardRequest(c, claims, startedAt)
+	if !h.authorizeMLflowDashboardClaims(c, claims) {
+		return
+	}
 	if isMLflowMutation(c.Request.Method) && !h.hasValidMLflowMutationOrigin(c.Request) {
 		h.writeError(c, http.StatusForbidden, "MLFLOW_DASHBOARD_ORIGIN_FORBIDDEN", "MLflow Dashboard mutation origin is not allowed")
 		return
@@ -134,6 +150,86 @@ func (h *Handler) proxyMLflowDashboard(c *gin.Context) {
 		return
 	}
 	h.serveMLflowDashboardProxy(c, target)
+}
+
+func mlflowDashboardAuthMarker(authType auth.AuthenticationType) (byte, bool) {
+	switch authType {
+	case auth.AuthTypeOIDC:
+		return mlflowDashboardTicketOIDC, true
+	case auth.AuthTypeLocal:
+		return mlflowDashboardTicketLocal, true
+	case auth.AuthTypeDemo:
+		return mlflowDashboardTicketDemo, true
+	default:
+		return 0, false
+	}
+}
+
+func mlflowDashboardAuthType(marker byte) (auth.AuthenticationType, bool) {
+	switch marker {
+	case mlflowDashboardTicketOIDC:
+		return auth.AuthTypeOIDC, true
+	case mlflowDashboardTicketLocal:
+		return auth.AuthTypeLocal, true
+	case mlflowDashboardTicketDemo:
+		return auth.AuthTypeDemo, true
+	default:
+		return "", false
+	}
+}
+
+func mlflowDashboardSessionNonce(authType auth.AuthenticationType, tokenHash string) string {
+	return string(authType) + ":" + tokenHash
+}
+
+func parseMLflowDashboardSessionNonce(nonce string) (auth.AuthenticationType, string, bool) {
+	authTypeText, tokenHash, found := strings.Cut(nonce, ":")
+	if !found || len(tokenHash) != sha256.Size*2 || strings.ToLower(tokenHash) != tokenHash {
+		return "", "", false
+	}
+	decoded, err := hex.DecodeString(tokenHash)
+	if err != nil || len(decoded) != sha256.Size {
+		return "", "", false
+	}
+	authType := auth.AuthenticationType(authTypeText)
+	if _, ok := mlflowDashboardAuthMarker(authType); !ok {
+		return "", "", false
+	}
+	return authType, tokenHash, true
+}
+
+func (h *Handler) authorizeMLflowDashboardClaims(c *gin.Context, claims domain.MLflowDashboardSessionClaims) bool {
+	authType, _, ok := parseMLflowDashboardSessionNonce(claims.Nonce)
+	if !ok {
+		h.clearMLflowDashboardCookie(c)
+		h.writeError(c, http.StatusUnauthorized, "MLFLOW_DASHBOARD_AUTH_REQUIRED", "open MLflow Dashboard from the authenticated application")
+		return false
+	}
+	if h.mlflowDashboardStore == nil {
+		h.writeError(c, http.StatusServiceUnavailable, "MLFLOW_DASHBOARD_UNAVAILABLE", "MLflow Dashboard access is not configured")
+		return false
+	}
+	allowed, err := h.mlflowDashboardStore.AuthorizeMLflowDashboardPrincipal(c.Request.Context(), auth.Principal{
+		Subject: claims.Subject, Username: claims.Subject, TenantID: claims.TenantID, AuthType: authType,
+	})
+	if err != nil {
+		h.writeError(c, http.StatusServiceUnavailable, "MLFLOW_DASHBOARD_AUTH_UNAVAILABLE", "could not verify MLflow Dashboard access")
+		return false
+	}
+	if !allowed {
+		h.clearMLflowDashboardCookie(c)
+		h.writeError(c, http.StatusUnauthorized, "MLFLOW_DASHBOARD_ACCESS_REVOKED", "MLflow Dashboard access is no longer authorized")
+		return false
+	}
+	return true
+}
+
+func (h *Handler) clearMLflowDashboardCookie(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name: mlflowDashboardCookieName, Value: "", Path: mlflowDashboardBasePath,
+		MaxAge: -1, Expires: time.Unix(1, 0).UTC(), HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode,
+	})
 }
 
 func isMLflowDashboardMethodAllowed(method string) bool {
@@ -314,14 +410,32 @@ func (h *Handler) exchangeMLflowDashboardTicket(c *gin.Context) {
 		h.writeError(c, http.StatusUnauthorized, "MLFLOW_DASHBOARD_TICKET_INVALID", "MLflow Dashboard access link is invalid or expired")
 		return
 	}
+	authType, ok := mlflowDashboardAuthType(decoded[0])
+	if !ok {
+		h.writeError(c, http.StatusUnauthorized, "MLFLOW_DASHBOARD_TICKET_INVALID", "MLflow Dashboard access link is invalid or expired")
+		return
+	}
 	tokenHash := sha256.Sum256([]byte(rawTicket))
+	tokenHashText := hex.EncodeToString(tokenHash[:])
 	now := h.mlflowDashboardNow().UTC()
-	record, err := h.mlflowDashboardStore.ConsumeMLflowDashboardTicket(c.Request.Context(), hex.EncodeToString(tokenHash[:]), now)
+	record, err := h.mlflowDashboardStore.ConsumeMLflowDashboardTicket(c.Request.Context(), tokenHashText, now)
 	if err != nil {
 		h.writeError(c, http.StatusUnauthorized, "MLFLOW_DASHBOARD_TICKET_INVALID", "MLflow Dashboard access link is invalid or expired")
 		return
 	}
-	session, err := domain.IssueMLflowDashboardSession(record.TenantID, record.UserID, record.TokenHash, h.mlflowDashboardPepper, now, h.mlflowDashboardTTL)
+	allowed, err := h.mlflowDashboardStore.AuthorizeMLflowDashboardPrincipal(c.Request.Context(), auth.Principal{
+		Subject: record.UserID, Username: record.UserID, TenantID: record.TenantID, AuthType: authType,
+	})
+	if err != nil {
+		h.writeError(c, http.StatusServiceUnavailable, "MLFLOW_DASHBOARD_AUTH_UNAVAILABLE", "could not verify MLflow Dashboard access")
+		return
+	}
+	if !allowed {
+		h.clearMLflowDashboardCookie(c)
+		h.writeError(c, http.StatusUnauthorized, "MLFLOW_DASHBOARD_ACCESS_REVOKED", "MLflow Dashboard access is no longer authorized")
+		return
+	}
+	session, err := domain.IssueMLflowDashboardSession(record.TenantID, record.UserID, mlflowDashboardSessionNonce(authType, record.TokenHash), h.mlflowDashboardPepper, now, h.mlflowDashboardTTL)
 	if err != nil {
 		h.writeError(c, http.StatusInternalServerError, "MLFLOW_DASHBOARD_SESSION_FAILED", "could not create MLflow Dashboard session")
 		return
