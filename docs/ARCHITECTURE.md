@@ -45,6 +45,7 @@ flowchart TB
     prom[Prometheus Operator + DCGM]
     grafana[Grafana]
     mlflow[MLflow ×2<br/>独立 PostgreSQL<br/>原生 UI /mlflow/]
+    mlflowArtifact[MLflow Artifact<br/>FSX CSI 静态 PV/PVC<br/>/mlflow-artifacts]
     ingest[MLflow 写入网关]
   end
 
@@ -78,6 +79,7 @@ flowchart TB
   job -. 日志 .-> alloy --> loki
   gpu -. GPU / 节点指标 .-> prom --> grafana
   job -. 参数 / Loss / 评估指标 .-> ingest --> mlflow
+  mlflow --> mlflowArtifact
   api -. 筛选查询 / 原生 UI 代理 .-> mlflow
   portal -. 登录后完整管理界面 .-> api
   job --> gitlab
@@ -197,11 +199,12 @@ flowchart TB
 - Prometheus Operator、Prometheus 2 副本、Alertmanager 2 副本、Grafana 2 副本运行于 CPU 节点。
 - DCGM Exporter 采集 GPU 指标；Node Exporter、kube-state-metrics 采集节点和 Kubernetes 指标。
 - Alloy 当前为 2 个 CPU 节点副本。它通过 Kubernetes API 发现容器日志；若未来需要采集 GPU 节点宿主机文件或本地缓存指标，应将 Alloy 改为覆盖 GPU 节点的 DaemonSet，并保持其日志标签与现有 Loki 查询兼容。
-- MLflow 以 2 副本部署在独立 `mlflow-system` namespace，元数据使用独立 PostgreSQL，服务端 Artifact 写入平台专用 TOS 前缀。训练 Pod 只访问写入网关，不持有对象存储凭据，也不能通过该网关搜索其他运行或下载 Artifact。
+- MLflow 以 2 副本部署在独立 `mlflow-system` namespace，元数据使用独立 PostgreSQL。Artifact 存储通过 FSX CSI 静态 PV/PVC 将 `vke-cluster/ray-train/platform/mlflow-artifacts/` 这一专用前缀发布给 MLflow；`Retain` 的 PV 与 `mlflow-system/mlflow-artifacts` PVC 固定绑定，不与用户数据卷混用。
+- MLflow Pod 只看到 `/mlflow-artifacts` 挂载根，Artifact destination 是 `file:///mlflow-artifacts`；Pod 不直连对象存储，也不注入 TOS/AWS AK/SK。FSX CSI 的 `fsx-agent` 使用平台 Secret `ray-train-platform/tos-fsx-credentials` 完成挂载，凭据不进入 MLflow Pod。训练 Pod 只访问写入网关，不能通过该网关搜索其他运行或下载 Artifact。
 - 实验中心是平台筛选视图：Backend 读取 MLflow 后再用平台数据库校验租户、任务和提交人，Engineer 只看到自己的运行，TenantAdmin/SuperAdmin 查看授权范围内的团队运行。Ray Dashboard 随任务集群回收，MLflow 指标和 Loki 日志独立持久保留。
 - 原生 MLflow 是登录后可访问的完整管理界面，通过同域 `https://raytrain.wellspiking.ai/mlflow/` 进入。所有平台认证用户都能看到全平台实验，并可创建、修改、删除实验、Run 和模型注册条目，也可上传、下载 MLflow Artifact。原生 MLflow 全功能开放是当前明确策略，平台只控制入口认证，不对进入后的 MLflow 功能做二次裁剪。
 - 原生界面由 Frontend 把 `/mlflow/` 转给 Backend，再由 Backend 代理到 MLflow ClusterIP；MLflow 不创建 NodePort、不创建独立 Ingress。一次性票据交换为仅限 `/mlflow/` 的安全 Cookie，修改类请求还必须通过同源校验。
-- MLflow Artifact 与治理训练数据隔离。Artifact 上传下载由 MLflow 服务端处理，不等于允许下载 `/mnt/storage/public`，不改变公共/团队目录只读策略，也不暴露 TOS AK/SK。
+- MLflow Artifact 与 `/mnt/storage/public` 治理数据隔离。Artifact 上传下载只在 MLflow 的专用挂载根中执行，不等于允许下载公共数据，也不改变公共/团队目录只读策略。
 
 ## 内网依赖与不做的事
 

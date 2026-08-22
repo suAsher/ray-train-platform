@@ -116,9 +116,9 @@ PLATFORM_CHECKPOINT_PATH  续训时挂载的历史结果目录（可选）
 - GPU 节点 NVMe 的任务级临时缓存契约已实现，但 `ray-cache-local` StorageClass 未完成集群验收前保持关闭，不宣称已获得数据加速。
 - IDC 数据源可由管理员登记为受控只读挂载；IDC 与 TOS 的用户自助双向迁移尚未作为生产入口开放。
 - Ray Dashboard 只用于运行期诊断。任务集群回收后，历史分析使用平台任务详情、Loki、Prometheus/Grafana 和训练产物。
-- MLflow 独立运行于 `mlflow-system`，使用自己的 PostgreSQL 和对象存储 Artifact 根目录。实验中心是平台筛选视图，适合按当前用户或团队查看训练指标；登录后的原生 MLflow 是全平台共享的完整管理界面。
+- MLflow 独立运行于 `mlflow-system`，使用自己的 PostgreSQL；Artifact 存储是 `vke-cluster/ray-train/platform/mlflow-artifacts/` 专用前缀的 FSX CSI 静态 PV/PVC。MLflow Pod 只看到 `/mlflow-artifacts` 挂载根，不直连对象存储，也不注入 TOS/AWS AK/SK。实验中心是平台筛选视图，适合按当前用户或团队查看训练指标；登录后的原生 MLflow 是全平台共享的完整管理界面。
 - 原生 MLflow 全功能开放是当前明确策略：所有平台认证用户都能查看全平台实验，并可创建、修改、删除实验、Run 和模型注册条目，也可上传、下载 MLflow Artifact。共享管理操作会直接改变 MLflow 数据，使用前必须确认目标对象。
-- MLflow Artifact 与治理训练数据隔离。开放 Artifact 上传下载不等于允许下载 `/mnt/storage/public`，也不暴露 TOS AK/SK；公共与团队训练数据仍只能通过受控挂载读取。
+- FSX CSI 的 `fsx-agent` 使用平台 Secret `ray-train-platform/tos-fsx-credentials` 执行底层挂载，凭据不进入 MLflow Pod。MLflow Artifact 与 `/mnt/storage/public` 治理数据隔离；开放 Artifact 上传下载不等于允许读取公共或团队训练数据。
 - 公共与团队数据在训练 Pod 中只读；写入和发布通过相应管理员权限完成。平台页面不提供数据下载入口。
 
 ## 文档

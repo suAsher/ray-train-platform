@@ -31,6 +31,12 @@ USER_FACING_DOCS = (
     ROOT / "docs" / "BEVFUSION_RUNBOOK.md",
 )
 BUILD_AND_DEPLOY = ROOT / "docs" / "BUILD_AND_DEPLOY.md"
+MLFLOW_PUBLIC_DOCS = (
+    ROOT / "README.md",
+    ROOT / "docs" / "ARCHITECTURE.md",
+    BUILD_AND_DEPLOY,
+    ROOT / "docs" / "USER_GUIDE.md",
+)
 LINK = re.compile(r"(?<!!)\[[^]]+\]\(([^)]+)\)")
 
 
@@ -169,14 +175,44 @@ class DocumentationContractTest(unittest.TestCase):
         self.assertIn("**打开 MLflow 管理界面**", user_guide)
 
     def test_mlflow_artifacts_are_separate_from_governed_training_data(self) -> None:
-        user_guide = (ROOT / "docs" / "USER_GUIDE.md").read_text(encoding="utf-8")
-        mlflow_ops = (ROOT / "ops" / "mlflow" / "README.md").read_text(
-            encoding="utf-8"
-        )
-        combined = "\n".join((user_guide, mlflow_ops))
-        self.assertIn("MLflow Artifact 与治理训练数据隔离", combined)
-        self.assertIn("不等于允许下载 `/mnt/storage/public`", combined)
-        self.assertIn("不暴露 TOS AK/SK", combined)
+        contents = {
+            path: path.read_text(encoding="utf-8") for path in MLFLOW_PUBLIC_DOCS
+        }
+        combined = "\n".join(contents.values())
+
+        for path, document in contents.items():
+            with self.subTest(document=path.relative_to(ROOT)):
+                self.assertIn(
+                    "vke-cluster/ray-train/platform/mlflow-artifacts/", document
+                )
+                self.assertIn("FSX CSI", document)
+                self.assertIn("`/mlflow-artifacts`", document)
+                self.assertIn("`/mnt/storage/public`", document)
+
+        for document in (
+            contents[ROOT / "docs" / "ARCHITECTURE.md"],
+            contents[BUILD_AND_DEPLOY],
+        ):
+            self.assertIn("静态 PV/PVC", document)
+            self.assertIn("`fsx-agent`", document)
+            self.assertIn("`ray-train-platform/tos-fsx-credentials`", document)
+            self.assertIn("凭据不进入 MLflow Pod", document)
+
+        for marker in (
+            "MLflow Pod 只看到 `/mlflow-artifacts` 挂载根",
+            "不注入 TOS/AWS AK/SK",
+            "MLflow Artifact 与 `/mnt/storage/public` 治理数据隔离",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, combined)
+
+        for obsolete in (
+            "对象存储 Artifact 根目录",
+            "平台专用 TOS 前缀",
+            "TOS Artifact",
+        ):
+            with self.subTest(obsolete=obsolete):
+                self.assertNotIn(obsolete, combined)
 
     def test_mlflow_has_only_same_domain_clusterip_access(self) -> None:
         deployment = (ROOT / "docs" / "BUILD_AND_DEPLOY.md").read_text(

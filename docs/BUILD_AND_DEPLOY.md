@@ -289,7 +289,9 @@ bash ops/mlflow/verify.sh
 
 MLflow 保持 ClusterIP。普通训练 Pod 只访问写入网关；实验中心是平台筛选视图，原生管理界面统一从 `https://raytrain.wellspiking.ai/mlflow/` 访问。该路径先到 Frontend，再由 Backend 完成平台鉴权和反向代理；MLflow 自身不创建 NodePort、不创建独立 Ingress。
 
-原生 MLflow 全功能开放是当前明确策略：所有平台认证用户都能管理全平台实验、Run、模型注册条目和 MLflow Artifact。部署验收必须覆盖登录票据、共享 CRUD、Artifact 上传下载和同源保护。开放 Artifact 不改变治理训练数据策略，不允许从 `/mnt/storage/public` 下载数据，也不向浏览器或训练 Pod 暴露 TOS AK/SK。详细拓扑、数据库、TOS Artifact 和 NetworkPolicy 约束见 [MLflow 运维说明](../ops/mlflow/README.md)。
+MLflow Artifact 存储必须使用 `vke-cluster/ray-train/platform/mlflow-artifacts/` 专用前缀的 FSX CSI 静态 PV/PVC。MLflow Pod 只看到 `/mlflow-artifacts` 挂载根，并以 `file:///mlflow-artifacts` 作为 Artifact destination；不允许 Pod 直连对象存储，也不注入 TOS/AWS AK/SK。FSX CSI 的 `fsx-agent` 使用已有平台 Secret `ray-train-platform/tos-fsx-credentials` 完成底层挂载，凭据不进入 MLflow Pod；不得将该 Secret 复制到 `mlflow-system` 或通过环境变量绕过此边界。
+
+原生 MLflow 全功能开放是当前明确策略：所有平台认证用户都能管理全平台实验、Run、模型注册条目和 MLflow Artifact。部署验收必须覆盖登录票据、共享 CRUD、Artifact 上传下载、PVC 绑定、挂载根限定、Pod 无对象存储凭据和同源保护。MLflow Artifact 与 `/mnt/storage/public` 治理数据隔离；开放 Artifact 不允许读取公共或团队训练数据。详细拓扑、数据库、Artifact 存储和 NetworkPolicy 约束见 [MLflow 运维说明](../ops/mlflow/README.md)。
 
 ## 6. 扩容与生产发布
 
