@@ -234,6 +234,12 @@ spec:
               value: {{ .Values.backend.prometheusURL | quote }}
             - name: MLFLOW_ENABLED
               value: {{ default false $mlflow.enabled | quote }}
+            - name: MLFLOW_DASHBOARD_ENABLED
+              value: {{ default false $mlflow.dashboardEnabled | quote }}
+            - name: MLFLOW_PUBLIC_ORIGIN
+              value: {{ default "" $mlflow.publicOrigin | quote }}
+            - name: MLFLOW_DASHBOARD_SESSION_HOURS
+              value: {{ default 8 $mlflow.dashboardSessionHours | quote }}
             - name: MLFLOW_TRACKING_URL
               value: {{ default "" $mlflow.trackingURL | quote }}
             - name: MLFLOW_INGEST_URL

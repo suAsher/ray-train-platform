@@ -67,6 +67,9 @@ backend:
     # Opt-in: a control-plane upgrade must not change Ray workloads before the
     # internal MLflow service has passed its own readiness checks.
     enabled: false
+    dashboardEnabled: false
+    publicOrigin: ""
+    dashboardSessionHours: 8
     trackingURL: "http://mlflow.mlflow-system.svc.cluster.local:5000"
     ingestURL: "http://mlflow-ingest.mlflow-system.svc.cluster.local:8080"
     experimentPrefix: raytrain

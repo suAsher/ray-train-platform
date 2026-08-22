@@ -7,9 +7,15 @@ readonly NAMESPACE="${ROOT_DIR}/ops/mlflow/00-namespace.yaml"
 readonly DATABASE="${ROOT_DIR}/ops/mlflow/10-database.yaml"
 readonly POLICY="${ROOT_DIR}/ops/mlflow/30-policy.yaml"
 readonly SMOKE="${ROOT_DIR}/ops/mlflow/40-smoke.yaml"
+readonly VERIFY="${ROOT_DIR}/ops/mlflow/verify.sh"
 
+grep -Fq 'replicaCount: 2' "$VALUES"
+grep -Fq '  staticPrefix: /mlflow' "$VALUES" || {
+  echo 'MLflow must be served under server.staticPrefix /mlflow' >&2
+  exit 1
+}
 grep -Fq 'type: ClusterIP' "$VALUES"
-grep -Fq 'enabled: false' "$VALUES"
+grep -A1 '^ingress:$' "$VALUES" | grep -Fq '  enabled: false'
 grep -Fq '@sha256:' "$VALUES"
 grep -Fq 'name: mlflow-database' "$VALUES"
 grep -Fq 'automountServiceAccountToken: false' "$VALUES"
@@ -34,6 +40,7 @@ grep -Fq 'app.kubernetes.io/managed-by: ray-train-platform' "$POLICY"
 grep -Fq 'key: ray.io/tenant-id' "$POLICY"
 grep -Fq 'operator: Exists' "$POLICY"
 grep -Fq 'kubernetes.io/metadata.name: ray-train-platform' "$POLICY"
+grep -Fq 'app: ray-train-backend' "$POLICY"
 grep -Fq 'name: mlflow-postgres' "$POLICY"
 grep -Fq 'cidr: 100.64.0.0/10' "$POLICY"
 grep -Fq 'path: /metrics' "$POLICY"
@@ -45,6 +52,21 @@ if grep -Fq 'mlflow.log_dict' "$SMOKE"; then
 fi
 if grep -Fq 'namespaceSelector: {}' "$POLICY"; then
   echo 'MLflow policy must not allow every namespace' >&2
+  exit 1
+fi
+if grep -Eq '^[[:space:]]*type:[[:space:]]*(NodePort|LoadBalancer)[[:space:]]*$' "$VALUES"; then
+  echo 'MLflow service must remain internal-only' >&2
+  exit 1
+fi
+if grep -Fq 'static-prefix' "$VALUES"; then
+  echo 'MLflow static prefix must use server.staticPrefix, not a flag_options duplicate' >&2
+  exit 1
+fi
+grep -Fq -- '--static-prefix=/mlflow' "$VERIFY"
+grep -Fq '/proxy/mlflow/health' "$VERIFY"
+grep -Fq ".spec.replicas" "$VERIFY"
+if grep -Fq 'get ingress' "$VERIFY"; then
+  echo 'MLflow live verification must not depend on direct Ingress ownership' >&2
   exit 1
 fi
 echo 'MLflow delivery contract verified'

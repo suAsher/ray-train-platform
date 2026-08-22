@@ -78,6 +78,13 @@ backend:
   lokiURL: http://loki-gateway.loki.svc.cluster.local
   prometheusURL: <http://prometheus.内部地址:9090>
 
+  # ---- MLflow 管理面板：仅通过平台认证代理暴露 ---------------------------
+  mlflow:
+    enabled: false
+    dashboardEnabled: false
+    publicOrigin: <https://平台正式域名>
+    dashboardSessionHours: 8
+
   corsOrigins: []
 
 migrations:
