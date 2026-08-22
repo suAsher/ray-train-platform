@@ -263,7 +263,7 @@ spec:
     - name: mlflow-fsx.rules
       rules:
         - alert: MLflowFSXMountUnavailable
-          expr: sum((kube_pod_status_ready{namespace="mlflow-system",pod=~"mlflow-fsx-probe-.*",condition="true"} == 0) and on(namespace,pod) (kube_pod_status_scheduled{namespace="mlflow-system",pod=~"mlflow-fsx-probe-.*",condition="true"} == 1)) > 0
+          expr: sum((kube_pod_status_ready{namespace="mlflow-system",pod=~"mlflow-fsx-probe-.*",condition="true"} == bool 0) and on(namespace,pod) (kube_pod_status_scheduled{namespace="mlflow-system",pod=~"mlflow-fsx-probe-.*",condition="true"} == 1)) > 0
           for: 2m
           labels:
             severity: critical
@@ -281,7 +281,7 @@ spec:
             summary: MLflow FSX health probe cannot schedule on every control-plane node
             description: Check the pending probe Pod events for CPU, memory, Pod IP, taint, and node-affinity capacity problems. FSX health is unknown on nodes without a scheduled probe.
         - alert: MLflowFSXDNSUnavailable
-          expr: sum((kube_pod_status_ready{namespace="mlflow-system",pod=~"mlflow-fsx-dns-probe-.*",condition="true"} == 0) and on(namespace,pod) (kube_pod_status_scheduled{namespace="mlflow-system",pod=~"mlflow-fsx-dns-probe-.*",condition="true"} == 1)) > 0
+          expr: sum((kube_pod_status_ready{namespace="mlflow-system",pod=~"mlflow-fsx-dns-probe-.*",condition="true"} == bool 0) and on(namespace,pod) (kube_pod_status_scheduled{namespace="mlflow-system",pod=~"mlflow-fsx-dns-probe-.*",condition="true"} == 1)) > 0
           for: 2m
           labels:
             severity: critical
