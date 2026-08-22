@@ -140,15 +140,88 @@ copy_secret() {
     kubectl apply -f - >/dev/null
 }
 
+cleanup_job_instance() {
+  local name="$1"
+  local expected_uid="$2"
+  local current_uid
+
+  if ! current_uid="$(kubectl -n "$NAMESPACE" get job "$name" --ignore-not-found -o jsonpath='{.metadata.uid}')"; then
+    echo "failed to inspect Job ${name} before cleanup" >&2
+    return 1
+  fi
+  if [[ -z "$current_uid" ]]; then
+    return 0
+  fi
+  if [[ "$current_uid" != "$expected_uid" ]]; then
+    echo "refusing to delete replacement Job ${name} with UID ${current_uid}" >&2
+    return 1
+  fi
+  if ! kubectl -n "$NAMESPACE" delete job "$name" --ignore-not-found --wait=false >/dev/null; then
+    echo "failed to terminate Job ${name} with UID ${expected_uid}" >&2
+    return 1
+  fi
+  return 0
+}
+
 run_job() {
   local name="$1"
   local manifest="$2"
-  kubectl -n "$NAMESPACE" delete job "$name" --ignore-not-found >/dev/null
-  kubectl apply -f "$manifest" >/dev/null
-  if ! kubectl -n "$NAMESPACE" wait --for=condition=complete "job/${name}" --timeout="$TIMEOUT"; then
-    kubectl -n "$NAMESPACE" logs "job/${name}" --all-containers=true --tail=200 || true
+  local created_job
+  local created_name
+  local created_uid
+  local current_uid
+  local completed_job
+
+  if ! kubectl -n "$NAMESPACE" delete job "$name" --ignore-not-found --wait=true --timeout="$TIMEOUT" >/dev/null; then
+    echo "failed to delete previous Job ${name}" >&2
     return 1
   fi
+  if ! created_job="$(kubectl -n "$NAMESPACE" create -f "$manifest" -o json)"; then
+    echo "failed to create fresh Job ${name}" >&2
+    return 1
+  fi
+  if ! created_name="$(jq -r '.metadata.name // empty' <<<"$created_job")" ||
+     ! created_uid="$(jq -r '.metadata.uid // empty' <<<"$created_job")"; then
+    echo "failed to parse identity of fresh Job ${name}" >&2
+    return 1
+  fi
+  if [[ "$created_name" != "$name" || -z "$created_uid" ]]; then
+    echo "fresh Job identity mismatch for ${name}: name=${created_name:-missing}, uid=${created_uid:-missing}" >&2
+    if [[ -n "$created_name" && -n "$created_uid" ]]; then
+      cleanup_job_instance "$created_name" "$created_uid" || true
+    fi
+    return 1
+  fi
+  if ! current_uid="$(kubectl -n "$NAMESPACE" get job "$name" -o jsonpath='{.metadata.uid}')"; then
+    echo "failed to read fresh Job ${name} with UID ${created_uid}" >&2
+    cleanup_job_instance "$name" "$created_uid" || true
+    return 1
+  fi
+  if [[ "$current_uid" != "$created_uid" ]]; then
+    echo "fresh Job ${name} was replaced before wait: expected UID ${created_uid}, got ${current_uid}" >&2
+    cleanup_job_instance "$name" "$created_uid" || true
+    return 1
+  fi
+  if ! kubectl -n "$NAMESPACE" wait --for=condition=complete "job/${name}" --timeout="$TIMEOUT"; then
+    kubectl -n "$NAMESPACE" logs "job/${name}" --all-containers=true --tail=200 || true
+    cleanup_job_instance "$name" "$created_uid" || {
+      echo "manual cleanup may be required for failed Job ${name} with UID ${created_uid}" >&2
+    }
+    return 1
+  fi
+  if ! completed_job="$(kubectl -n "$NAMESPACE" get job "$name" -o json)"; then
+    echo "failed to verify completed Job ${name} with UID ${created_uid}" >&2
+    cleanup_job_instance "$name" "$created_uid" || true
+    return 1
+  fi
+  if ! jq -e --arg name "$name" --arg uid "$created_uid" \
+    '.metadata.name == $name and .metadata.uid == $uid and any(.status.conditions[]?; .type == "Complete" and .status == "True")' \
+    <<<"$completed_job" >/dev/null; then
+    echo "Job ${name} completion did not belong to fresh UID ${created_uid}" >&2
+    cleanup_job_instance "$name" "$created_uid" || true
+    return 1
+  fi
+  return 0
 }
 
 apply_legacy_aws_config() {

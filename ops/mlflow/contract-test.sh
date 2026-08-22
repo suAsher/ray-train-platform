@@ -96,6 +96,147 @@ grep -Fq '29-storage-migration-policy.yaml' "$DEPLOY"
 grep -Fq 'run_job mlflow-artifact-storage-probe' "$DEPLOY"
 grep -Fq 'run_job mlflow-db-upgrade' "$DEPLOY"
 grep -Fq 'run_job mlflow-artifact-acceptance' "$DEPLOY"
+cleanup_job_body="$(sed -n '/^cleanup_job_instance()/,/^}/p' "$DEPLOY")"
+run_job_body="$(sed -n '/^run_job()/,/^}/p' "$DEPLOY")"
+fault_dir="$(mktemp -d)"
+trap 'rm -rf "$fault_dir"' EXIT
+
+assert_run_job_rejects_setup_failure() {
+  local scenario="$1"
+  local call_log="${fault_dir}/${scenario}.log"
+  : >"$call_log"
+
+  if (
+    TIMEOUT='1s'
+    KUBECTL_SCENARIO="$scenario"
+    KUBECTL_CALL_LOG="$call_log"
+
+    kubectl() {
+      printf '%s\n' "$*" >>"$KUBECTL_CALL_LOG"
+      case "${KUBECTL_SCENARIO}: $*" in
+        delete_failure:*' delete job '*) return 41 ;;
+        create_failure:*' create -f '* | create_failure:*' apply -f '*) return 42 ;;
+        *' wait '*) return 0 ;; # A stale Completed Job would make this succeed.
+        *' create -f '*) printf '%s\n' '{"metadata":{"name":"fault-job","uid":"fresh-uid"}}' ;;
+        *' get job '*) printf '%s\n' 'fresh-uid' ;;
+        *) return 0 ;;
+      esac
+    }
+
+    eval "$cleanup_job_body"
+    eval "$run_job_body"
+    run_job fault-job /tmp/fault-job.yaml >/dev/null 2>&1
+  ); then
+    echo "run_job accepted ${scenario} because a stale Job wait succeeded" >&2
+    exit 1
+  fi
+
+  if grep -Fq ' wait ' "$call_log"; then
+    echo "run_job waited after ${scenario} instead of failing immediately" >&2
+    exit 1
+  fi
+}
+
+assert_run_job_rejects_setup_failure delete_failure
+assert_run_job_rejects_setup_failure create_failure
+
+wait_failure_log="${fault_dir}/wait_failure.log"
+: >"$wait_failure_log"
+if (
+  TIMEOUT='1s'
+  KUBECTL_CALL_LOG="$wait_failure_log"
+
+  kubectl() {
+    printf '%s\n' "$*" >>"$KUBECTL_CALL_LOG"
+    case "$*" in
+      *' create -f '*) printf '%s\n' '{"metadata":{"name":"fault-job","uid":"fresh-uid"}}' ;;
+      *' get job '*' -o jsonpath='*) printf '%s\n' 'fresh-uid' ;;
+      *' wait '*) return 43 ;;
+      *) return 0 ;;
+    esac
+  }
+
+  eval "$cleanup_job_body"
+  eval "$run_job_body"
+  run_job fault-job /tmp/fault-job.yaml >/dev/null 2>&1
+); then
+  echo 'run_job accepted a failed wait' >&2
+  exit 1
+fi
+if (( $(grep -Fc ' delete job fault-job ' "$wait_failure_log") < 2 )); then
+  echo 'run_job must actively delete the fresh Job after wait failure' >&2
+  exit 1
+fi
+
+replacement_log="${fault_dir}/replacement.log"
+: >"$replacement_log"
+if (
+  TIMEOUT='1s'
+  KUBECTL_CALL_LOG="$replacement_log"
+
+  kubectl() {
+    printf '%s\n' "$*" >>"$KUBECTL_CALL_LOG"
+    case "$*" in
+      *' create -f '*) printf '%s\n' '{"metadata":{"name":"fault-job","uid":"fresh-uid"}}' ;;
+      *' get job '*' -o jsonpath='*) printf '%s\n' 'fresh-uid' ;;
+      *' get job '*' -o json') printf '%s\n' '{"metadata":{"name":"fault-job","uid":"stale-uid"},"status":{"conditions":[{"type":"Complete","status":"True"}]}}' ;;
+      *' wait '*) return 0 ;;
+      *) return 0 ;;
+    esac
+  }
+
+  eval "$cleanup_job_body"
+  eval "$run_job_body"
+  run_job fault-job /tmp/fault-job.yaml >/dev/null 2>&1
+); then
+  echo 'run_job accepted completion from a different Job UID' >&2
+  exit 1
+fi
+grep -Fq ' wait ' "$replacement_log" || {
+  echo 'UID replacement fault must exercise the successful wait path' >&2
+  exit 1
+}
+
+success_log="${fault_dir}/success.log"
+: >"$success_log"
+if ! (
+  TIMEOUT='1s'
+  KUBECTL_CALL_LOG="$success_log"
+
+  kubectl() {
+    printf '%s\n' "$*" >>"$KUBECTL_CALL_LOG"
+    case "$*" in
+      *' create -f '*) printf '%s\n' '{"metadata":{"name":"fault-job","uid":"fresh-uid"}}' ;;
+      *' get job '*' -o jsonpath='*) printf '%s\n' 'fresh-uid' ;;
+      *' get job '*' -o json') printf '%s\n' '{"metadata":{"name":"fault-job","uid":"fresh-uid"},"status":{"conditions":[{"type":"Complete","status":"True"}]}}' ;;
+      *) return 0 ;;
+    esac
+  }
+
+  eval "$cleanup_job_body"
+  eval "$run_job_body"
+  run_job fault-job /tmp/fault-job.yaml >/dev/null 2>&1
+); then
+  echo 'run_job rejected completion from its freshly created Job UID' >&2
+  exit 1
+fi
+[[ "$(grep -Fc ' wait ' "$success_log")" == '1' ]] || {
+  echo 'fresh Job success must wait exactly once for completion' >&2
+  exit 1
+}
+
+grep -Fq 'kubectl -n "$NAMESPACE" create -f "$manifest" -o json' "$DEPLOY" || {
+  echo 'MLflow jobs must be freshly created so each run has a new UID' >&2
+  exit 1
+}
+grep -Fq 'created_uid' "$DEPLOY" || {
+  echo 'MLflow jobs must capture the UID returned by create' >&2
+  exit 1
+}
+grep -Fq 'cleanup_job_instance' "$DEPLOY" || {
+  echo 'failed MLflow jobs must be actively terminated without deleting a replacement Job' >&2
+  exit 1
+}
 grep -Fq 'previous_revision' "$DEPLOY"
 grep -Fq 'get deployment mlflow --ignore-not-found -o yaml' "$DEPLOY"
 grep -Fq 'deployed_revision' "$DEPLOY"
