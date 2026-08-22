@@ -9,12 +9,12 @@
 - Artifact：通过 FSX CSI 将 `vke-cluster/ray-train/platform/mlflow-artifacts/` 作为独立 RWX 文件系统根挂载给 MLflow。`kube-system/csi-fsx-node` DaemonSet 必须使用 `CREDENTIALS_TYPE=IRSA` 且 `ROLE_NAME_FOR_IRSA` 非空；MLflow Pod、PV、PVC 和 Ray Pod 均不包含 AK/SK 或 Secret 引用。
 - 可用性：2 个副本，跨 CPU 节点硬反亲和，PDB `minAvailable: 1`。
 - 网络：全部为 ClusterIP。平台后端和 Prometheus 可访问 MLflow 5000；带平台托管标签的租户 namespace 只能访问 `mlflow-ingest:8080` 写入网关，不能直连 MLflow。数据库只允许 MLflow 与迁移 Job 访问。
-- 写入边界：网关只开放实验创建、run 创建/更新、参数、指标和 tag 写入所需接口；搜索、列表和 Artifact 下载一律拒绝。平台后端用 HMAC 任务来源标签和数据库归属做二次校验。
+- 写入边界：网关只开放实验创建、run 创建/更新、参数、指标和 tag 写入所需接口；搜索、列表和 Artifact 下载一律拒绝。网关将 MLflow Python 客户端的 `/api/2.0/...` 请求翻译到 Tracking Server 的 `/mlflow/api/2.0/...` 子路径。平台后端用 HMAC 任务来源标签和数据库归属做二次校验。
 - 浏览器边界：MLflow Service 始终为 ClusterIP，不创建 NodePort、不创建独立 Ingress。Frontend 的 `/mlflow/` 路由进入 Backend；Backend 校验平台登录、交换一次性票据并代理完整 UI/API。
 - 子路径：Tracking Server 使用 `--static-prefix /mlflow`，页面资源、API 和重定向都保持在 `/mlflow/` 下；升级 MLflow 后必须重新执行页面、CRUD、模型注册和 Artifact 回归。
 - 权限策略：原生 MLflow 全功能开放是当前明确策略。所有平台认证用户进入后可查看全平台实验，创建、修改、删除实验、Run 和模型注册条目，并上传、下载 MLflow Artifact；平台只记录入口主体和操作元数据，不做功能裁剪。
 - 数据边界：MLflow Artifact 与治理训练数据隔离。开放 Artifact 上传下载不等于允许下载 `/mnt/storage/public`，也不暴露 TOS AK/SK。训练 Pod 仍只能通过写入网关上报指标，不能借此读取共享 MLflow 数据。
-- 迁移安全：部署先启用临时 NetworkPolicy 保留旧 S3 后端的 TOS egress，再探测 FSX、执行数据库迁移和 Helm `--atomic` 切换。新版本必须通过真实 Artifact CRUD（上传、下载、删除）验收后，才会删除旧 Secret/ConfigMap 并撤销临时 egress。
+- 迁移安全：部署先启用临时 NetworkPolicy 保留旧 S3 后端的 TOS egress，再探测 FSX、执行数据库迁移和 Helm `--atomic` 切换。新版本必须先通过真实 Artifact CRUD（上传、下载、删除），再通过与训练 Pod 相同路径的 Python MLflow 客户端验收，才会删除旧 Secret/ConfigMap 并撤销临时 egress。
 - 卷升级：新版使用 `mlflow-artifacts-irsa` PVC 和 `mlflow-artifacts-irsa-pv` PV，不原地修改可能已存在的 Secret 型 PV 不可变字段。新旧卷指向同一个专用 TOS 前缀；旧 PV/PVC 在 Artifact CRUD 验收完前保留为回滚通道。
 - 回滚：Helm rollout 失败时由 `--atomic` 自动回滚；Artifact CRUD 验收失败时自动恢复旧依赖并回滚到部署前 revision。清理失败会恢复旧依赖并保留临时 egress，使运行中的新服务保持可用并为人工回滚留出路径。
 - 并发安全：`deploy.sh` 使用 `mlflow-system/mlflow-deploy` Kubernetes Lease 串行化完整部署、验收、回滚和清理流程。采用 fail-closed 固定锁：任意非空 holder（无论存续多久）都会让第二次部署立即失败，不设过期时间、不自动接管。只有正常完成或已确认活动 Job/Pod 全部结束的既有路径，才会以读取到的 `resourceVersion` 清空自己的 holder；不删除 Lease，也不覆盖新的 holder。每个部署进程无条件生成新的随机 run-id，不接受外部固定值；每次 Job create 另外生成随机 request nonce，只有 name、run-id、nonce 与 UID 均匹配才能从不确定的 create 响应中恢复。
@@ -33,7 +33,7 @@ bash ops/mlflow/deploy.sh
 
 ### 崩溃残留 Lease 的安全手动解锁
 
-只有管理员确认不存在正在运行的 MLflow 部署进程，并检查 `mlflow-artifact-storage-probe-*`、`mlflow-db-upgrade-*`、`mlflow-artifact-acceptance-*` Job 及其 Pod 均已消失后，才能执行以下手动解锁。命令保留读取时的 holder 与 `resourceVersion`，因此期间发生的并发更新会以 HTTP 409 拒绝；遇到冲突必须从检查步骤重新开始，不得强制更新。
+只有管理员确认不存在正在运行的 MLflow 部署进程，并检查 `mlflow-artifact-storage-probe-*`、`mlflow-db-upgrade-*`、`mlflow-artifact-acceptance-*`、`mlflow-client-smoke-*` Job 及其 Pod 均已消失后，才能执行以下手动解锁。命令保留读取时的 holder 与 `resourceVersion`，因此期间发生的并发更新会以 HTTP 409 拒绝；遇到冲突必须从检查步骤重新开始，不得强制更新。
 
 ```bash
 lease_snapshot="$(mktemp)"

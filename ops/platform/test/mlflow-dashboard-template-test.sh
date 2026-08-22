@@ -20,6 +20,10 @@ assert_source_contract() {
     echo 'base values must default MLflow dashboard sessions to 8 hours' >&2
     exit 1
   }
+  grep -Fq '    trackingURL: "http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow"' "$VALUES" || {
+    echo 'platform MLflow tracking URL must include the server /mlflow prefix' >&2
+    exit 1
+  }
   grep -Fq 'value: {{ default false $mlflow.dashboardEnabled | quote }}' "$TEMPLATE" || {
     echo 'backend template must default MLFLOW_DASHBOARD_ENABLED to false' >&2
     exit 1
@@ -42,6 +46,10 @@ assert_source_contract() {
   }
   grep -Fq '    dashboardSessionHours: 8' "$PROFILE" || {
     echo 'VKE production profile must use 8-hour MLflow dashboard sessions' >&2
+    exit 1
+  }
+  grep -Fq '    trackingURL: http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow' "$PROFILE" || {
+    echo 'VKE production profile must preserve the MLflow server /mlflow prefix' >&2
     exit 1
   }
   if grep -Eq '^[[:space:]]*type:[[:space:]]*NodePort[[:space:]]*$' "$VALUES" "$PROFILE"; then
@@ -85,6 +93,7 @@ helm template ray-train-platform "$CHART" --values "$PROFILE" >"$rendered"
 assert_rendered_env "$rendered" MLFLOW_DASHBOARD_ENABLED true
 assert_rendered_env "$rendered" MLFLOW_PUBLIC_ORIGIN https://raytrain.wellspiking.ai
 assert_rendered_env "$rendered" MLFLOW_DASHBOARD_SESSION_HOURS 8
+assert_rendered_env "$rendered" MLFLOW_TRACKING_URL http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow
 if grep -Eq '^[[:space:]]*type:[[:space:]]*NodePort[[:space:]]*$' "$rendered"; then
   echo 'rendered backend/frontend services must not use NodePort' >&2
   exit 1

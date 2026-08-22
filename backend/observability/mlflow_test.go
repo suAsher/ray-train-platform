@@ -12,6 +12,17 @@ import (
 
 var testProvenanceKey = []byte("0123456789abcdef0123456789abcdef")
 
+func TestMLflowClientEndpointPreservesTrackingBasePath(t *testing.T) {
+	client := &MLflowClient{BaseURL: "http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow/"}
+	endpoint, err := client.endpoint("/api/2.0/mlflow/experiments/get-by-name")
+	if err != nil {
+		t.Fatalf("build MLflow endpoint: %v", err)
+	}
+	if got, want := endpoint.String(), "http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow/api/2.0/mlflow/experiments/get-by-name"; got != want {
+		t.Fatalf("endpoint = %q, want %q", got, want)
+	}
+}
+
 func TestMLflowClientReturnsOnlyJobScopedMetrics(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {

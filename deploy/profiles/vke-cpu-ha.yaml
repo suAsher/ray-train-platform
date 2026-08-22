@@ -42,7 +42,7 @@ backend:
     dashboardEnabled: true
     publicOrigin: https://raytrain.wellspiking.ai
     dashboardSessionHours: 8
-    trackingURL: http://mlflow.mlflow-system.svc.cluster.local:5000
+    trackingURL: http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow
     ingestURL: http://mlflow-ingest.mlflow-system.svc.cluster.local:8080
     experimentPrefix: raytrain
   imageAllowlist:

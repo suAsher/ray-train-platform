@@ -23,54 +23,54 @@ data:
       location = /api/2.0/mlflow/experiments/get-by-name {
         limit_except GET { deny all; }
         proxy_set_header Host mlflow:5000;
-        proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000;
+        proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow/api/2.0/mlflow/experiments/get-by-name;
       }
       location = /api/2.0/mlflow/experiments/create {
         limit_except POST { deny all; }
         proxy_set_header Host mlflow:5000;
-        proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000;
+        proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow/api/2.0/mlflow/experiments/create;
       }
       location = /api/2.0/mlflow/runs/create {
         limit_except POST { deny all; }
         proxy_set_header Host mlflow:5000;
-        proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000;
+        proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow/api/2.0/mlflow/runs/create;
       }
       location = /api/2.0/mlflow/runs/update {
         limit_except POST { deny all; }
         proxy_set_header Host mlflow:5000;
-        proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000;
+        proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow/api/2.0/mlflow/runs/update;
       }
       # The MLflow Python client reads back only the high-entropy run ID it
       # just created while closing a run. There is still no search/list route.
       location = /api/2.0/mlflow/runs/get {
         limit_except GET { deny all; }
         proxy_set_header Host mlflow:5000;
-        proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000;
+        proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow/api/2.0/mlflow/runs/get;
       }
       location = /api/2.0/mlflow/runs/log-batch {
         limit_except POST { deny all; }
         proxy_set_header Host mlflow:5000;
-        proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000;
+        proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow/api/2.0/mlflow/runs/log-batch;
       }
       location = /api/2.0/mlflow/runs/log-metric {
         limit_except POST { deny all; }
         proxy_set_header Host mlflow:5000;
-        proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000;
+        proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow/api/2.0/mlflow/runs/log-metric;
       }
       location = /api/2.0/mlflow/runs/log-parameter {
         limit_except POST { deny all; }
         proxy_set_header Host mlflow:5000;
-        proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000;
+        proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow/api/2.0/mlflow/runs/log-parameter;
       }
       location = /api/2.0/mlflow/runs/set-tag {
         limit_except POST { deny all; }
         proxy_set_header Host mlflow:5000;
-        proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000;
+        proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow/api/2.0/mlflow/runs/set-tag;
       }
       location = /api/2.0/mlflow/runs/delete-tag {
         limit_except POST { deny all; }
         proxy_set_header Host mlflow:5000;
-        proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000;
+        proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow/api/2.0/mlflow/runs/delete-tag;
       }
 
       location /api/2.0/mlflow-artifacts/ { return 403; }
@@ -98,7 +98,7 @@ spec:
   template:
     metadata:
       annotations:
-        platform.wellspiking.ai/config-revision: "20260822-r2"
+        platform.wellspiking.ai/config-revision: "20260822-r3"
       labels:
         app.kubernetes.io/name: mlflow-ingest
         app.kubernetes.io/part-of: ray-train-platform
@@ -250,6 +250,9 @@ spec:
             matchExpressions:
               - key: ray.io/tenant-id
                 operator: Exists
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mlflow-client-smoke
       ports:
         - protocol: TCP
           port: 8080

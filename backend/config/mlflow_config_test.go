@@ -16,7 +16,7 @@ func TestLoadMLflowIsOptInAndValidatesInternalURL(t *testing.T) {
 
 	t.Setenv("MLFLOW_ENABLED", "true")
 	t.Setenv("PAT_PEPPER", "0123456789abcdef0123456789abcdef")
-	t.Setenv("MLFLOW_TRACKING_URL", "http://mlflow.mlflow-system.svc.cluster.local:5000")
+	t.Setenv("MLFLOW_TRACKING_URL", "http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow")
 	t.Setenv("MLFLOW_INGEST_URL", "http://mlflow-ingest.mlflow-system.svc.cluster.local:8080")
 	t.Setenv("MLFLOW_EXPERIMENT_PREFIX", "raytrain")
 	cfg, err = Load()
@@ -33,6 +33,12 @@ func TestLoadMLflowIsOptInAndValidatesInternalURL(t *testing.T) {
 	t.Setenv("MLFLOW_INGEST_URL", "https://mlflow.example.com")
 	if _, err := Load(); err == nil {
 		t.Fatal("workload ingest must remain behind an in-cluster write-only gateway")
+	}
+
+	t.Setenv("MLFLOW_TRACKING_URL", "http://mlflow.mlflow-system.svc.cluster.local:5000/arbitrary")
+	t.Setenv("MLFLOW_INGEST_URL", "http://mlflow-ingest.mlflow-system.svc.cluster.local:8080")
+	if _, err := Load(); err == nil {
+		t.Fatal("tracking URL must allow only the reviewed /mlflow server prefix")
 	}
 }
 
@@ -98,7 +104,7 @@ func setValidMLflowDashboardEnvironment(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("PAT_ENABLED", "false")
 	t.Setenv("MLFLOW_ENABLED", "true")
-	t.Setenv("MLFLOW_TRACKING_URL", "http://mlflow.mlflow-system.svc.cluster.local:5000")
+	t.Setenv("MLFLOW_TRACKING_URL", "http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow")
 	t.Setenv("MLFLOW_INGEST_URL", "http://mlflow-ingest.mlflow-system.svc.cluster.local:8080")
 	t.Setenv("MLFLOW_EXPERIMENT_PREFIX", "raytrain")
 	t.Setenv("PAT_PEPPER", strings.Repeat("p", 32))

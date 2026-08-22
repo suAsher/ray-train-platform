@@ -461,6 +461,28 @@ func TestMLflowDashboardProxyForwardsAllMethodsAndStripsBrowserCredentials(t *te
 	}
 }
 
+func TestMLflowDashboardProxyDoesNotDuplicateConfiguredBasePath(t *testing.T) {
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	seenPath := make(chan string, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		seenPath <- request.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+
+	request := httptest.NewRequest(http.MethodGet, "/mlflow/ajax-api/2.0/mlflow/runs/search", nil)
+	request.AddCookie(mlflowSessionCookie(t, now))
+	response := newMLflowResponseRecorder()
+	mlflowProxyRouter(newMLflowProxyTestHandler(newFakeMLflowDashboardStore(), now, upstream.URL+"/mlflow")).ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
+	}
+	if got, want := <-seenPath, "/mlflow/ajax-api/2.0/mlflow/runs/search"; got != want {
+		t.Fatalf("upstream path = %q, want %q", got, want)
+	}
+}
+
 func TestMLflowDashboardProxyRebuildsTrustedForwardingHeaders(t *testing.T) {
 	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
 	seen := make(chan http.Header, 1)

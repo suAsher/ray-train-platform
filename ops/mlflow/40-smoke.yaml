@@ -2,7 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: mlflow-client-smoke
-  namespace: tenant-local
+  namespace: mlflow-system
   labels:
     app.kubernetes.io/name: mlflow-client-smoke
     app.kubernetes.io/part-of: ray-train-platform

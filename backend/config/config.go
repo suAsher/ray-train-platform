@@ -356,8 +356,9 @@ func validateInternalServiceURL(name, value string) error {
 	if !(strings.HasSuffix(host, ".svc") || strings.HasSuffix(host, ".svc.cluster.local")) {
 		return fmt.Errorf("%s must target an in-cluster Kubernetes Service", name)
 	}
-	if endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" || (endpoint.Path != "" && endpoint.Path != "/") {
-		return fmt.Errorf("%s must not contain credentials, a path, query, or fragment", name)
+	pathAllowed := endpoint.Path == "" || endpoint.Path == "/" || (name == "MLFLOW_TRACKING_URL" && strings.TrimRight(endpoint.Path, "/") == "/mlflow")
+	if endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" || !pathAllowed {
+		return fmt.Errorf("%s must not contain credentials, query, fragment, or an unsupported path", name)
 	}
 	return nil
 }

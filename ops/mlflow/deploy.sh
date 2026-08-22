@@ -9,6 +9,7 @@ readonly CHART="${ROOT_DIR}/helm/vendor/mlflow-0.1.0.tgz"
 readonly VALUES="${ROOT_DIR}/ops/mlflow/values-vke.yaml"
 readonly ARTIFACT_STORAGE="${ROOT_DIR}/ops/mlflow/15-artifact-storage.yaml"
 readonly ARTIFACT_ACCEPTANCE="${ROOT_DIR}/ops/mlflow/25-artifact-acceptance.yaml"
+readonly CLIENT_SMOKE="${ROOT_DIR}/ops/mlflow/40-smoke.yaml"
 readonly TRANSITION_POLICY="${ROOT_DIR}/ops/mlflow/29-storage-migration-policy.yaml"
 readonly TIMEOUT="${MLFLOW_DEPLOY_TIMEOUT:-15m}"
 readonly LEASE_NAME="mlflow-deploy"
@@ -125,6 +126,20 @@ main() {
       echo "artifact acceptance failed; restored Helm revision ${previous_revision}" >&2
     else
       echo 'artifact acceptance failed; legacy dependencies and transition egress were retained for recovery' >&2
+    fi
+    exit 1
+  fi
+
+  # The browser and Artifact acceptance use the prefixed server directly. The
+  # real training client uses the restricted ingest gateway, so verify that
+  # path separately after applying its strict allowlist policy.
+  kubectl apply -f "${ROOT_DIR}/ops/mlflow/30-policy.yaml" >/dev/null
+  kubectl -n "$NAMESPACE" rollout status deployment/mlflow-ingest --timeout="$TIMEOUT"
+  if ! run_job "$(deployment_job_name mlflow-client-smoke)" "$CLIENT_SMOKE"; then
+    if [[ -n "$previous_revision" ]] && rollback_to_revision "$previous_revision"; then
+      echo "training-client acceptance failed; restored Helm revision ${previous_revision}" >&2
+    else
+      echo 'training-client acceptance failed; legacy dependencies and transition egress were retained for recovery' >&2
     fi
     exit 1
   fi

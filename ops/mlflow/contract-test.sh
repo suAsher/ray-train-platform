@@ -98,7 +98,7 @@ grep -Fq '15-artifact-storage.yaml' "$DEPLOY"
 grep -Fq 'pvc/mlflow-artifacts-irsa' "$DEPLOY"
 helm_line="$(grep -nF 'helm upgrade --install' "$DEPLOY" | cut -d: -f1)"
 legacy_delete_line="$(grep -nF 'delete secret tos-credentials' "$DEPLOY" | cut -d: -f1)"
-strict_policy_line="$(grep -nF 'kubectl apply -f "${ROOT_DIR}/ops/mlflow/30-policy.yaml"' "$DEPLOY" | cut -d: -f1)"
+strict_policy_line="$(grep -nF 'kubectl apply -f "${ROOT_DIR}/ops/mlflow/30-policy.yaml"' "$DEPLOY" | head -n1 | cut -d: -f1)"
 if (( legacy_delete_line < helm_line || strict_policy_line < helm_line )); then
   echo 'MLflow deploy must preserve legacy S3 dependencies and egress until the new release passes acceptance' >&2
   exit 1
@@ -199,6 +199,23 @@ fi
 grep -Fq 'name: mlflow-ingest' "$POLICY"
 grep -Fq 'return 403' "$POLICY"
 grep -Fq 'location = /api/2.0/mlflow/runs/log-batch' "$POLICY"
+grep -Fq 'proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow/api/2.0/mlflow/experiments/get-by-name;' "$POLICY" || {
+  echo 'MLflow ingest must translate the client API path to the server /mlflow prefix' >&2
+  exit 1
+}
+grep -Fq 'proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow/api/2.0/mlflow/experiments/create;' "$POLICY"
+grep -Fq 'proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow/api/2.0/mlflow/runs/create;' "$POLICY"
+grep -Fq 'proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow/api/2.0/mlflow/runs/update;' "$POLICY"
+grep -Fq 'proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow/api/2.0/mlflow/runs/get;' "$POLICY"
+grep -Fq 'proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow/api/2.0/mlflow/runs/log-batch;' "$POLICY"
+grep -Fq 'proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow/api/2.0/mlflow/runs/log-metric;' "$POLICY"
+grep -Fq 'proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow/api/2.0/mlflow/runs/log-parameter;' "$POLICY"
+grep -Fq 'proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow/api/2.0/mlflow/runs/set-tag;' "$POLICY"
+grep -Fq 'proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow/api/2.0/mlflow/runs/delete-tag;' "$POLICY"
+if grep -Fq 'proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000;' "$POLICY"; then
+  echo 'MLflow ingest must not forward an unprefixed API path to the prefixed server' >&2
+  exit 1
+fi
 grep -Fq 'app.kubernetes.io/managed-by: ray-train-platform' "$POLICY"
 grep -Fq 'key: ray.io/tenant-id' "$POLICY"
 grep -Fq 'operator: Exists' "$POLICY"
@@ -208,6 +225,16 @@ grep -Fq 'name: mlflow-postgres' "$POLICY"
 grep -Fq 'path: /metrics' "$POLICY"
 grep -Fq 'mlflow-ingest.mlflow-system.svc.cluster.local:8080' "$SMOKE"
 grep -Fq 'MLFLOW_ARTIFACT_DOWNLOAD_BLOCKED' "$SMOKE"
+grep -Fq 'namespace: mlflow-system' "$SMOKE"
+grep -Fq 'app.kubernetes.io/name: mlflow-client-smoke' "$POLICY"
+grep -Fq 'readonly CLIENT_SMOKE=' "$DEPLOY"
+grep -Fq 'run_job "$(deployment_job_name mlflow-client-smoke)" "$CLIENT_SMOKE"' "$DEPLOY"
+strict_policy_apply_line="$(grep -nF 'kubectl apply -f "${ROOT_DIR}/ops/mlflow/30-policy.yaml"' "$DEPLOY" | head -n1 | cut -d: -f1)"
+client_smoke_line="$(grep -nF 'run_job "$(deployment_job_name mlflow-client-smoke)" "$CLIENT_SMOKE"' "$DEPLOY" | cut -d: -f1)"
+if ! (( strict_policy_apply_line < client_smoke_line && client_smoke_line < cleanup_line )); then
+  echo 'MLflow deploy must apply the strict gateway, run the real client smoke, then clean legacy dependencies' >&2
+  exit 1
+fi
 if grep -Fq 'mlflow.log_dict' "$SMOKE"; then
   echo 'training clients must not use MLflow as an artifact download surface' >&2
   exit 1

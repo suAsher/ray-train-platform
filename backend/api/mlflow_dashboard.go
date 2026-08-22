@@ -272,7 +272,14 @@ func (h *Handler) serveMLflowDashboardProxy(c *gin.Context, target *url.URL) {
 		h.writeError(c, http.StatusBadGateway, "MLFLOW_DASHBOARD_PUBLIC_ORIGIN_INVALID", "MLflow Dashboard public origin is invalid")
 		return
 	}
-	proxy := httputil.NewSingleHostReverseProxy(target)
+	// MLFLOW_TRACKING_URL includes /mlflow so the control-plane API client can
+	// reach a server started with --static-prefix=/mlflow. Browser requests
+	// already arrive under /mlflow/, therefore the reverse proxy must use only
+	// the target origin or net/http would join the prefix twice.
+	proxyTarget := *target
+	proxyTarget.Path = ""
+	proxyTarget.RawPath = ""
+	proxy := httputil.NewSingleHostReverseProxy(&proxyTarget)
 	proxy.Transport = mlflowDashboardTransport
 	originalDirector := proxy.Director
 	proxy.Director = func(request *http.Request) {
