@@ -71,6 +71,10 @@ if kubectl -n "$NAMESPACE" get configmap mlflow-aws-config >/dev/null 2>&1; then
   echo 'legacy MLflow AWS config still exists in mlflow-system' >&2
   exit 1
 fi
+if kubectl -n "$NAMESPACE" get networkpolicy mlflow-storage-migration >/dev/null 2>&1; then
+  echo 'temporary MLflow storage migration egress is still enabled' >&2
+  exit 1
+fi
 
 kubectl -n "$NAMESPACE" get networkpolicy mlflow >/dev/null
 kubectl -n "$NAMESPACE" get networkpolicy mlflow-ingest >/dev/null

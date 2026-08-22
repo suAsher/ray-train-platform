@@ -6,7 +6,7 @@
 - 镜像：`harbor.wellspiking.ai/guofeng.su/mlflow:v3.14.0-full`，values 中同时固定摘要。
 - 命名空间：独立使用 `mlflow-system`，与训练平台控制面隔离。
 - 元数据：独立内置 PostgreSQL StatefulSet，使用独立 20Gi EBS PVC，不复用平台数据库。
-- Artifact：MLflow 服务端原生写入 `vke-cluster/ray-train/platform/mlflow-artifacts/`；不依赖 FSX，Ray Pod 不获取 TOS AK/SK。
+- Artifact：通过 FSX CSI 将 `vke-cluster/ray-train/platform/mlflow-artifacts/` 作为独立 RWX 文件系统根挂载给 MLflow；TOS 凭据只由 CSI agent 使用，MLflow 和 Ray Pod 均不获取 AK/SK。
 - 可用性：2 个副本，跨 CPU 节点硬反亲和，PDB `minAvailable: 1`。
 - 网络：全部为 ClusterIP。平台后端和 Prometheus 可访问 MLflow 5000；带平台托管标签的租户 namespace 只能访问 `mlflow-ingest:8080` 写入网关，不能直连 MLflow。数据库只允许 MLflow 与迁移 Job 访问。
 - 写入边界：网关只开放实验创建、run 创建/更新、参数、指标和 tag 写入所需接口；搜索、列表和 Artifact 下载一律拒绝。平台后端用 HMAC 任务来源标签和数据库归属做二次校验。
@@ -14,6 +14,8 @@
 - 子路径：Tracking Server 使用 `--static-prefix /mlflow`，页面资源、API 和重定向都保持在 `/mlflow/` 下；升级 MLflow 后必须重新执行页面、CRUD、模型注册和 Artifact 回归。
 - 权限策略：原生 MLflow 全功能开放是当前明确策略。所有平台认证用户进入后可查看全平台实验，创建、修改、删除实验、Run 和模型注册条目，并上传、下载 MLflow Artifact；平台只记录入口主体和操作元数据，不做功能裁剪。
 - 数据边界：MLflow Artifact 与治理训练数据隔离。开放 Artifact 上传下载不等于允许下载 `/mnt/storage/public`，也不暴露 TOS AK/SK。训练 Pod 仍只能通过写入网关上报指标，不能借此读取共享 MLflow 数据。
+- 迁移安全：部署先启用临时 NetworkPolicy 保留旧 S3 后端的 TOS egress，再探测 FSX、执行数据库迁移和 Helm `--atomic` 切换。新版本必须通过真实 Artifact CRUD（上传、下载、删除）验收后，才会删除旧 Secret/ConfigMap 并撤销临时 egress。
+- 回滚：Helm rollout 失败时由 `--atomic` 自动回滚；Artifact CRUD 验收失败时自动恢复旧依赖并回滚到部署前 revision。清理失败会恢复旧依赖并保留临时 egress，使运行中的新服务保持可用并为人工回滚留出路径。
 
 部署：
 

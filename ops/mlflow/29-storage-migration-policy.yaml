@@ -1,0 +1,74 @@
+# This policy is intentionally temporary. NetworkPolicies are additive, so it
+# keeps the old S3-backed MLflow Pods operational even if the final strict
+# policy already exists from an interrupted migration. deploy.sh removes this
+# policy only after the FSX-backed release passes real artifact CRUD acceptance.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mlflow-storage-migration
+  namespace: mlflow-system
+  labels:
+    app.kubernetes.io/name: mlflow
+    app.kubernetes.io/component: storage-migration
+    app.kubernetes.io/part-of: ray-train-platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mlflow
+      app.kubernetes.io/instance: mlflow
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ray-train-platform
+          podSelector:
+            matchLabels:
+              app: ray-train-backend
+      ports:
+        - protocol: TCP
+          port: 5000
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mlflow-ingest
+      ports:
+        - protocol: TCP
+          port: 5000
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 5000
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: artifact-acceptance
+      ports:
+        - protocol: TCP
+          port: 5000
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mlflow-postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - ipBlock:
+            cidr: 100.64.0.0/10
+      ports:
+        - protocol: TCP
+          port: 443

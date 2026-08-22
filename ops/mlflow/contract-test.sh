@@ -7,10 +7,13 @@ readonly NAMESPACE="${ROOT_DIR}/ops/mlflow/00-namespace.yaml"
 readonly DATABASE="${ROOT_DIR}/ops/mlflow/10-database.yaml"
 readonly STORAGE="${ROOT_DIR}/ops/mlflow/15-artifact-storage.yaml"
 readonly BOOTSTRAP="${ROOT_DIR}/ops/mlflow/20-bootstrap.yaml"
+readonly ACCEPTANCE="${ROOT_DIR}/ops/mlflow/25-artifact-acceptance.yaml"
+readonly TRANSITION_POLICY="${ROOT_DIR}/ops/mlflow/29-storage-migration-policy.yaml"
 readonly POLICY="${ROOT_DIR}/ops/mlflow/30-policy.yaml"
 readonly SMOKE="${ROOT_DIR}/ops/mlflow/40-smoke.yaml"
 readonly DEPLOY="${ROOT_DIR}/ops/mlflow/deploy.sh"
 readonly VERIFY="${ROOT_DIR}/ops/mlflow/verify.sh"
+readonly README="${ROOT_DIR}/ops/mlflow/README.md"
 readonly VENDORED_CHART="${ROOT_DIR}/helm/vendor/mlflow-0.1.0.tgz"
 readonly VENDORED_DEPLOYMENT="mlflow/templates/deployment.yaml"
 
@@ -81,25 +84,90 @@ fi
 grep -Fq 'get secret tos-fsx-credentials' "$DEPLOY"
 grep -Fq '15-artifact-storage.yaml' "$DEPLOY"
 grep -Fq 'pvc/mlflow-artifacts' "$DEPLOY"
-grep -Fq 'delete job mlflow-tos-prefix-init' "$DEPLOY"
-if grep -Fq 'copy_secret tos-credentials' "$DEPLOY"; then
-  echo 'MLflow deployment must not copy the shared TOS credential' >&2
+helm_line="$(grep -nF 'helm upgrade --install' "$DEPLOY" | cut -d: -f1)"
+legacy_delete_line="$(grep -nF 'delete secret tos-credentials' "$DEPLOY" | cut -d: -f1)"
+strict_policy_line="$(grep -nF 'kubectl apply -f "${ROOT_DIR}/ops/mlflow/30-policy.yaml"' "$DEPLOY" | cut -d: -f1)"
+if (( legacy_delete_line < helm_line || strict_policy_line < helm_line )); then
+  echo 'MLflow deploy must preserve legacy S3 dependencies and egress until the new release passes acceptance' >&2
   exit 1
 fi
-policy_apply_line="$(grep -nF 'kubectl apply -f "${ROOT_DIR}/ops/mlflow/30-policy.yaml"' "$DEPLOY" | cut -d: -f1)"
-credential_delete_line="$(grep -nF 'delete secret tos-credentials' "$DEPLOY" | cut -d: -f1)"
+
+grep -Fq '29-storage-migration-policy.yaml' "$DEPLOY"
+grep -Fq 'run_job mlflow-artifact-storage-probe' "$DEPLOY"
+grep -Fq 'run_job mlflow-db-upgrade' "$DEPLOY"
+grep -Fq 'run_job mlflow-artifact-acceptance' "$DEPLOY"
+grep -Fq 'previous_revision' "$DEPLOY"
+grep -Fq 'get deployment mlflow --ignore-not-found -o yaml' "$DEPLOY"
+grep -Fq 'deployed_revision' "$DEPLOY"
+grep -Fq 'previous_revision=$((deployed_revision - 1))' "$DEPLOY"
+grep -Fq 'helm rollback' "$DEPLOY"
+grep -Fq 'restore_legacy_dependencies' "$DEPLOY"
+grep -Fq 'cleanup_legacy_dependencies' "$DEPLOY"
+[[ "$(grep -Fc 'copy_secret tos-credentials' "$DEPLOY")" == "1" ]] || {
+  echo 'shared TOS credentials may only be recopied by the automatic recovery path' >&2
+  exit 1
+}
+
 storage_apply_line="$(grep -nF 'kubectl apply -f "$ARTIFACT_STORAGE"' "$DEPLOY" | cut -d: -f1)"
 storage_bound_line="$(grep -nF 'pvc/mlflow-artifacts' "$DEPLOY" | cut -d: -f1)"
+transition_apply_line="$(grep -nF 'kubectl apply -f "$TRANSITION_POLICY"' "$DEPLOY" | cut -d: -f1)"
+probe_line="$(grep -nF 'run_job mlflow-artifact-storage-probe' "$DEPLOY" | cut -d: -f1)"
 migration_line="$(grep -nF 'run_job mlflow-db-upgrade' "$DEPLOY" | cut -d: -f1)"
-helm_line="$(grep -nF 'helm upgrade --install' "$DEPLOY" | cut -d: -f1)"
-if ! (( storage_apply_line < storage_bound_line &&
-        storage_bound_line < policy_apply_line &&
-        policy_apply_line < credential_delete_line &&
-        credential_delete_line < migration_line &&
-        migration_line < helm_line )); then
-  echo 'MLflow deploy must bind storage and revoke direct TOS access before migration/Helm' >&2
+acceptance_line="$(grep -nF 'if ! run_job mlflow-artifact-acceptance' "$DEPLOY" | cut -d: -f1)"
+cleanup_line="$(grep -nF 'if ! cleanup_legacy_dependencies' "$DEPLOY" | cut -d: -f1)"
+verify_line="$(grep -nF 'ops/mlflow/verify.sh' "$DEPLOY" | tail -n1 | cut -d: -f1)"
+if ! (( transition_apply_line < storage_apply_line &&
+        storage_apply_line < storage_bound_line &&
+        storage_bound_line < probe_line &&
+        probe_line < migration_line &&
+        migration_line < helm_line &&
+        helm_line < acceptance_line &&
+        acceptance_line < cleanup_line &&
+        cleanup_line < verify_line )); then
+  echo 'MLflow deploy phases must be storage probe, migration, atomic Helm, artifact acceptance, then cleanup' >&2
   exit 1
 fi
+
+cleanup_body="$(sed -n '/^cleanup_legacy_dependencies()/,/^}/p' "$DEPLOY")"
+cleanup_policy_line="$(grep -nF '30-policy.yaml' <<<"$cleanup_body" | cut -d: -f1)"
+cleanup_secret_line="$(grep -nF 'delete secret tos-credentials' <<<"$cleanup_body" | cut -d: -f1)"
+cleanup_config_line="$(grep -nF 'delete configmap mlflow-aws-config' <<<"$cleanup_body" | cut -d: -f1)"
+cleanup_transition_line="$(grep -nF 'delete networkpolicy mlflow-storage-migration' <<<"$cleanup_body" | cut -d: -f1)"
+if ! (( cleanup_policy_line < cleanup_secret_line &&
+        cleanup_secret_line < cleanup_config_line &&
+        cleanup_config_line < cleanup_transition_line )); then
+  echo 'MLflow cleanup must stage the strict policy before deleting legacy dependencies and transition egress' >&2
+  exit 1
+fi
+[[ "$(grep -Ec 'recover_cleanup_failure; return 1' <<<"$cleanup_body")" == "4" ]] || {
+  echo 'every MLflow cleanup failure must stop deletion immediately after restoring legacy dependencies' >&2
+  exit 1
+}
+
+grep -Fq 'name: mlflow-storage-migration' "$TRANSITION_POLICY"
+grep -Fq 'app.kubernetes.io/component: artifact-acceptance' "$TRANSITION_POLICY"
+grep -Fq 'cidr: 100.64.0.0/10' "$TRANSITION_POLICY"
+grep -Fq 'port: 443' "$TRANSITION_POLICY"
+grep -Fq 'name: mlflow-postgres' "$TRANSITION_POLICY"
+if grep -Fq 'namespaceSelector: {}' "$TRANSITION_POLICY"; then
+  echo 'MLflow transition policy must not allow every namespace' >&2
+  exit 1
+fi
+
+grep -Fq 'name: mlflow-artifact-acceptance' "$ACCEPTANCE"
+grep -Fq 'http://mlflow:5000/mlflow' "$ACCEPTANCE"
+grep -Fq 'create_experiment' "$ACCEPTANCE"
+grep -Fq 'create_run' "$ACCEPTANCE"
+grep -Fq 'get_artifact_repository' "$ACCEPTANCE"
+grep -Fq 'log_artifact' "$ACCEPTANCE"
+grep -Fq 'download_artifacts' "$ACCEPTANCE"
+grep -Fq 'delete_artifacts' "$ACCEPTANCE"
+grep -Fq 'list_artifacts' "$ACCEPTANCE"
+if grep -Eq 'tos-credentials|AWS_|TOS_' "$ACCEPTANCE"; then
+  echo 'MLflow artifact acceptance must use the tracking service without object-store credentials' >&2
+  exit 1
+fi
+
 grep -Fq 'mlflow.mlflow-system.svc.cluster.local:5000' "$VALUES"
 grep -Fq '172.28.*' "$VALUES"
 if grep -Eq 'mlflow-aws-config|addressing_style = virtual|cidr: 100\.64\.0\.0/10' "$POLICY"; then
@@ -149,10 +217,14 @@ grep -Fq 'mountPath' "$VERIFY"
 grep -Fq 'MLFLOW_ARTIFACTS_DESTINATION' "$VERIFY"
 grep -Fq 'file:///mlflow-artifacts' "$VERIFY"
 grep -Fq 'AWS_|TOS_|MLFLOW_(S3|BOTO)' "$VERIFY"
+grep -Fq 'networkpolicy mlflow-storage-migration' "$VERIFY"
 grep -Fq '/proxy/mlflow/health' "$VERIFY"
 grep -Fq ".spec.replicas" "$VERIFY"
 if grep -Fq 'get ingress' "$VERIFY"; then
   echo 'MLflow live verification must not depend on direct Ingress ownership' >&2
   exit 1
 fi
+grep -Fq 'FSX CSI' "$README"
+grep -Fq 'Artifact CRUD' "$README"
+grep -Fq '自动回滚' "$README"
 echo 'MLflow delivery contract verified'

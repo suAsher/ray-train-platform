@@ -1,0 +1,112 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mlflow-artifact-acceptance
+  namespace: mlflow-system
+  labels:
+    app.kubernetes.io/name: mlflow
+    app.kubernetes.io/component: artifact-acceptance
+    app.kubernetes.io/part-of: ray-train-platform
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mlflow
+        app.kubernetes.io/component: artifact-acceptance
+        app.kubernetes.io/part-of: ray-train-platform
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: harbor-registry
+      nodeSelector:
+        platform.wellspiking.ai/pool: control-plane
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: acceptance
+          image: harbor.wellspiking.ai/guofeng.su/mlflow:v3.14.0-full@sha256:03c206d175084ee3f654a1353ab62ccd2e59048c54f9488f08cc4d8f5de0037d
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-c"]
+          args:
+            - |
+              import pathlib
+              import uuid
+
+              from mlflow import MlflowClient
+              from mlflow.store.artifact.artifact_repository_registry import get_artifact_repository
+
+              tracking_uri = "http://mlflow:5000/mlflow"
+              client = MlflowClient(tracking_uri=tracking_uri)
+              experiment_id = None
+              run_id = None
+              artifact_name = "rollback-safe-artifact.txt"
+              payload = f"mlflow-artifact-acceptance-{uuid.uuid4().hex}\n"
+
+              try:
+                  experiment_id = client.create_experiment(
+                      f"storage-migration-acceptance-{uuid.uuid4().hex}"
+                  )
+                  run = client.create_run(experiment_id)
+                  run_id = run.info.run_id
+                  if not run.info.artifact_uri.startswith("mlflow-artifacts:"):
+                      raise RuntimeError(
+                          f"artifact URI is not server-proxied: {run.info.artifact_uri}"
+                      )
+
+                  upload_dir = pathlib.Path("/tmp/upload")
+                  upload_dir.mkdir()
+                  source = upload_dir / artifact_name
+                  source.write_text(payload, encoding="utf-8")
+
+                  repository = get_artifact_repository(
+                      run.info.artifact_uri,
+                      tracking_uri=tracking_uri,
+                  )
+                  repository.log_artifact(str(source))
+
+                  download_dir = pathlib.Path("/tmp/download")
+                  download_dir.mkdir()
+                  downloaded = pathlib.Path(
+                      repository.download_artifacts(artifact_name, str(download_dir))
+                  )
+                  if downloaded.read_text(encoding="utf-8") != payload:
+                      raise RuntimeError("downloaded artifact does not match uploaded payload")
+
+                  repository.delete_artifacts(artifact_name)
+                  if any(item.path == artifact_name for item in repository.list_artifacts()):
+                      raise RuntimeError("artifact still exists after delete")
+
+                  after_delete_dir = pathlib.Path("/tmp/after-delete")
+                  after_delete_dir.mkdir()
+                  try:
+                      repository.download_artifacts(artifact_name, str(after_delete_dir))
+                  except Exception:
+                      pass
+                  else:
+                      raise RuntimeError("deleted artifact is still downloadable")
+              finally:
+                  if run_id is not None:
+                      client.set_terminated(run_id)
+                      client.delete_run(run_id)
+                  if experiment_id is not None:
+                      client.delete_experiment(experiment_id)
+
+              print("MLflow artifact upload/download/delete acceptance passed")
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: tmp
+          emptyDir: {}
