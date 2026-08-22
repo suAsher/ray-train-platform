@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
+	"strings"
 	"syscall"
 	"time"
 
@@ -119,7 +122,7 @@ func main() {
 	}
 	dataObjectStore, _ := directoryLister.(objectstore.DataSpaceStore)
 	workspaceSnapshotStore, _ := directoryLister.(objectstore.WorkspaceSnapshotStore)
-	jobHandler := api.NewHandler(repository, api.Options{AllowAnonymous: cfg.DemoMode, Logs: logs, Metrics: metrics, Experiments: experiments, ImageAllowlist: cfg.RayImageAllowlist, GitAllowlist: cfg.GitAllowlist, Workspaces: repository, Kubernetes: kubeClient, WorkspaceImage: cfg.WorkspaceImage, RayVersion: cfg.RayVersion, ServiceAccount: cfg.RayJobServiceAccount, ImagePullSecrets: cfg.ImagePullSecrets, PlatformNamespace: runtimeNamespace(), IDCClaim: cfg.IDCExistingClaim, IDCMountPath: cfg.IDCMountPath, KueueClusterQueue: cfg.KueueClusterQueue, Admin: repository, Quota: repository, WorkspacePepper: []byte(cfg.PATPepper), TrainingNodeSelector: cfg.TrainingNodeSelector, Images: repository, GitCredentials: repository, StorageAssets: repository, DataSpaces: repository, DataSpacesEnabled: cfg.DataSpacesEnabled, DataSpacesFSXAttributes: cfg.DataSpacesFSXAttributes, DataSpacesMountCapacity: cfg.DataSpacesMountCapacity, DataSpacesPublicRoot: cfg.DataSpacesPublicRoot, IDCDataSpacesEnabled: cfg.IDCDataSpacesEnabled, IDCDataSpacesMountCapacity: cfg.IDCDataSpacesMountCapacity, IDCDataSpaceSources: idcDataSpaceSources(cfg), DirectoryLister: directoryLister, DirectoryInitializer: directoryInitializer, DataObjectStore: dataObjectStore, WorkspaceSnapshotStore: workspaceSnapshotStore, WorkspaceSnapshots: repository, ArtifactLister: artifactLister, ArtifactReader: artifactReader})
+	jobHandler := api.NewHandler(repository, api.Options{AllowAnonymous: cfg.DemoMode, Logs: logs, Metrics: metrics, Experiments: experiments, ImageAllowlist: cfg.RayImageAllowlist, GitAllowlist: cfg.GitAllowlist, Workspaces: repository, Kubernetes: kubeClient, WorkspaceImage: cfg.WorkspaceImage, RayVersion: cfg.RayVersion, ServiceAccount: cfg.RayJobServiceAccount, ImagePullSecrets: cfg.ImagePullSecrets, PlatformNamespace: runtimeNamespace(), IDCClaim: cfg.IDCExistingClaim, IDCMountPath: cfg.IDCMountPath, KueueClusterQueue: cfg.KueueClusterQueue, Admin: repository, Quota: repository, WorkspacePepper: []byte(cfg.PATPepper), TrainingNodeSelector: cfg.TrainingNodeSelector, Images: repository, GitCredentials: repository, StorageAssets: repository, DataSpaces: repository, DataSpacesEnabled: cfg.DataSpacesEnabled, DataSpacesFSXAttributes: cfg.DataSpacesFSXAttributes, DataSpacesMountCapacity: cfg.DataSpacesMountCapacity, DataSpacesPublicRoot: cfg.DataSpacesPublicRoot, IDCDataSpacesEnabled: cfg.IDCDataSpacesEnabled, IDCDataSpacesMountCapacity: cfg.IDCDataSpacesMountCapacity, IDCDataSpaceSources: idcDataSpaceSources(cfg), DirectoryLister: directoryLister, DirectoryInitializer: directoryInitializer, DataObjectStore: dataObjectStore, WorkspaceSnapshotStore: workspaceSnapshotStore, WorkspaceSnapshots: repository, ArtifactLister: artifactLister, ArtifactReader: artifactReader, MLflowDashboardEnabled: cfg.MLflowDashboardEnabled, MLflowDashboardStore: repository, MLflowTrackingURL: cfg.MLflowTrackingURL, MLflowPublicOrigin: cfg.MLflowPublicOrigin, MLflowDashboardPepper: []byte(cfg.PATPepper), MLflowDashboardSessionTTL: time.Duration(cfg.MLflowDashboardSessionHours) * time.Hour})
 	rayHandler, err := newRayAPIHandler(repository, jobHandler.SubmissionService(), logs, cfg)
 	if err != nil {
 		log.Fatalf("initialize Ray Jobs API compatibility: %v", err)
@@ -137,11 +140,11 @@ func main() {
 	}
 
 	router := gin.New()
-	router.Use(gin.Logger(), gin.Recovery(), requestIDMiddleware())
+	router.Use(querySafeGINLogger(), querySafeGINRecovery(), requestIDMiddleware())
 	if len(cfg.CORSOrigins) > 0 {
 		router.Use(cors.New(cors.Config{
 			AllowOrigins:     cfg.CORSOrigins,
-			AllowMethods:     []string{http.MethodGet, http.MethodPost, http.MethodDelete, http.MethodOptions},
+			AllowMethods:     []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions},
 			AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "Idempotency-Key", "X-Request-ID"},
 			ExposeHeaders:    []string{"X-Request-ID"},
 			AllowCredentials: true,
@@ -245,6 +248,9 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	// verifies its own short-lived, job-scoped token and never exposes port
 	// 8265 outside the cluster.
 	jobs.RegisterJobDashboardProxyRoute(router.Group("/api/v1"))
+	// MLflow authenticates browser navigation with its own path-scoped cookie,
+	// so the proxy must remain outside bearer middleware.
+	jobs.RegisterMLflowDashboardProxyRoute(router.Group(""))
 
 	protected := router.Group("")
 	protected.Use(auth.HybridMiddlewareWithLocal(oidc, pat, localSessions, cfg.OIDCRequired), auth.DemoIdentityMiddleware(cfg.DemoMode))
@@ -263,6 +269,7 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 
 	interactive := v1.Group("")
 	interactive.Use(auth.RequireInteractiveSession(cfg.DemoMode))
+	jobs.RegisterMLflowDashboardAccessRoute(interactive)
 	if locals != nil {
 		locals.RegisterAuthenticatedRoutes(interactive)
 		locals.RegisterUserAdminRoutes(interactive)
@@ -340,6 +347,25 @@ func requestIDMiddleware() gin.HandlerFunc {
 		c.Header("X-Request-ID", requestID)
 		c.Next()
 	}
+}
+
+func querySafeGINLogger() gin.HandlerFunc {
+	return gin.LoggerWithFormatter(func(params gin.LogFormatterParams) string {
+		path := params.Path
+		if index := strings.IndexByte(path, '?'); index >= 0 {
+			path = path[:index]
+		}
+		return fmt.Sprintf("[GIN] %v | %3d | %13v | %15s | %-7s %q\n%s",
+			params.TimeStamp.Format("2006/01/02 - 15:04:05"), params.StatusCode,
+			params.Latency, params.ClientIP, params.Method, path, params.ErrorMessage)
+	})
+}
+
+func querySafeGINRecovery() gin.HandlerFunc {
+	return gin.CustomRecoveryWithWriter(io.Discard, func(c *gin.Context, recovered any) {
+		log.Printf("panic recovered for %s %s (%T)\n%s", c.Request.Method, c.Request.URL.Path, recovered, debug.Stack())
+		c.AbortWithStatus(http.StatusInternalServerError)
+	})
 }
 
 func clusterTopologyHandler(client *k8s.Client) gin.HandlerFunc {

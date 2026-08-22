@@ -16,6 +16,13 @@ const (
 	MLflowDashboardSessionTTL = 8 * time.Hour
 )
 
+type MLflowDashboardSessionClaims struct {
+	TenantID  string
+	Subject   string
+	Nonce     string
+	ExpiresAt time.Time
+}
+
 func IssueMLflowDashboardSession(tenantID, subject, nonce string, key []byte, now time.Time, ttl time.Duration) (string, error) {
 	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(subject) == "" || strings.TrimSpace(nonce) == "" {
 		return "", fmt.Errorf("tenant, subject and nonce are required")
@@ -41,42 +48,52 @@ func VerifyMLflowDashboardSession(token, expectedTenantID, expectedSubject strin
 	if strings.TrimSpace(expectedTenantID) == "" || strings.TrimSpace(expectedSubject) == "" {
 		return fmt.Errorf("tenant and subject are required")
 	}
-	if err := validatePATPepper(key); err != nil {
+	claims, err := VerifyMLflowDashboardSessionClaims(token, key, now)
+	if err != nil {
 		return err
+	}
+	if claims.TenantID != expectedTenantID || claims.Subject != expectedSubject {
+		return fmt.Errorf("invalid MLflow dashboard session")
+	}
+	return nil
+}
+
+func VerifyMLflowDashboardSessionClaims(token string, key []byte, now time.Time) (MLflowDashboardSessionClaims, error) {
+	if err := validatePATPepper(key); err != nil {
+		return MLflowDashboardSessionClaims{}, err
 	}
 
 	payload, signatureText, found := strings.Cut(token, ".")
 	if !found || payload == "" || signatureText == "" || len(signatureText) != sha256.Size*2 || strings.Contains(signatureText, ".") {
-		return fmt.Errorf("malformed MLflow dashboard session")
+		return MLflowDashboardSessionClaims{}, fmt.Errorf("malformed MLflow dashboard session")
 	}
 	signature, err := hex.DecodeString(signatureText)
 	if err != nil || len(signature) != sha256.Size {
-		return fmt.Errorf("malformed MLflow dashboard session")
+		return MLflowDashboardSessionClaims{}, fmt.Errorf("malformed MLflow dashboard session")
 	}
 	expectedSignature := mlflowDashboardSessionSignature(payload, key)
 	if !hmac.Equal(signature, expectedSignature) {
-		return fmt.Errorf("invalid MLflow dashboard session")
+		return MLflowDashboardSessionClaims{}, fmt.Errorf("invalid MLflow dashboard session")
 	}
 
 	decodedPayload, err := base64.RawURLEncoding.DecodeString(payload)
 	if err != nil || base64.RawURLEncoding.EncodeToString(decodedPayload) != payload {
-		return fmt.Errorf("malformed MLflow dashboard session")
+		return MLflowDashboardSessionClaims{}, fmt.Errorf("malformed MLflow dashboard session")
 	}
 	claims := strings.Split(string(decodedPayload), "\x00")
 	if len(claims) != 4 || strings.TrimSpace(claims[0]) == "" || strings.TrimSpace(claims[1]) == "" || strings.TrimSpace(claims[2]) == "" || strings.TrimSpace(claims[3]) == "" {
-		return fmt.Errorf("malformed MLflow dashboard session")
+		return MLflowDashboardSessionClaims{}, fmt.Errorf("malformed MLflow dashboard session")
 	}
 	expiry, err := strconv.ParseInt(claims[3], 10, 64)
 	if err != nil {
-		return fmt.Errorf("malformed MLflow dashboard session")
-	}
-	if claims[0] != expectedTenantID || claims[1] != expectedSubject {
-		return fmt.Errorf("invalid MLflow dashboard session")
+		return MLflowDashboardSessionClaims{}, fmt.Errorf("malformed MLflow dashboard session")
 	}
 	if now.UTC().Unix() > expiry {
-		return fmt.Errorf("MLflow dashboard session has expired")
+		return MLflowDashboardSessionClaims{}, fmt.Errorf("MLflow dashboard session has expired")
 	}
-	return nil
+	return MLflowDashboardSessionClaims{
+		TenantID: claims[0], Subject: claims[1], Nonce: claims[2], ExpiresAt: time.Unix(expiry, 0).UTC(),
+	}, nil
 }
 
 func mlflowDashboardSessionSignature(payload string, key []byte) []byte {

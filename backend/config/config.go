@@ -66,6 +66,9 @@ type Config struct {
 	MLflowTrackingURL                string
 	MLflowIngestURL                  string
 	MLflowExperimentPrefix           string
+	MLflowDashboardEnabled           bool
+	MLflowPublicOrigin               string
+	MLflowDashboardSessionHours      int
 	KueueClusterQueue                string
 	IDCStorageEnabled                bool
 	IDCExistingClaim                 string
@@ -104,50 +107,52 @@ type IDCDataSpaceSource struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		AppEnv:                     envOr("APP_ENV", "development"),
-		HTTPAddr:                   envOr("HTTP_ADDR", ":8080"),
-		DatabaseURL:                os.Getenv("DATABASE_URL"),
-		OIDCIssuerURL:              os.Getenv("OIDC_ISSUER_URL"),
-		OIDCClientID:               os.Getenv("OIDC_CLIENT_ID"),
-		OIDCAudience:               os.Getenv("OIDC_AUDIENCE"),
-		OIDCGroupPrefix:            envOr("OIDC_GROUP_PREFIX", "platform/tenants/"),
-		PATPepper:                  os.Getenv("PAT_PEPPER"),
-		KubeConfig:                 os.Getenv("KUBECONFIG"),
-		KubeContext:                os.Getenv("KUBE_CONTEXT"),
-		LokiURL:                    envOr("LOKI_URL", "http://loki-gateway.loki.svc.cluster.local"),
-		PrometheusURL:              envOr("PROMETHEUS_URL", "http://prometheus.monitoring.svc.cluster.local:9090"),
-		MLflowTrackingURL:          strings.TrimSpace(os.Getenv("MLFLOW_TRACKING_URL")),
-		MLflowIngestURL:            strings.TrimSpace(os.Getenv("MLFLOW_INGEST_URL")),
-		MLflowExperimentPrefix:     envOr("MLFLOW_EXPERIMENT_PREFIX", "raytrain"),
-		KueueClusterQueue:          envOr("KUEUE_CLUSTER_QUEUE", "cluster-gpu-queue"),
-		IDCExistingClaim:           os.Getenv("IDC_EXISTING_CLAIM"),
-		IDCStorageClass:            os.Getenv("IDC_STORAGE_CLASS"),
-		IDCMountPath:               envOr("IDC_MOUNT_PATH", "/mnt/idc"),
-		LocalCacheStorageClass:     strings.TrimSpace(os.Getenv("LOCAL_CACHE_STORAGE_CLASS")),
-		LocalCacheSize:             strings.TrimSpace(os.Getenv("LOCAL_CACHE_SIZE")),
-		LocalCacheMountPath:        strings.TrimSpace(os.Getenv("LOCAL_CACHE_MOUNT_PATH")),
-		DataSpacesFSXAttributes:    strings.TrimSpace(os.Getenv("DATA_SPACES_FSX_VOLUME_ATTRIBUTES_JSON")),
-		RayAPIDefaultImage:         strings.TrimSpace(os.Getenv("RAY_API_DEFAULT_IMAGE")),
-		DataSpacesMountCapacity:    strings.TrimSpace(os.Getenv("DATA_SPACES_MOUNT_CAPACITY")),
-		DataSpacesPublicRoot:       envOr("DATA_SPACES_PUBLIC_ROOT", domain.DefaultPublicDataRoot),
-		IDCDataSpacesMountCapacity: strings.TrimSpace(os.Getenv("IDC_DATA_SPACES_MOUNT_CAPACITY")),
-		RayVersion:                 envOr("RAY_VERSION", "2.35.0"),
-		RayJobClusterSpecField:     envOr("KUBERAY_RAYJOB_CLUSTER_SPEC_FIELD", "rayClusterSpec"),
-		RayJobServiceAccount:       os.Getenv("RAY_JOB_SERVICE_ACCOUNT"),
-		ImagePullSecrets:           splitList(os.Getenv("IMAGE_PULL_SECRETS")),
-		SourceMaterializerImage:    os.Getenv("SOURCE_MATERIALIZER_IMAGE"),
-		WorkspaceImage:             os.Getenv("WORKSPACE_IMAGE"),
-		CORSOrigins:                splitList(os.Getenv("CORS_ORIGINS")),
-		RayImageAllowlist:          splitList(os.Getenv("RAY_IMAGE_ALLOWLIST")),
-		GitAllowlist:               splitList(os.Getenv("GIT_ALLOWLIST")),
-		TOSBucket:                  os.Getenv("TOS_BUCKET"),
-		TOSEndpoint:                os.Getenv("TOS_ENDPOINT"),
-		TOSRegion:                  os.Getenv("TOS_REGION"),
-		TOSAccessKey:               os.Getenv("TOS_ACCESS_KEY"),
-		TOSSecretKey:               os.Getenv("TOS_SECRET_KEY"),
-		TOSSecurityToken:           os.Getenv("TOS_SECURITY_TOKEN"),
-		TOSSecretName:              os.Getenv("TOS_SECRET_NAME"),
-		RayAPISpoolDir:             strings.TrimSpace(os.Getenv("RAY_API_SPOOL_DIR")),
+		AppEnv:                      envOr("APP_ENV", "development"),
+		HTTPAddr:                    envOr("HTTP_ADDR", ":8080"),
+		DatabaseURL:                 os.Getenv("DATABASE_URL"),
+		OIDCIssuerURL:               os.Getenv("OIDC_ISSUER_URL"),
+		OIDCClientID:                os.Getenv("OIDC_CLIENT_ID"),
+		OIDCAudience:                os.Getenv("OIDC_AUDIENCE"),
+		OIDCGroupPrefix:             envOr("OIDC_GROUP_PREFIX", "platform/tenants/"),
+		PATPepper:                   os.Getenv("PAT_PEPPER"),
+		KubeConfig:                  os.Getenv("KUBECONFIG"),
+		KubeContext:                 os.Getenv("KUBE_CONTEXT"),
+		LokiURL:                     envOr("LOKI_URL", "http://loki-gateway.loki.svc.cluster.local"),
+		PrometheusURL:               envOr("PROMETHEUS_URL", "http://prometheus.monitoring.svc.cluster.local:9090"),
+		MLflowTrackingURL:           strings.TrimSpace(os.Getenv("MLFLOW_TRACKING_URL")),
+		MLflowIngestURL:             strings.TrimSpace(os.Getenv("MLFLOW_INGEST_URL")),
+		MLflowExperimentPrefix:      envOr("MLFLOW_EXPERIMENT_PREFIX", "raytrain"),
+		MLflowPublicOrigin:          strings.TrimSpace(os.Getenv("MLFLOW_PUBLIC_ORIGIN")),
+		MLflowDashboardSessionHours: 8,
+		KueueClusterQueue:           envOr("KUEUE_CLUSTER_QUEUE", "cluster-gpu-queue"),
+		IDCExistingClaim:            os.Getenv("IDC_EXISTING_CLAIM"),
+		IDCStorageClass:             os.Getenv("IDC_STORAGE_CLASS"),
+		IDCMountPath:                envOr("IDC_MOUNT_PATH", "/mnt/idc"),
+		LocalCacheStorageClass:      strings.TrimSpace(os.Getenv("LOCAL_CACHE_STORAGE_CLASS")),
+		LocalCacheSize:              strings.TrimSpace(os.Getenv("LOCAL_CACHE_SIZE")),
+		LocalCacheMountPath:         strings.TrimSpace(os.Getenv("LOCAL_CACHE_MOUNT_PATH")),
+		DataSpacesFSXAttributes:     strings.TrimSpace(os.Getenv("DATA_SPACES_FSX_VOLUME_ATTRIBUTES_JSON")),
+		RayAPIDefaultImage:          strings.TrimSpace(os.Getenv("RAY_API_DEFAULT_IMAGE")),
+		DataSpacesMountCapacity:     strings.TrimSpace(os.Getenv("DATA_SPACES_MOUNT_CAPACITY")),
+		DataSpacesPublicRoot:        envOr("DATA_SPACES_PUBLIC_ROOT", domain.DefaultPublicDataRoot),
+		IDCDataSpacesMountCapacity:  strings.TrimSpace(os.Getenv("IDC_DATA_SPACES_MOUNT_CAPACITY")),
+		RayVersion:                  envOr("RAY_VERSION", "2.35.0"),
+		RayJobClusterSpecField:      envOr("KUBERAY_RAYJOB_CLUSTER_SPEC_FIELD", "rayClusterSpec"),
+		RayJobServiceAccount:        os.Getenv("RAY_JOB_SERVICE_ACCOUNT"),
+		ImagePullSecrets:            splitList(os.Getenv("IMAGE_PULL_SECRETS")),
+		SourceMaterializerImage:     os.Getenv("SOURCE_MATERIALIZER_IMAGE"),
+		WorkspaceImage:              os.Getenv("WORKSPACE_IMAGE"),
+		CORSOrigins:                 splitList(os.Getenv("CORS_ORIGINS")),
+		RayImageAllowlist:           splitList(os.Getenv("RAY_IMAGE_ALLOWLIST")),
+		GitAllowlist:                splitList(os.Getenv("GIT_ALLOWLIST")),
+		TOSBucket:                   os.Getenv("TOS_BUCKET"),
+		TOSEndpoint:                 os.Getenv("TOS_ENDPOINT"),
+		TOSRegion:                   os.Getenv("TOS_REGION"),
+		TOSAccessKey:                os.Getenv("TOS_ACCESS_KEY"),
+		TOSSecretKey:                os.Getenv("TOS_SECRET_KEY"),
+		TOSSecurityToken:            os.Getenv("TOS_SECURITY_TOKEN"),
+		TOSSecretName:               os.Getenv("TOS_SECRET_NAME"),
+		RayAPISpoolDir:              strings.TrimSpace(os.Getenv("RAY_API_SPOOL_DIR")),
 	}
 	if cfg.RayAPISpoolDir == "" && cfg.AppEnv != "production" {
 		cfg.RayAPISpoolDir = os.TempDir()
@@ -200,6 +205,14 @@ func Load() (Config, error) {
 	}
 	if cfg.MLflowEnabled, err = parseBool("MLFLOW_ENABLED", false); err != nil {
 		return Config{}, err
+	}
+	if cfg.MLflowDashboardEnabled, err = parseBool("MLFLOW_DASHBOARD_ENABLED", false); err != nil {
+		return Config{}, err
+	}
+	if cfg.MLflowDashboardEnabled {
+		if cfg.MLflowDashboardSessionHours, err = parseInt("MLFLOW_DASHBOARD_SESSION_HOURS", 8); err != nil {
+			return Config{}, err
+		}
 	}
 	if cfg.DataSpacesEnabled, err = parseBool("DATA_SPACES_ENABLED", false); err != nil {
 		return Config{}, err
@@ -267,6 +280,9 @@ func Load() (Config, error) {
 	if err := validateMLflowConfig(cfg); err != nil {
 		return Config{}, err
 	}
+	if err := validateMLflowDashboardConfig(cfg); err != nil {
+		return Config{}, err
+	}
 	if err := validateDataSpaceConfig(cfg); err != nil {
 		return Config{}, err
 	}
@@ -304,6 +320,29 @@ func validateMLflowConfig(cfg Config) error {
 	prefix := strings.Trim(strings.TrimSpace(cfg.MLflowExperimentPrefix), "-")
 	if prefix == "" || prefix != cfg.MLflowExperimentPrefix || !isDNSSubdomain(prefix) {
 		return fmt.Errorf("MLFLOW_EXPERIMENT_PREFIX must be a lowercase DNS label")
+	}
+	return nil
+}
+
+func validateMLflowDashboardConfig(cfg Config) error {
+	if !cfg.MLflowDashboardEnabled {
+		return nil
+	}
+	if !cfg.MLflowEnabled {
+		return fmt.Errorf("MLFLOW_DASHBOARD_ENABLED requires MLFLOW_ENABLED")
+	}
+	if strings.TrimSpace(cfg.MLflowTrackingURL) == "" {
+		return fmt.Errorf("MLFLOW_TRACKING_URL is required when MLFLOW_DASHBOARD_ENABLED is true")
+	}
+	if len(cfg.PATPepper) < 32 {
+		return fmt.Errorf("PAT_PEPPER must contain at least 32 bytes when MLFLOW_DASHBOARD_ENABLED is true")
+	}
+	if cfg.MLflowDashboardSessionHours < 1 || cfg.MLflowDashboardSessionHours > 24 {
+		return fmt.Errorf("MLFLOW_DASHBOARD_SESSION_HOURS must be between 1 and 24")
+	}
+	origin, err := url.Parse(cfg.MLflowPublicOrigin)
+	if err != nil || origin.Scheme != "https" || origin.Host == "" || origin.Hostname() == "" || origin.User != nil || origin.Path != "" || origin.RawPath != "" || origin.RawQuery != "" || origin.Fragment != "" || origin.Opaque != "" || origin.ForceQuery {
+		return fmt.Errorf("MLFLOW_PUBLIC_ORIGIN must be an HTTPS origin with scheme and host only")
 	}
 	return nil
 }

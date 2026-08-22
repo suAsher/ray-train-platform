@@ -56,6 +56,49 @@ func TestMLflowDashboardSessionBindsTenantSubjectAndNonce(t *testing.T) {
 	}
 }
 
+func TestVerifyMLflowDashboardSessionClaimsReturnsAuthenticatedClaims(t *testing.T) {
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	token, err := IssueMLflowDashboardSession("tenant-a", "user-a", "nonce-a", testPepper(), now, time.Hour)
+	if err != nil {
+		t.Fatalf("issue session: %v", err)
+	}
+
+	claims, err := VerifyMLflowDashboardSessionClaims(token, testPepper(), now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("verify claims: %v", err)
+	}
+	if claims.TenantID != "tenant-a" || claims.Subject != "user-a" || claims.Nonce != "nonce-a" {
+		t.Fatalf("unexpected identity claims: %+v", claims)
+	}
+	wantExpiry := now.Add(time.Hour)
+	if !claims.ExpiresAt.Equal(wantExpiry) {
+		t.Fatalf("expiry = %v, want %v", claims.ExpiresAt, wantExpiry)
+	}
+}
+
+func TestVerifyMLflowDashboardSessionClaimsRejectsTamperingAndExpiryWithoutLeakingToken(t *testing.T) {
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	token, err := IssueMLflowDashboardSession("tenant-a", "user-a", "nonce-a", testPepper(), now, time.Second)
+	if err != nil {
+		t.Fatalf("issue session: %v", err)
+	}
+
+	for name, candidate := range map[string]string{
+		"expired":  token,
+		"tampered": token[:len(token)-1] + "0",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, verifyErr := VerifyMLflowDashboardSessionClaims(candidate, testPepper(), now.Add(2*time.Second))
+			if verifyErr == nil {
+				t.Fatal("invalid session accepted")
+			}
+			if strings.Contains(verifyErr.Error(), candidate) {
+				t.Fatalf("verification error exposed token: %v", verifyErr)
+			}
+		})
+	}
+}
+
 func TestMLflowDashboardSessionUsesURLSafePayloadAndDefaultTTL(t *testing.T) {
 	if MLflowDashboardTicketTTL != 2*time.Minute {
 		t.Fatalf("ticket TTL = %v", MLflowDashboardTicketTTL)
