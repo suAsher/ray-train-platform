@@ -95,6 +95,57 @@ class DocumentationContractTest(unittest.TestCase):
             guide.index("platform_mlflow = start_platform_mlflow"),
         )
 
+    def test_bevfusion_guide_documents_reported_operational_gaps(self) -> None:
+        guide = (ROOT / "docs" / "BEVFUSION_END_TO_END_GUIDE.md").read_text(
+            encoding="utf-8"
+        )
+        runbook = (ROOT / "docs" / "BEVFUSION_RUNBOOK.md").read_text(
+            encoding="utf-8"
+        )
+        for marker in (
+            'export PATH="$HOME/.local/bin:$PATH"',
+            "用户名输入 `oauth2`",
+            "不要把 PAT 放进 URL",
+            'jq -r ".observedState"',
+            "SUCCEEDED / FAILED / CANCELED / TIMED_OUT",
+            "按时间正序",
+            "当前 CLI 还没有产物列表子命令",
+            "`bev_3dod_s1h` 已验证范围是 smoke-128",
+            "`/healthz`",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, guide)
+        self.assertIn("S1H 全量训练不能直接复用", runbook)
+        submit = (ROOT / "docs" / "SUBMIT_GUIDE.md").read_text(encoding="utf-8")
+        changes = (ROOT / "docs" / "BEVFUSION_CODE_CHANGES.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("S1H 的全量训练不能直接套用", submit)
+        self.assertIn("历史 S1H Head 只有 9 类", changes)
+        for document in (runbook, changes):
+            succeeded_s1h_rows = (
+                line
+                for line in document.splitlines()
+                if "bev_3dod_s1h" in line and "SUCCEEDED" in line
+            )
+            for row in succeeded_s1h_rows:
+                with self.subTest(row=row):
+                    self.assertIn("smoke-128", row)
+        self.assertNotRegex(guide, r"https://oauth2:[^@\s]+@gitlab")
+
+    def test_mlflow_probe_runbook_explains_failure_semantics_and_placement(self) -> None:
+        runbook = (ROOT / "ops" / "mlflow" / "README.md").read_text(
+            encoding="utf-8"
+        )
+        for marker in (
+            "`0/1 Running`",
+            "`Pending` 不等于 DNS 或 FSX 检查失败",
+            "不应把 MLflow 长期迁移到 GPU 训练节点",
+            "探测不应挤占业务保底容量",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, runbook)
+
     def test_native_submission_boundary_is_not_overstated(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         submit = (ROOT / "docs" / "SUBMIT_GUIDE.md").read_text(encoding="utf-8")

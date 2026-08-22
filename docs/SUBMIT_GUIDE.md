@@ -262,7 +262,7 @@ fi
 spk-rayjob submit --watch
 ```
 
-`bev_3dod_s1h` 使用相同资源与镜像，但需在 entrypoint 的 `eval_dataset_root=...` 之后再加两个参数，并改名称/输出目录：
+`bev_3dod_s1h` 的 **smoke-128 链路验收**使用相同资源与镜像，但需在 entrypoint 的 `eval_dataset_root=...` 之后再加两个参数，并改名称/输出目录：
 
 ```yaml
 name: bevfusion-3dod-s1h-2x8
@@ -273,6 +273,8 @@ data.test.ann_file="$PLATFORM_DATASET_PATH/platform-validation/annotations/fz-04
 output:
   path: bevfusion/bev_3dod_s1h-2x8
 ```
+
+S1H 的全量训练不能直接套用 `bev_3dod` 的全量模板。当前全量数据包含 IGV 第 10 类，而历史 S1H Head 只有 9 类；扩成 10 类后又不能继续加载旧 9 类 checkpoint，并且历史复跑还出现过 fp16/Hungarian cost/loss NaN。正式全量训练必须由算法负责人先核对类别映射、Head、checkpoint、学习率与 fp16 策略，再单独完成收敛验收。
 
 模板只保存项目默认参数；不想创建该文件时，把字段改成同名命令行参数即可。完整源码补丁见 [BEVFusion 代码改造与验收](BEVFUSION_CODE_CHANGES.md)。
 

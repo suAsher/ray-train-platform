@@ -382,7 +382,7 @@ python tools/train.py cfg.yaml --data-root "$PLATFORM_DATASET_PATH"
 | S1H 写死历史 checkpoint | `load_from: null` | checkpoint 必须由任务显式选择，不能依赖旧机器路径 |
 | S1H `${post_center_range}` 未定义 | 固定为 `[-61.2, -61.2, -10, 61.2, 61.2, 10]` | 与当前 S1H 检测范围匹配并消除配置解析失败 |
 
-S1H 的 smoke 标注集只有 `final_merged_nuscenes_infos_val.pkl`，因此验收模板还显式覆盖 `data.val.ann_file` 与 `data.test.ann_file`。这只是 smoke 数据适配；正式训练应使用数据版本自身的 train/val/test 索引。
+S1H 的 smoke 标注集只有 `final_merged_nuscenes_infos_val.pkl`，因此验收模板还显式覆盖 `data.val.ann_file` 与 `data.test.ann_file`。这只是 smoke 数据适配；正式训练应使用数据版本自身的 train/val/test 索引。当前全量数据包含 IGV 第 10 类，而历史 S1H Head 只有 9 类；调整 Head 会改变模型结构并使旧 9 类 checkpoint 不兼容，且历史全量复跑还出现过 fp16/Hungarian cost/loss NaN。因此 S1H 全量不能按 smoke 通过来宣称可交付，必须单独完成类别和收敛验收。
 
 兼容镜像中的 `raytrain-bevfusion-prepare` 只把工作目录缺少的 `.so` / `.py` 文件从固定镜像环境补齐，并通过目录锁保证同一代码包被 16 个进程并发启动时只准备一次。它不会覆盖用户随任务上传的源码。
 
@@ -415,9 +415,9 @@ spk-rayjob submit \
 | `bev_3dod@0c1dc9d` | `spk-rayjob` | 2×8 | `SUCCEEDED` | `job-0d368c1c99570c6cfd30a704` | 6/6 iteration、验证、checkpoint、MLflow |
 | `bev_3dod@0c1dc9d` | 原生 Ray `--working-dir` | 2×8 | `SUCCEEDED` | `job-5cd8dd759fa2a481b5a0178e` | 6/6 iteration、验证、MLflow |
 | `bev_3dod@0c1dc9d` | Portal 工作区快照 | 2×8 | `SUCCEEDED` | `job-12a730d45f0f83e4b4ae37c5` | 6/6 iteration、checkpoint、MLflow |
-| `bev_3dod_s1h@7931cee` | `spk-rayjob` | 2×8 | `SUCCEEDED` | `job-ec9a64a66c953efd346fefe8` | 6/6 iteration、验证、checkpoint、MLflow |
-| `bev_3dod_s1h@7931cee` | 原生 Ray `--working-dir` | 2×8 | `SUCCEEDED` | `job-42b55a5447b7e93afe29bb87` | 6/6 iteration、验证、MLflow |
-| `bev_3dod_s1h@7931cee` | Portal 工作区快照 | 2×8 | `SUCCEEDED` | `job-69993074d2ff5de4f2d30b17` | 6/6 iteration、checkpoint、MLflow |
+| `bev_3dod_s1h@7931cee` | `spk-rayjob` | 2×8 | `SUCCEEDED` | `job-ec9a64a66c953efd346fefe8` | smoke-128，6/6 iteration、验证、checkpoint、MLflow |
+| `bev_3dod_s1h@7931cee` | 原生 Ray `--working-dir` | 2×8 | `SUCCEEDED` | `job-42b55a5447b7e93afe29bb87` | smoke-128，6/6 iteration、验证、MLflow |
+| `bev_3dod_s1h@7931cee` | Portal 工作区快照 | 2×8 | `SUCCEEDED` | `job-69993074d2ff5de4f2d30b17` | smoke-128，6/6 iteration、checkpoint、MLflow |
 
 每项都以 `guofeng.su` 提交，自动创建独立 RayCluster；RayJob 清单为 `replicas: 2`、每 Worker `nvidia.com/gpu: 8`，两个 Worker 分布在两台 GPU 节点。日志出现 NCCL 2.10.3、loss、验证与 `/mnt/data/output` checkpoint；任务终态及开始/结束时间完整。128 样本 smoke 的 `mAP=0` 和部分 `grad_norm=nan` 是算法/小样本质量信号，不影响平台链路验收，但正式全量训练必须继续做收敛与断点恢复验收。令牌、预签名 URL和内部凭据不写入本表。
 

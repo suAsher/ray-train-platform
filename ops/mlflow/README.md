@@ -22,6 +22,15 @@
 - 中断安全：持有 Lease 时收到 `INT/TERM/HUP` 会立即标记为 fail-closed 并保留 Lease，分别以标准状态 `130/143/129` 退出，等待管理员确认 Job、Pod 和 Helm rollout 已终止后手动恢复；尚未获取 Lease 时仅按标准状态退出。
 - 节点挂载探测：`mlflow-fsx-probe` DaemonSet 会在每台 CPU 节点挂载 MLflow 正在使用的同一个 PVC，每 20 秒执行有 10 秒上限的 `stat -> 写入 -> 校验 -> 删除`。`mlflow-fsx-dns-probe` 使用与节点/FSX Agent 相同的 resolver 配置，验证通用 TOS 与桶 endpoint 的有效解析链，并在日志中分别标记两台 IDC DNS 和两台 VKE DNS 的退化。已调度节点的挂载或 DNS 失败 2 分钟后会触发独立告警；资源不足导致探测 Pod 无法调度时也会告警。部署会在变更 MLflow 前停止。探测器只告警，不会自动重启 FSX 或业务 Pod。
 
+### 探针状态和部署位置怎么判断
+
+- 探针显示 `0/1 Running`，表示 Pod 已经调度并且探测进程仍在运行，但最近一次 DNS 或 FSX 读写检查失败；这是故障信号，不是探针容器崩溃。
+- `Pending` 不等于 DNS 或 FSX 检查失败。先看 Pod Event；常见原因是节点 CPU/内存 request 已满、节点选择器不匹配或 Pod 反亲和。探针只有 5m CPU/8Mi request 仍无法调度时，说明控制面节点已经没有安全余量。
+- `ContainerCreating` 并伴随 `MountVolume.SetUp failed ... input/output error`，表示该节点的 FSX/FUSE 挂载链路确实异常。旧 Pod 长时间 `Terminating` 通常也是失效的 FUSE mount 阻塞卸载，必须先按下面顺序恢复节点 Agent/CSI。
+- 当前两个探针在节点 DNS 与 FSX 稳定性问题彻底解决前仍有必要，不能直接删除；否则会失去节点级预警。不过永久 DaemonSet 在每个节点保持同一 PVC 的 FUSE mount，也会扩大失效挂载面。后续应改成输出独立 Prometheus 指标的轻量 DNS exporter，并把 FSX 读写改成有界的周期 canary/CronJob；替代告警和验收上线后再删除这两个 DaemonSet。
+
+MLflow 主服务应继续放在专用 CPU/control-plane 节点，**不应把 MLflow 长期迁移到 GPU 训练节点**。迁到 GPU 节点只会暂时绕过 CPU 节点容量或 FSX 故障，并让实验追踪可用性耦合到训练节点扩缩容、维护和资源争抢。生产上应保留两副本硬反亲和，同时为平台服务预留 CPU/内存 request 或扩容 CPU 节点；探测不应挤占业务保底容量，也不应依赖 GPU 池兜底。
+
 部署：
 
 ```bash

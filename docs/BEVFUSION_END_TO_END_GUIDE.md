@@ -49,6 +49,8 @@
 
 该结果证明平台、数据、跨节点 NCCL/DDP、日志和输出持久化链路可用；不同一次运行的数值可能受代码提交、随机性和配置影响，正式多 epoch 收敛、业务精度和超参数仍由算法负责人验收。
 
+`bev_3dod_s1h` 已验证范围是 smoke-128：数据预检、2×8 DDP、日志和 checkpoint 链路已经通过，但当前全量数据包含 S1H 历史 smoke 未覆盖的 IGV 类别，且全量训练出现过类别头不匹配和 fp16 数值不稳定。因此本文第 10 节的全量模板只对 `bev_3dod` 构成已验收基线，不能据此宣称 S1H 全量模型已经收敛。
+
 ---
 
 ## 2. CPU、内存和 GPU 应该怎么填
@@ -120,6 +122,16 @@ ssh -T git@gitlab.qomolo.com
 
 如果组织要求 HTTPS，请使用 Git 的安全凭据管理器，在交互提示中输入凭据。平台网页从 Git 提交时，凭据应在“Git 凭据”页面添加并测试，不写入算法仓库。
 
+没有 SSH Key 时，可以安全地使用 HTTPS；不要把 PAT 放进 URL：
+
+```bash
+git clone --single-branch --branch bev_3dod \
+  https://gitlab.qomolo.com/dl/bevfusion.git \
+  bevfusion-bev_3dod
+```
+
+Git 提示认证时，用户名输入 `oauth2`，密码位置粘贴个人 GitLab PAT。PAT 不会出现在命令历史和 Git remote URL 中。平台 PAT 与 GitLab PAT 是两种不同凭据，不能混用。
+
 ### 3.2 安装 `spk-rayjob`
 
 下面给出 Linux AMD64 命令。macOS、Windows 用户应打开 Portal“外部提交”页面，复制当前平台版本对应的安装和校验命令；[三种提交方式](SUBMIT_GUIDE.md#31-安装与登录)同时提供 Linux、macOS、Windows 的完整示例。
@@ -143,6 +155,13 @@ install -m 0755 \
 
 export PATH="$HOME/.local/bin:$PATH"
 spk-rayjob --help
+```
+
+上面的 `export` 只对当前终端生效。再执行一次下面的命令持久化 PATH，重新登录后仍可直接使用：
+
+```bash
+grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.profile" || \
+  printf '%s\n' 'export PATH="$HOME/.local/bin:$PATH"' >>"$HOME/.profile"
 ```
 
 ### 3.3 使用平台账号登录
@@ -634,6 +653,8 @@ if __name__ == "__main__":
 
 历史 checkpoint 不能写死在代码中。正式续训由新任务显式选择旧任务，并通过 `$PLATFORM_CHECKPOINT_PATH` 读取。
 
+如果 S1H 要使用本文的全量 `0429_pkl` 数据，必须先由算法负责人核对 `object_classes`、`name_mapping` 和 TransFusion Head 的 `num_classes`。当前全量数据包含映射为第 10 类的 IGV，而历史 S1H smoke 配置的 Head 只有 9 类；直接复用会触发 CUDA index out of bounds。把 Head 改成 10 类会改变模型结构并与旧 9 类 checkpoint 不兼容。即使类别数修正，历史复跑仍观察到 Hungarian cost 和 loss NaN，因此 S1H 全量还需要单独完成学习率、fp16 和收敛验收。
+
 ### 5.8 接入平台 MLflow 实验中心
 
 两个分支都新增 `mmdet3d/utils/platform_mlflow.py`。这段代码只在全局 rank 0 创建 run，参数、loss、学习率和验证指标进入实验中心；checkpoint 仍写 `PLATFORM_OUTPUT_PATH`：
@@ -748,6 +769,8 @@ def finish_platform_mlflow(client: Optional[Any], status: str) -> None:
 ```
 
 MLflow run 在 Dataset、模型和 Logger 初始化成功后、进入 `train_model()` 前才创建；这样初始化阶段失败不会留下永久 `RUNNING` 的空 run，训练异常则会明确结束为 `FAILED`。不要在代码中写死 MLflow 地址、实验名、租户或任务 ID；平台会为每个任务注入并校验这些字段。自定义镜像必须包含与 Python 版本兼容的 MLflow client；本手册固定的 BEVFusion 镜像已经包含。
+
+当前交付把实验记录视为训练验收的一部分：如果 `start_platform_mlflow()` 返回 404/5xx，任务会失败，而不是悄悄丢失 Loss 后继续。用户不要在算法仓库里临时写死地址或吞掉异常；先保留最早的 Worker traceback，并联系平台管理员检查 MLflow ingest。平台健康检查路径是 `/healthz`，不是 `/health`。平台应在 16 卡任务准入前完成 MLflow API 预检，避免把实验服务故障拖到训练启动后才暴露。
 
 ---
 
@@ -1004,6 +1027,8 @@ data.test.ann_file="$PLATFORM_DATASET_PATH/platform-validation/annotations/fz-04
 
 下面是当前 180C / 780GiB GPU 节点的推荐生产模板。每个 8 卡 Worker 使用 64 CPU、256GiB；两台节点总共申请 128 CPU、512GiB。
 
+本节只对 `bev_3dod` 完成了全量验收。`bev_3dod_s1h` 已验证范围是 smoke-128；S1H 全量训练不能直接复用下面模板，必须先完成第 5.7 节的类别配置和数值稳定性验收。
+
 在 `bev_3dod` checkout 根目录创建或替换 `.spk-rayjob.yaml`：
 
 ```yaml
@@ -1215,6 +1240,19 @@ spk-rayjob cancel <平台任务ID>
 
 当前 CLI 的选项必须放在任务 ID 前面。因此使用 `status --output json <ID>`，不能写成 `status <ID> --output json`；同理，`--limit` 必须放在日志任务 ID 前面。
 
+自动化脚本读取 `.observedState`，不是 `.state` 或 `.status`：
+
+```bash
+JOB_ID=<平台任务ID>
+spk-rayjob status --output json "$JOB_ID" | jq -r ".observedState"
+```
+
+正常终态为 `SUCCEEDED / FAILED / CANCELED / TIMED_OUT`。`SUBMITTED`、`VALIDATING`、`QUEUED`、`ADMITTED`、`PROVISIONING` 和 `RUNNING` 都不是终态。
+
+历史日志接口当前按时间正序返回生命周期窗口中的前 N 行；`--limit 3000` 不是“倒序取最后 3000 行”。运行中优先使用 `logs -f`，结束后在 Portal 日志页按日志流查看和检索。任务仍在 `PROVISIONING` 且提交器/Worker 尚未创建时，日志为空是正常现象。
+
+当前 CLI 还没有产物列表子命令。任务产物应在 Portal“我的数据 → 我的运行结果”或任务详情的产物页查看；不要用 kubeconfig，也不需要再提交辅助训练任务来列目录。平台策略允许页面预览受支持的文本产物，但不开放任意下载。
+
 任务通常有四个日志流：
 
 | 日志流 | 含义 | 主要检查 |
@@ -1321,6 +1359,8 @@ CPU 和内存配置是否合适，要以训练和数据基准共同判断。至�
 | GPU 利用率低 | 数据加载慢、worker 数过少或 I/O 小文件瓶颈 | 比较 `data_time`，逐步提高 `workers_per_gpu`，再考虑 CPU。 |
 | `CUDA out of memory` | batch、模型或输入过大 | 降低 `samples_per_gpu`，使用梯度累积，不要只增加 Pod 内存。 |
 | NCCL timeout/broken pipe | 某个 rank 先因 Python/数据/OOM 退出，其他 rank 连带失败 | 先找最早的 Worker traceback，不要只看最后一条 NCCL 错误。 |
+| MLflow 404/5xx 后其他 rank 报 NCCL 超时 | rank 0 先因实验记录服务失败退出，其他 rank 连带失败 | 保留最早 traceback，联系平台管理员检查 ingest `/healthz` 和 Tracking API；不要在用户代码中改写平台地址。 |
+| S1H 全量出现 index out of bounds 或 NaN | 全量 IGV 类别超出历史 9 类 Head，或 fp16/学习率数值不稳定 | 先按 5.7 核对类别数；变更 Head 后不得加载旧 9 类 checkpoint，并由算法负责人重新做收敛验收。 |
 | 日志末尾 loss 看不到 | 启动时模型结构过长 | 用 `logs -f` 或 `spk-rayjob logs --limit 3000 <ID>`。 |
 | Dashboard 打不开 | Head 未就绪，或任务集群已按 TTL 清理 | 运行中重试；结束后使用平台历史日志与指标。 |
 | 普通重试从头开始 | 没有显式选择 checkpoint | 使用 `--resume-from-job` 并在入口读取 `PLATFORM_CHECKPOINT_PATH`。 |

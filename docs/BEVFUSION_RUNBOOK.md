@@ -32,9 +32,9 @@
 | `spk-rayjob`，`bev_3dod` | `job-0d368c1c99570c6cfd30a704` | 2 Worker × 8 GPU | `SUCCEEDED`，6/6 iteration | checkpoint、验证、拓扑、MLflow |
 | 原生 Ray CLI，`bev_3dod` | `job-5cd8dd759fa2a481b5a0178e` | 2 Worker × 8 GPU | `SUCCEEDED`，6/6 iteration | 日志、状态、MLflow |
 | Portal 快照，`bev_3dod` | `job-12a730d45f0f83e4b4ae37c5` | 2 Worker × 8 GPU | `SUCCEEDED`，6/6 iteration | checkpoint、验证、拓扑、MLflow |
-| `spk-rayjob`，`bev_3dod_s1h` | `job-ec9a64a66c953efd346fefe8` | 2 Worker × 8 GPU | `SUCCEEDED`，6/6 iteration | checkpoint、验证、拓扑、MLflow |
-| 原生 Ray CLI，`bev_3dod_s1h` | `job-42b55a5447b7e93afe29bb87` | 2 Worker × 8 GPU | `SUCCEEDED`，6/6 iteration | 日志、状态、MLflow |
-| Portal 快照，`bev_3dod_s1h` | `job-69993074d2ff5de4f2d30b17` | 2 Worker × 8 GPU | `SUCCEEDED`，6/6 iteration | checkpoint、验证、拓扑、MLflow |
+| `spk-rayjob`，`bev_3dod_s1h` | `job-ec9a64a66c953efd346fefe8` | 2 Worker × 8 GPU | `SUCCEEDED`，smoke-128，6/6 iteration | checkpoint、验证、拓扑、MLflow |
+| 原生 Ray CLI，`bev_3dod_s1h` | `job-42b55a5447b7e93afe29bb87` | 2 Worker × 8 GPU | `SUCCEEDED`，smoke-128，6/6 iteration | 日志、状态、MLflow |
+| Portal 快照，`bev_3dod_s1h` | `job-69993074d2ff5de4f2d30b17` | 2 Worker × 8 GPU | `SUCCEEDED`，smoke-128，6/6 iteration | checkpoint、验证、拓扑、MLflow |
 
 拓扑文件已经确认：
 
@@ -233,7 +233,9 @@ spk-rayjob submit \
 
 ### 5.2 `bev_3dod_s1h`
 
-在自己的 `bev_3dod_s1h` checkout 根目录使用同一模板，并增加 S1H 的 `data.val.ann_file`、`data.test.ann_file` 覆盖后执行 `spk-rayjob submit --watch`。
+`bev_3dod_s1h` 已验证范围是 smoke-128。可以在自己的 checkout 根目录使用 smoke 模板，并增加 S1H 的 `data.val.ann_file`、`data.test.ann_file` 覆盖后执行 `spk-rayjob submit --watch`。
+
+S1H 全量训练不能直接复用 `bev_3dod` 的全量模板：全量数据包含 IGV 第 10 类，而历史 S1H Head 只有 9 类；修正类别数后还观察到 fp16/Hungarian cost/loss 数值不稳定。正式全量前必须由算法负责人确认 `num_classes`、checkpoint 兼容性、学习率和 fp16 策略，并单独完成收敛验收。
 
 每次修改代码后再次执行 `spk-rayjob submit --watch`。客户端重新打包当前目录，任务详情中保留不可变源码包摘要；无需重建镜像。
 
