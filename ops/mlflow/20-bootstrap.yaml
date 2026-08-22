@@ -55,4 +55,4 @@ spec:
       volumes:
         - name: mlflow-artifacts
           persistentVolumeClaim:
-            claimName: mlflow-artifacts
+            claimName: mlflow-artifacts-irsa

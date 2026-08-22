@@ -118,7 +118,7 @@ PLATFORM_CHECKPOINT_PATH  续训时挂载的历史结果目录（可选）
 - Ray Dashboard 只用于运行期诊断。任务集群回收后，历史分析使用平台任务详情、Loki、Prometheus/Grafana 和训练产物。
 - MLflow 独立运行于 `mlflow-system`，使用自己的 PostgreSQL；Artifact 存储是 `vke-cluster/ray-train/platform/mlflow-artifacts/` 专用前缀的 FSX CSI 静态 PV/PVC。MLflow Pod 只看到 `/mlflow-artifacts` 挂载根，不直连对象存储，也不注入 TOS/AWS AK/SK。实验中心是平台筛选视图，适合按当前用户或团队查看训练指标；登录后的原生 MLflow 是全平台共享的完整管理界面。
 - 原生 MLflow 全功能开放是当前明确策略：所有平台认证用户都能查看全平台实验，并可创建、修改、删除实验、Run 和模型注册条目，也可上传、下载 MLflow Artifact。共享管理操作会直接改变 MLflow 数据，使用前必须确认目标对象。
-- FSX CSI 的 `fsx-agent` 使用平台 Secret `ray-train-platform/tos-fsx-credentials` 执行底层挂载，凭据不进入 MLflow Pod。MLflow Artifact 与 `/mnt/storage/public` 治理数据隔离；开放 Artifact 上传下载不等于允许读取公共或团队训练数据。
+- FSX CSI 的 `csi-fsx-node` DaemonSet 通过 IRSA 执行底层挂载：`CREDENTIALS_TYPE=IRSA`，且 `ROLE_NAME_FOR_IRSA` 非空。MLflow Pod、PV 和 PVC 都不包含 AK/SK 或 Secret 引用。部署前必须确认 `fsx.csi.volcengine.com` CSIDriver 存在，并且 `kube-system/csi-fsx-node` DaemonSet 全部可用。MLflow Artifact 与 `/mnt/storage/public` 治理数据隔离；开放 Artifact 上传下载不等于允许读取公共或团队训练数据。
 - 公共与团队数据在训练 Pod 中只读；写入和发布通过相应管理员权限完成。平台页面不提供数据下载入口。
 
 ## 文档

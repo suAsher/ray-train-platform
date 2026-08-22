@@ -6,7 +6,7 @@
 - 镜像：`harbor.wellspiking.ai/guofeng.su/mlflow:v3.14.0-full`，values 中同时固定摘要。
 - 命名空间：独立使用 `mlflow-system`，与训练平台控制面隔离。
 - 元数据：独立内置 PostgreSQL StatefulSet，使用独立 20Gi EBS PVC，不复用平台数据库。
-- Artifact：通过 FSX CSI 将 `vke-cluster/ray-train/platform/mlflow-artifacts/` 作为独立 RWX 文件系统根挂载给 MLflow；TOS 凭据只由 CSI agent 使用，MLflow 和 Ray Pod 均不获取 AK/SK。
+- Artifact：通过 FSX CSI 将 `vke-cluster/ray-train/platform/mlflow-artifacts/` 作为独立 RWX 文件系统根挂载给 MLflow。`kube-system/csi-fsx-node` DaemonSet 必须使用 `CREDENTIALS_TYPE=IRSA` 且 `ROLE_NAME_FOR_IRSA` 非空；MLflow Pod、PV、PVC 和 Ray Pod 均不包含 AK/SK 或 Secret 引用。
 - 可用性：2 个副本，跨 CPU 节点硬反亲和，PDB `minAvailable: 1`。
 - 网络：全部为 ClusterIP。平台后端和 Prometheus 可访问 MLflow 5000；带平台托管标签的租户 namespace 只能访问 `mlflow-ingest:8080` 写入网关，不能直连 MLflow。数据库只允许 MLflow 与迁移 Job 访问。
 - 写入边界：网关只开放实验创建、run 创建/更新、参数、指标和 tag 写入所需接口；搜索、列表和 Artifact 下载一律拒绝。平台后端用 HMAC 任务来源标签和数据库归属做二次校验。
@@ -15,6 +15,7 @@
 - 权限策略：原生 MLflow 全功能开放是当前明确策略。所有平台认证用户进入后可查看全平台实验，创建、修改、删除实验、Run 和模型注册条目，并上传、下载 MLflow Artifact；平台只记录入口主体和操作元数据，不做功能裁剪。
 - 数据边界：MLflow Artifact 与治理训练数据隔离。开放 Artifact 上传下载不等于允许下载 `/mnt/storage/public`，也不暴露 TOS AK/SK。训练 Pod 仍只能通过写入网关上报指标，不能借此读取共享 MLflow 数据。
 - 迁移安全：部署先启用临时 NetworkPolicy 保留旧 S3 后端的 TOS egress，再探测 FSX、执行数据库迁移和 Helm `--atomic` 切换。新版本必须通过真实 Artifact CRUD（上传、下载、删除）验收后，才会删除旧 Secret/ConfigMap 并撤销临时 egress。
+- 卷升级：新版使用 `mlflow-artifacts-irsa` PVC 和 `mlflow-artifacts-irsa-pv` PV，不原地修改可能已存在的 Secret 型 PV 不可变字段。新旧卷指向同一个专用 TOS 前缀；旧 PV/PVC 在 Artifact CRUD 验收完前保留为回滚通道。
 - 回滚：Helm rollout 失败时由 `--atomic` 自动回滚；Artifact CRUD 验收失败时自动恢复旧依赖并回滚到部署前 revision。清理失败会恢复旧依赖并保留临时 egress，使运行中的新服务保持可用并为人工回滚留出路径。
 - 并发安全：`deploy.sh` 使用 `mlflow-system/mlflow-deploy` Kubernetes Lease 串行化完整部署、验收、回滚和清理流程。采用 fail-closed 固定锁：任意非空 holder（无论存续多久）都会让第二次部署立即失败，不设过期时间、不自动接管。只有正常完成或已确认活动 Job/Pod 全部结束的既有路径，才会以读取到的 `resourceVersion` 清空自己的 holder；不删除 Lease，也不覆盖新的 holder。每个部署进程无条件生成新的随机 run-id，不接受外部固定值；每次 Job create 另外生成随机 request nonce，只有 name、run-id、nonce 与 UID 均匹配才能从不确定的 create 响应中恢复。
 - Job 清理栅栏：失败 Job 使用 UID precondition + `Foreground` 删除，并依次确认 Job 已 NotFound、`job-name` + `deploy-run-id` 对应 Pod 已全部消失。删除、等待或最终确认任一失败，都会保留 Lease 并转人工处置，不允许下一次部署与未终止 Job 交叉执行。
@@ -27,6 +28,8 @@ bash ops/mlflow/deploy.sh
 ```
 
 部署身份除原有资源权限外，还必须能在 `mlflow-system` 中 get/create/update Lease，并能通过 Kubernetes API 删除带 UID precondition 的本次 Job、等待 Job 删除以及 list/watch 其 Pod。不要设置或依赖 `MLFLOW_DEPLOY_RUN_ID`；部署脚本会忽略该类外部值并自行生成身份。不要删除 Lease，也不要在部署进程存活或一次性 Job/Pod 仍在运行时手工解锁。
+
+部署脚本会在写入任何资源前确认 `fsx.csi.volcengine.com` CSIDriver 存在、`csi-fsx-node` DaemonSet 全部可用，并校验上述 IRSA 参数。预检失败时应先修复集群 FSX CSI/IRSA，不能改用静态 AK/SK Secret 绕过。
 
 ### 崩溃残留 Lease 的安全手动解锁
 

@@ -45,7 +45,7 @@ mlflow:
 extraVolumes:
   - name: mlflow-artifacts
     persistentVolumeClaim:
-      claimName: mlflow-artifacts
+      claimName: mlflow-artifacts-irsa
 extraVolumeMounts:
   - name: mlflow-artifacts
     mountPath: /mlflow-artifacts

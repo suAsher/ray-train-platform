@@ -174,7 +174,7 @@ class DocumentationContractTest(unittest.TestCase):
         user_guide = (ROOT / "docs" / "USER_GUIDE.md").read_text(encoding="utf-8")
         self.assertIn("**打开 MLflow 管理界面**", user_guide)
 
-    def test_mlflow_artifacts_are_separate_from_governed_training_data(self) -> None:
+    def test_mlflow_artifacts_use_secretless_fsx_irsa(self) -> None:
         contents = {
             path: path.read_text(encoding="utf-8") for path in MLFLOW_PUBLIC_DOCS
         }
@@ -195,16 +195,22 @@ class DocumentationContractTest(unittest.TestCase):
         ):
             self.assertIn("静态 PV/PVC", document)
             self.assertIn("`fsx-agent`", document)
-            self.assertIn("`ray-train-platform/tos-fsx-credentials`", document)
-            self.assertIn("凭据不进入 MLflow Pod", document)
+            self.assertIn("`CREDENTIALS_TYPE=IRSA`", document)
+            self.assertIn("`ROLE_NAME_FOR_IRSA` 非空", document)
+            self.assertIn("CSIDriver", document)
+            self.assertIn("DaemonSet 全部可用", document)
 
         for marker in (
             "MLflow Pod 只看到 `/mlflow-artifacts` 挂载根",
             "不注入 TOS/AWS AK/SK",
+            "MLflow Pod、PV 和 PVC 都不包含 AK/SK 或 Secret 引用",
             "MLflow Artifact 与 `/mnt/storage/public` 治理数据隔离",
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, combined)
+
+        self.assertNotIn("ray-train-platform/tos-fsx-credentials", combined)
+        self.assertIn("`mlflow-artifacts-irsa`", contents[ROOT / "docs" / "BUILD_AND_DEPLOY.md"])
 
         for obsolete in (
             "对象存储 Artifact 根目录",

@@ -289,7 +289,11 @@ bash ops/mlflow/verify.sh
 
 MLflow 保持 ClusterIP。普通训练 Pod 只访问写入网关；实验中心是平台筛选视图，原生管理界面统一从 `https://raytrain.wellspiking.ai/mlflow/` 访问。该路径先到 Frontend，再由 Backend 完成平台鉴权和反向代理；MLflow 自身不创建 NodePort、不创建独立 Ingress。
 
-MLflow Artifact 存储必须使用 `vke-cluster/ray-train/platform/mlflow-artifacts/` 专用前缀的 FSX CSI 静态 PV/PVC。MLflow Pod 只看到 `/mlflow-artifacts` 挂载根，并以 `file:///mlflow-artifacts` 作为 Artifact destination；不允许 Pod 直连对象存储，也不注入 TOS/AWS AK/SK。FSX CSI 的 `fsx-agent` 使用已有平台 Secret `ray-train-platform/tos-fsx-credentials` 完成底层挂载，凭据不进入 MLflow Pod；不得将该 Secret 复制到 `mlflow-system` 或通过环境变量绕过此边界。
+MLflow Artifact 存储必须使用 `vke-cluster/ray-train/platform/mlflow-artifacts/` 专用前缀的 FSX CSI 静态 PV/PVC。MLflow Pod 只看到 `/mlflow-artifacts` 挂载根，并以 `file:///mlflow-artifacts` 作为 Artifact destination；不允许 Pod 直连对象存储，也不注入 TOS/AWS AK/SK。底层挂载由集群 `csi-fsx-node` DaemonSet 中的 `fsx-agent` 通过 IRSA 完成：`CREDENTIALS_TYPE=IRSA`，且 `ROLE_NAME_FOR_IRSA` 非空。MLflow Pod、PV 和 PVC 都不包含 AK/SK 或 Secret 引用，不得把静态 TOS 凭据复制到 `mlflow-system` 或通过环境变量绕过该边界。
+
+`ops/mlflow/deploy.sh` 在任何资源变更前执行失败关闭的存储预检：确认 `fsx.csi.volcengine.com` CSIDriver 存在；确认 `kube-system/csi-fsx-node` DaemonSet 全部可用；并校验其 driver 容器为 `CREDENTIALS_TYPE=IRSA`、`ROLE_NAME_FOR_IRSA` 非空。任一条件不满足都必须先修复集群 FSX CSI/IRSA，不能改用 AK/SK Secret 继续部署。
+
+新版使用 `mlflow-artifacts-irsa` PVC 和 `mlflow-artifacts-irsa-pv` PV，与旧版 Secret 型卷使用不同的 Kubernetes 资源名，但仍指向同一个专用 TOS 前缀。这避免了修改不可变 PV 源；旧 PV/PVC 在新版 Artifact CRUD 验收完成前保留为回滚通道，不得在发版前手工删除。
 
 原生 MLflow 全功能开放是当前明确策略：所有平台认证用户都能管理全平台实验、Run、模型注册条目和 MLflow Artifact。部署验收必须覆盖登录票据、共享 CRUD、Artifact 上传下载、PVC 绑定、挂载根限定、Pod 无对象存储凭据和同源保护。MLflow Artifact 与 `/mnt/storage/public` 治理数据隔离；开放 Artifact 不允许读取公共或团队训练数据。详细拓扑、数据库、Artifact 存储和 NetworkPolicy 约束见 [MLflow 运维说明](../ops/mlflow/README.md)。
 

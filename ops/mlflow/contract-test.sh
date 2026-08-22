@@ -13,6 +13,7 @@ readonly POLICY="${ROOT_DIR}/ops/mlflow/30-policy.yaml"
 readonly SMOKE="${ROOT_DIR}/ops/mlflow/40-smoke.yaml"
 readonly DEPLOY="${ROOT_DIR}/ops/mlflow/deploy.sh"
 readonly CONCURRENCY_TEST="${ROOT_DIR}/ops/mlflow/deploy-concurrency-contract-test.sh"
+readonly FSX_IRSA_TEST="${ROOT_DIR}/ops/mlflow/fsx-irsa-contract-test.sh"
 readonly VERIFY="${ROOT_DIR}/ops/mlflow/verify.sh"
 readonly README="${ROOT_DIR}/ops/mlflow/README.md"
 readonly VENDORED_CHART="${ROOT_DIR}/helm/vendor/mlflow-0.1.0.tgz"
@@ -53,28 +54,30 @@ if grep -Eq 'mlflow-aws-config|aws-config|/etc/mlflow/aws' "$VALUES"; then
 fi
 grep -Fq 'artifactsDestination: file:///mlflow-artifacts' "$VALUES"
 grep -Fq 'name: mlflow-artifacts' "$VALUES"
-grep -Fq 'claimName: mlflow-artifacts' "$VALUES"
+grep -Fq 'claimName: mlflow-artifacts-irsa' "$VALUES"
 grep -Fq 'mountPath: /mlflow-artifacts' "$VALUES"
 grep -Fq 'kind: PersistentVolume' "$STORAGE"
-grep -Fq 'name: mlflow-artifacts-pv' "$STORAGE"
+grep -Fq 'name: mlflow-artifacts-irsa-pv' "$STORAGE"
 grep -Fq 'persistentVolumeReclaimPolicy: Retain' "$STORAGE"
-grep -Fq 'volumeHandle: mlflow-artifacts-pv' "$STORAGE"
+grep -Fq 'volumeHandle: mlflow-artifacts-irsa-pv' "$STORAGE"
 grep -Fq 'driver: fsx.csi.volcengine.com' "$STORAGE"
 grep -Fq 'bucket: vke-cluster' "$STORAGE"
 grep -Fq 'path: /ray-train/platform/mlflow-artifacts' "$STORAGE"
-grep -Fq 'secretName: tos-fsx-credentials' "$STORAGE"
-grep -Fq 'secretNamespace: ray-train-platform' "$STORAGE"
+if grep -Eq 'secret(Name|Namespace):|tos-fsx-credentials|AWS_|TOS_' "$STORAGE"; then
+  echo 'MLflow artifact PV must use the cluster FSX CSI IRSA identity without static credentials' >&2
+  exit 1
+fi
 grep -Fq 'tos_allow_delete=true' "$STORAGE"
 grep -Fq 'uid=1000' "$STORAGE"
 grep -Fq 'gid=1000' "$STORAGE"
 grep -Fq 'dir_mode=770' "$STORAGE"
 grep -Fq 'file_mode=660' "$STORAGE"
-grep -Fq 'name: mlflow-artifacts' "$STORAGE"
+grep -Fq 'name: mlflow-artifacts-irsa' "$STORAGE"
 grep -Fq 'namespace: mlflow-system' "$STORAGE"
 grep -Fq 'ReadWriteMany' "$STORAGE"
 grep -Fq 'storageClassName: ""' "$STORAGE"
-grep -Fq 'volumeName: mlflow-artifacts-pv' "$STORAGE"
-grep -Fq 'claimName: mlflow-artifacts' "$BOOTSTRAP"
+grep -Fq 'volumeName: mlflow-artifacts-irsa-pv' "$STORAGE"
+grep -Fq 'claimName: mlflow-artifacts-irsa' "$BOOTSTRAP"
 grep -Fq 'mountPath: /mlflow-artifacts' "$BOOTSTRAP"
 grep -Fq 'rm -f "$probe"' "$BOOTSTRAP"
 grep -Fq 'test ! -e "$probe"' "$BOOTSTRAP"
@@ -82,9 +85,17 @@ if grep -Eq 'tos-credentials|AWS_|TOS_' "$BOOTSTRAP"; then
   echo 'MLflow storage bootstrap must probe the PVC without object-store credentials' >&2
   exit 1
 fi
-grep -Fq 'get secret tos-fsx-credentials' "$DEPLOY"
+grep -Fq 'verify_fsx_irsa' "$DEPLOY"
+grep -Fq 'get csidriver fsx.csi.volcengine.com' "$DEPLOY"
+grep -Fq 'get daemonset csi-fsx-node' "$DEPLOY"
+grep -Fq 'CREDENTIALS_TYPE' "$DEPLOY"
+grep -Fq 'ROLE_NAME_FOR_IRSA' "$DEPLOY"
+if grep -Fq 'get secret tos-fsx-credentials' "$DEPLOY"; then
+  echo 'MLflow deploy must not require a static FSX credential Secret' >&2
+  exit 1
+fi
 grep -Fq '15-artifact-storage.yaml' "$DEPLOY"
-grep -Fq 'pvc/mlflow-artifacts' "$DEPLOY"
+grep -Fq 'pvc/mlflow-artifacts-irsa' "$DEPLOY"
 helm_line="$(grep -nF 'helm upgrade --install' "$DEPLOY" | cut -d: -f1)"
 legacy_delete_line="$(grep -nF 'delete secret tos-credentials' "$DEPLOY" | cut -d: -f1)"
 strict_policy_line="$(grep -nF 'kubectl apply -f "${ROOT_DIR}/ops/mlflow/30-policy.yaml"' "$DEPLOY" | cut -d: -f1)"
@@ -95,6 +106,7 @@ fi
 
 grep -Fq '29-storage-migration-policy.yaml' "$DEPLOY"
 bash "$CONCURRENCY_TEST"
+bash "$FSX_IRSA_TEST"
 grep -Fq 'run_job "$(deployment_job_name mlflow-artifact-storage-probe)"' "$DEPLOY"
 grep -Fq 'run_job "$(deployment_job_name mlflow-db-upgrade)"' "$DEPLOY"
 grep -Fq 'run_job "$(deployment_job_name mlflow-artifact-acceptance)"' "$DEPLOY"
@@ -119,7 +131,7 @@ grep -Fq 'cleanup_legacy_dependencies' "$DEPLOY"
 }
 
 storage_apply_line="$(grep -nF 'kubectl apply -f "$ARTIFACT_STORAGE"' "$DEPLOY" | cut -d: -f1)"
-storage_bound_line="$(grep -nF 'pvc/mlflow-artifacts' "$DEPLOY" | cut -d: -f1)"
+storage_bound_line="$(grep -nF 'pvc/mlflow-artifacts-irsa' "$DEPLOY" | cut -d: -f1)"
 transition_apply_line="$(grep -nF 'kubectl apply -f "$TRANSITION_POLICY"' "$DEPLOY" | cut -d: -f1)"
 probe_line="$(grep -nF 'run_job "$(deployment_job_name mlflow-artifact-storage-probe)"' "$DEPLOY" | cut -d: -f1)"
 migration_line="$(grep -nF 'run_job "$(deployment_job_name mlflow-db-upgrade)"' "$DEPLOY" | cut -d: -f1)"
@@ -221,12 +233,14 @@ grep -Fq 'containers[?(@.name=="mlflow")].args' "$VERIFY" || {
   echo 'MLflow live verification must inspect the mlflow container args' >&2
   exit 1
 }
-grep -Fq 'pvc mlflow-artifacts' "$VERIFY"
+grep -Fq 'pvc mlflow-artifacts-irsa' "$VERIFY"
 grep -Fq 'claimName' "$VERIFY"
 grep -Fq 'mountPath' "$VERIFY"
 grep -Fq 'MLFLOW_ARTIFACTS_DESTINATION' "$VERIFY"
 grep -Fq 'file:///mlflow-artifacts' "$VERIFY"
 grep -Fq 'AWS_|TOS_|MLFLOW_(S3|BOTO)' "$VERIFY"
+grep -Fq 'get pv mlflow-artifacts-irsa-pv' "$VERIFY"
+grep -Fq 'secretName|secretNamespace|tos-fsx-credentials' "$VERIFY"
 grep -Fq 'networkpolicy mlflow-storage-migration' "$VERIFY"
 grep -Fq '/proxy/mlflow/health' "$VERIFY"
 grep -Fq ".spec.replicas" "$VERIFY"
@@ -235,6 +249,11 @@ if grep -Fq 'get ingress' "$VERIFY"; then
   exit 1
 fi
 grep -Fq 'FSX CSI' "$README"
+grep -Fq 'CREDENTIALS_TYPE=IRSA' "$README"
+grep -Fq 'ROLE_NAME_FOR_IRSA' "$README"
+grep -Fq 'DaemonSet' "$README"
+grep -Fq 'mlflow-artifacts-irsa' "$README"
+grep -Fq '回滚通道' "$README"
 grep -Fq 'Artifact CRUD' "$README"
 grep -Fq '自动回滚' "$README"
 echo 'MLflow delivery contract verified'

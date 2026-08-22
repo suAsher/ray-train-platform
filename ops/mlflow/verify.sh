@@ -33,10 +33,15 @@ done <<<"$services"
   echo "MLflow ingest gateway does not have two available replicas" >&2
   exit 1
 }
-[[ "$(kubectl -n "$NAMESPACE" get pvc mlflow-artifacts -o jsonpath='{.status.phase}')" == "Bound" ]] || {
+[[ "$(kubectl -n "$NAMESPACE" get pvc mlflow-artifacts-irsa -o jsonpath='{.status.phase}')" == "Bound" ]] || {
   echo "MLflow artifact PVC is not Bound" >&2
   exit 1
 }
+artifact_pv="$(kubectl get pv mlflow-artifacts-irsa-pv -o yaml)"
+if grep -Eq 'secretName|secretNamespace|tos-fsx-credentials' <<<"$artifact_pv"; then
+  echo 'MLflow artifact PV contains a static FSX credential reference' >&2
+  exit 1
+fi
 mlflow_command="$(kubectl -n "$NAMESPACE" get deployment mlflow -o jsonpath='{.spec.template.spec.containers[?(@.name=="mlflow")].command}')"
 mlflow_args="$(kubectl -n "$NAMESPACE" get deployment mlflow -o jsonpath='{.spec.template.spec.containers[?(@.name=="mlflow")].args}')"
 grep -Fq -- '--static-prefix=/mlflow' <<<"${mlflow_command} ${mlflow_args}" || {
@@ -44,7 +49,7 @@ grep -Fq -- '--static-prefix=/mlflow' <<<"${mlflow_command} ${mlflow_args}" || {
   exit 1
 }
 artifact_claim="$(kubectl -n "$NAMESPACE" get deployment mlflow -o jsonpath='{.spec.template.spec.volumes[?(@.name=="mlflow-artifacts")].persistentVolumeClaim.claimName}')"
-[[ "$artifact_claim" == "mlflow-artifacts" ]] || {
+[[ "$artifact_claim" == "mlflow-artifacts-irsa" ]] || {
   echo "MLflow deployment does not reference the artifact PVC: ${artifact_claim}" >&2
   exit 1
 }

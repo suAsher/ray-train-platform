@@ -235,7 +235,7 @@ if int(os.getenv("RANK", "0")) == 0 and mlflow.active_run():
 
 训练代码默认只把标量参数和指标写入 MLflow。模型、Checkpoint、配置快照和正式训练结果仍应写入 `PLATFORM_OUTPUT_PATH`，再从“我的运行结果”查看；普通训练 Pod 的 MLflow 写入网关不提供 Artifact 下载能力。
 
-MLflow Artifact 与 `/mnt/storage/public` 治理数据隔离。Artifact 底层存放在 `vke-cluster/ray-train/platform/mlflow-artifacts/` 专用前缀，由 FSX CSI 静态 PV/PVC 只向 MLflow 发布为 `/mlflow-artifacts`。MLflow Pod 只看到 `/mlflow-artifacts` 挂载根，不注入 TOS/AWS AK/SK；FSX CSI 的 `fsx-agent` 使用平台 Secret `ray-train-platform/tos-fsx-credentials`，但凭据不进入 MLflow Pod。
+MLflow Artifact 与 `/mnt/storage/public` 治理数据隔离。Artifact 底层存放在 `vke-cluster/ray-train/platform/mlflow-artifacts/` 专用前缀，由 FSX CSI 静态 PV/PVC 只向 MLflow 发布为 `/mlflow-artifacts`。MLflow Pod 只看到 `/mlflow-artifacts` 挂载根，不注入 TOS/AWS AK/SK。底层挂载由集群 `csi-fsx-node` 通过 IRSA 完成（`CREDENTIALS_TYPE=IRSA`、`ROLE_NAME_FOR_IRSA` 非空）；MLflow Pod、PV 和 PVC 都不包含 AK/SK 或 Secret 引用。平台管理员会在部署前确认 `fsx.csi.volcengine.com` CSIDriver 存在，并且 `kube-system/csi-fsx-node` DaemonSet 全部可用；用户无需配置任何对象存储凭据。
 
 原生界面允许上传、下载 MLflow Artifact，不等于允许下载公共或团队训练数据，也不会把受治理的输入变成可下载对象。Artifact 仅用于明确上传到 MLflow 的实验附件；受治理的训练输入继续通过只读挂载访问。完整可运行示例见仓库 `examples/mlflow/train.py`。
 

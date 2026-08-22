@@ -26,6 +26,7 @@ main() {
   [[ -f "$CHART" ]] || { echo "missing vendored chart: ${CHART}" >&2; exit 1; }
   [[ "$(sha256sum "$CHART" | awk '{print $1}')" == "$CHART_SHA256" ]] || { echo "vendored MLflow chart checksum mismatch" >&2; exit 1; }
   grep -Fq '@sha256:' "$VALUES" || { echo "MLflow image must be pinned by digest" >&2; exit 1; }
+  verify_fsx_irsa
 
   kubectl apply -f "${ROOT_DIR}/ops/mlflow/00-namespace.yaml" >/dev/null
   initialize_deploy_identity
@@ -36,11 +37,6 @@ main() {
   }
 
   copy_secret harbor-registry
-
-  kubectl -n "$PLATFORM_NAMESPACE" get secret tos-fsx-credentials >/dev/null 2>&1 || {
-    echo "missing CSI credential: ${PLATFORM_NAMESPACE}/tos-fsx-credentials" >&2
-    exit 1
-  }
 
   # NetworkPolicies are additive. Install the transition policy first so a
   # previously tightened policy cannot strand a rolled-back S3-backed Pod.
@@ -57,7 +53,7 @@ main() {
   kubectl apply -f "$ARTIFACT_STORAGE" >/dev/null
   kubectl -n "$NAMESPACE" wait \
     --for=jsonpath='{.status.phase}'=Bound \
-    pvc/mlflow-artifacts \
+    pvc/mlflow-artifacts-irsa \
     --timeout="$TIMEOUT"
 
   # Probe the FSX mount while the old release and all of its dependencies are
@@ -139,6 +135,36 @@ main() {
   fi
 
   bash "${ROOT_DIR}/ops/mlflow/verify.sh"
+}
+
+verify_fsx_irsa() {
+  local fsx_daemonset
+
+  kubectl get csidriver fsx.csi.volcengine.com >/dev/null 2>&1 || {
+    echo 'missing CSIDriver fsx.csi.volcengine.com' >&2
+    return 1
+  }
+  if ! fsx_daemonset="$(kubectl -n kube-system get daemonset csi-fsx-node -o json)"; then
+    echo 'missing FSX CSI node DaemonSet kube-system/csi-fsx-node' >&2
+    return 1
+  fi
+  if ! jq -e '
+    (.status.desiredNumberScheduled // 0) > 0 and
+    (.status.numberAvailable // 0) == (.status.desiredNumberScheduled // 0)
+  ' <<<"$fsx_daemonset" >/dev/null; then
+    echo 'FSX CSI node DaemonSet is not fully available' >&2
+    return 1
+  fi
+  if ! jq -e '
+    any(.spec.template.spec.containers[]?;
+      .name == "driver" and
+      any(.env[]?; .name == "CREDENTIALS_TYPE" and ((.value // "") | ascii_downcase) == "irsa") and
+      any(.env[]?; .name == "ROLE_NAME_FOR_IRSA" and ((.value // "") | length > 0))
+    )
+  ' <<<"$fsx_daemonset" >/dev/null; then
+    echo 'FSX CSI node driver must use IRSA with a non-empty ROLE_NAME_FOR_IRSA' >&2
+    return 1
+  fi
 }
 
 initialize_deploy_identity() {

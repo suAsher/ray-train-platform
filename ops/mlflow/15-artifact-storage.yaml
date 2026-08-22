@@ -1,9 +1,10 @@
-# This static volume exposes only MLflow's dedicated TOS prefix. The CSI node
-# agent consumes the credential; neither the PVC nor the MLflow Pod receives it.
+# This static volume exposes only MLflow's dedicated TOS prefix. The FSX CSI
+# node agent authenticates with its cluster IRSA role; neither the PV/PVC nor
+# the MLflow Pod receives a static credential.
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: mlflow-artifacts-pv
+  name: mlflow-artifacts-irsa-pv
   labels:
     app.kubernetes.io/name: mlflow
     app.kubernetes.io/component: artifact-storage
@@ -27,20 +28,18 @@ spec:
     driver: fsx.csi.volcengine.com
     # Keep this cluster-wide handle stable so repeated applies reuse the same
     # prefix-scoped volume instead of provisioning a second artifact root.
-    volumeHandle: mlflow-artifacts-pv
+    volumeHandle: mlflow-artifacts-irsa-pv
     volumeAttributes:
       type: TOS
       server: tos-cn-shanghai.ivolces.com
       region: cn-shanghai
       bucket: vke-cluster
       path: /ray-train/platform/mlflow-artifacts
-      secretName: tos-fsx-credentials
-      secretNamespace: ray-train-platform
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: mlflow-artifacts
+  name: mlflow-artifacts-irsa
   namespace: mlflow-system
   labels:
     app.kubernetes.io/name: mlflow
@@ -51,7 +50,7 @@ spec:
     - ReadWriteMany
   volumeMode: Filesystem
   storageClassName: ""
-  volumeName: mlflow-artifacts-pv
+  volumeName: mlflow-artifacts-irsa-pv
   resources:
     requests:
       storage: 500Gi
