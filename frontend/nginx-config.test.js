@@ -32,3 +32,21 @@ test('health endpoints reach the backend instead of falling back to the SPA', as
     assert.match(block, /proxy_pass http:\/\/ray-train-backend:8080/)
   }
 })
+
+test('MLflow stays behind the backend proxy with upload-safe streaming settings', async () => {
+  const config = await readFile(configURL, 'utf8')
+  const block = locationBlock(config, '/mlflow/')
+
+  assert.match(block, /proxy_pass http:\/\/ray-train-backend:8080\/mlflow\/;/)
+  assert.match(block, /proxy_set_header Host \$http_host;/)
+  assert.match(block, /proxy_set_header X-Real-IP \$remote_addr;/)
+  assert.match(block, /proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;/)
+  assert.match(block, /proxy_set_header X-Forwarded-Proto \$scheme;/)
+  assert.match(block, /proxy_http_version 1\.1;/)
+  assert.match(block, /proxy_read_timeout 3600s;/)
+  assert.match(block, /proxy_send_timeout 3600s;/)
+  assert.match(block, /proxy_request_buffering off;/)
+  assert.match(block, /proxy_buffering off;/)
+  assert.match(block, /client_max_body_size 2048m;/)
+  assert.doesNotMatch(block, /mlflow\.mlflow-system|NodePort/i)
+})

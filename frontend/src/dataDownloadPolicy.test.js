@@ -6,7 +6,7 @@ const dataPage = new URL('./views/DataCache/index.vue', import.meta.url)
 const artifactBrowser = new URL('./components/JobArtifactBrowser.vue', import.meta.url)
 const experimentPage = new URL('./views/Experiments/index.vue', import.meta.url)
 
-test('data, training artifact, and experiment browsers do not render download actions', async () => {
+test('governed data and training artifact browsers do not render download actions', async () => {
   const [dataPageSource, artifactBrowserSource, experimentPageSource] = await Promise.all([
     readFile(dataPage, 'utf8'),
     readFile(artifactBrowser, 'utf8'),
@@ -18,7 +18,12 @@ test('data, training artifact, and experiment browsers do not render download ac
   assert.equal(artifactBrowserSource.includes('downloadJobArtifact'), false)
   assert.equal(artifactBrowserSource.includes('@click="download('), false)
   assert.equal(artifactBrowserSource.includes('请下载后查看'), false)
-  assert.equal(experimentPageSource.toLowerCase().includes('artifact'), false)
-  assert.equal(experimentPageSource.toLowerCase().includes('download'), false)
-  assert.equal(experimentPageSource.includes('下载'), false)
+
+  // The separate native MLflow surface intentionally supports Artifact upload
+  // and download. It must not add a direct governed training-data download path
+  // to the filtered Experiment Center itself.
+  assert.equal(experimentPageSource.includes('downloadJobArtifact'), false)
+  assert.equal(experimentPageSource.includes('/api/v1/data-spaces'), false)
+  assert.equal(experimentPageSource.includes('/api/v1/jobs/') && experimentPageSource.includes('/artifacts'), false)
+  assert.match(experimentPageSource, /不会开放公开训练数据下载/)
 })

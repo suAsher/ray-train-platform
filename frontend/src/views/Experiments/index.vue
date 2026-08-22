@@ -12,8 +12,30 @@
           </div>
         </div>
       </div>
-      <el-button :loading="loading" icon="Refresh" class="!rounded-xl" @click="loadExperiments">刷新</el-button>
+      <div class="flex flex-wrap items-center gap-3">
+        <el-button
+          type="primary"
+          :loading="dashboardOpening"
+          :disabled="dashboardOpening"
+          class="!rounded-xl"
+          @click="openMLflowDashboard"
+        >打开 MLflow 管理界面</el-button>
+        <el-button :loading="loading" icon="Refresh" class="!rounded-xl" @click="loadExperiments">刷新</el-button>
+      </div>
     </section>
+
+    <el-alert
+      type="warning"
+      show-icon
+      :closable="false"
+      class="!rounded-xl"
+    >
+      <template #title>
+        <span class="text-xs leading-5">
+          MLflow 原生界面是全局共享视图：所有已登录平台用户都可以查看和变更共享实验；创建、修改、删除、模型注册表以及 MLflow Artifact 上传和下载均已启用。这不会开放公开训练数据下载。
+        </span>
+      </template>
+    </el-alert>
 
     <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
       <div v-for="card in summaryCards" :key="card.label" class="stat-tile panel-hover">
@@ -118,8 +140,10 @@
 </template>
 
 <script setup>
+import { ElMessage } from 'element-plus'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 
+import { requestMLflowDashboardAccess } from '../../api/mlflowDashboard.js'
 import {
   fetchExperimentCatalog,
   formatExperimentDuration,
@@ -132,6 +156,7 @@ const CLOCK_REFRESH_MS = 30_000
 
 const experiments = ref([])
 const loading = ref(false)
+const dashboardOpening = ref(false)
 const errorMessage = ref('')
 const clockMs = ref(Date.now())
 let clockTimer
@@ -156,6 +181,28 @@ async function loadExperiments() {
     errorMessage.value = error?.message || '无法读取实验记录'
   } finally {
     loading.value = false
+  }
+}
+
+async function openMLflowDashboard() {
+  if (dashboardOpening.value) return
+
+  const popup = window.open('about:blank', '_blank', 'noopener,noreferrer')
+  if (!popup) {
+    ElMessage.warning('浏览器阻止了新标签页，请允许本站打开新标签页后重试')
+    return
+  }
+  if ('opener' in popup) popup.opener = null
+
+  dashboardOpening.value = true
+  try {
+    const accessURL = await requestMLflowDashboardAccess()
+    popup.location.replace(accessURL)
+  } catch (error) {
+    popup.close()
+    ElMessage.error(error?.message || '无法打开 MLflow 管理界面')
+  } finally {
+    dashboardOpening.value = false
   }
 }
 
