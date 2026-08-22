@@ -37,9 +37,10 @@ if [[ "$mlflow_accelerator_selector" != "nvidia-rtx-4090" || "$mlflow_pool_selec
   echo 'MLflow deployment is not restricted to the production GPU worker pool' >&2
   exit 1
 fi
-mlflow_pods="$(kubectl -n "$NAMESPACE" get pods -l 'app.kubernetes.io/name=mlflow,app.kubernetes.io/instance=mlflow' -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.nodeName}{"\n"}{end}')"
-while IFS=$'\t' read -r pod_name node_name; do
+mlflow_pods="$(kubectl -n "$NAMESPACE" get pods -l 'app.kubernetes.io/name=mlflow,app.kubernetes.io/instance=mlflow' -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.nodeName}{"\t"}{.metadata.deletionTimestamp}{"\n"}{end}')"
+while IFS=$'\t' read -r pod_name node_name deletion_timestamp; do
   [[ -n "$pod_name" && -n "$node_name" ]] || continue
+  [[ -n "$deletion_timestamp" ]] && continue
   node_accelerator="$(kubectl get node "$node_name" -o jsonpath='{.metadata.labels.accelerator}')"
   node_pool="$(kubectl get node "$node_name" -o jsonpath='{.metadata.labels.platform\.wellspiking\.ai/gpu-pool}')"
   if [[ "$node_accelerator" != "nvidia-rtx-4090" || "$node_pool" != "production" ]]; then
