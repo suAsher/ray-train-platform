@@ -11,7 +11,13 @@ readonly ARTIFACT_STORAGE="${ROOT_DIR}/ops/mlflow/15-artifact-storage.yaml"
 readonly ARTIFACT_ACCEPTANCE="${ROOT_DIR}/ops/mlflow/25-artifact-acceptance.yaml"
 readonly TRANSITION_POLICY="${ROOT_DIR}/ops/mlflow/29-storage-migration-policy.yaml"
 readonly TIMEOUT="${MLFLOW_DEPLOY_TIMEOUT:-15m}"
+readonly LEASE_NAME="mlflow-deploy"
 readonly CHART_SHA256="db32bf8f17be693a59f8c440d47a97fbea5a93c02d2b5e9ee1761efee50597e8"
+
+DEPLOY_RUN_ID="${MLFLOW_DEPLOY_RUN_ID:-}"
+LEASE_HOLDER=""
+LEASE_ACQUIRED=false
+LEASE_RELEASE_BLOCKED=false
 
 main() {
   for command in kubectl helm grep sha256sum jq openssl base64; do
@@ -22,6 +28,13 @@ main() {
   grep -Fq '@sha256:' "$VALUES" || { echo "MLflow image must be pinned by digest" >&2; exit 1; }
 
   kubectl apply -f "${ROOT_DIR}/ops/mlflow/00-namespace.yaml" >/dev/null
+  initialize_deploy_identity
+  install_deploy_traps
+  acquire_deploy_lease || {
+    echo 'another MLflow deployment is active or the deployment Lease could not be acquired' >&2
+    exit 1
+  }
+
   copy_secret harbor-registry
 
   kubectl -n "$PLATFORM_NAMESPACE" get secret tos-fsx-credentials >/dev/null 2>&1 || {
@@ -49,7 +62,7 @@ main() {
 
   # Probe the FSX mount while the old release and all of its dependencies are
   # still untouched.
-  run_job mlflow-artifact-storage-probe "${ROOT_DIR}/ops/mlflow/20-bootstrap.yaml"
+  run_job "$(deployment_job_name mlflow-artifact-storage-probe)" "${ROOT_DIR}/ops/mlflow/20-bootstrap.yaml"
 
   # Generate the dedicated database credential once. Re-deployments preserve it.
   if ! kubectl -n "$NAMESPACE" get secret mlflow-database >/dev/null 2>&1; then
@@ -81,7 +94,7 @@ main() {
   kubectl -n "$NAMESPACE" rollout status statefulset/mlflow-postgres --timeout="$TIMEOUT"
 
   # Database migrations are serialized before the two new server replicas start.
-  run_job mlflow-db-upgrade "${ROOT_DIR}/ops/mlflow/22-db-upgrade.yaml"
+  run_job "$(deployment_job_name mlflow-db-upgrade)" "${ROOT_DIR}/ops/mlflow/22-db-upgrade.yaml"
 
   local previous_revision=""
   if helm -n "$NAMESPACE" status "$RELEASE" >/dev/null 2>&1; then
@@ -111,7 +124,7 @@ main() {
 
   # A healthy Pod is insufficient: prove the new server can create metadata and
   # upload, download, and delete an artifact through the tracking API.
-  if ! run_job mlflow-artifact-acceptance "$ARTIFACT_ACCEPTANCE"; then
+  if ! run_job "$(deployment_job_name mlflow-artifact-acceptance)" "$ARTIFACT_ACCEPTANCE"; then
     if [[ -n "$previous_revision" ]] && rollback_to_revision "$previous_revision"; then
       echo "artifact acceptance failed; restored Helm revision ${previous_revision}" >&2
     else
@@ -126,6 +139,145 @@ main() {
   fi
 
   bash "${ROOT_DIR}/ops/mlflow/verify.sh"
+}
+
+initialize_deploy_identity() {
+  if [[ -z "$DEPLOY_RUN_ID" ]]; then
+    DEPLOY_RUN_ID="$(openssl rand -hex 8)"
+  fi
+  if ! [[ "$DEPLOY_RUN_ID" =~ ^[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?$ ]]; then
+    echo 'MLFLOW_DEPLOY_RUN_ID must be a lowercase DNS label of at most 20 characters' >&2
+    return 1
+  fi
+  LEASE_HOLDER="mlflow-deploy-${DEPLOY_RUN_ID}"
+}
+
+deployment_job_name() {
+  local name="${1}-${DEPLOY_RUN_ID}"
+  if (( ${#name} > 63 )); then
+    echo "generated Job name exceeds 63 characters: ${name}" >&2
+    return 1
+  fi
+  printf '%s' "$name"
+}
+
+acquire_deploy_lease() {
+  local existing_lease
+  local current_holder
+  local lease_payload
+  local acquired_lease
+
+  if ! existing_lease="$(kubectl -n "$NAMESPACE" get lease "$LEASE_NAME" --ignore-not-found -o json)"; then
+    echo "failed to inspect deployment Lease ${NAMESPACE}/${LEASE_NAME}" >&2
+    return 1
+  fi
+  if [[ -z "$existing_lease" ]]; then
+    if ! lease_payload="$(jq -n \
+      --arg name "$LEASE_NAME" \
+      --arg namespace "$NAMESPACE" \
+      --arg holder "$LEASE_HOLDER" \
+      '{apiVersion:"coordination.k8s.io/v1",kind:"Lease",metadata:{name:$name,namespace:$namespace},spec:{holderIdentity:$holder,leaseTransitions:0}}')"; then
+      echo 'failed to render deployment Lease' >&2
+      return 1
+    fi
+    if ! acquired_lease="$(kubectl -n "$NAMESPACE" create -f - -o json <<<"$lease_payload")"; then
+      echo "failed to create deployment Lease ${NAMESPACE}/${LEASE_NAME}; another deploy may have won the race" >&2
+      return 1
+    fi
+    LEASE_ACQUIRED=true
+  else
+    if ! current_holder="$(jq -er '.spec.holderIdentity // ""' <<<"$existing_lease")"; then
+      echo "deployment Lease ${NAMESPACE}/${LEASE_NAME} has an invalid holderIdentity" >&2
+      return 1
+    fi
+    if [[ -n "$current_holder" ]]; then
+      echo "deployment Lease ${NAMESPACE}/${LEASE_NAME} has non-empty holder ${current_holder}; automatic takeover is disabled" >&2
+      echo 'confirm no MLflow deployment is running, then follow the README manual unlock procedure' >&2
+      return 1
+    fi
+    if ! lease_payload="$(jq \
+      --arg holder "$LEASE_HOLDER" '
+        .spec = (.spec // {}) |
+        .spec.holderIdentity = $holder |
+        .spec.leaseTransitions = ((.spec.leaseTransitions // 0) + 1)
+      ' <<<"$existing_lease")"; then
+      echo 'failed to render deployment Lease takeover' >&2
+      return 1
+    fi
+    if ! acquired_lease="$(kubectl -n "$NAMESPACE" replace -f - -o json <<<"$lease_payload")"; then
+      echo "failed to acquire deployment Lease ${NAMESPACE}/${LEASE_NAME}; resourceVersion changed" >&2
+      return 1
+    fi
+    LEASE_ACQUIRED=true
+  fi
+
+  if ! jq -e --arg name "$LEASE_NAME" --arg holder "$LEASE_HOLDER" \
+    '.metadata.name == $name and .spec.holderIdentity == $holder and (.metadata.resourceVersion | type == "string")' \
+    <<<"$acquired_lease" >/dev/null; then
+    echo "deployment Lease ${NAMESPACE}/${LEASE_NAME} response did not confirm this holder" >&2
+    return 1
+  fi
+  return 0
+}
+
+release_deploy_lease() {
+  local current_lease
+  local current_holder
+  local release_payload
+  local released_lease
+
+  if [[ "$LEASE_ACQUIRED" != true ]]; then
+    return 0
+  fi
+  if ! current_lease="$(kubectl -n "$NAMESPACE" get lease "$LEASE_NAME" -o json)"; then
+    echo "failed to read deployment Lease ${NAMESPACE}/${LEASE_NAME} for release" >&2
+    return 1
+  fi
+  if ! current_holder="$(jq -er '.spec.holderIdentity // ""' <<<"$current_lease")"; then
+    echo "deployment Lease ${NAMESPACE}/${LEASE_NAME} has an invalid holder during release" >&2
+    return 1
+  fi
+  if [[ "$current_holder" != "$LEASE_HOLDER" ]]; then
+    LEASE_ACQUIRED=false
+    echo "refusing to release deployment Lease owned by ${current_holder:-no holder}; expected ${LEASE_HOLDER}" >&2
+    return 1
+  fi
+  if ! release_payload="$(jq '.spec.holderIdentity = ""' <<<"$current_lease")"; then
+    echo 'failed to render deployment Lease release' >&2
+    return 1
+  fi
+  if ! released_lease="$(kubectl -n "$NAMESPACE" replace -f - -o json <<<"$release_payload")"; then
+    echo "failed to release deployment Lease ${NAMESPACE}/${LEASE_NAME}; resourceVersion changed, so no retry was attempted" >&2
+    return 1
+  fi
+  if ! jq -e '.spec.holderIdentity == ""' <<<"$released_lease" >/dev/null; then
+    echo "deployment Lease ${NAMESPACE}/${LEASE_NAME} release was not confirmed" >&2
+    return 1
+  fi
+  LEASE_ACQUIRED=false
+  return 0
+}
+
+deployment_exit_trap() {
+  local status="$1"
+  trap - EXIT INT TERM
+  if [[ "$LEASE_ACQUIRED" == true ]]; then
+    if [[ "$LEASE_RELEASE_BLOCKED" == true ]]; then
+      echo "deployment Lease ${NAMESPACE}/${LEASE_NAME} retained for manual recovery by holder ${LEASE_HOLDER}" >&2
+    elif ! release_deploy_lease; then
+      echo 'failed to release the MLflow deployment Lease safely' >&2
+      if (( status == 0 )); then
+        status=1
+      fi
+    fi
+  fi
+  exit "$status"
+}
+
+install_deploy_traps() {
+  trap 'deployment_exit_trap $?' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 }
 
 encode() {
@@ -143,42 +295,78 @@ copy_secret() {
 cleanup_job_instance() {
   local name="$1"
   local expected_uid="$2"
-  local current_uid
+  local delete_options
 
-  if ! current_uid="$(kubectl -n "$NAMESPACE" get job "$name" --ignore-not-found -o jsonpath='{.metadata.uid}')"; then
-    echo "failed to inspect Job ${name} before cleanup" >&2
+  if ! delete_options="$(jq -n --arg uid "$expected_uid" \
+    '{apiVersion:"v1",kind:"DeleteOptions",propagationPolicy:"Background",preconditions:{uid:$uid}}')"; then
+    echo "failed to render UID-preconditioned deletion for Job ${name}" >&2
     return 1
   fi
-  if [[ -z "$current_uid" ]]; then
-    return 0
-  fi
-  if [[ "$current_uid" != "$expected_uid" ]]; then
-    echo "refusing to delete replacement Job ${name} with UID ${current_uid}" >&2
-    return 1
-  fi
-  if ! kubectl -n "$NAMESPACE" delete job "$name" --ignore-not-found --wait=false >/dev/null; then
-    echo "failed to terminate Job ${name} with UID ${expected_uid}" >&2
+  if ! kubectl delete \
+    --raw "/apis/batch/v1/namespaces/${NAMESPACE}/jobs/${name}" \
+    -f - <<<"$delete_options" >/dev/null; then
+    echo "failed to terminate Job ${name} with UID ${expected_uid}; it may have been replaced" >&2
     return 1
   fi
   return 0
 }
 
+retain_deploy_lease_for_manual_recovery() {
+  local job_name="$1"
+  local reason="$2"
+
+  LEASE_RELEASE_BLOCKED=true
+  echo "Lease retained: ${NAMESPACE}/${LEASE_NAME} holder ${LEASE_HOLDER} because Job ${job_name} is uncertain (${reason})." >&2
+  echo "Inspect Job ${NAMESPACE}/${job_name} and confirm no MLflow deployment is running; then follow the README manual unlock procedure." >&2
+}
+
 run_job() {
   local name="$1"
   local manifest="$2"
+  local rendered_job
   local created_job
   local created_name
   local created_uid
   local current_uid
   local completed_job
+  local observed_job
 
-  if ! kubectl -n "$NAMESPACE" delete job "$name" --ignore-not-found --wait=true --timeout="$TIMEOUT" >/dev/null; then
-    echo "failed to delete previous Job ${name}" >&2
+  if ! rendered_job="$(kubectl -n "$NAMESPACE" create --dry-run=client -f "$manifest" -o json)"; then
+    echo "failed to render unique Job ${name} from ${manifest}" >&2
     return 1
   fi
-  if ! created_job="$(kubectl -n "$NAMESPACE" create -f "$manifest" -o json)"; then
-    echo "failed to create fresh Job ${name}" >&2
+  if ! rendered_job="$(jq \
+    --arg name "$name" \
+    --arg run_id "$DEPLOY_RUN_ID" '
+      .metadata.name = $name |
+      .metadata.labels = ((.metadata.labels // {}) + {"platform.wellspiking.ai/deploy-run-id":$run_id}) |
+      del(.metadata.creationTimestamp, .metadata.resourceVersion, .metadata.uid, .status)
+    ' <<<"$rendered_job")"; then
+    echo "failed to assign unique identity to Job ${name}" >&2
     return 1
+  fi
+  if created_job="$(kubectl -n "$NAMESPACE" create -f - -o json <<<"$rendered_job")"; then
+    :
+  else
+    echo "create returned an error for Job ${name}; checking whether the API server persisted it" >&2
+    if ! observed_job="$(kubectl -n "$NAMESPACE" get job "$name" --ignore-not-found -o json)"; then
+      retain_deploy_lease_for_manual_recovery "$name" 'create failed and follow-up GET failed'
+      return 1
+    fi
+    if [[ -z "$observed_job" ]]; then
+      echo "create failed and Job ${name} was confirmed absent" >&2
+      return 1
+    fi
+    if ! jq -e --arg name "$name" --arg run_id "$DEPLOY_RUN_ID" '
+      .metadata.name == $name and
+      .metadata.labels["platform.wellspiking.ai/deploy-run-id"] == $run_id and
+      (.metadata.uid | type == "string" and length > 0)
+    ' <<<"$observed_job" >/dev/null; then
+      retain_deploy_lease_for_manual_recovery "$name" 'the observed object does not belong to this deploy run'
+      return 1
+    fi
+    created_job="$observed_job"
+    echo "recovered Job ${name} after an ambiguous create response" >&2
   fi
   if ! created_name="$(jq -r '.metadata.name // empty' <<<"$created_job")" ||
      ! created_uid="$(jq -r '.metadata.uid // empty' <<<"$created_job")"; then
@@ -258,12 +446,33 @@ recover_cleanup_failure() {
   return 1
 }
 
+cleanup_legacy_job() {
+  local name="$1"
+  local legacy_job
+  local legacy_uid
+
+  if ! legacy_job="$(kubectl -n "$NAMESPACE" get job "$name" --ignore-not-found -o json)"; then
+    echo "failed to inspect legacy Job ${name}" >&2
+    return 1
+  fi
+  if [[ -z "$legacy_job" ]]; then
+    return 0
+  fi
+  if ! legacy_uid="$(jq -er '.metadata.uid // empty' <<<"$legacy_job")"; then
+    echo "legacy Job ${name} has no UID; refusing name-only cleanup" >&2
+    return 1
+  fi
+  cleanup_job_instance "$name" "$legacy_uid"
+}
+
 cleanup_legacy_dependencies() {
   kubectl apply -f "${ROOT_DIR}/ops/mlflow/30-policy.yaml" >/dev/null || return 1
-  if ! kubectl -n "$NAMESPACE" delete job mlflow-tos-prefix-init --ignore-not-found >/dev/null; then recover_cleanup_failure; return 1; fi
+  if ! cleanup_legacy_job mlflow-tos-prefix-init; then recover_cleanup_failure; return 1; fi
   if ! kubectl -n "$NAMESPACE" delete secret tos-credentials --ignore-not-found >/dev/null; then recover_cleanup_failure; return 1; fi
   if ! kubectl -n "$NAMESPACE" delete configmap mlflow-aws-config --ignore-not-found >/dev/null; then recover_cleanup_failure; return 1; fi
   if ! kubectl -n "$NAMESPACE" delete networkpolicy mlflow-storage-migration --ignore-not-found >/dev/null; then recover_cleanup_failure; return 1; fi
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
