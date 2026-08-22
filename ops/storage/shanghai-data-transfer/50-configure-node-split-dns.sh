@@ -11,6 +11,7 @@ readonly VKE_DNS_PRIMARY="${VKE_DNS_PRIMARY:-100.96.0.2}"
 readonly VKE_DNS_SECONDARY="${VKE_DNS_SECONDARY:-100.96.0.3}"
 readonly TOS_TEST_HOST="${TOS_TEST_HOST:-shanghai-data-transfer.tos-cn-shanghai.ivolces.com}"
 readonly TOS_API_TEST_HOST="${TOS_API_TEST_HOST:-tos-cn-shanghai.ivolces.com}"
+readonly OIDC_TEST_HOST="${OIDC_TEST_HOST:-oidc-vke-cn-shanghai.tos-cn-shanghai.volces.com}"
 
 usage() {
   cat <<'EOF'
@@ -20,6 +21,7 @@ Adds a systemd-resolved routing-only DNS configuration:
   *.tos-cn-shanghai.ivolces.com     -> VKE VPC DNS
   *.tos-s3-cn-shanghai.ivolces.com  -> VKE VPC DNS
   *.volcengineapi.com               -> VKE VPC DNS
+  *.tos-cn-shanghai.volces.com      -> VKE VPC DNS
 
 All other domains retain the node's existing per-link DNS configuration.
 Run this on every non-virtual node that can host FSX/TOS-backed Pods.
@@ -42,23 +44,31 @@ render_drop_in() {
     '# Route only Volcengine object-storage and STS domains to the VKE VPC DNS.' \
     '# Do not add ~. here: IDC domains must continue to use the node link DNS.' \
     "DNS=${VKE_DNS_PRIMARY} ${VKE_DNS_SECONDARY}" \
-    'Domains=~tos-cn-shanghai.ivolces.com ~tos-s3-cn-shanghai.ivolces.com ~volcengineapi.com'
+    'Domains=~tos-cn-shanghai.ivolces.com ~tos-s3-cn-shanghai.ivolces.com ~volcengineapi.com ~tos-cn-shanghai.volces.com'
 }
 
 verify_tos_resolution() {
   local host
   local answer
-  for host in "$TOS_API_TEST_HOST" "$TOS_TEST_HOST"; do
+  for host in "$TOS_API_TEST_HOST" "$TOS_TEST_HOST" "$OIDC_TEST_HOST"; do
     answer="$(timeout 10 getent ahostsv4 "$host" 2>&1)" || {
       echo "TOS routing verification failed for ${host}" >&2
       printf '%s\n' "$answer" >&2
       return 1
     }
-    printf '%s\n' "$answer" | grep -Eq '100\.(64|96)\.' || {
-      echo "TOS routing verification returned no VKE private address for ${host}" >&2
-      printf '%s\n' "$answer" >&2
-      return 1
-    }
+    if [[ "$host" == "$OIDC_TEST_HOST" ]]; then
+      printf '%s\n' "$answer" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' || {
+        echo "OIDC routing verification returned no IPv4 address for ${host}" >&2
+        printf '%s\n' "$answer" >&2
+        return 1
+      }
+    else
+      printf '%s\n' "$answer" | grep -Eq '100\.(64|96)\.' || {
+        echo "TOS routing verification returned no VKE private address for ${host}" >&2
+        printf '%s\n' "$answer" >&2
+        return 1
+      }
+    fi
   done
 }
 
@@ -71,18 +81,18 @@ case "${1:---check}" in
   *) usage >&2; exit 2 ;;
 esac
 
-require_resolved
-
 case "$mode" in
   check)
+    require_resolved
     [[ -f "$DROP_IN_FILE" ]] || { echo "split DNS is not configured: ${DROP_IN_FILE}" >&2; exit 1; }
     grep -Fx "DNS=${VKE_DNS_PRIMARY} ${VKE_DNS_SECONDARY}" "$DROP_IN_FILE" >/dev/null
-    grep -Fx 'Domains=~tos-cn-shanghai.ivolces.com ~tos-s3-cn-shanghai.ivolces.com ~volcengineapi.com' "$DROP_IN_FILE" >/dev/null
+    grep -Fx 'Domains=~tos-cn-shanghai.ivolces.com ~tos-s3-cn-shanghai.ivolces.com ~volcengineapi.com ~tos-cn-shanghai.volces.com' "$DROP_IN_FILE" >/dev/null
     verify_tos_resolution
     echo "split DNS is configured and TOS routing is healthy"
     ;;
   apply)
     require_root
+    require_resolved
     install -d -m 0755 "$DROP_IN_DIR"
     temp_file="$(mktemp)"
     trap 'rm -f "$temp_file"' EXIT
@@ -95,7 +105,9 @@ case "$mode" in
   revert)
     require_root
     rm -f "$DROP_IN_FILE"
-    systemctl restart systemd-resolved
+    if command -v systemctl >/dev/null && systemctl is-active --quiet systemd-resolved; then
+      systemctl restart systemd-resolved
+    fi
     echo "split DNS reverted"
     ;;
 esac

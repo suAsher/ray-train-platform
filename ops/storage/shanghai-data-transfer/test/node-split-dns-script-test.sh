@@ -8,6 +8,7 @@ SCRIPT="${ROOT}/ops/storage/shanghai-data-transfer/50-configure-node-split-dns.s
 "$SCRIPT" --help >/dev/null
 
 grep -F '100.96.0.2' "$SCRIPT" >/dev/null
+grep -F 'if [[ "$host" == "$OIDC_TEST_HOST" ]]' "$SCRIPT" >/dev/null
 grep -F '100.96.0.3' "$SCRIPT" >/dev/null
 grep -F 'TOS_API_TEST_HOST' "$SCRIPT" >/dev/null
 grep -F 'tos-cn-shanghai.ivolces.com' "$SCRIPT" >/dev/null
