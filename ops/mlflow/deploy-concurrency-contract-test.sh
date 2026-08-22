@@ -340,35 +340,113 @@ grep -Fq 'released mlflow-deploy-trap-run' "$trap_log" || {
   exit 1
 }
 
-signal_log="${fault_dir}/signal.log"
-if CASE_DIR="$fault_dir" DEPLOY_PATH="$DEPLOY" TEST_RUN_ID='signal-run' \
-  bash -c '
+run_interruption_case() {
+  local signal_name="$1"
+  local expected_status="$2"
+  local context="$3"
+  local case_dir="${fault_dir}/signal-${signal_name}-${context}"
+  mkdir -p "$case_dir"
+
+  if CASE_DIR="$case_dir" CONTEXT="$context" DEPLOY_PATH="$DEPLOY" \
+    TEST_SIGNAL="$signal_name" TEST_RUN_ID='signal-run' TEST_REQUEST_NONCE='nonce-one' \
+    bash -c '
+      set -euo pipefail
+      readonly EXPECTED_JOB="mlflow-db-upgrade-signal-run"
+
+      kubectl() {
+        printf "%s\n" "$*" >>"${CASE_DIR}/calls.log"
+        case "$*" in
+          *" create --dry-run=client -f "*)
+            printf "%s\n" "{\"apiVersion\":\"batch/v1\",\"kind\":\"Job\",\"metadata\":{\"name\":\"mlflow-db-upgrade\",\"namespace\":\"mlflow-system\"},\"spec\":{\"template\":{\"spec\":{\"restartPolicy\":\"Never\",\"containers\":[{\"name\":\"upgrade\",\"image\":\"example.invalid/mlflow\"}]}}}}"
+            ;;
+          *" create -f - -o json"*)
+            local payload
+            payload="$(</dev/stdin)"
+            jq ".metadata.uid = \"signal-job-uid\"" <<<"$payload"
+            ;;
+          *" get job ${EXPECTED_JOB} -o jsonpath="*) printf "%s" "signal-job-uid" ;;
+          *" wait --for=condition=complete "*) kill -"$TEST_SIGNAL" "$$" ;;
+          *) return 0 ;;
+        esac
+      }
+
+      helm() {
+        printf "%s\n" "$*" >>"${CASE_DIR}/calls.log"
+        kill -"$TEST_SIGNAL" "$$"
+      }
+
+      source "$DEPLOY_PATH"
+      generate_deploy_run_id() { printf "%s" "$TEST_RUN_ID"; }
+      generate_job_request_nonce() { printf "%s" "$TEST_REQUEST_NONCE"; }
+      initialize_deploy_identity
+      release_deploy_lease() {
+        printf "released %s\n" "$LEASE_HOLDER" >"${CASE_DIR}/released.log"
+        LEASE_ACQUIRED=false
+        return 0
+      }
+      LEASE_ACQUIRED=true
+      install_deploy_traps
+
+      case "$CONTEXT" in
+        job-wait) run_job "$EXPECTED_JOB" /tmp/db-upgrade.yaml ;;
+        helm-wait) helm upgrade --install mlflow fake-chart --atomic --wait ;;
+      esac
+      exit 99
+    ' >"${case_dir}/stdout.log" 2>"${case_dir}/stderr.log"; then
+    signal_status=0
+  else
+    signal_status=$?
+  fi
+  [[ "$signal_status" == "$expected_status" ]] || {
+    echo "deployment ${signal_name} in ${context} returned ${signal_status} instead of ${expected_status}" >&2
+    exit 1
+  }
+  if [[ -e "${case_dir}/released.log" ]]; then
+    echo "deployment ${signal_name} in ${context} released its Lease" >&2
+    exit 1
+  fi
+  grep -Fq 'retained for manual recovery' "${case_dir}/stderr.log" || {
+    echo "deployment ${signal_name} in ${context} did not explain that the Lease was retained" >&2
+    exit 1
+  }
+  grep -Fq 'README' "${case_dir}/stderr.log" || {
+    echo "deployment ${signal_name} in ${context} did not provide manual recovery guidance" >&2
+    exit 1
+  }
+}
+
+run_unlocked_interruption_case() {
+  local signal_name="$1"
+  local expected_status="$2"
+  local case_dir="${fault_dir}/signal-${signal_name}-unlocked"
+  mkdir -p "$case_dir"
+
+  if CASE_DIR="$case_dir" DEPLOY_PATH="$DEPLOY" TEST_SIGNAL="$signal_name" bash -c '
     set -euo pipefail
     source "$DEPLOY_PATH"
-    generate_deploy_run_id() { printf "%s" "$TEST_RUN_ID"; }
-    initialize_deploy_identity
-    release_deploy_lease() {
-      printf "released %s\n" "$LEASE_HOLDER" >>"${CASE_DIR}/signal.log"
-      LEASE_ACQUIRED=false
-      return 0
-    }
-    LEASE_ACQUIRED=true
+    release_deploy_lease() { printf "released\n" >"${CASE_DIR}/released.log"; }
     install_deploy_traps
-    kill -TERM "$$"
+    kill -"$TEST_SIGNAL" "$$"
     exit 99
-  '; then
-  signal_status=0
-else
-  signal_status=$?
-fi
-[[ "$signal_status" == '143' ]] || {
-  echo "deployment TERM trap returned ${signal_status} instead of 143" >&2
-  exit 1
+  ' >"${case_dir}/stdout.log" 2>"${case_dir}/stderr.log"; then
+    signal_status=0
+  else
+    signal_status=$?
+  fi
+  [[ "$signal_status" == "$expected_status" ]] || {
+    echo "unlocked deployment ${signal_name} returned ${signal_status} instead of ${expected_status}" >&2
+    exit 1
+  }
+  [[ ! -e "${case_dir}/released.log" ]]
+  ! grep -Fq 'retained for manual recovery' "${case_dir}/stderr.log"
 }
-grep -Fq 'released mlflow-deploy-signal-run' "$signal_log" || {
-  echo 'deployment TERM trap did not release its Lease' >&2
-  exit 1
-}
+
+for signal_case in 'INT 130' 'TERM 143' 'HUP 129'; do
+  read -r signal_name expected_status <<<"$signal_case"
+  run_interruption_case "$signal_name" "$expected_status" job-wait
+  run_interruption_case "$signal_name" "$expected_status" helm-wait
+  run_unlocked_interruption_case "$signal_name" "$expected_status"
+done
 
 run_job_failure_case() {
   local scenario="$1"
@@ -592,5 +670,7 @@ grep -Fq 'request nonce' "$README"
 grep -Fq 'UID precondition + `Foreground`' "$README"
 grep -Fq 'Job 已 NotFound' "$README"
 grep -Fq '`job-name` + `deploy-run-id`' "$README"
+grep -Fq 'INT/TERM/HUP' "$README"
+grep -Fq '130/143/129' "$README"
 
 echo 'MLflow deployment concurrency contract verified'

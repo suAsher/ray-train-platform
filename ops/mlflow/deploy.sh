@@ -269,7 +269,7 @@ release_deploy_lease() {
 
 deployment_exit_trap() {
   local status="$1"
-  trap - EXIT INT TERM
+  trap - EXIT INT TERM HUP
   if [[ "$LEASE_ACQUIRED" == true ]]; then
     if [[ "$LEASE_RELEASE_BLOCKED" == true ]]; then
       echo "deployment Lease ${NAMESPACE}/${LEASE_NAME} retained for manual recovery by holder ${LEASE_HOLDER}" >&2
@@ -283,10 +283,23 @@ deployment_exit_trap() {
   exit "$status"
 }
 
+deployment_signal_trap() {
+  local signal_name="$1"
+  local status="$2"
+
+  if [[ "$LEASE_ACQUIRED" == true ]]; then
+    LEASE_RELEASE_BLOCKED=true
+    echo "received ${signal_name} while holding deployment Lease ${NAMESPACE}/${LEASE_NAME}; fail-closed interruption" >&2
+    echo 'Confirm that no MLflow Job/Pod or Helm rollout is still active, then follow the README manual recovery procedure.' >&2
+  fi
+  exit "$status"
+}
+
 install_deploy_traps() {
   trap 'deployment_exit_trap $?' EXIT
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
+  trap 'deployment_signal_trap INT 130' INT
+  trap 'deployment_signal_trap TERM 143' TERM
+  trap 'deployment_signal_trap HUP 129' HUP
 }
 
 encode() {
