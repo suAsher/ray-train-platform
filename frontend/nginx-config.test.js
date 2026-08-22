@@ -50,3 +50,12 @@ test('MLflow stays behind the backend proxy with upload-safe streaming settings'
   assert.match(block, /client_max_body_size 2048m;/)
   assert.doesNotMatch(block, /mlflow\.mlflow-system|NodePort/i)
 })
+
+test('MLflow access tokens are excluded from Nginx access logs without disabling other access logs', async () => {
+  const config = await readFile(configURL, 'utf8')
+  const block = locationBlock(config, '/mlflow/')
+  const disabledAccessLogs = config.match(/\baccess_log\s+off;/g) ?? []
+
+  assert.match(block, /access_log off;/)
+  assert.equal(disabledAccessLogs.length, 1)
+})
