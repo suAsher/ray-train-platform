@@ -39,7 +39,7 @@ bash ops/mlflow/deploy.sh
 恢复顺序必须是：
 
 1. 用 `mlflow-fsx-probe` 和 Pod Event 确认出问题的节点。
-2. 先恢复该节点的 `fsx-agent`，确认 Agent 自身 Ready，且 `/opt/fsx/tools/fsx-health-check` 通过。
+2. 先恢复该节点的 `fsx-agent`，确认 Agent 自身 Ready，且 `/usr/bin/fsx-health-check` 通过。
 3. 再滚动重建该节点的 `csi-fsx-node` Pod，确认所有容器 Ready。
 4. 只有在 Agent 和 CSI 恢复后，才滚动重建该节点上受影响的 MLflow Pod。已存在的 FUSE bind mount 不会因 CSI 恢复而自动重连，所以这一步不能省略。
 5. 等待 `mlflow-fsx-probe` 在所有 CPU 节点 Ready，然后执行 `bash ops/mlflow/verify.sh`。

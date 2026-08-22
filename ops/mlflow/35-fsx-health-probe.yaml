@@ -77,11 +77,11 @@ spec:
             failureThreshold: 2
           resources:
             requests:
-              cpu: 10m
-              memory: 24Mi
+              cpu: 5m
+              memory: 8Mi
             limits:
-              cpu: 100m
-              memory: 64Mi
+              cpu: 50m
+              memory: 32Mi
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
