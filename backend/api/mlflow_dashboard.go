@@ -28,7 +28,21 @@ const (
 	mlflowDashboardBasePath   = "/mlflow/"
 	mlflowDashboardTicketSize = 32
 	mlflowDashboardAllow      = "GET, HEAD, OPTIONS, POST, PUT, PATCH, DELETE"
+	mlflowDashboardRewriteMax = 2 << 20
 )
+
+type mlflowDashboardPassThroughBody struct {
+	reader io.Reader
+	closer io.Closer
+}
+
+func (b *mlflowDashboardPassThroughBody) Read(p []byte) (int, error) {
+	return b.reader.Read(p)
+}
+
+func (b *mlflowDashboardPassThroughBody) Close() error {
+	return b.closer.Close()
+}
 
 type MLflowDashboardStore interface {
 	CreateMLflowDashboardTicket(context.Context, repositories.MLflowDashboardTicketRecord) error
@@ -157,16 +171,32 @@ func (h *Handler) hasValidMLflowMutationOrigin(request *http.Request) bool {
 }
 
 func (h *Handler) serveMLflowDashboardProxy(c *gin.Context, target *url.URL) {
+	publicOrigin, err := url.Parse(h.mlflowPublicOrigin)
+	if err != nil || publicOrigin.Scheme == "" || publicOrigin.Host == "" {
+		h.writeError(c, http.StatusBadGateway, "MLFLOW_DASHBOARD_PUBLIC_ORIGIN_INVALID", "MLflow Dashboard public origin is invalid")
+		return
+	}
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.Transport = mlflowDashboardTransport
 	originalDirector := proxy.Director
 	proxy.Director = func(request *http.Request) {
 		originalDirector(request)
 		request.Host = target.Host
-		request.Header.Del("Authorization")
-		request.Header.Del("Cookie")
-		request.Header.Del("X-Forwarded-Access-Token")
-		request.Header.Del("Accept-Encoding")
+		for _, header := range []string{
+			"Accept-Encoding",
+			"Authorization",
+			"Cookie",
+			"Forwarded",
+			"X-Forwarded-Access-Token",
+			"X-Forwarded-For",
+			"X-Forwarded-Host",
+			"X-Forwarded-Proto",
+			"X-Real-IP",
+		} {
+			request.Header.Del(header)
+		}
+		request.Header.Set("X-Forwarded-Host", publicOrigin.Host)
+		request.Header.Set("X-Forwarded-Proto", publicOrigin.Scheme)
 	}
 	proxy.ModifyResponse = func(response *http.Response) error {
 		response.Header.Del("Set-Cookie")
@@ -216,6 +246,9 @@ func rewriteMLflowDashboardTextResponse(response *http.Response) error {
 	if response.Request.Method == http.MethodHead || strings.TrimSpace(response.Header.Get("Content-Encoding")) != "" {
 		return nil
 	}
+	if isMLflowDashboardArtifactPath(response.Request.URL.Path) {
+		return nil
+	}
 	mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if err != nil {
 		return nil
@@ -224,11 +257,19 @@ func rewriteMLflowDashboardTextResponse(response *http.Response) error {
 	if mediaType != "text/html" && !strings.Contains(mediaType, "javascript") {
 		return nil
 	}
-	body, err := io.ReadAll(response.Body)
+	originalBody := response.Body
+	body, err := io.ReadAll(io.LimitReader(originalBody, mlflowDashboardRewriteMax+1))
 	if err != nil {
 		return err
 	}
-	_ = response.Body.Close()
+	if len(body) > mlflowDashboardRewriteMax {
+		response.Body = &mlflowDashboardPassThroughBody{
+			reader: io.MultiReader(bytes.NewReader(body), originalBody),
+			closer: originalBody,
+		}
+		return nil
+	}
+	_ = originalBody.Close()
 	for _, quote := range []string{`"`, `'`, "`"} {
 		body = bytes.ReplaceAll(body, []byte(quote+"/ajax-api/"), []byte(quote+"/mlflow/ajax-api/"))
 		body = bytes.ReplaceAll(body, []byte(quote+"/api/"), []byte(quote+"/mlflow/api/"))
@@ -237,6 +278,14 @@ func rewriteMLflowDashboardTextResponse(response *http.Response) error {
 	response.ContentLength = int64(len(body))
 	response.Header.Set("Content-Length", strconv.Itoa(len(body)))
 	return nil
+}
+
+func isMLflowDashboardArtifactPath(path string) bool {
+	if path == "/mlflow-artifacts" || strings.HasPrefix(path, "/mlflow-artifacts/") {
+		return true
+	}
+	path = strings.TrimPrefix(path, strings.TrimSuffix(mlflowDashboardBasePath, "/"))
+	return path == "/mlflow-artifacts" || strings.HasPrefix(path, "/mlflow-artifacts/")
 }
 
 func (h *Handler) auditMLflowDashboardRequest(c *gin.Context, claims domain.MLflowDashboardSessionClaims, startedAt time.Time) {

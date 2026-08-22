@@ -38,6 +38,23 @@ type mlflowResponseRecorder struct {
 	closed chan bool
 }
 
+type countingReadCloser struct {
+	reader    io.Reader
+	bytesRead int
+	closed    bool
+}
+
+func (r *countingReadCloser) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	r.bytesRead += n
+	return n, err
+}
+
+func (r *countingReadCloser) Close() error {
+	r.closed = true
+	return nil
+}
+
 func newMLflowResponseRecorder() *mlflowResponseRecorder {
 	return &mlflowResponseRecorder{ResponseRecorder: httptest.NewRecorder(), closed: make(chan bool)}
 }
@@ -349,6 +366,45 @@ func TestMLflowDashboardProxyForwardsAllMethodsAndStripsBrowserCredentials(t *te
 	}
 }
 
+func TestMLflowDashboardProxyRebuildsTrustedForwardingHeaders(t *testing.T) {
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	seen := make(chan http.Header, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		seen <- request.Header.Clone()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+
+	request := httptest.NewRequest(http.MethodGet, "/mlflow/", nil)
+	request.AddCookie(mlflowSessionCookie(t, now))
+	request.Header.Set("Forwarded", "for=attacker;host=evil.example;proto=http")
+	request.Header.Set("X-Forwarded-For", "203.0.113.66")
+	request.Header.Set("X-Forwarded-Host", "evil.example")
+	request.Header.Set("X-Forwarded-Proto", "http")
+	request.Header.Set("X-Real-IP", "203.0.113.77")
+	response := newMLflowResponseRecorder()
+	mlflowProxyRouter(newMLflowProxyTestHandler(newFakeMLflowDashboardStore(), now, upstream.URL)).ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
+	}
+	forwarded := <-seen
+	for _, header := range []string{"Forwarded", "X-Real-IP"} {
+		if values, present := forwarded[http.CanonicalHeaderKey(header)]; present || len(values) != 0 {
+			t.Fatalf("upstream %s = %q, want absent", header, values)
+		}
+	}
+	if got := forwarded.Values("X-Forwarded-For"); len(got) != 1 || got[0] != "192.0.2.1" {
+		t.Fatalf("upstream X-Forwarded-For = %q, want fresh backend client address", got)
+	}
+	if got := forwarded.Values("X-Forwarded-Host"); len(got) != 1 || got[0] != "portal.example.com" {
+		t.Fatalf("upstream X-Forwarded-Host = %q, want configured public host", got)
+	}
+	if got := forwarded.Values("X-Forwarded-Proto"); len(got) != 1 || got[0] != "https" {
+		t.Fatalf("upstream X-Forwarded-Proto = %q, want configured public scheme", got)
+	}
+}
+
 func TestMLflowDashboardProxyRemovesAcceptEncodingBeforeTextRewrite(t *testing.T) {
 	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
 	type acceptEncodingHeader struct {
@@ -502,6 +558,82 @@ func TestMLflowDashboardProxyRewritesLocationTextAndSecurityHeaders(t *testing.T
 		if response.Header().Get(header) == "" {
 			t.Fatalf("missing security header %s", header)
 		}
+	}
+}
+
+func TestRewriteMLflowDashboardTextResponseBoundsMislabelledLargeBody(t *testing.T) {
+	const expectedRewriteLimit = 2 << 20
+	original := []byte(strings.Repeat("a", expectedRewriteLimit+1) + `"/api/must-not-change"`)
+	originalBody := &countingReadCloser{reader: bytes.NewReader(original)}
+	response := &http.Response{
+		Header:        make(http.Header),
+		Body:          originalBody,
+		ContentLength: int64(len(original)),
+		Request: &http.Request{
+			Method: http.MethodGet,
+			URL:    &url.URL{Path: "/mlflow/static/mislabelled.txt"},
+		},
+	}
+	response.Header.Set("Content-Type", "text/html")
+	response.Header.Set("Content-Length", fmt.Sprint(len(original)))
+
+	if err := rewriteMLflowDashboardTextResponse(response); err != nil {
+		t.Fatalf("rewrite response: %v", err)
+	}
+	if originalBody.bytesRead > expectedRewriteLimit+1 {
+		t.Fatalf("rewrite eagerly read %d bytes, want at most %d", originalBody.bytesRead, expectedRewriteLimit+1)
+	}
+	if originalBody.closed {
+		t.Fatal("oversized response body was closed before pass-through completed")
+	}
+	got, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read pass-through response: %v", err)
+	}
+	if err := response.Body.Close(); err != nil {
+		t.Fatalf("close pass-through response: %v", err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatal("oversized text-labelled response was changed")
+	}
+	if response.ContentLength != int64(len(original)) || response.Header.Get("Content-Length") != fmt.Sprint(len(original)) {
+		t.Fatalf("content length changed: field=%d header=%q", response.ContentLength, response.Header.Get("Content-Length"))
+	}
+	if !originalBody.closed {
+		t.Fatal("closing pass-through response did not close upstream body")
+	}
+}
+
+func TestRewriteMLflowDashboardTextResponseSkipsArtifactDownloadPath(t *testing.T) {
+	original := []byte(`artifact bytes with misleading marker "/api/must-not-change"`)
+	originalBody := &countingReadCloser{reader: bytes.NewReader(original)}
+	response := &http.Response{
+		Header:        make(http.Header),
+		Body:          originalBody,
+		ContentLength: int64(len(original)),
+		Request: &http.Request{
+			Method: http.MethodGet,
+			URL:    &url.URL{Path: "/mlflow-artifacts/tenant-a/model.bin"},
+		},
+	}
+	response.Header.Set("Content-Type", "text/html")
+	response.Header.Set("Content-Length", fmt.Sprint(len(original)))
+
+	if err := rewriteMLflowDashboardTextResponse(response); err != nil {
+		t.Fatalf("rewrite response: %v", err)
+	}
+	if originalBody.bytesRead != 0 {
+		t.Fatalf("artifact response was probed: read %d bytes", originalBody.bytesRead)
+	}
+	got, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read artifact response: %v", err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("artifact response changed: got %q", got)
+	}
+	if response.ContentLength != int64(len(original)) || response.Header.Get("Content-Length") != fmt.Sprint(len(original)) {
+		t.Fatalf("content length changed: field=%d header=%q", response.ContentLength, response.Header.Get("Content-Length"))
 	}
 }
 
