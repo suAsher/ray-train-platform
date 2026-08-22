@@ -187,7 +187,7 @@ async function loadExperiments() {
 async function openMLflowDashboard() {
   if (dashboardOpening.value) return
 
-  const popup = window.open('about:blank', '_blank', 'noopener,noreferrer')
+  const popup = window.open('about:blank', '_blank')
   if (!popup) {
     ElMessage.warning('浏览器阻止了新标签页，请允许本站打开新标签页后重试')
     return

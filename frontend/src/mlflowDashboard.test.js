@@ -59,15 +59,32 @@ test('Experiment Center exposes the native MLflow dashboard with its global-acce
 
 test('Experiment Center opens a protected blank tab synchronously and handles every popup outcome', async () => {
   const source = await readFile(experimentPage, 'utf8')
-  const openIndex = source.indexOf("window.open('about:blank', '_blank', 'noopener,noreferrer')")
+  const duplicateGuardIndex = source.indexOf('if (dashboardOpening.value) return')
+  const openIndex = source.indexOf("window.open('about:blank', '_blank')")
+  const blockedGuardIndex = source.indexOf('if (!popup)')
+  const openerIndex = source.indexOf('popup.opener = null')
   const requestIndex = source.indexOf('await requestMLflowDashboardAccess()')
+  const replaceIndex = source.indexOf('popup.location.replace(accessURL)')
+  const closeIndex = source.indexOf('popup.close()')
+  const errorIndex = source.indexOf('ElMessage.error')
 
-  assert.notEqual(openIndex, -1)
-  assert.ok(requestIndex > openIndex, 'the blank tab must open before the asynchronous access request')
-  assert.match(source, /if \(dashboardOpening\.value\) return/)
+  for (const [label, index] of Object.entries({
+    duplicateGuardIndex,
+    openIndex,
+    blockedGuardIndex,
+    openerIndex,
+    requestIndex,
+    replaceIndex,
+    closeIndex,
+    errorIndex,
+  })) {
+    assert.notEqual(index, -1, `missing popup contract marker: ${label}`)
+  }
+  assert.ok(duplicateGuardIndex < openIndex, 'duplicate requests must be rejected before opening another tab')
+  assert.ok(blockedGuardIndex > openIndex, 'popup blocking must be checked immediately after opening')
+  assert.ok(openerIndex > blockedGuardIndex && openerIndex < requestIndex, 'opener must be cleared before the first await')
+  assert.ok(replaceIndex > requestIndex, 'the returned access URL must replace the blank tab history entry')
+  assert.ok(closeIndex > requestIndex && closeIndex < errorIndex, 'a failed request must close the blank tab before reporting the error')
   assert.match(source, /:loading="dashboardOpening"/)
-  assert.match(source, /popup\.opener = null/)
-  assert.match(source, /popup\.location\.replace\(accessURL\)/)
   assert.match(source, /浏览器阻止了新标签页/)
-  assert.match(source, /popup\.close\(\)[\s\S]*?ElMessage\.error/)
 })
