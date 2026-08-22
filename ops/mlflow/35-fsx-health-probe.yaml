@@ -140,17 +140,26 @@ spec:
             - |
               while true; do
                 rm -f /health/ready
-                if timeout 25 /bin/sh -ec '
-                  for resolver in 192.168.110.61 192.168.111.63; do
-                    for endpoint in tos-cn-shanghai.ivolces.com shanghai-data-transfer.tos-cn-shanghai.ivolces.com; do
-                      timeout 5 nslookup "$endpoint" "$resolver" >/dev/null 2>&1
-                    done
+                if timeout 15 /bin/sh -ec '
+                  for endpoint in tos-cn-shanghai.ivolces.com shanghai-data-transfer.tos-cn-shanghai.ivolces.com; do
+                    getent ahostsv4 "$endpoint" | grep -Eq "100\\.(64|96)\\."
                   done
                 '; then
                   date +%s >/health/ready
                 else
-                  echo "FSX DNS probe failed on ${NODE_NAME}" >&2
+                  echo "effective FSX DNS resolution failed on ${NODE_NAME}" >&2
                 fi
+                for resolver in 192.168.110.61 192.168.111.63 100.96.0.2 100.96.0.3; do
+                  resolver_ok=true
+                  for endpoint in tos-cn-shanghai.ivolces.com shanghai-data-transfer.tos-cn-shanghai.ivolces.com; do
+                    if ! timeout 5 nslookup "$endpoint" "$resolver" >/dev/null 2>&1; then
+                      resolver_ok=false
+                    fi
+                  done
+                  if ! "$resolver_ok"; then
+                    echo "FSX DNS resolver ${resolver} is degraded on ${NODE_NAME}" >&2
+                  fi
+                done
                 sleep 20
               done
           env:
@@ -230,6 +239,10 @@ spec:
             cidr: 192.168.110.61/32
         - ipBlock:
             cidr: 192.168.111.63/32
+        - ipBlock:
+            cidr: 100.96.0.2/32
+        - ipBlock:
+            cidr: 100.96.0.3/32
       ports:
         - port: 53
           protocol: UDP
@@ -275,7 +288,7 @@ spec:
             service: mlflow
           annotations:
             summary: A control-plane node cannot resolve an FSX TOS endpoint through both configured IDC resolvers
-            description: The probe uses the node resolver policy and queries both required TOS endpoints directly through 192.168.110.61 and 192.168.111.63. Restore DNS before recycling FSX mounts.
+            description: The effective node resolver chain cannot resolve both required TOS endpoints. The probe also logs per-resolver degradation for the two IDC and two VKE DNS servers. Restore DNS before recycling FSX mounts.
         - alert: MLflowFSXDNSProbeUnschedulable
           expr: max(kube_pod_status_unschedulable{namespace="mlflow-system",pod=~"mlflow-fsx-dns-probe-.*"}) > 0
           for: 2m

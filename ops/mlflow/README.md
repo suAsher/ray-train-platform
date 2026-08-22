@@ -20,7 +20,7 @@
 - 并发安全：`deploy.sh` 使用 `mlflow-system/mlflow-deploy` Kubernetes Lease 串行化完整部署、验收、回滚和清理流程。采用 fail-closed 固定锁：任意非空 holder（无论存续多久）都会让第二次部署立即失败，不设过期时间、不自动接管。只有正常完成或已确认活动 Job/Pod 全部结束的既有路径，才会以读取到的 `resourceVersion` 清空自己的 holder；不删除 Lease，也不覆盖新的 holder。每个部署进程无条件生成新的随机 run-id，不接受外部固定值；每次 Job create 另外生成随机 request nonce，只有 name、run-id、nonce 与 UID 均匹配才能从不确定的 create 响应中恢复。
 - Job 清理栅栏：失败 Job 使用 UID precondition + `Foreground` 删除，并依次确认 Job 已 NotFound、`job-name` + `deploy-run-id` 对应 Pod 已全部消失。删除、等待或最终确认任一失败，都会保留 Lease 并转人工处置，不允许下一次部署与未终止 Job 交叉执行。
 - 中断安全：持有 Lease 时收到 `INT/TERM/HUP` 会立即标记为 fail-closed 并保留 Lease，分别以标准状态 `130/143/129` 退出，等待管理员确认 Job、Pod 和 Helm rollout 已终止后手动恢复；尚未获取 Lease 时仅按标准状态退出。
-- 节点挂载探测：`mlflow-fsx-probe` DaemonSet 会在每台 CPU 节点挂载 MLflow 正在使用的同一个 PVC，每 20 秒执行有 10 秒上限的 `stat -> 写入 -> 校验 -> 删除`。`mlflow-fsx-dns-probe` 使用与节点/FSX Agent 相同的 resolver 配置，分别向两台 IDC DNS 查询通用 TOS 与桶 endpoint。已调度节点的挂载或 DNS 失败 2 分钟后会触发独立告警；资源不足导致探测 Pod 无法调度时也会告警。部署会在变更 MLflow 前停止。探测器只告警，不会自动重启 FSX 或业务 Pod。
+- 节点挂载探测：`mlflow-fsx-probe` DaemonSet 会在每台 CPU 节点挂载 MLflow 正在使用的同一个 PVC，每 20 秒执行有 10 秒上限的 `stat -> 写入 -> 校验 -> 删除`。`mlflow-fsx-dns-probe` 使用与节点/FSX Agent 相同的 resolver 配置，验证通用 TOS 与桶 endpoint 的有效解析链，并在日志中分别标记两台 IDC DNS 和两台 VKE DNS 的退化。已调度节点的挂载或 DNS 失败 2 分钟后会触发独立告警；资源不足导致探测 Pod 无法调度时也会告警。部署会在变更 MLflow 前停止。探测器只告警，不会自动重启 FSX 或业务 Pod。
 
 部署：
 

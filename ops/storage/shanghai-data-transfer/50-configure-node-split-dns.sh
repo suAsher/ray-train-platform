@@ -10,6 +10,7 @@ readonly DROP_IN_FILE="${DROP_IN_DIR}/60-ray-platform-tos-routing.conf"
 readonly VKE_DNS_PRIMARY="${VKE_DNS_PRIMARY:-100.96.0.2}"
 readonly VKE_DNS_SECONDARY="${VKE_DNS_SECONDARY:-100.96.0.3}"
 readonly TOS_TEST_HOST="${TOS_TEST_HOST:-shanghai-data-transfer.tos-cn-shanghai.ivolces.com}"
+readonly TOS_API_TEST_HOST="${TOS_API_TEST_HOST:-tos-cn-shanghai.ivolces.com}"
 
 usage() {
   cat <<'EOF'
@@ -45,17 +46,20 @@ render_drop_in() {
 }
 
 verify_tos_resolution() {
+  local host
   local answer
-  answer="$(timeout 10 getent ahostsv4 "$TOS_TEST_HOST" 2>&1)" || {
-    echo "TOS routing verification failed for ${TOS_TEST_HOST}" >&2
-    printf '%s\n' "$answer" >&2
-    return 1
-  }
-  printf '%s\n' "$answer" | grep -Eq '100\.(64|96)\.' || {
-    echo "TOS routing verification returned no VKE private address for ${TOS_TEST_HOST}" >&2
-    printf '%s\n' "$answer" >&2
-    return 1
-  }
+  for host in "$TOS_API_TEST_HOST" "$TOS_TEST_HOST"; do
+    answer="$(timeout 10 getent ahostsv4 "$host" 2>&1)" || {
+      echo "TOS routing verification failed for ${host}" >&2
+      printf '%s\n' "$answer" >&2
+      return 1
+    }
+    printf '%s\n' "$answer" | grep -Eq '100\.(64|96)\.' || {
+      echo "TOS routing verification returned no VKE private address for ${host}" >&2
+      printf '%s\n' "$answer" >&2
+      return 1
+    }
+  done
 }
 
 mode="check"
