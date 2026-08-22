@@ -197,7 +197,7 @@ Dashboard 用于查看运行中的 Ray node、task、actor、object store 和资
 
 实验中心是平台筛选视图，用于按当前用户或团队查看任务参数、Loss、学习率、吞吐和 mAP/NDS。它适合日常训练排障，并保留平台任务、提交人、租户和训练指标之间的关联。
 
-实验中心中的“打开 MLflow 管理界面”会在新标签页打开同域 `https://raytrain.wellspiking.ai/mlflow/`。原生 MLflow 是登录后可访问的完整管理界面，展示全平台实验。所有平台认证用户都可以创建、修改、删除实验、Run 和模型注册条目，并可上传、下载 MLflow Artifact。原生 MLflow 全功能开放是当前明确策略；这些操作直接改变共享 MLflow 数据，删除或修改前应确认目标对象。
+实验中心中的按钮 **打开 MLflow 管理界面** 会在新标签页打开同域 `https://raytrain.wellspiking.ai/mlflow/`。原生 MLflow 是登录后可访问的完整管理界面，展示全平台实验。所有平台认证用户都可以创建、修改、删除实验、Run 和模型注册条目，并可上传、下载 MLflow Artifact。原生 MLflow 全功能开放是当前明确策略；这些操作直接改变共享 MLflow 数据，删除或修改前应确认目标对象。
 
 Ray Dashboard 与两种 MLflow 视图的生命周期不同：Ray Dashboard 随任务 RayCluster 回收；实验中心和原生 MLflow 的运行记录长期保留。
 

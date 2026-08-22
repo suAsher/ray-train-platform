@@ -131,6 +131,10 @@ class DocumentationContractTest(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertIn(marker, combined)
 
+    def test_user_guide_names_the_exact_mlflow_dashboard_button(self) -> None:
+        user_guide = (ROOT / "docs" / "USER_GUIDE.md").read_text(encoding="utf-8")
+        self.assertIn("**打开 MLflow 管理界面**", user_guide)
+
     def test_mlflow_artifacts_are_separate_from_governed_training_data(self) -> None:
         user_guide = (ROOT / "docs" / "USER_GUIDE.md").read_text(encoding="utf-8")
         mlflow_ops = (ROOT / "ops" / "mlflow" / "README.md").read_text(
