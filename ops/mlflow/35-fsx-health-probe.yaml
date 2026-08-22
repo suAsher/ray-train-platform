@@ -250,7 +250,7 @@ spec:
     - name: mlflow-fsx.rules
       rules:
         - alert: MLflowFSXMountUnavailable
-          expr: kube_daemonset_status_number_ready{namespace="mlflow-system",daemonset="mlflow-fsx-probe"} < kube_daemonset_status_current_number_scheduled{namespace="mlflow-system",daemonset="mlflow-fsx-probe"}
+          expr: sum((kube_pod_status_ready{namespace="mlflow-system",pod=~"mlflow-fsx-probe-.*",condition="true"} == 0) and on(namespace,pod) (kube_pod_status_scheduled{namespace="mlflow-system",pod=~"mlflow-fsx-probe-.*",condition="true"} == 1)) > 0
           for: 2m
           labels:
             severity: critical
@@ -259,7 +259,7 @@ spec:
             summary: MLflow FSX mount is unavailable on one or more control-plane nodes
             description: The node-level probe cannot complete a bounded stat/write/delete cycle. Check mlflow-fsx-probe Pod events, csi-fsx-node logs, and fsx-agent recovery state before restarting workloads.
         - alert: MLflowFSXProbeUnschedulable
-          expr: kube_daemonset_status_current_number_scheduled{namespace="mlflow-system",daemonset="mlflow-fsx-probe"} < kube_daemonset_status_desired_number_scheduled{namespace="mlflow-system",daemonset="mlflow-fsx-probe"}
+          expr: max(kube_pod_status_unschedulable{namespace="mlflow-system",pod=~"mlflow-fsx-probe-.*"}) > 0
           for: 2m
           labels:
             severity: critical
@@ -268,7 +268,7 @@ spec:
             summary: MLflow FSX health probe cannot schedule on every control-plane node
             description: Check the pending probe Pod events for CPU, memory, Pod IP, taint, and node-affinity capacity problems. FSX health is unknown on nodes without a scheduled probe.
         - alert: MLflowFSXDNSUnavailable
-          expr: kube_daemonset_status_number_ready{namespace="mlflow-system",daemonset="mlflow-fsx-dns-probe"} < kube_daemonset_status_current_number_scheduled{namespace="mlflow-system",daemonset="mlflow-fsx-dns-probe"}
+          expr: sum((kube_pod_status_ready{namespace="mlflow-system",pod=~"mlflow-fsx-dns-probe-.*",condition="true"} == 0) and on(namespace,pod) (kube_pod_status_scheduled{namespace="mlflow-system",pod=~"mlflow-fsx-dns-probe-.*",condition="true"} == 1)) > 0
           for: 2m
           labels:
             severity: critical
@@ -277,7 +277,7 @@ spec:
             summary: A control-plane node cannot resolve an FSX TOS endpoint through both configured IDC resolvers
             description: The probe uses the node resolver policy and queries both required TOS endpoints directly through 192.168.110.61 and 192.168.111.63. Restore DNS before recycling FSX mounts.
         - alert: MLflowFSXDNSProbeUnschedulable
-          expr: kube_daemonset_status_current_number_scheduled{namespace="mlflow-system",daemonset="mlflow-fsx-dns-probe"} < kube_daemonset_status_desired_number_scheduled{namespace="mlflow-system",daemonset="mlflow-fsx-dns-probe"}
+          expr: max(kube_pod_status_unschedulable{namespace="mlflow-system",pod=~"mlflow-fsx-dns-probe-.*"}) > 0
           for: 2m
           labels:
             severity: critical
