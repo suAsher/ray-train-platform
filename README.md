@@ -38,7 +38,7 @@ KubeRay 创建任务专属 RayCluster
 | 交互式调试 | JupyterLab、VS Code、Terminal 连接 GPU Worker；工作区、个人数据和 Python 虚拟环境持久化。 |
 | 数据治理 | 公共数据、团队数据、个人数据与结果使用稳定逻辑路径；训练 Pod 不持有对象存储长期凭据。 |
 | 代码与镜像 | 代码通过 working-dir、工作区快照或固定 Git commit 提交；训练镜像按不可变 digest 登记。 |
-| 可观测性 | Loki/Alloy 提供任务日志，Prometheus Operator/DCGM 提供 GPU 和集群指标，Grafana 提供仪表盘，MLflow 实验中心持久保存训练参数与指标。 |
+| 可观测性 | Loki/Alloy 提供任务日志，Prometheus Operator/DCGM 提供 GPU 和集群指标，Grafana 提供仪表盘；平台实验中心提供受身份过滤的 MLflow 视图，原生 MLflow 提供完整管理界面。 |
 | 训练诊断 | 任务状态、排队时间、运行时间、Pod 日志流、Ray Dashboard 和 GPU 使用率统一关联到平台任务 ID；受管入口还自动关联训练产物。 |
 | 断点续训 | Checkpoint 写入个人结果空间；新任务可把历史任务结果只读挂载后显式 resume。 |
 | 多租户管理 | 用户、角色、租户、团队 GPU 配额、镜像、Git 凭据和数据发布均由管理员页面管理。 |
@@ -52,7 +52,7 @@ KubeRay 创建任务专属 RayCluster
 3. **集群控制与调度**：Kubernetes、KubeRay、Kueue、RBAC、NetworkPolicy 和 GPU 节点选择策略。
 4. **Ray 运行时**：调试环境使用 Dev RayCluster；批量训练为任务专属 Ray head 与 GPU worker。
 5. **数据与存储**：个人、团队、公共、IDC 数据源以及 Checkpoint/产物；对象存储是数据真相。
-6. **可观测性**：日志、指标、GPU 遥测、持久 MLflow 实验中心、运行期 Ray Dashboard 和可选的节点本地临时缓存。
+6. **可观测性**：日志、指标、GPU 遥测、持久 MLflow 实验中心与原生管理界面、运行期 Ray Dashboard 和可选的节点本地临时缓存。
 
 完整网络边界、资源所有权、数据契约和高可用说明见[生产架构](docs/ARCHITECTURE.md)。
 
@@ -116,7 +116,9 @@ PLATFORM_CHECKPOINT_PATH  续训时挂载的历史结果目录（可选）
 - GPU 节点 NVMe 的任务级临时缓存契约已实现，但 `ray-cache-local` StorageClass 未完成集群验收前保持关闭，不宣称已获得数据加速。
 - IDC 数据源可由管理员登记为受控只读挂载；IDC 与 TOS 的用户自助双向迁移尚未作为生产入口开放。
 - Ray Dashboard 只用于运行期诊断。任务集群回收后，历史分析使用平台任务详情、Loki、Prometheus/Grafana 和训练产物。
-- MLflow 独立运行于 `mlflow-system`，使用自己的 PostgreSQL 和对象存储 Artifact 根目录；普通用户通过平台“实验中心”查看有权限的运行，不直接访问 MLflow 管理服务。
+- MLflow 独立运行于 `mlflow-system`，使用自己的 PostgreSQL 和对象存储 Artifact 根目录。实验中心是平台筛选视图，适合按当前用户或团队查看训练指标；登录后的原生 MLflow 是全平台共享的完整管理界面。
+- 原生 MLflow 全功能开放是当前明确策略：所有平台认证用户都能查看全平台实验，并可创建、修改、删除实验、Run 和模型注册条目，也可上传、下载 MLflow Artifact。共享管理操作会直接改变 MLflow 数据，使用前必须确认目标对象。
+- MLflow Artifact 与治理训练数据隔离。开放 Artifact 上传下载不等于允许下载 `/mnt/storage/public`，也不暴露 TOS AK/SK；公共与团队训练数据仍只能通过受控挂载读取。
 - 公共与团队数据在训练 Pod 中只读；写入和发布通过相应管理员权限完成。平台页面不提供数据下载入口。
 
 ## 文档

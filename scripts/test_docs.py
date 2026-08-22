@@ -18,13 +18,25 @@ PUBLIC_DOCS = (
     ROOT / "docs" / "BEVFUSION_CODE_CHANGES.md",
     ROOT / "docs" / "ARCHITECTURE.md",
 )
+CONTRACT_DOCS = PUBLIC_DOCS + (
+    ROOT / "docs" / "BUILD_AND_DEPLOY.md",
+    ROOT / "docs" / "BEVFUSION_RUNBOOK.md",
+    ROOT / "ops" / "mlflow" / "README.md",
+)
+USER_FACING_DOCS = (
+    ROOT / "README.md",
+    ROOT / "docs" / "USER_GUIDE.md",
+    ROOT / "docs" / "SUBMIT_GUIDE.md",
+    ROOT / "docs" / "BEVFUSION_END_TO_END_GUIDE.md",
+    ROOT / "docs" / "BEVFUSION_RUNBOOK.md",
+)
 LINK = re.compile(r"(?<!!)\[[^]]+\]\(([^)]+)\)")
 
 
 class DocumentationContractTest(unittest.TestCase):
     def test_relative_markdown_links_resolve(self) -> None:
         missing = []
-        for document in PUBLIC_DOCS:
+        for document in CONTRACT_DOCS:
             for target in LINK.findall(document.read_text(encoding="utf-8")):
                 path = target.split("#", 1)[0].strip()
                 if not path or "://" in path or path.startswith("mailto:"):
@@ -84,17 +96,131 @@ class DocumentationContractTest(unittest.TestCase):
         self.assertIn("command -v jq", submit)
 
     def test_user_docs_do_not_depend_on_maintainer_machine(self) -> None:
-        user_docs = PUBLIC_DOCS[2:6]
-        combined = "\n".join(path.read_text(encoding="utf-8") for path in user_docs)
+        combined = "\n".join(
+            path.read_text(encoding="utf-8") for path in USER_FACING_DOCS
+        )
         self.assertNotIn("/opt/guofeng/", combined)
         self.assertNotIn("qomolo-desktop", combined)
         self.assertNotRegex(combined, r"/root/raytrain-acceptance")
         self.assertNotRegex(combined, r"glpat-[A-Za-z0-9_-]{12,}")
         self.assertNotRegex(combined, r"rpt_[A-Za-z0-9_-]{20,}")
+        self.assertNotIn("同版本接入工具包", combined)
+        self.assertNotIn("内部工具包", combined)
+
+    def test_mlflow_native_dashboard_policy_is_explicit(self) -> None:
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        architecture = (ROOT / "docs" / "ARCHITECTURE.md").read_text(
+            encoding="utf-8"
+        )
+        user_guide = (ROOT / "docs" / "USER_GUIDE.md").read_text(encoding="utf-8")
+        combined = "\n".join((readme, architecture, user_guide))
+
+        for document in (readme, architecture):
+            self.assertIn("原生 MLflow", document)
+            self.assertIn("完整管理界面", document)
+
+        for marker in (
+            "实验中心是平台筛选视图",
+            "原生 MLflow",
+            "完整管理界面",
+            "所有平台认证用户",
+            "创建、修改、删除实验、Run 和模型注册条目",
+            "上传、下载 MLflow Artifact",
+            "当前明确策略",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, combined)
+
+    def test_mlflow_artifacts_are_separate_from_governed_training_data(self) -> None:
+        user_guide = (ROOT / "docs" / "USER_GUIDE.md").read_text(encoding="utf-8")
+        mlflow_ops = (ROOT / "ops" / "mlflow" / "README.md").read_text(
+            encoding="utf-8"
+        )
+        combined = "\n".join((user_guide, mlflow_ops))
+        self.assertIn("MLflow Artifact 与治理训练数据隔离", combined)
+        self.assertIn("不等于允许下载 `/mnt/storage/public`", combined)
+        self.assertIn("不暴露 TOS AK/SK", combined)
+
+    def test_mlflow_has_only_same_domain_clusterip_access(self) -> None:
+        deployment = (ROOT / "docs" / "BUILD_AND_DEPLOY.md").read_text(
+            encoding="utf-8"
+        )
+        mlflow_ops = (ROOT / "ops" / "mlflow" / "README.md").read_text(
+            encoding="utf-8"
+        )
+        combined = "\n".join((deployment, mlflow_ops))
+        for marker in (
+            "https://raytrain.wellspiking.ai/mlflow/",
+            "ClusterIP",
+            "不创建 NodePort",
+            "不创建独立 Ingress",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, combined)
+
+    def test_daily_shortest_path_is_documented_in_order(self) -> None:
+        guide = (ROOT / "docs" / "USER_GUIDE.md").read_text(encoding="utf-8")
+        markers = (
+            "改代码",
+            "spk-rayjob submit --watch",
+            "spk-rayjob logs -f",
+            "平台实验中心",
+            "原生 MLflow",
+            "断点续跑/重提",
+        )
+        positions = [guide.index(marker) for marker in markers]
+        self.assertEqual(positions, sorted(positions))
+
+    def test_bevfusion_prerequisites_appear_before_clone(self) -> None:
+        guide = (ROOT / "docs" / "BEVFUSION_END_TO_END_GUIDE.md").read_text(
+            encoding="utf-8"
+        )
+        clone_position = guide.index("git clone --single-branch")
+        prerequisites = guide[:clone_position]
+        for marker in (
+            "平台账号",
+            "GitLab 访问权",
+            "已批准镜像",
+            "团队 16 GPU 配额",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, prerequisites)
+
+    def test_cli_installation_is_cross_platform_and_portal_discoverable(self) -> None:
+        submit = (ROOT / "docs" / "SUBMIT_GUIDE.md").read_text(encoding="utf-8")
+        for marker in ("Linux", "macOS", "Windows", "Portal“外部提交”"):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, submit)
+
+    def test_bevfusion_resource_profiles_do_not_mix_smoke_and_production(self) -> None:
+        guide = (ROOT / "docs" / "BEVFUSION_END_TO_END_GUIDE.md").read_text(
+            encoding="utf-8"
+        )
+        runbook = (ROOT / "docs" / "BEVFUSION_RUNBOOK.md").read_text(
+            encoding="utf-8"
+        )
+        combined = "\n".join((guide, runbook))
+        self.assertIn("32 CPU / 128GiB 仅用于 smoke", combined)
+        self.assertIn("每个 Worker 64 CPU / 256GiB", combined)
+        self.assertIn('"ray-platform.cpu-per-worker":"64"', runbook)
+        self.assertIn('"ray-platform.memory-per-worker":"256Gi"', runbook)
+        submit = (ROOT / "docs" / "SUBMIT_GUIDE.md").read_text(encoding="utf-8")
+        self.assertIn('"ray-platform.cpu-per-worker":"64"', submit)
+        self.assertIn('"ray-platform.memory-per-worker":"256Gi"', submit)
+
+    def test_rayignore_uses_verified_root_anchoring(self) -> None:
+        guide = (ROOT / "docs" / "BEVFUSION_END_TO_END_GUIDE.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("根锚定规则有效", guide)
+        self.assertIn("/datasets/", guide)
+        self.assertIn("mmdet3d/datasets", guide)
+        self.assertNotIn("开头增加 `/` 在当前 CLI 中无效", guide)
+        self.assertNotRegex(guide, r"(?m)^(?:data|datasets|work_dirs)/$")
 
     def test_code_fences_are_balanced(self) -> None:
         unbalanced = []
-        for document in PUBLIC_DOCS:
+        for document in CONTRACT_DOCS:
             count = sum(1 for line in document.read_text(encoding="utf-8").splitlines()
                         if line.startswith("```"))
             if count % 2:

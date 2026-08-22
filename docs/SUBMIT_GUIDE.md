@@ -2,7 +2,7 @@
 
 > 适用平台：`https://raytrain.wellspiking.ai`
 > 文档版本：2026-08-22
-> 用户只需本文和自己的代码目录，不需要访问平台构建机。
+> 用户只需平台账号、本文和自己的代码目录。
 
 本文从一份可以在本机运行的原始训练代码开始，说明如何完成代码改造、选择数据和镜像、提交任务、查看 RayCluster、日志、Dashboard 与产物。
 
@@ -129,6 +129,10 @@ spk-rayjob submit --watch
 
 ### 3.1 安装与登录
 
+Portal“外部提交”页面始终展示与当前平台版本匹配的 Linux、macOS 和 Windows 下载命令；版本升级后优先复制该页面中的命令。下面是相同流程的手工写法。
+
+Linux AMD64：
+
 ```bash
 mkdir -p ~/.local/bin ~/.cache/spk-rayjob
 curl -fL https://raytrain.wellspiking.ai/downloads/spk-rayjob/spk-rayjob-linux-amd64 \
@@ -141,6 +145,33 @@ export PATH="$HOME/.local/bin:$PATH"
 
 spk-rayjob login --server https://raytrain.wellspiking.ai
 spk-rayjob jobs
+```
+
+macOS Apple Silicon：
+
+```bash
+mkdir -p ~/.local/bin ~/.cache/spk-rayjob
+curl -fL https://raytrain.wellspiking.ai/downloads/spk-rayjob/spk-rayjob-darwin-arm64 \
+  -o ~/.cache/spk-rayjob/spk-rayjob-darwin-arm64
+curl -fL https://raytrain.wellspiking.ai/downloads/spk-rayjob/SHA256SUMS \
+  -o ~/.cache/spk-rayjob/SHA256SUMS
+(cd ~/.cache/spk-rayjob && grep 'spk-rayjob-darwin-arm64$' SHA256SUMS | shasum -a 256 -c -)
+install -m 0755 ~/.cache/spk-rayjob/spk-rayjob-darwin-arm64 ~/.local/bin/spk-rayjob
+export PATH="$HOME/.local/bin:$PATH"
+spk-rayjob login --server https://raytrain.wellspiking.ai
+```
+
+Windows AMD64（PowerShell）：
+
+```powershell
+$dir = "$env:USERPROFILE\.spk-rayjob"
+New-Item -ItemType Directory -Force $dir | Out-Null
+Invoke-WebRequest https://raytrain.wellspiking.ai/downloads/spk-rayjob/spk-rayjob-windows-amd64.exe -OutFile "$dir\spk-rayjob.exe"
+Invoke-WebRequest https://raytrain.wellspiking.ai/downloads/spk-rayjob/SHA256SUMS -OutFile "$dir\SHA256SUMS"
+$expected = ((Select-String 'spk-rayjob-windows-amd64.exe$' "$dir\SHA256SUMS").Line -split '\s+')[0].ToLower()
+$actual = (Get-FileHash -Algorithm SHA256 "$dir\spk-rayjob.exe").Hash.ToLower()
+if ($actual -ne $expected) { throw 'spk-rayjob checksum mismatch' }
+& "$dir\spk-rayjob.exe" login --server https://raytrain.wellspiking.ai
 ```
 
 登录使用平台账号；`spk-rayjob jobs` 能列出自己的任务即说明会话有效。客户端不会获得 kubeconfig、TOS AK/SK。
@@ -173,12 +204,12 @@ spk-rayjob submit \
   --input-space public --input-path my-dataset/v1 \
   --output-path my-project/train-2x8 \
   --workers 2 --gpus-per-worker 8 \
-  --cpu-per-worker 32 --memory-per-worker 128Gi \
+  --cpu-per-worker 64 --memory-per-worker 256Gi \
   --execution-mode ray_train \
   --watch
 ```
 
-命令中仍然不要手写 `torchrun`。平台会生成跨节点 rendezvous 与每节点 8 进程。
+命令中仍然不要手写 `torchrun`。平台会生成跨节点 rendezvous 与每节点 8 进程。生产 2×8 默认是每个 Worker 64 CPU / 256GiB；32 CPU / 128GiB 仅用于 smoke，不要把 smoke 资源复制到正式长任务。
 
 ### 3.4 用模板固定项目参数
 
@@ -196,6 +227,8 @@ spk-rayjob submit --watch
 不要直接使用报告中的 `python3 tools/westwell_train.py ...`。该 working-dir 含新版 `mmdet3d` Python 源码，而编译扩展在镜像内，必须使用准备器：
 
 `bev_3dod` 在自己的 checkout 根目录创建：
+
+下面模板使用 128 样本，只是 2×8 链路 smoke，因此采用每 Worker 32 CPU / 128GiB；正式长任务改为每 Worker 64 CPU / 256GiB。
 
 ```bash
 cat > .spk-rayjob.yaml <<'YAML'
@@ -286,8 +319,8 @@ META="$(jq -cn --arg image "$IMAGE" '{
   "ray-platform.image":$image,
   "ray-platform.worker-replicas":"2",
   "ray-platform.gpus-per-worker":"8",
-  "ray-platform.cpu-per-worker":"32",
-  "ray-platform.memory-per-worker":"128Gi",
+  "ray-platform.cpu-per-worker":"64",
+  "ray-platform.memory-per-worker":"256Gi",
   "ray-platform.queue":"local-gpu"
 }')"
 

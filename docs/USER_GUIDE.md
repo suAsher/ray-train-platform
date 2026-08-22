@@ -2,6 +2,21 @@
 
 本手册面向算法工程师。浏览器入口是 [https://raytrain.wellspiking.ai](https://raytrain.wellspiking.ai)；管理员操作看 [管理员手册](ADMIN_GUIDE.md)。运行现有 BEVFusion 分支时使用 [BEVFusion 代码改造与验收](BEVFUSION_CODE_CHANGES.md)；接入其他代码使用 [新训练代码接入手册](NEW_TRAINING_CODE_GUIDE.md)。
 
+## 日常最短路径
+
+代码和训练镜像彼此独立。日常开发不需要反复构建镜像，按下面一条链路循环即可：
+
+```text
+改代码
+→ spk-rayjob submit --watch
+→ spk-rayjob logs -f <任务ID>
+→ 平台实验中心看本任务 Loss/指标
+→ 可选：打开原生 MLflow 做全局对比或管理
+→ 断点续跑/重提
+```
+
+第一次接入项目时才需要完成数据路径、分布式入口和镜像兼容性改造；之后每次 `submit` 都会重新打包当前工作目录。
+
 ## 先记住这一条主流程
 
 ```text
@@ -178,9 +193,13 @@ Dashboard 用于查看运行中的 Ray node、task、actor、object store 和资
 
 平台不会自动篡改你的学习率、batch size 或模型参数。基于日志做判断，修改 config/命令后创建新任务，旧任务和 checkpoint 保持可追溯。
 
-### MLflow 实验中心
+### MLflow 实验中心与原生管理界面
 
-“实验中心”用于跨任务比较参数、Loss、学习率、吞吐和 mAP/NDS 等评估指标。它与 Ray Dashboard 的区别是：Ray Dashboard 随任务 RayCluster 回收，MLflow 运行记录长期保留。
+实验中心是平台筛选视图，用于按当前用户或团队查看任务参数、Loss、学习率、吞吐和 mAP/NDS。它适合日常训练排障，并保留平台任务、提交人、租户和训练指标之间的关联。
+
+实验中心中的“打开 MLflow 管理界面”会在新标签页打开同域 `https://raytrain.wellspiking.ai/mlflow/`。原生 MLflow 是登录后可访问的完整管理界面，展示全平台实验。所有平台认证用户都可以创建、修改、删除实验、Run 和模型注册条目，并可上传、下载 MLflow Artifact。原生 MLflow 全功能开放是当前明确策略；这些操作直接改变共享 MLflow 数据，删除或修改前应确认目标对象。
+
+Ray Dashboard 与两种 MLflow 视图的生命周期不同：Ray Dashboard 随任务 RayCluster 回收；实验中心和原生 MLflow 的运行记录长期保留。
 
 当前租户默认训练环境是平台镜像目录中的 `BEVFusion CUDA 11.3 + MLflow`，固定为 `PyTorch 1.10.1 / CUDA 11.3 / Ray 2.10 / MLflow client 2.17.2`。MLflow client 采用 2.17.2 是为了兼容该镜像的 Python 3.8；平台 Tracking Server 为 3.14，标准 Tracking API 已完成兼容验证。自定义镜像若要使用实验中心，也必须预装与自身 Python 版本兼容的 `mlflow-skinny`，不要在每次任务启动时临时安装。
 
@@ -214,7 +233,9 @@ if int(os.getenv("RANK", "0")) == 0 and mlflow.active_run():
     mlflow.end_run(status="FINISHED")
 ```
 
-仅把标量参数和指标写入 MLflow。模型、Checkpoint、配置快照和报告仍写入 `PLATFORM_OUTPUT_PATH`，再从“我的运行结果”查看；普通训练 Pod 的 MLflow 网关不提供 Artifact 下载能力，也不暴露 TOS 凭据。完整可运行示例见仓库 `examples/mlflow/train.py`。
+训练代码默认只把标量参数和指标写入 MLflow。模型、Checkpoint、配置快照和正式训练结果仍应写入 `PLATFORM_OUTPUT_PATH`，再从“我的运行结果”查看；普通训练 Pod 的 MLflow 写入网关不提供 Artifact 下载能力。
+
+MLflow Artifact 与治理训练数据隔离。原生界面允许上传、下载 MLflow Artifact，不等于允许下载 `/mnt/storage/public`，不会把公共或团队训练数据变成可下载对象，也不暴露 TOS AK/SK。Artifact 仅用于明确上传到 MLflow 的实验附件；受治理的训练输入继续通过只读挂载访问。完整可运行示例见仓库 `examples/mlflow/train.py`。
 
 ### 数据分布
 
@@ -227,7 +248,7 @@ if int(os.getenv("RANK", "0")) == 0 and mlflow.active_run():
 
 ## 5. 集群外开发机如何提交
 
-外部机器（构建机、个人 8 卡调试机或笔记本）只需要访问 `raytrain.wellspiking.ai`，不需要 kubeconfig 和 TOS 凭据。
+外部开发服务器、个人 8 卡调试机或笔记本只需要访问 `raytrain.wellspiking.ai`，不需要 kubeconfig 和 TOS 凭据。Linux、macOS、Windows 的当前客户端下载与校验命令以 Portal“外部提交”页面为准，也可查看[三种提交方式](SUBMIT_GUIDE.md#31-安装与登录)。
 
 ### 安装与登录
 
@@ -293,8 +314,8 @@ image: harbor.wellspiking.ai/<项目>/<镜像>@sha256:<digest>
 entrypoint: python tools/westwell_train.py configs/lidar.yaml --launcher pytorch
 workers: 1
 gpusPerWorker: 8
-cpuPerWorker: 32
-memoryPerWorker: 128Gi
+cpuPerWorker: 64
+memoryPerWorker: 256Gi
 executionMode: torchrun      # single_gpu | torchrun | ray_train
 input:
   space: public

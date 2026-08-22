@@ -101,6 +101,15 @@ Ray Head、任务提交器和平台组件由平台单独管理，不包含在上
 
 ## 3. 准备账号、Git 和客户端
 
+在执行任何 `git clone` 之前，先确认四项前置条件全部满足：
+
+- **平台账号**：能登录 Portal，并且 `spk-rayjob jobs` 能返回本人任务；
+- **GitLab 访问权**：个人 SSH Key 或组织批准的 HTTPS 凭据能读取目标分支；
+- **已批准镜像**：团队镜像目录中已登记本手册固定的不可变 digest；
+- **团队 16 GPU 配额**：团队剩余配额至少为 16 GPU，且当前物理资源允许 2 Worker × 8 GPU 准入。
+
+任一项不满足都应先联系团队管理员，不要通过共享账号、临时镜像或绕过平台入口继续。
+
 ### 3.1 Git 凭据
 
 优先使用个人 SSH Key 拉私有仓库，不要把 GitLab Token 写进 clone URL、脚本或 shell history：
@@ -112,6 +121,8 @@ ssh -T git@gitlab.qomolo.com
 如果组织要求 HTTPS，请使用 Git 的安全凭据管理器，在交互提示中输入凭据。平台网页从 Git 提交时，凭据应在“Git 凭据”页面添加并测试，不写入算法仓库。
 
 ### 3.2 安装 `spk-rayjob`
+
+下面给出 Linux AMD64 命令。macOS、Windows 用户应打开 Portal“外部提交”页面，复制当前平台版本对应的安装和校验命令；[三种提交方式](SUBMIT_GUIDE.md#31-安装与登录)同时提供 Linux、macOS、Windows 的完整示例。
 
 Linux AMD64：
 
@@ -492,22 +503,17 @@ __pycache__/
 *.pyc
 *.pkl
 *.pth
+/data/
+/datasets/
+/work_dirs/
 /run/
 /run_dir/
 mmdet3d/ops/
 ```
 
-这组规则排除 Git 历史、虚拟环境、Python 缓存、pkl、checkpoint 和镜像提供的编译扩展。其他格式的大型训练数据不会被自动识别，必须放在算法 checkout 外。当前固定镜像已经包含匹配的 `mmdet3d.ops` 和 CUDA 扩展；入口中的 `raytrain-bevfusion-prepare` 会把镜像内缺失的扩展补入 working directory，但不会覆盖用户 Python 源码。
+这组规则排除 Git 历史、虚拟环境、Python 缓存、仓库根数据目录、pkl、checkpoint 和镜像提供的编译扩展。当前客户端的 `.rayignore` 根锚定规则有效：`/datasets/` 只匹配仓库根目录，不会吞掉 `mmdet3d/datasets`；不能写成不带开头 `/` 的 `datasets/`。同理应使用 `/data/`、`/work_dirs/`，不要使用会匹配任意层级的宽泛规则。
 
-不要在当前版本的 `.rayignore` 中添加下面三条：
-
-```text
-data/
-datasets/
-work_dirs/
-```
-
-当前 `spk-rayjob` 会把不含 `/` 的目录规则应用到任意层级，因此 `datasets/` 会错误排除 `mmdet3d/datasets/`，导致 `platform_paths.py` 不进入源码包。2026.08.22.1 及以后版本保留开头 `/` 的仓库根锚定语义；确实存在仓库根数据目录时可使用 `/data/`、`/datasets/`、`/work_dirs/`。仍建议把大型数据放在算法 checkout 外，并通过第 6.2 节检查最终 ZIP。
+其他格式的大型训练数据不会被自动识别，仍建议放在算法 checkout 外。当前固定镜像已经包含匹配的 `mmdet3d.ops` 和 CUDA 扩展；入口中的 `raytrain-bevfusion-prepare` 会把镜像内缺失的扩展补入 working directory，但不会覆盖用户 Python 源码。提交前必须按第 6.2 节检查最终 ZIP，确认 `mmdet3d/datasets/platform_paths.py` 存在。
 
 如果用户修改了自定义 CUDA/C++ op，必须删除 `mmdet3d/ops/` 忽略规则、重新构建兼容镜像并登记新的不可变 digest；不能把任意机器上编译的 `.so` 随源码包上传。
 
@@ -946,7 +952,7 @@ BEVFUSION_PLATFORM_DATA_PREFLIGHT_OK
 
 ## 9. 可选：2×8 卡小样本 smoke
 
-正式长任务前建议用 128 样本执行一次真实 forward/backward、NCCL 和 checkpoint。smoke 可以保持已验证资源 `32 CPU / 128GiB`，因为它用于链路验收而不是吞吐调优。
+正式长任务前建议用 128 样本执行一次真实 forward/backward、NCCL 和 checkpoint。32 CPU / 128GiB 仅用于 smoke，因为它用于链路验收而不是吞吐调优；正式 2×8 必须从每个 Worker 64 CPU / 256GiB 起步。
 
 在 checkout 根目录创建临时 `.spk-rayjob.yaml`：
 
@@ -1293,7 +1299,7 @@ CPU 和内存配置是否合适，要以训练和数据基准共同判断。至�
 
 推荐对比：
 
-1. `32 CPU / 128GiB`、`workers_per_gpu=1`；
+1. smoke 对照：`32 CPU / 128GiB`、`workers_per_gpu=1`；
 2. `64 CPU / 256GiB`、`workers_per_gpu=1`；
 3. `64 CPU / 256GiB`、`workers_per_gpu=2`；
 4. 必要时再测 `96 CPU / 384GiB`、`workers_per_gpu=4`。
@@ -1307,7 +1313,7 @@ CPU 和内存配置是否合适，要以训练和数据基准共同判断。至�
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
 | `No module named mmdet3d.runner` | 原 `.gitignore` 的 `run*/` 把源码排除了 | 应用运行时补丁，确认已改为 `/run*/`。 |
-| `No module named platform_paths` | `.rayignore` 的 `datasets/` 把 `mmdet3d/datasets/` 整体排除了 | 删除 `data/`、`datasets/`、`work_dirs/` 宽泛规则，并按 6.2 检查实际 ZIP。开头增加 `/` 在当前 CLI 中无效。 |
+| `No module named platform_paths` | `.rayignore` 的 `datasets/` 把 `mmdet3d/datasets/` 整体排除了 | 改用 `/data/`、`/datasets/`、`/work_dirs/` 根锚定规则，并按 6.2 检查实际 ZIP 中存在 `mmdet3d/datasets/platform_paths.py`。 |
 | `No module named mmdet3d.ops` | working-dir 中没有镜像提供的编译扩展，或入口没有执行准备器 | 保留精确规则 `mmdet3d/ops/`，并确保 entrypoint 以 `raytrain-bevfusion-prepare` 开头。 |
 | `distutils.version` 或 TensorBoard 报错 | 旧 PyTorch/MMCV 与 TensorBoard/setuptools 组合不兼容 | 应用完整 `configure_platform_output()` 补丁，不要只改 local rank。 |
 | pkl 能读但样本文件缺失 | pkl 保存了旧机器绝对路径，或公共数据不完整 | 先跑第 8 节预检，检查 `missing=0`。 |

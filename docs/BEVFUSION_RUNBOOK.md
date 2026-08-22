@@ -19,6 +19,8 @@
 | 用户结果根目录 | `/mnt/storage/me/runs`（个人读写） |
 | 提交客户端 | `spk-rayjob prod-20260819-cli-r7` |
 
+资源口径固定为：生产 2×8 使用每个 Worker 64 CPU / 256GiB；32 CPU / 128GiB 仅用于 smoke。表格和命令中的 CPU、内存均是单个 Worker Pod 的申请量，不是任务总量。
+
 对象存储中的物理 bucket 和前缀由平台管理员维护。用户不接触 TOS URI 或 AK/SK，只选择 `public / <数据集>/<版本>`；平台把登记的数据目录以只读方式挂载给每个训练 Worker，并把每次任务结果写入用户自己的结果空间。
 
 ## 2. 2026-08-21 实际验收结果
@@ -181,8 +183,8 @@ entrypoint: >-
   evaluation.interval=1
 workers: 2
 gpusPerWorker: 8
-cpuPerWorker: 32
-memoryPerWorker: 128Gi
+cpuPerWorker: 64
+memoryPerWorker: 256Gi
 executionMode: ray_train
 input:
   space: public
@@ -209,8 +211,8 @@ spk-rayjob submit \
   --output-path "acceptance/manual/bevfusion-fz-merged-2x8-${RUN_ID}" \
   --workers 2 \
   --gpus-per-worker 8 \
-  --cpu-per-worker 32 \
-  --memory-per-worker 128Gi \
+  --cpu-per-worker 64 \
+  --memory-per-worker 256Gi \
   --execution-mode ray_train \
   --watch
 ```
@@ -273,8 +275,8 @@ META=$(jq -cn --arg image "$IMAGE" '{
   "ray-platform.image":$image,
   "ray-platform.worker-replicas":"2",
   "ray-platform.gpus-per-worker":"8",
-  "ray-platform.cpu-per-worker":"32",
-  "ray-platform.memory-per-worker":"128Gi",
+  "ray-platform.cpu-per-worker":"64",
+  "ray-platform.memory-per-worker":"256Gi",
   "ray-platform.queue":"local-gpu"
 }')
 
@@ -306,7 +308,7 @@ ray job submit \
 
 1. 代码来源选择当前调试工作区快照，或固定 Git commit。
 2. 镜像选择上述 BEVFusion 不可变 digest。
-3. 执行方式选择“多机多卡 Ray Train”，Worker `2`，每 Worker GPU `8`，CPU `32`，内存 `128Gi`。
+3. 执行方式选择“多机多卡 Ray Train”，Worker `2`，每 Worker GPU `8`，CPU `64`，内存 `256Gi`。
 4. 输入选择“公共数据 / `bevfusion/fz-3dod-v1`”。
 5. 命令填写模板中的普通训练命令，不要自己写 `torchrun`。
 6. 输出选择个人运行结果目录。

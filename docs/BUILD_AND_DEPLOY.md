@@ -2,7 +2,7 @@
 
 本文是唯一的部署入口，覆盖首次安装、日常发版、原子升级、验收与回滚。
 
-> 当前生产拓扑已包含 Frontend/Backend/CLI 发布服务双副本、私网 ALB、属主限定 Ray Dashboard、持久 MLflow 实验中心、工作区源码快照与终态任务归档。Profile 暂用 `APP_ENV=development`，因为平台 PostgreSQL 仍是内置单实例且 Keycloak OIDC 尚未成为强制认证。不要只改这个开关；严格生产模式会拒绝内置 PostgreSQL 和缺失的 OIDC。完成外部 HA PostgreSQL 与 OIDC 配置后，再将 `backend.appEnv` 改为 `production` 并走本手册的完整 preflight/deploy/verify。
+> 当前生产拓扑已包含 Frontend/Backend/CLI 发布服务双副本、私网 ALB、属主限定 Ray Dashboard、持久 MLflow 实验中心、同域原生 MLflow 管理界面、工作区源码快照与终态任务归档。Profile 暂用 `APP_ENV=development`，因为平台 PostgreSQL 仍是内置单实例且 Keycloak OIDC 尚未成为强制认证。不要只改这个开关；严格生产模式会拒绝内置 PostgreSQL 和缺失的 OIDC。完成外部 HA PostgreSQL 与 OIDC 配置后，再将 `backend.appEnv` 改为 `production` 并走本手册的完整 preflight/deploy/verify。
 
 ## 1. 日常发布原则
 
@@ -230,7 +230,9 @@ bash ops/mlflow/deploy.sh
 bash ops/mlflow/verify.sh
 ```
 
-MLflow 保持 ClusterIP。普通训练 Pod 只访问写入网关，用户从平台“实验中心”查看已授权运行；不要单独创建 MLflow Ingress。详细拓扑、数据库、TOS Artifact 和 NetworkPolicy 约束见 [MLflow 运维说明](../ops/mlflow/README.md)。
+MLflow 保持 ClusterIP。普通训练 Pod 只访问写入网关；实验中心是平台筛选视图，原生管理界面统一从 `https://raytrain.wellspiking.ai/mlflow/` 访问。该路径先到 Frontend，再由 Backend 完成平台鉴权和反向代理；MLflow 自身不创建 NodePort、不创建独立 Ingress。
+
+原生 MLflow 全功能开放是当前明确策略：所有平台认证用户都能管理全平台实验、Run、模型注册条目和 MLflow Artifact。部署验收必须覆盖登录票据、共享 CRUD、Artifact 上传下载和同源保护。开放 Artifact 不改变治理训练数据策略，不允许从 `/mnt/storage/public` 下载数据，也不向浏览器或训练 Pod 暴露 TOS AK/SK。详细拓扑、数据库、TOS Artifact 和 NetworkPolicy 约束见 [MLflow 运维说明](../ops/mlflow/README.md)。
 
 ## 6. 扩容与生产发布
 
