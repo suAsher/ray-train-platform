@@ -23,7 +23,7 @@ func TestModelColumnsExistInMigrations(t *testing.T) {
 	models := []any{
 		&JobRecord{}, &OutboxRecord{}, &TenantRecord{}, &UserRecord{},
 		&WorkspaceRecord{}, &IdempotencyRecord{}, &PersonalAccessTokenRecord{},
-		&LocalUserRecord{}, &LocalSessionRecord{}, &AuditLogRecord{}, &PlatformImageRecord{},
+		&LocalUserRecord{}, &LocalSessionRecord{}, &AuditLogRecord{}, &MLflowDashboardTicketRecord{}, &PlatformImageRecord{},
 		&DataMountBindingRecord{}, &GitCredentialRecord{}, &WorkspaceSnapshotRecord{},
 		&IDCConnectionRecord{}, &DataTransferRecord{},
 	}
