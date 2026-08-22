@@ -8,36 +8,38 @@ readonly README="${ROOT_DIR}/ops/mlflow/README.md"
 fault_dir="$(mktemp -d)"
 trap 'rm -rf "$fault_dir"' EXIT
 
-# Reproduce the old GET-then-name-DELETE race. The fake API changes the object
-# after the UID read; only a DeleteOptions UID precondition can reject it.
-cleanup_job_body="$(sed -n '/^cleanup_job_instance()/,/^}/p' "$DEPLOY")"
+# Reproduce a same-name replacement during cleanup. The API rejects the old
+# UID precondition; cleanup must retain the Lease instead of releasing it.
 toctou_log="${fault_dir}/job-toctou.log"
 : >"$toctou_log"
-if (
-  NAMESPACE='mlflow-system'
-  KUBECTL_CALL_LOG="$toctou_log"
-
+if ! KUBECTL_CALL_LOG="$toctou_log" DEPLOY_PATH="$DEPLOY" bash -c '
+  set -euo pipefail
   kubectl() {
     case "$*" in
-      *' get job '*) printf '%s' 'old-job-uid' ;;
-      *'delete --raw '*)
+      *"delete --raw "*)
         local payload
         payload="$(</dev/stdin)"
-        printf 'uid-delete %s %s\n' "$*" "$payload" >>"$KUBECTL_CALL_LOG"
+        printf "uid-delete %s %s\n" "$*" "$payload" >>"$KUBECTL_CALL_LOG"
         return 55 # The API server reports that the name now has another UID.
         ;;
-      *' delete job '*)
-        printf 'blind-name-delete %s\n' "$*" >>"$KUBECTL_CALL_LOG"
+      *" delete job "*)
+        printf "blind-name-delete %s\n" "$*" >>"$KUBECTL_CALL_LOG"
         return 0
         ;;
       *) return 0 ;;
     esac
   }
 
-  eval "$cleanup_job_body"
-  cleanup_job_instance mlflow-artifact-acceptance-old-run old-job-uid >/dev/null 2>&1
-); then
-  echo 'Job cleanup remained successful after a same-name UID replacement' >&2
+  source "$DEPLOY_PATH"
+  DEPLOY_RUN_ID="old-run"
+  LEASE_HOLDER="mlflow-deploy-old-run"
+  LEASE_ACQUIRED=true
+  if cleanup_job_instance mlflow-artifact-acceptance-old-run old-job-uid old-run >/dev/null 2>&1; then
+    exit 81
+  fi
+  [[ "$LEASE_RELEASE_BLOCKED" == true ]]
+'; then
+  echo 'Job cleanup did not fail closed after a same-name UID replacement' >&2
   exit 1
 fi
 if grep -Fq 'blind-name-delete' "$toctou_log"; then
@@ -56,6 +58,34 @@ grep -Fq 'preconditions' "$toctou_log" || {
   echo 'Job cleanup must send Kubernetes DeleteOptions preconditions' >&2
   exit 1
 }
+grep -Fq 'Foreground' "$DEPLOY" || {
+  echo 'Job cleanup must use Foreground propagation' >&2
+  exit 1
+}
+grep -Fq -- '--for=delete "job/${name}"' "$DEPLOY" || {
+  echo 'Job cleanup must wait until the deleted Job is NotFound' >&2
+  exit 1
+}
+grep -Fq 'platform.wellspiking.ai/deploy-run-id' "$DEPLOY"
+grep -Fq 'platform.wellspiking.ai/request-nonce' "$DEPLOY" || {
+  echo 'Job create and recovery must be fenced by a per-request nonce' >&2
+  exit 1
+}
+if grep -Fq 'MLFLOW_DEPLOY_RUN_ID' "$DEPLOY"; then
+  echo 'production deploy must not accept an externally reusable run ID' >&2
+  exit 1
+fi
+run_job_body="$(sed -n '/^run_job()/,/^}/p' "$DEPLOY")"
+if grep -Eq 'cleanup_job_instance.*\|\| true' <<<"$run_job_body"; then
+  echo 'run_job must propagate cleanup fencing failures' >&2
+  exit 1
+fi
+while IFS= read -r cleanup_call; do
+  grep -Fq '"$DEPLOY_RUN_ID"' <<<"$cleanup_call" || {
+    echo 'run_job cleanup must select Pods by this deployment run ID' >&2
+    exit 1
+  }
+done < <(grep 'cleanup_job_instance' <<<"$run_job_body")
 
 grep -Fq 'coordination.k8s.io/v1' "$DEPLOY" || {
   echo 'MLflow deploy must use a coordination.k8s.io/v1 Lease' >&2
@@ -102,12 +132,111 @@ fi
   exit 1
 }
 
+# An inherited CI value must never become the production deployment identity.
+MLFLOW_DEPLOY_RUN_ID='reused-external-id' TEST_RUN_ID='fresh-process-id' DEPLOY_PATH="$DEPLOY" \
+  bash -c '
+    set -euo pipefail
+    source "$DEPLOY_PATH"
+    generate_deploy_run_id() { printf "%s" "$TEST_RUN_ID"; }
+    initialize_deploy_identity
+    [[ "$DEPLOY_RUN_ID" == "fresh-process-id" ]]
+    [[ "$LEASE_HOLDER" == "mlflow-deploy-fresh-process-id" ]]
+    [[ "$(deployment_job_name mlflow-db-upgrade)" == "mlflow-db-upgrade-fresh-process-id" ]]
+  ' || {
+    echo 'external MLFLOW_DEPLOY_RUN_ID was reused by the deployment process' >&2
+    exit 1
+  }
+
+run_cleanup_fence_failure_case() {
+  local scenario="$1"
+  local case_dir="${fault_dir}/cleanup-${scenario}"
+  mkdir -p "$case_dir"
+
+  if CASE_NAME="$scenario" CASE_DIR="$case_dir" DEPLOY_PATH="$DEPLOY" \
+    bash -c '
+      set -euo pipefail
+
+      kubectl() {
+        printf "%s\n" "$*" >>"${CASE_DIR}/calls.log"
+        case "${CASE_NAME}: $*" in
+          raw-delete-failure:*"delete --raw "*)
+            local payload
+            payload="$(</dev/stdin)"
+            printf "%s" "$payload" >"${CASE_DIR}/delete-options.json"
+            return 42
+            ;;
+          pods-remain:*"delete --raw "*)
+            local payload
+            payload="$(</dev/stdin)"
+            printf "%s" "$payload" >"${CASE_DIR}/delete-options.json"
+            return 0
+            ;;
+          job-wait-failure:*"delete --raw "*)
+            local payload
+            payload="$(</dev/stdin)"
+            printf "%s" "$payload" >"${CASE_DIR}/delete-options.json"
+            return 0
+            ;;
+          job-wait-failure:*" wait --for=delete job/"*) return 45 ;;
+          pods-remain:*" wait --for=delete job/"*) return 0 ;;
+          pods-remain:*" get pods -l "*)
+            printf "%s\n" "{\"items\":[{\"metadata\":{\"name\":\"orphan-pod\"}}]}"
+            ;;
+          pods-remain:*" wait --for=delete pod "*) return 0 ;;
+          *) return 0 ;;
+        esac
+      }
+
+      source "$DEPLOY_PATH"
+      DEPLOY_RUN_ID="run-one"
+      LEASE_HOLDER="mlflow-deploy-run-one"
+      release_deploy_lease() {
+        printf "released\n" >"${CASE_DIR}/released.log"
+        LEASE_ACQUIRED=false
+        return 0
+      }
+      LEASE_ACQUIRED=true
+      install_deploy_traps
+      if cleanup_job_instance mlflow-db-upgrade-run-one fresh-job-uid run-one >/dev/null 2>"${CASE_DIR}/stderr.log"; then
+        exit 82
+      fi
+      [[ "$LEASE_RELEASE_BLOCKED" == true ]]
+      grep -Fq "Lease retained" "${CASE_DIR}/stderr.log"
+      exit 73
+    '; then
+    case_status=0
+  else
+    case_status=$?
+  fi
+  [[ "$case_status" == '73' ]] || {
+    echo "${scenario} cleanup fence exited ${case_status} instead of retaining the Lease" >&2
+    exit 1
+  }
+  if [[ -e "${case_dir}/released.log" ]]; then
+    echo "${scenario} cleanup fence released the deployment Lease" >&2
+    exit 1
+  fi
+  jq -e '.propagationPolicy == "Foreground" and .preconditions.uid == "fresh-job-uid"' \
+    "${case_dir}/delete-options.json" >/dev/null
+  if [[ "$scenario" == pods-remain ]]; then
+    grep -Fq 'job-name=mlflow-db-upgrade-run-one,platform.wellspiking.ai/deploy-run-id=run-one' \
+      "${case_dir}/calls.log" || {
+        echo 'Job cleanup did not fence Pod confirmation by job-name and deploy-run-id' >&2
+        exit 1
+      }
+  fi
+}
+
+run_cleanup_fence_failure_case raw-delete-failure
+run_cleanup_fence_failure_case job-wait-failure
+run_cleanup_fence_failure_case pods-remain
+
 run_lease_case() {
   local scenario="$1"
   local case_dir="${fault_dir}/${scenario}"
   mkdir -p "$case_dir"
 
-  CASE_NAME="$scenario" CASE_DIR="$case_dir" DEPLOY_PATH="$DEPLOY" MLFLOW_DEPLOY_RUN_ID='run-one' \
+  CASE_NAME="$scenario" CASE_DIR="$case_dir" DEPLOY_PATH="$DEPLOY" TEST_RUN_ID='run-one' \
     bash -c '
       set -euo pipefail
 
@@ -138,6 +267,7 @@ run_lease_case() {
       }
 
       source "$DEPLOY_PATH"
+      generate_deploy_run_id() { printf "%s" "$TEST_RUN_ID"; }
       initialize_deploy_identity
 
       case "$CASE_NAME" in
@@ -182,10 +312,11 @@ run_lease_case release-other
 run_lease_case release-own
 
 trap_log="${fault_dir}/trap.log"
-if CASE_DIR="$fault_dir" DEPLOY_PATH="$DEPLOY" MLFLOW_DEPLOY_RUN_ID='trap-run' \
+if CASE_DIR="$fault_dir" DEPLOY_PATH="$DEPLOY" TEST_RUN_ID='trap-run' \
   bash -c '
     set -euo pipefail
     source "$DEPLOY_PATH"
+    generate_deploy_run_id() { printf "%s" "$TEST_RUN_ID"; }
     initialize_deploy_identity
     release_deploy_lease() {
       printf "released %s\n" "$LEASE_HOLDER" >>"${CASE_DIR}/trap.log"
@@ -210,10 +341,11 @@ grep -Fq 'released mlflow-deploy-trap-run' "$trap_log" || {
 }
 
 signal_log="${fault_dir}/signal.log"
-if CASE_DIR="$fault_dir" DEPLOY_PATH="$DEPLOY" MLFLOW_DEPLOY_RUN_ID='signal-run' \
+if CASE_DIR="$fault_dir" DEPLOY_PATH="$DEPLOY" TEST_RUN_ID='signal-run' \
   bash -c '
     set -euo pipefail
     source "$DEPLOY_PATH"
+    generate_deploy_run_id() { printf "%s" "$TEST_RUN_ID"; }
     initialize_deploy_identity
     release_deploy_lease() {
       printf "released %s\n" "$LEASE_HOLDER" >>"${CASE_DIR}/signal.log"
@@ -243,7 +375,7 @@ run_job_failure_case() {
   local case_dir="${fault_dir}/job-${scenario}"
   mkdir -p "$case_dir"
 
-  CASE_NAME="$scenario" CASE_DIR="$case_dir" DEPLOY_PATH="$DEPLOY" MLFLOW_DEPLOY_RUN_ID='run-one' \
+  CASE_NAME="$scenario" CASE_DIR="$case_dir" DEPLOY_PATH="$DEPLOY" TEST_RUN_ID='run-one' TEST_REQUEST_NONCE='nonce-one' \
     bash -c '
       set -euo pipefail
       readonly EXPECTED_JOB="mlflow-artifact-acceptance-run-one"
@@ -268,7 +400,8 @@ run_job_failure_case() {
           *:*" get job ${EXPECTED_JOB} -o json")
             printf "{\"metadata\":{\"name\":\"%s\",\"uid\":\"fresh-job-uid\"},\"status\":{\"conditions\":[{\"type\":\"Complete\",\"status\":\"True\"}]}}\n" "$EXPECTED_JOB"
             ;;
-          wait-failure:*" wait "*) return 43 ;;
+          wait-failure:*" wait --for=condition=complete "*) return 43 ;;
+          *:*" get pods -l "*) printf "%s\n" "{\"items\":[]}" ;;
           *:*" wait "*) return 0 ;;
           *:*"delete --raw "*)
             local delete_options
@@ -281,6 +414,8 @@ run_job_failure_case() {
       }
 
       source "$DEPLOY_PATH"
+      generate_deploy_run_id() { printf "%s" "$TEST_RUN_ID"; }
+      generate_job_request_nonce() { printf "%s" "$TEST_REQUEST_NONCE"; }
       initialize_deploy_identity
       if run_job "$EXPECTED_JOB" /tmp/artifact-acceptance.yaml >/dev/null 2>&1; then
         exit 61
@@ -293,11 +428,13 @@ run_job_failure_case() {
         wait-failure)
           grep -Fq "raw-delete" "${CASE_DIR}/calls.log"
           grep -Fq "fresh-job-uid" "${CASE_DIR}/calls.log"
+          [[ "${LEASE_RELEASE_BLOCKED:-false}" != true ]]
           ;;
         replacement)
           grep -Fq " wait " "${CASE_DIR}/calls.log"
           grep -Fq "raw-delete" "${CASE_DIR}/calls.log"
           grep -Fq "fresh-job-uid" "${CASE_DIR}/calls.log"
+          [[ "${LEASE_RELEASE_BLOCKED:-false}" == true ]]
           ;;
       esac
     '
@@ -309,7 +446,7 @@ run_job_failure_case replacement
 
 create_recovered_dir="${fault_dir}/create-recovered"
 mkdir -p "$create_recovered_dir"
-CASE_DIR="$create_recovered_dir" DEPLOY_PATH="$DEPLOY" MLFLOW_DEPLOY_RUN_ID='run-one' \
+CASE_DIR="$create_recovered_dir" DEPLOY_PATH="$DEPLOY" TEST_RUN_ID='run-one' TEST_REQUEST_NONCE='nonce-one' \
   bash -c '
     set -euo pipefail
     readonly EXPECTED_JOB="mlflow-db-upgrade-run-one"
@@ -322,7 +459,7 @@ CASE_DIR="$create_recovered_dir" DEPLOY_PATH="$DEPLOY" MLFLOW_DEPLOY_RUN_ID='run
           ;;
         *" create -f - -o json"*) return 42 ;;
         *" get job ${EXPECTED_JOB} --ignore-not-found -o json"*)
-          printf "{\"metadata\":{\"name\":\"%s\",\"uid\":\"recovered-job-uid\",\"labels\":{\"platform.wellspiking.ai/deploy-run-id\":\"run-one\"}}}\n" "$EXPECTED_JOB"
+          printf "{\"metadata\":{\"name\":\"%s\",\"uid\":\"recovered-job-uid\",\"labels\":{\"platform.wellspiking.ai/deploy-run-id\":\"run-one\",\"platform.wellspiking.ai/request-nonce\":\"nonce-one\"}}}\n" "$EXPECTED_JOB"
           ;;
         *" get job ${EXPECTED_JOB} -o jsonpath="*) printf "%s" "recovered-job-uid" ;;
         *" get job ${EXPECTED_JOB} -o json")
@@ -334,6 +471,8 @@ CASE_DIR="$create_recovered_dir" DEPLOY_PATH="$DEPLOY" MLFLOW_DEPLOY_RUN_ID='run
     }
 
     source "$DEPLOY_PATH"
+    generate_deploy_run_id() { printf "%s" "$TEST_RUN_ID"; }
+    generate_job_request_nonce() { printf "%s" "$TEST_REQUEST_NONCE"; }
     initialize_deploy_identity
     run_job "$EXPECTED_JOB" /tmp/db-upgrade.yaml >/dev/null
     grep -Fq " wait " "${CASE_DIR}/calls.log"
@@ -344,7 +483,7 @@ run_create_fail_closed_case() {
   local case_dir="${fault_dir}/create-${scenario}"
   mkdir -p "$case_dir"
 
-  if CASE_NAME="$scenario" CASE_DIR="$case_dir" DEPLOY_PATH="$DEPLOY" MLFLOW_DEPLOY_RUN_ID='run-one' \
+  if CASE_NAME="$scenario" CASE_DIR="$case_dir" DEPLOY_PATH="$DEPLOY" TEST_RUN_ID='run-one' TEST_REQUEST_NONCE='nonce-one' \
     bash -c '
       set -euo pipefail
       readonly EXPECTED_JOB="mlflow-db-upgrade-run-one"
@@ -358,13 +497,15 @@ run_create_fail_closed_case() {
           *:*" create -f - -o json"*) return 42 ;;
           uncertain:*" get job ${EXPECTED_JOB} --ignore-not-found -o json"*) return 45 ;;
           mismatch:*" get job ${EXPECTED_JOB} --ignore-not-found -o json"*)
-            printf "{\"metadata\":{\"name\":\"%s\",\"uid\":\"foreign-job-uid\",\"labels\":{\"platform.wellspiking.ai/deploy-run-id\":\"other-run\"}}}\n" "$EXPECTED_JOB"
+            printf "{\"metadata\":{\"name\":\"%s\",\"uid\":\"old-job-uid\",\"labels\":{\"platform.wellspiking.ai/deploy-run-id\":\"run-one\",\"platform.wellspiking.ai/request-nonce\":\"old-nonce\"}}}\n" "$EXPECTED_JOB"
             ;;
           *) return 0 ;;
         esac
       }
 
       source "$DEPLOY_PATH"
+      generate_deploy_run_id() { printf "%s" "$TEST_RUN_ID"; }
+      generate_job_request_nonce() { printf "%s" "$TEST_REQUEST_NONCE"; }
       initialize_deploy_identity
       release_deploy_lease() {
         printf "released\n" >"${CASE_DIR}/released.log"
@@ -399,7 +540,7 @@ run_create_fail_closed_case mismatch
 
 job_case_dir="${fault_dir}/unique-job"
 mkdir -p "$job_case_dir"
-CASE_DIR="$job_case_dir" DEPLOY_PATH="$DEPLOY" MLFLOW_DEPLOY_RUN_ID='run-one' \
+CASE_DIR="$job_case_dir" DEPLOY_PATH="$DEPLOY" TEST_RUN_ID='run-one' TEST_REQUEST_NONCE='nonce-one' \
   bash -c '
     set -euo pipefail
     readonly EXPECTED_JOB="mlflow-db-upgrade-run-one"
@@ -426,10 +567,16 @@ CASE_DIR="$job_case_dir" DEPLOY_PATH="$DEPLOY" MLFLOW_DEPLOY_RUN_ID='run-one' \
     }
 
     source "$DEPLOY_PATH"
+    generate_deploy_run_id() { printf "%s" "$TEST_RUN_ID"; }
+    generate_job_request_nonce() { printf "%s" "$TEST_REQUEST_NONCE"; }
     initialize_deploy_identity
     [[ "$(deployment_job_name mlflow-db-upgrade)" == "$EXPECTED_JOB" ]]
     run_job "$EXPECTED_JOB" /tmp/db-upgrade.yaml >/dev/null
-    jq -e ".metadata.name == \"${EXPECTED_JOB}\" and .metadata.labels[\"platform.wellspiking.ai/deploy-run-id\"] == \"run-one\"" "${CASE_DIR}/created.json" >/dev/null
+    jq -e ".metadata.name == \"${EXPECTED_JOB}\" and
+      .metadata.labels[\"platform.wellspiking.ai/deploy-run-id\"] == \"run-one\" and
+      .metadata.labels[\"platform.wellspiking.ai/request-nonce\"] == \"nonce-one\" and
+      .spec.template.metadata.labels[\"platform.wellspiking.ai/deploy-run-id\"] == \"run-one\" and
+      .spec.template.metadata.labels[\"platform.wellspiking.ai/request-nonce\"] == \"nonce-one\"" "${CASE_DIR}/created.json" >/dev/null
     ! grep -Fq " delete job " "${CASE_DIR}/calls.log"
   '
 
@@ -440,5 +587,10 @@ grep -Fq 'Kubernetes Lease' "$README"
 grep -Fq '任意非空 holder' "$README"
 grep -Fq '手动解锁' "$README"
 grep -Fq 'resourceVersion' "$README"
+grep -Fq '无条件生成新的随机 run-id' "$README"
+grep -Fq 'request nonce' "$README"
+grep -Fq 'UID precondition + `Foreground`' "$README"
+grep -Fq 'Job 已 NotFound' "$README"
+grep -Fq '`job-name` + `deploy-run-id`' "$README"
 
 echo 'MLflow deployment concurrency contract verified'

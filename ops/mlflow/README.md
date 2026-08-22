@@ -16,7 +16,8 @@
 - 数据边界：MLflow Artifact 与治理训练数据隔离。开放 Artifact 上传下载不等于允许下载 `/mnt/storage/public`，也不暴露 TOS AK/SK。训练 Pod 仍只能通过写入网关上报指标，不能借此读取共享 MLflow 数据。
 - 迁移安全：部署先启用临时 NetworkPolicy 保留旧 S3 后端的 TOS egress，再探测 FSX、执行数据库迁移和 Helm `--atomic` 切换。新版本必须通过真实 Artifact CRUD（上传、下载、删除）验收后，才会删除旧 Secret/ConfigMap 并撤销临时 egress。
 - 回滚：Helm rollout 失败时由 `--atomic` 自动回滚；Artifact CRUD 验收失败时自动恢复旧依赖并回滚到部署前 revision。清理失败会恢复旧依赖并保留临时 egress，使运行中的新服务保持可用并为人工回滚留出路径。
-- 并发安全：`deploy.sh` 使用 `mlflow-system/mlflow-deploy` Kubernetes Lease 串行化完整部署、验收、回滚和清理流程。采用 fail-closed 固定锁：任意非空 holder（无论存续多久）都会让第二次部署立即失败，不设过期时间、不自动接管。退出与信号处理只会以读取到的 `resourceVersion` 清空自己的 holder，不删除 Lease，也不会覆盖新的 holder。三个一次性 Job 均带随机部署后缀，失败清理通过 UID precondition 原子删除本次 Job；若 Job 创建结果无法确认归属，则保留 Lease 等待人工处置。
+- 并发安全：`deploy.sh` 使用 `mlflow-system/mlflow-deploy` Kubernetes Lease 串行化完整部署、验收、回滚和清理流程。采用 fail-closed 固定锁：任意非空 holder（无论存续多久）都会让第二次部署立即失败，不设过期时间、不自动接管。退出与信号处理只会以读取到的 `resourceVersion` 清空自己的 holder，不删除 Lease，也不会覆盖新的 holder。每个部署进程无条件生成新的随机 run-id，不接受外部固定值；每次 Job create 另外生成随机 request nonce，只有 name、run-id、nonce 与 UID 均匹配才能从不确定的 create 响应中恢复。
+- Job 清理栅栏：失败 Job 使用 UID precondition + `Foreground` 删除，并依次确认 Job 已 NotFound、`job-name` + `deploy-run-id` 对应 Pod 已全部消失。删除、等待或最终确认任一失败，都会保留 Lease 并转人工处置，不允许下一次部署与未终止 Job 交叉执行。
 
 部署：
 
@@ -24,11 +25,11 @@
 bash ops/mlflow/deploy.sh
 ```
 
-部署身份除原有资源权限外，还必须能在 `mlflow-system` 中 get/create/update Lease，并能通过 Kubernetes API 删除带 UID precondition 的本次 Job。不要删除 Lease，也不要在部署进程存活或一次性 Job 仍在运行时手工解锁。
+部署身份除原有资源权限外，还必须能在 `mlflow-system` 中 get/create/update Lease，并能通过 Kubernetes API 删除带 UID precondition 的本次 Job、等待 Job 删除以及 list/watch 其 Pod。不要设置或依赖 `MLFLOW_DEPLOY_RUN_ID`；部署脚本会忽略该类外部值并自行生成身份。不要删除 Lease，也不要在部署进程存活或一次性 Job/Pod 仍在运行时手工解锁。
 
 ### 崩溃残留 Lease 的安全手动解锁
 
-只有管理员确认不存在正在运行的 MLflow 部署进程，并检查 `mlflow-artifact-storage-probe-*`、`mlflow-db-upgrade-*`、`mlflow-artifact-acceptance-*` 没有仍在运行后，才能执行以下手动解锁。命令保留读取时的 holder 与 `resourceVersion`，因此期间发生的并发更新会以 HTTP 409 拒绝；遇到冲突必须从检查步骤重新开始，不得强制更新。
+只有管理员确认不存在正在运行的 MLflow 部署进程，并检查 `mlflow-artifact-storage-probe-*`、`mlflow-db-upgrade-*`、`mlflow-artifact-acceptance-*` Job 及其 Pod 均已消失后，才能执行以下手动解锁。命令保留读取时的 holder 与 `resourceVersion`，因此期间发生的并发更新会以 HTTP 409 拒绝；遇到冲突必须从检查步骤重新开始，不得强制更新。
 
 ```bash
 lease_snapshot="$(mktemp)"

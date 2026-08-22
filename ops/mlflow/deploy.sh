@@ -14,7 +14,7 @@ readonly TIMEOUT="${MLFLOW_DEPLOY_TIMEOUT:-15m}"
 readonly LEASE_NAME="mlflow-deploy"
 readonly CHART_SHA256="db32bf8f17be693a59f8c440d47a97fbea5a93c02d2b5e9ee1761efee50597e8"
 
-DEPLOY_RUN_ID="${MLFLOW_DEPLOY_RUN_ID:-}"
+DEPLOY_RUN_ID=""
 LEASE_HOLDER=""
 LEASE_ACQUIRED=false
 LEASE_RELEASE_BLOCKED=false
@@ -142,14 +142,23 @@ main() {
 }
 
 initialize_deploy_identity() {
-  if [[ -z "$DEPLOY_RUN_ID" ]]; then
-    DEPLOY_RUN_ID="$(openssl rand -hex 8)"
+  if ! DEPLOY_RUN_ID="$(generate_deploy_run_id)"; then
+    echo 'failed to generate a unique MLflow deployment run ID' >&2
+    return 1
   fi
   if ! [[ "$DEPLOY_RUN_ID" =~ ^[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?$ ]]; then
-    echo 'MLFLOW_DEPLOY_RUN_ID must be a lowercase DNS label of at most 20 characters' >&2
+    echo 'generated MLflow deployment run ID is not a lowercase DNS label of at most 20 characters' >&2
     return 1
   fi
   LEASE_HOLDER="mlflow-deploy-${DEPLOY_RUN_ID}"
+}
+
+generate_deploy_run_id() {
+  openssl rand -hex 8
+}
+
+generate_job_request_nonce() {
+  openssl rand -hex 8
 }
 
 deployment_job_name() {
@@ -295,17 +304,51 @@ copy_secret() {
 cleanup_job_instance() {
   local name="$1"
   local expected_uid="$2"
+  local expected_run_id="${3:-}"
   local delete_options
+  local pod_selector="job-name=${name}"
+  local matching_pods
 
   if ! delete_options="$(jq -n --arg uid "$expected_uid" \
-    '{apiVersion:"v1",kind:"DeleteOptions",propagationPolicy:"Background",preconditions:{uid:$uid}}')"; then
+    '{apiVersion:"v1",kind:"DeleteOptions",propagationPolicy:"Foreground",preconditions:{uid:$uid}}')"; then
     echo "failed to render UID-preconditioned deletion for Job ${name}" >&2
+    retain_deploy_lease_for_manual_recovery "$name" 'failed to render Foreground UID-preconditioned deletion'
     return 1
   fi
   if ! kubectl delete \
     --raw "/apis/batch/v1/namespaces/${NAMESPACE}/jobs/${name}" \
     -f - <<<"$delete_options" >/dev/null; then
     echo "failed to terminate Job ${name} with UID ${expected_uid}; it may have been replaced" >&2
+    retain_deploy_lease_for_manual_recovery "$name" 'Foreground UID-preconditioned delete failed'
+    return 1
+  fi
+  if ! kubectl -n "$NAMESPACE" wait --for=delete "job/${name}" --timeout="$TIMEOUT" >/dev/null; then
+    retain_deploy_lease_for_manual_recovery "$name" 'Job did not reach NotFound after Foreground deletion'
+    return 1
+  fi
+  if [[ -n "$expected_run_id" ]]; then
+    pod_selector+=",platform.wellspiking.ai/deploy-run-id=${expected_run_id}"
+  fi
+  if ! matching_pods="$(kubectl -n "$NAMESPACE" get pods -l "$pod_selector" -o json)"; then
+    retain_deploy_lease_for_manual_recovery "$name" 'failed to list Pods after Job deletion'
+    return 1
+  fi
+  if ! jq -e '.items | type == "array"' <<<"$matching_pods" >/dev/null; then
+    retain_deploy_lease_for_manual_recovery "$name" 'Pod deletion query returned an invalid response'
+    return 1
+  fi
+  if ! jq -e '.items | length == 0' <<<"$matching_pods" >/dev/null; then
+    if ! kubectl -n "$NAMESPACE" wait --for=delete pod -l "$pod_selector" --timeout="$TIMEOUT" >/dev/null; then
+      retain_deploy_lease_for_manual_recovery "$name" 'Pods did not disappear after Foreground Job deletion'
+      return 1
+    fi
+  fi
+  if ! matching_pods="$(kubectl -n "$NAMESPACE" get pods -l "$pod_selector" -o json)"; then
+    retain_deploy_lease_for_manual_recovery "$name" 'failed to confirm Pod deletion'
+    return 1
+  fi
+  if ! jq -e '.items | type == "array" and length == 0' <<<"$matching_pods" >/dev/null; then
+    retain_deploy_lease_for_manual_recovery "$name" 'Pods remain after Foreground Job deletion'
     return 1
   fi
   return 0
@@ -330,16 +373,34 @@ run_job() {
   local current_uid
   local completed_job
   local observed_job
+  local request_nonce
 
   if ! rendered_job="$(kubectl -n "$NAMESPACE" create --dry-run=client -f "$manifest" -o json)"; then
     echo "failed to render unique Job ${name} from ${manifest}" >&2
     return 1
   fi
+  if ! request_nonce="$(generate_job_request_nonce "$name")"; then
+    echo "failed to generate request nonce for Job ${name}" >&2
+    return 1
+  fi
+  if ! [[ "$request_nonce" =~ ^[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?$ ]]; then
+    echo "generated request nonce for Job ${name} is not a lowercase DNS label of at most 20 characters" >&2
+    return 1
+  fi
   if ! rendered_job="$(jq \
     --arg name "$name" \
-    --arg run_id "$DEPLOY_RUN_ID" '
+    --arg run_id "$DEPLOY_RUN_ID" \
+    --arg request_nonce "$request_nonce" '
       .metadata.name = $name |
-      .metadata.labels = ((.metadata.labels // {}) + {"platform.wellspiking.ai/deploy-run-id":$run_id}) |
+      .metadata.labels = ((.metadata.labels // {}) + {
+        "platform.wellspiking.ai/deploy-run-id":$run_id,
+        "platform.wellspiking.ai/request-nonce":$request_nonce
+      }) |
+      .spec.template.metadata = (.spec.template.metadata // {}) |
+      .spec.template.metadata.labels = ((.spec.template.metadata.labels // {}) + {
+        "platform.wellspiking.ai/deploy-run-id":$run_id,
+        "platform.wellspiking.ai/request-nonce":$request_nonce
+      }) |
       del(.metadata.creationTimestamp, .metadata.resourceVersion, .metadata.uid, .status)
     ' <<<"$rendered_job")"; then
     echo "failed to assign unique identity to Job ${name}" >&2
@@ -357,9 +418,10 @@ run_job() {
       echo "create failed and Job ${name} was confirmed absent" >&2
       return 1
     fi
-    if ! jq -e --arg name "$name" --arg run_id "$DEPLOY_RUN_ID" '
+    if ! jq -e --arg name "$name" --arg run_id "$DEPLOY_RUN_ID" --arg request_nonce "$request_nonce" '
       .metadata.name == $name and
       .metadata.labels["platform.wellspiking.ai/deploy-run-id"] == $run_id and
+      .metadata.labels["platform.wellspiking.ai/request-nonce"] == $request_nonce and
       (.metadata.uid | type == "string" and length > 0)
     ' <<<"$observed_job" >/dev/null; then
       retain_deploy_lease_for_manual_recovery "$name" 'the observed object does not belong to this deploy run'
@@ -371,42 +433,43 @@ run_job() {
   if ! created_name="$(jq -r '.metadata.name // empty' <<<"$created_job")" ||
      ! created_uid="$(jq -r '.metadata.uid // empty' <<<"$created_job")"; then
     echo "failed to parse identity of fresh Job ${name}" >&2
+    retain_deploy_lease_for_manual_recovery "$name" 'created Job identity response could not be parsed'
     return 1
   fi
   if [[ "$created_name" != "$name" || -z "$created_uid" ]]; then
     echo "fresh Job identity mismatch for ${name}: name=${created_name:-missing}, uid=${created_uid:-missing}" >&2
     if [[ -n "$created_name" && -n "$created_uid" ]]; then
-      cleanup_job_instance "$created_name" "$created_uid" || true
+      cleanup_job_instance "$created_name" "$created_uid" "$DEPLOY_RUN_ID" || return 1
+    else
+      retain_deploy_lease_for_manual_recovery "$name" 'created Job identity was incomplete'
     fi
     return 1
   fi
   if ! current_uid="$(kubectl -n "$NAMESPACE" get job "$name" -o jsonpath='{.metadata.uid}')"; then
     echo "failed to read fresh Job ${name} with UID ${created_uid}" >&2
-    cleanup_job_instance "$name" "$created_uid" || true
+    cleanup_job_instance "$name" "$created_uid" "$DEPLOY_RUN_ID" || return 1
     return 1
   fi
   if [[ "$current_uid" != "$created_uid" ]]; then
     echo "fresh Job ${name} was replaced before wait: expected UID ${created_uid}, got ${current_uid}" >&2
-    cleanup_job_instance "$name" "$created_uid" || true
+    cleanup_job_instance "$name" "$created_uid" "$DEPLOY_RUN_ID" || return 1
     return 1
   fi
   if ! kubectl -n "$NAMESPACE" wait --for=condition=complete "job/${name}" --timeout="$TIMEOUT"; then
     kubectl -n "$NAMESPACE" logs "job/${name}" --all-containers=true --tail=200 || true
-    cleanup_job_instance "$name" "$created_uid" || {
-      echo "manual cleanup may be required for failed Job ${name} with UID ${created_uid}" >&2
-    }
+    cleanup_job_instance "$name" "$created_uid" "$DEPLOY_RUN_ID" || return 1
     return 1
   fi
   if ! completed_job="$(kubectl -n "$NAMESPACE" get job "$name" -o json)"; then
     echo "failed to verify completed Job ${name} with UID ${created_uid}" >&2
-    cleanup_job_instance "$name" "$created_uid" || true
+    cleanup_job_instance "$name" "$created_uid" "$DEPLOY_RUN_ID" || return 1
     return 1
   fi
   if ! jq -e --arg name "$name" --arg uid "$created_uid" \
     '.metadata.name == $name and .metadata.uid == $uid and any(.status.conditions[]?; .type == "Complete" and .status == "True")' \
     <<<"$completed_job" >/dev/null; then
     echo "Job ${name} completion did not belong to fresh UID ${created_uid}" >&2
-    cleanup_job_instance "$name" "$created_uid" || true
+    cleanup_job_instance "$name" "$created_uid" "$DEPLOY_RUN_ID" || return 1
     return 1
   fi
   return 0
@@ -450,6 +513,7 @@ cleanup_legacy_job() {
   local name="$1"
   local legacy_job
   local legacy_uid
+  local legacy_run_id
 
   if ! legacy_job="$(kubectl -n "$NAMESPACE" get job "$name" --ignore-not-found -o json)"; then
     echo "failed to inspect legacy Job ${name}" >&2
@@ -462,7 +526,12 @@ cleanup_legacy_job() {
     echo "legacy Job ${name} has no UID; refusing name-only cleanup" >&2
     return 1
   fi
-  cleanup_job_instance "$name" "$legacy_uid"
+  if ! legacy_run_id="$(jq -r '.spec.template.metadata.labels["platform.wellspiking.ai/deploy-run-id"] // empty' <<<"$legacy_job")"; then
+    echo "failed to read legacy Job ${name} Pod identity" >&2
+    retain_deploy_lease_for_manual_recovery "$name" 'legacy Job Pod identity could not be read'
+    return 1
+  fi
+  cleanup_job_instance "$name" "$legacy_uid" "$legacy_run_id"
 }
 
 cleanup_legacy_dependencies() {
