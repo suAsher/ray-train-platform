@@ -15,6 +15,7 @@ __pycache__/
 *.new
 .tmp
 .claude/settings.local.json
+.worktrees/
 
 # Local databases and scratch state
 *.db
