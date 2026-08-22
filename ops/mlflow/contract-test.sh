@@ -8,6 +8,18 @@ readonly DATABASE="${ROOT_DIR}/ops/mlflow/10-database.yaml"
 readonly POLICY="${ROOT_DIR}/ops/mlflow/30-policy.yaml"
 readonly SMOKE="${ROOT_DIR}/ops/mlflow/40-smoke.yaml"
 readonly VERIFY="${ROOT_DIR}/ops/mlflow/verify.sh"
+readonly VENDORED_CHART="${ROOT_DIR}/helm/vendor/mlflow-0.1.0.tgz"
+readonly VENDORED_DEPLOYMENT="mlflow/templates/deployment.yaml"
+
+vendored_deployment="$(tar -xOf "$VENDORED_CHART" "$VENDORED_DEPLOYMENT")"
+grep -Fq '          command:' <<<"$vendored_deployment" || {
+  echo 'vendored MLflow chart must render server flags in container.command' >&2
+  exit 1
+}
+grep -Fq -- '- --static-prefix={{ .Values.server.staticPrefix }}' <<<"$vendored_deployment" || {
+  echo 'vendored MLflow chart must render server.staticPrefix in container.command' >&2
+  exit 1
+}
 
 grep -Fq 'replicaCount: 2' "$VALUES"
 grep -Fq '  staticPrefix: /mlflow' "$VALUES" || {
@@ -63,6 +75,14 @@ if grep -Fq 'static-prefix' "$VALUES"; then
   exit 1
 fi
 grep -Fq -- '--static-prefix=/mlflow' "$VERIFY"
+grep -Fq 'containers[?(@.name=="mlflow")].command' "$VERIFY" || {
+  echo 'MLflow live verification must inspect the mlflow container command' >&2
+  exit 1
+}
+grep -Fq 'containers[?(@.name=="mlflow")].args' "$VERIFY" || {
+  echo 'MLflow live verification must inspect the mlflow container args' >&2
+  exit 1
+}
 grep -Fq '/proxy/mlflow/health' "$VERIFY"
 grep -Fq ".spec.replicas" "$VERIFY"
 if grep -Fq 'get ingress' "$VERIFY"; then

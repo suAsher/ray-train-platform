@@ -33,8 +33,9 @@ done <<<"$services"
   echo "MLflow ingest gateway does not have two available replicas" >&2
   exit 1
 }
-mlflow_args="$(kubectl -n "$NAMESPACE" get deployment mlflow -o jsonpath='{range .spec.template.spec.containers[*]}{range .args[*]}{.}{"\n"}{end}{end}')"
-grep -Fxq -- '--static-prefix=/mlflow' <<<"$mlflow_args" || {
+mlflow_command="$(kubectl -n "$NAMESPACE" get deployment mlflow -o jsonpath='{.spec.template.spec.containers[?(@.name=="mlflow")].command}')"
+mlflow_args="$(kubectl -n "$NAMESPACE" get deployment mlflow -o jsonpath='{.spec.template.spec.containers[?(@.name=="mlflow")].args}')"
+grep -Fq -- '--static-prefix=/mlflow' <<<"${mlflow_command} ${mlflow_args}" || {
   echo 'MLflow deployment is missing --static-prefix=/mlflow' >&2
   exit 1
 }
