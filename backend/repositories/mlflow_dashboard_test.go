@@ -151,6 +151,30 @@ func TestMLflowDashboardTicketConsumeRejectsInvalidTickets(t *testing.T) {
 	}
 }
 
+func TestMLflowDashboardTicketConsumeRejectsExactExpiryBoundary(t *testing.T) {
+	repository, _ := mlflowDashboardTestRepositories(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	ticket := validMLflowDashboardTicket(now.Add(-time.Minute))
+	if !ticket.ExpiresAt.Equal(now) {
+		t.Fatalf("test ticket expiry = %v, want exact boundary %v", ticket.ExpiresAt, now)
+	}
+	if err := repository.CreateMLflowDashboardTicket(ctx, ticket); err != nil {
+		t.Fatalf("create exact-boundary MLflow dashboard ticket: %v", err)
+	}
+
+	if _, err := repository.ConsumeMLflowDashboardTicket(ctx, ticket.TokenHash, now); !errors.Is(err, ErrMLflowDashboardTicketInvalid) {
+		t.Fatalf("consume at exact expiry error = %v, want ErrMLflowDashboardTicketInvalid", err)
+	}
+	var stored MLflowDashboardTicketRecord
+	if err := repository.db.First(&stored, "token_hash = ?", ticket.TokenHash).Error; err != nil {
+		t.Fatalf("load exact-boundary MLflow dashboard ticket: %v", err)
+	}
+	if stored.ConsumedAt != nil {
+		t.Fatalf("exact-boundary ticket transitioned consumed_at to %v", stored.ConsumedAt)
+	}
+}
+
 func TestMLflowDashboardTicketConcurrentConsumeHasExactlyOneWinner(t *testing.T) {
 	first, second := mlflowDashboardTestRepositories(t)
 	ctx := context.Background()

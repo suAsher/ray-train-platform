@@ -92,7 +92,7 @@ func (r *GormRepository) ConsumeMLflowDashboardTicket(ctx context.Context, token
 	result := r.db.WithContext(ctx).
 		Model(&consumed).
 		Clauses(clause.Returning{}).
-		Where("token_hash = ? AND consumed_at IS NULL AND expires_at >= ?", tokenHash, now).
+		Where("token_hash = ? AND consumed_at IS NULL AND expires_at > ?", tokenHash, now).
 		Update("consumed_at", now)
 	if result.Error != nil {
 		return MLflowDashboardTicketRecord{}, fmt.Errorf("consume MLflow dashboard ticket: %w", result.Error)
