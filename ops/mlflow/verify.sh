@@ -11,6 +11,7 @@ helm -n "$NAMESPACE" status mlflow >/dev/null
 kubectl -n "$NAMESPACE" rollout status deployment/mlflow --timeout=5m
 kubectl -n "$NAMESPACE" rollout status deployment/mlflow-ingest --timeout=5m
 kubectl -n "$NAMESPACE" rollout status statefulset/mlflow-postgres --timeout=5m
+kubectl -n "$NAMESPACE" rollout status daemonset/mlflow-fsx-probe --timeout=5m
 
 services="$(kubectl -n "$NAMESPACE" get services -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.type}{"\n"}{end}')"
 while IFS=$'\t' read -r service_name service_type; do
@@ -85,6 +86,17 @@ kubectl -n "$NAMESPACE" get networkpolicy mlflow >/dev/null
 kubectl -n "$NAMESPACE" get networkpolicy mlflow-ingest >/dev/null
 kubectl -n "$NAMESPACE" get poddisruptionbudget mlflow >/dev/null
 kubectl -n "$NAMESPACE" get servicemonitor mlflow >/dev/null
+kubectl -n "$NAMESPACE" get prometheusrule mlflow-fsx-probe >/dev/null
+kubectl -n "$NAMESPACE" get networkpolicy mlflow-fsx-probe >/dev/null
+fsx_probe_desired="$(kubectl -n "$NAMESPACE" get daemonset mlflow-fsx-probe -o jsonpath='{.status.desiredNumberScheduled}')"
+if [[ ! "$fsx_probe_desired" =~ ^[1-9][0-9]*$ ]]; then
+  echo 'FSX probe has no matching control-plane nodes' >&2
+  exit 1
+fi
+[[ "$(kubectl -n "$NAMESPACE" get daemonset mlflow-fsx-probe -o jsonpath='{.status.numberReady}')" == "$fsx_probe_desired" ]] || {
+  echo 'MLflow FSX probe is not Ready on every control-plane node' >&2
+  exit 1
+}
 [[ "$(kubectl -n "$NAMESPACE" get pvc data-mlflow-postgres-0 -o jsonpath='{.status.phase}')" == "Bound" ]]
 
 health="$(kubectl get --raw '/api/v1/namespaces/mlflow-system/services/http:mlflow:5000/proxy/mlflow/health')"

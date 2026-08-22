@@ -10,6 +10,7 @@ readonly BOOTSTRAP="${ROOT_DIR}/ops/mlflow/20-bootstrap.yaml"
 readonly ACCEPTANCE="${ROOT_DIR}/ops/mlflow/25-artifact-acceptance.yaml"
 readonly TRANSITION_POLICY="${ROOT_DIR}/ops/mlflow/29-storage-migration-policy.yaml"
 readonly POLICY="${ROOT_DIR}/ops/mlflow/30-policy.yaml"
+readonly FSX_PROBE="${ROOT_DIR}/ops/mlflow/35-fsx-health-probe.yaml"
 readonly SMOKE="${ROOT_DIR}/ops/mlflow/40-smoke.yaml"
 readonly DEPLOY="${ROOT_DIR}/ops/mlflow/deploy.sh"
 readonly CONCURRENCY_TEST="${ROOT_DIR}/ops/mlflow/deploy-concurrency-contract-test.sh"
@@ -132,6 +133,8 @@ grep -Fq 'cleanup_legacy_dependencies' "$DEPLOY"
 
 storage_apply_line="$(grep -nF 'kubectl apply -f "$ARTIFACT_STORAGE"' "$DEPLOY" | cut -d: -f1)"
 storage_bound_line="$(grep -nF 'pvc/mlflow-artifacts-irsa' "$DEPLOY" | cut -d: -f1)"
+fsx_probe_apply_line="$(grep -nF 'kubectl apply -f "$FSX_HEALTH_PROBE"' "$DEPLOY" | cut -d: -f1)"
+fsx_probe_ready_line="$(grep -nF 'rollout status daemonset/mlflow-fsx-probe' "$DEPLOY" | cut -d: -f1)"
 transition_apply_line="$(grep -nF 'kubectl apply -f "$TRANSITION_POLICY"' "$DEPLOY" | cut -d: -f1)"
 probe_line="$(grep -nF 'run_job "$(deployment_job_name mlflow-artifact-storage-probe)"' "$DEPLOY" | cut -d: -f1)"
 migration_line="$(grep -nF 'run_job "$(deployment_job_name mlflow-db-upgrade)"' "$DEPLOY" | cut -d: -f1)"
@@ -140,7 +143,9 @@ cleanup_line="$(grep -nF 'if ! cleanup_legacy_dependencies' "$DEPLOY" | cut -d: 
 verify_line="$(grep -nF 'ops/mlflow/verify.sh' "$DEPLOY" | tail -n1 | cut -d: -f1)"
 if ! (( transition_apply_line < storage_apply_line &&
         storage_apply_line < storage_bound_line &&
-        storage_bound_line < probe_line &&
+        storage_bound_line < fsx_probe_apply_line &&
+        fsx_probe_apply_line < fsx_probe_ready_line &&
+        fsx_probe_ready_line < probe_line &&
         probe_line < migration_line &&
         migration_line < helm_line &&
         helm_line < acceptance_line &&
@@ -223,6 +228,28 @@ grep -Fq 'kubernetes.io/metadata.name: ray-train-platform' "$POLICY"
 grep -Fq 'app: ray-train-backend' "$POLICY"
 grep -Fq 'name: mlflow-postgres' "$POLICY"
 grep -Fq 'path: /metrics' "$POLICY"
+grep -Fq 'kind: DaemonSet' "$FSX_PROBE"
+grep -Fq 'name: mlflow-fsx-probe' "$FSX_PROBE"
+grep -Fq 'claimName: mlflow-artifacts-irsa' "$FSX_PROBE"
+grep -Fq 'platform.wellspiking.ai/pool: control-plane' "$FSX_PROBE"
+grep -Fq 'timeout 10' "$FSX_PROBE"
+grep -Fq 'stat "$directory"' "$FSX_PROBE"
+grep -Fq 'printf' "$FSX_PROBE"
+grep -Fq 'rm -f' "$FSX_PROBE"
+grep -Fq 'readinessProbe:' "$FSX_PROBE"
+grep -Fq 'kind: PrometheusRule' "$FSX_PROBE"
+grep -Fq 'release: prometheus' "$FSX_PROBE"
+grep -Fq 'MLflowFSXMountUnavailable' "$FSX_PROBE"
+grep -Fq 'MLflowFSXProbeHasNoTargets' "$FSX_PROBE"
+grep -Fq '== 0' "$FSX_PROBE"
+grep -Fq 'policyTypes: [Ingress, Egress]' "$FSX_PROBE"
+grep -Fq 'automountServiceAccountToken: false' "$FSX_PROBE"
+grep -Fq 'readonly FSX_HEALTH_PROBE=' "$DEPLOY"
+grep -Fq 'kubectl apply -f "$FSX_HEALTH_PROBE"' "$DEPLOY"
+grep -Fq 'rollout status daemonset/mlflow-fsx-probe' "$DEPLOY"
+grep -Fq 'FSX probe has no matching control-plane nodes' "$DEPLOY"
+grep -Fq 'daemonset mlflow-fsx-probe' "$VERIFY"
+grep -Fq 'FSX probe has no matching control-plane nodes' "$VERIFY"
 grep -Fq 'mlflow-ingest.mlflow-system.svc.cluster.local:8080' "$SMOKE"
 grep -Fq 'MLFLOW_ARTIFACT_DOWNLOAD_BLOCKED' "$SMOKE"
 grep -Fq 'namespace: mlflow-system' "$SMOKE"

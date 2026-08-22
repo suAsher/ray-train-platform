@@ -8,6 +8,7 @@ readonly RELEASE="mlflow"
 readonly CHART="${ROOT_DIR}/helm/vendor/mlflow-0.1.0.tgz"
 readonly VALUES="${ROOT_DIR}/ops/mlflow/values-vke.yaml"
 readonly ARTIFACT_STORAGE="${ROOT_DIR}/ops/mlflow/15-artifact-storage.yaml"
+readonly FSX_HEALTH_PROBE="${ROOT_DIR}/ops/mlflow/35-fsx-health-probe.yaml"
 readonly ARTIFACT_ACCEPTANCE="${ROOT_DIR}/ops/mlflow/25-artifact-acceptance.yaml"
 readonly CLIENT_SMOKE="${ROOT_DIR}/ops/mlflow/40-smoke.yaml"
 readonly TRANSITION_POLICY="${ROOT_DIR}/ops/mlflow/29-storage-migration-policy.yaml"
@@ -56,6 +57,18 @@ main() {
     --for=jsonpath='{.status.phase}'=Bound \
     pvc/mlflow-artifacts-irsa \
     --timeout="$TIMEOUT"
+
+  # A one-shot Job can land on a healthy node and miss a stale node-local FUSE
+  # session. Keep one bounded read/write/delete probe on every control-plane
+  # node and require all of them to become Ready before changing MLflow.
+  kubectl apply -f "$FSX_HEALTH_PROBE" >/dev/null
+  kubectl -n "$NAMESPACE" rollout status daemonset/mlflow-fsx-probe --timeout="$TIMEOUT"
+  local fsx_probe_desired
+  fsx_probe_desired="$(kubectl -n "$NAMESPACE" get daemonset mlflow-fsx-probe -o jsonpath='{.status.desiredNumberScheduled}')"
+  if [[ ! "$fsx_probe_desired" =~ ^[1-9][0-9]*$ ]]; then
+    echo 'FSX probe has no matching control-plane nodes' >&2
+    exit 1
+  fi
 
   # Probe the FSX mount while the old release and all of its dependencies are
   # still untouched.

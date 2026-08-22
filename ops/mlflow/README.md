@@ -20,6 +20,7 @@
 - 并发安全：`deploy.sh` 使用 `mlflow-system/mlflow-deploy` Kubernetes Lease 串行化完整部署、验收、回滚和清理流程。采用 fail-closed 固定锁：任意非空 holder（无论存续多久）都会让第二次部署立即失败，不设过期时间、不自动接管。只有正常完成或已确认活动 Job/Pod 全部结束的既有路径，才会以读取到的 `resourceVersion` 清空自己的 holder；不删除 Lease，也不覆盖新的 holder。每个部署进程无条件生成新的随机 run-id，不接受外部固定值；每次 Job create 另外生成随机 request nonce，只有 name、run-id、nonce 与 UID 均匹配才能从不确定的 create 响应中恢复。
 - Job 清理栅栏：失败 Job 使用 UID precondition + `Foreground` 删除，并依次确认 Job 已 NotFound、`job-name` + `deploy-run-id` 对应 Pod 已全部消失。删除、等待或最终确认任一失败，都会保留 Lease 并转人工处置，不允许下一次部署与未终止 Job 交叉执行。
 - 中断安全：持有 Lease 时收到 `INT/TERM/HUP` 会立即标记为 fail-closed 并保留 Lease，分别以标准状态 `130/143/129` 退出，等待管理员确认 Job、Pod 和 Helm rollout 已终止后手动恢复；尚未获取 Lease 时仅按标准状态退出。
+- 节点挂载探测：`mlflow-fsx-probe` DaemonSet 会在每台 CPU 节点挂载 MLflow 正在使用的同一个 PVC，每 20 秒执行有 10 秒上限的 `stat -> 写入 -> 校验 -> 删除`。任一节点失败 2 分钟后触发 `MLflowFSXMountUnavailable`，部署也会在变更 MLflow 前停止。探测器只告警，不会自动重启 FSX 或业务 Pod。
 
 部署：
 
@@ -30,6 +31,28 @@ bash ops/mlflow/deploy.sh
 部署身份除原有资源权限外，还必须能在 `mlflow-system` 中 get/create/update Lease，并能通过 Kubernetes API 删除带 UID precondition 的本次 Job、等待 Job 删除以及 list/watch 其 Pod。不要设置或依赖 `MLFLOW_DEPLOY_RUN_ID`；部署脚本会忽略该类外部值并自行生成身份。不要删除 Lease，也不要在部署进程存活或一次性 Job/Pod 仍在运行时手工解锁。
 
 部署脚本会在写入任何资源前确认 `fsx.csi.volcengine.com` CSIDriver 存在、`csi-fsx-node` DaemonSet 全部可用，并校验上述 IRSA 参数。预检失败时应先修复集群 FSX CSI/IRSA，不能改用静态 AK/SK Secret 绕过。
+
+### FSX 挂载异常的判断与恢复
+
+本次故障的直接现象是 PVC 在特定节点挂载时返回 `input/output error`，而 FSX Agent 和 CSI Pod 仍可能显示 Running。这表示故障位于节点本地 FUSE 会话，不是 PVC 配额、TOS 目录权限或 DNS 解析。如果 Agent 日志同时出现 `fusedaemon uds not ready within timeout`、`MODULE_STILL_RUNNING` 或 `/usr/bin/fsx` 缺失，则是 Agent 恢复过程未完成，不应直接重启 MLflow。
+
+恢复顺序必须是：
+
+1. 用 `mlflow-fsx-probe` 和 Pod Event 确认出问题的节点。
+2. 先恢复该节点的 `fsx-agent`，确认 Agent 自身 Ready，且 `/opt/fsx/tools/fsx-health-check` 通过。
+3. 再滚动重建该节点的 `csi-fsx-node` Pod，确认所有容器 Ready。
+4. 只有在 Agent 和 CSI 恢复后，才滚动重建该节点上受影响的 MLflow Pod。已存在的 FUSE bind mount 不会因 CSI 恢复而自动重连，所以这一步不能省略。
+5. 等待 `mlflow-fsx-probe` 在所有 CPU 节点 Ready，然后执行 `bash ops/mlflow/verify.sh`。
+
+可先用以下命令查看探测结果：
+
+```bash
+kubectl -n mlflow-system get ds,pod -l app.kubernetes.io/name=mlflow-fsx-probe -o wide
+kubectl -n mlflow-system describe ds mlflow-fsx-probe
+kubectl -n mlflow-system logs -l app.kubernetes.io/name=mlflow-fsx-probe --tail=100 --prefix
+```
+
+不要设置 liveness probe 或自动删除业务 Pod：挂载故障会让大量 Pod 同时重启，但不会修复节点上的 FUSE 会话。如果同一节点反复出现该问题，应在 VKE 组件管理中升级 CSI-FSX/FSX Agent，并将 `/var/log/fsx` 与 `/opt/fsx/tools/sysinfo_collector.sh` 的诊断包提交给火山引擎支持，不应长期依赖人工补软链接。
 
 ### 崩溃残留 Lease 的安全手动解锁
 
