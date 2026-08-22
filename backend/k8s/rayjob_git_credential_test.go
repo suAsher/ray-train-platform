@@ -15,7 +15,7 @@ func gitMaterializer(t *testing.T, options RenderOptions) map[string]any {
 	if err != nil {
 		t.Fatalf("render ray job: %v", err)
 	}
-	spec, _, err := nestedMap(manifest.Object, "spec", "rayClusterSpec", "headGroupSpec", "template", "spec")
+	spec, _, err := nestedMap(manifest.Object, "spec", "submitterPodTemplate", "spec")
 	if err != nil {
 		t.Fatalf("read pod spec: %v", err)
 	}

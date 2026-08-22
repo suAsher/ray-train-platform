@@ -23,7 +23,14 @@ RUN pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
       datasets==2.21.0 \
       accelerate==0.34.2 \
       tensorboard==2.17.1 \
+      mlflow-skinny==3.14.0 \
  && chown -R ray:users /home/ray
+
+# The RayJob head is CPU-only.  This launcher places the user command on the
+# GPUs reserved by its Ray workers and implements torchrun for both one-node
+# and multi-node legacy DDP code.
+COPY workspace/raytrain-launch.py /usr/local/bin/raytrain-launch
+RUN chmod 0755 /usr/local/bin/raytrain-launch
 
 USER ray
 WORKDIR /home/ray

@@ -1,0 +1,154 @@
+# The three claims intentionally mount independent, narrow TOS roots instead
+# of the bucket root. Training workloads cannot enumerate platform logs or
+# unrelated tenant data through these mounts.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ray-train-local-datasets-pv
+  labels:
+    app.kubernetes.io/part-of: ray-train-platform
+    ray-train.platform/storage-kind: dataset
+spec:
+  capacity:
+    storage: 500Gi
+  accessModes:
+    - ReadWriteMany
+  volumeMode: Filesystem
+  persistentVolumeReclaimPolicy: Retain
+  mountOptions:
+    - no_writeback_cache
+  csi:
+    driver: fsx.csi.volcengine.com
+    volumeHandle: ray-train-local-datasets-pv
+    volumeAttributes:
+      type: TOS
+      server: tos-cn-shanghai.ivolces.com
+      region: cn-shanghai
+      bucket: shanghai-data-transfer
+      path: /ray-train/tenants/local/datasets
+      # CSI-FSX expects AccessKeyId / SecretAccessKey keys. This is kept
+      # separate from the platform API's lower-case credential Secret.
+      secretName: tos-fsx-credentials
+      secretNamespace: ray-train-platform
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tos-local-datasets
+  namespace: tenant-local
+  labels:
+    app.kubernetes.io/part-of: ray-train-platform
+    ray-train.platform/storage-kind: dataset
+spec:
+  accessModes:
+    - ReadWriteMany
+  volumeMode: Filesystem
+  storageClassName: ""
+  volumeName: ray-train-local-datasets-pv
+  resources:
+    requests:
+      storage: 500Gi
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ray-train-local-checkpoints-pv
+  labels:
+    app.kubernetes.io/part-of: ray-train-platform
+    ray-train.platform/storage-kind: checkpoint
+spec:
+  capacity:
+    storage: 500Gi
+  accessModes:
+    - ReadWriteMany
+  volumeMode: Filesystem
+  persistentVolumeReclaimPolicy: Retain
+  mountOptions:
+    - no_writeback_cache
+  csi:
+    driver: fsx.csi.volcengine.com
+    volumeHandle: ray-train-local-checkpoints-pv
+    volumeAttributes:
+      type: TOS
+      server: tos-cn-shanghai.ivolces.com
+      region: cn-shanghai
+      bucket: shanghai-data-transfer
+      path: /ray-train/tenants/local/checkpoints
+      # CSI-FSX expects AccessKeyId / SecretAccessKey keys. This is kept
+      # separate from the platform API's lower-case credential Secret.
+      secretName: tos-fsx-credentials
+      secretNamespace: ray-train-platform
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tos-local-checkpoints
+  namespace: tenant-local
+  labels:
+    app.kubernetes.io/part-of: ray-train-platform
+    ray-train.platform/storage-kind: checkpoint
+spec:
+  accessModes:
+    - ReadWriteMany
+  volumeMode: Filesystem
+  storageClassName: ""
+  volumeName: ray-train-local-checkpoints-pv
+  resources:
+    requests:
+      storage: 500Gi
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ray-train-local-outputs-pv
+  labels:
+    app.kubernetes.io/part-of: ray-train-platform
+    ray-train.platform/storage-kind: output
+spec:
+  capacity:
+    storage: 500Gi
+  accessModes:
+    - ReadWriteMany
+  volumeMode: Filesystem
+  persistentVolumeReclaimPolicy: Retain
+  mountOptions:
+    - no_writeback_cache
+    - tos_allow_delete=true
+    # The approved Ray training image runs as uid/gid 1000.  Keep the output
+    # prefix writable only to that workload identity instead of opening it to
+    # every user in a multi-container pod.
+    - uid=1000
+    - gid=1000
+    - dir_mode=770
+    - file_mode=660
+  csi:
+    driver: fsx.csi.volcengine.com
+    volumeHandle: ray-train-local-outputs-pv
+    volumeAttributes:
+      type: TOS
+      server: tos-cn-shanghai.ivolces.com
+      region: cn-shanghai
+      bucket: shanghai-data-transfer
+      path: /ray-train/tenants/local/outputs
+      # CSI-FSX expects AccessKeyId / SecretAccessKey keys. This is kept
+      # separate from the platform API's lower-case credential Secret.
+      secretName: tos-fsx-credentials
+      secretNamespace: ray-train-platform
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tos-local-outputs
+  namespace: tenant-local
+  labels:
+    app.kubernetes.io/part-of: ray-train-platform
+    ray-train.platform/storage-kind: output
+spec:
+  accessModes:
+    - ReadWriteMany
+  volumeMode: Filesystem
+  storageClassName: ""
+  volumeName: ray-train-local-outputs-pv
+  resources:
+    requests:
+      storage: 500Gi

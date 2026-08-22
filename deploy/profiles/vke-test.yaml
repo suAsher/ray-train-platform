@@ -1,0 +1,145 @@
+# 当前 VKE 单 GPU 验收环境。无密码、AK/SK 或其他凭证；Secrets 由
+# ops/platform/bootstrap-secrets.sh 从构建机的受保护 env 文件创建。
+namespace: ray-train-platform
+
+release:
+  requireImageDigests: false
+
+global:
+  imagePullPolicy: IfNotPresent
+  imageRegistry: harbor.wellspiking.ai/guofeng.su
+  imagePullSecrets:
+    - name: aliyun-registry
+
+backend:
+  replicaCount: 1
+  appEnv: development
+  oidcRequired: false
+  demoMode: false
+  sourceArtifactsEnabled: false
+  image:
+    repository: ray-train-backend
+    tag: dev-20260814-no-download-r5
+  oidc:
+    issuerURL: https://keycloak.test.invalid/realms/ai
+    clientID: ray-training-platform-test
+    audience: ray-training-platform-api
+    groupPrefix: platform/tenants/
+  localAuth:
+    enabled: true
+    sessionHours: 12
+    bootstrapUsername: admin
+    bootstrapTenant: local
+    bootstrapSecret: ray-platform-bootstrap-admin
+  lokiURL: http://loki-gateway.loki.svc.cluster.local
+  prometheusURL: ""
+  imageAllowlist:
+    - harbor.wellspiking.ai/guofeng.su/ray-test
+  gitAllowlist:
+    - github.com
+  workspaceImage: harbor.wellspiking.ai/guofeng.su/ray-workspace@sha256:76161584df38afd67cc71bf1dab6ae4984a141e192813b3a2a761bf798d52190
+  sourceMaterializerImage: harbor.wellspiking.ai/guofeng.su/ray-source-materializer@sha256:d57351745193fd08bc42662656c78c3bcc747ca89609fa0e8cc4a7a778d55af2
+
+frontend:
+  replicaCount: 1
+  image:
+    repository: ray-train-frontend
+    tag: dev-20260814-no-download-r5
+  service:
+    # VKE ALB 的非透传 Ingress 要求后端为 NodePort/LoadBalancer。端口由
+    # Kubernetes 自动分配，仅供 internal-alb 使用；用户入口仍为 train.xx.com。
+    type: NodePort
+    port: 80
+  runtimeConfig:
+    authRequired: false
+    keycloakURL: https://keycloak.test.invalid
+    keycloakRealm: ai
+    keycloakClientID: ray-training-platform-test
+
+# Chart 接管原本手工维护的入口；NodePort 仅作为 internal-alb 后端，不对用户公布。
+ingress:
+  enabled: true
+  className: internal-alb
+  host: train.xx.com
+  annotations:
+    ingress.vke.volcengine.com/alb-instance-name: internal-alb
+    ingress.vke.volcengine.com/loadbalancer-port: "80"
+    ingress.vke.volcengine.com/loadbalancer-protocol: http
+    ingress.vke.volcengine.com/request-timeout: "3600"
+    ingress.vke.volcengine.com/keepalive-timeout: "3600"
+
+training:
+  nodeSelector: accelerator=nvidia-rtx-4090
+  maxWorkerReplicas: 1
+  maxGPUsPerWorker: 1
+  maxTotalGPUs: 1
+  localCache:
+    enabled: false
+
+kueue:
+  enabled: true
+  manageResources: true
+  autoQuota: true
+  clusterQueueName: cluster-gpu-queue
+  resourceFlavorName: gpu-4090-flavor
+  gpuQuota: 1
+  cpuQuota: 16
+  memoryQuota: 64Gi
+  resourceFlavorNodeLabels:
+    accelerator: nvidia-rtx-4090
+
+storage:
+  enabled: false
+  existingClaim: ""
+
+dataSpaces:
+  # 已在训练节点以 fsx-agent IRSA 完成双前缀、UID 1000 读写验收。
+  # 系统为每位用户固定派生独立 TOS 前缀；本 Profile 不含 path 或 AK/SK。
+  enabled: true
+  mountCapacity: 1Ti
+  fsxVolumeAttributes:
+    type: TOS
+    bucket: shanghai-data-transfer
+    server: tos-cn-shanghai.ivolces.com
+    region: cn-shanghai
+
+# TOS ObjectSet 只在超级管理员在 Portal 确认初始化后写入桶配置；启用本
+# 开关本身不会创建 ObjectSet，也不依赖 csi-fsx/IRSA。
+personalStorage:
+  objectSetQuota:
+    enabled: true
+    defaultQuota: 100Gi
+    maxQuota: 2Ti
+
+# Leave disabled until VKE nodes can reach each IDC NFS export. Enabling this
+# has no relationship to the TOS CSI/IRSA readiness check.
+idcDataSpaces:
+  enabled: false
+
+tos:
+  endpoint: https://tos-cn-shanghai.ivolces.com
+  region: cn-shanghai
+  bucket: shanghai-data-transfer
+  secretName: tos-credentials
+
+postgres:
+  mode: standalone
+  existingSecret: ray-platform-postgres
+  standalone:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/postgres:16-alpine
+    databaseName: platform
+    storageClass: ebs-ssd
+    size: 20Gi
+
+availability:
+  pdbEnabled: false
+  preferredAntiAffinity: false
+
+autoscaling:
+  backend:
+    enabled: false
+  frontend:
+    enabled: false
+
+networkPolicy:
+  enabled: false

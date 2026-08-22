@@ -28,6 +28,10 @@ type SourceArtifactRepository interface {
 	MarkSourceArtifactReady(context.Context, string, string, string, time.Time) (*domain.SourceArtifact, error)
 }
 
+type sourceArtifactDataBindingStore interface {
+	ListDataBindings(context.Context, string, string) ([]domain.DataMountBinding, error)
+}
+
 type SourceArtifactOptions struct {
 	AllowDemo           bool
 	Limiter             SourceArtifactLimiter
@@ -120,8 +124,13 @@ func (handler *SourceArtifactHandler) create(c *gin.Context) {
 		return
 	}
 	now := handler.now().UTC()
+	storageRoot, err := handler.personalSourceArtifactRoot(c.Request.Context(), principal)
+	if err != nil {
+		handler.writeError(c, http.StatusServiceUnavailable, "DATA_SPACE_LOOKUP_FAILED", "could not resolve the personal code workspace")
+		return
+	}
 	artifact, err := domain.NewSourceArtifact(domain.SourceArtifactInput{
-		ID: id, TenantID: principal.TenantID, UserID: principal.Subject,
+		ID: id, TenantID: principal.TenantID, UserID: principal.Subject, StorageRoot: storageRoot,
 		SHA256: request.SHA256, SizeBytes: request.SizeBytes,
 	}, now.Add(SourceArtifactUploadTTL), now)
 	if err != nil {
@@ -182,6 +191,31 @@ func (handler *SourceArtifactHandler) create(c *gin.Context) {
 		UploadURL: presigned.URL, RequiredHeaders: presigned.RequiredHeaders, ContentLength: presigned.ContentLength,
 		ExpiresAt: &expiresAt, UploadRequired: true,
 	})
+}
+
+// personalSourceArtifactRoot keeps command-line/API source archives on the
+// exact same personal root mounted into the Ray materializer. Falling back to
+// the legacy subject path keeps old deployments operable before their
+// explicitly approved storage-root migration.
+func (handler *SourceArtifactHandler) personalSourceArtifactRoot(ctx context.Context, principal auth.Principal) (string, error) {
+	store, ok := handler.repository.(sourceArtifactDataBindingStore)
+	if !ok {
+		return domain.PersonalDataRootFor(principal.TenantID, principal.Subject)
+	}
+	bindings, err := store.ListDataBindings(ctx, principal.TenantID, principal.Subject)
+	if err != nil {
+		return "", err
+	}
+	for _, binding := range bindings {
+		if binding.Scope != domain.DataMountScopePersonal || binding.SpaceID != domain.DataSpaceWorkspace || binding.UserID != principal.Subject || binding.TenantID != principal.TenantID || binding.RootPrefix == "" {
+			continue
+		}
+		if _, err := domain.PersonalDataSpacesForRoot(principal.TenantID, binding.RootPrefix); err != nil {
+			return "", err
+		}
+		return binding.RootPrefix, nil
+	}
+	return domain.PersonalDataRootFor(principal.TenantID, principal.Subject)
 }
 
 func (handler *SourceArtifactHandler) complete(c *gin.Context) {

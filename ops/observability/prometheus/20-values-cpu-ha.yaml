@@ -1,0 +1,16 @@
+# Deployment overrides for helm/ray-observability. Both image digests were
+# verified from the cluster through the internal Harbor hub proxy on 2026-08-17.
+prometheus:
+  image: harbor.wellspiking.ai/hub/prom/prometheus@sha256:23031bfe0e74a13004252caaa74eccd0d62b6c6e7a04711d5b8bf5b7e113adc7
+  replicas: 2
+  retention: 90d
+  storage:
+    className: ebs-ssd
+    size: 200Gi
+
+grafana:
+  image: harbor.wellspiking.ai/hub/grafana/grafana@sha256:a1701c2180249361737a99a01bc770db39381640e4d631825d38ff4535efa47d
+  replicas: 2
+  adminSecretName: ray-platform-grafana-admin
+  dashboardProvisioningConfigMap: ray-grafana-dashboard-provisioning
+  dashboardJSONConfigMap: ray-grafana-dashboard-json

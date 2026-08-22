@@ -9,8 +9,7 @@
             <el-icon :size="20"><Zap /></el-icon>
           </div>
           <div>
-            <h1 class="font-bold text-base text-white tracking-wide">Ray AI Platform</h1>
-            <p class="text-xs text-slate-400">分布式训练控制台</p>
+            <h1 class="font-bold text-base text-white tracking-wide">Ray Training Platform</h1>
           </div>
         </div>
 
@@ -80,6 +79,7 @@
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item disabled>{{ roleLabel }}</el-dropdown-item>
+                <el-dropdown-item command="security">账户与安全</el-dropdown-item>
                 <el-dropdown-item command="logout" divided>退出登录</el-dropdown-item>
               </el-dropdown-menu>
             </template>
@@ -96,29 +96,30 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
-import { ArrowDown, VideoPlay, Platform, FolderOpened, Lock, DataAnalysis, Monitor } from '@element-plus/icons-vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ArrowDown, VideoPlay, Platform, FolderOpened, Lock, DataAnalysis, Monitor, UploadFilled, TrendCharts } from '@element-plus/icons-vue'
 import { logout } from '../auth'
 import { fetchMyQuota } from '../api/quota'
 import { session, isAdmin, isDemoSession, roles } from '../stores/session'
+import { adminNavigation } from '../adminNav'
 
 const REFRESH_INTERVAL_MS = 15000
 
 const route = useRoute()
+const router = useRouter()
 const quota = ref(null)
 let quotaTimer
 
 const workspaceNav = [
   { to: '/job', label: '我的训练任务', icon: VideoPlay },
+  { to: '/experiments', label: '实验中心', icon: TrendCharts },
   { to: '/devcenter', label: '交互式调试', icon: Platform },
-  { to: '/datacache', label: '数据与模型产物', icon: FolderOpened }
+  { to: '/datacache', label: '我的数据', icon: FolderOpened },
+  { to: '/external-submit', label: '外部提交', icon: UploadFilled }
 ]
 
-const adminNav = [
-  { to: '/quota', label: '租户与配额', icon: Lock },
-  { to: '/control-center', label: '集群算力', icon: DataAnalysis },
-  { to: '/devices', label: 'GPU 节点', icon: Monitor }
-]
+const adminIcons = { console: Lock, cluster: DataAnalysis, nodes: Monitor }
+const adminNav = adminNavigation.map((item) => ({ ...item, icon: adminIcons[item.id] }))
 
 const navClass = 'flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-all text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'
 const navActiveClass = 'bg-blue-600/15 !text-blue-400 border border-blue-500/30 font-bold shadow-inner'
@@ -151,6 +152,10 @@ const quotaTagType = computed(() => (quota.value ? (quotaPercent.value >= 100 ? 
 const quotaLabel = computed(() => (quota.value ? (quotaPercent.value >= 100 ? '已满' : '实时') : '不可用'))
 
 function onUserCommand(command) {
+  if (command === 'security') {
+    router.push('/account-security')
+    return
+  }
   if (command === 'logout') logout()
 }
 </script>

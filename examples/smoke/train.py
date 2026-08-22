@@ -1,21 +1,20 @@
 import os
 import socket
+import subprocess
 
-import ray
-
-
-ray.init(address="auto", namespace="ray-platform-smoke")
-
-
-@ray.remote(num_gpus=1)
-def probe_gpu():
-    return {
-        "host": socket.gethostname(),
-        "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES", ""),
-    }
-
-
-result = ray.get(probe_gpu.remote())
+result = {
+    "host": socket.gethostname(),
+    "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES", ""),
+    "nvidia_smi": subprocess.check_output(
+        [
+            "nvidia-smi",
+            "--query-gpu=index,name,uuid",
+            "--format=csv,noheader",
+        ],
+        text=True,
+        timeout=15,
+    ).strip(),
+}
 print(f"smoke_gpu_probe={result}", flush=True)
 print("platform_training_loss=0.123", flush=True)
 print("platform_training_throughput=1", flush=True)

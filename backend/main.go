@@ -20,6 +20,7 @@ import (
 	"ray-train-platform-backend/domain"
 	"ray-train-platform-backend/httpapi"
 	"ray-train-platform-backend/k8s"
+	"ray-train-platform-backend/objectstore"
 	"ray-train-platform-backend/observability"
 	"ray-train-platform-backend/rayapi"
 	"ray-train-platform-backend/repositories"
@@ -75,7 +76,28 @@ func main() {
 	if err != nil {
 		log.Fatalf("initialize source artifact storage: %v", err)
 	}
-	localSessionAuthenticator, localAuthHandler, err := newLocalAuthComponents(repository, cfg)
+	directoryLister, err := newStorageDirectoryLister(cfg)
+	if err != nil {
+		log.Fatalf("initialize storage directory browser: %v", err)
+	}
+	directoryInitializer, _ := directoryLister.(objectstore.PersonalDataDirectoryInitializer)
+	if cfg.DataSpacesEnabled && directoryInitializer == nil {
+		log.Fatal("initialize governed data spaces: the backend requires complete TOS credentials to create personal mount directories")
+	}
+	var personalStorageQuota objectstore.PersonalStorageQuotaManager
+	if cfg.TOSObjectSetQuotasEnabled {
+		store, ok := directoryLister.(*objectstore.TOSStore)
+		if !ok {
+			log.Fatal("initialize personal storage quota governance: the backend requires a complete TOS SDK store")
+		}
+		personalStorageQuota, err = objectstore.NewPersonalStorageQuotaManager(store, cfg.PersonalStorageDefaultQuotaBytes, cfg.PersonalStorageMaxQuotaBytes)
+		if err != nil {
+			log.Fatalf("initialize personal storage quota governance: %v", err)
+		}
+	}
+	artifactLister, _ := directoryLister.(objectstore.ArtifactLister)
+	artifactReader, _ := directoryLister.(objectstore.ArtifactReader)
+	localSessionAuthenticator, localAuthHandler, err := newLocalAuthComponents(repository, cfg, directoryInitializer, personalStorageQuota)
 	if err != nil {
 		log.Fatalf("initialize local authentication: %v", err)
 	}
@@ -91,7 +113,13 @@ func main() {
 
 	logs := &observability.LokiClient{BaseURL: cfg.LokiURL}
 	metrics := &observability.PrometheusClient{BaseURL: cfg.PrometheusURL}
-	jobHandler := api.NewHandler(repository, api.Options{AllowAnonymous: cfg.DemoMode, Logs: logs, Metrics: metrics, ImageAllowlist: cfg.RayImageAllowlist, GitAllowlist: cfg.GitAllowlist, Workspaces: repository, Kubernetes: kubeClient, WorkspaceImage: cfg.WorkspaceImage, RayVersion: cfg.RayVersion, ServiceAccount: cfg.RayJobServiceAccount, ImagePullSecrets: cfg.ImagePullSecrets, IDCClaim: cfg.IDCExistingClaim, IDCMountPath: cfg.IDCMountPath, KueueClusterQueue: cfg.KueueClusterQueue, Admin: repository, Quota: repository, WorkspacePepper: []byte(cfg.PATPepper), TrainingNodeSelector: cfg.TrainingNodeSelector, Images: repository, GitCredentials: repository})
+	var experiments api.ExperimentProvider
+	if cfg.MLflowEnabled {
+		experiments = &observability.MLflowClient{BaseURL: cfg.MLflowTrackingURL, ExperimentPrefix: cfg.MLflowExperimentPrefix, ProvenanceKey: []byte(cfg.PATPepper)}
+	}
+	dataObjectStore, _ := directoryLister.(objectstore.DataSpaceStore)
+	workspaceSnapshotStore, _ := directoryLister.(objectstore.WorkspaceSnapshotStore)
+	jobHandler := api.NewHandler(repository, api.Options{AllowAnonymous: cfg.DemoMode, Logs: logs, Metrics: metrics, Experiments: experiments, ImageAllowlist: cfg.RayImageAllowlist, GitAllowlist: cfg.GitAllowlist, Workspaces: repository, Kubernetes: kubeClient, WorkspaceImage: cfg.WorkspaceImage, RayVersion: cfg.RayVersion, ServiceAccount: cfg.RayJobServiceAccount, ImagePullSecrets: cfg.ImagePullSecrets, PlatformNamespace: runtimeNamespace(), IDCClaim: cfg.IDCExistingClaim, IDCMountPath: cfg.IDCMountPath, KueueClusterQueue: cfg.KueueClusterQueue, Admin: repository, Quota: repository, WorkspacePepper: []byte(cfg.PATPepper), TrainingNodeSelector: cfg.TrainingNodeSelector, Images: repository, GitCredentials: repository, StorageAssets: repository, DataSpaces: repository, DataSpacesEnabled: cfg.DataSpacesEnabled, DataSpacesFSXAttributes: cfg.DataSpacesFSXAttributes, DataSpacesMountCapacity: cfg.DataSpacesMountCapacity, DataSpacesPublicRoot: cfg.DataSpacesPublicRoot, IDCDataSpacesEnabled: cfg.IDCDataSpacesEnabled, IDCDataSpacesMountCapacity: cfg.IDCDataSpacesMountCapacity, IDCDataSpaceSources: idcDataSpaceSources(cfg), DirectoryLister: directoryLister, DirectoryInitializer: directoryInitializer, DataObjectStore: dataObjectStore, WorkspaceSnapshotStore: workspaceSnapshotStore, WorkspaceSnapshots: repository, ArtifactLister: artifactLister, ArtifactReader: artifactReader})
 	rayHandler, err := newRayAPIHandler(repository, jobHandler.SubmissionService(), logs, cfg)
 	if err != nil {
 		log.Fatalf("initialize Ray Jobs API compatibility: %v", err)
@@ -136,6 +164,19 @@ func main() {
 	}
 }
 
+func idcDataSpaceSources(cfg config.Config) map[domain.DataSpaceID]k8s.IDCDataMountSource {
+	sources := make(map[domain.DataSpaceID]k8s.IDCDataMountSource, len(cfg.IDCDataSpaceSources))
+	for name, source := range cfg.IDCDataSpaceSources {
+		space := map[string]domain.DataSpaceID{
+			"original": domain.DataSpaceIDCOriginal, "wellspiking": domain.DataSpaceIDCWellspiking, "shared": domain.DataSpaceIDCShared,
+		}[name]
+		if space != "" {
+			sources[space] = k8s.IDCDataMountSource{Server: source.Server, Path: source.Path}
+		}
+	}
+	return sources
+}
+
 func newOIDCValidator(cfg config.Config) (*auth.Validator, error) {
 	if !cfg.OIDCRequired {
 		return nil, nil
@@ -164,7 +205,7 @@ func newPATComponents(repository *repositories.GormRepository, cfg config.Config
 
 // newLocalAuthComponents wires username/password login. It reuses the PAT
 // pepper so a deployment only has to manage one authentication secret.
-func newLocalAuthComponents(repository *repositories.GormRepository, cfg config.Config) (auth.LocalSessionVerifier, *api.LocalAuthHandler, error) {
+func newLocalAuthComponents(repository *repositories.GormRepository, cfg config.Config, directoryInitializer objectstore.PersonalDataDirectoryInitializer, personalStorageQuota objectstore.PersonalStorageQuotaManager) (auth.LocalSessionVerifier, *api.LocalAuthHandler, error) {
 	if !cfg.LocalAuthEnabled {
 		return nil, nil, nil
 	}
@@ -174,11 +215,14 @@ func newLocalAuthComponents(repository *repositories.GormRepository, cfg config.
 		return nil, nil, err
 	}
 	handler := api.NewLocalAuthHandler(api.LocalAuthOptions{
-		Store:           repository,
-		Pepper:          pepper,
-		SessionLifetime: time.Duration(cfg.LocalSessionHours) * time.Hour,
-		Enabled:         true,
-		OIDCConfigured:  cfg.OIDCRequired,
+		Store:                       repository,
+		Pepper:                      pepper,
+		SessionLifetime:             time.Duration(cfg.LocalSessionHours) * time.Hour,
+		Enabled:                     true,
+		OIDCConfigured:              cfg.OIDCRequired,
+		PersonalDataInitializer:     api.NewPersonalDataSpaceInitializer(directoryInitializer),
+		PersonalStorageQuota:        personalStorageQuota,
+		PersonalStorageQuotaEnabled: cfg.TOSObjectSetQuotasEnabled,
 	})
 	return authenticator, handler, nil
 }
@@ -197,6 +241,10 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	if locals != nil {
 		locals.RegisterPublicRoutes(router.Group("/api/v1"))
 	}
+	// Browser navigation cannot attach the Portal's bearer token. This route
+	// verifies its own short-lived, job-scoped token and never exposes port
+	// 8265 outside the cluster.
+	jobs.RegisterJobDashboardProxyRoute(router.Group("/api/v1"))
 
 	protected := router.Group("")
 	protected.Use(auth.HybridMiddlewareWithLocal(oidc, pat, localSessions, cfg.OIDCRequired), auth.DemoIdentityMiddleware(cfg.DemoMode))
@@ -223,6 +271,9 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	jobs.RegisterWorkspaceRoutes(oidcOnly)
 	jobs.RegisterAdminRoutes(oidcOnly)
 	jobs.RegisterImageRoutes(interactive)
+	jobs.RegisterStorageAssetRoutes(interactive)
+	jobs.RegisterDataSpaceRoutes(interactive)
+	jobs.RegisterWorkspaceSnapshotRoutes(interactive)
 	jobs.RegisterGitCredentialRoutes(interactive)
 	oidcOnly.GET("/cluster/topology", clusterTopologyHandler(kubeClient))
 	if pats != nil {
@@ -266,10 +317,19 @@ func newReconciler(repository *repositories.GormRepository, client *k8s.Client, 
 		SourceMaterializerImage: cfg.SourceMaterializerImage,
 		IDCExistingClaim:        cfg.IDCExistingClaim,
 		IDCMountPath:            cfg.IDCMountPath,
-		TOSSecretName:           cfg.TOSSecretName,
-		TOSEndpoint:             cfg.TOSEndpoint,
-		TOSBucket:               cfg.TOSBucket,
 		NodeSelector:            cfg.TrainingNodeSelector,
+		LocalCache: k8s.LocalCacheOptions{
+			Enabled:      cfg.LocalCacheEnabled,
+			StorageClass: cfg.LocalCacheStorageClass,
+			Size:         cfg.LocalCacheSize,
+			MountPath:    cfg.LocalCacheMountPath,
+		},
+		MLflow: k8s.MLflowOptions{
+			Enabled:          cfg.MLflowEnabled,
+			TrackingURI:      cfg.MLflowIngestURL,
+			ExperimentPrefix: cfg.MLflowExperimentPrefix,
+			ProvenanceKey:    []byte(cfg.PATPepper),
+		},
 	})
 }
 

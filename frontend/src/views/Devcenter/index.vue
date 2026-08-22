@@ -5,9 +5,9 @@
       <div class="flex justify-between items-start">
         <div>
           <h3 class="text-lg font-bold text-white flex items-center gap-2">
-            <el-icon class="text-amber-400"><Platform /></el-icon> 单卡 4090 交互调试工作台 (Interactive Dev Studio)
+            <el-icon class="text-amber-400"><Platform /></el-icon> GPU 交互调试工作台
           </h3>
-          <p class="text-xs text-slate-400 mt-1">在单张 RTX 4090 上快速调通代码、验证 Loss 与模型逻辑；训练前请准备一个已写入 IDC 的不可变快照 ID。</p>
+          <p class="text-xs text-slate-400 mt-1">在 GPU Worker 上快速调通代码和数据路径；无需填写对象存储地址或密钥。</p>
         </div>
 
         <el-tag type="success">多租户隔离：按当前登录租户</el-tag>
@@ -18,8 +18,16 @@
           <el-input :value="sessionLabel" disabled />
         </el-form-item>
 
-        <el-form-item label="单卡调试资源">
-          <span class="text-xs font-mono text-emerald-400 font-bold">1x RTX 4090 (24GB VRAM) + IDC PVC 共享挂载</span>
+        <el-form-item label="调试资源">
+          <div class="space-y-2 w-full">
+            <el-radio-group v-model="selectedGPUCount" :disabled="hasActiveWorkspace" class="flex flex-wrap gap-2">
+              <el-radio-button v-for="profile in workspaceProfiles" :key="profile.id" :label="profile.gpuCount">
+                {{ profile.label }}
+              </el-radio-button>
+            </el-radio-group>
+            <p class="text-xs font-mono font-bold" :class="storageReady ? 'text-emerald-400' : 'text-amber-400'">{{ selectedWorkspaceProfile.topology }} · {{ storageReady ? '授权数据空间将自动挂载' : '当前为临时工作目录，受管数据挂载待管理员验收' }}</p>
+            <p class="text-[11px] text-slate-500">{{ selectedWorkspaceProfile.description }} 多机调试请直接提交“多机多卡 Ray Train”验证任务，避免编辑器连接到不确定的 worker。</p>
+          </div>
         </el-form-item>
 
         <el-form-item label="调试镜像">
@@ -32,12 +40,8 @@
             </el-option>
           </el-select>
           <p v-if="!loadingImages && images.length === 0" class="text-[11px] text-amber-400 mt-1">
-            镜像目录为空，将使用部署默认镜像。管理员可在「租户与配额」页登记镜像。
+            镜像目录为空，暂不能启动调试环境。请由团队管理员在「平台管理」页登记调试镜像。
           </p>
-        </el-form-item>
-
-        <el-form-item label="训练快照 ID">
-          <el-input v-model="snapshotId" placeholder="可选：IDC 中已准备好的不可变快照目录名" :disabled="hasActiveWorkspace" />
         </el-form-item>
 
         <el-form-item>
@@ -46,10 +50,10 @@
             icon="VideoPlay"
             class="!rounded-xl shadow-lg shadow-amber-600/20"
             :loading="launching"
-            :disabled="hasActiveWorkspace"
+            :disabled="hasActiveWorkspace || (!loadingImages && images.length === 0)"
             @click="launchDev"
           >
-            {{ hasActiveWorkspace ? '调试环境已在运行' : '启动单卡 4090 调试环境' }}
+            {{ hasActiveWorkspace ? '调试环境已在运行' : `启动 ${selectedWorkspaceProfile.topology} 调试环境` }}
           </el-button>
           <span v-if="hasActiveWorkspace" class="text-[11px] text-slate-500 ml-3">
             每位用户同时只能有一个调试环境；如需更换镜像请先停止当前工作区。
@@ -58,19 +62,34 @@
       </el-form>
     </div>
 
+    <el-alert v-if="storageStatusAlert" :type="storageStatusAlert.type" :closable="false" class="!rounded-xl">
+      <template #title>{{ storageStatusAlert.message }}</template>
+    </el-alert>
+
     <!-- Active Dev Workspace Status -->
-    <div v-if="workspace" class="bg-[#131826] border border-amber-500/40 p-6 rounded-2xl space-y-5 shadow-2xl relative overflow-hidden">
+      <div v-if="workspace" class="bg-[#131826] border border-amber-500/40 p-6 rounded-2xl space-y-5 shadow-2xl relative overflow-hidden">
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-3">
-          <span class="w-3 h-3 rounded-full bg-emerald-400 animate-pulse"></span>
-          <span class="text-sm font-bold text-white font-mono">调试环境: {{ workspace.id }} · {{ workspace.status }}</span>
+          <span class="w-3 h-3 rounded-full" :class="workspaceStatus.dotClass"></span>
+          <span class="text-sm font-bold text-white font-mono">调试环境: {{ workspace.id }} · {{ workspaceStatus.label }}</span>
         </div>
-        <el-tag type="warning" size="small">1x 4090 在用</el-tag>
+        <div class="flex items-center gap-2">
+          <span class="text-[11px] text-slate-500">同步于 {{ lastSyncLabel }}</span>
+          <el-button text size="small" :loading="refreshing" @click="refreshWorkspace(true)">刷新状态</el-button>
+          <el-tag :type="workspaceStatus.tagType" size="small">{{ workspaceStatus.resourceLabel }}</el-tag>
+        </div>
       </div>
 
       <div class="p-4 bg-slate-950/80 rounded-xl border border-slate-800 text-xs font-mono space-y-2 text-slate-300">
-        <div>IDC 快照: <span class="text-amber-400 font-bold">{{ workspace.snapshot_id || '未指定' }}</span></div>
-        <div>Jupyter 访问由平台 API 代理；代码目录和启动命令由用户在工作区内确认。</div>
+        <div>Jupyter 和 VS Code 均连接 GPU Worker；Ray Head 不提供交互入口。</div>
+        <template v-if="storageReady">
+          <div>个人工作区: <span class="text-emerald-300">/workspace</span>（可写） · 个人文件: <span class="text-emerald-300">/mnt/storage/me</span>（可写）</div>
+          <div>团队/公共数据: <span class="text-sky-300">/mnt/storage/team</span>、<span class="text-sky-300">/mnt/storage/public</span>（只读）</div>
+          <div>IDC 数据: <span class="text-sky-300">/mnt/idc/original</span>、<span class="text-sky-300">/mnt/idc/wellspiking</span>、<span class="text-sky-300">/mnt/idc/shared</span>（管理员登记后只读）</div>
+          <div>Python 依赖: <span class="text-amber-200">cd /workspace &amp;&amp; python -m venv .venv &amp;&amp; . .venv/bin/activate &amp;&amp; pip install -r requirements.txt</span></div>
+          <div>系统级 apt 依赖: 请在“调试镜像”下拉中选择团队发布的自定义 Harbor 镜像；停止工作区后通过 apt 安装的内容不会保留。</div>
+        </template>
+        <div v-else>当前环境不声明 <span class="text-slate-200">/workspace</span>、<span class="text-slate-200">/mnt/storage/*</span> 或 <span class="text-slate-200">/mnt/idc/*</span> 的持久数据可用性；临时代码请放在 <span class="text-slate-200">~/workspace</span>，并通过 <span class="text-amber-200">python -m venv ~/workspace/.venv</span> 安装 Python 依赖。停止工作区后这些内容会丢失。</div>
       </div>
 
       <!-- Actions: Open Jupyter OR Conversion to Distributed Job -->
@@ -82,11 +101,11 @@
           打开 VS Code
         </el-button>
         <el-tag v-if="!isReady" type="warning" effect="plain" size="small">环境启动中，就绪后可打开</el-tag>
-        <el-button type="danger" plain icon="CircleClose" @click="stopDev">停止工作区</el-button>
+        <el-button v-if="hasActiveWorkspace" type="danger" plain icon="CircleClose" @click="stopDev">停止工作区</el-button>
 
         <!-- THE KEY ONE-CLICK CONVERSION BUTTON -->
-        <el-button type="primary" icon="Zap" class="!rounded-xl shadow-lg shadow-blue-600/30" @click="convertJob">
-          🚀 使用快照提交 24 卡分布式训练
+        <el-button type="primary" icon="Zap" class="!rounded-xl shadow-lg shadow-blue-600/30" :loading="convertingJob" :disabled="!isReady" @click="convertJob">
+          🚀 创建代码版本并提交分布式训练
         </el-button>
       </div>
     </div>
@@ -94,12 +113,16 @@
 </template>
 
 <script setup>
+import { createWorkspaceSnapshot } from '../../api/dataSpaces'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { apiGet, apiPost, apiDelete } from '../../api/client'
 import { fetchImages } from '../../api/catalog'
+import { fetchDataSpaces } from '../../api/dataSpaces'
+import { dataSpaceReadiness } from '../../dataSpaceReadiness'
 import { session } from '../../stores/session'
+import { interactiveWorkspaceProfiles, workspaceProfileForGPUCount } from '../../devWorkspaceProfiles'
 
 const POLL_INTERVAL_MS = 5000
 const ACTIVE_STATES = ['SUBMITTED', 'PROVISIONING', 'RUNNING']
@@ -108,37 +131,74 @@ const router = useRouter()
 const workspace = ref(null)
 const images = ref([])
 const selectedImage = ref('')
-const snapshotId = ref('')
+const selectedGPUCount = ref(1)
 const loadingImages = ref(false)
+const storageLoaded = ref(false)
+const dataSpaces = ref([])
 const launching = ref(false)
 const openingEditor = ref('')
+const refreshing = ref(false)
+const lastSyncedAt = ref(null)
 let pollTimer
 
 const sessionLabel = computed(() => {
   const user = session.value
   return user ? `${user.username}（租户 ${user.tenantId}）` : '未登录'
 })
+const workspaceProfiles = interactiveWorkspaceProfiles
+const selectedWorkspaceProfile = computed(() => workspaceProfileForGPUCount(selectedGPUCount.value))
 
 // A workspace that is starting or running blocks a second launch, which is
 // what the API enforces too; without this the button looked like it did
 // nothing when clicked repeatedly.
 const hasActiveWorkspace = computed(() => ACTIVE_STATES.includes(workspace.value?.status))
 const isReady = computed(() => workspace.value?.status === 'RUNNING')
+const workspaceStatus = computed(() => {
+  const status = workspace.value?.status || 'SUBMITTED'
+  const states = {
+    SUBMITTED: { label: '提交中', tagType: 'warning', resourceLabel: '等待创建', dotClass: 'bg-amber-400 animate-pulse' },
+    PROVISIONING: { label: '启动中', tagType: 'warning', resourceLabel: '等待资源', dotClass: 'bg-amber-400 animate-pulse' },
+    RUNNING: { label: '运行中', tagType: 'success', resourceLabel: `${workspace.value?.gpu_count || 1}x 4090 在用`, dotClass: 'bg-emerald-400 animate-pulse' },
+    STOPPED: { label: '已停止', tagType: 'info', resourceLabel: 'GPU 已释放', dotClass: 'bg-slate-500' },
+    FAILED: { label: '启动失败', tagType: 'danger', resourceLabel: 'GPU 未占用', dotClass: 'bg-rose-400' }
+  }
+  return states[status] || { label: status, tagType: 'info', resourceLabel: '状态待确认', dotClass: 'bg-slate-500' }
+})
+const lastSyncLabel = computed(() => lastSyncedAt.value ? lastSyncedAt.value.toLocaleTimeString() : '—')
+const storageReady = computed(() => dataSpaces.value.some((space) => space.id === 'workspace' && dataSpaceReadiness(space).ready))
+const storageStatusAlert = computed(() => {
+  if (!storageLoaded.value || storageReady.value) return null
+  const mountFailed = dataSpaces.value.some((space) => space.provider === 'tos' && space.mountStatus === 'failed')
+  if (mountFailed) {
+    return {
+      type: 'error',
+      message: '受控数据目录挂载失败：当前不会创建仅含临时目录的调试环境。请刷新“我的数据”查看失败状态，或联系管理员处理后重试。'
+    }
+  }
+  return {
+    type: 'warning',
+    message: '受控数据目录正在准备中：个人工作区、个人文件和团队只读目录将在挂载就绪后自动出现在 GPU Worker 中。平台不会把 TOS 地址或密钥暴露给用户。'
+  }
+})
 
 const normalizeWorkspace = (value) => value && ({
   ...value,
   jupyter_url: value.jupyterUrl || value.jupyter_url,
   snapshot_id: value.snapshotId || value.snapshot_id,
-  gpu_count: value.gpuCount || value.gpu_count,
+  gpu_count: value.gpuCount || value.gpu_count || 1,
   status: value.state || value.status
 })
 
-const refreshWorkspace = async () => {
+const refreshWorkspace = async (manual = false) => {
+  if (manual) refreshing.value = true
   try {
     workspace.value = normalizeWorkspace(await apiGet('/api/v1/dev-workspaces/me'))
   } catch {
     // A 404 simply means this user has no workspace yet.
     workspace.value = null
+  } finally {
+    lastSyncedAt.value = new Date()
+    if (manual) refreshing.value = false
   }
 }
 
@@ -166,8 +226,18 @@ const loadImages = async () => {
   }
 }
 
+const loadStorageReadiness = async () => {
+  try {
+    dataSpaces.value = await fetchDataSpaces()
+  } catch {
+    dataSpaces.value = []
+  } finally {
+    storageLoaded.value = true
+  }
+}
+
 onMounted(async () => {
-  await Promise.all([refreshWorkspace(), loadImages()])
+  await Promise.all([refreshWorkspace(), loadImages(), loadStorageReadiness()])
   // Poll so SUBMITTED -> RUNNING appears without a manual reload.
   pollTimer = window.setInterval(refreshWorkspace, POLL_INTERVAL_MS)
 })
@@ -180,7 +250,7 @@ const launchDev = async () => {
     workspace.value = normalizeWorkspace(await apiPost('/api/v1/dev-workspaces', {
       name: 'interactive-dev',
       image: selectedImage.value,
-      snapshotId: snapshotId.value
+      gpuCount: selectedGPUCount.value,
     }))
     ElMessage.success('调试环境创建中，就绪后即可打开编辑器')
   } catch (error) {
@@ -220,14 +290,29 @@ const openEditor = async (kind) => {
   }
 }
 
-const convertJob = () => {
-  if (!workspace.value?.snapshot_id) {
-    ElMessage.warning('当前工作区没有快照 ID；请先在 IDC 中准备不可变快照，再从任务页选择工作区快照')
+// One click means one click: snapshot the workspace into an immutable code
+// version and land on the submit form with it already selected. It previously
+// redirected to the data page with an instruction, which is a handoff rather
+// than a conversion.
+const convertingJob = ref(false)
+
+const convertJob = async () => {
+  if (!isReady.value) {
+    ElMessage.warning('调试环境尚未就绪，就绪后才能固化当前代码')
     return
   }
-  router.push({
-    path: '/job/create',
-    query: { from: 'dev_workspace', snapshot: workspace.value.snapshot_id }
-  })
+  convertingJob.value = true
+  try {
+    const snapshot = await createWorkspaceSnapshot('')
+    ElMessage.success(`已固化当前工作区代码（${snapshot.fileCount || 0} 个文件）`)
+    router.push({
+      path: '/job/create',
+      query: { from: 'dev_workspace', snapshot: snapshot.id },
+    })
+  } catch (error) {
+    ElMessage.error(error.message || '固化工作区代码失败，请稍后重试')
+  } finally {
+    convertingJob.value = false
+  }
 }
 </script>

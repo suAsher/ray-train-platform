@@ -14,23 +14,26 @@ import (
 )
 
 var (
-	ErrLocalUserNotFound    = errors.New("local user not found")
-	ErrLocalSessionNotFound = errors.New("local session not found")
-	ErrUsernameTaken        = errors.New("username is already taken")
+	ErrLocalUserNotFound        = errors.New("local user not found")
+	ErrLocalSessionNotFound     = errors.New("local session not found")
+	ErrUsernameTaken            = errors.New("username is already taken")
+	ErrLocalUserActiveWorkloads = errors.New("local user has active workloads")
 )
 
 const sessionLastUsedUpdateInterval = 5 * time.Minute
 
 type LocalUserRecord struct {
-	ID           string `gorm:"primaryKey"`
-	Username     string `gorm:"column:username;uniqueIndex"`
-	Email        string `gorm:"column:email"`
-	TenantID     string `gorm:"column:tenant_id;index"`
-	RolesJSON    string `gorm:"column:roles;type:jsonb"`
-	PasswordHash string `gorm:"column:password_hash"`
-	Disabled     bool   `gorm:"column:disabled"`
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID               string `gorm:"primaryKey"`
+	Username         string `gorm:"column:username;uniqueIndex"`
+	StorageKey       string `gorm:"column:storage_key"`
+	Email            string `gorm:"column:email"`
+	TenantID         string `gorm:"column:tenant_id;index"`
+	RolesJSON        string `gorm:"column:roles;type:jsonb"`
+	PasswordHash     string `gorm:"column:password_hash"`
+	Disabled         bool   `gorm:"column:disabled"`
+	DecommissionedAt *time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 func (LocalUserRecord) TableName() string { return "local_users" }
@@ -57,7 +60,7 @@ func (r *GormRepository) toLocalUser(record LocalUserRecord) (domain.LocalUser, 
 		}
 	}
 	return domain.LocalUser{
-		ID: record.ID, Username: record.Username, Email: record.Email, TenantID: record.TenantID,
+		ID: record.ID, Username: record.Username, StorageKey: record.StorageKey, Email: record.Email, TenantID: record.TenantID,
 		Roles: roles, Disabled: record.Disabled, PasswordHash: record.PasswordHash,
 		CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt,
 	}, nil
@@ -80,8 +83,15 @@ func (r *GormRepository) CreateLocalUser(ctx context.Context, user domain.LocalU
 		return fmt.Errorf("local user requires a password hash")
 	}
 	now := time.Now().UTC()
+	storageKey := strings.TrimSpace(user.StorageKey)
+	if storageKey == "" {
+		storageKey = username
+	}
+	if err := domain.ValidateUsername(storageKey); err != nil {
+		return fmt.Errorf("local user storage key: %w", err)
+	}
 	record := LocalUserRecord{
-		ID: user.ID, Username: username, Email: user.Email, TenantID: user.TenantID,
+		ID: user.ID, Username: username, StorageKey: storageKey, Email: user.Email, TenantID: user.TenantID,
 		RolesJSON: string(rolesJSON), PasswordHash: user.PasswordHash, Disabled: user.Disabled,
 		CreatedAt: now, UpdatedAt: now,
 	}
@@ -96,7 +106,7 @@ func (r *GormRepository) CreateLocalUser(ctx context.Context, user domain.LocalU
 
 func (r *GormRepository) FindLocalUserByUsername(ctx context.Context, username string) (domain.LocalUser, error) {
 	var record LocalUserRecord
-	err := r.db.WithContext(ctx).Where("username = ?", domain.NormalizeUsername(username)).First(&record).Error
+	err := r.db.WithContext(ctx).Where("username = ? AND decommissioned_at IS NULL", domain.NormalizeUsername(username)).First(&record).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return domain.LocalUser{}, ErrLocalUserNotFound
 	}
@@ -106,9 +116,21 @@ func (r *GormRepository) FindLocalUserByUsername(ctx context.Context, username s
 	return r.toLocalUser(record)
 }
 
+func (r *GormRepository) FindLocalUserByID(ctx context.Context, userID string) (domain.LocalUser, error) {
+	var record LocalUserRecord
+	err := r.db.WithContext(ctx).Where("id = ? AND decommissioned_at IS NULL", userID).First(&record).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return domain.LocalUser{}, ErrLocalUserNotFound
+	}
+	if err != nil {
+		return domain.LocalUser{}, fmt.Errorf("find local user by id: %w", err)
+	}
+	return r.toLocalUser(record)
+}
+
 func (r *GormRepository) ListLocalUsers(ctx context.Context) ([]domain.LocalUser, error) {
 	var records []LocalUserRecord
-	if err := r.db.WithContext(ctx).Order("username ASC").Find(&records).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("decommissioned_at IS NULL").Order("username ASC").Find(&records).Error; err != nil {
 		return nil, fmt.Errorf("list local users: %w", err)
 	}
 	users := make([]domain.LocalUser, 0, len(records))
@@ -124,10 +146,21 @@ func (r *GormRepository) ListLocalUsers(ctx context.Context) ([]domain.LocalUser
 
 func (r *GormRepository) CountLocalUsers(ctx context.Context) (int64, error) {
 	var total int64
-	if err := r.db.WithContext(ctx).Model(&LocalUserRecord{}).Count(&total).Error; err != nil {
+	if err := r.db.WithContext(ctx).Model(&LocalUserRecord{}).Where("decommissioned_at IS NULL").Count(&total).Error; err != nil {
 		return 0, fmt.Errorf("count local users: %w", err)
 	}
 	return total, nil
+}
+
+// TenantExists is deliberately separate from identity upsert: account
+// administration must not create an implicit tenant merely because a request
+// named it.
+func (r *GormRepository) TenantExists(ctx context.Context, tenantID string) (bool, error) {
+	var count int64
+	if err := r.db.WithContext(ctx).Model(&TenantRecord{}).Where("id = ?", strings.TrimSpace(tenantID)).Count(&count).Error; err != nil {
+		return false, fmt.Errorf("check tenant: %w", err)
+	}
+	return count > 0, nil
 }
 
 func (r *GormRepository) SetLocalUserPassword(ctx context.Context, userID, passwordHash string) error {
@@ -143,6 +176,75 @@ func (r *GormRepository) SetLocalUserPassword(ctx context.Context, userID, passw
 		return ErrLocalUserNotFound
 	}
 	return nil
+}
+
+// SetLocalUserRoles changes an existing account's roles. Session verification
+// re-reads this row on every request, so the new role is in force immediately.
+func (r *GormRepository) SetLocalUserRoles(ctx context.Context, userID string, roles []string) error {
+	normalized, err := domain.NormalizeRoles(roles)
+	if err != nil {
+		return fmt.Errorf("normalize roles: %w", err)
+	}
+	encoded, err := json.Marshal(normalized)
+	if err != nil {
+		return fmt.Errorf("encode roles: %w", err)
+	}
+	result := r.db.WithContext(ctx).Model(&LocalUserRecord{}).
+		Where("id = ?", userID).
+		Update("roles", string(encoded))
+	if result.Error != nil {
+		return fmt.Errorf("update local user roles: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return ErrLocalUserNotFound
+	}
+	return nil
+}
+
+func (r *GormRepository) SetLocalUserDisabled(ctx context.Context, userID string, disabled bool) error {
+	result := r.db.WithContext(ctx).Model(&LocalUserRecord{}).Where("id = ?", userID).
+		Updates(map[string]any{"disabled": disabled, "updated_at": time.Now().UTC()})
+	if result.Error != nil {
+		return fmt.Errorf("update local user disabled state: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return ErrLocalUserNotFound
+	}
+	return nil
+}
+
+// DecommissionLocalUser keeps user data and audit records intact while
+// disabling the account. It rejects an active workspace or training job so an
+// administrator cannot orphan a running GPU workload by removing its owner.
+func (r *GormRepository) DecommissionLocalUser(ctx context.Context, userID string, now time.Time) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var activeJobs int64
+		if err := tx.Model(&JobRecord{}).Where("user_id = ? AND observed_state NOT IN ?", userID,
+			[]string{string(domain.StateSucceeded), string(domain.StateFailed), string(domain.StateCanceled), string(domain.StateTimedOut)}).Count(&activeJobs).Error; err != nil {
+			return fmt.Errorf("count active training jobs: %w", err)
+		}
+		if activeJobs > 0 {
+			return ErrLocalUserActiveWorkloads
+		}
+		var activeWorkspaces int64
+		if err := tx.Model(&WorkspaceRecord{}).Where("user_id = ? AND observed_state NOT IN ?", userID,
+			[]string{string(domain.WorkspaceStopped), string(domain.WorkspaceFailed)}).Count(&activeWorkspaces).Error; err != nil {
+			return fmt.Errorf("count active workspaces: %w", err)
+		}
+		if activeWorkspaces > 0 {
+			return ErrLocalUserActiveWorkloads
+		}
+		result := tx.Model(&LocalUserRecord{}).Where("id = ?", userID).Updates(map[string]any{
+			"disabled": true, "decommissioned_at": now.UTC(), "updated_at": now.UTC(),
+		})
+		if result.Error != nil {
+			return fmt.Errorf("disable local user for decommission: %w", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return ErrLocalUserNotFound
+		}
+		return nil
+	})
 }
 
 func (r *GormRepository) CreateLocalSession(ctx context.Context, session domain.LocalSession, digest string) error {
@@ -208,6 +310,19 @@ func (r *GormRepository) RevokeLocalSession(ctx context.Context, publicID string
 		Where("public_id = ? AND revoked_at IS NULL", publicID).Update("revoked_at", revokedAt)
 	if result.Error != nil {
 		return fmt.Errorf("revoke local session: %w", result.Error)
+	}
+	return nil
+}
+
+// RevokeAllLocalSessions invalidates every active session for a user. It is
+// called after password changes and administrative account changes so a stolen
+// token cannot remain valid until its natural expiry.
+func (r *GormRepository) RevokeAllLocalSessions(ctx context.Context, userID string, revokedAt time.Time) error {
+	result := r.db.WithContext(ctx).Model(&LocalSessionRecord{}).
+		Where("user_id = ? AND revoked_at IS NULL", userID).
+		Update("revoked_at", revokedAt)
+	if result.Error != nil {
+		return fmt.Errorf("revoke local user sessions: %w", result.Error)
 	}
 	return nil
 }

@@ -17,7 +17,7 @@ func gitInitContainerScript(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("render ray job: %v", err)
 	}
-	spec, _, err := nestedMap(manifest.Object, "spec", "rayClusterSpec", "headGroupSpec", "template", "spec")
+	spec, _, err := nestedMap(manifest.Object, "spec", "submitterPodTemplate", "spec")
 	if err != nil {
 		t.Fatalf("read pod spec: %v", err)
 	}
@@ -61,5 +61,68 @@ func TestGitSourceMaterializerStillCheckoutsRequestedCommit(t *testing.T) {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("expected %q in materializer script:\n%s", expected, script)
 		}
+	}
+}
+
+// A source fetch happens before KubeRay can start scheduling the Ray cluster.
+// It must be non-interactive and bounded, otherwise a half-open Git HTTPS
+// connection leaves a GPU job in Initializing indefinitely.
+func TestGitSourceMaterializerBoundsStalledFetch(t *testing.T) {
+	script := gitInitContainerScript(t)
+	for _, expected := range []string{
+		"export GIT_TERMINAL_PROMPT=0",
+		"timeout 180 git",
+		"-c http.lowSpeedLimit=1024",
+		"-c http.lowSpeedTime=60",
+		"Git fetch failed or exceeded 180 seconds",
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("expected %q in bounded Git source materializer:\n%s", expected, script)
+		}
+	}
+}
+
+// The submitter uploads /workspace as Ray's runtime environment. Making the
+// head fetch the same repository is redundant and lets one transient Git
+// connection hold the entire GPU job in Initializing. The runtime environment
+// then distributes the uploaded code to the driver and workers.
+func TestGitSourceIsMaterializedOnlyInSubmitterPod(t *testing.T) {
+	job := validRenderJob()
+	manifest, err := RenderRayJob(job, testRenderOptions())
+	if err != nil {
+		t.Fatalf("render ray job: %v", err)
+	}
+
+	cluster, _, err := nestedMap(manifest.Object, "spec", "rayClusterSpec")
+	if err != nil {
+		t.Fatalf("read cluster spec: %v", err)
+	}
+	head, _, err := nestedMap(cluster, "headGroupSpec", "template", "spec")
+	if err != nil {
+		t.Fatalf("read head spec: %v", err)
+	}
+	if init, _ := head["initContainers"].([]any); len(init) != 0 {
+		t.Fatalf("head must not fetch source independently: %#v", init)
+	}
+
+	workers, _, err := nestedSlice(cluster, "workerGroupSpecs")
+	if err != nil || len(workers) != 1 {
+		t.Fatalf("read worker specs: %v", err)
+	}
+	worker := workers[0].(map[string]any)
+	workerSpec, _, err := nestedMap(worker, "template", "spec")
+	if err != nil {
+		t.Fatalf("read worker spec: %v", err)
+	}
+	if init, _ := workerSpec["initContainers"].([]any); len(init) != 0 {
+		t.Fatalf("worker must receive code from Ray runtime env, not Git: %#v", init)
+	}
+
+	submitter, _, err := nestedMap(manifest.Object, "spec", "submitterPodTemplate", "spec")
+	if err != nil {
+		t.Fatalf("read submitter spec: %v", err)
+	}
+	if init, _ := submitter["initContainers"].([]any); len(init) != 1 {
+		t.Fatalf("submitter must be the only source materializer: %#v", init)
 	}
 }

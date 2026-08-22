@@ -66,19 +66,29 @@ type RetryPolicy struct {
 }
 
 type JobSpec struct {
-	Name           string        `json:"name"`
-	Image          string        `json:"image"`
-	Source         CodeSource    `json:"source"`
-	Entrypoint     Entrypoint    `json:"entrypoint"`
-	Resources      Resources     `json:"resources"`
-	Queue          string        `json:"queue"`
-	Priority       string        `json:"priority,omitempty"`
-	DatasetURI     string        `json:"datasetUri,omitempty"`
-	CheckpointURI  string        `json:"checkpointUri,omitempty"`
-	OutputURI      string        `json:"outputUri,omitempty"`
-	TimeoutSeconds int64         `json:"timeoutSeconds,omitempty"`
-	RetryPolicy    RetryPolicy   `json:"retryPolicy,omitempty"`
-	CleanupPolicy  CleanupPolicy `json:"cleanupPolicy,omitempty"`
+	Name               string                  `json:"name"`
+	Image              string                  `json:"image"`
+	Source             CodeSource              `json:"source"`
+	Entrypoint         Entrypoint              `json:"entrypoint"`
+	Execution          ExecutionProfile        `json:"execution,omitempty"`
+	Resources          Resources               `json:"resources"`
+	Queue              string                  `json:"queue"`
+	Priority           string                  `json:"priority,omitempty"`
+	DatasetURI         string                  `json:"datasetUri,omitempty"`
+	CheckpointURI      string                  `json:"checkpointUri,omitempty"`
+	OutputURI          string                  `json:"outputUri,omitempty"`
+	DatasetStorage     StorageSelection        `json:"datasetStorage,omitempty"`
+	CheckpointStorage  StorageSelection        `json:"checkpointStorage,omitempty"`
+	OutputStorage      StorageSelection        `json:"outputStorage,omitempty"`
+	Input              DataLocation            `json:"input,omitempty"`
+	Checkpoint         DataLocation            `json:"checkpoint,omitempty"`
+	Output             DataLocation            `json:"output,omitempty"`
+	ResolvedStorage    ResolvedStorageMounts   `json:"resolvedStorage,omitempty"`
+	ResolvedDataMounts ResolvedDataSpaceMounts `json:"resolvedDataMounts,omitempty"`
+	ResolvedDataRoots  ResolvedDataSpaceRoots  `json:"resolvedDataRoots,omitempty"`
+	TimeoutSeconds     int64                   `json:"timeoutSeconds,omitempty"`
+	RetryPolicy        RetryPolicy             `json:"retryPolicy,omitempty"`
+	CleanupPolicy      CleanupPolicy           `json:"cleanupPolicy,omitempty"`
 }
 
 type TrainingJob struct {
@@ -101,7 +111,10 @@ type TrainingJob struct {
 	CreatedAt            time.Time        `json:"createdAt"`
 	UpdatedAt            time.Time        `json:"updatedAt"`
 	LastObservedAt       *time.Time       `json:"lastObservedAt,omitempty"`
-	FinishedAt           *time.Time       `json:"finishedAt,omitempty"`
+	// StartedAt is when the workload began running, which is later than
+	// CreatedAt by however long the job waited for a GPU admission.
+	StartedAt  *time.Time `json:"startedAt,omitempty"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
 }
 
 type JobFilter struct {
@@ -129,6 +142,11 @@ type ObservedJobState struct {
 	RayJobUID       string
 	RayClusterName  string
 	ResourceVersion string
+	// StartedAt and FinishedAt come from the workload itself, not from the
+	// control plane's clock at poll time. Both stay nil until the workload
+	// publishes them, so "not started" is never rendered as an epoch date.
+	StartedAt  *time.Time
+	FinishedAt *time.Time
 }
 
 var dnsLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
@@ -159,8 +177,33 @@ func (s JobSpec) Validate() error {
 	if s.Resources.WorkerReplicas*s.Resources.GPUsPerWorker > limits.MaxTotalGPUs {
 		return fmt.Errorf("total GPUs cannot exceed %d", limits.MaxTotalGPUs)
 	}
+	if err := s.Execution.Validate(s.Resources); err != nil {
+		return err
+	}
 	if strings.TrimSpace(s.Queue) == "" {
 		return fmt.Errorf("queue is required")
+	}
+	if err := validateDataLocations(
+		dataLocation{field: "datasetUri", value: s.DatasetURI},
+		dataLocation{field: "checkpointUri", value: s.CheckpointURI},
+		dataLocation{field: "outputUri", value: s.OutputURI},
+	); err != nil {
+		return err
+	}
+	if err := validateStorageSelections(s); err != nil {
+		return err
+	}
+	if err := validateLogicalDataLocations(s); err != nil {
+		return err
+	}
+	if err := s.ResolvedStorage.Validate(); err != nil {
+		return err
+	}
+	if err := s.ResolvedDataMounts.Validate(); err != nil {
+		return err
+	}
+	if err := s.ResolvedDataRoots.Validate(); err != nil {
+		return err
 	}
 	if s.RetryPolicy.MaxRetries < 0 || s.RetryPolicy.MaxRetries > 3 {
 		return fmt.Errorf("maxRetries must be between 0 and 3")
@@ -201,6 +244,10 @@ func (s CodeSource) validate() error {
 	case "workspace":
 		if !snapshotID.MatchString(s.Snapshot) {
 			return fmt.Errorf("workspace source requires snapshot")
+		}
+	case "workspace-archive":
+		if strings.TrimSpace(s.ArtifactID) == "" {
+			return fmt.Errorf("workspace archive source requires artifactId")
 		}
 	case "artifact":
 		if strings.TrimSpace(s.ArtifactID) == "" {

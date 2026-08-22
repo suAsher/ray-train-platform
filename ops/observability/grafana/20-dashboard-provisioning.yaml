@@ -1,0 +1,10 @@
+apiVersion: 1
+providers:
+  - name: ray-training
+    orgId: 1
+    folder: Ray Training
+    type: file
+    disableDeletion: true
+    editable: false
+    options:
+      path: /var/lib/grafana/dashboards/ray

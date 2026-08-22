@@ -52,7 +52,7 @@ func TestDevRayClusterWorkerUsesConfiguredSelector(t *testing.T) {
 	spec := devClusterPodSpec(t, WorkspaceRenderOptions{NodeSelector: map[string]string{"accelerator": "nvidia-h100"}}, "worker")
 	selector, _ := spec["nodeSelector"].(map[string]any)
 	if selector["accelerator"] != "nvidia-h100" {
-		t.Fatalf("dev worker must use the configured selector, got %v", selector)
+		t.Fatalf("GPU worker must use the configured selector, got %v", selector)
 	}
 }
 

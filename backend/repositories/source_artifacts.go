@@ -20,6 +20,7 @@ type SourceArtifactRecord struct {
 	ID               string `gorm:"primaryKey"`
 	TenantID         string `gorm:"uniqueIndex:source_artifacts_tenant_user_sha256_key;index"`
 	UserID           string `gorm:"uniqueIndex:source_artifacts_tenant_user_sha256_key;index"`
+	StorageRoot      string `gorm:"column:storage_root"`
 	SHA256           string `gorm:"uniqueIndex:source_artifacts_tenant_user_sha256_key"`
 	SizeBytes        int64
 	ObjectKey        string
@@ -91,7 +92,7 @@ func (r *GormRepository) MarkSourceArtifactReady(ctx context.Context, tenantID, 
 
 func sourceArtifactRecordFromDomain(artifact domain.SourceArtifact) SourceArtifactRecord {
 	return SourceArtifactRecord{
-		ID: artifact.ID, TenantID: artifact.TenantID, UserID: artifact.UserID,
+		ID: artifact.ID, TenantID: artifact.TenantID, UserID: artifact.UserID, StorageRoot: artifact.StorageRoot,
 		SHA256: artifact.SHA256, SizeBytes: artifact.SizeBytes, ObjectKey: artifact.ObjectKey,
 		State: string(artifact.State), UploadExpiresAt: artifact.UploadExpiresAt,
 		CompletedAt: artifact.CompletedAt, LastReferencedAt: artifact.LastReferencedAt, CreatedAt: artifact.CreatedAt,
@@ -100,7 +101,7 @@ func sourceArtifactRecordFromDomain(artifact domain.SourceArtifact) SourceArtifa
 
 func (record SourceArtifactRecord) toDomain() (*domain.SourceArtifact, error) {
 	artifact := &domain.SourceArtifact{
-		ID: record.ID, TenantID: record.TenantID, UserID: record.UserID,
+		ID: record.ID, TenantID: record.TenantID, UserID: record.UserID, StorageRoot: record.StorageRoot,
 		SHA256: record.SHA256, SizeBytes: record.SizeBytes, ObjectKey: record.ObjectKey,
 		State: domain.SourceArtifactState(record.State), UploadExpiresAt: record.UploadExpiresAt,
 		CompletedAt: record.CompletedAt, LastReferencedAt: record.LastReferencedAt, CreatedAt: record.CreatedAt,

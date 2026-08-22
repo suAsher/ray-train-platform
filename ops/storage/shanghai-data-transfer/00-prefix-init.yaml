@@ -1,0 +1,52 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ray-train-tos-prefix-init
+  namespace: ray-train-platform
+  labels:
+    app.kubernetes.io/name: ray-train-storage-bootstrap
+    app.kubernetes.io/component: tos-prefix-init
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ray-train-storage-bootstrap
+        app.kubernetes.io/component: tos-prefix-init
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      # The bootstrap image lives in the same private Harbor project as the
+      # platform images. Reuse the namespace-scoped pull secret so this
+      # one-time TOS directory initializer can run on fresh GPU nodes.
+      imagePullSecrets:
+        - name: harbor-registry
+      containers:
+        - name: create-prefixes
+          # Native TOS SDK utility. Credentials are injected only for this
+          # short-lived bootstrap pod and are never printed.
+          image: harbor.wellspiking.ai/guofeng.su/ray-tos-prefix-init@sha256:4d68045813ed8e20e89600c4bec04fb08c71eabf7bb0dca9a6f14d650d48dcb3
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: TOS_ENDPOINT
+              value: https://tos-cn-shanghai.ivolces.com
+            - name: TOS_BUCKET
+              value: shanghai-data-transfer
+            - name: TOS_REGION
+              value: cn-shanghai
+            - name: TOS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: tos-credentials
+                  key: access-key
+            - name: TOS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: tos-credentials
+                  key: secret-key
+      # The managed VCI node cannot reach DaoCloud reliably. Keep bootstrap on
+      # the training node, which already pulls the same registry namespace as
+      # Ray workload images.
+      nodeSelector:
+        accelerator: nvidia-rtx-4090

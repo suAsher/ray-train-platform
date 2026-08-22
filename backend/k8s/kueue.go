@@ -41,7 +41,10 @@ func (c *Client) EnsureLocalQueue(ctx context.Context, namespace, queueName, clu
 		"metadata": map[string]any{
 			"name":      queueName,
 			"namespace": namespace,
-			"labels":    map[string]any{"app.kubernetes.io/managed-by": "ray-train-platform"},
+			"labels": map[string]any{
+				"app.kubernetes.io/part-of":    "ray-train-platform",
+				"app.kubernetes.io/managed-by": "ray-train-platform",
+			},
 		},
 		"spec": map[string]any{"clusterQueue": clusterQueueName},
 	}}

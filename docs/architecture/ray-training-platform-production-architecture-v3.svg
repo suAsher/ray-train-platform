@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
+  <title id="title">Ray 分布式训练平台（生产架构）</title>
+  <desc id="desc">Ray 分布式训练平台的用户入口、平台控制面、集群调度、Ray 运行时、数据存储、缓存与可观测性架构。</desc>
+  <defs>
+    <linearGradient id="page" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f8fbff"/><stop offset="1" stop-color="#ffffff"/>
+    </linearGradient>
+    <linearGradient id="titleBg" x1="0" x2="1">
+      <stop stop-color="#eef5ff"/><stop offset=".5" stop-color="#ffffff"/><stop offset="1" stop-color="#f4f0ff"/>
+    </linearGradient>
+    <filter id="shadow" x="-15%" y="-20%" width="130%" height="145%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#153a72" flood-opacity=".09"/>
+    </filter>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto">
+      <path d="M0 0L0 6L8 3Z" fill="#2f6fd2"/>
+    </marker>
+    <style>
+      text{font-family:Inter,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",Arial,sans-serif;fill:#152445}
+      .title{font-size:42px;font-weight:800;letter-spacing:1.5px}.sectionTitle{font-size:20px;font-weight:800;fill:#1257bd}
+      .boxTitle{font-size:17px;font-weight:750}.boxText{font-size:13px;fill:#5a6881}.small{font-size:12px;fill:#63728d}
+      .flowText{font-size:15px;font-weight:700;fill:#245ead}.white{fill:#fff}.arrow{fill:none;stroke:#2f6fd2;stroke-width:2.2;marker-end:url(#arrow)}
+      .dash{fill:none;stroke:#7084aa;stroke-width:1.8;stroke-dasharray:6 5;marker-end:url(#arrow)}
+    </style>
+  </defs>
+
+  <rect width="1920" height="1080" fill="url(#page)"/>
+  <rect x="34" y="24" width="1852" height="74" rx="18" fill="url(#titleBg)" stroke="#a8c7f2" stroke-width="1.5"/>
+  <text x="960" y="72" class="title" text-anchor="middle">Ray 分布式训练平台（生产架构）</text>
+
+  <!-- 1 用户与入口 -->
+  <rect x="34" y="116" width="1852" height="112" rx="16" fill="#fbfdff" stroke="#87b4ef" stroke-width="1.6"/>
+  <rect x="52" y="132" width="166" height="38" rx="10" fill="#1460ce"/>
+  <circle cx="75" cy="151" r="12" fill="#fff" opacity=".96"/><text x="75" y="156" text-anchor="middle" font-size="14" font-weight="800" fill="#1460ce">1</text>
+  <text x="93" y="158" font-size="18" font-weight="800" class="white">用户与入口</text>
+  <g filter="url(#shadow)"><rect x="258" y="137" width="320" height="72" rx="13" fill="#fff" stroke="#6fa5ea"/><text x="418" y="166" class="boxTitle" text-anchor="middle">训练用户 · Web Portal</text><text x="418" y="190" class="boxText" text-anchor="middle">调试、提交、日志、数据与结果</text></g>
+  <g filter="url(#shadow)"><rect x="616" y="137" width="320" height="72" rx="13" fill="#fff" stroke="#6fa5ea"/><text x="776" y="166" class="boxTitle" text-anchor="middle">开发者 · CLI / SDK</text><text x="776" y="190" class="boxText" text-anchor="middle">spk-rayjob / 原生 Ray Job API</text></g>
+  <g filter="url(#shadow)"><rect x="974" y="137" width="320" height="72" rx="13" fill="#fff" stroke="#9c83e1"/><text x="1134" y="166" class="boxTitle" text-anchor="middle">统一身份认证</text><text x="1134" y="190" class="boxText" text-anchor="middle">本地账号 / Keycloak OIDC</text></g>
+  <g filter="url(#shadow)"><rect x="1332" y="137" width="320" height="72" rx="13" fill="#fff" stroke="#9c83e1"/><text x="1492" y="166" class="boxTitle" text-anchor="middle">管理员控制台</text><text x="1492" y="190" class="boxText" text-anchor="middle">团队、用户、配额、镜像与数据</text></g>
+
+  <!-- 2 平台控制面 -->
+  <rect x="34" y="246" width="910" height="260" rx="16" fill="#fbfdff" stroke="#87b4ef" stroke-width="1.6"/>
+  <rect x="52" y="262" width="190" height="38" rx="10" fill="#1460ce"/>
+  <circle cx="75" cy="281" r="12" fill="#fff"/><text x="75" y="286" text-anchor="middle" font-size="14" font-weight="800" fill="#1460ce">2</text>
+  <text x="93" y="288" font-size="18" font-weight="800" class="white">平台控制面</text>
+  <g filter="url(#shadow)"><rect x="70" y="322" width="245" height="72" rx="13" fill="#fff" stroke="#6fa5ea"/><text x="193" y="351" class="boxTitle" text-anchor="middle">Web UI</text><text x="193" y="375" class="boxText" text-anchor="middle">用户入口 / 管理入口</text></g>
+  <g filter="url(#shadow)"><rect x="350" y="322" width="245" height="72" rx="13" fill="#fff" stroke="#6fa5ea"/><text x="473" y="351" class="boxTitle" text-anchor="middle">Backend API</text><text x="473" y="375" class="boxText" text-anchor="middle">鉴权 / 编排 / 审计</text></g>
+  <g filter="url(#shadow)"><rect x="630" y="322" width="245" height="72" rx="13" fill="#fff" stroke="#6fa5ea"/><text x="753" y="351" class="boxTitle" text-anchor="middle">任务控制器</text><text x="753" y="375" class="boxText" text-anchor="middle">RayJob / Workspace 生命周期</text></g>
+  <g filter="url(#shadow)"><rect x="70" y="416" width="245" height="66" rx="13" fill="#f3fff8" stroke="#64b987"/><text x="193" y="444" class="boxTitle" text-anchor="middle">PostgreSQL</text><text x="193" y="466" class="boxText" text-anchor="middle">用户 / 任务 / 元数据</text></g>
+  <g filter="url(#shadow)"><rect x="350" y="416" width="245" height="66" rx="13" fill="#fff9ef" stroke="#daa04d"/><text x="473" y="444" class="boxTitle" text-anchor="middle">代码与镜像目录</text><text x="473" y="466" class="boxText" text-anchor="middle">代码版本 / Harbor 镜像</text></g>
+  <g filter="url(#shadow)"><rect x="630" y="416" width="245" height="66" rx="13" fill="#faf6ff" stroke="#9c83e1"/><text x="753" y="444" class="boxTitle" text-anchor="middle">私网服务入口</text><text x="753" y="466" class="boxText" text-anchor="middle">Ingress / ClusterIP</text></g>
+
+  <!-- 3 集群控制与调度 -->
+  <rect x="976" y="246" width="910" height="260" rx="16" fill="#fbfdff" stroke="#87b4ef" stroke-width="1.6"/>
+  <rect x="994" y="262" width="222" height="38" rx="10" fill="#1460ce"/>
+  <circle cx="1017" cy="281" r="12" fill="#fff"/><text x="1017" y="286" text-anchor="middle" font-size="14" font-weight="800" fill="#1460ce">3</text>
+  <text x="1035" y="288" font-size="18" font-weight="800" class="white">集群控制与调度</text>
+  <g filter="url(#shadow)"><rect x="1012" y="322" width="250" height="72" rx="13" fill="#fff" stroke="#6fa5ea"/><text x="1137" y="351" class="boxTitle" text-anchor="middle">Kubernetes</text><text x="1137" y="375" class="boxText" text-anchor="middle">工作负载与资源编排</text></g>
+  <g filter="url(#shadow)"><rect x="1292" y="322" width="250" height="72" rx="13" fill="#fff" stroke="#6fa5ea"/><text x="1417" y="351" class="boxTitle" text-anchor="middle">KubeRay Operator</text><text x="1417" y="375" class="boxText" text-anchor="middle">RayJob / RayCluster 管理</text></g>
+  <g filter="url(#shadow)"><rect x="1572" y="322" width="250" height="72" rx="13" fill="#fff" stroke="#64b987"/><text x="1697" y="351" class="boxTitle" text-anchor="middle">Kueue</text><text x="1697" y="375" class="boxText" text-anchor="middle">队列 / 配额 / 准入 / 优先级</text></g>
+  <g filter="url(#shadow)"><rect x="1012" y="416" width="390" height="66" rx="13" fill="#f4f9ff" stroke="#6fa5ea"/><text x="1207" y="444" class="boxTitle" text-anchor="middle">弹性 GPU 资源池</text><text x="1207" y="466" class="boxText" text-anchor="middle">节点标签 / 污点容忍 / 动态容量</text></g>
+  <g filter="url(#shadow)"><rect x="1432" y="416" width="390" height="66" rx="13" fill="#faf6ff" stroke="#9c83e1"/><text x="1627" y="444" class="boxTitle" text-anchor="middle">资源与访问策略</text><text x="1627" y="466" class="boxText" text-anchor="middle">RBAC / NetworkPolicy / Pod 安全</text></g>
+
+  <!-- 4 Ray 运行时 -->
+  <rect x="34" y="524" width="1852" height="184" rx="16" fill="#fbfdff" stroke="#87b4ef" stroke-width="1.6"/>
+  <rect x="52" y="540" width="180" height="38" rx="10" fill="#1460ce"/>
+  <circle cx="75" cy="559" r="12" fill="#fff"/><text x="75" y="564" text-anchor="middle" font-size="14" font-weight="800" fill="#1460ce">4</text>
+  <text x="93" y="566" font-size="18" font-weight="800" class="white">Ray 运行时</text>
+  <g filter="url(#shadow)"><rect x="270" y="550" width="330" height="126" rx="14" fill="#faf6ff" stroke="#9c83e1"/><text x="435" y="581" class="boxTitle" text-anchor="middle">交互式 GPU 调试环境</text><text x="435" y="607" class="boxText" text-anchor="middle">JupyterLab / VS Code / Terminal</text><text x="435" y="632" class="boxText" text-anchor="middle">工作区与依赖环境持久化</text><rect x="352" y="646" width="166" height="20" rx="10" fill="#eee7ff"/><text x="435" y="660" class="small" text-anchor="middle">Dev RayCluster</text></g>
+  <g filter="url(#shadow)"><rect x="650" y="550" width="330" height="126" rx="14" fill="#f4f9ff" stroke="#6fa5ea"/><text x="815" y="581" class="boxTitle" text-anchor="middle">Ray Head Pod</text><text x="815" y="607" class="boxText" text-anchor="middle">Driver / GCS / Dashboard</text><text x="815" y="632" class="boxText" text-anchor="middle">任务控制与集群状态</text><rect x="743" y="646" width="144" height="20" rx="10" fill="#e5f0ff"/><text x="815" y="660" class="small" text-anchor="middle">RayJob</text></g>
+  <g filter="url(#shadow)"><rect x="1030" y="550" width="330" height="126" rx="14" fill="#f3fff8" stroke="#64b987"/><text x="1195" y="581" class="boxTitle" text-anchor="middle">Ray Worker Pods</text><text x="1195" y="607" class="boxText" text-anchor="middle">GPU 训练 / 数据加载 / 通信</text><text x="1195" y="632" class="boxText" text-anchor="middle">单机多卡 / 多机多卡</text><rect x="1107" y="646" width="176" height="20" rx="10" fill="#e6f8ee"/><text x="1195" y="660" class="small" text-anchor="middle">PyTorch DDP / NCCL</text></g>
+  <g filter="url(#shadow)"><rect x="1410" y="550" width="330" height="126" rx="14" fill="#fff9ef" stroke="#daa04d"/><text x="1575" y="581" class="boxTitle" text-anchor="middle">任务访问与诊断</text><text x="1575" y="607" class="boxText" text-anchor="middle">Ray Dashboard / 实时日志</text><text x="1575" y="632" class="boxText" text-anchor="middle">状态、指标与错误分析</text><rect x="1493" y="646" width="164" height="20" rx="10" fill="#fff0d7"/><text x="1575" y="660" class="small" text-anchor="middle">Portal Proxy</text></g>
+
+  <!-- 5 数据与存储 -->
+  <rect x="34" y="726" width="1180" height="190" rx="16" fill="#fbfdff" stroke="#79b9aa" stroke-width="1.6"/>
+  <rect x="52" y="742" width="190" height="38" rx="10" fill="#13836f"/>
+  <circle cx="75" cy="761" r="12" fill="#fff"/><text x="75" y="766" text-anchor="middle" font-size="14" font-weight="800" fill="#13836f">5</text>
+  <text x="93" y="768" font-size="18" font-weight="800" class="white">数据与存储</text>
+  <g filter="url(#shadow)"><rect x="70" y="800" width="200" height="88" rx="13" fill="#f3fff8" stroke="#64b987"/><text x="170" y="831" class="boxTitle" text-anchor="middle">个人空间</text><text x="170" y="856" class="boxText" text-anchor="middle">代码 / 数据 / 输出</text><text x="170" y="877" class="small" text-anchor="middle">读写</text></g>
+  <g filter="url(#shadow)"><rect x="295" y="800" width="200" height="88" rx="13" fill="#f4f9ff" stroke="#6fa5ea"/><text x="395" y="831" class="boxTitle" text-anchor="middle">团队空间</text><text x="395" y="856" class="boxText" text-anchor="middle">协作数据 / 发布结果</text><text x="395" y="877" class="small" text-anchor="middle">按角色授权</text></g>
+  <g filter="url(#shadow)"><rect x="520" y="800" width="200" height="88" rx="13" fill="#f4f9ff" stroke="#6fa5ea"/><text x="620" y="831" class="boxTitle" text-anchor="middle">公共数据</text><text x="620" y="856" class="boxText" text-anchor="middle">统一训练数据集</text><text x="620" y="877" class="small" text-anchor="middle">训练只读</text></g>
+  <g filter="url(#shadow)"><rect x="745" y="800" width="200" height="88" rx="13" fill="#fff9ef" stroke="#daa04d"/><text x="845" y="831" class="boxTitle" text-anchor="middle">IDC 数据源</text><text x="845" y="856" class="boxText" text-anchor="middle">NFS / 用户数据目录</text><text x="845" y="877" class="small" text-anchor="middle">受控挂载</text></g>
+  <g filter="url(#shadow)"><rect x="970" y="800" width="200" height="88" rx="13" fill="#faf6ff" stroke="#9c83e1"/><text x="1070" y="831" class="boxTitle" text-anchor="middle">Checkpoint / 产物</text><text x="1070" y="856" class="boxText" text-anchor="middle">持久化与断点续跑</text><text x="1070" y="877" class="small" text-anchor="middle">读写</text></g>
+
+  <!-- 6 可观测性与缓存 -->
+  <rect x="1238" y="726" width="648" height="190" rx="16" fill="#fbfdff" stroke="#e2a15d" stroke-width="1.6"/>
+  <rect x="1256" y="742" width="228" height="38" rx="10" fill="#df7b2e"/>
+  <circle cx="1279" cy="761" r="12" fill="#fff"/><text x="1279" y="766" text-anchor="middle" font-size="14" font-weight="800" fill="#df7b2e">6</text>
+  <text x="1297" y="768" font-size="18" font-weight="800" class="white">可观测性与缓存</text>
+  <g filter="url(#shadow)"><rect x="1274" y="800" width="170" height="88" rx="13" fill="#fff9ef" stroke="#df8b45"/><text x="1359" y="831" class="boxTitle" text-anchor="middle">日志链路</text><text x="1359" y="856" class="boxText" text-anchor="middle">Alloy → Loki</text><text x="1359" y="877" class="small" text-anchor="middle">任务 / Pod 日志</text></g>
+  <g filter="url(#shadow)"><rect x="1468" y="800" width="170" height="88" rx="13" fill="#fff9ef" stroke="#df8b45"/><text x="1553" y="831" class="boxTitle" text-anchor="middle">指标链路</text><text x="1553" y="856" class="boxText" text-anchor="middle">Prometheus / DCGM</text><text x="1553" y="877" class="small" text-anchor="middle">Grafana / 告警</text></g>
+  <g filter="url(#shadow)"><rect x="1662" y="800" width="188" height="88" rx="13" fill="#faf6ff" stroke="#9c83e1"/><text x="1756" y="831" class="boxTitle" text-anchor="middle">节点 NVMe 缓存</text><text x="1756" y="856" class="boxText" text-anchor="middle">数据预热 / 临时加速</text><text x="1756" y="877" class="small" text-anchor="middle">可回收副本</text></g>
+
+  <!-- 7 用户闭环 -->
+  <rect x="34" y="934" width="1852" height="116" rx="16" fill="#f7faff" stroke="#87b4ef" stroke-width="1.6"/>
+  <rect x="52" y="950" width="170" height="38" rx="10" fill="#1460ce"/>
+  <circle cx="75" cy="969" r="12" fill="#fff"/><text x="75" y="974" text-anchor="middle" font-size="14" font-weight="800" fill="#1460ce">7</text>
+  <text x="93" y="976" font-size="18" font-weight="800" class="white">训练闭环</text>
+  <g><rect x="270" y="955" width="190" height="68" rx="34" fill="#fff" stroke="#6fa5ea"/><text x="365" y="995" class="flowText" text-anchor="middle">选择代码 / 镜像 / 数据</text></g>
+  <g><rect x="510" y="955" width="160" height="68" rx="34" fill="#fff" stroke="#9c83e1"/><text x="590" y="995" class="flowText" text-anchor="middle">GPU 调试</text></g>
+  <g><rect x="720" y="955" width="160" height="68" rx="34" fill="#fff" stroke="#6fa5ea"/><text x="800" y="995" class="flowText" text-anchor="middle">提交任务</text></g>
+  <g><rect x="930" y="955" width="160" height="68" rx="34" fill="#fff" stroke="#64b987"/><text x="1010" y="995" class="flowText" text-anchor="middle">排队 / 训练</text></g>
+  <g><rect x="1140" y="955" width="180" height="68" rx="34" fill="#fff" stroke="#df8b45"/><text x="1230" y="995" class="flowText" text-anchor="middle">日志 / 指标 / Loss</text></g>
+  <g><rect x="1370" y="955" width="160" height="68" rx="34" fill="#fff" stroke="#9c83e1"/><text x="1450" y="995" class="flowText" text-anchor="middle">调参与续跑</text></g>
+  <g><rect x="1580" y="955" width="190" height="68" rx="34" fill="#fff" stroke="#64b987"/><text x="1675" y="995" class="flowText" text-anchor="middle">Checkpoint / 产物</text></g>
+
+  <!-- 主要关系 -->
+  <path class="arrow" d="M418 209V235H473V322"/><path class="arrow" d="M776 209V235H753V322"/>
+  <path class="arrow" d="M875 358H1012"/><path class="arrow" d="M1417 394V512H815V550"/><path class="arrow" d="M1697 394V512H1195V550"/>
+  <path class="arrow" d="M980 613H1030"/><path class="dash" d="M1195 676V718H620V800"/><path class="dash" d="M435 676V718H170V800"/>
+  <path class="dash" d="M815 676V718H1359V800"/><path class="dash" d="M1195 676V718H1553V800"/><path class="dash" d="M1195 676V718H1756V800"/>
+  <path class="arrow" d="M460 989H510"/><path class="arrow" d="M670 989H720"/><path class="arrow" d="M880 989H930"/><path class="arrow" d="M1090 989H1140"/><path class="arrow" d="M1320 989H1370"/><path class="arrow" d="M1530 989H1580"/>
+</svg>

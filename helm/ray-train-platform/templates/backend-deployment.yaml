@@ -1,4 +1,7 @@
 {{- if contains "REPLACE_WITH" .Values.backend.image.tag }}{{- fail "backend.image.tag must be replaced with an immutable release tag or digest" }}{{- end }}
+{{- if and .Values.release.requireImageDigests (not .Values.backend.image.digest) }}{{- fail "backend.image.digest is required when release.requireImageDigests is true" }}{{- end }}
+{{- if and .Values.backend.image.digest (not (regexMatch `^sha256:[0-9a-fA-F]{64}$` .Values.backend.image.digest)) }}{{- fail "backend.image.digest must use sha256:<64 hex>" }}{{- end }}
+{{- if and (eq .Values.backend.appEnv "production") (ne .Values.postgres.mode "external") }}{{- fail "production deployments must use postgres.mode=external" }}{{- end }}
 {{- /* The OIDC issuer only has to be real when OIDC is actually required; a
 local-account deployment never contacts Keycloak. */}}
 {{- if .Values.backend.oidcRequired }}
@@ -8,21 +11,65 @@ local-account deployment never contacts Keycloak. */}}
 {{- if contains "REPLACE_WITH" .Values.backend.sourceMaterializerImage }}{{- fail "backend.sourceMaterializerImage must be replaced with a pinned source materializer image" }}{{- end }}
 {{- if not (regexMatch `^[^@[:space:]]+@sha256:[0-9a-fA-F]{64}$` .Values.backend.sourceMaterializerImage) }}{{- fail "backend.sourceMaterializerImage must use @sha256:<64 hex>" }}{{- end }}
 {{- if not (regexMatch `^[^@[:space:]]+@sha256:[0-9a-fA-F]{64}$` .Values.backend.workspaceImage) }}{{- fail "backend.workspaceImage must use @sha256:<64 hex>" }}{{- end }}
+{{- /* Existing releases may predate training.localCache. Keep --reuse-values
+      upgrades safe by treating that absent map as the disabled default. */}}
+{{- $localCache := default (dict) .Values.training.localCache }}
+{{- $mlflow := default (dict) .Values.backend.mlflow }}
+{{- $dataSpaces := default (dict) .Values.dataSpaces }}
+{{- $personalStorage := default (dict) .Values.personalStorage }}
+{{- $objectSetQuota := default (dict) $personalStorage.objectSetQuota }}
+{{- $idcDataSpaces := default (dict) .Values.idcDataSpaces }}
+{{- $legacyStorage := default (dict) .Values.storage }}
+{{- if (default false $legacyStorage.enabled) }}{{- fail "storage.enabled is deprecated; configure governed idcDataSpaces instead" }}{{- end }}
+{{- if (default false $dataSpaces.enabled) }}
+{{- $dataSpaceAttributes := default (dict) $dataSpaces.fsxVolumeAttributes }}
+{{- if not (kindIs "map" $dataSpaceAttributes) }}{{- fail "dataSpaces.fsxVolumeAttributes must be a YAML map when dataSpaces.enabled is true" }}{{- end }}
+{{- if not (default "" $dataSpaces.mountCapacity) }}{{- fail "dataSpaces.mountCapacity is required when dataSpaces.enabled is true" }}{{- end }}
+{{- range $required := list "type" "bucket" "server" "region" }}
+{{- if not (default "" (get $dataSpaceAttributes $required)) }}{{- fail (printf "dataSpaces.fsxVolumeAttributes.%s is required when dataSpaces.enabled is true" $required) }}{{- end }}
+{{- end }}
+{{- if ne (upper (toString (get $dataSpaceAttributes "type"))) "TOS" }}{{- fail "dataSpaces.fsxVolumeAttributes.type must be TOS" }}{{- end }}
+{{- range $forbidden := list "path" "secretName" "secretNamespace" }}
+{{- if hasKey $dataSpaceAttributes $forbidden }}{{- fail (printf "dataSpaces.fsxVolumeAttributes must not contain %s; workload mounts use csi-fsx component IRSA" $forbidden) }}{{- end }}
+{{- end }}
+{{- end }}
+{{- if (default false $idcDataSpaces.enabled) }}
+{{- if not (default "" $idcDataSpaces.mountCapacity) }}{{- fail "idcDataSpaces.mountCapacity is required when idcDataSpaces.enabled is true" }}{{- end }}
+{{- $idcSources := default (dict) $idcDataSpaces.sources }}
+{{- if not (kindIs "map" $idcSources) }}{{- fail "idcDataSpaces.sources must be a YAML map when idcDataSpaces.enabled is true" }}{{- end }}
+{{- range $name := list "original" "wellspiking" "shared" }}
+{{- $source := get $idcSources $name }}
+{{- if not (kindIs "map" $source) }}{{- fail (printf "idcDataSpaces.sources.%s must be a YAML map when idcDataSpaces.enabled is true" $name) }}{{- end }}
+{{- $server := default "" (get $source "server") }}
+{{- $path := default "" (get $source "path") }}
+{{- if not $server }}{{- fail (printf "idcDataSpaces.sources.%s.server is required when idcDataSpaces.enabled is true" $name) }}{{- end }}
+{{- if or (not $path) (eq $path "/") (not (hasPrefix "/" $path)) }}{{- fail (printf "idcDataSpaces.sources.%s.path must be a non-root absolute export path" $name) }}{{- end }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ray-train-backend
   namespace: {{ .Values.namespace }}
   labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: api
     app: ray-train-backend
 spec:
   replicas: {{ .Values.backend.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ .Values.availability.rollingUpdate.maxUnavailable }}
+      maxSurge: {{ .Values.availability.rollingUpdate.maxSurge }}
   selector:
     matchLabels:
       app: ray-train-backend
   template:
     metadata:
       labels:
+        {{- include "ray-train-platform.commonLabels" . | nindent 8 }}
+        app.kubernetes.io/component: api
         app: ray-train-backend
     spec:
       serviceAccountName: ray-train-platform-sa
@@ -33,7 +80,7 @@ spec:
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
-          whenUnsatisfiable: ScheduleAnyway
+          whenUnsatisfiable: {{ .Values.availability.topologySpreadWhenUnsatisfiable }}
           labelSelector:
             matchLabels:
               app: ray-train-backend
@@ -48,6 +95,23 @@ spec:
                   - key: type
                     operator: NotIn
                     values: ["virtual-kubelet"]
+        {{- if .Values.availability.requiredAntiAffinity }}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: ray-train-backend
+              topologyKey: kubernetes.io/hostname
+        {{- else if .Values.availability.preferredAntiAffinity }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: ray-train-backend
+        {{- end }}
       {{- with .Values.backend.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -58,7 +122,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: backend
-          image: "{{ .Values.global.imageRegistry }}/{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+          image: {{ include "ray-train-platform.image" (list . .Values.backend.image) | quote }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - containerPort: 8080
@@ -107,6 +171,44 @@ spec:
               value: {{ .Values.training.maxGPUsPerWorker | quote }}
             - name: MAX_TOTAL_GPUS
               value: {{ .Values.training.maxTotalGPUs | quote }}
+            - name: LOCAL_CACHE_ENABLED
+              value: {{ default false $localCache.enabled | quote }}
+            - name: LOCAL_CACHE_STORAGE_CLASS
+              value: {{ default "" $localCache.storageClass | quote }}
+            - name: LOCAL_CACHE_SIZE
+              value: {{ default "" $localCache.size | quote }}
+            - name: LOCAL_CACHE_MOUNT_PATH
+              value: {{ default "" $localCache.mountPath | quote }}
+            # New governed TOS mounts remain opt-in until the csi-fsx IRSA
+            # prefix-isolation smoke test has passed. Browsing stays available,
+            # but Ray workloads are not changed by a compatibility upgrade.
+            - name: DATA_SPACES_ENABLED
+              value: {{ default false $dataSpaces.enabled | quote }}
+            - name: DATA_SPACES_MOUNT_CAPACITY
+              value: {{ default "" $dataSpaces.mountCapacity | quote }}
+            - name: DATA_SPACES_FSX_VOLUME_ATTRIBUTES_JSON
+              value: {{ toJson (default (dict) $dataSpaces.fsxVolumeAttributes) | quote }}
+            - name: DATA_SPACES_PUBLIC_ROOT
+              value: {{ default "ray-train/public" $dataSpaces.publicRoot | quote }}
+            # Native TOS hard quota for each platform user's fixed ObjectSet.
+            # It is independent of dataSpaces.enabled (FSX mounts), so admins
+            # can prepare and govern personal storage before GPU rollout.
+            - name: TOS_OBJECT_SET_QUOTAS_ENABLED
+              value: {{ default false $objectSetQuota.enabled | quote }}
+            - name: PERSONAL_STORAGE_DEFAULT_QUOTA
+              value: {{ default "100Gi" $objectSetQuota.defaultQuota | quote }}
+            - name: PERSONAL_STORAGE_MAX_QUOTA
+              value: {{ default "10Ti" $objectSetQuota.maxQuota | quote }}
+            # IDC NFS exports are configured by the platform operator. The
+            # API creates only tenant-local read-only adapters; users never
+            # submit an arbitrary server/path and cannot browse the export
+            # through the web object browser.
+            - name: IDC_DATA_SPACES_ENABLED
+              value: {{ default false $idcDataSpaces.enabled | quote }}
+            - name: IDC_DATA_SPACES_MOUNT_CAPACITY
+              value: {{ default "" $idcDataSpaces.mountCapacity | quote }}
+            - name: IDC_DATA_SPACES_SOURCES_JSON
+              value: {{ toJson (default (dict) $idcDataSpaces.sources) | quote }}
             - name: KUEUE_AUTO_QUOTA
               value: {{ .Values.kueue.autoQuota | quote }}
             - name: LOCAL_AUTH_ENABLED
@@ -130,6 +232,14 @@ spec:
               value: {{ .Values.backend.lokiURL | quote }}
             - name: PROMETHEUS_URL
               value: {{ .Values.backend.prometheusURL | quote }}
+            - name: MLFLOW_ENABLED
+              value: {{ default false $mlflow.enabled | quote }}
+            - name: MLFLOW_TRACKING_URL
+              value: {{ default "" $mlflow.trackingURL | quote }}
+            - name: MLFLOW_INGEST_URL
+              value: {{ default "" $mlflow.ingestURL | quote }}
+            - name: MLFLOW_EXPERIMENT_PREFIX
+              value: {{ default "raytrain" $mlflow.experimentPrefix | quote }}
             - name: KUEUE_CLUSTER_QUEUE
               value: {{ .Values.kueue.clusterQueueName | quote }}
             - name: CORS_ORIGINS
@@ -152,33 +262,37 @@ spec:
               value: {{ required "backend.sourceMaterializerImage is required" .Values.backend.sourceMaterializerImage | quote }}
             - name: SOURCE_ARTIFACTS_ENABLED
               value: {{ .Values.backend.sourceArtifactsEnabled | quote }}
+            - name: RAY_API_DEFAULT_IMAGE
+              value: {{ .Values.backend.rayAPIDefaultImage | quote }}
             - name: TOS_ENDPOINT
               value: {{ .Values.tos.endpoint | quote }}
             - name: TOS_BUCKET
               value: {{ .Values.tos.bucket | quote }}
             - name: TOS_SECRET_NAME
               value: {{ .Values.tos.secretName | quote }}
+            {{- if .Values.tos.secretName }}
             - name: TOS_REGION
-              valueFrom:
-                secretKeyRef:
-                  name: {{ required .Values.tos.secretName .Values.tos.secretName | quote }}
-                  key: region
+              # Region is deployment configuration, not credential material.
+              # Keeping it in values means AK/SK rotation cannot make the
+              # backend unschedulable because of an unrelated Secret key.
+              value: {{ .Values.tos.region | quote }}
             - name: TOS_ACCESS_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ required .Values.tos.secretName .Values.tos.secretName | quote }}
+                  name: {{ .Values.tos.secretName | quote }}
                   key: access-key
             - name: TOS_SECRET_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ required .Values.tos.secretName .Values.tos.secretName | quote }}
+                  name: {{ .Values.tos.secretName | quote }}
                   key: secret-key
             - name: TOS_SECURITY_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ required .Values.tos.secretName .Values.tos.secretName | quote }}
+                  name: {{ .Values.tos.secretName | quote }}
                   key: security-token
                   optional: true
+            {{- end }}
             - name: RAY_API_SPOOL_SIZE_BYTES
               value: "3221225472"
             - name: RAY_API_UPLOAD_MAX_CONCURRENT
@@ -187,14 +301,6 @@ spec:
               value: "20"
             - name: RAY_API_SPOOL_DIR
               value: "/var/lib/ray-platform/ray-packages"
-            - name: IDC_STORAGE_ENABLED
-              value: {{ .Values.storage.enabled | quote }}
-            - name: IDC_EXISTING_CLAIM
-              value: {{ .Values.storage.existingClaim | quote }}
-            - name: IDC_STORAGE_CLASS
-              value: {{ .Values.storage.storageClass | quote }}
-            - name: IDC_MOUNT_PATH
-              value: {{ .Values.storage.mountPath | quote }}
           volumeMounts:
             - name: ray-api-spool
               mountPath: /var/lib/ray-platform/ray-packages
@@ -223,6 +329,9 @@ kind: Service
 metadata:
   name: ray-train-backend
   namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: api
 spec:
   type: {{ .Values.backend.service.type }}
   ports:

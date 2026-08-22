@@ -23,7 +23,9 @@ func TestModelColumnsExistInMigrations(t *testing.T) {
 	models := []any{
 		&JobRecord{}, &OutboxRecord{}, &TenantRecord{}, &UserRecord{},
 		&WorkspaceRecord{}, &IdempotencyRecord{}, &PersonalAccessTokenRecord{},
-		&LocalUserRecord{}, &LocalSessionRecord{}, &PlatformImageRecord{},
+		&LocalUserRecord{}, &LocalSessionRecord{}, &AuditLogRecord{}, &PlatformImageRecord{},
+		&DataMountBindingRecord{}, &GitCredentialRecord{}, &WorkspaceSnapshotRecord{},
+		&IDCConnectionRecord{}, &DataTransferRecord{},
 	}
 
 	namer := schema.NamingStrategy{}

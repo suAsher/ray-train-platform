@@ -15,12 +15,87 @@ type AdminStore interface {
 	ListTenantSummaries(context.Context) ([]repositories.TenantSummary, error)
 	ListUserSummaries(context.Context) ([]repositories.UserSummary, error)
 	CreateTenant(ctx context.Context, tenant domain.Tenant) error
+	SetTenantGPUQuota(ctx context.Context, tenantID string, limit int) error
 }
 
 func (h *Handler) RegisterAdminRoutes(group *gin.RouterGroup) {
 	group.GET("/tenants", h.listTenants)
 	group.POST("/tenants", h.createTenant)
+	// The tenant GPU limit is enforced at submission from the database, so an
+	// administrator can reallocate it here instead of editing Helm values.
+	group.POST("/tenants/:id/quota", h.setTenantQuota)
 	group.GET("/users", h.listUsers)
+}
+
+// maxTenantGPUQuota bounds an administrator typo. It is deliberately far above
+// any real fleet: the per-job ceilings and Kueue admission remain the operative
+// limits, this only rejects an obviously wrong number.
+const maxTenantGPUQuota = 4096
+
+type setTenantQuotaRequest struct {
+	GPUQuota int `json:"gpuQuota"`
+}
+
+func (h *Handler) setTenantQuota(c *gin.Context) {
+	principal, ok := h.principal(c)
+	if !ok {
+		h.writeError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "authentication is required")
+		return
+	}
+	// GPU capacity is shared cluster-wide, so reallocating it between teams is
+	// not something a single team's administrator may do for itself.
+	if !principal.HasRole(domain.RoleSuperAdmin) {
+		h.writeError(c, http.StatusForbidden, "FORBIDDEN", "super administrator role is required to reallocate GPU capacity")
+		return
+	}
+	if h.admin == nil {
+		h.writeError(c, http.StatusServiceUnavailable, "ADMIN_UNAVAILABLE", "admin data is not configured")
+		return
+	}
+	var request setTenantQuotaRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		h.writeError(c, http.StatusBadRequest, "INVALID_JSON", "request body is invalid")
+		return
+	}
+	if request.GPUQuota < 0 || request.GPUQuota > maxTenantGPUQuota {
+		h.writeError(c, http.StatusBadRequest, "INVALID_GPU_QUOTA", "GPU quota must be between 0 and 4096")
+		return
+	}
+	tenantID := c.Param("id")
+	tenants, err := h.admin.ListTenantSummaries(c.Request.Context())
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "TENANT_LIST_FAILED", "could not read tenants")
+		return
+	}
+	if !containsTenant(tenants, tenantID) {
+		h.writeError(c, http.StatusNotFound, "TENANT_NOT_FOUND", "tenant was not found")
+		return
+	}
+	if err := h.admin.SetTenantGPUQuota(c.Request.Context(), tenantID, request.GPUQuota); err != nil {
+		h.writeError(c, http.StatusInternalServerError, "TENANT_QUOTA_UPDATE_FAILED", "could not update the tenant GPU quota")
+		return
+	}
+	updated, err := h.admin.ListTenantSummaries(c.Request.Context())
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "TENANT_LIST_FAILED", "quota saved but the tenant could not be re-read")
+		return
+	}
+	for _, tenant := range updated {
+		if tenant.ID == tenantID {
+			h.writeSuccess(c, http.StatusOK, tenant)
+			return
+		}
+	}
+	h.writeError(c, http.StatusNotFound, "TENANT_NOT_FOUND", "tenant was not found")
+}
+
+func containsTenant(tenants []repositories.TenantSummary, tenantID string) bool {
+	for _, tenant := range tenants {
+		if tenant.ID == tenantID {
+			return true
+		}
+	}
+	return false
 }
 
 type createTenantRequest struct {

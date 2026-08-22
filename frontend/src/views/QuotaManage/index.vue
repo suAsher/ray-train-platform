@@ -1,216 +1,90 @@
 <template>
   <div class="space-y-6">
-    <!-- Header -->
-    <div class="flex justify-between items-center bg-[#131826] p-6 rounded-2xl border border-slate-800/80 shadow-xl">
+    <div class="panel flex flex-wrap items-center justify-between gap-4 p-6">
       <div>
-        <h3 class="text-lg font-bold text-white flex items-center gap-2">
-          <el-icon class="text-purple-400"><Lock /></el-icon> 多租户管理与 Kueue GPU 配额隔离 (RBAC & Quotas)
+        <h3 class="flex items-center gap-2 text-lg font-bold text-white">
+          <el-icon class="text-purple-400"><Lock /></el-icon> 管理员控制台
         </h3>
-        <p class="text-xs text-slate-400 mt-1">支持基于 Kueue 的多租户 GPU 硬/软配额隔离、排队优先级调度与管理员 RBAC 权限管制。</p>
+        <p class="mt-1 text-xs text-slate-400">{{ quotaCopy.pageSummary }}</p>
       </div>
-
       <div class="flex items-center gap-3">
-        <el-tag type="danger" effect="dark" size="small">超级管理员权限 (SuperAdmin)</el-tag>
-        <el-button type="primary" icon="Plus" class="!rounded-xl" @click="showAddTenantModal = true">新建租户/团队</el-button>
+        <el-tag :type="isSuperAdmin ? 'danger' : 'warning'" effect="dark" size="small">
+          {{ isSuperAdmin ? '超级管理员 (SuperAdmin)' : '团队管理员 (TenantAdmin)' }}
+        </el-tag>
+        <el-button size="small" :loading="loading" icon="Refresh" @click="loadAll">刷新</el-button>
       </div>
     </div>
 
-    <!-- Tenant Quota Cards Grid -->
-    <div class="space-y-3">
-      <h4 class="text-xs font-bold text-slate-300 uppercase tracking-wider">租户 / 项目组 GPU 配额使用情况 (24 卡总容量)</h4>
-
-      <div class="grid grid-cols-3 gap-5">
-        <div 
-          v-for="tenant in tenants" 
-          :key="tenant.id"
-          class="bg-[#131826] p-6 rounded-2xl border border-slate-800/80 space-y-4 shadow-xl hover:border-slate-700 transition-all"
-        >
-          <div class="flex justify-between items-start">
-            <div>
-              <h5 class="text-sm font-bold text-white flex items-center gap-2">
-                <el-icon class="text-blue-400"><UserFilled /></el-icon> {{ tenant.tenant_name }}
-              </h5>
-              <p class="text-[11px] font-mono text-slate-400 mt-0.5">Kueue 队列: {{ tenant.queue_name }}</p>
-            </div>
-            <el-tag size="small" :type="tenant.queued_jobs_count > 0 ? 'warning' : 'success'">
-              {{ tenant.queued_jobs_count > 0 ? `${tenant.queued_jobs_count} 任务排队中` : '配额正常' }}
-            </el-tag>
-          </div>
-
-          <!-- Quota Usage Bar -->
-          <div class="space-y-1.5">
-            <div class="flex justify-between text-xs font-mono">
-              <span class="text-slate-400">4090 显卡配额:</span>
-              <span class="font-bold text-blue-400">{{ tenant.gpu_quota_used }} / {{ tenant.gpu_quota_limit }} 卡</span>
-            </div>
-            <el-progress 
-              :percentage="Math.round((tenant.gpu_quota_used / tenant.gpu_quota_limit) * 100)" 
-              :status="tenant.gpu_quota_used === tenant.gpu_quota_limit ? 'warning' : 'success'"
-              :show-text="false" 
-            />
-          </div>
-
-          <div class="flex justify-between items-center text-xs font-mono text-slate-400 pt-2 border-t border-slate-800/60">
-            <span>最高允许优先级: <span class="text-amber-400 font-bold uppercase">{{ tenant.max_priority }}</span></span>
-            <el-button type="primary" link size="small" @click="editQuota(tenant)">修改配额</el-button>
-          </div>
+    <el-tabs v-model="activeTab" type="border-card" class="!rounded-2xl !border-slate-800/80 !bg-[#131826] shadow-xl">
+      <el-tab-pane label="租户与配额" name="tenants">
+        <div class="p-4">
+          <TenantPanel
+            :tenants="tenants"
+            :is-super-admin="isSuperAdmin"
+            :limits="limits"
+            @create-tenant="showAddTenantModal = true"
+            @changed="loadTenants"
+          />
         </div>
-      </div>
-    </div>
+      </el-tab-pane>
 
-    <!-- Queued Jobs Queue Management -->
-    <div class="bg-[#131826] p-6 rounded-2xl border border-slate-800/80 space-y-4 shadow-xl">
-      <div class="flex justify-between items-center">
-        <div>
-          <h4 class="text-sm font-bold text-white flex items-center gap-2">
-            <el-icon class="text-amber-400"><Clock /></el-icon> 实时 Kueue 排队与抢占队列 (Queued & Pending Jobs)
-          </h4>
-          <p class="text-xs text-slate-400 mt-1">当集群显卡满载或租户超过配额时，新提交的任务自动进入组调度排队队列。</p>
+      <el-tab-pane label="用户与权限" name="users">
+        <div class="p-4">
+          <UserPanel
+            :users="users"
+            :is-super-admin="isSuperAdmin"
+            :storage-quota-enabled="storageQuotaEnabled"
+            :preparing="preparingObjectSet"
+            :can-manage="canManageUser"
+            @create-user="showAddUserModal = true"
+            @reset-password="openResetPassword"
+            @set-state="changeUserState"
+            @decommission="decommissionUser"
+            @edit-storage="openStorageQuota"
+            @edit-roles="openRoles"
+            @prepare-object-set="prepareObjectSet"
+          />
         </div>
-        <el-tag type="warning" size="small">Kueue Gang Scheduling 生效中</el-tag>
-      </div>
+      </el-tab-pane>
 
-      <el-table :data="queuedJobs" style="width: 100%" class="!bg-transparent text-xs">
-        <el-table-column prop="name" label="排队任务名称" min-width="220">
-          <template #default="scope">
-            <span class="font-mono font-bold text-slate-200">{{ scope.row.name }}</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column prop="tenant_name" label="所属租户" width="180" />
-        
-        <el-table-column prop="priority" label="优先级" width="120">
-          <template #default="scope">
-            <el-tag :type="scope.row.priority === 'HIGH' ? 'danger' : 'info'" size="small" effect="dark">
-              {{ scope.row.priority }}
-            </el-tag>
-          </template>
-        </el-table-column>
-
-        <el-table-column prop="requested_gpus" label="申请 GPU 数量" width="140 font-mono text-blue-400 font-bold">
-          <template #default="scope">
-            {{ scope.row.requested_gpus }} 卡 4090
-          </template>
-        </el-table-column>
-
-        <el-table-column prop="queued_time" label="已等待时间" width="140 font-mono text-amber-400" />
-
-        <el-table-column label="管理员调度操作" width="180" align="right">
-          <template #default="scope">
-            <el-button type="danger" link size="small" @click="cancelJob(scope.row.id)">取消排队</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </div>
-
-    <!-- Users & RBAC Permissions Table -->
-    <div class="bg-[#131826] p-6 rounded-2xl border border-slate-800/80 space-y-4 shadow-xl">
-      <div class="flex justify-between items-center">
-        <h4 class="text-sm font-bold text-white flex items-center gap-2">
-          <el-icon class="text-blue-400"><Avatar /></el-icon> 平台用户与 RBAC 角色分配
-        </h4>
-        <el-button size="small" icon="User" @click="showAddUserModal = true">添加用户</el-button>
-      </div>
-
-      <el-table :data="users" style="width: 100%" class="!bg-transparent text-xs">
-        <el-table-column prop="username" label="用户名" min-width="160 font-mono font-bold text-white" />
-        <el-table-column prop="email" label="邮箱" min-width="200 font-mono text-slate-400" />
-        <el-table-column prop="role" label="RBAC 角色" width="160">
-          <template #default="scope">
-            <el-tag :type="getRoleTag(scope.row.role)" size="small" effect="plain">
-              {{ scope.row.role }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="tenant_id" label="所属租户组" width="180 font-mono" />
-        <el-table-column prop="disabled" label="状态" width="100">
-          <template #default="scope">
-            <el-tag size="small" :type="scope.row.disabled ? 'info' : 'success'" effect="plain">
-              {{ scope.row.disabled ? '已停用' : '正常' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-      </el-table>
-    </div>
-
-    <!-- Image catalogue: the environments users can pick for jobs and debugging -->
-    <div class="bg-[#131826] p-6 rounded-2xl border border-slate-800/80 space-y-4 shadow-xl">
-      <div class="flex justify-between items-center">
-        <div>
-          <h4 class="text-sm font-bold text-white flex items-center gap-2">
-            <el-icon class="text-emerald-400"><Box /></el-icon> 镜像目录（训练 / 调试运行环境）
-          </h4>
-          <p class="text-[11px] text-slate-500 mt-1">用户在提交任务和启动调试环境时从这里选择，保证依赖环境一致且可复现。</p>
+      <el-tab-pane label="镜像与凭据" name="catalog">
+        <div class="p-4">
+          <CatalogPanel
+            :images="catalogImages"
+            :credentials="gitCredentials"
+            @create-image="showAddImageModal = true"
+            @remove-image="removeImage"
+            @create-credential="showAddCredentialModal = true"
+            @remove-credential="removeCredential"
+            @test-credential="testCredential"
+          />
         </div>
-        <el-button size="small" icon="Plus" @click="showAddImageModal = true">登记镜像</el-button>
-      </div>
+      </el-tab-pane>
 
-      <el-table :data="catalogImages" style="width: 100%" class="!bg-transparent text-xs" empty-text="尚未登记任何镜像">
-        <el-table-column prop="name" label="名称" min-width="150" />
-        <el-table-column prop="kind" label="用途" width="110">
-          <template #default="scope">
-            <el-tag size="small" :type="scope.row.kind === 'training' ? 'primary' : 'warning'" effect="plain">
-              {{ scope.row.kind === 'training' ? '训练' : '调试' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="framework" label="框架" width="120" />
-        <el-table-column prop="reference" label="镜像（digest）" min-width="260">
-          <template #default="scope">
-            <span class="font-mono text-[11px] text-slate-400 break-all">{{ scope.row.reference }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="范围" width="100">
-          <template #default="scope">
-            <el-tag size="small" effect="plain">{{ scope.row.tenantId ? '本团队' : '全平台' }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="90" align="right">
-          <template #default="scope">
-            <el-button type="danger" link size="small" @click="removeImage(scope.row.id)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </div>
-
-    <!-- Private repository credentials -->
-    <div class="bg-[#131826] p-6 rounded-2xl border border-slate-800/80 space-y-4 shadow-xl">
-      <div class="flex justify-between items-center">
-        <div>
-          <h4 class="text-sm font-bold text-white flex items-center gap-2">
-            <el-icon class="text-blue-400"><Key /></el-icon> 私有 Git 仓库凭证
-          </h4>
-          <p class="text-[11px] text-slate-500 mt-1">令牌保存在租户 namespace 的 Kubernetes Secret 中，数据库只记录引用；拉取私有仓库时自动注入。</p>
+      <el-tab-pane label="数据与存储" name="storage">
+        <div class="p-4">
+          <StoragePanel :is-super-admin="isSuperAdmin" />
         </div>
-        <el-button size="small" icon="Plus" @click="showAddCredentialModal = true">添加凭证</el-button>
-      </div>
+      </el-tab-pane>
 
-      <el-table :data="gitCredentials" style="width: 100%" class="!bg-transparent text-xs" empty-text="尚未配置私有仓库凭证">
-        <el-table-column prop="name" label="名称" min-width="140" />
-        <el-table-column prop="host" label="Git 主机" min-width="180" />
-        <el-table-column prop="username" label="用户名" width="140" />
-        <el-table-column prop="secretName" label="Secret" min-width="180">
-          <template #default="scope"><span class="font-mono text-[11px] text-slate-400">{{ scope.row.secretName }}</span></template>
-        </el-table-column>
-        <el-table-column label="操作" width="90" align="right">
-          <template #default="scope">
-            <el-button type="danger" link size="small" @click="removeCredential(scope.row.id)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </div>
+      <el-tab-pane label="队列与运行中" name="queue">
+        <div class="p-4">
+          <QueuePanel
+            :jobs="activeJobs"
+            :cluster-g-p-us="clusterGPUs"
+            :current-tenant-id="currentTenantId"
+            @cancel-job="cancelJob"
+          />
+        </div>
+      </el-tab-pane>
+    </el-tabs>
 
-    <!-- Create a tenant: database row, namespace and Kueue queue in one step -->
     <el-dialog v-model="showAddTenantModal" title="新建租户 / 团队" width="440px">
       <el-form label-position="top" @submit.prevent>
-        <el-form-item label="租户 ID">
-          <el-input v-model="newTenant.id" placeholder="小写字母、数字或短横线，例如 team-a" />
-        </el-form-item>
-        <el-form-item label="显示名称">
-          <el-input v-model="newTenant.name" placeholder="例如 感知算法组" />
-        </el-form-item>
+        <el-form-item label="租户 ID"><el-input v-model="newTenant.id" placeholder="小写字母、数字或短横线，例如 team-a" /></el-form-item>
+        <el-form-item label="显示名称"><el-input v-model="newTenant.name" placeholder="例如 感知算法组" /></el-form-item>
         <el-form-item label="GPU 配额（卡）">
-          <el-input-number v-model="newTenant.gpuQuota" :min="0" :max="512" class="w-full" />
+          <el-input-number v-model="newTenant.gpuQuota" :min="0" :max="4096" class="w-full" />
         </el-form-item>
         <p class="text-[11px] text-slate-500">将同时创建 Kubernetes namespace 与 Kueue 队列。</p>
       </el-form>
@@ -222,9 +96,7 @@
 
     <el-dialog v-model="showAddImageModal" title="登记镜像" width="480px">
       <el-form label-position="top" @submit.prevent>
-        <el-form-item label="名称">
-          <el-input v-model="newImage.name" placeholder="例如 PyTorch 2.4 + CUDA 12.1" />
-        </el-form-item>
+        <el-form-item label="名称"><el-input v-model="newImage.name" placeholder="例如 BEVFusion CUDA 12.1" /></el-form-item>
         <el-form-item label="用途">
           <el-select v-model="newImage.kind" class="w-full">
             <el-option label="训练任务" value="training" />
@@ -234,9 +106,7 @@
         <el-form-item label="镜像（必须带 @sha256 digest）">
           <el-input v-model="newImage.reference" placeholder="registry/repo@sha256:..." />
         </el-form-item>
-        <el-form-item label="框架标注">
-          <el-input v-model="newImage.framework" placeholder="可选，例如 PyTorch / DeepSpeed" />
-        </el-form-item>
+        <el-form-item label="框架标注"><el-input v-model="newImage.framework" placeholder="可选，例如 PyTorch / BEVFusion" /></el-form-item>
         <div class="flex gap-6">
           <el-checkbox v-model="newImage.isDefault">设为该用途的默认镜像</el-checkbox>
           <el-checkbox v-model="newImage.shared" :disabled="!isSuperAdmin">全平台共享</el-checkbox>
@@ -248,21 +118,15 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="showAddCredentialModal" title="添加私有仓库凭证" width="440px">
+    <el-dialog v-model="showAddCredentialModal" title="添加团队私有仓库凭据" width="440px">
       <el-form label-position="top" @submit.prevent>
-        <el-form-item label="名称">
-          <el-input v-model="newCredential.name" placeholder="例如 内网 GitLab" />
-        </el-form-item>
-        <el-form-item label="Git 主机">
-          <el-input v-model="newCredential.host" placeholder="git.example.com（只填主机名）" />
-        </el-form-item>
-        <el-form-item label="用户名">
-          <el-input v-model="newCredential.username" placeholder="留空则使用 git" />
-        </el-form-item>
+        <el-form-item label="名称"><el-input v-model="newCredential.name" placeholder="例如 内网 GitLab" /></el-form-item>
+        <el-form-item label="Git 主机"><el-input v-model="newCredential.host" placeholder="gitlab.qomolo.com（只填主机名）" /></el-form-item>
+        <el-form-item label="用户名"><el-input v-model="newCredential.username" placeholder="留空则使用 git" /></el-form-item>
         <el-form-item label="访问令牌 / 密码">
           <el-input v-model="newCredential.token" type="password" show-password placeholder="Personal Access Token" />
         </el-form-item>
-        <p class="text-[11px] text-slate-500">令牌只写入 Kubernetes Secret，不会保存到平台数据库，也不会在接口中返回。</p>
+        <p class="text-[11px] text-slate-500">团队成员提交该 Git 主机的任务时作为兜底凭据；令牌只写入 Kubernetes Secret。</p>
       </el-form>
       <template #footer>
         <el-button @click="showAddCredentialModal = false">取消</el-button>
@@ -270,67 +134,215 @@
       </template>
     </el-dialog>
 
-    <!-- Create a local account so a colleague can sign in without an IdP -->
     <el-dialog v-model="showAddUserModal" title="添加平台账号" width="440px">
       <el-form label-position="top" @submit.prevent>
-        <el-form-item label="用户名">
-          <el-input v-model="newUser.username" placeholder="例如 zhangsan" autocomplete="off" />
-        </el-form-item>
+        <el-form-item label="用户名"><el-input v-model="newUser.username" placeholder="例如 zhangsan" autocomplete="off" /></el-form-item>
         <el-form-item label="初始密码">
           <el-input v-model="newUser.password" type="password" show-password placeholder="至少 8 位" autocomplete="new-password" />
         </el-form-item>
         <el-form-item label="角色">
           <el-select v-model="newUser.role" class="w-full">
             <el-option label="Engineer（提交与查看自己的任务）" value="Engineer" />
-            <el-option label="TenantAdmin（管理本团队配额与成员）" value="TenantAdmin" />
+            <el-option v-if="isSuperAdmin" label="TenantAdmin（管理本团队成员与团队共享目录）" value="TenantAdmin" />
           </el-select>
         </el-form-item>
-        <p class="text-[11px] text-slate-500">账号会创建在当前团队下，创建后请让本人登录并修改密码。</p>
+        <el-form-item v-if="isSuperAdmin" label="所属租户">
+          <el-select v-model="newUser.tenantId" class="w-full" placeholder="选择已创建的租户">
+            <el-option v-for="tenant in tenants" :key="tenant.id" :label="`${tenant.name || tenant.id}（${tenant.id}）`" :value="tenant.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="storageQuotaEnabled" label="个人 TOS 硬配额">
+          <el-input-number v-model="newUser.storageQuotaGiB" :min="1" :max="storageQuotaMaxGiB" :step="10" class="w-full" />
+          <p class="mt-1 text-[11px] text-slate-500">单位 GiB，当前平台允许 1–{{ storageQuotaMaxGiB }} GiB。</p>
+        </el-form-item>
+        <p class="text-[11px] text-slate-500">创建时会自动初始化个人工作区、文件、训练结果与快照目录。</p>
       </el-form>
       <template #footer>
         <el-button @click="showAddUserModal = false">取消</el-button>
         <el-button type="primary" :loading="creatingUser" @click="createUser">创建</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="showRolesModal" title="修改账号角色" width="460px" @closed="selectedRoleUser = null">
+      <p class="mb-4 text-sm leading-6 text-slate-400">
+        为 <span class="font-mono text-slate-200">{{ selectedRoleUser?.username }}</span>
+        （租户 <span class="font-mono text-slate-200">{{ selectedRoleUser?.tenant_id }}</span>）设置角色。
+        保存后立即生效，该用户已登录的会话会退出并需要重新登录。
+      </p>
+      <el-form label-position="top" @submit.prevent>
+        <el-form-item label="角色">
+          <el-select v-model="selectedRole" class="w-full">
+            <el-option label="Engineer — 提交与查看自己的任务，只写个人空间" value="Engineer" />
+            <el-option label="TenantAdmin — 额外可管理本团队成员，并对团队共享目录有写权限" value="TenantAdmin" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <el-alert v-if="selectedRole === 'TenantAdmin'" type="info" :closable="false" show-icon>
+        <template #title>TenantAdmin 可以向「团队共享数据」发布文件</template>
+        该目录对本团队所有成员只读可见，训练任务可直接选它作为输入。
+      </el-alert>
+      <template #footer>
+        <el-button @click="showRolesModal = false">取消</el-button>
+        <el-button type="primary" :loading="savingRoles" @click="submitRoles">保存角色</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="showStorageQuotaModal" title="配置个人 TOS 硬配额" width="420px" @closed="resetStorageQuotaForm">
+      <p class="mb-4 text-sm text-slate-400">
+        为 <span class="font-mono text-slate-200">{{ selectedStorageUser?.username }}</span> 设置可写入的最大容量。
+        达到上限后 TOS 会拒绝新写入；不会删除已有文件。
+      </p>
+      <el-form label-position="top" @submit.prevent>
+        <el-form-item label="容量（GiB）">
+          <el-input-number v-model="storageQuotaGiB" :min="1" :max="storageQuotaMaxGiB" :step="10" class="w-full" @keyup.enter="submitStorageQuota" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showStorageQuotaModal = false">取消</el-button>
+        <el-button type="primary" :loading="savingStorageQuota" @click="submitStorageQuota">保存配额</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="showResetPasswordModal" title="重置本地账号密码" width="420px" @closed="resetPasswordForm">
+      <p class="mb-4 text-sm text-slate-400">
+        为 <span class="font-mono text-slate-200">{{ selectedUser?.username }}</span> 设置新密码。保存后该用户所有已登录设备会退出。
+      </p>
+      <el-form label-position="top" @submit.prevent>
+        <el-form-item label="新密码">
+          <el-input v-model="resetPassword" type="password" show-password autocomplete="new-password" placeholder="至少 8 位" @keyup.enter="submitPasswordReset" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showResetPasswordModal = false">取消</el-button>
+        <el-button type="primary" :loading="resettingPassword" @click="submitPasswordReset">重置并退出旧会话</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
-import { apiDelete, apiGet, apiPost } from '../../api/client'
-import { createGitCredential, createImage, createTenant, deleteGitCredential, deleteImage, fetchGitCredentials, fetchImages } from '../../api/catalog'
-import { roles } from '../../stores/session'
+import { computed, onMounted, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
+import { apiDelete, apiGet, apiPost } from '../../api/client'
+import { createGitCredential, createImage, createTenant, deleteGitCredential, deleteImage, fetchGitCredentials, fetchImages, testGitCredential } from '../../api/catalog'
+import { fetchPlatformLimits } from '../../api/platform'
+import { adminQuotaModel, defaultPlatformLimits } from '../../platformLimits'
+import { roles, session } from '../../stores/session'
+import { formatStorageQuota, storageQuotaGiBFromQuantity, storageQuotaGiBToBytes } from '../../storageQuota'
+import TenantPanel from '../../components/admin/TenantPanel.vue'
+import UserPanel from '../../components/admin/UserPanel.vue'
+import CatalogPanel from '../../components/admin/CatalogPanel.vue'
+import StoragePanel from '../../components/admin/StoragePanel.vue'
+import QueuePanel from '../../components/admin/QueuePanel.vue'
+import { queueJobAction } from '../../components/admin/queuePanelActions.js'
+
+const activeTab = ref('tenants')
+const loading = ref(false)
 const tenants = ref([])
 const users = ref([])
-const showAddTenantModal = ref(false)
-const showAddUserModal = ref(false)
-const creatingUser = ref(false)
-const newUser = ref({ username: '', password: '', role: 'Engineer' })
+const activeJobs = ref([])
 const catalogImages = ref([])
 const gitCredentials = ref([])
+const limits = ref(defaultPlatformLimits)
+
+const isSuperAdmin = computed(() => roles.value.includes('SuperAdmin'))
+const currentTenantId = computed(() => session.value?.tenantId || '')
+const quotaCopy = computed(() => adminQuotaModel({
+  isSuperAdmin: isSuperAdmin.value,
+  limits: limits.value,
+  tenants: tenants.value,
+}))
+const clusterGPUs = computed(() => quotaCopy.value.capacityGPUs)
+
+const storageQuotaEnabled = Boolean(window.__RAY_PLATFORM_CONFIG__?.personalStorageQuotaEnabled)
+const runtimeStorageQuotaDefault = storageQuotaGiBFromQuantity(window.__RAY_PLATFORM_CONFIG__?.personalStorageDefaultQuota) || 100
+const runtimeStorageQuotaMax = storageQuotaGiBFromQuantity(window.__RAY_PLATFORM_CONFIG__?.personalStorageMaxQuota) || 102400
+const storageQuotaMaxGiB = Math.max(1, runtimeStorageQuotaMax)
+
+const showAddTenantModal = ref(false)
+const showAddUserModal = ref(false)
 const showAddImageModal = ref(false)
 const showAddCredentialModal = ref(false)
+const showResetPasswordModal = ref(false)
+const showStorageQuotaModal = ref(false)
 const creatingTenant = ref(false)
+const creatingUser = ref(false)
 const creatingImage = ref(false)
 const creatingCredential = ref(false)
-const isSuperAdmin = computed(() => roles.value.includes('SuperAdmin'))
-const newTenant = ref({ id: '', name: '', gpuQuota: 24 })
+const resettingPassword = ref(false)
+const savingStorageQuota = ref(false)
+const preparingObjectSet = ref(false)
+const selectedUser = ref(null)
+const selectedStorageUser = ref(null)
+const resetPassword = ref('')
+const storageQuotaGiB = ref(Math.min(runtimeStorageQuotaDefault, storageQuotaMaxGiB))
+
+const newTenant = ref({ id: '', name: '', gpuQuota: 8 })
+const newUser = ref({ username: '', password: '', role: 'Engineer', tenantId: '', storageQuotaGiB: Math.min(runtimeStorageQuotaDefault, storageQuotaMaxGiB) })
 const newImage = ref({ name: '', kind: 'training', reference: '', framework: '', isDefault: false, shared: false })
-const newCredential = ref({ name: '', host: '', username: '', token: '' })
+const newCredential = ref({ name: '', host: '', username: '', token: '', scope: 'team' })
+
+const loadTenants = async () => {
+  try {
+    tenants.value = (await apiGet('/api/v1/tenants')) || []
+  } catch (error) {
+    tenants.value = []
+    ElMessage.error(error.message || '无法读取租户配额')
+  }
+}
+
+const loadUsers = async () => {
+  try {
+    const items = (await apiGet('/api/v1/local-users')) || []
+    users.value = items.map((item) => ({ ...item, role: item.roles?.[0] || 'Engineer', tenant_id: item.tenantId }))
+  } catch (error) {
+    users.value = []
+    ElMessage.error(error.message || '无法读取平台用户')
+  }
+}
+
+// Both queued and running jobs matter to an administrator: the running ones are
+// what actually hold the GPUs a queued job is waiting for.
+const loadActiveJobs = async () => {
+  const states = ['QUEUED', 'RUNNING', 'PROVISIONING']
+  const pages = await Promise.allSettled(states.map((state) => apiGet(`/api/v1/jobs?status=${state}`)))
+  const rows = []
+  for (const page of pages) {
+    if (page.status !== 'fulfilled') continue
+    for (const job of page.value?.items || []) {
+      const resources = job.spec?.resources || {}
+      rows.push({
+        id: job.id,
+        name: job.spec?.name || job.id,
+        tenantId: job.tenantId,
+        state: job.observedState,
+        gpus: (resources.workerReplicas || 0) * (resources.gpusPerWorker || 0),
+        createdAt: job.createdAt ? new Date(job.createdAt).toLocaleString('zh-CN', { hour12: false }) : '',
+      })
+    }
+  }
+  activeJobs.value = rows
+}
 
 const loadCatalog = async () => {
+  const [images, credentials] = await Promise.allSettled([fetchImages(), fetchGitCredentials()])
+  catalogImages.value = images.status === 'fulfilled' ? images.value || [] : []
+  gitCredentials.value = credentials.status === 'fulfilled' ? credentials.value || [] : []
+}
+
+const loadLimits = async () => {
   try {
-    catalogImages.value = await fetchImages()
+    limits.value = { ...defaultPlatformLimits, ...(await fetchPlatformLimits()) }
   } catch {
-    catalogImages.value = []
+    limits.value = defaultPlatformLimits
   }
-  try {
-    gitCredentials.value = await fetchGitCredentials()
-  } catch {
-    gitCredentials.value = []
-  }
+}
+
+const loadAll = async () => {
+  loading.value = true
+  await Promise.all([loadTenants(), loadUsers(), loadActiveJobs(), loadCatalog(), loadLimits()])
+  loading.value = false
 }
 
 const submitTenant = async () => {
@@ -343,8 +355,8 @@ const submitTenant = async () => {
     await createTenant(newTenant.value)
     ElMessage.success(`租户 ${newTenant.value.id} 已创建（含 namespace 与队列）`)
     showAddTenantModal.value = false
-    newTenant.value = { id: '', name: '', gpuQuota: 24 }
-    await fetchTenants()
+    newTenant.value = { id: '', name: '', gpuQuota: 8 }
+    await loadTenants()
   } catch (error) {
     ElMessage.error(error.message || '创建租户失败')
   } finally {
@@ -390,7 +402,7 @@ const submitCredential = async () => {
     await createGitCredential(newCredential.value)
     ElMessage.success('凭证已保存到 Kubernetes Secret')
     showAddCredentialModal.value = false
-    newCredential.value = { name: '', host: '', username: '', token: '' }
+    newCredential.value = { name: '', host: '', username: '', token: '', scope: 'team' }
     await loadCatalog()
   } catch (error) {
     ElMessage.error(error.message || '保存凭证失败')
@@ -408,34 +420,19 @@ const removeCredential = async (id) => {
   }
 }
 
-const queuedJobs = ref([])
-
-const fetchTenants = async () => {
+const testCredential = async (credential) => {
   try {
-    const items = await apiGet('/api/v1/tenants')
-    tenants.value = (items || []).map(item => ({
-      ...item,
-      tenant_name: item.name,
-      queue_name: item.queueName,
-      gpu_quota_limit: item.gpuQuotaLimit,
-      gpu_quota_used: item.gpuQuotaUsed,
-      queued_jobs_count: item.queuedJobsCount,
-      max_priority: item.maxPriority
-    }))
+    const { value } = await ElMessageBox.prompt(
+      `输入 ${credential.host} 上一个团队可读取的 HTTPS 仓库地址。平台只会访问这个已批准的主机，不会显示令牌。`,
+      '测试团队 Git 凭据',
+      { inputPlaceholder: `https://${credential.host}/group/repository.git`, inputPattern: /^https:\/\//, inputErrorMessage: '请输入 HTTPS 仓库地址', confirmButtonText: '开始测试', cancelButtonText: '取消' },
+    )
+    const result = await testGitCredential(credential.id, value)
+    if (result.authenticated) ElMessage.success(result.message || '仓库连接与权限验证成功')
+    else ElMessage.warning(result.message || 'Git 主机可达，但凭据没有该仓库权限')
   } catch (error) {
-    tenants.value = []
-    ElMessage.error(error.message || '无法读取租户配额')
-  }
-}
-
-const fetchUsers = async () => {
-  try {
-    // Local accounts are the ones an administrator can actually manage here.
-    const items = await apiGet('/api/v1/local-users')
-    users.value = (items || []).map(item => ({ ...item, role: item.roles?.[0] || 'Engineer', tenant_id: item.tenantId }))
-  } catch (error) {
-    users.value = []
-    ElMessage.error(error.message || '无法读取平台用户')
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error.message || 'Git 凭据测试失败')
   }
 }
 
@@ -444,17 +441,27 @@ const createUser = async () => {
     ElMessage.warning('请填写用户名和初始密码')
     return
   }
+  if (storageQuotaEnabled && (storageQuotaGiBToBytes(newUser.value.storageQuotaGiB) === null || newUser.value.storageQuotaGiB > storageQuotaMaxGiB)) {
+    ElMessage.warning(`请输入 1 到 ${storageQuotaMaxGiB} 之间的整数 GiB 容量`)
+    return
+  }
+  if (isSuperAdmin.value && !newUser.value.tenantId) {
+    ElMessage.warning('请选择账号所属租户')
+    return
+  }
   creatingUser.value = true
   try {
     await apiPost('/api/v1/local-users', {
       username: newUser.value.username,
       password: newUser.value.password,
-      roles: [newUser.value.role]
+      roles: [newUser.value.role],
+      ...(storageQuotaEnabled ? { storageQuotaGiB: newUser.value.storageQuotaGiB } : {}),
+      ...(isSuperAdmin.value ? { tenantId: newUser.value.tenantId } : {}),
     })
-    ElMessage.success(`账号 ${newUser.value.username} 已创建`)
+    ElMessage.success(`账号 ${newUser.value.username} 与个人数据空间已创建`)
     showAddUserModal.value = false
-    newUser.value = { username: '', password: '', role: 'Engineer' }
-    await fetchUsers()
+    newUser.value = { username: '', password: '', role: 'Engineer', tenantId: '', storageQuotaGiB: Math.min(runtimeStorageQuotaDefault, storageQuotaMaxGiB) }
+    await loadUsers()
   } catch (error) {
     ElMessage.error(error.message || '创建账号失败')
   } finally {
@@ -462,48 +469,176 @@ const createUser = async () => {
   }
 }
 
-const fetchQueuedJobs = async () => {
+const canManageUser = (user) => {
+  if (!user || user.id === session.value?.subject || user.roles?.includes('SuperAdmin')) return false
+  if (isSuperAdmin.value) return true
+  return user.tenant_id === session.value?.tenantId && user.roles?.length === 1 && user.roles[0] === 'Engineer'
+}
+
+const resetPasswordForm = () => {
+  selectedUser.value = null
+  resetPassword.value = ''
+}
+
+const openResetPassword = (user) => {
+  selectedUser.value = user
+  resetPassword.value = ''
+  showResetPasswordModal.value = true
+}
+
+const submitPasswordReset = async () => {
+  if (!selectedUser.value) return
+  if (resetPassword.value.length < 8) {
+    ElMessage.warning('新密码至少需要 8 位')
+    return
+  }
+  resettingPassword.value = true
   try {
-    const page = await apiGet('/api/v1/jobs?status=QUEUED')
-    queuedJobs.value = (page.items || []).map(job => ({
-      id: job.id,
-      name: job.spec?.name || job.name,
-      tenant_name: job.tenantId,
-      priority: job.spec?.priority || 'normal',
-      requested_gpus: (job.spec?.resources?.workerReplicas || 0) * (job.spec?.resources?.gpusPerWorker || 0),
-      queued_time: job.createdAt ? new Date(job.createdAt).toLocaleString() : ''
-    }))
+    await apiPost(`/api/v1/local-users/${selectedUser.value.id}/reset-password`, { newPassword: resetPassword.value })
+    ElMessage.success('密码已重置，旧会话已失效')
+    showResetPasswordModal.value = false
+    await loadUsers()
   } catch (error) {
-    queuedJobs.value = []
+    ElMessage.error(error.message || '重置密码失败')
+  } finally {
+    resettingPassword.value = false
   }
 }
 
-const getRoleTag = (role) => {
-  switch (role) {
-    case 'SuperAdmin': return 'danger'
-    case 'TenantAdmin': return 'warning'
-    default: return 'info'
-  }
-}
-
-const editQuota = (tenant) => {
-  ElMessage.info('配额变更请通过 GitOps/Helm values 审批后发布')
-}
-
-const cancelJob = async (id) => {
+const changeUserState = async (user, disabled) => {
+  const action = disabled ? '停用' : '启用'
   try {
-    await apiDelete(`/api/v1/jobs/${id}`)
-    ElMessage.success('已提交取消请求')
-    await fetchQueuedJobs()
+    await ElMessageBox.confirm(`确定要${action}账号 ${user.username} 吗？${disabled ? '该用户现有登录会话会立即失效。' : ''}`, `${action}账号`, {
+      type: disabled ? 'warning' : 'info', confirmButtonText: `确认${action}`, cancelButtonText: '取消',
+    })
+    await apiPost(`/api/v1/local-users/${user.id}/${disabled ? 'disable' : 'enable'}`, {})
+    ElMessage.success(`账号已${action}`)
+    await loadUsers()
   } catch (error) {
-    ElMessage.error(error.message || '取消任务失败')
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error.message || `${action}账号失败`)
   }
 }
 
-onMounted(() => {
-  fetchTenants()
-  fetchUsers()
-  fetchQueuedJobs()
-  loadCatalog()
-})
+const decommissionUser = async (user) => {
+  try {
+    await ElMessageBox.confirm(
+      `将删除账号 ${user.username}。账号会立即停用并退出所有会话；个人 TOS 数据、训练记录和结果不会被删除。请先停止该用户的训练任务和调试环境。`,
+      '删除用户',
+      { type: 'warning', confirmButtonText: '确认删除账号', cancelButtonText: '取消' },
+    )
+    await apiDelete(`/api/v1/local-users/${user.id}`)
+    ElMessage.success(`账号 ${user.username} 已删除，个人数据仍按平台保留策略保存`)
+    await loadUsers()
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error.message || '删除账号失败')
+  }
+}
+
+const resetStorageQuotaForm = () => {
+  selectedStorageUser.value = null
+  storageQuotaGiB.value = Math.min(runtimeStorageQuotaDefault, storageQuotaMaxGiB)
+}
+
+const openStorageQuota = (user) => {
+  selectedStorageUser.value = user
+  storageQuotaGiB.value = user.storageQuota?.bytes
+    ? Math.max(1, Math.round(user.storageQuota.bytes / (1024 * 1024 * 1024)))
+    : Math.min(runtimeStorageQuotaDefault, storageQuotaMaxGiB)
+  showStorageQuotaModal.value = true
+}
+
+const submitStorageQuota = async () => {
+  if (!selectedStorageUser.value || storageQuotaGiBToBytes(storageQuotaGiB.value) === null || storageQuotaGiB.value > storageQuotaMaxGiB) {
+    ElMessage.warning(`请输入 1 到 ${storageQuotaMaxGiB} 之间的整数 GiB 容量`)
+    return
+  }
+  savingStorageQuota.value = true
+  try {
+    const quota = await apiPost(`/api/v1/local-users/${selectedStorageUser.value.id}/storage-quota`, { storageQuotaGiB: storageQuotaGiB.value })
+    ElMessage.success(`已将个人 TOS 硬配额调整为 ${formatStorageQuota(quota.bytes)}`)
+    showStorageQuotaModal.value = false
+    await loadUsers()
+  } catch (error) {
+    ElMessage.error(error.message || '保存存储配额失败')
+  } finally {
+    savingStorageQuota.value = false
+  }
+}
+
+const showRolesModal = ref(false)
+const selectedRoleUser = ref(null)
+const selectedRole = ref('Engineer')
+const savingRoles = ref(false)
+
+const openRoles = (user) => {
+  selectedRoleUser.value = user
+  selectedRole.value = user.roles?.includes('TenantAdmin') ? 'TenantAdmin' : 'Engineer'
+  showRolesModal.value = true
+}
+
+const submitRoles = async () => {
+  if (!selectedRoleUser.value) return
+  savingRoles.value = true
+  try {
+    await apiPost(`/api/v1/local-users/${selectedRoleUser.value.id}/roles`, { roles: [selectedRole.value] })
+    ElMessage.success(`已将 ${selectedRoleUser.value.username} 的角色设为 ${selectedRole.value}`)
+    showRolesModal.value = false
+    await loadUsers()
+  } catch (error) {
+    ElMessage.error(error.message || '修改角色失败')
+  } finally {
+    savingRoles.value = false
+  }
+}
+
+const prepareObjectSet = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '这会把当前 TOS Bucket 的 ObjectSet 前缀层级固定为平台个人目录的五级结构。该层级在已有 ObjectSet 后不能修改；不会删除或移动已有对象。确认继续吗？',
+      '初始化 TOS 目录配额',
+      { type: 'warning', confirmButtonText: '确认初始化', cancelButtonText: '取消' },
+    )
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error.message || '无法确认初始化操作')
+    return
+  }
+  preparingObjectSet.value = true
+  try {
+    await apiPost('/api/v1/storage-governance/objectset/prepare', {})
+    ElMessage.success('ObjectSet 目录治理已初始化。请等待约一分钟后，为现有用户配置个人 TOS 容量。')
+  } catch (error) {
+    ElMessage.error(error.message || '初始化 TOS 目录配额失败')
+  } finally {
+    preparingObjectSet.value = false
+  }
+}
+
+const cancelJob = async (job) => {
+  const action = queueJobAction(job, currentTenantId.value)
+  if (!action) {
+    ElMessage.warning('只能操作当前租户的排队或运行中任务')
+    return
+  }
+  const queued = action.kind === 'cancel-queue'
+  try {
+    await ElMessageBox.confirm(
+      queued
+        ? `将取消 ${job.tenantId} 的任务 ${job.name} 排队；任务不会进入运行。`
+        : `将停止 ${job.tenantId} 的任务 ${job.name}（占用 ${job.gpus} 卡）。运行中的训练会立即中断。`,
+      action.label,
+      { type: 'warning', confirmButtonText: queued ? '确认取消排队' : '确认停止', cancelButtonText: '返回' },
+    )
+    await apiDelete(`/api/v1/jobs/${job.id}`)
+    ElMessage.success(queued ? '已提交取消排队请求' : '已提交停止请求')
+    await Promise.all([loadActiveJobs(), loadTenants()])
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error.message || (queued ? '取消排队失败' : '停止任务失败'))
+  }
+}
+
+onMounted(loadAll)
 </script>

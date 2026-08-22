@@ -20,6 +20,8 @@ API = os.environ.get("API_URL", "http://172.28.0.167:31113").rstrip("/")
 USER = os.environ.get("PLATFORM_USER", "admin")
 PASSWORD = os.environ["PLATFORM_PASSWORD"]
 IMAGE = os.environ["IMAGE"]
+WAIT_FOR_COMPLETION = os.environ.get("WAIT_FOR_COMPLETION", "false").lower() == "true"
+WAIT_TIMEOUT_SECONDS = int(os.environ.get("WAIT_TIMEOUT_SECONDS", "1800"))
 GIT_URL = os.environ.get("GIT_URL", "https://github.com/octocat/Hello-World")
 GIT_COMMIT = os.environ.get("GIT_COMMIT", "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d")
 
@@ -78,7 +80,24 @@ def main():
     }
     job = call("POST", f"{API}/api/v1/jobs", token=token, body={"spec": spec},
                headers={"Idempotency-Key": name})["data"]
-    print(job["id"])
+    job_id = job["id"]
+    print(job_id, flush=True)
+    if not WAIT_FOR_COMPLETION:
+        return
+
+    deadline = time.monotonic() + WAIT_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        detail = call("GET", f"{API}/api/v1/jobs/{job_id}", token=token)["data"]
+        state = detail.get("observedState", "UNKNOWN")
+        print(f"{job_id} {state}", flush=True)
+        if state == "SUCCEEDED":
+            call("GET", f"{API}/api/v1/jobs/{job_id}/logs?limit=20", token=token)
+            print("GPU SMOKE SUCCEEDED", flush=True)
+            return
+        if state in {"FAILED", "CANCELED", "TIMED_OUT"}:
+            raise SystemExit(f"GPU smoke ended in {state}: {json.dumps(detail, ensure_ascii=False)}")
+        time.sleep(5)
+    raise SystemExit(f"GPU smoke timed out after {WAIT_TIMEOUT_SECONDS}s: {job_id}")
 
 
 if __name__ == "__main__":

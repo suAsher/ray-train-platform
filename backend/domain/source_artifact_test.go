@@ -17,9 +17,34 @@ func TestNewSourceArtifactValidatesDigestSizeAndBuildsCanonicalKey(t *testing.T)
 	if err != nil {
 		t.Fatalf("new source artifact: %v", err)
 	}
-	wantKey := "tenants/tenant-a/users/user_1/sha256/" + artifactDigest + ".zip"
+	wantKey := "ray-train/tenants/tenant-a/users/user_1/workspace/.ray-train-archives/" + artifactDigest + ".zip"
 	if artifact.ObjectKey != wantKey || artifact.State != SourceArtifactPending || artifact.UploadExpiresAt != expires || artifact.CreatedAt != now {
 		t.Fatalf("unexpected artifact fields: key=%q state=%q expires=%s created=%s", artifact.ObjectKey, artifact.State, artifact.UploadExpiresAt, artifact.CreatedAt)
+	}
+}
+
+func TestNewSourceArtifactSeparatesOpaqueOwnerFromPersistedStorageRoot(t *testing.T) {
+	now := time.Date(2026, 8, 18, 9, 0, 0, 0, time.UTC)
+	root, err := PersonalDataRootFor("local", "guofeng.su")
+	if err != nil {
+		t.Fatalf("personal root: %v", err)
+	}
+	artifact, err := NewSourceArtifact(SourceArtifactInput{
+		ID: "artifact-storage-root", TenantID: "local", UserID: "opaque-subject-123", StorageRoot: root,
+		SHA256: artifactDigest, SizeBytes: 10,
+	}, now.Add(15*time.Minute), now)
+	if err != nil {
+		t.Fatalf("new source artifact: %v", err)
+	}
+	if artifact.UserID != "opaque-subject-123" || artifact.StorageRoot != root {
+		t.Fatalf("owner and storage root must remain distinct: %+v", artifact)
+	}
+	want := root + "workspace/.ray-train-archives/" + artifactDigest + ".zip"
+	if artifact.ObjectKey != want {
+		t.Fatalf("artifact key=%q want=%q", artifact.ObjectKey, want)
+	}
+	if err := artifact.Validate(); err != nil {
+		t.Fatalf("stored artifact should validate: %v", err)
 	}
 }
 

@@ -1,0 +1,129 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ray-observability-grafana-datasources
+  labels:
+    {{- include "ray-observability.labels" . | nindent 4 }}
+    app.kubernetes.io/component: grafana
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://ray-observability-prometheus:9090
+        isDefault: true
+        editable: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ray-observability-grafana
+  labels:
+    {{- include "ray-observability.labels" . | nindent 4 }}
+    app.kubernetes.io/component: grafana
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: ray-observability
+    app.kubernetes.io/component: grafana
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ray-observability-grafana
+  labels:
+    {{- include "ray-observability.labels" . | nindent 4 }}
+    app.kubernetes.io/component: grafana
+spec:
+  replicas: {{ .Values.grafana.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ray-observability
+      app.kubernetes.io/component: grafana
+  template:
+    metadata:
+      labels:
+        {{- include "ray-observability.labels" . | nindent 8 }}
+        app.kubernetes.io/component: grafana
+    spec:
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: ray-observability
+                    app.kubernetes.io/component: grafana
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 472
+        runAsGroup: 472
+        fsGroup: 472
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: grafana
+          image: {{ .Values.grafana.image | quote }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.grafana.adminSecretName | quote }}
+                  key: admin-user
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.grafana.adminSecretName | quote }}
+                  key: admin-password
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+          resources:
+            {{- toYaml .Values.grafana.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/grafana
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+              readOnly: true
+            - name: dashboards-provisioning
+              mountPath: /etc/grafana/provisioning/dashboards
+              readOnly: true
+            - name: dashboards-json
+              mountPath: /var/lib/grafana/dashboards/ray
+              readOnly: true
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: datasources
+          configMap:
+            name: ray-observability-grafana-datasources
+        - name: dashboards-provisioning
+          configMap:
+            name: {{ .Values.grafana.dashboardProvisioningConfigMap | quote }}
+        - name: dashboards-json
+          configMap:
+            name: {{ .Values.grafana.dashboardJSONConfigMap | quote }}

@@ -3,35 +3,69 @@
 # The dev RayCluster head starts `ray start` and then execs JupyterLab, so the
 # image must actually contain jupyterlab — the plain Ray image does not, and the
 # head crash-loops with "exec: jupyter: not found".
-ARG RAY_BASE_IMAGE=rayproject/ray:2.35.0-py310
-FROM ${RAY_BASE_IMAGE}
+# The interactive tools run on the Ray worker that requests a GPU. Use the GPU
+# Ray image so CUDA libraries and nvidia-smi are present in exactly the shell,
+# JupyterLab and VS Code environment the user enters.
+ARG CODE_SERVER_IMAGE=harbor.wellspiking.ai/hub/codercom/code-server:4.93.1
+ARG WORKSPACE_RAY_BASE_IMAGE=harbor.wellspiking.ai/hub/rayproject/ray:2.35.0-py310-gpu
+FROM ${CODE_SERVER_IMAGE} AS code-server
+
+FROM ${WORKSPACE_RAY_BASE_IMAGE}
 
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-# code-server gives the workspace a browser-based VS Code alongside JupyterLab.
-ARG CODE_SERVER_VERSION=4.93.1
-# GitHub release downloads are unreliable from mainland China, so a proxy is
-# used by default. Override CODE_SERVER_URL to pull from GitHub directly.
-ARG CODE_SERVER_URL=https://gh-proxy.com/https://github.com/coder/code-server/releases/download
+ARG APT_MIRROR=http://repo.wellspiking.ai/repository/ubuntu-jammy
+# The debug workspace must contain the same deep-learning stack as the default
+# training image. Without torch, `import torch` fails in JupyterLab and the
+# GPU looks absent even though nvidia-smi sees it — which is exactly how the
+# missing dependency was reported.
+ARG TORCH_INDEX_URL=https://mirrors.aliyun.com/pytorch-wheels/cu121
 
 USER root
-RUN pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
+RUN printf '%s\n' \
+      "deb ${APT_MIRROR} jammy main restricted universe multiverse" \
+      "deb ${APT_MIRROR} jammy-updates main restricted universe multiverse" \
+      "deb ${APT_MIRROR} jammy-security main restricted universe multiverse" \
+      "deb ${APT_MIRROR} jammy-backports main restricted universe multiverse" \
+      > /etc/apt/sources.list \
+ && apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      git curl less nano ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && pip install --index-url "${PIP_INDEX_URL}" \
       jupyterlab==4.2.5 \
       notebook==7.2.2 \
       ipywidgets==8.1.5 \
- && chown -R ray:users /home/ray
+      mlflow-skinny==3.14.0 \
+ && pip install --index-url "${TORCH_INDEX_URL}" \
+      torch==2.4.1 torchvision==0.19.1 \
+ || pip install --index-url "${PIP_INDEX_URL}" \
+      torch==2.4.1 torchvision==0.19.1 \
+ && printf '%s\n' \
+      'default_channels:' \
+      '- https://repo.wellspiking.ai/repository/conda-main' \
+      '- https://repo.wellspiking.ai/repository/conda-r' \
+      '- https://repo.wellspiking.ai/repository/conda-msys2' \
+      'custom_multichannels:' \
+      '  defaults:' \
+      '  - https://repo.wellspiking.ai/repository/conda-main' \
+      '  - https://repo.wellspiking.ai/repository/conda-r' \
+      '  - https://repo.wellspiking.ai/repository/conda-msys2' \
+      'channels:' \
+      '- https://repo.wellspiking.ai/repository/conda-main' \
+      '- https://repo.wellspiking.ai/repository/conda-r' \
+      '- https://repo.wellspiking.ai/repository/conda-msys2' \
+      '- https://repo.wellspiking.ai/repository/conda-forge' \
+      'show_channel_urls: true' \
+      > /home/ray/.condarc \
+ && mkdir -p /workspace/.cache/pip /workspace/.cache/pycache \
+ && chown -R ray:users /home/ray /workspace
 
-# The Ray base image ships no curl, so install it before fetching code-server.
-RUN set -eux; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends curl ca-certificates; \
-    rm -rf /var/lib/apt/lists/*
-
-RUN set -eux; \
-    arch="$(dpkg --print-architecture)"; \
-    curl -fsSL --retry 3 -o /tmp/code-server.deb \
-      "${CODE_SERVER_URL}/v${CODE_SERVER_VERSION}/code-server_${CODE_SERVER_VERSION}_${arch}.deb"; \
-    dpkg -i /tmp/code-server.deb; \
-    rm -f /tmp/code-server.deb
+# Copy a version-pinned code-server distribution from the internal Harbor
+# mirror. This makes image builds independent of GitHub release downloads.
+COPY --from=code-server /usr/lib/code-server /usr/lib/code-server
+COPY --from=code-server /usr/bin/code-server /usr/bin/code-server
+COPY raytrain-launch.py /usr/local/bin/raytrain-launch
+RUN chmod 0755 /usr/local/bin/raytrain-launch
 
 USER ray
 WORKDIR /home/ray
@@ -39,5 +73,11 @@ WORKDIR /home/ray
 # The platform proxies JupyterLab through the API, so it is served on a base
 # path and must not open a browser or demand its own token.
 ENV JUPYTER_ALLOW_INSECURE_WRITES=1
+# The workspace data mount persists across debug sessions. Keep Python caches
+# there so installing user-scoped dependencies in a virtual environment does
+# not repeatedly fetch the same wheels after a debug pod is recreated.
+ENV PIP_CACHE_DIR=/workspace/.cache/pip
+ENV PYTHONPYCACHEPREFIX=/workspace/.cache/pycache
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 # 8888 JupyterLab, 8443 code-server (VS Code in the browser)
 EXPOSE 8888 8443

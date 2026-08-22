@@ -16,7 +16,7 @@ func getOptions() metav1.GetOptions { return metav1.GetOptions{} }
 
 func clusterQueueObject(name string, gpu, cpu, memory string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "kueue.x-k8s.io/v1beta1",
+		"apiVersion": "kueue.x-k8s.io/v1beta2",
 		"kind":       "ClusterQueue",
 		"metadata":   map[string]any{"name": name},
 		"spec": map[string]any{

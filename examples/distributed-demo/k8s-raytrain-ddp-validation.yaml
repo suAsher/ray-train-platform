@@ -1,0 +1,155 @@
+# Temporary production validation. Apply only after the normal platform and
+# FSX/IRSA preflight pass, then delete the named ConfigMap/RayJob after
+# collecting logs. It deliberately mounts no user data and exposes no secret.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: raytrain-ddp-validation-code
+  namespace: tenant-local
+data:
+  ddp_validation.py: |
+    import json
+    import os
+    import socket
+
+    import torch
+    import torch.distributed as dist
+
+    dist.init_process_group(backend="nccl")
+    local_rank = int(os.environ["LOCAL_RANK"])
+    torch.cuda.set_device(local_rank)
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    value = torch.tensor([rank + 1], dtype=torch.int64, device="cuda")
+    dist.all_reduce(value, op=dist.ReduceOp.SUM)
+    print("RAYTRAIN_DDP_VALIDATION=" + json.dumps({
+        "host": socket.gethostname(),
+        "rank": rank,
+        "localRank": local_rank,
+        "worldSize": world_size,
+        "visibleDevices": os.environ.get("CUDA_VISIBLE_DEVICES", ""),
+        "gpu": torch.cuda.get_device_name(local_rank),
+        "allReduceSum": int(value.item()),
+    }, sort_keys=True), flush=True)
+    dist.barrier()
+    dist.destroy_process_group()
+---
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: raytrain-ddp-validation-819
+  namespace: tenant-local
+  labels:
+    app.kubernetes.io/part-of: ray-train-platform
+    kueue.x-k8s.io/queue-name: local-gpu
+    validation.raytrain.wellspiking.ai/run: ddp-819
+spec:
+  shutdownAfterJobFinishes: true
+  ttlSecondsAfterFinished: 600
+  submissionMode: K8sJobMode
+  entrypoint: >-
+    raytrain-launch --mode ray_train --workers 2 --gpus-per-worker 1 --
+    python /opt/raytrain-validation/ddp_validation.py
+  runtimeEnvYAML: |
+    working_dir: /opt/raytrain-validation
+    env_vars:
+      PYTHONUNBUFFERED: "1"
+  rayClusterSpec:
+    rayVersion: "2.35.0"
+    headGroupSpec:
+      rayStartParams:
+        dashboard-host: "0.0.0.0"
+        num-gpus: "0"
+      template:
+        metadata:
+          labels:
+            validation.raytrain.wellspiking.ai/run: ddp-819
+        spec:
+          nodeSelector:
+            accelerator: nvidia-rtx-4090
+            platform.wellspiking.ai/gpu-pool: production
+          imagePullSecrets:
+            - name: harbor-registry
+          containers:
+            - name: ray-head
+              image: harbor.wellspiking.ai/guofeng.su/ray-train-pytorch@sha256:efeeb99106965845f245071d3102df720bbd39855bfaa42f4d3b4e5e268928b7
+              imagePullPolicy: IfNotPresent
+              resources:
+                requests: {cpu: "2", memory: 8Gi}
+                limits: {cpu: "2", memory: 8Gi}
+              volumeMounts:
+                - name: validation-code
+                  mountPath: /opt/raytrain-validation
+                  readOnly: true
+          volumes:
+            - name: validation-code
+              configMap:
+                name: raytrain-ddp-validation-code
+    workerGroupSpecs:
+      - groupName: ddp-workers
+        replicas: 2
+        minReplicas: 2
+        maxReplicas: 2
+        rayStartParams:
+          num-gpus: "1"
+        template:
+          metadata:
+            labels:
+              validation.raytrain.wellspiking.ai/run: ddp-819
+          spec:
+            nodeSelector:
+              accelerator: nvidia-rtx-4090
+              platform.wellspiking.ai/gpu-pool: production
+            topologySpreadConstraints:
+              - maxSkew: 1
+                minDomains: 2
+                topologyKey: kubernetes.io/hostname
+                whenUnsatisfiable: DoNotSchedule
+                labelSelector:
+                  matchLabels:
+                    validation.raytrain.wellspiking.ai/run: ddp-819
+            imagePullSecrets:
+              - name: harbor-registry
+            containers:
+              - name: ray-worker
+                image: harbor.wellspiking.ai/guofeng.su/ray-train-pytorch@sha256:efeeb99106965845f245071d3102df720bbd39855bfaa42f4d3b4e5e268928b7
+                imagePullPolicy: IfNotPresent
+                env:
+                  - name: NCCL_DEBUG
+                    value: INFO
+                  - name: NCCL_IB_DISABLE
+                    value: "1"
+                resources:
+                  requests: {cpu: "4", memory: 16Gi, nvidia.com/gpu: "1"}
+                  limits: {cpu: "4", memory: 16Gi, nvidia.com/gpu: "1"}
+                volumeMounts:
+                  - name: validation-code
+                    mountPath: /opt/raytrain-validation
+                    readOnly: true
+            volumes:
+              - name: validation-code
+                configMap:
+                  name: raytrain-ddp-validation-code
+  submitterPodTemplate:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-rtx-4090
+        platform.wellspiking.ai/gpu-pool: production
+      imagePullSecrets:
+        - name: harbor-registry
+      containers:
+        - name: ray-job-submitter
+          image: harbor.wellspiking.ai/guofeng.su/ray-train-pytorch@sha256:efeeb99106965845f245071d3102df720bbd39855bfaa42f4d3b4e5e268928b7
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests: {cpu: "1", memory: 2Gi}
+            limits: {cpu: "1", memory: 2Gi}
+          volumeMounts:
+            - name: validation-code
+              mountPath: /opt/raytrain-validation
+              readOnly: true
+      volumes:
+        - name: validation-code
+          configMap:
+            name: raytrain-ddp-validation-code

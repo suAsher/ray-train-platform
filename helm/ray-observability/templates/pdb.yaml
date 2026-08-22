@@ -1,0 +1,25 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ray-observability-prometheus
+  labels:
+    {{- include "ray-observability.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ray-observability
+      app.kubernetes.io/component: prometheus
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ray-observability-grafana
+  labels:
+    {{- include "ray-observability.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ray-observability
+      app.kubernetes.io/component: grafana

@@ -3,11 +3,17 @@ kind: ServiceAccount
 metadata:
   name: ray-train-platform-sa
   namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: api
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: ray-train-platform-role
+  name: {{ include "ray-train-platform.fullname" . }}-role
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: api
 rules:
   - apiGroups: ["ray.io"]
     resources: ["rayjobs", "rayclusters"]
@@ -38,8 +44,14 @@ rules:
     resources: ["leases"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
   - apiGroups: [""]
-    resources: ["pods", "nodes", "events", "namespaces", "persistentvolumeclaims"]
+    resources: ["pods", "nodes", "events", "namespaces"]
     verbs: ["get", "list", "watch"]
+  # The data-space controller may create only newly labelled, immutable
+  # static FSX PV/PVC pairs. It never updates or deletes a PV/PVC and it does
+  # not get Secret list/read privileges for workload storage credentials.
+  - apiGroups: [""]
+    resources: ["persistentvolumes", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create"]
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
@@ -50,12 +62,15 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: ray-train-platform-binding
+  name: {{ include "ray-train-platform.fullname" . }}-binding
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: api
 subjects:
   - kind: ServiceAccount
     name: ray-train-platform-sa
     namespace: {{ .Values.namespace }}
 roleRef:
   kind: ClusterRole
-  name: ray-train-platform-role
+  name: {{ include "ray-train-platform.fullname" . }}-role
   apiGroup: rbac.authorization.k8s.io

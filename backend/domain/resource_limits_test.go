@@ -67,3 +67,51 @@ func TestPartialResourceLimitsFallBackToDefaults(t *testing.T) {
 		t.Fatalf("unset limits must keep their defaults")
 	}
 }
+
+func TestUpdateResourceLimitsFromCapacityUsesValidObservation(t *testing.T) {
+	t.Cleanup(func() { SetResourceLimits(ResourceLimits{}) })
+	SetResourceLimits(ResourceLimits{MaxWorkerReplicas: 3, MaxGPUsPerWorker: 8, MaxTotalGPUs: 24})
+
+	if err := UpdateResourceLimitsFromCapacity(5, 6, 32); err != nil {
+		t.Fatalf("update limits from observed capacity: %v", err)
+	}
+
+	got := CurrentResourceLimits()
+	want := ResourceLimits{MaxWorkerReplicas: 5, MaxGPUsPerWorker: 6, MaxTotalGPUs: 32}
+	if got != want {
+		t.Fatalf("expected runtime limits %+v, got %+v", want, got)
+	}
+}
+
+func TestUpdateResourceLimitsFromCapacityPreservesLastKnownGood(t *testing.T) {
+	t.Cleanup(func() { SetResourceLimits(ResourceLimits{}) })
+	want := ResourceLimits{MaxWorkerReplicas: 5, MaxGPUsPerWorker: 4, MaxTotalGPUs: 20}
+
+	invalidObservations := []struct {
+		name                    string
+		readyNodes              int
+		guaranteedGPUsPerWorker int64
+		totalGPUs               int64
+	}{
+		{name: "zero nodes", readyNodes: 0, guaranteedGPUsPerWorker: 4, totalGPUs: 20},
+		{name: "zero per-node GPUs", readyNodes: 5, guaranteedGPUsPerWorker: 0, totalGPUs: 20},
+		{name: "zero total GPUs", readyNodes: 5, guaranteedGPUsPerWorker: 4, totalGPUs: 0},
+		{name: "per-node exceeds total", readyNodes: 1, guaranteedGPUsPerWorker: 21, totalGPUs: 20},
+		{name: "total cannot cover guaranteed worker shape", readyNodes: 3, guaranteedGPUsPerWorker: 8, totalGPUs: 14},
+		{name: "worker shape multiplication would overflow", readyNodes: 2, guaranteedGPUsPerWorker: int64(^uint64(0) >> 1), totalGPUs: int64(^uint64(0) >> 1)},
+	}
+	for _, observation := range invalidObservations {
+		t.Run(observation.name, func(t *testing.T) {
+			SetResourceLimits(ResourceLimits{MaxWorkerReplicas: 3, MaxGPUsPerWorker: 8, MaxTotalGPUs: 24})
+			if err := UpdateResourceLimitsFromCapacity(5, 4, 20); err != nil {
+				t.Fatalf("seed last-known-good observed capacity: %v", err)
+			}
+			if err := UpdateResourceLimitsFromCapacity(observation.readyNodes, observation.guaranteedGPUsPerWorker, observation.totalGPUs); err == nil {
+				t.Fatalf("expected invalid capacity to be rejected")
+			}
+			if got := CurrentResourceLimits(); got != want {
+				t.Fatalf("invalid capacity replaced last-known-good limits: got %+v, want %+v", got, want)
+			}
+		})
+	}
+}

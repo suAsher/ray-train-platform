@@ -13,7 +13,7 @@ backend:
   appEnv: development
   oidcRequired: false
   demoMode: true
-  sourceArtifactsEnabled: true
+  sourceArtifactsEnabled: false
   image:
     repository: ray-train-backend
     tag: "REPLACE_WITH_BACKEND_TAG"
@@ -25,7 +25,7 @@ backend:
     clientID: ray-training-platform-test
     audience: ray-training-platform-api
     groupPrefix: platform/tenants/
-  lokiURL: "http://loki.loki.svc.cluster.local:3100"
+  lokiURL: "http://loki-gateway.loki.svc.cluster.local"
   prometheusURL: "http://prometheus.monitoring.svc.cluster.local:9090"
   imageAllowlist:
     - cr-cn-beijing.volces.com/ray-platform/ray-test
@@ -65,6 +65,19 @@ kueue:
 storage:
   enabled: false
   existingClaim: ""
+
+dataSpaces:
+  enabled: false
+  mountCapacity: 1Ti
+  fsxVolumeAttributes: {}
+
+idcDataSpaces:
+  enabled: false
+  mountCapacity: 1Pi
+  sources:
+    original: {server: "", path: ""}
+    wellspiking: {server: "", path: ""}
+    shared: {server: "", path: ""}
 
 networkPolicy:
   enabled: false

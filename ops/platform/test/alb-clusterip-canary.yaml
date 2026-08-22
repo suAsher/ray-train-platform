@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ray-train-frontend-clusterip-canary
+  namespace: ray-train-platform
+  labels:
+    app.kubernetes.io/name: ray-train-platform
+    app.kubernetes.io/component: clusterip-canary
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+  selector:
+    app: ray-train-frontend
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: raytrain-clusterip-canary
+  namespace: ray-train-platform
+  labels:
+    app.kubernetes.io/name: ray-train-platform
+    app.kubernetes.io/component: clusterip-canary
+  annotations:
+    ingress.vke.volcengine.com/loadbalancer-pass-through: "true"
+spec:
+  ingressClassName: raytrain-prod-alb
+  rules:
+    - host: raytrain.wellspiking.ai
+      http:
+        paths:
+          - path: /__platform-clusterip-canary
+            pathType: Prefix
+            backend:
+              service:
+                name: ray-train-frontend-clusterip-canary
+                port:
+                  number: 80

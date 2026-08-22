@@ -8,8 +8,8 @@ import (
 )
 
 func TestTOSStorePresignResponsePathIsBoundToRequestedObjectKey(t *testing.T) {
-	objectKey := "tenants/tenant-a/users/user-a/sha256/" + testDigest + ".zip"
-	otherKey := "tenants/tenant-a/users/user-a/sha256/" + strings.Repeat("f", 64) + ".zip"
+	objectKey := "ray-train/tenants/tenant-a/users/user-a/workspace/.ray-train-archives/" + testDigest + ".zip"
+	otherKey := "ray-train/tenants/tenant-a/users/user-a/workspace/.ray-train-archives/" + strings.Repeat("f", 64) + ".zip"
 	tests := []struct {
 		name    string
 		baseURL string
@@ -21,8 +21,8 @@ func TestTOSStorePresignResponsePathIsBoundToRequestedObjectKey(t *testing.T) {
 		{name: "path style other key", baseURL: "https://tos.example.com/private-bucket/" + otherKey, wantErr: true},
 		{name: "extra prefix", baseURL: "https://private-bucket.tos.example.com/prefix/" + objectKey, wantErr: true},
 		{name: "extra suffix", baseURL: "https://private-bucket.tos.example.com/" + objectKey + ".bak", wantErr: true},
-		{name: "double slash", baseURL: "https://private-bucket.tos.example.com/tenants//tenant-a/users/user-a/sha256/" + testDigest + ".zip", wantErr: true},
-		{name: "encoded path ambiguity", baseURL: "https://private-bucket.tos.example.com/tenants%2Ftenant-a/users/user-a/sha256/" + testDigest + ".zip", wantErr: true},
+		{name: "double slash", baseURL: "https://private-bucket.tos.example.com/ray-train//tenants/tenant-a/users/user-a/workspace/.ray-train-archives/" + testDigest + ".zip", wantErr: true},
+		{name: "encoded path ambiguity", baseURL: "https://private-bucket.tos.example.com/ray-train%2Ftenants/tenant-a/users/user-a/workspace/.ray-train-archives/" + testDigest + ".zip", wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -1,0 +1,21 @@
+{
+  "spec": {
+    "template": {
+      "parameterTemplate": {
+        "labels": {
+          "ray-train.platform/fsx-dns-revision": "r5"
+        }
+      },
+      "podTemplateSpec": {
+        "spec": {
+          "dnsPolicy": "ClusterFirstWithHostNet"
+        }
+      }
+    },
+    "upgradeStrategy": {
+      "type": "RollingUpdate",
+      "maxUnavailable": "1",
+      "maxSurge": "0"
+    }
+  }
+}

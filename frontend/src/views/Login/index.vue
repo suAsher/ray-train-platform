@@ -7,8 +7,7 @@
           <el-icon class="text-white" :size="24"><Cpu /></el-icon>
         </div>
         <div>
-          <h1 class="text-xl font-bold text-white tracking-wide">Ray AI Platform</h1>
-          <p class="text-xs text-slate-400">多租户分布式训练控制台</p>
+          <h1 class="text-xl font-bold text-white tracking-wide">Ray Training Platform</h1>
         </div>
       </div>
 

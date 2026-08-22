@@ -1,0 +1,51 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mlflow-tos-prefix-init
+  namespace: mlflow-system
+  labels:
+    app.kubernetes.io/name: mlflow
+    app.kubernetes.io/component: storage-bootstrap
+    app.kubernetes.io/part-of: ray-train-platform
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mlflow
+        app.kubernetes.io/component: storage-bootstrap
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: harbor-registry
+      nodeSelector:
+        platform.wellspiking.ai/pool: control-plane
+      containers:
+        - name: create-prefix
+          image: harbor.wellspiking.ai/guofeng.su/ray-tos-prefix-init:mlflow-20260821-r1@sha256:a147d025eea4216e272b330ea7abd836b805eaa3c2f6bfd163fe1a287fe13438
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: TOS_ENDPOINT
+              value: https://tos-cn-shanghai.ivolces.com
+            - name: TOS_REGION
+              value: cn-shanghai
+            - name: TOS_BUCKET
+              value: vke-cluster
+            - name: TOS_PREFIXES
+              value: ray-train/platform/mlflow-artifacts/
+            - name: TOS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: tos-credentials
+                  key: access-key
+            - name: TOS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: tos-credentials
+                  key: secret-key
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]

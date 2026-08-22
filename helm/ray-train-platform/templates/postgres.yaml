@@ -1,0 +1,131 @@
+{{- if eq .Values.postgres.mode "standalone" }}
+{{- if eq .Values.backend.appEnv "production" }}{{- fail "postgres.mode=standalone is not supported in production" }}{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+spec:
+  clusterIP: None
+  selector:
+    app: ray-train-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ray-train-postgres
+  template:
+    metadata:
+      labels:
+        {{- include "ray-train-platform.commonLabels" . | nindent 8 }}
+        app.kubernetes.io/component: database
+        app: ray-train-postgres
+    spec:
+      {{- with .Values.postgres.standalone.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node.kubernetes.io/instance-type
+                    operator: NotIn
+                    values: ["virtual-node"]
+                  - key: type
+                    operator: NotIn
+                    values: ["virtual-kubelet"]
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.standalone.image | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            # Fresh block volumes can contain lost+found at their mount root.
+            # PostgreSQL must initialize under a writable child directory.
+            - name: PGDATA
+              value: "/var/lib/postgresql/data/pgdata"
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.existingSecret }}
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.existingSecret }}
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              # A database name is deployment configuration, not a Secret.
+              # This also keeps old test Secrets (which only had DATABASE_URL,
+              # user and password) compatible with Chart-managed PostgreSQL.
+              value: {{ .Values.postgres.standalone.databaseName | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-ec", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
+          livenessProbe:
+            exec:
+              command: ["/bin/sh", "-ec", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.postgres.standalone.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "ray-train-platform.commonLabels" . | nindent 10 }}
+          app.kubernetes.io/component: database
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.postgres.standalone.storageClass }}
+        storageClassName: {{ .Values.postgres.standalone.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.postgres.standalone.size | quote }}
+{{- else if ne .Values.postgres.mode "external" }}
+{{- fail "postgres.mode must be standalone or external" }}
+{{- end }}

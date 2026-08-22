@@ -1,5 +1,6 @@
 # Stage 1: Build static assets
 ARG NODE_BUILDER_IMAGE=node:20-alpine
+ARG NGINX_RUNTIME_IMAGE=nginx:1.27-alpine
 FROM ${NODE_BUILDER_IMAGE} AS builder
 
 ARG NPM_REGISTRY=https://registry.npmmirror.com
@@ -12,8 +13,11 @@ COPY . .
 RUN npm run build
 
 # Stage 2: Serve with Nginx
-ARG NGINX_RUNTIME_IMAGE=nginx:1.27-alpine
 FROM ${NGINX_RUNTIME_IMAGE}
+
+# Harbor's nginx-unprivileged image deliberately sets a non-root default user.
+# Switch only for image-time configuration, then restore the nginx user below.
+USER root
 
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf

@@ -99,6 +99,28 @@ func TestCreateImageKeepsASingleDefaultPerKind(t *testing.T) {
 	}
 }
 
+// A tenant may see both its own default and the shared fallback default. The
+// tenant-specific entry must be listed first because CLI clients select the
+// first default returned by the catalogue.
+func TestListImagesOrdersTenantDefaultBeforeSharedDefault(t *testing.T) {
+	repo := imageRepo(t)
+	ctx := context.Background()
+	_ = repo.CreateImage(ctx, testImage("img-shared", "aaa-shared", domain.ImageKindTraining, "", true, '1'))
+	_ = repo.CreateImage(ctx, testImage("img-tenant", "zzz-tenant", domain.ImageKindTraining, "team-a", true, '2'))
+
+	images, err := repo.ListImages(ctx, "team-a", domain.ImageKindTraining)
+	if err != nil {
+		t.Fatalf("list images: %v", err)
+	}
+	if len(images) < 2 || images[0].ID != "img-tenant" || !images[0].IsDefault {
+		t.Fatalf("tenant default must precede shared fallback, got %+v", images)
+	}
+	preferred, err := repo.DefaultImage(ctx, "team-a", domain.ImageKindTraining)
+	if err != nil || preferred.ID != "img-tenant" {
+		t.Fatalf("tenant default must win, got %+v err=%v", preferred, err)
+	}
+}
+
 func TestCreateImageRejectsMutableTag(t *testing.T) {
 	repo := imageRepo(t)
 	image := testImage("img-1", "loose", domain.ImageKindTraining, "", false, '1')

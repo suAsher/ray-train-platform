@@ -1,0 +1,112 @@
+# Cluster-wide Kubernetes API log collector for the Ray training platform.
+#
+# This collector intentionally runs on VCI. loki.source.kubernetes tails pod
+# logs via the Kubernetes API, so it must not rely on node /var/log mounts or
+# the temporary GPU node. Clustering prevents two replicas from ingesting the
+# same stream.
+
+image:
+  registry: harbor.wellspiking.ai
+  repository: hub/grafana/alloy
+
+# The configured reloader digest is not present in the Harbor proxy. Disable
+# the optional sidecar instead of introducing an external registry dependency;
+# every managed configuration change is applied through a Helm rollout.
+configReloader:
+  enabled: false
+
+alloy:
+  clustering:
+    enabled: true
+  enableReporting: false
+  mounts:
+    dockercontainers: false
+    varlog: false
+  extraEnv:
+    - name: LOKI_URL
+      value: http://loki-gateway.loki.svc.cluster.local/loki/api/v1/push
+  configMap:
+    content: |-
+      discovery.kubernetes "pods" {
+        role = "pod"
+      }
+
+      // Promote only stable platform metadata to indexed Loki labels.
+      // These source labels originate from the RayJob pod template.
+      discovery.relabel "platform_pods" {
+        targets = discovery.kubernetes.pods.targets
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_platform_job_id"]
+          target_label  = "platform_job_id"
+          action        = "replace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_platform_tenant_id"]
+          target_label  = "platform_tenant_id"
+          action        = "replace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+          action        = "replace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+          action        = "replace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+          action        = "replace"
+        }
+      }
+
+      loki.source.kubernetes "pods" {
+        targets    = discovery.relabel.platform_pods.output
+        forward_to = [loki.write.platform.receiver]
+        clustering {
+          enabled = true
+        }
+      }
+
+      loki.write "platform" {
+        endpoint {
+          name = "loki-gateway"
+          url  = env("LOKI_URL")
+        }
+      }
+
+controller:
+  # Alloy's own clustered mode requires a StatefulSet for stable membership.
+  type: statefulset
+  replicas: 2
+  nodeSelector:
+    node.kubernetes.io/instance-type: virtual-node
+  tolerations:
+    - key: vci.vke.volcengine.com/node-type
+      operator: Exists
+  podAnnotations:
+    vke.volcengine.com/burst-to-vci: enforce
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: alloy
+          app.kubernetes.io/instance: alloy
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+service:
+  type: ClusterIP

@@ -1,353 +1,222 @@
 <template>
-  <div class="max-w-5xl mx-auto space-y-6">
-    <!-- Header with Sleek Title -->
-    <div class="flex items-center justify-between">
+  <div class="mx-auto max-w-6xl space-y-6">
+    <div class="flex flex-wrap items-start justify-between gap-4">
       <div>
-        <h3 class="text-xl font-bold text-white flex items-center gap-2">
-          <el-icon class="text-blue-500"><VideoPlay /></el-icon> 提交分布式训练任务 (Ray Distributed Training)
-        </h3>
-        <p class="text-xs text-slate-400 mt-1">从单卡 4090 调试无缝平滑扩容至 24 卡多节点分布式并行训练。</p>
+        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-blue-400">Ray Training</p>
+        <h1 class="mt-1 text-2xl font-bold text-white">新建训练任务</h1>
+        <p class="mt-2 text-sm text-slate-400">依次选择代码、算力和数据。平台会将你的选择固化为可复现的训练任务。</p>
       </div>
-      <router-link to="/job">
-        <el-button size="small" icon="Back">返回任务列表</el-button>
-      </router-link>
+      <router-link to="/job"><el-button>返回任务列表</el-button></router-link>
     </div>
 
-    <!-- Dev Workspace Auto-Converted Banner -->
-    <div v-if="fromDevWorkspace" class="p-4 bg-emerald-950/40 border border-emerald-500/50 rounded-2xl flex items-center justify-between font-mono text-xs shadow-xl">
-      <div class="flex items-center gap-3">
-        <el-icon class="text-emerald-400" :size="20"><Zap /></el-icon>
-        <div>
-          <span class="font-bold text-emerald-300">已带入单卡调试工作区快照</span>
-          <p class="text-slate-400 mt-0.5">训练代码将由集群 initContainer 从 IDC 快照物化到 <code class="text-white">/workspace</code></p>
-        </div>
-      </div>
-      <el-tag type="success">快照来源已锁定</el-tag>
+    <el-alert v-if="fromWorkspaceSnapshot" type="success" :closable="false" class="!rounded-2xl">
+      <template #title>已从调试工作区带入代码快照</template>
+      训练任务会从不可变快照物化代码；请继续补全运行规模和数据位置。
+    </el-alert>
+
+    <el-alert v-if="resumeCheckpointPath" type="warning" :closable="false" class="!rounded-2xl">
+      <template #title>将从已有训练结果继续训练</template>
+      已带入只读 Checkpoint：<code>我的训练结果/{{ resumeCheckpointPath }}</code>。这是一个新任务，不会修改原任务；
+      训练脚本需要支持从 <code>$PLATFORM_CHECKPOINT_PATH</code> 恢复（例如 <code>--resume-from</code> 或 <code>--auto-resume</code>）。
+    </el-alert>
+
+    <el-alert v-if="quotaModel.blocked" type="error" :closable="false" show-icon class="!rounded-2xl" :title="quotaModel.blockMessage" />
+
+    <div class="panel p-3">
+      <el-steps :active="currentStep" finish-status="success" simple>
+        <el-step title="代码与环境" description="选择可复现的运行基础" />
+        <el-step title="运行规模" description="选择训练方式与启动命令" />
+        <el-step title="数据与确认" description="声明输入和训练产物" />
+      </el-steps>
     </div>
 
-    <!-- PRESET TEMPLATE SELECTION CARDS -->
-    <div class="space-y-3">
-      <span class="text-xs font-bold text-slate-300 uppercase tracking-wider">或选择一键加载主流模型训练预设 (Preset Templates):</span>
-      <div class="grid grid-cols-4 gap-4">
-        <div 
-          v-for="tpl in presetTemplates" 
-          :key="tpl.id"
-          @click="applyPreset(tpl)"
-          class="p-4 rounded-xl border bg-[#131826] hover:bg-slate-800/80 border-slate-800/80 hover:border-blue-500/50 transition-all cursor-pointer space-y-2 group shadow-lg"
-        >
-          <div class="flex items-center justify-between">
-            <span class="text-xs font-bold text-white group-hover:text-blue-400 font-mono">{{ tpl.name }}</span>
-            <el-tag size="small" effect="dark" :type="tpl.tagType">{{ tpl.tag }}</el-tag>
-          </div>
-          <p class="text-[11px] text-slate-400 line-clamp-2 leading-relaxed">{{ tpl.desc }}</p>
-          <div class="text-[10px] font-mono text-emerald-400 font-semibold pt-1">
-            推荐: {{ tpl.gpus }} 卡 4090 并行
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Main Wizard Form -->
-    <el-form :model="form" label-width="160px" label-position="left" class="bg-[#131826] p-8 rounded-2xl border border-slate-800/80 shadow-2xl space-y-6">
-      
-      <!-- STEP 1: BASIC & CODE -->
-      <div>
-        <h4 class="text-xs font-bold text-blue-400 uppercase tracking-wider mb-4 pb-2 border-b border-slate-800 flex items-center gap-2">
-          <el-icon><FolderOpened /></el-icon> 1. 代码来源与数据集配置
-        </h4>
-
-        <div class="space-y-4">
-          <el-form-item label="任务名称 (Job Name)">
-            <el-input v-model="form.name" placeholder="例: llama3-8b-instruct-sft" />
-          </el-form-item>
-
-          <el-form-item label="训练镜像 digest">
-            <el-select v-model="form.image" class="w-full" placeholder="选择训练运行环境" :loading="loadingImages" filterable allow-create>
-              <el-option v-for="image in trainingImages" :key="image.id" :label="imageLabel(image)" :value="image.reference">
-                <div class="flex justify-between items-center gap-4">
-                  <span>{{ image.name }}<el-tag v-if="image.isDefault" size="small" type="success" effect="plain" class="ml-2">默认</el-tag></span>
-                  <span class="text-[11px] text-slate-500">{{ image.framework }}</span>
-                </div>
-              </el-option>
-            </el-select>
-            <p class="text-[11px] text-slate-500 mt-1">
-              {{ trainingImages.length ? '从管理员登记的镜像目录中选择，确保依赖环境一致；也可直接粘贴带 digest 的镜像。' : '镜像目录为空，请粘贴带 @sha256 digest 的镜像，或由管理员先登记镜像。' }}
+    <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_280px]">
+      <section class="panel p-6">
+        <StepCode
+          v-if="currentStep === 0"
+          :form="form"
+          :images="trainingImages"
+          :snapshots="workspaceSnapshots"
+          :loading="loadingCatalog"
+          :workspace-path="mountPaths.workspace"
+        />
+        <div v-else-if="currentStep === 1">
+          <div class="mb-6">
+            <h2 class="text-lg font-semibold text-white">运行规模</h2>
+            <p class="mt-1 text-sm text-slate-400">
+              选择训练方式，平台会据此决定命令在哪里、以什么并行方式运行。{{ quotaModel.scopeLabel }}：
+              {{ quotaModel.maxWorkerReplicas }} 个节点 × {{ quotaModel.maxGpusPerWorker }} 卡，单任务最多
+              {{ quotaModel.maxTotalGpus }} 卡。
             </p>
-            <div class="text-[11px] text-slate-500 mt-1">生产环境只允许不可变的 sha256 镜像，不接受 latest。</div>
-          </el-form-item>
-
-          <el-form-item label="代码来源模式">
-            <el-radio-group v-model="form.code_source_type">
-              <el-radio-button label="workspace">IDC PVC 工作区快照</el-radio-button>
-              <el-radio-button label="git">Git 远程仓库</el-radio-button>
-              <el-radio-button label="tos">TOS 对象存储 ZIP</el-radio-button>
-            </el-radio-group>
-          </el-form-item>
-
-          <template v-if="form.code_source_type === 'git'">
-            <el-form-item label="Git 仓库 URL">
-              <el-input v-model="form.git_url" placeholder="https://github.com/..." />
-            </el-form-item>
-            <el-form-item label="Git Commit (必须固定)">
-              <el-input v-model="form.git_commit" placeholder="40 位 commit SHA" style="width: 360px" />
-            </el-form-item>
-          </template>
-
-          <template v-else-if="form.code_source_type === 'workspace'">
-            <el-form-item label="工作区快照 ID">
-              <el-input v-model="form.workspace_snapshot" placeholder="由调试工作区生成的不可变快照 ID" />
-            </el-form-item>
-          </template>
-
-          <template v-else-if="form.code_source_type === 'tos'">
-            <el-form-item label="TOS 代码 URI">
-              <el-input v-model="form.tos_code_path" placeholder="tos://bucket/code/release.tar.gz" />
-            </el-form-item>
-          </template>
-
-          <el-form-item label="TOS 数据集 URI">
-            <el-input v-model="form.dataset_path" placeholder="tos://ai-training-data/datasets/sft_v1.json" />
-          </el-form-item>
-        </div>
-      </div>
-
-      <!-- STEP 2: EXECUTION COMMAND -->
-      <div>
-        <h4 class="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-4 pb-2 border-b border-slate-800 flex items-center gap-2">
-          <el-icon><Cpu /></el-icon> 2. 分布式并行启动命令与产物归档
-        </h4>
-
-        <div class="space-y-4">
-          <el-form-item label="训练框架引擎">
-            <el-radio-group v-model="form.framework">
-              <el-radio-button label="RayTrain">Ray Train (PyTorch 分布式)</el-radio-button>
-              <el-radio-button label="Megatron">Megatron-LM</el-radio-button>
-              <el-radio-button label="DeepSpeed">DeepSpeed Zero-3</el-radio-button>
-            </el-radio-group>
-          </el-form-item>
-
-          <el-form-item label="分布式启动脚本">
-            <el-input 
-              v-model="form.entrypoint" 
-              type="textarea" 
-              :rows="3" 
-              class="font-mono text-emerald-400 bg-slate-950"
-              placeholder="python -m ray.train.torch.run --nnodes 3 --nproc-per-node 8 train.py --batch-size 64" 
-            />
-          </el-form-item>
-
-          <el-form-item label="Checkpoint 导出 URI">
-            <el-input v-model="form.checkpoint_output_dir" placeholder="tos://ai-training-data/checkpoints/run1/" />
-          </el-form-item>
-        </div>
-      </div>
-
-      <!-- STEP 3: PARALLELISM CALCULATOR -->
-      <div>
-        <h4 class="text-xs font-bold text-purple-400 uppercase tracking-wider mb-4 pb-2 border-b border-slate-800 flex items-center gap-2">
-          <el-icon><Setting /></el-icon> 3. 4090 算力规模扩展 (从 1 卡扩展至 24 卡)
-        </h4>
-
-        <div class="grid grid-cols-2 gap-6 bg-slate-900/60 p-5 rounded-xl border border-slate-800">
-          <el-form-item label="请求节点数量 (Nodes)">
-            <el-input-number v-model="form.worker_replicas" :min="1" :max="3" />
-            <span class="text-xs text-slate-500 ml-2">台 (每台 8x 4090)</span>
-          </el-form-item>
-
-          <el-form-item label="单节点 GPU 数">
-            <el-input-number v-model="form.gpus_per_worker" :min="1" :max="8" />
-            <span class="text-xs text-slate-500 ml-2">张</span>
-          </el-form-item>
-        </div>
-
-        <div class="mt-4 p-5 bg-gradient-to-r from-blue-950/40 via-purple-950/30 to-blue-950/40 rounded-xl border border-blue-900/50 space-y-3">
-          <div class="flex justify-between items-center text-xs font-mono">
-            <span class="text-slate-300 font-bold">算力分布与 Megatron 并行演算:</span>
-            <span class="text-blue-400 font-bold text-sm">共计 {{ totalGpus }} 张 RTX 4090 显卡 (576 GB 总显存)</span>
           </div>
+          <StepRuntime
+            class="role-aware-runtime-step"
+            :form="form"
+            :profiles="profiles"
+            :limits="formLimits"
+            :execution-mode="executionMode"
+            :command-preview="commandPreview"
+            :warnings="commandWarnings"
+            :workspace-path="mountPaths.workspace"
+            @apply-profile="applyProfile"
+          />
+        </div>
+        <template v-else>
+          <StepData :form="form" :mount-paths="mountPaths" />
+          <SubmitPreview
+            class="mt-6"
+            :form="form"
+            :issues="allIssues"
+            :total-g-p-us="totalGPUs"
+            :execution-mode="executionMode"
+            :command-preview="commandPreview"
+          />
+        </template>
 
-          <div class="grid grid-cols-3 gap-4 text-xs font-mono">
-            <div class="p-3 bg-slate-950/80 rounded-lg border border-slate-800">
-              <div class="text-slate-400">Tensor Parallel (TP):</div>
-              <div class="text-blue-400 font-bold text-sm mt-0.5">{{ form.worker_replicas > 1 ? 2 : 1 }}</div>
+        <div class="mt-8 flex items-center justify-between border-t border-slate-800 pt-5">
+          <el-button :disabled="currentStep === 0" @click="currentStep -= 1">上一步</el-button>
+          <div class="flex gap-3">
+            <router-link to="/job"><el-button>取消</el-button></router-link>
+            <el-button v-if="currentStep < 2" type="primary" @click="nextStep">下一步</el-button>
+            <el-button v-else type="primary" :loading="submitting" @click="submitJob">提交训练任务</el-button>
+          </div>
+        </div>
+      </section>
+
+      <aside class="panel h-fit p-5">
+        <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">本次申请</p>
+        <p class="mt-3 text-3xl font-bold text-white">{{ totalGPUs }} <span class="text-base font-medium text-slate-400">GPU</span></p>
+        <p class="mt-1 text-xs text-slate-500">{{ form.workerReplicas }} 个训练节点，每个 {{ form.gpusPerWorker }} GPU</p>
+
+        <div class="my-5 border-t border-slate-800" />
+        <div class="space-y-4 text-sm">
+          <div>
+            <p class="text-slate-500">当前步骤</p>
+            <p class="mt-1 font-medium text-slate-200">{{ stepTitles[currentStep] }}</p>
+          </div>
+          <div>
+            <p class="text-slate-500">训练方式</p>
+            <p class="mt-1 font-medium text-slate-200">{{ executionModeLabel }}</p>
+          </div>
+          <div>
+            <p class="text-slate-500">{{ quotaModel.scopeLabel }}</p>
+            <p class="mt-1 font-medium text-slate-200">
+              {{ quotaModel.maxWorkerReplicas }} 节点 × {{ quotaModel.maxGpusPerWorker }} 卡，最多 {{ quotaModel.maxTotalGpus }} 卡
+            </p>
+          </div>
+          <div v-if="quotaModel.isTenantScoped" class="grid grid-cols-3 gap-2 border-t border-slate-800 pt-4 text-center">
+            <div>
+              <p class="text-xs text-slate-500">管理员分配额度</p>
+              <p class="mt-1 font-semibold text-slate-200">{{ quotaModel.gpuLimit }} 卡</p>
             </div>
-            <div class="p-3 bg-slate-950/80 rounded-lg border border-slate-800">
-              <div class="text-slate-400">Pipeline Parallel (PP):</div>
-              <div class="text-purple-400 font-bold text-sm mt-0.5">{{ form.worker_replicas > 1 ? 2 : 1 }}</div>
+            <div>
+              <p class="text-xs text-slate-500">已使用</p>
+              <p class="mt-1 font-semibold text-amber-300">{{ quotaModel.gpuUsed }} 卡</p>
             </div>
-            <div class="p-3 bg-slate-950/80 rounded-lg border border-slate-800">
-              <div class="text-slate-400">Data Parallel (DP):</div>
-              <div class="text-emerald-400 font-bold text-sm mt-0.5">{{ totalGpus / (form.worker_replicas > 1 ? 4 : 1) }}</div>
+            <div>
+              <p class="text-xs text-slate-500">当前可提交上限</p>
+              <p class="mt-1 font-semibold text-emerald-300">{{ quotaModel.gpuAvailable }} 卡</p>
             </div>
           </div>
         </div>
-      </div>
 
-      <!-- SUBMIT ACTION -->
-      <div class="pt-6 border-t border-slate-800 flex justify-end gap-4">
-        <router-link to="/job">
-          <el-button class="!rounded-xl">取消</el-button>
-        </router-link>
-        <el-button type="primary" icon="Check" class="!rounded-xl shadow-lg shadow-blue-600/30" @click="submitJob">
-          一键提交分布式训练任务
-        </el-button>
-      </div>
-
-    </el-form>
+        <div class="mt-6 rounded-xl bg-slate-950/70 p-4 text-xs leading-5 text-slate-400">
+          资源是否立刻运行由租户队列和集群可用 GPU 决定。提交成功后可在任务详情查看排队、日志和运行状态。
+        </div>
+      </aside>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { reactive, ref, computed, onMounted } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { useRoute, useRouter } from 'vue-router'
+
 import { apiPost } from '../../api/client'
-import { fetchImages } from '../../api/catalog'
+import { buildJobSpec } from '../../submission'
+import { useJobForm } from '../../composables/useJobForm'
+import StepCode from '../../components/job/StepCode.vue'
+import StepRuntime from '../../components/job/StepRuntime.vue'
+import StepData from '../../components/job/StepData.vue'
+import SubmitPreview from '../../components/job/SubmitPreview.vue'
 
 const router = useRouter()
 const route = useRoute()
+const currentStep = ref(0)
+const submitting = ref(false)
+const stepTitles = ['代码与环境', '运行规模', '数据与确认']
 
-const fromDevWorkspace = computed(() => route.query.from === 'dev_workspace')
+const {
+  form, limits, quotaModel, profiles, executionMode, totalGPUs, commandPreview, commandWarnings, mountPaths,
+  trainingImages, workspaceSnapshots, loadingCatalog, applyProfile, toSubmission, stepIssues, loadCatalog,
+} = useJobForm(route)
 
-const presetTemplates = [
-  {
-    id: 'llama3-8b',
-    name: 'Llama-3-8B SFT',
-    tag: '大语言模型',
-    tagType: 'primary',
-    desc: '基于 Ray Train + PyTorch FSDP 对 Llama-3-8B 进行 24 卡全量 SFT 微调。',
-    gpus: 24,
-    entrypoint: 'python -m ray.train.torch.run --nnodes 3 --nproc-per-node 8 train_llama.py --batch-size 64 --lr 2e-5'
-  },
-  {
-    id: 'deepseek-r1',
-    name: 'DeepSeek-R1 Distill',
-    tag: '推理强化学习',
-    tagType: 'warning',
-    desc: 'DeepSeek-R1 蒸馏模型多卡 GRPO / PPO 强化学习对齐训练。',
-    gpus: 24,
-    entrypoint: 'python -m ray.train.torch.run --nnodes 3 --nproc-per-node 8 train_grpo.py --model_name_or_path DeepSeek-R1-Distill'
-  },
-  {
-    id: 'qwen25-72b',
-    name: 'Qwen-2.5-72B LoRA',
-    tag: '千亿大模型',
-    tagType: 'success',
-    desc: 'Qwen-2.5-72B 大模型 24 卡 Megatron TP=2 PP=2 混合并行训练。',
-    gpus: 24,
-    entrypoint: 'python -m ray.train.torch.run --nnodes 3 --nproc-per-node 8 train_qwen.py --tp 2 --pp 2'
-  },
-  {
-    id: 'flux-1',
-    name: 'FLUX.1 Diffusion',
-    tag: '多模态图像',
-    tagType: 'danger',
-    desc: 'FLUX.1 图像生成大模型 24 卡多节点分布式 LoRA 微调。',
-    gpus: 24,
-    entrypoint: 'python -m ray.train.torch.run --nnodes 3 --nproc-per-node 8 train_flux.py --resolution 1024'
-  }
-]
+// Element Plus input-number requires max >= min. When quota is zero the form
+// keeps its 1 × 1 visual minimum, while quotaModel.blocked remains authoritative.
+const formLimits = computed(() => quotaModel.value.blocked
+  ? { ...limits.value, maxWorkerReplicas: 1, maxGpusPerWorker: 1 }
+  : limits.value)
 
-const form = reactive({
-  name: 'llama3-8b-instruct-sft',
-  idempotency_key: '',
-  image: '',
-  framework: 'RayTrain',
-  code_source_type: 'git',
-  workspace_snapshot: '',
-  tos_code_path: '',
-  git_url: 'https://github.com/meta-llama/llama3.git',
-  git_commit: '',
-  dataset_path: 'tos://ai-training-data/datasets/sft_v1.json',
-  entrypoint: 'python -m ray.train.torch.run --nnodes 3 --nproc-per-node 8 train.py --batch-size 64',
-  checkpoint_output_dir: 'tos://ai-training-data/checkpoints/run1/',
-  worker_replicas: 3,
-  gpus_per_worker: 8
-})
+const fromWorkspaceSnapshot = computed(() => ['dev_workspace', 'workspace_snapshot'].includes(String(route.query.from || '')))
+const resumeCheckpointPath = computed(() => String(route.query.checkpointPath || '').trim())
+const allIssues = computed(() => [...stepIssues(0), ...stepIssues(1)])
 
-const totalGpus = computed(() => form.worker_replicas * form.gpus_per_worker)
-
-const applyPreset = (tpl) => {
-  const generatedID = globalThis.crypto?.randomUUID?.()
-  const suffix = generatedID ? generatedID.slice(0, 8) : String(Date.now()).slice(-8)
-  form.name = `${tpl.id}-run-${suffix}`
-  form.entrypoint = tpl.entrypoint
-  ElMessage.success(`已成功加载预设模板: ${tpl.name}`)
+const executionModeLabels = {
+  single_gpu: '单卡',
+  torchrun: '单机多卡（平台执行 torchrun）',
+  ray_train: '多机多卡（Ray 分散放置 + torchrun）',
 }
+const executionModeLabel = computed(() => executionModeLabels[executionMode.value] || executionMode.value)
 
-
-// The default marker belongs in the label: el-select only renders the option
-// slot while the dropdown is open, so a tag inside it is invisible once a
-// value is chosen.
-const imageLabel = (image) => {
-  const parts = [image.name]
-  if (image.framework) parts.push(image.framework)
-  const suffix = image.isDefault ? '（默认）' : ''
-  return `${parts.join(' · ')}${suffix}`
-}
-
-const trainingImages = ref([])
-const loadingImages = ref(false)
-
-onMounted(async () => {
-  loadingImages.value = true
-  try {
-    trainingImages.value = await fetchImages('training')
-    const preferred = trainingImages.value.find((image) => image.isDefault) || trainingImages.value[0]
-    if (preferred && !form.image) form.image = preferred.reference
-  } catch {
-    trainingImages.value = []
-  } finally {
-    loadingImages.value = false
+const nextStep = () => {
+  const issues = stepIssues(currentStep.value)
+  if (issues.length) {
+    ElMessage.warning(issues[0])
+    return
   }
-})
+  currentStep.value += 1
+}
 
 const submitJob = async () => {
+  if (allIssues.value.length) {
+    ElMessage.warning(allIssues.value[0])
+    return
+  }
+  submitting.value = true
   try {
-    if (!form.idempotency_key) form.idempotency_key = crypto.randomUUID()
-    const data = await apiPost('/api/v1/jobs', { spec: buildSpec() }, { headers: { 'Idempotency-Key': form.idempotency_key } })
-    ElMessage.success('分布式训练任务已提交，正在等待 Kueue 调度')
+    const spec = buildJobSpec(toSubmission())
+    const idempotencyKey = globalThis.crypto?.randomUUID?.() || `portal-${Date.now()}`
+    const data = await apiPost('/api/v1/jobs', { spec }, { headers: { 'Idempotency-Key': idempotencyKey } })
+    ElMessage.success('训练任务已提交，正在等待队列准入')
     router.push(`/job/detail/${data.id}`)
   } catch (error) {
     ElMessage.error(error.message || '提交训练任务失败')
+  } finally {
+    submitting.value = false
   }
 }
 
-const parseEntrypoint = (value) => {
-  const parts = []
-  const matcher = /"([^"\\]*(?:\\.[^"\\]*)*)"|'([^']*)'|([^\s]+)/g
-  let match
-  while ((match = matcher.exec(value || '')) !== null) parts.push(match[1] ?? match[2] ?? match[3])
-  return parts
-}
-
-const buildSpec = () => {
-  const command = parseEntrypoint(form.entrypoint)
-  if (!command.length) throw new Error('请输入训练启动命令')
-  const source = form.code_source_type === 'git'
-    ? { type: 'git', url: form.git_url, commit: form.git_commit }
-    : form.code_source_type === 'tos'
-      ? { type: 'tos', uri: form.tos_code_path }
-      : { type: 'workspace', snapshot: form.workspace_snapshot }
-  return {
-    name: form.name,
-    image: form.image,
-    source,
-    entrypoint: { command: [command[0]], args: command.slice(1) },
-    resources: { workerReplicas: form.worker_replicas, gpusPerWorker: form.gpus_per_worker, cpuPerWorker: 8, memoryPerWorker: '32Gi' },
-    datasetUri: form.dataset_path,
-    outputUri: form.checkpoint_output_dir,
-    queue: '',
-    timeoutSeconds: 0,
-    retryPolicy: { maxRetries: 0 }
+onMounted(async () => {
+  if (fromWorkspaceSnapshot.value) {
+    form.codeSourceType = 'workspace'
+    form.workspaceSnapshot = String(route.query.snapshot || '')
   }
-}
-
-onMounted(() => {
-  if (route.query.from === 'dev_workspace') {
-    form.code_source_type = 'workspace'
-    form.workspace_snapshot = route.query.snapshot || ''
-    form.entrypoint = 'python -m ray.train.torch.run --nnodes 3 --nproc-per-node 8 train.py --batch-size 64'
+  if (resumeCheckpointPath.value) {
+    form.checkpoint = { spaceId: 'my-runs', relativePath: resumeCheckpointPath.value }
   }
+  // A resubmission carries the previous job's shape so "再来一次" needs no retyping.
+  for (const [key, value] of Object.entries({
+    name: route.query.name, image: route.query.image, entrypoint: route.query.entrypoint,
+  })) {
+    if (value) form[key] = String(value)
+  }
+  await loadCatalog()
 })
 </script>
+
+<style scoped>
+:deep(.role-aware-runtime-step > .mb-6) {
+  display: none;
+}
+</style>

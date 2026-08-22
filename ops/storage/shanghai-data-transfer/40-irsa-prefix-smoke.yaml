@@ -1,0 +1,163 @@
+# Render with envsubst from 41-verify-irsa-prefix-mount.sh.  This manifest
+# deliberately has no Secret reference: a successful mount proves that the
+# csi-fsx component-level IRSA identity, rather than a workload credential,
+# is being used.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ${SMOKE_NAME}-a-pv
+  labels:
+    app.kubernetes.io/managed-by: ray-train-platform
+    ray-train.platform/purpose: irsa-prefix-smoke
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes: [ReadWriteMany]
+  persistentVolumeReclaimPolicy: Delete
+  mountOptions:
+    - no_writeback_cache
+    - uid=1000
+    - gid=1000
+    - file_mode=770
+    - dir_mode=770
+    - tos_allow_delete=true
+  csi:
+    driver: fsx.csi.volcengine.com
+    volumeHandle: ${SMOKE_NAME}-a-pv
+    volumeAttributes:
+      type: TOS
+      server: ${FSX_TOS_SERVER}
+      region: ${FSX_TOS_REGION}
+      bucket: ${FSX_TOS_BUCKET}
+      # These two dedicated verification roots are prepared by the platform
+      # control-plane bootstrap Job before IRSA is tested. FSX requires the
+      # exact TOS path to exist; no user or Ray Pod receives that bootstrap
+      # credential.
+      path: /ray-train/tenants/local/datasets
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: smoke-a
+  namespace: ${SMOKE_NAMESPACE}
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: ""
+  volumeName: ${SMOKE_NAME}-a-pv
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: smoke-a
+  namespace: ${SMOKE_NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: ray-train-platform
+    ray-train.platform/purpose: irsa-prefix-smoke
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+  nodeSelector: ${SMOKE_NODE_SELECTOR_JSON}
+  containers:
+    - name: verify
+      image: ${SMOKE_IMAGE}
+      command: ["/bin/sh", "-ec"]
+      args:
+        - |
+          printf '%s\n' 'smoke-a' > /mnt/me/owner.txt
+          test "$(cat /mnt/me/owner.txt)" = 'smoke-a'
+          test ! -e /mnt/me/../checkpoints/owner.txt
+          rm -f /mnt/me/owner.txt
+          printf '%s\n' 'mount-root-isolated'
+      volumeMounts:
+        - name: data
+          mountPath: /mnt/me
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: smoke-a
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ${SMOKE_NAME}-b-pv
+  labels:
+    app.kubernetes.io/managed-by: ray-train-platform
+    ray-train.platform/purpose: irsa-prefix-smoke
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes: [ReadWriteMany]
+  persistentVolumeReclaimPolicy: Delete
+  mountOptions:
+    - no_writeback_cache
+    - uid=1000
+    - gid=1000
+    - file_mode=770
+    - dir_mode=770
+    - tos_allow_delete=true
+  csi:
+    driver: fsx.csi.volcengine.com
+    volumeHandle: ${SMOKE_NAME}-b-pv
+    volumeAttributes:
+      type: TOS
+      server: ${FSX_TOS_SERVER}
+      region: ${FSX_TOS_REGION}
+      bucket: ${FSX_TOS_BUCKET}
+      path: /ray-train/tenants/local/checkpoints
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: smoke-b
+  namespace: ${SMOKE_NAMESPACE}
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: ""
+  volumeName: ${SMOKE_NAME}-b-pv
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: smoke-b
+  namespace: ${SMOKE_NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: ray-train-platform
+    ray-train.platform/purpose: irsa-prefix-smoke
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+  nodeSelector: ${SMOKE_NODE_SELECTOR_JSON}
+  containers:
+    - name: verify
+      image: ${SMOKE_IMAGE}
+      command: ["/bin/sh", "-ec"]
+      args:
+        - |
+          printf '%s\n' 'smoke-b' > /mnt/me/owner.txt
+          test "$(cat /mnt/me/owner.txt)" = 'smoke-b'
+          test ! -e /mnt/me/../datasets/owner.txt
+          rm -f /mnt/me/owner.txt
+          printf '%s\n' 'mount-root-isolated'
+      volumeMounts:
+        - name: data
+          mountPath: /mnt/me
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: smoke-b

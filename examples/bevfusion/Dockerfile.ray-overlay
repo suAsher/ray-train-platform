@@ -1,0 +1,32 @@
+# Bootstrap overlay for a legacy BEVFusion image that has already been
+# materialized as a complete OCI image.  It only adds the Ray runtime needed
+# by KubeRay; CUDA/C++ operators and application code stay byte-for-byte the
+# same as the verified base image.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+# The base compatibility image deliberately runs workloads as UID 1000.  The
+# overlay itself still needs root only while adding its helper and ensuring the
+# runtime identity; the final USER instruction restores the workload contract.
+USER root
+
+ARG PIP_INDEX_URL=https://repo.wellspiking.ai/repository/pip/simple
+# Keep this in lockstep with Dockerfile.  2.10.0 is the newest Ray version
+# currently available from the internal Python repository.
+ARG RAY_VERSION=2.10.0
+
+RUN python3 -m pip install --index-url "${PIP_INDEX_URL}" --no-cache-dir "ray[default]==${RAY_VERSION}"
+
+COPY examples/bevfusion/raytrain-bevfusion-prepare-runtime.sh /usr/local/bin/raytrain-bevfusion-prepare
+RUN chmod 0755 /usr/local/bin/raytrain-bevfusion-prepare
+
+# FSX/TOS mounts are owned by the platform's non-root workload identity.
+# Preserve that identity even when the legacy BEVFusion base itself has no
+# application user (and even if a Docker 29 fallback flattens the image).
+RUN if ! getent group 1000 >/dev/null; then groupadd --gid 1000 ray; fi \
+    && if ! getent passwd 1000 >/dev/null; then useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash ray; fi \
+    && install -d -m 0755 -o 1000 -g 1000 /home/ray
+
+ENV PYTHONPATH=/opt/bevfusion \
+    HOME=/home/ray
+USER 1000:1000

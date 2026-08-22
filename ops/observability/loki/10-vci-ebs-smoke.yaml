@@ -1,0 +1,113 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki-vci-ebs-smoke
+  namespace: loki
+  labels:
+    app.kubernetes.io/name: loki-vci-ebs-smoke
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: loki-vci-ebs-smoke
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: loki-vci-ebs-smoke
+  namespace: loki
+spec:
+  serviceName: loki-vci-ebs-smoke
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: loki-vci-ebs-smoke
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: loki-vci-ebs-smoke
+      annotations:
+        vke.volcengine.com/burst-to-vci: enforce
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 10
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node.kubernetes.io/instance-type
+                    operator: In
+                    values: [virtual-node]
+      tolerations:
+        - key: vci.vke.volcengine.com/node-type
+          operator: Exists
+      securityContext:
+        fsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: initialize-volume-permissions
+          image: harbor.wellspiking.ai/hub/library/busybox:1.36
+          command: ["sh", "-ec"]
+          args:
+            - |-
+              chown 1000:1000 /data
+              chmod 0770 /data
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      containers:
+        - name: smoke
+          image: harbor.wellspiking.ai/hub/library/busybox:1.36
+          command: ["sh", "-ec"]
+          args:
+            - |-
+              if [ ! -f /data/marker ]; then
+                date -u +%FT%TZ > /data/marker
+              fi
+              cat /data/marker
+              sleep 3600
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: ebs-ssd
+        resources:
+          requests:
+            storage: 20Gi

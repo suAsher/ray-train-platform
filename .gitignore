@@ -2,6 +2,11 @@
 node_modules/
 frontend/dist/
 backend/bin/
+output/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
 
 # Editor / OS noise
 .DS_Store
@@ -19,3 +24,10 @@ backend/bin/
 # values.yaml holds only placeholders; per-environment overrides stay local.
 helm/ray-train-platform/values-*.yaml
 !helm/ray-train-platform/values-test.yaml.example
+
+# Standard deployment keeps environment configuration in deploy/profiles but
+# never commits credentials or an operator's private environment override.
+deploy/secrets.env
+deploy/profiles/*.local.yaml
+deploy/profiles/*-private.yaml
+deploy/release-records/

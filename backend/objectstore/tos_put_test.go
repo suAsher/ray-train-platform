@@ -31,7 +31,7 @@ func TestTOSStorePutStreamsValidatedArchiveWithImmutableHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Put(context.Background(), "tenants/tenant/users/user/sha256/"+testDigest+".zip", testDigest, int64(len(payload)), bytes.NewReader(payload)); err != nil {
+	if err := store.Put(context.Background(), "ray-train/tenants/tenant/users/user/workspace/.ray-train-archives/"+testDigest+".zip", testDigest, int64(len(payload)), bytes.NewReader(payload)); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 }
@@ -46,7 +46,7 @@ func TestTOSStorePutClassifiesConflictsAndDoesNotLeakStorageDetails(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = store.Put(context.Background(), "tenants/tenant/users/user/sha256/"+testDigest+".zip", testDigest, 1, strings.NewReader("x"))
+	err = store.Put(context.Background(), "ray-train/tenants/tenant/users/user/workspace/.ray-train-archives/"+testDigest+".zip", testDigest, 1, strings.NewReader("x"))
 	if !errors.Is(err, ErrAlreadyExists) || strings.Contains(err.Error(), "sensitive-request-id") {
 		t.Fatalf("put error=%v", err)
 	}
@@ -61,7 +61,7 @@ func TestTOSStorePutMapsPreconditionFailureToAlreadyExists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Put(context.Background(), "tenants/tenant/users/user/sha256/"+testDigest+".zip", testDigest, 1, strings.NewReader("x")); !errors.Is(err, ErrAlreadyExists) {
+	if err := store.Put(context.Background(), "ray-train/tenants/tenant/users/user/workspace/.ray-train-archives/"+testDigest+".zip", testDigest, 1, strings.NewReader("x")); !errors.Is(err, ErrAlreadyExists) {
 		t.Fatalf("412 put error=%v", err)
 	}
 }

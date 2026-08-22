@@ -1,340 +1,324 @@
-# 构建与部署流程
+# 日常构建与发布
 
-适用环境：火山云 VKE + KubeRay 1.3.0 + Kueue 0.19.0 + PostgreSQL + Nginx/Vue Portal。
+本文是唯一的部署入口，覆盖首次安装、日常发版、原子升级、验收与回滚。
 
-构建机：`root@14.103.49.106`（已安装 Docker 29.x、Node 20、helm、kubectl；kubeconfig 指向真实 VKE 集群；已 `docker login` 镜像仓库）。构建机上没有 Go —— 后端在 Go builder 容器里编译，不需要本机装 Go。
+> 当前生产拓扑已包含 Frontend/Backend/CLI 发布服务双副本、私网 ALB、属主限定 Ray Dashboard、持久 MLflow 实验中心、工作区源码快照与终态任务归档。Profile 暂用 `APP_ENV=development`，因为平台 PostgreSQL 仍是内置单实例且 Keycloak OIDC 尚未成为强制认证。不要只改这个开关；严格生产模式会拒绝内置 PostgreSQL 和缺失的 OIDC。完成外部 HA PostgreSQL 与 OIDC 配置后，再将 `backend.appEnv` 改为 `production` 并走本手册的完整 preflight/deploy/verify。
 
-**工作目录：`/opt/guofeng/vke-cluster/ray-platform`**。它是 `vke-cluster/` 集群资产树的一部分，同级还有：
+## 1. 日常发布原则
 
-| 目录 | 内容 |
-|---|---|
-| `loki/` | Loki chart 与 values（**已准备，尚未安装**） |
-| `alloy/` | Grafana Alloy chart 与 values（**已部署**，运行在 `monitoring` namespace） |
-| `kueue/` | Kueue 资源清单 |
-| `ray-train-ingress.yaml` | 私网 ALB Ingress（host 仍是占位符 `train.xx.com`） |
+- 不使用 `helm --set`、`--reuse-values` 或历史 release values；它们会重新引入配置漂移。
+- 每次发布使用新的镜像 tag；生产 API/Portal 使用 `@sha256` digest。
+- 机密只通过 Kubernetes Secret 注入，绝不写入 Profile、构建参数或 Git。
+- Chart 不管理 KubeRay、Kueue Controller、CSI、ALB、Loki、Alloy、Keycloak。
+- Prometheus/Grafana 是独立的共享监控发布，使用本仓库固定的
+  `kube-prometheus-stack` Chart，不随每次 Portal/API 镜像发布重复安装。
+- MLflow 使用独立 `mlflow-system` namespace、独立 PostgreSQL 和独立部署流程，不复用平台数据库，也不随每次 Portal/API 发版重复安装。
+- 构建和部署必须来自一个无未提交改动的 Git commit；生产验收通过后创建同版本 annotated tag。镜像 digest、Helm revision 和 tag 共同构成回滚证据，不能只保留构建机上的工作目录。
 
-平台自身的所有构建部署操作都在 `ray-platform/` 子目录内执行。
-
----
-
-## 0. 一次性前置检查
+## 2. 本地校验
 
 ```bash
-ssh -i ~/.ssh/qomolo-desktop.pem root@14.103.49.106
+cd backend
+gofmt -l .
+go vet ./...
+go test ./...
+
+cd ../frontend
+npm test
+npm run build
+
+cd ..
+bash scripts/test-delivery-render.sh
+bash ops/platform/test/reset-preview-test.sh
+```
+
+校验通过后先固化源码版本，再从该版本构建。示例中的身份使用维护者自己的 Git 配置，不要把个人访问令牌写入 remote URL：
+
+```bash
+git status --short                 # 必须无意外的临时文件或凭据
+git diff --check
+git add -A
+git commit -m "feat: deliver Ray training platform v1.1.0"
+git tag -a v1.1.0 -m "Ray training platform v1.1.0"
+git show --stat --oneline v1.1.0
+```
+
+若内部 Git 尚未配置，可以先在本地创建 commit/tag；配置受保护的内部 remote 后再推送分支和 tag。构建机只接收源码副本，不作为 Git 历史的唯一保存位置。
+
+## 3. 同步到构建机并构建
+
+构建机工作目录：`/opt/guofeng/vke-cluster/ray-platform`。使用安全同步方式，不把
+`.git`、`node_modules`、构建产物或恢复备份同步进去：
+
+```bash
+rsync -az \
+  --exclude .git --exclude .playwright-cli --exclude frontend/node_modules \
+  --exclude frontend/dist --exclude output --exclude deploy/release-records \
+  -e "ssh -i ~/.ssh/qomolo-desktop.pem" \
+  ./ root@14.103.49.106:/opt/guofeng/vke-cluster/ray-platform/
+```
+
+在构建机上创建新标签并推送：
+
+```bash
+cd /opt/guofeng/vke-cluster/ray-platform
+IMAGE_TAG=prod-$(date -u +%Y%m%d-%H%M%S) \
+BUILD_TARGETS=backend,frontend,spk-rayjob,source-materializer,workspace,train-pytorch \
+PUSH_IMAGE=true USE_BUILDX=true \
+bash build-image.sh
+```
+
+生产 GPU 镜像必须使用 Buildx：它会向 Harbor 推送标准 OCI manifest，避免旧 Docker
+builder 在大镜像上出现“本地构建成功、远端节点无法拉取”的 manifest 兼容性问题。构建机
+已安装 Buildx；如新建构建机，先执行 `docker buildx version` 确认可用。
+
+构建完成后更新目标 Profile：
+
+- `backend.image.tag`、`frontend.image.tag` 与 `spkRayjobRelease.image.tag` 使用新 tag；
+- `backend.workspaceImage`、`backend.sourceMaterializerImage` 使用输出的 digest；
+- 生产 Profile 还要填写 API/Portal 的 `image.digest` 并保留
+  `release.requireImageDigests=true`。
+
+Profile 是审阅对象：将环境 Profile 与代码一并提交到内部 Git，或由 GitOps 仓库
+维护。不要把数据库 URL、AK/SK 或管理员密码放入其中。
+
+## 4. 原子升级与验收
+
+首次安装时，先在构建机的受保护目录准备 Secret 输入；日常升级已经存在的环境时跳过这一小节。模板不含真实凭据，填写后不得提交到 Git：
+
+```bash
+install -d -m 700 /secure/ray-platform
+cp deploy/secrets.env.example /secure/ray-platform/production.env
+chmod 600 /secure/ray-platform/production.env
+vi /secure/ray-platform/production.env
+
+bash ops/platform/bootstrap-secrets.sh \
+  --profile deploy/profiles/vke-cpu-ha.yaml \
+  --env-file /secure/ray-platform/production.env
 ```
 
 ```bash
-kubectl get nodes -L accelerator && kubectl get crd | grep -E 'ray|kueue' && helm list -A
+cd /opt/guofeng/vke-cluster/ray-platform
+
+# 首次部署，或专用 ALB 被重建后执行一次；它会创建/认领私网 ALB，待其 Running 后再创建 IngressClass。
+bash ops/platform/bootstrap-alb.sh --profile deploy/profiles/vke-cpu-ha.yaml --timeout 15m
+
+bash ops/platform/preflight.sh --profile deploy/profiles/vke-cpu-ha.yaml
+bash ops/platform/deploy.sh --profile deploy/profiles/vke-cpu-ha.yaml --verify-fsx-irsa --timeout 15m
+bash ops/platform/verify.sh --profile deploy/profiles/vke-cpu-ha.yaml
 ```
 
-要点：
-- 训练节点必须有 `accelerator=nvidia-rtx-4090` 标签，Ray worker 的 nodeSelector 依赖它。
-- VCI 虚拟节点（`type=virtual-kubelet`）会上报上千张弹性 GPU，那是购买上限不是物理卡，平台已在算力统计中排除。
-- 每个租户 namespace 需要一个 LocalQueue 绑定到 `cluster-gpu-queue`；提交任务时后端会自动创建缺失的 LocalQueue。
-
----
-
-## 1. 本地校验（推送前必做）
-
-```bash
-cd backend && gofmt -l . && go vet ./... && go test ./...
-```
-
-```bash
-cd frontend && npm ci && npm run build
-```
-
-两条都必须 exit 0。当前 CI（`.github/workflows/ci.yml`）只构建镜像、不跑这两步，所以这一步目前只能靠人工把关。
-
----
-
-## 2. 同步代码到构建机
-
-```bash
-rsync -az --delete -e "ssh -i ~/.ssh/qomolo-desktop.pem" --exclude node_modules --exclude dist --exclude .git --exclude '*.orig' --exclude '*.bak' ./ root@14.103.49.106:/opt/guofeng/vke-cluster/ray-platform/
-```
-
----
-
-## 3. 构建并推送镜像
-
-```bash
-cd /opt/guofeng/vke-cluster/ray-platform && BUILD_TARGETS=backend,frontend IMAGE_TAG=dev-$(date -u +%Y%m%d-%H%M%S) PUSH_IMAGE=true bash build-image.sh
-```
-
-`build-image.sh` 的关键参数：
-
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `REGISTRY` | `registry.cn-shanghai.aliyuncs.com/ashersu` | 目标仓库 |
-| `BUILD_TARGETS` | `all` | `backend,frontend,source-materializer,test-training` |
-| `IMAGE_TAG` | `test-<UTC时间戳>` | 生产请用不可变 tag 或 digest |
-| `PUSH_IMAGE` | `false` | 默认只构建不推送 |
-| `DRY_RUN` | `false` | 只打印将要执行的命令 |
-
-脚本结束会打印每个镜像的 `@sha256` digest。`backend.workspaceImage` 和 `backend.sourceMaterializerImage` **必须**填 digest —— 后端的 `ValidatePinnedImage` 会拒绝可变 tag。
-
----
-
-## 4. Helm 部署
-
-保留现有 values 再覆盖镜像 tag，避免手滑丢配置：
-
-```bash
-helm -n ray-train-platform get values ray-platform -o yaml > /tmp/cv.yaml
-```
-
-```bash
-helm upgrade ray-platform ./helm/ray-train-platform -n ray-train-platform -f /tmp/cv.yaml --set backend.image.tag=<TAG> --set frontend.image.tag=<TAG> --wait --timeout 5m
-```
-
-回滚：
-
-```bash
-helm -n ray-train-platform rollback ray-platform
-```
-
-migrations 由 `migrations-job.yaml` 在 API 滚动更新前执行；migration 失败时 Helm 会中止，不会把新 API 推上去。
-
----
-
-## 5. 部署后验证
-
-```bash
-kubectl -n ray-train-platform get pods && curl -s http://172.28.0.167:31113/api/v1/me && curl -s http://172.28.0.167:31113/api/v1/cluster/topology
-```
-
-预期：
-- 三个 Pod 全部 `Running`。
-- `/api/v1/me` 返回后端解析出的身份与租户（demo 模式下是 `local` / `authType: demo`）。
-- `/api/v1/cluster/topology` 的 `totalGpus` 等于物理卡数，不含 VCI 弹性配额。
-
-本机预览 Portal：
-
-```bash
-ssh -i ~/.ssh/qomolo-desktop.pem -N -L 31113:172.28.0.167:31113 root@14.103.49.106
-```
-
-然后浏览器打开 <http://127.0.0.1:31113>。
-
----
-
-## 6. 登录方式
-
-平台支持两种登录，可以同时开启，互不依赖：
-
-**本地账号（默认开启）** —— 不需要 Keycloak，开箱即可测试。
-
-首次部署时，如果 `local_users` 表为空且配置了 `BOOTSTRAP_ADMIN_PASSWORD`，后端会自动创建一个 SuperAdmin。之后重启不会覆盖已有账号，也不会重置密码。
-
-```bash
-kubectl -n ray-train-platform create secret generic ray-platform-bootstrap-admin --from-literal=BOOTSTRAP_ADMIN_PASSWORD='<设置一个强密码>'
-```
-
-相关 values：
-
-| 键 | 默认值 | 说明 |
-|---|---|---|
-| `backend.localAuth.enabled` | `true` | 关闭后 `/api/v1/auth/login` 返回 404 |
-| `backend.localAuth.sessionHours` | `12` | 会话有效期 |
-| `backend.localAuth.bootstrapUsername` | `admin` | 首个管理员用户名 |
-| `backend.localAuth.bootstrapTenant` | `local` | 首个管理员所属租户 |
-| `backend.localAuth.bootstrapSecret` | `ray-platform-bootstrap-admin` | 留空则不创建 |
-
-会话令牌是 `rls_` 前缀的不透明令牌，数据库只保存 HMAC 摘要（与 PAT 同一套构造，共用 `PAT_PEPPER`）。登录接口对同一用户名连续失败 5 次会锁定 5 分钟，且对不存在的用户也会走完 bcrypt 比对，避免用响应时间枚举账号。
-
-**企业 SSO（Keycloak/OIDC）** —— 设置 `backend.oidcRequired=true` 与 `frontend.runtimeConfig.authRequired=true` 后，登录页会出现 SSO 按钮。三种令牌按前缀分发：`rls_` 本地会话、`rpt_` 个人访问令牌、其余按 OIDC 校验。
-
-## 7. 租户 namespace 的前置资源
-
-训练 Pod 跑在租户 namespace（`tenant-<租户ID>`），不是平台 namespace。以下资源必须在租户 namespace 中存在，否则 Pod 会停在 `CreateContainerConfigError`：
-
-```bash
-kubectl -n tenant-<租户ID> create secret generic tos-credentials --from-literal=AWS_ACCESS_KEY_ID='<AK>' --from-literal=AWS_SECRET_ACCESS_KEY='<SK>'
-```
-
-RayJob 渲染器以 `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` 这两个键名注入环境变量，和平台自身读取 TOS 用的 `access-key` / `secret-key` 键名不同，同一个 Secret 里两套键都要有。
-
-LocalQueue 由后端在提交任务时自动创建并绑定到 `kueue.clusterQueueName`，不需要手工建。
-
-## 8. 扩容：从 1 卡换成 3 台 8 卡
-
-**不需要重新部署平台，也不需要重新构建镜像、更不需要手工改 Kueue 配额。** 正常情况下扩容就是一条 `kubectl label`。
-
-### 8.1 给新节点打标签
-
-Ray Pod 靠这个标签落到训练池，Kueue 的 ResourceFlavor 也用同一个标签：
-
-```bash
-kubectl label node <node-1> <node-2> <node-3> accelerator=nvidia-rtx-4090 --overwrite
-```
-
-如果新机器不是 4090，改用别的标签值，并同步改 `training.nodeSelector` 与 ResourceFlavor，两边必须一致。
-
-### 8.2 Kueue 配额会自动跟上
-
-**不需要手工改配额。** 控制器每 5 秒把 ClusterQueue 的 `nominalQuota` 对齐到「带训练标签且 Ready 的节点」的 allocatable 总和，打完标签一个周期内就生效：
-
-```bash
-kubectl get clusterqueue cluster-gpu-queue -o jsonpath='{.spec.resourceGroups[0].flavors[0].resources}'
-```
-
-日志里会有一行 `kueue quota synced from training pool: 3 nodes, 24 GPUs, 192 cores`。
-
-为什么需要平台来做：Kueue 的 `nominalQuota` 是 **required 的静态字段**，CRD 文档明确写着它「应当代表集群中可用于运行任务的资源」，也就是由运维负责维护，Kueue 本身**没有任何容量发现机制**。节点加入并打标签只让 K8s 可以调度、让 ResourceFlavor 能匹配，准入预算不会自己变。
-
-安全护栏：
-- 统计**排除** serverless 虚拟节点（VCI），它们上报的上千张卡是购买上限不是硬件
-- 统计**排除** NotReady 节点
-- 匹配不到任何节点时**拒绝写入**，保留上一次的预算并打日志，避免误清零把所有任务卡在 `QUEUED`
-- 配额已经正确时不发起写请求，不会churn API server
-
-想手工分配一个更小的预算（例如 24 卡只给团队 8 卡），关掉自动同步：
-
-```bash
-helm upgrade ray-platform ./helm/ray-train-platform -n ray-train-platform -f <values> --set kueue.autoQuota=false --wait
-```
-
-### 8.3 更新 Helm values（可选）
-
-只有在改了节点标签时才需要，两边必须一致：
-
-```bash
-helm upgrade ray-platform ./helm/ray-train-platform -n ray-train-platform -f <你的 values> --set training.nodeSelector="accelerator=nvidia-rtx-4090" --wait
-```
-
-ResourceFlavor 的 `nodeLabels` 也要同步改成一样的值。
-
-### 8.4 每个租户 namespace 补 Secret
-
-新租户或新 namespace 都要有 `tos-credentials`（见第 7 节），否则 Pod 停在 `CreateContainerConfigError`。
-
-### 8.5 替换节点：踢掉旧机器，换上新机器
-
-平台自身（API / 前端 / PostgreSQL）已经不再绑定任何具体节点，可以在真实节点之间自由漂移，同时通过 nodeAffinity 排除 serverless 虚拟节点（VCI 挂不了 EBS，也拉不到内部镜像源）。
-
-PostgreSQL 使用 `ebs-ssd` 上的 PVC（[k8s/base/postgres.yaml](../k8s/base/postgres.yaml)），是 StatefulSet 而非 Deployment —— Deployment 配 ReadWriteOnce 卷做滚动更新会因为新旧 Pod 抢同一块盘而死锁。
-
-**替换前务必先备份**，即使有 PVC：
-
-```bash
-kubectl -n ray-train-platform exec postgres-0 -- pg_dump -U platform -d platform --clean --if-exists > backup-$(date +%Y%m%d-%H%M%S).sql
-```
-
-然后逐台替换（一次一台，让 PVC 有时间在新节点重新挂载）：
-
-```bash
-kubectl cordon <旧节点> && kubectl drain <旧节点> --ignore-daemonsets --delete-emptydir-data --timeout=10m
-```
-
-确认平台 Pod 都在新节点上跑起来、数据还在，再摘节点：
-
-```bash
-kubectl -n ray-train-platform get pods -o wide && kubectl -n ray-train-platform exec postgres-0 -- psql -U platform -d platform -c 'select count(*) from training_jobs;'
-```
-
-```bash
-kubectl delete node <旧节点>
-```
-
-> EBS 卷是可用区绑定的。新机器必须和旧机器在**同一个可用区**（当前是 `cn-shanghai-a`），否则 `postgres-0` 会一直 Pending，报无法挂载卷。跨可用区替换需要先 dump、删 PVC、在新可用区重建再 restore。
-
-### 8.6 单任务规模上限
-
-三台机器时默认值正好够用；**加到第 4 台及以上时**要一起抬高，否则单个任务最多还是只能用 3 worker：
-
-```bash
-helm upgrade ray-platform ./helm/ray-train-platform -n ray-train-platform -f <values> --set training.maxWorkerReplicas=6 --set training.maxTotalGPUs=48 --wait
-```
-
-| 值 | 默认 | 含义 |
-|---|---|---|
-| `training.maxWorkerReplicas` | 3 | 单任务最多几个 worker |
-| `training.maxGPUsPerWorker` | 8 | 每个 worker 最多几卡 |
-| `training.maxTotalGPUs` | 24 | 单任务总卡数上限 |
-
-### 8.7 扩容后回归验证
-
-```bash
-API_URL=http://<portal> PLATFORM_PASSWORD=<密码> IMAGE=<镜像@sha256:...> python3 scripts/submit_smoke_job.py
-```
-
-再提交一个 3 worker × 8 卡的 24 卡任务，确认 Kueue 能一次性准入（gang scheduling），并实测多机 NCCL 带宽——这是 4090 集群最需要提前验证的一项，机间没有 RDMA 时通信会成为瓶颈。
-
-### 8.8 完整检查清单
-
-| 步骤 | 必须 | 说明 |
-|---|---|---|
-| 新节点打 `accelerator` 标签 | ✅ | 唯一必做的一步 |
-| 新节点与 PG 卷同可用区 | ✅ | 否则 postgres-0 Pending |
-| 备份数据库 | ✅ | 替换节点前 |
-| Kueue 配额 | ❌ 自动 | 控制器按标签节点自动对齐 |
-| 重建镜像 / 改 Helm | ❌ | 除非要抬高单任务规模上限 |
-| 租户 namespace 的 `tos-credentials` | ⚠️ | 只在新增租户时 |
-| 抬高 `training.max*` | ⚠️ | 只在超过 3 台机器时 |
-
-## 9. 正式版本发布流程
-
-调试完成后按语义化版本发布，不再用 `dev-*` 标签。
-
-### 9.1 提交并打标签
-
-```bash
-git add -A && git commit -m "feat: <变更说明>" && git tag -a v1.0.0 -m "V1 首个生产版本" && git push origin main --tags
-```
-
-### 9.2 构建带版本号的镜像
-
-```bash
-cd /opt/guofeng/vke-cluster/ray-platform && BUILD_TARGETS=all IMAGE_TAG=v1.0.0 PUSH_IMAGE=true bash build-image.sh
-```
-
-脚本结束会打印每个镜像的 `@sha256` digest。**记录下来**：
-
-- `backend.image.tag` / `frontend.image.tag` 可以用 `v1.0.0`
-- `backend.workspaceImage` 和 `backend.sourceMaterializerImage` **必须**填 digest，后端的 `ValidatePinnedImage` 会拒绝可变 tag
-
-### 9.3 用版本号部署
-
-```bash
-helm upgrade ray-platform ./helm/ray-train-platform -n ray-train-platform -f values-prod.yaml --set backend.image.tag=v1.0.0 --set frontend.image.tag=v1.0.0 --wait --timeout 5m
-```
-
-### 9.4 记录发布信息
-
-每次发布把这些写进变更记录，便于回溯：集群与组件版本（VKE / KubeRay / Kueue）、四个镜像的 digest、GPU 驱动与 CUDA 版本、NCCL 实测带宽、PostgreSQL 备份恢复验证结果。
-
-回滚：
-
-```bash
-helm -n ray-train-platform rollback ray-platform
-```
-
----
-
-## 10. 从 demo 模式切到生产模式
-
-当前部署是 `appEnv=development` + `demoMode=false` + `oidcRequired=false`，用本地账号登录。切生产需要改这几项：
+`--verify-fsx-irsa` 会创建两个隔离的临时前缀挂载探针并在退出时自动删除。新加入的 GPU
+节点第一次使用 TOS 时，FSX 的 TOS FUSE 守护进程可能发生一次冷启动；探针会在首个有界
+等待窗口失败后自动重试一次。若第二次仍失败，不要跳过门禁：先分别验证节点对企业 DNS
+`192.168.110.61`、`192.168.111.63` 的 TOS/STS 解析，再检查对应节点的 `fsx-agent` 与
+`csi-fsx-node` 事件。只有隔离探针通过后才允许发布或接纳该节点承载训练。
+
+生产入口是私网 HTTPS `https://raytrain.wellspiking.ai`。ALB、IngressClass 与证书中心
+证书属于共享网络层，由 `bootstrap-alb.sh` 在 Helm 之外一次性管理；Helm 只升级平台
+工作负载和路由。Frontend、Backend 与 spk-rayjob Release 全部保持 `ClusterIP`，不创建
+用户可访问的 NodePort；ALB 仅通过 Ingress 路由到这些集群内部服务。
+
+当前企业 DNS 由 IDC Ingress 统一承载：`raytrain.wellspiking.ai` 应解析到 IDC Ingress，
+再由其中的 `raytrain-vke-proxy` 以 HTTPS、保留 Host/SNI 的方式转发至 VKE 私网 ALB。
+不要把用户 DNS 直接指向 VKE ALB 地址，也不要为 Frontend 或 spk-rayjob 增加 NodePort。
+IDC 侧代理对象是独立共享网络资源，变更 ALB 或证书后必须一并复验该代理。
+原生 Ray `--working-dir` 会上传代码包，IDC Nginx Ingress 必须至少包含：
 
 ```yaml
-backend:
-  appEnv: production
-  demoMode: false
-  oidcRequired: true
-  oidc:
-    issuerURL: https://<真实 Keycloak>/realms/ai
-    clientID: ray-training-platform
-    audience: ray-training-platform-api
-frontend:
-  runtimeConfig:
-    authRequired: true
-    keycloakURL: https://<真实 Keycloak>
-    keycloakRealm: ai
-    keycloakClientID: ray-training-platform
-ingress:
-  enabled: true          # 私网 ALB，替代 NodePort
+metadata:
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    nginx.ingress.kubernetes.io/upstream-vhost: "raytrain.wellspiking.ai"
+    nginx.ingress.kubernetes.io/proxy-ssl-server-name: "on"
+    nginx.ingress.kubernetes.io/proxy-ssl-name: "raytrain.wellspiking.ai"
+    nginx.ingress.kubernetes.io/proxy-body-size: "2g"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
 ```
 
-`config.Load()` 在 `APP_ENV=production` 且 `DEMO_MODE=true` 时会直接拒绝启动，这是有意的保护。
+缺少 `proxy-body-size` 时，小请求和 `/healthz` 仍会正常，但实际代码目录上传会返回
+`413 Request Entity Too Large`。不要用 NodePort 绕过这个问题。
 
-Keycloak 侧需要：public client、Authorization Code + PKCE(S256)、redirect URI 精确包含 `/silent-check-sso.html`、realm role `SuperAdmin`/`TenantAdmin`/`Engineer`、group `platform/tenants/<tenant-id>`、audience 与 `OIDC_AUDIENCE` 一致。详见 [CLUSTER_DEPLOYMENT_GUIDE.md](CLUSTER_DEPLOYMENT_GUIDE.md) 第 1.4 节。
+证书由火山证书中心的 `cert-8fbe7f999bc3478483e8c8838c73b2b0` 绑定到专用 ALB；不要
+将 PEM 私钥复制进 Git 或 Kubernetes Secret。DNS 生效后，发布机验证：
+
+```bash
+curl -fsS https://raytrain.wellspiking.ai/healthz
+curl -fsS https://raytrain.wellspiking.ai/downloads/spk-rayjob/SHA256SUMS
+```
+
+Ray 2.35 Jobs API 的版本响应必须把协议版本和 Ray 版本分开。发布后检查：
+
+```bash
+curl -fsS https://raytrain.wellspiking.ai/ray/api/version | jq .
+```
+
+正确形状为 `version: "4"`、`ray_version: "2.35.0"`，并包含字符串字段
+`ray_commit`、`session_name`。如果错误地把 `version` 也设成 `2.35.0`，任务会先被接收，
+随后官方 CLI 因 `int("2.35.0")` 失败而返回非零退出码，造成“提交成功但本地显示失败”。
+
+CLI 发布文件必须用标准相对文件名生成校验表。构建机验收：
+
+```bash
+mkdir -p /tmp/spk-rayjob-install && cd /tmp/spk-rayjob-install
+curl -fLO https://raytrain.wellspiking.ai/downloads/spk-rayjob/spk-rayjob-linux-amd64
+curl -fLO https://raytrain.wellspiking.ai/downloads/spk-rayjob/SHA256SUMS
+grep 'spk-rayjob-linux-amd64$' SHA256SUMS | sha256sum -c -
+```
+
+如需验证完整单卡训练：
+
+```bash
+bash ops/platform/verify.sh \
+  --profile deploy/profiles/vke-cpu-ha.yaml --smoke \
+  --api-url https://raytrain.wellspiking.ai \
+  --smoke-image harbor.wellspiking.ai/guofeng.su/ray-test@sha256:<digest> \
+  --env-file /secure/ray-platform/vke-test.env
+```
+
+### 三种提交入口验收
+
+先在构建机完成 `spk-rayjob login`，再串行执行，避免验收任务抢占所有 GPU：
+
+```bash
+IMAGE='harbor.wellspiking.ai/guofeng.su/ray-train-pytorch@sha256:db39733e3e5d301547286dd8f532dd2c78c16c4e0806e3e2096189d0696e5288'
+
+# 1. spk-rayjob：日常外部开发机入口
+cd examples/distributed-demo
+spk-rayjob submit --dir . --image "$IMAGE" \
+  --entrypoint 'python storage_gpu_smoke.py' \
+  --input-space public \
+  --input-path bevfusion/fz-3dod-v1/platform-validation/annotations/fz-0429-platform-smoke-128 \
+  --output-path acceptance/manual-spk --watch
+
+# 2. 官方 Ray 2.35 working-dir 入口
+cd ../..
+bash scripts/e2e_native_ray_submit.sh --image "$IMAGE"
+
+# 3. 与网页完全相同的“上传工作区 → 快照 → Portal JobSpec”入口
+bash scripts/e2e_portal_submit.sh --image "$IMAGE"
+```
+
+2026-08-21 使用 `guofeng.su` 完成两个分支 × 三个入口共六个 `2×8 GPU` 任务；六项均为 `SUCCEEDED`。随后最终 BEVFusion r9 运行镜像
+`harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion@sha256:66b906d062870131121b07e4455783dc5f2913e285b29fdbb2cf1decc100f553`
+又通过代表性 `2×8` 回归任务 `job-56fbc0b27e9a5b5bc4491023`。这些任务确认代码随任务上传、Kueue 准入、KubeRay 自动建群、跨两台 RTX 4090 节点的 NCCL/DDP、公共数据读取、Loki 日志、验证和个人 checkpoint。完整任务 ID 见 [BEVFusion 代码改造与验收](BEVFUSION_CODE_CHANGES.md)。
+
+revision 69 另用短时 1 卡任务验收了 RayCluster 自动创建和 Dashboard 访问链：Head Service 保持 `ClusterIP`，签名链接交换会话返回 302，Dashboard 页面、静态资源和 Ray 版本 API 均返回 200，写请求返回 405。验收任务已停止并清理 RayCluster。
+
+revision 71 统一公共数据根为 `ray-train/public/`，校准 `local` 租户配额为当前物理容量 16 GPU，并实测调试 Worker 只暴露 `/mnt/storage/me`、`/mnt/storage/team`、`/mnt/storage/public`。个人目录可写，团队与公共目录只读。历史终态任务使用 `archived_at` 软归档从默认列表隐藏，数据库审计记录和 Loki 日志不做物理删除。
+
+## 5. 共享监控组件发布
+
+首次部署、升级 Prometheus Operator 或更新其固定镜像时，使用独立流程：
+
+```bash
+cd /opt/guofeng/vke-cluster/ray-platform
+bash ops/observability/prometheus-operator/deploy.sh
+```
+
+该发布包含 2 副本 Prometheus、2 副本 Alertmanager、跨 CPU 节点的 2 副本 Grafana，
+每个 Prometheus PVC 仅为 50Gi。它会实际查询 `DCGM_FI_DEV_GPU_UTIL`，只有 GPU
+指标链路可用才返回成功。详细说明与旧临时栈清理限制见
+[Prometheus Operator 运维说明](../ops/observability/prometheus-operator/README.md)。
+
+MLflow 首次安装或自身版本升级使用：
+
+```bash
+cd /opt/guofeng/vke-cluster/ray-platform
+bash ops/mlflow/deploy.sh
+bash ops/mlflow/verify.sh
+```
+
+MLflow 保持 ClusterIP。普通训练 Pod 只访问写入网关，用户从平台“实验中心”查看已授权运行；不要单独创建 MLflow Ingress。详细拓扑、数据库、TOS Artifact 和 NetworkPolicy 约束见 [MLflow 运维说明](../ops/mlflow/README.md)。
+
+## 6. 扩容与生产发布
+
+新 4090 节点加入集群后，先验证 NVIDIA device plugin、网络、IDC 只读 NFS 挂载和
+本地缓存盘，再统一打 Profile 约定的标签，例如：
+
+```bash
+kubectl label node <gpu-node-a> <gpu-node-b> accelerator=nvidia-rtx-4090 --overwrite
+```
+
+然后更新生产 Profile 的 `training.max*` 与 Kueue 配额，执行同一套
+`preflight → deploy → verify`。生产数据库必须为外部/托管 HA PostgreSQL，Portal
+与 API 维持至少两个副本、HPA、PDB 和软反亲和。
+
+### 启用 GPU 节点 NVMe 缓存
+
+当前生产 Profile 中该能力关闭，因为集群尚无 `ray-cache-local` StorageClass。不要只把 `enabled` 改为 `true`；顺序必须是：
+
+1. 在每个 GPU 节点确认 `/data1`、`/data2` 为独立可丢弃缓存盘。
+2. 安装经评审的 VKE 本地 CSI/LVM 驱动，建立 `ray-cache-local`（RWO、`WaitForFirstConsumer`、Delete）。这一步包含集群级 RBAC，必须单独审批。
+3. 在两台 GPU 节点各创建一个临时 PVC/Pod，验证定位、写入、删除和容量回收。
+4. 更新 Profile：
+
+```yaml
+training:
+  localCache:
+    enabled: true
+    storageClass: ray-cache-local
+    size: 200Gi
+    mountPath: /mnt/cache
+```
+
+5. 提交 1×1 smoke，确认 worker 中有 `PLATFORM_CACHE_PATH=/mnt/cache`，Ray `temp-dir` 和 object spilling 位于该卷，任务删除后临时 PVC 自动回收。
+
+该能力不改变数据读写契约：数据从 TOS/IDC 读，结果写 `PLATFORM_OUTPUT_PATH`。
+
+### 公共数据根目录迁移
+
+公共根统一为 `tos://shanghai-data-transfer/ray-train/public/`，Profile 必须保持 `dataSpaces.publicRoot: ray-train/public`。数据按 `<dataset>/<version>/` 发布，部署时使用 FSX IRSA 前缀验收；网页、`spk-rayjob`、原生 Ray 和调试环境都必须读取这一个根，不保留双根选择。
+
+切换用户 TOS 数据空间前，必须完成 FSX CSI 组件级 IRSA 前缀隔离验收；未验收时
+保持 `dataSpaces.enabled=false`。验收需要 FSX CSI 的 `fsx-agent` 已绑定具备目标桶最小读写权限的 IAM 角色，然后在部署机执行：
+
+```bash
+KUBECONFIG=/root/.kube/config \
+FSX_TOS_SERVER=tos-cn-shanghai.ivolces.com \
+FSX_TOS_REGION=cn-shanghai \
+FSX_TOS_BUCKET=shanghai-data-transfer \
+TRAINING_NODE_SELECTOR=accelerator=nvidia-rtx-4090 \
+SMOKE_IMAGE=<可在训练节点拉取的调试镜像@sha256:...> \
+bash ops/storage/shanghai-data-transfer/41-verify-irsa-prefix-mount.sh
+```
+
+只有输出 `IRSA prefix mount contract verified` 后，才在 Profile 中设置：
+
+```yaml
+dataSpaces:
+  enabled: true
+  mountCapacity: 1Ti
+  fsxVolumeAttributes:
+    type: TOS
+    server: tos-cn-shanghai.ivolces.com
+    region: cn-shanghai
+    bucket: shanghai-data-transfer
+```
+
+首次启用硬配额还需设置 `personalStorage.objectSetQuota.enabled: true`，然后由 SuperAdmin 在 Portal 确认一次 ObjectSet 目录初始化。该确认和 FSX 挂载验收相互独立，均不会向用户 Pod 注入静态 TOS 凭据。IDC NFS 使用 `idcDataSpaces` 的三个管理员登记导出：
+它和 TOS 验收独立，只有节点到 NFS 的连通性、权限和只读挂载已验收后才可启用。不要
+将 SSHFS、节点个人目录或旧的 `storage.existingClaim` 作为平台数据空间。
+
+### IRSA 排障：`HeadBucket` 失败
+
+FSX CSI 显示 `CREDENTIALS_TYPE=IRSA` 只说明组件已选择角色，**不代表该角色已经能访问目标桶**。如果前缀验收报 `HeadBucket failed`，在 IAM 控制台核对以下两层授权都授予了绑定到 csi-fsx 的角色，而不只是某个 AK 所属的 IAM 用户：
+
+1. 角色身份策略至少允许 `tos:HeadBucket`、`tos:ListBucket`、`tos:GetObject`、`tos:PutObject`、`tos:DeleteObject`、`tos:AbortMultipartUpload`，范围覆盖目标桶与 `ray-train/*`。
+2. 如果该桶使用了 Bucket Policy，`Principal` 也必须包含**该角色**；只包含 AK 所属用户不会让 IRSA 角色继承权限。
+
+角色的 OIDC 信任关系必须将 `oidc:aud` 固定为 `sts.volcengine.com`，`oidc:iss` 精确等于集群供应商 URL，`oidc:sub` 精确为 `system:serviceaccount:kube-system:fsx-agent`。完成修改后重新执行前缀验收，不要用 TOS AK/SK Secret 绕过失败。
+
+### IRSA 排障：节点 DNS 正常但 FSX agent 无法解析 TOS
+
+如果 GPU 节点自身可以解析并访问私网 TOS，而某个 `fsx-agent` 仍在日志中出现解析失败或 TOS 挂载超时，先不要改成静态 AK/SK，也不要修改节点 DNS。该现象通常是 agent 已缓存旧的解析状态。确认该 GPU 节点没有用户运行中的训练或工作区后，仅重启受影响节点上的 `fsx-agent`，再重新执行前缀验收。只有 `IRSA prefix mount contract verified` 通过后，才能恢复该节点承接用户任务。
+
+## 7. 回滚
+
+```bash
+helm -n ray-train-platform rollback ray-platform
+```
+
+Helm 回滚不回退数据库 schema。数据库恢复走部署前的 `backup-state.sh` 产物；TOS、
+Loki 与 IDC 数据不属于平台回滚范围。

@@ -23,6 +23,7 @@ type WorkspaceRenderOptions struct {
 	IDCExistingClaim string
 	IDCMountPath     string
 	JupyterBasePath  string
+	DataMounts       DataMountPlan
 }
 
 func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderOptions) (*unstructured.Unstructured, error) {
@@ -32,11 +33,14 @@ func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderO
 	if workspace.Namespace == "" || !isDNSLabel(workspace.Namespace) {
 		return nil, fmt.Errorf("workspace namespace must be a lowercase DNS label")
 	}
-	if workspace.GPUCount < 1 || workspace.GPUCount > 1 {
-		return nil, fmt.Errorf("dev workspace GPU count must be 1 in V1")
+	if workspace.GPUCount < 1 || workspace.GPUCount > 8 {
+		return nil, fmt.Errorf("dev workspace GPU count must be between 1 and 8")
 	}
 	if err := domain.ValidatePinnedImage(options.Image); err != nil {
 		return nil, fmt.Errorf("workspace image: %w", err)
+	}
+	if err := options.DataMounts.Validate(); err != nil {
+		return nil, fmt.Errorf("workspace data mounts: %w", err)
 	}
 	rayVersion := options.RayVersion
 	if rayVersion == "" {
@@ -49,17 +53,34 @@ func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderO
 	volumes := []any{
 		map[string]any{"name": "dshm", "emptyDir": map[string]any{"medium": "Memory", "sizeLimit": "16Gi"}},
 	}
-	if options.IDCExistingClaim != "" {
+	useLegacyIDC := options.IDCExistingClaim != "" && !options.DataMounts.hasGovernedIDC()
+	if useLegacyIDC {
 		volumes = append(volumes, map[string]any{"name": "idc-storage", "persistentVolumeClaim": map[string]any{"claimName": options.IDCExistingClaim}})
 	}
 	headMounts := []any{map[string]any{"name": "dshm", "mountPath": "/dev/shm"}}
 	workerMounts := []any{map[string]any{"name": "dshm", "mountPath": "/dev/shm"}}
-	if options.IDCExistingClaim != "" {
-		headMounts = append(headMounts, map[string]any{"name": "idc-storage", "mountPath": mountPath})
-		workerMounts = append(workerMounts, map[string]any{"name": "idc-storage", "mountPath": mountPath})
+	if useLegacyIDC {
+		headMounts = append(headMounts, map[string]any{"name": "idc-storage", "mountPath": mountPath, "readOnly": true})
+		workerMounts = append(workerMounts, map[string]any{"name": "idc-storage", "mountPath": mountPath, "readOnly": true})
 	}
-	securityContext := map[string]any{"seccompProfile": map[string]any{"type": "RuntimeDefault"}}
+	volumesForPlan := volumes
+	headMounts, volumesForPlan = appendDataMountPlan(headMounts, volumesForPlan, options.DataMounts)
+	workerMounts, _ = appendDataMountPlan(workerMounts, volumes, options.DataMounts)
+	// The Ray images execute as uid 1000. fsGroup makes PVC-backed workspace
+	// subPaths writable to that non-root user while keeping the Pod otherwise
+	// restricted; it also makes fresh emptyDir files usable from Jupyter/VS Code.
+	securityContext := map[string]any{"seccompProfile": map[string]any{"type": "RuntimeDefault"}, "fsGroup": int64(1000), "fsGroupChangePolicy": "OnRootMismatch"}
 	containerSecurity := map[string]any{"allowPrivilegeEscalation": false, "capabilities": map[string]any{"drop": []any{"ALL"}}}
+	// Editors start in the persistent personal workspace as soon as it is
+	// mounted. Without a personal mount, retain the image user's home as a
+	// clearly temporary fallback instead of pretending /workspace is durable.
+	interactiveRoot := "/home/ray"
+	if options.DataMounts.Personal != nil {
+		interactiveRoot = domain.WorkspaceMountPath
+	}
+	interactiveTools := "mkdir -p /tmp/ray-platform; " +
+		"nohup code-server --bind-addr 0.0.0.0:8443 --auth none --disable-telemetry " + interactiveRoot + " >/tmp/ray-platform/code-server.log 2>&1 & " +
+		"nohup jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --ServerApp.token='' --ServerApp.base_url='" + strings.TrimRight(options.JupyterBasePath, "/") + "/' --ServerApp.root_dir='" + interactiveRoot + "' >/tmp/ray-platform/jupyter.log 2>&1 &"
 	head := map[string]any{
 		"rayStartParams": map[string]any{"dashboard-host": "0.0.0.0", "num-gpus": "0"},
 		"template": map[string]any{"spec": map[string]any{
@@ -69,18 +90,14 @@ func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderO
 			"containers": []any{map[string]any{
 				"name": "ray-head", "image": options.Image, "imagePullPolicy": "IfNotPresent",
 				"command": []any{"/bin/sh", "-c"},
-				"args": []any{"ray start --head --dashboard-host=0.0.0.0 --num-gpus=0 & " +
-					"code-server --bind-addr 0.0.0.0:8443 --auth none --disable-telemetry /home/ray & " +
-					"exec jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --ServerApp.token='' --ServerApp.base_url='" + strings.TrimRight(options.JupyterBasePath, "/") + "/'"},
+				"args":    []any{"exec ray start --head --dashboard-host=0.0.0.0 --num-gpus=0 --block"},
 				"ports": []any{
-					map[string]any{"name": "jupyter", "containerPort": int64(8888)},
-					map[string]any{"name": "vscode", "containerPort": int64(8443)},
 					map[string]any{"name": "dashboard", "containerPort": int64(8265)},
 				},
 				"resources":    map[string]any{"requests": map[string]any{"cpu": "4", "memory": "16Gi"}, "limits": map[string]any{"cpu": "8", "memory": "32Gi"}},
 				"volumeMounts": headMounts, "securityContext": containerSecurity,
 			}},
-			"volumes": volumes,
+			"volumes": volumesForPlan,
 		}},
 	}
 	if pullSecrets := renderImagePullSecrets(options.ImagePullSecrets); len(pullSecrets) > 0 {
@@ -99,11 +116,16 @@ func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderO
 			"securityContext":              securityContext,
 			"containers": []any{map[string]any{
 				"name": "ray-worker", "image": options.Image, "imagePullPolicy": "IfNotPresent",
+				"ports": []any{
+					map[string]any{"name": "jupyter", "containerPort": int64(8888)},
+					map[string]any{"name": "vscode", "containerPort": int64(8443)},
+				},
+				"lifecycle":    map[string]any{"postStart": map[string]any{"exec": map[string]any{"command": []any{"/bin/sh", "-c", interactiveTools}}}},
 				"resources":    map[string]any{"requests": map[string]any{"cpu": "4", "memory": "16Gi", "nvidia.com/gpu": strconv.Itoa(workspace.GPUCount)}, "limits": map[string]any{"cpu": "8", "memory": "32Gi", "nvidia.com/gpu": strconv.Itoa(workspace.GPUCount)}},
 				"env":          []any{map[string]any{"name": "NCCL_P2P_DISABLE", "value": "1"}, map[string]any{"name": "NCCL_IB_DISABLE", "value": "1"}},
 				"volumeMounts": workerMounts, "securityContext": containerSecurity,
 			}},
-			"volumes": volumes,
+			"volumes": volumesForPlan,
 		}},
 	}
 	if pullSecrets := renderImagePullSecrets(options.ImagePullSecrets); len(pullSecrets) > 0 {
@@ -115,7 +137,7 @@ func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderO
 	}
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": RayAPIVersion, "kind": "RayCluster",
-		"metadata": map[string]any{"name": workspace.Name, "namespace": workspace.Namespace, "labels": map[string]any{"app.kubernetes.io/managed-by": "ray-train-platform", "ray.io/dev-workspace": "true", "ray.io/workspace-id": workspace.ID, "ray.io/tenant-id": workspace.TenantID}},
+		"metadata": map[string]any{"name": workspace.Name, "namespace": workspace.Namespace, "labels": map[string]any{"app.kubernetes.io/part-of": "ray-train-platform", "app.kubernetes.io/managed-by": "ray-train-platform", "ray.io/dev-workspace": "true", "ray.io/workspace-id": workspace.ID, "ray.io/tenant-id": workspace.TenantID}},
 		"spec":     map[string]any{"rayVersion": rayVersion, "headGroupSpec": head, "workerGroupSpecs": []any{worker}},
 	}}, nil
 }
@@ -212,7 +234,7 @@ func (c *Client) EnsureWorkspaceService(ctx context.Context, namespace, clusterN
 		return fmt.Errorf("Kubernetes client is not initialized")
 	}
 	services := c.kubernetes.CoreV1().Services(namespace)
-	serviceName := clusterName + "-head-svc"
+	serviceName := clusterName + "-dev-svc"
 	existing, err := services.Get(ctx, serviceName, metav1.GetOptions{})
 	if err == nil {
 		if existing.Labels["ray.io/workspace-id"] != workspaceID {
@@ -223,9 +245,36 @@ func (c *Client) EnsureWorkspaceService(ctx context.Context, namespace, clusterN
 	if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("get workspace service: %w", err)
 	}
-	_, err = services.Create(ctx, &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: serviceName, Namespace: namespace, Labels: map[string]string{"app.kubernetes.io/managed-by": "ray-train-platform", "ray.io/workspace-id": workspaceID}}, Spec: corev1.ServiceSpec{Selector: map[string]string{"ray.io/cluster": clusterName, "ray.io/node-type": "head"}, Ports: []corev1.ServicePort{{Name: "jupyter", Port: 8888}, {Name: "vscode", Port: 8443}, {Name: "dashboard", Port: 8265}}}}, metav1.CreateOptions{})
+	_, err = services.Create(ctx, &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: serviceName, Namespace: namespace, Labels: map[string]string{"app.kubernetes.io/part-of": "ray-train-platform", "app.kubernetes.io/managed-by": "ray-train-platform", "ray.io/workspace-id": workspaceID}}, Spec: corev1.ServiceSpec{Selector: map[string]string{"ray.io/cluster": clusterName, "ray.io/node-type": "worker"}, Ports: []corev1.ServicePort{{Name: "jupyter", Port: 8888}, {Name: "vscode", Port: 8443}}}}, metav1.CreateOptions{})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create workspace service: %w", err)
+	}
+	return nil
+}
+
+// DeleteWorkspaceService removes the Service that fronts a workspace's editor
+// ports. Stopping a workspace previously deleted only the RayCluster, so every
+// stop left an endpoint-less Service behind forever.
+func (c *Client) DeleteWorkspaceService(ctx context.Context, namespace, clusterName, workspaceID string) error {
+	if c == nil || c.kubernetes == nil {
+		return fmt.Errorf("Kubernetes client is not initialized")
+	}
+	services := c.kubernetes.CoreV1().Services(namespace)
+	serviceName := clusterName + "-dev-svc"
+	existing, err := services.Get(ctx, serviceName, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("get workspace service before delete: %w", err)
+	}
+	// One workspace must never remove another's Service; that would black-hole
+	// a running editor session.
+	if workspaceID != "" && existing.Labels["ray.io/workspace-id"] != workspaceID {
+		return fmt.Errorf("refusing to delete workspace service owned by another workspace")
+	}
+	if err := services.Delete(ctx, serviceName, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete workspace service: %w", err)
 	}
 	return nil
 }

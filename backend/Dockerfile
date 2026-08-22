@@ -1,7 +1,12 @@
 # Multi-stage Dockerfile for Go backend
-ARG GO_BUILDER_IMAGE=golang:1.24-alpine3.20
+ARG GO_BUILDER_IMAGE=swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/golang:1.25-alpine@sha256:a9316ea600fe38d4527999823d67764dbd5b5ce4b4a0895266faf0134aa28264
 ARG ALPINE_RUNTIME_IMAGE=alpine:3.20
 FROM ${GO_BUILDER_IMAGE} AS builder
+
+# Some internal Go mirrors retain /usr/local/go but omit its PATH metadata.
+# Make the toolchain location explicit so builds and verification use the same
+# binary regardless of mirror image config.
+ENV PATH=/usr/local/go/bin:$PATH
 
 ARG GOPROXY=https://goproxy.cn,direct
 ARG APK_MIRROR=https://repo.huaweicloud.com/repository/alpine

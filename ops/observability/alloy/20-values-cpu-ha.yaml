@@ -1,0 +1,105 @@
+# Cluster-mode Kubernetes API log collector for the CPU control-plane pool.
+image:
+  registry: harbor.wellspiking.ai
+  repository: hub/grafana/alloy
+
+configReloader:
+  enabled: false
+
+alloy:
+  clustering:
+    enabled: true
+  enableReporting: false
+  mounts:
+    dockercontainers: false
+    varlog: false
+  extraEnv:
+    - name: LOKI_URL
+      value: http://loki-cpu-gateway.loki.svc.cluster.local/loki/api/v1/push
+  configMap:
+    content: |-
+      discovery.kubernetes "pods" {
+        role = "pod"
+      }
+
+      discovery.relabel "platform_pods" {
+        targets = discovery.kubernetes.pods.targets
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_platform_job_id"]
+          target_label  = "platform_job_id"
+          action        = "replace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_platform_tenant_id"]
+          target_label  = "platform_tenant_id"
+          action        = "replace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+          action        = "replace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+          action        = "replace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+          action        = "replace"
+        }
+      }
+
+      loki.source.kubernetes "pods" {
+        targets    = discovery.relabel.platform_pods.output
+        forward_to = [loki.write.platform.receiver]
+        clustering {
+          enabled = true
+        }
+      }
+
+      loki.write "platform" {
+        endpoint {
+          name = "loki-cpu-gateway"
+          url  = env("LOKI_URL")
+        }
+      }
+
+controller:
+  type: statefulset
+  replicas: 2
+  nodeSelector:
+    platform.wellspiking.ai/pool: control-plane
+  tolerations: []
+  podAnnotations: {}
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: alloy
+              app.kubernetes.io/instance: alloy
+          topologyKey: kubernetes.io/hostname
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: alloy
+          app.kubernetes.io/instance: alloy
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+service:
+  type: ClusterIP

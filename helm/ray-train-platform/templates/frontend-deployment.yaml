@@ -1,21 +1,31 @@
 {{- if contains "REPLACE_WITH" .Values.frontend.image.tag }}{{- fail "frontend.image.tag must be replaced with an immutable release tag or digest" }}{{- end }}
+{{- if and .Values.release.requireImageDigests (not .Values.frontend.image.digest) }}{{- fail "frontend.image.digest is required when release.requireImageDigests is true" }}{{- end }}
+{{- if and .Values.frontend.image.digest (not (regexMatch `^sha256:[0-9a-fA-F]{64}$` .Values.frontend.image.digest)) }}{{- fail "frontend.image.digest must use sha256:<64 hex>" }}{{- end }}
 {{- /* Keycloak is optional: a deployment may run on local accounts alone. It is
 only validated when the Portal is configured to require SSO. */}}
 {{- if .Values.frontend.runtimeConfig.authRequired }}
 {{- if contains "example" .Values.frontend.runtimeConfig.keycloakURL }}{{- fail "frontend.runtimeConfig.keycloakURL must point to the organization's Keycloak when authRequired is true" }}{{- end }}
 {{- end }}
+{{- $personalStorage := default (dict) .Values.personalStorage }}
+{{- $objectSetQuota := default (dict) $personalStorage.objectSetQuota }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: ray-train-frontend-runtime
   namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: portal
 data:
   runtime-config.js: |
     window.__RAY_PLATFORM_CONFIG__ = {
       authRequired: {{ .Values.frontend.runtimeConfig.authRequired }},
       keycloakURL: {{ .Values.frontend.runtimeConfig.keycloakURL | quote }},
       keycloakRealm: {{ .Values.frontend.runtimeConfig.keycloakRealm | quote }},
-      keycloakClientID: {{ .Values.frontend.runtimeConfig.keycloakClientID | quote }}
+      keycloakClientID: {{ .Values.frontend.runtimeConfig.keycloakClientID | quote }},
+      personalStorageQuotaEnabled: {{ default false $objectSetQuota.enabled }},
+      personalStorageDefaultQuota: {{ default "100Gi" $objectSetQuota.defaultQuota | quote }},
+      personalStorageMaxQuota: {{ default "10Ti" $objectSetQuota.maxQuota | quote }}
     };
 ---
 apiVersion: apps/v1
@@ -24,15 +34,24 @@ metadata:
   name: ray-train-frontend
   namespace: {{ .Values.namespace }}
   labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: portal
     app: ray-train-frontend
 spec:
   replicas: {{ .Values.frontend.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ .Values.availability.rollingUpdate.maxUnavailable }}
+      maxSurge: {{ .Values.availability.rollingUpdate.maxSurge }}
   selector:
     matchLabels:
       app: ray-train-frontend
   template:
     metadata:
       labels:
+        {{- include "ray-train-platform.commonLabels" . | nindent 8 }}
+        app.kubernetes.io/component: portal
         app: ray-train-frontend
     spec:
       {{- with .Values.global.imagePullSecrets }}
@@ -42,7 +61,7 @@ spec:
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
-          whenUnsatisfiable: ScheduleAnyway
+          whenUnsatisfiable: {{ .Values.availability.topologySpreadWhenUnsatisfiable }}
           labelSelector:
             matchLabels:
               app: ray-train-frontend
@@ -57,6 +76,23 @@ spec:
                   - key: type
                     operator: NotIn
                     values: ["virtual-kubelet"]
+        {{- if .Values.availability.requiredAntiAffinity }}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: ray-train-frontend
+              topologyKey: kubernetes.io/hostname
+        {{- else if .Values.availability.preferredAntiAffinity }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: ray-train-frontend
+        {{- end }}
       {{- with .Values.frontend.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -70,11 +106,15 @@ spec:
           type: RuntimeDefault
       containers:
         - name: frontend
-          image: "{{ .Values.global.imageRegistry }}/{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }}"
+          image: {{ include "ray-train-platform.image" (list . .Values.frontend.image) | quote }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - containerPort: 8080
               name: http
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           volumeMounts:
             - name: runtime-config
               mountPath: /usr/share/nginx/html/runtime-config.js
@@ -104,11 +144,17 @@ kind: Service
 metadata:
   name: ray-train-frontend
   namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: portal
 spec:
   type: {{ .Values.frontend.service.type }}
   ports:
     - port: {{ .Values.frontend.service.port }}
       targetPort: http
       name: http
+      {{- if and (eq .Values.frontend.service.type "NodePort") .Values.frontend.service.nodePort }}
+      nodePort: {{ .Values.frontend.service.nodePort }}
+      {{- end }}
   selector:
     app: ray-train-frontend

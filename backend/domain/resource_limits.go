@@ -1,6 +1,9 @@
 package domain
 
-import "sync"
+import (
+	"fmt"
+	"sync"
+)
 
 // ResourceLimits caps how large a single training job may be. The ceilings
 // track the cluster the platform is deployed on, so growing the GPU fleet is a
@@ -38,6 +41,40 @@ func SetResourceLimits(limits ResourceLimits) {
 		MaxGPUsPerWorker:  positiveOr(limits.MaxGPUsPerWorker, defaultMaxGPUsPerWorker),
 		MaxTotalGPUs:      positiveOr(limits.MaxTotalGPUs, defaultMaxTotalGPUs),
 	}
+}
+
+// UpdateResourceLimitsFromCapacity atomically replaces the runtime ceilings
+// after a complete, internally consistent training-pool observation. Invalid
+// observations leave the deployment profile or last valid observation intact.
+func UpdateResourceLimitsFromCapacity(readyNodes int, guaranteedGPUsPerWorker, totalGPUs int64) error {
+	if readyNodes <= 0 {
+		return fmt.Errorf("observed training capacity must include at least one Ready node")
+	}
+	if guaranteedGPUsPerWorker <= 0 {
+		return fmt.Errorf("observed training capacity must include GPUs on at least one node")
+	}
+	if totalGPUs <= 0 {
+		return fmt.Errorf("observed training capacity must include at least one GPU")
+	}
+	// Division keeps this validation safe even when the corresponding
+	// readyNodes*guaranteedGPUsPerWorker multiplication would overflow.
+	if int64(readyNodes) > totalGPUs/guaranteedGPUsPerWorker {
+		return fmt.Errorf("observed total GPUs cannot cover the guaranteed worker shape")
+	}
+	maxGPUsPerWorker := int(guaranteedGPUsPerWorker)
+	maxTotalGPUs := int(totalGPUs)
+	if int64(maxGPUsPerWorker) != guaranteedGPUsPerWorker || int64(maxTotalGPUs) != totalGPUs {
+		return fmt.Errorf("observed GPU capacity exceeds supported integer limits")
+	}
+
+	limitsMutex.Lock()
+	defer limitsMutex.Unlock()
+	currentLimits = ResourceLimits{
+		MaxWorkerReplicas: readyNodes,
+		MaxGPUsPerWorker:  maxGPUsPerWorker,
+		MaxTotalGPUs:      maxTotalGPUs,
+	}
+	return nil
 }
 
 func CurrentResourceLimits() ResourceLimits {

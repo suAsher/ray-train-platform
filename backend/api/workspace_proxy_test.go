@@ -15,12 +15,17 @@ import (
 
 type fakeWorkspaceStore struct {
 	workspace domain.DevWorkspace
+	createErr error
+	getErr    error
 }
 
 func (s *fakeWorkspaceStore) CreateWorkspace(context.Context, *domain.DevWorkspace, int64) error {
-	return nil
+	return s.createErr
 }
 func (s *fakeWorkspaceStore) GetWorkspace(context.Context, string, string) (*domain.DevWorkspace, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
 	copy := s.workspace
 	return &copy, nil
 }
@@ -80,6 +85,9 @@ func TestWorkspaceAccessEndpointReturnsOpenableURL(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), "access_token=") {
 		t.Fatalf("the returned URL must carry a token: %s", response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "subject=user-1") {
+		t.Fatalf("the returned URL must carry the token-bound subject: %s", response.Body.String())
 	}
 	if response.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("a URL containing a credential must not be cached")
@@ -154,6 +162,17 @@ func TestWorkspaceProxyAcceptsCookieOnFollowUpRequests(t *testing.T) {
 	subject, ok := handler.workspacePrincipal(c)
 	if !ok || subject != "user-1" {
 		t.Fatalf("sub-resource requests must be authorised by the cookie alone")
+	}
+}
+
+func TestWorkspaceProxyRoutesInteractiveToolsToGPUWorkerService(t *testing.T) {
+	_, handler := workspaceProxyRouter(t, true)
+	workspace := &domain.DevWorkspace{RayClusterName: "debug-a", Namespace: "tenant-a"}
+	for _, port := range []int{8888, 8443} {
+		upstream := handler.upstreamForPort(workspace, port)
+		if !strings.Contains(upstream, "debug-a-dev-svc.tenant-a.svc.cluster.local") {
+			t.Fatalf("port %d must route to the GPU worker service, got %q", port, upstream)
+		}
 	}
 }
 

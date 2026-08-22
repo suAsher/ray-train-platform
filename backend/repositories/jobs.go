@@ -39,7 +39,9 @@ type JobRecord struct {
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
 	LastObservedAt       *time.Time
+	StartedAt            *time.Time
 	FinishedAt           *time.Time
+	ArchivedAt           *time.Time `gorm:"index"`
 }
 
 type OutboxRecord struct {
@@ -195,8 +197,8 @@ func newJobRecord(job *domain.TrainingJob) (JobRecord, error) {
 }
 
 func effectiveGPUQuota(limit int) int {
-	if limit <= 0 {
-		return defaultTenantGPUQuota
+	if limit < 0 {
+		return defaultTenantGPUQuota()
 	}
 	return limit
 }
@@ -220,6 +222,26 @@ func reservedTenantGPUs(tx *gorm.DB, tenantID string) (int, error) {
 			used += spec.Resources.WorkerReplicas * spec.Resources.GPUsPerWorker
 		}
 	}
+	workspaceGPUs, err := reservedWorkspaceGPUs(tx, tenantID)
+	if err != nil {
+		return 0, err
+	}
+	return used + workspaceGPUs, nil
+}
+
+func reservedWorkspaceGPUs(tx *gorm.DB, tenantID string) (int, error) {
+	var records []WorkspaceRecord
+	if err := tx.Where("tenant_id = ?", tenantID).Find(&records).Error; err != nil {
+		return 0, fmt.Errorf("load tenant workspaces: %w", err)
+	}
+	used := 0
+	for _, record := range records {
+		switch domain.WorkspaceState(record.ObservedState) {
+		case domain.WorkspaceStopped, domain.WorkspaceFailed:
+			continue
+		}
+		used += record.GPUCount
+	}
 	return used, nil
 }
 
@@ -227,12 +249,10 @@ func reservedTenantGPUs(tx *gorm.DB, tenantID string) (int, error) {
 func (r *GormRepository) TenantGPUQuota(ctx context.Context, tenantID string) (domain.TenantQuota, error) {
 	database := r.db.WithContext(ctx)
 	var tenant TenantRecord
-	limit := defaultTenantGPUQuota
-	if err := database.Where("id = ?", tenantID).First(&tenant).Error; err == nil {
-		limit = effectiveGPUQuota(tenant.GPUQuotaLimit)
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+	if err := database.Where("id = ?", tenantID).First(&tenant).Error; err != nil {
 		return domain.TenantQuota{}, fmt.Errorf("load tenant quota: %w", err)
 	}
+	limit := effectiveGPUQuota(tenant.GPUQuotaLimit)
 	used, err := reservedTenantGPUs(database, tenantID)
 	if err != nil {
 		return domain.TenantQuota{}, err
@@ -245,20 +265,21 @@ func (r *GormRepository) TenantGPUQuota(ctx context.Context, tenantID string) (d
 }
 
 func enforceTenantGPUQuota(tx *gorm.DB, job *domain.TrainingJob) error {
+	requested := job.Spec.Resources.WorkerReplicas * job.Spec.Resources.GPUsPerWorker
+	return enforceTenantGPUQuotaRequest(tx, job.TenantID, requested)
+}
+
+func enforceTenantGPUQuotaRequest(tx *gorm.DB, tenantID string, requested int) error {
 	var tenant TenantRecord
-	result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", job.TenantID).First(&tenant)
-	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-		return nil
-	}
+	result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", tenantID).First(&tenant)
 	if result.Error != nil {
 		return fmt.Errorf("load tenant quota: %w", result.Error)
 	}
 	quota := effectiveGPUQuota(tenant.GPUQuotaLimit)
-	used, err := reservedTenantGPUs(tx, job.TenantID)
+	used, err := reservedTenantGPUs(tx, tenantID)
 	if err != nil {
 		return err
 	}
-	requested := job.Spec.Resources.WorkerReplicas * job.Spec.Resources.GPUsPerWorker
 	if used+requested > quota {
 		return &GPUQuotaExceededError{Quota: quota, Used: used, Requested: requested}
 	}
@@ -298,7 +319,8 @@ func (r *GormRepository) List(ctx context.Context, filter domain.JobFilter) (dom
 	if offset < 0 {
 		offset = 0
 	}
-	query := r.db.WithContext(ctx).Model(&JobRecord{}).Where("tenant_id = ?", filter.TenantID)
+	query := r.db.WithContext(ctx).Model(&JobRecord{}).
+		Where("tenant_id = ? AND archived_at IS NULL", filter.TenantID)
 	if filter.Status != "" {
 		query = query.Where("observed_state = ?", filter.Status)
 	}
@@ -395,7 +417,15 @@ func (r *GormRepository) ApplyObservedState(ctx context.Context, observed domain
 		"last_observed_at": now,
 		"updated_at":       now,
 	}
-	if observed.State == domain.StateSucceeded || observed.State == domain.StateFailed || observed.State == domain.StateCanceled || observed.State == domain.StateTimedOut {
+	// Prefer the workload's own execution window. Falling back to the control
+	// plane clock keeps a terminal job from having no finish time at all, but it
+	// is only a fallback: it is later than reality by up to one poll interval.
+	if observed.StartedAt != nil {
+		updates["started_at"] = observed.StartedAt.UTC()
+	}
+	if observed.FinishedAt != nil {
+		updates["finished_at"] = observed.FinishedAt.UTC()
+	} else if isTerminalState(observed.State) {
 		updates["finished_at"] = now
 	}
 	result := r.db.WithContext(ctx).Model(&JobRecord{}).Where("id = ?", observed.ID).Updates(updates)
@@ -406,6 +436,15 @@ func (r *GormRepository) ApplyObservedState(ctx context.Context, observed domain
 		return fmt.Errorf("job not found")
 	}
 	return nil
+}
+
+func isTerminalState(state domain.State) bool {
+	for _, terminal := range terminalStates() {
+		if state == terminal {
+			return true
+		}
+	}
+	return false
 }
 
 func terminalStates() []domain.State {
@@ -478,6 +517,7 @@ func (r JobRecord) toDomain() (*domain.TrainingJob, error) {
 		CreatedAt:            r.CreatedAt,
 		UpdatedAt:            r.UpdatedAt,
 		LastObservedAt:       r.LastObservedAt,
+		StartedAt:            r.StartedAt,
 		FinishedAt:           r.FinishedAt,
 	}, nil
 }

@@ -3,6 +3,8 @@ package rayapi
 import (
 	"strings"
 	"testing"
+
+	"ray-train-platform-backend/domain"
 )
 
 const (
@@ -82,8 +84,90 @@ func TestTranslateSubmitRequestUsesOnlyValidatedPlatformMetadata(t *testing.T) {
 	if translated.Spec.Image != testImageDigest || translated.Spec.Resources.WorkerReplicas != 2 || translated.Spec.Resources.GPUsPerWorker != 1 || translated.Spec.Resources.CPUPerWorker != 8 || translated.Spec.Resources.MemoryPerWorker != "32Gi" || translated.Spec.Queue != "tenant-a-gpu" {
 		t.Fatalf("metadata was not translated into the platform job spec: %+v", translated.Spec)
 	}
+	if translated.Spec.Execution.Mode != domain.ExecutionModeRayTrain {
+		t.Fatalf("two-worker Ray CLI job must use ray_train, got %q", translated.Spec.Execution.Mode)
+	}
 	if len(translated.Spec.Entrypoint.Command) != 3 || translated.Spec.Entrypoint.Command[0] != "/bin/sh" || translated.Spec.Entrypoint.Command[1] != "-lc" || translated.Spec.Entrypoint.Command[2] != request.Entrypoint {
 		t.Fatalf("entrypoint was not preserved as a shell command: %+v", translated.Spec.Entrypoint)
+	}
+}
+
+func TestTranslateSubmitRequestWithDefaultsAcceptsBareRayCLIWorkingDirectory(t *testing.T) {
+	defaults := SubmissionDefaults{
+		Image: testImageDigest, WorkerReplicas: 1, GPUsPerWorker: 1,
+		CPUPerWorker: 8, MemoryPerWorker: "32Gi",
+	}
+	translated, err := TranslateSubmitRequestWithDefaults(JobSubmitRequest{
+		Entrypoint:   "python train.py --epochs 3",
+		SubmissionID: "bare_ray_cli",
+		RuntimeEnv:   map[string]any{"working_dir": "gcs://" + testPackageSHA256 + ".zip"},
+	}, defaults)
+	if err != nil {
+		t.Fatalf("translate bare Ray CLI request: %v", err)
+	}
+	if translated.Spec.Image != testImageDigest || translated.Spec.Resources.WorkerReplicas != 1 || translated.Spec.Resources.GPUsPerWorker != 1 || translated.Spec.Resources.CPUPerWorker != 8 || translated.Spec.Resources.MemoryPerWorker != "32Gi" {
+		t.Fatalf("bare Ray CLI request did not use safe platform defaults: %+v", translated.Spec)
+	}
+	if translated.Spec.Queue != "" {
+		t.Fatalf("tenant queue must be selected by the submission service, got %q", translated.Spec.Queue)
+	}
+	if translated.Spec.Execution.Mode != domain.ExecutionModeSingleGPU {
+		t.Fatalf("default one-GPU Ray CLI job must use single_gpu, got %q", translated.Spec.Execution.Mode)
+	}
+}
+
+func TestTranslateSubmitRequestInfersExecutionModeFromResourceShape(t *testing.T) {
+	tests := []struct {
+		name    string
+		workers string
+		gpus    string
+		want    domain.ExecutionMode
+	}{
+		{name: "single GPU", workers: "1", gpus: "1", want: domain.ExecutionModeSingleGPU},
+		{name: "single node DDP", workers: "1", gpus: "8", want: domain.ExecutionModeTorchrun},
+		{name: "multi node DDP", workers: "2", gpus: "8", want: domain.ExecutionModeRayTrain},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			translated, err := TranslateSubmitRequest(JobSubmitRequest{
+				Entrypoint: "python train.py",
+				RuntimeEnv: map[string]any{"working_dir": "gcs://" + testPackageSHA256 + ".zip"},
+				Metadata: map[string]string{
+					metadataImage: testImageDigest, metadataWorkerReplicas: test.workers,
+					metadataGPUsPerWorker: test.gpus, metadataCPUPerWorker: "32",
+					metadataMemoryWorker: "128Gi", metadataQueue: "tenant-a-gpu",
+				},
+			})
+			if err != nil {
+				t.Fatalf("translate request: %v", err)
+			}
+			if translated.Spec.Execution.Mode != test.want {
+				t.Fatalf("execution mode=%q, want %q", translated.Spec.Execution.Mode, test.want)
+			}
+		})
+	}
+}
+
+func TestTranslateSubmitRequestWithDefaultsRejectsPartialPlatformMetadata(t *testing.T) {
+	_, err := TranslateSubmitRequestWithDefaults(JobSubmitRequest{
+		Entrypoint: "python train.py",
+		RuntimeEnv: map[string]any{"working_dir": "gcs://" + testPackageSHA256 + ".zip"},
+		Metadata:   map[string]string{metadataWorkerReplicas: "2"},
+	}, SubmissionDefaults{Image: testImageDigest, WorkerReplicas: 1, GPUsPerWorker: 1, CPUPerWorker: 8, MemoryPerWorker: "32Gi"})
+	if err == nil {
+		t.Fatal("partial platform metadata must not silently combine with defaults")
+	}
+}
+
+func TestTranslateSubmitRequestWithDefaultsRejectsUnknownReservedMetadata(t *testing.T) {
+	_, err := TranslateSubmitRequestWithDefaults(JobSubmitRequest{
+		Entrypoint: "python train.py",
+		RuntimeEnv: map[string]any{"working_dir": "gcs://" + testPackageSHA256 + ".zip"},
+		Metadata:   map[string]string{"ray-platform.gpu-per-worker": "8"},
+	}, SubmissionDefaults{Image: testImageDigest, WorkerReplicas: 1, GPUsPerWorker: 1, CPUPerWorker: 8, MemoryPerWorker: "32Gi"})
+	if err == nil {
+		t.Fatal("unknown reserved metadata must not silently fall back to defaults")
 	}
 }
 

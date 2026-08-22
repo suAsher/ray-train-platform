@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1260" viewBox="0 0 1920 1260" role="img" aria-labelledby="title desc">
+  <title id="title">RayTrain 分布式训练平台生产架构</title>
+  <desc id="desc">基于 VKE、KubeRay、Kueue、TOS、IDC 数据源和 GPU 节点缓存的生产级 Ray 分布式训练平台。</desc>
+  <defs>
+    <linearGradient id="hero" x1="0" x2="1"><stop stop-color="#edf4ff"/><stop offset="1" stop-color="#f7f1ff"/></linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="5" stdDeviation="6" flood-color="#0f2550" flood-opacity=".10"/></filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#4776d0"/></marker>
+    <style>
+      text{font-family:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",Arial,sans-serif;fill:#17213b}
+      .title{font-size:38px;font-weight:800;letter-spacing:1px}.sub{font-size:17px;fill:#52627f}.section{font-size:22px;font-weight:800;fill:#1552ac}.boxTitle{font-size:18px;font-weight:750}.boxText{font-size:14px;fill:#55627a}.tiny{font-size:13px;fill:#61718d}.pill{font-size:13px;font-weight:700;fill:#1552ac}.edge{fill:none;stroke:#4776d0;stroke-width:2.5;marker-end:url(#arrow)}.dash{fill:none;stroke:#7888a6;stroke-width:2;stroke-dasharray:7 6;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1920" height="1260" fill="#fbfdff"/>
+  <rect x="40" y="28" width="1840" height="112" rx="24" fill="url(#hero)" stroke="#a8c9f7" stroke-width="2"/>
+  <text x="960" y="79" class="title" text-anchor="middle">RayTrain 分布式训练平台 · 生产架构</text>
+  <text x="960" y="112" class="sub" text-anchor="middle">VKE 托管 Kubernetes · KubeRay · Kueue · 动态容量与团队配额 · 可扩展 GPU 资源池</text>
+
+  <!-- access -->
+  <rect x="40" y="165" width="1840" height="130" rx="18" fill="#f8fbff" stroke="#9dc1f4" stroke-width="2"/>
+  <rect x="62" y="185" width="184" height="46" rx="12" fill="#165bc8"/><text x="154" y="215" fill="white" font-size="20" font-weight="800" text-anchor="middle">1 · 用户与入口</text>
+  <g filter="url(#shadow)"><rect x="292" y="186" width="300" height="82" rx="14" fill="white" stroke="#74a7ef"/><text x="442" y="217" class="boxTitle" text-anchor="middle">训练用户 · Web Portal</text><text x="442" y="244" class="boxText" text-anchor="middle">提交任务 / 数据 / 日志 / 调试</text></g>
+  <g filter="url(#shadow)"><rect x="656" y="186" width="300" height="82" rx="14" fill="white" stroke="#74a7ef"/><text x="806" y="217" class="boxTitle" text-anchor="middle">开发者 · spk-rayjob CLI</text><text x="806" y="244" class="boxText" text-anchor="middle">集群外上传当前代码并提交</text></g>
+  <g filter="url(#shadow)"><rect x="1020" y="186" width="300" height="82" rx="14" fill="white" stroke="#a48ae7"/><text x="1170" y="217" class="boxTitle" text-anchor="middle">身份 · 本地 / Keycloak</text><text x="1170" y="244" class="boxText" text-anchor="middle">LDAP 通过 OIDC Federation 对接</text></g>
+  <g filter="url(#shadow)"><rect x="1384" y="186" width="300" height="82" rx="14" fill="white" stroke="#a48ae7"/><text x="1534" y="217" class="boxTitle" text-anchor="middle">管理员控制台</text><text x="1534" y="244" class="boxText" text-anchor="middle">租户 / 用户 / 配额 / 镜像 / Git</text></g>
+
+  <!-- control -->
+  <rect x="40" y="325" width="900" height="305" rx="18" fill="#fbfdff" stroke="#8ab7ec" stroke-width="2"/>
+  <text x="68" y="365" class="section">2 · 平台控制面（CPU 节点池，高可用）</text>
+  <g filter="url(#shadow)"><rect x="76" y="394" width="238" height="90" rx="14" fill="white" stroke="#6ea5ea"/><text x="195" y="427" class="boxTitle" text-anchor="middle">Frontend × 2</text><text x="195" y="454" class="boxText" text-anchor="middle">引导式 UI / 管理员 UI</text></g>
+  <g filter="url(#shadow)"><rect x="352" y="394" width="238" height="90" rx="14" fill="white" stroke="#6ea5ea"/><text x="471" y="427" class="boxTitle" text-anchor="middle">Backend API × 2</text><text x="471" y="454" class="boxText" text-anchor="middle">鉴权 / 目录 / 审计 / 编排</text></g>
+  <g filter="url(#shadow)"><rect x="628" y="394" width="238" height="90" rx="14" fill="white" stroke="#6ea5ea"/><text x="747" y="427" class="boxTitle" text-anchor="middle">spk-rayjob Release × 2</text><text x="747" y="454" class="boxText" text-anchor="middle">客户端发布 / 校验摘要</text></g>
+  <g filter="url(#shadow)"><rect x="76" y="520" width="238" height="78" rx="14" fill="#f5fff9" stroke="#73c394"/><text x="195" y="551" class="boxTitle" text-anchor="middle">PostgreSQL</text><text x="195" y="575" class="boxText" text-anchor="middle">任务 / 用户 / 元数据 / 审计</text></g>
+  <g filter="url(#shadow)"><rect x="352" y="520" width="238" height="78" rx="14" fill="#fffaf2" stroke="#e4a95b"/><text x="471" y="551" class="boxTitle" text-anchor="middle">代码版本服务</text><text x="471" y="575" class="boxText" text-anchor="middle">Git / 快照 → 不可变代码包</text></g>
+  <g filter="url(#shadow)"><rect x="628" y="520" width="238" height="78" rx="14" fill="#faf7ff" stroke="#a58ce3"/><text x="747" y="551" class="boxTitle" text-anchor="middle">私网 ALB / Ingress</text><text x="747" y="575" class="boxText" text-anchor="middle">所有用户服务均为 ClusterIP</text></g>
+
+  <!-- cluster control -->
+  <rect x="970" y="325" width="910" height="305" rx="18" fill="#fbfdff" stroke="#8ab7ec" stroke-width="2"/>
+  <text x="998" y="365" class="section">3 · VKE 集群控制与资源治理</text>
+  <g filter="url(#shadow)"><rect x="1006" y="394" width="256" height="90" rx="14" fill="white" stroke="#6ea5ea"/><text x="1134" y="427" class="boxTitle" text-anchor="middle">KubeRay Operator</text><text x="1134" y="454" class="boxText" text-anchor="middle">RayJob / RayCluster 生命周期</text></g>
+  <g filter="url(#shadow)"><rect x="1300" y="394" width="256" height="90" rx="14" fill="white" stroke="#6ea5ea"/><text x="1428" y="427" class="boxTitle" text-anchor="middle">Kueue</text><text x="1428" y="454" class="boxText" text-anchor="middle">物理容量 / 团队配额 / 排队准入</text></g>
+  <g filter="url(#shadow)"><rect x="1594" y="394" width="250" height="90" rx="14" fill="white" stroke="#6ea5ea"/><text x="1719" y="427" class="boxTitle" text-anchor="middle">资源策略</text><text x="1719" y="454" class="boxText" text-anchor="middle">配额 / 优先级 / 污点 / 标签</text></g>
+  <g filter="url(#shadow)"><rect x="1006" y="520" width="838" height="78" rx="14" fill="#f5fbff" stroke="#6ea5ea"/><text x="1425" y="551" class="boxTitle" text-anchor="middle">弹性 GPU 资源池</text><text x="1425" y="575" class="boxText" text-anchor="middle">Ready 真实节点自动计入容量；新增节点标签后即可准入，无需改静态卡数</text></g>
+
+  <!-- runtime -->
+  <rect x="40" y="662" width="1115" height="245" rx="18" fill="#fbfdff" stroke="#8ab7ec" stroke-width="2"/>
+  <text x="68" y="702" class="section">4 · Ray 运行时</text>
+  <g filter="url(#shadow)"><rect x="76" y="733" width="320" height="136" rx="14" fill="#faf7ff" stroke="#a48ae7"/><text x="236" y="765" class="boxTitle" text-anchor="middle">交互式 GPU 调试环境</text><text x="236" y="791" class="boxText" text-anchor="middle">Ray Head + 1 个 GPU Worker</text><text x="236" y="815" class="boxText" text-anchor="middle">JupyterLab / VS Code / Terminal</text><text x="236" y="844" class="pill" text-anchor="middle">1 / 2 / 4 / 8 GPU 规格</text></g>
+  <g filter="url(#shadow)"><rect x="434" y="733" width="320" height="136" rx="14" fill="#f5fbff" stroke="#6ea5ea"/><text x="594" y="765" class="boxTitle" text-anchor="middle">RayJob 批量训练</text><text x="594" y="791" class="boxText" text-anchor="middle">CPU Head + GPU Worker Pods</text><text x="594" y="815" class="boxText" text-anchor="middle">单卡 / 单机多卡 DDP</text><text x="594" y="844" class="pill" text-anchor="middle">代码、数据、镜像均可追溯</text></g>
+  <g filter="url(#shadow)"><rect x="792" y="733" width="320" height="136" rx="14" fill="#f5fff9" stroke="#73c394"/><text x="952" y="765" class="boxTitle" text-anchor="middle">跨节点 Ray 管理 DDP</text><text x="952" y="791" class="boxText" text-anchor="middle">Ray 严格跨主机放置</text><text x="952" y="815" class="boxText" text-anchor="middle">每节点 torchrun / NCCL</text><text x="952" y="844" class="pill" text-anchor="middle">多机多卡、弹性扩容</text></g>
+
+  <!-- storage -->
+  <rect x="1185" y="662" width="695" height="245" rx="18" fill="#fbfdff" stroke="#8ab7ec" stroke-width="2"/>
+  <text x="1213" y="702" class="section">5 · 受控存储与数据</text>
+  <g filter="url(#shadow)"><rect x="1221" y="733" width="190" height="136" rx="14" fill="#f5fff9" stroke="#73c394"/><text x="1316" y="765" class="boxTitle" text-anchor="middle">TOS 个人空间</text><text x="1316" y="792" class="boxText" text-anchor="middle">工作区 / 输入 / 结果</text><text x="1316" y="818" class="pill" text-anchor="middle">受控读写</text></g>
+  <g filter="url(#shadow)"><rect x="1438" y="733" width="190" height="136" rx="14" fill="#f8fbff" stroke="#74a7ef"/><text x="1533" y="765" class="boxTitle" text-anchor="middle">团队与公共数据</text><text x="1533" y="792" class="boxText" text-anchor="middle">管理员在 Portal 发布</text><text x="1533" y="818" class="pill" text-anchor="middle">训练 Pod 只读</text></g>
+  <g filter="url(#shadow)"><rect x="1655" y="733" width="190" height="136" rx="14" fill="#fffaf2" stroke="#e4a95b"/><text x="1750" y="765" class="boxTitle" text-anchor="middle">IDC 与 NVMe</text><text x="1750" y="792" class="boxText" text-anchor="middle">IDC NFS 只读</text><text x="1750" y="816" class="boxText" text-anchor="middle">/data1、/data2 临时缓存</text><text x="1750" y="844" class="pill" text-anchor="middle">数据真相不在缓存</text></g>
+
+  <!-- obs -->
+  <rect x="40" y="940" width="1840" height="190" rx="18" fill="#fbfdff" stroke="#8ab7ec" stroke-width="2"/>
+  <text x="68" y="980" class="section">6 · 可观测性与运维（CPU 节点池）</text>
+  <g filter="url(#shadow)"><rect x="130" y="1013" width="260" height="82" rx="14" fill="white" stroke="#e26a49"/><text x="260" y="1045" class="boxTitle" text-anchor="middle">Alloy</text><text x="260" y="1072" class="boxText" text-anchor="middle">容器日志、事件与节点采集</text></g>
+  <g filter="url(#shadow)"><rect x="470" y="1013" width="260" height="82" rx="14" fill="white" stroke="#e26a49"/><text x="600" y="1045" class="boxTitle" text-anchor="middle">Loki</text><text x="600" y="1072" class="boxText" text-anchor="middle">按任务 / Pod 查询与分析日志</text></g>
+  <g filter="url(#shadow)"><rect x="810" y="1013" width="300" height="82" rx="14" fill="white" stroke="#e26a49"/><text x="960" y="1045" class="boxTitle" text-anchor="middle">Prometheus Operator + DCGM</text><text x="960" y="1072" class="boxText" text-anchor="middle">GPU / 显存 / Pod / Node / 队列指标</text></g>
+  <g filter="url(#shadow)"><rect x="1190" y="1013" width="260" height="82" rx="14" fill="white" stroke="#e26a49"/><text x="1320" y="1045" class="boxTitle" text-anchor="middle">Grafana</text><text x="1320" y="1072" class="boxText" text-anchor="middle">任务健康、容量与告警看板</text></g>
+  <g filter="url(#shadow)"><rect x="1530" y="1013" width="260" height="82" rx="14" fill="white" stroke="#e26a49"/><text x="1660" y="1045" class="boxTitle" text-anchor="middle">生命周期治理</text><text x="1660" y="1072" class="boxText" text-anchor="middle">PDB / HPA / 备份 / 升级 / 审计</text></g>
+
+  <!-- relationships -->
+  <path class="edge" d="M442 268 V350 H471 V394"/><path class="edge" d="M806 268 V350 H747 V394"/><path class="edge" d="M471 484 V520"/>
+  <path class="edge" d="M590 439 H1006"/><path class="edge" d="M590 454 H1300"/>
+  <path class="edge" d="M1134 484 V620 H594 V733"/><path class="edge" d="M1428 484 V620 H952 V733"/>
+  <path class="edge" d="M952 869 V920 H1533 V869"/><path class="edge" d="M594 869 V920 H1316 V869"/>
+  <path class="dash" d="M594 869 V1013 H600"/><path class="dash" d="M952 869 V1013 H960"/>
+  <text x="960" y="1185" class="tiny" text-anchor="middle">训练主路径：Portal / spk-rayjob / 原生 Ray CLI → API → Kueue 准入 → KubeRay RayJob → GPU Worker</text>
+  <text x="960" y="1215" class="tiny" text-anchor="middle">安全边界：用户不接触 Kubeconfig、TOS AK/SK、PVC、节点路径或任意 NFS / TOS 前缀</text>
+</svg>

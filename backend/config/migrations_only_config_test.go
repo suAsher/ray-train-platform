@@ -2,7 +2,6 @@ package config
 
 import (
 	"os"
-	"regexp"
 	"strings"
 	"testing"
 )
@@ -39,30 +38,19 @@ func TestLoadProductionMigrationsOnlyRejectsMissingDatabase(t *testing.T) {
 	}
 }
 
-func TestMigrationJobInjectsOnlyDatabaseConfiguration(t *testing.T) {
-	contents, err := os.ReadFile("../../helm/ray-train-platform/templates/migrations-job.yaml")
+func TestChartDelegatesMigrationsToBackendStartup(t *testing.T) {
+	contents, err := os.ReadFile("../../helm/ray-train-platform/templates/backend-deployment.yaml")
 	if err != nil {
 		if os.IsNotExist(err) {
 			t.Skip("Helm chart is not mounted with the backend package")
 		}
-		t.Fatalf("read migration Job template: %v", err)
+		t.Fatalf("read backend deployment template: %v", err)
 	}
 	template := string(contents)
-	for _, required := range []string{"name: MIGRATIONS_ONLY", "name: DATABASE_URL"} {
-		if !strings.Contains(template, required) {
-			t.Fatalf("migration Job missing %q", required)
-		}
+	if !strings.Contains(template, "name: DATABASE_URL") {
+		t.Fatal("backend deployment must receive the database URL for startup migrations")
 	}
-	for _, forbidden := range []string{"PAT_PEPPER", "TOS_ACCESS_KEY", "TOS_SECRET_KEY"} {
-		if strings.Contains(template, forbidden) {
-			t.Fatalf("migration Job injects runtime secret %s", forbidden)
-		}
-	}
-	names := regexp.MustCompile(`(?m)^\s*- name: ([A-Z0-9_]+)\s*$`).FindAllStringSubmatch(template, -1)
-	allowed := map[string]bool{"APP_ENV": true, "MIGRATIONS_ONLY": true, "DATABASE_URL": true}
-	for _, match := range names {
-		if !allowed[match[1]] {
-			t.Fatalf("migration Job injects runtime-only environment variable %s", match[1])
-		}
+	if strings.Contains(template, "helm.sh/hook") || strings.Contains(template, "MIGRATIONS_ONLY") {
+		t.Fatal("Chart must not run migrations as a pre-install hook; test PostgreSQL is created by the same release")
 	}
 }

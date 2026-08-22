@@ -5,6 +5,9 @@ kind: Ingress
 metadata:
   name: ray-platform-intranet-alb-ingress
   namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: ingress
   annotations:
     {{- toYaml .Values.ingress.annotations | nindent 4 }}
 spec:

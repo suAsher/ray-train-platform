@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
+	"ray-train-platform-backend/observability"
 )
 
 const demoAuthType = auth.AuthTypeDemo
@@ -29,6 +30,36 @@ type sessionResponse struct {
 func (h *Handler) RegisterSessionRoutes(group *gin.RouterGroup) {
 	group.GET("/me", h.currentSession)
 	group.GET("/quota", h.currentQuota)
+	// Deployment ceilings and governed mount paths belong next to identity: the
+	// Portal needs both before it can render a submit form the server accepts.
+	group.GET("/limits", h.platformLimits)
+	// Live GPU state from DCGM. The devices page previously showed only
+	// Kubernetes GPU requests, which says what is reserved but not what is busy.
+	group.GET("/cluster/gpu-metrics", h.clusterGPUMetrics)
+}
+
+// GPUInventoryProvider is satisfied by the Prometheus client. It is an
+// interface so a deployment without Prometheus degrades to a clear message.
+type GPUInventoryProvider interface {
+	QueryGPUInventory(ctx context.Context) (observability.GPUInventory, error)
+}
+
+func (h *Handler) clusterGPUMetrics(c *gin.Context) {
+	if _, ok := h.principal(c); !ok {
+		h.writeError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "authentication is required")
+		return
+	}
+	provider, ok := h.metrics.(GPUInventoryProvider)
+	if !ok {
+		h.writeError(c, http.StatusServiceUnavailable, "GPU_METRICS_UNAVAILABLE", "GPU 指标未配置：需要 Prometheus 与 DCGM Exporter")
+		return
+	}
+	inventory, err := provider.QueryGPUInventory(c.Request.Context())
+	if err != nil {
+		h.writeError(c, http.StatusBadGateway, "GPU_METRICS_QUERY_FAILED", "无法读取 GPU 指标，请稍后重试")
+		return
+	}
+	h.writeSuccess(c, http.StatusOK, inventory)
 }
 
 // QuotaStore exposes the caller's own GPU budget. It is deliberately not an

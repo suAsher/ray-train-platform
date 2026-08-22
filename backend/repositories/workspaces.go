@@ -55,6 +55,9 @@ func (r *GormRepository) CreateWorkspace(ctx context.Context, workspace *domain.
 		case !errors.Is(err, gorm.ErrRecordNotFound):
 			return fmt.Errorf("look up existing workspace: %w", err)
 		}
+		if err := enforceTenantGPUQuotaRequest(tx, workspace.TenantID, workspace.GPUCount); err != nil {
+			return err
+		}
 		if err := tx.Create(&record).Error; err != nil {
 			return fmt.Errorf("create workspace: %w", err)
 		}

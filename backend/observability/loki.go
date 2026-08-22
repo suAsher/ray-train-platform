@@ -24,11 +24,22 @@ type LokiClient struct {
 }
 
 func (c *LokiClient) QueryJobLogs(ctx context.Context, jobID string, limit int) ([]LogLine, error) {
+	now := time.Now().UTC()
+	return c.QueryJobLogsInRange(ctx, jobID, limit, now.Add(-30*24*time.Hour), now)
+}
+
+// QueryJobLogsInRange returns job logs from an explicit lifecycle window. Callers
+// should use the job's creation and completion times so completed jobs remain
+// available without making Loki scan the entire retention period on every request.
+func (c *LokiClient) QueryJobLogsInRange(ctx context.Context, jobID string, limit int, start, end time.Time) ([]LogLine, error) {
 	if c == nil || strings.TrimSpace(c.BaseURL) == "" {
 		return nil, fmt.Errorf("Loki URL is not configured")
 	}
 	if !safeLabelValue(jobID) {
 		return nil, fmt.Errorf("job id is invalid")
+	}
+	if start.IsZero() || end.IsZero() || end.Before(start) {
+		return nil, fmt.Errorf("log query range is invalid")
 	}
 	if limit <= 0 || limit > 10000 {
 		limit = 1000
@@ -41,6 +52,8 @@ func (c *LokiClient) QueryJobLogs(ctx context.Context, jobID string, limit int) 
 	query.Set("query", `{platform_job_id="`+jobID+`"}`)
 	query.Set("limit", strconv.Itoa(limit))
 	query.Set("direction", "forward")
+	query.Set("start", start.UTC().Format(time.RFC3339Nano))
+	query.Set("end", end.UTC().Format(time.RFC3339Nano))
 	endpoint.RawQuery = query.Encode()
 	httpClient := c.HTTPClient
 	if httpClient == nil {

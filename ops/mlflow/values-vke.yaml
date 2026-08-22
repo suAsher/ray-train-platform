@@ -1,0 +1,124 @@
+fullnameOverride: mlflow
+
+image:
+  repository: harbor.wellspiking.ai/guofeng.su/mlflow
+  tag: v3.14.0-full@sha256:03c206d175084ee3f654a1353ab62ccd2e59048c54f9488f08cc4d8f5de0037d
+  pullPolicy: IfNotPresent
+imagePullSecrets:
+  - name: harbor-registry
+
+replicaCount: 2
+deploymentStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+    maxSurge: 1
+
+server:
+  value_options:
+    host: 0.0.0.0
+    port: 5000
+    workers: 2
+    # MLflow 3.5+ validates the complete HTTP Host header, including port.
+    # Keep the allowlist explicit; never replace this with "*".
+    allowed_hosts: mlflow,mlflow:5000,mlflow.mlflow-system.svc,mlflow.mlflow-system.svc:5000,mlflow.mlflow-system.svc.cluster.local,mlflow.mlflow-system.svc.cluster.local:5000,localhost:*,127.0.0.1:*,172.28.*
+  flag_options:
+    - serve_artifacts
+
+service:
+  type: ClusterIP
+ingress:
+  enabled: false
+
+mlflow:
+  backendStoreUriFrom:
+    secretKeyRef:
+      name: mlflow-database
+      key: uri
+  registryStoreUriFrom:
+    secretKeyRef:
+      name: mlflow-database
+      key: uri
+  artifactsDestination: s3://vke-cluster/ray-train/platform/mlflow-artifacts
+
+env:
+  # Only the MLflow server receives this Secret. Training Pods upload through
+  # the tracking API and never receive TOS AK/SK.
+  - name: AWS_ACCESS_KEY_ID
+    valueFrom:
+      secretKeyRef:
+        name: tos-credentials
+        key: access-key
+  - name: AWS_SECRET_ACCESS_KEY
+    valueFrom:
+      secretKeyRef:
+        name: tos-credentials
+        key: secret-key
+  - name: AWS_DEFAULT_REGION
+    valueFrom:
+      secretKeyRef:
+        name: tos-credentials
+        key: region
+  - name: MLFLOW_S3_ENDPOINT_URL
+    value: https://tos-s3-cn-shanghai.ivolces.com
+  # MLflow constructs its own botocore Config and therefore needs its native
+  # addressing-style option in addition to the standard AWS config file.
+  # Volcengine TOS rejects S3 path-style requests.
+  - name: MLFLOW_BOTO_CLIENT_ADDRESSING_STYLE
+    value: virtual
+  - name: AWS_CONFIG_FILE
+    value: /etc/mlflow/aws/config
+  - name: MLFLOW_ARTIFACT_UPLOAD_DOWNLOAD_TIMEOUT
+    value: "600"
+
+extraVolumes:
+  - name: aws-config
+    configMap:
+      name: mlflow-aws-config
+      items:
+        - key: config
+          path: config
+extraVolumeMounts:
+  - name: aws-config
+    mountPath: /etc/mlflow/aws
+    readOnly: true
+
+metrics:
+  enabled: true
+serviceMonitor:
+  # Chart 0.1.0 renders an empty ServiceMonitor path. Install the explicit
+  # /metrics monitor from 30-policy.yaml instead.
+  enabled: false
+networkPolicy:
+  # The upstream default permits every namespace. A narrower, reviewed policy
+  # is installed from 30-policy.yaml instead.
+  enabled: false
+
+serviceAccount:
+  create: true
+  automountServiceAccountToken: false
+namespace_rbac:
+  extraRules: []
+cluster_rbac:
+  extraRules: []
+
+podLabels:
+  app.kubernetes.io/part-of: ray-train-platform
+nodeSelector:
+  platform.wellspiking.ai/pool: control-plane
+affinity:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: mlflow
+            app.kubernetes.io/instance: mlflow
+        topologyKey: kubernetes.io/hostname
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    cpu: "2"
+    memory: 4Gi

@@ -28,6 +28,7 @@ func setValidProductionConfig(t *testing.T) {
 	t.Setenv("TOS_ACCESS_KEY", "test-access-key")
 	t.Setenv("TOS_SECRET_KEY", "test-secret-key")
 	t.Setenv("RAY_API_SPOOL_DIR", "/var/lib/ray-platform/ray-packages")
+	t.Setenv("RAY_API_DEFAULT_IMAGE", "registry.example/ray@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 }
 
 func TestLoadRejectsProductionWithoutRequiredDependencies(t *testing.T) {
@@ -86,6 +87,104 @@ func TestLoadAcceptsProductionConfiguration(t *testing.T) {
 	}
 }
 
+func TestLoadUsesLokiGatewayByDefault(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("LOKI_URL", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load defaults: %v", err)
+	}
+	if cfg.LokiURL != "http://loki-gateway.loki.svc.cluster.local" {
+		t.Fatalf("unexpected Loki default: %q", cfg.LokiURL)
+	}
+}
+
+func TestLoadKeepsDataSpaceMountsDisabledUntilExplicitlyEnabled(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("TOS_ENDPOINT", "https://tos-cn-shanghai.ivolces.com")
+	t.Setenv("TOS_BUCKET", "shanghai-data-transfer")
+	t.Setenv("DATA_SPACES_ENABLED", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load defaults: %v", err)
+	}
+	if cfg.DataSpacesEnabled {
+		t.Fatal("data-space mounts must be disabled by default")
+	}
+
+	t.Setenv("DATA_SPACES_ENABLED", "true")
+	t.Setenv("DATA_SPACES_FSX_VOLUME_ATTRIBUTES_JSON", `{"type":"TOS","bucket":"shanghai-data-transfer","server":"tos-cn-shanghai.ivolces.com","region":"cn-shanghai"}`)
+	t.Setenv("DATA_SPACES_MOUNT_CAPACITY", "1Ti")
+	cfg, err = Load()
+	if err != nil || !cfg.DataSpacesEnabled || cfg.DataSpacesMountCapacity != "1Ti" {
+		t.Fatalf("explicit data-space enablement was not retained: cfg=%#v err=%v", cfg, err)
+	}
+	if cfg.DataSpacesPublicRoot != "ray-train/public/" {
+		t.Fatalf("default public root = %q", cfg.DataSpacesPublicRoot)
+	}
+	t.Setenv("DATA_SPACES_PUBLIC_ROOT", "ray-train/tenants/local/datasets/public")
+	cfg, err = Load()
+	if err != nil || cfg.DataSpacesPublicRoot != "ray-train/tenants/local/datasets/public" {
+		t.Fatalf("temporary public root was not retained: cfg=%#v err=%v", cfg, err)
+	}
+}
+
+func TestLoadEnablesFinitePersonalObjectSetQuotaOnlyWithCompleteTOSConfiguration(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("TOS_ENDPOINT", "https://tos-cn-shanghai.ivolces.com")
+	t.Setenv("TOS_REGION", "cn-shanghai")
+	t.Setenv("TOS_BUCKET", "shanghai-data-transfer")
+	t.Setenv("TOS_ACCESS_KEY", "test-access-key")
+	t.Setenv("TOS_SECRET_KEY", "test-secret-key")
+	t.Setenv("TOS_OBJECT_SET_QUOTAS_ENABLED", "true")
+	t.Setenv("PERSONAL_STORAGE_DEFAULT_QUOTA", "100Gi")
+	t.Setenv("PERSONAL_STORAGE_MAX_QUOTA", "2Ti")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load ObjectSet quota configuration: %v", err)
+	}
+	if !cfg.TOSObjectSetQuotasEnabled || cfg.PersonalStorageDefaultQuotaBytes != 100*1024*1024*1024 || cfg.PersonalStorageMaxQuotaBytes != 2*1024*1024*1024*1024 {
+		t.Fatalf("unexpected ObjectSet quota configuration: %#v", cfg)
+	}
+
+	t.Setenv("PERSONAL_STORAGE_DEFAULT_QUOTA", "0")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "PERSONAL_STORAGE_DEFAULT_QUOTA") {
+		t.Fatalf("expected finite quota validation error, got %v", err)
+	}
+}
+
+func TestLoadRejectsDataSpaceMountAgainstDifferentBackendTOS(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("TOS_ENDPOINT", "https://tos-cn-shanghai.ivolces.com")
+	t.Setenv("TOS_BUCKET", "shanghai-data-transfer")
+	t.Setenv("DATA_SPACES_ENABLED", "true")
+	t.Setenv("DATA_SPACES_FSX_VOLUME_ATTRIBUTES_JSON", `{"type":"TOS","bucket":"other-bucket","server":"tos-cn-shanghai.ivolces.com","region":"cn-shanghai"}`)
+	t.Setenv("DATA_SPACES_MOUNT_CAPACITY", "1Ti")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "same bucket and server") {
+		t.Fatalf("expected data-space/backend TOS mismatch rejection, got %v", err)
+	}
+}
+
+func TestLoadRejectsEnabledDataSpacesWithoutSecretlessFSXContract(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("TOS_ENDPOINT", "https://s")
+	t.Setenv("TOS_BUCKET", "b")
+	t.Setenv("DATA_SPACES_ENABLED", "true")
+	t.Setenv("DATA_SPACES_FSX_VOLUME_ATTRIBUTES_JSON", `{"type":"TOS","bucket":"b","server":"s","region":"r","secretName":"legacy"}`)
+	t.Setenv("DATA_SPACES_MOUNT_CAPACITY", "1Ti")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "DATA_SPACES_FSX_VOLUME_ATTRIBUTES_JSON") {
+		t.Fatalf("expected a secretless FSX contract error, got %v", err)
+	}
+}
+
 func TestLoadRejectsIDCWithoutExistingClaim(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("PAT_ENABLED", "false")
@@ -94,6 +193,83 @@ func TestLoadRejectsIDCWithoutExistingClaim(t *testing.T) {
 	t.Setenv("IDC_STORAGE_CLASS", "fast")
 	if _, err := Load(); err == nil {
 		t.Fatal("expected IDC existing claim validation error")
+	}
+}
+
+func TestLoadAcceptsGovernedIDCDataSpacesWithoutLegacyClaim(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("IDC_STORAGE_ENABLED", "false")
+	t.Setenv("IDC_DATA_SPACES_ENABLED", "true")
+	t.Setenv("IDC_DATA_SPACES_MOUNT_CAPACITY", "1Pi")
+	t.Setenv("IDC_DATA_SPACES_SOURCES_JSON", `{
+      "original":{"server":"192.0.2.10","path":"/exports/original"},
+      "wellspiking":{"server":"192.0.2.11","path":"/exports/wellspiking"},
+      "shared":{"server":"storage.example.internal","path":"/exports/shared"}
+    }`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load governed IDC data spaces: %v", err)
+	}
+	if !cfg.IDCDataSpacesEnabled || cfg.IDCDataSpaceSources["shared"].Path != "/exports/shared" {
+		t.Fatalf("unexpected governed IDC configuration: %#v", cfg)
+	}
+}
+
+func TestLoadRejectsIncompleteGovernedIDCDataSpaces(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("IDC_STORAGE_ENABLED", "false")
+	t.Setenv("IDC_DATA_SPACES_ENABLED", "true")
+	t.Setenv("IDC_DATA_SPACES_MOUNT_CAPACITY", "1Pi")
+	t.Setenv("IDC_DATA_SPACES_SOURCES_JSON", `{"original":{"server":"192.0.2.10","path":"/exports/original"}}`)
+
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "wellspiking") {
+		t.Fatalf("expected complete IDC source validation error, got %v", err)
+	}
+}
+
+func TestLoadRejectsEnabledLocalCacheWithoutCompleteConfiguration(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("LOCAL_CACHE_ENABLED", "true")
+	t.Setenv("LOCAL_CACHE_STORAGE_CLASS", "")
+	t.Setenv("LOCAL_CACHE_SIZE", "200Gi")
+	t.Setenv("LOCAL_CACHE_MOUNT_PATH", "/mnt/cache")
+
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "LOCAL_CACHE_STORAGE_CLASS") {
+		t.Fatalf("expected local cache storage class validation error, got %v", err)
+	}
+}
+
+func TestLoadAcceptsCompleteLocalCacheConfiguration(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("LOCAL_CACHE_ENABLED", "true")
+	t.Setenv("LOCAL_CACHE_STORAGE_CLASS", "ray-cache-local")
+	t.Setenv("LOCAL_CACHE_SIZE", "200Gi")
+	t.Setenv("LOCAL_CACHE_MOUNT_PATH", "/mnt/cache")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load complete local cache configuration: %v", err)
+	}
+	if !cfg.LocalCacheEnabled || cfg.LocalCacheStorageClass != "ray-cache-local" || cfg.LocalCacheSize != "200Gi" || cfg.LocalCacheMountPath != "/mnt/cache" {
+		t.Fatalf("unexpected local cache configuration: %#v", cfg)
+	}
+}
+
+func TestLoadRejectsLocalCacheMountedInsideRayDefaultTempDirectory(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("LOCAL_CACHE_ENABLED", "true")
+	t.Setenv("LOCAL_CACHE_STORAGE_CLASS", "ray-cache-local")
+	t.Setenv("LOCAL_CACHE_SIZE", "200Gi")
+	t.Setenv("LOCAL_CACHE_MOUNT_PATH", "/tmp/ray")
+
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "LOCAL_CACHE_MOUNT_PATH") {
+		t.Fatalf("expected unsafe Ray temp-directory cache mount to be rejected, got %v", err)
 	}
 }
 

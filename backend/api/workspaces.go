@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httputil"
@@ -9,8 +11,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
 	"ray-train-platform-backend/k8s"
+	"ray-train-platform-backend/repositories"
 )
 
 func (h *Handler) RegisterWorkspaceRoutes(group *gin.RouterGroup) {
@@ -25,6 +29,7 @@ type launchWorkspaceRequest struct {
 	Name       string `json:"name"`
 	Image      string `json:"image"`
 	SnapshotID string `json:"snapshotId"`
+	GPUCount   int    `json:"gpuCount"`
 }
 
 func (h *Handler) launchWorkspace(c *gin.Context) {
@@ -46,9 +51,22 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "INVALID_JSON", "request body is invalid")
 		return
 	}
+	if request.GPUCount == 0 {
+		request.GPUCount = 1
+	}
+	if request.GPUCount != 1 && request.GPUCount != 2 && request.GPUCount != 4 && request.GPUCount != 8 {
+		h.writeError(c, http.StatusBadRequest, "WORKSPACE_GPU_COUNT_INVALID", "debug workspace GPU count must be one of 1, 2, 4, or 8")
+		return
+	}
 	if existing, err := h.workspaces.GetWorkspace(c.Request.Context(), principal.TenantID, principal.Subject); err == nil && existing.State != domain.WorkspaceStopped {
 		h.writeSuccess(c, http.StatusOK, existing)
 		return
+	}
+	if h.dataSpacesEnabled || h.idcDataSpacesEnabled {
+		if err := h.ensureDataSpacesForPrincipal(c.Request.Context(), principal); err != nil {
+			h.writeError(c, http.StatusServiceUnavailable, "DATA_SPACE_INITIALIZATION_FAILED", "could not initialize the selected data spaces; inspect platform storage readiness and try again")
+			return
+		}
 	}
 	image, ok := h.resolveWorkspaceImage(c, principal.TenantID, domain.NormalizeImageReference(request.Image))
 	if !ok {
@@ -56,6 +74,16 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 	}
 	if err := domain.ValidatePinnedImage(image); err != nil {
 		h.writeError(c, http.StatusBadRequest, "WORKSPACE_IMAGE_REQUIRED", err.Error())
+		return
+	}
+	dataMounts, err := h.resolveWorkspaceDataMountPlan(c.Request.Context(), principal)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrSubmissionDataSpacesUnavailable):
+			h.writeError(c, http.StatusServiceUnavailable, "DATA_SPACES_UNAVAILABLE", "data spaces are not configured")
+		default:
+			h.writeError(c, http.StatusConflict, "DATA_SPACE_MOUNT_NOT_READY", "your personal data space is still being prepared; try again after storage setup is complete")
+		}
 		return
 	}
 	name, err := h.newID()
@@ -69,16 +97,22 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 		workspaceName = workspaceName[:63]
 	}
 	namespace := "tenant-" + sanitizeDNS(principal.TenantID)
-	workspace := &domain.DevWorkspace{ID: "ws-" + workspaceID, TenantID: principal.TenantID, UserID: principal.Subject, Name: workspaceName, Namespace: namespace, RayClusterName: workspaceName, JupyterURL: "/api/v1/dev-workspaces/ws-" + workspaceID + "/proxy/", SnapshotID: request.SnapshotID, GPUCount: 1, State: domain.WorkspaceSubmitted}
-	if err := h.repository.EnsureIdentity(c.Request.Context(), principal); err != nil {
-		h.writeError(c, http.StatusInternalServerError, "IDENTITY_PERSIST_FAILED", "could not persist authenticated identity")
-		return
-	}
+	workspace := &domain.DevWorkspace{ID: "ws-" + workspaceID, TenantID: principal.TenantID, UserID: principal.Subject, Name: workspaceName, Namespace: namespace, RayClusterName: workspaceName, JupyterURL: "/api/v1/dev-workspaces/ws-" + workspaceID + "/proxy/", SnapshotID: request.SnapshotID, GPUCount: request.GPUCount, State: domain.WorkspaceSubmitted}
 	if err := h.workspaces.CreateWorkspace(c.Request.Context(), workspace, 3600); err != nil {
+		var quotaErr *repositories.GPUQuotaExceededError
+		if errors.As(err, &quotaErr) {
+			h.writeError(c, http.StatusConflict, "GPU_QUOTA_EXCEEDED", "the tenant GPU quota does not have enough capacity for this debug environment")
+			return
+		}
 		h.writeError(c, http.StatusConflict, "WORKSPACE_CREATE_FAILED", "could not persist workspace")
 		return
 	}
-	manifest, err := k8s.RenderDevRayCluster(*workspace, k8s.WorkspaceRenderOptions{NodeSelector: h.trainingNodeSelector, Image: image, RayVersion: h.rayVersion, ServiceAccount: h.serviceAccount, ImagePullSecrets: h.imagePullSecrets, IDCExistingClaim: h.idcClaim, IDCMountPath: h.idcMountPath, JupyterBasePath: workspace.JupyterURL})
+	if err := h.ensureTenantNamespaceAndPullSecrets(c.Request.Context(), principal.TenantID, namespace); err != nil {
+		_ = h.workspaces.UpdateWorkspaceState(c.Request.Context(), principal.TenantID, principal.Subject, domain.WorkspaceFailed)
+		h.writeError(c, http.StatusBadGateway, "WORKSPACE_RUNTIME_PREPARE_FAILED", "could not prepare the tenant workspace runtime")
+		return
+	}
+	manifest, err := k8s.RenderDevRayCluster(*workspace, k8s.WorkspaceRenderOptions{NodeSelector: h.trainingNodeSelector, Image: image, RayVersion: h.rayVersion, ServiceAccount: h.serviceAccount, ImagePullSecrets: h.imagePullSecrets, IDCExistingClaim: h.idcClaim, IDCMountPath: h.idcMountPath, JupyterBasePath: workspace.JupyterURL, DataMounts: dataMounts})
 	if err != nil {
 		_ = h.workspaces.UpdateWorkspaceState(c.Request.Context(), principal.TenantID, principal.Subject, domain.WorkspaceFailed)
 		h.writeError(c, http.StatusBadRequest, "WORKSPACE_SPEC_INVALID", err.Error())
@@ -96,6 +130,86 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 		return
 	}
 	h.writeSuccess(c, http.StatusAccepted, workspace)
+}
+
+func (h *Handler) resolveWorkspaceDataMountPlan(ctx context.Context, principal auth.Principal) (k8s.DataMountPlan, error) {
+	if !h.dataSpacesEnabled && !h.idcDataSpacesEnabled {
+		return k8s.DataMountPlan{}, nil
+	}
+	if h.dataSpaces == nil {
+		return k8s.DataMountPlan{}, ErrSubmissionDataSpacesUnavailable
+	}
+	bindings, err := h.dataSpaces.ListDataBindings(ctx, principal.TenantID, principal.Subject)
+	if err != nil {
+		return k8s.DataMountPlan{}, ErrSubmissionDataSpacesUnavailable
+	}
+	ready := make(map[domain.DataSpaceID]domain.DataMountBinding, len(bindings))
+	for _, binding := range bindings {
+		if binding.Status == domain.DataMountBindingReady && bindingVisibleToPrincipal(binding, principal) && dataSpaceMountingEnabled(binding.SpaceID, h.dataSpacesEnabled, h.idcDataSpacesEnabled) {
+			ready[binding.SpaceID] = binding
+		}
+	}
+	tenantRoot, hasTenantRoot := ready[domain.DataSpaceTenantStorageRoot]
+	root := func(space domain.DataSpaceID, readOnly bool) *k8s.DataMountRoot {
+		binding, ok := ready[space]
+		if !ok || strings.TrimSpace(binding.ClaimName) == "" {
+			return nil
+		}
+		if isTOSWorkloadSpace(space) {
+			if !hasTenantRoot || strings.TrimSpace(tenantRoot.ClaimName) == "" {
+				return nil
+			}
+			logicalRoot := binding.RootPrefix
+			if space == domain.DataSpacePublic {
+				var err error
+				logicalRoot, err = h.publicDataRootForTenant(principal.TenantID)
+				if err != nil {
+					return nil
+				}
+			}
+			subPath, err := dataRootSubPath(tenantRoot.RootPrefix, logicalRoot)
+			if err != nil {
+				return nil
+			}
+			return &k8s.DataMountRoot{ClaimName: tenantRoot.ClaimName, SubPath: subPath, ReadOnly: readOnly}
+		}
+		return &k8s.DataMountRoot{ClaimName: binding.ClaimName, ReadOnly: readOnly}
+	}
+	plan := k8s.DataMountPlan{
+		Personal: root(domain.DataSpaceWorkspace, false), Team: root(domain.DataSpaceTeamShared, true), Public: root(domain.DataSpacePublic, true),
+		IDCOriginal: root(domain.DataSpaceIDCOriginal, true), IDCWellspiking: root(domain.DataSpaceIDCWellspiking, true), IDCShared: root(domain.DataSpaceIDCShared, true),
+	}
+	if plan.Validate() != nil {
+		return k8s.DataMountPlan{}, ErrSubmissionDataMountNotReady
+	}
+	if h.dataSpacesEnabled && plan.Personal == nil {
+		return k8s.DataMountPlan{}, ErrSubmissionDataMountNotReady
+	}
+	if h.idcDataSpacesEnabled && (plan.IDCOriginal == nil || plan.IDCWellspiking == nil || plan.IDCShared == nil) {
+		return k8s.DataMountPlan{}, ErrSubmissionDataMountNotReady
+	}
+	return plan, nil
+}
+
+func isTOSWorkloadSpace(space domain.DataSpaceID) bool {
+	switch space {
+	case domain.DataSpaceWorkspace, domain.DataSpaceTeamShared, domain.DataSpacePublic:
+		return true
+	default:
+		return false
+	}
+}
+
+// dataRootSubPath returns the canonical relative directory below the internal
+// tenant TOS root. Both values originate in platform-owned bindings; still,
+// the check keeps an unexpected stored root from widening a Pod mount.
+func dataRootSubPath(tenantRoot, logicalRoot string) (string, error) {
+	base := strings.TrimSuffix(strings.TrimSpace(tenantRoot), "/")
+	child := strings.TrimSuffix(strings.TrimSpace(logicalRoot), "/")
+	if base == "" || child == "" || !strings.HasPrefix(child, base+"/") {
+		return "", fmt.Errorf("logical data root is outside the tenant storage root")
+	}
+	return domain.NormalizeStorageRelativePath(strings.TrimPrefix(child, base+"/"))
 }
 
 // resolveWorkspaceImage takes the image the user picked from the catalogue,
@@ -167,6 +281,12 @@ func (h *Handler) stopWorkspace(c *gin.Context) {
 		h.writeError(c, http.StatusBadGateway, "WORKSPACE_STOP_FAILED", "could not stop debug RayCluster")
 		return
 	}
+	// The editor Service is created alongside the cluster and is not garbage
+	// collected with it, so it has to be removed here or every stop leaks one.
+	if err := h.kubernetes.DeleteWorkspaceService(c.Request.Context(), workspace.Namespace, workspace.RayClusterName, workspace.ID); err != nil {
+		h.writeError(c, http.StatusBadGateway, "WORKSPACE_STOP_FAILED", "could not remove the debug workspace service")
+		return
+	}
 	if err := h.workspaces.UpdateWorkspaceState(c.Request.Context(), principal.TenantID, principal.Subject, domain.WorkspaceStopped); err != nil {
 		h.writeError(c, http.StatusInternalServerError, "WORKSPACE_STATE_FAILED", "could not persist workspace state")
 		return
@@ -188,9 +308,8 @@ func (h *Handler) RegisterWorkspaceProxyRoute(group *gin.RouterGroup) {
 // rather than a path on JupyterLab, so the editors stay independent.
 func (h *Handler) proxyWorkspaceVSCode(c *gin.Context) {
 	// code-server serves from the root, so the proxy prefix is stripped. Its
-	// static assets and HTML load correctly this way; the editor's WebSocket
-	// session is still refused by code-server at this sub-path and needs
-	// either a dedicated hostname or VSCODE_PROXY_URI support.
+	// static assets and WebSocket endpoint can share the workspace-scoped
+	// proxy; Nginx preserves the original Host for code-server's origin check.
 	h.proxyWorkspacePort(c, 8443, true)
 }
 
@@ -202,7 +321,7 @@ func (h *Handler) upstreamForPort(workspace *domain.DevWorkspace, port int) stri
 	if h.workspaceUpstream != nil {
 		return h.workspaceUpstream(workspace)
 	}
-	return fmt.Sprintf("http://%s-head-svc.%s.svc.cluster.local:%d", workspace.RayClusterName, workspace.Namespace, port)
+	return fmt.Sprintf("http://%s-dev-svc.%s.svc.cluster.local:%d", workspace.RayClusterName, workspace.Namespace, port)
 }
 
 // issueWorkspaceAccess mints the short-lived token the Portal puts in the
@@ -235,9 +354,10 @@ func (h *Handler) issueWorkspaceAccess(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	base := strings.TrimSuffix(workspace.JupyterURL, "/")
 	vscodeBase := strings.TrimSuffix(base, "/proxy") + "/vscode"
+	accessQuery := "?access_token=" + url.QueryEscape(token) + "&subject=" + url.QueryEscape(principal.Subject)
 	h.writeSuccess(c, http.StatusOK, map[string]string{
-		"url":       base + "/?access_token=" + url.QueryEscape(token),
-		"vscodeUrl": vscodeBase + "/?access_token=" + url.QueryEscape(token),
+		"url":       base + "/" + accessQuery,
+		"vscodeUrl": vscodeBase + "/" + accessQuery,
 	})
 }
 

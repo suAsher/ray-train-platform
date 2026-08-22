@@ -31,19 +31,19 @@ func TestRenderRayJobShutsDownClusterAfterJobFinishes(t *testing.T) {
 
 func TestRenderRayJobAppliesCleanupTTLFromPolicy(t *testing.T) {
 	job := validRenderJob()
-	job.Spec.CleanupPolicy = domain.CleanupPolicy{SuccessTTLSeconds: 900}
+	job.Spec.CleanupPolicy = domain.CleanupPolicy{FailureTTLSeconds: 900}
 	spec := renderSpec(t, job)
 	ttl, ok := spec["ttlSecondsAfterFinished"].(int64)
 	if !ok || ttl != 900 {
-		t.Fatalf("expected ttlSecondsAfterFinished=900, got %v", spec["ttlSecondsAfterFinished"])
+		t.Fatalf("expected initial failure-safe ttlSecondsAfterFinished=900, got %v", spec["ttlSecondsAfterFinished"])
 	}
 }
 
 func TestRenderRayJobAppliesDefaultCleanupTTLWhenPolicyOmitted(t *testing.T) {
 	spec := renderSpec(t, validRenderJob())
 	ttl, ok := spec["ttlSecondsAfterFinished"].(int64)
-	if !ok || ttl != defaultCleanupTTLSeconds {
-		t.Fatalf("expected default ttl %d, got %v", defaultCleanupTTLSeconds, spec["ttlSecondsAfterFinished"])
+	if !ok || ttl != 600 {
+		t.Fatalf("expected unfinished/failed training to retain diagnostics for 600 seconds, got %v", spec["ttlSecondsAfterFinished"])
 	}
 }
 
@@ -63,6 +63,19 @@ func TestRenderRayJobAppliesTimeoutAsActiveDeadline(t *testing.T) {
 	deadline, ok := spec["activeDeadlineSeconds"].(int64)
 	if !ok || deadline != 3600 {
 		t.Fatalf("expected activeDeadlineSeconds=3600, got %v", spec["activeDeadlineSeconds"])
+	}
+}
+
+func TestRenderRayJobPassesConfiguredInfrastructureRetriesToSubmitter(t *testing.T) {
+	job := validRenderJob()
+	job.Spec.RetryPolicy = domain.RetryPolicy{MaxRetries: 2}
+	spec := renderSpec(t, job)
+	config, ok := spec["submitterConfig"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected submitterConfig, got %#v", spec["submitterConfig"])
+	}
+	if retries, ok := config["backoffLimit"].(int64); !ok || retries != 2 {
+		t.Fatalf("expected submitter backoffLimit=2, got %#v", config["backoffLimit"])
 	}
 }
 

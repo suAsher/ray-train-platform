@@ -14,7 +14,7 @@ import (
 // GitCredentialResolver supplies the Secret name for a private repository, so
 // the renderer only wires a credential in when the tenant registered one.
 type GitCredentialResolver interface {
-	GitCredentialSecretFor(ctx context.Context, tenantID, repositoryURL string) string
+	GitCredentialSecretFor(ctx context.Context, tenantID, userID, repositoryURL string) string
 }
 
 type JobStore interface {
@@ -63,6 +63,9 @@ func (r *Reconciler) syncClusterQueueQuota(ctx context.Context) {
 		return
 	}
 	capacity, err := r.client.TrainingPoolCapacity(ctx, r.renderOptions.NodeSelector)
+	if err == nil {
+		err = domain.UpdateResourceLimitsFromCapacity(capacity.Nodes, capacity.GuaranteedGPUsPerWorker, capacity.GPUs)
+	}
 	if err == nil {
 		var changed bool
 		changed, err = r.client.SyncClusterQueueQuota(ctx, r.clusterQueueName, capacity)
@@ -163,7 +166,7 @@ func (r *Reconciler) ReconcileJob(ctx context.Context, jobID string) error {
 	}
 	options := r.renderOptions
 	if r.gitCredentials != nil && job.Spec.Source.Type == "git" {
-		options.GitCredentialSecret = r.gitCredentials.GitCredentialSecretFor(ctx, job.TenantID, job.Spec.Source.URL)
+		options.GitCredentialSecret = r.gitCredentials.GitCredentialSecretFor(ctx, job.TenantID, job.UserID, job.Spec.Source.URL)
 	}
 	manifest, err := RenderRayJob(*job, options)
 	if err != nil {
@@ -184,13 +187,25 @@ func (r *Reconciler) ReconcileJob(ctx context.Context, jobID string) error {
 	observed.KubernetesNS = resource.GetNamespace()
 	observed.RayJobName = resource.GetName()
 	observed.RayJobUID = string(resource.GetUID())
-	return r.store.ApplyObservedState(ctx, observed)
+	// Persist the terminal result before best-effort cleanup tuning. A transient
+	// Kubernetes update conflict must never leave a completed job non-terminal
+	// in PostgreSQL, where a later reconcile could recreate the workload.
+	if err := r.store.ApplyObservedState(ctx, observed); err != nil {
+		return err
+	}
+	if observed.State == domain.StateSucceeded {
+		_, err = r.client.UpdateRayJobCleanupTTL(ctx, resource, job.ID, successCleanupTTL(*job))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *Reconciler) reconcileCancellation(ctx context.Context, job *domain.TrainingJob) error {
 	name := job.RayJobName
 	if name == "" {
-		name = job.Spec.Name
+		name = rayJobResourceName(*job)
 	}
 	namespace := job.KubernetesNS
 	if namespace == "" {

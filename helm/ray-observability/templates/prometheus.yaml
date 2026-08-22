@@ -1,0 +1,161 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ray-observability-prometheus-config
+  labels:
+    {{- include "ray-observability.labels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: {{ .Values.prometheus.scrapeInterval }}
+      evaluation_interval: {{ .Values.prometheus.scrapeInterval }}
+      external_labels:
+        platform: ray-training
+        environment: production
+    scrape_configs:
+      - job_name: dcgm-exporter
+        kubernetes_sd_configs:
+          - role: endpoints
+            namespaces:
+              names: [kube-system]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_label_app_kubernetes_io_name]
+            action: keep
+            regex: dcgm-exporter
+          - source_labels: [__meta_kubernetes_service_label_app_kubernetes_io_instance]
+            action: keep
+            regex: nvidia-device-plugin
+          - source_labels: [__meta_kubernetes_endpoint_port_name]
+            action: keep
+            regex: metrics
+          - source_labels: [__meta_kubernetes_endpoint_node_name]
+            target_label: kubernetes_node
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: kubernetes_namespace
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ray-observability-prometheus
+  labels:
+    {{- include "ray-observability.labels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: ray-observability
+    app.kubernetes.io/component: prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ray-observability-prometheus-headless
+  labels:
+    {{- include "ray-observability.labels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: ray-observability
+    app.kubernetes.io/component: prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ray-observability-prometheus
+  labels:
+    {{- include "ray-observability.labels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+spec:
+  serviceName: ray-observability-prometheus-headless
+  replicas: {{ .Values.prometheus.replicas }}
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ray-observability
+      app.kubernetes.io/component: prometheus
+  template:
+    metadata:
+      labels:
+        {{- include "ray-observability.labels" . | nindent 8 }}
+        app.kubernetes.io/component: prometheus
+    spec:
+      serviceAccountName: ray-observability-prometheus
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: ray-observability
+                  app.kubernetes.io/component: prometheus
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: prometheus
+          image: {{ .Values.prometheus.image | quote }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time={{ .Values.prometheus.retention }}
+            - --web.enable-lifecycle
+          ports:
+            - name: http
+              containerPort: 9090
+          resources:
+            {{- toYaml .Values.prometheus.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+              readOnly: true
+            - name: storage
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: ray-observability-prometheus-config
+  volumeClaimTemplates:
+    - metadata:
+        name: storage
+        labels:
+          {{- include "ray-observability.labels" . | nindent 10 }}
+          app.kubernetes.io/component: prometheus
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: {{ .Values.prometheus.storage.className | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.prometheus.storage.size | quote }}

@@ -1,0 +1,140 @@
+{{- $release := default (dict) .Values.spkRayjobRelease }}
+{{- if (default false $release.enabled) }}
+{{- $image := required "spkRayjobRelease.image is required when spkRayjobRelease.enabled is true" $release.image }}
+{{- if and .Values.release.requireImageDigests (not $image.digest) }}{{- fail "spkRayjobRelease.image.digest is required when release.requireImageDigests is true" }}{{- end }}
+{{- if and $image.digest (not (regexMatch `^sha256:[0-9a-fA-F]{64}$` $image.digest)) }}{{- fail "spkRayjobRelease.image.digest must use sha256:<64 hex>" }}{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spk-rayjob-release
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: spk-rayjob-release
+    app: spk-rayjob-release
+spec:
+  replicas: {{ default 2 $release.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ .Values.availability.rollingUpdate.maxUnavailable }}
+      maxSurge: {{ .Values.availability.rollingUpdate.maxSurge }}
+  selector:
+    matchLabels:
+      app: spk-rayjob-release
+  template:
+    metadata:
+      labels:
+        {{- include "ray-train-platform.commonLabels" . | nindent 8 }}
+        app.kubernetes.io/component: spk-rayjob-release
+        app: spk-rayjob-release
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: {{ .Values.availability.topologySpreadWhenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              app: spk-rayjob-release
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node.kubernetes.io/instance-type
+                    operator: NotIn
+                    values: ["virtual-node"]
+                  - key: type
+                    operator: NotIn
+                    values: ["virtual-kubelet"]
+        {{- if .Values.availability.requiredAntiAffinity }}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: spk-rayjob-release
+              topologyKey: kubernetes.io/hostname
+        {{- else if .Values.availability.preferredAntiAffinity }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: spk-rayjob-release
+        {{- end }}
+      {{- with $release.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: release
+          image: {{ include "ray-train-platform.image" (list . $image) | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            {{- toYaml $release.resources | nindent 12 }}
+          volumeMounts:
+            - name: runtime
+              mountPath: /tmp
+            - name: cache
+              mountPath: /var/cache/nginx
+            - name: run
+              mountPath: /var/run
+      volumes:
+        - name: runtime
+          emptyDir: {}
+        - name: cache
+          emptyDir: {}
+        - name: run
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spk-rayjob-release
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: spk-rayjob-release
+spec:
+  type: {{ default "ClusterIP" $release.service.type }}
+  ports:
+    - name: http
+      port: {{ $release.service.port }}
+      targetPort: http
+  selector:
+    app: spk-rayjob-release
+{{- end }}

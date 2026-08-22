@@ -31,21 +31,22 @@ type UserSummary struct {
 }
 
 func (r *GormRepository) ListTenantSummaries(ctx context.Context) ([]TenantSummary, error) {
+	database := r.db.WithContext(ctx)
 	var tenants []TenantRecord
-	if err := r.db.WithContext(ctx).Order("created_at ASC").Find(&tenants).Error; err != nil {
+	if err := database.Order("created_at ASC").Find(&tenants).Error; err != nil {
 		return nil, fmt.Errorf("list tenants: %w", err)
 	}
 	var jobs []JobRecord
-	if err := r.db.WithContext(ctx).Find(&jobs).Error; err != nil {
+	if err := database.Find(&jobs).Error; err != nil {
 		return nil, fmt.Errorf("list jobs for tenant summaries: %w", err)
 	}
 	summaries := make([]TenantSummary, 0, len(tenants))
 	for _, tenant := range tenants {
-		quota := tenant.GPUQuotaLimit
-		if quota <= 0 {
-			quota = defaultTenantGPUQuota
+		used, err := reservedTenantGPUs(database, tenant.ID)
+		if err != nil {
+			return nil, fmt.Errorf("calculate tenant %q gpu usage: %w", tenant.ID, err)
 		}
-		summary := TenantSummary{ID: tenant.ID, Name: tenant.Name, Namespace: tenant.Namespace, QueueName: tenant.LocalQueue, GPUQuotaLimit: quota, MaxPriority: tenant.MaxPriority, CreatedAt: tenant.CreatedAt}
+		summary := TenantSummary{ID: tenant.ID, Name: tenant.Name, Namespace: tenant.Namespace, QueueName: tenant.LocalQueue, GPUQuotaLimit: effectiveGPUQuota(tenant.GPUQuotaLimit), GPUQuotaUsed: used, MaxPriority: tenant.MaxPriority, CreatedAt: tenant.CreatedAt}
 		for _, job := range jobs {
 			if job.TenantID != tenant.ID {
 				continue
@@ -53,10 +54,6 @@ func (r *GormRepository) ListTenantSummaries(ctx context.Context) ([]TenantSumma
 			switch domain.State(job.ObservedState) {
 			case domain.StateSubmitted, domain.StateValidating, domain.StateQueued, domain.StateAdmitted, domain.StateProvisioning, domain.StateRunning:
 				summary.ActiveJobsCount++
-				var spec domain.JobSpec
-				if json.Unmarshal([]byte(job.SpecJSON), &spec) == nil {
-					summary.GPUQuotaUsed += spec.Resources.WorkerReplicas * spec.Resources.GPUsPerWorker
-				}
 			case domain.StateSucceeded, domain.StateFailed, domain.StateCanceled, domain.StateTimedOut:
 			}
 			if domain.State(job.ObservedState) == domain.StateQueued {
@@ -66,6 +63,25 @@ func (r *GormRepository) ListTenantSummaries(ctx context.Context) ([]TenantSumma
 		summaries = append(summaries, summary)
 	}
 	return summaries, nil
+}
+
+// SetTenantGPUQuota reallocates a team's GPU budget. The value is the same one
+// enforceTenantGPUQuota checks on every submission, so the change takes effect
+// on the next job without a redeploy.
+func (r *GormRepository) SetTenantGPUQuota(ctx context.Context, tenantID string, limit int) error {
+	if limit < 0 {
+		return fmt.Errorf("tenant gpu quota cannot be negative")
+	}
+	result := r.db.WithContext(ctx).Model(&TenantRecord{}).
+		Where("id = ?", tenantID).
+		Updates(map[string]any{"gpu_quota_limit": limit, "updated_at": time.Now().UTC()})
+	if result.Error != nil {
+		return fmt.Errorf("update tenant gpu quota: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("tenant %q was not found", tenantID)
+	}
+	return nil
 }
 
 func (r *GormRepository) ListUserSummaries(ctx context.Context) ([]UserSummary, error) {

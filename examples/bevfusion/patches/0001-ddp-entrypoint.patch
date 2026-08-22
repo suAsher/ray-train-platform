@@ -1,0 +1,34 @@
+From: RayTrain Platform <platform@wellspiking.ai>
+Subject: [PATCH] tools: make westwell_train compatible with torchrun
+
+Apply this patch to either `bev_3dod` or `bev_3dod_s1h` before submitting a
+multi-GPU job.  It intentionally leaves the model configuration untouched.
+
+---
+ tools/westwell_train.py | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/tools/westwell_train.py b/tools/westwell_train.py
+index 0000000..1111111 100644
+--- a/tools/westwell_train.py
++++ b/tools/westwell_train.py
+@@ -56,7 +56,8 @@ def main():
+     parser.add_argument(
+         '--diff-seed',
+         action='store_true',
+         help='Whether or not set different seeds for different ranks')
++    parser.add_argument('--local-rank', '--local_rank', type=int, default=0)
+     args, opts = parser.parse_known_args()
+     if 'LOCAL_RANK' not in os.environ:
+         os.environ['LOCAL_RANK'] = str(args.local_rank)
+@@ -152,7 +153,7 @@ def main():
+         model,
+         datasets,
+         cfg,
+-        distributed=True,
++        distributed=distributed,
+         validate=True,
+         timestamp=timestamp,
+     )
+--
+2.39.0

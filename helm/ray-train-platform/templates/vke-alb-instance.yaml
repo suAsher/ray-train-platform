@@ -1,0 +1,57 @@
+{{- $alb := default (dict) .Values.albInstance }}
+{{- if (default false $alb.enabled) }}
+{{- if not $alb.name }}{{- fail "albInstance.name is required when albInstance.enabled is true" }}{{- end }}
+{{- if not $alb.className }}{{- fail "albInstance.className is required when albInstance.enabled is true" }}{{- end }}
+{{- if not $alb.instance.name }}{{- fail "albInstance.instance.name is required when albInstance.enabled is true" }}{{- end }}
+{{- if lt (len $alb.instance.zoneMappings) 2 }}{{- fail "albInstance.instance.zoneMappings must contain two private subnets for production availability" }}{{- end }}
+{{- if not $alb.https.certificateID }}{{- fail "albInstance.https.certificateID is required when albInstance.enabled is true" }}{{- end }}
+apiVersion: loadbalancer.vke.volcengine.com/v1beta1
+kind: ALBInstance
+metadata:
+  name: {{ $alb.name }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: ingress
+spec:
+  blockCascadeDeletion: true
+  {{- if $alb.instance.instanceID }}
+  instanceID: {{ $alb.instance.instanceID | quote }}
+  {{- else }}
+  instance:
+    name: {{ $alb.instance.name | quote }}
+    edition: {{ default "Basic" $alb.instance.edition }}
+    addressType: {{ default "private" $alb.instance.addressType }}
+    ipVersion: {{ default "ipv4" $alb.instance.ipVersion }}
+    deleteProtection: {{ default "on" $alb.instance.deleteProtection | quote }}
+    zoneMappings:
+      {{- toYaml $alb.instance.zoneMappings | nindent 6 }}
+  {{- end }}
+  listeners:
+    - protocol: HTTP
+      port: 80
+    - protocol: HTTPS
+      port: 443
+      certificateSource: {{ default "cert_center" $alb.https.certificateSource | quote }}
+      certificateID: {{ $alb.https.certificateID | quote }}
+      domainExtensions:
+        - domain: {{ $alb.https.host | quote }}
+          certificateSource: {{ default "cert_center" $alb.https.certificateSource | quote }}
+          certificateID: {{ $alb.https.certificateID | quote }}
+      enableHTTP2: true
+      enableQUIC: false
+---
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: {{ $alb.className }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: ingress
+spec:
+  controller: ingress.vke.volcengine.com/alb
+  parameters:
+    apiGroup: loadbalancer.vke.volcengine.com
+    kind: ALBInstance
+    name: {{ $alb.name }}
+    scope: Cluster
+{{- end }}

@@ -16,6 +16,30 @@ type sdkTOSClient struct {
 	client *tos.ClientV2
 }
 
+func (client *sdkTOSClient) GetBucketObjectSetConfiguration(ctx context.Context, input *tos.GetBucketObjectSetConfigurationInput) (*tos.GetBucketObjectSetConfigurationOutput, error) {
+	return client.client.GetBucketObjectSetConfiguration(ctx, input)
+}
+
+func (client *sdkTOSClient) PutBucketObjectSetConfiguration(ctx context.Context, input *tos.PutBucketObjectSetConfigurationInput) (*tos.PutBucketObjectSetConfigurationOutput, error) {
+	return client.client.PutBucketObjectSetConfiguration(ctx, input)
+}
+
+func (client *sdkTOSClient) GetObjectSet(ctx context.Context, input *tos.GetObjectSetInput) (*tos.GetObjectSetOutput, error) {
+	return client.client.GetObjectSet(ctx, input)
+}
+
+func (client *sdkTOSClient) PutObjectSet(ctx context.Context, input *tos.PutObjectSetInput) (*tos.PutObjectSetOutput, error) {
+	return client.client.PutObjectSet(ctx, input)
+}
+
+func (client *sdkTOSClient) PutObjectSetQuota(ctx context.Context, input *tos.PutObjectSetQuotaInput) (*tos.PutObjectSetQuotaOutput, error) {
+	return client.client.PutObjectSetQuota(ctx, input)
+}
+
+func (client *sdkTOSClient) GetObjectSetQuota(ctx context.Context, input *tos.GetObjectSetQuotaInput) (*tos.GetObjectSetQuotaOutput, error) {
+	return client.client.GetObjectSetQuota(ctx, input)
+}
+
 func NewTOSStore(config TOSConfig) (*TOSStore, error) {
 	if _, err := validateTOSConfig(config); err != nil {
 		return nil, err
@@ -81,6 +105,92 @@ func (client *sdkTOSClient) Head(ctx context.Context, bucket, objectKey string) 
 	return ObjectInfo{SizeBytes: output.ContentLength, Metadata: metadata}, nil
 }
 
+func (client *sdkTOSClient) ListDirectories(ctx context.Context, request tosDirectoryListRequest) (tosDirectoryListResponse, error) {
+	output, err := client.client.ListObjectsType2(ctx, &tos.ListObjectsType2Input{
+		Bucket: request.Bucket, Prefix: request.Prefix, Delimiter: request.Delimiter,
+		ContinuationToken: request.ContinuationToken, MaxKeys: request.MaxKeys,
+	})
+	if err != nil {
+		return tosDirectoryListResponse{}, err
+	}
+	if output == nil {
+		return tosDirectoryListResponse{}, fmt.Errorf("empty TOS directory response")
+	}
+	directories := make([]string, 0, len(output.CommonPrefixes))
+	for _, prefix := range output.CommonPrefixes {
+		directories = append(directories, prefix.Prefix)
+	}
+	return tosDirectoryListResponse{Directories: directories, NextContinuationToken: output.NextContinuationToken}, nil
+}
+
+func (client *sdkTOSClient) PutDirectoryMarker(ctx context.Context, bucket, key string) error {
+	_, err := client.client.PutObjectV2(ctx, &tos.PutObjectV2Input{
+		PutObjectBasicInput: tos.PutObjectBasicInput{
+			Bucket: bucket, Key: key, ContentLength: 0, ContentType: "application/octet-stream",
+		},
+		Content: strings.NewReader(""),
+	})
+	if err != nil {
+		return ErrUnavailable
+	}
+	return nil
+}
+
+func (client *sdkTOSClient) ListArtifacts(ctx context.Context, request tosArtifactListRequest) (tosArtifactListResponse, error) {
+	output, err := client.client.ListObjectsType2(ctx, &tos.ListObjectsType2Input{
+		Bucket: request.Bucket, Prefix: request.Prefix, Delimiter: request.Delimiter,
+		ContinuationToken: request.ContinuationToken, MaxKeys: request.MaxKeys,
+	})
+	if err != nil {
+		return tosArtifactListResponse{}, err
+	}
+	if output == nil {
+		return tosArtifactListResponse{}, fmt.Errorf("empty TOS artifact response")
+	}
+	directories := make([]string, 0, len(output.CommonPrefixes))
+	for _, prefix := range output.CommonPrefixes {
+		directories = append(directories, prefix.Prefix)
+	}
+	objects := make([]tosArtifactObject, 0, len(output.Contents))
+	for _, object := range output.Contents {
+		objects = append(objects, tosArtifactObject{Key: object.Key, SizeBytes: object.Size, LastModified: object.LastModified})
+	}
+	return tosArtifactListResponse{Directories: directories, Objects: objects, NextContinuationToken: output.NextContinuationToken}, nil
+}
+
+func (client *sdkTOSClient) CopyObject(ctx context.Context, request tosCopyRequest) error {
+	_, err := client.client.CopyObject(ctx, &tos.CopyObjectInput{
+		Bucket: request.Bucket, Key: request.DestinationKey,
+		SrcBucket: request.Bucket, SrcKey: request.SourceKey,
+		ForbidOverwrite: true,
+		GenericInput:    tos.GenericInput{RequestHeader: map[string]string{"If-None-Match": "*"}},
+	})
+	if err == nil {
+		return nil
+	}
+	if code := tos.StatusCode(err); code == http.StatusConflict || code == http.StatusPreconditionFailed {
+		return ErrAlreadyExists
+	}
+	return ErrUnavailable
+}
+
+func (client *sdkTOSClient) ReadArtifact(ctx context.Context, request tosArtifactReadRequest) (tosArtifactReadResponse, error) {
+	output, err := client.client.GetObjectV2(ctx, &tos.GetObjectV2Input{Bucket: request.Bucket, Key: request.Key})
+	if err != nil {
+		if tos.StatusCode(err) == http.StatusNotFound {
+			return tosArtifactReadResponse{}, ErrNotFound
+		}
+		return tosArtifactReadResponse{}, ErrUnavailable
+	}
+	if output == nil || output.Content == nil || output.ContentLength < 0 {
+		if output != nil && output.Content != nil {
+			_ = output.Content.Close()
+		}
+		return tosArtifactReadResponse{}, ErrUnavailable
+	}
+	return tosArtifactReadResponse{Content: output.Content, SizeBytes: output.ContentLength, ContentType: output.ContentType}, nil
+}
+
 func (client *sdkTOSClient) Put(ctx context.Context, request tosPutRequest) error {
 	_, err := client.client.PutObjectV2(ctx, &tos.PutObjectV2Input{
 		PutObjectBasicInput: tos.PutObjectBasicInput{
@@ -126,5 +236,5 @@ func (store *TOSStore) Put(ctx context.Context, objectKey, digest string, sizeBy
 }
 
 func safePutObjectKey(value string) bool {
-	return strings.HasPrefix(value, "tenants/") && !strings.Contains(value, "..") && !strings.Contains(value, "\\") && strings.IndexByte(value, 0) < 0
+	return strings.HasPrefix(value, "ray-train/tenants/") && !strings.Contains(value, "..") && !strings.Contains(value, "\\") && strings.IndexByte(value, 0) < 0
 }

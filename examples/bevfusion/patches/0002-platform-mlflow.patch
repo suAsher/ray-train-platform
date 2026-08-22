@@ -1,0 +1,45 @@
+diff --git a/tools/westwell_train.py b/tools/westwell_train.py
+--- a/tools/westwell_train.py
++++ b/tools/westwell_train.py
+@@ -15,6 +15,10 @@
+ from mmdet3d.datasets import build_dataset
+ from mmdet3d.models import build_model
+ from mmdet3d.utils import get_root_logger, convert_sync_batchnorm, recursive_eval
++from mmdet3d.utils.platform_mlflow import (
++    finish_platform_mlflow,
++    start_platform_mlflow,
++)
+
+
+ def configure_platform_output(cfg):
+@@ -181,14 +185,22 @@
+         model = convert_sync_batchnorm(model, exclude=cfg["sync_bn"]["exclude"])
+
+     logger.info(f"Model:\n{model}")
++    rank, world_size = get_dist_info()
++    platform_mlflow = start_platform_mlflow(cfg, rank, world_size)
+-    train_model(
+-        model,
+-        datasets,
+-        cfg,
+-        distributed=distributed,
+-        validate=True,
+-        timestamp=timestamp,
+-    )
++    try:
++        train_model(
++            model,
++            datasets,
++            cfg,
++            distributed=distributed,
++            validate=True,
++            timestamp=timestamp,
++        )
++    except BaseException:
++        finish_platform_mlflow(platform_mlflow, "FAILED")
++        raise
++    else:
++        finish_platform_mlflow(platform_mlflow, "FINISHED")
+
+
+ if __name__ == "__main__":

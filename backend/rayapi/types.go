@@ -20,6 +20,18 @@ type PackageName struct {
 	Name string
 }
 
+// SubmissionDefaults are the safe, intentionally small shape used when a
+// caller uses the stock `ray job submit --working-dir .` command. Ray's CLI
+// has no first-class flags for the Kubernetes image, Kueue queue, or GPU pod
+// topology, so the platform owns those values.
+type SubmissionDefaults struct {
+	Image           string
+	WorkerReplicas  int
+	GPUsPerWorker   int
+	CPUPerWorker    int64
+	MemoryPerWorker string
+}
+
 type TranslatedSubmitRequest struct {
 	Package              PackageName
 	Spec                 domain.JobSpec

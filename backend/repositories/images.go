@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"ray-train-platform-backend/domain"
 )
 
@@ -75,7 +76,16 @@ func (r *GormRepository) ListImages(ctx context.Context, tenantID, kind string) 
 		query = query.Where("kind = ?", kind)
 	}
 	var records []PlatformImageRecord
-	if err := query.Order("is_default DESC, name ASC").Find(&records).Error; err != nil {
+	// A tenant can legitimately see two defaults: its own and the shared
+	// fallback. Keep the tenant-specific default first so API/CLI consumers do
+	// not accidentally select the shared image based on alphabetical order.
+	if err := query.
+		Clauses(clause.OrderBy{Expression: clause.Expr{
+			SQL:                "is_default DESC, CASE WHEN tenant_id = ? THEN 0 ELSE 1 END ASC, name ASC",
+			Vars:               []interface{}{tenantID},
+			WithoutParentheses: true,
+		}}).
+		Find(&records).Error; err != nil {
 		return nil, fmt.Errorf("list images: %w", err)
 	}
 	images := make([]domain.PlatformImage, 0, len(records))

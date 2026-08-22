@@ -1,11 +1,14 @@
 package k8s
 
 import (
+	"encoding/json"
 	"fmt"
-	"net/url"
+	"path"
 	"strconv"
 	"strings"
+	"time"
 
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"ray-train-platform-backend/domain"
 )
@@ -24,15 +27,36 @@ type RenderOptions struct {
 	SourceMaterializerImage string
 	IDCExistingClaim        string
 	IDCMountPath            string
-	TOSSecretName           string
-	TOSEndpoint             string
-	TOSBucket               string
+	LocalCache              LocalCacheOptions
 	// NodeSelector pins Ray Pods to the GPU training pool. It is configuration
 	// so that adding machines or changing GPU model needs no code change.
 	NodeSelector map[string]string
 	// GitCredentialSecret names a Secret in the tenant namespace holding
 	// GIT_USERNAME/GIT_TOKEN for a private repository. Empty for public ones.
 	GitCredentialSecret string
+	MLflow              MLflowOptions
+}
+
+// MLflowOptions carries only non-secret, in-cluster routing information.
+// Object-store credentials remain attached to the MLflow server itself.
+type MLflowOptions struct {
+	Enabled          bool
+	TrackingURI      string
+	ExperimentPrefix string
+	ProvenanceKey    []byte
+	jobID            string
+	tenantID         string
+	userID           string
+}
+
+// LocalCacheOptions describes disposable node-local storage for a single Ray
+// Pod. It is deliberately not part of the storage catalog: neither input data
+// nor output artifacts may depend on its lifecycle.
+type LocalCacheOptions struct {
+	Enabled      bool
+	StorageClass string
+	Size         string
+	MountPath    string
 }
 
 // defaultTrainingNodeSelector matches the label the deployment guide asks
@@ -58,15 +82,27 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	if err := domain.ValidatePinnedImage(options.SourceMaterializerImage); err != nil {
 		return nil, fmt.Errorf("source materializer image: %w", err)
 	}
-	if job.Spec.Source.Type == "workspace" && options.IDCExistingClaim == "" {
-		return nil, fmt.Errorf("workspace source requires an IDC PVC")
+	if err := options.LocalCache.Validate(); err != nil {
+		return nil, fmt.Errorf("local cache: %w", err)
 	}
-	if job.Spec.Source.Type == "tos" && (options.TOSSecretName == "" || options.TOSEndpoint == "") {
-		return nil, fmt.Errorf("tos source requires TOS endpoint and credential Secret")
+	if err := options.MLflow.Validate(); err != nil {
+		return nil, fmt.Errorf("MLflow: %w", err)
 	}
-	if job.Spec.Source.Type == "artifact" {
-		if err := validateArtifactMaterialization(job, options); err != nil {
-			return nil, err
+	if job.Spec.Source.Type != "git" && job.Spec.Source.Type != "workspace" && job.Spec.Source.Type != "workspace-archive" {
+		// Defense in depth for callers that bypass the HTTP submission service.
+		// Ray workloads must not receive object-store credentials just to obtain
+		// their source code.
+		return nil, fmt.Errorf("unsupported Ray workload code source %q", job.Spec.Source.Type)
+	}
+	if (job.Spec.Source.Type == "workspace" || job.Spec.Source.Type == "workspace-archive") && job.Spec.ResolvedDataRoots.Personal == nil {
+		return nil, fmt.Errorf("workspace-derived source requires a resolved personal data mount")
+	}
+	if job.Spec.Source.Type == "workspace-archive" {
+		if strings.TrimSpace(job.Spec.Source.ArtifactID) == "" || strings.TrimSpace(job.Spec.Source.ArtifactSHA256) == "" {
+			return nil, fmt.Errorf("workspace archive source must be materialized before rendering")
+		}
+		if !domain.IsSourceArtifactObjectKeyForTenant(job.TenantID, job.Spec.Source.ArtifactObjectKey, job.Spec.Source.ArtifactSHA256) {
+			return nil, fmt.Errorf("workspace archive source is not owner scoped")
 		}
 	}
 	namespace := strings.TrimSpace(job.KubernetesNS)
@@ -97,25 +133,50 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	if strings.TrimSpace(workerMemory) == "" {
 		workerMemory = "32Gi"
 	}
-	entrypoint := append(append([]string{}, job.Spec.Entrypoint.Command...), job.Spec.Entrypoint.Args...)
+	entrypoint := executionProfileEntrypoint(job.Spec)
+	options.MLflow.jobID = job.ID
+	options.MLflow.tenantID = job.TenantID
+	options.MLflow.userID = job.UserID
 
 	// The submitter runs `ray job submit`, and Ray uploads the runtime env's
-	// working_dir from the submitter's own filesystem. It therefore needs the
-	// same materialized source as the cluster, or the driver gets an empty
-	// working directory.
-	submitterPod := podTemplate("ray-job-submitter", job.Spec.Image, "1", "2Gi", 0, job.Spec.Source, options, true)
+	// working_dir from the submitter's own filesystem. Materialize the source
+	// only there: Ray distributes that runtime env to the driver and workers.
+	// This prevents every Pod from independently fetching the same Git source
+	// and keeps private Git credentials out of the Ray cluster Pods.
+	submitterPod := podTemplate("ray-job-submitter", job.Spec.Image, "1", "2Gi", 0, job.Spec.Source, job.Spec, options, true, false, true)
 	// KubeRay wraps this template in a batch Job, whose pod spec requires an
 	// explicit restartPolicy; without it the submitter Job is rejected and the
 	// RayJob stalls in Initializing forever.
 	submitterPod["spec"].(map[string]any)["restartPolicy"] = "Never"
-	headPod := podTemplate("ray-head", job.Spec.Image, "4", "16Gi", 0, job.Spec.Source, options, true)
-	workerPod := podTemplate("ray-worker", job.Spec.Image, workerCPU, workerMemory, gpusPerWorker, job.Spec.Source, options, false)
+	addPodLabels(submitterPod, job.ID, job.TenantID)
+	headPod := podTemplate("ray-head", job.Spec.Image, "4", "16Gi", 0, job.Spec.Source, job.Spec, options, true, true, false)
+	workerPod := podTemplate("ray-worker", job.Spec.Image, workerCPU, workerMemory, gpusPerWorker, job.Spec.Source, job.Spec, options, false, true, false)
 	addPodLabels(headPod, job.ID, job.TenantID)
 	addPodLabels(workerPod, job.ID, job.TenantID)
+	if job.Spec.Execution.ResolvedMode() == domain.ExecutionModeRayTrain {
+		// A Ray-managed DDP worker represents one physical training node. Require
+		// an even host spread so a multi-worker submission is a real multi-node
+		// validation rather than two worker Pods packed onto one 8-GPU server.
+		workerPod["spec"].(map[string]any)["topologySpreadConstraints"] = []any{map[string]any{
+			"maxSkew":           int64(1),
+			"minDomains":        int64(2),
+			"topologyKey":       "kubernetes.io/hostname",
+			"whenUnsatisfiable": "DoNotSchedule",
+			"labelSelector": map[string]any{"matchLabels": map[string]any{
+				"platform_job_id": job.ID,
+			}},
+		}}
+	}
+	headStartParams := map[string]any{"dashboard-host": "0.0.0.0", "num-gpus": "0"}
+	workerStartParams := map[string]any{"num-gpus": strconv.FormatInt(gpusPerWorker, 10)}
+	if options.LocalCache.Enabled {
+		configureRayCache(headStartParams, options.LocalCache)
+		configureRayCache(workerStartParams, options.LocalCache)
+	}
 	clusterSpec := map[string]any{
 		"rayVersion": rayVersion,
 		"headGroupSpec": map[string]any{
-			"rayStartParams": map[string]any{"dashboard-host": "0.0.0.0", "num-gpus": "0"},
+			"rayStartParams": headStartParams,
 			"template":       headPod,
 		},
 		"workerGroupSpecs": []any{map[string]any{
@@ -123,11 +184,12 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 			"replicas":       workerReplicas,
 			"minReplicas":    workerReplicas,
 			"maxReplicas":    workerReplicas,
-			"rayStartParams": map[string]any{"num-gpus": strconv.FormatInt(gpusPerWorker, 10)},
+			"rayStartParams": workerStartParams,
 			"template":       workerPod,
 		}},
 	}
 	labels := map[string]any{
+		"app.kubernetes.io/part-of":    "ray-train-platform",
 		"app.kubernetes.io/managed-by": "ray-train-platform",
 		"ray.io/job-id":                job.ID,
 		"ray.io/tenant-id":             job.TenantID,
@@ -139,7 +201,9 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 		"apiVersion": RayAPIVersion,
 		"kind":       RayJobKind,
 		"metadata": map[string]any{
-			"name":      job.Spec.Name,
+			// The display name is reusable. Kubernetes identity comes from the
+			// immutable platform job ID so repeated project runs never collide.
+			"name":      rayJobResourceName(job),
 			"namespace": namespace,
 			"labels":    labels,
 			"annotations": map[string]any{
@@ -152,15 +216,96 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	return &unstructured.Unstructured{Object: jobObject}, nil
 }
 
-// defaultCleanupTTLSeconds keeps a finished RayCluster around briefly so the
-// Portal can capture the final status before KubeRay removes it.
-const defaultCleanupTTLSeconds int64 = 600
+// executionProfileEntrypoint keeps compatibility for persisted V1 jobs while routing
+// newly selected profiles through the image-owned launcher. The launcher is
+// deliberately part of the immutable runtime image: neither API clients nor
+// user code need to understand Ray head/worker placement or credentials.
+func executionProfileEntrypoint(spec domain.JobSpec) []string {
+	command := append(append([]string{}, spec.Entrypoint.Command...), spec.Entrypoint.Args...)
+	mode := spec.Execution.ResolvedMode()
+	if mode == domain.ExecutionModeLegacy {
+		return command
+	}
+	launcher := []string{
+		"raytrain-launch",
+		"--mode", string(mode),
+		"--workers", strconv.Itoa(spec.Resources.WorkerReplicas),
+		"--gpus-per-worker", strconv.Itoa(spec.Resources.GPUsPerWorker),
+		"--",
+	}
+	return append(launcher, command...)
+}
+
+func (options LocalCacheOptions) Validate() error {
+	if !options.Enabled {
+		return nil
+	}
+	if !isDNSSubdomain(strings.TrimSpace(options.StorageClass)) {
+		return fmt.Errorf("storage class must be a valid Kubernetes name")
+	}
+	quantity, err := resource.ParseQuantity(strings.TrimSpace(options.Size))
+	if err != nil || quantity.Sign() <= 0 {
+		return fmt.Errorf("size must be a positive Kubernetes storage quantity")
+	}
+	mountPath := strings.TrimSpace(options.MountPath)
+	if !strings.HasPrefix(mountPath, "/") || path.Clean(mountPath) != mountPath || mountPath == "/" {
+		return fmt.Errorf("mount path must be a clean absolute directory")
+	}
+	if mountPath == "/tmp/ray" || strings.HasPrefix(mountPath, "/tmp/ray/") {
+		return fmt.Errorf("mount path must not be inside Ray's default temporary directory")
+	}
+	return nil
+}
+
+func configureRayCache(rayStartParams map[string]any, cache LocalCacheOptions) {
+	rayStartParams["temp-dir"] = path.Join(cache.MountPath, "ray")
+	rayStartParams["object-spilling-config"] = rayObjectSpillingConfig(path.Join(cache.MountPath, "ray-spill", "objects"))
+}
+
+func rayObjectSpillingConfig(directory string) string {
+	config, _ := json.Marshal(map[string]any{
+		"type":   "filesystem",
+		"params": map[string]string{"directory_path": directory},
+	})
+	return string(config)
+}
+
+const (
+	// A successful run has already persisted its history and artifacts, so its
+	// scarce GPU workers can be released promptly.
+	defaultSuccessCleanupTTLSeconds int64 = 60
+	// Failed runs retain a longer native Ray diagnostics window. The reconciler
+	// shortens this value only after it observes SUCCEEDED.
+	defaultFailureCleanupTTLSeconds int64 = 600
+)
+
+func rayJobResourceName(job domain.TrainingJob) string {
+	// Jobs created before display names became reusable already have a live
+	// Kubernetes resource under the persisted name. Keep using that exact
+	// identity so an upgrade cannot create a duplicate workload.
+	if persisted := strings.TrimSpace(job.RayJobName); persisted != "" {
+		return persisted
+	}
+	return sanitizeDNS(job.ID)
+}
+
+func successCleanupTTL(job domain.TrainingJob) int64 {
+	ttl := job.Spec.CleanupPolicy.SuccessTTLSeconds
+	if ttl <= 0 {
+		return defaultSuccessCleanupTTLSeconds
+	}
+	return ttl
+}
+
+func failureCleanupTTL(job domain.TrainingJob) int64 {
+	ttl := job.Spec.CleanupPolicy.FailureTTLSeconds
+	if ttl <= 0 {
+		return defaultFailureCleanupTTLSeconds
+	}
+	return ttl
+}
 
 func jobSpecFields(job domain.TrainingJob, clusterSpecField string, clusterSpec map[string]any, entrypoint []string, submitterPod map[string]any) map[string]any {
-	cleanupTTL := job.Spec.CleanupPolicy.SuccessTTLSeconds
-	if cleanupTTL <= 0 {
-		cleanupTTL = defaultCleanupTTLSeconds
-	}
 	spec := map[string]any{
 		"submissionMode": "K8sJobMode",
 		// KubeRay appends this to `ray job submit -- ...`. It must be a single
@@ -175,12 +320,21 @@ func jobSpecFields(job domain.TrainingJob, clusterSpecField string, clusterSpec 
 		// Release the GPUs as soon as the run ends; without this the RayCluster
 		// outlives the job and the worker Pods keep their nvidia.com/gpu claims.
 		"shutdownAfterJobFinishes": true,
-		"ttlSecondsAfterFinished":  cleanupTTL,
+		// KubeRay has one TTL for every terminal state. Start conservatively
+		// with the failure window; the reconciler changes it after SUCCEEDED.
+		"ttlSecondsAfterFinished": failureCleanupTTL(job),
 		// Kueue admits a workload by clearing suspend. A job created unsuspended
 		// would start immediately and bypass the tenant GPU quota. JobSpec
 		// validation guarantees a queue, so this always applies.
 		"suspend":              true,
 		"submitterPodTemplate": submitterPod,
+	}
+	// KubeRay creates the submitter as a Kubernetes Job. Its backoff limit
+	// covers transient provisioning failures only (image pull, temporary API
+	// or node interruptions). A training process that exits non-zero still
+	// requires an explicit user-confirmed resume from a persisted checkpoint.
+	if job.Spec.RetryPolicy.MaxRetries > 0 {
+		spec["submitterConfig"] = map[string]any{"backoffLimit": int64(job.Spec.RetryPolicy.MaxRetries)}
 	}
 	if job.Spec.TimeoutSeconds > 0 {
 		spec["activeDeadlineSeconds"] = job.Spec.TimeoutSeconds
@@ -188,25 +342,7 @@ func jobSpecFields(job domain.TrainingJob, clusterSpecField string, clusterSpec 
 	return spec
 }
 
-func validateArtifactMaterialization(job domain.TrainingJob, options RenderOptions) error {
-	source := job.Spec.Source
-	if strings.TrimSpace(source.ArtifactID) == "" || strings.TrimSpace(source.ArtifactObjectKey) == "" || strings.TrimSpace(source.ArtifactSHA256) == "" {
-		return fmt.Errorf("artifact source must be materialized before rendering")
-	}
-	if options.TOSSecretName == "" || options.TOSEndpoint == "" || options.TOSBucket == "" {
-		return fmt.Errorf("artifact source requires TOS bucket, endpoint, and credential Secret")
-	}
-	expectedKey, err := domain.SourceArtifactObjectKey(job.TenantID, job.UserID, source.ArtifactSHA256)
-	if err != nil {
-		return fmt.Errorf("validate artifact digest: %w", err)
-	}
-	if source.ArtifactObjectKey != expectedKey {
-		return fmt.Errorf("artifact object key is not the immutable owner-scoped key")
-	}
-	return nil
-}
-
-func podTemplate(containerName, image, cpu, memory string, gpus int64, source domain.CodeSource, options RenderOptions, head bool) map[string]any {
+func podTemplate(containerName, image, cpu, memory string, gpus int64, source domain.CodeSource, jobSpec domain.JobSpec, options RenderOptions, head, mountData, materializeSource bool) map[string]any {
 	resources := map[string]any{
 		"requests": map[string]any{"cpu": cpu, "memory": memory},
 		"limits":   map[string]any{"cpu": cpu, "memory": memory},
@@ -219,6 +355,12 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 		map[string]any{"name": "PYTHONUNBUFFERED", "value": "1"},
 		map[string]any{"name": "RAY_DISABLE_DOCKER_CPU_WARNING", "value": "1"},
 	}
+	if mountData {
+		env = append(env, platformDataEnvironment(jobSpec)...)
+	}
+	if options.MLflow.Enabled {
+		env = append(env, mlflowEnvironment(options.MLflow)...)
+	}
 	if !head {
 		env = append(env,
 			map[string]any{"name": "NCCL_P2P_DISABLE", "value": "1"},
@@ -226,43 +368,44 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 			map[string]any{"name": "NCCL_DEBUG", "value": "WARN"},
 		)
 	}
-	if options.TOSSecretName != "" {
-		for _, key := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"} {
-			env = append(env, map[string]any{
-				"name": key,
-				"valueFrom": map[string]any{"secretKeyRef": map[string]any{
-					"name": options.TOSSecretName,
-					"key":  key,
-				}},
-			})
-		}
-	}
-	if options.TOSEndpoint != "" {
-		env = append(env, map[string]any{"name": "TOS_ENDPOINT", "value": options.TOSEndpoint})
-	}
-	if options.TOSBucket != "" {
-		env = append(env, map[string]any{"name": "TOS_BUCKET", "value": options.TOSBucket})
-	}
 	volumeMounts := []any{
 		map[string]any{"name": "workspace", "mountPath": "/workspace"},
 		map[string]any{"name": "dshm", "mountPath": "/dev/shm"},
-		map[string]any{"name": "ray-spill", "mountPath": "/tmp/ray-spill"},
 	}
 	volumes := []any{
 		map[string]any{"name": "workspace", "emptyDir": map[string]any{}},
 		map[string]any{"name": "dshm", "emptyDir": map[string]any{"medium": "Memory", "sizeLimit": "32Gi"}},
-		map[string]any{"name": "ray-spill", "emptyDir": map[string]any{}},
 	}
-	if options.IDCExistingClaim != "" {
+	if !options.LocalCache.Enabled {
+		volumeMounts = append(volumeMounts, map[string]any{"name": "ray-spill", "mountPath": "/tmp/ray-spill"})
+		volumes = append(volumes, map[string]any{"name": "ray-spill", "emptyDir": map[string]any{}})
+	}
+	useLegacyIDC := options.IDCExistingClaim != "" && !hasAnyResolvedDataRoots(jobSpec.ResolvedDataRoots)
+	if useLegacyIDC {
 		mountPath := options.IDCMountPath
 		if mountPath == "" {
 			mountPath = "/mnt/idc"
 		}
-		volumeMounts = append(volumeMounts, map[string]any{"name": "idc-storage", "mountPath": mountPath, "readOnly": false})
+		volumeMounts = append(volumeMounts, map[string]any{"name": "idc-storage", "mountPath": mountPath, "readOnly": true})
 		volumes = append(volumes, map[string]any{
 			"name":                  "idc-storage",
-			"persistentVolumeClaim": map[string]any{"claimName": options.IDCExistingClaim, "readOnly": false},
+			"persistentVolumeClaim": map[string]any{"claimName": options.IDCExistingClaim, "readOnly": true},
 		})
+	}
+	if mountData {
+		volumeMounts, volumes = appendResolvedStorageMounts(volumeMounts, volumes, jobSpec.ResolvedStorage)
+		volumeMounts, volumes = appendTrainingDataRoots(volumeMounts, volumes, jobSpec.ResolvedDataRoots)
+		volumeMounts, volumes = appendResolvedDataSpaceMounts(volumeMounts, volumes, jobSpec.ResolvedDataMounts)
+	}
+	if materializeSource && (source.Type == "workspace" || source.Type == "workspace-archive") {
+		personal := jobSpec.ResolvedDataRoots.Personal
+		if personal != nil {
+			volumes = append(volumes, pvcVolume("workspace-snapshot-source", personal.ClaimName, true))
+		}
+	}
+	if mountData && options.LocalCache.Enabled {
+		volumeMounts, volumes = appendLocalCache(volumeMounts, volumes, options.LocalCache)
+		env = append(env, map[string]any{"name": "PLATFORM_CACHE_PATH", "value": options.LocalCache.MountPath})
 	}
 	podSpec := map[string]any{
 		"serviceAccountName":           options.ServiceAccount,
@@ -278,8 +421,13 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 			"volumeMounts":    volumeMounts,
 			"securityContext": map[string]any{"allowPrivilegeEscalation": false, "capabilities": map[string]any{"drop": []any{"ALL"}}},
 		}},
-		"volumes":        volumes,
-		"initContainers": []any{sourceMaterializer(source, options)},
+		"volumes": volumes,
+	}
+	if materializeSource {
+		podSpec["initContainers"] = []any{sourceMaterializer(source, jobSpec, options)}
+	}
+	if mountData && options.LocalCache.Enabled {
+		podSpec["securityContext"].(map[string]any)["fsGroup"] = int64(1000)
 	}
 	if pullSecrets := renderImagePullSecrets(options.ImagePullSecrets); len(pullSecrets) > 0 {
 		podSpec["imagePullSecrets"] = pullSecrets
@@ -293,6 +441,180 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 	return map[string]any{"spec": podSpec}
 }
 
+func (options MLflowOptions) Validate() error {
+	if !options.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(options.TrackingURI) == "" {
+		return fmt.Errorf("tracking URI is required when enabled")
+	}
+	prefix := strings.Trim(strings.TrimSpace(options.ExperimentPrefix), "-")
+	if prefix == "" {
+		return fmt.Errorf("experiment prefix is required when enabled")
+	}
+	if len(options.ProvenanceKey) < 32 {
+		return fmt.Errorf("provenance key must contain at least 32 bytes")
+	}
+	return nil
+}
+
+func mlflowProvenanceTag(key []byte, jobID string) string {
+	return domain.MLflowProvenanceTag(key, jobID)
+}
+
+func mlflowEnvironment(options MLflowOptions) []any {
+	return []any{
+		map[string]any{"name": "MLFLOW_TRACKING_URI", "value": options.TrackingURI},
+		map[string]any{"name": "MLFLOW_EXPERIMENT_NAME", "value": strings.Trim(options.ExperimentPrefix, "-") + "-" + options.tenantID},
+		map[string]any{"name": "MLFLOW_RUN_NAME", "value": options.jobID},
+		map[string]any{"name": "RAYTRAIN_JOB_ID", "value": options.jobID},
+		map[string]any{"name": "RAYTRAIN_TENANT_ID", "value": options.tenantID},
+		map[string]any{"name": "RAYTRAIN_SUBMITTER_USER_ID", "value": options.userID},
+		map[string]any{"name": "RAYTRAIN_MLFLOW_PROVENANCE", "value": mlflowProvenanceTag(options.ProvenanceKey, options.jobID)},
+	}
+}
+
+func appendLocalCache(volumeMounts, volumes []any, cache LocalCacheOptions) ([]any, []any) {
+	volumeMounts = append(volumeMounts, map[string]any{"name": "local-cache", "mountPath": cache.MountPath})
+	volumes = append(volumes, map[string]any{
+		"name": "local-cache",
+		"ephemeral": map[string]any{
+			"volumeClaimTemplate": map[string]any{
+				"spec": map[string]any{
+					"accessModes":      []any{"ReadWriteOnce"},
+					"storageClassName": cache.StorageClass,
+					"resources": map[string]any{
+						"requests": map[string]any{"storage": cache.Size},
+					},
+				},
+			},
+		},
+	})
+	return volumeMounts, volumes
+}
+
+func platformDataEnvironment(spec domain.JobSpec) []any {
+	locations := []struct {
+		name  string
+		value string
+	}{
+		{name: "PLATFORM_DATASET_URI", value: spec.DatasetURI},
+		{name: "PLATFORM_CHECKPOINT_URI", value: spec.CheckpointURI},
+		{name: "PLATFORM_OUTPUT_URI", value: spec.OutputURI},
+	}
+	env := make([]any, 0, len(locations))
+	for _, location := range locations {
+		if value := strings.TrimSpace(location.value); value != "" {
+			env = append(env, map[string]any{"name": location.name, "value": value})
+		}
+	}
+	mounts := []struct {
+		name  string
+		mount *domain.ResolvedStorageMount
+	}{
+		{name: "PLATFORM_DATASET_PATH", mount: spec.ResolvedStorage.Dataset},
+		{name: "PLATFORM_CHECKPOINT_PATH", mount: spec.ResolvedStorage.Checkpoint},
+		{name: "PLATFORM_OUTPUT_PATH", mount: spec.ResolvedStorage.Output},
+	}
+	for _, item := range mounts {
+		if item.mount == nil {
+			continue
+		}
+		path := item.mount.MountPath
+		if item.mount.RelativePath != "" {
+			path += "/" + item.mount.RelativePath
+		}
+		env = append(env, map[string]any{"name": item.name, "value": path})
+	}
+	governedMounts := []struct {
+		name  string
+		mount *domain.ResolvedDataMount
+	}{
+		{name: "PLATFORM_DATASET_PATH", mount: spec.ResolvedDataMounts.Input},
+		{name: "PLATFORM_CHECKPOINT_PATH", mount: spec.ResolvedDataMounts.Checkpoint},
+		{name: "PLATFORM_OUTPUT_PATH", mount: spec.ResolvedDataMounts.Output},
+	}
+	for _, item := range governedMounts {
+		if item.mount == nil {
+			continue
+		}
+		env = append(env, map[string]any{"name": item.name, "value": item.mount.MountPath})
+	}
+	return env
+}
+
+func appendResolvedStorageMounts(volumeMounts, volumes []any, mounts domain.ResolvedStorageMounts) ([]any, []any) {
+	items := []struct {
+		volumeName string
+		mount      *domain.ResolvedStorageMount
+	}{
+		{volumeName: "platform-dataset", mount: mounts.Dataset},
+		{volumeName: "platform-checkpoint", mount: mounts.Checkpoint},
+		{volumeName: "platform-output", mount: mounts.Output},
+	}
+	for _, item := range items {
+		if item.mount == nil {
+			continue
+		}
+		volumeMounts = append(volumeMounts, map[string]any{
+			"name": item.volumeName, "mountPath": item.mount.MountPath, "readOnly": item.mount.ReadOnly,
+		})
+		volumes = append(volumes, map[string]any{
+			"name": item.volumeName,
+			"persistentVolumeClaim": map[string]any{
+				"claimName": item.mount.ClaimName, "readOnly": item.mount.ReadOnly,
+			},
+		})
+	}
+	return volumeMounts, volumes
+}
+
+// appendResolvedDataSpaceMounts renders only control-plane-generated mount
+// contracts. The subPath keeps each Pod inside its selected logical directory
+// even though the backing PVC is a wider platform-managed root.
+func appendResolvedDataSpaceMounts(volumeMounts, volumes []any, mounts domain.ResolvedDataSpaceMounts) ([]any, []any) {
+	items := []struct {
+		volumeName string
+		mount      *domain.ResolvedDataMount
+	}{
+		{volumeName: "platform-data-input", mount: mounts.Input},
+		{volumeName: "platform-data-checkpoint", mount: mounts.Checkpoint},
+		{volumeName: "platform-data-output", mount: mounts.Output},
+	}
+	for _, item := range items {
+		if item.mount == nil {
+			continue
+		}
+		volumeName := item.volumeName
+		// A tenant-root data PVC can already be mounted at governed
+		// personal/team/public paths. Reuse that one writable PVC source for
+		// readonly selections backed by that claim; only the individual
+		// container mount carries the read-only flag. Declaring the same FSX
+		// PVC twice, once read-write and once read-only, causes the CSI driver
+		// to publish the shared source read-only for the whole Pod. Tenant-root
+		// output subpaths also reuse that source; legacy per-user output paths
+		// retain their named volume for compatibility.
+		if existing := pvcVolumeName(volumes, item.mount.ClaimName); existing == "platform-data-personal" && (item.mount.ReadOnly || strings.HasPrefix(item.mount.SubPath, "tenants/")) {
+			volumeName = existing
+		} else {
+			volumes = append(volumes, map[string]any{
+				"name": item.volumeName,
+				"persistentVolumeClaim": map[string]any{
+					"claimName": item.mount.ClaimName, "readOnly": item.mount.ReadOnly,
+				},
+			})
+		}
+		mount := map[string]any{
+			"name": volumeName, "mountPath": item.mount.MountPath, "readOnly": item.mount.ReadOnly,
+		}
+		if item.mount.SubPath != "" {
+			mount["subPath"] = item.mount.SubPath
+		}
+		volumeMounts = append(volumeMounts, mount)
+	}
+	return volumeMounts, volumes
+}
+
 func renderImagePullSecrets(names []string) []any {
 	pullSecrets := make([]any, 0, len(names))
 	for _, name := range names {
@@ -303,15 +625,16 @@ func renderImagePullSecrets(names []string) []any {
 	return pullSecrets
 }
 
-func sourceMaterializer(source domain.CodeSource, options RenderOptions) map[string]any {
-	if source.Type == "artifact" {
-		return artifactSourceMaterializer(source, options)
-	}
+func hasGovernedIDCDataRoots(roots domain.ResolvedDataSpaceRoots) bool {
+	return roots.IDCOriginal != nil || roots.IDCWellspiking != nil || roots.IDCShared != nil
+}
+
+func hasAnyResolvedDataRoots(roots domain.ResolvedDataSpaceRoots) bool {
+	return roots.Personal != nil || roots.Team != nil || roots.Public != nil || hasGovernedIDCDataRoots(roots)
+}
+
+func sourceMaterializer(source domain.CodeSource, jobSpec domain.JobSpec, options RenderOptions) map[string]any {
 	command := "set -eu\nfind /workspace -mindepth 1 -maxdepth 1 -exec rm -rf {} +\n"
-	idcMountPath := options.IDCMountPath
-	if idcMountPath == "" {
-		idcMountPath = "/mnt/idc"
-	}
 	switch source.Type {
 	case "git":
 		// The workspace volume is created by the kubelet and is not owned by the
@@ -319,26 +642,34 @@ func sourceMaterializer(source domain.CodeSource, options RenderOptions) map[str
 		// safe.directory is passed per command rather than written with
 		// --global because the materializer image has no writable HOME.
 		git := "git -c safe.directory=/workspace"
+		// Never let Git open a terminal prompt in a Pod. A hard timeout keeps a
+		// broken or half-open Git connection from holding the RayJob in its
+		// provisioning phase forever; the low-speed guard fails stalled streams
+		// sooner while still allowing normal large repository transfers.
+		command += "export GIT_TERMINAL_PROMPT=0\n"
 		if options.GitCredentialSecret != "" {
 			// Feed the token through an askpass helper. Putting it in the remote
 			// URL would persist it in .git/config and expose it in process
 			// arguments and error messages.
 			command += "printf '#!/bin/sh\\ncase \"$1\" in *Username*) echo \"$GIT_USERNAME\";; *) echo \"$GIT_TOKEN\";; esac\\n' > /tmp/askpass\n"
 			command += "chmod +x /tmp/askpass\n"
-			command += "export GIT_ASKPASS=/tmp/askpass GIT_TERMINAL_PROMPT=0\n"
+			command += "export GIT_ASKPASS=/tmp/askpass\n"
 		}
 		command += git + " init /workspace\n"
 		command += git + " -C /workspace remote add origin " + shellQuote(source.URL) + "\n"
-		command += git + " -C /workspace fetch --depth 1 origin " + shellQuote(source.Commit) + "\n"
+		command += "if ! timeout 180 " + git + " -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=60 -C /workspace fetch --depth 1 origin " + shellQuote(source.Commit) + "; then\n"
+		command += "  echo 'source materialization failed: Git fetch failed or exceeded 180 seconds' >&2\n"
+		command += "  exit 1\n"
+		command += "fi\n"
 		command += git + " -C /workspace checkout --detach FETCH_HEAD\n"
-	case "tos":
-		parsed, _ := url.Parse(source.URI)
-		objectURI := "s3://" + parsed.Host + strings.TrimRight(parsed.Path, "/")
-		command += "mkdir -p /tmp/platform-source\n"
-		command += "aws s3 cp --no-progress --endpoint-url \"$TOS_ENDPOINT\" " + shellQuote(objectURI) + " /tmp/platform-source/code-artifact\n"
-		command += "/usr/local/bin/safe-extract --archive /tmp/platform-source/code-artifact --destination /workspace\n"
 	case "workspace":
-		command += "cp -a " + shellQuote(idcMountPath+"/snapshots/"+source.Snapshot) + "/. /workspace/\n"
+		// /workspace is an emptyDir created by kubelet and its root is not owned
+		// by the non-root materializer. Copy contents only: preserving ownership,
+		// modes or timestamps of that root makes cp return EPERM after the files
+		// were copied, which causes a needless submitter retry.
+		command += "cp -R " + shellQuote("/mnt/platform-workspace-snapshot/snapshots/"+source.Snapshot) + "/. /workspace/\n"
+	case "workspace-archive":
+		command += "python3 /usr/local/bin/platform-safe-extract.py --archive " + shellQuote("/mnt/platform-workspace-snapshot/workspace/.ray-train-archives/"+source.ArtifactSHA256+".zip") + " --destination /workspace\n"
 	}
 	env := []any{}
 	if source.Type == "git" && options.GitCredentialSecret != "" {
@@ -351,16 +682,18 @@ func sourceMaterializer(source domain.CodeSource, options RenderOptions) map[str
 			})
 		}
 	}
-	if source.Type == "tos" {
-		env = append(env,
-			map[string]any{"name": "TOS_ENDPOINT", "value": options.TOSEndpoint},
-			map[string]any{"name": "AWS_ACCESS_KEY_ID", "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": options.TOSSecretName, "key": "AWS_ACCESS_KEY_ID"}}},
-			map[string]any{"name": "AWS_SECRET_ACCESS_KEY", "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": options.TOSSecretName, "key": "AWS_SECRET_ACCESS_KEY"}}},
-		)
-	}
 	volumeMounts := []any{map[string]any{"name": "workspace", "mountPath": "/workspace"}}
-	if source.Type == "workspace" {
-		volumeMounts = append(volumeMounts, map[string]any{"name": "idc-storage", "mountPath": idcMountPath, "readOnly": true})
+	if source.Type == "workspace" || source.Type == "workspace-archive" {
+		mount := map[string]any{"name": "workspace-snapshot-source", "mountPath": "/mnt/platform-workspace-snapshot", "readOnly": true}
+		if personal := jobSpec.ResolvedDataRoots.Personal; personal != nil && personal.SubPath != "" {
+			mount["subPath"] = personal.SubPath
+		}
+		volumeMounts = append(volumeMounts, mount)
+	}
+	if source.Type == "workspace" && jobSpec.ResolvedDataRoots.Personal == nil {
+		// RenderRayJob validates this before templates are generated. Keep the
+		// init container defensive for direct unit-level calls.
+		volumeMounts = []any{map[string]any{"name": "workspace", "mountPath": "/workspace"}}
 	}
 	return map[string]any{
 		"name":            "source-materializer",
@@ -373,39 +706,23 @@ func sourceMaterializer(source domain.CodeSource, options RenderOptions) map[str
 			"requests": map[string]any{"cpu": "100m", "memory": "256Mi"},
 			"limits":   map[string]any{"cpu": "1", "memory": "1Gi"},
 		},
-		"securityContext": map[string]any{"allowPrivilegeEscalation": false, "capabilities": map[string]any{"drop": []any{"ALL"}}},
-		"volumeMounts":    volumeMounts,
-	}
-}
-
-func artifactSourceMaterializer(source domain.CodeSource, options RenderOptions) map[string]any {
-	env := []any{
-		map[string]any{"name": "TOS_ENDPOINT", "value": options.TOSEndpoint},
-		map[string]any{"name": "TOS_BUCKET", "value": options.TOSBucket},
-		map[string]any{"name": "AWS_ACCESS_KEY_ID", "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": options.TOSSecretName, "key": "AWS_ACCESS_KEY_ID"}}},
-		map[string]any{"name": "AWS_SECRET_ACCESS_KEY", "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": options.TOSSecretName, "key": "AWS_SECRET_ACCESS_KEY"}}},
-	}
-	return map[string]any{
-		"name":            "source-materializer",
-		"image":           options.SourceMaterializerImage,
-		"imagePullPolicy": "IfNotPresent",
-		"command":         []any{"/usr/local/bin/safe-extract"},
-		"args": []any{
-			"tos", "--endpoint", options.TOSEndpoint, "--bucket", options.TOSBucket,
-			"--object-key", source.ArtifactObjectKey, "--sha256", source.ArtifactSHA256, "--destination", "/workspace",
+		"securityContext": map[string]any{
+			"runAsNonRoot":             true,
+			"runAsUser":                int64(1000),
+			"runAsGroup":               int64(1000),
+			"allowPrivilegeEscalation": false,
+			"capabilities":             map[string]any{"drop": []any{"ALL"}},
 		},
-		"env": env,
-		"resources": map[string]any{
-			"requests": map[string]any{"cpu": "100m", "memory": "256Mi"},
-			"limits":   map[string]any{"cpu": "1", "memory": "1Gi"},
-		},
-		"securityContext": map[string]any{"allowPrivilegeEscalation": false, "capabilities": map[string]any{"drop": []any{"ALL"}}},
-		"volumeMounts":    []any{map[string]any{"name": "workspace", "mountPath": "/workspace"}},
+		"volumeMounts": volumeMounts,
 	}
 }
 
 func addPodLabels(template map[string]any, jobID, tenantID string) {
-	template["metadata"] = map[string]any{"labels": map[string]any{"platform_job_id": jobID, "platform_tenant_id": tenantID}}
+	template["metadata"] = map[string]any{"labels": map[string]any{
+		"app.kubernetes.io/part-of": "ray-train-platform",
+		"platform_job_id":           jobID,
+		"platform_tenant_id":        tenantID,
+	}}
 }
 
 func MapRayJobStatus(jobID string, status map[string]any, resourceVersion string) domain.ObservedJobState {
@@ -427,7 +744,11 @@ func MapRayJobStatus(jobID string, status map[string]any, resourceVersion string
 		state = domain.StateCanceled
 	case "PENDING", "WAITING":
 		state = domain.StateQueued
-	case "PROVISIONING", "DEPLOYING":
+	case "SUSPENDED":
+		// Kueue suspends a RayJob until a matching admission is available. It is
+		// queued, not an unknown or failed training job.
+		state = domain.StateQueued
+	case "PROVISIONING", "DEPLOYING", "INITIALIZING":
 		state = domain.StateProvisioning
 	default:
 		state = domain.StateUnknown
@@ -437,6 +758,9 @@ func MapRayJobStatus(jobID string, status map[string]any, resourceVersion string
 	if message == "" {
 		message = stringValue(status, "jobStatus")
 	}
+	if message == "" {
+		message = stringValue(status, "jobDeploymentStatus")
+	}
 	return domain.ObservedJobState{
 		ID:              jobID,
 		State:           state,
@@ -445,7 +769,50 @@ func MapRayJobStatus(jobID string, status map[string]any, resourceVersion string
 		RayJobUID:       stringValue(status, "rayJobUID"),
 		RayClusterName:  stringValue(status, "rayClusterName"),
 		ResourceVersion: resourceVersion,
+		// KubeRay publishes the workload's own execution window. Using it keeps
+		// the reported times independent of when the reconciler happened to poll.
+		StartedAt:  parseRayJobTime(status, "startTime"),
+		FinishedAt: parseRayJobTime(status, "endTime"),
 	}
+}
+
+// parseRayJobTime reads an RFC 3339 timestamp from a RayJob status field. An
+// absent or unparseable value stays nil so "not started" is never rendered as
+// an epoch date.
+func parseRayJobTime(status map[string]any, field string) *time.Time {
+	raw, ok := status[field]
+	if !ok || raw == nil {
+		return nil
+	}
+	text, ok := raw.(string)
+	if !ok || strings.TrimSpace(text) == "" {
+		return nil
+	}
+	parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(text))
+	if err != nil {
+		return nil
+	}
+	utc := parsed.UTC()
+	return &utc
+}
+
+// validateRayJobSubmitterRestartPolicy protects the KubeRay contract which
+// renders submitterPodTemplate as a batch Job PodTemplateSpec. Kubernetes
+// requires its restartPolicy to be Never or OnFailure; the platform requires
+// Never so a failed submission is represented by the RayJob rather than being
+// retried invisibly by the submitter Job.
+func validateRayJobSubmitterRestartPolicy(resource *unstructured.Unstructured) error {
+	if resource == nil {
+		return fmt.Errorf("RayJob manifest must be provided")
+	}
+	policy, found, err := unstructured.NestedString(resource.Object, "spec", "submitterPodTemplate", "spec", "restartPolicy")
+	if err != nil {
+		return fmt.Errorf("read RayJob submitter restart policy: %w", err)
+	}
+	if !found || policy != "Never" {
+		return fmt.Errorf("RayJob submitter pod restartPolicy must be Never")
+	}
+	return nil
 }
 
 func nestedMap(object map[string]any, fields ...string) (map[string]any, bool, error) {
@@ -522,6 +889,18 @@ func isDNSLabel(value string) bool {
 			continue
 		}
 		return false
+	}
+	return true
+}
+
+func isDNSSubdomain(value string) bool {
+	if value == "" || len(value) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(value, ".") {
+		if !isDNSLabel(label) {
+			return false
+		}
 	}
 	return true
 }

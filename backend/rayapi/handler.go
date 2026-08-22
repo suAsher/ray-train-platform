@@ -31,6 +31,7 @@ import (
 
 type Repository interface {
 	api.JobRepository
+	api.DataSpaceStore
 	CreateOrReuseSourceArtifactWithLimits(context.Context, *domain.SourceArtifact, repositories.SourceArtifactLimits) (*domain.SourceArtifact, error)
 	ReopenSourceArtifactUploadWithLimits(context.Context, string, string, string, time.Time, repositories.SourceArtifactLimits) (*domain.SourceArtifact, error)
 	GetSourceArtifact(context.Context, string, string, string) (*domain.SourceArtifact, error)
@@ -40,6 +41,7 @@ type Repository interface {
 type Options struct {
 	Limits              repositories.SourceArtifactLimits
 	SpoolDir            string
+	Defaults            SubmissionDefaults
 	Logs                api.LogProvider
 	UploadLimiter       UploadLimiter
 	UploadMaxConcurrent int
@@ -54,6 +56,7 @@ type Handler struct {
 	submission    *api.SubmissionService
 	limits        repositories.SourceArtifactLimits
 	spoolDir      string
+	defaults      SubmissionDefaults
 	logs          api.LogProvider
 	uploadLimiter UploadLimiter
 	uploads       chan struct{}
@@ -105,7 +108,7 @@ func NewHandler(repository Repository, store objectstore.Store, submission *api.
 	if now == nil {
 		now = time.Now
 	}
-	return &Handler{repository: repository, store: store, submission: submission, limits: limits, spoolDir: spoolDir, logs: options.Logs, uploadLimiter: limiter, uploads: make(chan struct{}, maxConcurrent), tailPoll: tailPoll, now: now}, nil
+	return &Handler{repository: repository, store: store, submission: submission, limits: limits, spoolDir: spoolDir, defaults: options.Defaults, logs: options.Logs, uploadLimiter: limiter, uploads: make(chan struct{}, maxConcurrent), tailPoll: tailPoll, now: now}, nil
 }
 
 func validateSpoolDir(spoolDir string) error {
@@ -153,7 +156,12 @@ func (handler *Handler) RegisterRoutes(group *gin.RouterGroup) {
 }
 
 func (handler *Handler) version(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"version": "2.35.0", "ray_version": "2.35.0"})
+	c.JSON(http.StatusOK, gin.H{
+		"version":      "4",
+		"ray_version":  "2.35.0",
+		"ray_commit":   "",
+		"session_name": "ray-training-platform",
+	})
 }
 
 func (handler *Handler) packageExists(c *gin.Context) {
@@ -227,8 +235,13 @@ func (handler *Handler) putPackage(c *gin.Context) {
 	}
 	artifactID := rayPackageArtifactID(principal.TenantID, principal.Subject, packageName.Name)
 	now := handler.now().UTC()
+	storageRoot, err := handler.personalSourceArtifactRoot(c.Request.Context(), principal)
+	if err != nil {
+		handler.writeError(c, http.StatusServiceUnavailable)
+		return
+	}
 	artifact, err := domain.NewSourceArtifact(domain.SourceArtifactInput{
-		ID: artifactID, TenantID: principal.TenantID, UserID: principal.Subject, SHA256: digest, SizeBytes: sizeBytes,
+		ID: artifactID, TenantID: principal.TenantID, UserID: principal.Subject, StorageRoot: storageRoot, SHA256: digest, SizeBytes: sizeBytes,
 	}, now.Add(api.SourceArtifactUploadTTL), now)
 	if err != nil {
 		handler.writeError(c, http.StatusBadRequest)
@@ -285,6 +298,23 @@ func (handler *Handler) putPackage(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusOK)
+}
+
+func (handler *Handler) personalSourceArtifactRoot(ctx context.Context, principal auth.Principal) (string, error) {
+	bindings, err := handler.repository.ListDataBindings(ctx, principal.TenantID, principal.Subject)
+	if err != nil {
+		return "", err
+	}
+	for _, binding := range bindings {
+		if binding.Scope != domain.DataMountScopePersonal || binding.SpaceID != domain.DataSpaceWorkspace || binding.UserID != principal.Subject || binding.TenantID != principal.TenantID || binding.RootPrefix == "" {
+			continue
+		}
+		if _, err := domain.PersonalDataSpacesForRoot(principal.TenantID, binding.RootPrefix); err != nil {
+			return "", err
+		}
+		return binding.RootPrefix, nil
+	}
+	return domain.PersonalDataRootFor(principal.TenantID, api.StorageKeyForPrincipal(principal))
 }
 
 func (handler *Handler) writeUploadBusy(c *gin.Context, retryAfter time.Duration) {
@@ -376,7 +406,7 @@ func (handler *Handler) submitJob(c *gin.Context) {
 		}
 		request.SubmissionID = generated
 	}
-	translated, err := TranslateSubmitRequest(request)
+	translated, err := TranslateSubmitRequestWithDefaults(request, handler.defaults)
 	if err != nil {
 		handler.writeError(c, http.StatusBadRequest)
 		return
@@ -395,7 +425,13 @@ func (handler *Handler) submitJob(c *gin.Context) {
 		handler.writeArtifactError(c, status)
 		return
 	}
-	translated.Spec.Source = domain.CodeSource{Type: "artifact", ArtifactID: artifact.ID}
+	// Ray SDK packs its working directory into a zip. Keep that archive below
+	// the caller's personal workspace root and materialize it from the
+	// governed PVC, never by injecting TOS credentials into the Ray workload.
+	translated.Spec.Source = domain.CodeSource{
+		Type: "workspace-archive", ArtifactID: artifact.ID,
+		ArtifactObjectKey: artifact.ObjectKey, ArtifactSHA256: artifact.SHA256,
+	}
 	job, err := handler.submission.Submit(c.Request.Context(), api.SubmissionInput{
 		Principal: principal, Spec: translated.Spec, Origin: domain.SubmissionOriginRayCLI, ExternalSubmissionID: translated.ExternalSubmissionID,
 	})
@@ -455,7 +491,7 @@ func (handler *Handler) getLogs(c *gin.Context) {
 		handler.writeError(c, http.StatusServiceUnavailable)
 		return
 	}
-	lines, err := handler.logs.QueryJobLogs(c.Request.Context(), job.ID, 1000)
+	lines, err := api.QueryJobLogsForLifecycle(c.Request.Context(), handler.logs, *job, 1000)
 	if err != nil {
 		handler.writeError(c, http.StatusServiceUnavailable)
 		return
@@ -481,7 +517,7 @@ func (handler *Handler) tailLogs(c *gin.Context) {
 		handler.writeError(c, http.StatusServiceUnavailable)
 		return
 	}
-	lines, err := handler.logs.QueryJobLogs(c.Request.Context(), job.ID, 1000)
+	lines, err := api.QueryJobLogsForLifecycle(c.Request.Context(), handler.logs, *job, 1000)
 	if err != nil {
 		handler.writeError(c, http.StatusServiceUnavailable)
 		return
@@ -530,7 +566,7 @@ func (handler *Handler) tailLogs(c *gin.Context) {
 		if err != nil {
 			return
 		}
-		lines, err = handler.logs.QueryJobLogs(c.Request.Context(), job.ID, 1000)
+		lines, err = api.QueryJobLogsForLifecycle(c.Request.Context(), handler.logs, *job, 1000)
 		if err != nil {
 			return
 		}

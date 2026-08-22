@@ -19,12 +19,15 @@ type fakeLocalAuthStore struct {
 	users        map[string]domain.LocalUser
 	sessions     []domain.LocalSession
 	revoked      []string
+	revokedAll   []string
+	disabled     map[string]bool
+	auditActions []string
 	identityCall int
 	passwordSet  string
 }
 
 func newFakeLocalAuthStore() *fakeLocalAuthStore {
-	return &fakeLocalAuthStore{users: make(map[string]domain.LocalUser)}
+	return &fakeLocalAuthStore{users: make(map[string]domain.LocalUser), disabled: make(map[string]bool)}
 }
 
 func (s *fakeLocalAuthStore) withUser(t *testing.T, username, password string, disabled bool) *fakeLocalAuthStore {
@@ -64,9 +67,16 @@ func (s *fakeLocalAuthStore) ListLocalUsers(context.Context) ([]domain.LocalUser
 	}
 	return items, nil
 }
-func (s *fakeLocalAuthStore) SetLocalUserPassword(_ context.Context, _, hash string) error {
+func (s *fakeLocalAuthStore) SetLocalUserPassword(_ context.Context, userID, hash string) error {
 	s.passwordSet = hash
-	return nil
+	for username, user := range s.users {
+		if user.ID == userID {
+			user.PasswordHash = hash
+			s.users[username] = user
+			return nil
+		}
+	}
+	return repositories.ErrLocalUserNotFound
 }
 func (s *fakeLocalAuthStore) CreateLocalSession(_ context.Context, session domain.LocalSession, _ string) error {
 	s.sessions = append(s.sessions, session)
@@ -76,9 +86,40 @@ func (s *fakeLocalAuthStore) RevokeLocalSession(_ context.Context, publicID stri
 	s.revoked = append(s.revoked, publicID)
 	return nil
 }
+func (s *fakeLocalAuthStore) FindLocalUserByID(_ context.Context, userID string) (domain.LocalUser, error) {
+	for _, user := range s.users {
+		if user.ID == userID {
+			return user, nil
+		}
+	}
+	return domain.LocalUser{}, repositories.ErrLocalUserNotFound
+}
+func (s *fakeLocalAuthStore) RevokeAllLocalSessions(_ context.Context, userID string, _ time.Time) error {
+	s.revokedAll = append(s.revokedAll, userID)
+	return nil
+}
+func (s *fakeLocalAuthStore) SetLocalUserDisabled(_ context.Context, userID string, disabled bool) error {
+	for username, user := range s.users {
+		if user.ID == userID {
+			user.Disabled = disabled
+			s.users[username] = user
+			s.disabled[userID] = disabled
+			return nil
+		}
+	}
+	return repositories.ErrLocalUserNotFound
+}
+func (s *fakeLocalAuthStore) CreateAuditLog(_ context.Context, action, resourceID string, _ auth.Principal, _ string) error {
+	s.auditActions = append(s.auditActions, action+":"+resourceID)
+	return nil
+}
 func (s *fakeLocalAuthStore) EnsureIdentity(context.Context, auth.Principal) error {
 	s.identityCall++
 	return nil
+}
+
+func (s *fakeLocalAuthStore) TenantExists(_ context.Context, tenantID string) (bool, error) {
+	return tenantID == "team-a" || tenantID == "team-b" || tenantID == "platform", nil
 }
 
 func localAuthHandler(store LocalAuthStore) *LocalAuthHandler {
@@ -137,6 +178,58 @@ func TestLoginIssuesSessionTokenForValidCredentials(t *testing.T) {
 	}
 	if response.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("credential responses must not be cacheable")
+	}
+}
+
+func TestChangePasswordRevokesEveryLocalSession(t *testing.T) {
+	store := newFakeLocalAuthStore().withUser(t, "alice", "correct-horse", false)
+	handler := localAuthHandler(store)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("ray-platform-principal", auth.Principal{Subject: "user-alice", Username: "alice", TenantID: "team-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal})
+		c.Next()
+	})
+	handler.RegisterAuthenticatedRoutes(router.Group("/api/v1"))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/password", strings.NewReader(`{"currentPassword":"correct-horse","newPassword":"new-correct-horse"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected password change success, got %d body=%s", response.Code, response.Body.String())
+	}
+	if len(store.revokedAll) != 1 || store.revokedAll[0] != "user-alice" {
+		t.Fatalf("password change must revoke every local session, got %+v", store.revokedAll)
+	}
+	if !domain.VerifyPassword(store.users["alice"].PasswordHash, "new-correct-horse") {
+		t.Fatal("password change did not persist the new bcrypt hash")
+	}
+	if strings.Contains(response.Body.String(), "new-correct-horse") || strings.Contains(response.Body.String(), "correct-horse") {
+		t.Fatalf("password response leaked a password: %s", response.Body.String())
+	}
+}
+
+func TestChangePasswordRejectsTheCurrentPassword(t *testing.T) {
+	store := newFakeLocalAuthStore().withUser(t, "alice", "correct-horse", false)
+	handler := localAuthHandler(store)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("ray-platform-principal", auth.Principal{Subject: "user-alice", Username: "alice", TenantID: "team-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal})
+		c.Next()
+	})
+	handler.RegisterAuthenticatedRoutes(router.Group("/api/v1"))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/password", strings.NewReader(`{"currentPassword":"correct-horse","newPassword":"correct-horse"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("expected current password reuse to be rejected, got %d body=%s", response.Code, response.Body.String())
+	}
+	if len(store.revokedAll) != 0 {
+		t.Fatalf("rejected password reuse must not revoke sessions: %+v", store.revokedAll)
 	}
 }
 
@@ -216,4 +309,15 @@ func TestEnsureBootstrapAdminSkippedWithoutPassword(t *testing.T) {
 	if err != nil || created {
 		t.Fatalf("expected no bootstrap without a configured password")
 	}
+}
+
+func (s *fakeLocalAuthStore) SetLocalUserRoles(_ context.Context, userID string, roles []string) error {
+	for username, user := range s.users {
+		if user.ID == userID {
+			user.Roles = append([]string(nil), roles...)
+			s.users[username] = user
+			return nil
+		}
+	}
+	return repositories.ErrLocalUserNotFound
 }

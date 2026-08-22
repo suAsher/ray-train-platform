@@ -13,32 +13,67 @@
               {{ jobDetail.status }}
             </div>
             <span class="text-xs font-mono px-3 py-1 bg-blue-500/10 text-blue-400 rounded-full border border-blue-500/20 font-semibold flex items-center gap-1.5">
-              <el-icon><Cpu /></el-icon> {{ jobDetail.total_gpus }} 卡 RTX 4090 并行训练
+              <el-icon><Cpu /></el-icon> {{ gpuSummary }}
             </span>
           </div>
 
-          <div class="flex items-center gap-6 text-xs font-mono text-slate-400">
-            <span>任务 ID: <code class="text-slate-200">{{ jobDetail.id }}</code></span>
-            <span>已运行时间: <span class="text-amber-400 font-bold">{{ formatDuration(jobDetail) }}</span></span>
-            <span>入口: <code class="text-emerald-400 bg-slate-900/80 px-2 py-0.5 rounded border border-slate-800">{{ jobDetail.entrypoint }}</code></span>
+          <div class="flex flex-wrap items-center gap-x-6 gap-y-2 font-mono text-xs text-slate-400">
+            <span class="inline-flex items-center gap-1">
+              任务 ID: <code class="text-slate-200">{{ jobDetail.id }}</code>
+              <el-button link size="small" icon="DocumentCopy" title="复制任务 ID" @click="copyValue(jobDetail.id)" />
+            </span>
+            <span>提交: <span class="text-slate-300">{{ formatDateTime(timeline.submittedAt) }}</span></span>
+            <span v-if="timeline.isWaiting" class="text-amber-400">排队等待 GPU: {{ timeline.queuedLabel }}</span>
+            <template v-else>
+              <span>开始: <span class="text-slate-300">{{ formatDateTime(timeline.startedAt) }}</span></span>
+              <span>结束: <span class="text-slate-300">{{ finishedLabel(timeline.finishedAt) }}</span></span>
+              <span>训练时长: <span class="font-bold" :class="timeline.isRunning ? 'text-blue-400' : 'text-amber-400'">{{ timeline.runningLabel }}</span></span>
+              <span v-if="timeline.queuedSeconds" class="text-slate-500">排队 {{ timeline.queuedLabel }}</span>
+            </template>
+          </div>
+          <div class="font-mono text-xs text-slate-400">
+            入口: <code class="rounded border border-slate-800 bg-slate-900/80 px-2 py-0.5 text-emerald-400">{{ jobDetail.entrypoint }}</code>
           </div>
         </div>
 
         <div class="flex items-center gap-3">
-          <a v-if="jobDetail.ray_dashboard_url" :href="jobDetail.ray_dashboard_url" target="_blank">
-            <el-button type="primary" class="!rounded-xl shadow-lg shadow-blue-600/20" icon="Link">Ray Dashboard (8265)</el-button>
-          </a>
+          <el-button v-if="canResumeFromCheckpoint" type="warning" plain class="!rounded-xl" @click="resumeFromCheckpoint">续训（从此结果继续）</el-button>
+          <el-button plain class="!rounded-xl" @click="rerunJob">再来一次</el-button>
+          <el-button plain class="!rounded-xl" icon="DocumentCopy" @click="showCli = true">命令行提交</el-button>
+          <el-button
+            v-if="showRayDashboard"
+            type="primary"
+            class="!rounded-xl shadow-lg shadow-blue-600/20"
+            icon="Link"
+            :loading="dashboardOpening"
+            title="仅在本任务的 RayCluster 运行期间可用"
+            @click="openRayDashboard"
+          >Ray Dashboard</el-button>
           <el-button type="danger" plain class="!rounded-xl" icon="CircleClose" @click="cancelJob">停止训练</el-button>
         </div>
       </div>
     </div>
 
+    <el-dialog v-model="showCli" title="用 spk-rayjob 提交同样的任务" width="min(720px, 94vw)">
+      <p class="mb-4 text-sm leading-6 text-slate-400">
+        网页和命令行提交的是同一份契约。把下面这条命令粘到装了 <code>spk-rayjob</code> 的机器上即可复现这个任务；
+        想反复迭代，可在代码目录执行 <code>spk-rayjob init</code> 把这些默认值写进 <code>.spk-rayjob.yaml</code>。
+      </p>
+      <CopyBlock :text="cliCommand" wrap />
+    </el-dialog>
+
     <!-- Main Tabs Section -->
     <el-tabs v-model="activeTab" type="border-card" class="!bg-[#131826] !border-slate-800/80 !rounded-2xl shadow-2xl">
       
       <!-- TAB 1: MULTI-NODE AGGREGATED LOG CENTER -->
-      <el-tab-pane label="🔥 多节点 24卡 实时聚合日志" name="aggregated-logs">
+      <el-tab-pane label="🔥 实时聚合日志" name="aggregated-logs">
         <div class="p-4 space-y-4">
+          <el-alert v-if="logsError" :title="logsError" type="warning" show-icon :closable="false" class="!rounded-xl" />
+          <el-alert v-else title="日志流说明" type="info" :closable="false" class="!rounded-xl">
+            <template #default>
+              <span><b>任务提交器</b>负责代码准备和启动；<b>Ray Head</b>负责集群调度和 Dashboard；<b>训练 Worker</b>才是用户训练代码、Loss、NCCL 和 Checkpoint 的主要输出。一个 8 卡 Worker Pod 内可同时包含 8 个 rank，日志流数不等于 GPU 数。</span>
+            </template>
+          </el-alert>
           
           <!-- Rank Cards Bar -->
           <div class="grid grid-cols-4 gap-3">
@@ -94,11 +129,12 @@
           </div>
 
           <!-- Log Console Display -->
-          <div 
+          <div v-if="!logsError"
             ref="logConsoleRef"
             class="bg-[#070A10] p-5 rounded-xl border border-slate-800/90 font-mono text-xs text-slate-300 h-[580px] overflow-y-auto space-y-2 select-text"
           >
-            <div 
+            <el-empty v-if="filteredLogs.length === 0" description="当前查询范围没有日志；任务结束后需由 Loki 保留日志" />
+            <div v-else
               v-for="(log, idx) in filteredLogs" 
               :key="idx" 
               class="hover:bg-slate-900/80 rounded px-2 py-1 flex items-start gap-3 leading-relaxed transition-colors border-l-2 border-transparent hover:border-blue-500"
@@ -121,12 +157,19 @@
       <!-- TAB 2: TRAINING METRICS & LOSS CURVE -->
       <el-tab-pane label="📈 Loss 收敛曲线与指标" name="metrics">
         <div class="p-6 space-y-6">
+          <el-alert v-if="metricsError" :title="metricsError" type="warning" show-icon :closable="false" class="!rounded-xl" />
+          <el-alert v-if="experimentError" :title="experimentError" type="info" show-icon :closable="false" class="!rounded-xl" />
+          <div v-if="experiment?.run" class="flex flex-wrap items-center gap-3 text-xs text-slate-400">
+            <span class="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-emerald-300">MLflow {{ experiment.run.status || 'RUNNING' }}</span>
+            <span>实验：<code class="text-slate-200">{{ experiment.experimentName }}</code></span>
+            <span>Run：<code class="text-slate-200">{{ experiment.run.id }}</code></span>
+          </div>
           <!-- Metric Stat Cards -->
           <div class="grid grid-cols-4 gap-5">
             <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-800/80">
               <span class="text-xs text-slate-400">当前 Training Loss</span>
-              <p class="text-2xl font-bold text-emerald-400 font-mono mt-1">{{ metrics?.loss || '—' }}</p>
-              <span class="text-[11px] text-slate-500">等待训练脚本上报指标</span>
+              <p class="text-2xl font-bold text-emerald-400 font-mono mt-1">{{ formatMetric(trainingLoss) }}</p>
+              <span class="text-[11px] text-slate-500">MLflow 训练指标</span>
             </div>
 
             <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-800/80">
@@ -137,14 +180,14 @@
 
             <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-800/80">
               <span class="text-xs text-slate-400">学习率 (Learning Rate)</span>
-              <p class="text-2xl font-bold text-amber-400 font-mono mt-1">{{ metrics?.learningRate || '—' }}</p>
-              <span class="text-[11px] text-slate-500">训练脚本指标</span>
+              <p class="text-2xl font-bold text-amber-400 font-mono mt-1">{{ formatMetric(learningRate) }}</p>
+              <span class="text-[11px] text-slate-500">MLflow 训练指标</span>
             </div>
 
             <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-800/80">
               <span class="text-xs text-slate-400">当前 Epoch 进度</span>
-              <p class="text-2xl font-bold text-purple-400 font-mono mt-1">{{ metrics?.epoch || '—' }}</p>
-              <span class="text-[11px] text-slate-500">训练脚本指标</span>
+              <p class="text-2xl font-bold text-purple-400 font-mono mt-1">{{ formatMetric(currentEpoch) }}</p>
+              <span class="text-[11px] text-slate-500">MLflow 训练指标</span>
             </div>
           </div>
 
@@ -152,61 +195,51 @@
           <div class="bg-[#070A10] p-6 rounded-xl border border-slate-800/80 space-y-4">
             <div class="flex justify-between items-center">
               <h4 class="text-xs font-bold text-slate-200 uppercase tracking-wider">训练指标曲线</h4>
-              <span class="text-xs font-mono text-slate-500">由训练脚本/Prometheus 提供</span>
+              <span class="text-xs font-mono text-slate-500">由训练脚本上报到 MLflow</span>
             </div>
-            <el-empty v-if="!metrics" description="当前任务尚未提供可绘制的训练指标" />
+            <div v-if="lossSeries?.points?.length" class="space-y-3">
+              <svg viewBox="0 0 640 220" class="h-64 w-full overflow-visible" role="img" aria-label="Training loss curve">
+                <line x1="0" y1="220" x2="640" y2="220" stroke="#334155" stroke-width="1" />
+                <line x1="0" y1="0" x2="0" y2="220" stroke="#334155" stroke-width="1" />
+                <polyline :points="lossSparkline" fill="none" stroke="#34d399" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" />
+              </svg>
+              <div class="flex justify-between text-xs text-slate-500">
+                <span>{{ lossSeries.key }}</span>
+                <span>{{ lossSeries.points.length }} 个记录点</span>
+              </div>
+            </div>
+            <el-empty v-else description="任务尚未上报 Loss；训练代码需在 rank 0 调用 mlflow.log_metric" />
           </div>
         </div>
       </el-tab-pane>
 
-      <!-- TAB 3: CHECKPOINTS -->
-      <el-tab-pane label="💾 模型的 Checkpoints 产物" name="checkpoints">
-        <div class="p-6 space-y-4">
-          <div class="flex justify-between items-center">
-            <h4 class="text-xs font-bold text-slate-300 uppercase">TOS 对象存储关联挂载点</h4>
-            <el-tag type="info" size="small" class="font-mono">{{ jobDetail.spec?.outputUri || '未配置产物 URI' }}</el-tag>
-          </div>
-
-          <el-table :data="checkpoints" style="width: 100%" class="!bg-transparent text-xs">
-            <el-table-column prop="name" label="Checkpoint 文件名" min-width="220">
-              <template #default="scope">
-                <span class="font-mono font-bold text-slate-100 flex items-center gap-2">
-                  <el-icon class="text-purple-400"><Document /></el-icon> {{ scope.row.name }}
-                </span>
-              </template>
-            </el-table-column>
-            <el-table-column prop="step" label="Step / Epoch 节点" width="160" />
-            <el-table-column prop="size" label="文件大小" width="120" />
-            <el-table-column prop="tos_url" label="TOS URI 路径" min-width="280 font-mono text-slate-400" />
-            <el-table-column label="操作" width="140" align="right">
-              <template #default>
-                <el-button type="primary" link size="small" icon="Download">下载权重</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
+      <!-- TAB 3: TRAINING ARTIFACTS -->
+      <el-tab-pane label="💾 训练产物" name="artifacts">
+        <div class="p-6">
+          <JobArtifactBrowser :job-id="jobDetail.id" />
         </div>
       </el-tab-pane>
 
       <!-- TAB 4: POD TOPOLOGY -->
       <el-tab-pane label="📦 Pod 副本与节点拓扑" name="topology">
         <div class="p-6 space-y-4">
-          <div v-if="jobDetail.pod_topology.length" class="space-y-3">
-            <div 
-              v-for="pod in jobDetail.pod_topology" 
-              :key="pod.name" 
+          <div v-if="runtimePods.length" class="space-y-3">
+            <div
+              v-for="pod in runtimePods"
+              :key="pod.name"
               class="p-4 bg-slate-900/60 rounded-xl border border-slate-800 flex items-center justify-between"
             >
               <div class="flex items-center gap-4 font-mono">
                 <el-icon :size="22" :class="pod.gpu_assigned === 0 ? 'text-amber-400' : 'text-blue-400'"><Platform /></el-icon>
                 <div>
                   <div class="text-sm font-bold text-white">{{ pod.name }}</div>
-                  <div class="text-xs text-slate-400 mt-0.5">{{ pod.role }} | Pod IP: {{ pod.pod_ip }}</div>
+                  <div class="text-xs text-slate-400 mt-0.5">{{ pod.role }} | Pod IP: {{ pod.podIp || '尚未分配' }}</div>
                 </div>
               </div>
 
               <div class="flex items-center gap-6 text-xs font-mono">
-                <div>宿主机: <span class="text-slate-200">{{ pod.node_name }}</span></div>
-                <div>显卡: <span class="text-blue-400 font-bold">{{ pod.gpu_assigned }} 卡 4090</span></div>
+                <div>宿主机: <span class="text-slate-200">{{ pod.nodeName || '等待调度' }}</span></div>
+                <div>申请显卡: <span class="text-blue-400 font-bold">{{ pod.gpuRequested }} 卡</span></div>
                 <el-tag type="success" size="small">{{ pod.phase }}</el-tag>
               </div>
             </div>
@@ -220,11 +253,20 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { finishedLabel, formatDateTime, jobTimeline } from '../../jobTimeline'
+import CopyBlock from '../../components/CopyBlock.vue'
+import { copyToClipboard } from '../../clipboard'
 import { apiGet, apiPost } from '../../api/client'
+import JobArtifactBrowser from '../../components/JobArtifactBrowser.vue'
+import { userId } from '../../stores/session'
+import { canOpenRayDashboard, jobDashboardAccessPath } from '../../jobDashboard'
+import { buildLogStreamCards } from '../../jobLogStreams'
+import { latestMetric, metricSeries, sparklinePoints } from '../../mlflowExperiment'
 
 const route = useRoute()
+const router = useRouter()
 const activeTab = ref('aggregated-logs')
 const selectedRank = ref('ALL')
 const currentLogType = ref('ALL')
@@ -234,15 +276,33 @@ const logConsoleRef = ref(null)
 
 const jobDetail = ref(null)
 const metrics = ref(null)
+const experiment = ref(null)
+const runtimePods = ref([])
+const logsError = ref('')
+const metricsError = ref('')
+const experimentError = ref('')
+const dashboardOpening = ref(false)
 
 const rawLogs = ref([])
+const nowTick = ref(new Date().toISOString())
+
+const terminalStates = new Set(['SUCCEEDED', 'FAILED', 'CANCELED', 'TIMED_OUT'])
+const canResumeFromCheckpoint = computed(() => (
+  Boolean(jobDetail.value?.id) &&
+  jobDetail.value?.userId === userId.value &&
+  terminalStates.has(jobDetail.value?.status)
+))
+const showRayDashboard = computed(() => canOpenRayDashboard(jobDetail.value))
+const trainingLoss = computed(() => latestMetric(experiment.value, ['train_loss', 'training_loss', 'loss']))
+const learningRate = computed(() => latestMetric(experiment.value, ['learning_rate', 'lr']))
+const currentEpoch = computed(() => latestMetric(experiment.value, ['epoch', 'train_epoch']))
+const lossSeries = computed(() => metricSeries(experiment.value, ['train_loss', 'training_loss', 'loss']))
+const lossSparkline = computed(() => sparklinePoints(lossSeries.value?.points, 640, 220))
+const formatMetric = value => value == null ? '—' : Number(value).toLocaleString('zh-CN', { maximumSignificantDigits: 6 })
 
 const rankCards = computed(() => {
   const nodes = [...new Set(rawLogs.value.map(log => log.node).filter(Boolean))]
-  return [
-    { id: 'ALL', label: `${jobDetail.value?.total_gpus || 0} 卡全量聚合`, sub: `${nodes.length} 个日志流`, active: true },
-    ...nodes.map(node => ({ id: node, label: node, sub: 'Loki stream', active: true }))
-  ]
+  return buildLogStreamCards(nodes, jobDetail.value?.total_gpus || 0)
 })
 
 const logTypes = [
@@ -252,8 +312,6 @@ const logTypes = [
   { label: 'Checkpoint', value: 'CHECKPOINT', btnType: 'warning' },
   { label: 'NCCL 通信', value: 'NCCL', btnType: 'info' }
 ]
-
-const checkpoints = ref([])
 
 const filteredLogs = computed(() => {
   return rawLogs.value.filter(l => {
@@ -273,9 +331,9 @@ const filteredLogs = computed(() => {
 })
 
 const getRankTagClass = (node) => {
-  if (node.includes('Head')) return 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-  if (node.includes('Worker-1')) return 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
-  if (node.includes('Worker-2')) return 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+  const normalized = String(node || '').toLowerCase()
+  if (normalized.includes('-head-')) return 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+  if (normalized.includes('worker')) return 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
   return 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
 }
 
@@ -308,21 +366,11 @@ const normalizeDetail = (job) => {
     worker_replicas: resources.workerReplicas || 0,
     gpus_per_worker: resources.gpusPerWorker || 0,
     total_gpus: (resources.workerReplicas || 0) * (resources.gpusPerWorker || 0),
-    ray_dashboard_url: job.rayDashboardUrl || '',
     pod_topology: job.podTopology || []
   }
 }
 
-const formatDuration = (job) => {
-  const started = Date.parse(job?.createdAt || '')
-  if (!Number.isFinite(started)) return '—'
-  const finished = job.finishedAt ? Date.parse(job.finishedAt) : Date.now()
-  const seconds = Math.max(0, Math.floor((finished - started) / 1000))
-  const hours = String(Math.floor(seconds / 3600)).padStart(2, '0')
-  const minutes = String(Math.floor((seconds % 3600) / 60)).padStart(2, '0')
-  const remainder = String(seconds % 60).padStart(2, '0')
-  return `${hours}:${minutes}:${remainder}`
-}
+const timeline = computed(() => jobTimeline(jobDetail.value || {}, nowTick.value))
 
 const statusClass = (status) => {
   if (status === 'SUCCEEDED') return 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400'
@@ -340,20 +388,29 @@ const fetchDetail = async () => {
   const id = route.params.id
   try {
     jobDetail.value = normalizeDetail(await apiGet(`/api/v1/jobs/${id}`))
-    const logResponse = await apiGet(`/api/v1/jobs/${id}/logs?limit=2000`)
-    rawLogs.value = (logResponse.items || []).map(item => ({
-      node: item.stream?.pod || item.stream?.container || 'cluster',
-      text: item.line,
-      timestamp: item.timestamp
-    }))
-    metrics.value = await apiGet(`/api/v1/jobs/${id}/metrics`)
   } catch (error) {
-    if (error.code === 'METRICS_UNAVAILABLE' || error.code === 'METRICS_QUERY_FAILED') {
-      metrics.value = null
-      return
-    }
     ElMessage.error(error.message || '无法读取任务详情')
+    return
   }
+
+  const [runtimeResult, logResult, metricResult, experimentResult] = await Promise.allSettled([
+    apiGet(`/api/v1/jobs/${id}/runtime`),
+    apiGet(`/api/v1/jobs/${id}/logs?limit=2000`),
+    apiGet(`/api/v1/jobs/${id}/metrics`),
+    apiGet(`/api/v1/jobs/${id}/experiment`)
+  ])
+  runtimePods.value = runtimeResult.status === 'fulfilled' ? runtimeResult.value?.pods || [] : []
+  logsError.value = logResult.status === 'rejected' ? 'Loki 日志服务尚未接入或暂时不可达；Pod 删除后历史日志无法恢复。' : ''
+  const logResponse = logResult.status === 'fulfilled' ? logResult.value : null
+  rawLogs.value = (logResponse?.items || []).map(item => ({
+    node: item.stream?.pod || item.stream?.container || 'cluster',
+    text: item.line,
+    timestamp: item.timestamp
+  }))
+  metricsError.value = metricResult.status === 'rejected' ? 'Prometheus / DCGM 指标服务尚未接入或暂时不可达。' : ''
+  metrics.value = metricResult.status === 'fulfilled' ? metricResult.value : null
+  experimentError.value = experimentResult.status === 'rejected' ? 'MLflow 暂时不可达；训练本身不会因此停止。' : ''
+  experiment.value = experimentResult.status === 'fulfilled' ? experimentResult.value : null
 }
 
 const cancelJob = async () => {
@@ -366,12 +423,105 @@ const cancelJob = async () => {
   }
 }
 
+const openRayDashboard = async () => {
+  const popup = window.open('', '_blank')
+  if (!popup) {
+    ElMessage.warning('浏览器阻止了新窗口，请允许本站打开新标签页后重试')
+    return
+  }
+  popup.opener = null
+  dashboardOpening.value = true
+  try {
+    const access = await apiPost(jobDashboardAccessPath(route.params.id), {})
+    popup.location.replace(access.url)
+  } catch (error) {
+    popup.close()
+    ElMessage.warning(error.message || 'Ray Dashboard 尚未就绪或 RayCluster 已结束')
+  } finally {
+    dashboardOpening.value = false
+  }
+}
+
+const resumeFromCheckpoint = () => {
+  const parent = String(jobDetail.value?.spec?.output?.relativePath || '').trim()
+  const checkpointPath = [parent, jobDetail.value?.id].filter(Boolean).join('/')
+  // Carry the previous run's shape so continuing a training run is one click
+  // rather than retyping the image, command and scale.
+  router.push({
+    path: '/job/create',
+    query: {
+      from: 'checkpoint',
+      checkpointPath,
+      name: jobDetail.value?.name,
+      image: jobDetail.value?.spec?.image,
+      entrypoint: jobDetail.value?.entrypoint,
+    },
+  })
+}
+
+const rerunJob = () => {
+  router.push({
+    path: '/job/create',
+    query: {
+      name: jobDetail.value?.name,
+      image: jobDetail.value?.spec?.image,
+      entrypoint: jobDetail.value?.entrypoint,
+    },
+  })
+}
+
+// The Portal and spk-rayjob submit the same contract. Handing the user the
+// equivalent command is what lets them move a working job into their terminal
+// loop without rebuilding it by hand.
+const cliCommand = computed(() => {
+  const spec = jobDetail.value?.spec || {}
+  const resources = spec.resources || {}
+  const parts = [
+    'spk-rayjob submit',
+    `--name ${jobDetail.value?.name || ''}`,
+    `--image ${spec.image || ''}`,
+    `--entrypoint '${jobDetail.value?.entrypoint || ''}'`,
+    `--workers ${resources.workerReplicas || 1}`,
+    `--gpus-per-worker ${resources.gpusPerWorker || 1}`,
+  ]
+  if (spec.input?.space) {
+    parts.push(`--input-space ${spec.input.space}`)
+    if (spec.input.relativePath) parts.push(`--input-path ${spec.input.relativePath}`)
+  }
+  parts.push('--watch')
+  return parts.join(' \\\n  ')
+})
+
+const showCli = ref(false)
+
+const copyValue = async (value) => {
+  if (await copyToClipboard(value)) ElMessage.success('已复制任务 ID')
+  else ElMessage.warning('浏览器阻止了剪贴板访问，请手动复制')
+}
+
+// GPU summary comes from the job itself; the page used to state a fleet size
+// that did not match the cluster.
+const gpuSummary = computed(() => {
+  const resources = jobDetail.value?.spec?.resources || {}
+  const workers = resources.workerReplicas || 0
+  const gpus = resources.gpusPerWorker || 0
+  if (!workers || !gpus) return '未申请 GPU'
+  return workers > 1 ? `${workers} 节点 × ${gpus} 卡 = ${workers * gpus} 卡` : `${gpus} 卡（单机）`
+})
+
 let refreshTimer
+let clockTimer
 
 onMounted(() => {
   fetchDetail()
   refreshTimer = window.setInterval(fetchDetail, 5000)
+  // A running job's elapsed time is measured against now, so the clock has to
+  // advance even between detail refreshes.
+  clockTimer = window.setInterval(() => { nowTick.value = new Date().toISOString() }, 1000)
 })
 
-onUnmounted(() => window.clearInterval(refreshTimer))
+onUnmounted(() => {
+  window.clearInterval(refreshTimer)
+  window.clearInterval(clockTimer)
+})
 </script>

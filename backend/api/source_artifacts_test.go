@@ -168,7 +168,7 @@ func TestCreateSourceArtifactReturnsPresignWithoutCachingOrCredentialLeak(t *tes
 	if response.Header().Get("Cache-Control") != "no-store" || response.Header().Get("Pragma") != "no-cache" {
 		t.Fatalf("presign response is cacheable: headers=%v", response.Header())
 	}
-	if repo.identity != 1 || store.presignCalls != 1 || store.lastObjectKey != "tenants/tenant-a/users/user-a/sha256/"+apiArtifactDigest+".zip" {
+	if repo.identity != 1 || store.presignCalls != 1 || store.lastObjectKey != "ray-train/tenants/tenant-a/users/user-a/workspace/.ray-train-archives/"+apiArtifactDigest+".zip" {
 		t.Fatalf("unexpected create calls: identity=%d presign=%d key=%q", repo.identity, store.presignCalls, store.lastObjectKey)
 	}
 	var envelope struct {

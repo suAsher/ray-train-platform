@@ -70,6 +70,31 @@ export async function logoutLocal() {
   }
 }
 
+// A successful password change revokes every server-side local session. Drop
+// the browser copy immediately as well, so the user must sign in with the new
+// password instead of continuing with a token that is about to return 401.
+export async function changeLocalPassword(currentPassword, newPassword) {
+  const token = localToken()
+  if (!token) {
+    const error = new Error('本地登录已失效，请重新登录')
+    error.code = 'LOCAL_SESSION_REQUIRED'
+    throw error
+  }
+  const response = await fetch('/api/v1/auth/password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ currentPassword, newPassword })
+  })
+  const body = await response.json().catch(() => null)
+  if (!response.ok || body?.success === false) {
+    const error = new Error(body?.error?.message || `修改密码失败 (${response.status})`)
+    error.code = body?.error?.code
+    throw error
+  }
+  persist(null)
+  return body?.data || { updated: true }
+}
+
 export function clearLocalSession() {
   persist(null)
 }

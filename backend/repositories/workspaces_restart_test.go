@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"ray-train-platform-backend/domain"
@@ -60,5 +61,32 @@ func TestCreateWorkspaceRefusesToReplaceARunningOne(t *testing.T) {
 
 	if err := repo.CreateWorkspace(ctx, devWorkspace("ws-2"), 3600); err == nil {
 		t.Fatalf("expected a running workspace to block a second launch")
+	}
+}
+
+func TestCreateWorkspaceHonorsTenantGPUQuota(t *testing.T) {
+	repo := testRepository(t)
+	ctx := context.Background()
+	principal := testPrincipalForRepository()
+	if err := repo.EnsureIdentity(ctx, principal); err != nil {
+		t.Fatalf("ensure identity: %v", err)
+	}
+	job := testJob()
+	job.TenantID = principal.TenantID
+	job.UserID = principal.Subject
+	job.Spec.Resources.WorkerReplicas = 3
+	job.Spec.Resources.GPUsPerWorker = 8
+	if err := repo.Create(ctx, &job, "workspace-quota-job"); err != nil {
+		t.Fatalf("create quota-filling job: %v", err)
+	}
+	workspace := &domain.DevWorkspace{
+		ID: "ws-over-quota", TenantID: principal.TenantID, UserID: principal.Subject,
+		Name: "debug-over-quota", Namespace: "tenant-" + principal.TenantID,
+		RayClusterName: "debug-over-quota", GPUCount: 1, State: domain.WorkspaceSubmitted,
+	}
+	err := repo.CreateWorkspace(ctx, workspace, 3600)
+	var quotaErr *GPUQuotaExceededError
+	if !errors.As(err, &quotaErr) {
+		t.Fatalf("expected workspace launch to reject exhausted tenant quota, got %v", err)
 	}
 }

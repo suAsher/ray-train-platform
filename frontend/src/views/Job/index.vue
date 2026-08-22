@@ -1,16 +1,20 @@
 <template>
   <div class="space-y-5">
     <!-- At-a-glance counters for the jobs the user actually cares about -->
-    <div class="grid grid-cols-4 gap-4">
-      <div v-for="card in summaryCards" :key="card.label" class="bg-[#131826] p-4 rounded-2xl border border-slate-800/80 shadow-lg">
-        <p class="text-xs text-slate-400">{{ card.label }}</p>
-        <p class="text-2xl font-bold mt-1" :class="card.tone">{{ card.value }}</p>
+    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div v-for="card in summaryCards" :key="card.label" class="stat-tile panel-hover">
+        <div class="flex items-center justify-between">
+          <p class="stat-tile__label">{{ card.label }}</p>
+          <span class="h-2 w-2 rounded-full" :class="card.dot" />
+        </div>
+        <p class="stat-tile__value" :class="card.tone">{{ card.value }}</p>
+        <p class="text-[11px] text-slate-500">{{ card.hint }}</p>
       </div>
     </div>
 
     <!-- Filter Header -->
-    <div class="flex justify-between items-center bg-[#131826] p-5 rounded-2xl border border-slate-800/80 shadow-xl">
-      <div class="flex items-center gap-4">
+    <div class="panel flex flex-wrap items-center justify-between gap-4 p-5">
+      <div class="flex flex-wrap items-center gap-3">
         <el-radio-group v-model="scope" size="default">
           <el-radio-button label="mine">我提交的</el-radio-button>
           <el-radio-button label="team">全team</el-radio-button>
@@ -34,13 +38,18 @@
         </el-select>
       </div>
 
-      <router-link to="/job/create">
-        <el-button type="primary" icon="Plus" class="!rounded-xl">创建训练任务</el-button>
-      </router-link>
+      <div class="flex items-center gap-3">
+        <!-- Most submissions repeat a previous run with a small change, so
+             re-running is a first-class entry rather than a blank form. -->
+        <el-button v-if="lastJob" class="!rounded-xl" icon="RefreshRight" @click="rerun(lastJob)">复制上次任务</el-button>
+        <router-link to="/job/create">
+          <el-button type="primary" icon="Plus" class="!rounded-xl">创建训练任务</el-button>
+        </router-link>
+      </div>
     </div>
 
     <!-- Jobs Table -->
-    <div class="bg-[#131826] rounded-2xl border border-slate-800/80 overflow-hidden shadow-2xl">
+    <div class="panel overflow-hidden">
       <el-table :data="filteredJobs" style="width: 100%" class="!bg-transparent text-xs" v-loading="loading">
         <template #empty>
           <div class="py-12 space-y-3">
@@ -53,16 +62,27 @@
         </template>
         <el-table-column prop="name" label="任务名称 / ID" min-width="240">
           <template #default="scope">
-            <div class="font-mono font-bold text-slate-100 hover:text-blue-400 cursor-pointer" @click="goToDetail(scope.row.id)">
+            <div class="cursor-pointer font-mono font-bold text-slate-100 hover:text-blue-400" @click="goToDetail(scope.row.id)">
               {{ scope.row.name }}
             </div>
-            <div class="text-[11px] text-slate-500 font-sans truncate mt-0.5">{{ scope.row.entrypoint }}</div>
+            <div class="mt-0.5 flex items-center gap-1">
+              <!-- The job id is what users paste into spk-rayjob commands. -->
+              <code class="truncate font-mono text-[11px] text-slate-500">{{ scope.row.id }}</code>
+              <el-button link size="small" icon="DocumentCopy" title="复制任务 ID" @click.stop="copyValue(scope.row.id)" />
+            </div>
+            <div class="mt-0.5 truncate font-sans text-[11px] text-slate-500">{{ scope.row.entrypoint }}</div>
           </template>
         </el-table-column>
 
         <el-table-column prop="framework" label="训练框架" width="130">
           <template #default="scope">
             <el-tag size="small" effect="plain">{{ scope.row.framework || 'RayTrain' }}</el-tag>
+          </template>
+        </el-table-column>
+
+        <el-table-column prop="submissionOrigin" label="提交方式" width="130">
+          <template #default="scope">
+            <el-tag size="small" effect="plain" :type="scope.row.submissionOrigin === 'ray-cli' ? 'warning' : 'info'">{{ originLabel(scope.row.submissionOrigin) }}</el-tag>
           </template>
         </el-table-column>
 
@@ -76,7 +96,7 @@
 
         <el-table-column prop="owner" label="提交人" width="130">
           <template #default="scope">
-            <span class="text-slate-400">{{ scope.row.isMine ? '我' : shortOwner(scope.row.userId) }}</span>
+            <span class="text-slate-400">{{ ownerLabel(scope.row) }}</span>
           </template>
         </el-table-column>
 
@@ -87,16 +107,28 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="created_at" label="创建时间" width="180">
+        <el-table-column label="时间线" width="270">
           <template #default="scope">
-            <span class="font-mono text-slate-400">{{ new Date(scope.row.created_at).toLocaleString() }}</span>
+            <div class="space-y-1 font-mono text-[11px]">
+              <div class="text-slate-400">提交 {{ formatDateTime(scope.row.created_at) }}</div>
+              <div class="text-slate-500">
+                <span v-if="scope.row.timeline.isWaiting" class="text-amber-400">排队中 {{ scope.row.timeline.queuedLabel }}</span>
+                <template v-else>结束 {{ finishedLabel(scope.row.timeline.finishedAt) }}</template>
+              </div>
+              <div class="text-slate-500">
+                训练 <span :class="scope.row.timeline.isRunning ? 'text-blue-400' : ''">{{ scope.row.timeline.runningLabel }}</span>
+                <span v-if="scope.row.timeline.queuedSeconds" class="ml-2 text-slate-600">排队 {{ scope.row.timeline.queuedLabel }}</span>
+              </div>
+            </div>
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="160" fixed="right" align="right">
+        <el-table-column label="操作" width="230" fixed="right" align="right">
           <template #default="scope">
             <el-button type="primary" link size="small" @click="goToDetail(scope.row.id)">控制台</el-button>
-            <el-button type="danger" link size="small" @click="deleteJob(scope.row.id)">停止</el-button>
+            <el-button link size="small" @click="rerun(scope.row)">再来一次</el-button>
+            <el-button v-if="canResume(scope.row)" type="warning" link size="small" @click="resume(scope.row)">续训</el-button>
+            <el-button v-else type="danger" link size="small" @click="deleteJob(scope.row.id)">停止</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -109,7 +141,10 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { apiDelete, apiGet } from '../../api/client'
-import { userId } from '../../stores/session'
+import { isAdmin, userId } from '../../stores/session'
+import { displayJobOwner } from '../../jobOwner'
+import { finishedLabel, formatDateTime, jobTimeline, originLabel } from '../../jobTimeline'
+import { copyToClipboard } from '../../clipboard'
 
 const router = useRouter()
 const scope = ref('mine')
@@ -117,6 +152,7 @@ const searchKeyword = ref('')
 const statusFilter = ref('')
 const loading = ref(false)
 const jobs = ref([])
+const submitterNamesByID = ref(new Map())
 let refreshTimer
 
 const normalizeJob = (job) => {
@@ -131,7 +167,14 @@ const normalizeJob = (job) => {
     worker_replicas: resources.workerReplicas || 0,
     gpus_per_worker: resources.gpusPerWorker || 0,
     total_gpus: (resources.workerReplicas || 0) * (resources.gpusPerWorker || 0),
-    created_at: job.createdAt || job.created_at
+    created_at: job.createdAt || job.created_at,
+    started_at: job.startedAt || job.started_at,
+    finished_at: job.finishedAt || job.finished_at,
+    // Queue wait and training time are separate facts; a single span measured
+    // from submission reported queue wait as training time.
+    timeline: jobTimeline(job),
+    last_observed_at: job.lastObservedAt || job.last_observed_at,
+    submissionOrigin: job.submissionOrigin || job.submission_origin || 'portal',
   }
 }
 
@@ -150,6 +193,24 @@ const fetchJobs = async () => {
     loading.value = false
   }
 }
+
+const loadSubmitterDirectory = async () => {
+  if (!isAdmin.value) return
+  try {
+    const users = await apiGet('/api/v1/users')
+    submitterNamesByID.value = new Map(
+      (users || [])
+        .filter((user) => user?.id && user?.username)
+        .map((user) => [user.id, user.username])
+    )
+  } catch {
+    // Job visibility remains available when the optional display-name lookup
+    // is unavailable; ownerLabel falls back to a short opaque subject.
+    submitterNamesByID.value = new Map()
+  }
+}
+
+const ownerLabel = (job) => displayJobOwner(job.userId, userId.value, submitterNamesByID.value)
 
 // The API already scopes results to the caller's tenant; this narrows further
 // to the jobs the signed-in user submitted.
@@ -178,15 +239,25 @@ const emptyHint = computed(() => {
 })
 
 const ACTIVE_STATES = ['QUEUED', 'PROVISIONING', 'RUNNING', 'SUBMITTED', 'ADMITTED']
+const TERMINAL_STATES = ['SUCCEEDED', 'FAILED', 'CANCELED', 'TIMED_OUT']
 
 const summaryCards = computed(() => {
   const items = scopedJobs.value
   const count = (predicate) => items.filter(predicate).length
+  const queued = count((j) => j.status === 'QUEUED')
   return [
-    { label: '进行中', value: count((j) => ACTIVE_STATES.includes(j.status)), tone: 'text-blue-400' },
-    { label: '已成功', value: count((j) => j.status === 'SUCCEEDED'), tone: 'text-emerald-400' },
-    { label: '失败', value: count((j) => j.status === 'FAILED'), tone: 'text-red-400' },
-    { label: '占用 GPU', value: items.filter((j) => ACTIVE_STATES.includes(j.status)).reduce((total, j) => total + j.total_gpus, 0), tone: 'text-slate-100' }
+    {
+      label: '进行中', value: count((j) => ACTIVE_STATES.includes(j.status)),
+      tone: 'text-blue-400', dot: 'bg-blue-400',
+      hint: queued > 0 ? `其中 ${queued} 个在排队` : '没有任务在排队',
+    },
+    { label: '已成功', value: count((j) => j.status === 'SUCCEEDED'), tone: 'text-emerald-400', dot: 'bg-emerald-400', hint: '结果可在“我的训练结果”查看' },
+    { label: '失败', value: count((j) => j.status === 'FAILED'), tone: 'text-red-400', dot: 'bg-red-400', hint: '打开控制台查看失败日志' },
+    {
+      label: '占用 GPU',
+      value: items.filter((j) => ACTIVE_STATES.includes(j.status)).reduce((total, j) => total + j.total_gpus, 0),
+      tone: 'text-slate-100', dot: 'bg-slate-400', hint: '仅统计进行中的任务',
+    },
   ]
 })
 
@@ -196,8 +267,6 @@ const STATUS_LABELS = {
   CANCELING: '取消中', CANCELED: '已取消', TIMED_OUT: '已超时', DELETING: '清理中', UNKNOWN: '未知'
 }
 const statusLabel = (status) => STATUS_LABELS[status] || status
-const shortOwner = (id) => (id ? `${id.slice(0, 8)}…` : '—')
-
 const getStatusType = (status) => {
   switch (status) {
     case 'RUNNING': return 'primary'
@@ -209,8 +278,39 @@ const getStatusType = (status) => {
   }
 }
 
+const copyValue = async (value) => {
+  if (await copyToClipboard(value)) ElMessage.success('已复制任务 ID')
+  else ElMessage.warning('浏览器阻止了剪贴板访问，请手动复制')
+}
+
 const goToDetail = (id) => {
   router.push(`/job/detail/${id}`)
+}
+
+const lastJob = computed(() => scopedJobs.value.find((job) => job.isMine) || null)
+
+// A run can only be continued from its own managed result directory, which the
+// platform creates per job under the selected output space.
+const canResume = (job) => TERMINAL_STATES.includes(job.status) && Boolean(job.spec?.output?.space)
+
+const rerun = (job) => {
+  router.push({
+    path: '/job/create',
+    query: { name: job.name, image: job.spec?.image, entrypoint: job.entrypoint },
+  })
+}
+
+const resume = (job) => {
+  const base = String(job.spec?.output?.relativePath || '').replace(/\/$/, '')
+  router.push({
+    path: '/job/create',
+    query: {
+      name: job.name,
+      image: job.spec?.image,
+      entrypoint: job.entrypoint,
+      checkpointPath: base ? `${base}/${job.id}` : job.id,
+    },
+  })
 }
 
 const deleteJob = async (id) => {
@@ -225,6 +325,7 @@ const deleteJob = async (id) => {
 }
 
 onMounted(() => {
+  loadSubmitterDirectory()
   fetchJobs()
   refreshTimer = window.setInterval(fetchJobs, 5000)
 })

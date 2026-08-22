@@ -13,10 +13,11 @@ import (
 )
 
 type fakeJobRepository struct {
-	created  *domain.TrainingJob
-	jobs     []domain.TrainingJob
-	identity int
-	canceled string
+	created     *domain.TrainingJob
+	jobs        []domain.TrainingJob
+	identity    int
+	identityErr error
+	canceled    string
 }
 
 func (f *fakeJobRepository) Create(_ context.Context, job *domain.TrainingJob, _ string) error {
@@ -48,7 +49,7 @@ func (f *fakeJobRepository) SetDesiredState(_ context.Context, tenant, id string
 }
 func (f *fakeJobRepository) EnsureIdentity(context.Context, auth.Principal) error {
 	f.identity++
-	return nil
+	return f.identityErr
 }
 
 func TestSubmitJobUsesAuthenticatedTenantAndQueuesOutboxViaRepository(t *testing.T) {
@@ -76,6 +77,45 @@ func TestSubmitJobUsesAuthenticatedTenantAndQueuesOutboxViaRepository(t *testing
 	}
 	if repository.identity != 1 {
 		t.Fatalf("expected identity upsert")
+	}
+}
+
+func TestTenantAdminSubmissionPersistsPrincipalIdentity(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repository := &fakeJobRepository{}
+	handler := NewHandler(repository, Options{})
+	handler.newID = func() (string, error) { return "job-tenant-admin", nil }
+	principal := auth.Principal{
+		Subject:  "user-tenant-admin-42",
+		Username: "team-admin-client-name",
+		TenantID: "team-a",
+		Roles:    []string{domain.RoleTenantAdmin},
+		AuthType: auth.AuthTypeLocal,
+	}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("ray-platform-principal", principal)
+		c.Next()
+	})
+	handler.RegisterTrainingRoutes(router.Group("/api/v1"))
+	body := `{"spec":{"name":"tenant-admin-job","image":"registry.example/ray@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","source":{"type":"git","url":"https://git.example/train","commit":"0123456789abcdef"},"entrypoint":{"command":["python","train.py"]},"resources":{"workerReplicas":1,"gpusPerWorker":1}}}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("expected accepted, got %d: %s", response.Code, response.Body.String())
+	}
+	if repository.created == nil {
+		t.Fatal("expected a persisted job")
+	}
+	if repository.created.UserID != principal.Subject || repository.created.TenantID != principal.TenantID {
+		t.Fatalf("job identity must come from authenticated subject and tenant, got user=%q tenant=%q", repository.created.UserID, repository.created.TenantID)
+	}
+	if repository.created.UserID == principal.Username || repository.created.UserID == domain.RoleTenantAdmin || repository.created.UserID == "admin" || repository.created.UserID == "client" {
+		t.Fatalf("job submitter must never use role, admin, client, or username labels: %q", repository.created.UserID)
 	}
 }
 
@@ -120,5 +160,45 @@ func TestSubmitJobRecordsPortalSubmissionOrigin(t *testing.T) {
 	}
 	if repository.created == nil || repository.created.SubmissionOrigin != domain.SubmissionOriginPortal {
 		t.Fatalf("expected portal origin, got %+v", repository.created)
+	}
+}
+
+func TestSubmitJobRecordsRayCLIOriginWhenRequested(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repository := &fakeJobRepository{}
+	handler := NewHandler(repository, Options{})
+	handler.newID = func() (string, error) { return "job-spk-rayjob", nil }
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("ray-platform-principal", auth.Principal{Subject: "subject-1", TenantID: "team-a", Roles: []string{"Engineer"}, AuthType: auth.AuthTypeLocal})
+		c.Next()
+	})
+	handler.RegisterTrainingRoutes(router.Group("/api/v1"))
+	body := `{"origin":"ray-cli","spec":{"name":"spk-rayjob-job","image":"registry.example/ray@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","source":{"type":"git","url":"https://git.example/train","commit":"0123456789abcdef"},"entrypoint":{"command":["python","train.py"]},"resources":{"workerReplicas":1,"gpusPerWorker":1}}}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("expected accepted, got %d", response.Code)
+	}
+	if repository.created == nil || repository.created.SubmissionOrigin != domain.SubmissionOriginRayCLI {
+		t.Fatalf("expected spk-rayjob origin, got %+v", repository.created)
+	}
+}
+
+func TestPublicTrainingJobRedactsResolvedPVCClaims(t *testing.T) {
+	job := &domain.TrainingJob{Spec: domain.JobSpec{
+		DatasetStorage: domain.StorageSelection{AssetID: "dataset-a", RelativePath: "train"},
+		ResolvedStorage: domain.ResolvedStorageMounts{
+			Dataset: &domain.ResolvedStorageMount{AssetID: "dataset-a", ClaimName: "tos-private-claim", MountPath: domain.StorageMountDataset, ReadOnly: true},
+		},
+	}}
+	public := publicTrainingJob(job)
+	if public == job || public.Spec.DatasetStorage.AssetID != "dataset-a" || public.Spec.ResolvedStorage.Dataset != nil {
+		t.Fatalf("public job did not preserve selection and redact renderer details: %#v", public)
+	}
+	if job.Spec.ResolvedStorage.Dataset == nil || job.Spec.ResolvedStorage.Dataset.ClaimName != "tos-private-claim" {
+		t.Fatalf("redaction mutated the persisted job: %#v", job)
 	}
 }

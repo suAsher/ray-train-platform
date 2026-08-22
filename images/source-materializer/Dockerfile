@@ -6,11 +6,9 @@ ARG APK_MIRROR=https://repo.huaweicloud.com/repository/alpine
 RUN alpine_version="$(cut -d. -f1-2 /etc/alpine-release)" \
   && printf '%s/v%s/main\n%s/v%s/community\n' "$APK_MIRROR" "$alpine_version" "$APK_MIRROR" "$alpine_version" > /etc/apk/repositories \
   && apk add --no-cache \
-    aws-cli \
     ca-certificates \
     git \
-    tar \
-    unzip \
+    python3 \
   && addgroup -S -g 65532 platform \
   && adduser -S -D -H -u 65532 -G platform platform \
   && mkdir -p /workspace /tmp/platform-source \
@@ -18,4 +16,5 @@ RUN alpine_version="$(cut -d. -f1-2 /etc/alpine-release)" \
 
 USER 65532:65532
 WORKDIR /workspace
+COPY platform-safe-extract.py /usr/local/bin/platform-safe-extract.py
 ENTRYPOINT ["/bin/sh"]

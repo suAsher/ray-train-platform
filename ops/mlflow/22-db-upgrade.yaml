@@ -1,0 +1,41 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mlflow-db-upgrade
+  namespace: mlflow-system
+  labels:
+    app.kubernetes.io/name: mlflow
+    app.kubernetes.io/component: database-migration
+    app.kubernetes.io/part-of: ray-train-platform
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mlflow
+        app.kubernetes.io/component: database-migration
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: harbor-registry
+      nodeSelector:
+        platform.wellspiking.ai/pool: control-plane
+      containers:
+        - name: upgrade
+          image: harbor.wellspiking.ai/guofeng.su/mlflow:v3.14.0-full@sha256:03c206d175084ee3f654a1353ab62ccd2e59048c54f9488f08cc4d8f5de0037d
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - exec mlflow db upgrade "$MLFLOW_DATABASE_URL"
+          env:
+            - name: MLFLOW_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: mlflow-database
+                  key: uri
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]

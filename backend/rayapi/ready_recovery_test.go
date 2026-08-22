@@ -82,7 +82,10 @@ func (repository *rayTestRepository) ReopenSourceArtifactUploadWithLimits(_ cont
 func recoveryRouter(t *testing.T, repository *rayTestRepository, store objectstore.Store, logs api.LogProvider, principal auth.Principal) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	submission := api.NewSubmissionService(repository, api.SubmissionServiceOptions{NewID: func() (string, error) { return "job-ray", nil }})
+	submission := api.NewSubmissionService(repository, api.SubmissionServiceOptions{
+		DataSpaces: repository, DataSpacesEnabled: true,
+		NewID: func() (string, error) { return "job-ray", nil },
+	})
 	handler, err := NewHandler(repository, store, submission, Options{SpoolDir: t.TempDir(), Logs: logs, TailPollInterval: time.Millisecond, Now: func() time.Time { return time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC) }})
 	if err != nil {
 		t.Fatalf("new Ray API handler: %v", err)
@@ -196,8 +199,8 @@ func TestRay235TransportPackageSubmitsThroughSubmissionService(t *testing.T) {
 	if response := recoveryRequest(router, http.MethodPost, "/ray/api/jobs/", []byte(raySubmitBody(packageName))); response.Code != http.StatusOK {
 		t.Fatalf("Ray 2.35 package submit status=%d body=%s", response.Code, response.Body.String())
 	}
-	if repository.created == nil || repository.created.SourceArtifactID != rayPackageArtifactID(principal.TenantID, principal.Subject, packageName) {
-		t.Fatalf("Ray 2.35 package was not owner-scoped into SubmissionService: %+v", repository.created)
+	if repository.created == nil || repository.created.SourceArtifactID != rayPackageArtifactID(principal.TenantID, principal.Subject, packageName) || repository.created.Spec.Source.Type != "workspace-archive" {
+		t.Fatalf("Ray 2.35 package was not owner-scoped into the workspace archive flow: %+v", repository.created)
 	}
 }
 

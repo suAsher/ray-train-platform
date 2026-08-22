@@ -1,0 +1,59 @@
+{{- $https := default (dict) .Values.ingress.https }}
+{{- $release := default (dict) .Values.spkRayjobRelease }}
+{{- if (default false $https.enabled) }}
+{{- if not $release.enabled }}{{- fail "ingress.https.enabled requires spkRayjobRelease.enabled" }}{{- end }}
+{{- if not $https.host }}{{- fail "ingress.https.host is required when ingress.https.enabled is true" }}{{- end }}
+{{- $certificateMode := default "native-secret" $https.certificateMode }}
+{{- if and (ne $certificateMode "native-secret") (ne $certificateMode "alb-instance") }}{{- fail "ingress.https.certificateMode must be native-secret or alb-instance" }}{{- end }}
+{{- if and (eq $certificateMode "native-secret") (not $https.tlsSecretName) }}{{- fail "ingress.https.tlsSecretName is required when certificateMode is native-secret" }}{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  # The object name is deliberately pinned to its original value. Renaming an
+  # Ingress is a delete-and-create, and the VKE ALB admission webhook rejects
+  # two Ingresses claiming path / on the same host during the swap. The name is
+  # not user visible; the routed paths and backend service below are.
+  name: ray-platform-rayctl-https-ingress
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: ingress
+  annotations:
+    {{- toYaml $https.annotations | nindent 4 }}
+spec:
+  ingressClassName: {{ default .Values.ingress.className $https.className }}
+  {{- if eq $certificateMode "native-secret" }}
+  tls:
+    - hosts:
+        - {{ $https.host | quote }}
+      secretName: {{ $https.tlsSecretName | quote }}
+  {{- end }}
+  rules:
+    - host: {{ $https.host | quote }}
+      http:
+        paths:
+          - path: /downloads/spk-rayjob/
+            pathType: Prefix
+            backend:
+              service:
+                name: spk-rayjob-release
+                port:
+                  number: {{ $release.service.port }}
+          # The client was renamed from rayctl. The old prefix keeps routing so
+          # published install instructions do not break mid-upgrade; the release
+          # image maps the old file names onto the new binaries.
+          - path: /downloads/rayctl/
+            pathType: Prefix
+            backend:
+              service:
+                name: spk-rayjob-release
+                port:
+                  number: {{ $release.service.port }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ray-train-frontend
+                port:
+                  number: 80
+{{- end }}

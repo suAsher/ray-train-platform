@@ -1,5 +1,10 @@
 namespace: ray-train-platform
 
+release:
+  # Test profiles may use a release tag. Production profiles require digests
+  # so a Helm revision always identifies exact Portal and API images.
+  requireImageDigests: false
+
 global:
   imagePullPolicy: IfNotPresent
   imageRegistry: cr-cn-beijing.volces.com/ray-platform
@@ -7,13 +12,22 @@ global:
 
 backend:
   replicaCount: 2
+  # Optional scheduling boundary for control-plane Pods. Production profiles
+  # use the dedicated CPU node pool; the default remains portable.
+  nodeSelector: {}
   appEnv: production
   oidcRequired: true
   demoMode: false
-  sourceArtifactsEnabled: true
+  # Disabled: user workloads use Git or immutable workspace snapshots, so no
+  # object-store credential is ever injected into a Ray Pod.
+  sourceArtifactsEnabled: false
+  # The standard `ray job submit --working-dir .` entry point has no image
+  # flag. It uses this administrator-pinned 1xGPU runtime by default.
+  rayAPIDefaultImage: ""
   image:
     repository: ray-train-backend
     tag: "REPLACE_WITH_IMMUTABLE_TAG"
+    digest: ""
   service:
     type: ClusterIP
     port: 8080
@@ -46,8 +60,16 @@ backend:
     # Secret holding BOOTSTRAP_ADMIN_PASSWORD, used only to create the very
     # first administrator. Leave empty to skip bootstrapping.
     bootstrapSecret: ray-platform-bootstrap-admin
-  lokiURL: "http://loki.logging.svc.cluster.local:3100"
+  # Stable in-cluster Loki gateway. The backend appends /loki/api/v1 paths.
+  lokiURL: "http://loki-gateway.loki.svc.cluster.local"
   prometheusURL: "http://prometheus.monitoring.svc.cluster.local:9090"
+  mlflow:
+    # Opt-in: a control-plane upgrade must not change Ray workloads before the
+    # internal MLflow service has passed its own readiness checks.
+    enabled: false
+    trackingURL: "http://mlflow.mlflow-system.svc.cluster.local:5000"
+    ingestURL: "http://mlflow-ingest.mlflow-system.svc.cluster.local:8080"
+    experimentPrefix: raytrain
   corsOrigins: []
   imageAllowlist:
     - cr-cn-beijing.volces.com/ray-platform/ray-train
@@ -61,14 +83,14 @@ backend:
   # tenant-local, least-privilege ServiceAccount is provisioned separately.
   rayJobServiceAccount: ""
 
-migrations:
-  enabled: true
-
 frontend:
   replicaCount: 2
+  # Optional scheduling boundary for Portal Pods.
+  nodeSelector: {}
   image:
     repository: ray-train-frontend
     tag: "REPLACE_WITH_IMMUTABLE_TAG"
+    digest: ""
   service:
     type: ClusterIP
     port: 80
@@ -86,15 +108,77 @@ frontend:
     keycloakRealm: ai
     keycloakClientID: ray-training-platform
 
+spkRayjobRelease:
+  enabled: false
+  replicaCount: 2
+  nodeSelector: {}
+  image:
+    repository: spk-rayjob-release
+    tag: "REPLACE_WITH_IMMUTABLE_TAG"
+    digest: ""
+  service:
+    type: ClusterIP
+    port: 8080
+  resources:
+    limits:
+      cpu: 250m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
 ingress:
   enabled: true
   className: alb
   host: ai-training.internal.example
   annotations:
     ingress.vke.volcengine.com/loadbalancer-type: private
+    # Pod pass-through lets the VKE ALB target ClusterIP Service endpoints;
+    # without it, the controller requires NodePort or LoadBalancer Services.
+    ingress.vke.volcengine.com/loadbalancer-pass-through: "true"
     ingress.vke.volcengine.com/loadbalancer-port: "80"
     ingress.vke.volcengine.com/request-timeout: "3600"
     ingress.vke.volcengine.com/keepalive-timeout: "3600"
+  https:
+    enabled: false
+    host: ""
+    className: ""
+    # native-secret is VKE beta. Production uses alb-instance and binds the
+    # Certificate Center ID on a dedicated private ALBInstance.
+    certificateMode: native-secret
+    tlsSecretName: ""
+    annotations:
+      ingress.vke.volcengine.com/loadbalancer-type: private
+      # Keep this aligned with the HTTP ingress: platform Services remain
+      # internal ClusterIP Services and are not exposed through NodePort.
+      ingress.vke.volcengine.com/loadbalancer-pass-through: "true"
+      ingress.vke.volcengine.com/loadbalancer-port: "443"
+      ingress.vke.volcengine.com/loadbalancer-protocol: https
+      ingress.vke.volcengine.com/request-timeout: "3600"
+      ingress.vke.volcengine.com/keepalive-timeout: "3600"
+
+# A dedicated private VKE ALB and its cluster-scoped IngressClass. It is
+# intentionally disabled by default because subnet IDs and certificate IDs are
+# environment-specific. blockCascadeDeletion protects the cloud ALB when a
+# Helm release is removed.
+albInstance:
+  enabled: false
+  name: ""
+  className: ""
+  instance:
+    # Set only when adopting an existing private ALB. Otherwise the bootstrap
+    # operation creates one from name/zoneMappings.
+    instanceID: ""
+    name: ""
+    edition: Basic
+    addressType: private
+    ipVersion: ipv4
+    deleteProtection: "on"
+    zoneMappings: []
+  https:
+    host: ""
+    certificateSource: cert_center
+    certificateID: ""
 
 # Where Ray head and worker Pods are allowed to run. Comma-separated
 # key=value labels. Adding GPU machines only means labelling them the same way
@@ -106,9 +190,61 @@ training:
   maxWorkerReplicas: 3
   maxGPUsPerWorker: 8
   maxTotalGPUs: 24
+  # Disposable per-Pod cache on a GPU node's local data disk. Keep disabled
+  # until every GPU node has the same tested local CSI StorageClass. This is
+  # not a data asset and must never hold final checkpoints or model outputs.
+  localCache:
+    enabled: false
+    storageClass: ray-cache-local
+    size: 200Gi
+    mountPath: /mnt/cache
+
+# Governed user data spaces. Keep disabled until csi-fsx is configured with
+# its component-level IRSA role and ops/storage/.../41-verify-irsa-prefix-mount.sh
+# reports success. This never injects TOS credentials into Ray Pods.
+dataSpaces:
+  enabled: false
+  # Capacity is Kubernetes accounting for the RWX static PV, not a hard TOS
+  # quota. The CSI component's IRSA role is the only credential used.
+  mountCapacity: 1Ti
+  fsxVolumeAttributes: {}
+  # Standard public dataset root. A temporary value is accepted only as
+  # ray-train/tenants/<tenant>/datasets/public during a controlled migration.
+  publicRoot: ray-train/public
+
+# Native TOS ObjectSet hard quotas for personal roots. This is independent of
+# FSX mounting: it can be prepared before GPU nodes or CSI IRSA are ready, and
+# never gives a workload Pod an AK/SK. The SuperAdmin initializes the bucket
+# layout once from the Portal before accounts are provisioned with a quota.
+personalStorage:
+  objectSetQuota:
+    enabled: false
+    defaultQuota: 100Gi
+    maxQuota: 10Ti
+
+# Administrator-configured IDC NFS exports. This replaces the legacy single
+# storage.existingClaim compatibility path. Each enabled tenant gets three
+# retained ReadOnlyMany PVC adapters, mounted in workloads at /mnt/idc/*.
+# Do not put user-specific mount paths or personal SSHFS credentials here.
+idcDataSpaces:
+  enabled: false
+  mountCapacity: 1Pi
+  sources:
+    original:
+      server: ""
+      path: ""
+    wellspiking:
+      server: ""
+      path: ""
+    shared:
+      server: ""
+      path: ""
 
 kueue:
   enabled: false
+  # True means this Helm release owns ResourceFlavor and ClusterQueue. False
+  # attaches to a queue managed outside this project.
+  manageResources: false
   # Kueue's nominalQuota is a static field with no capacity discovery. With this
   # on, the controller keeps it equal to the allocatable capacity of the nodes
   # matching training.nodeSelector, so adding a machine only means labelling it.
@@ -119,10 +255,14 @@ kueue:
   gpuQuota: 24
   cpuQuota: 256
   memoryQuota: 1024Gi
+  resourceFlavorNodeLabels:
+    accelerator: nvidia-rtx-4090
 
 storage:
-  enabled: true
-  existingClaim: idc-training-rwx
+  # Deprecated compatibility switch. Keep false: governed IDC data uses the
+  # idcDataSpaces section above, never a single shared arbitrary PVC.
+  enabled: false
+  existingClaim: ""
   storageClass: ""
   size: 2Ti
   accessModes:
@@ -136,11 +276,52 @@ networkPolicy:
 availability:
   pdbEnabled: true
   minAvailable: 1
+  # Deployment defaults favor zero-downtime updates when the cluster has
+  # spare capacity. Smaller HA pools can override these in their profile.
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+  preferredAntiAffinity: true
+  # The CPU HA profile uses hard host separation. Keep the default relaxed so
+  # a small development cluster can still run a single replica.
+  requiredAntiAffinity: false
+  topologySpreadWhenUnsatisfiable: ScheduleAnyway
+
+autoscaling:
+  backend:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  frontend:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
 
 tos:
   endpoint: "https://tos-cn-beijing.volces.com"
+  region: "cn-beijing"
   bucket: ""
   secretName: "tos-credentials"
 
 postgres:
+  # standalone is a disposable test database only. Production uses `external`
+  # and references a managed/HA PostgreSQL DATABASE_URL Secret.
+  mode: external
   existingSecret: ray-platform-postgres
+  standalone:
+    image: docker.io/library/postgres:16-alpine
+    databaseName: platform
+    storageClass: ""
+    size: 20Gi
+    # Keep the disposable single-instance database off GPU/VCI nodes when a
+    # control-plane node pool is available.
+    nodeSelector: {}
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 2Gi

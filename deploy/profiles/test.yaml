@@ -1,0 +1,96 @@
+# 单 GPU/功能验收基线。它不含任何凭证，实际密码由
+# ops/platform/bootstrap-secrets.sh 从受保护的 env 文件创建。
+namespace: ray-train-platform
+
+global:
+  imageRegistry: registry.invalid/ray-platform
+  imagePullSecrets: []
+
+backend:
+  replicaCount: 1
+  appEnv: development
+  oidcRequired: false
+  demoMode: false
+  image:
+    repository: ray-train-backend
+    tag: test
+  workspaceImage: registry.invalid/ray-platform/ray-workspace@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  sourceMaterializerImage: registry.invalid/ray-platform/ray-source-materializer@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  oidc:
+    issuerURL: https://keycloak.test.invalid/realms/ai
+    clientID: ray-training-platform-test
+    audience: ray-training-platform-api
+  localAuth:
+    enabled: true
+    bootstrapUsername: admin
+    bootstrapTenant: local
+    bootstrapSecret: ray-platform-bootstrap-admin
+  imageAllowlist:
+    - registry.invalid/ray-platform/ray-test
+  gitAllowlist:
+    - github.com
+  lokiURL: ""
+  prometheusURL: ""
+
+frontend:
+  replicaCount: 1
+  image:
+    repository: ray-train-frontend
+    tag: test
+  runtimeConfig:
+    authRequired: false
+    keycloakURL: https://keycloak.test.invalid
+    keycloakRealm: ai
+    keycloakClientID: ray-training-platform-test
+
+ingress:
+  enabled: false
+
+training:
+  nodeSelector: accelerator=nvidia-test
+  maxWorkerReplicas: 1
+  maxGPUsPerWorker: 1
+  maxTotalGPUs: 1
+
+kueue:
+  enabled: true
+  manageResources: true
+  autoQuota: false
+  clusterQueueName: ray-platform-test-gpu
+  resourceFlavorName: ray-platform-test-gpu
+  gpuQuota: 1
+  cpuQuota: 16
+  memoryQuota: 64Gi
+
+storage:
+  enabled: false
+  existingClaim: ""
+
+dataSpaces:
+  enabled: false
+
+tos:
+  endpoint: ""
+  region: ""
+  bucket: ""
+  secretName: ""
+
+postgres:
+  mode: standalone
+  standalone:
+    image: docker.io/library/postgres:16-alpine
+    databaseName: platform
+    storageClass: ""
+    size: 20Gi
+
+availability:
+  pdbEnabled: false
+
+autoscaling:
+  backend:
+    enabled: false
+  frontend:
+    enabled: false
+
+networkPolicy:
+  enabled: false

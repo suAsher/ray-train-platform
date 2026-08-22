@@ -1,7 +1,8 @@
 # 正式部署 values 模板
 #
 # 复制成 values-prod.yaml 后逐项替换 <> 占位符。这个文件本身不含任何凭证：
-# 密码和密钥全部通过 Secret 注入，见 docs/DEPLOY_FROM_SCRATCH.md 第 3 节。
+# 密码和密钥全部通过 Secret 注入，使用 deploy/secrets.env.example 与
+# ops/platform/bootstrap-secrets.sh；见 docs/BUILD_AND_DEPLOY.md。
 #
 # 之所以用一份完整的 values 文件而不是一串 --set：测试环境累积了 30 多次
 # 修订的配置漂移，逐条纠正比从审阅过的基线重装更容易漏项。
@@ -71,10 +72,10 @@ backend:
   rayVersion: "2.35.0"
   rayJobClusterSpecField: rayClusterSpec
   rayJobServiceAccount: ""
-  sourceArtifactsEnabled: true
+  sourceArtifactsEnabled: false
 
   # ---- 可观测性：指向内部服务，没部署就留空并知悉日志页不可用 ----------
-  lokiURL: <http://loki.内部地址:3100>
+  lokiURL: http://loki-gateway.loki.svc.cluster.local
   prometheusURL: <http://prometheus.内部地址:9090>
 
   corsOrigins: []
@@ -119,6 +120,15 @@ training:
   maxWorkerReplicas: 3
   maxGPUsPerWorker: 8
   maxTotalGPUs: 24
+  # ---- GPU 节点本地缓存（默认关闭） --------------------------------------
+  # 前提：每台 GPU 节点均已挂载数据盘，并通过 csi-local 验证此 StorageClass。
+  # 每个 Ray head / worker Pod 都会获得一个独立、随 Pod 删除的缓存 PVC；
+  # 不可存放最终 checkpoint 或模型产物。
+  localCache:
+    enabled: false
+    storageClass: ray-cache-local
+    size: 200Gi
+    mountPath: /mnt/cache
 
 kueue:
   enabled: false
@@ -131,16 +141,47 @@ kueue:
   memoryQuota: 1024Gi
 
 storage:
-  enabled: true
-  existingClaim: <IDC RWX PVC 名称>
+  # Deprecated; keep disabled. Use idcDataSpaces below for fixed read-only NFS exports.
+  enabled: false
+  existingClaim: ""
   storageClass: ""
   size: 2Ti
   accessModes: ["ReadWriteMany"]
   mountPath: /mnt/idc
   tenantNamespaces: []
 
+# ---- 受控 TOS 数据空间 --------------------------------------------------
+# 仅在 csi-fsx 已启用其组件级 IRSA，且双前缀 smoke 验证成功后再开启。
+# 禁止填 path、secretName 或 secretNamespace；个人 TOS 子目录由平台根据
+# 已登录用户自动派生，Ray Pod 不获得 AK/SK。
+dataSpaces:
+  enabled: false
+  mountCapacity: 1Ti
+  fsxVolumeAttributes:
+    type: TOS
+    bucket: <训练数据桶，例如 shanghai-data-transfer>
+    server: tos-cn-shanghai.ivolces.com
+    region: cn-shanghai
+
+# ---- 受控 IDC 只读数据 -------------------------------------------------
+# 三个 export 必须都配置，平台才会在租户 namespace 创建只读 PV/PVC。
+idcDataSpaces:
+  enabled: false
+  mountCapacity: 1Pi
+  sources:
+    original:
+      server: <IDC NFS server>
+      path: <IDC original export path>
+    wellspiking:
+      server: <IDC NFS server>
+      path: <IDC wellspiking export path>
+    shared:
+      server: <IDC NFS server>
+      path: <IDC shared export path>
+
 tos:
   endpoint: <https://内部对象存储endpoint>
+  region: <对象存储地域，例如 cn-shanghai>
   bucket: <bucket 名>
   secretName: tos-credentials
 

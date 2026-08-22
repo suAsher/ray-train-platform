@@ -18,6 +18,7 @@ func (c *Client) EnsureNamespace(ctx context.Context, name, tenantID string) err
 	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
 		Name: name,
 		Labels: map[string]string{
+			"app.kubernetes.io/part-of":    "ray-train-platform",
 			"app.kubernetes.io/managed-by": "ray-train-platform",
 			"ray.io/tenant-id":             tenantID,
 		},

@@ -36,6 +36,26 @@ func ParsePackageName(protocol, value string) (PackageName, error) {
 }
 
 func TranslateSubmitRequest(request JobSubmitRequest) (TranslatedSubmitRequest, error) {
+	resources, queue, image, err := parseMetadata(request.Metadata)
+	if err != nil {
+		return TranslatedSubmitRequest{}, err
+	}
+	return translateSubmitRequest(request, resources, queue, image)
+}
+
+// TranslateSubmitRequestWithDefaults accepts the standard Ray CLI shape. With
+// no platform metadata it chooses the operator-configured 1-GPU environment;
+// providing any platform metadata opts into the explicit all-fields-required
+// contract so a typo cannot produce a hybrid workload.
+func TranslateSubmitRequestWithDefaults(request JobSubmitRequest, defaults SubmissionDefaults) (TranslatedSubmitRequest, error) {
+	resources, queue, image, err := parseMetadataOrDefaults(request.Metadata, defaults)
+	if err != nil {
+		return TranslatedSubmitRequest{}, err
+	}
+	return translateSubmitRequest(request, resources, queue, image)
+}
+
+func translateSubmitRequest(request JobSubmitRequest, resources domain.Resources, queue, image string) (TranslatedSubmitRequest, error) {
 	if strings.TrimSpace(request.Entrypoint) == "" || len(request.Entrypoint) > 8192 {
 		return TranslatedSubmitRequest{}, fmt.Errorf("invalid entrypoint")
 	}
@@ -53,10 +73,6 @@ func TranslateSubmitRequest(request JobSubmitRequest) (TranslatedSubmitRequest, 
 	if err != nil {
 		return TranslatedSubmitRequest{}, err
 	}
-	resources, queue, image, err := parseMetadata(request.Metadata)
-	if err != nil {
-		return TranslatedSubmitRequest{}, err
-	}
 	nameSeed := externalID
 	if nameSeed == "" {
 		nameSeed = packageName.Name + "\\x00" + request.Entrypoint
@@ -68,11 +84,52 @@ func TranslateSubmitRequest(request JobSubmitRequest) (TranslatedSubmitRequest, 
 			Name:       "rayjob-" + hex.EncodeToString(nameHash[:])[:24],
 			Image:      image,
 			Entrypoint: domain.Entrypoint{Command: []string{"/bin/sh", "-lc", request.Entrypoint}},
+			Execution:  executionProfileForResources(resources),
 			Resources:  resources,
 			Queue:      queue,
 		},
 		ExternalSubmissionID: externalID,
 	}, nil
+}
+
+func executionProfileForResources(resources domain.Resources) domain.ExecutionProfile {
+	mode := domain.ExecutionModeSingleGPU
+	if resources.WorkerReplicas > 1 {
+		mode = domain.ExecutionModeRayTrain
+	} else if resources.GPUsPerWorker > 1 {
+		mode = domain.ExecutionModeTorchrun
+	}
+	return domain.ExecutionProfile{Mode: mode}
+}
+
+func parseMetadataOrDefaults(metadata map[string]string, defaults SubmissionDefaults) (domain.Resources, string, string, error) {
+	if hasPlatformMetadata(metadata) {
+		return parseMetadata(metadata)
+	}
+	return defaults.resources()
+}
+
+func hasPlatformMetadata(metadata map[string]string) bool {
+	for key := range metadata {
+		if strings.HasPrefix(key, "ray-platform.") {
+			return true
+		}
+	}
+	return false
+}
+
+func (defaults SubmissionDefaults) resources() (domain.Resources, string, string, error) {
+	image := strings.TrimSpace(defaults.Image)
+	if err := domain.ValidatePinnedImage(image); err != nil {
+		return domain.Resources{}, "", "", fmt.Errorf("Ray CLI default image is not configured")
+	}
+	if defaults.WorkerReplicas != 1 || defaults.GPUsPerWorker != 1 || defaults.CPUPerWorker < 1 || defaults.CPUPerWorker > 64 || !validMemory(strings.TrimSpace(defaults.MemoryPerWorker)) {
+		return domain.Resources{}, "", "", fmt.Errorf("Ray CLI defaults are invalid")
+	}
+	return domain.Resources{
+		WorkerReplicas: defaults.WorkerReplicas, GPUsPerWorker: defaults.GPUsPerWorker,
+		CPUPerWorker: defaults.CPUPerWorker, MemoryPerWorker: strings.TrimSpace(defaults.MemoryPerWorker),
+	}, "", image, nil
 }
 
 func parseWorkingDir(runtimeEnv map[string]any) (PackageName, error) {
@@ -89,6 +146,17 @@ func parseWorkingDir(runtimeEnv map[string]any) (PackageName, error) {
 func parseMetadata(metadata map[string]string) (domain.Resources, string, string, error) {
 	if metadata == nil {
 		return domain.Resources{}, "", "", fmt.Errorf("metadata is required")
+	}
+	known := map[string]struct{}{
+		metadataImage: {}, metadataWorkerReplicas: {}, metadataGPUsPerWorker: {},
+		metadataCPUPerWorker: {}, metadataMemoryWorker: {}, metadataQueue: {},
+	}
+	for key := range metadata {
+		if strings.HasPrefix(key, "ray-platform.") {
+			if _, ok := known[key]; !ok {
+				return domain.Resources{}, "", "", fmt.Errorf("unsupported platform metadata %q", key)
+			}
+		}
 	}
 	image := strings.TrimSpace(metadata[metadataImage])
 	if err := domain.ValidatePinnedImage(image); err != nil {

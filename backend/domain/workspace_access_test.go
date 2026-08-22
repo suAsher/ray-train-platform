@@ -45,7 +45,14 @@ func TestWorkspaceAccessTokenRejectsTamperingAndForeignSecret(t *testing.T) {
 	now := time.Now().UTC()
 	token, _ := IssueWorkspaceAccessToken("ws-1", "user-1", testPepper(), now, 5*time.Minute)
 
-	tampered := token[:len(token)-1] + "0"
+	// Appending a fixed digit is not tampering when the signature already ends
+	// in it: the signature is hex, so one run in sixteen rebuilt the identical
+	// token and this assertion silently passed. Flip to a guaranteed-different
+	// digit instead.
+	tampered := token[:len(token)-1] + flippedHexDigit(token[len(token)-1])
+	if tampered == token {
+		t.Fatalf("the tampered token must differ from the original")
+	}
 	if err := VerifyWorkspaceAccessToken(tampered, "ws-1", "user-1", testPepper(), now); err == nil {
 		t.Fatalf("expected a tampered signature to be rejected")
 	}
@@ -58,4 +65,13 @@ func TestWorkspaceAccessTokenRejectsTamperingAndForeignSecret(t *testing.T) {
 			t.Fatalf("expected %q to be rejected", malformed)
 		}
 	}
+}
+
+// flippedHexDigit returns a hex digit that is always different from the one
+// given, so a tampering test never accidentally rebuilds the original token.
+func flippedHexDigit(digit byte) string {
+	if digit == '0' {
+		return "1"
+	}
+	return "0"
 }

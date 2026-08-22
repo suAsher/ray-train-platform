@@ -1,0 +1,39 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percent"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "id": 1,
+      "targets": [{"expr": "avg by (instance) (DCGM_FI_DEV_GPU_UTIL)", "legendFormat": "{{instance}}", "refId": "A"}],
+      "title": "GPU 利用率",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "id": 2,
+      "targets": [{"expr": "max by (instance) (DCGM_FI_DEV_FB_USED * 1048576)", "legendFormat": "{{instance}}", "refId": "A"}],
+      "title": "GPU 显存占用",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8},
+      "id": 3,
+      "targets": [{"expr": "platform_training_loss", "legendFormat": "{{platform_job_id}}", "refId": "A"}],
+      "title": "训练 Loss（训练脚本主动上报时显示）",
+      "type": "timeseries"
+    }
+  ],
+  "schemaVersion": 41,
+  "tags": ["ray", "gpu", "training"],
+  "time": {"from": "now-6h", "to": "now"},
+  "title": "Ray Training Platform",
+  "uid": "ray-training-platform",
+  "version": 1
+}

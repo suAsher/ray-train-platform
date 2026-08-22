@@ -1,0 +1,145 @@
+# 可移植的生产模板。复制为环境自己的 profile 后仅填写非敏感值；
+# 数据库 URL、PAT pepper、首个管理员密码、TOS 凭据均只放 Kubernetes Secret。
+namespace: ray-train-platform
+
+release:
+  requireImageDigests: true
+
+global:
+  imageRegistry: harbor.corp.invalid/ai
+  imagePullSecrets:
+    - name: platform-registry
+
+backend:
+  replicaCount: 2
+  appEnv: production
+  oidcRequired: true
+  demoMode: false
+  image:
+    repository: ray-train-backend
+    tag: v1.0.0
+    digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  workspaceImage: harbor.corp.invalid/ai/ray-workspace@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  sourceMaterializerImage: harbor.corp.invalid/ai/ray-source-materializer@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+  oidc:
+    issuerURL: https://keycloak.corp.invalid/realms/ai
+    clientID: ray-training-platform
+    audience: ray-training-platform-api
+    groupPrefix: platform/tenants/
+  localAuth:
+    enabled: true
+    bootstrapUsername: admin
+    bootstrapTenant: platform
+    bootstrapSecret: ray-platform-bootstrap-admin
+  imageAllowlist:
+    - harbor.corp.invalid/ai/ray-train
+  gitAllowlist:
+    - git.corp.invalid
+  lokiURL: http://loki-gateway.loki.svc.cluster.local
+  prometheusURL: http://prometheus.monitoring.svc.cluster.local:9090
+
+frontend:
+  replicaCount: 2
+  image:
+    repository: ray-train-frontend
+    tag: v1.0.0
+    digest: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+  # VKE ALB 非透传模式要求 Ingress 后端是 NodePort/LoadBalancer。由集群自动
+  # 分配 NodePort，并在网络层限制为仅由 ALB 访问；Portal 用户只使用域名。
+  service:
+    type: NodePort
+    port: 80
+  runtimeConfig:
+    authRequired: true
+    keycloakURL: https://keycloak.corp.invalid
+    keycloakRealm: ai
+    keycloakClientID: ray-training-platform
+
+ingress:
+  enabled: true
+  className: alb
+  host: train.corp.invalid
+  annotations:
+    ingress.vke.volcengine.com/loadbalancer-type: private
+    ingress.vke.volcengine.com/loadbalancer-port: "80"
+    ingress.vke.volcengine.com/request-timeout: "3600"
+    ingress.vke.volcengine.com/keepalive-timeout: "3600"
+
+training:
+  nodeSelector: accelerator=nvidia-rtx-4090
+  maxWorkerReplicas: 3
+  maxGPUsPerWorker: 8
+  maxTotalGPUs: 24
+
+kueue:
+  enabled: true
+  manageResources: true
+  autoQuota: true
+  clusterQueueName: ray-platform-gpu
+  resourceFlavorName: ray-platform-gpu
+  gpuQuota: 24
+  cpuQuota: 256
+  memoryQuota: 1024Gi
+
+storage:
+  enabled: false
+  existingClaim: ""
+
+# 默认关闭。仅在 FSX CSI 的组件级 IRSA 已完成双前缀验收后开启。
+dataSpaces:
+  enabled: false
+
+# 在超级管理员确认初始化目标 Bucket 的 ObjectSet 五级目录契约后打开。
+# 该配额由 TOS 存储侧强制执行，PV 的 mountCapacity 不是它的替代品。
+personalStorage:
+  objectSetQuota:
+    enabled: false
+    defaultQuota: 100Gi
+    maxQuota: 10Ti
+
+# ---- 受控 IDC 只读数据 -------------------------------------------------
+# 三条 NFS export 仅由平台管理员登记；每个租户会得到自己的只读 PVC，调试
+# 和训练容器分别看到 /mnt/idc/original、/mnt/idc/wellspiking、/mnt/idc/shared。
+# 这与 TOS CSI/IRSA 独立，可先单独验收。不要写入用户个人 sshfs 挂载。
+idcDataSpaces:
+  enabled: false
+  mountCapacity: 1Pi
+  sources:
+    original:
+      server: <IDC NFS server>
+      path: <例如 /storage/data-e2e/original>
+    wellspiking:
+      server: <IDC NFS server>
+      path: <例如 /storage/data-e2e/wellspiking>
+    shared:
+      server: <IDC NFS server>
+      path: <例如 /mnt/yrfs/wellspiking-training/shared>
+
+tos:
+  endpoint: https://tos-cn-shanghai.ivolces.com
+  region: cn-shanghai
+  bucket: shanghai-data-transfer
+  secretName: tos-credentials
+
+postgres:
+  mode: external
+
+availability:
+  pdbEnabled: true
+  minAvailable: 1
+  preferredAntiAffinity: true
+
+autoscaling:
+  backend:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  frontend:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+
+networkPolicy:
+  enabled: true

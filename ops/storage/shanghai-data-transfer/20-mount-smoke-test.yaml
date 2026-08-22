@@ -1,0 +1,62 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ray-train-tos-mount-smoke
+  namespace: tenant-local
+  labels:
+    app.kubernetes.io/name: ray-train-storage-bootstrap
+    app.kubernetes.io/component: fsx-mount-smoke
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ray-train-storage-bootstrap
+        app.kubernetes.io/component: fsx-mount-smoke
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      nodeSelector:
+        accelerator: nvidia-rtx-4090
+      containers:
+        - name: verify-mounts
+          image: harbor.wellspiking.ai/guofeng.su/ray-test@sha256:42071b474718f8165e782059b07ec406fd325b660b284a4581973d899951137a
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-ec"]
+          args:
+            - |
+              test -d /mnt/dataset
+              test -d /mnt/checkpoint
+              test -d /mnt/output
+              test ! -w /mnt/dataset
+              test ! -w /mnt/checkpoint
+              smoke_dir=/mnt/output/_platform-mount-smoke
+              mkdir -p "$smoke_dir"
+              printf 'ok\\n' > "$smoke_dir/healthcheck"
+              test -s "$smoke_dir/healthcheck"
+              rm -rf "$smoke_dir"
+              echo 'FSX TOS dataset/checkpoint/output mount contract verified'
+          volumeMounts:
+            - name: dataset
+              mountPath: /mnt/dataset
+              readOnly: true
+            - name: checkpoint
+              mountPath: /mnt/checkpoint
+              readOnly: true
+            - name: output
+              mountPath: /mnt/output
+      volumes:
+        - name: dataset
+          persistentVolumeClaim:
+            claimName: tos-local-datasets
+        - name: checkpoint
+          persistentVolumeClaim:
+            claimName: tos-local-checkpoints
+        - name: output
+          persistentVolumeClaim:
+            claimName: tos-local-outputs

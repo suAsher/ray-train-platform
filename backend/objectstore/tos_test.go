@@ -22,7 +22,7 @@ func TestTOSStorePresignPutSignsRequiredHeadersForFifteenMinutes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new TOS store: %v", err)
 	}
-	result, err := store.PresignPut(context.Background(), "tenants/t/users/u/sha256/"+testDigest+".zip", testDigest, 1234, 15*time.Minute)
+	result, err := store.PresignPut(context.Background(), "ray-train/tenants/t/users/u/workspace/.ray-train-archives/"+testDigest+".zip", testDigest, 1234, 15*time.Minute)
 	if err != nil {
 		t.Fatalf("presign put: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestTOSStoreHeadReturnsLengthAndLowercaseMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	info, err := store.Head(context.Background(), "tenants/t/users/u/sha256/"+testDigest+".zip")
+	info, err := store.Head(context.Background(), "ray-train/tenants/t/users/u/workspace/.ray-train-archives/"+testDigest+".zip")
 	if err != nil {
 		t.Fatalf("head object: %v", err)
 	}

@@ -1,0 +1,228 @@
+# 三台 CPU 节点的单可用区控制面高可用 Profile。
+# PostgreSQL 仍为内置单实例；它是本环境唯一已知数据库单点。
+namespace: ray-train-platform
+
+release:
+  requireImageDigests: true
+
+global:
+  imagePullPolicy: IfNotPresent
+  imageRegistry: harbor.wellspiking.ai/guofeng.su
+  imagePullSecrets:
+    - name: harbor-registry
+
+backend:
+  replicaCount: 2
+  nodeSelector:
+    platform.wellspiking.ai/pool: control-plane
+  appEnv: development
+  oidcRequired: false
+  demoMode: false
+  sourceArtifactsEnabled: true
+  rayAPIDefaultImage: harbor.wellspiking.ai/guofeng.su/ray-train-pytorch@sha256:2102761c7a5e3af6ff33225182d5b936d18601f7d5697bc11187922df58cfa7f
+  image:
+    repository: ray-train-backend
+    tag: mlflow-nan-r1-20260822
+    digest: sha256:dbff2ef812285b0b0a6173412381ec5f21714386742fd815eeb865df444d23f4
+  oidc:
+    issuerURL: https://keycloak.test.invalid/realms/ai
+    clientID: ray-training-platform-test
+    audience: ray-training-platform-api
+    groupPrefix: platform/tenants/
+  localAuth:
+    enabled: true
+    sessionHours: 12
+    bootstrapUsername: admin
+    bootstrapTenant: local
+    bootstrapSecret: ray-platform-bootstrap-admin
+  lokiURL: http://loki-cpu-gateway.loki.svc.cluster.local
+  prometheusURL: http://prometheus-prometheus.monitoring.svc.cluster.local:9090
+  mlflow:
+    enabled: true
+    trackingURL: http://mlflow.mlflow-system.svc.cluster.local:5000
+    ingestURL: http://mlflow-ingest.mlflow-system.svc.cluster.local:8080
+    experimentPrefix: raytrain
+  imageAllowlist:
+    - harbor.wellspiking.ai/guofeng.su/ray-test
+    - harbor.wellspiking.ai/guofeng.su/ray-train-pytorch
+    - harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion
+  gitAllowlist:
+    - github.com
+    - gitlab.wellspiking.ai
+    - gitlab.qomolo.com
+  workspaceImage: harbor.wellspiking.ai/guofeng.su/ray-workspace@sha256:1e81b8ef456883ea03a92c0bac39eec0a3f8bbad0cb2361da7a904e84dd18228
+  sourceMaterializerImage: harbor.wellspiking.ai/guofeng.su/ray-source-materializer@sha256:d57351745193fd08bc42662656c78c3bcc747ca89609fa0e8cc4a7a778d55af2
+
+frontend:
+  replicaCount: 2
+  nodeSelector:
+    platform.wellspiking.ai/pool: control-plane
+  image:
+    repository: ray-train-frontend
+    tag: prod-20260822-experiments-r1
+    digest: sha256:bc542ad6e56a53d353c8d67e9c4a136d0eec737a8c8653a5c1a3000229ad61f6
+  service:
+    type: ClusterIP
+    port: 80
+  runtimeConfig:
+    authRequired: false
+    keycloakURL: https://keycloak.test.invalid
+    keycloakRealm: ai
+    keycloakClientID: ray-training-platform-test
+
+spkRayjobRelease:
+  enabled: true
+  replicaCount: 2
+  nodeSelector:
+    platform.wellspiking.ai/pool: control-plane
+  image:
+    repository: spk-rayjob-release
+    tag: cli-ignore-anchor-20260822
+    digest: sha256:126f2d381acbf2a28159d4a939f03af0f6f595727ae3b81ca7e5a7ea0eab922c
+  service:
+    type: ClusterIP
+    port: 8080
+
+ingress:
+  # The former train.xx.com route remains only on the test ALB. Production
+  # users enter exclusively through https://raytrain.wellspiking.ai.
+  enabled: false
+  className: internal-alb
+  host: train.xx.com
+  annotations:
+    ingress.vke.volcengine.com/alb-instance-name: internal-alb
+    ingress.vke.volcengine.com/loadbalancer-port: "80"
+    ingress.vke.volcengine.com/loadbalancer-protocol: http
+    ingress.vke.volcengine.com/request-timeout: "3600"
+    ingress.vke.volcengine.com/keepalive-timeout: "3600"
+  https:
+    enabled: true
+    host: raytrain.wellspiking.ai
+    className: raytrain-prod-alb
+    certificateMode: alb-instance
+    annotations:
+      ingress.vke.volcengine.com/alb-instance-name: raytrain-prod-alb
+      ingress.vke.volcengine.com/loadbalancer-type: private
+      ingress.vke.volcengine.com/loadbalancer-port: "443"
+      ingress.vke.volcengine.com/loadbalancer-protocol: https
+      ingress.vke.volcengine.com/request-timeout: "3600"
+      ingress.vke.volcengine.com/keepalive-timeout: "3600"
+
+albInstance:
+  # Network resources are bootstrapped outside Helm, then retained as shared
+  # cluster infrastructure. See ops/platform/bootstrap-alb.sh.
+  enabled: false
+  name: raytrain-prod-alb
+  className: raytrain-prod-alb
+  instance:
+    instanceID: alb-1vzdtqufb4hz43766qah8okd5
+    name: raytrain-prod-alb
+    edition: Basic
+    addressType: private
+    ipVersion: ipv4
+    deleteProtection: "on"
+    zoneMappings:
+      - subnetId: subnet-7unidm1p2z2872200sud1p65
+      - subnetId: subnet-33gbv86ebxhq86k70bpaw3s6j
+  https:
+    host: raytrain.wellspiking.ai
+    certificateSource: cert_center
+    certificateID: cert-8fbe7f999bc3478483e8c8838c73b2b0
+
+training:
+  # The production pool contains exactly the two eight-GPU RTX 4090 nodes.
+  # The former single-GPU machine is deliberately excluded and remains a
+  # separately labelled smoke-test node until it is removed from the cluster.
+  nodeSelector: accelerator=nvidia-rtx-4090,platform.wellspiking.ai/gpu-pool=production
+  maxWorkerReplicas: 2
+  maxGPUsPerWorker: 8
+  maxTotalGPUs: 16
+  localCache:
+    enabled: false
+
+kueue:
+  enabled: true
+  manageResources: true
+  autoQuota: true
+  clusterQueueName: cluster-gpu-queue
+  resourceFlavorName: gpu-4090-flavor
+  # Initial quota for the two production nodes. The backend's auto-quota
+  # reconciler re-measures this selector after deployment, so future nodes are
+  # added by labelling them and adjusting the job-shape ceiling intentionally.
+  gpuQuota: 16
+  cpuQuota: 354682m
+  memoryQuota: "1475607134080"
+  resourceFlavorNodeLabels:
+    accelerator: nvidia-rtx-4090
+    platform.wellspiking.ai/gpu-pool: production
+
+storage:
+  enabled: false
+  existingClaim: ""
+
+dataSpaces:
+  enabled: true
+  mountCapacity: 1Ti
+  # One global read-only dataset root, published by platform administrators.
+  publicRoot: ray-train/public
+  fsxVolumeAttributes:
+    type: TOS
+    bucket: shanghai-data-transfer
+    server: tos-cn-shanghai.ivolces.com
+    region: cn-shanghai
+
+personalStorage:
+  objectSetQuota:
+    enabled: true
+    defaultQuota: 100Gi
+    # A platform guardrail, not a fixed per-user allocation. Administrators
+    # can set any user quota up to this value from the portal.
+    maxQuota: 100Ti
+
+idcDataSpaces:
+  enabled: false
+
+tos:
+  endpoint: https://tos-cn-shanghai.ivolces.com
+  region: cn-shanghai
+  bucket: shanghai-data-transfer
+  secretName: tos-credentials
+
+postgres:
+  mode: standalone
+  existingSecret: ray-platform-postgres
+  standalone:
+    image: harbor.wellspiking.ai/guofeng.su/postgres@sha256:31482568d12f43e4e3c51a2d87993eddd0163354306f987be3bc674bbcbd3e08
+    databaseName: platform
+    storageClass: ebs-ssd
+    size: 20Gi
+    nodeSelector:
+      platform.wellspiking.ai/pool: control-plane
+
+availability:
+  pdbEnabled: true
+  minAvailable: 1
+  # The three 8C/16Gi control-plane nodes are deliberately kept tightly
+  # packed. Retain one available replica while replacing one old Pod at a
+  # time, instead of requiring a third surge slot during upgrades.
+  rollingUpdate:
+    maxUnavailable: 1
+    maxSurge: 0
+  preferredAntiAffinity: false
+  requiredAntiAffinity: true
+  topologySpreadWhenUnsatisfiable: DoNotSchedule
+
+autoscaling:
+  backend:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  frontend:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+
+networkPolicy:
+  enabled: false

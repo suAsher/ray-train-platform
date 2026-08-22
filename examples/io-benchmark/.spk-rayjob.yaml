@@ -1,0 +1,18 @@
+name: public-data-io-benchmark
+image: harbor.wellspiking.ai/guofeng.su/bevfusion@sha256:cbc23478ca97290428bae1e1a3dba49776fa4e7f4ada851c173223278fd49e47
+entrypoint: >-
+  python3 benchmark.py
+  --path cnfzhjyg
+  --passes 2
+  --max-files 8192
+  --max-bytes-per-worker 8589934592
+workers: 2
+gpusPerWorker: 1
+cpuPerWorker: 8
+memoryPerWorker: 32Gi
+executionMode: ray_train
+input:
+  space: public
+  path: ""
+output:
+  path: benchmarks/public-data

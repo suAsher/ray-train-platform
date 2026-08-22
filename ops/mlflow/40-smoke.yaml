@@ -1,0 +1,58 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mlflow-client-smoke
+  namespace: tenant-local
+  labels:
+    app.kubernetes.io/name: mlflow-client-smoke
+    app.kubernetes.io/part-of: ray-train-platform
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mlflow-client-smoke
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: harbor-registry
+      nodeSelector:
+        platform.wellspiking.ai/pool: control-plane
+      containers:
+        - name: client
+          image: harbor.wellspiking.ai/guofeng.su/ray-train-pytorch@sha256:2102761c7a5e3af6ff33225182d5b936d18601f7d5697bc11187922df58cfa7f
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "-c"]
+          args:
+            - |
+              import urllib.error
+              import urllib.request
+              import mlflow
+              tracking_uri = "http://mlflow-ingest.mlflow-system.svc.cluster.local:8080"
+              mlflow.set_tracking_uri(tracking_uri)
+              mlflow.set_experiment("raytrain-local")
+              with mlflow.start_run(run_name="mlflow-client-smoke", tags={"platform.job_id": "mlflow-client-smoke", "platform.tenant_id": "local"}):
+                  mlflow.log_param("purpose", "delivery-smoke")
+                  mlflow.log_metric("loss", 1.0, step=0)
+                  mlflow.log_metric("loss", 0.25, step=1)
+              try:
+                  urllib.request.urlopen(tracking_uri + "/api/2.0/mlflow-artifacts/artifacts/blocked", timeout=10)
+                  raise RuntimeError("MLflow ingest gateway unexpectedly allowed artifact download")
+              except urllib.error.HTTPError as error:
+                  if error.code != 403:
+                      raise
+              print("MLFLOW_ARTIFACT_DOWNLOAD_BLOCKED", flush=True)
+              print("MLFLOW_CLIENT_SMOKE_OK", flush=True)
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]

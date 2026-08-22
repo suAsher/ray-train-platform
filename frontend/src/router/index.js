@@ -33,10 +33,21 @@ const routes = [
         meta: { title: '任务详情控制台', requiresAuth: true }
       },
       {
-        path: 'quota',
-        name: 'QuotaManage',
+        path: 'experiments',
+        name: 'Experiments',
+        component: () => import('../views/Experiments/index.vue'),
+        meta: { title: '实验中心', requiresAuth: true }
+      },
+      {
+        path: 'admin',
+        name: 'AdminConsole',
         component: () => import('../views/QuotaManage/index.vue'),
-        meta: { title: '多租户与 GPU 配额隔离', requiresAuth: true, admin: true }
+        meta: { title: '管理员控制台', requiresAuth: true, admin: true }
+      },
+      {
+        path: 'quota',
+        redirect: '/admin',
+        meta: { requiresAuth: true, admin: true }
       },
       {
         path: 'devcenter',
@@ -49,6 +60,18 @@ const routes = [
         name: 'DataCache',
         component: () => import('../views/DataCache/index.vue'),
         meta: { title: '数据集与模型产物 (TOS)', requiresAuth: true }
+      },
+      {
+        path: 'external-submit',
+        name: 'ExternalSubmit',
+        component: () => import('../views/ExternalSubmit/index.vue'),
+        meta: { title: '集群外提交', requiresAuth: true }
+      },
+      {
+        path: 'account-security',
+        name: 'AccountSecurity',
+        component: () => import('../views/AccountSecurity/index.vue'),
+        meta: { title: '账户与安全', requiresAuth: true }
       },
       {
         path: 'control-center',

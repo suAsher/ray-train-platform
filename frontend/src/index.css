@@ -4,8 +4,71 @@
 
 @layer base {
   body {
-    background-color: #0A0D14;
-    color: #E2E8F0;
+    background-color: #0a0d14;
+    color: #e2e8f0;
+    /* The portal is reached over a private network where fonts.googleapis.com
+       is not resolvable. Webfonts are loaded opportunistically; this stack is
+       what actually renders and must look right on its own. */
+    font-family: Inter, 'PingFang SC', 'Microsoft YaHei', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  }
+
+  code,
+  pre,
+  .font-mono {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  /* Focus must stay visible for keyboard users; the dark theme's default
+     outline is nearly invisible against the page background. */
+  :focus-visible {
+    outline: 2px solid rgb(96 165 250);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  /* One panel treatment for every surface. Card styling was previously copied
+     inline in each view and had drifted into several slightly different
+     borders, radii and shadows. */
+  .panel {
+    @apply rounded-2xl border border-slate-800/80 bg-[#131826] shadow-xl;
+  }
+
+  .panel-pad {
+    @apply panel p-6;
+  }
+
+  .panel-hover {
+    @apply transition-colors hover:border-slate-700;
+  }
+
+  /* Compact metric tile used by the job list and the admin console. */
+  .stat-tile {
+    @apply panel flex flex-col gap-1 p-4;
+  }
+
+  .stat-tile__label {
+    @apply text-xs text-slate-400;
+  }
+
+  .stat-tile__value {
+    @apply text-2xl font-bold tabular-nums;
+  }
+
+  .section-title {
+    @apply flex items-center gap-2 text-sm font-bold text-white;
+  }
+
+  .section-hint {
+    @apply mt-1 text-xs leading-5 text-slate-400;
+  }
+
+  .field-label {
+    @apply mb-2 block text-sm font-semibold text-slate-200;
+  }
+
+  .field-help {
+    @apply mt-1.5 text-xs leading-5 text-slate-500;
   }
 }
 
@@ -22,5 +85,22 @@
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #4B5563;
+  background: #4b5563;
+}
+
+/* Element Plus tables sit on the panel background rather than their own. */
+.el-table,
+.el-table__inner-wrapper,
+.el-table tr,
+.el-table th.el-table__cell {
+  background-color: transparent !important;
+}
+
+.el-table td.el-table__cell,
+.el-table th.el-table__cell {
+  border-bottom-color: rgb(30 41 59 / 0.7) !important;
+}
+
+.el-table__body tr:hover > td.el-table__cell {
+  background-color: rgb(30 41 59 / 0.4) !important;
 }

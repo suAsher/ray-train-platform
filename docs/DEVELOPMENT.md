@@ -16,7 +16,7 @@ backend/            Go 控制面（API + Reconciler 同一个二进制）
   db/migrations/    版本化 SQL 迁移（只增不改）
   objectstore/      TOS 对象存储
   rayapi/           Ray Jobs API 兼容网关（支持原生 ray job submit）
-  rayctl/           CLI
+  spk-rayjob/           CLI
 frontend/src/
   views/            页面
   layout/           侧边栏与顶栏（角色化导航在这里）
@@ -145,4 +145,4 @@ VCI 节点（`type=virtual-kubelet`）上报上千张「GPU」，那是弹性配
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — 架构图与逐层实现状态
 - [BUILD_AND_DEPLOY.md](BUILD_AND_DEPLOY.md) — 构建、部署、扩容、发版
-- [CLUSTER_DEPLOYMENT_GUIDE.md](CLUSTER_DEPLOYMENT_GUIDE.md) — 集群前置条件与 Keycloak 配置
+- [ADMIN_GUIDE.md](ADMIN_GUIDE.md) — 集群前置条件、账号、Keycloak 与权限配置

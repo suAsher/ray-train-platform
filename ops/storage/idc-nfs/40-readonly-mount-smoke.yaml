@@ -1,0 +1,57 @@
+# Rendered by 41-verify-readonly-mount.sh. This Pod uses the three configured
+# NFS exports directly so it validates the same node-side mount path that a
+# tenant-local static PV/PVC will use. No object-store credential or user
+# supplied server/path appears in this template.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${IDC_SMOKE_NAME}
+  namespace: ${IDC_SMOKE_NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: ray-train-platform
+    ray-train.platform/purpose: idc-readonly-mount-smoke
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  nodeSelector: ${IDC_SMOKE_NODE_SELECTOR_JSON}
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+  containers:
+    - name: verify
+      image: ${IDC_SMOKE_IMAGE}
+      command: ["/bin/sh", "-ec"]
+      args:
+        - |
+          for directory in /mnt/idc/original /mnt/idc/wellspiking /mnt/idc/shared; do
+            test -d "$directory"
+            test ! -w "$directory"
+          done
+          printf '%s\n' 'idc-readonly-mount-contract-verified'
+      volumeMounts:
+        - name: original
+          mountPath: /mnt/idc/original
+          readOnly: true
+        - name: wellspiking
+          mountPath: /mnt/idc/wellspiking
+          readOnly: true
+        - name: shared
+          mountPath: /mnt/idc/shared
+          readOnly: true
+  volumes:
+    - name: original
+      nfs:
+        server: ${IDC_NFS_ORIGINAL_SERVER}
+        path: ${IDC_NFS_ORIGINAL_PATH}
+        readOnly: true
+    - name: wellspiking
+      nfs:
+        server: ${IDC_NFS_WELLSPIKING_SERVER}
+        path: ${IDC_NFS_WELLSPIKING_PATH}
+        readOnly: true
+    - name: shared
+      nfs:
+        server: ${IDC_NFS_SHARED_SERVER}
+        path: ${IDC_NFS_SHARED_PATH}
+        readOnly: true

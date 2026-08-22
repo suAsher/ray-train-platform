@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -20,6 +21,14 @@ func testRepository(t *testing.T) *GormRepository {
 	}
 	if err := database.AutoMigrate(&JobRecord{}, &OutboxRecord{}, &TenantRecord{}, &UserRecord{}, &WorkspaceRecord{}, &IdempotencyRecord{}); err != nil {
 		t.Fatalf("migrate test database: %v", err)
+	}
+	now := time.Now().UTC()
+	tenants := []TenantRecord{
+		{ID: "tenant-a", Name: "tenant-a", Namespace: "tenant-tenant-a", LocalQueue: "tenant-a-gpu", GPUQuotaLimit: defaultTenantGPUQuota(), MaxPriority: "normal", CreatedAt: now, UpdatedAt: now},
+		{ID: "team-a", Name: "team-a", Namespace: "tenant-team-a", LocalQueue: "team-a-gpu", GPUQuotaLimit: defaultTenantGPUQuota(), MaxPriority: "normal", CreatedAt: now, UpdatedAt: now},
+	}
+	if err := database.Create(&tenants).Error; err != nil {
+		t.Fatalf("seed controlled test tenants: %v", err)
 	}
 	return NewGormRepository(database)
 }
@@ -78,6 +87,28 @@ func TestGetDoesNotCrossTenantBoundary(t *testing.T) {
 	}
 	if _, err := repo.Get(context.Background(), "tenant-b", "job-1"); err == nil {
 		t.Fatal("expected tenant boundary error")
+	}
+}
+
+func TestListExcludesArchivedJobsButGetRetainsAuditRecord(t *testing.T) {
+	repo := testRepository(t)
+	job := testJob()
+	if err := repo.Create(context.Background(), &job, "request-archive"); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	archivedAt := time.Now().UTC()
+	if err := repo.db.Model(&JobRecord{}).Where("id = ?", job.ID).Update("archived_at", archivedAt).Error; err != nil {
+		t.Fatalf("archive job: %v", err)
+	}
+	page, err := repo.List(context.Background(), domain.JobFilter{TenantID: job.TenantID})
+	if err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if page.Total != 0 || len(page.Items) != 0 {
+		t.Fatalf("archived job leaked into the default list: total=%d items=%d", page.Total, len(page.Items))
+	}
+	if _, err := repo.Get(context.Background(), job.TenantID, job.ID); err != nil {
+		t.Fatalf("archived audit record should remain addressable: %v", err)
 	}
 }
 

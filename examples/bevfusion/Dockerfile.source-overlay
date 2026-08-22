@@ -1,0 +1,39 @@
+# Compatibility image for a CPU-only builder.  It deliberately retains the
+# CUDA/C++ .so files from a previously GPU-built, pinned base image while
+# replacing the selected branch's Python source.  This is appropriate for a
+# short-lived migration/preflight image only: production branch images must be
+# built with Dockerfile on a CUDA builder so their extensions match source,
+# Torch and the target GPU architecture.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+# The validated compatibility base runs as UID 1000. Building the overlay
+# still needs root to install the Ray runtime and helper; the final USER
+# instruction restores the non-root workload contract.
+USER root
+
+ARG PIP_INDEX_URL=https://repo.wellspiking.ai/repository/pip/simple
+ARG RAY_VERSION=2.10.0
+
+WORKDIR /opt/bevfusion
+COPY . /opt/bevfusion
+
+# Do not run setup.py develop here.  The CPU builder has no CUDA compiler and
+# the image's existing mmdet3d extension files remain in place after COPY.
+RUN python3 -m pip install --index-url "${PIP_INDEX_URL}" --no-cache-dir yapf==0.40.1 setuptools==59.5.0 \
+    && python3 - <<'PY'
+from mmdet3d.ops import Voxelization
+print("retained extension:", Voxelization.__name__)
+PY
+
+RUN python3 -m pip install --index-url "${PIP_INDEX_URL}" --no-cache-dir "ray[default]==${RAY_VERSION}"
+
+COPY raytrain-bevfusion-prepare-runtime.sh /usr/local/bin/raytrain-bevfusion-prepare
+RUN chmod 0755 /usr/local/bin/raytrain-bevfusion-prepare
+RUN if ! getent group 1000 >/dev/null; then groupadd --gid 1000 ray; fi \
+    && if ! getent passwd 1000 >/dev/null; then useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash ray; fi \
+    && install -d -m 0755 -o 1000 -g 1000 /home/ray
+
+ENV PYTHONPATH=/opt/bevfusion \
+    HOME=/home/ray
+USER 1000:1000

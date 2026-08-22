@@ -4,6 +4,9 @@ kind: NetworkPolicy
 metadata:
   name: ray-train-frontend
   namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: portal
 spec:
   podSelector:
     matchLabels:
@@ -32,6 +35,9 @@ kind: NetworkPolicy
 metadata:
   name: ray-train-backend
   namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: api
 spec:
   podSelector:
     matchLabels:

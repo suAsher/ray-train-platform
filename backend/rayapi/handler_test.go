@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -26,11 +27,31 @@ import (
 type rayTestRepository struct {
 	jobs      []domain.TrainingJob
 	artifacts map[string]domain.SourceArtifact
+	bindings  []domain.DataMountBinding
 	created   *domain.TrainingJob
 	identity  int
 	canceled  string
 	reopens   int
 	limits    repositories.SourceArtifactLimits
+}
+
+func readyRayPersonalDataBinding(tenantID, userID string) domain.DataMountBinding {
+	return domain.DataMountBinding{
+		ID: "personal-" + userID, TenantID: tenantID, UserID: userID,
+		Scope: domain.DataMountScopePersonal, SpaceID: domain.DataSpaceWorkspace,
+		ClaimName: "data-" + userID, Status: domain.DataMountBindingReady,
+	}
+}
+
+func (repository *rayTestRepository) ListDataBindings(_ context.Context, tenantID, userID string) ([]domain.DataMountBinding, error) {
+	if repository.bindings != nil {
+		return repository.bindings, nil
+	}
+	return []domain.DataMountBinding{readyRayPersonalDataBinding(tenantID, userID)}, nil
+}
+
+func (repository *rayTestRepository) EnsurePersonalDataBinding(_ context.Context, binding domain.DataMountBinding) (domain.DataMountBinding, error) {
+	return binding, nil
 }
 
 func (repository *rayTestRepository) Create(_ context.Context, job *domain.TrainingJob, _ string) error {
@@ -165,8 +186,11 @@ func (store *rayTestStore) Put(_ context.Context, key, digest string, sizeBytes 
 func rayRouter(t *testing.T, repository *rayTestRepository, store *rayTestStore, principal auth.Principal) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	submission := api.NewSubmissionService(repository, api.SubmissionServiceOptions{NewID: func() (string, error) { return "job-ray", nil }})
-	handler, err := NewHandler(repository, store, submission, Options{SpoolDir: t.TempDir(), Logs: &recoveryLogs{lines: []observability.LogLine{{Line: "ray-sdk-log-marker"}}}, Now: func() time.Time { return time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC) }})
+	submission := api.NewSubmissionService(repository, api.SubmissionServiceOptions{
+		DataSpaces: repository, DataSpacesEnabled: true,
+		NewID: func() (string, error) { return "job-ray", nil },
+	})
+	handler, err := NewHandler(repository, store, submission, Options{SpoolDir: t.TempDir(), Defaults: SubmissionDefaults{Image: testImageDigest, WorkerReplicas: 1, GPUsPerWorker: 1, CPUPerWorker: 8, MemoryPerWorker: "32Gi"}, Logs: &recoveryLogs{lines: []observability.LogLine{{Line: "ray-sdk-log-marker"}}}, Now: func() time.Time { return time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC) }})
 	if err != nil {
 		t.Fatalf("new Ray API handler: %v", err)
 	}
@@ -193,7 +217,7 @@ func raySubmitBody(packageName string) string {
 	return `{"entrypoint":"python train.py","submission_id":"raysubmit_test","runtime_env":{"working_dir":"gcs://` + packageName + `"},"metadata":{"ray-platform.image":"` + testImageDigest + `","ray-platform.worker-replicas":"1","ray-platform.gpus-per-worker":"1","ray-platform.cpu-per-worker":"8","ray-platform.memory-per-worker":"32Gi","ray-platform.queue":"tenant-a-gpu"}}`
 }
 
-func TestRayRoutesReturnRay235VersionAndFieldNames(t *testing.T) {
+func TestRayRoutesReturnRayJobsProtocolAndRuntimeVersion(t *testing.T) {
 	principal := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{"Engineer"}, AuthType: auth.AuthTypeOIDC}
 	response := rayRequest(rayRouter(t, &rayTestRepository{}, &rayTestStore{}, principal), http.MethodGet, "/ray/api/version", "")
 	if response.Code != http.StatusOK {
@@ -203,8 +227,45 @@ func TestRayRoutesReturnRay235VersionAndFieldNames(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &version); err != nil {
 		t.Fatal(err)
 	}
-	if version["version"] != "2.35.0" || version["ray_version"] != "2.35.0" {
+	if version["version"] != "4" || version["ray_version"] != "2.35.0" {
 		t.Fatalf("unexpected version response: %v", version)
+	}
+	if _, ok := version["ray_commit"]; !ok {
+		t.Fatalf("version response is missing ray_commit: %v", version)
+	}
+	if _, ok := version["session_name"]; !ok {
+		t.Fatalf("version response is missing session_name: %v", version)
+	}
+}
+
+func TestPersonalSourceArtifactRootUsesPersistedStorageKeyBinding(t *testing.T) {
+	repository := &rayTestRepository{bindings: []domain.DataMountBinding{{
+		ID: "personal-oidc-user", TenantID: "local", UserID: "oidc-subject-123",
+		Scope: domain.DataMountScopePersonal, SpaceID: domain.DataSpaceWorkspace,
+		RootPrefix: "ray-train/tenants/local/users/guofeng.su/", Status: domain.DataMountBindingReady,
+	}}}
+	handler := &Handler{repository: repository}
+	root, err := handler.personalSourceArtifactRoot(context.Background(), auth.Principal{
+		Subject: "oidc-subject-123", Username: "guofeng.su", TenantID: "local",
+	})
+	if err != nil {
+		t.Fatalf("resolve persisted personal root: %v", err)
+	}
+	if root != "ray-train/tenants/local/users/guofeng.su/" {
+		t.Fatalf("root=%q", root)
+	}
+}
+
+func TestPersonalSourceArtifactRootUsesUsernameForFirstUpload(t *testing.T) {
+	handler := &Handler{repository: &rayTestRepository{bindings: []domain.DataMountBinding{}}}
+	root, err := handler.personalSourceArtifactRoot(context.Background(), auth.Principal{
+		Subject: "oidc-subject-123", Username: "Guofeng.Su", TenantID: "local",
+	})
+	if err != nil {
+		t.Fatalf("resolve first-upload personal root: %v", err)
+	}
+	if root != "ray-train/tenants/local/users/guofeng.su/" {
+		t.Fatalf("root=%q", root)
 	}
 }
 
@@ -237,8 +298,8 @@ func TestRayPackagePutHeadAndSubmitAreOwnerScoped(t *testing.T) {
 	if response = rayRequest(router, http.MethodPost, "/ray/api/jobs/", raySubmitBody(packageName)); response.Code != http.StatusOK {
 		t.Fatalf("submit status=%d body=%s", response.Code, response.Body.String())
 	}
-	if repository.created == nil || repository.created.SubmissionOrigin != domain.SubmissionOriginRayCLI || repository.created.SourceArtifactID != artifactID || repository.created.Spec.Source.ArtifactSHA256 != artifact.SHA256 {
-		t.Fatalf("Ray submit did not use SubmissionService artifact flow: %+v", repository.created)
+	if repository.created == nil || repository.created.SubmissionOrigin != domain.SubmissionOriginRayCLI || repository.created.SourceArtifactID != artifactID || repository.created.Spec.Source.Type != "workspace-archive" || repository.created.Spec.Source.ArtifactSHA256 != artifact.SHA256 {
+		t.Fatalf("Ray submit did not use the owner-scoped workspace archive flow: %+v", repository.created)
 	}
 	for _, endpoint := range []struct {
 		method string
@@ -256,6 +317,29 @@ func TestRayPackagePutHeadAndSubmitAreOwnerScoped(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), `"deleted":true`) {
 		t.Fatalf("delete response is not Ray-compatible: %s", response.Body.String())
+	}
+}
+
+func TestRayPackageSubmitWithoutPlatformMetadataUsesConfiguredDefaults(t *testing.T) {
+	principal := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{"Engineer"}, AuthType: auth.AuthTypeOIDC}
+	repository := &rayTestRepository{}
+	store := &rayTestStore{}
+	router := rayRouter(t, repository, store, principal)
+	packageName := testPackageSHA256 + ".zip"
+	payload := []byte("PK\\x03\\x04bare")
+	request := httptest.NewRequest(http.MethodPut, "/ray/api/packages/gcs/"+packageName, bytes.NewReader(payload))
+	request.Header.Set("Content-Length", strconv.Itoa(len(payload)))
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("package upload status=%d body=%s", response.Code, response.Body.String())
+	}
+	body := `{"entrypoint":"python train.py","submission_id":"bare_cli","runtime_env":{"working_dir":"gcs://` + packageName + `"}}`
+	if response = rayRequest(router, http.MethodPost, "/ray/api/jobs/", body); response.Code != http.StatusOK {
+		t.Fatalf("bare Ray CLI submit status=%d body=%s", response.Code, response.Body.String())
+	}
+	if repository.created == nil || repository.created.Spec.Image != testImageDigest || repository.created.Spec.Resources.WorkerReplicas != 1 || repository.created.Spec.Resources.GPUsPerWorker != 1 || repository.created.Spec.Queue != "tenant-a-gpu" {
+		t.Fatalf("bare Ray CLI defaults were not normalized by the platform: %+v", repository.created)
 	}
 }
 

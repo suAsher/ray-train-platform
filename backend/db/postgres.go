@@ -37,7 +37,9 @@ func Open(cfg config.Config) (*gorm.DB, error) {
 	if cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("DATABASE_URL is required")
 	}
-	database, err := gorm.Open(postgres.Open(cfg.DatabaseURL), &gorm.Config{})
+	// Translate driver-specific constraint errors into GORM's portable
+	// sentinels so the API can return a precise 409 instead of a generic 500.
+	database, err := gorm.Open(postgres.Open(cfg.DatabaseURL), &gorm.Config{TranslateError: true})
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}

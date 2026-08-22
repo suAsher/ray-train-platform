@@ -14,7 +14,13 @@ import (
 	"ray-train-platform-backend/domain"
 )
 
-const defaultTenantGPUQuota = 24
+func defaultTenantGPUQuota() int {
+	quota := domain.CurrentResourceLimits().MaxTotalGPUs
+	if quota < 1 {
+		return 1
+	}
+	return quota
+}
 
 type TenantRecord struct {
 	ID             string `gorm:"primaryKey"`
@@ -55,7 +61,7 @@ func (r *GormRepository) EnsureIdentity(ctx context.Context, principal auth.Prin
 	}
 	now := time.Now().UTC()
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		tenant := TenantRecord{ID: principal.TenantID, Name: principal.TenantID, Namespace: namespace, LocalQueue: queue, GPUQuotaLimit: defaultTenantGPUQuota, MaxPriority: "normal", CreatedAt: now, UpdatedAt: now}
+		tenant := TenantRecord{ID: principal.TenantID, Name: principal.TenantID, Namespace: namespace, LocalQueue: queue, GPUQuotaLimit: defaultTenantGPUQuota(), MaxPriority: "normal", CreatedAt: now, UpdatedAt: now}
 		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.Assignments(map[string]any{"name": tenant.Name, "namespace": tenant.Namespace, "local_queue": tenant.LocalQueue, "updated_at": now})}).Create(&tenant).Error; err != nil {
 			return fmt.Errorf("upsert tenant: %w", err)
 		}
@@ -95,13 +101,9 @@ func (r *GormRepository) CreateTenant(ctx context.Context, tenant domain.Tenant)
 		return err
 	}
 	now := time.Now().UTC()
-	quota := tenant.GPUQuotaLimit
-	if quota <= 0 {
-		quota = defaultTenantGPUQuota
-	}
 	record := TenantRecord{
 		ID: tenant.ID, Name: tenant.Name, Namespace: tenant.Namespace,
-		LocalQueue: tenant.LocalQueue, GPUQuotaLimit: quota, MaxPriority: "normal",
+		LocalQueue: tenant.LocalQueue, GPUQuotaLimit: tenant.GPUQuotaLimit, MaxPriority: "normal",
 		CreatedAt: now, UpdatedAt: now,
 	}
 	var existing TenantRecord

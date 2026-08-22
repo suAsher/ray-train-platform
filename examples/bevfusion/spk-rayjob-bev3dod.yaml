@@ -1,0 +1,27 @@
+# Copy this file to <bev_3dod checkout>/.spk-rayjob.yaml.
+# The source directory is packaged on every submit; the image only supplies
+# the pinned Python/CUDA/Ray runtime and prebuilt legacy CUDA extensions.
+name: bevfusion-3dod-2x8
+image: harbor.wellspiking.ai/guofeng.su/bevfusion@sha256:cbc23478ca97290428bae1e1a3dba49776fa4e7f4ada851c173223278fd49e47
+entrypoint: >-
+  raytrain-bevfusion-prepare python3 tools/westwell_train.py
+  configs/westwell/det/transfusion/secfpn/lidar/voxelnet_0p075.yaml
+  --launcher pytorch
+  --run-dir "$PLATFORM_OUTPUT_PATH"
+  dataset_root="$PLATFORM_DATASET_PATH/platform-validation/annotations/fz-0429-platform-smoke-128/"
+  eval_dataset_root="$PLATFORM_DATASET_PATH/platform-validation/annotations/fz-0429-platform-smoke-128/"
+  data.samples_per_gpu=1
+  data.workers_per_gpu=1
+  runner.max_epochs=1
+  log_config.interval=1
+  evaluation.interval=1
+workers: 2
+gpusPerWorker: 8
+cpuPerWorker: 32
+memoryPerWorker: 128Gi
+executionMode: ray_train
+input:
+  space: public
+  path: bevfusion/fz-3dod-v1
+output:
+  path: bevfusion/bev_3dod-2x8

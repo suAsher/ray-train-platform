@@ -1,0 +1,35 @@
+{{- if and .Values.kueue.enabled .Values.kueue.manageResources }}
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: {{ .Values.kueue.resourceFlavorName }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: scheduling
+spec:
+  nodeLabels:
+    {{- toYaml .Values.kueue.resourceFlavorNodeLabels | nindent 4 }}
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: {{ .Values.kueue.clusterQueueName }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: scheduling
+spec:
+  namespaceSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: ray-train-platform
+  resourceGroups:
+    - coveredResources: ["cpu", "memory", "nvidia.com/gpu"]
+      flavors:
+        - name: {{ .Values.kueue.resourceFlavorName }}
+          resources:
+            - name: cpu
+              nominalQuota: {{ .Values.kueue.cpuQuota }}
+            - name: memory
+              nominalQuota: {{ .Values.kueue.memoryQuota }}
+            - name: nvidia.com/gpu
+              nominalQuota: {{ .Values.kueue.gpuQuota }}
+{{- end }}
