@@ -381,6 +381,11 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	if err := validateProjectCacheShape(resolved.Cache); err != nil {
 		return err
 	}
+	previousJobID := strings.TrimSpace(*resumeFromJob)
+	checkpointProvided := provided["checkpoint-space"] || provided["checkpoint-path"]
+	if err := validateLocalSubmit(resolved, previousJobID, checkpointProvided); err != nil {
+		return err
+	}
 	client, err := newCommandClient(connection, getenv, stderr)
 	if err != nil {
 		return err
@@ -401,10 +406,7 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	}
 	// Resuming is an ordinary read-only selection of the previous run's own
 	// managed result directory; the platform contract does not change.
-	if previousJobID := strings.TrimSpace(*resumeFromJob); previousJobID != "" {
-		if provided["checkpoint-space"] || provided["checkpoint-path"] {
-			return errors.New("--resume-from-job cannot be combined with --checkpoint-space or --checkpoint-path")
-		}
+	if previousJobID != "" {
 		previous, statusErr := client.Status(ctx, previousJobID)
 		if statusErr != nil {
 			return fmt.Errorf("read the previous job: %w", statusErr)
@@ -434,6 +436,16 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 		return nil
 	}
 	return watchJob(ctx, client, job.ID, stdout, format.json)
+}
+
+func validateLocalSubmit(value project, previousJobID string, checkpointProvided bool) error {
+	if strings.TrimSpace(value.Entrypoint) == "" {
+		return value.validateForSubmit()
+	}
+	if previousJobID != "" && checkpointProvided {
+		return errors.New("--resume-from-job cannot be combined with --checkpoint-space or --checkpoint-path")
+	}
+	return nil
 }
 
 // validateForSubmit fails before any network call so a missing value is

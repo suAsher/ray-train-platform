@@ -583,3 +583,42 @@ func TestSubmitWithoutEntrypointFailsWithoutContactingThePlatform(t *testing.T) 
 		t.Fatalf("expected a clear message naming the missing entrypoint, got %v", err)
 	}
 }
+
+func TestSubmitRuntimeCacheWithoutEntrypointFailsBeforeClientConfiguration(t *testing.T) {
+	root := seedProject(t, `name: cache-training
+image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
+cache:
+  mode: runtime
+`)
+	getenv := func(key string) string {
+		t.Fatalf("local validation must not read credentials or connection settings: %s", key)
+		return ""
+	}
+
+	err := Run(context.Background(), []string{"submit", "--dir", root},
+		&bytes.Buffer{}, &bytes.Buffer{}, getenv)
+	if err == nil || !strings.Contains(err.Error(), "--entrypoint") {
+		t.Fatalf("expected the original missing-entrypoint error, got %v", err)
+	}
+}
+
+func TestSubmitRuntimeCacheResumeConflictFailsBeforeClientConfiguration(t *testing.T) {
+	root := seedProject(t, `name: cache-training
+image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
+entrypoint: python train.py
+cache:
+  mode: runtime
+`)
+	getenv := func(key string) string {
+		t.Fatalf("local validation must not read credentials or connection settings: %s", key)
+		return ""
+	}
+
+	err := Run(context.Background(), []string{
+		"submit", "--dir", root, "--resume-from-job", "job-previous", "--checkpoint-path", "checkpoint",
+	}, &bytes.Buffer{}, &bytes.Buffer{}, getenv)
+	want := "--resume-from-job cannot be combined with --checkpoint-space or --checkpoint-path"
+	if err == nil || err.Error() != want {
+		t.Fatalf("expected the original resume/checkpoint conflict error %q, got %v", want, err)
+	}
+}
