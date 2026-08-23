@@ -18,7 +18,7 @@ validate_local_path() {
 remote_path_absent() {
   local node="$1"
   local local_path="$2"
-  local remote_path_check="sh -ceu 'test ! -e -- \"\$1\"' sh"
+  local remote_path_check="sh -ceu 'test ! -e \"\$1\"' sh"
 
   validate_local_path "${local_path}" || return 1
   ssh "${ssh_options[@]}" "root@${node}" "${remote_path_check}" "${local_path}"

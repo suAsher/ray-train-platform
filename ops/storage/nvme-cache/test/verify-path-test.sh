@@ -16,6 +16,10 @@ if grep -Fq -- 'test ! -e "${local_path}"' "${verify_script}"; then
   echo 'verify.sh interpolates local_path into remote command' >&2
   exit 1
 fi
+if grep -Fq -- 'test ! -e --' "${verify_script}"; then
+  echo 'verify.sh uses a non-POSIX test -- operand on remote nodes' >&2
+  exit 1
+fi
 
 RAY_CACHE_VERIFY_LIBRARY_ONLY=1
 export RAY_CACHE_VERIFY_LIBRARY_ONLY
@@ -61,7 +65,7 @@ expected_remote_args="$(printf '%s\n' \
   -o \
   BatchMode=yes \
   root@172.28.1.232 \
-  'sh -ceu '\''test ! -e -- "$1"'\'' sh' \
+  'sh -ceu '\''test ! -e "$1"'\'' sh' \
   "${valid_paths[0]}")"
 [[ "$(cat "${capture_file}")" == "${expected_remote_args}" ]] || {
   echo 'verify.sh did not pass the validated path as a separate remote positional argument' >&2

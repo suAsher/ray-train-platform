@@ -25,7 +25,7 @@ validate_trusted_path_state() {
 remote_trusted_path_state() {
   local node="$1"
   local trusted_path="$2"
-  local remote_state_check="sh -ceu 'test -d -- \"\$1\"; test ! -L \"\$1\"; stat -c \"%u:%g:%a\" -- \"\$1\"' sh"
+  local remote_state_check="sh -ceu 'test -d \"\$1\"; test ! -L \"\$1\"; stat -c \"%u:%g:%a\" \"\$1\"' sh"
 
   ssh "${ssh_options[@]}" "root@${node}" "${remote_state_check}" "${trusted_path}"
 }

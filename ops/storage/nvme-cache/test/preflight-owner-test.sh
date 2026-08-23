@@ -8,6 +8,10 @@ grep -Fq -- 'validate_trusted_path_state()' "${preflight_script}" || {
   echo 'preflight.sh missing trusted path owner/mode validation' >&2
   exit 1
 }
+if grep -Fq -- 'test -d --' "${preflight_script}"; then
+  echo 'preflight.sh uses a non-POSIX test -- operand on remote nodes' >&2
+  exit 1
+fi
 
 RAY_CACHE_PREFLIGHT_LIBRARY_ONLY=1
 export RAY_CACHE_PREFLIGHT_LIBRARY_ONLY
