@@ -10,11 +10,10 @@ esac
 [ "${interval_seconds}" -gt 0 ] || { printf 'INTERVAL_SECONDS must be positive\n' >&2; exit 1; }
 
 collect_filesystem() {
-  host_path="$1"
+  cache_root="$1"
   metric_path="$2"
-  cache_root="${host_path}/ray-cache"
 
-  set -- $(df -Pk "${host_path}" | awk 'END {print $2, $4}')
+  set -- $(df -Pk "${cache_root}" | awk 'END {print $2, $4}')
   [ "$#" -eq 2 ] || return 1
   total_bytes=$(($1 * 1024))
   available_bytes=$(($2 * 1024))
@@ -53,8 +52,8 @@ while :; do
     printf '# TYPE ray_cache_volume_directories gauge\n'
     printf '# HELP ray_cache_teardown_failures_total Recorded cache teardown failures.\n'
     printf '# TYPE ray_cache_teardown_failures_total counter\n'
-    collect_filesystem /host/data1 /data1
-    collect_filesystem /host/data2 /data2
+    collect_filesystem /host/data1-ray-cache /data1
+    collect_filesystem /host/data2-ray-cache /data2
   } >"${temporary_file}"
   mv "${temporary_file}" "${output_file}"
   sleep "${interval_seconds}"

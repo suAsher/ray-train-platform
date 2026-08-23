@@ -51,6 +51,9 @@ require_in "${ops_dir}/preflight.sh" 'prometheusrules.monitoring.coreos.com'
 require_in "${ops_dir}/preflight.sh" 'crictl pull'
 require_in "${ops_dir}/preflight.sh" 'may populate the container runtime image cache'
 require_in "${ops_dir}/preflight.sh" 'never starts containers'
+require_in "${ops_dir}/preflight.sh" 'RAY_CACHE_EXPECTED_ROOT_GID'
+require_in "${ops_dir}/preflight.sh" 'expected_ancestor_mode=755'
+require_in "${ops_dir}/preflight.sh" 'expected_cache_root_mode=770'
 reject_in "${ops_dir}/preflight.sh" 'crictl inspecti'
 if grep -Eq 'kubectl[^#]*(apply|create|delete|patch|replace|edit|label|taint)' "${ops_dir}/preflight.sh"; then
   echo 'preflight must not mutate Kubernetes API resources' >&2
@@ -70,8 +73,9 @@ require_in "${ops_dir}/verify.sh" 'trap cleanup EXIT'
 require_in "${ops_dir}/verify.sh" '172.28.1.232'
 require_in "${ops_dir}/verify.sh" '172.28.1.233'
 require_in "${ops_dir}/verify.sh" 'ray-cache-local'
-require_in "${ops_dir}/verify.sh" '/data1/ray-cache/'
-require_in "${ops_dir}/verify.sh" '/data2/ray-cache/'
+require_in "${ops_dir}/verify.sh" '/data[12]/ray-cache/pvc-'
+require_in "${ops_dir}/verify.sh" 'remote_path_check='
+reject_in "${ops_dir}/verify.sh" 'test ! -e "${local_path}"'
 
 require_in "${ops_dir}/register-node.sh" 'values-patch.yaml'
 require_in "${ops_dir}/register-node.sh" 'acceptance-report.txt'
@@ -98,5 +102,9 @@ require_in "${ops_dir}/smoke-pod.yaml" 'automountServiceAccountToken: false'
 require_in "${ops_dir}/smoke-pod.yaml" 'privileged: false'
 require_in "${ops_dir}/smoke-pod.yaml" 'harbor.wellspiking.ai/guofeng.su/busybox@sha256:ff6bba6f18535e7ccb3c1bbed0b84e5c733d7d9dd8815f1ea93ee73073135aa4'
 reject_in "${ops_dir}/smoke-pod.yaml" 'nvidia.com/gpu'
+
+bash "${ops_dir}/test/verify-path-test.sh"
+bash "${ops_dir}/test/preflight-owner-test.sh"
+bash "${ops_dir}/test/register-node-output-test.sh"
 
 echo 'ray cache operations contract verified'

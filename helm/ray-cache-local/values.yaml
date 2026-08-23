@@ -45,6 +45,10 @@ monitoring:
         memory: 128Mi
   collector:
     image: harbor.wellspiking.ai/guofeng.su/busybox@sha256:ff6bba6f18535e7ccb3c1bbed0b84e5c733d7d9dd8815f1ea93ee73073135aa4
+    # Non-root UID with the trusted root-owned cache directory group. The
+    # host mounts are exact cache roots and read-only.
+    runAsUser: 65534
+    runAsGroup: 0
     resources:
       requests:
         cpu: 25m

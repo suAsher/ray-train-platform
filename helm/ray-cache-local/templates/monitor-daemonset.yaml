@@ -24,6 +24,8 @@ spec:
       tolerations:
         - operator: Exists
       securityContext:
+        fsGroup: 65534
+        fsGroupChangePolicy: Always
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -69,19 +71,19 @@ spec:
             allowPrivilegeEscalation: false
             privileged: false
             readOnlyRootFilesystem: true
-            runAsNonRoot: false
-            runAsUser: 0
+            runAsNonRoot: true
+            runAsUser: {{ .Values.monitoring.collector.runAsUser }}
+            runAsGroup: {{ .Values.monitoring.collector.runAsGroup }}
             seccompProfile:
               type: RuntimeDefault
             capabilities:
               drop: ["ALL"]
-              add: ["DAC_READ_SEARCH"]
           volumeMounts:
             - name: data1
-              mountPath: /host/data1
+              mountPath: /host/data1-ray-cache
               readOnly: true
             - name: data2
-              mountPath: /host/data2
+              mountPath: /host/data2-ray-cache
               readOnly: true
             - name: textfile
               mountPath: /var/lib/node-exporter/textfile
@@ -91,11 +93,11 @@ spec:
       volumes:
         - name: data1
           hostPath:
-            path: /data1
+            path: /data1/ray-cache
             type: Directory
         - name: data2
           hostPath:
-            path: /data2
+            path: /data2/ray-cache
             type: Directory
         - name: textfile
           emptyDir: {}
