@@ -23,6 +23,19 @@ const baseForm = () => ({
   maxRetries: 1,
 })
 
+const cacheLimits = (overrides = {}) => ({
+  cache: {
+    enabled: true,
+    defaultMode: 'off',
+    modes: ['off', 'runtime'],
+    allowedSizes: ['100Gi', '200Gi'],
+    defaultSize: '200Gi',
+    maxSize: '200Gi',
+    mountPath: '/mnt/cache',
+    ...overrides,
+  },
+})
+
 test('parseEntrypoint preserves quoted arguments', () => {
   assert.deepEqual(
     parseEntrypoint('python train.py --run-name "support sft"'),
@@ -89,4 +102,39 @@ test('buildJobSpec always lets the platform allocate a task output directory', (
   const form = baseForm()
   form.output = { spaceId: 'team-shared' }
   assert.throws(() => buildJobSpec(form), /我的训练结果/)
+})
+
+test('buildJobSpec keeps omitted and explicit-off cache backward compatible', () => {
+  const omitted = buildJobSpec(baseForm(), cacheLimits())
+  assert.equal('cache' in omitted, false)
+
+  const off = buildJobSpec({ ...baseForm(), cacheMode: 'off', cacheSize: '' }, cacheLimits())
+  assert.equal('cache' in off, false)
+})
+
+test('buildJobSpec maps a policy-approved runtime cache', () => {
+  const spec = buildJobSpec({ ...baseForm(), cacheMode: 'runtime', cacheSize: '200Gi' }, cacheLimits())
+  assert.deepEqual(spec.cache, { mode: 'runtime', size: '200Gi' })
+})
+
+test('buildJobSpec rejects unsupported or internally inconsistent cache requests', () => {
+  assert.throws(
+    () => buildJobSpec({ ...baseForm(), cacheMode: 'persistent', cacheSize: '200Gi' }, cacheLimits()),
+    /缓存模式/,
+  )
+  assert.throws(
+    () => buildJobSpec({ ...baseForm(), cacheMode: 'off', cacheSize: '200Gi' }, cacheLimits()),
+    /缓存关闭时不能选择容量/,
+  )
+  assert.throws(
+    () => buildJobSpec({ ...baseForm(), cacheMode: 'runtime', cacheSize: '' }, cacheLimits()),
+    /请选择运行时缓存容量/,
+  )
+})
+
+test('buildJobSpec rejects runtime cache disabled or disallowed by the loaded server policy', () => {
+  const form = { ...baseForm(), cacheMode: 'runtime', cacheSize: '200Gi' }
+  assert.throws(() => buildJobSpec(form, cacheLimits({ enabled: false })), /未开放运行时缓存/)
+  assert.throws(() => buildJobSpec(form, cacheLimits({ modes: ['off'] })), /未开放运行时缓存/)
+  assert.throws(() => buildJobSpec(form, cacheLimits({ allowedSizes: ['100Gi'] })), /不在平台允许范围/)
 })

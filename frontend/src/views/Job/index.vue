@@ -296,7 +296,13 @@ const canResume = (job) => TERMINAL_STATES.includes(job.status) && Boolean(job.s
 const rerun = (job) => {
   router.push({
     path: '/job/create',
-    query: { name: job.name, image: job.spec?.image, entrypoint: job.entrypoint },
+    query: {
+      name: job.name,
+      image: job.spec?.image,
+      entrypoint: job.entrypoint,
+      cacheMode: job.spec?.cache?.mode,
+      cacheSize: job.spec?.cache?.size,
+    },
   })
 }
 
@@ -308,6 +314,8 @@ const resume = (job) => {
       name: job.name,
       image: job.spec?.image,
       entrypoint: job.entrypoint,
+      cacheMode: job.spec?.cache?.mode,
+      cacheSize: job.spec?.cache?.size,
       checkpointPath: base ? `${base}/${job.id}` : job.id,
     },
   })

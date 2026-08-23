@@ -455,6 +455,8 @@ const resumeFromCheckpoint = () => {
       name: jobDetail.value?.name,
       image: jobDetail.value?.spec?.image,
       entrypoint: jobDetail.value?.entrypoint,
+      cacheMode: jobDetail.value?.spec?.cache?.mode,
+      cacheSize: jobDetail.value?.spec?.cache?.size,
     },
   })
 }
@@ -466,6 +468,8 @@ const rerunJob = () => {
       name: jobDetail.value?.name,
       image: jobDetail.value?.spec?.image,
       entrypoint: jobDetail.value?.entrypoint,
+      cacheMode: jobDetail.value?.spec?.cache?.mode,
+      cacheSize: jobDetail.value?.spec?.cache?.size,
     },
   })
 }

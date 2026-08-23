@@ -11,11 +11,12 @@ export function parseEntrypoint(value) {
   return parts
 }
 
-export function buildJobSpec(form) {
+export function buildJobSpec(form, platformLimits = {}) {
   const command = parseEntrypoint(form.entrypoint)
   if (command.length === 0) {
     throw new Error('请输入训练启动命令')
   }
+  const cache = buildCache(form, platformLimits.cache)
 
   const spec = {
     name: requiredText(form.name, '任务名称'),
@@ -37,6 +38,7 @@ export function buildJobSpec(form) {
     queue: '',
     timeoutSeconds: nonNegativeInteger(form.timeoutSeconds || 0, '最长运行时间'),
     retryPolicy: { maxRetries: boundedInteger(form.maxRetries || 0, '自动重试次数', 0, 3) },
+    ...(cache ? { cache } : {}),
   }
 
   const priority = String(form.priority || '').trim()
@@ -44,6 +46,24 @@ export function buildJobSpec(form) {
     spec.priority = priority
   }
   return spec
+}
+
+function buildCache(form, policy) {
+  const mode = String(form.cacheMode || 'off').trim() || 'off'
+  const size = String(form.cacheSize || '').trim()
+  if (mode === 'off') {
+    if (size) throw new Error('缓存关闭时不能选择容量')
+    return null
+  }
+  if (mode !== 'runtime') throw new Error('请选择有效的缓存模式')
+  if (policy?.enabled !== true || !Array.isArray(policy.modes) || !policy.modes.includes('runtime')) {
+    throw new Error('平台未开放运行时缓存')
+  }
+  if (!size) throw new Error('请选择运行时缓存容量')
+  if (!Array.isArray(policy.allowedSizes) || !policy.allowedSizes.includes(size)) {
+    throw new Error('运行时缓存容量不在平台允许范围')
+  }
+  return { mode: 'runtime', size }
 }
 
 function executionMode(form) {
