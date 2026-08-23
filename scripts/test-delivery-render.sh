@@ -38,7 +38,6 @@ require "$production_rendered" 'minReplicas: 2'
 require "$production_rendered" 'type: NodePort'
 require "$production_rendered" 'app.kubernetes.io/part-of: ray-train-platform'
 require "$production_rendered" 'app.kubernetes.io/managed-by: Helm'
-require "$cpu_ha_rendered" 'platform.wellspiking.ai/pool: control-plane'
 require "$cpu_ha_rendered" 'replicas: 2'
 require "$cpu_ha_rendered" 'whenUnsatisfiable: DoNotSchedule'
 require "$cpu_ha_rendered" 'requiredDuringSchedulingIgnoredDuringExecution:'
@@ -108,6 +107,7 @@ bash "${root_dir}/ops/platform/test/loki-cpu-fullname-test.sh"
 bash "${root_dir}/ops/platform/test/preflight-managed-ingress-class-test.sh"
 bash "${root_dir}/ops/platform/test/bootstrap-alb-contract-test.sh"
 bash "${root_dir}/ops/platform/test/verify-rendered-ingress-test.sh"
+bash "${root_dir}/ops/platform/test/ha-rollout-template-test.sh"
 bash "${root_dir}/scripts/test-external-spk-rayjob-e2e-contract.sh"
 bash "${root_dir}/scripts/test-go-builder-path-contract.sh"
 bash "${root_dir}/scripts/test-nvme-cache-delivery.sh"
