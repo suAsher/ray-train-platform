@@ -12,6 +12,12 @@ done
 
 grep -Fq 'node.kubernetes.io/instance-type=virtual-node' "$verify_script"
 grep -Fq 'platform.wellspiking.ai/pool' "$verify_script"
+grep -Fq 'platform.wellspiking.ai/gpu-pool' "$verify_script"
+grep -Fq 'require_real_pool kube-system' "$verify_script"
+if grep -Fq "require_cpu_pool kube-system 'k8s-app=kube-dns'" "$verify_script"; then
+  echo 'VCI retirement check still requires CPU-only CoreDNS placement' >&2
+  exit 1
+fi
 grep -Fq 'ray-train-backend' "$verify_script"
 grep -Fq 'loki-cpu' "$verify_script"
 grep -Fq 'cordon "$node"' "$migrate_script"

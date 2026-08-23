@@ -25,6 +25,7 @@
 | 用户、租户、角色、配额、镜像、Git 和数据发布 | [管理员手册](ADMIN_GUIDE.md) |
 | 网络、高可用、KubeRay/Kueue、存储、安全和可观测性 | [生产架构](ARCHITECTURE.md) |
 | 安装、升级、回滚和迁移 | [构建与部署](BUILD_AND_DEPLOY.md) |
+| 组件清单、巡检、备份恢复和故障处置 | [生产运维手册](OPERATIONS_GUIDE.md) |
 | 代码结构、测试和贡献 | [开发指南](DEVELOPMENT.md) |
 
 ## 文档状态

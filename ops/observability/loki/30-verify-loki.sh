@@ -2,7 +2,7 @@
 set -euo pipefail
 
 readonly namespace="${LOKI_NAMESPACE:-loki}"
-readonly release="${LOKI_RELEASE:-loki}"
+readonly release="${LOKI_RELEASE:-loki-cpu}"
 readonly service="${LOKI_GATEWAY_SERVICE:-${release}-gateway}"
 readonly port="${LOKI_VERIFY_PORT:-13100}"
 readonly expected_instance_type="${LOKI_EXPECTED_INSTANCE_TYPE:-}"
@@ -27,12 +27,14 @@ kubectl -n "$namespace" get "statefulset/${release}" >/dev/null
 kubectl -n "$namespace" rollout status "statefulset/${release}" --timeout=10m
 kubectl -n "$namespace" rollout status "deployment/${release}-gateway" --timeout=10m
 
-ready_loki="$(kubectl -n "$namespace" get pods -l "app.kubernetes.io/component=single-binary,app.kubernetes.io/instance=${release}" -o jsonpath='{range .items[?(@.status.phase=="Running")]}{.metadata.name}{"\n"}{end}' | wc -l | tr -d ' ')"
+readonly loki_selector="app.kubernetes.io/component=single-binary,app.kubernetes.io/instance=${release}"
+kubectl -n "$namespace" wait --for=condition=Ready pod -l "$loki_selector" --timeout=10m
+ready_loki="$(kubectl -n "$namespace" get pods -l "$loki_selector" -o jsonpath='{range .items[?(@.status.phase=="Running")]}{.metadata.name}{"\n"}{end}' | wc -l | tr -d ' ')"
 [[ "$ready_loki" == "3" ]] || { echo "expected 3 running Loki pods, got ${ready_loki}" >&2; exit 1; }
-bound_wal="$(kubectl -n "$namespace" get pvc -l "app.kubernetes.io/component=single-binary,app.kubernetes.io/instance=${release}" -o jsonpath='{range .items[?(@.status.phase=="Bound")]}{.metadata.name}{"\n"}{end}' | wc -l | tr -d ' ')"
+bound_wal="$(kubectl -n "$namespace" get pvc -l "$loki_selector" -o jsonpath='{range .items[?(@.status.phase=="Bound")]}{.metadata.name}{"\n"}{end}' | wc -l | tr -d ' ')"
 [[ "$bound_wal" == "3" ]] || { echo "expected 3 bound Loki WAL PVCs, got ${bound_wal}" >&2; exit 1; }
 
-for node in $(kubectl -n "$namespace" get pods -l "app.kubernetes.io/component=single-binary,app.kubernetes.io/instance=${release}" -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}'); do
+for node in $(kubectl -n "$namespace" get pods -l "$loki_selector" -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}'); do
   node_type="$(kubectl get node "$node" -o go-template='{{ index .metadata.labels "node.kubernetes.io/instance-type" }}')"
   if [[ -n "$expected_instance_type" ]]; then
     [[ "$node_type" == "$expected_instance_type" ]] || { echo "Loki pod scheduled on unexpected node type: ${node}" >&2; exit 1; }

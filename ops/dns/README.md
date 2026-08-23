@@ -52,3 +52,17 @@ sudo bash ops/storage/shanghai-data-transfer/50-configure-node-split-dns.sh --re
 The FSX DNS and mount DaemonSets in `ops/mlflow/35-fsx-health-probe.yaml`
 continuously distinguish resolver failures, stale mounts, and unschedulable
 probe Pods.
+
+## CoreDNS placement
+
+CoreDNS is shared cluster infrastructure and does not request a GPU device. It
+prefers the CPU control-plane pool and may fall back to the production GPU pool,
+but it must not run on a virtual node. The reconciler keeps two replicas and
+sets requests to `250m` CPU and `256Mi` memory (limits `2` CPU / `1Gi`). These
+reservations are above measured steady-state usage while avoiding the former
+`2 CPU / 4Gi` per-pod reservation that blocked zone-bound Loki replicas.
+
+```bash
+bash ops/dns/reconcile-coredns-placement.sh --apply
+bash ops/dns/reconcile-coredns-placement.sh --check
+```

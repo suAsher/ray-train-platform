@@ -139,6 +139,7 @@ PLATFORM_CHECKPOINT_PATH  续训时挂载的历史结果目录（可选）
 - [管理员手册](docs/ADMIN_GUIDE.md)：租户、用户、角色、GPU 配额、镜像、Git 凭据和数据发布。
 - [生产架构](docs/ARCHITECTURE.md)：网络、高可用、调度、存储、安全与可观测性。
 - [构建与部署](docs/BUILD_AND_DEPLOY.md)：安装、升级、回滚和迁移到新集群。
+- [生产运维手册](docs/OPERATIONS_GUIDE.md)：组件清单、巡检、发布、备份恢复和故障处置。
 - [开发指南](docs/DEVELOPMENT.md)：代码结构、测试和本地开发。
 - [完整文档目录](docs/README.md)：当前有效文档与历史归档边界。
 

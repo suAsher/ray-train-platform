@@ -4,6 +4,8 @@ set -euo pipefail
 readonly kubectl_bin="${KUBECTL_BIN:-kubectl}"
 readonly cpu_pool_label='platform.wellspiking.ai/pool'
 readonly cpu_pool_value='control-plane'
+readonly gpu_pool_label='platform.wellspiking.ai/gpu-pool'
+readonly gpu_pool_value='production'
 readonly virtual_selector='node.kubernetes.io/instance-type=virtual-node'
 
 for required in "$kubectl_bin" jq; do
@@ -44,6 +46,25 @@ require_cpu_pool() {
   done <<<"$nodes"
 }
 
+require_real_pool() {
+  local namespace="$1"
+  local selector="$2"
+  local expected="$3"
+  local pods nodes node cpu_pool gpu_pool count
+  pods="$("$kubectl_bin" -n "$namespace" get pods -l "$selector" -o json)"
+  count="$(jq '[.items[] | select(.status.phase == "Running") | select(any(.status.containerStatuses[]?; .ready == true))] | length' <<<"$pods")"
+  [[ "$count" =~ ^[0-9]+$ && "$count" -ge "$expected" ]] || { fail "${namespace}/${selector} readyPods=${count}, expected>=${expected}"; return; }
+  nodes="$(jq -r '.items[] | select(.status.phase == "Running") | .spec.nodeName' <<<"$pods" | sort -u)"
+  while IFS= read -r node; do
+    [[ -n "$node" ]] || continue
+    cpu_pool="$("$kubectl_bin" get node "$node" -o go-template="{{ index .metadata.labels \"${cpu_pool_label}\" }}")"
+    gpu_pool="$("$kubectl_bin" get node "$node" -o go-template="{{ index .metadata.labels \"${gpu_pool_label}\" }}")"
+    if [[ "$cpu_pool" != "$cpu_pool_value" && "$gpu_pool" != "$gpu_pool_value" ]]; then
+      fail "${namespace}/${selector} uses node outside reviewed real pools: ${node}"
+    fi
+  done <<<"$nodes"
+}
+
 require_ready deployment ray-train-platform ray-train-backend 2
 require_ready deployment ray-train-platform ray-train-frontend 2
 require_ready statefulset ray-train-platform postgres 1
@@ -61,7 +82,7 @@ require_cpu_pool loki 'app.kubernetes.io/instance=loki-cpu' 3
 require_cpu_pool monitoring 'app.kubernetes.io/instance=alloy' 2
 require_cpu_pool kuberay-system 'app.kubernetes.io/name=kuberay-operator' 2
 require_cpu_pool kueue-system 'app.kubernetes.io/name=kueue' 2
-require_cpu_pool kube-system 'k8s-app=kube-dns' 2
+require_real_pool kube-system 'k8s-app=kube-dns' 2
 
 virtual_nodes="$("$kubectl_bin" get nodes -l "$virtual_selector" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')"
 while IFS= read -r node; do
@@ -73,4 +94,4 @@ while IFS= read -r node; do
 done <<<"$virtual_nodes"
 
 [[ "$failures" == 0 ]] || exit 1
-echo 'VCI retirement readiness verified: all critical workloads run on the CPU pool'
+echo 'VCI retirement readiness verified: critical workloads run on reviewed real-node pools'

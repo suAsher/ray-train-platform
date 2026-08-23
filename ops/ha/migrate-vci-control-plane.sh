@@ -60,7 +60,7 @@ case "$stage" in
     patch_deployment_to_cpu kuberay-system kuberay-operator 2
     patch_deployment_to_cpu kueue-system kueue-controller-manager 2
     patch_deployment_to_cpu kube-system apig-controller 2
-    patch_deployment_to_cpu kube-system coredns 2
+    bash "${root_dir}/ops/dns/reconcile-coredns-placement.sh" --apply
     patch_deployment_to_cpu kube-system csi-ebs-controller 1
     patch_deployment_to_cpu kube-system csi-nas-controller 1
     patch_deployment_to_cpu kube-system csi-fsx-controller 1
