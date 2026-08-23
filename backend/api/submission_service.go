@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/api/resource"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
 	"ray-train-platform-backend/repositories"
@@ -71,6 +72,15 @@ type SubmissionServiceOptions struct {
 	IDCDataSpacesEnabled  bool
 	WorkspaceSnapshots    WorkspaceSnapshotLookup
 	NewID                 func() (string, error)
+	LocalCache            LocalCachePolicy
+}
+
+type LocalCachePolicy struct {
+	Enabled      bool
+	AllowedSizes []string
+	DefaultSize  string
+	MaxSize      string
+	MountPath    string
 }
 
 type SubmissionService struct {
@@ -89,6 +99,7 @@ type SubmissionService struct {
 	idcDataSpacesEnabled  bool
 	workspaceSnapshots    WorkspaceSnapshotLookup
 	newID                 func() (string, error)
+	localCache            LocalCachePolicy
 }
 
 type SubmissionInput struct {
@@ -120,6 +131,17 @@ func NewSubmissionService(repository JobRepository, options SubmissionServiceOpt
 		idcDataSpacesEnabled:  options.IDCDataSpacesEnabled,
 		workspaceSnapshots:    options.WorkspaceSnapshots,
 		newID:                 newID,
+		localCache:            cloneLocalCachePolicy(options.LocalCache),
+	}
+}
+
+func cloneLocalCachePolicy(policy LocalCachePolicy) LocalCachePolicy {
+	return LocalCachePolicy{
+		Enabled:      policy.Enabled,
+		AllowedSizes: append([]string(nil), policy.AllowedSizes...),
+		DefaultSize:  strings.TrimSpace(policy.DefaultSize),
+		MaxSize:      strings.TrimSpace(policy.MaxSize),
+		MountPath:    strings.TrimSpace(policy.MountPath),
 	}
 }
 
@@ -146,7 +168,7 @@ func (service *SubmissionService) Submit(ctx context.Context, input SubmissionIn
 	if err := input.Origin.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrSubmissionInvalidOrigin, err)
 	}
-	spec, err := normalizeSubmissionSpec(input.Principal, input.Origin, input.Spec)
+	spec, err := normalizeSubmissionSpec(input.Principal, input.Origin, input.Spec, service.localCache)
 	if err != nil {
 		return nil, err
 	}
@@ -430,13 +452,18 @@ func (service *SubmissionService) publicDataRootForTenant(tenantID string) (stri
 	return domain.PublicDataRootForTenant(tenantID, root)
 }
 
-func normalizeSubmissionSpec(principal auth.Principal, origin domain.SubmissionOrigin, spec domain.JobSpec) (domain.JobSpec, error) {
+func normalizeSubmissionSpec(principal auth.Principal, origin domain.SubmissionOrigin, spec domain.JobSpec, cachePolicy LocalCachePolicy) (domain.JobSpec, error) {
 	// Claim names and mount paths are server-generated. Clear a value supplied
 	// by an API client before validation and storage resolution so it cannot be
 	// used to mount an arbitrary PVC.
 	spec.ResolvedStorage = domain.ResolvedStorageMounts{}
 	spec.ResolvedDataMounts = domain.ResolvedDataSpaceMounts{}
 	spec.ResolvedDataRoots = domain.ResolvedDataSpaceRoots{}
+	cache, err := normalizeCacheRequest(spec.Cache, cachePolicy)
+	if err != nil {
+		return domain.JobSpec{}, fmt.Errorf("%w: %v", ErrSubmissionInvalidJobSpec, err)
+	}
+	spec.Cache = cache
 	expectedQueue := tenantQueue(principal.TenantID)
 	if spec.Queue == "" {
 		spec.Queue = expectedQueue
@@ -450,6 +477,45 @@ func normalizeSubmissionSpec(principal auth.Principal, origin domain.SubmissionO
 		return domain.JobSpec{}, ErrSubmissionCodeSourceNotAllowed
 	}
 	return spec, nil
+}
+
+func normalizeCacheRequest(cache domain.CacheRequest, policy LocalCachePolicy) (domain.CacheRequest, error) {
+	cache.Mode = domain.CacheMode(strings.TrimSpace(string(cache.Mode)))
+	cache.Size = strings.TrimSpace(cache.Size)
+	if cache.Mode == "" {
+		cache.Mode = domain.CacheModeOff
+	}
+	if cache.Mode != domain.CacheModeRuntime {
+		if err := cache.Validate(); err != nil {
+			return domain.CacheRequest{}, err
+		}
+		return cache, nil
+	}
+	if !policy.Enabled {
+		return domain.CacheRequest{}, fmt.Errorf("runtime cache capability is disabled")
+	}
+	if cache.Size == "" {
+		cache.Size = strings.TrimSpace(policy.DefaultSize)
+	}
+	if err := cache.Validate(); err != nil {
+		return domain.CacheRequest{}, err
+	}
+	requested, _ := resource.ParseQuantity(cache.Size)
+	maximum, err := resource.ParseQuantity(strings.TrimSpace(policy.MaxSize))
+	if err != nil || maximum.Sign() <= 0 {
+		return domain.CacheRequest{}, fmt.Errorf("runtime cache maximum size is invalid")
+	}
+	if requested.Cmp(maximum) > 0 {
+		return domain.CacheRequest{}, fmt.Errorf("runtime cache size %q exceeds maximum %q", cache.Size, policy.MaxSize)
+	}
+	for _, configured := range policy.AllowedSizes {
+		allowed, err := resource.ParseQuantity(strings.TrimSpace(configured))
+		if err == nil && allowed.Sign() > 0 && requested.Cmp(allowed) == 0 {
+			cache.Size = strings.TrimSpace(configured)
+			return cache, nil
+		}
+	}
+	return domain.CacheRequest{}, fmt.Errorf("runtime cache size %q is not allowed", cache.Size)
 }
 
 func (service *SubmissionService) materializeArtifact(ctx context.Context, principal auth.Principal, spec domain.JobSpec) (domain.JobSpec, error) {
@@ -477,6 +543,7 @@ func (service *SubmissionService) materializeArtifact(ctx context.Context, princ
 		OutputStorage: spec.OutputStorage, Input: spec.Input, Checkpoint: spec.Checkpoint, Output: spec.Output,
 		ResolvedStorage: spec.ResolvedStorage, ResolvedDataMounts: spec.ResolvedDataMounts, ResolvedDataRoots: spec.ResolvedDataRoots, TimeoutSeconds: spec.TimeoutSeconds,
 		RetryPolicy: spec.RetryPolicy, CleanupPolicy: spec.CleanupPolicy,
+		Cache: spec.Cache,
 	}, nil
 }
 

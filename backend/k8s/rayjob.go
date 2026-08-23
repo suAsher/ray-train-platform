@@ -55,8 +55,12 @@ type MLflowOptions struct {
 type LocalCacheOptions struct {
 	Enabled      bool
 	StorageClass string
-	Size         string
+	AllowedSizes []string
+	DefaultSize  string
+	MaxSize      string
 	MountPath    string
+	runtime      bool
+	resolvedSize string
 }
 
 // defaultTrainingNodeSelector matches the label the deployment guide asks
@@ -85,6 +89,11 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	if err := options.LocalCache.Validate(); err != nil {
 		return nil, fmt.Errorf("local cache: %w", err)
 	}
+	localCache, err := options.LocalCache.resolve(job.Spec.Cache)
+	if err != nil {
+		return nil, fmt.Errorf("local cache: %w", err)
+	}
+	options.LocalCache = localCache
 	if err := options.MLflow.Validate(); err != nil {
 		return nil, fmt.Errorf("MLflow: %w", err)
 	}
@@ -169,7 +178,7 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	}
 	headStartParams := map[string]any{"dashboard-host": "0.0.0.0", "num-gpus": "0"}
 	workerStartParams := map[string]any{"num-gpus": strconv.FormatInt(gpusPerWorker, 10)}
-	if options.LocalCache.Enabled {
+	if options.LocalCache.runtime {
 		configureRayCache(headStartParams, options.LocalCache)
 		configureRayCache(workerStartParams, options.LocalCache)
 	}
@@ -243,9 +252,37 @@ func (options LocalCacheOptions) Validate() error {
 	if !isDNSSubdomain(strings.TrimSpace(options.StorageClass)) {
 		return fmt.Errorf("storage class must be a valid Kubernetes name")
 	}
-	quantity, err := resource.ParseQuantity(strings.TrimSpace(options.Size))
-	if err != nil || quantity.Sign() <= 0 {
-		return fmt.Errorf("size must be a positive Kubernetes storage quantity")
+	maximum, err := positiveCacheQuantity(options.MaxSize)
+	if err != nil {
+		return fmt.Errorf("maximum size must be a positive Kubernetes storage quantity")
+	}
+	defaultSize, err := positiveCacheQuantity(options.DefaultSize)
+	if err != nil {
+		return fmt.Errorf("default size must be a positive Kubernetes storage quantity")
+	}
+	if len(options.AllowedSizes) == 0 {
+		return fmt.Errorf("allowed sizes must not be empty")
+	}
+	allowed := make([]resource.Quantity, 0, len(options.AllowedSizes))
+	defaultAllowed := false
+	for _, configured := range options.AllowedSizes {
+		quantity, err := positiveCacheQuantity(configured)
+		if err != nil {
+			return fmt.Errorf("allowed sizes must be positive Kubernetes storage quantities")
+		}
+		if quantity.Cmp(maximum) > 0 {
+			return fmt.Errorf("allowed size %q exceeds maximum %q", configured, options.MaxSize)
+		}
+		for _, existing := range allowed {
+			if quantity.Cmp(existing) == 0 {
+				return fmt.Errorf("allowed sizes must be unique")
+			}
+		}
+		allowed = append(allowed, quantity)
+		defaultAllowed = defaultAllowed || quantity.Cmp(defaultSize) == 0
+	}
+	if !defaultAllowed {
+		return fmt.Errorf("default size must belong to allowed sizes")
 	}
 	mountPath := strings.TrimSpace(options.MountPath)
 	if !strings.HasPrefix(mountPath, "/") || path.Clean(mountPath) != mountPath || mountPath == "/" {
@@ -255,6 +292,50 @@ func (options LocalCacheOptions) Validate() error {
 		return fmt.Errorf("mount path must not be inside Ray's default temporary directory")
 	}
 	return nil
+}
+
+func (options LocalCacheOptions) resolve(request domain.CacheRequest) (LocalCacheOptions, error) {
+	options.AllowedSizes = append([]string(nil), options.AllowedSizes...)
+	options.runtime = false
+	options.resolvedSize = ""
+	mode := request.Mode
+	if mode == "" {
+		mode = domain.CacheModeOff
+	}
+	if mode == domain.CacheModeOff {
+		return options, nil
+	}
+	if mode != domain.CacheModeRuntime {
+		return LocalCacheOptions{}, fmt.Errorf("unsupported cache mode %q", mode)
+	}
+	if !options.Enabled {
+		return LocalCacheOptions{}, fmt.Errorf("runtime cache capability is disabled")
+	}
+	requested, err := positiveCacheQuantity(request.Size)
+	if err != nil {
+		return LocalCacheOptions{}, fmt.Errorf("runtime cache size must be a positive Kubernetes storage quantity")
+	}
+	maximum, _ := positiveCacheQuantity(options.MaxSize)
+	if requested.Cmp(maximum) > 0 {
+		return LocalCacheOptions{}, fmt.Errorf("runtime cache size %q exceeds maximum %q", request.Size, options.MaxSize)
+	}
+	for _, configured := range options.AllowedSizes {
+		allowed, parseErr := positiveCacheQuantity(configured)
+		if parseErr == nil && requested.Cmp(allowed) == 0 {
+			options.runtime = true
+			options.resolvedSize = strings.TrimSpace(request.Size)
+			return options, nil
+		}
+	}
+	return LocalCacheOptions{}, fmt.Errorf("runtime cache size %q is not allowed", request.Size)
+}
+
+func positiveCacheQuantity(value string) (resource.Quantity, error) {
+	quantity, err := resource.ParseQuantity(strings.TrimSpace(value))
+	if err != nil || quantity.Sign() <= 0 {
+		return resource.Quantity{}, fmt.Errorf("quantity must be positive")
+	}
+	return quantity, nil
 }
 
 func configureRayCache(rayStartParams map[string]any, cache LocalCacheOptions) {
@@ -376,7 +457,7 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 		map[string]any{"name": "workspace", "emptyDir": map[string]any{}},
 		map[string]any{"name": "dshm", "emptyDir": map[string]any{"medium": "Memory", "sizeLimit": "32Gi"}},
 	}
-	if !options.LocalCache.Enabled {
+	if !options.LocalCache.runtime {
 		volumeMounts = append(volumeMounts, map[string]any{"name": "ray-spill", "mountPath": "/tmp/ray-spill"})
 		volumes = append(volumes, map[string]any{"name": "ray-spill", "emptyDir": map[string]any{}})
 	}
@@ -403,7 +484,7 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 			volumes = append(volumes, pvcVolume("workspace-snapshot-source", personal.ClaimName, true))
 		}
 	}
-	if mountData && options.LocalCache.Enabled {
+	if mountData && options.LocalCache.runtime {
 		volumeMounts, volumes = appendLocalCache(volumeMounts, volumes, options.LocalCache)
 		env = append(env, map[string]any{"name": "PLATFORM_CACHE_PATH", "value": options.LocalCache.MountPath})
 	}
@@ -426,7 +507,7 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 	if materializeSource {
 		podSpec["initContainers"] = []any{sourceMaterializer(source, jobSpec, options)}
 	}
-	if mountData && options.LocalCache.Enabled {
+	if mountData && options.LocalCache.runtime {
 		podSpec["securityContext"].(map[string]any)["fsGroup"] = int64(1000)
 	}
 	if pullSecrets := renderImagePullSecrets(options.ImagePullSecrets); len(pullSecrets) > 0 {
@@ -484,7 +565,7 @@ func appendLocalCache(volumeMounts, volumes []any, cache LocalCacheOptions) ([]a
 					"accessModes":      []any{"ReadWriteOnce"},
 					"storageClassName": cache.StorageClass,
 					"resources": map[string]any{
-						"requests": map[string]any{"storage": cache.Size},
+						"requests": map[string]any{"storage": cache.resolvedSize},
 					},
 				},
 			},

@@ -3,17 +3,15 @@ package k8s
 import (
 	"strings"
 	"testing"
+
+	"ray-train-platform-backend/domain"
 )
 
 func TestRenderRayJobAddsGenericEphemeralCacheOnlyWhenConfigured(t *testing.T) {
-	options := testRenderOptions()
-	options.LocalCache = LocalCacheOptions{
-		Enabled:      true,
-		StorageClass: "ray-cache-local",
-		Size:         "200Gi",
-		MountPath:    "/mnt/cache",
-	}
-	manifest, err := RenderRayJob(validRenderJob(), options)
+	options := runtimeCacheRenderOptions()
+	job := validRenderJob()
+	job.Spec.Cache = domain.CacheRequest{Mode: domain.CacheModeRuntime, Size: "100Gi"}
+	manifest, err := RenderRayJob(job, options)
 	if err != nil {
 		t.Fatalf("render ray job: %v", err)
 	}
@@ -22,7 +20,7 @@ func TestRenderRayJobAddsGenericEphemeralCacheOnlyWhenConfigured(t *testing.T) {
 	workerSpec := cacheWorkerPodSpec(t, manifest.Object)
 	submitterSpec := cacheSubmitterPodSpec(t, manifest.Object)
 	for name, podSpec := range map[string]map[string]any{"head": headSpec, "worker": workerSpec} {
-		assertGenericEphemeralCache(t, name, podSpec)
+		assertGenericEphemeralCache(t, name, podSpec, "100Gi")
 		if got := podEnvironment(podSpec)["PLATFORM_CACHE_PATH"]; got != "/mnt/cache" {
 			t.Fatalf("%s cache path: got %q", name, got)
 		}
@@ -43,8 +41,8 @@ func TestRenderRayJobAddsGenericEphemeralCacheOnlyWhenConfigured(t *testing.T) {
 	}
 }
 
-func TestRenderRayJobOmitsLocalCacheWhenDisabled(t *testing.T) {
-	manifest, err := RenderRayJob(validRenderJob(), testRenderOptions())
+func TestRenderRayJobCapabilityEnabledDoesNotMountCacheForOmittedRequest(t *testing.T) {
+	manifest, err := RenderRayJob(validRenderJob(), runtimeCacheRenderOptions())
 	if err != nil {
 		t.Fatalf("render ray job: %v", err)
 	}
@@ -59,12 +57,30 @@ func TestRenderRayJobOmitsLocalCacheWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestRenderRayJobRejectsRuntimeCacheWhenCapabilityDisabled(t *testing.T) {
+	job := validRenderJob()
+	job.Spec.Cache = domain.CacheRequest{Mode: domain.CacheModeRuntime, Size: "200Gi"}
+	if _, err := RenderRayJob(job, testRenderOptions()); err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Fatalf("expected disabled runtime cache rejection, got %v", err)
+	}
+}
+
+func TestRenderRayJobRejectsRuntimeCacheSizeOutsidePolicy(t *testing.T) {
+	job := validRenderJob()
+	job.Spec.Cache = domain.CacheRequest{Mode: domain.CacheModeRuntime, Size: "300Gi"}
+	if _, err := RenderRayJob(job, runtimeCacheRenderOptions()); err == nil || !strings.Contains(err.Error(), "not allowed") {
+		t.Fatalf("expected disallowed runtime cache rejection, got %v", err)
+	}
+}
+
 func TestRenderRayJobRejectsCacheMountedInsideRayDefaultTempDirectory(t *testing.T) {
 	options := testRenderOptions()
 	options.LocalCache = LocalCacheOptions{
 		Enabled:      true,
 		StorageClass: "ray-cache-local",
-		Size:         "200Gi",
+		AllowedSizes: []string{"200Gi"},
+		DefaultSize:  "200Gi",
+		MaxSize:      "500Gi",
 		MountPath:    "/tmp/ray",
 	}
 	if _, err := RenderRayJob(validRenderJob(), options); err == nil || !strings.Contains(err.Error(), "mount path") {
@@ -72,7 +88,20 @@ func TestRenderRayJobRejectsCacheMountedInsideRayDefaultTempDirectory(t *testing
 	}
 }
 
-func assertGenericEphemeralCache(t *testing.T, podName string, podSpec map[string]any) {
+func runtimeCacheRenderOptions() RenderOptions {
+	options := testRenderOptions()
+	options.LocalCache = LocalCacheOptions{
+		Enabled:      true,
+		StorageClass: "ray-cache-local",
+		AllowedSizes: []string{"100Gi", "200Gi", "500Gi"},
+		DefaultSize:  "200Gi",
+		MaxSize:      "500Gi",
+		MountPath:    "/mnt/cache",
+	}
+	return options
+}
+
+func assertGenericEphemeralCache(t *testing.T, podName string, podSpec map[string]any, expectedSize string) {
 	t.Helper()
 	volumes, _, _ := nestedSlice(podSpec, "volumes")
 	foundVolume := false
@@ -88,7 +117,7 @@ func assertGenericEphemeralCache(t *testing.T, podName string, podSpec map[strin
 		claim := ephemeral["volumeClaimTemplate"].(map[string]any)
 		spec := claim["spec"].(map[string]any)
 		requests := spec["resources"].(map[string]any)["requests"].(map[string]any)
-		if spec["storageClassName"] == "ray-cache-local" && requests["storage"] == "200Gi" {
+		if spec["storageClassName"] == "ray-cache-local" && requests["storage"] == expectedSize {
 			foundVolume = true
 		}
 	}

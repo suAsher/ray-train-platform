@@ -91,6 +91,51 @@ func TestPlatformLimitsReportTheDeploymentCeilingsTheServerEnforces(t *testing.T
 	}
 }
 
+func TestPlatformLimitsExposeEnabledRuntimeCachePolicyDefensively(t *testing.T) {
+	allowed := []string{"100Gi", "200Gi", "500Gi"}
+	handler := NewHandler(&fakeJobRepository{}, Options{LocalCache: LocalCachePolicy{
+		Enabled: true, AllowedSizes: allowed, DefaultSize: "200Gi", MaxSize: "500Gi", MountPath: "/mnt/cache",
+	}})
+	allowed[0] = "1Ti"
+	principal := auth.Principal{Subject: "admin", TenantID: "local", Roles: []string{domain.RoleSuperAdmin}, AuthType: auth.AuthTypeLocal}
+	response := httptest.NewRecorder()
+	limitsRouter(handler, &principal).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/limits", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+	cache := decodePlatformLimits(t, response.Body.Bytes()).Cache
+	if !cache.Enabled || cache.DefaultMode != string(domain.CacheModeOff) || strings.Join(cache.Modes, ",") != "off,runtime" {
+		t.Fatalf("unexpected cache modes: %#v", cache)
+	}
+	if strings.Join(cache.AllowedSizes, ",") != "100Gi,200Gi,500Gi" || cache.DefaultSize != "200Gi" || cache.MaxSize != "500Gi" || cache.MountPath != "/mnt/cache" {
+		t.Fatalf("unexpected cache policy: %#v", cache)
+	}
+	cache.AllowedSizes[0] = "mutated"
+	second := httptest.NewRecorder()
+	limitsRouter(handler, &principal).ServeHTTP(second, httptest.NewRequest(http.MethodGet, "/api/v1/limits", nil))
+	if got := decodePlatformLimits(t, second.Body.Bytes()).Cache.AllowedSizes[0]; got != "100Gi" {
+		t.Fatalf("response exposed mutable cache policy: %q", got)
+	}
+}
+
+func TestPlatformLimitsExposeOnlyOffWhenRuntimeCacheDisabled(t *testing.T) {
+	handler := NewHandler(&fakeJobRepository{}, Options{LocalCache: LocalCachePolicy{
+		AllowedSizes: []string{"100Gi", "200Gi"}, DefaultSize: "200Gi", MaxSize: "500Gi", MountPath: "/mnt/cache",
+	}})
+	principal := auth.Principal{Subject: "admin", TenantID: "local", Roles: []string{domain.RoleSuperAdmin}, AuthType: auth.AuthTypeLocal}
+	response := httptest.NewRecorder()
+	limitsRouter(handler, &principal).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/limits", nil))
+
+	cache := decodePlatformLimits(t, response.Body.Bytes()).Cache
+	if cache.Enabled || cache.DefaultMode != string(domain.CacheModeOff) || strings.Join(cache.Modes, ",") != "off" {
+		t.Fatalf("unexpected disabled cache modes: %#v", cache)
+	}
+	if len(cache.AllowedSizes) != 0 || cache.DefaultSize != "" || cache.MaxSize != "" || cache.MountPath != "" {
+		t.Fatalf("disabled cache policy leaked unavailable choices: %#v", cache)
+	}
+}
+
 // The Portal renders GPU pickers from this payload. Hard-coding a fleet size in
 // the UI is exactly the mismatch that lets a user submit a job the server will
 // reject, so the mount paths and execution profiles ship with the limits.
