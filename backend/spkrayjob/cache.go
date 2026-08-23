@@ -10,13 +10,41 @@ import (
 	"ray-train-platform-backend/domain"
 )
 
-func resolveProjectCache(ctx context.Context, cache projectCache, client *Client) (domain.CacheRequest, error) {
+type projectCacheDraft struct {
+	mode         domain.CacheMode
+	size         string
+	requested    resource.Quantity
+	hasRequested bool
+}
+
+func newProjectCacheDraft(cache projectCache) (projectCacheDraft, error) {
 	mode := domain.CacheMode(strings.TrimSpace(cache.Mode))
 	size := strings.TrimSpace(cache.Size)
-	if err := validateProjectCacheShape(cache); err != nil {
-		return domain.CacheRequest{}, err
+	switch mode {
+	case "", domain.CacheModeOff:
+		if size != "" {
+			return projectCacheDraft{}, errors.New("缓存关闭时不能指定容量；请删除 cache.size 或改用 mode: runtime")
+		}
+		return projectCacheDraft{mode: mode}, nil
+	case domain.CacheModeRuntime:
+		draft := projectCacheDraft{mode: mode, size: size}
+		if size == "" {
+			return draft, nil
+		}
+		requested, err := positiveCacheQuantity(size)
+		if err != nil {
+			return projectCacheDraft{}, fmt.Errorf("缓存容量 %q 无效，必须是正的 Kubernetes 容量：%w", size, err)
+		}
+		draft.requested = requested
+		draft.hasRequested = true
+		return draft, nil
+	default:
+		return projectCacheDraft{}, fmt.Errorf("不支持的缓存模式 %q；可选值为 off 或 runtime", mode)
 	}
-	if mode == "" || mode == domain.CacheModeOff {
+}
+
+func resolveProjectCache(ctx context.Context, draft projectCacheDraft, client *Client) (domain.CacheRequest, error) {
+	if draft.mode == "" || draft.mode == domain.CacheModeOff {
 		return domain.CacheRequest{}, nil
 	}
 	limits, err := client.PlatformLimits(ctx)
@@ -29,15 +57,17 @@ func resolveProjectCache(ctx context.Context, cache projectCache, client *Client
 	if !containsTrimmed(limits.Cache.Modes, string(domain.CacheModeRuntime)) {
 		return domain.CacheRequest{}, errors.New("平台当前不支持 runtime 临时缓存模式")
 	}
-	if size == "" {
+	size := draft.size
+	requested := draft.requested
+	if !draft.hasRequested {
 		size = strings.TrimSpace(limits.Cache.DefaultSize)
 		if size == "" {
 			return domain.CacheRequest{}, errors.New("平台未提供 runtime 临时缓存默认容量，请使用 --cache-size 指定")
 		}
-	}
-	requested, err := positiveCacheQuantity(size)
-	if err != nil {
-		return domain.CacheRequest{}, fmt.Errorf("缓存容量 %q 无效，必须是正的 Kubernetes 容量：%w", size, err)
+		requested, err = positiveCacheQuantity(size)
+		if err != nil {
+			return domain.CacheRequest{}, fmt.Errorf("缓存容量 %q 无效，必须是正的 Kubernetes 容量：%w", size, err)
+		}
 	}
 	maximum, err := positiveCacheQuantity(limits.Cache.MaxSize)
 	if err != nil {
@@ -49,26 +79,10 @@ func resolveProjectCache(ctx context.Context, cache projectCache, client *Client
 	for _, configured := range limits.Cache.AllowedSizes {
 		allowed, err := positiveCacheQuantity(configured)
 		if err == nil && requested.Cmp(allowed) == 0 {
-			return domain.CacheRequest{Mode: domain.CacheModeRuntime, Size: strings.TrimSpace(configured)}, nil
+			return domain.CacheRequest{Mode: draft.mode, Size: strings.TrimSpace(configured)}, nil
 		}
 	}
 	return domain.CacheRequest{}, fmt.Errorf("缓存容量 %q 不在平台允许范围内", size)
-}
-
-func validateProjectCacheShape(cache projectCache) error {
-	mode := domain.CacheMode(strings.TrimSpace(cache.Mode))
-	size := strings.TrimSpace(cache.Size)
-	switch mode {
-	case "", domain.CacheModeOff:
-		if size != "" {
-			return errors.New("缓存关闭时不能指定容量；请删除 cache.size 或改用 mode: runtime")
-		}
-		return nil
-	case domain.CacheModeRuntime:
-		return nil
-	default:
-		return fmt.Errorf("不支持的缓存模式 %q；可选值为 off 或 runtime", mode)
-	}
 }
 
 func containsTrimmed(values []string, want string) bool {

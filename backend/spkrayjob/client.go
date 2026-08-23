@@ -184,6 +184,10 @@ func (client *Client) SubmitDirectory(ctx context.Context, directory string, spe
 		return Job{}, err
 	}
 	defer os.Remove(archive.Path)
+	return client.submitArchive(ctx, archive, spec)
+}
+
+func (client *Client) submitArchive(ctx context.Context, archive Archive, spec domain.JobSpec) (Job, error) {
 	artifact, err := client.CreateArtifact(ctx, archive)
 	if err != nil {
 		return Job{}, err

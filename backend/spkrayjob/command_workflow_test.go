@@ -622,3 +622,114 @@ cache:
 		t.Fatalf("expected the original resume/checkpoint conflict error %q, got %v", want, err)
 	}
 }
+
+func TestSubmitRuntimeCacheInvalidExecutionModeFailsBeforeClientConfiguration(t *testing.T) {
+	root := seedProject(t, `name: cache-training
+image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
+entrypoint: python train.py
+executionMode: invalid
+cache:
+  mode: runtime
+  size: 100Gi
+`)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("local validation must not contact the platform")
+	}))
+	defer server.Close()
+	getenv := func(key string) string {
+		t.Fatalf("local validation must not read credentials or connection settings: %s", key)
+		return ""
+	}
+
+	err := Run(context.Background(), []string{
+		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root,
+	}, &bytes.Buffer{}, &bytes.Buffer{}, getenv)
+	if err == nil || !strings.Contains(err.Error(), `unsupported execution mode "invalid"`) {
+		t.Fatalf("expected the invalid execution mode error, got %v", err)
+	}
+}
+
+func TestSubmitRuntimeCacheMalformedDataLocationFailsBeforeClientConfiguration(t *testing.T) {
+	root := seedProject(t, `name: cache-training
+image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
+entrypoint: python train.py
+input:
+  space: public
+  path: ../secret
+cache:
+  mode: runtime
+  size: 100Gi
+`)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("local validation must not contact the platform")
+	}))
+	defer server.Close()
+	getenv := func(key string) string {
+		t.Fatalf("local validation must not read credentials or connection settings: %s", key)
+		return ""
+	}
+
+	err := Run(context.Background(), []string{
+		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root,
+	}, &bytes.Buffer{}, &bytes.Buffer{}, getenv)
+	if err == nil || !strings.Contains(err.Error(), "storage path contains an unsafe segment") {
+		t.Fatalf("expected the malformed data location error, got %v", err)
+	}
+}
+
+func TestSubmitRuntimeCacheInvalidArchiveFailsBeforeClientConfiguration(t *testing.T) {
+	root := seedProject(t, `name: cache-training
+image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
+entrypoint: python train.py
+cache:
+  mode: runtime
+  size: 100Gi
+`)
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("local validation must not contact the platform")
+	}))
+	defer server.Close()
+	getenv := func(key string) string {
+		t.Fatalf("local validation must not read credentials or connection settings: %s", key)
+		return ""
+	}
+
+	err := Run(context.Background(), []string{
+		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root,
+	}, &bytes.Buffer{}, &bytes.Buffer{}, getenv)
+	if err == nil || !strings.Contains(err.Error(), "source symlink escapes source directory") {
+		t.Fatalf("expected the invalid archive error, got %v", err)
+	}
+}
+
+func TestSubmitRuntimeCacheMalformedSizeFailsBeforeClientConfiguration(t *testing.T) {
+	root := seedProject(t, `name: cache-training
+image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
+entrypoint: python train.py
+cache:
+  mode: runtime
+  size: definitely-not-a-size
+`)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("local validation must not contact the platform")
+	}))
+	defer server.Close()
+	getenv := func(key string) string {
+		t.Fatalf("local validation must not read credentials or connection settings: %s", key)
+		return ""
+	}
+
+	err := Run(context.Background(), []string{
+		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root,
+	}, &bytes.Buffer{}, &bytes.Buffer{}, getenv)
+	if err == nil || !strings.Contains(err.Error(), "Kubernetes") {
+		t.Fatalf("expected the malformed cache size error, got %v", err)
+	}
+}
