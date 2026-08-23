@@ -77,7 +77,7 @@ func isDNSLabel(value string) bool {
 }
 
 // defaultImage picks the training environment when the user did not name one.
-// Pasting a sha256 digest by hand is the most error-prone part of a
+// Pasting an approved image reference by hand is one of the most error-prone parts of a
 // submission, and the catalogue already records which entry is the default.
 func defaultImage(images []catalogImage) (string, error) {
 	usable := make([]catalogImage, 0, len(images))

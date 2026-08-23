@@ -47,10 +47,10 @@ memoryPerWorker: definitely-not-memory
 		{
 			name: "supplied image",
 			project: `name: invalid-image
-image: harbor.example/train:latest
+image: harbor.example/train
 entrypoint: python train.py
 `,
-			wantError: "image must be pinned by sha256 digest",
+			wantError: "image must include an explicit tag or sha256 digest",
 		},
 	}
 	for _, test := range tests {
@@ -100,6 +100,32 @@ func TestSubmitWithDerivedNameAndPlatformDefaultImageStillNeedsNoJobOptions(t *t
 	}
 }
 
+func TestSubmitAcceptsExplicitTaggedPlatformImage(t *testing.T) {
+	root := seedProject(t, "entrypoint: python train.py\n")
+	var submitted domain.JobSpec
+	stub := artifactStubHandler(t, func(spec domain.JobSpec) { submitted = spec })
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v1/images" {
+			writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
+				"name": "tagged-default", "reference": "harbor.example/train:production", "isDefault": true,
+			}})
+			return
+		}
+		stub(writer, request)
+	}))
+	defer server.Close()
+
+	err := Run(context.Background(), []string{
+		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root,
+	}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+	if err != nil {
+		t.Fatalf("submit with catalogued tagged image failed: %v", err)
+	}
+	if submitted.Image != "harbor.example/train:production" {
+		t.Fatalf("expected tagged platform image, got %q", submitted.Image)
+	}
+}
+
 func TestSubmitValidatesResolvedPlatformImageBeforeArtifactCreation(t *testing.T) {
 	root := seedProject(t, "entrypoint: python train.py\n")
 	artifactCreated := false
@@ -107,7 +133,7 @@ func TestSubmitValidatesResolvedPlatformImageBeforeArtifactCreation(t *testing.T
 		switch request.URL.Path {
 		case "/api/v1/images":
 			writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
-				"name": "invalid-default", "reference": "harbor.example/train:latest", "isDefault": true,
+				"name": "invalid-default", "reference": "harbor.example/train", "isDefault": true,
 			}})
 		case "/api/v1/source-artifacts":
 			artifactCreated = true
@@ -124,7 +150,7 @@ func TestSubmitValidatesResolvedPlatformImageBeforeArtifactCreation(t *testing.T
 	if artifactCreated {
 		t.Fatal("invalid resolved image must fail before artifact creation")
 	}
-	if err == nil || !strings.Contains(err.Error(), "image must be pinned by sha256 digest") {
+	if err == nil || !strings.Contains(err.Error(), "image must include an explicit tag or sha256 digest") {
 		t.Fatalf("expected final local domain validation error, got %v", err)
 	}
 }

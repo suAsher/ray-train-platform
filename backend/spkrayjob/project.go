@@ -11,8 +11,8 @@ import (
 )
 
 // projectFileName is committed next to the training code. It turns the daily
-// loop into "edit, then run spk-rayjob submit" instead of retyping an image
-// digest, GPU layout and data paths on every iteration.
+// loop into "edit, then run spk-rayjob submit" instead of retyping an approved
+// image reference, GPU layout and data paths on every iteration.
 const projectFileName = ".spk-rayjob.yaml"
 
 type projectLocation struct {

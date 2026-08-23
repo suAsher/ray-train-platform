@@ -309,7 +309,7 @@ func (client *Client) submit(ctx context.Context, spec domain.JobSpec, origin do
 }
 
 // TrainingImages returns the administrator-approved training environments so
-// the CLI can pick the default one instead of asking the user for a digest.
+// the CLI can pick the default one instead of asking the user for a reference.
 func (client *Client) TrainingImages(ctx context.Context) ([]catalogImage, error) {
 	raw, err := client.request(ctx, http.MethodGet, "/api/v1/images?kind=training", nil, nil)
 	if err != nil {
