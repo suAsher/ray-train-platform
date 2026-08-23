@@ -5,6 +5,7 @@ import * as platformLimits from './platformLimits.js'
 
 const {
   adminQuotaModel,
+  cacheQueryForJob,
   clampResources,
   defaultPlatformLimits,
   jobQuotaModel,
@@ -237,6 +238,44 @@ test('invalid copied cache query values stay off instead of adopting a different
 
   assert.deepEqual(
     normalizeCacheSelection({ cacheMode: 'runtime', cacheSize: '200Gi' }, policy),
+    { cacheMode: 'off', cacheSize: '' },
+  )
+})
+
+test('legacy rerun and resume omit cache query values and start off after policy load', () => {
+  const policy = normalizeCachePolicy({
+    enabled: true,
+    defaultMode: 'off',
+    modes: ['off', 'runtime'],
+    allowedSizes: ['100Gi', '200Gi'],
+    defaultSize: '200Gi',
+    maxSize: '200Gi',
+    mountPath: '/mnt/cache',
+  })
+  const copiedQuery = cacheQueryForJob({ spec: {} })
+
+  assert.deepEqual(copiedQuery, {})
+  assert.deepEqual(normalizeCacheSelection(copiedQuery, policy), { cacheMode: 'off', cacheSize: '' })
+})
+
+test('runtime rerun and resume preserve only explicitly forwarded cache valid under current policy', () => {
+  const copiedQuery = cacheQueryForJob({
+    spec: { cache: { mode: 'runtime', size: '200Gi' } },
+  })
+  const currentPolicy = normalizeCachePolicy({
+    enabled: true,
+    defaultMode: 'off',
+    modes: ['off', 'runtime'],
+    allowedSizes: ['100Gi', '200Gi'],
+    defaultSize: '100Gi',
+    maxSize: '200Gi',
+    mountPath: '/mnt/cache',
+  })
+
+  assert.deepEqual(copiedQuery, { cacheMode: 'runtime', cacheSize: '200Gi' })
+  assert.deepEqual(normalizeCacheSelection(copiedQuery, currentPolicy), copiedQuery)
+  assert.deepEqual(
+    normalizeCacheSelection(copiedQuery, { ...currentPolicy, allowedSizes: ['100Gi'] }),
     { cacheMode: 'off', cacheSize: '' },
   )
 })

@@ -47,6 +47,7 @@
 <script setup>
 import { computed } from 'vue'
 
+import { equivalentSubmitCommand } from '../../submission'
 import CopyBlock from '../CopyBlock.vue'
 
 const props = defineProps({
@@ -77,22 +78,5 @@ const cacheSummary = computed(() => {
   return `运行时 · ${size} · 挂载到 ${mountPath}`
 })
 
-// The same job as a copy-pasteable CLI invocation. It is the bridge between the
-// two submission paths: whatever a user composes here, they can rerun from a
-// terminal without rebuilding the request by hand.
-const cliCommand = computed(() => {
-  const parts = ['spk-rayjob submit', `--name ${props.form.name || '<任务名>'}`, `--image ${props.form.image || '<镜像 digest>'}`]
-  parts.push(`--entrypoint '${props.form.entrypoint || '<启动命令>'}'`)
-  parts.push(`--workers ${props.form.workerReplicas}`, `--gpus-per-worker ${props.form.gpusPerWorker}`)
-  if (props.form.input?.spaceId) {
-    parts.push(`--input-space ${props.form.input.spaceId}`)
-    if (props.form.input.relativePath) parts.push(`--input-path ${props.form.input.relativePath}`)
-  }
-  if (props.form.checkpoint?.spaceId) {
-    parts.push(`--checkpoint-space ${props.form.checkpoint.spaceId}`)
-    if (props.form.checkpoint.relativePath) parts.push(`--checkpoint-path ${props.form.checkpoint.relativePath}`)
-  }
-  parts.push('--watch')
-  return parts.join(' \\\n  ')
-})
+const cliCommand = computed(() => equivalentSubmitCommand(props.form))
 </script>

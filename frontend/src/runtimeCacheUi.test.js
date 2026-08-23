@@ -51,8 +51,8 @@ test('copy and resubmit carry cache query values while the form validates them a
   ])
 
   for (const source of [listSource, detailSource]) {
-    assert.match(source, /cacheMode/)
-    assert.match(source, /cacheSize/)
+    assert.match(source, /cacheQueryForJob/)
+    assert.match(source, /\.\.\.cacheQueryForJob\(/)
   }
   assert.match(formSource, /route\?\.query\?\.cacheMode/)
   assert.match(formSource, /route\?\.query\?\.cacheSize/)

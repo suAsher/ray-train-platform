@@ -264,6 +264,7 @@ import { userId } from '../../stores/session'
 import { canOpenRayDashboard, jobDashboardAccessPath } from '../../jobDashboard'
 import { buildLogStreamCards } from '../../jobLogStreams'
 import { latestMetric, metricSeries, sparklinePoints } from '../../mlflowExperiment'
+import { cacheQueryForJob } from '../../platformLimits'
 
 const route = useRoute()
 const router = useRouter()
@@ -455,8 +456,7 @@ const resumeFromCheckpoint = () => {
       name: jobDetail.value?.name,
       image: jobDetail.value?.spec?.image,
       entrypoint: jobDetail.value?.entrypoint,
-      cacheMode: jobDetail.value?.spec?.cache?.mode,
-      cacheSize: jobDetail.value?.spec?.cache?.size,
+      ...cacheQueryForJob(jobDetail.value),
     },
   })
 }
@@ -468,8 +468,7 @@ const rerunJob = () => {
       name: jobDetail.value?.name,
       image: jobDetail.value?.spec?.image,
       entrypoint: jobDetail.value?.entrypoint,
-      cacheMode: jobDetail.value?.spec?.cache?.mode,
-      cacheSize: jobDetail.value?.spec?.cache?.size,
+      ...cacheQueryForJob(jobDetail.value),
     },
   })
 }

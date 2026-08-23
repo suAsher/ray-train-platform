@@ -11,6 +11,26 @@ export function parseEntrypoint(value) {
   return parts
 }
 
+/** Build the copyable spk-rayjob command shown in the final submit preview. */
+export function equivalentSubmitCommand(form) {
+  const parts = ['spk-rayjob submit', `--name ${form.name || '<任务名>'}`, `--image ${form.image || '<镜像 digest>'}`]
+  parts.push(`--entrypoint '${form.entrypoint || '<启动命令>'}'`)
+  parts.push(`--workers ${form.workerReplicas}`, `--gpus-per-worker ${form.gpusPerWorker}`)
+  if (form.cacheMode === 'runtime') {
+    parts.push('--cache-mode runtime', `--cache-size ${String(form.cacheSize || '<缓存容量>').trim()}`)
+  }
+  if (form.input?.spaceId) {
+    parts.push(`--input-space ${form.input.spaceId}`)
+    if (form.input.relativePath) parts.push(`--input-path ${form.input.relativePath}`)
+  }
+  if (form.checkpoint?.spaceId) {
+    parts.push(`--checkpoint-space ${form.checkpoint.spaceId}`)
+    if (form.checkpoint.relativePath) parts.push(`--checkpoint-path ${form.checkpoint.relativePath}`)
+  }
+  parts.push('--watch')
+  return parts.join(' \\\n  ')
+}
+
 export function buildJobSpec(form, platformLimits = {}) {
   const command = parseEntrypoint(form.entrypoint)
   if (command.length === 0) {

@@ -64,6 +64,15 @@ export function normalizeCacheSelection(selection, policy, { selectRuntimeDefaul
     : { cacheMode: 'off', cacheSize: '' }
 }
 
+/** Forward only an explicit, complete runtime cache request into copy/resubmit. */
+export function cacheQueryForJob(job) {
+  const mode = String(job?.spec?.cache?.mode || '').trim()
+  const size = String(job?.spec?.cache?.size || '').trim()
+  return mode === 'runtime' && size
+    ? { cacheMode: 'runtime', cacheSize: size }
+    : {}
+}
+
 function normalizedStrings(values) {
   if (!Array.isArray(values)) return []
   return [...new Set(values.map((value) => String(value || '').trim()).filter(Boolean))]

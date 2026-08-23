@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { buildJobSpec, parseEntrypoint } from './submission.js'
+import * as submission from './submission.js'
+
+const { buildJobSpec, equivalentSubmitCommand, parseEntrypoint } = submission
 
 const baseForm = () => ({
   name: 'support-sft-001',
@@ -137,4 +139,22 @@ test('buildJobSpec rejects runtime cache disabled or disallowed by the loaded se
   assert.throws(() => buildJobSpec(form, cacheLimits({ enabled: false })), /未开放运行时缓存/)
   assert.throws(() => buildJobSpec(form, cacheLimits({ modes: ['off'] })), /未开放运行时缓存/)
   assert.throws(() => buildJobSpec(form, cacheLimits({ allowedSizes: ['100Gi'] })), /不在平台允许范围/)
+})
+
+test('equivalent submit command includes the selected runtime cache flags', () => {
+  const command = equivalentSubmitCommand({
+    ...baseForm(),
+    cacheMode: 'runtime',
+    cacheSize: '200Gi',
+  })
+
+  assert.match(command, /--cache-mode runtime \\\n  --cache-size 200Gi/)
+})
+
+test('equivalent submit command omits cache flags for off and legacy forms', () => {
+  const off = equivalentSubmitCommand({ ...baseForm(), cacheMode: 'off', cacheSize: '' })
+  const legacy = equivalentSubmitCommand(baseForm())
+
+  assert.doesNotMatch(off, /--cache-(?:mode|size)/)
+  assert.doesNotMatch(legacy, /--cache-(?:mode|size)/)
 })
