@@ -72,7 +72,7 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if err := domain.ValidatePinnedImage(image); err != nil {
+	if err := domain.ValidateRuntimeImage(image); err != nil {
 		h.writeError(c, http.StatusBadRequest, "WORKSPACE_IMAGE_REQUIRED", err.Error())
 		return
 	}

@@ -125,6 +125,31 @@ func TestRenderDevRayClusterAllowsMultiGPUWorker(t *testing.T) {
 	}
 }
 
+func TestRenderDevRayClusterPullsTaggedImagesEveryStart(t *testing.T) {
+	workspace := domain.DevWorkspace{ID: "ws-1", TenantID: "tenant-a", UserID: "user-a", Name: "debug-a", Namespace: "tenant-a", RayClusterName: "debug-a", GPUCount: 1, State: domain.WorkspaceSubmitted}
+	manifest, err := RenderDevRayCluster(workspace, WorkspaceRenderOptions{Image: "registry.example/team/workspace:cuda121"})
+	if err != nil {
+		t.Fatalf("render tagged dev image: %v", err)
+	}
+	for group, path := range map[string][]string{
+		"head":   {"spec", "headGroupSpec", "template", "spec", "containers"},
+		"worker": {"spec", "workerGroupSpecs", "0", "template", "spec", "containers"},
+	} {
+		var containers []any
+		if group == "head" {
+			containers, _, _ = nestedSlice(manifest.Object, path...)
+		} else {
+			workers, _, _ := nestedSlice(manifest.Object, "spec", "workerGroupSpecs")
+			worker := workers[0].(map[string]any)
+			containers, _, _ = nestedSlice(worker, "template", "spec", "containers")
+		}
+		container := containers[0].(map[string]any)
+		if container["imagePullPolicy"] != "Always" {
+			t.Fatalf("%s must refresh a tagged image, got %#v", group, container)
+		}
+	}
+}
+
 // Once a personal data mount is ready, both editors must open the same
 // persistent workspace that will later be snapshotted for a training job.
 // Opening /home/ray would make the user start in an ephemeral image layer and

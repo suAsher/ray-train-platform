@@ -45,9 +45,9 @@ func (i PlatformImage) Validate() error {
 	if err := ValidateImageKind(i.Kind); err != nil {
 		return err
 	}
-	// The catalogue exists to make runs reproducible, so a mutable tag is
-	// rejected here just as it is on the job submission path.
-	if err := ValidatePinnedImage(i.Reference); err != nil {
+	// Administrators may publish either an immutable digest or an explicit tag.
+	// The workload renderer always refreshes tagged images from the registry.
+	if err := ValidateRuntimeImage(i.Reference); err != nil {
 		return fmt.Errorf("image reference: %w", err)
 	}
 	return nil

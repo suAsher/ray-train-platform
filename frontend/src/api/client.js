@@ -33,4 +33,5 @@ export async function apiFetch(path, options = {}) {
 
 export const apiGet = (path) => apiFetch(path)
 export const apiPost = (path, data, options = {}) => apiFetch(path, { ...options, method: 'POST', body: JSON.stringify(data) })
+export const apiPatch = (path, data, options = {}) => apiFetch(path, { ...options, method: 'PATCH', body: JSON.stringify(data) })
 export const apiDelete = (path) => apiFetch(path, { method: 'DELETE' })

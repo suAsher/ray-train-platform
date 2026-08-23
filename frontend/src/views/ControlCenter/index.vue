@@ -10,7 +10,7 @@
       <div class="flex items-center justify-between">
         <div>
           <h3 class="text-sm font-bold text-slate-200">运行中的 Ray 训练任务</h3>
-          <p class="text-xs text-slate-500 mt-1">状态来自 PostgreSQL 中的 KubeRay reconciler 快照。</p>
+          <p class="text-xs text-slate-500 mt-1">超级管理员查看全平台任务；普通用户仅查看本团队。任务结束后的 RayCluster 在清理窗口内仍可能计入物理已分配 GPU。</p>
         </div>
         <el-button icon="Refresh" @click="refresh">刷新</el-button>
       </div>

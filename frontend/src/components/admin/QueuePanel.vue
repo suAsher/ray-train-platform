@@ -6,7 +6,7 @@
           <el-icon class="text-amber-400"><Clock /></el-icon> 队列与运行中的任务
         </h4>
         <p class="mt-1 text-xs text-slate-400">
-          集群满载或租户超配额时，新任务由 Kueue 组调度排队。这里只能取消或停止当前租户的任务，其他租户任务为只读。
+          集群满载或团队超配额时，新任务由 Kueue 组调度排队。超级管理员可查看并停止任意团队任务；团队管理员仅管理本团队。
         </p>
       </div>
       <el-tag type="warning" size="small">Kueue Gang Scheduling 生效中</el-tag>
@@ -57,27 +57,27 @@
 <script setup>
 import { computed } from 'vue'
 
-import { queueJobAction } from './queuePanelActions.js'
+import { queueJobAction, queuePanelStats } from './queuePanelActions.js'
 
 const props = defineProps({
   jobs: { type: Array, default: () => [] },
   clusterGPUs: { type: Number, default: 0 },
+  physicalAllocatedGPUs: { type: Number, default: 0 },
   currentTenantId: { type: String, default: '' },
+  isSuperAdmin: { type: Boolean, default: false },
 })
 
 defineEmits(['cancel-job'])
 
-const actionFor = (job) => queueJobAction(job, props.currentTenantId)
+const actionFor = (job) => queueJobAction(job, props.currentTenantId, props.isSuperAdmin)
 
 const cards = computed(() => {
-  const running = props.jobs.filter((job) => job.state === 'RUNNING')
-  const queued = props.jobs.filter((job) => job.state !== 'RUNNING')
-  const busyGPUs = running.reduce((total, job) => total + (job.gpus || 0), 0)
+  const stats = queuePanelStats(props.jobs, props.clusterGPUs, props.physicalAllocatedGPUs)
   return [
-    { label: '运行中', value: running.length, tone: 'text-blue-400' },
-    { label: '排队中', value: queued.length, tone: 'text-amber-400' },
-    { label: '占用 GPU', value: `${busyGPUs} / ${props.clusterGPUs}`, tone: 'text-emerald-400' },
-    { label: '排队等待 GPU', value: queued.reduce((total, job) => total + (job.gpus || 0), 0), tone: 'text-slate-100' },
+    { label: '运行中任务', value: stats.runningJobs, tone: 'text-blue-400' },
+    { label: '排队 / 准备', value: stats.waitingJobs, tone: 'text-amber-400' },
+    { label: '任务申请 GPU', value: `${stats.activeRequestedGPUs} / ${stats.clusterGPUs}`, tone: 'text-emerald-400' },
+    { label: stats.releasingGPUs > 0 ? '物理已分配（含释放中）' : '物理已分配 GPU', value: stats.physicalAllocatedGPUs, tone: 'text-slate-100' },
   ]
 })
 </script>

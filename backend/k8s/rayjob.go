@@ -414,7 +414,7 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 		"containers": []any{map[string]any{
 			"name":            containerName,
 			"image":           image,
-			"imagePullPolicy": "IfNotPresent",
+			"imagePullPolicy": domain.RuntimeImagePullPolicy(image),
 			"workingDir":      "/workspace",
 			"resources":       resources,
 			"env":             env,

@@ -95,6 +95,13 @@ class DocumentationContractTest(unittest.TestCase):
             guide.index("platform_mlflow = start_platform_mlflow"),
         )
 
+    def test_image_catalog_docs_allow_tags_and_document_scope_changes(self) -> None:
+        admin = (ROOT / "docs" / "ADMIN_GUIDE.md").read_text(encoding="utf-8")
+        self.assertIn("支持显式 tag", admin)
+        self.assertIn("设为全平台", admin)
+        self.assertIn("改为本团队", admin)
+        self.assertNotIn("必须带 `@sha256:` digest", admin)
+
     def test_bevfusion_guide_documents_reported_operational_gaps(self) -> None:
         guide = (ROOT / "docs" / "BEVFUSION_END_TO_END_GUIDE.md").read_text(
             encoding="utf-8"
@@ -132,6 +139,52 @@ class DocumentationContractTest(unittest.TestCase):
                 with self.subTest(row=row):
                     self.assertIn("smoke-128", row)
         self.assertNotRegex(guide, r"https://oauth2:[^@\s]+@gitlab")
+
+    def test_bevfusion_guide_captures_first_run_failure_lessons(self) -> None:
+        guide = (ROOT / "docs" / "BEVFUSION_END_TO_END_GUIDE.md").read_text(
+            encoding="utf-8"
+        )
+        required = (
+            "final_merged_nuscenes_infos_train.pkl",
+            "当前 CLI 不支持 `--job-id`",
+            "spk-rayjob jobs --output json",
+            "`--config` 是登录认证 JSON",
+            "`.spk-rayjob.yaml` 是任务默认值",
+            "`statusMessage`",
+            "不保证包含完整 traceback",
+            "1 卡探针调试",
+            "platform_directory_probe.py",
+            "platform_mlflow_probe.py",
+            "platform_result_probe.py",
+            "7～9 分钟",
+            "working directory archive",
+            "与 Git commit 状态无关",
+            "dynamic loss scale",
+            "一个 2×8",
+            "未发布的本地 commit 不能作为交付链接",
+        )
+        for marker in required:
+            with self.subTest(marker=marker):
+                self.assertIn(marker, guide)
+
+        self.assertRegex(
+            guide,
+            re.escape("0429_pkl/fz/merged_nuscenes_infos_*.pkl")
+            + r".*?根目录.*?留空",
+        )
+        self.assertRegex(
+            guide,
+            r"platform-validation/annotations/fz-0429-platform-smoke-128/.*?bevfusion/fz-3dod-v1",
+        )
+        for script_name in (
+            "platform_directory_probe.py",
+            "platform_mlflow_probe.py",
+            "platform_result_probe.py",
+        ):
+            marker = f"`tools/{script_name}`"
+            fence = guide.index("```python", guide.index(marker)) + len("```python")
+            end = guide.index("```", fence)
+            compile(guide[fence:end], script_name, "exec")
 
     def test_mlflow_probe_runbook_explains_failure_semantics_and_placement(self) -> None:
         runbook = (ROOT / "ops" / "mlflow" / "README.md").read_text(
@@ -339,15 +392,13 @@ class DocumentationContractTest(unittest.TestCase):
         self.assertIn('"ray-platform.cpu-per-worker":"64"', submit)
         self.assertIn('"ray-platform.memory-per-worker":"256Gi"', submit)
 
-    def test_rayignore_uses_verified_root_anchoring(self) -> None:
+    def test_rayignore_omits_verified_overbroad_data_rules(self) -> None:
         guide = (ROOT / "docs" / "BEVFUSION_END_TO_END_GUIDE.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("根锚定规则有效", guide)
-        self.assertIn("/datasets/", guide)
+        self.assertIn("带前导 `/` 的同名写法都可能误伤", guide)
         self.assertIn("mmdet3d/datasets", guide)
-        self.assertNotIn("开头增加 `/` 在当前 CLI 中无效", guide)
-        self.assertNotRegex(guide, r"(?m)^(?:data|datasets|work_dirs)/$")
+        self.assertNotRegex(guide, r"(?m)^/?(?:data|datasets|work_dirs)/$")
 
     def test_code_fences_are_balanced(self) -> None:
         unbalanced = []

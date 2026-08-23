@@ -97,6 +97,28 @@ func TestRenderRayJobProducesKueueManagedRayJob(t *testing.T) {
 	}
 }
 
+func TestRenderRayJobPullsTaggedTrainingImagesEveryStart(t *testing.T) {
+	job := validRenderJob()
+	job.Spec.Image = "registry.example/team/ray-train:cuda121"
+	manifest, err := RenderRayJob(job, testRenderOptions())
+	if err != nil {
+		t.Fatalf("render tagged training image: %v", err)
+	}
+	spec, _, _ := nestedMap(manifest.Object, "spec")
+	cluster, _, _ := nestedMap(spec, "rayClusterSpec")
+	headPod, _, _ := nestedMap(cluster, "headGroupSpec", "template", "spec")
+	workers, _, _ := nestedSlice(cluster, "workerGroupSpecs")
+	worker := workers[0].(map[string]any)
+	workerPod, _, _ := nestedMap(worker, "template", "spec")
+	for name, pod := range map[string]map[string]any{"head": headPod, "worker": workerPod} {
+		containers, _, _ := nestedSlice(pod, "containers")
+		container := containers[0].(map[string]any)
+		if container["imagePullPolicy"] != "Always" {
+			t.Fatalf("%s must refresh a tagged training image, got %#v", name, container)
+		}
+	}
+}
+
 func TestRenderRayJobUsesJobIDSoDisplayNamesCanRepeat(t *testing.T) {
 	first := validRenderJob()
 	second := validRenderJob()

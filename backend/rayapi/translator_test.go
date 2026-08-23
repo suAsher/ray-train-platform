@@ -186,7 +186,7 @@ func TestTranslateSubmitRequestRejectsMissingOrInvalidMetadata(t *testing.T) {
 		runtimeEnv map[string]any
 	}{
 		{name: "missing image", mutate: func(metadata map[string]string) { delete(metadata, "ray-platform.image") }},
-		{name: "unpinned image", mutate: func(metadata map[string]string) { metadata["ray-platform.image"] = "registry.example/ray:latest" }},
+		{name: "image without tag or digest", mutate: func(metadata map[string]string) { metadata["ray-platform.image"] = "registry.example/ray" }},
 		{name: "fractional replicas", mutate: func(metadata map[string]string) { metadata["ray-platform.worker-replicas"] = "1.5" }},
 		{name: "too many GPUs", mutate: func(metadata map[string]string) { metadata["ray-platform.gpus-per-worker"] = "9" }},
 		{name: "zero CPU", mutate: func(metadata map[string]string) { metadata["ray-platform.cpu-per-worker"] = "0" }},

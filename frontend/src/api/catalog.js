@@ -1,4 +1,4 @@
-import { apiDelete, apiGet, apiPost } from './client'
+import { apiDelete, apiGet, apiPatch, apiPost } from './client'
 
 /** Runtime environments an administrator has published. */
 export function fetchImages(kind) {
@@ -7,6 +7,10 @@ export function fetchImages(kind) {
 
 export function createImage(payload) {
   return apiPost('/api/v1/images', payload)
+}
+
+export function updateImageScope(id, shared, targetTenantId = '') {
+  return apiPatch(`/api/v1/images/${id}`, { shared, targetTenantId })
 }
 
 export function deleteImage(id) {

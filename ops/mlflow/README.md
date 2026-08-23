@@ -9,7 +9,7 @@
 - Artifact：通过 FSX CSI 将 `vke-cluster/ray-train/platform/mlflow-artifacts/` 作为独立 RWX 文件系统根挂载给 MLflow。`kube-system/csi-fsx-node` DaemonSet 必须使用 `CREDENTIALS_TYPE=IRSA` 且 `ROLE_NAME_FOR_IRSA` 非空；MLflow Pod、PV、PVC 和 Ray Pod 均不包含 AK/SK 或 Secret 引用。
 - 可用性：2 个副本，使用 `accelerator=nvidia-rtx-4090` 且 `platform.wellspiking.ai/gpu-pool=production` 的生产 GPU 训练节点 CPU/内存并跨节点硬反亲和，PDB `minAvailable: 1`。MLflow 不申请 `nvidia.com/gpu`，不会占用训练卡；PostgreSQL 和轻量 ingest 仍放在 CPU/control-plane 节点。
 - 网络：全部为 ClusterIP。平台后端和 Prometheus 可访问 MLflow 5000；带平台托管标签的租户 namespace 只能访问 `mlflow-ingest:8080` 写入网关，不能直连 MLflow。数据库只允许 MLflow 与迁移 Job 访问。
-- 写入边界：网关只开放实验创建、run 创建/更新、参数、指标和 tag 写入所需接口；搜索、列表和 Artifact 下载一律拒绝。网关将 MLflow Python 客户端的 `/api/2.0/...` 请求翻译到 Tracking Server 的 `/mlflow/api/2.0/...` 子路径。平台后端用 HMAC 任务来源标签和数据库归属做二次校验。
+- 写入边界：网关只开放实验创建、run 创建/更新、参数、指标和 tag 写入所需接口；搜索、列表和 Artifact 下载一律拒绝。新团队首次创建实验时，MLflow Python 客户端会在 `get-by-name -> create` 之后再调用一次 `experiments/get`，因此这三个端点必须同时放行；缺少最后一个会使首个训练任务收到 403。网关将 MLflow Python 客户端的 `/api/2.0/...` 请求翻译到 Tracking Server 的 `/mlflow/api/2.0/...` 子路径。平台后端用 HMAC 任务来源标签和数据库归属做二次校验。
 - 浏览器边界：MLflow Service 始终为 ClusterIP，不创建 NodePort、不创建独立 Ingress。Frontend 的 `/mlflow/` 路由进入 Backend；Backend 校验平台登录、交换一次性票据并代理完整 UI/API。
 - 子路径：Tracking Server 使用 `--static-prefix /mlflow`，页面资源、API 和重定向都保持在 `/mlflow/` 下；升级 MLflow 后必须重新执行页面、CRUD、模型注册和 Artifact 回归。
 - 权限策略：原生 MLflow 全功能开放是当前明确策略。所有平台认证用户进入后可查看全平台实验，创建、修改、删除实验、Run 和模型注册条目，并上传、下载 MLflow Artifact；平台只记录入口主体和操作元数据，不做功能裁剪。

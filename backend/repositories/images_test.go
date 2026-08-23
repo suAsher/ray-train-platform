@@ -121,12 +121,12 @@ func TestListImagesOrdersTenantDefaultBeforeSharedDefault(t *testing.T) {
 	}
 }
 
-func TestCreateImageRejectsMutableTag(t *testing.T) {
+func TestCreateImageAcceptsExplicitTag(t *testing.T) {
 	repo := imageRepo(t)
-	image := testImage("img-1", "loose", domain.ImageKindTraining, "", false, '1')
-	image.Reference = "registry.example/img:latest"
-	if err := repo.CreateImage(context.Background(), image); err == nil {
-		t.Fatalf("a mutable tag must be rejected so runs stay reproducible")
+	image := testImage("img-1", "tagged", domain.ImageKindTraining, "", false, '1')
+	image.Reference = "registry.example/team/img:release-2026-08"
+	if err := repo.CreateImage(context.Background(), image); err != nil {
+		t.Fatalf("an explicit tag published by an administrator must be accepted: %v", err)
 	}
 }
 
@@ -155,5 +155,35 @@ func TestDeleteImageProtectsSharedCatalogueFromTenantAdmins(t *testing.T) {
 	}
 	if err := repo.DeleteImage(ctx, "team-a", "img-shared", true); err != nil {
 		t.Fatalf("a super admin must be able to delete it: %v", err)
+	}
+}
+
+func TestSetImageSharedMovesBetweenTenantAndPlatformScopes(t *testing.T) {
+	repo := imageRepo(t)
+	ctx := context.Background()
+	_ = repo.CreateImage(ctx, testImage("img-team", "team runtime", domain.ImageKindTraining, "team-a", true, '1'))
+
+	shared, err := repo.SetImageShared(ctx, "team-a", "img-team", true, "")
+	if err != nil {
+		t.Fatalf("promote image to platform scope: %v", err)
+	}
+	if shared.TenantID != "" {
+		t.Fatalf("shared image must have an empty tenant ID, got %+v", shared)
+	}
+	visibleToOtherTeam, err := repo.ListImages(ctx, "team-b", domain.ImageKindTraining)
+	if err != nil || len(visibleToOtherTeam) != 1 || visibleToOtherTeam[0].ID != "img-team" {
+		t.Fatalf("platform image must be visible to another team, got %+v err=%v", visibleToOtherTeam, err)
+	}
+
+	teamOnly, err := repo.SetImageShared(ctx, "team-a", "img-team", false, "team-a")
+	if err != nil {
+		t.Fatalf("demote image to team scope: %v", err)
+	}
+	if teamOnly.TenantID != "team-a" {
+		t.Fatalf("team image must return to the acting administrator's team, got %+v", teamOnly)
+	}
+	visibleToOtherTeam, err = repo.ListImages(ctx, "team-b", domain.ImageKindTraining)
+	if err != nil || len(visibleToOtherTeam) != 0 {
+		t.Fatalf("team image must not leak to another team, got %+v err=%v", visibleToOtherTeam, err)
 	}
 }

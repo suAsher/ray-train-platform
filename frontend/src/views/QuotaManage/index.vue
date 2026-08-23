@@ -52,7 +52,10 @@
           <CatalogPanel
             :images="catalogImages"
             :credentials="gitCredentials"
+            :is-super-admin="isSuperAdmin"
+            :current-tenant-id="currentTenantId"
             @create-image="showAddImageModal = true"
+            @edit-scope="changeImageScope"
             @remove-image="removeImage"
             @create-credential="showAddCredentialModal = true"
             @remove-credential="removeCredential"
@@ -72,7 +75,9 @@
           <QueuePanel
             :jobs="activeJobs"
             :cluster-g-p-us="clusterGPUs"
+            :physical-allocated-g-p-us="physicalAllocatedGPUs"
             :current-tenant-id="currentTenantId"
+            :is-super-admin="isSuperAdmin"
             @cancel-job="cancelJob"
           />
         </div>
@@ -103,8 +108,9 @@
             <el-option label="交互式调试" value="workspace" />
           </el-select>
         </el-form-item>
-        <el-form-item label="镜像（必须带 @sha256 digest）">
-          <el-input v-model="newImage.reference" placeholder="registry/repo@sha256:..." />
+        <el-form-item label="镜像（显式 tag 或 @sha256 digest）">
+          <el-input v-model="newImage.reference" placeholder="registry/project/image:tag 或 registry/project/image@sha256:..." />
+          <p class="mt-1 text-[11px] text-slate-500">tag 便于日常迭代，每次启动都会重新拉取；正式基线推荐使用不可变 digest。</p>
         </el-form-item>
         <el-form-item label="框架标注"><el-input v-model="newImage.framework" placeholder="可选，例如 PyTorch / BEVFusion" /></el-form-item>
         <div class="flex gap-6">
@@ -225,7 +231,7 @@ import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { apiDelete, apiGet, apiPost } from '../../api/client'
-import { createGitCredential, createImage, createTenant, deleteGitCredential, deleteImage, fetchGitCredentials, fetchImages, testGitCredential } from '../../api/catalog'
+import { createGitCredential, createImage, createTenant, deleteGitCredential, deleteImage, fetchGitCredentials, fetchImages, testGitCredential, updateImageScope } from '../../api/catalog'
 import { fetchPlatformLimits } from '../../api/platform'
 import { adminQuotaModel, defaultPlatformLimits } from '../../platformLimits'
 import { roles, session } from '../../stores/session'
@@ -242,6 +248,7 @@ const loading = ref(false)
 const tenants = ref([])
 const users = ref([])
 const activeJobs = ref([])
+const physicalAllocatedGPUs = ref(0)
 const catalogImages = ref([])
 const gitCredentials = ref([])
 const limits = ref(defaultPlatformLimits)
@@ -305,7 +312,7 @@ const loadUsers = async () => {
 // Both queued and running jobs matter to an administrator: the running ones are
 // what actually hold the GPUs a queued job is waiting for.
 const loadActiveJobs = async () => {
-  const states = ['QUEUED', 'RUNNING', 'PROVISIONING']
+  const states = ['SUBMITTED', 'VALIDATING', 'QUEUED', 'ADMITTED', 'PROVISIONING', 'RUNNING']
   const pages = await Promise.allSettled(states.map((state) => apiGet(`/api/v1/jobs?status=${state}`)))
   const rows = []
   for (const page of pages) {
@@ -325,6 +332,15 @@ const loadActiveJobs = async () => {
   activeJobs.value = rows
 }
 
+const loadClusterTopology = async () => {
+  try {
+    const topology = await apiGet('/api/v1/cluster/topology')
+    physicalAllocatedGPUs.value = Number(topology?.usedGpus || 0)
+  } catch {
+    physicalAllocatedGPUs.value = 0
+  }
+}
+
 const loadCatalog = async () => {
   const [images, credentials] = await Promise.allSettled([fetchImages(), fetchGitCredentials()])
   catalogImages.value = images.status === 'fulfilled' ? images.value || [] : []
@@ -341,7 +357,7 @@ const loadLimits = async () => {
 
 const loadAll = async () => {
   loading.value = true
-  await Promise.all([loadTenants(), loadUsers(), loadActiveJobs(), loadCatalog(), loadLimits()])
+  await Promise.all([loadTenants(), loadUsers(), loadActiveJobs(), loadClusterTopology(), loadCatalog(), loadLimits()])
   loading.value = false
 }
 
@@ -389,6 +405,23 @@ const removeImage = async (id) => {
     await loadCatalog()
   } catch (error) {
     ElMessage.error(error.message || '删除镜像失败')
+  }
+}
+
+const changeImageScope = async (image) => {
+  if (!isSuperAdmin.value) return
+  const shared = Boolean(image.tenantId)
+  const target = shared ? '全平台' : '本团队'
+  try {
+    await ElMessageBox.confirm(`确定将镜像 ${image.name} 的可用范围改为${target}吗？`, '修改镜像范围', {
+      type: 'warning', confirmButtonText: `改为${target}`, cancelButtonText: '取消',
+    })
+    await updateImageScope(image.id, shared, shared ? '' : currentTenantId.value)
+    ElMessage.success(`镜像已改为${target}可用`)
+    await loadCatalog()
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error.message || '修改镜像范围失败')
   }
 }
 
@@ -617,9 +650,9 @@ const prepareObjectSet = async () => {
 }
 
 const cancelJob = async (job) => {
-  const action = queueJobAction(job, currentTenantId.value)
+  const action = queueJobAction(job, currentTenantId.value, isSuperAdmin.value)
   if (!action) {
-    ElMessage.warning('只能操作当前租户的排队或运行中任务')
+    ElMessage.warning('没有权限操作该团队的任务')
     return
   }
   const queued = action.kind === 'cancel-queue'
@@ -633,7 +666,7 @@ const cancelJob = async (job) => {
     )
     await apiDelete(`/api/v1/jobs/${job.id}`)
     ElMessage.success(queued ? '已提交取消排队请求' : '已提交停止请求')
-    await Promise.all([loadActiveJobs(), loadTenants()])
+    await Promise.all([loadActiveJobs(), loadClusterTopology(), loadTenants()])
   } catch (error) {
     if (error === 'cancel' || error === 'close') return
     ElMessage.error(error.message || (queued ? '取消排队失败' : '停止任务失败'))

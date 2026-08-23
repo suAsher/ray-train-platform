@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"ray-train-platform-backend/domain"
@@ -16,6 +17,7 @@ type ImageStore interface {
 	ListImages(ctx context.Context, tenantID, kind string) ([]domain.PlatformImage, error)
 	DefaultImage(ctx context.Context, tenantID, kind string) (domain.PlatformImage, error)
 	ImageByReference(ctx context.Context, tenantID, kind, reference string) (domain.PlatformImage, error)
+	SetImageShared(ctx context.Context, tenantID, id string, shared bool, targetTenantID string) (domain.PlatformImage, error)
 	DeleteImage(ctx context.Context, tenantID, id string, superAdmin bool) error
 }
 
@@ -24,7 +26,58 @@ func (h *Handler) RegisterImageRoutes(group *gin.RouterGroup) {
 	// submitting a job. Publishing and removing are administrative.
 	group.GET("/images", h.listImages)
 	group.POST("/images", h.createImage)
+	group.PATCH("/images/:id", h.updateImageScope)
 	group.DELETE("/images/:id", h.deleteImage)
+}
+
+type updateImageScopeRequest struct {
+	Shared         *bool  `json:"shared"`
+	TargetTenantID string `json:"targetTenantId"`
+}
+
+func (h *Handler) updateImageScope(c *gin.Context) {
+	principal, ok := h.principal(c)
+	if !ok {
+		h.writeError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "authentication is required")
+		return
+	}
+	// Changing the visibility boundary affects every tenant, including moving a
+	// previously shared image back into one team, so it is always SuperAdmin-only.
+	if !principal.HasRole(domain.RoleSuperAdmin) {
+		h.writeError(c, http.StatusForbidden, "FORBIDDEN", "super administrator role is required to change image scope")
+		return
+	}
+	if h.images == nil {
+		h.writeError(c, http.StatusServiceUnavailable, "IMAGE_CATALOG_UNAVAILABLE", "image catalog is not configured")
+		return
+	}
+	var request updateImageScopeRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		h.writeError(c, http.StatusBadRequest, "INVALID_JSON", "request body is invalid")
+		return
+	}
+	if request.Shared == nil {
+		h.writeError(c, http.StatusBadRequest, "INVALID_IMAGE_SCOPE", "shared is required")
+		return
+	}
+	targetTenantID := ""
+	if !*request.Shared {
+		targetTenantID = strings.TrimSpace(request.TargetTenantID)
+		if targetTenantID == "" || targetTenantID != principal.TenantID {
+			h.writeError(c, http.StatusBadRequest, "INVALID_IMAGE_SCOPE", "targetTenantId must be your current tenant when removing platform access")
+			return
+		}
+	}
+	image, err := h.images.SetImageShared(c.Request.Context(), principal.TenantID, c.Param("id"), *request.Shared, targetTenantID)
+	if errors.Is(err, repositories.ErrImageNotFound) {
+		h.writeError(c, http.StatusNotFound, "IMAGE_NOT_FOUND", "image was not found in your catalog")
+		return
+	}
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "IMAGE_SCOPE_UPDATE_FAILED", "could not change image scope")
+		return
+	}
+	h.writeSuccess(c, http.StatusOK, image)
 }
 
 func (h *Handler) listImages(c *gin.Context) {

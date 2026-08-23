@@ -1,6 +1,6 @@
 # BEVFusion 从拉取代码到 2×8 卡训练：完整操作
 
-一份全新的 BEVFusion checkout 开始，完成代码改造、数据预检、1 卡检查、2×8 卡训练、日志查看、Ray Dashboard、Checkpoint 和断点续训。
+本手册从一份全新的 BEVFusion checkout 开始，完成代码改造、数据预检、1 卡检查、2×8 卡训练、日志查看、Ray Dashboard、Checkpoint 和断点续训。
 
 最终训练形态为：
 
@@ -76,7 +76,7 @@ CPU：    2 × 64      = 128 CPU
 
 Ray Head、任务提交器和平台组件由平台单独管理，不包含在上述 Worker 合计中。
 
-### 2.1 当前 180C / 780GiB 节点的建议值
+### 2.1 当前 GPU 节点的建议值
 
 | 场景 | Worker 数 | 每 Worker GPU | 每 Worker CPU | 每 Worker 内存 | 说明 |
 | --- | ---: | ---: | ---: | ---: | --- |
@@ -86,7 +86,7 @@ Ray Head、任务提交器和平台组件由平台单独管理，不包含在上
 | 数据加载较重 | 2 | 8 | 96 | 384GiB | 只有观测到 GPU 等数据时再提高。 |
 | 单 Worker 建议上限 | 任意 | 8 | 144 | 600GiB | 必须给 kubelet、CSI、DCGM 和突发内存留余量。 |
 
-不要直接填写 180 CPU / 780GiB。Kubernetes 按节点 `allocatable` 而不是物理标称值调度，系统 Pod 也需要资源；填满节点会导致任务长时间 Pending，或在节点压力下被驱逐。
+不要直接按节点的物理标称 CPU/内存填满资源。Kubernetes 按节点 `allocatable` 而不是物理标称值调度，系统 Pod 也需要资源；填满节点会导致任务长时间 Pending，或在节点压力下被驱逐。
 
 当前 BEVFusion 验收参数为 `data.workers_per_gpu=1`。这意味着 8 卡 Worker 的数据加载并发并不高，单纯把 CPU 从 64 提到 144 通常不会自动变快。建议按下面顺序调优：
 
@@ -98,6 +98,14 @@ Ray Head、任务提交器和平台组件由平台单独管理，不包含在上
 6. 每次只改变一个变量，记录 samples/s、iteration time 和 GPU 利用率。
 
 新增 GPU 节点后仍保持“一个 8 卡 Worker 对应一台 8 卡节点”。例如 4 台节点做 4×8 时设置 `workers: 4`，每 Worker 的 CPU/内存不变，总资源按 Worker 数线性增长，并受团队 Kueue 配额限制。
+
+### 2.2 配额、并发与排队
+
+当前租户的团队配额是 16 GPU，因此一个 2×8 任务会占满团队 GPU 配额；同一团队第二个 2×8 任务会由 Kueue 排队，不会抢占正在运行的任务。1 卡探针和 2×8 正式任务也共享这 16 GPU 配额，提交长任务前应先确认没有遗留的 `RUNNING`、`PROVISIONING` 或已准入任务。
+
+平台按实际加入集群且可调度的 GPU 动态计算物理容量，但团队管理员分配的配额不会随扩容自动增加。新增 GPU 节点后，仍需由超级管理员调整团队配额；否则新节点存在，团队任务也可能继续排队。
+
+任务结束后，Kueue 准入资源会释放。RayCluster 和 Pod 的成功诊断保留窗口当前约 60 秒，失败诊断保留窗口约 10 分钟；历史任务记录、Loki 日志、MLflow 指标和个人结果目录不依赖这些 Pod 存活。不要用“Pod 还没消失”判断配额是否已经释放，应以 Portal 的配额、队列和任务状态为准。
 
 ---
 
@@ -172,6 +180,28 @@ spk-rayjob jobs
 ```
 
 登录信息与 Web Portal 账号一致。客户端只获得提交本人训练任务所需的权限，不获得 Kubernetes kubeconfig 或对象存储 AK/SK。
+
+这里有两个名字容易混淆：
+
+- `--config` 是登录认证 JSON，只包含平台地址和登录令牌。它必须由 `spk-rayjob login --config <文件.json>` 生成，并保持属主可读，例如权限 `0600`；它不是任务 YAML。
+- `.spk-rayjob.yaml` 是任务默认值，由 `spk-rayjob init` 在代码目录生成。`spk-rayjob submit --dir <代码目录>` 只自动读取该目录中这个固定文件名，不支持用 `--config` 指向另一份任务 YAML。
+
+因此下面两种方式才是正确的：
+
+```bash
+# 独立保存登录态；后续所有选项都放在任务 ID 前面。
+AUTH_CONFIG="$HOME/.config/spk-rayjob/config.json"
+spk-rayjob login \
+  --server https://raytrain.wellspiking.ai \
+  --config "$AUTH_CONFIG"
+
+# 任务默认值必须放在 checkout 根目录的固定文件名中。
+cd ~/training-src/bevfusion-bev_3dod
+spk-rayjob init
+spk-rayjob submit --config "$AUTH_CONFIG" --watch
+```
+
+不要把派生的任务 YAML 传给 `--config`；即使内容看起来与 `.spk-rayjob.yaml` 等价，也会因它不是认证 JSON 而得到 `invalid spk-rayjob config`。如需保存另一套任务参数，应使用另一份 checkout/工作目录，或在提交时用显式参数覆盖 `.spk-rayjob.yaml`。
 
 ---
 
@@ -522,15 +552,12 @@ __pycache__/
 *.pyc
 *.pkl
 *.pth
-/data/
-/datasets/
-/work_dirs/
 /run/
 /run_dir/
 mmdet3d/ops/
 ```
 
-这组规则排除 Git 历史、虚拟环境、Python 缓存、仓库根数据目录、pkl、checkpoint 和镜像提供的编译扩展。当前客户端的 `.rayignore` 根锚定规则有效：`/datasets/` 只匹配仓库根目录，不会吞掉 `mmdet3d/datasets`；不能写成不带开头 `/` 的 `datasets/`。同理应使用 `/data/`、`/work_dirs/`，不要使用会匹配任意层级的宽泛规则。
+这组规则只排除已经确认安全的内容。当前客户端的忽略规则会按目录名匹配，`data/`、`datasets/`、`work_dirs/` 以及带前导 `/` 的同名写法都可能误伤 `mmdet3d/datasets/`，因此不要加入这些规则。大型数据必须放在 checkout 外；提交前按第 6.2 节检查 ZIP，确认 `mmdet3d/datasets/platform_paths.py` 仍在包内。
 
 其他格式的大型训练数据不会被自动识别，仍建议放在算法 checkout 外。当前固定镜像已经包含匹配的 `mmdet3d.ops` 和 CUDA 扩展；入口中的 `raytrain-bevfusion-prepare` 会把镜像内缺失的扩展补入 working directory，但不会覆盖用户 Python 源码。提交前必须按第 6.2 节检查最终 ZIP，确认 `mmdet3d/datasets/platform_paths.py` 存在。
 
@@ -654,6 +681,17 @@ if __name__ == "__main__":
 历史 checkpoint 不能写死在代码中。正式续训由新任务显式选择旧任务，并通过 `$PLATFORM_CHECKPOINT_PATH` 读取。
 
 如果 S1H 要使用本文的全量 `0429_pkl` 数据，必须先由算法负责人核对 `object_classes`、`name_mapping` 和 TransFusion Head 的 `num_classes`。当前全量数据包含映射为第 10 类的 IGV，而历史 S1H smoke 配置的 Head 只有 9 类；直接复用会触发 CUDA index out of bounds。把 Head 改成 10 类会改变模型结构并与旧 9 类 checkpoint 不兼容。即使类别数修正，历史复跑仍观察到 Hungarian cost 和 loss NaN，因此 S1H 全量还需要单独完成学习率、fp16 和收敛验收。
+
+S1H 全量数值稳定性建议按下面顺序做单变量实验，不要一次同时修改全部参数：
+
+1. 先关闭 fp16，用 fp32 跑 1 卡小样本，确认 loss 全程有限；
+2. 保持 fp32，降低学习率到当前值的 `1/2` 或 `1/10`；
+3. 增加梯度裁剪并记录 `grad_norm`，确认异常发生在哪个 loss 分项；
+4. 如必须使用 fp16，再启用 dynamic loss scale，并记录每次 overflow/scale 变化；
+5. 延长 warmup，避免多机 world size 放大有效 batch 后过早进入高学习率；
+6. 最后恢复 2×8，并要求所有 rank loss 有限、验证指标非零、checkpoint 可 resume。
+
+`num_classes: 10` 和 HungarianAssigner NaN 防护属于算法补丁，必须经过独立的 fp32、fp16 和 checkpoint 兼容验收后，以企业 Git MR 或可访问的 commit 发布。未发布的本地 commit 不能作为交付链接；本文当前不伪造 MR 地址，也不把一次本地成功当作 S1H 全量基线。算法负责人发布 MR 后，应在这里补充 MR URL、commit、适用基线和验收任务 ID。
 
 ### 5.8 接入平台 MLflow 实验中心
 
@@ -916,6 +954,29 @@ input:
 
 `path: ""` 表示选择公共根目录。不要填写 `.`，不要在训练代码里使用 TOS URI，也不要注入 AK/SK。
 
+### 7.1 `input-path`、挂载根和 pkl 文件名对照
+
+`$PLATFORM_DATASET_PATH` 不是永远等于 `/mnt/storage/public`：它指向本次任务选择的目录根。选择子目录后，平台只把该子目录作为任务输入根，代码里不能再次拼接这个子目录。
+
+| 场景 | pkl 引用路径（相对 `$PLATFORM_DATASET_PATH`） | `--input-space` | 必需的 `--input-path` | Pod 内 `$PLATFORM_DATASET_PATH` |
+| --- | --- | --- | --- | --- |
+| 全量 FZ | `0429_pkl/fz/merged_nuscenes_infos_*.pkl`，根目录必须留空 | `public` | `''` | `/mnt/storage/public` |
+| smoke-128 | `platform-validation/annotations/fz-0429-platform-smoke-128/final_merged_nuscenes_infos_*.pkl` | `public` | `bevfusion/fz-3dod-v1` | 选中子目录的挂载根 |
+
+两套索引名称不同，不要凭文件名猜测：
+
+```text
+# 全量：公共根下
+0429_pkl/fz/merged_nuscenes_infos_train.pkl
+0429_pkl/fz/merged_nuscenes_infos_val.pkl
+
+# smoke：选择 bevfusion/fz-3dod-v1 后，相对于所选根
+platform-validation/annotations/fz-0429-platform-smoke-128/final_merged_nuscenes_infos_train.pkl
+platform-validation/annotations/fz-0429-platform-smoke-128/final_merged_nuscenes_infos_val.pkl
+```
+
+提交前用同一套规则检查：全量命令必须是 `--input-path ''`，smoke 命令必须是 `--input-path bevfusion/fz-3dod-v1`。如果 smoke 选择了公共根，或选择子目录后又在代码里拼接 `bevfusion/fz-3dod-v1`，都会得到“文件不存在”。
+
 公共根的实际对象存储前缀是 `tos://shanghai-data-transfer/ray-train/public/`。当前目录至少包含：
 
 ```text
@@ -970,6 +1031,158 @@ BEVFUSION_PLATFORM_DATA_PREFLIGHT_OK
 ```
 
 如果 `missing` 不为 0，不要继续提交 16 卡。先确认选择的公共目录、pkl 版本、原始数据是否完整，以及路径 resolver 是否已经接入 `nuscenes_dataset.py`。
+
+### 8.1 1 卡探针调试：先定位，再申请 16 卡
+
+目录、MLflow 和历史结果问题都应先用 `1 Worker × 1 GPU × 8 CPU × 32GiB` 的短任务定位。探针使用与正式任务相同的镜像、数据挂载、身份和网络，因此比在提交机器上执行 `ls` 或 `curl` 更接近真实训练环境。
+
+把下面三个脚本放进 checkout 的 `tools/`。它们会随 working directory archive 上传，不需要构建镜像。
+
+`tools/platform_directory_probe.py`：
+
+```python
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+
+
+def selected_path(relative: str) -> Path:
+    root = Path(os.environ["PLATFORM_DATASET_PATH"]).resolve()
+    candidate = (root / relative).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as error:
+        raise SystemExit("path escapes PLATFORM_DATASET_PATH") from error
+    return candidate
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("relative", nargs="?", default=".")
+parser.add_argument("--fail-after-print", action="store_true")
+args = parser.parse_args()
+target = selected_path(args.relative)
+print("DATASET_ROOT", os.environ["PLATFORM_DATASET_PATH"])
+print("TARGET", target, "EXISTS", target.exists())
+if not target.exists():
+    raise SystemExit(2)
+if target.is_dir():
+    for child in sorted(target.iterdir())[:200]:
+        print("ENTRY", child.name, "DIR" if child.is_dir() else child.stat().st_size)
+else:
+    print("FILE_SIZE", target.stat().st_size)
+if args.fail_after_print:
+    raise SystemExit("intentional probe failure after printing diagnostics")
+```
+
+`tools/platform_mlflow_probe.py`：
+
+```python
+from __future__ import annotations
+
+import os
+import urllib.request
+
+import mlflow
+
+
+tracking_uri = os.environ["MLFLOW_TRACKING_URI"].rstrip("/")
+with urllib.request.urlopen(tracking_uri + "/healthz", timeout=10) as response:
+    print("MLFLOW_HEALTH", response.status, response.read(256).decode("utf-8", "replace"))
+
+mlflow.set_tracking_uri(tracking_uri)
+mlflow.set_experiment(os.environ["MLFLOW_EXPERIMENT_NAME"])
+tags = {
+    "platform.job_id": os.environ["RAYTRAIN_JOB_ID"],
+    "platform.tenant_id": os.environ["RAYTRAIN_TENANT_ID"],
+    "platform.submitter_user_id": os.environ["RAYTRAIN_SUBMITTER_USER_ID"],
+    "platform.provenance": os.environ["RAYTRAIN_MLFLOW_PROVENANCE"],
+}
+with mlflow.start_run(run_name=os.environ["MLFLOW_RUN_NAME"] + "-probe", tags=tags):
+    mlflow.log_param("probe", "mlflow-connectivity")
+    mlflow.log_metric("probe_ok", 1.0)
+print("MLFLOW_PROBE_OK")
+```
+
+`tools/platform_result_probe.py`：
+
+```python
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("relative", nargs="?", default=".")
+parser.add_argument("--fail-after-print", action="store_true")
+args = parser.parse_args()
+root = Path(os.environ["PLATFORM_CHECKPOINT_PATH"]).resolve()
+target = (root / args.relative).resolve()
+try:
+    target.relative_to(root)
+except ValueError as error:
+    raise SystemExit("path escapes PLATFORM_CHECKPOINT_PATH") from error
+print("CHECKPOINT_ROOT", root)
+print("TARGET", target, "EXISTS", target.exists())
+if not target.exists():
+    raise SystemExit(2)
+if target.is_dir():
+    for child in sorted(target.iterdir())[:200]:
+        print("ENTRY", child.name, "DIR" if child.is_dir() else child.stat().st_size)
+else:
+    print("FILE_SIZE", target.stat().st_size)
+    if target.suffix.lower() in {".txt", ".json", ".yaml", ".yml", ".log"}:
+        print(target.read_text(encoding="utf-8", errors="replace")[:4096])
+if args.fail_after_print:
+    raise SystemExit("intentional probe failure after printing diagnostics")
+```
+
+目录探针示例。注意它与 smoke 使用相同的子目录选择：
+
+```bash
+spk-rayjob submit \
+  --name "bevfusion-dir-probe-$(date +%H%M%S)" \
+  --image "$IMAGE" \
+  --entrypoint 'python3 tools/platform_directory_probe.py platform-validation/annotations/fz-0429-platform-smoke-128/' \
+  --input-space public \
+  --input-path bevfusion/fz-3dod-v1 \
+  --output-path bevfusion/probes/directory \
+  --workers 1 --gpus-per-worker 1 \
+  --cpu-per-worker 8 --memory-per-worker 32Gi \
+  --execution-mode single_gpu --watch
+```
+
+MLflow 探针示例：
+
+```bash
+spk-rayjob submit \
+  --name "bevfusion-mlflow-probe-$(date +%H%M%S)" \
+  --image "$IMAGE" \
+  --entrypoint 'python3 tools/platform_mlflow_probe.py' \
+  --output-path bevfusion/probes/mlflow \
+  --workers 1 --gpus-per-worker 1 \
+  --cpu-per-worker 8 --memory-per-worker 32Gi \
+  --execution-mode single_gpu --watch
+```
+
+读取历史结果探针示例。`--resume-from-job` 只读挂载指定任务的结果：
+
+```bash
+spk-rayjob submit \
+  --name "bevfusion-result-probe-$(date +%H%M%S)" \
+  --image "$IMAGE" \
+  --entrypoint 'python3 tools/platform_result_probe.py epoch_1.pth' \
+  --resume-from-job <已有成功任务ID> \
+  --output-path bevfusion/probes/result \
+  --workers 1 --gpus-per-worker 1 \
+  --cpu-per-worker 8 --memory-per-worker 32Gi \
+  --execution-mode single_gpu --watch
+```
+
+`--fail-after-print` 用于主动让探针失败，以验证失败状态和 `statusMessage` 兜底；它只用于调试，正常验收不要加。探针通过后再提交 2×8，避免用 16 卡排查目录拼错、MLflow 断连或历史产物文件名错误。
 
 ---
 
@@ -1136,6 +1349,24 @@ git rev-parse HEAD
 
 不需要执行 Docker build。任务详情保存源码包摘要、镜像 digest、参数、输入、输出和提交人；即使 working tree 尚未 commit，也会按本次不可变源码包运行，但正式实验应把改动提交到 Git。
 
+准确地说，`spk-rayjob` 提交的是当前目录的 working directory archive：
+
+- 它包含当前磁盘上的已提交文件、已修改文件和未跟踪文件；
+- 它与 Git commit 状态无关，不要求先 `git commit`；
+- `.rayignore` 命中的文件不会进入 archive；
+- `.gitignore` 不等于 `.rayignore`，但被 Git 忽略的源码也容易在改造/审计时漏掉；
+- 上传完成后，平台按 archive 摘要运行本次不可变快照，随后继续修改本地文件不会改变已提交任务。
+
+这让“改完立即提交”成为可能，也意味着本地未提交的实验代码会被一起带上集群。每次提交前至少执行：
+
+```bash
+git status --short
+git diff --check
+spk-rayjob package --dir . --output "/tmp/source-$(date +%s).zip"
+```
+
+确认工作区差异与实际 ZIP 后再提交；正式实验还应保存 Git commit、`git diff` 和平台记录的源码摘要，保证可追溯。
+
 ---
 
 ## 12. 网页提交同一份代码
@@ -1238,7 +1469,15 @@ spk-rayjob logs --limit 3000 <平台任务ID>
 spk-rayjob cancel <平台任务ID>
 ```
 
-当前 CLI 的选项必须放在任务 ID 前面。因此使用 `status --output json <ID>`，不能写成 `status <ID> --output json`；同理，`--limit` 必须放在日志任务 ID 前面。
+当前 CLI 的选项必须全部放在任务 ID 前面。因此使用 `status --output json <ID>`，不能写成 `status <ID> --output json`；如果使用独立登录文件，完整写法是：
+
+```bash
+AUTH_CONFIG="$HOME/.config/spk-rayjob/config.json"
+spk-rayjob status --config "$AUTH_CONFIG" --output json <平台任务ID>
+spk-rayjob logs --config "$AUTH_CONFIG" --limit 3000 <平台任务ID>
+```
+
+当前 CLI 不支持 `--job-id`。`spk-rayjob status <ID>` 本身可用，但 ID 后不能再放 `--config`、`--output` 或其他选项；同理，`--limit` 必须放在日志任务 ID 前面。违反顺序时会统一返回 `requires a job ID`，这个错误不代表任务 ID 不存在。
 
 自动化脚本读取 `.observedState`，不是 `.state` 或 `.status`：
 
@@ -1247,9 +1486,48 @@ JOB_ID=<平台任务ID>
 spk-rayjob status --output json "$JOB_ID" | jq -r ".observedState"
 ```
 
+如果当前客户端的 `status` 命令仍因参数顺序或版本差异不可用，可以从任务列表按 ID 读取同一状态：
+
+```bash
+JOB_ID=<平台任务ID>
+spk-rayjob jobs --output json \
+  | jq -r --arg id "$JOB_ID" '.items[] | select(.id == $id) | .observedState'
+```
+
 正常终态为 `SUCCEEDED / FAILED / CANCELED / TIMED_OUT`。`SUBMITTED`、`VALIDATING`、`QUEUED`、`ADMITTED`、`PROVISIONING` 和 `RUNNING` 都不是终态。
 
 历史日志接口当前按时间正序返回生命周期窗口中的前 N 行；`--limit 3000` 不是“倒序取最后 3000 行”。运行中优先使用 `logs -f`，结束后在 Portal 日志页按日志流查看和检索。任务仍在 `PROVISIONING` 且提交器/Worker 尚未创建时，日志为空是正常现象。
+
+下面是当前 2×8 验收环境的实测时间，不是 SLA。镜像缓存、Kueue 排队、节点状态和 CSI 挂载都会改变时长：
+
+| 阶段 | 常见实测 | 何时开始排查 |
+| --- | ---: | --- |
+| 1 卡探针从提交到运行 | 数十秒到数分钟 | 超过 5 分钟仍无 Pod，检查队列、配额和挂载事件。 |
+| 2×8 `PROVISIONING` | 7～9 分钟 | 超过 15 分钟仍无两个 Ready Worker，检查 RayCluster、镜像、CSI 和节点资源。 |
+| smoke-128 总时长 | 约 10 分钟 | Worker Ready 后长期没有 iteration，检查最早的 Worker 日志。 |
+| 全量 1 epoch | 约 13～15 分钟 | 以 iteration/data_time 为准，不能只看墙钟。 |
+
+`QUEUED` 没有固定上限：团队配额被其他任务占用时，等多久取决于前序任务何时释放资源。
+
+### 14.1 日志接口故障时如何保住 traceback
+
+正常顺序始终是：`logs -f` → Portal 日志流 → 任务状态兜底。当 Loki/logs API 暂时不可用时，先不要反复提交 16 卡任务：
+
+```bash
+JOB_ID=<失败任务ID>
+spk-rayjob status --output json "$JOB_ID" \
+  | jq -r '.statusReason, .statusMessage'
+```
+
+KubeRay 会把部分失败信息写入任务的 `statusMessage`。当前环境曾观察到其中内嵌约最后 20k 字符，可能包含完整 Python traceback；但这不是稳定的日志归档接口，也不保证包含完整 traceback，长度和内容可能随 KubeRay/Ray 版本改变。
+
+实际排障中，显式参数式提交曾在 `statusMessage` 中保留较完整 traceback，而使用 `.spk-rayjob.yaml` 默认值的失败任务只留下 torchrun 摘要。这不是“参数式提交”和“模板提交”的设计差异，两者最终创建同一类任务；不能依赖这个偶发现象。为了提高失败时的可诊断性：
+
+1. 先用第 8.1 节的 1 卡探针复现；
+2. 在入口最外层不要吞 Python 异常，保留原始 traceback 和非零退出码；
+3. 调试时可给探针加 `--fail-after-print`，验证 `statusMessage` 兜底；
+4. 保存 `status --output json` 的结果并记录任务 ID；
+5. logs API 恢复后，再以 Loki 按时间正序的完整日志为准。
 
 当前 CLI 还没有产物列表子命令。任务产物应在 Portal“我的数据 → 我的运行结果”或任务详情的产物页查看；不要用 kubeconfig，也不需要再提交辅助训练任务来列目录。平台策略允许页面预览受支持的文本产物，但不开放任意下载。
 
@@ -1351,16 +1629,20 @@ CPU 和内存配置是否合适，要以训练和数据基准共同判断。至�
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
 | `No module named mmdet3d.runner` | 原 `.gitignore` 的 `run*/` 把源码排除了 | 应用运行时补丁，确认已改为 `/run*/`。 |
-| `No module named platform_paths` | `.rayignore` 的 `datasets/` 把 `mmdet3d/datasets/` 整体排除了 | 改用 `/data/`、`/datasets/`、`/work_dirs/` 根锚定规则，并按 6.2 检查实际 ZIP 中存在 `mmdet3d/datasets/platform_paths.py`。 |
+| `No module named platform_paths` | `.rayignore` 的 `datasets/`（包括前导 `/` 写法）把 `mmdet3d/datasets/` 整体排除了 | 删除 `data`、`datasets`、`work_dirs` 这些宽泛规则，并按 6.2 检查实际 ZIP 中存在 `mmdet3d/datasets/platform_paths.py`。 |
 | `No module named mmdet3d.ops` | working-dir 中没有镜像提供的编译扩展，或入口没有执行准备器 | 保留精确规则 `mmdet3d/ops/`，并确保 entrypoint 以 `raytrain-bevfusion-prepare` 开头。 |
 | `distutils.version` 或 TensorBoard 报错 | 旧 PyTorch/MMCV 与 TensorBoard/setuptools 组合不兼容 | 应用完整 `configure_platform_output()` 补丁，不要只改 local rank。 |
+| smoke pkl 不存在 | smoke 任务错误选择了公共根，或把全量的 `merged_*` 当成 smoke 的 `final_merged_*` | 按 7.1 选择 `bevfusion/fz-3dod-v1`，并使用 `final_merged_nuscenes_infos_*.pkl`。 |
 | pkl 能读但样本文件缺失 | pkl 保存了旧机器绝对路径，或公共数据不完整 | 先跑第 8 节预检，检查 `missing=0`。 |
 | 一直 Pending | GPU、CPU、内存或团队 Kueue 配额不足 | 先看任务排队原因；不要给单个 Worker 填 180C/780GiB。 |
 | GPU 利用率低 | 数据加载慢、worker 数过少或 I/O 小文件瓶颈 | 比较 `data_time`，逐步提高 `workers_per_gpu`，再考虑 CPU。 |
 | `CUDA out of memory` | batch、模型或输入过大 | 降低 `samples_per_gpu`，使用梯度累积，不要只增加 Pod 内存。 |
 | NCCL timeout/broken pipe | 某个 rank 先因 Python/数据/OOM 退出，其他 rank 连带失败 | 先找最早的 Worker traceback，不要只看最后一条 NCCL 错误。 |
 | MLflow 404/5xx 后其他 rank 报 NCCL 超时 | rank 0 先因实验记录服务失败退出，其他 rank 连带失败 | 保留最早 traceback，联系平台管理员检查 ingest `/healthz` 和 Tracking API；不要在用户代码中改写平台地址。 |
-| S1H 全量出现 index out of bounds 或 NaN | 全量 IGV 类别超出历史 9 类 Head，或 fp16/学习率数值不稳定 | 先按 5.7 核对类别数；变更 Head 后不得加载旧 9 类 checkpoint，并由算法负责人重新做收敛验收。 |
+| S1H 全量出现 index out of bounds 或 NaN | 全量 IGV 类别超出历史 9 类 Head，或 fp16/学习率数值不稳定 | 先按 5.7 核对类别数；变更 Head 后不得加载旧 9 类 checkpoint，再依次验证 fp32、降学习率、梯度裁剪、dynamic loss scale 和 warmup。 |
+| `status` 报 `requires a job ID` | 选项放在 ID 后，或使用了不支持的 `--job-id` | 所有选项放在 ID 前；仍有问题时用 `jobs --output json` 按 ID 过滤。 |
+| `invalid spk-rayjob config` | 把任务 YAML 传给了认证参数 `--config` | 用 `login --config <JSON>` 生成认证文件；任务参数放 checkout 根目录的 `.spk-rayjob.yaml`。 |
+| logs API 暂时不可用 | Loki、网关或网络链路故障 | 先读取失败任务的 `statusMessage` 兜底并用 1 卡探针复现；恢复后以 Loki 完整日志为准。 |
 | 日志末尾 loss 看不到 | 启动时模型结构过长 | 用 `logs -f` 或 `spk-rayjob logs --limit 3000 <ID>`。 |
 | Dashboard 打不开 | Head 未就绪，或任务集群已按 TTL 清理 | 运行中重试；结束后使用平台历史日志与指标。 |
 | 普通重试从头开始 | 没有显式选择 checkpoint | 使用 `--resume-from-job` 并在入口读取 `PLATFORM_CHECKPOINT_PATH`。 |

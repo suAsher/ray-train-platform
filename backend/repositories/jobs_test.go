@@ -112,6 +112,30 @@ func TestListExcludesArchivedJobsButGetRetainsAuditRecord(t *testing.T) {
 	}
 }
 
+func TestListAllTenantsReturnsActiveJobsAcrossTenantBoundaries(t *testing.T) {
+	repo := testRepository(t)
+	first := testJob()
+	if err := repo.Create(context.Background(), &first, "request-list-all-a"); err != nil {
+		t.Fatalf("create first job: %v", err)
+	}
+	second := testJob()
+	second.ID = "job-team-a"
+	second.TenantID = "team-a"
+	second.Spec.Name = second.ID
+	second.Spec.Queue = "team-a-gpu"
+	if err := repo.Create(context.Background(), &second, "request-list-all-b"); err != nil {
+		t.Fatalf("create second job: %v", err)
+	}
+
+	page, err := repo.List(context.Background(), domain.JobFilter{AllTenants: true})
+	if err != nil {
+		t.Fatalf("list all tenant jobs: %v", err)
+	}
+	if page.Total != 2 || len(page.Items) != 2 {
+		t.Fatalf("expected both tenant jobs, got total=%d items=%+v", page.Total, page.Items)
+	}
+}
+
 func TestApplyObservedStateUpdatesKubernetesReferences(t *testing.T) {
 	repo := testRepository(t)
 	job := testJob()

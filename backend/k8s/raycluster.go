@@ -36,7 +36,7 @@ func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderO
 	if workspace.GPUCount < 1 || workspace.GPUCount > 8 {
 		return nil, fmt.Errorf("dev workspace GPU count must be between 1 and 8")
 	}
-	if err := domain.ValidatePinnedImage(options.Image); err != nil {
+	if err := domain.ValidateRuntimeImage(options.Image); err != nil {
 		return nil, fmt.Errorf("workspace image: %w", err)
 	}
 	if err := options.DataMounts.Validate(); err != nil {
@@ -88,7 +88,7 @@ func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderO
 			"automountServiceAccountToken": options.ServiceAccount != "",
 			"securityContext":              securityContext,
 			"containers": []any{map[string]any{
-				"name": "ray-head", "image": options.Image, "imagePullPolicy": "IfNotPresent",
+				"name": "ray-head", "image": options.Image, "imagePullPolicy": domain.RuntimeImagePullPolicy(options.Image),
 				"command": []any{"/bin/sh", "-c"},
 				"args":    []any{"exec ray start --head --dashboard-host=0.0.0.0 --num-gpus=0 --block"},
 				"ports": []any{
@@ -115,7 +115,7 @@ func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderO
 			"automountServiceAccountToken": options.ServiceAccount != "",
 			"securityContext":              securityContext,
 			"containers": []any{map[string]any{
-				"name": "ray-worker", "image": options.Image, "imagePullPolicy": "IfNotPresent",
+				"name": "ray-worker", "image": options.Image, "imagePullPolicy": domain.RuntimeImagePullPolicy(options.Image),
 				"ports": []any{
 					map[string]any{"name": "jupyter", "containerPort": int64(8888)},
 					map[string]any{"name": "vscode", "containerPort": int64(8443)},

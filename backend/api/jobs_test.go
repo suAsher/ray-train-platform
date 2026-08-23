@@ -34,10 +34,19 @@ func (f *fakeJobRepository) Get(_ context.Context, tenant, id string) (*domain.T
 	}
 	return nil, context.Canceled
 }
+func (f *fakeJobRepository) GetByID(_ context.Context, id string) (*domain.TrainingJob, error) {
+	for _, job := range f.jobs {
+		if job.ID == id {
+			copy := job
+			return &copy, nil
+		}
+	}
+	return nil, context.Canceled
+}
 func (f *fakeJobRepository) List(_ context.Context, filter domain.JobFilter) (domain.Page[domain.TrainingJob], error) {
 	items := make([]domain.TrainingJob, 0)
 	for _, job := range f.jobs {
-		if job.TenantID == filter.TenantID {
+		if filter.AllTenants || job.TenantID == filter.TenantID {
 			items = append(items, job)
 		}
 	}
@@ -200,5 +209,70 @@ func TestPublicTrainingJobRedactsResolvedPVCClaims(t *testing.T) {
 	}
 	if job.Spec.ResolvedStorage.Dataset == nil || job.Spec.ResolvedStorage.Dataset.ClaimName != "tos-private-claim" {
 		t.Fatalf("redaction mutated the persisted job: %#v", job)
+	}
+}
+
+func TestSuperAdminListsJobsAcrossTenantBoundaries(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repository := &fakeJobRepository{jobs: []domain.TrainingJob{
+		{ID: "job-team-a", TenantID: "team-a", Spec: domain.JobSpec{Name: "team-a-job"}},
+		{ID: "job-team-b", TenantID: "team-b", Spec: domain.JobSpec{Name: "team-b-job"}},
+	}}
+	handler := NewHandler(repository, Options{})
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("ray-platform-principal", auth.Principal{Subject: "admin", TenantID: "local", Roles: []string{domain.RoleSuperAdmin}, AuthType: auth.AuthTypeLocal})
+		c.Next()
+	})
+	handler.RegisterTrainingRoutes(router.Group("/api/v1"))
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/jobs", nil))
+
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "job-team-a") || !strings.Contains(response.Body.String(), "job-team-b") {
+		t.Fatalf("super administrator must see every tenant job, got %d: %s", response.Code, response.Body.String())
+	}
+}
+
+func TestSuperAdminCanReadAndCancelCrossTenantJob(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repository := &fakeJobRepository{jobs: []domain.TrainingJob{{ID: "job-team-b", TenantID: "team-b", Spec: domain.JobSpec{Name: "team-b-job"}}}}
+	handler := NewHandler(repository, Options{})
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("ray-platform-principal", auth.Principal{Subject: "admin", TenantID: "local", Roles: []string{domain.RoleSuperAdmin}, AuthType: auth.AuthTypeLocal})
+		c.Next()
+	})
+	handler.RegisterTrainingRoutes(router.Group("/api/v1"))
+
+	readResponse := httptest.NewRecorder()
+	router.ServeHTTP(readResponse, httptest.NewRequest(http.MethodGet, "/api/v1/jobs/job-team-b", nil))
+	if readResponse.Code != http.StatusOK || !strings.Contains(readResponse.Body.String(), "job-team-b") {
+		t.Fatalf("super administrator must read a cross-tenant job, got %d: %s", readResponse.Code, readResponse.Body.String())
+	}
+
+	cancelResponse := httptest.NewRecorder()
+	router.ServeHTTP(cancelResponse, httptest.NewRequest(http.MethodDelete, "/api/v1/jobs/job-team-b", nil))
+	if cancelResponse.Code != http.StatusAccepted || repository.canceled != "team-b/job-team-b/CANCELED" {
+		t.Fatalf("super administrator cancellation must target the owning tenant, got %d canceled=%q body=%s", cancelResponse.Code, repository.canceled, cancelResponse.Body.String())
+	}
+}
+
+func TestEngineerCannotSelectAnotherTenantJobList(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repository := &fakeJobRepository{jobs: []domain.TrainingJob{{ID: "job-team-b", TenantID: "team-b"}}}
+	handler := NewHandler(repository, Options{})
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("ray-platform-principal", auth.Principal{Subject: "user-a", TenantID: "team-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal})
+		c.Next()
+	})
+	handler.RegisterTrainingRoutes(router.Group("/api/v1"))
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/jobs?tenantId=team-b", nil))
+
+	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "TENANT_SCOPE_FORBIDDEN") {
+		t.Fatalf("engineer must not select another tenant, got %d: %s", response.Code, response.Body.String())
 	}
 }

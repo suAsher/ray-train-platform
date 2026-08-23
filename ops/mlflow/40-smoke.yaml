@@ -32,7 +32,9 @@ spec:
               import mlflow
               tracking_uri = "http://mlflow-ingest.mlflow-system.svc.cluster.local:8080"
               mlflow.set_tracking_uri(tracking_uri)
-              mlflow.set_experiment("raytrain-local")
+              experiment = mlflow.set_experiment("raytrain-local")
+              client = mlflow.tracking.MlflowClient()
+              client.get_experiment(experiment.experiment_id)
               with mlflow.start_run(run_name="mlflow-client-smoke", tags={"platform.job_id": "mlflow-client-smoke", "platform.tenant_id": "local"}):
                   mlflow.log_param("purpose", "delivery-smoke")
                   mlflow.log_metric("loss", 1.0, step=0)

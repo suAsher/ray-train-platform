@@ -22,8 +22,8 @@ backend:
   rayAPIDefaultImage: harbor.wellspiking.ai/guofeng.su/ray-train-pytorch@sha256:2102761c7a5e3af6ff33225182d5b936d18601f7d5697bc11187922df58cfa7f
   image:
     repository: ray-train-backend
-    tag: prod-20260822-fdaa07f-mlflow
-    digest: sha256:acfb71f1693397f044dccf2d47e70b9178426b1093c0d6bc83668477d0e1ab1b
+    tag: prod-20260823-admin-global-r1
+    digest: sha256:1d65c3b39ccb980649e98fca2af443338c873894f89331e10667a439a92aaaf8
   oidc:
     issuerURL: https://keycloak.test.invalid/realms/ai
     clientID: ray-training-platform-test
@@ -62,8 +62,8 @@ frontend:
     platform.wellspiking.ai/pool: control-plane
   image:
     repository: ray-train-frontend
-    tag: prod-20260822-7b5e1ed
-    digest: sha256:4b762f6c597ff3b2b0eed7037b79f935593c207701dfda271bf8e9cdde14a21c
+    tag: prod-20260823-admin-global-r1
+    digest: sha256:2188919aeb4a48dcc80d4cd415b4a1ad0d5dd1aeaa74bf5c55ca818b7afc9e97
   service:
     type: ClusterIP
     port: 80

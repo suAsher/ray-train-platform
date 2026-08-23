@@ -133,6 +133,63 @@ func (r *GormRepository) ImageByReference(ctx context.Context, tenantID, kind, r
 	return domain.PlatformImage{}, ErrImageNotFound
 }
 
+// SetImageShared moves an image visible to the acting super administrator
+// between that administrator's tenant catalogue and the platform catalogue.
+// The API reserves this operation for SuperAdmin; the repository still scopes
+// the lookup to the actor's tenant plus shared rows to avoid reassigning an
+// unrelated team's image by ID.
+func (r *GormRepository) SetImageShared(ctx context.Context, tenantID, id string, shared bool, targetTenantID string) (domain.PlatformImage, error) {
+	var updated PlatformImageRecord
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var record PlatformImageRecord
+		err := tx.Where("id = ?", id).
+			Where("tenant_id IS NULL OR tenant_id = ?", tenantID).
+			First(&record).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrImageNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("find image for scope update: %w", err)
+		}
+
+		if shared {
+			targetTenantID = ""
+		}
+		if valueOrEmpty(record.TenantID) == targetTenantID {
+			updated = record
+			return nil
+		}
+		if record.IsDefault {
+			if err := clearDefaultImage(tx, record.Kind, targetTenantID); err != nil {
+				return err
+			}
+		}
+		if err := tx.Model(&PlatformImageRecord{}).Where("id = ?", id).Updates(map[string]any{
+			"tenant_id":  optionalID(targetTenantID),
+			"updated_at": time.Now().UTC(),
+		}).Error; err != nil {
+			return fmt.Errorf("update image scope: %w", err)
+		}
+		if err := tx.Where("id = ?", id).First(&updated).Error; err != nil {
+			return fmt.Errorf("read updated image: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return domain.PlatformImage{}, err
+	}
+	return platformImageFromRecord(updated), nil
+}
+
+func platformImageFromRecord(record PlatformImageRecord) domain.PlatformImage {
+	return domain.PlatformImage{
+		ID: record.ID, TenantID: valueOrEmpty(record.TenantID), Name: record.Name,
+		Reference: record.Reference, Kind: record.Kind, Description: record.Description,
+		Framework: record.Framework, IsDefault: record.IsDefault, CreatedBy: record.CreatedBy,
+		CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt,
+	}
+}
+
 func (r *GormRepository) DeleteImage(ctx context.Context, tenantID, id string, superAdmin bool) error {
 	query := r.db.WithContext(ctx).Where("id = ?", id)
 	if !superAdmin {

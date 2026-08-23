@@ -215,6 +215,7 @@ if grep -Eq 'mlflow-aws-config|addressing_style = virtual|cidr: 100\.64\.0\.0/10
   exit 1
 fi
 grep -Fq 'name: mlflow-ingest' "$POLICY"
+grep -Fq 'location = /api/2.0/mlflow/experiments/get {' "$POLICY"
 grep -Fq 'return 403' "$POLICY"
 grep -Fq 'location = /api/2.0/mlflow/runs/log-batch' "$POLICY"
 grep -Fq 'proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow/api/2.0/mlflow/experiments/get-by-name;' "$POLICY" || {
@@ -301,6 +302,7 @@ grep -Fq '.metadata.deletionTimestamp' "$VERIFY"
 grep -Fq '[[ -n "$deletion_timestamp" ]] && continue' "$VERIFY"
 grep -Fq 'mlflow-ingest.mlflow-system.svc.cluster.local:8080' "$SMOKE"
 grep -Fq 'MLFLOW_ARTIFACT_DOWNLOAD_BLOCKED' "$SMOKE"
+grep -Fq 'client.get_experiment(experiment.experiment_id)' "$SMOKE"
 grep -Fq 'namespace: mlflow-system' "$SMOKE"
 grep -Fq 'app.kubernetes.io/name: mlflow-client-smoke' "$POLICY"
 grep -Fq 'readonly CLIENT_SMOKE=' "$DEPLOY"

@@ -120,7 +120,7 @@ func hasPlatformMetadata(metadata map[string]string) bool {
 
 func (defaults SubmissionDefaults) resources() (domain.Resources, string, string, error) {
 	image := strings.TrimSpace(defaults.Image)
-	if err := domain.ValidatePinnedImage(image); err != nil {
+	if err := domain.ValidateRuntimeImage(image); err != nil {
 		return domain.Resources{}, "", "", fmt.Errorf("Ray CLI default image is not configured")
 	}
 	if defaults.WorkerReplicas != 1 || defaults.GPUsPerWorker != 1 || defaults.CPUPerWorker < 1 || defaults.CPUPerWorker > 64 || !validMemory(strings.TrimSpace(defaults.MemoryPerWorker)) {
@@ -159,7 +159,7 @@ func parseMetadata(metadata map[string]string) (domain.Resources, string, string
 		}
 	}
 	image := strings.TrimSpace(metadata[metadataImage])
-	if err := domain.ValidatePinnedImage(image); err != nil {
+	if err := domain.ValidateRuntimeImage(image); err != nil {
 		return domain.Resources{}, "", "", fmt.Errorf("invalid image")
 	}
 	workers, err := boundedInt(metadata[metadataWorkerReplicas], 1, 3)

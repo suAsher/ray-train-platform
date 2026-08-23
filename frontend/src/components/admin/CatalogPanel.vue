@@ -7,7 +7,7 @@
             <el-icon class="text-emerald-400"><Box /></el-icon> 镜像目录（训练 / 调试运行环境）
           </h4>
           <p class="mt-1 text-[11px] text-slate-500">
-            用户提交任务和启动调试环境时只能从这里选择，保证依赖环境一致且可复现。必须使用 sha256 digest。
+            用户提交任务和启动调试环境时只能从这里选择。支持显式 tag 或 sha256 digest；生产基线推荐 digest。
           </p>
         </div>
         <el-button size="small" icon="Plus" @click="$emit('create-image')">登记镜像</el-button>
@@ -28,7 +28,7 @@
           </template>
         </el-table-column>
         <el-table-column prop="framework" label="框架" width="120" />
-        <el-table-column prop="reference" label="镜像（digest）" min-width="260">
+        <el-table-column prop="reference" label="镜像（tag / digest）" min-width="260">
           <template #default="scope">
             <span class="break-all font-mono text-[11px] text-slate-400">{{ scope.row.reference }}</span>
           </template>
@@ -38,8 +38,11 @@
             <el-tag size="small" effect="plain">{{ scope.row.tenantId ? '本团队' : '全平台' }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="90" align="right">
+        <el-table-column label="操作" width="190" align="right">
           <template #default="scope">
+            <el-button v-if="isSuperAdmin" type="primary" link size="small" @click="$emit('edit-scope', scope.row)">
+              {{ scope.row.tenantId ? '设为全平台' : '改为本团队' }}
+            </el-button>
             <el-button type="danger" link size="small" @click="$emit('remove-image', scope.row.id)">删除</el-button>
           </template>
         </el-table-column>
@@ -78,7 +81,9 @@
 defineProps({
   images: { type: Array, default: () => [] },
   credentials: { type: Array, default: () => [] },
+  isSuperAdmin: { type: Boolean, default: false },
+  currentTenantId: { type: String, default: '' },
 })
 
-defineEmits(['create-image', 'remove-image', 'create-credential', 'remove-credential', 'test-credential'])
+defineEmits(['create-image', 'edit-scope', 'remove-image', 'create-credential', 'remove-credential', 'test-credential'])
 </script>

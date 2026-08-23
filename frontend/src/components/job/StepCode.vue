@@ -2,7 +2,7 @@
   <div>
     <div class="mb-6">
       <h2 class="text-lg font-semibold text-white">代码与训练环境</h2>
-      <p class="mt-1 text-sm text-slate-400">代码、镜像和 Commit 都会随任务记录；镜像必须使用不可变 digest。</p>
+      <p class="mt-1 text-sm text-slate-400">代码、镜像和 Commit 都会随任务记录；镜像可使用管理员批准的 tag 或不可变 digest。</p>
     </div>
 
     <div class="space-y-5">
@@ -22,7 +22,7 @@
             </div>
           </el-option>
         </el-select>
-        <p class="field-help">只显示当前团队可用、已固定 digest 的训练环境。需要新依赖时，请由团队管理员在镜像目录发布。</p>
+        <p class="field-help">只显示当前团队可用、管理员已批准的训练环境。正式基线推荐 digest；日常迭代可使用 tag。</p>
         <p v-if="!loading && images.length === 0" class="mt-2 text-xs text-amber-300">还没有可用镜像，请联系团队管理员登记训练环境。</p>
       </div>
 

@@ -40,7 +40,7 @@ test('quota UI contains no fixed 16 or 24 GPU fleet assumptions', () => {
 
 test('queue actions are tenant-scoped and TenantAdmin copy does not claim quota allocation', () => {
   assert.match(quotaManageSource, /:current-tenant-id="currentTenantId"/)
-  assert.match(quotaManageSource, /queueJobAction\(job, currentTenantId\.value\)/)
+  assert.match(quotaManageSource, /queueJobAction\(job, currentTenantId\.value, isSuperAdmin\.value\)/)
   assert.match(quotaManageSource, /TenantAdmin（管理本团队成员与团队共享目录）/)
   assert.doesNotMatch(quotaManageSource, /TenantAdmin（管理本团队配额与成员）/)
   assert.match(queuePanelSource, /currentTenantId/)

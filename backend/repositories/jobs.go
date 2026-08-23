@@ -319,8 +319,10 @@ func (r *GormRepository) List(ctx context.Context, filter domain.JobFilter) (dom
 	if offset < 0 {
 		offset = 0
 	}
-	query := r.db.WithContext(ctx).Model(&JobRecord{}).
-		Where("tenant_id = ? AND archived_at IS NULL", filter.TenantID)
+	query := r.db.WithContext(ctx).Model(&JobRecord{}).Where("archived_at IS NULL")
+	if !filter.AllTenants {
+		query = query.Where("tenant_id = ?", filter.TenantID)
+	}
 	if filter.Status != "" {
 		query = query.Where("observed_state = ?", filter.Status)
 	}

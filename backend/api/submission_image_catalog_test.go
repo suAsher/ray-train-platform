@@ -12,7 +12,10 @@ import (
 )
 
 type stubImageStore struct {
-	images []domain.PlatformImage
+	images                []domain.PlatformImage
+	updatedID             string
+	updatedShared         bool
+	updatedTargetTenantID string
 }
 
 func (s *stubImageStore) CreateImage(context.Context, domain.PlatformImage) error { return nil }
@@ -41,6 +44,18 @@ func (s *stubImageStore) ImageByReference(ctx context.Context, tenantID, kind, r
 	return domain.PlatformImage{}, repositories.ErrImageNotFound
 }
 func (s *stubImageStore) DeleteImage(context.Context, string, string, bool) error { return nil }
+func (s *stubImageStore) SetImageShared(_ context.Context, tenantID, id string, shared bool, targetTenantID string) (domain.PlatformImage, error) {
+	s.updatedID = id
+	s.updatedShared = shared
+	s.updatedTargetTenantID = targetTenantID
+	targetTenant := tenantID
+	if shared {
+		targetTenant = ""
+	} else if targetTenantID != "" {
+		targetTenant = targetTenantID
+	}
+	return domain.PlatformImage{ID: id, TenantID: targetTenant, Name: "runtime", Kind: domain.ImageKindTraining, Reference: "registry.example/runtime:stable"}, nil
+}
 
 func catalogImage(reference string) domain.PlatformImage {
 	return domain.PlatformImage{

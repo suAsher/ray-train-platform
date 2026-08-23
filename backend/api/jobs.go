@@ -32,6 +32,10 @@ type JobRepository interface {
 	EnsureIdentity(context.Context, auth.Principal) error
 }
 
+type globalJobReader interface {
+	GetByID(context.Context, string) (*domain.TrainingJob, error)
+}
+
 type Handler struct {
 	repository             JobRepository
 	logs                   LogProvider
@@ -417,7 +421,19 @@ func (h *Handler) listJobs(c *gin.Context) {
 	}
 	limit, _ := strconv.Atoi(c.Query("limit"))
 	offset, _ := strconv.Atoi(c.Query("offset"))
-	page, err := h.repository.List(c.Request.Context(), domain.JobFilter{TenantID: principal.TenantID, Status: domain.State(c.Query("status")), Keyword: c.Query("keyword"), Limit: limit, Offset: offset})
+	tenantID := strings.TrimSpace(c.Query("tenantId"))
+	filter := domain.JobFilter{TenantID: principal.TenantID, Status: domain.State(c.Query("status")), Keyword: c.Query("keyword"), Limit: limit, Offset: offset}
+	if principal.HasRole(domain.RoleSuperAdmin) {
+		if tenantID == "" {
+			filter.AllTenants = true
+		} else {
+			filter.TenantID = tenantID
+		}
+	} else if tenantID != "" && tenantID != principal.TenantID {
+		h.writeError(c, http.StatusForbidden, "TENANT_SCOPE_FORBIDDEN", "training jobs from another tenant are not accessible")
+		return
+	}
+	page, err := h.repository.List(c.Request.Context(), filter)
 	if err != nil {
 		h.writeError(c, http.StatusInternalServerError, "JOB_LIST_FAILED", "could not list training jobs")
 		return
@@ -431,7 +447,7 @@ func (h *Handler) getJob(c *gin.Context) {
 		h.writeError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "authentication is required")
 		return
 	}
-	job, err := h.repository.Get(c.Request.Context(), principal.TenantID, c.Param("id"))
+	job, err := h.jobForPrincipal(c.Request.Context(), principal, c.Param("id"))
 	if err != nil {
 		status := http.StatusInternalServerError
 		if strings.Contains(err.Error(), "not found") {
@@ -453,7 +469,7 @@ func (h *Handler) getJobRuntime(c *gin.Context) {
 		h.writeError(c, http.StatusServiceUnavailable, "RUNTIME_UNAVAILABLE", "Kubernetes runtime is not configured")
 		return
 	}
-	job, err := h.repository.Get(c.Request.Context(), principal.TenantID, c.Param("id"))
+	job, err := h.jobForPrincipal(c.Request.Context(), principal, c.Param("id"))
 	if err != nil {
 		h.writeError(c, http.StatusNotFound, "JOB_NOT_FOUND", "training job was not found")
 		return
@@ -480,7 +496,12 @@ func (h *Handler) cancelJob(c *gin.Context) {
 		h.writeError(c, http.StatusForbidden, "FORBIDDEN", "engineer role is required")
 		return
 	}
-	if err := h.repository.SetDesiredState(c.Request.Context(), principal.TenantID, c.Param("id"), domain.DesiredCanceled); err != nil {
+	job, err := h.jobForPrincipal(c.Request.Context(), principal, c.Param("id"))
+	if err != nil {
+		h.writeError(c, http.StatusNotFound, "JOB_NOT_FOUND", "training job was not found")
+		return
+	}
+	if err := h.repository.SetDesiredState(c.Request.Context(), job.TenantID, job.ID, domain.DesiredCanceled); err != nil {
 		status := http.StatusInternalServerError
 		if strings.Contains(err.Error(), "not found") {
 			status = http.StatusNotFound
@@ -501,7 +522,7 @@ func (h *Handler) getJobLogs(c *gin.Context) {
 		h.writeError(c, http.StatusServiceUnavailable, "LOGS_UNAVAILABLE", "log service is not configured")
 		return
 	}
-	job, err := h.repository.Get(c.Request.Context(), principal.TenantID, c.Param("id"))
+	job, err := h.jobForPrincipal(c.Request.Context(), principal, c.Param("id"))
 	if err != nil {
 		h.writeError(c, http.StatusNotFound, "JOB_NOT_FOUND", "training job was not found")
 		return
@@ -525,7 +546,7 @@ func (h *Handler) getJobMetrics(c *gin.Context) {
 		h.writeError(c, http.StatusServiceUnavailable, "METRICS_UNAVAILABLE", "metrics service is not configured")
 		return
 	}
-	job, err := h.repository.Get(c.Request.Context(), principal.TenantID, c.Param("id"))
+	job, err := h.jobForPrincipal(c.Request.Context(), principal, c.Param("id"))
 	if err != nil {
 		h.writeError(c, http.StatusNotFound, "JOB_NOT_FOUND", "training job was not found")
 		return
@@ -548,7 +569,7 @@ func (h *Handler) getJobExperiment(c *gin.Context) {
 		h.writeError(c, http.StatusServiceUnavailable, "MLFLOW_UNAVAILABLE", "MLflow is not configured")
 		return
 	}
-	job, err := h.repository.Get(c.Request.Context(), principal.TenantID, c.Param("id"))
+	job, err := h.jobForPrincipal(c.Request.Context(), principal, c.Param("id"))
 	if err != nil {
 		h.writeError(c, http.StatusNotFound, "JOB_NOT_FOUND", "training job was not found")
 		return
@@ -557,12 +578,23 @@ func (h *Handler) getJobExperiment(c *gin.Context) {
 		h.writeError(c, http.StatusForbidden, "EXPERIMENT_FORBIDDEN", "training experiment is available only to the job owner or a tenant administrator")
 		return
 	}
-	experiment, err := h.experiments.QueryJobExperiment(c.Request.Context(), principal.TenantID, job.ID)
+	experiment, err := h.experiments.QueryJobExperiment(c.Request.Context(), job.TenantID, job.ID)
 	if err != nil {
 		h.writeError(c, http.StatusBadGateway, "MLFLOW_QUERY_FAILED", "could not query training experiment")
 		return
 	}
 	h.writeSuccess(c, http.StatusOK, experiment)
+}
+
+func (h *Handler) jobForPrincipal(ctx context.Context, principal auth.Principal, jobID string) (*domain.TrainingJob, error) {
+	if !principal.HasRole(domain.RoleSuperAdmin) {
+		return h.repository.Get(ctx, principal.TenantID, jobID)
+	}
+	reader, ok := h.repository.(globalJobReader)
+	if !ok {
+		return nil, fmt.Errorf("global job lookup is not supported")
+	}
+	return reader.GetByID(ctx, jobID)
 }
 
 func (h *Handler) listExperiments(c *gin.Context) {

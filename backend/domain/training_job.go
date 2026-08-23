@@ -119,10 +119,13 @@ type TrainingJob struct {
 
 type JobFilter struct {
 	TenantID string
-	Status   State
-	Keyword  string
-	Limit    int
-	Offset   int
+	// AllTenants is reserved for platform-wide administrative views. API
+	// handlers must only set it after authorizing a SuperAdmin principal.
+	AllTenants bool
+	Status     State
+	Keyword    string
+	Limit      int
+	Offset     int
 }
 
 type Page[T any] struct {
@@ -151,6 +154,9 @@ type ObservedJobState struct {
 
 var dnsLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 var digestImage = regexp.MustCompile(`^[^@\s]+@sha256:[0-9a-fA-F]{64}$`)
+var imageTag = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
+var imagePathComponent = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*$`)
+var imageRegistryComponent = regexp.MustCompile(`^[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*(?::[0-9]+)?$`)
 var gitCommit = regexp.MustCompile(`^[0-9a-fA-F]{7,64}$`)
 var snapshotID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
@@ -158,7 +164,7 @@ func (s JobSpec) Validate() error {
 	if s.Name == "" || len(s.Name) > 63 || !dnsLabel.MatchString(s.Name) {
 		return fmt.Errorf("name must be a lowercase DNS label with 1-63 characters")
 	}
-	if err := ValidatePinnedImage(s.Image); err != nil {
+	if err := ValidateRuntimeImage(s.Image); err != nil {
 		return err
 	}
 	if err := s.Source.validate(); err != nil {
@@ -223,6 +229,65 @@ func ValidatePinnedImage(image string) error {
 		return fmt.Errorf("image must be pinned by sha256 digest")
 	}
 	return nil
+}
+
+// ValidateRuntimeImage accepts the two administrator-controlled forms users
+// can select from the image catalogue: an immutable digest or an explicit
+// tag. A bare repository is rejected because Kubernetes would silently apply
+// the mutable "latest" tag.
+func ValidateRuntimeImage(image string) error {
+	if digestImage.MatchString(image) {
+		return nil
+	}
+	if !validTaggedImage(image) {
+		return fmt.Errorf("image must include an explicit tag or sha256 digest")
+	}
+	return nil
+}
+
+func validTaggedImage(image string) bool {
+	if image == "" || strings.ContainsAny(image, "@ \t\r\n") || strings.Contains(image, "//") {
+		return false
+	}
+	lastSlash := strings.LastIndexByte(image, '/')
+	lastColon := strings.LastIndexByte(image, ':')
+	if lastColon <= lastSlash || lastColon == len(image)-1 {
+		return false
+	}
+	if strings.Count(image[lastSlash+1:], ":") != 1 || !imageTag.MatchString(image[lastColon+1:]) {
+		return false
+	}
+	repository := image[:lastColon]
+	parts := strings.Split(repository, "/")
+	for index, part := range parts {
+		if part == "" {
+			return false
+		}
+		if index == 0 && len(parts) > 1 && (strings.ContainsAny(part, ".:") || part == "localhost") {
+			if !imageRegistryComponent.MatchString(part) {
+				return false
+			}
+			continue
+		}
+		if !imagePathComponent.MatchString(part) {
+			return false
+		}
+	}
+	return true
+}
+
+func IsPinnedImage(image string) bool {
+	return digestImage.MatchString(image)
+}
+
+// RuntimeImagePullPolicy prevents a mutable tag from being satisfied by a
+// stale node cache. Digest images remain cacheable because their content is
+// immutable by definition.
+func RuntimeImagePullPolicy(image string) string {
+	if IsPinnedImage(image) {
+		return "IfNotPresent"
+	}
+	return "Always"
 }
 
 func (s CodeSource) validate() error {

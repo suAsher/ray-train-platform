@@ -25,6 +25,13 @@ data:
         proxy_set_header Host mlflow:5000;
         proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow/api/2.0/mlflow/experiments/get-by-name;
       }
+      # After creating a previously unseen experiment, the MLflow Python
+      # client reads that experiment back by ID before creating the run.
+      location = /api/2.0/mlflow/experiments/get {
+        limit_except GET { deny all; }
+        proxy_set_header Host mlflow:5000;
+        proxy_pass http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow/api/2.0/mlflow/experiments/get;
+      }
       location = /api/2.0/mlflow/experiments/create {
         limit_except POST { deny all; }
         proxy_set_header Host mlflow:5000;
@@ -98,7 +105,7 @@ spec:
   template:
     metadata:
       annotations:
-        platform.wellspiking.ai/config-revision: "20260822-r3"
+        platform.wellspiking.ai/config-revision: "20260823-r4"
       labels:
         app.kubernetes.io/name: mlflow-ingest
         app.kubernetes.io/part-of: ray-train-platform
