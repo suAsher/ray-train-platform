@@ -79,13 +79,13 @@ publish_file() {
 
 node_json="$(kubectl get node "${node}" -o json)"
 jq -e '.status.conditions[] | select(.type == "Ready" and .status == "True")' <<<"${node_json}" >/dev/null
-jq -e '.metadata.labels.accelerator == "nvidia-rtx-4090" and .metadata.labels["gpu-pool"] == "production"' \
+jq -e '.metadata.labels.accelerator == "nvidia-rtx-4090" and .metadata.labels["platform.wellspiking.ai/gpu-pool"] == "production"' \
   <<<"${node_json}" >/dev/null
 
 {
   printf 'node=%s\n' "${node}"
   printf 'checked_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  printf 'ready=true\nlabels=accelerator=nvidia-rtx-4090,gpu-pool=production\n'
+  printf 'ready=true\nlabels=accelerator=nvidia-rtx-4090,platform.wellspiking.ai/gpu-pool=production\n'
 } >"${report_temp}"
 
 for cache_root in "${cache_roots[@]}"; do

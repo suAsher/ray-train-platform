@@ -44,7 +44,7 @@ mkdir "${mock_bin}"
 cat >"${mock_bin}/kubectl" <<'EOF'
 #!/usr/bin/env bash
 cat <<'JSON'
-{"metadata":{"labels":{"accelerator":"nvidia-rtx-4090","gpu-pool":"production"}},"status":{"conditions":[{"type":"Ready","status":"True"}]}}
+{"metadata":{"labels":{"accelerator":"nvidia-rtx-4090","platform.wellspiking.ai/gpu-pool":"production"}},"status":{"conditions":[{"type":"Ready","status":"True"}]}}
 JSON
 EOF
 cat >"${mock_bin}/ssh" <<'EOF'

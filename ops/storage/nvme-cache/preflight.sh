@@ -36,7 +36,7 @@ fi
 
 readonly nodes=(172.28.1.232 172.28.1.233)
 readonly cache_roots=(/data1/ray-cache /data2/ray-cache)
-readonly label_contracts=(accelerator=nvidia-rtx-4090 gpu-pool=production)
+readonly label_contracts=(accelerator=nvidia-rtx-4090 platform.wellspiking.ai/gpu-pool=production)
 readonly provisioner_image='harbor.wellspiking.ai/guofeng.su/local-path-provisioner@sha256:7d30aa9da00db4d40dbe3d2bb41a0fb6a3a926cbe915908458b0ec470db73115'
 readonly helper_image='harbor.wellspiking.ai/guofeng.su/busybox@sha256:ff6bba6f18535e7ccb3c1bbed0b84e5c733d7d9dd8815f1ea93ee73073135aa4'
 readonly monitor_image='harbor.wellspiking.ai/guofeng.su/node-exporter@sha256:8c9bac11973b94b59be88d6e11fee4429aa743c8846cdc75d65b18db33f6a106'

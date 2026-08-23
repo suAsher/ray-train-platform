@@ -33,7 +33,7 @@ monitoring:
   intervalSeconds: 30
   nodeSelector:
     accelerator: nvidia-rtx-4090
-    gpu-pool: production
+    platform.wellspiking.ai/gpu-pool: production
   nodeExporter:
     image: harbor.wellspiking.ai/guofeng.su/node-exporter@sha256:8c9bac11973b94b59be88d6e11fee4429aa743c8846cdc75d65b18db33f6a106
     resources:
