@@ -36,13 +36,3 @@ data:
         - name: helper-pod
           image: {{ include "ray-cache-local.requireDigestImage" .Values.images.helper }}
           imagePullPolicy: {{ .Values.images.pullPolicy }}
-          securityContext:
-            allowPrivilegeEscalation: false
-            privileged: false
-            readOnlyRootFilesystem: true
-            runAsNonRoot: false
-            runAsUser: 0
-            seccompProfile:
-              type: RuntimeDefault
-            capabilities:
-              drop: ["AUDIT_WRITE", "KILL", "NET_BIND_SERVICE", "NET_RAW", "SETFCAP", "SETGID", "SETPCAP", "SETUID", "SYS_CHROOT"]

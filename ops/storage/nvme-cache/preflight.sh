@@ -16,6 +16,11 @@ done
 kubectl get crd servicemonitors.monitoring.coreos.com >/dev/null
 kubectl get crd prometheusrules.monitoring.coreos.com >/dev/null
 
+# Pulling an exact repository@digest proves registry authentication, remote
+# retrieval, and digest resolution. This may populate the container runtime
+# image cache on each target node, but preflight never starts containers.
+echo 'preflight image verification may populate the container runtime image cache; it never starts containers'
+
 for node in "${nodes[@]}"; do
   node_json="$(kubectl get node "${node}" -o json)"
   jq -e '.status.conditions[] | select(.type == "Ready" and .status == "True")' <<<"${node_json}" >/dev/null
@@ -46,8 +51,8 @@ for node in "${nodes[@]}"; do
   done
 
   for image in "${provisioner_image}" "${helper_image}" "${monitor_image}"; do
-    ssh "${ssh_options[@]}" "root@${node}" "crictl inspecti '${image}' >/dev/null" || {
-      echo "node ${node} has not pull-verified pinned image ${image}" >&2
+    ssh "${ssh_options[@]}" "root@${node}" "crictl pull '${image}' >/dev/null" || {
+      echo "node ${node} cannot pull exact pinned image ${image}" >&2
       exit 1
     }
   done

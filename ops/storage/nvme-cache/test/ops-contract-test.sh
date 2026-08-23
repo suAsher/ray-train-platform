@@ -48,8 +48,12 @@ require_in "${ops_dir}/preflight.sh" 'accelerator=nvidia-rtx-4090'
 require_in "${ops_dir}/preflight.sh" 'gpu-pool=production'
 require_in "${ops_dir}/preflight.sh" 'servicemonitors.monitoring.coreos.com'
 require_in "${ops_dir}/preflight.sh" 'prometheusrules.monitoring.coreos.com'
+require_in "${ops_dir}/preflight.sh" 'crictl pull'
+require_in "${ops_dir}/preflight.sh" 'may populate the container runtime image cache'
+require_in "${ops_dir}/preflight.sh" 'never starts containers'
+reject_in "${ops_dir}/preflight.sh" 'crictl inspecti'
 if grep -Eq 'kubectl[^#]*(apply|create|delete|patch|replace|edit|label|taint)' "${ops_dir}/preflight.sh"; then
-  echo 'preflight must be read-only' >&2
+  echo 'preflight must not mutate Kubernetes API resources' >&2
   exit 1
 fi
 
