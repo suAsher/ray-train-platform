@@ -81,6 +81,11 @@ const helpText = `spk-rayjob — 分布式训练任务命令行客户端
 断点续训（把上一次运行的结果目录作为只读 checkpoint 传入本次运行）：
   spk-rayjob submit --resume-from-job <上一次的 JOB ID> --watch
 
+临时缓存（可选）：
+  spk-rayjob submit --cache-mode runtime --cache-size <平台允许的容量>
+  runtime 缓存是随任务销毁的临时空间，不会自动缓存 /mnt/storage/public；
+  训练代码需要显式把希望加速的数据复制到缓存目录。
+
 通用参数：
   --output json    输出原始 JSON，供脚本使用（默认为可读文本）
   --server         平台地址；未提供时读取 SPK_RAYJOB_URL 或已保存的登录配置
@@ -333,6 +338,8 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	cpu := set.Int64("cpu-per-worker", 8, "CPUs per worker")
 	memory := set.String("memory-per-worker", "32Gi", "memory per worker")
 	executionMode := set.String("execution-mode", "auto", "execution mode: auto, single_gpu, torchrun, ray_train")
+	cacheMode := set.String("cache-mode", "", "cache mode: off, runtime")
+	cacheSize := set.String("cache-size", "", "runtime cache size allowed by the platform")
 	inputSpace := set.String("input-space", "", "logical input data space")
 	inputPath := set.String("input-path", "", "path relative to the input data space")
 	checkpointSpace := set.String("checkpoint-space", "", "logical checkpoint data space")
@@ -353,6 +360,7 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	resolved := defaults.merge(submitOverrides{
 		Name: *name, Image: *image, Entrypoint: *entrypoint, Workers: *workers, GPUsPerWorker: *gpus,
 		CPUPerWorker: *cpu, MemoryPerWorker: *memory, ExecutionMode: *executionMode,
+		Cache:              projectCache{Mode: *cacheMode, Size: *cacheSize},
 		Input:              projectLocation{Space: *inputSpace, Path: *inputPath},
 		Checkpoint:         projectLocation{Space: *checkpointSpace, Path: *checkpointPath},
 		Output:             projectLocation{Path: *outputPath},
@@ -364,14 +372,24 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 		providedCPU:        provided["cpu-per-worker"],
 		providedMemory:     provided["memory-per-worker"],
 		providedMode:       provided["execution-mode"],
+		providedCacheMode:  provided["cache-mode"],
+		providedCacheSize:  provided["cache-size"],
 		providedInput:      provided["input-space"] || provided["input-path"],
 		providedCheckpoint: provided["checkpoint-space"] || provided["checkpoint-path"],
 		providedOutput:     provided["output-path"],
 	})
+	if err := validateProjectCacheShape(resolved.Cache); err != nil {
+		return err
+	}
 	client, err := newCommandClient(connection, getenv, stderr)
 	if err != nil {
 		return err
 	}
+	resolvedCache, err := resolveProjectCache(ctx, resolved.Cache, client)
+	if err != nil {
+		return err
+	}
+	resolved.Cache = projectCache{Mode: string(resolvedCache.Mode), Size: resolvedCache.Size}
 	// Fill in what can be derived so `spk-rayjob submit` works with no
 	// arguments at all: the directory names the run, and the platform's image
 	// catalogue already records which environment is the default.
@@ -512,6 +530,7 @@ func (value project) jobSpec() (domain.JobSpec, error) {
 		Input:      input,
 		Checkpoint: checkpoint,
 		Output:     output,
+		Cache:      domain.CacheRequest{Mode: domain.CacheMode(strings.TrimSpace(value.Cache.Mode)), Size: strings.TrimSpace(value.Cache.Size)},
 	}, nil
 }
 

@@ -64,6 +64,18 @@ type Job struct {
 	Raw           json.RawMessage `json:"-"`
 }
 
+type PlatformLimits struct {
+	Cache PlatformCacheLimits `json:"cache"`
+}
+
+type PlatformCacheLimits struct {
+	Enabled      bool     `json:"enabled"`
+	Modes        []string `json:"modes"`
+	AllowedSizes []string `json:"allowedSizes"`
+	DefaultSize  string   `json:"defaultSize"`
+	MaxSize      string   `json:"maxSize"`
+}
+
 type apiEnvelope[T any] struct {
 	Success bool `json:"success"`
 	Data    T    `json:"data"`
@@ -298,6 +310,20 @@ func (client *Client) TrainingImages(ctx context.Context) ([]catalogImage, error
 		return nil, fmt.Errorf("decode image catalogue: %w", err)
 	}
 	return images, nil
+}
+
+func (client *Client) PlatformLimits(ctx context.Context) (PlatformLimits, error) {
+	raw, err := client.request(ctx, http.MethodGet, "/api/v1/limits", nil, nil)
+	if err != nil {
+		return PlatformLimits{}, err
+	}
+	var limits PlatformLimits
+	if err := json.Unmarshal(raw, &limits); err != nil {
+		return PlatformLimits{}, fmt.Errorf("decode platform limits: %w", err)
+	}
+	limits.Cache.Modes = append([]string(nil), limits.Cache.Modes...)
+	limits.Cache.AllowedSizes = append([]string(nil), limits.Cache.AllowedSizes...)
+	return limits, nil
 }
 
 func (client *Client) Status(ctx context.Context, jobID string) (Job, error) {

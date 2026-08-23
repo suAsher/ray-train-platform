@@ -20,6 +20,9 @@ gpusPerWorker: 8
 cpuPerWorker: 32
 memoryPerWorker: 128Gi
 executionMode: torchrun
+cache:
+  mode: runtime
+  size: 200Gi
 input:
   space: public
   path: bevfusion/2026-08-0429
@@ -42,6 +45,9 @@ output:
 	if project.MemoryPerWorker != "128Gi" || project.CPUPerWorker != 32 {
 		t.Fatalf("unexpected resources: %+v", project)
 	}
+	if project.Cache.Mode != "runtime" || project.Cache.Size != "200Gi" {
+		t.Fatalf("unexpected cache defaults: %+v", project.Cache)
+	}
 }
 
 // An absent project file is normal for a one-off submission: every value can
@@ -56,16 +62,46 @@ func TestLoadProjectReturnsEmptyDefaultsWhenAbsent(t *testing.T) {
 	}
 }
 
+func TestProjectFileStrictlyAcceptsUnquotedOffCacheMode(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, projectFileName), []byte("cache:\n  mode: off\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadProject(root)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	if loaded.Cache.Mode != "off" || loaded.Cache.Size != "" {
+		t.Fatalf("unexpected off cache shape: %+v", loaded.Cache)
+	}
+}
+
 // Explicit flags always win: a project file is a default, not a lock.
 func TestExplicitFlagsOverrideProjectDefaults(t *testing.T) {
-	project := project{Name: "from-file", Workers: 1, GPUsPerWorker: 8, ExecutionMode: "torchrun"}
-	resolved := project.merge(submitOverrides{Name: "from-flag", GPUsPerWorker: 2, providedGPUs: true, providedName: true})
+	project := project{
+		Name: "from-file", Workers: 1, GPUsPerWorker: 8, ExecutionMode: "torchrun",
+		Cache: projectCache{Mode: "runtime", Size: "100Gi"},
+	}
+	resolved := project.merge(submitOverrides{
+		Name: "from-flag", GPUsPerWorker: 2, Cache: projectCache{Size: "200Gi"},
+		providedGPUs: true, providedName: true, providedCacheSize: true,
+	})
 
 	if resolved.Name != "from-flag" || resolved.GPUsPerWorker != 2 {
 		t.Fatalf("flags must win, got %+v", resolved)
 	}
 	if resolved.Workers != 1 || resolved.ExecutionMode != "torchrun" {
 		t.Fatalf("unset flags must keep project defaults, got %+v", resolved)
+	}
+	if resolved.Cache.Mode != "runtime" || resolved.Cache.Size != "200Gi" {
+		t.Fatalf("cache flags must override project defaults independently, got %+v", resolved.Cache)
+	}
+
+	modeOnly := project.merge(submitOverrides{
+		Cache: projectCache{Mode: "off"}, providedCacheMode: true,
+	})
+	if modeOnly.Cache.Mode != "off" || modeOnly.Cache.Size != "100Gi" {
+		t.Fatalf("an omitted size flag must preserve the project value, got %+v", modeOnly.Cache)
 	}
 }
 
@@ -74,7 +110,7 @@ func TestWriteProjectProducesAReadableStarterFile(t *testing.T) {
 	if err := writeProject(root, project{
 		Name: "my-training", Image: "registry.example/img@sha256:2222222222222222222222222222222222222222222222222222222222222222",
 		Entrypoint: "python train.py", Workers: 1, GPUsPerWorker: 8, CPUPerWorker: 32,
-		MemoryPerWorker: "128Gi", ExecutionMode: "torchrun",
+		MemoryPerWorker: "128Gi", ExecutionMode: "torchrun", Cache: projectCache{Mode: "runtime", Size: "200Gi"},
 	}); err != nil {
 		t.Fatalf("write project: %v", err)
 	}
@@ -82,14 +118,32 @@ func TestWriteProjectProducesAReadableStarterFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"name: my-training", "gpusPerWorker: 8", "executionMode: torchrun"} {
+	for _, expected := range []string{"name: my-training", "gpusPerWorker: 8", "executionMode: torchrun", "cache:", "mode: runtime", "size: 200Gi"} {
 		if !strings.Contains(string(written), expected) {
 			t.Fatalf("expected %q in the starter file:\n%s", expected, written)
 		}
 	}
 	reloaded, err := loadProject(root)
-	if err != nil || reloaded.Name != "my-training" || reloaded.GPUsPerWorker != 8 {
+	if err != nil || reloaded.Name != "my-training" || reloaded.GPUsPerWorker != 8 || reloaded.Cache.Mode != "runtime" || reloaded.Cache.Size != "200Gi" {
 		t.Fatalf("the starter file must round-trip, got %+v (%v)", reloaded, err)
+	}
+}
+
+func TestStarterAndHelpExplainOptionalDisposableRuntimeCache(t *testing.T) {
+	root := t.TempDir()
+	if err := writeProject(root, project{Name: "my-training"}); err != nil {
+		t.Fatalf("write project: %v", err)
+	}
+	written, err := os.ReadFile(filepath.Join(root, projectFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for label, text := range map[string]string{"starter": string(written), "help": helpText} {
+		for _, expected := range []string{"可选", "临时", "/mnt/storage/public", "不会自动缓存"} {
+			if !strings.Contains(text, expected) {
+				t.Fatalf("%s must explain %q:\n%s", label, expected, text)
+			}
+		}
 	}
 }
 

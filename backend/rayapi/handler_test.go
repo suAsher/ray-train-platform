@@ -184,11 +184,16 @@ func (store *rayTestStore) Put(_ context.Context, key, digest string, sizeBytes 
 }
 
 func rayRouter(t *testing.T, repository *rayTestRepository, store *rayTestStore, principal auth.Principal) *gin.Engine {
+	return rayRouterWithCachePolicy(t, repository, store, principal, api.LocalCachePolicy{})
+}
+
+func rayRouterWithCachePolicy(t *testing.T, repository *rayTestRepository, store *rayTestStore, principal auth.Principal, cache api.LocalCachePolicy) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	submission := api.NewSubmissionService(repository, api.SubmissionServiceOptions{
 		DataSpaces: repository, DataSpacesEnabled: true,
-		NewID: func() (string, error) { return "job-ray", nil },
+		NewID:      func() (string, error) { return "job-ray", nil },
+		LocalCache: cache,
 	})
 	handler, err := NewHandler(repository, store, submission, Options{SpoolDir: t.TempDir(), Defaults: SubmissionDefaults{Image: testImageDigest, WorkerReplicas: 1, GPUsPerWorker: 1, CPUPerWorker: 8, MemoryPerWorker: "32Gi"}, Logs: &recoveryLogs{lines: []observability.LogLine{{Line: "ray-sdk-log-marker"}}}, Now: func() time.Time { return time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC) }})
 	if err != nil {
@@ -340,6 +345,31 @@ func TestRayPackageSubmitWithoutPlatformMetadataUsesConfiguredDefaults(t *testin
 	}
 	if repository.created == nil || repository.created.Spec.Image != testImageDigest || repository.created.Spec.Resources.WorkerReplicas != 1 || repository.created.Spec.Resources.GPUsPerWorker != 1 || repository.created.Spec.Queue != "tenant-a-gpu" {
 		t.Fatalf("bare Ray CLI defaults were not normalized by the platform: %+v", repository.created)
+	}
+}
+
+func TestRayCacheMetadataPersistsThroughSharedSubmissionService(t *testing.T) {
+	principal := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{"Engineer"}, AuthType: auth.AuthTypeOIDC}
+	repository := &rayTestRepository{}
+	store := &rayTestStore{}
+	router := rayRouterWithCachePolicy(t, repository, store, principal, api.LocalCachePolicy{
+		Enabled: true, AllowedSizes: []string{"100Gi", "200Gi"}, DefaultSize: "200Gi", MaxSize: "500Gi",
+	})
+	packageName := testPackageSHA256 + ".zip"
+	payload := "PK\x03\x04cache"
+	request := httptest.NewRequest(http.MethodPut, "/ray/api/packages/gcs/"+packageName, strings.NewReader(payload))
+	request.Header.Set("Content-Length", strconv.Itoa(len(payload)))
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("package upload status=%d body=%s", response.Code, response.Body.String())
+	}
+	body := `{"entrypoint":"python train.py","submission_id":"cache_cli","runtime_env":{"working_dir":"gcs://` + packageName + `"},"metadata":{"platform.cache.mode":"runtime"}}`
+	if response = rayRequest(router, http.MethodPost, "/ray/api/jobs/", body); response.Code != http.StatusOK {
+		t.Fatalf("cache submit status=%d body=%s", response.Code, response.Body.String())
+	}
+	if repository.created == nil || repository.created.Spec.Cache.Mode != domain.CacheModeRuntime || repository.created.Spec.Cache.Size != "200Gi" {
+		t.Fatalf("cache metadata did not reach persisted normalized JobSpec: %+v", repository.created)
 	}
 }
 

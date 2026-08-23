@@ -19,6 +19,11 @@ type projectLocation struct {
 	Path  string `json:"path,omitempty"`
 }
 
+type projectCache struct {
+	Mode string `json:"mode,omitempty"`
+	Size string `json:"size,omitempty"`
+}
+
 type project struct {
 	Name            string          `json:"name,omitempty"`
 	Image           string          `json:"image,omitempty"`
@@ -28,6 +33,7 @@ type project struct {
 	CPUPerWorker    int64           `json:"cpuPerWorker,omitempty"`
 	MemoryPerWorker string          `json:"memoryPerWorker,omitempty"`
 	ExecutionMode   string          `json:"executionMode,omitempty"`
+	Cache           projectCache    `json:"cache,omitempty"`
 	Input           projectLocation `json:"input,omitempty"`
 	Checkpoint      projectLocation `json:"checkpoint,omitempty"`
 	Output          projectLocation `json:"output,omitempty"`
@@ -45,6 +51,7 @@ type submitOverrides struct {
 	CPUPerWorker    int64
 	MemoryPerWorker string
 	ExecutionMode   string
+	Cache           projectCache
 	Input           projectLocation
 	Checkpoint      projectLocation
 	Output          projectLocation
@@ -57,6 +64,8 @@ type submitOverrides struct {
 	providedCPU        bool
 	providedMemory     bool
 	providedMode       bool
+	providedCacheMode  bool
+	providedCacheSize  bool
 	providedInput      bool
 	providedCheckpoint bool
 	providedOutput     bool
@@ -88,6 +97,12 @@ func (base project) merge(overrides submitOverrides) project {
 	if overrides.providedMode {
 		merged.ExecutionMode = overrides.ExecutionMode
 	}
+	if overrides.providedCacheMode {
+		merged.Cache.Mode = overrides.Cache.Mode
+	}
+	if overrides.providedCacheSize {
+		merged.Cache.Size = overrides.Cache.Size
+	}
 	if overrides.providedInput {
 		merged.Input = overrides.Input
 	}
@@ -115,6 +130,11 @@ func loadProject(directory string) (project, error) {
 	if err := yaml.UnmarshalStrict(contents, &loaded); err != nil {
 		return project{}, fmt.Errorf("%s is not a valid project file: %w", projectFileName, err)
 	}
+	// YAML 1.1 treats an unquoted `off` as boolean false. The JSON-tag-aware
+	// decoder converts it to the string "false", so restore the documented mode.
+	if loaded.Cache.Mode == "false" {
+		loaded.Cache.Mode = "off"
+	}
 	return loaded, nil
 }
 
@@ -130,6 +150,7 @@ type starterProject struct {
 	CPUPerWorker    int64            `json:"cpuPerWorker,omitempty"`
 	MemoryPerWorker string           `json:"memoryPerWorker,omitempty"`
 	ExecutionMode   string           `json:"executionMode,omitempty"`
+	Cache           *projectCache    `json:"cache,omitempty"`
 	Input           *projectLocation `json:"input,omitempty"`
 	Checkpoint      *projectLocation `json:"checkpoint,omitempty"`
 	Output          *projectLocation `json:"output,omitempty"`
@@ -142,10 +163,17 @@ func newStarterProject(value project) starterProject {
 		}
 		return &location
 	}
+	optionalCache := func(cache projectCache) *projectCache {
+		if cache.Mode == "" && cache.Size == "" {
+			return nil
+		}
+		return &cache
+	}
 	return starterProject{
 		Name: value.Name, Image: value.Image, Entrypoint: value.Entrypoint,
 		Workers: value.Workers, GPUsPerWorker: value.GPUsPerWorker, CPUPerWorker: value.CPUPerWorker,
 		MemoryPerWorker: value.MemoryPerWorker, ExecutionMode: value.ExecutionMode,
+		Cache: optionalCache(value.Cache),
 		Input: optional(value.Input), Checkpoint: optional(value.Checkpoint), Output: optional(value.Output),
 	}
 }
@@ -179,6 +207,12 @@ const projectFileHeader = `# spk-rayjob submission defaults for this repository.
 #   torchrun    1 worker x N GPUs  (single machine, multi GPU)
 #   ray_train   N workers x M GPUs (multi machine)
 # Do not put torchrun in entrypoint: the platform adds it for you.
+#
+# 可选 runtime 临时缓存会随任务销毁，也不会自动缓存 /mnt/storage/public。
+# 训练代码需要显式读写缓存目录；省略 cache 时缓存关闭：
+# cache:
+#   mode: runtime
+#   size: <平台允许的容量>
 `
 
 // projectRelativeName derives a stable default job name from the directory a

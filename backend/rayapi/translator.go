@@ -18,6 +18,8 @@ const (
 	metadataCPUPerWorker   = "ray-platform.cpu-per-worker"
 	metadataMemoryWorker   = "ray-platform.memory-per-worker"
 	metadataQueue          = "ray-platform.queue"
+	metadataCacheMode      = "platform.cache.mode"
+	metadataCacheSize      = "platform.cache.size"
 )
 
 var (
@@ -40,22 +42,31 @@ func TranslateSubmitRequest(request JobSubmitRequest) (TranslatedSubmitRequest, 
 	if err != nil {
 		return TranslatedSubmitRequest{}, err
 	}
-	return translateSubmitRequest(request, resources, queue, image)
+	cache, err := parseCacheMetadata(request.Metadata)
+	if err != nil {
+		return TranslatedSubmitRequest{}, err
+	}
+	return translateSubmitRequest(request, resources, queue, image, cache)
 }
 
 // TranslateSubmitRequestWithDefaults accepts the standard Ray CLI shape. With
-// no platform metadata it chooses the operator-configured 1-GPU environment;
-// providing any platform metadata opts into the explicit all-fields-required
-// contract so a typo cannot produce a hybrid workload.
+// no ray-platform resource metadata it chooses the operator-configured 1-GPU
+// environment; providing any ray-platform resource metadata opts into the
+// explicit all-fields-required contract so a typo cannot produce a hybrid
+// workload. Cache-only metadata remains independent of that resource choice.
 func TranslateSubmitRequestWithDefaults(request JobSubmitRequest, defaults SubmissionDefaults) (TranslatedSubmitRequest, error) {
 	resources, queue, image, err := parseMetadataOrDefaults(request.Metadata, defaults)
 	if err != nil {
 		return TranslatedSubmitRequest{}, err
 	}
-	return translateSubmitRequest(request, resources, queue, image)
+	cache, err := parseCacheMetadata(request.Metadata)
+	if err != nil {
+		return TranslatedSubmitRequest{}, err
+	}
+	return translateSubmitRequest(request, resources, queue, image, cache)
 }
 
-func translateSubmitRequest(request JobSubmitRequest, resources domain.Resources, queue, image string) (TranslatedSubmitRequest, error) {
+func translateSubmitRequest(request JobSubmitRequest, resources domain.Resources, queue, image string, cache domain.CacheRequest) (TranslatedSubmitRequest, error) {
 	if strings.TrimSpace(request.Entrypoint) == "" || len(request.Entrypoint) > 8192 {
 		return TranslatedSubmitRequest{}, fmt.Errorf("invalid entrypoint")
 	}
@@ -87,9 +98,31 @@ func translateSubmitRequest(request JobSubmitRequest, resources domain.Resources
 			Execution:  executionProfileForResources(resources),
 			Resources:  resources,
 			Queue:      queue,
+			Cache:      cache,
 		},
 		ExternalSubmissionID: externalID,
 	}, nil
+}
+
+func parseCacheMetadata(metadata map[string]string) (domain.CacheRequest, error) {
+	for key := range metadata {
+		if strings.HasPrefix(key, "platform.cache.") && key != metadataCacheMode && key != metadataCacheSize {
+			return domain.CacheRequest{}, fmt.Errorf("unsupported cache metadata %q", key)
+		}
+	}
+	mode := domain.CacheMode(strings.TrimSpace(metadata[metadataCacheMode]))
+	size := strings.TrimSpace(metadata[metadataCacheSize])
+	switch mode {
+	case "", domain.CacheModeOff:
+		if size != "" {
+			return domain.CacheRequest{}, fmt.Errorf("off cache cannot specify size")
+		}
+		return domain.CacheRequest{}, nil
+	case domain.CacheModeRuntime:
+		return domain.CacheRequest{Mode: mode, Size: size}, nil
+	default:
+		return domain.CacheRequest{}, fmt.Errorf("unsupported cache mode %q", mode)
+	}
 }
 
 func executionProfileForResources(resources domain.Resources) domain.ExecutionProfile {
@@ -103,13 +136,13 @@ func executionProfileForResources(resources domain.Resources) domain.ExecutionPr
 }
 
 func parseMetadataOrDefaults(metadata map[string]string, defaults SubmissionDefaults) (domain.Resources, string, string, error) {
-	if hasPlatformMetadata(metadata) {
+	if hasResourceMetadata(metadata) {
 		return parseMetadata(metadata)
 	}
 	return defaults.resources()
 }
 
-func hasPlatformMetadata(metadata map[string]string) bool {
+func hasResourceMetadata(metadata map[string]string) bool {
 	for key := range metadata {
 		if strings.HasPrefix(key, "ray-platform.") {
 			return true

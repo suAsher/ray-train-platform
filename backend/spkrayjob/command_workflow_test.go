@@ -109,8 +109,221 @@ input:
 	if submitted.Output.Space != domain.DataSpaceMyRuns || submitted.Output.RelativePath != "bevfusion-lidar" {
 		t.Fatalf("unexpected output selection: %+v", submitted.Output)
 	}
+	if submitted.Cache != (domain.CacheRequest{}) {
+		t.Fatalf("the shortest submit path must keep cache off, got %+v", submitted.Cache)
+	}
 	if !strings.Contains(stdout.String(), "job-test") {
 		t.Fatalf("expected a readable confirmation, got %q", stdout.String())
+	}
+}
+
+func TestSubmitRuntimeCacheUsesIndependentFlagOverride(t *testing.T) {
+	root := seedProject(t, `name: cache-training
+image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
+entrypoint: python train.py
+cache:
+  mode: runtime
+  size: 100Gi
+`)
+	var submitted domain.JobSpec
+	limitsRead := false
+	stub := artifactStubHandler(t, func(spec domain.JobSpec) { submitted = spec })
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v1/limits" {
+			limitsRead = true
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"cache": map[string]any{
+				"enabled": true, "modes": []string{"off", "runtime"}, "allowedSizes": []string{"100Gi", "200Gi"},
+				"defaultSize": "100Gi", "maxSize": "500Gi",
+			}})
+			return
+		}
+		stub(writer, request)
+	}))
+	defer server.Close()
+
+	err := Run(context.Background(), []string{
+		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root,
+		"--cache-size", "200Gi",
+	}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+	if err != nil {
+		t.Fatalf("submit runtime cache: %v", err)
+	}
+	if submitted.Cache.Mode != domain.CacheModeRuntime || submitted.Cache.Size != "200Gi" {
+		t.Fatalf("cache flag must independently override project size: %+v", submitted.Cache)
+	}
+	if !limitsRead {
+		t.Fatal("runtime cache must be checked against authenticated platform limits")
+	}
+}
+
+func TestSubmitExplicitRuntimeCacheFlags(t *testing.T) {
+	root := seedProject(t, `name: cache-training
+image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
+entrypoint: python train.py
+`)
+	var submitted domain.JobSpec
+	stub := artifactStubHandler(t, func(spec domain.JobSpec) { submitted = spec })
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v1/limits" {
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"cache": map[string]any{
+				"enabled": true, "modes": []string{"off", "runtime"}, "allowedSizes": []string{"100Gi"},
+				"defaultSize": "100Gi", "maxSize": "500Gi",
+			}})
+			return
+		}
+		stub(writer, request)
+	}))
+	defer server.Close()
+
+	err := Run(context.Background(), []string{
+		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root,
+		"--cache-mode", "runtime", "--cache-size", "100Gi",
+	}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+	if err != nil {
+		t.Fatalf("submit explicit runtime cache flags: %v", err)
+	}
+	if submitted.Cache.Mode != domain.CacheModeRuntime || submitted.Cache.Size != "100Gi" {
+		t.Fatalf("explicit cache flags were not applied: %+v", submitted.Cache)
+	}
+}
+
+func TestSubmitRuntimeCacheUsesServerDefaultBeforeUpload(t *testing.T) {
+	root := seedProject(t, `name: cache-training
+image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
+entrypoint: python train.py
+cache:
+  mode: runtime
+`)
+	limitsRead := false
+	var submitted domain.JobSpec
+	stub := artifactStubHandler(t, func(spec domain.JobSpec) { submitted = spec })
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v1/limits" {
+			limitsRead = true
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"cache": map[string]any{
+				"enabled": true, "modes": []string{"off", "runtime"}, "allowedSizes": []string{"100Gi", "200Gi"},
+				"defaultSize": "200Gi", "maxSize": "500Gi",
+			}})
+			return
+		}
+		if request.URL.Path == "/api/v1/source-artifacts" && !limitsRead {
+			t.Fatal("limits must be resolved before source archive upload")
+		}
+		stub(writer, request)
+	}))
+	defer server.Close()
+
+	err := Run(context.Background(), []string{
+		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root,
+	}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+	if err != nil {
+		t.Fatalf("submit runtime cache with platform default: %v", err)
+	}
+	if submitted.Cache.Mode != domain.CacheModeRuntime || submitted.Cache.Size != "200Gi" {
+		t.Fatalf("server default cache size was not applied: %+v", submitted.Cache)
+	}
+}
+
+func TestSubmitRuntimeCacheWithoutServerDefaultFailsBeforeUpload(t *testing.T) {
+	root := seedProject(t, `name: cache-training
+image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
+entrypoint: python train.py
+cache:
+  mode: runtime
+`)
+	uploaded := false
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v1/limits" {
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"cache": map[string]any{
+				"enabled": true, "modes": []string{"off", "runtime"}, "allowedSizes": []string{"100Gi"},
+				"defaultSize": "", "maxSize": "500Gi",
+			}})
+			return
+		}
+		if request.URL.Path == "/api/v1/source-artifacts" || request.Method == http.MethodPut {
+			uploaded = true
+		}
+		t.Fatalf("unexpected request before cache validation: %s %s", request.Method, request.URL.Path)
+	}))
+	defer server.Close()
+
+	err := Run(context.Background(), []string{
+		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root,
+	}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+	if err == nil || !strings.Contains(err.Error(), "默认容量") {
+		t.Fatalf("expected missing default-size error, got %v", err)
+	}
+	if uploaded {
+		t.Fatal("missing runtime cache default must fail before source upload")
+	}
+}
+
+func TestSubmitRejectsInvalidCachePolicyBeforeSourceUpload(t *testing.T) {
+	tests := []struct {
+		name         string
+		mode         string
+		size         string
+		enabled      bool
+		modes        []string
+		allowedSizes []string
+		maxSize      string
+		wantError    string
+	}{
+		{name: "off with size", mode: "off", size: "100Gi", enabled: true, modes: []string{"off", "runtime"}, allowedSizes: []string{"100Gi"}, maxSize: "500Gi", wantError: "关闭"},
+		{name: "unknown mode", mode: "durable", enabled: true, modes: []string{"off", "runtime"}, allowedSizes: []string{"100Gi"}, maxSize: "500Gi", wantError: "不支持"},
+		{name: "disabled", mode: "runtime", size: "100Gi", enabled: false, modes: []string{"off", "runtime"}, allowedSizes: []string{"100Gi"}, maxSize: "500Gi", wantError: "未启用"},
+		{name: "runtime mode disallowed", mode: "runtime", size: "100Gi", enabled: true, modes: []string{"off"}, allowedSizes: []string{"100Gi"}, maxSize: "500Gi", wantError: "不支持 runtime"},
+		{name: "size disallowed", mode: "runtime", size: "300Gi", enabled: true, modes: []string{"off", "runtime"}, allowedSizes: []string{"100Gi", "200Gi"}, maxSize: "500Gi", wantError: "允许范围"},
+		{name: "size exceeds maximum", mode: "runtime", size: "1Ti", enabled: true, modes: []string{"off", "runtime"}, allowedSizes: []string{"100Gi", "1Ti"}, maxSize: "500Gi", wantError: "超过"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := seedProject(t, `name: cache-training
+image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
+entrypoint: python train.py
+cache:
+  mode: `+test.mode+`
+  size: `+test.size+`
+`)
+			uploaded := false
+			server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if request.URL.Path == "/api/v1/limits" {
+					writeClientSuccess(t, writer, http.StatusOK, map[string]any{"cache": map[string]any{
+						"enabled": test.enabled, "modes": test.modes, "allowedSizes": test.allowedSizes,
+						"defaultSize": "100Gi", "maxSize": test.maxSize,
+					}})
+					return
+				}
+				if request.URL.Path == "/api/v1/source-artifacts" || request.Method == http.MethodPut {
+					uploaded = true
+				}
+				t.Fatalf("unexpected request before cache validation: %s %s", request.Method, request.URL.Path)
+			}))
+			defer server.Close()
+
+			err := Run(context.Background(), []string{
+				"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root,
+			}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("expected cache error containing %q, got %v", test.wantError, err)
+			}
+			if uploaded {
+				t.Fatal("invalid cache request must fail before source archive upload")
+			}
+		})
+	}
+}
+
+func TestSubmitOffCacheWithSizeFailsBeforeClientConfiguration(t *testing.T) {
+	root := seedProject(t, `name: cache-training
+image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
+entrypoint: python train.py
+`)
+	err := Run(context.Background(), []string{
+		"submit", "--dir", root, "--cache-size", "100Gi",
+	}, &bytes.Buffer{}, &bytes.Buffer{}, func(string) string { return "" })
+	if err == nil || !strings.Contains(err.Error(), "关闭") {
+		t.Fatalf("off cache with size must fail locally before client configuration, got %v", err)
 	}
 }
 

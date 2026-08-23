@@ -85,6 +85,33 @@ func TestSubmitDirectoryCreatesUploadsCompletesThenSubmits(t *testing.T) {
 	}
 }
 
+func TestPlatformLimitsDecodesAuthenticatedCachePolicy(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/api/v1/limits" {
+			t.Fatalf("unexpected request %s %s", request.Method, request.URL.Path)
+		}
+		if request.Header.Get("Authorization") != "Bearer test-token" {
+			t.Fatal("API token missing")
+		}
+		writeClientSuccess(t, writer, http.StatusOK, map[string]any{"cache": map[string]any{
+			"enabled": true, "modes": []string{"off", "runtime"}, "allowedSizes": []string{"100Gi", "200Gi"},
+			"defaultSize": "200Gi", "maxSize": "500Gi",
+		}})
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientOptions{ServerURL: server.URL, Token: "test-token", HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits, err := client.PlatformLimits(context.Background())
+	if err != nil {
+		t.Fatalf("read platform limits: %v", err)
+	}
+	if !limits.Cache.Enabled || limits.Cache.DefaultSize != "200Gi" || limits.Cache.MaxSize != "500Gi" || !reflect.DeepEqual(limits.Cache.Modes, []string{"off", "runtime"}) || !reflect.DeepEqual(limits.Cache.AllowedSizes, []string{"100Gi", "200Gi"}) {
+		t.Fatalf("unexpected limits: %+v", limits)
+	}
+}
+
 func TestDebugOutputRedactsTokenAndPresignedSignature(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Query().Get("X-Tos-Signature") != "secret-signature" {
