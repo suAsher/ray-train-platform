@@ -188,6 +188,9 @@ func (client *Client) SubmitDirectory(ctx context.Context, directory string, spe
 }
 
 func (client *Client) submitArchive(ctx context.Context, archive Archive, spec domain.JobSpec) (Job, error) {
+	if err := validateArchiveJobSpec(spec); err != nil {
+		return Job{}, err
+	}
 	artifact, err := client.CreateArtifact(ctx, archive)
 	if err != nil {
 		return Job{}, err
@@ -288,6 +291,9 @@ func (client *Client) Submit(ctx context.Context, spec domain.JobSpec) (Job, err
 }
 
 func (client *Client) submit(ctx context.Context, spec domain.JobSpec, origin domain.SubmissionOrigin) (Job, error) {
+	if err := validateFinalJobSpec(spec); err != nil {
+		return Job{}, err
+	}
 	body, err := json.Marshal(struct {
 		Spec   domain.JobSpec          `json:"spec"`
 		Origin domain.SubmissionOrigin `json:"origin,omitempty"`

@@ -85,6 +85,63 @@ func TestSubmitDirectoryCreatesUploadsCompletesThenSubmits(t *testing.T) {
 	}
 }
 
+func TestSubmitRejectsInvalidFinalSpecBeforeCreateAPI(t *testing.T) {
+	tests := []struct {
+		name      string
+		mutate    func(*domain.JobSpec)
+		wantError string
+	}{
+		{
+			name: "source",
+			mutate: func(spec *domain.JobSpec) {
+				spec.Source = domain.CodeSource{}
+			},
+			wantError: `unsupported source type ""`,
+		},
+		{
+			name: "timeout",
+			mutate: func(spec *domain.JobSpec) {
+				spec.TimeoutSeconds = -1
+			},
+			wantError: "timeoutSeconds must not be negative",
+		},
+		{
+			name: "retry",
+			mutate: func(spec *domain.JobSpec) {
+				spec.RetryPolicy.MaxRetries = 4
+			},
+			wantError: "maxRetries must be between 0 and 3",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requests := 0
+			client, err := NewClient(ClientOptions{
+				ServerURL: "https://platform.invalid",
+				Token:     "test-token",
+				HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+					requests++
+					return nil, errors.New("unexpected request")
+				})},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			spec := testJobSpec()
+			spec.Source = domain.CodeSource{Type: "workspace-archive", ArtifactID: "artifact-ready"}
+			test.mutate(&spec)
+
+			_, err = client.Submit(context.Background(), spec)
+			if requests != 0 {
+				t.Fatal("invalid final job spec must fail before the create API")
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("expected validation error containing %q, got %v", test.wantError, err)
+			}
+		})
+	}
+}
+
 func TestPlatformLimitsDecodesAuthenticatedCachePolicy(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet || request.URL.Path != "/api/v1/limits" {

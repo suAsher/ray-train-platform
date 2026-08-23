@@ -463,6 +463,9 @@ func newLocalSubmitDraft(value project, directory string, stdout io.Writer) (loc
 	if err != nil {
 		return localSubmitDraft{}, err
 	}
+	if err := validatePreflightJobSpec(spec); err != nil {
+		return localSubmitDraft{}, err
+	}
 	archive, err := BuildArchive(directory)
 	if err != nil {
 		return localSubmitDraft{}, err
@@ -558,13 +561,13 @@ func (value project) jobSpec() (domain.JobSpec, error) {
 	if err != nil {
 		return domain.JobSpec{}, fmt.Errorf("output path: %w", err)
 	}
-	workers, gpus := positiveOrOne(value.Workers), positiveOrOne(value.GPUsPerWorker)
+	workers, gpus := oneIfZero(value.Workers), oneIfZero(value.GPUsPerWorker)
 	execution, err := executionProfileForFlags(value.ExecutionMode, workers, gpus)
 	if err != nil {
 		return domain.JobSpec{}, err
 	}
 	cpu := value.CPUPerWorker
-	if cpu <= 0 {
+	if cpu == 0 {
 		cpu = 8
 	}
 	memory := strings.TrimSpace(value.MemoryPerWorker)
@@ -583,8 +586,8 @@ func (value project) jobSpec() (domain.JobSpec, error) {
 	}, nil
 }
 
-func positiveOrOne(value int) int {
-	if value <= 0 {
+func oneIfZero(value int) int {
+	if value == 0 {
 		return 1
 	}
 	return value
