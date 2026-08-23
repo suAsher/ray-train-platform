@@ -1,0 +1,109 @@
+{{- if .Values.monitoring.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "ray-cache-local.fullname" . }}-monitor
+  labels:
+    {{- include "ray-cache-local.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cache-monitor
+spec:
+  selector:
+    matchLabels:
+      {{- include "ray-cache-local.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: cache-monitor
+  template:
+    metadata:
+      labels:
+        {{- include "ray-cache-local.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: cache-monitor
+    spec:
+      serviceAccountName: {{ include "ray-cache-local.fullname" . }}-monitor
+      automountServiceAccountToken: false
+      nodeSelector:
+        {{- toYaml .Values.monitoring.nodeSelector | nindent 8 }}
+      tolerations:
+        - operator: Exists
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: node-exporter
+          image: {{ include "ray-cache-local.requireDigestImage" .Values.monitoring.nodeExporter.image }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          args:
+            - --web.listen-address=:{{ .Values.monitoring.service.port }}
+            - --collector.disable-defaults
+            - --collector.textfile
+            - --collector.textfile.directory=/var/lib/node-exporter/textfile
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.monitoring.service.port }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.monitoring.nodeExporter.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: textfile
+              mountPath: /var/lib/node-exporter/textfile
+              readOnly: true
+        - name: cache-metrics-collector
+          image: {{ include "ray-cache-local.requireDigestImage" .Values.monitoring.collector.image }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command: ["/bin/sh", "/scripts/collect-cache-metrics"]
+          env:
+            - name: INTERVAL_SECONDS
+              value: {{ .Values.monitoring.intervalSeconds | quote }}
+            - name: TEXTFILE_DIR
+              value: /var/lib/node-exporter/textfile
+          resources:
+            {{- toYaml .Values.monitoring.collector.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: false
+            runAsUser: 0
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+              add: ["DAC_READ_SEARCH"]
+          volumeMounts:
+            - name: data1
+              mountPath: /host/data1
+              readOnly: true
+            - name: data2
+              mountPath: /host/data2
+              readOnly: true
+            - name: textfile
+              mountPath: /var/lib/node-exporter/textfile
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: data1
+          hostPath:
+            path: /data1
+            type: Directory
+        - name: data2
+          hostPath:
+            path: /data2
+            type: Directory
+        - name: textfile
+          emptyDir: {}
+        - name: scripts
+          configMap:
+            name: {{ include "ray-cache-local.fullname" . }}-config
+            defaultMode: 0555
+            items:
+              - key: collect-cache-metrics
+                path: collect-cache-metrics
+{{- end }}

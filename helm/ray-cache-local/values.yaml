@@ -1,0 +1,61 @@
+nameOverride: ""
+fullnameOverride: ""
+
+images:
+  provisioner: harbor.wellspiking.ai/guofeng.su/local-path-provisioner@sha256:7d30aa9da00db4d40dbe3d2bb41a0fb6a3a926cbe915908458b0ec470db73115
+  helper: harbor.wellspiking.ai/guofeng.su/busybox@sha256:ff6bba6f18535e7ccb3c1bbed0b84e5c733d7d9dd8815f1ea93ee73073135aa4
+  pullPolicy: IfNotPresent
+
+storageClass:
+  name: ray-cache-local
+  provisioner: rancher.io/local-path
+  reclaimPolicy: Delete
+  volumeBindingMode: WaitForFirstConsumer
+  allowVolumeExpansion: false
+
+# Portable defaults deliberately deny all nodes. Cluster profiles must opt in
+# exact node names and exact cache roots.
+nodePathMap: []
+
+provisioner:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  preferredNodeSelector:
+    platform.wellspiking.ai/pool: control-plane
+
+monitoring:
+  enabled: false
+  intervalSeconds: 30
+  nodeSelector:
+    accelerator: nvidia-rtx-4090
+    gpu-pool: production
+  nodeExporter:
+    image: harbor.wellspiking.ai/guofeng.su/node-exporter@sha256:8c9bac11973b94b59be88d6e11fee4429aa743c8846cdc75d65b18db33f6a106
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi
+  collector:
+    image: harbor.wellspiking.ai/guofeng.su/busybox@sha256:ff6bba6f18535e7ccb3c1bbed0b84e5c733d7d9dd8815f1ea93ee73073135aa4
+    resources:
+      requests:
+        cpu: 25m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 64Mi
+  service:
+    port: 9100
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+  prometheusRule:
+    enabled: false

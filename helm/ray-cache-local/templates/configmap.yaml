@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ray-cache-local.fullname" . }}-config
+  labels:
+    {{- include "ray-cache-local.labels" . | nindent 4 }}
+data:
+  config.json: |-
+    {
+      "nodePathMap": [
+        {{- range $index, $mapping := .Values.nodePathMap }}
+        {{- if $index }},{{ end }}
+        {"node": {{ $mapping.node | quote }}, "paths": {{ $mapping.paths | toJson }}}
+        {{- end }}
+        {{- if .Values.nodePathMap }},{{ end }}
+        {"node": "DEFAULT_PATH_FOR_NON_LISTED_NODES", "paths": []}
+      ]
+    }
+  setup: |-
+{{ .Files.Get "files/setup" | indent 4 }}
+  teardown: |-
+{{ .Files.Get "files/teardown" | indent 4 }}
+  collect-cache-metrics: |-
+{{ .Files.Get "files/collect-cache-metrics" | indent 4 }}
+  helperPod.yaml: |-
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      name: helper-pod
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: helper-pod
+          image: {{ include "ray-cache-local.requireDigestImage" .Values.images.helper }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: false
+            runAsUser: 0
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["AUDIT_WRITE", "KILL", "NET_BIND_SERVICE", "NET_RAW", "SETFCAP", "SETGID", "SETPCAP", "SETUID", "SYS_CHROOT"]

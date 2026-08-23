@@ -1,0 +1,19 @@
+{{- if and .Values.monitoring.enabled .Values.monitoring.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "ray-cache-local.fullname" . }}
+  labels:
+    {{- include "ray-cache-local.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "ray-cache-local.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: cache-monitor
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval }}
+{{- end }}

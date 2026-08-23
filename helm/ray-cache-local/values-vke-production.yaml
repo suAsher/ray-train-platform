@@ -1,0 +1,20 @@
+images:
+  provisioner: harbor.wellspiking.ai/guofeng.su/local-path-provisioner@sha256:7d30aa9da00db4d40dbe3d2bb41a0fb6a3a926cbe915908458b0ec470db73115
+  helper: harbor.wellspiking.ai/guofeng.su/busybox@sha256:ff6bba6f18535e7ccb3c1bbed0b84e5c733d7d9dd8815f1ea93ee73073135aa4
+
+nodePathMap:
+  - node: "172.28.1.232"
+    paths:
+      - /data1/ray-cache
+      - /data2/ray-cache
+  - node: "172.28.1.233"
+    paths:
+      - /data1/ray-cache
+      - /data2/ray-cache
+
+monitoring:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+  prometheusRule:
+    enabled: true
