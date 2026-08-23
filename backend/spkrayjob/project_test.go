@@ -76,6 +76,22 @@ func TestProjectFileStrictlyAcceptsUnquotedOffCacheMode(t *testing.T) {
 	}
 }
 
+func TestProjectFileRejectsBooleanLikeCacheModes(t *testing.T) {
+	for _, mode := range []string{"false", "no"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			contents := "cache:\n  mode: " + mode + "\n"
+			if err := os.WriteFile(filepath.Join(root, projectFileName), []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := loadProject(root)
+			if err == nil || !strings.Contains(err.Error(), "cache.mode") {
+				t.Fatalf("unquoted %q must be rejected clearly, got %v", mode, err)
+			}
+		})
+	}
+}
+
 // Explicit flags always win: a project file is a default, not a lock.
 func TestExplicitFlagsOverrideProjectDefaults(t *testing.T) {
 	project := project{
@@ -100,8 +116,15 @@ func TestExplicitFlagsOverrideProjectDefaults(t *testing.T) {
 	modeOnly := project.merge(submitOverrides{
 		Cache: projectCache{Mode: "off"}, providedCacheMode: true,
 	})
-	if modeOnly.Cache.Mode != "off" || modeOnly.Cache.Size != "100Gi" {
-		t.Fatalf("an omitted size flag must preserve the project value, got %+v", modeOnly.Cache)
+	if modeOnly.Cache.Mode != "off" || modeOnly.Cache.Size != "" {
+		t.Fatalf("an explicit off mode must clear the inherited size, got %+v", modeOnly.Cache)
+	}
+
+	runtimeModeOnly := project.merge(submitOverrides{
+		Cache: projectCache{Mode: "runtime"}, providedCacheMode: true,
+	})
+	if runtimeModeOnly.Cache.Mode != "runtime" || runtimeModeOnly.Cache.Size != "100Gi" {
+		t.Fatalf("runtime mode alone must preserve the project size, got %+v", runtimeModeOnly.Cache)
 	}
 }
 

@@ -156,6 +156,41 @@ cache:
 	}
 }
 
+func TestSubmitCacheModeOffClearsInheritedSizeWithoutLimitsRequest(t *testing.T) {
+	root := seedProject(t, `name: cache-training
+image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
+entrypoint: python train.py
+cache:
+  mode: runtime
+  size: 100Gi
+`)
+	var submitted domain.JobSpec
+	limitsRead := false
+	stub := artifactStubHandler(t, func(spec domain.JobSpec) { submitted = spec })
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v1/limits" {
+			limitsRead = true
+			t.Fatal("cache mode off must not request platform limits")
+		}
+		stub(writer, request)
+	}))
+	defer server.Close()
+
+	err := Run(context.Background(), []string{
+		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root,
+		"--cache-mode", "off",
+	}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+	if err != nil {
+		t.Fatalf("submit with cache disabled by flag: %v", err)
+	}
+	if limitsRead {
+		t.Fatal("cache mode off must not request platform limits")
+	}
+	if submitted.Cache != (domain.CacheRequest{}) {
+		t.Fatalf("cache mode off must omit cache from the job spec, got %+v", submitted.Cache)
+	}
+}
+
 func TestSubmitExplicitRuntimeCacheFlags(t *testing.T) {
 	root := seedProject(t, `name: cache-training
 image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
@@ -315,15 +350,19 @@ cache:
 }
 
 func TestSubmitOffCacheWithSizeFailsBeforeClientConfiguration(t *testing.T) {
-	root := seedProject(t, `name: cache-training
+	for _, arguments := range [][]string{
+		{"--cache-size", "100Gi"},
+		{"--cache-mode", "off", "--cache-size", "100Gi"},
+	} {
+		root := seedProject(t, `name: cache-training
 image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
 entrypoint: python train.py
 `)
-	err := Run(context.Background(), []string{
-		"submit", "--dir", root, "--cache-size", "100Gi",
-	}, &bytes.Buffer{}, &bytes.Buffer{}, func(string) string { return "" })
-	if err == nil || !strings.Contains(err.Error(), "关闭") {
-		t.Fatalf("off cache with size must fail locally before client configuration, got %v", err)
+		command := append([]string{"submit", "--dir", root}, arguments...)
+		err := Run(context.Background(), command, &bytes.Buffer{}, &bytes.Buffer{}, func(string) string { return "" })
+		if err == nil || !strings.Contains(err.Error(), "关闭") {
+			t.Fatalf("off cache with arguments %v must fail locally before client configuration, got %v", arguments, err)
+		}
 	}
 }
 
