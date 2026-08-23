@@ -26,8 +26,8 @@ backend:
   rayAPIDefaultImage: harbor.wellspiking.ai/guofeng.su/ray-train-pytorch@sha256:2102761c7a5e3af6ff33225182d5b936d18601f7d5697bc11187922df58cfa7f
   image:
     repository: ray-train-backend
-    tag: prod-20260823-nvme-cache-r1
-    digest: sha256:2f2dd0a6a3309ccc89e2fa0ffc04d2bfa8df007340dca778002642f05de2a8b0
+    tag: prod-20260824-cache-compat-r1
+    digest: sha256:fa07bb0959e0ed74b563e527b8e71af6d2973813fdf178f12a41864d484bd6a7
   oidc:
     issuerURL: https://keycloak.test.invalid/realms/ai
     clientID: ray-training-platform-test
