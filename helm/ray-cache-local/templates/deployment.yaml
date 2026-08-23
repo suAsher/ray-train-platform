@@ -43,7 +43,22 @@ spec:
         - name: local-path-provisioner
           image: {{ include "ray-cache-local.requireDigestImage" .Values.images.provisioner }}
           imagePullPolicy: {{ .Values.images.pullPolicy }}
-          command: ["local-path-provisioner", "--debug", "start", "--config", "/etc/config/config.json"]
+          command:
+            - local-path-provisioner
+            - --debug
+            - start
+            - --config
+            - /etc/config/config.json
+            - --configmap-name
+            - {{ include "ray-cache-local.fullname" . }}-config
+            - --helper-pod-file
+            - /etc/config/helperPod.yaml
+            - --helper-image
+            - {{ include "ray-cache-local.requireDigestImage" .Values.images.helper }}
+            - --service-account-name
+            - {{ include "ray-cache-local.fullname" . }}
+            - --provisioner-name
+            - {{ .Values.storageClass.provisioner }}
           env:
             - name: POD_NAMESPACE
               valueFrom:
