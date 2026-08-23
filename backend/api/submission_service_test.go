@@ -27,7 +27,7 @@ func TestSubmissionNormalizesAndEnforcesRuntimeCachePolicy(t *testing.T) {
 		wantSize  string
 		wantError string
 	}{
-		{name: "omitted becomes off", cache: domain.CacheRequest{}, wantMode: domain.CacheModeOff},
+		{name: "omitted remains omitted", cache: domain.CacheRequest{}, wantMode: ""},
 		{name: "explicit off remains off", cache: domain.CacheRequest{Mode: domain.CacheModeOff}, wantMode: domain.CacheModeOff},
 		{name: "runtime rejected while disabled", cache: domain.CacheRequest{Mode: domain.CacheModeRuntime, Size: "200Gi"}, wantError: "capability is disabled"},
 		{name: "runtime defaults size", policy: LocalCachePolicy{Enabled: true, AllowedSizes: []string{"100Gi", "200Gi", "500Gi"}, DefaultSize: "200Gi", MaxSize: "500Gi"}, cache: domain.CacheRequest{Mode: domain.CacheModeRuntime}, wantMode: domain.CacheModeRuntime, wantSize: "200Gi"},

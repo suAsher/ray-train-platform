@@ -483,7 +483,10 @@ func normalizeCacheRequest(cache domain.CacheRequest, policy LocalCachePolicy) (
 	cache.Mode = domain.CacheMode(strings.TrimSpace(string(cache.Mode)))
 	cache.Size = strings.TrimSpace(cache.Size)
 	if cache.Mode == "" {
-		cache.Mode = domain.CacheModeOff
+		if err := cache.Validate(); err != nil {
+			return domain.CacheRequest{}, err
+		}
+		return cache, nil
 	}
 	if cache.Mode != domain.CacheModeRuntime {
 		if err := cache.Validate(); err != nil {
