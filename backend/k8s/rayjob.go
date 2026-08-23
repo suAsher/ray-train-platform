@@ -323,7 +323,7 @@ func (options LocalCacheOptions) resolve(request domain.CacheRequest) (LocalCach
 		allowed, parseErr := positiveCacheQuantity(configured)
 		if parseErr == nil && requested.Cmp(allowed) == 0 {
 			options.runtime = true
-			options.resolvedSize = strings.TrimSpace(request.Size)
+			options.resolvedSize = strings.TrimSpace(configured)
 			return options, nil
 		}
 	}

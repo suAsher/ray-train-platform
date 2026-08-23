@@ -41,6 +41,18 @@ func TestRenderRayJobAddsGenericEphemeralCacheOnlyWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestRenderRayJobUsesConfiguredSpellingForEquivalentCacheSize(t *testing.T) {
+	job := validRenderJob()
+	job.Spec.Cache = domain.CacheRequest{Mode: domain.CacheModeRuntime, Size: "102400Mi"}
+	manifest, err := RenderRayJob(job, runtimeCacheRenderOptions())
+	if err != nil {
+		t.Fatalf("render ray job: %v", err)
+	}
+
+	assertGenericEphemeralCache(t, "head", cacheHeadPodSpec(t, manifest.Object), "100Gi")
+	assertGenericEphemeralCache(t, "worker", cacheWorkerPodSpec(t, manifest.Object), "100Gi")
+}
+
 func TestRenderRayJobCapabilityEnabledDoesNotMountCacheForOmittedRequest(t *testing.T) {
 	manifest, err := RenderRayJob(validRenderJob(), runtimeCacheRenderOptions())
 	if err != nil {
