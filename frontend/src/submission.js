@@ -11,21 +11,36 @@ export function parseEntrypoint(value) {
   return parts
 }
 
+/** Quote one value as a single POSIX sh argument. */
+export function shellArg(value) {
+  return "'" + String(value).replaceAll("'", "'\"'\"'") + "'"
+}
+
 /** Build the copyable spk-rayjob command shown in the final submit preview. */
 export function equivalentSubmitCommand(form) {
-  const parts = ['spk-rayjob submit', `--name ${form.name || '<任务名>'}`, `--image ${form.image || '<镜像 digest>'}`]
-  parts.push(`--entrypoint '${form.entrypoint || '<启动命令>'}'`)
-  parts.push(`--workers ${form.workerReplicas}`, `--gpus-per-worker ${form.gpusPerWorker}`)
+  const parts = [
+    'spk-rayjob submit',
+    `--name ${shellArg(form.name || '<任务名>')}`,
+    `--image ${shellArg(form.image || '<镜像 digest>')}`,
+  ]
+  parts.push(`--entrypoint ${shellArg(form.entrypoint || '<启动命令>')}`)
+  parts.push(
+    `--workers ${shellArg(form.workerReplicas)}`,
+    `--gpus-per-worker ${shellArg(form.gpusPerWorker)}`,
+  )
   if (form.cacheMode === 'runtime') {
-    parts.push('--cache-mode runtime', `--cache-size ${String(form.cacheSize || '<缓存容量>').trim()}`)
+    parts.push(
+      `--cache-mode ${shellArg('runtime')}`,
+      `--cache-size ${shellArg(String(form.cacheSize || '<缓存容量>').trim())}`,
+    )
   }
   if (form.input?.spaceId) {
-    parts.push(`--input-space ${form.input.spaceId}`)
-    if (form.input.relativePath) parts.push(`--input-path ${form.input.relativePath}`)
+    parts.push(`--input-space ${shellArg(form.input.spaceId)}`)
+    if (form.input.relativePath) parts.push(`--input-path ${shellArg(form.input.relativePath)}`)
   }
   if (form.checkpoint?.spaceId) {
-    parts.push(`--checkpoint-space ${form.checkpoint.spaceId}`)
-    if (form.checkpoint.relativePath) parts.push(`--checkpoint-path ${form.checkpoint.relativePath}`)
+    parts.push(`--checkpoint-space ${shellArg(form.checkpoint.spaceId)}`)
+    if (form.checkpoint.relativePath) parts.push(`--checkpoint-path ${shellArg(form.checkpoint.relativePath)}`)
   }
   parts.push('--watch')
   return parts.join(' \\\n  ')

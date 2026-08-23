@@ -3,7 +3,13 @@ import test from 'node:test'
 
 import * as submission from './submission.js'
 
-const { buildJobSpec, equivalentSubmitCommand, equivalentSubmitCommandForJob, parseEntrypoint } = submission
+const {
+  buildJobSpec,
+  equivalentSubmitCommand,
+  equivalentSubmitCommandForJob,
+  parseEntrypoint,
+  shellArg,
+} = submission
 
 const baseForm = () => ({
   name: 'support-sft-001',
@@ -43,6 +49,11 @@ test('parseEntrypoint preserves quoted arguments', () => {
     parseEntrypoint('python train.py --run-name "support sft"'),
     ['python', 'train.py', '--run-name', 'support sft'],
   )
+})
+
+test('shellArg uses POSIX single-quote escaping, including for an empty value', () => {
+  assert.equal(shellArg(''), "''")
+  assert.equal(shellArg("a b'c;$(d)`e`&&f"), "'a b'\"'\"'c;$(d)`e`&&f'")
 })
 
 test('buildJobSpec maps a Git submission into the platform runtime contract', () => {
@@ -148,7 +159,7 @@ test('equivalent submit command includes the selected runtime cache flags', () =
     cacheSize: '200Gi',
   })
 
-  assert.match(command, /--cache-mode runtime \\\n  --cache-size 200Gi/)
+  assert.match(command, /--cache-mode 'runtime' \\\n  --cache-size '200Gi'/)
 })
 
 test('equivalent submit command omits cache flags for off and legacy forms', () => {
@@ -157,6 +168,43 @@ test('equivalent submit command omits cache flags for off and legacy forms', () 
 
   assert.doesNotMatch(off, /--cache-(?:mode|size)/)
   assert.doesNotMatch(legacy, /--cache-(?:mode|size)/)
+})
+
+test('equivalent submit command shell-quotes every interpolated flag value exactly', () => {
+  const command = equivalentSubmitCommand({
+    ...baseForm(),
+    name: "team's run; $(name) `name` && next",
+    image: "registry.example/train image:latest; $(image) `image` && next's",
+    entrypoint: "python train.py --run 'alpha beta'; $(entrypoint) `entrypoint` && next",
+    workerReplicas: '2; $(workers)',
+    gpusPerWorker: '8 && `gpus`',
+    cacheMode: 'runtime',
+    cacheSize: "200 Gi; $(cache) `cache` && next's",
+    input: {
+      spaceId: "team input's; $(input-space) `input-space` && next",
+      relativePath: "train path's; $(input-path) `input-path` && next",
+    },
+    checkpoint: {
+      spaceId: "public checkpoint's; $(checkpoint-space) `checkpoint-space` && next",
+      relativePath: "models base's; $(checkpoint-path) `checkpoint-path` && next",
+    },
+  })
+
+  assert.equal(command, [
+    'spk-rayjob submit',
+    "--name 'team'\"'\"'s run; $(name) `name` && next'",
+    "--image 'registry.example/train image:latest; $(image) `image` && next'\"'\"'s'",
+    "--entrypoint 'python train.py --run '\"'\"'alpha beta'\"'\"'; $(entrypoint) `entrypoint` && next'",
+    "--workers '2; $(workers)'",
+    "--gpus-per-worker '8 && `gpus`'",
+    "--cache-mode 'runtime'",
+    "--cache-size '200 Gi; $(cache) `cache` && next'\"'\"'s'",
+    "--input-space 'team input'\"'\"'s; $(input-space) `input-space` && next'",
+    "--input-path 'train path'\"'\"'s; $(input-path) `input-path` && next'",
+    "--checkpoint-space 'public checkpoint'\"'\"'s; $(checkpoint-space) `checkpoint-space` && next'",
+    "--checkpoint-path 'models base'\"'\"'s; $(checkpoint-path) `checkpoint-path` && next'",
+    '--watch',
+  ].join(' \\\n  '))
 })
 
 test('JobDetail equivalent command includes explicit runtime cache flags through the shared builder', () => {
@@ -171,8 +219,44 @@ test('JobDetail equivalent command includes explicit runtime cache flags through
     },
   })
 
-  assert.match(command, /--cache-mode runtime \\\n  --cache-size 200Gi/)
-  assert.match(command, /--input-space team-shared/)
+  assert.match(command, /--cache-mode 'runtime' \\\n  --cache-size '200Gi'/)
+  assert.match(command, /--input-space 'team-shared'/)
+})
+
+test('JobDetail equivalent command shell-quotes persisted values exactly', () => {
+  const command = equivalentSubmitCommandForJob({
+    name: "saved job's; $(name) `name` && next",
+    entrypoint: "python saved.py --run 'alpha beta'; $(entrypoint) `entrypoint` && next",
+    spec: {
+      image: "registry.example/saved image:latest; $(image) `image` && next's",
+      resources: { workerReplicas: '3; $(workers)', gpusPerWorker: '4 && `gpus`' },
+      input: {
+        space: "saved input's; $(input-space) `input-space` && next",
+        relativePath: "saved train's; $(input-path) `input-path` && next",
+      },
+      checkpoint: {
+        space: "saved checkpoint's; $(checkpoint-space) `checkpoint-space` && next",
+        relativePath: "saved models's; $(checkpoint-path) `checkpoint-path` && next",
+      },
+      cache: { mode: 'runtime', size: "100 Gi; $(cache) `cache` && next's" },
+    },
+  })
+
+  assert.equal(command, [
+    'spk-rayjob submit',
+    "--name 'saved job'\"'\"'s; $(name) `name` && next'",
+    "--image 'registry.example/saved image:latest; $(image) `image` && next'\"'\"'s'",
+    "--entrypoint 'python saved.py --run '\"'\"'alpha beta'\"'\"'; $(entrypoint) `entrypoint` && next'",
+    "--workers '3; $(workers)'",
+    "--gpus-per-worker '4 && `gpus`'",
+    "--cache-mode 'runtime'",
+    "--cache-size '100 Gi; $(cache) `cache` && next'\"'\"'s'",
+    "--input-space 'saved input'\"'\"'s; $(input-space) `input-space` && next'",
+    "--input-path 'saved train'\"'\"'s; $(input-path) `input-path` && next'",
+    "--checkpoint-space 'saved checkpoint'\"'\"'s; $(checkpoint-space) `checkpoint-space` && next'",
+    "--checkpoint-path 'saved models'\"'\"'s; $(checkpoint-path) `checkpoint-path` && next'",
+    '--watch',
+  ].join(' \\\n  '))
 })
 
 test('JobDetail equivalent command omits cache flags for off and legacy jobs', () => {
