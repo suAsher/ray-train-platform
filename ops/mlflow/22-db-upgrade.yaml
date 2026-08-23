@@ -20,8 +20,24 @@ spec:
       restartPolicy: Never
       imagePullSecrets:
         - name: harbor-registry
-      nodeSelector:
-        platform.wellspiking.ai/pool: control-plane
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node.kubernetes.io/instance-type
+                    operator: NotIn
+                    values: [virtual-node]
+                  - key: type
+                    operator: NotIn
+                    values: [virtual-kubelet]
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: platform.wellspiking.ai/pool
+                    operator: In
+                    values: [control-plane]
       containers:
         - name: upgrade
           image: harbor.wellspiking.ai/guofeng.su/mlflow:v3.14.0-full@sha256:03c206d175084ee3f654a1353ab62ccd2e59048c54f9488f08cc4d8f5de0037d

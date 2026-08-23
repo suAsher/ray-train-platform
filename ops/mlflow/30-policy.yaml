@@ -106,9 +106,24 @@ spec:
       automountServiceAccountToken: false
       imagePullSecrets:
         - name: harbor-registry
-      nodeSelector:
-        platform.wellspiking.ai/pool: control-plane
       affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node.kubernetes.io/instance-type
+                    operator: NotIn
+                    values: [virtual-node]
+                  - key: type
+                    operator: NotIn
+                    values: [virtual-kubelet]
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: platform.wellspiking.ai/pool
+                    operator: In
+                    values: [control-plane]
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
             - labelSelector:

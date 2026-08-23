@@ -21,6 +21,30 @@ readonly README="${ROOT_DIR}/ops/mlflow/README.md"
 readonly VENDORED_CHART="${ROOT_DIR}/helm/vendor/mlflow-0.1.0.tgz"
 readonly VENDORED_DEPLOYMENT="mlflow/templates/deployment.yaml"
 
+assert_cpu_preferred_physical() {
+  local manifest="$1"
+  grep -Fq 'preferredDuringSchedulingIgnoredDuringExecution:' "$manifest" || {
+    echo "missing CPU preference in ${manifest}" >&2
+    exit 1
+  }
+  grep -Fq 'weight: 100' "$manifest"
+  grep -Fq 'key: platform.wellspiking.ai/pool' "$manifest"
+  grep -Fq 'values: [control-plane]' "$manifest"
+  grep -Fq 'requiredDuringSchedulingIgnoredDuringExecution:' "$manifest"
+  grep -Fq 'key: node.kubernetes.io/instance-type' "$manifest"
+  grep -Fq 'values: [virtual-node]' "$manifest"
+  grep -Fq 'key: type' "$manifest"
+  grep -Fq 'values: [virtual-kubelet]' "$manifest"
+  if grep -A3 'nodeSelector:' "$manifest" | grep -Eq 'control-plane|nvidia-rtx-4090|gpu-pool'; then
+    echo "hard CPU/GPU nodeSelector remains in ${manifest}" >&2
+    exit 1
+  fi
+  if grep -Fq 'nvidia.com/gpu' "$manifest"; then
+    echo "shared service requests a GPU in ${manifest}" >&2
+    exit 1
+  fi
+}
+
 vendored_deployment="$(tar -xOf "$VENDORED_CHART" "$VENDORED_DEPLOYMENT")"
 grep -Fq '          command:' <<<"$vendored_deployment" || {
   echo 'vendored MLflow chart must render server flags in container.command' >&2
@@ -32,18 +56,9 @@ grep -Fq -- '- --static-prefix={{ .Values.server.staticPrefix }}' <<<"$vendored_
 }
 
 grep -Fq 'replicaCount: 2' "$VALUES"
-grep -A1 '^nodeSelector:$' "$VALUES" | grep -Fq 'accelerator: nvidia-rtx-4090' || {
-  echo 'MLflow server must use CPU and memory from the GPU worker pool' >&2
-  exit 1
-}
-grep -A2 '^nodeSelector:$' "$VALUES" | grep -Fq 'platform.wellspiking.ai/gpu-pool: production' || {
-  echo 'MLflow server must be restricted to the production GPU worker pool' >&2
-  exit 1
-}
-if grep -Fq 'nvidia.com/gpu' "$VALUES"; then
-  echo 'MLflow server must not reserve a GPU device' >&2
-  exit 1
-fi
+for manifest in "$VALUES" "$DATABASE" "$BOOTSTRAP" "$DB_UPGRADE" "$ACCEPTANCE" "$POLICY" "$FSX_PROBE" "$SMOKE"; do
+  assert_cpu_preferred_physical "$manifest"
+done
 grep -Fq '  staticPrefix: /mlflow' "$VALUES" || {
   echo 'MLflow must be served under server.staticPrefix /mlflow' >&2
   exit 1
@@ -245,20 +260,6 @@ grep -Fq 'kind: DaemonSet' "$FSX_PROBE"
 grep -Fq 'name: mlflow-fsx-probe' "$FSX_PROBE"
 grep -Fq 'name: mlflow-fsx-dns-probe' "$FSX_PROBE"
 grep -Fq 'claimName: mlflow-artifacts-irsa' "$FSX_PROBE"
-grep -Fq 'accelerator: nvidia-rtx-4090' "$FSX_PROBE"
-grep -Fq 'accelerator: nvidia-rtx-4090' "$BOOTSTRAP"
-grep -Fq 'accelerator: nvidia-rtx-4090' "$ACCEPTANCE"
-grep -Fq 'platform.wellspiking.ai/gpu-pool: production' "$FSX_PROBE"
-grep -Fq 'platform.wellspiking.ai/gpu-pool: production' "$BOOTSTRAP"
-grep -Fq 'platform.wellspiking.ai/gpu-pool: production' "$ACCEPTANCE"
-grep -Fq 'platform.wellspiking.ai/pool: control-plane' "$DATABASE"
-grep -Fq 'platform.wellspiking.ai/pool: control-plane' "$POLICY"
-grep -Fq 'platform.wellspiking.ai/pool: control-plane' "$DB_UPGRADE"
-grep -Fq 'platform.wellspiking.ai/pool: control-plane' "$SMOKE"
-if grep -Fq 'nvidia.com/gpu' "$FSX_PROBE" "$BOOTSTRAP" "$ACCEPTANCE"; then
-  echo 'MLflow probes and acceptance jobs must not reserve a GPU device' >&2
-  exit 1
-fi
 grep -Fq 'dnsPolicy: Default' "$FSX_PROBE"
 grep -Fq 'nslookup "$endpoint" "$resolver"' "$FSX_PROBE"
 grep -Fq '192.168.110.61/32' "$FSX_PROBE"
@@ -295,7 +296,10 @@ grep -Fq 'daemonset mlflow-fsx-probe' "$VERIFY"
 grep -Fq 'daemonset mlflow-fsx-dns-probe' "$VERIFY"
 grep -Fq 'FSX probe has no matching MLflow serving nodes' "$VERIFY"
 grep -Fq 'FSX DNS probe has no matching MLflow serving nodes' "$VERIFY"
-grep -Fq 'MLflow deployment is not restricted to the production GPU worker pool' "$VERIFY"
+grep -Fq 'MLflow deployment has a hard nodeSelector' "$VERIFY"
+grep -Fq 'preferredDuringSchedulingIgnoredDuringExecution' "$VERIFY"
+grep -Fq 'platform.wellspiking.ai/pool' "$VERIFY"
+grep -Fq 'virtual-node' "$VERIFY"
 grep -Fq 'MLflow Pod requested an nvidia.com/gpu device' "$VERIFY"
 grep -Fq '.metadata.deletionTimestamp' "$VERIFY"
 grep -Fq '[[ -n "$deletion_timestamp" ]] && continue' "$VERIFY"

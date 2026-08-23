@@ -31,12 +31,17 @@ require_rendered() {
 
 require_rendered 'image: harbor.wellspiking.ai/hub/grafana/loki:3.7.6'
 require_rendered 'image: harbor.wellspiking.ai/hub/nginxinc/nginx-unprivileged:1.31-alpine'
-require_rendered 'platform.wellspiking.ai/pool: control-plane'
+require_rendered 'preferredDuringSchedulingIgnoredDuringExecution:'
+require_rendered 'weight: 100'
+require_rendered 'key: platform.wellspiking.ai/pool'
+require_rendered 'control-plane'
+require_rendered 'key: node.kubernetes.io/instance-type'
+require_rendered 'virtual-node'
 require_rendered 'storageClassName: ebs-ssd'
 require_rendered 'name: storage'
 require_rendered 'mountPath: /var/loki'
-if grep -Fq 'virtual-node' "$rendered" || grep -Fq 'burst-to-vci' "$rendered"; then
-  echo 'CPU Loki profile must not target VCI' >&2
+if grep -Fq 'nvidia.com/gpu' "$rendered"; then
+  echo 'Loki must not request GPU resources' >&2
   exit 1
 fi
 

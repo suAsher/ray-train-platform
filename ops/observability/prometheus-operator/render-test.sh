@@ -18,6 +18,21 @@ grep -q 'storage: 50Gi' "$rendered"
 grep -q 'harbor.wellspiking.ai/guofeng.su/prometheus-operator:v0.92.1@sha256:7d9247d2351480fc74587e24681578f815f387bafb2ee7b86a852a94c4cd3774' "$rendered"
 grep -q 'harbor.wellspiking.ai/guofeng.su/prometheus-config-reloader:v0.92.1@sha256:74550ba3e8bf93f47bc574231090d340ae9c01d25cd11ff74799e65f9fdb9a48' "$rendered"
 grep -q 'harbor.wellspiking.ai/guofeng.su/thanos:v0.42.2@sha256:6249f7aaadd3695df637fb2eb4cb9a9955611eee691c3970892fe9c0dc3f2db6' "$rendered"
+[[ "$(grep -c 'weight: 100' "$rendered")" -ge 4 ]] || {
+  echo 'Prometheus, Alertmanager, Grafana, and operator workloads must prefer CPU nodes' >&2
+  exit 1
+}
+grep -q 'key: platform.wellspiking.ai/pool' "$rendered"
+grep -q 'key: node.kubernetes.io/instance-type' "$rendered"
+grep -q 'virtual-node' "$rendered"
+if grep -A3 'nodeSelector:' "$rendered" | grep -Fq 'platform.wellspiking.ai/pool: control-plane'; then
+  echo 'monitoring workloads must not retain a hard control-plane nodeSelector' >&2
+  exit 1
+fi
+if grep -q 'nvidia.com/gpu' "$rendered"; then
+  echo 'monitoring workloads must not request GPU resources' >&2
+  exit 1
+fi
 ! grep -q 'ray-observability' "$rendered"
 if grep -Eq '(^[[:space:]]*image:.*(quay\.io|ghcr\.io|docker\.io)|--[a-z-]+=.*(quay\.io|ghcr\.io|docker\.io))' "$rendered"; then
   echo 'rendered observability chart still contains an external workload image reference' >&2

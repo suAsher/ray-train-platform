@@ -18,8 +18,24 @@ spec:
       restartPolicy: Never
       imagePullSecrets:
         - name: harbor-registry
-      nodeSelector:
-        platform.wellspiking.ai/pool: control-plane
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node.kubernetes.io/instance-type
+                    operator: NotIn
+                    values: [virtual-node]
+                  - key: type
+                    operator: NotIn
+                    values: [virtual-kubelet]
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: platform.wellspiking.ai/pool
+                    operator: In
+                    values: [control-plane]
       containers:
         - name: client
           image: harbor.wellspiking.ai/guofeng.su/ray-train-pytorch@sha256:2102761c7a5e3af6ff33225182d5b936d18601f7d5697bc11187922df58cfa7f

@@ -24,9 +24,24 @@ spec:
       terminationGracePeriodSeconds: 5
       imagePullSecrets:
         - name: harbor-registry
-      nodeSelector:
-        accelerator: nvidia-rtx-4090
-        platform.wellspiking.ai/gpu-pool: production
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node.kubernetes.io/instance-type
+                    operator: NotIn
+                    values: [virtual-node]
+                  - key: type
+                    operator: NotIn
+                    values: [virtual-kubelet]
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: platform.wellspiking.ai/pool
+                    operator: In
+                    values: [control-plane]
       containers:
         - name: probe
           image: harbor.wellspiking.ai/hub/nginxinc/nginx-unprivileged@sha256:c3fed6436b61d2bf2201ec032c35c000871f7ed062dea5d586bc6bf4d0fdd140
@@ -130,9 +145,24 @@ spec:
       terminationGracePeriodSeconds: 5
       imagePullSecrets:
         - name: harbor-registry
-      nodeSelector:
-        accelerator: nvidia-rtx-4090
-        platform.wellspiking.ai/gpu-pool: production
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node.kubernetes.io/instance-type
+                    operator: NotIn
+                    values: [virtual-node]
+                  - key: type
+                    operator: NotIn
+                    values: [virtual-kubelet]
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: platform.wellspiking.ai/pool
+                    operator: In
+                    values: [control-plane]
       containers:
         - name: probe
           image: harbor.wellspiking.ai/hub/nginxinc/nginx-unprivileged@sha256:c3fed6436b61d2bf2201ec032c35c000871f7ed062dea5d586bc6bf4d0fdd140
@@ -317,4 +347,4 @@ spec:
             service: mlflow
           annotations:
             summary: MLflow FSX health probe has no target nodes
-            description: No node matches the probe selector. Restore accelerator=nvidia-rtx-4090 and platform.wellspiking.ai/gpu-pool=production on the MLflow serving nodes before relying on FSX health status.
+            description: No physical node satisfies the probe affinity. Restore at least one non-VCI node before relying on FSX health status.
