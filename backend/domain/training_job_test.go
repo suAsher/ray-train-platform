@@ -53,6 +53,20 @@ func TestJobSpecCacheJSONShapeAndOmittedCompatibility(t *testing.T) {
 	}
 }
 
+func TestJobSpecJSONOmitsZeroValueCache(t *testing.T) {
+	payload, err := json.Marshal(JobSpec{})
+	if err != nil {
+		t.Fatalf("encode zero-value job spec: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		t.Fatalf("decode zero-value job spec: %v", err)
+	}
+	if _, exists := fields["cache"]; exists {
+		t.Fatalf("zero-value cache must be omitted: %s", payload)
+	}
+}
+
 func TestJobSpecValidateAcceptsPinnedTrainingJob(t *testing.T) {
 	spec := JobSpec{
 		Name:       "llama-sft-run-001",

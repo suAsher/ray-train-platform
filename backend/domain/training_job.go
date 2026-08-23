@@ -125,7 +125,7 @@ type JobSpec struct {
 	TimeoutSeconds     int64                   `json:"timeoutSeconds,omitempty"`
 	RetryPolicy        RetryPolicy             `json:"retryPolicy,omitempty"`
 	CleanupPolicy      CleanupPolicy           `json:"cleanupPolicy,omitempty"`
-	Cache              CacheRequest            `json:"cache,omitempty"`
+	Cache              CacheRequest            `json:"cache,omitzero"`
 }
 
 type TrainingJob struct {
