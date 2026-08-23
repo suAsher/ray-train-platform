@@ -1,0 +1,53 @@
+{{- if and .Values.monitoring.enabled .Values.monitoring.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "ray-cache-local.fullname" . }}
+  labels:
+    {{- include "ray-cache-local.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: ray-cache-local.rules
+      rules:
+        - alert: RayCacheFilesystemUsageWarning
+          expr: 1 - (ray_cache_filesystem_available_bytes / ray_cache_filesystem_size_bytes) >= 0.75
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: GPU cache filesystem usage is at least 75 percent
+        - alert: RayCacheFilesystemUsageHigh
+          expr: 1 - (ray_cache_filesystem_available_bytes / ray_cache_filesystem_size_bytes) >= 0.85
+          for: 5m
+          labels:
+            severity: high
+          annotations:
+            summary: GPU cache filesystem usage is at least 85 percent
+        - alert: RayCacheFilesystemUsageCritical
+          expr: 1 - (ray_cache_filesystem_available_bytes / ray_cache_filesystem_size_bytes) >= 0.92
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: GPU cache filesystem usage is at least 92 percent
+        - alert: RayCacheProvisionerUnavailable
+          expr: absent(kube_deployment_status_replicas_available{namespace={{ .Release.Namespace | quote }},deployment={{ include "ray-cache-local.fullname" . | quote }}}) or kube_deployment_status_replicas_available{namespace={{ .Release.Namespace | quote }},deployment={{ include "ray-cache-local.fullname" . | quote }}} < 1
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Local cache provisioner has no available replica
+        - alert: RayCachePVCProvisioningPending
+          expr: (kube_persistentvolumeclaim_status_phase{phase="Pending"} == 1) * on(namespace, persistentvolumeclaim) group_left(storageclass) kube_persistentvolumeclaim_info{storageclass={{ .Values.storageClass.name | quote }}}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: A local cache PVC has remained Pending
+        - alert: RayCacheTeardownFailure
+          expr: increase(ray_cache_teardown_failures_total[10m]) > 0
+          labels:
+            severity: critical
+          annotations:
+            summary: A local cache directory teardown failed
+{{- end }}

@@ -42,6 +42,8 @@ type Config struct {
 	IDCDataSpaceSources              map[string]IDCDataSpaceSource
 	LocalCacheStorageClass           string
 	LocalCacheSize                   string
+	LocalCacheAllowedSizes           []string
+	LocalCacheMaxSize                string
 	LocalCacheMountPath              string
 	LocalAuthEnabled                 bool
 	LocalSessionHours                int
@@ -129,7 +131,9 @@ func Load() (Config, error) {
 		IDCStorageClass:             os.Getenv("IDC_STORAGE_CLASS"),
 		IDCMountPath:                envOr("IDC_MOUNT_PATH", "/mnt/idc"),
 		LocalCacheStorageClass:      strings.TrimSpace(os.Getenv("LOCAL_CACHE_STORAGE_CLASS")),
-		LocalCacheSize:              strings.TrimSpace(os.Getenv("LOCAL_CACHE_SIZE")),
+		LocalCacheSize:              strings.TrimSpace(envOr("LOCAL_CACHE_SIZE", "200Gi")),
+		LocalCacheAllowedSizes:      splitList(envOr("LOCAL_CACHE_ALLOWED_SIZES", "100Gi,200Gi,500Gi")),
+		LocalCacheMaxSize:           strings.TrimSpace(envOr("LOCAL_CACHE_MAX_SIZE", "500Gi")),
 		LocalCacheMountPath:         strings.TrimSpace(os.Getenv("LOCAL_CACHE_MOUNT_PATH")),
 		DataSpacesFSXAttributes:     strings.TrimSpace(os.Getenv("DATA_SPACES_FSX_VOLUME_ATTRIBUTES_JSON")),
 		RayAPIDefaultImage:          strings.TrimSpace(os.Getenv("RAY_API_DEFAULT_IMAGE")),
@@ -487,9 +491,37 @@ func validateLocalCacheConfig(cfg Config) error {
 	if !isDNSSubdomain(cfg.LocalCacheStorageClass) {
 		return fmt.Errorf("LOCAL_CACHE_STORAGE_CLASS must be a valid Kubernetes name")
 	}
-	quantity, err := resource.ParseQuantity(cfg.LocalCacheSize)
-	if err != nil || quantity.Sign() <= 0 {
+	defaultSize, err := positiveStorageQuantity(cfg.LocalCacheSize)
+	if err != nil {
 		return fmt.Errorf("LOCAL_CACHE_SIZE must be a positive Kubernetes storage quantity")
+	}
+	maxSize, err := positiveStorageQuantity(cfg.LocalCacheMaxSize)
+	if err != nil {
+		return fmt.Errorf("LOCAL_CACHE_MAX_SIZE must be a positive Kubernetes storage quantity")
+	}
+	if len(cfg.LocalCacheAllowedSizes) == 0 {
+		return fmt.Errorf("LOCAL_CACHE_ALLOWED_SIZES must contain at least one positive Kubernetes storage quantity")
+	}
+	allowed := make([]resource.Quantity, 0, len(cfg.LocalCacheAllowedSizes))
+	defaultAllowed := false
+	for _, configured := range cfg.LocalCacheAllowedSizes {
+		quantity, err := positiveStorageQuantity(configured)
+		if err != nil {
+			return fmt.Errorf("LOCAL_CACHE_ALLOWED_SIZES must contain positive Kubernetes storage quantities")
+		}
+		if quantity.Cmp(maxSize) > 0 {
+			return fmt.Errorf("LOCAL_CACHE_ALLOWED_SIZES entries must not exceed LOCAL_CACHE_MAX_SIZE")
+		}
+		for _, existing := range allowed {
+			if quantity.Cmp(existing) == 0 {
+				return fmt.Errorf("LOCAL_CACHE_ALLOWED_SIZES entries must be unique")
+			}
+		}
+		allowed = append(allowed, quantity)
+		defaultAllowed = defaultAllowed || quantity.Cmp(defaultSize) == 0
+	}
+	if !defaultAllowed {
+		return fmt.Errorf("LOCAL_CACHE_SIZE must belong to LOCAL_CACHE_ALLOWED_SIZES")
 	}
 	if !strings.HasPrefix(cfg.LocalCacheMountPath, "/") || path.Clean(cfg.LocalCacheMountPath) != cfg.LocalCacheMountPath || cfg.LocalCacheMountPath == "/" {
 		return fmt.Errorf("LOCAL_CACHE_MOUNT_PATH must be a clean absolute directory")
@@ -498,6 +530,14 @@ func validateLocalCacheConfig(cfg Config) error {
 		return fmt.Errorf("LOCAL_CACHE_MOUNT_PATH must not be inside Ray's default temporary directory")
 	}
 	return nil
+}
+
+func positiveStorageQuantity(value string) (resource.Quantity, error) {
+	quantity, err := resource.ParseQuantity(strings.TrimSpace(value))
+	if err != nil || quantity.Sign() <= 0 {
+		return resource.Quantity{}, fmt.Errorf("quantity must be positive")
+	}
+	return quantity, nil
 }
 
 func isDNSSubdomain(value string) bool {

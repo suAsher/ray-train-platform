@@ -18,6 +18,17 @@ type platformLimitsResponse struct {
 	TenantQuota       *tenantQuotaDescriptor       `json:"tenantQuota,omitempty"`
 	MountPaths        governedMountPaths           `json:"mountPaths"`
 	ExecutionProfiles []executionProfileDescriptor `json:"executionProfiles"`
+	Cache             cachePolicyDescriptor        `json:"cache"`
+}
+
+type cachePolicyDescriptor struct {
+	Enabled      bool     `json:"enabled"`
+	DefaultMode  string   `json:"defaultMode"`
+	Modes        []string `json:"modes"`
+	AllowedSizes []string `json:"allowedSizes"`
+	DefaultSize  string   `json:"defaultSize"`
+	MaxSize      string   `json:"maxSize"`
+	MountPath    string   `json:"mountPath"`
 }
 
 type tenantQuotaDescriptor struct {
@@ -88,7 +99,23 @@ func (h *Handler) platformLimits(c *gin.Context) {
 			Output:     domain.DataMountOutputPath,
 		},
 		ExecutionProfiles: executionProfileDescriptors(limits),
+		Cache:             cachePolicyDescriptorFor(h.localCache),
 	})
+}
+
+func cachePolicyDescriptorFor(policy LocalCachePolicy) cachePolicyDescriptor {
+	descriptor := cachePolicyDescriptor{
+		Enabled: policy.Enabled, DefaultMode: string(domain.CacheModeOff), Modes: []string{string(domain.CacheModeOff)}, AllowedSizes: []string{},
+	}
+	if !policy.Enabled {
+		return descriptor
+	}
+	descriptor.Modes = append(descriptor.Modes, string(domain.CacheModeRuntime))
+	descriptor.AllowedSizes = append([]string(nil), policy.AllowedSizes...)
+	descriptor.DefaultSize = policy.DefaultSize
+	descriptor.MaxSize = policy.MaxSize
+	descriptor.MountPath = policy.MountPath
+	return descriptor
 }
 
 func callerTenantQuota(quota domain.TenantQuota) tenantQuotaDescriptor {

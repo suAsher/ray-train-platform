@@ -22,8 +22,25 @@ defaultRules:
 prometheusOperator:
   # kube-prometheus-stack intentionally renders one restart-safe operator.
   # The Prometheus, Alertmanager, and Grafana data plane is deployed HA below.
-  nodeSelector:
-    platform.wellspiking.ai/pool: control-plane
+  nodeSelector: {}
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: node.kubernetes.io/instance-type
+                operator: NotIn
+                values: [virtual-node]
+              - key: type
+                operator: NotIn
+                values: [virtual-kubelet]
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          preference:
+            matchExpressions:
+              - key: platform.wellspiking.ai/pool
+                operator: In
+                values: [control-plane]
   podDisruptionBudget:
     enabled: true
     minAvailable: 1
@@ -61,8 +78,25 @@ prometheus:
     enabled: true
     minAvailable: 1
   prometheusSpec:
-    nodeSelector:
-      platform.wellspiking.ai/pool: control-plane
+    nodeSelector: {}
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: node.kubernetes.io/instance-type
+                  operator: NotIn
+                  values: [virtual-node]
+                - key: type
+                  operator: NotIn
+                  values: [virtual-kubelet]
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+                - key: platform.wellspiking.ai/pool
+                  operator: In
+                  values: [control-plane]
     image:
       registry: harbor.wellspiking.ai
       repository: guofeng.su/prometheus
@@ -99,8 +133,25 @@ alertmanager:
     enabled: true
     minAvailable: 1
   alertmanagerSpec:
-    nodeSelector:
-      platform.wellspiking.ai/pool: control-plane
+    nodeSelector: {}
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: node.kubernetes.io/instance-type
+                  operator: NotIn
+                  values: [virtual-node]
+                - key: type
+                  operator: NotIn
+                  values: [virtual-kubelet]
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+                - key: platform.wellspiking.ai/pool
+                  operator: In
+                  values: [control-plane]
     image:
       registry: harbor.wellspiking.ai
       repository: guofeng.su/alertmanager
@@ -119,9 +170,25 @@ alertmanager:
 grafana:
   enabled: true
   replicas: 2
-  nodeSelector:
-    platform.wellspiking.ai/pool: control-plane
+  nodeSelector: {}
   affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: node.kubernetes.io/instance-type
+                operator: NotIn
+                values: [virtual-node]
+              - key: type
+                operator: NotIn
+                values: [virtual-kubelet]
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          preference:
+            matchExpressions:
+              - key: platform.wellspiking.ai/pool
+                operator: In
+                values: [control-plane]
     podAntiAffinity:
       requiredDuringSchedulingIgnoredDuringExecution:
         - labelSelector:

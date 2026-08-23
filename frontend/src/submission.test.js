@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { buildJobSpec, parseEntrypoint } from './submission.js'
+import * as submission from './submission.js'
+
+const {
+  buildJobSpec,
+  equivalentSubmitCommand,
+  equivalentSubmitCommandForJob,
+  parseEntrypoint,
+  shellArg,
+} = submission
 
 const baseForm = () => ({
   name: 'support-sft-001',
@@ -23,11 +31,29 @@ const baseForm = () => ({
   maxRetries: 1,
 })
 
+const cacheLimits = (overrides = {}) => ({
+  cache: {
+    enabled: true,
+    defaultMode: 'off',
+    modes: ['off', 'runtime'],
+    allowedSizes: ['100Gi', '200Gi'],
+    defaultSize: '200Gi',
+    maxSize: '200Gi',
+    mountPath: '/mnt/cache',
+    ...overrides,
+  },
+})
+
 test('parseEntrypoint preserves quoted arguments', () => {
   assert.deepEqual(
     parseEntrypoint('python train.py --run-name "support sft"'),
     ['python', 'train.py', '--run-name', 'support sft'],
   )
+})
+
+test('shellArg uses POSIX single-quote escaping, including for an empty value', () => {
+  assert.equal(shellArg(''), "''")
+  assert.equal(shellArg("a b'c;$(d)`e`&&f"), "'a b'\"'\"'c;$(d)`e`&&f'")
 })
 
 test('buildJobSpec maps a Git submission into the platform runtime contract', () => {
@@ -89,4 +115,163 @@ test('buildJobSpec always lets the platform allocate a task output directory', (
   const form = baseForm()
   form.output = { spaceId: 'team-shared' }
   assert.throws(() => buildJobSpec(form), /我的训练结果/)
+})
+
+test('buildJobSpec keeps omitted and explicit-off cache backward compatible', () => {
+  const omitted = buildJobSpec(baseForm(), cacheLimits())
+  assert.equal('cache' in omitted, false)
+
+  const off = buildJobSpec({ ...baseForm(), cacheMode: 'off', cacheSize: '' }, cacheLimits())
+  assert.equal('cache' in off, false)
+})
+
+test('buildJobSpec maps a policy-approved runtime cache', () => {
+  const spec = buildJobSpec({ ...baseForm(), cacheMode: 'runtime', cacheSize: '200Gi' }, cacheLimits())
+  assert.deepEqual(spec.cache, { mode: 'runtime', size: '200Gi' })
+})
+
+test('buildJobSpec rejects unsupported or internally inconsistent cache requests', () => {
+  assert.throws(
+    () => buildJobSpec({ ...baseForm(), cacheMode: 'persistent', cacheSize: '200Gi' }, cacheLimits()),
+    /缓存模式/,
+  )
+  assert.throws(
+    () => buildJobSpec({ ...baseForm(), cacheMode: 'off', cacheSize: '200Gi' }, cacheLimits()),
+    /缓存关闭时不能选择容量/,
+  )
+  assert.throws(
+    () => buildJobSpec({ ...baseForm(), cacheMode: 'runtime', cacheSize: '' }, cacheLimits()),
+    /请选择运行时缓存容量/,
+  )
+})
+
+test('buildJobSpec rejects runtime cache disabled or disallowed by the loaded server policy', () => {
+  const form = { ...baseForm(), cacheMode: 'runtime', cacheSize: '200Gi' }
+  assert.throws(() => buildJobSpec(form, cacheLimits({ enabled: false })), /未开放运行时缓存/)
+  assert.throws(() => buildJobSpec(form, cacheLimits({ modes: ['off'] })), /未开放运行时缓存/)
+  assert.throws(() => buildJobSpec(form, cacheLimits({ allowedSizes: ['100Gi'] })), /不在平台允许范围/)
+})
+
+test('equivalent submit command includes the selected runtime cache flags', () => {
+  const command = equivalentSubmitCommand({
+    ...baseForm(),
+    cacheMode: 'runtime',
+    cacheSize: '200Gi',
+  })
+
+  assert.match(command, /--cache-mode 'runtime' \\\n  --cache-size '200Gi'/)
+})
+
+test('equivalent submit command omits cache flags for off and legacy forms', () => {
+  const off = equivalentSubmitCommand({ ...baseForm(), cacheMode: 'off', cacheSize: '' })
+  const legacy = equivalentSubmitCommand(baseForm())
+
+  assert.doesNotMatch(off, /--cache-(?:mode|size)/)
+  assert.doesNotMatch(legacy, /--cache-(?:mode|size)/)
+})
+
+test('equivalent submit command shell-quotes every interpolated flag value exactly', () => {
+  const command = equivalentSubmitCommand({
+    ...baseForm(),
+    name: "team's run; $(name) `name` && next",
+    image: "registry.example/train image:latest; $(image) `image` && next's",
+    entrypoint: "python train.py --run 'alpha beta'; $(entrypoint) `entrypoint` && next",
+    workerReplicas: '2; $(workers)',
+    gpusPerWorker: '8 && `gpus`',
+    cacheMode: 'runtime',
+    cacheSize: "200 Gi; $(cache) `cache` && next's",
+    input: {
+      spaceId: "team input's; $(input-space) `input-space` && next",
+      relativePath: "train path's; $(input-path) `input-path` && next",
+    },
+    checkpoint: {
+      spaceId: "public checkpoint's; $(checkpoint-space) `checkpoint-space` && next",
+      relativePath: "models base's; $(checkpoint-path) `checkpoint-path` && next",
+    },
+  })
+
+  assert.equal(command, [
+    'spk-rayjob submit',
+    "--name 'team'\"'\"'s run; $(name) `name` && next'",
+    "--image 'registry.example/train image:latest; $(image) `image` && next'\"'\"'s'",
+    "--entrypoint 'python train.py --run '\"'\"'alpha beta'\"'\"'; $(entrypoint) `entrypoint` && next'",
+    "--workers '2; $(workers)'",
+    "--gpus-per-worker '8 && `gpus`'",
+    "--cache-mode 'runtime'",
+    "--cache-size '200 Gi; $(cache) `cache` && next'\"'\"'s'",
+    "--input-space 'team input'\"'\"'s; $(input-space) `input-space` && next'",
+    "--input-path 'train path'\"'\"'s; $(input-path) `input-path` && next'",
+    "--checkpoint-space 'public checkpoint'\"'\"'s; $(checkpoint-space) `checkpoint-space` && next'",
+    "--checkpoint-path 'models base'\"'\"'s; $(checkpoint-path) `checkpoint-path` && next'",
+    '--watch',
+  ].join(' \\\n  '))
+})
+
+test('JobDetail equivalent command includes explicit runtime cache flags through the shared builder', () => {
+  const command = equivalentSubmitCommandForJob({
+    name: 'support-sft-001',
+    entrypoint: 'python train.py --epochs 3',
+    spec: {
+      image: 'registry.example/ray@sha256:' + 'a'.repeat(64),
+      resources: { workerReplicas: 2, gpusPerWorker: 8 },
+      input: { space: 'team-shared', relativePath: 'train' },
+      cache: { mode: 'runtime', size: '200Gi' },
+    },
+  })
+
+  assert.match(command, /--cache-mode 'runtime' \\\n  --cache-size '200Gi'/)
+  assert.match(command, /--input-space 'team-shared'/)
+})
+
+test('JobDetail equivalent command shell-quotes persisted values exactly', () => {
+  const command = equivalentSubmitCommandForJob({
+    name: "saved job's; $(name) `name` && next",
+    entrypoint: "python saved.py --run 'alpha beta'; $(entrypoint) `entrypoint` && next",
+    spec: {
+      image: "registry.example/saved image:latest; $(image) `image` && next's",
+      resources: { workerReplicas: '3; $(workers)', gpusPerWorker: '4 && `gpus`' },
+      input: {
+        space: "saved input's; $(input-space) `input-space` && next",
+        relativePath: "saved train's; $(input-path) `input-path` && next",
+      },
+      checkpoint: {
+        space: "saved checkpoint's; $(checkpoint-space) `checkpoint-space` && next",
+        relativePath: "saved models's; $(checkpoint-path) `checkpoint-path` && next",
+      },
+      cache: { mode: 'runtime', size: "100 Gi; $(cache) `cache` && next's" },
+    },
+  })
+
+  assert.equal(command, [
+    'spk-rayjob submit',
+    "--name 'saved job'\"'\"'s; $(name) `name` && next'",
+    "--image 'registry.example/saved image:latest; $(image) `image` && next'\"'\"'s'",
+    "--entrypoint 'python saved.py --run '\"'\"'alpha beta'\"'\"'; $(entrypoint) `entrypoint` && next'",
+    "--workers '3; $(workers)'",
+    "--gpus-per-worker '4 && `gpus`'",
+    "--cache-mode 'runtime'",
+    "--cache-size '100 Gi; $(cache) `cache` && next'\"'\"'s'",
+    "--input-space 'saved input'\"'\"'s; $(input-space) `input-space` && next'",
+    "--input-path 'saved train'\"'\"'s; $(input-path) `input-path` && next'",
+    "--checkpoint-space 'saved checkpoint'\"'\"'s; $(checkpoint-space) `checkpoint-space` && next'",
+    "--checkpoint-path 'saved models'\"'\"'s; $(checkpoint-path) `checkpoint-path` && next'",
+    '--watch',
+  ].join(' \\\n  '))
+})
+
+test('JobDetail equivalent command omits cache flags for off and legacy jobs', () => {
+  const baseJob = {
+    name: 'support-sft-001',
+    entrypoint: 'python train.py',
+    spec: {
+      image: 'registry.example/ray@sha256:' + 'a'.repeat(64),
+      resources: { workerReplicas: 1, gpusPerWorker: 1 },
+    },
+  }
+
+  assert.doesNotMatch(equivalentSubmitCommandForJob(baseJob), /--cache-(?:mode|size)/)
+  assert.doesNotMatch(
+    equivalentSubmitCommandForJob({ ...baseJob, spec: { ...baseJob.spec, cache: { mode: 'off' } } }),
+    /--cache-(?:mode|size)/,
+  )
 })

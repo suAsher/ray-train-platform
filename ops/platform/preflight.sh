@@ -36,6 +36,12 @@ namespace="$(profile_namespace "$profile")"
 rendered="$(mktemp)"
 trap 'rm -f "$rendered"' EXIT
 
+# The production cache chart install contract fixes all three names. Keep the
+# platform gate tied to that release instead of probing arbitrary workloads.
+readonly CACHE_PROVISIONER_NAMESPACE="ray-cache-local"
+readonly CACHE_PROVISIONER_RELEASE="ray-cache-local"
+readonly CACHE_PROVISIONER_DEPLOYMENT="ray-cache-local"
+
 rendered_defines_ingress_class() {
   local rendered_file="$1"
   local expected_class="$2"
@@ -47,8 +53,66 @@ rendered_defines_ingress_class() {
   ' "$rendered_file"
 }
 
+verify_local_cache() {
+  local storage_class="$1"
+  local provisioner binding_mode reclaim_policy
+  local stable_default beta_default allow_expansion release_label available_condition
+
+  [[ -n "$storage_class" ]] || die "local cache is enabled but LOCAL_CACHE_STORAGE_CLASS is empty"
+
+  if ! provisioner="$(kube get storageclass "$storage_class" -o jsonpath='{.provisioner}')"; then
+    die "local cache StorageClass is absent: $storage_class"
+  fi
+  [[ "$provisioner" == "rancher.io/local-path" ]] || \
+    die "local cache StorageClass ${storage_class} has provisioner=${provisioner:-<empty>}, expected rancher.io/local-path"
+
+  binding_mode="$(kube get storageclass "$storage_class" -o jsonpath='{.volumeBindingMode}')"
+  [[ "$binding_mode" == "WaitForFirstConsumer" ]] || \
+    die "local cache StorageClass ${storage_class} has volumeBindingMode=${binding_mode:-<empty>}, expected WaitForFirstConsumer"
+
+  reclaim_policy="$(kube get storageclass "$storage_class" -o jsonpath='{.reclaimPolicy}')"
+  [[ "$reclaim_policy" == "Delete" ]] || \
+    die "local cache StorageClass ${storage_class} has reclaimPolicy=${reclaim_policy:-<empty>}, expected Delete"
+
+  stable_default="$(kube get storageclass "$storage_class" -o jsonpath='{.metadata.annotations.storageclass\.kubernetes\.io/is-default-class}')"
+  [[ -z "$stable_default" || "$stable_default" == "false" ]] || \
+    die "local cache StorageClass ${storage_class} must not be default via storageclass.kubernetes.io/is-default-class"
+
+  beta_default="$(kube get storageclass "$storage_class" -o jsonpath='{.metadata.annotations.storageclass\.beta\.kubernetes\.io/is-default-class}')"
+  [[ -z "$beta_default" || "$beta_default" == "false" ]] || \
+    die "local cache StorageClass ${storage_class} must not be default via storageclass.beta.kubernetes.io/is-default-class"
+
+  allow_expansion="$(kube get storageclass "$storage_class" -o jsonpath='{.allowVolumeExpansion}')"
+  [[ -z "$allow_expansion" || "$allow_expansion" == "false" ]] || \
+    die "local cache StorageClass ${storage_class} must not allow volume expansion"
+
+  if ! release_label="$(kube -n "$CACHE_PROVISIONER_NAMESPACE" get deployment "$CACHE_PROVISIONER_DEPLOYMENT" \
+    -o jsonpath='{.metadata.labels.app\.kubernetes\.io/instance}')"; then
+    die "cache provisioner Deployment is absent: ${CACHE_PROVISIONER_NAMESPACE}/${CACHE_PROVISIONER_DEPLOYMENT}"
+  fi
+  [[ "$release_label" == "$CACHE_PROVISIONER_RELEASE" ]] || \
+    die "cache provisioner Deployment ${CACHE_PROVISIONER_NAMESPACE}/${CACHE_PROVISIONER_DEPLOYMENT} belongs to Helm release ${release_label:-<empty>}, expected Helm release ${CACHE_PROVISIONER_RELEASE}"
+
+  available_condition="$(kube -n "$CACHE_PROVISIONER_NAMESPACE" get deployment "$CACHE_PROVISIONER_DEPLOYMENT" \
+    -o jsonpath='{.status.conditions[?(@.type=="Available")].status}')"
+  [[ "$available_condition" == "True" ]] || \
+    die "cache provisioner Deployment is not Ready: ${CACHE_PROVISIONER_NAMESPACE}/${CACHE_PROVISIONER_DEPLOYMENT}"
+}
+
 helm_cmd lint "$PLATFORM_CHART" --values "$profile" >/dev/null
 render_profile "$profile" >"$rendered"
+
+local_cache_enabled="$(rendered_env_value "$rendered" LOCAL_CACHE_ENABLED)"
+case "$local_cache_enabled" in
+  true)
+    verify_local_cache "$(rendered_env_value "$rendered" LOCAL_CACHE_STORAGE_CLASS)"
+    ;;
+  false|"")
+    ;;
+  *)
+    die "LOCAL_CACHE_ENABLED must render as true or false, got: $local_cache_enabled"
+    ;;
+esac
 
 for resource in rayjobs.ray.io rayclusters.ray.io; do
   kube get crd "$resource" >/dev/null || die "required KubeRay CRD is absent: $resource"

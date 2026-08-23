@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	yamlv3 "gopkg.in/yaml.v3"
 	"sigs.k8s.io/yaml"
 )
 
@@ -19,6 +20,11 @@ type projectLocation struct {
 	Path  string `json:"path,omitempty"`
 }
 
+type projectCache struct {
+	Mode string `json:"mode,omitempty"`
+	Size string `json:"size,omitempty"`
+}
+
 type project struct {
 	Name            string          `json:"name,omitempty"`
 	Image           string          `json:"image,omitempty"`
@@ -28,6 +34,7 @@ type project struct {
 	CPUPerWorker    int64           `json:"cpuPerWorker,omitempty"`
 	MemoryPerWorker string          `json:"memoryPerWorker,omitempty"`
 	ExecutionMode   string          `json:"executionMode,omitempty"`
+	Cache           projectCache    `json:"cache,omitempty"`
 	Input           projectLocation `json:"input,omitempty"`
 	Checkpoint      projectLocation `json:"checkpoint,omitempty"`
 	Output          projectLocation `json:"output,omitempty"`
@@ -45,6 +52,7 @@ type submitOverrides struct {
 	CPUPerWorker    int64
 	MemoryPerWorker string
 	ExecutionMode   string
+	Cache           projectCache
 	Input           projectLocation
 	Checkpoint      projectLocation
 	Output          projectLocation
@@ -57,6 +65,8 @@ type submitOverrides struct {
 	providedCPU        bool
 	providedMemory     bool
 	providedMode       bool
+	providedCacheMode  bool
+	providedCacheSize  bool
 	providedInput      bool
 	providedCheckpoint bool
 	providedOutput     bool
@@ -88,6 +98,15 @@ func (base project) merge(overrides submitOverrides) project {
 	if overrides.providedMode {
 		merged.ExecutionMode = overrides.ExecutionMode
 	}
+	if overrides.providedCacheMode {
+		merged.Cache.Mode = overrides.Cache.Mode
+		if strings.TrimSpace(overrides.Cache.Mode) == "off" {
+			merged.Cache.Size = ""
+		}
+	}
+	if overrides.providedCacheSize {
+		merged.Cache.Size = overrides.Cache.Size
+	}
 	if overrides.providedInput {
 		merged.Input = overrides.Input
 	}
@@ -115,7 +134,39 @@ func loadProject(directory string) (project, error) {
 	if err := yaml.UnmarshalStrict(contents, &loaded); err != nil {
 		return project{}, fmt.Errorf("%s is not a valid project file: %w", projectFileName, err)
 	}
+	// YAML 1.1 treats an unquoted `off` as boolean false. The JSON-tag-aware
+	// decoder converts every false-like spelling to the string "false". Restore
+	// only the documented lowercase `off`; rejecting the other spellings avoids
+	// silently turning a typo such as `no` into a valid cache mode.
+	if loaded.Cache.Mode == "false" {
+		if !hasUnquotedOffCacheMode(contents) {
+			return project{}, fmt.Errorf("%s is not a valid project file: cache.mode 只能使用 off 或 runtime，不能使用 YAML 布尔值 false/no", projectFileName)
+		}
+		loaded.Cache.Mode = "off"
+	}
 	return loaded, nil
+}
+
+func hasUnquotedOffCacheMode(contents []byte) bool {
+	var document yamlv3.Node
+	if err := yamlv3.Unmarshal(contents, &document); err != nil || len(document.Content) == 0 {
+		return false
+	}
+	cache := yamlMappingValue(document.Content[0], "cache")
+	mode := yamlMappingValue(cache, "mode")
+	return mode != nil && mode.Kind == yamlv3.ScalarNode && mode.Style == 0 && mode.Value == "off"
+}
+
+func yamlMappingValue(mapping *yamlv3.Node, key string) *yamlv3.Node {
+	if mapping == nil || mapping.Kind != yamlv3.MappingNode {
+		return nil
+	}
+	for index := 0; index+1 < len(mapping.Content); index += 2 {
+		if mapping.Content[index].Value == key {
+			return mapping.Content[index+1]
+		}
+	}
+	return nil
 }
 
 // starterProject is the shape written by init. The location fields are
@@ -130,6 +181,7 @@ type starterProject struct {
 	CPUPerWorker    int64            `json:"cpuPerWorker,omitempty"`
 	MemoryPerWorker string           `json:"memoryPerWorker,omitempty"`
 	ExecutionMode   string           `json:"executionMode,omitempty"`
+	Cache           *projectCache    `json:"cache,omitempty"`
 	Input           *projectLocation `json:"input,omitempty"`
 	Checkpoint      *projectLocation `json:"checkpoint,omitempty"`
 	Output          *projectLocation `json:"output,omitempty"`
@@ -142,10 +194,17 @@ func newStarterProject(value project) starterProject {
 		}
 		return &location
 	}
+	optionalCache := func(cache projectCache) *projectCache {
+		if cache.Mode == "" && cache.Size == "" {
+			return nil
+		}
+		return &cache
+	}
 	return starterProject{
 		Name: value.Name, Image: value.Image, Entrypoint: value.Entrypoint,
 		Workers: value.Workers, GPUsPerWorker: value.GPUsPerWorker, CPUPerWorker: value.CPUPerWorker,
 		MemoryPerWorker: value.MemoryPerWorker, ExecutionMode: value.ExecutionMode,
+		Cache: optionalCache(value.Cache),
 		Input: optional(value.Input), Checkpoint: optional(value.Checkpoint), Output: optional(value.Output),
 	}
 }
@@ -179,6 +238,12 @@ const projectFileHeader = `# spk-rayjob submission defaults for this repository.
 #   torchrun    1 worker x N GPUs  (single machine, multi GPU)
 #   ray_train   N workers x M GPUs (multi machine)
 # Do not put torchrun in entrypoint: the platform adds it for you.
+#
+# 可选 runtime 临时缓存会随任务销毁，也不会自动缓存 /mnt/storage/public。
+# 训练代码需要显式读写缓存目录；省略 cache 时缓存关闭：
+# cache:
+#   mode: runtime
+#   size: <平台允许的容量>
 `
 
 // projectRelativeName derives a stable default job name from the directory a

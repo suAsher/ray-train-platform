@@ -11,11 +11,65 @@ export function parseEntrypoint(value) {
   return parts
 }
 
-export function buildJobSpec(form) {
+/** Quote one value as a single POSIX sh argument. */
+export function shellArg(value) {
+  return "'" + String(value).replaceAll("'", "'\"'\"'") + "'"
+}
+
+/** Build the copyable spk-rayjob command shown in the final submit preview. */
+export function equivalentSubmitCommand(form) {
+  const parts = [
+    'spk-rayjob submit',
+    `--name ${shellArg(form.name || '<任务名>')}`,
+    `--image ${shellArg(form.image || '<镜像 digest>')}`,
+  ]
+  parts.push(`--entrypoint ${shellArg(form.entrypoint || '<启动命令>')}`)
+  parts.push(
+    `--workers ${shellArg(form.workerReplicas)}`,
+    `--gpus-per-worker ${shellArg(form.gpusPerWorker)}`,
+  )
+  if (form.cacheMode === 'runtime') {
+    parts.push(
+      `--cache-mode ${shellArg('runtime')}`,
+      `--cache-size ${shellArg(String(form.cacheSize || '<缓存容量>').trim())}`,
+    )
+  }
+  if (form.input?.spaceId) {
+    parts.push(`--input-space ${shellArg(form.input.spaceId)}`)
+    if (form.input.relativePath) parts.push(`--input-path ${shellArg(form.input.relativePath)}`)
+  }
+  if (form.checkpoint?.spaceId) {
+    parts.push(`--checkpoint-space ${shellArg(form.checkpoint.spaceId)}`)
+    if (form.checkpoint.relativePath) parts.push(`--checkpoint-path ${shellArg(form.checkpoint.relativePath)}`)
+  }
+  parts.push('--watch')
+  return parts.join(' \\\n  ')
+}
+
+/** Adapt the persisted job shape used by JobDetail to the shared CLI builder. */
+export function equivalentSubmitCommandForJob(job) {
+  const spec = job?.spec || {}
+  const resources = spec.resources || {}
+  const persistedEntrypoint = [...(spec.entrypoint?.command || []), ...(spec.entrypoint?.args || [])].join(' ')
+  return equivalentSubmitCommand({
+    name: job?.name || spec.name || '',
+    image: spec.image || '',
+    entrypoint: job?.entrypoint || persistedEntrypoint,
+    workerReplicas: resources.workerReplicas || 1,
+    gpusPerWorker: resources.gpusPerWorker || 1,
+    cacheMode: spec.cache?.mode,
+    cacheSize: spec.cache?.size,
+    input: spec.input?.space ? { spaceId: spec.input.space, relativePath: spec.input.relativePath } : {},
+    checkpoint: spec.checkpoint?.space ? { spaceId: spec.checkpoint.space, relativePath: spec.checkpoint.relativePath } : {},
+  })
+}
+
+export function buildJobSpec(form, platformLimits = {}) {
   const command = parseEntrypoint(form.entrypoint)
   if (command.length === 0) {
     throw new Error('请输入训练启动命令')
   }
+  const cache = buildCache(form, platformLimits.cache)
 
   const spec = {
     name: requiredText(form.name, '任务名称'),
@@ -37,6 +91,7 @@ export function buildJobSpec(form) {
     queue: '',
     timeoutSeconds: nonNegativeInteger(form.timeoutSeconds || 0, '最长运行时间'),
     retryPolicy: { maxRetries: boundedInteger(form.maxRetries || 0, '自动重试次数', 0, 3) },
+    ...(cache ? { cache } : {}),
   }
 
   const priority = String(form.priority || '').trim()
@@ -44,6 +99,24 @@ export function buildJobSpec(form) {
     spec.priority = priority
   }
   return spec
+}
+
+function buildCache(form, policy) {
+  const mode = String(form.cacheMode || 'off').trim() || 'off'
+  const size = String(form.cacheSize || '').trim()
+  if (mode === 'off') {
+    if (size) throw new Error('缓存关闭时不能选择容量')
+    return null
+  }
+  if (mode !== 'runtime') throw new Error('请选择有效的缓存模式')
+  if (policy?.enabled !== true || !Array.isArray(policy.modes) || !policy.modes.includes('runtime')) {
+    throw new Error('平台未开放运行时缓存')
+  }
+  if (!size) throw new Error('请选择运行时缓存容量')
+  if (!Array.isArray(policy.allowedSizes) || !policy.allowedSizes.includes(size)) {
+    throw new Error('运行时缓存容量不在平台允许范围')
+  }
+  return { mode: 'runtime', size }
 }
 
 function executionMode(form) {

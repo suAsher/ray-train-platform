@@ -10,6 +10,13 @@ global:
   imageRegistry: cr-cn-beijing.volces.com/ray-platform
   imagePullSecrets: []
 
+# Portable placement policy for platform-owned workloads. A cluster profile
+# may prefer a dedicated CPU pool while still allowing physical GPU nodes to
+# absorb control-plane Pods when CPU capacity is exhausted.
+placement:
+  preferredNodeSelector: {}
+  allowGPUNodeFallback: false
+
 backend:
   replicaCount: 2
   # Optional scheduling boundary for control-plane Pods. Production profiles
@@ -197,10 +204,19 @@ training:
   # until every GPU node has the same tested local CSI StorageClass. This is
   # not a data asset and must never hold final checkpoints or model outputs.
   localCache:
-    enabled: false
-    storageClass: ray-cache-local
-    size: 200Gi
-    mountPath: /mnt/cache
+    # Infrastructure availability only. Individual tasks remain cache-off
+    # unless their request explicitly selects a policy-supported cache mode.
+    available: false
+    storageClass: ""
+    mountPath: ""
+    policy:
+      defaultMode: "off"
+      allowedSizes:
+        - 100Gi
+        - 200Gi
+        - 500Gi
+      defaultSize: 200Gi
+      maxSize: 500Gi
 
 # Governed user data spaces. Keep disabled until csi-fsx is configured with
 # its component-level IRSA role and ops/storage/.../41-verify-irsa-prefix-mount.sh

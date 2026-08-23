@@ -114,6 +114,92 @@ func TestTranslateSubmitRequestWithDefaultsAcceptsBareRayCLIWorkingDirectory(t *
 	if translated.Spec.Execution.Mode != domain.ExecutionModeSingleGPU {
 		t.Fatalf("default one-GPU Ray CLI job must use single_gpu, got %q", translated.Spec.Execution.Mode)
 	}
+	if translated.Spec.Cache != (domain.CacheRequest{}) {
+		t.Fatalf("omitted cache metadata must leave cache off, got %+v", translated.Spec.Cache)
+	}
+}
+
+func TestTranslateSubmitRequestWithDefaultsTreatsExplicitCacheOffAsZero(t *testing.T) {
+	translated, err := TranslateSubmitRequestWithDefaults(JobSubmitRequest{
+		Entrypoint: "python train.py", RuntimeEnv: map[string]any{"working_dir": "gcs://" + testPackageSHA256 + ".zip"},
+		Metadata: map[string]string{metadataCacheMode: "off"},
+	}, SubmissionDefaults{Image: testImageDigest, WorkerReplicas: 1, GPUsPerWorker: 1, CPUPerWorker: 8, MemoryPerWorker: "32Gi"})
+	if err != nil {
+		t.Fatalf("translate explicit cache off: %v", err)
+	}
+	if translated.Spec.Cache != (domain.CacheRequest{}) {
+		t.Fatalf("explicit cache off must leave zero cache, got %+v", translated.Spec.Cache)
+	}
+}
+
+func TestTranslateSubmitRequestWithDefaultsAcceptsCacheOnlyMetadata(t *testing.T) {
+	defaults := SubmissionDefaults{
+		Image: testImageDigest, WorkerReplicas: 1, GPUsPerWorker: 1,
+		CPUPerWorker: 8, MemoryPerWorker: "32Gi",
+	}
+	translated, err := TranslateSubmitRequestWithDefaults(JobSubmitRequest{
+		Entrypoint:   "python train.py",
+		SubmissionID: "cache_only",
+		RuntimeEnv:   map[string]any{"working_dir": "gcs://" + testPackageSHA256 + ".zip"},
+		Metadata: map[string]string{
+			"platform.cache.mode": "runtime",
+			"platform.cache.size": "200Gi",
+			"ray.user-note":       "ignored as before",
+		},
+	}, defaults)
+	if err != nil {
+		t.Fatalf("translate cache-only metadata: %v", err)
+	}
+	if translated.Spec.Image != defaults.Image || translated.Spec.Resources.WorkerReplicas != 1 || translated.Spec.Resources.GPUsPerWorker != 1 {
+		t.Fatalf("cache-only metadata must retain operator defaults: %+v", translated.Spec)
+	}
+	if translated.Spec.Cache.Mode != domain.CacheModeRuntime || translated.Spec.Cache.Size != "200Gi" {
+		t.Fatalf("cache metadata was not preserved: %+v", translated.Spec.Cache)
+	}
+}
+
+func TestTranslateSubmitRequestCombinesExplicitResourcesWithOptionalRuntimeCacheSize(t *testing.T) {
+	metadata := map[string]string{
+		metadataImage: testImageDigest, metadataWorkerReplicas: "2", metadataGPUsPerWorker: "1",
+		metadataCPUPerWorker: "8", metadataMemoryWorker: "32Gi", metadataQueue: "tenant-a-gpu",
+		metadataCacheMode: "runtime",
+	}
+	translated, err := TranslateSubmitRequestWithDefaults(JobSubmitRequest{
+		Entrypoint: "python train.py", RuntimeEnv: map[string]any{"working_dir": "gcs://" + testPackageSHA256 + ".zip"}, Metadata: metadata,
+	}, SubmissionDefaults{Image: "unused"})
+	if err != nil {
+		t.Fatalf("translate combined metadata: %v", err)
+	}
+	if translated.Spec.Resources.WorkerReplicas != 2 || translated.Spec.Image != testImageDigest || translated.Spec.Queue != "tenant-a-gpu" {
+		t.Fatalf("explicit resource metadata was not preserved: %+v", translated.Spec)
+	}
+	if translated.Spec.Cache.Mode != domain.CacheModeRuntime || translated.Spec.Cache.Size != "" {
+		t.Fatalf("runtime cache without size must reach SubmissionService normalization: %+v", translated.Spec.Cache)
+	}
+}
+
+func TestTranslateSubmitRequestRejectsInvalidCacheMetadata(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata map[string]string
+	}{
+		{name: "unknown cache key", metadata: map[string]string{"platform.cache.storage-class": "fast"}},
+		{name: "mount path is not exposed", metadata: map[string]string{"platform.cache.mount-path": "/cache"}},
+		{name: "unsupported mode", metadata: map[string]string{metadataCacheMode: "durable"}},
+		{name: "off with size", metadata: map[string]string{metadataCacheMode: "off", metadataCacheSize: "100Gi"}},
+		{name: "omitted mode with size", metadata: map[string]string{metadataCacheSize: "100Gi"}},
+	}
+	defaults := SubmissionDefaults{Image: testImageDigest, WorkerReplicas: 1, GPUsPerWorker: 1, CPUPerWorker: 8, MemoryPerWorker: "32Gi"}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := TranslateSubmitRequestWithDefaults(JobSubmitRequest{
+				Entrypoint: "python train.py", RuntimeEnv: map[string]any{"working_dir": "gcs://" + testPackageSHA256 + ".zip"}, Metadata: test.metadata,
+			}, defaults)
+			if err == nil {
+				t.Fatal("invalid cache metadata was accepted")
+			}
+		})
+	}
 }
 
 func TestTranslateSubmitRequestInfersExecutionModeFromResourceShape(t *testing.T) {

@@ -258,6 +258,65 @@ func TestLoadAcceptsCompleteLocalCacheConfiguration(t *testing.T) {
 	if !cfg.LocalCacheEnabled || cfg.LocalCacheStorageClass != "ray-cache-local" || cfg.LocalCacheSize != "200Gi" || cfg.LocalCacheMountPath != "/mnt/cache" {
 		t.Fatalf("unexpected local cache configuration: %#v", cfg)
 	}
+	if strings.Join(cfg.LocalCacheAllowedSizes, ",") != "100Gi,200Gi,500Gi" || cfg.LocalCacheMaxSize != "500Gi" {
+		t.Fatalf("unexpected local cache policy defaults: allowed=%v max=%q", cfg.LocalCacheAllowedSizes, cfg.LocalCacheMaxSize)
+	}
+}
+
+func TestLoadParsesLocalCachePolicy(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("LOCAL_CACHE_ENABLED", "true")
+	t.Setenv("LOCAL_CACHE_STORAGE_CLASS", "ray-cache-local")
+	t.Setenv("LOCAL_CACHE_SIZE", " 250Gi ")
+	t.Setenv("LOCAL_CACHE_ALLOWED_SIZES", "100Gi, 250Gi,500Gi")
+	t.Setenv("LOCAL_CACHE_MAX_SIZE", " 500Gi ")
+	t.Setenv("LOCAL_CACHE_MOUNT_PATH", "/mnt/cache")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load local cache policy: %v", err)
+	}
+	if got := strings.Join(cfg.LocalCacheAllowedSizes, ","); got != "100Gi,250Gi,500Gi" {
+		t.Fatalf("allowed sizes=%q", got)
+	}
+	if cfg.LocalCacheSize != "250Gi" || cfg.LocalCacheMaxSize != "500Gi" {
+		t.Fatalf("default=%q max=%q", cfg.LocalCacheSize, cfg.LocalCacheMaxSize)
+	}
+}
+
+func TestLoadRejectsInvalidLocalCachePolicy(t *testing.T) {
+	tests := []struct {
+		name        string
+		allowed     string
+		defaultSize string
+		maxSize     string
+		want        string
+	}{
+		{name: "empty allowlist", allowed: " ", defaultSize: "200Gi", maxSize: "500Gi", want: "LOCAL_CACHE_ALLOWED_SIZES"},
+		{name: "non-positive allowed", allowed: "100Gi,0Gi", defaultSize: "100Gi", maxSize: "500Gi", want: "positive"},
+		{name: "duplicate equivalent allowed", allowed: "100Gi,102400Mi", defaultSize: "100Gi", maxSize: "500Gi", want: "unique"},
+		{name: "default outside allowlist", allowed: "100Gi,500Gi", defaultSize: "200Gi", maxSize: "500Gi", want: "LOCAL_CACHE_SIZE"},
+		{name: "allowed above max", allowed: "100Gi,500Gi", defaultSize: "100Gi", maxSize: "200Gi", want: "LOCAL_CACHE_MAX_SIZE"},
+		{name: "invalid max", allowed: "100Gi", defaultSize: "100Gi", maxSize: "large", want: "LOCAL_CACHE_MAX_SIZE"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("APP_ENV", "development")
+			t.Setenv("PAT_ENABLED", "false")
+			t.Setenv("LOCAL_CACHE_ENABLED", "true")
+			t.Setenv("LOCAL_CACHE_STORAGE_CLASS", "ray-cache-local")
+			t.Setenv("LOCAL_CACHE_SIZE", test.defaultSize)
+			t.Setenv("LOCAL_CACHE_ALLOWED_SIZES", test.allowed)
+			t.Setenv("LOCAL_CACHE_MAX_SIZE", test.maxSize)
+			t.Setenv("LOCAL_CACHE_MOUNT_PATH", "/mnt/cache")
+
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected error containing %q, got %v", test.want, err)
+			}
+		})
+	}
 }
 
 func TestLoadRejectsLocalCacheMountedInsideRayDefaultTempDirectory(t *testing.T) {

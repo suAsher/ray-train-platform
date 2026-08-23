@@ -66,16 +66,7 @@ spec:
             matchLabels:
               app: ray-train-frontend
       affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  - key: node.kubernetes.io/instance-type
-                    operator: NotIn
-                    values: ["virtual-node"]
-                  - key: type
-                    operator: NotIn
-                    values: ["virtual-kubelet"]
+        {{- include "ray-train-platform.nodeAffinity" . | nindent 8 }}
         {{- if .Values.availability.requiredAntiAffinity }}
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:

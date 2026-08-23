@@ -1,9 +1,71 @@
 package domain
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
+
+func TestCacheRequestValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		cache   CacheRequest
+		wantErr string
+	}{
+		{name: "omitted is backward compatible", cache: CacheRequest{}},
+		{name: "off", cache: CacheRequest{Mode: CacheModeOff}},
+		{name: "runtime", cache: CacheRequest{Mode: CacheModeRuntime, Size: "200Gi"}},
+		{name: "invalid mode", cache: CacheRequest{Mode: "always"}, wantErr: "unsupported cache mode"},
+		{name: "omitted with size", cache: CacheRequest{Size: "200Gi"}, wantErr: "off cache cannot specify size"},
+		{name: "off with size", cache: CacheRequest{Mode: CacheModeOff, Size: "200Gi"}, wantErr: "off cache cannot specify size"},
+		{name: "runtime without size", cache: CacheRequest{Mode: CacheModeRuntime}, wantErr: "runtime cache size is required"},
+		{name: "runtime invalid size", cache: CacheRequest{Mode: CacheModeRuntime, Size: "large"}, wantErr: "positive Kubernetes storage quantity"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.cache.Validate()
+			if test.wantErr == "" && err != nil {
+				t.Fatalf("validate cache: %v", err)
+			}
+			if test.wantErr != "" && (err == nil || !strings.Contains(err.Error(), test.wantErr)) {
+				t.Fatalf("expected error containing %q, got %v", test.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestJobSpecCacheJSONShapeAndOmittedCompatibility(t *testing.T) {
+	var legacy JobSpec
+	if err := json.Unmarshal([]byte(`{"name":"legacy"}`), &legacy); err != nil {
+		t.Fatalf("decode legacy job spec: %v", err)
+	}
+	if legacy.Cache.Mode != "" || legacy.Cache.Size != "" {
+		t.Fatalf("legacy cache must remain omitted: %#v", legacy.Cache)
+	}
+
+	payload, err := json.Marshal(JobSpec{Cache: CacheRequest{Mode: CacheModeRuntime, Size: "200Gi"}})
+	if err != nil {
+		t.Fatalf("encode job spec: %v", err)
+	}
+	if !strings.Contains(string(payload), `"cache":{"mode":"runtime","size":"200Gi"}`) {
+		t.Fatalf("unexpected cache JSON shape: %s", payload)
+	}
+}
+
+func TestJobSpecJSONOmitsZeroValueCache(t *testing.T) {
+	payload, err := json.Marshal(JobSpec{})
+	if err != nil {
+		t.Fatalf("encode zero-value job spec: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		t.Fatalf("decode zero-value job spec: %v", err)
+	}
+	if _, exists := fields["cache"]; exists {
+		t.Fatalf("zero-value cache must be omitted: %s", payload)
+	}
+}
 
 func TestJobSpecValidateAcceptsPinnedTrainingJob(t *testing.T) {
 	spec := JobSpec{

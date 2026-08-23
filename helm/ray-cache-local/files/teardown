@@ -1,0 +1,86 @@
+#!/bin/sh
+set -eu
+
+die() {
+  printf 'ray-cache teardown: %s\n' "$*" >&2
+  exit 1
+}
+
+allowed_roots='/data1/ray-cache:/data2/ray-cache'
+if [ "${RAY_CACHE_TEST_MODE:-}" = 1 ]; then
+  [ -n "${RAY_CACHE_TEST_ALLOWED_ROOTS:-}" ] || die 'test roots are required in test mode'
+  allowed_roots="${RAY_CACHE_TEST_ALLOWED_ROOTS}"
+fi
+
+[ -n "${VOL_DIR:-}" ] || die 'VOL_DIR is required'
+case "${VOL_DIR}" in
+  /*/) die 'VOL_DIR must not have a trailing slash' ;;
+  /*) ;;
+  *) die 'VOL_DIR must be absolute' ;;
+esac
+
+volume_name="${VOL_DIR##*/}"
+volume_parent="${VOL_DIR%/*}"
+printf '%s\n' "${volume_name}" | grep -Eq \
+  '^pvc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_[a-z0-9]([-a-z0-9]*[a-z0-9])?_[a-z0-9]([-a-z0-9.]*[a-z0-9])?$' || \
+  die 'VOL_DIR is not an eligible cache volume child'
+
+canonical_parent="$(cd -P "${volume_parent}" 2>/dev/null && pwd -P)" || die 'VOL_DIR parent does not exist'
+cache_root=''
+old_ifs="${IFS}"
+IFS=:
+for candidate in ${allowed_roots}; do
+  [ -n "${candidate}" ] || continue
+  canonical_candidate="$(cd -P "${candidate}" 2>/dev/null && pwd -P)" || continue
+  [ "${canonical_candidate}" = "${candidate}" ] || continue
+  if [ "${canonical_parent}" = "${candidate}" ]; then
+    cache_root="${candidate}"
+    break
+  fi
+done
+IFS="${old_ifs}"
+[ -n "${cache_root}" ] || die 'VOL_DIR is outside the exact cache roots'
+
+expected_target="${cache_root}/${volume_name}"
+[ "${VOL_DIR}" = "${expected_target}" ] || die 'VOL_DIR is not canonical'
+
+record_failure() {
+  metric_dir="${cache_root}/.ray-cache-metrics"
+  metric_file="${metric_dir}/teardown_failures"
+  mkdir -p -m 0770 "${metric_dir}" || return 1
+  current=0
+  if [ -f "${metric_file}" ]; then
+    current="$(cat "${metric_file}")"
+    case "${current}" in
+      *[!0-9]*) current=0 ;;
+    esac
+  fi
+  next=$((current + 1))
+  temporary_metric="${metric_file}.tmp.$$"
+  printf '%s\n' "${next}" >"${temporary_metric}" || return 1
+  mv "${temporary_metric}" "${metric_file}" || return 1
+}
+
+fail_with_metric() {
+  message="$1"
+  record_failure || printf 'ray-cache teardown: failed to record teardown metric\n' >&2
+  die "${message}"
+}
+
+if [ ! -e "${expected_target}" ] && [ ! -L "${expected_target}" ]; then
+  exit 0
+fi
+[ -d "${expected_target}" ] && [ ! -L "${expected_target}" ] || fail_with_metric 'target is not a real directory'
+canonical_target="$(cd -P "${expected_target}" && pwd -P)" || fail_with_metric 'cannot canonicalize target'
+[ "${canonical_target}" = "${expected_target}" ] || fail_with_metric 'target is not the exact volume directory'
+
+if [ "${RAY_CACHE_TEST_MODE:-}" = 1 ] && [ "${RAY_CACHE_TEST_FORCE_DELETE_FAILURE:-}" = 1 ]; then
+  fail_with_metric 'forced test deletion failure'
+fi
+
+if ! find "${expected_target}" -xdev -depth -mindepth 1 -delete; then
+  fail_with_metric 'failed to delete volume contents'
+fi
+if ! rmdir "${expected_target}"; then
+  fail_with_metric 'failed to delete exact volume directory'
+fi

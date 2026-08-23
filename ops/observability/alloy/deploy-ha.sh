@@ -18,6 +18,23 @@ for required in helm kubectl grep; do
   command -v "$required" >/dev/null || { echo "missing required command: ${required}" >&2; exit 1; }
 done
 [[ -f "$values_file" ]] || { echo "Alloy values not found: ${values_file}" >&2; exit 1; }
+grep -Fq 'preferredDuringSchedulingIgnoredDuringExecution:' "$values_file" || {
+  echo 'Alloy StatefulSet must prefer CPU nodes' >&2
+  exit 1
+}
+grep -Fq 'weight: 100' "$values_file"
+grep -Fq 'key: platform.wellspiking.ai/pool' "$values_file"
+grep -Fq 'values: [control-plane]' "$values_file"
+grep -Fq 'key: node.kubernetes.io/instance-type' "$values_file"
+grep -Fq 'values: [virtual-node]' "$values_file"
+if grep -A3 'nodeSelector:' "$values_file" | grep -Fq 'platform.wellspiking.ai/pool: control-plane'; then
+  echo 'Alloy StatefulSet must not retain a hard control-plane nodeSelector' >&2
+  exit 1
+fi
+if grep -Fq 'nvidia.com/gpu' "$values_file"; then
+  echo 'Alloy must not request GPU resources' >&2
+  exit 1
+fi
 
 rendered="$(mktemp)"
 trap 'rm -f "$rendered"' EXIT
@@ -28,11 +45,15 @@ for required in \
   'replicas: 2' \
   'harbor.wellspiking.ai/hub/grafana/alloy' \
   'platform_job_id' \
-  'platform.wellspiking.ai/pool: control-plane'; do
+  'preferredDuringSchedulingIgnoredDuringExecution:' \
+  'weight: 100' \
+  'key: platform.wellspiking.ai/pool' \
+  'key: node.kubernetes.io/instance-type' \
+  'virtual-node'; do
   grep -Fq -- "$required" "$rendered" || { echo "Alloy render contract missing: ${required}" >&2; exit 1; }
 done
-if grep -Fq 'virtual-node' "$rendered" || grep -Fq 'burst-to-vci' "$rendered"; then
-  echo 'CPU Alloy profile must not target VCI' >&2
+if grep -Fq 'nvidia.com/gpu' "$rendered"; then
+  echo 'Alloy must not request GPU resources' >&2
   exit 1
 fi
 

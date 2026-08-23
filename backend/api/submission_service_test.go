@@ -18,6 +18,76 @@ type submissionServiceRepository struct {
 	artifactLookup string
 }
 
+func TestSubmissionNormalizesAndEnforcesRuntimeCachePolicy(t *testing.T) {
+	tests := []struct {
+		name      string
+		policy    LocalCachePolicy
+		cache     domain.CacheRequest
+		wantMode  domain.CacheMode
+		wantSize  string
+		wantError string
+	}{
+		{name: "omitted becomes off", cache: domain.CacheRequest{}, wantMode: domain.CacheModeOff},
+		{name: "explicit off remains off", cache: domain.CacheRequest{Mode: domain.CacheModeOff}, wantMode: domain.CacheModeOff},
+		{name: "runtime rejected while disabled", cache: domain.CacheRequest{Mode: domain.CacheModeRuntime, Size: "200Gi"}, wantError: "capability is disabled"},
+		{name: "runtime defaults size", policy: LocalCachePolicy{Enabled: true, AllowedSizes: []string{"100Gi", "200Gi", "500Gi"}, DefaultSize: "200Gi", MaxSize: "500Gi"}, cache: domain.CacheRequest{Mode: domain.CacheModeRuntime}, wantMode: domain.CacheModeRuntime, wantSize: "200Gi"},
+		{name: "runtime accepts explicit allowed size", policy: LocalCachePolicy{Enabled: true, AllowedSizes: []string{"100Gi", "200Gi", "500Gi"}, DefaultSize: "200Gi", MaxSize: "500Gi"}, cache: domain.CacheRequest{Mode: domain.CacheModeRuntime, Size: "100Gi"}, wantMode: domain.CacheModeRuntime, wantSize: "100Gi"},
+		{name: "runtime rejects disallowed size", policy: LocalCachePolicy{Enabled: true, AllowedSizes: []string{"100Gi", "200Gi", "500Gi"}, DefaultSize: "200Gi", MaxSize: "500Gi"}, cache: domain.CacheRequest{Mode: domain.CacheModeRuntime, Size: "300Gi"}, wantError: "not allowed"},
+		{name: "runtime rejects size over max", policy: LocalCachePolicy{Enabled: true, AllowedSizes: []string{"100Gi", "1Ti"}, DefaultSize: "100Gi", MaxSize: "500Gi"}, cache: domain.CacheRequest{Mode: domain.CacheModeRuntime, Size: "1Ti"}, wantError: "exceeds maximum"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &submissionServiceRepository{}
+			service := NewSubmissionService(repository, SubmissionServiceOptions{
+				LocalCache: test.policy,
+				NewID:      func() (string, error) { return "job-cache", nil },
+			})
+			spec := submissionSpec("registry.example/ray@sha256:" + strings.Repeat("a", 64))
+			spec.Cache = test.cache
+			job, err := service.Submit(context.Background(), SubmissionInput{
+				Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+				Spec:      spec, Origin: domain.SubmissionOriginPortal,
+			})
+			if test.wantError != "" {
+				if !errors.Is(err, ErrSubmissionInvalidJobSpec) || !strings.Contains(err.Error(), test.wantError) {
+					t.Fatalf("expected invalid job spec containing %q, got %v", test.wantError, err)
+				}
+				if repository.created != nil {
+					t.Fatalf("invalid cache request was persisted: %#v", repository.created.Spec.Cache)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("submit: %v", err)
+			}
+			if job.Spec.Cache.Mode != test.wantMode || job.Spec.Cache.Size != test.wantSize {
+				t.Fatalf("normalized cache=%#v want mode=%q size=%q", job.Spec.Cache, test.wantMode, test.wantSize)
+			}
+			if repository.created == nil || repository.created.Spec.Cache != job.Spec.Cache {
+				t.Fatalf("normalized cache was not persisted: job=%#v persisted=%#v", job.Spec.Cache, repository.created)
+			}
+		})
+	}
+}
+
+func TestSubmissionServiceCopiesCacheAllowlist(t *testing.T) {
+	allowed := []string{"200Gi"}
+	service := NewSubmissionService(&submissionServiceRepository{}, SubmissionServiceOptions{
+		LocalCache: LocalCachePolicy{Enabled: true, AllowedSizes: allowed, DefaultSize: "200Gi", MaxSize: "500Gi"},
+		NewID:      func() (string, error) { return "job-cache-copy", nil },
+	})
+	allowed[0] = "500Gi"
+	spec := submissionSpec("registry.example/ray@sha256:" + strings.Repeat("a", 64))
+	spec.Cache = domain.CacheRequest{Mode: domain.CacheModeRuntime, Size: "200Gi"}
+	if _, err := service.Submit(context.Background(), SubmissionInput{
+		Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+		Spec:      spec, Origin: domain.SubmissionOriginPortal,
+	}); err != nil {
+		t.Fatalf("constructor retained mutable allowlist: %v", err)
+	}
+}
+
 func TestSubmissionRestoresTenantRuntimeBeforeCreatingJob(t *testing.T) {
 	repository := &submissionServiceRepository{}
 	var gotTenant, gotNamespace, gotQueue, gotClusterQueue string

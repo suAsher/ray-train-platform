@@ -20,9 +20,63 @@ export const defaultPlatformLimits = Object.freeze({
     Object.freeze({ mode: 'single_gpu', name: '单卡', minWorkerReplicas: 1, maxWorkerReplicas: 1, minGpusPerWorker: 1, available: true }),
     Object.freeze({ mode: 'torchrun', name: '单机多卡 DDP', minWorkerReplicas: 1, maxWorkerReplicas: 1, minGpusPerWorker: 2, available: false }),
   ]),
+  cache: Object.freeze({
+    enabled: false,
+    defaultMode: 'off',
+    modes: Object.freeze(['off']),
+    allowedSizes: Object.freeze([]),
+    defaultSize: '',
+    maxSize: '',
+    mountPath: '',
+  }),
 })
 
 export const zeroQuotaMessage = '团队当前没有可用 GPU 配额，请等待正在运行的任务释放资源，或联系超级管理员调整配额'
+
+/** Normalize the cache descriptor served by GET /api/v1/limits. */
+export function normalizeCachePolicy(policy) {
+  if (policy?.enabled !== true) return { ...defaultPlatformLimits.cache }
+  return {
+    enabled: true,
+    defaultMode: String(policy.defaultMode || '').trim(),
+    modes: normalizedStrings(policy.modes),
+    allowedSizes: normalizedStrings(policy.allowedSizes),
+    defaultSize: String(policy.defaultSize || '').trim(),
+    maxSize: String(policy.maxSize || '').trim(),
+    mountPath: String(policy.mountPath || '').trim(),
+  }
+}
+
+/** Keep form and copied-query cache values inside the currently loaded policy. */
+export function normalizeCacheSelection(selection, policy, { selectRuntimeDefault = false } = {}) {
+  const cachePolicy = normalizeCachePolicy(policy)
+  const mode = String(selection?.cacheMode || 'off').trim() || 'off'
+  const size = String(selection?.cacheSize || '').trim()
+  const runtimeAvailable = cachePolicy.enabled && cachePolicy.modes.includes('runtime') && cachePolicy.allowedSizes.length > 0
+  if (mode !== 'runtime' || !runtimeAvailable) return { cacheMode: 'off', cacheSize: '' }
+  if (cachePolicy.allowedSizes.includes(size)) return { cacheMode: 'runtime', cacheSize: size }
+  if (!selectRuntimeDefault) return { cacheMode: 'off', cacheSize: '' }
+  const defaultSize = cachePolicy.allowedSizes.includes(cachePolicy.defaultSize)
+    ? cachePolicy.defaultSize
+    : cachePolicy.allowedSizes[0]
+  return defaultSize
+    ? { cacheMode: 'runtime', cacheSize: defaultSize }
+    : { cacheMode: 'off', cacheSize: '' }
+}
+
+/** Forward only an explicit, complete runtime cache request into copy/resubmit. */
+export function cacheQueryForJob(job) {
+  const mode = String(job?.spec?.cache?.mode || '').trim()
+  const size = String(job?.spec?.cache?.size || '').trim()
+  return mode === 'runtime' && size
+    ? { cacheMode: 'runtime', cacheSize: size }
+    : {}
+}
+
+function normalizedStrings(values) {
+  if (!Array.isArray(values)) return []
+  return [...new Set(values.map((value) => String(value || '').trim()).filter(Boolean))]
+}
 
 const profileCopy = {
   single_gpu: {

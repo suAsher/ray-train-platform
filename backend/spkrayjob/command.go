@@ -81,6 +81,11 @@ const helpText = `spk-rayjob — 分布式训练任务命令行客户端
 断点续训（把上一次运行的结果目录作为只读 checkpoint 传入本次运行）：
   spk-rayjob submit --resume-from-job <上一次的 JOB ID> --watch
 
+临时缓存（可选）：
+  spk-rayjob submit --cache-mode runtime --cache-size <平台允许的容量>
+  runtime 缓存是随任务销毁的临时空间，不会自动缓存 /mnt/storage/public；
+  训练代码需要显式把希望加速的数据复制到缓存目录。
+
 通用参数：
   --output json    输出原始 JSON，供脚本使用（默认为可读文本）
   --server         平台地址；未提供时读取 SPK_RAYJOB_URL 或已保存的登录配置
@@ -333,6 +338,8 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	cpu := set.Int64("cpu-per-worker", 8, "CPUs per worker")
 	memory := set.String("memory-per-worker", "32Gi", "memory per worker")
 	executionMode := set.String("execution-mode", "auto", "execution mode: auto, single_gpu, torchrun, ray_train")
+	cacheMode := set.String("cache-mode", "", "cache mode: off, runtime")
+	cacheSize := set.String("cache-size", "", "runtime cache size allowed by the platform")
 	inputSpace := set.String("input-space", "", "logical input data space")
 	inputPath := set.String("input-path", "", "path relative to the input data space")
 	checkpointSpace := set.String("checkpoint-space", "", "logical checkpoint data space")
@@ -353,6 +360,7 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	resolved := defaults.merge(submitOverrides{
 		Name: *name, Image: *image, Entrypoint: *entrypoint, Workers: *workers, GPUsPerWorker: *gpus,
 		CPUPerWorker: *cpu, MemoryPerWorker: *memory, ExecutionMode: *executionMode,
+		Cache:              projectCache{Mode: *cacheMode, Size: *cacheSize},
 		Input:              projectLocation{Space: *inputSpace, Path: *inputPath},
 		Checkpoint:         projectLocation{Space: *checkpointSpace, Path: *checkpointPath},
 		Output:             projectLocation{Path: *outputPath},
@@ -364,29 +372,43 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 		providedCPU:        provided["cpu-per-worker"],
 		providedMemory:     provided["memory-per-worker"],
 		providedMode:       provided["execution-mode"],
+		providedCacheMode:  provided["cache-mode"],
+		providedCacheSize:  provided["cache-size"],
 		providedInput:      provided["input-space"] || provided["input-path"],
 		providedCheckpoint: provided["checkpoint-space"] || provided["checkpoint-path"],
 		providedOutput:     provided["output-path"],
 	})
+	cacheDraft, err := newProjectCacheDraft(resolved.Cache)
+	if err != nil {
+		return err
+	}
+	previousJobID := strings.TrimSpace(*resumeFromJob)
+	checkpointProvided := provided["checkpoint-space"] || provided["checkpoint-path"]
+	if err := validateLocalSubmit(resolved, previousJobID, checkpointProvided); err != nil {
+		return err
+	}
+	draft, err := newLocalSubmitDraft(resolved, *directory, stdout)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(draft.archive.Path)
 	client, err := newCommandClient(connection, getenv, stderr)
 	if err != nil {
 		return err
 	}
-	// Fill in what can be derived so `spk-rayjob submit` works with no
-	// arguments at all: the directory names the run, and the platform's image
-	// catalogue already records which environment is the default.
-	if err := applyDerivedDefaults(ctx, &resolved, *directory, client, stdout); err != nil {
+	resolvedCache, err := resolveProjectCache(ctx, cacheDraft, client)
+	if err != nil {
 		return err
 	}
-	if err := resolved.validateForSubmit(); err != nil {
+	if err := applyPlatformDerivedDefaults(ctx, &draft.values, client, stdout); err != nil {
+		return err
+	}
+	if err := draft.values.validateForSubmit(); err != nil {
 		return err
 	}
 	// Resuming is an ordinary read-only selection of the previous run's own
 	// managed result directory; the platform contract does not change.
-	if previousJobID := strings.TrimSpace(*resumeFromJob); previousJobID != "" {
-		if provided["checkpoint-space"] || provided["checkpoint-path"] {
-			return errors.New("--resume-from-job cannot be combined with --checkpoint-space or --checkpoint-path")
-		}
+	if previousJobID != "" {
 		previous, statusErr := client.Status(ctx, previousJobID)
 		if statusErr != nil {
 			return fmt.Errorf("read the previous job: %w", statusErr)
@@ -395,13 +417,12 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 		if resolveErr != nil {
 			return resolveErr
 		}
-		resolved.Checkpoint = location
+		if err := draft.setCheckpoint(location); err != nil {
+			return err
+		}
 	}
-	spec, err := resolved.jobSpec()
-	if err != nil {
-		return err
-	}
-	job, err := client.SubmitDirectory(ctx, *directory, spec)
+	spec := draft.finalSpec(resolvedCache)
+	job, err := client.submitArchive(ctx, draft.archive, spec)
 	if err != nil {
 		return err
 	}
@@ -409,7 +430,7 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 		if err := writeJSON(stdout, job.Raw); err != nil {
 			return err
 		}
-	} else if _, err := fmt.Fprintf(stdout, "已提交 %s（%s）。查看日志：spk-rayjob logs -f %s\n", job.ID, resolved.Name, job.ID); err != nil {
+	} else if _, err := fmt.Fprintf(stdout, "已提交 %s（%s）。查看日志：spk-rayjob logs -f %s\n", job.ID, draft.values.Name, job.ID); err != nil {
 		return err
 	}
 	if !*watch {
@@ -418,17 +439,62 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	return watchJob(ctx, client, job.ID, stdout, format.json)
 }
 
-// validateForSubmit fails before any network call so a missing value is
-// reported as one clear message rather than a rejected API request.
-// applyDerivedDefaults supplies the values a user should not have to repeat.
-// It never overrides something they provided, and it reports what it chose so
-// a submission is never silently different from what was intended.
-func applyDerivedDefaults(ctx context.Context, value *project, directory string, client *Client, stdout io.Writer) error {
-	// The entrypoint cannot be derived from anything. Checking it first keeps a
-	// missing one from costing a catalogue round trip.
+func validateLocalSubmit(value project, previousJobID string, checkpointProvided bool) error {
 	if strings.TrimSpace(value.Entrypoint) == "" {
 		return value.validateForSubmit()
 	}
+	if previousJobID != "" && checkpointProvided {
+		return errors.New("--resume-from-job cannot be combined with --checkpoint-space or --checkpoint-path")
+	}
+	return nil
+}
+
+type localSubmitDraft struct {
+	values  project
+	spec    domain.JobSpec
+	archive Archive
+}
+
+func newLocalSubmitDraft(value project, directory string, stdout io.Writer) (localSubmitDraft, error) {
+	if err := applyLocalDerivedDefaults(&value, directory, stdout); err != nil {
+		return localSubmitDraft{}, err
+	}
+	spec, err := value.jobSpec()
+	if err != nil {
+		return localSubmitDraft{}, err
+	}
+	if err := validatePreflightJobSpec(spec); err != nil {
+		return localSubmitDraft{}, err
+	}
+	archive, err := BuildArchive(directory)
+	if err != nil {
+		return localSubmitDraft{}, err
+	}
+	return localSubmitDraft{values: value, spec: spec, archive: archive}, nil
+}
+
+func (draft *localSubmitDraft) setCheckpoint(location projectLocation) error {
+	checkpoint, err := commandDataLocation(location.Space, location.Path, "checkpoint")
+	if err != nil {
+		return err
+	}
+	draft.values.Checkpoint = location
+	draft.spec.Checkpoint = checkpoint
+	return nil
+}
+
+func (draft localSubmitDraft) finalSpec(cache domain.CacheRequest) domain.JobSpec {
+	spec := draft.spec
+	spec.Image = strings.TrimSpace(draft.values.Image)
+	spec.Cache = cache
+	return spec
+}
+
+// validateForSubmit fails before any network call so a missing value is
+// reported as one clear message rather than a rejected API request.
+// Local defaults are normalized into the draft before client configuration;
+// the platform-derived image is applied only after cache policy resolution.
+func applyLocalDerivedDefaults(value *project, directory string, stdout io.Writer) error {
 	if strings.TrimSpace(value.Name) == "" {
 		name, err := defaultJobName(directory, time.Now)
 		if err != nil {
@@ -437,6 +503,14 @@ func applyDerivedDefaults(ctx context.Context, value *project, directory string,
 		value.Name = name
 		fmt.Fprintf(stdout, "任务名称：%s（来自目录名，可用 --name 覆盖）\n", name)
 	}
+	// The output directory defaults to the job name so results are easy to find.
+	if strings.TrimSpace(value.Output.Path) == "" {
+		value.Output.Path = value.Name
+	}
+	return nil
+}
+
+func applyPlatformDerivedDefaults(ctx context.Context, value *project, client *Client, stdout io.Writer) error {
 	if strings.TrimSpace(value.Image) == "" {
 		images, err := client.TrainingImages(ctx)
 		if err != nil {
@@ -448,10 +522,6 @@ func applyDerivedDefaults(ctx context.Context, value *project, directory string,
 		}
 		value.Image = reference
 		fmt.Fprintf(stdout, "训练镜像：%s（平台默认，可用 --image 覆盖）\n", reference)
-	}
-	// The output directory defaults to the job name so results are easy to find.
-	if strings.TrimSpace(value.Output.Path) == "" {
-		value.Output.Path = value.Name
 	}
 	return nil
 }
@@ -491,13 +561,13 @@ func (value project) jobSpec() (domain.JobSpec, error) {
 	if err != nil {
 		return domain.JobSpec{}, fmt.Errorf("output path: %w", err)
 	}
-	workers, gpus := positiveOrOne(value.Workers), positiveOrOne(value.GPUsPerWorker)
+	workers, gpus := oneIfZero(value.Workers), oneIfZero(value.GPUsPerWorker)
 	execution, err := executionProfileForFlags(value.ExecutionMode, workers, gpus)
 	if err != nil {
 		return domain.JobSpec{}, err
 	}
 	cpu := value.CPUPerWorker
-	if cpu <= 0 {
+	if cpu == 0 {
 		cpu = 8
 	}
 	memory := strings.TrimSpace(value.MemoryPerWorker)
@@ -512,11 +582,12 @@ func (value project) jobSpec() (domain.JobSpec, error) {
 		Input:      input,
 		Checkpoint: checkpoint,
 		Output:     output,
+		Cache:      domain.CacheRequest{Mode: domain.CacheMode(strings.TrimSpace(value.Cache.Mode)), Size: strings.TrimSpace(value.Cache.Size)},
 	}, nil
 }
 
-func positiveOrOne(value int) int {
-	if value <= 0 {
+func oneIfZero(value int) int {
+	if value == 0 {
 		return 1
 	}
 	return value

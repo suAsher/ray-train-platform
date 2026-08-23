@@ -5,9 +5,12 @@ import * as platformLimits from './platformLimits.js'
 
 const {
   adminQuotaModel,
+  cacheQueryForJob,
   clampResources,
   defaultPlatformLimits,
   jobQuotaModel,
+  normalizeCachePolicy,
+  normalizeCacheSelection,
   profilesFromLimits,
   resolveExecutionMode,
 } = platformLimits
@@ -145,4 +148,134 @@ test('defaults stay conservative when the platform has not answered yet', () => 
   assert.equal(defaultPlatformLimits.maxWorkerReplicas >= 1, true)
   assert.equal(defaultPlatformLimits.mountPaths.dataset, '/mnt/data/input')
   assert.equal(defaultPlatformLimits.executionProfiles.length >= 2, true)
+  assert.deepEqual(defaultPlatformLimits.cache, {
+    enabled: false,
+    defaultMode: 'off',
+    modes: ['off'],
+    allowedSizes: [],
+    defaultSize: '',
+    maxSize: '',
+    mountPath: '',
+  })
+})
+
+test('cache policy normalization is disabled and off-safe without a server policy', () => {
+  assert.deepEqual(normalizeCachePolicy(), defaultPlatformLimits.cache)
+  assert.deepEqual(
+    normalizeCacheSelection({ cacheMode: 'runtime', cacheSize: '200Gi' }, normalizeCachePolicy()),
+    { cacheMode: 'off', cacheSize: '' },
+  )
+})
+
+test('selecting runtime cache uses the valid server default or first allowed size', () => {
+  const policy = normalizeCachePolicy({
+    enabled: true,
+    defaultMode: 'off',
+    modes: ['off', 'runtime'],
+    allowedSizes: ['100Gi', '200Gi'],
+    defaultSize: '200Gi',
+    maxSize: '200Gi',
+    mountPath: '/mnt/cache',
+  })
+
+  assert.deepEqual(
+    normalizeCacheSelection({ cacheMode: 'runtime', cacheSize: '' }, policy, { selectRuntimeDefault: true }),
+    { cacheMode: 'runtime', cacheSize: '200Gi' },
+  )
+  assert.deepEqual(
+    normalizeCacheSelection(
+      { cacheMode: 'runtime', cacheSize: '' },
+      { ...policy, defaultSize: '500Gi' },
+      { selectRuntimeDefault: true },
+    ),
+    { cacheMode: 'runtime', cacheSize: '100Gi' },
+  )
+})
+
+test('cache selection follows a changed allowlist and switching off clears size', () => {
+  const changedPolicy = normalizeCachePolicy({
+    enabled: true,
+    defaultMode: 'off',
+    modes: ['off', 'runtime'],
+    allowedSizes: ['50Gi', '100Gi'],
+    defaultSize: '100Gi',
+    maxSize: '100Gi',
+    mountPath: '/mnt/cache',
+  })
+
+  assert.deepEqual(
+    normalizeCacheSelection(
+      { cacheMode: 'runtime', cacheSize: '200Gi' },
+      changedPolicy,
+      { selectRuntimeDefault: true },
+    ),
+    { cacheMode: 'runtime', cacheSize: '100Gi' },
+  )
+  assert.deepEqual(
+    normalizeCacheSelection({ cacheMode: 'off', cacheSize: '100Gi' }, changedPolicy),
+    { cacheMode: 'off', cacheSize: '' },
+  )
+  assert.deepEqual(
+    normalizeCacheSelection(
+      { cacheMode: 'runtime', cacheSize: '100Gi' },
+      { ...changedPolicy, enabled: false },
+      { selectRuntimeDefault: true },
+    ),
+    { cacheMode: 'off', cacheSize: '' },
+  )
+})
+
+test('invalid copied cache query values stay off instead of adopting a different size', () => {
+  const policy = normalizeCachePolicy({
+    enabled: true,
+    defaultMode: 'off',
+    modes: ['off', 'runtime'],
+    allowedSizes: ['100Gi'],
+    defaultSize: '100Gi',
+    maxSize: '100Gi',
+    mountPath: '/mnt/cache',
+  })
+
+  assert.deepEqual(
+    normalizeCacheSelection({ cacheMode: 'runtime', cacheSize: '200Gi' }, policy),
+    { cacheMode: 'off', cacheSize: '' },
+  )
+})
+
+test('legacy rerun and resume omit cache query values and start off after policy load', () => {
+  const policy = normalizeCachePolicy({
+    enabled: true,
+    defaultMode: 'off',
+    modes: ['off', 'runtime'],
+    allowedSizes: ['100Gi', '200Gi'],
+    defaultSize: '200Gi',
+    maxSize: '200Gi',
+    mountPath: '/mnt/cache',
+  })
+  const copiedQuery = cacheQueryForJob({ spec: {} })
+
+  assert.deepEqual(copiedQuery, {})
+  assert.deepEqual(normalizeCacheSelection(copiedQuery, policy), { cacheMode: 'off', cacheSize: '' })
+})
+
+test('runtime rerun and resume preserve only explicitly forwarded cache valid under current policy', () => {
+  const copiedQuery = cacheQueryForJob({
+    spec: { cache: { mode: 'runtime', size: '200Gi' } },
+  })
+  const currentPolicy = normalizeCachePolicy({
+    enabled: true,
+    defaultMode: 'off',
+    modes: ['off', 'runtime'],
+    allowedSizes: ['100Gi', '200Gi'],
+    defaultSize: '100Gi',
+    maxSize: '200Gi',
+    mountPath: '/mnt/cache',
+  })
+
+  assert.deepEqual(copiedQuery, { cacheMode: 'runtime', cacheSize: '200Gi' })
+  assert.deepEqual(normalizeCacheSelection(copiedQuery, currentPolicy), copiedQuery)
+  assert.deepEqual(
+    normalizeCacheSelection(copiedQuery, { ...currentPolicy, allowedSizes: ['100Gi'] }),
+    { cacheMode: 'off', cacheSize: '' },
+  )
 })

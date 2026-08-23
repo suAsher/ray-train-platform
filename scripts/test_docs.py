@@ -18,10 +18,28 @@ PUBLIC_DOCS = (
     ROOT / "docs" / "BEVFUSION_CODE_CHANGES.md",
     ROOT / "docs" / "ARCHITECTURE.md",
 )
+NVME_CACHE_DESIGN = (
+    ROOT
+    / "docs"
+    / "superpowers"
+    / "specs"
+    / "2026-08-23-nvme-cache-and-gpu-fallback-placement-design.md"
+)
+NVME_CACHE_PLAN = (
+    ROOT
+    / "docs"
+    / "superpowers"
+    / "plans"
+    / "2026-08-23-nvme-cache-and-gpu-fallback-placement.md"
+)
+PLATFORM_ROADMAP = ROOT / "docs" / "PLATFORM_ROADMAP.md"
 CONTRACT_DOCS = PUBLIC_DOCS + (
     ROOT / "docs" / "BUILD_AND_DEPLOY.md",
     ROOT / "docs" / "BEVFUSION_RUNBOOK.md",
     ROOT / "ops" / "mlflow" / "README.md",
+    NVME_CACHE_DESIGN,
+    NVME_CACHE_PLAN,
+    PLATFORM_ROADMAP,
 )
 USER_FACING_DOCS = (
     ROOT / "README.md",
@@ -40,7 +58,248 @@ MLFLOW_PUBLIC_DOCS = (
 LINK = re.compile(r"(?<!!)\[[^]]+\]\(([^)]+)\)")
 
 
+def markdown_section(markdown: str, heading: str) -> str:
+    """Return one Markdown section, including nested subsections."""
+    lines = markdown.splitlines()
+    target_level = len(heading) - len(heading.lstrip("#"))
+    start = None
+
+    for index, line in enumerate(lines):
+        if line == heading:
+            start = index
+            continue
+        if start is None or not line.startswith("#"):
+            continue
+        level = len(line) - len(line.lstrip("#"))
+        if level <= target_level:
+            return "\n".join(lines[start:index])
+
+    if start is None:
+        raise AssertionError(f"Markdown heading not found: {heading}")
+    return "\n".join(lines[start:])
+
+
 class DocumentationContractTest(unittest.TestCase):
+    def assert_section_markers(
+        self, label: str, section: str, markers: tuple[str, ...]
+    ) -> None:
+        for marker in markers:
+            with self.subTest(section=label, marker=marker):
+                self.assertIn(
+                    marker,
+                    section,
+                    f"{label} is missing required marker: {marker}",
+                )
+
+    def test_nvme_cache_is_per_job_opt_in_without_training_image_rebuilds(
+        self,
+    ) -> None:
+        design = NVME_CACHE_DESIGN.read_text(encoding="utf-8")
+        plan = NVME_CACHE_PLAN.read_text(encoding="utf-8")
+        roadmap = PLATFORM_ROADMAP.read_text(encoding="utf-8")
+
+        policy = markdown_section(
+            design, "### 5.1 基础设施可用性与管理员策略"
+        )
+        self.assert_section_markers(
+            "design policy",
+            policy,
+            (
+                "基础设施全局提供缓存能力",
+                "每个训练任务按需选择 `off` 或 `runtime`",
+                "初始默认 `off`",
+                "管理员允许的容量为 `100Gi`、`200Gi`、`500Gi`",
+                "runtime 默认申请 `200Gi`",
+                "管理员上限为 `500Gi`",
+                "未提供缓存参数的任务保持不变",
+                "既有任务保持不变",
+            ),
+        )
+        self.assertNotIn("enabled: true", policy)
+        self.assertNotIn("自动获得任务级临时缓存", policy)
+
+        submission = markdown_section(design, "### 5.2 提交接口")
+        self.assert_section_markers(
+            "design submission",
+            submission,
+            (
+                "Web 创建/重提训练任务",
+                "`spk-rayjob` 提供等价的 cache mode/size 参数",
+                "`platform.cache.mode`",
+                "`platform.cache.size`",
+                "平台网关",
+                "训练镜像保持不变",
+            ),
+        )
+
+        runtime = markdown_section(design, "### 5.3 runtime 挂载语义")
+        self.assert_section_markers(
+            "design runtime",
+            runtime,
+            (
+                "只给选择 `runtime` 的 Ray Head 和 Worker 添加 generic ephemeral PVC",
+                "Submitter 不挂载本地缓存",
+                "PLATFORM_CACHE_PATH=/mnt/cache",
+                "Ray temp-dir=/mnt/cache/ray",
+                "Ray object spilling=/mnt/cache/ray-spill/objects",
+                "不会自动复制 `/mnt/storage/public`",
+                "不会自动加速 PyTorch `DataLoader`",
+                "监控组件不自动删除目录、不终止训练",
+            ),
+        )
+        self.assertNotIn("Submitter 挂载本地缓存", runtime)
+        self.assertNotIn("监控组件自动删除目录", runtime)
+        self.assertNotIn("监控组件终止训练", runtime)
+
+        storage_class = markdown_section(design, "### 4.2 StorageClass 契约")
+        self.assert_section_markers(
+            "design storage class",
+            storage_class,
+            (
+                "`ray-cache-local`",
+                "WaitForFirstConsumer",
+                "reclaimPolicy: Delete",
+                "只允许已登记的生产 GPU 节点进入 `nodePathMap`",
+                "/data1/ray-cache",
+                "/data2/ray-cache",
+                "默认节点路径为空",
+                "CPU 节点和未来未登记节点不能误供应缓存",
+            ),
+        )
+
+        non_goals = markdown_section(design, "### 3.2 本期不做")
+        self.assert_section_markers(
+            "design non-goals",
+            non_goals,
+            (
+                "不把 `/data1`、`/data2` 根目录直接暴露给用户",
+                "不修改、重建或迁移运行中的 RayJob/RayCluster",
+                "不重启 kubelet、containerd、FSX Agent、CNI 或 GPU 驱动",
+            ),
+        )
+        self.assertNotIn("- 重启 kubelet", non_goals)
+        self.assertNotIn("- 修改、重建或迁移运行中的 RayJob/RayCluster", non_goals)
+
+        security = markdown_section(design, "## 11. 安全边界")
+        self.assert_section_markers(
+            "design security",
+            security,
+            (
+                "`nodePathMap` 默认拒绝未知节点",
+                "不启用不安全路径模板",
+                "不接受用户提供宿主机路径",
+                "看不到节点缓存根和其他任务目录",
+            ),
+        )
+        self.assertNotIn("allowUnsafePathPattern: true", security)
+        self.assertNotIn("允许用户提供宿主机路径", security)
+
+        upgrade = markdown_section(design, "## 8. 在线升级与现有训练保护")
+        self.assert_section_markers(
+            "design upgrade",
+            upgrade,
+            (
+                "只影响未来创建的 Pod 模板",
+                "既有任务保持不变",
+                "已经存在的 RayJob、RayCluster",
+                "不 patch 现有 RayJob/RayCluster",
+            ),
+        )
+        self.assertNotIn("会 patch 现有 RayJob/RayCluster", upgrade)
+
+        dataset = markdown_section(design, "## 6. dataset 模式的后续门槛")
+        self.assert_section_markers(
+            "design dataset",
+            dataset,
+            (
+                "dataset 模式不在本期范围",
+                "不可变数据集 manifest",
+                "预热",
+                "基准门禁",
+            ),
+        )
+
+        plan_policy = markdown_section(
+            plan,
+            "## Task 6: 平台 Chart 支持 CPU 优先、GPU 兜底和缓存 availability/policy",
+        )
+        self.assert_section_markers(
+            "plan policy",
+            plan_policy,
+            (
+                "`training.localCache.available`",
+                "`training.localCache.policy.allowedSizes`",
+                "`training.localCache.policy.defaultSize`",
+                "`training.localCache.policy.maxSize`",
+                "每任务默认 `off`",
+            ),
+        )
+        self.assertNotIn("`training.localCache.enabled` 改为 `true`", plan_policy)
+
+        plan_runtime = markdown_section(
+            plan,
+            "## Task 8: 实现每任务 API、平台网关 metadata 和 RayJob runtime 渲染",
+        )
+        self.assert_section_markers(
+            "plan runtime",
+            plan_runtime,
+            (
+                "每任务 API",
+                "`platform.cache.mode`",
+                "`platform.cache.size`",
+                "平台网关",
+                "只有 `runtime` 为 Head/Worker",
+                "generic ephemeral PVC",
+                "PLATFORM_CACHE_PATH=/mnt/cache",
+                "Ray temp-dir `/mnt/cache/ray`",
+                "object spilling `/mnt/cache/ray-spill/objects`",
+                "Submitter 无挂载",
+                "不得自动复制 `/mnt/storage/public`",
+                "不得修改 DataLoader",
+            ),
+        )
+        self.assertNotIn("必须修改 DataLoader", plan_runtime)
+
+        plan_clients = markdown_section(
+            plan, "## Task 9: Web、spk-rayjob、镜像构建与离线交付"
+        )
+        self.assert_section_markers(
+            "plan clients",
+            plan_clients,
+            (
+                "Web RED 测试",
+                "`spk-rayjob` RED 测试",
+                "Backend、Frontend 和 `spk-rayjob` 镜像",
+                "不重建训练镜像",
+            ),
+        )
+
+        current_iteration = markdown_section(roadmap, "## 当前迭代")
+        self.assert_section_markers(
+            "roadmap current iteration",
+            current_iteration,
+            (
+                "按任务选择",
+                "默认关闭",
+                "100Gi / 200Gi / 500Gi",
+                "只为 Ray Head/Worker 挂载 `/mnt/cache`",
+                "`PLATFORM_CACHE_PATH`",
+                "Ray temp-dir",
+                "object spilling",
+                "训练镜像保持不变",
+            ),
+        )
+
+        future_gate = markdown_section(roadmap, "## 后续阶段门禁")
+        self.assertIn("dataset 模式", future_gate)
+        self.assertIn("不可变数据集 manifest", future_gate)
+        self.assertIn("预热流程", future_gate)
+        self.assertIn("基准门禁", future_gate)
+
+    def test_nvme_cache_docs_are_in_relative_link_contract(self) -> None:
+        required = {NVME_CACHE_DESIGN, NVME_CACHE_PLAN, PLATFORM_ROADMAP}
+        self.assertTrue(required.issubset(CONTRACT_DOCS))
+
     def test_relative_markdown_links_resolve(self) -> None:
         missing = []
         for document in CONTRACT_DOCS:

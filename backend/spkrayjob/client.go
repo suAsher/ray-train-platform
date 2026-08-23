@@ -64,6 +64,18 @@ type Job struct {
 	Raw           json.RawMessage `json:"-"`
 }
 
+type PlatformLimits struct {
+	Cache PlatformCacheLimits `json:"cache"`
+}
+
+type PlatformCacheLimits struct {
+	Enabled      bool     `json:"enabled"`
+	Modes        []string `json:"modes"`
+	AllowedSizes []string `json:"allowedSizes"`
+	DefaultSize  string   `json:"defaultSize"`
+	MaxSize      string   `json:"maxSize"`
+}
+
 type apiEnvelope[T any] struct {
 	Success bool `json:"success"`
 	Data    T    `json:"data"`
@@ -172,6 +184,13 @@ func (client *Client) SubmitDirectory(ctx context.Context, directory string, spe
 		return Job{}, err
 	}
 	defer os.Remove(archive.Path)
+	return client.submitArchive(ctx, archive, spec)
+}
+
+func (client *Client) submitArchive(ctx context.Context, archive Archive, spec domain.JobSpec) (Job, error) {
+	if err := validateArchiveJobSpec(spec); err != nil {
+		return Job{}, err
+	}
 	artifact, err := client.CreateArtifact(ctx, archive)
 	if err != nil {
 		return Job{}, err
@@ -272,6 +291,9 @@ func (client *Client) Submit(ctx context.Context, spec domain.JobSpec) (Job, err
 }
 
 func (client *Client) submit(ctx context.Context, spec domain.JobSpec, origin domain.SubmissionOrigin) (Job, error) {
+	if err := validateFinalJobSpec(spec); err != nil {
+		return Job{}, err
+	}
 	body, err := json.Marshal(struct {
 		Spec   domain.JobSpec          `json:"spec"`
 		Origin domain.SubmissionOrigin `json:"origin,omitempty"`
@@ -298,6 +320,20 @@ func (client *Client) TrainingImages(ctx context.Context) ([]catalogImage, error
 		return nil, fmt.Errorf("decode image catalogue: %w", err)
 	}
 	return images, nil
+}
+
+func (client *Client) PlatformLimits(ctx context.Context) (PlatformLimits, error) {
+	raw, err := client.request(ctx, http.MethodGet, "/api/v1/limits", nil, nil)
+	if err != nil {
+		return PlatformLimits{}, err
+	}
+	var limits PlatformLimits
+	if err := json.Unmarshal(raw, &limits); err != nil {
+		return PlatformLimits{}, fmt.Errorf("decode platform limits: %w", err)
+	}
+	limits.Cache.Modes = append([]string(nil), limits.Cache.Modes...)
+	limits.Cache.AllowedSizes = append([]string(nil), limits.Cache.AllowedSizes...)
+	return limits, nil
 }
 
 func (client *Client) Status(ctx context.Context, jobID string) (Job, error) {

@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 type CodeSource struct {
@@ -65,6 +67,40 @@ type RetryPolicy struct {
 	MaxRetries int `json:"maxRetries"`
 }
 
+type CacheMode string
+
+const (
+	CacheModeOff     CacheMode = "off"
+	CacheModeRuntime CacheMode = "runtime"
+)
+
+type CacheRequest struct {
+	Mode CacheMode `json:"mode,omitempty"`
+	Size string    `json:"size,omitempty"`
+}
+
+func (cache CacheRequest) Validate() error {
+	size := strings.TrimSpace(cache.Size)
+	switch cache.Mode {
+	case "", CacheModeOff:
+		if size != "" {
+			return fmt.Errorf("off cache cannot specify size")
+		}
+		return nil
+	case CacheModeRuntime:
+		if size == "" {
+			return fmt.Errorf("runtime cache size is required")
+		}
+		quantity, err := resource.ParseQuantity(size)
+		if err != nil || quantity.Sign() <= 0 {
+			return fmt.Errorf("runtime cache size must be a positive Kubernetes storage quantity")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported cache mode %q", cache.Mode)
+	}
+}
+
 type JobSpec struct {
 	Name               string                  `json:"name"`
 	Image              string                  `json:"image"`
@@ -89,6 +125,7 @@ type JobSpec struct {
 	TimeoutSeconds     int64                   `json:"timeoutSeconds,omitempty"`
 	RetryPolicy        RetryPolicy             `json:"retryPolicy,omitempty"`
 	CleanupPolicy      CleanupPolicy           `json:"cleanupPolicy,omitempty"`
+	Cache              CacheRequest            `json:"cache,omitzero"`
 }
 
 type TrainingJob struct {
@@ -188,6 +225,9 @@ func (s JobSpec) Validate() error {
 	}
 	if strings.TrimSpace(s.Queue) == "" {
 		return fmt.Errorf("queue is required")
+	}
+	if err := s.Cache.Validate(); err != nil {
+		return err
 	}
 	if err := validateDataLocations(
 		dataLocation{field: "datasetUri", value: s.DatasetURI},

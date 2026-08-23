@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 为新创建的 Ray Head/Worker 提供基于 GPU 节点两块 NVMe 的任务级可丢弃缓存，并把平台与可观测性服务改成 CPU 节点优先、GPU 节点可兜底，同时证明升级不影响既有训练。
+**Goal:** 全局提供 GPU 节点 NVMe 缓存能力，让每个新训练任务显式选择 `off` 或 `runtime`，并把平台与可观测性服务改成 CPU 节点优先、GPU 节点可兜底，同时证明默认关闭和升级都不影响既有训练。
 
-**Architecture:** 使用固定版本 Rancher Local Path Provisioner 为 `/data1/ray-cache` 和 `/data2/ray-cache` 动态创建带节点亲和的本地 PV；现有 Backend 继续通过 generic ephemeral PVC 把它挂到 `/mnt/cache`。供应脚本执行 15% 剩余容量门禁，独立只读监控 DaemonSet 暴露磁盘与缓存目录指标。控制面组件保留 CPU/内存请求和反亲和，只把硬 `nodeSelector` 改成 CPU 节点 preferred affinity；训练 Worker 的 GPU 标签硬约束保持不变。
+**Architecture:** 使用固定版本 Rancher Local Path Provisioner 为 `/data1/ray-cache` 和 `/data2/ray-cache` 动态创建带节点亲和的本地 PV；平台发布全局 availability/policy，但 Backend 只为每任务选择 `runtime` 的 Ray Head/Worker 渲染挂到 `/mnt/cache` 的 generic ephemeral PVC，默认 `off`。Web、`spk-rayjob` 和平台网关把同一 mode/size 契约送入任务创建链路；训练镜像保持不变。供应脚本执行 15% 剩余容量门禁，独立只读监控 DaemonSet 暴露磁盘与缓存目录指标；控制面组件保留 CPU/内存请求和反亲和，只把硬 `nodeSelector` 改成 CPU 节点 preferred affinity。
 
 **Tech Stack:** Kubernetes/VKE、KubeRay、Kueue、Helm 3、Rancher Local Path Provisioner v0.0.36、Prometheus Operator、node-exporter、Bash、Go、Harbor。
 
@@ -16,21 +16,26 @@
 - 本地目录 `/Users/ashersu/Desktop/西井/ray-train-platform` 是代码真相；构建机 `/opt/guofeng/vke-cluster/ray-platform` 只接收已审查的同步结果。
 - 所有生产镜像必须来自 `harbor.wellspiking.ai` 并固定 digest；部署脚本不得在生产阶段访问公网。
 - 不修改或删除现有 RayJob、RayCluster、训练 Pod、PVC/PV；不重启节点级核心服务。
+- 缓存只改变平台 Backend、Frontend、`spk-rayjob` 和基础设施；不修改、不重建训练镜像，也不要求训练入口代码升级。
+- 省略缓存参数必须保持历史行为；`runtime` 只配置临时目录和 object spilling，不自动复制 `/mnt/storage/public` 或加速 DataLoader。
 - 每个任务先运行 RED 测试，确认失败原因与预期一致，再写最小实现并运行 GREEN 测试。
 
-## Task 1: 固化路线图、设计状态和测试入口
+## Task 1: 固化每任务缓存文档契约和测试入口
 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-08-23-nvme-cache-and-gpu-fallback-placement-design.md`
-- Create: `docs/PLATFORM_ROADMAP.md`
+- Modify: `docs/PLATFORM_ROADMAP.md`
+- Modify: `scripts/test_docs.py`
 - Create: `scripts/test-nvme-cache-delivery.sh`
 - Modify: `scripts/test-delivery-render.sh`
 
-- [ ] 在 `scripts/test-nvme-cache-delivery.sh` 先写失败测试，要求本地缓存 Chart、生产 values、容量脚本、监控资源、PrometheusRule 和运维文档均存在。
+- [ ] 先在 `scripts/test_docs.py` 写失败契约，要求全局 availability + 每任务 `off`/`runtime`、100Gi/200Gi/500Gi allowlist、原生 metadata、训练镜像不变和 dataset 模式门禁，并拒绝全局启用步骤。
+- [ ] 运行 `python3 scripts/test_docs.py`，预期因现有设计仍描述全局缓存而 RED。
+- [ ] 在 `scripts/test-nvme-cache-delivery.sh` 写交付失败测试，要求本地缓存 Chart、生产 values、容量脚本、监控资源、PrometheusRule 和运维文档均存在。
 - [ ] 运行 `bash scripts/test-nvme-cache-delivery.sh`，预期因 `helm/ray-cache-local/Chart.yaml` 不存在而失败。
 - [ ] 把新测试接入 `scripts/test-delivery-render.sh` 的末尾，保证总交付检查不会漏掉缓存子系统。
-- [ ] 更新设计状态为“已确认，进入实施”，补充 `docs/PLATFORM_ROADMAP.md` 的八项依赖顺序。
-- [ ] 运行 `python3 scripts/test_docs.py`，预期文档链接与命令块检查通过。
+- [ ] 更新设计和路线图，明确默认 `off`、三种入口、容量政策、runtime 边界、训练镜像不变和 dataset 模式门禁。
+- [ ] 运行 `python3 scripts/test_docs.py`，预期每任务缓存契约、文档链接与命令块检查全部通过。
 - [ ] 只提交本任务文档和测试入口：`git commit -m "docs: plan nvme cache delivery roadmap"`。
 
 ## Task 2: 新建固定版本本地卷 Helm Chart
@@ -115,7 +120,7 @@
 - [ ] 运行全部 shell 契约和渲染测试，预期通过。
 - [ ] 提交：`git commit -m "feat: add safe nvme cache operations"`。
 
-## Task 6: 平台 Chart 支持 CPU 优先、GPU 兜底
+## Task 6: 平台 Chart 支持 CPU 优先、GPU 兜底和缓存 availability/policy
 
 **Files:**
 - Modify: `helm/ray-train-platform/values.yaml`
@@ -129,11 +134,12 @@
 - Modify: `ops/platform/test/ha-rollout-template-test.sh`
 - Modify: `backend/config/vke_cpu_ha_profile_test.go`
 
-- [ ] 先把渲染测试改成新契约并确认 RED：生产控制面 Pod 不得存在 `platform.wellspiking.ai/pool: control-plane` 的硬 `nodeSelector`；必须有权重 100 的 preferred node affinity；仍必须排除 virtual-node；训练环境变量 `TRAINING_NODE_SELECTOR` 保持生产 GPU 硬标签。
+- [ ] 先把渲染测试改成新契约并确认 RED：生产控制面 Pod 不得存在 `platform.wellspiking.ai/pool: control-plane` 的硬 `nodeSelector`；必须有权重 100 的 preferred node affinity；仍必须排除 virtual-node；训练环境变量 `TRAINING_NODE_SELECTOR` 保持生产 GPU 硬标签；缓存策略必须全局可用但每任务默认 `off`。
 - [ ] 新增统一 values：`placement.preferredNodeSelector` 和 `placement.allowGPUNodeFallback`。默认可移植 profile 不设置偏好；VKE profile 设置 control-plane 偏好并启用 GPU fallback。
 - [ ] helper 负责渲染节点偏好，四个模板复用同一实现；已有组件级 `nodeSelector` 保留为兼容性逃生口，但生产 profile 清空这些硬约束。
 - [ ] 保留现有 PDB、required pod anti-affinity、topology spread、CPU/内存 request/limit；任何控制面 Pod 均不得申请 GPU。
-- [ ] 把 `training.localCache` 先配置为 `storageClass: ray-cache-local`、`size: 200Gi`、`mountPath: /mnt/cache`，此 Task 仍保持 `enabled: false`。
+- [ ] 用 `training.localCache.available` 表达基础设施能力，生产初始设为 `true`；配置 `storageClass: ray-cache-local`、`mountPath: /mnt/cache`，并把 `training.localCache.policy.allowedSizes` 设为 `[100Gi, 200Gi, 500Gi]`、`training.localCache.policy.defaultSize` 设为 `200Gi`、`training.localCache.policy.maxSize` 设为 `500Gi`、`defaultMode` 设为 `off`。availability 不是给所有任务挂载缓存的开关。
+- [ ] 配置解析必须拒绝空 StorageClass、非绝对 mountPath、重复/非法容量、defaultSize 不在 allowlist、maxSize 超过 `500Gi` 或默认 mode 非 `off`；默认可移植 profile 可设置 `available: false`，但省略每任务 cache 参数的渲染始终保持旧模板。
 - [ ] 运行 `go test ./backend/config ./backend/k8s`、Helm lint、`scripts/test-delivery-render.sh`，预期通过。
 - [ ] 提交：`git commit -m "feat: allow gpu fallback for platform services"`。
 
@@ -165,36 +171,46 @@
 - [ ] 运行 MLflow、Loki、Prometheus Operator、Alloy 的全部 render/contract tests，预期通过。
 - [ ] 提交：`git commit -m "feat: prefer cpu nodes for shared services"`。
 
-## Task 8: 增加平台缓存上线前检查并启用生产开关
+## Task 8: 实现每任务 API、平台网关 metadata 和 RayJob runtime 渲染
 
 **Files:**
+- Modify: Backend 训练任务请求/响应 schema、校验和持久化模块
+- Modify: 平台网关原生 Ray Jobs API metadata 解析模块
+- Modify: Backend RayJob/RayCluster Pod 模板渲染模块
+- Modify: 对应 Backend 单元与集成测试
 - Modify: `ops/platform/preflight.sh`
 - Modify: `ops/platform/deploy.sh`
 - Create: `ops/platform/test/preflight-local-cache-test.sh`
-- Modify: `deploy/profiles/vke-cpu-ha.yaml`
 - Modify: `scripts/test-delivery-render.sh`
-- Modify: `backend/config/vke_cpu_ha_profile_test.go`
 
-- [ ] 先写 preflight 测试：当 `LOCAL_CACHE_ENABLED=true` 时，必须确认 StorageClass 的 provisioner、binding mode、reclaim policy、非默认状态和供应器 Ready；任一不符时部署拒绝继续。
-- [ ] 为 `preflight.sh` 增加只读 `verify_local_cache_contract`；禁用缓存时不要求 StorageClass，保证首次供应器安装仍能独立完成。
-- [ ] 在 Task 5 的双节点 storage smoke 通过后，将生产 profile 的 `training.localCache.enabled` 改为 `true`。
-- [ ] Helm 渲染必须出现 `LOCAL_CACHE_ENABLED=true`、`LOCAL_CACHE_STORAGE_CLASS=ray-cache-local`、`LOCAL_CACHE_SIZE=200Gi`、`LOCAL_CACHE_MOUNT_PATH=/mnt/cache`。
-- [ ] 运行 Backend 配置与 RayJob cache 测试、preflight 单测和完整交付渲染测试。
-- [ ] 提交：`git commit -m "feat: enable guarded nvme cache for new ray jobs"`。
+- [ ] 先写 Backend 表驱动 RED 测试，覆盖：字段省略和显式 `off` 都生成与历史完全相同的 Pod 模板；`runtime` + 100Gi/200Gi/500Gi 通过；`runtime` 省略 size 得到 200Gi；未知 mode、非 allowlist size、仅提供 size、超过 500Gi 和 availability=false 时请求 runtime 都在创建 RayCluster 前失败。
+- [ ] 为每任务 API 增加可选 cache mode/size，并规范化为一个不可变值对象；校验顺序固定为 availability、mode、mode/size 组合、allowlist、default 和 max，错误响应明确指出允许值。未提供缓存参数的任务不写入新字段，保证旧客户端与历史审计输出不漂移。
+- [ ] 先写平台网关 RED 测试，要求原生 `ray job submit` metadata 键 `platform.cache.mode` 和 `platform.cache.size` 进入同一规范化/校验路径；拒绝未知 `platform.cache.*` 键和重复冲突值，不把这些平台键传给训练入口脚本。
+- [ ] 平台网关只解析 metadata，不从 command、environment 或 working directory 猜测缓存意图；省略两个键保持历史行为，`runtime` 省略 `platform.cache.size` 时使用 200Gi。
+- [ ] 先写 RayJob 渲染 RED 测试：只有 `runtime` 为 Head/Worker 各加独立 generic ephemeral PVC 和 `/mnt/cache`，设置 `PLATFORM_CACHE_PATH=/mnt/cache`、Ray temp-dir `/mnt/cache/ray`、object spilling `/mnt/cache/ray-spill/objects`；Submitter 无挂载，`off`/省略参数的完整模板与基线一致。
+- [ ] 实现最小渲染；不得自动复制 `/mnt/storage/public`，不得修改 DataLoader，不得改变 output/checkpoint 路径，也不得依赖训练镜像内新增脚本。所有请求对象以新值返回，不原地修改共享模板。
+- [ ] preflight 在 `training.localCache.available=true` 时只读确认 StorageClass 的 provisioner、binding mode、reclaim policy、非默认状态和供应器 Ready；不满足时拒绝平台发布，`available=false` 时允许供应器独立安装或逻辑回滚。
+- [ ] 运行 Backend 配置、API、网关 metadata、RayJob 渲染、preflight 和完整交付测试，预期全部通过。
+- [ ] 提交：`git commit -m "feat: add per-job runtime cache contract"`。
 
-## Task 9: 构建、镜像同步与离线交付验证
+## Task 9: Web、spk-rayjob、镜像构建与离线交付
 
 **Files:**
+- Modify: Frontend 训练创建/重提表单、API 类型和组件测试
+- Modify: `spk-rayjob` 提交参数、请求映射、帮助文本和 CLI 测试
 - Modify: `build-image.sh`
 - Modify: `docs/BUILD_AND_DEPLOY.md`
 - Modify: `ops/observability/prometheus-operator/IMAGE-SOURCES.md`
 - Create: `ops/storage/nvme-cache/IMAGE-SOURCES.md`
 
-- [ ] 在构建脚本测试中先要求 `cache-dependencies` 目标能把 Local Path Provisioner、helper BusyBox 和 cache monitor/node-exporter 镜像复制到内部 Harbor，并输出 digest 清单。
-- [ ] 只从已配置的 Harbor Docker Hub mirror 或构建机代理拉取，推送到 `harbor.wellspiking.ai/guofeng.su`，再以 registry 返回的 digest 更新 `values-vke-production.yaml`。
-- [ ] 运行生产渲染并检查所有镜像都为 `harbor.wellspiking.ai/...@sha256:...`，不得出现 docker.io、quay.io、ghcr.io 或浮动 tag。
-- [ ] 在构建机临时目录重新检出当前 release commit，运行完整单测、前端测试、Helm 渲染和缓存契约，证明交付不依赖本地未提交文件。
-- [ ] 提交：`git commit -m "build: package nvme cache dependencies offline"`。
+- [ ] 先写 Web RED 测试：创建和重提表单默认显示“缓存关闭”；选择 `runtime` 后才显示 100Gi/200Gi/500Gi，默认 200Gi；切回 `off` 清除 size；服务端 allowlist 或 availability 变化后界面不保留非法旧值；错误可访问且可操作。
+- [ ] 实现 Web 控件并通过每任务 API 发送 mode/size。复制旧任务或从旧草稿进入时，缺少 cache 字段必须解释为 `off`，不得静默变成 `runtime`。
+- [ ] 先写 `spk-rayjob` RED 测试，为 submit 增加 `--cache-mode off|runtime` 和 `--cache-size 100Gi|200Gi|500Gi`；省略两个参数时请求体与旧版本字节级等价，`runtime` 省略 size 由服务端默认 200Gi，非法组合在本地快速失败且服务端仍重复校验。
+- [ ] 更新 `spk-rayjob` 帮助和提交映射；文档示例同时给出 Web、`spk-rayjob submit --cache-mode runtime --cache-size 200Gi` 和原生 `ray job submit --metadata-json` 的 `platform.cache.mode`/`platform.cache.size` 用法。
+- [ ] 构建脚本测试必须要求 `cache-dependencies` 目标把 Local Path Provisioner、helper BusyBox 和 cache monitor/node-exporter 镜像复制到内部 Harbor并输出 digest 清单，同时只重建 Backend、Frontend 和 `spk-rayjob` 镜像，不重建训练镜像。
+- [ ] 只从已配置的 Harbor Docker Hub mirror 或构建机代理拉取基础设施依赖，推送到内部 Harbor，再以 registry 返回的 digest 更新生产 values；生产渲染不得出现公网 registry 或浮动 tag。
+- [ ] 在构建机临时目录重新检出当前 release commit，运行 Backend、Frontend、`spk-rayjob`、Helm 渲染、缓存契约和离线镜像检查。记录训练镜像升级前后 digest 相同，Backend、Frontend 和 `spk-rayjob` 镜像 digest 已更新。
+- [ ] 提交：`git commit -m "feat: expose per-job cache options"`。
 
 ## Task 10: 分阶段生产上线并证明既有训练连续
 
@@ -206,8 +222,9 @@
 - [ ] 先部署 `ray-cache-local`，平台 profile 仍保持缓存关闭；执行两个节点、两条路径的供应/写入/回收 smoke。
 - [ ] 用普通用户启动一个持续至少 30 分钟、每 30 秒输出心跳并持续写个人输出目录的 1 GPU 训练，记录 Job ID、Pod UID、最后日志序号和 MLflow Run ID。
 - [ ] 分别滚动升级平台、MLflow、Loki、Prometheus/Grafana、Alloy；每个 release 完成后确认持续训练 Pod UID 与 restartCount 不变、心跳连续、checkpoint/输出仍可写。
-- [ ] 启用生产缓存 profile。确认 Helm 只滚动 Backend/控制面 Pod，不 patch 现有 RayJob/RayCluster。
-- [ ] 提交新的 1×1 cache smoke：Head/Worker 有 `/mnt/cache`，Submitter 无；PVC/PV 绑定到同一节点；Ray session 与 spilling 在缓存盘；结束后目录回收。
+- [ ] 发布 `training.localCache.available=true` 及管理员 policy，确认默认 mode 仍为 `off`；只滚动 Backend、Frontend、`spk-rayjob` 和所需控制面 Pod，不重建训练镜像，不 patch 现有 RayJob/RayCluster。
+- [ ] 分别用 Web、`spk-rayjob` 和经平台网关的原生 metadata 提交省略参数与显式 `off` 回归，确认不创建缓存 PVC、Pod 模板和历史行为不变；再验证非法 mode/size 在创建 RayCluster 前失败。
+- [ ] 从三个入口分别提交新的 1×1 `runtime` cache smoke：Head/Worker 有 `/mnt/cache`，Submitter 无；未指定 size 时为 200Gi，显式 100Gi/500Gi 可用；PVC/PV 绑定到同一节点；Ray session 与 spilling 在缓存盘；结束后目录回收。
 - [ ] 按 `docs/BEVFUSION_END_TO_END_GUIDE.md` 用普通用户提交 2×8 回归，验证两个 Worker 各 8 GPU、NCCL、loss、MLflow、日志和 checkpoint；禁止用管理员 kubeconfig替代用户验收路径。
 - [ ] 记录所有命令、Job ID、时间、Pod UID、PVC/PV、节点路径、指标截图和结果到验收报告；任一步失败立即停止，不继续扩大变更。
 
@@ -223,11 +240,12 @@
 - Modify: `docs/PLATFORM_ROADMAP.md`
 - Modify: `docs/acceptance/NVME_CACHE_ROLLOUT_20260823.md`
 
-- [ ] 使用完全相同的数据目录、文件清单、总字节数、镜像和 Worker 数执行缓存关闭/开启、冷读/热读基准；记录 MiB/s、files/s、P50/P95、GPU 利用率和端到端训练时间。
+- [ ] 使用完全相同的数据目录、文件清单、总字节数、训练镜像和 Worker 数执行 `off`/`runtime`、冷读/热读基准；记录 MiB/s、files/s、P50/P95、GPU 利用率和端到端训练时间。
 - [ ] 明确说明任务级缓存只加速 Ray temp/object spill 和用户显式写入 `/mnt/cache` 的临时文件；它不会自动把 `/mnt/storage/public` 的 DataLoader 文件复制到 NVMe。
-- [ ] 演练逻辑回滚：关闭 `training.localCache.enabled`，确认新任务不再创建缓存 PVC，已有缓存任务继续到结束；恢复开关并再次提交 smoke。
+- [ ] 演练逻辑回滚：设置 `training.localCache.available=false`，确认新的 `runtime` 请求被拒绝、`off`/省略参数任务保持可提交、已有 `runtime` 任务继续到结束；恢复 availability 并再次提交 smoke。所有缓存 PVC/PV 清理前不得卸载供应器。
 - [ ] 演练服务调度回滚：恢复硬 selector 的上一 Helm revision，但不操作 RayJob/RayCluster；记录回滚时长与训练连续性。
-- [ ] 更新架构、构建部署、运维和用户文档；用户文档只新增 `/mnt/cache` 的用途与不可持久化警告，不改变 `/mnt/storage/public`、个人、团队和输出路径契约。
+- [ ] 更新架构、构建部署、运维和用户文档；用户文档只新增每任务 `off`/`runtime`、allowlist、`/mnt/cache` 用途与不可持久化警告，不改变 `/mnt/storage/public`、个人、团队和输出路径契约。
+- [ ] 将未来 dataset 模式继续保持在范围外；只有不可变数据集 manifest、可恢复且带校验的预热流程和设计规定的基准门禁全部通过，才允许另立设计进入实施。
 - [ ] 运行 `python3 scripts/test_docs.py`、`bash scripts/test-delivery-render.sh`、`go test ./backend/...`、前端测试和所有 ops contract tests。
 - [ ] 执行安全检查：扫描仓库中的 AK/SK、PAT、GitLab Token、密码和 kubeconfig；确认本任务未提交任何凭据。
 - [ ] 仅在全部验收通过后创建 release commit：`git commit -m "feat: deliver guarded gpu nvme task cache"`，再创建可追溯 release tag；推送前展示最终 diff 与测试报告。
@@ -235,8 +253,12 @@
 ## 完成定义
 
 - 两块 NVMe 都能安全供应和回收任务缓存，未知节点与 CPU 节点不能供应；
-- 新任务有缓存、旧任务不中断，缓存关闭可即时阻止新任务使用；
+- 缓存基础设施全局可用，但每任务默认 `off`；Web、`spk-rayjob`、原生 metadata 的 `off`/`runtime` 语义一致；
+- 100Gi/200Gi/500Gi allowlist、runtime 默认 200Gi 和管理员最大 500Gi 在客户端与服务端生效；
+- 未提供缓存参数的新任务保持历史行为，既有任务不中断；关闭 availability 可即时阻止新的 `runtime` 请求而不影响 `off` 任务；
 - 高水位阻止新卷但不删除运行中目录，告警能在 Prometheus/Grafana 中看到；
 - 平台与共享服务优先 CPU、资源不足时可落 GPU，且不占用 `nvidia.com/gpu`；
 - 1×1 cache smoke、持续训练升级验证、2×8 BEVFusion 回归、MLflow、Loki、checkpoint 全部通过；
+- runtime 只提供 `/mnt/cache`、`PLATFORM_CACHE_PATH`、Ray temp-dir 和 object spilling，不自动复制公共数据或加速 DataLoader；
+- Backend、Frontend 和 `spk-rayjob` 镜像已重建，训练镜像 digest 保持不变；dataset 模式仍受 manifest/预热/基准门禁约束；
 - 文档、部署清单、镜像 digest、release commit/tag 与线上 Helm revision 可相互追溯。

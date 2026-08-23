@@ -11,10 +11,14 @@ global:
   imagePullSecrets:
     - name: harbor-registry
 
+placement:
+  preferredNodeSelector:
+    platform.wellspiking.ai/pool: control-plane
+  allowGPUNodeFallback: true
+
 backend:
   replicaCount: 2
-  nodeSelector:
-    platform.wellspiking.ai/pool: control-plane
+  nodeSelector: {}
   appEnv: development
   oidcRequired: false
   demoMode: false
@@ -58,8 +62,7 @@ backend:
 
 frontend:
   replicaCount: 2
-  nodeSelector:
-    platform.wellspiking.ai/pool: control-plane
+  nodeSelector: {}
   image:
     repository: ray-train-frontend
     tag: prod-20260823-admin-global-r1
@@ -76,8 +79,7 @@ frontend:
 spkRayjobRelease:
   enabled: true
   replicaCount: 2
-  nodeSelector:
-    platform.wellspiking.ai/pool: control-plane
+  nodeSelector: {}
   image:
     repository: spk-rayjob-release
     tag: cli-ignore-anchor-20260822
@@ -141,7 +143,14 @@ training:
   maxGPUsPerWorker: 8
   maxTotalGPUs: 16
   localCache:
-    enabled: false
+    available: true
+    storageClass: ray-cache-local
+    mountPath: /mnt/cache
+    policy:
+      defaultMode: "off"
+      allowedSizes: [100Gi, 200Gi, 500Gi]
+      defaultSize: 200Gi
+      maxSize: 500Gi
 
 kueue:
   enabled: true
@@ -199,8 +208,7 @@ postgres:
     databaseName: platform
     storageClass: ebs-ssd
     size: 20Gi
-    nodeSelector:
-      platform.wellspiking.ai/pool: control-plane
+    nodeSelector: {}
 
 availability:
   pdbEnabled: true

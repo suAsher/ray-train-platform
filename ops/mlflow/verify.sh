@@ -31,20 +31,32 @@ done <<<"$services"
   echo "MLflow does not have two available replicas" >&2
   exit 1
 }
-mlflow_accelerator_selector="$(kubectl -n "$NAMESPACE" get deployment mlflow -o jsonpath='{.spec.template.spec.nodeSelector.accelerator}')"
-mlflow_pool_selector="$(kubectl -n "$NAMESPACE" get deployment mlflow -o jsonpath='{.spec.template.spec.nodeSelector.platform\.wellspiking\.ai/gpu-pool}')"
-if [[ "$mlflow_accelerator_selector" != "nvidia-rtx-4090" || "$mlflow_pool_selector" != "production" ]]; then
-  echo 'MLflow deployment is not restricted to the production GPU worker pool' >&2
+mlflow_node_selector="$(kubectl -n "$NAMESPACE" get deployment mlflow -o jsonpath='{.spec.template.spec.nodeSelector}')"
+if [[ -n "$mlflow_node_selector" && "$mlflow_node_selector" != "{}" ]]; then
+  echo "MLflow deployment has a hard nodeSelector: ${mlflow_node_selector}" >&2
   exit 1
 fi
+mlflow_deployment="$(kubectl -n "$NAMESPACE" get deployment mlflow -o yaml)"
+for expected in \
+  preferredDuringSchedulingIgnoredDuringExecution \
+  requiredDuringSchedulingIgnoredDuringExecution \
+  platform.wellspiking.ai/pool \
+  control-plane \
+  virtual-node \
+  virtual-kubelet; do
+  grep -Fq "$expected" <<<"$mlflow_deployment" || {
+    echo "MLflow deployment scheduling contract is missing ${expected}" >&2
+    exit 1
+  }
+done
 mlflow_pods="$(kubectl -n "$NAMESPACE" get pods -l 'app.kubernetes.io/name=mlflow,app.kubernetes.io/instance=mlflow' -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.nodeName}{"\t"}{.metadata.deletionTimestamp}{"\n"}{end}')"
 while IFS=$'\t' read -r pod_name node_name deletion_timestamp; do
   [[ -n "$pod_name" && -n "$node_name" ]] || continue
   [[ -n "$deletion_timestamp" ]] && continue
-  node_accelerator="$(kubectl get node "$node_name" -o jsonpath='{.metadata.labels.accelerator}')"
-  node_pool="$(kubectl get node "$node_name" -o jsonpath='{.metadata.labels.platform\.wellspiking\.ai/gpu-pool}')"
-  if [[ "$node_accelerator" != "nvidia-rtx-4090" || "$node_pool" != "production" ]]; then
-    echo "MLflow Pod ${pod_name} is running outside the production GPU worker pool: ${node_name}" >&2
+  node_instance_type="$(kubectl get node "$node_name" -o jsonpath='{.metadata.labels.node\.kubernetes\.io/instance-type}')"
+  node_type="$(kubectl get node "$node_name" -o jsonpath='{.metadata.labels.type}')"
+  if [[ "$node_instance_type" == "virtual-node" || "$node_type" == "virtual-kubelet" ]]; then
+    echo "MLflow Pod ${pod_name} is running on excluded virtual node ${node_name}" >&2
     exit 1
   fi
 done <<<"$mlflow_pods"
@@ -82,7 +94,6 @@ artifact_destination="$(kubectl -n "$NAMESPACE" get deployment mlflow -o jsonpat
   echo "unexpected MLflow artifact root: ${artifact_destination}" >&2
   exit 1
 }
-mlflow_deployment="$(kubectl -n "$NAMESPACE" get deployment mlflow -o yaml)"
 if grep -Fq 'nvidia.com/gpu' <<<"$mlflow_deployment"; then
   echo 'MLflow Pod requested an nvidia.com/gpu device' >&2
   exit 1

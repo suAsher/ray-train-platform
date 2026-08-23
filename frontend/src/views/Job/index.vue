@@ -145,6 +145,7 @@ import { isAdmin, userId } from '../../stores/session'
 import { displayJobOwner } from '../../jobOwner'
 import { finishedLabel, formatDateTime, jobTimeline, originLabel } from '../../jobTimeline'
 import { copyToClipboard } from '../../clipboard'
+import { cacheQueryForJob } from '../../platformLimits'
 
 const router = useRouter()
 const scope = ref('mine')
@@ -296,7 +297,12 @@ const canResume = (job) => TERMINAL_STATES.includes(job.status) && Boolean(job.s
 const rerun = (job) => {
   router.push({
     path: '/job/create',
-    query: { name: job.name, image: job.spec?.image, entrypoint: job.entrypoint },
+    query: {
+      name: job.name,
+      image: job.spec?.image,
+      entrypoint: job.entrypoint,
+      ...cacheQueryForJob(job),
+    },
   })
 }
 
@@ -308,6 +314,7 @@ const resume = (job) => {
       name: job.name,
       image: job.spec?.image,
       entrypoint: job.entrypoint,
+      ...cacheQueryForJob(job),
       checkpointPath: base ? `${base}/${job.id}` : job.id,
     },
   })

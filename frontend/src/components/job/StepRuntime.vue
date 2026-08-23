@@ -46,6 +46,27 @@
 
     <el-alert v-for="warning in warnings" :key="warning" class="mt-3" type="warning" show-icon :closable="false" :title="warning" />
 
+    <div v-if="cachePolicy.enabled" class="mt-5 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+      <label class="field-label">一次性运行时缓存</label>
+      <el-radio-group :model-value="form.cacheMode" class="mt-2" @change="selectCacheMode">
+        <el-radio-button value="off">关闭</el-radio-button>
+        <el-radio-button value="runtime" :disabled="!runtimeCacheAvailable">运行时缓存</el-radio-button>
+      </el-radio-group>
+      <el-select
+        v-if="form.cacheMode === 'runtime'"
+        :model-value="form.cacheSize"
+        class="mt-3 w-full"
+        placeholder="选择缓存容量"
+        @change="selectCacheSize"
+      >
+        <el-option v-for="size in cachePolicy.allowedSizes" :key="size" :label="size" :value="size" />
+      </el-select>
+      <p class="field-help">
+        这是随任务结束释放的一次性缓存，仅用于 Ray 临时文件、object spill，以及训练代码显式写入 <code>{{ cachePolicy.mountPath }}</code> 的文件。
+        平台不会自动缓存 <code>/mnt/storage</code>、公共数据或 DataLoader；输出和 Checkpoint 仍写入持久存储。
+      </p>
+    </div>
+
     <el-collapse class="mt-5 border-slate-800">
       <el-collapse-item title="调整 CPU、内存与运行控制" name="advanced">
         <div class="grid gap-4 py-3 sm:grid-cols-2">
@@ -90,6 +111,9 @@
 </template>
 
 <script setup>
+import { computed } from 'vue'
+
+import { normalizeCachePolicy, normalizeCacheSelection } from '../../platformLimits'
 import CopyBlock from '../CopyBlock.vue'
 
 const props = defineProps({
@@ -103,6 +127,24 @@ const props = defineProps({
 })
 
 defineEmits(['apply-profile'])
+
+const cachePolicy = computed(() => normalizeCachePolicy(props.limits.cache))
+const runtimeCacheAvailable = computed(() =>
+  cachePolicy.value.modes.includes('runtime') && cachePolicy.value.allowedSizes.length > 0)
+
+const applyCacheSelection = (selection, selectRuntimeDefault = false) => {
+  const normalized = normalizeCacheSelection(selection, cachePolicy.value, { selectRuntimeDefault })
+  props.form.cacheMode = normalized.cacheMode
+  props.form.cacheSize = normalized.cacheSize
+}
+
+const selectCacheMode = (cacheMode) => {
+  applyCacheSelection({ cacheMode, cacheSize: props.form.cacheSize }, cacheMode === 'runtime')
+}
+
+const selectCacheSize = (cacheSize) => {
+  applyCacheSelection({ cacheMode: 'runtime', cacheSize })
+}
 
 const profileClass = (profile) => {
   if (!profile.available) return 'cursor-not-allowed border-slate-800 bg-slate-900/30 opacity-60'

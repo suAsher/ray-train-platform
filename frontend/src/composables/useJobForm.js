@@ -3,7 +3,16 @@ import { computed, reactive, ref, watch } from 'vue'
 import { fetchPlatformLimits } from '../api/platform'
 import { fetchImages } from '../api/catalog'
 import { fetchWorkspaceSnapshots } from '../api/dataSpaces'
-import { clampResources, containerPathFor, defaultPlatformLimits, jobQuotaModel, profilesFromLimits, resolveExecutionMode } from '../platformLimits'
+import {
+  clampResources,
+  containerPathFor,
+  defaultPlatformLimits,
+  jobQuotaModel,
+  normalizeCachePolicy,
+  normalizeCacheSelection,
+  profilesFromLimits,
+  resolveExecutionMode,
+} from '../platformLimits'
 import { entrypointWarnings, previewCommand } from '../commandPreview'
 import { jobFormStepIssues } from './jobFormIssues.js'
 
@@ -36,6 +45,8 @@ export function useJobForm(route) {
     memoryPerWorker: '32Gi',
     timeoutSeconds: 0,
     maxRetries: 0,
+    cacheMode: 'off',
+    cacheSize: '',
     input: { spaceId: String(route?.query?.dataSpace || ''), relativePath: String(route?.query?.dataPath || '') },
     checkpoint: {},
     output: {},
@@ -66,6 +77,16 @@ export function useJobForm(route) {
       if (bounded.workers !== Number(form.workerReplicas)) form.workerReplicas = bounded.workers
       if (bounded.gpus !== Number(form.gpusPerWorker)) form.gpusPerWorker = bounded.gpus
     },
+  )
+
+  watch(
+    () => limits.value.cache,
+    (cachePolicy) => {
+      const normalized = normalizeCacheSelection(form, cachePolicy, { selectRuntimeDefault: true })
+      form.cacheMode = normalized.cacheMode
+      form.cacheSize = normalized.cacheSize
+    },
+    { deep: true },
   )
 
   const applyProfile = (profile) => {
@@ -108,11 +129,21 @@ export function useJobForm(route) {
     const results = await Promise.allSettled([fetchPlatformLimits(), fetchImages('training'), fetchWorkspaceSnapshots()])
     const [limitsResult, imagesResult, snapshotsResult] = results
     if (limitsResult.status === 'fulfilled' && limitsResult.value) {
-      limits.value = { ...defaultPlatformLimits, ...limitsResult.value }
+      limits.value = {
+        ...defaultPlatformLimits,
+        ...limitsResult.value,
+        cache: normalizeCachePolicy(limitsResult.value.cache),
+      }
       const bounded = clampResources({ workers: form.workerReplicas, gpus: form.gpusPerWorker }, limits.value)
       form.workerReplicas = bounded.workers
       form.gpusPerWorker = bounded.gpus
     }
+    const copiedCache = normalizeCacheSelection({
+      cacheMode: route?.query?.cacheMode,
+      cacheSize: route?.query?.cacheSize,
+    }, limits.value.cache)
+    form.cacheMode = copiedCache.cacheMode
+    form.cacheSize = copiedCache.cacheSize
     trainingImages.value = imagesResult.status === 'fulfilled' ? imagesResult.value || [] : []
     workspaceSnapshots.value = snapshotsResult.status === 'fulfilled' ? snapshotsResult.value || [] : []
     const preferred = trainingImages.value.find((image) => image.isDefault) || trainingImages.value[0]

@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ray-cache-local.fullname" . }}
+  labels:
+    {{- include "ray-cache-local.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "ray-cache-local.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ray-cache-local.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "ray-cache-local.fullname" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: virtual-kubelet.io/provider
+                    operator: DoesNotExist
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  {{- range $key, $value := .Values.provisioner.preferredNodeSelector }}
+                  - key: {{ $key }}
+                    operator: In
+                    values: [{{ $value | quote }}]
+                  {{- end }}
+      containers:
+        - name: local-path-provisioner
+          image: {{ include "ray-cache-local.requireDigestImage" .Values.images.provisioner }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command: ["local-path-provisioner", "--debug", "start", "--config", "/etc/config/config.json"]
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: CONFIG_MOUNT_PATH
+              value: /etc/config/
+          resources:
+            {{- toYaml .Values.provisioner.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/config/
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "ray-cache-local.fullname" . }}-config

@@ -70,6 +70,7 @@
             :total-g-p-us="totalGPUs"
             :execution-mode="executionMode"
             :command-preview="commandPreview"
+            :cache-policy="limits.cache"
           />
         </template>
 
@@ -185,7 +186,7 @@ const submitJob = async () => {
   }
   submitting.value = true
   try {
-    const spec = buildJobSpec(toSubmission())
+    const spec = buildJobSpec(toSubmission(), limits.value)
     const idempotencyKey = globalThis.crypto?.randomUUID?.() || `portal-${Date.now()}`
     const data = await apiPost('/api/v1/jobs', { spec }, { headers: { 'Idempotency-Key': idempotencyKey } })
     ElMessage.success('训练任务已提交，正在等待队列准入')

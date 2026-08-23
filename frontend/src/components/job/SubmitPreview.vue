@@ -29,6 +29,10 @@
         <dt class="text-slate-500">产物目录</dt>
         <dd class="mt-1 break-all text-slate-200">{{ outputSummary }}</dd>
       </div>
+      <div>
+        <dt class="text-slate-500">运行时缓存</dt>
+        <dd class="mt-1 break-all text-slate-200">{{ cacheSummary }}</dd>
+      </div>
     </dl>
 
     <CopyBlock class="mt-4" :text="commandPreview || '（尚未填写启动命令）'" label="平台实际执行" wrap />
@@ -43,6 +47,7 @@
 <script setup>
 import { computed } from 'vue'
 
+import { equivalentSubmitCommand } from '../../submission'
 import CopyBlock from '../CopyBlock.vue'
 
 const props = defineProps({
@@ -51,6 +56,7 @@ const props = defineProps({
   totalGPUs: { type: Number, default: 0 },
   executionMode: { type: String, default: 'single_gpu' },
   commandPreview: { type: String, default: '' },
+  cachePolicy: { type: Object, default: () => ({}) },
 })
 
 const sourceSummary = computed(() => {
@@ -65,22 +71,12 @@ const outputSummary = computed(() => (props.form.output?.spaceId === 'my-runs'
   ? '我的训练结果 · 平台自动创建独立 runs/<job-id>'
   : '尚未选择训练结果空间'))
 
-// The same job as a copy-pasteable CLI invocation. It is the bridge between the
-// two submission paths: whatever a user composes here, they can rerun from a
-// terminal without rebuilding the request by hand.
-const cliCommand = computed(() => {
-  const parts = ['spk-rayjob submit', `--name ${props.form.name || '<任务名>'}`, `--image ${props.form.image || '<镜像 digest>'}`]
-  parts.push(`--entrypoint '${props.form.entrypoint || '<启动命令>'}'`)
-  parts.push(`--workers ${props.form.workerReplicas}`, `--gpus-per-worker ${props.form.gpusPerWorker}`)
-  if (props.form.input?.spaceId) {
-    parts.push(`--input-space ${props.form.input.spaceId}`)
-    if (props.form.input.relativePath) parts.push(`--input-path ${props.form.input.relativePath}`)
-  }
-  if (props.form.checkpoint?.spaceId) {
-    parts.push(`--checkpoint-space ${props.form.checkpoint.spaceId}`)
-    if (props.form.checkpoint.relativePath) parts.push(`--checkpoint-path ${props.form.checkpoint.relativePath}`)
-  }
-  parts.push('--watch')
-  return parts.join(' \\\n  ')
+const cacheSummary = computed(() => {
+  if (props.form.cacheMode !== 'runtime') return '已关闭'
+  const size = String(props.form.cacheSize || '').trim() || '尚未选择容量'
+  const mountPath = String(props.cachePolicy.mountPath || '').trim() || '挂载路径未提供'
+  return `运行时 · ${size} · 挂载到 ${mountPath}`
 })
+
+const cliCommand = computed(() => equivalentSubmitCommand(props.form))
 </script>

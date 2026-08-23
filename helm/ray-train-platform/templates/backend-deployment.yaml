@@ -14,6 +14,17 @@ local-account deployment never contacts Keycloak. */}}
 {{- /* Existing releases may predate training.localCache. Keep --reuse-values
       upgrades safe by treating that absent map as the disabled default. */}}
 {{- $localCache := default (dict) .Values.training.localCache }}
+{{- $localCachePolicy := default (dict) (get $localCache "policy") }}
+{{- $localCacheAvailable := default false (get $localCache "available") }}
+{{- if $localCacheAvailable }}
+{{- $storageClass := required "training.localCache.storageClass is required when local cache is available" (get $localCache "storageClass") }}
+{{- $mountPath := required "training.localCache.mountPath is required when local cache is available" (get $localCache "mountPath") }}
+{{- if or (not (hasPrefix "/" $mountPath)) (eq $mountPath "/") }}{{- fail "training.localCache.mountPath must be a non-root absolute path" }}{{- end }}
+{{- if ne (default "" (get $localCachePolicy "defaultMode")) "off" }}{{- fail "training.localCache.policy.defaultMode must be off" }}{{- end }}
+{{- if not (get $localCachePolicy "allowedSizes") }}{{- fail "training.localCache.policy.allowedSizes is required when local cache is available" }}{{- end }}
+{{- $defaultSize := required "training.localCache.policy.defaultSize is required when local cache is available" (get $localCachePolicy "defaultSize") -}}
+{{- $maxSize := required "training.localCache.policy.maxSize is required when local cache is available" (get $localCachePolicy "maxSize") -}}
+{{- end }}
 {{- $mlflow := default (dict) .Values.backend.mlflow }}
 {{- $dataSpaces := default (dict) .Values.dataSpaces }}
 {{- $personalStorage := default (dict) .Values.personalStorage }}
@@ -85,16 +96,7 @@ spec:
             matchLabels:
               app: ray-train-backend
       affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  - key: node.kubernetes.io/instance-type
-                    operator: NotIn
-                    values: ["virtual-node"]
-                  - key: type
-                    operator: NotIn
-                    values: ["virtual-kubelet"]
+        {{- include "ray-train-platform.nodeAffinity" . | nindent 8 }}
         {{- if .Values.availability.requiredAntiAffinity }}
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -172,13 +174,17 @@ spec:
             - name: MAX_TOTAL_GPUS
               value: {{ .Values.training.maxTotalGPUs | quote }}
             - name: LOCAL_CACHE_ENABLED
-              value: {{ default false $localCache.enabled | quote }}
+              value: {{ default false (get $localCache "available") | quote }}
             - name: LOCAL_CACHE_STORAGE_CLASS
-              value: {{ default "" $localCache.storageClass | quote }}
+              value: {{ default "" (get $localCache "storageClass") | quote }}
             - name: LOCAL_CACHE_SIZE
-              value: {{ default "" $localCache.size | quote }}
+              value: {{ default "" (get $localCachePolicy "defaultSize") | quote }}
             - name: LOCAL_CACHE_MOUNT_PATH
-              value: {{ default "" $localCache.mountPath | quote }}
+              value: {{ default "" (get $localCache "mountPath") | quote }}
+            - name: LOCAL_CACHE_ALLOWED_SIZES
+              value: {{ join "," (default (list) (get $localCachePolicy "allowedSizes")) | quote }}
+            - name: LOCAL_CACHE_MAX_SIZE
+              value: {{ default "" (get $localCachePolicy "maxSize") | quote }}
             # New governed TOS mounts remain opt-in until the csi-fsx IRSA
             # prefix-isolation smoke test has passed. Browsing stays available,
             # but Ray workloads are not changed by a compatibility upgrade.
