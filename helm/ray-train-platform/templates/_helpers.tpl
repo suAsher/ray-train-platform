@@ -22,6 +22,44 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 
+{{- /* Every platform workload stays off VCI. Cluster profiles can prefer a
+physical CPU pool and either permit physical GPU fallback or make the same
+selector required. Component nodeSelector values remain an explicit escape
+hatch and are rendered separately by each workload template. */ -}}
+{{- define "ray-train-platform.nodeAffinity" -}}
+{{- $placement := default (dict) .Values.placement -}}
+{{- $preferred := default (dict) (get $placement "preferredNodeSelector") -}}
+{{- $allowFallback := default false (get $placement "allowGPUNodeFallback") -}}
+nodeAffinity:
+  requiredDuringSchedulingIgnoredDuringExecution:
+    nodeSelectorTerms:
+      - matchExpressions:
+          - key: node.kubernetes.io/instance-type
+            operator: NotIn
+            values: ["virtual-node"]
+          - key: type
+            operator: NotIn
+            values: ["virtual-kubelet"]
+          {{- if and $preferred (not $allowFallback) }}
+          {{- range $key, $value := $preferred }}
+          - key: {{ $key }}
+            operator: In
+            values: [{{ $value | quote }}]
+          {{- end }}
+          {{- end }}
+{{- if and $preferred $allowFallback }}
+  preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      preference:
+        matchExpressions:
+          {{- range $key, $value := $preferred }}
+          - key: {{ $key }}
+            operator: In
+            values: [{{ $value | quote }}]
+          {{- end }}
+{{- end }}
+{{- end -}}
+
 {{- /* Production profiles set digest; test profiles can intentionally use a
 release tag while exercising image build and deployment flow. */}}
 {{- define "ray-train-platform.image" -}}
