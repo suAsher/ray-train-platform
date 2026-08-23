@@ -26,8 +26,8 @@ backend:
   rayAPIDefaultImage: harbor.wellspiking.ai/guofeng.su/ray-train-pytorch@sha256:2102761c7a5e3af6ff33225182d5b936d18601f7d5697bc11187922df58cfa7f
   image:
     repository: ray-train-backend
-    tag: prod-20260823-admin-global-r1
-    digest: sha256:1d65c3b39ccb980649e98fca2af443338c873894f89331e10667a439a92aaaf8
+    tag: prod-20260823-nvme-cache-r1
+    digest: sha256:2f2dd0a6a3309ccc89e2fa0ffc04d2bfa8df007340dca778002642f05de2a8b0
   oidc:
     issuerURL: https://keycloak.test.invalid/realms/ai
     clientID: ray-training-platform-test
@@ -65,8 +65,8 @@ frontend:
   nodeSelector: {}
   image:
     repository: ray-train-frontend
-    tag: prod-20260823-admin-global-r1
-    digest: sha256:2188919aeb4a48dcc80d4cd415b4a1ad0d5dd1aeaa74bf5c55ca818b7afc9e97
+    tag: prod-20260823-nvme-cache-r1
+    digest: sha256:e5dab0faf1455f677ad17295dc1156af745d56282b267bfa41ffc8d54cbcf9c6
   service:
     type: ClusterIP
     port: 80
@@ -82,8 +82,8 @@ spkRayjobRelease:
   nodeSelector: {}
   image:
     repository: spk-rayjob-release
-    tag: cli-ignore-anchor-20260822
-    digest: sha256:126f2d381acbf2a28159d4a939f03af0f6f595727ae3b81ca7e5a7ea0eab922c
+    tag: prod-20260823-nvme-cache-r1
+    digest: sha256:60e825d020105dc5f2a90d25ef63f9b0edaa4bf9db4563c6bf8e368725eabafa
   service:
     type: ClusterIP
     port: 8080
