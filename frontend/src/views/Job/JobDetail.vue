@@ -265,6 +265,7 @@ import { canOpenRayDashboard, jobDashboardAccessPath } from '../../jobDashboard'
 import { buildLogStreamCards } from '../../jobLogStreams'
 import { latestMetric, metricSeries, sparklinePoints } from '../../mlflowExperiment'
 import { cacheQueryForJob } from '../../platformLimits'
+import { equivalentSubmitCommandForJob } from '../../submission'
 
 const route = useRoute()
 const router = useRouter()
@@ -473,27 +474,7 @@ const rerunJob = () => {
   })
 }
 
-// The Portal and spk-rayjob submit the same contract. Handing the user the
-// equivalent command is what lets them move a working job into their terminal
-// loop without rebuilding it by hand.
-const cliCommand = computed(() => {
-  const spec = jobDetail.value?.spec || {}
-  const resources = spec.resources || {}
-  const parts = [
-    'spk-rayjob submit',
-    `--name ${jobDetail.value?.name || ''}`,
-    `--image ${spec.image || ''}`,
-    `--entrypoint '${jobDetail.value?.entrypoint || ''}'`,
-    `--workers ${resources.workerReplicas || 1}`,
-    `--gpus-per-worker ${resources.gpusPerWorker || 1}`,
-  ]
-  if (spec.input?.space) {
-    parts.push(`--input-space ${spec.input.space}`)
-    if (spec.input.relativePath) parts.push(`--input-path ${spec.input.relativePath}`)
-  }
-  parts.push('--watch')
-  return parts.join(' \\\n  ')
-})
+const cliCommand = computed(() => equivalentSubmitCommandForJob(jobDetail.value))
 
 const showCli = ref(false)
 

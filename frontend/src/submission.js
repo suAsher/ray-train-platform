@@ -31,6 +31,24 @@ export function equivalentSubmitCommand(form) {
   return parts.join(' \\\n  ')
 }
 
+/** Adapt the persisted job shape used by JobDetail to the shared CLI builder. */
+export function equivalentSubmitCommandForJob(job) {
+  const spec = job?.spec || {}
+  const resources = spec.resources || {}
+  const persistedEntrypoint = [...(spec.entrypoint?.command || []), ...(spec.entrypoint?.args || [])].join(' ')
+  return equivalentSubmitCommand({
+    name: job?.name || spec.name || '',
+    image: spec.image || '',
+    entrypoint: job?.entrypoint || persistedEntrypoint,
+    workerReplicas: resources.workerReplicas || 1,
+    gpusPerWorker: resources.gpusPerWorker || 1,
+    cacheMode: spec.cache?.mode,
+    cacheSize: spec.cache?.size,
+    input: spec.input?.space ? { spaceId: spec.input.space, relativePath: spec.input.relativePath } : {},
+    checkpoint: spec.checkpoint?.space ? { spaceId: spec.checkpoint.space, relativePath: spec.checkpoint.relativePath } : {},
+  })
+}
+
 export function buildJobSpec(form, platformLimits = {}) {
   const command = parseEntrypoint(form.entrypoint)
   if (command.length === 0) {

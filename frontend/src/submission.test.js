@@ -3,7 +3,7 @@ import test from 'node:test'
 
 import * as submission from './submission.js'
 
-const { buildJobSpec, equivalentSubmitCommand, parseEntrypoint } = submission
+const { buildJobSpec, equivalentSubmitCommand, equivalentSubmitCommandForJob, parseEntrypoint } = submission
 
 const baseForm = () => ({
   name: 'support-sft-001',
@@ -157,4 +157,37 @@ test('equivalent submit command omits cache flags for off and legacy forms', () 
 
   assert.doesNotMatch(off, /--cache-(?:mode|size)/)
   assert.doesNotMatch(legacy, /--cache-(?:mode|size)/)
+})
+
+test('JobDetail equivalent command includes explicit runtime cache flags through the shared builder', () => {
+  const command = equivalentSubmitCommandForJob({
+    name: 'support-sft-001',
+    entrypoint: 'python train.py --epochs 3',
+    spec: {
+      image: 'registry.example/ray@sha256:' + 'a'.repeat(64),
+      resources: { workerReplicas: 2, gpusPerWorker: 8 },
+      input: { space: 'team-shared', relativePath: 'train' },
+      cache: { mode: 'runtime', size: '200Gi' },
+    },
+  })
+
+  assert.match(command, /--cache-mode runtime \\\n  --cache-size 200Gi/)
+  assert.match(command, /--input-space team-shared/)
+})
+
+test('JobDetail equivalent command omits cache flags for off and legacy jobs', () => {
+  const baseJob = {
+    name: 'support-sft-001',
+    entrypoint: 'python train.py',
+    spec: {
+      image: 'registry.example/ray@sha256:' + 'a'.repeat(64),
+      resources: { workerReplicas: 1, gpusPerWorker: 1 },
+    },
+  }
+
+  assert.doesNotMatch(equivalentSubmitCommandForJob(baseJob), /--cache-(?:mode|size)/)
+  assert.doesNotMatch(
+    equivalentSubmitCommandForJob({ ...baseJob, spec: { ...baseJob.spec, cache: { mode: 'off' } } }),
+    /--cache-(?:mode|size)/,
+  )
 })

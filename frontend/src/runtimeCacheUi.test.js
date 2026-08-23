@@ -62,3 +62,10 @@ test('copy and resubmit carry cache query values while the form validates them a
     'cache query must be applied only after the limits request settles',
   )
 })
+
+test('JobDetail delegates its copyable command to the shared job command builder', async () => {
+  const detailSource = await read('./views/Job/JobDetail.vue')
+
+  assert.match(detailSource, /equivalentSubmitCommandForJob/)
+  assert.match(detailSource, /cliCommand\s*=\s*computed\(\(\)\s*=>\s*equivalentSubmitCommandForJob\(jobDetail\.value\)\)/)
+})
