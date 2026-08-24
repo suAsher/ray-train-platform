@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"net/http"
+	"regexp"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"ray-train-platform-backend/auth"
@@ -36,6 +38,7 @@ func (h *Handler) RegisterSessionRoutes(group *gin.RouterGroup) {
 	// Live GPU state from DCGM. The devices page previously showed only
 	// Kubernetes GPU requests, which says what is reserved but not what is busy.
 	group.GET("/cluster/gpu-metrics", h.clusterGPUMetrics)
+	group.GET("/cluster/gpu-metrics/history", h.clusterGPUHistory)
 }
 
 // GPUInventoryProvider is satisfied by the Prometheus client. It is an
@@ -44,9 +47,68 @@ type GPUInventoryProvider interface {
 	QueryGPUInventory(ctx context.Context) (observability.GPUInventory, error)
 }
 
-func (h *Handler) clusterGPUMetrics(c *gin.Context) {
-	if _, ok := h.principal(c); !ok {
+type GPUHistoryProvider interface {
+	QueryGPUHistory(ctx context.Context, window, nodeName string) (observability.GPUHistory, error)
+}
+
+var allowedGPUHistoryWindows = map[string]struct{}{
+	"15m": {}, "1h": {}, "6h": {}, "24h": {}, "7d": {},
+}
+
+var gpuNodeQueryPattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]+$`)
+
+func (h *Handler) requireGPUAdministrator(c *gin.Context) (auth.Principal, bool) {
+	principal, ok := h.principal(c)
+	if !ok {
 		h.writeError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "authentication is required")
+		return auth.Principal{}, false
+	}
+	if principal.AuthType != auth.AuthTypeOIDC && principal.AuthType != auth.AuthTypeLocal && principal.AuthType != auth.AuthTypeDemo {
+		h.writeError(c, http.StatusForbidden, "INTERACTIVE_SESSION_REQUIRED", "该指标仅供交互式管理员会话访问")
+		return auth.Principal{}, false
+	}
+	if !principal.Allowed(domain.RoleTenantAdmin) {
+		h.writeError(c, http.StatusForbidden, "ADMIN_REQUIRED", "需要团队管理员或平台管理员权限")
+		return auth.Principal{}, false
+	}
+	return principal, true
+}
+
+func validGPUNodeQuery(nodeName string) bool {
+	nodeName = strings.TrimSpace(nodeName)
+	return nodeName == "" || (len(nodeName) <= 253 && gpuNodeQueryPattern.MatchString(nodeName))
+}
+
+func (h *Handler) clusterGPUHistory(c *gin.Context) {
+	if _, ok := h.requireGPUAdministrator(c); !ok {
+		return
+	}
+	window := c.DefaultQuery("window", "1h")
+	if _, ok := allowedGPUHistoryWindows[window]; !ok {
+		h.writeError(c, http.StatusBadRequest, "GPU_HISTORY_WINDOW_INVALID", "时间范围仅支持 15m、1h、6h、24h 或 7d")
+		return
+	}
+	nodeName := strings.TrimSpace(c.Query("node"))
+	if !validGPUNodeQuery(nodeName) {
+		h.writeError(c, http.StatusBadRequest, "GPU_NODE_INVALID", "节点名称格式无效")
+		return
+	}
+	provider, ok := h.metrics.(GPUHistoryProvider)
+	if !ok {
+		h.writeError(c, http.StatusServiceUnavailable, "GPU_METRICS_UNAVAILABLE", "GPU 历史指标未配置")
+		return
+	}
+	history, err := provider.QueryGPUHistory(c.Request.Context(), window, nodeName)
+	if err != nil {
+		h.writeError(c, http.StatusBadGateway, "GPU_HISTORY_QUERY_FAILED", "无法读取 GPU 历史指标，请稍后重试")
+		return
+	}
+	h.writeSuccess(c, http.StatusOK, history)
+}
+
+func (h *Handler) clusterGPUMetrics(c *gin.Context) {
+	principal, ok := h.requireGPUAdministrator(c)
+	if !ok {
 		return
 	}
 	provider, ok := h.metrics.(GPUInventoryProvider)
@@ -59,7 +121,27 @@ func (h *Handler) clusterGPUMetrics(c *gin.Context) {
 		h.writeError(c, http.StatusBadGateway, "GPU_METRICS_QUERY_FAILED", "无法读取 GPU 指标，请稍后重试")
 		return
 	}
+	inventory = visibleGPUInventory(inventory, principal)
 	h.writeSuccess(c, http.StatusOK, inventory)
+}
+
+func visibleGPUInventory(inventory observability.GPUInventory, principal auth.Principal) observability.GPUInventory {
+	if principal.HasRole(domain.RoleSuperAdmin) {
+		return inventory
+	}
+	visible := inventory
+	visible.Devices = append([]observability.GPUDevice(nil), inventory.Devices...)
+	allowedNamespace := "tenant-" + sanitizeDNS(principal.TenantID)
+	for index, device := range visible.Devices {
+		if device.Namespace == "" || device.Namespace == allowedNamespace {
+			continue
+		}
+		device.Namespace = ""
+		device.PodName = ""
+		device.ContainerName = ""
+		visible.Devices[index] = device
+	}
+	return visible
 }
 
 // QuotaStore exposes the caller's own GPU budget. It is deliberately not an

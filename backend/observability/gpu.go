@@ -10,22 +10,27 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // GPUDevice is one physical accelerator as DCGM Exporter reports it. The
 // Portal previously showed only Kubernetes GPU *requests*, which says how much
 // capacity is reserved but nothing about whether it is being used.
 type GPUDevice struct {
-	UUID               string  `json:"uuid"`
-	NodeName           string  `json:"nodeName"`
-	Index              string  `json:"index"`
-	Model              string  `json:"model"`
-	UtilizationPercent float64 `json:"utilizationPercent"`
-	MemoryUsedMiB      float64 `json:"memoryUsedMib"`
-	MemoryTotalMiB     float64 `json:"memoryTotalMib"`
-	TemperatureCelsius float64 `json:"temperatureCelsius"`
-	PowerWatts         float64 `json:"powerWatts"`
-	Busy               bool    `json:"busy"`
+	UUID               string    `json:"uuid"`
+	NodeName           string    `json:"nodeName"`
+	Index              string    `json:"index"`
+	Model              string    `json:"model"`
+	UtilizationPercent float64   `json:"utilizationPercent"`
+	MemoryUsedMiB      float64   `json:"memoryUsedMib"`
+	MemoryTotalMiB     float64   `json:"memoryTotalMib"`
+	TemperatureCelsius float64   `json:"temperatureCelsius"`
+	PowerWatts         float64   `json:"powerWatts"`
+	Busy               bool      `json:"busy"`
+	SampledAt          time.Time `json:"sampledAt"`
+	Namespace          string    `json:"namespace,omitempty"`
+	PodName            string    `json:"podName,omitempty"`
+	ContainerName      string    `json:"containerName,omitempty"`
 }
 
 type GPUInventory struct {
@@ -60,6 +65,10 @@ func (c *PrometheusClient) QueryGPUInventory(ctx context.Context) (GPUInventory,
 	if err != nil {
 		return GPUInventory{}, err
 	}
+	sampleTimes, err := c.instantQuery(ctx, fmt.Sprintf("timestamp(%s)", gpuMetricNames.utilization))
+	if err != nil {
+		return GPUInventory{}, err
+	}
 	memoryUsed, err := c.instantQuery(ctx, gpuMetricNames.memoryUsed)
 	if err != nil {
 		return GPUInventory{}, err
@@ -86,6 +95,7 @@ func (c *PrometheusClient) QueryGPUInventory(ctx context.Context) (GPUInventory,
 	}
 	used, free := byUUID(memoryUsed), byUUID(memoryFree)
 	temperatures, watts := byUUID(temperature), byUUID(power)
+	sampledAt := byUUID(sampleTimes)
 
 	inventory := GPUInventory{Devices: make([]GPUDevice, 0, len(utilization))}
 	for _, sample := range utilization {
@@ -101,6 +111,10 @@ func (c *PrometheusClient) QueryGPUInventory(ctx context.Context) (GPUInventory,
 			TemperatureCelsius: temperatures[uuid],
 			PowerWatts:         watts[uuid],
 			Busy:               sample.value > gpuBusyUtilizationPercent,
+			SampledAt:          unixTimeFromSeconds(sampledAt[uuid]),
+			Namespace:          sample.labels["exported_namespace"],
+			PodName:            sample.labels["exported_pod"],
+			ContainerName:      sample.labels["exported_container"],
 		}
 		inventory.Devices = append(inventory.Devices, device)
 		if device.Busy {
@@ -121,6 +135,15 @@ func (c *PrometheusClient) QueryGPUInventory(ctx context.Context) (GPUInventory,
 type promSample struct {
 	labels map[string]string
 	value  float64
+}
+
+func unixTimeFromSeconds(value float64) time.Time {
+	if value <= 0 {
+		return time.Time{}
+	}
+	seconds := int64(value)
+	nanoseconds := int64((value - float64(seconds)) * float64(time.Second))
+	return time.Unix(seconds, nanoseconds).UTC()
 }
 
 // maxPrometheusResponseBytes bounds an unexpectedly large series set so a

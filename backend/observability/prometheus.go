@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -17,8 +18,9 @@ type MetricPoint struct {
 }
 
 type MetricSeries struct {
-	Name   string        `json:"name"`
-	Points []MetricPoint `json:"points"`
+	Name   string            `json:"name"`
+	Labels map[string]string `json:"labels,omitempty"`
+	Points []MetricPoint     `json:"points"`
 }
 
 type JobMetrics struct {
@@ -82,6 +84,10 @@ func (c *PrometheusClient) QueryJobMetrics(ctx context.Context, jobID string, wi
 }
 
 func (c *PrometheusClient) queryRange(ctx context.Context, expression string, start, end time.Time) ([]MetricSeries, error) {
+	return c.queryRangeWithStep(ctx, expression, start, end, 15*time.Second)
+}
+
+func (c *PrometheusClient) queryRangeWithStep(ctx context.Context, expression string, start, end time.Time, step time.Duration) ([]MetricSeries, error) {
 	endpoint, err := url.Parse(strings.TrimRight(c.BaseURL, "/") + "/api/v1/query_range")
 	if err != nil {
 		return nil, fmt.Errorf("parse Prometheus URL: %w", err)
@@ -90,7 +96,10 @@ func (c *PrometheusClient) queryRange(ctx context.Context, expression string, st
 	query.Set("query", expression)
 	query.Set("start", strconv.FormatInt(start.Unix(), 10))
 	query.Set("end", strconv.FormatInt(end.Unix(), 10))
-	query.Set("step", "15")
+	if step < time.Second {
+		step = 15 * time.Second
+	}
+	query.Set("step", strconv.FormatInt(int64(step/time.Second), 10))
 	endpoint.RawQuery = query.Encode()
 	httpClient := c.HTTPClient
 	if httpClient == nil {
@@ -109,7 +118,7 @@ func (c *PrometheusClient) queryRange(ctx context.Context, expression string, st
 		return nil, fmt.Errorf("Prometheus returned HTTP %d", response.StatusCode)
 	}
 	var payload prometheusResponse
-	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+	if err := json.NewDecoder(io.LimitReader(response.Body, maxPrometheusResponseBytes)).Decode(&payload); err != nil {
 		return nil, fmt.Errorf("decode Prometheus response: %w", err)
 	}
 	if payload.Status != "success" {
@@ -137,7 +146,11 @@ func (c *PrometheusClient) queryRange(ctx context.Context, expression string, st
 			points = append(points, MetricPoint{Timestamp: time.Unix(int64(timestamp), int64((timestamp-float64(int64(timestamp)))*float64(time.Second))).UTC(), Value: value})
 		}
 		if len(points) > 0 {
-			series = append(series, MetricSeries{Points: points})
+			labels := make(map[string]string, len(result.Metric))
+			for key, value := range result.Metric {
+				labels[key] = value
+			}
+			series = append(series, MetricSeries{Labels: labels, Points: points})
 		}
 	}
 	return series, nil
@@ -173,6 +186,7 @@ type prometheusResponse struct {
 	Status string `json:"status"`
 	Data   struct {
 		Result []struct {
+			Metric map[string]string   `json:"metric"`
 			Values [][]json.RawMessage `json:"values"`
 		} `json:"result"`
 	} `json:"data"`

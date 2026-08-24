@@ -26,3 +26,9 @@ export function resolveGitRef(repositoryUrl, ref) {
 export function fetchGPUMetrics() {
   return apiGet('/api/v1/cluster/gpu-metrics')
 }
+
+export function fetchGPUHistory(window, node = '') {
+  const query = new URLSearchParams({ window })
+  if (node) query.set('node', node)
+  return apiGet(`/api/v1/cluster/gpu-metrics/history?${query.toString()}`)
+}

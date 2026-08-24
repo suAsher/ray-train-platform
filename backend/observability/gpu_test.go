@@ -44,8 +44,12 @@ func gpuMetricsServer(t *testing.T, responses map[string]string) *httptest.Serve
 func TestQueryGPUInventoryReportsPerDeviceUtilisationAndMemory(t *testing.T) {
 	server := gpuMetricsServer(t, map[string]string{
 		"DCGM_FI_DEV_GPU_UTIL": dcgmVector(
-			map[string]any{"Hostname": "172.28.1.232", "gpu": "0", "UUID": "GPU-aaa", "modelName": "NVIDIA GeForce RTX 4090 D", "value": "73"},
+			map[string]any{"Hostname": "172.28.1.232", "gpu": "0", "UUID": "GPU-aaa", "modelName": "NVIDIA GeForce RTX 4090 D", "exported_namespace": "tenant-local", "exported_pod": "job-1-worker", "exported_container": "ray-worker", "value": "73"},
 			map[string]any{"Hostname": "172.28.1.233", "gpu": "1", "UUID": "GPU-bbb", "modelName": "NVIDIA GeForce RTX 4090 D", "value": "0"},
+		),
+		"timestamp(DCGM_FI_DEV_GPU_UTIL)": dcgmVector(
+			map[string]any{"UUID": "GPU-aaa", "value": "1787126600.5"},
+			map[string]any{"UUID": "GPU-bbb", "value": "1787126601"},
 		),
 		"DCGM_FI_DEV_FB_USED":     dcgmVector(map[string]any{"UUID": "GPU-aaa", "value": "18000"}, map[string]any{"UUID": "GPU-bbb", "value": "2"}),
 		"DCGM_FI_DEV_FB_FREE":     dcgmVector(map[string]any{"UUID": "GPU-aaa", "value": "6000"}, map[string]any{"UUID": "GPU-bbb", "value": "24000"}),
@@ -69,6 +73,12 @@ func TestQueryGPUInventoryReportsPerDeviceUtilisationAndMemory(t *testing.T) {
 	if busy.UtilizationPercent != 73 || busy.TemperatureCelsius != 71 || busy.PowerWatts != 310.5 {
 		t.Fatalf("unexpected readings: %+v", busy)
 	}
+	if busy.Namespace != "tenant-local" || busy.PodName != "job-1-worker" || busy.ContainerName != "ray-worker" {
+		t.Fatalf("workload attribution was lost: %+v", busy)
+	}
+	if busy.SampledAt.Unix() != 1787126600 {
+		t.Fatalf("source sample timestamp was not used: %+v", busy)
+	}
 	// DCGM reports framebuffer in MiB; total is used + free.
 	if busy.MemoryUsedMiB != 18000 || busy.MemoryTotalMiB != 24000 {
 		t.Fatalf("unexpected memory: %+v", busy)
@@ -85,6 +95,11 @@ func TestQueryGPUInventoryOrdersDevicesByNodeThenIndex(t *testing.T) {
 			map[string]any{"Hostname": "node-b", "gpu": "1", "UUID": "GPU-3", "value": "10"},
 			map[string]any{"Hostname": "node-a", "gpu": "1", "UUID": "GPU-2", "value": "10"},
 			map[string]any{"Hostname": "node-a", "gpu": "0", "UUID": "GPU-1", "value": "10"},
+		),
+		"timestamp(DCGM_FI_DEV_GPU_UTIL)": dcgmVector(
+			map[string]any{"UUID": "GPU-1", "value": "1787126600"},
+			map[string]any{"UUID": "GPU-2", "value": "1787126600"},
+			map[string]any{"UUID": "GPU-3", "value": "1787126600"},
 		),
 		"DCGM_FI_DEV_FB_USED":     dcgmVector(),
 		"DCGM_FI_DEV_FB_FREE":     dcgmVector(),
@@ -125,6 +140,10 @@ func TestGPUBusyThresholdIgnoresIdleNoise(t *testing.T) {
 			map[string]any{"Hostname": "node-a", "gpu": "0", "UUID": "GPU-1", "value": "2"},
 			map[string]any{"Hostname": "node-a", "gpu": "1", "UUID": "GPU-2", "value": "0"},
 		),
+		"timestamp(DCGM_FI_DEV_GPU_UTIL)": dcgmVector(
+			map[string]any{"UUID": "GPU-1", "value": "1787126600"},
+			map[string]any{"UUID": "GPU-2", "value": "1787126600"},
+		),
 		"DCGM_FI_DEV_FB_USED":     dcgmVector(),
 		"DCGM_FI_DEV_FB_FREE":     dcgmVector(),
 		"DCGM_FI_DEV_GPU_TEMP":    dcgmVector(),
@@ -135,5 +154,28 @@ func TestGPUBusyThresholdIgnoresIdleNoise(t *testing.T) {
 	inventory, _ := (&PrometheusClient{BaseURL: server.URL}).QueryGPUInventory(context.Background())
 	if inventory.BusyGPUs != 0 {
 		t.Fatalf("idle noise must not count as busy, got %d", inventory.BusyGPUs)
+	}
+}
+
+func TestGPUInventoryDoesNotTreatDCGMScrapeTargetAsAWorkload(t *testing.T) {
+	server := gpuMetricsServer(t, map[string]string{
+		"DCGM_FI_DEV_GPU_UTIL": dcgmVector(
+			map[string]any{"Hostname": "node-a", "gpu": "0", "UUID": "GPU-1", "namespace": "kube-system", "pod": "dcgm-exporter-a", "container": "exporter", "value": "0"},
+		),
+		"timestamp(DCGM_FI_DEV_GPU_UTIL)": dcgmVector(map[string]any{"UUID": "GPU-1", "value": "1787126600"}),
+		"DCGM_FI_DEV_FB_USED":             dcgmVector(),
+		"DCGM_FI_DEV_FB_FREE":             dcgmVector(),
+		"DCGM_FI_DEV_GPU_TEMP":            dcgmVector(),
+		"DCGM_FI_DEV_POWER_USAGE":         dcgmVector(),
+	})
+	defer server.Close()
+
+	inventory, err := (&PrometheusClient{BaseURL: server.URL}).QueryGPUInventory(context.Background())
+	if err != nil || len(inventory.Devices) != 1 {
+		t.Fatalf("query inventory: devices=%+v err=%v", inventory.Devices, err)
+	}
+	device := inventory.Devices[0]
+	if device.Namespace != "" || device.PodName != "" || device.ContainerName != "" {
+		t.Fatalf("scrape target was incorrectly shown as GPU owner: %+v", device)
 	}
 }
