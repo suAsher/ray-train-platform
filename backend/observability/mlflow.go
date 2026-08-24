@@ -22,6 +22,7 @@ const (
 	maxMLflowResponseBytes = 8 * 1024 * 1024
 	maxMLflowMetricKeys    = 20
 	maxMLflowMetricPoints  = 500
+	maxMLflowRunsPerJob    = 1000
 )
 
 // MLflowClient is used only by the control plane. Browsers do not connect to
@@ -251,6 +252,114 @@ func (c *MLflowClient) ListTenantExperiments(ctx context.Context, tenantID, subj
 		result.Runs = append(result.Runs, run)
 	}
 	return result, nil
+}
+
+// FinalizeJobRuns closes every still-running MLflow run that is cryptographically
+// bound to a terminal platform job. It is safe to retry: the search only returns
+// RUNNING runs, and MLflow's run update is idempotent for a terminal status.
+func (c *MLflowClient) FinalizeJobRuns(ctx context.Context, tenantID, jobID string, state domain.State, finishedAt time.Time) error {
+	if c == nil || strings.TrimSpace(c.BaseURL) == "" {
+		return fmt.Errorf("MLflow URL is not configured")
+	}
+	if len(c.ProvenanceKey) < 32 {
+		return fmt.Errorf("MLflow provenance key is not configured")
+	}
+	if !safeLabelValue(tenantID) || !safeLabelValue(jobID) {
+		return fmt.Errorf("tenant or job identifier is invalid")
+	}
+	status, err := mlflowTerminalStatus(state)
+	if err != nil {
+		return err
+	}
+	prefix := strings.Trim(strings.TrimSpace(c.ExperimentPrefix), "-")
+	if prefix == "" {
+		prefix = "raytrain"
+	}
+	if !safeLabelValue(prefix) {
+		return fmt.Errorf("MLflow experiment prefix is invalid")
+	}
+	experimentID, found, err := c.experimentID(ctx, prefix+"-"+tenantID)
+	if err != nil || !found {
+		return err
+	}
+	runIDs, err := c.runningJobRunIDs(ctx, experimentID, jobID)
+	if err != nil {
+		return err
+	}
+	endTime := finishedAt.UTC().UnixMilli()
+	if endTime <= 0 {
+		endTime = time.Now().UTC().UnixMilli()
+	}
+	for _, runID := range runIDs {
+		endpoint, endpointErr := c.endpoint("/api/2.0/mlflow/runs/update")
+		if endpointErr != nil {
+			return endpointErr
+		}
+		var payload map[string]any
+		if _, updateErr := c.doJSON(ctx, http.MethodPost, endpoint, map[string]any{
+			"run_id": runID, "status": status, "end_time": endTime,
+		}, &payload); updateErr != nil {
+			return fmt.Errorf("finalize MLflow run %s: %w", runID, updateErr)
+		}
+	}
+	return nil
+}
+
+func mlflowTerminalStatus(state domain.State) (string, error) {
+	switch state {
+	case domain.StateSucceeded:
+		return "FINISHED", nil
+	case domain.StateFailed, domain.StateTimedOut:
+		return "FAILED", nil
+	case domain.StateCanceled:
+		return "KILLED", nil
+	default:
+		return "", fmt.Errorf("job state %s is not terminal", state)
+	}
+}
+
+func (c *MLflowClient) runningJobRunIDs(ctx context.Context, experimentID, jobID string) ([]string, error) {
+	endpoint, err := c.endpoint("/api/2.0/mlflow/runs/search")
+	if err != nil {
+		return nil, err
+	}
+	filter := "attributes.status = 'RUNNING' AND tags.`platform.job_id` = '" + jobID + "' AND tags.`platform.provenance` = '" + mlflowProvenanceTag(c.ProvenanceKey, jobID) + "'"
+	runIDs := make([]string, 0)
+	pageToken := ""
+	seenTokens := map[string]struct{}{}
+	for {
+		body := map[string]any{"experiment_ids": []string{experimentID}, "filter": filter, "max_results": 100}
+		if pageToken != "" {
+			body["page_token"] = pageToken
+		}
+		var payload struct {
+			Runs []struct {
+				Info struct {
+					ID string `json:"run_id"`
+				} `json:"info"`
+			} `json:"runs"`
+			NextPageToken string `json:"next_page_token"`
+		}
+		if _, err := c.doJSON(ctx, http.MethodPost, endpoint, body, &payload); err != nil {
+			return nil, err
+		}
+		for _, run := range payload.Runs {
+			if run.Info.ID != "" {
+				runIDs = append(runIDs, run.Info.ID)
+				if len(runIDs) > maxMLflowRunsPerJob {
+					return nil, fmt.Errorf("MLflow job has more than %d running runs", maxMLflowRunsPerJob)
+				}
+			}
+		}
+		pageToken = strings.TrimSpace(payload.NextPageToken)
+		if pageToken == "" {
+			return runIDs, nil
+		}
+		if _, exists := seenTokens[pageToken]; exists {
+			return nil, fmt.Errorf("MLflow returned a repeated page token")
+		}
+		seenTokens[pageToken] = struct{}{}
+	}
 }
 
 func (c *MLflowClient) experimentID(ctx context.Context, name string) (string, bool, error) {

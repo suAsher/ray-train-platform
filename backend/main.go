@@ -117,8 +117,10 @@ func main() {
 	logs := &observability.LokiClient{BaseURL: cfg.LokiURL}
 	metrics := &observability.PrometheusClient{BaseURL: cfg.PrometheusURL}
 	var experiments api.ExperimentProvider
+	var mlflowClient *observability.MLflowClient
 	if cfg.MLflowEnabled {
-		experiments = &observability.MLflowClient{BaseURL: cfg.MLflowTrackingURL, ExperimentPrefix: cfg.MLflowExperimentPrefix, ProvenanceKey: []byte(cfg.PATPepper)}
+		mlflowClient = &observability.MLflowClient{BaseURL: cfg.MLflowTrackingURL, ExperimentPrefix: cfg.MLflowExperimentPrefix, ProvenanceKey: []byte(cfg.PATPepper)}
+		experiments = mlflowClient
 	}
 	dataObjectStore, _ := directoryLister.(objectstore.DataSpaceStore)
 	workspaceSnapshotStore, _ := directoryLister.(objectstore.WorkspaceSnapshotStore)
@@ -128,6 +130,9 @@ func main() {
 		log.Fatalf("initialize Ray Jobs API compatibility: %v", err)
 	}
 	reconciler := newReconciler(repository, kubeClient, cfg)
+	if reconciler != nil && mlflowClient != nil {
+		reconciler.WithExperimentFinalizer(mlflowClient)
+	}
 	platformNamespace := runtimeNamespace()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

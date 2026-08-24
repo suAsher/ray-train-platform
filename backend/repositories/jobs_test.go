@@ -154,6 +154,44 @@ func TestApplyObservedStateUpdatesKubernetesReferences(t *testing.T) {
 	}
 }
 
+func TestApplyObservedStateQueuesOneTerminalExperimentSyncEvent(t *testing.T) {
+	repo := testRepository(t)
+	job := testJob()
+	if err := repo.Create(context.Background(), &job, "terminal-event"); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := repo.ApplyObservedState(context.Background(), domain.ObservedJobState{ID: job.ID, State: domain.StateCanceled}); err != nil {
+			t.Fatalf("apply terminal state: %v", err)
+		}
+	}
+	var events []OutboxRecord
+	if err := repo.db.Where("event_type = ?", "TRAINING_JOB_TERMINAL").Find(&events).Error; err != nil {
+		t.Fatalf("list terminal events: %v", err)
+	}
+	if len(events) != 1 || events[0].AggregateID != job.ID {
+		t.Fatalf("expected one terminal event, got %+v", events)
+	}
+	if !strings.Contains(events[0].PayloadJSON, `"job_id":"job-1"`) {
+		t.Fatalf("terminal event payload = %s", events[0].PayloadJSON)
+	}
+}
+
+func TestApplyObservedStateDoesNotQueueExperimentSyncBeforeTerminalState(t *testing.T) {
+	repo := testRepository(t)
+	job := testJob()
+	if err := repo.Create(context.Background(), &job, "nonterminal-event"); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	if err := repo.ApplyObservedState(context.Background(), domain.ObservedJobState{ID: job.ID, State: domain.StateRunning}); err != nil {
+		t.Fatalf("apply running state: %v", err)
+	}
+	var count int64
+	if err := repo.db.Model(&OutboxRecord{}).Where("event_type = ?", "TRAINING_JOB_TERMINAL").Count(&count).Error; err != nil || count != 0 {
+		t.Fatalf("non-terminal state queued %d terminal events: %v", count, err)
+	}
+}
+
 func TestCancelCreatesIdempotentOutboxEvent(t *testing.T) {
 	repo := testRepository(t)
 	job := testJob()

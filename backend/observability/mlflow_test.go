@@ -8,6 +8,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"ray-train-platform-backend/domain"
 )
 
 var testProvenanceKey = []byte("0123456789abcdef0123456789abcdef")
@@ -201,5 +204,70 @@ func TestMLflowClientRejectsUnsafeCatalogIdentityAndLimit(t *testing.T) {
 		if _, err := client.ListTenantExperiments(context.Background(), test.tenant, test.subject, test.limit); err == nil {
 			t.Fatalf("expected unsafe catalog request rejection for %#v", test)
 		}
+	}
+}
+
+func TestMLflowClientFinalizesEveryRunningRunForTerminalJob(t *testing.T) {
+	finishedAt := time.Date(2026, 8, 24, 10, 15, 30, 604000000, time.UTC)
+	wantEndTime := finishedAt.UnixMilli()
+	updated := map[string]string{}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/2.0/mlflow/experiments/get-by-name":
+			_, _ = response.Write([]byte(`{"experiment":{"experiment_id":"7"}}`))
+		case "/api/2.0/mlflow/runs/search":
+			var body map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			wantFilter := "attributes.status = 'RUNNING' AND tags.`platform.job_id` = 'job-01' AND tags.`platform.provenance` = '" + mlflowProvenanceTag(testProvenanceKey, "job-01") + "'"
+			if body["filter"] != wantFilter {
+				t.Fatalf("unexpected finalization filter: %#v", body["filter"])
+			}
+			_, _ = response.Write([]byte(`{"runs":[{"info":{"run_id":"run-1"}},{"info":{"run_id":"run-2"}}]}`))
+		case "/api/2.0/mlflow/runs/update":
+			var body struct {
+				RunID   string `json:"run_id"`
+				Status  string `json:"status"`
+				EndTime int64  `json:"end_time"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body.EndTime != wantEndTime {
+				t.Fatalf("end_time = %d, want %d", body.EndTime, wantEndTime)
+			}
+			updated[body.RunID] = body.Status
+			_, _ = response.Write([]byte(`{"run_info":{}}`))
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+
+	client := &MLflowClient{BaseURL: server.URL, ExperimentPrefix: "raytrain", ProvenanceKey: testProvenanceKey, HTTPClient: server.Client()}
+	if err := client.FinalizeJobRuns(context.Background(), "tenant-a", "job-01", domain.StateCanceled, finishedAt); err != nil {
+		t.Fatalf("finalize job runs: %v", err)
+	}
+	if len(updated) != 2 || updated["run-1"] != "KILLED" || updated["run-2"] != "KILLED" {
+		t.Fatalf("unexpected updates: %#v", updated)
+	}
+}
+
+func TestMLflowTerminalStatusMapping(t *testing.T) {
+	tests := map[domain.State]string{
+		domain.StateSucceeded: "FINISHED",
+		domain.StateFailed:    "FAILED",
+		domain.StateTimedOut:  "FAILED",
+		domain.StateCanceled:  "KILLED",
+	}
+	for state, want := range tests {
+		got, err := mlflowTerminalStatus(state)
+		if err != nil || got != want {
+			t.Fatalf("state %s mapped to %q, err=%v; want %q", state, got, err, want)
+		}
+	}
+	if _, err := mlflowTerminalStatus(domain.StateRunning); err == nil {
+		t.Fatal("running jobs must not be finalized")
 	}
 }

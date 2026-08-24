@@ -27,6 +27,22 @@ type recordingGitCredentialResolver struct {
 	url      string
 }
 
+type recordingExperimentFinalizer struct {
+	tenantID string
+	jobID    string
+	state    domain.State
+	finished time.Time
+	err      error
+}
+
+func (finalizer *recordingExperimentFinalizer) FinalizeJobRuns(_ context.Context, tenantID, jobID string, state domain.State, finishedAt time.Time) error {
+	finalizer.tenantID = tenantID
+	finalizer.jobID = jobID
+	finalizer.state = state
+	finalizer.finished = finishedAt
+	return finalizer.err
+}
+
 func (resolver *recordingGitCredentialResolver) GitCredentialSecretFor(_ context.Context, tenantID, userID, repositoryURL string) string {
 	resolver.tenantID, resolver.userID, resolver.url = tenantID, userID, repositoryURL
 	return "git-cred-personal"
@@ -184,6 +200,37 @@ func TestReconcileCanceledJobDeletesRayJobBeforeMarkingCanceled(t *testing.T) {
 	}
 	if len(store.observed) != 1 || store.observed[0].State != domain.StateDeleting {
 		t.Fatalf("expected deleting observation: %+v", store.observed)
+	}
+}
+
+func TestProcessTerminalEventFinalizesExperimentRuns(t *testing.T) {
+	finishedAt := time.Date(2026, 8, 24, 10, 15, 30, 0, time.UTC)
+	job := validRenderJob()
+	job.ObservedState = domain.StateCanceled
+	job.FinishedAt = &finishedAt
+	store := &memoryJobStore{job: &job}
+	finalizer := &recordingExperimentFinalizer{}
+	reconciler := NewReconciler(store, NewClientFromInterfaces(newFakeDynamicClient(), nil), testRenderOptions()).WithExperimentFinalizer(finalizer)
+	event := domain.OutboxEvent{ID: job.ID + "-terminal", EventType: "TRAINING_JOB_TERMINAL", Payload: []byte(`{"job_id":"` + job.ID + `"}`)}
+
+	if err := reconciler.processEvent(context.Background(), event); err != nil {
+		t.Fatalf("process terminal event: %v", err)
+	}
+	if finalizer.tenantID != job.TenantID || finalizer.jobID != job.ID || finalizer.state != domain.StateCanceled || !finalizer.finished.Equal(finishedAt) {
+		t.Fatalf("unexpected finalization: %+v", finalizer)
+	}
+}
+
+func TestProcessTerminalEventReturnsFinalizerErrorForOutboxRetry(t *testing.T) {
+	job := validRenderJob()
+	job.ObservedState = domain.StateFailed
+	store := &memoryJobStore{job: &job}
+	finalizer := &recordingExperimentFinalizer{err: errors.New("MLflow unavailable")}
+	reconciler := NewReconciler(store, NewClientFromInterfaces(newFakeDynamicClient(), nil), testRenderOptions()).WithExperimentFinalizer(finalizer)
+	event := domain.OutboxEvent{ID: job.ID + "-terminal", EventType: "TRAINING_JOB_TERMINAL", Payload: []byte(`{"job_id":"` + job.ID + `"}`)}
+
+	if err := reconciler.processEvent(context.Background(), event); err == nil {
+		t.Fatal("expected finalizer error so the outbox event is retried")
 	}
 }
 

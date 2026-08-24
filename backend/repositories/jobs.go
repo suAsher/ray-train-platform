@@ -430,14 +430,31 @@ func (r *GormRepository) ApplyObservedState(ctx context.Context, observed domain
 	} else if isTerminalState(observed.State) {
 		updates["finished_at"] = now
 	}
-	result := r.db.WithContext(ctx).Model(&JobRecord{}).Where("id = ?", observed.ID).Updates(updates)
-	if result.Error != nil {
-		return fmt.Errorf("apply observed state: %w", result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("job not found")
-	}
-	return nil
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&JobRecord{}).Where("id = ?", observed.ID).Updates(updates)
+		if result.Error != nil {
+			return fmt.Errorf("apply observed state: %w", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return fmt.Errorf("job not found")
+		}
+		if !isTerminalState(observed.State) {
+			return nil
+		}
+		payload, err := json.Marshal(map[string]string{"job_id": observed.ID})
+		if err != nil {
+			return fmt.Errorf("marshal terminal job event: %w", err)
+		}
+		event := OutboxRecord{
+			ID: observed.ID + "-terminal", AggregateType: "TrainingJob", AggregateID: observed.ID,
+			EventType: "TRAINING_JOB_TERMINAL", PayloadJSON: string(payload), Status: "PENDING",
+			NextAttemptAt: now, CreatedAt: now,
+		}
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&event).Error; err != nil {
+			return fmt.Errorf("create terminal job event: %w", err)
+		}
+		return nil
+	})
 }
 
 func isTerminalState(state domain.State) bool {

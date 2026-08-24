@@ -26,6 +26,10 @@ type JobStore interface {
 	ApplyObservedState(context.Context, domain.ObservedJobState) error
 }
 
+type ExperimentFinalizer interface {
+	FinalizeJobRuns(context.Context, string, string, domain.State, time.Time) error
+}
+
 type Reconciler struct {
 	store            JobStore
 	client           *Client
@@ -34,6 +38,7 @@ type Reconciler struct {
 	clusterQueueName string
 	autoQuota        bool
 	gitCredentials   GitCredentialResolver
+	experimentRuns   ExperimentFinalizer
 	lastQuotaError   string
 }
 
@@ -52,6 +57,11 @@ func (r *Reconciler) WithGitCredentials(resolver GitCredentialResolver) *Reconci
 func (r *Reconciler) WithQuotaSync(options QuotaSyncOptions) *Reconciler {
 	r.clusterQueueName = options.ClusterQueueName
 	r.autoQuota = options.Enabled && options.ClusterQueueName != ""
+	return r
+}
+
+func (r *Reconciler) WithExperimentFinalizer(finalizer ExperimentFinalizer) *Reconciler {
+	r.experimentRuns = finalizer
 	return r
 }
 
@@ -144,7 +154,7 @@ func (r *Reconciler) ProcessOnce(ctx context.Context) error {
 }
 
 func (r *Reconciler) processEvent(ctx context.Context, event domain.OutboxEvent) error {
-	if event.EventType != "TRAINING_JOB_SUBMITTED" && event.EventType != "TRAINING_JOB_CANCEL_REQUESTED" {
+	if event.EventType != "TRAINING_JOB_SUBMITTED" && event.EventType != "TRAINING_JOB_CANCEL_REQUESTED" && event.EventType != "TRAINING_JOB_TERMINAL" {
 		return nil
 	}
 	var payload struct {
@@ -153,7 +163,33 @@ func (r *Reconciler) processEvent(ctx context.Context, event domain.OutboxEvent)
 	if err := json.Unmarshal(event.Payload, &payload); err != nil || payload.JobID == "" {
 		return fmt.Errorf("invalid outbox payload for %s", event.ID)
 	}
+	if event.EventType == "TRAINING_JOB_TERMINAL" {
+		if r.experimentRuns == nil {
+			return nil
+		}
+		job, err := r.store.GetByID(ctx, payload.JobID)
+		if err != nil {
+			return err
+		}
+		if !terminalJobState(job.ObservedState) {
+			return fmt.Errorf("terminal event %s references non-terminal job %s", event.ID, job.ObservedState)
+		}
+		finishedAt := time.Now().UTC()
+		if job.FinishedAt != nil {
+			finishedAt = job.FinishedAt.UTC()
+		}
+		return r.experimentRuns.FinalizeJobRuns(ctx, job.TenantID, job.ID, job.ObservedState, finishedAt)
+	}
 	return r.ReconcileJob(ctx, payload.JobID)
+}
+
+func terminalJobState(state domain.State) bool {
+	switch state {
+	case domain.StateSucceeded, domain.StateFailed, domain.StateCanceled, domain.StateTimedOut:
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *Reconciler) ReconcileJob(ctx context.Context, jobID string) error {
