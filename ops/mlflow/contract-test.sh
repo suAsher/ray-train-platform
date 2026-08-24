@@ -56,7 +56,9 @@ grep -Fq -- '- --static-prefix={{ .Values.server.staticPrefix }}' <<<"$vendored_
 }
 
 grep -Fq 'replicaCount: 2' "$VALUES"
-for manifest in "$VALUES" "$DATABASE" "$BOOTSTRAP" "$DB_UPGRADE" "$ACCEPTANCE" "$POLICY" "$FSX_PROBE" "$SMOKE"; do
+grep -Fq '  accelerator: nvidia-rtx-4090' "$VALUES"
+grep -Fq '  platform.wellspiking.ai/gpu-pool: production' "$VALUES"
+for manifest in "$DATABASE" "$BOOTSTRAP" "$DB_UPGRADE" "$ACCEPTANCE" "$POLICY" "$FSX_PROBE" "$SMOKE"; do
   assert_cpu_preferred_physical "$manifest"
 done
 grep -Fq '  staticPrefix: /mlflow' "$VALUES" || {
@@ -260,6 +262,17 @@ grep -Fq 'path: /metrics' "$POLICY"
 grep -Fq 'kind: DaemonSet' "$FSX_PROBE"
 grep -Fq 'name: mlflow-fsx-probe' "$FSX_PROBE"
 grep -Fq 'name: mlflow-fsx-dns-probe' "$FSX_PROBE"
+fsx_mount_probe_manifest="$(awk '/^---$/{exit} {print}' "$FSX_PROBE")"
+for expected in \
+  'key: accelerator' \
+  'values: [nvidia-rtx-4090]' \
+  'key: platform.wellspiking.ai/gpu-pool' \
+  'values: [production]'; do
+  grep -Fq "$expected" <<<"$fsx_mount_probe_manifest" || {
+    echo "MLflow FSX mount probe must target the GPU serving pool: missing ${expected}" >&2
+    exit 1
+  }
+done
 grep -Fq 'claimName: mlflow-artifacts-irsa' "$FSX_PROBE"
 grep -Fq 'dnsPolicy: Default' "$FSX_PROBE"
 grep -Fq 'nslookup "$endpoint" "$resolver"' "$FSX_PROBE"
@@ -297,10 +310,11 @@ grep -Fq 'daemonset mlflow-fsx-probe' "$VERIFY"
 grep -Fq 'daemonset mlflow-fsx-dns-probe' "$VERIFY"
 grep -Fq 'FSX probe has no matching MLflow serving nodes' "$VERIFY"
 grep -Fq 'FSX DNS probe has no matching MLflow serving nodes' "$VERIFY"
-grep -Fq 'MLflow deployment has a hard nodeSelector' "$VERIFY"
-grep -Fq 'preferredDuringSchedulingIgnoredDuringExecution' "$VERIFY"
-grep -Fq 'platform.wellspiking.ai/pool' "$VERIFY"
-grep -Fq 'virtual-node' "$VERIFY"
+grep -Fq 'MLflow deployment is not pinned to the production GPU serving pool' "$VERIFY"
+grep -Fq 'accelerator' "$VERIFY"
+grep -Fq 'nvidia-rtx-4090' "$VERIFY"
+grep -Fq 'gpu-pool' "$VERIFY"
+grep -Fq 'production' "$VERIFY"
 grep -Fq 'MLflow Pod requested an nvidia.com/gpu device' "$VERIFY"
 grep -Fq '.metadata.deletionTimestamp' "$VERIFY"
 grep -Fq '[[ -n "$deletion_timestamp" ]] && continue' "$VERIFY"

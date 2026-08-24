@@ -35,13 +35,12 @@ spec:
                   - key: type
                     operator: NotIn
                     values: [virtual-kubelet]
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              preference:
-                matchExpressions:
-                  - key: platform.wellspiking.ai/pool
+                  - key: platform.wellspiking.ai/gpu-pool
                     operator: In
-                    values: [control-plane]
+                    values: [production]
+                  - key: accelerator
+                    operator: In
+                    values: [nvidia-rtx-4090]
       containers:
         - name: probe
           image: harbor.wellspiking.ai/hub/nginxinc/nginx-unprivileged@sha256:c3fed6436b61d2bf2201ec032c35c000871f7ed062dea5d586bc6bf4d0fdd140

@@ -31,24 +31,13 @@ done <<<"$services"
   echo "MLflow does not have two available replicas" >&2
   exit 1
 }
-mlflow_node_selector="$(kubectl -n "$NAMESPACE" get deployment mlflow -o jsonpath='{.spec.template.spec.nodeSelector}')"
-if [[ -n "$mlflow_node_selector" && "$mlflow_node_selector" != "{}" ]]; then
-  echo "MLflow deployment has a hard nodeSelector: ${mlflow_node_selector}" >&2
+mlflow_accelerator="$(kubectl -n "$NAMESPACE" get deployment mlflow -o jsonpath='{.spec.template.spec.nodeSelector.accelerator}')"
+mlflow_gpu_pool="$(kubectl -n "$NAMESPACE" get deployment mlflow -o jsonpath='{.spec.template.spec.nodeSelector.platform\.wellspiking\.ai/gpu-pool}')"
+if [[ "$mlflow_accelerator" != "nvidia-rtx-4090" || "$mlflow_gpu_pool" != "production" ]]; then
+  echo "MLflow deployment is not pinned to the production GPU serving pool: accelerator=${mlflow_accelerator}, gpu-pool=${mlflow_gpu_pool}" >&2
   exit 1
 fi
 mlflow_deployment="$(kubectl -n "$NAMESPACE" get deployment mlflow -o yaml)"
-for expected in \
-  preferredDuringSchedulingIgnoredDuringExecution \
-  requiredDuringSchedulingIgnoredDuringExecution \
-  platform.wellspiking.ai/pool \
-  control-plane \
-  virtual-node \
-  virtual-kubelet; do
-  grep -Fq "$expected" <<<"$mlflow_deployment" || {
-    echo "MLflow deployment scheduling contract is missing ${expected}" >&2
-    exit 1
-  }
-done
 mlflow_pods="$(kubectl -n "$NAMESPACE" get pods -l 'app.kubernetes.io/name=mlflow,app.kubernetes.io/instance=mlflow' -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.nodeName}{"\t"}{.metadata.deletionTimestamp}{"\n"}{end}')"
 while IFS=$'\t' read -r pod_name node_name deletion_timestamp; do
   [[ -n "$pod_name" && -n "$node_name" ]] || continue

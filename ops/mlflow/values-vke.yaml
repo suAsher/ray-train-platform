@@ -71,25 +71,10 @@ cluster_rbac:
 
 podLabels:
   app.kubernetes.io/part-of: ray-train-platform
-nodeSelector: {}
+nodeSelector:
+  accelerator: nvidia-rtx-4090
+  platform.wellspiking.ai/gpu-pool: production
 affinity:
-  nodeAffinity:
-    requiredDuringSchedulingIgnoredDuringExecution:
-      nodeSelectorTerms:
-        - matchExpressions:
-            - key: node.kubernetes.io/instance-type
-              operator: NotIn
-              values: [virtual-node]
-            - key: type
-              operator: NotIn
-              values: [virtual-kubelet]
-    preferredDuringSchedulingIgnoredDuringExecution:
-      - weight: 100
-        preference:
-          matchExpressions:
-            - key: platform.wellspiking.ai/pool
-              operator: In
-              values: [control-plane]
   podAntiAffinity:
     requiredDuringSchedulingIgnoredDuringExecution:
       - labelSelector:
