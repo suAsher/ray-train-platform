@@ -3,12 +3,13 @@ set -euo pipefail
 
 readonly namespace="${LOKI_NAMESPACE:-loki}"
 readonly release="${LOKI_RELEASE:-loki-cpu}"
-readonly service="${LOKI_GATEWAY_SERVICE:-${release}-gateway}"
+readonly service="${LOKI_VERIFY_SERVICE:-${release}}"
+readonly service_port="${LOKI_VERIFY_SERVICE_PORT:-3100}"
 readonly port="${LOKI_VERIFY_PORT:-13100}"
 readonly expected_instance_type="${LOKI_EXPECTED_INSTANCE_TYPE:-}"
 readonly expected_node_pool="${LOKI_EXPECTED_NODE_POOL:-}"
 readonly marker="platform-loki-smoke-$(date +%s)"
-readonly service_proxy="/api/v1/namespaces/${namespace}/services/http:${service}:80/proxy"
+readonly service_proxy="/api/v1/namespaces/${namespace}/services/http:${service}:${service_port}/proxy"
 proxy_pid=''
 
 cleanup() {
@@ -50,12 +51,12 @@ done
 kubectl proxy --port="$port" --address=127.0.0.1 --accept-hosts='^127[.]0[.]0[.]1(:[0-9]+)?$' >/tmp/loki-kubectl-proxy.log 2>&1 &
 proxy_pid=$!
 for _ in {1..30}; do
-  if curl --fail --silent "$(proxy_url '/')" | grep -Fxq 'OK'; then
+  if curl --fail --silent "$(proxy_url '/ready')" | grep -Fxq 'ready'; then
     break
   fi
   sleep 1
 done
-curl --fail --silent "$(proxy_url '/')" | grep -Fxq 'OK'
+curl --fail --silent "$(proxy_url '/ready')" | grep -Fxq 'ready'
 
 timestamp="$(date +%s%N)"
 payload="{\"streams\":[{\"stream\":{\"app\":\"ray-platform-smoke\",\"job_id\":\"loki-smoke\"},\"values\":[[\"${timestamp}\",\"${marker}\"]]}]}"

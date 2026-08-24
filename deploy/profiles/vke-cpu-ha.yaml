@@ -39,7 +39,7 @@ backend:
     bootstrapUsername: admin
     bootstrapTenant: local
     bootstrapSecret: ray-platform-bootstrap-admin
-  lokiURL: http://loki-cpu-gateway.loki.svc.cluster.local
+  lokiURL: http://loki-cpu.loki.svc.cluster.local:3100
   prometheusURL: http://prometheus-prometheus.monitoring.svc.cluster.local:9090
   mlflow:
     enabled: true
@@ -65,8 +65,8 @@ frontend:
   nodeSelector: {}
   image:
     repository: ray-train-frontend
-    tag: prod-20260824-gpu-allocations-r1
-    digest: sha256:eb34510abc478fea3c5ce3c040c65c741e2b463fe1316ea7ef4b1d5b3c395ac8
+    tag: prod-20260824-log-resilience-r1
+    digest: sha256:c1fd3d4372b23a9b94bff01e12becdae9647deca76b13bce02e8dcced23c6398
   service:
     type: ClusterIP
     port: 80

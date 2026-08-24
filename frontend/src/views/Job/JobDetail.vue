@@ -128,7 +128,7 @@
             </div>
           </div>
 
-          <div v-if="logsLoaded && !logsError" class="flex items-center justify-between rounded-xl border border-slate-800/80 bg-slate-950/70 px-4 py-2.5 text-xs text-slate-400">
+          <div v-if="logsLoaded" class="flex items-center justify-between rounded-xl border border-slate-800/80 bg-slate-950/70 px-4 py-2.5 text-xs text-slate-400">
             <span>已加载 <b class="font-mono text-slate-200">{{ rawLogs.length }}</b> 条日志<span v-if="hasOlderLogs">，还有更早日志</span></span>
             <el-button
               v-if="hasOlderLogs"
@@ -141,11 +141,13 @@
           </div>
 
           <!-- Log Console Display -->
-          <div v-if="!logsError"
-            ref="logConsoleRef"
+          <div ref="logConsoleRef"
             class="bg-[#070A10] p-5 rounded-xl border border-slate-800/90 font-mono text-xs text-slate-300 h-[580px] overflow-y-auto space-y-2 select-text"
           >
-            <el-empty v-if="filteredLogs.length === 0" description="当前查询范围没有日志；任务结束后需由 Loki 保留日志" />
+            <el-empty
+              v-if="filteredLogs.length === 0"
+              :description="logsError ? '日志服务暂时不可达，平台正在自动重试' : '当前查询范围没有日志；任务结束后由 Loki 保留日志'"
+            />
             <div v-else
               v-for="(log, idx) in filteredLogs" 
               :key="idx" 
@@ -264,7 +266,7 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { finishedLabel, formatDateTime, jobTimeline } from '../../jobTimeline'
@@ -276,6 +278,7 @@ import { userId } from '../../stores/session'
 import { canOpenRayDashboard, jobDashboardAccessPath } from '../../jobDashboard'
 import { buildLogStreamCards } from '../../jobLogStreams'
 import { logPagePath, mergeLogEntries, normalizeLogPage } from '../../jobLogPagination'
+import { createSingleFlight, nextLogRequest } from '../../jobLogPolling'
 import { latestMetric, metricSeries, sparklinePoints } from '../../mlflowExperiment'
 import { cacheQueryForJob } from '../../platformLimits'
 import { equivalentSubmitCommandForJob } from '../../submission'
@@ -302,6 +305,7 @@ const rawLogs = ref([])
 const logsLoaded = ref(false)
 const hasOlderLogs = ref(false)
 const olderLogCursor = ref('')
+const followLogCursor = ref('')
 const olderPagesLoaded = ref(false)
 const logsLoadingOlder = ref(false)
 const nowTick = ref(new Date().toISOString())
@@ -381,15 +385,28 @@ const scrollLogsToBottom = async () => {
   if (logConsoleRef.value) logConsoleRef.value.scrollTop = logConsoleRef.value.scrollHeight
 }
 
-const applyLatestLogPage = async (response) => {
+const resetLogState = () => {
+  rawLogs.value = []
+  logsLoaded.value = false
+  logsError.value = ''
+  hasOlderLogs.value = false
+  olderLogCursor.value = ''
+  followLogCursor.value = ''
+  olderPagesLoaded.value = false
+  logsLoadingOlder.value = false
+  selectedRank.value = 'ALL'
+}
+
+const applyLatestLogPage = async (response, initialTail) => {
   const page = normalizeLogPage(response)
-  const wasEmpty = rawLogs.value.length === 0
   rawLogs.value = mergeLogEntries(rawLogs.value, page.logs)
-  if (wasEmpty || !olderPagesLoaded.value) {
+  if (initialTail) {
     hasOlderLogs.value = page.hasMore
     olderLogCursor.value = page.nextCursor
+    olderPagesLoaded.value = true
   }
   await scrollLogsToBottom()
+  return page
 }
 
 const loadOlderLogs = async () => {
@@ -398,17 +415,18 @@ const loadOlderLogs = async () => {
   const consoleElement = logConsoleRef.value
   const previousHeight = consoleElement?.scrollHeight || 0
   const previousTop = consoleElement?.scrollTop || 0
+  const requestJobId = String(route.params.id)
   try {
-    const response = await apiGet(logPagePath(route.params.id, {
+    const response = await apiGet(logPagePath(requestJobId, {
       limit: 2000,
       direction: 'backward',
       cursor: olderLogCursor.value,
     }))
+    if (requestJobId !== String(route.params.id)) return
     const page = normalizeLogPage(response)
     rawLogs.value = mergeLogEntries(rawLogs.value, page.logs)
     hasOlderLogs.value = page.hasMore
     olderLogCursor.value = page.nextCursor
-    olderPagesLoaded.value = true
     await nextTick()
     if (consoleElement) consoleElement.scrollTop = previousTop + consoleElement.scrollHeight - previousHeight
   } catch (error) {
@@ -447,31 +465,52 @@ const statusDotClass = (status) => {
   return 'bg-blue-400 animate-pulse'
 }
 
-const fetchDetail = async () => {
-  const id = route.params.id
+const refreshLogs = createSingleFlight(async () => {
+  const requestJobId = String(route.params.id)
+  const initialTail = rawLogs.value.length === 0
+  const request = nextLogRequest(rawLogs.value, followLogCursor.value)
   try {
-    jobDetail.value = normalizeDetail(await apiGet(`/api/v1/jobs/${id}`))
+    const response = await apiGet(logPagePath(requestJobId, request))
+    if (requestJobId !== String(route.params.id)) return
+    const page = await applyLatestLogPage(response, initialTail)
+    if (request.direction === 'forward' && page.nextCursor) {
+      followLogCursor.value = page.nextCursor
+    } else if (initialTail && rawLogs.value.length) {
+      followLogCursor.value = nextLogRequest(rawLogs.value).cursor
+    }
+    logsLoaded.value = true
+    logsError.value = ''
+  } catch (error) {
+    if (requestJobId !== String(route.params.id)) return
+    logsError.value = rawLogs.value.length
+      ? '日志刷新暂时失败，平台正在自动重试；已加载的日志仍可查看。'
+      : '日志服务暂时不可达，平台正在自动重试。'
+  }
+})
+
+const fetchDetail = createSingleFlight(async () => {
+  const id = String(route.params.id)
+  try {
+    const detail = await apiGet(`/api/v1/jobs/${id}`)
+    if (id !== String(route.params.id)) return
+    jobDetail.value = normalizeDetail(detail)
   } catch (error) {
     ElMessage.error(error.message || '无法读取任务详情')
     return
   }
 
-  const [runtimeResult, logResult, metricResult, experimentResult] = await Promise.allSettled([
+  const [runtimeResult, metricResult, experimentResult] = await Promise.allSettled([
     apiGet(`/api/v1/jobs/${id}/runtime`),
-    apiGet(logPagePath(id, { limit: 2000, direction: 'backward' })),
     apiGet(`/api/v1/jobs/${id}/metrics`),
     apiGet(`/api/v1/jobs/${id}/experiment`)
   ])
+  if (id !== String(route.params.id)) return
   runtimePods.value = runtimeResult.status === 'fulfilled' ? runtimeResult.value?.pods || [] : []
-  logsError.value = logResult.status === 'rejected' ? 'Loki 日志服务尚未接入或暂时不可达；Pod 删除后历史日志无法恢复。' : ''
-  logsLoaded.value = logResult.status === 'fulfilled'
-  const logResponse = logResult.status === 'fulfilled' ? logResult.value : null
-  if (logResponse) await applyLatestLogPage(logResponse)
   metricsError.value = metricResult.status === 'rejected' ? 'Prometheus / DCGM 指标服务尚未接入或暂时不可达。' : ''
   metrics.value = metricResult.status === 'fulfilled' ? metricResult.value : null
   experimentError.value = experimentResult.status === 'rejected' ? 'MLflow 暂时不可达；训练本身不会因此停止。' : ''
   experiment.value = experimentResult.status === 'fulfilled' ? experimentResult.value : null
-}
+})
 
 const cancelJob = async () => {
   try {
@@ -552,11 +591,27 @@ const gpuSummary = computed(() => {
 })
 
 let refreshTimer
+let logRefreshTimer
 let clockTimer
+
+watch(() => route.params.id, (nextJobId, previousJobId) => {
+  if (String(nextJobId) === String(previousJobId)) return
+  jobDetail.value = null
+  runtimePods.value = []
+  metrics.value = null
+  experiment.value = null
+  metricsError.value = ''
+  experimentError.value = ''
+  resetLogState()
+  fetchDetail()
+  refreshLogs()
+})
 
 onMounted(() => {
   fetchDetail()
+  refreshLogs()
   refreshTimer = window.setInterval(fetchDetail, 5000)
+  logRefreshTimer = window.setInterval(refreshLogs, 5000)
   // A running job's elapsed time is measured against now, so the clock has to
   // advance even between detail refreshes.
   clockTimer = window.setInterval(() => { nowTick.value = new Date().toISOString() }, 1000)
@@ -564,6 +619,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.clearInterval(refreshTimer)
+  window.clearInterval(logRefreshTimer)
   window.clearInterval(clockTimer)
 })
 </script>
