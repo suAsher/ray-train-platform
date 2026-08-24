@@ -74,6 +74,9 @@
         <div class="p-4">
           <QueuePanel
             :jobs="activeJobs"
+            :allocations="gpuAllocations"
+            :allocation-available="gpuAllocationsLoaded"
+            :allocation-error="gpuAllocationError"
             :cluster-g-p-us="clusterGPUs"
             :physical-allocated-g-p-us="physicalAllocatedGPUs"
             :current-tenant-id="currentTenantId"
@@ -242,12 +245,16 @@ import CatalogPanel from '../../components/admin/CatalogPanel.vue'
 import StoragePanel from '../../components/admin/StoragePanel.vue'
 import QueuePanel from '../../components/admin/QueuePanel.vue'
 import { queueJobAction } from '../../components/admin/queuePanelActions.js'
+import { normalizeGPUAllocations } from '../../gpuAllocations'
 
 const activeTab = ref('tenants')
 const loading = ref(false)
 const tenants = ref([])
 const users = ref([])
 const activeJobs = ref([])
+const gpuAllocations = ref([])
+const gpuAllocationsLoaded = ref(false)
+const gpuAllocationError = ref('')
 const physicalAllocatedGPUs = ref(0)
 const catalogImages = ref([])
 const gitCredentials = ref([])
@@ -341,6 +348,17 @@ const loadClusterTopology = async () => {
   }
 }
 
+const loadGPUAllocations = async () => {
+  try {
+    gpuAllocations.value = normalizeGPUAllocations(await apiGet('/api/v1/gpu-allocations'))
+    gpuAllocationsLoaded.value = true
+    gpuAllocationError.value = ''
+  } catch (error) {
+    gpuAllocationError.value = error.message || '无法读取 GPU 占用明细'
+    ElMessage.error(gpuAllocationError.value)
+  }
+}
+
 const loadCatalog = async () => {
   const [images, credentials] = await Promise.allSettled([fetchImages(), fetchGitCredentials()])
   catalogImages.value = images.status === 'fulfilled' ? images.value || [] : []
@@ -357,7 +375,7 @@ const loadLimits = async () => {
 
 const loadAll = async () => {
   loading.value = true
-  await Promise.all([loadTenants(), loadUsers(), loadActiveJobs(), loadClusterTopology(), loadCatalog(), loadLimits()])
+  await Promise.all([loadTenants(), loadUsers(), loadActiveJobs(), loadGPUAllocations(), loadClusterTopology(), loadCatalog(), loadLimits()])
   loading.value = false
 }
 
@@ -666,7 +684,7 @@ const cancelJob = async (job) => {
     )
     await apiDelete(`/api/v1/jobs/${job.id}`)
     ElMessage.success(queued ? '已提交取消排队请求' : '已提交停止请求')
-    await Promise.all([loadActiveJobs(), loadClusterTopology(), loadTenants()])
+    await Promise.all([loadActiveJobs(), loadGPUAllocations(), loadClusterTopology(), loadTenants()])
   } catch (error) {
     if (error === 'cancel' || error === 'close') return
     ElMessage.error(error.message || (queued ? '取消排队失败' : '停止任务失败'))

@@ -51,6 +51,22 @@
         </template>
       </el-table-column>
     </el-table>
+
+    <div class="border-t border-slate-800/80 pt-5">
+      <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h5 class="text-sm font-bold text-white">交互式调试环境</h5>
+          <p class="mt-1 text-xs text-slate-400">调试环境同样占用团队 GPU 配额；这里显示使用者、团队和实际资源名称。</p>
+        </div>
+        <el-tag v-if="allocationAvailable" type="warning" size="small">{{ debugAllocations.length }} 个 · {{ debugGPUs }} 卡</el-tag>
+        <el-tag v-else type="danger" size="small">占用明细暂不可用</el-tag>
+      </div>
+      <el-alert v-if="allocationError" type="error" :closable="false" show-icon class="mb-3">
+        <template #title>GPU 占用明细暂不可用{{ allocationAvailable ? '，当前显示上次成功结果' : '' }}</template>
+        {{ allocationError }}
+      </el-alert>
+      <GPUAllocationTable v-if="allocationAvailable" :allocations="debugAllocations" />
+    </div>
   </div>
 </template>
 
@@ -58,9 +74,13 @@
 import { computed } from 'vue'
 
 import { queueJobAction, queuePanelStats } from './queuePanelActions.js'
+import GPUAllocationTable from './GPUAllocationTable.vue'
 
 const props = defineProps({
   jobs: { type: Array, default: () => [] },
+  allocations: { type: Array, default: () => [] },
+  allocationAvailable: { type: Boolean, default: false },
+  allocationError: { type: String, default: '' },
   clusterGPUs: { type: Number, default: 0 },
   physicalAllocatedGPUs: { type: Number, default: 0 },
   currentTenantId: { type: String, default: '' },
@@ -70,6 +90,8 @@ const props = defineProps({
 defineEmits(['cancel-job'])
 
 const actionFor = (job) => queueJobAction(job, props.currentTenantId, props.isSuperAdmin)
+const debugAllocations = computed(() => props.allocations.filter((item) => item.type === 'DEBUG_WORKSPACE'))
+const debugGPUs = computed(() => debugAllocations.value.reduce((total, item) => total + (Number(item.gpuCount) || 0), 0))
 
 const cards = computed(() => {
   const stats = queuePanelStats(props.jobs, props.clusterGPUs, props.physicalAllocatedGPUs)

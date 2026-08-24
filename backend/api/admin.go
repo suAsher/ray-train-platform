@@ -19,6 +19,7 @@ type AdminStore interface {
 }
 
 func (h *Handler) RegisterAdminRoutes(group *gin.RouterGroup) {
+	group.GET("/gpu-allocations", h.listGPUAllocations)
 	group.GET("/tenants", h.listTenants)
 	group.POST("/tenants", h.createTenant)
 	// The tenant GPU limit is enforced at submission from the database, so an
