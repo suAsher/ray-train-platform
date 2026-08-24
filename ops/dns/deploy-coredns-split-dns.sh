@@ -6,6 +6,8 @@ BLOCKS="${ROOT}/ops/dns/coredns-volcengine-forwarding.conf"
 NAMESPACE="${COREDNS_NAMESPACE:-kube-system}"
 CONFIGMAP="${COREDNS_CONFIGMAP:-coredns}"
 DEPLOYMENT="${COREDNS_DEPLOYMENT:-coredns}"
+IDC_DNS_PRIMARY="${IDC_DNS_PRIMARY:-192.168.110.61}"
+IDC_DNS_SECONDARY="${IDC_DNS_SECONDARY:-192.168.111.63}"
 BEGIN_MARKER="# BEGIN ray-train-platform managed Volcengine DNS forwarding"
 END_MARKER="# END ray-train-platform managed Volcengine DNS forwarding"
 
@@ -14,8 +16,8 @@ usage() {
 Usage: deploy-coredns-split-dns.sh [--check|--apply|--revert]
 
 Routes only Volcengine service zones through the VKE VPC resolvers
-100.96.0.2 and 100.96.0.3. The existing root forwarder remains unchanged,
-so IDC-only domains continue to use the cluster's existing IDC DNS path.
+100.96.0.2 and 100.96.0.3. The CoreDNS root forwarder is set explicitly to
+the IDC resolvers 192.168.110.61 and 192.168.111.63 for every other domain.
 EOF
 }
 
@@ -34,6 +36,92 @@ strip_managed_block() {
     $0 == end { managed = 0; next }
     !managed { print }
   '
+}
+
+rewrite_root_forwarder() {
+  local primary="$1"
+  local secondary="${2:-}"
+  local replacement="forward . ${primary}"
+  if [[ -n "$secondary" ]]; then
+    replacement+=" ${secondary}"
+  fi
+
+  awk -v replacement="$replacement" '
+    /^[[:space:]]*\.:53[[:space:]]*\{/ {
+      in_root = 1
+      depth = 1
+      print
+      next
+    }
+    in_root {
+      original = $0
+      if (!rewritten && original ~ /^[[:space:]]*forward[[:space:]]+\.[[:space:]]+/) {
+        match(original, /^[[:space:]]*/)
+        print substr(original, RSTART, RLENGTH) replacement " {"
+        rewritten = 1
+      } else {
+        print
+      }
+      opens = gsub(/\{/, "{", original)
+      closes = gsub(/\}/, "}", original)
+      depth += opens - closes
+      if (depth == 0) {
+        in_root = 0
+      }
+      next
+    }
+    { print }
+    END {
+      if (!rewritten) {
+        exit 42
+      }
+    }
+  '
+}
+
+root_forwarder_target() {
+  awk '
+    /^[[:space:]]*\.:53[[:space:]]*\{/ {
+      in_root = 1
+      depth = 1
+      next
+    }
+    in_root {
+      original = $0
+      if (original ~ /^[[:space:]]*forward[[:space:]]+\.[[:space:]]+/) {
+        normalized = original
+        sub(/^[[:space:]]*forward[[:space:]]+\.[[:space:]]+/, "", normalized)
+        sub(/[[:space:]]*\{[[:space:]]*$/, "", normalized)
+        print normalized
+        found = 1
+        exit
+      }
+      opens = gsub(/\{/, "{", original)
+      closes = gsub(/\}/, "}", original)
+      depth += opens - closes
+      if (depth == 0) {
+        in_root = 0
+      }
+    }
+    END {
+      if (!found) {
+        exit 42
+      }
+    }
+  '
+}
+
+require_managed_root_source() {
+  local corefile="$1"
+  local current_target
+  current_target="$(root_forwarder_target <"$corefile")"
+  case "$current_target" in
+    "/etc/resolv.conf"|"${IDC_DNS_PRIMARY} ${IDC_DNS_SECONDARY}") ;;
+    *)
+      echo "refusing to replace unmanaged CoreDNS root forwarder: ${current_target}" >&2
+      return 1
+      ;;
+  esac
 }
 
 apply_corefile() {
@@ -74,6 +162,11 @@ check_config() {
     grep -F "${zone}:53" "$current" >/dev/null
   done
   test "$(grep -Fc 'forward . 100.96.0.2 100.96.0.3' "$current")" -eq 3
+  test "$(grep -Fc "forward . ${IDC_DNS_PRIMARY} ${IDC_DNS_SECONDARY}" "$current")" -eq 1
+  if grep -F 'forward . /etc/resolv.conf' "$current" >/dev/null; then
+    echo "CoreDNS root forwarder still uses /etc/resolv.conf instead of the IDC resolvers" >&2
+    return 1
+  fi
 }
 
 mode="${1:---check}"
@@ -91,6 +184,7 @@ workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 current="${workdir}/Corefile.current"
 base="${workdir}/Corefile.base"
+base_with_idc="${workdir}/Corefile.base-with-idc"
 desired="${workdir}/Corefile.desired"
 patch_file="${workdir}/patch.json"
 read_corefile >"$current"
@@ -103,10 +197,12 @@ case "$mode" in
     ;;
   --apply)
     strip_managed_block <"$current" >"$base"
+    require_managed_root_source "$base"
+    rewrite_root_forwarder "$IDC_DNS_PRIMARY" "$IDC_DNS_SECONDARY" <"$base" >"$base_with_idc"
     {
       cat "$BLOCKS"
       printf '\n'
-      cat "$base"
+      cat "$base_with_idc"
     } >"$desired"
     patch_corefile "$desired" "$current" "$patch_file"
     read_corefile >"$current"
@@ -114,7 +210,9 @@ case "$mode" in
     echo "CoreDNS split forwarding applied"
     ;;
   --revert)
-    strip_managed_block <"$current" >"$desired"
+    strip_managed_block <"$current" >"$base"
+    require_managed_root_source "$base"
+    rewrite_root_forwarder "/etc/resolv.conf" <"$base" >"$desired"
     patch_corefile "$desired" "$current" "$patch_file"
     read_corefile >"$current"
     if grep -Fx "$BEGIN_MARKER" "$current" >/dev/null; then

@@ -455,7 +455,7 @@ bash ops/dns/deploy-coredns-split-dns.sh --check
 
 调度脚本使 CoreDNS 优先运行在 CPU 控制面节点，并允许生产 GPU 节点兜底，但不允许虚拟节点。每副本请求 `250m` CPU / `256Mi` 内存，限额为 `2` CPU / `1Gi`，不占用 GPU 卡。
 
-分流脚本只把火山服务域名转发到 VKE VPC DNS，其他域名继续使用原 IDC 转发链。脚本在 rollout 失败时自动恢复旧 Corefile。
+分流脚本把火山服务域名转发到 VKE VPC DNS `100.96.0.2/100.96.0.3`，并把 CoreDNS 默认根转发器显式设置为 IDC DNS `192.168.110.61/192.168.111.63`。不要使用 `/etc/resolv.conf` 作为默认转发器，否则 `gitlab.qomolo.com` 等 IDC 域名可能被解析到不可达的公网地址。脚本在 rollout 失败时自动恢复旧 Corefile。
 
 hostNetwork 的 FSX Agent 不一定使用 CoreDNS；新节点还要执行节点侧分流：
 

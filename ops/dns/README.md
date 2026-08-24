@@ -4,8 +4,10 @@ The cluster uses split DNS rather than sending every query to one resolver:
 
 - Volcengine service zones use the VKE VPC resolvers `100.96.0.2` and
   `100.96.0.3`.
-- The existing CoreDNS root forwarder is retained for IDC and all other
-  domains.
+- The CoreDNS root forwarder is set explicitly to the IDC resolvers
+  `192.168.110.61` and `192.168.111.63` for every other external domain.
+  Do not leave the root forwarder on `/etc/resolv.conf`: VKE node resolvers can
+  return public addresses for IDC-only services such as `gitlab.qomolo.com`.
 
 ## Ordinary Pods
 
@@ -16,8 +18,11 @@ bash ops/dns/deploy-coredns-split-dns.sh --apply
 bash ops/dns/deploy-coredns-split-dns.sh --check
 ```
 
-The script is idempotent. If the CoreDNS rollout fails, it restores the
-previous Corefile automatically. To remove only this project's managed blocks:
+The script is idempotent. Its check verifies both sides of the split: the three
+Volcengine zones use VKE DNS and the root zone uses both IDC resolvers. If the
+CoreDNS rollout fails, it restores the previous Corefile automatically. To
+remove the managed blocks and restore the root forwarder to
+`/etc/resolv.conf`:
 
 ```bash
 bash ops/dns/deploy-coredns-split-dns.sh --revert
