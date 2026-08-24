@@ -26,8 +26,8 @@ backend:
   rayAPIDefaultImage: harbor.wellspiking.ai/guofeng.su/ray-train-pytorch@sha256:2102761c7a5e3af6ff33225182d5b936d18601f7d5697bc11187922df58cfa7f
   image:
     repository: ray-train-backend
-    tag: prod-20260824-gpu-allocations-r1
-    digest: sha256:b88e51053b5dee1aa91940f0474c21772eada3c51253fe0dad710482018a271f
+    tag: prod-20260824-mlflow-state-r1
+    digest: sha256:cff2c769e65893e0a563141857f8047ea66620fe8fb14e0a7c716833542a2942
   oidc:
     issuerURL: https://keycloak.test.invalid/realms/ai
     clientID: ray-training-platform-test
