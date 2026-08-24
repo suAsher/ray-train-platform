@@ -531,13 +531,26 @@ func (h *Handler) getJobLogs(c *gin.Context) {
 		h.writeError(c, http.StatusNotFound, "JOB_NOT_FOUND", "training job was not found")
 		return
 	}
-	limit, _ := strconv.Atoi(c.Query("limit"))
-	logs, err := QueryJobLogsForLifecycle(c.Request.Context(), h.logs, *job, limit)
+	request, err := NormalizeJobLogPageRequest(c.Query("limit"), c.Query("direction"), c.Query("before"), c.Query("after"))
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "INVALID_LOG_QUERY", err.Error())
+		return
+	}
+	page, err := QueryJobLogPage(c.Request.Context(), h.logs, *job, request, time.Now())
 	if err != nil {
 		h.writeError(c, http.StatusBadGateway, "LOG_QUERY_FAILED", "could not query job logs")
 		return
 	}
-	h.writeSuccess(c, http.StatusOK, map[string]any{"jobId": job.ID, "items": logs})
+	h.writeSuccess(c, http.StatusOK, map[string]any{
+		"jobId": job.ID,
+		"items": page.Lines,
+		"page": map[string]any{
+			"direction":  page.Direction,
+			"limit":      page.Limit,
+			"hasMore":    page.HasMore,
+			"nextCursor": page.NextCursor,
+		},
+	})
 }
 
 func (h *Handler) getJobMetrics(c *gin.Context) {

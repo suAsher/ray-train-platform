@@ -18,6 +18,14 @@ type LogLine struct {
 	Stream    map[string]string `json:"stream,omitempty"`
 }
 
+type LogDirection string
+
+const (
+	LogDirectionForward  LogDirection = "forward"
+	LogDirectionBackward LogDirection = "backward"
+	MaxLogQueryEntries                = 5000
+)
+
 type LokiClient struct {
 	BaseURL    string
 	HTTPClient *http.Client
@@ -25,13 +33,21 @@ type LokiClient struct {
 
 func (c *LokiClient) QueryJobLogs(ctx context.Context, jobID string, limit int) ([]LogLine, error) {
 	now := time.Now().UTC()
-	return c.QueryJobLogsInRange(ctx, jobID, limit, now.Add(-30*24*time.Hour), now)
+	return c.QueryJobLogsPage(ctx, jobID, limit, now.Add(-30*24*time.Hour), now, LogDirectionForward)
 }
 
 // QueryJobLogsInRange returns job logs from an explicit lifecycle window. Callers
 // should use the job's creation and completion times so completed jobs remain
 // available without making Loki scan the entire retention period on every request.
 func (c *LokiClient) QueryJobLogsInRange(ctx context.Context, jobID string, limit int, start, end time.Time) ([]LogLine, error) {
+	return c.QueryJobLogsPage(ctx, jobID, limit, start, end, LogDirectionForward)
+}
+
+// QueryJobLogsPage reads one direction-aware page from Loki. The caller owns
+// pagination and asks for one extra entry when it needs an exact has-more bit.
+// Results are always returned in chronological order so Portal and CLI
+// rendering do not depend on Loki's wire direction.
+func (c *LokiClient) QueryJobLogsPage(ctx context.Context, jobID string, limit int, start, end time.Time, direction LogDirection) ([]LogLine, error) {
 	if c == nil || strings.TrimSpace(c.BaseURL) == "" {
 		return nil, fmt.Errorf("Loki URL is not configured")
 	}
@@ -41,8 +57,11 @@ func (c *LokiClient) QueryJobLogsInRange(ctx context.Context, jobID string, limi
 	if start.IsZero() || end.IsZero() || end.Before(start) {
 		return nil, fmt.Errorf("log query range is invalid")
 	}
-	if limit <= 0 || limit > 10000 {
+	if limit <= 0 || limit > MaxLogQueryEntries {
 		limit = 1000
+	}
+	if direction != LogDirectionForward && direction != LogDirectionBackward {
+		return nil, fmt.Errorf("log query direction is invalid")
 	}
 	endpoint, err := url.Parse(strings.TrimRight(c.BaseURL, "/") + "/loki/api/v1/query_range")
 	if err != nil {
@@ -51,7 +70,7 @@ func (c *LokiClient) QueryJobLogsInRange(ctx context.Context, jobID string, limi
 	query := endpoint.Query()
 	query.Set("query", `{platform_job_id="`+jobID+`"}`)
 	query.Set("limit", strconv.Itoa(limit))
-	query.Set("direction", "forward")
+	query.Set("direction", string(direction))
 	query.Set("start", start.UTC().Format(time.RFC3339Nano))
 	query.Set("end", end.UTC().Format(time.RFC3339Nano))
 	endpoint.RawQuery = query.Encode()

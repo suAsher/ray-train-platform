@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -516,6 +517,175 @@ func TestLogsFollowStopsWhenTheJobReachesATerminalState(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "line 1") || !strings.Contains(stdout.String(), "line 2") {
 		t.Fatalf("unexpected follow output:\n%s", stdout.String())
+	}
+}
+
+func TestLogsCommandPaginatesCompleteHistoryByDefault(t *testing.T) {
+	logCalls := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if !strings.HasSuffix(request.URL.Path, "/logs") {
+			t.Fatalf("unexpected request %s", request.URL.Path)
+		}
+		logCalls++
+		if request.URL.Query().Get("direction") != "forward" {
+			t.Fatalf("logs history must page forward: %s", request.URL.RawQuery)
+		}
+		switch logCalls {
+		case 1:
+			if request.URL.Query().Get("after") != "" {
+				t.Fatalf("first page unexpectedly had a cursor: %s", request.URL.RawQuery)
+			}
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{
+				"items": []any{
+					map[string]any{"timestamp": "2026-08-22T16:00:01Z", "line": "line one"},
+					map[string]any{"timestamp": "2026-08-22T16:00:02Z", "line": "line two"},
+				},
+				"page": map[string]any{"direction": "forward", "limit": 4000, "hasMore": true, "nextCursor": "2026-08-22T16:00:02Z"},
+			})
+		case 2:
+			if request.URL.Query().Get("after") != "2026-08-22T16:00:02Z" {
+				t.Fatalf("second page cursor missing: %s", request.URL.RawQuery)
+			}
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{
+				"items": []any{map[string]any{"timestamp": "2026-08-22T16:00:03Z", "line": "final success"}},
+				"page":  map[string]any{"direction": "forward", "limit": 4000, "hasMore": false, "nextCursor": "2026-08-22T16:00:03Z"},
+			})
+		default:
+			t.Fatalf("unexpected log page %d", logCalls)
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := Run(context.Background(), []string{"logs", "--server", server.URL, "--ca-file", writeTestCA(t, server), "job-1"},
+		&stdout, &bytes.Buffer{}, testEnvironment)
+	if err != nil {
+		t.Fatalf("logs failed: %v", err)
+	}
+	if logCalls != 2 || stdout.String() != "line one\nline two\nfinal success\n" {
+		t.Fatalf("calls=%d output=%q", logCalls, stdout.String())
+	}
+}
+
+func TestLogsCommandRejectsLegacyResponseForCompleteHistory(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writeClientSuccess(t, writer, http.StatusOK, map[string]any{
+			"items": []any{map[string]any{"timestamp": "2026-08-22T16:00:01Z", "line": "partial"}},
+		})
+	}))
+	defer server.Close()
+
+	err := Run(context.Background(), []string{"logs", "--server", server.URL, "--ca-file", writeTestCA(t, server), "job-1"},
+		&bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+	if err == nil || !strings.Contains(err.Error(), "does not support complete log pagination") {
+		t.Fatalf("expected rolling-upgrade pagination error, got %v", err)
+	}
+	err = Run(context.Background(), []string{"logs", "--limit", "5000", "--server", server.URL, "--ca-file", writeTestCA(t, server), "job-1"},
+		&bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+	if err == nil || !strings.Contains(err.Error(), "does not support complete log pagination") {
+		t.Fatalf("expected explicit-limit rolling-upgrade error, got %v", err)
+	}
+}
+
+func TestLogsFollowStartsAfterTheInitialTailAndDrainsEveryFinalPage(t *testing.T) {
+	logCalls := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case strings.HasSuffix(request.URL.Path, "/logs"):
+			logCalls++
+			stamp := "2026-08-22T16:00:01Z"
+			switch logCalls {
+			case 1:
+				writeClientSuccess(t, writer, http.StatusOK, map[string]any{
+					"items": []any{map[string]any{"timestamp": stamp, "line": "same-time one"}},
+					"page":  map[string]any{"direction": "backward", "limit": 1000, "hasMore": false, "nextCursor": stamp + "~1"},
+				})
+			case 2:
+				if request.URL.Query().Get("after") != "2026-08-22T16:00:01.000000001Z" {
+					t.Fatalf("follow cursor missing: %s", request.URL.RawQuery)
+				}
+				writeClientSuccess(t, writer, http.StatusOK, map[string]any{
+					"items": []any{map[string]any{"timestamp": "2026-08-22T16:00:02Z", "line": "next line"}},
+					"page":  map[string]any{"direction": "forward", "limit": 1000, "hasMore": true, "nextCursor": "2026-08-22T16:00:02Z~1"},
+				})
+			case 3:
+				writeClientSuccess(t, writer, http.StatusOK, map[string]any{
+					"items": []any{map[string]any{"timestamp": "2026-08-22T16:00:03Z", "line": "final success"}},
+					"page":  map[string]any{"direction": "forward", "limit": 1000, "hasMore": false, "nextCursor": "2026-08-22T16:00:03Z~1"},
+				})
+			default:
+				t.Fatalf("unexpected log call %d", logCalls)
+			}
+		case strings.HasSuffix(request.URL.Path, "job-1"):
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"id": "job-1", "observedState": "SUCCEEDED"})
+		default:
+			t.Fatalf("unexpected request %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := Run(context.Background(), []string{"logs", "-f", "--server", server.URL, "--ca-file", writeTestCA(t, server), "job-1"},
+		&stdout, &bytes.Buffer{}, testEnvironment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if logCalls != 3 || stdout.String() != "same-time one\nnext line\nfinal success\n" {
+		t.Fatalf("calls=%d output=%q", logCalls, stdout.String())
+	}
+}
+
+func TestLogsFollowRejectsARepeatedBacklogCursor(t *testing.T) {
+	logCalls := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case strings.HasSuffix(request.URL.Path, "/logs"):
+			logCalls++
+			stamp := "2026-08-22T16:00:01Z"
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{
+				"items": []any{map[string]any{"timestamp": stamp, "line": fmt.Sprintf("line %d", logCalls)}},
+				"page": map[string]any{
+					"direction": map[bool]string{true: "backward", false: "forward"}[logCalls == 1],
+					"limit":     1000, "hasMore": logCalls > 1, "nextCursor": stamp + "~1",
+				},
+			})
+		case strings.HasSuffix(request.URL.Path, "job-1"):
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"id": "job-1", "observedState": "SUCCEEDED"})
+		default:
+			t.Fatalf("unexpected request %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	err := Run(context.Background(), []string{"logs", "-f", "--server", server.URL, "--ca-file", writeTestCA(t, server), "job-1"},
+		&bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+	if err == nil || !strings.Contains(err.Error(), "cursor did not advance") {
+		t.Fatalf("expected repeated cursor rejection, got %v", err)
+	}
+}
+
+func TestLogsJSONReportsMoreHistoryWhenLimitTruncates(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writeClientSuccess(t, writer, http.StatusOK, map[string]any{
+			"jobId": "job-1",
+			"items": []any{map[string]any{"timestamp": "2026-08-22T16:00:01Z", "line": "first"}},
+			"page":  map[string]any{"direction": "forward", "limit": 1, "hasMore": true, "nextCursor": "2026-08-22T16:00:01Z~1"},
+		})
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := Run(context.Background(), []string{"logs", "--limit", "1", "--output", "json", "--server", server.URL, "--ca-file", writeTestCA(t, server), "job-1"},
+		&stdout, &bytes.Buffer{}, testEnvironment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload LogPage
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !payload.Page.HasMore || payload.Page.NextCursor != "2026-08-22T16:00:01Z~1" {
+		t.Fatalf("truncation metadata was lost: %+v", payload.Page)
 	}
 }
 

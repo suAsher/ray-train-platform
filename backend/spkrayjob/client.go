@@ -64,6 +64,32 @@ type Job struct {
 	Raw           json.RawMessage `json:"-"`
 }
 
+type LogEntry struct {
+	Timestamp string            `json:"timestamp"`
+	Line      string            `json:"line"`
+	Stream    map[string]string `json:"stream,omitempty"`
+}
+
+type LogPageMeta struct {
+	Direction  string `json:"direction"`
+	Limit      int    `json:"limit"`
+	HasMore    bool   `json:"hasMore"`
+	NextCursor string `json:"nextCursor"`
+}
+
+type LogPage struct {
+	JobID               string      `json:"jobId"`
+	Items               []LogEntry  `json:"items"`
+	Page                LogPageMeta `json:"page"`
+	PaginationAvailable bool        `json:"-"`
+}
+
+type LogPageOptions struct {
+	Limit     int
+	Direction string
+	Cursor    string
+}
+
 type PlatformLimits struct {
 	Cache PlatformCacheLimits `json:"cache"`
 }
@@ -368,6 +394,70 @@ func (client *Client) Logs(ctx context.Context, jobID string, limit int) (json.R
 		path += "?limit=" + fmt.Sprintf("%d", limit)
 	}
 	return client.request(ctx, http.MethodGet, path, nil, nil)
+}
+
+// LogsPage reads one bounded page. Forward pages are used for complete exports
+// and follow; backward pages let interactive clients open at the newest lines.
+func (client *Client) LogsPage(ctx context.Context, jobID string, options LogPageOptions) (LogPage, error) {
+	direction := strings.ToLower(strings.TrimSpace(options.Direction))
+	if direction == "" {
+		direction = "backward"
+	}
+	if direction != "forward" && direction != "backward" {
+		return LogPage{}, fmt.Errorf("log direction must be forward or backward")
+	}
+	query := url.Values{}
+	query.Set("direction", direction)
+	if options.Limit > 0 {
+		query.Set("limit", strconv.Itoa(options.Limit))
+	}
+	if cursor := strings.TrimSpace(options.Cursor); cursor != "" {
+		if direction == "forward" {
+			query.Set("after", cursor)
+		} else {
+			query.Set("before", cursor)
+		}
+	}
+	path := "/api/v1/jobs/" + url.PathEscape(jobID) + "/logs?" + query.Encode()
+	raw, err := client.request(ctx, http.MethodGet, path, nil, nil)
+	if err != nil {
+		return LogPage{}, err
+	}
+	var payload struct {
+		JobID string       `json:"jobId"`
+		Items []LogEntry   `json:"items"`
+		Page  *LogPageMeta `json:"page"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return LogPage{}, fmt.Errorf("decode job logs")
+	}
+	page := LogPage{JobID: payload.JobID, Items: payload.Items, PaginationAvailable: payload.Page != nil}
+	if payload.Page != nil {
+		page.Page = *payload.Page
+	}
+	if page.Items == nil {
+		page.Items = make([]LogEntry, 0)
+	}
+	if page.JobID == "" {
+		page.JobID = jobID
+	}
+	if page.Page.Direction == "" {
+		page.Page.Direction = direction
+	}
+	if page.Page.Limit == 0 {
+		page.Page.Limit = options.Limit
+	}
+	// This fallback keeps a newly installed CLI compatible with a rolling
+	// backend upgrade. Old responses had no page block, but their timestamp is
+	// still a safe follow cursor.
+	if page.Page.NextCursor == "" && len(page.Items) > 0 {
+		if direction == "backward" {
+			page.Page.NextCursor = page.Items[0].Timestamp
+		} else {
+			page.Page.NextCursor = page.Items[len(page.Items)-1].Timestamp
+		}
+	}
+	return page, nil
 }
 
 func (client *Client) Cancel(ctx context.Context, jobID string) (json.RawMessage, error) {

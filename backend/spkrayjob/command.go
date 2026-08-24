@@ -740,11 +740,11 @@ func runLogs(ctx context.Context, arguments []string, stdout, stderr io.Writer, 
 	bindConnectionFlags(set, &connection)
 	var format outputFormatFlag
 	bindOutputFormatFlag(set, &format)
-	limit := set.Int("limit", 1000, "maximum log lines")
+	limit := set.Int("limit", 0, "maximum total log lines; 0 prints complete history")
 	follow := set.Bool("follow", false, "keep printing new lines until the job finishes")
 	shortFollow := set.Bool("f", false, "alias for --follow")
-	if err := set.Parse(arguments); err != nil || set.NArg() != 1 || *limit < 1 || *limit > 10000 {
-		return errors.New("logs requires a job ID and a limit between 1 and 10000")
+	if err := set.Parse(arguments); err != nil || set.NArg() != 1 || *limit < 0 || *limit > maxCLIHistoryLines {
+		return fmt.Errorf("logs requires a job ID and a limit between 0 and %d", maxCLIHistoryLines)
 	}
 	client, err := newCommandClient(connection, getenv, stderr)
 	if err != nil {
@@ -752,17 +752,109 @@ func runLogs(ctx context.Context, arguments []string, stdout, stderr io.Writer, 
 	}
 	jobID := set.Arg(0)
 	if !*follow && !*shortFollow {
-		logs, logErr := client.Logs(ctx, jobID, *limit)
+		if !format.json {
+			return writeJobLogHistory(ctx, client, jobID, *limit, stdout)
+		}
+		if *limit == 0 || *limit > maxCLIJSONLogLines {
+			return fmt.Errorf("JSON log output requires --limit between 1 and %d", maxCLIJSONLogLines)
+		}
+		logs, logErr := collectJobLogs(ctx, client, jobID, *limit)
 		if logErr != nil {
 			return logErr
 		}
 		if format.json {
 			return writeJSON(stdout, logs)
 		}
-		_, renderErr := renderLogLines(stdout, logs, "")
-		return renderErr
+		return nil
 	}
 	return followLogs(ctx, client, jobID, *limit, stdout)
+}
+
+const (
+	cliLogPageSize       = 2000
+	maxCLIHistoryLines   = 250000
+	maxCLIJSONLogLines   = 10000
+	followDrainPageLimit = 5
+)
+
+func writeJobLogHistory(ctx context.Context, client *Client, jobID string, maximum int, stdout io.Writer) error {
+	cursor := ""
+	written := 0
+	for {
+		pageSize := cliLogPageSize
+		effectiveMaximum := maximum
+		if effectiveMaximum == 0 {
+			effectiveMaximum = maxCLIHistoryLines
+		}
+		if effectiveMaximum-written < pageSize {
+			pageSize = effectiveMaximum - written
+		}
+		if pageSize <= 0 {
+			return fmt.Errorf("log history exceeds the %d-line safety ceiling", maxCLIHistoryLines)
+		}
+		page, err := client.LogsPage(ctx, jobID, LogPageOptions{Limit: pageSize, Direction: "forward", Cursor: cursor})
+		if err != nil {
+			return err
+		}
+		if !page.PaginationAvailable && (maximum == 0 || maximum > pageSize) {
+			return fmt.Errorf("platform backend does not support complete log pagination yet; retry after the platform upgrade finishes")
+		}
+		if _, err := renderLogEntries(stdout, page.Items, ""); err != nil {
+			return err
+		}
+		written += len(page.Items)
+		if !page.Page.HasMore || len(page.Items) == 0 {
+			return nil
+		}
+		if maximum > 0 && written >= maximum {
+			return nil
+		}
+		if maximum == 0 && written >= maxCLIHistoryLines {
+			return fmt.Errorf("log history exceeds the %d-line safety ceiling", maxCLIHistoryLines)
+		}
+		next := strings.TrimSpace(page.Page.NextCursor)
+		if next == "" || next == cursor {
+			return fmt.Errorf("platform log cursor did not advance")
+		}
+		cursor = next
+	}
+}
+
+func collectJobLogs(ctx context.Context, client *Client, jobID string, maximum int) (LogPage, error) {
+	result := LogPage{
+		JobID: jobID,
+		Items: make([]LogEntry, 0),
+		Page:  LogPageMeta{Direction: "forward", Limit: maximum},
+	}
+	cursor := ""
+	for {
+		pageSize := cliLogPageSize
+		if maximum > 0 && maximum-len(result.Items) < pageSize {
+			pageSize = maximum - len(result.Items)
+		}
+		if pageSize <= 0 {
+			break
+		}
+		page, err := client.LogsPage(ctx, jobID, LogPageOptions{Limit: pageSize, Direction: "forward", Cursor: cursor})
+		if err != nil {
+			return LogPage{}, err
+		}
+		if !page.PaginationAvailable && maximum > pageSize {
+			return LogPage{}, fmt.Errorf("platform backend does not support the requested paginated log limit yet; retry after the platform upgrade finishes")
+		}
+		result.Items = append(result.Items, page.Items...)
+		result.Page.HasMore = page.Page.HasMore
+		result.Page.NextCursor = page.Page.NextCursor
+		if !page.Page.HasMore || len(page.Items) == 0 {
+			break
+		}
+		next := strings.TrimSpace(page.Page.NextCursor)
+		if next == "" || next == cursor {
+			return LogPage{}, fmt.Errorf("platform log cursor did not advance")
+		}
+		cursor = next
+	}
+	return result, nil
 }
 
 // followLogs polls the same bounded log endpoint and prints only lines newer
@@ -770,19 +862,54 @@ func runLogs(ctx context.Context, arguments []string, stdout, stderr io.Writer, 
 // finished run does not leave the terminal blocked.
 func followLogs(ctx context.Context, client *Client, jobID string, limit int, stdout io.Writer) error {
 	const pollInterval = 3 * time.Second
+	if limit == 0 {
+		limit = 1000
+	}
 	cursor := ""
 	finishing := false
+	initial := true
+	drainedPages := 0
 	for {
-		logs, err := client.Logs(ctx, jobID, limit)
+		wasInitial := initial
+		previousCursor := cursor
+		direction := "forward"
+		if initial {
+			direction = "backward"
+		}
+		logs, err := client.LogsPage(ctx, jobID, LogPageOptions{Limit: min(limit, cliLogPageSize), Direction: direction, Cursor: cursor})
 		if err != nil {
 			return err
 		}
-		next, err := renderLogLines(stdout, logs, cursor)
+		renderCursor := ""
+		if !logs.PaginationAvailable {
+			renderCursor = cursor
+		}
+		next, err := renderLogEntries(stdout, logs.Items, renderCursor)
 		if err != nil {
 			return err
 		}
-		cursor = next
-		if finishing {
+		if logs.PaginationAvailable && wasInitial {
+			cursor, err = forwardCursorAfterEntries(logs.Items)
+			if err != nil {
+				return err
+			}
+		} else if logs.PaginationAvailable && logs.Page.NextCursor != "" {
+			cursor = logs.Page.NextCursor
+		} else if next != "" {
+			cursor = next
+		}
+		initial = false
+		hasBacklog := !wasInitial && logs.Page.HasMore
+		if hasBacklog {
+			if cursor == "" || cursor == previousCursor {
+				return fmt.Errorf("platform log cursor did not advance")
+			}
+			drainedPages++
+			if drainedPages < followDrainPageLimit {
+				continue
+			}
+		}
+		if finishing && !hasBacklog {
 			return nil
 		}
 		job, err := client.Status(ctx, jobID)
@@ -794,12 +921,27 @@ func followLogs(ctx context.Context, client *Client, jobID string, limit int, st
 			// status read, so the tail of a finished run is never truncated.
 			finishing = true
 		}
+		drainedPages = 0
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(pollInterval):
 		}
 	}
+}
+
+func forwardCursorAfterEntries(entries []LogEntry) (string, error) {
+	if len(entries) == 0 {
+		return "", nil
+	}
+	latest, err := time.Parse(time.RFC3339Nano, entries[len(entries)-1].Timestamp)
+	if err != nil {
+		return "", fmt.Errorf("platform returned an invalid log timestamp")
+	}
+	// The initial page is a backward tail snapshot. Starting the forward poll
+	// strictly after its newest timestamp avoids depending on Loki using the
+	// same tie order for backward and forward queries.
+	return latest.UTC().Add(time.Nanosecond).Format(time.RFC3339Nano), nil
 }
 
 func runCancel(ctx context.Context, arguments []string, stdout, stderr io.Writer, getenv func(string) string) error {

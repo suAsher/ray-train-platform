@@ -50,6 +50,24 @@ func TestQueryJobLogsInRangeUsesRequestedLifecycleWindow(t *testing.T) {
 	}
 }
 
+func TestQueryJobLogsPageForwardsBackwardDirectionToLoki(t *testing.T) {
+	start := time.Date(2026, 8, 22, 16, 0, 0, 0, time.UTC)
+	end := start.Add(30 * time.Minute)
+	client := LokiClient{BaseURL: "http://loki", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if got := request.URL.Query().Get("direction"); got != "backward" {
+			t.Fatalf("direction = %q, want backward", got)
+		}
+		if got := request.URL.Query().Get("limit"); got != "5000" {
+			t.Fatalf("limit = %q, want 5000", got)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"status":"success","data":{"result":[]}}`)), Request: request}, nil
+	})}}
+
+	if _, err := client.QueryJobLogsPage(context.Background(), "job-1", 5000, start, end, LogDirectionBackward); err != nil {
+		t.Fatalf("query backward log page: %v", err)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }

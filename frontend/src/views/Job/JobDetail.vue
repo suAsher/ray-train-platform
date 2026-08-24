@@ -128,6 +128,18 @@
             </div>
           </div>
 
+          <div v-if="logsLoaded && !logsError" class="flex items-center justify-between rounded-xl border border-slate-800/80 bg-slate-950/70 px-4 py-2.5 text-xs text-slate-400">
+            <span>已加载 <b class="font-mono text-slate-200">{{ rawLogs.length }}</b> 条日志<span v-if="hasOlderLogs">，还有更早日志</span></span>
+            <el-button
+              v-if="hasOlderLogs"
+              size="small"
+              plain
+              :loading="logsLoadingOlder"
+              @click="loadOlderLogs"
+            >加载更早日志</el-button>
+            <span v-else class="text-slate-500">已到达任务日志起点</span>
+          </div>
+
           <!-- Log Console Display -->
           <div v-if="!logsError"
             ref="logConsoleRef"
@@ -252,7 +264,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { finishedLabel, formatDateTime, jobTimeline } from '../../jobTimeline'
@@ -263,6 +275,7 @@ import JobArtifactBrowser from '../../components/JobArtifactBrowser.vue'
 import { userId } from '../../stores/session'
 import { canOpenRayDashboard, jobDashboardAccessPath } from '../../jobDashboard'
 import { buildLogStreamCards } from '../../jobLogStreams'
+import { logPagePath, mergeLogEntries, normalizeLogPage } from '../../jobLogPagination'
 import { latestMetric, metricSeries, sparklinePoints } from '../../mlflowExperiment'
 import { cacheQueryForJob } from '../../platformLimits'
 import { equivalentSubmitCommandForJob } from '../../submission'
@@ -286,6 +299,11 @@ const experimentError = ref('')
 const dashboardOpening = ref(false)
 
 const rawLogs = ref([])
+const logsLoaded = ref(false)
+const hasOlderLogs = ref(false)
+const olderLogCursor = ref('')
+const olderPagesLoaded = ref(false)
+const logsLoadingOlder = ref(false)
 const nowTick = ref(new Date().toISOString())
 
 const terminalStates = new Set(['SUCCEEDED', 'FAILED', 'CANCELED', 'TIMED_OUT'])
@@ -357,6 +375,49 @@ const downloadLogs = () => {
   URL.revokeObjectURL(url)
 }
 
+const scrollLogsToBottom = async () => {
+  if (!autoScroll.value) return
+  await nextTick()
+  if (logConsoleRef.value) logConsoleRef.value.scrollTop = logConsoleRef.value.scrollHeight
+}
+
+const applyLatestLogPage = async (response) => {
+  const page = normalizeLogPage(response)
+  const wasEmpty = rawLogs.value.length === 0
+  rawLogs.value = mergeLogEntries(rawLogs.value, page.logs)
+  if (wasEmpty || !olderPagesLoaded.value) {
+    hasOlderLogs.value = page.hasMore
+    olderLogCursor.value = page.nextCursor
+  }
+  await scrollLogsToBottom()
+}
+
+const loadOlderLogs = async () => {
+  if (!hasOlderLogs.value || !olderLogCursor.value || logsLoadingOlder.value) return
+  logsLoadingOlder.value = true
+  const consoleElement = logConsoleRef.value
+  const previousHeight = consoleElement?.scrollHeight || 0
+  const previousTop = consoleElement?.scrollTop || 0
+  try {
+    const response = await apiGet(logPagePath(route.params.id, {
+      limit: 2000,
+      direction: 'backward',
+      cursor: olderLogCursor.value,
+    }))
+    const page = normalizeLogPage(response)
+    rawLogs.value = mergeLogEntries(rawLogs.value, page.logs)
+    hasOlderLogs.value = page.hasMore
+    olderLogCursor.value = page.nextCursor
+    olderPagesLoaded.value = true
+    await nextTick()
+    if (consoleElement) consoleElement.scrollTop = previousTop + consoleElement.scrollHeight - previousHeight
+  } catch (error) {
+    ElMessage.warning(error.message || '加载更早日志失败')
+  } finally {
+    logsLoadingOlder.value = false
+  }
+}
+
 const normalizeDetail = (job) => {
   const spec = job.spec || {}
   const resources = spec.resources || {}
@@ -397,18 +458,15 @@ const fetchDetail = async () => {
 
   const [runtimeResult, logResult, metricResult, experimentResult] = await Promise.allSettled([
     apiGet(`/api/v1/jobs/${id}/runtime`),
-    apiGet(`/api/v1/jobs/${id}/logs?limit=2000`),
+    apiGet(logPagePath(id, { limit: 2000, direction: 'backward' })),
     apiGet(`/api/v1/jobs/${id}/metrics`),
     apiGet(`/api/v1/jobs/${id}/experiment`)
   ])
   runtimePods.value = runtimeResult.status === 'fulfilled' ? runtimeResult.value?.pods || [] : []
   logsError.value = logResult.status === 'rejected' ? 'Loki 日志服务尚未接入或暂时不可达；Pod 删除后历史日志无法恢复。' : ''
+  logsLoaded.value = logResult.status === 'fulfilled'
   const logResponse = logResult.status === 'fulfilled' ? logResult.value : null
-  rawLogs.value = (logResponse?.items || []).map(item => ({
-    node: item.stream?.pod || item.stream?.container || 'cluster',
-    text: item.line,
-    timestamp: item.timestamp
-  }))
+  if (logResponse) await applyLatestLogPage(logResponse)
   metricsError.value = metricResult.status === 'rejected' ? 'Prometheus / DCGM 指标服务尚未接入或暂时不可达。' : ''
   metrics.value = metricResult.status === 'fulfilled' ? metricResult.value : null
   experimentError.value = experimentResult.status === 'rejected' ? 'MLflow 暂时不可达；训练本身不会因此停止。' : ''

@@ -42,11 +42,8 @@ type jobPage struct {
 }
 
 type logPayload struct {
-	JobID string `json:"jobId"`
-	Items []struct {
-		Timestamp string `json:"timestamp"`
-		Line      string `json:"line"`
-	} `json:"items"`
+	JobID string     `json:"jobId"`
+	Items []LogEntry `json:"items"`
 }
 
 func renderJobTable(writer io.Writer, payload json.RawMessage) error {
@@ -114,8 +111,12 @@ func renderLogLines(writer io.Writer, payload json.RawMessage, cursor string) (s
 	if err := json.Unmarshal(payload, &logs); err != nil {
 		return cursor, fmt.Errorf("decode job logs")
 	}
+	return renderLogEntries(writer, logs.Items, cursor)
+}
+
+func renderLogEntries(writer io.Writer, entries []LogEntry, cursor string) (string, error) {
 	latest := cursor
-	for _, entry := range logs.Items {
+	for _, entry := range entries {
 		if cursor != "" && entry.Timestamp <= cursor {
 			continue
 		}

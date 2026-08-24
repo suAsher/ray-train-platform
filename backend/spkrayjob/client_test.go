@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -284,6 +285,41 @@ func TestLogsAndCancelUseEstablishedJobEndpoints(t *testing.T) {
 	want := []string{"GET /api/v1/jobs/job-test/logs?limit=25", "POST /api/v1/jobs/job-test/cancel?"}
 	if !reflect.DeepEqual(requests, want) {
 		t.Fatalf("requests=%v want=%v", requests, want)
+	}
+}
+
+func TestLogsPageEncodesDirectionLimitAndCursor(t *testing.T) {
+	var rawQuery string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		rawQuery = request.URL.RawQuery
+		writeClientSuccess(t, writer, http.StatusOK, map[string]any{
+			"jobId": "job-test", "items": []any{},
+			"page": map[string]any{"direction": "forward", "limit": 2000, "hasMore": false, "nextCursor": ""},
+		})
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientOptions{ServerURL: server.URL, Token: "test-token", HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := client.LogsPage(context.Background(), "job-test", LogPageOptions{
+		Limit: 2000, Direction: "forward", Cursor: "2026-08-22T16:00:00.123456789Z",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values.Get("limit") != "2000" || values.Get("direction") != "forward" || values.Get("after") != "2026-08-22T16:00:00.123456789Z" {
+		t.Fatalf("unexpected log page query: %s", rawQuery)
+	}
+	if page.JobID != "job-test" || page.Page.Direction != "forward" {
+		t.Fatalf("unexpected decoded page: %+v", page)
+	}
+	if !page.PaginationAvailable {
+		t.Fatal("pagination metadata was present but not detected")
 	}
 }
 

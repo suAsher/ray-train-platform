@@ -298,3 +298,17 @@ func TestRunRejectsUnknownAndTokenFlags(t *testing.T) {
 		}
 	}
 }
+
+func TestForwardCursorStartsStrictlyAfterTheNewestLineInAnInitialTail(t *testing.T) {
+	cursor, err := forwardCursorAfterEntries([]LogEntry{
+		{Timestamp: "2026-08-22T16:00:10Z", Line: "oldest"},
+		{Timestamp: "2026-08-22T16:00:12Z", Line: "newest-a"},
+		{Timestamp: "2026-08-22T16:00:12Z", Line: "newest-b"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cursor != "2026-08-22T16:00:12.000000001Z" {
+		t.Fatalf("forward cursor=%q, want the instant after the newest tail entry", cursor)
+	}
+}
