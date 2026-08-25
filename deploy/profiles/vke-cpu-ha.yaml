@@ -65,8 +65,8 @@ frontend:
   nodeSelector: {}
   image:
     repository: ray-train-frontend
-    tag: prod-20260825-data-path-r1
-    digest: sha256:0d1777b196856e6771122be7747923c070c31c04ad1350b7b289494328a95567
+    tag: prod-20260825-personal-root-r1
+    digest: sha256:3f0a386cbe596562e51fd4a62640c8ba90061cde653274768a481fe3f18b03f4
   service:
     type: ClusterIP
     port: 80

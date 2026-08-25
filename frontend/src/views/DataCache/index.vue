@@ -14,6 +14,38 @@
 
     <el-alert v-if="error" type="warning" :closable="false"><template #title>{{ error }}</template></el-alert>
 
+    <section class="rounded-2xl border border-emerald-900/60 bg-emerald-950/15 p-6 shadow-xl">
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <div class="flex flex-wrap items-center gap-2">
+            <h2 class="text-lg font-semibold text-white">个人空间</h2>
+            <el-tag size="small" type="success" effect="plain">读写</el-tag>
+          </div>
+          <p class="mt-2 text-sm leading-6 text-slate-400">调试和训练环境中的个人持久化存储根目录。任务结束或调试环境关闭后，文件仍会保留。</p>
+        </div>
+        <code class="rounded-lg border border-emerald-900/70 bg-slate-950/60 px-3 py-2 font-mono text-sm text-emerald-300">/mnt/storage/me</code>
+      </div>
+
+      <div class="mt-5 grid gap-3 md:grid-cols-2">
+        <button type="button" class="group rounded-xl border border-slate-800 bg-slate-950/35 p-4 text-left transition hover:border-blue-500/70 hover:bg-blue-950/20" @click="selectSpaceByID('my-files')">
+          <span class="flex items-center justify-between gap-3">
+            <span class="font-medium text-slate-100 group-hover:text-blue-200">我的文件</span>
+            <span class="text-xs text-blue-300">进入目录 →</span>
+          </span>
+          <span class="mt-2 block font-mono text-xs text-slate-400">/mnt/storage/me/files</span>
+          <span class="mt-2 block text-xs leading-5 text-slate-500">上传和管理个人数据、代码附件及其他持久文件。</span>
+        </button>
+        <button type="button" class="group rounded-xl border border-slate-800 bg-slate-950/35 p-4 text-left transition hover:border-purple-500/70 hover:bg-purple-950/20" @click="selectSpaceByID('my-runs')">
+          <span class="flex items-center justify-between gap-3">
+            <span class="font-medium text-slate-100 group-hover:text-purple-200">我的运行结果</span>
+            <span class="text-xs text-purple-300">进入目录 →</span>
+          </span>
+          <span class="mt-2 block font-mono text-xs text-slate-400">/mnt/storage/me/runs</span>
+          <span class="mt-2 block text-xs leading-5 text-slate-500">查看训练输出、Checkpoint、模型权重和任务产物。</span>
+        </button>
+      </div>
+    </section>
+
     <section class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
       <button
         v-for="space in spaces"
@@ -210,6 +242,11 @@ const selectSpace = async (space) => {
   currentPath.value = ''
   entries.value = []
   if (space.browseEnabled) await loadEntries()
+}
+
+const selectSpaceByID = async (id) => {
+  const space = spaces.value.find((candidate) => candidate.id === id)
+  if (space) await selectSpace(space)
 }
 
 const loadEntries = async () => {
