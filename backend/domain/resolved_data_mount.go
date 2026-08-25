@@ -88,7 +88,7 @@ func isResolvedRunsSubPath(subPath string) bool {
 }
 
 func dataSpaceBindingSpace(space DataSpaceID) DataSpaceID {
-	if space == DataSpaceMyFiles || space == DataSpaceMyRuns {
+	if space == DataSpaceMyStorage || space == DataSpaceMyFiles || space == DataSpaceMyRuns {
 		return DataSpaceWorkspace
 	}
 	return space

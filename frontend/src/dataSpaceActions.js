@@ -34,3 +34,18 @@ export function dataSpaceAccessType(space, session) {
 export function canMutateDataSpace(space, session) {
   return canManageDataSpace(space, session) && dataSpaceStorageReady(space)
 }
+
+export function dataPageSpaces(spaces) {
+  const catalog = Array.isArray(spaces) ? [...spaces] : []
+  if (!catalog.some((space) => space?.id === 'my-storage')) return catalog
+  return catalog.filter((space) => space?.id !== 'my-files' && space?.id !== 'my-runs')
+}
+
+export function trainingInputDataSpaces(spaces) {
+  const catalog = Array.isArray(spaces) ? [...spaces] : []
+  const hasPersonalRoot = catalog.some((space) => space?.id === 'my-storage')
+  return catalog.filter((space) => {
+    if (space?.id === 'workspace' || space?.id === 'my-runs') return false
+    return !(hasPersonalRoot && space?.id === 'my-files')
+  })
+}

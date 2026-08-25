@@ -13,6 +13,7 @@ type DataSpaceID string
 
 const (
 	DataSpaceWorkspace      DataSpaceID = "workspace"
+	DataSpaceMyStorage      DataSpaceID = "my-storage"
 	DataSpaceMyFiles        DataSpaceID = "my-files"
 	DataSpaceMyRuns         DataSpaceID = "my-runs"
 	DataSpaceTeamShared     DataSpaceID = "team-shared"
@@ -117,6 +118,11 @@ func personalDataSpacesForRoot(tenantID, personalRoot, publicRoot string) ([]Dat
 			RootPrefix: personalRoot + "workspace/",
 		},
 		{
+			ID: DataSpaceMyStorage, Name: "我的文件", Description: "个人持久化数据、训练结果与 Checkpoint",
+			Provider: StorageProviderTOS, MountPath: MyStorageMountPath, BrowseEnabled: true,
+			RootPrefix: personalRoot,
+		},
+		{
 			ID: DataSpaceMyFiles, Name: "我的文件", Description: "个人上传的数据和文件",
 			Provider: StorageProviderTOS, MountPath: MyFilesMountPath, BrowseEnabled: true,
 			RootPrefix: personalRoot + "files/",
@@ -206,7 +212,7 @@ func FindDataSpace(spaces []DataSpace, id DataSpaceID) (DataSpace, bool) {
 
 func IsKnownDataSpace(id DataSpaceID) bool {
 	for _, candidate := range []DataSpaceID{
-		DataSpaceWorkspace, DataSpaceMyFiles, DataSpaceMyRuns, DataSpaceTeamShared, DataSpacePublic,
+		DataSpaceWorkspace, DataSpaceMyStorage, DataSpaceMyFiles, DataSpaceMyRuns, DataSpaceTeamShared, DataSpacePublic,
 		DataSpaceIDCOriginal, DataSpaceIDCWellspiking, DataSpaceIDCShared,
 	} {
 		if id == candidate {
@@ -218,7 +224,7 @@ func IsKnownDataSpace(id DataSpaceID) bool {
 
 func IsWritableDataSpace(id DataSpaceID) bool {
 	switch id {
-	case DataSpaceWorkspace, DataSpaceMyFiles, DataSpaceMyRuns:
+	case DataSpaceWorkspace, DataSpaceMyStorage, DataSpaceMyFiles, DataSpaceMyRuns:
 		return true
 	default:
 		return false

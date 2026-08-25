@@ -317,7 +317,7 @@ func hasLogicalLocations(spec domain.JobSpec) bool {
 }
 
 func logicalLocationBindingSpace(space domain.DataSpaceID) domain.DataSpaceID {
-	if space == domain.DataSpaceMyFiles || space == domain.DataSpaceMyRuns {
+	if space == domain.DataSpaceMyStorage || space == domain.DataSpaceMyFiles || space == domain.DataSpaceMyRuns {
 		return domain.DataSpaceWorkspace
 	}
 	return space

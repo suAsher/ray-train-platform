@@ -14,41 +14,9 @@
 
     <el-alert v-if="error" type="warning" :closable="false"><template #title>{{ error }}</template></el-alert>
 
-    <section class="rounded-2xl border border-emerald-900/60 bg-emerald-950/15 p-6 shadow-xl">
-      <div class="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <div class="flex flex-wrap items-center gap-2">
-            <h2 class="text-lg font-semibold text-white">个人空间</h2>
-            <el-tag size="small" type="success" effect="plain">读写</el-tag>
-          </div>
-          <p class="mt-2 text-sm leading-6 text-slate-400">调试和训练环境中的个人持久化存储根目录。任务结束或调试环境关闭后，文件仍会保留。</p>
-        </div>
-        <code class="rounded-lg border border-emerald-900/70 bg-slate-950/60 px-3 py-2 font-mono text-sm text-emerald-300">/mnt/storage/me</code>
-      </div>
-
-      <div class="mt-5 grid gap-3 md:grid-cols-2">
-        <button type="button" class="group rounded-xl border border-slate-800 bg-slate-950/35 p-4 text-left transition hover:border-blue-500/70 hover:bg-blue-950/20" @click="selectSpaceByID('my-files')">
-          <span class="flex items-center justify-between gap-3">
-            <span class="font-medium text-slate-100 group-hover:text-blue-200">我的文件</span>
-            <span class="text-xs text-blue-300">进入目录 →</span>
-          </span>
-          <span class="mt-2 block font-mono text-xs text-slate-400">/mnt/storage/me/files</span>
-          <span class="mt-2 block text-xs leading-5 text-slate-500">上传和管理个人数据、代码附件及其他持久文件。</span>
-        </button>
-        <button type="button" class="group rounded-xl border border-slate-800 bg-slate-950/35 p-4 text-left transition hover:border-purple-500/70 hover:bg-purple-950/20" @click="selectSpaceByID('my-runs')">
-          <span class="flex items-center justify-between gap-3">
-            <span class="font-medium text-slate-100 group-hover:text-purple-200">我的运行结果</span>
-            <span class="text-xs text-purple-300">进入目录 →</span>
-          </span>
-          <span class="mt-2 block font-mono text-xs text-slate-400">/mnt/storage/me/runs</span>
-          <span class="mt-2 block text-xs leading-5 text-slate-500">查看训练输出、Checkpoint、模型权重和任务产物。</span>
-        </button>
-      </div>
-    </section>
-
     <section class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
       <button
-        v-for="space in spaces"
+        v-for="space in visibleSpaces"
         :key="space.id"
         type="button"
         class="rounded-2xl border p-5 text-left transition"
@@ -168,7 +136,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { createDataSpaceFolder, createDataSpaceUpload, createWorkspaceSnapshot, fetchDataSpaceEntries, fetchDataSpaces, uploadDataSpaceFile } from '../../api/dataSpaces'
 import { folderUploadRelativePath } from '../../api/dataSpaceUpload'
-import { canManageDataSpace, canMutateDataSpace, canUseDataSpaceForTraining, dataSpaceAccessLabel, dataSpaceAccessType } from '../../dataSpaceActions'
+import { canManageDataSpace, canMutateDataSpace, canUseDataSpaceForTraining, dataPageSpaces, dataSpaceAccessLabel, dataSpaceAccessType } from '../../dataSpaceActions'
 import { dataSpaceReadiness, dataSpaceStorageReady } from '../../dataSpaceReadiness'
 import { session } from '../../stores/session'
 
@@ -198,6 +166,7 @@ const uploadPercentage = computed(() => {
   if (!uploadState.value?.totalBytes) return 0
   return Math.min(100, Math.floor((uploadState.value.uploadedBytes / uploadState.value.totalBytes) * 100))
 })
+const visibleSpaces = computed(() => dataPageSpaces(spaces.value))
 
 const statusLabel = (space) => ({ ready: 'GPU 挂载已就绪', pending: 'GPU 挂载准备中', failed: 'GPU 挂载失败', 'not-configured': space.provider === 'idc' ? '等待管理员登记' : 'GPU 挂载待配置' }[space.mountStatus] || '状态待确认')
 const statusType = (status) => ({ ready: 'success', pending: 'warning', failed: 'danger', 'not-configured': 'info' }[status] || 'info')
@@ -226,9 +195,9 @@ const loadSpaces = async () => {
   error.value = ''
   try {
     spaces.value = await fetchDataSpaces()
-    const refreshed = spaces.value.find((space) => space.id === selectedSpace.value?.id)
+    const refreshed = visibleSpaces.value.find((space) => space.id === selectedSpace.value?.id)
     if (refreshed) selectedSpace.value = refreshed
-    else if (!selectedSpace.value && spaces.value.length) await selectSpace(spaces.value[0])
+    else if (visibleSpaces.value.length) await selectSpace(visibleSpaces.value[0])
   } catch (requestError) {
     error.value = requestError.message || '无法加载我的数据，请稍后重试。'
   } finally {
@@ -242,11 +211,6 @@ const selectSpace = async (space) => {
   currentPath.value = ''
   entries.value = []
   if (space.browseEnabled) await loadEntries()
-}
-
-const selectSpaceByID = async (id) => {
-  const space = spaces.value.find((candidate) => candidate.id === id)
-  if (space) await selectSpace(space)
 }
 
 const loadEntries = async () => {

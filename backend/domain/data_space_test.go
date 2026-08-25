@@ -23,6 +23,23 @@ func TestPersonalDataSpacesUseStableSubjectPrefix(t *testing.T) {
 	}
 }
 
+func TestPersonalDataSpacesExposeTheRealPersonalStorageRoot(t *testing.T) {
+	spaces := PersonalDataSpaces("local", "kc-7f3a")
+	space, ok := FindDataSpace(spaces, DataSpaceID("my-storage"))
+	if !ok {
+		t.Fatal("my-storage space is missing")
+	}
+	if got, want := space.RootPrefix, "ray-train/tenants/local/users/kc-7f3a/"; got != want {
+		t.Fatalf("root prefix = %q, want %q", got, want)
+	}
+	if got, want := space.MountPath, "/mnt/storage/me"; got != want {
+		t.Fatalf("mount path = %q, want %q", got, want)
+	}
+	if space.ReadOnly || !space.BrowseEnabled {
+		t.Fatalf("personal storage root must be writable and browsable: %#v", space)
+	}
+}
+
 func TestPersonalDataSpacesCanUseAStableStorageKeyRootWithoutChangingOwnerIdentity(t *testing.T) {
 	spaces, err := PersonalDataSpacesForRoot("local", "ray-train/tenants/local/users/guofeng.su/")
 	if err != nil {

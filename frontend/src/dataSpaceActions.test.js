@@ -61,3 +61,26 @@ test('DataCache mutation buttons use the authorized storage-ready capability', (
   assert.match(view, /v-if="selectedSpace\.id === 'workspace' && canMutate"[^>]*@click="folderInput\?\.click\(\)"/)
   assert.match(view, /v-if="selectedSpace\.id === 'workspace' && canMutate"[^>]*@click="createSnapshot"/)
 })
+
+test('data page shows one direct personal root while preserving legacy spaces for rolling compatibility', () => {
+  assert.equal(typeof dataSpaceActions.dataPageSpaces, 'function')
+  const spaces = [
+    { id: 'workspace' },
+    { id: 'my-storage', mountPath: '/mnt/storage/me' },
+    { id: 'my-files' },
+    { id: 'my-runs' },
+    { id: 'public' },
+  ]
+
+  assert.deepEqual(dataSpaceActions.dataPageSpaces(spaces).map((space) => space.id), ['workspace', 'my-storage', 'public'])
+  assert.deepEqual(dataSpaceActions.dataPageSpaces(spaces.slice(2)).map((space) => space.id), ['my-files', 'my-runs', 'public'])
+  assert.deepEqual(spaces.map((space) => space.id), ['workspace', 'my-storage', 'my-files', 'my-runs', 'public'])
+})
+
+test('training input picker prefers the direct personal root over the legacy files alias', () => {
+  assert.equal(typeof dataSpaceActions.trainingInputDataSpaces, 'function')
+  const spaces = [{ id: 'workspace' }, { id: 'my-storage' }, { id: 'my-files' }, { id: 'my-runs' }, { id: 'public' }]
+
+  assert.deepEqual(dataSpaceActions.trainingInputDataSpaces(spaces).map((space) => space.id), ['my-storage', 'public'])
+  assert.deepEqual(dataSpaceActions.trainingInputDataSpaces([{ id: 'my-files' }, { id: 'public' }]).map((space) => space.id), ['my-files', 'public'])
+})

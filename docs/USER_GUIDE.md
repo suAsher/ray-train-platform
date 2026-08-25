@@ -42,8 +42,8 @@
 | 页面中的名称 | 调试 / 训练 Pod 中的路径 | Pod 挂载权限 | Portal 发布 / 写入主体 |
 | --- | --- | --- | --- |
 | 我的工作区 | `/workspace` | 读写 | 本人 |
-| 我的文件 | `/mnt/storage/me/files` | 读写 | 本人 |
-| 我的运行结果 | `/mnt/storage/me/runs` | 读写 | 本人（训练输出只能写这里） |
+| 我的文件 | `/mnt/storage/me` | 读写 | 本人；页面直接浏览个人空间根目录 |
+| 我的运行结果 | `/mnt/storage/me/runs` | 读写 | 本人（训练输出仍由平台固定写入这里） |
 | 团队共享数据 | `/mnt/storage/team` | 始终只读 | TenantAdmin 可在页面上传、覆盖和建目录 |
 | 公共数据 | `/mnt/storage/public` | 始终只读 | SuperAdmin 可在页面发布 |
 | IDC 数据（管理员已登记时） | `/mnt/idc/*` | 只读 | IDC 数据管理员 |
@@ -443,7 +443,7 @@ TOS 是对象存储，经 CSI/FSX 以文件系统语义呈现；目录遍历可�
 工作区内的虚拟环境可复用，但训练镜像不会自动继承调试 Pod 的系统改动。对可复现训练，应将依赖写入镜像并选择相同 digest。
 
 **任务完成后我在哪里看到文件？**
-在“我的数据 → 我的运行结果”，或在新调试环境的 `/mnt/storage/me/runs`。“我的文件”只对应 `/mnt/storage/me/files`，不会混合显示训练结果。平台不提供受治理数据和任务产物的直接下载入口。
+在“我的数据 → 我的文件”打开 `/mnt/storage/me` 后进入 `runs/`，或在新调试环境直接访问 `/mnt/storage/me/runs`。页面直接浏览个人空间根目录，训练结果仍由平台固定写入 `runs/`，既有 `files/` 内容也会继续可见。平台不提供受治理数据和任务产物的直接下载入口。
 
 **修改代码后需要重新构建镜像吗？**
 不需要。镜像只在 CUDA、PyTorch、Ray、系统库或 Python 基础依赖变化时重建。普通 Python/config 修改直接用 `spk-rayjob submit --dir .` 或 `ray job submit --working-dir .`。

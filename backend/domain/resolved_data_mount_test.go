@@ -26,6 +26,22 @@ func TestResolvedDataSpaceMountsAcceptsGovernedInputAndOutput(t *testing.T) {
 	}
 }
 
+func TestResolvedDataSpaceMountsAcceptsTheDirectPersonalStorageRootAsInput(t *testing.T) {
+	mounts := ResolvedDataSpaceMounts{
+		Input: &ResolvedDataMount{
+			Space:        DataSpaceID("my-storage"),
+			BindingSpace: DataSpaceWorkspace,
+			ClaimName:    "data-user-a",
+			SubPath:      "datasets/train-v1",
+			MountPath:    DataMountInputPath,
+			ReadOnly:     true,
+		},
+	}
+	if err := mounts.Validate(); err != nil {
+		t.Fatalf("direct personal storage input was rejected: %v", err)
+	}
+}
+
 func TestResolvedDataSpaceMountsRejectsArbitraryClaimOrOutputPath(t *testing.T) {
 	mounts := ResolvedDataSpaceMounts{
 		Output: &ResolvedDataMount{

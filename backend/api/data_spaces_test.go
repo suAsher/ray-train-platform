@@ -190,6 +190,7 @@ func TestDataSpacesListReportsPrincipalWriteCapabilityWithoutChangingMountSemant
 			roles: []string{domain.RoleEngineer},
 			writable: map[domain.DataSpaceID]bool{
 				domain.DataSpaceWorkspace: true,
+				domain.DataSpaceMyStorage: true,
 				domain.DataSpaceMyFiles:   true,
 				domain.DataSpaceMyRuns:    true,
 			},
@@ -199,6 +200,7 @@ func TestDataSpacesListReportsPrincipalWriteCapabilityWithoutChangingMountSemant
 			roles: []string{domain.RoleTenantAdmin},
 			writable: map[domain.DataSpaceID]bool{
 				domain.DataSpaceWorkspace:  true,
+				domain.DataSpaceMyStorage:  true,
 				domain.DataSpaceMyFiles:    true,
 				domain.DataSpaceMyRuns:     true,
 				domain.DataSpaceTeamShared: true,
@@ -209,6 +211,7 @@ func TestDataSpacesListReportsPrincipalWriteCapabilityWithoutChangingMountSemant
 			roles: []string{domain.RoleSuperAdmin},
 			writable: map[domain.DataSpaceID]bool{
 				domain.DataSpaceWorkspace:  true,
+				domain.DataSpaceMyStorage:  true,
 				domain.DataSpaceMyFiles:    true,
 				domain.DataSpaceMyRuns:     true,
 				domain.DataSpaceTeamShared: true,
@@ -510,6 +513,23 @@ func TestDataSpaceDirectoryRouteUsesCurrentUsersLogicalRoot(t *testing.T) {
 	}
 	if strings.Contains(response.Body.String(), lister.root) || strings.Contains(response.Body.String(), "shanghai-data-transfer") {
 		t.Fatalf("directory response leaked backing storage: %s", response.Body.String())
+	}
+}
+
+func TestPersonalStorageDirectoryRouteUsesThePersonalRootWithoutAHiddenFilesSuffix(t *testing.T) {
+	store := &fakeDataSpaceStore{}
+	lister := &fakeDataSpaceDirectoryLister{page: objectstore.DirectoryPage{Directories: []string{"files", "runs"}}}
+	handler := NewHandler(&fakeJobRepository{}, Options{DataSpaces: store, DirectoryLister: lister})
+	handler.newID = func() (string, error) { return "mine", nil }
+	router := dataSpaceRouter(handler, auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal})
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/data-spaces/my-storage/directories", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if got, want := lister.root, "ray-train/tenants/tenant-a/users/user-a/"; got != want {
+		t.Fatalf("root=%q want=%q", got, want)
 	}
 }
 

@@ -94,7 +94,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { fetchDataSpaceEntries, fetchDataSpaces } from '../api/dataSpaces'
-import { dataSpaceAccessLabel, dataSpaceAccessType } from '../dataSpaceActions'
+import { dataSpaceAccessLabel, dataSpaceAccessType, trainingInputDataSpaces } from '../dataSpaceActions'
 import { dataSpaceReadiness } from '../dataSpaceReadiness'
 import { appendDataSpaceDirectory, parentDataSpaceDirectory, selectedDataSpaceDirectoryLabel } from '../dataSpaceSelection'
 import { session } from '../stores/session'
@@ -124,7 +124,9 @@ const model = computed({
   get: () => ({ spaceId: props.modelValue?.spaceId || props.modelValue?.space || '', relativePath: props.modelValue?.relativePath || '' }),
   set: (value) => emit('update:modelValue', { spaceId: value.spaceId || '', relativePath: value.relativePath || '' }),
 })
-const selectableSpaces = computed(() => spaces.value.filter((space) => props.output ? space.id === 'my-runs' : space.id !== 'workspace' && space.id !== 'my-runs'))
+const selectableSpaces = computed(() => props.output
+  ? spaces.value.filter((space) => space.id === 'my-runs')
+  : trainingInputDataSpaces(spaces.value))
 const selectedSpace = computed(() => spaces.value.find((space) => space.id === model.value.spaceId) || null)
 const isSelected = (space) => model.value.spaceId === space.id
 const accessLabel = (space) => dataSpaceAccessLabel(space, session.value)

@@ -627,7 +627,7 @@ func dataSpaceBindingStatuses(bindings []domain.DataMountBinding) map[domain.Dat
 
 func dataSpaceMountStatus(id domain.DataSpaceID, statuses map[domain.DataSpaceID]domain.DataMountBindingStatus) string {
 	bindingSpace := id
-	if id == domain.DataSpaceMyFiles || id == domain.DataSpaceMyRuns {
+	if id == domain.DataSpaceMyStorage || id == domain.DataSpaceMyFiles || id == domain.DataSpaceMyRuns {
 		bindingSpace = domain.DataSpaceWorkspace
 	}
 	status, ok := statuses[bindingSpace]
