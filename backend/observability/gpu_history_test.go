@@ -63,7 +63,9 @@ func TestJobGPUHistoryEmptyClusterReturnsBoundedEmptyHistoryWithoutRequest(t *te
 }
 
 func TestJobGPUHistoryRejectsUnsafeMetadataWithoutRequest(t *testing.T) {
+	requests := 0
 	client := PrometheusClient{BaseURL: "http://prometheus", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
 		t.Fatalf("unsafe metadata must not query Prometheus: %s", request.URL)
 		return nil, nil
 	})}}
@@ -73,6 +75,7 @@ func TestJobGPUHistoryRejectsUnsafeMetadataWithoutRequest(t *testing.T) {
 		rayClusterName string
 	}{
 		{name: "namespace injection", namespace: `tenant"}`, rayClusterName: "train-cluster"},
+		{name: "namespace injection with empty cluster", namespace: `tenant"}`, rayClusterName: ""},
 		{name: "cluster regex injection", namespace: "tenant-local", rayClusterName: `train.*`},
 	}
 	for _, test := range tests {
@@ -81,6 +84,9 @@ func TestJobGPUHistoryRejectsUnsafeMetadataWithoutRequest(t *testing.T) {
 				t.Fatal("unsafe workload metadata must be rejected")
 			}
 		})
+	}
+	if requests != 0 {
+		t.Fatalf("unsafe metadata made %d Prometheus requests", requests)
 	}
 }
 

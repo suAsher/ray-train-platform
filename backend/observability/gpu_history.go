@@ -85,11 +85,11 @@ func (c *PrometheusClient) QueryJobGPUHistory(ctx context.Context, window, names
 	if err != nil {
 		return GPUHistory{}, err
 	}
-	if rayClusterName == "" {
-		return history, nil
-	}
 	if len(validation.IsDNS1123Label(namespace)) != 0 {
 		return GPUHistory{}, fmt.Errorf("GPU workload namespace is invalid")
+	}
+	if rayClusterName == "" {
+		return history, nil
 	}
 	if len(validation.IsDNS1123Subdomain(rayClusterName)) != 0 {
 		return GPUHistory{}, fmt.Errorf("GPU workload RayCluster name is invalid")
