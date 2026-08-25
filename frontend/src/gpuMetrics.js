@@ -6,6 +6,11 @@ export const GPU_TIME_WINDOWS = Object.freeze([
   Object.freeze({ value: '7d', label: '7 天' }),
 ])
 
+export function jobGPUHistoryPath(jobId, window = '1h') {
+  const selectedWindow = GPU_TIME_WINDOWS.some(({ value }) => value === window) ? window : '1h'
+  return `/api/v1/jobs/${encodeURIComponent(String(jobId ?? ''))}/gpu-metrics?window=${encodeURIComponent(selectedWindow)}`
+}
+
 const METRICS = Object.freeze(['utilizationPercent', 'memoryUsedMib', 'temperatureCelsius', 'powerWatts'])
 const safeText = (value) => typeof value === 'string' ? value.trim() : ''
 const finiteNumber = (value) => Number.isFinite(Number(value)) ? Number(value) : null
@@ -61,8 +66,7 @@ const recentValues = (points, seconds = 60) => {
     .map((point) => point.value)
 }
 
-export function nodeMetricSummary(history, nodeName) {
-  const devices = (history?.devices || []).filter((device) => device.nodeName === nodeName)
+function summarizeDevices(devices) {
   const utilizationByDevice = devices.map((device) => average(recentValues(device.series.utilizationPercent)))
   const utilizationSpread = utilizationByDevice.length
     ? Math.max(...utilizationByDevice) - Math.min(...utilizationByDevice)
@@ -77,6 +81,16 @@ export function nodeMetricSummary(history, nodeName) {
   }
 }
 
+export function nodeMetricSummary(history, nodeName) {
+  const devices = (history?.devices || []).filter((device) => device.nodeName === nodeName)
+  return summarizeDevices(devices)
+}
+
+export function jobMetricSummary(history) {
+  const devices = [...(history?.devices || [])]
+  return { deviceCount: devices.length, ...summarizeDevices(devices) }
+}
+
 export function metricChartSeries(history, nodeName, metric) {
   if (!METRICS.includes(metric)) return []
   return (history?.devices || [])
@@ -85,6 +99,23 @@ export function metricChartSeries(history, nodeName, metric) {
     .map((device) => ({
       id: device.uuid,
       name: `GPU ${device.index}`,
+      data: device.series[metric].map((point) => [point.timestamp, point.value]),
+    }))
+}
+
+export function jobMetricChartSeries(history, metric) {
+  if (!METRICS.includes(metric)) return []
+  return [...(history?.devices || [])]
+    .sort((left, right) => {
+      const nodeComparison = left.nodeName.localeCompare(right.nodeName)
+      if (nodeComparison !== 0) return nodeComparison
+      const indexComparison = Number(left.index) - Number(right.index)
+      if (indexComparison !== 0) return indexComparison
+      return left.uuid.localeCompare(right.uuid)
+    })
+    .map((device) => ({
+      id: device.uuid,
+      name: `${device.nodeName || '未知节点'} / GPU ${device.index}`,
       data: device.series[metric].map((point) => [point.timestamp, point.value]),
     }))
 }
