@@ -15,7 +15,7 @@ func TestJobGPUHistoryScopesEveryMetricQueryToPersistedWorkloadLabels(t *testing
 	client := PrometheusClient{BaseURL: "http://prometheus", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		requests++
 		expression := request.URL.Query().Get("query")
-		expectedSelector := `{exported_namespace="tenant-local",exported_pod=~"train\\.cluster-worker-.*"}`
+		expectedSelector := `{exported_namespace="tenant-local",exported_pod=~"train\\.cluster-.*-worker-.*"}`
 		if !strings.Contains(expression, expectedSelector) {
 			t.Fatalf("job GPU history query was not workload-scoped: %s", expression)
 		}

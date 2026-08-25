@@ -95,7 +95,7 @@ func (c *PrometheusClient) QueryJobGPUHistory(ctx context.Context, window, names
 		return GPUHistory{}, fmt.Errorf("GPU workload RayCluster name is invalid")
 	}
 	selector := fmt.Sprintf(
-		`{exported_namespace="%s",exported_pod=~"%s-worker-.*"}`,
+		`{exported_namespace="%s",exported_pod=~"%s-.*-worker-.*"}`,
 		namespace,
 		strings.ReplaceAll(regexp.QuoteMeta(rayClusterName), `\`, `\\`),
 	)
