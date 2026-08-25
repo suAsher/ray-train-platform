@@ -7,7 +7,82 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestJobGPUHistoryScopesEveryMetricQueryToPersistedWorkloadLabels(t *testing.T) {
+	requests := 0
+	client := PrometheusClient{BaseURL: "http://prometheus", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		expression := request.URL.Query().Get("query")
+		expectedSelector := `{exported_namespace="tenant-local",exported_pod=~"train\\.cluster-worker-.*"}`
+		if !strings.Contains(expression, expectedSelector) {
+			t.Fatalf("job GPU history query was not workload-scoped: %s", expression)
+		}
+		if !strings.Contains(expression, "avg_over_time(") || !strings.Contains(expression, "[1m])") {
+			t.Fatalf("job GPU history query was not smoothed over one minute: %s", expression)
+		}
+		if !strings.HasPrefix(expression, "avg by (UUID, Hostname, gpu, modelName) (") {
+			t.Fatalf("job GPU history query must aggregate by physical GPU: %s", expression)
+		}
+		body := `{"status":"success","data":{"result":[]}}`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+	})}}
+
+	history, err := client.QueryJobGPUHistory(context.Background(), "1h", "tenant-local", "train.cluster")
+	if err != nil {
+		t.Fatalf("query job GPU history: %v", err)
+	}
+	if requests != len(gpuHistoryMetrics) {
+		t.Fatalf("expected one scoped request per GPU metric, got %d", requests)
+	}
+	if history.Window != "1h" || history.StepSeconds != 30 || len(history.Devices) != 0 {
+		t.Fatalf("unexpected history envelope: %+v", history)
+	}
+}
+
+func TestJobGPUHistoryEmptyClusterReturnsBoundedEmptyHistoryWithoutRequest(t *testing.T) {
+	client := PrometheusClient{HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		t.Fatalf("empty RayCluster must not query Prometheus: %s", request.URL)
+		return nil, nil
+	})}}
+
+	history, err := client.QueryJobGPUHistory(context.Background(), "6h", "tenant-local", "")
+	if err != nil {
+		t.Fatalf("query empty job GPU history: %v", err)
+	}
+	if history.Window != "6h" || history.StepSeconds != 60 || !history.EndedAt.After(history.StartedAt) {
+		t.Fatalf("unexpected bounded history envelope: %+v", history)
+	}
+	if history.EndedAt.Sub(history.StartedAt) != 6*time.Hour {
+		t.Fatalf("history duration = %s, want 6h", history.EndedAt.Sub(history.StartedAt))
+	}
+	if history.Devices == nil || len(history.Devices) != 0 {
+		t.Fatalf("empty history devices must be a non-nil empty slice: %#v", history.Devices)
+	}
+}
+
+func TestJobGPUHistoryRejectsUnsafeMetadataWithoutRequest(t *testing.T) {
+	client := PrometheusClient{BaseURL: "http://prometheus", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		t.Fatalf("unsafe metadata must not query Prometheus: %s", request.URL)
+		return nil, nil
+	})}}
+	tests := []struct {
+		name           string
+		namespace      string
+		rayClusterName string
+	}{
+		{name: "namespace injection", namespace: `tenant"}`, rayClusterName: "train-cluster"},
+		{name: "cluster regex injection", namespace: "tenant-local", rayClusterName: `train.*`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := client.QueryJobGPUHistory(context.Background(), "1h", test.namespace, test.rayClusterName); err == nil {
+				t.Fatal("unsafe workload metadata must be rejected")
+			}
+		})
+	}
+}
 
 func TestGPUHistoryUsesBoundedWindowAndJoinsMetricsByUUID(t *testing.T) {
 	requests := 0

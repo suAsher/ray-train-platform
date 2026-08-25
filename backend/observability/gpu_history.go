@@ -3,9 +3,12 @@ package observability
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
+
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 type GPUHistorySeries struct {
@@ -63,12 +66,46 @@ func (c *PrometheusClient) QueryGPUHistory(ctx context.Context, window, nodeName
 	if c == nil || strings.TrimSpace(c.BaseURL) == "" {
 		return GPUHistory{}, fmt.Errorf("Prometheus URL is not configured")
 	}
+	history, spec, err := newGPUHistory(window)
+	if err != nil {
+		return GPUHistory{}, err
+	}
+	selector := ""
+	if nodeName != "" {
+		if !safeGPUNodeLabel(nodeName) {
+			return GPUHistory{}, fmt.Errorf("GPU node name is invalid")
+		}
+		selector = fmt.Sprintf(`{Hostname="%s"}`, nodeName)
+	}
+	return c.queryGPUHistory(ctx, history, spec, selector)
+}
+
+func (c *PrometheusClient) QueryJobGPUHistory(ctx context.Context, window, namespace, rayClusterName string) (GPUHistory, error) {
+	history, spec, err := newGPUHistory(window)
+	if err != nil {
+		return GPUHistory{}, err
+	}
+	if rayClusterName == "" {
+		return history, nil
+	}
+	if len(validation.IsDNS1123Label(namespace)) != 0 {
+		return GPUHistory{}, fmt.Errorf("GPU workload namespace is invalid")
+	}
+	if len(validation.IsDNS1123Subdomain(rayClusterName)) != 0 {
+		return GPUHistory{}, fmt.Errorf("GPU workload RayCluster name is invalid")
+	}
+	selector := fmt.Sprintf(
+		`{exported_namespace="%s",exported_pod=~"%s-worker-.*"}`,
+		namespace,
+		strings.ReplaceAll(regexp.QuoteMeta(rayClusterName), `\`, `\\`),
+	)
+	return c.queryGPUHistory(ctx, history, spec, selector)
+}
+
+func newGPUHistory(window string) (GPUHistory, gpuHistoryWindow, error) {
 	spec, ok := gpuHistoryWindows[window]
 	if !ok {
-		return GPUHistory{}, fmt.Errorf("unsupported GPU history window")
-	}
-	if nodeName != "" && !safeGPUNodeLabel(nodeName) {
-		return GPUHistory{}, fmt.Errorf("GPU node name is invalid")
+		return GPUHistory{}, gpuHistoryWindow{}, fmt.Errorf("unsupported GPU history window")
 	}
 	end := time.Now().UTC()
 	start := end.Add(-spec.duration)
@@ -76,17 +113,21 @@ func (c *PrometheusClient) QueryGPUHistory(ctx context.Context, window, nodeName
 		Window: window, StepSeconds: int(spec.step / time.Second),
 		StartedAt: start, EndedAt: end, Devices: []GPUHistoryDevice{},
 	}
+	return history, spec, nil
+}
+
+func (c *PrometheusClient) queryGPUHistory(ctx context.Context, history GPUHistory, spec gpuHistoryWindow, selector string) (GPUHistory, error) {
+	if c == nil || strings.TrimSpace(c.BaseURL) == "" {
+		return GPUHistory{}, fmt.Errorf("Prometheus URL is not configured")
+	}
 	devices := map[string]*GPUHistoryDevice{}
 	for _, metric := range gpuHistoryMetrics {
-		expression := metric.name
-		if nodeName != "" {
-			expression += fmt.Sprintf(`{Hostname="%s"}`, nodeName)
-		}
+		expression := metric.name + selector
 		// Workload labels (pod/container/namespace) change when a GPU moves
 		// between jobs. Collapse them so one physical GPU remains one continuous
 		// line instead of an arbitrary set of short-lived pod-labelled series.
 		expression = fmt.Sprintf("avg by (UUID, Hostname, gpu, modelName) (avg_over_time(%s[1m]))", expression)
-		series, err := c.queryRangeWithStep(ctx, expression, start, end, spec.step)
+		series, err := c.queryRangeWithStep(ctx, expression, history.StartedAt, history.EndedAt, spec.step)
 		if err != nil {
 			return GPUHistory{}, err
 		}
