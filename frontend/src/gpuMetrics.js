@@ -109,7 +109,15 @@ export function jobMetricChartSeries(history, metric) {
     .sort((left, right) => {
       const nodeComparison = left.nodeName.localeCompare(right.nodeName)
       if (nodeComparison !== 0) return nodeComparison
-      const indexComparison = Number(left.index) - Number(right.index)
+      const leftIndex = safeText(left.index)
+      const rightIndex = safeText(right.index)
+      const leftNumericIndex = Number(leftIndex)
+      const rightNumericIndex = Number(rightIndex)
+      const bothIndexesNumeric = leftIndex !== '' && rightIndex !== ''
+        && Number.isFinite(leftNumericIndex) && Number.isFinite(rightNumericIndex)
+      const indexComparison = bothIndexesNumeric
+        ? leftNumericIndex - rightNumericIndex
+        : leftIndex.localeCompare(rightIndex)
       if (indexComparison !== 0) return indexComparison
       return left.uuid.localeCompare(right.uuid)
     })

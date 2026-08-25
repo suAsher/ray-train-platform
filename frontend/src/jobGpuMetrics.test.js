@@ -85,6 +85,23 @@ test('builds immutable job chart series sorted by node and numeric GPU index', (
   assert.equal(history.devices[2].series.utilizationPercent[0].value, 80)
 })
 
+test('orders non-numeric and numerically equivalent GPU indexes deterministically', () => {
+  const history = gpuMetrics.normalizeGPUHistory({
+    devices: [
+      { uuid: 'GPU-slot-b', nodeName: 'node-a', index: ' slot-b ' },
+      { uuid: 'GPU-z', nodeName: 'node-a', index: '2' },
+      { uuid: 'GPU-a', nodeName: 'node-a', index: '02' },
+      { uuid: 'GPU-slot-a', nodeName: 'node-a', index: 'slot-a' },
+    ],
+  })
+  const original = structuredClone(history)
+
+  const series = gpuMetrics.jobMetricChartSeries(history, 'utilizationPercent')
+
+  assert.deepEqual(series.map(({ id }) => id), ['GPU-a', 'GPU-z', 'GPU-slot-a', 'GPU-slot-b'])
+  assert.deepEqual(history, original)
+})
+
 test('labels GPUs without a node clearly and rejects unsupported metrics', () => {
   const history = gpuMetrics.normalizeGPUHistory({
     devices: [{
