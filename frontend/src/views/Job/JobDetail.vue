@@ -337,6 +337,7 @@ import { canOpenRayDashboard, jobDashboardAccessPath } from '../../jobDashboard'
 import { buildLogStreamCards } from '../../jobLogStreams'
 import { logPagePath, mergeLogEntries, normalizeLogPage } from '../../jobLogPagination'
 import { createSingleFlight, nextLogRequest } from '../../jobLogPolling'
+import { createJobGPUHistoryController } from '../../jobGpuHistoryController'
 import { latestMetric, metricSeries, sparklinePoints } from '../../mlflowExperiment'
 import { cacheQueryForJob } from '../../platformLimits'
 import { equivalentSubmitCommandForJob } from '../../submission'
@@ -363,7 +364,16 @@ const gpuHistory = ref(normalizeGPUHistory(null))
 const gpuHistoryError = ref('')
 const gpuHistoryLoading = ref(false)
 const selectedGPUWindow = ref('1h')
-let gpuRequestGeneration = 0
+const gpuHistoryController = createJobGPUHistoryController({
+  fetchHistory: fetchJobGPUHistory,
+  normalizeHistory: normalizeGPUHistory,
+  onHistory: (history) => { gpuHistory.value = history },
+  onWarning: (warning) => { gpuHistoryError.value = warning },
+  onLoading: (loading) => { gpuHistoryLoading.value = loading },
+  onReset: (history) => { gpuHistory.value = history },
+  setInterval: (callback, milliseconds) => window.setInterval(callback, milliseconds),
+  clearInterval: (timer) => window.clearInterval(timer),
+})
 
 const rawLogs = ref([])
 const logsLoaded = ref(false)
@@ -413,16 +423,20 @@ const gpuFreshnessLabel = computed(() => {
   return `${Math.floor(ageSeconds / 60)} 分钟前`
 })
 const formatGPUDecimal = value => Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 1 })
-const gpuMetricHasSamples = metric => gpuHistory.value.devices.some(device => device.series?.[metric]?.length)
+const gpuCoverageHint = (metric, completeHint) => {
+  const coverage = gpuMetricSummary.value?.coverage?.[metric]
+  if (!coverage || coverage.sampled === coverage.total) return completeHint
+  return `${coverage.sampled}/${coverage.total} 卡有样本`
+}
 const gpuSummaryCards = computed(() => {
   const summary = gpuMetricSummary.value
   if (!summary) return []
   return [
     { label: '已分配 / 已观测 GPU', value: `${jobDetail.value?.total_gpus ?? '—'} / ${summary.deviceCount}`, hint: '任务申请 / Prometheus 发现', tone: 'text-slate-100' },
-    { label: '近 1 分钟平均利用率', value: gpuMetricHasSamples('utilizationPercent') ? `${summary.averageUtilizationPercent}%` : '—', hint: '所有训练 GPU 平均', tone: 'text-emerald-400' },
-    { label: '显存使用量', value: gpuMetricHasSamples('memoryUsedMib') ? `${formatGPUDecimal(summary.totalMemoryUsedMib / 1024)} GiB` : '—', hint: '全部 GPU 最新样本', tone: 'text-cyan-300' },
-    { label: '总功率', value: gpuMetricHasSamples('powerWatts') ? `${summary.totalPowerWatts} W` : '—', hint: '全部 GPU 最新样本', tone: 'text-violet-300' },
-    { label: '最高温度', value: gpuMetricHasSamples('temperatureCelsius') ? `${summary.maximumTemperatureCelsius} °C` : '—', hint: '全部 GPU 最新样本', tone: 'text-amber-300' },
+    { label: '近 1 分钟平均利用率', value: summary.averageUtilizationPercent == null ? '—' : `${summary.averageUtilizationPercent}%`, hint: gpuCoverageHint('utilizationPercent', '所有训练 GPU 平均'), tone: 'text-emerald-400' },
+    { label: '显存使用量', value: summary.totalMemoryUsedMib == null ? '—' : `${formatGPUDecimal(summary.totalMemoryUsedMib / 1024)} GiB`, hint: gpuCoverageHint('memoryUsedMib', '全部 GPU 最新样本'), tone: 'text-cyan-300' },
+    { label: '总功率', value: summary.totalPowerWatts == null ? '—' : `${summary.totalPowerWatts} W`, hint: gpuCoverageHint('powerWatts', '全部 GPU 最新样本'), tone: 'text-violet-300' },
+    { label: '最高温度', value: summary.maximumTemperatureCelsius == null ? '—' : `${summary.maximumTemperatureCelsius} °C`, hint: gpuCoverageHint('temperatureCelsius', '全部 GPU 最新样本'), tone: 'text-amber-300' },
   ]
 })
 const gpuChartSeries = metric => jobMetricChartSeries(gpuHistory.value, metric)
@@ -615,39 +629,6 @@ const fetchDetail = createSingleFlight(async () => {
   experiment.value = experimentResult.status === 'fulfilled' ? experimentResult.value : null
 })
 
-async function refreshGPUHistory() {
-  const requestGeneration = ++gpuRequestGeneration
-  const requestJobId = String(route.params.id)
-  const requestWindow = selectedGPUWindow.value
-  gpuHistoryLoading.value = true
-  try {
-    const payload = await fetchJobGPUHistory(requestJobId, requestWindow)
-    if (
-      requestGeneration !== gpuRequestGeneration ||
-      requestJobId !== String(route.params.id) ||
-      requestWindow !== selectedGPUWindow.value
-    ) return
-    gpuHistory.value = normalizeGPUHistory(payload)
-    gpuHistoryError.value = ''
-  } catch (error) {
-    if (
-      requestGeneration !== gpuRequestGeneration ||
-      requestJobId !== String(route.params.id) ||
-      requestWindow !== selectedGPUWindow.value
-    ) return
-    gpuHistoryError.value = error?.message || 'Prometheus / DCGM GPU 历史暂不可用。'
-  } finally {
-    if (requestGeneration === gpuRequestGeneration) gpuHistoryLoading.value = false
-  }
-}
-
-function resetGPUState() {
-  gpuRequestGeneration += 1
-  gpuHistory.value = normalizeGPUHistory(null)
-  gpuHistoryError.value = ''
-  gpuHistoryLoading.value = false
-}
-
 const cancelJob = async () => {
   try {
     await apiPost(`/api/v1/jobs/${route.params.id}/cancel`, {})
@@ -729,9 +710,8 @@ const gpuSummary = computed(() => {
 let refreshTimer
 let logRefreshTimer
 let clockTimer
-let gpuRefreshTimer
 
-watch(selectedGPUWindow, refreshGPUHistory)
+watch(selectedGPUWindow, (window) => gpuHistoryController.changeWindow(window))
 
 watch(() => route.params.id, (nextJobId, previousJobId) => {
   if (String(nextJobId) === String(previousJobId)) return
@@ -741,30 +721,27 @@ watch(() => route.params.id, (nextJobId, previousJobId) => {
   experiment.value = null
   metricsError.value = ''
   experimentError.value = ''
-  resetGPUState()
   resetLogState()
   fetchDetail()
   refreshLogs()
-  refreshGPUHistory()
+  gpuHistoryController.changeJob(nextJobId)
 })
 
 onMounted(() => {
   fetchDetail()
   refreshLogs()
-  refreshGPUHistory()
+  gpuHistoryController.start(route.params.id, selectedGPUWindow.value)
   refreshTimer = window.setInterval(fetchDetail, 5000)
   logRefreshTimer = window.setInterval(refreshLogs, 5000)
-  gpuRefreshTimer = window.setInterval(refreshGPUHistory, 30000)
   // A running job's elapsed time is measured against now, so the clock has to
   // advance even between detail refreshes.
   clockTimer = window.setInterval(() => { nowTick.value = new Date().toISOString() }, 1000)
 })
 
 onUnmounted(() => {
-  gpuRequestGeneration += 1
+  gpuHistoryController.stop()
   window.clearInterval(refreshTimer)
   window.clearInterval(logRefreshTimer)
   window.clearInterval(clockTimer)
-  window.clearInterval(gpuRefreshTimer)
 })
 </script>

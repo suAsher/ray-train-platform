@@ -65,7 +65,98 @@ test('summarizes every GPU in a multi-node job and detects imbalance', () => {
     maximumTemperatureCelsius: 70,
     utilizationSpread: 70,
     imbalanced: true,
+    coverage: {
+      utilizationPercent: { sampled: 3, total: 3 },
+      memoryUsedMib: { sampled: 3, total: 3 },
+      temperatureCelsius: { sampled: 3, total: 3 },
+      powerWatts: { sampled: 3, total: 3 },
+    },
   })
+})
+
+test('job summary excludes unsampled devices and reports immutable per-metric coverage', () => {
+  const history = gpuMetrics.normalizeGPUHistory({
+    devices: [
+      {
+        uuid: 'GPU-0',
+        series: {
+          utilizationPercent: [{ timestamp: '2026-08-24T12:59:30Z', value: 80 }],
+          memoryUsedMib: [{ timestamp: '2026-08-24T12:59:30Z', value: 4096 }],
+        },
+      },
+      {
+        uuid: 'GPU-1',
+        series: {
+          utilizationPercent: [{ timestamp: '2026-08-24T12:59:30Z', value: 20 }],
+          powerWatts: [{ timestamp: '2026-08-24T12:59:30Z', value: 175 }],
+        },
+      },
+      {
+        uuid: 'GPU-2',
+        series: { temperatureCelsius: [{ timestamp: '2026-08-24T12:59:30Z', value: 67 }] },
+      },
+      { uuid: 'GPU-3' },
+    ],
+  })
+  const original = structuredClone(history)
+
+  const summary = gpuMetrics.jobMetricSummary(history)
+
+  assert.deepEqual(summary, {
+    deviceCount: 4,
+    averageUtilizationPercent: 50,
+    totalMemoryUsedMib: 4096,
+    totalPowerWatts: 175,
+    maximumTemperatureCelsius: 67,
+    utilizationSpread: 60,
+    imbalanced: true,
+    coverage: {
+      utilizationPercent: { sampled: 2, total: 4 },
+      memoryUsedMib: { sampled: 1, total: 4 },
+      temperatureCelsius: { sampled: 1, total: 4 },
+      powerWatts: { sampled: 1, total: 4 },
+    },
+  })
+  assert.deepEqual(history, original)
+  assert.equal(Object.isFrozen(summary.coverage), true)
+  assert.equal(Object.isFrozen(summary.coverage.utilizationPercent), true)
+  assert.throws(() => { summary.coverage.utilizationPercent.sampled = 99 }, TypeError)
+})
+
+test('job summary returns null metrics instead of zero when no GPU has a sample', () => {
+  const summary = gpuMetrics.jobMetricSummary(gpuMetrics.normalizeGPUHistory({
+    devices: [{ uuid: 'GPU-0' }, { uuid: 'GPU-1' }],
+  }))
+
+  assert.deepEqual(summary, {
+    deviceCount: 2,
+    averageUtilizationPercent: null,
+    totalMemoryUsedMib: null,
+    totalPowerWatts: null,
+    maximumTemperatureCelsius: null,
+    utilizationSpread: null,
+    imbalanced: false,
+    coverage: {
+      utilizationPercent: { sampled: 0, total: 2 },
+      memoryUsedMib: { sampled: 0, total: 2 },
+      temperatureCelsius: { sampled: 0, total: 2 },
+      powerWatts: { sampled: 0, total: 2 },
+    },
+  })
+})
+
+test('job utilization imbalance requires samples from at least two GPUs', () => {
+  const summary = gpuMetrics.jobMetricSummary(gpuMetrics.normalizeGPUHistory({
+    devices: [
+      { uuid: 'GPU-0', series: { utilizationPercent: [{ timestamp: '2026-08-24T12:59:30Z', value: 100 }] } },
+      { uuid: 'GPU-1' },
+    ],
+  }))
+
+  assert.equal(summary.averageUtilizationPercent, 100)
+  assert.equal(summary.utilizationSpread, 0)
+  assert.equal(summary.imbalanced, false)
+  assert.deepEqual(summary.coverage.utilizationPercent, { sampled: 1, total: 2 })
 })
 
 test('builds immutable job chart series sorted by node and numeric GPU index', () => {

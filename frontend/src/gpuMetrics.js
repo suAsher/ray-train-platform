@@ -81,6 +81,30 @@ function summarizeDevices(devices) {
   }
 }
 
+function validMetricPoints(device, metric) {
+  if (!Array.isArray(device?.series?.[metric])) return []
+  return device.series[metric].flatMap((point) => {
+    const timestamp = new Date(point?.timestamp || '')
+    const value = finiteNumber(point?.value)
+    if (!Number.isFinite(timestamp.getTime()) || value === null) return []
+    return [{ timestamp: timestamp.toISOString(), value }]
+  })
+}
+
+function sampledMetricSeries(devices, metric) {
+  return devices.flatMap((device) => {
+    const points = validMetricPoints(device, metric)
+    return points.length ? [points] : []
+  })
+}
+
+function metricCoverage(seriesByMetric, total) {
+  return Object.freeze(Object.fromEntries(METRICS.map((metric) => [
+    metric,
+    Object.freeze({ sampled: seriesByMetric[metric].length, total }),
+  ])))
+}
+
 export function nodeMetricSummary(history, nodeName) {
   const devices = (history?.devices || []).filter((device) => device.nodeName === nodeName)
   return summarizeDevices(devices)
@@ -88,7 +112,27 @@ export function nodeMetricSummary(history, nodeName) {
 
 export function jobMetricSummary(history) {
   const devices = [...(history?.devices || [])]
-  return { deviceCount: devices.length, ...summarizeDevices(devices) }
+  const seriesByMetric = Object.fromEntries(METRICS.map((metric) => [metric, sampledMetricSeries(devices, metric)]))
+  const utilizationSeries = seriesByMetric.utilizationPercent
+  const memorySeries = seriesByMetric.memoryUsedMib
+  const powerSeries = seriesByMetric.powerWatts
+  const temperatureSeries = seriesByMetric.temperatureCelsius
+  const utilizationByDevice = utilizationSeries.map((points) => average(recentValues(points)))
+  const utilizationSpread = utilizationByDevice.length
+    ? Math.max(...utilizationByDevice) - Math.min(...utilizationByDevice)
+    : null
+  return {
+    deviceCount: devices.length,
+    averageUtilizationPercent: utilizationByDevice.length ? Math.round(average(utilizationByDevice)) : null,
+    totalMemoryUsedMib: memorySeries.length ? memorySeries.reduce((sum, points) => sum + latest(points), 0) : null,
+    totalPowerWatts: powerSeries.length ? Math.round(powerSeries.reduce((sum, points) => sum + latest(points), 0)) : null,
+    maximumTemperatureCelsius: temperatureSeries.length
+      ? Math.round(Math.max(...temperatureSeries.map((points) => latest(points))))
+      : null,
+    utilizationSpread: utilizationSpread === null ? null : Math.round(utilizationSpread),
+    imbalanced: utilizationByDevice.length > 1 && utilizationSpread >= 30,
+    coverage: metricCoverage(seriesByMetric, devices.length),
+  }
 }
 
 export function metricChartSeries(history, nodeName, metric) {
