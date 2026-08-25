@@ -87,6 +87,52 @@ test('30-second interval callback retries GPU history', async () => {
   assert.equal(state.warnings.at(-1), '')
 })
 
+test('manual and timer refreshes share one pending promise for the same job and window', async () => {
+  const request = deferred()
+  let fetchCount = 0
+  const state = harness(() => {
+    fetchCount += 1
+    return request.promise
+  })
+
+  const initialLoad = state.controller.start('job-a', '1h')
+  const manualRefresh = state.controller.refresh()
+  const timerRefresh = state.scheduled[0].callback()
+
+  assert.equal(fetchCount, 1)
+  assert.strictEqual(manualRefresh, initialLoad)
+  assert.strictEqual(timerRefresh, initialLoad)
+
+  request.resolve({ jobId: 'job-a', window: '1h' })
+  await initialLoad
+})
+
+test('changing key starts a new fetch and an old finalizer cannot clear the new in-flight promise', async () => {
+  const oldRequest = deferred()
+  const newRequest = deferred()
+  const calls = []
+  const state = harness((jobId, window) => {
+    calls.push([jobId, window])
+    return window === '1h' ? oldRequest.promise : newRequest.promise
+  })
+  const oldLoad = state.controller.start('job-a', '1h')
+
+  const newLoad = state.controller.changeWindow('6h')
+
+  assert.deepEqual(calls, [['job-a', '1h'], ['job-a', '6h']])
+  assert.notStrictEqual(newLoad, oldLoad)
+
+  oldRequest.resolve({ jobId: 'job-a', window: '1h' })
+  await oldLoad
+
+  const coalescedNewLoad = state.controller.refresh()
+  assert.strictEqual(coalescedNewLoad, newLoad)
+  assert.equal(calls.length, 2)
+
+  newRequest.resolve({ jobId: 'job-a', window: '6h' })
+  await newLoad
+})
+
 test('window change fetches the selected window immediately', async () => {
   const calls = []
   const state = harness(async (jobId, window) => {

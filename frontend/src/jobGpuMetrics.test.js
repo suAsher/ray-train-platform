@@ -176,13 +176,31 @@ test('builds immutable job chart series sorted by node and numeric GPU index', (
   assert.equal(history.devices[2].series.utilizationPercent[0].value, 80)
 })
 
+test('job chart series omits GPUs without samples for the selected metric', () => {
+  const history = gpuMetrics.normalizeGPUHistory({
+    devices: [{
+      uuid: 'GPU-util-only',
+      nodeName: 'node-a',
+      index: '0',
+      series: {
+        utilizationPercent: [{ timestamp: '2026-08-24T12:59:30Z', value: 75 }],
+      },
+    }],
+  })
+  const original = structuredClone(history)
+
+  assert.equal(gpuMetrics.jobMetricChartSeries(history, 'utilizationPercent').length, 1)
+  assert.deepEqual(gpuMetrics.jobMetricChartSeries(history, 'powerWatts'), [])
+  assert.deepEqual(history, original)
+})
+
 test('orders non-numeric and numerically equivalent GPU indexes deterministically', () => {
   const history = gpuMetrics.normalizeGPUHistory({
     devices: [
-      { uuid: 'GPU-slot-b', nodeName: 'node-a', index: ' slot-b ' },
-      { uuid: 'GPU-z', nodeName: 'node-a', index: '2' },
-      { uuid: 'GPU-a', nodeName: 'node-a', index: '02' },
-      { uuid: 'GPU-slot-a', nodeName: 'node-a', index: 'slot-a' },
+      { uuid: 'GPU-slot-b', nodeName: 'node-a', index: ' slot-b ', series: { utilizationPercent: [{ timestamp: '2026-08-24T12:59:30Z', value: 10 }] } },
+      { uuid: 'GPU-z', nodeName: 'node-a', index: '2', series: { utilizationPercent: [{ timestamp: '2026-08-24T12:59:30Z', value: 20 }] } },
+      { uuid: 'GPU-a', nodeName: 'node-a', index: '02', series: { utilizationPercent: [{ timestamp: '2026-08-24T12:59:30Z', value: 30 }] } },
+      { uuid: 'GPU-slot-a', nodeName: 'node-a', index: 'slot-a', series: { utilizationPercent: [{ timestamp: '2026-08-24T12:59:30Z', value: 40 }] } },
     ],
   })
   const original = structuredClone(history)

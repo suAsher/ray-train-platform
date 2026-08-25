@@ -150,6 +150,7 @@ export function metricChartSeries(history, nodeName, metric) {
 export function jobMetricChartSeries(history, metric) {
   if (!METRICS.includes(metric)) return []
   return [...(history?.devices || [])]
+    .filter((device) => device?.series?.[metric]?.length)
     .sort((left, right) => {
       const nodeComparison = left.nodeName.localeCompare(right.nodeName)
       if (nodeComparison !== 0) return nodeComparison
