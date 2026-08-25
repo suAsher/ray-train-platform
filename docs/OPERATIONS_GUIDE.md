@@ -142,7 +142,7 @@ EBS 用于 PostgreSQL、Prometheus 和 Loki 的本地状态；TOS 用于训练�
 | --- | --- | --- | --- |
 | Pod stdout/stderr | Alloy → Loki | 平台任务详情 | Loki 当前配置 30 天。 |
 | Node/Pod/Kubernetes 指标 | Prometheus Operator | Grafana/平台指标 | 15 天或每副本 45GiB。 |
-| GPU 利用率、显存、温度、功耗 | DCGM exporter → Prometheus | GPU 面板 | 同 Prometheus。 |
+| GPU 利用率、显存、温度、功耗 | DCGM exporter → Prometheus | 后端任务级接口 → Portal；管理员全局显卡物理矩阵 | 同 Prometheus。 |
 | Loss、参数、评估指标 | MLflow ingest → MLflow | 实验中心和 `/mlflow/` | 由 MLflow DB 和 Artifact 存储保持。 |
 | Ray 运行时拓扑 | Ray Dashboard | 任务运行期 Dashboard | RayCluster 回收后不可用。 |
 
@@ -741,6 +741,7 @@ bash ops/observability/loki/30-verify-loki.sh
 ### 8.10 Prometheus/Grafana 或 GPU 指标缺失
 
 ```bash
+kubectl -n <namespace> get rayjobs,rayclusters,pods -o wide
 kubectl -n monitoring get deploy,sts,ds,pod,pvc
 kubectl -n monitoring get servicemonitor,prometheusrule
 kubectl -n kube-system get ds dcgm-exporter -o wide
@@ -748,7 +749,20 @@ kubectl -n kube-system logs ds/dcgm-exporter --tail=200
 bash ops/observability/prometheus-operator/verify.sh
 ```
 
-GPU 指标链路为 `DCGM exporter → ServiceMonitor → Prometheus → Grafana/平台`。训练正常但 GPU 面板为空，通常是监控发现问题，不应重启训练任务。
+任务级 GPU 曲线的完整查询链路是 `DCGM exporter → Prometheus → 后端任务级接口 → Portal`；ServiceMonitor 负责让 Prometheus 发现 DCGM target，但浏览器不直接查询 Prometheus。后端只使用任务记录中已持久化的 `KubernetesNS` 和 `RayClusterName` 构造选择器，并将后者限制为对应的 Worker Pod 前缀。浏览器只能选择白名单时间窗口，不能提供 PromQL、namespace 或 Pod 正则表达式。
+
+Portal 每 30 秒轮询一次，并合并相同请求键（任务 ID + 时间窗口）的并发请求。Prometheus 短暂报错时，页面保留上一次成功结果并提示重试，不把缺失样本显示成零。
+
+任务训练正常但曲线为空时，严格按以下顺序排查：
+
+1. 平台任务记录是否已经观察并持久化对应 RayCluster。
+2. 该 RayCluster 的训练 Worker Pod 是否已经 Running；排队中或 Worker 未启动时无 GPU 样本是正常现象。
+3. Prometheus 中对应 DCGM target 是否为 Up，exporter 是否持续暴露该 Worker GPU 的指标。
+4. 后端查询 Prometheus 是否成功，以及所选时间范围是否仍在 Prometheus 保留期内。
+
+这是只读监控链路。曲线缺失不会改变训练状态、参数、数据、通信或结果；不要通过重启 RayJob、Worker、GPU 驱动或 FSX Agent 修复展示问题，这些操作不能修复查询链路，反而可能中断正常训练。
+
+任务级接口只返回已授权任务的 Worker GPU。管理员的“显卡物理矩阵”仍是独立的全局资源视图，用于查看物理节点和全卡状态；不要把它与任务详情曲线合并，也不要向普通任务提交者开放全局矩阵接口。
 
 ### 8.11 镜像拉取失败
 

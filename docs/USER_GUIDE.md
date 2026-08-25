@@ -172,7 +172,7 @@ python train.py \
 
 任务被 Kueue 准入并创建 RayCluster 后，任务详情会显示“Ray Dashboard”。它通过平台的短时授权和同源代理访问，只允许任务所有者使用；Ray Head 的 8265 端口保持 ClusterIP，不开放 NodePort。
 
-Dashboard 用于查看运行中的 Ray node、task、actor、object store 和资源分配。成功任务终态后，RayCluster 默认在 60 秒内清理并释放 GPU；失败任务默认保留 600 秒原生排障窗口。RayCluster 清理后 Dashboard 随之消失，历史日志、GPU 指标和产物继续从平台查看。因此不要把 Dashboard 当作日志保留系统。
+Dashboard 用于查看运行中的 Ray node、task、actor、object store 和资源分配。成功任务终态后，RayCluster 默认在 60 秒内清理并释放 GPU；失败任务默认保留 600 秒原生排障窗口。RayCluster 清理后 Dashboard 随之消失；历史日志和产物按各自保留策略继续从平台查看，任务 GPU 曲线则仅保留到 Prometheus 保留期结束。因此不要把 Dashboard 当作日志或指标保留系统。
 
 常见日志信号：
 
@@ -186,12 +186,27 @@ Dashboard 用于查看运行中的 Ray node、task、actor、object store 和资
 
 ### 指标与 loss
 
-任务详情页显示任务状态与运行时 Pod；Grafana 用于 GPU 利用率、显存、CPU、网络与节点健康。推荐打开两个窗口：
+任务详情页把业务训练指标和任务级 GPU 指标放在一起。推荐同时查看：
 
 1. Portal 日志页：看训练脚本输出的 `loss`、`lr`、`mAP` 等业务指标。
-2. Grafana：看 GPU 是否真正忙、显存是否增长、是否发生 OOM 或某个 worker 掉线。
+2. **任务详情 → Loss 收敛曲线与指标 → 训练 GPU**：看本任务的 GPU 是否真正忙、显存是否增长，以及某张卡是否掉线或负载异常。
 
 平台不会自动篡改你的学习率、batch size 或模型参数。基于日志做判断，修改 config/命令后创建新任务，旧任务和 checkpoint 保持可追溯。
+
+### 任务 GPU 曲线
+
+在 **我的训练任务 → 任务详情 → Loss 收敛曲线与指标 → 训练 GPU** 中，可以查看该任务 Worker 实际使用的每张 GPU。页面提供 **15 分钟、1 小时、6 小时、24 小时、7 天** 五个时间窗口，每 30 秒刷新一次：
+
+- **利用率**：近 1 分钟平均计算利用率，可判断 GPU 是否持续工作或频繁等待。
+- **显存使用量**：观察显存压力、不同卡之间的差异和 OOM 风险。
+- **功率**：低功率通常可辅助判断计算停顿、数据等待或通信等待。
+- **温度**：持续高温可能伴随降频，需要结合功率和利用率判断。
+
+普通提交者只能查看自己任务的 GPU 曲线；TenantAdmin 可以查看本团队任务；SuperAdmin 可以查看所有团队任务。同一团队中不是任务所有者、TenantAdmin 或 SuperAdmin 的普通成员，不能读取另一位用户的 GPU 遥测。
+
+任务排队中、训练 Worker 尚未启动、Prometheus/DCGM 暂不可用，或所选时间范围已经超过 Prometheus 保留期时，页面会显示无数据状态，不会用 `0` 冒充缺失样本。只有部分 GPU 或部分指标有样本时，汇总卡片会按“有样本卡数/总卡数”（sampled/total，例如 `3/4 卡有样本`）显示覆盖率；缺失的卡不参与求和、平均值或最大值，也不按零计算。
+
+任务结束并清理 RayCluster/Pod 后，只要样本仍在 Prometheus 保留期内，曲线仍可查询；这与 RayCluster 或 Pod 的生命周期无关。Prometheus 保留期结束后历史曲线即为空，不会由平台另行长期保存。曲线只用于诊断计算负载、数据读取和卡间通信，不会修改训练参数、调度训练进程或改变训练结果。
 
 ### MLflow 实验中心与原生管理界面
 
