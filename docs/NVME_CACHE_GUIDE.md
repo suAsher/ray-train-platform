@@ -19,7 +19,7 @@
 
 ## 2. 当前生产状态
 
-截至 2026-08-24，集群中的实际状态为：
+截至 2026-08-25，集群中的实际状态为：
 
 | 项目 | 当前值 |
 | --- | --- |
@@ -208,71 +208,46 @@ ray job submit \
 
 不要把 10 TB 公共数据全量复制到每个任务。应只预热当前实验真正使用的版本、场景或 shard。
 
-下面的 Python 示例具有三个行为：
+平台交付了一份可直接放进用户代码仓库的完整脚本：
 
-- 没有启用缓存时直接返回持久数据路径；
+[`examples/dataset-cache/stage_dataset.py`](../examples/dataset-cache/stage_dataset.py)
+
+把该文件保存为自己仓库的 `tools/stage_dataset.py`。它具有三个行为：
+
+- 没有启用缓存时直接返回原 `PLATFORM_DATASET_PATH`；
 - 每个 Worker Pod 只让 `LOCAL_RANK=0` 复制一次；
-- 同一节点的其他 GPU rank 等待 `.ready` 标记后再读取。
+- 同一 Worker 的其他 GPU rank 等待原子 `.ready` 标记后再读取。
 
-```python
-import os
-import shutil
-import time
-from pathlib import Path
+入口命令先执行脚本，再导出脚本返回的真实数据根：
 
-
-def stage_dataset(relative_path: str, timeout_seconds: int = 3600) -> Path:
-    relative = Path(relative_path)
-    if relative.is_absolute() or not relative.parts or any(
-        part in {"", ".", ".."} for part in relative.parts
-    ):
-        raise ValueError("dataset path must be a safe non-empty relative path")
-
-    source_root = Path(os.environ["PLATFORM_DATASET_PATH"]).resolve()
-    source = (source_root / relative).resolve()
-    source.relative_to(source_root)
-    if not source.is_dir():
-        raise FileNotFoundError(source)
-
-    cache_root = os.environ.get("PLATFORM_CACHE_PATH", "").strip()
-    if not cache_root:
-        return source
-
-    cache_dataset_root = (Path(cache_root) / "datasets").resolve()
-    destination = (cache_dataset_root / relative).resolve()
-    destination.relative_to(cache_dataset_root)
-    ready = destination.parent / f".{destination.name}.ready"
-    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-
-    if local_rank == 0 and not ready.exists():
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        temporary = destination.parent / f".{destination.name}.tmp-{os.getpid()}"
-        if temporary.exists():
-            shutil.rmtree(temporary)
-        if destination.exists():
-            shutil.rmtree(destination)
-
-        shutil.copytree(source, temporary)
-        temporary.rename(destination)
-        ready.write_text("ready\n", encoding="utf-8")
-
-    deadline = time.monotonic() + timeout_seconds
-    while not ready.exists():
-        if time.monotonic() >= deadline:
-            raise TimeoutError(f"cache warmup timed out: {destination}")
-        time.sleep(1)
-
-    return destination
+```bash
+PLATFORM_DATASET_PATH="$(python3 tools/stage_dataset.py)"
+export PLATFORM_DATASET_PATH
+python3 tools/train.py --data-root "$PLATFORM_DATASET_PATH"
 ```
 
-在初始化数据集前使用：
+`.spk-rayjob.yaml` 的关键配置：
 
-```python
-dataset_root = stage_dataset("bevfusion/fz-3dod-v1")
-print(f"effective dataset root: {dataset_root}", flush=True)
+```yaml
+entrypoint: >-
+  PLATFORM_DATASET_PATH="$(python3 tools/stage_dataset.py)";
+  export PLATFORM_DATASET_PATH;
+  python3 tools/train.py --data-root "$PLATFORM_DATASET_PATH"
+cache:
+  mode: runtime
+  size: 100Gi
+input:
+  space: public
+  path: <本次训练精确使用的数据集版本或 shard>
 ```
 
-如果程序自行初始化 `torch.distributed`，还可以在预热完成后增加一次全局 barrier，确保所有节点都完成本地复制后再开始第一轮训练。
+脚本会复制整个“任务选中的输入根”。因此 `input.path` 绝不能留空后指向 10 TB 的
+`public` 根；必须在页面或配置中选择本次训练真正使用的最小只读目录。所选目录实际容量
+必须小于每个 Worker 的缓存容量，并留出 Ray 临时目录和 object spilling 空间。
+
+如果程序自行初始化 `torch.distributed`，脚本的本地 `.ready` 只负责同一 Worker 内同步；
+所有 Worker 都进入训练后，DDP 初始化本身会形成全局同步。自定义启动器也可以在预热后
+增加一次全局 barrier。
 
 ### 6.3 适合放入缓存的内容
 
@@ -307,6 +282,22 @@ print(f"effective dataset root: {dataset_root}", flush=True)
 但目录创建后，Linux 文件系统不会阻止任务实际写入超过所选容量。用户代码必须遵守所选容量；平台通过受控并发、磁盘水位和告警保护节点，而不是依赖目录硬配额。
 
 如未来必须实现严格容量隔离，需要在维护窗口迁移到经过验证的 Local CSI/LVM、XFS project quota 或其他具有真实限额能力的方案，不能把当前 PVC request 当成硬限制。
+
+### 7.1 两块 3.5 TB 是否够用
+
+2026-08-25 实测每台 GPU 节点的 `/data1`、`/data2` 各可用约 3.587 TB，合计约
+7.174 TB（约 6.52 TiB）。两台节点总计约 14.35 TB，但本地盘不共享：
+
+- 同一份 10 TB 数据如果每个 Worker 都需要完整副本，单节点放不下；
+- 如果数据可以按节点稳定分片，10 TB 约为每节点 5 TB，容量上可行，但必须保留至少
+  15% 水位并考虑临时文件；
+- 当前平台单个 Head/Worker 只允许申请到 500Gi，因此现阶段定位是“实验热点子集缓存”，
+  不是全量 `public` 镜像；
+- 新增 GPU 节点只增加本地总容量，不会让一个 Worker 自动看到其他节点的缓存。
+
+因此两块盘足够缓存多数单次实验的热点数据和 Ray 临时文件，但不足以在每台节点复制
+一份约 10 TB 的全量数据。全量缓存需要第二阶段的数据集分片、manifest、断点预热和
+跨任务复用能力。
 
 ## 8. 如何验证是否真正使用 NVMe
 
@@ -343,7 +334,8 @@ Head 和 Worker 模板中应包含：
 - `storageClassName: ray-cache-local`；
 - `/mnt/cache` volumeMount；
 - `PLATFORM_CACHE_PATH=/mnt/cache`；
-- Ray `temp-dir` 和 `object-spilling-config` 指向 `/mnt/cache`。
+- Ray `temp-dir` 指向 `/mnt/cache/ray`，支持 Ray 2.35 的
+  `RAY_object_spilling_config` 环境变量指向 `/mnt/cache/ray-spill/objects`。
 
 Submitter 模板不应包含这些字段。
 
@@ -365,6 +357,34 @@ Submitter 模板不应包含这些字段。
 - 总训练 wall time。
 
 runtime 缓存不会跨任务复用。若训练只有一个很短的 epoch，预热成本可能高于收益；多 epoch、重复读取、小文件密集或数据加载明显让 GPU 空转的任务更可能获益。
+
+### 9.1 已验证结果
+
+读取基准固定为 2 个 Worker、8,192 个文件、5.20 GB：
+
+| 路径 | 吞吐 | files/s | 单文件 P95 |
+| --- | ---: | ---: | ---: |
+| 持久数据首次读 | 19.140 MiB/s | 31.618 | 约 146 ms |
+| 持久数据重复读 | 114.849 MiB/s | 189.727 | 约 15 ms |
+| NVMe 预热后读 | 5,625.340 MiB/s | 9,292.892 | 约 1.8 ms |
+
+NVMe 预热本身耗时 223.146 秒。紧接预热后的本地读取同时受 NVMe 和 Linux 页缓存影响，
+所以这是“任务真实热路径”而不是裸盘测速。
+
+BEVFusion smoke-128 的 2×8 训练也按同一代码、镜像和参数完成 A/B：
+
+| 指标 | 缓存关闭 | NVMe 数据预热 |
+| --- | ---: | ---: |
+| 任务 | `job-c3427242dc13857bfd225968` | `job-171387b7aed9cbe613b4616f` |
+| 预热 | 无 | 963 文件、961.6 MB、48.9 秒/Worker |
+| 第一步 `data_time` | 3.735 s | 2.398 s |
+| 后 5 步平均 `data_time` | 0.0062 s | 0.0036 s |
+| 后 5 步平均 `time` | 0.2606 s | 0.1690 s |
+| 结果 | SUCCEEDED | SUCCEEDED |
+
+这项 smoke 只有 6 个 iteration，只证明数据根确实切换到 NVMe、DDP/训练/验证/结果链路
+正常，不能把后 5 步的百分比直接当作全量训练 SLA。计入 48.9 秒预热后，短任务总墙钟
+更慢。正式收益必须按 300～500 个稳态 iteration 或完整多个 epoch 测量。
 
 ## 10. 管理员部署与验收
 

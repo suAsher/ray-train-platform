@@ -1,5 +1,5 @@
 name: public-data-io-benchmark
-image: harbor.wellspiking.ai/guofeng.su/bevfusion@sha256:cbc23478ca97290428bae1e1a3dba49776fa4e7f4ada851c173223278fd49e47
+image: harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion@sha256:66b906d062870131121b07e4455783dc5f2913e285b29fdbb2cf1decc100f553
 entrypoint: >-
   python3 benchmark.py
   --path cnfzhjyg

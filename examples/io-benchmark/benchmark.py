@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import statistics
 import time
 from datetime import datetime, timezone
@@ -139,6 +140,43 @@ def read_pass(files: Iterable[Path], chunk_size: int = DEFAULT_CHUNK_SIZE) -> Di
     }
 
 
+def stage_files(
+    source_root: Path,
+    files: Sequence[Path],
+    cache_root: Path,
+) -> Tuple[List[Path], Dict[str, Any]]:
+    """Copy a selected manifest to the task-local cache, preserving paths."""
+    resolved_source = source_root.resolve()
+    resolved_cache = cache_root.resolve()
+    destination_root = resolved_cache / "io-benchmark-data"
+    staged: List[Path] = []
+    total_bytes = 0
+    started = time.perf_counter()
+
+    for source in files:
+        resolved_file = source.resolve()
+        try:
+            relative = resolved_file.relative_to(resolved_source)
+        except ValueError as error:
+            raise ValueError("staged file must stay inside source root") from error
+        destination = destination_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_name(f".{destination.name}.tmp-{os.getpid()}")
+        shutil.copyfile(resolved_file, temporary)
+        temporary.replace(destination)
+        staged = [*staged, destination]
+        total_bytes += destination.stat().st_size
+
+    elapsed = max(time.perf_counter() - started, 1e-9)
+    return staged, {
+        "files": len(staged),
+        "bytes": total_bytes,
+        "seconds": round(elapsed, 6),
+        "mib_per_second": round(total_bytes / elapsed / MIB, 3),
+        "files_per_second": round(len(staged) / elapsed, 3),
+    }
+
+
 def aggregate_report(
     workers: Sequence[Dict[str, Any]],
     dataset_path: str,
@@ -164,7 +202,21 @@ def aggregate_report(
             },
         ]
 
-    return {
+    cache_stages = [worker["cache_stage"] for worker in workers if worker.get("cache_stage")]
+    cache_stage = None
+    if cache_stages:
+        stage_wall_seconds = max(float(item["seconds"]) for item in cache_stages)
+        stage_bytes = sum(int(item["bytes"]) for item in cache_stages)
+        stage_files = sum(int(item["files"]) for item in cache_stages)
+        cache_stage = {
+            "files": stage_files,
+            "bytes": stage_bytes,
+            "wall_seconds": stage_wall_seconds,
+            "aggregate_mib_per_second": round(stage_bytes / max(stage_wall_seconds, 1e-9) / MIB, 3),
+            "aggregate_files_per_second": round(stage_files / max(stage_wall_seconds, 1e-9), 3),
+        }
+
+    report = {
         "schema_version": 1,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "dataset_path": dataset_path,
@@ -192,6 +244,9 @@ def aggregate_report(
             "scope": "结果仅代表本次所选文件组合、并发度和运行时集群状态。",
         },
     }
+    if cache_stage is not None:
+        report = {**report, "cache_stage": cache_stage}
+    return report
 
 
 def resolve_dataset_path(root: Path, relative_path: str) -> Path:
@@ -218,6 +273,11 @@ def parse_args() -> argparse.Namespace:
         help="target maximum selected bytes per worker",
     )
     parser.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE)
+    parser.add_argument(
+        "--stage-to-cache",
+        action="store_true",
+        help="copy each worker's selected files to PLATFORM_CACHE_PATH before measuring reads",
+    )
     parser.add_argument("--output", default="", help="JSON output path; defaults below PLATFORM_OUTPUT_PATH")
     return parser.parse_args()
 
@@ -299,13 +359,32 @@ def main() -> int:
         max_bytes=args.max_bytes_per_worker,
     )
     require_nonempty_partition(assigned, rank=rank, max_bytes=args.max_bytes_per_worker)
+    cache_stage = None
+    effective_files = assigned
+    if args.stage_to_cache:
+        cache_path = os.environ.get("PLATFORM_CACHE_PATH", "").strip()
+        if not cache_path:
+            raise RuntimeError("--stage-to-cache requires PLATFORM_CACHE_PATH; submit with runtime cache enabled")
+        print(
+            f"RAYTRAIN_IO_PHASE=cache-stage rank={rank} files={len(assigned)} cache={cache_path}",
+            flush=True,
+        )
+        effective_files, cache_stage = stage_files(
+            source_root=dataset_path,
+            files=assigned,
+            cache_root=Path(cache_path),
+        )
+        print(
+            "RAYTRAIN_IO_CACHE_STAGE=" + json.dumps(cache_stage, ensure_ascii=False),
+            flush=True,
+        )
     passes: List[Dict[str, Any]] = []
     for pass_index in range(args.passes):
         print(
             f"RAYTRAIN_IO_PHASE=read rank={rank} pass={pass_index + 1}/{args.passes} files={len(assigned)}",
             flush=True,
         )
-        passes = [*passes, read_pass(assigned, chunk_size=args.chunk_size)]
+        passes = [*passes, read_pass(effective_files, chunk_size=args.chunk_size)]
     worker_result = {
         "rank": rank,
         "metadata_seconds": manifest["metadata_seconds"],
@@ -313,6 +392,8 @@ def main() -> int:
         "assigned_bytes": sum(path.stat().st_size for path in assigned),
         "passes": passes,
     }
+    if cache_stage is not None:
+        worker_result = {**worker_result, "cache_stage": cache_stage}
     print("RAYTRAIN_IO_WORKER=" + json.dumps(worker_result, ensure_ascii=False), flush=True)
 
     gathered = gather_worker_results(worker_result, rank, world_size, distributed)

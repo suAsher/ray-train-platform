@@ -101,6 +101,45 @@ class DatasetBenchmarkTest(unittest.TestCase):
             self.assertGreater(result["mib_per_second"], 0)
             self.assertGreaterEqual(result["latency_ms_p95"], result["latency_ms_p50"])
 
+    def test_stage_files_copies_only_selected_relative_paths(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            source = base / "source"
+            cache = base / "cache"
+            source.mkdir()
+            (source / "nested").mkdir()
+            first = source / "first.bin"
+            second = source / "nested" / "second.bin"
+            first.write_bytes(b"a" * 16)
+            second.write_bytes(b"b" * 32)
+
+            staged, metrics = benchmark.stage_files(
+                source_root=source,
+                files=[first, second],
+                cache_root=cache,
+            )
+
+            self.assertEqual(
+                [path.relative_to(cache.resolve()).as_posix() for path in staged],
+                ["io-benchmark-data/first.bin", "io-benchmark-data/nested/second.bin"],
+            )
+            self.assertEqual([path.read_bytes() for path in staged], [b"a" * 16, b"b" * 32])
+            self.assertEqual(metrics["files"], 2)
+            self.assertEqual(metrics["bytes"], 48)
+            self.assertGreater(metrics["seconds"], 0)
+
+    def test_stage_files_rejects_source_escape(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            source = base / "source"
+            cache = base / "cache"
+            source.mkdir()
+            outside = base / "outside.bin"
+            outside.write_bytes(b"outside")
+
+            with self.assertRaisesRegex(ValueError, "must stay inside source root"):
+                benchmark.stage_files(source_root=source, files=[outside], cache_root=cache)
+
     def test_aggregate_sums_throughput_and_hides_node_names(self):
         workers = [
             {"rank": 0, "metadata_seconds": 2.0, "passes": [{"files": 1, "bytes": 100 * 1024 * 1024, "seconds": 4.0}]},
@@ -120,6 +159,34 @@ class DatasetBenchmarkTest(unittest.TestCase):
         self.assertEqual(report["passes"][0]["wall_seconds"], 5.0)
         self.assertAlmostEqual(report["passes"][0]["aggregate_mib_per_second"], 80.0)
         self.assertNotIn("hostname", json.dumps(report))
+
+    def test_aggregate_includes_cache_stage_wall_rate(self):
+        workers = [
+            {
+                "rank": 0,
+                "metadata_seconds": 1.0,
+                "passes": [],
+                "cache_stage": {"files": 2, "bytes": 100 * 1024 * 1024, "seconds": 4.0},
+            },
+            {
+                "rank": 1,
+                "metadata_seconds": 1.0,
+                "passes": [],
+                "cache_stage": {"files": 3, "bytes": 300 * 1024 * 1024, "seconds": 5.0},
+            },
+        ]
+
+        report = benchmark.aggregate_report(
+            workers=workers,
+            dataset_path="/mnt/data/input",
+            selected_files=5,
+            selected_bytes=400 * 1024 * 1024,
+        )
+
+        self.assertEqual(report["cache_stage"]["files"], 5)
+        self.assertEqual(report["cache_stage"]["bytes"], 400 * 1024 * 1024)
+        self.assertEqual(report["cache_stage"]["wall_seconds"], 5.0)
+        self.assertAlmostEqual(report["cache_stage"]["aggregate_mib_per_second"], 80.0)
 
 
 if __name__ == "__main__":

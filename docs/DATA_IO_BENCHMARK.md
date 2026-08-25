@@ -65,7 +65,60 @@ spk-rayjob submit \
 
 文件清单由 rank 0 生成，用时 1.850 秒。第 1 次读取不宣称为严格冷缓存；第 2 次读取会同时受到 Linux 页缓存、FSX 客户端缓存和对象存储侧缓存影响，因此不能直接称作“NVMe 命中率”。这组数字适合作为当前小文件训练负载的基线，后续启用节点 NVMe 缓存时应使用完全相同的目录、文件数量、字节上限、镜像 digest 和并发度重测。
 
-## 4. 对外展示口径
+## 4. 2026-08-25 TOS/FSX 与 NVMe 对照
+
+本次使用同一公共目录 `cnfzhjyg`、同一镜像 digest、2 个 Worker、8,192 个文件和
+5,199,813,050 字节完成顺序 A/B。测试没有执行宿主机 `drop_caches`，因此“首次读”是
+业务可复现口径，不是实验室意义上的裸盘冷缓存。
+
+| 指标 | 持久数据首次读 | 持久数据同 Pod 重复读 | NVMe 预热后第 1 次读 |
+| --- | ---: | ---: | ---: |
+| 聚合吞吐 | 19.140 MiB/s | 114.849 MiB/s | 5,625.340 MiB/s |
+| 聚合文件速率 | 31.618 files/s | 189.727 files/s | 9,292.892 files/s |
+| 最慢 Worker 用时 | 259.093 s | 43.178 s | 0.882 s |
+| 单文件 P95 | 约 146 ms | 约 15 ms | 约 1.8 ms |
+
+NVMe 组在读取前还发生了一次不能忽略的预热：5.20 GB、8,192 个文件共用时
+223.146 秒，聚合源到缓存吞吐为 22.223 MiB/s。以这组数据估算，只读取一遍时预热没有
+收益；同一数据在一个任务内重复读取约两遍后才接近回本，epoch 更多、小文件更密集或
+远端读取长尾更严重时收益才会继续扩大。
+
+对应任务：
+
+- 缓存关闭：`job-d7489711966bad0f742871c9`；
+- NVMe 预热：`job-bd7827af5a33faa9ec07ec4a`。
+
+## 5. 标准 A/B 命令
+
+先执行缓存关闭组：
+
+```bash
+cd examples/io-benchmark
+RUN_ID="$(date +%Y%m%d-%H%M%S)"
+spk-rayjob submit \
+  --name "public-io-off-${RUN_ID}" \
+  --cache-mode off \
+  --output-path "benchmarks/public-io-off-${RUN_ID}" \
+  --watch
+```
+
+待任务结束并释放 Worker 后，再执行缓存组：
+
+```bash
+RUN_ID="$(date +%Y%m%d-%H%M%S)"
+spk-rayjob submit \
+  --name "public-io-nvme-${RUN_ID}" \
+  --entrypoint 'python3 benchmark.py --path cnfzhjyg --passes 2 --max-files 8192 --max-bytes-per-worker 8589934592 --stage-to-cache' \
+  --cache-mode runtime \
+  --cache-size 100Gi \
+  --output-path "benchmarks/public-io-nvme-${RUN_ID}" \
+  --watch
+```
+
+两次任务日志都必须保存 `RAYTRAIN_IO_BENCHMARK_JSON=`。缓存组还必须保存
+`RAYTRAIN_IO_CACHE_STAGE=`，否则不能计算预热成本和回本点。
+
+## 6. 对外展示口径
 
 展示性能时至少同时说明：
 
@@ -77,7 +130,7 @@ spk-rayjob submit \
 
 不要只展示最高 MiB/s。训练数据包含大量图片和点云小文件时，`files/s` 与单文件 P95 延迟通常比大文件顺序吞吐更能解释 DataLoader 是否会等待。
 
-## 5. FSX Agent 与慢挂载排查
+## 7. FSX Agent 与慢挂载排查
 
 FSX Agent 是 FSX CSI 在每个节点上的用户态数据客户端。Kubelet 请求挂载 TOS/FSX 卷时，CSI Node 组件通过它完成身份获取、FUSE 客户端启动、健康检查和卸载；它不是业务 Pod，也不保存用户训练代码。
 

@@ -34,6 +34,27 @@ spk-rayjob submit \
 
 任务结束后，控制台日志中搜索 `RAYTRAIN_IO_BENCHMARK_JSON=`。完整 JSON 同时写入该任务个人结果目录下的 `io-benchmark.json`。
 
+## NVMe 预热对照
+
+缓存组必须保持目录、文件数、字节上限、镜像和 Worker 数与基线一致，只增加
+`--stage-to-cache` 和 runtime 缓存参数：
+
+```bash
+RUN_ID="$(date +%Y%m%d-%H%M%S)"
+spk-rayjob submit \
+  --name "public-io-nvme-${RUN_ID}" \
+  --entrypoint 'python3 benchmark.py --path cnfzhjyg --passes 2 --max-files 8192 --max-bytes-per-worker 8589934592 --stage-to-cache' \
+  --cache-mode runtime \
+  --cache-size 100Gi \
+  --output-path "benchmarks/public-io-nvme-${RUN_ID}" \
+  --watch
+```
+
+缓存组会先把每个 Worker 分到的只读文件复制到自己的 `/mnt/cache`，单独记录
+`cache_stage` 的文件数、字节数、耗时和源到缓存吞吐，然后才从本地路径执行两次读取。
+不能省略预热耗时，也不能把紧接预热后的第一次本地读取称为“裸盘冷读”，因为 Linux
+页缓存也会参与。
+
 ## 指标口径
 
 | 指标 | 含义 |

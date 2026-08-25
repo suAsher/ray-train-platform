@@ -340,7 +340,6 @@ func positiveCacheQuantity(value string) (resource.Quantity, error) {
 
 func configureRayCache(rayStartParams map[string]any, cache LocalCacheOptions) {
 	rayStartParams["temp-dir"] = path.Join(cache.MountPath, "ray")
-	rayStartParams["object-spilling-config"] = rayObjectSpillingConfig(path.Join(cache.MountPath, "ray-spill", "objects"))
 }
 
 func rayObjectSpillingConfig(directory string) string {
@@ -486,7 +485,14 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 	}
 	if mountData && options.LocalCache.runtime {
 		volumeMounts, volumes = appendLocalCache(volumeMounts, volumes, options.LocalCache)
-		env = append(env, map[string]any{"name": "PLATFORM_CACHE_PATH", "value": options.LocalCache.MountPath})
+		env = append(
+			env,
+			map[string]any{"name": "PLATFORM_CACHE_PATH", "value": options.LocalCache.MountPath},
+			map[string]any{
+				"name":  "RAY_object_spilling_config",
+				"value": rayObjectSpillingConfig(path.Join(options.LocalCache.MountPath, "ray-spill", "objects")),
+			},
+		)
 	}
 	podSpec := map[string]any{
 		"serviceAccountName":           options.ServiceAccount,

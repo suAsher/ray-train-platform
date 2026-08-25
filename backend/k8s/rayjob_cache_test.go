@@ -30,14 +30,26 @@ func TestRenderRayJobAddsGenericEphemeralCacheOnlyWhenConfigured(t *testing.T) {
 	}
 
 	headStart, _, _ := nestedMap(manifest.Object, "spec", "rayClusterSpec", "headGroupSpec", "rayStartParams")
-	if headStart["temp-dir"] != "/mnt/cache/ray" || !strings.Contains(headStart["object-spilling-config"].(string), "/mnt/cache/ray-spill") {
+	if headStart["temp-dir"] != "/mnt/cache/ray" {
 		t.Fatalf("head must keep Ray session and spills on cache: %#v", headStart)
+	}
+	if _, exists := headStart["object-spilling-config"]; exists {
+		t.Fatalf("Ray 2.35 does not accept --object-spilling-config: %#v", headStart)
 	}
 	workers, _, _ := nestedSlice(manifest.Object, "spec", "rayClusterSpec", "workerGroupSpecs")
 	worker := workers[0].(map[string]any)
 	workerStart, _ := worker["rayStartParams"].(map[string]any)
-	if workerStart["temp-dir"] != "/mnt/cache/ray" || !strings.Contains(workerStart["object-spilling-config"].(string), "/mnt/cache/ray-spill") {
+	if workerStart["temp-dir"] != "/mnt/cache/ray" {
 		t.Fatalf("worker must keep Ray session and spills on cache: %#v", workerStart)
+	}
+	if _, exists := workerStart["object-spilling-config"]; exists {
+		t.Fatalf("Ray 2.35 does not accept --object-spilling-config: %#v", workerStart)
+	}
+	for name, podSpec := range map[string]map[string]any{"head": headSpec, "worker": workerSpec} {
+		spilling := podEnvironment(podSpec)["RAY_object_spilling_config"]
+		if !strings.Contains(spilling, "/mnt/cache/ray-spill/objects") {
+			t.Fatalf("%s must configure object spilling through the Ray-supported environment variable: %q", name, spilling)
+		}
 	}
 }
 
