@@ -413,7 +413,7 @@ python train.py \
 - [ ] 输入空间与子目录正确；训练脚本读取 `PLATFORM_DATASET_PATH`。
 - [ ] 训练结果与 checkpoint 写入 `PLATFORM_OUTPUT_PATH`。
 - [ ] 先用 1 GPU、最小 batch 跑通一个 step，再扩大到多卡/多节点。
-- [ ] 观察 stdout loss 与 Grafana GPU 曲线，确认每张卡都在工作。
+- [ ] 观察 stdout loss，并在 **我的训练任务 → 任务详情 → Loss 收敛曲线与指标 → 训练 GPU** 查看任务级曲线，确认每张卡都在工作。
 - [ ] 调试 Workspace 用完已停止。
 
 ## 常见问题
