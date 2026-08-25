@@ -17,6 +17,7 @@
 | BEVFusion 两个分支的逐文件补丁 | [BEVFusion 代码改造](BEVFUSION_CODE_CHANGES.md) |
 | BEVFusion 实际验收流程与结果 | [BEVFusion 交付手册](BEVFUSION_RUNBOOK.md) |
 | 输入路径关系、双节点读取性能与 FSX 排障 | [数据路径与读取性能基准](DATA_IO_BENCHMARK.md) |
+| 单机/多机训练速度对比、瓶颈定位与标准 A/B | [训练性能诊断指南](TRAINING_PERFORMANCE_DIAGNOSIS.md) |
 
 ## 管理员与运维文档
 

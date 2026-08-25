@@ -83,7 +83,7 @@
       <div class="p-4 bg-slate-950/80 rounded-xl border border-slate-800 text-xs font-mono space-y-2 text-slate-300">
         <div>Jupyter 和 VS Code 均连接 GPU Worker；Ray Head 不提供交互入口。</div>
         <template v-if="storageReady">
-          <div>个人工作区: <span class="text-emerald-300">/workspace</span>（可写） · 个人文件: <span class="text-emerald-300">/mnt/storage/me</span>（可写）</div>
+          <div>个人工作区: <span class="text-emerald-300">/workspace</span>（可写） · 个人文件: <span class="text-emerald-300">/mnt/storage/me/files</span>（可写） · 训练结果: <span class="text-emerald-300">/mnt/storage/me/runs</span>（可写）</div>
           <div>团队/公共数据: <span class="text-sky-300">/mnt/storage/team</span>、<span class="text-sky-300">/mnt/storage/public</span>（只读）</div>
           <div>IDC 数据: <span class="text-sky-300">/mnt/idc/original</span>、<span class="text-sky-300">/mnt/idc/wellspiking</span>、<span class="text-sky-300">/mnt/idc/shared</span>（管理员登记后只读）</div>
           <div>Python 依赖: <span class="text-amber-200">cd /workspace &amp;&amp; python -m venv .venv &amp;&amp; . .venv/bin/activate &amp;&amp; pip install -r requirements.txt</span></div>

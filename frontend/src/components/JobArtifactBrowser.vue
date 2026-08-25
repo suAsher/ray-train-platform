@@ -3,7 +3,7 @@
     <div class="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/50 p-4">
       <div>
         <p class="text-sm font-semibold text-slate-100">训练产物</p>
-        <p class="mt-1 text-xs leading-5 text-slate-500">训练脚本写入输出目录的文件会显示在这里。平台不会暴露底层对象存储地址或访问凭据。</p>
+        <p class="mt-1 text-xs leading-5 text-slate-500">训练脚本写入输出目录的文件会显示在这里。权重不会自动复制到 MLflow；可在调试环境的 /mnt/storage/me/runs 中继续使用，或从当前任务发起续训。平台不会暴露底层对象存储地址或访问凭据。</p>
       </div>
       <el-button size="small" :loading="loading" @click="loadDirectory()">刷新</el-button>
     </div>

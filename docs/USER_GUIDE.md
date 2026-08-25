@@ -406,6 +406,21 @@ python train.py \
 
 三者都会把**上一次运行自己的结果目录**（`我的训练结果/<路径>/<任务ID>`）作为只读 checkpoint 挂到新任务的 `PLATFORM_CHECKPOINT_PATH`。这是一个新任务，不会修改原任务。
 
+### 权重在哪里，怎么继续使用
+
+训练脚本写入 `PLATFORM_OUTPUT_PATH` 的 `.pth`、`.pt`、`.ckpt` 等文件会进入该任务的个人运行结果目录。可以从以下入口找到同一份文件：
+
+| 入口 | 用途 |
+| --- | --- |
+| 我的训练任务 → 任务详情 → 训练产物 | 浏览该任务输出目录和支持预览的文件 |
+| 我的数据 → 我的运行结果 | 按个人结果目录浏览所有任务产物 |
+| GPU 调试环境中的 `/mnt/storage/me/runs` | 加载权重、验证模型、整理结果 |
+| 新任务选择“初始 Checkpoint”或点击“续训” | 将旧任务结果只读挂载到 `PLATFORM_CHECKPOINT_PATH` |
+
+权重**不会因为任务关联了一个 MLflow Run 就自动进入 MLflow Artifact**。当前标准训练写入通道只上报参数、指标和 tag；Checkpoint 的数据真相仍是 `PLATFORM_OUTPUT_PATH`。如果某个模型已经通过原生 MLflow 管理界面明确上传为 Artifact，才可以在对应 Run 的 **Artifacts** 中查看和下载。不要把“MLflow 中能看到 loss”理解为“MLflow 中已经保存权重”。
+
+受治理的任务产物页面不提供直接下载按钮，这是当前平台的数据外发策略。集群内继续训练或调试不需要下载；若要把权重带到集群外，应走后续的模型发布/审批流程，而不是获取 TOS 凭据或绕过个人目录权限。
+
 ## 7. 训练前检查清单
 
 - [ ] 镜像是平台已登记的不可变 digest，且在调试环境中已通过 `import`、CUDA 与训练入口自检。
@@ -428,7 +443,7 @@ TOS 是对象存储，经 CSI/FSX 以文件系统语义呈现；目录遍历可�
 工作区内的虚拟环境可复用，但训练镜像不会自动继承调试 Pod 的系统改动。对可复现训练，应将依赖写入镜像并选择相同 digest。
 
 **任务完成后我在哪里看到文件？**
-在“我的数据 → 我的运行结果”，或在新调试环境的 `/mnt/storage/me/runs`。平台不提供数据下载入口。
+在“我的数据 → 我的运行结果”，或在新调试环境的 `/mnt/storage/me/runs`。“我的文件”只对应 `/mnt/storage/me/files`，不会混合显示训练结果。平台不提供受治理数据和任务产物的直接下载入口。
 
 **修改代码后需要重新构建镜像吗？**
 不需要。镜像只在 CUDA、PyTorch、Ray、系统库或 Python 基础依赖变化时重建。普通 Python/config 修改直接用 `spk-rayjob submit --dir .` 或 `ray job submit --working-dir .`。

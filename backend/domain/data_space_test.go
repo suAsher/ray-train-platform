@@ -18,6 +18,9 @@ func TestPersonalDataSpacesUseStableSubjectPrefix(t *testing.T) {
 	if space.ReadOnly {
 		t.Fatal("my-files must be writable")
 	}
+	if got, want := space.MountPath, "/mnt/storage/me/files"; got != want {
+		t.Fatalf("my-files mount path = %q, want %q", got, want)
+	}
 }
 
 func TestPersonalDataSpacesCanUseAStableStorageKeyRootWithoutChangingOwnerIdentity(t *testing.T) {

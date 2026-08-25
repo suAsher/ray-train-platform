@@ -30,6 +30,7 @@ const (
 const (
 	WorkspaceMountPath      = "/workspace"
 	MyStorageMountPath      = "/mnt/storage/me"
+	MyFilesMountPath        = MyStorageMountPath + "/files"
 	TeamStorageMountPath    = "/mnt/storage/team"
 	PublicStorageMountPath  = "/mnt/storage/public"
 	IDCOriginalMountPath    = "/mnt/idc/original"
@@ -117,7 +118,7 @@ func personalDataSpacesForRoot(tenantID, personalRoot, publicRoot string) ([]Dat
 		},
 		{
 			ID: DataSpaceMyFiles, Name: "我的文件", Description: "个人上传的数据和文件",
-			Provider: StorageProviderTOS, MountPath: MyStorageMountPath, BrowseEnabled: true,
+			Provider: StorageProviderTOS, MountPath: MyFilesMountPath, BrowseEnabled: true,
 			RootPrefix: personalRoot + "files/",
 		},
 		{

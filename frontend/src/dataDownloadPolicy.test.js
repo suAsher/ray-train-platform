@@ -27,3 +27,11 @@ test('governed data and training artifact browsers do not render download action
   assert.equal(experimentPageSource.includes('/api/v1/jobs/') && experimentPageSource.includes('/artifacts'), false)
   assert.match(experimentPageSource, /不会开放公开训练数据下载/)
 })
+
+test('training artifact browser explains checkpoint reuse and the MLflow boundary', async () => {
+  const source = await readFile(artifactBrowser, 'utf8')
+
+  assert.match(source, /权重不会自动复制到 MLflow/)
+  assert.match(source, /\/mnt\/storage\/me\/runs/)
+  assert.match(source, /续训/)
+})

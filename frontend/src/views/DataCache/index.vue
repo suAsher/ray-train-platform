@@ -103,7 +103,12 @@
             <span class="hidden w-36 text-right text-xs text-slate-500 md:inline">{{ entry.lastModified ? formatDate(entry.lastModified) : '—' }}</span>
           </div>
         </div>
-        <div v-else class="mt-5 rounded-xl border border-dashed border-slate-700 bg-slate-950/40 p-5 text-sm text-slate-500">这个目录暂无可见文件或子目录。</div>
+        <div v-else class="mt-5 rounded-xl border border-dashed border-slate-700 bg-slate-950/40 p-5 text-sm leading-6 text-slate-500">
+          <template v-if="selectedSpace.id === 'my-files'">
+            当前目录为空。我的文件只显示 /mnt/storage/me/files 中的个人数据；训练权重和任务输出请到“我的运行结果”查看。
+          </template>
+          <template v-else>这个目录暂无可见文件或子目录。</template>
+        </div>
         <div v-if="selectedSpace.id === 'workspace'" class="mt-5 rounded-xl border border-blue-900/60 bg-blue-950/20 p-4 text-xs leading-5 text-slate-300">
           当前目录可创建不可变代码版本。创建后，在“新建训练任务 → 调试快照”中选择即可；之后继续修改工作区不会影响已提交的训练。
         </div>
