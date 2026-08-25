@@ -26,8 +26,8 @@ backend:
   rayAPIDefaultImage: harbor.wellspiking.ai/guofeng.su/ray-train-pytorch@sha256:2102761c7a5e3af6ff33225182d5b936d18601f7d5697bc11187922df58cfa7f
   image:
     repository: ray-train-backend
-    tag: prod-20260825-job-gpu-r1
-    digest: sha256:334892208003f6d264a7666e13670ea96cd6e72886f2dacbab5a64c27580f448
+    tag: prod-20260825-job-gpu-r2
+    digest: sha256:7f4d263ad785a81d170c79faf51060812db5867dcc33d4ddb91ad2419e8948d7
   oidc:
     issuerURL: https://keycloak.test.invalid/realms/ai
     clientID: ray-training-platform-test
