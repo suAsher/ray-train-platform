@@ -205,6 +205,62 @@
             </div>
           </div>
 
+          <section class="space-y-5 rounded-2xl border border-slate-800/80 bg-slate-950/45 p-5">
+            <div class="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <h4 class="text-base font-bold text-white">训练 GPU</h4>
+                <p class="mt-1 text-xs text-slate-400">查看本任务在所有训练 Worker 节点上的 GPU 历史；曲线每 30 秒独立刷新。</p>
+              </div>
+              <el-radio-group v-model="selectedGPUWindow" size="small">
+                <el-radio-button v-for="item in GPU_TIME_WINDOWS" :key="item.value" :value="item.value">{{ item.label }}</el-radio-button>
+              </el-radio-group>
+            </div>
+
+            <el-alert v-if="gpuHistoryError" type="warning" show-icon :closable="false" title="GPU 历史刷新失败">
+              {{ gpuHistoryError }} 已保留上一次成功数据，将在 30 秒后重试。
+            </el-alert>
+
+            <div v-if="gpuHasSamples" v-loading="gpuHistoryLoading" class="space-y-5">
+              <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                <div
+                  v-for="card in gpuSummaryCards"
+                  :key="card.label"
+                  class="rounded-xl border border-slate-800/80 bg-slate-900/60 p-4"
+                >
+                  <span class="text-xs text-slate-400">{{ card.label }}</span>
+                  <p class="mt-1 font-mono text-2xl font-bold tabular-nums" :class="card.tone">{{ card.value }}</p>
+                  <span class="text-[11px] text-slate-500">{{ card.hint }}</span>
+                </div>
+              </div>
+
+              <div class="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-800/80 bg-slate-950/70 px-4 py-3 text-xs text-slate-400">
+                <span>最新样本：<b class="font-mono text-slate-200">{{ formatDateTime(gpuLatestSampleAt) }}</b></span>
+                <span>{{ gpuFreshnessLabel }}</span>
+              </div>
+
+              <el-alert v-if="gpuFreshness.stale" type="warning" show-icon :closable="false" title="GPU 数据延迟">
+                最新样本已超过 90 秒（{{ gpuFreshnessLabel }}），当前曲线可能不是实时状态。
+              </el-alert>
+
+              <el-alert v-if="gpuMetricSummary?.imbalanced" type="warning" show-icon :closable="false" title="检测到 GPU 负载不均">
+                近 1 分钟卡间利用率相差 {{ gpuMetricSummary.utilizationSpread }}%，建议检查 DataLoader、rank 阻塞或通信等待。
+              </el-alert>
+
+              <div class="grid gap-4 xl:grid-cols-2">
+                <GPUTrendChart title="GPU 使用率" description="每条曲线对应一张训练 GPU" unit="%" :series="gpuChartSeries('utilizationPercent')" :minimum="0" :maximum="100" />
+                <GPUTrendChart title="显存使用量" description="观察总显存压力和 OOM 风险" unit="GiB" :series="gpuChartSeries('memoryUsedMib')" :minimum="0" :scale="1024" />
+                <GPUTrendChart title="GPU 功率" description="功率下降通常对应计算或数据等待" unit="W" :series="gpuChartSeries('powerWatts')" :minimum="0" />
+                <GPUTrendChart title="GPU 温度" description="持续高温可能触发降频" unit="°C" :series="gpuChartSeries('temperatureCelsius')" :minimum="20" :maximum="100" />
+              </div>
+            </div>
+
+            <el-empty
+              v-else
+              v-loading="gpuHistoryLoading"
+              description="当前范围暂无 GPU 样本：任务可能仍在排队、训练 Worker 尚未启动、Prometheus / DCGM 暂不可用，或所选时间范围已超过指标保留期。"
+            />
+          </section>
+
           <!-- Dynamic SVG Loss Convergence Graph -->
           <div class="bg-[#070A10] p-6 rounded-xl border border-slate-800/80 space-y-4">
             <div class="flex justify-between items-center">
@@ -273,7 +329,9 @@ import { finishedLabel, formatDateTime, jobTimeline } from '../../jobTimeline'
 import CopyBlock from '../../components/CopyBlock.vue'
 import { copyToClipboard } from '../../clipboard'
 import { apiGet, apiPost } from '../../api/client'
+import { fetchJobGPUHistory } from '../../api/jobGpuMetrics'
 import JobArtifactBrowser from '../../components/JobArtifactBrowser.vue'
+import GPUTrendChart from '../../components/gpu/GPUTrendChart.vue'
 import { userId } from '../../stores/session'
 import { canOpenRayDashboard, jobDashboardAccessPath } from '../../jobDashboard'
 import { buildLogStreamCards } from '../../jobLogStreams'
@@ -282,6 +340,7 @@ import { createSingleFlight, nextLogRequest } from '../../jobLogPolling'
 import { latestMetric, metricSeries, sparklinePoints } from '../../mlflowExperiment'
 import { cacheQueryForJob } from '../../platformLimits'
 import { equivalentSubmitCommandForJob } from '../../submission'
+import { GPU_TIME_WINDOWS, jobMetricChartSeries, jobMetricSummary, normalizeGPUHistory, sampleFreshness } from '../../gpuMetrics'
 
 const route = useRoute()
 const router = useRouter()
@@ -300,6 +359,11 @@ const logsError = ref('')
 const metricsError = ref('')
 const experimentError = ref('')
 const dashboardOpening = ref(false)
+const gpuHistory = ref(normalizeGPUHistory(null))
+const gpuHistoryError = ref('')
+const gpuHistoryLoading = ref(false)
+const selectedGPUWindow = ref('1h')
+let gpuRequestGeneration = 0
 
 const rawLogs = ref([])
 const logsLoaded = ref(false)
@@ -323,6 +387,45 @@ const currentEpoch = computed(() => latestMetric(experiment.value, ['epoch', 'tr
 const lossSeries = computed(() => metricSeries(experiment.value, ['train_loss', 'training_loss', 'loss']))
 const lossSparkline = computed(() => sparklinePoints(lossSeries.value?.points, 640, 220))
 const formatMetric = value => value == null ? '—' : Number(value).toLocaleString('zh-CN', { maximumSignificantDigits: 6 })
+const gpuLatestSampleAt = computed(() => {
+  let latestTimestamp = ''
+  let latestTime = Number.NEGATIVE_INFINITY
+  for (const device of gpuHistory.value.devices) {
+    for (const points of Object.values(device.series)) {
+      for (const point of points) {
+        const pointTime = new Date(point.timestamp).getTime()
+        if (pointTime > latestTime) {
+          latestTime = pointTime
+          latestTimestamp = point.timestamp
+        }
+      }
+    }
+  }
+  return latestTimestamp
+})
+const gpuHasSamples = computed(() => Boolean(gpuLatestSampleAt.value))
+const gpuMetricSummary = computed(() => gpuHasSamples.value ? jobMetricSummary(gpuHistory.value) : null)
+const gpuFreshness = computed(() => sampleFreshness(gpuLatestSampleAt.value, nowTick.value))
+const gpuFreshnessLabel = computed(() => {
+  const ageSeconds = gpuFreshness.value.ageSeconds
+  if (ageSeconds === null) return '暂无有效采样时间'
+  if (ageSeconds < 60) return `${ageSeconds} 秒前`
+  return `${Math.floor(ageSeconds / 60)} 分钟前`
+})
+const formatGPUDecimal = value => Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 1 })
+const gpuMetricHasSamples = metric => gpuHistory.value.devices.some(device => device.series?.[metric]?.length)
+const gpuSummaryCards = computed(() => {
+  const summary = gpuMetricSummary.value
+  if (!summary) return []
+  return [
+    { label: '已分配 / 已观测 GPU', value: `${jobDetail.value?.total_gpus ?? '—'} / ${summary.deviceCount}`, hint: '任务申请 / Prometheus 发现', tone: 'text-slate-100' },
+    { label: '近 1 分钟平均利用率', value: gpuMetricHasSamples('utilizationPercent') ? `${summary.averageUtilizationPercent}%` : '—', hint: '所有训练 GPU 平均', tone: 'text-emerald-400' },
+    { label: '显存使用量', value: gpuMetricHasSamples('memoryUsedMib') ? `${formatGPUDecimal(summary.totalMemoryUsedMib / 1024)} GiB` : '—', hint: '全部 GPU 最新样本', tone: 'text-cyan-300' },
+    { label: '总功率', value: gpuMetricHasSamples('powerWatts') ? `${summary.totalPowerWatts} W` : '—', hint: '全部 GPU 最新样本', tone: 'text-violet-300' },
+    { label: '最高温度', value: gpuMetricHasSamples('temperatureCelsius') ? `${summary.maximumTemperatureCelsius} °C` : '—', hint: '全部 GPU 最新样本', tone: 'text-amber-300' },
+  ]
+})
+const gpuChartSeries = metric => jobMetricChartSeries(gpuHistory.value, metric)
 
 const rankCards = computed(() => {
   const nodes = [...new Set(rawLogs.value.map(log => log.node).filter(Boolean))]
@@ -512,6 +615,39 @@ const fetchDetail = createSingleFlight(async () => {
   experiment.value = experimentResult.status === 'fulfilled' ? experimentResult.value : null
 })
 
+async function refreshGPUHistory() {
+  const requestGeneration = ++gpuRequestGeneration
+  const requestJobId = String(route.params.id)
+  const requestWindow = selectedGPUWindow.value
+  gpuHistoryLoading.value = true
+  try {
+    const payload = await fetchJobGPUHistory(requestJobId, requestWindow)
+    if (
+      requestGeneration !== gpuRequestGeneration ||
+      requestJobId !== String(route.params.id) ||
+      requestWindow !== selectedGPUWindow.value
+    ) return
+    gpuHistory.value = normalizeGPUHistory(payload)
+    gpuHistoryError.value = ''
+  } catch (error) {
+    if (
+      requestGeneration !== gpuRequestGeneration ||
+      requestJobId !== String(route.params.id) ||
+      requestWindow !== selectedGPUWindow.value
+    ) return
+    gpuHistoryError.value = error?.message || 'Prometheus / DCGM GPU 历史暂不可用。'
+  } finally {
+    if (requestGeneration === gpuRequestGeneration) gpuHistoryLoading.value = false
+  }
+}
+
+function resetGPUState() {
+  gpuRequestGeneration += 1
+  gpuHistory.value = normalizeGPUHistory(null)
+  gpuHistoryError.value = ''
+  gpuHistoryLoading.value = false
+}
+
 const cancelJob = async () => {
   try {
     await apiPost(`/api/v1/jobs/${route.params.id}/cancel`, {})
@@ -593,6 +729,9 @@ const gpuSummary = computed(() => {
 let refreshTimer
 let logRefreshTimer
 let clockTimer
+let gpuRefreshTimer
+
+watch(selectedGPUWindow, refreshGPUHistory)
 
 watch(() => route.params.id, (nextJobId, previousJobId) => {
   if (String(nextJobId) === String(previousJobId)) return
@@ -602,24 +741,30 @@ watch(() => route.params.id, (nextJobId, previousJobId) => {
   experiment.value = null
   metricsError.value = ''
   experimentError.value = ''
+  resetGPUState()
   resetLogState()
   fetchDetail()
   refreshLogs()
+  refreshGPUHistory()
 })
 
 onMounted(() => {
   fetchDetail()
   refreshLogs()
+  refreshGPUHistory()
   refreshTimer = window.setInterval(fetchDetail, 5000)
   logRefreshTimer = window.setInterval(refreshLogs, 5000)
+  gpuRefreshTimer = window.setInterval(refreshGPUHistory, 30000)
   // A running job's elapsed time is measured against now, so the clock has to
   // advance even between detail refreshes.
   clockTimer = window.setInterval(() => { nowTick.value = new Date().toISOString() }, 1000)
 })
 
 onUnmounted(() => {
+  gpuRequestGeneration += 1
   window.clearInterval(refreshTimer)
   window.clearInterval(logRefreshTimer)
   window.clearInterval(clockTimer)
+  window.clearInterval(gpuRefreshTimer)
 })
 </script>
