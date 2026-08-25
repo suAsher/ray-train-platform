@@ -102,6 +102,10 @@ type MetricsProvider interface {
 	QueryJobMetrics(context.Context, string, time.Duration) (observability.JobMetrics, error)
 }
 
+type JobGPUHistoryProvider interface {
+	QueryJobGPUHistory(ctx context.Context, window, namespace, rayClusterName string) (observability.GPUHistory, error)
+}
+
 type ExperimentProvider interface {
 	QueryJobExperiment(context.Context, string, string) (observability.JobExperiment, error)
 	ListTenantExperiments(context.Context, string, string, int) (observability.ExperimentCatalog, error)
@@ -576,6 +580,52 @@ func (h *Handler) getJobMetrics(c *gin.Context) {
 		return
 	}
 	h.writeSuccess(c, http.StatusOK, metrics)
+}
+
+func (h *Handler) getJobGPUHistory(c *gin.Context) {
+	principal, ok := h.principal(c)
+	if !ok {
+		h.writeError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "authentication is required")
+		return
+	}
+	window := c.DefaultQuery("window", "1h")
+	if _, ok := allowedGPUHistoryWindows[window]; !ok {
+		h.writeError(c, http.StatusBadRequest, "GPU_HISTORY_WINDOW_INVALID", "window must be one of 15m, 1h, 6h, 24h, or 7d")
+		return
+	}
+	job, err := h.jobForPrincipal(c.Request.Context(), principal, c.Param("id"))
+	if err != nil {
+		h.writeError(c, http.StatusNotFound, "JOB_NOT_FOUND", "training job was not found")
+		return
+	}
+	if !canReadJobGPUHistory(principal, job) {
+		h.writeError(c, http.StatusNotFound, "JOB_NOT_FOUND", "training job was not found")
+		return
+	}
+	provider, ok := h.metrics.(JobGPUHistoryProvider)
+	if !ok {
+		h.writeError(c, http.StatusServiceUnavailable, "GPU_METRICS_UNAVAILABLE", "GPU history metrics are not configured")
+		return
+	}
+	history, err := provider.QueryJobGPUHistory(c.Request.Context(), window, job.KubernetesNS, job.RayClusterName)
+	if err != nil {
+		h.writeError(c, http.StatusBadGateway, "GPU_HISTORY_QUERY_FAILED", "could not query job GPU history")
+		return
+	}
+	h.writeSuccess(c, http.StatusOK, history)
+}
+
+func canReadJobGPUHistory(principal auth.Principal, job *domain.TrainingJob) bool {
+	if principal.HasRole(domain.RoleSuperAdmin) {
+		return true
+	}
+	if job.TenantID != principal.TenantID {
+		return false
+	}
+	if principal.HasRole(domain.RoleTenantAdmin) {
+		return true
+	}
+	return job.UserID == principal.Subject
 }
 
 func (h *Handler) getJobExperiment(c *gin.Context) {
