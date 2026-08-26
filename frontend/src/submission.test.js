@@ -130,6 +130,21 @@ test('buildJobSpec maps a policy-approved runtime cache', () => {
   assert.deepEqual(spec.cache, { mode: 'runtime', size: '200Gi' })
 })
 
+test('buildJobSpec maps parameter-only automatic input preload and requires an exact input directory', () => {
+  const spec = buildJobSpec({
+    ...baseForm(), cacheMode: 'runtime', cacheSize: '200Gi', cachePreload: 'input',
+  }, cacheLimits())
+  assert.deepEqual(spec.cache, { mode: 'runtime', size: '200Gi', preload: 'input' })
+
+  assert.throws(
+    () => buildJobSpec({
+      ...baseForm(), input: { spaceId: 'public', relativePath: '' },
+      cacheMode: 'runtime', cacheSize: '200Gi', cachePreload: 'input',
+    }, cacheLimits()),
+    /选择一个具体的数据集子目录/,
+  )
+})
+
 test('buildJobSpec rejects unsupported or internally inconsistent cache requests', () => {
   assert.throws(
     () => buildJobSpec({ ...baseForm(), cacheMode: 'persistent', cacheSize: '200Gi' }, cacheLimits()),
@@ -160,6 +175,13 @@ test('equivalent submit command includes the selected runtime cache flags', () =
   })
 
   assert.match(command, /--cache-mode 'runtime' \\\n  --cache-size '200Gi'/)
+})
+
+test('equivalent submit command includes automatic input preload as one user parameter', () => {
+  const command = equivalentSubmitCommand({
+    ...baseForm(), cacheMode: 'runtime', cacheSize: '200Gi', cachePreload: 'input',
+  })
+  assert.match(command, /--cache-size '200Gi' \\\n  --cache-preload 'input'/)
 })
 
 test('equivalent submit command omits cache flags for off and legacy forms', () => {
@@ -221,6 +243,19 @@ test('JobDetail equivalent command includes explicit runtime cache flags through
 
   assert.match(command, /--cache-mode 'runtime' \\\n  --cache-size '200Gi'/)
   assert.match(command, /--input-space 'team-shared'/)
+})
+
+test('JobDetail equivalent command preserves automatic preload', () => {
+  const command = equivalentSubmitCommandForJob({
+    name: 'cached-run', entrypoint: 'python train.py',
+    spec: {
+      image: 'registry.example/ray@sha256:' + 'a'.repeat(64),
+      resources: { workerReplicas: 2, gpusPerWorker: 8 },
+      input: { space: 'public', relativePath: 'labeled/fz-v1' },
+      cache: { mode: 'runtime', size: '1Ti', preload: 'input' },
+    },
+  })
+  assert.match(command, /--cache-preload 'input'/)
 })
 
 test('JobDetail equivalent command shell-quotes persisted values exactly', () => {

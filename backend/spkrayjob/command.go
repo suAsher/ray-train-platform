@@ -82,9 +82,10 @@ const helpText = `spk-rayjob — 分布式训练任务命令行客户端
   spk-rayjob submit --resume-from-job <上一次的 JOB ID> --watch
 
 临时缓存（可选）：
-  spk-rayjob submit --cache-mode runtime --cache-size <平台允许的容量>
-  runtime 缓存是随任务销毁的临时空间，不会自动缓存 /mnt/storage/public；
-  训练代码需要显式把希望加速的数据复制到缓存目录。
+  spk-rayjob submit --cache-mode runtime --cache-size 1Ti \
+    --cache-preload input --input-space public --input-path <数据集目录>
+  加上 --cache-preload input 后，平台会在每个 Worker 启动前把所选输入预热到双 NVMe；
+  不加该参数时不会自动缓存 /mnt/storage/public，只加速 Ray 临时文件和训练代码主动写入缓存的内容。
 
 通用参数：
   --output json    输出原始 JSON，供脚本使用（默认为可读文本）
@@ -340,6 +341,7 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	executionMode := set.String("execution-mode", "auto", "execution mode: auto, single_gpu, torchrun, ray_train")
 	cacheMode := set.String("cache-mode", "", "cache mode: off, runtime")
 	cacheSize := set.String("cache-size", "", "runtime cache size allowed by the platform")
+	cachePreload := set.String("cache-preload", "", "automatic cache preload: input")
 	inputSpace := set.String("input-space", "", "logical input data space")
 	inputPath := set.String("input-path", "", "path relative to the input data space")
 	checkpointSpace := set.String("checkpoint-space", "", "logical checkpoint data space")
@@ -360,23 +362,24 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	resolved := defaults.merge(submitOverrides{
 		Name: *name, Image: *image, Entrypoint: *entrypoint, Workers: *workers, GPUsPerWorker: *gpus,
 		CPUPerWorker: *cpu, MemoryPerWorker: *memory, ExecutionMode: *executionMode,
-		Cache:              projectCache{Mode: *cacheMode, Size: *cacheSize},
-		Input:              projectLocation{Space: *inputSpace, Path: *inputPath},
-		Checkpoint:         projectLocation{Space: *checkpointSpace, Path: *checkpointPath},
-		Output:             projectLocation{Path: *outputPath},
-		providedName:       provided["name"],
-		providedImage:      provided["image"],
-		providedEntrypoint: provided["entrypoint"],
-		providedWorkers:    provided["workers"],
-		providedGPUs:       provided["gpus-per-worker"],
-		providedCPU:        provided["cpu-per-worker"],
-		providedMemory:     provided["memory-per-worker"],
-		providedMode:       provided["execution-mode"],
-		providedCacheMode:  provided["cache-mode"],
-		providedCacheSize:  provided["cache-size"],
-		providedInput:      provided["input-space"] || provided["input-path"],
-		providedCheckpoint: provided["checkpoint-space"] || provided["checkpoint-path"],
-		providedOutput:     provided["output-path"],
+		Cache:                projectCache{Mode: *cacheMode, Size: *cacheSize, Preload: *cachePreload},
+		Input:                projectLocation{Space: *inputSpace, Path: *inputPath},
+		Checkpoint:           projectLocation{Space: *checkpointSpace, Path: *checkpointPath},
+		Output:               projectLocation{Path: *outputPath},
+		providedName:         provided["name"],
+		providedImage:        provided["image"],
+		providedEntrypoint:   provided["entrypoint"],
+		providedWorkers:      provided["workers"],
+		providedGPUs:         provided["gpus-per-worker"],
+		providedCPU:          provided["cpu-per-worker"],
+		providedMemory:       provided["memory-per-worker"],
+		providedMode:         provided["execution-mode"],
+		providedCacheMode:    provided["cache-mode"],
+		providedCacheSize:    provided["cache-size"],
+		providedCachePreload: provided["cache-preload"],
+		providedInput:        provided["input-space"] || provided["input-path"],
+		providedCheckpoint:   provided["checkpoint-space"] || provided["checkpoint-path"],
+		providedOutput:       provided["output-path"],
 	})
 	cacheDraft, err := newProjectCacheDraft(resolved.Cache)
 	if err != nil {
@@ -582,7 +585,10 @@ func (value project) jobSpec() (domain.JobSpec, error) {
 		Input:      input,
 		Checkpoint: checkpoint,
 		Output:     output,
-		Cache:      domain.CacheRequest{Mode: domain.CacheMode(strings.TrimSpace(value.Cache.Mode)), Size: strings.TrimSpace(value.Cache.Size)},
+		Cache: domain.CacheRequest{
+			Mode: domain.CacheMode(strings.TrimSpace(value.Cache.Mode)), Size: strings.TrimSpace(value.Cache.Size),
+			Preload: domain.CachePreloadMode(strings.TrimSpace(value.Cache.Preload)),
+		},
 	}, nil
 }
 

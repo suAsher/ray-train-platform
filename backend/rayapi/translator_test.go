@@ -158,6 +158,30 @@ func TestTranslateSubmitRequestWithDefaultsAcceptsCacheOnlyMetadata(t *testing.T
 	}
 }
 
+func TestTranslateSubmitRequestWithDefaultsAcceptsAutomaticInputPreloadMetadata(t *testing.T) {
+	defaults := SubmissionDefaults{Image: testImageDigest, WorkerReplicas: 1, GPUsPerWorker: 1, CPUPerWorker: 8, MemoryPerWorker: "32Gi"}
+	translated, err := TranslateSubmitRequestWithDefaults(JobSubmitRequest{
+		Entrypoint: "python train.py",
+		RuntimeEnv: map[string]any{"working_dir": "gcs://" + testPackageSHA256 + ".zip"},
+		Metadata: map[string]string{
+			metadataCacheMode:    "runtime",
+			metadataCacheSize:    "1Ti",
+			metadataCachePreload: "input",
+			metadataInputSpace:   string(domain.DataSpacePublic),
+			metadataInputPath:    "labeled/fz-v1",
+		},
+	}, defaults)
+	if err != nil {
+		t.Fatalf("translate automatic preload metadata: %v", err)
+	}
+	if translated.Spec.Cache.Preload != domain.CachePreloadInput {
+		t.Fatalf("preload metadata was not preserved: %+v", translated.Spec.Cache)
+	}
+	if translated.Spec.Input.Space != domain.DataSpacePublic || translated.Spec.Input.RelativePath != "labeled/fz-v1" {
+		t.Fatalf("input metadata was not preserved: %+v", translated.Spec.Input)
+	}
+}
+
 func TestTranslateSubmitRequestCombinesExplicitResourcesWithOptionalRuntimeCacheSize(t *testing.T) {
 	metadata := map[string]string{
 		metadataImage: testImageDigest, metadataWorkerReplicas: "2", metadataGPUsPerWorker: "1",
@@ -188,6 +212,8 @@ func TestTranslateSubmitRequestRejectsInvalidCacheMetadata(t *testing.T) {
 		{name: "unsupported mode", metadata: map[string]string{metadataCacheMode: "durable"}},
 		{name: "off with size", metadata: map[string]string{metadataCacheMode: "off", metadataCacheSize: "100Gi"}},
 		{name: "omitted mode with size", metadata: map[string]string{metadataCacheSize: "100Gi"}},
+		{name: "off with preload", metadata: map[string]string{metadataCacheMode: "off", metadataCachePreload: "input"}},
+		{name: "preload without input path", metadata: map[string]string{metadataCacheMode: "runtime", metadataCachePreload: "input", metadataInputSpace: string(domain.DataSpacePublic)}},
 	}
 	defaults := SubmissionDefaults{Image: testImageDigest, WorkerReplicas: 1, GPUsPerWorker: 1, CPUPerWorker: 8, MemoryPerWorker: "32Gi"}
 	for _, test := range tests {

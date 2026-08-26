@@ -47,6 +47,7 @@ export function useJobForm(route) {
     maxRetries: 0,
     cacheMode: 'off',
     cacheSize: '',
+	cachePreload: '',
     input: { spaceId: String(route?.query?.dataSpace || ''), relativePath: String(route?.query?.dataPath || '') },
     checkpoint: {},
     output: {},
@@ -85,6 +86,7 @@ export function useJobForm(route) {
       const normalized = normalizeCacheSelection(form, cachePolicy, { selectRuntimeDefault: true })
       form.cacheMode = normalized.cacheMode
       form.cacheSize = normalized.cacheSize
+		if (normalized.cacheMode !== 'runtime') form.cachePreload = ''
     },
     { deep: true },
   )
@@ -144,6 +146,7 @@ export function useJobForm(route) {
     }, limits.value.cache)
     form.cacheMode = copiedCache.cacheMode
     form.cacheSize = copiedCache.cacheSize
+	form.cachePreload = copiedCache.cacheMode === 'runtime' && route?.query?.cachePreload === 'input' ? 'input' : ''
     trainingImages.value = imagesResult.status === 'fulfilled' ? imagesResult.value || [] : []
     workspaceSnapshots.value = snapshotsResult.status === 'fulfilled' ? snapshotsResult.value || [] : []
     const preferred = trainingImages.value.find((image) => image.isDefault) || trainingImages.value[0]

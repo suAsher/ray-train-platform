@@ -223,6 +223,41 @@ entrypoint: python train.py
 	}
 }
 
+func TestSubmitAutomaticInputPreloadUsesOnlyUserFacingFlags(t *testing.T) {
+	root := seedProject(t, `name: cache-preload
+image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
+entrypoint: python train.py
+`)
+	var submitted domain.JobSpec
+	stub := artifactStubHandler(t, func(spec domain.JobSpec) { submitted = spec })
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v1/limits" {
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"cache": map[string]any{
+				"enabled": true, "modes": []string{"off", "runtime"}, "allowedSizes": []string{"1Ti"},
+				"defaultSize": "1Ti", "maxSize": "5Ti",
+			}})
+			return
+		}
+		stub(writer, request)
+	}))
+	defer server.Close()
+
+	err := Run(context.Background(), []string{
+		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root,
+		"--cache-mode", "runtime", "--cache-size", "1Ti", "--cache-preload", "input",
+		"--input-space", "public", "--input-path", "labeled/fz-v1",
+	}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+	if err != nil {
+		t.Fatalf("submit automatic preload: %v", err)
+	}
+	if submitted.Cache != (domain.CacheRequest{Mode: domain.CacheModeRuntime, Size: "1Ti", Preload: domain.CachePreloadInput}) {
+		t.Fatalf("automatic preload flags were not preserved: %+v", submitted.Cache)
+	}
+	if submitted.Input.Space != domain.DataSpacePublic || submitted.Input.RelativePath != "labeled/fz-v1" {
+		t.Fatalf("selected input was not preserved: %+v", submitted.Input)
+	}
+}
+
 func TestSubmitRuntimeCacheUsesServerDefaultBeforeUpload(t *testing.T) {
 	root := seedProject(t, `name: cache-training
 image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`

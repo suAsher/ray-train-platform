@@ -279,3 +279,12 @@ test('runtime rerun and resume preserve only explicitly forwarded cache valid un
     { cacheMode: 'off', cacheSize: '' },
   )
 })
+
+test('runtime rerun carries automatic preload intent without exposing storage coordinates', () => {
+  const copied = cacheQueryForJob({
+    spec: { cache: { mode: 'runtime', size: '1Ti', preload: 'input' } },
+  })
+  assert.deepEqual(copied, { cacheMode: 'runtime', cacheSize: '1Ti', cachePreload: 'input' })
+  assert.equal('storageClass' in copied, false)
+  assert.equal('mountPath' in copied, false)
+})

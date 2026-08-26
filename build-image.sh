@@ -109,7 +109,7 @@ target_spec() {
       printf '%s\n' 'frontend/Dockerfile|ray-train-frontend|frontend'
       ;;
     source-materializer)
-      printf '%s\n' 'images/source-materializer/Dockerfile|ray-source-materializer|images/source-materializer'
+      printf '%s\n' 'images/source-materializer/Dockerfile|ray-source-materializer|.'
       ;;
     test-training)
       printf '%s\n' 'images/test-training/Dockerfile|ray-test|images/test-training'

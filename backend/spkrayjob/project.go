@@ -21,8 +21,9 @@ type projectLocation struct {
 }
 
 type projectCache struct {
-	Mode string `json:"mode,omitempty"`
-	Size string `json:"size,omitempty"`
+	Mode    string `json:"mode,omitempty"`
+	Size    string `json:"size,omitempty"`
+	Preload string `json:"preload,omitempty"`
 }
 
 type project struct {
@@ -57,19 +58,20 @@ type submitOverrides struct {
 	Checkpoint      projectLocation
 	Output          projectLocation
 
-	providedName       bool
-	providedImage      bool
-	providedEntrypoint bool
-	providedWorkers    bool
-	providedGPUs       bool
-	providedCPU        bool
-	providedMemory     bool
-	providedMode       bool
-	providedCacheMode  bool
-	providedCacheSize  bool
-	providedInput      bool
-	providedCheckpoint bool
-	providedOutput     bool
+	providedName         bool
+	providedImage        bool
+	providedEntrypoint   bool
+	providedWorkers      bool
+	providedGPUs         bool
+	providedCPU          bool
+	providedMemory       bool
+	providedMode         bool
+	providedCacheMode    bool
+	providedCacheSize    bool
+	providedCachePreload bool
+	providedInput        bool
+	providedCheckpoint   bool
+	providedOutput       bool
 }
 
 func (base project) merge(overrides submitOverrides) project {
@@ -102,10 +104,14 @@ func (base project) merge(overrides submitOverrides) project {
 		merged.Cache.Mode = overrides.Cache.Mode
 		if strings.TrimSpace(overrides.Cache.Mode) == "off" {
 			merged.Cache.Size = ""
+			merged.Cache.Preload = ""
 		}
 	}
 	if overrides.providedCacheSize {
 		merged.Cache.Size = overrides.Cache.Size
+	}
+	if overrides.providedCachePreload {
+		merged.Cache.Preload = overrides.Cache.Preload
 	}
 	if overrides.providedInput {
 		merged.Input = overrides.Input
@@ -195,7 +201,7 @@ func newStarterProject(value project) starterProject {
 		return &location
 	}
 	optionalCache := func(cache projectCache) *projectCache {
-		if cache.Mode == "" && cache.Size == "" {
+		if cache.Mode == "" && cache.Size == "" && cache.Preload == "" {
 			return nil
 		}
 		return &cache
@@ -239,11 +245,12 @@ const projectFileHeader = `# spk-rayjob submission defaults for this repository.
 #   ray_train   N workers x M GPUs (multi machine)
 # Do not put torchrun in entrypoint: the platform adds it for you.
 #
-# 可选 runtime 临时缓存会随任务销毁，也不会自动缓存 /mnt/storage/public。
-# 训练代码需要显式读写缓存目录；省略 cache 时缓存关闭：
+# 可选 runtime 临时缓存会随任务销毁。只配置 mode/size 不会自动缓存 /mnt/storage/public；
+# 加 preload: input 后，平台自动预热所选具体输入目录。省略 cache 时缓存关闭：
 # cache:
 #   mode: runtime
 #   size: <平台允许的容量>
+#   preload: input
 `
 
 // projectRelativeName derives a stable default job name from the directory a

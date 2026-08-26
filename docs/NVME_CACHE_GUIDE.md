@@ -1,542 +1,255 @@
-# GPU 节点 NVMe 缓存加速指南
+# 双 NVMe 训练数据加速使用指南
 
-本文单独说明 Ray 训练平台已经上线的节点本地 NVMe 缓存：它解决什么问题、当前如何实现、用户如何启用、训练代码如何真正利用它，以及管理员如何验收和排障。
+本文说明训练平台的节点本地 NVMe 缓存：用户如何用参数开启、平台实际做了什么、代码如何读取、如何估算容量，以及遇到问题如何排查。
 
-## 1. 先给结论
+## 1. 最短结论
 
-当前生产环境已经具备可选的 `runtime` 缓存能力：
+用户不需要复制脚本、不需要重新构建训练镜像，也不需要接触 StorageClass、PVC、节点目录或 TOS 凭据。
 
-- 两台生产 GPU 节点各使用 `/data1/ray-cache`、`/data2/ray-cache` 两个独立缓存根；
-- Kubernetes 提供非默认 StorageClass `ray-cache-local`；
-- 用户可为单个任务选择 `100Gi`、`200Gi` 或 `500Gi`；
-- 缓存默认关闭，只影响新提交且主动选择 `runtime` 的任务；
-- Ray Head 和每个 Worker 各获得一个独立临时卷，容器内统一挂载到 `/mnt/cache`；
-- Ray session、临时目录和 object spilling 会自动使用 NVMe；
-- `/mnt/storage/public`、团队目录、个人目录、Checkpoint 和训练结果不会被自动迁移到 NVMe；
-- 任务 Pod 删除后，对应 PVC、PV 和节点目录自动回收。
+提交任务时指定四项即可：
 
-训练镜像不需要因为启用缓存而重建。普通训练代码即使完全不认识缓存也能继续运行；只是这种情况下，只有 Ray 自身的临时文件和 object spilling 会使用 NVMe，PyTorch DataLoader 仍从原数据目录读取。
-
-## 2. 当前生产状态
-
-截至 2026-08-25，集群中的实际状态为：
-
-| 项目 | 当前值 |
-| --- | --- |
-| Helm release | `ray-cache-local`，状态 `deployed` |
-| Namespace | `ray-cache-local` |
-| StorageClass | `ray-cache-local` |
-| Provisioner | `rancher.io/local-path` |
-| 绑定方式 | `WaitForFirstConsumer` |
-| 回收策略 | `Delete` |
-| 平台开关 | 已启用，任务默认 `off` |
-| 可选容量 | `100Gi`、`200Gi`、`500Gi` |
-| 默认 runtime 容量 | `200Gi` |
-| 容器挂载点 | `/mnt/cache` |
-| GPU 节点 | 2 台生产节点 |
-| 每节点缓存盘 | `/data1`、`/data2`，各约 3.78 TB 十进制容量 |
-| 当前每盘可用空间 | 约 3.59 TB 十进制容量 |
-| 监控 | 2 个节点监控 Pod，Prometheus ServiceMonitor 和告警规则已启用 |
-
-这些容量数字是状态快照，不应写入容量规划脚本。日常判断以 Prometheus 指标和实时 `df` 为准。
-
-## 3. 架构与生命周期
-
-```mermaid
-flowchart LR
-    user[网页 / spk-rayjob / 原生 Ray CLI]
-    api[平台提交 API<br/>校验 mode 和 size]
-    rayjob[KubeRay RayJob]
-    head[Ray Head<br/>独立临时 PVC]
-    worker1[Worker 1<br/>独立临时 PVC]
-    worker2[Worker N<br/>独立临时 PVC]
-    sc[ray-cache-local<br/>WaitForFirstConsumer]
-    disk1[GPU 节点 /data1/ray-cache]
-    disk2[GPU 节点 /data2/ray-cache]
-    durable[TOS / FSX / IDC<br/>数据真相与训练结果]
-
-    user --> api --> rayjob
-    rayjob --> head
-    rayjob --> worker1
-    rayjob --> worker2
-    head --> sc
-    worker1 --> sc
-    worker2 --> sc
-    sc --> disk1
-    sc --> disk2
-    durable --> worker1
-    durable --> worker2
-```
-
-一次 `2 Worker × 8 GPU` 的 runtime 缓存任务会创建：
-
-- 1 个 Head 临时 PVC；
-- 2 个 Worker 临时 PVC；
-- 共 3 个独立本地卷。
-
-因此界面中的 `200Gi` 表示每个 Head/Worker Pod 的请求容量，不是整个任务合计 200Gi。`N` 个 Worker 的任务会产生 `N + 1` 个临时 PVC。Submitter Pod 不挂载缓存。
-
-任务删除时，generic ephemeral PVC 的所有者引用触发以下回收链路：
-
-```text
-Pod 删除 → 临时 PVC 删除 → PV 删除 → helper Pod 删除精确的节点缓存目录
-```
-
-成功任务默认很快释放 RayCluster；失败任务会保留更长的原生诊断窗口，因此失败任务的缓存目录也可能多保留一段时间。
-
-## 4. 缓存能加速什么
-
-### 4.1 自动生效的部分
-
-选择 `runtime` 后，平台自动为 Head 和 Worker 配置：
-
-```text
-PLATFORM_CACHE_PATH=/mnt/cache
-Ray temp-dir=/mnt/cache/ray
-Ray object spilling=/mnt/cache/ray-spill/objects
-```
-
-这会改善以下负载：
-
-- Ray session 和运行时临时文件较多；
-- Ray Object Store 内存不足，需要把对象 spill 到磁盘；
-- 用户代码主动把解压文件、中间特征、编译缓存或临时 shard 写到 `$PLATFORM_CACHE_PATH`。
-
-### 4.2 不会自动生效的部分
-
-下列路径不会因为勾选缓存而改变：
-
-| 数据类型 | 仍使用的路径 | 是否持久 |
-| --- | --- | --- |
-| 公共训练数据 | `/mnt/storage/public` 或 `PLATFORM_DATASET_PATH` | 是 |
-| 团队数据 | 平台选择后映射的团队目录 | 是 |
-| 个人工作区 | `/mnt/storage/me` | 是 |
-| Checkpoint 输入 | `PLATFORM_CHECKPOINT_PATH` | 是，只读 |
-| 训练结果 | `PLATFORM_OUTPUT_PATH` | 是，可读写 |
-| 本地缓存 | `PLATFORM_CACHE_PATH=/mnt/cache` | 否 |
-
-BEVFusion、PyTorch DDP 等代码如果继续把 `dataset_root` 指向 `/mnt/storage/public/...`，DataLoader 仍直接读取 TOS/FSX。仅启用 runtime 缓存不会自动提高这部分吞吐。
-
-## 5. 用户如何启用
-
-### 5.1 网页提交
-
-1. 打开“创建训练任务”。
-2. 进入“运行规模”。
-3. 在“一次性运行时缓存”选择“运行时缓存”。
-4. 选择 `100Gi`、`200Gi` 或 `500Gi`。
-5. 正常选择数据、Checkpoint、输出目录并提交。
-
-提交预览会显示缓存模式和容量。若页面没有这个选项，说明平台 API 当前没有发布 runtime 能力，不要在代码中自行假设 `/mnt/cache` 一定存在。
-
-### 5.2 spk-rayjob：单次命令
-
-在已有提交命令中增加两个参数：
+1. 选择一个具体的训练输入子目录；
+2. `cache.mode=runtime`；
+3. 选择缓存总容量；
+4. `cache.preload=input`。
 
 ```bash
 spk-rayjob submit \
   --cache-mode runtime \
-  --cache-size 200Gi \
+  --cache-size 5Ti \
+  --cache-preload input \
+  --input-space public \
+  --input-path labeled/<数据集版本> \
   --watch
 ```
 
-其他镜像、资源、数据和入口参数保持原样。临时关闭缓存：
+平台会在每个 GPU Worker 启动训练前，把所选输入复制到该节点的两块 NVMe。模型代码不负责复制，训练镜像也不因缓存而变化。
+
+## 2. 两种 runtime 缓存用法
+
+| 配置 | 实际效果 | 数据代码是否要处理缓存 |
+| --- | --- | --- |
+| `mode: runtime`，不配置 `preload` | Ray session、object spilling 和用户主动写入的临时文件使用 NVMe；训练输入仍从 TOS/FSX 读取 | 不需要 |
+| `mode: runtime`，`preload: input` | 平台自动把所选输入预热到双 NVMe，并把 `PLATFORM_DATASET_PATH` 切到缓存视图 | 不需要复制代码；程序应遵守平台数据路径契约 |
+
+缓存默认关闭。未开启缓存的旧任务、正在运行的任务和现有训练镜像保持原行为。
+
+## 3. 平台实际做了什么
+
+生产 GPU 节点的两块本地盘分别提供 `/data1/ray-cache`、`/data2/ray-cache`。用户和训练容器不会直接看到节点路径。平台为每个 Worker 创建两个一次性本地卷：
+
+```text
+/mnt/cache   -> 节点 /data1/ray-cache 下的任务隔离目录
+/mnt/cache2  -> 节点 /data2/ray-cache 下的任务隔离目录
+```
+
+自动预热流程：
+
+```text
+任务通过 Kueue 获得资源
+  -> 每个 Worker 绑定本节点的两块临时 NVMe 卷
+  -> 平台预热容器枚举所选输入并做容量预检
+  -> 32 路并发复制，文件稳定分散到两块盘
+  -> 原子发布 /mnt/cache/dataset-view
+  -> Ray Worker 和 GPU 训练进程启动
+```
+
+Head 不复制训练数据；Submitter 也不挂载 NVMe。多机训练中的每个 Worker 都有自己的本地副本，因此不会跨节点共享缓存。
+
+## 4. 训练容器中的路径
+
+自动预热后，平台注入：
+
+```text
+PLATFORM_DATASET_SOURCE_PATH=/mnt/data/input
+PLATFORM_DATASET_PATH=/mnt/cache/dataset-view
+PLATFORM_CACHE_PATH=/mnt/cache
+PLATFORM_CACHE_PATHS=/mnt/cache:/mnt/cache2
+PLATFORM_CACHE_PRELOAD=input
+```
+
+- `PLATFORM_DATASET_SOURCE_PATH`：TOS/FSX 的持久只读源，用于诊断；
+- `PLATFORM_DATASET_PATH`：本次训练应读取的活跃数据根，开启预热后指向 NVMe；
+- `PLATFORM_OUTPUT_PATH`：持久训练结果目录，不会切到 NVMe；
+- `PLATFORM_CHECKPOINT_PATH`：持久只读续训输入，不会切到 NVMe。
+
+平台兼容代码应读取 `PLATFORM_DATASET_PATH`。如果训练程序本来支持 `--data-root`，提交命令直接传环境变量即可，无需修改模型逻辑：
+
+```bash
+python3 train.py --data-root "$PLATFORM_DATASET_PATH"
+```
+
+现有平台版 BEVFusion 的路径解析器已经遵守这个契约。若旧代码把 `/mnt/storage/public` 写死在 Python 中，它会绕过缓存；这类代码需要做一次通用数据根适配，之后每次任务只改提交参数，不再改缓存代码或重建镜像。
+
+## 5. 网页使用
+
+1. 在“训练输入”中选择数据空间，例如“公共数据”。
+2. 必须继续选择一个具体子目录，例如 `labeled/fz-3dod-v1`，不能停在整个 `public` 根。
+3. 在“运行规模”中选择“运行时缓存”和总容量。
+4. 开启“自动预热所选输入到双 NVMe”。
+5. 检查提交预览中的缓存容量和自动预热标记后提交。
+
+页面会在没有具体输入目录、容量不受支持或缓存关闭却配置预热时阻止提交。
+
+## 6. spk-rayjob 使用
+
+### 6.1 单次命令
+
+```bash
+spk-rayjob submit \
+  --name bevfusion-cache-$(date +%Y%m%d-%H%M%S) \
+  --workers 2 \
+  --gpus-per-worker 8 \
+  --cpu-per-worker 64 \
+  --memory-per-worker 256Gi \
+  --cache-mode runtime \
+  --cache-size 5Ti \
+  --cache-preload input \
+  --input-space public \
+  --input-path labeled/<本次数据集版本> \
+  --entrypoint 'python3 tools/westwell_train.py <配置文件> --launcher pytorch' \
+  --watch
+```
+
+### 6.2 项目默认值
+
+```yaml
+cache:
+  mode: runtime
+  size: 5Ti
+  preload: input
+
+input:
+  space: public
+  path: labeled/<本次数据集版本>
+```
+
+然后执行 `spk-rayjob submit --watch`。临时关闭使用：
 
 ```bash
 spk-rayjob submit --cache-mode off --watch
 ```
 
-### 5.3 spk-rayjob：项目默认值
+显式关闭时，平台同时清除项目文件里继承的容量和预热设置。
 
-可在代码仓库的 `.spk-rayjob.yaml` 中加入：
+## 7. 原生 ray job submit
 
-```yaml
-cache:
-  mode: runtime
-  size: 200Gi
-```
-
-命令行参数优先于项目文件。建议项目文件仍以 `off` 为默认，只有确认任务确实受临时 I/O 或 object spilling 限制后再长期打开：
-
-```yaml
-cache:
-  mode: "off"
-```
-
-### 5.4 原生 ray job submit
-
-在现有 `--metadata-json` 中增加两个字符串字段：
+原生 Ray API 也使用逻辑数据空间，不接受 TOS AK/SK、PVC 或节点路径：
 
 ```bash
-export RAY_ADDRESS='https://raytrain.wellspiking.ai/ray'
-export RAY_JOB_HEADERS='{"Authorization":"Bearer <个人访问令牌>"}'
-
-IMAGE='harbor.wellspiking.ai/<个人项目>/<训练镜像>@sha256:<digest>'
-RUN_ID="$(date +%Y%m%d-%H%M%S)"
-META="$(jq -cn --arg image "$IMAGE" '{
-  "ray-platform.image":$image,
-  "ray-platform.worker-replicas":"2",
-  "ray-platform.gpus-per-worker":"8",
-  "ray-platform.cpu-per-worker":"64",
-  "ray-platform.memory-per-worker":"256Gi",
-  "ray-platform.queue":"local-gpu",
-  "platform.cache.mode":"runtime",
-  "platform.cache.size":"200Gi"
-}')"
+META="$(jq -cn \
+  --arg image 'harbor.wellspiking.ai/<项目>/<镜像>:<tag>' \
+  '{
+    "ray-platform.image": $image,
+    "ray-platform.worker-replicas": "2",
+    "ray-platform.gpus-per-worker": "8",
+    "ray-platform.cpu-per-worker": "64",
+    "ray-platform.memory-per-worker": "256Gi",
+    "ray-platform.queue": "local-gpu",
+    "platform.data.input-space": "public",
+    "platform.data.input-path": "labeled/<本次数据集版本>",
+    "platform.cache.mode": "runtime",
+    "platform.cache.size": "5Ti",
+    "platform.cache.preload": "input"
+  }')"
 
 ray job submit \
-  --submission-id "my-training-${RUN_ID}" \
+  --address "$RAY_ADDRESS" \
+  --submission-id "bevfusion-cache-$(date +%Y%m%d-%H%M%S)" \
   --working-dir . \
   --metadata-json "$META" \
-  -- \
-  python3 train.py
+  -- python3 train.py
 ```
 
-只提供 `platform.cache.size`、使用未知的 `platform.cache.*` 字段或提交不在 allowlist 中的容量都会被平台拒绝。
+未知的 `platform.cache.*`、`platform.data.*` 字段会被拒绝，避免拼写错误悄悄退化为直读存储。
 
-## 6. 训练代码如何真正缓存数据
+## 8. 容量怎么选
 
-### 6.1 不改代码
+界面中的容量是“每个 Worker 的双盘总容量”，平台平均拆到两块盘：
 
-不改代码也可以启用 runtime 缓存。此时获得的是 Ray 临时目录和 object spilling 加速，训练数据读取路径不变。
-
-这是最安全的第一步，适用于先观察 Ray spill、临时文件和训练总耗时是否改善。
-
-### 6.2 显式预热热点数据
-
-要让 DataLoader 从 NVMe 读取，训练代码必须显式把需要的子集复制到 `PLATFORM_CACHE_PATH`，然后把实际 `dataset_root` 指向复制后的目录。
-
-不要把 10 TB 公共数据全量复制到每个任务。应只预热当前实验真正使用的版本、场景或 shard。
-
-平台交付了一份可直接放进用户代码仓库的完整脚本：
-
-[`examples/dataset-cache/stage_dataset.py`](../examples/dataset-cache/stage_dataset.py)
-
-把该文件保存为自己仓库的 `tools/stage_dataset.py`。它具有三个行为：
-
-- 没有启用缓存时直接返回原 `PLATFORM_DATASET_PATH`；
-- 每个 Worker Pod 只让 `LOCAL_RANK=0` 复制一次；
-- 同一 Worker 的其他 GPU rank 等待原子 `.ready` 标记后再读取。
-
-入口命令先执行脚本，再导出脚本返回的真实数据根：
-
-```bash
-PLATFORM_DATASET_PATH="$(python3 tools/stage_dataset.py)"
-export PLATFORM_DATASET_PATH
-python3 tools/train.py --data-root "$PLATFORM_DATASET_PATH"
-```
-
-`.spk-rayjob.yaml` 的关键配置：
-
-```yaml
-entrypoint: >-
-  PLATFORM_DATASET_PATH="$(python3 tools/stage_dataset.py)";
-  export PLATFORM_DATASET_PATH;
-  python3 tools/train.py --data-root "$PLATFORM_DATASET_PATH"
-cache:
-  mode: runtime
-  size: 100Gi
-input:
-  space: public
-  path: <本次训练精确使用的数据集版本或 shard>
-```
-
-脚本会复制整个“任务选中的输入根”。因此 `input.path` 绝不能留空后指向 10 TB 的
-`public` 根；必须在页面或配置中选择本次训练真正使用的最小只读目录。所选目录实际容量
-必须小于每个 Worker 的缓存容量，并留出 Ray 临时目录和 object spilling 空间。
-
-如果程序自行初始化 `torch.distributed`，脚本的本地 `.ready` 只负责同一 Worker 内同步；
-所有 Worker 都进入训练后，DDP 初始化本身会形成全局同步。自定义启动器也可以在预热后
-增加一次全局 barrier。
-
-### 6.3 适合放入缓存的内容
-
-- 当前任务反复读取的只读数据 shard；
-- 解压后的临时数据；
-- 可重新生成的中间特征；
-- JIT、CUDA 扩展或框架临时缓存；
-- Ray object spilling 文件。
-
-### 6.4 绝不能只放在缓存里的内容
-
-- 最终模型；
-- 唯一一份 Checkpoint；
-- 训练报告和指标；
-- 用户源码的唯一副本；
-- AK/SK、PAT、Git Token、SSH 私钥；
-- 无法从 TOS、IDC 或代码重新生成的数据。
-
-最终 Checkpoint 和模型必须写入 `PLATFORM_OUTPUT_PATH`。
-
-## 7. 容量语义与限制
-
-当前实现基于 Rancher Local Path Provisioner。`100Gi`、`200Gi`、`500Gi` 是平台准入、调度和审计使用的请求容量，不是底层文件系统硬配额。
-
-供应器在创建目录前会检查：
-
-- 请求容量不能超过当时可用空间；
-- 按请求容量计算后，文件系统必须至少保留 15% 空间；
-- 目标必须位于精确的 `/data1/ray-cache` 或 `/data2/ray-cache`；
-- 只能在已登记的生产 GPU 节点供应。
-
-但目录创建后，Linux 文件系统不会阻止任务实际写入超过所选容量。用户代码必须遵守所选容量；平台通过受控并发、磁盘水位和告警保护节点，而不是依赖目录硬配额。
-
-如未来必须实现严格容量隔离，需要在维护窗口迁移到经过验证的 Local CSI/LVM、XFS project quota 或其他具有真实限额能力的方案，不能把当前 PVC request 当成硬限制。
-
-### 7.1 两块 3.5 TB 是否够用
-
-2026-08-25 实测每台 GPU 节点的 `/data1`、`/data2` 各可用约 3.587 TB，合计约
-7.174 TB（约 6.52 TiB）。两台节点总计约 14.35 TB，但本地盘不共享：
-
-- 同一份 10 TB 数据如果每个 Worker 都需要完整副本，单节点放不下；
-- 如果数据可以按节点稳定分片，10 TB 约为每节点 5 TB，容量上可行，但必须保留至少
-  15% 水位并考虑临时文件；
-- 当前平台单个 Head/Worker 只允许申请到 500Gi，因此现阶段定位是“实验热点子集缓存”，
-  不是全量 `public` 镜像；
-- 新增 GPU 节点只增加本地总容量，不会让一个 Worker 自动看到其他节点的缓存。
-
-因此两块盘足够缓存多数单次实验的热点数据和 Ray 临时文件，但不足以在每台节点复制
-一份约 10 TB 的全量数据。全量缓存需要第二阶段的数据集分片、manifest、断点预热和
-跨任务复用能力。
-
-## 8. 如何验证是否真正使用 NVMe
-
-训练程序可以打印：
-
-```python
-import os
-from pathlib import Path
-
-cache = os.environ.get("PLATFORM_CACHE_PATH", "")
-print(f"PLATFORM_CACHE_PATH={cache or '<disabled>'}", flush=True)
-if cache:
-    probe = Path(cache) / "write-probe.txt"
-    probe.write_text("ok\n", encoding="utf-8")
-    print(f"cache write probe={probe} bytes={probe.stat().st_size}", flush=True)
-```
-
-任务日志中应看到：
-
-```text
-PLATFORM_CACHE_PATH=/mnt/cache
-cache write probe=/mnt/cache/write-probe.txt bytes=3
-```
-
-管理员还可以确认生成的 RayJob：
-
-```bash
-kubectl -n <tenant-namespace> get rayjob <rayjob-name> -o yaml
-```
-
-Head 和 Worker 模板中应包含：
-
-- `ephemeral.volumeClaimTemplate`；
-- `storageClassName: ray-cache-local`；
-- `/mnt/cache` volumeMount；
-- `PLATFORM_CACHE_PATH=/mnt/cache`；
-- Ray `temp-dir` 指向 `/mnt/cache/ray`，支持 Ray 2.35 的
-  `RAY_object_spilling_config` 环境变量指向 `/mnt/cache/ray-spill/objects`。
-
-Submitter 模板不应包含这些字段。
-
-## 9. 如何证明数据读取真的变快
-
-不要只比较第二次 `cat` 或单个文件读取。Linux 页缓存、FSX 客户端缓存和对象存储后端缓存都会影响结果。
-
-建议使用同一镜像、同一数据 manifest、同一 Worker 数和同一训练参数做两组实验：
-
-1. `cache.mode=off`，DataLoader 直接读取 `PLATFORM_DATASET_PATH`；
-2. `cache.mode=runtime`，先预热相同数据 shard，再让 DataLoader 读取预热目录。
-
-同时记录：
-
-- 预热耗时与复制字节数；
-- 第一个 epoch 和后续 epoch 的耗时；
-- MiB/s、files/s、P95 单文件延迟；
-- GPU 利用率和 GPU 等待数据比例；
-- 总训练 wall time。
-
-runtime 缓存不会跨任务复用。若训练只有一个很短的 epoch，预热成本可能高于收益；多 epoch、重复读取、小文件密集或数据加载明显让 GPU 空转的任务更可能获益。
-
-### 9.1 已验证结果
-
-读取基准固定为 2 个 Worker、8,192 个文件、5.20 GB：
-
-| 路径 | 吞吐 | files/s | 单文件 P95 |
-| --- | ---: | ---: | ---: |
-| 持久数据首次读 | 19.140 MiB/s | 31.618 | 约 146 ms |
-| 持久数据重复读 | 114.849 MiB/s | 189.727 | 约 15 ms |
-| NVMe 预热后读 | 5,625.340 MiB/s | 9,292.892 | 约 1.8 ms |
-
-NVMe 预热本身耗时 223.146 秒。紧接预热后的本地读取同时受 NVMe 和 Linux 页缓存影响，
-所以这是“任务真实热路径”而不是裸盘测速。
-
-BEVFusion smoke-128 的 2×8 训练也按同一代码、镜像和参数完成 A/B：
-
-| 指标 | 缓存关闭 | NVMe 数据预热 |
+| 用户选择 | `/data1` 对应卷 | `/data2` 对应卷 |
 | --- | ---: | ---: |
-| 任务 | `job-c3427242dc13857bfd225968` | `job-171387b7aed9cbe613b4616f` |
-| 预热 | 无 | 963 文件、961.6 MB、48.9 秒/Worker |
-| 第一步 `data_time` | 3.735 s | 2.398 s |
-| 后 5 步平均 `data_time` | 0.0062 s | 0.0036 s |
-| 后 5 步平均 `time` | 0.2606 s | 0.1690 s |
-| 结果 | SUCCEEDED | SUCCEEDED |
+| `200Gi` | `100Gi` | `100Gi` |
+| `1Ti` | `512Gi` | `512Gi` |
+| `5Ti` | `2.5Ti` | `2.5Ti` |
 
-这项 smoke 只有 6 个 iteration，只证明数据根确实切换到 NVMe、DDP/训练/验证/结果链路
-正常，不能把后 5 步的百分比直接当作全量训练 SLA。计入 48.9 秒预热后，短任务总墙钟
-更慢。正式收益必须按 300～500 个稳态 iteration 或完整多个 epoch 测量。
+文件按相对路径哈希分盘，不保证字节数绝对各占一半。平台会分别检查每块盘的计划字节数和实时可用空间；任一块不足都会在训练启动前失败。
 
-## 10. 管理员部署与验收
-
-### 10.1 交付测试
-
-```bash
-cd /opt/guofeng/vke-cluster/ray-platform
-bash scripts/test-nvme-cache-delivery.sh
-```
-
-这一步检查 Helm 渲染、容量门禁、回收安全、监控清单和运维脚本，不创建训练任务。
-
-### 10.2 安装或升级
-
-```bash
-cd /opt/guofeng/vke-cluster/ray-platform
-bash ops/storage/nvme-cache/install.sh
-```
-
-`install.sh` 会先执行只读节点预检和完整交付测试，再使用固定 production values 做 Helm `--atomic --wait` 部署。不要绕过 preflight，也不要临时使用 `--set` 改节点目录。
-
-### 10.3 真实供应与回收验收
-
-```bash
-cd /opt/guofeng/vke-cluster/ray-platform
-bash ops/storage/nvme-cache/verify.sh
-```
-
-该脚本会在每个已登记 GPU 节点创建临时 smoke Pod/PVC，验证：
-
-- `WaitForFirstConsumer` 和节点亲和；
-- `/mnt/cache` 可写；
-- PVC/PV 删除；
-- 节点缓存目录最终消失。
-
-这是会创建和删除临时 Kubernetes 资源的验收操作，应在明确的变更窗口执行。
-
-### 10.4 新增 GPU 节点
-
-新节点必须先具备两块独立挂载盘，并准备：
+容量至少应满足：
 
 ```text
-/data1/ray-cache
-/data2/ray-cache
+所选输入实际容量 + Ray 临时文件 + object spilling + 10%~20% 余量
 ```
 
-目录必须是可信的真实目录，不能是符号链接。完成节点标签、权限、容量和写删检查后生成只供评审的 values patch：
+不要选 `public` 根去预热约 10 TB 全量数据。应把任务实际使用的数据组织/登记为一个数据集版本目录，再只选择该目录。
 
-```bash
-bash ops/storage/nvme-cache/register-node.sh \
-  --node <Kubernetes节点名> \
-  --output-dir ./nvme-cache-node-review
-```
+## 9. 冷启动、训练收益与适用场景
 
-该命令不会修改集群。管理员审核 `acceptance-report.txt` 和 `values-patch.yaml` 后，才可把节点加入 `helm/ray-cache-local/values-vke-production.yaml`，重新安装并执行完整 verify。
+每个新任务都会先从 TOS/FSX 复制一次，任务结束后缓存释放，不跨任务保留。
 
-## 11. 监控与告警
+预热发生在已经绑定目标 GPU 节点的 Worker Pod 内，因此预热期间该任务的 GPU 配额和显卡已经被保留，但训练进程尚未启动。这样才能保证数据写入训练即将运行的同一台机器；评估总收益时必须把这段冷启动时间算进去。
 
-每台生产 GPU 节点运行一个缓存监控 Pod，导出：
+在 2026-08-26 对 `bev_3dod_s1h`、约 300 GiB/24 万小文件的实测中：
 
-| 指标 | 含义 |
-| --- | --- |
-| `ray_cache_filesystem_size_bytes` | `/data1`、`/data2` 文件系统总量 |
-| `ray_cache_filesystem_available_bytes` | 当前可用空间 |
-| `ray_cache_volume_directories` | 合法缓存卷目录数量 |
-| `ray_cache_teardown_failures_total` | 缓存目录回收失败次数 |
+| 方式 | 稳态单步时间 | `data_time` | 备注 |
+| --- | ---: | ---: | --- |
+| 直接读 TOS/FSX | 约 `3.4~3.7 s` | 常见 `0.02 s`，但有元数据长尾 | 16 卡扩展效率差 |
+| 双 NVMe | 约 `1.5~1.6 s` | 约 `0.02 s` | 单机、多机都明显改善 |
 
-内置告警：
+每节点预热约 15~17 分钟。该结果是当前数据形态和硬件的验收基线，不是所有数据集的性能保证。
 
-| 告警 | 条件 |
-| --- | --- |
-| `RayCacheFilesystemUsageWarning` | 使用率 ≥ 75%，持续 10 分钟 |
-| `RayCacheFilesystemUsageHigh` | 使用率 ≥ 85%，持续 5 分钟 |
-| `RayCacheFilesystemUsageCritical` | 使用率 ≥ 92%，持续 2 分钟 |
-| `RayCacheProvisionerUnavailable` | Provisioner 无可用副本 |
-| `RayCachePVCProvisioningPending` | 缓存 PVC Pending 超过 10 分钟 |
-| `RayCacheTeardownFailure` | 10 分钟内发生目录回收失败 |
+适合自动预热：大量小文件、随机访问、多个 epoch 重复读取、长训练，以及增加 GPU 后共享存储没有获得相同比例加速的任务。
 
-当前只监控磁盘容量、目录数量和回收错误，不提供数据集级命中率。真正的跨任务数据集热缓存、manifest、预热进度和 LRU 回收仍属于后续能力。
-
-## 12. 常见问题
-
-### 页面没有缓存选项
-
-检查后端是否发布：
+不适合：短冒烟任务、少量大文件顺序读取、输入大于 NVMe，或预热时间大于训练节省时间的单轮任务。
 
 ```text
-LOCAL_CACHE_ENABLED=true
-LOCAL_CACHE_STORAGE_CLASS=ray-cache-local
-LOCAL_CACHE_MOUNT_PATH=/mnt/cache
+有收益 = 预热时间 + NVMe 训练时间 < 直接存储训练时间
 ```
 
-并确认 `GET /api/v1/limits` 返回 `cache.enabled=true` 和 `runtime` 模式。
+## 10. 日志和状态怎么看
 
-### 任务一直处于 PROVISIONING
+预热期间任务处于资源准备阶段，GPU 训练日志尚未出现。平台预热日志包含：
 
-优先检查缓存 PVC Event。常见原因：
-
-- GPU 节点未登记在 `nodePathMap`；
-- `/data1`、`/data2` 剩余空间不足；
-- 请求后预计剩余空间低于 15%；
-- local-path helper Pod 创建失败；
-- Provisioner 不可用；
-- 任务调度到没有缓存供应能力的节点。
-
-平台不会在缓存供应失败时悄悄降级到普通目录，否则用户会误以为任务正在使用 NVMe。
-
-### 启用后训练速度没有变化
-
-先确认训练日志中的实际数据路径。如果仍是 `/mnt/storage/public/...`，说明 DataLoader 没有使用缓存。需要显式预热并把数据集根切换到 `/mnt/cache/...`。
-
-如果已经读取缓存，再检查预热成本、CPU 解码、DataLoader worker 数、文件尺寸分布和 GPU 利用率。瓶颈不一定是存储。
-
-### 任务结束后缓存还存在
-
-先确认 RayCluster Pod 是否仍处于保留窗口。Pod 删除后再观察 PVC、PV 和缓存目录。出现 `RayCacheTeardownFailure` 时只处理明确属于 `ray-cache-local` 的精确 PVC 目录，禁止对 `/data1`、`/data2` 或 `ray-cache` 根执行递归删除。
-
-### 能不能把 Checkpoint 写到 `/mnt/cache`
-
-可以写临时副本，但不能作为唯一副本。正式 Checkpoint 必须同步写入 `PLATFORM_OUTPUT_PATH`。节点故障、Pod 重建或任务结束都会使缓存丢失。
-
-### 能不能让不同任务复用同一份数据缓存
-
-当前不能。每个 Pod 都是隔离的临时 PVC，任务结束即回收。跨任务共享需要不可变数据集版本、manifest 摘要、校验、并发预热和 LRU 回收，不能直接复用当前任务目录。
-
-## 13. 安全回滚
-
-回滚顺序：
-
-1. 先在平台 production profile 中关闭 runtime 可用性，阻止新任务选择缓存；
-2. 不修改、不重建已经运行的 runtime 任务；
-3. 等所有 `ray-cache-local` PVC/PV 清空；
-4. 执行只读卸载检查：
-
-```bash
-bash ops/storage/nvme-cache/uninstall.sh
+```text
+RAYTRAIN_DATASET_CACHE_PROGRESS files=<已复制>/<总数> bytes=<字节数>
+RAYTRAIN_DATASET_CACHE={...最终文件数、字节数、耗时、每盘分布...}
 ```
 
-5. 确认输出为零个 PVC/PV 后，再显式卸载：
+预热成功后才出现 Ray Worker、NCCL 和训练 epoch 日志。
 
-```bash
-bash ops/storage/nvme-cache/uninstall.sh --confirm-empty
+| 提示 | 原因 | 处理 |
+| --- | --- | --- |
+| `requires a non-empty input path` | 选了整个数据空间根 | 选择具体数据集版本目录 |
+| `selected dataset exceeds cache capacity` | 某块盘计划数据超过额度或可用空间 | 增大容量，或缩小输入目录 |
+| `source dataset contains a symbolic link` | 输入含可能逃逸授权目录的符号链接 | 发布为真实文件目录后重提 |
+| `dataset cache warmup timed out` | 目录过大、存储/DNS 或节点 I/O 异常 | 查看进度并检查存储，必要时缩小目录 |
+| 训练仍读 `/mnt/storage/public` | 代码写死旧路径 | 使用 `PLATFORM_DATASET_PATH` 或已有 `--data-root` 参数 |
+
+预热失败会在 GPU 训练开始前明确失败，不会静默切回慢速路径。立即回退可用同一代码重提并指定 `--cache-mode off`。
+
+## 11. 任务结束是否自动清理
+
+会。缓存使用 Kubernetes generic ephemeral PVC：
+
+```text
+Ray Worker 删除 -> 临时 PVC 删除 -> 本地 PV 删除 -> provisioner 删除该任务隔离目录
 ```
 
-卸载脚本不会删除 `/data1/ray-cache` 或 `/data2/ray-cache` 根目录。任何时候都不要在仍有 PVC/PV 时卸载 Provisioner。
+训练结果、Checkpoint、MLflow 记录和原始 TOS/FSX 数据不在回收链路中。成功任务较快释放缓存；失败任务为保留诊断窗口，可能延迟数分钟释放。任何必须保留的文件都要写入 `PLATFORM_OUTPUT_PATH`。
 
-## 14. 用户使用检查单
+## 12. 管理员验收
 
-- [ ] 已确认任务确实受临时 I/O、object spilling 或重复数据读取限制；
-- [ ] 已选择 `runtime` 和合适容量；
-- [ ] 代码能在 `PLATFORM_CACHE_PATH` 为空时正常回退；
-- [ ] 只预热本次任务需要的数据 shard，不复制全量公共数据；
-- [ ] 日志打印了最终实际数据路径；
-- [ ] Checkpoint 和结果写入 `PLATFORM_OUTPUT_PATH`；
-- [ ] 使用相同输入和参数对比 off/runtime 的总训练耗时，而不是只比较一次文件读取。
+上线后至少验证：
+
+1. 缓存关闭的旧任务仍可提交；
+2. 只开启 runtime、不开启 preload 的任务没有预热容器；
+3. 开启 preload 的每个 Worker 各有两个临时 PVC；
+4. Head 和 Submitter 不复制数据；
+5. 两块盘都出现文件且统一视图完整；
+6. 超容量、空输入目录和符号链接能在训练前失败；
+7. 输出和 Checkpoint 仍在持久目录；
+8. 任务删除后 PVC、PV 和节点隔离目录自动回收；
+9. 新 GPU 节点完成双盘注册后可正常预热；
+10. 对同一代码、数据和 batch 比较直读与 NVMe 的预热时间、稳态 step time 和总耗时。
+
+底层安装、节点注册、StorageClass、监控和故障恢复请参阅平台运维文档；普通用户不需要这些权限。

@@ -23,6 +23,7 @@ executionMode: torchrun
 cache:
   mode: runtime
   size: 200Gi
+  preload: input
 input:
   space: public
   path: bevfusion/2026-08-0429
@@ -45,7 +46,7 @@ output:
 	if project.MemoryPerWorker != "128Gi" || project.CPUPerWorker != 32 {
 		t.Fatalf("unexpected resources: %+v", project)
 	}
-	if project.Cache.Mode != "runtime" || project.Cache.Size != "200Gi" {
+	if project.Cache.Mode != "runtime" || project.Cache.Size != "200Gi" || project.Cache.Preload != "input" {
 		t.Fatalf("unexpected cache defaults: %+v", project.Cache)
 	}
 }
@@ -96,7 +97,7 @@ func TestProjectFileRejectsBooleanLikeCacheModes(t *testing.T) {
 func TestExplicitFlagsOverrideProjectDefaults(t *testing.T) {
 	project := project{
 		Name: "from-file", Workers: 1, GPUsPerWorker: 8, ExecutionMode: "torchrun",
-		Cache: projectCache{Mode: "runtime", Size: "100Gi"},
+		Cache: projectCache{Mode: "runtime", Size: "100Gi", Preload: "input"},
 	}
 	resolved := project.merge(submitOverrides{
 		Name: "from-flag", GPUsPerWorker: 2, Cache: projectCache{Size: "200Gi"},
@@ -119,6 +120,16 @@ func TestExplicitFlagsOverrideProjectDefaults(t *testing.T) {
 	if modeOnly.Cache.Mode != "off" || modeOnly.Cache.Size != "" {
 		t.Fatalf("an explicit off mode must clear the inherited size, got %+v", modeOnly.Cache)
 	}
+	if modeOnly.Cache.Preload != "" {
+		t.Fatalf("an explicit off mode must clear inherited preload, got %+v", modeOnly.Cache)
+	}
+
+	preloadOnly := project.merge(submitOverrides{
+		Cache: projectCache{Preload: ""}, providedCachePreload: true,
+	})
+	if preloadOnly.Cache.Mode != "runtime" || preloadOnly.Cache.Size != "100Gi" || preloadOnly.Cache.Preload != "" {
+		t.Fatalf("an explicit empty preload must disable only automatic staging, got %+v", preloadOnly.Cache)
+	}
 
 	runtimeModeOnly := project.merge(submitOverrides{
 		Cache: projectCache{Mode: "runtime"}, providedCacheMode: true,
@@ -133,7 +144,7 @@ func TestWriteProjectProducesAReadableStarterFile(t *testing.T) {
 	if err := writeProject(root, project{
 		Name: "my-training", Image: "registry.example/img@sha256:2222222222222222222222222222222222222222222222222222222222222222",
 		Entrypoint: "python train.py", Workers: 1, GPUsPerWorker: 8, CPUPerWorker: 32,
-		MemoryPerWorker: "128Gi", ExecutionMode: "torchrun", Cache: projectCache{Mode: "runtime", Size: "200Gi"},
+		MemoryPerWorker: "128Gi", ExecutionMode: "torchrun", Cache: projectCache{Mode: "runtime", Size: "200Gi", Preload: "input"},
 	}); err != nil {
 		t.Fatalf("write project: %v", err)
 	}
@@ -141,7 +152,7 @@ func TestWriteProjectProducesAReadableStarterFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"name: my-training", "gpusPerWorker: 8", "executionMode: torchrun", "cache:", "mode: runtime", "size: 200Gi"} {
+	for _, expected := range []string{"name: my-training", "gpusPerWorker: 8", "executionMode: torchrun", "cache:", "mode: runtime", "size: 200Gi", "preload: input"} {
 		if !strings.Contains(string(written), expected) {
 			t.Fatalf("expected %q in the starter file:\n%s", expected, written)
 		}

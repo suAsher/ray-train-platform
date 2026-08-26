@@ -1,38 +1,11 @@
-# 训练数据预热到节点 NVMe
+# 训练数据预热实现参考
 
-`stage_dataset.py` 把平台已经选中的只读输入根从 `PLATFORM_DATASET_PATH` 按相对路径
-SHA-256 稳定分片到 `PLATFORM_CACHE_PATHS` 中的两块 NVMe，并在第一块盘生成统一视图
-`/mnt/cache/dataset-view`。同一个 Worker 中只有 `LOCAL_RANK=0` 执行复制，其他 GPU
-rank 等待就绪标记。旧环境只提供 `PLATFORM_CACHE_PATH` 时仍按单盘工作。
+平台现在推荐使用提交参数 `cache.preload: input`，由 Worker init container 自动调用本目录的 `stage_dataset.py`。普通用户不需要把这个脚本复制到训练仓库。
 
-把 `stage_dataset.py` 放进自己的代码仓库，例如 `tools/stage_dataset.py`，然后让训练入口
-先取得实际路径：
+该脚本仍作为以下用途保留：
 
-```bash
-PLATFORM_DATASET_PATH="$(python3 tools/stage_dataset.py)"
-export PLATFORM_DATASET_PATH
-python3 tools/train.py --data-root "$PLATFORM_DATASET_PATH"
-```
+- 平台预热镜像的可测试实现源；
+- 管理员本地验证双盘分片、容量保护和原子发布；
+- 自动预热版本上线前的旧任务兼容参考。
 
-提交配置必须同时选择精确的数据子目录和 runtime 缓存：
-
-```yaml
-cache:
-  mode: runtime
-  size: 500Gi
-input:
-  space: public
-  path: <数据集版本或 shard>
-```
-
-不要选择整个 `public` 根。每个 Worker 都有独立 NVMe 卷，因此 2 个 Worker 会分别复制
-一份选中数据。Checkpoint、模型和训练报告仍写 `PLATFORM_OUTPUT_PATH`，不能只放在缓存。
-
-任务日志会出现：
-
-```text
-RAYTRAIN_DATASET_CACHE={"path":"/mnt/cache/dataset-view","copied":true,"roots":[...],...}
-```
-
-其中 `files`、`bytes` 和 `seconds` 是预热成本。比较加速效果时，必须把这段时间计入总
-墙钟时间；训练数据只读一遍时，预热可能比直接远端读取更慢。
+用户用法请阅读 [`docs/NVME_CACHE_GUIDE.md`](../../docs/NVME_CACHE_GUIDE.md)。

@@ -15,9 +15,12 @@ func TestCacheRequestValidation(t *testing.T) {
 		{name: "omitted is backward compatible", cache: CacheRequest{}},
 		{name: "off", cache: CacheRequest{Mode: CacheModeOff}},
 		{name: "runtime", cache: CacheRequest{Mode: CacheModeRuntime, Size: "200Gi"}},
+		{name: "runtime with automatic input preload", cache: CacheRequest{Mode: CacheModeRuntime, Size: "200Gi", Preload: CachePreloadInput}},
 		{name: "invalid mode", cache: CacheRequest{Mode: "always"}, wantErr: "unsupported cache mode"},
+		{name: "invalid preload", cache: CacheRequest{Mode: CacheModeRuntime, Size: "200Gi", Preload: "dataset"}, wantErr: "unsupported cache preload"},
 		{name: "omitted with size", cache: CacheRequest{Size: "200Gi"}, wantErr: "off cache cannot specify size"},
 		{name: "off with size", cache: CacheRequest{Mode: CacheModeOff, Size: "200Gi"}, wantErr: "off cache cannot specify size"},
+		{name: "off with preload", cache: CacheRequest{Mode: CacheModeOff, Preload: CachePreloadInput}, wantErr: "off cache cannot specify preload"},
 		{name: "runtime without size", cache: CacheRequest{Mode: CacheModeRuntime}, wantErr: "runtime cache size is required"},
 		{name: "runtime invalid size", cache: CacheRequest{Mode: CacheModeRuntime, Size: "large"}, wantErr: "positive Kubernetes storage quantity"},
 	}
@@ -44,12 +47,45 @@ func TestJobSpecCacheJSONShapeAndOmittedCompatibility(t *testing.T) {
 		t.Fatalf("legacy cache must remain omitted: %#v", legacy.Cache)
 	}
 
-	payload, err := json.Marshal(JobSpec{Cache: CacheRequest{Mode: CacheModeRuntime, Size: "200Gi"}})
+	payload, err := json.Marshal(JobSpec{Cache: CacheRequest{Mode: CacheModeRuntime, Size: "200Gi", Preload: CachePreloadInput}})
 	if err != nil {
 		t.Fatalf("encode job spec: %v", err)
 	}
-	if !strings.Contains(string(payload), `"cache":{"mode":"runtime","size":"200Gi"}`) {
+	if !strings.Contains(string(payload), `"cache":{"mode":"runtime","size":"200Gi","preload":"input"}`) {
 		t.Fatalf("unexpected cache JSON shape: %s", payload)
+	}
+}
+
+func TestJobSpecValidateRequiresExactGovernedInputForAutomaticPreload(t *testing.T) {
+	base := JobSpec{
+		Name:       "cache-preload",
+		Image:      "registry.example.com/ray-train@sha256:" + strings.Repeat("a", 64),
+		Source:     CodeSource{Type: "git", URL: "https://git.example.com/team/train.git", Commit: "0123456789abcdef"},
+		Entrypoint: Entrypoint{Command: []string{"python", "train.py"}},
+		Resources:  Resources{WorkerReplicas: 2, GPUsPerWorker: 8, CPUPerWorker: 32, MemoryPerWorker: "128Gi"},
+		Queue:      "team-gpu-queue",
+		Cache:      CacheRequest{Mode: CacheModeRuntime, Size: "1Ti", Preload: CachePreloadInput},
+	}
+	for _, test := range []struct {
+		name    string
+		input   DataLocation
+		wantErr string
+	}{
+		{name: "missing input", wantErr: "automatic cache preload requires"},
+		{name: "whole logical root", input: DataLocation{Space: DataSpacePublic}, wantErr: "non-empty input path"},
+		{name: "exact public dataset", input: DataLocation{Space: DataSpacePublic, RelativePath: "labeled/fz-v1"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			spec := base
+			spec.Input = test.input
+			err := spec.Validate()
+			if test.wantErr == "" && err != nil {
+				t.Fatalf("validate preloaded job: %v", err)
+			}
+			if test.wantErr != "" && (err == nil || !strings.Contains(err.Error(), test.wantErr)) {
+				t.Fatalf("expected %q, got %v", test.wantErr, err)
+			}
+		})
 	}
 }
 

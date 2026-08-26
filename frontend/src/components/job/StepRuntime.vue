@@ -61,9 +61,24 @@
       >
         <el-option v-for="size in cachePolicy.allowedSizes" :key="size" :label="size" :value="size" />
       </el-select>
+      <div v-if="form.cacheMode === 'runtime'" class="mt-4 rounded-xl border border-blue-900/60 bg-blue-950/20 p-3">
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <p class="text-sm font-medium text-blue-100">自动预热所选输入到双 NVMe</p>
+            <p class="mt-1 text-xs leading-5 text-slate-400">每个 Worker 在训练启动前复制一份，只需选择具体的数据集子目录，模型代码不负责复制。</p>
+          </div>
+          <el-switch :model-value="form.cachePreload === 'input'" @change="selectCachePreload" />
+        </div>
+        <el-alert
+          v-if="form.cachePreload === 'input' && !hasExactInput"
+          class="mt-3" type="warning" show-icon :closable="false"
+          title="请先在数据步骤选择一个具体的数据集子目录；不能预热整个 public、团队或个人根目录。"
+        />
+      </div>
       <p class="field-help">
-        这是随任务结束释放的一次性缓存，仅用于 Ray 临时文件、object spill，以及训练代码显式写入 <code>{{ cachePolicy.mountPath }}</code> 的文件。
-        平台不会自动缓存 <code>/mnt/storage</code>、公共数据或 DataLoader；输出和 Checkpoint 仍写入持久存储。
+        这是随任务结束释放的一次性缓存。不开启自动预热时，仅用于 Ray 临时文件、object spill，以及训练代码显式写入
+        <code>{{ cachePolicy.mountPath }}</code> 的内容；开启后，平台会把所选输入分片到两块 NVMe 并自动切换训练数据路径。
+        冷启动会增加一次复制时间；输出和 Checkpoint 始终写入持久存储。
       </p>
     </div>
 
@@ -131,11 +146,13 @@ defineEmits(['apply-profile'])
 const cachePolicy = computed(() => normalizeCachePolicy(props.limits.cache))
 const runtimeCacheAvailable = computed(() =>
   cachePolicy.value.modes.includes('runtime') && cachePolicy.value.allowedSizes.length > 0)
+const hasExactInput = computed(() => Boolean(String(props.form.input?.spaceId || '').trim() && String(props.form.input?.relativePath || '').trim()))
 
 const applyCacheSelection = (selection, selectRuntimeDefault = false) => {
   const normalized = normalizeCacheSelection(selection, cachePolicy.value, { selectRuntimeDefault })
   props.form.cacheMode = normalized.cacheMode
   props.form.cacheSize = normalized.cacheSize
+  if (normalized.cacheMode !== 'runtime') props.form.cachePreload = ''
 }
 
 const selectCacheMode = (cacheMode) => {
@@ -144,6 +161,10 @@ const selectCacheMode = (cacheMode) => {
 
 const selectCacheSize = (cacheSize) => {
   applyCacheSelection({ cacheMode: 'runtime', cacheSize })
+}
+
+const selectCachePreload = (enabled) => {
+  props.form.cachePreload = enabled ? 'input' : ''
 }
 
 const profileClass = (profile) => {

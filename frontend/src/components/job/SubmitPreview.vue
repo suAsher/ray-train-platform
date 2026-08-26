@@ -75,7 +75,8 @@ const cacheSummary = computed(() => {
   if (props.form.cacheMode !== 'runtime') return '已关闭'
   const size = String(props.form.cacheSize || '').trim() || '尚未选择容量'
   const mountPath = String(props.cachePolicy.mountPath || '').trim() || '挂载路径未提供'
-  return `运行时 · ${size} · 挂载到 ${mountPath}`
+	const preload = props.form.cachePreload === 'input' ? ' · 自动预热所选输入' : ''
+  return `运行时 · ${size} · 挂载到 ${mountPath}${preload}`
 })
 
 const cliCommand = computed(() => equivalentSubmitCommand(props.form))

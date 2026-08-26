@@ -71,6 +71,19 @@ func TestSubmissionNormalizesAndEnforcesRuntimeCachePolicy(t *testing.T) {
 	}
 }
 
+func TestNormalizeCacheRequestTrimsAutomaticPreload(t *testing.T) {
+	cache, err := normalizeCacheRequest(
+		domain.CacheRequest{Mode: domain.CacheModeRuntime, Preload: " input "},
+		LocalCachePolicy{Enabled: true, AllowedSizes: []string{"1Ti"}, DefaultSize: "1Ti", MaxSize: "1Ti"},
+	)
+	if err != nil {
+		t.Fatalf("normalize automatic preload: %v", err)
+	}
+	if cache.Preload != domain.CachePreloadInput || cache.Size != "1Ti" {
+		t.Fatalf("unexpected normalized cache: %+v", cache)
+	}
+}
+
 func TestSubmissionServiceCopiesCacheAllowlist(t *testing.T) {
 	allowed := []string{"200Gi"}
 	service := NewSubmissionService(&submissionServiceRepository{}, SubmissionServiceOptions{

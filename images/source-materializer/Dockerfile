@@ -16,5 +16,6 @@ RUN alpine_version="$(cut -d. -f1-2 /etc/alpine-release)" \
 
 USER 65532:65532
 WORKDIR /workspace
-COPY platform-safe-extract.py /usr/local/bin/platform-safe-extract.py
+COPY images/source-materializer/platform-safe-extract.py /usr/local/bin/platform-safe-extract.py
+COPY examples/dataset-cache/stage_dataset.py /usr/local/bin/platform-stage-dataset.py
 ENTRYPOINT ["/bin/sh"]

@@ -484,6 +484,7 @@ func normalizeSubmissionSpec(principal auth.Principal, origin domain.SubmissionO
 func normalizeCacheRequest(cache domain.CacheRequest, policy LocalCachePolicy) (domain.CacheRequest, error) {
 	cache.Mode = domain.CacheMode(strings.TrimSpace(string(cache.Mode)))
 	cache.Size = strings.TrimSpace(cache.Size)
+	cache.Preload = domain.CachePreloadMode(strings.TrimSpace(string(cache.Preload)))
 	if cache.Mode == "" {
 		if err := cache.Validate(); err != nil {
 			return domain.CacheRequest{}, err

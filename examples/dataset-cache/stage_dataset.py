@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -103,6 +104,8 @@ def stage_selected_dataset(
     cache_roots: Sequence[Path],
     local_rank: int,
     timeout_seconds: int,
+    copy_workers: int = 32,
+    max_bytes_per_root: int = 0,
 ) -> StageResult:
     source = source_root.resolve()
     if not source.is_dir():
@@ -110,6 +113,10 @@ def stage_selected_dataset(
     roots = _validated_roots(source, cache_roots)
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be positive")
+    if copy_workers <= 0 or copy_workers > 128:
+        raise ValueError("copy_workers must be between 1 and 128")
+    if max_bytes_per_root < 0:
+        raise ValueError("max_bytes_per_root must not be negative")
 
     for root in roots:
         root.mkdir(parents=True, exist_ok=True)
@@ -127,15 +134,66 @@ def stage_selected_dataset(
         started = time.perf_counter()
         root_files = [0 for _ in roots]
         root_bytes = [0 for _ in roots]
+        planned_bytes = [0 for _ in roots]
+        planned_files = 0
         for source_file, relative in _source_files(source):
+            index = cache_root_index(relative, len(roots))
+            planned_bytes[index] += source_file.stat().st_size
+            planned_files += 1
+        if planned_files == 0:
+            raise ValueError("selected dataset is empty")
+        for index, planned_size in enumerate(planned_bytes):
+            if max_bytes_per_root and planned_size > max_bytes_per_root:
+                raise ValueError(
+                    f"selected dataset exceeds cache capacity on {roots[index]}: "
+                    f"planned={planned_size} limit={max_bytes_per_root}"
+                )
+            available = shutil.disk_usage(roots[index]).free
+            if planned_size > available:
+                raise ValueError(
+                    f"selected dataset exceeds cache capacity on {roots[index]}: "
+                    f"planned={planned_size} available={available}"
+                )
+
+        def copy_planned(item: tuple[Path, Path]) -> tuple[int, int]:
+            source_file, relative = item
             index = cache_root_index(relative, len(roots))
             destination = roots[index] / "data" / relative
             copied_bytes = _copy_file(source_file, destination)
-            root_files[index] += 1
-            root_bytes[index] += copied_bytes
             link = temporary_view / relative
             link.parent.mkdir(parents=True, exist_ok=True)
             link.symlink_to(destination)
+            return index, copied_bytes
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=copy_workers) as executor:
+            items = iter(_source_files(source))
+            pending: set[concurrent.futures.Future[tuple[int, int]]] = set()
+            for _ in range(copy_workers * 4):
+                item = next(items, None)
+                if item is None:
+                    break
+                pending.add(executor.submit(copy_planned, item))
+
+            completed = 0
+            while pending:
+                finished, pending = concurrent.futures.wait(
+                    pending, return_when=concurrent.futures.FIRST_COMPLETED
+                )
+                for future in finished:
+                    index, copied_bytes = future.result()
+                    root_files[index] += 1
+                    root_bytes[index] += copied_bytes
+                    completed += 1
+                    if completed % 5000 == 0 or completed == planned_files:
+                        print(
+                            f"RAYTRAIN_DATASET_CACHE_PROGRESS files={completed}/{planned_files} "
+                            f"bytes={sum(root_bytes)}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                    item = next(items, None)
+                    if item is not None:
+                        pending.add(executor.submit(copy_planned, item))
         temporary_view.replace(view)
         elapsed = max(time.perf_counter() - started, 1e-9)
         result = StageResult(
@@ -173,7 +231,9 @@ def stage_selected_dataset(
 
 
 def main() -> int:
-    source_value = os.environ.get("PLATFORM_DATASET_PATH", "").strip()
+    source_value = os.environ.get("PLATFORM_DATASET_SOURCE_PATH", "").strip()
+    if not source_value:
+        source_value = os.environ.get("PLATFORM_DATASET_PATH", "").strip()
     if not source_value:
         raise RuntimeError("PLATFORM_DATASET_PATH is required")
     paths_value = os.environ.get("PLATFORM_CACHE_PATHS", "").strip()
@@ -189,6 +249,8 @@ def main() -> int:
         cache_roots=[Path(item) for item in paths_value.split(":") if item],
         local_rank=int(os.environ.get("LOCAL_RANK", "0")),
         timeout_seconds=int(os.environ.get("PLATFORM_CACHE_STAGE_TIMEOUT", "7200")),
+        copy_workers=int(os.environ.get("PLATFORM_CACHE_COPY_WORKERS", "32")),
+        max_bytes_per_root=int(os.environ.get("PLATFORM_CACHE_LIMIT_BYTES_PER_DISK", "0")),
     )
     print(
         "RAYTRAIN_DATASET_CACHE=" + json.dumps(_result_payload(result), ensure_ascii=False),

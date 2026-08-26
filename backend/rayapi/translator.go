@@ -20,6 +20,9 @@ const (
 	metadataQueue          = "ray-platform.queue"
 	metadataCacheMode      = "platform.cache.mode"
 	metadataCacheSize      = "platform.cache.size"
+	metadataCachePreload   = "platform.cache.preload"
+	metadataInputSpace     = "platform.data.input-space"
+	metadataInputPath      = "platform.data.input-path"
 )
 
 var (
@@ -46,7 +49,11 @@ func TranslateSubmitRequest(request JobSubmitRequest) (TranslatedSubmitRequest, 
 	if err != nil {
 		return TranslatedSubmitRequest{}, err
 	}
-	return translateSubmitRequest(request, resources, queue, image, cache)
+	input, err := parseInputMetadata(request.Metadata)
+	if err != nil {
+		return TranslatedSubmitRequest{}, err
+	}
+	return translateSubmitRequest(request, resources, queue, image, cache, input)
 }
 
 // TranslateSubmitRequestWithDefaults accepts the standard Ray CLI shape. With
@@ -63,10 +70,14 @@ func TranslateSubmitRequestWithDefaults(request JobSubmitRequest, defaults Submi
 	if err != nil {
 		return TranslatedSubmitRequest{}, err
 	}
-	return translateSubmitRequest(request, resources, queue, image, cache)
+	input, err := parseInputMetadata(request.Metadata)
+	if err != nil {
+		return TranslatedSubmitRequest{}, err
+	}
+	return translateSubmitRequest(request, resources, queue, image, cache, input)
 }
 
-func translateSubmitRequest(request JobSubmitRequest, resources domain.Resources, queue, image string, cache domain.CacheRequest) (TranslatedSubmitRequest, error) {
+func translateSubmitRequest(request JobSubmitRequest, resources domain.Resources, queue, image string, cache domain.CacheRequest, input domain.DataLocation) (TranslatedSubmitRequest, error) {
 	if strings.TrimSpace(request.Entrypoint) == "" || len(request.Entrypoint) > 8192 {
 		return TranslatedSubmitRequest{}, fmt.Errorf("invalid entrypoint")
 	}
@@ -99,6 +110,7 @@ func translateSubmitRequest(request JobSubmitRequest, resources domain.Resources
 			Resources:  resources,
 			Queue:      queue,
 			Cache:      cache,
+			Input:      input,
 		},
 		ExternalSubmissionID: externalID,
 	}, nil
@@ -106,23 +118,55 @@ func translateSubmitRequest(request JobSubmitRequest, resources domain.Resources
 
 func parseCacheMetadata(metadata map[string]string) (domain.CacheRequest, error) {
 	for key := range metadata {
-		if strings.HasPrefix(key, "platform.cache.") && key != metadataCacheMode && key != metadataCacheSize {
+		if strings.HasPrefix(key, "platform.cache.") && key != metadataCacheMode && key != metadataCacheSize && key != metadataCachePreload {
 			return domain.CacheRequest{}, fmt.Errorf("unsupported cache metadata %q", key)
 		}
 	}
 	mode := domain.CacheMode(strings.TrimSpace(metadata[metadataCacheMode]))
 	size := strings.TrimSpace(metadata[metadataCacheSize])
+	preload := domain.CachePreloadMode(strings.TrimSpace(metadata[metadataCachePreload]))
 	switch mode {
 	case "", domain.CacheModeOff:
 		if size != "" {
 			return domain.CacheRequest{}, fmt.Errorf("off cache cannot specify size")
 		}
+		if preload != "" {
+			return domain.CacheRequest{}, fmt.Errorf("off cache cannot specify preload")
+		}
 		return domain.CacheRequest{}, nil
 	case domain.CacheModeRuntime:
-		return domain.CacheRequest{Mode: mode, Size: size}, nil
+		cache := domain.CacheRequest{Mode: mode, Size: size, Preload: preload}
+		if err := cache.Validate(); err != nil && size != "" {
+			return domain.CacheRequest{}, err
+		}
+		if preload != "" && preload != domain.CachePreloadInput {
+			return domain.CacheRequest{}, fmt.Errorf("unsupported cache preload %q", preload)
+		}
+		return cache, nil
 	default:
 		return domain.CacheRequest{}, fmt.Errorf("unsupported cache mode %q", mode)
 	}
+}
+
+func parseInputMetadata(metadata map[string]string) (domain.DataLocation, error) {
+	for key := range metadata {
+		if strings.HasPrefix(key, "platform.data.") && key != metadataInputSpace && key != metadataInputPath {
+			return domain.DataLocation{}, fmt.Errorf("unsupported data metadata %q", key)
+		}
+	}
+	space := domain.DataSpaceID(strings.TrimSpace(metadata[metadataInputSpace]))
+	relativePath := strings.TrimSpace(metadata[metadataInputPath])
+	if space == "" && relativePath == "" {
+		return domain.DataLocation{}, nil
+	}
+	if space == "" || relativePath == "" {
+		return domain.DataLocation{}, fmt.Errorf("input space and non-empty input path must be specified together")
+	}
+	location, err := domain.NewDataLocation(space, relativePath)
+	if err != nil {
+		return domain.DataLocation{}, fmt.Errorf("invalid input metadata: %w", err)
+	}
+	return location, nil
 }
 
 func executionProfileForResources(resources domain.Resources) domain.ExecutionProfile {

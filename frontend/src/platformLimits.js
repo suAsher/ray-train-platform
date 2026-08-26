@@ -68,8 +68,9 @@ export function normalizeCacheSelection(selection, policy, { selectRuntimeDefaul
 export function cacheQueryForJob(job) {
   const mode = String(job?.spec?.cache?.mode || '').trim()
   const size = String(job?.spec?.cache?.size || '').trim()
+	const preload = String(job?.spec?.cache?.preload || '').trim()
   return mode === 'runtime' && size
-    ? { cacheMode: 'runtime', cacheSize: size }
+	? { cacheMode: 'runtime', cacheSize: size, ...(preload === 'input' ? { cachePreload: 'input' } : {}) }
     : {}
 }
 

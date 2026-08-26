@@ -97,6 +97,9 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 		return nil, fmt.Errorf("local cache: %w", err)
 	}
 	options.LocalCache = localCache
+	if job.Spec.Cache.Preload == domain.CachePreloadInput && job.Spec.ResolvedDataMounts.Input == nil {
+		return nil, fmt.Errorf("automatic cache preload requires a resolved governed input mount")
+	}
 	if err := options.MLflow.Validate(); err != nil {
 		return nil, fmt.Errorf("MLflow: %w", err)
 	}
@@ -515,6 +518,13 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 			},
 		)
 	}
+	preloadInput := mountData && !head && options.LocalCache.runtime && jobSpec.Cache.Preload == domain.CachePreloadInput
+	if preloadInput {
+		sourcePath := environmentValue(env, "PLATFORM_DATASET_PATH")
+		env = setEnvironmentValue(env, "PLATFORM_DATASET_SOURCE_PATH", sourcePath)
+		env = setEnvironmentValue(env, "PLATFORM_DATASET_PATH", path.Join(options.LocalCache.MountPathData1, "dataset-view"))
+		env = setEnvironmentValue(env, "PLATFORM_CACHE_PRELOAD", string(domain.CachePreloadInput))
+	}
 	podSpec := map[string]any{
 		"serviceAccountName":           options.ServiceAccount,
 		"automountServiceAccountToken": options.ServiceAccount != "",
@@ -534,6 +544,9 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 	if materializeSource {
 		podSpec["initContainers"] = []any{sourceMaterializer(source, jobSpec, options)}
 	}
+	if preloadInput {
+		podSpec["initContainers"] = []any{datasetCachePreloader(options.SourceMaterializerImage, volumeMounts, options.LocalCache)}
+	}
 	if mountData && options.LocalCache.runtime {
 		podSpec["securityContext"].(map[string]any)["fsGroup"] = int64(1000)
 	}
@@ -547,6 +560,77 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 		delete(podSpec, "serviceAccountName")
 	}
 	return map[string]any{"spec": podSpec}
+}
+
+func environmentValue(environment []any, name string) string {
+	for _, item := range environment {
+		entry, _ := item.(map[string]any)
+		if entry["name"] == name {
+			value, _ := entry["value"].(string)
+			return value
+		}
+	}
+	return ""
+}
+
+func setEnvironmentValue(environment []any, name, value string) []any {
+	updated := make([]any, 0, len(environment)+1)
+	replaced := false
+	for _, item := range environment {
+		entry, _ := item.(map[string]any)
+		if entry["name"] == name {
+			updated = append(updated, map[string]any{"name": name, "value": value})
+			replaced = true
+			continue
+		}
+		updated = append(updated, item)
+	}
+	if !replaced {
+		updated = append(updated, map[string]any{"name": name, "value": value})
+	}
+	return updated
+}
+
+func datasetCachePreloader(image string, workerMounts []any, cache LocalCacheOptions) map[string]any {
+	mounts := make([]any, 0, 3)
+	for _, item := range workerMounts {
+		mount, _ := item.(map[string]any)
+		name, _ := mount["name"].(string)
+		mountPath, _ := mount["mountPath"].(string)
+		if name == "local-cache-data1" || name == "local-cache-data2" || mountPath == domain.DataMountInputPath {
+			copy := make(map[string]any, len(mount))
+			for key, value := range mount {
+				copy[key] = value
+			}
+			mounts = append(mounts, copy)
+		}
+	}
+	perDisk, _ := resource.ParseQuantity(cache.resolvedSizePerDisk)
+	return map[string]any{
+		"name":            "dataset-cache-preloader",
+		"image":           image,
+		"imagePullPolicy": "IfNotPresent",
+		"command":         []any{"python3", "/usr/local/bin/platform-stage-dataset.py"},
+		"env": []any{
+			map[string]any{"name": "PLATFORM_DATASET_SOURCE_PATH", "value": domain.DataMountInputPath},
+			map[string]any{"name": "PLATFORM_CACHE_PATHS", "value": cache.MountPathData1 + ":" + cache.MountPathData2},
+			map[string]any{"name": "PLATFORM_CACHE_STAGE_TIMEOUT", "value": "14400"},
+			map[string]any{"name": "PLATFORM_CACHE_COPY_WORKERS", "value": "32"},
+			map[string]any{"name": "PLATFORM_CACHE_LIMIT_BYTES_PER_DISK", "value": strconv.FormatInt(perDisk.Value(), 10)},
+		},
+		"resources": map[string]any{
+			"requests": map[string]any{"cpu": "2", "memory": "1Gi"},
+			"limits":   map[string]any{"cpu": "8", "memory": "4Gi"},
+		},
+		"securityContext": map[string]any{
+			"runAsNonRoot":             true,
+			"runAsUser":                int64(65532),
+			"runAsGroup":               int64(65532),
+			"allowPrivilegeEscalation": false,
+			"capabilities":             map[string]any{"drop": []any{"ALL"}},
+		},
+		"volumeMounts": mounts,
+	}
 }
 
 func (options MLflowOptions) Validate() error {

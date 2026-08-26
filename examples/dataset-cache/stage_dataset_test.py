@@ -7,6 +7,20 @@ import stage_dataset
 
 
 class StageDatasetTest(unittest.TestCase):
+    def test_empty_dataset_is_rejected_before_publish(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.mkdir()
+
+            with self.assertRaisesRegex(ValueError, "selected dataset is empty"):
+                stage_dataset.stage_selected_dataset(
+                    source_root=source,
+                    cache_roots=[root / "cache-a", root / "cache-b"],
+                    local_rank=0,
+                    timeout_seconds=5,
+                )
+
     def test_rank_zero_atomically_copies_selected_dataset(self):
         with tempfile.TemporaryDirectory() as root:
             base = Path(root)
@@ -90,6 +104,51 @@ class StageDatasetTest(unittest.TestCase):
                 relative = Path(f"sample-{index:03d}.bin")
                 expected = stage_dataset.cache_root_index(relative, 2)
                 self.assertTrue((base / f"cache{expected + 1}" / "data" / relative).is_file())
+
+    def test_rejects_a_dataset_that_exceeds_either_nvme_share(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            source = base / "source"
+            source.mkdir()
+            for index in range(32):
+                (source / f"sample-{index:03d}.bin").write_bytes(b"x" * 1024)
+
+            with self.assertRaisesRegex(ValueError, "exceeds cache capacity"):
+                stage_dataset.stage_selected_dataset(
+                    source_root=source,
+                    cache_roots=[base / "cache1", base / "cache2"],
+                    local_rank=0,
+                    timeout_seconds=5,
+                    max_bytes_per_root=1024,
+                )
+
+    def test_parallel_copy_reports_every_file_and_reuses_atomic_ready_marker(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            source = base / "source"
+            source.mkdir()
+            for index in range(64):
+                (source / f"sample-{index:03d}.bin").write_bytes(bytes([index]))
+
+            first = stage_dataset.stage_selected_dataset(
+                source_root=source,
+                cache_roots=[base / "cache1", base / "cache2"],
+                local_rank=0,
+                timeout_seconds=5,
+                copy_workers=8,
+            )
+            second = stage_dataset.stage_selected_dataset(
+                source_root=source,
+                cache_roots=[base / "cache1", base / "cache2"],
+                local_rank=1,
+                timeout_seconds=5,
+                copy_workers=8,
+            )
+
+            self.assertTrue(first.copied)
+            self.assertFalse(second.copied)
+            self.assertEqual(first.files, second.files)
+            self.assertEqual(first.bytes, second.bytes)
 
     def test_rejects_source_symlinks_and_overlapping_cache_roots(self):
         with tempfile.TemporaryDirectory() as root:

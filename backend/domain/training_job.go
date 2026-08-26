@@ -68,28 +68,39 @@ type RetryPolicy struct {
 }
 
 type CacheMode string
+type CachePreloadMode string
 
 const (
 	CacheModeOff     CacheMode = "off"
 	CacheModeRuntime CacheMode = "runtime"
+
+	CachePreloadInput CachePreloadMode = "input"
 )
 
 type CacheRequest struct {
-	Mode CacheMode `json:"mode,omitempty"`
-	Size string    `json:"size,omitempty"`
+	Mode    CacheMode        `json:"mode,omitempty"`
+	Size    string           `json:"size,omitempty"`
+	Preload CachePreloadMode `json:"preload,omitempty"`
 }
 
 func (cache CacheRequest) Validate() error {
 	size := strings.TrimSpace(cache.Size)
+	preload := CachePreloadMode(strings.TrimSpace(string(cache.Preload)))
 	switch cache.Mode {
 	case "", CacheModeOff:
 		if size != "" {
 			return fmt.Errorf("off cache cannot specify size")
 		}
+		if preload != "" {
+			return fmt.Errorf("off cache cannot specify preload")
+		}
 		return nil
 	case CacheModeRuntime:
 		if size == "" {
 			return fmt.Errorf("runtime cache size is required")
+		}
+		if preload != "" && preload != CachePreloadInput {
+			return fmt.Errorf("unsupported cache preload %q", preload)
 		}
 		quantity, err := resource.ParseQuantity(size)
 		if err != nil || quantity.Sign() <= 0 {
@@ -241,6 +252,14 @@ func (s JobSpec) Validate() error {
 	}
 	if err := validateLogicalDataLocations(s); err != nil {
 		return err
+	}
+	if s.Cache.Preload == CachePreloadInput {
+		if s.Input.Space == "" {
+			return fmt.Errorf("automatic cache preload requires a governed input data space")
+		}
+		if strings.TrimSpace(s.Input.RelativePath) == "" {
+			return fmt.Errorf("automatic cache preload requires a non-empty input path")
+		}
 	}
 	if err := s.ResolvedStorage.Validate(); err != nil {
 		return err

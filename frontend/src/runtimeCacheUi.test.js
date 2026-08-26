@@ -12,21 +12,23 @@ test('job form defaults cache off and renders only the server-enabled runtime ch
 
   assert.match(formSource, /cacheMode:\s*'off'/)
   assert.match(formSource, /cacheSize:\s*''/)
+  assert.match(formSource, /cachePreload:\s*''/)
   assert.match(runtimeSource, /v-if="cachePolicy\.enabled"/)
   assert.match(runtimeSource, /allowedSizes/)
   assert.match(runtimeSource, /value="off"/)
   assert.match(runtimeSource, /value="runtime"/)
 })
 
-test('runtime cache warning describes its disposable and explicit-only boundary in Chinese', async () => {
+test('runtime cache offers platform-managed automatic input preload with clear boundaries', async () => {
   const runtimeSource = await read('./components/job/StepRuntime.vue')
 
   assert.match(runtimeSource, /随任务结束释放的一次性缓存/)
   assert.match(runtimeSource, /Ray 临时文件/)
   assert.match(runtimeSource, /object spill/)
-  assert.match(runtimeSource, /显式写入[\s\S]*cachePolicy\.mountPath/)
-  assert.doesNotMatch(runtimeSource, /<code>\/mnt\/cache<\/code>/)
-  assert.match(runtimeSource, /不会自动缓存.*\/mnt\/storage.*公共数据.*DataLoader/)
+  assert.match(runtimeSource, /自动预热所选输入到双 NVMe/)
+  assert.match(runtimeSource, /cachePreload/)
+  assert.match(runtimeSource, /每个 Worker/)
+  assert.match(runtimeSource, /具体的数据集子目录/)
   assert.match(runtimeSource, /输出和 Checkpoint.*持久存储/)
 })
 
@@ -56,6 +58,7 @@ test('copy and resubmit carry cache query values while the form validates them a
   }
   assert.match(formSource, /route\?\.query\?\.cacheMode/)
   assert.match(formSource, /route\?\.query\?\.cacheSize/)
+  assert.match(formSource, /route\?\.query\?\.cachePreload/)
   assert.match(formSource, /normalizeCacheSelection/)
   assert.ok(
     formSource.indexOf('await Promise.allSettled') < formSource.lastIndexOf('route?.query?.cacheMode'),

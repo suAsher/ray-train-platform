@@ -12,6 +12,7 @@ import (
 
 type projectCacheDraft struct {
 	mode         domain.CacheMode
+	preload      domain.CachePreloadMode
 	size         string
 	requested    resource.Quantity
 	hasRequested bool
@@ -20,14 +21,21 @@ type projectCacheDraft struct {
 func newProjectCacheDraft(cache projectCache) (projectCacheDraft, error) {
 	mode := domain.CacheMode(strings.TrimSpace(cache.Mode))
 	size := strings.TrimSpace(cache.Size)
+	preload := domain.CachePreloadMode(strings.TrimSpace(cache.Preload))
 	switch mode {
 	case "", domain.CacheModeOff:
 		if size != "" {
 			return projectCacheDraft{}, errors.New("缓存关闭时不能指定容量；请删除 cache.size 或改用 mode: runtime")
 		}
+		if preload != "" {
+			return projectCacheDraft{}, errors.New("缓存关闭时不能自动预热；请删除 cache.preload 或改用 mode: runtime")
+		}
 		return projectCacheDraft{mode: mode}, nil
 	case domain.CacheModeRuntime:
-		draft := projectCacheDraft{mode: mode, size: size}
+		if preload != "" && preload != domain.CachePreloadInput {
+			return projectCacheDraft{}, fmt.Errorf("不支持的缓存预热模式 %q；可选值为 input", preload)
+		}
+		draft := projectCacheDraft{mode: mode, size: size, preload: preload}
 		if size == "" {
 			return draft, nil
 		}
@@ -79,7 +87,7 @@ func resolveProjectCache(ctx context.Context, draft projectCacheDraft, client *C
 	for _, configured := range limits.Cache.AllowedSizes {
 		allowed, err := positiveCacheQuantity(configured)
 		if err == nil && requested.Cmp(allowed) == 0 {
-			return domain.CacheRequest{Mode: draft.mode, Size: strings.TrimSpace(configured)}, nil
+			return domain.CacheRequest{Mode: draft.mode, Size: strings.TrimSpace(configured), Preload: draft.preload}, nil
 		}
 	}
 	return domain.CacheRequest{}, fmt.Errorf("缓存容量 %q 不在平台允许范围内", size)

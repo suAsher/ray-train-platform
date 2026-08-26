@@ -33,6 +33,7 @@ export function equivalentSubmitCommand(form) {
       `--cache-mode ${shellArg('runtime')}`,
       `--cache-size ${shellArg(String(form.cacheSize || '<缓存容量>').trim())}`,
     )
+    if (form.cachePreload === 'input') parts.push(`--cache-preload ${shellArg('input')}`)
   }
   if (form.input?.spaceId) {
     parts.push(`--input-space ${shellArg(form.input.spaceId)}`)
@@ -59,6 +60,7 @@ export function equivalentSubmitCommandForJob(job) {
     gpusPerWorker: resources.gpusPerWorker || 1,
     cacheMode: spec.cache?.mode,
     cacheSize: spec.cache?.size,
+    cachePreload: spec.cache?.preload,
     input: spec.input?.space ? { spaceId: spec.input.space, relativePath: spec.input.relativePath } : {},
     checkpoint: spec.checkpoint?.space ? { spaceId: spec.checkpoint.space, relativePath: spec.checkpoint.relativePath } : {},
   })
@@ -104,8 +106,10 @@ export function buildJobSpec(form, platformLimits = {}) {
 function buildCache(form, policy) {
   const mode = String(form.cacheMode || 'off').trim() || 'off'
   const size = String(form.cacheSize || '').trim()
+  const preload = String(form.cachePreload || '').trim()
   if (mode === 'off') {
     if (size) throw new Error('缓存关闭时不能选择容量')
+    if (preload) throw new Error('缓存关闭时不能启用自动预热')
     return null
   }
   if (mode !== 'runtime') throw new Error('请选择有效的缓存模式')
@@ -116,7 +120,11 @@ function buildCache(form, policy) {
   if (!Array.isArray(policy.allowedSizes) || !policy.allowedSizes.includes(size)) {
     throw new Error('运行时缓存容量不在平台允许范围')
   }
-  return { mode: 'runtime', size }
+  if (preload && preload !== 'input') throw new Error('请选择有效的缓存预热模式')
+  if (preload === 'input' && (!String(form.input?.spaceId || '').trim() || !String(form.input?.relativePath || '').trim())) {
+    throw new Error('自动预热前，请选择一个具体的数据集子目录，不能选择整个数据空间根目录')
+  }
+  return { mode: 'runtime', size, ...(preload ? { preload } : {}) }
 }
 
 function executionMode(form) {

@@ -65,6 +65,88 @@ func TestRenderRayJobAddsGenericEphemeralCacheOnlyWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestRenderRayJobAutomaticallyPreloadsSelectedInputOnWorkers(t *testing.T) {
+	job := validRenderJob()
+	job.Spec.Cache = domain.CacheRequest{Mode: domain.CacheModeRuntime, Size: "1Ti", Preload: domain.CachePreloadInput}
+	job.Spec.Input = domain.DataLocation{Space: domain.DataSpacePublic, RelativePath: "labeled/fz-v1"}
+	job.Spec.ResolvedDataMounts.Input = &domain.ResolvedDataMount{
+		Space: domain.DataSpacePublic, BindingSpace: domain.DataSpacePublic,
+		ClaimName: "data-public", SubPath: "labeled/fz-v1",
+		MountPath: domain.DataMountInputPath, ReadOnly: true,
+	}
+	manifest, err := RenderRayJob(job, runtimeCacheRenderOptions())
+	if err != nil {
+		t.Fatalf("render automatic preload job: %v", err)
+	}
+
+	worker := cacheWorkerPodSpec(t, manifest.Object)
+	workerEnv := podEnvironment(worker)
+	if workerEnv["PLATFORM_DATASET_SOURCE_PATH"] != domain.DataMountInputPath {
+		t.Fatalf("worker must retain the durable source path: %#v", workerEnv)
+	}
+	if workerEnv["PLATFORM_DATASET_PATH"] != "/mnt/cache/dataset-view" {
+		t.Fatalf("worker must read the platform-managed cached view: %#v", workerEnv)
+	}
+	if workerEnv["PLATFORM_CACHE_PRELOAD"] != "input" {
+		t.Fatalf("worker must expose the preload contract: %#v", workerEnv)
+	}
+
+	initContainers, ok := worker["initContainers"].([]any)
+	if !ok || len(initContainers) != 1 {
+		t.Fatalf("worker must have exactly one platform cache preloader: %#v", worker["initContainers"])
+	}
+	preloader := initContainers[0].(map[string]any)
+	if preloader["name"] != "dataset-cache-preloader" || preloader["image"] != runtimeCacheRenderOptions().SourceMaterializerImage {
+		t.Fatalf("unexpected preloader identity: %#v", preloader)
+	}
+	preloaderEnv := environmentValues(preloader)
+	if preloaderEnv["PLATFORM_DATASET_SOURCE_PATH"] != domain.DataMountInputPath || preloaderEnv["PLATFORM_CACHE_PATHS"] != "/mnt/cache:/mnt/cache2" {
+		t.Fatalf("preloader paths are wrong: %#v", preloaderEnv)
+	}
+	if preloaderEnv["PLATFORM_CACHE_LIMIT_BYTES_PER_DISK"] != "549755813888" {
+		t.Fatalf("preloader must enforce the requested 512 GiB per disk: %#v", preloaderEnv)
+	}
+	mounts := preloader["volumeMounts"].([]any)
+	wantMounts := map[string]bool{"platform-data-input": false, "local-cache-data1": false, "local-cache-data2": false}
+	for _, item := range mounts {
+		mount := item.(map[string]any)
+		name, tracked := mount["name"].(string)
+		if tracked {
+			if _, expected := wantMounts[name]; !expected {
+				t.Fatalf("preloader received an unrelated mount %q: %#v", name, mounts)
+			}
+			wantMounts[name] = true
+		}
+	}
+	for name, found := range wantMounts {
+		if !found {
+			t.Fatalf("preloader is missing %s: %#v", name, mounts)
+		}
+	}
+
+	head := cacheHeadPodSpec(t, manifest.Object)
+	if init, ok := head["initContainers"].([]any); ok && len(init) != 0 {
+		t.Fatalf("head must not duplicate the worker dataset: %#v", init)
+	}
+	if podEnvironment(head)["PLATFORM_DATASET_PATH"] != domain.DataMountInputPath {
+		t.Fatalf("head keeps the durable selected input mount: %#v", podEnvironment(head))
+	}
+	if strings.Contains(string(mustJSON(cacheSubmitterPodSpec(t, manifest.Object))), "dataset-cache-preloader") {
+		t.Fatal("submitter must never reserve or preload worker cache")
+	}
+}
+
+func environmentValues(container map[string]any) map[string]string {
+	values := map[string]string{}
+	for _, item := range container["env"].([]any) {
+		entry := item.(map[string]any)
+		name, _ := entry["name"].(string)
+		value, _ := entry["value"].(string)
+		values[name] = value
+	}
+	return values
+}
+
 func TestRenderRayJobUsesConfiguredSpellingForEquivalentCacheSize(t *testing.T) {
 	job := validRenderJob()
 	job.Spec.Cache = domain.CacheRequest{Mode: domain.CacheModeRuntime, Size: "512000Mi"}
