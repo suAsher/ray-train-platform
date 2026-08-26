@@ -17,6 +17,11 @@ storageClass:
 # exact node names and exact cache roots.
 nodePathMap: []
 
+# Exact host roots the helper scripts may create/delete PVC children under.
+# Profiles must keep this list identical to the roots in nodePathMap.
+cache:
+  allowedRoots: []
+
 provisioner:
   resources:
     requests:

@@ -35,11 +35,13 @@ require "${rendered1}" 'provisioner: wellspiking.ai/local-path-data1'
 require "${rendered1}" '/data1/ray-cache'
 reject "${rendered1}" '/data2/ray-cache'
 reject "${rendered1}" 'wellspiking.ai/local-path-data2'
+reject "${rendered1}" '__RAY_CACHE_ALLOWED_ROOTS__'
 
 require "${rendered2}" 'name: ray-cache-local-data2'
 require "${rendered2}" 'provisioner: wellspiking.ai/local-path-data2'
 require "${rendered2}" '/data2/ray-cache'
 reject "${rendered2}" '/data1/ray-cache'
 reject "${rendered2}" 'wellspiking.ai/local-path-data1'
+reject "${rendered2}" '__RAY_CACHE_ALLOWED_ROOTS__'
 
 echo 'dual NVMe provisioner render contract verified'

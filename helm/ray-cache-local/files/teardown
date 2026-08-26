@@ -6,7 +6,7 @@ die() {
   exit 1
 }
 
-allowed_roots='/data1/ray-cache:/data2/ray-cache'
+allowed_roots='__RAY_CACHE_ALLOWED_ROOTS__'
 if [ "${RAY_CACHE_TEST_MODE:-}" = 1 ]; then
   [ -n "${RAY_CACHE_TEST_ALLOWED_ROOTS:-}" ] || die 'test roots are required in test mode'
   allowed_roots="${RAY_CACHE_TEST_ALLOWED_ROOTS}"

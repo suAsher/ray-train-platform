@@ -12,6 +12,9 @@ nodePathMap:
       - /data1/ray-cache
       - /data2/ray-cache
 
+cache:
+  allowedRoots: [/data1/ray-cache, /data2/ray-cache]
+
 monitoring:
   enabled: true
   serviceMonitor:

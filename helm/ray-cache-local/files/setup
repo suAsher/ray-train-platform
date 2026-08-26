@@ -6,7 +6,7 @@ die() {
   exit 1
 }
 
-allowed_roots='/data1/ray-cache:/data2/ray-cache'
+allowed_roots='__RAY_CACHE_ALLOWED_ROOTS__'
 target_uid=1000
 target_gid=1000
 df_file=''

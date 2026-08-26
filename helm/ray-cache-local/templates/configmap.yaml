@@ -17,9 +17,9 @@ data:
       ]
     }
   setup: |-
-{{ .Files.Get "files/setup" | indent 4 }}
+{{ .Files.Get "files/setup" | replace "__RAY_CACHE_ALLOWED_ROOTS__" (join ":" (default (list) .Values.cache.allowedRoots)) | indent 4 }}
   teardown: |-
-{{ .Files.Get "files/teardown" | indent 4 }}
+{{ .Files.Get "files/teardown" | replace "__RAY_CACHE_ALLOWED_ROOTS__" (join ":" (default (list) .Values.cache.allowedRoots)) | indent 4 }}
   collect-cache-metrics: |-
 {{ .Files.Get "files/collect-cache-metrics" | indent 4 }}
   helperPod.yaml: |-

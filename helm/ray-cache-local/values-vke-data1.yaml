@@ -13,6 +13,9 @@ nodePathMap:
   - node: "172.28.1.233"
     paths: [/data1/ray-cache]
 
+cache:
+  allowedRoots: [/data1/ray-cache]
+
 # The retained legacy release already exports metrics for both cache roots.
 # Enable monitoring here only when that compatibility release is retired.
 monitoring:

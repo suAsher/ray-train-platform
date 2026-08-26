@@ -13,5 +13,8 @@ nodePathMap:
   - node: "172.28.1.233"
     paths: [/data2/ray-cache]
 
+cache:
+  allowedRoots: [/data2/ray-cache]
+
 monitoring:
   enabled: false
