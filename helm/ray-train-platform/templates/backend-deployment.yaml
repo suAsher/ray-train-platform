@@ -17,9 +17,14 @@ local-account deployment never contacts Keycloak. */}}
 {{- $localCachePolicy := default (dict) (get $localCache "policy") }}
 {{- $localCacheAvailable := default false (get $localCache "available") }}
 {{- if $localCacheAvailable }}
-{{- $storageClass := required "training.localCache.storageClass is required when local cache is available" (get $localCache "storageClass") }}
-{{- $mountPath := required "training.localCache.mountPath is required when local cache is available" (get $localCache "mountPath") }}
-{{- if or (not (hasPrefix "/" $mountPath)) (eq $mountPath "/") }}{{- fail "training.localCache.mountPath must be a non-root absolute path" }}{{- end }}
+{{- $storageClassData1 := required "training.localCache.storageClassData1 is required when local cache is available" (get $localCache "storageClassData1") }}
+{{- $storageClassData2 := required "training.localCache.storageClassData2 is required when local cache is available" (get $localCache "storageClassData2") }}
+{{- if eq $storageClassData1 $storageClassData2 }}{{- fail "training.localCache storage classes must be distinct" }}{{- end }}
+{{- $mountPathData1 := required "training.localCache.mountPathData1 is required when local cache is available" (get $localCache "mountPathData1") }}
+{{- $mountPathData2 := required "training.localCache.mountPathData2 is required when local cache is available" (get $localCache "mountPathData2") }}
+{{- if or (not (hasPrefix "/" $mountPathData1)) (eq $mountPathData1 "/") }}{{- fail "training.localCache.mountPathData1 must be a non-root absolute path" }}{{- end }}
+{{- if or (not (hasPrefix "/" $mountPathData2)) (eq $mountPathData2 "/") }}{{- fail "training.localCache.mountPathData2 must be a non-root absolute path" }}{{- end }}
+{{- if eq $mountPathData1 $mountPathData2 }}{{- fail "training.localCache mount paths must be distinct" }}{{- end }}
 {{- if ne (default "" (get $localCachePolicy "defaultMode")) "off" }}{{- fail "training.localCache.policy.defaultMode must be off" }}{{- end }}
 {{- if not (get $localCachePolicy "allowedSizes") }}{{- fail "training.localCache.policy.allowedSizes is required when local cache is available" }}{{- end }}
 {{- $defaultSize := required "training.localCache.policy.defaultSize is required when local cache is available" (get $localCachePolicy "defaultSize") -}}
