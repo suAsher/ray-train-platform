@@ -12,7 +12,7 @@ import pickle
 import shutil
 import sys
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterable
 
 
@@ -26,6 +26,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stage-cache", action="store_true")
     parser.add_argument("--copy-workers", type=int, default=32)
     parser.add_argument("--timeout", type=int, default=14400)
+    parser.add_argument("--samples-per-gpu", type=int, default=1)
+    parser.add_argument("--workers-per-gpu", type=int, default=4)
+    parser.add_argument("--learning-rate", type=float, default=1.0e-5)
+    parser.add_argument("--recorded-root", default="")
     return parser.parse_args()
 
 
@@ -35,7 +39,7 @@ def load_subset(path: Path, limit: int) -> tuple[object, list[dict]]:
     infos = payload.get("infos", payload) if isinstance(payload, dict) else payload
     if not isinstance(infos, list):
         raise TypeError(f"annotation does not contain an info list: {path}")
-    selected = list(infos[:limit])
+    selected = list(infos if limit <= 0 else infos[:limit])
     if isinstance(payload, dict):
         subset_payload = {**payload, "infos": selected}
     else:
@@ -54,6 +58,40 @@ def recorded_paths(info: dict) -> Iterable[str]:
             yield camera["data_path"]
 
 
+def rewrite_info_paths(info: dict, mapping: dict[str, str]) -> dict:
+    """Return an info record whose data files point at staged cache copies."""
+    rewritten = dict(info)
+    lidar_path = info.get("lidar_path")
+    if lidar_path in mapping:
+        rewritten["lidar_path"] = mapping[lidar_path]
+
+    rewritten["sweeps"] = [
+        {
+            **sweep,
+            "data_path": mapping.get(sweep.get("data_path"), sweep.get("data_path")),
+        }
+        if isinstance(sweep, dict) and sweep.get("data_path")
+        else sweep
+        for sweep in info.get("sweeps", [])
+    ]
+    rewritten["cams"] = {
+        name: {
+            **camera,
+            "data_path": mapping.get(camera.get("data_path"), camera.get("data_path")),
+        }
+        if isinstance(camera, dict) and camera.get("data_path")
+        else camera
+        for name, camera in info.get("cams", {}).items()
+    }
+    return rewritten
+
+
+def replace_payload_infos(payload: object, infos: list[dict]) -> object:
+    if isinstance(payload, dict):
+        return {**payload, "infos": infos}
+    return infos
+
+
 def within(path: Path, root: Path) -> bool:
     try:
         path.relative_to(root)
@@ -62,14 +100,52 @@ def within(path: Path, root: Path) -> bool:
         return False
 
 
-def resolve_files(source_root: Path, infos: list[dict]) -> list[Path]:
-    sys.path.insert(0, str(Path(__file__).resolve().parent / "mmdet3d" / "datasets"))
-    from platform_paths import discover_path_rewrite, safe_path_parts
+def map_explicit_recorded_path(source_root: Path, recorded_path: str, recorded_root: str) -> Path:
+    """Map a known absolute PKL prefix without resolving symlink targets."""
+    recorded = PurePosixPath(recorded_path)
+    root = PurePosixPath(recorded_root)
+    if not recorded.is_absolute() or not root.is_absolute():
+        raise ValueError("recorded path and --recorded-root must be absolute")
+    if any(part in (".", "..") for part in (*recorded.parts, *root.parts)):
+        raise ValueError(f"unsafe recorded path: {recorded_path}")
+    try:
+        relative = recorded.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(
+            f"recorded path is outside --recorded-root: {recorded_path}"
+        ) from exc
+    candidate = source_root.joinpath(*relative.parts)
+    if not within(candidate, source_root):
+        raise ValueError(f"mapped path escapes dataset root: {candidate}")
+    return candidate
 
+
+def resolve_files(
+    source_root: Path, infos: list[dict], recorded_root: str = ""
+) -> dict[str, Path]:
     recorded_unique: dict[str, str] = {}
     for info in infos:
         for recorded in recorded_paths(info):
             recorded_unique[recorded] = recorded
+    if recorded_root:
+        resolved = {
+            recorded: map_explicit_recorded_path(source_root, recorded, recorded_root)
+            for recorded in recorded_unique.values()
+        }
+        print(
+            "RAYTRAIN_BEV_CACHE_MANIFEST="
+            + json.dumps(
+                {
+                    "files": len(set(resolved.values())),
+                    "recorded_root": recorded_root,
+                }
+            ),
+            flush=True,
+        )
+        return resolved
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "mmdet3d" / "datasets"))
+    from platform_paths import discover_path_rewrite, safe_path_parts
+
     rewrite = None
     for recorded in recorded_unique.values():
         rewrite = discover_path_rewrite(recorded, str(source_root))
@@ -78,7 +154,7 @@ def resolve_files(source_root: Path, infos: list[dict]) -> list[Path]:
     if rewrite is None:
         raise FileNotFoundError("could not discover a mounted path rewrite from annotations")
     prefix, drop = rewrite
-    unique: dict[str, Path] = {}
+    resolved: dict[str, Path] = {}
     for recorded in recorded_unique.values():
         parts = safe_path_parts(recorded)
         if parts is None or drop >= len(parts):
@@ -86,13 +162,14 @@ def resolve_files(source_root: Path, infos: list[dict]) -> list[Path]:
         candidate = source_root.joinpath(*prefix, *parts[drop:])
         if not within(candidate, source_root):
             raise ValueError(f"resolved path escapes dataset root: {candidate}")
-        unique[str(candidate)] = candidate
+        resolved[recorded] = candidate
+    unique_files = {str(candidate) for candidate in resolved.values()}
     print(
         "RAYTRAIN_BEV_CACHE_MANIFEST="
-        + json.dumps({"files": len(unique), "prefix": list(prefix), "drop": drop}),
+        + json.dumps({"files": len(unique_files), "prefix": list(prefix), "drop": drop}),
         flush=True,
     )
-    return sorted(unique.values(), key=lambda item: item.as_posix())
+    return resolved
 
 
 def cache_root_index(relative: Path, root_count: int) -> int:
@@ -100,7 +177,7 @@ def cache_root_index(relative: Path, root_count: int) -> int:
     return int.from_bytes(digest[:8], "big") % root_count
 
 
-def copy_one(source: Path, source_root: Path, cache_roots: list[Path], view_root: Path) -> tuple[int, int]:
+def copy_one(source: Path, source_root: Path, cache_roots: list[Path]) -> tuple[int, int, str, str]:
     relative = source.relative_to(source_root)
     index = cache_root_index(relative, len(cache_roots))
     destination = cache_roots[index] / "data" / relative
@@ -108,10 +185,7 @@ def copy_one(source: Path, source_root: Path, cache_roots: list[Path], view_root
     temporary = destination.with_name(f".{destination.name}.tmp-{os.getpid()}")
     shutil.copyfile(source, temporary)
     temporary.replace(destination)
-    link = view_root / relative
-    link.parent.mkdir(parents=True, exist_ok=True)
-    link.symlink_to(destination)
-    return index, destination.stat().st_size
+    return index, destination.stat().st_size, str(source), str(destination)
 
 
 def write_pickle(path: Path, payload: object) -> None:
@@ -144,7 +218,7 @@ def prepare(args: argparse.Namespace) -> tuple[Path, Path, Path, dict]:
         raise RuntimeError("PLATFORM_CACHE_PATHS contains duplicate roots")
 
     base = cache_roots[0] if args.stage_cache else Path("/tmp/raytrain-bev-benchmark")
-    destination_root = base / "dataset-view" if args.stage_cache else source_root
+    destination_root = base if args.stage_cache else source_root
     annotation_root = base / "annotations"
     train_output = annotation_root / "train.pkl"
     val_output = annotation_root / "val.pkl"
@@ -159,8 +233,6 @@ def prepare(args: argparse.Namespace) -> tuple[Path, Path, Path, dict]:
     started = time.perf_counter()
     train_payload, train_infos = load_subset(source_root / args.train, args.train_limit)
     val_payload, val_infos = load_subset(source_root / args.val, args.val_limit)
-    write_pickle(train_output, train_payload)
-    write_pickle(val_output, val_payload)
     payload = {
         "cache": args.stage_cache,
         "train_samples": len(train_infos),
@@ -172,28 +244,38 @@ def prepare(args: argparse.Namespace) -> tuple[Path, Path, Path, dict]:
         "mib_per_second": 0.0,
     }
     if args.stage_cache:
-        files = resolve_files(source_root, [*train_infos, *val_infos])
+        recorded_sources = resolve_files(
+            source_root, [*train_infos, *val_infos], args.recorded_root
+        )
+        files = sorted(set(recorded_sources.values()), key=lambda item: item.as_posix())
         for cache_root in cache_roots:
             (cache_root / "data").mkdir(parents=True, exist_ok=True)
-        if destination_root.exists():
-            shutil.rmtree(destination_root)
-        destination_root.mkdir(parents=True)
         copy_started = time.perf_counter()
         copied_bytes = 0
         root_files = [0 for _ in cache_roots]
         root_bytes = [0 for _ in cache_roots]
+        source_destinations: dict[str, str] = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.copy_workers) as executor:
-            futures = [executor.submit(copy_one, path, source_root, cache_roots, destination_root) for path in files]
+            futures = [executor.submit(copy_one, path, source_root, cache_roots) for path in files]
             for completed, future in enumerate(concurrent.futures.as_completed(futures), start=1):
-                root_index, file_bytes = future.result()
+                root_index, file_bytes, source, destination = future.result()
                 copied_bytes += file_bytes
                 root_files[root_index] += 1
                 root_bytes[root_index] += file_bytes
+                source_destinations[source] = destination
                 if completed % 5000 == 0:
                     print(
                         f"RAYTRAIN_BEV_CACHE_PROGRESS files={completed}/{len(files)} bytes={copied_bytes}",
                         flush=True,
                     )
+        recorded_destinations = {
+            recorded: source_destinations[str(source)]
+            for recorded, source in recorded_sources.items()
+        }
+        train_infos = [rewrite_info_paths(info, recorded_destinations) for info in train_infos]
+        val_infos = [rewrite_info_paths(info, recorded_destinations) for info in val_infos]
+        train_payload = replace_payload_infos(train_payload, train_infos)
+        val_payload = replace_payload_infos(val_payload, val_infos)
         copy_seconds = max(time.perf_counter() - copy_started, 1e-9)
         payload = {
             **payload,
@@ -207,6 +289,8 @@ def prepare(args: argparse.Namespace) -> tuple[Path, Path, Path, dict]:
                 for index, root in enumerate(cache_roots)
             ],
         }
+    write_pickle(train_output, train_payload)
+    write_pickle(val_output, val_payload)
     payload = {**payload, "prepare_seconds": round(time.perf_counter() - started, 3)}
     ready.write_text(json.dumps(payload) + "\n", encoding="utf-8")
     return destination_root, train_output, val_output, payload
@@ -221,6 +305,7 @@ def main() -> int:
     os.environ["PLATFORM_DATASET_PATH"] = str(dataset_root)
     output_path = os.environ["PLATFORM_OUTPUT_PATH"]
     command = [
+        "raytrain-bevfusion-prepare",
         "python3",
         "tools/westwell_train.py",
         args.config,
@@ -233,9 +318,9 @@ def main() -> int:
         f"data.train.dataset.ann_file={train_annotation}",
         f"data.val.ann_file={val_annotation}",
         f"data.test.ann_file={val_annotation}",
-        "data.samples_per_gpu=1",
-        "data.workers_per_gpu=4",
-        "optimizer.lr=1.0e-5",
+        f"data.samples_per_gpu={args.samples_per_gpu}",
+        f"data.workers_per_gpu={args.workers_per_gpu}",
+        f"optimizer.lr={args.learning_rate}",
         "runner.max_epochs=1",
         "log_config.interval=10",
         "evaluation.interval=1",
