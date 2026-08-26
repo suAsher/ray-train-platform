@@ -82,8 +82,8 @@ spkRayjobRelease:
   nodeSelector: {}
   image:
     repository: spk-rayjob-release
-    tag: prod-20260824-log-pagination-r1
-    digest: sha256:4b46686a8a316c5e323f0e073dd097364f491f009abf3d84fc96fd86711b8f05
+    tag: dual-nvme-r1-20260826
+    digest: sha256:e47b09733e837d2fd0fe59b3a4907f8e859c31eda308111bd01c8321992f5239
   service:
     type: ClusterIP
     port: 8080
