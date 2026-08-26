@@ -36,11 +36,10 @@ namespace="$(profile_namespace "$profile")"
 rendered="$(mktemp)"
 trap 'rm -f "$rendered"' EXIT
 
-# The production cache chart install contract fixes all three names. Keep the
-# platform gate tied to that release instead of probing arbitrary workloads.
+# The production cache chart install contract fixes both independent disk
+# provisioners. Keep the platform gate tied to those releases instead of
+# probing arbitrary workloads.
 readonly CACHE_PROVISIONER_NAMESPACE="ray-cache-local"
-readonly CACHE_PROVISIONER_RELEASE="ray-cache-local"
-readonly CACHE_PROVISIONER_DEPLOYMENT="ray-cache-local"
 
 rendered_defines_ingress_class() {
   local rendered_file="$1"
@@ -55,6 +54,9 @@ rendered_defines_ingress_class() {
 
 verify_local_cache() {
   local storage_class="$1"
+  local expected_provisioner="$2"
+  local expected_release="$3"
+  local expected_deployment="$4"
   local provisioner binding_mode reclaim_policy
   local stable_default beta_default allow_expansion release_label available_condition
 
@@ -63,8 +65,8 @@ verify_local_cache() {
   if ! provisioner="$(kube get storageclass "$storage_class" -o jsonpath='{.provisioner}')"; then
     die "local cache StorageClass is absent: $storage_class"
   fi
-  [[ "$provisioner" == "rancher.io/local-path" ]] || \
-    die "local cache StorageClass ${storage_class} has provisioner=${provisioner:-<empty>}, expected rancher.io/local-path"
+  [[ "$provisioner" == "$expected_provisioner" ]] || \
+    die "local cache StorageClass ${storage_class} has provisioner=${provisioner:-<empty>}, expected ${expected_provisioner}"
 
   binding_mode="$(kube get storageclass "$storage_class" -o jsonpath='{.volumeBindingMode}')"
   [[ "$binding_mode" == "WaitForFirstConsumer" ]] || \
@@ -86,17 +88,17 @@ verify_local_cache() {
   [[ -z "$allow_expansion" || "$allow_expansion" == "false" ]] || \
     die "local cache StorageClass ${storage_class} must not allow volume expansion"
 
-  if ! release_label="$(kube -n "$CACHE_PROVISIONER_NAMESPACE" get deployment "$CACHE_PROVISIONER_DEPLOYMENT" \
+  if ! release_label="$(kube -n "$CACHE_PROVISIONER_NAMESPACE" get deployment "$expected_deployment" \
     -o jsonpath='{.metadata.labels.app\.kubernetes\.io/instance}')"; then
-    die "cache provisioner Deployment is absent: ${CACHE_PROVISIONER_NAMESPACE}/${CACHE_PROVISIONER_DEPLOYMENT}"
+    die "cache provisioner Deployment is absent: ${CACHE_PROVISIONER_NAMESPACE}/${expected_deployment}"
   fi
-  [[ "$release_label" == "$CACHE_PROVISIONER_RELEASE" ]] || \
-    die "cache provisioner Deployment ${CACHE_PROVISIONER_NAMESPACE}/${CACHE_PROVISIONER_DEPLOYMENT} belongs to Helm release ${release_label:-<empty>}, expected Helm release ${CACHE_PROVISIONER_RELEASE}"
+  [[ "$release_label" == "$expected_release" ]] || \
+    die "cache provisioner Deployment ${CACHE_PROVISIONER_NAMESPACE}/${expected_deployment} belongs to Helm release ${release_label:-<empty>}, expected Helm release ${expected_release}"
 
-  available_condition="$(kube -n "$CACHE_PROVISIONER_NAMESPACE" get deployment "$CACHE_PROVISIONER_DEPLOYMENT" \
+  available_condition="$(kube -n "$CACHE_PROVISIONER_NAMESPACE" get deployment "$expected_deployment" \
     -o jsonpath='{.status.conditions[?(@.type=="Available")].status}')"
   [[ "$available_condition" == "True" ]] || \
-    die "cache provisioner Deployment is not Ready: ${CACHE_PROVISIONER_NAMESPACE}/${CACHE_PROVISIONER_DEPLOYMENT}"
+    die "cache provisioner Deployment is not Ready: ${CACHE_PROVISIONER_NAMESPACE}/${expected_deployment}"
 }
 
 helm_cmd lint "$PLATFORM_CHART" --values "$profile" >/dev/null
@@ -105,7 +107,10 @@ render_profile "$profile" >"$rendered"
 local_cache_enabled="$(rendered_env_value "$rendered" LOCAL_CACHE_ENABLED)"
 case "$local_cache_enabled" in
   true)
-    verify_local_cache "$(rendered_env_value "$rendered" LOCAL_CACHE_STORAGE_CLASS)"
+    verify_local_cache "$(rendered_env_value "$rendered" LOCAL_CACHE_STORAGE_CLASS_DATA1)" \
+      "wellspiking.ai/local-path-data1" "ray-cache-local-data1" "ray-cache-local-data1"
+    verify_local_cache "$(rendered_env_value "$rendered" LOCAL_CACHE_STORAGE_CLASS_DATA2)" \
+      "wellspiking.ai/local-path-data2" "ray-cache-local-data2" "ray-cache-local-data2"
     ;;
   false|"")
     ;;

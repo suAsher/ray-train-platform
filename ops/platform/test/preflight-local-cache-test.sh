@@ -37,8 +37,10 @@ YAML
       cat <<YAML
             - name: LOCAL_CACHE_ENABLED
               value: "${MOCK_CACHE_ENABLED:-false}"
-            - name: LOCAL_CACHE_STORAGE_CLASS
-              value: "${MOCK_CACHE_STORAGE_CLASS:-}"
+            - name: LOCAL_CACHE_STORAGE_CLASS_DATA1
+              value: "${MOCK_CACHE_STORAGE_CLASS_DATA1:-}"
+            - name: LOCAL_CACHE_STORAGE_CLASS_DATA2
+              value: "${MOCK_CACHE_STORAGE_CLASS_DATA2:-}"
 YAML
     fi
     ;;
@@ -71,37 +73,53 @@ case "$*" in
     echo '8'
     exit 0
     ;;
-  "get storageclass ray-cache-local -o jsonpath={.provisioner}")
+  "get storageclass ray-cache-local-data1 -o jsonpath={.provisioner}")
     [[ "${MOCK_SC_EXISTS:-true}" == "true" ]] || exit 1
-    printf '%s' "${MOCK_SC_PROVISIONER:-rancher.io/local-path}"
+    printf '%s' "${MOCK_SC_PROVISIONER:-wellspiking.ai/local-path-data1}"
     exit 0
     ;;
-  "get storageclass ray-cache-local -o jsonpath={.volumeBindingMode}")
+  "get storageclass ray-cache-local-data2 -o jsonpath={.provisioner}")
+    [[ "${MOCK_SC_EXISTS:-true}" == "true" ]] || exit 1
+    printf '%s' "${MOCK_SC_PROVISIONER_DATA2:-wellspiking.ai/local-path-data2}"
+    exit 0
+    ;;
+  "get storageclass ray-cache-local-data1 -o jsonpath={.volumeBindingMode}"|\
+  "get storageclass ray-cache-local-data2 -o jsonpath={.volumeBindingMode}")
     printf '%s' "${MOCK_SC_BINDING:-WaitForFirstConsumer}"
     exit 0
     ;;
-  "get storageclass ray-cache-local -o jsonpath={.reclaimPolicy}")
+  "get storageclass ray-cache-local-data1 -o jsonpath={.reclaimPolicy}"|\
+  "get storageclass ray-cache-local-data2 -o jsonpath={.reclaimPolicy}")
     printf '%s' "${MOCK_SC_RECLAIM:-Delete}"
     exit 0
     ;;
-  "get storageclass ray-cache-local -o jsonpath={.metadata.annotations.storageclass\\.kubernetes\\.io/is-default-class}")
+  "get storageclass ray-cache-local-data1 -o jsonpath={.metadata.annotations.storageclass\\.kubernetes\\.io/is-default-class}"|\
+  "get storageclass ray-cache-local-data2 -o jsonpath={.metadata.annotations.storageclass\\.kubernetes\\.io/is-default-class}")
     printf '%s' "${MOCK_SC_DEFAULT:-false}"
     exit 0
     ;;
-  "get storageclass ray-cache-local -o jsonpath={.metadata.annotations.storageclass\\.beta\\.kubernetes\\.io/is-default-class}")
+  "get storageclass ray-cache-local-data1 -o jsonpath={.metadata.annotations.storageclass\\.beta\\.kubernetes\\.io/is-default-class}"|\
+  "get storageclass ray-cache-local-data2 -o jsonpath={.metadata.annotations.storageclass\\.beta\\.kubernetes\\.io/is-default-class}")
     printf '%s' "${MOCK_SC_BETA_DEFAULT:-false}"
     exit 0
     ;;
-  "get storageclass ray-cache-local -o jsonpath={.allowVolumeExpansion}")
+  "get storageclass ray-cache-local-data1 -o jsonpath={.allowVolumeExpansion}"|\
+  "get storageclass ray-cache-local-data2 -o jsonpath={.allowVolumeExpansion}")
     printf '%s' "${MOCK_SC_EXPANSION:-false}"
     exit 0
     ;;
-  "-n ray-cache-local get deployment ray-cache-local -o jsonpath={.metadata.labels.app\\.kubernetes\\.io/instance}")
+  "-n ray-cache-local get deployment ray-cache-local-data1 -o jsonpath={.metadata.labels.app\\.kubernetes\\.io/instance}")
     [[ "${MOCK_DEPLOYMENT_EXISTS:-true}" == "true" ]] || exit 1
-    printf '%s' "${MOCK_RELEASE_LABEL:-ray-cache-local}"
+    printf '%s' "${MOCK_RELEASE_LABEL:-ray-cache-local-data1}"
     exit 0
     ;;
-  "-n ray-cache-local get deployment ray-cache-local -o jsonpath={.status.conditions[?(@.type==\"Available\")].status}")
+  "-n ray-cache-local get deployment ray-cache-local-data2 -o jsonpath={.metadata.labels.app\\.kubernetes\\.io/instance}")
+    [[ "${MOCK_DEPLOYMENT_EXISTS:-true}" == "true" ]] || exit 1
+    printf '%s' "${MOCK_RELEASE_LABEL_DATA2:-ray-cache-local-data2}"
+    exit 0
+    ;;
+  "-n ray-cache-local get deployment ray-cache-local-data1 -o jsonpath={.status.conditions[?(@.type==\"Available\")].status}"|\
+  "-n ray-cache-local get deployment ray-cache-local-data2 -o jsonpath={.status.conditions[?(@.type==\"Available\")].status}")
     printf '%s' "${MOCK_AVAILABLE_STATUS:-True}"
     exit 0
     ;;
@@ -166,16 +184,18 @@ assert_cache_checks_skipped() {
 }
 
 run_case disabled success 'preflight passed' \
-  MOCK_CACHE_ENABLED=false MOCK_CACHE_STORAGE_CLASS=ray-cache-local
+  MOCK_CACHE_ENABLED=false MOCK_CACHE_STORAGE_CLASS_DATA1=ray-cache-local-data1 MOCK_CACHE_STORAGE_CLASS_DATA2=ray-cache-local-data2
 assert_cache_checks_skipped disabled
 
 run_case unavailable success 'preflight passed' MOCK_CACHE_RENDER=absent
 assert_cache_checks_skipped unavailable
 
 run_case enabled-good success 'preflight passed' \
-  MOCK_CACHE_ENABLED=true MOCK_CACHE_STORAGE_CLASS=ray-cache-local
-grep -Fq 'get storageclass ray-cache-local' "${CASE_LOG}"
-grep -Fq -- '-n ray-cache-local get deployment ray-cache-local -o jsonpath={.status.conditions[?(@.type=="Available")].status}' "${CASE_LOG}"
+  MOCK_CACHE_ENABLED=true MOCK_CACHE_STORAGE_CLASS_DATA1=ray-cache-local-data1 MOCK_CACHE_STORAGE_CLASS_DATA2=ray-cache-local-data2
+grep -Fq 'get storageclass ray-cache-local-data1' "${CASE_LOG}"
+grep -Fq 'get storageclass ray-cache-local-data2' "${CASE_LOG}"
+grep -Fq -- '-n ray-cache-local get deployment ray-cache-local-data1 -o jsonpath={.status.conditions[?(@.type=="Available")].status}' "${CASE_LOG}"
+grep -Fq -- '-n ray-cache-local get deployment ray-cache-local-data2 -o jsonpath={.status.conditions[?(@.type=="Available")].status}' "${CASE_LOG}"
 if grep -Eq '(^| )(apply|create|delete|patch|replace|edit)( |$)' "${CASE_LOG}"; then
   echo 'local cache platform preflight must remain read-only' >&2
   cat "${CASE_LOG}" >&2
@@ -183,26 +203,26 @@ if grep -Eq '(^| )(apply|create|delete|patch|replace|edit)( |$)' "${CASE_LOG}"; 
 fi
 
 run_case enabled-empty-class failure 'LOCAL_CACHE_STORAGE_CLASS is empty' \
-  MOCK_CACHE_ENABLED=true MOCK_CACHE_STORAGE_CLASS=
-run_case missing-class failure 'local cache StorageClass is absent: ray-cache-local' \
-  MOCK_CACHE_ENABLED=true MOCK_CACHE_STORAGE_CLASS=ray-cache-local MOCK_SC_EXISTS=false
-run_case wrong-provisioner failure 'expected rancher.io/local-path' \
-  MOCK_CACHE_ENABLED=true MOCK_CACHE_STORAGE_CLASS=ray-cache-local MOCK_SC_PROVISIONER=example.invalid/provisioner
+  MOCK_CACHE_ENABLED=true MOCK_CACHE_STORAGE_CLASS_DATA1= MOCK_CACHE_STORAGE_CLASS_DATA2=ray-cache-local-data2
+run_case missing-class failure 'local cache StorageClass is absent: ray-cache-local-data1' \
+  MOCK_CACHE_ENABLED=true MOCK_CACHE_STORAGE_CLASS_DATA1=ray-cache-local-data1 MOCK_CACHE_STORAGE_CLASS_DATA2=ray-cache-local-data2 MOCK_SC_EXISTS=false
+run_case wrong-provisioner failure 'expected wellspiking.ai/local-path-data1' \
+  MOCK_CACHE_ENABLED=true MOCK_CACHE_STORAGE_CLASS_DATA1=ray-cache-local-data1 MOCK_CACHE_STORAGE_CLASS_DATA2=ray-cache-local-data2 MOCK_SC_PROVISIONER=example.invalid/provisioner
 run_case wrong-binding failure 'expected WaitForFirstConsumer' \
-  MOCK_CACHE_ENABLED=true MOCK_CACHE_STORAGE_CLASS=ray-cache-local MOCK_SC_BINDING=Immediate
+  MOCK_CACHE_ENABLED=true MOCK_CACHE_STORAGE_CLASS_DATA1=ray-cache-local-data1 MOCK_CACHE_STORAGE_CLASS_DATA2=ray-cache-local-data2 MOCK_SC_BINDING=Immediate
 run_case wrong-reclaim failure 'expected Delete' \
-  MOCK_CACHE_ENABLED=true MOCK_CACHE_STORAGE_CLASS=ray-cache-local MOCK_SC_RECLAIM=Retain
+  MOCK_CACHE_ENABLED=true MOCK_CACHE_STORAGE_CLASS_DATA1=ray-cache-local-data1 MOCK_CACHE_STORAGE_CLASS_DATA2=ray-cache-local-data2 MOCK_SC_RECLAIM=Retain
 run_case default-class failure 'must not be default via storageclass.kubernetes.io/is-default-class' \
-  MOCK_CACHE_ENABLED=true MOCK_CACHE_STORAGE_CLASS=ray-cache-local MOCK_SC_DEFAULT=true
+  MOCK_CACHE_ENABLED=true MOCK_CACHE_STORAGE_CLASS_DATA1=ray-cache-local-data1 MOCK_CACHE_STORAGE_CLASS_DATA2=ray-cache-local-data2 MOCK_SC_DEFAULT=true
 run_case beta-default-class failure 'must not be default via storageclass.beta.kubernetes.io/is-default-class' \
-  MOCK_CACHE_ENABLED=true MOCK_CACHE_STORAGE_CLASS=ray-cache-local MOCK_SC_BETA_DEFAULT=true
+  MOCK_CACHE_ENABLED=true MOCK_CACHE_STORAGE_CLASS_DATA1=ray-cache-local-data1 MOCK_CACHE_STORAGE_CLASS_DATA2=ray-cache-local-data2 MOCK_SC_BETA_DEFAULT=true
 run_case expansion-enabled failure 'must not allow volume expansion' \
-  MOCK_CACHE_ENABLED=true MOCK_CACHE_STORAGE_CLASS=ray-cache-local MOCK_SC_EXPANSION=true
-run_case wrong-release failure 'expected Helm release ray-cache-local' \
-  MOCK_CACHE_ENABLED=true MOCK_CACHE_STORAGE_CLASS=ray-cache-local MOCK_RELEASE_LABEL=other-release
-run_case missing-deployment failure 'cache provisioner Deployment is absent: ray-cache-local/ray-cache-local' \
-  MOCK_CACHE_ENABLED=true MOCK_CACHE_STORAGE_CLASS=ray-cache-local MOCK_DEPLOYMENT_EXISTS=false
-run_case unready-deployment failure 'cache provisioner Deployment is not Ready: ray-cache-local/ray-cache-local' \
-  MOCK_CACHE_ENABLED=true MOCK_CACHE_STORAGE_CLASS=ray-cache-local MOCK_AVAILABLE_STATUS=False
+  MOCK_CACHE_ENABLED=true MOCK_CACHE_STORAGE_CLASS_DATA1=ray-cache-local-data1 MOCK_CACHE_STORAGE_CLASS_DATA2=ray-cache-local-data2 MOCK_SC_EXPANSION=true
+run_case wrong-release failure 'expected Helm release ray-cache-local-data1' \
+  MOCK_CACHE_ENABLED=true MOCK_CACHE_STORAGE_CLASS_DATA1=ray-cache-local-data1 MOCK_CACHE_STORAGE_CLASS_DATA2=ray-cache-local-data2 MOCK_RELEASE_LABEL=other-release
+run_case missing-deployment failure 'cache provisioner Deployment is absent: ray-cache-local/ray-cache-local-data1' \
+  MOCK_CACHE_ENABLED=true MOCK_CACHE_STORAGE_CLASS_DATA1=ray-cache-local-data1 MOCK_CACHE_STORAGE_CLASS_DATA2=ray-cache-local-data2 MOCK_DEPLOYMENT_EXISTS=false
+run_case unready-deployment failure 'cache provisioner Deployment is not Ready: ray-cache-local/ray-cache-local-data1' \
+  MOCK_CACHE_ENABLED=true MOCK_CACHE_STORAGE_CLASS_DATA1=ray-cache-local-data1 MOCK_CACHE_STORAGE_CLASS_DATA2=ray-cache-local-data2 MOCK_AVAILABLE_STATUS=False
 
 echo 'platform local cache preflight contract verified'
