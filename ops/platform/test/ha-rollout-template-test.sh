@@ -188,9 +188,13 @@ for workload_spec in \
     grep -A1 'name: TRAINING_NODE_SELECTOR' "$workload_document" \
       | grep -F 'value: "accelerator=nvidia-rtx-4090,platform.wellspiking.ai/gpu-pool=production"' >/dev/null
     grep -A1 'name: LOCAL_CACHE_ENABLED' "$workload_document" | grep -F 'value: "true"' >/dev/null
+    grep -A1 'name: LOCAL_CACHE_STORAGE_CLASS_DATA1' "$workload_document" | grep -F 'value: "ray-cache-local-data1"' >/dev/null
+    grep -A1 'name: LOCAL_CACHE_STORAGE_CLASS_DATA2' "$workload_document" | grep -F 'value: "ray-cache-local-data2"' >/dev/null
     grep -A1 'name: LOCAL_CACHE_SIZE' "$workload_document" | grep -F 'value: "200Gi"' >/dev/null
-    grep -A1 'name: LOCAL_CACHE_ALLOWED_SIZES' "$workload_document" | grep -F 'value: "100Gi,200Gi,500Gi"' >/dev/null
-    grep -A1 'name: LOCAL_CACHE_MAX_SIZE' "$workload_document" | grep -F 'value: "500Gi"' >/dev/null
+    grep -A1 'name: LOCAL_CACHE_MOUNT_PATH_DATA1' "$workload_document" | grep -F 'value: "/mnt/cache"' >/dev/null
+    grep -A1 'name: LOCAL_CACHE_MOUNT_PATH_DATA2' "$workload_document" | grep -F 'value: "/mnt/cache2"' >/dev/null
+    grep -A1 'name: LOCAL_CACHE_ALLOWED_SIZES' "$workload_document" | grep -F 'value: "200Gi,500Gi,1Ti,2Ti,4Ti,5Ti"' >/dev/null
+    grep -A1 'name: LOCAL_CACHE_MAX_SIZE' "$workload_document" | grep -F 'value: "5Ti"' >/dev/null
   fi
 done
 
