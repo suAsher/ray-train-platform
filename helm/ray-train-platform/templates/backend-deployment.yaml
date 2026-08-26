@@ -175,12 +175,16 @@ spec:
               value: {{ .Values.training.maxTotalGPUs | quote }}
             - name: LOCAL_CACHE_ENABLED
               value: {{ default false (get $localCache "available") | quote }}
-            - name: LOCAL_CACHE_STORAGE_CLASS
-              value: {{ default "" (get $localCache "storageClass") | quote }}
+            - name: LOCAL_CACHE_STORAGE_CLASS_DATA1
+              value: {{ default "" (get $localCache "storageClassData1") | quote }}
+            - name: LOCAL_CACHE_STORAGE_CLASS_DATA2
+              value: {{ default "" (get $localCache "storageClassData2") | quote }}
             - name: LOCAL_CACHE_SIZE
               value: {{ default "" (get $localCachePolicy "defaultSize") | quote }}
-            - name: LOCAL_CACHE_MOUNT_PATH
-              value: {{ default "" (get $localCache "mountPath") | quote }}
+            - name: LOCAL_CACHE_MOUNT_PATH_DATA1
+              value: {{ default "" (get $localCache "mountPathData1") | quote }}
+            - name: LOCAL_CACHE_MOUNT_PATH_DATA2
+              value: {{ default "" (get $localCache "mountPathData2") | quote }}
             - name: LOCAL_CACHE_ALLOWED_SIZES
               value: {{ join "," (default (list) (get $localCachePolicy "allowedSizes")) | quote }}
             - name: LOCAL_CACHE_MAX_SIZE

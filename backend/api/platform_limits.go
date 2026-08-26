@@ -29,6 +29,7 @@ type cachePolicyDescriptor struct {
 	DefaultSize  string   `json:"defaultSize"`
 	MaxSize      string   `json:"maxSize"`
 	MountPath    string   `json:"mountPath"`
+	MountPaths   []string `json:"mountPaths"`
 }
 
 type tenantQuotaDescriptor struct {
@@ -115,6 +116,7 @@ func cachePolicyDescriptorFor(policy LocalCachePolicy) cachePolicyDescriptor {
 	descriptor.DefaultSize = policy.DefaultSize
 	descriptor.MaxSize = policy.MaxSize
 	descriptor.MountPath = policy.MountPath
+	descriptor.MountPaths = append([]string(nil), policy.MountPaths...)
 	return descriptor
 }
 

@@ -234,11 +234,13 @@ func TestLoadRejectsEnabledLocalCacheWithoutCompleteConfiguration(t *testing.T) 
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("PAT_ENABLED", "false")
 	t.Setenv("LOCAL_CACHE_ENABLED", "true")
-	t.Setenv("LOCAL_CACHE_STORAGE_CLASS", "")
+	t.Setenv("LOCAL_CACHE_STORAGE_CLASS_DATA1", "ray-cache-local-data1")
+	t.Setenv("LOCAL_CACHE_STORAGE_CLASS_DATA2", "")
 	t.Setenv("LOCAL_CACHE_SIZE", "200Gi")
-	t.Setenv("LOCAL_CACHE_MOUNT_PATH", "/mnt/cache")
+	t.Setenv("LOCAL_CACHE_MOUNT_PATH_DATA1", "/mnt/cache")
+	t.Setenv("LOCAL_CACHE_MOUNT_PATH_DATA2", "/mnt/cache2")
 
-	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "LOCAL_CACHE_STORAGE_CLASS") {
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "LOCAL_CACHE_STORAGE_CLASS_DATA2") {
 		t.Fatalf("expected local cache storage class validation error, got %v", err)
 	}
 }
@@ -247,18 +249,17 @@ func TestLoadAcceptsCompleteLocalCacheConfiguration(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("PAT_ENABLED", "false")
 	t.Setenv("LOCAL_CACHE_ENABLED", "true")
-	t.Setenv("LOCAL_CACHE_STORAGE_CLASS", "ray-cache-local")
+	setCompleteDualLocalCacheEnv(t)
 	t.Setenv("LOCAL_CACHE_SIZE", "200Gi")
-	t.Setenv("LOCAL_CACHE_MOUNT_PATH", "/mnt/cache")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("load complete local cache configuration: %v", err)
 	}
-	if !cfg.LocalCacheEnabled || cfg.LocalCacheStorageClass != "ray-cache-local" || cfg.LocalCacheSize != "200Gi" || cfg.LocalCacheMountPath != "/mnt/cache" {
+	if !cfg.LocalCacheEnabled || cfg.LocalCacheStorageClassData1 != "ray-cache-local-data1" || cfg.LocalCacheStorageClassData2 != "ray-cache-local-data2" || cfg.LocalCacheSize != "200Gi" || cfg.LocalCacheMountPathData1 != "/mnt/cache" || cfg.LocalCacheMountPathData2 != "/mnt/cache2" {
 		t.Fatalf("unexpected local cache configuration: %#v", cfg)
 	}
-	if strings.Join(cfg.LocalCacheAllowedSizes, ",") != "100Gi,200Gi,500Gi" || cfg.LocalCacheMaxSize != "500Gi" {
+	if strings.Join(cfg.LocalCacheAllowedSizes, ",") != "200Gi,500Gi,1Ti,2Ti,4Ti,5Ti" || cfg.LocalCacheMaxSize != "5Ti" {
 		t.Fatalf("unexpected local cache policy defaults: allowed=%v max=%q", cfg.LocalCacheAllowedSizes, cfg.LocalCacheMaxSize)
 	}
 }
@@ -267,20 +268,19 @@ func TestLoadParsesLocalCachePolicy(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("PAT_ENABLED", "false")
 	t.Setenv("LOCAL_CACHE_ENABLED", "true")
-	t.Setenv("LOCAL_CACHE_STORAGE_CLASS", "ray-cache-local")
-	t.Setenv("LOCAL_CACHE_SIZE", " 250Gi ")
-	t.Setenv("LOCAL_CACHE_ALLOWED_SIZES", "100Gi, 250Gi,500Gi")
-	t.Setenv("LOCAL_CACHE_MAX_SIZE", " 500Gi ")
-	t.Setenv("LOCAL_CACHE_MOUNT_PATH", "/mnt/cache")
+	setCompleteDualLocalCacheEnv(t)
+	t.Setenv("LOCAL_CACHE_SIZE", " 2Ti ")
+	t.Setenv("LOCAL_CACHE_ALLOWED_SIZES", "200Gi, 2Ti,5Ti")
+	t.Setenv("LOCAL_CACHE_MAX_SIZE", " 5Ti ")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("load local cache policy: %v", err)
 	}
-	if got := strings.Join(cfg.LocalCacheAllowedSizes, ","); got != "100Gi,250Gi,500Gi" {
+	if got := strings.Join(cfg.LocalCacheAllowedSizes, ","); got != "200Gi,2Ti,5Ti" {
 		t.Fatalf("allowed sizes=%q", got)
 	}
-	if cfg.LocalCacheSize != "250Gi" || cfg.LocalCacheMaxSize != "500Gi" {
+	if cfg.LocalCacheSize != "2Ti" || cfg.LocalCacheMaxSize != "5Ti" {
 		t.Fatalf("default=%q max=%q", cfg.LocalCacheSize, cfg.LocalCacheMaxSize)
 	}
 }
@@ -299,6 +299,8 @@ func TestLoadRejectsInvalidLocalCachePolicy(t *testing.T) {
 		{name: "default outside allowlist", allowed: "100Gi,500Gi", defaultSize: "200Gi", maxSize: "500Gi", want: "LOCAL_CACHE_SIZE"},
 		{name: "allowed above max", allowed: "100Gi,500Gi", defaultSize: "100Gi", maxSize: "200Gi", want: "LOCAL_CACHE_MAX_SIZE"},
 		{name: "invalid max", allowed: "100Gi", defaultSize: "100Gi", maxSize: "large", want: "LOCAL_CACHE_MAX_SIZE"},
+		{name: "odd total cannot split equally", allowed: "200Gi,201Gi", defaultSize: "200Gi", maxSize: "5Ti", want: "even whole-GiB"},
+		{name: "maximum exceeds physical policy", allowed: "200Gi", defaultSize: "200Gi", maxSize: "6Ti", want: "must not exceed 5Ti"},
 	}
 
 	for _, test := range tests {
@@ -306,11 +308,10 @@ func TestLoadRejectsInvalidLocalCachePolicy(t *testing.T) {
 			t.Setenv("APP_ENV", "development")
 			t.Setenv("PAT_ENABLED", "false")
 			t.Setenv("LOCAL_CACHE_ENABLED", "true")
-			t.Setenv("LOCAL_CACHE_STORAGE_CLASS", "ray-cache-local")
+			setCompleteDualLocalCacheEnv(t)
 			t.Setenv("LOCAL_CACHE_SIZE", test.defaultSize)
 			t.Setenv("LOCAL_CACHE_ALLOWED_SIZES", test.allowed)
 			t.Setenv("LOCAL_CACHE_MAX_SIZE", test.maxSize)
-			t.Setenv("LOCAL_CACHE_MOUNT_PATH", "/mnt/cache")
 
 			if _, err := Load(); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("expected error containing %q, got %v", test.want, err)
@@ -323,13 +324,39 @@ func TestLoadRejectsLocalCacheMountedInsideRayDefaultTempDirectory(t *testing.T)
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("PAT_ENABLED", "false")
 	t.Setenv("LOCAL_CACHE_ENABLED", "true")
-	t.Setenv("LOCAL_CACHE_STORAGE_CLASS", "ray-cache-local")
+	setCompleteDualLocalCacheEnv(t)
 	t.Setenv("LOCAL_CACHE_SIZE", "200Gi")
-	t.Setenv("LOCAL_CACHE_MOUNT_PATH", "/tmp/ray")
+	t.Setenv("LOCAL_CACHE_MOUNT_PATH_DATA1", "/tmp/ray")
 
-	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "LOCAL_CACHE_MOUNT_PATH") {
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "LOCAL_CACHE_MOUNT_PATH_DATA1") {
 		t.Fatalf("expected unsafe Ray temp-directory cache mount to be rejected, got %v", err)
 	}
+}
+
+func TestLoadUsesLegacyLocalCacheFieldsOnlyAsData1Fallback(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("LOCAL_CACHE_ENABLED", "true")
+	t.Setenv("LOCAL_CACHE_STORAGE_CLASS", "legacy-data1")
+	t.Setenv("LOCAL_CACHE_STORAGE_CLASS_DATA2", "ray-cache-local-data2")
+	t.Setenv("LOCAL_CACHE_MOUNT_PATH", "/mnt/legacy-cache")
+	t.Setenv("LOCAL_CACHE_MOUNT_PATH_DATA2", "/mnt/cache2")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load legacy data1 fallback: %v", err)
+	}
+	if cfg.LocalCacheStorageClassData1 != "legacy-data1" || cfg.LocalCacheMountPathData1 != "/mnt/legacy-cache" {
+		t.Fatalf("legacy data1 fallback not applied: %#v", cfg)
+	}
+}
+
+func setCompleteDualLocalCacheEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("LOCAL_CACHE_STORAGE_CLASS_DATA1", "ray-cache-local-data1")
+	t.Setenv("LOCAL_CACHE_STORAGE_CLASS_DATA2", "ray-cache-local-data2")
+	t.Setenv("LOCAL_CACHE_MOUNT_PATH_DATA1", "/mnt/cache")
+	t.Setenv("LOCAL_CACHE_MOUNT_PATH_DATA2", "/mnt/cache2")
 }
 
 func TestLoadPATDefaults(t *testing.T) {

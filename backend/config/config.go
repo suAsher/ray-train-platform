@@ -41,10 +41,14 @@ type Config struct {
 	IDCDataSpacesMountCapacity       string
 	IDCDataSpaceSources              map[string]IDCDataSpaceSource
 	LocalCacheStorageClass           string
+	LocalCacheStorageClassData1      string
+	LocalCacheStorageClassData2      string
 	LocalCacheSize                   string
 	LocalCacheAllowedSizes           []string
 	LocalCacheMaxSize                string
 	LocalCacheMountPath              string
+	LocalCacheMountPathData1         string
+	LocalCacheMountPathData2         string
 	LocalAuthEnabled                 bool
 	LocalSessionHours                int
 	BootstrapAdminUsername           string
@@ -131,10 +135,14 @@ func Load() (Config, error) {
 		IDCStorageClass:             os.Getenv("IDC_STORAGE_CLASS"),
 		IDCMountPath:                envOr("IDC_MOUNT_PATH", "/mnt/idc"),
 		LocalCacheStorageClass:      strings.TrimSpace(os.Getenv("LOCAL_CACHE_STORAGE_CLASS")),
+		LocalCacheStorageClassData1: strings.TrimSpace(envOr("LOCAL_CACHE_STORAGE_CLASS_DATA1", os.Getenv("LOCAL_CACHE_STORAGE_CLASS"))),
+		LocalCacheStorageClassData2: strings.TrimSpace(os.Getenv("LOCAL_CACHE_STORAGE_CLASS_DATA2")),
 		LocalCacheSize:              strings.TrimSpace(envOr("LOCAL_CACHE_SIZE", "200Gi")),
-		LocalCacheAllowedSizes:      splitList(envOr("LOCAL_CACHE_ALLOWED_SIZES", "100Gi,200Gi,500Gi")),
-		LocalCacheMaxSize:           strings.TrimSpace(envOr("LOCAL_CACHE_MAX_SIZE", "500Gi")),
+		LocalCacheAllowedSizes:      splitList(envOr("LOCAL_CACHE_ALLOWED_SIZES", "200Gi,500Gi,1Ti,2Ti,4Ti,5Ti")),
+		LocalCacheMaxSize:           strings.TrimSpace(envOr("LOCAL_CACHE_MAX_SIZE", "5Ti")),
 		LocalCacheMountPath:         strings.TrimSpace(os.Getenv("LOCAL_CACHE_MOUNT_PATH")),
+		LocalCacheMountPathData1:    strings.TrimSpace(envOr("LOCAL_CACHE_MOUNT_PATH_DATA1", os.Getenv("LOCAL_CACHE_MOUNT_PATH"))),
+		LocalCacheMountPathData2:    strings.TrimSpace(os.Getenv("LOCAL_CACHE_MOUNT_PATH_DATA2")),
 		DataSpacesFSXAttributes:     strings.TrimSpace(os.Getenv("DATA_SPACES_FSX_VOLUME_ATTRIBUTES_JSON")),
 		RayAPIDefaultImage:          strings.TrimSpace(os.Getenv("RAY_API_DEFAULT_IMAGE")),
 		DataSpacesMountCapacity:     strings.TrimSpace(os.Getenv("DATA_SPACES_MOUNT_CAPACITY")),
@@ -161,6 +169,10 @@ func Load() (Config, error) {
 	if cfg.RayAPISpoolDir == "" && cfg.AppEnv != "production" {
 		cfg.RayAPISpoolDir = os.TempDir()
 	}
+	// Keep the original single-disk fields as read-only data1 aliases during a
+	// rolling upgrade. Rendering uses the explicit dual-disk fields below.
+	cfg.LocalCacheStorageClass = cfg.LocalCacheStorageClassData1
+	cfg.LocalCacheMountPath = cfg.LocalCacheMountPathData1
 
 	var err error
 	if cfg.MigrationsOnly, err = parseBool("MIGRATIONS_ONLY", false); err != nil {
@@ -479,17 +491,29 @@ func validateLocalCacheConfig(cfg Config) error {
 	if !cfg.LocalCacheEnabled {
 		return nil
 	}
-	if cfg.LocalCacheStorageClass == "" {
-		return fmt.Errorf("LOCAL_CACHE_STORAGE_CLASS is required when LOCAL_CACHE_ENABLED is true")
+	if cfg.LocalCacheStorageClassData1 == "" {
+		return fmt.Errorf("LOCAL_CACHE_STORAGE_CLASS_DATA1 is required when LOCAL_CACHE_ENABLED is true")
+	}
+	if cfg.LocalCacheStorageClassData2 == "" {
+		return fmt.Errorf("LOCAL_CACHE_STORAGE_CLASS_DATA2 is required when LOCAL_CACHE_ENABLED is true")
 	}
 	if cfg.LocalCacheSize == "" {
 		return fmt.Errorf("LOCAL_CACHE_SIZE is required when LOCAL_CACHE_ENABLED is true")
 	}
-	if cfg.LocalCacheMountPath == "" {
-		return fmt.Errorf("LOCAL_CACHE_MOUNT_PATH is required when LOCAL_CACHE_ENABLED is true")
+	if cfg.LocalCacheMountPathData1 == "" {
+		return fmt.Errorf("LOCAL_CACHE_MOUNT_PATH_DATA1 is required when LOCAL_CACHE_ENABLED is true")
 	}
-	if !isDNSSubdomain(cfg.LocalCacheStorageClass) {
-		return fmt.Errorf("LOCAL_CACHE_STORAGE_CLASS must be a valid Kubernetes name")
+	if cfg.LocalCacheMountPathData2 == "" {
+		return fmt.Errorf("LOCAL_CACHE_MOUNT_PATH_DATA2 is required when LOCAL_CACHE_ENABLED is true")
+	}
+	if !isDNSSubdomain(cfg.LocalCacheStorageClassData1) {
+		return fmt.Errorf("LOCAL_CACHE_STORAGE_CLASS_DATA1 must be a valid Kubernetes name")
+	}
+	if !isDNSSubdomain(cfg.LocalCacheStorageClassData2) {
+		return fmt.Errorf("LOCAL_CACHE_STORAGE_CLASS_DATA2 must be a valid Kubernetes name")
+	}
+	if cfg.LocalCacheStorageClassData1 == cfg.LocalCacheStorageClassData2 {
+		return fmt.Errorf("LOCAL_CACHE_STORAGE_CLASS_DATA1 and LOCAL_CACHE_STORAGE_CLASS_DATA2 must be different")
 	}
 	defaultSize, err := positiveStorageQuantity(cfg.LocalCacheSize)
 	if err != nil {
@@ -498,6 +522,10 @@ func validateLocalCacheConfig(cfg Config) error {
 	maxSize, err := positiveStorageQuantity(cfg.LocalCacheMaxSize)
 	if err != nil {
 		return fmt.Errorf("LOCAL_CACHE_MAX_SIZE must be a positive Kubernetes storage quantity")
+	}
+	physicalMaximum := resource.MustParse("5Ti")
+	if maxSize.Cmp(physicalMaximum) > 0 {
+		return fmt.Errorf("LOCAL_CACHE_MAX_SIZE must not exceed 5Ti")
 	}
 	if len(cfg.LocalCacheAllowedSizes) == 0 {
 		return fmt.Errorf("LOCAL_CACHE_ALLOWED_SIZES must contain at least one positive Kubernetes storage quantity")
@@ -512,6 +540,10 @@ func validateLocalCacheConfig(cfg Config) error {
 		if quantity.Cmp(maxSize) > 0 {
 			return fmt.Errorf("LOCAL_CACHE_ALLOWED_SIZES entries must not exceed LOCAL_CACHE_MAX_SIZE")
 		}
+		const gib = int64(1024 * 1024 * 1024)
+		if quantity.Value()%gib != 0 || (quantity.Value()/gib)%2 != 0 {
+			return fmt.Errorf("LOCAL_CACHE_ALLOWED_SIZES entries must be even whole-GiB totals")
+		}
 		for _, existing := range allowed {
 			if quantity.Cmp(existing) == 0 {
 				return fmt.Errorf("LOCAL_CACHE_ALLOWED_SIZES entries must be unique")
@@ -523,11 +555,19 @@ func validateLocalCacheConfig(cfg Config) error {
 	if !defaultAllowed {
 		return fmt.Errorf("LOCAL_CACHE_SIZE must belong to LOCAL_CACHE_ALLOWED_SIZES")
 	}
-	if !strings.HasPrefix(cfg.LocalCacheMountPath, "/") || path.Clean(cfg.LocalCacheMountPath) != cfg.LocalCacheMountPath || cfg.LocalCacheMountPath == "/" {
-		return fmt.Errorf("LOCAL_CACHE_MOUNT_PATH must be a clean absolute directory")
+	for name, mountPath := range map[string]string{
+		"LOCAL_CACHE_MOUNT_PATH_DATA1": cfg.LocalCacheMountPathData1,
+		"LOCAL_CACHE_MOUNT_PATH_DATA2": cfg.LocalCacheMountPathData2,
+	} {
+		if !strings.HasPrefix(mountPath, "/") || path.Clean(mountPath) != mountPath || mountPath == "/" {
+			return fmt.Errorf("%s must be a clean absolute directory", name)
+		}
+		if mountPath == "/tmp/ray" || strings.HasPrefix(mountPath, "/tmp/ray/") {
+			return fmt.Errorf("%s must not be inside Ray's default temporary directory", name)
+		}
 	}
-	if cfg.LocalCacheMountPath == "/tmp/ray" || strings.HasPrefix(cfg.LocalCacheMountPath, "/tmp/ray/") {
-		return fmt.Errorf("LOCAL_CACHE_MOUNT_PATH must not be inside Ray's default temporary directory")
+	if cfg.LocalCacheMountPathData1 == cfg.LocalCacheMountPathData2 {
+		return fmt.Errorf("LOCAL_CACHE_MOUNT_PATH_DATA1 and LOCAL_CACHE_MOUNT_PATH_DATA2 must be different")
 	}
 	return nil
 }

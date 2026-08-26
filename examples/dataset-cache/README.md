@@ -1,8 +1,9 @@
 # 训练数据预热到节点 NVMe
 
-`stage_dataset.py` 把平台已经选中的只读输入根从 `PLATFORM_DATASET_PATH` 原子复制到
-当前 Worker 的 `PLATFORM_CACHE_PATH/dataset`。同一个 Worker 中只有 `LOCAL_RANK=0`
-执行复制，其他 GPU rank 等待就绪标记。
+`stage_dataset.py` 把平台已经选中的只读输入根从 `PLATFORM_DATASET_PATH` 按相对路径
+SHA-256 稳定分片到 `PLATFORM_CACHE_PATHS` 中的两块 NVMe，并在第一块盘生成统一视图
+`/mnt/cache/dataset-view`。同一个 Worker 中只有 `LOCAL_RANK=0` 执行复制，其他 GPU
+rank 等待就绪标记。旧环境只提供 `PLATFORM_CACHE_PATH` 时仍按单盘工作。
 
 把 `stage_dataset.py` 放进自己的代码仓库，例如 `tools/stage_dataset.py`，然后让训练入口
 先取得实际路径：
@@ -18,7 +19,7 @@ python3 tools/train.py --data-root "$PLATFORM_DATASET_PATH"
 ```yaml
 cache:
   mode: runtime
-  size: 100Gi
+  size: 500Gi
 input:
   space: public
   path: <数据集版本或 shard>
@@ -30,7 +31,7 @@ input:
 任务日志会出现：
 
 ```text
-RAYTRAIN_DATASET_CACHE={"path":"/mnt/cache/dataset","copied":true,...}
+RAYTRAIN_DATASET_CACHE={"path":"/mnt/cache/dataset-view","copied":true,"roots":[...],...}
 ```
 
 其中 `files`、`bytes` 和 `seconds` 是预热成本。比较加速效果时，必须把这段时间计入总

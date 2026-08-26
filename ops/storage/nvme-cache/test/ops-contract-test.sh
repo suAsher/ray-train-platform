@@ -3,7 +3,7 @@ set -euo pipefail
 
 readonly ops_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
-for required in install.sh preflight.sh verify.sh register-node.sh uninstall.sh smoke-pod.yaml; do
+for required in install.sh preflight.sh verify.sh verify-dual.sh register-node.sh uninstall.sh smoke-pod.yaml smoke-pod-dual.yaml; do
   [[ -f "${ops_dir}/${required}" ]] || { echo "missing ${required}" >&2; exit 1; }
 done
 
@@ -60,9 +60,13 @@ if grep -Eq 'kubectl[^#]*(apply|create|delete|patch|replace|edit|label|taint)' "
   exit 1
 fi
 
-require_in "${ops_dir}/install.sh" 'release_name="ray-cache-local"'
 require_in "${ops_dir}/install.sh" 'namespace="ray-cache-local"'
-require_in "${ops_dir}/install.sh" 'values-vke-production.yaml'
+require_in "${ops_dir}/install.sh" 'values-vke-data1.yaml'
+require_in "${ops_dir}/install.sh" 'values-vke-data2.yaml'
+require_in "${ops_dir}/install.sh" 'ray-cache-local-data1'
+require_in "${ops_dir}/install.sh" 'ray-cache-local-data2'
+require_in "${ops_dir}/install.sh" 'dual-render-contract.sh'
+require_in "${ops_dir}/install.sh" 'verify-dual.sh'
 require_in "${ops_dir}/install.sh" '--atomic'
 require_in "${ops_dir}/install.sh" '--wait'
 require_in "${ops_dir}/install.sh" 'preflight.sh'
@@ -103,6 +107,10 @@ require_in "${ops_dir}/smoke-pod.yaml" 'automountServiceAccountToken: false'
 require_in "${ops_dir}/smoke-pod.yaml" 'privileged: false'
 require_in "${ops_dir}/smoke-pod.yaml" 'harbor.wellspiking.ai/guofeng.su/busybox@sha256:ff6bba6f18535e7ccb3c1bbed0b84e5c733d7d9dd8815f1ea93ee73073135aa4'
 reject_in "${ops_dir}/smoke-pod.yaml" 'nvidia.com/gpu'
+require_in "${ops_dir}/smoke-pod-dual.yaml" 'storageClassName: ray-cache-local-data1'
+require_in "${ops_dir}/smoke-pod-dual.yaml" 'storageClassName: ray-cache-local-data2'
+require_in "${ops_dir}/verify-dual.sh" '/data1/ray-cache/'
+require_in "${ops_dir}/verify-dual.sh" '/data2/ray-cache/'
 
 bash "${ops_dir}/test/verify-path-test.sh"
 bash "${ops_dir}/test/preflight-owner-test.sh"

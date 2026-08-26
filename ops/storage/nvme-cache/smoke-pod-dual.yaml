@@ -1,0 +1,66 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: __PVC1_NAME__
+  namespace: ray-cache-local
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: ray-cache-local-data1
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: __PVC2_NAME__
+  namespace: ray-cache-local
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: ray-cache-local-data2
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: __POD_NAME__
+  namespace: ray-cache-local
+spec:
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  nodeSelector:
+    kubernetes.io/hostname: __NODE_NAME__
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: smoke
+      image: harbor.wellspiking.ai/guofeng.su/busybox@sha256:ff6bba6f18535e7ccb3c1bbed0b84e5c733d7d9dd8815f1ea93ee73073135aa4
+      imagePullPolicy: IfNotPresent
+      command: [/bin/sh, -ceu]
+      args:
+        - printf 'data1\n' > /mnt/cache/marker; printf 'data2\n' > /mnt/cache2/marker; sleep 3600
+      resources:
+        requests: {cpu: 10m, memory: 16Mi}
+        limits: {cpu: 100m, memory: 64Mi}
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      volumeMounts:
+        - {name: data1, mountPath: /mnt/cache}
+        - {name: data2, mountPath: /mnt/cache2}
+  volumes:
+    - name: data1
+      persistentVolumeClaim:
+        claimName: __PVC1_NAME__
+    - name: data2
+      persistentVolumeClaim:
+        claimName: __PVC2_NAME__

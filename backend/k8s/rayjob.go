@@ -53,14 +53,17 @@ type MLflowOptions struct {
 // Pod. It is deliberately not part of the storage catalog: neither input data
 // nor output artifacts may depend on its lifecycle.
 type LocalCacheOptions struct {
-	Enabled      bool
-	StorageClass string
-	AllowedSizes []string
-	DefaultSize  string
-	MaxSize      string
-	MountPath    string
-	runtime      bool
-	resolvedSize string
+	Enabled             bool
+	StorageClassData1   string
+	StorageClassData2   string
+	AllowedSizes        []string
+	DefaultSize         string
+	MaxSize             string
+	MountPathData1      string
+	MountPathData2      string
+	runtime             bool
+	resolvedSize        string
+	resolvedSizePerDisk string
 }
 
 // defaultTrainingNodeSelector matches the label the deployment guide asks
@@ -249,8 +252,11 @@ func (options LocalCacheOptions) Validate() error {
 	if !options.Enabled {
 		return nil
 	}
-	if !isDNSSubdomain(strings.TrimSpace(options.StorageClass)) {
-		return fmt.Errorf("storage class must be a valid Kubernetes name")
+	if !isDNSSubdomain(strings.TrimSpace(options.StorageClassData1)) || !isDNSSubdomain(strings.TrimSpace(options.StorageClassData2)) {
+		return fmt.Errorf("both storage classes must be valid Kubernetes names")
+	}
+	if options.StorageClassData1 == options.StorageClassData2 {
+		return fmt.Errorf("storage classes must be different")
 	}
 	maximum, err := positiveCacheQuantity(options.MaxSize)
 	if err != nil {
@@ -284,12 +290,16 @@ func (options LocalCacheOptions) Validate() error {
 	if !defaultAllowed {
 		return fmt.Errorf("default size must belong to allowed sizes")
 	}
-	mountPath := strings.TrimSpace(options.MountPath)
-	if !strings.HasPrefix(mountPath, "/") || path.Clean(mountPath) != mountPath || mountPath == "/" {
-		return fmt.Errorf("mount path must be a clean absolute directory")
+	for _, mountPath := range []string{strings.TrimSpace(options.MountPathData1), strings.TrimSpace(options.MountPathData2)} {
+		if !strings.HasPrefix(mountPath, "/") || path.Clean(mountPath) != mountPath || mountPath == "/" {
+			return fmt.Errorf("mount path must be a clean absolute directory")
+		}
+		if mountPath == "/tmp/ray" || strings.HasPrefix(mountPath, "/tmp/ray/") {
+			return fmt.Errorf("mount path must not be inside Ray's default temporary directory")
+		}
 	}
-	if mountPath == "/tmp/ray" || strings.HasPrefix(mountPath, "/tmp/ray/") {
-		return fmt.Errorf("mount path must not be inside Ray's default temporary directory")
+	if options.MountPathData1 == options.MountPathData2 {
+		return fmt.Errorf("mount paths must be different")
 	}
 	return nil
 }
@@ -298,6 +308,7 @@ func (options LocalCacheOptions) resolve(request domain.CacheRequest) (LocalCach
 	options.AllowedSizes = append([]string(nil), options.AllowedSizes...)
 	options.runtime = false
 	options.resolvedSize = ""
+	options.resolvedSizePerDisk = ""
 	mode := request.Mode
 	if mode == "" {
 		mode = domain.CacheModeOff
@@ -322,8 +333,13 @@ func (options LocalCacheOptions) resolve(request domain.CacheRequest) (LocalCach
 	for _, configured := range options.AllowedSizes {
 		allowed, parseErr := positiveCacheQuantity(configured)
 		if parseErr == nil && requested.Cmp(allowed) == 0 {
+			perDisk, splitErr := splitLocalCacheCapacity(configured)
+			if splitErr != nil {
+				return LocalCacheOptions{}, splitErr
+			}
 			options.runtime = true
 			options.resolvedSize = strings.TrimSpace(configured)
+			options.resolvedSizePerDisk = perDisk
 			return options, nil
 		}
 	}
@@ -339,7 +355,7 @@ func positiveCacheQuantity(value string) (resource.Quantity, error) {
 }
 
 func configureRayCache(rayStartParams map[string]any, cache LocalCacheOptions) {
-	rayStartParams["temp-dir"] = path.Join(cache.MountPath, "ray")
+	rayStartParams["temp-dir"] = path.Join(cache.MountPathData1, "ray")
 }
 
 func rayObjectSpillingConfig(directory string) string {
@@ -484,13 +500,18 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 		}
 	}
 	if mountData && options.LocalCache.runtime {
-		volumeMounts, volumes = appendLocalCache(volumeMounts, volumes, options.LocalCache)
+		volumeMounts, volumes = appendLocalCache(volumeMounts, volumes, options.LocalCache, head)
+		cachePaths := options.LocalCache.MountPathData1
+		if !head {
+			cachePaths += ":" + options.LocalCache.MountPathData2
+		}
 		env = append(
 			env,
-			map[string]any{"name": "PLATFORM_CACHE_PATH", "value": options.LocalCache.MountPath},
+			map[string]any{"name": "PLATFORM_CACHE_PATH", "value": options.LocalCache.MountPathData1},
+			map[string]any{"name": "PLATFORM_CACHE_PATHS", "value": cachePaths},
 			map[string]any{
 				"name":  "RAY_object_spilling_config",
-				"value": rayObjectSpillingConfig(path.Join(options.LocalCache.MountPath, "ray-spill", "objects")),
+				"value": rayObjectSpillingConfig(path.Join(options.LocalCache.MountPathData1, "ray-spill", "objects")),
 			},
 		)
 	}
@@ -561,22 +582,38 @@ func mlflowEnvironment(options MLflowOptions) []any {
 	}
 }
 
-func appendLocalCache(volumeMounts, volumes []any, cache LocalCacheOptions) ([]any, []any) {
-	volumeMounts = append(volumeMounts, map[string]any{"name": "local-cache", "mountPath": cache.MountPath})
-	volumes = append(volumes, map[string]any{
-		"name": "local-cache",
-		"ephemeral": map[string]any{
-			"volumeClaimTemplate": map[string]any{
-				"spec": map[string]any{
-					"accessModes":      []any{"ReadWriteOnce"},
-					"storageClassName": cache.StorageClass,
-					"resources": map[string]any{
-						"requests": map[string]any{"storage": cache.resolvedSize},
+func appendLocalCache(volumeMounts, volumes []any, cache LocalCacheOptions, head bool) ([]any, []any) {
+	devices := []struct {
+		name         string
+		storageClass string
+		mountPath    string
+	}{
+		{name: "local-cache-data1", storageClass: cache.StorageClassData1, mountPath: cache.MountPathData1},
+	}
+	if !head {
+		devices = append(devices, struct {
+			name         string
+			storageClass string
+			mountPath    string
+		}{name: "local-cache-data2", storageClass: cache.StorageClassData2, mountPath: cache.MountPathData2})
+	}
+	for _, device := range devices {
+		volumeMounts = append(volumeMounts, map[string]any{"name": device.name, "mountPath": device.mountPath})
+		volumes = append(volumes, map[string]any{
+			"name": device.name,
+			"ephemeral": map[string]any{
+				"volumeClaimTemplate": map[string]any{
+					"spec": map[string]any{
+						"accessModes":      []any{"ReadWriteOnce"},
+						"storageClassName": device.storageClass,
+						"resources": map[string]any{
+							"requests": map[string]any{"storage": cache.resolvedSizePerDisk},
+						},
 					},
 				},
 			},
-		},
-	})
+		})
+	}
 	return volumeMounts, volumes
 }
 

@@ -92,9 +92,9 @@ func TestPlatformLimitsReportTheDeploymentCeilingsTheServerEnforces(t *testing.T
 }
 
 func TestPlatformLimitsExposeEnabledRuntimeCachePolicyDefensively(t *testing.T) {
-	allowed := []string{"100Gi", "200Gi", "500Gi"}
+	allowed := []string{"200Gi", "500Gi", "1Ti", "2Ti", "4Ti", "5Ti"}
 	handler := NewHandler(&fakeJobRepository{}, Options{LocalCache: LocalCachePolicy{
-		Enabled: true, AllowedSizes: allowed, DefaultSize: "200Gi", MaxSize: "500Gi", MountPath: "/mnt/cache",
+		Enabled: true, AllowedSizes: allowed, DefaultSize: "200Gi", MaxSize: "5Ti", MountPath: "/mnt/cache", MountPaths: []string{"/mnt/cache", "/mnt/cache2"},
 	}})
 	allowed[0] = "1Ti"
 	principal := auth.Principal{Subject: "admin", TenantID: "local", Roles: []string{domain.RoleSuperAdmin}, AuthType: auth.AuthTypeLocal}
@@ -108,13 +108,13 @@ func TestPlatformLimitsExposeEnabledRuntimeCachePolicyDefensively(t *testing.T) 
 	if !cache.Enabled || cache.DefaultMode != string(domain.CacheModeOff) || strings.Join(cache.Modes, ",") != "off,runtime" {
 		t.Fatalf("unexpected cache modes: %#v", cache)
 	}
-	if strings.Join(cache.AllowedSizes, ",") != "100Gi,200Gi,500Gi" || cache.DefaultSize != "200Gi" || cache.MaxSize != "500Gi" || cache.MountPath != "/mnt/cache" {
+	if strings.Join(cache.AllowedSizes, ",") != "200Gi,500Gi,1Ti,2Ti,4Ti,5Ti" || cache.DefaultSize != "200Gi" || cache.MaxSize != "5Ti" || cache.MountPath != "/mnt/cache" || strings.Join(cache.MountPaths, ",") != "/mnt/cache,/mnt/cache2" {
 		t.Fatalf("unexpected cache policy: %#v", cache)
 	}
 	cache.AllowedSizes[0] = "mutated"
 	second := httptest.NewRecorder()
 	limitsRouter(handler, &principal).ServeHTTP(second, httptest.NewRequest(http.MethodGet, "/api/v1/limits", nil))
-	if got := decodePlatformLimits(t, second.Body.Bytes()).Cache.AllowedSizes[0]; got != "100Gi" {
+	if got := decodePlatformLimits(t, second.Body.Bytes()).Cache.AllowedSizes[0]; got != "200Gi" {
 		t.Fatalf("response exposed mutable cache policy: %q", got)
 	}
 }

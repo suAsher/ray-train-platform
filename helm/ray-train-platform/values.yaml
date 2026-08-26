@@ -207,16 +207,21 @@ training:
     # Infrastructure availability only. Individual tasks remain cache-off
     # unless their request explicitly selects a policy-supported cache mode.
     available: false
-    storageClass: ""
-    mountPath: ""
+    storageClassData1: ""
+    storageClassData2: ""
+    mountPathData1: ""
+    mountPathData2: ""
     policy:
       defaultMode: "off"
       allowedSizes:
-        - 100Gi
         - 200Gi
         - 500Gi
+        - 1Ti
+        - 2Ti
+        - 4Ti
+        - 5Ti
       defaultSize: 200Gi
-      maxSize: 500Gi
+      maxSize: 5Ti
 
 # Governed user data spaces. Keep disabled until csi-fsx is configured with
 # its component-level IRSA role and ops/storage/.../41-verify-irsa-prefix-mount.sh

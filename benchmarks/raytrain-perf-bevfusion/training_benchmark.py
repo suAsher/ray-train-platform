@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import hashlib
 import json
 import os
 import pickle
@@ -94,13 +95,23 @@ def resolve_files(source_root: Path, infos: list[dict]) -> list[Path]:
     return sorted(unique.values(), key=lambda item: item.as_posix())
 
 
-def copy_one(source: Path, source_root: Path, destination_root: Path) -> int:
-    destination = destination_root / source.relative_to(source_root)
+def cache_root_index(relative: Path, root_count: int) -> int:
+    digest = hashlib.sha256(relative.as_posix().encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big") % root_count
+
+
+def copy_one(source: Path, source_root: Path, cache_roots: list[Path], view_root: Path) -> tuple[int, int]:
+    relative = source.relative_to(source_root)
+    index = cache_root_index(relative, len(cache_roots))
+    destination = cache_roots[index] / "data" / relative
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(f".{destination.name}.tmp-{os.getpid()}")
     shutil.copyfile(source, temporary)
     temporary.replace(destination)
-    return destination.stat().st_size
+    link = view_root / relative
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(destination)
+    return index, destination.stat().st_size
 
 
 def write_pickle(path: Path, payload: object) -> None:
@@ -123,12 +134,17 @@ def wait_ready(ready: Path, timeout: int) -> dict:
 def prepare(args: argparse.Namespace) -> tuple[Path, Path, Path, dict]:
     source_root = Path(os.environ["PLATFORM_DATASET_PATH"]).resolve()
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-    cache_value = os.environ.get("PLATFORM_CACHE_PATH", "").strip()
-    if args.stage_cache and not cache_value:
-        raise RuntimeError("--stage-cache requires PLATFORM_CACHE_PATH")
+    cache_value = os.environ.get("PLATFORM_CACHE_PATHS", "").strip()
+    if not cache_value:
+        cache_value = os.environ.get("PLATFORM_CACHE_PATH", "").strip()
+    cache_roots = [Path(item).resolve() for item in cache_value.split(":") if item]
+    if args.stage_cache and not cache_roots:
+        raise RuntimeError("--stage-cache requires PLATFORM_CACHE_PATHS")
+    if len(set(cache_roots)) != len(cache_roots):
+        raise RuntimeError("PLATFORM_CACHE_PATHS contains duplicate roots")
 
-    base = Path(cache_value).resolve() if args.stage_cache else Path("/tmp/raytrain-bev-benchmark")
-    destination_root = base / "dataset" if args.stage_cache else source_root
+    base = cache_roots[0] if args.stage_cache else Path("/tmp/raytrain-bev-benchmark")
+    destination_root = base / "dataset-view" if args.stage_cache else source_root
     annotation_root = base / "annotations"
     train_output = annotation_root / "train.pkl"
     val_output = annotation_root / "val.pkl"
@@ -157,12 +173,22 @@ def prepare(args: argparse.Namespace) -> tuple[Path, Path, Path, dict]:
     }
     if args.stage_cache:
         files = resolve_files(source_root, [*train_infos, *val_infos])
+        for cache_root in cache_roots:
+            (cache_root / "data").mkdir(parents=True, exist_ok=True)
+        if destination_root.exists():
+            shutil.rmtree(destination_root)
+        destination_root.mkdir(parents=True)
         copy_started = time.perf_counter()
         copied_bytes = 0
+        root_files = [0 for _ in cache_roots]
+        root_bytes = [0 for _ in cache_roots]
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.copy_workers) as executor:
-            futures = [executor.submit(copy_one, path, source_root, destination_root) for path in files]
+            futures = [executor.submit(copy_one, path, source_root, cache_roots, destination_root) for path in files]
             for completed, future in enumerate(concurrent.futures.as_completed(futures), start=1):
-                copied_bytes += future.result()
+                root_index, file_bytes = future.result()
+                copied_bytes += file_bytes
+                root_files[root_index] += 1
+                root_bytes[root_index] += file_bytes
                 if completed % 5000 == 0:
                     print(
                         f"RAYTRAIN_BEV_CACHE_PROGRESS files={completed}/{len(files)} bytes={copied_bytes}",
@@ -176,6 +202,10 @@ def prepare(args: argparse.Namespace) -> tuple[Path, Path, Path, dict]:
             "gib": round(copied_bytes / 1024**3, 3),
             "copy_seconds": round(copy_seconds, 3),
             "mib_per_second": round(copied_bytes / copy_seconds / 1024**2, 3),
+            "roots": [
+                {"path": str(root), "files": root_files[index], "bytes": root_bytes[index]}
+                for index, root in enumerate(cache_roots)
+            ],
         }
     payload = {**payload, "prepare_seconds": round(time.perf_counter() - started, 3)}
     ready.write_text(json.dumps(payload) + "\n", encoding="utf-8")

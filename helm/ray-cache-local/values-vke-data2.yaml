@@ -1,0 +1,17 @@
+fullnameOverride: ray-cache-local-data2
+
+storageClass:
+  name: ray-cache-local-data2
+  provisioner: wellspiking.ai/local-path-data2
+  reclaimPolicy: Delete
+  volumeBindingMode: WaitForFirstConsumer
+  allowVolumeExpansion: false
+
+nodePathMap:
+  - node: "172.28.1.232"
+    paths: [/data2/ray-cache]
+  - node: "172.28.1.233"
+    paths: [/data2/ray-cache]
+
+monitoring:
+  enabled: false

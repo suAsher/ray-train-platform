@@ -26,10 +26,12 @@ type vkeCPUHAProfile struct {
 	Training struct {
 		NodeSelector string `yaml:"nodeSelector"`
 		LocalCache   struct {
-			Available    bool   `yaml:"available"`
-			StorageClass string `yaml:"storageClass"`
-			MountPath    string `yaml:"mountPath"`
-			Policy       struct {
+			Available         bool   `yaml:"available"`
+			StorageClassData1 string `yaml:"storageClassData1"`
+			StorageClassData2 string `yaml:"storageClassData2"`
+			MountPathData1    string `yaml:"mountPathData1"`
+			MountPathData2    string `yaml:"mountPathData2"`
+			Policy            struct {
 				DefaultMode  string   `yaml:"defaultMode"`
 				AllowedSizes []string `yaml:"allowedSizes"`
 				DefaultSize  string   `yaml:"defaultSize"`
@@ -122,16 +124,16 @@ func TestVKECPUHAProfilePublishesCacheAvailabilityWithDefaultOffPolicy(t *testin
 		t.Fatalf("parse VKE production profile: %v", err)
 	}
 	cache := profile.Training.LocalCache
-	if !cache.Available || cache.StorageClass != "ray-cache-local" || cache.MountPath != "/mnt/cache" {
+	if !cache.Available || cache.StorageClassData1 != "ray-cache-local-data1" || cache.StorageClassData2 != "ray-cache-local-data2" || cache.MountPathData1 != "/mnt/cache" || cache.MountPathData2 != "/mnt/cache2" {
 		t.Fatalf("unexpected VKE local cache availability: %+v", cache)
 	}
 	if cache.Policy.DefaultMode != "off" {
 		t.Fatalf("per-task cache default mode=%q, want off", cache.Policy.DefaultMode)
 	}
-	if got := strings.Join(cache.Policy.AllowedSizes, ","); got != "100Gi,200Gi,500Gi" {
+	if got := strings.Join(cache.Policy.AllowedSizes, ","); got != "200Gi,500Gi,1Ti,2Ti,4Ti,5Ti" {
 		t.Fatalf("cache allowlist=%q", got)
 	}
-	if cache.Policy.DefaultSize != "200Gi" || cache.Policy.MaxSize != "500Gi" {
+	if cache.Policy.DefaultSize != "200Gi" || cache.Policy.MaxSize != "5Ti" {
 		t.Fatalf("cache policy default=%q max=%q", cache.Policy.DefaultSize, cache.Policy.MaxSize)
 	}
 }
@@ -144,8 +146,10 @@ func TestPlatformChartWiresExistingLocalCacheEnvironmentContract(t *testing.T) {
 	template := string(contents)
 	for _, name := range []string{
 		"LOCAL_CACHE_ENABLED",
-		"LOCAL_CACHE_STORAGE_CLASS",
-		"LOCAL_CACHE_MOUNT_PATH",
+		"LOCAL_CACHE_STORAGE_CLASS_DATA1",
+		"LOCAL_CACHE_STORAGE_CLASS_DATA2",
+		"LOCAL_CACHE_MOUNT_PATH_DATA1",
+		"LOCAL_CACHE_MOUNT_PATH_DATA2",
 		"LOCAL_CACHE_SIZE",
 		"LOCAL_CACHE_ALLOWED_SIZES",
 		"LOCAL_CACHE_MAX_SIZE",

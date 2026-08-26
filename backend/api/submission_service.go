@@ -81,6 +81,7 @@ type LocalCachePolicy struct {
 	DefaultSize  string
 	MaxSize      string
 	MountPath    string
+	MountPaths   []string
 }
 
 type SubmissionService struct {
@@ -142,6 +143,7 @@ func cloneLocalCachePolicy(policy LocalCachePolicy) LocalCachePolicy {
 		DefaultSize:  strings.TrimSpace(policy.DefaultSize),
 		MaxSize:      strings.TrimSpace(policy.MaxSize),
 		MountPath:    strings.TrimSpace(policy.MountPath),
+		MountPaths:   append([]string(nil), policy.MountPaths...),
 	}
 }
 

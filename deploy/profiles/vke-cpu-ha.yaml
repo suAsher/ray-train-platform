@@ -144,13 +144,15 @@ training:
   maxTotalGPUs: 16
   localCache:
     available: true
-    storageClass: ray-cache-local
-    mountPath: /mnt/cache
+    storageClassData1: ray-cache-local-data1
+    storageClassData2: ray-cache-local-data2
+    mountPathData1: /mnt/cache
+    mountPathData2: /mnt/cache2
     policy:
       defaultMode: "off"
-      allowedSizes: [100Gi, 200Gi, 500Gi]
+      allowedSizes: [200Gi, 500Gi, 1Ti, 2Ti, 4Ti, 5Ti]
       defaultSize: 200Gi
-      maxSize: 500Gi
+      maxSize: 5Ti
 
 kueue:
   enabled: true
