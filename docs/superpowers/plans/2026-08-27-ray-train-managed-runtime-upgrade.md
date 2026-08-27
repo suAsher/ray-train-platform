@@ -775,6 +775,14 @@ safe Python argv form supporting only `python file.py ...` and `python -m module
 reject shell operators, arbitrary executables, and nested `torchrun` before allocating GPUs. Do
 not split the shell string with an ad-hoc parser or pass `/bin/sh -lc` into Train workers.
 
+The `raytrain-managed` parser must consume `--checkpoint-every-epochs`,
+`--checkpoint-keep-latest`, and `--checkpoint-keep-best` before the `--` argument separator and
+store all three values in the immutable `DriverConfig`. The factory must use both retention
+values in `CheckpointConfig`; `every_epochs` is the explicit handoff contract for Task 10's
+framework-neutral reporting and MMCV adapter, which must use it to decide checkpoint epochs.
+Tests must prove non-default and boundary values survive parsing without being replaced by
+driver defaults.
+
 **Files:**
 - Create: `images/workspace/raytrain_runtime/__init__.py`
 - Create: `images/workspace/raytrain_runtime/entrypoint.py`
@@ -867,8 +875,9 @@ def build_trainer(config: DriverConfig):
 - [ ] **Step 5: Test the factory without creating a cluster**
 
 Patch `TorchTrainer`, `ScalingConfig`, and `RunConfig` with fakes. Assert 2 nodes × 8 GPUs creates
-16 workers, 64 node CPUs yields 8 CPUs per Train worker, and `max_failures=2` reaches
-`FailureConfig`.
+16 workers, 64 node CPUs yields 8 CPUs per Train worker, `max_failures=2` reaches
+`FailureConfig`, both retention values reach `CheckpointConfig`, and `every_epochs` remains
+available in `DriverConfig` for the Task 10 reporting/MMCV checkpoint schedule.
 
 - [ ] **Step 6: Run Python tests and image contract tests**
 

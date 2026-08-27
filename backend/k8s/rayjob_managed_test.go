@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -36,11 +37,75 @@ func TestManagedJobUsesPerJobVersionAndManagedDriver(t *testing.T) {
 				t.Fatalf("Ray version must come from immutable job snapshot: got %q want %q", gotVersion, version)
 			}
 			entrypoint, _, _ := unstructured.NestedString(manifest.Object, "spec", "entrypoint")
-			want := "raytrain-managed --nodes 2 --gpus-per-node 8 --cpus-per-node 32 --max-failures 3 -- python train.py --epochs 3"
+			want := "raytrain-managed --nodes 2 --gpus-per-node 8 --cpus-per-node 32 --max-failures 3 --checkpoint-every-epochs 0 --checkpoint-keep-latest 0 --checkpoint-keep-best 0 -- python train.py --epochs 3"
 			if entrypoint != want {
 				t.Fatalf("unexpected managed entrypoint:\n got: %q\nwant: %q", entrypoint, want)
 			}
 		})
+	}
+}
+
+func TestManagedEntrypointPropagatesPersistedCheckpointPolicyExactly(t *testing.T) {
+	job := managedRenderJob(domain.RayVersionProduction)
+	job.Spec.Managed = domain.ManagedTrainingPolicy{
+		MaxFailures: 7,
+		Checkpoint: domain.CheckpointPolicy{
+			EveryEpochs: 4,
+			KeepLatest:  9,
+			KeepBest:    2,
+		},
+	}
+	wantSpec := job.Spec
+	wantSpec.Entrypoint.Command = append([]string(nil), job.Spec.Entrypoint.Command...)
+	wantSpec.Entrypoint.Args = append([]string(nil), job.Spec.Entrypoint.Args...)
+
+	manifest := managedManifest(t, job)
+	entrypoint, _, _ := unstructured.NestedString(manifest.Object, "spec", "entrypoint")
+	want := "raytrain-managed --nodes 2 --gpus-per-node 8 --cpus-per-node 32 --max-failures 7 --checkpoint-every-epochs 4 --checkpoint-keep-latest 9 --checkpoint-keep-best 2 -- python train.py --epochs 3"
+	if entrypoint != want {
+		t.Fatalf("managed checkpoint policy was not propagated exactly:\n got: %q\nwant: %q", entrypoint, want)
+	}
+	if !reflect.DeepEqual(job.Spec, wantSpec) {
+		t.Fatalf("renderer mutated caller-owned spec:\n got: %#v\nwant: %#v", job.Spec, wantSpec)
+	}
+}
+
+func TestManagedEntrypointPropagatesCheckpointPolicyBoundaries(t *testing.T) {
+	job := managedRenderJob(domain.RayVersionProduction)
+	job.Spec.Managed = domain.ManagedTrainingPolicy{
+		MaxFailures: domain.ManagedMaxFailuresLimit,
+		Checkpoint: domain.CheckpointPolicy{
+			EveryEpochs: domain.ManagedCheckpointEveryEpochsLimit,
+			KeepLatest:  domain.ManagedCheckpointRetentionLimit,
+			KeepBest:    domain.ManagedCheckpointRetentionLimit,
+		},
+	}
+
+	manifest := managedManifest(t, job)
+	entrypoint, _, _ := unstructured.NestedString(manifest.Object, "spec", "entrypoint")
+	want := "raytrain-managed --nodes 2 --gpus-per-node 8 --cpus-per-node 32 --max-failures 10 --checkpoint-every-epochs 100000 --checkpoint-keep-latest 1000 --checkpoint-keep-best 1000 -- python train.py --epochs 3"
+	if entrypoint != want {
+		t.Fatalf("managed checkpoint boundary policy was not propagated exactly:\n got: %q\nwant: %q", entrypoint, want)
+	}
+}
+
+func TestLegacyEntrypointIgnoresManagedCheckpointPolicy(t *testing.T) {
+	job := validRenderJob()
+	job.Spec.TrainingEngine = domain.TrainingEngineRayDDP
+
+	manifest, err := RenderRayJob(job, testRenderOptions())
+	if err != nil {
+		t.Fatalf("render legacy RayJob: %v", err)
+	}
+	entrypoint, _, _ := unstructured.NestedString(manifest.Object, "spec", "entrypoint")
+	want := "python train.py --epochs 3"
+	if entrypoint != want {
+		t.Fatalf("legacy entrypoint changed:\n got: %q\nwant: %q", entrypoint, want)
+	}
+	for _, flag := range []string{"--max-failures", "--checkpoint-every-epochs", "--checkpoint-keep-latest", "--checkpoint-keep-best"} {
+		if strings.Contains(entrypoint, flag) {
+			t.Fatalf("legacy entrypoint must not contain managed flag %q: %q", flag, entrypoint)
+		}
 	}
 }
 

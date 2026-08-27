@@ -264,6 +264,9 @@ func trainingEntrypoint(spec domain.JobSpec) []string {
 		"--gpus-per-node", strconv.Itoa(spec.Resources.GPUsPerWorker),
 		"--cpus-per-node", effectiveWorkerCPU(spec.Resources),
 		"--max-failures", strconv.Itoa(spec.Managed.MaxFailures),
+		"--checkpoint-every-epochs", strconv.Itoa(spec.Managed.Checkpoint.EveryEpochs),
+		"--checkpoint-keep-latest", strconv.Itoa(spec.Managed.Checkpoint.KeepLatest),
+		"--checkpoint-keep-best", strconv.Itoa(spec.Managed.Checkpoint.KeepBest),
 		"--",
 	}
 	return append(launcher, command...)

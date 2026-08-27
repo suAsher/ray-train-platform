@@ -71,7 +71,7 @@ func TestRenderManagedRayJobEntrypointQuotesArgumentsSafelyWithoutMutatingSpec(t
 	wantArgs := append([]string(nil), job.Spec.Entrypoint.Args...)
 	manifest := managedManifest(t, job)
 	entrypoint, _, _ := unstructured.NestedString(manifest.Object, "spec", "entrypoint")
-	want := "raytrain-managed --nodes 2 --gpus-per-node 8 --cpus-per-node 32 --max-failures 3 -- python -c 'import os; os.system('\"'\"'touch /tmp/pwned'\"'\"')' '$(id)'"
+	want := "raytrain-managed --nodes 2 --gpus-per-node 8 --cpus-per-node 32 --max-failures 3 --checkpoint-every-epochs 0 --checkpoint-keep-latest 0 --checkpoint-keep-best 0 -- python -c 'import os; os.system('\"'\"'touch /tmp/pwned'\"'\"')' '$(id)'"
 	if entrypoint != want {
 		t.Fatalf("managed user command was not shell-quoted safely:\n got: %q\nwant: %q", entrypoint, want)
 	}
