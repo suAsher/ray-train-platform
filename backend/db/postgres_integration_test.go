@@ -59,6 +59,40 @@ func TestPostgresMigrationsIntegration(t *testing.T) {
 		}
 	}
 
+	runtimeColumnDefaults := map[string]string{
+		"training_engine":      "'ray-ddp'::text",
+		"ray_version":          "'2.35.0'::text",
+		"cluster_attempt":      "1",
+		"worker_restart_count": "0",
+		"resume_checkpoint_id": "''::text",
+		"parent_job_id":        "''::text",
+	}
+	for column, expectedDefault := range runtimeColumnDefaults {
+		var metadata struct {
+			ColumnName    string
+			IsNullable    string
+			ColumnDefault string
+		}
+		if err := database.Raw(`
+SELECT column_name, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'training_jobs'
+  AND column_name = ?`, column).Scan(&metadata).Error; err != nil {
+			t.Fatalf("load training_jobs.%s metadata: %v", column, err)
+		}
+		if metadata.ColumnName != column {
+			t.Errorf("training_jobs.%s metadata not found", column)
+			continue
+		}
+		if metadata.IsNullable != "NO" {
+			t.Errorf("training_jobs.%s is_nullable = %q, want NO", column, metadata.IsNullable)
+		}
+		if metadata.ColumnDefault != expectedDefault {
+			t.Errorf("training_jobs.%s default = %q, want %q", column, metadata.ColumnDefault, expectedDefault)
+		}
+	}
+
 	requiredConstraints := []string{
 		"personal_access_tokens_user_tenant_fk",
 		"personal_access_tokens_scopes_array_check",
@@ -67,6 +101,12 @@ func TestPostgresMigrationsIntegration(t *testing.T) {
 		"source_artifacts_size_check",
 		"source_artifacts_state_check",
 		"source_artifacts_tenant_user_sha256_key",
+		"training_jobs_training_engine_check",
+		"training_jobs_ray_version_check",
+		"training_jobs_engine_ray_version_check",
+		"training_jobs_cluster_attempt_check",
+		"training_jobs_worker_restart_count_check",
+		"training_jobs_parent_job_id_check",
 	}
 	for _, constraint := range requiredConstraints {
 		var count int64
@@ -81,6 +121,23 @@ WHERE n.nspname = current_schema() AND c.conname = ?`, constraint).Scan(&count).
 		if count != 1 {
 			t.Errorf("constraint %s count = %d, want 1", constraint, count)
 		}
+	}
+
+	for _, index := range []string{"training_jobs_engine_state_idx", "training_jobs_parent_idx"} {
+		var count int64
+		if err := database.Raw("SELECT COUNT(*) FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'training_jobs' AND indexname = ?", index).Scan(&count).Error; err != nil {
+			t.Fatalf("check index %s: %v", index, err)
+		}
+		if count != 1 {
+			t.Errorf("index %s count = %d, want 1", index, count)
+		}
+	}
+	var parentIndexDefinition string
+	if err := database.Raw("SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'training_jobs' AND indexname = 'training_jobs_parent_idx'").Scan(&parentIndexDefinition).Error; err != nil {
+		t.Fatalf("load training_jobs_parent_idx definition: %v", err)
+	}
+	if normalized := strings.ToLower(parentIndexDefinition); !strings.Contains(normalized, "where") || !strings.Contains(normalized, "parent_job_id") || !strings.Contains(normalized, "<> ''::text") {
+		t.Errorf("training_jobs_parent_idx is not partial: %q", parentIndexDefinition)
 	}
 
 	seedPostgresIdentityRows(t, database)

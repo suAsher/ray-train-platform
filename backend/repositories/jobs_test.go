@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -297,5 +298,40 @@ func TestCreatePersistsResolvedRuntimeMetadataDefaults(t *testing.T) {
 	}
 	if record.TrainingEngine != string(domain.TrainingEngineRayDDP) || record.RayVersion != domain.RayVersionLegacy || record.ClusterAttempt != 1 {
 		t.Fatalf("resolved runtime defaults not persisted: %+v", record)
+	}
+}
+
+func TestCreateNormalizesRuntimeMetadataConsistently(t *testing.T) {
+	repo := testRepository(t)
+	job := testJob()
+	if err := repo.Create(context.Background(), &job, "runtime-consistency"); err != nil {
+		t.Fatalf("create legacy runtime job: %v", err)
+	}
+
+	if job.Spec.TrainingEngine != domain.TrainingEngineRayDDP || job.Spec.RayVersion != domain.RayVersionLegacy || job.ClusterAttempt != 1 {
+		t.Fatalf("created job was not normalized in memory: %+v", job)
+	}
+
+	var record JobRecord
+	if err := repo.db.Where("id = ?", job.ID).First(&record).Error; err != nil {
+		t.Fatalf("load legacy runtime record: %v", err)
+	}
+	var storedSpec domain.JobSpec
+	if err := json.Unmarshal([]byte(record.SpecJSON), &storedSpec); err != nil {
+		t.Fatalf("decode stored job spec: %v", err)
+	}
+	if storedSpec.TrainingEngine != domain.TrainingEngineRayDDP || storedSpec.RayVersion != domain.RayVersionLegacy {
+		t.Fatalf("spec_json was not normalized: %+v", storedSpec)
+	}
+	if record.TrainingEngine != string(domain.TrainingEngineRayDDP) || record.RayVersion != domain.RayVersionLegacy || record.ClusterAttempt != 1 {
+		t.Fatalf("normalized columns disagree with created job: %+v", record)
+	}
+
+	got, err := repo.Get(context.Background(), job.TenantID, job.ID)
+	if err != nil {
+		t.Fatalf("get legacy runtime job: %v", err)
+	}
+	if got.Spec.TrainingEngine != job.Spec.TrainingEngine || got.Spec.RayVersion != job.Spec.RayVersion || got.ClusterAttempt != job.ClusterAttempt {
+		t.Fatalf("read job disagrees with create response: created=%+v read=%+v", job, got)
 	}
 }

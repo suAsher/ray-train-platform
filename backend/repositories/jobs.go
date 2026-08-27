@@ -177,6 +177,7 @@ func valueOrEmpty(value *string) string {
 // to receive syntactically valid JSON: PostgreSQL rejects an empty string with
 // SQLSTATE 22P02 and fails the whole insert.
 func newJobRecord(job *domain.TrainingJob) (JobRecord, error) {
+	normalizeJobRuntimeMetadata(job)
 	specJSON, err := json.Marshal(job.Spec)
 	if err != nil {
 		return JobRecord{}, fmt.Errorf("marshal job spec: %w", err)
@@ -184,15 +185,6 @@ func newJobRecord(job *domain.TrainingJob) (JobRecord, error) {
 	cleanupJSON, err := json.Marshal(job.Spec.CleanupPolicy)
 	if err != nil {
 		return JobRecord{}, fmt.Errorf("marshal cleanup policy: %w", err)
-	}
-	engine := job.Spec.TrainingEngine.Resolved()
-	rayVersion := strings.TrimSpace(job.Spec.RayVersion)
-	if rayVersion == "" {
-		rayVersion = domain.RayVersionLegacy
-	}
-	clusterAttempt := job.ClusterAttempt
-	if clusterAttempt < 1 {
-		clusterAttempt = 1
 	}
 	return JobRecord{
 		ID:                   job.ID,
@@ -206,15 +198,29 @@ func newJobRecord(job *domain.TrainingJob) (JobRecord, error) {
 		DesiredState:         string(job.DesiredState),
 		ObservedState:        string(job.ObservedState),
 		KubernetesNS:         job.KubernetesNS,
-		TrainingEngine:       string(engine),
-		RayVersion:           rayVersion,
-		ClusterAttempt:       clusterAttempt,
+		TrainingEngine:       string(job.Spec.TrainingEngine),
+		RayVersion:           job.Spec.RayVersion,
+		ClusterAttempt:       job.ClusterAttempt,
 		WorkerRestartCount:   job.WorkerRestartCount,
 		ResumeCheckpointID:   job.ResumeCheckpointID,
 		ParentJobID:          job.Spec.ParentJobID,
 		TimeoutSeconds:       job.Spec.TimeoutSeconds,
 		CleanupJSON:          string(cleanupJSON),
 	}, nil
+}
+
+func normalizeJobRuntimeMetadata(job *domain.TrainingJob) {
+	job.Spec.TrainingEngine = job.Spec.TrainingEngine.Resolved()
+	job.Spec.RayVersion = strings.TrimSpace(job.Spec.RayVersion)
+	if job.Spec.RayVersion == "" {
+		job.Spec.RayVersion = domain.RayVersionLegacy
+	}
+	if job.ClusterAttempt < 1 {
+		job.ClusterAttempt = 1
+	}
+	if job.WorkerRestartCount < 0 {
+		job.WorkerRestartCount = 0
+	}
 }
 
 func effectiveGPUQuota(limit int) int {
@@ -546,8 +552,12 @@ func (r JobRecord) toDomain() (*domain.TrainingJob, error) {
 	spec.RayVersion = rayVersion
 	spec.ParentJobID = r.ParentJobID
 	clusterAttempt := r.ClusterAttempt
-	if clusterAttempt == 0 {
+	if clusterAttempt < 1 {
 		clusterAttempt = 1
+	}
+	workerRestartCount := r.WorkerRestartCount
+	if workerRestartCount < 0 {
+		workerRestartCount = 0
 	}
 	return &domain.TrainingJob{
 		ID:                   r.ID,
@@ -567,7 +577,7 @@ func (r JobRecord) toDomain() (*domain.TrainingJob, error) {
 		RayClusterName:       r.RayClusterName,
 		ResourceVersion:      r.ResourceVersion,
 		ClusterAttempt:       clusterAttempt,
-		WorkerRestartCount:   r.WorkerRestartCount,
+		WorkerRestartCount:   workerRestartCount,
 		ResumeCheckpointID:   r.ResumeCheckpointID,
 		CreatedAt:            r.CreatedAt,
 		UpdatedAt:            r.UpdatedAt,

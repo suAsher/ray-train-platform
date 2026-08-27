@@ -114,3 +114,23 @@ func TestJobRecordResolvesLegacyRuntimeMetadataDefaults(t *testing.T) {
 		t.Fatalf("legacy runtime metadata defaults not resolved: %+v", got)
 	}
 }
+
+func TestJobRecordDefensivelyNormalizesInvalidRuntimeCounters(t *testing.T) {
+	job := testJob()
+	specJSON, err := json.Marshal(job.Spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := (JobRecord{
+		SpecJSON:           string(specJSON),
+		ClusterAttempt:     -2,
+		WorkerRestartCount: -3,
+	}).toDomain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ClusterAttempt != 1 || got.WorkerRestartCount != 0 {
+		t.Fatalf("invalid runtime counters not normalized: %+v", got)
+	}
+}
