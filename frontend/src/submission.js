@@ -1,5 +1,8 @@
+import { normalizeTrainingEngine, RAY_TRAIN_ENGINE } from './trainingEngine.js'
+
 const gitCommitPattern = /^[0-9a-f]{7,64}$/i
 const snapshotPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
+const jobIDPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
 export function parseEntrypoint(value) {
   const parts = []
@@ -25,6 +28,7 @@ export function equivalentSubmitCommand(form) {
   ]
   parts.push(`--entrypoint ${shellArg(form.entrypoint || '<启动命令>')}`)
   parts.push(
+    `--engine ${shellArg(normalizeTrainingEngine(form.trainingEngine))}`,
     `--workers ${shellArg(form.workerReplicas)}`,
     `--gpus-per-worker ${shellArg(form.gpusPerWorker)}`,
   )
@@ -55,6 +59,7 @@ export function equivalentSubmitCommandForJob(job) {
   return equivalentSubmitCommand({
     name: job?.name || spec.name || '',
     image: spec.image || '',
+    trainingEngine: normalizeTrainingEngine(spec.trainingEngine),
     entrypoint: job?.entrypoint || persistedEntrypoint,
     workerReplicas: resources.workerReplicas || 1,
     gpusPerWorker: resources.gpusPerWorker || 1,
@@ -72,6 +77,7 @@ export function buildJobSpec(form, platformLimits = {}) {
     throw new Error('请输入训练启动命令')
   }
   const cache = buildCache(form, platformLimits.cache)
+  const trainingEngine = normalizeTrainingEngine(form.trainingEngine)
 
   const spec = {
     name: requiredText(form.name, '任务名称'),
@@ -85,6 +91,7 @@ export function buildJobSpec(form, platformLimits = {}) {
       memoryPerWorker: requiredText(form.memoryPerWorker || '32Gi', '每节点内存'),
     },
     execution: { mode: executionMode(form) },
+    trainingEngine,
     // Data locations are logical spaces, never a TOS URI, object key, or
     // PVC. The backend derives the caller's permitted root at submission.
     input: dataLocation(form.input, '训练输入'),
@@ -94,13 +101,35 @@ export function buildJobSpec(form, platformLimits = {}) {
     timeoutSeconds: nonNegativeInteger(form.timeoutSeconds || 0, '最长运行时间'),
     retryPolicy: { maxRetries: boundedInteger(form.maxRetries || 0, '自动重试次数', 0, 3) },
     ...(cache ? { cache } : {}),
+    ...(trainingEngine === RAY_TRAIN_ENGINE ? { managed: managedPolicy(form) } : {}),
   }
+
+  const parentJobId = optionalJobID(form.parentJobId)
+  if (parentJobId) spec.parentJobId = parentJobId
 
   const priority = String(form.priority || '').trim()
   if (priority) {
     spec.priority = priority
   }
   return spec
+}
+
+function managedPolicy(form) {
+  return {
+    maxFailures: boundedInteger(form.maxFailures ?? 2, 'Worker 最大恢复次数', 0, 10),
+    checkpoint: {
+      everyEpochs: nonNegativeInteger(form.checkpointEveryEpochs ?? 1, 'Checkpoint 周期'),
+      keepLatest: nonNegativeInteger(form.checkpointKeepLatest ?? 3, '最近 Checkpoint 保留数'),
+      keepBest: nonNegativeInteger(form.checkpointKeepBest ?? 1, '最佳 Checkpoint 保留数'),
+    },
+  }
+}
+
+function optionalJobID(value) {
+  const id = String(value || '').trim()
+  if (!id) return ''
+  if (!jobIDPattern.test(id)) throw new Error('续训来源任务 ID 格式不合法')
+  return id
 }
 
 function buildCache(form, policy) {

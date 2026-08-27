@@ -54,6 +54,28 @@
       </div>
     </div>
 
+    <section class="panel p-5" aria-label="不可变运行时信息">
+      <div class="flex items-center justify-between gap-3">
+        <div>
+          <h4 class="text-sm font-semibold text-white">不可变运行时</h4>
+          <p class="mt-1 text-xs text-slate-500">以下内容在提交时由平台固化，用于复现、恢复与排障。</p>
+        </div>
+        <el-tag effect="plain" type="info">{{ runtimeDetails.engineLabel }}</el-tag>
+      </div>
+      <dl class="mt-4 grid gap-4 text-sm sm:grid-cols-2 xl:grid-cols-4">
+        <div><dt class="text-slate-500">训练引擎</dt><dd class="mt-1 text-slate-200">{{ runtimeDetails.engineLabel }}</dd></div>
+        <div><dt class="text-slate-500">Ray 版本</dt><dd class="mt-1 font-mono text-slate-200">{{ runtimeDetails.rayVersion }}</dd></div>
+        <div class="sm:col-span-2"><dt class="text-slate-500">镜像 Digest / 引用</dt><dd class="mt-1 break-all font-mono text-slate-200">{{ runtimeDetails.image }}</dd></div>
+        <div><dt class="text-slate-500">Worker 数</dt><dd class="mt-1 text-slate-200">{{ runtimeDetails.workerCount }}</dd></div>
+        <div><dt class="text-slate-500">World Size</dt><dd class="mt-1 text-slate-200">{{ runtimeDetails.worldSize }}</dd></div>
+        <div><dt class="text-slate-500">集群尝试</dt><dd class="mt-1 text-slate-200">{{ runtimeDetails.clusterAttempt }}</dd></div>
+        <div><dt class="text-slate-500">Worker 重启</dt><dd class="mt-1 text-slate-200">{{ runtimeDetails.restartCount }}</dd></div>
+        <div v-if="runtimeDetails.resumeSource" class="sm:col-span-2 xl:col-span-4">
+          <dt class="text-slate-500">续训来源</dt><dd class="mt-1 break-all font-mono text-slate-200">{{ runtimeDetails.resumeSource }}</dd>
+        </div>
+      </dl>
+    </section>
+
     <el-dialog v-model="showCli" title="用 spk-rayjob 提交同样的任务" width="min(720px, 94vw)">
       <p class="mb-4 text-sm leading-6 text-slate-400">
         网页和命令行提交的是同一份契约。把下面这条命令粘到装了 <code>spk-rayjob</code> 的机器上即可复现这个任务；
@@ -342,6 +364,7 @@ import { createJobGPUHistoryController } from '../../jobGpuHistoryController'
 import { latestMetric, metricSeries, sparklinePoints } from '../../mlflowExperiment'
 import { cacheQueryForJob } from '../../platformLimits'
 import { equivalentSubmitCommandForJob } from '../../submission'
+import { jobRuntimeDetails, resubmitRuntimeQuery } from '../../trainingEngine.js'
 import { GPU_TIME_WINDOWS, jobMetricChartSeries, jobMetricSummary, normalizeGPUHistory, sampleFreshness } from '../../gpuMetrics'
 
 const route = useRoute()
@@ -574,6 +597,7 @@ const normalizeDetail = (job) => {
 }
 
 const timeline = computed(() => jobTimeline(jobDetail.value || {}, nowTick.value))
+const runtimeDetails = computed(() => jobRuntimeDetails(jobDetail.value))
 
 const statusClass = (status) => {
   if (status === 'SUCCEEDED') return 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400'
@@ -676,6 +700,7 @@ const resumeFromCheckpoint = () => {
       name: jobDetail.value?.name,
       image: jobDetail.value?.spec?.image,
       entrypoint: jobDetail.value?.entrypoint,
+      ...resubmitRuntimeQuery(jobDetail.value, { resume: true }),
       ...cacheQueryForJob(jobDetail.value),
     },
   })
@@ -688,6 +713,7 @@ const rerunJob = () => {
       name: jobDetail.value?.name,
       image: jobDetail.value?.spec?.image,
       entrypoint: jobDetail.value?.entrypoint,
+      ...resubmitRuntimeQuery(jobDetail.value),
       ...cacheQueryForJob(jobDetail.value),
     },
   })

@@ -1,7 +1,27 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 import { jobFormStepIssues } from './jobFormIssues.js'
+
+const readFormSource = () => readFile(new URL('./useJobForm.js', import.meta.url), 'utf8')
+
+test('job form defaults to Ray orchestrated DDP and keeps managed recovery defaults separate', async () => {
+  const source = await readFormSource()
+
+  assert.match(source, /trainingEngine:\s*normalizeTrainingEngine\(/)
+  assert.match(source, /maxFailures:\s*queryNonNegativeInteger\([^,]+,\s*2\)/)
+  assert.match(source, /checkpointEveryEpochs:\s*queryNonNegativeInteger\([^,]+,\s*1\)/)
+  assert.match(source, /checkpointKeepLatest:\s*queryNonNegativeInteger\([^,]+,\s*3\)/)
+  assert.match(source, /checkpointKeepBest:\s*queryNonNegativeInteger\([^,]+,\s*1\)/)
+})
+
+test('job form preserves an explicit managed engine and parent from rerun query state', async () => {
+  const source = await readFormSource()
+
+  assert.match(source, /route\?\.query\?\.trainingEngine/)
+  assert.match(source, /route\?\.query\?\.parentJobId/)
+})
 
 test('runtime step blocks submission with a clear Chinese message when team quota is exhausted', () => {
   const issues = jobFormStepIssues({

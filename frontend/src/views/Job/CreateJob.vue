@@ -58,6 +58,7 @@
             :command-preview="commandPreview"
             :warnings="commandWarnings"
             :workspace-path="mountPaths.workspace"
+            :managed-availability="managedAvailability"
             @apply-profile="applyProfile"
           />
         </div>
@@ -94,6 +95,10 @@
           <div>
             <p class="text-slate-500">当前步骤</p>
             <p class="mt-1 font-medium text-slate-200">{{ stepTitles[currentStep] }}</p>
+          </div>
+          <div>
+            <p class="text-slate-500">训练引擎</p>
+            <p class="mt-1 font-medium text-slate-200">{{ trainingEngineDisplay }}</p>
           </div>
           <div>
             <p class="text-slate-500">训练方式</p>
@@ -137,6 +142,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { apiPost } from '../../api/client'
 import { buildJobSpec } from '../../submission'
 import { useJobForm } from '../../composables/useJobForm'
+import { trainingEngineLabel } from '../../trainingEngine.js'
 import StepCode from '../../components/job/StepCode.vue'
 import StepRuntime from '../../components/job/StepRuntime.vue'
 import StepData from '../../components/job/StepData.vue'
@@ -150,7 +156,7 @@ const stepTitles = ['代码与环境', '运行规模', '数据与确认']
 
 const {
   form, limits, quotaModel, profiles, executionMode, totalGPUs, commandPreview, commandWarnings, mountPaths,
-  trainingImages, workspaceSnapshots, loadingCatalog, applyProfile, toSubmission, stepIssues, loadCatalog,
+  trainingImages, workspaceSnapshots, loadingCatalog, managedAvailability, applyProfile, toSubmission, stepIssues, loadCatalog,
 } = useJobForm(route)
 
 // Element Plus input-number requires max >= min. When quota is zero the form
@@ -169,6 +175,7 @@ const executionModeLabels = {
   ray_train: '多机多卡（Ray 分散放置 + torchrun）',
 }
 const executionModeLabel = computed(() => executionModeLabels[executionMode.value] || executionMode.value)
+const trainingEngineDisplay = computed(() => trainingEngineLabel(form.trainingEngine))
 
 const nextStep = () => {
   const issues = stepIssues(currentStep.value)

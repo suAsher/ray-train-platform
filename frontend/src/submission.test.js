@@ -83,6 +83,45 @@ test('buildJobSpec maps a Git submission into the platform runtime contract', ()
   assert.equal('datasetUri' in spec, false)
   assert.equal(spec.timeoutSeconds, 3600)
   assert.deepEqual(spec.retryPolicy, { maxRetries: 1 })
+  assert.equal(spec.trainingEngine, 'ray-ddp')
+  assert.equal('rayVersion' in spec, false)
+})
+
+test('managed engine is opt-in and carries managed recovery and checkpoint policy', () => {
+  const spec = buildJobSpec({
+    ...baseForm(),
+    trainingEngine: 'ray-train',
+    maxFailures: 2,
+    checkpointEveryEpochs: 1,
+    checkpointKeepLatest: 3,
+    checkpointKeepBest: 1,
+  })
+
+  assert.equal(spec.trainingEngine, 'ray-train')
+  assert.deepEqual(spec.managed, {
+    maxFailures: 2,
+    checkpoint: { everyEpochs: 1, keepLatest: 3, keepBest: 1 },
+  })
+  assert.equal('rayVersion' in spec, false)
+})
+
+test('legacy DDP payload omits managed policy even when stale managed fields are present', () => {
+  const spec = buildJobSpec({
+    ...baseForm(),
+    trainingEngine: 'ray-ddp',
+    maxFailures: 9,
+    checkpointEveryEpochs: 9,
+    checkpointKeepLatest: 9,
+    checkpointKeepBest: 9,
+  })
+
+  assert.equal(spec.trainingEngine, 'ray-ddp')
+  assert.equal('managed' in spec, false)
+})
+
+test('resume submission carries an immutable parent job relationship', () => {
+  const spec = buildJobSpec({ ...baseForm(), parentJobId: 'job-parent-17' })
+  assert.equal(spec.parentJobId, 'job-parent-17')
 })
 
 test('buildJobSpec rejects a multi-worker torchrun request before submitting it', () => {
@@ -177,6 +216,12 @@ test('equivalent submit command includes the selected runtime cache flags', () =
   assert.match(command, /--cache-mode 'runtime' \\\n  --cache-size '200Gi'/)
 })
 
+test('equivalent submit command shows the effective engine but never exposes a Ray version selector', () => {
+  const command = equivalentSubmitCommand({ ...baseForm(), trainingEngine: 'ray-train' })
+  assert.match(command, /--engine 'ray-train'/)
+  assert.doesNotMatch(command, /--ray-version/)
+})
+
 test('equivalent submit command includes automatic input preload as one user parameter', () => {
   const command = equivalentSubmitCommand({
     ...baseForm(), cacheMode: 'runtime', cacheSize: '200Gi', cachePreload: 'input',
@@ -217,6 +262,7 @@ test('equivalent submit command shell-quotes every interpolated flag value exact
     "--name 'team'\"'\"'s run; $(name) `name` && next'",
     "--image 'registry.example/train image:latest; $(image) `image` && next'\"'\"'s'",
     "--entrypoint 'python train.py --run '\"'\"'alpha beta'\"'\"'; $(entrypoint) `entrypoint` && next'",
+    "--engine 'ray-ddp'",
     "--workers '2; $(workers)'",
     "--gpus-per-worker '8 && `gpus`'",
     "--cache-mode 'runtime'",
@@ -282,6 +328,7 @@ test('JobDetail equivalent command shell-quotes persisted values exactly', () =>
     "--name 'saved job'\"'\"'s; $(name) `name` && next'",
     "--image 'registry.example/saved image:latest; $(image) `image` && next'\"'\"'s'",
     "--entrypoint 'python saved.py --run '\"'\"'alpha beta'\"'\"'; $(entrypoint) `entrypoint` && next'",
+    "--engine 'ray-ddp'",
     "--workers '3; $(workers)'",
     "--gpus-per-worker '4 && `gpus`'",
     "--cache-mode 'runtime'",

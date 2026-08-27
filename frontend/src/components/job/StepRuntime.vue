@@ -8,6 +8,68 @@
       </p>
     </div>
 
+    <fieldset class="mb-6">
+      <legend class="field-label">训练引擎</legend>
+      <div class="mt-2 grid gap-3 sm:grid-cols-2">
+        <button
+          type="button"
+          class="rounded-2xl border p-4 text-left transition"
+          :class="engineClass('ray-ddp')"
+          :aria-pressed="form.trainingEngine !== 'ray-train'"
+          @click="selectTrainingEngine('ray-ddp')"
+        >
+          <div class="flex items-center justify-between gap-3">
+            <p class="font-semibold text-white">Ray 编排 DDP</p>
+            <el-tag size="small" effect="plain">默认</el-tag>
+          </div>
+          <p class="mt-2 text-xs leading-5 text-slate-400">保持现有训练代码与启动方式，由平台在 Ray Worker 上编排 torchrun。</p>
+        </button>
+        <button
+          type="button"
+          class="rounded-2xl border p-4 text-left transition"
+          :class="engineClass('ray-train')"
+          :aria-disabled="!managedAvailability.available"
+          :aria-pressed="form.trainingEngine === 'ray-train'"
+          :aria-describedby="!managedAvailability.available ? 'managed-engine-reason' : undefined"
+          @click="selectTrainingEngine('ray-train')"
+        >
+          <div class="flex items-center justify-between gap-3">
+            <p class="font-semibold text-white">Ray Train 托管</p>
+            <el-tag size="small" type="success" effect="plain">托管恢复</el-tag>
+          </div>
+          <p class="mt-2 text-xs leading-5 text-slate-400">由 Ray Train 管理 Worker 恢复、原生指标与 Checkpoint 生命周期。</p>
+          <p
+            v-if="!managedAvailability.available"
+            id="managed-engine-reason"
+            class="mt-3 text-xs text-amber-300"
+          >{{ managedAvailability.reason }}</p>
+        </button>
+      </div>
+    </fieldset>
+
+    <div v-if="form.trainingEngine === 'ray-train'" class="mb-6 rounded-2xl border border-emerald-900/60 bg-emerald-950/15 p-4">
+      <p class="text-sm font-semibold text-emerald-200">托管恢复与 Checkpoint 策略</p>
+      <div class="mt-4 grid gap-4 sm:grid-cols-2">
+        <div>
+          <label class="field-label">Worker 最大恢复次数</label>
+          <el-input-number v-model="form.maxFailures" :min="0" :max="10" class="w-full" />
+        </div>
+        <div>
+          <label class="field-label">每隔多少 Epoch 保存</label>
+          <el-input-number v-model="form.checkpointEveryEpochs" :min="0" :max="100000" class="w-full" />
+          <p class="field-help">填 0 表示不按 Epoch 自动保存。</p>
+        </div>
+        <div>
+          <label class="field-label">保留最近 Checkpoint</label>
+          <el-input-number v-model="form.checkpointKeepLatest" :min="0" :max="1000" class="w-full" />
+        </div>
+        <div>
+          <label class="field-label">保留最佳 Checkpoint</label>
+          <el-input-number v-model="form.checkpointKeepBest" :min="0" :max="1000" class="w-full" />
+        </div>
+      </div>
+    </div>
+
     <div class="grid gap-3 sm:grid-cols-3">
       <button
         v-for="profile in profiles"
@@ -139,6 +201,10 @@ const props = defineProps({
   commandPreview: { type: String, default: '' },
   warnings: { type: Array, default: () => [] },
   workspacePath: { type: String, default: '/workspace' },
+  managedAvailability: {
+    type: Object,
+    default: () => ({ available: false, reason: '当前团队未开放 Ray Train 托管' }),
+  },
 })
 
 defineEmits(['apply-profile'])
@@ -165,6 +231,20 @@ const selectCacheSize = (cacheSize) => {
 
 const selectCachePreload = (enabled) => {
   props.form.cachePreload = enabled ? 'input' : ''
+}
+
+const selectTrainingEngine = (engine) => {
+  if (engine === 'ray-train' && !props.managedAvailability.available) return
+  props.form.trainingEngine = engine
+}
+
+const engineClass = (engine) => {
+  const disabled = engine === 'ray-train' && !props.managedAvailability.available
+  if (disabled) return 'cursor-not-allowed border-slate-800 bg-slate-900/30 opacity-60'
+  const selected = engine === 'ray-train'
+    ? props.form.trainingEngine === 'ray-train'
+    : props.form.trainingEngine !== 'ray-train'
+  return selected ? 'border-emerald-400 bg-emerald-950/20' : 'border-slate-700 bg-slate-900/50 hover:border-slate-500'
 }
 
 const profileClass = (profile) => {

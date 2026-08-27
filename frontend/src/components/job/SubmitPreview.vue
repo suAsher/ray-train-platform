@@ -14,6 +14,10 @@
 
     <dl class="mt-4 grid gap-3 text-sm sm:grid-cols-2">
       <div>
+        <dt class="text-slate-500">训练引擎</dt>
+        <dd class="mt-1 text-slate-200">{{ engineLabel }}</dd>
+      </div>
+      <div>
         <dt class="text-slate-500">代码来源</dt>
         <dd class="mt-1 break-all text-slate-200">{{ sourceSummary }}</dd>
       </div>
@@ -33,6 +37,10 @@
         <dt class="text-slate-500">运行时缓存</dt>
         <dd class="mt-1 break-all text-slate-200">{{ cacheSummary }}</dd>
       </div>
+      <div v-if="form.trainingEngine === 'ray-train'">
+        <dt class="text-slate-500">托管恢复策略</dt>
+        <dd class="mt-1 text-slate-200">{{ managedSummary }}</dd>
+      </div>
     </dl>
 
     <CopyBlock class="mt-4" :text="commandPreview || '（尚未填写启动命令）'" label="平台实际执行" wrap />
@@ -48,6 +56,7 @@
 import { computed } from 'vue'
 
 import { equivalentSubmitCommand } from '../../submission'
+import { trainingEngineLabel } from '../../trainingEngine.js'
 import CopyBlock from '../CopyBlock.vue'
 
 const props = defineProps({
@@ -66,6 +75,12 @@ const sourceSummary = computed(() => {
   }
   return props.form.workspaceSnapshot || '尚未选择工作区快照'
 })
+
+const engineLabel = computed(() => trainingEngineLabel(props.form.trainingEngine))
+const managedSummary = computed(() => (
+  `最多恢复 ${Number(props.form.maxFailures || 0)} 次；每 ${Number(props.form.checkpointEveryEpochs || 0)} Epoch 保存，` +
+  `保留最近 ${Number(props.form.checkpointKeepLatest || 0)} / 最佳 ${Number(props.form.checkpointKeepBest || 0)}`
+))
 
 const outputSummary = computed(() => (props.form.output?.spaceId === 'my-runs'
   ? '我的训练结果 · 平台自动创建独立 runs/<job-id>'

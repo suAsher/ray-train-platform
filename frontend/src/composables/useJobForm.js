@@ -14,6 +14,7 @@ import {
   resolveExecutionMode,
 } from '../platformLimits'
 import { entrypointWarnings, previewCommand } from '../commandPreview'
+import { managedEngineAvailability, normalizeTrainingEngine } from '../trainingEngine.js'
 import { jobFormStepIssues } from './jobFormIssues.js'
 
 /**
@@ -39,6 +40,12 @@ export function useJobForm(route) {
     gitCommit: '',
     workspaceSnapshot: '',
     entrypoint: 'python train.py',
+    trainingEngine: normalizeTrainingEngine(route?.query?.trainingEngine),
+    maxFailures: queryNonNegativeInteger(route?.query?.maxFailures, 2),
+    checkpointEveryEpochs: queryNonNegativeInteger(route?.query?.checkpointEveryEpochs, 1),
+    checkpointKeepLatest: queryNonNegativeInteger(route?.query?.checkpointKeepLatest, 3),
+    checkpointKeepBest: queryNonNegativeInteger(route?.query?.checkpointKeepBest, 1),
+    parentJobId: String(route?.query?.parentJobId || ''),
     workerReplicas: 1,
     gpusPerWorker: 1,
     cpuPerWorker: 8,
@@ -68,6 +75,11 @@ export function useJobForm(route) {
 
   const activeProfile = computed(() => profiles.value.find((profile) =>
     profile.workers === Number(form.workerReplicas) && profile.gpus === Number(form.gpusPerWorker)))
+  const managedAvailability = computed(() => managedEngineAvailability({
+    limits: limits.value,
+    images: trainingImages.value,
+    imageReference: form.image,
+  }))
 
   // A shape beyond the deployment ceiling is corrected as the user types rather
   // than accepted and rejected later by the API.
@@ -116,6 +128,9 @@ export function useJobForm(route) {
       }
     }
     if (step === 1) {
+      if (form.trainingEngine === 'ray-train' && !managedAvailability.value.available) {
+        issues.push(managedAvailability.value.reason)
+      }
       issues.push(...jobFormStepIssues({
         step,
         form,
@@ -166,6 +181,7 @@ export function useJobForm(route) {
     commandWarnings,
     mountPaths,
     trainingImages,
+    managedAvailability,
     workspaceSnapshots,
     loadingCatalog,
     applyProfile,
@@ -173,4 +189,10 @@ export function useJobForm(route) {
     stepIssues,
     loadCatalog,
   }
+}
+
+function queryNonNegativeInteger(value, fallback) {
+  if (value == null || value === '') return fallback
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : fallback
 }
