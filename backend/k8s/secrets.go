@@ -2,6 +2,8 @@ package k8s
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"strings"
 
@@ -13,6 +15,75 @@ import (
 const imagePullSecretSourceLabel = "ray-train-platform/source-secret"
 
 const idcSFTPPrivateKeySecretLabel = "platform.wellspiking.ai/idc-sftp-key"
+
+const (
+	TrainingEventTokenBytes = 32
+	TrainingEventTokenKey   = "token"
+	trainingEventJobLabel   = "platform.wellspiking.ai/training-event-job"
+)
+
+func TrainingEventSecretName(jobID string) string {
+	return "raytrain-event-" + strings.TrimSpace(jobID)
+}
+
+// EnsureTrainingEventTokenSecret returns the raw 256-bit credential while
+// persisting only its URL-safe representation in one immutable, job-labelled
+// Secret. Retries reuse the same credential; they never rotate a running job.
+func (c *Client) EnsureTrainingEventTokenSecret(ctx context.Context, namespace, jobID string) ([]byte, error) {
+	if c == nil || c.kubernetes == nil {
+		return nil, fmt.Errorf("Kubernetes client is not initialized")
+	}
+	namespace = strings.TrimSpace(namespace)
+	jobID = strings.TrimSpace(jobID)
+	name := TrainingEventSecretName(jobID)
+	if namespace == "" || !isDNSLabel(namespace) || jobID == "" || !isDNSLabel(jobID) || !isDNSSubdomain(name) || len(name) > 63 {
+		return nil, fmt.Errorf("namespace and job ID must form valid DNS labels")
+	}
+	secrets := c.kubernetes.CoreV1().Secrets(namespace)
+	existing, err := secrets.Get(ctx, name, metav1.GetOptions{})
+	if err == nil {
+		return trainingEventTokenFromSecret(existing, jobID)
+	}
+	if !apierrors.IsNotFound(err) {
+		return nil, fmt.Errorf("get training event Secret %s/%s: %w", namespace, name, err)
+	}
+	raw := make([]byte, TrainingEventTokenBytes)
+	if _, err := rand.Read(raw); err != nil {
+		return nil, fmt.Errorf("generate training event token: %w", err)
+	}
+	immutable := true
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/part-of": "ray-train-platform", "app.kubernetes.io/managed-by": "ray-train-platform",
+				trainingEventJobLabel: jobID,
+			},
+		},
+		Type: corev1.SecretTypeOpaque, Immutable: &immutable,
+		Data: map[string][]byte{TrainingEventTokenKey: []byte(base64.RawURLEncoding.EncodeToString(raw))},
+	}
+	created, err := secrets.Create(ctx, secret, metav1.CreateOptions{})
+	if apierrors.IsAlreadyExists(err) {
+		created, err = secrets.Get(ctx, name, metav1.GetOptions{})
+	}
+	if err != nil {
+		return nil, fmt.Errorf("create training event Secret %s/%s: %w", namespace, name, err)
+	}
+	return trainingEventTokenFromSecret(created, jobID)
+}
+
+func trainingEventTokenFromSecret(secret *corev1.Secret, jobID string) ([]byte, error) {
+	if secret == nil || secret.Type != corev1.SecretTypeOpaque || secret.Immutable == nil || !*secret.Immutable ||
+		secret.Labels["app.kubernetes.io/managed-by"] != "ray-train-platform" || secret.Labels[trainingEventJobLabel] != jobID {
+		return nil, fmt.Errorf("refusing to use unmanaged training event Secret")
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(string(secret.Data[TrainingEventTokenKey]))
+	if err != nil || len(raw) != TrainingEventTokenBytes {
+		return nil, fmt.Errorf("training event Secret has an invalid token")
+	}
+	return append([]byte(nil), raw...), nil
+}
 
 // EnsureImagePullSecret copies one explicitly configured registry credential
 // from the platform namespace into a tenant namespace. Secret references never

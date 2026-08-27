@@ -3,6 +3,7 @@ package k8s
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"path"
 	"strconv"
 	"strings"
@@ -35,6 +36,10 @@ type RenderOptions struct {
 	// GIT_USERNAME/GIT_TOKEN for a private repository. Empty for public ones.
 	GitCredentialSecret string
 	MLflow              MLflowOptions
+	// TrainingEventBaseURL is an internal control-plane URL. The renderer adds
+	// the immutable job path and never obtains it from a submission request.
+	TrainingEventBaseURL string
+	trainingEventJobID   string
 }
 
 // MLflowOptions carries only non-secret, in-cluster routing information.
@@ -103,6 +108,13 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	if err := options.MLflow.Validate(); err != nil {
 		return nil, fmt.Errorf("MLflow: %w", err)
 	}
+	if job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain {
+		trainingEventBaseURL, err := validateTrainingEventBaseURL(options.TrainingEventBaseURL)
+		if err != nil {
+			return nil, fmt.Errorf("training event callback: %w", err)
+		}
+		options.TrainingEventBaseURL = trainingEventBaseURL
+	}
 	if job.Spec.Source.Type != "git" && job.Spec.Source.Type != "workspace" && job.Spec.Source.Type != "workspace-archive" {
 		// Defense in depth for callers that bypass the HTTP submission service.
 		// Ray workloads must not receive object-store credentials just to obtain
@@ -146,6 +158,7 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	options.MLflow.jobID = job.ID
 	options.MLflow.tenantID = job.TenantID
 	options.MLflow.userID = job.UserID
+	options.trainingEventJobID = job.ID
 
 	// The submitter runs `ray job submit`, and Ray uploads the runtime env's
 	// working_dir from the submitter's own filesystem. Materialize the source
@@ -548,6 +561,9 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 		volumeMounts, volumes = appendTrainingDataRoots(volumeMounts, volumes, jobSpec.ResolvedDataRoots)
 		volumeMounts, volumes = appendResolvedDataSpaceMounts(volumeMounts, volumes, jobSpec.ResolvedDataMounts)
 	}
+	if mountData && jobSpec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain {
+		volumeMounts, volumes, env = appendTrainingEventCredential(volumeMounts, volumes, env, options)
+	}
 	if materializeSource && (source.Type == "workspace" || source.Type == "workspace-archive") {
 		personal := jobSpec.ResolvedDataRoots.Personal
 		if personal != nil {
@@ -612,6 +628,47 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 		delete(podSpec, "serviceAccountName")
 	}
 	return map[string]any{"spec": podSpec}
+}
+
+const trainingEventTokenMountPath = "/var/run/secrets/raytrain-events"
+
+func validateTrainingEventBaseURL(value string) (string, error) {
+	value = strings.TrimRight(strings.TrimSpace(value), "/")
+	if value == "" {
+		value = "http://ray-train-backend.ray-train-platform.svc.cluster.local:8080/api/v1/internal"
+	}
+	if strings.ContainsAny(value, "\x00\r\n\t") {
+		return "", fmt.Errorf("base URL contains control characters")
+	}
+	parsed, err := url.ParseRequestURI(value)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("base URL must be an HTTP(S) origin and path without credentials, query, or fragment")
+	}
+	if parsed.Path == "" || path.Clean(parsed.Path) != parsed.Path || strings.Contains(parsed.Path, "..") {
+		return "", fmt.Errorf("base URL path is invalid")
+	}
+	return value, nil
+}
+
+func appendTrainingEventCredential(volumeMounts, volumes, environment []any, options RenderOptions) ([]any, []any, []any) {
+	jobID := strings.TrimSpace(options.trainingEventJobID)
+	baseURL := strings.TrimRight(strings.TrimSpace(options.TrainingEventBaseURL), "/")
+	secretName := TrainingEventSecretName(jobID)
+	volumeMounts = append(volumeMounts, map[string]any{
+		"name": "managed-training-events", "mountPath": trainingEventTokenMountPath, "readOnly": true,
+	})
+	volumes = append(volumes, map[string]any{
+		"name": "managed-training-events",
+		"secret": map[string]any{
+			"secretName": secretName, "defaultMode": int64(0400),
+			"items": []any{map[string]any{"key": TrainingEventTokenKey, "path": TrainingEventTokenKey}},
+		},
+	})
+	environment = append(environment,
+		map[string]any{"name": "RAYTRAIN_EVENT_TOKEN_FILE", "value": path.Join(trainingEventTokenMountPath, TrainingEventTokenKey)},
+		map[string]any{"name": "RAYTRAIN_EVENT_ENDPOINT", "value": baseURL + "/jobs/" + jobID + "/train-events"},
+	)
+	return volumeMounts, volumes, environment
 }
 
 func environmentValue(environment []any, name string) string {
