@@ -9,6 +9,8 @@ import (
 
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
+	"ray-train-platform-backend/repositories"
+	"ray-train-platform-backend/runtimecatalog"
 )
 
 type submissionServiceRepository struct {
@@ -16,6 +18,154 @@ type submissionServiceRepository struct {
 	identityCalls  int
 	artifact       *domain.SourceArtifact
 	artifactLookup string
+}
+
+type countingRuntimeImageStore struct {
+	stubImageStore
+	lookupCalls int
+	listCalls   int
+	listErr     error
+}
+
+func (store *countingRuntimeImageStore) ImageByReference(_ context.Context, tenantID, kind, reference string) (domain.PlatformImage, error) {
+	store.lookupCalls++
+	for _, image := range store.images {
+		if image.Kind == kind && image.Reference == reference && (image.TenantID == "" || image.TenantID == tenantID) {
+			return image, nil
+		}
+	}
+	return domain.PlatformImage{}, repositories.ErrImageNotFound
+}
+
+func (store *countingRuntimeImageStore) ListImages(ctx context.Context, tenantID, kind string) ([]domain.PlatformImage, error) {
+	store.listCalls++
+	if store.listErr != nil {
+		return nil, store.listErr
+	}
+	return store.stubImageStore.ListImages(ctx, tenantID, kind)
+}
+
+func TestSubmitSnapshotsCatalogRuntimeAndIgnoresForgedRayVersion(t *testing.T) {
+	reference := "harbor.example/ray-runtime:production"
+	store := &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{{
+		ID: "managed-image", Name: "Ray managed", Kind: domain.ImageKindTraining, Reference: reference,
+		RayVersion: domain.RayVersionProduction, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayTrain},
+	}}}}
+	repository := &submissionServiceRepository{}
+	service := NewSubmissionService(repository, SubmissionServiceOptions{
+		Images: store, RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true},
+		NewID: func() (string, error) { return "job-runtime-snapshot", nil },
+	})
+	spec := submissionSpec("  " + reference + "  ")
+	spec.TrainingEngine = domain.TrainingEngineRayTrain
+	spec.RayVersion = domain.RayVersionCanary
+
+	job, err := service.Submit(context.Background(), SubmissionInput{
+		Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+		Spec:      spec, Origin: domain.SubmissionOriginPortal,
+	})
+
+	if err != nil {
+		t.Fatalf("submit managed runtime: %v", err)
+	}
+	if job.Spec.Image != reference || job.Spec.TrainingEngine != domain.TrainingEngineRayTrain || job.Spec.RayVersion != domain.RayVersionProduction {
+		t.Fatalf("catalog runtime was not authoritative: %+v", job.Spec)
+	}
+	if repository.created == nil || repository.created.Spec.RayVersion != domain.RayVersionProduction {
+		t.Fatalf("resolved runtime was not persisted: %+v", repository.created)
+	}
+	if store.lookupCalls != 0 || store.listCalls != 1 {
+		t.Fatalf("selected image must use one catalog snapshot, lookup=%d list=%d", store.lookupCalls, store.listCalls)
+	}
+}
+
+func TestSubmitAllowlistFallbackIsLegacyOnly(t *testing.T) {
+	reference := "harbor.example/legacy:stable"
+	principal := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal}
+
+	t.Run("omitted engine snapshots legacy runtime", func(t *testing.T) {
+		store := &countingRuntimeImageStore{}
+		repository := &submissionServiceRepository{}
+		service := NewSubmissionService(repository, SubmissionServiceOptions{
+			Images: store, ImageAllowlist: []string{reference},
+			NewID: func() (string, error) { return "job-legacy-fallback", nil },
+		})
+		spec := submissionSpec(reference)
+		spec.RayVersion = domain.RayVersionCanary
+
+		job, err := service.Submit(context.Background(), SubmissionInput{Principal: principal, Spec: spec, Origin: domain.SubmissionOriginPortal})
+		if err != nil {
+			t.Fatalf("submit legacy fallback: %v", err)
+		}
+		if job.Spec.TrainingEngine != domain.TrainingEngineRayDDP || job.Spec.RayVersion != domain.RayVersionLegacy || job.Spec.Image != reference {
+			t.Fatalf("unexpected fallback snapshot: %+v", job.Spec)
+		}
+		if store.lookupCalls != 0 || store.listCalls != 1 {
+			t.Fatalf("unexpected catalog calls: lookup=%d list=%d", store.lookupCalls, store.listCalls)
+		}
+	})
+
+	t.Run("managed requires catalog metadata", func(t *testing.T) {
+		store := &countingRuntimeImageStore{}
+		repository := &submissionServiceRepository{}
+		service := NewSubmissionService(repository, SubmissionServiceOptions{
+			Images: store, ImageAllowlist: []string{reference}, RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true},
+		})
+		spec := submissionSpec(reference)
+		spec.TrainingEngine = domain.TrainingEngineRayTrain
+
+		_, err := service.Submit(context.Background(), SubmissionInput{Principal: principal, Spec: spec, Origin: domain.SubmissionOriginPortal})
+		if !errors.Is(err, ErrSubmissionImageNotAllowed) {
+			t.Fatalf("expected managed fallback rejection, got %v", err)
+		}
+		if repository.created != nil {
+			t.Fatalf("managed fallback reached persistence: %+v", repository.created)
+		}
+	})
+}
+
+func TestSubmitFailsClosedWhenRuntimeCatalogIsUnavailable(t *testing.T) {
+	reference := "harbor.example/legacy:stable"
+	store := &countingRuntimeImageStore{
+		listErr: errors.New("database unavailable"),
+	}
+	repository := &submissionServiceRepository{}
+	service := NewSubmissionService(repository, SubmissionServiceOptions{
+		Images: store, ImageAllowlist: []string{reference},
+	})
+
+	_, err := service.Submit(context.Background(), SubmissionInput{
+		Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+		Spec:      submissionSpec(reference), Origin: domain.SubmissionOriginPortal,
+	})
+
+	if !errors.Is(err, ErrSubmissionImageNotAllowed) {
+		t.Fatalf("catalog outage must fail closed with the existing public error, got %v", err)
+	}
+	if repository.created != nil {
+		t.Fatalf("catalog outage reached persistence: %+v", repository.created)
+	}
+}
+
+func TestNewHandlerWiresRuntimePolicyIntoSubmission(t *testing.T) {
+	reference := "harbor.example/ray-runtime:production"
+	store := &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{{
+		ID: "managed-image", Name: "Ray managed", Kind: domain.ImageKindTraining, Reference: reference,
+		RayVersion: domain.RayVersionProduction, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayTrain},
+	}}}}
+	handler := NewHandler(&submissionServiceRepository{}, Options{
+		Images: store, RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true},
+	})
+	spec := submissionSpec(reference)
+	spec.TrainingEngine = domain.TrainingEngineRayTrain
+
+	job, err := handler.SubmissionService().Submit(context.Background(), SubmissionInput{
+		Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+		Spec:      spec, Origin: domain.SubmissionOriginPortal,
+	})
+	if err != nil || job.Spec.RayVersion != domain.RayVersionProduction {
+		t.Fatalf("handler runtime policy was not wired: job=%+v err=%v", job, err)
+	}
 }
 
 func TestSubmissionNormalizesAndEnforcesRuntimeCachePolicy(t *testing.T) {

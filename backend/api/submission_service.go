@@ -10,6 +10,7 @@ import (
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
 	"ray-train-platform-backend/repositories"
+	"ray-train-platform-backend/runtimecatalog"
 )
 
 var (
@@ -60,6 +61,7 @@ type SubmissionServiceOptions struct {
 	// the fallback for deployments that have not populated it yet.
 	Images                ImageStore
 	ImageAllowlist        []string
+	RuntimePolicy         runtimecatalog.Policy
 	GitAllowlist          []string
 	ClusterQueue          string
 	EnsureTenantRuntime   TenantRuntimeEnsurer
@@ -88,6 +90,7 @@ type SubmissionService struct {
 	repository            JobRepository
 	images                ImageStore
 	imageAllowlist        []string
+	runtimePolicy         runtimecatalog.Policy
 	gitAllowlist          []string
 	clusterQueue          string
 	ensureTenantRuntime   TenantRuntimeEnsurer
@@ -120,6 +123,7 @@ func NewSubmissionService(repository JobRepository, options SubmissionServiceOpt
 		repository:            repository,
 		images:                options.Images,
 		imageAllowlist:        append([]string(nil), options.ImageAllowlist...),
+		runtimePolicy:         options.RuntimePolicy,
 		gitAllowlist:          append([]string(nil), options.GitAllowlist...),
 		clusterQueue:          strings.TrimSpace(options.ClusterQueue),
 		ensureTenantRuntime:   options.EnsureTenantRuntime,
@@ -147,20 +151,40 @@ func cloneLocalCachePolicy(policy LocalCachePolicy) LocalCachePolicy {
 	}
 }
 
-// imagePermitted resolves the requested image against the catalogue first. A
-// populated catalogue is the allowlist, so an administrator controls exactly
-// which environments can run without also editing deployment values.
-func (service *SubmissionService) imagePermitted(ctx context.Context, tenantID, reference string) bool {
+// resolveRuntime resolves the selected catalog entry once and snapshots its
+// authoritative image, engine and Ray version before JobSpec validation. A
+// deployment without catalog metadata retains only the legacy allowlist path.
+func (service *SubmissionService) resolveRuntime(ctx context.Context, tenantID string, spec domain.JobSpec) (domain.JobSpec, error) {
+	reference := strings.TrimSpace(spec.Image)
 	if service.images != nil {
-		if _, err := service.images.ImageByReference(ctx, tenantID, domain.ImageKindTraining, reference); err == nil {
-			return true
-		}
 		catalog, err := service.images.ListImages(ctx, tenantID, domain.ImageKindTraining)
-		if err == nil && len(catalog) > 0 {
-			return false
+		if err != nil {
+			return domain.JobSpec{}, ErrSubmissionImageNotAllowed
+		}
+		for _, image := range catalog {
+			if image.Reference != reference {
+				continue
+			}
+			snapshot, resolveErr := runtimecatalog.Resolve(image, spec.TrainingEngine, service.runtimePolicy)
+			if resolveErr != nil {
+				return domain.JobSpec{}, ErrSubmissionImageNotAllowed
+			}
+			spec.Image = snapshot.ImageDigest
+			spec.TrainingEngine = snapshot.Engine
+			spec.RayVersion = snapshot.RayVersion
+			return spec, nil
+		}
+		if len(catalog) > 0 {
+			return domain.JobSpec{}, ErrSubmissionImageNotAllowed
 		}
 	}
-	return matchesAllowlist(reference, service.imageAllowlist)
+	if !matchesAllowlist(reference, service.imageAllowlist) || spec.TrainingEngine.Resolved() != domain.TrainingEngineRayDDP {
+		return domain.JobSpec{}, ErrSubmissionImageNotAllowed
+	}
+	spec.Image = reference
+	spec.TrainingEngine = domain.TrainingEngineRayDDP
+	spec.RayVersion = domain.RayVersionLegacy
+	return spec, nil
 }
 
 func (service *SubmissionService) Submit(ctx context.Context, input SubmissionInput) (*domain.TrainingJob, error) {
@@ -170,12 +194,13 @@ func (service *SubmissionService) Submit(ctx context.Context, input SubmissionIn
 	if err := input.Origin.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrSubmissionInvalidOrigin, err)
 	}
-	spec, err := normalizeSubmissionSpec(input.Principal, input.Origin, input.Spec, service.localCache)
+	resolvedSpec, err := service.resolveRuntime(ctx, input.Principal.TenantID, input.Spec)
 	if err != nil {
 		return nil, err
 	}
-	if !service.imagePermitted(ctx, input.Principal.TenantID, spec.Image) {
-		return nil, ErrSubmissionImageNotAllowed
+	spec, err := normalizeSubmissionSpec(input.Principal, input.Origin, resolvedSpec, service.localCache)
+	if err != nil {
+		return nil, err
 	}
 	if spec.Source.Type == "git" && !matchesGitAllowlist(spec.Source.URL, service.gitAllowlist) {
 		return nil, ErrSubmissionGitNotAllowed
@@ -549,7 +574,8 @@ func (service *SubmissionService) materializeArtifact(ctx context.Context, princ
 		OutputStorage: spec.OutputStorage, Input: spec.Input, Checkpoint: spec.Checkpoint, Output: spec.Output,
 		ResolvedStorage: spec.ResolvedStorage, ResolvedDataMounts: spec.ResolvedDataMounts, ResolvedDataRoots: spec.ResolvedDataRoots, TimeoutSeconds: spec.TimeoutSeconds,
 		RetryPolicy: spec.RetryPolicy, CleanupPolicy: spec.CleanupPolicy,
-		Cache: spec.Cache,
+		TrainingEngine: spec.TrainingEngine, RayVersion: spec.RayVersion, Managed: spec.Managed,
+		DataMode: spec.DataMode, ParentJobID: spec.ParentJobID, Cache: spec.Cache,
 	}, nil
 }
 

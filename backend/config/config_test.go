@@ -101,6 +101,42 @@ func TestLoadUsesLokiGatewayByDefault(t *testing.T) {
 	}
 }
 
+func TestLoadRayTrainRuntimeFlagsAreDisabledByDefaultAndExplicitlyConfigurable(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("RAY_TRAIN_MANAGED_ENABLED", "")
+	t.Setenv("RAY_TRAIN_CANARY_ENABLED", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load runtime flag defaults: %v", err)
+	}
+	if cfg.RayTrainManagedEnabled || cfg.RayTrainCanaryEnabled {
+		t.Fatalf("runtime flags must default off: %+v", cfg)
+	}
+
+	t.Setenv("RAY_TRAIN_MANAGED_ENABLED", "true")
+	t.Setenv("RAY_TRAIN_CANARY_ENABLED", "true")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("load enabled runtime flags: %v", err)
+	}
+	if !cfg.RayTrainManagedEnabled || !cfg.RayTrainCanaryEnabled {
+		t.Fatalf("explicit runtime flags were not retained: %+v", cfg)
+	}
+}
+
+func TestLoadRejectsInvalidRayTrainRuntimeFlags(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("RAY_TRAIN_MANAGED_ENABLED", "sometimes")
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "RAY_TRAIN_MANAGED_ENABLED") {
+		t.Fatalf("expected invalid managed runtime flag error, got %v", err)
+	}
+}
+
 func TestLoadKeepsDataSpaceMountsDisabledUntilExplicitlyEnabled(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("PAT_ENABLED", "false")

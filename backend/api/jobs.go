@@ -22,6 +22,7 @@ import (
 	"ray-train-platform-backend/objectstore"
 	"ray-train-platform-backend/observability"
 	"ray-train-platform-backend/repositories"
+	"ray-train-platform-backend/runtimecatalog"
 )
 
 type JobRepository interface {
@@ -84,6 +85,7 @@ type Handler struct {
 	newID                  func() (string, error)
 	submission             *SubmissionService
 	localCache             LocalCachePolicy
+	runtimePolicy          runtimecatalog.Policy
 	mlflowDashboardEnabled bool
 	mlflowDashboardStore   MLflowDashboardStore
 	mlflowTrackingURL      string
@@ -165,6 +167,7 @@ type Options struct {
 	MLflowDashboardNow         func() time.Time
 	MLflowDashboardRandom      io.Reader
 	LocalCache                 LocalCachePolicy
+	RuntimePolicy              runtimecatalog.Policy
 }
 
 func NewHandler(repository JobRepository, options Options) *Handler {
@@ -174,6 +177,7 @@ func NewHandler(repository JobRepository, options Options) *Handler {
 	}
 	handler := &Handler{repository: repository, logs: options.Logs, metrics: options.Metrics, experiments: options.Experiments, allowAnonymous: options.AllowAnonymous, imageAllowlist: append([]string(nil), options.ImageAllowlist...), gitAllowlist: append([]string(nil), options.GitAllowlist...), workspaces: options.Workspaces, kubernetes: options.Kubernetes, workspaceImage: options.WorkspaceImage, rayVersion: options.RayVersion, serviceAccount: options.ServiceAccount, imagePullSecrets: append([]string(nil), options.ImagePullSecrets...), platformNamespace: strings.TrimSpace(options.PlatformNamespace), idcClaim: options.IDCClaim, idcMountPath: options.IDCMountPath, clusterQueue: options.KueueClusterQueue, admin: options.Admin, gpuAllocations: options.GPUAllocations, quota: options.Quota, workspacePepper: append([]byte(nil), options.WorkspacePepper...), trainingNodeSelector: options.TrainingNodeSelector, images: options.Images, gitCredentials: options.GitCredentials, storageAssets: options.StorageAssets, dataSpaces: options.DataSpaces, dataSpacesEnabled: options.DataSpacesEnabled, dataSpacesFSXAttrs: options.DataSpacesFSXAttributes, dataSpacesCapacity: options.DataSpacesMountCapacity, dataSpacesPublicRoot: strings.TrimSpace(options.DataSpacesPublicRoot), idcDataSpacesEnabled: options.IDCDataSpacesEnabled, idcDataSpacesCapacity: options.IDCDataSpacesMountCapacity, idcDataSpaceSources: idcSources, directoryLister: options.DirectoryLister, directoryInitializer: options.DirectoryInitializer, dataObjectStore: options.DataObjectStore, workspaceSnapshotStore: options.WorkspaceSnapshotStore, workspaceSnapshots: options.WorkspaceSnapshots, artifactLister: options.ArtifactLister, artifactReader: options.ArtifactReader, gitCredentialTester: options.GitCredentialTester, gitRefResolver: options.GitRefResolver, newID: newJobID, mlflowDashboardEnabled: options.MLflowDashboardEnabled, mlflowDashboardStore: options.MLflowDashboardStore, mlflowTrackingURL: strings.TrimSpace(options.MLflowTrackingURL), mlflowPublicOrigin: strings.TrimSpace(options.MLflowPublicOrigin), mlflowDashboardPepper: append([]byte(nil), options.MLflowDashboardPepper...), mlflowDashboardTTL: options.MLflowDashboardSessionTTL, mlflowDashboardNow: options.MLflowDashboardNow, mlflowDashboardRandom: options.MLflowDashboardRandom}
 	handler.localCache = cloneLocalCachePolicy(options.LocalCache)
+	handler.runtimePolicy = options.RuntimePolicy
 	if handler.mlflowDashboardTTL <= 0 {
 		handler.mlflowDashboardTTL = domain.MLflowDashboardSessionTTL
 	}
@@ -210,6 +214,7 @@ func NewHandler(repository JobRepository, options Options) *Handler {
 		IDCDataSpacesEnabled: handler.idcDataSpacesEnabled,
 		WorkspaceSnapshots:   handler.workspaceSnapshots,
 		LocalCache:           handler.localCache,
+		RuntimePolicy:        handler.runtimePolicy,
 		EnsureTenantRuntime: func(ctx context.Context, tenantID, namespace, queue, clusterQueue string) error {
 			if err := handler.ensureTenantNamespaceAndPullSecrets(ctx, tenantID, namespace); err != nil {
 				return err

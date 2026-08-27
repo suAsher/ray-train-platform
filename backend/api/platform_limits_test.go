@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
+	"ray-train-platform-backend/runtimecatalog"
 )
 
 type fakePlatformQuotaStore struct {
@@ -89,6 +90,44 @@ func TestPlatformLimitsReportTheDeploymentCeilingsTheServerEnforces(t *testing.T
 	if limits.MaxWorkerReplicas != 2 || limits.MaxGPUsPerWorker != 8 || limits.MaxTotalGPUs != 16 {
 		t.Fatalf("expected the configured ceilings, got %+v", limits)
 	}
+}
+
+func TestPlatformLimitsExposeEffectiveRuntimeCapabilities(t *testing.T) {
+	principal := auth.Principal{Subject: "admin", TenantID: "local", Roles: []string{domain.RoleSuperAdmin}, AuthType: auth.AuthTypeLocal}
+
+	t.Run("feature flags disabled", func(t *testing.T) {
+		handler := NewHandler(&fakeJobRepository{}, Options{})
+		response := httptest.NewRecorder()
+		limitsRouter(handler, &principal).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/limits", nil))
+
+		runtime := decodePlatformLimits(t, response.Body.Bytes()).Runtime
+		if runtime.ManagedEnabled || runtime.CanaryEnabled {
+			t.Fatalf("disabled features advertised as enabled: %+v", runtime)
+		}
+		if strings.Join(runtime.AvailableEngines, ",") != string(domain.TrainingEngineRayDDP) {
+			t.Fatalf("unexpected disabled engine list: %+v", runtime)
+		}
+		if runtime.ProductionRayVersion != domain.RayVersionProduction || runtime.CanaryRayVersion != domain.RayVersionCanary {
+			t.Fatalf("unexpected runtime versions: %+v", runtime)
+		}
+	})
+
+	t.Run("feature flags enabled", func(t *testing.T) {
+		handler := NewHandler(&fakeJobRepository{}, Options{RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true, CanaryEnabled: true}})
+		response := httptest.NewRecorder()
+		limitsRouter(handler, &principal).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/limits", nil))
+
+		limits := decodePlatformLimits(t, response.Body.Bytes())
+		if !limits.Runtime.ManagedEnabled || !limits.Runtime.CanaryEnabled || strings.Join(limits.Runtime.AvailableEngines, ",") != "ray-ddp,ray-train" {
+			t.Fatalf("enabled capabilities missing: %+v", limits.Runtime)
+		}
+		limits.Runtime.AvailableEngines[0] = "mutated"
+		second := httptest.NewRecorder()
+		limitsRouter(handler, &principal).ServeHTTP(second, httptest.NewRequest(http.MethodGet, "/api/v1/limits", nil))
+		if got := decodePlatformLimits(t, second.Body.Bytes()).Runtime.AvailableEngines[0]; got != string(domain.TrainingEngineRayDDP) {
+			t.Fatalf("runtime capabilities retained mutable response state: %q", got)
+		}
+	})
 }
 
 func TestPlatformLimitsExposeEnabledRuntimeCachePolicyDefensively(t *testing.T) {

@@ -81,6 +81,8 @@ type Config struct {
 	IDCStorageClass                  string
 	IDCMountPath                     string
 	RayVersion                       string
+	RayTrainManagedEnabled           bool
+	RayTrainCanaryEnabled            bool
 	RayJobClusterSpecField           string
 	RayJobServiceAccount             string
 	ImagePullSecrets                 []string
@@ -217,6 +219,12 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.LocalCacheEnabled, err = parseBool("LOCAL_CACHE_ENABLED", false); err != nil {
+		return Config{}, err
+	}
+	if cfg.RayTrainManagedEnabled, err = parseBool("RAY_TRAIN_MANAGED_ENABLED", false); err != nil {
+		return Config{}, err
+	}
+	if cfg.RayTrainCanaryEnabled, err = parseBool("RAY_TRAIN_CANARY_ENABLED", false); err != nil {
 		return Config{}, err
 	}
 	if cfg.MLflowEnabled, err = parseBool("MLFLOW_ENABLED", false); err != nil {
