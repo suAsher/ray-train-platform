@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -17,6 +18,7 @@ func testImage(id, name, kind string, tenantID string, isDefault bool, seed byte
 	return domain.PlatformImage{
 		ID: id, TenantID: tenantID, Name: name, Kind: kind,
 		Reference: pinnedRef(seed), IsDefault: isDefault,
+		RayVersion: domain.RayVersionLegacy, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayDDP},
 	}
 }
 
@@ -185,5 +187,56 @@ func TestSetImageSharedMovesBetweenTenantAndPlatformScopes(t *testing.T) {
 	visibleToOtherTeam, err = repo.ListImages(ctx, "team-b", domain.ImageKindTraining)
 	if err != nil || len(visibleToOtherTeam) != 0 {
 		t.Fatalf("team image must not leak to another team, got %+v err=%v", visibleToOtherTeam, err)
+	}
+}
+
+func TestImageRepositoryCompatibilityRoundTripHasNoAliasing(t *testing.T) {
+	repo := imageRepo(t)
+	ctx := context.Background()
+	callerEngines := []domain.TrainingEngine{domain.TrainingEngineRayDDP, domain.TrainingEngineRayTrain}
+	image := testImage("img-compatible", "compatible", domain.ImageKindTraining, "team-a", false, '4')
+	image.RayVersion = domain.RayVersionProduction
+	image.SupportedEngines = callerEngines
+
+	if err := repo.CreateImage(ctx, image); err != nil {
+		t.Fatalf("create compatible image: %v", err)
+	}
+	callerEngines[0] = domain.TrainingEngineRayTrain
+
+	images, err := repo.ListImages(ctx, "team-a", domain.ImageKindTraining)
+	if err != nil {
+		t.Fatalf("list compatible image: %v", err)
+	}
+	want := []domain.TrainingEngine{domain.TrainingEngineRayDDP, domain.TrainingEngineRayTrain}
+	if len(images) != 1 || images[0].RayVersion != domain.RayVersionProduction || !reflect.DeepEqual(images[0].SupportedEngines, want) {
+		t.Fatalf("compatibility metadata did not round trip: %+v", images)
+	}
+
+	images[0].SupportedEngines[0] = domain.TrainingEngineRayTrain
+	again, err := repo.ListImages(ctx, "team-a", domain.ImageKindTraining)
+	if err != nil {
+		t.Fatalf("list compatible image again: %v", err)
+	}
+	if !reflect.DeepEqual(again[0].SupportedEngines, want) {
+		t.Fatalf("returned slice aliases repository state: got %v want %v", again[0].SupportedEngines, want)
+	}
+}
+
+func TestImageRepositoryCompatibilityRejectsInvalidPersistedJSON(t *testing.T) {
+	repo := imageRepo(t)
+	record := PlatformImageRecord{
+		ID: "img-corrupt", Name: "corrupt", Reference: pinnedRef('5'), Kind: domain.ImageKindTraining,
+		RayVersion: domain.RayVersionProduction, SupportedEnginesJSON: `{not-json}`,
+	}
+	if err := repo.db.Create(&record).Error; err != nil {
+		t.Fatalf("seed corrupt image record: %v", err)
+	}
+
+	images, err := repo.ListImages(context.Background(), "team-a", domain.ImageKindTraining)
+	if err == nil {
+		t.Fatalf("invalid persisted JSON returned a partial image: %+v", images)
+	}
+	if !strings.Contains(err.Error(), "supported engines") {
+		t.Fatalf("invalid persisted JSON error lacks context: %v", err)
 	}
 }

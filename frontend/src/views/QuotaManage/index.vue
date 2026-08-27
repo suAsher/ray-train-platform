@@ -111,6 +111,20 @@
             <el-option label="交互式调试" value="workspace" />
           </el-select>
         </el-form-item>
+        <el-form-item label="Ray 版本">
+          <el-select v-model="newImage.rayVersion" class="w-full">
+            <el-option label="2.35.0（兼容版本）" value="2.35.0" />
+            <el-option label="2.56.1（生产版本）" value="2.56.1" />
+            <el-option label="2.58.0（前沿版本）" value="2.58.0" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="支持的训练引擎" required>
+          <el-checkbox-group v-model="newImage.supportedEngines">
+            <el-checkbox label="ray-ddp">ray-ddp</el-checkbox>
+            <el-checkbox label="ray-train" :disabled="newImage.rayVersion === '2.35.0'">ray-train</el-checkbox>
+          </el-checkbox-group>
+          <p class="mt-1 w-full text-[11px] text-slate-500">至少选择一个训练引擎；Ray 2.35.0 仅支持 ray-ddp。</p>
+        </el-form-item>
         <el-form-item label="镜像（显式 tag 或 @sha256 digest）">
           <el-input v-model="newImage.reference" placeholder="registry/project/image:tag 或 registry/project/image@sha256:..." />
           <p class="mt-1 text-[11px] text-slate-500">tag 便于日常迭代，每次启动都会重新拉取；正式基线推荐使用不可变 digest。</p>
@@ -230,7 +244,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { apiDelete, apiGet, apiPost } from '../../api/client'
@@ -294,8 +308,26 @@ const storageQuotaGiB = ref(Math.min(runtimeStorageQuotaDefault, storageQuotaMax
 
 const newTenant = ref({ id: '', name: '', gpuQuota: 8 })
 const newUser = ref({ username: '', password: '', role: 'Engineer', tenantId: '', storageQuotaGiB: Math.min(runtimeStorageQuotaDefault, storageQuotaMaxGiB) })
-const newImage = ref({ name: '', kind: 'training', reference: '', framework: '', isDefault: false, shared: false })
+const emptyImageForm = () => ({
+  name: '',
+  kind: 'training',
+  reference: '',
+  framework: '',
+  isDefault: false,
+  rayVersion: '2.35.0',
+  supportedEngines: ['ray-ddp'],
+  shared: false,
+})
+const newImage = ref(emptyImageForm())
 const newCredential = ref({ name: '', host: '', username: '', token: '', scope: 'team' })
+
+watch(() => newImage.value.rayVersion, (rayVersion) => {
+  if (rayVersion !== '2.35.0' || !newImage.value.supportedEngines.includes('ray-train')) return
+  newImage.value = {
+    ...newImage.value,
+    supportedEngines: newImage.value.supportedEngines.filter((engine) => engine !== 'ray-train'),
+  }
+})
 
 const loadTenants = async () => {
   try {
@@ -403,12 +435,25 @@ const submitImage = async () => {
     ElMessage.warning('请填写名称与镜像地址')
     return
   }
+  if (newImage.value.supportedEngines.length === 0) {
+    ElMessage.warning('请至少选择一个训练引擎')
+    return
+  }
   creatingImage.value = true
   try {
-    await createImage(newImage.value)
+    await createImage({
+      name: newImage.value.name,
+      reference: newImage.value.reference,
+      kind: newImage.value.kind,
+      rayVersion: newImage.value.rayVersion,
+      supportedEngines: [...newImage.value.supportedEngines],
+      shared: Boolean(newImage.value.shared),
+      framework: newImage.value.framework,
+      isDefault: newImage.value.isDefault,
+    })
     ElMessage.success('镜像已登记')
     showAddImageModal.value = false
-    newImage.value = { name: '', kind: 'training', reference: '', framework: '', isDefault: false, shared: false }
+    newImage.value = emptyImageForm()
     await loadCatalog()
   } catch (error) {
     ElMessage.error(error.message || '登记镜像失败')

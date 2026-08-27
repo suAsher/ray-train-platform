@@ -25,7 +25,7 @@ func TestPostgresMigrationsIntegration(t *testing.T) {
 	if err := database.Raw("SELECT version FROM schema_migrations ORDER BY version").Scan(&versions).Error; err != nil {
 		t.Fatalf("load migration versions: %v", err)
 	}
-	if want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}; !reflectIntSlicesEqual(versions, want) {
+	if want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21}; !reflectIntSlicesEqual(versions, want) {
 		t.Fatalf("migration versions = %v, want %v", versions, want)
 	}
 
@@ -93,6 +93,36 @@ WHERE table_schema = current_schema()
 		}
 	}
 
+	imageCompatibilityDefaults := map[string]string{
+		"ray_version":       "'2.35.0'::text",
+		"supported_engines": "'[\"ray-ddp\"]'::jsonb",
+	}
+	for column, expectedDefault := range imageCompatibilityDefaults {
+		var metadata struct {
+			ColumnName    string
+			IsNullable    string
+			ColumnDefault string
+		}
+		if err := database.Raw(`
+SELECT column_name, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'platform_images'
+  AND column_name = ?`, column).Scan(&metadata).Error; err != nil {
+			t.Fatalf("load platform_images.%s metadata: %v", column, err)
+		}
+		if metadata.ColumnName != column {
+			t.Errorf("platform_images.%s metadata not found", column)
+			continue
+		}
+		if metadata.IsNullable != "NO" {
+			t.Errorf("platform_images.%s is_nullable = %q, want NO", column, metadata.IsNullable)
+		}
+		if metadata.ColumnDefault != expectedDefault {
+			t.Errorf("platform_images.%s default = %q, want %q", column, metadata.ColumnDefault, expectedDefault)
+		}
+	}
+
 	requiredConstraints := []string{
 		"personal_access_tokens_user_tenant_fk",
 		"personal_access_tokens_scopes_array_check",
@@ -107,6 +137,9 @@ WHERE table_schema = current_schema()
 		"training_jobs_cluster_attempt_check",
 		"training_jobs_worker_restart_count_check",
 		"training_jobs_parent_job_id_check",
+		"platform_images_ray_version_check",
+		"platform_images_supported_engines_check",
+		"platform_images_engine_ray_version_check",
 	}
 	for _, constraint := range requiredConstraints {
 		var count int64
@@ -121,6 +154,24 @@ WHERE n.nspname = current_schema() AND c.conname = ?`, constraint).Scan(&count).
 		if count != 1 {
 			t.Errorf("constraint %s count = %d, want 1", constraint, count)
 		}
+	}
+
+	if err := database.Exec(`
+INSERT INTO platform_images(id, name, reference, kind)
+VALUES ('image-default-compatibility', 'Default compatibility', 'registry.example/runtime:legacy', 'training')`).Error; err != nil {
+		t.Fatalf("insert image using compatibility defaults: %v", err)
+	}
+	var defaultCompatibility struct {
+		RayVersion       string
+		SupportedEngines string
+	}
+	if err := database.Raw(`
+SELECT ray_version, supported_engines::text AS supported_engines
+FROM platform_images WHERE id = 'image-default-compatibility'`).Scan(&defaultCompatibility).Error; err != nil {
+		t.Fatalf("read image compatibility defaults: %v", err)
+	}
+	if defaultCompatibility.RayVersion != "2.35.0" || defaultCompatibility.SupportedEngines != `["ray-ddp"]` {
+		t.Errorf("platform image defaults = %+v, want Ray 2.35.0/ray-ddp", defaultCompatibility)
 	}
 
 	for _, index := range []string{"training_jobs_engine_state_idx", "training_jobs_parent_idx"} {

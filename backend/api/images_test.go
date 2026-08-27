@@ -1,8 +1,11 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -10,6 +13,33 @@ import (
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
 )
+
+type compatibilityImageStore struct {
+	stubImageStore
+	created          domain.PlatformImage
+	mutateStoreInput bool
+}
+
+func (s *compatibilityImageStore) CreateImage(_ context.Context, image domain.PlatformImage) error {
+	if err := image.Validate(); err != nil {
+		return err
+	}
+	s.created = image
+	s.created.SupportedEngines = append([]domain.TrainingEngine(nil), image.SupportedEngines...)
+	if s.mutateStoreInput {
+		image.SupportedEngines[0] = "store-mutated"
+	}
+	return nil
+}
+
+func postImage(t *testing.T, store ImageStore, principal auth.Principal, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/images", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	imageScopeRouter(store, principal).ServeHTTP(response, request)
+	return response
+}
 
 func imageScopeRouter(store ImageStore, principal auth.Principal) *gin.Engine {
 	gin.SetMode(gin.TestMode)
@@ -89,5 +119,85 @@ func TestSharedImageDemotionRequiresTargetTenant(t *testing.T) {
 
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("expected demotion without a target tenant to be rejected, got %d: %s", response.Code, response.Body.String())
+	}
+}
+
+func TestImageCompatibilityTenantAdminPublishesTenantLocalMetadata(t *testing.T) {
+	store := &compatibilityImageStore{mutateStoreInput: true}
+	principal := auth.Principal{
+		Subject: "team-admin", TenantID: "team-a", Roles: []string{domain.RoleTenantAdmin}, AuthType: auth.AuthTypeLocal,
+	}
+	response := postImage(t, store, principal, `{
+		"name":"Ray production","reference":"registry.example/runtime:2.56.1","kind":"training",
+		"rayVersion":"2.56.1","supportedEngines":["ray-ddp","ray-train"],"shared":false
+	}`)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("tenant-local image status = %d, body=%s", response.Code, response.Body.String())
+	}
+	wantEngines := []domain.TrainingEngine{domain.TrainingEngineRayDDP, domain.TrainingEngineRayTrain}
+	if store.created.TenantID != "team-a" || store.created.RayVersion != domain.RayVersionProduction || !reflect.DeepEqual(store.created.SupportedEngines, wantEngines) {
+		t.Fatalf("store received wrong compatibility metadata: %+v", store.created)
+	}
+	var envelope struct {
+		Data domain.PlatformImage `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if envelope.Data.RayVersion != domain.RayVersionProduction || !reflect.DeepEqual(envelope.Data.SupportedEngines, wantEngines) {
+		t.Fatalf("response did not preserve accepted metadata independently of store mutation: %+v", envelope.Data)
+	}
+}
+
+func TestImageCompatibilitySharedPublishRequiresSuperAdmin(t *testing.T) {
+	body := `{
+		"name":"Ray shared","reference":"registry.example/runtime:2.58.0","kind":"training",
+		"rayVersion":"2.58.0","supportedEngines":["ray-train"],"shared":true
+	}`
+
+	tenantStore := &compatibilityImageStore{}
+	tenantResponse := postImage(t, tenantStore, auth.Principal{
+		Subject: "team-admin", TenantID: "team-a", Roles: []string{domain.RoleTenantAdmin}, AuthType: auth.AuthTypeLocal,
+	}, body)
+	if tenantResponse.Code != http.StatusForbidden || tenantStore.created.ID != "" {
+		t.Fatalf("tenant admin shared publish status=%d image=%+v body=%s", tenantResponse.Code, tenantStore.created, tenantResponse.Body.String())
+	}
+
+	superStore := &compatibilityImageStore{}
+	superResponse := postImage(t, superStore, auth.Principal{
+		Subject: "root", TenantID: "team-a", Roles: []string{domain.RoleSuperAdmin}, AuthType: auth.AuthTypeLocal,
+	}, body)
+	if superResponse.Code != http.StatusCreated || superStore.created.TenantID != "" {
+		t.Fatalf("super admin shared publish status=%d image=%+v body=%s", superResponse.Code, superStore.created, superResponse.Body.String())
+	}
+}
+
+func TestImageCompatibilityInvalidMetadataReturnsInvalidImage(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "unknown Ray version", body: `"rayVersion":"2.99.0","supportedEngines":["ray-ddp"]`},
+		{name: "unknown engine", body: `"rayVersion":"2.56.1","supportedEngines":["pytorch"]`},
+		{name: "empty engines", body: `"rayVersion":"2.56.1","supportedEngines":[]`},
+		{name: "duplicate engines", body: `"rayVersion":"2.56.1","supportedEngines":["ray-ddp","ray-ddp"]`},
+		{name: "legacy Ray Train", body: `"rayVersion":"2.35.0","supportedEngines":["ray-train"]`},
+		{name: "empty engine is not normalized", body: `"rayVersion":"2.56.1","supportedEngines":[""]`},
+	}
+	principal := auth.Principal{
+		Subject: "team-admin", TenantID: "team-a", Roles: []string{domain.RoleTenantAdmin}, AuthType: auth.AuthTypeLocal,
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &compatibilityImageStore{}
+			body := `{"name":"invalid","reference":"registry.example/runtime:invalid","kind":"training",` + test.body + `}`
+			response := postImage(t, store, principal, body)
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"INVALID_IMAGE"`) {
+				t.Fatalf("invalid compatibility status=%d body=%s", response.Code, response.Body.String())
+			}
+			if store.created.ID != "" {
+				t.Fatalf("invalid compatibility reached persistence: %+v", store.created)
+			}
+		})
 	}
 }

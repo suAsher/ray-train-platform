@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -14,17 +15,19 @@ import (
 var ErrImageNotFound = errors.New("image not found")
 
 type PlatformImageRecord struct {
-	ID          string  `gorm:"primaryKey"`
-	TenantID    *string `gorm:"column:tenant_id;index"`
-	Name        string
-	Reference   string
-	Kind        string `gorm:"index"`
-	Description string
-	Framework   string
-	IsDefault   bool `gorm:"column:is_default"`
-	CreatedBy   string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID                   string  `gorm:"primaryKey"`
+	TenantID             *string `gorm:"column:tenant_id;index"`
+	Name                 string
+	Reference            string
+	Kind                 string `gorm:"index"`
+	Description          string
+	Framework            string
+	IsDefault            bool   `gorm:"column:is_default"`
+	RayVersion           string `gorm:"column:ray_version"`
+	SupportedEnginesJSON string `gorm:"column:supported_engines;type:jsonb"`
+	CreatedBy            string
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 func (PlatformImageRecord) TableName() string { return "platform_images" }
@@ -33,11 +36,17 @@ func (r *GormRepository) CreateImage(ctx context.Context, image domain.PlatformI
 	if err := image.Validate(); err != nil {
 		return err
 	}
+	supportedEngines := append([]domain.TrainingEngine(nil), image.SupportedEngines...)
+	supportedEnginesJSON, err := json.Marshal(supportedEngines)
+	if err != nil {
+		return fmt.Errorf("encode image supported engines: %w", err)
+	}
 	now := time.Now().UTC()
 	record := PlatformImageRecord{
 		ID: image.ID, TenantID: optionalID(image.TenantID), Name: image.Name,
 		Reference: image.Reference, Kind: image.Kind, Description: image.Description,
 		Framework: image.Framework, IsDefault: image.IsDefault, CreatedBy: image.CreatedBy,
+		RayVersion: image.RayVersion, SupportedEnginesJSON: string(supportedEnginesJSON),
 		CreatedAt: now, UpdatedAt: now,
 	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -90,12 +99,11 @@ func (r *GormRepository) ListImages(ctx context.Context, tenantID, kind string) 
 	}
 	images := make([]domain.PlatformImage, 0, len(records))
 	for _, record := range records {
-		images = append(images, domain.PlatformImage{
-			ID: record.ID, TenantID: valueOrEmpty(record.TenantID), Name: record.Name,
-			Reference: record.Reference, Kind: record.Kind, Description: record.Description,
-			Framework: record.Framework, IsDefault: record.IsDefault, CreatedBy: record.CreatedBy,
-			CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt,
-		})
+		image, err := platformImageFromRecord(record)
+		if err != nil {
+			return nil, fmt.Errorf("decode image %s: %w", record.ID, err)
+		}
+		images = append(images, image)
 	}
 	return images, nil
 }
@@ -178,16 +186,28 @@ func (r *GormRepository) SetImageShared(ctx context.Context, tenantID, id string
 	if err != nil {
 		return domain.PlatformImage{}, err
 	}
-	return platformImageFromRecord(updated), nil
+	image, err := platformImageFromRecord(updated)
+	if err != nil {
+		return domain.PlatformImage{}, fmt.Errorf("decode updated image %s: %w", updated.ID, err)
+	}
+	return image, nil
 }
 
-func platformImageFromRecord(record PlatformImageRecord) domain.PlatformImage {
+func platformImageFromRecord(record PlatformImageRecord) (domain.PlatformImage, error) {
+	var supportedEngines []domain.TrainingEngine
+	if err := json.Unmarshal([]byte(record.SupportedEnginesJSON), &supportedEngines); err != nil {
+		return domain.PlatformImage{}, fmt.Errorf("decode supported engines: %w", err)
+	}
+	if len(supportedEngines) == 0 {
+		return domain.PlatformImage{}, fmt.Errorf("decode supported engines: expected a nonempty JSON array")
+	}
 	return domain.PlatformImage{
 		ID: record.ID, TenantID: valueOrEmpty(record.TenantID), Name: record.Name,
 		Reference: record.Reference, Kind: record.Kind, Description: record.Description,
 		Framework: record.Framework, IsDefault: record.IsDefault, CreatedBy: record.CreatedBy,
+		RayVersion: record.RayVersion, SupportedEngines: append([]domain.TrainingEngine(nil), supportedEngines...),
 		CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt,
-	}
+	}, nil
 }
 
 func (r *GormRepository) DeleteImage(ctx context.Context, tenantID, id string, superAdmin bool) error {

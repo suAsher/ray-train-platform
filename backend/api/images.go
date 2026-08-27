@@ -106,13 +106,15 @@ func (h *Handler) listImages(c *gin.Context) {
 }
 
 type createImageRequest struct {
-	Name        string `json:"name"`
-	Reference   string `json:"reference"`
-	Kind        string `json:"kind"`
-	Description string `json:"description"`
-	Framework   string `json:"framework"`
-	IsDefault   bool   `json:"isDefault"`
-	Shared      bool   `json:"shared"`
+	Name             string                  `json:"name"`
+	Reference        string                  `json:"reference"`
+	Kind             string                  `json:"kind"`
+	Description      string                  `json:"description"`
+	Framework        string                  `json:"framework"`
+	IsDefault        bool                    `json:"isDefault"`
+	Shared           bool                    `json:"shared"`
+	RayVersion       string                  `json:"rayVersion"`
+	SupportedEngines []domain.TrainingEngine `json:"supportedEngines"`
 }
 
 func (h *Handler) createImage(c *gin.Context) {
@@ -144,22 +146,33 @@ func (h *Handler) createImage(c *gin.Context) {
 		}
 		tenantID = ""
 	}
+	image := domain.PlatformImage{
+		TenantID: tenantID, Name: request.Name,
+		Reference: domain.NormalizeImageReference(request.Reference),
+		Kind:      request.Kind, Description: request.Description, Framework: request.Framework,
+		IsDefault: request.IsDefault, CreatedBy: principal.Subject,
+		RayVersion:       request.RayVersion,
+		SupportedEngines: append([]domain.TrainingEngine(nil), request.SupportedEngines...),
+	}
+	if err := image.Validate(); err != nil {
+		h.writeError(c, http.StatusBadRequest, "INVALID_IMAGE", err.Error())
+		return
+	}
 	id, err := h.newID()
 	if err != nil {
 		h.writeError(c, http.StatusInternalServerError, "ID_GENERATION_FAILED", "could not allocate image id")
 		return
 	}
-	image := domain.PlatformImage{
-		ID: id, TenantID: tenantID, Name: request.Name,
-		Reference: domain.NormalizeImageReference(request.Reference),
-		Kind:      request.Kind, Description: request.Description, Framework: request.Framework,
-		IsDefault: request.IsDefault, CreatedBy: principal.Subject,
-	}
-	if err := h.images.CreateImage(c.Request.Context(), image); err != nil {
+	image.ID = id
+	responseImage := image
+	responseImage.SupportedEngines = append([]domain.TrainingEngine(nil), image.SupportedEngines...)
+	persistedImage := image
+	persistedImage.SupportedEngines = append([]domain.TrainingEngine(nil), image.SupportedEngines...)
+	if err := h.images.CreateImage(c.Request.Context(), persistedImage); err != nil {
 		h.writeError(c, http.StatusBadRequest, "INVALID_IMAGE", err.Error())
 		return
 	}
-	h.writeSuccess(c, http.StatusCreated, image)
+	h.writeSuccess(c, http.StatusCreated, responseImage)
 }
 
 func (h *Handler) deleteImage(c *gin.Context) {
