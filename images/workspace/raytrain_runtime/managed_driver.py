@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
 import os
 import pathlib
@@ -185,6 +186,40 @@ def _load_ray_components() -> _RayComponents:
     )
 
 
+@contextlib.contextmanager
+def _temporary_environment(values: Mapping[str, str]):
+    """Apply worker-scoped environment values and restore the exact prior state."""
+
+    previous = {name: os.environ.get(name) for name in values}
+    existed = {name for name in values if name in os.environ}
+    try:
+        os.environ.update(dict(values))
+        yield
+    finally:
+        for name, value in previous.items():
+            if name in existed:
+                os.environ[name] = value if value is not None else ""
+            else:
+                os.environ.pop(name, None)
+
+
+def _train_loop_environment(loop_config: Mapping[str, Any]) -> dict[str, str]:
+    storage_path = _validated_managed_storage(
+        pathlib.Path(str(loop_config["storage_path"])),
+        _resolved(_STABLE_OUTPUT_ROOT),
+    )
+    return {
+        "RAYTRAIN_CHECKPOINT_EVERY_EPOCHS": str(
+            int(loop_config["checkpoint_every_epochs"])
+        ),
+        "RAYTRAIN_CHECKPOINT_KEEP_LATEST": str(int(loop_config["keep_latest"])),
+        "RAYTRAIN_CHECKPOINT_KEEP_BEST": str(int(loop_config["keep_best"])),
+        "RAYTRAIN_CHECKPOINT_BEST_METRIC": str(loop_config["best_metric"]),
+        "RAYTRAIN_CHECKPOINT_BEST_MODE": str(loop_config["best_mode"]),
+        "PLATFORM_CHECKPOINT_PATH": str(pathlib.Path(storage_path) / "checkpoints"),
+    }
+
+
 def _train_loop(loop_config: Mapping[str, Any]) -> None:
     payload = loop_config["entrypoint"]
     entrypoint = PythonEntrypoint(
@@ -192,7 +227,8 @@ def _train_loop(loop_config: Mapping[str, Any]) -> None:
         target=str(payload["target"]),
         argv=tuple(str(value) for value in payload["argv"]),
     )
-    execute(entrypoint)
+    with _temporary_environment(_train_loop_environment(loop_config)):
+        execute(entrypoint)
 
 
 def build_trainer(config: DriverConfig, *, ray_components: Any | None = None) -> Any:
@@ -216,6 +252,7 @@ def build_trainer(config: DriverConfig, *, ray_components: Any | None = None) ->
         "best_mode": config.best_mode,
         "job_id": config.job_id,
         "parent_job_id": config.parent_job_id,
+        "storage_path": storage_path,
     }
     return ray_api.TorchTrainer(
         train_loop_per_worker=_train_loop,

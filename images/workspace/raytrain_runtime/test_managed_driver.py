@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import os
 import pathlib
 import sys
 import types
@@ -15,6 +16,7 @@ if str(RUNTIME_PARENT) not in sys.path:
 from raytrain_runtime.entrypoint import PythonEntrypoint  # noqa: E402
 from raytrain_runtime.managed_driver import (  # noqa: E402
     DriverConfig,
+    _train_loop,
     build_trainer,
     main,
     parse_driver_config,
@@ -45,6 +47,32 @@ FAKE_RAY = types.SimpleNamespace(
     FailureConfig=CapturedConfig,
     CheckpointConfig=CapturedConfig,
 )
+
+MANAGED_ENVIRONMENT_KEYS = (
+    "RAYTRAIN_CHECKPOINT_EVERY_EPOCHS",
+    "RAYTRAIN_CHECKPOINT_KEEP_LATEST",
+    "RAYTRAIN_CHECKPOINT_KEEP_BEST",
+    "RAYTRAIN_CHECKPOINT_BEST_METRIC",
+    "RAYTRAIN_CHECKPOINT_BEST_MODE",
+    "PLATFORM_CHECKPOINT_PATH",
+)
+
+
+def loop_config(job_id: str = JOB_ID) -> dict[str, object]:
+    storage_path = f"/mnt/data/output/.platform/ray-train/{job_id}"
+    return {
+        "entrypoint": dataclasses.asdict(
+            PythonEntrypoint("path", "train.py", ("train.py",))
+        ),
+        "checkpoint_every_epochs": 7,
+        "keep_latest": 11,
+        "keep_best": 2,
+        "best_metric": "val/nds",
+        "best_mode": "min",
+        "job_id": job_id,
+        "parent_job_id": "",
+        "storage_path": storage_path,
+    }
 
 
 def driver_argv(*extra: str, entrypoint: tuple[str, ...] = ("python", "train.py")) -> list[str]:
@@ -252,6 +280,7 @@ class TrainerFactoryTest(unittest.TestCase):
         self.assertEqual(loop["keep_latest"], 4)
         self.assertEqual(loop["keep_best"], 2)
         self.assertEqual(loop["parent_job_id"], PARENT_JOB_ID)
+        self.assertEqual(loop["storage_path"], config.storage_path)
 
     def test_cpu_per_worker_has_floor_of_one(self):
         config = DriverConfig(
@@ -277,6 +306,81 @@ class TrainerFactoryTest(unittest.TestCase):
         checkpoint = trainer.kwargs["run_config"].kwargs["checkpoint_config"].kwargs
         self.assertIsNone(checkpoint["num_to_keep"])
         self.assertIsNone(checkpoint["checkpoint_score_attribute"])
+
+
+class TrainLoopEnvironmentTest(unittest.TestCase):
+    def test_non_default_policy_and_job_checkpoint_path_reach_user_entrypoint(self):
+        observed = {}
+
+        def capture(_entrypoint):
+            observed.update({key: os.environ.get(key) for key in MANAGED_ENVIRONMENT_KEYS})
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch("raytrain_runtime.managed_driver.execute", side_effect=capture):
+                _train_loop(loop_config())
+
+        self.assertEqual(
+            observed,
+            {
+                "RAYTRAIN_CHECKPOINT_EVERY_EPOCHS": "7",
+                "RAYTRAIN_CHECKPOINT_KEEP_LATEST": "11",
+                "RAYTRAIN_CHECKPOINT_KEEP_BEST": "2",
+                "RAYTRAIN_CHECKPOINT_BEST_METRIC": "val/nds",
+                "RAYTRAIN_CHECKPOINT_BEST_MODE": "min",
+                "PLATFORM_CHECKPOINT_PATH": (
+                    f"/mnt/data/output/.platform/ray-train/{JOB_ID}/checkpoints"
+                ),
+            },
+        )
+
+    def test_checkpoint_paths_are_scoped_by_job_storage(self):
+        observed = []
+
+        def capture(_entrypoint):
+            observed.append(os.environ["PLATFORM_CHECKPOINT_PATH"])
+
+        with mock.patch("raytrain_runtime.managed_driver.execute", side_effect=capture):
+            _train_loop(loop_config("job-aaaaaaaaaaaaaaaaaaaaaaaa"))
+            _train_loop(loop_config("job-bbbbbbbbbbbbbbbbbbbbbbbb"))
+
+        self.assertEqual(
+            observed,
+            [
+                "/mnt/data/output/.platform/ray-train/job-aaaaaaaaaaaaaaaaaaaaaaaa/checkpoints",
+                "/mnt/data/output/.platform/ray-train/job-bbbbbbbbbbbbbbbbbbbbbbbb/checkpoints",
+            ],
+        )
+
+    def test_restores_overwritten_and_new_environment_after_success(self):
+        original = {
+            "RAYTRAIN_CHECKPOINT_KEEP_LATEST": "original",
+            "PLATFORM_CHECKPOINT_PATH": "/before/checkpoints",
+            "UNRELATED": "preserved",
+        }
+        with mock.patch.dict(os.environ, original, clear=True):
+            with mock.patch("raytrain_runtime.managed_driver.execute"):
+                _train_loop(loop_config())
+            self.assertEqual(dict(os.environ), original)
+
+    def test_restores_overwritten_and_new_environment_after_exception(self):
+        original = {
+            "RAYTRAIN_CHECKPOINT_BEST_MODE": "original",
+            "UNRELATED": "preserved",
+        }
+
+        def mutate_environment_then_fail(_entrypoint):
+            os.environ["RAYTRAIN_CHECKPOINT_BEST_MODE"] = "user-mutated"
+            os.environ.pop("RAYTRAIN_CHECKPOINT_KEEP_LATEST")
+            raise RuntimeError("user code failed")
+
+        with mock.patch.dict(os.environ, original, clear=True):
+            with mock.patch(
+                "raytrain_runtime.managed_driver.execute",
+                side_effect=mutate_environment_then_fail,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "user code failed"):
+                    _train_loop(loop_config())
+            self.assertEqual(dict(os.environ), original)
 
 
 if __name__ == "__main__":
