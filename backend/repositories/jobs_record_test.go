@@ -48,3 +48,69 @@ func TestNewJobRecordPreservesCleanupPolicy(t *testing.T) {
 		t.Fatalf("cleanup policy not round-tripped: %+v", policy)
 	}
 }
+
+func TestJobRecordRoundTripsManagedRuntimeMetadata(t *testing.T) {
+	job := testJob()
+	job.Spec.TrainingEngine = domain.TrainingEngineRayTrain
+	job.Spec.RayVersion = domain.RayVersionProduction
+	job.Spec.ParentJobID = "job-0123456789abcdef01234567"
+	job.ClusterAttempt = 2
+	job.WorkerRestartCount = 3
+	job.ResumeCheckpointID = "checkpoint-7"
+
+	record, err := newJobRecord(&job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := record.toDomain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.TrainingEngine != domain.TrainingEngineRayTrain || got.Spec.RayVersion != domain.RayVersionProduction || got.Spec.ParentJobID != job.Spec.ParentJobID || got.ClusterAttempt != 2 || got.WorkerRestartCount != 3 || got.ResumeCheckpointID != "checkpoint-7" {
+		t.Fatalf("runtime metadata lost: %+v", got)
+	}
+}
+
+func TestJobRecordNormalizedRuntimeMetadataOverridesSpecJSON(t *testing.T) {
+	job := testJob()
+	specJSON, err := json.Marshal(job.Spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := JobRecord{
+		SpecJSON:           string(specJSON),
+		TrainingEngine:     string(domain.TrainingEngineRayTrain),
+		RayVersion:         domain.RayVersionCanary,
+		ClusterAttempt:     4,
+		WorkerRestartCount: 5,
+		ResumeCheckpointID: "checkpoint-normalized",
+		ParentJobID:        "job-89abcdef0123456701234567",
+	}
+
+	got, err := record.toDomain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.TrainingEngine != domain.TrainingEngineRayTrain || got.Spec.RayVersion != domain.RayVersionCanary || got.Spec.ParentJobID != record.ParentJobID {
+		t.Fatalf("normalized spec metadata did not override spec_json: %+v", got.Spec)
+	}
+	if got.ClusterAttempt != 4 || got.WorkerRestartCount != 5 || got.ResumeCheckpointID != "checkpoint-normalized" {
+		t.Fatalf("normalized runtime counters lost: %+v", got)
+	}
+}
+
+func TestJobRecordResolvesLegacyRuntimeMetadataDefaults(t *testing.T) {
+	job := testJob()
+	specJSON, err := json.Marshal(job.Spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := (JobRecord{SpecJSON: string(specJSON)}).toDomain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.TrainingEngine != domain.TrainingEngineRayDDP || got.Spec.RayVersion != domain.RayVersionLegacy || got.ClusterAttempt != 1 {
+		t.Fatalf("legacy runtime metadata defaults not resolved: %+v", got)
+	}
+}

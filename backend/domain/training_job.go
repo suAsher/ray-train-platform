@@ -161,6 +161,9 @@ type TrainingJob struct {
 	RayJobUID            string           `json:"rayJobUid"`
 	RayClusterName       string           `json:"rayClusterName"`
 	ResourceVersion      string           `json:"resourceVersion"`
+	ClusterAttempt       int              `json:"clusterAttempt"`
+	WorkerRestartCount   int              `json:"workerRestartCount"`
+	ResumeCheckpointID   string           `json:"resumeCheckpointId,omitempty"`
 	CreatedAt            time.Time        `json:"createdAt"`
 	UpdatedAt            time.Time        `json:"updatedAt"`
 	LastObservedAt       *time.Time       `json:"lastObservedAt,omitempty"`

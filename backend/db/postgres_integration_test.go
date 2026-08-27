@@ -25,7 +25,7 @@ func TestPostgresMigrationsIntegration(t *testing.T) {
 	if err := database.Raw("SELECT version FROM schema_migrations ORDER BY version").Scan(&versions).Error; err != nil {
 		t.Fatalf("load migration versions: %v", err)
 	}
-	if want := []int{1, 2, 3}; !reflectIntSlicesEqual(versions, want) {
+	if want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}; !reflectIntSlicesEqual(versions, want) {
 		t.Fatalf("migration versions = %v, want %v", versions, want)
 	}
 
@@ -39,7 +39,17 @@ func TestPostgresMigrationsIntegration(t *testing.T) {
 		}
 	}
 
-	for _, column := range []string{"source_artifact_id", "submission_origin", "external_submission_id"} {
+	for _, column := range []string{
+		"source_artifact_id",
+		"submission_origin",
+		"external_submission_id",
+		"training_engine",
+		"ray_version",
+		"cluster_attempt",
+		"worker_restart_count",
+		"resume_checkpoint_id",
+		"parent_job_id",
+	} {
 		var count int64
 		if err := database.Raw("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'training_jobs' AND column_name = ?", column).Scan(&count).Error; err != nil {
 			t.Fatalf("check training_jobs.%s: %v", column, err)

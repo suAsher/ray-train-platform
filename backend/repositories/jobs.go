@@ -33,6 +33,12 @@ type JobRecord struct {
 	RayJobUID            string
 	RayClusterName       string
 	ResourceVersion      string
+	TrainingEngine       string
+	RayVersion           string
+	ClusterAttempt       int
+	WorkerRestartCount   int
+	ResumeCheckpointID   string
+	ParentJobID          string
 	RetryCount           int
 	TimeoutSeconds       int64
 	CleanupJSON          string `gorm:"type:jsonb"`
@@ -179,6 +185,15 @@ func newJobRecord(job *domain.TrainingJob) (JobRecord, error) {
 	if err != nil {
 		return JobRecord{}, fmt.Errorf("marshal cleanup policy: %w", err)
 	}
+	engine := job.Spec.TrainingEngine.Resolved()
+	rayVersion := strings.TrimSpace(job.Spec.RayVersion)
+	if rayVersion == "" {
+		rayVersion = domain.RayVersionLegacy
+	}
+	clusterAttempt := job.ClusterAttempt
+	if clusterAttempt < 1 {
+		clusterAttempt = 1
+	}
 	return JobRecord{
 		ID:                   job.ID,
 		TenantID:             job.TenantID,
@@ -191,6 +206,12 @@ func newJobRecord(job *domain.TrainingJob) (JobRecord, error) {
 		DesiredState:         string(job.DesiredState),
 		ObservedState:        string(job.ObservedState),
 		KubernetesNS:         job.KubernetesNS,
+		TrainingEngine:       string(engine),
+		RayVersion:           rayVersion,
+		ClusterAttempt:       clusterAttempt,
+		WorkerRestartCount:   job.WorkerRestartCount,
+		ResumeCheckpointID:   job.ResumeCheckpointID,
+		ParentJobID:          job.Spec.ParentJobID,
 		TimeoutSeconds:       job.Spec.TimeoutSeconds,
 		CleanupJSON:          string(cleanupJSON),
 	}, nil
@@ -516,6 +537,18 @@ func (r JobRecord) toDomain() (*domain.TrainingJob, error) {
 	if err := json.Unmarshal([]byte(r.SpecJSON), &spec); err != nil {
 		return nil, fmt.Errorf("decode job spec: %w", err)
 	}
+	engine := domain.TrainingEngine(strings.TrimSpace(r.TrainingEngine)).Resolved()
+	rayVersion := strings.TrimSpace(r.RayVersion)
+	if rayVersion == "" {
+		rayVersion = domain.RayVersionLegacy
+	}
+	spec.TrainingEngine = engine
+	spec.RayVersion = rayVersion
+	spec.ParentJobID = r.ParentJobID
+	clusterAttempt := r.ClusterAttempt
+	if clusterAttempt == 0 {
+		clusterAttempt = 1
+	}
 	return &domain.TrainingJob{
 		ID:                   r.ID,
 		TenantID:             r.TenantID,
@@ -533,6 +566,9 @@ func (r JobRecord) toDomain() (*domain.TrainingJob, error) {
 		RayJobUID:            r.RayJobUID,
 		RayClusterName:       r.RayClusterName,
 		ResourceVersion:      r.ResourceVersion,
+		ClusterAttempt:       clusterAttempt,
+		WorkerRestartCount:   r.WorkerRestartCount,
+		ResumeCheckpointID:   r.ResumeCheckpointID,
 		CreatedAt:            r.CreatedAt,
 		UpdatedAt:            r.UpdatedAt,
 		LastObservedAt:       r.LastObservedAt,

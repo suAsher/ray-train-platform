@@ -56,6 +56,29 @@ func TestMigrationsOnlyTouchTablesEarlierMigrationsCreate(t *testing.T) {
 	}
 }
 
+func TestTrainingRuntimeMetadataMigrationTargetsTrainingJobs(t *testing.T) {
+	contents, err := migrationFiles.ReadFile("migrations/0020_training_runtime_metadata.up.sql")
+	if err != nil {
+		t.Fatalf("read training runtime metadata migration: %v", err)
+	}
+
+	sql := string(contents)
+	for _, fragment := range []string{
+		"ALTER TABLE training_jobs ADD COLUMN IF NOT EXISTS training_engine TEXT NOT NULL DEFAULT 'ray-ddp';",
+		"ALTER TABLE training_jobs ADD COLUMN IF NOT EXISTS ray_version TEXT NOT NULL DEFAULT '2.35.0';",
+		"ALTER TABLE training_jobs ADD COLUMN IF NOT EXISTS cluster_attempt INTEGER NOT NULL DEFAULT 1;",
+		"ALTER TABLE training_jobs ADD COLUMN IF NOT EXISTS worker_restart_count INTEGER NOT NULL DEFAULT 0;",
+		"ALTER TABLE training_jobs ADD COLUMN IF NOT EXISTS resume_checkpoint_id TEXT NOT NULL DEFAULT '';",
+		"ALTER TABLE training_jobs ADD COLUMN IF NOT EXISTS parent_job_id TEXT NOT NULL DEFAULT '';",
+		"ON training_jobs(training_engine, observed_state)",
+		"ON training_jobs(parent_job_id) WHERE parent_job_id <> ''",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("training runtime metadata migration missing %q", fragment)
+		}
+	}
+}
+
 func migrationFileNames() ([]string, error) {
 	entries, err := migrationFiles.ReadDir("migrations")
 	if err != nil {

@@ -253,3 +253,49 @@ func TestCreateRoundTripsArtifactSubmissionMetadata(t *testing.T) {
 		t.Fatalf("list metadata did not round-trip: artifact=%q origin=%q external=%q", listed.SourceArtifactID, listed.SubmissionOrigin, listed.ExternalSubmissionID)
 	}
 }
+
+func TestCreateRoundTripsManagedRuntimeMetadata(t *testing.T) {
+	repo := testRepository(t)
+	job := testJob()
+	job.Spec.TrainingEngine = domain.TrainingEngineRayTrain
+	job.Spec.RayVersion = domain.RayVersionProduction
+	job.Spec.ParentJobID = "job-0123456789abcdef01234567"
+	job.ClusterAttempt = 2
+	job.WorkerRestartCount = 3
+	job.ResumeCheckpointID = "checkpoint-7"
+	if err := repo.Create(context.Background(), &job, "runtime-metadata"); err != nil {
+		t.Fatalf("create managed runtime job: %v", err)
+	}
+
+	var record JobRecord
+	if err := repo.db.Where("id = ?", job.ID).First(&record).Error; err != nil {
+		t.Fatalf("load managed runtime record: %v", err)
+	}
+	if record.TrainingEngine != string(domain.TrainingEngineRayTrain) || record.RayVersion != domain.RayVersionProduction || record.ParentJobID != job.Spec.ParentJobID || record.ClusterAttempt != 2 || record.WorkerRestartCount != 3 || record.ResumeCheckpointID != "checkpoint-7" {
+		t.Fatalf("normalized runtime metadata not persisted: %+v", record)
+	}
+
+	got, err := repo.Get(context.Background(), job.TenantID, job.ID)
+	if err != nil {
+		t.Fatalf("get managed runtime job: %v", err)
+	}
+	if got.Spec.TrainingEngine != job.Spec.TrainingEngine || got.Spec.RayVersion != job.Spec.RayVersion || got.Spec.ParentJobID != job.Spec.ParentJobID || got.ClusterAttempt != 2 || got.WorkerRestartCount != 3 || got.ResumeCheckpointID != "checkpoint-7" {
+		t.Fatalf("managed runtime metadata did not round-trip: %+v", got)
+	}
+}
+
+func TestCreatePersistsResolvedRuntimeMetadataDefaults(t *testing.T) {
+	repo := testRepository(t)
+	job := testJob()
+	if err := repo.Create(context.Background(), &job, "runtime-defaults"); err != nil {
+		t.Fatalf("create legacy runtime job: %v", err)
+	}
+
+	var record JobRecord
+	if err := repo.db.Where("id = ?", job.ID).First(&record).Error; err != nil {
+		t.Fatalf("load legacy runtime record: %v", err)
+	}
+	if record.TrainingEngine != string(domain.TrainingEngineRayDDP) || record.RayVersion != domain.RayVersionLegacy || record.ClusterAttempt != 1 {
+		t.Fatalf("resolved runtime defaults not persisted: %+v", record)
+	}
+}
