@@ -118,6 +118,11 @@ type JobSpec struct {
 	Source             CodeSource              `json:"source"`
 	Entrypoint         Entrypoint              `json:"entrypoint"`
 	Execution          ExecutionProfile        `json:"execution,omitempty"`
+	TrainingEngine     TrainingEngine          `json:"trainingEngine,omitempty"`
+	RayVersion         string                  `json:"rayVersion,omitempty"`
+	Managed            ManagedTrainingPolicy   `json:"managed,omitempty"`
+	DataMode           DataMode                `json:"dataMode,omitempty"`
+	ParentJobID        string                  `json:"parentJobId,omitempty"`
 	Resources          Resources               `json:"resources"`
 	Queue              string                  `json:"queue"`
 	Priority           string                  `json:"priority,omitempty"`
@@ -207,6 +212,7 @@ var imagePathComponent = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*$`)
 var imageRegistryComponent = regexp.MustCompile(`^[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*(?::[0-9]+)?$`)
 var gitCommit = regexp.MustCompile(`^[0-9a-fA-F]{7,64}$`)
 var snapshotID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+var jobID = regexp.MustCompile(`^job-[0-9a-f]{24}$`)
 
 func (s JobSpec) Validate() error {
 	if s.Name == "" || len(s.Name) > 63 || !dnsLabel.MatchString(s.Name) {
@@ -232,6 +238,9 @@ func (s JobSpec) Validate() error {
 		return fmt.Errorf("total GPUs cannot exceed %d", limits.MaxTotalGPUs)
 	}
 	if err := s.Execution.Validate(s.Resources); err != nil {
+		return err
+	}
+	if err := s.validateTrainingRuntime(); err != nil {
 		return err
 	}
 	if strings.TrimSpace(s.Queue) == "" {
@@ -272,6 +281,45 @@ func (s JobSpec) Validate() error {
 	}
 	if s.RetryPolicy.MaxRetries < 0 || s.RetryPolicy.MaxRetries > 3 {
 		return fmt.Errorf("maxRetries must be between 0 and 3")
+	}
+	return nil
+}
+
+func (s JobSpec) validateTrainingRuntime() error {
+	engine := s.TrainingEngine.Resolved()
+	switch engine {
+	case TrainingEngineRayDDP:
+	case TrainingEngineRayTrain:
+		if s.RayVersion != RayVersionProduction && s.RayVersion != RayVersionCanary {
+			return fmt.Errorf("ray-train requires Ray 2.56.1 or Ray 2.58.0")
+		}
+		if err := s.Managed.Validate(); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unsupported training engine %q", s.TrainingEngine)
+	}
+
+	dataMode := s.DataMode
+	if strings.TrimSpace(string(dataMode)) == "" {
+		dataMode = ""
+	}
+	switch dataMode {
+	case "", DataModeMount:
+	case DataModeCache:
+		if s.Cache.Mode != CacheModeRuntime || s.Cache.Preload != CachePreloadInput {
+			return fmt.Errorf("cache data mode requires runtime cache with preload=input")
+		}
+	case DataModeRayData:
+		if engine != TrainingEngineRayTrain {
+			return fmt.Errorf("ray-data requires ray-train")
+		}
+	default:
+		return fmt.Errorf("unsupported data mode %q", s.DataMode)
+	}
+
+	if s.ParentJobID != "" && !jobID.MatchString(s.ParentJobID) {
+		return fmt.Errorf("parentJobId must match the platform job ID format")
 	}
 	return nil
 }

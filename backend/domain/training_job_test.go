@@ -205,3 +205,147 @@ func TestJobSpecValidateRequiresArtifactIDForArtifactSource(t *testing.T) {
 		t.Fatalf("artifact source with artifactId should be valid before materialization: %v", err)
 	}
 }
+
+func TestManagedEngineRejectsRay235(t *testing.T) {
+	spec := validJobSpec()
+	spec.TrainingEngine = TrainingEngineRayTrain
+	spec.RayVersion = "2.35.0"
+	if err := spec.Validate(); err == nil || !strings.Contains(err.Error(), "Ray 2.56.1") {
+		t.Fatalf("expected managed-runtime version rejection, got %v", err)
+	}
+}
+
+func TestManagedEngineAcceptsProductionAndCanaryVersions(t *testing.T) {
+	for _, version := range []string{RayVersionProduction, RayVersionCanary} {
+		t.Run(version, func(t *testing.T) {
+			spec := validJobSpec()
+			spec.TrainingEngine = TrainingEngineRayTrain
+			spec.RayVersion = version
+			spec.Managed = ManagedTrainingPolicy{
+				MaxFailures: 2,
+				Checkpoint:  CheckpointPolicy{EveryEpochs: 1, KeepLatest: 3, KeepBest: 1},
+			}
+			if err := spec.Validate(); err != nil {
+				t.Fatalf("expected Ray %s to support managed training: %v", version, err)
+			}
+		})
+	}
+}
+
+func TestManagedEngineValidatesPolicy(t *testing.T) {
+	spec := validJobSpec()
+	spec.TrainingEngine = TrainingEngineRayTrain
+	spec.RayVersion = RayVersionProduction
+	spec.Managed.MaxFailures = 11
+	if err := spec.Validate(); err == nil || !strings.Contains(err.Error(), "maxFailures") {
+		t.Fatalf("expected managed policy rejection, got %v", err)
+	}
+}
+
+func TestJobSpecTrainingEngineValidation(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		engine  TrainingEngine
+		wantErr string
+	}{
+		{name: "omitted legacy engine"},
+		{name: "whitespace legacy engine", engine: " \t"},
+		{name: "explicit ray ddp", engine: TrainingEngineRayDDP},
+		{name: "unknown engine", engine: "spark", wantErr: "unsupported training engine"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			spec := validJobSpec()
+			spec.TrainingEngine = test.engine
+			err := spec.Validate()
+			if test.wantErr == "" && err != nil {
+				t.Fatalf("validate job spec: %v", err)
+			}
+			if test.wantErr != "" && (err == nil || !strings.Contains(err.Error(), test.wantErr)) {
+				t.Fatalf("expected error containing %q, got %v", test.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestJobSpecDataModeValidation(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		prepare func(*JobSpec)
+		wantErr string
+	}{
+		{name: "omitted mode", prepare: func(*JobSpec) {}},
+		{name: "mount mode", prepare: func(spec *JobSpec) { spec.DataMode = DataModeMount }},
+		{name: "ray data with managed engine", prepare: func(spec *JobSpec) {
+			spec.TrainingEngine = TrainingEngineRayTrain
+			spec.RayVersion = RayVersionProduction
+			spec.DataMode = DataModeRayData
+		}},
+		{name: "ray data with legacy engine", prepare: func(spec *JobSpec) {
+			spec.DataMode = DataModeRayData
+		}, wantErr: "ray-data requires ray-train"},
+		{name: "cache with runtime input preload", prepare: func(spec *JobSpec) {
+			spec.DataMode = DataModeCache
+			spec.Cache = CacheRequest{Mode: CacheModeRuntime, Size: "200Gi", Preload: CachePreloadInput}
+			spec.Input = DataLocation{Space: DataSpacePublic, RelativePath: "datasets/train"}
+		}},
+		{name: "cache without runtime cache", prepare: func(spec *JobSpec) {
+			spec.DataMode = DataModeCache
+		}, wantErr: "cache data mode requires runtime cache with preload=input"},
+		{name: "cache without input preload", prepare: func(spec *JobSpec) {
+			spec.DataMode = DataModeCache
+			spec.Cache = CacheRequest{Mode: CacheModeRuntime, Size: "200Gi"}
+		}, wantErr: "cache data mode requires runtime cache with preload=input"},
+		{name: "unknown mode", prepare: func(spec *JobSpec) {
+			spec.DataMode = "stream"
+		}, wantErr: "unsupported data mode"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			spec := validJobSpec()
+			test.prepare(&spec)
+			err := spec.Validate()
+			if test.wantErr == "" && err != nil {
+				t.Fatalf("validate job spec: %v", err)
+			}
+			if test.wantErr != "" && (err == nil || !strings.Contains(err.Error(), test.wantErr)) {
+				t.Fatalf("expected error containing %q, got %v", test.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestJobSpecParentJobIDValidation(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		parentJobID string
+		wantErr     bool
+	}{
+		{name: "omitted"},
+		{name: "generated job id", parentJobID: "job-0123456789abcdef01234567"},
+		{name: "too short", parentJobID: "job-0123", wantErr: true},
+		{name: "uppercase hexadecimal", parentJobID: "job-0123456789ABCDEF01234567", wantErr: true},
+		{name: "surrounding whitespace", parentJobID: " job-0123456789abcdef01234567 ", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			spec := validJobSpec()
+			spec.ParentJobID = test.parentJobID
+			err := spec.Validate()
+			if !test.wantErr && err != nil {
+				t.Fatalf("validate job spec: %v", err)
+			}
+			if test.wantErr && (err == nil || !strings.Contains(err.Error(), "parentJobId")) {
+				t.Fatalf("expected parentJobId rejection, got %v", err)
+			}
+		})
+	}
+}
+
+func validJobSpec() JobSpec {
+	return JobSpec{
+		Name:       "managed-train-001",
+		Image:      "registry.example.com/ray-train@sha256:" + strings.Repeat("a", 64),
+		Source:     CodeSource{Type: "git", URL: "https://git.example.com/team/train.git", Commit: "0123456789abcdef"},
+		Entrypoint: Entrypoint{Command: []string{"python", "train.py"}},
+		Resources:  Resources{WorkerReplicas: 2, GPUsPerWorker: 8, CPUPerWorker: 32, MemoryPerWorker: "128Gi"},
+		Queue:      "team-gpu-queue",
+	}
+}
