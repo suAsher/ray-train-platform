@@ -17,6 +17,33 @@ placement:
   preferredNodeSelector: {}
   allowGPUNodeFallback: false
 
+# Side-by-side Ray runtime catalog inputs. References are populated with
+# immutable digests after building and smoke-testing the images. These values
+# do not enable managed submission; Task 15 wires the disabled gates into the
+# backend Deployment after the runtime acceptance matrix is complete.
+rayTrain:
+  managedEnabled: false
+  canaryEnabled: false
+  canaryTenants: []
+  productionVersion: "2.56.1"
+  canaryVersion: "2.58.0"
+  runtimeCatalog:
+    legacyDDP:
+      reference: "REPLACE_WITH_RAY_235_DDP_IMAGE@sha256:REPLACE_WITH_64_HEX_DIGEST"
+      rayVersion: "2.35.0"
+      supportedEngines: ["ray-ddp"]
+    productionDDP:
+      reference: "REPLACE_WITH_RAY_256_DDP_IMAGE@sha256:REPLACE_WITH_64_HEX_DIGEST"
+      rayVersion: "2.56.1"
+      supportedEngines: ["ray-ddp"]
+    productionManaged:
+      reference: "REPLACE_WITH_RAY_256_MANAGED_IMAGE@sha256:REPLACE_WITH_64_HEX_DIGEST"
+      rayVersion: "2.56.1"
+      supportedEngines: ["ray-train"]
+    productionWorkspace:
+      reference: "REPLACE_WITH_RAY_256_WORKSPACE_IMAGE@sha256:REPLACE_WITH_64_HEX_DIGEST"
+      rayVersion: "2.56.1"
+
 backend:
   replicaCount: 2
   # Optional scheduling boundary for control-plane Pods. Production profiles

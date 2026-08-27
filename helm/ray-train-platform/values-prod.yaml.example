@@ -16,6 +16,32 @@ global:
   imagePullSecrets:
     - name: <pull-secret 名称>
 
+# ---- Ray 运行环境目录 -------------------------------------------------
+# 先使用 scripts/test-ray-runtime-images.sh 验证下列精确 digest。
+# 此版只发布运行环，托管与灰度开关继续关闭。
+rayTrain:
+  managedEnabled: false
+  canaryEnabled: false
+  canaryTenants: []
+  productionVersion: "2.56.1"
+  canaryVersion: "2.58.0"
+  runtimeCatalog:
+    legacyDDP:
+      reference: <内部仓库>/ray-train-pytorch@sha256:<64位digest>
+      rayVersion: "2.35.0"
+      supportedEngines: ["ray-ddp"]
+    productionDDP:
+      reference: <内部仓库>/ray-train-pytorch-ray-ddp@sha256:<64位digest>
+      rayVersion: "2.56.1"
+      supportedEngines: ["ray-ddp"]
+    productionManaged:
+      reference: <内部仓库>/ray-train-pytorch-ray-train@sha256:<64位digest>
+      rayVersion: "2.56.1"
+      supportedEngines: ["ray-train"]
+    productionWorkspace:
+      reference: <内部仓库>/ray-workspace-ray256@sha256:<64位digest>
+      rayVersion: "2.56.1"
+
 backend:
   # production 会强制要求数据库、Kubernetes 可用，并拒绝 demoMode
   appEnv: production
