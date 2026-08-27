@@ -43,7 +43,7 @@ RAY_BASE_IMAGE_ARG="${RAY_BASE_IMAGE:-harbor.wellspiking.ai/hub/rayproject/ray:2
 WORKSPACE_RAY_BASE_IMAGE_ARG="${WORKSPACE_RAY_BASE_IMAGE:-harbor.wellspiking.ai/hub/rayproject/ray:2.35.0-py310-gpu}"
 RAY_PRODUCTION_VERSION="2.56.1"
 RAY_VERSION_ARG="${RAY_VERSION:-$RAY_PRODUCTION_VERSION}"
-RAY_RUNTIME_VARIANTS=(pytorch-ray-ddp workspace-ray256)
+RAY_RUNTIME_VARIANTS=(pytorch-ray-ddp pytorch-ray-train workspace-ray256)
 BEVFUSION_BASE_IMAGE_ARG="${BEVFUSION_BASE_IMAGE:-harbor.wellspiking.ai/guofeng.su/bevfusion@sha256:88e9c5045ced1b4b3dc49ddf1f2e22a8c9702574fd8103afcdff83577784a5ee}"
 CODE_SERVER_IMAGE_ARG="${CODE_SERVER_IMAGE:-harbor.wellspiking.ai/hub/codercom/code-server:4.93.1}"
 SPK_RAYJOB_VERSION_ARG="${SPK_RAYJOB_VERSION:-$IMAGE_TAG}"
@@ -234,9 +234,17 @@ done < <(normalize_targets)
 [ "${#BUILD_TARGETS_LIST[@]}" -gt 0 ] || { echo 'ERROR: BUILD_TARGETS is empty' >&2; exit 1; }
 
 for target in "${BUILD_TARGETS_LIST[@]}"; do
-  if [ "$target" = "pytorch-ray-train" ] && [ ! -f "$SCRIPT_DIR/images/workspace/raytrain-managed" ]; then
-    echo 'ERROR: pytorch-ray-train requires images/workspace/raytrain-managed from Task 9' >&2
-    exit 1
+  if [ "$target" = "pytorch-ray-train" ]; then
+    [ -x "$SCRIPT_DIR/images/workspace/raytrain-managed" ] || {
+      echo 'ERROR: pytorch-ray-train requires executable images/workspace/raytrain-managed' >&2
+      exit 1
+    }
+    for runtime_source in __init__.py entrypoint.py managed_driver.py; do
+      [ -f "$SCRIPT_DIR/images/workspace/raytrain_runtime/$runtime_source" ] || {
+        echo "ERROR: pytorch-ray-train requires images/workspace/raytrain_runtime/$runtime_source" >&2
+        exit 1
+      }
+    done
   fi
   case "$target" in
     pytorch-ray-ddp|pytorch-ray-train|workspace-ray256)

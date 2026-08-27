@@ -56,6 +56,7 @@ assert_contracts() {
   require_literal images/train-pytorch/Dockerfile 'python3 -c'
   require_literal images/train-pytorch/Dockerfile 'python3 -m pip check'
   require_literal images/train-pytorch/Dockerfile 'COPY workspace/raytrain-managed /usr/local/bin/raytrain-managed'
+  require_literal images/train-pytorch/Dockerfile 'COPY workspace/raytrain_runtime /usr/local/lib/raytrain-platform/raytrain_runtime'
   require_literal images/train-pytorch/Dockerfile 'ENV RAY_TRAIN_V2_ENABLED=1'
 
   local base_stage ddp_stage managed_stage managed_env_count required_copy_source
@@ -100,12 +101,23 @@ assert_contracts() {
   require_before "$workspace_stage" 'test "${RAY_VERSION}" = "2.56.1"' 'python3 -m pip install'
 
   for required_copy_source in \
-    images/workspace/raytrain-launch.py; do
+    images/workspace/raytrain-launch.py \
+    images/workspace/raytrain-managed \
+    images/workspace/raytrain_runtime/__init__.py \
+    images/workspace/raytrain_runtime/entrypoint.py \
+    images/workspace/raytrain_runtime/managed_driver.py; do
     test -f "${root_dir}/${required_copy_source}" || {
-      echo "required Ray DDP/workspace COPY source is missing: ${required_copy_source}" >&2
+      echo "required Ray runtime COPY source is missing: ${required_copy_source}" >&2
       exit 1
     }
   done
+  test -x "${root_dir}/images/workspace/raytrain-managed" || {
+    echo 'managed Ray Train launcher must be executable' >&2
+    exit 1
+  }
+  "${root_dir}/images/workspace/raytrain-managed" --help >/dev/null
+  require_literal images/workspace/raytrain-managed 'from raytrain_runtime.managed_driver import main'
+  require_absent_literal images/workspace/raytrain-managed 'placeholder'
   require_literal images/train-pytorch/Dockerfile 'COPY workspace/raytrain-launch.py /usr/local/bin/raytrain-launch'
   require_literal images/workspace/Dockerfile 'COPY raytrain-launch.py /usr/local/bin/raytrain-launch'
 
@@ -158,33 +170,8 @@ assert_contracts() {
   grep -Fq 'ray-workspace:contract' <<<"$dry_run"
   grep -Fq 'ray-train-pytorch:contract' <<<"$dry_run"
   grep -Fq 'ray-train-pytorch-ray-ddp:2.56.1-contract' <<<"$dry_run"
+  grep -Fq 'ray-train-pytorch-ray-train:2.56.1-contract' <<<"$dry_run"
   grep -Fq 'ray-workspace-ray256:2.56.1-contract' <<<"$dry_run"
-  if grep -Fq 'ray-train-pytorch-ray-train:' <<<"$dry_run"; then
-    echo 'default all matrix includes the unavailable Task 9 managed image' >&2
-    exit 1
-  fi
-
-  if [[ ! -e "${root_dir}/images/workspace/raytrain-managed" ]]; then
-    local managed_preflight managed_targets
-    for managed_targets in \
-      'pytorch-ray-train' \
-      'pytorch-ray-ddp,pytorch-ray-train' \
-      'workspace-ray256,pytorch-ray-train'; do
-      if managed_preflight="$(DRY_RUN=true IMAGE_TAG=contract BUILD_TARGETS="$managed_targets" bash "${root_dir}/build-image.sh" 2>&1)"; then
-        echo "managed image target list succeeded without its real COPY source: ${managed_targets}" >&2
-        exit 1
-      fi
-      grep -Fq 'pytorch-ray-train requires images/workspace/raytrain-managed from Task 9' <<<"$managed_preflight"
-      if grep -Eq -- '(^--- Building|docker (build|push))' <<<"$managed_preflight"; then
-        echo "managed target validation started a build before completing preflight: ${managed_targets}" >&2
-        exit 1
-      fi
-      if grep -Fq 'unbound variable' <<<"$managed_preflight"; then
-        echo 'managed preflight triggered a secondary cleanup trap failure' >&2
-        exit 1
-      fi
-    done
-  fi
 }
 
 require_exact_image_ref() {

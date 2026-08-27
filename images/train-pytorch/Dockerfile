@@ -55,9 +55,11 @@ USER ray
 WORKDIR /home/ray
 
 FROM pytorch-ray256-base AS pytorch-ray-train
+COPY workspace/raytrain_runtime /usr/local/lib/raytrain-platform/raytrain_runtime
 COPY workspace/raytrain-managed /usr/local/bin/raytrain-managed
 RUN chmod 0755 /usr/local/bin/raytrain-managed \
  && chmod 0755 /usr/local/bin/raytrain-launch \
+ && find /usr/local/lib/raytrain-platform/raytrain_runtime -type f -name '*.py' -exec chmod 0644 {} + \
  && chown -R ray:users /home/ray
 ENV PLATFORM_TRAINING_ENGINE=ray-train
 ENV RAY_TRAIN_V2_ENABLED=1

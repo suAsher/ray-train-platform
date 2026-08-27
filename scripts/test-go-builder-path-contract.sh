@@ -36,6 +36,7 @@ for expected in \
   'ray-workspace:contract' \
   'ray-train-pytorch:contract' \
   'ray-train-pytorch-ray-ddp:2.56.1-contract' \
+  'ray-train-pytorch-ray-train:2.56.1-contract' \
   'ray-workspace-ray256:2.56.1-contract'; do
   if ! grep -Fq "$expected" <<<"$matrix_output"; then
     echo "runtime build matrix is missing ${expected}" >&2
@@ -43,33 +44,10 @@ for expected in \
   fi
 done
 
-if grep -Fq 'ray-train-pytorch-ray-train:' <<<"$matrix_output"; then
-  echo 'default all matrix must remain buildable before Task 9 supplies raytrain-managed' >&2
+if [[ ! -x "${root_dir}/images/workspace/raytrain-managed" ]]; then
+  echo 'default all matrix requires the executable Task 9 managed launcher' >&2
   exit 1
 fi
-
-assert_managed_preflight() {
-  local targets="$1"
-  local output_file="${test_root}/managed-output-${2}"
-  if DRY_RUN=true IMAGE_TAG=contract BUILD_TARGETS="$targets" \
-    bash "${root_dir}/build-image.sh" >"$output_file" 2>&1; then
-    echo "managed target list bypassed launcher preflight: ${targets}" >&2
-    exit 1
-  fi
-  grep -Fq 'pytorch-ray-train requires images/workspace/raytrain-managed from Task 9' "$output_file"
-  if grep -Eq -- '(^--- Building|docker (build|push))' "$output_file"; then
-    echo "managed target validation started a build before completing preflight: ${targets}" >&2
-    exit 1
-  fi
-  if grep -Fq 'unbound variable' "$output_file"; then
-    echo 'managed preflight triggered a secondary cleanup trap failure' >&2
-    exit 1
-  fi
-}
-
-assert_managed_preflight 'pytorch-ray-train' single
-assert_managed_preflight 'pytorch-ray-ddp,pytorch-ray-train' ddp-first
-assert_managed_preflight 'workspace-ray256,pytorch-ray-train' workspace-first
 
 # Force the legacy Docker path to fail after creating its temporary Dockerfile.
 # The EXIT trap in build-image.sh must remove that exact file on every exit.

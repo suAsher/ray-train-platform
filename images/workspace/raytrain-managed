@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+"""Executable entrypoint for the platform-owned managed Ray Train driver."""
+
+from __future__ import annotations
+
+import pathlib
+import sys
+
+
+RUNTIME_ROOT = pathlib.Path(__file__).resolve().parent.parent / "lib" / "raytrain-platform"
+sys.path.insert(0, str(RUNTIME_ROOT))
+
+from raytrain_runtime.managed_driver import main  # noqa: E402
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
