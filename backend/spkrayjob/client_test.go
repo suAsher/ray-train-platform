@@ -167,6 +167,128 @@ func TestSubmitManagedPreflightsImageBeforeCreatingJob(t *testing.T) {
 	}
 }
 
+func TestSubmitDirectoryRejectsInvalidManagedSpecBeforeNetworkOrArchive(t *testing.T) {
+	tests := []struct {
+		name      string
+		mutate    func(*domain.JobSpec)
+		wantError string
+	}{
+		{
+			name: "resources",
+			mutate: func(spec *domain.JobSpec) {
+				spec.Resources.CPUPerWorker = 0
+			},
+			wantError: "cpuPerWorker must be positive",
+		},
+		{
+			name: "timeout",
+			mutate: func(spec *domain.JobSpec) {
+				spec.TimeoutSeconds = -1
+			},
+			wantError: "timeoutSeconds must not be negative",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.Symlink(filepath.Join(root, "missing-target"), filepath.Join(root, "broken-link")); err != nil {
+				t.Fatal(err)
+			}
+			requests := 0
+			client, err := NewClient(ClientOptions{
+				ServerURL: "https://platform.invalid",
+				Token:     "test-token",
+				HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+					requests++
+					return nil, errors.New("unexpected request")
+				})},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			spec := testJobSpec()
+			spec.TrainingEngine = domain.TrainingEngineRayTrain
+			spec.Managed.MaxFailures = 2
+			test.mutate(&spec)
+			original := spec
+
+			_, err = client.SubmitDirectory(context.Background(), root, spec)
+			if requests != 0 {
+				t.Fatalf("invalid managed directory submit made %d HTTP requests", requests)
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("expected local validation error containing %q, got %v", test.wantError, err)
+			}
+			if !reflect.DeepEqual(spec, original) {
+				t.Fatalf("directory submit mutated the caller's spec: before=%+v after=%+v", original, spec)
+			}
+		})
+	}
+}
+
+func TestSubmitRejectsInvalidManagedSpecsBeforeAnyRequest(t *testing.T) {
+	tests := []struct {
+		name      string
+		mutate    func(*domain.JobSpec)
+		wantError string
+	}{
+		{
+			name: "resources",
+			mutate: func(spec *domain.JobSpec) {
+				spec.Resources.CPUPerWorker = 0
+			},
+			wantError: "cpuPerWorker must be positive",
+		},
+		{
+			name: "timeout",
+			mutate: func(spec *domain.JobSpec) {
+				spec.TimeoutSeconds = -1
+			},
+			wantError: "timeoutSeconds must not be negative",
+		},
+		{
+			name: "engine",
+			mutate: func(spec *domain.JobSpec) {
+				spec.TrainingEngine = domain.TrainingEngine("ray-unknown")
+			},
+			wantError: "unsupported training engine",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requests := 0
+			client, err := NewClient(ClientOptions{
+				ServerURL: "https://platform.invalid",
+				Token:     "test-token",
+				HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+					requests++
+					return nil, errors.New("unexpected request")
+				})},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			spec := testJobSpec()
+			spec.Source = domain.CodeSource{Type: "workspace-archive", ArtifactID: "artifact-ready"}
+			spec.TrainingEngine = domain.TrainingEngineRayTrain
+			spec.Managed.MaxFailures = 2
+			test.mutate(&spec)
+			original := spec
+
+			_, err = client.Submit(context.Background(), spec)
+			if requests != 0 {
+				t.Fatalf("invalid managed submit made %d HTTP requests", requests)
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("expected local validation error containing %q, got %v", test.wantError, err)
+			}
+			if !reflect.DeepEqual(spec, original) {
+				t.Fatalf("submit mutated the caller's spec: before=%+v after=%+v", original, spec)
+			}
+		})
+	}
+}
+
 func TestSubmitRejectsInvalidFinalSpecBeforeCreateAPI(t *testing.T) {
 	tests := []struct {
 		name      string

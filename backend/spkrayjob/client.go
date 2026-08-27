@@ -218,6 +218,9 @@ func (client *Client) LoginCheck(ctx context.Context) (json.RawMessage, error) {
 }
 
 func (client *Client) SubmitDirectory(ctx context.Context, directory string, spec domain.JobSpec) (Job, error) {
+	if err := validateArchiveJobSpec(spec); err != nil {
+		return Job{}, err
+	}
 	resolved, err := client.preflightManagedImage(ctx, spec)
 	if err != nil {
 		return Job{}, err
@@ -355,6 +358,9 @@ func (client *Client) CompleteArtifact(ctx context.Context, artifactID string) (
 }
 
 func (client *Client) Submit(ctx context.Context, spec domain.JobSpec) (Job, error) {
+	if err := validateFinalJobSpec(spec); err != nil {
+		return Job{}, err
+	}
 	resolved, err := client.preflightManagedImage(ctx, spec)
 	if err != nil {
 		return Job{}, err
