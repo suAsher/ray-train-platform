@@ -35,6 +35,23 @@ func TestMigrationVersionsEmbedded(t *testing.T) {
 	}
 }
 
+func TestImageRuntimeCompatibilityMigrationEnforcesUniqueSupportedEngines(t *testing.T) {
+	contents, err := migrationFiles.ReadFile("migrations/0021_image_runtime_compatibility.up.sql")
+	if err != nil {
+		t.Fatalf("read image runtime compatibility migration: %v", err)
+	}
+
+	sql := strings.Join(strings.Fields(string(contents)), " ")
+	uniqueEngineCount := strings.Join(strings.Fields(`
+jsonb_array_length(supported_engines) =
+  (CASE WHEN supported_engines @> '["ray-ddp"]'::jsonb THEN 1 ELSE 0 END) +
+  (CASE WHEN supported_engines @> '["ray-train"]'::jsonb THEN 1 ELSE 0 END)
+`), " ")
+	if !strings.Contains(sql, uniqueEngineCount) {
+		t.Fatalf("migration 21 does not enforce unique supported engines; missing %q", uniqueEngineCount)
+	}
+}
+
 func TestSubmissionGatewayMigrationEnforcesIsolationAndBounds(t *testing.T) {
 	contents, err := migrationFiles.ReadFile("migrations/0002_submission_gateway.up.sql")
 	if err != nil {

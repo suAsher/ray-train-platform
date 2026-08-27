@@ -174,6 +174,41 @@ FROM platform_images WHERE id = 'image-default-compatibility'`).Scan(&defaultCom
 		t.Errorf("platform image defaults = %+v, want Ray 2.35.0/ray-ddp", defaultCompatibility)
 	}
 
+	invalidCompatibilityRows := []struct {
+		name             string
+		id               string
+		rayVersion       string
+		supportedEngines string
+	}{
+		{name: "duplicate ray-ddp", id: "image-duplicate-ddp", rayVersion: "2.56.1", supportedEngines: `["ray-ddp","ray-ddp"]`},
+		{name: "duplicate ray-train", id: "image-duplicate-train", rayVersion: "2.56.1", supportedEngines: `["ray-train","ray-train"]`},
+		{name: "mixed duplicate", id: "image-mixed-duplicate", rayVersion: "2.56.1", supportedEngines: `["ray-ddp","ray-train","ray-ddp"]`},
+		{name: "unknown engine", id: "image-unknown-engine", rayVersion: "2.56.1", supportedEngines: `["unknown"]`},
+		{name: "empty engines", id: "image-empty-engines", rayVersion: "2.56.1", supportedEngines: `[]`},
+		{name: "legacy ray-train", id: "image-legacy-train", rayVersion: "2.35.0", supportedEngines: `["ray-train"]`},
+	}
+	for _, test := range invalidCompatibilityRows {
+		t.Run("rejects "+test.name, func(t *testing.T) {
+			// Keep every constraint probe outside a surrounding transaction. A
+			// rejected statement must not poison the following PostgreSQL checks.
+			err := database.Exec(`
+INSERT INTO platform_images(id, name, reference, kind, ray_version, supported_engines)
+VALUES (?, ?, ?, 'training', ?, CAST(? AS JSONB))`,
+				test.id, test.name, "registry.example/runtime:"+test.id, test.rayVersion, test.supportedEngines,
+			).Error
+			if err == nil {
+				t.Fatalf("platform image compatibility constraint accepted %s", test.supportedEngines)
+			}
+		})
+	}
+
+	if err := database.Exec(`
+INSERT INTO platform_images(id, name, reference, kind, ray_version, supported_engines)
+VALUES ('image-valid-mixed-engines', 'Valid mixed engines', 'registry.example/runtime:valid-mixed',
+        'training', '2.56.1', '["ray-ddp","ray-train"]'::jsonb)`).Error; err != nil {
+		t.Fatalf("valid Ray 2.56.1 mixed-engine image was rejected: %v", err)
+	}
+
 	for _, index := range []string{"training_jobs_engine_state_idx", "training_jobs_parent_idx"} {
 		var count int64
 		if err := database.Raw("SELECT COUNT(*) FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'training_jobs' AND indexname = ?", index).Scan(&count).Error; err != nil {

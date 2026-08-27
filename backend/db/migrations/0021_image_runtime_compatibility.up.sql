@@ -14,6 +14,9 @@ ALTER TABLE platform_images
       jsonb_typeof(supported_engines) = 'array'
       AND jsonb_array_length(supported_engines) > 0
       AND supported_engines <@ '["ray-ddp", "ray-train"]'::jsonb
+      AND jsonb_array_length(supported_engines) =
+        (CASE WHEN supported_engines @> '["ray-ddp"]'::jsonb THEN 1 ELSE 0 END) +
+        (CASE WHEN supported_engines @> '["ray-train"]'::jsonb THEN 1 ELSE 0 END)
     ),
   ADD CONSTRAINT platform_images_engine_ray_version_check
     CHECK (ray_version <> '2.35.0' OR NOT supported_engines @> '["ray-train"]'::jsonb);
