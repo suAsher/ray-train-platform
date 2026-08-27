@@ -17,8 +17,10 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from raytrain_runtime.reporting import (  # noqa: E402
+    RETENTION_INDEX_NAME,
     finalize_checkpoint,
     report_metrics,
+    retain_checkpoints,
     sanitize_metrics,
     validate_checkpoint,
 )
@@ -115,6 +117,13 @@ class CheckpointIntegrityTest(unittest.TestCase):
         self.assertFalse((self.root / "manifest.json").exists())
         self.assertEqual(list(self.root.glob(".manifest.*.tmp")), [])
 
+    def test_rejects_non_finite_manifest_metadata_without_publishing(self):
+        with self.assertRaisesRegex(ValueError, "JSON compliant"):
+            finalize_checkpoint(self.root, {"epoch": 1, "score": math.nan})
+
+        self.assertFalse((self.root / "manifest.json").exists())
+        self.assertEqual(list(self.root.glob(".manifest.*.tmp")), [])
+
     def test_rejects_incomplete_manifest(self):
         (self.root / "manifest.json").write_text(
             json.dumps({"complete": False, "metadata": {}, "files": []}),
@@ -185,6 +194,145 @@ class ReportMetricsTest(unittest.TestCase):
             report_metrics({"loss": 1}, self.checkpoint, world_rank=0, train_api=train)
 
         self.assertEqual(train.reports, [])
+
+
+class CheckpointRetentionTest(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name) / "checkpoints"
+        self.root.mkdir()
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def _checkpoint(self, epoch, score=None, *, complete=True):
+        checkpoint = self.root / f"checkpoint-epoch-{epoch:06d}-step-{epoch * 10:012d}"
+        checkpoint.mkdir()
+        (checkpoint / "training_state.pth").write_bytes(f"state-{epoch}".encode())
+        metadata = {"epoch": epoch, "step": epoch * 10}
+        if score is not None:
+            metadata.update({"score": score, "score_metric": "mAP"})
+        if complete:
+            finalize_checkpoint(checkpoint, metadata)
+        return checkpoint
+
+    def _retained_names(self):
+        index = json.loads((self.root / RETENTION_INDEX_NAME).read_text(encoding="utf-8"))
+        self.assertTrue(index["complete"])
+        return [item["path"] for item in index["checkpoints"]]
+
+    def test_preserves_union_of_latest_and_best_max(self):
+        first = self._checkpoint(1, 0.9)
+        second = self._checkpoint(2, 0.2)
+        third = self._checkpoint(3, 0.3)
+        current = self._checkpoint(4, 0.4)
+
+        retained = retain_checkpoints(
+            self.root,
+            current,
+            keep_latest=2,
+            keep_best=1,
+            best_mode="max",
+        )
+
+        self.assertEqual(
+            {item["path"] for item in retained["checkpoints"]},
+            {first.name, third.name, current.name},
+        )
+        self.assertFalse(second.exists())
+        self.assertEqual(
+            set(self._retained_names()),
+            {first.name, third.name, current.name},
+        )
+
+    def test_min_mode_and_score_ties_are_deterministic(self):
+        oldest = self._checkpoint(1, 0.1)
+        middle = self._checkpoint(2, 0.1)
+        newest = self._checkpoint(3, 0.1)
+
+        retained = retain_checkpoints(
+            self.root,
+            newest,
+            keep_latest=0,
+            keep_best=2,
+            best_mode="min",
+        )
+
+        self.assertEqual(
+            [item["path"] for item in retained["checkpoints"]],
+            [middle.name, newest.name],
+        )
+        self.assertFalse(oldest.exists())
+
+    def test_missing_score_can_be_latest_but_not_best(self):
+        best = self._checkpoint(1, 0.8)
+        scored_latest = self._checkpoint(2, 0.4)
+        current = self._checkpoint(3)
+
+        retained = retain_checkpoints(
+            self.root,
+            current,
+            keep_latest=2,
+            keep_best=1,
+            best_mode="max",
+        )
+
+        self.assertEqual(
+            {item["path"] for item in retained["checkpoints"]},
+            {best.name, scored_latest.name, current.name},
+        )
+
+    def test_zero_policy_removes_only_complete_accepted_checkpoints(self):
+        current = self._checkpoint(1, 0.5)
+        incomplete = self._checkpoint(2, complete=False)
+
+        retained = retain_checkpoints(
+            self.root,
+            current,
+            keep_latest=0,
+            keep_best=0,
+            best_mode="max",
+        )
+
+        self.assertEqual(retained["checkpoints"], [])
+        self.assertFalse(current.exists())
+        self.assertTrue(incomplete.exists())
+
+    def test_atomic_index_failure_does_not_prune_any_checkpoint(self):
+        old = self._checkpoint(1, 0.1)
+        current = self._checkpoint(2, 0.2)
+
+        with mock.patch("raytrain_runtime.reporting.os.replace", side_effect=OSError("disk full")):
+            with self.assertRaisesRegex(OSError, "disk full"):
+                retain_checkpoints(
+                    self.root,
+                    current,
+                    keep_latest=1,
+                    keep_best=0,
+                    best_mode="max",
+                )
+
+        self.assertTrue(old.exists())
+        self.assertTrue(current.exists())
+        self.assertFalse((self.root / RETENTION_INDEX_NAME).exists())
+
+    def test_policy_can_be_enforced_after_metrics_only_report_without_current(self):
+        old = self._checkpoint(1, 0.1)
+        newest = self._checkpoint(2, 0.2)
+
+        retained = retain_checkpoints(
+            self.root,
+            None,
+            keep_latest=1,
+            keep_best=0,
+            best_mode="max",
+        )
+
+        self.assertEqual(
+            [item["path"] for item in retained["checkpoints"]], [newest.name]
+        )
+        self.assertFalse(old.exists())
+        self.assertTrue(newest.exists())
 
     def test_rejects_non_finite_metric_before_reporting(self):
         train = _FakeTrain()

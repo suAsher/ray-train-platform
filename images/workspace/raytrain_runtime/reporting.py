@@ -10,12 +10,15 @@ import numbers
 import os
 from pathlib import Path, PurePosixPath
 from collections.abc import Mapping
+import shutil
 from typing import Any
 import uuid
 
 
 MANIFEST_NAME = "manifest.json"
 MANIFEST_VERSION = 1
+RETENTION_INDEX_NAME = "retention-index.json"
+RETENTION_INDEX_VERSION = 1
 
 
 def _scalar(value: Any) -> float | None:
@@ -106,10 +109,17 @@ def _checkpoint_files(root: Path) -> list[dict[str, Any]]:
 
 
 def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
-    encoded = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode(
-        "utf-8"
-    )
-    temporary = path.with_name(f".manifest.{uuid.uuid4().hex}.tmp")
+    encoded = (
+        json.dumps(
+            payload,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode("utf-8")
+    temporary_prefix = ".manifest" if path.name == MANIFEST_NAME else f".{path.name}"
+    temporary = path.with_name(f"{temporary_prefix}.{uuid.uuid4().hex}.tmp")
     try:
         with temporary.open("xb") as stream:
             stream.write(encoded)
@@ -195,6 +205,131 @@ def validate_checkpoint(checkpoint_dir: str | os.PathLike[str]) -> dict[str, Any
     if actual_paths != expected_paths:
         raise ValueError("checkpoint integrity failure: manifest file set differs")
     return copy.deepcopy(manifest)
+
+
+def _retention_record(path: Path, manifest: Mapping[str, Any]) -> dict[str, Any]:
+    metadata = manifest.get("metadata")
+    if not isinstance(metadata, Mapping):
+        raise ValueError("checkpoint manifest metadata is invalid")
+    epoch = metadata.get("epoch")
+    step = metadata.get("step")
+    if isinstance(epoch, bool) or not isinstance(epoch, numbers.Integral):
+        raise ValueError("checkpoint epoch must be an integer")
+    if isinstance(step, bool) or not isinstance(step, numbers.Integral):
+        raise ValueError("checkpoint step must be an integer")
+    score = None
+    if metadata.get("score") is not None:
+        score = _scalar(metadata.get("score"))
+        if score is None:
+            raise ValueError("checkpoint score must be a finite scalar")
+    return {
+        "path": path.name,
+        "epoch": int(epoch),
+        "step": int(step),
+        "score": score,
+        "score_metric": str(metadata.get("score_metric", "")),
+    }
+
+
+def _complete_checkpoint_records(root: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for candidate in sorted(root.iterdir(), key=lambda item: item.name):
+        if candidate.is_symlink() or not candidate.is_dir():
+            continue
+        try:
+            manifest = validate_checkpoint(candidate)
+        except ValueError:
+            # Incomplete or corrupt directories are never retention deletion targets.
+            continue
+        records.append(_retention_record(candidate, manifest))
+    return records
+
+
+def retain_checkpoints(
+    checkpoint_root: str | os.PathLike[str],
+    current_checkpoint: str | os.PathLike[str] | None,
+    *,
+    keep_latest: int,
+    keep_best: int,
+    best_mode: str,
+) -> dict[str, Any]:
+    """Atomically publish and enforce the union of latest-N and best-M.
+
+    This function must be called only after Ray has accepted ``current_checkpoint``
+    (when one is present), or after a metrics-only report has succeeded.
+    Only complete, integrity-checked direct children are eligible for deletion;
+    incomplete or corrupt directories are left untouched for diagnosis.
+    """
+
+    latest_count = int(keep_latest)
+    best_count = int(keep_best)
+    if latest_count < 0 or best_count < 0:
+        raise ValueError("checkpoint retention must be non-negative")
+    if best_mode not in ("min", "max"):
+        raise ValueError("best_mode must be min or max")
+
+    root = Path(checkpoint_root)
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("checkpoint root must be a real directory")
+    resolved_root = root.resolve(strict=True)
+    if current_checkpoint is not None:
+        current = Path(current_checkpoint)
+        if current.is_symlink() or not current.is_dir():
+            raise ValueError("current checkpoint must be a real directory")
+        try:
+            resolved_current = current.resolve(strict=True)
+            resolved_current.relative_to(resolved_root)
+        except ValueError as exc:
+            raise ValueError("current checkpoint must be below checkpoint root") from exc
+        if resolved_current.parent != resolved_root:
+            raise ValueError("current checkpoint must be a direct child of checkpoint root")
+        validate_checkpoint(current)
+
+    records = _complete_checkpoint_records(root)
+    newest_first = sorted(
+        records,
+        key=lambda item: (item["epoch"], item["step"], item["path"]),
+        reverse=True,
+    )
+    selected_paths = {
+        item["path"] for item in newest_first[:latest_count]
+    }
+    scored = [item for item in newest_first if item["score"] is not None]
+    scored.sort(
+        key=lambda item: (
+            item["score"] if best_mode == "min" else -item["score"],
+            -item["epoch"],
+            -item["step"],
+            item["path"],
+        )
+    )
+    selected_paths.update(item["path"] for item in scored[:best_count])
+    retained = sorted(
+        (item for item in records if item["path"] in selected_paths),
+        key=lambda item: (item["epoch"], item["step"], item["path"]),
+    )
+    index = {
+        "version": RETENTION_INDEX_VERSION,
+        "complete": True,
+        "policy": {
+            "keep_latest": latest_count,
+            "keep_best": best_count,
+            "best_mode": best_mode,
+        },
+        "checkpoints": retained,
+    }
+
+    # Publish the new source of truth first. A failed atomic replace cannot prune.
+    _atomic_json(root / RETENTION_INDEX_NAME, index)
+    for record in records:
+        if record["path"] in selected_paths:
+            continue
+        candidate = root / record["path"]
+        if candidate.resolve(strict=True).parent != resolved_root:
+            raise ValueError("checkpoint retention target escaped checkpoint root")
+        validate_checkpoint(candidate)
+        shutil.rmtree(candidate)
+    return copy.deepcopy(index)
 
 
 def _load_train_api() -> Any:

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import dataclasses
+from contextlib import contextmanager
 import os
 import pathlib
 import sys
+import tempfile
 import types
 import unittest
 from unittest import mock
@@ -14,6 +16,8 @@ if str(RUNTIME_PARENT) not in sys.path:
     sys.path.insert(0, str(RUNTIME_PARENT))
 
 from raytrain_runtime.entrypoint import PythonEntrypoint  # noqa: E402
+from raytrain_runtime.reporting import finalize_checkpoint  # noqa: E402
+import raytrain_runtime.managed_driver as managed_driver  # noqa: E402
 from raytrain_runtime.managed_driver import (  # noqa: E402
     DriverConfig,
     _train_loop,
@@ -54,6 +58,8 @@ MANAGED_ENVIRONMENT_KEYS = (
     "RAYTRAIN_CHECKPOINT_KEEP_BEST",
     "RAYTRAIN_CHECKPOINT_BEST_METRIC",
     "RAYTRAIN_CHECKPOINT_BEST_MODE",
+    "RAYTRAIN_CHECKPOINT_OUTPUT_PATH",
+    "RAYTRAIN_RESUME_CHECKPOINT_PATH",
     "PLATFORM_CHECKPOINT_PATH",
 )
 
@@ -271,8 +277,8 @@ class TrainerFactoryTest(unittest.TestCase):
         self.assertEqual(run["storage_path"], config.storage_path)
         self.assertEqual(run["failure_config"].kwargs["max_failures"], 2)
         checkpoint = run["checkpoint_config"].kwargs
-        self.assertEqual(checkpoint["num_to_keep"], 6)
-        self.assertEqual(checkpoint["checkpoint_score_attribute"], "val/nds")
+        self.assertIsNone(checkpoint["num_to_keep"])
+        self.assertIsNone(checkpoint["checkpoint_score_attribute"])
         self.assertEqual(checkpoint["checkpoint_score_order"], "max")
 
         loop = trainer.kwargs["train_loop_config"]
@@ -315,7 +321,11 @@ class TrainLoopEnvironmentTest(unittest.TestCase):
         def capture(_entrypoint):
             observed.update({key: os.environ.get(key) for key in MANAGED_ENVIRONMENT_KEYS})
 
-        with mock.patch.dict(os.environ, {}, clear=True):
+        with mock.patch.dict(
+            os.environ,
+            {"PLATFORM_CHECKPOINT_PATH": "/mnt/data/resume/checkpoint-7"},
+            clear=True,
+        ):
             with mock.patch("raytrain_runtime.managed_driver.execute", side_effect=capture):
                 _train_loop(loop_config())
 
@@ -327,17 +337,103 @@ class TrainLoopEnvironmentTest(unittest.TestCase):
                 "RAYTRAIN_CHECKPOINT_KEEP_BEST": "2",
                 "RAYTRAIN_CHECKPOINT_BEST_METRIC": "val/nds",
                 "RAYTRAIN_CHECKPOINT_BEST_MODE": "min",
-                "PLATFORM_CHECKPOINT_PATH": (
+                "RAYTRAIN_CHECKPOINT_OUTPUT_PATH": (
                     f"/mnt/data/output/.platform/ray-train/{JOB_ID}/checkpoints"
                 ),
+                "RAYTRAIN_RESUME_CHECKPOINT_PATH": None,
+                "PLATFORM_CHECKPOINT_PATH": "/mnt/data/resume/checkpoint-7",
             },
         )
+
+    def test_lazy_ray_checkpoint_is_handed_to_user_code_and_environment_is_restored(self):
+        observed = {}
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = pathlib.Path(temporary) / "checkpoint"
+            checkpoint.mkdir()
+            (checkpoint / "training_state.pth").write_bytes(b"state")
+            finalize_checkpoint(checkpoint, {"epoch": 1, "step": 10})
+
+            class FakeCheckpoint:
+                @contextmanager
+                def as_directory(self):
+                    yield str(checkpoint)
+
+            original = {
+                "PLATFORM_CHECKPOINT_PATH": "/mnt/data/resume/backend-input",
+                "RAYTRAIN_RESUME_CHECKPOINT_PATH": "/before/ray-resume",
+            }
+
+            def capture(_entrypoint):
+                observed.update(
+                    {key: os.environ.get(key) for key in MANAGED_ENVIRONMENT_KEYS}
+                )
+
+            with mock.patch.dict(os.environ, original, clear=True):
+                with mock.patch.object(
+                    managed_driver,
+                    "_load_resume_checkpoint",
+                    return_value=FakeCheckpoint(),
+                    create=True,
+                ):
+                    with mock.patch(
+                        "raytrain_runtime.managed_driver.execute", side_effect=capture
+                    ):
+                        _train_loop(loop_config())
+                self.assertEqual(dict(os.environ), original)
+
+        self.assertEqual(
+            observed["RAYTRAIN_RESUME_CHECKPOINT_PATH"], str(checkpoint.resolve())
+        )
+        self.assertEqual(
+            observed["PLATFORM_CHECKPOINT_PATH"],
+            "/mnt/data/resume/backend-input",
+        )
+
+    def test_invalid_ray_checkpoint_fails_before_user_code_runs(self):
+        execute = mock.Mock()
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = pathlib.Path(temporary) / "incomplete"
+            checkpoint.mkdir()
+            (checkpoint / "partial.pth").write_bytes(b"partial")
+
+            class FakeCheckpoint:
+                @contextmanager
+                def as_directory(self):
+                    yield str(checkpoint)
+
+            with mock.patch.object(
+                managed_driver,
+                "_load_resume_checkpoint",
+                return_value=FakeCheckpoint(),
+                create=True,
+            ):
+                with mock.patch(
+                    "raytrain_runtime.managed_driver.execute", execute
+                ):
+                    with self.assertRaisesRegex(ValueError, "complete manifest"):
+                        _train_loop(loop_config())
+
+        execute.assert_not_called()
+
+    def test_resume_checkpoint_loader_imports_ray_only_when_called(self):
+        sentinel = object()
+        fake_train = types.ModuleType("ray.train")
+        fake_train.get_checkpoint = lambda: sentinel
+        fake_ray = types.ModuleType("ray")
+        fake_ray.train = fake_train
+
+        with mock.patch.dict(
+            sys.modules, {"ray": fake_ray, "ray.train": fake_train}
+        ):
+            loaded = managed_driver._load_resume_checkpoint()
+
+        self.assertIs(loaded, sentinel)
 
     def test_checkpoint_paths_are_scoped_by_job_storage(self):
         observed = []
 
         def capture(_entrypoint):
-            observed.append(os.environ["PLATFORM_CHECKPOINT_PATH"])
+            observed.append(os.environ["RAYTRAIN_CHECKPOINT_OUTPUT_PATH"])
 
         with mock.patch("raytrain_runtime.managed_driver.execute", side_effect=capture):
             _train_loop(loop_config("job-aaaaaaaaaaaaaaaaaaaaaaaa"))
@@ -354,7 +450,8 @@ class TrainLoopEnvironmentTest(unittest.TestCase):
     def test_restores_overwritten_and_new_environment_after_success(self):
         original = {
             "RAYTRAIN_CHECKPOINT_KEEP_LATEST": "original",
-            "PLATFORM_CHECKPOINT_PATH": "/before/checkpoints",
+            "RAYTRAIN_CHECKPOINT_OUTPUT_PATH": "/before/output-checkpoints",
+            "PLATFORM_CHECKPOINT_PATH": "/before/resume-checkpoint",
             "UNRELATED": "preserved",
         }
         with mock.patch.dict(os.environ, original, clear=True):

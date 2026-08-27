@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .entrypoint import PythonEntrypoint, execute, parse_python_entrypoint
+from .reporting import validate_checkpoint
 
 
 _STABLE_OUTPUT_ROOT = pathlib.Path("/mnt/data/output")
@@ -187,13 +188,17 @@ def _load_ray_components() -> _RayComponents:
 
 
 @contextlib.contextmanager
-def _temporary_environment(values: Mapping[str, str]):
+def _temporary_environment(values: Mapping[str, str | None]):
     """Apply worker-scoped environment values and restore the exact prior state."""
 
     previous = {name: os.environ.get(name) for name in values}
     existed = {name for name in values if name in os.environ}
     try:
-        os.environ.update(dict(values))
+        for name, value in values.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
         yield
     finally:
         for name, value in previous.items():
@@ -203,7 +208,7 @@ def _temporary_environment(values: Mapping[str, str]):
                 os.environ.pop(name, None)
 
 
-def _train_loop_environment(loop_config: Mapping[str, Any]) -> dict[str, str]:
+def _train_loop_environment(loop_config: Mapping[str, Any]) -> dict[str, str | None]:
     storage_path = _validated_managed_storage(
         pathlib.Path(str(loop_config["storage_path"])),
         _resolved(_STABLE_OUTPUT_ROOT),
@@ -216,8 +221,36 @@ def _train_loop_environment(loop_config: Mapping[str, Any]) -> dict[str, str]:
         "RAYTRAIN_CHECKPOINT_KEEP_BEST": str(int(loop_config["keep_best"])),
         "RAYTRAIN_CHECKPOINT_BEST_METRIC": str(loop_config["best_metric"]),
         "RAYTRAIN_CHECKPOINT_BEST_MODE": str(loop_config["best_mode"]),
-        "PLATFORM_CHECKPOINT_PATH": str(pathlib.Path(storage_path) / "checkpoints"),
+        "RAYTRAIN_CHECKPOINT_OUTPUT_PATH": str(
+            pathlib.Path(storage_path) / "checkpoints"
+        ),
+        "RAYTRAIN_RESUME_CHECKPOINT_PATH": None,
     }
+
+
+def _load_resume_checkpoint() -> Any | None:
+    """Load Ray's worker checkpoint lazily so this module remains importable alone."""
+
+    try:
+        from ray import train
+    except ImportError:
+        return None
+    return train.get_checkpoint()
+
+
+@contextlib.contextmanager
+def _resume_checkpoint_environment():
+    checkpoint = _load_resume_checkpoint()
+    if checkpoint is None:
+        yield {"RAYTRAIN_RESUME_CHECKPOINT_PATH": None}
+        return
+    as_directory = getattr(checkpoint, "as_directory", None)
+    if not callable(as_directory):
+        raise ValueError("Ray resume checkpoint cannot be opened as a directory")
+    with as_directory() as checkpoint_directory:
+        checkpoint_path = pathlib.Path(str(checkpoint_directory)).resolve(strict=True)
+        validate_checkpoint(checkpoint_path)
+        yield {"RAYTRAIN_RESUME_CHECKPOINT_PATH": str(checkpoint_path)}
 
 
 def _train_loop(loop_config: Mapping[str, Any]) -> None:
@@ -227,8 +260,10 @@ def _train_loop(loop_config: Mapping[str, Any]) -> None:
         target=str(payload["target"]),
         argv=tuple(str(value) for value in payload["argv"]),
     )
-    with _temporary_environment(_train_loop_environment(loop_config)):
-        execute(entrypoint)
+    with _resume_checkpoint_environment() as resume_environment:
+        environment = {**_train_loop_environment(loop_config), **resume_environment}
+        with _temporary_environment(environment):
+            execute(entrypoint)
 
 
 def build_trainer(config: DriverConfig, *, ray_components: Any | None = None) -> Any:
@@ -241,8 +276,6 @@ def build_trainer(config: DriverConfig, *, ray_components: Any | None = None) ->
     ray_api = ray_components if ray_components is not None else _load_ray_components()
     workers = config.nodes * config.gpus_per_node
     cpus_per_worker = max(1, config.cpus_per_node // config.gpus_per_node)
-    retained_checkpoints = config.keep_latest + config.keep_best
-    score_attribute = config.best_metric if config.keep_best and config.best_metric else None
     loop_config = {
         "entrypoint": dataclasses.asdict(config.entrypoint),
         "checkpoint_every_epochs": config.checkpoint_every_epochs,
@@ -268,8 +301,8 @@ def build_trainer(config: DriverConfig, *, ray_components: Any | None = None) ->
             storage_path=storage_path,
             failure_config=ray_api.FailureConfig(max_failures=config.max_failures),
             checkpoint_config=ray_api.CheckpointConfig(
-                num_to_keep=retained_checkpoints or None,
-                checkpoint_score_attribute=score_attribute,
+                num_to_keep=None,
+                checkpoint_score_attribute=None,
                 checkpoint_score_order=config.best_mode,
             ),
         ),
