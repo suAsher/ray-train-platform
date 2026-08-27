@@ -1,0 +1,81 @@
+"""Idempotent BEVFusion adaptation for the managed Ray Train engine."""
+
+from __future__ import annotations
+
+
+MANAGED_HOOK_HELPER = '''def configure_ray_train_managed_hook(cfg):
+    """Enable the image-provided MMCV adapter only for managed Ray Train."""
+    if os.environ.get("PLATFORM_TRAINING_ENGINE") != "ray-train":
+        return cfg
+
+    from raytrain_runtime.mmcv_hook import build_hook_config
+
+    interval = int(cfg.log_config.get("interval", 10))
+    policy = {
+        **build_hook_config(
+            interval=interval,
+            checkpoint_every_epochs=int(
+                os.environ.get("RAYTRAIN_CHECKPOINT_EVERY_EPOCHS", "1")
+            ),
+            keep_latest=int(os.environ.get("RAYTRAIN_CHECKPOINT_KEEP_LATEST", "3")),
+            keep_best=int(os.environ.get("RAYTRAIN_CHECKPOINT_KEEP_BEST", "1")),
+            best_metric=os.environ.get("RAYTRAIN_CHECKPOINT_BEST_METRIC", ""),
+            best_mode=os.environ.get("RAYTRAIN_CHECKPOINT_BEST_MODE", "max"),
+        ),
+        # Evaluation hooks publish mAP/NDS at epoch end. Run after them so the
+        # configured best metric is stable before a checkpoint is reported.
+        "priority": "VERY_LOW",
+    }
+    existing = [
+        dict(hook)
+        for hook in cfg.get("custom_hooks", [])
+        if hook.get("type") != "RayTrainManagedHook"
+    ]
+    cfg.custom_hooks = [*existing, policy]
+    return cfg
+
+
+'''
+
+
+def _replace_once(source: str, old: str, new: str, label: str) -> str:
+    count = source.count(old)
+    if count != 1:
+        raise ValueError(
+            f"unexpected westwell_train.py layout for {label}: "
+            f"expected one match, found {count}"
+        )
+    return source.replace(old, new, 1)
+
+
+def patch_managed_training_entrypoint(source: str) -> str:
+    """Add one custom Hook and avoid a duplicate distributed process group."""
+
+    helper_present = "def configure_ray_train_managed_hook(cfg):" in source
+    guarded = "if distributed and not torch.distributed.is_initialized():" in source
+    if helper_present and guarded:
+        return source
+    if helper_present != guarded:
+        raise ValueError("partially applied managed Ray Train patch")
+
+    patched = _replace_once(
+        source,
+        "def main():\n",
+        MANAGED_HOOK_HELPER + "def main():\n",
+        "managed hook insertion",
+    )
+    patched = _replace_once(
+        patched,
+        "    cfg = Config(recursive_eval(configs), filename=args.config)\n",
+        "    cfg = Config(recursive_eval(configs), filename=args.config)\n"
+        "    cfg = configure_ray_train_managed_hook(cfg)\n",
+        "managed hook configuration",
+    )
+    patched = _replace_once(
+        patched,
+        "    if distributed:\n        init_dist(args.launcher, **cfg.dist_params)\n",
+        "    if distributed and not torch.distributed.is_initialized():\n"
+        "        init_dist(args.launcher, **cfg.dist_params)\n",
+        "distributed initialization",
+    )
+    return patched
