@@ -52,6 +52,40 @@ jsonb_array_length(supported_engines) =
 	}
 }
 
+func TestTrainingCheckpointMigrationEnforcesManagedEventContracts(t *testing.T) {
+	contents, err := migrationFiles.ReadFile("migrations/0022_training_checkpoints.up.sql")
+	if err != nil {
+		t.Fatalf("read training checkpoint migration: %v", err)
+	}
+
+	sql := strings.Join(strings.Fields(string(contents)), " ")
+	required := []string{
+		"PRIMARY KEY (job_id, id)",
+		"token_sha256 ~ '^[0-9a-f]{64}$'",
+		"event_type IN ('WORKER_GROUP_STARTED', 'CHECKPOINT_COMPLETE', 'TRAINING_PROGRESS')",
+		"last_generation BETWEEN 0 AND 1000000000000",
+		"last_epoch BETWEEN 0 AND 1000000000000",
+		"last_step BETWEEN 0 AND 1000000000000",
+		"rate_count BETWEEN 0 AND 120",
+		"generation BETWEEN 0 AND 1000000000000",
+		"epoch BETWEEN 0 AND 1000000000000",
+		"step BETWEEN 0 AND 1000000000000",
+		"complete = FALSE OR manifest_sha256 ~ '^[0-9a-f]{64}$'",
+		"WHERE complete = TRUE",
+	}
+	for _, fragment := range required {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("migration 22 missing %q", fragment)
+		}
+	}
+	if strings.Contains(string(contents), "\n  id TEXT PRIMARY KEY,") {
+		t.Error("migration 22 scopes checkpoint identity globally instead of by job")
+	}
+	if strings.Count(sql, "event_type IN (") != 1 {
+		t.Error("migration 22 event allowlist is missing or ambiguous")
+	}
+}
+
 func TestSubmissionGatewayMigrationEnforcesIsolationAndBounds(t *testing.T) {
 	contents, err := migrationFiles.ReadFile("migrations/0002_submission_gateway.up.sql")
 	if err != nil {

@@ -4,8 +4,8 @@ SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
 
 CREATE TABLE IF NOT EXISTS training_checkpoints (
-  id TEXT PRIMARY KEY,
   job_id TEXT NOT NULL REFERENCES training_jobs(id) ON DELETE CASCADE,
+  id TEXT NOT NULL,
   tenant_id TEXT NOT NULL,
   user_id TEXT NOT NULL,
   epoch BIGINT NOT NULL DEFAULT 0,
@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS training_checkpoints (
   is_best BOOLEAN NOT NULL DEFAULT FALSE,
   manifest_sha256 TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (job_id, id),
   CONSTRAINT training_checkpoints_id_check CHECK (id ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'),
   CONSTRAINT training_checkpoints_owner_check CHECK (tenant_id <> '' AND user_id <> ''),
   CONSTRAINT training_checkpoints_progress_check CHECK (epoch BETWEEN 0 AND 1000000000000 AND step BETWEEN 0 AND 1000000000000),

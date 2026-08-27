@@ -64,14 +64,14 @@ func TestRecordTrainingEventRejectsAnotherJobsToken(t *testing.T) {
 	}
 }
 
-func TestRecordTrainingEventIsIdempotentAndCountsOnlyNewWorkerGeneration(t *testing.T) {
+func TestRecordTrainingEventTreatsFirstWorkerGenerationAsInitialObservation(t *testing.T) {
 	repository, job := managedCheckpointRepository(t)
 	token := randomJobToken(t)
 	now := time.Now().UTC()
 	if err := repository.EnsureTrainingEventToken(context.Background(), job.ID, token, now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	event := domain.TrainingEvent{ID: "worker-generation-2", Type: domain.TrainingEventWorkerGroupStarted, Generation: 2}
+	event := domain.TrainingEvent{ID: "worker-generation-1", Type: domain.TrainingEventWorkerGroupStarted, Generation: 1}
 	first, err := repository.RecordTrainingEvent(context.Background(), job.ID, token, event, now)
 	if err != nil {
 		t.Fatal(err)
@@ -80,21 +80,85 @@ func TestRecordTrainingEventIsIdempotentAndCountsOnlyNewWorkerGeneration(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.EventID != second.EventID || first.WorkerRestartCount != second.WorkerRestartCount || first.Replayed || !second.Replayed || first.WorkerRestartCount != 1 {
+	if first.EventID != second.EventID || first.WorkerRestartCount != second.WorkerRestartCount || first.Replayed || !second.Replayed || first.WorkerRestartCount != 0 {
 		t.Fatalf("replay changed result: first=%+v second=%+v", first, second)
 	}
 	stored, err := repository.GetByID(context.Background(), job.ID)
-	if err != nil || stored.WorkerRestartCount != 1 {
+	if err != nil || stored.WorkerRestartCount != 0 {
 		t.Fatalf("worker restart count=%d err=%v", stored.WorkerRestartCount, err)
 	}
 
-	_, err = repository.RecordTrainingEvent(context.Background(), job.ID, token, domain.TrainingEvent{ID: "same-generation", Type: domain.TrainingEventWorkerGroupStarted, Generation: 2}, now.Add(2*time.Second))
+	secondGeneration, err := repository.RecordTrainingEvent(context.Background(), job.ID, token, domain.TrainingEvent{ID: "worker-generation-2", Type: domain.TrainingEventWorkerGroupStarted, Generation: 2}, now.Add(2*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
+	if secondGeneration.WorkerRestartCount != 1 {
+		t.Fatalf("second generation restart count=%d, want 1", secondGeneration.WorkerRestartCount)
+	}
 	stored, _ = repository.GetByID(context.Background(), job.ID)
 	if stored.WorkerRestartCount != 1 {
-		t.Fatalf("same generation incremented restart count: %d", stored.WorkerRestartCount)
+		t.Fatalf("second generation did not increment restart count: %d", stored.WorkerRestartCount)
+	}
+}
+
+func TestRecordTrainingEventRejectsStaleGenerationForProgressAndCheckpoint(t *testing.T) {
+	repository, job := managedCheckpointRepository(t)
+	token := randomJobToken(t)
+	now := time.Now().UTC()
+	if err := repository.EnsureTrainingEventToken(context.Background(), job.ID, token, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.RecordTrainingEvent(context.Background(), job.ID, token, domain.TrainingEvent{
+		ID: "worker-generation-3", Type: domain.TrainingEventWorkerGroupStarted, Generation: 3,
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	progress := domain.TrainingEvent{ID: "stale-progress", Type: domain.TrainingEventProgress, Generation: 2, Epoch: 1, Step: 1}
+	if _, err := repository.RecordTrainingEvent(context.Background(), job.ID, token, progress, now.Add(time.Second)); !errors.Is(err, ErrTrainingEventInvalid) {
+		t.Fatalf("expected stale progress generation rejection, got %v", err)
+	}
+	checkpoint := &domain.TrainingCheckpoint{
+		ID: "stale-checkpoint", Epoch: 1, Step: 2,
+		ObjectPath:     "/mnt/data/output/.platform/ray-train/" + job.ID + "/checkpoints/stale",
+		ManifestSHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		Complete:       true,
+	}
+	checkpointEvent := domain.TrainingEvent{ID: "stale-checkpoint-event", Type: domain.TrainingEventCheckpointComplete, Generation: 2, Epoch: 1, Step: 2, Checkpoint: checkpoint}
+	if _, err := repository.RecordTrainingEvent(context.Background(), job.ID, token, checkpointEvent, now.Add(2*time.Second)); !errors.Is(err, ErrTrainingEventInvalid) {
+		t.Fatalf("expected stale checkpoint generation rejection, got %v", err)
+	}
+}
+
+func TestRecordTrainingEventReplayConsumesPerJobRateLimit(t *testing.T) {
+	repository, job := managedCheckpointRepository(t)
+	token := randomJobToken(t)
+	now := time.Now().UTC()
+	if err := repository.EnsureTrainingEventToken(context.Background(), job.ID, token, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	event := domain.TrainingEvent{ID: "replayed-progress", Type: domain.TrainingEventProgress, Generation: 1, Epoch: 1, Step: 1}
+	if _, err := repository.RecordTrainingEvent(context.Background(), job.ID, token, event, now); err != nil {
+		t.Fatal(err)
+	}
+	for replay := 1; replay < TrainingEventRateLimit; replay++ {
+		result, err := repository.RecordTrainingEvent(context.Background(), job.ID, token, event, now)
+		if err != nil {
+			t.Fatalf("replay %d unexpectedly rejected: %v", replay, err)
+		}
+		if !result.Replayed || result.EventID != event.ID {
+			t.Fatalf("replay %d changed idempotent result: %+v", replay, result)
+		}
+	}
+	if _, err := repository.RecordTrainingEvent(context.Background(), job.ID, token, event, now); !errors.Is(err, ErrTrainingEventRateLimited) {
+		t.Fatalf("expected replay rate limit, got %v", err)
+	}
+	var cursor TrainingJobEventTokenRecord
+	if err := repository.db.Where("job_id = ?", job.ID).First(&cursor).Error; err != nil {
+		t.Fatal(err)
+	}
+	if cursor.RateCount != TrainingEventRateLimit {
+		t.Fatalf("persisted replay rate count=%d, want %d", cursor.RateCount, TrainingEventRateLimit)
 	}
 }
 
@@ -124,6 +188,67 @@ func TestRecordCheckpointCompletePersistsTransactionallyAndListsOnlyUsableRows(t
 	}
 	if len(items) != 1 || items[0].ID != checkpoint.ID || !items[0].Complete {
 		t.Fatalf("unexpected usable checkpoints: %+v", items)
+	}
+}
+
+func TestRecordCheckpointIdentityIsScopedToJob(t *testing.T) {
+	repository, firstJob := managedCheckpointRepository(t)
+	secondJob := testJob()
+	secondJob.ID = "job-fedcba9876543210fedcba98"
+	secondJob.TenantID = "team-a"
+	secondJob.UserID = "user-b"
+	secondJob.Spec.Name = "second-managed-checkpoint-job"
+	secondJob.Spec.Queue = "team-a-gpu"
+	secondJob.Spec.TrainingEngine = domain.TrainingEngineRayTrain
+	secondJob.Spec.RayVersion = domain.RayVersionProduction
+	secondJob.Spec.ResolvedDataMounts.Output = &domain.ResolvedDataMount{
+		Space: domain.DataSpaceMyRuns, BindingSpace: domain.DataSpaceWorkspace,
+		ClaimName: "data-team-a", SubPath: "tenants/team-a/users/user-b/runs/managed",
+		MountPath: domain.DataMountOutputPath,
+	}
+	if err := repository.Create(context.Background(), &secondJob, "second-managed-checkpoint-job"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	firstToken := randomJobToken(t)
+	secondToken := randomJobToken(t)
+	if err := repository.EnsureTrainingEventToken(context.Background(), firstJob.ID, firstToken, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.EnsureTrainingEventToken(context.Background(), secondJob.ID, secondToken, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	const checkpointID = "checkpoint-shared-name"
+	for index, item := range []struct {
+		job   domain.TrainingJob
+		token []byte
+	}{
+		{job: firstJob, token: firstToken},
+		{job: secondJob, token: secondToken},
+	} {
+		checkpoint := &domain.TrainingCheckpoint{
+			ID: checkpointID, Epoch: 1, Step: 10,
+			ObjectPath:     "/mnt/data/output/.platform/ray-train/" + item.job.ID + "/checkpoints/shared",
+			ManifestSHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			Complete:       true,
+		}
+		event := domain.TrainingEvent{
+			ID: "checkpoint-event-" + item.job.ID, Type: domain.TrainingEventCheckpointComplete,
+			Generation: 1, Epoch: 1, Step: 10, Checkpoint: checkpoint,
+		}
+		if _, err := repository.RecordTrainingEvent(context.Background(), item.job.ID, item.token, event, now.Add(time.Duration(index)*time.Second)); err != nil {
+			t.Fatalf("persist checkpoint for job %s: %v", item.job.ID, err)
+		}
+	}
+	for _, job := range []domain.TrainingJob{firstJob, secondJob} {
+		items, err := repository.ListUsableCheckpoints(context.Background(), job.TenantID, job.UserID, job.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(items) != 1 || items[0].ID != checkpointID || items[0].JobID != job.ID {
+			t.Fatalf("job-scoped checkpoint lookup for %s returned %+v", job.ID, items)
+		}
 	}
 }
 

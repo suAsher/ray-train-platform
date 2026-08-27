@@ -26,8 +26,8 @@ var (
 )
 
 type TrainingCheckpointRecord struct {
+	JobID          string `gorm:"primaryKey;index"`
 	ID             string `gorm:"primaryKey"`
-	JobID          string `gorm:"index"`
 	TenantID       string `gorm:"index"`
 	UserID         string `gorm:"index"`
 	Epoch          int64
@@ -126,6 +126,13 @@ func (r *GormRepository) RecordTrainingEvent(ctx context.Context, jobID string, 
 			if unmarshalErr := json.Unmarshal([]byte(replay.ResultJSON), &result); unmarshalErr != nil {
 				return fmt.Errorf("decode replayed training event result: %w", unmarshalErr)
 			}
+			if err := consumeTrainingEventRate(&tokenRecord, now); err != nil {
+				return err
+			}
+			tokenRecord.UpdatedAt = now
+			if err := tx.Save(&tokenRecord).Error; err != nil {
+				return fmt.Errorf("persist replayed training event rate: %w", err)
+			}
 			result.Replayed = true
 			return nil
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -148,11 +155,15 @@ func (r *GormRepository) RecordTrainingEvent(ctx context.Context, jobID string, 
 
 		result = domain.TrainingEventResult{EventID: event.ID, WorkerRestartCount: job.WorkerRestartCount}
 		if event.Type == domain.TrainingEventWorkerGroupStarted && event.Generation > tokenRecord.LastGeneration {
-			job.WorkerRestartCount++
-			if err := tx.Model(&JobRecord{}).Where("id = ?", jobID).Update("worker_restart_count", job.WorkerRestartCount).Error; err != nil {
-				return fmt.Errorf("increment worker restart count: %w", err)
+			if tokenRecord.LastGeneration > 0 {
+				job.WorkerRestartCount++
+				if err := tx.Model(&JobRecord{}).Where("id = ?", jobID).Update("worker_restart_count", job.WorkerRestartCount).Error; err != nil {
+					return fmt.Errorf("increment worker restart count: %w", err)
+				}
 			}
 			result.WorkerRestartCount = job.WorkerRestartCount
+		}
+		if event.Generation > tokenRecord.LastGeneration {
 			tokenRecord.LastGeneration = event.Generation
 		}
 		if event.Type == domain.TrainingEventCheckpointComplete {
@@ -200,10 +211,10 @@ func validTrainingEventToken(storedHex string, token []byte) bool {
 }
 
 func validateEventProgress(cursor TrainingJobEventTokenRecord, event domain.TrainingEvent) error {
+	if event.Generation < cursor.LastGeneration {
+		return fmt.Errorf("%w: worker generation regressed", ErrTrainingEventInvalid)
+	}
 	if event.Type == domain.TrainingEventWorkerGroupStarted {
-		if event.Generation < cursor.LastGeneration {
-			return fmt.Errorf("%w: worker generation regressed", ErrTrainingEventInvalid)
-		}
 		return nil
 	}
 	if event.Epoch < cursor.LastEpoch || (event.Epoch == cursor.LastEpoch && event.Step < cursor.LastStep) {
