@@ -223,20 +223,65 @@ func TestImageRepositoryCompatibilityRoundTripHasNoAliasing(t *testing.T) {
 }
 
 func TestImageRepositoryCompatibilityRejectsInvalidPersistedJSON(t *testing.T) {
-	repo := imageRepo(t)
-	record := PlatformImageRecord{
-		ID: "img-corrupt", Name: "corrupt", Reference: pinnedRef('5'), Kind: domain.ImageKindTraining,
-		RayVersion: domain.RayVersionProduction, SupportedEnginesJSON: `{not-json}`,
+	tests := []struct {
+		name        string
+		json        string
+		wantContext string
+	}{
+		{name: "malformed", json: `{not-json}`, wantContext: "supported engines"},
+		{name: "empty list", json: `[]`, wantContext: "validate persisted image"},
 	}
-	if err := repo.db.Create(&record).Error; err != nil {
-		t.Fatalf("seed corrupt image record: %v", err)
-	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo := imageRepo(t)
+			record := PlatformImageRecord{
+				ID: "img-corrupt", Name: "corrupt", Reference: pinnedRef('5'), Kind: domain.ImageKindTraining,
+				RayVersion: domain.RayVersionProduction, SupportedEnginesJSON: test.json,
+			}
+			if err := repo.db.Create(&record).Error; err != nil {
+				t.Fatalf("seed corrupt image record: %v", err)
+			}
 
-	images, err := repo.ListImages(context.Background(), "team-a", domain.ImageKindTraining)
-	if err == nil {
-		t.Fatalf("invalid persisted JSON returned a partial image: %+v", images)
+			images, err := repo.ListImages(context.Background(), "team-a", domain.ImageKindTraining)
+			if err == nil || len(images) != 0 {
+				t.Fatalf("invalid persisted JSON returned a partial image: images=%+v err=%v", images, err)
+			}
+			if !strings.Contains(err.Error(), test.wantContext) {
+				t.Fatalf("invalid persisted JSON error lacks context: %v", err)
+			}
+		})
 	}
-	if !strings.Contains(err.Error(), "supported engines") {
-		t.Fatalf("invalid persisted JSON error lacks context: %v", err)
+}
+
+func TestImageRepositoryCompatibilityRejectsSemanticallyInvalidPersistedRows(t *testing.T) {
+	tests := []struct {
+		name             string
+		rayVersion       string
+		supportedEngines string
+	}{
+		{name: "unknown version", rayVersion: "2.99.0", supportedEngines: `["ray-ddp"]`},
+		{name: "duplicate engines", rayVersion: domain.RayVersionProduction, supportedEngines: `["ray-ddp","ray-ddp"]`},
+		{name: "unknown engine", rayVersion: domain.RayVersionProduction, supportedEngines: `["unknown"]`},
+		{name: "legacy ray-train", rayVersion: domain.RayVersionLegacy, supportedEngines: `["ray-train"]`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo := imageRepo(t)
+			record := PlatformImageRecord{
+				ID: "img-semantic", Name: "semantic", Reference: pinnedRef('6'), Kind: domain.ImageKindTraining,
+				RayVersion: test.rayVersion, SupportedEnginesJSON: test.supportedEngines,
+			}
+			if err := repo.db.Create(&record).Error; err != nil {
+				t.Fatalf("seed semantically invalid image record: %v", err)
+			}
+
+			images, err := repo.ListImages(context.Background(), "team-a", domain.ImageKindTraining)
+			if err == nil || len(images) != 0 {
+				t.Fatalf("semantically invalid row returned a partial image: images=%+v err=%v", images, err)
+			}
+			if !strings.Contains(err.Error(), "validate persisted image") {
+				t.Fatalf("semantic decode error lacks context: %v", err)
+			}
+		})
 	}
 }

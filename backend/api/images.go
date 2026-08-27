@@ -106,15 +106,15 @@ func (h *Handler) listImages(c *gin.Context) {
 }
 
 type createImageRequest struct {
-	Name             string                  `json:"name"`
-	Reference        string                  `json:"reference"`
-	Kind             string                  `json:"kind"`
-	Description      string                  `json:"description"`
-	Framework        string                  `json:"framework"`
-	IsDefault        bool                    `json:"isDefault"`
-	Shared           bool                    `json:"shared"`
-	RayVersion       string                  `json:"rayVersion"`
-	SupportedEngines []domain.TrainingEngine `json:"supportedEngines"`
+	Name             string                   `json:"name"`
+	Reference        string                   `json:"reference"`
+	Kind             string                   `json:"kind"`
+	Description      string                   `json:"description"`
+	Framework        string                   `json:"framework"`
+	IsDefault        bool                     `json:"isDefault"`
+	Shared           bool                     `json:"shared"`
+	RayVersion       *string                  `json:"rayVersion"`
+	SupportedEngines *[]domain.TrainingEngine `json:"supportedEngines"`
 }
 
 func (h *Handler) createImage(c *gin.Context) {
@@ -146,13 +146,21 @@ func (h *Handler) createImage(c *gin.Context) {
 		}
 		tenantID = ""
 	}
+	rayVersion := domain.RayVersionLegacy
+	if request.RayVersion != nil {
+		rayVersion = *request.RayVersion
+	}
+	supportedEngines := []domain.TrainingEngine{domain.TrainingEngineRayDDP}
+	if request.SupportedEngines != nil {
+		supportedEngines = append([]domain.TrainingEngine(nil), (*request.SupportedEngines)...)
+	}
 	image := domain.PlatformImage{
 		TenantID: tenantID, Name: request.Name,
 		Reference: domain.NormalizeImageReference(request.Reference),
 		Kind:      request.Kind, Description: request.Description, Framework: request.Framework,
 		IsDefault: request.IsDefault, CreatedBy: principal.Subject,
-		RayVersion:       request.RayVersion,
-		SupportedEngines: append([]domain.TrainingEngine(nil), request.SupportedEngines...),
+		RayVersion:       rayVersion,
+		SupportedEngines: supportedEngines,
 	}
 	if err := image.Validate(); err != nil {
 		h.writeError(c, http.StatusBadRequest, "INVALID_IMAGE", err.Error())

@@ -201,3 +201,105 @@ func TestImageCompatibilityInvalidMetadataReturnsInvalidImage(t *testing.T) {
 		})
 	}
 }
+
+func TestImageCompatibilityLegacyPayloadDefaultsOmittedOrNullMetadata(t *testing.T) {
+	principal := auth.Principal{
+		Subject: "team-admin", TenantID: "team-a", Roles: []string{domain.RoleTenantAdmin}, AuthType: auth.AuthTypeLocal,
+	}
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "omitted", body: `{"name":"legacy","reference":"registry.example/runtime:legacy","kind":"training"}`},
+		{name: "null", body: `{"name":"legacy","reference":"registry.example/runtime:legacy","kind":"training","rayVersion":null,"supportedEngines":null}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &compatibilityImageStore{}
+			response := postImage(t, store, principal, test.body)
+			if response.Code != http.StatusCreated {
+				t.Fatalf("legacy payload status=%d body=%s", response.Code, response.Body.String())
+			}
+			wantEngines := []domain.TrainingEngine{domain.TrainingEngineRayDDP}
+			if store.created.RayVersion != domain.RayVersionLegacy || !reflect.DeepEqual(store.created.SupportedEngines, wantEngines) {
+				t.Fatalf("legacy defaults not persisted: %+v", store.created)
+			}
+			var envelope struct {
+				Data domain.PlatformImage `json:"data"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+				t.Fatalf("decode legacy response: %v", err)
+			}
+			if envelope.Data.RayVersion != domain.RayVersionLegacy || !reflect.DeepEqual(envelope.Data.SupportedEngines, wantEngines) {
+				t.Fatalf("legacy defaults not returned: %+v", envelope.Data)
+			}
+		})
+	}
+}
+
+func TestImageCompatibilityDefaultsOmittedFieldsIndependently(t *testing.T) {
+	principal := auth.Principal{
+		Subject: "team-admin", TenantID: "team-a", Roles: []string{domain.RoleTenantAdmin}, AuthType: auth.AuthTypeLocal,
+	}
+	tests := []struct {
+		name        string
+		metadata    string
+		wantStatus  int
+		wantVersion string
+		wantEngines []domain.TrainingEngine
+	}{
+		{
+			name: "omitted engines use ray-ddp", metadata: `"rayVersion":"2.56.1"`, wantStatus: http.StatusCreated,
+			wantVersion: domain.RayVersionProduction, wantEngines: []domain.TrainingEngine{domain.TrainingEngineRayDDP},
+		},
+		{
+			name: "omitted version uses legacy", metadata: `"supportedEngines":["ray-ddp"]`, wantStatus: http.StatusCreated,
+			wantVersion: domain.RayVersionLegacy, wantEngines: []domain.TrainingEngine{domain.TrainingEngineRayDDP},
+		},
+		{
+			name: "omitted version still validates compatibility", metadata: `"supportedEngines":["ray-train"]`, wantStatus: http.StatusBadRequest,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &compatibilityImageStore{}
+			body := `{"name":"mixed","reference":"registry.example/runtime:mixed","kind":"training",` + test.metadata + `}`
+			response := postImage(t, store, principal, body)
+			if response.Code != test.wantStatus {
+				t.Fatalf("mixed omission status=%d want=%d body=%s", response.Code, test.wantStatus, response.Body.String())
+			}
+			if test.wantStatus == http.StatusCreated && (store.created.RayVersion != test.wantVersion || !reflect.DeepEqual(store.created.SupportedEngines, test.wantEngines)) {
+				t.Fatalf("mixed omission defaults = %+v", store.created)
+			}
+			if test.wantStatus == http.StatusBadRequest && !strings.Contains(response.Body.String(), `"code":"INVALID_IMAGE"`) {
+				t.Fatalf("mixed omission did not return INVALID_IMAGE: %s", response.Body.String())
+			}
+		})
+	}
+}
+
+func TestImageCompatibilityExplicitEmptyMetadataRemainsInvalid(t *testing.T) {
+	principal := auth.Principal{
+		Subject: "team-admin", TenantID: "team-a", Roles: []string{domain.RoleTenantAdmin}, AuthType: auth.AuthTypeLocal,
+	}
+	tests := []struct {
+		name     string
+		metadata string
+	}{
+		{name: "empty version", metadata: `"rayVersion":""`},
+		{name: "empty engines", metadata: `"supportedEngines":[]`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &compatibilityImageStore{}
+			body := `{"name":"empty","reference":"registry.example/runtime:empty","kind":"training",` + test.metadata + `}`
+			response := postImage(t, store, principal, body)
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"INVALID_IMAGE"`) {
+				t.Fatalf("explicit empty metadata status=%d body=%s", response.Code, response.Body.String())
+			}
+			if store.created.ID != "" {
+				t.Fatalf("explicit empty metadata reached persistence: %+v", store.created)
+			}
+		})
+	}
+}

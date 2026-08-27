@@ -198,16 +198,17 @@ func platformImageFromRecord(record PlatformImageRecord) (domain.PlatformImage, 
 	if err := json.Unmarshal([]byte(record.SupportedEnginesJSON), &supportedEngines); err != nil {
 		return domain.PlatformImage{}, fmt.Errorf("decode supported engines: %w", err)
 	}
-	if len(supportedEngines) == 0 {
-		return domain.PlatformImage{}, fmt.Errorf("decode supported engines: expected a nonempty JSON array")
-	}
-	return domain.PlatformImage{
+	image := domain.PlatformImage{
 		ID: record.ID, TenantID: valueOrEmpty(record.TenantID), Name: record.Name,
 		Reference: record.Reference, Kind: record.Kind, Description: record.Description,
 		Framework: record.Framework, IsDefault: record.IsDefault, CreatedBy: record.CreatedBy,
 		RayVersion: record.RayVersion, SupportedEngines: append([]domain.TrainingEngine(nil), supportedEngines...),
 		CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt,
-	}, nil
+	}
+	if err := image.Validate(); err != nil {
+		return domain.PlatformImage{}, fmt.Errorf("validate persisted image: %w", err)
+	}
+	return image, nil
 }
 
 func (r *GormRepository) DeleteImage(ctx context.Context, tenantID, id string, superAdmin bool) error {

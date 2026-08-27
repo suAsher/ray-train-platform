@@ -260,6 +260,7 @@ import StoragePanel from '../../components/admin/StoragePanel.vue'
 import QueuePanel from '../../components/admin/QueuePanel.vue'
 import { queueJobAction } from '../../components/admin/queuePanelActions.js'
 import { normalizeGPUAllocations } from '../../gpuAllocations'
+import { buildCreateImageRequest, defaultImageCompatibilityState, reconcileImageCompatibility } from '../../imageCompatibility'
 
 const activeTab = ref('tenants')
 const loading = ref(false)
@@ -314,19 +315,14 @@ const emptyImageForm = () => ({
   reference: '',
   framework: '',
   isDefault: false,
-  rayVersion: '2.35.0',
-  supportedEngines: ['ray-ddp'],
+  ...defaultImageCompatibilityState(),
   shared: false,
 })
 const newImage = ref(emptyImageForm())
 const newCredential = ref({ name: '', host: '', username: '', token: '', scope: 'team' })
 
 watch(() => newImage.value.rayVersion, (rayVersion) => {
-  if (rayVersion !== '2.35.0' || !newImage.value.supportedEngines.includes('ray-train')) return
-  newImage.value = {
-    ...newImage.value,
-    supportedEngines: newImage.value.supportedEngines.filter((engine) => engine !== 'ray-train'),
-  }
+  newImage.value = reconcileImageCompatibility(newImage.value, rayVersion)
 })
 
 const loadTenants = async () => {
@@ -441,16 +437,7 @@ const submitImage = async () => {
   }
   creatingImage.value = true
   try {
-    await createImage({
-      name: newImage.value.name,
-      reference: newImage.value.reference,
-      kind: newImage.value.kind,
-      rayVersion: newImage.value.rayVersion,
-      supportedEngines: [...newImage.value.supportedEngines],
-      shared: Boolean(newImage.value.shared),
-      framework: newImage.value.framework,
-      isDefault: newImage.value.isDefault,
-    })
+    await createImage(buildCreateImageRequest(newImage.value))
     ElMessage.success('镜像已登记')
     showAddImageModal.value = false
     newImage.value = emptyImageForm()
