@@ -342,6 +342,26 @@ test('JobDetail equivalent command preserves automatic preload', () => {
   assert.match(command, /--cache-preload 'input'/)
 })
 
+test('JobDetail equivalent command accepts every backend checkpoint boundary', () => {
+  const command = equivalentSubmitCommandForJob({
+    name: 'managed-boundary', entrypoint: 'python train.py',
+    spec: {
+      image: 'registry.example/ray@sha256:' + 'a'.repeat(64),
+      trainingEngine: 'ray-train',
+      resources: { workerReplicas: 2, gpusPerWorker: 8 },
+      managed: {
+        maxFailures: 10,
+        checkpoint: { everyEpochs: 100000, keepLatest: 1000, keepBest: 1000 },
+      },
+    },
+  })
+
+  assert.match(command, /--max-failures '10'/)
+  assert.match(command, /--checkpoint-every-epochs '100000'/)
+  assert.match(command, /--checkpoint-keep-latest '1000'/)
+  assert.match(command, /--checkpoint-keep-best '1000'/)
+})
+
 test('JobDetail equivalent command shell-quotes persisted values exactly', () => {
   const command = equivalentSubmitCommandForJob({
     name: "saved job's; $(name) `name` && next",

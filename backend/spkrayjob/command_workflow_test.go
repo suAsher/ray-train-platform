@@ -192,15 +192,15 @@ entrypoint: python train.py
 
 	err := Run(context.Background(), []string{
 		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root,
-		"--engine", "ray-train", "--max-failures", "7", "--checkpoint-every-epochs", "4",
-		"--checkpoint-keep-latest", "9", "--checkpoint-keep-best", "2",
+		"--engine", "ray-train", "--max-failures", "10", "--checkpoint-every-epochs", "100000",
+		"--checkpoint-keep-latest", "1000", "--checkpoint-keep-best", "1000",
 	}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
 	if err != nil {
 		t.Fatalf("submit managed policy: %v", err)
 	}
 	want := domain.ManagedTrainingPolicy{
-		MaxFailures: 7,
-		Checkpoint:  domain.CheckpointPolicy{EveryEpochs: 4, KeepLatest: 9, KeepBest: 2},
+		MaxFailures: 10,
+		Checkpoint:  domain.CheckpointPolicy{EveryEpochs: 100000, KeepLatest: 1000, KeepBest: 1000},
 	}
 	if submitted.Managed != want {
 		t.Fatalf("copied Portal policy did not reach JobSpec: got %+v want %+v", submitted.Managed, want)
@@ -239,8 +239,11 @@ func TestManagedPolicyValuesValidateBeforeNetworkOrArchive(t *testing.T) {
 	for _, flagAndValue := range [][]string{
 		{"--max-failures", "11"},
 		{"--checkpoint-every-epochs", "-1"},
+		{"--checkpoint-every-epochs", "100001"},
 		{"--checkpoint-keep-latest", "-1"},
+		{"--checkpoint-keep-latest", "1001"},
 		{"--checkpoint-keep-best", "-1"},
+		{"--checkpoint-keep-best", "1001"},
 	} {
 		t.Run(strings.Join(flagAndValue, "="), func(t *testing.T) {
 			root := seedProject(t, "name: bad-managed-policy\nentrypoint: python train.py\nengine: ray-train\n")

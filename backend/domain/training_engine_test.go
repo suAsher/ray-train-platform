@@ -27,6 +27,16 @@ func TestManagedTrainingPolicyIsBounded(t *testing.T) {
 	}
 }
 
+func TestManagedTrainingPolicyAcceptsEveryUpperBoundary(t *testing.T) {
+	policy := ManagedTrainingPolicy{
+		MaxFailures: 10,
+		Checkpoint:  CheckpointPolicy{EveryEpochs: 100000, KeepLatest: 1000, KeepBest: 1000},
+	}
+	if err := policy.Validate(); err != nil {
+		t.Fatalf("upper boundaries must remain valid: %v", err)
+	}
+}
+
 func TestManagedTrainingPolicyRejectsValuesOutsideBounds(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -35,9 +45,12 @@ func TestManagedTrainingPolicyRejectsValuesOutsideBounds(t *testing.T) {
 	}{
 		{name: "negative max failures", policy: ManagedTrainingPolicy{MaxFailures: -1}, wantErr: "maxFailures"},
 		{name: "too many failures", policy: ManagedTrainingPolicy{MaxFailures: 11}, wantErr: "maxFailures"},
-		{name: "negative checkpoint frequency", policy: ManagedTrainingPolicy{Checkpoint: CheckpointPolicy{EveryEpochs: -1}}, wantErr: "checkpoint policy values"},
-		{name: "negative latest retention", policy: ManagedTrainingPolicy{Checkpoint: CheckpointPolicy{KeepLatest: -1}}, wantErr: "checkpoint policy values"},
-		{name: "negative best retention", policy: ManagedTrainingPolicy{Checkpoint: CheckpointPolicy{KeepBest: -1}}, wantErr: "checkpoint policy values"},
+		{name: "negative checkpoint frequency", policy: ManagedTrainingPolicy{Checkpoint: CheckpointPolicy{EveryEpochs: -1}}, wantErr: "everyEpochs"},
+		{name: "too many checkpoint epochs", policy: ManagedTrainingPolicy{Checkpoint: CheckpointPolicy{EveryEpochs: 100001}}, wantErr: "everyEpochs"},
+		{name: "negative latest retention", policy: ManagedTrainingPolicy{Checkpoint: CheckpointPolicy{KeepLatest: -1}}, wantErr: "keepLatest"},
+		{name: "too many latest checkpoints", policy: ManagedTrainingPolicy{Checkpoint: CheckpointPolicy{KeepLatest: 1001}}, wantErr: "keepLatest"},
+		{name: "negative best retention", policy: ManagedTrainingPolicy{Checkpoint: CheckpointPolicy{KeepBest: -1}}, wantErr: "keepBest"},
+		{name: "too many best checkpoints", policy: ManagedTrainingPolicy{Checkpoint: CheckpointPolicy{KeepBest: 1001}}, wantErr: "keepBest"},
 	}
 
 	for _, test := range tests {

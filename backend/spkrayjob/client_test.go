@@ -187,6 +187,27 @@ func TestSubmitDirectoryRejectsInvalidManagedSpecBeforeNetworkOrArchive(t *testi
 			},
 			wantError: "timeoutSeconds must not be negative",
 		},
+		{
+			name: "checkpoint frequency overflow",
+			mutate: func(spec *domain.JobSpec) {
+				spec.Managed.Checkpoint.EveryEpochs = 100001
+			},
+			wantError: "everyEpochs",
+		},
+		{
+			name: "latest checkpoint retention overflow",
+			mutate: func(spec *domain.JobSpec) {
+				spec.Managed.Checkpoint.KeepLatest = 1001
+			},
+			wantError: "keepLatest",
+		},
+		{
+			name: "best checkpoint retention overflow",
+			mutate: func(spec *domain.JobSpec) {
+				spec.Managed.Checkpoint.KeepBest = 1001
+			},
+			wantError: "keepBest",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -252,6 +273,27 @@ func TestSubmitRejectsInvalidManagedSpecsBeforeAnyRequest(t *testing.T) {
 				spec.TrainingEngine = domain.TrainingEngine("ray-unknown")
 			},
 			wantError: "unsupported training engine",
+		},
+		{
+			name: "checkpoint frequency overflow",
+			mutate: func(spec *domain.JobSpec) {
+				spec.Managed.Checkpoint.EveryEpochs = 100001
+			},
+			wantError: "everyEpochs",
+		},
+		{
+			name: "latest checkpoint retention overflow",
+			mutate: func(spec *domain.JobSpec) {
+				spec.Managed.Checkpoint.KeepLatest = 1001
+			},
+			wantError: "keepLatest",
+		},
+		{
+			name: "best checkpoint retention overflow",
+			mutate: func(spec *domain.JobSpec) {
+				spec.Managed.Checkpoint.KeepBest = 1001
+			},
+			wantError: "keepBest",
 		},
 	}
 	for _, test := range tests {

@@ -1,5 +1,7 @@
 export const RAY_DDP_ENGINE = 'ray-ddp'
 export const RAY_TRAIN_ENGINE = 'ray-train'
+// Keep these maxima identical to backend/domain Managed*Limit constants. The
+// shared backend validation guarantees every persisted job is safe to render.
 export const MANAGED_POLICY_LIMITS = Object.freeze({
   maxFailures: Object.freeze({ fallback: 2, maximum: 10, label: 'Worker 最大恢复次数' }),
   checkpointEveryEpochs: Object.freeze({ fallback: 1, maximum: 100000, label: 'Checkpoint 保存周期' }),

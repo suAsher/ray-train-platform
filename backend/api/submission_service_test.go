@@ -79,6 +79,52 @@ func TestSubmitSnapshotsCatalogRuntimeAndIgnoresForgedRayVersion(t *testing.T) {
 	}
 }
 
+func TestSubmissionRejectsManagedCheckpointOverflowBeforePortalOrNativePersistence(t *testing.T) {
+	reference := "harbor.example/ray-runtime:production"
+	image := domain.PlatformImage{
+		ID: "managed-image", Name: "Ray managed", Kind: domain.ImageKindTraining, Reference: reference,
+		RayVersion: domain.RayVersionProduction, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayTrain},
+	}
+	tests := []struct {
+		name   string
+		origin domain.SubmissionOrigin
+		mutate func(*domain.JobSpec)
+		field  string
+	}{
+		{name: "portal checkpoint frequency", origin: domain.SubmissionOriginPortal, mutate: func(spec *domain.JobSpec) { spec.Managed.Checkpoint.EveryEpochs = 100001 }, field: "everyEpochs"},
+		{name: "portal latest retention", origin: domain.SubmissionOriginPortal, mutate: func(spec *domain.JobSpec) { spec.Managed.Checkpoint.KeepLatest = 1001 }, field: "keepLatest"},
+		{name: "portal best retention", origin: domain.SubmissionOriginPortal, mutate: func(spec *domain.JobSpec) { spec.Managed.Checkpoint.KeepBest = 1001 }, field: "keepBest"},
+		{name: "native checkpoint frequency", origin: domain.SubmissionOriginRayCLI, mutate: func(spec *domain.JobSpec) { spec.Managed.Checkpoint.EveryEpochs = 100001 }, field: "everyEpochs"},
+		{name: "native latest retention", origin: domain.SubmissionOriginRayCLI, mutate: func(spec *domain.JobSpec) { spec.Managed.Checkpoint.KeepLatest = 1001 }, field: "keepLatest"},
+		{name: "native best retention", origin: domain.SubmissionOriginRayCLI, mutate: func(spec *domain.JobSpec) { spec.Managed.Checkpoint.KeepBest = 1001 }, field: "keepBest"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &submissionServiceRepository{}
+			service := NewSubmissionService(repository, SubmissionServiceOptions{
+				Images:        &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{image}}},
+				RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true},
+			})
+			spec := submissionSpec(reference)
+			spec.TrainingEngine = domain.TrainingEngineRayTrain
+			spec.Managed.MaxFailures = 2
+			test.mutate(&spec)
+
+			_, err := service.Submit(context.Background(), SubmissionInput{
+				Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+				Spec:      spec, Origin: test.origin,
+			})
+			if !errors.Is(err, ErrSubmissionInvalidJobSpec) || !strings.Contains(err.Error(), test.field) {
+				t.Fatalf("expected %s overflow rejection, got %v", test.field, err)
+			}
+			if repository.created != nil || repository.identityCalls != 0 {
+				t.Fatalf("overflow reached persistence: identity=%d job=%+v", repository.identityCalls, repository.created)
+			}
+		})
+	}
+}
+
 func TestSubmitAllowlistFallbackIsLegacyOnly(t *testing.T) {
 	reference := "harbor.example/legacy:stable"
 	principal := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal}

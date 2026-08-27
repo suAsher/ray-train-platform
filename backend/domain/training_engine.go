@@ -14,6 +14,10 @@ const (
 	RayVersionLegacy     = "2.35.0"
 	RayVersionProduction = "2.56.1"
 	RayVersionCanary     = "2.58.0"
+
+	ManagedMaxFailuresLimit           = 10
+	ManagedCheckpointEveryEpochsLimit = 100000
+	ManagedCheckpointRetentionLimit   = 1000
 )
 
 func (engine TrainingEngine) Resolved() TrainingEngine {
@@ -43,11 +47,17 @@ type ManagedTrainingPolicy struct {
 }
 
 func (policy ManagedTrainingPolicy) Validate() error {
-	if policy.MaxFailures < 0 || policy.MaxFailures > 10 {
-		return fmt.Errorf("maxFailures must be between 0 and 10")
+	if policy.MaxFailures < 0 || policy.MaxFailures > ManagedMaxFailuresLimit {
+		return fmt.Errorf("maxFailures must be between 0 and %d", ManagedMaxFailuresLimit)
 	}
-	if policy.Checkpoint.EveryEpochs < 0 || policy.Checkpoint.KeepLatest < 0 || policy.Checkpoint.KeepBest < 0 {
-		return fmt.Errorf("checkpoint policy values must be non-negative")
+	if policy.Checkpoint.EveryEpochs < 0 || policy.Checkpoint.EveryEpochs > ManagedCheckpointEveryEpochsLimit {
+		return fmt.Errorf("checkpoint.everyEpochs must be between 0 and %d", ManagedCheckpointEveryEpochsLimit)
+	}
+	if policy.Checkpoint.KeepLatest < 0 || policy.Checkpoint.KeepLatest > ManagedCheckpointRetentionLimit {
+		return fmt.Errorf("checkpoint.keepLatest must be between 0 and %d", ManagedCheckpointRetentionLimit)
+	}
+	if policy.Checkpoint.KeepBest < 0 || policy.Checkpoint.KeepBest > ManagedCheckpointRetentionLimit {
+		return fmt.Errorf("checkpoint.keepBest must be between 0 and %d", ManagedCheckpointRetentionLimit)
 	}
 	return nil
 }
