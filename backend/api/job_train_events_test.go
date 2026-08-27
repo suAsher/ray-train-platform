@@ -73,6 +73,50 @@ func TestTrainEventAcceptsBoundedPayloadAndReturnsReplayResult(t *testing.T) {
 	}
 }
 
+func TestTrainEventRejectsOmittedGenerationBeforeRepository(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	checkpoint := `"checkpoint":{"id":"checkpoint-1","epoch":1,"step":1,"objectPath":"/mnt/data/output/.platform/ray-train/job-a/checkpoints/epoch-1","complete":true,"manifestSha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}`
+	requests := []string{
+		`{"eventId":"progress-no-generation","type":"TRAINING_PROGRESS","epoch":1,"step":1}`,
+		`{"eventId":"checkpoint-no-generation","type":"CHECKPOINT_COMPLETE","epoch":1,"step":1,` + checkpoint + `}`,
+	}
+	for _, body := range requests {
+		store := &fakeManagedTrainingStore{fakeJobRepository: &fakeJobRepository{}}
+		handler := NewHandler(store, Options{})
+		router := gin.New()
+		handler.RegisterTrainingEventRoutes(router.Group("/api/v1/internal"))
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/internal/jobs/job-a/train-events", strings.NewReader(body))
+		request.Header.Set("Authorization", "Bearer "+base64.RawURLEncoding.EncodeToString(make([]byte, 32)))
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest || store.wantJobID != "" || store.seen.ID != "" {
+			t.Fatalf("omitted generation reached repository: code=%d body=%s event=%+v", response.Code, response.Body.String(), store.seen)
+		}
+	}
+}
+
+func TestTrainEventAcceptsExplicitGenerationForProgressAndCheckpoint(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	checkpoint := `"checkpoint":{"id":"checkpoint-1","epoch":1,"step":2,"objectPath":"/mnt/data/output/.platform/ray-train/job-a/checkpoints/epoch-1","complete":true,"manifestSha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}`
+	requests := []string{
+		`{"eventId":"progress-current-generation","type":"TRAINING_PROGRESS","generation":2,"epoch":1,"step":1}`,
+		`{"eventId":"checkpoint-current-generation","type":"CHECKPOINT_COMPLETE","generation":2,"epoch":1,"step":2,` + checkpoint + `}`,
+	}
+	for _, body := range requests {
+		store := &fakeManagedTrainingStore{fakeJobRepository: &fakeJobRepository{}, result: domain.TrainingEventResult{EventID: "accepted"}}
+		handler := NewHandler(store, Options{})
+		router := gin.New()
+		handler.RegisterTrainingEventRoutes(router.Group("/api/v1/internal"))
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/internal/jobs/job-a/train-events", strings.NewReader(body))
+		request.Header.Set("Authorization", "Bearer "+base64.RawURLEncoding.EncodeToString(make([]byte, 32)))
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || store.wantJobID != "job-a" || store.seen.Generation != 2 {
+			t.Fatalf("explicit generation was rejected: code=%d body=%s event=%+v", response.Code, response.Body.String(), store.seen)
+		}
+	}
+}
+
 func TestTrainEventRejectsOversizedBodyBeforeRepository(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := &fakeManagedTrainingStore{fakeJobRepository: &fakeJobRepository{}}

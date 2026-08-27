@@ -120,6 +120,9 @@ func (r *GormRepository) RecordTrainingEvent(ctx context.Context, jobID string, 
 		if !validTrainingEventToken(tokenRecord.TokenSHA256, token) || !now.Before(tokenRecord.ExpiresAt) {
 			return ErrTrainingEventUnauthorized
 		}
+		if err := event.Validate(); err != nil {
+			return fmt.Errorf("%w: %v", ErrTrainingEventInvalid, err)
+		}
 
 		var replay TrainingJobEventRecord
 		if err := tx.Where("job_id = ? AND event_id = ?", jobID, event.ID).First(&replay).Error; err == nil {
@@ -138,10 +141,6 @@ func (r *GormRepository) RecordTrainingEvent(ctx context.Context, jobID string, 
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return fmt.Errorf("find replayed training event: %w", err)
 		}
-		if err := event.Validate(); err != nil {
-			return fmt.Errorf("%w: %v", ErrTrainingEventInvalid, err)
-		}
-
 		var job JobRecord
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND training_engine = ?", jobID, domain.TrainingEngineRayTrain).First(&job).Error; err != nil {
 			return fmt.Errorf("%w: managed job was not found", ErrTrainingEventInvalid)

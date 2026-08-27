@@ -130,6 +130,106 @@ func TestRecordTrainingEventRejectsStaleGenerationForProgressAndCheckpoint(t *te
 	}
 }
 
+func TestRecordTrainingEventRejectsOmittedGenerationBeforePersistence(t *testing.T) {
+	repository, job := managedCheckpointRepository(t)
+	token := randomJobToken(t)
+	now := time.Now().UTC()
+	if err := repository.EnsureTrainingEventToken(context.Background(), job.ID, token, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := &domain.TrainingCheckpoint{
+		ID: "checkpoint-no-generation", Epoch: 1, Step: 2,
+		ObjectPath:     "/mnt/data/output/.platform/ray-train/" + job.ID + "/checkpoints/no-generation",
+		ManifestSHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		Complete:       true,
+	}
+	for _, event := range []domain.TrainingEvent{
+		{ID: "progress-no-generation", Type: domain.TrainingEventProgress, Epoch: 1, Step: 1},
+		{ID: "checkpoint-no-generation", Type: domain.TrainingEventCheckpointComplete, Epoch: 1, Step: 2, Checkpoint: checkpoint},
+	} {
+		if _, err := repository.RecordTrainingEvent(context.Background(), job.ID, token, event, now); !errors.Is(err, ErrTrainingEventInvalid) {
+			t.Fatalf("event type %q without generation returned %v", event.Type, err)
+		}
+	}
+	var eventCount, checkpointCount int64
+	if err := repository.db.Model(&TrainingJobEventRecord{}).Where("job_id = ?", job.ID).Count(&eventCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.db.Model(&TrainingCheckpointRecord{}).Where("job_id = ?", job.ID).Count(&checkpointCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	var cursor TrainingJobEventTokenRecord
+	if err := repository.db.Where("job_id = ?", job.ID).First(&cursor).Error; err != nil {
+		t.Fatal(err)
+	}
+	if eventCount != 0 || checkpointCount != 0 || cursor.RateCount != 0 || cursor.LastGeneration != 0 {
+		t.Fatalf("omitted generation mutated persistence: events=%d checkpoints=%d cursor=%+v", eventCount, checkpointCount, cursor)
+	}
+}
+
+func TestRecordTrainingEventRejectsReplayWithOmittedGenerationBeforeRatePersistence(t *testing.T) {
+	repository, job := managedCheckpointRepository(t)
+	token := randomJobToken(t)
+	now := time.Now().UTC()
+	if err := repository.EnsureTrainingEventToken(context.Background(), job.ID, token, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	valid := domain.TrainingEvent{ID: "progress-replay-generation", Type: domain.TrainingEventProgress, Generation: 1, Epoch: 1, Step: 1}
+	if _, err := repository.RecordTrainingEvent(context.Background(), job.ID, token, valid, now); err != nil {
+		t.Fatal(err)
+	}
+	omitted := valid
+	omitted.Generation = 0
+	if _, err := repository.RecordTrainingEvent(context.Background(), job.ID, token, omitted, now); !errors.Is(err, ErrTrainingEventInvalid) {
+		t.Fatalf("replay without generation returned %v", err)
+	}
+	var cursor TrainingJobEventTokenRecord
+	if err := repository.db.Where("job_id = ?", job.ID).First(&cursor).Error; err != nil {
+		t.Fatal(err)
+	}
+	if cursor.RateCount != 1 || cursor.LastGeneration != 1 {
+		t.Fatalf("invalid replay mutated cursor: %+v", cursor)
+	}
+}
+
+func TestRecordTrainingEventAcceptsProgressAndCheckpointAtCurrentGeneration(t *testing.T) {
+	repository, job := managedCheckpointRepository(t)
+	token := randomJobToken(t)
+	now := time.Now().UTC()
+	if err := repository.EnsureTrainingEventToken(context.Background(), job.ID, token, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.RecordTrainingEvent(context.Background(), job.ID, token, domain.TrainingEvent{
+		ID: "worker-generation-2", Type: domain.TrainingEventWorkerGroupStarted, Generation: 2,
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.RecordTrainingEvent(context.Background(), job.ID, token, domain.TrainingEvent{
+		ID: "progress-generation-2", Type: domain.TrainingEventProgress, Generation: 2, Epoch: 1, Step: 1,
+	}, now.Add(time.Second)); err != nil {
+		t.Fatalf("record progress at current generation: %v", err)
+	}
+	checkpoint := &domain.TrainingCheckpoint{
+		ID: "checkpoint-generation-2", Epoch: 1, Step: 2,
+		ObjectPath:     "/mnt/data/output/.platform/ray-train/" + job.ID + "/checkpoints/generation-2",
+		ManifestSHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		Complete:       true,
+	}
+	if _, err := repository.RecordTrainingEvent(context.Background(), job.ID, token, domain.TrainingEvent{
+		ID: "checkpoint-event-generation-2", Type: domain.TrainingEventCheckpointComplete,
+		Generation: 2, Epoch: 1, Step: 2, Checkpoint: checkpoint,
+	}, now.Add(2*time.Second)); err != nil {
+		t.Fatalf("record checkpoint at current generation: %v", err)
+	}
+	items, err := repository.ListUsableCheckpoints(context.Background(), job.TenantID, job.UserID, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ID != checkpoint.ID {
+		t.Fatalf("current-generation checkpoint was not persisted: %+v", items)
+	}
+}
+
 func TestRecordTrainingEventReplayConsumesPerJobRateLimit(t *testing.T) {
 	repository, job := managedCheckpointRepository(t)
 	token := randomJobToken(t)
@@ -175,7 +275,7 @@ func TestRecordCheckpointCompletePersistsTransactionallyAndListsOnlyUsableRows(t
 		ManifestSHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 		Complete:       true, IsBest: true, MetricName: "mAP", MetricValue: floatPointerRepository(0.61),
 	}
-	result, err := repository.RecordTrainingEvent(context.Background(), job.ID, token, domain.TrainingEvent{ID: "checkpoint-event-2", Type: domain.TrainingEventCheckpointComplete, Epoch: 2, Step: 40, Checkpoint: checkpoint}, now)
+	result, err := repository.RecordTrainingEvent(context.Background(), job.ID, token, domain.TrainingEvent{ID: "checkpoint-event-2", Type: domain.TrainingEventCheckpointComplete, Generation: 1, Epoch: 2, Step: 40, Checkpoint: checkpoint}, now)
 	if err != nil || result.CheckpointID != checkpoint.ID {
 		t.Fatalf("record checkpoint: result=%+v err=%v", result, err)
 	}
@@ -259,7 +359,7 @@ func TestRecordCheckpointRejectsPathOutsideAuthenticatedJobOutput(t *testing.T) 
 	if err := repository.EnsureTrainingEventToken(context.Background(), job.ID, token, now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	event := domain.TrainingEvent{ID: "checkpoint-escape", Type: domain.TrainingEventCheckpointComplete, Epoch: 1, Step: 1, Checkpoint: &domain.TrainingCheckpoint{
+	event := domain.TrainingEvent{ID: "checkpoint-escape", Type: domain.TrainingEventCheckpointComplete, Generation: 1, Epoch: 1, Step: 1, Checkpoint: &domain.TrainingCheckpoint{
 		ID: "checkpoint-escape", ObjectPath: "/mnt/data/output/../../storage/team/checkpoint", Complete: true,
 		ManifestSHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 	}}
@@ -275,19 +375,19 @@ func TestRecordTrainingEventRejectsRegressingProgressAndRateLimitsPerJob(t *test
 	if err := repository.EnsureTrainingEventToken(context.Background(), job.ID, token, now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repository.RecordTrainingEvent(context.Background(), job.ID, token, domain.TrainingEvent{ID: "progress-10", Type: domain.TrainingEventProgress, Epoch: 3, Step: 10}, now); err != nil {
+	if _, err := repository.RecordTrainingEvent(context.Background(), job.ID, token, domain.TrainingEvent{ID: "progress-10", Type: domain.TrainingEventProgress, Generation: 1, Epoch: 3, Step: 10}, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repository.RecordTrainingEvent(context.Background(), job.ID, token, domain.TrainingEvent{ID: "progress-9", Type: domain.TrainingEventProgress, Epoch: 3, Step: 9}, now); !errors.Is(err, ErrTrainingEventInvalid) {
+	if _, err := repository.RecordTrainingEvent(context.Background(), job.ID, token, domain.TrainingEvent{ID: "progress-9", Type: domain.TrainingEventProgress, Generation: 1, Epoch: 3, Step: 9}, now); !errors.Is(err, ErrTrainingEventInvalid) {
 		t.Fatalf("expected monotonic progress rejection, got %v", err)
 	}
 	for index := 0; index < TrainingEventRateLimit-1; index++ {
-		event := domain.TrainingEvent{ID: eventID(index), Type: domain.TrainingEventProgress, Epoch: 3, Step: int64(11 + index)}
+		event := domain.TrainingEvent{ID: eventID(index), Type: domain.TrainingEventProgress, Generation: 1, Epoch: 3, Step: int64(11 + index)}
 		if _, err := repository.RecordTrainingEvent(context.Background(), job.ID, token, event, now); err != nil {
 			t.Fatalf("event %d unexpectedly rejected: %v", index, err)
 		}
 	}
-	if _, err := repository.RecordTrainingEvent(context.Background(), job.ID, token, domain.TrainingEvent{ID: "rate-limit", Type: domain.TrainingEventProgress, Epoch: 4, Step: 1}, now); !errors.Is(err, ErrTrainingEventRateLimited) {
+	if _, err := repository.RecordTrainingEvent(context.Background(), job.ID, token, domain.TrainingEvent{ID: "rate-limit", Type: domain.TrainingEventProgress, Generation: 1, Epoch: 4, Step: 1}, now); !errors.Is(err, ErrTrainingEventRateLimited) {
 		t.Fatalf("expected rate limit, got %v", err)
 	}
 }

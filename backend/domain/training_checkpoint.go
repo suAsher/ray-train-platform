@@ -81,7 +81,7 @@ func validateCheckpointPath(value string) error {
 type TrainingEvent struct {
 	ID         string              `json:"eventId"`
 	Type       TrainingEventType   `json:"type"`
-	Generation int64               `json:"generation,omitempty"`
+	Generation int64               `json:"generation"`
 	Epoch      int64               `json:"epoch,omitempty"`
 	Step       int64               `json:"step,omitempty"`
 	Checkpoint *TrainingCheckpoint `json:"checkpoint,omitempty"`
@@ -91,10 +91,13 @@ func (event TrainingEvent) Validate() error {
 	if len(event.ID) > TrainingEventIDMaxBytes || !trainingEventIDPattern.MatchString(event.ID) {
 		return fmt.Errorf("event ID must be a safe identifier")
 	}
+	if event.Generation < 1 || event.Generation > TrainingEventCounterMax {
+		return fmt.Errorf("event generation must be between 1 and %d", TrainingEventCounterMax)
+	}
 	switch event.Type {
 	case TrainingEventWorkerGroupStarted:
-		if event.Generation < 1 || event.Checkpoint != nil {
-			return fmt.Errorf("worker group event requires a positive generation and no checkpoint")
+		if event.Checkpoint != nil {
+			return fmt.Errorf("worker group event must not include a checkpoint")
 		}
 	case TrainingEventCheckpointComplete:
 		if event.Checkpoint == nil {
@@ -113,8 +116,8 @@ func (event TrainingEvent) Validate() error {
 	default:
 		return fmt.Errorf("unsupported training event type %q", event.Type)
 	}
-	if event.Generation < 0 || event.Generation > TrainingEventCounterMax || event.Epoch < 0 || event.Epoch > TrainingEventCounterMax || event.Step < 0 || event.Step > TrainingEventCounterMax {
-		return fmt.Errorf("event counters are outside supported bounds")
+	if event.Epoch < 0 || event.Epoch > TrainingEventCounterMax || event.Step < 0 || event.Step > TrainingEventCounterMax {
+		return fmt.Errorf("event epoch and step are outside supported bounds")
 	}
 	return nil
 }

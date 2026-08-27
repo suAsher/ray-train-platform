@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS training_job_events (
   job_id TEXT NOT NULL REFERENCES training_jobs(id) ON DELETE CASCADE,
   event_id TEXT NOT NULL,
   event_type TEXT NOT NULL,
-  generation BIGINT NOT NULL DEFAULT 0,
+  generation BIGINT NOT NULL DEFAULT 1,
   epoch BIGINT NOT NULL DEFAULT 0,
   step BIGINT NOT NULL DEFAULT 0,
   result_json JSONB NOT NULL,
@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS training_job_events (
   CONSTRAINT training_job_events_id_check CHECK (event_id ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'),
   CONSTRAINT training_job_events_type_check CHECK (event_type IN ('WORKER_GROUP_STARTED', 'CHECKPOINT_COMPLETE', 'TRAINING_PROGRESS')),
   CONSTRAINT training_job_events_progress_check CHECK (
-    generation BETWEEN 0 AND 1000000000000
+    generation BETWEEN 1 AND 1000000000000
     AND epoch BETWEEN 0 AND 1000000000000
     AND step BETWEEN 0 AND 1000000000000
   ),
