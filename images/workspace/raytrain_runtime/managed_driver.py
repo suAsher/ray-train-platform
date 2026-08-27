@@ -276,6 +276,7 @@ def build_trainer(config: DriverConfig, *, ray_components: Any | None = None) ->
     ray_api = ray_components if ray_components is not None else _load_ray_components()
     workers = config.nodes * config.gpus_per_node
     cpus_per_worker = max(1, config.cpus_per_node // config.gpus_per_node)
+    ray_copy_limit = config.keep_latest + config.keep_best
     loop_config = {
         "entrypoint": dataclasses.asdict(config.entrypoint),
         "checkpoint_every_epochs": config.checkpoint_every_epochs,
@@ -301,9 +302,7 @@ def build_trainer(config: DriverConfig, *, ray_components: Any | None = None) ->
             storage_path=storage_path,
             failure_config=ray_api.FailureConfig(max_failures=config.max_failures),
             checkpoint_config=ray_api.CheckpointConfig(
-                num_to_keep=None,
-                checkpoint_score_attribute=None,
-                checkpoint_score_order=config.best_mode,
+                num_to_keep=ray_copy_limit or None,
             ),
         ),
     )

@@ -8,10 +8,15 @@ MANAGED_HOOK_HELPER = '''def configure_ray_train_managed_hook(cfg):
     if os.environ.get("PLATFORM_TRAINING_ENGINE") != "ray-train":
         return cfg
 
-    from raytrain_runtime.mmcv_hook import build_hook_config
+    from raytrain_runtime.mmcv_hook import build_hook_config, build_restore_hook_config
 
     interval = int(cfg.log_config.get("interval", 10))
-    policy = {
+    restore = {
+        **build_restore_hook_config(),
+        # Resume state must be loaded before optimizer/LR/logger hooks consume it.
+        "priority": "VERY_HIGH",
+    }
+    reporting = {
         **build_hook_config(
             interval=interval,
             checkpoint_every_epochs=int(
@@ -29,9 +34,10 @@ MANAGED_HOOK_HELPER = '''def configure_ray_train_managed_hook(cfg):
     existing = [
         dict(hook)
         for hook in cfg.get("custom_hooks", [])
-        if hook.get("type") != "RayTrainManagedHook"
+        if hook.get("type")
+        not in {"RayTrainManagedRestoreHook", "RayTrainManagedHook"}
     ]
-    cfg.custom_hooks = [*existing, policy]
+    cfg.custom_hooks = [*existing, restore, reporting]
     return cfg
 
 

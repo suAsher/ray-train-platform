@@ -277,9 +277,9 @@ class TrainerFactoryTest(unittest.TestCase):
         self.assertEqual(run["storage_path"], config.storage_path)
         self.assertEqual(run["failure_config"].kwargs["max_failures"], 2)
         checkpoint = run["checkpoint_config"].kwargs
-        self.assertIsNone(checkpoint["num_to_keep"])
-        self.assertIsNone(checkpoint["checkpoint_score_attribute"])
-        self.assertEqual(checkpoint["checkpoint_score_order"], "max")
+        self.assertEqual(checkpoint["num_to_keep"], 6)
+        self.assertNotIn("checkpoint_score_attribute", checkpoint)
+        self.assertNotIn("checkpoint_score_order", checkpoint)
 
         loop = trainer.kwargs["train_loop_config"]
         self.assertEqual(loop["checkpoint_every_epochs"], 3)
@@ -311,7 +311,30 @@ class TrainerFactoryTest(unittest.TestCase):
         self.assertEqual(scaling["resources_per_worker"], {"CPU": 1})
         checkpoint = trainer.kwargs["run_config"].kwargs["checkpoint_config"].kwargs
         self.assertIsNone(checkpoint["num_to_keep"])
-        self.assertIsNone(checkpoint["checkpoint_score_attribute"])
+        self.assertNotIn("checkpoint_score_attribute", checkpoint)
+        self.assertNotIn("checkpoint_score_order", checkpoint)
+
+    def test_ray_copy_bound_includes_latest_and_best_without_score_ordering(self):
+        config = DriverConfig(
+            entrypoint=PythonEntrypoint("path", "train.py", ("train.py",)),
+            nodes=1,
+            gpus_per_node=1,
+            cpus_per_node=8,
+            max_failures=0,
+            checkpoint_every_epochs=1,
+            keep_latest=0,
+            keep_best=2,
+            best_metric="mAP",
+            best_mode="min",
+            job_id=JOB_ID,
+            parent_job_id="",
+            storage_path=f"/mnt/data/output/.platform/ray-train/{JOB_ID}",
+        )
+
+        trainer = build_trainer(config, ray_components=FAKE_RAY)
+        checkpoint = trainer.kwargs["run_config"].kwargs["checkpoint_config"].kwargs
+
+        self.assertEqual(checkpoint, {"num_to_keep": 2})
 
 
 class TrainLoopEnvironmentTest(unittest.TestCase):

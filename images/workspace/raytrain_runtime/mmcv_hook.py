@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import copy
+import json
 import math
 import os
 from pathlib import Path
 import random
+import shutil
 from collections.abc import Mapping
 from typing import Any, Callable
 import uuid
 
 from .reporting import (
+    MANIFEST_NAME,
+    RETENTION_INDEX_NAME,
     finalize_checkpoint,
     report_metrics,
     retain_checkpoints,
@@ -41,6 +45,16 @@ CHECKPOINT_STATE_VERSION = 1
 TRAINING_PARAMETER_LIMIT = 128
 TRAINING_PARAMETER_DEPTH = 4
 TRAINING_PARAMETER_STRING_LIMIT = 512
+SAFE_RUNNER_META_FIELDS = (
+    "hook_msgs",
+    "seed",
+    "experiment_name",
+    "experiment",
+    "exp_name",
+)
+EXTERNAL_CHECKPOINT_INDEX_MAX_BYTES = 1024 * 1024
+EXTERNAL_CHECKPOINT_SCAN_LIMIT = 512
+EXTERNAL_JOB_ROOT_SCAN_LIMIT = 128
 
 
 def extract_scalar_metrics(metrics: Mapping[Any, Any]) -> dict[str, float]:
@@ -69,6 +83,12 @@ def build_hook_config(
         "best_metric": str(best_metric),
         "best_mode": str(best_mode),
     }
+
+
+def build_restore_hook_config() -> dict[str, str]:
+    """Build the independent early-resume hook configuration."""
+
+    return {"type": "RayTrainManagedRestoreHook"}
 
 
 def _state_dict(value: Any) -> Any:
@@ -155,6 +175,21 @@ def bounded_training_parameters(runner: Any) -> Any:
     )
 
 
+def _safe_runner_metadata(value: Any) -> dict[str, Any]:
+    """Copy only bounded MMCV state that is useful during resume."""
+
+    if not isinstance(value, Mapping):
+        return {}
+    budget = [TRAINING_PARAMETER_LIMIT]
+    copied: dict[str, Any] = {}
+    for name in SAFE_RUNNER_META_FIELDS:
+        if name not in value or budget[0] <= 0:
+            continue
+        budget[0] -= 1
+        copied[name] = _bounded_copy(value[name], budget, depth=1)
+    return copied
+
+
 def _load_numpy() -> Any | None:
     try:
         import numpy
@@ -207,7 +242,7 @@ def write_runner_checkpoint(
         "runner": {
             "epoch": int(getattr(runner, "epoch", 0)),
             "iter": int(getattr(runner, "iter", 0)),
-            "meta": copy.deepcopy(getattr(runner, "meta", {})),
+            "safe_meta": _safe_runner_metadata(getattr(runner, "meta", {})),
         },
         "rng": _capture_rng_state(torch, numpy),
         "training_parameters": bounded_training_parameters(runner),
@@ -260,7 +295,7 @@ def _validate_resume_payload(
         isinstance(runner_state.get(name), bool)
         or not isinstance(runner_state.get(name), int)
         for name in ("epoch", "iter")
-    ) or not isinstance(runner_state.get("meta"), Mapping):
+    ) or not isinstance(runner_state.get("safe_meta"), Mapping):
         raise ValueError("checkpoint runner state is invalid")
     rng = payload.get("rng")
     if not isinstance(rng, Mapping) or "python" not in rng or "torch_cpu" not in rng:
@@ -338,7 +373,7 @@ def restore_runner_checkpoint(runner: Any, checkpoint_dir: Path) -> Path:
     runner_state = restore["runner"]
     setattr(runner, epoch_field, int(runner_state["epoch"]))
     setattr(runner, iter_field, int(runner_state["iter"]))
-    runner.meta = copy.deepcopy(dict(runner_state["meta"]))
+    runner.meta = copy.deepcopy(dict(runner_state["safe_meta"]))
     rng = restore["rng"]
     random.setstate(rng["python"])
     if rng.get("numpy") is not None:
@@ -349,12 +384,266 @@ def restore_runner_checkpoint(runner: Any, checkpoint_dir: Path) -> Path:
     return state_path
 
 
+def _checkpoint_order(checkpoint: Path) -> tuple[int, int, str] | None:
+    try:
+        manifest = validate_checkpoint(checkpoint)
+    except ValueError:
+        return None
+    metadata = manifest.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return None
+    epoch = metadata.get("epoch")
+    step = metadata.get("step")
+    if (
+        isinstance(epoch, bool)
+        or not isinstance(epoch, int)
+        or isinstance(step, bool)
+        or not isinstance(step, int)
+    ):
+        return None
+    return int(epoch), int(step), checkpoint.name
+
+
+def _safe_collection(path: Path, boundary: Path) -> Path | None:
+    if path.is_symlink() or not path.is_dir():
+        return None
+    try:
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(boundary)
+    except (OSError, ValueError):
+        return None
+    return resolved
+
+
+def _indexed_checkpoint(
+    collection: Path, *, max_checkpoints: int
+) -> Path | None:
+    index_path = collection / RETENTION_INDEX_NAME
+    if index_path.is_symlink() or not index_path.is_file():
+        return None
+    try:
+        if index_path.stat().st_size > EXTERNAL_CHECKPOINT_INDEX_MAX_BYTES:
+            raise ValueError("checkpoint retention index exceeds bounded size")
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("checkpoint retention index is not readable") from exc
+    if not isinstance(index, Mapping):
+        return None
+    records = index.get("checkpoints")
+    if index.get("complete") is not True or not isinstance(records, list):
+        return None
+    if len(records) > max_checkpoints:
+        raise ValueError("checkpoint retention index exceeds bounded candidate count")
+
+    candidates: list[tuple[tuple[int, int, str], Path]] = []
+    for record in records:
+        if not isinstance(record, Mapping):
+            continue
+        name = record.get("path")
+        if (
+            not isinstance(name, str)
+            or not name
+            or name.startswith(".")
+            or Path(name).name != name
+        ):
+            continue
+        candidate = collection / name
+        if candidate.is_symlink() or not candidate.is_dir():
+            continue
+        order = _checkpoint_order(candidate)
+        if order is not None:
+            candidates.append((order, candidate))
+    return max(candidates, default=(None, None), key=lambda item: item[0])[1]
+
+
+def _scanned_checkpoint(
+    collection: Path, *, max_checkpoints: int
+) -> Path | None:
+    names: list[str] = []
+    with os.scandir(collection) as entries:
+        for entry in entries:
+            if (
+                entry.name.startswith("checkpoint-")
+                and not entry.is_symlink()
+                and entry.is_dir(follow_symlinks=False)
+            ):
+                names.append(entry.name)
+                if len(names) > max_checkpoints:
+                    raise ValueError("checkpoint directory scan exceeds bounded candidate count")
+    candidates: list[tuple[tuple[int, int, str], Path]] = []
+    for name in sorted(names):
+        candidate = collection / name
+        order = _checkpoint_order(candidate)
+        if order is not None:
+            candidates.append((order, candidate))
+    return max(candidates, default=(None, None), key=lambda item: item[0])[1]
+
+
+def resolve_external_managed_checkpoint(
+    external_path: str | os.PathLike[str],
+    *,
+    max_job_roots: int = EXTERNAL_JOB_ROOT_SCAN_LIMIT,
+    max_checkpoints: int = EXTERNAL_CHECKPOINT_SCAN_LIMIT,
+) -> Path | None:
+    """Resolve a managed checkpoint without consuming a legacy resume path."""
+
+    if max_job_roots < 1 or max_checkpoints < 1:
+        raise ValueError("checkpoint resolver bounds must be positive")
+    external = Path(external_path)
+    if external.is_symlink() or not external.is_dir():
+        return None
+    boundary = external.resolve(strict=True)
+    direct_manifest = external / MANIFEST_NAME
+    if direct_manifest.exists() or direct_manifest.is_symlink():
+        validate_checkpoint(external)
+        return external
+
+    collections: list[Path] = []
+    for path in (external, external / "checkpoints"):
+        safe = _safe_collection(path, boundary)
+        if safe is not None and safe not in collections:
+            collections.append(safe)
+
+    managed_root = _safe_collection(external / ".platform" / "ray-train", boundary)
+    if managed_root is not None:
+        job_roots: list[str] = []
+        with os.scandir(managed_root) as entries:
+            for entry in entries:
+                if (
+                    entry.name.startswith("job-")
+                    and not entry.is_symlink()
+                    and entry.is_dir(follow_symlinks=False)
+                ):
+                    job_roots.append(entry.name)
+                    if len(job_roots) > max_job_roots:
+                        raise ValueError("managed job root scan exceeds bounded candidate count")
+        for name in sorted(job_roots):
+            safe = _safe_collection(managed_root / name / "checkpoints", boundary)
+            if safe is not None and safe not in collections:
+                collections.append(safe)
+
+    indexed: list[tuple[tuple[int, int, str], Path]] = []
+    for collection in collections:
+        candidate = _indexed_checkpoint(
+            collection, max_checkpoints=max_checkpoints
+        )
+        if candidate is not None:
+            order = _checkpoint_order(candidate)
+            if order is not None:
+                indexed.append((order, candidate))
+    if indexed:
+        return max(indexed, key=lambda item: item[0])[1]
+
+    scanned: list[tuple[tuple[int, int, str], Path]] = []
+    for collection in collections:
+        candidate = _scanned_checkpoint(
+            collection, max_checkpoints=max_checkpoints
+        )
+        if candidate is not None:
+            order = _checkpoint_order(candidate)
+            if order is not None:
+                scanned.append((order, candidate))
+    return max(scanned, default=(None, None), key=lambda item: item[0])[1]
+
+
 def _default_checkpoint_root() -> Path:
     configured = os.environ.get("RAYTRAIN_CHECKPOINT_OUTPUT_PATH", "").strip()
     if configured:
         return Path(configured)
     output = os.environ.get("PLATFORM_OUTPUT_PATH", "/mnt/data/output").strip()
     return Path(output) / ".platform" / "ray-train" / "checkpoints"
+
+
+def _checkpoint_name(metadata: Mapping[str, Any]) -> str:
+    return (
+        f"checkpoint-epoch-{int(metadata['epoch']):06d}-"
+        f"step-{int(metadata['step']):012d}"
+    )
+
+
+def _complete_checkpoint_matches(
+    checkpoint: Path, metadata: Mapping[str, Any]
+) -> bool:
+    manifest = validate_checkpoint(checkpoint)
+    existing = manifest.get("metadata", {})
+    return (
+        isinstance(existing, Mapping)
+        and existing.get("epoch") == metadata.get("epoch")
+        and existing.get("step") == metadata.get("step")
+    )
+
+
+def _remove_private_staging(path: Path) -> None:
+    if path.is_symlink():
+        path.unlink()
+    elif path.exists():
+        shutil.rmtree(path)
+
+
+def _publish_runner_checkpoint(
+    runner: Any,
+    checkpoint_root: Path,
+    metadata: Mapping[str, Any],
+    state_writer: Callable[[Any, Path, Mapping[str, Any]], Any],
+) -> Path:
+    """Finalize in a unique hidden directory, then atomically publish it."""
+
+    checkpoint_root.mkdir(parents=True, exist_ok=True)
+    if checkpoint_root.is_symlink() or not checkpoint_root.is_dir():
+        raise ValueError("checkpoint root must be a real directory")
+    final = checkpoint_root / _checkpoint_name(metadata)
+    if final.exists() or final.is_symlink():
+        if final.is_symlink() or not final.is_dir():
+            raise ValueError("checkpoint final path must be a real directory")
+        try:
+            matches = _complete_checkpoint_matches(final, metadata)
+        except ValueError:
+            matches = False
+        if matches:
+            return final
+        quarantine = checkpoint_root / (
+            f".checkpoint-incomplete-{final.name}-{uuid.uuid4().hex}"
+        )
+        os.replace(final, quarantine)
+
+    staging = checkpoint_root / f".checkpoint-staging-{uuid.uuid4().hex}"
+    staging.mkdir(exist_ok=False)
+    try:
+        state_writer(runner, staging, metadata)
+        finalize_checkpoint(staging, metadata)
+        os.replace(staging, final)
+    except Exception:
+        _remove_private_staging(staging)
+        raise
+    return final
+
+
+class RayTrainManagedRestoreHook(_MMCVHook):
+    """Restore managed state before optimizer, LR, and logger hooks run."""
+
+    def __init__(
+        self,
+        *,
+        state_loader: Callable[[Any, Path], Any] | None = None,
+    ) -> None:
+        self._load_state = (
+            state_loader if state_loader is not None else restore_runner_checkpoint
+        )
+
+    def before_run(self, runner: Any) -> None:
+        ray_resume = os.environ.get("RAYTRAIN_RESUME_CHECKPOINT_PATH", "").strip()
+        if ray_resume:
+            checkpoint = Path(ray_resume)
+            validate_checkpoint(checkpoint)
+            self._load_state(runner, checkpoint)
+            return
+        external_resume = os.environ.get("PLATFORM_CHECKPOINT_PATH", "").strip()
+        if not external_resume:
+            return
+        checkpoint = resolve_external_managed_checkpoint(external_resume)
+        if checkpoint is None:
+            return
+        self._load_state(runner, checkpoint)
 
 
 class RayTrainManagedHook(_MMCVHook):
@@ -377,7 +666,6 @@ class RayTrainManagedHook(_MMCVHook):
         world_size_fn: Callable[[], int] | None = None,
         report_fn: Callable[..., None] | None = None,
         state_writer: Callable[[Any, Path, Mapping[str, Any]], Any] | None = None,
-        state_loader: Callable[[Any, Path], Any] | None = None,
     ) -> None:
         if int(interval) < 1:
             raise ValueError("interval must be at least 1")
@@ -414,7 +702,6 @@ class RayTrainManagedHook(_MMCVHook):
         self._world_size = world_size_fn if world_size_fn is not None else world_size
         self._report = report_fn if report_fn is not None else report_metrics
         self._write_state = state_writer if state_writer is not None else write_runner_checkpoint
-        self._load_state = state_loader if state_loader is not None else restore_runner_checkpoint
 
     @staticmethod
     def _epoch(runner: Any) -> int:
@@ -431,17 +718,6 @@ class RayTrainManagedHook(_MMCVHook):
         metrics["epoch"] = float(self._epoch(runner))
         metrics["step"] = float(self._step(runner))
         return metrics
-
-    def before_run(self, runner: Any) -> None:
-        resume_path = (
-            os.environ.get("RAYTRAIN_RESUME_CHECKPOINT_PATH", "").strip()
-            or os.environ.get("PLATFORM_CHECKPOINT_PATH", "").strip()
-        )
-        if not resume_path:
-            return
-        checkpoint = Path(resume_path)
-        validate_checkpoint(checkpoint)
-        self._load_state(runner, checkpoint)
 
     def after_train_iter(self, runner: Any) -> None:
         if self._step(runner) % self.interval:
@@ -496,12 +772,12 @@ class RayTrainManagedHook(_MMCVHook):
         ):
             try:
                 metadata = self._checkpoint_metadata(runner, metrics)
-                checkpoint_dir = self.checkpoint_root / (
-                    f"checkpoint-epoch-{metadata['epoch']:06d}-step-{metadata['step']:012d}"
+                checkpoint_dir = _publish_runner_checkpoint(
+                    runner,
+                    self.checkpoint_root,
+                    metadata,
+                    self._write_state,
                 )
-                checkpoint_dir.mkdir(parents=True, exist_ok=False)
-                self._write_state(runner, checkpoint_dir, metadata)
-                finalize_checkpoint(checkpoint_dir, metadata)
             except Exception as exc:
                 checkpoint_dir = None
                 checkpoint_error = exc
@@ -520,4 +796,7 @@ class RayTrainManagedHook(_MMCVHook):
 
 
 if _MMCV_HOOKS is not None:
+    RayTrainManagedRestoreHook = _MMCV_HOOKS.register_module()(
+        RayTrainManagedRestoreHook
+    )
     RayTrainManagedHook = _MMCV_HOOKS.register_module()(RayTrainManagedHook)

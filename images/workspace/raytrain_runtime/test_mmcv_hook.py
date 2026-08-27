@@ -19,9 +19,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from raytrain_runtime.mmcv_hook import (  # noqa: E402
     MMCV_AVAILABLE,
     RayTrainManagedHook,
+    RayTrainManagedRestoreHook,
     bounded_training_parameters,
     build_hook_config,
+    build_restore_hook_config,
     extract_scalar_metrics,
+    resolve_external_managed_checkpoint,
     restore_runner_checkpoint,
     write_runner_checkpoint,
 )
@@ -139,6 +142,7 @@ class MetricHookTest(unittest.TestCase):
     def test_imports_without_mmcv_installed(self):
         self.assertIsInstance(MMCV_AVAILABLE, bool)
         self.assertTrue(callable(RayTrainManagedHook))
+        self.assertTrue(callable(RayTrainManagedRestoreHook))
 
     def test_extracts_only_finite_scalars_without_mutating_runner_output(self):
         output = {"loss": 1, "mAP": 0.5, "nested": [1], "nan": math.nan}
@@ -194,6 +198,13 @@ class MetricHookTest(unittest.TestCase):
                 "best_mode": "max",
             },
         )
+
+    def test_restore_hook_config_is_separate_from_very_low_reporting(self):
+        self.assertEqual(
+            build_restore_hook_config(), {"type": "RayTrainManagedRestoreHook"}
+        )
+        self.assertNotIn("before_run", RayTrainManagedHook.__dict__)
+        self.assertIn("before_run", RayTrainManagedRestoreHook.__dict__)
 
     def test_default_checkpoint_root_uses_output_contract_not_resume_input(self):
         with mock.patch.dict(
@@ -269,6 +280,10 @@ class CheckpointHookTest(unittest.TestCase):
         }
         options.update(overrides)
         return RayTrainManagedHook(**options)
+
+    @staticmethod
+    def _restore_hook(state_loader):
+        return RayTrainManagedRestoreHook(state_loader=state_loader)
 
     def test_checkpoint_epoch_reports_on_all_ranks_but_only_rank_zero_attaches(self):
         rank_zero_reports = []
@@ -387,6 +402,81 @@ class CheckpointHookTest(unittest.TestCase):
         self.assertIsNone(reports[0][1]["checkpoint_dir"])
         self.assertFalse(any(self.root.rglob("manifest.json")))
 
+    def test_failed_staging_write_does_not_block_same_epoch_retry(self):
+        reports = []
+        attempts = 0
+        self.runner.log_buffer.output = {"loss": 0.8, "mAP": 0.6}
+
+        def fail_once(_runner, directory, _metadata):
+            nonlocal attempts
+            attempts += 1
+            (directory / "training_state.pth").write_bytes(b"partial")
+            if attempts == 1:
+                raise OSError("transient write failure")
+
+        hook = self._hook(0, reports, state_writer=fail_once)
+        with self.assertRaisesRegex(OSError, "transient write failure"):
+            hook.after_train_epoch(self.runner)
+
+        final = self.root / "checkpoint-epoch-000002-step-000000000100"
+        self.assertFalse(final.exists())
+
+        hook.after_train_epoch(self.runner)
+
+        self.assertEqual(attempts, 2)
+        self.assertTrue((final / "manifest.json").is_file())
+        self.assertEqual(reports[-1][1]["checkpoint_dir"], final)
+
+    def test_checkpoint_is_finalized_in_hidden_staging_then_atomically_published(self):
+        reports = []
+        observed = {}
+        final = self.root / "checkpoint-epoch-000002-step-000000000100"
+
+        def observe_staging(_runner, directory, _metadata):
+            observed["directory"] = directory
+            observed["final_during_write"] = final.exists()
+            (directory / "training_state.pth").write_bytes(b"state")
+
+        self._hook(0, reports, state_writer=observe_staging).after_train_epoch(
+            self.runner
+        )
+
+        self.assertTrue(observed["directory"].name.startswith(".checkpoint-staging-"))
+        self.assertFalse(observed["final_during_write"])
+        self.assertTrue((final / "manifest.json").is_file())
+        self.assertFalse(observed["directory"].exists())
+        self.assertEqual(reports[0][1]["checkpoint_dir"], final)
+
+    def test_legacy_incomplete_final_directory_is_quarantined_before_retry(self):
+        reports = []
+        final = self.root / "checkpoint-epoch-000002-step-000000000100"
+        final.mkdir()
+        (final / "partial.pth").write_bytes(b"legacy-partial")
+
+        self._hook(0, reports).after_train_epoch(self.runner)
+
+        self.assertTrue((final / "manifest.json").is_file())
+        quarantined = list(self.root.glob(".checkpoint-incomplete-*-*"))
+        self.assertEqual(len(quarantined), 1)
+        self.assertEqual(
+            (quarantined[0] / "partial.pth").read_bytes(), b"legacy-partial"
+        )
+        self.assertEqual(reports[0][1]["checkpoint_dir"], final)
+
+    def test_existing_complete_current_checkpoint_is_reused_without_rewrite(self):
+        reports = []
+        final = self.root / "checkpoint-epoch-000002-step-000000000100"
+        final.mkdir()
+        (final / "training_state.pth").write_bytes(b"complete")
+        finalize_checkpoint(final, {"epoch": 2, "step": 100, "score": 0.6})
+        writer = mock.Mock(side_effect=AssertionError("must not rewrite complete checkpoint"))
+
+        self._hook(0, reports, state_writer=writer).after_train_epoch(self.runner)
+
+        writer.assert_not_called()
+        self.assertEqual(reports[0][1]["checkpoint_dir"], final)
+        self.assertEqual((final / "training_state.pth").read_bytes(), b"complete")
+
     def test_report_failure_keeps_current_checkpoint_and_skips_retention(self):
         self.runner.log_buffer.output = {"loss": 0.8, "mAP": 0.6}
 
@@ -428,7 +518,7 @@ class CheckpointHookTest(unittest.TestCase):
         self.assertEqual(captured["amp"], {"amp": 4})
         self.assertEqual(captured["runner"]["epoch"], 1)
         self.assertEqual(captured["runner"]["iter"], 99)
-        self.assertEqual(captured["runner"]["meta"], self.runner.meta)
+        self.assertEqual(captured["runner"]["safe_meta"], self.runner.meta)
         self.assertEqual(captured["rng"]["torch_cpu"], b"cpu-rng")
         self.assertEqual(captured["rng"]["torch_cuda"], [b"cuda-0", b"cuda-1"])
         self.assertEqual(captured["rng"]["numpy"], fake_numpy.random.state)
@@ -436,6 +526,50 @@ class CheckpointHookTest(unittest.TestCase):
         self.assertIn("__truncated__", captured["training_parameters"])
         for key, value in metadata.items():
             self.assertEqual(captured[key], value)
+
+    def test_runner_metadata_is_bounded_redacted_and_preserves_safe_hook_messages(self):
+        fake_torch = _FakeTorch()
+        self.runner.meta = {
+            "hook_msgs": {"last_ckpt": "epoch_4.pth"},
+            "access_token": "must-not-leak",
+            "nested": {"password": "must-not-leak"},
+            "seed": 7,
+            "experiment_name": "bevfusion",
+            **{f"a_item_{index}": index for index in range(300)},
+        }
+
+        with mock.patch.dict(
+            sys.modules, {"torch": fake_torch, "numpy": _FakeNumpy()}
+        ):
+            write_runner_checkpoint(
+                self.runner, self.root, {"epoch": 2, "step": 100}
+            )
+
+        payload = next(iter(fake_torch.saved.values()))
+        safe_meta = payload["runner"]["safe_meta"]
+        self.assertEqual(
+            safe_meta["hook_msgs"], {"last_ckpt": "epoch_4.pth"}
+        )
+        self.assertEqual(safe_meta["seed"], 7)
+        self.assertEqual(safe_meta["experiment_name"], "bevfusion")
+        self.assertNotIn("access_token", safe_meta)
+        self.assertNotIn("nested", safe_meta)
+        self.assertFalse(any(key.startswith("a_item_") for key in safe_meta))
+        self.assertNotIn("must-not-leak", repr(payload))
+
+    def test_non_mapping_runner_metadata_is_saved_as_empty_safe_state(self):
+        fake_torch = _FakeTorch()
+        self.runner.meta = ["not", "a", "mapping"]
+
+        with mock.patch.dict(
+            sys.modules, {"torch": fake_torch, "numpy": _FakeNumpy()}
+        ):
+            write_runner_checkpoint(
+                self.runner, self.root, {"epoch": 2, "step": 100}
+            )
+
+        payload = next(iter(fake_torch.saved.values()))
+        self.assertEqual(payload["runner"]["safe_meta"], {})
 
     def test_checkpoint_write_is_atomic_when_serializer_fails(self):
         class FailingTorch(_FakeTorch):
@@ -531,7 +665,7 @@ class CheckpointHookTest(unittest.TestCase):
         fake_torch.saved[str(state_path)] = {
             "format_version": 1,
             "model": {"model": 2},
-            "runner": {"epoch": 2, "iter": 10, "meta": {}},
+            "runner": {"epoch": 2, "iter": 10, "safe_meta": {}},
             # Deliberately missing required RNG state.
         }
         finalize_checkpoint(self.root, {"epoch": 3, "step": 11})
@@ -551,11 +685,8 @@ class CheckpointHookTest(unittest.TestCase):
         (ray_resume / "training_state.pth").write_bytes(b"state")
         finalize_checkpoint(ray_resume, {"epoch": 2, "step": 20})
         restored = []
-        hook = self._hook(
-            0,
-            [],
-            checkpoint_every_epochs=0,
-            state_loader=lambda runner, path: restored.append((runner, Path(path))),
+        hook = self._restore_hook(
+            lambda runner, path: restored.append((runner, Path(path)))
         )
 
         with mock.patch.dict(
@@ -576,11 +707,8 @@ class CheckpointHookTest(unittest.TestCase):
         (backend_resume / "training_state.pth").write_bytes(b"state")
         finalize_checkpoint(backend_resume, {"epoch": 2, "step": 20})
         restored = []
-        hook = self._hook(
-            0,
-            [],
-            checkpoint_every_epochs=0,
-            state_loader=lambda runner, path: restored.append((runner, Path(path))),
+        hook = self._restore_hook(
+            lambda runner, path: restored.append((runner, Path(path)))
         )
 
         with mock.patch.dict(
@@ -591,6 +719,112 @@ class CheckpointHookTest(unittest.TestCase):
             hook.before_run(self.runner)
 
         self.assertEqual(restored, [(self.runner, backend_resume)])
+
+    def test_external_previous_run_root_prefers_retention_index(self):
+        previous_run = self.root / "previous-run"
+        checkpoints = previous_run / "checkpoints"
+        checkpoints.mkdir(parents=True)
+        indexed = checkpoints / "checkpoint-epoch-000001-step-000000000010"
+        indexed.mkdir()
+        (indexed / "training_state.pth").write_bytes(b"indexed")
+        finalize_checkpoint(indexed, {"epoch": 1, "step": 10})
+        unindexed_newer = checkpoints / "checkpoint-epoch-000009-step-000000000090"
+        unindexed_newer.mkdir()
+        (unindexed_newer / "training_state.pth").write_bytes(b"newer")
+        finalize_checkpoint(unindexed_newer, {"epoch": 9, "step": 90})
+        (checkpoints / "retention-index.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "complete": True,
+                    "checkpoints": [
+                        {"path": indexed.name, "epoch": 1, "step": 10}
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        resolved = resolve_external_managed_checkpoint(previous_run)
+
+        self.assertEqual(resolved, indexed.resolve())
+
+    def test_external_previous_run_platform_job_root_resolves_latest_complete(self):
+        previous_run = self.root / "previous-run"
+        checkpoints = (
+            previous_run
+            / ".platform"
+            / "ray-train"
+            / "job-0123456789abcdef01234567"
+            / "checkpoints"
+        )
+        checkpoints.mkdir(parents=True)
+        older = checkpoints / "checkpoint-epoch-000001-step-000000000010"
+        newer = checkpoints / "checkpoint-epoch-000002-step-000000000020"
+        for checkpoint, epoch in ((older, 1), (newer, 2)):
+            checkpoint.mkdir()
+            (checkpoint / "training_state.pth").write_bytes(str(epoch).encode())
+            finalize_checkpoint(checkpoint, {"epoch": epoch, "step": epoch * 10})
+
+        resolved = resolve_external_managed_checkpoint(previous_run)
+
+        self.assertEqual(resolved, newer.resolve())
+
+    def test_external_legacy_resume_without_manifest_skips_managed_restore(self):
+        legacy = self.root / "legacy"
+        legacy.mkdir()
+        (legacy / "epoch_7.pth").write_bytes(b"legacy")
+        loader = mock.Mock()
+        hook = self._restore_hook(loader)
+
+        with mock.patch.dict(
+            os.environ, {"PLATFORM_CHECKPOINT_PATH": str(legacy)}, clear=True
+        ):
+            hook.before_run(self.runner)
+
+        loader.assert_not_called()
+
+    def test_external_resolver_ignores_symlink_escape(self):
+        previous_run = self.root / "previous-run"
+        checkpoints = previous_run / "checkpoints"
+        checkpoints.mkdir(parents=True)
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "training_state.pth").write_bytes(b"outside")
+        finalize_checkpoint(outside, {"epoch": 99, "step": 990})
+        try:
+            os.symlink(outside, checkpoints / "checkpoint-epoch-99")
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks are not supported")
+
+        self.assertIsNone(resolve_external_managed_checkpoint(previous_run))
+
+    def test_external_resolver_bounds_managed_job_root_scan(self):
+        managed_root = self.root / "previous-run" / ".platform" / "ray-train"
+        (managed_root / "job-a").mkdir(parents=True)
+        (managed_root / "job-b").mkdir()
+
+        with self.assertRaisesRegex(ValueError, "bounded"):
+            resolve_external_managed_checkpoint(
+                self.root / "previous-run", max_job_roots=1
+            )
+
+    def test_ray_resume_handoff_remains_strict_for_corrupt_checkpoint(self):
+        corrupt = self.root / "ray-corrupt"
+        corrupt.mkdir()
+        (corrupt / "training_state.pth").write_bytes(b"corrupt")
+        loader = mock.Mock()
+        hook = self._restore_hook(loader)
+
+        with mock.patch.dict(
+            os.environ,
+            {"RAYTRAIN_RESUME_CHECKPOINT_PATH": str(corrupt)},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "complete manifest"):
+                hook.before_run(self.runner)
+
+        loader.assert_not_called()
 
 
 class OptionalRegistrationTest(unittest.TestCase):
@@ -624,8 +858,11 @@ class OptionalRegistrationTest(unittest.TestCase):
                 sys.modules.pop(module_name, None)
 
         self.assertTrue(module.MMCV_AVAILABLE)
-        self.assertEqual(len(registered), 1)
-        self.assertEqual(registered[0].__name__, "RayTrainManagedHook")
+        self.assertEqual(len(registered), 2)
+        self.assertEqual(
+            [item.__name__ for item in registered],
+            ["RayTrainManagedRestoreHook", "RayTrainManagedHook"],
+        )
 
 
 if __name__ == "__main__":

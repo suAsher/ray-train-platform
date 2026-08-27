@@ -44,6 +44,7 @@ class RayTrainManagedPatchTest(unittest.TestCase):
         self.assertIn("configure_ray_train_managed_hook(cfg)", self.patched)
         self.assertEqual(self.patched.count("train_model(model, datasets, cfg"), 1)
         self.assertIn("custom_hooks", self.patched)
+        self.assertIn('"priority": "VERY_HIGH"', self.patched)
         self.assertIn('"priority": "VERY_LOW"', self.patched)
 
     def test_guards_duplicate_process_group_initialization(self):
@@ -105,6 +106,10 @@ class RayTrainManagedPatchTest(unittest.TestCase):
         self.assertEqual(
             config.custom_hooks,
             [
+                {
+                    "type": "RayTrainManagedRestoreHook",
+                    "priority": "VERY_HIGH",
+                },
                 {
                     "type": "RayTrainManagedHook",
                     "interval": 13,

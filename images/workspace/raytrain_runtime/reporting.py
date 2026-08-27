@@ -234,7 +234,7 @@ def _retention_record(path: Path, manifest: Mapping[str, Any]) -> dict[str, Any]
 def _complete_checkpoint_records(root: Path) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for candidate in sorted(root.iterdir(), key=lambda item: item.name):
-        if candidate.is_symlink() or not candidate.is_dir():
+        if candidate.name.startswith(".") or candidate.is_symlink() or not candidate.is_dir():
             continue
         try:
             manifest = validate_checkpoint(candidate)
@@ -361,7 +361,13 @@ def report_metrics(
     api = train_api if train_api is not None else _load_train_api()
     rank = int(api.get_context().get_world_rank()) if world_rank is None else int(world_rank)
     checkpoint = None
+    checkpoint_error = None
     if checkpoint_dir is not None and rank == 0:
-        validate_checkpoint(checkpoint_dir)
-        checkpoint = api.Checkpoint.from_directory(str(checkpoint_dir))
+        try:
+            validate_checkpoint(checkpoint_dir)
+            checkpoint = api.Checkpoint.from_directory(str(checkpoint_dir))
+        except Exception as exc:
+            checkpoint_error = exc
     api.report(clean, checkpoint=checkpoint)
+    if checkpoint_error is not None:
+        raise checkpoint_error

@@ -193,7 +193,58 @@ class ReportMetricsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "complete"):
             report_metrics({"loss": 1}, self.checkpoint, world_rank=0, train_api=train)
 
-        self.assertEqual(train.reports, [])
+        self.assertEqual(
+            train.reports, [{"metrics": {"loss": 1.0}, "checkpoint": None}]
+        )
+
+    def test_corrupt_checkpoint_preparation_preserves_rank_report_parity(self):
+        (self.checkpoint / "model.pth").write_bytes(b"corrupt")
+        train = _FakeTrain()
+
+        report_metrics({"loss": 1}, self.checkpoint, world_rank=1, train_api=train)
+        with self.assertRaisesRegex(ValueError, "integrity"):
+            report_metrics(
+                {"loss": 1}, self.checkpoint, world_rank=0, train_api=train
+            )
+
+        self.assertEqual(len(train.reports), 2)
+        self.assertTrue(all(item["checkpoint"] is None for item in train.reports))
+
+    def test_checkpoint_factory_failure_reports_then_reraises_on_rank_zero(self):
+        class RejectingCheckpoint:
+            @classmethod
+            def from_directory(cls, _path):
+                raise RuntimeError("checkpoint factory failed")
+
+        train = _FakeTrain()
+        train.Checkpoint = RejectingCheckpoint
+
+        with self.assertRaisesRegex(RuntimeError, "checkpoint factory failed"):
+            report_metrics(
+                {"loss": 1}, self.checkpoint, world_rank=0, train_api=train
+            )
+
+        self.assertEqual(
+            train.reports, [{"metrics": {"loss": 1.0}, "checkpoint": None}]
+        )
+
+    def test_report_failure_takes_precedence_over_checkpoint_preparation_failure(self):
+        (self.checkpoint / "manifest.json").write_text("{}", encoding="utf-8")
+
+        class RejectingTrain(_FakeTrain):
+            def report(self, metrics, *, checkpoint=None):
+                super().report(metrics, checkpoint=checkpoint)
+                raise RuntimeError("report failed")
+
+        train = RejectingTrain()
+
+        with self.assertRaisesRegex(RuntimeError, "report failed"):
+            report_metrics(
+                {"loss": 1}, self.checkpoint, world_rank=0, train_api=train
+            )
+
+        self.assertEqual(len(train.reports), 1)
+        self.assertIsNone(train.reports[0]["checkpoint"])
 
 
 class CheckpointRetentionTest(unittest.TestCase):
@@ -333,6 +384,26 @@ class CheckpointRetentionTest(unittest.TestCase):
         )
         self.assertFalse(old.exists())
         self.assertTrue(newest.exists())
+
+    def test_hidden_staging_and_quarantine_directories_are_ignored(self):
+        current = self._checkpoint(2, 0.2)
+        hidden = self.root / ".checkpoint-staging-or-quarantine"
+        hidden.mkdir()
+        (hidden / "training_state.pth").write_bytes(b"hidden")
+        finalize_checkpoint(hidden, {"epoch": 99, "step": 990, "score": 9.9})
+
+        retained = retain_checkpoints(
+            self.root,
+            current,
+            keep_latest=1,
+            keep_best=1,
+            best_mode="max",
+        )
+
+        self.assertEqual(
+            [item["path"] for item in retained["checkpoints"]], [current.name]
+        )
+        self.assertTrue(hidden.exists())
 
     def test_rejects_non_finite_metric_before_reporting(self):
         train = _FakeTrain()
