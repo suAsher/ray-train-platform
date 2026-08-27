@@ -127,11 +127,18 @@ entrypoint: python train.py
 	limitsRead := 0
 	stub := artifactStubHandler(t, func(spec domain.JobSpec) { submitted = spec })
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/api/v1/limits" {
+		switch request.URL.Path {
+		case "/api/v1/limits":
 			limitsRead++
 			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"runtime": map[string]any{
 				"availableEngines": []string{"ray-ddp", "ray-train"}, "managedEnabled": true,
 				"productionRayVersion": "2.56.1", "canaryRayVersion": "2.58.0",
+			}})
+			return
+		case "/api/v1/images":
+			writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
+				"name": "Managed", "reference": "harbor.example/train@sha256:" + strings.Repeat("b", 64),
+				"rayVersion": "2.56.1", "supportedEngines": []string{"ray-ddp", "ray-train"},
 			}})
 			return
 		}
@@ -152,8 +159,89 @@ entrypoint: python train.py
 	if submitted.TrainingEngine != domain.TrainingEngineRayTrain || submitted.RayVersion != "" || submitted.Managed.MaxFailures != 2 {
 		t.Fatalf("CLI must select managed engine/default policy but not forge Ray version: %+v", submitted)
 	}
-	if !strings.Contains(stdout.String(), "spk-rayjob submit --engine ray-train --watch") {
+	if !strings.Contains(stdout.String(), "下一步示例") || !strings.Contains(stdout.String(), "spk-rayjob submit --engine ray-train --watch") || strings.Contains(stdout.String(), "再次提交") {
 		t.Fatalf("managed-capable server must render a copyable engine command: %s", stdout.String())
+	}
+}
+
+func TestManagedSubmitRejectsIncompatibleExplicitImageBeforeArchiveOrUpload(t *testing.T) {
+	root := seedProject(t, `name: incompatible-managed
+image: harbor.example/legacy@sha256:`+strings.Repeat("1", 64)+`
+entrypoint: python train.py
+engine: ray-train
+`)
+	// A broken symlink makes BuildArchive fail. The expected catalog error proves
+	// managed preflight completes before archive construction even starts.
+	if err := os.Symlink(filepath.Join(root, "missing-target"), filepath.Join(root, "broken-link")); err != nil {
+		t.Fatal(err)
+	}
+	sourceRequests := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/limits":
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"runtime": map[string]any{
+				"availableEngines": []string{"ray-ddp", "ray-train"}, "managedEnabled": true,
+				"productionRayVersion": "2.56.1", "canaryRayVersion": "2.58.0",
+			}})
+		case "/api/v1/images":
+			writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
+				"name": "Legacy", "reference": "harbor.example/legacy@sha256:" + strings.Repeat("1", 64),
+				"rayVersion": "2.35.0", "supportedEngines": []string{"ray-ddp"}, "isDefault": true,
+			}})
+		default:
+			sourceRequests++
+			t.Fatalf("managed image rejection must happen before source artifact work: %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	err := Run(context.Background(), []string{"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+	if err == nil || !strings.Contains(err.Error(), "ray-train") {
+		t.Fatalf("expected managed image compatibility error before archive, got %v", err)
+	}
+	if sourceRequests != 0 {
+		t.Fatalf("source artifact work started %d times", sourceRequests)
+	}
+}
+
+func TestManagedSubmitWithCacheReadsLimitsOnceAndSelectsCompatibleDefault(t *testing.T) {
+	root := seedProject(t, `name: managed-cache
+entrypoint: python train.py
+engine: ray-train
+cache:
+  mode: runtime
+  size: 100Gi
+`)
+	limitsRead := 0
+	var submitted domain.JobSpec
+	stub := artifactStubHandler(t, func(spec domain.JobSpec) { submitted = spec })
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/limits":
+			limitsRead++
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{
+				"runtime": map[string]any{"availableEngines": []string{"ray-ddp", "ray-train"}, "managedEnabled": true, "productionRayVersion": "2.56.1", "canaryRayVersion": "2.58.0"},
+				"cache":   map[string]any{"enabled": true, "modes": []string{"off", "runtime"}, "allowedSizes": []string{"100Gi"}, "defaultSize": "100Gi", "maxSize": "1Ti"},
+			})
+			return
+		case "/api/v1/images":
+			writeClientSuccess(t, writer, http.StatusOK, []map[string]any{
+				{"name": "Legacy default", "reference": "harbor.example/legacy:2.35", "isDefault": true, "rayVersion": "2.35.0", "supportedEngines": []string{"ray-ddp"}},
+				{"name": "Managed", "reference": "harbor.example/managed:2.56", "rayVersion": "2.56.1", "supportedEngines": []string{"ray-ddp", "ray-train"}},
+			})
+			return
+		}
+		stub(writer, request)
+	}))
+	defer server.Close()
+	err := Run(context.Background(), []string{"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+	if err != nil {
+		t.Fatalf("managed cached submit: %v", err)
+	}
+	if limitsRead != 1 {
+		t.Fatalf("managed+cache must share one limits snapshot, calls=%d", limitsRead)
+	}
+	if submitted.Image != "harbor.example/managed:2.56" || submitted.Cache.Size != "100Gi" {
+		t.Fatalf("managed image/cache preflight was not applied: %+v", submitted)
 	}
 }
 

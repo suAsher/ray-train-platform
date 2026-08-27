@@ -218,12 +218,41 @@ func (client *Client) LoginCheck(ctx context.Context) (json.RawMessage, error) {
 }
 
 func (client *Client) SubmitDirectory(ctx context.Context, directory string, spec domain.JobSpec) (Job, error) {
+	resolved, err := client.preflightManagedImage(ctx, spec)
+	if err != nil {
+		return Job{}, err
+	}
+	spec = resolved
 	archive, err := BuildArchive(directory)
 	if err != nil {
 		return Job{}, err
 	}
 	defer os.Remove(archive.Path)
 	return client.submitArchive(ctx, archive, spec)
+}
+
+func (client *Client) preflightManagedImage(ctx context.Context, spec domain.JobSpec) (domain.JobSpec, error) {
+	if spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain {
+		return spec, nil
+	}
+	limits, err := client.PlatformLimits(ctx)
+	if err != nil {
+		return domain.JobSpec{}, fmt.Errorf("read managed runtime capabilities: %w", err)
+	}
+	if !limits.Runtime.ManagedAvailable() {
+		return domain.JobSpec{}, fmt.Errorf("Ray Train managed engine is not available")
+	}
+	images, err := client.TrainingImages(ctx)
+	if err != nil {
+		return domain.JobSpec{}, err
+	}
+	selected, err := managedImage(images, spec.Image, limits.Runtime)
+	if err != nil {
+		return domain.JobSpec{}, err
+	}
+	resolved := spec
+	resolved.Image = selected.Reference
+	return resolved, nil
 }
 
 func (client *Client) submitArchive(ctx context.Context, archive Archive, spec domain.JobSpec) (Job, error) {
@@ -326,7 +355,11 @@ func (client *Client) CompleteArtifact(ctx context.Context, artifactID string) (
 }
 
 func (client *Client) Submit(ctx context.Context, spec domain.JobSpec) (Job, error) {
-	return client.submit(ctx, spec, "")
+	resolved, err := client.preflightManagedImage(ctx, spec)
+	if err != nil {
+		return Job{}, err
+	}
+	return client.submit(ctx, resolved, "")
 }
 
 func (client *Client) submit(ctx context.Context, spec domain.JobSpec, origin domain.SubmissionOrigin) (Job, error) {
@@ -358,7 +391,15 @@ func (client *Client) TrainingImages(ctx context.Context) ([]catalogImage, error
 	if err := json.Unmarshal(raw, &images); err != nil {
 		return nil, fmt.Errorf("decode image catalogue: %w", err)
 	}
-	return images, nil
+	normalized := make([]catalogImage, 0, len(images))
+	for _, image := range images {
+		validated, err := normalizeCatalogImage(image)
+		if err != nil {
+			return nil, fmt.Errorf("decode image catalogue: %w", err)
+		}
+		normalized = append(normalized, validated)
+	}
+	return normalized, nil
 }
 
 func (client *Client) PlatformLimits(ctx context.Context) (PlatformLimits, error) {
@@ -397,6 +438,12 @@ func normalizeRuntimeLimits(limits PlatformRuntimeLimits) (PlatformRuntimeLimits
 	}
 	if limits.ManagedEnabled && !normalized.ManagedAvailable() {
 		return PlatformRuntimeLimits{}, fmt.Errorf("managed engine capability is inconsistent")
+	}
+	if limits.CanaryEnabled && !limits.ManagedEnabled {
+		return PlatformRuntimeLimits{}, fmt.Errorf("canary is enabled while managed engine is disabled")
+	}
+	if limits.ManagedEnabled && (strings.TrimSpace(limits.ProductionRayVersion) != domain.RayVersionProduction || strings.TrimSpace(limits.CanaryRayVersion) != domain.RayVersionCanary) {
+		return PlatformRuntimeLimits{}, fmt.Errorf("managed Ray version capability is inconsistent")
 	}
 	if !limits.ManagedEnabled && containsTrimmed(normalized.AvailableEngines, string(domain.TrainingEngineRayTrain)) {
 		return PlatformRuntimeLimits{}, fmt.Errorf("ray-train is advertised while managed engine is disabled")

@@ -86,6 +86,87 @@ func TestSubmitDirectoryCreatesUploadsCompletesThenSubmits(t *testing.T) {
 	}
 }
 
+func TestSubmitDirectoryManagedPreflightsImageBeforeBuildingArchive(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Symlink(filepath.Join(root, "missing"), filepath.Join(root, "broken")); err != nil {
+		t.Fatal(err)
+	}
+	artifactRequests := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/limits":
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"runtime": map[string]any{
+				"availableEngines": []string{"ray-ddp", "ray-train"}, "managedEnabled": true,
+				"productionRayVersion": domain.RayVersionProduction, "canaryRayVersion": domain.RayVersionCanary,
+			}})
+		case "/api/v1/images":
+			writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
+				"name": "Legacy", "reference": "registry/legacy:2.35", "rayVersion": domain.RayVersionLegacy,
+				"supportedEngines": []string{"ray-ddp"},
+			}})
+		default:
+			artifactRequests++
+			t.Fatalf("managed preflight must finish before artifact work: %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientOptions{ServerURL: server.URL, Token: "test-token", HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := testJobSpec()
+	spec.Image = "registry/legacy:2.35"
+	spec.TrainingEngine = domain.TrainingEngineRayTrain
+	spec.Managed.MaxFailures = 2
+	_, err = client.SubmitDirectory(context.Background(), root, spec)
+	if err == nil || !strings.Contains(err.Error(), "ray-train") {
+		t.Fatalf("expected image compatibility error before broken archive, got %v", err)
+	}
+	if artifactRequests != 0 {
+		t.Fatalf("artifact work started %d times", artifactRequests)
+	}
+}
+
+func TestSubmitManagedPreflightsImageBeforeCreatingJob(t *testing.T) {
+	jobRequests := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/limits":
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"runtime": map[string]any{
+				"availableEngines": []string{"ray-ddp", "ray-train"}, "managedEnabled": true,
+				"productionRayVersion": domain.RayVersionProduction, "canaryRayVersion": domain.RayVersionCanary,
+			}})
+		case "/api/v1/images":
+			writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
+				"name": "Legacy", "reference": "registry/legacy:2.35", "rayVersion": domain.RayVersionLegacy,
+				"supportedEngines": []string{"ray-ddp"},
+			}})
+		case "/api/v1/jobs":
+			jobRequests++
+			writeClientSuccess(t, writer, http.StatusAccepted, map[string]any{"id": "must-not-submit"})
+		default:
+			t.Fatalf("unexpected request %s %s", request.Method, request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientOptions{ServerURL: server.URL, Token: "test-token", HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := testJobSpec()
+	spec.Source = domain.CodeSource{Type: "workspace-archive", ArtifactID: "artifact-ready"}
+	spec.Image = "registry/legacy:2.35"
+	spec.TrainingEngine = domain.TrainingEngineRayTrain
+	spec.Managed.MaxFailures = 2
+	_, err = client.Submit(context.Background(), spec)
+	if err == nil || !strings.Contains(err.Error(), "ray-train") {
+		t.Fatalf("expected image compatibility error before job creation, got %v", err)
+	}
+	if jobRequests != 0 {
+		t.Fatalf("job creation started %d times", jobRequests)
+	}
+}
+
 func TestSubmitRejectsInvalidFinalSpecBeforeCreateAPI(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -189,6 +270,64 @@ func TestPlatformLimitsRejectsInconsistentManagedCapabilities(t *testing.T) {
 	}
 	if _, err := client.PlatformLimits(context.Background()); err == nil || !strings.Contains(err.Error(), "runtime") {
 		t.Fatalf("inconsistent capabilities must fail closed, got %v", err)
+	}
+}
+
+func TestTrainingImagesDecodesAndCopiesRuntimeCompatibility(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
+			"name": "Managed", "reference": "registry/managed:2.56.1", "framework": "pytorch", "isDefault": true,
+			"rayVersion": domain.RayVersionProduction, "supportedEngines": []string{"ray-ddp", "ray-train"},
+		}})
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientOptions{ServerURL: server.URL, Token: "test-token", HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	images, err := client.TrainingImages(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(images) != 1 || images[0].RayVersion != domain.RayVersionProduction || !reflect.DeepEqual(images[0].SupportedEngines, []domain.TrainingEngine{domain.TrainingEngineRayDDP, domain.TrainingEngineRayTrain}) {
+		t.Fatalf("runtime compatibility was not decoded: %+v", images)
+	}
+	copy := cloneCatalogImage(images[0])
+	images[0].SupportedEngines[0] = domain.TrainingEngineRayTrain
+	if copy.SupportedEngines[0] != domain.TrainingEngineRayDDP {
+		t.Fatalf("catalog engine slices alias caller-owned memory: %+v", copy)
+	}
+}
+
+func TestTrainingImagesRejectsMalformedRuntimeCompatibility(t *testing.T) {
+	tests := []struct {
+		name    string
+		version any
+		engines any
+	}{
+		{name: "missing version", version: "", engines: []string{"ray-ddp"}},
+		{name: "unknown version", version: "2.99.0", engines: []string{"ray-ddp"}},
+		{name: "empty engines", version: domain.RayVersionProduction, engines: []string{}},
+		{name: "unknown engine", version: domain.RayVersionProduction, engines: []string{"ray-magic"}},
+		{name: "duplicate engine", version: domain.RayVersionProduction, engines: []string{"ray-ddp", "ray-ddp"}},
+		{name: "legacy managed", version: domain.RayVersionLegacy, engines: []string{"ray-train"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
+					"name": "Broken", "reference": "registry/broken:tag", "rayVersion": test.version, "supportedEngines": test.engines,
+				}})
+			}))
+			defer server.Close()
+			client, err := NewClient(ClientOptions{ServerURL: server.URL, Token: "test-token", HTTPClient: server.Client()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.TrainingImages(context.Background()); err == nil || !strings.Contains(err.Error(), "image catalogue") {
+				t.Fatalf("malformed image metadata was accepted: %v", err)
+			}
+		})
 	}
 }
 

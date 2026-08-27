@@ -407,27 +407,42 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	if err != nil {
 		return err
 	}
-	defer os.Remove(draft.archive.Path)
+	var archive Archive
+	if draft.spec.TrainingEngine != domain.TrainingEngineRayTrain {
+		archive, err = BuildArchive(*directory)
+		if err != nil {
+			return err
+		}
+		defer os.Remove(archive.Path)
+	}
 	client, err := newCommandClient(connection, getenv, stderr)
 	if err != nil {
 		return err
 	}
 	runtimeCapabilities := PlatformRuntimeLimits{}
-	if draft.spec.TrainingEngine == domain.TrainingEngineRayTrain {
+	var limitsSnapshot *PlatformLimits
+	if draft.spec.TrainingEngine == domain.TrainingEngineRayTrain || cacheDraft.mode == domain.CacheModeRuntime {
 		limits, limitsErr := client.PlatformLimits(ctx)
 		if limitsErr != nil {
-			return fmt.Errorf("读取平台训练引擎能力失败：%w", limitsErr)
+			return fmt.Errorf("读取平台提交能力失败：%w", limitsErr)
 		}
+		limitsSnapshot = &limits
 		runtimeCapabilities = limits.Runtime
+	}
+	if draft.spec.TrainingEngine == domain.TrainingEngineRayTrain {
 		if !runtimeCapabilities.ManagedAvailable() {
 			return errors.New("当前平台未开启 Ray Train 托管引擎，请改用 --engine ray-ddp")
 		}
 	}
-	resolvedCache, err := resolveProjectCache(ctx, cacheDraft, client)
+	resolvedCache, err := resolveProjectCache(cacheDraft, limitsSnapshot)
 	if err != nil {
 		return err
 	}
-	if err := applyPlatformDerivedDefaults(ctx, &draft.values, client, stdout); err != nil {
+	if draft.spec.TrainingEngine == domain.TrainingEngineRayTrain {
+		if err := applyManagedImage(ctx, &draft.values, client, runtimeCapabilities, stdout); err != nil {
+			return err
+		}
+	} else if err := applyPlatformDerivedDefaults(ctx, &draft.values, client, stdout); err != nil {
 		return err
 	}
 	if err := draft.values.validateForSubmit(); err != nil {
@@ -449,7 +464,17 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 		}
 	}
 	spec := draft.finalSpec(resolvedCache)
-	job, err := client.submitArchive(ctx, draft.archive, spec)
+	if err := validateArchiveJobSpec(spec); err != nil {
+		return err
+	}
+	if archive.Path == "" {
+		archive, err = BuildArchive(*directory)
+		if err != nil {
+			return err
+		}
+		defer os.Remove(archive.Path)
+	}
+	job, err := client.submitArchive(ctx, archive, spec)
 	if err != nil {
 		return err
 	}
@@ -457,7 +482,7 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 		if err := writeJSON(stdout, job.Raw); err != nil {
 			return err
 		}
-	} else if _, err := fmt.Fprintf(stdout, "已提交 %s（%s）。查看日志：spk-rayjob logs -f %s\n再次提交：%s\n", job.ID, draft.values.Name, job.ID, renderSubmitCommand(spec.TrainingEngine, runtimeCapabilities)); err != nil {
+	} else if _, err := fmt.Fprintf(stdout, "已提交 %s（%s）。查看日志：spk-rayjob logs -f %s\n下一步示例（不会复现本次临时参数）：%s\n", job.ID, draft.values.Name, job.ID, renderSubmitCommand(spec.TrainingEngine, runtimeCapabilities)); err != nil {
 		return err
 	}
 	if !*watch {
@@ -477,9 +502,8 @@ func validateLocalSubmit(value project, previousJobID string, checkpointProvided
 }
 
 type localSubmitDraft struct {
-	values  project
-	spec    domain.JobSpec
-	archive Archive
+	values project
+	spec   domain.JobSpec
 }
 
 func newLocalSubmitDraft(value project, directory string, stdout io.Writer) (localSubmitDraft, error) {
@@ -493,11 +517,7 @@ func newLocalSubmitDraft(value project, directory string, stdout io.Writer) (loc
 	if err := validatePreflightJobSpec(spec); err != nil {
 		return localSubmitDraft{}, err
 	}
-	archive, err := BuildArchive(directory)
-	if err != nil {
-		return localSubmitDraft{}, err
-	}
-	return localSubmitDraft{values: value, spec: spec, archive: archive}, nil
+	return localSubmitDraft{values: value, spec: spec}, nil
 }
 
 func (draft *localSubmitDraft) setCheckpoint(location projectLocation) error {
@@ -549,6 +569,23 @@ func applyPlatformDerivedDefaults(ctx context.Context, value *project, client *C
 		}
 		value.Image = reference
 		fmt.Fprintf(stdout, "训练镜像：%s（平台默认，可用 --image 覆盖）\n", reference)
+	}
+	return nil
+}
+
+func applyManagedImage(ctx context.Context, value *project, client *Client, runtime PlatformRuntimeLimits, stdout io.Writer) error {
+	images, err := client.TrainingImages(ctx)
+	if err != nil {
+		return fmt.Errorf("读取镜像目录失败：%w", err)
+	}
+	requested := strings.TrimSpace(value.Image)
+	selected, err := managedImage(images, requested, runtime)
+	if err != nil {
+		return err
+	}
+	value.Image = selected.Reference
+	if requested == "" {
+		fmt.Fprintf(stdout, "训练镜像：%s（平台默认的 ray-train 兼容镜像，可用 --image 覆盖）\n", selected.Reference)
 	}
 	return nil
 }
