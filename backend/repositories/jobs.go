@@ -66,8 +66,33 @@ type OutboxRecord struct {
 	CompletedAt   *time.Time
 }
 
-func (JobRecord) TableName() string    { return "training_jobs" }
-func (OutboxRecord) TableName() string { return "outbox_events" }
+type ManagedAttemptResourceRecord struct {
+	JobID          string `gorm:"primaryKey"`
+	ClusterAttempt int    `gorm:"primaryKey"`
+	KubernetesNS   string `gorm:"column:namespace"`
+	RayJobName     string
+	RayJobUID      string
+	State          string `gorm:"index"`
+	LeaseOwner     string
+	LeaseVersion   int64
+	LeaseExpiresAt *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+func (JobRecord) TableName() string                    { return "training_jobs" }
+func (OutboxRecord) TableName() string                 { return "outbox_events" }
+func (ManagedAttemptResourceRecord) TableName() string { return "managed_attempt_resources" }
+
+func (record ManagedAttemptResourceRecord) toDomain() domain.ManagedAttemptResource {
+	return domain.ManagedAttemptResource{
+		JobID: record.JobID, ClusterAttempt: record.ClusterAttempt,
+		KubernetesNS: record.KubernetesNS, RayJobName: record.RayJobName, RayJobUID: record.RayJobUID,
+		State: domain.ManagedAttemptResourceState(record.State), LeaseOwner: record.LeaseOwner,
+		LeaseVersion: record.LeaseVersion, LeaseExpiresAt: record.LeaseExpiresAt,
+		CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt,
+	}
+}
 
 type GormRepository struct {
 	db *gorm.DB
@@ -380,15 +405,40 @@ func (r *GormRepository) List(ctx context.Context, filter domain.JobFilter) (dom
 func (r *GormRepository) SetDesiredState(ctx context.Context, tenantID, jobID string, state domain.DesiredState) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var record JobRecord
-		if err := tx.Where("tenant_id = ? AND id = ?", tenantID, jobID).First(&record).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND id = ?", tenantID, jobID).First(&record).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return fmt.Errorf("job not found")
 			}
 			return fmt.Errorf("get job for desired state: %w", err)
 		}
+		now := time.Now().UTC()
+		if state == domain.DesiredCanceled && domain.TrainingEngine(record.TrainingEngine).Resolved() == domain.TrainingEngineRayTrain {
+			namespace := strings.TrimSpace(record.KubernetesNS)
+			if namespace == "" {
+				namespace = "tenant-" + record.TenantID
+			}
+			if record.RayJobName != "" {
+				retiringAttempt := record.ClusterAttempt
+				if domain.State(record.ObservedState) == domain.StateRecovering && retiringAttempt > 1 &&
+					record.RayJobName != deterministicAttemptRayJobName(record.ID, retiringAttempt) {
+					retiringAttempt--
+				}
+				if _, _, err := retireManagedAttemptResourceTx(tx, domain.ManagedAttemptRetireRequest{
+					JobID: record.ID, ClusterAttempt: retiringAttempt, KubernetesNS: namespace,
+					RayJobName: record.RayJobName, RayJobUID: record.RayJobUID,
+				}, now); err != nil {
+					return fmt.Errorf("persist cancellation retirement intent: %w", err)
+				}
+			}
+			if err := tx.Model(&ManagedAttemptResourceRecord{}).Where("job_id = ?", record.ID).Updates(map[string]any{
+				"state": domain.ManagedAttemptResourceRetiring, "lease_owner": "", "lease_expires_at": nil, "updated_at": now,
+			}).Error; err != nil {
+				return fmt.Errorf("retire managed attempts for cancellation: %w", err)
+			}
+		}
 		if err := tx.Model(&JobRecord{}).Where("tenant_id = ? AND id = ?", tenantID, jobID).Updates(map[string]any{
 			"desired_state": state,
-			"updated_at":    time.Now().UTC(),
+			"updated_at":    now,
 		}).Error; err != nil {
 			return fmt.Errorf("set desired state: %w", err)
 		}
@@ -485,6 +535,28 @@ func (r *GormRepository) ApplyObservedState(ctx context.Context, observed domain
 		if !isTerminalState(observed.State) {
 			return nil
 		}
+		if domain.TrainingEngine(current.TrainingEngine).Resolved() == domain.TrainingEngineRayTrain {
+			namespace := strings.TrimSpace(observed.KubernetesNS)
+			if namespace == "" {
+				namespace = strings.TrimSpace(current.KubernetesNS)
+			}
+			if namespace == "" {
+				namespace = "tenant-" + current.TenantID
+			}
+			if observed.RayJobName != "" {
+				if _, _, err := retireManagedAttemptResourceTx(tx, domain.ManagedAttemptRetireRequest{
+					JobID: current.ID, ClusterAttempt: current.ClusterAttempt, KubernetesNS: namespace,
+					RayJobName: observed.RayJobName, RayJobUID: observed.RayJobUID,
+				}, now); err != nil {
+					return fmt.Errorf("persist terminal retirement intent: %w", err)
+				}
+			}
+			if err := tx.Model(&ManagedAttemptResourceRecord{}).Where("job_id = ?", current.ID).Updates(map[string]any{
+				"state": domain.ManagedAttemptResourceRetiring, "lease_owner": "", "lease_expires_at": nil, "updated_at": now,
+			}).Error; err != nil {
+				return fmt.Errorf("retire managed attempts for terminal state: %w", err)
+			}
+		}
 		payload, err := json.Marshal(map[string]string{"job_id": observed.ID})
 		if err != nil {
 			return fmt.Errorf("marshal terminal job event: %w", err)
@@ -552,13 +624,29 @@ func (r *GormRepository) ReserveManagedAttemptIdentity(ctx context.Context, requ
 			return nil
 		}
 		if job.RayJobName == request.RayJobName {
-			reserved = true
+			var existing ManagedAttemptResourceRecord
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("job_id = ? AND cluster_attempt = ?", request.JobID, request.ExpectedClusterAttempt).First(&existing).Error; err != nil {
+				if !errors.Is(err, gorm.ErrRecordNotFound) {
+					return fmt.Errorf("lock managed attempt reservation ledger: %w", err)
+				}
+				return fmt.Errorf("managed attempt reservation ledger is missing")
+			}
+			reserved = existing.KubernetesNS == request.KubernetesNS && existing.RayJobName == request.RayJobName && existing.RayJobUID == "" &&
+				(existing.State == string(domain.ManagedAttemptResourceReserved) || existing.State == string(domain.ManagedAttemptResourceCreating))
 			return nil
 		}
 		if job.RayJobName != "" {
 			return nil
 		}
 		now := time.Now().UTC()
+		ledger := ManagedAttemptResourceRecord{
+			JobID: request.JobID, ClusterAttempt: request.ExpectedClusterAttempt,
+			KubernetesNS: request.KubernetesNS, RayJobName: request.RayJobName,
+			State: string(domain.ManagedAttemptResourceReserved), CreatedAt: now, UpdatedAt: now,
+		}
+		if err := tx.Create(&ledger).Error; err != nil {
+			return fmt.Errorf("create managed attempt reservation ledger: %w", err)
+		}
 		result := tx.Model(&JobRecord{}).
 			Where("id = ? AND training_engine = ? AND desired_state = ? AND cluster_attempt = ? AND observed_state = ? AND ray_job_name = ? AND ray_job_uid = ?",
 				request.JobID, domain.TrainingEngineRayTrain, domain.DesiredActive, request.ExpectedClusterAttempt,
@@ -568,11 +656,9 @@ func (r *GormRepository) ReserveManagedAttemptIdentity(ctx context.Context, requ
 			return fmt.Errorf("reserve managed attempt identity: %w", result.Error)
 		}
 		if result.RowsAffected == 0 {
-			if err := tx.Where("id = ?", request.JobID).First(&record).Error; err != nil {
-				return fmt.Errorf("reload stale managed attempt reservation: %w", err)
-			}
-			current, err = record.toDomain()
-			return err
+			// The reservation row and job identity are one atomic fence. Never
+			// commit an orphan reservation if the job CAS unexpectedly loses.
+			return fmt.Errorf("managed attempt reservation CAS was lost")
 		}
 		reserved = true
 		if err := tx.Where("id = ?", request.JobID).First(&record).Error; err != nil {
@@ -585,6 +671,210 @@ func (r *GormRepository) ReserveManagedAttemptIdentity(ctx context.Context, requ
 		return nil, false, err
 	}
 	return current, reserved, nil
+}
+
+// AcquireManagedAttemptCreation grants a short database lease immediately
+// before the only create-capable Kubernetes call. Any unresolved lower attempt
+// blocks the lease, so recovery cannot overlap old and new GPU workloads.
+func (r *GormRepository) AcquireManagedAttemptCreation(ctx context.Context, request domain.ManagedAttemptCreationLeaseRequest, now time.Time) (*domain.TrainingJob, *domain.ManagedAttemptResource, bool, error) {
+	if err := request.Validate(); err != nil {
+		return nil, nil, false, err
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+	var current *domain.TrainingJob
+	var resource *domain.ManagedAttemptResource
+	acquired := false
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var jobRecord JobRecord
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", request.JobID).First(&jobRecord).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("job not found")
+			}
+			return fmt.Errorf("lock managed attempt creation job: %w", err)
+		}
+		job, err := jobRecord.toDomain()
+		if err != nil {
+			return err
+		}
+		current = job
+		var ledger ManagedAttemptResourceRecord
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("job_id = ? AND cluster_attempt = ?", request.JobID, request.ExpectedClusterAttempt).First(&ledger).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("managed attempt creation ledger not found")
+			}
+			return fmt.Errorf("lock managed attempt creation ledger: %w", err)
+		}
+		ledgerDomain := ledger.toDomain()
+		resource = &ledgerDomain
+		if job.Spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain || job.DesiredState != domain.DesiredActive ||
+			job.ClusterAttempt != request.ExpectedClusterAttempt || job.ObservedState != request.ExpectedState ||
+			job.RayJobName != request.RayJobName || job.RayJobUID != "" || ledger.RayJobName != request.RayJobName {
+			return nil
+		}
+		var lower int64
+		if err := tx.Model(&ManagedAttemptResourceRecord{}).Where("job_id = ? AND cluster_attempt < ?", request.JobID, request.ExpectedClusterAttempt).Count(&lower).Error; err != nil {
+			return fmt.Errorf("count unresolved lower managed attempts: %w", err)
+		}
+		if lower > 0 || (ledger.State != string(domain.ManagedAttemptResourceReserved) && ledger.State != string(domain.ManagedAttemptResourceCreating)) {
+			return nil
+		}
+		if ledger.State == string(domain.ManagedAttemptResourceCreating) && ledger.LeaseExpiresAt != nil && ledger.LeaseExpiresAt.After(now) {
+			if ledger.LeaseOwner == request.LeaseOwner {
+				acquired = true
+			}
+			return nil
+		}
+		expires := now.Add(request.LeaseDuration)
+		result := tx.Model(&ManagedAttemptResourceRecord{}).
+			Where("job_id = ? AND cluster_attempt = ? AND state = ? AND lease_version = ?", ledger.JobID, ledger.ClusterAttempt, ledger.State, ledger.LeaseVersion).
+			Updates(map[string]any{
+				"state": string(domain.ManagedAttemptResourceCreating), "lease_owner": request.LeaseOwner,
+				"lease_version": ledger.LeaseVersion + 1, "lease_expires_at": expires, "updated_at": now,
+			})
+		if result.Error != nil {
+			return fmt.Errorf("acquire managed attempt creation lease: %w", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return nil
+		}
+		ledger.State = string(domain.ManagedAttemptResourceCreating)
+		ledger.LeaseOwner = request.LeaseOwner
+		ledger.LeaseVersion++
+		ledger.LeaseExpiresAt = &expires
+		ledger.UpdatedAt = now
+		ledgerDomain = ledger.toDomain()
+		resource = &ledgerDomain
+		acquired = true
+		return nil
+	})
+	if err != nil {
+		return nil, nil, false, err
+	}
+	return current, resource, acquired, nil
+}
+
+// CompleteManagedAttemptCleanup removes only an exact RETIRING ledger row
+// after the reconciler has observed the corresponding Kubernetes UID absent.
+func (r *GormRepository) CompleteManagedAttemptCleanup(ctx context.Context, request domain.ManagedAttemptCleanupRequest) (bool, error) {
+	if err := request.Validate(); err != nil {
+		return false, err
+	}
+	result := r.db.WithContext(ctx).Where(
+		"job_id = ? AND cluster_attempt = ? AND ray_job_name = ? AND ray_job_uid = ? AND state = ?",
+		request.JobID, request.ClusterAttempt, request.RayJobName, request.RayJobUID, domain.ManagedAttemptResourceRetiring,
+	).Delete(&ManagedAttemptResourceRecord{})
+	if result.Error != nil {
+		return false, fmt.Errorf("complete managed attempt cleanup: %w", result.Error)
+	}
+	return result.RowsAffected == 1, nil
+}
+
+// ListManagedAttemptCleanup is deliberately independent of normal active-job
+// candidates. Terminal and canceled jobs remain visible until every durable
+// stale or retiring Kubernetes resource intent has reached NotFound.
+func (r *GormRepository) ListManagedAttemptCleanup(ctx context.Context, limit int, now time.Time) ([]domain.ManagedAttemptResource, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	terminal := []domain.State{domain.StateSucceeded, domain.StateFailed, domain.StateCanceled, domain.StateTimedOut}
+	var records []ManagedAttemptResourceRecord
+	query := r.db.WithContext(ctx).Table("managed_attempt_resources AS resources").
+		Select("resources.*").Joins("JOIN training_jobs AS jobs ON jobs.id = resources.job_id").
+		Where("resources.state = ? OR (resources.state IN ? AND (resources.cluster_attempt < jobs.cluster_attempt OR jobs.desired_state = ? OR jobs.observed_state IN ?))",
+			domain.ManagedAttemptResourceRetiring,
+			[]domain.ManagedAttemptResourceState{domain.ManagedAttemptResourceReserved, domain.ManagedAttemptResourceCreating},
+			domain.DesiredCanceled, terminal).
+		Order("resources.updated_at ASC, resources.job_id ASC, resources.cluster_attempt ASC").Limit(limit)
+	if err := query.Find(&records).Error; err != nil {
+		return nil, fmt.Errorf("list managed attempt cleanup: %w", err)
+	}
+	items := make([]domain.ManagedAttemptResource, 0, len(records))
+	for _, record := range records {
+		items = append(items, record.toDomain())
+	}
+	return items, nil
+}
+
+// RetireManagedAttemptResource persists deletion intent before any Kubernetes
+// delete. A previously unknown UID may be captured exactly once after resource
+// ownership and immutable attempt metadata have been verified.
+func (r *GormRepository) RetireManagedAttemptResource(ctx context.Context, request domain.ManagedAttemptRetireRequest) (*domain.ManagedAttemptResource, bool, error) {
+	if err := request.Validate(); err != nil {
+		return nil, false, err
+	}
+	var resource *domain.ManagedAttemptResource
+	changed := false
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		record, didChange, err := retireManagedAttemptResourceTx(tx, request, time.Now().UTC())
+		if err != nil {
+			return err
+		}
+		value := record.toDomain()
+		resource = &value
+		changed = didChange
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return resource, changed, nil
+}
+
+func retireManagedAttemptResourceTx(tx *gorm.DB, request domain.ManagedAttemptRetireRequest, now time.Time) (ManagedAttemptResourceRecord, bool, error) {
+	var record ManagedAttemptResourceRecord
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("job_id = ? AND cluster_attempt = ?", request.JobID, request.ClusterAttempt).First(&record).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		record = ManagedAttemptResourceRecord{
+			JobID: request.JobID, ClusterAttempt: request.ClusterAttempt,
+			KubernetesNS: request.KubernetesNS, RayJobName: request.RayJobName, RayJobUID: request.RayJobUID,
+			State: string(domain.ManagedAttemptResourceRetiring), CreatedAt: now, UpdatedAt: now,
+		}
+		if err := tx.Create(&record).Error; err != nil {
+			return ManagedAttemptResourceRecord{}, false, fmt.Errorf("create managed attempt retirement ledger: %w", err)
+		}
+		return record, true, nil
+	}
+	if err != nil {
+		return ManagedAttemptResourceRecord{}, false, fmt.Errorf("lock managed attempt retirement ledger: %w", err)
+	}
+	if record.KubernetesNS != request.KubernetesNS || record.RayJobName != request.RayJobName {
+		return ManagedAttemptResourceRecord{}, false, fmt.Errorf("managed attempt retirement identity does not match ledger")
+	}
+	if record.RayJobUID != "" && request.RayJobUID != "" && record.RayJobUID != request.RayJobUID {
+		return ManagedAttemptResourceRecord{}, false, fmt.Errorf("managed attempt retirement UID does not match ledger")
+	}
+	uid := record.RayJobUID
+	if uid == "" {
+		uid = request.RayJobUID
+	}
+	if record.State == string(domain.ManagedAttemptResourceRetiring) && record.RayJobUID == uid && record.LeaseOwner == "" && record.LeaseExpiresAt == nil {
+		return record, false, nil
+	}
+	result := tx.Model(&ManagedAttemptResourceRecord{}).
+		Where("job_id = ? AND cluster_attempt = ? AND ray_job_name = ?", request.JobID, request.ClusterAttempt, request.RayJobName).
+		Updates(map[string]any{
+			"ray_job_uid": uid, "state": domain.ManagedAttemptResourceRetiring,
+			"lease_owner": "", "lease_expires_at": nil, "updated_at": now,
+		})
+	if result.Error != nil {
+		return ManagedAttemptResourceRecord{}, false, fmt.Errorf("mark managed attempt retiring: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return ManagedAttemptResourceRecord{}, false, fmt.Errorf("managed attempt retirement ledger disappeared")
+	}
+	record.RayJobUID = uid
+	record.State = string(domain.ManagedAttemptResourceRetiring)
+	record.LeaseOwner = ""
+	record.LeaseExpiresAt = nil
+	record.UpdatedAt = now
+	return record, true, nil
 }
 
 // AdoptManagedAttemptIdentity binds the UID returned by Kubernetes to the
@@ -609,13 +899,29 @@ func (r *GormRepository) AdoptManagedAttemptIdentity(ctx context.Context, reques
 			return err
 		}
 		current = job
+		var ledger ManagedAttemptResourceRecord
+		ledgerErr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("job_id = ? AND cluster_attempt = ?", request.JobID, request.ExpectedClusterAttempt).First(&ledger).Error
 		if job.ClusterAttempt == request.ExpectedClusterAttempt && job.RayJobName == request.RayJobName && job.RayJobUID == request.RayJobUID {
-			adopted = true
+			if ledgerErr != nil {
+				return fmt.Errorf("load idempotent managed attempt ledger: %w", ledgerErr)
+			}
+			adopted = ledger.RayJobName == request.RayJobName && ledger.RayJobUID == request.RayJobUID &&
+				(ledger.State == string(domain.ManagedAttemptResourceActive) || ledger.State == string(domain.ManagedAttemptResourceRetiring))
 			return nil
 		}
 		if job.Spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain ||
 			job.DesiredState != domain.DesiredActive || job.ClusterAttempt != request.ExpectedClusterAttempt ||
 			job.ObservedState != request.ExpectedState || job.RayJobName != request.RayJobName || job.RayJobUID != "" {
+			return nil
+		}
+		if ledgerErr != nil {
+			if errors.Is(ledgerErr, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("managed attempt adoption ledger not found")
+			}
+			return fmt.Errorf("lock managed attempt adoption ledger: %w", ledgerErr)
+		}
+		if ledger.KubernetesNS != request.KubernetesNS || ledger.RayJobName != request.RayJobName || ledger.RayJobUID != "" ||
+			ledger.State != string(domain.ManagedAttemptResourceCreating) || ledger.LeaseOwner != request.LeaseOwner || ledger.LeaseVersion != request.LeaseVersion {
 			return nil
 		}
 		now := time.Now().UTC()
@@ -636,6 +942,19 @@ func (r *GormRepository) AdoptManagedAttemptIdentity(ctx context.Context, reques
 			}
 			current, err = record.toDomain()
 			return err
+		}
+		ledgerResult := tx.Model(&ManagedAttemptResourceRecord{}).
+			Where("job_id = ? AND cluster_attempt = ? AND state = ? AND lease_owner = ? AND lease_version = ? AND ray_job_uid = ?",
+				request.JobID, request.ExpectedClusterAttempt, domain.ManagedAttemptResourceCreating, request.LeaseOwner, request.LeaseVersion, "").
+			Updates(map[string]any{
+				"ray_job_uid": request.RayJobUID, "state": domain.ManagedAttemptResourceActive,
+				"lease_owner": "", "lease_expires_at": nil, "updated_at": now,
+			})
+		if ledgerResult.Error != nil {
+			return fmt.Errorf("activate managed attempt ledger: %w", ledgerResult.Error)
+		}
+		if ledgerResult.RowsAffected == 0 {
+			return fmt.Errorf("managed attempt adoption lease was lost")
 		}
 		adopted = true
 		if err := tx.Where("id = ?", request.JobID).First(&record).Error; err != nil {
@@ -695,6 +1014,16 @@ func (r *GormRepository) BeginManagedRecovery(ctx context.Context, request domai
 			return nil
 		}
 		now := time.Now().UTC()
+		namespace := strings.TrimSpace(job.KubernetesNS)
+		if namespace == "" {
+			namespace = "tenant-" + job.TenantID
+		}
+		if _, _, err := retireManagedAttemptResourceTx(tx, domain.ManagedAttemptRetireRequest{
+			JobID: job.ID, ClusterAttempt: job.ClusterAttempt, KubernetesNS: namespace,
+			RayJobName: job.RayJobName, RayJobUID: job.RayJobUID,
+		}, now); err != nil {
+			return fmt.Errorf("persist recovery retirement intent: %w", err)
+		}
 		updates := map[string]any{
 			"observed_state":       domain.StateRecovering,
 			"status_reason":        strings.TrimSpace(request.FailureClass),
@@ -757,6 +1086,16 @@ func (r *GormRepository) ClearManagedRecoveryRetiringIdentity(ctx context.Contex
 		current = job
 		if job.DesiredState != domain.DesiredActive || job.ObservedState != domain.StateRecovering ||
 			job.ClusterAttempt != request.ExpectedClusterAttempt || job.RayJobName != request.RayJobName || job.RayJobUID != request.RayJobUID {
+			return nil
+		}
+		var pendingCleanup int64
+		if err := tx.Model(&ManagedAttemptResourceRecord{}).
+			Where("job_id = ? AND ray_job_name = ? AND ray_job_uid = ? AND state = ?",
+				request.JobID, request.RayJobName, request.RayJobUID, domain.ManagedAttemptResourceRetiring).
+			Count(&pendingCleanup).Error; err != nil {
+			return fmt.Errorf("check managed retirement cleanup fence: %w", err)
+		}
+		if pendingCleanup != 0 {
 			return nil
 		}
 		now := time.Now().UTC()

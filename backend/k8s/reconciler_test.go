@@ -33,6 +33,7 @@ type memoryJobStore struct {
 	cancelDuringRetire   bool
 	advanceDuringAdopt   bool
 	cancelDuringAdopt    bool
+	managedResources     map[int]domain.ManagedAttemptResource
 }
 
 type recordingGitCredentialResolver struct {
@@ -102,6 +103,12 @@ func (s *memoryJobStore) BeginManagedRecovery(_ context.Context, request domain.
 		copy := *s.job
 		return &copy, false, nil
 	}
+	s.ensureManagedResources()
+	resource := s.managedResources[s.job.ClusterAttempt]
+	resource.JobID, resource.ClusterAttempt = s.job.ID, s.job.ClusterAttempt
+	resource.KubernetesNS, resource.RayJobName, resource.RayJobUID = s.job.KubernetesNS, s.job.RayJobName, s.job.RayJobUID
+	resource.State, resource.LeaseOwner, resource.LeaseExpiresAt = domain.ManagedAttemptResourceRetiring, "", nil
+	s.managedResources[s.job.ClusterAttempt] = resource
 	s.job.ClusterAttempt++
 	s.job.ObservedState = domain.StateRecovering
 	s.job.ResumeCheckpointID = s.recoveryCheckpointID
@@ -121,6 +128,12 @@ func (s *memoryJobStore) ClearManagedRecoveryRetiringIdentity(_ context.Context,
 		copy := *s.job
 		return &copy, false, nil
 	}
+	for _, resource := range s.managedResources {
+		if resource.JobID == s.job.ID && resource.RayJobName == request.RayJobName && resource.RayJobUID == request.RayJobUID {
+			copy := *s.job
+			return &copy, false, nil
+		}
+	}
 	s.job.RayJobName = ""
 	s.job.RayJobUID = ""
 	s.job.RayClusterName = ""
@@ -139,6 +152,12 @@ func (s *memoryJobStore) ReserveManagedAttemptIdentity(_ context.Context, reques
 	}
 	if s.job.RayJobName == "" {
 		s.job.RayJobName = request.RayJobName
+		s.ensureManagedResources()
+		s.managedResources[request.ExpectedClusterAttempt] = domain.ManagedAttemptResource{
+			JobID: request.JobID, ClusterAttempt: request.ExpectedClusterAttempt,
+			KubernetesNS: request.KubernetesNS, RayJobName: request.RayJobName,
+			State: domain.ManagedAttemptResourceReserved,
+		}
 	}
 	copy := *s.job
 	return &copy, s.job.RayJobName == request.RayJobName, nil
@@ -149,6 +168,10 @@ func (s *memoryJobStore) AdoptManagedAttemptIdentity(_ context.Context, request 
 	if s.cancelDuringAdopt {
 		s.cancelDuringAdopt = false
 		s.job.DesiredState = domain.DesiredCanceled
+		if resource, ok := s.managedResources[request.ExpectedClusterAttempt]; ok {
+			resource.State, resource.LeaseOwner, resource.LeaseExpiresAt = domain.ManagedAttemptResourceRetiring, "", nil
+			s.managedResources[request.ExpectedClusterAttempt] = resource
+		}
 	}
 	if s.advanceDuringAdopt {
 		s.advanceDuringAdopt = false
@@ -173,8 +196,88 @@ func (s *memoryJobStore) AdoptManagedAttemptIdentity(_ context.Context, request 
 	s.job.RayJobUID = request.RayJobUID
 	s.job.KubernetesNS = request.KubernetesNS
 	s.job.ResourceVersion = request.ResourceVersion
+	resource := s.managedResources[request.ExpectedClusterAttempt]
+	resource.RayJobUID, resource.State, resource.LeaseOwner, resource.LeaseExpiresAt = request.RayJobUID, domain.ManagedAttemptResourceActive, "", nil
+	s.managedResources[request.ExpectedClusterAttempt] = resource
 	copy := *s.job
 	return &copy, true, nil
+}
+
+func (s *memoryJobStore) ensureManagedResources() {
+	if s.managedResources == nil {
+		s.managedResources = map[int]domain.ManagedAttemptResource{}
+	}
+}
+
+func (s *memoryJobStore) AcquireManagedAttemptCreation(_ context.Context, request domain.ManagedAttemptCreationLeaseRequest, now time.Time) (*domain.TrainingJob, *domain.ManagedAttemptResource, bool, error) {
+	s.ensureManagedResources()
+	copyJob := *s.job
+	resource, ok := s.managedResources[request.ExpectedClusterAttempt]
+	if !ok || s.job.DesiredState != domain.DesiredActive || s.job.ClusterAttempt != request.ExpectedClusterAttempt ||
+		s.job.ObservedState != request.ExpectedState || s.job.RayJobName != request.RayJobName || s.job.RayJobUID != "" {
+		return &copyJob, nil, false, nil
+	}
+	for attempt := range s.managedResources {
+		if attempt < request.ExpectedClusterAttempt {
+			resourceCopy := resource
+			return &copyJob, &resourceCopy, false, nil
+		}
+	}
+	if resource.State == domain.ManagedAttemptResourceCreating && resource.LeaseExpiresAt != nil && resource.LeaseExpiresAt.After(now) {
+		resourceCopy := resource
+		return &copyJob, &resourceCopy, resource.LeaseOwner == request.LeaseOwner, nil
+	}
+	expires := now.Add(request.LeaseDuration)
+	resource.State, resource.LeaseOwner, resource.LeaseVersion, resource.LeaseExpiresAt = domain.ManagedAttemptResourceCreating, request.LeaseOwner, resource.LeaseVersion+1, &expires
+	s.managedResources[request.ExpectedClusterAttempt] = resource
+	resourceCopy := resource
+	return &copyJob, &resourceCopy, true, nil
+}
+
+func (s *memoryJobStore) RetireManagedAttemptResource(_ context.Context, request domain.ManagedAttemptRetireRequest) (*domain.ManagedAttemptResource, bool, error) {
+	s.ensureManagedResources()
+	resource, ok := s.managedResources[request.ClusterAttempt]
+	if ok && (resource.KubernetesNS != request.KubernetesNS || resource.RayJobName != request.RayJobName ||
+		(resource.RayJobUID != "" && request.RayJobUID != "" && resource.RayJobUID != request.RayJobUID)) {
+		return nil, false, errors.New("managed attempt retirement identity mismatch")
+	}
+	if !ok {
+		resource = domain.ManagedAttemptResource{JobID: request.JobID, ClusterAttempt: request.ClusterAttempt, KubernetesNS: request.KubernetesNS, RayJobName: request.RayJobName}
+	}
+	changed := resource.State != domain.ManagedAttemptResourceRetiring || (resource.RayJobUID == "" && request.RayJobUID != "")
+	if resource.RayJobUID == "" {
+		resource.RayJobUID = request.RayJobUID
+	}
+	resource.State, resource.LeaseOwner, resource.LeaseExpiresAt = domain.ManagedAttemptResourceRetiring, "", nil
+	s.managedResources[request.ClusterAttempt] = resource
+	copyResource := resource
+	return &copyResource, changed, nil
+}
+
+func (s *memoryJobStore) ListManagedAttemptCleanup(_ context.Context, limit int, _ time.Time) ([]domain.ManagedAttemptResource, error) {
+	s.ensureManagedResources()
+	items := make([]domain.ManagedAttemptResource, 0, len(s.managedResources))
+	for _, resource := range s.managedResources {
+		if resource.State == domain.ManagedAttemptResourceRetiring ||
+			((resource.State == domain.ManagedAttemptResourceReserved || resource.State == domain.ManagedAttemptResourceCreating) &&
+				(resource.ClusterAttempt < s.job.ClusterAttempt || s.job.DesiredState == domain.DesiredCanceled || terminalJobState(s.job.ObservedState))) {
+			items = append(items, resource)
+			if limit > 0 && len(items) == limit {
+				break
+			}
+		}
+	}
+	return items, nil
+}
+
+func (s *memoryJobStore) CompleteManagedAttemptCleanup(_ context.Context, request domain.ManagedAttemptCleanupRequest) (bool, error) {
+	s.ensureManagedResources()
+	resource, ok := s.managedResources[request.ClusterAttempt]
+	if !ok || resource.State != domain.ManagedAttemptResourceRetiring || resource.RayJobName != request.RayJobName || resource.RayJobUID != request.RayJobUID {
+		return false, nil
+	}
+	delete(s.managedResources, request.ClusterAttempt)
+	return true, nil
 }
 
 func TestCancellationWinningManagedAdoptionDeletesCreatedAttempt(t *testing.T) {
@@ -560,6 +663,8 @@ func managedEmptyAttempt(attempt int, state domain.State) domain.TrainingJob {
 	return job
 }
 
+func timePointer(value time.Time) *time.Time { return &value }
+
 func TestStaleEmptyAttemptReservationReconcilesNewerAttemptWithoutCreatingOld(t *testing.T) {
 	staleAttemptTwo := managedEmptyAttempt(2, domain.StateRecovering)
 	currentAttemptThree := managedEmptyAttempt(3, domain.StateRecovering)
@@ -649,7 +754,9 @@ func TestReservedManagedAttemptCrashToleranceAbsentAndPresentResource(t *testing
 		t.Run(fmt.Sprintf("resource-present-%v", resourcePresent), func(t *testing.T) {
 			job := managedEmptyAttempt(2, domain.StateRecovering)
 			job.RayJobName = job.ID + "-a2"
-			store := &memoryJobStore{job: &job}
+			store := &memoryJobStore{job: &job, managedResources: map[int]domain.ManagedAttemptResource{
+				2: {JobID: job.ID, ClusterAttempt: 2, KubernetesNS: job.KubernetesNS, RayJobName: job.RayJobName, State: domain.ManagedAttemptResourceReserved},
+			}}
 			dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
 			client := NewClientFromInterfaces(dynamicClient, nil)
 			if resourcePresent {
@@ -678,7 +785,9 @@ func TestCreatorCrashAdoptsFailedResourceBeforeManagedRecovery(t *testing.T) {
 		ClaimName: "tenant-data", SubPath: "tenants/tenant-a/users/user-01/runs/job-01",
 		MountPath: domain.DataMountOutputPath, ReadOnly: false,
 	}
-	store := &memoryJobStore{job: &job, recoveryAllowed: true, recoveryCheckpointID: "checkpoint-current"}
+	store := &memoryJobStore{job: &job, recoveryAllowed: true, recoveryCheckpointID: "checkpoint-current", managedResources: map[int]domain.ManagedAttemptResource{
+		2: {JobID: job.ID, ClusterAttempt: 2, KubernetesNS: job.KubernetesNS, RayJobName: job.RayJobName, State: domain.ManagedAttemptResourceCreating, LeaseOwner: "crashed", LeaseVersion: 1, LeaseExpiresAt: timePointer(time.Now().Add(-time.Minute))},
+	}}
 	dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
 	client := NewClientFromInterfaces(dynamicClient, nil)
 	manifest := managedManifest(t, job)
@@ -706,7 +815,9 @@ func TestCreatorCrashAdoptsFailedResourceBeforeManagedRecovery(t *testing.T) {
 func TestCreatorCrashAdoptsFailedResourceAndFailsClosedWithoutCheckpoint(t *testing.T) {
 	job := managedEmptyAttempt(2, domain.StateRecovering)
 	job.RayJobName = job.ID + "-a2"
-	store := &memoryJobStore{job: &job, recoveryAllowed: false}
+	store := &memoryJobStore{job: &job, recoveryAllowed: false, managedResources: map[int]domain.ManagedAttemptResource{
+		2: {JobID: job.ID, ClusterAttempt: 2, KubernetesNS: job.KubernetesNS, RayJobName: job.RayJobName, State: domain.ManagedAttemptResourceCreating, LeaseOwner: "crashed", LeaseVersion: 1, LeaseExpiresAt: timePointer(time.Now().Add(-time.Minute))},
+	}}
 	dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
 	client := NewClientFromInterfaces(dynamicClient, nil)
 	manifest := managedManifest(t, job)
@@ -911,8 +1022,8 @@ func TestCancellationWinsRecoveryRace(t *testing.T) {
 	if store.job.ClusterAttempt != 1 || store.job.DesiredState != domain.DesiredCanceled {
 		t.Fatalf("recovery overrode cancellation: %+v", store.job)
 	}
-	if len(store.observed) == 0 || store.observed[len(store.observed)-1].State != domain.StateDeleting {
-		t.Fatalf("cancellation did not delete existing RayJob: %+v", store.observed)
+	if len(store.observed) == 0 || store.observed[len(store.observed)-1].State != domain.StateCanceled {
+		t.Fatalf("managed cancellation did not wait for deletion and become canceled: %+v", store.observed)
 	}
 }
 

@@ -73,6 +73,18 @@ func TestTrainingCheckpointMigrationEnforcesManagedEventContracts(t *testing.T) 
 		"step BETWEEN 0 AND 1000000000000",
 		"complete = FALSE OR manifest_sha256 ~ '^[0-9a-f]{64}$'",
 		"WHERE complete = TRUE",
+		"CREATE TABLE IF NOT EXISTS managed_attempt_resources",
+		"PRIMARY KEY (job_id, cluster_attempt)",
+		"UNIQUE (namespace, ray_job_name)",
+		"state IN ('RESERVED', 'CREATING', 'ACTIVE', 'RETIRING')",
+		"cluster_attempt BETWEEN 1 AND 1000000",
+		"lease_version BIGINT NOT NULL DEFAULT 0",
+		"lease_expires_at TIMESTAMPTZ",
+		"managed_attempt_resources_cleanup_idx",
+		"WHERE state IN ('RETIRING', 'RESERVED', 'CREATING')",
+		"INSERT INTO managed_attempt_resources",
+		"FROM training_jobs",
+		"WHERE training_engine = 'ray-train' AND ray_job_name <> ''",
 	}
 	for _, fragment := range required {
 		if !strings.Contains(sql, fragment) {

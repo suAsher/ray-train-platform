@@ -45,6 +45,29 @@ func TestManagedJobUsesPerJobVersionAndManagedDriver(t *testing.T) {
 	}
 }
 
+func TestManagedRayJobCarriesImmutableClusterAttemptIdentity(t *testing.T) {
+	job := managedRenderJob(domain.RayVersionProduction)
+	job.ClusterAttempt = 3
+	job.RayJobName = job.ID + "-a3"
+	manifest := managedManifest(t, job)
+	const key = "raytrain.wellspiking.ai/cluster-attempt"
+	if got := manifest.GetLabels()[key]; got != "3" {
+		t.Fatalf("managed attempt label = %q, want 3", got)
+	}
+	if got := manifest.GetAnnotations()[key]; got != "3" {
+		t.Fatalf("managed attempt annotation = %q, want 3", got)
+	}
+
+	legacy := validRenderJob()
+	legacyManifest, err := RenderRayJob(legacy, testRenderOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacyManifest.GetLabels()[key] != "" || legacyManifest.GetAnnotations()[key] != "" {
+		t.Fatal("legacy RayJob unexpectedly gained managed attempt identity")
+	}
+}
+
 func TestManagedInvalidEntrypointReturnsNoRayWorkload(t *testing.T) {
 	tests := []domain.Entrypoint{
 		{Command: []string{"torchrun", "train.py"}},

@@ -15,9 +15,10 @@ import (
 )
 
 const (
-	RayAPIVersion  = "ray.io/v1"
-	RayJobKind     = "RayJob"
-	RayJobResource = "rayjobs"
+	RayAPIVersion             = "ray.io/v1"
+	RayJobKind                = "RayJob"
+	RayJobResource            = "rayjobs"
+	managedAttemptIdentityKey = "raytrain.wellspiking.ai/cluster-attempt"
 )
 
 type RenderOptions struct {
@@ -231,19 +232,25 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 		"platform_tenant_id":           job.TenantID,
 		"kueue.x-k8s.io/queue-name":    job.Spec.Queue,
 	}
+	annotations := map[string]any{
+		"ray-train-platform/job-id": job.ID,
+		"ray-train-platform/owner":  job.UserID,
+	}
+	if job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain {
+		attempt := strconv.Itoa(job.ClusterAttempt)
+		labels[managedAttemptIdentityKey] = attempt
+		annotations[managedAttemptIdentityKey] = attempt
+	}
 	jobObject := map[string]any{
 		"apiVersion": RayAPIVersion,
 		"kind":       RayJobKind,
 		"metadata": map[string]any{
 			// The display name is reusable. Kubernetes identity comes from the
 			// immutable platform job ID so repeated project runs never collide.
-			"name":      rayJobResourceName(job),
-			"namespace": namespace,
-			"labels":    labels,
-			"annotations": map[string]any{
-				"ray-train-platform/job-id": job.ID,
-				"ray-train-platform/owner":  job.UserID,
-			},
+			"name":        rayJobResourceName(job),
+			"namespace":   namespace,
+			"labels":      labels,
+			"annotations": annotations,
 		},
 		"spec": jobSpecFields(job, clusterSpecField, clusterSpec, entrypoint, submitterPod),
 	}

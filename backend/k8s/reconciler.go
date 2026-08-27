@@ -2,9 +2,11 @@ package k8s
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -28,7 +30,11 @@ type JobStore interface {
 	MarkOutboxRetry(context.Context, string, time.Time, string) error
 	ApplyObservedState(context.Context, domain.ObservedJobState) error
 	ReserveManagedAttemptIdentity(context.Context, domain.ManagedAttemptReservationRequest) (*domain.TrainingJob, bool, error)
+	AcquireManagedAttemptCreation(context.Context, domain.ManagedAttemptCreationLeaseRequest, time.Time) (*domain.TrainingJob, *domain.ManagedAttemptResource, bool, error)
 	AdoptManagedAttemptIdentity(context.Context, domain.ManagedAttemptAdoptionRequest) (*domain.TrainingJob, bool, error)
+	RetireManagedAttemptResource(context.Context, domain.ManagedAttemptRetireRequest) (*domain.ManagedAttemptResource, bool, error)
+	ListManagedAttemptCleanup(context.Context, int, time.Time) ([]domain.ManagedAttemptResource, error)
+	CompleteManagedAttemptCleanup(context.Context, domain.ManagedAttemptCleanupRequest) (bool, error)
 	BeginManagedRecovery(context.Context, domain.ManagedRecoveryRequest) (*domain.TrainingJob, bool, error)
 	ClearManagedRecoveryRetiringIdentity(context.Context, domain.ManagedRetiringIdentityRequest) (*domain.TrainingJob, bool, error)
 }
@@ -47,6 +53,11 @@ type Reconciler struct {
 	gitCredentials   GitCredentialResolver
 	experimentRuns   ExperimentFinalizer
 	lastQuotaError   string
+	leaseOwner       string
+	creationLease    time.Duration
+	cleanupWait      time.Duration
+	cleanupPoll      time.Duration
+	now              func() time.Time
 }
 
 // QuotaSyncOptions turns on continuous alignment of the Kueue admission budget
@@ -101,7 +112,20 @@ func (r *Reconciler) syncClusterQueueQuota(ctx context.Context) {
 }
 
 func NewReconciler(store JobStore, client *Client, renderOptions RenderOptions) *Reconciler {
-	return &Reconciler{store: store, client: client, renderOptions: renderOptions, interval: 5 * time.Second}
+	return &Reconciler{
+		store: store, client: client, renderOptions: renderOptions, interval: 5 * time.Second,
+		leaseOwner: newReconcilerLeaseOwner(), creationLease: 30 * time.Second,
+		cleanupWait: 100 * time.Millisecond, cleanupPoll: 25 * time.Millisecond,
+		now: func() time.Time { return time.Now().UTC() },
+	}
+}
+
+func newReconcilerLeaseOwner() string {
+	var value [12]byte
+	if _, err := rand.Read(value[:]); err == nil {
+		return fmt.Sprintf("reconciler-%x", value[:])
+	}
+	return fmt.Sprintf("reconciler-%d", time.Now().UnixNano())
 }
 
 func (r *Reconciler) Run(ctx context.Context) error {
@@ -129,6 +153,11 @@ func (r *Reconciler) Run(ctx context.Context) error {
 }
 
 func (r *Reconciler) ProcessOnce(ctx context.Context) error {
+	if err := r.reconcileManagedAttemptCleanups(ctx); err != nil {
+		// Preserve quiescence: do not let the normal candidate path retry or
+		// advance a job whose durable cleanup failed in this same pass.
+		return err
+	}
 	events, err := r.store.ClaimOutbox(ctx, 50)
 	if err != nil {
 		return err
@@ -154,6 +183,20 @@ func (r *Reconciler) ProcessOnce(ctx context.Context) error {
 	}
 	for _, id := range ids {
 		if err := r.ReconcileJob(ctx, id); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func (r *Reconciler) reconcileManagedAttemptCleanups(ctx context.Context) error {
+	resources, err := r.store.ListManagedAttemptCleanup(ctx, 20, r.now())
+	if err != nil {
+		return err
+	}
+	var firstErr error
+	for _, resource := range resources {
+		if _, err := r.cleanupManagedAttemptResource(ctx, resource); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -219,6 +262,7 @@ func (r *Reconciler) reconcileLoadedJob(ctx context.Context, job *domain.Trainin
 	}
 	managed := job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain
 	needsAdoption := false
+	var creationLease *domain.ManagedAttemptResource
 	if managed && strings.TrimSpace(job.RayJobUID) == "" {
 		reserved, current, err := r.reserveManagedAttempt(ctx, job)
 		if err != nil {
@@ -229,6 +273,23 @@ func (r *Reconciler) reconcileLoadedJob(ctx context.Context, job *domain.Trainin
 		}
 		job = current
 		needsAdoption = true
+		current, lease, acquired, err := r.store.AcquireManagedAttemptCreation(ctx, domain.ManagedAttemptCreationLeaseRequest{
+			JobID: job.ID, ExpectedClusterAttempt: job.ClusterAttempt, ExpectedState: job.ObservedState,
+			RayJobName: job.RayJobName, LeaseOwner: r.leaseOwner, LeaseDuration: r.creationLease,
+		}, r.now())
+		if err != nil {
+			return err
+		}
+		if current == nil {
+			return fmt.Errorf("managed creation lease returned no job")
+		}
+		if !acquired {
+			if managedJobSnapshotChanged(*job, *current) {
+				return r.reconcileCurrentManagedJob(ctx, current)
+			}
+			return nil
+		}
+		job, creationLease = current, lease
 	}
 	options := r.renderOptions
 	if r.gitCredentials != nil && job.Spec.Source.Type == "git" {
@@ -246,13 +307,24 @@ func (r *Reconciler) reconcileLoadedJob(ctx context.Context, job *domain.Trainin
 		return err
 	}
 	if needsAdoption {
-		current, adopted, adoptionErr := r.adoptManagedAttempt(ctx, job, resource)
+		current, adopted, adoptionErr := r.adoptManagedAttempt(ctx, job, creationLease, resource)
 		if adoptionErr != nil {
 			return adoptionErr
 		}
 		if !adopted {
-			if deleteErr := r.client.DeleteRayJob(ctx, resource.GetNamespace(), resource.GetName(), job.ID, string(resource.GetUID())); deleteErr != nil && !apierrors.IsNotFound(deleteErr) {
-				return deleteErr
+			retiring, _, retireErr := r.store.RetireManagedAttemptResource(ctx, domain.ManagedAttemptRetireRequest{
+				JobID: job.ID, ClusterAttempt: job.ClusterAttempt, KubernetesNS: resource.GetNamespace(),
+				RayJobName: resource.GetName(), RayJobUID: string(resource.GetUID()),
+			})
+			if retireErr != nil {
+				return retireErr
+			}
+			if retiring == nil {
+				return fmt.Errorf("managed adoption compensation returned no resource")
+			}
+			cleaned, cleanupErr := r.cleanupManagedAttemptResource(ctx, *retiring)
+			if cleanupErr != nil || !cleaned {
+				return cleanupErr
 			}
 			return r.reconcileCurrentManagedJob(ctx, current)
 		}
@@ -337,7 +409,8 @@ func (r *Reconciler) reserveManagedAttempt(ctx context.Context, loaded *domain.T
 	current, reserved, err := r.store.ReserveManagedAttemptIdentity(ctx, domain.ManagedAttemptReservationRequest{
 		JobID: loaded.ID, ExpectedClusterAttempt: loaded.ClusterAttempt,
 		ExpectedState: loaded.ObservedState, ExpectedRayJobName: loaded.RayJobName,
-		RayJobName: managedAttemptRayJobName(*loaded),
+		RayJobName:   managedAttemptRayJobName(*loaded),
+		KubernetesNS: managedJobNamespace(*loaded),
 	})
 	if err != nil {
 		return false, nil, err
@@ -348,15 +421,19 @@ func (r *Reconciler) reserveManagedAttempt(ctx context.Context, loaded *domain.T
 	return reserved, current, nil
 }
 
-func (r *Reconciler) adoptManagedAttempt(ctx context.Context, reserved *domain.TrainingJob, resource *unstructured.Unstructured) (*domain.TrainingJob, bool, error) {
+func (r *Reconciler) adoptManagedAttempt(ctx context.Context, reserved *domain.TrainingJob, lease *domain.ManagedAttemptResource, resource *unstructured.Unstructured) (*domain.TrainingJob, bool, error) {
 	uid := strings.TrimSpace(string(resource.GetUID()))
 	if uid == "" {
 		return nil, false, fmt.Errorf("managed RayJob %s has no Kubernetes UID", resource.GetName())
+	}
+	if lease == nil || lease.LeaseOwner != r.leaseOwner || lease.LeaseVersion < 1 {
+		return nil, false, fmt.Errorf("managed RayJob creation lease is missing")
 	}
 	current, adopted, err := r.store.AdoptManagedAttemptIdentity(ctx, domain.ManagedAttemptAdoptionRequest{
 		JobID: reserved.ID, ExpectedClusterAttempt: reserved.ClusterAttempt,
 		ExpectedState: reserved.ObservedState, RayJobName: resource.GetName(), RayJobUID: uid,
 		KubernetesNS: resource.GetNamespace(), ResourceVersion: resource.GetResourceVersion(),
+		LeaseOwner: lease.LeaseOwner, LeaseVersion: lease.LeaseVersion,
 	})
 	if err != nil {
 		return nil, false, err
@@ -365,6 +442,13 @@ func (r *Reconciler) adoptManagedAttempt(ctx context.Context, reserved *domain.T
 		return nil, false, fmt.Errorf("managed attempt adoption returned no job")
 	}
 	return current, adopted, nil
+}
+
+func managedJobNamespace(job domain.TrainingJob) string {
+	if namespace := strings.TrimSpace(job.KubernetesNS); namespace != "" {
+		return namespace
+	}
+	return "tenant-" + sanitizeDNS(job.TenantID)
 }
 
 func (r *Reconciler) reconcileCurrentManagedJob(ctx context.Context, current *domain.TrainingJob) error {
@@ -455,27 +539,19 @@ func (r *Reconciler) reconcileManagedRetirement(ctx context.Context, job *domain
 	if strings.TrimSpace(job.RayJobUID) == "" {
 		return fmt.Errorf("managed retiring RayJob UID is missing")
 	}
-	namespace := job.KubernetesNS
-	if namespace == "" {
-		manifest, err := RenderRayJob(*job, r.renderOptions)
-		if err != nil {
-			return err
-		}
-		namespace = manifest.GetNamespace()
+	retiringAttempt := job.ClusterAttempt - 1
+	if retiringAttempt < 1 {
+		return fmt.Errorf("managed retiring attempt is invalid")
 	}
-	resource, err := r.client.GetRayJob(ctx, namespace, job.RayJobName)
-	if err == nil {
-		if string(resource.GetUID()) != job.RayJobUID {
-			return fmt.Errorf("refusing to retire RayJob with an unexpected UID")
-		}
-		if err := r.client.DeleteRayJob(ctx, namespace, job.RayJobName, job.ID, job.RayJobUID); err != nil {
-			return err
-		}
-		if _, err = r.client.GetRayJob(ctx, namespace, job.RayJobName); err == nil {
-			return nil
-		}
+	resource, _, err := r.store.RetireManagedAttemptResource(ctx, domain.ManagedAttemptRetireRequest{
+		JobID: job.ID, ClusterAttempt: retiringAttempt, KubernetesNS: managedJobNamespace(*job),
+		RayJobName: job.RayJobName, RayJobUID: job.RayJobUID,
+	})
+	if err != nil {
+		return err
 	}
-	if !apierrors.IsNotFound(err) {
+	cleaned, err := r.cleanupManagedAttemptResource(ctx, *resource)
+	if err != nil || !cleaned {
 		return err
 	}
 	current, cleared, err := r.store.ClearManagedRecoveryRetiringIdentity(ctx, domain.ManagedRetiringIdentityRequest{
@@ -524,6 +600,9 @@ func isManagedInfrastructureFailure(reason string) bool {
 }
 
 func (r *Reconciler) reconcileCancellation(ctx context.Context, job *domain.TrainingJob) error {
+	if job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain {
+		return r.reconcileManagedCancellation(ctx, job)
+	}
 	name := job.RayJobName
 	if name == "" {
 		name = rayJobResourceName(*job)
@@ -565,4 +644,115 @@ func (r *Reconciler) reconcileCancellation(ctx context.Context, job *domain.Trai
 	observed := domain.ObservedJobState{ID: job.ID, State: state, KubernetesNS: namespace, RayJobName: name, RayJobUID: string(resource.GetUID()), ResourceVersion: resource.GetResourceVersion()}
 	setObservedStateFence(&observed, *job)
 	return r.store.ApplyObservedState(ctx, observed)
+}
+
+func (r *Reconciler) reconcileManagedCancellation(ctx context.Context, job *domain.TrainingJob) error {
+	name := strings.TrimSpace(job.RayJobName)
+	if name == "" {
+		name = managedAttemptRayJobName(*job)
+	}
+	attempt := job.ClusterAttempt
+	if managedJobHasRetiringIdentity(*job) && attempt > 1 {
+		attempt--
+	}
+	resource, _, err := r.store.RetireManagedAttemptResource(ctx, domain.ManagedAttemptRetireRequest{
+		JobID: job.ID, ClusterAttempt: attempt, KubernetesNS: managedJobNamespace(*job),
+		RayJobName: name, RayJobUID: job.RayJobUID,
+	})
+	if err != nil {
+		return err
+	}
+	cleaned, err := r.cleanupManagedAttemptResource(ctx, *resource)
+	if err != nil || !cleaned {
+		return err
+	}
+	observed := domain.ObservedJobState{
+		ID: job.ID, State: domain.StateCanceled, KubernetesNS: managedJobNamespace(*job),
+		RayJobName: job.RayJobName, RayJobUID: job.RayJobUID,
+	}
+	setObservedStateFence(&observed, *job)
+	return r.store.ApplyObservedState(ctx, observed)
+}
+
+func (r *Reconciler) cleanupManagedAttemptResource(ctx context.Context, resource domain.ManagedAttemptResource) (bool, error) {
+	if resource.State != domain.ManagedAttemptResourceRetiring {
+		retiring, _, err := r.store.RetireManagedAttemptResource(ctx, domain.ManagedAttemptRetireRequest{
+			JobID: resource.JobID, ClusterAttempt: resource.ClusterAttempt, KubernetesNS: resource.KubernetesNS,
+			RayJobName: resource.RayJobName, RayJobUID: resource.RayJobUID,
+		})
+		if err != nil {
+			return false, err
+		}
+		if retiring == nil {
+			return false, fmt.Errorf("managed cleanup retirement returned no resource")
+		}
+		resource = *retiring
+	}
+	current, err := r.client.GetRayJob(ctx, resource.KubernetesNS, resource.RayJobName)
+	if apierrors.IsNotFound(err) {
+		return r.store.CompleteManagedAttemptCleanup(ctx, domain.ManagedAttemptCleanupRequest{
+			JobID: resource.JobID, ClusterAttempt: resource.ClusterAttempt,
+			RayJobName: resource.RayJobName, RayJobUID: resource.RayJobUID,
+		})
+	}
+	if err != nil {
+		return false, err
+	}
+	if err := verifyManagedAttemptResource(current, resource); err != nil {
+		return false, err
+	}
+	uid := string(current.GetUID())
+	if resource.RayJobUID == "" {
+		captured, _, err := r.store.RetireManagedAttemptResource(ctx, domain.ManagedAttemptRetireRequest{
+			JobID: resource.JobID, ClusterAttempt: resource.ClusterAttempt, KubernetesNS: resource.KubernetesNS,
+			RayJobName: resource.RayJobName, RayJobUID: uid,
+		})
+		if err != nil {
+			return false, err
+		}
+		resource = *captured
+	}
+	if err := r.client.DeleteRayJob(ctx, resource.KubernetesNS, resource.RayJobName, resource.JobID, uid); err != nil && !apierrors.IsNotFound(err) {
+		return false, err
+	}
+	deadline := r.now().Add(r.cleanupWait)
+	for {
+		current, err = r.client.GetRayJob(ctx, resource.KubernetesNS, resource.RayJobName)
+		if apierrors.IsNotFound(err) {
+			return r.store.CompleteManagedAttemptCleanup(ctx, domain.ManagedAttemptCleanupRequest{
+				JobID: resource.JobID, ClusterAttempt: resource.ClusterAttempt,
+				RayJobName: resource.RayJobName, RayJobUID: resource.RayJobUID,
+			})
+		}
+		if err != nil {
+			return false, err
+		}
+		if string(current.GetUID()) != uid {
+			return false, fmt.Errorf("managed RayJob %s was replaced before cleanup completed", resource.RayJobName)
+		}
+		if !r.now().Before(deadline) {
+			return false, nil
+		}
+		timer := time.NewTimer(r.cleanupPoll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func verifyManagedAttemptResource(resource *unstructured.Unstructured, expected domain.ManagedAttemptResource) error {
+	if resource.GetLabels()["ray.io/job-id"] != expected.JobID {
+		return fmt.Errorf("refusing to clean foreign RayJob owner")
+	}
+	attempt := strconv.Itoa(expected.ClusterAttempt)
+	if resource.GetLabels()[managedAttemptIdentityKey] != attempt || resource.GetAnnotations()[managedAttemptIdentityKey] != attempt {
+		return fmt.Errorf("refusing to clean RayJob with unexpected cluster attempt identity")
+	}
+	if expected.RayJobUID != "" && string(resource.GetUID()) != expected.RayJobUID {
+		return fmt.Errorf("refusing to clean RayJob with unexpected UID")
+	}
+	return nil
 }

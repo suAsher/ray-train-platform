@@ -26,6 +26,7 @@ func TestModelColumnsExistInMigrations(t *testing.T) {
 		&LocalUserRecord{}, &LocalSessionRecord{}, &AuditLogRecord{}, &MLflowDashboardTicketRecord{}, &PlatformImageRecord{},
 		&DataMountBindingRecord{}, &GitCredentialRecord{}, &WorkspaceSnapshotRecord{},
 		&IDCConnectionRecord{}, &DataTransferRecord{},
+		&ManagedAttemptResourceRecord{},
 	}
 
 	namer := schema.NamingStrategy{}

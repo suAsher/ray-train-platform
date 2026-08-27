@@ -76,3 +76,64 @@ CREATE TABLE IF NOT EXISTS training_job_events (
 );
 CREATE INDEX IF NOT EXISTS training_job_events_created_idx
   ON training_job_events(job_id, created_at DESC);
+
+-- Kubernetes creation and foreground deletion cross a database/API boundary.
+-- Keep one durable row per managed cluster attempt so a backend crash cannot
+-- lose an unadopted resource or a pending cleanup intent.
+CREATE TABLE IF NOT EXISTS managed_attempt_resources (
+  job_id TEXT NOT NULL REFERENCES training_jobs(id) ON DELETE CASCADE,
+  cluster_attempt INTEGER NOT NULL,
+  namespace TEXT NOT NULL,
+  ray_job_name TEXT NOT NULL,
+  ray_job_uid TEXT NOT NULL DEFAULT '',
+  state TEXT NOT NULL DEFAULT 'RESERVED',
+  lease_owner TEXT NOT NULL DEFAULT '',
+  lease_version BIGINT NOT NULL DEFAULT 0,
+  lease_expires_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (job_id, cluster_attempt),
+  UNIQUE (namespace, ray_job_name),
+  CONSTRAINT managed_attempt_resources_attempt_check CHECK (cluster_attempt BETWEEN 1 AND 1000000),
+  CONSTRAINT managed_attempt_resources_namespace_check CHECK (
+    length(namespace) BETWEEN 1 AND 63
+    AND namespace ~ '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+  ),
+  CONSTRAINT managed_attempt_resources_name_check CHECK (
+    length(ray_job_name) BETWEEN 1 AND 63
+    AND ray_job_name ~ '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+  ),
+  CONSTRAINT managed_attempt_resources_uid_check CHECK (length(ray_job_uid) <= 253),
+  CONSTRAINT managed_attempt_resources_state_check CHECK (state IN ('RESERVED', 'CREATING', 'ACTIVE', 'RETIRING')),
+  CONSTRAINT managed_attempt_resources_lease_check CHECK (
+    lease_version >= 0
+    AND length(lease_owner) <= 128
+    AND (
+      (state = 'CREATING' AND lease_owner <> '' AND lease_expires_at IS NOT NULL)
+      OR (state <> 'CREATING' AND lease_owner = '' AND lease_expires_at IS NULL)
+    )
+  )
+);
+CREATE INDEX IF NOT EXISTS managed_attempt_resources_cleanup_idx
+  ON managed_attempt_resources(state, updated_at, job_id, cluster_attempt)
+  WHERE state IN ('RETIRING', 'RESERVED', 'CREATING');
+CREATE INDEX IF NOT EXISTS managed_attempt_resources_job_state_idx
+  ON managed_attempt_resources(job_id, state, cluster_attempt);
+
+-- 0022 has not shipped yet, but backfilling keeps development databases and
+-- rolling test environments coherent when the migration is reapplied there.
+INSERT INTO managed_attempt_resources (
+  job_id, cluster_attempt, namespace, ray_job_name, ray_job_uid, state,
+  lease_owner, lease_version, lease_expires_at, created_at, updated_at
+)
+SELECT
+  id, cluster_attempt, COALESCE(NULLIF(kubernetes_ns, ''), 'tenant-' || tenant_id), ray_job_name, ray_job_uid,
+  CASE
+    WHEN desired_state = 'CANCELED' OR observed_state IN ('SUCCEEDED', 'FAILED', 'CANCELED', 'TIMED_OUT') THEN 'RETIRING'
+    WHEN ray_job_uid <> '' THEN 'ACTIVE'
+    ELSE 'RESERVED'
+  END,
+  '', 0, NULL, created_at, updated_at
+FROM training_jobs
+WHERE training_engine = 'ray-train' AND ray_job_name <> ''
+ON CONFLICT (job_id, cluster_attempt) DO NOTHING;

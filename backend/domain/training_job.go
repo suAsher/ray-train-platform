@@ -324,6 +324,7 @@ type ManagedAttemptReservationRequest struct {
 	ExpectedState          State
 	ExpectedRayJobName     string
 	RayJobName             string
+	KubernetesNS           string
 }
 
 func (request ManagedAttemptReservationRequest) Validate() error {
@@ -346,6 +347,77 @@ func (request ManagedAttemptReservationRequest) Validate() error {
 	if expected := strings.TrimSpace(request.ExpectedRayJobName); expected != "" && expected != name {
 		return fmt.Errorf("managed attempt reservation expected name must be empty or deterministic")
 	}
+	if namespace := strings.TrimSpace(request.KubernetesNS); namespace == "" || len(namespace) > 63 || !dnsLabel.MatchString(namespace) {
+		return fmt.Errorf("managed attempt reservation namespace must be a DNS label")
+	}
+	return nil
+}
+
+type ManagedAttemptResourceState string
+
+const (
+	ManagedAttemptResourceReserved ManagedAttemptResourceState = "RESERVED"
+	ManagedAttemptResourceCreating ManagedAttemptResourceState = "CREATING"
+	ManagedAttemptResourceActive   ManagedAttemptResourceState = "ACTIVE"
+	ManagedAttemptResourceRetiring ManagedAttemptResourceState = "RETIRING"
+)
+
+type ManagedAttemptResource struct {
+	JobID          string
+	ClusterAttempt int
+	KubernetesNS   string
+	RayJobName     string
+	RayJobUID      string
+	State          ManagedAttemptResourceState
+	LeaseOwner     string
+	LeaseVersion   int64
+	LeaseExpiresAt *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type ManagedAttemptCreationLeaseRequest struct {
+	JobID                  string
+	ExpectedClusterAttempt int
+	ExpectedState          State
+	RayJobName             string
+	LeaseOwner             string
+	LeaseDuration          time.Duration
+}
+
+func (request ManagedAttemptCreationLeaseRequest) Validate() error {
+	if strings.TrimSpace(request.JobID) == "" || request.ExpectedClusterAttempt < 1 {
+		return fmt.Errorf("managed attempt creation job and attempt are required")
+	}
+	if !managedAttemptReservableState(request.ExpectedState) {
+		return fmt.Errorf("managed attempt creation expected state is not active")
+	}
+	if name := strings.TrimSpace(request.RayJobName); name == "" || len(name) > 63 || !dnsLabel.MatchString(name) {
+		return fmt.Errorf("managed attempt creation RayJob name must be a DNS label")
+	}
+	if owner := strings.TrimSpace(request.LeaseOwner); owner == "" || len(owner) > 128 {
+		return fmt.Errorf("managed attempt creation lease owner is required and bounded")
+	}
+	if request.LeaseDuration < time.Second || request.LeaseDuration > 5*time.Minute {
+		return fmt.Errorf("managed attempt creation lease duration must be between one second and five minutes")
+	}
+	return nil
+}
+
+type ManagedAttemptCleanupRequest struct {
+	JobID          string
+	ClusterAttempt int
+	RayJobName     string
+	RayJobUID      string
+}
+
+func (request ManagedAttemptCleanupRequest) Validate() error {
+	if strings.TrimSpace(request.JobID) == "" || request.ClusterAttempt < 1 {
+		return fmt.Errorf("managed attempt cleanup job and attempt are required")
+	}
+	if strings.TrimSpace(request.RayJobName) == "" {
+		return fmt.Errorf("managed attempt cleanup RayJob name is required")
+	}
 	return nil
 }
 
@@ -359,6 +431,8 @@ type ManagedAttemptAdoptionRequest struct {
 	RayJobUID              string
 	KubernetesNS           string
 	ResourceVersion        string
+	LeaseOwner             string
+	LeaseVersion           int64
 }
 
 func (request ManagedAttemptAdoptionRequest) Validate() error {
@@ -379,6 +453,30 @@ func (request ManagedAttemptAdoptionRequest) Validate() error {
 	}
 	if strings.TrimSpace(request.KubernetesNS) == "" {
 		return fmt.Errorf("managed attempt adoption Kubernetes namespace is required")
+	}
+	if owner := strings.TrimSpace(request.LeaseOwner); owner == "" || len(owner) > 128 || request.LeaseVersion < 1 {
+		return fmt.Errorf("managed attempt adoption lease owner and version are required")
+	}
+	return nil
+}
+
+type ManagedAttemptRetireRequest struct {
+	JobID          string
+	ClusterAttempt int
+	KubernetesNS   string
+	RayJobName     string
+	RayJobUID      string
+}
+
+func (request ManagedAttemptRetireRequest) Validate() error {
+	if strings.TrimSpace(request.JobID) == "" || request.ClusterAttempt < 1 {
+		return fmt.Errorf("managed attempt retirement job and attempt are required")
+	}
+	if namespace := strings.TrimSpace(request.KubernetesNS); namespace == "" || len(namespace) > 63 || !dnsLabel.MatchString(namespace) {
+		return fmt.Errorf("managed attempt retirement namespace must be a DNS label")
+	}
+	if name := strings.TrimSpace(request.RayJobName); name == "" || len(name) > 63 || !dnsLabel.MatchString(name) {
+		return fmt.Errorf("managed attempt retirement RayJob name must be a DNS label")
 	}
 	return nil
 }
