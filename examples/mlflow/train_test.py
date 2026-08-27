@@ -12,6 +12,7 @@ class PlatformContractTest(unittest.TestCase):
             "RAYTRAIN_TENANT_ID": "local",
             "RAYTRAIN_SUBMITTER_USER_ID": "user-456",
             "RAYTRAIN_MLFLOW_PROVENANCE": "signed-provenance",
+            "RAYTRAIN_CLUSTER_ATTEMPT": "2",
         }
         with mock.patch.dict(os.environ, values, clear=True):
             self.assertEqual(
@@ -21,6 +22,7 @@ class PlatformContractTest(unittest.TestCase):
                     "platform.tenant_id": "local",
                     "platform.submitter_user_id": "user-456",
                     "platform.provenance": "signed-provenance",
+                    "platform.cluster_attempt": "2",
                 },
             )
 

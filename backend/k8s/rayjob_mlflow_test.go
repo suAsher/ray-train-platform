@@ -1,11 +1,18 @@
 package k8s
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"ray-train-platform-backend/domain"
+)
 
 var testMLflowProvenanceKey = []byte("0123456789abcdef0123456789abcdef")
 
 func TestRenderRayJobInjectsSecretlessMLflowContractIntoHeadAndWorkers(t *testing.T) {
-	job := validRenderJob()
+	job := managedRenderJob(domain.RayVersionProduction)
+	job.ClusterAttempt = 1
 	options := testRenderOptions()
 	options.MLflow = MLflowOptions{Enabled: true, TrackingURI: "http://mlflow-ingest.mlflow-system.svc.cluster.local:8080", ExperimentPrefix: "raytrain", ProvenanceKey: testMLflowProvenanceKey}
 
@@ -26,6 +33,7 @@ func TestRenderRayJobInjectsSecretlessMLflowContractIntoHeadAndWorkers(t *testin
 		"RAYTRAIN_TENANT_ID":         job.TenantID,
 		"RAYTRAIN_SUBMITTER_USER_ID": job.UserID,
 		"RAYTRAIN_MLFLOW_PROVENANCE": mlflowProvenanceTag(testMLflowProvenanceKey, job.ID),
+		"RAYTRAIN_CLUSTER_ATTEMPT":   "1",
 	}
 	for name, spec := range map[string]map[string]any{"head": head, "worker": workerSpec} {
 		env := podEnvironment(spec)
@@ -39,6 +47,28 @@ func TestRenderRayJobInjectsSecretlessMLflowContractIntoHeadAndWorkers(t *testin
 				t.Fatalf("%s must not receive credential %s", name, forbidden)
 			}
 		}
+	}
+}
+
+func TestRenderManagedRayJobInjectsClusterAttemptWithoutMLflow(t *testing.T) {
+	job := managedRenderJob(domain.RayVersionProduction)
+	job.ClusterAttempt = 3
+	manifest, err := RenderRayJob(job, testRenderOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, _, _ := nestedMap(manifest.Object, "spec", "rayClusterSpec", "headGroupSpec", "template", "spec")
+	workers, _, _ := nestedSlice(manifest.Object, "spec", "rayClusterSpec", "workerGroupSpecs")
+	worker := workers[0].(map[string]any)
+	workerSpec, _, _ := nestedMap(worker, "template", "spec")
+	for name, spec := range map[string]map[string]any{"head": head, "worker": workerSpec} {
+		if got := podEnvironment(spec)["RAYTRAIN_CLUSTER_ATTEMPT"]; got != "3" {
+			t.Fatalf("%s cluster attempt=%q, want 3", name, got)
+		}
+	}
+	runtimeEnv, _, _ := unstructured.NestedString(manifest.Object, "spec", "runtimeEnvYAML")
+	if !strings.Contains(runtimeEnv, "RAYTRAIN_CLUSTER_ATTEMPT: \"3\"") {
+		t.Fatalf("runtime environment does not expose cluster attempt: %s", runtimeEnv)
 	}
 }
 

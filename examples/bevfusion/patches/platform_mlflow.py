@@ -35,6 +35,9 @@ def _platform_tags() -> Dict[str, str]:
             "RAYTRAIN_SUBMITTER_USER_ID"
         ),
         "platform.provenance": _required_environment("RAYTRAIN_MLFLOW_PROVENANCE"),
+        "platform.cluster_attempt": _required_environment(
+            "RAYTRAIN_CLUSTER_ATTEMPT"
+        ),
     }
 
 

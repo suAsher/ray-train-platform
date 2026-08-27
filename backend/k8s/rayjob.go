@@ -41,6 +41,7 @@ type RenderOptions struct {
 	TrainingEventBaseURL string
 	trainingEventJobID   string
 	managedResumePath    string
+	clusterAttempt       int
 }
 
 // MLflowOptions carries only non-secret, in-cluster routing information.
@@ -165,6 +166,7 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	options.MLflow.tenantID = job.TenantID
 	options.MLflow.userID = job.UserID
 	options.trainingEventJobID = job.ID
+	options.clusterAttempt = job.ClusterAttempt
 
 	// The submitter runs `ray job submit`, and Ray uploads the runtime env's
 	// working_dir from the submitter's own filesystem. Materialize the source
@@ -549,7 +551,8 @@ func runtimeEnvironmentYAML(job domain.TrainingJob) string {
 	return runtimeEnv +
 		"  RAY_TRAIN_V2_ENABLED: \"1\"\n" +
 		"  PLATFORM_TRAINING_ENGINE: \"ray-train\"\n" +
-		"  PLATFORM_JOB_ID: " + strconv.Quote(job.ID) + "\n"
+		"  PLATFORM_JOB_ID: " + strconv.Quote(job.ID) + "\n" +
+		"  RAYTRAIN_CLUSTER_ATTEMPT: " + strconv.Quote(strconv.Itoa(job.ClusterAttempt)) + "\n"
 }
 
 func podTemplate(containerName, image, cpu, memory string, gpus int64, source domain.CodeSource, jobSpec domain.JobSpec, options RenderOptions, head, mountData, materializeSource bool) map[string]any {
@@ -564,6 +567,9 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 	env := []any{
 		map[string]any{"name": "PYTHONUNBUFFERED", "value": "1"},
 		map[string]any{"name": "RAY_DISABLE_DOCKER_CPU_WARNING", "value": "1"},
+	}
+	if jobSpec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain {
+		env = append(env, map[string]any{"name": "RAYTRAIN_CLUSTER_ATTEMPT", "value": strconv.Itoa(options.clusterAttempt)})
 	}
 	if mountData {
 		env = append(env, platformDataEnvironment(jobSpec, options.managedResumePath)...)

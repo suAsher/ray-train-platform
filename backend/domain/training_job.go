@@ -314,6 +314,84 @@ func (request ManagedRetiringIdentityRequest) Validate() error {
 	return nil
 }
 
+// ManagedAttemptReservationRequest reserves the deterministic Kubernetes name
+// for one managed cluster attempt before any create-capable client call. An
+// empty ExpectedRayJobName is the first reservation; the deterministic name is
+// used as ExpectedRayJobName when a later reconciler revalidates it.
+type ManagedAttemptReservationRequest struct {
+	JobID                  string
+	ExpectedClusterAttempt int
+	ExpectedState          State
+	ExpectedRayJobName     string
+	RayJobName             string
+}
+
+func (request ManagedAttemptReservationRequest) Validate() error {
+	if strings.TrimSpace(request.JobID) == "" {
+		return fmt.Errorf("managed attempt reservation job ID is required")
+	}
+	if request.ExpectedClusterAttempt < 1 {
+		return fmt.Errorf("managed attempt reservation expected cluster attempt must be positive")
+	}
+	if strings.TrimSpace(string(request.ExpectedState)) == "" {
+		return fmt.Errorf("managed attempt reservation expected state is required")
+	}
+	if !managedAttemptReservableState(request.ExpectedState) {
+		return fmt.Errorf("managed attempt reservation expected state is not active")
+	}
+	name := strings.TrimSpace(request.RayJobName)
+	if name == "" || len(name) > 63 || !dnsLabel.MatchString(name) {
+		return fmt.Errorf("managed attempt reservation RayJob name must be a DNS label")
+	}
+	if expected := strings.TrimSpace(request.ExpectedRayJobName); expected != "" && expected != name {
+		return fmt.Errorf("managed attempt reservation expected name must be empty or deterministic")
+	}
+	return nil
+}
+
+// ManagedAttemptAdoptionRequest binds the exact UID returned by Kubernetes to
+// a previously reserved attempt name before its status is interpreted.
+type ManagedAttemptAdoptionRequest struct {
+	JobID                  string
+	ExpectedClusterAttempt int
+	ExpectedState          State
+	RayJobName             string
+	RayJobUID              string
+	KubernetesNS           string
+	ResourceVersion        string
+}
+
+func (request ManagedAttemptAdoptionRequest) Validate() error {
+	if strings.TrimSpace(request.JobID) == "" {
+		return fmt.Errorf("managed attempt adoption job ID is required")
+	}
+	if request.ExpectedClusterAttempt < 1 {
+		return fmt.Errorf("managed attempt adoption expected cluster attempt must be positive")
+	}
+	if strings.TrimSpace(string(request.ExpectedState)) == "" {
+		return fmt.Errorf("managed attempt adoption expected state is required")
+	}
+	if !managedAttemptReservableState(request.ExpectedState) {
+		return fmt.Errorf("managed attempt adoption expected state is not active")
+	}
+	if strings.TrimSpace(request.RayJobName) == "" || strings.TrimSpace(request.RayJobUID) == "" {
+		return fmt.Errorf("managed attempt adoption RayJob name and UID are required")
+	}
+	if strings.TrimSpace(request.KubernetesNS) == "" {
+		return fmt.Errorf("managed attempt adoption Kubernetes namespace is required")
+	}
+	return nil
+}
+
+func managedAttemptReservableState(state State) bool {
+	switch state {
+	case StateSubmitted, StateValidating, StateQueued, StateAdmitted, StateProvisioning, StateRunning, StateRecovering, StateUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
 var dnsLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 var digestImage = regexp.MustCompile(`^[^@\s]+@sha256:[0-9a-fA-F]{64}$`)
 var imageTag = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)

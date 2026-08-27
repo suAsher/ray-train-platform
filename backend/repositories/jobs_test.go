@@ -642,6 +642,109 @@ func TestClearManagedRecoveryRetiringIdentityLosesToCancellation(t *testing.T) {
 	}
 }
 
+func TestReserveManagedAttemptIdentityCASAndNoTerminalOutbox(t *testing.T) {
+	repo, job := managedRecoveryJob(t, 2)
+	if err := repo.db.Model(&JobRecord{}).Where("id = ?", job.ID).Updates(map[string]any{
+		"cluster_attempt": 2, "observed_state": domain.StateRecovering,
+		"ray_job_name": "", "ray_job_uid": "",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	request := domain.ManagedAttemptReservationRequest{
+		JobID: job.ID, ExpectedClusterAttempt: 2, ExpectedState: domain.StateRecovering,
+		ExpectedRayJobName: "", RayJobName: job.ID + "-a2",
+	}
+	current, reserved, err := repo.ReserveManagedAttemptIdentity(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reserved || current.ClusterAttempt != 2 || current.RayJobName != job.ID+"-a2" || current.RayJobUID != "" {
+		t.Fatalf("current attempt was not reserved: reserved=%v job=%+v", reserved, current)
+	}
+
+	staleCurrent, stale, err := repo.ReserveManagedAttemptIdentity(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stale || staleCurrent.RayJobName != job.ID+"-a2" {
+		t.Fatalf("stale empty reservation unexpectedly won: reserved=%v job=%+v", stale, staleCurrent)
+	}
+	revalidate := request
+	revalidate.ExpectedRayJobName = job.ID + "-a2"
+	current, revalidated, err := repo.ReserveManagedAttemptIdentity(context.Background(), revalidate)
+	if err != nil || !revalidated || current.RayJobUID != "" {
+		t.Fatalf("current reservation did not revalidate: reserved=%v job=%+v err=%v", revalidated, current, err)
+	}
+
+	if err := repo.SetDesiredState(context.Background(), job.TenantID, job.ID, domain.DesiredCanceled); err != nil {
+		t.Fatal(err)
+	}
+	canceled, canceledReservation, err := repo.ReserveManagedAttemptIdentity(context.Background(), revalidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canceledReservation || canceled.DesiredState != domain.DesiredCanceled {
+		t.Fatalf("reservation overrode cancellation: reserved=%v job=%+v", canceledReservation, canceled)
+	}
+	var terminalEvents int64
+	if err := repo.db.Model(&OutboxRecord{}).Where("event_type = ?", "TRAINING_JOB_TERMINAL").Count(&terminalEvents).Error; err != nil {
+		t.Fatal(err)
+	}
+	if terminalEvents != 0 {
+		t.Fatalf("reservation emitted %d terminal events", terminalEvents)
+	}
+}
+
+func TestAdoptManagedAttemptIdentityCASAndIdempotency(t *testing.T) {
+	repo, job := managedRecoveryJob(t, 2)
+	if err := repo.db.Model(&JobRecord{}).Where("id = ?", job.ID).Updates(map[string]any{
+		"cluster_attempt": 2, "observed_state": domain.StateRecovering,
+		"ray_job_name": job.ID + "-a2", "ray_job_uid": "",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	request := domain.ManagedAttemptAdoptionRequest{
+		JobID: job.ID, ExpectedClusterAttempt: 2, ExpectedState: domain.StateRecovering,
+		RayJobName: job.ID + "-a2", RayJobUID: "uid-attempt-2",
+		KubernetesNS: job.KubernetesNS, ResourceVersion: "rv-attempt-2",
+	}
+	current, adopted, err := repo.AdoptManagedAttemptIdentity(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !adopted || current.RayJobName != request.RayJobName || current.RayJobUID != request.RayJobUID || current.ResourceVersion != request.ResourceVersion {
+		t.Fatalf("current attempt was not adopted: adopted=%v job=%+v", adopted, current)
+	}
+
+	if err := repo.SetDesiredState(context.Background(), job.TenantID, job.ID, domain.DesiredCanceled); err != nil {
+		t.Fatal(err)
+	}
+	current, idempotent, err := repo.AdoptManagedAttemptIdentity(context.Background(), request)
+	if err != nil || !idempotent || current.DesiredState != domain.DesiredCanceled {
+		t.Fatalf("same identity adoption was not idempotent after cancellation: adopted=%v job=%+v err=%v", idempotent, current, err)
+	}
+}
+
+func TestAdoptManagedAttemptIdentityLosesToNewerAttempt(t *testing.T) {
+	repo, job := managedRecoveryJob(t, 3)
+	if err := repo.db.Model(&JobRecord{}).Where("id = ?", job.ID).Updates(map[string]any{
+		"cluster_attempt": 3, "observed_state": domain.StateRecovering,
+		"ray_job_name": job.ID + "-a3", "ray_job_uid": "",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	current, adopted, err := repo.AdoptManagedAttemptIdentity(context.Background(), domain.ManagedAttemptAdoptionRequest{
+		JobID: job.ID, ExpectedClusterAttempt: 2, ExpectedState: domain.StateRecovering,
+		RayJobName: job.ID + "-a2", RayJobUID: "uid-attempt-2", KubernetesNS: job.KubernetesNS,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adopted || current.ClusterAttempt != 3 || current.RayJobName != job.ID+"-a3" || current.RayJobUID != "" {
+		t.Fatalf("stale adoption overwrote newer attempt: adopted=%v job=%+v", adopted, current)
+	}
+}
+
 func TestBeginManagedRecoveryMaxFailuresCountsRetriesAfterInitialAttempt(t *testing.T) {
 	repo, job := managedRecoveryJob(t, 2)
 	persistRecoveryCheckpoint(t, repo, job, "checkpoint-4", true)

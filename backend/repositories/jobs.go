@@ -523,6 +523,133 @@ func deterministicAttemptRayJobName(jobID string, attempt int) string {
 	return fmt.Sprintf("%s-a%d", jobID, attempt)
 }
 
+// ReserveManagedAttemptIdentity serializes the first create-capable operation
+// for an attempt. It persists only the deterministic name; Kubernetes remains
+// the authority for the UID, which is adopted in a separate transaction.
+func (r *GormRepository) ReserveManagedAttemptIdentity(ctx context.Context, request domain.ManagedAttemptReservationRequest) (*domain.TrainingJob, bool, error) {
+	if err := request.Validate(); err != nil {
+		return nil, false, err
+	}
+	var current *domain.TrainingJob
+	reserved := false
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var record JobRecord
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", request.JobID).First(&record).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("job not found")
+			}
+			return fmt.Errorf("lock managed attempt reservation: %w", err)
+		}
+		job, err := record.toDomain()
+		if err != nil {
+			return err
+		}
+		current = job
+		if job.Spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain ||
+			job.DesiredState != domain.DesiredActive || job.ClusterAttempt != request.ExpectedClusterAttempt ||
+			job.ObservedState != request.ExpectedState || job.RayJobUID != "" ||
+			job.RayJobName != request.ExpectedRayJobName {
+			return nil
+		}
+		if job.RayJobName == request.RayJobName {
+			reserved = true
+			return nil
+		}
+		if job.RayJobName != "" {
+			return nil
+		}
+		now := time.Now().UTC()
+		result := tx.Model(&JobRecord{}).
+			Where("id = ? AND training_engine = ? AND desired_state = ? AND cluster_attempt = ? AND observed_state = ? AND ray_job_name = ? AND ray_job_uid = ?",
+				request.JobID, domain.TrainingEngineRayTrain, domain.DesiredActive, request.ExpectedClusterAttempt,
+				request.ExpectedState, request.ExpectedRayJobName, "").
+			Updates(map[string]any{"ray_job_name": request.RayJobName, "last_observed_at": now, "updated_at": now})
+		if result.Error != nil {
+			return fmt.Errorf("reserve managed attempt identity: %w", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			if err := tx.Where("id = ?", request.JobID).First(&record).Error; err != nil {
+				return fmt.Errorf("reload stale managed attempt reservation: %w", err)
+			}
+			current, err = record.toDomain()
+			return err
+		}
+		reserved = true
+		if err := tx.Where("id = ?", request.JobID).First(&record).Error; err != nil {
+			return fmt.Errorf("reload reserved managed attempt: %w", err)
+		}
+		current, err = record.toDomain()
+		return err
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return current, reserved, nil
+}
+
+// AdoptManagedAttemptIdentity binds the UID returned by Kubernetes to the
+// reserved attempt before any status is classified. Exact repeated adoption is
+// idempotent, including when cancellation has already changed desired state.
+func (r *GormRepository) AdoptManagedAttemptIdentity(ctx context.Context, request domain.ManagedAttemptAdoptionRequest) (*domain.TrainingJob, bool, error) {
+	if err := request.Validate(); err != nil {
+		return nil, false, err
+	}
+	var current *domain.TrainingJob
+	adopted := false
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var record JobRecord
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", request.JobID).First(&record).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("job not found")
+			}
+			return fmt.Errorf("lock managed attempt adoption: %w", err)
+		}
+		job, err := record.toDomain()
+		if err != nil {
+			return err
+		}
+		current = job
+		if job.ClusterAttempt == request.ExpectedClusterAttempt && job.RayJobName == request.RayJobName && job.RayJobUID == request.RayJobUID {
+			adopted = true
+			return nil
+		}
+		if job.Spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain ||
+			job.DesiredState != domain.DesiredActive || job.ClusterAttempt != request.ExpectedClusterAttempt ||
+			job.ObservedState != request.ExpectedState || job.RayJobName != request.RayJobName || job.RayJobUID != "" {
+			return nil
+		}
+		now := time.Now().UTC()
+		result := tx.Model(&JobRecord{}).
+			Where("id = ? AND training_engine = ? AND desired_state = ? AND cluster_attempt = ? AND observed_state = ? AND ray_job_name = ? AND ray_job_uid = ?",
+				request.JobID, domain.TrainingEngineRayTrain, domain.DesiredActive, request.ExpectedClusterAttempt,
+				request.ExpectedState, request.RayJobName, "").
+			Updates(map[string]any{
+				"kubernetes_ns": request.KubernetesNS, "ray_job_uid": request.RayJobUID,
+				"resource_version": request.ResourceVersion, "last_observed_at": now, "updated_at": now,
+			})
+		if result.Error != nil {
+			return fmt.Errorf("adopt managed attempt identity: %w", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			if err := tx.Where("id = ?", request.JobID).First(&record).Error; err != nil {
+				return fmt.Errorf("reload stale managed attempt adoption: %w", err)
+			}
+			current, err = record.toDomain()
+			return err
+		}
+		adopted = true
+		if err := tx.Where("id = ?", request.JobID).First(&record).Error; err != nil {
+			return fmt.Errorf("reload adopted managed attempt: %w", err)
+		}
+		current, err = record.toDomain()
+		return err
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return current, adopted, nil
+}
+
 // BeginManagedRecovery atomically snapshots the latest usable checkpoint and
 // advances the outer RayCluster attempt. MaxFailures is the number of retries
 // after the initial attempt: maxFailures=2 permits attempts 2 and 3.

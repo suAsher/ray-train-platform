@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -26,8 +27,12 @@ type memoryJobStore struct {
 	recoveryCheckpointID string
 	recoveryRequests     []domain.ManagedRecoveryRequest
 	retirementRequests   []domain.ManagedRetiringIdentityRequest
+	reservationRequests  []domain.ManagedAttemptReservationRequest
+	adoptionRequests     []domain.ManagedAttemptAdoptionRequest
 	cancelDuringRecovery bool
 	cancelDuringRetire   bool
+	advanceDuringAdopt   bool
+	cancelDuringAdopt    bool
 }
 
 type recordingGitCredentialResolver struct {
@@ -124,6 +129,72 @@ func (s *memoryJobStore) ClearManagedRecoveryRetiringIdentity(_ context.Context,
 	return &copy, true, nil
 }
 
+func (s *memoryJobStore) ReserveManagedAttemptIdentity(_ context.Context, request domain.ManagedAttemptReservationRequest) (*domain.TrainingJob, bool, error) {
+	s.reservationRequests = append(s.reservationRequests, request)
+	if s.job.Spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain ||
+		s.job.DesiredState != domain.DesiredActive || s.job.ClusterAttempt != request.ExpectedClusterAttempt ||
+		s.job.ObservedState != request.ExpectedState || s.job.RayJobUID != "" || s.job.RayJobName != request.ExpectedRayJobName {
+		copy := *s.job
+		return &copy, false, nil
+	}
+	if s.job.RayJobName == "" {
+		s.job.RayJobName = request.RayJobName
+	}
+	copy := *s.job
+	return &copy, s.job.RayJobName == request.RayJobName, nil
+}
+
+func (s *memoryJobStore) AdoptManagedAttemptIdentity(_ context.Context, request domain.ManagedAttemptAdoptionRequest) (*domain.TrainingJob, bool, error) {
+	s.adoptionRequests = append(s.adoptionRequests, request)
+	if s.cancelDuringAdopt {
+		s.cancelDuringAdopt = false
+		s.job.DesiredState = domain.DesiredCanceled
+	}
+	if s.advanceDuringAdopt {
+		s.advanceDuringAdopt = false
+		s.job.ClusterAttempt++
+		s.job.ObservedState = domain.StateRecovering
+		// Model replica A adopting this exact resource and advancing recovery
+		// while replica B is still between Ensure and adoption. Begin recovery
+		// preserves the old identity until retirement reaches NotFound.
+		s.job.RayJobName = request.RayJobName
+		s.job.RayJobUID = request.RayJobUID
+	}
+	if s.job.ClusterAttempt == request.ExpectedClusterAttempt && s.job.RayJobName == request.RayJobName && s.job.RayJobUID == request.RayJobUID {
+		copy := *s.job
+		return &copy, true, nil
+	}
+	if s.job.Spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain ||
+		s.job.DesiredState != domain.DesiredActive || s.job.ClusterAttempt != request.ExpectedClusterAttempt ||
+		s.job.ObservedState != request.ExpectedState || s.job.RayJobName != request.RayJobName || s.job.RayJobUID != "" {
+		copy := *s.job
+		return &copy, false, nil
+	}
+	s.job.RayJobUID = request.RayJobUID
+	s.job.KubernetesNS = request.KubernetesNS
+	s.job.ResourceVersion = request.ResourceVersion
+	copy := *s.job
+	return &copy, true, nil
+}
+
+func TestCancellationWinningManagedAdoptionDeletesCreatedAttempt(t *testing.T) {
+	attemptTwo := managedEmptyAttempt(2, domain.StateRecovering)
+	store := &memoryJobStore{job: &attemptTwo, cancelDuringAdopt: true}
+	dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
+	client := NewClientFromInterfaces(dynamicClient, nil)
+	reconciler := NewReconciler(store, client, testRenderOptions())
+
+	if err := reconciler.ReconcileJob(context.Background(), attemptTwo.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.GetRayJob(context.Background(), attemptTwo.KubernetesNS, attemptTwo.ID+"-a2"); !apierrors.IsNotFound(err) {
+		t.Fatalf("canceled attempt 2 resource was not compensated: %v", err)
+	}
+	if store.job.ObservedState != domain.StateCanceled {
+		t.Fatalf("cancellation did not win the adoption race: %+v", store.job)
+	}
+}
+
 func (s *memoryJobStore) ClaimOutbox(context.Context, int) ([]domain.OutboxEvent, error) {
 	return nil, nil
 }
@@ -135,7 +206,23 @@ func (s *memoryJobStore) MarkOutboxRetry(context.Context, string, time.Time, str
 }
 
 func newFakeDynamicClient() dynamic.Interface {
-	return dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
+	client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
+	client.PrependReactor("create", "rayjobs", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		create := action.(k8stesting.CreateAction)
+		resource := create.GetObject().(*unstructured.Unstructured).DeepCopy()
+		if resource.GetUID() == "" {
+			resource.SetUID(types.UID("uid-" + resource.GetName()))
+		}
+		createWithOptions, ok := action.(interface{ GetCreateOptions() metav1.CreateOptions })
+		if ok && len(createWithOptions.GetCreateOptions().DryRun) > 0 {
+			return true, resource, nil
+		}
+		if err := client.Tracker().Create(rayJobGVR, resource, resource.GetNamespace()); err != nil {
+			return true, nil, err
+		}
+		return true, resource, nil
+	})
+	return client
 }
 
 func assertNoKueueUpdateActions(t *testing.T, client *dynamicfake.FakeDynamicClient) {
@@ -452,6 +539,192 @@ func TestStaleReplicaNeverRecreatesRetiredManagedAttempt(t *testing.T) {
 		if action.GetVerb() == "create" && action.(k8stesting.CreateAction).GetObject().(*unstructured.Unstructured).GetName() == job.ID {
 			t.Fatalf("stale replica issued create for attempt 1: %+v", action)
 		}
+	}
+}
+
+func managedEmptyAttempt(attempt int, state domain.State) domain.TrainingJob {
+	job := managedRenderJob(domain.RayVersionProduction)
+	job.DesiredState = domain.DesiredActive
+	job.ObservedState = state
+	job.ClusterAttempt = attempt
+	job.RayJobName = ""
+	job.RayJobUID = ""
+	if attempt > 1 {
+		job.ResumeCheckpointID = "checkpoint-previous"
+		job.Spec.ResolvedDataMounts.Output = &domain.ResolvedDataMount{
+			Space: domain.DataSpaceMyRuns, BindingSpace: domain.DataSpaceWorkspace,
+			ClaimName: "tenant-data", SubPath: "tenants/tenant-a/users/user-01/runs/job-01",
+			MountPath: domain.DataMountOutputPath, ReadOnly: false,
+		}
+	}
+	return job
+}
+
+func TestStaleEmptyAttemptReservationReconcilesNewerAttemptWithoutCreatingOld(t *testing.T) {
+	staleAttemptTwo := managedEmptyAttempt(2, domain.StateRecovering)
+	currentAttemptThree := managedEmptyAttempt(3, domain.StateRecovering)
+	store := &memoryJobStore{job: &currentAttemptThree}
+	dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
+	client := NewClientFromInterfaces(dynamicClient, nil)
+	reconciler := NewReconciler(store, client, testRenderOptions())
+
+	if err := reconciler.reconcileLoadedJob(context.Background(), &staleAttemptTwo); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.GetRayJob(context.Background(), staleAttemptTwo.KubernetesNS, staleAttemptTwo.ID+"-a2"); !apierrors.IsNotFound(err) {
+		t.Fatalf("stale empty attempt 2 was created: %v", err)
+	}
+	if _, err := client.GetRayJob(context.Background(), currentAttemptThree.KubernetesNS, currentAttemptThree.ID+"-a3"); err != nil {
+		t.Fatalf("current attempt 3 was not reconciled: %v", err)
+	}
+}
+
+func TestCanceledEmptyAttemptReservationCreatesNothing(t *testing.T) {
+	stale := managedEmptyAttempt(2, domain.StateRecovering)
+	current := stale
+	current.DesiredState = domain.DesiredCanceled
+	store := &memoryJobStore{job: &current}
+	client := NewClientFromInterfaces(newFakeDynamicClient(), nil)
+	reconciler := NewReconciler(store, client, testRenderOptions())
+
+	if err := reconciler.reconcileLoadedJob(context.Background(), &stale); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.GetRayJob(context.Background(), stale.KubernetesNS, stale.ID+"-a2"); !apierrors.IsNotFound(err) {
+		t.Fatalf("canceled empty attempt was created: %v", err)
+	}
+	if store.job.ObservedState != domain.StateCanceled {
+		t.Fatalf("latest canceled state was not reconciled: %+v", store.job)
+	}
+}
+
+func TestLosingManagedAdoptionDeletesExactCreatedUIDAndReconcilesNewAttempt(t *testing.T) {
+	attemptTwo := managedEmptyAttempt(2, domain.StateRecovering)
+	store := &memoryJobStore{job: &attemptTwo, advanceDuringAdopt: true}
+	dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
+	client := NewClientFromInterfaces(dynamicClient, nil)
+	reconciler := NewReconciler(store, client, testRenderOptions())
+
+	if err := reconciler.ReconcileJob(context.Background(), attemptTwo.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.GetRayJob(context.Background(), attemptTwo.KubernetesNS, attemptTwo.ID+"-a2"); !apierrors.IsNotFound(err) {
+		t.Fatalf("losing attempt 2 resource was not compensated: %v", err)
+	}
+	if _, err := client.GetRayJob(context.Background(), attemptTwo.KubernetesNS, attemptTwo.ID+"-a3"); err != nil {
+		t.Fatalf("new attempt 3 was not reconciled after compensation: %v", err)
+	}
+	if len(store.adoptionRequests) < 2 || store.adoptionRequests[0].RayJobUID == "" {
+		t.Fatalf("created resource was not adopted before status classification: %+v", store.adoptionRequests)
+	}
+}
+
+func TestInitialManagedAttemptConcurrentCreatorUsesOneReservedIdentity(t *testing.T) {
+	initial := managedEmptyAttempt(1, domain.StateSubmitted)
+	stale := initial
+	store := &memoryJobStore{job: &initial}
+	dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
+	client := NewClientFromInterfaces(dynamicClient, nil)
+	first := NewReconciler(store, client, testRenderOptions())
+	second := NewReconciler(store, client, testRenderOptions())
+	if err := first.reconcileLoadedJob(context.Background(), &initial); err != nil {
+		t.Fatal(err)
+	}
+	dynamicClient.ClearActions()
+	if err := second.reconcileLoadedJob(context.Background(), &stale); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range dynamicClient.Actions() {
+		if action.GetVerb() == "create" {
+			t.Fatalf("second initial-attempt replica issued another create: %+v", action)
+		}
+	}
+	if store.job.ClusterAttempt != 1 || store.job.RayJobName != initial.ID || store.job.RayJobUID == "" {
+		t.Fatalf("initial attempt identity was not adopted exactly once: %+v", store.job)
+	}
+}
+
+func TestReservedManagedAttemptCrashToleranceAbsentAndPresentResource(t *testing.T) {
+	for _, resourcePresent := range []bool{false, true} {
+		t.Run(fmt.Sprintf("resource-present-%v", resourcePresent), func(t *testing.T) {
+			job := managedEmptyAttempt(2, domain.StateRecovering)
+			job.RayJobName = job.ID + "-a2"
+			store := &memoryJobStore{job: &job}
+			dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
+			client := NewClientFromInterfaces(dynamicClient, nil)
+			if resourcePresent {
+				manifest := managedManifest(t, job)
+				if _, err := dynamicClient.Resource(rayJobGVR).Namespace(job.KubernetesNS).Create(context.Background(), manifest, metav1.CreateOptions{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			reconciler := NewReconciler(store, client, testRenderOptions())
+			if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
+				t.Fatal(err)
+			}
+			if store.job.RayJobName != job.ID+"-a2" || store.job.RayJobUID == "" {
+				t.Fatalf("reserved attempt was not created/adopted after restart: %+v", store.job)
+			}
+		})
+	}
+}
+
+func TestCreatorCrashAdoptsFailedResourceBeforeManagedRecovery(t *testing.T) {
+	job := managedEmptyAttempt(2, domain.StateRecovering)
+	job.RayJobName = job.ID + "-a2"
+	job.Spec.Managed.MaxFailures = 3
+	job.Spec.ResolvedDataMounts.Output = &domain.ResolvedDataMount{
+		Space: domain.DataSpaceMyRuns, BindingSpace: domain.DataSpaceWorkspace,
+		ClaimName: "tenant-data", SubPath: "tenants/tenant-a/users/user-01/runs/job-01",
+		MountPath: domain.DataMountOutputPath, ReadOnly: false,
+	}
+	store := &memoryJobStore{job: &job, recoveryAllowed: true, recoveryCheckpointID: "checkpoint-current"}
+	dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
+	client := NewClientFromInterfaces(dynamicClient, nil)
+	manifest := managedManifest(t, job)
+	if err := unstructured.SetNestedMap(manifest.Object, map[string]any{
+		"jobStatus": "FAILED", "reason": "HEAD_POD_LOST", "message": "head disappeared after create",
+	}, "status"); err != nil {
+		t.Fatal(err)
+	}
+	created, err := dynamicClient.Resource(rayJobGVR).Namespace(job.KubernetesNS).Create(context.Background(), manifest, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconciler := NewReconciler(store, client, testRenderOptions())
+	if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.recoveryRequests) != 1 || store.recoveryRequests[0].ExpectedRayJobUID != string(created.GetUID()) {
+		t.Fatalf("FAILED resource was classified before exact adoption: created=%s requests=%+v", created.GetUID(), store.recoveryRequests)
+	}
+	if store.job.ClusterAttempt != 3 || store.job.RayJobName != job.ID+"-a3" || store.job.RayJobUID == "" {
+		t.Fatalf("adopted FAILED attempt did not recover to attempt 3: %+v", store.job)
+	}
+}
+
+func TestCreatorCrashAdoptsFailedResourceAndFailsClosedWithoutCheckpoint(t *testing.T) {
+	job := managedEmptyAttempt(2, domain.StateRecovering)
+	job.RayJobName = job.ID + "-a2"
+	store := &memoryJobStore{job: &job, recoveryAllowed: false}
+	dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
+	client := NewClientFromInterfaces(dynamicClient, nil)
+	manifest := managedManifest(t, job)
+	if err := unstructured.SetNestedMap(manifest.Object, map[string]any{
+		"jobStatus": "FAILED", "reason": "HEAD_POD_LOST", "message": "head disappeared after create",
+	}, "status"); err != nil {
+		t.Fatal(err)
+	}
+	created, err := dynamicClient.Resource(rayJobGVR).Namespace(job.KubernetesNS).Create(context.Background(), manifest, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconciler := NewReconciler(store, client, testRenderOptions())
+	if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if store.job.ObservedState != domain.StateFailed || store.job.RayJobUID != string(created.GetUID()) {
+		t.Fatalf("FAILED resource was not adopted before fail-closed state: %+v", store.job)
 	}
 }
 

@@ -57,6 +57,7 @@ class PlatformMLflowTest(unittest.TestCase):
             "RAYTRAIN_TENANT_ID": "local",
             "RAYTRAIN_SUBMITTER_USER_ID": "user-test",
             "RAYTRAIN_MLFLOW_PROVENANCE": "signed-provenance",
+            "RAYTRAIN_CLUSTER_ATTEMPT": "2",
         }
 
     def test_rank_zero_starts_owned_run_and_installs_scalar_logger(self) -> None:
@@ -81,6 +82,7 @@ class PlatformMLflowTest(unittest.TestCase):
                 "platform.tenant_id": "local",
                 "platform.submitter_user_id": "user-test",
                 "platform.provenance": "signed-provenance",
+                "platform.cluster_attempt": "2",
             },
         )
         fake_mlflow.log_params.assert_called_once_with(

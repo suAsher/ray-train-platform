@@ -27,6 +27,8 @@ type JobStore interface {
 	MarkOutboxDone(context.Context, string) error
 	MarkOutboxRetry(context.Context, string, time.Time, string) error
 	ApplyObservedState(context.Context, domain.ObservedJobState) error
+	ReserveManagedAttemptIdentity(context.Context, domain.ManagedAttemptReservationRequest) (*domain.TrainingJob, bool, error)
+	AdoptManagedAttemptIdentity(context.Context, domain.ManagedAttemptAdoptionRequest) (*domain.TrainingJob, bool, error)
 	BeginManagedRecovery(context.Context, domain.ManagedRecoveryRequest) (*domain.TrainingJob, bool, error)
 	ClearManagedRecoveryRetiringIdentity(context.Context, domain.ManagedRetiringIdentityRequest) (*domain.TrainingJob, bool, error)
 }
@@ -215,6 +217,19 @@ func (r *Reconciler) reconcileLoadedJob(ctx context.Context, job *domain.Trainin
 	if managedJobHasRetiringIdentity(*job) {
 		return r.reconcileManagedRetirement(ctx, job)
 	}
+	managed := job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain
+	needsAdoption := false
+	if managed && strings.TrimSpace(job.RayJobUID) == "" {
+		reserved, current, err := r.reserveManagedAttempt(ctx, job)
+		if err != nil {
+			return err
+		}
+		if !reserved {
+			return r.reconcileCurrentManagedJob(ctx, current)
+		}
+		job = current
+		needsAdoption = true
+	}
 	options := r.renderOptions
 	if r.gitCredentials != nil && job.Spec.Source.Type == "git" {
 		options.GitCredentialSecret = r.gitCredentials.GitCredentialSecretFor(ctx, job.TenantID, job.UserID, job.Spec.Source.URL)
@@ -229,6 +244,25 @@ func (r *Reconciler) reconcileLoadedJob(ctx context.Context, job *domain.Trainin
 	}
 	if err != nil {
 		return err
+	}
+	if needsAdoption {
+		current, adopted, adoptionErr := r.adoptManagedAttempt(ctx, job, resource)
+		if adoptionErr != nil {
+			return adoptionErr
+		}
+		if !adopted {
+			if deleteErr := r.client.DeleteRayJob(ctx, resource.GetNamespace(), resource.GetName(), job.ID, string(resource.GetUID())); deleteErr != nil && !apierrors.IsNotFound(deleteErr) {
+				return deleteErr
+			}
+			return r.reconcileCurrentManagedJob(ctx, current)
+		}
+		job = current
+		if job.DesiredState == domain.DesiredCanceled {
+			return r.reconcileCancellation(ctx, job)
+		}
+		if terminalJobState(job.ObservedState) {
+			return nil
+		}
 	}
 	status, found, statusErr := nestedMap(resource.Object, "status")
 	if statusErr != nil {
@@ -296,15 +330,65 @@ func (r *Reconciler) reconcileLoadedJob(ctx context.Context, job *domain.Trainin
 	return nil
 }
 
+func (r *Reconciler) reserveManagedAttempt(ctx context.Context, loaded *domain.TrainingJob) (bool, *domain.TrainingJob, error) {
+	if strings.TrimSpace(loaded.RayJobUID) != "" {
+		return false, nil, fmt.Errorf("managed attempt reservation requires an empty UID")
+	}
+	current, reserved, err := r.store.ReserveManagedAttemptIdentity(ctx, domain.ManagedAttemptReservationRequest{
+		JobID: loaded.ID, ExpectedClusterAttempt: loaded.ClusterAttempt,
+		ExpectedState: loaded.ObservedState, ExpectedRayJobName: loaded.RayJobName,
+		RayJobName: managedAttemptRayJobName(*loaded),
+	})
+	if err != nil {
+		return false, nil, err
+	}
+	if current == nil {
+		return false, nil, fmt.Errorf("managed attempt reservation returned no job")
+	}
+	return reserved, current, nil
+}
+
+func (r *Reconciler) adoptManagedAttempt(ctx context.Context, reserved *domain.TrainingJob, resource *unstructured.Unstructured) (*domain.TrainingJob, bool, error) {
+	uid := strings.TrimSpace(string(resource.GetUID()))
+	if uid == "" {
+		return nil, false, fmt.Errorf("managed RayJob %s has no Kubernetes UID", resource.GetName())
+	}
+	current, adopted, err := r.store.AdoptManagedAttemptIdentity(ctx, domain.ManagedAttemptAdoptionRequest{
+		JobID: reserved.ID, ExpectedClusterAttempt: reserved.ClusterAttempt,
+		ExpectedState: reserved.ObservedState, RayJobName: resource.GetName(), RayJobUID: uid,
+		KubernetesNS: resource.GetNamespace(), ResourceVersion: resource.GetResourceVersion(),
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if current == nil {
+		return nil, false, fmt.Errorf("managed attempt adoption returned no job")
+	}
+	return current, adopted, nil
+}
+
+func (r *Reconciler) reconcileCurrentManagedJob(ctx context.Context, current *domain.TrainingJob) error {
+	if current == nil {
+		return fmt.Errorf("managed attempt CAS returned no current job")
+	}
+	if terminalJobState(current.ObservedState) {
+		return nil
+	}
+	return r.reconcileLoadedJob(ctx, current)
+}
+
 func (r *Reconciler) getOrEnsureRayJob(ctx context.Context, job *domain.TrainingJob, manifest *unstructured.Unstructured) (*unstructured.Unstructured, error) {
 	if job.Spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain {
 		return r.client.EnsureRayJob(ctx, manifest)
 	}
 	name, uid := strings.TrimSpace(job.RayJobName), strings.TrimSpace(job.RayJobUID)
-	if (name == "") != (uid == "") {
+	if name == "" && uid != "" {
 		return nil, fmt.Errorf("managed RayJob persisted identity is incomplete")
 	}
-	if name == "" {
+	if uid == "" {
+		if name == "" {
+			return nil, fmt.Errorf("managed RayJob name was not reserved")
+		}
 		return r.client.EnsureRayJob(ctx, manifest)
 	}
 	return r.client.GetOwnedRayJob(ctx, manifest.GetNamespace(), name, job.ID, uid)
