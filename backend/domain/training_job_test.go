@@ -339,6 +339,59 @@ func TestJobSpecParentJobIDValidation(t *testing.T) {
 	}
 }
 
+func TestRayDDPRejectsUnsupportedRayVersion(t *testing.T) {
+	spec := validJobSpec()
+	spec.TrainingEngine = TrainingEngineRayDDP
+	spec.RayVersion = "bogus"
+	if err := spec.Validate(); err == nil || !strings.Contains(err.Error(), "unsupported Ray version") {
+		t.Fatalf("expected unsupported Ray version rejection, got %v", err)
+	}
+}
+
+func TestRayDDPAcceptsPlatformRayVersions(t *testing.T) {
+	for _, version := range []string{"", RayVersionLegacy, RayVersionProduction, RayVersionCanary} {
+		t.Run(version, func(t *testing.T) {
+			spec := validJobSpec()
+			spec.TrainingEngine = TrainingEngineRayDDP
+			spec.RayVersion = version
+			if err := spec.Validate(); err != nil {
+				t.Fatalf("expected ray-ddp to accept Ray version %q: %v", version, err)
+			}
+		})
+	}
+}
+
+func TestRayDDPRejectsNonZeroManagedTrainingPolicy(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		policy ManagedTrainingPolicy
+	}{
+		{name: "invalid policy", policy: ManagedTrainingPolicy{MaxFailures: 11}},
+		{name: "valid max failures", policy: ManagedTrainingPolicy{MaxFailures: 1}},
+		{name: "valid checkpoint policy", policy: ManagedTrainingPolicy{Checkpoint: CheckpointPolicy{EveryEpochs: 1, KeepLatest: 2, KeepBest: 1}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			spec := validJobSpec()
+			spec.TrainingEngine = TrainingEngineRayDDP
+			spec.Managed = test.policy
+			if err := spec.Validate(); err == nil || !strings.Contains(err.Error(), "managed policy requires ray-train") {
+				t.Fatalf("expected ray-ddp managed policy rejection, got %v", err)
+			}
+		})
+	}
+}
+
+func TestLegacyExecutionRayTrainDoesNotSelectManagedEngine(t *testing.T) {
+	spec := validJobSpec()
+	spec.Execution.Mode = ExecutionModeRayTrain
+	if err := spec.Validate(); err != nil {
+		t.Fatalf("expected legacy ray_train execution mode to remain valid: %v", err)
+	}
+	if got := spec.TrainingEngine.Resolved(); got != TrainingEngineRayDDP {
+		t.Fatalf("legacy execution mode resolved training engine to %q", got)
+	}
+}
+
 func validJobSpec() JobSpec {
 	return JobSpec{
 		Name:       "managed-train-001",

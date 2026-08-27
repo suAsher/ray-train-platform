@@ -286,9 +286,18 @@ func (s JobSpec) Validate() error {
 }
 
 func (s JobSpec) validateTrainingRuntime() error {
+	switch s.RayVersion {
+	case "", RayVersionLegacy, RayVersionProduction, RayVersionCanary:
+	default:
+		return fmt.Errorf("unsupported Ray version %q", s.RayVersion)
+	}
+
 	engine := s.TrainingEngine.Resolved()
 	switch engine {
 	case TrainingEngineRayDDP:
+		if s.Managed != (ManagedTrainingPolicy{}) {
+			return fmt.Errorf("managed policy requires ray-train")
+		}
 	case TrainingEngineRayTrain:
 		if s.RayVersion != RayVersionProduction && s.RayVersion != RayVersionCanary {
 			return fmt.Errorf("ray-train requires Ray 2.56.1 or Ray 2.58.0")
