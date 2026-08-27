@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 	"unicode/utf8"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"ray-train-platform-backend/domain"
 )
 
@@ -26,6 +28,7 @@ type JobStore interface {
 	MarkOutboxRetry(context.Context, string, time.Time, string) error
 	ApplyObservedState(context.Context, domain.ObservedJobState) error
 	BeginManagedRecovery(context.Context, domain.ManagedRecoveryRequest) (*domain.TrainingJob, bool, error)
+	ClearManagedRecoveryRetiringIdentity(context.Context, domain.ManagedRetiringIdentityRequest) (*domain.TrainingJob, bool, error)
 }
 
 type ExperimentFinalizer interface {
@@ -209,6 +212,9 @@ func (r *Reconciler) reconcileLoadedJob(ctx context.Context, job *domain.Trainin
 	if job.DesiredState == domain.DesiredCanceled {
 		return r.reconcileCancellation(ctx, job)
 	}
+	if managedJobHasRetiringIdentity(*job) {
+		return r.reconcileManagedRetirement(ctx, job)
+	}
 	options := r.renderOptions
 	if r.gitCredentials != nil && job.Spec.Source.Type == "git" {
 		options.GitCredentialSecret = r.gitCredentials.GitCredentialSecretFor(ctx, job.TenantID, job.UserID, job.Spec.Source.URL)
@@ -217,7 +223,10 @@ func (r *Reconciler) reconcileLoadedJob(ctx context.Context, job *domain.Trainin
 	if err != nil {
 		return err
 	}
-	resource, err := r.client.EnsureRayJob(ctx, manifest)
+	resource, err := r.getOrEnsureRayJob(ctx, job, manifest)
+	if apierrors.IsNotFound(err) && managedJobHasPersistedIdentity(*job) {
+		return r.reconcileMissingManagedWorkload(ctx, job, manifest.GetNamespace())
+	}
 	if err != nil {
 		return err
 	}
@@ -232,11 +241,13 @@ func (r *Reconciler) reconcileLoadedJob(ctx context.Context, job *domain.Trainin
 	observed.KubernetesNS = resource.GetNamespace()
 	observed.RayJobName = resource.GetName()
 	observed.RayJobUID = string(resource.GetUID())
+	setObservedStateFence(&observed, *job)
 	if observed.State == domain.StateFailed && managedJobCanRecover(*job) {
 		failureClass, recoverable := managedInfrastructureFailureClass(observed.Reason)
 		if recoverable {
 			recovered, transitioned, recoveryErr := r.store.BeginManagedRecovery(ctx, domain.ManagedRecoveryRequest{
 				JobID: job.ID, ExpectedClusterAttempt: job.ClusterAttempt,
+				ExpectedRayJobName: job.RayJobName, ExpectedRayJobUID: job.RayJobUID,
 				FailureClass: failureClass, FailureMessage: managedRecoveryFailureMessage(observed.Message),
 			})
 			if recoveryErr != nil {
@@ -285,6 +296,123 @@ func (r *Reconciler) reconcileLoadedJob(ctx context.Context, job *domain.Trainin
 	return nil
 }
 
+func (r *Reconciler) getOrEnsureRayJob(ctx context.Context, job *domain.TrainingJob, manifest *unstructured.Unstructured) (*unstructured.Unstructured, error) {
+	if job.Spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain {
+		return r.client.EnsureRayJob(ctx, manifest)
+	}
+	name, uid := strings.TrimSpace(job.RayJobName), strings.TrimSpace(job.RayJobUID)
+	if (name == "") != (uid == "") {
+		return nil, fmt.Errorf("managed RayJob persisted identity is incomplete")
+	}
+	if name == "" {
+		return r.client.EnsureRayJob(ctx, manifest)
+	}
+	return r.client.GetOwnedRayJob(ctx, manifest.GetNamespace(), name, job.ID, uid)
+}
+
+func managedJobHasPersistedIdentity(job domain.TrainingJob) bool {
+	return job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain &&
+		strings.TrimSpace(job.RayJobName) != "" && strings.TrimSpace(job.RayJobUID) != ""
+}
+
+func (r *Reconciler) reconcileMissingManagedWorkload(ctx context.Context, job *domain.TrainingJob, namespace string) error {
+	const failureClass = "RAY_CLUSTER_DELETED"
+	const failureMessage = "persisted managed RayJob is missing"
+	recovered, transitioned, err := r.store.BeginManagedRecovery(ctx, domain.ManagedRecoveryRequest{
+		JobID: job.ID, ExpectedClusterAttempt: job.ClusterAttempt,
+		ExpectedRayJobName: job.RayJobName, ExpectedRayJobUID: job.RayJobUID,
+		FailureClass: failureClass, FailureMessage: failureMessage,
+	})
+	if err != nil {
+		return err
+	}
+	if recovered == nil {
+		return fmt.Errorf("managed recovery returned no job")
+	}
+	if recovered.DesiredState == domain.DesiredCanceled {
+		return r.reconcileCancellation(ctx, recovered)
+	}
+	if transitioned || managedJobSnapshotChanged(*job, *recovered) {
+		if terminalJobState(recovered.ObservedState) {
+			return nil
+		}
+		return r.reconcileLoadedJob(ctx, recovered)
+	}
+	observed := domain.ObservedJobState{
+		ID: job.ID, State: domain.StateFailed, Reason: failureClass, Message: failureMessage,
+		KubernetesNS: namespace, RayJobName: job.RayJobName, RayJobUID: job.RayJobUID,
+	}
+	setObservedStateFence(&observed, *job)
+	return r.store.ApplyObservedState(ctx, observed)
+}
+
+func managedJobSnapshotChanged(loaded, current domain.TrainingJob) bool {
+	return current.ClusterAttempt != loaded.ClusterAttempt ||
+		current.RayJobName != loaded.RayJobName || current.RayJobUID != loaded.RayJobUID ||
+		current.ObservedState != loaded.ObservedState || current.DesiredState != loaded.DesiredState
+}
+
+func setObservedStateFence(observed *domain.ObservedJobState, job domain.TrainingJob) {
+	observed.ExpectedClusterAttempt = job.ClusterAttempt
+	observed.ExpectedRayJobName = job.RayJobName
+	observed.ExpectedRayJobUID = job.RayJobUID
+}
+
+func managedJobHasRetiringIdentity(job domain.TrainingJob) bool {
+	return job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain &&
+		job.ObservedState == domain.StateRecovering && job.RayJobName != "" &&
+		job.RayJobName != managedAttemptRayJobName(job)
+}
+
+func (r *Reconciler) reconcileManagedRetirement(ctx context.Context, job *domain.TrainingJob) error {
+	if job.DesiredState == domain.DesiredCanceled {
+		return r.reconcileCancellation(ctx, job)
+	}
+	if strings.TrimSpace(job.RayJobUID) == "" {
+		return fmt.Errorf("managed retiring RayJob UID is missing")
+	}
+	namespace := job.KubernetesNS
+	if namespace == "" {
+		manifest, err := RenderRayJob(*job, r.renderOptions)
+		if err != nil {
+			return err
+		}
+		namespace = manifest.GetNamespace()
+	}
+	resource, err := r.client.GetRayJob(ctx, namespace, job.RayJobName)
+	if err == nil {
+		if string(resource.GetUID()) != job.RayJobUID {
+			return fmt.Errorf("refusing to retire RayJob with an unexpected UID")
+		}
+		if err := r.client.DeleteRayJob(ctx, namespace, job.RayJobName, job.ID, job.RayJobUID); err != nil {
+			return err
+		}
+		if _, err = r.client.GetRayJob(ctx, namespace, job.RayJobName); err == nil {
+			return nil
+		}
+	}
+	if !apierrors.IsNotFound(err) {
+		return err
+	}
+	current, cleared, err := r.store.ClearManagedRecoveryRetiringIdentity(ctx, domain.ManagedRetiringIdentityRequest{
+		JobID: job.ID, ExpectedClusterAttempt: job.ClusterAttempt,
+		RayJobName: job.RayJobName, RayJobUID: job.RayJobUID,
+	})
+	if err != nil {
+		return err
+	}
+	if current == nil {
+		return fmt.Errorf("managed retirement returned no job")
+	}
+	if current.DesiredState == domain.DesiredCanceled {
+		return r.reconcileCancellation(ctx, current)
+	}
+	if cleared || !managedJobHasRetiringIdentity(*current) {
+		return r.reconcileLoadedJob(ctx, current)
+	}
+	return nil
+}
+
 func managedJobCanRecover(job domain.TrainingJob) bool {
 	return job.DesiredState == domain.DesiredActive &&
 		job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain &&
@@ -326,17 +454,31 @@ func (r *Reconciler) reconcileCancellation(ctx context.Context, job *domain.Trai
 	}
 	resource, err := r.client.GetRayJob(ctx, namespace, name)
 	if apierrors.IsNotFound(err) {
-		return r.store.ApplyObservedState(ctx, domain.ObservedJobState{ID: job.ID, State: domain.StateCanceled, KubernetesNS: namespace, RayJobName: name})
+		observed := domain.ObservedJobState{
+			ID: job.ID, State: domain.StateCanceled, KubernetesNS: namespace,
+			RayJobName: name, RayJobUID: job.RayJobUID,
+		}
+		setObservedStateFence(&observed, *job)
+		return r.store.ApplyObservedState(ctx, observed)
 	}
 	if err != nil {
 		return err
 	}
-	if err := r.client.DeleteRayJob(ctx, namespace, name, job.ID); err != nil {
+	expectedUID := job.RayJobUID
+	if expectedUID == "" {
+		expectedUID = string(resource.GetUID())
+	}
+	if job.RayJobUID != "" && string(resource.GetUID()) != job.RayJobUID {
+		return fmt.Errorf("refusing to cancel RayJob with an unexpected UID")
+	}
+	if err := r.client.DeleteRayJob(ctx, namespace, name, job.ID, expectedUID); err != nil {
 		return err
 	}
 	state := domain.StateDeleting
 	if job.ObservedState == domain.StateRecovering {
 		state = domain.StateCanceled
 	}
-	return r.store.ApplyObservedState(ctx, domain.ObservedJobState{ID: job.ID, State: state, KubernetesNS: namespace, RayJobName: name, RayJobUID: string(resource.GetUID()), ResourceVersion: resource.GetResourceVersion()})
+	observed := domain.ObservedJobState{ID: job.ID, State: state, KubernetesNS: namespace, RayJobName: name, RayJobUID: string(resource.GetUID()), ResourceVersion: resource.GetResourceVersion()}
+	setObservedStateFence(&observed, *job)
+	return r.store.ApplyObservedState(ctx, observed)
 }

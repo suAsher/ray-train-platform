@@ -62,6 +62,7 @@ func TestListGPUAllocationsIncludesOnlyDeclaredActiveStates(t *testing.T) {
 		domain.StateAdmitted,
 		domain.StateProvisioning,
 		domain.StateRunning,
+		domain.StateRecovering,
 		domain.StateCanceling,
 		domain.StateDeleting,
 		domain.StateUnknown,

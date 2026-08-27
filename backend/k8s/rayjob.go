@@ -445,6 +445,10 @@ func rayJobResourceName(job domain.TrainingJob) string {
 	if persisted := strings.TrimSpace(job.RayJobName); persisted != "" {
 		return persisted
 	}
+	return managedAttemptRayJobName(job)
+}
+
+func managedAttemptRayJobName(job domain.TrainingJob) string {
 	if job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain && job.ClusterAttempt > 1 {
 		suffix := "-a" + strconv.Itoa(job.ClusterAttempt)
 		base := sanitizeDNS(job.ID)

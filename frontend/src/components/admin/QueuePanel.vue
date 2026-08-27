@@ -29,7 +29,7 @@
       <el-table-column prop="tenantId" label="所属租户" width="160" />
       <el-table-column prop="state" label="状态" width="120">
         <template #default="scope">
-          <el-tag size="small" :type="scope.row.state === 'RUNNING' ? 'primary' : 'warning'" effect="dark">{{ scope.row.state }}</el-tag>
+          <el-tag size="small" :type="['RUNNING', 'RECOVERING'].includes(scope.row.state) ? 'primary' : 'warning'" effect="dark">{{ scope.row.state }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column prop="gpus" label="GPU" width="120">

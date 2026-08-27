@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
@@ -313,9 +314,29 @@ func (c *Client) GetRayJob(ctx context.Context, namespace, name string) (*unstru
 	return c.dynamic.Resource(rayJobGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 }
 
-func (c *Client) DeleteRayJob(ctx context.Context, namespace, name, jobID string) error {
+func (c *Client) GetOwnedRayJob(ctx context.Context, namespace, name, jobID, expectedUID string) (*unstructured.Unstructured, error) {
+	if strings.TrimSpace(jobID) == "" || strings.TrimSpace(expectedUID) == "" {
+		return nil, fmt.Errorf("expected RayJob owner and UID are required")
+	}
+	resource, err := c.GetRayJob(ctx, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	if resource.GetLabels()["ray.io/job-id"] != jobID {
+		return nil, fmt.Errorf("refusing to observe RayJob owned by another job")
+	}
+	if string(resource.GetUID()) != expectedUID {
+		return nil, fmt.Errorf("refusing to observe RayJob with an unexpected UID")
+	}
+	return resource, nil
+}
+
+func (c *Client) DeleteRayJob(ctx context.Context, namespace, name, jobID, expectedUID string) error {
 	if c == nil || c.dynamic == nil {
 		return fmt.Errorf("Kubernetes dynamic client is not initialized")
+	}
+	if strings.TrimSpace(expectedUID) == "" {
+		return fmt.Errorf("expected RayJob UID is required")
 	}
 	jobs := c.dynamic.Resource(rayJobGVR).Namespace(namespace)
 	existing, err := jobs.Get(ctx, name, metav1.GetOptions{})
@@ -328,11 +349,23 @@ func (c *Client) DeleteRayJob(ctx context.Context, namespace, name, jobID string
 	if jobID != "" && existing.GetLabels()["ray.io/job-id"] != jobID {
 		return fmt.Errorf("refusing to delete RayJob owned by another job")
 	}
-	propagation := metav1.DeletePropagationBackground
-	if err := jobs.Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &propagation}); err != nil && !apierrors.IsNotFound(err) {
+	if string(existing.GetUID()) != expectedUID {
+		return fmt.Errorf("refusing to delete RayJob with an unexpected UID")
+	}
+	options := rayJobDeleteOptions(expectedUID)
+	if err := jobs.Delete(ctx, name, options); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete RayJob %s/%s: %w", namespace, name, err)
 	}
 	return nil
+}
+
+func rayJobDeleteOptions(expectedUID string) metav1.DeleteOptions {
+	propagation := metav1.DeletePropagationForeground
+	uid := types.UID(expectedUID)
+	return metav1.DeleteOptions{
+		PropagationPolicy: &propagation,
+		Preconditions:     &metav1.Preconditions{UID: &uid},
+	}
 }
 
 func (c *Client) WaitForRayJobDeletion(ctx context.Context, namespace, name string) error {

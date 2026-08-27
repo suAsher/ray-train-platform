@@ -8,6 +8,7 @@ test('engineer can stop only an owned active job', () => {
 
   assert.equal(canCancelJob({ userId: 'user-a', status: 'RUNNING' }, engineer), true)
   assert.equal(canCancelJob({ userId: 'user-b', status: 'RUNNING' }, engineer), false)
+	assert.equal(canCancelJob({ userId: 'user-a', status: 'RECOVERING' }, engineer), true)
 })
 
 test('tenant and platform administrators can stop jobs in their visible scope', () => {

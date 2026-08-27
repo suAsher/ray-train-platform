@@ -833,7 +833,7 @@ func jobDetails(job domain.TrainingJob) jobDetailsResponse {
 
 func rayStatus(state domain.State) string {
 	switch state {
-	case domain.StateRunning:
+	case domain.StateRunning, domain.StateRecovering:
 		return "RUNNING"
 	case domain.StateSucceeded:
 		return "SUCCEEDED"

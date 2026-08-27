@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -139,6 +140,34 @@ func TestEnsureRayJobDoesNotAdoptForeignResource(t *testing.T) {
 
 	if _, err := client.EnsureRayJob(context.Background(), manifest); err == nil {
 		t.Fatal("expected ownership error")
+	}
+}
+
+func TestDeleteRayJobRequiresExpectedUIDAndUsesForegroundPrecondition(t *testing.T) {
+	manifest, err := RenderRayJob(validRenderJob(), testRenderOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.SetUID(types.UID("uid-attempt-1"))
+	dynamicClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), manifest)
+	client := NewClientFromInterfaces(dynamicClient, nil)
+
+	if err := client.DeleteRayJob(context.Background(), manifest.GetNamespace(), manifest.GetName(), validRenderJob().ID, "uid-wrong"); err == nil {
+		t.Fatal("deletion with a stale UID was accepted")
+	}
+	if _, err := client.GetRayJob(context.Background(), manifest.GetNamespace(), manifest.GetName()); err != nil {
+		t.Fatalf("stale UID deleted the RayJob: %v", err)
+	}
+
+	if err := client.DeleteRayJob(context.Background(), manifest.GetNamespace(), manifest.GetName(), validRenderJob().ID, "uid-attempt-1"); err != nil {
+		t.Fatal(err)
+	}
+	deleteOptions := rayJobDeleteOptions("uid-attempt-1")
+	if deleteOptions.Preconditions == nil || deleteOptions.Preconditions.UID == nil || string(*deleteOptions.Preconditions.UID) != "uid-attempt-1" {
+		t.Fatalf("delete did not carry UID precondition: %+v", deleteOptions)
+	}
+	if deleteOptions.PropagationPolicy == nil || *deleteOptions.PropagationPolicy != metav1.DeletePropagationForeground {
+		t.Fatalf("delete did not use foreground propagation: %+v", deleteOptions)
 	}
 }
 

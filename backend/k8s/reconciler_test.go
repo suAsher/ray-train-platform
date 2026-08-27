@@ -7,9 +7,11 @@ import (
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
@@ -23,7 +25,9 @@ type memoryJobStore struct {
 	recoveryAllowed      bool
 	recoveryCheckpointID string
 	recoveryRequests     []domain.ManagedRecoveryRequest
+	retirementRequests   []domain.ManagedRetiringIdentityRequest
 	cancelDuringRecovery bool
+	cancelDuringRetire   bool
 }
 
 type recordingGitCredentialResolver struct {
@@ -64,9 +68,21 @@ func (s *memoryJobStore) ListReconcileCandidates(context.Context, int) ([]string
 
 func (s *memoryJobStore) ApplyObservedState(_ context.Context, state domain.ObservedJobState) error {
 	s.observed = append(s.observed, state)
+	if s.job.ClusterAttempt != state.ExpectedClusterAttempt || s.job.RayJobName != state.ExpectedRayJobName || s.job.RayJobUID != state.ExpectedRayJobUID {
+		return nil
+	}
+	if s.job.RayJobName != "" && s.job.RayJobName != state.RayJobName {
+		return nil
+	}
+	if s.job.RayJobUID != "" && s.job.RayJobUID != state.RayJobUID {
+		return nil
+	}
 	s.job.ObservedState = state.State
+	s.job.StatusReason = state.Reason
+	s.job.StatusMessage = state.Message
 	s.job.KubernetesNS = state.KubernetesNS
 	s.job.RayJobName = state.RayJobName
+	s.job.RayJobUID = state.RayJobUID
 	return nil
 }
 
@@ -75,7 +91,9 @@ func (s *memoryJobStore) BeginManagedRecovery(_ context.Context, request domain.
 	if s.cancelDuringRecovery {
 		s.job.DesiredState = domain.DesiredCanceled
 	}
-	if !s.recoveryAllowed || s.job.DesiredState != domain.DesiredActive || s.job.ClusterAttempt != request.ExpectedClusterAttempt {
+	if !s.recoveryAllowed || s.job.DesiredState != domain.DesiredActive ||
+		s.job.ClusterAttempt != request.ExpectedClusterAttempt ||
+		s.job.RayJobName != request.ExpectedRayJobName || s.job.RayJobUID != request.ExpectedRayJobUID {
 		copy := *s.job
 		return &copy, false, nil
 	}
@@ -84,6 +102,20 @@ func (s *memoryJobStore) BeginManagedRecovery(_ context.Context, request domain.
 	s.job.ResumeCheckpointID = s.recoveryCheckpointID
 	s.job.StatusReason = request.FailureClass
 	s.job.StatusMessage = request.FailureMessage
+	copy := *s.job
+	return &copy, true, nil
+}
+
+func (s *memoryJobStore) ClearManagedRecoveryRetiringIdentity(_ context.Context, request domain.ManagedRetiringIdentityRequest) (*domain.TrainingJob, bool, error) {
+	s.retirementRequests = append(s.retirementRequests, request)
+	if s.cancelDuringRetire {
+		s.job.DesiredState = domain.DesiredCanceled
+	}
+	if s.job.DesiredState != domain.DesiredActive || s.job.ObservedState != domain.StateRecovering ||
+		s.job.ClusterAttempt != request.ExpectedClusterAttempt || s.job.RayJobName != request.RayJobName || s.job.RayJobUID != request.RayJobUID {
+		copy := *s.job
+		return &copy, false, nil
+	}
 	s.job.RayJobName = ""
 	s.job.RayJobUID = ""
 	s.job.RayClusterName = ""
@@ -211,13 +243,16 @@ func TestReconcileGitJobResolvesCredentialForSubmittingUser(t *testing.T) {
 func TestReconcileCanceledJobDeletesRayJobBeforeMarkingCanceled(t *testing.T) {
 	job := validRenderJob()
 	job.DesiredState = domain.DesiredCanceled
-	store := &memoryJobStore{job: &job}
 	dynamicClient := newFakeDynamicClient()
 	client := NewClientFromInterfaces(dynamicClient, nil)
 	manifest, err := RenderRayJob(job, testRenderOptions())
 	if err != nil {
 		t.Fatalf("render ray job: %v", err)
 	}
+	manifest.SetUID("uid-cancel")
+	job.RayJobName = manifest.GetName()
+	job.RayJobUID = string(manifest.GetUID())
+	store := &memoryJobStore{job: &job}
 	if _, err := client.EnsureRayJob(context.Background(), manifest); err != nil {
 		t.Fatalf("seed ray job: %v", err)
 	}
@@ -237,6 +272,7 @@ func managedRecoveryFixture(t *testing.T) (*memoryJobStore, *Client, *dynamicfak
 	job.ObservedState = domain.StateRunning
 	job.ClusterAttempt = 1
 	job.RayJobName = job.ID
+	job.RayJobUID = "uid-attempt-1"
 	job.Spec.Managed.MaxFailures = 2
 	job.Spec.ResolvedDataMounts.Output = &domain.ResolvedDataMount{
 		Space: domain.DataSpaceMyRuns, BindingSpace: domain.DataSpaceWorkspace,
@@ -247,6 +283,7 @@ func managedRecoveryFixture(t *testing.T) (*memoryJobStore, *Client, *dynamicfak
 	dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
 	client := NewClientFromInterfaces(dynamicClient, nil)
 	manifest := managedManifest(t, job)
+	manifest.SetUID("uid-attempt-1")
 	if err := unstructured.SetNestedMap(manifest.Object, map[string]any{
 		"jobStatus": "FAILED", "reason": "HEAD_POD_LOST", "message": "head node disappeared",
 	}, "status"); err != nil {
@@ -256,6 +293,19 @@ func managedRecoveryFixture(t *testing.T) (*memoryJobStore, *Client, *dynamicfak
 		t.Fatalf("seed failed RayJob: %v", err)
 	}
 	return store, client, dynamicClient, job
+}
+
+func assignFakeRayJobUID(t *testing.T, dynamicClient *dynamicfake.FakeDynamicClient, store *memoryJobStore, namespace, name, uid string) {
+	t.Helper()
+	resource, err := dynamicClient.Resource(rayJobGVR).Namespace(namespace).Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get fake RayJob %s: %v", name, err)
+	}
+	resource.SetUID(types.UID(uid))
+	if _, err := dynamicClient.Resource(rayJobGVR).Namespace(namespace).Update(context.Background(), resource, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("assign fake apiserver UID to %s: %v", name, err)
+	}
+	store.job.RayJobUID = uid
 }
 
 func TestFailedManagedClusterCreatesNextAttemptFromCheckpoint(t *testing.T) {
@@ -272,6 +322,217 @@ func TestFailedManagedClusterCreatesNextAttemptFromCheckpoint(t *testing.T) {
 	}
 	if _, err := client.GetRayJob(context.Background(), job.KubernetesNS, job.ID+"-a2"); err != nil {
 		t.Fatalf("next recovery RayJob was not created: %v", err)
+	}
+}
+
+func TestManagedRecoveryRetiresOldUIDBeforeCreatingNextAttempt(t *testing.T) {
+	store, client, dynamicClient, job := managedRecoveryFixture(t)
+	dynamicClient.ClearActions()
+	reconciler := NewReconciler(store, client, testRenderOptions())
+	if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	deleteIndex, createIndex := -1, -1
+	for index, action := range dynamicClient.Actions() {
+		switch action.GetVerb() {
+		case "delete":
+			if action.(k8stesting.DeleteAction).GetName() == job.ID {
+				deleteIndex = index
+			}
+		case "create":
+			resource := action.(k8stesting.CreateAction).GetObject().(*unstructured.Unstructured)
+			if resource.GetName() == job.ID+"-a2" {
+				createIndex = index
+			}
+		}
+	}
+	if deleteIndex < 0 || createIndex < 0 || deleteIndex >= createIndex {
+		t.Fatalf("recovery order must be delete old then create new: delete=%d create=%d actions=%+v", deleteIndex, createIndex, dynamicClient.Actions())
+	}
+	if len(store.retirementRequests) != 1 || store.retirementRequests[0].RayJobUID != "uid-attempt-1" {
+		t.Fatalf("old identity was not retired with its UID: %+v", store.retirementRequests)
+	}
+}
+
+func TestManagedRecoveryDeleteFailureKeepsRetiringIdentityAndCreatesNothing(t *testing.T) {
+	store, client, dynamicClient, job := managedRecoveryFixture(t)
+	dynamicClient.PrependReactor("delete", "rayjobs", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if action.(k8stesting.DeleteAction).GetName() == job.ID {
+			return true, nil, errors.New("apiserver delete failed")
+		}
+		return false, nil, nil
+	})
+	reconciler := NewReconciler(store, client, testRenderOptions())
+	if err := reconciler.ReconcileJob(context.Background(), job.ID); err == nil {
+		t.Fatal("expected retirement deletion failure")
+	}
+	if store.job.ClusterAttempt != 2 || store.job.ObservedState != domain.StateRecovering || store.job.RayJobName != job.ID || store.job.RayJobUID != "uid-attempt-1" {
+		t.Fatalf("delete failure lost retiring identity: %+v", store.job)
+	}
+	if _, err := client.GetRayJob(context.Background(), job.KubernetesNS, job.ID+"-a2"); !apierrors.IsNotFound(err) {
+		t.Fatalf("new attempt was created before retirement: %v", err)
+	}
+}
+
+func TestManagedRecoveryWaitsForOldRayJobNotFoundBeforeClearingIdentity(t *testing.T) {
+	store, client, dynamicClient, job := managedRecoveryFixture(t)
+	allowDelete := false
+	dynamicClient.PrependReactor("delete", "rayjobs", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if action.(k8stesting.DeleteAction).GetName() == job.ID && !allowDelete {
+			return true, nil, nil
+		}
+		return false, nil, nil
+	})
+	reconciler := NewReconciler(store, client, testRenderOptions())
+	if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if store.job.RayJobName != job.ID || len(store.retirementRequests) != 0 {
+		t.Fatalf("identity cleared before old workload reached NotFound: job=%+v requests=%+v", store.job, store.retirementRequests)
+	}
+	if _, err := client.GetRayJob(context.Background(), job.KubernetesNS, job.ID+"-a2"); !apierrors.IsNotFound(err) {
+		t.Fatalf("new attempt exists while old workload is not quiescent: %v", err)
+	}
+
+	allowDelete = true
+	if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.GetRayJob(context.Background(), job.KubernetesNS, job.ID+"-a2"); err != nil {
+		t.Fatalf("new attempt was not created after retirement: %v", err)
+	}
+}
+
+func TestTwoReconcilersDoNotCreateAnExtraRecoveryAttempt(t *testing.T) {
+	store, client, dynamicClient, job := managedRecoveryFixture(t)
+	first := NewReconciler(store, client, testRenderOptions())
+	second := NewReconciler(store, client, testRenderOptions())
+	if err := first.ReconcileJob(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	assignFakeRayJobUID(t, dynamicClient, store, job.KubernetesNS, job.ID+"-a2", "uid-attempt-2")
+	if err := second.ReconcileJob(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if store.job.ClusterAttempt != 2 || len(store.recoveryRequests) != 1 {
+		t.Fatalf("two reconcilers created an extra attempt: job=%+v recoveries=%+v", store.job, store.recoveryRequests)
+	}
+}
+
+func TestStaleReplicaNeverRecreatesRetiredManagedAttempt(t *testing.T) {
+	store, client, dynamicClient, job := managedRecoveryFixture(t)
+	staleAttemptOne := job
+	first := NewReconciler(store, client, testRenderOptions())
+	if err := first.ReconcileJob(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if store.job.ClusterAttempt != 2 {
+		t.Fatalf("first replica did not advance recovery: %+v", store.job)
+	}
+	if _, err := client.GetRayJob(context.Background(), job.KubernetesNS, job.ID); !apierrors.IsNotFound(err) {
+		t.Fatalf("attempt 1 still exists before stale replica resumes: %v", err)
+	}
+	if _, err := client.GetRayJob(context.Background(), job.KubernetesNS, job.ID+"-a2"); err != nil {
+		t.Fatalf("attempt 2 was not created: %v", err)
+	}
+	assignFakeRayJobUID(t, dynamicClient, store, job.KubernetesNS, job.ID+"-a2", "uid-attempt-2")
+
+	dynamicClient.ClearActions()
+	second := NewReconciler(store, client, testRenderOptions())
+	if err := second.reconcileLoadedJob(context.Background(), &staleAttemptOne); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.GetRayJob(context.Background(), job.KubernetesNS, job.ID); !apierrors.IsNotFound(err) {
+		t.Fatalf("stale replica recreated attempt 1: %v", err)
+	}
+	if _, err := client.GetRayJob(context.Background(), job.KubernetesNS, job.ID+"-a2"); err != nil {
+		t.Fatalf("stale replica disturbed attempt 2: %v", err)
+	}
+	for _, action := range dynamicClient.Actions() {
+		if action.GetVerb() == "create" && action.(k8stesting.CreateAction).GetObject().(*unstructured.Unstructured).GetName() == job.ID {
+			t.Fatalf("stale replica issued create for attempt 1: %+v", action)
+		}
+	}
+}
+
+func TestMissingManagedWorkloadWithoutCheckpointFailsWithoutRecreation(t *testing.T) {
+	job := managedRenderJob(domain.RayVersionProduction)
+	job.DesiredState = domain.DesiredActive
+	job.ObservedState = domain.StateRunning
+	job.ClusterAttempt = 1
+	job.RayJobName = job.ID
+	job.RayJobUID = "uid-attempt-1"
+	store := &memoryJobStore{job: &job, recoveryAllowed: false}
+	client := NewClientFromInterfaces(newFakeDynamicClient(), nil)
+	reconciler := NewReconciler(store, client, testRenderOptions())
+
+	if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if store.job.ObservedState != domain.StateFailed || store.job.StatusReason != "RAY_CLUSTER_DELETED" {
+		t.Fatalf("missing workload did not become an explicit infrastructure failure: %+v", store.job)
+	}
+	if _, err := client.GetRayJob(context.Background(), job.KubernetesNS, job.ID); !apierrors.IsNotFound(err) {
+		t.Fatalf("missing historical workload was recreated: %v", err)
+	}
+}
+
+func TestManagedPersistedIdentityGetRejectsForeignOwnerAndUID(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*unstructured.Unstructured)
+	}{
+		{
+			name: "foreign owner",
+			mutate: func(resource *unstructured.Unstructured) {
+				labels := resource.GetLabels()
+				labels["ray.io/job-id"] = "other-job"
+				resource.SetLabels(labels)
+			},
+		},
+		{
+			name: "replaced UID",
+			mutate: func(resource *unstructured.Unstructured) {
+				resource.SetUID("uid-replacement")
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			job := managedRenderJob(domain.RayVersionProduction)
+			job.DesiredState = domain.DesiredActive
+			job.ObservedState = domain.StateRunning
+			job.ClusterAttempt = 1
+			job.RayJobName = job.ID
+			job.RayJobUID = "uid-attempt-1"
+			resource := managedManifest(t, job)
+			resource.SetUID(types.UID(job.RayJobUID))
+			test.mutate(resource)
+			store := &memoryJobStore{job: &job}
+			client := NewClientFromInterfaces(dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), resource), nil)
+			reconciler := NewReconciler(store, client, testRenderOptions())
+
+			if err := reconciler.ReconcileJob(context.Background(), job.ID); err == nil {
+				t.Fatal("managed reconciler adopted a foreign or replaced RayJob")
+			}
+			if len(store.observed) != 0 {
+				t.Fatalf("foreign resource produced an observation: %+v", store.observed)
+			}
+		})
+	}
+}
+
+func TestCancellationDuringRetirementPreventsNewAttempt(t *testing.T) {
+	store, client, _, job := managedRecoveryFixture(t)
+	store.cancelDuringRetire = true
+	reconciler := NewReconciler(store, client, testRenderOptions())
+	if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if store.job.DesiredState != domain.DesiredCanceled || store.job.ObservedState != domain.StateCanceled {
+		t.Fatalf("cancellation did not win retirement race: %+v", store.job)
+	}
+	if _, err := client.GetRayJob(context.Background(), job.KubernetesNS, job.ID+"-a2"); !apierrors.IsNotFound(err) {
+		t.Fatalf("new recovery attempt was created after cancellation: %v", err)
 	}
 }
 
@@ -389,7 +650,9 @@ func TestRecoveringCancellationTransitionsDirectlyToCanceled(t *testing.T) {
 	store.job.DesiredState = domain.DesiredCanceled
 	store.job.ResumeCheckpointID = "checkpoint-4"
 	store.job.RayJobName = job.ID + "-a2"
+	store.job.RayJobUID = "uid-attempt-2"
 	manifest := managedManifest(t, *store.job)
+	manifest.SetUID("uid-attempt-2")
 	if _, err := dynamicClient.Resource(rayJobGVR).Namespace(job.KubernetesNS).Create(context.Background(), manifest, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -399,6 +662,24 @@ func TestRecoveringCancellationTransitionsDirectlyToCanceled(t *testing.T) {
 	}
 	if store.job.ObservedState != domain.StateCanceled {
 		t.Fatalf("RECOVERING cancellation did not reach CANCELED: %+v", store.job)
+	}
+}
+
+func TestCancellationAfterRetiringRayJobAlreadyGoneStillReachesCanceled(t *testing.T) {
+	store, client, dynamicClient, job := managedRecoveryFixture(t)
+	store.job.ClusterAttempt = 2
+	store.job.ObservedState = domain.StateRecovering
+	store.job.DesiredState = domain.DesiredCanceled
+
+	if err := dynamicClient.Resource(rayJobGVR).Namespace(job.KubernetesNS).Delete(context.Background(), job.ID, metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	reconciler := NewReconciler(store, client, testRenderOptions())
+	if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if store.job.ObservedState != domain.StateCanceled {
+		t.Fatalf("missing retiring resource left cancellation stuck: %+v", store.job)
 	}
 }
 
@@ -435,7 +716,9 @@ func TestRecoveredAttemptTransitionsFromRecoveringToRunning(t *testing.T) {
 	store.job.ObservedState = domain.StateRecovering
 	store.job.ResumeCheckpointID = "checkpoint-4"
 	store.job.RayJobName = job.ID + "-a2"
+	store.job.RayJobUID = "uid-attempt-2"
 	manifest := managedManifest(t, *store.job)
+	manifest.SetUID("uid-attempt-2")
 	if err := unstructured.SetNestedMap(manifest.Object, map[string]any{"jobStatus": "RUNNING"}, "status"); err != nil {
 		t.Fatal(err)
 	}
@@ -466,6 +749,22 @@ func TestProcessTerminalEventFinalizesExperimentRuns(t *testing.T) {
 	}
 	if finalizer.tenantID != job.TenantID || finalizer.jobID != job.ID || finalizer.state != domain.StateCanceled || !finalizer.finished.Equal(finishedAt) {
 		t.Fatalf("unexpected finalization: %+v", finalizer)
+	}
+}
+
+func TestProcessTerminalEventNeverFinalizesRecoveringJob(t *testing.T) {
+	job := validRenderJob()
+	job.ObservedState = domain.StateRecovering
+	store := &memoryJobStore{job: &job}
+	finalizer := &recordingExperimentFinalizer{}
+	reconciler := NewReconciler(store, NewClientFromInterfaces(newFakeDynamicClient(), nil), testRenderOptions()).WithExperimentFinalizer(finalizer)
+	event := domain.OutboxEvent{ID: job.ID + "-terminal", EventType: "TRAINING_JOB_TERMINAL", Payload: []byte(`{"job_id":"` + job.ID + `"}`)}
+
+	if err := reconciler.processEvent(context.Background(), event); err == nil {
+		t.Fatal("stale terminal event for RECOVERING was accepted")
+	}
+	if finalizer.jobID != "" || finalizer.state != "" {
+		t.Fatalf("RECOVERING job was finalized in MLflow: %+v", finalizer)
 	}
 }
 

@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   allocationSummary,
+	allocationStateTag,
   formatAllocationDuration,
   normalizeGPUAllocations,
 } from './gpuAllocations.js'
@@ -24,6 +25,10 @@ test('normalizes allocation records without mutating the API payload', () => {
     namespace: 'tenant-team-a', resourceName: 'dev-1', createdAt: '2026-08-24T08:00:00Z',
     startedAt: '',
   })
+})
+
+test('recovering training allocation remains visibly active', () => {
+	assert.equal(allocationStateTag('RECOVERING'), 'success')
 })
 
 test('summarizes training and debug occupancy separately', () => {

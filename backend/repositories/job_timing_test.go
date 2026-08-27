@@ -26,9 +26,9 @@ func TestApplyObservedStateRecordsTheWorkloadExecutionWindow(t *testing.T) {
 
 	started := time.Date(2026, 8, 17, 9, 15, 28, 0, time.UTC)
 	finished := time.Date(2026, 8, 17, 9, 17, 18, 0, time.UTC)
-	if err := repository.ApplyObservedState(context.Background(), domain.ObservedJobState{
-		ID: job.ID, State: domain.StateSucceeded, StartedAt: &started, FinishedAt: &finished,
-	}); err != nil {
+	observed := observedStateForTest(job, domain.StateSucceeded)
+	observed.StartedAt, observed.FinishedAt = &started, &finished
+	if err := repository.ApplyObservedState(context.Background(), observed); err != nil {
 		t.Fatalf("apply observed state: %v", err)
 	}
 	stored, err := repository.Get(context.Background(), job.TenantID, job.ID)
@@ -50,9 +50,9 @@ func TestApplyObservedStateRecordsStartWithoutFinishWhileRunning(t *testing.T) {
 	job := seedTimingJob(t, repository)
 
 	started := time.Date(2026, 8, 17, 9, 15, 28, 0, time.UTC)
-	if err := repository.ApplyObservedState(context.Background(), domain.ObservedJobState{
-		ID: job.ID, State: domain.StateRunning, StartedAt: &started,
-	}); err != nil {
+	observed := observedStateForTest(job, domain.StateRunning)
+	observed.StartedAt = &started
+	if err := repository.ApplyObservedState(context.Background(), observed); err != nil {
 		t.Fatalf("apply observed state: %v", err)
 	}
 	stored, _ := repository.Get(context.Background(), job.TenantID, job.ID)
@@ -68,9 +68,7 @@ func TestApplyObservedStateFallsBackToObservationTimeForATerminalJob(t *testing.
 	job := seedTimingJob(t, repository)
 
 	before := time.Now().UTC().Add(-time.Second)
-	if err := repository.ApplyObservedState(context.Background(), domain.ObservedJobState{
-		ID: job.ID, State: domain.StateFailed,
-	}); err != nil {
+	if err := repository.ApplyObservedState(context.Background(), observedStateForTest(job, domain.StateFailed)); err != nil {
 		t.Fatalf("apply observed state: %v", err)
 	}
 	stored, _ := repository.Get(context.Background(), job.TenantID, job.ID)
@@ -84,9 +82,7 @@ func TestApplyObservedStateLeavesAQueuedJobWithoutExecutionTimes(t *testing.T) {
 	repository := testRepository(t)
 	job := seedTimingJob(t, repository)
 
-	if err := repository.ApplyObservedState(context.Background(), domain.ObservedJobState{
-		ID: job.ID, State: domain.StateQueued,
-	}); err != nil {
+	if err := repository.ApplyObservedState(context.Background(), observedStateForTest(job, domain.StateQueued)); err != nil {
 		t.Fatalf("apply observed state: %v", err)
 	}
 	stored, _ := repository.Get(context.Background(), job.TenantID, job.ID)

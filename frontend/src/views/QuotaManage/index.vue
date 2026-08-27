@@ -347,14 +347,14 @@ const loadUsers = async () => {
 // Both queued and running jobs matter to an administrator: the running ones are
 // what actually hold the GPUs a queued job is waiting for.
 const loadActiveJobs = async () => {
-  const states = ['SUBMITTED', 'VALIDATING', 'QUEUED', 'ADMITTED', 'PROVISIONING', 'RUNNING']
+  const states = ['SUBMITTED', 'VALIDATING', 'QUEUED', 'ADMITTED', 'PROVISIONING', 'RUNNING', 'RECOVERING']
   const pages = await Promise.allSettled(states.map((state) => apiGet(`/api/v1/jobs?status=${state}`)))
-  const rows = []
+  const rowsByID = new Map()
   for (const page of pages) {
     if (page.status !== 'fulfilled') continue
     for (const job of page.value?.items || []) {
       const resources = job.spec?.resources || {}
-      rows.push({
+      rowsByID.set(job.id, {
         id: job.id,
         name: job.spec?.name || job.id,
         tenantId: job.tenantId,
@@ -364,7 +364,7 @@ const loadActiveJobs = async () => {
       })
     }
   }
-  activeJobs.value = rows
+  activeJobs.value = [...rowsByID.values()]
 }
 
 const loadClusterTopology = async () => {

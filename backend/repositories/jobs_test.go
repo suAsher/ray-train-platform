@@ -46,6 +46,22 @@ func testJob() domain.TrainingJob {
 	}
 }
 
+func observedStateForTest(job domain.TrainingJob, state domain.State) domain.ObservedJobState {
+	attempt := job.ClusterAttempt
+	if attempt < 1 {
+		attempt = 1
+	}
+	resourceName := job.RayJobName
+	if resourceName == "" {
+		resourceName = job.ID
+	}
+	return domain.ObservedJobState{
+		ID: job.ID, State: state,
+		ExpectedClusterAttempt: attempt, ExpectedRayJobName: job.RayJobName, ExpectedRayJobUID: job.RayJobUID,
+		RayJobName: resourceName, RayJobUID: job.RayJobUID,
+	}
+}
+
 func TestCreateWritesJobAndOutboxAtomically(t *testing.T) {
 	repo := testRepository(t)
 	job := testJob()
@@ -143,7 +159,10 @@ func TestApplyObservedStateUpdatesKubernetesReferences(t *testing.T) {
 	if err := repo.Create(context.Background(), &job, "request-3"); err != nil {
 		t.Fatalf("create job: %v", err)
 	}
-	if err := repo.ApplyObservedState(context.Background(), domain.ObservedJobState{ID: "job-1", State: domain.StateRunning, KubernetesNS: "tenant-a", RayJobName: "job-1", RayJobUID: "uid-1", RayClusterName: "job-1-cluster", ResourceVersion: "rv-2"}); err != nil {
+	observed := observedStateForTest(job, domain.StateRunning)
+	observed.KubernetesNS, observed.RayJobName, observed.RayJobUID = "tenant-a", "job-1", "uid-1"
+	observed.RayClusterName, observed.ResourceVersion = "job-1-cluster", "rv-2"
+	if err := repo.ApplyObservedState(context.Background(), observed); err != nil {
 		t.Fatalf("apply observed state: %v", err)
 	}
 	got, err := repo.Get(context.Background(), "tenant-a", "job-1")
@@ -162,10 +181,14 @@ func TestApplyObservedStateNeverRegressesTerminalLegacyJob(t *testing.T) {
 	if err := repo.Create(context.Background(), &job, "terminal-legacy"); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.ApplyObservedState(context.Background(), domain.ObservedJobState{ID: job.ID, State: domain.StateFailed, Reason: "NONZERO_EXIT"}); err != nil {
+	failed := observedStateForTest(job, domain.StateFailed)
+	failed.Reason = "NONZERO_EXIT"
+	if err := repo.ApplyObservedState(context.Background(), failed); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.ApplyObservedState(context.Background(), domain.ObservedJobState{ID: job.ID, State: domain.StateRunning, RayJobName: "recreated"}); err != nil {
+	stale := observedStateForTest(job, domain.StateRunning)
+	stale.RayJobName = "recreated"
+	if err := repo.ApplyObservedState(context.Background(), stale); err != nil {
 		t.Fatal(err)
 	}
 	got, err := repo.Get(context.Background(), job.TenantID, job.ID)
@@ -184,7 +207,7 @@ func TestApplyObservedStateQueuesOneTerminalExperimentSyncEvent(t *testing.T) {
 		t.Fatalf("create job: %v", err)
 	}
 	for attempt := 0; attempt < 2; attempt++ {
-		if err := repo.ApplyObservedState(context.Background(), domain.ObservedJobState{ID: job.ID, State: domain.StateCanceled}); err != nil {
+		if err := repo.ApplyObservedState(context.Background(), observedStateForTest(job, domain.StateCanceled)); err != nil {
 			t.Fatalf("apply terminal state: %v", err)
 		}
 	}
@@ -206,12 +229,117 @@ func TestApplyObservedStateDoesNotQueueExperimentSyncBeforeTerminalState(t *test
 	if err := repo.Create(context.Background(), &job, "nonterminal-event"); err != nil {
 		t.Fatalf("create job: %v", err)
 	}
-	if err := repo.ApplyObservedState(context.Background(), domain.ObservedJobState{ID: job.ID, State: domain.StateRunning}); err != nil {
+	if err := repo.ApplyObservedState(context.Background(), observedStateForTest(job, domain.StateRunning)); err != nil {
 		t.Fatalf("apply running state: %v", err)
 	}
 	var count int64
 	if err := repo.db.Model(&OutboxRecord{}).Where("event_type = ?", "TRAINING_JOB_TERMINAL").Count(&count).Error; err != nil || count != 0 {
 		t.Fatalf("non-terminal state queued %d terminal events: %v", count, err)
+	}
+}
+
+func TestApplyObservedStateDropsStaleAttemptNonTerminalObservation(t *testing.T) {
+	repo, job := managedRecoveryJob(t, 2)
+	if err := repo.db.Model(&JobRecord{}).Where("id = ?", job.ID).Updates(map[string]any{
+		"cluster_attempt": 2,
+		"observed_state":  domain.StateRunning,
+		"ray_job_name":    job.ID + "-a2",
+		"ray_job_uid":     "uid-attempt-2",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	err := repo.ApplyObservedState(context.Background(), domain.ObservedJobState{
+		ID: job.ID, State: domain.StateProvisioning,
+		ExpectedClusterAttempt: 1, ExpectedRayJobName: job.ID, ExpectedRayJobUID: "uid-attempt-1",
+		RayJobName: job.ID, RayJobUID: "uid-attempt-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Get(context.Background(), job.TenantID, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ClusterAttempt != 2 || got.ObservedState != domain.StateRunning || got.RayJobName != job.ID+"-a2" || got.RayJobUID != "uid-attempt-2" {
+		t.Fatalf("stale attempt overwrote current nonterminal state: %+v", got)
+	}
+}
+
+func TestApplyObservedStateDropsStaleAttemptTerminalObservationWithoutOutbox(t *testing.T) {
+	repo, job := managedRecoveryJob(t, 2)
+	if err := repo.db.Model(&JobRecord{}).Where("id = ?", job.ID).Updates(map[string]any{
+		"cluster_attempt": 2,
+		"observed_state":  domain.StateRecovering,
+		"ray_job_name":    job.ID,
+		"ray_job_uid":     "uid-attempt-1",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	err := repo.ApplyObservedState(context.Background(), domain.ObservedJobState{
+		ID: job.ID, State: domain.StateFailed, Reason: "stale terminal",
+		ExpectedClusterAttempt: 1, ExpectedRayJobName: job.ID, ExpectedRayJobUID: "uid-attempt-1",
+		RayJobName: job.ID, RayJobUID: "uid-attempt-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Get(context.Background(), job.TenantID, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ObservedState != domain.StateRecovering || got.ClusterAttempt != 2 {
+		t.Fatalf("stale terminal observation overwrote recovery: %+v", got)
+	}
+	var terminalEvents int64
+	if err := repo.db.Model(&OutboxRecord{}).Where("event_type = ?", "TRAINING_JOB_TERMINAL").Count(&terminalEvents).Error; err != nil {
+		t.Fatal(err)
+	}
+	if terminalEvents != 0 {
+		t.Fatalf("stale terminal observation emitted %d terminal events", terminalEvents)
+	}
+}
+
+func TestApplyObservedStateEstablishesOnlyCurrentDeterministicRecoveryIdentity(t *testing.T) {
+	repo, job := managedRecoveryJob(t, 2)
+	if err := repo.db.Model(&JobRecord{}).Where("id = ?", job.ID).Updates(map[string]any{
+		"cluster_attempt": 2,
+		"observed_state":  domain.StateRecovering,
+		"ray_job_name":    "",
+		"ray_job_uid":     "",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	wrong := domain.ObservedJobState{
+		ID: job.ID, State: domain.StateRunning,
+		ExpectedClusterAttempt: 2,
+		RayJobName:             job.ID + "-wrong", RayJobUID: "uid-wrong",
+	}
+	if err := repo.ApplyObservedState(context.Background(), wrong); err != nil {
+		t.Fatal(err)
+	}
+	current, err := repo.Get(context.Background(), job.TenantID, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.ObservedState != domain.StateRecovering || current.RayJobName != "" || current.RayJobUID != "" {
+		t.Fatalf("non-deterministic recovery identity was adopted: %+v", current)
+	}
+
+	correct := wrong
+	correct.RayJobName = job.ID + "-a2"
+	correct.RayJobUID = "uid-attempt-2"
+	if err := repo.ApplyObservedState(context.Background(), correct); err != nil {
+		t.Fatal(err)
+	}
+	current, err = repo.Get(context.Background(), job.TenantID, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.ObservedState != domain.StateRunning || current.RayJobName != job.ID+"-a2" || current.RayJobUID != "uid-attempt-2" {
+		t.Fatalf("current deterministic recovery identity was not established: %+v", current)
 	}
 }
 
@@ -239,7 +367,7 @@ func TestListReconcileCandidatesExcludesTerminalActiveJobs(t *testing.T) {
 	if err := repo.Create(context.Background(), &job, "request-list"); err != nil {
 		t.Fatalf("create job: %v", err)
 	}
-	if err := repo.ApplyObservedState(context.Background(), domain.ObservedJobState{ID: "job-1", State: domain.StateSucceeded}); err != nil {
+	if err := repo.ApplyObservedState(context.Background(), observedStateForTest(job, domain.StateSucceeded)); err != nil {
 		t.Fatalf("mark succeeded: %v", err)
 	}
 	ids, err := repo.ListReconcileCandidates(context.Background(), 10)
@@ -376,8 +504,14 @@ func managedRecoveryJob(t *testing.T, maxFailures int) (*GormRepository, domain.
 	job.ObservedState = domain.StateRunning
 	job.ClusterAttempt = 1
 	job.RayJobName = job.ID
+	job.RayJobUID = "uid-attempt-1"
 	if err := repo.Create(context.Background(), &job, "managed-recovery"); err != nil {
 		t.Fatalf("create managed recovery job: %v", err)
+	}
+	if err := repo.db.Model(&JobRecord{}).Where("id = ?", job.ID).Updates(map[string]any{
+		"ray_job_name": job.RayJobName, "ray_job_uid": job.RayJobUID,
+	}).Error; err != nil {
+		t.Fatalf("persist managed recovery identity: %v", err)
 	}
 	return repo, job
 }
@@ -392,6 +526,14 @@ func persistRecoveryCheckpoint(t *testing.T, repo *GormRepository, job domain.Tr
 	}
 	if err := repo.db.Create(&record).Error; err != nil {
 		t.Fatalf("persist recovery checkpoint: %v", err)
+	}
+}
+
+func managedRecoveryRequest(job domain.TrainingJob, failureClass string) domain.ManagedRecoveryRequest {
+	return domain.ManagedRecoveryRequest{
+		JobID: job.ID, ExpectedClusterAttempt: job.ClusterAttempt,
+		ExpectedRayJobName: job.RayJobName, ExpectedRayJobUID: job.RayJobUID,
+		FailureClass: failureClass,
 	}
 }
 
@@ -410,27 +552,25 @@ func TestBeginManagedRecoverySnapshotsLatestCompleteCheckpointAndCASAttempt(t *t
 		t.Fatal(err)
 	}
 
-	recovered, transitioned, err := repo.BeginManagedRecovery(context.Background(), domain.ManagedRecoveryRequest{
-		JobID: job.ID, ExpectedClusterAttempt: 1,
-		FailureClass: "HEAD_POD_LOST", FailureMessage: "head node disappeared",
-	})
+	request := managedRecoveryRequest(job, "HEAD_POD_LOST")
+	request.FailureMessage = "head node disappeared"
+	recovered, transitioned, err := repo.BeginManagedRecovery(context.Background(), request)
 	if err != nil {
 		t.Fatalf("begin managed recovery: %v", err)
 	}
 	if !transitioned || recovered.ClusterAttempt != 2 || recovered.ObservedState != domain.StateRecovering {
 		t.Fatalf("unexpected recovery transition: transitioned=%v job=%+v", transitioned, recovered)
 	}
-	if recovered.ResumeCheckpointID != "checkpoint-4" || recovered.RayJobName != "" {
-		t.Fatalf("recovery did not snapshot checkpoint and reset current RayJob identity: %+v", recovered)
+	if recovered.ResumeCheckpointID != "checkpoint-4" || recovered.RayJobName != job.ID || recovered.RayJobUID != "uid-attempt-1" {
+		t.Fatalf("recovery did not snapshot checkpoint while preserving retiring identity: %+v", recovered)
 	}
 	if recovered.StatusReason != "HEAD_POD_LOST" || recovered.StatusMessage != "head node disappeared" {
 		t.Fatalf("recovery failure provenance was not preserved: %+v", recovered)
 	}
 
-	duplicate, transitioned, err := repo.BeginManagedRecovery(context.Background(), domain.ManagedRecoveryRequest{
-		JobID: job.ID, ExpectedClusterAttempt: 1,
-		FailureClass: "HEAD_POD_LOST", FailureMessage: "duplicate replica",
-	})
+	duplicateRequest := managedRecoveryRequest(job, "HEAD_POD_LOST")
+	duplicateRequest.FailureMessage = "duplicate replica"
+	duplicate, transitioned, err := repo.BeginManagedRecovery(context.Background(), duplicateRequest)
 	if err != nil {
 		t.Fatalf("duplicate recovery: %v", err)
 	}
@@ -439,21 +579,96 @@ func TestBeginManagedRecoverySnapshotsLatestCompleteCheckpointAndCASAttempt(t *t
 	}
 }
 
+func TestClearManagedRecoveryRetiringIdentityUsesAttemptNameAndUIDCAS(t *testing.T) {
+	repo, job := managedRecoveryJob(t, 2)
+	persistRecoveryCheckpoint(t, repo, job, "checkpoint-4", true)
+	recovered, transitioned, err := repo.BeginManagedRecovery(context.Background(), managedRecoveryRequest(job, "HEAD_POD_LOST"))
+	if err != nil || !transitioned {
+		t.Fatalf("begin recovery: transitioned=%v err=%v", transitioned, err)
+	}
+
+	for _, stale := range []domain.ManagedRetiringIdentityRequest{
+		{JobID: job.ID, ExpectedClusterAttempt: 1, RayJobName: job.ID, RayJobUID: "uid-attempt-1"},
+		{JobID: job.ID, ExpectedClusterAttempt: 2, RayJobName: job.ID + "-wrong", RayJobUID: "uid-attempt-1"},
+		{JobID: job.ID, ExpectedClusterAttempt: 2, RayJobName: job.ID, RayJobUID: "uid-wrong"},
+	} {
+		current, cleared, clearErr := repo.ClearManagedRecoveryRetiringIdentity(context.Background(), stale)
+		if clearErr != nil {
+			t.Fatal(clearErr)
+		}
+		if cleared || current.RayJobName != job.ID || current.RayJobUID != "uid-attempt-1" {
+			t.Fatalf("stale retirement CAS cleared identity: request=%+v job=%+v", stale, current)
+		}
+	}
+
+	current, cleared, err := repo.ClearManagedRecoveryRetiringIdentity(context.Background(), domain.ManagedRetiringIdentityRequest{
+		JobID: job.ID, ExpectedClusterAttempt: recovered.ClusterAttempt,
+		RayJobName: recovered.RayJobName, RayJobUID: recovered.RayJobUID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cleared || current.ClusterAttempt != 2 || current.ObservedState != domain.StateRecovering || current.RayJobName != "" || current.RayJobUID != "" {
+		t.Fatalf("current retiring identity was not cleared: cleared=%v job=%+v", cleared, current)
+	}
+	var terminalEvents int64
+	if err := repo.db.Model(&OutboxRecord{}).Where("event_type = ?", "TRAINING_JOB_TERMINAL").Count(&terminalEvents).Error; err != nil {
+		t.Fatal(err)
+	}
+	if terminalEvents != 0 {
+		t.Fatalf("recovery retirement emitted %d terminal events", terminalEvents)
+	}
+}
+
+func TestClearManagedRecoveryRetiringIdentityLosesToCancellation(t *testing.T) {
+	repo, job := managedRecoveryJob(t, 2)
+	persistRecoveryCheckpoint(t, repo, job, "checkpoint-4", true)
+	recovered, transitioned, err := repo.BeginManagedRecovery(context.Background(), managedRecoveryRequest(job, "HEAD_POD_LOST"))
+	if err != nil || !transitioned {
+		t.Fatalf("begin recovery: transitioned=%v err=%v", transitioned, err)
+	}
+	if err := repo.SetDesiredState(context.Background(), job.TenantID, job.ID, domain.DesiredCanceled); err != nil {
+		t.Fatal(err)
+	}
+	current, cleared, err := repo.ClearManagedRecoveryRetiringIdentity(context.Background(), domain.ManagedRetiringIdentityRequest{
+		JobID: job.ID, ExpectedClusterAttempt: recovered.ClusterAttempt,
+		RayJobName: recovered.RayJobName, RayJobUID: recovered.RayJobUID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared || current.DesiredState != domain.DesiredCanceled || current.RayJobName != job.ID || current.RayJobUID != "uid-attempt-1" {
+		t.Fatalf("retirement clear overrode cancellation: cleared=%v job=%+v", cleared, current)
+	}
+}
+
 func TestBeginManagedRecoveryMaxFailuresCountsRetriesAfterInitialAttempt(t *testing.T) {
 	repo, job := managedRecoveryJob(t, 2)
 	persistRecoveryCheckpoint(t, repo, job, "checkpoint-4", true)
 
-	for expected, want := range map[int]int{1: 2, 2: 3} {
-		recovered, transitioned, err := repo.BeginManagedRecovery(context.Background(), domain.ManagedRecoveryRequest{
-			JobID: job.ID, ExpectedClusterAttempt: expected, FailureClass: "RAY_CLUSTER_UNAVAILABLE",
-		})
+	current := job
+	for _, want := range []int{2, 3} {
+		recovered, transitioned, err := repo.BeginManagedRecovery(context.Background(), managedRecoveryRequest(current, "RAY_CLUSTER_UNAVAILABLE"))
 		if err != nil || !transitioned || recovered.ClusterAttempt != want {
-			t.Fatalf("attempt %d: transitioned=%v recovered=%+v err=%v", expected, transitioned, recovered, err)
+			t.Fatalf("attempt %d: transitioned=%v recovered=%+v err=%v", want, transitioned, recovered, err)
 		}
+		cleared, didClear, err := repo.ClearManagedRecoveryRetiringIdentity(context.Background(), domain.ManagedRetiringIdentityRequest{
+			JobID: job.ID, ExpectedClusterAttempt: recovered.ClusterAttempt,
+			RayJobName: recovered.RayJobName, RayJobUID: recovered.RayJobUID,
+		})
+		if err != nil || !didClear {
+			t.Fatalf("clear attempt %d retiring identity: cleared=%v err=%v", want, didClear, err)
+		}
+		name, uid := job.ID+"-a"+fmt.Sprint(want), "uid-attempt-"+fmt.Sprint(want)
+		if err := repo.db.Model(&JobRecord{}).Where("id = ?", job.ID).Updates(map[string]any{
+			"observed_state": domain.StateRunning, "ray_job_name": name, "ray_job_uid": uid,
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+		current = *cleared
+		current.ObservedState, current.RayJobName, current.RayJobUID = domain.StateRunning, name, uid
 	}
-	exhausted, transitioned, err := repo.BeginManagedRecovery(context.Background(), domain.ManagedRecoveryRequest{
-		JobID: job.ID, ExpectedClusterAttempt: 3, FailureClass: "RAY_CLUSTER_UNAVAILABLE",
-	})
+	exhausted, transitioned, err := repo.BeginManagedRecovery(context.Background(), managedRecoveryRequest(current, "RAY_CLUSTER_UNAVAILABLE"))
 	if err != nil {
 		t.Fatalf("exhausted recovery: %v", err)
 	}
@@ -493,9 +708,7 @@ func TestBeginManagedRecoveryRequiresUsableOwnedCheckpointAndActiveDesire(t *tes
 					t.Fatal(err)
 				}
 			}
-			recovered, transitioned, err := repo.BeginManagedRecovery(context.Background(), domain.ManagedRecoveryRequest{
-				JobID: job.ID, ExpectedClusterAttempt: 1, FailureClass: "DRIVER_POD_LOST",
-			})
+			recovered, transitioned, err := repo.BeginManagedRecovery(context.Background(), managedRecoveryRequest(job, "DRIVER_POD_LOST"))
 			if err != nil {
 				t.Fatalf("begin recovery: %v", err)
 			}
@@ -518,14 +731,24 @@ func TestBeginManagedRecoveryRequiresGovernedWritableOutputMount(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	recovered, transitioned, err := repo.BeginManagedRecovery(context.Background(), domain.ManagedRecoveryRequest{
-		JobID: job.ID, ExpectedClusterAttempt: 1, FailureClass: "HEAD_POD_LOST",
-	})
+	recovered, transitioned, err := repo.BeginManagedRecovery(context.Background(), managedRecoveryRequest(job, "HEAD_POD_LOST"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if transitioned || recovered.ClusterAttempt != 1 || recovered.ObservedState != domain.StateRunning {
 		t.Fatalf("checkpoint without governed output mount was treated as usable: transitioned=%v job=%+v", transitioned, recovered)
+	}
+}
+
+func TestBeginManagedRecoveryRequiresCompleteRetiringIdentity(t *testing.T) {
+	repo, job := managedRecoveryJob(t, 2)
+	persistRecoveryCheckpoint(t, repo, job, "checkpoint-4", true)
+	if err := repo.db.Model(&JobRecord{}).Where("id = ?", job.ID).Update("ray_job_uid", "").Error; err != nil {
+		t.Fatal(err)
+	}
+	job.RayJobUID = ""
+	if _, _, err := repo.BeginManagedRecovery(context.Background(), managedRecoveryRequest(job, "HEAD_POD_LOST")); err == nil {
+		t.Fatal("recovery accepted an incomplete retiring identity")
 	}
 }
 

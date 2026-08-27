@@ -16,6 +16,10 @@ test('current-tenant queued and active workloads get distinct actions', () => {
     kind: 'stop',
     label: '停止任务',
   })
+	assert.deepEqual(queueJobAction({ tenantId: 'team-a', state: 'RECOVERING' }, 'team-a'), {
+		kind: 'stop',
+		label: '停止任务',
+	})
 })
 
 test('cross-tenant and unidentified workloads are read-only', () => {
@@ -37,16 +41,32 @@ test('super administrator can stop active workloads in any tenant', () => {
 
 test('queue panel distinguishes job reservations from physical GPU allocation', () => {
   assert.deepEqual(queuePanelStats([
-    { state: 'RUNNING', gpus: 8 },
+	{ id: 'job-running', state: 'RUNNING', gpus: 8 },
+	{ id: 'job-recovering', state: 'RECOVERING', gpus: 8 },
     { state: 'PROVISIONING', gpus: 8 },
     { state: 'QUEUED', gpus: 16 },
-  ], 32, 24), {
-    runningJobs: 1,
+	], 40, 32), {
+	runningJobs: 2,
     waitingJobs: 2,
-    activeRequestedGPUs: 16,
+	activeRequestedGPUs: 24,
     queuedRequestedGPUs: 16,
-    physicalAllocatedGPUs: 24,
+	physicalAllocatedGPUs: 32,
     releasingGPUs: 8,
-    clusterGPUs: 32,
+	clusterGPUs: 40,
   })
+})
+
+test('queue panel does not double count one platform job during a state-page race', () => {
+	assert.deepEqual(queuePanelStats([
+		{ id: 'job-1', state: 'RUNNING', gpus: 16 },
+		{ id: 'job-1', state: 'RUNNING', gpus: 16 },
+	], 16, 16), {
+		runningJobs: 1,
+		waitingJobs: 0,
+		activeRequestedGPUs: 16,
+		queuedRequestedGPUs: 0,
+		physicalAllocatedGPUs: 16,
+		releasingGPUs: 0,
+		clusterGPUs: 16,
+	})
 })

@@ -47,3 +47,8 @@ test('queue actions are tenant-scoped and TenantAdmin copy does not claim quota 
   assert.match(queuePanelSource, /queueJobAction/)
   assert.match(queuePanelSource, /v-if="actionFor\(scope\.row\)"/)
 })
+
+test('admin active job loading includes recovery and de-duplicates state-page races', () => {
+	assert.match(quotaManageSource, /['"]RECOVERING['"]/)
+	assert.match(quotaManageSource, /new Map\(\)/)
+})

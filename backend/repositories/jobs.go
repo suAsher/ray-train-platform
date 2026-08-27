@@ -434,6 +434,9 @@ func (r *GormRepository) ListReconcileCandidates(ctx context.Context, limit int)
 }
 
 func (r *GormRepository) ApplyObservedState(ctx context.Context, observed domain.ObservedJobState) error {
+	if observed.ExpectedClusterAttempt < 1 {
+		return fmt.Errorf("expected cluster attempt is required")
+	}
 	now := time.Now().UTC()
 	updates := map[string]any{
 		"observed_state":   observed.State,
@@ -469,6 +472,9 @@ func (r *GormRepository) ApplyObservedState(ctx context.Context, observed domain
 		if isTerminalState(domain.State(current.ObservedState)) {
 			return nil
 		}
+		if !observedStateMatchesCurrentAttempt(current, observed) {
+			return nil
+		}
 		result := tx.Model(&JobRecord{}).Where("id = ?", observed.ID).Updates(updates)
 		if result.Error != nil {
 			return fmt.Errorf("apply observed state: %w", result.Error)
@@ -493,6 +499,28 @@ func (r *GormRepository) ApplyObservedState(ctx context.Context, observed domain
 		}
 		return nil
 	})
+}
+
+func observedStateMatchesCurrentAttempt(current JobRecord, observed domain.ObservedJobState) bool {
+	if current.ClusterAttempt != observed.ExpectedClusterAttempt ||
+		current.RayJobName != observed.ExpectedRayJobName ||
+		current.RayJobUID != observed.ExpectedRayJobUID {
+		return false
+	}
+	if current.RayJobName == "" {
+		return observed.RayJobName == deterministicAttemptRayJobName(current.ID, current.ClusterAttempt)
+	}
+	if observed.RayJobName != current.RayJobName {
+		return false
+	}
+	return current.RayJobUID == "" || observed.RayJobUID == current.RayJobUID
+}
+
+func deterministicAttemptRayJobName(jobID string, attempt int) string {
+	if attempt <= 1 {
+		return jobID
+	}
+	return fmt.Sprintf("%s-a%d", jobID, attempt)
 }
 
 // BeginManagedRecovery atomically snapshots the latest usable checkpoint and
@@ -521,6 +549,8 @@ func (r *GormRepository) BeginManagedRecovery(ctx context.Context, request domai
 		if job.DesiredState != domain.DesiredActive ||
 			job.Spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain ||
 			job.ClusterAttempt != request.ExpectedClusterAttempt ||
+			job.RayJobName != request.ExpectedRayJobName ||
+			job.RayJobUID != request.ExpectedRayJobUID ||
 			(job.ObservedState != domain.StateRunning && job.ObservedState != domain.StateRecovering) ||
 			job.ClusterAttempt > job.Spec.Managed.MaxFailures {
 			return nil
@@ -544,17 +574,14 @@ func (r *GormRepository) BeginManagedRecovery(ctx context.Context, request domai
 			"status_message":       request.FailureMessage,
 			"cluster_attempt":      request.ExpectedClusterAttempt + 1,
 			"resume_checkpoint_id": checkpoint.ID,
-			"ray_job_name":         "",
-			"ray_job_uid":          "",
-			"ray_cluster_name":     "",
-			"resource_version":     "",
 			"last_observed_at":     now,
 			"updated_at":           now,
 		}
 		result := tx.Model(&JobRecord{}).
-			Where("id = ? AND cluster_attempt = ? AND desired_state = ? AND training_engine = ? AND observed_state IN ?",
+			Where("id = ? AND cluster_attempt = ? AND desired_state = ? AND training_engine = ? AND ray_job_name = ? AND ray_job_uid = ? AND observed_state IN ?",
 				request.JobID, request.ExpectedClusterAttempt, domain.DesiredActive,
-				domain.TrainingEngineRayTrain, []domain.State{domain.StateRunning, domain.StateRecovering}).
+				domain.TrainingEngineRayTrain, request.ExpectedRayJobName, request.ExpectedRayJobUID,
+				[]domain.State{domain.StateRunning, domain.StateRecovering}).
 			Updates(updates)
 		if result.Error != nil {
 			return fmt.Errorf("advance managed recovery attempt: %w", result.Error)
@@ -577,6 +604,63 @@ func (r *GormRepository) BeginManagedRecovery(ctx context.Context, request domai
 		return nil, false, err
 	}
 	return current, transitioned, nil
+}
+
+// ClearManagedRecoveryRetiringIdentity releases the old RayJob identity after
+// the reconciler has verified ownership, UID and NotFound. A cancellation or
+// competing replica that changes any CAS component wins and leaves it intact.
+func (r *GormRepository) ClearManagedRecoveryRetiringIdentity(ctx context.Context, request domain.ManagedRetiringIdentityRequest) (*domain.TrainingJob, bool, error) {
+	if err := request.Validate(); err != nil {
+		return nil, false, err
+	}
+	var current *domain.TrainingJob
+	cleared := false
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var record JobRecord
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", request.JobID).First(&record).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("job not found")
+			}
+			return fmt.Errorf("lock managed retiring identity: %w", err)
+		}
+		job, err := record.toDomain()
+		if err != nil {
+			return err
+		}
+		current = job
+		if job.DesiredState != domain.DesiredActive || job.ObservedState != domain.StateRecovering ||
+			job.ClusterAttempt != request.ExpectedClusterAttempt || job.RayJobName != request.RayJobName || job.RayJobUID != request.RayJobUID {
+			return nil
+		}
+		now := time.Now().UTC()
+		result := tx.Model(&JobRecord{}).
+			Where("id = ? AND desired_state = ? AND observed_state = ? AND cluster_attempt = ? AND ray_job_name = ? AND ray_job_uid = ?",
+				request.JobID, domain.DesiredActive, domain.StateRecovering, request.ExpectedClusterAttempt, request.RayJobName, request.RayJobUID).
+			Updates(map[string]any{
+				"ray_job_name": "", "ray_job_uid": "", "ray_cluster_name": "", "resource_version": "",
+				"last_observed_at": now, "updated_at": now,
+			})
+		if result.Error != nil {
+			return fmt.Errorf("clear managed retiring identity: %w", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			if err := tx.Where("id = ?", request.JobID).First(&record).Error; err != nil {
+				return fmt.Errorf("reload stale managed retiring identity: %w", err)
+			}
+			current, err = record.toDomain()
+			return err
+		}
+		cleared = true
+		if err := tx.Where("id = ?", request.JobID).First(&record).Error; err != nil {
+			return fmt.Errorf("reload cleared managed retiring identity: %w", err)
+		}
+		current, err = record.toDomain()
+		return err
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return current, cleared, nil
 }
 
 func latestUsableRecoveryCheckpoint(tx *gorm.DB, job JobRecord) (TrainingCheckpointRecord, bool, error) {

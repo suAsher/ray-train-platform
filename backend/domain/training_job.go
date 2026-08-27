@@ -201,6 +201,12 @@ type ObservedJobState struct {
 	RayJobUID       string
 	RayClusterName  string
 	ResourceVersion string
+	// ExpectedClusterAttempt and the expected RayJob identity are copied from
+	// the row loaded by the reconciler. They form the compare-and-swap fence
+	// that prevents an old attempt from overwriting a newer recovery attempt.
+	ExpectedClusterAttempt int
+	ExpectedRayJobName     string
+	ExpectedRayJobUID      string
 	// StartedAt and FinishedAt come from the workload itself, not from the
 	// control plane's clock at poll time. Both stay nil until the workload
 	// publishes them, so "not started" is never rendered as an epoch date.
@@ -256,6 +262,8 @@ func NormalizeManagedInfrastructureFailureClass(reason string) (string, bool) {
 type ManagedRecoveryRequest struct {
 	JobID                  string
 	ExpectedClusterAttempt int
+	ExpectedRayJobName     string
+	ExpectedRayJobUID      string
 	FailureClass           string
 	FailureMessage         string
 }
@@ -267,6 +275,9 @@ func (request ManagedRecoveryRequest) Validate() error {
 	if request.ExpectedClusterAttempt < 1 {
 		return fmt.Errorf("managed recovery expected cluster attempt must be positive")
 	}
+	if strings.TrimSpace(request.ExpectedRayJobName) == "" || strings.TrimSpace(request.ExpectedRayJobUID) == "" {
+		return fmt.Errorf("managed recovery expected RayJob name and UID are required")
+	}
 	failureClass := strings.TrimSpace(request.FailureClass)
 	if failureClass == "" || len(failureClass) > ManagedRecoveryFailureClassMaxBytes {
 		return fmt.Errorf("managed recovery failure class is required and bounded")
@@ -276,6 +287,29 @@ func (request ManagedRecoveryRequest) Validate() error {
 	}
 	if len(request.FailureMessage) > ManagedRecoveryFailureMessageMaxBytes {
 		return fmt.Errorf("managed recovery failure message is too large")
+	}
+	return nil
+}
+
+// ManagedRetiringIdentityRequest clears the previous Kubernetes workload
+// identity only after that exact UID has reached NotFound. The attempt, name
+// and UID form one CAS fence across backend replicas.
+type ManagedRetiringIdentityRequest struct {
+	JobID                  string
+	ExpectedClusterAttempt int
+	RayJobName             string
+	RayJobUID              string
+}
+
+func (request ManagedRetiringIdentityRequest) Validate() error {
+	if strings.TrimSpace(request.JobID) == "" {
+		return fmt.Errorf("managed retiring identity job ID is required")
+	}
+	if request.ExpectedClusterAttempt < 1 {
+		return fmt.Errorf("managed retiring identity expected cluster attempt must be positive")
+	}
+	if strings.TrimSpace(request.RayJobName) == "" || strings.TrimSpace(request.RayJobUID) == "" {
+		return fmt.Errorf("managed retiring RayJob name and UID are required")
 	}
 	return nil
 }

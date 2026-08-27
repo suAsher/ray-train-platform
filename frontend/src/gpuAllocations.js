@@ -46,7 +46,7 @@ export const allocationTypeLabel = (type) => type === 'DEBUG_WORKSPACE' ? 'äº¤äº
 export const allocationTypeTag = (type) => type === 'DEBUG_WORKSPACE' ? 'warning' : 'primary'
 
 export const allocationStateTag = (state) => {
-  if (state === 'RUNNING') return 'success'
+  if (state === 'RUNNING' || state === 'RECOVERING') return 'success'
   if (['CANCELING', 'DELETING', 'STOPPING'].includes(state)) return 'danger'
   return 'warning'
 }
