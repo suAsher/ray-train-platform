@@ -122,4 +122,5 @@ bash "${root_dir}/ops/platform/test/verify-rendered-ingress-test.sh"
 bash "${root_dir}/ops/platform/test/ha-rollout-template-test.sh"
 bash "${root_dir}/scripts/test-external-spk-rayjob-e2e-contract.sh"
 bash "${root_dir}/scripts/test-go-builder-path-contract.sh"
+bash "${root_dir}/scripts/test-ray-runtime-images.sh" --contract-only
 bash "${root_dir}/scripts/test-nvme-cache-delivery.sh"

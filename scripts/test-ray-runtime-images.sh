@@ -13,6 +13,15 @@ require_literal() {
   fi
 }
 
+require_absent_literal() {
+  local file="$1"
+  local literal="$2"
+  if grep -Fq -- "$literal" "${root_dir}/${file}"; then
+    echo "forbidden runtime image contract in ${file}: ${literal}" >&2
+    exit 1
+  fi
+}
+
 docker_stage() {
   local file="$1"
   local stage="$2"
@@ -24,34 +33,81 @@ docker_stage() {
   ' "${root_dir}/${file}"
 }
 
+require_before() {
+  local text="$1"
+  local earlier="$2"
+  local later="$3"
+  local earlier_line later_line
+  earlier_line="$(grep -nF -- "$earlier" <<<"$text" | head -1 | cut -d: -f1)"
+  later_line="$(grep -nF -- "$later" <<<"$text" | head -1 | cut -d: -f1)"
+  if [[ -z "$earlier_line" || -z "$later_line" || "$earlier_line" -ge "$later_line" ]]; then
+    echo "runtime image contract requires '${earlier}' before '${later}'" >&2
+    exit 1
+  fi
+}
+
 assert_contracts() {
   require_literal images/train-pytorch/Dockerfile 'AS pytorch-legacy'
   require_literal images/train-pytorch/Dockerfile 'AS pytorch-ray-ddp'
   require_literal images/train-pytorch/Dockerfile 'AS pytorch-ray-train'
   require_literal images/train-pytorch/Dockerfile 'ARG RAY_VERSION=2.56.1'
+  require_literal images/train-pytorch/Dockerfile 'test "${RAY_VERSION}" = "2.56.1"'
   require_literal images/train-pytorch/Dockerfile 'ray[train,tune]==${RAY_VERSION}'
   require_literal images/train-pytorch/Dockerfile 'python3 -c'
   require_literal images/train-pytorch/Dockerfile 'python3 -m pip check'
   require_literal images/train-pytorch/Dockerfile 'COPY workspace/raytrain-managed /usr/local/bin/raytrain-managed'
   require_literal images/train-pytorch/Dockerfile 'ENV RAY_TRAIN_V2_ENABLED=1'
 
-  local ddp_stage managed_stage
+  local base_stage ddp_stage managed_stage managed_env_count required_copy_source
+  base_stage="$(docker_stage images/train-pytorch/Dockerfile pytorch-ray256-base)"
   ddp_stage="$(docker_stage images/train-pytorch/Dockerfile pytorch-ray-ddp)"
   managed_stage="$(docker_stage images/train-pytorch/Dockerfile pytorch-ray-train)"
-  if grep -Fq 'RAY_TRAIN_V2_ENABLED=1' <<<"$ddp_stage"; then
-    echo 'Ray DDP image stage must not enable Ray Train V2' >&2
+  managed_env_count="$(grep -Fc 'RAY_TRAIN_V2_ENABLED=1' "${root_dir}/images/train-pytorch/Dockerfile")"
+  if [[ "$managed_env_count" != 1 ]]; then
+    echo "RAY_TRAIN_V2_ENABLED=1 must occur exactly once, found ${managed_env_count}" >&2
     exit 1
   fi
+  for non_managed_stage in "$base_stage" "$ddp_stage"; do
+    if grep -Fq 'RAY_TRAIN_V2_ENABLED=1' <<<"$non_managed_stage"; then
+      echo 'Ray Train V2 must not be enabled in a shared or DDP stage' >&2
+      exit 1
+    fi
+    if grep -Fq 'raytrain-managed' <<<"$non_managed_stage"; then
+      echo 'shared and DDP stages must not depend on the Task 9 managed launcher' >&2
+      exit 1
+    fi
+  done
   if ! grep -Fq 'ENV RAY_TRAIN_V2_ENABLED=1' <<<"$managed_stage"; then
     echo 'managed Ray Train image stage must explicitly enable Ray Train V2' >&2
     exit 1
   fi
+  if ! grep -Fq 'COPY workspace/raytrain-managed /usr/local/bin/raytrain-managed' <<<"$managed_stage"; then
+    echo 'only the managed stage may copy the Task 9 launcher' >&2
+    exit 1
+  fi
+  require_before "$base_stage" 'test "${RAY_VERSION}" = "2.56.1"' 'python3 -m pip install'
 
   require_literal images/workspace/Dockerfile 'AS workspace-legacy'
   require_literal images/workspace/Dockerfile 'AS workspace-ray256'
   require_literal images/workspace/Dockerfile 'ARG RAY_VERSION=2.56.1'
+  require_literal images/workspace/Dockerfile 'test "${RAY_VERSION}" = "2.56.1"'
   require_literal images/workspace/Dockerfile 'ray[train,tune]==${RAY_VERSION}'
-  require_literal images/workspace/Dockerfile 'COPY raytrain-managed /usr/local/bin/raytrain-managed'
+  require_absent_literal images/workspace/Dockerfile 'raytrain-managed'
+  require_absent_literal images/workspace/Dockerfile 'RAY_TRAIN_V2_ENABLED=1'
+
+  local workspace_stage
+  workspace_stage="$(docker_stage images/workspace/Dockerfile workspace-ray256)"
+  require_before "$workspace_stage" 'test "${RAY_VERSION}" = "2.56.1"' 'python3 -m pip install'
+
+  for required_copy_source in \
+    images/workspace/raytrain-launch.py; do
+    test -f "${root_dir}/${required_copy_source}" || {
+      echo "required Ray DDP/workspace COPY source is missing: ${required_copy_source}" >&2
+      exit 1
+    }
+  done
+  require_literal images/train-pytorch/Dockerfile 'COPY workspace/raytrain-launch.py /usr/local/bin/raytrain-launch'
+  require_literal images/workspace/Dockerfile 'COPY raytrain-launch.py /usr/local/bin/raytrain-launch'
 
   require_literal build-image.sh 'RAY_RUNTIME_VARIANTS'
   require_literal build-image.sh 'pytorch-ray-ddp'
@@ -59,6 +115,13 @@ assert_contracts() {
   require_literal build-image.sh 'workspace-ray256'
   require_literal build-image.sh 'RAY_VERSION=${RAY_VERSION_ARG}'
   require_literal build-image.sh "RAY_PRODUCTION_VERSION=\"${production_ray_version}\""
+  require_literal build-image.sh 'cleanup_temp_dockerfiles()'
+  require_literal build-image.sh 'trap cleanup_temp_dockerfiles EXIT'
+  require_literal build-image.sh 'rm -f -- "$dockerfile"'
+  if grep -Eq 'rm[[:space:]]+-[^[:space:]]*r' "${root_dir}/build-image.sh"; then
+    echo 'runtime builder cleanup must not use recursive removal' >&2
+    exit 1
+  fi
 
   # The old public build targets and image names are rollback contracts. New
   # variants must be additive; the builder may not retag or remove them.
@@ -74,19 +137,45 @@ assert_contracts() {
   require_literal helm/ray-train-platform/values.yaml 'productionVersion: "2.56.1"'
   require_literal helm/ray-train-platform/values.yaml 'supportedEngines: ["ray-ddp"]'
   require_literal helm/ray-train-platform/values.yaml 'supportedEngines: ["ray-train"]'
+  require_literal helm/ray-train-platform/values.yaml 'Dormant until Task 15'
+  require_literal helm/ray-train-platform/values-prod.yaml.example 'Dormant until Task 15'
+  if grep -Rqs '\.Values\.rayTrain' "${root_dir}/helm/ray-train-platform/templates"; then
+    echo 'dormant Task 8 rayTrain values are unexpectedly wired before Task 15' >&2
+    exit 1
+  fi
+
+  require_literal scripts/test-delivery-render.sh 'test-ray-runtime-images.sh" --contract-only'
+  require_literal .github/workflows/ci.yml 'bash scripts/test-ray-runtime-images.sh --contract-only'
+  require_literal docs/superpowers/plans/2026-08-27-ray-train-managed-runtime-upgrade.md 'add `pytorch-ray-train` back to `BUILD_TARGETS=all`'
 
   local dry_run
   dry_run="$(
     DRY_RUN=true \
     IMAGE_TAG=contract \
-    BUILD_TARGETS=workspace,train-pytorch,pytorch-ray-ddp,pytorch-ray-train,workspace-ray256 \
+    BUILD_TARGETS=all \
     bash "${root_dir}/build-image.sh"
   )"
   grep -Fq 'ray-workspace:contract' <<<"$dry_run"
   grep -Fq 'ray-train-pytorch:contract' <<<"$dry_run"
   grep -Fq 'ray-train-pytorch-ray-ddp:2.56.1-contract' <<<"$dry_run"
-  grep -Fq 'ray-train-pytorch-ray-train:2.56.1-contract' <<<"$dry_run"
   grep -Fq 'ray-workspace-ray256:2.56.1-contract' <<<"$dry_run"
+  if grep -Fq 'ray-train-pytorch-ray-train:' <<<"$dry_run"; then
+    echo 'default all matrix includes the unavailable Task 9 managed image' >&2
+    exit 1
+  fi
+
+  if [[ ! -e "${root_dir}/images/workspace/raytrain-managed" ]]; then
+    local managed_preflight
+    if managed_preflight="$(DRY_RUN=true IMAGE_TAG=contract BUILD_TARGETS=pytorch-ray-train bash "${root_dir}/build-image.sh" 2>&1)"; then
+      echo 'managed image target succeeded without its real COPY source' >&2
+      exit 1
+    fi
+    grep -Fq 'pytorch-ray-train requires images/workspace/raytrain-managed from Task 9' <<<"$managed_preflight"
+    if grep -Fq 'unbound variable' <<<"$managed_preflight"; then
+      echo 'managed preflight triggered a secondary cleanup trap failure' >&2
+      exit 1
+    fi
+  fi
 }
 
 require_exact_image_ref() {
@@ -104,15 +193,15 @@ require_exact_image_ref() {
 
 smoke_image() {
   local image="$1"
-  local expected_managed="$2"
+  local role="$2"
 
   docker run --rm "$image" python3 -c \
     "import ray, ray.train, torch; assert ray.__version__ == '${production_ray_version}', ray.__version__; print(ray.__version__, torch.__version__)"
   docker run --rm "$image" sh -eu -c \
-    "ray --version | grep -F '${production_ray_version}'; test -x /usr/local/bin/raytrain-launch; test -x /usr/local/bin/raytrain-managed"
+    "ray --version | grep -F '${production_ray_version}'; test -x /usr/local/bin/raytrain-launch"
 
-  if [[ "$expected_managed" == true ]]; then
-    docker run --rm "$image" sh -eu -c 'test "${RAY_TRAIN_V2_ENABLED:-}" = 1'
+  if [[ "$role" == managed ]]; then
+    docker run --rm "$image" sh -eu -c 'test -x /usr/local/bin/raytrain-managed; test "${RAY_TRAIN_V2_ENABLED:-}" = 1'
   else
     docker run --rm "$image" sh -eu -c 'test "${RAY_TRAIN_V2_ENABLED:-}" != 1'
   fi
@@ -134,8 +223,8 @@ require_exact_image_ref RAY_TRAIN_IMAGE "${RAY_TRAIN_IMAGE:-}"
 require_exact_image_ref RAY_WORKSPACE_IMAGE "${RAY_WORKSPACE_IMAGE:-}"
 command -v docker >/dev/null 2>&1 || { echo 'docker is required for runtime smoke tests' >&2; exit 1; }
 
-smoke_image "$RAY_DDP_IMAGE" false
-smoke_image "$RAY_TRAIN_IMAGE" true
-smoke_image "$RAY_WORKSPACE_IMAGE" false
+smoke_image "$RAY_DDP_IMAGE" ddp
+smoke_image "$RAY_TRAIN_IMAGE" managed
+smoke_image "$RAY_WORKSPACE_IMAGE" workspace
 
 echo 'Ray runtime image smoke tests passed'

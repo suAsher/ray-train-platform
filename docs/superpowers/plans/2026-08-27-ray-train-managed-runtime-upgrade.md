@@ -792,6 +792,8 @@ driver defaults.
 - Create: `images/workspace/raytrain-managed`
 - Modify: `images/workspace/Dockerfile`
 - Modify: `images/train-pytorch/Dockerfile`
+- Modify: `build-image.sh`
+- Modify: `scripts/test-ray-runtime-images.sh`
 
 - [ ] **Step 1: Write failing pure-Python entrypoint tests**
 
@@ -880,6 +882,11 @@ Patch `TorchTrainer`, `ScalingConfig`, and `RunConfig` with fakes. Assert 2 node
 available in `DriverConfig` for the Task 10 reporting/MMCV checkpoint schedule.
 
 - [ ] **Step 6: Run Python tests and image contract tests**
+
+After the real executable exists, add `pytorch-ray-train` back to `BUILD_TARGETS=all`. Update the
+runtime smoke contract so DDP and workspace require `raytrain-launch`, while the managed image
+requires both `raytrain-launch` and `raytrain-managed`. Until this step, the managed target must
+remain explicit and fail its build-script preflight when the executable is absent.
 
 Run: `python3 -m unittest discover -s images/workspace/raytrain_runtime -p 'test_*.py' -v`
 

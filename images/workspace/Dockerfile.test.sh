@@ -14,10 +14,14 @@ grep -Fq 'chown -R ray:users /home/ray /workspace' "$dockerfile"
 grep -Fq 'AS workspace-legacy' "$dockerfile"
 grep -Fq 'AS workspace-ray256' "$dockerfile"
 grep -Fq 'ARG RAY_VERSION=2.56.1' "$dockerfile"
+grep -Fq 'test "${RAY_VERSION}" = "2.56.1"' "$dockerfile"
 grep -Fq 'ray[train,tune]==${RAY_VERSION}' "$dockerfile"
 grep -Fq 'python3 -m pip check' "$dockerfile"
-grep -Fq 'COPY raytrain-managed /usr/local/bin/raytrain-managed' "$dockerfile"
-grep -Fq 'chmod 0755 /usr/local/bin/raytrain-managed' "$dockerfile"
+
+if grep -Fq 'raytrain-managed' "$dockerfile"; then
+  echo 'buildable workspace image must not depend on the Task 9 managed launcher' >&2
+  exit 1
+fi
 
 if grep -Fq -- '--no-cache-dir' "$dockerfile"; then
   echo 'workspace image must preserve the runtime pip cache' >&2

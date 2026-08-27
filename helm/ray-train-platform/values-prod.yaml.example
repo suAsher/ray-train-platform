@@ -17,8 +17,9 @@ global:
     - name: <pull-secret 名称>
 
 # ---- Ray 运行环境目录 -------------------------------------------------
-# 先使用 scripts/test-ray-runtime-images.sh 验证下列精确 digest。
-# 此版只发布运行环，托管与灰度开关继续关闭。
+# Dormant until Task 15：当前 Chart 不会把这些值注入 Deployment，也不会
+# 自动写入镜像目录；修改它们不能开启托管训练。先使用
+# scripts/test-ray-runtime-images.sh 验证下列精确 digest。
 rayTrain:
   managedEnabled: false
   canaryEnabled: false

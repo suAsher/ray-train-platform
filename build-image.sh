@@ -43,10 +43,25 @@ RAY_BASE_IMAGE_ARG="${RAY_BASE_IMAGE:-harbor.wellspiking.ai/hub/rayproject/ray:2
 WORKSPACE_RAY_BASE_IMAGE_ARG="${WORKSPACE_RAY_BASE_IMAGE:-harbor.wellspiking.ai/hub/rayproject/ray:2.35.0-py310-gpu}"
 RAY_PRODUCTION_VERSION="2.56.1"
 RAY_VERSION_ARG="${RAY_VERSION:-$RAY_PRODUCTION_VERSION}"
-RAY_RUNTIME_VARIANTS=(pytorch-ray-ddp pytorch-ray-train workspace-ray256)
+RAY_RUNTIME_VARIANTS=(pytorch-ray-ddp workspace-ray256)
 BEVFUSION_BASE_IMAGE_ARG="${BEVFUSION_BASE_IMAGE:-harbor.wellspiking.ai/guofeng.su/bevfusion@sha256:88e9c5045ced1b4b3dc49ddf1f2e22a8c9702574fd8103afcdff83577784a5ee}"
 CODE_SERVER_IMAGE_ARG="${CODE_SERVER_IMAGE:-harbor.wellspiking.ai/hub/codercom/code-server:4.93.1}"
 SPK_RAYJOB_VERSION_ARG="${SPK_RAYJOB_VERSION:-$IMAGE_TAG}"
+# Bash 3.2 with `set -u` treats expansion of an empty array as unbound inside
+# an EXIT trap. The empty sentinel keeps early validation failures clean; the
+# cleanup helper skips it and only removes exact mktemp files registered later.
+TEMP_DOCKERFILES=("")
+
+cleanup_temp_dockerfiles() {
+  local dockerfile
+  for dockerfile in "${TEMP_DOCKERFILES[@]}"; do
+    if [ -n "$dockerfile" ] && [ -f "$dockerfile" ]; then
+      rm -f -- "$dockerfile"
+    fi
+  done
+}
+
+trap cleanup_temp_dockerfiles EXIT
 
 trim() {
   local value="${1:-}"
@@ -98,11 +113,11 @@ Build targets:
   workspace           Existing Ray 2.35 interactive workspace (rollback)
   train-pytorch       Existing Ray 2.35 PyTorch runtime (rollback)
   pytorch-ray-ddp     Ray 2.56.1 PyTorch runtime for Ray-orchestrated DDP
-  pytorch-ray-train   Ray 2.56.1 PyTorch runtime for managed Ray Train
+  pytorch-ray-train   Explicit Task 9 target for managed Ray Train
   workspace-ray256    Ray 2.56.1 interactive workspace
   tos-prefix-init     Native TOS SDK utility for controlled training roots
   spk-rayjob          Self-service external submission CLI release image
-  all                 All platform images (default)
+  all                 All currently buildable platform images (default)
 
 The script requires an authenticated Docker/BuildKit session when pushing.
 It prints remote image digests after a successful push.
@@ -219,6 +234,10 @@ done < <(normalize_targets)
 [ "${#BUILD_TARGETS_LIST[@]}" -gt 0 ] || { echo 'ERROR: BUILD_TARGETS is empty' >&2; exit 1; }
 
 for target in "${BUILD_TARGETS_LIST[@]}"; do
+  if [ "$target" = "pytorch-ray-train" ] && [ ! -f "$SCRIPT_DIR/images/workspace/raytrain-managed" ]; then
+    echo 'ERROR: pytorch-ray-train requires images/workspace/raytrain-managed from Task 9' >&2
+    exit 1
+  fi
   case "$target" in
     pytorch-ray-ddp|pytorch-ray-train|workspace-ray256)
       [ "$RAY_VERSION_ARG" = "$RAY_PRODUCTION_VERSION" ] || {
@@ -286,6 +305,7 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
     # Resolve the base-image variables into a temporary Dockerfile so later
     # stages build correctly without requiring BuildKit/Buildx.
     tmp_dockerfile=$(mktemp)
+    TEMP_DOCKERFILES+=("$tmp_dockerfile")
     sed \
       -e "s|^FROM \${GO_BUILDER_IMAGE}|FROM $GO_BUILDER_IMAGE_ARG|" \
       -e "s|^FROM \${NODE_BUILDER_IMAGE}|FROM $NODE_BUILDER_IMAGE_ARG|" \
@@ -372,9 +392,6 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
     echo "    Digest: $(remote_digest "$image")"
   fi
 
-  if ! is_true "$USE_BUILDX" && [ -n "${tmp_dockerfile:-}" ] && [ -f "$tmp_dockerfile" ]; then
-    rm -f "$tmp_dockerfile"
-  fi
   echo "    Done:   $image"
 done
 

@@ -46,6 +46,9 @@ jobs:
           npm test
           npm run build
 
+      - name: Validate Ray runtime image contracts
+        run: bash scripts/test-ray-runtime-images.sh --contract-only
+
       - name: Set up Helm
         uses: azure/setup-helm@v4
 

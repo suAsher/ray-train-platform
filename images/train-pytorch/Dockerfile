@@ -43,17 +43,11 @@ FROM pytorch-legacy AS pytorch-ray256-base
 ARG RAY_VERSION=2.56.1
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 USER root
-RUN python3 -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
+RUN test "${RAY_VERSION}" = "2.56.1" \
+ && python3 -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
       "ray[train,tune]==${RAY_VERSION}" \
  && python3 -c "import ray, ray.train, ray.tune; assert ray.__version__ == '${RAY_VERSION}', ray.__version__" \
  && python3 -m pip check
-
-# Task 9 supplies this real platform-owned driver. Keeping the COPY contract
-# here makes a managed-runtime build fail closed until that implementation is
-# present; no fake launcher is shipped by this image task.
-COPY workspace/raytrain-managed /usr/local/bin/raytrain-managed
-RUN chmod 0755 /usr/local/bin/raytrain-launch /usr/local/bin/raytrain-managed \
- && chown -R ray:users /home/ray
 
 FROM pytorch-ray256-base AS pytorch-ray-ddp
 ENV PLATFORM_TRAINING_ENGINE=ray-ddp
@@ -61,6 +55,10 @@ USER ray
 WORKDIR /home/ray
 
 FROM pytorch-ray256-base AS pytorch-ray-train
+COPY workspace/raytrain-managed /usr/local/bin/raytrain-managed
+RUN chmod 0755 /usr/local/bin/raytrain-managed \
+ && chmod 0755 /usr/local/bin/raytrain-launch \
+ && chown -R ray:users /home/ray
 ENV PLATFORM_TRAINING_ENGINE=ray-train
 ENV RAY_TRAIN_V2_ENABLED=1
 USER ray

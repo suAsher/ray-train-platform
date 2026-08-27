@@ -17,10 +17,11 @@ placement:
   preferredNodeSelector: {}
   allowGPUNodeFallback: false
 
-# Side-by-side Ray runtime catalog inputs. References are populated with
-# immutable digests after building and smoke-testing the images. These values
-# do not enable managed submission; Task 15 wires the disabled gates into the
-# backend Deployment after the runtime acceptance matrix is complete.
+# Dormant until Task 15: these are side-by-side runtime catalog inputs only.
+# This chart does not render them into a Deployment or seed the database yet,
+# so changing them cannot enable managed submission. Task 15 will wire the
+# disabled gates after the runtime acceptance matrix is complete. References
+# are populated with immutable digests only after post-build smoke testing.
 rayTrain:
   managedEnabled: false
   canaryEnabled: false

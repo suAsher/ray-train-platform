@@ -89,16 +89,11 @@ FROM workspace-legacy AS workspace-ray256
 ARG RAY_VERSION=2.56.1
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 USER root
-RUN python3 -m pip install --index-url "${PIP_INDEX_URL}" \
+RUN test "${RAY_VERSION}" = "2.56.1" \
+ && python3 -m pip install --index-url "${PIP_INDEX_URL}" \
       "ray[train,tune]==${RAY_VERSION}" \
  && python3 -c "import ray, ray.train, ray.tune; assert ray.__version__ == '${RAY_VERSION}', ray.__version__" \
- && python3 -m pip check
-
-# Task 9 supplies the real managed driver. The workspace can inspect and invoke
-# both platform launch paths once that file exists; this task does not create a
-# placeholder that could accidentally be promoted to production.
-COPY raytrain-managed /usr/local/bin/raytrain-managed
-RUN chmod 0755 /usr/local/bin/raytrain-managed \
+ && python3 -m pip check \
  && chmod 0755 /usr/local/bin/raytrain-launch \
  && chown -R ray:users /home/ray /workspace
 
