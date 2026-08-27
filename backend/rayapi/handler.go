@@ -742,7 +742,7 @@ func (handler *Handler) stopJob(c *gin.Context) {
 		return
 	}
 	job, err := handler.resolveJob(c.Request.Context(), principal, c.Param("id"))
-	if err != nil || handler.repository.SetDesiredState(c.Request.Context(), principal.TenantID, job.ID, domain.DesiredCanceled) != nil {
+	if err != nil || !canMutateJob(principal, job) || handler.repository.SetDesiredState(c.Request.Context(), principal.TenantID, job.ID, domain.DesiredCanceled) != nil {
 		handler.writeError(c, http.StatusNotFound)
 		return
 	}
@@ -755,11 +755,15 @@ func (handler *Handler) deleteJob(c *gin.Context) {
 		return
 	}
 	job, err := handler.resolveJob(c.Request.Context(), principal, c.Param("id"))
-	if err != nil || handler.repository.SetDesiredState(c.Request.Context(), principal.TenantID, job.ID, domain.DesiredCanceled) != nil {
+	if err != nil || !canMutateJob(principal, job) || handler.repository.SetDesiredState(c.Request.Context(), principal.TenantID, job.ID, domain.DesiredCanceled) != nil {
 		handler.writeError(c, http.StatusNotFound)
 		return
 	}
 	c.JSON(http.StatusOK, jobDeleteResponse{Deleted: true})
+}
+
+func canMutateJob(principal auth.Principal, job *domain.TrainingJob) bool {
+	return job != nil && (job.UserID == principal.Subject || principal.Allowed(domain.RoleTenantAdmin))
 }
 
 func (handler *Handler) resolveJob(ctx context.Context, principal auth.Principal, value string) (*domain.TrainingJob, error) {

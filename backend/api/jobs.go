@@ -511,6 +511,10 @@ func (h *Handler) cancelJob(c *gin.Context) {
 		h.writeError(c, http.StatusNotFound, "JOB_NOT_FOUND", "training job was not found")
 		return
 	}
+	if job.UserID != principal.Subject && !principal.Allowed(domain.RoleTenantAdmin) {
+		h.writeError(c, http.StatusForbidden, "JOB_CANCEL_FORBIDDEN", "only the job owner or an administrator can stop this training job")
+		return
+	}
 	if err := h.repository.SetDesiredState(c.Request.Context(), job.TenantID, job.ID, domain.DesiredCanceled); err != nil {
 		status := http.StatusInternalServerError
 		if strings.Contains(err.Error(), "not found") {

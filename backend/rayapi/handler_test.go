@@ -325,6 +325,35 @@ func TestRayPackagePutHeadAndSubmitAreOwnerScoped(t *testing.T) {
 	}
 }
 
+func TestRayStopAndDeleteRequireJobOwnershipOrAdministratorRole(t *testing.T) {
+	jobs := []domain.TrainingJob{{
+		ID: "job-other", ExternalSubmissionID: "external-other", TenantID: "tenant-a", UserID: "user-b",
+		Spec: domain.JobSpec{Name: "other-job"},
+	}}
+
+	for _, endpoint := range []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodPost, path: "/ray/api/jobs/external-other/stop"},
+		{method: http.MethodDelete, path: "/ray/api/jobs/external-other"},
+	} {
+		repository := &rayTestRepository{jobs: append([]domain.TrainingJob(nil), jobs...)}
+		engineer := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal}
+		response := rayRequest(rayRouter(t, repository, &rayTestStore{}, engineer), endpoint.method, endpoint.path, "")
+		if response.Code != http.StatusNotFound || repository.canceled != "" {
+			t.Fatalf("engineer must not mutate another user's Ray job via %s: status=%d canceled=%q body=%s", endpoint.method, response.Code, repository.canceled, response.Body.String())
+		}
+	}
+
+	repository := &rayTestRepository{jobs: append([]domain.TrainingJob(nil), jobs...)}
+	tenantAdmin := auth.Principal{Subject: "team-admin", TenantID: "tenant-a", Roles: []string{domain.RoleTenantAdmin}, AuthType: auth.AuthTypeLocal}
+	response := rayRequest(rayRouter(t, repository, &rayTestStore{}, tenantAdmin), http.MethodPost, "/ray/api/jobs/external-other/stop", "")
+	if response.Code != http.StatusOK || repository.canceled != "tenant-a/job-other" {
+		t.Fatalf("tenant administrator must stop own-tenant jobs: status=%d canceled=%q body=%s", response.Code, repository.canceled, response.Body.String())
+	}
+}
+
 func TestRayPackageSubmitWithoutPlatformMetadataUsesConfiguredDefaults(t *testing.T) {
 	principal := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{"Engineer"}, AuthType: auth.AuthTypeOIDC}
 	repository := &rayTestRepository{}

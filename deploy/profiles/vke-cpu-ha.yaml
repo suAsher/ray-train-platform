@@ -26,8 +26,8 @@ backend:
   rayAPIDefaultImage: harbor.wellspiking.ai/guofeng.su/ray-train-pytorch@sha256:2102761c7a5e3af6ff33225182d5b936d18601f7d5697bc11187922df58cfa7f
   image:
     repository: ray-train-backend
-    tag: nvme-auto-20260826-r1
-    digest: sha256:f06560de3d6b6a8213e8ba3e8404b0a427ed0712697776b8c1ae6bb70a360431
+    tag: authz-20260827-r1
+    digest: sha256:5fabf0053f9a262122a77cc55db06d67082c165bdd2caf065facbf644eb3f616
   oidc:
     issuerURL: https://keycloak.test.invalid/realms/ai
     clientID: ray-training-platform-test
@@ -65,8 +65,8 @@ frontend:
   nodeSelector: {}
   image:
     repository: ray-train-frontend
-    tag: nvme-auto-20260826-r1
-    digest: sha256:f9e18c15084c8d6bffb5eebd09fb6186ee36c23e45dbdf2d7281efdded4f0a1d
+    tag: authz-20260827-r1
+    digest: sha256:c01ada5584cb90e58a9eb99c908ff2ef68ef1ad22f82289f2215bb015368705c
   service:
     type: ClusterIP
     port: 80

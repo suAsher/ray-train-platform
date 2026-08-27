@@ -49,7 +49,7 @@
             title="仅在本任务的 RayCluster 运行期间可用"
             @click="openRayDashboard"
           >Ray Dashboard</el-button>
-          <el-button type="danger" plain class="!rounded-xl" icon="CircleClose" @click="cancelJob">停止训练</el-button>
+          <el-button v-if="canCancelCurrentJob" type="danger" plain class="!rounded-xl" icon="CircleClose" @click="cancelJob">停止训练</el-button>
         </div>
       </div>
     </div>
@@ -332,7 +332,8 @@ import { apiGet, apiPost } from '../../api/client'
 import { fetchJobGPUHistory } from '../../api/jobGpuMetrics'
 import JobArtifactBrowser from '../../components/JobArtifactBrowser.vue'
 import GPUTrendChart from '../../components/gpu/GPUTrendChart.vue'
-import { userId } from '../../stores/session'
+import { roles, userId } from '../../stores/session'
+import { canCancelJob } from '../../jobPermissions'
 import { canOpenRayDashboard, jobDashboardAccessPath } from '../../jobDashboard'
 import { buildLogStreamCards } from '../../jobLogStreams'
 import { logPagePath, mergeLogEntries, normalizeLogPage } from '../../jobLogPagination'
@@ -390,6 +391,10 @@ const canResumeFromCheckpoint = computed(() => (
   jobDetail.value?.userId === userId.value &&
   terminalStates.has(jobDetail.value?.status)
 ))
+const canCancelCurrentJob = computed(() => canCancelJob(jobDetail.value, {
+  userId: userId.value,
+  roles: roles.value,
+}))
 const showRayDashboard = computed(() => canOpenRayDashboard(jobDetail.value))
 const trainingLoss = computed(() => latestMetric(experiment.value, ['train_loss', 'training_loss', 'loss']))
 const learningRate = computed(() => latestMetric(experiment.value, ['learning_rate', 'lr']))

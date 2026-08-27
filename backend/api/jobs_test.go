@@ -258,6 +258,56 @@ func TestSuperAdminCanReadAndCancelCrossTenantJob(t *testing.T) {
 	}
 }
 
+func TestEngineerCanCancelOnlyOwnJob(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repository := &fakeJobRepository{jobs: []domain.TrainingJob{
+		{ID: "job-owned", TenantID: "team-a", UserID: "user-a", Spec: domain.JobSpec{Name: "owned-job"}},
+		{ID: "job-other", TenantID: "team-a", UserID: "user-b", Spec: domain.JobSpec{Name: "other-job"}},
+	}}
+	handler := NewHandler(repository, Options{})
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("ray-platform-principal", auth.Principal{Subject: "user-a", TenantID: "team-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal})
+		c.Next()
+	})
+	handler.RegisterTrainingRoutes(router.Group("/api/v1"))
+
+	denied := httptest.NewRecorder()
+	router.ServeHTTP(denied, httptest.NewRequest(http.MethodDelete, "/api/v1/jobs/job-other", nil))
+	if denied.Code != http.StatusForbidden || !strings.Contains(denied.Body.String(), "JOB_CANCEL_FORBIDDEN") {
+		t.Fatalf("engineer must not cancel another user's job, got %d canceled=%q body=%s", denied.Code, repository.canceled, denied.Body.String())
+	}
+	if repository.canceled != "" {
+		t.Fatalf("forbidden cancellation reached repository: %q", repository.canceled)
+	}
+
+	allowed := httptest.NewRecorder()
+	router.ServeHTTP(allowed, httptest.NewRequest(http.MethodDelete, "/api/v1/jobs/job-owned", nil))
+	if allowed.Code != http.StatusAccepted || repository.canceled != "team-a/job-owned/CANCELED" {
+		t.Fatalf("engineer must be able to cancel own job, got %d canceled=%q body=%s", allowed.Code, repository.canceled, allowed.Body.String())
+	}
+}
+
+func TestTenantAdminCanCancelAnotherUsersJobInOwnTenant(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repository := &fakeJobRepository{jobs: []domain.TrainingJob{
+		{ID: "job-member", TenantID: "team-a", UserID: "user-a", Spec: domain.JobSpec{Name: "member-job"}},
+	}}
+	handler := NewHandler(repository, Options{})
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("ray-platform-principal", auth.Principal{Subject: "team-admin", TenantID: "team-a", Roles: []string{domain.RoleTenantAdmin}, AuthType: auth.AuthTypeLocal})
+		c.Next()
+	})
+	handler.RegisterTrainingRoutes(router.Group("/api/v1"))
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/api/v1/jobs/job-member", nil))
+	if response.Code != http.StatusAccepted || repository.canceled != "team-a/job-member/CANCELED" {
+		t.Fatalf("tenant administrator must cancel own-tenant member jobs, got %d canceled=%q body=%s", response.Code, repository.canceled, response.Body.String())
+	}
+}
+
 func TestEngineerCannotSelectAnotherTenantJobList(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repository := &fakeJobRepository{jobs: []domain.TrainingJob{{ID: "job-team-b", TenantID: "team-b"}}}

@@ -128,7 +128,7 @@
             <el-button type="primary" link size="small" @click="goToDetail(scope.row.id)">控制台</el-button>
             <el-button link size="small" @click="rerun(scope.row)">再来一次</el-button>
             <el-button v-if="canResume(scope.row)" type="warning" link size="small" @click="resume(scope.row)">续训</el-button>
-            <el-button v-else type="danger" link size="small" @click="deleteJob(scope.row.id)">停止</el-button>
+            <el-button v-if="canStop(scope.row)" type="danger" link size="small" @click="deleteJob(scope.row.id)">停止</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -141,7 +141,8 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { apiDelete, apiGet } from '../../api/client'
-import { isAdmin, userId } from '../../stores/session'
+import { isAdmin, roles, userId } from '../../stores/session'
+import { canCancelJob } from '../../jobPermissions'
 import { displayJobOwner } from '../../jobOwner'
 import { finishedLabel, formatDateTime, jobTimeline, originLabel } from '../../jobTimeline'
 import { copyToClipboard } from '../../clipboard'
@@ -293,6 +294,7 @@ const lastJob = computed(() => scopedJobs.value.find((job) => job.isMine) || nul
 // A run can only be continued from its own managed result directory, which the
 // platform creates per job under the selected output space.
 const canResume = (job) => TERMINAL_STATES.includes(job.status) && Boolean(job.spec?.output?.space)
+const canStop = (job) => canCancelJob(job, { userId: userId.value, roles: roles.value })
 
 const rerun = (job) => {
   router.push({
