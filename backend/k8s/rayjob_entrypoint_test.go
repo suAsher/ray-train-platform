@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -57,5 +58,24 @@ func TestRenderRayJobEntrypointQuotesArgumentsSafely(t *testing.T) {
 	// The script is one argument, so it must stay quoted as a single token.
 	if !strings.Contains(entrypoint, "'print('\"'\"'hello world'\"'\"')'") {
 		t.Fatalf("script argument was not safely quoted: %q", entrypoint)
+	}
+}
+
+func TestRenderManagedRayJobEntrypointQuotesArgumentsSafelyWithoutMutatingSpec(t *testing.T) {
+	job := managedRenderJob(domain.RayVersionProduction)
+	job.Spec.Entrypoint = domain.Entrypoint{
+		Command: []string{"python", "-c"},
+		Args:    []string{"import os; os.system('touch /tmp/pwned')", "$(id)"},
+	}
+	wantCommand := append([]string(nil), job.Spec.Entrypoint.Command...)
+	wantArgs := append([]string(nil), job.Spec.Entrypoint.Args...)
+	manifest := managedManifest(t, job)
+	entrypoint, _, _ := unstructured.NestedString(manifest.Object, "spec", "entrypoint")
+	want := "raytrain-managed --nodes 2 --gpus-per-node 8 --cpus-per-node 32 --max-failures 3 -- python -c 'import os; os.system('\"'\"'touch /tmp/pwned'\"'\"')' '$(id)'"
+	if entrypoint != want {
+		t.Fatalf("managed user command was not shell-quoted safely:\n got: %q\nwant: %q", entrypoint, want)
+	}
+	if !reflect.DeepEqual(job.Spec.Entrypoint.Command, wantCommand) || !reflect.DeepEqual(job.Spec.Entrypoint.Args, wantArgs) {
+		t.Fatalf("renderer mutated caller-owned command: command=%#v args=%#v", job.Spec.Entrypoint.Command, job.Spec.Entrypoint.Args)
 	}
 }

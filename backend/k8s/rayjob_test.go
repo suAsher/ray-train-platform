@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"ray-train-platform-backend/domain"
 )
 
@@ -180,6 +181,49 @@ func TestRenderRayJobRoutesRayTrainWorkersThroughLauncher(t *testing.T) {
 	spec, _, _ := nestedMap(manifest.Object, "spec")
 	if got := spec["entrypoint"]; got != "raytrain-launch --mode ray_train --workers 2 --gpus-per-worker 1 -- python train.py --epochs 3" {
 		t.Fatalf("unexpected Ray Train launcher entrypoint: %#v", got)
+	}
+}
+
+func TestLegacyRayTrainExecutionModeStillUsesActorLauncher(t *testing.T) {
+	job := validRenderJob()
+	job.Spec.TrainingEngine = domain.TrainingEngineRayDDP
+	job.Spec.Execution = domain.ExecutionProfile{Mode: domain.ExecutionModeRayTrain}
+	manifest, err := RenderRayJob(job, testRenderOptions())
+	if err != nil {
+		t.Fatalf("render legacy Ray Train profile: %v", err)
+	}
+	entrypoint, _, _ := unstructured.NestedString(manifest.Object, "spec", "entrypoint")
+	if !strings.HasPrefix(entrypoint, "raytrain-launch --mode ray_train") {
+		t.Fatalf("legacy serialized mode changed meaning: %s", entrypoint)
+	}
+}
+
+func TestRayDDPUsesPerJobRayVersionWithOptionsOnlyAsLegacyFallback(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		jobVersion    string
+		optionVersion string
+		want          string
+	}{
+		{name: "per-job snapshot wins", jobVersion: domain.RayVersionProduction, optionVersion: domain.RayVersionLegacy, want: domain.RayVersionProduction},
+		{name: "option supports pre-migration rows", optionVersion: domain.RayVersionProduction, want: domain.RayVersionProduction},
+		{name: "empty values use legacy default", want: domain.RayVersionLegacy},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			job := validRenderJob()
+			job.Spec.TrainingEngine = domain.TrainingEngineRayDDP
+			job.Spec.RayVersion = test.jobVersion
+			options := testRenderOptions()
+			options.RayVersion = test.optionVersion
+			manifest, err := RenderRayJob(job, options)
+			if err != nil {
+				t.Fatalf("render ray-ddp job: %v", err)
+			}
+			got, _, _ := unstructured.NestedString(manifest.Object, "spec", "rayClusterSpec", "rayVersion")
+			if got != test.want {
+				t.Fatalf("rayVersion=%q want %q", got, test.want)
+			}
+		})
 	}
 }
 

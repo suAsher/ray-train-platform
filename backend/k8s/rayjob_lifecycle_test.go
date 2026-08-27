@@ -1,6 +1,8 @@
 package k8s
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -18,6 +20,42 @@ func renderSpec(t *testing.T, job domain.TrainingJob) map[string]any {
 		t.Fatalf("manifest has no spec: %v", err)
 	}
 	return spec
+}
+
+func TestPreUpgradeRayTrainJobKeepsLegacyLifecycleAndLauncherFields(t *testing.T) {
+	job := validRenderJob()
+	job.Spec.TrainingEngine = ""
+	job.Spec.RayVersion = ""
+	job.Spec.Execution = domain.ExecutionProfile{Mode: domain.ExecutionModeRayTrain}
+	manifest, err := RenderRayJob(job, testRenderOptions())
+	if err != nil {
+		t.Fatalf("render pre-upgrade job: %v", err)
+	}
+
+	spec, _, _ := unstructured.NestedMap(manifest.Object, "spec")
+	if got := spec["entrypoint"]; got != "raytrain-launch --mode ray_train --workers 2 --gpus-per-worker 8 -- python train.py --epochs 3" {
+		t.Fatalf("legacy launcher changed: %#v", got)
+	}
+	cluster := spec["rayClusterSpec"].(map[string]any)
+	if got := cluster["rayVersion"]; got != domain.RayVersionLegacy {
+		t.Fatalf("legacy Ray version changed: %#v", got)
+	}
+	workers := cluster["workerGroupSpecs"].([]any)
+	worker := workers[0].(map[string]any)
+	constraints, found, _ := nestedSlice(worker, "template", "spec", "topologySpreadConstraints")
+	if !found || len(constraints) != 1 {
+		t.Fatalf("legacy multi-node topology spread changed: %#v", constraints)
+	}
+	if spec["suspend"] != true || spec["ttlSecondsAfterFinished"] != int64(defaultFailureCleanupTTLSeconds) {
+		t.Fatalf("legacy lifecycle changed: suspend=%#v ttl=%#v", spec["suspend"], spec["ttlSecondsAfterFinished"])
+	}
+	runtimeEnv := spec["runtimeEnvYAML"].(string)
+	encoded := fmt.Sprintf("%#v", manifest.Object)
+	for _, forbidden := range []string{"RAY_TRAIN_V2_ENABLED", "PLATFORM_TRAINING_ENGINE", "PLATFORM_JOB_ID", "callback", "Callback"} {
+		if strings.Contains(runtimeEnv, forbidden) || strings.Contains(encoded, forbidden) {
+			t.Fatalf("pre-upgrade job gained managed field %q", forbidden)
+		}
+	}
 }
 
 // A finished RayJob must tear its RayCluster down, otherwise every completed

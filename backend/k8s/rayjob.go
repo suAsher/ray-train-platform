@@ -134,10 +134,7 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	if clusterSpecField != "rayClusterConfig" && clusterSpecField != "rayClusterSpec" {
 		return nil, fmt.Errorf("unsupported RayJob cluster spec field %q", clusterSpecField)
 	}
-	rayVersion := strings.TrimSpace(options.RayVersion)
-	if rayVersion == "" {
-		rayVersion = "2.35.0"
-	}
+	rayVersion := resolvedRayVersion(job.Spec, options)
 	workerReplicas := int64(job.Spec.Resources.WorkerReplicas)
 	gpusPerWorker := int64(job.Spec.Resources.GPUsPerWorker)
 	workerCPU := strconv.FormatInt(job.Spec.Resources.CPUPerWorker, 10)
@@ -148,7 +145,7 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	if strings.TrimSpace(workerMemory) == "" {
 		workerMemory = "32Gi"
 	}
-	entrypoint := executionProfileEntrypoint(job.Spec)
+	entrypoint := trainingEntrypoint(job.Spec)
 	options.MLflow.jobID = job.ID
 	options.MLflow.tenantID = job.TenantID
 	options.MLflow.userID = job.UserID
@@ -168,10 +165,14 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	workerPod := podTemplate("ray-worker", job.Spec.Image, workerCPU, workerMemory, gpusPerWorker, job.Spec.Source, job.Spec, options, false, true, false)
 	addPodLabels(headPod, job.ID, job.TenantID)
 	addPodLabels(workerPod, job.ID, job.TenantID)
-	if job.Spec.Execution.ResolvedMode() == domain.ExecutionModeRayTrain {
-		// A Ray-managed DDP worker represents one physical training node. Require
+	managedMultiNode := job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain && workerReplicas > 1
+	legacyRayTrain := job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayDDP && job.Spec.Execution.ResolvedMode() == domain.ExecutionModeRayTrain
+	if managedMultiNode || legacyRayTrain {
+		// Each distributed worker represents one physical training node. Require
 		// an even host spread so a multi-worker submission is a real multi-node
-		// validation rather than two worker Pods packed onto one 8-GPU server.
+		// run rather than two worker Pods packed onto one 8-GPU server. The legacy
+		// ray_train profile retains its historical behavior, while the managed
+		// engine applies this independently of the legacy execution mode.
 		workerPod["spec"].(map[string]any)["topologySpreadConstraints"] = []any{map[string]any{
 			"maxSkew":           int64(1),
 			"minDomains":        int64(2),
@@ -229,6 +230,37 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 		"spec": jobSpecFields(job, clusterSpecField, clusterSpec, entrypoint, submitterPod),
 	}
 	return &unstructured.Unstructured{Object: jobObject}, nil
+}
+
+func resolvedRayVersion(spec domain.JobSpec, options RenderOptions) string {
+	if version := strings.TrimSpace(spec.RayVersion); version != "" {
+		return version
+	}
+	if version := strings.TrimSpace(options.RayVersion); version != "" {
+		return version
+	}
+	return domain.RayVersionLegacy
+}
+
+// trainingEntrypoint routes on the immutable training engine before consulting
+// the legacy execution profile. This preserves the historical meaning of
+// execution.mode=ray_train while allowing the official managed Ray Train
+// driver to own worker orchestration for explicitly selected jobs.
+func trainingEntrypoint(spec domain.JobSpec) []string {
+	if spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain {
+		return executionProfileEntrypoint(spec)
+	}
+	command := append([]string(nil), spec.Entrypoint.Command...)
+	command = append(command, spec.Entrypoint.Args...)
+	launcher := []string{
+		"raytrain-managed",
+		"--nodes", strconv.Itoa(spec.Resources.WorkerReplicas),
+		"--gpus-per-node", strconv.Itoa(spec.Resources.GPUsPerWorker),
+		"--cpus-per-node", strconv.FormatInt(spec.Resources.CPUPerWorker, 10),
+		"--max-failures", strconv.Itoa(spec.Managed.MaxFailures),
+		"--",
+	}
+	return append(launcher, command...)
 }
 
 // executionProfileEntrypoint keeps compatibility for persisted V1 jobs while routing
@@ -414,7 +446,7 @@ func jobSpecFields(job domain.TrainingJob, clusterSpecField string, clusterSpec 
 		// The working directory comes from the runtime env below, which is also
 		// what ships the materialized source to the driver and workers.
 		"entrypoint":     shellJoin(entrypoint),
-		"runtimeEnvYAML": "working_dir: /workspace\nenv_vars:\n  PYTHONUNBUFFERED: \"1\"\n",
+		"runtimeEnvYAML": runtimeEnvironmentYAML(job),
 		clusterSpecField: clusterSpec,
 		// Release the GPUs as soon as the run ends; without this the RayCluster
 		// outlives the job and the worker Pods keep their nvidia.com/gpu claims.
@@ -439,6 +471,17 @@ func jobSpecFields(job domain.TrainingJob, clusterSpecField string, clusterSpec 
 		spec["activeDeadlineSeconds"] = job.Spec.TimeoutSeconds
 	}
 	return spec
+}
+
+func runtimeEnvironmentYAML(job domain.TrainingJob) string {
+	runtimeEnv := "working_dir: /workspace\nenv_vars:\n  PYTHONUNBUFFERED: \"1\"\n"
+	if job.Spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain {
+		return runtimeEnv
+	}
+	return runtimeEnv +
+		"  RAY_TRAIN_V2_ENABLED: \"1\"\n" +
+		"  PLATFORM_TRAINING_ENGINE: \"ray-train\"\n" +
+		"  PLATFORM_JOB_ID: " + strconv.Quote(job.ID) + "\n"
 }
 
 func podTemplate(containerName, image, cpu, memory string, gpus int64, source domain.CodeSource, jobSpec domain.JobSpec, options RenderOptions, head, mountData, materializeSource bool) map[string]any {
