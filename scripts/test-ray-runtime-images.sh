@@ -165,16 +165,25 @@ assert_contracts() {
   fi
 
   if [[ ! -e "${root_dir}/images/workspace/raytrain-managed" ]]; then
-    local managed_preflight
-    if managed_preflight="$(DRY_RUN=true IMAGE_TAG=contract BUILD_TARGETS=pytorch-ray-train bash "${root_dir}/build-image.sh" 2>&1)"; then
-      echo 'managed image target succeeded without its real COPY source' >&2
-      exit 1
-    fi
-    grep -Fq 'pytorch-ray-train requires images/workspace/raytrain-managed from Task 9' <<<"$managed_preflight"
-    if grep -Fq 'unbound variable' <<<"$managed_preflight"; then
-      echo 'managed preflight triggered a secondary cleanup trap failure' >&2
-      exit 1
-    fi
+    local managed_preflight managed_targets
+    for managed_targets in \
+      'pytorch-ray-train' \
+      'pytorch-ray-ddp,pytorch-ray-train' \
+      'workspace-ray256,pytorch-ray-train'; do
+      if managed_preflight="$(DRY_RUN=true IMAGE_TAG=contract BUILD_TARGETS="$managed_targets" bash "${root_dir}/build-image.sh" 2>&1)"; then
+        echo "managed image target list succeeded without its real COPY source: ${managed_targets}" >&2
+        exit 1
+      fi
+      grep -Fq 'pytorch-ray-train requires images/workspace/raytrain-managed from Task 9' <<<"$managed_preflight"
+      if grep -Eq -- '(^--- Building|docker (build|push))' <<<"$managed_preflight"; then
+        echo "managed target validation started a build before completing preflight: ${managed_targets}" >&2
+        exit 1
+      fi
+      if grep -Fq 'unbound variable' <<<"$managed_preflight"; then
+        echo 'managed preflight triggered a secondary cleanup trap failure' >&2
+        exit 1
+      fi
+    done
   fi
 }
 

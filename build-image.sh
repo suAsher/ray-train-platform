@@ -244,7 +244,6 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
         echo "ERROR: production runtime variants require RAY_VERSION=$RAY_PRODUCTION_VERSION" >&2
         exit 1
       }
-      break
       ;;
   esac
 done
