@@ -62,6 +62,12 @@ func validateLocalJobSpec(spec domain.JobSpec, defaults localJobSpecDefaults) er
 	if defaults.cacheSize && candidate.Cache.Mode == domain.CacheModeRuntime && strings.TrimSpace(candidate.Cache.Size) == "" {
 		candidate.Cache.Size = localValidationCacheSize
 	}
+	// Ray version is an immutable server-side image-catalog decision. Managed
+	// submissions need a version only so the shared domain validator can check
+	// their shape locally; this sentinel is never copied back into the request.
+	if candidate.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain && strings.TrimSpace(candidate.RayVersion) == "" {
+		candidate.RayVersion = domain.RayVersionProduction
+	}
 	if err := candidate.Validate(); err != nil {
 		return err
 	}

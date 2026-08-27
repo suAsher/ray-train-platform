@@ -5,7 +5,20 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"ray-train-platform-backend/domain"
 )
+
+func TestRenderSubmitCommandIncludesEngineOnlyWhenBothEnginesAreAdvertised(t *testing.T) {
+	both := PlatformRuntimeLimits{AvailableEngines: []string{"ray-ddp", "ray-train"}, ManagedEnabled: true}
+	if got := renderSubmitCommand(domain.TrainingEngineRayTrain, both); got != "spk-rayjob submit --engine ray-train --watch" {
+		t.Fatalf("managed-capable command=%q", got)
+	}
+	legacy := PlatformRuntimeLimits{AvailableEngines: []string{"ray-ddp"}}
+	if got := renderSubmitCommand(domain.TrainingEngineRayDDP, legacy); got != "spk-rayjob submit --watch" {
+		t.Fatalf("legacy-only command must not advertise engine selection: %q", got)
+	}
+}
 
 // Raw JSON forced every user to pipe the CLI through jq to answer "did it
 // run?". The default output is now readable; --output json keeps scripts and
@@ -34,7 +47,7 @@ func TestRenderJobTableSummarisesTheFieldsAUserActsOn(t *testing.T) {
 }
 
 func TestRenderJobDetailShowsStateReasonAndGovernedOutput(t *testing.T) {
-	payload := json.RawMessage(`{"id":"job-9","spec":{"name":"bevfusion","execution":{"mode":"torchrun"},
+	payload := json.RawMessage(`{"id":"job-9","spec":{"name":"bevfusion","trainingEngine":"ray-train","execution":{"mode":"torchrun"},
 	  "resources":{"workerReplicas":1,"gpusPerWorker":8},"output":{"space":"my-runs","relativePath":"bevfusion"}},
 	  "observedState":"FAILED","statusReason":"Error","statusMessage":"CUDA out of memory","rayJobName":"bevfusion"}`)
 
@@ -43,10 +56,21 @@ func TestRenderJobDetailShowsStateReasonAndGovernedOutput(t *testing.T) {
 		t.Fatalf("render job detail: %v", err)
 	}
 	text := output.String()
-	for _, expected := range []string{"job-9", "FAILED", "CUDA out of memory", "torchrun", "8"} {
+	for _, expected := range []string{"job-9", "FAILED", "CUDA out of memory", "ray-train", "torchrun", "8"} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("expected %q in:\n%s", expected, text)
 		}
+	}
+}
+
+func TestRenderLegacyJobDetailResolvesOmittedEngineToRayDDP(t *testing.T) {
+	payload := json.RawMessage(`{"id":"job-old","spec":{"name":"old","execution":{"mode":"torchrun"},"resources":{"workerReplicas":1,"gpusPerWorker":8}}}`)
+	var output bytes.Buffer
+	if err := renderJobDetail(&output, payload); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "ray-ddp") {
+		t.Fatalf("an omitted pre-upgrade engine must render as ray-ddp:\n%s", output.String())
 	}
 }
 

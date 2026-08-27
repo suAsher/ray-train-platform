@@ -23,6 +23,7 @@ const (
 	metadataCachePreload   = "platform.cache.preload"
 	metadataInputSpace     = "platform.data.input-space"
 	metadataInputPath      = "platform.data.input-path"
+	metadataTrainingEngine = "platform.training.engine"
 )
 
 var (
@@ -78,6 +79,10 @@ func TranslateSubmitRequestWithDefaults(request JobSubmitRequest, defaults Submi
 }
 
 func translateSubmitRequest(request JobSubmitRequest, resources domain.Resources, queue, image string, cache domain.CacheRequest, input domain.DataLocation) (TranslatedSubmitRequest, error) {
+	engine, managed, err := parseTrainingMetadata(request.Metadata)
+	if err != nil {
+		return TranslatedSubmitRequest{}, err
+	}
 	if strings.TrimSpace(request.Entrypoint) == "" || len(request.Entrypoint) > 8192 {
 		return TranslatedSubmitRequest{}, fmt.Errorf("invalid entrypoint")
 	}
@@ -103,17 +108,36 @@ func translateSubmitRequest(request JobSubmitRequest, resources domain.Resources
 	return TranslatedSubmitRequest{
 		Package: packageName,
 		Spec: domain.JobSpec{
-			Name:       "rayjob-" + hex.EncodeToString(nameHash[:])[:24],
-			Image:      image,
-			Entrypoint: domain.Entrypoint{Command: []string{"/bin/sh", "-lc", request.Entrypoint}},
-			Execution:  executionProfileForResources(resources),
-			Resources:  resources,
-			Queue:      queue,
-			Cache:      cache,
-			Input:      input,
+			Name:           "rayjob-" + hex.EncodeToString(nameHash[:])[:24],
+			Image:          image,
+			TrainingEngine: engine,
+			Entrypoint:     domain.Entrypoint{Command: []string{"/bin/sh", "-lc", request.Entrypoint}},
+			Execution:      executionProfileForResources(resources),
+			Resources:      resources,
+			Queue:          queue,
+			Cache:          cache,
+			Input:          input,
+			Managed:        managed,
 		},
 		ExternalSubmissionID: externalID,
 	}, nil
+}
+
+func parseTrainingMetadata(metadata map[string]string) (domain.TrainingEngine, domain.ManagedTrainingPolicy, error) {
+	for key := range metadata {
+		if strings.HasPrefix(key, "platform.training.") && key != metadataTrainingEngine {
+			return "", domain.ManagedTrainingPolicy{}, fmt.Errorf("unsupported training metadata %q", key)
+		}
+	}
+	engine := domain.TrainingEngine(strings.TrimSpace(metadata[metadataTrainingEngine])).Resolved()
+	if engine != domain.TrainingEngineRayDDP && engine != domain.TrainingEngineRayTrain {
+		return "", domain.ManagedTrainingPolicy{}, fmt.Errorf("unsupported training engine %q", engine)
+	}
+	managed := domain.ManagedTrainingPolicy{}
+	if engine == domain.TrainingEngineRayTrain {
+		managed.MaxFailures = 2
+	}
+	return engine, managed, nil
 }
 
 func parseCacheMetadata(metadata map[string]string) (domain.CacheRequest, error) {

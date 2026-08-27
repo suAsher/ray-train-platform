@@ -6,7 +6,17 @@ import (
 	"io"
 	"strings"
 	"text/tabwriter"
+
+	"ray-train-platform-backend/domain"
 )
+
+func renderSubmitCommand(engine domain.TrainingEngine, runtime PlatformRuntimeLimits) string {
+	command := "spk-rayjob submit"
+	if runtime.ManagedAvailable() {
+		command += " --engine " + string(engine.Resolved())
+	}
+	return command + " --watch"
+}
 
 // jobView is the subset of a job the CLI renders. Decoding into a narrow struct
 // rather than a map keeps the output stable when the API adds fields.
@@ -20,9 +30,10 @@ type jobView struct {
 	CreatedAt        string `json:"createdAt"`
 	FinishedAt       string `json:"finishedAt"`
 	Spec             struct {
-		Name      string `json:"name"`
-		Image     string `json:"image"`
-		Execution struct {
+		Name           string                `json:"name"`
+		Image          string                `json:"image"`
+		TrainingEngine domain.TrainingEngine `json:"trainingEngine"`
+		Execution      struct {
 			Mode string `json:"mode"`
 		} `json:"execution"`
 		Resources struct {
@@ -79,6 +90,7 @@ func renderJobDetail(writer io.Writer, payload json.RawMessage) error {
 		{"任务 ID", job.ID},
 		{"名称", orDash(job.Spec.Name)},
 		{"状态", orDash(job.ObservedState)},
+		{"训练引擎", string(job.Spec.TrainingEngine.Resolved())},
 		{"执行方式", orDash(job.Spec.Execution.Mode)},
 		{"规模", gpuSummary(job)},
 		{"镜像", orDash(job.Spec.Image)},

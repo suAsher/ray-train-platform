@@ -768,6 +768,13 @@ git commit -m "build: add ray 2.56 runtime variants"
 
 ### Task 9: Implement the platform-owned `TorchTrainer` driver
 
+**Task 6 compatibility gate:** both `spk-rayjob` and the native Ray Jobs API preserve the
+existing working-directory contract by serializing the user's entrypoint as `/bin/sh -lc <text>`.
+Before enabling `ray-train`, Task 9 must convert that exact legacy representation into a tested,
+safe Python argv form supporting only `python file.py ...` and `python -m module ...`. It must
+reject shell operators, arbitrary executables, and nested `torchrun` before allocating GPUs. Do
+not split the shell string with an ad-hoc parser or pass `/bin/sh -lc` into Train workers.
+
 **Files:**
 - Create: `images/workspace/raytrain_runtime/__init__.py`
 - Create: `images/workspace/raytrain_runtime/entrypoint.py`

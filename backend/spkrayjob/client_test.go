@@ -154,6 +154,9 @@ func TestPlatformLimitsDecodesAuthenticatedCachePolicy(t *testing.T) {
 		writeClientSuccess(t, writer, http.StatusOK, map[string]any{"cache": map[string]any{
 			"enabled": true, "modes": []string{"off", "runtime"}, "allowedSizes": []string{"100Gi", "200Gi"},
 			"defaultSize": "200Gi", "maxSize": "500Gi",
+		}, "runtime": map[string]any{
+			"availableEngines": []string{"ray-ddp", "ray-train"}, "managedEnabled": true,
+			"productionRayVersion": "2.56.1", "canaryRayVersion": "2.58.0",
 		}})
 	}))
 	defer server.Close()
@@ -167,6 +170,25 @@ func TestPlatformLimitsDecodesAuthenticatedCachePolicy(t *testing.T) {
 	}
 	if !limits.Cache.Enabled || limits.Cache.DefaultSize != "200Gi" || limits.Cache.MaxSize != "500Gi" || !reflect.DeepEqual(limits.Cache.Modes, []string{"off", "runtime"}) || !reflect.DeepEqual(limits.Cache.AllowedSizes, []string{"100Gi", "200Gi"}) {
 		t.Fatalf("unexpected limits: %+v", limits)
+	}
+	if !limits.Runtime.ManagedEnabled || !reflect.DeepEqual(limits.Runtime.AvailableEngines, []string{"ray-ddp", "ray-train"}) || limits.Runtime.ProductionRayVersion != "2.56.1" {
+		t.Fatalf("unexpected runtime capabilities: %+v", limits.Runtime)
+	}
+}
+
+func TestPlatformLimitsRejectsInconsistentManagedCapabilities(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writeClientSuccess(t, writer, http.StatusOK, map[string]any{"runtime": map[string]any{
+			"availableEngines": []string{"ray-train"}, "managedEnabled": true,
+		}})
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientOptions{ServerURL: server.URL, Token: "test-token", HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.PlatformLimits(context.Background()); err == nil || !strings.Contains(err.Error(), "runtime") {
+		t.Fatalf("inconsistent capabilities must fail closed, got %v", err)
 	}
 }
 

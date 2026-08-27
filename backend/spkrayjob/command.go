@@ -87,6 +87,11 @@ const helpText = `spk-rayjob — 分布式训练任务命令行客户端
   加上 --cache-preload input 后，平台会在每个 Worker 启动前把所选输入预热到双 NVMe；
   不加该参数时不会自动缓存 /mnt/storage/public，只加速 Ray 临时文件和训练代码主动写入缓存的内容。
 
+训练引擎：
+  --engine ray-ddp    默认；兼容现有 Actor + torchrun 单机/多机 DDP
+  --engine ray-train  Ray Train 托管 workers、故障恢复和 Checkpoint；仅在平台开启后可用
+  客户端不接受 Ray 版本参数；版本由平台根据管理员登记的镜像固化。
+
 通用参数：
   --output json    输出原始 JSON，供脚本使用（默认为可读文本）
   --server         平台地址；未提供时读取 SPK_RAYJOB_URL 或已保存的登录配置
@@ -298,10 +303,15 @@ func runInit(arguments []string, stdout io.Writer) error {
 	name := set.String("name", "", "default job name; defaults to the directory name")
 	image := set.String("image", "", "catalogued training image with an explicit tag or sha256 digest")
 	entrypoint := set.String("entrypoint", "python train.py", "training command, without torchrun")
+	engine := set.String("engine", string(domain.TrainingEngineRayDDP), "training engine: ray-ddp or ray-train")
 	gpus := set.Int("gpus-per-worker", 1, "GPUs per worker")
 	workers := set.Int("workers", 1, "worker replicas")
 	if err := set.Parse(arguments); err != nil || set.NArg() != 0 {
 		return errors.New("invalid init arguments")
+	}
+	resolvedEngine, err := parseTrainingEngine(*engine)
+	if err != nil {
+		return err
 	}
 	jobName := sanitizeJobName(*name)
 	if jobName == "" {
@@ -313,6 +323,7 @@ func runInit(arguments []string, stdout io.Writer) error {
 	}
 	starter := project{
 		Name: jobName, Image: strings.TrimSpace(*image), Entrypoint: strings.TrimSpace(*entrypoint),
+		Engine:  string(resolvedEngine),
 		Workers: *workers, GPUsPerWorker: *gpus, CPUPerWorker: 8, MemoryPerWorker: "32Gi",
 		ExecutionMode: string(execution.Mode), Output: projectLocation{Path: jobName},
 	}
@@ -334,6 +345,7 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	name := set.String("name", "", "job DNS name")
 	image := set.String("image", "", "catalogued training image with an explicit tag or sha256 digest")
 	entrypoint := set.String("entrypoint", "", "shell command to run")
+	engine := set.String("engine", string(domain.TrainingEngineRayDDP), "training engine: ray-ddp or ray-train")
 	workers := set.Int("workers", 1, "worker replicas")
 	gpus := set.Int("gpus-per-worker", 1, "GPUs per worker")
 	cpu := set.Int64("cpu-per-worker", 8, "CPUs per worker")
@@ -360,7 +372,7 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	}
 	provided := providedFlags(set)
 	resolved := defaults.merge(submitOverrides{
-		Name: *name, Image: *image, Entrypoint: *entrypoint, Workers: *workers, GPUsPerWorker: *gpus,
+		Name: *name, Image: *image, Entrypoint: *entrypoint, Engine: *engine, Workers: *workers, GPUsPerWorker: *gpus,
 		CPUPerWorker: *cpu, MemoryPerWorker: *memory, ExecutionMode: *executionMode,
 		Cache:                projectCache{Mode: *cacheMode, Size: *cacheSize, Preload: *cachePreload},
 		Input:                projectLocation{Space: *inputSpace, Path: *inputPath},
@@ -369,6 +381,7 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 		providedName:         provided["name"],
 		providedImage:        provided["image"],
 		providedEntrypoint:   provided["entrypoint"],
+		providedEngine:       provided["engine"],
 		providedWorkers:      provided["workers"],
 		providedGPUs:         provided["gpus-per-worker"],
 		providedCPU:          provided["cpu-per-worker"],
@@ -398,6 +411,17 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	client, err := newCommandClient(connection, getenv, stderr)
 	if err != nil {
 		return err
+	}
+	runtimeCapabilities := PlatformRuntimeLimits{}
+	if draft.spec.TrainingEngine == domain.TrainingEngineRayTrain {
+		limits, limitsErr := client.PlatformLimits(ctx)
+		if limitsErr != nil {
+			return fmt.Errorf("读取平台训练引擎能力失败：%w", limitsErr)
+		}
+		runtimeCapabilities = limits.Runtime
+		if !runtimeCapabilities.ManagedAvailable() {
+			return errors.New("当前平台未开启 Ray Train 托管引擎，请改用 --engine ray-ddp")
+		}
 	}
 	resolvedCache, err := resolveProjectCache(ctx, cacheDraft, client)
 	if err != nil {
@@ -433,7 +457,7 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 		if err := writeJSON(stdout, job.Raw); err != nil {
 			return err
 		}
-	} else if _, err := fmt.Fprintf(stdout, "已提交 %s（%s）。查看日志：spk-rayjob logs -f %s\n", job.ID, draft.values.Name, job.ID); err != nil {
+	} else if _, err := fmt.Fprintf(stdout, "已提交 %s（%s）。查看日志：spk-rayjob logs -f %s\n再次提交：%s\n", job.ID, draft.values.Name, job.ID, renderSubmitCommand(spec.TrainingEngine, runtimeCapabilities)); err != nil {
 		return err
 	}
 	if !*watch {
@@ -548,6 +572,10 @@ func (value project) validateForSubmit() error {
 }
 
 func (value project) jobSpec() (domain.JobSpec, error) {
+	engine, err := parseTrainingEngine(value.Engine)
+	if err != nil {
+		return domain.JobSpec{}, err
+	}
 	input, err := commandDataLocation(value.Input.Space, value.Input.Path, "input")
 	if err != nil {
 		return domain.JobSpec{}, err
@@ -577,19 +605,24 @@ func (value project) jobSpec() (domain.JobSpec, error) {
 	if memory == "" {
 		memory = "32Gi"
 	}
-	return domain.JobSpec{
+	spec := domain.JobSpec{
 		Name: strings.TrimSpace(value.Name), Image: strings.TrimSpace(value.Image),
-		Entrypoint: domain.Entrypoint{Command: []string{"/bin/sh", "-lc", strings.TrimSpace(value.Entrypoint)}},
-		Execution:  execution,
-		Resources:  domain.Resources{WorkerReplicas: workers, GPUsPerWorker: gpus, CPUPerWorker: cpu, MemoryPerWorker: memory},
-		Input:      input,
-		Checkpoint: checkpoint,
-		Output:     output,
+		TrainingEngine: engine,
+		Entrypoint:     domain.Entrypoint{Command: []string{"/bin/sh", "-lc", strings.TrimSpace(value.Entrypoint)}},
+		Execution:      execution,
+		Resources:      domain.Resources{WorkerReplicas: workers, GPUsPerWorker: gpus, CPUPerWorker: cpu, MemoryPerWorker: memory},
+		Input:          input,
+		Checkpoint:     checkpoint,
+		Output:         output,
 		Cache: domain.CacheRequest{
 			Mode: domain.CacheMode(strings.TrimSpace(value.Cache.Mode)), Size: strings.TrimSpace(value.Cache.Size),
 			Preload: domain.CachePreloadMode(strings.TrimSpace(value.Cache.Preload)),
 		},
-	}, nil
+	}
+	if engine == domain.TrainingEngineRayTrain {
+		spec.Managed.MaxFailures = 2
+	}
+	return spec, nil
 }
 
 func oneIfZero(value int) int {

@@ -26,6 +26,14 @@ func TestRunHelpUsesProductNeutralTitle(t *testing.T) {
 	if strings.Contains(help, "西井") {
 		t.Fatalf("help must not expose an internal brand: %q", help)
 	}
+	for _, expected := range []string{"--engine ray-ddp", "Actor + torchrun", "--engine ray-train", "workers", "Checkpoint", "平台开启后可用"} {
+		if !strings.Contains(help, expected) {
+			t.Fatalf("help must explain engine semantics and availability using %q: %s", expected, help)
+		}
+	}
+	if strings.Contains(help, "--ray-version") {
+		t.Fatalf("the client must not expose a Ray version override: %s", help)
+	}
 }
 
 func TestRunLoginWritesOwnerOnlyConfigWithoutEchoingToken(t *testing.T) {

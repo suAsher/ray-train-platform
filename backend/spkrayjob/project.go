@@ -7,8 +7,17 @@ import (
 	"strings"
 
 	yamlv3 "gopkg.in/yaml.v3"
+	"ray-train-platform-backend/domain"
 	"sigs.k8s.io/yaml"
 )
+
+func parseTrainingEngine(value string) (domain.TrainingEngine, error) {
+	engine := domain.TrainingEngine(strings.TrimSpace(value)).Resolved()
+	if engine != domain.TrainingEngineRayDDP && engine != domain.TrainingEngineRayTrain {
+		return "", fmt.Errorf("不支持的训练引擎 %q；可选值为 ray-ddp 或 ray-train", value)
+	}
+	return engine, nil
+}
 
 // projectFileName is committed next to the training code. It turns the daily
 // loop into "edit, then run spk-rayjob submit" instead of retyping an approved
@@ -30,6 +39,7 @@ type project struct {
 	Name            string          `json:"name,omitempty"`
 	Image           string          `json:"image,omitempty"`
 	Entrypoint      string          `json:"entrypoint,omitempty"`
+	Engine          string          `json:"engine,omitempty"`
 	Workers         int             `json:"workers,omitempty"`
 	GPUsPerWorker   int             `json:"gpusPerWorker,omitempty"`
 	CPUPerWorker    int64           `json:"cpuPerWorker,omitempty"`
@@ -48,6 +58,7 @@ type submitOverrides struct {
 	Name            string
 	Image           string
 	Entrypoint      string
+	Engine          string
 	Workers         int
 	GPUsPerWorker   int
 	CPUPerWorker    int64
@@ -61,6 +72,7 @@ type submitOverrides struct {
 	providedName         bool
 	providedImage        bool
 	providedEntrypoint   bool
+	providedEngine       bool
 	providedWorkers      bool
 	providedGPUs         bool
 	providedCPU          bool
@@ -84,6 +96,9 @@ func (base project) merge(overrides submitOverrides) project {
 	}
 	if overrides.providedEntrypoint {
 		merged.Entrypoint = overrides.Entrypoint
+	}
+	if overrides.providedEngine {
+		merged.Engine = overrides.Engine
 	}
 	if overrides.providedWorkers {
 		merged.Workers = overrides.Workers
@@ -182,6 +197,7 @@ type starterProject struct {
 	Name            string           `json:"name,omitempty"`
 	Image           string           `json:"image,omitempty"`
 	Entrypoint      string           `json:"entrypoint,omitempty"`
+	Engine          string           `json:"engine,omitempty"`
 	Workers         int              `json:"workers,omitempty"`
 	GPUsPerWorker   int              `json:"gpusPerWorker,omitempty"`
 	CPUPerWorker    int64            `json:"cpuPerWorker,omitempty"`
@@ -207,7 +223,7 @@ func newStarterProject(value project) starterProject {
 		return &cache
 	}
 	return starterProject{
-		Name: value.Name, Image: value.Image, Entrypoint: value.Entrypoint,
+		Name: value.Name, Image: value.Image, Entrypoint: value.Entrypoint, Engine: value.Engine,
 		Workers: value.Workers, GPUsPerWorker: value.GPUsPerWorker, CPUPerWorker: value.CPUPerWorker,
 		MemoryPerWorker: value.MemoryPerWorker, ExecutionMode: value.ExecutionMode,
 		Cache: optionalCache(value.Cache),
@@ -238,6 +254,11 @@ const projectFileHeader = `# spk-rayjob submission defaults for this repository.
 # Commit this file so every teammate submits the same shape of job. Any value
 # can still be overridden by a flag on a single run, for example:
 #   spk-rayjob submit --gpus-per-worker 2 --name quick-check
+#
+# engine:
+#   ray-ddp    兼容引擎：Ray Actor 编排 + 平台 torchrun
+#   ray-train  托管引擎：Ray Train workers + 故障恢复/Checkpoint
+# 省略 engine 时保持 ray-ddp 兼容行为；Ray 版本由平台根据镜像固化。
 #
 # executionMode:
 #   single_gpu  1 worker x 1 GPU

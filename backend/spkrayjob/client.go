@@ -91,7 +91,20 @@ type LogPageOptions struct {
 }
 
 type PlatformLimits struct {
-	Cache PlatformCacheLimits `json:"cache"`
+	Cache   PlatformCacheLimits   `json:"cache"`
+	Runtime PlatformRuntimeLimits `json:"runtime"`
+}
+
+type PlatformRuntimeLimits struct {
+	AvailableEngines     []string `json:"availableEngines"`
+	ProductionRayVersion string   `json:"productionRayVersion"`
+	CanaryRayVersion     string   `json:"canaryRayVersion"`
+	ManagedEnabled       bool     `json:"managedEnabled"`
+	CanaryEnabled        bool     `json:"canaryEnabled"`
+}
+
+func (limits PlatformRuntimeLimits) ManagedAvailable() bool {
+	return limits.ManagedEnabled && containsTrimmed(limits.AvailableEngines, string(domain.TrainingEngineRayDDP)) && containsTrimmed(limits.AvailableEngines, string(domain.TrainingEngineRayTrain))
 }
 
 type PlatformCacheLimits struct {
@@ -359,7 +372,36 @@ func (client *Client) PlatformLimits(ctx context.Context) (PlatformLimits, error
 	}
 	limits.Cache.Modes = append([]string(nil), limits.Cache.Modes...)
 	limits.Cache.AllowedSizes = append([]string(nil), limits.Cache.AllowedSizes...)
+	runtime, err := normalizeRuntimeLimits(limits.Runtime)
+	if err != nil {
+		return PlatformLimits{}, fmt.Errorf("decode platform runtime limits: %w", err)
+	}
+	limits.Runtime = runtime
 	return limits, nil
+}
+
+func normalizeRuntimeLimits(limits PlatformRuntimeLimits) (PlatformRuntimeLimits, error) {
+	normalized := limits
+	normalized.AvailableEngines = make([]string, 0, len(limits.AvailableEngines))
+	seen := make(map[string]struct{}, len(limits.AvailableEngines))
+	for _, raw := range limits.AvailableEngines {
+		engine := strings.TrimSpace(raw)
+		if engine != string(domain.TrainingEngineRayDDP) && engine != string(domain.TrainingEngineRayTrain) {
+			return PlatformRuntimeLimits{}, fmt.Errorf("unsupported engine %q", raw)
+		}
+		if _, duplicate := seen[engine]; duplicate {
+			return PlatformRuntimeLimits{}, fmt.Errorf("duplicate engine %q", engine)
+		}
+		seen[engine] = struct{}{}
+		normalized.AvailableEngines = append(normalized.AvailableEngines, engine)
+	}
+	if limits.ManagedEnabled && !normalized.ManagedAvailable() {
+		return PlatformRuntimeLimits{}, fmt.Errorf("managed engine capability is inconsistent")
+	}
+	if !limits.ManagedEnabled && containsTrimmed(normalized.AvailableEngines, string(domain.TrainingEngineRayTrain)) {
+		return PlatformRuntimeLimits{}, fmt.Errorf("ray-train is advertised while managed engine is disabled")
+	}
+	return normalized, nil
 }
 
 func (client *Client) Status(ctx context.Context, jobID string) (Job, error) {
