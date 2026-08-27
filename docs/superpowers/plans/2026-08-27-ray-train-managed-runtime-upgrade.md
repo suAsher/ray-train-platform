@@ -338,7 +338,7 @@ Disable `ray-train` when version `2.35.0` is selected. Submit this shape:
 
 Run: `cd backend && go test ./domain ./repositories ./api -count=1`
 
-Run: `cd frontend && npm test -- --run imageCatalogAdmin.test.js`
+Run: `cd frontend && npm test -- src/imageCatalogAdmin.test.js`
 
 Expected: PASS.
 
@@ -644,7 +644,7 @@ preserves the previous immutable engine while allowing “从 Checkpoint 续训�
 
 - [ ] **Step 2: Run frontend tests and confirm RED**
 
-Run: `cd frontend && npm test -- --run trainingEngine.test.js submission.test.js useJobForm.test.js`
+Run: `cd frontend && npm test -- src/trainingEngine.test.js src/submission.test.js src/composables/useJobForm.test.js`
 
 Expected: FAIL because the new form fields and helpers are absent.
 
@@ -676,7 +676,7 @@ their new `trainingEngine` is explicitly `ray-train`.
 
 - [ ] **Step 5: Run all frontend tests and production build**
 
-Run: `cd frontend && npm test -- --run`
+Run: `cd frontend && npm test`
 
 Run: `cd frontend && npm run build`
 
@@ -1283,7 +1283,7 @@ NCCL time produces a communication hint, and missing metrics render “暂无数
 
 Run: `cd backend && go test ./observability ./api -run 'TrainingPerformance' -count=1`
 
-Run: `cd frontend && npm test -- --run jobTrainingPerformance.test.js`
+Run: `cd frontend && npm test -- src/jobTrainingPerformance.test.js`
 
 Expected: FAIL because the endpoint and UI model are absent.
 
@@ -1324,7 +1324,7 @@ MLflow, GPU trend, and Ray Dashboard tabs.
 
 Run: `cd backend && go test ./observability ./api -count=1`
 
-Run: `cd frontend && npm test -- --run && npm run build`
+Run: `cd frontend && npm test && npm run build`
 
 Expected: PASS.
 
@@ -1552,7 +1552,7 @@ Run:
 
 ```bash
 cd backend && go test ./... -count=1
-cd ../frontend && npm test -- --run && npm run build
+cd ../frontend && npm test && npm run build
 cd .. && python3 -m unittest discover -s images/workspace/raytrain_runtime -p 'test_*.py' -v
 python3 -m unittest discover -s examples -p '*_test.py' -v
 bash scripts/test-delivery-render.sh
