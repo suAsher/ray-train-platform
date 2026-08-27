@@ -106,6 +106,7 @@ func TestLoadRayTrainRuntimeFlagsAreDisabledByDefaultAndExplicitlyConfigurable(t
 	t.Setenv("PAT_ENABLED", "false")
 	t.Setenv("RAY_TRAIN_MANAGED_ENABLED", "")
 	t.Setenv("RAY_TRAIN_CANARY_ENABLED", "")
+	t.Setenv("RAY_TRAIN_CANARY_TENANTS", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -113,6 +114,9 @@ func TestLoadRayTrainRuntimeFlagsAreDisabledByDefaultAndExplicitlyConfigurable(t
 	}
 	if cfg.RayTrainManagedEnabled || cfg.RayTrainCanaryEnabled {
 		t.Fatalf("runtime flags must default off: %+v", cfg)
+	}
+	if len(cfg.RayTrainCanaryTenants) != 0 {
+		t.Fatalf("canary tenant allowlist must default empty: %v", cfg.RayTrainCanaryTenants)
 	}
 
 	t.Setenv("RAY_TRAIN_MANAGED_ENABLED", "true")
@@ -123,6 +127,21 @@ func TestLoadRayTrainRuntimeFlagsAreDisabledByDefaultAndExplicitlyConfigurable(t
 	}
 	if !cfg.RayTrainManagedEnabled || !cfg.RayTrainCanaryEnabled {
 		t.Fatalf("explicit runtime flags were not retained: %+v", cfg)
+	}
+}
+
+func TestLoadNormalizesRayTrainCanaryTenants(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("RAY_TRAIN_CANARY_ENABLED", "true")
+	t.Setenv("RAY_TRAIN_CANARY_TENANTS", " tenant-a,tenant-b, tenant-a ,, tenant-b ")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load canary tenants: %v", err)
+	}
+	if strings.Join(cfg.RayTrainCanaryTenants, ",") != "tenant-a,tenant-b" {
+		t.Fatalf("unexpected normalized canary tenants: %v", cfg.RayTrainCanaryTenants)
 	}
 }
 

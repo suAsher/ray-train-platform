@@ -168,6 +168,76 @@ func TestNewHandlerWiresRuntimePolicyIntoSubmission(t *testing.T) {
 	}
 }
 
+func TestSubmitScopesCanaryRuntimeToPrincipalTenant(t *testing.T) {
+	reference := "harbor.example/ray-runtime:canary"
+	image := domain.PlatformImage{
+		ID: "canary-image", Name: "Ray canary", Kind: domain.ImageKindTraining, Reference: reference,
+		RayVersion: domain.RayVersionCanary, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayTrain},
+	}
+	tests := []struct {
+		name       string
+		tenantID   string
+		policy     runtimecatalog.Policy
+		wantAccept bool
+	}{
+		{name: "allowlisted tenant", tenantID: "tenant-a", policy: runtimecatalog.NewPolicy(true, true, []string{"tenant-a"}), wantAccept: true},
+		{name: "non-allowlisted tenant", tenantID: "tenant-b", policy: runtimecatalog.NewPolicy(true, true, []string{"tenant-a"})},
+		{name: "empty allowlist", tenantID: "tenant-a", policy: runtimecatalog.NewPolicy(true, true, nil)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &submissionServiceRepository{}
+			service := NewSubmissionService(repository, SubmissionServiceOptions{
+				Images:        &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{image}}},
+				RuntimePolicy: test.policy,
+				NewID:         func() (string, error) { return "job-canary-snapshot", nil },
+			})
+			spec := submissionSpec(reference)
+			spec.TrainingEngine = domain.TrainingEngineRayTrain
+
+			job, err := service.Submit(context.Background(), SubmissionInput{
+				Principal: auth.Principal{Subject: "user-a", TenantID: test.tenantID, Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+				Spec:      spec, Origin: domain.SubmissionOriginPortal,
+			})
+			if test.wantAccept {
+				if err != nil || job.Spec.RayVersion != domain.RayVersionCanary {
+					t.Fatalf("job=%+v err=%v", job, err)
+				}
+				return
+			}
+			if !errors.Is(err, ErrSubmissionImageNotAllowed) || repository.created != nil {
+				t.Fatalf("non-canary tenant was not rejected: job=%+v err=%v", repository.created, err)
+			}
+		})
+	}
+}
+
+func TestSubmissionServiceDefensivelyCopiesRuntimePolicy(t *testing.T) {
+	reference := "harbor.example/ray-runtime:canary"
+	tenants := []string{"tenant-a"}
+	policy := runtimecatalog.NewPolicy(true, true, tenants)
+	service := NewSubmissionService(&submissionServiceRepository{}, SubmissionServiceOptions{
+		Images: &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{{
+			ID: "canary-image", Name: "Ray canary", Kind: domain.ImageKindTraining, Reference: reference,
+			RayVersion: domain.RayVersionCanary, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayTrain},
+		}}}},
+		RuntimePolicy: policy,
+		NewID:         func() (string, error) { return "job-policy-copy", nil },
+	})
+	tenants[0] = "tenant-b"
+	spec := submissionSpec(reference)
+	spec.TrainingEngine = domain.TrainingEngineRayTrain
+
+	job, err := service.Submit(context.Background(), SubmissionInput{
+		Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+		Spec:      spec, Origin: domain.SubmissionOriginPortal,
+	})
+	if err != nil || job.Spec.RayVersion != domain.RayVersionCanary {
+		t.Fatalf("caller mutation changed service policy: job=%+v err=%v", job, err)
+	}
+}
+
 func TestSubmissionNormalizesAndEnforcesRuntimeCachePolicy(t *testing.T) {
 	tests := []struct {
 		name      string

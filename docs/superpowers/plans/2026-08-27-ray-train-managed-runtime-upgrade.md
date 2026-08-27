@@ -392,6 +392,7 @@ Expected: FAIL because the package and runtime policy are absent.
 type Policy struct {
 	ManagedEnabled bool
 	CanaryEnabled  bool
+	// Canary tenant IDs are held privately and copied by NewPolicy/Clone.
 }
 
 type Snapshot struct {
@@ -415,7 +416,8 @@ func Resolve(image domain.PlatformImage, requested domain.TrainingEngine, policy
 }
 ```
 
-`SubmissionService.Submit()` must look up the selected image, call this resolver, and overwrite
+`SubmissionService.Submit()` must compute `policy.EffectiveForTenant(principal.TenantID)`, look up
+the selected image, call this resolver, and overwrite
 `Spec.TrainingEngine`, `Spec.RayVersion`, and normalized `Spec.Image` before validation. A request
 cannot claim a different Ray version than the catalog.
 
@@ -426,9 +428,11 @@ Parse:
 ```go
 RayTrainManagedEnabled bool
 RayTrainCanaryEnabled  bool
+RayTrainCanaryTenants  []string
 ```
 
-from `RAY_TRAIN_MANAGED_ENABLED=false` and `RAY_TRAIN_CANARY_ENABLED=false`. Add the engine list
+from `RAY_TRAIN_MANAGED_ENABLED=false`, `RAY_TRAIN_CANARY_ENABLED=false`, and the comma-separated
+`RAY_TRAIN_CANARY_TENANTS`. Empty canary tenants deny canary to every tenant. Add the engine list
 and production/canary versions to `/api/v1/limits` so CLI and Portal do not hard-code availability.
 
 - [ ] **Step 5: Run API and configuration tests**
@@ -1357,6 +1361,7 @@ The tests assert:
 ```bash
 grep -F 'RAY_TRAIN_MANAGED_ENABLED' "$rendered"
 grep -F 'RAY_TRAIN_CANARY_ENABLED' "$rendered"
+grep -F 'RAY_TRAIN_CANARY_TENANTS' "$rendered"
 grep -F 'kubectl get rayjobs.ray.io --all-namespaces' ops/kuberay/preflight-upgrade.sh
 grep -F 'kubectl replace -k' ops/kuberay/upgrade-1.6.2.sh
 grep -F 'helm upgrade kuberay-operator' ops/kuberay/upgrade-1.6.2.sh
@@ -1377,11 +1382,13 @@ Expected: FAIL because feature gates and guarded scripts are absent.
 rayTrain:
   managedEnabled: false
   canaryEnabled: false
+  canaryTenants: []
   productionVersion: "2.56.1"
   canaryVersion: "2.58.0"
 ```
 
-The backend Deployment receives matching environment variables. Changing them affects only new
+The backend Deployment receives matching environment variables, including a comma-separated
+`RAY_TRAIN_CANARY_TENANTS` rendered from `rayTrain.canaryTenants`. Changing them affects only new
 submissions; the reconciler uses each persisted job’s immutable snapshot.
 
 - [ ] **Step 4: Implement a fail-closed operator upgrade workflow**

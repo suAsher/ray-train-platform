@@ -123,7 +123,7 @@ func NewSubmissionService(repository JobRepository, options SubmissionServiceOpt
 		repository:            repository,
 		images:                options.Images,
 		imageAllowlist:        append([]string(nil), options.ImageAllowlist...),
-		runtimePolicy:         options.RuntimePolicy,
+		runtimePolicy:         options.RuntimePolicy.Clone(),
 		gitAllowlist:          append([]string(nil), options.GitAllowlist...),
 		clusterQueue:          strings.TrimSpace(options.ClusterQueue),
 		ensureTenantRuntime:   options.EnsureTenantRuntime,
@@ -165,7 +165,8 @@ func (service *SubmissionService) resolveRuntime(ctx context.Context, tenantID s
 			if image.Reference != reference {
 				continue
 			}
-			snapshot, resolveErr := runtimecatalog.Resolve(image, spec.TrainingEngine, service.runtimePolicy)
+			effectivePolicy := service.runtimePolicy.EffectiveForTenant(tenantID)
+			snapshot, resolveErr := runtimecatalog.Resolve(image, spec.TrainingEngine, effectivePolicy)
 			if resolveErr != nil {
 				return domain.JobSpec{}, ErrSubmissionImageNotAllowed
 			}

@@ -111,7 +111,7 @@ func (h *Handler) platformLimits(c *gin.Context) {
 		},
 		ExecutionProfiles: executionProfileDescriptors(limits),
 		Cache:             cachePolicyDescriptorFor(h.localCache),
-		Runtime:           runtimeCapabilityDescriptorFor(h.runtimePolicy),
+		Runtime:           runtimeCapabilityDescriptorFor(h.runtimePolicy.EffectiveForTenant(principal.TenantID)),
 	})
 }
 

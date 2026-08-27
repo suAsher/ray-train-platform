@@ -113,7 +113,7 @@ func TestPlatformLimitsExposeEffectiveRuntimeCapabilities(t *testing.T) {
 	})
 
 	t.Run("feature flags enabled", func(t *testing.T) {
-		handler := NewHandler(&fakeJobRepository{}, Options{RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true, CanaryEnabled: true}})
+		handler := NewHandler(&fakeJobRepository{}, Options{RuntimePolicy: runtimecatalog.NewPolicy(true, true, []string{"local"})})
 		response := httptest.NewRecorder()
 		limitsRouter(handler, &principal).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/limits", nil))
 
@@ -128,6 +128,37 @@ func TestPlatformLimitsExposeEffectiveRuntimeCapabilities(t *testing.T) {
 			t.Fatalf("runtime capabilities retained mutable response state: %q", got)
 		}
 	})
+}
+
+func TestPlatformLimitsScopeCanaryCapabilityToCallerTenant(t *testing.T) {
+	handler := NewHandler(&fakeJobRepository{}, Options{
+		RuntimePolicy: runtimecatalog.NewPolicy(true, true, []string{"tenant-a"}),
+	})
+	tests := []struct {
+		tenantID   string
+		wantCanary bool
+	}{
+		{tenantID: "tenant-a", wantCanary: true},
+		{tenantID: "tenant-b", wantCanary: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.tenantID, func(t *testing.T) {
+			principal := auth.Principal{Subject: "admin", TenantID: test.tenantID, Roles: []string{domain.RoleSuperAdmin}, AuthType: auth.AuthTypeLocal}
+			response := httptest.NewRecorder()
+			limitsRouter(handler, &principal).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/limits", nil))
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+			}
+			if got := decodePlatformLimits(t, response.Body.Bytes()).Runtime.CanaryEnabled; got != test.wantCanary {
+				t.Fatalf("tenant %q canary=%t want %t", test.tenantID, got, test.wantCanary)
+			}
+			if strings.Contains(response.Body.String(), "tenant-a") || strings.Contains(response.Body.String(), "tenant-b") {
+				t.Fatalf("limits leaked canary tenant allowlist: %s", response.Body.String())
+			}
+		})
+	}
 }
 
 func TestPlatformLimitsExposeEnabledRuntimeCachePolicyDefensively(t *testing.T) {

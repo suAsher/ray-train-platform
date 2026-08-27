@@ -83,6 +83,7 @@ type Config struct {
 	RayVersion                       string
 	RayTrainManagedEnabled           bool
 	RayTrainCanaryEnabled            bool
+	RayTrainCanaryTenants            []string
 	RayJobClusterSpecField           string
 	RayJobServiceAccount             string
 	ImagePullSecrets                 []string
@@ -151,6 +152,7 @@ func Load() (Config, error) {
 		DataSpacesPublicRoot:        envOr("DATA_SPACES_PUBLIC_ROOT", domain.DefaultPublicDataRoot),
 		IDCDataSpacesMountCapacity:  strings.TrimSpace(os.Getenv("IDC_DATA_SPACES_MOUNT_CAPACITY")),
 		RayVersion:                  envOr("RAY_VERSION", "2.35.0"),
+		RayTrainCanaryTenants:       splitUniqueList(os.Getenv("RAY_TRAIN_CANARY_TENANTS")),
 		RayJobClusterSpecField:      envOr("KUBERAY_RAYJOB_CLUSTER_SPEC_FIELD", "rayClusterSpec"),
 		RayJobServiceAccount:        os.Getenv("RAY_JOB_SERVICE_ACCOUNT"),
 		ImagePullSecrets:            splitList(os.Getenv("IMAGE_PULL_SECRETS")),
@@ -768,6 +770,20 @@ func splitList(value string) []string {
 		}
 	}
 	return items
+}
+
+func splitUniqueList(value string) []string {
+	items := splitList(value)
+	seen := make(map[string]struct{}, len(items))
+	unique := make([]string, 0, len(items))
+	for _, item := range items {
+		if _, exists := seen[item]; exists {
+			continue
+		}
+		seen[item] = struct{}{}
+		unique = append(unique, item)
+	}
+	return unique
 }
 
 // parseLabelSelector reads a comma-separated key=value list, for example
