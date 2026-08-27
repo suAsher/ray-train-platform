@@ -92,9 +92,15 @@ def execute(entrypoint: PythonEntrypoint) -> None:
     """Execute user Python in the current Ray Train worker process."""
 
     previous = tuple(sys.argv)
+    previous_path = tuple(sys.path)
     try:
         sys.argv = list(entrypoint.argv)
         if entrypoint.kind == "path":
+            script_directory = str(pathlib.Path(entrypoint.target).resolve().parent)
+            if sys.path:
+                sys.path[0] = script_directory
+            else:
+                sys.path.insert(0, script_directory)
             runpy.run_path(entrypoint.target, run_name="__main__")
         elif entrypoint.kind == "module":
             runpy.run_module(entrypoint.target, run_name="__main__", alter_sys=True)
@@ -102,3 +108,4 @@ def execute(entrypoint: PythonEntrypoint) -> None:
             raise ValueError(f"unsupported Python entrypoint kind {entrypoint.kind!r}")
     finally:
         sys.argv = list(previous)
+        sys.path[:] = previous_path

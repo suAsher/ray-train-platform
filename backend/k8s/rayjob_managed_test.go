@@ -45,6 +45,37 @@ func TestManagedJobUsesPerJobVersionAndManagedDriver(t *testing.T) {
 	}
 }
 
+func TestManagedInvalidEntrypointReturnsNoRayWorkload(t *testing.T) {
+	tests := []domain.Entrypoint{
+		{Command: []string{"torchrun", "train.py"}},
+		{Command: []string{"bash", "train.sh"}},
+		{Command: []string{"python", "../train.py"}},
+		{Command: []string{"/bin/sh", "-lc", "python train.py && echo pwned"}},
+	}
+	for _, entrypoint := range tests {
+		job := managedRenderJob(domain.RayVersionProduction)
+		job.Spec.Entrypoint = entrypoint
+		manifest, err := RenderRayJob(job, testRenderOptions())
+		if err == nil || manifest != nil {
+			t.Fatalf("invalid managed entrypoint returned a workload: entrypoint=%#v manifest=%#v err=%v", entrypoint, manifest, err)
+		}
+		if !strings.Contains(err.Error(), "managed entrypoint") {
+			t.Fatalf("invalid managed entrypoint returned unclear error: %v", err)
+		}
+	}
+}
+
+func TestManagedRendererPreservesExplicitZeroPolicyBoundaries(t *testing.T) {
+	job := managedRenderJob(domain.RayVersionProduction)
+	job.Spec.Managed = domain.ManagedTrainingPolicy{}
+	manifest := managedManifest(t, job)
+	entrypoint, _, _ := unstructured.NestedString(manifest.Object, "spec", "entrypoint")
+	want := "raytrain-managed --nodes 2 --gpus-per-node 8 --cpus-per-node 32 --max-failures 0 --checkpoint-every-epochs 0 --checkpoint-keep-latest 0 --checkpoint-keep-best 0 -- python train.py --epochs 3"
+	if entrypoint != want {
+		t.Fatalf("explicit zero policy boundaries were overwritten:\n got: %q\nwant: %q", entrypoint, want)
+	}
+}
+
 func TestManagedEntrypointPropagatesPersistedCheckpointPolicyExactly(t *testing.T) {
 	job := managedRenderJob(domain.RayVersionProduction)
 	job.Spec.Managed = domain.ManagedTrainingPolicy{

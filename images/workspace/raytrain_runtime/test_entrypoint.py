@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import dataclasses
+import os
 import pathlib
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -110,6 +112,31 @@ class EntrypointTest(unittest.TestCase):
 
         run_module.assert_called_once_with("package.train", run_name="__main__", alter_sys=True)
         self.assertEqual(sys.argv, original)
+
+    def test_execute_path_supports_sibling_import_and_restores_process_state_on_failure(self):
+        module_name = "task9_sibling_helper"
+        original_argv = list(sys.argv)
+        original_path = list(sys.path)
+        original_cwd = pathlib.Path.cwd()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = pathlib.Path(temporary_directory)
+            tools = root / "tools"
+            tools.mkdir()
+            (tools / f"{module_name}.py").write_text("VALUE = 'sibling-loaded'\n", encoding="utf-8")
+            (tools / "train.py").write_text(
+                f"from {module_name} import VALUE\nraise RuntimeError(VALUE)\n",
+                encoding="utf-8",
+            )
+            os.chdir(root)
+            try:
+                with self.assertRaisesRegex(RuntimeError, "sibling-loaded"):
+                    execute(PythonEntrypoint("path", "tools/train.py", ("tools/train.py",)))
+            finally:
+                os.chdir(original_cwd)
+                sys.modules.pop(module_name, None)
+
+        self.assertEqual(sys.argv, original_argv)
+        self.assertEqual(sys.path, original_path)
 
 
 if __name__ == "__main__":

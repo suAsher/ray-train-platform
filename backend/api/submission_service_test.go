@@ -125,6 +125,50 @@ func TestSubmissionRejectsManagedCheckpointOverflowBeforePortalOrNativePersisten
 	}
 }
 
+func TestSubmissionRejectsUnsafeManagedEntrypointBeforePersistence(t *testing.T) {
+	reference := "harbor.example/ray-runtime:production"
+	image := domain.PlatformImage{
+		ID: "managed-image", Name: "Ray managed", Kind: domain.ImageKindTraining, Reference: reference,
+		RayVersion: domain.RayVersionProduction, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayTrain},
+	}
+	tests := []struct {
+		name       string
+		origin     domain.SubmissionOrigin
+		entrypoint domain.Entrypoint
+	}{
+		{name: "portal direct torchrun", origin: domain.SubmissionOriginPortal, entrypoint: domain.Entrypoint{Command: []string{"torchrun", "train.py"}}},
+		{name: "native legacy wrapper operator", origin: domain.SubmissionOriginRayCLI, entrypoint: domain.Entrypoint{Command: []string{"/bin/sh", "-lc", "python train.py && echo unsafe"}}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &submissionServiceRepository{}
+			service := NewSubmissionService(repository, SubmissionServiceOptions{
+				Images:        &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{image}}},
+				RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true},
+			})
+			spec := submissionSpec(reference)
+			spec.TrainingEngine = domain.TrainingEngineRayTrain
+			spec.Managed = domain.ManagedTrainingPolicy{
+				MaxFailures: 2,
+				Checkpoint:  domain.CheckpointPolicy{EveryEpochs: 1, KeepLatest: 3, KeepBest: 1},
+			}
+			spec.Entrypoint = test.entrypoint
+
+			job, err := service.Submit(context.Background(), SubmissionInput{
+				Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+				Spec:      spec, Origin: test.origin,
+			})
+			if job != nil || !errors.Is(err, ErrSubmissionInvalidJobSpec) || !strings.Contains(err.Error(), "managed entrypoint") {
+				t.Fatalf("unsafe managed entrypoint returned a job or unclear error: job=%+v err=%v", job, err)
+			}
+			if repository.created != nil || repository.identityCalls != 0 {
+				t.Fatalf("unsafe entrypoint reached persistence: identity=%d job=%+v", repository.identityCalls, repository.created)
+			}
+		})
+	}
+}
+
 func TestSubmitAllowlistFallbackIsLegacyOnly(t *testing.T) {
 	reference := "harbor.example/legacy:stable"
 	principal := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal}

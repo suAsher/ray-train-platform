@@ -64,14 +64,14 @@ func TestRenderRayJobEntrypointQuotesArgumentsSafely(t *testing.T) {
 func TestRenderManagedRayJobEntrypointQuotesArgumentsSafelyWithoutMutatingSpec(t *testing.T) {
 	job := managedRenderJob(domain.RayVersionProduction)
 	job.Spec.Entrypoint = domain.Entrypoint{
-		Command: []string{"python", "-c"},
-		Args:    []string{"import os; os.system('touch /tmp/pwned')", "$(id)"},
+		Command: []string{"python", "tools/train.py"},
+		Args:    []string{"--run-name", "managed training"},
 	}
 	wantCommand := append([]string(nil), job.Spec.Entrypoint.Command...)
 	wantArgs := append([]string(nil), job.Spec.Entrypoint.Args...)
 	manifest := managedManifest(t, job)
 	entrypoint, _, _ := unstructured.NestedString(manifest.Object, "spec", "entrypoint")
-	want := "raytrain-managed --nodes 2 --gpus-per-node 8 --cpus-per-node 32 --max-failures 3 --checkpoint-every-epochs 0 --checkpoint-keep-latest 0 --checkpoint-keep-best 0 -- python -c 'import os; os.system('\"'\"'touch /tmp/pwned'\"'\"')' '$(id)'"
+	want := "raytrain-managed --nodes 2 --gpus-per-node 8 --cpus-per-node 32 --max-failures 3 --checkpoint-every-epochs 0 --checkpoint-keep-latest 0 --checkpoint-keep-best 0 -- python tools/train.py --run-name 'managed training'"
 	if entrypoint != want {
 		t.Fatalf("managed user command was not shell-quoted safely:\n got: %q\nwant: %q", entrypoint, want)
 	}

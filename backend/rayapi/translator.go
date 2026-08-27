@@ -135,7 +135,10 @@ func parseTrainingMetadata(metadata map[string]string) (domain.TrainingEngine, d
 	}
 	managed := domain.ManagedTrainingPolicy{}
 	if engine == domain.TrainingEngineRayTrain {
-		managed.MaxFailures = 2
+		managed = domain.ManagedTrainingPolicy{
+			MaxFailures: 2,
+			Checkpoint:  domain.CheckpointPolicy{EveryEpochs: 1, KeepLatest: 3, KeepBest: 1},
+		}
 	}
 	return engine, managed, nil
 }

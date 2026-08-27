@@ -230,6 +230,11 @@ func (s JobSpec) Validate() error {
 	if len(s.Entrypoint.Command) == 0 || strings.TrimSpace(s.Entrypoint.Command[0]) == "" {
 		return fmt.Errorf("entrypoint command is required")
 	}
+	if s.TrainingEngine.Resolved() == TrainingEngineRayTrain {
+		if err := validateManagedEntrypoint(s.Entrypoint); err != nil {
+			return err
+		}
+	}
 	limits := CurrentResourceLimits()
 	if s.Resources.WorkerReplicas < 1 || s.Resources.WorkerReplicas > limits.MaxWorkerReplicas {
 		return fmt.Errorf("workerReplicas must be between 1 and %d", limits.MaxWorkerReplicas)

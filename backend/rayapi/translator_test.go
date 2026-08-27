@@ -130,7 +130,11 @@ func TestTranslateSubmitRequestCarriesManagedTrainingEngine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("translate managed metadata: %v", err)
 	}
-	if translated.Spec.TrainingEngine != domain.TrainingEngineRayTrain || translated.Spec.RayVersion != "" || translated.Spec.Managed.MaxFailures != 2 {
+	wantManaged := domain.ManagedTrainingPolicy{
+		MaxFailures: 2,
+		Checkpoint:  domain.CheckpointPolicy{EveryEpochs: 1, KeepLatest: 3, KeepBest: 1},
+	}
+	if translated.Spec.TrainingEngine != domain.TrainingEngineRayTrain || translated.Spec.RayVersion != "" || translated.Spec.Managed != wantManaged {
 		t.Fatalf("managed metadata must select engine/default recovery but not Ray version: %+v", translated.Spec)
 	}
 	if got := translated.Spec.Entrypoint.Command; len(got) != 3 || got[0] != "/bin/sh" || got[1] != "-lc" || got[2] != "python train.py" {
