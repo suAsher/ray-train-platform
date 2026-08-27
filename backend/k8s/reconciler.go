@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"time"
+	"unicode/utf8"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"ray-train-platform-backend/domain"
@@ -24,6 +25,7 @@ type JobStore interface {
 	MarkOutboxDone(context.Context, string) error
 	MarkOutboxRetry(context.Context, string, time.Time, string) error
 	ApplyObservedState(context.Context, domain.ObservedJobState) error
+	BeginManagedRecovery(context.Context, domain.ManagedRecoveryRequest) (*domain.TrainingJob, bool, error)
 }
 
 type ExperimentFinalizer interface {
@@ -197,6 +199,13 @@ func (r *Reconciler) ReconcileJob(ctx context.Context, jobID string) error {
 	if err != nil {
 		return err
 	}
+	if terminalJobState(job.ObservedState) {
+		return nil
+	}
+	return r.reconcileLoadedJob(ctx, job)
+}
+
+func (r *Reconciler) reconcileLoadedJob(ctx context.Context, job *domain.TrainingJob) error {
 	if job.DesiredState == domain.DesiredCanceled {
 		return r.reconcileCancellation(ctx, job)
 	}
@@ -223,6 +232,44 @@ func (r *Reconciler) ReconcileJob(ctx context.Context, jobID string) error {
 	observed.KubernetesNS = resource.GetNamespace()
 	observed.RayJobName = resource.GetName()
 	observed.RayJobUID = string(resource.GetUID())
+	if observed.State == domain.StateFailed && managedJobCanRecover(*job) {
+		failureClass, recoverable := managedInfrastructureFailureClass(observed.Reason)
+		if recoverable {
+			recovered, transitioned, recoveryErr := r.store.BeginManagedRecovery(ctx, domain.ManagedRecoveryRequest{
+				JobID: job.ID, ExpectedClusterAttempt: job.ClusterAttempt,
+				FailureClass: failureClass, FailureMessage: managedRecoveryFailureMessage(observed.Message),
+			})
+			if recoveryErr != nil {
+				return recoveryErr
+			}
+			if recovered == nil {
+				return fmt.Errorf("managed recovery returned no job")
+			}
+			if recovered.DesiredState == domain.DesiredCanceled {
+				return r.reconcileCancellation(ctx, recovered)
+			}
+			if transitioned || recovered.ClusterAttempt != job.ClusterAttempt {
+				return r.reconcileLoadedJob(ctx, recovered)
+			}
+		}
+	}
+	if job.ObservedState == domain.StateRecovering {
+		switch observed.State {
+		case domain.StateQueued, domain.StateProvisioning, domain.StateUnknown:
+			observed.State = domain.StateRecovering
+			observed.Reason = job.StatusReason
+			observed.Message = job.StatusMessage
+		case domain.StateSucceeded:
+			// A short recovered attempt may finish between polls. Persist the
+			// required RECOVERING -> RUNNING edge before the terminal result.
+			running := observed
+			running.State = domain.StateRunning
+			running.FinishedAt = nil
+			if err := r.store.ApplyObservedState(ctx, running); err != nil {
+				return err
+			}
+		}
+	}
 	// Persist the terminal result before best-effort cleanup tuning. A transient
 	// Kubernetes update conflict must never leave a completed job non-terminal
 	// in PostgreSQL, where a later reconcile could recreate the workload.
@@ -236,6 +283,32 @@ func (r *Reconciler) ReconcileJob(ctx context.Context, jobID string) error {
 		}
 	}
 	return nil
+}
+
+func managedJobCanRecover(job domain.TrainingJob) bool {
+	return job.DesiredState == domain.DesiredActive &&
+		job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain &&
+		(job.ObservedState == domain.StateRunning || job.ObservedState == domain.StateRecovering)
+}
+
+func managedInfrastructureFailureClass(reason string) (string, bool) {
+	return domain.NormalizeManagedInfrastructureFailureClass(reason)
+}
+
+func managedRecoveryFailureMessage(message string) string {
+	if len(message) <= domain.ManagedRecoveryFailureMessageMaxBytes {
+		return message
+	}
+	bounded := message[:domain.ManagedRecoveryFailureMessageMaxBytes]
+	for !utf8.ValidString(bounded) {
+		bounded = bounded[:len(bounded)-1]
+	}
+	return bounded
+}
+
+func isManagedInfrastructureFailure(reason string) bool {
+	_, ok := managedInfrastructureFailureClass(reason)
+	return ok
 }
 
 func (r *Reconciler) reconcileCancellation(ctx context.Context, job *domain.TrainingJob) error {
@@ -261,5 +334,9 @@ func (r *Reconciler) reconcileCancellation(ctx context.Context, job *domain.Trai
 	if err := r.client.DeleteRayJob(ctx, namespace, name, job.ID); err != nil {
 		return err
 	}
-	return r.store.ApplyObservedState(ctx, domain.ObservedJobState{ID: job.ID, State: domain.StateDeleting, KubernetesNS: namespace, RayJobName: name, RayJobUID: string(resource.GetUID()), ResourceVersion: resource.GetResourceVersion()})
+	state := domain.StateDeleting
+	if job.ObservedState == domain.StateRecovering {
+		state = domain.StateCanceled
+	}
+	return r.store.ApplyObservedState(ctx, domain.ObservedJobState{ID: job.ID, State: state, KubernetesNS: namespace, RayJobName: name, RayJobUID: string(resource.GetUID()), ResourceVersion: resource.GetResourceVersion()})
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 	"time"
 
@@ -458,6 +459,16 @@ func (r *GormRepository) ApplyObservedState(ctx context.Context, observed domain
 		updates["finished_at"] = now
 	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var current JobRecord
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", observed.ID).First(&current).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("job not found")
+			}
+			return fmt.Errorf("lock job for observed state: %w", err)
+		}
+		if isTerminalState(domain.State(current.ObservedState)) {
+			return nil
+		}
 		result := tx.Model(&JobRecord{}).Where("id = ?", observed.ID).Updates(updates)
 		if result.Error != nil {
 			return fmt.Errorf("apply observed state: %w", result.Error)
@@ -482,6 +493,114 @@ func (r *GormRepository) ApplyObservedState(ctx context.Context, observed domain
 		}
 		return nil
 	})
+}
+
+// BeginManagedRecovery atomically snapshots the latest usable checkpoint and
+// advances the outer RayCluster attempt. MaxFailures is the number of retries
+// after the initial attempt: maxFailures=2 permits attempts 2 and 3.
+func (r *GormRepository) BeginManagedRecovery(ctx context.Context, request domain.ManagedRecoveryRequest) (*domain.TrainingJob, bool, error) {
+	if err := request.Validate(); err != nil {
+		return nil, false, err
+	}
+	var current *domain.TrainingJob
+	transitioned := false
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var record JobRecord
+		query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", request.JobID)
+		if err := query.First(&record).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("job not found")
+			}
+			return fmt.Errorf("lock managed recovery job: %w", err)
+		}
+		job, err := record.toDomain()
+		if err != nil {
+			return err
+		}
+		current = job
+		if job.DesiredState != domain.DesiredActive ||
+			job.Spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain ||
+			job.ClusterAttempt != request.ExpectedClusterAttempt ||
+			(job.ObservedState != domain.StateRunning && job.ObservedState != domain.StateRecovering) ||
+			job.ClusterAttempt > job.Spec.Managed.MaxFailures {
+			return nil
+		}
+		output := job.Spec.ResolvedDataMounts.Output
+		if output == nil || output.MountPath != domain.DataMountOutputPath || output.ReadOnly || job.Spec.ResolvedDataMounts.Validate() != nil {
+			return nil
+		}
+
+		checkpoint, found, err := latestUsableRecoveryCheckpoint(tx, record)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return nil
+		}
+		now := time.Now().UTC()
+		updates := map[string]any{
+			"observed_state":       domain.StateRecovering,
+			"status_reason":        strings.TrimSpace(request.FailureClass),
+			"status_message":       request.FailureMessage,
+			"cluster_attempt":      request.ExpectedClusterAttempt + 1,
+			"resume_checkpoint_id": checkpoint.ID,
+			"ray_job_name":         "",
+			"ray_job_uid":          "",
+			"ray_cluster_name":     "",
+			"resource_version":     "",
+			"last_observed_at":     now,
+			"updated_at":           now,
+		}
+		result := tx.Model(&JobRecord{}).
+			Where("id = ? AND cluster_attempt = ? AND desired_state = ? AND training_engine = ? AND observed_state IN ?",
+				request.JobID, request.ExpectedClusterAttempt, domain.DesiredActive,
+				domain.TrainingEngineRayTrain, []domain.State{domain.StateRunning, domain.StateRecovering}).
+			Updates(updates)
+		if result.Error != nil {
+			return fmt.Errorf("advance managed recovery attempt: %w", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			if err := tx.Where("id = ?", request.JobID).First(&record).Error; err != nil {
+				return fmt.Errorf("reload stale managed recovery job: %w", err)
+			}
+			current, err = record.toDomain()
+			return err
+		}
+		transitioned = true
+		if err := tx.Where("id = ?", request.JobID).First(&record).Error; err != nil {
+			return fmt.Errorf("reload recovered managed job: %w", err)
+		}
+		current, err = record.toDomain()
+		return err
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return current, transitioned, nil
+}
+
+func latestUsableRecoveryCheckpoint(tx *gorm.DB, job JobRecord) (TrainingCheckpointRecord, bool, error) {
+	var records []TrainingCheckpointRecord
+	if err := tx.Where("job_id = ? AND tenant_id = ? AND user_id = ? AND complete = ?",
+		job.ID, job.TenantID, job.UserID, true).
+		Order("epoch DESC, step DESC, created_at DESC").Limit(domain.ManagedCheckpointRetentionLimit * 2).Find(&records).Error; err != nil {
+		return TrainingCheckpointRecord{}, false, fmt.Errorf("load managed recovery checkpoints: %w", err)
+	}
+	root := path.Join(domain.DataMountOutputPath, ".platform", "ray-train", job.ID, "checkpoints")
+	for _, record := range records {
+		checkpoint := domain.TrainingCheckpoint{
+			ID: record.ID, JobID: record.JobID, TenantID: record.TenantID, UserID: record.UserID,
+			Epoch: record.Epoch, Step: record.Step, ObjectPath: record.ObjectPath,
+			MetricName: record.MetricName, MetricValue: record.MetricValue, Complete: record.Complete,
+			IsBest: record.IsBest, ManifestSHA256: record.ManifestSHA256, CreatedAt: record.CreatedAt,
+		}
+		expectedObjectPath := path.Join(root, checkpoint.ID)
+		if checkpoint.Validate() != nil || checkpoint.ObjectPath != expectedObjectPath {
+			continue
+		}
+		return record, true, nil
+	}
+	return TrainingCheckpointRecord{}, false, nil
 }
 
 func isTerminalState(state domain.State) bool {

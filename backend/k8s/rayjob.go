@@ -40,6 +40,7 @@ type RenderOptions struct {
 	// the immutable job path and never obtains it from a submission request.
 	TrainingEventBaseURL string
 	trainingEventJobID   string
+	managedResumePath    string
 }
 
 // MLflowOptions carries only non-secret, in-cluster routing information.
@@ -114,6 +115,11 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 			return nil, fmt.Errorf("training event callback: %w", err)
 		}
 		options.TrainingEventBaseURL = trainingEventBaseURL
+		resumePath, err := managedRecoveryCheckpointPath(job)
+		if err != nil {
+			return nil, fmt.Errorf("managed recovery checkpoint: %w", err)
+		}
+		options.managedResumePath = resumePath
 	}
 	if job.Spec.Source.Type != "git" && job.Spec.Source.Type != "workspace" && job.Spec.Source.Type != "workspace-archive" {
 		// Defense in depth for callers that bypass the HTTP submission service.
@@ -439,7 +445,43 @@ func rayJobResourceName(job domain.TrainingJob) string {
 	if persisted := strings.TrimSpace(job.RayJobName); persisted != "" {
 		return persisted
 	}
+	if job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain && job.ClusterAttempt > 1 {
+		suffix := "-a" + strconv.Itoa(job.ClusterAttempt)
+		base := sanitizeDNS(job.ID)
+		if maximum := 63 - len(suffix); len(base) > maximum {
+			base = strings.Trim(base[:maximum], "-")
+		}
+		if base == "" {
+			base = "job"
+		}
+		return base + suffix
+	}
 	return sanitizeDNS(job.ID)
+}
+
+func managedRecoveryCheckpointPath(job domain.TrainingJob) (string, error) {
+	checkpointID := strings.TrimSpace(job.ResumeCheckpointID)
+	if checkpointID == "" {
+		return "", nil
+	}
+	if job.ClusterAttempt <= 1 {
+		return "", fmt.Errorf("resume checkpoint requires a recovery attempt")
+	}
+	if len(checkpointID) > domain.TrainingCheckpointIDMaxBytes || path.Base(checkpointID) != checkpointID {
+		return "", fmt.Errorf("checkpoint ID is not a safe path segment")
+	}
+	for index, char := range checkpointID {
+		valid := (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || (index > 0 && (char == '.' || char == '_' || char == '-'))
+		if !valid {
+			return "", fmt.Errorf("checkpoint ID is not a safe identifier")
+		}
+	}
+	output := job.Spec.ResolvedDataMounts.Output
+	if output == nil || output.MountPath != domain.DataMountOutputPath || output.ReadOnly {
+		return "", fmt.Errorf("recovery requires the governed writable output mount")
+	}
+	return path.Join(domain.DataMountOutputPath, ".platform", "ray-train", job.ID, "checkpoints", checkpointID), nil
 }
 
 func successCleanupTTL(job domain.TrainingJob) int64 {
@@ -520,7 +562,7 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 		map[string]any{"name": "RAY_DISABLE_DOCKER_CPU_WARNING", "value": "1"},
 	}
 	if mountData {
-		env = append(env, platformDataEnvironment(jobSpec)...)
+		env = append(env, platformDataEnvironment(jobSpec, options.managedResumePath)...)
 	}
 	if options.MLflow.Enabled {
 		env = append(env, mlflowEnvironment(options.MLflow)...)
@@ -810,7 +852,7 @@ func appendLocalCache(volumeMounts, volumes []any, cache LocalCacheOptions, head
 	return volumeMounts, volumes
 }
 
-func platformDataEnvironment(spec domain.JobSpec) []any {
+func platformDataEnvironment(spec domain.JobSpec, managedResumePath string) []any {
 	locations := []struct {
 		name  string
 		value string
@@ -856,6 +898,17 @@ func platformDataEnvironment(spec domain.JobSpec) []any {
 			continue
 		}
 		env = append(env, map[string]any{"name": item.name, "value": item.mount.MountPath})
+	}
+	if managedResumePath != "" {
+		filtered := env[:0]
+		for _, value := range env {
+			item, ok := value.(map[string]any)
+			if ok && item["name"] == "PLATFORM_CHECKPOINT_PATH" {
+				continue
+			}
+			filtered = append(filtered, value)
+		}
+		env = append(filtered, map[string]any{"name": "PLATFORM_CHECKPOINT_PATH", "value": managedResumePath})
 	}
 	return env
 }

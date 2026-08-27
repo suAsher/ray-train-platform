@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,8 +18,12 @@ import (
 )
 
 type memoryJobStore struct {
-	job      *domain.TrainingJob
-	observed []domain.ObservedJobState
+	job                  *domain.TrainingJob
+	observed             []domain.ObservedJobState
+	recoveryAllowed      bool
+	recoveryCheckpointID string
+	recoveryRequests     []domain.ManagedRecoveryRequest
+	cancelDuringRecovery bool
 }
 
 type recordingGitCredentialResolver struct {
@@ -63,6 +68,28 @@ func (s *memoryJobStore) ApplyObservedState(_ context.Context, state domain.Obse
 	s.job.KubernetesNS = state.KubernetesNS
 	s.job.RayJobName = state.RayJobName
 	return nil
+}
+
+func (s *memoryJobStore) BeginManagedRecovery(_ context.Context, request domain.ManagedRecoveryRequest) (*domain.TrainingJob, bool, error) {
+	s.recoveryRequests = append(s.recoveryRequests, request)
+	if s.cancelDuringRecovery {
+		s.job.DesiredState = domain.DesiredCanceled
+	}
+	if !s.recoveryAllowed || s.job.DesiredState != domain.DesiredActive || s.job.ClusterAttempt != request.ExpectedClusterAttempt {
+		copy := *s.job
+		return &copy, false, nil
+	}
+	s.job.ClusterAttempt++
+	s.job.ObservedState = domain.StateRecovering
+	s.job.ResumeCheckpointID = s.recoveryCheckpointID
+	s.job.StatusReason = request.FailureClass
+	s.job.StatusMessage = request.FailureMessage
+	s.job.RayJobName = ""
+	s.job.RayJobUID = ""
+	s.job.RayClusterName = ""
+	s.job.ResourceVersion = ""
+	copy := *s.job
+	return &copy, true, nil
 }
 
 func (s *memoryJobStore) ClaimOutbox(context.Context, int) ([]domain.OutboxEvent, error) {
@@ -200,6 +227,227 @@ func TestReconcileCanceledJobDeletesRayJobBeforeMarkingCanceled(t *testing.T) {
 	}
 	if len(store.observed) != 1 || store.observed[0].State != domain.StateDeleting {
 		t.Fatalf("expected deleting observation: %+v", store.observed)
+	}
+}
+
+func managedRecoveryFixture(t *testing.T) (*memoryJobStore, *Client, *dynamicfake.FakeDynamicClient, domain.TrainingJob) {
+	t.Helper()
+	job := managedRenderJob(domain.RayVersionProduction)
+	job.DesiredState = domain.DesiredActive
+	job.ObservedState = domain.StateRunning
+	job.ClusterAttempt = 1
+	job.RayJobName = job.ID
+	job.Spec.Managed.MaxFailures = 2
+	job.Spec.ResolvedDataMounts.Output = &domain.ResolvedDataMount{
+		Space: domain.DataSpaceMyRuns, BindingSpace: domain.DataSpaceWorkspace,
+		ClaimName: "tenant-data", SubPath: "tenants/tenant-a/users/user-01/runs/job-01",
+		MountPath: domain.DataMountOutputPath, ReadOnly: false,
+	}
+	store := &memoryJobStore{job: &job, recoveryAllowed: true, recoveryCheckpointID: "checkpoint-4"}
+	dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
+	client := NewClientFromInterfaces(dynamicClient, nil)
+	manifest := managedManifest(t, job)
+	if err := unstructured.SetNestedMap(manifest.Object, map[string]any{
+		"jobStatus": "FAILED", "reason": "HEAD_POD_LOST", "message": "head node disappeared",
+	}, "status"); err != nil {
+		t.Fatalf("set failed RayJob status: %v", err)
+	}
+	if _, err := dynamicClient.Resource(rayJobGVR).Namespace(manifest.GetNamespace()).Create(context.Background(), manifest, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed failed RayJob: %v", err)
+	}
+	return store, client, dynamicClient, job
+}
+
+func TestFailedManagedClusterCreatesNextAttemptFromCheckpoint(t *testing.T) {
+	store, client, _, job := managedRecoveryFixture(t)
+	reconciler := NewReconciler(store, client, testRenderOptions())
+	if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
+		t.Fatalf("reconcile managed recovery: %v", err)
+	}
+	if len(store.recoveryRequests) != 1 || store.recoveryRequests[0].FailureClass != "HEAD_POD_LOST" {
+		t.Fatalf("unexpected recovery classification: %+v", store.recoveryRequests)
+	}
+	if store.job.ClusterAttempt != 2 || store.job.ObservedState != domain.StateRecovering || store.job.ResumeCheckpointID != "checkpoint-4" {
+		t.Fatalf("unexpected recovered job: %+v", store.job)
+	}
+	if _, err := client.GetRayJob(context.Background(), job.KubernetesNS, job.ID+"-a2"); err != nil {
+		t.Fatalf("next recovery RayJob was not created: %v", err)
+	}
+}
+
+func TestManagedRecoveryUsesExplicitInfrastructureReasonAllowlist(t *testing.T) {
+	for _, test := range []struct {
+		reason string
+		want   bool
+	}{
+		{reason: "DRIVER_POD_LOST", want: true},
+		{reason: "DRIVER_POD_EVICTED", want: true},
+		{reason: "DRIVER_POD_DELETED", want: true},
+		{reason: "DRIVER_POD_NOT_FOUND", want: true},
+		{reason: "HEAD_POD_LOST", want: true},
+		{reason: "HEAD_POD_EVICTED", want: true},
+		{reason: "HEAD_POD_DELETED", want: true},
+		{reason: "HEAD_POD_NOT_FOUND", want: true},
+		{reason: "RAY_CLUSTER_FAILED", want: true},
+		{reason: "RAY_CLUSTER_UNAVAILABLE", want: true},
+		{reason: "RAY_CLUSTER_DELETED", want: true},
+		{reason: "WHOLE_CLUSTER_UNAVAILABLE", want: true},
+		{reason: "", want: false},
+		{reason: "UNKNOWN", want: false},
+		{reason: "USER_CODE_FAILED", want: false},
+		{reason: "INVALID_CONFIG", want: false},
+		{reason: "IMPORT_ERROR", want: false},
+		{reason: "NONZERO_EXIT", want: false},
+		{reason: "OOM_KILLED", want: false},
+		{reason: "NAN_DETECTED", want: false},
+	} {
+		t.Run(test.reason, func(t *testing.T) {
+			if got := isManagedInfrastructureFailure(test.reason); got != test.want {
+				t.Fatalf("reason %q recoverable=%v want=%v", test.reason, got, test.want)
+			}
+		})
+	}
+}
+
+func TestManagedRecoveryBoundsUntrustedFailureMessage(t *testing.T) {
+	message := strings.Repeat("故", domain.ManagedRecoveryFailureMessageMaxBytes)
+	bounded := managedRecoveryFailureMessage(message)
+	if len(bounded) > domain.ManagedRecoveryFailureMessageMaxBytes || !strings.HasPrefix(message, bounded) {
+		t.Fatalf("failure message was not safely bounded: bytes=%d", len(bounded))
+	}
+}
+
+func TestLegacyAndProvisioningFailuresNeverEnterManagedRecovery(t *testing.T) {
+	for _, mutate := range []func(*domain.TrainingJob){
+		func(job *domain.TrainingJob) {
+			job.Spec.TrainingEngine = domain.TrainingEngineRayDDP
+			job.Spec.Managed = domain.ManagedTrainingPolicy{}
+		},
+		func(job *domain.TrainingJob) { job.ObservedState = domain.StateProvisioning },
+	} {
+		store, client, _, job := managedRecoveryFixture(t)
+		mutate(store.job)
+		reconciler := NewReconciler(store, client, testRenderOptions())
+		if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
+			t.Fatalf("reconcile non-recoverable job: %v", err)
+		}
+		if len(store.recoveryRequests) != 0 || store.job.ObservedState != domain.StateFailed {
+			t.Fatalf("non-managed/provisioning job entered recovery: requests=%+v job=%+v", store.recoveryRequests, store.job)
+		}
+	}
+}
+
+func TestRecoveryCreationFailureRetriesSameAttemptWithoutIncrementing(t *testing.T) {
+	store, client, dynamicClient, job := managedRecoveryFixture(t)
+	failCreation := true
+	dynamicClient.PrependReactor("create", "rayjobs", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		create := action.(k8stesting.CreateAction)
+		resource := create.GetObject().(*unstructured.Unstructured)
+		if failCreation && resource.GetName() == job.ID+"-a2" {
+			return true, nil, errors.New("apiserver unavailable")
+		}
+		return false, nil, nil
+	})
+	reconciler := NewReconciler(store, client, testRenderOptions())
+	if err := reconciler.ReconcileJob(context.Background(), job.ID); err == nil {
+		t.Fatal("expected recovery creation failure")
+	}
+	if store.job.ClusterAttempt != 2 || store.job.ObservedState != domain.StateRecovering || len(store.recoveryRequests) != 1 {
+		t.Fatalf("failed creation lost recoverable snapshot: job=%+v requests=%+v", store.job, store.recoveryRequests)
+	}
+	failCreation = false
+	if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
+		t.Fatalf("retry same recovery attempt: %v", err)
+	}
+	if store.job.ClusterAttempt != 2 || len(store.recoveryRequests) != 1 {
+		t.Fatalf("retry incorrectly advanced another attempt: job=%+v requests=%+v", store.job, store.recoveryRequests)
+	}
+	if _, err := client.GetRayJob(context.Background(), job.KubernetesNS, job.ID+"-a2"); err != nil {
+		t.Fatalf("same recovery attempt was not retried: %v", err)
+	}
+}
+
+func TestCancellationWinsRecoveryRace(t *testing.T) {
+	store, client, _, job := managedRecoveryFixture(t)
+	store.cancelDuringRecovery = true
+	reconciler := NewReconciler(store, client, testRenderOptions())
+	if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
+		t.Fatalf("reconcile cancellation race: %v", err)
+	}
+	if store.job.ClusterAttempt != 1 || store.job.DesiredState != domain.DesiredCanceled {
+		t.Fatalf("recovery overrode cancellation: %+v", store.job)
+	}
+	if len(store.observed) == 0 || store.observed[len(store.observed)-1].State != domain.StateDeleting {
+		t.Fatalf("cancellation did not delete existing RayJob: %+v", store.observed)
+	}
+}
+
+func TestRecoveringCancellationTransitionsDirectlyToCanceled(t *testing.T) {
+	store, client, dynamicClient, job := managedRecoveryFixture(t)
+	store.job.ClusterAttempt = 2
+	store.job.ObservedState = domain.StateRecovering
+	store.job.DesiredState = domain.DesiredCanceled
+	store.job.ResumeCheckpointID = "checkpoint-4"
+	store.job.RayJobName = job.ID + "-a2"
+	manifest := managedManifest(t, *store.job)
+	if _, err := dynamicClient.Resource(rayJobGVR).Namespace(job.KubernetesNS).Create(context.Background(), manifest, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	reconciler := NewReconciler(store, client, testRenderOptions())
+	if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if store.job.ObservedState != domain.StateCanceled {
+		t.Fatalf("RECOVERING cancellation did not reach CANCELED: %+v", store.job)
+	}
+}
+
+func TestUnknownAndUserFailuresBecomeFailedWithoutRecovery(t *testing.T) {
+	for _, reason := range []string{"", "UNKNOWN", "IMPORT_ERROR", "NONZERO_EXIT", "OOM_KILLED", "NAN_DETECTED"} {
+		t.Run(reason, func(t *testing.T) {
+			store, client, dynamicClient, job := managedRecoveryFixture(t)
+			manifest, err := client.GetRayJob(context.Background(), job.KubernetesNS, job.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := unstructured.SetNestedMap(manifest.Object, map[string]any{
+				"jobStatus": "FAILED", "reason": reason, "message": "user workload failed",
+			}, "status"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := dynamicClient.Resource(rayJobGVR).Namespace(job.KubernetesNS).Update(context.Background(), manifest, metav1.UpdateOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			reconciler := NewReconciler(store, client, testRenderOptions())
+			if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
+				t.Fatal(err)
+			}
+			if len(store.recoveryRequests) != 0 || store.job.ObservedState != domain.StateFailed {
+				t.Fatalf("user/unknown failure retried: reason=%q requests=%+v job=%+v", reason, store.recoveryRequests, store.job)
+			}
+		})
+	}
+}
+
+func TestRecoveredAttemptTransitionsFromRecoveringToRunning(t *testing.T) {
+	store, client, dynamicClient, job := managedRecoveryFixture(t)
+	store.job.ClusterAttempt = 2
+	store.job.ObservedState = domain.StateRecovering
+	store.job.ResumeCheckpointID = "checkpoint-4"
+	store.job.RayJobName = job.ID + "-a2"
+	manifest := managedManifest(t, *store.job)
+	if err := unstructured.SetNestedMap(manifest.Object, map[string]any{"jobStatus": "RUNNING"}, "status"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dynamicClient.Resource(rayJobGVR).Namespace(job.KubernetesNS).Create(context.Background(), manifest, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	reconciler := NewReconciler(store, client, testRenderOptions())
+	if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if store.job.ObservedState != domain.StateRunning || len(store.recoveryRequests) != 0 {
+		t.Fatalf("recovered attempt did not return to RUNNING: job=%+v requests=%+v", store.job, store.recoveryRequests)
 	}
 }
 

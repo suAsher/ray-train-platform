@@ -155,6 +155,28 @@ func TestApplyObservedStateUpdatesKubernetesReferences(t *testing.T) {
 	}
 }
 
+func TestApplyObservedStateNeverRegressesTerminalLegacyJob(t *testing.T) {
+	repo := testRepository(t)
+	job := testJob()
+	job.Spec.TrainingEngine = domain.TrainingEngineRayDDP
+	if err := repo.Create(context.Background(), &job, "terminal-legacy"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ApplyObservedState(context.Background(), domain.ObservedJobState{ID: job.ID, State: domain.StateFailed, Reason: "NONZERO_EXIT"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ApplyObservedState(context.Background(), domain.ObservedJobState{ID: job.ID, State: domain.StateRunning, RayJobName: "recreated"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Get(context.Background(), job.TenantID, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ObservedState != domain.StateFailed || got.RayJobName == "recreated" {
+		t.Fatalf("terminal legacy identity was overwritten: %+v", got)
+	}
+}
+
 func TestApplyObservedStateQueuesOneTerminalExperimentSyncEvent(t *testing.T) {
 	repo := testRepository(t)
 	job := testJob()
@@ -333,5 +355,198 @@ func TestCreateNormalizesRuntimeMetadataConsistently(t *testing.T) {
 	}
 	if got.Spec.TrainingEngine != job.Spec.TrainingEngine || got.Spec.RayVersion != job.Spec.RayVersion || got.ClusterAttempt != job.ClusterAttempt {
 		t.Fatalf("read job disagrees with create response: created=%+v read=%+v", job, got)
+	}
+}
+
+func managedRecoveryJob(t *testing.T, maxFailures int) (*GormRepository, domain.TrainingJob) {
+	t.Helper()
+	repo := testRepository(t)
+	if err := repo.db.AutoMigrate(&TrainingCheckpointRecord{}); err != nil {
+		t.Fatalf("migrate checkpoints: %v", err)
+	}
+	job := testJob()
+	job.Spec.TrainingEngine = domain.TrainingEngineRayTrain
+	job.Spec.RayVersion = domain.RayVersionProduction
+	job.Spec.Managed.MaxFailures = maxFailures
+	job.Spec.ResolvedDataMounts.Output = &domain.ResolvedDataMount{
+		Space: domain.DataSpaceMyRuns, BindingSpace: domain.DataSpaceWorkspace,
+		ClaimName: "tenant-data", SubPath: "tenants/tenant-a/users/user-a/runs/job-1",
+		MountPath: domain.DataMountOutputPath, ReadOnly: false,
+	}
+	job.ObservedState = domain.StateRunning
+	job.ClusterAttempt = 1
+	job.RayJobName = job.ID
+	if err := repo.Create(context.Background(), &job, "managed-recovery"); err != nil {
+		t.Fatalf("create managed recovery job: %v", err)
+	}
+	return repo, job
+}
+
+func persistRecoveryCheckpoint(t *testing.T, repo *GormRepository, job domain.TrainingJob, id string, complete bool) {
+	t.Helper()
+	record := TrainingCheckpointRecord{
+		JobID: job.ID, ID: id, TenantID: job.TenantID, UserID: job.UserID,
+		Epoch: 4, Step: 40, Complete: complete,
+		ObjectPath:     domain.DataMountOutputPath + "/.platform/ray-train/" + job.ID + "/checkpoints/" + id,
+		ManifestSHA256: strings.Repeat("a", 64), CreatedAt: time.Now().UTC(),
+	}
+	if err := repo.db.Create(&record).Error; err != nil {
+		t.Fatalf("persist recovery checkpoint: %v", err)
+	}
+}
+
+func TestBeginManagedRecoverySnapshotsLatestCompleteCheckpointAndCASAttempt(t *testing.T) {
+	repo, job := managedRecoveryJob(t, 2)
+	persistRecoveryCheckpoint(t, repo, job, "checkpoint-4", true)
+	if err := repo.db.Create(&TrainingCheckpointRecord{
+		JobID: job.ID, ID: "newer-invalid", TenantID: job.TenantID, UserID: job.UserID,
+		Epoch: 5, Step: 50, Complete: true,
+		ObjectPath:     domain.DataMountOutputPath + "/.platform/ray-train/" + job.ID + "/checkpoints/nested/newer-invalid",
+		ManifestSHA256: strings.Repeat("b", 64), CreatedAt: time.Now().UTC().Add(time.Second),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.db.Model(&JobRecord{}).Where("id = ?", job.ID).Update("resume_checkpoint_id", "caller-supplied-unverified").Error; err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, transitioned, err := repo.BeginManagedRecovery(context.Background(), domain.ManagedRecoveryRequest{
+		JobID: job.ID, ExpectedClusterAttempt: 1,
+		FailureClass: "HEAD_POD_LOST", FailureMessage: "head node disappeared",
+	})
+	if err != nil {
+		t.Fatalf("begin managed recovery: %v", err)
+	}
+	if !transitioned || recovered.ClusterAttempt != 2 || recovered.ObservedState != domain.StateRecovering {
+		t.Fatalf("unexpected recovery transition: transitioned=%v job=%+v", transitioned, recovered)
+	}
+	if recovered.ResumeCheckpointID != "checkpoint-4" || recovered.RayJobName != "" {
+		t.Fatalf("recovery did not snapshot checkpoint and reset current RayJob identity: %+v", recovered)
+	}
+	if recovered.StatusReason != "HEAD_POD_LOST" || recovered.StatusMessage != "head node disappeared" {
+		t.Fatalf("recovery failure provenance was not preserved: %+v", recovered)
+	}
+
+	duplicate, transitioned, err := repo.BeginManagedRecovery(context.Background(), domain.ManagedRecoveryRequest{
+		JobID: job.ID, ExpectedClusterAttempt: 1,
+		FailureClass: "HEAD_POD_LOST", FailureMessage: "duplicate replica",
+	})
+	if err != nil {
+		t.Fatalf("duplicate recovery: %v", err)
+	}
+	if transitioned || duplicate.ClusterAttempt != 2 || duplicate.ResumeCheckpointID != "checkpoint-4" {
+		t.Fatalf("stale replica advanced another attempt: transitioned=%v job=%+v", transitioned, duplicate)
+	}
+}
+
+func TestBeginManagedRecoveryMaxFailuresCountsRetriesAfterInitialAttempt(t *testing.T) {
+	repo, job := managedRecoveryJob(t, 2)
+	persistRecoveryCheckpoint(t, repo, job, "checkpoint-4", true)
+
+	for expected, want := range map[int]int{1: 2, 2: 3} {
+		recovered, transitioned, err := repo.BeginManagedRecovery(context.Background(), domain.ManagedRecoveryRequest{
+			JobID: job.ID, ExpectedClusterAttempt: expected, FailureClass: "RAY_CLUSTER_UNAVAILABLE",
+		})
+		if err != nil || !transitioned || recovered.ClusterAttempt != want {
+			t.Fatalf("attempt %d: transitioned=%v recovered=%+v err=%v", expected, transitioned, recovered, err)
+		}
+	}
+	exhausted, transitioned, err := repo.BeginManagedRecovery(context.Background(), domain.ManagedRecoveryRequest{
+		JobID: job.ID, ExpectedClusterAttempt: 3, FailureClass: "RAY_CLUSTER_UNAVAILABLE",
+	})
+	if err != nil {
+		t.Fatalf("exhausted recovery: %v", err)
+	}
+	if transitioned || exhausted.ClusterAttempt != 3 {
+		t.Fatalf("maxFailures=2 must permit exactly attempts 2 and 3: transitioned=%v job=%+v", transitioned, exhausted)
+	}
+}
+
+func TestBeginManagedRecoveryRequiresUsableOwnedCheckpointAndActiveDesire(t *testing.T) {
+	tests := []struct {
+		name       string
+		checkpoint func(*testing.T, *GormRepository, domain.TrainingJob)
+		cancel     bool
+	}{
+		{name: "missing"},
+		{name: "incomplete", checkpoint: func(t *testing.T, repo *GormRepository, job domain.TrainingJob) {
+			persistRecoveryCheckpoint(t, repo, job, "checkpoint-4", false)
+		}},
+		{name: "wrong owner", checkpoint: func(t *testing.T, repo *GormRepository, job domain.TrainingJob) {
+			persistRecoveryCheckpoint(t, repo, job, "checkpoint-4", true)
+			if err := repo.db.Model(&TrainingCheckpointRecord{}).Where("job_id = ?", job.ID).Update("user_id", "other-user").Error; err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "canceled", checkpoint: func(t *testing.T, repo *GormRepository, job domain.TrainingJob) {
+			persistRecoveryCheckpoint(t, repo, job, "checkpoint-4", true)
+		}, cancel: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo, job := managedRecoveryJob(t, 2)
+			if test.checkpoint != nil {
+				test.checkpoint(t, repo, job)
+			}
+			if test.cancel {
+				if err := repo.SetDesiredState(context.Background(), job.TenantID, job.ID, domain.DesiredCanceled); err != nil {
+					t.Fatal(err)
+				}
+			}
+			recovered, transitioned, err := repo.BeginManagedRecovery(context.Background(), domain.ManagedRecoveryRequest{
+				JobID: job.ID, ExpectedClusterAttempt: 1, FailureClass: "DRIVER_POD_LOST",
+			})
+			if err != nil {
+				t.Fatalf("begin recovery: %v", err)
+			}
+			if transitioned || recovered.ClusterAttempt != 1 || recovered.ObservedState != domain.StateRunning {
+				t.Fatalf("unusable recovery input changed job: transitioned=%v job=%+v", transitioned, recovered)
+			}
+		})
+	}
+}
+
+func TestBeginManagedRecoveryRequiresGovernedWritableOutputMount(t *testing.T) {
+	repo, job := managedRecoveryJob(t, 2)
+	persistRecoveryCheckpoint(t, repo, job, "checkpoint-4", true)
+	job.Spec.ResolvedDataMounts.Output = nil
+	specJSON, err := json.Marshal(job.Spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.db.Model(&JobRecord{}).Where("id = ?", job.ID).Update("spec_json", string(specJSON)).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, transitioned, err := repo.BeginManagedRecovery(context.Background(), domain.ManagedRecoveryRequest{
+		JobID: job.ID, ExpectedClusterAttempt: 1, FailureClass: "HEAD_POD_LOST",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transitioned || recovered.ClusterAttempt != 1 || recovered.ObservedState != domain.StateRunning {
+		t.Fatalf("checkpoint without governed output mount was treated as usable: transitioned=%v job=%+v", transitioned, recovered)
+	}
+}
+
+func TestRecoveringJobRemainsAnActiveReconcileAndQuotaCandidate(t *testing.T) {
+	repo, job := managedRecoveryJob(t, 2)
+	if err := repo.db.Model(&JobRecord{}).Where("id = ?", job.ID).Update("observed_state", domain.StateRecovering).Error; err != nil {
+		t.Fatal(err)
+	}
+	ids, err := repo.ListReconcileCandidates(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 || ids[0] != job.ID {
+		t.Fatalf("RECOVERING was treated as terminal: %v", ids)
+	}
+	quota, err := repo.TenantGPUQuota(context.Background(), job.TenantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := job.Spec.Resources.WorkerReplicas * job.Spec.Resources.GPUsPerWorker
+	if quota.GPUUsed != want {
+		t.Fatalf("RECOVERING job released quota early: used=%d want=%d", quota.GPUUsed, want)
 	}
 }

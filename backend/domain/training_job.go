@@ -208,6 +208,78 @@ type ObservedJobState struct {
 	FinishedAt *time.Time
 }
 
+const (
+	ManagedRecoveryFailureClassMaxBytes   = 128
+	ManagedRecoveryFailureMessageMaxBytes = 4096
+)
+
+// NormalizeManagedInfrastructureFailureClass is the complete outer-recovery
+// allowlist. It intentionally classifies only pod/cluster loss, eviction,
+// deletion and unavailability signals; user exits, code errors, OOM and NaN
+// never become recoverable because of message keyword matching.
+func NormalizeManagedInfrastructureFailureClass(reason string) (string, bool) {
+	normalized := strings.ToUpper(strings.TrimSpace(reason))
+	normalized = strings.NewReplacer("-", "_", " ", "_").Replace(normalized)
+	switch normalized {
+	case "DRIVER_POD_LOST", "DRIVERPODLOST":
+		return "DRIVER_POD_LOST", true
+	case "DRIVER_POD_EVICTED", "DRIVERPODEVICTED":
+		return "DRIVER_POD_EVICTED", true
+	case "DRIVER_POD_DELETED", "DRIVERPODDELETED":
+		return "DRIVER_POD_DELETED", true
+	case "DRIVER_POD_NOT_FOUND", "DRIVERPODNOTFOUND":
+		return "DRIVER_POD_NOT_FOUND", true
+	case "HEAD_POD_LOST", "HEADPODLOST":
+		return "HEAD_POD_LOST", true
+	case "HEAD_POD_EVICTED", "HEADPODEVICTED":
+		return "HEAD_POD_EVICTED", true
+	case "HEAD_POD_DELETED", "HEADPODDELETED":
+		return "HEAD_POD_DELETED", true
+	case "HEAD_POD_NOT_FOUND", "HEADPODNOTFOUND":
+		return "HEAD_POD_NOT_FOUND", true
+	case "RAY_CLUSTER_FAILED", "RAYCLUSTERFAILED":
+		return "RAY_CLUSTER_FAILED", true
+	case "RAY_CLUSTER_UNAVAILABLE", "RAYCLUSTERUNAVAILABLE":
+		return "RAY_CLUSTER_UNAVAILABLE", true
+	case "RAY_CLUSTER_DELETED", "RAYCLUSTERDELETED":
+		return "RAY_CLUSTER_DELETED", true
+	case "WHOLE_CLUSTER_UNAVAILABLE", "WHOLECLUSTERUNAVAILABLE":
+		return "WHOLE_CLUSTER_UNAVAILABLE", true
+	default:
+		return "", false
+	}
+}
+
+// ManagedRecoveryRequest is produced only by the reconciler after it has
+// classified a failed managed RayJob. ExpectedClusterAttempt is a CAS token:
+// a stale backend replica cannot advance a job that another replica recovered.
+type ManagedRecoveryRequest struct {
+	JobID                  string
+	ExpectedClusterAttempt int
+	FailureClass           string
+	FailureMessage         string
+}
+
+func (request ManagedRecoveryRequest) Validate() error {
+	if strings.TrimSpace(request.JobID) == "" {
+		return fmt.Errorf("managed recovery job ID is required")
+	}
+	if request.ExpectedClusterAttempt < 1 {
+		return fmt.Errorf("managed recovery expected cluster attempt must be positive")
+	}
+	failureClass := strings.TrimSpace(request.FailureClass)
+	if failureClass == "" || len(failureClass) > ManagedRecoveryFailureClassMaxBytes {
+		return fmt.Errorf("managed recovery failure class is required and bounded")
+	}
+	if _, ok := NormalizeManagedInfrastructureFailureClass(failureClass); !ok {
+		return fmt.Errorf("managed recovery failure class is not recoverable")
+	}
+	if len(request.FailureMessage) > ManagedRecoveryFailureMessageMaxBytes {
+		return fmt.Errorf("managed recovery failure message is too large")
+	}
+	return nil
+}
+
 var dnsLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 var digestImage = regexp.MustCompile(`^[^@\s]+@sha256:[0-9a-fA-F]{64}$`)
 var imageTag = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)

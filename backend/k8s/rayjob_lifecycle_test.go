@@ -123,3 +123,62 @@ func TestRenderRayJobOmitsActiveDeadlineWhenNoTimeout(t *testing.T) {
 		t.Fatalf("no timeout configured, activeDeadlineSeconds must be omitted")
 	}
 }
+
+func TestManagedRecoveryAttemptUsesBoundedAttemptNameAndCheckpoint(t *testing.T) {
+	job := managedRenderJob(domain.RayVersionProduction)
+	job.ClusterAttempt = 2
+	job.ResumeCheckpointID = "checkpoint-epoch-4"
+	job.Spec.ResolvedDataMounts.Output = &domain.ResolvedDataMount{
+		Space: domain.DataSpaceMyRuns, BindingSpace: domain.DataSpaceWorkspace,
+		ClaimName: "tenant-data", SubPath: "tenants/tenant-a/users/user-01/runs/job-01",
+		MountPath: domain.DataMountOutputPath, ReadOnly: false,
+	}
+	manifest := managedManifest(t, job)
+	if got := manifest.GetName(); got != job.ID+"-a2" {
+		t.Fatalf("unexpected recovery attempt name %q", got)
+	}
+	cluster, _, _ := nestedMap(manifest.Object, "spec", "rayClusterSpec")
+	workers, _, _ := nestedSlice(cluster, "workerGroupSpecs")
+	worker := workers[0].(map[string]any)
+	workerPod, _, _ := nestedMap(worker, "template", "spec")
+	wantCheckpoint := domain.DataMountOutputPath + "/.platform/ray-train/" + job.ID + "/checkpoints/" + job.ResumeCheckpointID
+	if got := podEnvironment(workerPod)["PLATFORM_CHECKPOINT_PATH"]; got != wantCheckpoint {
+		t.Fatalf("recovery checkpoint path=%q want=%q", got, wantCheckpoint)
+	}
+	if manifest.GetLabels()["ray.io/job-id"] != job.ID || manifest.GetLabels()["kueue.x-k8s.io/queue-name"] != job.Spec.Queue {
+		t.Fatalf("recovery lost immutable provenance: %#v", manifest.GetLabels())
+	}
+}
+
+func TestInitialAndLegacyRayJobNamesRemainBackwardCompatible(t *testing.T) {
+	initial := managedRenderJob(domain.RayVersionProduction)
+	initial.ClusterAttempt = 1
+	if got := managedManifest(t, initial).GetName(); got != initial.ID {
+		t.Fatalf("initial managed attempt name changed: %q", got)
+	}
+	legacy := validRenderJob()
+	legacy.Spec.TrainingEngine = domain.TrainingEngineRayDDP
+	legacy.ClusterAttempt = 7
+	if got := renderManifestName(t, legacy); got != legacy.ID {
+		t.Fatalf("legacy job gained managed attempt suffix: %q", got)
+	}
+}
+
+func TestManagedRecoveryAttemptNameKeepsSuffixWhenJobIDNeedsBounding(t *testing.T) {
+	job := managedRenderJob(domain.RayVersionProduction)
+	job.ID = "job-" + strings.Repeat("a", 80)
+	job.ClusterAttempt = domain.ManagedMaxFailuresLimit + 1
+	name := rayJobResourceName(job)
+	if len(name) > 63 || !strings.HasSuffix(name, "-a11") {
+		t.Fatalf("bounded recovery name lost attempt suffix: %q", name)
+	}
+}
+
+func renderManifestName(t *testing.T, job domain.TrainingJob) string {
+	t.Helper()
+	manifest, err := RenderRayJob(job, testRenderOptions())
+	if err != nil {
+		t.Fatalf("render RayJob: %v", err)
+	}
+	return manifest.GetName()
+}
