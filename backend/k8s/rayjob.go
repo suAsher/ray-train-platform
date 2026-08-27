@@ -137,10 +137,7 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	rayVersion := resolvedRayVersion(job.Spec, options)
 	workerReplicas := int64(job.Spec.Resources.WorkerReplicas)
 	gpusPerWorker := int64(job.Spec.Resources.GPUsPerWorker)
-	workerCPU := strconv.FormatInt(job.Spec.Resources.CPUPerWorker, 10)
-	if job.Spec.Resources.CPUPerWorker <= 0 {
-		workerCPU = "8"
-	}
+	workerCPU := effectiveWorkerCPU(job.Spec.Resources)
 	workerMemory := job.Spec.Resources.MemoryPerWorker
 	if strings.TrimSpace(workerMemory) == "" {
 		workerMemory = "32Gi"
@@ -236,10 +233,19 @@ func resolvedRayVersion(spec domain.JobSpec, options RenderOptions) string {
 	if version := strings.TrimSpace(spec.RayVersion); version != "" {
 		return version
 	}
-	if version := strings.TrimSpace(options.RayVersion); version != "" {
-		return version
+	if strings.TrimSpace(string(spec.TrainingEngine)) == "" {
+		if version := strings.TrimSpace(options.RayVersion); version != "" {
+			return version
+		}
 	}
 	return domain.RayVersionLegacy
+}
+
+func effectiveWorkerCPU(resources domain.Resources) string {
+	if resources.CPUPerWorker <= 0 {
+		return "8"
+	}
+	return strconv.FormatInt(resources.CPUPerWorker, 10)
 }
 
 // trainingEntrypoint routes on the immutable training engine before consulting
@@ -256,7 +262,7 @@ func trainingEntrypoint(spec domain.JobSpec) []string {
 		"raytrain-managed",
 		"--nodes", strconv.Itoa(spec.Resources.WorkerReplicas),
 		"--gpus-per-node", strconv.Itoa(spec.Resources.GPUsPerWorker),
-		"--cpus-per-node", strconv.FormatInt(spec.Resources.CPUPerWorker, 10),
+		"--cpus-per-node", effectiveWorkerCPU(spec.Resources),
 		"--max-failures", strconv.Itoa(spec.Managed.MaxFailures),
 		"--",
 	}

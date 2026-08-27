@@ -201,17 +201,20 @@ func TestLegacyRayTrainExecutionModeStillUsesActorLauncher(t *testing.T) {
 func TestRayDDPUsesPerJobRayVersionWithOptionsOnlyAsLegacyFallback(t *testing.T) {
 	for _, test := range []struct {
 		name          string
+		engine        domain.TrainingEngine
 		jobVersion    string
 		optionVersion string
 		want          string
 	}{
-		{name: "per-job snapshot wins", jobVersion: domain.RayVersionProduction, optionVersion: domain.RayVersionLegacy, want: domain.RayVersionProduction},
-		{name: "option supports pre-migration rows", optionVersion: domain.RayVersionProduction, want: domain.RayVersionProduction},
-		{name: "empty values use legacy default", want: domain.RayVersionLegacy},
+		{name: "per-job snapshot wins", engine: domain.TrainingEngineRayDDP, jobVersion: domain.RayVersionProduction, optionVersion: domain.RayVersionLegacy, want: domain.RayVersionProduction},
+		{name: "explicit ray-ddp never inherits global production version", engine: domain.TrainingEngineRayDDP, optionVersion: domain.RayVersionProduction, want: domain.RayVersionLegacy},
+		{name: "explicit ray-ddp never inherits global canary version", engine: domain.TrainingEngineRayDDP, optionVersion: domain.RayVersionCanary, want: domain.RayVersionLegacy},
+		{name: "option supports true pre-upgrade rows", optionVersion: domain.RayVersionProduction, want: domain.RayVersionProduction},
+		{name: "empty pre-upgrade values use legacy default", want: domain.RayVersionLegacy},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			job := validRenderJob()
-			job.Spec.TrainingEngine = domain.TrainingEngineRayDDP
+			job.Spec.TrainingEngine = test.engine
 			job.Spec.RayVersion = test.jobVersion
 			options := testRenderOptions()
 			options.RayVersion = test.optionVersion

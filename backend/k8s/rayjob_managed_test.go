@@ -44,6 +44,26 @@ func TestManagedJobUsesPerJobVersionAndManagedDriver(t *testing.T) {
 	}
 }
 
+func TestManagedJobUsesEffectiveWorkerCPUInDriverArguments(t *testing.T) {
+	job := managedRenderJob(domain.RayVersionProduction)
+	job.Spec.Resources.CPUPerWorker = 0
+	manifest := managedManifest(t, job)
+	entrypoint, _, _ := unstructured.NestedString(manifest.Object, "spec", "entrypoint")
+	if !strings.Contains(entrypoint, "--cpus-per-node 8") {
+		t.Fatalf("managed driver CPU must match worker Pod fallback: %q", entrypoint)
+	}
+	cluster, _, _ := unstructured.NestedMap(manifest.Object, "spec", "rayClusterSpec")
+	workers, _, _ := nestedSlice(cluster, "workerGroupSpecs")
+	worker := workers[0].(map[string]any)
+	containers, _, _ := nestedSlice(worker, "template", "spec", "containers")
+	resources := containers[0].(map[string]any)["resources"].(map[string]any)
+	for _, class := range []string{"requests", "limits"} {
+		if got := resources[class].(map[string]any)["cpu"]; got != "8" {
+			t.Fatalf("worker Pod CPU fallback changed in %s: %#v", class, got)
+		}
+	}
+}
+
 func TestManagedJobRuntimeEnvironmentReachesRayDriverAndWorkers(t *testing.T) {
 	job := managedRenderJob(domain.RayVersionProduction)
 	manifest := managedManifest(t, job)
