@@ -5,6 +5,7 @@ import test from 'node:test'
 import {
   jobRuntimeDetails,
   managedEngineAvailability,
+  managedPolicyFromQuery,
   normalizeTrainingEngine,
   resubmitRuntimeQuery,
   trainingEngineLabel,
@@ -44,9 +45,24 @@ test('managed availability requires both caller capability and selected image co
   )
 })
 
+test('managed query normalization owns a fresh result and never mutates caller state', () => {
+  const query = Object.freeze({ maxFailures: '7', checkpointKeepLatest: '9' })
+  const normalized = managedPolicyFromQuery(query)
+
+  assert.deepEqual(query, { maxFailures: '7', checkpointKeepLatest: '9' })
+  assert.deepEqual(normalized, {
+    maxFailures: 7,
+    checkpointEveryEpochs: 1,
+    checkpointKeepLatest: 9,
+    checkpointKeepBest: 1,
+  })
+  assert.notEqual(normalized, query)
+})
+
 test('rerun preserves the explicit immutable engine and resume creates a child relationship', () => {
+  const parentJobId = 'job-0123456789abcdef01234567'
   const job = {
-    id: 'job-parent',
+    id: parentJobId,
     spec: {
       trainingEngine: 'ray-train',
       managed: { maxFailures: 3, checkpoint: { everyEpochs: 2, keepLatest: 4, keepBest: 1 } },
@@ -66,7 +82,7 @@ test('rerun preserves the explicit immutable engine and resume creates a child r
     checkpointEveryEpochs: '2',
     checkpointKeepLatest: '4',
     checkpointKeepBest: '1',
-    parentJobId: 'job-parent',
+    parentJobId,
   })
 })
 
@@ -79,7 +95,7 @@ test('job runtime details expose immutable runtime and recovery topology fields'
       trainingEngine: 'ray-train',
       rayVersion: '2.56.1',
       image: managedImage.reference,
-      parentJobId: 'job-parent',
+      parentJobId: 'job-0123456789abcdef01234567',
       resources: { workerReplicas: 2, gpusPerWorker: 8 },
     },
   }), {
@@ -106,6 +122,8 @@ test('runtime UI renders both accessible engine cards, managed policy controls, 
   assert.match(runtime, /Ray Train 托管/)
   assert.match(runtime, /aria-pressed/)
   assert.match(runtime, /aria-disabled/)
+  assert.match(runtime, /:disabled="!managedAvailability\.available"/)
+  assert.match(runtime, /<el-alert[\s\S]*managedAvailability\.reason/)
   assert.match(runtime, /managedAvailability\.reason/)
   assert.match(runtime, /maxFailures/)
   assert.match(runtime, /checkpointEveryEpochs/)

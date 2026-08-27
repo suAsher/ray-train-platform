@@ -90,6 +90,10 @@ const helpText = `spk-rayjob — 分布式训练任务命令行客户端
 训练引擎：
   --engine ray-ddp    默认；兼容现有 Actor + torchrun 单机/多机 DDP
   --engine ray-train  Ray Train 托管 workers、故障恢复和 Checkpoint；仅在平台开启后可用
+  --max-failures 2                 ray-train Worker 最大恢复次数（0-10）
+  --checkpoint-every-epochs 1      ray-train 每隔多少 Epoch 保存 Checkpoint
+  --checkpoint-keep-latest 3       ray-train 保留最近 Checkpoint 数
+  --checkpoint-keep-best 1         ray-train 保留最佳 Checkpoint 数
   客户端不接受 Ray 版本参数；版本由平台根据管理员登记的镜像固化。
 
 通用参数：
@@ -346,6 +350,10 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	image := set.String("image", "", "catalogued training image with an explicit tag or sha256 digest")
 	entrypoint := set.String("entrypoint", "", "shell command to run")
 	engine := set.String("engine", string(domain.TrainingEngineRayDDP), "training engine: ray-ddp or ray-train")
+	maxFailures := set.Int("max-failures", 2, "ray-train worker recovery limit (0-10)")
+	checkpointEveryEpochs := set.Int("checkpoint-every-epochs", 1, "ray-train checkpoint interval in epochs")
+	checkpointKeepLatest := set.Int("checkpoint-keep-latest", 3, "ray-train latest checkpoint retention")
+	checkpointKeepBest := set.Int("checkpoint-keep-best", 1, "ray-train best checkpoint retention")
 	workers := set.Int("workers", 1, "worker replicas")
 	gpus := set.Int("gpus-per-worker", 1, "GPUs per worker")
 	cpu := set.Int64("cpu-per-worker", 8, "CPUs per worker")
@@ -400,12 +408,36 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	}
 	previousJobID := strings.TrimSpace(*resumeFromJob)
 	checkpointProvided := provided["checkpoint-space"] || provided["checkpoint-path"]
+	resolvedEngine, err := parseTrainingEngine(resolved.Engine)
+	if err != nil {
+		return err
+	}
+	managedFlagsProvided := provided["max-failures"] || provided["checkpoint-every-epochs"] || provided["checkpoint-keep-latest"] || provided["checkpoint-keep-best"]
+	if resolvedEngine != domain.TrainingEngineRayTrain && managedFlagsProvided {
+		return errors.New("--max-failures 与 --checkpoint-* 参数仅支持 --engine ray-train，不能用于 ray-ddp")
+	}
+	managedPolicy := domain.ManagedTrainingPolicy{
+		MaxFailures: *maxFailures,
+		Checkpoint: domain.CheckpointPolicy{
+			EveryEpochs: *checkpointEveryEpochs,
+			KeepLatest:  *checkpointKeepLatest,
+			KeepBest:    *checkpointKeepBest,
+		},
+	}
+	if resolvedEngine == domain.TrainingEngineRayTrain {
+		if err := managedPolicy.Validate(); err != nil {
+			return fmt.Errorf("无效的 Ray Train 托管策略：%w", err)
+		}
+	}
 	if err := validateLocalSubmit(resolved, previousJobID, checkpointProvided); err != nil {
 		return err
 	}
 	draft, err := newLocalSubmitDraft(resolved, *directory, stdout)
 	if err != nil {
 		return err
+	}
+	if draft.spec.TrainingEngine == domain.TrainingEngineRayTrain {
+		draft.spec.Managed = managedPolicy
 	}
 	var archive Archive
 	if draft.spec.TrainingEngine != domain.TrainingEngineRayTrain {
@@ -657,9 +689,16 @@ func (value project) jobSpec() (domain.JobSpec, error) {
 		},
 	}
 	if engine == domain.TrainingEngineRayTrain {
-		spec.Managed.MaxFailures = 2
+		spec.Managed = defaultManagedTrainingPolicy()
 	}
 	return spec, nil
+}
+
+func defaultManagedTrainingPolicy() domain.ManagedTrainingPolicy {
+	return domain.ManagedTrainingPolicy{
+		MaxFailures: 2,
+		Checkpoint:  domain.CheckpointPolicy{EveryEpochs: 1, KeepLatest: 3, KeepBest: 1},
+	}
 }
 
 func oneIfZero(value int) int {

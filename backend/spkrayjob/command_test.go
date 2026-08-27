@@ -26,7 +26,7 @@ func TestRunHelpUsesProductNeutralTitle(t *testing.T) {
 	if strings.Contains(help, "西井") {
 		t.Fatalf("help must not expose an internal brand: %q", help)
 	}
-	for _, expected := range []string{"--engine ray-ddp", "Actor + torchrun", "--engine ray-train", "workers", "Checkpoint", "平台开启后可用"} {
+	for _, expected := range []string{"--engine ray-ddp", "Actor + torchrun", "--engine ray-train", "--max-failures", "--checkpoint-every-epochs", "--checkpoint-keep-latest", "--checkpoint-keep-best", "workers", "Checkpoint", "平台开启后可用"} {
 		if !strings.Contains(help, expected) {
 			t.Fatalf("help must explain engine semantics and availability using %q: %s", expected, help)
 		}

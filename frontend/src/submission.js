@@ -1,8 +1,8 @@
-import { normalizeTrainingEngine, RAY_TRAIN_ENGINE } from './trainingEngine.js'
+import { MANAGED_POLICY_LIMITS, normalizeTrainingEngine, RAY_TRAIN_ENGINE } from './trainingEngine.js'
 
 const gitCommitPattern = /^[0-9a-f]{7,64}$/i
 const snapshotPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
-const jobIDPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
+const jobIDPattern = /^job-[0-9a-f]{24}$/
 
 export function parseEntrypoint(value) {
   const parts = []
@@ -27,11 +27,21 @@ export function equivalentSubmitCommand(form) {
     `--image ${shellArg(form.image || '<镜像 digest>')}`,
   ]
   parts.push(`--entrypoint ${shellArg(form.entrypoint || '<启动命令>')}`)
+  const trainingEngine = normalizeTrainingEngine(form.trainingEngine)
   parts.push(
-    `--engine ${shellArg(normalizeTrainingEngine(form.trainingEngine))}`,
+    `--engine ${shellArg(trainingEngine)}`,
     `--workers ${shellArg(form.workerReplicas)}`,
     `--gpus-per-worker ${shellArg(form.gpusPerWorker)}`,
   )
+  if (trainingEngine === RAY_TRAIN_ENGINE) {
+    const policy = managedPolicy(form)
+    parts.push(
+      `--max-failures ${shellArg(policy.maxFailures)}`,
+      `--checkpoint-every-epochs ${shellArg(policy.checkpoint.everyEpochs)}`,
+      `--checkpoint-keep-latest ${shellArg(policy.checkpoint.keepLatest)}`,
+      `--checkpoint-keep-best ${shellArg(policy.checkpoint.keepBest)}`,
+    )
+  }
   if (form.cacheMode === 'runtime') {
     parts.push(
       `--cache-mode ${shellArg('runtime')}`,
@@ -60,6 +70,10 @@ export function equivalentSubmitCommandForJob(job) {
     name: job?.name || spec.name || '',
     image: spec.image || '',
     trainingEngine: normalizeTrainingEngine(spec.trainingEngine),
+    maxFailures: spec.managed?.maxFailures,
+    checkpointEveryEpochs: spec.managed?.checkpoint?.everyEpochs,
+    checkpointKeepLatest: spec.managed?.checkpoint?.keepLatest,
+    checkpointKeepBest: spec.managed?.checkpoint?.keepBest,
     entrypoint: job?.entrypoint || persistedEntrypoint,
     workerReplicas: resources.workerReplicas || 1,
     gpusPerWorker: resources.gpusPerWorker || 1,
@@ -116,18 +130,27 @@ export function buildJobSpec(form, platformLimits = {}) {
 
 function managedPolicy(form) {
   return {
-    maxFailures: boundedInteger(form.maxFailures ?? 2, 'Worker 最大恢复次数', 0, 10),
+    maxFailures: managedPolicyInteger(form.maxFailures, 'maxFailures'),
     checkpoint: {
-      everyEpochs: nonNegativeInteger(form.checkpointEveryEpochs ?? 1, 'Checkpoint 周期'),
-      keepLatest: nonNegativeInteger(form.checkpointKeepLatest ?? 3, '最近 Checkpoint 保留数'),
-      keepBest: nonNegativeInteger(form.checkpointKeepBest ?? 1, '最佳 Checkpoint 保留数'),
+      everyEpochs: managedPolicyInteger(form.checkpointEveryEpochs, 'checkpointEveryEpochs'),
+      keepLatest: managedPolicyInteger(form.checkpointKeepLatest, 'checkpointKeepLatest'),
+      keepBest: managedPolicyInteger(form.checkpointKeepBest, 'checkpointKeepBest'),
     },
   }
 }
 
+function managedPolicyInteger(value, field) {
+  const policy = MANAGED_POLICY_LIMITS[field]
+  const candidate = value === undefined ? policy.fallback : value
+  if (candidate == null || candidate === '') throw new Error(`${policy.label}必须是非负整数`)
+  return boundedInteger(candidate, policy.label, 0, policy.maximum)
+}
+
 function optionalJobID(value) {
-  const id = String(value || '').trim()
+  const raw = String(value || '')
+  const id = raw.trim()
   if (!id) return ''
+  if (raw !== id) throw new Error('续训来源任务 ID 格式不合法')
   if (!jobIDPattern.test(id)) throw new Error('续训来源任务 ID 格式不合法')
   return id
 }

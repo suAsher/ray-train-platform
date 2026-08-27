@@ -88,14 +88,16 @@ test('buildJobSpec maps a Git submission into the platform runtime contract', ()
 })
 
 test('managed engine is opt-in and carries managed recovery and checkpoint policy', () => {
-  const spec = buildJobSpec({
+  const form = {
     ...baseForm(),
     trainingEngine: 'ray-train',
     maxFailures: 2,
     checkpointEveryEpochs: 1,
     checkpointKeepLatest: 3,
     checkpointKeepBest: 1,
-  })
+  }
+  const before = structuredClone(form)
+  const spec = buildJobSpec(form)
 
   assert.equal(spec.trainingEngine, 'ray-train')
   assert.deepEqual(spec.managed, {
@@ -103,6 +105,7 @@ test('managed engine is opt-in and carries managed recovery and checkpoint polic
     checkpoint: { everyEpochs: 1, keepLatest: 3, keepBest: 1 },
   })
   assert.equal('rayVersion' in spec, false)
+  assert.deepEqual(form, before)
 })
 
 test('legacy DDP payload omits managed policy even when stale managed fields are present', () => {
@@ -120,8 +123,20 @@ test('legacy DDP payload omits managed policy even when stale managed fields are
 })
 
 test('resume submission carries an immutable parent job relationship', () => {
-  const spec = buildJobSpec({ ...baseForm(), parentJobId: 'job-parent-17' })
-  assert.equal(spec.parentJobId, 'job-parent-17')
+  const parentJobId = 'job-0123456789abcdef01234567'
+  const spec = buildJobSpec({ ...baseForm(), parentJobId })
+  assert.equal(spec.parentJobId, parentJobId)
+})
+
+test('resume submission enforces the exact backend parent job ID contract', () => {
+  for (const parentJobId of [
+    'job-0123456789abcdef0123456',
+    'job-0123456789ABCDEF01234567',
+    ' job-0123456789abcdef01234567',
+    'job-0123456789abcdef01234567 ',
+  ]) {
+    assert.throws(() => buildJobSpec({ ...baseForm(), parentJobId }), /任务 ID 格式不合法/)
+  }
 })
 
 test('buildJobSpec rejects a multi-worker torchrun request before submitting it', () => {
@@ -217,9 +232,32 @@ test('equivalent submit command includes the selected runtime cache flags', () =
 })
 
 test('equivalent submit command shows the effective engine but never exposes a Ray version selector', () => {
-  const command = equivalentSubmitCommand({ ...baseForm(), trainingEngine: 'ray-train' })
+  const command = equivalentSubmitCommand({
+    ...baseForm(),
+    trainingEngine: 'ray-train',
+    maxFailures: 7,
+    checkpointEveryEpochs: 4,
+    checkpointKeepLatest: 9,
+    checkpointKeepBest: 2,
+  })
   assert.match(command, /--engine 'ray-train'/)
+  assert.match(command, /--max-failures '7'/)
+  assert.match(command, /--checkpoint-every-epochs '4'/)
+  assert.match(command, /--checkpoint-keep-latest '9'/)
+  assert.match(command, /--checkpoint-keep-best '2'/)
   assert.doesNotMatch(command, /--ray-version/)
+})
+
+test('equivalent submit command omits managed policy flags for Ray DDP', () => {
+  const command = equivalentSubmitCommand({
+    ...baseForm(),
+    trainingEngine: 'ray-ddp',
+    maxFailures: 7,
+    checkpointEveryEpochs: 4,
+    checkpointKeepLatest: 9,
+    checkpointKeepBest: 2,
+  })
+  assert.doesNotMatch(command, /--(?:max-failures|checkpoint-every-epochs|checkpoint-keep-latest|checkpoint-keep-best)/)
 })
 
 test('equivalent submit command includes automatic input preload as one user parameter', () => {

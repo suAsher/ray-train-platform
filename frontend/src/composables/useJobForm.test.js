@@ -1,26 +1,93 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 import { jobFormStepIssues } from './jobFormIssues.js'
+import { buildJobSpec } from '../submission.js'
+import { useJobForm } from './useJobForm.js'
 
-const readFormSource = () => readFile(new URL('./useJobForm.js', import.meta.url), 'utf8')
+const managedImage = {
+  reference: 'registry.example/ray@sha256:' + 'a'.repeat(64),
+  supportedEngines: ['ray-ddp', 'ray-train'],
+}
 
-test('job form defaults to Ray orchestrated DDP and keeps managed recovery defaults separate', async () => {
-  const source = await readFormSource()
+const makeManagedAvailable = (state) => {
+  state.limits.value = {
+    ...state.limits.value,
+    maxWorkerReplicas: 2,
+    maxGpusPerWorker: 8,
+    maxTotalGpus: 16,
+    tenantQuota: { gpuLimit: 16, gpuUsed: 0, gpuAvailable: 16 },
+    runtime: { managedEnabled: true, availableEngines: ['ray-ddp', 'ray-train'] },
+  }
+  state.trainingImages.value = [managedImage]
+  state.form.image = managedImage.reference
+}
 
-  assert.match(source, /trainingEngine:\s*normalizeTrainingEngine\(/)
-  assert.match(source, /maxFailures:\s*queryNonNegativeInteger\([^,]+,\s*2\)/)
-  assert.match(source, /checkpointEveryEpochs:\s*queryNonNegativeInteger\([^,]+,\s*1\)/)
-  assert.match(source, /checkpointKeepLatest:\s*queryNonNegativeInteger\([^,]+,\s*3\)/)
-  assert.match(source, /checkpointKeepBest:\s*queryNonNegativeInteger\([^,]+,\s*1\)/)
+test('job form defaults managed recovery values and sanitizes invalid copied query policy', () => {
+  const defaults = useJobForm({ query: {} })
+  assert.equal(defaults.form.trainingEngine, 'ray-ddp')
+  assert.deepEqual([
+    defaults.form.maxFailures,
+    defaults.form.checkpointEveryEpochs,
+    defaults.form.checkpointKeepLatest,
+    defaults.form.checkpointKeepBest,
+  ], [2, 1, 3, 1])
+
+  const copied = useJobForm({ query: {
+    trainingEngine: 'ray-train',
+    maxFailures: '11',
+    checkpointEveryEpochs: '100001',
+    checkpointKeepLatest: '1001',
+    checkpointKeepBest: '-1',
+    parentJobId: 'job-0123456789abcdef01234567',
+  } })
+  assert.equal(copied.form.trainingEngine, 'ray-train')
+  assert.deepEqual([
+    copied.form.maxFailures,
+    copied.form.checkpointEveryEpochs,
+    copied.form.checkpointKeepLatest,
+    copied.form.checkpointKeepBest,
+  ], [2, 1, 3, 1])
+  assert.equal(copied.form.parentJobId, 'job-0123456789abcdef01234567')
 })
 
-test('job form preserves an explicit managed engine and parent from rerun query state', async () => {
-  const source = await readFormSource()
+test('managed policy mutation blocks the runtime step and submission at every UI boundary', () => {
+  const state = useJobForm({ query: { trainingEngine: 'ray-train' } })
+  makeManagedAvailable(state)
+  Object.assign(state.form, {
+    name: 'managed-test',
+    codeSourceType: 'git',
+    gitURL: 'https://git.example.com/team/train.git',
+    gitCommit: '0123456789abcdef',
+    workerReplicas: 2,
+    gpusPerWorker: 1,
+  })
 
-  assert.match(source, /route\?\.query\?\.trainingEngine/)
-  assert.match(source, /route\?\.query\?\.parentJobId/)
+  state.form.maxFailures = 11
+  assert.match(state.stepIssues(1).join('\n'), /最大恢复次数.*0.*10/)
+  assert.throws(() => buildJobSpec(state.toSubmission()), /最大恢复次数.*0.*10/)
+
+  state.form.maxFailures = 2
+  state.form.checkpointEveryEpochs = 100001
+  assert.match(state.stepIssues(1).join('\n'), /Checkpoint.*周期.*100000/)
+  assert.throws(() => buildJobSpec(state.toSubmission()), /Checkpoint.*周期.*100000/)
+
+  state.form.checkpointEveryEpochs = 1
+  state.form.checkpointKeepLatest = null
+  assert.match(state.stepIssues(1).join('\n'), /最近 Checkpoint.*非负整数/)
+  assert.throws(() => buildJobSpec(state.toSubmission()), /最近 Checkpoint.*非负整数/)
+})
+
+test('managed selection survives an incompatible image transition and becomes visibly blocking', () => {
+  const state = useJobForm({ query: { trainingEngine: 'ray-train' } })
+  makeManagedAvailable(state)
+  assert.equal(state.managedAvailability.value.available, true)
+  assert.doesNotMatch(state.stepIssues(1).join('\n'), /不支持 Ray Train/)
+
+  state.trainingImages.value = [{ ...managedImage, supportedEngines: ['ray-ddp'] }]
+  assert.equal(state.form.trainingEngine, 'ray-train')
+  assert.equal(state.managedAvailability.value.available, false)
+  assert.match(state.stepIssues(1).join('\n'), /镜像.*不支持 Ray Train/)
 })
 
 test('runtime step blocks submission with a clear Chinese message when team quota is exhausted', () => {

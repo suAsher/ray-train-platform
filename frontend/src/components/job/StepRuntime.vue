@@ -28,6 +28,7 @@
           type="button"
           class="rounded-2xl border p-4 text-left transition"
           :class="engineClass('ray-train')"
+          :disabled="!managedAvailability.available"
           :aria-disabled="!managedAvailability.available"
           :aria-pressed="form.trainingEngine === 'ray-train'"
           :aria-describedby="!managedAvailability.available ? 'managed-engine-reason' : undefined"
@@ -45,6 +46,15 @@
           >{{ managedAvailability.reason }}</p>
         </button>
       </div>
+      <el-alert
+        v-if="form.trainingEngine === 'ray-train' && !managedAvailability.available"
+        id="managed-engine-blocking-alert"
+        class="mt-3"
+        type="error"
+        show-icon
+        :closable="false"
+        :title="managedAvailability.reason"
+      />
     </fieldset>
 
     <div v-if="form.trainingEngine === 'ray-train'" class="mb-6 rounded-2xl border border-emerald-900/60 bg-emerald-950/15 p-4">

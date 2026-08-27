@@ -1,5 +1,11 @@
 export const RAY_DDP_ENGINE = 'ray-ddp'
 export const RAY_TRAIN_ENGINE = 'ray-train'
+export const MANAGED_POLICY_LIMITS = Object.freeze({
+  maxFailures: Object.freeze({ fallback: 2, maximum: 10, label: 'Worker 最大恢复次数' }),
+  checkpointEveryEpochs: Object.freeze({ fallback: 1, maximum: 100000, label: 'Checkpoint 保存周期' }),
+  checkpointKeepLatest: Object.freeze({ fallback: 3, maximum: 1000, label: '最近 Checkpoint 保留数' }),
+  checkpointKeepBest: Object.freeze({ fallback: 1, maximum: 1000, label: '最佳 Checkpoint 保留数' }),
+})
 
 /** Legacy rows have no trainingEngine and must remain Ray-orchestrated DDP. */
 export function normalizeTrainingEngine(value) {
@@ -30,6 +36,32 @@ export function managedEngineAvailability({ limits = {}, images = [], imageRefer
     return { available: false, reason: '所选镜像不支持 Ray Train 托管，请选择兼容镜像' }
   }
   return { available: true, reason: '' }
+}
+
+/** Normalize copied/rerun query state without mutating the route query. */
+export function managedPolicyFromQuery(query = {}) {
+  return Object.fromEntries(Object.entries(MANAGED_POLICY_LIMITS).map(([field, policy]) => [
+    field,
+    boundedNonNegativeInteger(query?.[field], policy.fallback, policy.maximum),
+  ]))
+}
+
+/** Return user-facing errors for the managed policy currently in the form. */
+export function managedPolicyIssues(policy = {}) {
+  const issues = []
+  for (const [field, bounds] of Object.entries(MANAGED_POLICY_LIMITS)) {
+    if (policy?.[field] == null || policy[field] === '') {
+      issues.push(`${bounds.label}必须是非负整数`)
+      continue
+    }
+    const parsed = Number(policy?.[field])
+    if (!Number.isSafeInteger(parsed) || parsed < 0) {
+      issues.push(`${bounds.label}必须是非负整数`)
+    } else if (parsed > bounds.maximum) {
+      issues.push(`${bounds.label}必须在 0 到 ${bounds.maximum} 之间`)
+    }
+  }
+  return issues
 }
 
 export function resubmitRuntimeQuery(job, { resume = false } = {}) {
@@ -68,4 +100,10 @@ export function jobRuntimeDetails(job) {
 function nonNegativeInteger(value, fallback) {
   const parsed = Number(value)
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : fallback
+}
+
+function boundedNonNegativeInteger(value, fallback, maximum) {
+  if (value == null || value === '') return fallback
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed >= 0 && parsed <= maximum ? parsed : fallback
 }

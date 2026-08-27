@@ -164,6 +164,102 @@ entrypoint: python train.py
 	}
 }
 
+func TestManagedSubmitCarriesExplicitRecoveryAndCheckpointPolicy(t *testing.T) {
+	root := seedProject(t, `name: managed-policy
+image: harbor.example/train@sha256:`+strings.Repeat("b", 64)+`
+entrypoint: python train.py
+`)
+	var submitted domain.JobSpec
+	stub := artifactStubHandler(t, func(spec domain.JobSpec) { submitted = spec })
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/limits":
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"runtime": map[string]any{
+				"availableEngines": []string{"ray-ddp", "ray-train"}, "managedEnabled": true,
+				"productionRayVersion": "2.56.1", "canaryRayVersion": "2.58.0",
+			}})
+			return
+		case "/api/v1/images":
+			writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
+				"name": "Managed", "reference": "harbor.example/train@sha256:" + strings.Repeat("b", 64),
+				"rayVersion": "2.56.1", "supportedEngines": []string{"ray-ddp", "ray-train"},
+			}})
+			return
+		}
+		stub(writer, request)
+	}))
+	defer server.Close()
+
+	err := Run(context.Background(), []string{
+		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root,
+		"--engine", "ray-train", "--max-failures", "7", "--checkpoint-every-epochs", "4",
+		"--checkpoint-keep-latest", "9", "--checkpoint-keep-best", "2",
+	}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+	if err != nil {
+		t.Fatalf("submit managed policy: %v", err)
+	}
+	want := domain.ManagedTrainingPolicy{
+		MaxFailures: 7,
+		Checkpoint:  domain.CheckpointPolicy{EveryEpochs: 4, KeepLatest: 9, KeepBest: 2},
+	}
+	if submitted.Managed != want {
+		t.Fatalf("copied Portal policy did not reach JobSpec: got %+v want %+v", submitted.Managed, want)
+	}
+}
+
+func TestManagedPolicyFlagsRejectRayDDPBeforeNetworkOrArchive(t *testing.T) {
+	for _, flagAndValue := range [][]string{
+		{"--max-failures", "2"},
+		{"--checkpoint-every-epochs", "1"},
+		{"--checkpoint-keep-latest", "3"},
+		{"--checkpoint-keep-best", "1"},
+	} {
+		t.Run(flagAndValue[0], func(t *testing.T) {
+			root := seedProject(t, "name: ddp-policy\nentrypoint: python train.py\nengine: ray-ddp\n")
+			if err := os.Symlink(filepath.Join(root, "missing"), filepath.Join(root, "broken")); err != nil {
+				t.Fatal(err)
+			}
+			requests := 0
+			server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+			defer server.Close()
+			arguments := []string{"submit", "--server", server.URL, "--dir", root}
+			arguments = append(arguments, flagAndValue...)
+			err := Run(context.Background(), arguments, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+			if err == nil || !strings.Contains(err.Error(), "ray-ddp") {
+				t.Fatalf("expected local ray-ddp policy rejection, got %v", err)
+			}
+			if requests != 0 {
+				t.Fatalf("invalid policy reached network %d times", requests)
+			}
+		})
+	}
+}
+
+func TestManagedPolicyValuesValidateBeforeNetworkOrArchive(t *testing.T) {
+	for _, flagAndValue := range [][]string{
+		{"--max-failures", "11"},
+		{"--checkpoint-every-epochs", "-1"},
+		{"--checkpoint-keep-latest", "-1"},
+		{"--checkpoint-keep-best", "-1"},
+	} {
+		t.Run(strings.Join(flagAndValue, "="), func(t *testing.T) {
+			root := seedProject(t, "name: bad-managed-policy\nentrypoint: python train.py\nengine: ray-train\n")
+			requests := 0
+			server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+			defer server.Close()
+			arguments := []string{"submit", "--server", server.URL, "--dir", root}
+			arguments = append(arguments, flagAndValue...)
+			err := Run(context.Background(), arguments, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+			if err == nil {
+				t.Fatal("expected local managed policy validation error")
+			}
+			if requests != 0 {
+				t.Fatalf("invalid policy reached network %d times", requests)
+			}
+		})
+	}
+}
+
 func TestManagedSubmitRejectsIncompatibleExplicitImageBeforeArchiveOrUpload(t *testing.T) {
 	root := seedProject(t, `name: incompatible-managed
 image: harbor.example/legacy@sha256:`+strings.Repeat("1", 64)+`

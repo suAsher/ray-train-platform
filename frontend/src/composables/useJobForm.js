@@ -1,8 +1,5 @@
 import { computed, reactive, ref, watch } from 'vue'
 
-import { fetchPlatformLimits } from '../api/platform'
-import { fetchImages } from '../api/catalog'
-import { fetchWorkspaceSnapshots } from '../api/dataSpaces'
 import {
   clampResources,
   containerPathFor,
@@ -12,9 +9,14 @@ import {
   normalizeCacheSelection,
   profilesFromLimits,
   resolveExecutionMode,
-} from '../platformLimits'
-import { entrypointWarnings, previewCommand } from '../commandPreview'
-import { managedEngineAvailability, normalizeTrainingEngine } from '../trainingEngine.js'
+} from '../platformLimits.js'
+import { entrypointWarnings, previewCommand } from '../commandPreview.js'
+import {
+  managedEngineAvailability,
+  managedPolicyFromQuery,
+  managedPolicyIssues,
+  normalizeTrainingEngine,
+} from '../trainingEngine.js'
 import { jobFormStepIssues } from './jobFormIssues.js'
 
 /**
@@ -25,12 +27,13 @@ import { jobFormStepIssues } from './jobFormIssues.js'
  * is what let a user pick the single-GPU card, raise the GPU count, and only
  * discover the mismatch when the server rejected the submit.
  */
-export function useJobForm(route) {
+export function useJobForm(route, catalogLoaders = defaultCatalogLoaders) {
   const limits = ref(defaultPlatformLimits)
   const trainingImages = ref([])
   const workspaceSnapshots = ref([])
   const loadingCatalog = ref(false)
 
+  const copiedManagedPolicy = managedPolicyFromQuery(route?.query)
   const form = reactive({
     name: '',
     image: '',
@@ -41,10 +44,7 @@ export function useJobForm(route) {
     workspaceSnapshot: '',
     entrypoint: 'python train.py',
     trainingEngine: normalizeTrainingEngine(route?.query?.trainingEngine),
-    maxFailures: queryNonNegativeInteger(route?.query?.maxFailures, 2),
-    checkpointEveryEpochs: queryNonNegativeInteger(route?.query?.checkpointEveryEpochs, 1),
-    checkpointKeepLatest: queryNonNegativeInteger(route?.query?.checkpointKeepLatest, 3),
-    checkpointKeepBest: queryNonNegativeInteger(route?.query?.checkpointKeepBest, 1),
+    ...copiedManagedPolicy,
     parentJobId: String(route?.query?.parentJobId || ''),
     workerReplicas: 1,
     gpusPerWorker: 1,
@@ -131,6 +131,7 @@ export function useJobForm(route) {
       if (form.trainingEngine === 'ray-train' && !managedAvailability.value.available) {
         issues.push(managedAvailability.value.reason)
       }
+      if (form.trainingEngine === 'ray-train') issues.push(...managedPolicyIssues(form))
       issues.push(...jobFormStepIssues({
         step,
         form,
@@ -143,7 +144,11 @@ export function useJobForm(route) {
 
   const loadCatalog = async () => {
     loadingCatalog.value = true
-    const results = await Promise.allSettled([fetchPlatformLimits(), fetchImages('training'), fetchWorkspaceSnapshots()])
+    const results = await Promise.allSettled([
+      catalogLoaders.fetchPlatformLimits(),
+      catalogLoaders.fetchImages('training'),
+      catalogLoaders.fetchWorkspaceSnapshots(),
+    ])
     const [limitsResult, imagesResult, snapshotsResult] = results
     if (limitsResult.status === 'fulfilled' && limitsResult.value) {
       limits.value = {
@@ -191,8 +196,8 @@ export function useJobForm(route) {
   }
 }
 
-function queryNonNegativeInteger(value, fallback) {
-  if (value == null || value === '') return fallback
-  const parsed = Number(value)
-  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : fallback
-}
+const defaultCatalogLoaders = Object.freeze({
+  fetchPlatformLimits: (...arguments_) => import('../api/platform.js').then(({ fetchPlatformLimits }) => fetchPlatformLimits(...arguments_)),
+  fetchImages: (...arguments_) => import('../api/catalog.js').then(({ fetchImages }) => fetchImages(...arguments_)),
+  fetchWorkspaceSnapshots: (...arguments_) => import('../api/dataSpaces.js').then(({ fetchWorkspaceSnapshots }) => fetchWorkspaceSnapshots(...arguments_)),
+})

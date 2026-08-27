@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"ray-train-platform-backend/domain"
 )
 
 // The daily loop is "edit code, submit". Retyping image digests, GPU counts and
@@ -185,7 +187,11 @@ func TestProjectJobSpecDefaultsEngineWithoutForgingRayVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spec.TrainingEngine != "ray-train" || spec.RayVersion != "" || spec.Managed.MaxFailures != 2 {
+	wantPolicy := domain.ManagedTrainingPolicy{
+		MaxFailures: 2,
+		Checkpoint:  domain.CheckpointPolicy{EveryEpochs: 1, KeepLatest: 3, KeepBest: 1},
+	}
+	if spec.TrainingEngine != "ray-train" || spec.RayVersion != "" || spec.Managed != wantPolicy {
 		t.Fatalf("managed project must use the design recovery default without a client Ray version: %+v", spec)
 	}
 }
