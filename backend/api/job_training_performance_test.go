@@ -53,7 +53,7 @@ func TestTrainingPerformanceUsesPersistedSelectorsAndRejectsClientSelectors(t *t
 
 	response := httptest.NewRecorder()
 	trainingPerformanceRouter(handler, &principal).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/jobs/job-a/training-performance?window=1h", nil))
-	if response.Code != http.StatusOK || provider.calls != 1 || provider.ref.Namespace != job.KubernetesNS || provider.ref.RayClusterName != job.RayClusterName || provider.ref.RayJobName != job.RayJobName || provider.window != "1h" {
+	if response.Code != http.StatusOK || provider.calls != 1 || provider.ref.JobID != job.ID || provider.ref.Namespace != job.KubernetesNS || provider.ref.RayClusterName != job.RayClusterName || provider.ref.RayJobName != job.RayJobName || provider.window != "1h" {
 		t.Fatalf("persisted selectors not used: status=%d provider=%+v body=%s", response.Code, provider, response.Body.String())
 	}
 	var envelope struct {

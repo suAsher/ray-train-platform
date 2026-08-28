@@ -8,6 +8,8 @@ import json
 import math
 import numbers
 import os
+import re
+import threading
 from pathlib import Path, PurePosixPath
 from collections.abc import Mapping
 import shutil
@@ -19,6 +21,27 @@ MANIFEST_NAME = "manifest.json"
 MANIFEST_VERSION = 1
 RETENTION_INDEX_NAME = "retention-index.json"
 RETENTION_INDEX_VERSION = 1
+
+_GAUGE_TAG_KEYS = (
+    "platform_job_id",
+    "exported_namespace",
+    "ray_io_cluster",
+    "ray_io_node_type",
+    "pod",
+    "rank",
+)
+_CUSTOM_METRIC_NAMES = {
+    "step": "platform_training_step",
+    "time": "platform_training_step_time_seconds",
+    "step_time": "platform_training_step_time_seconds",
+    "data_time": "platform_training_data_time_seconds",
+    "nccl_time": "platform_training_nccl_duration_seconds",
+    "nccl_duration": "platform_training_nccl_duration_seconds",
+}
+_CUSTOM_GAUGES: dict[str, Any] = {}
+_CUSTOM_GAUGES_LOCK = threading.Lock()
+_SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_SAFE_DNS_VALUE = re.compile(r"^[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?$")
 
 
 def _scalar(value: Any) -> float | None:
@@ -338,6 +361,55 @@ def _load_train_api() -> Any:
     return train
 
 
+def _load_gauge_class() -> Any:
+    from ray.util.metrics import Gauge
+
+    return Gauge
+
+
+def _managed_metric_tags(rank: int) -> dict[str, str] | None:
+    tags = {
+        "platform_job_id": os.environ.get("PLATFORM_JOB_ID", "").strip(),
+        "exported_namespace": os.environ.get("PLATFORM_POD_NAMESPACE", "").strip(),
+        "ray_io_cluster": os.environ.get("PLATFORM_RAY_CLUSTER", "").strip(),
+        "ray_io_node_type": os.environ.get("PLATFORM_RAY_NODE_TYPE", "").strip(),
+        "pod": os.environ.get("PLATFORM_POD_NAME", "").strip(),
+        "rank": str(rank),
+    }
+    if not _SAFE_IDENTIFIER.fullmatch(tags["platform_job_id"]):
+        return None
+    for key in ("exported_namespace", "ray_io_cluster", "pod"):
+        if len(tags[key]) > 253 or not _SAFE_DNS_VALUE.fullmatch(tags[key]):
+            return None
+    if tags["ray_io_node_type"] != "worker" or rank < 0 or rank > 1_000_000:
+        return None
+    return tags
+
+
+def _export_managed_metrics(metrics: Mapping[str, float], rank: int) -> None:
+    tags = _managed_metric_tags(rank)
+    if tags is None:
+        return
+    for key, value in metrics.items():
+        metric_name = _CUSTOM_METRIC_NAMES.get(key.strip().lower())
+        if metric_name is None:
+            continue
+        try:
+            with _CUSTOM_GAUGES_LOCK:
+                gauge = _CUSTOM_GAUGES.get(metric_name)
+                if gauge is None:
+                    gauge = _load_gauge_class()(
+                        metric_name,
+                        description="Managed Ray Train worker performance metric.",
+                        tag_keys=_GAUGE_TAG_KEYS,
+                    )
+                    _CUSTOM_GAUGES[metric_name] = gauge
+            gauge.set(value, tags=tags)
+        except Exception:
+            # Observability must never interrupt training or checkpoint parity.
+            continue
+
+
 def world_rank(*, train_api: Any | None = None) -> int:
     api = train_api if train_api is not None else _load_train_api()
     return int(api.get_context().get_world_rank())
@@ -360,6 +432,7 @@ def report_metrics(
     clean = sanitize_metrics(metrics, reject_invalid=True)
     api = train_api if train_api is not None else _load_train_api()
     rank = int(api.get_context().get_world_rank()) if world_rank is None else int(world_rank)
+    _export_managed_metrics(clean, rank)
     checkpoint = None
     checkpoint_error = None
     if checkpoint_dir is not None and rank == 0:

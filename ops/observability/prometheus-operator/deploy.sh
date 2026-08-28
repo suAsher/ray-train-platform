@@ -12,11 +12,12 @@ readonly chart="${root_dir}/helm/vendor/kube-prometheus-stack-87.18.1.tgz"
 readonly values="${root_dir}/ops/observability/prometheus-operator/20-values-production.yaml"
 readonly dashboard="${root_dir}/ops/observability/prometheus-operator/50-gpu-training-dashboard.yaml"
 readonly dcgm_service_monitor="${root_dir}/ops/observability/prometheus-operator/40-dcgm-service-monitor.yaml"
+readonly ray_pod_monitor="${root_dir}/ops/observability/prometheus-operator/60-ray-pod-monitor.yaml"
 
 for required in "$kubectl_bin" "$helm_bin" openssl jq; do
   command -v "$required" >/dev/null || { echo "missing required command: ${required}" >&2; exit 1; }
 done
-[[ -f "$chart" && -f "$values" && -f "$dashboard" && -f "$dcgm_service_monitor" ]] || {
+[[ -f "$chart" && -f "$values" && -f "$dashboard" && -f "$dcgm_service_monitor" && -f "$ray_pod_monitor" ]] || {
   echo 'Prometheus Operator deployment assets are incomplete' >&2
   exit 1
 }
@@ -49,4 +50,5 @@ fi
 
 "$kubectl_bin" -n "$namespace" apply -f "$dashboard"
 "$kubectl_bin" -n "$namespace" apply -f "$dcgm_service_monitor"
+"$kubectl_bin" -n "$namespace" apply -f "$ray_pod_monitor"
 "${root_dir}/ops/observability/prometheus-operator/verify.sh"

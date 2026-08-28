@@ -3,11 +3,15 @@ set -eu
 
 textfile_dir="${TEXTFILE_DIR:-/var/lib/node-exporter/textfile}"
 interval_seconds="${INTERVAL_SECONDS:-30}"
+cache_root_data1="${CACHE_ROOT_DATA1:-/host/data1-ray-cache}"
+cache_root_data2="${CACHE_ROOT_DATA2:-/host/data2-ray-cache}"
+run_once="${RUN_ONCE:-0}"
 
 case "${interval_seconds}" in
   ''|*[!0-9]*) printf 'invalid INTERVAL_SECONDS\n' >&2; exit 1 ;;
 esac
 [ "${interval_seconds}" -gt 0 ] || { printf 'INTERVAL_SECONDS must be positive\n' >&2; exit 1; }
+case "${run_once}" in 0|1) ;; *) printf 'RUN_ONCE must be 0 or 1\n' >&2; exit 1 ;; esac
 
 collect_filesystem() {
   cache_root="$1"
@@ -39,6 +43,40 @@ collect_filesystem() {
   printf 'ray_cache_teardown_failures_total{path="%s"} %s\n' "${metric_path}" "${teardown_failures}"
 }
 
+collect_preload_metrics() {
+  cache_root="$1"
+  [ -d "${cache_root}" ] || return 0
+  find "${cache_root}" -xdev -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | while IFS= read -r volume; do
+    volume_name="${volume##*/}"
+    printf '%s\n' "${volume_name}" | grep -Eq '^pvc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_[a-z0-9]([-a-z0-9]*[a-z0-9])?_[a-z0-9]([-a-z0-9.]*[a-z0-9])?$' || continue
+    metric_file="${volume}/.ray-cache-metrics/preload.metrics"
+    [ -f "${metric_file}" ] && [ ! -L "${metric_file}" ] || continue
+    metric_size="$(wc -c <"${metric_file}" | tr -d ' ')"
+    case "${metric_size}" in ''|*[!0-9]*) continue ;; esac
+    [ "${metric_size}" -le 4096 ] || continue
+    awk -F= '
+      function safe_id(value) { return length(value) <= 128 && value ~ /^[A-Za-z0-9][A-Za-z0-9._-]*$/ }
+      function safe_dns(value) { return length(value) <= 253 && value ~ /^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/ }
+      function uint(value) { return value ~ /^[0-9]+$/ }
+      function decimal(value) { return value ~ /^[0-9]+([.][0-9]+)?$/ }
+      NF != 2 || seen[$1]++ { invalid=1; next }
+      { value[$1]=$2; count++ }
+      END {
+        if (invalid || count != 12 || value["version"] != "1" ||
+            !safe_id(value["platform_job_id"]) || !safe_dns(value["exported_namespace"]) ||
+            !safe_dns(value["ray_io_cluster"]) || value["ray_io_node_type"] != "worker" ||
+            !safe_dns(value["pod"]) || !uint(value["bytes"]) || !uint(value["files"]) ||
+            !decimal(value["seconds"]) || value["copied"] !~ /^[01]$/ || !uint(value["hits"]) || !uint(value["misses"])) exit
+        labels="platform_job_id=\"" value["platform_job_id"] "\",exported_namespace=\"" value["exported_namespace"] "\",ray_io_cluster=\"" value["ray_io_cluster"] "\",ray_io_node_type=\"worker\",pod=\"" value["pod"] "\""
+        print "ray_cache_bytes{" labels "} " value["bytes"]
+        print "ray_cache_hits_total{" labels "} " value["hits"]
+        print "ray_cache_misses_total{" labels "} " value["misses"]
+        print "ray_cache_preloader_duration_seconds{" labels "} " value["seconds"]
+      }
+    ' "${metric_file}"
+  done
+}
+
 mkdir -p "${textfile_dir}"
 while :; do
   temporary_file="${textfile_dir}/ray_cache.prom.tmp"
@@ -52,9 +90,20 @@ while :; do
     printf '# TYPE ray_cache_volume_directories gauge\n'
     printf '# HELP ray_cache_teardown_failures_total Recorded cache teardown failures.\n'
     printf '# TYPE ray_cache_teardown_failures_total counter\n'
-    collect_filesystem /host/data1-ray-cache /data1
-    collect_filesystem /host/data2-ray-cache /data2
+    printf '# HELP ray_cache_bytes Bytes staged in one job-scoped cache PVC.\n'
+    printf '# TYPE ray_cache_bytes gauge\n'
+    printf '# HELP ray_cache_hits_total Cumulative cache preload reuses for one job-scoped cache PVC.\n'
+    printf '# TYPE ray_cache_hits_total counter\n'
+    printf '# HELP ray_cache_misses_total Cumulative cache preload copies for one job-scoped cache PVC.\n'
+    printf '# TYPE ray_cache_misses_total counter\n'
+    printf '# HELP ray_cache_preloader_duration_seconds Duration of the latest cache preload operation.\n'
+    printf '# TYPE ray_cache_preloader_duration_seconds gauge\n'
+    collect_filesystem "${cache_root_data1}" /data1
+    collect_filesystem "${cache_root_data2}" /data2
+    collect_preload_metrics "${cache_root_data1}"
+    collect_preload_metrics "${cache_root_data2}"
   } >"${temporary_file}"
   mv "${temporary_file}" "${output_file}"
+  [ "${run_once}" = "0" ] || break
   sleep "${interval_seconds}"
 done

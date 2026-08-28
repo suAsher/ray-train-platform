@@ -619,6 +619,9 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 	}
 	if jobSpec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain {
 		env = append(env, map[string]any{"name": "RAYTRAIN_CLUSTER_ATTEMPT", "value": strconv.Itoa(options.clusterAttempt)})
+		if !head && containerName == "ray-worker" {
+			env = append(env, managedMetricIdentityEnvironment(options.trainingEventJobID)...)
+		}
 	}
 	if mountData {
 		env = append(env, platformDataEnvironment(jobSpec, options.managedResumePath)...)
@@ -700,27 +703,31 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 		env = setEnvironmentValue(env, "PLATFORM_DATASET_PATH", path.Join(options.LocalCache.MountPathData1, "dataset-view"))
 		env = setEnvironmentValue(env, "PLATFORM_CACHE_PRELOAD", string(domain.CachePreloadInput))
 	}
+	container := map[string]any{
+		"name":            containerName,
+		"image":           image,
+		"imagePullPolicy": domain.RuntimeImagePullPolicy(image),
+		"workingDir":      "/workspace",
+		"resources":       resources,
+		"env":             env,
+		"volumeMounts":    volumeMounts,
+		"securityContext": map[string]any{"allowPrivilegeEscalation": false, "capabilities": map[string]any{"drop": []any{"ALL"}}},
+	}
+	if jobSpec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain && (containerName == "ray-head" || containerName == "ray-worker") {
+		container["ports"] = []any{map[string]any{"name": "metrics", "containerPort": int64(8080), "protocol": "TCP"}}
+	}
 	podSpec := map[string]any{
 		"serviceAccountName":           options.ServiceAccount,
 		"automountServiceAccountToken": options.ServiceAccount != "",
 		"securityContext":              map[string]any{"seccompProfile": map[string]any{"type": "RuntimeDefault"}},
-		"containers": []any{map[string]any{
-			"name":            containerName,
-			"image":           image,
-			"imagePullPolicy": domain.RuntimeImagePullPolicy(image),
-			"workingDir":      "/workspace",
-			"resources":       resources,
-			"env":             env,
-			"volumeMounts":    volumeMounts,
-			"securityContext": map[string]any{"allowPrivilegeEscalation": false, "capabilities": map[string]any{"drop": []any{"ALL"}}},
-		}},
-		"volumes": volumes,
+		"containers":                   []any{container},
+		"volumes":                      volumes,
 	}
 	if materializeSource {
 		podSpec["initContainers"] = []any{sourceMaterializer(source, jobSpec, options)}
 	}
 	if preloadInput {
-		podSpec["initContainers"] = []any{datasetCachePreloader(options.SourceMaterializerImage, volumeMounts, options.LocalCache)}
+		podSpec["initContainers"] = []any{datasetCachePreloader(options.SourceMaterializerImage, volumeMounts, options.LocalCache, options.trainingEventJobID)}
 	}
 	if mountData && options.LocalCache.runtime {
 		podSpec["securityContext"].(map[string]any)["fsGroup"] = int64(1000)
@@ -807,7 +814,7 @@ func setEnvironmentValue(environment []any, name, value string) []any {
 	return updated
 }
 
-func datasetCachePreloader(image string, workerMounts []any, cache LocalCacheOptions) map[string]any {
+func datasetCachePreloader(image string, workerMounts []any, cache LocalCacheOptions, jobID string) map[string]any {
 	mounts := make([]any, 0, 3)
 	for _, item := range workerMounts {
 		mount, _ := item.(map[string]any)
@@ -827,13 +834,13 @@ func datasetCachePreloader(image string, workerMounts []any, cache LocalCacheOpt
 		"image":           image,
 		"imagePullPolicy": "IfNotPresent",
 		"command":         []any{"python3", "/usr/local/bin/platform-stage-dataset.py"},
-		"env": []any{
+		"env": append([]any{
 			map[string]any{"name": "PLATFORM_DATASET_SOURCE_PATH", "value": domain.DataMountInputPath},
 			map[string]any{"name": "PLATFORM_CACHE_PATHS", "value": cache.MountPathData1 + ":" + cache.MountPathData2},
 			map[string]any{"name": "PLATFORM_CACHE_STAGE_TIMEOUT", "value": "14400"},
 			map[string]any{"name": "PLATFORM_CACHE_COPY_WORKERS", "value": "32"},
 			map[string]any{"name": "PLATFORM_CACHE_LIMIT_BYTES_PER_DISK", "value": strconv.FormatInt(perDisk.Value(), 10)},
-		},
+		}, managedMetricIdentityEnvironment(jobID)...),
 		"resources": map[string]any{
 			"requests": map[string]any{"cpu": "2", "memory": "1Gi"},
 			"limits":   map[string]any{"cpu": "8", "memory": "4Gi"},
@@ -846,6 +853,19 @@ func datasetCachePreloader(image string, workerMounts []any, cache LocalCacheOpt
 			"capabilities":             map[string]any{"drop": []any{"ALL"}},
 		},
 		"volumeMounts": mounts,
+	}
+}
+
+func managedMetricIdentityEnvironment(jobID string) []any {
+	field := func(name, fieldPath string) map[string]any {
+		return map[string]any{"name": name, "valueFrom": map[string]any{"fieldRef": map[string]any{"apiVersion": "v1", "fieldPath": fieldPath}}}
+	}
+	return []any{
+		map[string]any{"name": "PLATFORM_JOB_ID", "value": strings.TrimSpace(jobID)},
+		field("PLATFORM_POD_NAMESPACE", "metadata.namespace"),
+		field("PLATFORM_POD_NAME", "metadata.name"),
+		field("PLATFORM_RAY_CLUSTER", "metadata.labels['ray.io/cluster']"),
+		field("PLATFORM_RAY_NODE_TYPE", "metadata.labels['ray.io/node-type']"),
 	}
 }
 

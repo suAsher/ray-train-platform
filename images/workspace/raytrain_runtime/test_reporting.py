@@ -24,6 +24,7 @@ from raytrain_runtime.reporting import (  # noqa: E402
     sanitize_metrics,
     validate_checkpoint,
 )
+from raytrain_runtime import reporting  # noqa: E402
 
 
 class _FakeCheckpoint:
@@ -162,7 +163,71 @@ class ReportMetricsTest(unittest.TestCase):
         finalize_checkpoint(self.checkpoint, {"epoch": 1, "step": 100})
 
     def tearDown(self):
+        reporting._CUSTOM_GAUGES.clear()
         self.temporary.cleanup()
+
+    def test_exports_supported_managed_metrics_with_bounded_cached_tags(self):
+        class FakeGauge:
+            created = []
+            records = []
+
+            def __init__(self, name, description="", tag_keys=()):
+                self.name = name
+                self.tag_keys = tuple(tag_keys)
+                self.created.append(self)
+
+            def set(self, value, tags=None):
+                self.records.append((self.name, value, dict(tags or {})))
+
+        environment = {
+            "PLATFORM_JOB_ID": "job-01",
+            "PLATFORM_POD_NAMESPACE": "tenant-a",
+            "PLATFORM_RAY_CLUSTER": "job-01-cluster",
+            "PLATFORM_RAY_NODE_TYPE": "worker",
+            "PLATFORM_POD_NAME": "job-01-cluster-worker-abc",
+        }
+        metrics = {
+            "step": 7,
+            "time": 1.5,
+            "data_time": 0.4,
+            "nccl_time": 0.2,
+            "loss": 9.0,
+        }
+        train = _FakeTrain(rank=3)
+        with mock.patch.dict(os.environ, environment, clear=True), mock.patch.object(
+            reporting, "_load_gauge_class", return_value=FakeGauge
+        ):
+            report_metrics(metrics, world_rank=3, train_api=train)
+            report_metrics({"step_time": 1.25, "nccl_duration": 0.1}, world_rank=3, train_api=train)
+
+        self.assertEqual(
+            {gauge.name for gauge in FakeGauge.created},
+            {
+                "platform_training_step",
+                "platform_training_step_time_seconds",
+                "platform_training_data_time_seconds",
+                "platform_training_nccl_duration_seconds",
+            },
+        )
+        self.assertEqual(len(FakeGauge.created), 4)
+        self.assertTrue(all(record[2]["rank"] == "3" for record in FakeGauge.records))
+        self.assertTrue(all(record[2]["exported_namespace"] == "tenant-a" for record in FakeGauge.records))
+        self.assertNotIn("loss", {record[0] for record in FakeGauge.records})
+
+    def test_metrics_export_fails_open_when_ray_metrics_are_unavailable(self):
+        train = _FakeTrain(rank=0)
+        environment = {
+            "PLATFORM_JOB_ID": "job-01",
+            "PLATFORM_POD_NAMESPACE": "tenant-a",
+            "PLATFORM_RAY_CLUSTER": "job-01-cluster",
+            "PLATFORM_RAY_NODE_TYPE": "worker",
+            "PLATFORM_POD_NAME": "job-01-cluster-worker-abc",
+        }
+        with mock.patch.dict(os.environ, environment, clear=True), mock.patch.object(
+            reporting, "_load_gauge_class", side_effect=ImportError("ray metrics unavailable")
+        ):
+            report_metrics({"step": 2, "step_time": 1.0}, world_rank=0, train_api=train)
+        self.assertEqual(train.reports[0]["metrics"]["step"], 2.0)
 
     def test_only_rank_zero_attaches_checkpoint_and_rank_calls_stay_equal(self):
         train = _FakeTrain()

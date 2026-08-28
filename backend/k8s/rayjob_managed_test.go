@@ -221,6 +221,77 @@ func TestManagedJobRuntimeEnvironmentReachesRayDriverAndWorkers(t *testing.T) {
 	}
 }
 
+func TestManagedWorkerReceivesDownwardAPIMetricIdentityOnly(t *testing.T) {
+	manifest := managedManifest(t, managedRenderJob(domain.RayVersionProduction))
+	cluster, _, _ := unstructured.NestedMap(manifest.Object, "spec", "rayClusterSpec")
+	workers, _, _ := nestedSlice(cluster, "workerGroupSpecs")
+	workerContainers, _, _ := nestedSlice(workers[0].(map[string]any), "template", "spec", "containers")
+	workerEnv := metricEnvironment(workerContainers[0].(map[string]any))
+	if workerEnv["PLATFORM_JOB_ID"]["value"] != "job-01" {
+		t.Fatalf("managed worker missing immutable job ID: %#v", workerEnv)
+	}
+	wantFields := map[string]string{
+		"PLATFORM_POD_NAMESPACE": "metadata.namespace",
+		"PLATFORM_POD_NAME":      "metadata.name",
+		"PLATFORM_RAY_CLUSTER":   "metadata.labels['ray.io/cluster']",
+		"PLATFORM_RAY_NODE_TYPE": "metadata.labels['ray.io/node-type']",
+	}
+	for name, field := range wantFields {
+		valueFrom, _ := workerEnv[name]["valueFrom"].(map[string]any)
+		fieldRef, _ := valueFrom["fieldRef"].(map[string]any)
+		if fieldRef["fieldPath"] != field {
+			t.Fatalf("%s fieldPath = %#v, want %q", name, fieldRef["fieldPath"], field)
+		}
+	}
+
+	legacy, err := RenderRayJob(validRenderJob(), testRenderOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyCluster, _, _ := unstructured.NestedMap(legacy.Object, "spec", "rayClusterSpec")
+	legacyWorkers, _, _ := nestedSlice(legacyCluster, "workerGroupSpecs")
+	legacyContainers, _, _ := nestedSlice(legacyWorkers[0].(map[string]any), "template", "spec", "containers")
+	if got := metricEnvironment(legacyContainers[0].(map[string]any)); len(got) != 0 {
+		t.Fatalf("legacy worker gained managed metric metadata: %#v", got)
+	}
+}
+
+func TestManagedRayPodsExposeNamedMetricsPortWithoutChangingLegacyPods(t *testing.T) {
+	manifest := managedManifest(t, managedRenderJob(domain.RayVersionProduction))
+	cluster, _, _ := unstructured.NestedMap(manifest.Object, "spec", "rayClusterSpec")
+	headContainers, _, _ := nestedSlice(cluster, "headGroupSpec", "template", "spec", "containers")
+	workers, _, _ := nestedSlice(cluster, "workerGroupSpecs")
+	workerContainers, _, _ := nestedSlice(workers[0].(map[string]any), "template", "spec", "containers")
+	for name, container := range map[string]map[string]any{"head": headContainers[0].(map[string]any), "worker": workerContainers[0].(map[string]any)} {
+		ports, _ := container["ports"].([]any)
+		if len(ports) != 1 || ports[0].(map[string]any)["name"] != "metrics" || ports[0].(map[string]any)["containerPort"] != int64(8080) {
+			t.Fatalf("managed %s has no named Ray metrics port: %#v", name, ports)
+		}
+	}
+	legacy, err := RenderRayJob(validRenderJob(), testRenderOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyCluster, _, _ := unstructured.NestedMap(legacy.Object, "spec", "rayClusterSpec")
+	legacyWorkers, _, _ := nestedSlice(legacyCluster, "workerGroupSpecs")
+	legacyContainers, _, _ := nestedSlice(legacyWorkers[0].(map[string]any), "template", "spec", "containers")
+	if _, exists := legacyContainers[0].(map[string]any)["ports"]; exists {
+		t.Fatalf("legacy worker template changed: %#v", legacyContainers[0])
+	}
+}
+
+func metricEnvironment(container map[string]any) map[string]map[string]any {
+	result := map[string]map[string]any{}
+	for _, raw := range container["env"].([]any) {
+		entry := raw.(map[string]any)
+		name, _ := entry["name"].(string)
+		if strings.HasPrefix(name, "PLATFORM_") && (strings.Contains(name, "POD") || strings.Contains(name, "RAY_") || name == "PLATFORM_JOB_ID") {
+			result[name] = entry
+		}
+	}
+	return result
+}
+
 func TestManagedJobPreservesRayClusterResourcesAndKeepsHeadCPUOnly(t *testing.T) {
 	manifest := managedManifest(t, managedRenderJob(domain.RayVersionProduction))
 	cluster, _, _ := unstructured.NestedMap(manifest.Object, "spec", "rayClusterSpec")

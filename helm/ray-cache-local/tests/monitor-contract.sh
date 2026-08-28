@@ -4,6 +4,8 @@ set -euo pipefail
 readonly chart_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly production_values="${chart_dir}/values-vke-production.yaml"
 
+"${chart_dir}/tests/collector-contract.sh"
+
 for required in \
   templates/monitor-daemonset.yaml \
   templates/monitor-service.yaml \
@@ -72,6 +74,13 @@ require 'ray_cache_filesystem_size_bytes'
 require 'ray_cache_filesystem_available_bytes'
 require 'ray_cache_volume_directories'
 require 'ray_cache_teardown_failures_total'
+require 'ray_cache_bytes'
+require 'ray_cache_hits_total'
+require 'ray_cache_misses_total'
+require 'ray_cache_preloader_duration_seconds'
+require 'platform_job_id'
+require 'exported_namespace'
+require 'ray_io_cluster'
 require 'pvc-[0-9a-f]'
 require 'kind: ServiceMonitor'
 require 'kind: PrometheusRule'

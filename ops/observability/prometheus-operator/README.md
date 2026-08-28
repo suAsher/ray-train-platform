@@ -11,6 +11,7 @@
 - Prometheus Operator：上游 Chart 固定单个、无状态且可自动重建的控制器。
 - 监控组件选择 `platform.wellspiking.ai/pool=control-plane`，不占用 GPU 节点。
 - `40-dcgm-service-monitor.yaml` 从 `kube-system/dcgm-exporter` 采集 GPU 指标。
+- `60-ray-pod-monitor.yaml` 跨租户 namespace 采集 Ray head/worker 的 `metrics` 端口，并将 namespace、Pod、节点及 RayCluster 标签固化到每条时序。
 
 ## 首次部署或升级
 

@@ -12,16 +12,13 @@ import (
 	"ray-train-platform-backend/domain"
 )
 
-func TestTrainingPerformanceQueriesAreScopedToPersistedWorkerWorkload(t *testing.T) {
+func TestTrainingPerformanceUsesMetricFamilySpecificProductionSelectors(t *testing.T) {
 	requests := 0
+	queries := map[string]string{}
 	client := PrometheusClient{BaseURL: "http://prometheus.internal", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		requests++
 		expression := request.URL.Query().Get("query")
-		for _, selector := range []string{`exported_namespace="tenant-a"`, `ray_io_cluster="job-a-cluster"`, `ray_io_node_type="worker"`} {
-			if !strings.Contains(expression, selector) {
-				t.Fatalf("query missing persisted worker selector %s: %s", selector, expression)
-			}
-		}
+		queries[metricNameFromExpression(expression)] = expression
 		if request.URL.Query().Get("step") != "30" {
 			t.Fatalf("unexpected step: %s", request.URL.RawQuery)
 		}
@@ -30,7 +27,7 @@ func TestTrainingPerformanceQueriesAreScopedToPersistedWorkerWorkload(t *testing
 	})}}
 
 	performance, err := client.QueryTrainingPerformance(context.Background(), domain.TrainingWorkloadRef{
-		Namespace: "tenant-a", RayClusterName: "job-a-cluster", RayJobName: "job-a",
+		JobID: "job-a", Namespace: "tenant-a", RayClusterName: "job-a-cluster", RayJobName: "job-a",
 	}, "1h")
 	if err != nil {
 		t.Fatal(err)
@@ -46,6 +43,62 @@ func TestTrainingPerformanceQueriesAreScopedToPersistedWorkerWorkload(t *testing
 			t.Fatalf("missing metric %s became zero/value %v", name, *value)
 		}
 	}
+	workerRegex := `pod=~"^job-a-cluster-.*-worker-.*$"`
+	for _, name := range []string{"container_cpu_usage_seconds_total", "container_memory_working_set_bytes", "container_network_receive_bytes_total", "container_network_transmit_bytes_total"} {
+		expression := queries[name]
+		if !strings.Contains(expression, `namespace="tenant-a"`) || !strings.Contains(expression, workerRegex) || strings.Contains(expression, "ray_io_cluster") {
+			t.Fatalf("cAdvisor query is not pod-scoped through Kubernetes identity: %s", expression)
+		}
+	}
+	for _, name := range []string{"DCGM_FI_DEV_GPU_UTIL", "DCGM_FI_DEV_FB_USED"} {
+		expression := queries[name]
+		if !strings.Contains(expression, `exported_namespace="tenant-a"`) || !strings.Contains(expression, `exported_pod=~"^job-a-cluster-.*-worker-.*$"`) {
+			t.Fatalf("DCGM query is not exported-pod scoped: %s", expression)
+		}
+	}
+	for _, name := range []string{"ray_platform_training_step", "ray_platform_training_step_time_seconds", "ray_platform_training_data_time_seconds", "ray_platform_training_nccl_duration_seconds", "ray_object_store_memory"} {
+		expression := queries[name]
+		for _, selector := range []string{`exported_namespace="tenant-a"`, `ray_io_cluster="job-a-cluster"`, `ray_io_node_type="worker"`} {
+			if !strings.Contains(expression, selector) {
+				t.Fatalf("Ray query %s missing %s: %s", name, selector, expression)
+			}
+		}
+	}
+	cache := queries["ray_cache_bytes"]
+	for _, selector := range []string{`exported_namespace="tenant-a"`, `ray_io_cluster="job-a-cluster"`, `platform_job_id="job-a"`} {
+		if !strings.Contains(cache, selector) {
+			t.Fatalf("cache query missing %s: %s", selector, cache)
+		}
+	}
+	for _, name := range []string{"ray_cache_hits_total", "ray_cache_misses_total"} {
+		if strings.Contains(queries[name], "rate(") {
+			t.Fatalf("cumulative cache counter was converted to a sparse rate: %s", queries[name])
+		}
+	}
+	node := queries["node_network_receive_bytes_total"]
+	if !strings.Contains(node, "kube_pod_info") || !strings.Contains(node, `namespace="tenant-a"`) || !strings.Contains(node, workerRegex) || strings.Contains(node, `node_network_receive_bytes_total{exported_namespace`) {
+		t.Fatalf("node network query does not use worker-node join: %s", node)
+	}
+	for _, name := range []string{"kube_pod_status_phase", "kube_pod_container_status_restarts_total"} {
+		if !strings.Contains(queries[name], `namespace="tenant-a"`) || !strings.Contains(queries[name], workerRegex) {
+			t.Fatalf("Kubernetes query is not persisted-pod scoped: %s", queries[name])
+		}
+	}
+}
+
+func metricNameFromExpression(expression string) string {
+	for _, name := range []string{
+		"container_cpu_usage_seconds_total", "container_memory_working_set_bytes", "container_network_receive_bytes_total", "container_network_transmit_bytes_total",
+		"node_network_receive_bytes_total", "node_network_transmit_bytes_total", "DCGM_FI_DEV_GPU_UTIL", "DCGM_FI_DEV_FB_USED", "DCGM_FI_DEV_POWER_USAGE", "DCGM_FI_DEV_GPU_TEMP",
+		"ray_object_store_memory", "ray_object_store_spilled_bytes_total", "ray_cache_bytes", "ray_cache_hits_total", "ray_cache_misses_total", "ray_cache_preloader_duration_seconds",
+		"ray_platform_training_step_time_seconds", "ray_platform_training_data_time_seconds", "ray_platform_training_nccl_duration_seconds", "ray_platform_training_step",
+		"kube_pod_container_status_restarts_total", "kube_pod_status_phase",
+	} {
+		if strings.Contains(expression, name) {
+			return name
+		}
+	}
+	return expression
 }
 
 func TestTrainingPerformanceRejectsUnsafePersistedLabelsBeforeQuery(t *testing.T) {
@@ -55,10 +108,11 @@ func TestTrainingPerformanceRejectsUnsafePersistedLabelsBeforeQuery(t *testing.T
 		return nil, context.Canceled
 	})}}
 	cases := []domain.TrainingWorkloadRef{
-		{Namespace: "", RayClusterName: "cluster-a", RayJobName: "job-a"},
-		{Namespace: "tenant-a\n", RayClusterName: "cluster-a", RayJobName: "job-a"},
-		{Namespace: "tenant-a", RayClusterName: `cluster-a"} or vector(1)`, RayJobName: "job-a"},
-		{Namespace: "tenant-a", RayClusterName: "cluster-a", RayJobName: "job-a\x00evil"},
+		{JobID: "job-a", Namespace: "", RayClusterName: "cluster-a", RayJobName: "job-a"},
+		{JobID: "job-a", Namespace: "tenant-a\n", RayClusterName: "cluster-a", RayJobName: "job-a"},
+		{JobID: "job-a", Namespace: "tenant-a", RayClusterName: `cluster-a"} or vector(1)`, RayJobName: "job-a"},
+		{JobID: "job-a", Namespace: "tenant-a", RayClusterName: "cluster-a", RayJobName: "job-a\x00evil"},
+		{JobID: `job-a"}`, Namespace: "tenant-a", RayClusterName: "cluster-a", RayJobName: "job-a"},
 	}
 	for _, ref := range cases {
 		if _, err := client.QueryTrainingPerformance(context.Background(), ref, "1h"); err == nil {
@@ -73,7 +127,7 @@ func TestTrainingPerformanceRejectsUnsafePersistedLabelsBeforeQuery(t *testing.T
 func TestTrainingPerformanceBoundsWindowTimeoutAndResultCount(t *testing.T) {
 	t.Run("window", func(t *testing.T) {
 		client := PrometheusClient{BaseURL: "http://prometheus.internal"}
-		if _, err := client.QueryTrainingPerformance(context.Background(), domain.TrainingWorkloadRef{Namespace: "tenant-a", RayClusterName: "cluster-a", RayJobName: "job-a"}, "7d"); err == nil {
+		if _, err := client.QueryTrainingPerformance(context.Background(), domain.TrainingWorkloadRef{JobID: "job-a", Namespace: "tenant-a", RayClusterName: "cluster-a", RayJobName: "job-a"}, "7d"); err == nil {
 			t.Fatal("unbounded window accepted")
 		}
 	})
@@ -85,7 +139,7 @@ func TestTrainingPerformanceBoundsWindowTimeoutAndResultCount(t *testing.T) {
 			}
 			return nil, context.DeadlineExceeded
 		})}}
-		_, _ = client.QueryTrainingPerformance(context.Background(), domain.TrainingWorkloadRef{Namespace: "tenant-a", RayClusterName: "cluster-a", RayJobName: "job-a"}, "15m")
+		_, _ = client.QueryTrainingPerformance(context.Background(), domain.TrainingWorkloadRef{JobID: "job-a", Namespace: "tenant-a", RayClusterName: "cluster-a", RayJobName: "job-a"}, "15m")
 	})
 	t.Run("results", func(t *testing.T) {
 		series := strings.Repeat(`{"metric":{"pod":"p"},"values":[[1000,"1"]]},`, maxTrainingPerformanceSeries+1)
@@ -94,7 +148,7 @@ func TestTrainingPerformanceBoundsWindowTimeoutAndResultCount(t *testing.T) {
 			body := `{"status":"success","data":{"result":[` + series + `]}}`
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
 		})}}
-		_, err := client.QueryTrainingPerformance(context.Background(), domain.TrainingWorkloadRef{Namespace: "tenant-a", RayClusterName: "cluster-a", RayJobName: "job-a"}, "15m")
+		_, err := client.QueryTrainingPerformance(context.Background(), domain.TrainingWorkloadRef{JobID: "job-a", Namespace: "tenant-a", RayClusterName: "cluster-a", RayJobName: "job-a"}, "15m")
 		if err == nil || strings.Contains(err.Error(), "prometheus.internal") {
 			t.Fatalf("result bound not enforced or URL leaked: %v", err)
 		}
@@ -111,7 +165,7 @@ func TestTrainingPerformanceBuildsWorkerAndSummaryWithoutAliasing(t *testing.T) 
 		body := `{"status":"success","data":{"result":[{"metric":{"pod":"cluster-a-worker-abc","node":"node-a","rank":"0","UUID":"GPU-1","state":"RUNNING"},"values":[[1000,"` + value + `"]]}]}}`
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
 	})}}
-	got, err := client.QueryTrainingPerformance(context.Background(), domain.TrainingWorkloadRef{Namespace: "tenant-a", RayClusterName: "cluster-a", RayJobName: "job-a"}, "15m")
+	got, err := client.QueryTrainingPerformance(context.Background(), domain.TrainingWorkloadRef{JobID: "job-a", Namespace: "tenant-a", RayClusterName: "cluster-a", RayJobName: "job-a"}, "15m")
 	if err != nil {
 		t.Fatal(err)
 	}

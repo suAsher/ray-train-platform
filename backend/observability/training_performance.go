@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,51 +35,115 @@ var trainingPerformanceWindows = map[string]trainingPerformanceWindow{
 
 type trainingPerformanceMetric struct {
 	name       string
-	expression func(string) string
+	expression func(domain.TrainingWorkloadRef) string
 }
 
 var trainingPerformanceMetrics = []trainingPerformanceMetric{
-	{name: "cpuCores", expression: rateMetric("container_cpu_usage_seconds_total")},
-	{name: "memoryWorkingSetBytes", expression: instantMetric("container_memory_working_set_bytes")},
-	{name: "networkReceiveBytesPerSecond", expression: rateMetric("container_network_receive_bytes_total")},
-	{name: "networkTransmitBytesPerSecond", expression: rateMetric("container_network_transmit_bytes_total")},
+	{name: "cpuCores", expression: cadvisorRate("container_cpu_usage_seconds_total", `container!="",container!="POD"`)},
+	{name: "memoryWorkingSetBytes", expression: cadvisorSum("container_memory_working_set_bytes", `container!="",container!="POD"`)},
+	{name: "networkReceiveBytesPerSecond", expression: cadvisorRate("container_network_receive_bytes_total", "")},
+	{name: "networkTransmitBytesPerSecond", expression: cadvisorRate("container_network_transmit_bytes_total", "")},
 	{name: "nodeNetworkReceiveBytesPerSecond", expression: nodeRateMetric("node_network_receive_bytes_total")},
 	{name: "nodeNetworkTransmitBytesPerSecond", expression: nodeRateMetric("node_network_transmit_bytes_total")},
-	{name: "gpuUtilizationPercent", expression: instantMetric(gpuMetricNames.utilization)},
-	{name: "gpuMemoryUsedMiB", expression: instantMetric(gpuMetricNames.memoryUsed)},
-	{name: "gpuPowerWatts", expression: instantMetric(gpuMetricNames.power)},
-	{name: "gpuTemperatureCelsius", expression: instantMetric(gpuMetricNames.temperature)},
-	{name: "objectStoreBytes", expression: instantMetric("ray_object_store_memory")},
-	{name: "objectStoreSpillBytesPerSecond", expression: rateMetric("ray_object_store_spilled_bytes_total")},
-	{name: "cacheBytes", expression: instantMetric("ray_cache_bytes")},
-	{name: "cacheHitsPerSecond", expression: rateMetric("ray_cache_hits_total")},
-	{name: "cacheMissesPerSecond", expression: rateMetric("ray_cache_misses_total")},
-	{name: "cachePreloaderDurationSeconds", expression: instantMetric("ray_cache_preloader_duration_seconds")},
-	{name: "stepTimeSeconds", expression: instantMetric("platform_training_step_time_seconds")},
-	{name: "dataTimeSeconds", expression: instantMetric("platform_training_data_time_seconds")},
-	{name: "ncclDurationSeconds", expression: instantMetric("platform_training_nccl_duration_seconds")},
-	{name: "step", expression: instantMetric("platform_training_step")},
-	{name: "restarts", expression: instantMetric("kube_pod_container_status_restarts_total")},
-	{name: "state", expression: func(selector string) string {
-		return fmt.Sprintf("max by (pod, exported_pod, node, rank, worker_rank, UUID, state, phase) (kube_pod_status_phase%s == 1)", selector)
+	{name: "gpuUtilizationPercent", expression: dcgmInstant(gpuMetricNames.utilization)},
+	{name: "gpuMemoryUsedMiB", expression: dcgmInstant(gpuMetricNames.memoryUsed)},
+	{name: "gpuPowerWatts", expression: dcgmInstant(gpuMetricNames.power)},
+	{name: "gpuTemperatureCelsius", expression: dcgmInstant(gpuMetricNames.temperature)},
+	{name: "objectStoreBytes", expression: rayInstant("ray_object_store_memory")},
+	{name: "objectStoreSpillBytesPerSecond", expression: rayRate("ray_object_store_spilled_bytes_total")},
+	{name: "cacheBytes", expression: cacheMetric("ray_cache_bytes", "sum")},
+	{name: "cacheHitsPerSecond", expression: cacheMetric("ray_cache_hits_total", "sum")},
+	{name: "cacheMissesPerSecond", expression: cacheMetric("ray_cache_misses_total", "sum")},
+	{name: "cachePreloaderDurationSeconds", expression: cacheMetric("ray_cache_preloader_duration_seconds", "max")},
+	{name: "stepTimeSeconds", expression: rayInstant("ray_platform_training_step_time_seconds")},
+	{name: "dataTimeSeconds", expression: rayInstant("ray_platform_training_data_time_seconds")},
+	{name: "ncclDurationSeconds", expression: rayInstant("ray_platform_training_nccl_duration_seconds")},
+	{name: "step", expression: rayInstant("ray_platform_training_step")},
+	{name: "restarts", expression: kubernetesInstant("kube_pod_container_status_restarts_total", `container="ray-worker"`)},
+	{name: "state", expression: func(ref domain.TrainingWorkloadRef) string {
+		return fmt.Sprintf("max by (pod, node, phase) (kube_pod_status_phase%s == 1)", kubernetesSelector(ref, `phase=~"Pending|Running|Succeeded|Failed|Unknown"`))
 	}},
 }
 
-func instantMetric(metric string) func(string) string {
-	return func(selector string) string {
-		return fmt.Sprintf("max by (pod, exported_pod, node, rank, worker_rank, UUID, state, phase) (%s%s)", metric, selector)
+const trainingPerformanceGroup = "pod, exported_pod, node, rank, worker_rank, UUID, state, phase"
+
+func workerPodRegex(ref domain.TrainingWorkloadRef) string {
+	return "^" + regexp.QuoteMeta(ref.RayClusterName) + "-.*-worker-.*$"
+}
+
+func selector(labels ...string) string     { return "{" + strings.Join(labels, ",") + "}" }
+func exactLabel(name, value string) string { return name + "=" + strconv.Quote(value) }
+func regexLabel(name, value string) string { return name + "=~" + strconv.Quote(value) }
+
+func cadvisorSelector(ref domain.TrainingWorkloadRef, extra string) string {
+	labels := []string{exactLabel("namespace", ref.Namespace), regexLabel("pod", workerPodRegex(ref))}
+	if extra != "" {
+		labels = append(labels, extra)
+	}
+	return selector(labels...)
+}
+
+func cadvisorSum(metric, extra string) func(domain.TrainingWorkloadRef) string {
+	return func(ref domain.TrainingWorkloadRef) string {
+		return fmt.Sprintf("sum by (%s) (%s%s)", trainingPerformanceGroup, metric, cadvisorSelector(ref, extra))
 	}
 }
 
-func rateMetric(metric string) func(string) string {
-	return func(selector string) string {
-		return fmt.Sprintf("sum by (pod, exported_pod, node, rank, worker_rank, UUID, state, phase) (rate(%s%s[1m]))", metric, selector)
+func cadvisorRate(metric, extra string) func(domain.TrainingWorkloadRef) string {
+	return func(ref domain.TrainingWorkloadRef) string {
+		return fmt.Sprintf("sum by (%s) (rate(%s%s[1m]))", trainingPerformanceGroup, metric, cadvisorSelector(ref, extra))
 	}
 }
 
-func nodeRateMetric(metric string) func(string) string {
-	return func(selector string) string {
-		return fmt.Sprintf("sum by (node) (rate(%s%s[1m]))", metric, selector)
+func dcgmInstant(metric string) func(domain.TrainingWorkloadRef) string {
+	return func(ref domain.TrainingWorkloadRef) string {
+		scope := selector(exactLabel("exported_namespace", ref.Namespace), regexLabel("exported_pod", workerPodRegex(ref)))
+		return fmt.Sprintf("max by (%s) (%s%s)", trainingPerformanceGroup, metric, scope)
+	}
+}
+
+func raySelector(ref domain.TrainingWorkloadRef) string {
+	return selector(exactLabel("exported_namespace", ref.Namespace), exactLabel("ray_io_cluster", ref.RayClusterName), `ray_io_node_type="worker"`)
+}
+
+func rayInstant(metric string) func(domain.TrainingWorkloadRef) string {
+	return func(ref domain.TrainingWorkloadRef) string {
+		return fmt.Sprintf("max by (%s) (%s%s)", trainingPerformanceGroup, metric, raySelector(ref))
+	}
+}
+
+func rayRate(metric string) func(domain.TrainingWorkloadRef) string {
+	return func(ref domain.TrainingWorkloadRef) string {
+		return fmt.Sprintf("sum by (%s) (rate(%s%s[1m]))", trainingPerformanceGroup, metric, raySelector(ref))
+	}
+}
+
+func cacheMetric(metric, aggregation string) func(domain.TrainingWorkloadRef) string {
+	return func(ref domain.TrainingWorkloadRef) string {
+		scope := selector(exactLabel("exported_namespace", ref.Namespace), exactLabel("ray_io_cluster", ref.RayClusterName), exactLabel("platform_job_id", ref.JobID))
+		return fmt.Sprintf("%s by (%s) (%s%s)", aggregation, trainingPerformanceGroup, metric, scope)
+	}
+}
+
+func kubernetesSelector(ref domain.TrainingWorkloadRef, extra string) string {
+	labels := []string{exactLabel("namespace", ref.Namespace), regexLabel("pod", workerPodRegex(ref))}
+	if extra != "" {
+		labels = append(labels, extra)
+	}
+	return selector(labels...)
+}
+
+func kubernetesInstant(metric, extra string) func(domain.TrainingWorkloadRef) string {
+	return func(ref domain.TrainingWorkloadRef) string {
+		return fmt.Sprintf("max by (%s) (%s%s)", trainingPerformanceGroup, metric, kubernetesSelector(ref, extra))
+	}
+}
+
+func nodeRateMetric(metric string) func(domain.TrainingWorkloadRef) string {
+	return func(ref domain.TrainingWorkloadRef) string {
+		workers := fmt.Sprintf("max by (node) (kube_pod_info%s)", kubernetesSelector(ref, ""))
+		network := fmt.Sprintf(`label_replace(rate(%s{device!~"lo|veth.*|cali.*|flannel.*"}[1m]) * on(instance) group_left(nodename) node_uname_info, "node", "$1", "nodename", "(.*)")`, metric)
+		return fmt.Sprintf("sum by (node) ((%s) and on(node) (%s))", network, workers)
 	}
 }
 
@@ -110,13 +175,12 @@ func (c *PrometheusClient) QueryTrainingPerformance(ctx context.Context, ref dom
 
 	queryCtx, cancel := context.WithTimeout(ctx, trainingPerformanceTimeout)
 	defer cancel()
-	selector := trainingPerformanceSelector(ref)
 	workers := map[string]*domain.TrainingWorkerPerformance{}
 	workerLatest := map[string]map[string]domain.TrainingMetricPoint{}
 	summaryLatest := map[string]domain.TrainingMetricPoint{}
 	totalSeries := 0
 	for _, metric := range trainingPerformanceMetrics {
-		series, err := c.queryRangeWithStep(queryCtx, metric.expression(selector), start, end, spec.step)
+		series, err := c.queryRangeWithStep(queryCtx, metric.expression(ref), start, end, spec.step)
 		if err != nil {
 			return domain.TrainingPerformance{}, fmt.Errorf("query training performance metric %s: %w", metric.name, err)
 		}
@@ -194,21 +258,17 @@ func validateTrainingWorkloadRef(ref domain.TrainingWorkloadRef) error {
 		name, value string
 		errors      []string
 	}{
+		{name: "job ID", value: ref.JobID},
 		{name: "namespace", value: ref.Namespace, errors: validation.IsDNS1123Label(ref.Namespace)},
 		{name: "RayCluster name", value: ref.RayClusterName, errors: validation.IsDNS1123Subdomain(ref.RayClusterName)},
 		{name: "RayJob name", value: ref.RayJobName, errors: validation.IsDNS1123Subdomain(ref.RayJobName)},
 	}
 	for _, item := range values {
-		if item.value == "" || len(item.errors) != 0 || strings.IndexFunc(item.value, unicode.IsControl) >= 0 {
+		if item.value == "" || len(item.errors) != 0 || strings.IndexFunc(item.value, unicode.IsControl) >= 0 || (item.name == "job ID" && !safeLabelValue(item.value)) {
 			return fmt.Errorf("training workload %s is invalid", item.name)
 		}
 	}
 	return nil
-}
-
-func trainingPerformanceSelector(ref domain.TrainingWorkloadRef) string {
-	return fmt.Sprintf(`{exported_namespace=%s,ray_io_cluster=%s,ray_io_node_type="worker"}`,
-		strconv.Quote(ref.Namespace), strconv.Quote(ref.RayClusterName))
 }
 
 func trainingPoints(points []MetricPoint) []domain.TrainingMetricPoint {

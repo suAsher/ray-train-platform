@@ -5,6 +5,7 @@ import "time"
 // TrainingWorkloadRef is server-derived persisted workload identity. HTTP
 // clients must never construct it from query parameters.
 type TrainingWorkloadRef struct {
+	JobID          string `json:"jobId"`
 	Namespace      string `json:"namespace"`
 	RayClusterName string `json:"rayClusterName"`
 	RayJobName     string `json:"rayJobName"`

@@ -1,4 +1,5 @@
 import os
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +8,63 @@ import stage_dataset
 
 
 class StageDatasetTest(unittest.TestCase):
+    def test_writes_atomic_strict_job_scoped_preload_metrics(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            cache = base / "cache"
+            cache.mkdir()
+            result = stage_dataset.StageResult(
+                path=cache / "dataset-view", copied=True, files=2, bytes=12,
+                seconds=0.25, roots=(stage_dataset.RootStageResult(path=str(cache), files=2, bytes=12),),
+            )
+            identity = stage_dataset.MetricIdentity(
+                job_id="job-01", namespace="tenant-a", ray_cluster="job-01-cluster",
+                node_type="worker", pod="job-01-cluster-worker-abc",
+            )
+
+            stage_dataset.write_preload_metrics([cache], result, identity)
+
+            metric_file = cache / ".ray-cache-metrics" / "preload.metrics"
+            self.assertTrue(metric_file.is_file())
+            text = metric_file.read_text(encoding="utf-8")
+            self.assertIn("platform_job_id=job-01\n", text)
+            self.assertIn("bytes=12\n", text)
+            self.assertIn("copied=1\n", text)
+            self.assertIn("hits=0\nmisses=1\n", text)
+            self.assertFalse(any(metric_file.parent.glob("*.tmp")))
+
+            reused = stage_dataset.StageResult(
+                path=result.path, copied=False, files=2, bytes=12, seconds=0.01,
+                roots=result.roots,
+            )
+            stage_dataset.write_preload_metrics([cache], reused, identity)
+            updated = metric_file.read_text(encoding="utf-8")
+            self.assertIn("copied=0\n", updated)
+            self.assertIn("hits=1\nmisses=1\n", updated)
+
+    def test_rejects_unsafe_metric_labels_and_metric_symlinks(self):
+        with tempfile.TemporaryDirectory() as root:
+            cache = Path(root) / "cache"
+            cache.mkdir()
+            result = stage_dataset.StageResult(
+                path=cache / "dataset-view", copied=False, files=1, bytes=1,
+                seconds=0.1, roots=(stage_dataset.RootStageResult(path=str(cache), files=1, bytes=1),),
+            )
+            unsafe = stage_dataset.MetricIdentity(
+                job_id='job"} or vector(1)', namespace="tenant-a", ray_cluster="cluster-a",
+                node_type="worker", pod="cluster-a-worker-abc",
+            )
+            with self.assertRaisesRegex(ValueError, "metric label"):
+                stage_dataset.write_preload_metrics([cache], result, unsafe)
+
+            metric_dir = cache / ".ray-cache-metrics"
+            outside = Path(root) / "outside"
+            outside.mkdir()
+            os.symlink(outside, metric_dir)
+            safe = stage_dataset.MetricIdentity("job-01", "tenant-a", "cluster-a", "worker", "cluster-a-worker-abc")
+            with self.assertRaisesRegex(ValueError, "symbolic link"):
+                stage_dataset.write_preload_metrics([cache], result, safe)
+
     def test_empty_dataset_is_rejected_before_publish(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

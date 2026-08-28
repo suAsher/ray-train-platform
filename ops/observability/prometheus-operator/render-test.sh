@@ -6,6 +6,8 @@ readonly helm_bin="${HELM_BIN:-helm}"
 readonly chart="${root_dir}/helm/vendor/kube-prometheus-stack-87.18.1.tgz"
 readonly values="${root_dir}/ops/observability/prometheus-operator/20-values-production.yaml"
 
+"${root_dir}/ops/observability/prometheus-operator/ray-pod-monitor-contract.sh"
+
 command -v "$helm_bin" >/dev/null || { echo "missing helm: $helm_bin" >&2; exit 1; }
 [[ -f "$chart" && -f "$values" ]] || { echo 'fixed Operator chart or production values are missing' >&2; exit 1; }
 

@@ -106,6 +106,17 @@ func TestRenderRayJobAutomaticallyPreloadsSelectedInputOnWorkers(t *testing.T) {
 	if preloaderEnv["PLATFORM_CACHE_LIMIT_BYTES_PER_DISK"] != "549755813888" {
 		t.Fatalf("preloader must enforce the requested 512 GiB per disk: %#v", preloaderEnv)
 	}
+	metricEnv := metricEnvironment(preloader)
+	if metricEnv["PLATFORM_JOB_ID"]["value"] != "job-01" {
+		t.Fatalf("preloader missing immutable job ID: %#v", metricEnv)
+	}
+	for name, field := range map[string]string{"PLATFORM_POD_NAMESPACE": "metadata.namespace", "PLATFORM_POD_NAME": "metadata.name", "PLATFORM_RAY_CLUSTER": "metadata.labels['ray.io/cluster']", "PLATFORM_RAY_NODE_TYPE": "metadata.labels['ray.io/node-type']"} {
+		valueFrom, _ := metricEnv[name]["valueFrom"].(map[string]any)
+		fieldRef, _ := valueFrom["fieldRef"].(map[string]any)
+		if fieldRef["fieldPath"] != field {
+			t.Fatalf("preloader %s fieldPath = %#v", name, fieldRef["fieldPath"])
+		}
+	}
 	mounts := preloader["volumeMounts"].([]any)
 	wantMounts := map[string]bool{"platform-data-input": false, "local-cache-data1": false, "local-cache-data2": false}
 	for _, item := range mounts {

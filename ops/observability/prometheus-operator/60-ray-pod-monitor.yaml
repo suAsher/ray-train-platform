@@ -1,0 +1,37 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: ray-training-pods
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: ray-train-platform
+spec:
+  namespaceSelector:
+    any: true
+  selector:
+    matchExpressions:
+      - key: app.kubernetes.io/part-of
+        operator: In
+        values: [ray-train-platform]
+      - key: platform_job_id
+        operator: Exists
+      - key: ray.io/node-type
+        operator: In
+        values: [head, worker]
+  podMetricsEndpoints:
+    - port: metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: exported_namespace
+        - sourceLabels: [__meta_kubernetes_pod_label_platform_job_id]
+          targetLabel: platform_job_id
+        - sourceLabels: [__meta_kubernetes_pod_label_ray_io_cluster]
+          targetLabel: ray_io_cluster
+        - sourceLabels: [__meta_kubernetes_pod_label_ray_io_node_type]
+          targetLabel: ray_io_node_type
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: node

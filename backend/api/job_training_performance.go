@@ -46,7 +46,7 @@ func (h *Handler) getJobTrainingPerformance(c *gin.Context) {
 		return
 	}
 	performance, err := provider.QueryTrainingPerformance(c.Request.Context(), domain.TrainingWorkloadRef{
-		Namespace: job.KubernetesNS, RayClusterName: job.RayClusterName, RayJobName: job.RayJobName,
+		JobID: job.ID, Namespace: job.KubernetesNS, RayClusterName: job.RayClusterName, RayJobName: job.RayJobName,
 	}, window)
 	if err != nil {
 		h.writeError(c, http.StatusBadGateway, "TRAINING_PERFORMANCE_QUERY_FAILED", "could not query training performance")
