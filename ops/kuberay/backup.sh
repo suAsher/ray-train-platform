@@ -7,6 +7,7 @@ readonly HELM_BIN="${HELM_BIN:-helm}"
 readonly SHA256_BIN="${SHA256_BIN:-shasum}"
 readonly KUBERAY_NAMESPACE="${KUBERAY_NAMESPACE:-kuberay-system}"
 readonly KUBERAY_RELEASE="${KUBERAY_RELEASE:-kuberay-operator}"
+readonly KUBERAY_DEPLOYMENT="${KUBERAY_DEPLOYMENT:-kuberay-operator}"
 
 die() {
   echo "KubeRay backup failed: $*" >&2
@@ -54,6 +55,7 @@ confirm_context() {
 [[ "$#" == 1 ]] || die 'usage: backup.sh /absolute/existing/backup-parent'
 validate_name "$KUBERAY_NAMESPACE" KUBERAY_NAMESPACE
 validate_name "$KUBERAY_RELEASE" KUBERAY_RELEASE
+validate_name "$KUBERAY_DEPLOYMENT" KUBERAY_DEPLOYMENT
 backup_parent="$1"
 [[ "$backup_parent" == /* && "$backup_parent" != / && "$backup_parent" != *$'\n'* && "$backup_parent" != *'/../'* && "$backup_parent" != */.. ]] || die 'backup target must be an absolute safe parent path'
 [[ -d "$backup_parent" && ! -L "$backup_parent" ]] || die 'backup parent must be an existing real directory'
@@ -73,7 +75,7 @@ done <<<"$crd_names"
 [[ "${#crds[@]}" -gt 0 ]] || die 'no installed KubeRay CRDs found'
 
 kubectl get crd "${crds[@]}" --context "$target_context" -o yaml >"${backup_target}/crds.yaml"
-kubectl get deployment "$KUBERAY_RELEASE" --context "$target_context" -n "$KUBERAY_NAMESPACE" -o yaml >"${backup_target}/operator-deployment.yaml"
+kubectl get deployment "$KUBERAY_DEPLOYMENT" --context "$target_context" -n "$KUBERAY_NAMESPACE" -o yaml >"${backup_target}/operator-deployment.yaml"
 kubectl get pods --context "$target_context" -n "$KUBERAY_NAMESPACE" -l "app.kubernetes.io/instance=${KUBERAY_RELEASE}" -o jsonpath='{range .items[*]}{.metadata.name}{" "}{range .status.containerStatuses[*]}{.name}{" "}{.image}{" "}{.imageID}{"\n"}{end}{end}' >"${backup_target}/operator-pod-images.txt"
 helm get values "$KUBERAY_RELEASE" --namespace "$KUBERAY_NAMESPACE" --kube-context "$target_context" --all >"${backup_target}/operator-helm-values.yaml"
 helm status "$KUBERAY_RELEASE" --namespace "$KUBERAY_NAMESPACE" --kube-context "$target_context" -o yaml >"${backup_target}/operator-helm-status.yaml"

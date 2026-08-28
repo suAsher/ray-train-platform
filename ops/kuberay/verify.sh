@@ -5,6 +5,7 @@ readonly KUBECTL_BIN="${KUBECTL_BIN:-kubectl}"
 readonly HELM_BIN="${HELM_BIN:-helm}"
 readonly KUBERAY_NAMESPACE="${KUBERAY_NAMESPACE:-kuberay-system}"
 readonly KUBERAY_RELEASE="${KUBERAY_RELEASE:-kuberay-operator}"
+readonly KUBERAY_DEPLOYMENT="${KUBERAY_DEPLOYMENT:-kuberay-operator}"
 readonly KUBERAY_EXPECTED_CHART='kuberay-operator-1.6.2'
 readonly KUBERAY_EXPECTED_IMAGE='quay.io/kuberay/operator:v1.6.2'
 readonly EXPECTED_KUBERAY_OPERATOR_IMAGE_DIGEST="${EXPECTED_KUBERAY_OPERATOR_IMAGE_DIGEST:-}"
@@ -42,6 +43,7 @@ confirm_context() {
 
 validate_name "$KUBERAY_NAMESPACE" KUBERAY_NAMESPACE
 validate_name "$KUBERAY_RELEASE" KUBERAY_RELEASE
+validate_name "$KUBERAY_DEPLOYMENT" KUBERAY_DEPLOYMENT
 [[ "$EXPECTED_KUBERAY_OPERATOR_IMAGE_DIGEST" =~ ^[0-9a-f]{64}$ ]] || die 'EXPECTED_KUBERAY_OPERATOR_IMAGE_DIGEST must be 64 lowercase hexadecimal characters'
 [[ "${CONFIRM_KUBERAY_OPERATOR_IMAGE_DIGEST:-}" == "$EXPECTED_KUBERAY_OPERATOR_IMAGE_DIGEST" ]] || die 'CONFIRM_KUBERAY_OPERATOR_IMAGE_DIGEST must exactly match the expected digest'
 target_context="$(confirm_context)"
@@ -50,15 +52,15 @@ for crd in rayjobs.ray.io rayclusters.ray.io rayservices.ray.io raycronjobs.ray.
   grep -Fxq 'v1 true true' <<<"$versions" || die "CRD $crd served/storage contract does not include v1 true true"
 done
 
-kubectl rollout status deployment/"$KUBERAY_RELEASE" --context "$target_context" -n "$KUBERAY_NAMESPACE" --timeout=120s
-read -r desired ready available < <(kubectl get deployment "$KUBERAY_RELEASE" --context "$target_context" -n "$KUBERAY_NAMESPACE" -o jsonpath='{.spec.replicas}{" "}{.status.readyReplicas}{" "}{.status.availableReplicas}{"\n"}') || die 'cannot read KubeRay operator replicas'
+kubectl rollout status deployment/"$KUBERAY_DEPLOYMENT" --context "$target_context" -n "$KUBERAY_NAMESPACE" --timeout=120s
+read -r desired ready available < <(kubectl get deployment "$KUBERAY_DEPLOYMENT" --context "$target_context" -n "$KUBERAY_NAMESPACE" -o jsonpath='{.spec.replicas}{" "}{.status.readyReplicas}{" "}{.status.availableReplicas}{"\n"}') || die 'cannot read KubeRay operator replicas'
 [[ "$desired" == 2 && "$ready" == 2 && "$available" == 2 ]] || die "KubeRay operator is not 2/2 Ready: desired=${desired:-0} readyReplicas=${ready:-0} available=${available:-0}"
 
 release_metadata="$(helm list --filter "^${KUBERAY_RELEASE}$" --namespace "$KUBERAY_NAMESPACE" --kube-context "$target_context" -o json)" || die 'cannot read installed KubeRay Helm release metadata'
 grep -Fq '"name":"'"${KUBERAY_RELEASE}"'"' <<<"$release_metadata" || die 'KubeRay Helm release name does not match the requested release'
 grep -Fq '"chart":"'"${KUBERAY_EXPECTED_CHART}"'"' <<<"$release_metadata" || die "installed Helm chart is not ${KUBERAY_EXPECTED_CHART}"
 
-deployment_images="$(kubectl get deployment "$KUBERAY_RELEASE" --context "$target_context" -n "$KUBERAY_NAMESPACE" -o jsonpath='{range .spec.template.spec.containers[*]}{.name}{" "}{.image}{"\n"}{end}')" || die 'cannot read KubeRay operator Deployment images'
+deployment_images="$(kubectl get deployment "$KUBERAY_DEPLOYMENT" --context "$target_context" -n "$KUBERAY_NAMESPACE" -o jsonpath='{range .spec.template.spec.containers[*]}{.name}{" "}{.image}{"\n"}{end}')" || die 'cannot read KubeRay operator Deployment images'
 deployment_image_found=false
 while read -r container image; do
   [[ "$container" == kuberay-operator ]] || continue

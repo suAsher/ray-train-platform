@@ -35,6 +35,9 @@ for script in "$preflight" "$backup" "$upgrade" "$verify"; do
   require_in "$script" 'CONFIRM_KUBE_CONTEXT'
   bash -n "$script"
 done
+for script in "$preflight" "$backup" "$upgrade" "$verify"; do
+  require_in "$script" 'KUBERAY_DEPLOYMENT'
+done
 
 require_file "$chart_checksum"
 require_in "$chart_checksum" '660e709573ea49455fea0b34b40a38afc217b8354bcf0f17aab2a3249d3c1b5f  kuberay-operator-1.6.2.tgz'
@@ -239,11 +242,11 @@ case " $* " in
   *' get values '*) printf 'image:\n  repository: quay.io/kuberay/operator\n  tag: v1.3.0\nreplicas: 2\n' ;;
   *' status '*)
     [[ "${FIXTURE_BACKUP_FAIL:-0}" == 0 ]] || exit 1
-    printf 'name: kuberay-operator\nchart: kuberay-operator-1.3.0\n'
+    printf 'name: %s\nchart: kuberay-operator-1.3.0\n' "${FIXTURE_HELM_RELEASE:-kuberay-operator}"
     ;;
   *' history '*) printf 'revision: 1\nchart: kuberay-operator-1.3.0\n' ;;
   *' get manifest '*) printf 'apiVersion: apps/v1\nkind: Deployment\n' ;;
-  *' list '*) printf '[{"name":"kuberay-operator","chart":"kuberay-operator-%s"}]\n' "${FIXTURE_HELM_CHART_VERSION:-1.6.2}" ;;
+  *' list '*) printf '[{"name":"%s","chart":"kuberay-operator-%s"}]\n' "${FIXTURE_HELM_RELEASE:-kuberay-operator}" "${FIXTURE_HELM_CHART_VERSION:-1.6.2}" ;;
   *' show chart '*) printf 'name: kuberay-operator\nversion: 1.6.2\n' ;;
   *' upgrade '*)
     case "${FIXTURE_UPGRADE_SIGNAL:-}" in
@@ -363,7 +366,9 @@ fixture_env=(
   'KUBERAY_CONTEXT=fixture-context'
   'CONFIRM_KUBE_CONTEXT=fixture-context'
   'KUBERAY_NAMESPACE=kuberay-system'
-  'KUBERAY_RELEASE=kuberay-operator'
+  'KUBERAY_RELEASE=kuberay'
+  'KUBERAY_DEPLOYMENT=kuberay-operator'
+  'FIXTURE_HELM_RELEASE=kuberay'
   "EXPECTED_KUBERAY_CRD_SHA256=${fixture_crd_digest}"
   "CONFIRM_KUBERAY_CRD_SHA256=${fixture_crd_digest}"
   'EXPECTED_KUBERAY_OPERATOR_IMAGE_DIGEST=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
@@ -376,11 +381,16 @@ fi
 grep -Fq 'current context: fixture-context' "${temporary}/err" || fail 'preflight did not record current context'
 
 for state in PENDING RUNNING UNKNOWN ''; do
-  if env "${fixture_env[@]}" FIXTURE_RAYJOBS="tenant-a job-a ${state}\n" "$preflight" >/dev/null 2>&1; then
+  if env "${fixture_env[@]}" FIXTURE_RAYJOBS="tenant-a|job-a|${state}||0|0\n" "$preflight" >/dev/null 2>&1; then
     fail "preflight accepted non-terminal RayJob state: ${state:-missing}"
   fi
 done
-env "${fixture_env[@]}" FIXTURE_RAYJOBS=$'tenant-a job-a SUCCEEDED\ntenant-a job-b FAILED\ntenant-a job-c STOPPED\n' "$preflight" >/dev/null
+env "${fixture_env[@]}" FIXTURE_RAYJOBS=$'tenant-a|job-a|SUCCEEDED||0|1\ntenant-a|job-b|FAILED||1|0\ntenant-a|job-c|STOPPED||0|0\n' "$preflight" >/dev/null
+env "${fixture_env[@]}" FIXTURE_RAYJOBS=$'tenant-a|job-old-submit-failure||Failed|1|0\n' "$preflight" >/dev/null
+env "${fixture_env[@]}" FIXTURE_RAYJOBS=$'tenant-a|job-old-complete||Complete|0|1\n' "$preflight" >/dev/null
+if env "${fixture_env[@]}" FIXTURE_RAYJOBS=$'tenant-a|job-conflict|RUNNING|Complete|0|1\n' "$preflight" >/dev/null 2>&1; then
+  fail 'preflight accepted conflicting non-terminal jobStatus and terminal jobDeploymentStatus'
+fi
 
 if env "${fixture_env[@]}" FIXTURE_RAYCLUSTERS=$'tenant-a cluster-a READY\n' "$preflight" >/dev/null 2>&1; then
   fail 'preflight accepted an active RayCluster'
@@ -422,6 +432,8 @@ for artifact in context.txt crds.yaml operator-deployment.yaml operator-helm-val
 done
 [[ "$(cat "${backup_target}/COMPLETE")" == COMPLETE ]] || fail 'backup completion marker is invalid'
 grep -Fq 'get rayclusters.ray.io,rayjobs.ray.io,rayservices.ray.io,raycronjobs.ray.io --all-namespaces' "$fixture_log" || fail 'backup did not export every installed ray.io resource type'
+grep -Fq 'get deployment kuberay-operator' "$fixture_log" || fail 'backup did not address the configured operator Deployment'
+grep -Fq 'helm get values kuberay ' "$fixture_log" || fail 'backup did not address the configured Helm release'
 
 reset_fixture_state() {
   printf '2\n' >"${temporary}/state/backend-replicas"
@@ -540,7 +552,7 @@ if grep -Fq 'scale deployment/ray-train-backend --replicas=2' "$fixture_log"; th
 assert_manual_recovery_notice 'queue restoration failure' "$restore_failure_output"
 
 reset_fixture_state
-if env "${fixture_env[@]}" CONFIRM_KUBERAY_UPGRADE=1 FIXTURE_POST_GATE_RAYJOBS=$'tenant-a race-job RUNNING\n' "$upgrade" >/dev/null 2>&1; then
+if env "${fixture_env[@]}" CONFIRM_KUBERAY_UPGRADE=1 FIXTURE_POST_GATE_RAYJOBS=$'tenant-a|race-job|RUNNING||0|0\n' "$upgrade" >/dev/null 2>&1; then
   fail 'upgrade ignored a RayJob created before the maintenance gate closed'
 fi
 if grep -Eq 'kubectl replace -k|helm upgrade' "${fixture_log}"; then fail 'post-gate RayJob caused an upgrade mutation'; fi
@@ -583,7 +595,7 @@ reset_fixture_state
 upgrade_output="$(env "${fixture_env[@]}" CONFIRM_KUBERAY_UPGRADE=1 "$upgrade" 2>&1)"
 grep -Fq 'backup path:' <<<"$upgrade_output" || fail 'upgrade did not report its verified backup path'
 replace_line="$(grep -n 'kubectl replace -k' "${fixture_log}" | head -1 | cut -d: -f1)"
-helm_line="$(grep -n 'helm upgrade kuberay-operator' "${fixture_log}" | head -1 | cut -d: -f1)"
+helm_line="$(grep -n 'helm upgrade kuberay' "${fixture_log}" | head -1 | cut -d: -f1)"
 [[ -n "$replace_line" && -n "$helm_line" && "$replace_line" -lt "$helm_line" ]] || fail 'CRDs were not upgraded before the operator'
 grep -Fq -- '--set-string image.repository=quay.io/kuberay/operator' "${fixture_log}" || fail 'operator repository was not explicitly overridden'
 grep -Fq -- '--set-string image.tag=v1.6.2' "${fixture_log}" || fail 'old Helm values could retain the v1.3 operator image tag'

@@ -10,6 +10,7 @@ readonly KUBERAY_BACKUP_BIN="${KUBERAY_BACKUP_BIN:-${script_dir}/backup.sh}"
 readonly KUBERAY_TARGET_VERSION='1.6.2'
 readonly KUBERAY_NAMESPACE="${KUBERAY_NAMESPACE:-kuberay-system}"
 readonly KUBERAY_RELEASE="${KUBERAY_RELEASE:-kuberay-operator}"
+readonly KUBERAY_DEPLOYMENT="${KUBERAY_DEPLOYMENT:-kuberay-operator}"
 readonly KUBERAY_CHART_URL="${KUBERAY_CHART_URL:-https://github.com/ray-project/kuberay-helm/releases/download/kuberay-operator-1.6.2/kuberay-operator-1.6.2.tgz}"
 readonly KUBERAY_OFFICIAL_CHART_URL='https://github.com/ray-project/kuberay-helm/releases/download/kuberay-operator-1.6.2/kuberay-operator-1.6.2.tgz'
 readonly KUBERAY_CRD_BASE_URL='https://raw.githubusercontent.com/ray-project/kuberay/598eb66/ray-operator/config/crd/bases'
@@ -139,6 +140,7 @@ trap 'exit 143' TERM
 
 validate_name "$KUBERAY_NAMESPACE" KUBERAY_NAMESPACE
 validate_name "$KUBERAY_RELEASE" KUBERAY_RELEASE
+validate_name "$KUBERAY_DEPLOYMENT" KUBERAY_DEPLOYMENT
 validate_name "$PLATFORM_NAMESPACE" PLATFORM_NAMESPACE
 validate_name "$PLATFORM_BACKEND_DEPLOYMENT" PLATFORM_BACKEND_DEPLOYMENT
 [[ "${CONFIRM_KUBERAY_UPGRADE:-0}" == 1 ]] || die 'set CONFIRM_KUBERAY_UPGRADE=1 after reviewing the maintenance and rollback procedure'

@@ -4,6 +4,7 @@ set -euo pipefail
 readonly KUBECTL_BIN="${KUBECTL_BIN:-kubectl}"
 readonly KUBERAY_NAMESPACE="${KUBERAY_NAMESPACE:-kuberay-system}"
 readonly KUBERAY_RELEASE="${KUBERAY_RELEASE:-kuberay-operator}"
+readonly KUBERAY_DEPLOYMENT="${KUBERAY_DEPLOYMENT:-kuberay-operator}"
 readonly KUEUE_NAMESPACE="${KUEUE_NAMESPACE:-kueue-system}"
 readonly KUEUE_DEPLOYMENT="${KUEUE_DEPLOYMENT:-kueue-controller-manager}"
 readonly PREFLIGHT_EXPECT_QUEUES_HELD="${PREFLIGHT_EXPECT_QUEUES_HELD:-0}"
@@ -80,14 +81,19 @@ require_no_active_kueue_workloads() {
 }
 
 require_no_nonterminal_rayjobs() {
-  local context="$1" rows namespace name state normalized
-  rows="$(kubectl get rayjobs.ray.io --all-namespaces --context "$context" -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{" "}{.status.jobStatus}{"\n"}{end}')" || die 'cannot list RayJobs'
-  while read -r namespace name state; do
+  local context="$1" rows namespace name state deployment_state failed succeeded normalized normalized_deployment
+  rows="$(kubectl get rayjobs.ray.io --all-namespaces --context "$context" -o jsonpath='{range .items[*]}{.metadata.namespace}{"|"}{.metadata.name}{"|"}{.status.jobStatus}{"|"}{.status.jobDeploymentStatus}{"|"}{.status.failed}{"|"}{.status.succeeded}{"\n"}{end}')" || die 'cannot list RayJobs'
+  while IFS='|' read -r namespace name state deployment_state failed succeeded; do
     [[ -n "$namespace" ]] || continue
     normalized="$(printf '%s' "$state" | tr '[:lower:]' '[:upper:]')"
+    normalized_deployment="$(printf '%s' "$deployment_state" | tr '[:lower:]' '[:upper:]')"
     case "$normalized" in
-      SUCCEEDED|FAILED|STOPPED) ;;
-      *) die "non-terminal RayJob exists: ${namespace}/${name} status=${state:-<missing>}" ;;
+      SUCCEEDED|FAILED|STOPPED) continue ;;
+    esac
+    [[ -z "$normalized" ]] || die "non-terminal RayJob exists: ${namespace}/${name} status=${state} deploymentStatus=${deployment_state:-<missing>} failed=${failed:-0} succeeded=${succeeded:-0}"
+    case "$normalized_deployment" in
+      COMPLETE|FAILED) continue ;;
+      *) die "non-terminal RayJob exists: ${namespace}/${name} status=${state:-<missing>} deploymentStatus=${deployment_state:-<missing>} failed=${failed:-0} succeeded=${succeeded:-0}" ;;
     esac
   done <<<"$rows"
 }
@@ -111,6 +117,7 @@ require_no_active_clusters() {
 
 validate_name "$KUBERAY_NAMESPACE" KUBERAY_NAMESPACE
 validate_name "$KUBERAY_RELEASE" KUBERAY_RELEASE
+validate_name "$KUBERAY_DEPLOYMENT" KUBERAY_DEPLOYMENT
 validate_name "$KUEUE_NAMESPACE" KUEUE_NAMESPACE
 validate_name "$KUEUE_DEPLOYMENT" KUEUE_DEPLOYMENT
 [[ "$PREFLIGHT_EXPECT_QUEUES_HELD" == 0 || "$PREFLIGHT_EXPECT_QUEUES_HELD" == 1 ]] || die 'PREFLIGHT_EXPECT_QUEUES_HELD must be 0 or 1'
@@ -124,7 +131,7 @@ for crd in clusterqueues.kueue.x-k8s.io localqueues.kueue.x-k8s.io; do
   kubectl get crd "$crd" --context "$target_context" >/dev/null || die "required Kueue CRD is absent: $crd"
 done
 
-require_two_ready_replicas "$target_context" "$KUBERAY_NAMESPACE" "$KUBERAY_RELEASE" KubeRay
+require_two_ready_replicas "$target_context" "$KUBERAY_NAMESPACE" "$KUBERAY_DEPLOYMENT" KubeRay
 require_two_ready_replicas "$target_context" "$KUEUE_NAMESPACE" "$KUEUE_DEPLOYMENT" Kueue
 require_clusterqueue_gate_state "$target_context"
 require_no_nonterminal_rayjobs "$target_context"
