@@ -107,6 +107,9 @@ func (s *memoryJobStore) BeginManagedRecovery(_ context.Context, request domain.
 	resource := s.managedResources[s.job.ClusterAttempt]
 	resource.JobID, resource.ClusterAttempt = s.job.ID, s.job.ClusterAttempt
 	resource.KubernetesNS, resource.RayJobName, resource.RayJobUID = s.job.KubernetesNS, s.job.RayJobName, s.job.RayJobUID
+	if resource.ResourceFence == 0 {
+		resource.ResourceFence, resource.LeaseVersion = 1, 1
+	}
 	resource.State, resource.LeaseOwner, resource.LeaseExpiresAt = domain.ManagedAttemptResourceRetiring, "", nil
 	s.managedResources[s.job.ClusterAttempt] = resource
 	s.job.ClusterAttempt++
@@ -184,8 +187,9 @@ func (s *memoryJobStore) AdoptManagedAttemptIdentity(_ context.Context, request 
 		s.job.RayJobUID = request.RayJobUID
 	}
 	if s.job.ClusterAttempt == request.ExpectedClusterAttempt && s.job.RayJobName == request.RayJobName && s.job.RayJobUID == request.RayJobUID {
+		resource := s.managedResources[request.ExpectedClusterAttempt]
 		copy := *s.job
-		return &copy, true, nil
+		return &copy, resource.ResourceFence == request.ResourceFence, nil
 	}
 	if s.job.Spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain ||
 		s.job.DesiredState != domain.DesiredActive || s.job.ClusterAttempt != request.ExpectedClusterAttempt ||
@@ -193,11 +197,15 @@ func (s *memoryJobStore) AdoptManagedAttemptIdentity(_ context.Context, request 
 		copy := *s.job
 		return &copy, false, nil
 	}
+	resource := s.managedResources[request.ExpectedClusterAttempt]
+	if request.ResourceFence != resource.LeaseVersion {
+		copy := *s.job
+		return &copy, false, nil
+	}
 	s.job.RayJobUID = request.RayJobUID
 	s.job.KubernetesNS = request.KubernetesNS
 	s.job.ResourceVersion = request.ResourceVersion
-	resource := s.managedResources[request.ExpectedClusterAttempt]
-	resource.RayJobUID, resource.State, resource.LeaseOwner, resource.LeaseExpiresAt = request.RayJobUID, domain.ManagedAttemptResourceActive, "", nil
+	resource.RayJobUID, resource.ResourceFence, resource.State, resource.LeaseOwner, resource.LeaseExpiresAt = request.RayJobUID, request.ResourceFence, domain.ManagedAttemptResourceActivating, "", nil
 	s.managedResources[request.ExpectedClusterAttempt] = resource
 	copy := *s.job
 	return &copy, true, nil
@@ -228,10 +236,44 @@ func (s *memoryJobStore) AcquireManagedAttemptCreation(_ context.Context, reques
 		return &copyJob, &resourceCopy, resource.LeaseOwner == request.LeaseOwner, nil
 	}
 	expires := now.Add(request.LeaseDuration)
-	resource.State, resource.LeaseOwner, resource.LeaseVersion, resource.LeaseExpiresAt = domain.ManagedAttemptResourceCreating, request.LeaseOwner, resource.LeaseVersion+1, &expires
+	resource.State, resource.LeaseOwner, resource.LeaseVersion, resource.ResourceFence, resource.LeaseExpiresAt = domain.ManagedAttemptResourceCreating, request.LeaseOwner, resource.LeaseVersion+1, resource.LeaseVersion+1, &expires
 	s.managedResources[request.ExpectedClusterAttempt] = resource
 	resourceCopy := resource
 	return &copyJob, &resourceCopy, true, nil
+}
+
+func (s *memoryJobStore) AuthorizeManagedAttemptActivation(_ context.Context, request domain.ManagedAttemptActivationRequest) (*domain.TrainingJob, *domain.ManagedAttemptResource, bool, error) {
+	s.ensureManagedResources()
+	resource, exists := s.managedResources[request.ExpectedClusterAttempt]
+	if !exists && s.job.ClusterAttempt == request.ExpectedClusterAttempt && s.job.RayJobName == request.RayJobName && s.job.RayJobUID == request.RayJobUID {
+		resource = domain.ManagedAttemptResource{
+			JobID: request.JobID, ClusterAttempt: request.ExpectedClusterAttempt,
+			KubernetesNS: s.job.KubernetesNS, RayJobName: request.RayJobName, RayJobUID: request.RayJobUID,
+			State: domain.ManagedAttemptResourceActive, LeaseVersion: request.ResourceFence, ResourceFence: request.ResourceFence,
+		}
+		s.managedResources[request.ExpectedClusterAttempt] = resource
+	}
+	authorized := s.job.DesiredState == domain.DesiredActive && s.job.ClusterAttempt == request.ExpectedClusterAttempt &&
+		s.job.RayJobName == request.RayJobName && s.job.RayJobUID == request.RayJobUID &&
+		resource.RayJobName == request.RayJobName && resource.RayJobUID == request.RayJobUID && resource.ResourceFence == request.ResourceFence &&
+		(resource.State == domain.ManagedAttemptResourceActivating || resource.State == domain.ManagedAttemptResourceActive)
+	jobCopy, resourceCopy := *s.job, resource
+	return &jobCopy, &resourceCopy, authorized, nil
+}
+
+func (s *memoryJobStore) ConfirmManagedAttemptActivation(_ context.Context, request domain.ManagedAttemptActivationRequest) (*domain.TrainingJob, bool, error) {
+	s.ensureManagedResources()
+	resource := s.managedResources[request.ExpectedClusterAttempt]
+	confirmed := s.job.DesiredState == domain.DesiredActive && s.job.ClusterAttempt == request.ExpectedClusterAttempt &&
+		s.job.RayJobName == request.RayJobName && s.job.RayJobUID == request.RayJobUID &&
+		resource.RayJobName == request.RayJobName && resource.RayJobUID == request.RayJobUID && resource.ResourceFence == request.ResourceFence &&
+		(resource.State == domain.ManagedAttemptResourceActivating || resource.State == domain.ManagedAttemptResourceActive)
+	if confirmed {
+		resource.State = domain.ManagedAttemptResourceActive
+		s.managedResources[request.ExpectedClusterAttempt] = resource
+	}
+	copy := *s.job
+	return &copy, confirmed, nil
 }
 
 func (s *memoryJobStore) RetireManagedAttemptResource(_ context.Context, request domain.ManagedAttemptRetireRequest) (*domain.ManagedAttemptResource, bool, error) {
@@ -242,7 +284,10 @@ func (s *memoryJobStore) RetireManagedAttemptResource(_ context.Context, request
 		return nil, false, errors.New("managed attempt retirement identity mismatch")
 	}
 	if !ok {
-		resource = domain.ManagedAttemptResource{JobID: request.JobID, ClusterAttempt: request.ClusterAttempt, KubernetesNS: request.KubernetesNS, RayJobName: request.RayJobName}
+		resource = domain.ManagedAttemptResource{
+			JobID: request.JobID, ClusterAttempt: request.ClusterAttempt, KubernetesNS: request.KubernetesNS, RayJobName: request.RayJobName,
+			LeaseVersion: 1, ResourceFence: 1,
+		}
 	}
 	changed := resource.State != domain.ManagedAttemptResourceRetiring || (resource.RayJobUID == "" && request.RayJobUID != "")
 	if resource.RayJobUID == "" {
@@ -258,7 +303,7 @@ func (s *memoryJobStore) ListManagedAttemptCleanup(_ context.Context, limit int,
 	s.ensureManagedResources()
 	items := make([]domain.ManagedAttemptResource, 0, len(s.managedResources))
 	for _, resource := range s.managedResources {
-		if resource.State == domain.ManagedAttemptResourceRetiring || resource.State == domain.ManagedAttemptResourceCleaned ||
+		if resource.State == domain.ManagedAttemptResourceRetiring ||
 			((resource.State == domain.ManagedAttemptResourceReserved || resource.State == domain.ManagedAttemptResourceCreating) &&
 				(resource.ClusterAttempt < s.job.ClusterAttempt || s.job.DesiredState == domain.DesiredCanceled || terminalJobState(s.job.ObservedState))) {
 			items = append(items, resource)
@@ -268,6 +313,31 @@ func (s *memoryJobStore) ListManagedAttemptCleanup(_ context.Context, limit int,
 		}
 	}
 	return items, nil
+}
+
+func (s *memoryJobStore) ListManagedAttemptTombstoneAudit(_ context.Context, limit int, _ time.Time) ([]domain.ManagedAttemptResource, error) {
+	items := make([]domain.ManagedAttemptResource, 0)
+	for _, resource := range s.managedResources {
+		if resource.State == domain.ManagedAttemptResourceCleaned {
+			items = append(items, resource)
+			if limit > 0 && len(items) == limit {
+				break
+			}
+		}
+	}
+	return items, nil
+}
+
+func (s *memoryJobStore) RecordManagedAttemptCleanupFailure(_ context.Context, request domain.ManagedAttemptCleanupFailureRequest) error {
+	resource := s.managedResources[request.ClusterAttempt]
+	resource.CleanupFailures++
+	resource.CleanupLastError = request.Message
+	resource.NextCheckAt = request.ObservedAt.Add(5 * time.Second)
+	if request.Permanent {
+		resource.State = domain.ManagedAttemptResourceQuarantined
+	}
+	s.managedResources[request.ClusterAttempt] = resource
+	return nil
 }
 
 func (s *memoryJobStore) CompleteManagedAttemptCleanup(_ context.Context, request domain.ManagedAttemptCleanupRequest) (bool, error) {
@@ -501,6 +571,10 @@ func assignFakeRayJobUID(t *testing.T, dynamicClient *dynamicfake.FakeDynamicCli
 		t.Fatalf("assign fake apiserver UID to %s: %v", name, err)
 	}
 	store.job.RayJobUID = uid
+	if resource, ok := store.managedResources[store.job.ClusterAttempt]; ok {
+		resource.RayJobUID = uid
+		store.managedResources[store.job.ClusterAttempt] = resource
+	}
 }
 
 func TestFailedManagedClusterCreatesNextAttemptFromCheckpoint(t *testing.T) {
@@ -819,6 +893,24 @@ func TestCreatorCrashAdoptsFailedResourceBeforeManagedRecovery(t *testing.T) {
 	if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
 		t.Fatal(err)
 	}
+	if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := dynamicClient.Resource(rayJobGVR).Namespace(job.KubernetesNS).Get(context.Background(), job.RayJobName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := unstructured.SetNestedMap(replacement.Object, map[string]any{
+		"jobStatus": "FAILED", "reason": "HEAD_POD_LOST", "message": "replacement head disappeared",
+	}, "status"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dynamicClient.Resource(rayJobGVR).Namespace(job.KubernetesNS).Update(context.Background(), replacement, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
 	if len(store.recoveryRequests) != 1 || store.recoveryRequests[0].ExpectedRayJobUID != string(created.GetUID()) {
 		t.Fatalf("FAILED resource was classified before exact adoption: created=%s requests=%+v", created.GetUID(), store.recoveryRequests)
 	}
@@ -851,6 +943,24 @@ func TestCreatorCrashAdoptsFailedResourceAndFailsClosedWithoutCheckpoint(t *test
 		t.Fatal(err)
 	}
 	reconciler := NewReconciler(store, client, testRenderOptions())
+	if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := dynamicClient.Resource(rayJobGVR).Namespace(job.KubernetesNS).Get(context.Background(), job.RayJobName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := unstructured.SetNestedMap(replacement.Object, map[string]any{
+		"jobStatus": "FAILED", "reason": "HEAD_POD_LOST", "message": "replacement head disappeared",
+	}, "status"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dynamicClient.Resource(rayJobGVR).Namespace(job.KubernetesNS).Update(context.Background(), replacement, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
 	if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
 		t.Fatal(err)
 	}

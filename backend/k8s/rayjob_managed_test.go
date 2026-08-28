@@ -21,6 +21,7 @@ func managedManifest(t *testing.T, job domain.TrainingJob) *unstructured.Unstruc
 	t.Helper()
 	options := testRenderOptions()
 	options.RayVersion = domain.RayVersionLegacy
+	options.managedCreationFence = 1
 	manifest, err := RenderRayJob(job, options)
 	if err != nil {
 		t.Fatalf("render managed RayJob: %v", err)

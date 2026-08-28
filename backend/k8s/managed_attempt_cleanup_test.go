@@ -20,6 +20,7 @@ func retiringAttemptResource(job domain.TrainingJob, attempt int, name, uid stri
 	return domain.ManagedAttemptResource{
 		JobID: job.ID, ClusterAttempt: attempt, KubernetesNS: job.KubernetesNS,
 		RayJobName: name, RayJobUID: uid, State: domain.ManagedAttemptResourceRetiring,
+		LeaseVersion: 1, ResourceFence: 1,
 		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 	}
 }
@@ -104,11 +105,14 @@ func TestManagedCleanupDeletionFailureRemainsDurableAndRetries(t *testing.T) {
 		return false, nil, nil
 	})
 	reconciler := NewReconciler(store, NewClientFromInterfaces(dynamicClient, nil), testRenderOptions())
-	if err := reconciler.ProcessOnce(context.Background()); err == nil {
-		t.Fatal("expected first cleanup pass to surface deletion failure")
+	if err := reconciler.ProcessOnce(context.Background()); err != nil {
+		t.Fatalf("durably recorded cleanup failure blocked the pass: %v", err)
 	}
 	if _, ok := store.managedResources[1]; !ok {
 		t.Fatal("deletion failure lost durable retirement intent")
+	}
+	if resource := store.managedResources[1]; resource.CleanupFailures != 1 || resource.CleanupLastError == "" {
+		t.Fatalf("deletion failure did not record bounded retry state: %+v", resource)
 	}
 	if err := reconciler.ProcessOnce(context.Background()); err != nil {
 		t.Fatal(err)
@@ -177,7 +181,7 @@ func TestExpiredCreatorResumingAfterTakeoverCleanupCannotLeaveLowerAttempt(t *te
 	job := managedEmptyAttempt(3, domain.StateCanceled)
 	job.RayJobName, job.RayJobUID = job.ID+"-a3", "uid-attempt-3"
 	retiring := retiringAttemptResource(job, 2, job.ID+"-a2", "uid-takeover")
-	retiring.LeaseVersion = 2
+	retiring.LeaseVersion, retiring.ResourceFence = 2, 2
 	store := &memoryJobStore{job: &job, managedResources: map[int]domain.ManagedAttemptResource{2: retiring}}
 	dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
 	createManagedAttemptResourceWithFence(t, dynamicClient, job, 2, 2, retiring.RayJobName, retiring.RayJobUID)
@@ -216,6 +220,64 @@ func TestExpiredCreatorResumingAfterTakeoverCleanupCannotLeaveLowerAttempt(t *te
 	}
 	if _, ok := store.managedResources[2]; !ok {
 		t.Fatal("lower-attempt tombstone did not survive repeated cleanup")
+	}
+}
+
+func TestCancellationBetweenActivationAuthorizationAndKubernetesUpdateCannotExposeQueue(t *testing.T) {
+	job := managedEmptyAttempt(2, domain.StateRecovering)
+	store := &memoryJobStore{job: &job}
+	dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
+	canceled := false
+	dynamicClient.PrependReactor("update", "rayjobs", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if !canceled {
+			canceled = true
+			store.job.DesiredState = domain.DesiredCanceled
+			resource := store.managedResources[2]
+			resource.State = domain.ManagedAttemptResourceRetiring
+			store.managedResources[2] = resource
+		}
+		return false, nil, nil
+	})
+	reconciler := NewReconciler(store, NewClientFromInterfaces(dynamicClient, nil), testRenderOptions())
+	if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !canceled || store.job.DesiredState != domain.DesiredCanceled {
+		t.Fatal("test did not interleave cancellation after DB authorization")
+	}
+	if _, err := dynamicClient.Resource(rayJobGVR).Namespace(job.KubernetesNS).Get(context.Background(), job.ID+"-a2", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("activation race left a queued or GPU-visible RayJob: %v", err)
+	}
+}
+
+func TestMalformedCleanupIsQuarantinedWithoutBlockingUnrelatedReconciliation(t *testing.T) {
+	active := validRenderJob()
+	store := &memoryJobStore{job: &active, managedResources: map[int]domain.ManagedAttemptResource{
+		9: {
+			JobID: "job-bad", ClusterAttempt: 9, KubernetesNS: active.KubernetesNS,
+			RayJobName: "job-bad-a9", RayJobUID: "uid-bad", State: domain.ManagedAttemptResourceRetiring,
+			LeaseVersion: 1,
+		},
+	}}
+	dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
+	foreign := managedManifest(t, managedEmptyAttempt(9, domain.StateCanceled))
+	foreign.SetName("job-bad-a9")
+	foreign.SetUID(types.UID("uid-bad"))
+	labels := foreign.GetLabels()
+	labels["ray.io/job-id"] = "foreign-owner"
+	foreign.SetLabels(labels)
+	if _, err := dynamicClient.Resource(rayJobGVR).Namespace(active.KubernetesNS).Create(context.Background(), foreign, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	reconciler := NewReconciler(store, NewClientFromInterfaces(dynamicClient, nil), testRenderOptions())
+	if err := reconciler.ProcessOnce(context.Background()); err != nil {
+		t.Fatalf("quarantined cleanup error escaped the pass: %v", err)
+	}
+	if resource := store.managedResources[9]; resource.State != domain.ManagedAttemptResourceQuarantined || resource.CleanupLastError == "" {
+		t.Fatalf("permanent cleanup mismatch was not durable and alertable: %+v", resource)
+	}
+	if _, err := dynamicClient.Resource(rayJobGVR).Namespace(active.KubernetesNS).Get(context.Background(), active.ID, metav1.GetOptions{}); err != nil {
+		t.Fatalf("bad tombstone blocked unrelated job reconciliation: %v", err)
 	}
 }
 

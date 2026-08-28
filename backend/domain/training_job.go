@@ -356,26 +356,31 @@ func (request ManagedAttemptReservationRequest) Validate() error {
 type ManagedAttemptResourceState string
 
 const (
-	ManagedAttemptResourceReserved ManagedAttemptResourceState = "RESERVED"
-	ManagedAttemptResourceCreating ManagedAttemptResourceState = "CREATING"
-	ManagedAttemptResourceActive   ManagedAttemptResourceState = "ACTIVE"
-	ManagedAttemptResourceRetiring ManagedAttemptResourceState = "RETIRING"
-	ManagedAttemptResourceCleaned  ManagedAttemptResourceState = "CLEANED"
+	ManagedAttemptResourceReserved    ManagedAttemptResourceState = "RESERVED"
+	ManagedAttemptResourceCreating    ManagedAttemptResourceState = "CREATING"
+	ManagedAttemptResourceActivating  ManagedAttemptResourceState = "ACTIVATING"
+	ManagedAttemptResourceActive      ManagedAttemptResourceState = "ACTIVE"
+	ManagedAttemptResourceRetiring    ManagedAttemptResourceState = "RETIRING"
+	ManagedAttemptResourceCleaned     ManagedAttemptResourceState = "CLEANED"
+	ManagedAttemptResourceQuarantined ManagedAttemptResourceState = "QUARANTINED"
 )
 
 type ManagedAttemptResource struct {
-	JobID          string
-	ClusterAttempt int
-	KubernetesNS   string
-	RayJobName     string
-	RayJobUID      string
-	State          ManagedAttemptResourceState
-	LeaseOwner     string
-	LeaseVersion   int64
-	LeaseExpiresAt *time.Time
-	NextCheckAt    time.Time
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	JobID            string
+	ClusterAttempt   int
+	KubernetesNS     string
+	RayJobName       string
+	RayJobUID        string
+	State            ManagedAttemptResourceState
+	LeaseOwner       string
+	LeaseVersion     int64
+	ResourceFence    int64
+	LeaseExpiresAt   *time.Time
+	CleanupFailures  int
+	CleanupLastError string
+	NextCheckAt      time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 type ManagedAttemptCreationLeaseRequest struct {
@@ -435,6 +440,7 @@ type ManagedAttemptAdoptionRequest struct {
 	ResourceVersion        string
 	LeaseOwner             string
 	LeaseVersion           int64
+	ResourceFence          int64
 }
 
 func (request ManagedAttemptAdoptionRequest) Validate() error {
@@ -458,6 +464,50 @@ func (request ManagedAttemptAdoptionRequest) Validate() error {
 	}
 	if owner := strings.TrimSpace(request.LeaseOwner); owner == "" || len(owner) > 128 || request.LeaseVersion < 1 {
 		return fmt.Errorf("managed attempt adoption lease owner and version are required")
+	}
+	if request.ResourceFence < 1 {
+		return fmt.Errorf("managed attempt adoption resource fence is required")
+	}
+	return nil
+}
+
+// ManagedAttemptActivationRequest authorizes or confirms exposing exactly one
+// adopted RayJob to Kueue. The fence is bound during adoption and cannot be
+// inferred from a later Kubernetes observation.
+type ManagedAttemptActivationRequest struct {
+	JobID                  string
+	ExpectedClusterAttempt int
+	RayJobName             string
+	RayJobUID              string
+	ResourceFence          int64
+}
+
+func (request ManagedAttemptActivationRequest) Validate() error {
+	if strings.TrimSpace(request.JobID) == "" || request.ExpectedClusterAttempt < 1 {
+		return fmt.Errorf("managed attempt activation job and attempt are required")
+	}
+	if strings.TrimSpace(request.RayJobName) == "" || strings.TrimSpace(request.RayJobUID) == "" || request.ResourceFence < 1 {
+		return fmt.Errorf("managed attempt activation identity and fence are required")
+	}
+	return nil
+}
+
+type ManagedAttemptCleanupFailureRequest struct {
+	JobID          string
+	ClusterAttempt int
+	RayJobName     string
+	RayJobUID      string
+	Message        string
+	Permanent      bool
+	ObservedAt     time.Time
+}
+
+func (request ManagedAttemptCleanupFailureRequest) Validate() error {
+	if strings.TrimSpace(request.JobID) == "" || request.ClusterAttempt < 1 || strings.TrimSpace(request.RayJobName) == "" {
+		return fmt.Errorf("managed attempt cleanup failure identity is required")
+	}
+	if strings.TrimSpace(request.Message) == "" {
+		return fmt.Errorf("managed attempt cleanup failure message is required")
 	}
 	return nil
 }

@@ -89,7 +89,10 @@ CREATE TABLE IF NOT EXISTS managed_attempt_resources (
   state TEXT NOT NULL DEFAULT 'RESERVED',
   lease_owner TEXT NOT NULL DEFAULT '',
   lease_version BIGINT NOT NULL DEFAULT 0,
+  resource_fence BIGINT NOT NULL DEFAULT 0,
   lease_expires_at TIMESTAMPTZ,
+  cleanup_failures INTEGER NOT NULL DEFAULT 0,
+  cleanup_last_error TEXT NOT NULL DEFAULT '',
   next_check_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -105,18 +108,23 @@ CREATE TABLE IF NOT EXISTS managed_attempt_resources (
     AND ray_job_name ~ '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
   ),
   CONSTRAINT managed_attempt_resources_uid_check CHECK (length(ray_job_uid) <= 253),
-  CONSTRAINT managed_attempt_resources_state_check CHECK (state IN ('RESERVED', 'CREATING', 'ACTIVE', 'RETIRING', 'CLEANED')),
+  CONSTRAINT managed_attempt_resources_state_check CHECK (state IN ('RESERVED', 'CREATING', 'ACTIVATING', 'ACTIVE', 'RETIRING', 'CLEANED', 'QUARANTINED')),
   CONSTRAINT managed_attempt_resources_lease_check CHECK (
     lease_version >= 0
+    AND resource_fence >= 0
     AND length(lease_owner) <= 128
     AND (
       (state = 'CREATING' AND lease_owner <> '' AND lease_expires_at IS NOT NULL)
       OR (state <> 'CREATING' AND lease_owner = '' AND lease_expires_at IS NULL)
     )
+  ),
+  CONSTRAINT managed_attempt_resources_cleanup_check CHECK (
+    cleanup_failures >= 0
+    AND length(cleanup_last_error) <= 4096
   )
 );
 CREATE INDEX IF NOT EXISTS managed_attempt_resources_cleanup_idx
-  ON managed_attempt_resources(state, updated_at, job_id, cluster_attempt)
+  ON managed_attempt_resources(state, next_check_at, updated_at, job_id, cluster_attempt)
   WHERE state IN ('RETIRING', 'RESERVED', 'CREATING');
 CREATE INDEX IF NOT EXISTS managed_attempt_resources_job_state_idx
   ON managed_attempt_resources(job_id, state, cluster_attempt);

@@ -842,7 +842,7 @@ func TestAdoptManagedAttemptIdentityCASAndIdempotency(t *testing.T) {
 		JobID: job.ID, ExpectedClusterAttempt: 2, ExpectedState: domain.StateRecovering,
 		RayJobName: job.ID + "-a2", RayJobUID: "uid-attempt-2",
 		KubernetesNS: job.KubernetesNS, ResourceVersion: "rv-attempt-2",
-		LeaseOwner: "replica-a", LeaseVersion: lease.LeaseVersion,
+		LeaseOwner: "replica-a", LeaseVersion: lease.LeaseVersion, ResourceFence: lease.ResourceFence,
 	}
 	current, adopted, err := repo.AdoptManagedAttemptIdentity(context.Background(), request)
 	if err != nil {
@@ -855,7 +855,7 @@ func TestAdoptManagedAttemptIdentityCASAndIdempotency(t *testing.T) {
 	if err := repo.db.Where("job_id = ? AND cluster_attempt = ?", job.ID, 2).First(&active).Error; err != nil {
 		t.Fatal(err)
 	}
-	if active.State != string(domain.ManagedAttemptResourceActive) || active.RayJobUID != request.RayJobUID || active.LeaseOwner != "" || active.LeaseExpiresAt != nil {
+	if active.State != string(domain.ManagedAttemptResourceActivating) || active.ResourceFence != request.ResourceFence || active.RayJobUID != request.RayJobUID || active.LeaseOwner != "" || active.LeaseExpiresAt != nil {
 		t.Fatalf("adoption did not atomically activate ledger: %+v", active)
 	}
 
@@ -871,6 +871,187 @@ func TestAdoptManagedAttemptIdentityCASAndIdempotency(t *testing.T) {
 	}
 	if active.State != string(domain.ManagedAttemptResourceRetiring) {
 		t.Fatalf("cancellation did not durably retire active attempt: %+v", active)
+	}
+}
+
+func TestManagedAttemptAdoptionRejectsExpiredFenceAndBindsExactFence(t *testing.T) {
+	repo, job := managedRecoveryJob(t, 2)
+	if err := repo.db.Model(&JobRecord{}).Where("id = ?", job.ID).Updates(map[string]any{
+		"cluster_attempt": 2, "observed_state": domain.StateRecovering,
+		"ray_job_name": job.ID + "-a2", "ray_job_uid": "",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := repo.db.Create(&ManagedAttemptResourceRecord{
+		JobID: job.ID, ClusterAttempt: 2, KubernetesNS: job.KubernetesNS,
+		RayJobName: job.ID + "-a2", State: string(domain.ManagedAttemptResourceCreating),
+		LeaseOwner: "replica-a", LeaseVersion: 1, LeaseExpiresAt: testTimePointer(now.Add(-time.Second)),
+		CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, lease, acquired, err := repo.AcquireManagedAttemptCreation(context.Background(), domain.ManagedAttemptCreationLeaseRequest{
+		JobID: job.ID, ExpectedClusterAttempt: 2, ExpectedState: domain.StateRecovering,
+		RayJobName: job.ID + "-a2", LeaseOwner: "replica-b", LeaseDuration: 30 * time.Second,
+	}, now)
+	if err != nil || !acquired || lease.LeaseVersion != 2 {
+		t.Fatalf("take over expired lease: acquired=%v lease=%+v err=%v", acquired, lease, err)
+	}
+	stale := domain.ManagedAttemptAdoptionRequest{
+		JobID: job.ID, ExpectedClusterAttempt: 2, ExpectedState: domain.StateRecovering,
+		RayJobName: job.ID + "-a2", RayJobUID: "uid-attempt-2", KubernetesNS: job.KubernetesNS,
+		LeaseOwner: "replica-b", LeaseVersion: 2, ResourceFence: 1,
+	}
+	if _, adopted, err := repo.AdoptManagedAttemptIdentity(context.Background(), stale); err != nil || adopted {
+		t.Fatalf("stale fence-1 was accepted under lease-2: adopted=%v err=%v", adopted, err)
+	}
+	exact := stale
+	exact.ResourceFence = 2
+	current, adopted, err := repo.AdoptManagedAttemptIdentity(context.Background(), exact)
+	if err != nil || !adopted {
+		t.Fatalf("exact fence-2 adoption failed: adopted=%v err=%v", adopted, err)
+	}
+	var ledger ManagedAttemptResourceRecord
+	if err := repo.db.Where("job_id = ? AND cluster_attempt = ?", job.ID, 2).First(&ledger).Error; err != nil {
+		t.Fatal(err)
+	}
+	if ledger.ResourceFence != 2 || ledger.State != string(domain.ManagedAttemptResourceActivating) || current.RayJobUID != exact.RayJobUID {
+		t.Fatalf("exact adopted fence was not bound transactionally: job=%+v ledger=%+v", current, ledger)
+	}
+}
+
+func TestManagedActivationAuthorizationIsRevokedAtomicallyByCancellation(t *testing.T) {
+	repo, job, request := adoptedManagedAttemptForActivation(t)
+	current, ledger, authorized, err := repo.AuthorizeManagedAttemptActivation(context.Background(), domain.ManagedAttemptActivationRequest{
+		JobID: job.ID, ExpectedClusterAttempt: request.ExpectedClusterAttempt,
+		RayJobName: request.RayJobName, RayJobUID: request.RayJobUID, ResourceFence: request.ResourceFence,
+	})
+	if err != nil || !authorized || ledger.State != domain.ManagedAttemptResourceActivating || current.DesiredState != domain.DesiredActive {
+		t.Fatalf("active attempt was not authorized: authorized=%v job=%+v ledger=%+v err=%v", authorized, current, ledger, err)
+	}
+	if err := repo.SetDesiredState(context.Background(), job.TenantID, job.ID, domain.DesiredCanceled); err != nil {
+		t.Fatal(err)
+	}
+	current, confirmed, err := repo.ConfirmManagedAttemptActivation(context.Background(), domain.ManagedAttemptActivationRequest{
+		JobID: job.ID, ExpectedClusterAttempt: request.ExpectedClusterAttempt,
+		RayJobName: request.RayJobName, RayJobUID: request.RayJobUID, ResourceFence: request.ResourceFence,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if confirmed || current.DesiredState != domain.DesiredCanceled {
+		t.Fatalf("activation confirmation overrode cancellation: confirmed=%v job=%+v", confirmed, current)
+	}
+	var ledgerRecord ManagedAttemptResourceRecord
+	if err := repo.db.Where("job_id = ? AND cluster_attempt = ?", job.ID, request.ExpectedClusterAttempt).First(&ledgerRecord).Error; err != nil {
+		t.Fatal(err)
+	}
+	if ledgerRecord.State != string(domain.ManagedAttemptResourceRetiring) {
+		t.Fatalf("cancellation did not revoke activation authorization: %+v", ledgerRecord)
+	}
+}
+
+func adoptedManagedAttemptForActivation(t *testing.T) (*GormRepository, domain.TrainingJob, domain.ManagedAttemptAdoptionRequest) {
+	t.Helper()
+	repo, job := managedRecoveryJob(t, 2)
+	if err := repo.db.Model(&JobRecord{}).Where("id = ?", job.ID).Updates(map[string]any{
+		"cluster_attempt": 2, "observed_state": domain.StateRecovering,
+		"ray_job_name": job.ID + "-a2", "ray_job_uid": "",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := repo.db.Create(&ManagedAttemptResourceRecord{
+		JobID: job.ID, ClusterAttempt: 2, KubernetesNS: job.KubernetesNS,
+		RayJobName: job.ID + "-a2", State: string(domain.ManagedAttemptResourceCreating),
+		LeaseOwner: "replica-a", LeaseVersion: 1, LeaseExpiresAt: testTimePointer(now.Add(time.Minute)),
+		CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	request := domain.ManagedAttemptAdoptionRequest{
+		JobID: job.ID, ExpectedClusterAttempt: 2, ExpectedState: domain.StateRecovering,
+		RayJobName: job.ID + "-a2", RayJobUID: "uid-attempt-2", KubernetesNS: job.KubernetesNS,
+		LeaseOwner: "replica-a", LeaseVersion: 1, ResourceFence: 1,
+	}
+	if _, adopted, err := repo.AdoptManagedAttemptIdentity(context.Background(), request); err != nil || !adopted {
+		t.Fatalf("seed adopted attempt: adopted=%v err=%v", adopted, err)
+	}
+	return repo, job, request
+}
+
+func testTimePointer(value time.Time) *time.Time { return &value }
+
+func TestUrgentManagedCleanupIsIndependentOfTombstoneAuditBacklog(t *testing.T) {
+	repo, job := managedRecoveryJob(t, 10)
+	now := time.Now().UTC()
+	resources := make([]ManagedAttemptResourceRecord, 0, 26)
+	for attempt := 1; attempt <= 25; attempt++ {
+		resources = append(resources, ManagedAttemptResourceRecord{
+			JobID: job.ID, ClusterAttempt: attempt, KubernetesNS: job.KubernetesNS,
+			RayJobName: fmt.Sprintf("%s-a%d", job.ID, attempt), State: string(domain.ManagedAttemptResourceCleaned),
+			LeaseVersion: 1, NextCheckAt: now.Add(-time.Hour), CreatedAt: now.Add(-24 * time.Hour), UpdatedAt: now.Add(-24 * time.Hour),
+		})
+	}
+	resources = append(resources, ManagedAttemptResourceRecord{
+		JobID: job.ID, ClusterAttempt: 26, KubernetesNS: job.KubernetesNS,
+		RayJobName: job.ID + "-a26", RayJobUID: "uid-urgent", State: string(domain.ManagedAttemptResourceRetiring),
+		LeaseVersion: 1, NextCheckAt: now.Add(-time.Second), CreatedAt: now, UpdatedAt: now,
+	})
+	if err := repo.db.Create(&resources).Error; err != nil {
+		t.Fatal(err)
+	}
+	urgent, err := repo.ListManagedAttemptCleanup(context.Background(), 1, now)
+	if err != nil || len(urgent) != 1 || urgent[0].ClusterAttempt != 26 {
+		t.Fatalf("tombstones delayed urgent retirement: urgent=%+v err=%v", urgent, err)
+	}
+	audits, err := repo.ListManagedAttemptTombstoneAudit(context.Background(), 2, now)
+	if err != nil || len(audits) != 2 || audits[0].State != domain.ManagedAttemptResourceCleaned || audits[1].State != domain.ManagedAttemptResourceCleaned {
+		t.Fatalf("tombstone audit was not independently bounded: audits=%+v err=%v", audits, err)
+	}
+}
+
+func TestManagedCleanupFailureUsesBoundedBackoffAndPermanentQuarantine(t *testing.T) {
+	repo, job := managedRecoveryJob(t, 2)
+	now := time.Now().UTC()
+	row := ManagedAttemptResourceRecord{
+		JobID: job.ID, ClusterAttempt: 2, KubernetesNS: job.KubernetesNS,
+		RayJobName: job.ID + "-a2", RayJobUID: "uid-a2", State: string(domain.ManagedAttemptResourceRetiring),
+		LeaseVersion: 2, ResourceFence: 2, NextCheckAt: now, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := repo.db.Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	request := domain.ManagedAttemptCleanupFailureRequest{
+		JobID: job.ID, ClusterAttempt: 2, RayJobName: row.RayJobName, RayJobUID: row.RayJobUID,
+		Message: "temporary apiserver failure", ObservedAt: now,
+	}
+	if err := repo.RecordManagedAttemptCleanupFailure(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	var delayed ManagedAttemptResourceRecord
+	if err := repo.db.Where("job_id = ? AND cluster_attempt = ?", job.ID, 2).First(&delayed).Error; err != nil {
+		t.Fatal(err)
+	}
+	if delayed.CleanupFailures != 1 || delayed.CleanupLastError == "" || !delayed.NextCheckAt.Equal(now.Add(5*time.Second)) {
+		t.Fatalf("transient cleanup failure was not durably backed off: %+v", delayed)
+	}
+	if urgent, err := repo.ListManagedAttemptCleanup(context.Background(), 20, now.Add(time.Second)); err != nil || len(urgent) != 0 {
+		t.Fatalf("backed-off cleanup was selected too early: urgent=%+v err=%v", urgent, err)
+	}
+	request.Permanent, request.Message, request.ObservedAt = true, "foreign ownership", now.Add(6*time.Second)
+	if err := repo.RecordManagedAttemptCleanupFailure(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.db.Where("job_id = ? AND cluster_attempt = ?", job.ID, 2).First(&delayed).Error; err != nil {
+		t.Fatal(err)
+	}
+	if delayed.State != string(domain.ManagedAttemptResourceQuarantined) || delayed.CleanupFailures != 2 {
+		t.Fatalf("permanent mismatch was not quarantined: %+v", delayed)
+	}
+	if urgent, err := repo.ListManagedAttemptCleanup(context.Background(), 20, now.Add(48*time.Hour)); err != nil || len(urgent) != 0 {
+		t.Fatalf("quarantined cleanup remained in urgent queue: urgent=%+v err=%v", urgent, err)
 	}
 }
 
@@ -949,7 +1130,7 @@ func TestAdoptManagedAttemptIdentityLosesToNewerAttempt(t *testing.T) {
 	current, adopted, err := repo.AdoptManagedAttemptIdentity(context.Background(), domain.ManagedAttemptAdoptionRequest{
 		JobID: job.ID, ExpectedClusterAttempt: 2, ExpectedState: domain.StateRecovering,
 		RayJobName: job.ID + "-a2", RayJobUID: "uid-attempt-2", KubernetesNS: job.KubernetesNS,
-		LeaseOwner: "stale-replica", LeaseVersion: 1,
+		LeaseOwner: "stale-replica", LeaseVersion: 1, ResourceFence: 1,
 	})
 	if err != nil {
 		t.Fatal(err)

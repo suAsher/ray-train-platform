@@ -382,6 +382,44 @@ func (c *Client) ActivateManagedRayJob(ctx context.Context, namespace, name, job
 	return result, nil
 }
 
+// DeactivateManagedRayJob removes Kueue visibility before a losing activation
+// is deleted. Exact UID/attempt/fence checks prevent a stale replica from
+// suspending a replacement resource.
+func (c *Client) DeactivateManagedRayJob(ctx context.Context, namespace, name, jobID, expectedUID string, attempt int, fence int64) error {
+	if c == nil || c.dynamic == nil {
+		return fmt.Errorf("Kubernetes dynamic client is not initialized")
+	}
+	jobs := c.dynamic.Resource(rayJobGVR).Namespace(namespace)
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		current, err := jobs.Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		if err := verifyManagedRayJobFence(current, jobID, expectedUID, attempt, fence); err != nil {
+			return err
+		}
+		suspended, found, err := unstructured.NestedBool(current.Object, "spec", "suspend")
+		if err != nil {
+			return fmt.Errorf("read managed RayJob suspension: %w", err)
+		}
+		if current.GetLabels()["kueue.x-k8s.io/queue-name"] == "" && found && suspended {
+			return nil
+		}
+		updated := current.DeepCopy()
+		labels := copyStringMap(updated.GetLabels())
+		delete(labels, "kueue.x-k8s.io/queue-name")
+		updated.SetLabels(labels)
+		annotations := copyStringMap(updated.GetAnnotations())
+		annotations[managedPendingAdoptionKey] = "true"
+		updated.SetAnnotations(annotations)
+		if err := unstructured.SetNestedField(updated.Object, true, "spec", "suspend"); err != nil {
+			return fmt.Errorf("suspend managed RayJob: %w", err)
+		}
+		_, err = jobs.Update(ctx, updated, metav1.UpdateOptions{})
+		return err
+	})
+}
+
 func verifyManagedRayJobFence(resource *unstructured.Unstructured, jobID, expectedUID string, attempt int, fence int64) error {
 	if resource.GetLabels()["ray.io/job-id"] != jobID {
 		return fmt.Errorf("refusing to activate RayJob owned by another job")
