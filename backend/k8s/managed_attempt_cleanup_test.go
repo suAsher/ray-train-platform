@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,7 +27,7 @@ func retiringAttemptResource(job domain.TrainingJob, attempt int, name, uid stri
 }
 
 func createManagedAttemptResource(t *testing.T, client *dynamicfake.FakeDynamicClient, job domain.TrainingJob, attempt int, name, uid string) {
-	createManagedAttemptResourceWithFence(t, client, job, attempt, 0, name, uid)
+	createManagedAttemptResourceWithFence(t, client, job, attempt, 1, name, uid)
 }
 
 func createManagedAttemptResourceWithFence(t *testing.T, client *dynamicfake.FakeDynamicClient, job domain.TrainingJob, attempt int, fence int64, name, uid string) {
@@ -43,6 +44,9 @@ func createManagedAttemptResourceWithFence(t *testing.T, client *dynamicfake.Fak
 		fenceText := fmt.Sprintf("%d", fence)
 		labels[managedCreationFenceKey] = fenceText
 		annotations[managedCreationFenceKey] = fenceText
+	} else {
+		delete(labels, managedCreationFenceKey)
+		delete(annotations, managedCreationFenceKey)
 	}
 	resource.SetLabels(labels)
 	resource.SetAnnotations(annotations)
@@ -68,6 +72,8 @@ func TestManagedCleanupWaitsForForegroundNotFoundBeforeCreatingNextAttempt(t *te
 	})
 	reconciler := NewReconciler(store, NewClientFromInterfaces(dynamicClient, nil), testRenderOptions())
 	reconciler.cleanupWait = 10 * time.Millisecond
+	now := time.Now().UTC()
+	reconciler.now = func() time.Time { return now }
 
 	if err := reconciler.ProcessOnce(context.Background()); err != nil {
 		t.Fatal(err)
@@ -78,13 +84,104 @@ func TestManagedCleanupWaitsForForegroundNotFoundBeforeCreatingNextAttempt(t *te
 	if _, ok := store.managedResources[1]; !ok {
 		t.Fatal("retirement ledger was cleared while exact resource still existed")
 	}
+	if resource := store.managedResources[1]; resource.CleanupFailures != 1 || !resource.NextCheckAt.After(now) {
+		t.Fatalf("pending foreground deletion was not durably backed off: %+v", resource)
+	}
 
 	holdDeletion = false
+	now = now.Add(6 * time.Second)
 	if err := reconciler.ProcessOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := dynamicClient.Resource(rayJobGVR).Namespace(job.KubernetesNS).Get(context.Background(), job.ID+"-a2", metav1.GetOptions{}); err != nil {
 		t.Fatalf("attempt 2 was not created after attempt 1 reached NotFound: %v", err)
+	}
+}
+
+func TestManagedCleanupAcceptsOnlyExactlyIssuedCreationFences(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		fence       int64
+		ledgerFence int64
+		issued      map[int64]bool
+		wantClean   bool
+		wantReason  string
+	}{
+		{name: "issued old fence", fence: 1, ledgerFence: 3, issued: map[int64]bool{1: true, 3: true}, wantClean: true},
+		{name: "copied unissued fence", fence: 2, ledgerFence: 3, issued: map[int64]bool{1: true, 3: true}, wantReason: "unexpected creation fence"},
+		{name: "issued current fence", fence: 3, ledgerFence: 3, issued: map[int64]bool{1: true, 3: true}, wantClean: true},
+		{name: "missing legacy fence", fence: 0, ledgerFence: 0, issued: map[int64]bool{}, wantReason: "invalid creation fence"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			job := managedEmptyAttempt(4, domain.StateCanceled)
+			name, uid := job.ID+"-a3", "uid-a3"
+			resource := retiringAttemptResource(job, 3, name, uid)
+			resource.LeaseVersion, resource.ResourceFence = test.ledgerFence, test.ledgerFence
+			store := &memoryJobStore{
+				job:              &job,
+				managedResources: map[int]domain.ManagedAttemptResource{3: resource},
+				issuedFences:     map[int]map[int64]bool{3: test.issued},
+			}
+			dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
+			createManagedAttemptResourceWithFence(t, dynamicClient, job, 3, test.fence, name, uid)
+			reconciler := NewReconciler(store, NewClientFromInterfaces(dynamicClient, nil), testRenderOptions())
+			if err := reconciler.ProcessOnce(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			got := store.managedResources[3]
+			if test.wantClean {
+				if got.State != domain.ManagedAttemptResourceCleaned {
+					t.Fatalf("issued fence %d was not cleaned: %+v", test.fence, got)
+				}
+				return
+			}
+			if got.State != domain.ManagedAttemptResourceQuarantined || !strings.Contains(got.CleanupLastError, test.wantReason) {
+				t.Fatalf("unissued fence %d was not quarantined: %+v", test.fence, got)
+			}
+		})
+	}
+}
+
+func TestPendingForegroundDeletesBeyondFirstBatchProgressAcrossPasses(t *testing.T) {
+	job := managedEmptyAttempt(30, domain.StateCanceled)
+	store := &memoryJobStore{job: &job, managedResources: map[int]domain.ManagedAttemptResource{}, issuedFences: map[int]map[int64]bool{}}
+	dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
+	for attempt := 1; attempt <= 25; attempt++ {
+		name, uid := fmt.Sprintf("%s-a%d", job.ID, attempt), fmt.Sprintf("uid-%d", attempt)
+		store.managedResources[attempt] = retiringAttemptResource(job, attempt, name, uid)
+		store.issuedFences[attempt] = map[int64]bool{1: true}
+		createManagedAttemptResourceWithFence(t, dynamicClient, job, attempt, 1, name, uid)
+	}
+	dynamicClient.PrependReactor("delete", "rayjobs", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, nil
+	})
+	reconciler := NewReconciler(store, NewClientFromInterfaces(dynamicClient, nil), testRenderOptions())
+	reconciler.cleanupWait = time.Millisecond
+	now := time.Now().UTC()
+	reconciler.now = func() time.Time { return now }
+	if err := reconciler.ProcessOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	failed := 0
+	for _, resource := range store.managedResources {
+		if resource.CleanupFailures > 0 {
+			failed++
+		}
+	}
+	if failed != 20 {
+		t.Fatalf("first pass backed off %d resources, want 20", failed)
+	}
+	if err := reconciler.ProcessOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	failed = 0
+	for _, resource := range store.managedResources {
+		if resource.CleanupFailures > 0 {
+			failed++
+		}
+	}
+	if failed != 25 {
+		t.Fatalf("later urgent rows did not progress on second pass: backed off=%d", failed)
 	}
 }
 
@@ -105,6 +202,8 @@ func TestManagedCleanupDeletionFailureRemainsDurableAndRetries(t *testing.T) {
 		return false, nil, nil
 	})
 	reconciler := NewReconciler(store, NewClientFromInterfaces(dynamicClient, nil), testRenderOptions())
+	now := time.Now().UTC()
+	reconciler.now = func() time.Time { return now }
 	if err := reconciler.ProcessOnce(context.Background()); err != nil {
 		t.Fatalf("durably recorded cleanup failure blocked the pass: %v", err)
 	}
@@ -114,6 +213,7 @@ func TestManagedCleanupDeletionFailureRemainsDurableAndRetries(t *testing.T) {
 	if resource := store.managedResources[1]; resource.CleanupFailures != 1 || resource.CleanupLastError == "" {
 		t.Fatalf("deletion failure did not record bounded retry state: %+v", resource)
 	}
+	now = now.Add(6 * time.Second)
 	if err := reconciler.ProcessOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -169,11 +269,11 @@ func TestManagedCleanupRefusesForeignAttemptIdentity(t *testing.T) {
 	dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
 	createManagedAttemptResource(t, dynamicClient, job, 9, job.ID, job.RayJobUID)
 	reconciler := NewReconciler(store, NewClientFromInterfaces(dynamicClient, nil), testRenderOptions())
-	if err := reconciler.ProcessOnce(context.Background()); err == nil {
-		t.Fatal("foreign attempt metadata was accepted")
+	if err := reconciler.ProcessOnce(context.Background()); err != nil {
+		t.Fatalf("quarantined foreign attempt blocked reconciliation: %v", err)
 	}
-	if _, ok := store.managedResources[1]; !ok {
-		t.Fatal("foreign resource caused ledger completion")
+	if resource := store.managedResources[1]; resource.State != domain.ManagedAttemptResourceQuarantined {
+		t.Fatalf("foreign attempt metadata was not quarantined: %+v", resource)
 	}
 }
 
@@ -182,7 +282,10 @@ func TestExpiredCreatorResumingAfterTakeoverCleanupCannotLeaveLowerAttempt(t *te
 	job.RayJobName, job.RayJobUID = job.ID+"-a3", "uid-attempt-3"
 	retiring := retiringAttemptResource(job, 2, job.ID+"-a2", "uid-takeover")
 	retiring.LeaseVersion, retiring.ResourceFence = 2, 2
-	store := &memoryJobStore{job: &job, managedResources: map[int]domain.ManagedAttemptResource{2: retiring}}
+	store := &memoryJobStore{
+		job: &job, managedResources: map[int]domain.ManagedAttemptResource{2: retiring},
+		issuedFences: map[int]map[int64]bool{2: {1: true, 2: true}},
+	}
 	dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
 	createManagedAttemptResourceWithFence(t, dynamicClient, job, 2, 2, retiring.RayJobName, retiring.RayJobUID)
 	reconciler := NewReconciler(store, NewClientFromInterfaces(dynamicClient, nil), testRenderOptions())
@@ -228,6 +331,7 @@ func TestCancellationBetweenActivationAuthorizationAndKubernetesUpdateCannotExpo
 	store := &memoryJobStore{job: &job}
 	dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
 	canceled := false
+	deleteFailed := false
 	dynamicClient.PrependReactor("update", "rayjobs", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		if !canceled {
 			canceled = true
@@ -238,15 +342,35 @@ func TestCancellationBetweenActivationAuthorizationAndKubernetesUpdateCannotExpo
 		}
 		return false, nil, nil
 	})
+	dynamicClient.PrependReactor("delete", "rayjobs", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if !deleteFailed {
+			deleteFailed = true
+			return true, nil, errors.New("simulated crash-window delete failure")
+		}
+		return false, nil, nil
+	})
 	reconciler := NewReconciler(store, NewClientFromInterfaces(dynamicClient, nil), testRenderOptions())
-	if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
-		t.Fatal(err)
+	if err := reconciler.ReconcileJob(context.Background(), job.ID); err == nil {
+		t.Fatal("test did not exercise activation compensation crash window")
 	}
 	if !canceled || store.job.DesiredState != domain.DesiredCanceled {
 		t.Fatal("test did not interleave cancellation after DB authorization")
 	}
+	resource, err := dynamicClient.Resource(rayJobGVR).Namespace(job.KubernetesNS).Get(context.Background(), job.ID+"-a2", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("simulated crash should leave the durably owned resource for retry: %v", err)
+	}
+	if resource.GetLabels()["kueue.x-k8s.io/queue-name"] != "" {
+		t.Fatal("cancellation race left the crash-window resource queued")
+	}
+	if ledger := store.managedResources[2]; ledger.State != domain.ManagedAttemptResourceRetiring {
+		t.Fatalf("cancellation did not persist retirement before compensation: %+v", ledger)
+	}
+	if err := reconciler.ProcessOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := dynamicClient.Resource(rayJobGVR).Namespace(job.KubernetesNS).Get(context.Background(), job.ID+"-a2", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
-		t.Fatalf("activation race left a queued or GPU-visible RayJob: %v", err)
+		t.Fatalf("durable cancellation cleanup left an orphan after retry: %v", err)
 	}
 }
 

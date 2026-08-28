@@ -84,9 +84,17 @@ type ManagedAttemptResourceRecord struct {
 	UpdatedAt        time.Time
 }
 
+type ManagedAttemptFenceRecord struct {
+	JobID          string `gorm:"primaryKey"`
+	ClusterAttempt int    `gorm:"primaryKey"`
+	Fence          int64  `gorm:"primaryKey"`
+	CreatedAt      time.Time
+}
+
 func (JobRecord) TableName() string                    { return "training_jobs" }
 func (OutboxRecord) TableName() string                 { return "outbox_events" }
 func (ManagedAttemptResourceRecord) TableName() string { return "managed_attempt_resources" }
+func (ManagedAttemptFenceRecord) TableName() string    { return "managed_attempt_fences" }
 
 func (record ManagedAttemptResourceRecord) toDomain() domain.ManagedAttemptResource {
 	return domain.ManagedAttemptResource{
@@ -751,6 +759,13 @@ func (r *GormRepository) AcquireManagedAttemptCreation(ctx context.Context, requ
 		if result.RowsAffected == 0 {
 			return nil
 		}
+		issuedFence := ManagedAttemptFenceRecord{
+			JobID: ledger.JobID, ClusterAttempt: ledger.ClusterAttempt,
+			Fence: ledger.LeaseVersion + 1, CreatedAt: now,
+		}
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&issuedFence).Error; err != nil {
+			return fmt.Errorf("persist managed attempt issued fence: %w", err)
+		}
 		ledger.State = string(domain.ManagedAttemptResourceCreating)
 		ledger.LeaseOwner = request.LeaseOwner
 		ledger.LeaseVersion++
@@ -766,6 +781,31 @@ func (r *GormRepository) AcquireManagedAttemptCreation(ctx context.Context, requ
 		return nil, nil, false, err
 	}
 	return current, resource, acquired, nil
+}
+
+// IsManagedAttemptFenceIssued checks immutable exact membership. A smaller
+// number is not implicitly trusted merely because a larger lease was issued.
+func (r *GormRepository) IsManagedAttemptFenceIssued(ctx context.Context, jobID string, clusterAttempt int, fence int64) (bool, error) {
+	if strings.TrimSpace(jobID) == "" || clusterAttempt < 1 || fence < 1 {
+		return false, nil
+	}
+	var count int64
+	if err := r.db.WithContext(ctx).Model(&ManagedAttemptFenceRecord{}).Where(
+		"job_id = ? AND cluster_attempt = ? AND fence = ?", jobID, clusterAttempt, fence,
+	).Count(&count).Error; err != nil {
+		return false, fmt.Errorf("check managed attempt issued fence: %w", err)
+	}
+	return count == 1, nil
+}
+
+func managedAttemptFenceIssuedTx(tx *gorm.DB, jobID string, clusterAttempt int, fence int64) (bool, error) {
+	var count int64
+	if err := tx.Model(&ManagedAttemptFenceRecord{}).Where(
+		"job_id = ? AND cluster_attempt = ? AND fence = ?", jobID, clusterAttempt, fence,
+	).Count(&count).Error; err != nil {
+		return false, fmt.Errorf("check managed attempt issued fence: %w", err)
+	}
+	return count == 1, nil
 }
 
 // CompleteManagedAttemptCleanup turns an exact RETIRING row into a permanent
@@ -861,6 +901,9 @@ func (r *GormRepository) RecordManagedAttemptCleanupFailure(ctx context.Context,
 		).First(&record).Error; err != nil {
 			return fmt.Errorf("lock managed cleanup failure ledger: %w", err)
 		}
+		if record.State == string(domain.ManagedAttemptResourceQuarantined) {
+			return nil
+		}
 		failures := record.CleanupFailures + 1
 		state := domain.ManagedAttemptResourceState(record.State)
 		next := now.Add(managedCleanupRetryDelay(failures))
@@ -871,6 +914,25 @@ func (r *GormRepository) RecordManagedAttemptCleanupFailure(ctx context.Context,
 		if err := tx.Model(&ManagedAttemptResourceRecord{}).Where("job_id = ? AND cluster_attempt = ?", request.JobID, request.ClusterAttempt).
 			Updates(map[string]any{"state": state, "cleanup_failures": failures, "cleanup_last_error": message, "next_check_at": next, "updated_at": now}).Error; err != nil {
 			return fmt.Errorf("record managed cleanup failure: %w", err)
+		}
+		if state == domain.ManagedAttemptResourceQuarantined {
+			payload, err := json.Marshal(map[string]any{
+				"job_id": request.JobID, "cluster_attempt": request.ClusterAttempt,
+				"ray_job_name": request.RayJobName, "ray_job_uid": record.RayJobUID,
+				"reason": message,
+			})
+			if err != nil {
+				return fmt.Errorf("marshal managed attempt quarantine event: %w", err)
+			}
+			event := OutboxRecord{
+				ID:            fmt.Sprintf("%s-attempt-%d-quarantine", request.JobID, request.ClusterAttempt),
+				AggregateType: "ManagedAttemptResource", AggregateID: request.JobID,
+				EventType: "MANAGED_ATTEMPT_QUARANTINED", PayloadJSON: string(payload),
+				Status: "PENDING", NextAttemptAt: now, CreatedAt: now,
+			}
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&event).Error; err != nil {
+				return fmt.Errorf("create managed attempt quarantine event: %w", err)
+			}
 		}
 		return nil
 	})
@@ -997,7 +1059,12 @@ func (r *GormRepository) AdoptManagedAttemptIdentity(ctx context.Context, reques
 			if ledgerErr != nil {
 				return fmt.Errorf("load idempotent managed attempt ledger: %w", ledgerErr)
 			}
+			issued, issueErr := managedAttemptFenceIssuedTx(tx, request.JobID, request.ExpectedClusterAttempt, request.ResourceFence)
+			if issueErr != nil {
+				return issueErr
+			}
 			adopted = ledger.RayJobName == request.RayJobName && ledger.RayJobUID == request.RayJobUID && ledger.ResourceFence == request.ResourceFence &&
+				issued &&
 				(ledger.State == string(domain.ManagedAttemptResourceActivating) || ledger.State == string(domain.ManagedAttemptResourceActive) || ledger.State == string(domain.ManagedAttemptResourceRetiring))
 			return nil
 		}
@@ -1015,6 +1082,13 @@ func (r *GormRepository) AdoptManagedAttemptIdentity(ctx context.Context, reques
 		if ledger.KubernetesNS != request.KubernetesNS || ledger.RayJobName != request.RayJobName || ledger.RayJobUID != "" ||
 			ledger.State != string(domain.ManagedAttemptResourceCreating) || ledger.LeaseOwner != request.LeaseOwner ||
 			ledger.LeaseVersion != request.LeaseVersion || request.ResourceFence != ledger.LeaseVersion {
+			return nil
+		}
+		issued, err := managedAttemptFenceIssuedTx(tx, request.JobID, request.ExpectedClusterAttempt, request.ResourceFence)
+		if err != nil {
+			return err
+		}
+		if !issued {
 			return nil
 		}
 		now := time.Now().UTC()
@@ -1089,11 +1163,15 @@ func (r *GormRepository) AuthorizeManagedAttemptActivation(ctx context.Context, 
 		}
 		value := ledger.toDomain()
 		resource = &value
+		issued, err := managedAttemptFenceIssuedTx(tx, request.JobID, request.ExpectedClusterAttempt, request.ResourceFence)
+		if err != nil {
+			return err
+		}
 		authorized = job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain &&
 			job.DesiredState == domain.DesiredActive && job.ClusterAttempt == request.ExpectedClusterAttempt &&
 			job.RayJobName == request.RayJobName && job.RayJobUID == request.RayJobUID &&
 			ledger.RayJobName == request.RayJobName && ledger.RayJobUID == request.RayJobUID &&
-			ledger.ResourceFence == request.ResourceFence &&
+			ledger.ResourceFence == request.ResourceFence && issued &&
 			(ledger.State == string(domain.ManagedAttemptResourceActivating) || ledger.State == string(domain.ManagedAttemptResourceActive))
 		return nil
 	})
@@ -1131,6 +1209,13 @@ func (r *GormRepository) ConfirmManagedAttemptActivation(ctx context.Context, re
 			return fmt.Errorf("lock managed activation confirmation ledger: %w", err)
 		}
 		if ledger.RayJobName != request.RayJobName || ledger.RayJobUID != request.RayJobUID || ledger.ResourceFence != request.ResourceFence {
+			return nil
+		}
+		issued, err := managedAttemptFenceIssuedTx(tx, request.JobID, request.ExpectedClusterAttempt, request.ResourceFence)
+		if err != nil {
+			return err
+		}
+		if !issued {
 			return nil
 		}
 		if ledger.State == string(domain.ManagedAttemptResourceActive) {

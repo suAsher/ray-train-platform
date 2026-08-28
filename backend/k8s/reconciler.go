@@ -39,6 +39,7 @@ type JobStore interface {
 	ListManagedAttemptCleanup(context.Context, int, time.Time) ([]domain.ManagedAttemptResource, error)
 	ListManagedAttemptTombstoneAudit(context.Context, int, time.Time) ([]domain.ManagedAttemptResource, error)
 	RecordManagedAttemptCleanupFailure(context.Context, domain.ManagedAttemptCleanupFailureRequest) error
+	IsManagedAttemptFenceIssued(context.Context, string, int, int64) (bool, error)
 	CompleteManagedAttemptCleanup(context.Context, domain.ManagedAttemptCleanupRequest) (bool, error)
 	BeginManagedRecovery(context.Context, domain.ManagedRecoveryRequest) (*domain.TrainingJob, bool, error)
 	ClearManagedRecoveryRetiringIdentity(context.Context, domain.ManagedRetiringIdentityRequest) (*domain.TrainingJob, bool, error)
@@ -224,6 +225,20 @@ func (r *Reconciler) reconcileManagedAttemptCleanupBatch(ctx context.Context, re
 }
 
 func (r *Reconciler) processEvent(ctx context.Context, event domain.OutboxEvent) error {
+	if event.EventType == "MANAGED_ATTEMPT_QUARANTINED" {
+		var payload struct {
+			JobID          string `json:"job_id"`
+			ClusterAttempt int    `json:"cluster_attempt"`
+			RayJobName     string `json:"ray_job_name"`
+			Reason         string `json:"reason"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return fmt.Errorf("decode managed attempt quarantine event: %w", err)
+		}
+		log.Printf("managed attempt quarantined: job_id=%s cluster_attempt=%d ray_job_name=%s reason=%q",
+			payload.JobID, payload.ClusterAttempt, payload.RayJobName, payload.Reason)
+		return nil
+	}
 	if event.EventType != "TRAINING_JOB_SUBMITTED" && event.EventType != "TRAINING_JOB_CANCEL_REQUESTED" && event.EventType != "TRAINING_JOB_TERMINAL" {
 		return nil
 	}
@@ -499,6 +514,12 @@ func (r *Reconciler) adoptManagedAttempt(ctx context.Context, reserved *domain.T
 	return current, adopted, nil
 }
 
+// activateManagedRayJob implements cancellation as asynchronous desired-state
+// intent across PostgreSQL and Kubernetes; it cannot provide a zero-time
+// distributed transaction. The safety contract is instead: authorization is
+// revoked in PostgreSQL, no newer attempt is created, and any resource exposed
+// in the narrow cross-system race remains ledger-owned, is immediately
+// deactivated when observed, and is foreground-deleted by durable cleanup.
 func (r *Reconciler) activateManagedRayJob(ctx context.Context, job *domain.TrainingJob, resource *unstructured.Unstructured) (*unstructured.Unstructured, *domain.TrainingJob, bool, error) {
 	fence, err := managedResourceCreationFence(resource)
 	if err != nil {
@@ -825,6 +846,9 @@ func (r *Reconciler) cleanupManagedAttemptResource(ctx context.Context, resource
 	if resource.State == domain.ManagedAttemptResourceQuarantined {
 		return false, nil
 	}
+	if resource.State == domain.ManagedAttemptResourceRetiring && !resource.NextCheckAt.IsZero() && resource.NextCheckAt.After(r.now()) {
+		return false, nil
+	}
 	if resource.State != domain.ManagedAttemptResourceRetiring {
 		retiring, _, err := r.store.RetireManagedAttemptResource(ctx, domain.ManagedAttemptRetireRequest{
 			JobID: resource.JobID, ClusterAttempt: resource.ClusterAttempt, KubernetesNS: resource.KubernetesNS,
@@ -848,7 +872,7 @@ func (r *Reconciler) cleanupManagedAttemptResource(ctx context.Context, resource
 	if err != nil {
 		return false, err
 	}
-	if err := verifyManagedAttemptResource(current, resource); err != nil {
+	if err := r.verifyManagedAttemptResource(ctx, current, resource); err != nil {
 		return false, err
 	}
 	uid := string(current.GetUID())
@@ -865,7 +889,7 @@ func (r *Reconciler) cleanupManagedAttemptResource(ctx context.Context, resource
 	if err := r.client.DeleteRayJob(ctx, resource.KubernetesNS, resource.RayJobName, resource.JobID, uid); err != nil && !apierrors.IsNotFound(err) {
 		return false, err
 	}
-	deadline := r.now().Add(r.cleanupWait)
+	deadline := time.Now().Add(r.cleanupWait)
 	for {
 		current, err = r.client.GetRayJob(ctx, resource.KubernetesNS, resource.RayJobName)
 		if apierrors.IsNotFound(err) {
@@ -880,7 +904,15 @@ func (r *Reconciler) cleanupManagedAttemptResource(ctx context.Context, resource
 		if string(current.GetUID()) != uid {
 			return false, fmt.Errorf("managed RayJob %s was replaced before cleanup completed", resource.RayJobName)
 		}
-		if !r.now().Before(deadline) {
+		if !time.Now().Before(deadline) {
+			pendingMessage := fmt.Sprintf("managed RayJob %s foreground deletion is still pending", resource.RayJobName)
+			if err := r.store.RecordManagedAttemptCleanupFailure(ctx, domain.ManagedAttemptCleanupFailureRequest{
+				JobID: resource.JobID, ClusterAttempt: resource.ClusterAttempt,
+				RayJobName: resource.RayJobName, RayJobUID: resource.RayJobUID,
+				Message: pendingMessage, ObservedAt: r.now(),
+			}); err != nil {
+				return false, err
+			}
 			return false, nil
 		}
 		timer := time.NewTimer(r.cleanupPoll)
@@ -893,7 +925,7 @@ func (r *Reconciler) cleanupManagedAttemptResource(ctx context.Context, resource
 	}
 }
 
-func verifyManagedAttemptResource(resource *unstructured.Unstructured, expected domain.ManagedAttemptResource) error {
+func (r *Reconciler) verifyManagedAttemptResource(ctx context.Context, resource *unstructured.Unstructured, expected domain.ManagedAttemptResource) error {
 	if resource.GetLabels()["ray.io/job-id"] != expected.JobID {
 		return &managedCleanupVerificationError{message: "refusing to clean foreign RayJob owner"}
 	}
@@ -906,18 +938,18 @@ func verifyManagedAttemptResource(resource *unstructured.Unstructured, expected 
 	}
 	labelFence := resource.GetLabels()[managedCreationFenceKey]
 	annotationFence := resource.GetAnnotations()[managedCreationFenceKey]
-	if labelFence == "" && annotationFence == "" && expected.LeaseVersion == 0 {
-		return nil
-	}
 	if labelFence == "" || annotationFence != labelFence {
 		return &managedCleanupVerificationError{message: "refusing to clean RayJob with invalid creation fence identity"}
 	}
 	fence, err := strconv.ParseInt(labelFence, 10, 64)
-	maxFence := expected.ResourceFence
-	if maxFence == 0 {
-		maxFence = expected.LeaseVersion
+	if err != nil || fence < 1 {
+		return &managedCleanupVerificationError{message: "refusing to clean RayJob with unexpected creation fence identity"}
 	}
-	if err != nil || fence < 1 || maxFence < 1 || fence > maxFence {
+	issued, checkErr := r.store.IsManagedAttemptFenceIssued(ctx, expected.JobID, expected.ClusterAttempt, fence)
+	if checkErr != nil {
+		return fmt.Errorf("verify managed attempt creation fence: %w", checkErr)
+	}
+	if !issued {
 		return &managedCleanupVerificationError{message: "refusing to clean RayJob with unexpected creation fence identity"}
 	}
 	return nil

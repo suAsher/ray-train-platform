@@ -20,7 +20,7 @@ func testRepository(t *testing.T) *GormRepository {
 	if err != nil {
 		t.Fatalf("open test database: %v", err)
 	}
-	if err := database.AutoMigrate(&JobRecord{}, &OutboxRecord{}, &TenantRecord{}, &UserRecord{}, &WorkspaceRecord{}, &IdempotencyRecord{}, &ManagedAttemptResourceRecord{}); err != nil {
+	if err := database.AutoMigrate(&JobRecord{}, &OutboxRecord{}, &TenantRecord{}, &UserRecord{}, &WorkspaceRecord{}, &IdempotencyRecord{}, &ManagedAttemptResourceRecord{}, &ManagedAttemptFenceRecord{}); err != nil {
 		t.Fatalf("migrate test database: %v", err)
 	}
 	now := time.Now().UTC()
@@ -952,6 +952,24 @@ func TestManagedActivationAuthorizationIsRevokedAtomicallyByCancellation(t *test
 	}
 }
 
+func TestManagedActivationRequiresCurrentFenceToBeExactlyIssued(t *testing.T) {
+	repo, job, request := adoptedManagedAttemptForActivation(t)
+	if err := repo.db.Where("job_id = ? AND cluster_attempt = ? AND fence = ?", job.ID, request.ExpectedClusterAttempt, request.ResourceFence).
+		Delete(&ManagedAttemptFenceRecord{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, _, authorized, err := repo.AuthorizeManagedAttemptActivation(context.Background(), domain.ManagedAttemptActivationRequest{
+		JobID: job.ID, ExpectedClusterAttempt: request.ExpectedClusterAttempt,
+		RayJobName: request.RayJobName, RayJobUID: request.RayJobUID, ResourceFence: request.ResourceFence,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authorized {
+		t.Fatal("activation authorized a current ledger fence absent from the immutable issued set")
+	}
+}
+
 func adoptedManagedAttemptForActivation(t *testing.T) (*GormRepository, domain.TrainingJob, domain.ManagedAttemptAdoptionRequest) {
 	t.Helper()
 	repo, job := managedRecoveryJob(t, 2)
@@ -968,6 +986,9 @@ func adoptedManagedAttemptForActivation(t *testing.T) (*GormRepository, domain.T
 		LeaseOwner: "replica-a", LeaseVersion: 1, LeaseExpiresAt: testTimePointer(now.Add(time.Minute)),
 		CreatedAt: now, UpdatedAt: now,
 	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.db.Create(&ManagedAttemptFenceRecord{JobID: job.ID, ClusterAttempt: 2, Fence: 1, CreatedAt: now}).Error; err != nil {
 		t.Fatal(err)
 	}
 	request := domain.ManagedAttemptAdoptionRequest{
@@ -1050,8 +1071,88 @@ func TestManagedCleanupFailureUsesBoundedBackoffAndPermanentQuarantine(t *testin
 	if delayed.State != string(domain.ManagedAttemptResourceQuarantined) || delayed.CleanupFailures != 2 {
 		t.Fatalf("permanent mismatch was not quarantined: %+v", delayed)
 	}
+	var quarantineEvents []OutboxRecord
+	if err := repo.db.Where("event_type = ?", "MANAGED_ATTEMPT_QUARANTINED").Find(&quarantineEvents).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(quarantineEvents) != 1 || quarantineEvents[0].AggregateID != job.ID || !strings.Contains(quarantineEvents[0].PayloadJSON, `"cluster_attempt":2`) {
+		t.Fatalf("quarantine did not emit one durable structured event: %+v", quarantineEvents)
+	}
+	if err := repo.RecordManagedAttemptCleanupFailure(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.db.Where("event_type = ?", "MANAGED_ATTEMPT_QUARANTINED").Find(&quarantineEvents).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(quarantineEvents) != 1 {
+		t.Fatalf("idempotent quarantine emitted duplicate events: %+v", quarantineEvents)
+	}
 	if urgent, err := repo.ListManagedAttemptCleanup(context.Background(), 20, now.Add(48*time.Hour)); err != nil || len(urgent) != 0 {
 		t.Fatalf("quarantined cleanup remained in urgent queue: urgent=%+v err=%v", urgent, err)
+	}
+}
+
+func TestManagedAttemptIssuedFencesAreAnExactImmutableSet(t *testing.T) {
+	repo, job := managedRecoveryJob(t, 3)
+	now := time.Now().UTC()
+	resource := ManagedAttemptResourceRecord{
+		JobID: job.ID, ClusterAttempt: 3, KubernetesNS: job.KubernetesNS,
+		RayJobName: job.ID + "-a3", State: string(domain.ManagedAttemptResourceCreating),
+		LeaseVersion: 3, ResourceFence: 3, NextCheckAt: now, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := repo.db.Create(&resource).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.db.Create(&[]ManagedAttemptFenceRecord{
+		{JobID: job.ID, ClusterAttempt: 3, Fence: 1, CreatedAt: now},
+		{JobID: job.ID, ClusterAttempt: 3, Fence: 3, CreatedAt: now},
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		fence int64
+		want  bool
+	}{{1, true}, {2, false}, {3, true}} {
+		issued, err := repo.IsManagedAttemptFenceIssued(context.Background(), job.ID, 3, test.fence)
+		if err != nil {
+			t.Fatalf("check fence %d: %v", test.fence, err)
+		}
+		if issued != test.want {
+			t.Fatalf("fence %d issued=%v, want %v", test.fence, issued, test.want)
+		}
+	}
+}
+
+func TestPendingCleanupBackoffLetsRowsBeyondFirstBatchProgress(t *testing.T) {
+	repo, job := managedRecoveryJob(t, 10)
+	now := time.Now().UTC()
+	rows := make([]ManagedAttemptResourceRecord, 0, 25)
+	for attempt := 1; attempt <= 25; attempt++ {
+		rows = append(rows, ManagedAttemptResourceRecord{
+			JobID: job.ID, ClusterAttempt: attempt, KubernetesNS: job.KubernetesNS,
+			RayJobName: fmt.Sprintf("%s-a%d", job.ID, attempt), RayJobUID: fmt.Sprintf("uid-%d", attempt),
+			State: string(domain.ManagedAttemptResourceRetiring), LeaseVersion: 1, ResourceFence: 1,
+			NextCheckAt: now, CreatedAt: now, UpdatedAt: now,
+		})
+	}
+	if err := repo.db.Create(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	first, err := repo.ListManagedAttemptCleanup(context.Background(), 20, now)
+	if err != nil || len(first) != 20 {
+		t.Fatalf("first cleanup batch: len=%d err=%v", len(first), err)
+	}
+	for _, resource := range first {
+		if err := repo.RecordManagedAttemptCleanupFailure(context.Background(), domain.ManagedAttemptCleanupFailureRequest{
+			JobID: resource.JobID, ClusterAttempt: resource.ClusterAttempt, RayJobName: resource.RayJobName,
+			RayJobUID: resource.RayJobUID, Message: "foreground deletion still pending", ObservedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	second, err := repo.ListManagedAttemptCleanup(context.Background(), 20, now.Add(time.Second))
+	if err != nil || len(second) != 5 {
+		t.Fatalf("backoff did not expose later urgent rows: len=%d resources=%+v err=%v", len(second), second, err)
 	}
 }
 

@@ -132,6 +132,19 @@ CREATE INDEX IF NOT EXISTS managed_attempt_resources_tombstone_probe_idx
   ON managed_attempt_resources(next_check_at, job_id, cluster_attempt)
   WHERE state = 'CLEANED';
 
+-- Every fence handed to a create-capable reconciler is retained forever for
+-- the lifetime of its attempt tombstone. Cleanup must match this exact set;
+-- numeric ordering is not proof that a fence was ever issued.
+CREATE TABLE IF NOT EXISTS managed_attempt_fences (
+  job_id TEXT NOT NULL,
+  cluster_attempt INTEGER NOT NULL,
+  fence BIGINT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (job_id, cluster_attempt, fence),
+  FOREIGN KEY (job_id, cluster_attempt) REFERENCES managed_attempt_resources(job_id, cluster_attempt) ON DELETE CASCADE,
+  CONSTRAINT managed_attempt_fences_value_check CHECK (fence >= 1)
+);
+
 -- 0022 has not shipped yet, but backfilling keeps development databases and
 -- rolling test environments coherent when the migration is reapplied there.
 INSERT INTO managed_attempt_resources (
@@ -149,3 +162,9 @@ SELECT
 FROM training_jobs
 WHERE training_engine = 'ray-train' AND ray_job_name <> ''
 ON CONFLICT (job_id, cluster_attempt) DO NOTHING;
+
+INSERT INTO managed_attempt_fences (job_id, cluster_attempt, fence, created_at)
+SELECT job_id, cluster_attempt, resource_fence, updated_at
+FROM managed_attempt_resources
+WHERE resource_fence >= 1
+ON CONFLICT (job_id, cluster_attempt, fence) DO NOTHING;

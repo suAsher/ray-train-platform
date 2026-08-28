@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +35,15 @@ type memoryJobStore struct {
 	advanceDuringAdopt   bool
 	cancelDuringAdopt    bool
 	managedResources     map[int]domain.ManagedAttemptResource
+	issuedFences         map[int]map[int64]bool
+}
+
+func (s *memoryJobStore) IsManagedAttemptFenceIssued(_ context.Context, _ string, attempt int, fence int64) (bool, error) {
+	if fences := s.issuedFences[attempt]; fences != nil {
+		return fences[fence], nil
+	}
+	resource, ok := s.managedResources[attempt]
+	return ok && resource.ResourceFence == fence, nil
 }
 
 type recordingGitCredentialResolver struct {
@@ -289,28 +299,42 @@ func (s *memoryJobStore) RetireManagedAttemptResource(_ context.Context, request
 			LeaseVersion: 1, ResourceFence: 1,
 		}
 	}
+	if resource.State == domain.ManagedAttemptResourceQuarantined {
+		copyResource := resource
+		return &copyResource, false, nil
+	}
 	changed := resource.State != domain.ManagedAttemptResourceRetiring || (resource.RayJobUID == "" && request.RayJobUID != "")
 	if resource.RayJobUID == "" {
 		resource.RayJobUID = request.RayJobUID
 	}
 	resource.State, resource.LeaseOwner, resource.LeaseExpiresAt = domain.ManagedAttemptResourceRetiring, "", nil
+	resource.NextCheckAt = time.Now().UTC()
 	s.managedResources[request.ClusterAttempt] = resource
 	copyResource := resource
 	return &copyResource, changed, nil
 }
 
-func (s *memoryJobStore) ListManagedAttemptCleanup(_ context.Context, limit int, _ time.Time) ([]domain.ManagedAttemptResource, error) {
+func (s *memoryJobStore) ListManagedAttemptCleanup(_ context.Context, limit int, now time.Time) ([]domain.ManagedAttemptResource, error) {
 	s.ensureManagedResources()
 	items := make([]domain.ManagedAttemptResource, 0, len(s.managedResources))
 	for _, resource := range s.managedResources {
+		if !resource.NextCheckAt.IsZero() && resource.NextCheckAt.After(now) {
+			continue
+		}
 		if resource.State == domain.ManagedAttemptResourceRetiring ||
 			((resource.State == domain.ManagedAttemptResourceReserved || resource.State == domain.ManagedAttemptResourceCreating) &&
 				(resource.ClusterAttempt < s.job.ClusterAttempt || s.job.DesiredState == domain.DesiredCanceled || terminalJobState(s.job.ObservedState))) {
 			items = append(items, resource)
-			if limit > 0 && len(items) == limit {
-				break
-			}
 		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].NextCheckAt.Equal(items[j].NextCheckAt) {
+			return items[i].ClusterAttempt < items[j].ClusterAttempt
+		}
+		return items[i].NextCheckAt.Before(items[j].NextCheckAt)
+	})
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
 	}
 	return items, nil
 }
@@ -653,6 +677,8 @@ func TestManagedRecoveryWaitsForOldRayJobNotFoundBeforeClearingIdentity(t *testi
 		return false, nil, nil
 	})
 	reconciler := NewReconciler(store, client, testRenderOptions())
+	now := time.Now().UTC()
+	reconciler.now = func() time.Time { return now }
 	if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -664,6 +690,7 @@ func TestManagedRecoveryWaitsForOldRayJobNotFoundBeforeClearingIdentity(t *testi
 	}
 
 	allowDelete = true
+	now = now.Add(6 * time.Second)
 	if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
 		t.Fatal(err)
 	}
