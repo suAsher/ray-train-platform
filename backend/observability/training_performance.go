@@ -389,12 +389,9 @@ func trainingWorkerAliases(pod string, labels map[string]string) []string {
 	if pod == "" {
 		return nil
 	}
-	result := make([]string, 0, 4)
+	result := make([]string, 0, 3)
 	if gpu := labels["gpu"]; gpu != "" {
 		result = append(result, pod+"|identity:"+gpu)
-		if _, err := strconv.Atoi(gpu); err == nil {
-			result = append(result, pod+"|rank:"+gpu)
-		}
 	}
 	if uuid := labels["UUID"]; uuid != "" {
 		result = append(result, pod+"|identity:"+uuid)

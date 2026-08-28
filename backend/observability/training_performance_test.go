@@ -61,6 +61,45 @@ func TestTrainingPerformanceKeepsRanksInOnePodAndPrefersExportedPod(t *testing.T
 	}
 }
 
+func TestTrainingPerformanceDoesNotMergeRankWithUnrelatedLocalGPUOrdinal(t *testing.T) {
+	tests := []struct {
+		name    string
+		workers [][2]string
+	}{
+		{name: "global ranks differ from local ordinals", workers: [][2]string{{"8", "0"}, {"9", "1"}}},
+		{name: "rank and GPU ordinals cross", workers: [][2]string{{"0", "1"}, {"1", "0"}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			series := make([]domain.TrainingMetricSeries, 0, len(test.workers))
+			for _, identity := range test.workers {
+				series = append(series, domain.TrainingMetricSeries{
+					Labels: map[string]string{"pod": "cluster-a-worker-shared", "rank": identity[0], "gpu": identity[1]},
+					Points: []domain.TrainingMetricPoint{{Timestamp: time.Unix(1000, 0).UTC(), Value: 1}},
+				})
+			}
+
+			got := assembleTrainingWorkers(map[string][]domain.TrainingMetricSeries{"stepTimeSeconds": series})
+
+			if len(got) != len(test.workers) {
+				t.Fatalf("rank/GPU identities collapsed: got %d workers, want %d: %+v", len(got), len(test.workers), got)
+			}
+			seen := map[string]string{}
+			for _, assembly := range got {
+				if assembly.worker.Rank == nil {
+					t.Fatalf("worker has no rank: %+v", assembly.worker)
+				}
+				seen[strconv.Itoa(*assembly.worker.Rank)] = assembly.worker.GPU
+			}
+			for _, identity := range test.workers {
+				if seen[identity[0]] != identity[1] {
+					t.Fatalf("rank %s GPU = %q, want %q; workers=%+v", identity[0], seen[identity[0]], identity[1], got)
+				}
+			}
+		})
+	}
+}
+
 func TestTrainingPerformancePartialFailuresAreBoundedAndDeterministic(t *testing.T) {
 	var active, maximum int32
 	client := PrometheusClient{BaseURL: "http://prometheus.internal", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
