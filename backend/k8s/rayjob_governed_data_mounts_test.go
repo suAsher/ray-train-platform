@@ -86,6 +86,24 @@ func TestRenderRayJobMountsResolvedDataSpacesWithoutWorkloadCredentials(t *testi
 	}
 }
 
+func TestRenderManagedNativeOutputUsesStableContainerPath(t *testing.T) {
+	job := managedRenderJob(domain.RayVersionProduction)
+	job.Spec.Output = domain.DataLocation{Space: domain.DataSpaceMyRuns, RelativePath: "native-ray"}
+	job.Spec.ResolvedDataMounts.Output = &domain.ResolvedDataMount{
+		Space: domain.DataSpaceMyRuns, BindingSpace: domain.DataSpaceWorkspace,
+		ClaimName: "data-user-01", SubPath: "runs/native-ray/job-01", MountPath: domain.DataMountOutputPath,
+	}
+	manifest := managedManifest(t, job)
+	for name, pod := range map[string]map[string]any{
+		"head": cacheHeadPodSpec(t, manifest.Object), "worker": cacheWorkerPodSpec(t, manifest.Object),
+	} {
+		if got := podEnvironment(pod)["PLATFORM_OUTPUT_PATH"]; got != "/mnt/data/output" {
+			t.Fatalf("%s PLATFORM_OUTPUT_PATH=%q", name, got)
+		}
+		assertGovernedDataMount(t, pod, "platform-data-output", "data-user-01", domain.DataMountOutputPath, "runs/native-ray/job-01", false)
+	}
+}
+
 func TestRenderRayJobStagesTenantRootOnceForRootsAndSelections(t *testing.T) {
 	job := validRenderJob()
 	job.Spec.ResolvedDataRoots = domain.ResolvedDataSpaceRoots{

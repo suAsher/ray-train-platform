@@ -25,6 +25,7 @@ import (
 	"ray-train-platform-backend/objectstore"
 	"ray-train-platform-backend/observability"
 	"ray-train-platform-backend/repositories"
+	"ray-train-platform-backend/runtimecatalog"
 )
 
 type rayTestRepository struct {
@@ -37,6 +38,29 @@ type rayTestRepository struct {
 	reopens   int
 	limits    repositories.SourceArtifactLimits
 }
+
+type managedRayImageStore struct{}
+
+func (managedRayImageStore) CreateImage(context.Context, domain.PlatformImage) error { return nil }
+func (managedRayImageStore) ListImages(_ context.Context, _ string, kind string) ([]domain.PlatformImage, error) {
+	if kind != domain.ImageKindTraining {
+		return nil, nil
+	}
+	return []domain.PlatformImage{{
+		ID: "managed-native", Name: "managed-native", Kind: domain.ImageKindTraining, Reference: testImageDigest,
+		RayVersion: domain.RayVersionProduction, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayTrain},
+	}}, nil
+}
+func (managedRayImageStore) DefaultImage(context.Context, string, string) (domain.PlatformImage, error) {
+	return domain.PlatformImage{}, repositories.ErrImageNotFound
+}
+func (managedRayImageStore) ImageByReference(context.Context, string, string, string) (domain.PlatformImage, error) {
+	return domain.PlatformImage{}, repositories.ErrImageNotFound
+}
+func (managedRayImageStore) SetImageShared(context.Context, string, string, bool, string) (domain.PlatformImage, error) {
+	return domain.PlatformImage{}, repositories.ErrImageNotFound
+}
+func (managedRayImageStore) DeleteImage(context.Context, string, string, bool) error { return nil }
 
 func readyRayPersonalDataBinding(tenantID, userID string) domain.DataMountBinding {
 	return domain.DataMountBinding{
@@ -382,6 +406,41 @@ func TestRayPackagePutHeadAndSubmitAreOwnerScoped(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), `"deleted":true`) {
 		t.Fatalf("delete response is not Ray-compatible: %s", response.Body.String())
+	}
+}
+
+func TestManagedNativeSubmitPersistsOwnerScopedServerOutput(t *testing.T) {
+	principal := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{"Engineer"}, AuthType: auth.AuthTypeOIDC}
+	repository := &rayTestRepository{}
+	store := &rayTestStore{}
+	submission := api.NewSubmissionService(repository, api.SubmissionServiceOptions{
+		Images: managedRayImageStore{}, RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true},
+		DataSpaces: repository, DataSpacesEnabled: true, NewID: func() (string, error) { return "job-native-managed", nil },
+	})
+	handler, err := NewHandler(repository, store, submission, Options{
+		SpoolDir: t.TempDir(), Defaults: SubmissionDefaults{Image: testImageDigest, WorkerReplicas: 1, GPUsPerWorker: 1, CPUPerWorker: 8, MemoryPerWorker: "32Gi"},
+	})
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+	router := gin.New()
+	router.Use(func(c *gin.Context) { c.Set("ray-platform-principal", principal) })
+	handler.RegisterRoutes(router.Group("/ray"))
+	packageName := testPackageSHA256 + ".zip"
+	if response := rayRequest(router, http.MethodPut, "/ray/api/packages/gcs/"+packageName, "PKpayload"); response.Code != http.StatusOK {
+		t.Fatalf("upload status=%d body=%s", response.Code, response.Body.String())
+	}
+	body := `{"entrypoint":"python train.py","submission_id":"managed_native","runtime_env":{"working_dir":"gcs://` + packageName + `"},"metadata":{"platform.training.engine":"ray-train"}}`
+	if response := rayRequest(router, http.MethodPost, "/ray/api/jobs/", body); response.Code != http.StatusOK {
+		t.Fatalf("submit status=%d body=%s", response.Code, response.Body.String())
+	}
+	job := repository.created
+	if job == nil || job.Spec.Output != (domain.DataLocation{Space: domain.DataSpaceMyRuns, RelativePath: "native-ray"}) {
+		t.Fatalf("managed native output was not server-selected: %+v", job)
+	}
+	output := job.Spec.ResolvedDataMounts.Output
+	if output == nil || output.Space != domain.DataSpaceMyRuns || output.BindingSpace != domain.DataSpaceWorkspace || output.ClaimName != "data-user-a" || output.SubPath != "runs/native-ray/job-native-managed" || output.MountPath != domain.DataMountOutputPath || output.ReadOnly {
+		t.Fatalf("managed native output was not owner-scoped: %+v", output)
 	}
 }
 

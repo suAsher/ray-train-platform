@@ -12,18 +12,19 @@ import (
 )
 
 const (
-	metadataImage          = "ray-platform.image"
-	metadataWorkerReplicas = "ray-platform.worker-replicas"
-	metadataGPUsPerWorker  = "ray-platform.gpus-per-worker"
-	metadataCPUPerWorker   = "ray-platform.cpu-per-worker"
-	metadataMemoryWorker   = "ray-platform.memory-per-worker"
-	metadataQueue          = "ray-platform.queue"
-	metadataCacheMode      = "platform.cache.mode"
-	metadataCacheSize      = "platform.cache.size"
-	metadataCachePreload   = "platform.cache.preload"
-	metadataInputSpace     = "platform.data.input-space"
-	metadataInputPath      = "platform.data.input-path"
-	metadataTrainingEngine = "platform.training.engine"
+	metadataImage           = "ray-platform.image"
+	metadataWorkerReplicas  = "ray-platform.worker-replicas"
+	metadataGPUsPerWorker   = "ray-platform.gpus-per-worker"
+	metadataCPUPerWorker    = "ray-platform.cpu-per-worker"
+	metadataMemoryWorker    = "ray-platform.memory-per-worker"
+	metadataQueue           = "ray-platform.queue"
+	metadataCacheMode       = "platform.cache.mode"
+	metadataCacheSize       = "platform.cache.size"
+	metadataCachePreload    = "platform.cache.preload"
+	metadataInputSpace      = "platform.data.input-space"
+	metadataInputPath       = "platform.data.input-path"
+	metadataTrainingEngine  = "platform.training.engine"
+	nativeManagedOutputRoot = "native-ray"
 )
 
 var (
@@ -105,6 +106,10 @@ func translateSubmitRequest(request JobSubmitRequest, resources domain.Resources
 		nameSeed = packageName.Name + "\\x00" + request.Entrypoint
 	}
 	nameHash := sha256.Sum256([]byte(nameSeed))
+	output := domain.DataLocation{}
+	if engine == domain.TrainingEngineRayTrain {
+		output = domain.DataLocation{Space: domain.DataSpaceMyRuns, RelativePath: nativeManagedOutputRoot}
+	}
 	return TranslatedSubmitRequest{
 		Package: packageName,
 		Spec: domain.JobSpec{
@@ -117,6 +122,7 @@ func translateSubmitRequest(request JobSubmitRequest, resources domain.Resources
 			Queue:          queue,
 			Cache:          cache,
 			Input:          input,
+			Output:         output,
 			Managed:        managed,
 		},
 		ExternalSubmissionID: externalID,
