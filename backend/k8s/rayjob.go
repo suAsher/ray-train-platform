@@ -669,13 +669,14 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 		}
 	}
 	if mountData && options.LocalCache.runtime {
-		volumeMounts, volumes = appendLocalCache(volumeMounts, volumes, options.LocalCache, head)
+		dualCacheDevices := !head || jobSpec.DataMode == domain.DataModeRayData
+		volumeMounts, volumes = appendLocalCache(volumeMounts, volumes, options.LocalCache, dualCacheDevices)
 		cachePaths := options.LocalCache.MountPathData1
-		if !head {
+		if dualCacheDevices {
 			cachePaths += ":" + options.LocalCache.MountPathData2
 		}
 		spillDirectories := []string{path.Join(options.LocalCache.MountPathData1, "ray-spill", "objects")}
-		if !head && jobSpec.DataMode == domain.DataModeRayData {
+		if jobSpec.DataMode == domain.DataModeRayData {
 			spillDirectories = append(spillDirectories, path.Join(options.LocalCache.MountPathData2, "ray-spill", "objects"))
 		}
 		env = append(
@@ -878,7 +879,7 @@ func mlflowEnvironment(options MLflowOptions) []any {
 	}
 }
 
-func appendLocalCache(volumeMounts, volumes []any, cache LocalCacheOptions, head bool) ([]any, []any) {
+func appendLocalCache(volumeMounts, volumes []any, cache LocalCacheOptions, includeSecondDevice bool) ([]any, []any) {
 	devices := []struct {
 		name         string
 		storageClass string
@@ -886,7 +887,7 @@ func appendLocalCache(volumeMounts, volumes []any, cache LocalCacheOptions, head
 	}{
 		{name: "local-cache-data1", storageClass: cache.StorageClassData1, mountPath: cache.MountPathData1},
 	}
-	if !head {
+	if includeSecondDevice {
 		devices = append(devices, struct {
 			name         string
 			storageClass string

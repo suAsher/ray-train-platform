@@ -15,6 +15,7 @@ import (
 
 type submissionServiceRepository struct {
 	created        *domain.TrainingJob
+	createCalls    int
 	identityCalls  int
 	artifact       *domain.SourceArtifact
 	artifactLookup string
@@ -164,6 +165,68 @@ func TestSubmissionRejectsUnsafeManagedEntrypointBeforePersistence(t *testing.T)
 			}
 			if repository.created != nil || repository.identityCalls != 0 {
 				t.Fatalf("unsafe entrypoint reached persistence: identity=%d job=%+v", repository.identityCalls, repository.created)
+			}
+		})
+	}
+}
+
+func TestSubmissionRejectsInvalidRayDataModesBeforeJobAndOutboxPersistence(t *testing.T) {
+	reference := "harbor.example/ray-runtime:production"
+	image := domain.PlatformImage{
+		ID: "managed-image", Name: "Ray managed", Kind: domain.ImageKindTraining, Reference: reference,
+		RayVersion: domain.RayVersionProduction, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayTrain},
+	}
+	rayData, err := domain.NewRayDataDatasetConfig(domain.RayDataFormatImages, "images/train")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name    string
+		mutate  func(*domain.JobSpec)
+		wantErr string
+	}{
+		{name: "ray data missing config", mutate: func(spec *domain.JobSpec) {
+			spec.DataMode = domain.DataModeRayData
+		}, wantErr: "Ray Data dataset config is required"},
+		{name: "mount carries ray data config", mutate: func(spec *domain.JobSpec) {
+			spec.DataMode = domain.DataModeMount
+			spec.Managed.RayData = rayData
+		}, wantErr: "requires ray-data mode"},
+		{name: "cache carries ray data config", mutate: func(spec *domain.JobSpec) {
+			spec.DataMode = domain.DataModeCache
+			spec.Managed.RayData = rayData
+			spec.Cache = domain.CacheRequest{Mode: domain.CacheModeRuntime, Size: "200Gi", Preload: domain.CachePreloadInput}
+			spec.Input = domain.DataLocation{Space: domain.DataSpacePublic, RelativePath: "datasets/train"}
+		}, wantErr: "requires ray-data mode"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &submissionServiceRepository{}
+			service := NewSubmissionService(repository, SubmissionServiceOptions{
+				Images:        &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{image}}},
+				RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true},
+				LocalCache: LocalCachePolicy{
+					Enabled: true, AllowedSizes: []string{"200Gi"}, DefaultSize: "200Gi", MaxSize: "200Gi",
+				},
+			})
+			spec := submissionSpec(reference)
+			spec.TrainingEngine = domain.TrainingEngineRayTrain
+			spec.Managed = domain.ManagedTrainingPolicy{
+				MaxFailures: 2,
+				Checkpoint:  domain.CheckpointPolicy{EveryEpochs: 1, KeepLatest: 3, KeepBest: 1},
+			}
+			test.mutate(&spec)
+
+			job, submitErr := service.Submit(context.Background(), SubmissionInput{
+				Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+				Spec:      spec, Origin: domain.SubmissionOriginPortal,
+			})
+			if job != nil || !errors.Is(submitErr, ErrSubmissionInvalidJobSpec) || !strings.Contains(submitErr.Error(), test.wantErr) {
+				t.Fatalf("invalid Ray Data spec returned job=%+v err=%v", job, submitErr)
+			}
+			if repository.createCalls != 0 || repository.created != nil || repository.identityCalls != 0 {
+				t.Fatalf("invalid Ray Data spec crossed job/outbox persistence boundary: creates=%d identity=%d job=%+v", repository.createCalls, repository.identityCalls, repository.created)
 			}
 		})
 	}
@@ -738,6 +801,7 @@ func TestSubmissionInitializesServerGeneratedOutputDirectoryBeforePersistingJob(
 }
 
 func (repository *submissionServiceRepository) Create(_ context.Context, job *domain.TrainingJob, _ string) error {
+	repository.createCalls++
 	copy := *job
 	repository.created = &copy
 	return nil

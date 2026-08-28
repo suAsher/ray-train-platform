@@ -585,6 +585,9 @@ func (s JobSpec) Validate() error {
 	if err := s.validateTrainingRuntime(); err != nil {
 		return err
 	}
+	if err := s.Managed.ValidateDataMode(s.DataMode); err != nil {
+		return err
+	}
 	if strings.TrimSpace(s.Queue) == "" {
 		return fmt.Errorf("queue is required")
 	}

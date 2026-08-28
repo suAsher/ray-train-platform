@@ -268,6 +268,10 @@ func TestJobSpecTrainingEngineValidation(t *testing.T) {
 }
 
 func TestJobSpecDataModeValidation(t *testing.T) {
+	rayData, err := NewRayDataDatasetConfig(RayDataFormatImages, "images/train")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, test := range []struct {
 		name    string
 		prepare func(*JobSpec)
@@ -279,7 +283,27 @@ func TestJobSpecDataModeValidation(t *testing.T) {
 			spec.TrainingEngine = TrainingEngineRayTrain
 			spec.RayVersion = RayVersionProduction
 			spec.DataMode = DataModeRayData
+			spec.Managed.RayData = rayData
 		}},
+		{name: "ray data without dataset config", prepare: func(spec *JobSpec) {
+			spec.TrainingEngine = TrainingEngineRayTrain
+			spec.RayVersion = RayVersionProduction
+			spec.DataMode = DataModeRayData
+		}, wantErr: "Ray Data dataset config is required"},
+		{name: "mount with ray data config", prepare: func(spec *JobSpec) {
+			spec.TrainingEngine = TrainingEngineRayTrain
+			spec.RayVersion = RayVersionProduction
+			spec.DataMode = DataModeMount
+			spec.Managed.RayData = rayData
+		}, wantErr: "requires ray-data mode"},
+		{name: "cache with ray data config", prepare: func(spec *JobSpec) {
+			spec.TrainingEngine = TrainingEngineRayTrain
+			spec.RayVersion = RayVersionProduction
+			spec.DataMode = DataModeCache
+			spec.Managed.RayData = rayData
+			spec.Cache = CacheRequest{Mode: CacheModeRuntime, Size: "200Gi", Preload: CachePreloadInput}
+			spec.Input = DataLocation{Space: DataSpacePublic, RelativePath: "datasets/train"}
+		}, wantErr: "requires ray-data mode"},
 		{name: "ray data with legacy engine", prepare: func(spec *JobSpec) {
 			spec.DataMode = DataModeRayData
 		}, wantErr: "ray-data requires ray-train"},

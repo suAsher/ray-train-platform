@@ -97,24 +97,61 @@ func TestRayDataModeUsesNamedDatasetAndDualNVMeSpilling(t *testing.T) {
 		}
 	}
 
-	worker := cacheWorkerPodSpec(t, manifest.Object)
-	spilling := podEnvironment(worker)["RAY_object_spilling_config"]
-	var config struct {
-		Params struct {
-			DirectoryPath []string `json:"directory_path"`
-		} `json:"params"`
-	}
-	if err := json.Unmarshal([]byte(spilling), &config); err != nil {
-		t.Fatalf("decode spill config: %v (%q)", err, spilling)
-	}
 	want := []string{"/mnt/cache/ray-spill/objects", "/mnt/cache2/ray-spill/objects"}
-	if len(config.Params.DirectoryPath) != len(want) || config.Params.DirectoryPath[0] != want[0] || config.Params.DirectoryPath[1] != want[1] {
-		t.Fatalf("ray-data must spill across both NVMe disks: %#v", config.Params.DirectoryPath)
+	for name, pod := range map[string]map[string]any{
+		"head":   cacheHeadPodSpec(t, manifest.Object),
+		"worker": cacheWorkerPodSpec(t, manifest.Object),
+	} {
+		spilling := podEnvironment(pod)["RAY_object_spilling_config"]
+		var config struct {
+			Params struct {
+				DirectoryPath []string `json:"directory_path"`
+			} `json:"params"`
+		}
+		if err := json.Unmarshal([]byte(spilling), &config); err != nil {
+			t.Fatalf("decode %s spill config: %v (%q)", name, err, spilling)
+		}
+		if len(config.Params.DirectoryPath) != len(want) || config.Params.DirectoryPath[0] != want[0] || config.Params.DirectoryPath[1] != want[1] {
+			t.Fatalf("ray-data %s must spill across both NVMe disks: %#v", name, config.Params.DirectoryPath)
+		}
+		for _, mountPath := range []string{"/mnt/cache", "/mnt/cache2"} {
+			if !podHasMountPath(pod, mountPath) {
+				t.Fatalf("ray-data %s is missing cache device %s", name, mountPath)
+			}
+		}
 	}
+	worker := cacheWorkerPodSpec(t, manifest.Object)
 	if init, ok := worker["initContainers"].([]any); ok && len(init) != 0 {
 		t.Fatalf("ray-data must not run the cache preloader: %#v", init)
 	}
 	assertGovernedDataMount(t, worker, "platform-data-input", "data-team-a", domain.DataMountInputPath, "datasets/train", true)
+}
+
+func TestMountAndCacheModesKeepLegacyCacheDeviceSemantics(t *testing.T) {
+	mountManifest, err := RenderRayJob(managedJobWithDataMode(t, domain.DataModeMount), runtimeCacheRenderOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, pod := range map[string]map[string]any{
+		"head": cacheHeadPodSpec(t, mountManifest.Object), "worker": cacheWorkerPodSpec(t, mountManifest.Object),
+	} {
+		if podHasMountPath(pod, "/mnt/cache") || podHasMountPath(pod, "/mnt/cache2") {
+			t.Fatalf("mount mode %s unexpectedly received local cache devices", name)
+		}
+	}
+
+	cacheManifest, err := RenderRayJob(managedJobWithDataMode(t, domain.DataModeCache), runtimeCacheRenderOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := cacheHeadPodSpec(t, cacheManifest.Object)
+	worker := cacheWorkerPodSpec(t, cacheManifest.Object)
+	if !podHasMountPath(head, "/mnt/cache") || podHasMountPath(head, "/mnt/cache2") {
+		t.Fatalf("cache mode head device mounts changed: %#v", head["containers"])
+	}
+	if !podHasMountPath(worker, "/mnt/cache") || !podHasMountPath(worker, "/mnt/cache2") {
+		t.Fatalf("cache mode worker device mounts changed: %#v", worker["containers"])
+	}
 }
 
 func TestLegacyRayDDPRejectsRayDataMode(t *testing.T) {
