@@ -7,6 +7,28 @@ readonly test_profile="${root_dir}/deploy/profiles/test.yaml"
 readonly production_profile="${root_dir}/deploy/profiles/production.yaml.example"
 readonly cpu_ha_profile="${root_dir}/deploy/profiles/vke-cpu-ha.yaml"
 
+for expected in \
+  '  managedEnabled: false' \
+  '  canaryEnabled: false' \
+  '  canaryTenants: []' \
+  '  productionVersion: "2.56.1"' \
+  '  canaryVersion: "2.58.0"'; do
+  grep -Fq -- "${expected}" "${chart_dir}/values.yaml" || {
+    echo "default Ray Train feature gate missing: ${expected}" >&2
+    exit 1
+  }
+  grep -Fq -- "${expected}" "${chart_dir}/values-prod.yaml.example" || {
+    echo "production Ray Train feature gate missing: ${expected}" >&2
+    exit 1
+  }
+done
+for expected in RAY_TRAIN_MANAGED_ENABLED RAY_TRAIN_CANARY_ENABLED RAY_TRAIN_CANARY_TENANTS; do
+  grep -Fq -- "${expected}" "${chart_dir}/templates/backend-deployment.yaml" || {
+    echo "backend feature-gate environment missing: ${expected}" >&2
+    exit 1
+  }
+done
+
 for command in helm grep mktemp; do
   command -v "$command" >/dev/null || { echo "missing command: ${command}" >&2; exit 1; }
 done
@@ -67,6 +89,10 @@ require "$cpu_ha_rendered" 'name: LOCAL_CACHE_MOUNT_PATH_DATA2'
 require "$cpu_ha_rendered" 'value: "/mnt/cache2"'
 require "$cpu_ha_rendered" 'value: "200Gi,500Gi,1Ti,2Ti,4Ti,5Ti"'
 require "$cpu_ha_rendered" 'value: "5Ti"'
+require "$test_rendered" 'name: RAY_TRAIN_MANAGED_ENABLED'
+require "$test_rendered" 'name: RAY_TRAIN_CANARY_ENABLED'
+require "$test_rendered" 'name: RAY_TRAIN_CANARY_TENANTS'
+require "$test_rendered" 'value: "false"'
 require "$cpu_ha_rendered" 'name: spk-rayjob-release'
 require "$cpu_ha_rendered" 'ingressClassName: raytrain-prod-alb'
 require "$network_rendered" 'kind: ALBInstance'
