@@ -419,12 +419,13 @@ raytrain-bevfusion-prepare python3 tools/westwell_train.py ...
 
 ```bash
 spk-rayjob submit \
+  --engine ray-train \
   --resume-from-job <旧平台任务ID> \
   --entrypoint 'python3 train.py --resume "$PLATFORM_CHECKPOINT_PATH/epoch_10.pth" --output "$PLATFORM_OUTPUT_PATH"' \
   --watch
 ```
 
-旧目录只读挂载为 `PLATFORM_CHECKPOINT_PATH`，新任务写自己的 `PLATFORM_OUTPUT_PATH`。普通“重试”是重新执行，不等于断点续训；训练入口必须显式使用 checkpoint 参数。
+CLI 会调用该父任务的 owner/tenant-scoped checkpoint 列表，选择按 epoch/step 倒序的第一个 complete checkpoint，并将含 `manifest.json` 的具体目录只读挂载为 `PLATFORM_CHECKPOINT_PATH`；它不再把整个结果目录当 checkpoint，也不接受用户提供 ObjectPath。没有完整 checkpoint、父任务不属于当前用户或 manifest 无效时，提交会失败。新任务写自己的 `PLATFORM_OUTPUT_PATH`。普通“重试”是重新执行，不等于断点续训；训练入口必须显式使用 checkpoint 参数。
 
 ## 8. 历史失败案例：working-dir 覆盖镜像扩展
 

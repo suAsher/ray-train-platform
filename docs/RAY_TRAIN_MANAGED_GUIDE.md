@@ -1,6 +1,6 @@
 # Ray Train 托管训练使用指南
 
-本文说明如何在同一平台上选择兼容的 **Ray 编排 DDP** 与新的 **Ray Train 托管** 引擎。生产托管运行时固定为 **Ray 2.56.1**，Kubernetes 控制器升级目标固定为 **KubeRay 1.6.2**；Ray 2.58.0 只用于显式租户 canary。托管能力由 `RAY_TRAIN_MANAGED_ENABLED` 控制，默认关闭。本文是发布与验收契约，不代表任一集群已经升级或完成生产验证。
+本文说明如何在同一平台上选择兼容的 **Ray 编排 DDP** 与新的 **Ray Train 托管** 引擎。生产托管运行时目标固定为 **Ray 2.56.1**，Kubernetes 控制器升级目标固定为 **KubeRay 1.6.2**；Ray 2.58.0 只用于显式租户 canary。托管能力默认关闭。本文是发布与验收契约，不代表任一集群已经升级、切换默认版本或完成生产验证。
 
 | 引擎 | CLI 参数 | 适用代码 | 运行语义 |
 | --- | --- | --- | --- |
@@ -8,6 +8,19 @@
 | Ray Train 托管 | `--engine ray-train` | 可由 Ray Train 启动并上报 checkpoint/指标的 Python 项目 | 平台管理 Worker、失败恢复、checkpoint 与训练指标。 |
 
 `engine` 与历史的执行配置不是同一概念。已有 `ray-ddp` 任务和镜像不被原地改写；切换引擎必须新建任务。管理员启用方式和 KubeRay 升级门禁见[生产运维手册](OPERATIONS_GUIDE.md)。
+
+## 发布门禁与运行时版本
+
+当前实现使用部署环境变量 allowlist，不应写成数据库里的 capability record。`ray-train` 的新提交按下面的矩阵判定；`ray-ddp` 不受 managed allowlist 影响：
+
+| 全局开关与租户 | Ray 2.56.1 `ray-train` | Ray 2.58.0 canary |
+| --- | --- | --- |
+| `RAY_TRAIN_MANAGED_ENABLED=true`，tenant 非空 | 全局允许 | canary 还必须同时满足 `RAY_TRAIN_CANARY_ENABLED=true` 且 tenant 在 `RAY_TRAIN_CANARY_TENANTS` |
+| 全局开关关闭、租户在 managed allowlist `RAY_TRAIN_MANAGED_TENANTS` | 仅该租户允许 | canary 还必须同时满足 canary 开关和 canary allowlist |
+| 全局开关关闭、租户不在 managed allowlist | 拒绝 | 拒绝 |
+| 空 tenant 或空 allowlist | fail closed；不能因空值获得权限 | fail closed |
+
+Chart 当前保持 `backend.rayVersion: "2.35.0"`，Deployment 通过 `RAY_VERSION` 注入 Ray Jobs API 兼容层；`/ray/api/version` 的 `ray_version` 返回这个配置，而不是写死 2.56.1。Ray 2.56.1 是 managed 镜像和 **Task 18** 的发布目标：只有 Task 18 完成目标环境升级、canary、验收并切换并发布后，才可把相应环境的 API 版本响应验收为 2.56.1。协议字段 `version` 始终是 Ray Jobs API 协议版本 `4`。
 
 ## 代码、镜像与入口契约
 
@@ -47,7 +60,7 @@ spk-rayjob submit \
   --gpus-per-worker 8 \
   --input-space public \
   --input-path datasets/example/v1 \
-  --output-path runs/managed-example \
+  --output-path managed-example \
   --max-failures 2 \
   --checkpoint-every-epochs 1 \
   --checkpoint-keep-latest 3 \
@@ -82,6 +95,8 @@ ray job submit \
 ```
 
 平台网关必须从认证主体和持久化元数据建立任务，客户端不能指定租户 namespace、RayCluster 或 Kubernetes selector。Portal 持久化为 `submissionOrigin=portal`；`spk-rayjob` 与原生 Ray API 均持久化为 `submissionOrigin=ray-cli`。后两种入口通过接入方式与原生提交的 `externalSubmissionId` 区分，不能通过伪造新的 origin 值区分。
+
+对原生 managed 提交，服务端固定创建 `my-runs/native-ray/<job-id>` 输出，并只向训练容器提供 `PLATFORM_OUTPUT_PATH=/mnt/data/output`。调用方不能通过 metadata 指定 output、namespace、RayCluster 或 Kubernetes selector；未知的 placement/output metadata 会被拒绝。`ray-ddp` 的既有原生行为保持兼容，不会被强制改成 managed output。
 
 ## MMCV/MMEngine 适配
 
@@ -160,7 +175,9 @@ for step in range(resume_start_step(state), max_steps):
     report_metrics(metrics, checkpoint_path, world_rank=rank, train_api=train)
 ```
 
-父任务成功写出完整 manifest 后，才能创建 resume 子任务。子任务详情必须记录父任务、恢复 checkpoint 和集群 attempt；日志或结果应证明 `resumed=True`，且首个 step 等于父任务 step 加一。缺少 manifest、摘要不一致或文件不完整都表示不可恢复，不能回退成从零训练而伪装成功。可独立运行的参考见 [ray_train_checkpoint_smoke.py](../examples/distributed-demo/ray_train_checkpoint_smoke.py)。
+父任务成功写出完整 manifest 后，使用 `spk-rayjob submit --engine ray-train --resume-from-job <old-job-id>` 创建子任务。客户端先调用 owner/tenant-scoped 的 `GET /api/v1/jobs/<old-job-id>/checkpoints`，选择服务端按 epoch/step 倒序返回的第一个 complete checkpoint；用户不能提供 checkpoint ID 或 ObjectPath。提交路径由已验证身份派生为父任务输出目录下的 `.platform/ray-train/<old-job-id>/checkpoints/<checkpoint-id>`，容器中的 `PLATFORM_CHECKPOINT_PATH` 直接指向含 `manifest.json` 的该目录。
+
+服务端再次核对父任务、owner、checkpoint 和精确路径，然后持久化 `spec.parentJobId`（JSON 字段 `parentJobId`）与 `resumeCheckpointId`。没有完整 checkpoint 时提交失败；跨 owner/tenant、manifest 摘要无效、ObjectPath 不精确或目录不完整也必须失败，不能回退成从零训练而伪装成功。子任务日志或结果应证明 `resumed=True`，且首个 step 等于父任务 step 加一。可独立运行的参考见 [ray_train_checkpoint_smoke.py](../examples/distributed-demo/ray_train_checkpoint_smoke.py)。
 
 ## 数据模式
 

@@ -1146,6 +1146,8 @@ if args.fail_after_print:
 目录探针示例。注意它与 smoke 使用相同的子目录选择：
 
 ```bash
+OLD_OUTPUT_RELATIVE='bevfusion/runs'
+OLD_JOB_ID='<已有成功任务ID>'
 spk-rayjob submit \
   --engine ray-ddp \
   --name "bevfusion-dir-probe-$(date +%H%M%S)" \
@@ -1173,7 +1175,7 @@ spk-rayjob submit \
   --execution-mode single_gpu --watch
 ```
 
-读取历史结果探针示例。`--resume-from-job` 只读挂载指定任务的结果：
+兼容 `ray-ddp` 的历史结果探针仍使用 owner-scoped 的逻辑 My Runs 路径。`--resume-from-job` 已保留给 managed `ray-train` 的完整 checkpoint 选择；不要用它把整个 DDP 结果目录伪装成 complete checkpoint：
 
 ```bash
 spk-rayjob submit \
@@ -1181,7 +1183,8 @@ spk-rayjob submit \
   --name "bevfusion-result-probe-$(date +%H%M%S)" \
   --image "$IMAGE" \
   --entrypoint 'python3 tools/platform_result_probe.py epoch_1.pth' \
-  --resume-from-job <已有成功任务ID> \
+  --checkpoint-space my-runs \
+  --checkpoint-path "$OLD_OUTPUT_RELATIVE/$OLD_JOB_ID" \
   --output-path bevfusion/probes/result \
   --workers 1 --gpus-per-worker 1 \
   --cpu-per-worker 8 --memory-per-worker 32Gi \
@@ -1594,12 +1597,15 @@ latest.pth
 raytrain-topology.json
 ```
 
-续训会创建一个新任务，把旧任务结果只读挂载为 `$PLATFORM_CHECKPOINT_PATH`，新结果仍写新的 `$PLATFORM_OUTPUT_PATH`：
+下面是已验证兼容 `ray-ddp` 流程的显式逻辑路径读取：它会创建新任务，把当前用户 My Runs 下指定旧目录只读挂载为 `$PLATFORM_CHECKPOINT_PATH`，新结果仍写新的 `$PLATFORM_OUTPUT_PATH`。托管 `ray-train` 应改用 `--resume-from-job`，由 checkpoint API 选择具体 complete checkpoint：
 
 ```bash
+OLD_OUTPUT_RELATIVE='bevfusion/runs'
+OLD_JOB_ID='<上一次的平台任务ID>'
 spk-rayjob submit \
   --engine ray-ddp \
-  --resume-from-job <上一次的平台任务ID> \
+  --checkpoint-space my-runs \
+  --checkpoint-path "$OLD_OUTPUT_RELATIVE/$OLD_JOB_ID" \
   --entrypoint 'raytrain-bevfusion-prepare python3 tools/westwell_train.py configs/westwell/det/transfusion/secfpn/lidar/voxelnet_0p075.yaml --launcher pytorch --run-dir "$PLATFORM_OUTPUT_PATH" resume_from="$PLATFORM_CHECKPOINT_PATH/epoch_1.pth" dataset_root="$PLATFORM_DATASET_PATH/0429_pkl/fz/" eval_dataset_root="$PLATFORM_DATASET_PATH/0429_pkl/fz/" data.train.dataset.ann_file="$PLATFORM_DATASET_PATH/0429_pkl/fz/merged_nuscenes_infos_train.pkl" data.val.ann_file="$PLATFORM_DATASET_PATH/0429_pkl/fz/merged_nuscenes_infos_val.pkl" data.test.ann_file="$PLATFORM_DATASET_PATH/0429_pkl/fz/merged_nuscenes_infos_val.pkl"' \
   --watch
 ```

@@ -467,15 +467,16 @@ sudo bash ops/storage/shanghai-data-transfer/50-configure-node-split-dns.sh --ch
 
 ### 5.10 Ray Train feature gates 与 KubeRay 1.6.2 升级
 
-Ray 编排 DDP 与 Ray Train 托管使用**并行运行时镜像**，不得把现有 Ray 2.35 镜像就地覆盖。生产托管镜像固定 Ray 2.56.1，canary 镜像固定 Ray 2.58.0；`ray-ddp` 兼容路径继续使用其已验收 digest。平台 Chart 的三个门禁为：
+Ray 编排 DDP 与 Ray Train 托管使用**并行运行时镜像**，不得把现有 Ray 2.35 镜像就地覆盖。生产托管镜像固定 Ray 2.56.1，canary 镜像固定 Ray 2.58.0；`ray-ddp` 兼容路径继续使用其已验收 digest。平台 Chart 的四个门禁为：
 
 ```text
 RAY_TRAIN_MANAGED_ENABLED=false
+RAY_TRAIN_MANAGED_TENANTS=
 RAY_TRAIN_CANARY_ENABLED=false
 RAY_TRAIN_CANARY_TENANTS=
 ```
 
-默认值全部关闭。先启用 canary 并填写明确租户列表，完成 Portal、`spk-rayjob`、原生 Ray API、恢复和清理验收后，才可评审全局 `RAY_TRAIN_MANAGED_ENABLED`。关闭门禁只影响新提交，**不得修改运行中 RayJob**，也不得切换已持久化任务的引擎、RayCluster identity 或镜像。
+默认值全部关闭。`RAY_TRAIN_MANAGED_ENABLED=true` 表示对所有非空 tenant 开放 2.56.1 managed；保持 false 时，仅 `RAY_TRAIN_MANAGED_TENANTS` 中的明确 tenant 可用。2.58.0 还必须同时满足 managed 权限、`RAY_TRAIN_CANARY_ENABLED=true` 和 `RAY_TRAIN_CANARY_TENANTS`。空 tenant 与空 allowlist 一律 fail closed。先对明确租户完成 Portal、`spk-rayjob`、原生 Ray API、恢复和清理验收后，才可评审全局开关。关闭门禁只影响新提交，**不得修改运行中 RayJob**，也不得切换已持久化任务的引擎、RayCluster identity 或镜像。
 
 KubeRay Operator 只允许在**零训练负载**维护窗升级到 **KubeRay 1.6.2**。这里的零负载不是仅看 `Running` phase：所有 namespace 中不得存在非终态 RayJob、仍运行 RayCluster、运行中的 debug workspace 或活动 Kueue Workload。**Operator 绝不在训练期间升级**，也不能依靠“任务应该很快结束”绕过预检。
 
@@ -486,6 +487,34 @@ KubeRay Operator 只允许在**零训练负载**维护窗升级到 **KubeRay 1.6
 3. 运行 `ops/kuberay/upgrade-1.6.2.sh`。脚本先建立维护门禁：Backend 缩容为零、所有 ClusterQueue admission 设为 Hold；门禁生效后再次预检。任何备份不完整或二次预检失败都必须发生在首次 CRD 写入前。
 4. 脚本只使用已固定并校验摘要的 KubeRay 1.6.2 CRD 和 Chart，先更新 CRD，再升级 Operator；不修改 Ray runtime 镜像和租户资源。
 5. `ops/kuberay/verify.sh` 核验 CRD served/storage、Helm chart 版本、Operator 两副本 rollout、Pod image/imageID digest、webhook/API 和既有资源可读性。
+
+下面是完整参数模板。`EXPECTED_*` 必须抄自变更单或 release evidence 中的**预先审计记录**，由第二位审阅者核对；禁止在维护现场临时计算摘要后自行确认，也不能把尖括号占位符直接执行。`upgrade-1.6.2.sh` 会在任何维护门禁或 CRD 写入前自动创建另一份强制备份；单独运行 `backup.sh` 是维护窗前的可读性与恢复材料检查，不替代该硬前置：
+
+```bash
+export KUBERAY_CONTEXT='<reviewed-context>'
+export CONFIRM_KUBE_CONTEXT="$KUBERAY_CONTEXT"
+export KUBERAY_NAMESPACE='kuberay-system'
+export KUBERAY_RELEASE='kuberay-operator'
+export KUBERAY_BACKUP_PARENT='/secure/backup-parent'
+
+export EXPECTED_KUBERAY_CRD_SHA256='<pre-audited-64-lowercase-hex>'
+export CONFIRM_KUBERAY_CRD_SHA256="$EXPECTED_KUBERAY_CRD_SHA256"
+export EXPECTED_KUBERAY_OPERATOR_IMAGE_DIGEST='<pre-audited-64-lowercase-hex>'
+export CONFIRM_KUBERAY_OPERATOR_IMAGE_DIGEST="$EXPECTED_KUBERAY_OPERATOR_IMAGE_DIGEST"
+
+: "只读预检；必须确认所有 namespace 零训练、debug、Kueue 活动负载。"
+bash ops/kuberay/preflight-upgrade.sh
+
+: "维护窗前独立备份检查；记录唯一目录并核对 COMPLETE/checksums.sha256。"
+bash ops/kuberay/backup.sh "$KUBERAY_BACKUP_PARENT"
+
+: "审批人确认 context、审计摘要、备份父目录和回滚责任人后才设置。"
+export CONFIRM_KUBERAY_UPGRADE=1
+bash ops/kuberay/upgrade-1.6.2.sh
+
+: "upgrade 已自动调用 verify；保留显式复验命令作为变更记录。"
+bash ops/kuberay/verify.sh
+```
 
 首次 CRD 写操作开始后，CRD、Helm 或 verify 任一失败都必须保持 Backend 为零、ClusterQueue 为 Hold，并输出备份路径和人工恢复提示。只有 verify 完整成功后，才先恢复全部 ClusterQueue 并确认 Active，再恢复 Backend 原副本并确认 Ready；任一队列恢复失败时 Backend 必须保持为零。
 

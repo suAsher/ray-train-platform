@@ -205,14 +205,13 @@ curl -fsS https://raytrain.wellspiking.ai/healthz
 curl -fsS https://raytrain.wellspiking.ai/downloads/spk-rayjob/SHA256SUMS
 ```
 
-Ray Jobs API 的版本响应必须把协议版本和 Ray 版本分开。托管生产运行时发布后检查：
+Ray Jobs API 的版本响应必须把协议版本和 Ray 版本分开。当前 Chart 保持 `backend.rayVersion: "2.35.0"`，并以 `RAY_VERSION` 传给 Backend；因此在 Task 18 切换前，下面的检查应看到 `ray_version: "2.35.0"`：
 
 ```bash
 curl -fsS https://raytrain.wellspiking.ai/ray/api/version | jq .
 ```
 
-正确形状为协议字段 `version: "4"`、运行时字段 `ray_version: "2.56.1"`，并包含字符串字段
-`ray_commit`、`session_name`。如果错误地把 `version` 也设成 Ray 版本，任务会先被接收，
+正确形状为协议字段 `version: "4"`、运行时字段与当前 `RAY_VERSION` 一致，并包含字符串字段 `ray_commit`、`session_name`。只有切换并发布后，即 Task 18 完成目标环境的 KubeRay 升级、managed canary 与验收，并将该环境 `backend.rayVersion` 明确改为 `2.56.1` 后，才应验收 `ray_version: "2.56.1"`。如果错误地把 `version` 也设成 Ray 版本，任务会先被接收，
 随后官方 CLI 因尝试把语义版本转为协议整数而返回非零退出码，造成“提交成功但本地显示失败”。
 
 CLI 发布文件必须用标准相对文件名生成校验表。构建机验收：

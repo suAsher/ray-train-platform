@@ -180,6 +180,100 @@ class DocumentationContractTest(unittest.TestCase):
             with self.subTest(stale=stale):
                 self.assertNotIn(stale, guide)
 
+    def test_managed_rollout_matrix_and_runtime_version_are_conditional(self) -> None:
+        guide = RAY_TRAIN_MANAGED_GUIDE.read_text(encoding="utf-8")
+        rollout = markdown_section(guide, "## 发布门禁与运行时版本")
+        self.assert_section_markers(
+            "managed rollout matrix",
+            rollout,
+            (
+                "RAY_TRAIN_MANAGED_TENANTS",
+                "全局开关关闭、租户在 managed allowlist",
+                "全局开关关闭、租户不在 managed allowlist",
+                "canary 还必须同时满足",
+                "空 tenant",
+                'backend.rayVersion: "2.35.0"',
+                "RAY_VERSION",
+                "/ray/api/version",
+                "Task 18",
+                "切换并发布后",
+            ),
+        )
+        self.assertNotIn("当前 `/ray/api/version` 固定返回 2.56.1", rollout)
+
+    def test_native_managed_output_and_resume_are_server_bound(self) -> None:
+        guide = RAY_TRAIN_MANAGED_GUIDE.read_text(encoding="utf-8")
+        user_guide = (ROOT / "docs" / "USER_GUIDE.md").read_text(encoding="utf-8")
+        bevfusion = (ROOT / "docs" / "BEVFUSION_END_TO_END_GUIDE.md").read_text(
+            encoding="utf-8"
+        )
+        native = markdown_section(guide, "### 原生 Ray API")
+        self.assert_section_markers(
+            "native managed output",
+            native,
+            (
+                "my-runs/native-ray/<job-id>",
+                "PLATFORM_OUTPUT_PATH=/mnt/data/output",
+                "不能通过 metadata 指定 output",
+                "namespace",
+                "Kubernetes selector",
+            ),
+        )
+        resume = markdown_section(guide, "## checkpoint 与 resume")
+        self.assert_section_markers(
+            "checkpoint resume binding",
+            resume,
+            (
+                "GET /api/v1/jobs/<old-job-id>/checkpoints",
+                "第一个 complete checkpoint",
+                ".platform/ray-train/<old-job-id>/checkpoints/<checkpoint-id>",
+                "parentJobId",
+                "resumeCheckpointId",
+                "没有完整 checkpoint 时提交失败",
+            ),
+        )
+        self.assertIn("--output-path managed-example", guide)
+        self.assertNotIn("--output-path runs/managed-example", guide)
+        self.assertNotIn("三者都会把**上一次运行自己的结果目录**", user_guide)
+        self.assertNotIn("--checkpoint-path <", bevfusion)
+
+    def test_kuberay_runbook_has_copyable_audited_parameter_template(self) -> None:
+        operations = (ROOT / "docs" / "OPERATIONS_GUIDE.md").read_text(
+            encoding="utf-8"
+        )
+        upgrade = markdown_section(
+            operations, "### 5.10 Ray Train feature gates 与 KubeRay 1.6.2 升级"
+        )
+        self.assert_section_markers(
+            "KubeRay guarded upgrade template",
+            upgrade,
+            (
+                "RAY_TRAIN_MANAGED_TENANTS=",
+                "KUBERAY_CONTEXT='<reviewed-context>'",
+                'CONFIRM_KUBE_CONTEXT="$KUBERAY_CONTEXT"',
+                "KUBERAY_BACKUP_PARENT='/secure/backup-parent'",
+                "EXPECTED_KUBERAY_CRD_SHA256='<pre-audited-64-lowercase-hex>'",
+                'CONFIRM_KUBERAY_CRD_SHA256="$EXPECTED_KUBERAY_CRD_SHA256"',
+                "EXPECTED_KUBERAY_OPERATOR_IMAGE_DIGEST='<pre-audited-64-lowercase-hex>'",
+                'CONFIRM_KUBERAY_OPERATOR_IMAGE_DIGEST="$EXPECTED_KUBERAY_OPERATOR_IMAGE_DIGEST"',
+                "CONFIRM_KUBERAY_UPGRADE=1",
+                "bash ops/kuberay/preflight-upgrade.sh",
+                'bash ops/kuberay/backup.sh "$KUBERAY_BACKUP_PARENT"',
+                "bash ops/kuberay/upgrade-1.6.2.sh",
+                "bash ops/kuberay/verify.sh",
+                "预先审计记录",
+                "禁止在维护现场临时计算摘要后自行确认",
+            ),
+        )
+
+    def test_build_guide_does_not_claim_ray_api_has_switched_before_task18(self) -> None:
+        build = BUILD_AND_DEPLOY.read_text(encoding="utf-8")
+        self.assertIn('backend.rayVersion: "2.35.0"', build)
+        self.assertIn("Task 18", build)
+        self.assertIn("RAY_VERSION", build)
+        self.assertIn("只有切换并发布后", build)
+        self.assertNotIn('正确形状为协议字段 `version: "4"`、运行时字段 `ray_version: "2.56.1"`', build)
+
     def test_submission_origin_semantics_are_consistent(self) -> None:
         documents = tuple(
             path.read_text(encoding="utf-8")

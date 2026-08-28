@@ -371,7 +371,7 @@ spk-rayjob logs -f <任务ID>    # 跟随日志
 | 命令 | 用途 |
 | --- | --- |
 | `spk-rayjob submit --watch` | 提交并阻塞显示 排队 → 运行 → 结束 |
-| `spk-rayjob submit --resume-from-job <ID>` | 把上一次运行的结果目录作为只读 checkpoint 续训 |
+| `spk-rayjob submit --engine ray-train --resume-from-job <ID>` | 从 owner-scoped checkpoint API 选择该任务最新的完整 checkpoint，并只读挂载其具体目录；无完整 checkpoint 时拒绝提交 |
 | `spk-rayjob jobs --state RUNNING` | 按状态列出任务 |
 | `spk-rayjob status <ID>` | 查看单个任务的状态、规模与结果目录 |
 | `spk-rayjob logs -f <ID>` | 实时跟随日志，任务结束自动退出 |
@@ -397,15 +397,15 @@ python train.py \
 
 页面上的「提交失败重试」只会重新创建一次 Ray 提交流程（覆盖镜像拉取、节点中断这类提交期故障），会**从头重跑**，**不会自动猜测哪个 checkpoint 可恢复**。只有训练脚本支持 resume 且你显式选择 checkpoint，才是可靠的断点续跑。
 
-续训有三个入口，效果相同：
+续训有三个入口；所有来源都必须属于当前用户，但具体选择契约取决于引擎：
 
 | 入口 | 操作 |
 | --- | --- |
 | 任务列表 | 终态任务的「续训」按钮 |
 | 任务详情 | 「续训（从此结果继续）」 |
-| 命令行 | `spk-rayjob submit --resume-from-job <上一次的任务ID>` |
+| 命令行 | `spk-rayjob submit --engine ray-train --resume-from-job <上一次的任务ID>`；CLI 不接受调用方提供 checkpoint ObjectPath |
 
-三者都会把**上一次运行自己的结果目录**（`我的训练结果/<路径>/<任务ID>`）作为只读 checkpoint 挂到新任务的 `PLATFORM_CHECKPOINT_PATH`。这是一个新任务，不会修改原任务。
+managed `ray-train` 命令行入口会由 checkpoint API 选择父任务最新的 complete checkpoint，并只读挂载含 `manifest.json` 的具体目录。页面选择的初始 checkpoint 仍显示其受控来源；调用方不能借任一入口指定其他用户的目录或任意对象路径。续训始终创建新任务，不会修改父任务。
 
 ### 权重在哪里，怎么继续使用
 
