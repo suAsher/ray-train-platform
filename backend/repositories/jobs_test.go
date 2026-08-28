@@ -770,6 +770,13 @@ func TestAcquireManagedAttemptCreationLeaseBlocksOnLowerUnresolvedAttempt(t *tes
 	if err != nil || !cleaned {
 		t.Fatalf("complete attempt 1 cleanup: cleaned=%v err=%v", cleaned, err)
 	}
+	var tombstone ManagedAttemptResourceRecord
+	if err := repo.db.Where("job_id = ? AND cluster_attempt = ?", job.ID, 1).First(&tombstone).Error; err != nil {
+		t.Fatalf("load durable cleaned tombstone: %v", err)
+	}
+	if tombstone.State != string(domain.ManagedAttemptResourceCleaned) || tombstone.RayJobUID != "" {
+		t.Fatalf("cleanup did not preserve a reusable-fence tombstone: %+v", tombstone)
+	}
 	_, resource, acquired, err := repo.AcquireManagedAttemptCreation(context.Background(), leaseRequest, now)
 	if err != nil || !acquired {
 		t.Fatalf("acquire current attempt after quiescence: acquired=%v resource=%+v err=%v", acquired, resource, err)

@@ -76,6 +76,7 @@ type ManagedAttemptResourceRecord struct {
 	LeaseOwner     string
 	LeaseVersion   int64
 	LeaseExpiresAt *time.Time
+	NextCheckAt    time.Time
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
@@ -90,7 +91,8 @@ func (record ManagedAttemptResourceRecord) toDomain() domain.ManagedAttemptResou
 		KubernetesNS: record.KubernetesNS, RayJobName: record.RayJobName, RayJobUID: record.RayJobUID,
 		State: domain.ManagedAttemptResourceState(record.State), LeaseOwner: record.LeaseOwner,
 		LeaseVersion: record.LeaseVersion, LeaseExpiresAt: record.LeaseExpiresAt,
-		CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt,
+		NextCheckAt: record.NextCheckAt,
+		CreatedAt:   record.CreatedAt, UpdatedAt: record.UpdatedAt,
 	}
 }
 
@@ -716,7 +718,9 @@ func (r *GormRepository) AcquireManagedAttemptCreation(ctx context.Context, requ
 			return nil
 		}
 		var lower int64
-		if err := tx.Model(&ManagedAttemptResourceRecord{}).Where("job_id = ? AND cluster_attempt < ?", request.JobID, request.ExpectedClusterAttempt).Count(&lower).Error; err != nil {
+		if err := tx.Model(&ManagedAttemptResourceRecord{}).
+			Where("job_id = ? AND cluster_attempt < ? AND state <> ?", request.JobID, request.ExpectedClusterAttempt, domain.ManagedAttemptResourceCleaned).
+			Count(&lower).Error; err != nil {
 			return fmt.Errorf("count unresolved lower managed attempts: %w", err)
 		}
 		if lower > 0 || (ledger.State != string(domain.ManagedAttemptResourceReserved) && ledger.State != string(domain.ManagedAttemptResourceCreating)) {
@@ -757,16 +761,24 @@ func (r *GormRepository) AcquireManagedAttemptCreation(ctx context.Context, requ
 	return current, resource, acquired, nil
 }
 
-// CompleteManagedAttemptCleanup removes only an exact RETIRING ledger row
-// after the reconciler has observed the corresponding Kubernetes UID absent.
+// CompleteManagedAttemptCleanup turns an exact RETIRING row into a permanent
+// CLEANED tombstone after the reconciler observes the Kubernetes UID absent.
+// Repeated confirmation of an absent CLEANED resource only advances its probe
+// time; the fencing generation is never deleted or reused.
 func (r *GormRepository) CompleteManagedAttemptCleanup(ctx context.Context, request domain.ManagedAttemptCleanupRequest) (bool, error) {
 	if err := request.Validate(); err != nil {
 		return false, err
 	}
-	result := r.db.WithContext(ctx).Where(
-		"job_id = ? AND cluster_attempt = ? AND ray_job_name = ? AND ray_job_uid = ? AND state = ?",
-		request.JobID, request.ClusterAttempt, request.RayJobName, request.RayJobUID, domain.ManagedAttemptResourceRetiring,
-	).Delete(&ManagedAttemptResourceRecord{})
+	now := time.Now().UTC()
+	result := r.db.WithContext(ctx).Model(&ManagedAttemptResourceRecord{}).Where(
+		"job_id = ? AND cluster_attempt = ? AND ray_job_name = ? AND ray_job_uid = ? AND state IN ?",
+		request.JobID, request.ClusterAttempt, request.RayJobName, request.RayJobUID,
+		[]domain.ManagedAttemptResourceState{domain.ManagedAttemptResourceRetiring, domain.ManagedAttemptResourceCleaned},
+	).Updates(map[string]any{
+		"ray_job_uid": "", "state": domain.ManagedAttemptResourceCleaned,
+		"lease_owner": "", "lease_expires_at": nil,
+		"next_check_at": now.Add(time.Minute), "updated_at": now,
+	})
 	if result.Error != nil {
 		return false, fmt.Errorf("complete managed attempt cleanup: %w", result.Error)
 	}
@@ -787,8 +799,9 @@ func (r *GormRepository) ListManagedAttemptCleanup(ctx context.Context, limit in
 	var records []ManagedAttemptResourceRecord
 	query := r.db.WithContext(ctx).Table("managed_attempt_resources AS resources").
 		Select("resources.*").Joins("JOIN training_jobs AS jobs ON jobs.id = resources.job_id").
-		Where("resources.state = ? OR (resources.state IN ? AND (resources.cluster_attempt < jobs.cluster_attempt OR jobs.desired_state = ? OR jobs.observed_state IN ?))",
+		Where("resources.state = ? OR (resources.state = ? AND resources.next_check_at <= ?) OR (resources.state IN ? AND (resources.cluster_attempt < jobs.cluster_attempt OR jobs.desired_state = ? OR jobs.observed_state IN ?))",
 			domain.ManagedAttemptResourceRetiring,
+			domain.ManagedAttemptResourceCleaned, now,
 			[]domain.ManagedAttemptResourceState{domain.ManagedAttemptResourceReserved, domain.ManagedAttemptResourceCreating},
 			domain.DesiredCanceled, terminal).
 		Order("resources.updated_at ASC, resources.job_id ASC, resources.cluster_attempt ASC").Limit(limit)

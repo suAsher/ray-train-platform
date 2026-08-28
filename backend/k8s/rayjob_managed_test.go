@@ -68,6 +68,28 @@ func TestManagedRayJobCarriesImmutableClusterAttemptIdentity(t *testing.T) {
 	}
 }
 
+func TestUnadoptedManagedRayJobIsQuarantinedByCreationFence(t *testing.T) {
+	job := managedEmptyAttempt(2, domain.StateRecovering)
+	job.RayJobName = job.ID + "-a2"
+	options := testRenderOptions()
+	options.managedCreationFence = 7
+	manifest, err := RenderRayJob(job, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const fenceKey = "raytrain.wellspiking.ai/creation-fence"
+	if got := manifest.GetLabels()[fenceKey]; got != "7" || manifest.GetAnnotations()[fenceKey] != "7" {
+		t.Fatalf("creation fence was not immutable on the RayJob: labels=%v annotations=%v", manifest.GetLabels(), manifest.GetAnnotations())
+	}
+	if queue := manifest.GetLabels()["kueue.x-k8s.io/queue-name"]; queue != "" {
+		t.Fatalf("unadopted managed RayJob was exposed to Kueue: %q", queue)
+	}
+	suspended, found, err := unstructured.NestedBool(manifest.Object, "spec", "suspend")
+	if err != nil || !found || !suspended {
+		t.Fatalf("unadopted managed RayJob is runnable: suspend=%v found=%v err=%v", suspended, found, err)
+	}
+}
+
 func TestManagedInvalidEntrypointReturnsNoRayWorkload(t *testing.T) {
 	tests := []domain.Entrypoint{
 		{Command: []string{"torchrun", "train.py"}},

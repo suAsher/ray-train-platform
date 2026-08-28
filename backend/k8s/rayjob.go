@@ -19,6 +19,8 @@ const (
 	RayJobKind                = "RayJob"
 	RayJobResource            = "rayjobs"
 	managedAttemptIdentityKey = "raytrain.wellspiking.ai/cluster-attempt"
+	managedCreationFenceKey   = "raytrain.wellspiking.ai/creation-fence"
+	managedPendingAdoptionKey = "raytrain.wellspiking.ai/pending-adoption"
 )
 
 type RenderOptions struct {
@@ -43,6 +45,7 @@ type RenderOptions struct {
 	trainingEventJobID   string
 	managedResumePath    string
 	clusterAttempt       int
+	managedCreationFence int64
 }
 
 // MLflowOptions carries only non-secret, in-cluster routing information.
@@ -240,6 +243,15 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 		attempt := strconv.Itoa(job.ClusterAttempt)
 		labels[managedAttemptIdentityKey] = attempt
 		annotations[managedAttemptIdentityKey] = attempt
+		if options.managedCreationFence > 0 {
+			fence := strconv.FormatInt(options.managedCreationFence, 10)
+			labels[managedCreationFenceKey] = fence
+			annotations[managedCreationFenceKey] = fence
+		}
+		if strings.TrimSpace(job.RayJobUID) == "" {
+			delete(labels, "kueue.x-k8s.io/queue-name")
+			annotations[managedPendingAdoptionKey] = "true"
+		}
 	}
 	jobObject := map[string]any{
 		"apiVersion": RayAPIVersion,

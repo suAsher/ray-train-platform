@@ -25,6 +25,10 @@ func retiringAttemptResource(job domain.TrainingJob, attempt int, name, uid stri
 }
 
 func createManagedAttemptResource(t *testing.T, client *dynamicfake.FakeDynamicClient, job domain.TrainingJob, attempt int, name, uid string) {
+	createManagedAttemptResourceWithFence(t, client, job, attempt, 0, name, uid)
+}
+
+func createManagedAttemptResourceWithFence(t *testing.T, client *dynamicfake.FakeDynamicClient, job domain.TrainingJob, attempt int, fence int64, name, uid string) {
 	t.Helper()
 	resource := managedManifest(t, job)
 	resource.SetName(name)
@@ -34,6 +38,12 @@ func createManagedAttemptResource(t *testing.T, client *dynamicfake.FakeDynamicC
 	resource.SetLabels(labels)
 	annotations := resource.GetAnnotations()
 	annotations[managedAttemptIdentityKey] = managedAttemptString(attempt)
+	if fence > 0 {
+		fenceText := fmt.Sprintf("%d", fence)
+		labels[managedCreationFenceKey] = fenceText
+		annotations[managedCreationFenceKey] = fenceText
+	}
+	resource.SetLabels(labels)
 	resource.SetAnnotations(annotations)
 	if _, err := client.Resource(rayJobGVR).Namespace(job.KubernetesNS).Create(context.Background(), resource, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
@@ -103,8 +113,8 @@ func TestManagedCleanupDeletionFailureRemainsDurableAndRetries(t *testing.T) {
 	if err := reconciler.ProcessOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := store.managedResources[1]; ok {
-		t.Fatal("successful retry did not complete ledger cleanup")
+	if resource := store.managedResources[1]; resource.State != domain.ManagedAttemptResourceCleaned {
+		t.Fatalf("successful retry did not retain a cleaned tombstone: %#v", resource)
 	}
 }
 
@@ -120,8 +130,8 @@ func TestTerminalManagedJobStillRunsGlobalLedgerCleanup(t *testing.T) {
 	if err := reconciler.ProcessOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := store.managedResources[1]; ok {
-		t.Fatal("terminal job retirement ledger was skipped")
+	if resource := store.managedResources[1]; resource.State != domain.ManagedAttemptResourceCleaned {
+		t.Fatalf("terminal job retirement did not retain a cleaned tombstone: %#v", resource)
 	}
 	if _, err := dynamicClient.Resource(rayJobGVR).Namespace(job.KubernetesNS).Get(context.Background(), job.ID, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("terminal managed resource was not cleaned: %v", err)
@@ -141,8 +151,8 @@ func TestTerminalReservedIntentWithoutKubernetesResourceIsRetiredAndCleaned(t *t
 	if err := reconciler.ProcessOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := store.managedResources[1]; ok {
-		t.Fatal("terminal RESERVED intent with no Kubernetes resource was not cleaned")
+	if resource := store.managedResources[1]; resource.State != domain.ManagedAttemptResourceCleaned {
+		t.Fatalf("terminal RESERVED intent did not retain a cleaned tombstone: %#v", resource)
 	}
 }
 
@@ -160,6 +170,52 @@ func TestManagedCleanupRefusesForeignAttemptIdentity(t *testing.T) {
 	}
 	if _, ok := store.managedResources[1]; !ok {
 		t.Fatal("foreign resource caused ledger completion")
+	}
+}
+
+func TestExpiredCreatorResumingAfterTakeoverCleanupCannotLeaveLowerAttempt(t *testing.T) {
+	job := managedEmptyAttempt(3, domain.StateCanceled)
+	job.RayJobName, job.RayJobUID = job.ID+"-a3", "uid-attempt-3"
+	retiring := retiringAttemptResource(job, 2, job.ID+"-a2", "uid-takeover")
+	retiring.LeaseVersion = 2
+	store := &memoryJobStore{job: &job, managedResources: map[int]domain.ManagedAttemptResource{2: retiring}}
+	dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
+	createManagedAttemptResourceWithFence(t, dynamicClient, job, 2, 2, retiring.RayJobName, retiring.RayJobUID)
+	reconciler := NewReconciler(store, NewClientFromInterfaces(dynamicClient, nil), testRenderOptions())
+
+	// Replica B has taken lease version 2, adopted and retired attempt 2. Its
+	// foreground deletion reaches NotFound before stale replica A resumes.
+	if err := reconciler.ProcessOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.managedResources[2]; !ok {
+		t.Fatal("cleanup deleted the durable attempt-2 tombstone")
+	}
+
+	// Replica A still holds the manifest rendered under expired fence 1 and
+	// resumes its already-authorized Ensure call after B's cleanup.
+	staleJob := managedEmptyAttempt(2, domain.StateRecovering)
+	staleJob.RayJobName = staleJob.ID + "-a2"
+	staleOptions := testRenderOptions()
+	staleOptions.managedCreationFence = 1
+	staleManifest, err := RenderRayJob(staleJob, staleOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if staleManifest.GetLabels()["kueue.x-k8s.io/queue-name"] != "" {
+		t.Fatal("expired creator produced an admissible RayJob")
+	}
+	if _, err := reconciler.client.EnsureRayJob(context.Background(), staleManifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconciler.ProcessOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dynamicClient.Resource(rayJobGVR).Namespace(job.KubernetesNS).Get(context.Background(), staleJob.RayJobName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("expired creator left a resurrected lower attempt: %v", err)
+	}
+	if _, ok := store.managedResources[2]; !ok {
+		t.Fatal("lower-attempt tombstone did not survive repeated cleanup")
 	}
 }
 

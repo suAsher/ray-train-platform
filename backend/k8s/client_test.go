@@ -143,6 +143,34 @@ func TestEnsureRayJobDoesNotAdoptForeignResource(t *testing.T) {
 	}
 }
 
+func TestActivateManagedRayJobRequiresExactAdoptedIdentityAndEnablesKueue(t *testing.T) {
+	job := managedEmptyAttempt(2, domain.StateRecovering)
+	job.RayJobName = job.ID + "-a2"
+	options := testRenderOptions()
+	options.managedCreationFence = 4
+	manifest, err := RenderRayJob(job, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.SetUID(types.UID("uid-attempt-2"))
+	dynamicClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), manifest)
+	client := NewClientFromInterfaces(dynamicClient, nil)
+
+	if _, err := client.ActivateManagedRayJob(context.Background(), manifest.GetNamespace(), manifest.GetName(), job.ID, "uid-wrong", 2, 4, job.Spec.Queue); err == nil {
+		t.Fatal("activation accepted a stale UID")
+	}
+	active, err := client.ActivateManagedRayJob(context.Background(), manifest.GetNamespace(), manifest.GetName(), job.ID, "uid-attempt-2", 2, 4, job.Spec.Queue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.GetLabels()["kueue.x-k8s.io/queue-name"] != job.Spec.Queue {
+		t.Fatalf("adopted RayJob was not enabled for Kueue: %v", active.GetLabels())
+	}
+	if active.GetAnnotations()[managedPendingAdoptionKey] != "" {
+		t.Fatalf("adopted RayJob retained quarantine marker: %v", active.GetAnnotations())
+	}
+}
+
 func TestDeleteRayJobRequiresExpectedUIDAndUsesForegroundPrecondition(t *testing.T) {
 	manifest, err := RenderRayJob(validRenderJob(), testRenderOptions())
 	if err != nil {

@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS managed_attempt_resources (
   lease_owner TEXT NOT NULL DEFAULT '',
   lease_version BIGINT NOT NULL DEFAULT 0,
   lease_expires_at TIMESTAMPTZ,
+  next_check_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (job_id, cluster_attempt),
@@ -104,7 +105,7 @@ CREATE TABLE IF NOT EXISTS managed_attempt_resources (
     AND ray_job_name ~ '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
   ),
   CONSTRAINT managed_attempt_resources_uid_check CHECK (length(ray_job_uid) <= 253),
-  CONSTRAINT managed_attempt_resources_state_check CHECK (state IN ('RESERVED', 'CREATING', 'ACTIVE', 'RETIRING')),
+  CONSTRAINT managed_attempt_resources_state_check CHECK (state IN ('RESERVED', 'CREATING', 'ACTIVE', 'RETIRING', 'CLEANED')),
   CONSTRAINT managed_attempt_resources_lease_check CHECK (
     lease_version >= 0
     AND length(lease_owner) <= 128
@@ -119,6 +120,9 @@ CREATE INDEX IF NOT EXISTS managed_attempt_resources_cleanup_idx
   WHERE state IN ('RETIRING', 'RESERVED', 'CREATING');
 CREATE INDEX IF NOT EXISTS managed_attempt_resources_job_state_idx
   ON managed_attempt_resources(job_id, state, cluster_attempt);
+CREATE INDEX IF NOT EXISTS managed_attempt_resources_tombstone_probe_idx
+  ON managed_attempt_resources(next_check_at, job_id, cluster_attempt)
+  WHERE state = 'CLEANED';
 
 -- 0022 has not shipped yet, but backfilling keeps development databases and
 -- rolling test environments coherent when the migration is reapplied there.

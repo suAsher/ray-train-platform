@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -329,6 +330,82 @@ func (c *Client) GetOwnedRayJob(ctx context.Context, namespace, name, jobID, exp
 		return nil, fmt.Errorf("refusing to observe RayJob with an unexpected UID")
 	}
 	return resource, nil
+}
+
+// ActivateManagedRayJob removes the creation quarantine only after PostgreSQL
+// has adopted the exact Kubernetes UID and lease fence. Until this update
+// succeeds the RayJob remains suspended and has no Kueue queue, so an expired
+// creator cannot leave runnable work behind.
+func (c *Client) ActivateManagedRayJob(ctx context.Context, namespace, name, jobID, expectedUID string, attempt int, fence int64, queue string) (*unstructured.Unstructured, error) {
+	if c == nil || c.dynamic == nil {
+		return nil, fmt.Errorf("Kubernetes dynamic client is not initialized")
+	}
+	if strings.TrimSpace(namespace) == "" || strings.TrimSpace(name) == "" || strings.TrimSpace(jobID) == "" || strings.TrimSpace(expectedUID) == "" {
+		return nil, fmt.Errorf("managed RayJob namespace, name, owner, and UID are required")
+	}
+	if attempt < 1 || fence < 1 {
+		return nil, fmt.Errorf("managed RayJob attempt and creation fence must be positive")
+	}
+	if strings.TrimSpace(queue) == "" {
+		return nil, fmt.Errorf("managed RayJob queue is required")
+	}
+
+	jobs := c.dynamic.Resource(rayJobGVR).Namespace(namespace)
+	var result *unstructured.Unstructured
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		current, err := jobs.Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		if err := verifyManagedRayJobFence(current, jobID, expectedUID, attempt, fence); err != nil {
+			return err
+		}
+		labels := current.GetLabels()
+		annotations := current.GetAnnotations()
+		if labels["kueue.x-k8s.io/queue-name"] == queue && annotations[managedPendingAdoptionKey] == "" {
+			result = current
+			return nil
+		}
+		updated := current.DeepCopy()
+		labels = copyStringMap(updated.GetLabels())
+		labels["kueue.x-k8s.io/queue-name"] = queue
+		updated.SetLabels(labels)
+		annotations = copyStringMap(updated.GetAnnotations())
+		delete(annotations, managedPendingAdoptionKey)
+		updated.SetAnnotations(annotations)
+		result, err = jobs.Update(ctx, updated, metav1.UpdateOptions{})
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("activate managed RayJob %s/%s: %w", namespace, name, err)
+	}
+	return result, nil
+}
+
+func verifyManagedRayJobFence(resource *unstructured.Unstructured, jobID, expectedUID string, attempt int, fence int64) error {
+	if resource.GetLabels()["ray.io/job-id"] != jobID {
+		return fmt.Errorf("refusing to activate RayJob owned by another job")
+	}
+	if string(resource.GetUID()) != expectedUID {
+		return fmt.Errorf("refusing to activate RayJob with an unexpected UID")
+	}
+	expectedAttempt := strconv.Itoa(attempt)
+	if resource.GetLabels()[managedAttemptIdentityKey] != expectedAttempt || resource.GetAnnotations()[managedAttemptIdentityKey] != expectedAttempt {
+		return fmt.Errorf("refusing to activate RayJob with an unexpected cluster attempt")
+	}
+	expectedFence := strconv.FormatInt(fence, 10)
+	if resource.GetLabels()[managedCreationFenceKey] != expectedFence || resource.GetAnnotations()[managedCreationFenceKey] != expectedFence {
+		return fmt.Errorf("refusing to activate RayJob with an unexpected creation fence")
+	}
+	return nil
+}
+
+func copyStringMap(source map[string]string) map[string]string {
+	result := make(map[string]string, len(source)+1)
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
 }
 
 func (c *Client) DeleteRayJob(ctx context.Context, namespace, name, jobID, expectedUID string) error {

@@ -218,7 +218,7 @@ func (s *memoryJobStore) AcquireManagedAttemptCreation(_ context.Context, reques
 		return &copyJob, nil, false, nil
 	}
 	for attempt := range s.managedResources {
-		if attempt < request.ExpectedClusterAttempt {
+		if attempt < request.ExpectedClusterAttempt && s.managedResources[attempt].State != domain.ManagedAttemptResourceCleaned {
 			resourceCopy := resource
 			return &copyJob, &resourceCopy, false, nil
 		}
@@ -258,7 +258,7 @@ func (s *memoryJobStore) ListManagedAttemptCleanup(_ context.Context, limit int,
 	s.ensureManagedResources()
 	items := make([]domain.ManagedAttemptResource, 0, len(s.managedResources))
 	for _, resource := range s.managedResources {
-		if resource.State == domain.ManagedAttemptResourceRetiring ||
+		if resource.State == domain.ManagedAttemptResourceRetiring || resource.State == domain.ManagedAttemptResourceCleaned ||
 			((resource.State == domain.ManagedAttemptResourceReserved || resource.State == domain.ManagedAttemptResourceCreating) &&
 				(resource.ClusterAttempt < s.job.ClusterAttempt || s.job.DesiredState == domain.DesiredCanceled || terminalJobState(s.job.ObservedState))) {
 			items = append(items, resource)
@@ -273,10 +273,15 @@ func (s *memoryJobStore) ListManagedAttemptCleanup(_ context.Context, limit int,
 func (s *memoryJobStore) CompleteManagedAttemptCleanup(_ context.Context, request domain.ManagedAttemptCleanupRequest) (bool, error) {
 	s.ensureManagedResources()
 	resource, ok := s.managedResources[request.ClusterAttempt]
-	if !ok || resource.State != domain.ManagedAttemptResourceRetiring || resource.RayJobName != request.RayJobName || resource.RayJobUID != request.RayJobUID {
+	if !ok || (resource.State != domain.ManagedAttemptResourceRetiring && resource.State != domain.ManagedAttemptResourceCleaned) || resource.RayJobName != request.RayJobName || resource.RayJobUID != request.RayJobUID {
 		return false, nil
 	}
-	delete(s.managedResources, request.ClusterAttempt)
+	resource.State = domain.ManagedAttemptResourceCleaned
+	resource.RayJobUID = ""
+	resource.LeaseOwner = ""
+	resource.LeaseExpiresAt = nil
+	resource.NextCheckAt = time.Now().UTC().Add(time.Minute)
+	s.managedResources[request.ClusterAttempt] = resource
 	return true, nil
 }
 
@@ -760,7 +765,12 @@ func TestReservedManagedAttemptCrashToleranceAbsentAndPresentResource(t *testing
 			dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
 			client := NewClientFromInterfaces(dynamicClient, nil)
 			if resourcePresent {
-				manifest := managedManifest(t, job)
+				options := testRenderOptions()
+				options.managedCreationFence = 1
+				manifest, err := RenderRayJob(job, options)
+				if err != nil {
+					t.Fatal(err)
+				}
 				if _, err := dynamicClient.Resource(rayJobGVR).Namespace(job.KubernetesNS).Create(context.Background(), manifest, metav1.CreateOptions{}); err != nil {
 					t.Fatal(err)
 				}
@@ -790,7 +800,12 @@ func TestCreatorCrashAdoptsFailedResourceBeforeManagedRecovery(t *testing.T) {
 	}}
 	dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
 	client := NewClientFromInterfaces(dynamicClient, nil)
-	manifest := managedManifest(t, job)
+	options := testRenderOptions()
+	options.managedCreationFence = 1
+	manifest, err := RenderRayJob(job, options)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := unstructured.SetNestedMap(manifest.Object, map[string]any{
 		"jobStatus": "FAILED", "reason": "HEAD_POD_LOST", "message": "head disappeared after create",
 	}, "status"); err != nil {
@@ -820,7 +835,12 @@ func TestCreatorCrashAdoptsFailedResourceAndFailsClosedWithoutCheckpoint(t *test
 	}}
 	dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
 	client := NewClientFromInterfaces(dynamicClient, nil)
-	manifest := managedManifest(t, job)
+	options := testRenderOptions()
+	options.managedCreationFence = 1
+	manifest, err := RenderRayJob(job, options)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := unstructured.SetNestedMap(manifest.Object, map[string]any{
 		"jobStatus": "FAILED", "reason": "HEAD_POD_LOST", "message": "head disappeared after create",
 	}, "status"); err != nil {

@@ -360,6 +360,7 @@ const (
 	ManagedAttemptResourceCreating ManagedAttemptResourceState = "CREATING"
 	ManagedAttemptResourceActive   ManagedAttemptResourceState = "ACTIVE"
 	ManagedAttemptResourceRetiring ManagedAttemptResourceState = "RETIRING"
+	ManagedAttemptResourceCleaned  ManagedAttemptResourceState = "CLEANED"
 )
 
 type ManagedAttemptResource struct {
@@ -372,6 +373,7 @@ type ManagedAttemptResource struct {
 	LeaseOwner     string
 	LeaseVersion   int64
 	LeaseExpiresAt *time.Time
+	NextCheckAt    time.Time
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }

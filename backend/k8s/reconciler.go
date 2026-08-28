@@ -292,6 +292,9 @@ func (r *Reconciler) reconcileLoadedJob(ctx context.Context, job *domain.Trainin
 		job, creationLease = current, lease
 	}
 	options := r.renderOptions
+	if creationLease != nil {
+		options.managedCreationFence = creationLease.LeaseVersion
+	}
 	if r.gitCredentials != nil && job.Spec.Source.Type == "git" {
 		options.GitCredentialSecret = r.gitCredentials.GitCredentialSecretFor(ctx, job.TenantID, job.UserID, job.Spec.Source.URL)
 	}
@@ -334,6 +337,12 @@ func (r *Reconciler) reconcileLoadedJob(ctx context.Context, job *domain.Trainin
 		}
 		if terminalJobState(job.ObservedState) {
 			return nil
+		}
+	}
+	if managed {
+		resource, err = r.activateManagedRayJob(ctx, job, resource, creationLease)
+		if err != nil {
+			return err
 		}
 	}
 	status, found, statusErr := nestedMap(resource.Object, "status")
@@ -429,6 +438,16 @@ func (r *Reconciler) adoptManagedAttempt(ctx context.Context, reserved *domain.T
 	if lease == nil || lease.LeaseOwner != r.leaseOwner || lease.LeaseVersion < 1 {
 		return nil, false, fmt.Errorf("managed RayJob creation lease is missing")
 	}
+	if resource.GetLabels()["ray.io/job-id"] != reserved.ID || resource.GetLabels()[managedAttemptIdentityKey] != strconv.Itoa(reserved.ClusterAttempt) || resource.GetAnnotations()[managedAttemptIdentityKey] != strconv.Itoa(reserved.ClusterAttempt) {
+		return nil, false, fmt.Errorf("managed RayJob creation identity does not match the reserved attempt")
+	}
+	fence, err := managedResourceCreationFence(resource)
+	if err != nil || fence > lease.LeaseVersion {
+		return nil, false, fmt.Errorf("managed RayJob creation fence is not covered by the current lease")
+	}
+	if err := verifyManagedRayJobFence(resource, reserved.ID, uid, reserved.ClusterAttempt, fence); err != nil {
+		return nil, false, err
+	}
 	current, adopted, err := r.store.AdoptManagedAttemptIdentity(ctx, domain.ManagedAttemptAdoptionRequest{
 		JobID: reserved.ID, ExpectedClusterAttempt: reserved.ClusterAttempt,
 		ExpectedState: reserved.ObservedState, RayJobName: resource.GetName(), RayJobUID: uid,
@@ -442,6 +461,32 @@ func (r *Reconciler) adoptManagedAttempt(ctx context.Context, reserved *domain.T
 		return nil, false, fmt.Errorf("managed attempt adoption returned no job")
 	}
 	return current, adopted, nil
+}
+
+func (r *Reconciler) activateManagedRayJob(ctx context.Context, job *domain.TrainingJob, resource *unstructured.Unstructured, lease *domain.ManagedAttemptResource) (*unstructured.Unstructured, error) {
+	if resource.GetAnnotations()[managedPendingAdoptionKey] == "" {
+		return resource, nil
+	}
+	fence, err := managedResourceCreationFence(resource)
+	if err != nil {
+		return nil, fmt.Errorf("managed RayJob %s has an invalid creation fence", resource.GetName())
+	}
+	if lease != nil && fence > lease.LeaseVersion {
+		return nil, fmt.Errorf("managed RayJob %s creation fence does not match its lease", resource.GetName())
+	}
+	return r.client.ActivateManagedRayJob(ctx, resource.GetNamespace(), resource.GetName(), job.ID, job.RayJobUID, job.ClusterAttempt, fence, job.Spec.Queue)
+}
+
+func managedResourceCreationFence(resource *unstructured.Unstructured) (int64, error) {
+	labelFence := resource.GetLabels()[managedCreationFenceKey]
+	if labelFence == "" || resource.GetAnnotations()[managedCreationFenceKey] != labelFence {
+		return 0, fmt.Errorf("creation fence label and annotation must match")
+	}
+	fence, err := strconv.ParseInt(labelFence, 10, 64)
+	if err != nil || fence < 1 {
+		return 0, fmt.Errorf("creation fence must be positive")
+	}
+	return fence, nil
 }
 
 func managedJobNamespace(job domain.TrainingJob) string {
@@ -753,6 +798,18 @@ func verifyManagedAttemptResource(resource *unstructured.Unstructured, expected 
 	}
 	if expected.RayJobUID != "" && string(resource.GetUID()) != expected.RayJobUID {
 		return fmt.Errorf("refusing to clean RayJob with unexpected UID")
+	}
+	labelFence := resource.GetLabels()[managedCreationFenceKey]
+	annotationFence := resource.GetAnnotations()[managedCreationFenceKey]
+	if labelFence == "" && annotationFence == "" && expected.LeaseVersion == 0 {
+		return nil
+	}
+	if labelFence == "" || annotationFence != labelFence {
+		return fmt.Errorf("refusing to clean RayJob with invalid creation fence identity")
+	}
+	fence, err := strconv.ParseInt(labelFence, 10, 64)
+	if err != nil || fence < 1 || expected.LeaseVersion < 1 || fence > expected.LeaseVersion {
+		return fmt.Errorf("refusing to clean RayJob with unexpected creation fence identity")
 	}
 	return nil
 }

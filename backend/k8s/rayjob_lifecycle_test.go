@@ -127,6 +127,7 @@ func TestRenderRayJobOmitsActiveDeadlineWhenNoTimeout(t *testing.T) {
 func TestManagedRecoveryAttemptUsesBoundedAttemptNameAndCheckpoint(t *testing.T) {
 	job := managedRenderJob(domain.RayVersionProduction)
 	job.ClusterAttempt = 2
+	job.RayJobUID = "uid-attempt-2"
 	job.ResumeCheckpointID = "checkpoint-epoch-4"
 	job.Spec.ResolvedDataMounts.Output = &domain.ResolvedDataMount{
 		Space: domain.DataSpaceMyRuns, BindingSpace: domain.DataSpaceWorkspace,
