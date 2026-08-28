@@ -44,8 +44,16 @@ ARG RAY_VERSION=2.56.1
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 USER root
 RUN test "${RAY_VERSION}" = "2.56.1" \
+ && python3 -m pip uninstall -y \
+      azure-cli-core \
+      conda-content-trust \
+      opentelemetry-exporter-otlp \
+      opentelemetry-exporter-otlp-proto-grpc \
  && python3 -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
       "ray[train,tune]==${RAY_VERSION}" \
+      "google-api-core==2.34.0" \
+      "googleapis-common-protos==1.75.2" \
+      "opentelemetry-exporter-otlp==1.44.0" \
  && python3 -c "import ray, ray.train, ray.tune; assert ray.__version__ == '${RAY_VERSION}', ray.__version__" \
  && python3 -m pip check
 

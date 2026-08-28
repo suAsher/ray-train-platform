@@ -87,6 +87,22 @@ assert_contracts() {
     exit 1
   fi
   require_before "$base_stage" 'test "${RAY_VERSION}" = "2.56.1"' 'python3 -m pip install'
+  for dependency_contract in \
+    'python3 -m pip uninstall -y' \
+    'azure-cli-core' \
+    'conda-content-trust' \
+    '      opentelemetry-exporter-otlp \' \
+    'opentelemetry-exporter-otlp-proto-grpc' \
+    '"google-api-core==2.34.0"' \
+    '"googleapis-common-protos==1.75.2"' \
+    '"opentelemetry-exporter-otlp==1.44.0"'; do
+    if ! grep -Fq -- "$dependency_contract" <<<"$base_stage"; then
+      echo "Ray 2.56 training stage is missing dependency normalization: ${dependency_contract}" >&2
+      exit 1
+    fi
+  done
+  require_before "$base_stage" 'python3 -m pip uninstall -y' 'python3 -m pip install'
+  require_before "$base_stage" 'python3 -m pip install' 'python3 -m pip check'
 
   require_literal images/workspace/Dockerfile 'AS workspace-legacy'
   require_literal images/workspace/Dockerfile 'AS workspace-ray256'
@@ -99,6 +115,22 @@ assert_contracts() {
   local workspace_stage
   workspace_stage="$(docker_stage images/workspace/Dockerfile workspace-ray256)"
   require_before "$workspace_stage" 'test "${RAY_VERSION}" = "2.56.1"' 'python3 -m pip install'
+  for dependency_contract in \
+    'python3 -m pip uninstall -y' \
+    'azure-cli-core' \
+    'conda-content-trust' \
+    '      opentelemetry-exporter-otlp \' \
+    'opentelemetry-exporter-otlp-proto-grpc' \
+    '"google-api-core==2.34.0"' \
+    '"googleapis-common-protos==1.75.2"' \
+    '"opentelemetry-exporter-otlp==1.44.0"'; do
+    if ! grep -Fq -- "$dependency_contract" <<<"$workspace_stage"; then
+      echo "Ray 2.56 workspace stage is missing dependency normalization: ${dependency_contract}" >&2
+      exit 1
+    fi
+  done
+  require_before "$workspace_stage" 'python3 -m pip uninstall -y' 'python3 -m pip install'
+  require_before "$workspace_stage" 'python3 -m pip install' 'python3 -m pip check'
 
   for required_copy_source in \
     images/workspace/raytrain-launch.py \
