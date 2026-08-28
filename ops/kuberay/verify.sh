@@ -83,9 +83,22 @@ done <<<"$pod_images"
 
 kubectl get --raw /apis/ray.io/v1 --context "$target_context" >/dev/null || die 'ray.io/v1 API discovery failed'
 kubectl api-resources --api-group=ray.io --context "$target_context" >/dev/null || die 'ray.io API resources are unavailable'
-validating_webhook="$(kubectl get validatingwebhookconfigurations.admissionregistration.k8s.io --context "$target_context" -l "app.kubernetes.io/instance=${KUBERAY_RELEASE}" -o name)" || die 'cannot read KubeRay validating webhook'
-mutating_webhook="$(kubectl get mutatingwebhookconfigurations.admissionregistration.k8s.io --context "$target_context" -l "app.kubernetes.io/instance=${KUBERAY_RELEASE}" -o name)" || die 'cannot read KubeRay mutating webhook'
-[[ -n "${validating_webhook}${mutating_webhook}" ]] || die 'no KubeRay webhook configuration is installed'
+release_manifest="$(helm get manifest "$KUBERAY_RELEASE" --namespace "$KUBERAY_NAMESPACE" --kube-context "$target_context")" || die 'cannot read installed KubeRay Helm manifest'
+declares_validating_webhook=false
+declares_mutating_webhook=false
+grep -Fxq 'kind: ValidatingWebhookConfiguration' <<<"$release_manifest" && declares_validating_webhook=true
+grep -Fxq 'kind: MutatingWebhookConfiguration' <<<"$release_manifest" && declares_mutating_webhook=true
+if [[ "$declares_validating_webhook" == true ]]; then
+  validating_webhook="$(kubectl get validatingwebhookconfigurations.admissionregistration.k8s.io --context "$target_context" -l "app.kubernetes.io/instance=${KUBERAY_RELEASE}" -o name)" || die 'cannot read KubeRay validating webhook'
+  [[ -n "$validating_webhook" ]] || die 'KubeRay Helm manifest declares a validating webhook but no matching configuration is installed'
+fi
+if [[ "$declares_mutating_webhook" == true ]]; then
+  mutating_webhook="$(kubectl get mutatingwebhookconfigurations.admissionregistration.k8s.io --context "$target_context" -l "app.kubernetes.io/instance=${KUBERAY_RELEASE}" -o name)" || die 'cannot read KubeRay mutating webhook'
+  [[ -n "$mutating_webhook" ]] || die 'KubeRay Helm manifest declares a mutating webhook but no matching configuration is installed'
+fi
+if [[ "$declares_validating_webhook" != true && "$declares_mutating_webhook" != true ]]; then
+  echo 'KubeRay Helm manifest does not declare an admission webhook; webhook verification is not applicable' >&2
+fi
 
 allowed="$(kubectl auth can-i list rayjobs.ray.io --all-namespaces --context "$target_context")" || die 'cannot check Ray resource API access'
 [[ "$allowed" == yes ]] || die 'Ray resource API access is denied'

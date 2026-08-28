@@ -157,6 +157,8 @@ validate_name "$PLATFORM_BACKEND_DEPLOYMENT" PLATFORM_BACKEND_DEPLOYMENT
 for command_name in "$KUBECTL_BIN" "$HELM_BIN" "$CURL_BIN" "$SHA256_BIN" "$KUBERAY_BACKUP_BIN"; do
   command -v "$command_name" >/dev/null || die "missing command: $command_name"
 done
+helm_upgrade_help="$(helm upgrade --help)" || die 'cannot inspect Helm upgrade capabilities'
+grep -Fq -- '--reset-then-reuse-values' <<<"$helm_upgrade_help" || die 'Helm 3.14.0 or newer is required for --reset-then-reuse-values'
 
 current_context="$(kubectl config current-context)" || die 'cannot read current context'
 [[ -n "$current_context" ]] || die 'current context is empty'
@@ -246,12 +248,12 @@ done <"$queue_state_file"
 PREFLIGHT_EXPECT_QUEUES_HELD=1 KUBERAY_CONTEXT="$target_context" "${script_dir}/preflight-upgrade.sh"
 phase=writing_crds
 write_started=true
-kubectl replace -k "$crd_dir" --context "$target_context"
+kubectl apply --server-side --force-conflicts -k "$crd_dir" --context "$target_context"
 phase=upgrading_operator
 helm upgrade "$KUBERAY_RELEASE" "$chart_path" \
   --namespace "$KUBERAY_NAMESPACE" \
   --kube-context "$target_context" \
-  --skip-crds --reuse-values \
+  --skip-crds --reset-then-reuse-values \
   --set-string "image.repository=${KUBERAY_OPERATOR_REPOSITORY}" \
   --set-string "image.tag=${KUBERAY_OPERATOR_TAG}" \
   --set replicas=2 \

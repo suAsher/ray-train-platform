@@ -87,10 +87,10 @@ for expected in \
   'stopPolicy' \
   'Hold' \
   'CONFIRM_KUBERAY_UPGRADE' \
-  'kubectl replace -k' \
+  'kubectl apply --server-side --force-conflicts -k' \
   'helm upgrade' \
   '--skip-crds' \
-  '--reuse-values' \
+  '--reset-then-reuse-values' \
   'image.repository' \
   'image.tag' \
   'replicas' \
@@ -215,8 +215,12 @@ case "${command_line}" in
       printf 'kuberay-operator-0 operator quay.io/kuberay/operator:v1.3.0 quay.io/kuberay/operator@sha256:%064d\n' 0
     fi
     ;;
-  *' get validatingwebhookconfigurations.admissionregistration.k8s.io '*) printf 'validatingwebhookconfiguration.admissionregistration.k8s.io/kuberay-operator\n' ;;
-  *' get mutatingwebhookconfigurations.admissionregistration.k8s.io '*) printf 'mutatingwebhookconfiguration.admissionregistration.k8s.io/kuberay-operator\n' ;;
+  *' get validatingwebhookconfigurations.admissionregistration.k8s.io '*)
+    if [[ "${FIXTURE_VALIDATING_WEBHOOK+x}" == x ]]; then printf '%s' "$FIXTURE_VALIDATING_WEBHOOK"; else printf 'validatingwebhookconfiguration.admissionregistration.k8s.io/kuberay-operator\n'; fi
+    ;;
+  *' get mutatingwebhookconfigurations.admissionregistration.k8s.io '*)
+    if [[ "${FIXTURE_MUTATING_WEBHOOK+x}" == x ]]; then printf '%s' "$FIXTURE_MUTATING_WEBHOOK"; else printf 'mutatingwebhookconfiguration.admissionregistration.k8s.io/kuberay-operator\n'; fi
+    ;;
   *' get rayjobs.ray.io,rayclusters.ray.io,rayservices.ray.io,raycronjobs.ray.io '*)
     [[ "${FIXTURE_RESOURCES_READABLE:-1}" == 1 ]] || exit 1
     printf 'apiVersion: v1\nitems: []\n'
@@ -226,7 +230,7 @@ case "${command_line}" in
     printf 'apiVersion: v1\nitems: []\n'
     ;;
   *' rollout status '*) printf 'deployment successfully rolled out\n' ;;
-  *' replace -k '*)
+  *' apply --server-side --force-conflicts -k '*)
     printf 'customresourcedefinition.apiextensions.k8s.io replaced\n'
     [[ "${FIXTURE_REPLACE_FAIL:-0}" == 0 ]] || exit 1
     ;;
@@ -245,9 +249,16 @@ case " $* " in
     printf 'name: %s\nchart: kuberay-operator-1.3.0\n' "${FIXTURE_HELM_RELEASE:-kuberay-operator}"
     ;;
   *' history '*) printf 'revision: 1\nchart: kuberay-operator-1.3.0\n' ;;
-  *' get manifest '*) printf 'apiVersion: apps/v1\nkind: Deployment\n' ;;
+  *' get manifest '*)
+    printf 'apiVersion: apps/v1\nkind: Deployment\n'
+    if [[ "${FIXTURE_MANIFEST_VALIDATING_WEBHOOK:-${FIXTURE_MANIFEST_WEBHOOK:-0}}" == 1 ]]; then printf '%s\n' '---' 'apiVersion: admissionregistration.k8s.io/v1' 'kind: ValidatingWebhookConfiguration'; fi
+    if [[ "${FIXTURE_MANIFEST_MUTATING_WEBHOOK:-0}" == 1 ]]; then printf '%s\n' '---' 'apiVersion: admissionregistration.k8s.io/v1' 'kind: MutatingWebhookConfiguration'; fi
+    ;;
   *' list '*) printf '[{"name":"%s","chart":"kuberay-operator-%s"}]\n' "${FIXTURE_HELM_RELEASE:-kuberay-operator}" "${FIXTURE_HELM_CHART_VERSION:-1.6.2}" ;;
   *' show chart '*) printf 'name: kuberay-operator\nversion: 1.6.2\n' ;;
+  *' upgrade --help '*)
+    [[ "${FIXTURE_HELM_SUPPORTS_RESET_THEN_REUSE:-1}" == 1 ]] && printf '%s\n' '      --reset-then-reuse-values   reset values to chart defaults, then reuse previous values'
+    ;;
   *' upgrade '*)
     case "${FIXTURE_UPGRADE_SIGNAL:-}" in
       INT) kill -INT "$PPID"; exit 130 ;;
@@ -379,10 +390,10 @@ fixture_env=(
 if env "${fixture_env[@]}" CONFIRM_KUBE_CONTEXT=wrong "$preflight" >"${temporary}/out" 2>"${temporary}/err"; then
   fail 'preflight accepted an unconfirmed context'
 fi
+grep -Fq 'current context: fixture-context' "${temporary}/err" || fail 'preflight did not record current context'
 if env "${fixture_env[@]}" CONFIRM_KUBERAY_UPGRADE=1 KUBERAY_OPERATOR_REPOSITORY='harbor.wellspiking.ai/guofeng.su/kuberay-operator;touch /tmp/unsafe' "$upgrade" >/dev/null 2>&1; then
   fail 'upgrade accepted an unsafe operator repository'
 fi
-grep -Fq 'current context: fixture-context' "${temporary}/err" || fail 'preflight did not record current context'
 
 for state in PENDING RUNNING UNKNOWN ''; do
   if env "${fixture_env[@]}" FIXTURE_RAYJOBS="tenant-a|job-a|${state}||0|0\n" "$preflight" >/dev/null 2>&1; then
@@ -419,6 +430,16 @@ if env "${fixture_env[@]}" FIXTURE_WORKLOADS=$'tenant-a workload-a False\n' "$pr
 fi
 env "${fixture_env[@]}" FIXTURE_WORKLOADS=$'tenant-a workload-a True\n' "$preflight" >/dev/null
 touch "${temporary}/state/helm-upgraded"
+env "${fixture_env[@]}" FIXTURE_VALIDATING_WEBHOOK='' FIXTURE_MUTATING_WEBHOOK='' "$verify" >/dev/null
+if env "${fixture_env[@]}" FIXTURE_MANIFEST_WEBHOOK=1 FIXTURE_VALIDATING_WEBHOOK='' FIXTURE_MUTATING_WEBHOOK='' "$verify" >/dev/null 2>&1; then
+  fail 'verification accepted a chart-declared webhook that was not installed'
+fi
+if env "${fixture_env[@]}" FIXTURE_MANIFEST_VALIDATING_WEBHOOK=1 FIXTURE_VALIDATING_WEBHOOK='' FIXTURE_MUTATING_WEBHOOK='mutatingwebhookconfiguration.admissionregistration.k8s.io/kuberay-operator' "$verify" >/dev/null 2>&1; then
+  fail 'verification accepted a missing chart-declared validating webhook because a mutating webhook existed'
+fi
+if env "${fixture_env[@]}" FIXTURE_MANIFEST_MUTATING_WEBHOOK=1 FIXTURE_VALIDATING_WEBHOOK='validatingwebhookconfiguration.admissionregistration.k8s.io/kuberay-operator' FIXTURE_MUTATING_WEBHOOK='' "$verify" >/dev/null 2>&1; then
+  fail 'verification accepted a missing chart-declared mutating webhook because a validating webhook existed'
+fi
 if env "${fixture_env[@]}" FIXTURE_RESOURCES_READABLE=0 "$verify" >/dev/null 2>&1; then
   fail 'verification accepted unreadable existing resources'
 fi
@@ -447,11 +468,21 @@ reset_fixture_state() {
   : >"${fixture_log}"
 }
 
+upgrade_write_recorded() {
+  awk '/^kubectl apply / || (/^helm upgrade / && $0 !~ / --help( |$)/) { found=1 } END { exit(found ? 0 : 1) }' "${fixture_log}"
+}
+
 assert_no_cluster_writes() {
-  if grep -Eq 'kubectl (scale|patch|replace)|helm upgrade' "${fixture_log}"; then
+  if awk '/^kubectl (scale|patch|apply)/ || (/^helm upgrade / && $0 !~ / --help( |$)/) { found=1 } END { exit(found ? 0 : 1) }' "${fixture_log}"; then
     fail "$1"
   fi
 }
+
+reset_fixture_state
+if env "${fixture_env[@]}" CONFIRM_KUBERAY_UPGRADE=1 FIXTURE_HELM_SUPPORTS_RESET_THEN_REUSE=0 "$upgrade" >/dev/null 2>&1; then
+  fail 'upgrade accepted a Helm client without --reset-then-reuse-values support'
+fi
+assert_no_cluster_writes 'unsupported Helm client reached a cluster write'
 
 assert_gates_held() {
   [[ "$(cat "${temporary}/state/backend-replicas")" == 0 ]] || fail "$1: backend was scaled up"
@@ -521,7 +552,7 @@ reset_fixture_state
 if env "${fixture_env[@]}" CONFIRM_KUBERAY_UPGRADE=1 FIXTURE_BACKEND_DRAIN_STUCK=1 MAINTENANCE_WAIT_ATTEMPTS=1 MAINTENANCE_WAIT_INTERVAL_SECONDS=0 "$upgrade" >/dev/null 2>&1; then
   fail 'upgrade accepted a backend Pod that remained alive after scale-to-zero'
 fi
-if grep -Eq 'kubectl patch clusterqueue|kubectl replace -k|helm upgrade' "${fixture_log}"; then
+if grep -Eq '^kubectl patch clusterqueue' "${fixture_log}" || upgrade_write_recorded; then
   fail 'upgrade advanced beyond a backend maintenance gate that had not drained'
 fi
 [[ "$(cat "${temporary}/state/backend-replicas")" == 2 && "$(cat "${temporary}/state/backend-current")" == 2 ]] || fail 'backend was not restored after drain timeout'
@@ -530,7 +561,7 @@ reset_fixture_state
 if env "${fixture_env[@]}" CONFIRM_KUBERAY_UPGRADE=1 FIXTURE_POST_GATE_WORKLOADS=$'tenant-a race-workload False\n' "$upgrade" >/dev/null 2>&1; then
   fail 'upgrade ignored a Kueue Workload created before the maintenance gate closed'
 fi
-if grep -Eq 'kubectl replace -k|helm upgrade' "${fixture_log}"; then
+if upgrade_write_recorded; then
   fail 'post-gate workload was detected only after upgrade mutation'
 fi
 [[ "$(cat "${temporary}/state/backend-replicas")" == 2 ]] || fail 'backend replicas were not restored after a gated preflight failure'
@@ -541,7 +572,7 @@ reset_fixture_state
 if prewrite_signal_output="$(env "${fixture_env[@]}" CONFIRM_KUBERAY_UPGRADE=1 FIXTURE_PREWRITE_SIGNAL=TERM "$upgrade" 2>&1)"; then
   fail 'upgrade accepted a pre-write SIGTERM'
 fi
-if grep -Eq 'kubectl replace -k|helm upgrade' "$fixture_log"; then fail 'pre-write SIGTERM reached a cluster upgrade write'; fi
+if upgrade_write_recorded; then fail 'pre-write SIGTERM reached a cluster upgrade write'; fi
 [[ "$(cat "${temporary}/state/backend-replicas")" == 2 ]] || fail 'pre-write SIGTERM did not restore backend replicas'
 [[ "$(cat "${temporary}/state/queue-policy")" == None ]] || fail 'pre-write SIGTERM did not restore the ClusterQueue'
 assert_safe_restore_order 'pre-write SIGTERM'
@@ -559,13 +590,13 @@ reset_fixture_state
 if env "${fixture_env[@]}" CONFIRM_KUBERAY_UPGRADE=1 FIXTURE_POST_GATE_RAYJOBS=$'tenant-a|race-job|RUNNING||0|0\n' "$upgrade" >/dev/null 2>&1; then
   fail 'upgrade ignored a RayJob created before the maintenance gate closed'
 fi
-if grep -Eq 'kubectl replace -k|helm upgrade' "${fixture_log}"; then fail 'post-gate RayJob caused an upgrade mutation'; fi
+if upgrade_write_recorded; then fail 'post-gate RayJob caused an upgrade mutation'; fi
 
 reset_fixture_state
 if env "${fixture_env[@]}" CONFIRM_KUBERAY_UPGRADE=1 FIXTURE_POST_GATE_RAYCLUSTERS=$'tenant-a race-cluster READY\n' "$upgrade" >/dev/null 2>&1; then
   fail 'upgrade ignored a RayCluster created before the maintenance gate closed'
 fi
-if grep -Eq 'kubectl replace -k|helm upgrade' "${fixture_log}"; then fail 'post-gate RayCluster caused an upgrade mutation'; fi
+if upgrade_write_recorded; then fail 'post-gate RayCluster caused an upgrade mutation'; fi
 
 for failure_mode in replace helm verify INT TERM; do
   reset_fixture_state
@@ -579,7 +610,7 @@ for failure_mode in replace helm verify INT TERM; do
   if post_write_output="$(env "${fixture_env[@]}" "${failure_env[@]}" CONFIRM_KUBERAY_UPGRADE=1 "$upgrade" 2>&1)"; then
     fail "upgrade accepted post-write failure: ${failure_mode}"
   fi
-  grep -Fq 'kubectl replace -k' "$fixture_log" || fail "${failure_mode}: CRD write was not recorded before failure"
+  grep -Fq 'kubectl apply --server-side --force-conflicts -k' "$fixture_log" || fail "${failure_mode}: CRD write was not recorded before failure"
   assert_gates_held "post-write ${failure_mode} failure"
   assert_manual_recovery_notice "post-write ${failure_mode} failure" "$post_write_output"
 done
@@ -598,7 +629,7 @@ fi
 reset_fixture_state
 upgrade_output="$(env "${fixture_env[@]}" CONFIRM_KUBERAY_UPGRADE=1 "$upgrade" 2>&1)"
 grep -Fq 'backup path:' <<<"$upgrade_output" || fail 'upgrade did not report its verified backup path'
-replace_line="$(grep -n 'kubectl replace -k' "${fixture_log}" | head -1 | cut -d: -f1)"
+replace_line="$(grep -n 'kubectl apply --server-side --force-conflicts -k' "${fixture_log}" | head -1 | cut -d: -f1)"
 helm_line="$(grep -n 'helm upgrade kuberay' "${fixture_log}" | head -1 | cut -d: -f1)"
 [[ -n "$replace_line" && -n "$helm_line" && "$replace_line" -lt "$helm_line" ]] || fail 'CRDs were not upgraded before the operator'
 grep -Fq -- '--set-string image.repository=harbor.wellspiking.ai/guofeng.su/kuberay-operator' "${fixture_log}" || fail 'operator repository was not explicitly overridden'
@@ -610,6 +641,6 @@ grep -Fq -- '/apis/ray.io/v1' "${fixture_log}" || fail "post-upgrade verificatio
 assert_safe_restore_order 'successful verification'
 while read -r mutation; do
   [[ "$mutation" == *'--context fixture-context'* || "$mutation" == helm\ upgrade*'--kube-context fixture-context'* ]] || fail "mutation omitted explicit context: $mutation"
-done < <(grep -E '^(kubectl (scale|patch|replace)|helm upgrade)' "${fixture_log}")
+done < <(awk '/^kubectl (scale|patch|apply)/ || (/^helm upgrade / && $0 !~ / --help( |$)/)' "${fixture_log}")
 
 echo 'KubeRay 1.6.2 guarded-upgrade contract verified'
