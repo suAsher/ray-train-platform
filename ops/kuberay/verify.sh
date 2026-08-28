@@ -7,7 +7,8 @@ readonly KUBERAY_NAMESPACE="${KUBERAY_NAMESPACE:-kuberay-system}"
 readonly KUBERAY_RELEASE="${KUBERAY_RELEASE:-kuberay-operator}"
 readonly KUBERAY_DEPLOYMENT="${KUBERAY_DEPLOYMENT:-kuberay-operator}"
 readonly KUBERAY_EXPECTED_CHART='kuberay-operator-1.6.2'
-readonly KUBERAY_EXPECTED_IMAGE='quay.io/kuberay/operator:v1.6.2'
+readonly KUBERAY_OPERATOR_REPOSITORY="${KUBERAY_OPERATOR_REPOSITORY:-quay.io/kuberay/operator}"
+readonly KUBERAY_EXPECTED_IMAGE="${KUBERAY_OPERATOR_REPOSITORY}:v1.6.2"
 readonly EXPECTED_KUBERAY_OPERATOR_IMAGE_DIGEST="${EXPECTED_KUBERAY_OPERATOR_IMAGE_DIGEST:-}"
 
 die() {
@@ -44,6 +45,7 @@ confirm_context() {
 validate_name "$KUBERAY_NAMESPACE" KUBERAY_NAMESPACE
 validate_name "$KUBERAY_RELEASE" KUBERAY_RELEASE
 validate_name "$KUBERAY_DEPLOYMENT" KUBERAY_DEPLOYMENT
+[[ "$KUBERAY_OPERATOR_REPOSITORY" =~ ^[a-z0-9][a-z0-9.-]*(:[0-9]+)?/[a-z0-9][a-z0-9._/-]*[a-z0-9]$ && "$KUBERAY_OPERATOR_REPOSITORY" != *..* && "$KUBERAY_OPERATOR_REPOSITORY" != *//* ]] || die 'KUBERAY_OPERATOR_REPOSITORY must be a safe registry repository without a tag or digest'
 [[ "$EXPECTED_KUBERAY_OPERATOR_IMAGE_DIGEST" =~ ^[0-9a-f]{64}$ ]] || die 'EXPECTED_KUBERAY_OPERATOR_IMAGE_DIGEST must be 64 lowercase hexadecimal characters'
 [[ "${CONFIRM_KUBERAY_OPERATOR_IMAGE_DIGEST:-}" == "$EXPECTED_KUBERAY_OPERATOR_IMAGE_DIGEST" ]] || die 'CONFIRM_KUBERAY_OPERATOR_IMAGE_DIGEST must exactly match the expected digest'
 target_context="$(confirm_context)"

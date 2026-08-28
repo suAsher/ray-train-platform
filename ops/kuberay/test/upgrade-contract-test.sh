@@ -114,7 +114,7 @@ for expected in \
   'kubectl rollout status' \
   'readyReplicas' \
   'kuberay-operator-1.6.2' \
-  'quay.io/kuberay/operator:v1.6.2' \
+  'KUBERAY_OPERATOR_REPOSITORY' \
   'EXPECTED_KUBERAY_OPERATOR_IMAGE_DIGEST' \
   '/apis/ray.io/v1' \
   'webhook' \
@@ -198,7 +198,7 @@ case "${command_line}" in
   *' wait --for=condition=Active=true clusterqueue/queue-a '*) [[ "$(cat "${FIXTURE_STATE_DIR}/queue-policy")" == None ]] ;;
   *' wait --for=condition=Available=false deployment/ray-train-backend '*) [[ "$(cat "${FIXTURE_STATE_DIR}/backend-replicas")" == 0 ]] ;;
   *' get deployment '*'.spec.template.spec.containers'*)
-    if [[ -f "${FIXTURE_STATE_DIR}/helm-upgraded" ]]; then printf 'kuberay-operator quay.io/kuberay/operator:%s\n' "${FIXTURE_OPERATOR_IMAGE_TAG:-v1.6.2}"; else printf 'kuberay-operator quay.io/kuberay/operator:v1.3.0\n'; fi
+    if [[ -f "${FIXTURE_STATE_DIR}/helm-upgraded" ]]; then printf 'kuberay-operator %s:%s\n' "${KUBERAY_OPERATOR_REPOSITORY:-quay.io/kuberay/operator}" "${FIXTURE_OPERATOR_IMAGE_TAG:-v1.6.2}"; else printf 'kuberay-operator quay.io/kuberay/operator:v1.3.0\n'; fi
     ;;
   *' get deployment kueue-controller-manager '*)
     if [[ "${FIXTURE_KUEUE_HEALTHY:-1}" == 1 ]]; then printf '2 2 2\n'; else printf '2 1 1\n'; fi
@@ -209,8 +209,8 @@ case "${command_line}" in
   *' get deployment '*) printf 'apiVersion: apps/v1\nkind: Deployment\nspec:\n  template:\n    spec:\n      containers:\n      - image: quay.io/kuberay/operator:v1.3.0\n' ;;
   *' get pods '*'.status.containerStatuses'*)
     if [[ -f "${FIXTURE_STATE_DIR}/helm-upgraded" ]]; then
-      printf 'kuberay-operator-0 kuberay-operator quay.io/kuberay/operator:%s quay.io/kuberay/operator@sha256:%s\n' "${FIXTURE_OPERATOR_IMAGE_TAG:-v1.6.2}" "${FIXTURE_OPERATOR_IMAGE_DIGEST:-${EXPECTED_KUBERAY_OPERATOR_IMAGE_DIGEST:-}}"
-      printf 'kuberay-operator-1 kuberay-operator quay.io/kuberay/operator:%s quay.io/kuberay/operator@sha256:%s\n' "${FIXTURE_OPERATOR_IMAGE_TAG:-v1.6.2}" "${FIXTURE_OPERATOR_IMAGE_DIGEST:-${EXPECTED_KUBERAY_OPERATOR_IMAGE_DIGEST:-}}"
+      printf 'kuberay-operator-0 kuberay-operator %s:%s %s@sha256:%s\n' "${KUBERAY_OPERATOR_REPOSITORY:-quay.io/kuberay/operator}" "${FIXTURE_OPERATOR_IMAGE_TAG:-v1.6.2}" "${KUBERAY_OPERATOR_REPOSITORY:-quay.io/kuberay/operator}" "${FIXTURE_OPERATOR_IMAGE_DIGEST:-${EXPECTED_KUBERAY_OPERATOR_IMAGE_DIGEST:-}}"
+      printf 'kuberay-operator-1 kuberay-operator %s:%s %s@sha256:%s\n' "${KUBERAY_OPERATOR_REPOSITORY:-quay.io/kuberay/operator}" "${FIXTURE_OPERATOR_IMAGE_TAG:-v1.6.2}" "${KUBERAY_OPERATOR_REPOSITORY:-quay.io/kuberay/operator}" "${FIXTURE_OPERATOR_IMAGE_DIGEST:-${EXPECTED_KUBERAY_OPERATOR_IMAGE_DIGEST:-}}"
     else
       printf 'kuberay-operator-0 operator quay.io/kuberay/operator:v1.3.0 quay.io/kuberay/operator@sha256:%064d\n' 0
     fi
@@ -369,6 +369,7 @@ fixture_env=(
   'KUBERAY_RELEASE=kuberay'
   'KUBERAY_DEPLOYMENT=kuberay-operator'
   'FIXTURE_HELM_RELEASE=kuberay'
+  'KUBERAY_OPERATOR_REPOSITORY=harbor.wellspiking.ai/guofeng.su/kuberay-operator'
   "EXPECTED_KUBERAY_CRD_SHA256=${fixture_crd_digest}"
   "CONFIRM_KUBERAY_CRD_SHA256=${fixture_crd_digest}"
   'EXPECTED_KUBERAY_OPERATOR_IMAGE_DIGEST=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
@@ -377,6 +378,9 @@ fixture_env=(
 
 if env "${fixture_env[@]}" CONFIRM_KUBE_CONTEXT=wrong "$preflight" >"${temporary}/out" 2>"${temporary}/err"; then
   fail 'preflight accepted an unconfirmed context'
+fi
+if env "${fixture_env[@]}" CONFIRM_KUBERAY_UPGRADE=1 KUBERAY_OPERATOR_REPOSITORY='harbor.wellspiking.ai/guofeng.su/kuberay-operator;touch /tmp/unsafe' "$upgrade" >/dev/null 2>&1; then
+  fail 'upgrade accepted an unsafe operator repository'
 fi
 grep -Fq 'current context: fixture-context' "${temporary}/err" || fail 'preflight did not record current context'
 
@@ -597,7 +601,7 @@ grep -Fq 'backup path:' <<<"$upgrade_output" || fail 'upgrade did not report its
 replace_line="$(grep -n 'kubectl replace -k' "${fixture_log}" | head -1 | cut -d: -f1)"
 helm_line="$(grep -n 'helm upgrade kuberay' "${fixture_log}" | head -1 | cut -d: -f1)"
 [[ -n "$replace_line" && -n "$helm_line" && "$replace_line" -lt "$helm_line" ]] || fail 'CRDs were not upgraded before the operator'
-grep -Fq -- '--set-string image.repository=quay.io/kuberay/operator' "${fixture_log}" || fail 'operator repository was not explicitly overridden'
+grep -Fq -- '--set-string image.repository=harbor.wellspiking.ai/guofeng.su/kuberay-operator' "${fixture_log}" || fail 'operator repository was not explicitly overridden'
 grep -Fq -- '--set-string image.tag=v1.6.2' "${fixture_log}" || fail 'old Helm values could retain the v1.3 operator image tag'
 grep -Fq -- '--set replicas=2' "${fixture_log}" || fail 'operator replica count was not explicitly overridden'
 grep -Fq -- '/apis/ray.io/v1' "${fixture_log}" || fail "post-upgrade verification did not run: ${upgrade_output}"

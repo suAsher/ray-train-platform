@@ -15,7 +15,7 @@ readonly KUBERAY_CHART_URL="${KUBERAY_CHART_URL:-https://github.com/ray-project/
 readonly KUBERAY_OFFICIAL_CHART_URL='https://github.com/ray-project/kuberay-helm/releases/download/kuberay-operator-1.6.2/kuberay-operator-1.6.2.tgz'
 readonly KUBERAY_CRD_BASE_URL='https://raw.githubusercontent.com/ray-project/kuberay/598eb66/ray-operator/config/crd/bases'
 readonly KUBERAY_CHART_CHECKSUM_FILE="${script_dir}/checksums/kuberay-operator-1.6.2.sha256"
-readonly KUBERAY_OPERATOR_REPOSITORY='quay.io/kuberay/operator'
+readonly KUBERAY_OPERATOR_REPOSITORY="${KUBERAY_OPERATOR_REPOSITORY:-quay.io/kuberay/operator}"
 readonly KUBERAY_OPERATOR_TAG='v1.6.2'
 readonly PLATFORM_NAMESPACE="${PLATFORM_NAMESPACE:-ray-train-platform}"
 readonly PLATFORM_BACKEND_DEPLOYMENT="${PLATFORM_BACKEND_DEPLOYMENT:-ray-train-backend}"
@@ -143,6 +143,7 @@ validate_name "$KUBERAY_RELEASE" KUBERAY_RELEASE
 validate_name "$KUBERAY_DEPLOYMENT" KUBERAY_DEPLOYMENT
 validate_name "$PLATFORM_NAMESPACE" PLATFORM_NAMESPACE
 validate_name "$PLATFORM_BACKEND_DEPLOYMENT" PLATFORM_BACKEND_DEPLOYMENT
+[[ "$KUBERAY_OPERATOR_REPOSITORY" =~ ^[a-z0-9][a-z0-9.-]*(:[0-9]+)?/[a-z0-9][a-z0-9._/-]*[a-z0-9]$ && "$KUBERAY_OPERATOR_REPOSITORY" != *..* && "$KUBERAY_OPERATOR_REPOSITORY" != *//* ]] || die 'KUBERAY_OPERATOR_REPOSITORY must be a safe registry repository without a tag or digest'
 [[ "${CONFIRM_KUBERAY_UPGRADE:-0}" == 1 ]] || die 'set CONFIRM_KUBERAY_UPGRADE=1 after reviewing the maintenance and rollback procedure'
 [[ "$KUBERAY_CHART_URL" == "$KUBERAY_OFFICIAL_CHART_URL" ]] || die 'KUBERAY_CHART_URL must be the fixed official KubeRay 1.6.2 release URL'
 [[ "$EXPECTED_KUBERAY_CRD_SHA256" =~ ^[0-9a-f]{64}$ ]] || die 'EXPECTED_KUBERAY_CRD_SHA256 must be an audited 64-character lowercase SHA-256'
