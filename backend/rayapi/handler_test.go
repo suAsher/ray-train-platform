@@ -271,6 +271,38 @@ func TestRayRoutesReturnRayJobsProtocolAndRuntimeVersion(t *testing.T) {
 	}
 }
 
+func TestRayVersionResponseUsesConfiguredRuntimeAndLegacyFallback(t *testing.T) {
+	principal := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{"Engineer"}, AuthType: auth.AuthTypeOIDC}
+	for _, test := range []struct {
+		name       string
+		configured string
+		want       string
+	}{
+		{name: "configured", configured: domain.RayVersionProduction, want: domain.RayVersionProduction},
+		{name: "blank falls back", configured: "  ", want: domain.RayVersionLegacy},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &rayTestRepository{}
+			submission := api.NewSubmissionService(repository, api.SubmissionServiceOptions{DataSpaces: repository, DataSpacesEnabled: true})
+			handler, err := NewHandler(repository, &rayTestStore{}, submission, Options{SpoolDir: t.TempDir(), RayVersion: test.configured})
+			if err != nil {
+				t.Fatalf("new handler: %v", err)
+			}
+			router := gin.New()
+			router.Use(func(c *gin.Context) { c.Set("ray-platform-principal", principal) })
+			handler.RegisterRoutes(router.Group("/ray"))
+			response := rayRequest(router, http.MethodGet, "/ray/api/version", "")
+			var version map[string]string
+			if err := json.Unmarshal(response.Body.Bytes(), &version); err != nil {
+				t.Fatal(err)
+			}
+			if version["ray_version"] != test.want {
+				t.Fatalf("ray_version=%q want %q", version["ray_version"], test.want)
+			}
+		})
+	}
+}
+
 func TestPersonalSourceArtifactRootUsesPersistedStorageKeyBinding(t *testing.T) {
 	repository := &rayTestRepository{bindings: []domain.DataMountBinding{{
 		ID: "personal-oidc-user", TenantID: "local", UserID: "oidc-subject-123",
