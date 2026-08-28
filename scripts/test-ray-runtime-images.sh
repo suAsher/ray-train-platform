@@ -147,14 +147,13 @@ assert_contracts() {
   require_literal helm/ray-train-platform/values.yaml 'managedEnabled: false'
   require_literal helm/ray-train-platform/values.yaml 'canaryEnabled: false'
   require_literal helm/ray-train-platform/values.yaml 'productionVersion: "2.56.1"'
+  require_literal helm/ray-train-platform/values.yaml 'canaryTenants: []'
   require_literal helm/ray-train-platform/values.yaml 'supportedEngines: ["ray-ddp"]'
   require_literal helm/ray-train-platform/values.yaml 'supportedEngines: ["ray-train"]'
-  require_literal helm/ray-train-platform/values.yaml 'Dormant until Task 15'
-  require_literal helm/ray-train-platform/values-prod.yaml.example 'Dormant until Task 15'
-  if grep -Rqs '\.Values\.rayTrain' "${root_dir}/helm/ray-train-platform/templates"; then
-    echo 'dormant Task 8 rayTrain values are unexpectedly wired before Task 15' >&2
-    exit 1
-  fi
+  require_literal helm/ray-train-platform/templates/backend-deployment.yaml 'RAY_TRAIN_MANAGED_ENABLED'
+  require_literal helm/ray-train-platform/templates/backend-deployment.yaml 'RAY_TRAIN_CANARY_ENABLED'
+  require_literal helm/ray-train-platform/templates/backend-deployment.yaml 'RAY_TRAIN_CANARY_TENANTS'
+  require_literal helm/ray-train-platform/templates/backend-deployment.yaml 'join "," .Values.rayTrain.canaryTenants'
 
   require_literal scripts/test-delivery-render.sh 'test-ray-runtime-images.sh" --contract-only'
   require_literal .github/workflows/ci.yml 'bash scripts/test-ray-runtime-images.sh --contract-only'

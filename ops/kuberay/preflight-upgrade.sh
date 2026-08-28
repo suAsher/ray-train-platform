@@ -6,6 +6,7 @@ readonly KUBERAY_NAMESPACE="${KUBERAY_NAMESPACE:-kuberay-system}"
 readonly KUBERAY_RELEASE="${KUBERAY_RELEASE:-kuberay-operator}"
 readonly KUEUE_NAMESPACE="${KUEUE_NAMESPACE:-kueue-system}"
 readonly KUEUE_DEPLOYMENT="${KUEUE_DEPLOYMENT:-kueue-controller-manager}"
+readonly PREFLIGHT_EXPECT_QUEUES_HELD="${PREFLIGHT_EXPECT_QUEUES_HELD:-0}"
 
 die() {
   echo "KubeRay preflight failed: $*" >&2
@@ -35,7 +36,7 @@ confirm_context() {
 
 require_api_access() {
   local context="$1" resource allowed
-  for resource in rayjobs.ray.io rayclusters.ray.io rayservices.ray.io; do
+  for resource in rayjobs.ray.io rayclusters.ray.io rayservices.ray.io workloads.kueue.x-k8s.io; do
     allowed="$(kubectl auth can-i list "$resource" --all-namespaces --context "$context")" || die "cannot check API access for $resource"
     [[ "$allowed" == yes ]] || die "API access denied for $resource"
   done
@@ -54,15 +55,28 @@ require_two_ready_replicas() {
   [[ "$desired" == 2 && "$ready" == 2 && "$available" == 2 ]] || die "${description} operator replicas are not ready: desired=${desired:-0} ready=${ready:-0} available=${available:-0}"
 }
 
-require_healthy_clusterqueues() {
-  local context="$1" rows name active found=false
-  rows="$(kubectl get clusterqueues.kueue.x-k8s.io --all-namespaces --context "$context" -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.conditions[?(@.type=="Active")].status}{"\n"}{end}')" || die 'cannot list Kueue ClusterQueues'
-  while read -r name active; do
+require_clusterqueue_gate_state() {
+  local context="$1" rows name active stop_policy found=false
+  rows="$(kubectl get clusterqueues.kueue.x-k8s.io --all-namespaces --context "$context" -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.conditions[?(@.type=="Active")].status}{" "}{.spec.stopPolicy}{"\n"}{end}')" || die 'cannot list Kueue ClusterQueues'
+  while read -r name active stop_policy; do
     [[ -n "$name" ]] || continue
     found=true
-    [[ "$active" == True ]] || die "ClusterQueue is not Active: ${name} status=${active:-<missing>}"
+    if [[ "$PREFLIGHT_EXPECT_QUEUES_HELD" == 1 ]]; then
+      [[ "$stop_policy" == Hold && "$active" == False ]] || die "ClusterQueue maintenance gate is not effective: ${name} active=${active:-<missing>} stopPolicy=${stop_policy:-<missing>}"
+    else
+      [[ "$active" == True && "$stop_policy" != Hold && "$stop_policy" != HoldAndDrain ]] || die "ClusterQueue is not Active: ${name} status=${active:-<missing>} stopPolicy=${stop_policy:-<missing>}"
+    fi
   done <<<"$rows"
   [[ "$found" == true ]] || die 'no Kueue ClusterQueue is configured'
+}
+
+require_no_active_kueue_workloads() {
+  local context="$1" rows namespace name finished
+  rows="$(kubectl get workloads.kueue.x-k8s.io --all-namespaces --context "$context" -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{" "}{.status.conditions[?(@.type=="Finished")].status}{"\n"}{end}')" || die 'cannot list Kueue Workloads'
+  while read -r namespace name finished; do
+    [[ -n "$namespace" ]] || continue
+    [[ "$finished" == True ]] || die "non-terminal Kueue Workload exists: ${namespace}/${name} Finished=${finished:-<missing>}"
+  done <<<"$rows"
 }
 
 require_no_nonterminal_rayjobs() {
@@ -99,6 +113,7 @@ validate_name "$KUBERAY_NAMESPACE" KUBERAY_NAMESPACE
 validate_name "$KUBERAY_RELEASE" KUBERAY_RELEASE
 validate_name "$KUEUE_NAMESPACE" KUEUE_NAMESPACE
 validate_name "$KUEUE_DEPLOYMENT" KUEUE_DEPLOYMENT
+[[ "$PREFLIGHT_EXPECT_QUEUES_HELD" == 0 || "$PREFLIGHT_EXPECT_QUEUES_HELD" == 1 ]] || die 'PREFLIGHT_EXPECT_QUEUES_HELD must be 0 or 1'
 target_context="$(confirm_context)"
 require_api_access "$target_context"
 
@@ -111,9 +126,10 @@ done
 
 require_two_ready_replicas "$target_context" "$KUBERAY_NAMESPACE" "$KUBERAY_RELEASE" KubeRay
 require_two_ready_replicas "$target_context" "$KUEUE_NAMESPACE" "$KUEUE_DEPLOYMENT" Kueue
-require_healthy_clusterqueues "$target_context"
+require_clusterqueue_gate_state "$target_context"
 require_no_nonterminal_rayjobs "$target_context"
 require_no_active_clusters "$target_context" 'ray.io/dev-workspace=true' 'debug workspace'
 require_no_active_clusters "$target_context" '' RayCluster
+require_no_active_kueue_workloads "$target_context"
 
 echo "KubeRay upgrade preflight passed for context ${target_context}" >&2
