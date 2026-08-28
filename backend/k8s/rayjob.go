@@ -97,13 +97,25 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	if err := job.Spec.Validate(); err != nil {
 		return nil, fmt.Errorf("validate job spec: %w", err)
 	}
+	if err := job.Spec.Managed.ValidateDataMode(job.Spec.DataMode); err != nil {
+		return nil, fmt.Errorf("validate data mode: %w", err)
+	}
 	if err := domain.ValidatePinnedImage(options.SourceMaterializerImage); err != nil {
 		return nil, fmt.Errorf("source materializer image: %w", err)
 	}
 	if err := options.LocalCache.Validate(); err != nil {
 		return nil, fmt.Errorf("local cache: %w", err)
 	}
-	localCache, err := options.LocalCache.resolve(job.Spec.Cache)
+	cacheRequest := job.Spec.Cache
+	if job.Spec.DataMode == domain.DataModeRayData {
+		if cacheRequest.Preload != "" {
+			return nil, fmt.Errorf("ray-data mode does not support cache preload")
+		}
+		if cacheRequest.Mode == "" || cacheRequest.Mode == domain.CacheModeOff {
+			cacheRequest = domain.CacheRequest{Mode: domain.CacheModeRuntime, Size: options.LocalCache.DefaultSize}
+		}
+	}
+	localCache, err := options.LocalCache.resolve(cacheRequest)
 	if err != nil {
 		return nil, fmt.Errorf("local cache: %w", err)
 	}
@@ -307,8 +319,17 @@ func trainingEntrypoint(spec domain.JobSpec) []string {
 		"--checkpoint-every-epochs", strconv.Itoa(spec.Managed.Checkpoint.EveryEpochs),
 		"--checkpoint-keep-latest", strconv.Itoa(spec.Managed.Checkpoint.KeepLatest),
 		"--checkpoint-keep-best", strconv.Itoa(spec.Managed.Checkpoint.KeepBest),
-		"--",
 	}
+	if spec.DataMode != "" {
+		launcher = append(launcher, "--data-mode", string(spec.DataMode))
+	}
+	if spec.DataMode == domain.DataModeRayData {
+		launcher = append(launcher,
+			"--dataset-format", string(spec.Managed.RayData.Format()),
+			"--dataset-uri", spec.Managed.RayData.URI(),
+		)
+	}
+	launcher = append(launcher, "--")
 	return append(launcher, command...)
 }
 
@@ -442,10 +463,16 @@ func configureRayCache(rayStartParams map[string]any, cache LocalCacheOptions) {
 	rayStartParams["temp-dir"] = path.Join(cache.MountPathData1, "ray")
 }
 
-func rayObjectSpillingConfig(directory string) string {
+func rayObjectSpillingConfig(directories ...string) string {
+	directoryPath := any("")
+	if len(directories) == 1 {
+		directoryPath = directories[0]
+	} else {
+		directoryPath = append([]string(nil), directories...)
+	}
 	config, _ := json.Marshal(map[string]any{
 		"type":   "filesystem",
-		"params": map[string]string{"directory_path": directory},
+		"params": map[string]any{"directory_path": directoryPath},
 	})
 	return string(config)
 }
@@ -647,17 +674,22 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 		if !head {
 			cachePaths += ":" + options.LocalCache.MountPathData2
 		}
+		spillDirectories := []string{path.Join(options.LocalCache.MountPathData1, "ray-spill", "objects")}
+		if !head && jobSpec.DataMode == domain.DataModeRayData {
+			spillDirectories = append(spillDirectories, path.Join(options.LocalCache.MountPathData2, "ray-spill", "objects"))
+		}
 		env = append(
 			env,
 			map[string]any{"name": "PLATFORM_CACHE_PATH", "value": options.LocalCache.MountPathData1},
 			map[string]any{"name": "PLATFORM_CACHE_PATHS", "value": cachePaths},
 			map[string]any{
 				"name":  "RAY_object_spilling_config",
-				"value": rayObjectSpillingConfig(path.Join(options.LocalCache.MountPathData1, "ray-spill", "objects")),
+				"value": rayObjectSpillingConfig(spillDirectories...),
 			},
 		)
 	}
-	preloadInput := mountData && !head && options.LocalCache.runtime && jobSpec.Cache.Preload == domain.CachePreloadInput
+	preloadMode := jobSpec.DataMode == "" || jobSpec.DataMode == domain.DataModeCache
+	preloadInput := mountData && !head && options.LocalCache.runtime && preloadMode && jobSpec.Cache.Preload == domain.CachePreloadInput
 	if preloadInput {
 		sourcePath := environmentValue(env, "PLATFORM_DATASET_PATH")
 		env = setEnvironmentValue(env, "PLATFORM_DATASET_SOURCE_PATH", sourcePath)

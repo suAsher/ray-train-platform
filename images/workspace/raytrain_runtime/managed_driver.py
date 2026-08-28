@@ -39,6 +39,8 @@ class DriverConfig:
     job_id: str
     parent_job_id: str
     storage_path: str
+    data_mode: str = "mount"
+    dataset: Any | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -69,6 +71,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--job-id", default="")
     parser.add_argument("--parent-job-id", default="")
     parser.add_argument("--storage-path", default="")
+    parser.add_argument(
+        "--data-mode", choices=("mount", "cache", "ray-data"), default="mount"
+    )
+    parser.add_argument("--dataset-format", default="")
+    parser.add_argument("--dataset-uri", default="")
     return parser
 
 
@@ -157,6 +164,14 @@ def parse_driver_config(
     if any(character in best_metric for character in ("\n", "\r", "\x00")):
         raise ValueError("best metric must not contain control characters")
 
+    dataset = None
+    if options.data_mode == "ray-data":
+        from .ray_data import DatasetConfig
+
+        dataset = DatasetConfig(format=options.dataset_format, uri=options.dataset_uri)
+    elif options.dataset_format or options.dataset_uri:
+        raise ValueError("dataset format and URI require ray-data mode")
+
     return DriverConfig(
         entrypoint=entrypoint,
         nodes=options.nodes,
@@ -171,6 +186,8 @@ def parse_driver_config(
         job_id=job_id,
         parent_job_id=parent_job_id,
         storage_path=_storage_path(options.storage_path, job_id, environment),
+        data_mode=options.data_mode,
+        dataset=dataset,
     )
 
 
@@ -185,6 +202,12 @@ def _load_ray_components() -> _RayComponents:
         FailureConfig=FailureConfig,
         CheckpointConfig=CheckpointConfig,
     )
+
+
+def _load_ray_data_dataset(config: Any) -> Any:
+    from .ray_data import build_dataset
+
+    return build_dataset(config)
 
 
 @contextlib.contextmanager
@@ -288,16 +311,16 @@ def build_trainer(config: DriverConfig, *, ray_components: Any | None = None) ->
         "parent_job_id": config.parent_job_id,
         "storage_path": storage_path,
     }
-    return ray_api.TorchTrainer(
-        train_loop_per_worker=_train_loop,
-        train_loop_config=loop_config,
-        scaling_config=ray_api.ScalingConfig(
+    trainer_options = {
+        "train_loop_per_worker": _train_loop,
+        "train_loop_config": loop_config,
+        "scaling_config": ray_api.ScalingConfig(
             num_workers=workers,
             use_gpu=True,
             resources_per_worker={"CPU": cpus_per_worker},
             placement_strategy="PACK",
         ),
-        run_config=ray_api.RunConfig(
+        "run_config": ray_api.RunConfig(
             name=config.job_id,
             storage_path=storage_path,
             failure_config=ray_api.FailureConfig(max_failures=config.max_failures),
@@ -305,7 +328,14 @@ def build_trainer(config: DriverConfig, *, ray_components: Any | None = None) ->
                 num_to_keep=ray_copy_limit or None,
             ),
         ),
-    )
+    }
+    if config.data_mode == "ray-data":
+        if config.dataset is None:
+            raise ValueError("ray-data mode requires a dataset config")
+        trainer_options["datasets"] = {
+            "train": _load_ray_data_dataset(config.dataset)
+        }
+    return ray_api.TorchTrainer(**trainer_options)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -60,5 +62,94 @@ func TestManagedTrainingPolicyRejectsValuesOutsideBounds(t *testing.T) {
 				t.Fatalf("expected error containing %q, got %v", test.wantErr, err)
 			}
 		})
+	}
+}
+
+func TestRayDataDatasetConfigValidatesStableMountedPaths(t *testing.T) {
+	config, err := NewRayDataDatasetConfig(RayDataFormatImages, "shards/train")
+	if err != nil {
+		t.Fatalf("new Ray Data config: %v", err)
+	}
+	if config.Format() != RayDataFormatImages || config.URI() != "/mnt/data/input/shards/train" {
+		t.Fatalf("unexpected immutable config: format=%q uri=%q", config.Format(), config.URI())
+	}
+
+	want := config
+	if _, err := NewRayDataDatasetConfig(RayDataFormatParquet, "tables/train.parquet"); err != nil {
+		t.Fatalf("registered Parquet dataset was rejected: %v", err)
+	}
+	if !reflect.DeepEqual(config, want) {
+		t.Fatal("constructing another config mutated the first config")
+	}
+}
+
+func TestRayDataDatasetConfigRejectsUnsupportedOrUnsafeInputs(t *testing.T) {
+	tests := []struct {
+		name   string
+		format RayDataFormat
+		path   string
+	}{
+		{name: "unsupported format", format: "pkl", path: "bevfusion/train.pkl"},
+		{name: "absolute path", format: RayDataFormatParquet, path: "/mnt/storage/public/train.parquet"},
+		{name: "traversal", format: RayDataFormatImages, path: "images/../private"},
+		{name: "storage URI", format: RayDataFormatParquet, path: "tos://bucket/train.parquet"},
+		{name: "raw credentials", format: RayDataFormatImages, path: "user:secret@host/images"},
+		{name: "control character", format: RayDataFormatImages, path: "images\nsecret"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := NewRayDataDatasetConfig(test.format, test.path); err == nil {
+				t.Fatalf("unsafe Ray Data config was accepted: format=%q path=%q", test.format, test.path)
+			}
+		})
+	}
+}
+
+func TestManagedPolicyRequiresRayDataConfigOnlyInRayDataMode(t *testing.T) {
+	config, err := NewRayDataDatasetConfig(RayDataFormatImages, "images/train")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := ManagedTrainingPolicy{RayData: config}
+	if err := policy.ValidateDataMode(DataModeRayData); err != nil {
+		t.Fatalf("valid Ray Data policy was rejected: %v", err)
+	}
+	if err := (ManagedTrainingPolicy{}).ValidateDataMode(DataModeRayData); err == nil {
+		t.Fatal("ray-data mode accepted a missing dataset config")
+	}
+	if err := policy.ValidateDataMode(DataModeMount); err == nil {
+		t.Fatal("mount mode accepted a Ray Data config")
+	}
+}
+
+func TestRayDataDatasetConfigJSONRoundTripRevalidatesTheStableURI(t *testing.T) {
+	config, err := NewRayDataDatasetConfig(RayDataFormatParquet, "tables/train.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(ManagedTrainingPolicy{RayData: config})
+	if err != nil {
+		t.Fatalf("marshal Ray Data policy: %v", err)
+	}
+	if !strings.Contains(string(payload), `"rayData":{"format":"parquet","uri":"/mnt/data/input/tables/train.parquet"}`) {
+		t.Fatalf("unexpected Ray Data policy JSON: %s", payload)
+	}
+
+	var decoded ManagedTrainingPolicy
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal Ray Data policy: %v", err)
+	}
+	if decoded.RayData != config {
+		t.Fatalf("Ray Data policy changed across JSON: got %#v want %#v", decoded.RayData, config)
+	}
+
+	unsafe := [][]byte{
+		[]byte(`{"rayData":{"format":"parquet","uri":"tos://access:secret@bucket/train.parquet"}}`),
+		[]byte(`{"rayData":{"format":"parquet","uri":"/mnt/data/input/train.parquet","accessKey":"raw-credential"}}`),
+	}
+	for _, payload := range unsafe {
+		if err := json.Unmarshal(payload, &decoded); err == nil {
+			t.Fatalf("JSON decoding accepted raw object-store credentials: %s", payload)
+		}
 	}
 }
