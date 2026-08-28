@@ -16,7 +16,7 @@ readonly submission_flows=(portal spk-rayjob native-ray)
 origin_for_flow() {
   case "$1" in
     portal) printf 'portal\n' ;;
-    spk-rayjob) printf 'api\n' ;;
+    spk-rayjob) printf 'ray-cli\n' ;;
     native-ray) printf 'ray-cli\n' ;;
     *) e2e_die "unknown flow: $1" ;;
   esac
@@ -38,6 +38,8 @@ main() {
   require_live_configuration
   [[ -f "${PORTAL_SESSION_CONFIG:-}" ]] || e2e_die 'PORTAL_SESSION_CONFIG is required; Portal cannot be emulated with a PAT'
   [[ -n "${PORTAL_SOURCE_SNAPSHOT_ID:-}" ]] || e2e_die "Portal ${PORTAL_JOBS_ENDPOINT} submission requires PORTAL_SOURCE_SNAPSHOT_ID"
+  command -v docker >/dev/null || e2e_die 'docker is required for the native Ray acceptance flow'
+  verify_interactive_portal_session
   ledger_init
   while IFS=$'\t' read -r topology workers gpus mode; do
     for flow in "${submission_flows[@]}"; do

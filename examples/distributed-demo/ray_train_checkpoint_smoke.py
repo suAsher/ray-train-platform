@@ -13,12 +13,14 @@ import json
 import math
 import os
 import pathlib
+import stat
 import tempfile
 from typing import Any, Dict, Mapping, Optional
 
 
 MANIFEST_NAME = "manifest.json"
 STATE_NAME = "state.json"
+RESULT_NAME = "ray-train-checkpoint-smoke-result.json"
 MAX_CHECKPOINT_BYTES = 1024 * 1024
 
 
@@ -134,12 +136,74 @@ def write_checkpoint_atomic(
 
 
 def _read_bounded(path: pathlib.Path) -> bytes:
-    if path.is_symlink() or not path.is_file():
-        raise ValueError("checkpoint file is missing or unsafe")
-    payload = path.read_bytes()
+    descriptor = -1
+    try:
+        before = os.lstat(path)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError("checkpoint file is missing or unsafe")
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(path, flags)
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_dev != before.st_dev
+            or opened.st_ino != before.st_ino
+        ):
+            raise ValueError("checkpoint file changed or is unsafe")
+        chunks = []
+        remaining = MAX_CHECKPOINT_BYTES + 1
+        while remaining > 0:
+            chunk = os.read(descriptor, min(64 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+        if len(payload) > MAX_CHECKPOINT_BYTES:
+            raise ValueError("checkpoint file is too large")
+        after = os.fstat(descriptor)
+        if after.st_dev != opened.st_dev or after.st_ino != opened.st_ino:
+            raise ValueError("checkpoint file changed while being read")
+        return payload
+    except ValueError:
+        raise
+    except OSError as exc:
+        raise ValueError("checkpoint file is missing or unsafe") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def write_resume_result_atomic(
+    output_root: pathlib.Path,
+    *,
+    parent_step: Optional[int],
+    first_step: int,
+    resumed: bool,
+) -> Dict[str, Any]:
+    root = _real_checkpoint_root(pathlib.Path(output_root), create=True)
+    if isinstance(first_step, bool) or not isinstance(first_step, int) or first_step < 0:
+        raise ValueError("first resumed step must be a non-negative integer")
+    if parent_step is not None and (
+        isinstance(parent_step, bool)
+        or not isinstance(parent_step, int)
+        or parent_step < 0
+    ):
+        raise ValueError("parent checkpoint step must be a non-negative integer")
+    if resumed != (parent_step is not None and first_step == parent_step + 1):
+        raise ValueError("resume result does not prove the next checkpoint step")
+    result = {
+        "firstStep": first_step,
+        "parentStep": parent_step,
+        "resumed": resumed,
+    }
+    payload = _encoded_json(result)
     if len(payload) > MAX_CHECKPOINT_BYTES:
-        raise ValueError("checkpoint file is too large")
-    return payload
+        raise ValueError("resume result is too large")
+    _atomic_write(root / RESULT_NAME, payload)
+    return json.loads(json.dumps(result))
 
 
 def load_complete_checkpoint(checkpoint_root: pathlib.Path) -> CheckpointState:
@@ -188,13 +252,22 @@ def main() -> None:
     context = train.get_context()
     rank = int(context.get_world_rank())
     world_size = int(context.get_world_size())
-    start = resume_start_step(_resume_state())
+    resume_state = _resume_state()
+    start = resume_start_step(resume_state)
     steps = int(os.environ.get("RAY_TRAIN_SMOKE_STEPS", "3"))
     if steps < 1 or steps > 100:
         raise ValueError("RAY_TRAIN_SMOKE_STEPS must be between 1 and 100")
     checkpoint_root = pathlib.Path(
         os.environ.get("RAYTRAIN_CHECKPOINT_OUTPUT_PATH", tempfile.gettempdir())
     )
+    output_path = os.environ.get("PLATFORM_OUTPUT_PATH")
+    if rank == 0 and output_path:
+        write_resume_result_atomic(
+            pathlib.Path(output_path),
+            parent_step=None if resume_state is None else resume_state.step,
+            first_step=start,
+            resumed=resume_state is not None,
+        )
     for step in range(start, start + steps):
         metrics = {
             "step": float(step),

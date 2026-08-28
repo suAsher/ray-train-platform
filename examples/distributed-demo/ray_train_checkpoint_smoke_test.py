@@ -6,6 +6,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parent
@@ -62,6 +63,25 @@ class RayTrainCheckpointSmokeTest(unittest.TestCase):
         )
         self.assertEqual(checkpoint_smoke.resume_start_step(state), 9)
 
+    def test_resume_result_atomically_records_consumed_parent_step(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = pathlib.Path(temporary) / "output"
+            result = checkpoint_smoke.write_resume_result_atomic(
+                output,
+                parent_step=7,
+                first_step=8,
+                resumed=True,
+            )
+            self.assertEqual(
+                result,
+                {"firstStep": 8, "parentStep": 7, "resumed": True},
+            )
+            published = json.loads(
+                (output / checkpoint_smoke.RESULT_NAME).read_text(encoding="utf-8")
+            )
+            self.assertEqual(published, result)
+            self.assertFalse(any(output.parent.glob("*.tmp")))
+
     def test_checkpoint_root_must_not_be_a_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = pathlib.Path(temporary)
@@ -73,6 +93,46 @@ class RayTrainCheckpointSmokeTest(unittest.TestCase):
                 checkpoint_smoke.write_checkpoint_atomic(
                     linked, step=1, world_size=1, rank=0, metrics={}
                 )
+
+    def test_checkpoint_files_must_not_be_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary) / "checkpoint"
+            checkpoint_smoke.write_checkpoint_atomic(
+                root, step=2, world_size=1, rank=0, metrics={"loss": 0.5}
+            )
+            outside = pathlib.Path(temporary) / "outside.json"
+            outside.write_text("{}", encoding="utf-8")
+            state = root / checkpoint_smoke.STATE_NAME
+            state.unlink()
+            state.symlink_to(outside)
+            with self.assertRaisesRegex(ValueError, "unsafe"):
+                checkpoint_smoke.load_complete_checkpoint(root)
+
+    def test_checkpoint_read_is_bounded_without_path_read_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary) / "checkpoint"
+            checkpoint_smoke.write_checkpoint_atomic(
+                root, step=4, world_size=1, rank=0, metrics={"loss": 0.2}
+            )
+            with mock.patch.object(
+                pathlib.Path,
+                "read_bytes",
+                side_effect=AssertionError("unbounded Path.read_bytes is forbidden"),
+            ):
+                self.assertEqual(
+                    checkpoint_smoke.load_complete_checkpoint(root).step, 4
+                )
+
+    def test_oversized_checkpoint_file_is_rejected_after_bounded_read(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary) / "checkpoint"
+            checkpoint_smoke.write_checkpoint_atomic(
+                root, step=5, world_size=1, rank=0, metrics={"loss": 0.1}
+            )
+            manifest = root / checkpoint_smoke.MANIFEST_NAME
+            manifest.write_bytes(b"x" * (checkpoint_smoke.MAX_CHECKPOINT_BYTES + 1))
+            with self.assertRaisesRegex(ValueError, "too large"):
+                checkpoint_smoke.load_complete_checkpoint(root)
 
     def test_checkpoint_identity_and_metrics_are_not_coerced(self) -> None:
         invalid = (

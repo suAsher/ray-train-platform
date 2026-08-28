@@ -21,47 +21,53 @@ require_fault_identity() {
 }
 
 require_fault_live_configuration() {
-  e2e_live_enabled || e2e_die 'destructive faults require RUN_RAY_TRAIN_E2E=1 and DRY_RUN=0'
-  validate_tenant_namespace "${TENANT_NAMESPACE:-}"
-  [[ "${API_URL:-}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?/?$ ]] || e2e_die 'API_URL must be a concrete HTTPS origin'
-  [[ -f "${SPK_RAYJOB_CONFIG:-}" && ! -L "${SPK_RAYJOB_CONFIG:-}" ]] || e2e_die 'SPK_RAYJOB_CONFIG must be a regular file'
-  command -v kubectl >/dev/null || e2e_die 'kubectl is required'
-  command -v jq >/dev/null || e2e_die 'jq is required'
-  command -v perl >/dev/null || e2e_die 'perl is required for bounded subprocesses'
+  e2e_live_enabled || { e2e_die 'destructive faults require RUN_RAY_TRAIN_E2E=1 and DRY_RUN=0'; return 1; }
+  validate_tenant_namespace "${TENANT_NAMESPACE:-}" || return 1
+  [[ "${API_URL:-}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?/?$ ]] || { e2e_die 'API_URL must be a concrete HTTPS origin'; return 1; }
+  [[ -f "${SPK_RAYJOB_CONFIG:-}" && ! -L "${SPK_RAYJOB_CONFIG:-}" ]] || { e2e_die 'SPK_RAYJOB_CONFIG must be a regular file'; return 1; }
+  command -v kubectl >/dev/null || { e2e_die 'kubectl is required'; return 1; }
+  command -v spk-rayjob >/dev/null || { e2e_die 'spk-rayjob is required'; return 1; }
+  command -v jq >/dev/null || { e2e_die 'jq is required'; return 1; }
+  command -v perl >/dev/null || { e2e_die 'perl is required for bounded subprocesses'; return 1; }
+  _secure_config_token "$SPK_RAYJOB_CONFIG" >/dev/null || return 1
 }
 
 exact_job_selector() {
   require_fault_identity
-  printf '%s=%s\n' "$ACCEPTANCE_LABEL_KEY" "$ACCEPTANCE_JOB_ID"
+  [[ "${ACCEPTANCE_TENANT_ID:-}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || { e2e_die 'ACCEPTANCE_TENANT_ID must match the persisted tenant'; return 1; }
+  printf '%s=%s,%s=%s\n' "$ACCEPTANCE_LABEL_KEY" "$ACCEPTANCE_JOB_ID" "$ACCEPTANCE_TENANT_LABEL_KEY" "$ACCEPTANCE_TENANT_ID"
 }
 
 verify_acceptance_job() {
-  local detail namespace engine name
+  local detail namespace engine name tenant_id
   detail="$(job_status_json "$ACCEPTANCE_JOB_ID")"
   namespace="$(jq -er '(.data // .).kubernetesNamespace' <<<"$detail")"
   engine="$(jq -er '(.data // .).spec.trainingEngine' <<<"$detail")"
   name="$(jq -er '(.data // .).spec.name' <<<"$detail")"
-  [[ "$namespace" == "$TENANT_NAMESPACE" ]] || e2e_die 'acceptance job is outside the explicit tenant namespace'
-  [[ "$engine" == ray-train ]] || e2e_die 'destructive faults require a managed Ray Train acceptance job'
-  [[ "$name" == "${ACCEPTANCE_PREFIX}-"* ]] || e2e_die 'acceptance job name does not match ACCEPTANCE_PREFIX'
+  tenant_id="$(jq -er '(.data // .).tenantId' <<<"$detail")"
+  [[ "$namespace" == "$TENANT_NAMESPACE" ]] || { e2e_die 'acceptance job is outside the explicit tenant namespace'; return 1; }
+  [[ "$engine" == ray-train ]] || { e2e_die 'destructive faults require a managed Ray Train acceptance job'; return 1; }
+  [[ "$name" == "${ACCEPTANCE_PREFIX}-"* ]] || { e2e_die 'acceptance job name does not match ACCEPTANCE_PREFIX'; return 1; }
+  [[ "$tenant_id" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || { e2e_die 'acceptance job tenant identity is unsafe'; return 1; }
+  ACCEPTANCE_TENANT_ID="$tenant_id"
 }
 
 select_one_pod() {
   local node_type_selector="$1" selector response count pod
   selector="$(exact_job_selector),${node_type_selector}"
-  [[ "$selector" != *'*'* && "$selector" != *','','* ]] || e2e_die 'refusing an empty or broad selector'
+  [[ "$selector" != *'*'* && "$selector" != *','','* ]] || { e2e_die 'refusing an empty or broad selector'; return 1; }
   response="$(kube get pods --namespace "$TENANT_NAMESPACE" --selector "$selector" -o json)"
   count="$(jq '.items | length' <<<"$response")"
-  [[ "$count" -gt 0 ]] || e2e_die "no exact acceptance pod matched $selector"
+  [[ "$count" -gt 0 ]] || { e2e_die "no exact acceptance pod matched $selector"; return 1; }
   pod="$(jq -er '.items | sort_by(.metadata.name) | first | .metadata.name' <<<"$response")"
-  [[ "$pod" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ ]] || e2e_die 'selected pod name is unsafe'
+  [[ "$pod" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ ]] || { e2e_die 'selected pod name is unsafe'; return 1; }
   printf '%s\n' "$pod"
 }
 
 verify_pod_ownership() {
-  local pod="$1" owner
-  owner="$(kube get pod "$pod" --namespace "$TENANT_NAMESPACE" -o "jsonpath={.metadata.labels.ray\\.io/job-id}")"
-  [[ "$owner" == "$ACCEPTANCE_JOB_ID" ]] || e2e_die "pod $pod lost its exact acceptance ownership label"
+  local pod="$1" identity
+  identity="$(kube get pod "$pod" --namespace "$TENANT_NAMESPACE" -o 'jsonpath={.metadata.labels.platform_job_id}{"\t"}{.metadata.labels.platform_tenant_id}')"
+  [[ "$identity" == "$ACCEPTANCE_JOB_ID"$'\t'"$ACCEPTANCE_TENANT_ID" ]] || e2e_die "pod $pod lost its exact acceptance ownership labels"
 }
 
 worker_process_exit() {
@@ -91,6 +97,7 @@ metadata:
   name: ${name}
   labels:
     ${ACCEPTANCE_LABEL_KEY}: ${ACCEPTANCE_JOB_ID}
+    ${ACCEPTANCE_TENANT_LABEL_KEY}: ${ACCEPTANCE_TENANT_ID}
 spec:
   action: error
   mode: all
@@ -100,9 +107,10 @@ spec:
     namespaces: ["${TENANT_NAMESPACE}"]
     labelSelectors:
       ${ACCEPTANCE_LABEL_KEY}: ${ACCEPTANCE_JOB_ID}
+      ${ACCEPTANCE_TENANT_LABEL_KEY}: ${ACCEPTANCE_TENANT_ID}
 EOF
   sleep "$duration"
-  owner="$(kube get dnschaos.chaos-mesh.org "$name" --namespace "$TENANT_NAMESPACE" -o 'jsonpath={.metadata.labels.ray\.io/job-id}')"
+  owner="$(kube get dnschaos.chaos-mesh.org "$name" --namespace "$TENANT_NAMESPACE" -o 'jsonpath={.metadata.labels.platform_job_id}')"
   [[ "$owner" == "$ACCEPTANCE_JOB_ID" ]] || e2e_die 'DNS fault ownership changed before recovery'
   kube delete dnschaos.chaos-mesh.org "$name" --namespace "$TENANT_NAMESPACE" --wait=true
 }
@@ -119,6 +127,7 @@ metadata:
   name: ${name}
   labels:
     ${ACCEPTANCE_LABEL_KEY}: ${ACCEPTANCE_JOB_ID}
+    ${ACCEPTANCE_TENANT_LABEL_KEY}: ${ACCEPTANCE_TENANT_ID}
 spec:
   action: loss
   mode: all
@@ -132,9 +141,10 @@ spec:
     namespaces: ["${TENANT_NAMESPACE}"]
     labelSelectors:
       ${ACCEPTANCE_LABEL_KEY}: ${ACCEPTANCE_JOB_ID}
+      ${ACCEPTANCE_TENANT_LABEL_KEY}: ${ACCEPTANCE_TENANT_ID}
 EOF
   sleep "$duration"
-  owner="$(kube get networkchaos.chaos-mesh.org "$name" --namespace "$TENANT_NAMESPACE" -o 'jsonpath={.metadata.labels.ray\.io/job-id}')"
+  owner="$(kube get networkchaos.chaos-mesh.org "$name" --namespace "$TENANT_NAMESPACE" -o 'jsonpath={.metadata.labels.platform_job_id}')"
   [[ "$owner" == "$ACCEPTANCE_JOB_ID" ]] || e2e_die 'TOS fault ownership changed before recovery'
   kube delete networkchaos.chaos-mesh.org "$name" --namespace "$TENANT_NAMESPACE" --wait=true
 }
@@ -145,7 +155,7 @@ gpu_node_restart() {
   verify_pod_ownership "$pod"
   node="$(kube get pod "$pod" --namespace "$TENANT_NAMESPACE" -o jsonpath='{.spec.nodeName}')"
   [[ "$node" == "$TARGET_GPU_NODE" ]] || e2e_die 'selected acceptance worker is not on the explicitly confirmed GPU node'
-  unrelated="$(kube get pods --all-namespaces --field-selector "spec.nodeName=${node}" -o json | jq --arg job "$ACCEPTANCE_JOB_ID" '[.items[] | select(.metadata.labels["ray.io/job-id"] != $job) | select(any((([.spec.containers[]?, .spec.initContainers[]?, .spec.ephemeralContainers[]?][] | [(.resources.requests // {}), (.resources.limits // {})] | add | to_entries[]?)); .key == "nvidia.com/gpu" and (.value | tonumber? // 0) > 0))] | length')"
+  unrelated="$(kube get pods --all-namespaces --field-selector "spec.nodeName=${node}" -o json | jq --arg job "$ACCEPTANCE_JOB_ID" '[.items[] | select(.metadata.labels.platform_job_id != $job) | select(any((([.spec.containers[]?, .spec.initContainers[]?, .spec.ephemeralContainers[]?][] | [(.resources.requests // {}), (.resources.limits // {})] | add | to_entries[]?)); .key == "nvidia.com/gpu" and (.value | tonumber? // 0) > 0))] | length')"
   [[ "$unrelated" -eq 0 ]] || e2e_die 'refusing node restart: unrelated GPU workload is present'
   restart_bin="${GPU_NODE_RESTART_BIN:-}"
   [[ "$restart_bin" == /* && -x "$restart_bin" && ! -L "$restart_bin" ]] || e2e_die 'GPU_NODE_RESTART_BIN must be an explicit trusted executable path'
