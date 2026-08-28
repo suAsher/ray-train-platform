@@ -81,7 +81,7 @@ ray job submit \
   -- python train.py --config configs/train.yaml
 ```
 
-平台网关必须从认证主体和持久化元数据建立任务，客户端不能指定租户 namespace、RayCluster 或 Kubernetes selector。原生入口的产品来源语义是 `submissionOrigin=ray-native`；若目标环境仍返回其他来源值，应视为版本漂移并停止验收，而不是在文档中假定已经升级。
+平台网关必须从认证主体和持久化元数据建立任务，客户端不能指定租户 namespace、RayCluster 或 Kubernetes selector。Portal 持久化为 `submissionOrigin=portal`；`spk-rayjob` 与原生 Ray API 均持久化为 `submissionOrigin=ray-cli`。后两种入口通过接入方式与原生提交的 `externalSubmissionId` 区分，不能通过伪造新的 origin 值区分。
 
 ## MMCV/MMEngine 适配
 

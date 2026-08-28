@@ -254,7 +254,7 @@ spk-rayjob submit --dir . --engine ray-ddp --image "$IMAGE" \
   --input-path bevfusion/fz-3dod-v1/platform-validation/annotations/fz-0429-platform-smoke-128 \
   --output-path acceptance/manual-spk --watch
 
-# 2. 官方 Ray 2.56.1 working-dir 入口（来源语义为 ray-native）
+# 2. 官方 Ray 2.56.1 working-dir 入口（与 spk-rayjob 同为 ray-cli；另核对 externalSubmissionId）
 # 按 RAY_TRAIN_MANAGED_GUIDE.md 的原生 Ray API 完整示例提交，
 # 并在持久化任务详情核对 engine、rayVersion、origin 与拓扑。
 

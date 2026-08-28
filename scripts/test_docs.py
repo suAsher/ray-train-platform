@@ -153,7 +153,7 @@ class DocumentationContractTest(unittest.TestCase):
             "修改 Python 或配置代码无需重建镜像",
             "submissionOrigin=portal",
             "submissionOrigin=ray-cli",
-            "submissionOrigin=ray-native",
+            "externalSubmissionId",
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, guide)
@@ -181,14 +181,21 @@ class DocumentationContractTest(unittest.TestCase):
                 self.assertNotIn(stale, guide)
 
     def test_submission_origin_semantics_are_consistent(self) -> None:
-        submit = (ROOT / "docs" / "SUBMIT_GUIDE.md").read_text(encoding="utf-8")
-        bevfusion = (ROOT / "docs" / "BEVFUSION_END_TO_END_GUIDE.md").read_text(
-            encoding="utf-8"
+        documents = tuple(
+            path.read_text(encoding="utf-8")
+            for path in (
+                RAY_TRAIN_MANAGED_GUIDE,
+                ROOT / "docs" / "SUBMIT_GUIDE.md",
+                ROOT / "docs" / "BEVFUSION_END_TO_END_GUIDE.md",
+            )
         )
-        for document in (submit, bevfusion):
+        for document in documents:
             self.assertIn("submissionOrigin=portal", document)
             self.assertIn("submissionOrigin=ray-cli", document)
-            self.assertIn("submissionOrigin=ray-native", document)
+            self.assertNotIn("submissionOrigin=ray-native", document)
+        guide = documents[0]
+        self.assertIn("`spk-rayjob` 与原生 Ray API 均持久化为", guide)
+        self.assertIn("externalSubmissionId", guide)
 
     def test_managed_operations_are_fail_closed_and_preserve_running_jobs(
         self,

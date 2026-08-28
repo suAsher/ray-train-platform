@@ -353,7 +353,7 @@ ray job submit \
 
 ### 4.3 如何在平台找到原生任务
 
-原生 Ray CLI 返回的是 `submission-id`；平台同时创建自己的任务 ID。原生入口的产品来源语义为 `submissionOrigin=ray-native`，并记录 `externalSubmissionId=my-native-2x8-001`；`spk-rayjob` 才使用 `submissionOrigin=ray-cli`，Portal 使用交互会话并记录 `submissionOrigin=portal`。提交人始终是认证主体。若目标环境返回不同来源值，应停止验收并检查版本，而不是按客户端输入覆盖。之后可在网页看，也可用：
+原生 Ray CLI 返回的是 `submission-id`；平台同时创建自己的任务 ID。Portal 使用交互会话并记录 `submissionOrigin=portal`；`spk-rayjob` 与原生 Ray API 都记录 `submissionOrigin=ray-cli`。原生入口还记录 `externalSubmissionId=my-native-2x8-001`，平台通过该字段和实际接入方式区分两条 CLI/API 路径，不接受客户端伪造 origin。提交人始终是认证主体。之后可在网页看，也可用：
 
 ```bash
 ray job status my-native-2x8-001

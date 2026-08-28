@@ -1456,7 +1456,7 @@ ray job submit \
   log_config.interval=20 evaluation.interval=1
 ```
 
-原生入口没有 `spk-rayjob` 的逻辑目录参数，因此这里明确使用平台稳定容器路径；它们不是节点路径，也不会暴露对象存储凭据。令牌只保存在当前 shell 环境，不能写入仓库或脚本。任务会同时出现在 Web Portal，提交人是该 PAT 对应的平台用户，来源语义为 `submissionOrigin=ray-native`；同一流程经 `spk-rayjob` 提交时来源为 `submissionOrigin=ray-cli`，Portal 交互会话来源为 `submissionOrigin=portal`。
+原生入口没有 `spk-rayjob` 的逻辑目录参数，因此这里明确使用平台稳定容器路径；它们不是节点路径，也不会暴露对象存储凭据。令牌只保存在当前 shell 环境，不能写入仓库或脚本。任务会同时出现在 Web Portal，提交人是该 PAT 对应的平台用户。原生 Ray API 与 `spk-rayjob` 都持久化为 `submissionOrigin=ray-cli`，原生入口另以 `externalSubmissionId` 和接入方式识别；Portal 交互会话持久化为 `submissionOrigin=portal`。
 
 任务提交完成后清理当前 shell 中的认证头：
 

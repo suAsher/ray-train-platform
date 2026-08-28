@@ -48,5 +48,5 @@
 - 数据同步到 IDC、团队共享目录或公共目录仍需审批与审计，不会开放网页下载或向用户暴露 AK/SK；
 - PostgreSQL 高可用、跨团队身份模型和自动清理属于高风险变更，必须单独设计和迁移；
 - 任一期上线都不得修改运行中 RayJob/RayCluster 的 Pod 模板，不得重启 kubelet、containerd、CNI、FSX Agent 或 GPU 驱动。
-- 双引擎长期并行：`ray-ddp` 保持既有任务与镜像兼容，`ray-train` 只通过显式租户 canary 开放；Portal、`spk-rayjob` 和原生 Ray API 必须分别持久化正确来源与不可变运行时信息。
+- 双引擎长期并行：`ray-ddp` 保持既有任务与镜像兼容，`ray-train` 只通过显式租户 canary 开放；Portal 持久化来源 `portal`，`spk-rayjob` 与原生 Ray API 共享来源 `ray-cli`，并用 `externalSubmissionId`/接入方式区分，同时保留不可变运行时信息。
 - KubeRay Operator 只能在零 RayJob、RayCluster、debug workspace 和活动 Kueue Workload 的维护窗升级；备份、维护门禁、制品摘要、verify 和失败后人工恢复缺一不可。
