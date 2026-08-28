@@ -52,7 +52,7 @@ assert_contracts() {
   require_literal images/train-pytorch/Dockerfile 'AS pytorch-ray-train'
   require_literal images/train-pytorch/Dockerfile 'ARG RAY_VERSION=2.56.1'
   require_literal images/train-pytorch/Dockerfile 'test "${RAY_VERSION}" = "2.56.1"'
-  require_literal images/train-pytorch/Dockerfile 'ray[train,tune]==${RAY_VERSION}'
+  require_literal images/train-pytorch/Dockerfile 'ray[default,train,tune]==${RAY_VERSION}'
   require_literal images/train-pytorch/Dockerfile 'python3 -c'
   require_literal images/train-pytorch/Dockerfile 'python3 -m pip check'
   require_literal images/train-pytorch/Dockerfile 'COPY workspace/raytrain-managed /usr/local/bin/raytrain-managed'
@@ -95,7 +95,8 @@ assert_contracts() {
     'opentelemetry-exporter-otlp-proto-grpc' \
     '"google-api-core==2.34.0"' \
     '"googleapis-common-protos==1.75.2"' \
-    '"opentelemetry-exporter-otlp==1.44.0"'; do
+    '"opentelemetry-exporter-otlp==1.44.0"' \
+    'import opentelemetry.exporter.prometheus'; do
     if ! grep -Fq -- "$dependency_contract" <<<"$base_stage"; then
       echo "Ray 2.56 training stage is missing dependency normalization: ${dependency_contract}" >&2
       exit 1
@@ -108,7 +109,7 @@ assert_contracts() {
   require_literal images/workspace/Dockerfile 'AS workspace-ray256'
   require_literal images/workspace/Dockerfile 'ARG RAY_VERSION=2.56.1'
   require_literal images/workspace/Dockerfile 'test "${RAY_VERSION}" = "2.56.1"'
-  require_literal images/workspace/Dockerfile 'ray[train,tune]==${RAY_VERSION}'
+  require_literal images/workspace/Dockerfile 'ray[default,train,tune]==${RAY_VERSION}'
   require_absent_literal images/workspace/Dockerfile 'raytrain-managed'
   require_absent_literal images/workspace/Dockerfile 'RAY_TRAIN_V2_ENABLED=1'
 
@@ -123,7 +124,8 @@ assert_contracts() {
     'opentelemetry-exporter-otlp-proto-grpc' \
     '"google-api-core==2.34.0"' \
     '"googleapis-common-protos==1.75.2"' \
-    '"opentelemetry-exporter-otlp==1.44.0"'; do
+    '"opentelemetry-exporter-otlp==1.44.0"' \
+    'import opentelemetry.exporter.prometheus'; do
     if ! grep -Fq -- "$dependency_contract" <<<"$workspace_stage"; then
       echo "Ray 2.56 workspace stage is missing dependency normalization: ${dependency_contract}" >&2
       exit 1
@@ -223,7 +225,7 @@ smoke_image() {
   local role="$2"
 
   docker run --rm "$image" python3 -c \
-    "import ray, ray.train, torch; assert ray.__version__ == '${production_ray_version}', ray.__version__; print(ray.__version__, torch.__version__)"
+    "import opentelemetry.exporter.prometheus, ray, ray.train, torch; assert ray.__version__ == '${production_ray_version}', ray.__version__; print(ray.__version__, torch.__version__)"
   docker run --rm "$image" sh -eu -c \
     "ray --version | grep -F '${production_ray_version}'; test -x /usr/local/bin/raytrain-launch"
 

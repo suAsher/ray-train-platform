@@ -15,7 +15,8 @@ grep -Fq 'AS workspace-legacy' "$dockerfile"
 grep -Fq 'AS workspace-ray256' "$dockerfile"
 grep -Fq 'ARG RAY_VERSION=2.56.1' "$dockerfile"
 grep -Fq 'test "${RAY_VERSION}" = "2.56.1"' "$dockerfile"
-grep -Fq 'ray[train,tune]==${RAY_VERSION}' "$dockerfile"
+grep -Fq 'ray[default,train,tune]==${RAY_VERSION}' "$dockerfile"
+grep -Fq 'import opentelemetry.exporter.prometheus' "$dockerfile"
 grep -Fq 'python3 -m pip check' "$dockerfile"
 
 if grep -Fq 'raytrain-managed' "$dockerfile"; then

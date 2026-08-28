@@ -50,11 +50,11 @@ RUN test "${RAY_VERSION}" = "2.56.1" \
       opentelemetry-exporter-otlp \
       opentelemetry-exporter-otlp-proto-grpc \
  && python3 -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
-      "ray[train,tune]==${RAY_VERSION}" \
+      "ray[default,train,tune]==${RAY_VERSION}" \
       "google-api-core==2.34.0" \
       "googleapis-common-protos==1.75.2" \
       "opentelemetry-exporter-otlp==1.44.0" \
- && python3 -c "import ray, ray.train, ray.tune; assert ray.__version__ == '${RAY_VERSION}', ray.__version__" \
+ && python3 -c "import opentelemetry.exporter.prometheus, ray, ray.train, ray.tune; assert ray.__version__ == '${RAY_VERSION}', ray.__version__" \
  && python3 -m pip check
 
 FROM pytorch-ray256-base AS pytorch-ray-ddp
