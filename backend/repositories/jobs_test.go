@@ -1092,6 +1092,28 @@ func TestManagedCleanupFailureUsesBoundedBackoffAndPermanentQuarantine(t *testin
 	}
 }
 
+func TestGetManagedAttemptResourceReturnsExactQuarantinedStatus(t *testing.T) {
+	repo, job := managedRecoveryJob(t, 2)
+	now := time.Now().UTC()
+	want := ManagedAttemptResourceRecord{
+		JobID: job.ID, ClusterAttempt: 2, KubernetesNS: job.KubernetesNS,
+		RayJobName: job.ID + "-a2", RayJobUID: "uid-quarantined",
+		State: string(domain.ManagedAttemptResourceQuarantined), LeaseVersion: 3, ResourceFence: 3,
+		CleanupFailures: 1, CleanupLastError: "unissued fence", NextCheckAt: now.Add(time.Hour),
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := repo.db.Create(&want).Error; err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.GetManagedAttemptResource(context.Background(), job.ID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.State != domain.ManagedAttemptResourceQuarantined || got.RayJobUID != want.RayJobUID || got.ResourceFence != 3 {
+		t.Fatalf("managed attempt status was not returned exactly: %+v", got)
+	}
+}
+
 func TestManagedAttemptIssuedFencesAreAnExactImmutableSet(t *testing.T) {
 	repo, job := managedRecoveryJob(t, 3)
 	now := time.Now().UTC()

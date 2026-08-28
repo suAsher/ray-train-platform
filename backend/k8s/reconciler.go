@@ -39,6 +39,7 @@ type JobStore interface {
 	ListManagedAttemptCleanup(context.Context, int, time.Time) ([]domain.ManagedAttemptResource, error)
 	ListManagedAttemptTombstoneAudit(context.Context, int, time.Time) ([]domain.ManagedAttemptResource, error)
 	RecordManagedAttemptCleanupFailure(context.Context, domain.ManagedAttemptCleanupFailureRequest) error
+	GetManagedAttemptResource(context.Context, string, int) (*domain.ManagedAttemptResource, error)
 	IsManagedAttemptFenceIssued(context.Context, string, int, int64) (bool, error)
 	CompleteManagedAttemptCleanup(context.Context, domain.ManagedAttemptCleanupRequest) (bool, error)
 	BeginManagedRecovery(context.Context, domain.ManagedRecoveryRequest) (*domain.TrainingJob, bool, error)
@@ -304,7 +305,32 @@ func (r *Reconciler) reconcileLoadedJob(ctx context.Context, job *domain.Trainin
 			return err
 		}
 		if !reserved {
-			return r.reconcileCurrentManagedJob(ctx, current)
+			if managedJobSnapshotChanged(*job, *current) {
+				return r.reconcileCurrentManagedJob(ctx, current)
+			}
+			resource, statusErr := r.store.GetManagedAttemptResource(ctx, current.ID, current.ClusterAttempt)
+			if statusErr != nil {
+				return statusErr
+			}
+			if resource == nil {
+				return fmt.Errorf("non-reservable managed attempt returned no ledger status")
+			}
+			if resource.JobID != current.ID || resource.ClusterAttempt != current.ClusterAttempt ||
+				resource.RayJobName != current.RayJobName || resource.KubernetesNS != managedJobNamespace(*current) {
+				return fmt.Errorf("non-reservable managed attempt ledger identity does not match the current job")
+			}
+			switch resource.State {
+			case domain.ManagedAttemptResourceQuarantined:
+				// Durable quarantine + outbox alert intentionally blocks this
+				// attempt without recursively re-entering reservation or exposing
+				// GPU work. Operator remediation is required.
+				return nil
+			case domain.ManagedAttemptResourceRetiring:
+				// Global foreground cleanup owns progress for this state.
+				return nil
+			default:
+				return fmt.Errorf("managed attempt is non-reservable in state %s", resource.State)
+			}
 		}
 		job = current
 		needsAdoption = true

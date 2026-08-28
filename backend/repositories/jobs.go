@@ -798,6 +798,21 @@ func (r *GormRepository) IsManagedAttemptFenceIssued(ctx context.Context, jobID 
 	return count == 1, nil
 }
 
+func (r *GormRepository) GetManagedAttemptResource(ctx context.Context, jobID string, clusterAttempt int) (*domain.ManagedAttemptResource, error) {
+	if strings.TrimSpace(jobID) == "" || clusterAttempt < 1 {
+		return nil, fmt.Errorf("managed attempt job ID and positive attempt are required")
+	}
+	var record ManagedAttemptResourceRecord
+	if err := r.db.WithContext(ctx).Where("job_id = ? AND cluster_attempt = ?", jobID, clusterAttempt).First(&record).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("managed attempt resource not found")
+		}
+		return nil, fmt.Errorf("get managed attempt resource: %w", err)
+	}
+	resource := record.toDomain()
+	return &resource, nil
+}
+
 func managedAttemptFenceIssuedTx(tx *gorm.DB, jobID string, clusterAttempt int, fence int64) (bool, error) {
 	var count int64
 	if err := tx.Model(&ManagedAttemptFenceRecord{}).Where(

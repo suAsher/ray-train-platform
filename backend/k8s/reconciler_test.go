@@ -37,6 +37,8 @@ type memoryJobStore struct {
 	managedResources     map[int]domain.ManagedAttemptResource
 	issuedFences         map[int]map[int64]bool
 	quarantineEvents     []domain.ManagedAttemptCleanupFailureRequest
+	reservationCalls     int
+	reservationCallLimit int
 }
 
 func (s *memoryJobStore) IsManagedAttemptFenceIssued(_ context.Context, _ string, attempt int, fence int64) (bool, error) {
@@ -157,6 +159,10 @@ func (s *memoryJobStore) ClearManagedRecoveryRetiringIdentity(_ context.Context,
 }
 
 func (s *memoryJobStore) ReserveManagedAttemptIdentity(_ context.Context, request domain.ManagedAttemptReservationRequest) (*domain.TrainingJob, bool, error) {
+	s.reservationCalls++
+	if s.reservationCallLimit > 0 && s.reservationCalls > s.reservationCallLimit {
+		return nil, false, errors.New("managed reservation recursion exceeded test bound")
+	}
 	s.reservationRequests = append(s.reservationRequests, request)
 	if s.job.Spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain ||
 		s.job.DesiredState != domain.DesiredActive || s.job.ClusterAttempt != request.ExpectedClusterAttempt ||
@@ -173,8 +179,19 @@ func (s *memoryJobStore) ReserveManagedAttemptIdentity(_ context.Context, reques
 			State: domain.ManagedAttemptResourceReserved,
 		}
 	}
+	resource, exists := s.managedResources[request.ExpectedClusterAttempt]
 	copy := *s.job
-	return &copy, s.job.RayJobName == request.RayJobName, nil
+	return &copy, s.job.RayJobName == request.RayJobName && exists && resource.RayJobUID == "" &&
+		(resource.State == domain.ManagedAttemptResourceReserved || resource.State == domain.ManagedAttemptResourceCreating), nil
+}
+
+func (s *memoryJobStore) GetManagedAttemptResource(_ context.Context, _ string, attempt int) (*domain.ManagedAttemptResource, error) {
+	resource, ok := s.managedResources[attempt]
+	if !ok {
+		return nil, errors.New("managed attempt resource not found")
+	}
+	copy := resource
+	return &copy, nil
 }
 
 func (s *memoryJobStore) AdoptManagedAttemptIdentity(_ context.Context, request domain.ManagedAttemptAdoptionRequest) (*domain.TrainingJob, bool, error) {

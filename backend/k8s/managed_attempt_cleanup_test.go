@@ -208,6 +208,54 @@ func TestSupersededManagedCreationQuarantinesUnissuedLowerFenceWithoutDeleting(t
 	}
 }
 
+func TestQuarantinedManagedAttemptReconciliationIsBoundedAndDoesNotBlockUnrelatedJob(t *testing.T) {
+	job := managedEmptyAttempt(2, domain.StateRecovering)
+	job.RayJobName = job.ID + "-a2"
+	name, uid := job.RayJobName, "uid-quarantined"
+	quarantine := domain.ManagedAttemptCleanupFailureRequest{
+		JobID: job.ID, ClusterAttempt: 2, RayJobName: name, RayJobUID: uid,
+		Message: "unissued creation fence 2", Permanent: true, ObservedAt: time.Now().UTC(),
+	}
+	store := &memoryJobStore{
+		job: &job, reservationCallLimit: 4,
+		managedResources: map[int]domain.ManagedAttemptResource{2: {
+			JobID: job.ID, ClusterAttempt: 2, KubernetesNS: job.KubernetesNS,
+			RayJobName: name, RayJobUID: uid, State: domain.ManagedAttemptResourceQuarantined,
+			LeaseVersion: 3, ResourceFence: 3,
+		}},
+		issuedFences:     map[int]map[int64]bool{2: {1: true, 3: true}},
+		quarantineEvents: []domain.ManagedAttemptCleanupFailureRequest{quarantine},
+	}
+	dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
+	createManagedAttemptResourceWithFence(t, dynamicClient, job, 2, 2, name, uid)
+	actionsBefore := len(dynamicClient.Actions())
+	reconciler := NewReconciler(store, NewClientFromInterfaces(dynamicClient, nil), testRenderOptions())
+	if err := reconciler.ReconcileJob(context.Background(), job.ID); err != nil {
+		t.Fatalf("quarantined reconciliation did not return boundedly: %v", err)
+	}
+	if store.reservationCalls != 1 {
+		t.Fatalf("quarantined reconciliation re-entered reservation %d times", store.reservationCalls)
+	}
+	if ledger := store.managedResources[2]; ledger.State != domain.ManagedAttemptResourceQuarantined {
+		t.Fatalf("quarantined ledger changed state: %+v", ledger)
+	}
+	if len(store.quarantineEvents) != 1 {
+		t.Fatalf("durable quarantine alert was lost or duplicated: %+v", store.quarantineEvents)
+	}
+	if len(dynamicClient.Actions()) != actionsBefore {
+		t.Fatalf("quarantined reconciliation touched Kubernetes: before=%d after=%d actions=%+v", actionsBefore, len(dynamicClient.Actions()), dynamicClient.Actions())
+	}
+
+	unrelated := managedEmptyAttempt(1, domain.StateSubmitted)
+	store.job = &unrelated
+	if err := reconciler.ReconcileJob(context.Background(), unrelated.ID); err != nil {
+		t.Fatalf("quarantined job blocked unrelated managed reconciliation: %v", err)
+	}
+	if _, err := reconciler.client.GetRayJob(context.Background(), unrelated.KubernetesNS, unrelated.ID); err != nil {
+		t.Fatalf("unrelated managed job did not progress: %v", err)
+	}
+}
+
 func TestPendingForegroundDeletesBeyondFirstBatchProgressAcrossPasses(t *testing.T) {
 	job := managedEmptyAttempt(30, domain.StateCanceled)
 	store := &memoryJobStore{job: &job, managedResources: map[int]domain.ManagedAttemptResource{}, issuedFences: map[int]map[int64]bool{}}
