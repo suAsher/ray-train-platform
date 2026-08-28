@@ -200,14 +200,18 @@ if TENANT_NAMESPACE=tenant-contract CLEANUP_LEDGER="$artifact_failure_ledger" AR
     mkdir -p "$ACCEPTANCE_SOURCE_DIR"
     ledger_init
     bounded_command() {
-      local artifact_id="" previous=""
+      local request_id="" previous=""
       for argument in "$@"; do
-        if [[ "$previous" == --source-artifact-id ]]; then artifact_id="$argument"; fi
+        if [[ "$previous" == --source-request-id || "$previous" == --request-id ]]; then request_id="$argument"; fi
         previous="$argument"
       done
-      [[ "$artifact_id" =~ ^artifact-[0-9a-f]{24}$ ]] || return 61
-      grep -Fq $'"'"'sourceartifact\t'"'"'"$artifact_id"$'"'"'\ttenant-contract\tacc-contract-1234'"'"' "$CLEANUP_LEDGER" || return 62
-      printf "%s\n" "$artifact_id" >"$ARTIFACT_CLI_LOG"
+      [[ "$request_id" =~ ^source-request-[0-9a-f]{24}$ ]] || return 61
+      grep -Fq $'"'"'sourceartifact-request\t'"'"'"$request_id"$'"'"'\ttenant-contract\tacc-contract-1234'"'"' "$CLEANUP_LEDGER" || return 62
+      if [[ " $* " == *" source-artifact resolve "* ]]; then
+        printf "{\"artifactId\":\"artifact-aaaaaaaaaaaaaaaaaaaaaaaa\"}\n"
+        return 0
+      fi
+      printf "%s\n" "$request_id" >"$ARTIFACT_CLI_LOG"
       return 28
     }
     reconcile_submission_intent() { return 1; }
@@ -221,8 +225,9 @@ if TENANT_NAMESPACE=tenant-contract CLEANUP_LEDGER="$artifact_failure_ledger" AR
 else
   fail 'spk artifact upload failure was not pre-ledgered with a stable exact identity'
 fi
-artifact_id_recorded="$(cat "$artifact_cli_log")"
-grep -Fq $'sourceartifact\t'"$artifact_id_recorded"$'\ttenant-contract\tacc-contract-1234' "$artifact_failure_ledger" || fail 'stable source artifact was absent from the cleanup ledger'
+request_id_recorded="$(cat "$artifact_cli_log")"
+grep -Fq $'sourceartifact-request\t'"$request_id_recorded"$'\ttenant-contract\tacc-contract-1234' "$artifact_failure_ledger" || fail 'stable source request was absent from the cleanup ledger'
+grep -Fq $'sourceartifact\tartifact-aaaaaaaaaaaaaaaaaaaaaaaa\ttenant-contract\tacc-contract-1234' "$artifact_failure_ledger" || fail 'upload failure did not recover and record the server artifact ID'
 if grep -Fq 'foreign-artifact' "$artifact_failure_ledger"; then
   fail 'artifact reconciliation polluted the ledger with a non-acceptance artifact'
 fi

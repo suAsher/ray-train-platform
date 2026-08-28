@@ -52,6 +52,8 @@ func RunWithInput(ctx context.Context, arguments []string, stdin io.Reader, stdo
 		return runPackage(arguments[1:], stdout)
 	case "submit":
 		return runSubmit(ctx, arguments[1:], stdout, stderr, getenv)
+	case "source-artifact":
+		return runSourceArtifact(ctx, arguments[1:], stdout, stderr, getenv)
 	case "jobs":
 		return runJobs(ctx, arguments[1:], stdout, stderr, getenv)
 	case "status":
@@ -346,7 +348,7 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	var format outputFormatFlag
 	bindOutputFormatFlag(set, &format)
 	directory := set.String("dir", ".", "source directory")
-	sourceArtifactID := set.String("source-artifact-id", "", "stable source artifact identity for recoverable automation")
+	sourceRequestID := set.String("source-request-id", "", "owner-scoped source request identity for recoverable automation")
 	name := set.String("name", "", "job DNS name")
 	image := set.String("image", "", "catalogued training image with an explicit tag or sha256 digest")
 	entrypoint := set.String("entrypoint", "", "shell command to run")
@@ -373,8 +375,8 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	if err := set.Parse(arguments); err != nil || set.NArg() != 0 {
 		return errors.New("invalid submit arguments; run spk-rayjob help")
 	}
-	if *sourceArtifactID != "" && !stableSourceArtifactID.MatchString(*sourceArtifactID) {
-		return errors.New("--source-artifact-id must match artifact- followed by 24 lowercase hexadecimal characters")
+	if *sourceRequestID != "" && !stableSourceRequestID.MatchString(*sourceRequestID) {
+		return errors.New("--source-request-id must match source-request- followed by 24 lowercase hexadecimal characters")
 	}
 	// Committed defaults make "edit code, submit" a single command. A flag the
 	// user actually typed still wins over the file.
@@ -510,7 +512,7 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 		}
 		defer os.Remove(archive.Path)
 	}
-	job, err := client.submitArchiveWithArtifactID(ctx, archive, spec, *sourceArtifactID)
+	job, err := client.submitArchiveWithRequestID(ctx, archive, spec, *sourceRequestID)
 	if err != nil {
 		return err
 	}
@@ -525,6 +527,38 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 		return nil
 	}
 	return watchJob(ctx, client, job.ID, stdout, format.json)
+}
+
+func runSourceArtifact(ctx context.Context, arguments []string, stdout, stderr io.Writer, getenv func(string) string) error {
+	if len(arguments) == 0 || arguments[0] != "resolve" {
+		return errors.New("source-artifact requires the resolve subcommand")
+	}
+	set := flag.NewFlagSet("source-artifact resolve", flag.ContinueOnError)
+	set.SetOutput(io.Discard)
+	var connection connectionFlags
+	bindConnectionFlags(set, &connection)
+	var format outputFormatFlag
+	bindOutputFormatFlag(set, &format)
+	requestID := set.String("request-id", "", "owner-scoped source request identity")
+	if err := set.Parse(arguments[1:]); err != nil || set.NArg() != 0 {
+		return errors.New("invalid source-artifact resolve arguments")
+	}
+	if !stableSourceRequestID.MatchString(*requestID) {
+		return errors.New("--request-id must match source-request- followed by 24 lowercase hexadecimal characters")
+	}
+	client, err := newCommandClient(connection, getenv, stderr)
+	if err != nil {
+		return err
+	}
+	artifact, err := client.ResolveArtifactRequest(ctx, *requestID)
+	if err != nil {
+		return err
+	}
+	if format.json {
+		return writeJSON(stdout, artifact)
+	}
+	_, err = fmt.Fprintln(stdout, artifact.ArtifactID)
+	return err
 }
 
 func validateLocalSubmit(value project, previousJobID string, checkpointProvided bool) error {

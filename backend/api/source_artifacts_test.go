@@ -21,6 +21,7 @@ const apiArtifactDigest = "0123456789abcdef0123456789abcdef0123456789abcdef01234
 
 type fakeSourceArtifactRepository struct {
 	artifact     *domain.SourceArtifact
+	requests     map[string]*domain.SourceArtifact
 	identity     int
 	markedReady  int
 	identityErr  error
@@ -28,6 +29,40 @@ type fakeSourceArtifactRepository struct {
 	getErr       error
 	markReadyErr error
 	reopenErr    error
+}
+
+func artifactRequestKey(tenant, user, requestID string) string {
+	return tenant + "\x00" + user + "\x00" + requestID
+}
+
+func (f *fakeSourceArtifactRepository) CreateSourceArtifactForRequestWithLimits(_ context.Context, artifact *domain.SourceArtifact, requestID string, _ repositories.SourceArtifactLimits) (*domain.SourceArtifact, error) {
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
+	if f.requests == nil {
+		f.requests = make(map[string]*domain.SourceArtifact)
+	}
+	key := artifactRequestKey(artifact.TenantID, artifact.UserID, requestID)
+	if existing := f.requests[key]; existing != nil {
+		if existing.SHA256 != artifact.SHA256 || existing.SizeBytes != artifact.SizeBytes {
+			return nil, repositories.ErrSourceArtifactConflict
+		}
+		copy := *existing
+		return &copy, nil
+	}
+	copy := *artifact
+	f.requests[key] = &copy
+	f.artifact = &copy
+	return &copy, nil
+}
+
+func (f *fakeSourceArtifactRepository) GetSourceArtifactByClientRequestID(_ context.Context, tenant, user, requestID string) (*domain.SourceArtifact, error) {
+	artifact := f.requests[artifactRequestKey(tenant, user, requestID)]
+	if artifact == nil {
+		return nil, repositories.ErrSourceArtifactNotFound
+	}
+	copy := *artifact
+	return &copy, nil
 }
 
 func (f *fakeSourceArtifactRepository) EnsureIdentity(context.Context, auth.Principal) error {
@@ -200,9 +235,9 @@ func TestCreateSourceArtifactReturnsPresignWithoutCachingOrCredentialLeak(t *tes
 	}
 }
 
-func TestCreateSourceArtifactHonorsValidatedCallerArtifactID(t *testing.T) {
+func TestCreateSourceArtifactUsesOwnerScopedClientRequestAndServerID(t *testing.T) {
 	now := time.Date(2026, 8, 28, 3, 0, 0, 0, time.UTC)
-	const requestedID = "artifact-0123456789abcdef01234567"
+	const requestID = "source-request-0123456789abcdef01234567"
 	repo := &fakeSourceArtifactRepository{}
 	store := &fakeArtifactStore{presign: objectstore.PresignedPut{
 		URL: "https://objects.example/upload", ExpiresAt: now.Add(SourceArtifactUploadTTL), ContentLength: 100,
@@ -212,14 +247,18 @@ func TestCreateSourceArtifactHonorsValidatedCallerArtifactID(t *testing.T) {
 		artifactTestRouter(t, repo, store, principal, now),
 		http.MethodPost,
 		"/api/v1/source-artifacts",
-		`{"artifactId":"`+requestedID+`","sha256":"`+apiArtifactDigest+`","sizeBytes":100}`,
+		`{"artifactId":"artifact-attacker-supplied","clientRequestId":"`+requestID+`","sha256":"`+apiArtifactDigest+`","sizeBytes":100}`,
 	)
-	if response.Code != http.StatusCreated || repo.artifact == nil || repo.artifact.ID != requestedID || !strings.Contains(response.Body.String(), `"artifactId":"`+requestedID+`"`) {
-		t.Fatalf("caller artifact identity was not preserved: status=%d artifact=%+v body=%s", response.Code, repo.artifact, response.Body.String())
+	if response.Code != http.StatusBadRequest || repo.artifact != nil {
+		t.Fatalf("caller artifact identity was not rejected: status=%d artifact=%+v body=%s", response.Code, repo.artifact, response.Body.String())
+	}
+	retry := performArtifactRequest(artifactTestRouter(t, repo, store, principal, now.Add(time.Minute)), http.MethodPost, "/api/v1/source-artifacts", `{"clientRequestId":"`+requestID+`","sha256":"`+apiArtifactDigest+`","sizeBytes":100}`)
+	if retry.Code != http.StatusCreated || !strings.Contains(retry.Body.String(), `"artifactId":"artifact-fixed"`) {
+		t.Fatalf("request retry did not return the same artifact: status=%d body=%s", retry.Code, retry.Body.String())
 	}
 }
 
-func TestCreateSourceArtifactRejectsUnsafeCallerArtifactIDBeforePersistence(t *testing.T) {
+func TestCreateSourceArtifactRejectsUnsafeClientRequestIDBeforePersistence(t *testing.T) {
 	now := time.Date(2026, 8, 28, 3, 0, 0, 0, time.UTC)
 	repo := &fakeSourceArtifactRepository{}
 	principal := auth.Principal{Subject: "user", TenantID: "tenant", Roles: []string{"Engineer"}, AuthType: auth.AuthTypeOIDC}
@@ -227,10 +266,32 @@ func TestCreateSourceArtifactRejectsUnsafeCallerArtifactIDBeforePersistence(t *t
 		artifactTestRouter(t, repo, &fakeArtifactStore{}, principal, now),
 		http.MethodPost,
 		"/api/v1/source-artifacts",
-		`{"artifactId":"artifact-../../foreign","sha256":"`+apiArtifactDigest+`","sizeBytes":100}`,
+		`{"clientRequestId":"source-request-../../foreign","sha256":"`+apiArtifactDigest+`","sizeBytes":100}`,
 	)
 	if response.Code != http.StatusBadRequest || repo.identity != 0 || repo.artifact != nil {
 		t.Fatalf("unsafe artifact identity reached persistence: status=%d identity=%d artifact=%+v", response.Code, repo.identity, repo.artifact)
+	}
+}
+
+func TestResolveSourceArtifactRequestDoesNotExposeAnotherOwner(t *testing.T) {
+	now := time.Date(2026, 8, 28, 3, 0, 0, 0, time.UTC)
+	const requestID = "source-request-0123456789abcdef01234567"
+	repo := &fakeSourceArtifactRepository{requests: map[string]*domain.SourceArtifact{}}
+	artifact, err := domain.NewSourceArtifact(domain.SourceArtifactInput{ID: "artifact-private", TenantID: "tenant-a", UserID: "user-a", SHA256: apiArtifactDigest, SizeBytes: 100}, now.Add(SourceArtifactUploadTTL), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.requests[artifactRequestKey("tenant-a", "user-a", requestID)] = &artifact
+	owner := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{"Engineer"}, AuthType: auth.AuthTypeOIDC}
+	foreign := auth.Principal{Subject: "user-b", TenantID: "tenant-b", Roles: []string{"Engineer"}, AuthType: auth.AuthTypeOIDC}
+	ownerResponse := performArtifactRequest(artifactTestRouter(t, repo, &fakeArtifactStore{}, owner, now), http.MethodGet, "/api/v1/source-artifact-requests/"+requestID, "")
+	foreignResponse := performArtifactRequest(artifactTestRouter(t, repo, &fakeArtifactStore{}, foreign, now), http.MethodGet, "/api/v1/source-artifact-requests/"+requestID, "")
+	missingResponse := performArtifactRequest(artifactTestRouter(t, repo, &fakeArtifactStore{}, foreign, now), http.MethodGet, "/api/v1/source-artifact-requests/source-request-aaaaaaaaaaaaaaaaaaaaaaaa", "")
+	if ownerResponse.Code != http.StatusOK || !strings.Contains(ownerResponse.Body.String(), `"artifactId":"artifact-private"`) {
+		t.Fatalf("owner resolve status=%d body=%s", ownerResponse.Code, ownerResponse.Body.String())
+	}
+	if foreignResponse.Code != http.StatusNotFound || missingResponse.Code != http.StatusNotFound || foreignResponse.Body.String() != missingResponse.Body.String() {
+		t.Fatalf("cross-owner existence probe differed: foreign=%d/%s missing=%d/%s", foreignResponse.Code, foreignResponse.Body.String(), missingResponse.Code, missingResponse.Body.String())
 	}
 }
 

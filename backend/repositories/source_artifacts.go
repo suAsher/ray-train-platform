@@ -18,10 +18,10 @@ var (
 
 type SourceArtifactRecord struct {
 	ID               string `gorm:"primaryKey"`
-	TenantID         string `gorm:"uniqueIndex:source_artifacts_tenant_user_sha256_key;index"`
-	UserID           string `gorm:"uniqueIndex:source_artifacts_tenant_user_sha256_key;index"`
+	TenantID         string `gorm:"index"`
+	UserID           string `gorm:"index"`
 	StorageRoot      string `gorm:"column:storage_root"`
-	SHA256           string `gorm:"uniqueIndex:source_artifacts_tenant_user_sha256_key"`
+	SHA256           string `gorm:"index"`
 	SizeBytes        int64
 	ObjectKey        string
 	State            string
@@ -32,6 +32,16 @@ type SourceArtifactRecord struct {
 }
 
 func (SourceArtifactRecord) TableName() string { return "source_artifacts" }
+
+type SourceArtifactRequestRecord struct {
+	TenantID        string `gorm:"primaryKey"`
+	UserID          string `gorm:"primaryKey"`
+	ClientRequestID string `gorm:"primaryKey"`
+	ArtifactID      string `gorm:"index"`
+	CreatedAt       time.Time
+}
+
+func (SourceArtifactRequestRecord) TableName() string { return "source_artifact_requests" }
 
 func (r *GormRepository) CreateOrReuseSourceArtifact(ctx context.Context, artifact *domain.SourceArtifact) (*domain.SourceArtifact, error) {
 	return r.CreateOrReuseSourceArtifactWithLimits(ctx, artifact, DefaultSourceArtifactLimits())
@@ -45,6 +55,22 @@ func (r *GormRepository) GetSourceArtifact(ctx context.Context, tenantID, userID
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get source artifact: %w", err)
+	}
+	return record.toDomain()
+}
+
+func (r *GormRepository) GetSourceArtifactByClientRequestID(ctx context.Context, tenantID, userID, clientRequestID string) (*domain.SourceArtifact, error) {
+	var record SourceArtifactRecord
+	err := r.db.WithContext(ctx).Table("source_artifacts").
+		Select("source_artifacts.*").
+		Joins("JOIN source_artifact_requests ON source_artifact_requests.artifact_id = source_artifacts.id AND source_artifact_requests.tenant_id = source_artifacts.tenant_id AND source_artifact_requests.user_id = source_artifacts.user_id").
+		Where("source_artifact_requests.tenant_id = ? AND source_artifact_requests.user_id = ? AND source_artifact_requests.client_request_id = ?", tenantID, userID, clientRequestID).
+		First(&record).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrSourceArtifactNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get source artifact request: %w", err)
 	}
 	return record.toDomain()
 }

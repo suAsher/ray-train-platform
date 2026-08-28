@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"math"
@@ -33,7 +34,17 @@ func (handler *SourceArtifactHandler) bindCreateSourceArtifactRequest(c *gin.Con
 		return false
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, SourceArtifactJSONBodyLimit)
-	if err := c.ShouldBindJSON(request); err != nil {
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(request); err != nil {
+		if isSourceArtifactBodyTooLarge(err) {
+			handler.writeError(c, http.StatusRequestEntityTooLarge, "REQUEST_BODY_TOO_LARGE", "request body exceeds the allowed size")
+			return false
+		}
+		handler.writeError(c, http.StatusBadRequest, "INVALID_JSON", "request body is invalid")
+		return false
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		if isSourceArtifactBodyTooLarge(err) {
 			handler.writeError(c, http.StatusRequestEntityTooLarge, "REQUEST_BODY_TOO_LARGE", "request body exceeds the allowed size")
 			return false

@@ -25,6 +25,12 @@ func (*mainArtifactRepository) CreateOrReuseSourceArtifact(_ context.Context, ar
 func (*mainArtifactRepository) CreateOrReuseSourceArtifactWithLimits(_ context.Context, artifact *domain.SourceArtifact, _ repositories.SourceArtifactLimits) (*domain.SourceArtifact, error) {
 	return artifact, nil
 }
+func (*mainArtifactRepository) CreateSourceArtifactForRequestWithLimits(_ context.Context, artifact *domain.SourceArtifact, _ string, _ repositories.SourceArtifactLimits) (*domain.SourceArtifact, error) {
+	return artifact, nil
+}
+func (*mainArtifactRepository) GetSourceArtifactByClientRequestID(context.Context, string, string, string) (*domain.SourceArtifact, error) {
+	return nil, repositories.ErrSourceArtifactNotFound
+}
 func (*mainArtifactRepository) GetSourceArtifact(context.Context, string, string, string) (*domain.SourceArtifact, error) {
 	return nil, context.Canceled
 }

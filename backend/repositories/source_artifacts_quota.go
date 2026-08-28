@@ -60,6 +60,7 @@ func (r *GormRepository) CreateOrReuseSourceArtifactWithLimits(ctx context.Conte
 		var existing SourceArtifactRecord
 		err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("tenant_id = ? AND user_id = ? AND sha256 = ?", artifact.TenantID, artifact.UserID, artifact.SHA256).
+			Order("created_at ASC, id ASC").
 			First(&existing).Error
 		if err == nil {
 			converted, reuseErr := reuseSourceArtifactRecord(tx, &existing, artifact)
@@ -73,18 +74,8 @@ func (r *GormRepository) CreateOrReuseSourceArtifactWithLimits(ctx context.Conte
 			return fmt.Errorf("load existing source artifact: %w", err)
 		}
 
-		var usage struct {
-			Pending int64
-			Total   int64
-		}
-		if err := tx.Model(&SourceArtifactRecord{}).
-			Select("COALESCE(SUM(CASE WHEN state = ? THEN 1 ELSE 0 END), 0) AS pending, COALESCE(SUM(size_bytes), 0) AS total", string(domain.SourceArtifactPending)).
-			Where("tenant_id = ? AND user_id = ?", artifact.TenantID, artifact.UserID).
-			Scan(&usage).Error; err != nil {
-			return fmt.Errorf("load source artifact owner usage: %w", err)
-		}
-		if usage.Pending >= int64(limits.MaxPending) || artifact.SizeBytes > limits.QuotaBytes-usage.Total {
-			return ErrSourceArtifactQuotaExceeded
+		if err := enforceSourceArtifactOwnerQuota(tx, artifact, limits); err != nil {
+			return err
 		}
 		if err := tx.Create(&incoming).Error; err != nil {
 			return fmt.Errorf("create source artifact: %w", err)

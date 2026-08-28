@@ -130,7 +130,9 @@ WHERE table_schema = current_schema()
 		"source_artifacts_sha256_check",
 		"source_artifacts_size_check",
 		"source_artifacts_state_check",
-		"source_artifacts_tenant_user_sha256_key",
+		"source_artifact_requests_client_request_id_check",
+		"source_artifact_requests_user_tenant_fk",
+		"source_artifact_requests_artifact_owner_fk",
 		"training_jobs_training_engine_check",
 		"training_jobs_ray_version_check",
 		"training_jobs_engine_ray_version_check",
@@ -389,8 +391,18 @@ VALUES (?, 'tenant-a', 'user-a2', ?, 1, 'user-a2.zip', NOW() + INTERVAL '1 hour'
 	}
 	if err := database.Exec(`
 INSERT INTO source_artifacts(id, tenant_id, user_id, sha256, size_bytes, object_key, upload_expires_at)
-VALUES (?, 'tenant-a', 'user-a1', ?, 1, 'duplicate.zip', NOW() + INTERVAL '1 hour')`, "artifact-duplicate", sha).Error; err == nil {
-		t.Fatal("duplicate digest for the same tenant/user succeeded")
+VALUES (?, 'tenant-a', 'user-a1', ?, 1, 'duplicate.zip', NOW() + INTERVAL '1 hour')`, "artifact-duplicate", sha).Error; err != nil {
+		t.Fatalf("same-owner duplicate digest should be available for request-scoped idempotency: %v", err)
+	}
+	if err := database.Exec(`
+INSERT INTO source_artifact_requests(tenant_id, user_id, client_request_id, artifact_id)
+VALUES ('tenant-a', 'user-a1', 'source-request-0123456789abcdef01234567', 'artifact-duplicate')`).Error; err != nil {
+		t.Fatalf("insert owner-scoped source artifact request: %v", err)
+	}
+	if err := database.Exec(`
+INSERT INTO source_artifact_requests(tenant_id, user_id, client_request_id, artifact_id)
+VALUES ('tenant-b', 'user-b1', 'source-request-0123456789abcdef01234567', 'artifact-a1')`).Error; err == nil {
+		t.Fatal("cross-owner source artifact request mapping succeeded")
 	}
 }
 

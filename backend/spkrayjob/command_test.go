@@ -186,23 +186,24 @@ func TestRunSubmitOmitsQueueAndLetsPlatformResolveIt(t *testing.T) {
 	}
 }
 
-func TestRunSubmitPropagatesCallerSourceArtifactID(t *testing.T) {
+func TestRunSubmitPropagatesCallerSourceRequestID(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "train.py"), []byte("print('train')\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	const artifactID = "artifact-0123456789abcdef01234567"
+	const requestID = "source-request-0123456789abcdef01234567"
+	const artifactID = "artifact-server-generated"
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/api/v1/source-artifacts":
 			var create struct {
-				ArtifactID string `json:"artifactId"`
+				ClientRequestID string `json:"clientRequestId"`
 			}
 			if err := json.NewDecoder(request.Body).Decode(&create); err != nil {
 				t.Fatal(err)
 			}
-			if create.ArtifactID != artifactID {
-				t.Fatalf("artifactID=%q", create.ArtifactID)
+			if create.ClientRequestID != requestID {
+				t.Fatalf("clientRequestID=%q", create.ClientRequestID)
 			}
 			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"artifactId": artifactID, "state": "READY", "uploadRequired": false})
 		case "/api/v1/jobs":
@@ -215,10 +216,32 @@ func TestRunSubmitPropagatesCallerSourceArtifactID(t *testing.T) {
 	err := Run(context.Background(), []string{
 		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root,
 		"--name", "external-submit", "--image", "harbor.example/train@sha256:" + strings.Repeat("a", 64),
-		"--entrypoint", "python train.py", "--source-artifact-id", artifactID,
+		"--entrypoint", "python train.py", "--source-request-id", requestID,
 	}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRunSourceArtifactResolveReturnsServerArtifactID(t *testing.T) {
+	const requestID = "source-request-0123456789abcdef01234567"
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/api/v1/source-artifact-requests/"+requestID {
+			t.Fatalf("unexpected request %s %s", request.Method, request.URL.Path)
+		}
+		writeClientSuccess(t, writer, http.StatusOK, map[string]any{"artifactId": "artifact-server-generated", "state": "PENDING"})
+	}))
+	defer server.Close()
+	var stdout bytes.Buffer
+	err := Run(context.Background(), []string{
+		"source-artifact", "resolve", "--server", server.URL, "--ca-file", writeTestCA(t, server),
+		"--request-id", requestID, "--output", "json",
+	}, &stdout, &bytes.Buffer{}, testEnvironment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), `"artifactId":"artifact-server-generated"`) || strings.Contains(stdout.String(), requestID) {
+		t.Fatalf("unexpected resolve output %q", stdout.String())
 	}
 }
 

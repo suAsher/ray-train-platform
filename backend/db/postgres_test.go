@@ -30,8 +30,30 @@ func TestMigrationVersionsEmbedded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("migrationVersions() error = %v", err)
 	}
-	if want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22}; !reflect.DeepEqual(versions, want) {
+	if want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23}; !reflect.DeepEqual(versions, want) {
 		t.Fatalf("migrationVersions() = %v, want %v", versions, want)
+	}
+}
+
+func TestSourceArtifactRequestMigrationScopesIdempotencyToOwner(t *testing.T) {
+	contents, err := migrationFiles.ReadFile("migrations/0023_source_artifact_requests.up.sql")
+	if err != nil {
+		t.Fatalf("read source artifact request migration: %v", err)
+	}
+	sql := strings.Join(strings.Fields(string(contents)), " ")
+	for _, fragment := range []string{
+		"DROP CONSTRAINT IF EXISTS source_artifacts_tenant_user_sha256_key",
+		"CREATE TABLE IF NOT EXISTS source_artifact_requests",
+		"PRIMARY KEY (tenant_id, user_id, client_request_id)",
+		"FOREIGN KEY (artifact_id, tenant_id, user_id) REFERENCES source_artifacts(id, tenant_id, user_id)",
+		"client_request_id ~ '^source-request-[0-9a-f]{24}$'",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("migration 23 missing %q", fragment)
+		}
+	}
+	if strings.Contains(sql, "UNIQUE (client_request_id)") {
+		t.Fatal("client request identity is globally unique instead of owner scoped")
 	}
 }
 

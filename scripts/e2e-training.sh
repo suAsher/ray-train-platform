@@ -88,7 +88,7 @@ ledger_resume() {
 ledger_record() {
   local kind="${1:-}" identifier="${2:-}" namespace="${3:-}" ownership_label="${4:-$ACCEPTANCE_PREFIX}"
   case "$kind" in
-    submission-intent|job|sourceartifact|rayjob|raycluster|k8sjob|service|pvc|workload|pod|gpuallocation|dnschaos|networkchaos|node-fault) ;;
+    submission-intent|job|sourceartifact-request|sourceartifact|rayjob|raycluster|k8sjob|service|pvc|workload|pod|gpuallocation|dnschaos|networkchaos|node-fault) ;;
     *) e2e_die "unsupported cleanup ledger kind: $kind"; return 1 ;;
   esac
   [[ "$identifier" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,252}$ ]] || { e2e_die 'cleanup ledger identifier is unsafe'; return 1; }
@@ -124,7 +124,7 @@ ledger_cleanup() {
       k8sjob) resource='jobs.batch' ;;
       dnschaos) resource='dnschaos.chaos-mesh.org' ;;
       networkchaos) resource='networkchaos.chaos-mesh.org' ;;
-      submission-intent|job|sourceartifact|gpuallocation|node-fault)
+      submission-intent|job|sourceartifact-request|sourceartifact|gpuallocation|node-fault)
         printf 'CLEANUP_MANUAL kind=%s id=%s namespace=%s\n' "$kind" "$identifier" "$namespace"
         continue
         ;;
@@ -232,33 +232,52 @@ submit_portal_job() {
   jq -er '.data.id' <<<"$response"
 }
 
-source_artifact_id_for_acceptance() {
-  local digest
+source_request_id_for_submission() {
+  local submission_name="$1" digest
   validate_acceptance_prefix "$ACCEPTANCE_PREFIX" || return
+  [[ "$submission_name" == "${ACCEPTANCE_PREFIX}-"* ]] || { e2e_die 'source request must belong to the exact acceptance prefix'; return 1; }
   if command -v sha256sum >/dev/null; then
-    digest="$(printf '%s' "$ACCEPTANCE_PREFIX" | sha256sum)" || return
+    digest="$(printf '%s' "$submission_name" | sha256sum)" || return
   elif command -v shasum >/dev/null; then
-    digest="$(printf '%s' "$ACCEPTANCE_PREFIX" | shasum -a 256)" || return
+    digest="$(printf '%s' "$submission_name" | shasum -a 256)" || return
   else
-    e2e_die 'sha256sum or shasum is required for stable source artifact identity'
+    e2e_die 'sha256sum or shasum is required for stable source request identity'
     return 1
   fi
   digest="${digest%%[[:space:]]*}"
-  [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || { e2e_die 'could not derive a safe source artifact identity'; return 1; }
-  printf 'artifact-%s\n' "${digest:0:24}"
+  [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || { e2e_die 'could not derive a safe source request identity'; return 1; }
+  printf 'source-request-%s\n' "${digest:0:24}"
+}
+
+reconcile_source_artifact_request() {
+  local request_id="$1" response artifact_id
+  [[ "$request_id" =~ ^source-request-[0-9a-f]{24}$ ]] || { e2e_die 'unsafe source request identity during reconciliation'; return 1; }
+  response="$(bounded_command spk-rayjob source-artifact resolve --output json --config "$SPK_RAYJOB_CONFIG" --server "$API_URL" --request-id "$request_id")" || return
+  artifact_id="$(jq -er '(.artifactId // .data.artifactId) | select(test("^artifact-[0-9a-f]{24}$"))' <<<"$response")" || {
+    e2e_die 'source request reconciliation returned no safe server artifact ID'
+    return 1
+  }
+  ledger_record sourceartifact "$artifact_id" "$TENANT_NAMESPACE" "$ACCEPTANCE_PREFIX" || return
 }
 
 submit_spk_job() {
-  local name="$1" engine="$2" workers="$3" gpus="$4" mode="$5" parent_job_id="${6:-}" response entrypoint artifact_id
+  local name="$1" engine="$2" workers="$3" gpus="$4" mode="$5" parent_job_id="${6:-}" response entrypoint request_id submit_status
   entrypoint="$(entrypoint_for_engine "$engine")" || return
-  artifact_id="$(source_artifact_id_for_acceptance)" || return
-  ledger_record sourceartifact "$artifact_id" "$TENANT_NAMESPACE" "$artifact_id" || return
-  local args=(submit --output json --config "$SPK_RAYJOB_CONFIG" --server "$API_URL" --dir "$ACCEPTANCE_SOURCE_DIR" --source-artifact-id "$artifact_id" --name "$name" --image "$TRAINING_IMAGE" --entrypoint "$entrypoint" --engine "$engine" --workers "$workers" --gpus-per-worker "$gpus" --cpu-per-worker 32 --memory-per-worker 128Gi --execution-mode "$mode" --output-path "acceptance/$name")
+  request_id="$(source_request_id_for_submission "$name")" || return
+  ledger_record sourceartifact-request "$request_id" "$TENANT_NAMESPACE" "$ACCEPTANCE_PREFIX" || return
+  local args=(submit --output json --config "$SPK_RAYJOB_CONFIG" --server "$API_URL" --dir "$ACCEPTANCE_SOURCE_DIR" --source-request-id "$request_id" --name "$name" --image "$TRAINING_IMAGE" --entrypoint "$entrypoint" --engine "$engine" --workers "$workers" --gpus-per-worker "$gpus" --cpu-per-worker 32 --memory-per-worker 128Gi --execution-mode "$mode" --output-path "acceptance/$name")
   if [[ "$engine" == ray-train ]]; then
     args+=(--max-failures 2 --checkpoint-every-epochs 1 --checkpoint-keep-latest 3 --checkpoint-keep-best 1)
   fi
   [[ -z "$parent_job_id" ]] || args+=(--resume-from-job "$parent_job_id")
-  response="$(bounded_command spk-rayjob "${args[@]}")" || return
+  if response="$(bounded_command spk-rayjob "${args[@]}")"; then
+    :
+  else
+    submit_status=$?
+    reconcile_source_artifact_request "$request_id" >/dev/null 2>&1 || true
+    return "$submit_status"
+  fi
+  reconcile_source_artifact_request "$request_id" >/dev/null || return
   jq -er '.id // .data.id' <<<"$response"
 }
 
