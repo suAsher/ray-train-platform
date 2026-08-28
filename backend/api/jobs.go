@@ -404,6 +404,8 @@ func (h *Handler) writeSubmissionError(c *gin.Context, principal auth.Principal,
 		h.writeError(c, http.StatusServiceUnavailable, "DATA_SPACES_UNAVAILABLE", "data spaces are not configured")
 	case errors.Is(err, ErrSubmissionDataMountNotReady):
 		h.writeError(c, http.StatusConflict, "DATA_SPACE_MOUNT_NOT_READY", "selected data spaces are still being prepared; try again after storage setup is complete")
+	case errors.Is(err, ErrSubmissionResumeCheckpointNotFound):
+		h.writeError(c, http.StatusNotFound, "RESUME_CHECKPOINT_NOT_FOUND", "complete resume checkpoint was not found for this job owner")
 	case errors.Is(err, ErrSubmissionWorkspaceSnapshotNotFound):
 		h.writeError(c, http.StatusNotFound, "WORKSPACE_SNAPSHOT_NOT_FOUND", "the selected workspace version is not available to this user")
 	default:

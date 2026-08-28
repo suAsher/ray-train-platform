@@ -778,12 +778,12 @@ executionMode: torchrun
 	}
 }
 
-// Resuming reads the previous run's own managed result directory. The user
-// supplies one job ID instead of reconstructing a storage path.
-func TestSubmitResumeFromJobSelectsThePreviousRunAsReadOnlyCheckpoint(t *testing.T) {
+func TestSubmitResumeFromJobBindsLatestCompleteCheckpointAndParent(t *testing.T) {
+	const parentID = "job-0123456789abcdef01234567"
 	root := seedProject(t, `name: bevfusion-lidar
 image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
 entrypoint: python tools/westwell_train.py configs/lidar.yaml --launcher pytorch --auto-resume
+engine: ray-train
 workers: 1
 gpusPerWorker: 8
 executionMode: torchrun
@@ -791,11 +791,30 @@ executionMode: torchrun
 	var submitted domain.JobSpec
 	stub := artifactStubHandler(t, func(spec domain.JobSpec) { submitted = spec })
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/api/v1/jobs/job-previous" {
+		switch request.URL.Path {
+		case "/api/v1/limits":
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"runtime": map[string]any{
+				"availableEngines": []string{"ray-ddp", "ray-train"}, "managedEnabled": true,
+				"productionRayVersion": "2.56.1", "canaryRayVersion": "2.58.0",
+			}})
+			return
+		case "/api/v1/images":
+			writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
+				"name": "Managed", "reference": "harbor.example/train@sha256:" + strings.Repeat("a", 64),
+				"rayVersion": "2.56.1", "supportedEngines": []string{"ray-train"},
+			}})
+			return
+		case "/api/v1/jobs/" + parentID:
 			writeClientSuccess(t, writer, http.StatusOK, map[string]any{
-				"id": "job-previous", "observedState": "FAILED",
+				"id": parentID, "tenantId": "tenant-a", "userId": "user-a", "observedState": "FAILED",
 				"spec": map[string]any{"output": map[string]any{"space": "my-runs", "relativePath": "bevfusion-lidar"}},
 			})
+			return
+		case "/api/v1/jobs/" + parentID + "/checkpoints":
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"jobId": parentID, "items": []map[string]any{{
+				"id": "checkpoint-20", "jobId": parentID, "tenantId": "tenant-a", "userId": "user-a", "epoch": 2, "step": 20,
+				"objectPath": "/mnt/data/output/.platform/ray-train/" + parentID + "/checkpoints/checkpoint-20", "complete": true, "manifestSha256": strings.Repeat("c", 64),
+			}}})
 			return
 		}
 		stub(writer, request)
@@ -804,13 +823,14 @@ executionMode: torchrun
 
 	err := Run(context.Background(), []string{
 		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root,
-		"--resume-from-job", "job-previous",
+		"--resume-from-job", parentID,
 	}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
 	if err != nil {
 		t.Fatalf("resume submit failed: %v", err)
 	}
-	if submitted.Checkpoint.Space != domain.DataSpaceMyRuns || submitted.Checkpoint.RelativePath != "bevfusion-lidar/job-previous" {
-		t.Fatalf("expected the previous run directory as checkpoint, got %+v", submitted.Checkpoint)
+	wantPath := "bevfusion-lidar/" + parentID + "/.platform/ray-train/" + parentID + "/checkpoints/checkpoint-20"
+	if submitted.ParentJobID != parentID || submitted.Checkpoint.Space != domain.DataSpaceMyRuns || submitted.Checkpoint.RelativePath != wantPath {
+		t.Fatalf("expected concrete parent checkpoint binding, got parent=%q checkpoint=%+v", submitted.ParentJobID, submitted.Checkpoint)
 	}
 }
 
@@ -1171,6 +1191,38 @@ cache:
 	want := "--resume-from-job cannot be combined with --checkpoint-space or --checkpoint-path"
 	if err == nil || err.Error() != want {
 		t.Fatalf("expected the original resume/checkpoint conflict error %q, got %v", want, err)
+	}
+}
+
+func TestResumeFromJobRequiresManagedEngineBeforeClientConfiguration(t *testing.T) {
+	root := seedProject(t, `name: legacy-training
+image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
+entrypoint: python train.py
+engine: ray-ddp
+`)
+	getenv := func(key string) string {
+		t.Fatalf("managed resume validation must not read connection settings: %s", key)
+		return ""
+	}
+	err := Run(context.Background(), []string{"submit", "--dir", root, "--resume-from-job", "job-0123456789abcdef01234567"}, &bytes.Buffer{}, &bytes.Buffer{}, getenv)
+	if err == nil || !strings.Contains(err.Error(), "--engine ray-train") {
+		t.Fatalf("legacy engine accepted managed resume: %v", err)
+	}
+}
+
+func TestResumeFromJobRejectsUnsafeParentIDBeforeClientConfiguration(t *testing.T) {
+	root := seedProject(t, `name: managed-training
+image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
+entrypoint: python train.py
+engine: ray-train
+`)
+	getenv := func(key string) string {
+		t.Fatalf("unsafe parent ID validation must not read connection settings: %s", key)
+		return ""
+	}
+	err := Run(context.Background(), []string{"submit", "--dir", root, "--resume-from-job", "../foreign-job"}, &bytes.Buffer{}, &bytes.Buffer{}, getenv)
+	if err == nil || !strings.Contains(err.Error(), "平台 job ID") {
+		t.Fatalf("unsafe parent ID was not rejected locally: %v", err)
 	}
 }
 

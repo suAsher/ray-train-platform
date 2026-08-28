@@ -67,6 +67,11 @@ type Job struct {
 	Raw           json.RawMessage `json:"-"`
 }
 
+type JobCheckpointPage struct {
+	JobID string                      `json:"jobId"`
+	Items []domain.TrainingCheckpoint `json:"items"`
+}
+
 type LogEntry struct {
 	Timestamp string            `json:"timestamp"`
 	Line      string            `json:"line"`
@@ -511,6 +516,22 @@ func (client *Client) Status(ctx context.Context, jobID string) (Job, error) {
 		return Job{}, err
 	}
 	return decodeJob(data)
+}
+
+// Checkpoints reads the server-authorized checkpoint list for one job. The
+// endpoint applies tenant and owner scope; selection and path validation remain
+// client-side so a malformed response cannot become a submitted storage path.
+func (client *Client) Checkpoints(ctx context.Context, jobID string) (JobCheckpointPage, error) {
+	data, err := client.request(ctx, http.MethodGet, "/api/v1/jobs/"+url.PathEscape(jobID)+"/checkpoints", nil, nil)
+	if err != nil {
+		return JobCheckpointPage{}, err
+	}
+	var page JobCheckpointPage
+	if err := json.Unmarshal(data, &page); err != nil {
+		return JobCheckpointPage{}, fmt.Errorf("decode checkpoint response")
+	}
+	page.Items = append([]domain.TrainingCheckpoint(nil), page.Items...)
+	return page, nil
 }
 
 // ListJobs returns the caller's visible jobs. The server owns tenant scoping;

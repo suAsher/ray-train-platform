@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -37,6 +38,7 @@ var (
 	ErrSubmissionDataSpacesUnavailable     = errors.New("data spaces are unavailable")
 	ErrSubmissionDataMountNotReady         = errors.New("data-space mount is not ready")
 	ErrSubmissionWorkspaceSnapshotNotFound = errors.New("workspace snapshot was not found")
+	ErrSubmissionResumeCheckpointNotFound  = errors.New("resume checkpoint was not found")
 )
 
 type SourceArtifactLookup interface {
@@ -203,6 +205,10 @@ func (service *SubmissionService) Submit(ctx context.Context, input SubmissionIn
 	if err != nil {
 		return nil, err
 	}
+	resumeCheckpointID, err := service.resolveResumeCheckpoint(ctx, input.Principal, spec)
+	if err != nil {
+		return nil, err
+	}
 	if spec.Source.Type == "git" && !matchesGitAllowlist(spec.Source.URL, service.gitAllowlist) {
 		return nil, ErrSubmissionGitNotAllowed
 	}
@@ -286,6 +292,7 @@ func (service *SubmissionService) Submit(ctx context.Context, input SubmissionIn
 		Spec: spec, DesiredState: domain.DesiredActive, ObservedState: domain.StateSubmitted,
 		KubernetesNS:     "tenant-" + sanitizeDNS(input.Principal.TenantID),
 		SubmissionOrigin: input.Origin, ExternalSubmissionID: strings.TrimSpace(input.ExternalSubmissionID),
+		ResumeCheckpointID: resumeCheckpointID,
 	}
 	if spec.Source.Type == "workspace-archive" {
 		job.SourceArtifactID = spec.Source.ArtifactID
@@ -294,6 +301,38 @@ func (service *SubmissionService) Submit(ctx context.Context, input SubmissionIn
 		return nil, err
 	}
 	return job, nil
+}
+
+func (service *SubmissionService) resolveResumeCheckpoint(ctx context.Context, principal auth.Principal, spec domain.JobSpec) (string, error) {
+	if spec.ParentJobID == "" {
+		return "", nil
+	}
+	if spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain || spec.Checkpoint.Space != domain.DataSpaceMyRuns {
+		return "", ErrSubmissionResumeCheckpointNotFound
+	}
+	parent, err := service.repository.Get(ctx, principal.TenantID, spec.ParentJobID)
+	if err != nil || parent == nil || parent.ID != spec.ParentJobID || parent.TenantID != principal.TenantID || parent.UserID != principal.Subject || parent.Spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain || parent.Spec.Output.Space != domain.DataSpaceMyRuns {
+		return "", ErrSubmissionResumeCheckpointNotFound
+	}
+	store, ok := service.repository.(checkpointStore)
+	if !ok {
+		return "", ErrSubmissionResumeCheckpointNotFound
+	}
+	checkpoints, err := store.ListUsableCheckpoints(ctx, parent.TenantID, parent.UserID, parent.ID)
+	if err != nil {
+		return "", ErrSubmissionResumeCheckpointNotFound
+	}
+	for _, checkpoint := range checkpoints {
+		if !checkpoint.Complete || checkpoint.JobID != parent.ID || checkpoint.TenantID != parent.TenantID || checkpoint.UserID != parent.UserID || checkpoint.Validate() != nil {
+			continue
+		}
+		expectedObjectPath := path.Join(domain.DataMountOutputPath, ".platform", "ray-train", parent.ID, "checkpoints", checkpoint.ID)
+		expectedRelativePath := path.Join(strings.Trim(parent.Spec.Output.RelativePath, "/"), parent.ID, ".platform", "ray-train", parent.ID, "checkpoints", checkpoint.ID)
+		if checkpoint.ObjectPath == expectedObjectPath && spec.Checkpoint.RelativePath == expectedRelativePath {
+			return checkpoint.ID, nil
+		}
+	}
+	return "", ErrSubmissionResumeCheckpointNotFound
 }
 
 func (service *SubmissionService) authorizeWorkspaceSnapshot(ctx context.Context, principal auth.Principal, snapshotID string) error {

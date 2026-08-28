@@ -370,7 +370,7 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	checkpointSpace := set.String("checkpoint-space", "", "logical checkpoint data space")
 	checkpointPath := set.String("checkpoint-path", "", "path relative to the checkpoint data space")
 	outputPath := set.String("output-path", "", "path relative to My runs")
-	resumeFromJob := set.String("resume-from-job", "", "read a previous run's result directory as a read-only checkpoint")
+	resumeFromJob := set.String("resume-from-job", "", "select the latest complete checkpoint from a previous managed job")
 	watch := set.Bool("watch", false, "wait until the job reaches a terminal state")
 	if err := set.Parse(arguments); err != nil || set.NArg() != 0 {
 		return errors.New("invalid submit arguments; run spk-rayjob help")
@@ -414,9 +414,18 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	}
 	previousJobID := strings.TrimSpace(*resumeFromJob)
 	checkpointProvided := provided["checkpoint-space"] || provided["checkpoint-path"]
+	if previousJobID != "" && checkpointProvided {
+		return errors.New("--resume-from-job cannot be combined with --checkpoint-space or --checkpoint-path")
+	}
+	if previousJobID != "" && !platformJobID.MatchString(previousJobID) {
+		return errors.New("--resume-from-job 必须是有效的平台 job ID")
+	}
 	resolvedEngine, err := parseTrainingEngine(resolved.Engine)
 	if err != nil {
 		return err
+	}
+	if previousJobID != "" && resolvedEngine != domain.TrainingEngineRayTrain {
+		return errors.New("--resume-from-job 仅支持 --engine ray-train")
 	}
 	managedFlagsProvided := provided["max-failures"] || provided["checkpoint-every-epochs"] || provided["checkpoint-keep-latest"] || provided["checkpoint-keep-best"]
 	if resolvedEngine != domain.TrainingEngineRayTrain && managedFlagsProvided {
@@ -486,20 +495,28 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	if err := draft.values.validateForSubmit(); err != nil {
 		return err
 	}
-	// Resuming is an ordinary read-only selection of the previous run's own
-	// managed result directory; the platform contract does not change.
+	// Resume is bound to one complete checkpoint returned by the owner-scoped
+	// API. Neither an object path nor a checkpoint ID is accepted from flags.
 	if previousJobID != "" {
 		previous, statusErr := client.Status(ctx, previousJobID)
 		if statusErr != nil {
 			return fmt.Errorf("read the previous job: %w", statusErr)
 		}
-		location, resolveErr := checkpointLocationForPreviousRun(previous.Raw)
+		if previous.ID != previousJobID {
+			return errors.New("父任务响应与请求的 job ID 不一致")
+		}
+		checkpoints, checkpointErr := client.Checkpoints(ctx, previousJobID)
+		if checkpointErr != nil {
+			return fmt.Errorf("read the previous job checkpoints: %w", checkpointErr)
+		}
+		selection, resolveErr := checkpointLocationForPreviousRun(previous.Raw, checkpoints)
 		if resolveErr != nil {
 			return resolveErr
 		}
-		if err := draft.setCheckpoint(location); err != nil {
+		if err := draft.setCheckpoint(selection.Location); err != nil {
 			return err
 		}
+		draft.spec.ParentJobID = previousJobID
 	}
 	spec := draft.finalSpec(resolvedCache)
 	if err := validateArchiveJobSpec(spec); err != nil {

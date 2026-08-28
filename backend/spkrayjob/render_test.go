@@ -129,23 +129,46 @@ func TestJobStateIsTerminalOnlyForFinishedRuns(t *testing.T) {
 	}
 }
 
-// Resuming means "read the previous run's own output directory". Computing it
-// on the client keeps the platform contract unchanged: the checkpoint is just
-// an ordinary read-only selection in My runs.
-func TestCheckpointLocationForPreviousRunPointsAtItsOutputDirectory(t *testing.T) {
-	previous := json.RawMessage(`{"id":"job-abc","spec":{"output":{"space":"my-runs","relativePath":"bevfusion-lidar"}}}`)
-	location, err := checkpointLocationForPreviousRun(previous)
+func TestCheckpointLocationForPreviousRunSelectsFirstCompleteOwnerScopedCheckpoint(t *testing.T) {
+	const parentID = "job-0123456789abcdef01234567"
+	previous := json.RawMessage(`{"id":"` + parentID + `","tenantId":"tenant-a","userId":"user-a","spec":{"output":{"space":"my-runs","relativePath":"bevfusion-lidar"}}}`)
+	page := JobCheckpointPage{JobID: parentID, Items: []domain.TrainingCheckpoint{
+		{ID: "checkpoint-new", JobID: parentID, TenantID: "tenant-a", UserID: "user-a", Epoch: 2, Step: 20, ObjectPath: "/mnt/data/output/.platform/ray-train/" + parentID + "/checkpoints/checkpoint-new", Complete: true, ManifestSHA256: strings.Repeat("a", 64)},
+		{ID: "checkpoint-old", JobID: parentID, TenantID: "tenant-a", UserID: "user-a", Epoch: 1, Step: 10, ObjectPath: "/mnt/data/output/.platform/ray-train/" + parentID + "/checkpoints/checkpoint-old", Complete: true, ManifestSHA256: strings.Repeat("b", 64)},
+	}}
+	selection, err := checkpointLocationForPreviousRun(previous, page)
 	if err != nil {
 		t.Fatalf("resolve resume location: %v", err)
 	}
-	if location.Space != "my-runs" || location.Path != "bevfusion-lidar/job-abc" {
-		t.Fatalf("expected the previous run directory, got %+v", location)
+	wantPath := "bevfusion-lidar/" + parentID + "/.platform/ray-train/" + parentID + "/checkpoints/checkpoint-new"
+	if selection.Location.Space != "my-runs" || selection.Location.Path != wantPath || selection.CheckpointID != "checkpoint-new" {
+		t.Fatalf("expected the latest complete checkpoint, got %+v", selection)
 	}
 }
 
-func TestCheckpointLocationRejectsARunWithoutGovernedOutput(t *testing.T) {
-	previous := json.RawMessage(`{"id":"job-abc","spec":{}}`)
-	if _, err := checkpointLocationForPreviousRun(previous); err == nil {
-		t.Fatal("a run with no managed output cannot be resumed from")
+func TestCheckpointLocationRejectsMissingForeignOrForgedCheckpoint(t *testing.T) {
+	const parentID = "job-0123456789abcdef01234567"
+	previous := json.RawMessage(`{"id":"` + parentID + `","tenantId":"tenant-a","userId":"user-a","spec":{"output":{"space":"my-runs","relativePath":"run"}}}`)
+	valid := domain.TrainingCheckpoint{ID: "checkpoint-1", JobID: parentID, TenantID: "tenant-a", UserID: "user-a", Epoch: 1, Step: 2, ObjectPath: "/mnt/data/output/.platform/ray-train/" + parentID + "/checkpoints/checkpoint-1", Complete: true, ManifestSHA256: strings.Repeat("a", 64)}
+	for _, test := range []struct {
+		name     string
+		previous json.RawMessage
+		page     JobCheckpointPage
+	}{
+		{name: "no complete checkpoint", previous: previous, page: JobCheckpointPage{JobID: parentID}},
+		{name: "response job mismatch", previous: previous, page: JobCheckpointPage{JobID: "job-fedcba9876543210fedcba98", Items: []domain.TrainingCheckpoint{valid}}},
+		{name: "checkpoint owner mismatch", previous: previous, page: JobCheckpointPage{JobID: parentID, Items: []domain.TrainingCheckpoint{func() domain.TrainingCheckpoint { item := valid; item.UserID = "user-b"; return item }()}}},
+		{name: "forged object path", previous: previous, page: JobCheckpointPage{JobID: parentID, Items: []domain.TrainingCheckpoint{func() domain.TrainingCheckpoint {
+			item := valid
+			item.ObjectPath = "/mnt/data/output/other"
+			return item
+		}()}}},
+		{name: "missing governed output", previous: json.RawMessage(`{"id":"` + parentID + `","tenantId":"tenant-a","userId":"user-a","spec":{}}`), page: JobCheckpointPage{JobID: parentID, Items: []domain.TrainingCheckpoint{valid}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := checkpointLocationForPreviousRun(test.previous, test.page); err == nil {
+				t.Fatal("unsafe resume checkpoint was accepted")
+			}
+		})
 	}
 }

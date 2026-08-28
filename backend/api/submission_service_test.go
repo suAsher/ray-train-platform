@@ -19,6 +19,8 @@ type submissionServiceRepository struct {
 	identityCalls  int
 	artifact       *domain.SourceArtifact
 	artifactLookup string
+	parent         *domain.TrainingJob
+	checkpoints    []domain.TrainingCheckpoint
 }
 
 type countingRuntimeImageStore struct {
@@ -974,6 +976,64 @@ func TestSubmissionInitializesServerGeneratedOutputDirectoryBeforePersistingJob(
 	}
 }
 
+func TestSubmissionPersistsOnlyOwnerScopedCompleteResumeCheckpoint(t *testing.T) {
+	const parentID = "job-0123456789abcdef01234567"
+	const childID = "job-fedcba9876543210fedcba98"
+	reference := "registry.example/ray@sha256:" + strings.Repeat("c", 64)
+	parent := domain.TrainingJob{
+		ID: parentID, TenantID: "tenant-a", UserID: "user-a",
+		Spec: domain.JobSpec{TrainingEngine: domain.TrainingEngineRayTrain, Output: domain.DataLocation{Space: domain.DataSpaceMyRuns, RelativePath: "parent-run"}},
+	}
+	checkpoint := domain.TrainingCheckpoint{
+		ID: "checkpoint-20", JobID: parentID, TenantID: "tenant-a", UserID: "user-a", Epoch: 2, Step: 20,
+		ObjectPath: "/mnt/data/output/.platform/ray-train/" + parentID + "/checkpoints/checkpoint-20",
+		Complete:   true, ManifestSHA256: strings.Repeat("a", 64),
+	}
+	repository := &submissionServiceRepository{parent: &parent, checkpoints: []domain.TrainingCheckpoint{checkpoint}}
+	spaces := &fakeDataSpaceStore{bindings: []domain.DataMountBinding{{
+		ID: "mine", TenantID: "tenant-a", UserID: "user-a", Scope: domain.DataMountScopePersonal, SpaceID: domain.DataSpaceWorkspace,
+		ClaimName: "data-user-a", Status: domain.DataMountBindingReady,
+	}}}
+	service := NewSubmissionService(repository, SubmissionServiceOptions{
+		Images: &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{{
+			ID: "managed", Name: "managed", Kind: domain.ImageKindTraining, Reference: reference,
+			RayVersion: domain.RayVersionProduction, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayTrain},
+		}}}},
+		RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true}, DataSpaces: spaces, DataSpacesEnabled: true,
+		NewID: func() (string, error) { return childID, nil },
+	})
+	spec := submissionSpec(reference)
+	spec.TrainingEngine = domain.TrainingEngineRayTrain
+	spec.Managed = domain.ManagedTrainingPolicy{MaxFailures: 2, Checkpoint: domain.CheckpointPolicy{EveryEpochs: 1, KeepLatest: 3, KeepBest: 1}}
+	spec.ParentJobID = parentID
+	spec.Checkpoint = domain.DataLocation{Space: domain.DataSpaceMyRuns, RelativePath: "parent-run/" + parentID + "/.platform/ray-train/" + parentID + "/checkpoints/checkpoint-20"}
+	spec.Output = domain.DataLocation{Space: domain.DataSpaceMyRuns, RelativePath: "child-run"}
+
+	job, err := service.Submit(context.Background(), SubmissionInput{
+		Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+		Spec:      spec, Origin: domain.SubmissionOriginRayCLI,
+	})
+	if err != nil || job.ResumeCheckpointID != checkpoint.ID || repository.created == nil || repository.created.ResumeCheckpointID != checkpoint.ID {
+		t.Fatalf("resume provenance was not persisted: job=%+v persisted=%+v err=%v", job, repository.created, err)
+	}
+
+	foreign := *repository
+	foreign.created = nil
+	foreignService := NewSubmissionService(&foreign, SubmissionServiceOptions{
+		Images: &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{{
+			ID: "managed", Name: "managed", Kind: domain.ImageKindTraining, Reference: reference,
+			RayVersion: domain.RayVersionProduction, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayTrain},
+		}}}}, RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true}, NewID: func() (string, error) { return childID, nil },
+	})
+	_, err = foreignService.Submit(context.Background(), SubmissionInput{
+		Principal: auth.Principal{Subject: "user-b", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+		Spec:      spec, Origin: domain.SubmissionOriginRayCLI,
+	})
+	if !errors.Is(err, ErrSubmissionResumeCheckpointNotFound) || foreign.created != nil {
+		t.Fatalf("foreign parent checkpoint was accepted: job=%+v err=%v", foreign.created, err)
+	}
+}
+
 func (repository *submissionServiceRepository) Create(_ context.Context, job *domain.TrainingJob, _ string) error {
 	repository.createCalls++
 	copy := *job
@@ -981,8 +1041,22 @@ func (repository *submissionServiceRepository) Create(_ context.Context, job *do
 	return nil
 }
 
-func (repository *submissionServiceRepository) Get(_ context.Context, _, _ string) (*domain.TrainingJob, error) {
-	return nil, context.Canceled
+func (repository *submissionServiceRepository) Get(_ context.Context, tenantID, id string) (*domain.TrainingJob, error) {
+	if repository.parent == nil || repository.parent.TenantID != tenantID || repository.parent.ID != id {
+		return nil, context.Canceled
+	}
+	copy := *repository.parent
+	return &copy, nil
+}
+
+func (repository *submissionServiceRepository) ListUsableCheckpoints(_ context.Context, tenantID, userID, jobID string) ([]domain.TrainingCheckpoint, error) {
+	items := make([]domain.TrainingCheckpoint, 0, len(repository.checkpoints))
+	for _, checkpoint := range repository.checkpoints {
+		if checkpoint.TenantID == tenantID && checkpoint.UserID == userID && checkpoint.JobID == jobID {
+			items = append(items, checkpoint)
+		}
+	}
+	return items, nil
 }
 
 func (repository *submissionServiceRepository) List(_ context.Context, _ domain.JobFilter) (domain.Page[domain.TrainingJob], error) {

@@ -86,6 +86,28 @@ func TestSubmitDirectoryCreatesUploadsCompletesThenSubmits(t *testing.T) {
 	}
 }
 
+func TestCheckpointsUsesOwnerScopedJobEndpointAndDecodesOrderedItems(t *testing.T) {
+	const jobID = "job-0123456789abcdef01234567"
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/api/v1/jobs/"+jobID+"/checkpoints" || request.Header.Get("Authorization") != "Bearer test-token" {
+			t.Fatalf("unexpected checkpoint request %s %s", request.Method, request.URL.Path)
+		}
+		writeClientSuccess(t, writer, http.StatusOK, map[string]any{"jobId": jobID, "items": []map[string]any{{
+			"id": "checkpoint-2", "jobId": jobID, "tenantId": "tenant-a", "userId": "user-a", "epoch": 2, "step": 20,
+			"objectPath": "/mnt/data/output/.platform/ray-train/" + jobID + "/checkpoints/checkpoint-2", "complete": true, "manifestSha256": strings.Repeat("a", 64),
+		}}})
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientOptions{ServerURL: server.URL, Token: "test-token", HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := client.Checkpoints(context.Background(), jobID)
+	if err != nil || page.JobID != jobID || len(page.Items) != 1 || page.Items[0].ID != "checkpoint-2" {
+		t.Fatalf("page=%+v err=%v", page, err)
+	}
+}
+
 func TestSubmitDirectoryRetriesLostArtifactCreateResponseWithRequestID(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "train.py"), []byte("print('train')\n"), 0o600); err != nil {
