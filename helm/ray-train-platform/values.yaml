@@ -17,11 +17,10 @@ placement:
   preferredNodeSelector: {}
   allowGPUNodeFallback: false
 
-# Dormant until Task 15: these are side-by-side runtime catalog inputs only.
-# This chart does not render them into a Deployment or seed the database yet,
-# so changing them cannot enable managed submission. Task 15 will wire the
-# disabled gates after the runtime acceptance matrix is complete. References
-# are populated with immutable digests only after post-build smoke testing.
+# Submission feature gates are disabled by default. They affect only new
+# submissions; persisted jobs retain their immutable runtime snapshot.
+# Runtime references are populated with immutable digests only after
+# post-build smoke testing.
 rayTrain:
   managedEnabled: false
   canaryEnabled: false

@@ -28,6 +28,10 @@ for expected in RAY_TRAIN_MANAGED_ENABLED RAY_TRAIN_CANARY_ENABLED RAY_TRAIN_CAN
     exit 1
   }
 done
+grep -Fq -- 'join "," .Values.rayTrain.canaryTenants' "${chart_dir}/templates/backend-deployment.yaml" || {
+  echo 'RAY_TRAIN_CANARY_TENANTS must render as a comma-separated array' >&2
+  exit 1
+}
 
 for command in helm grep mktemp; do
   command -v "$command" >/dev/null || { echo "missing command: ${command}" >&2; exit 1; }
@@ -37,13 +41,18 @@ test_rendered="$(mktemp)"
 production_rendered="$(mktemp)"
 cpu_ha_rendered="$(mktemp)"
 network_rendered="$(mktemp)"
-trap 'rm -f "$test_rendered" "$production_rendered" "$cpu_ha_rendered" "$network_rendered"' EXIT
+canary_rendered="$(mktemp)"
+trap 'rm -f "$test_rendered" "$production_rendered" "$cpu_ha_rendered" "$network_rendered" "$canary_rendered"' EXIT
 
 helm lint "$chart_dir" --values "$test_profile" >/dev/null
 helm template ray-platform "$chart_dir" --namespace ray-train-platform --values "$test_profile" >"$test_rendered"
 helm template ray-platform "$chart_dir" --namespace ray-train-platform --values "$production_profile" >"$production_rendered"
 helm template ray-platform "$chart_dir" --namespace ray-train-platform --values "$cpu_ha_profile" >"$cpu_ha_rendered"
 helm template ray-platform "$chart_dir" --namespace ray-train-platform --values "$cpu_ha_profile" --set albInstance.enabled=true >"$network_rendered"
+helm template ray-platform "$chart_dir" --namespace ray-train-platform --values "$test_profile" \
+  --set rayTrain.managedEnabled=true \
+  --set rayTrain.canaryEnabled=true \
+  --set 'rayTrain.canaryTenants={tenant-a,tenant-b}' >"$canary_rendered"
 
 require() {
   local file="$1"
@@ -93,6 +102,7 @@ require "$test_rendered" 'name: RAY_TRAIN_MANAGED_ENABLED'
 require "$test_rendered" 'name: RAY_TRAIN_CANARY_ENABLED'
 require "$test_rendered" 'name: RAY_TRAIN_CANARY_TENANTS'
 require "$test_rendered" 'value: "false"'
+require "$canary_rendered" 'value: "tenant-a,tenant-b"'
 require "$cpu_ha_rendered" 'name: spk-rayjob-release'
 require "$cpu_ha_rendered" 'ingressClassName: raytrain-prod-alb'
 require "$network_rendered" 'kind: ALBInstance'

@@ -42,6 +42,7 @@ for expected in \
   'SUCCEEDED|FAILED|STOPPED' \
   'kueue-controller-manager' \
   'clusterqueues.kueue.x-k8s.io' \
+  'ClusterQueue is not Active' \
   'operator replicas are not ready' \
   'kubectl auth can-i'; do
   require_in "$preflight" "$expected"
@@ -56,17 +57,25 @@ for expected in \
   'rayjobs.ray.io,rayclusters.ray.io,rayservices.ray.io'; do
   require_in "$backup" "$expected"
 done
+require_in "$backup" '--kube-context'
 
 for expected in \
   'KUBERAY_TARGET_VERSION="1.6.2"' \
+  'https://ray-project.github.io/kuberay-helm/' \
   'CONFIRM_KUBERAY_UPGRADE' \
   'kubectl replace -k' \
+  'helm repo add' \
   'helm upgrade' \
+  '--skip-crds' \
+  '--reuse-values' \
   '"${KUBERAY_RELEASE}"' \
   'preflight-upgrade.sh' \
   'verify.sh'; do
   require_in "$upgrade" "$expected"
 done
+require_in "$upgrade" '--kube-context'
+require_in "$upgrade" 'KUBERAY_CONTEXT="$target_context" "${script_dir}/preflight-upgrade.sh"'
+require_in "$upgrade" 'KUBERAY_CONTEXT="$target_context" "${script_dir}/verify.sh"'
 for forbidden in 'kubectl delete' 'kubectl patch rayjobs' 'kubectl set image' 'ray runtime image'; do
   reject_in "$upgrade" "$forbidden"
 done
@@ -77,7 +86,8 @@ for expected in \
   'readyReplicas' \
   '/apis/ray.io/v1' \
   'webhook' \
-  'rayjobs.ray.io,rayclusters.ray.io,rayservices.ray.io'; do
+  'rayjobs.ray.io,rayclusters.ray.io,rayservices.ray.io' \
+  'clusterqueues.kueue.x-k8s.io,resourceflavors.kueue.x-k8s.io,localqueues.kueue.x-k8s.io,workloads.kueue.x-k8s.io'; do
   require_in "$verify" "$expected"
 done
 
@@ -108,6 +118,9 @@ case "${command_line}" in
     fi
     ;;
   *' get crd clusterqueues.kueue.x-k8s.io '*|*' get crd localqueues.kueue.x-k8s.io '*) printf 'crd.fixture\n' ;;
+  *' get clusterqueues.kueue.x-k8s.io --all-namespaces '*)
+    if [[ "${FIXTURE_CLUSTERQUEUES_HEALTHY:-1}" == 1 ]]; then printf 'queue-a True\n'; else printf 'queue-a False\n'; fi
+    ;;
   *' get deployment kueue-controller-manager '*)
     if [[ "${FIXTURE_KUEUE_HEALTHY:-1}" == 1 ]]; then printf '2 2 2\n'; else printf '2 1 1\n'; fi
     ;;
@@ -117,8 +130,14 @@ case "${command_line}" in
   *' get deployment '*) printf 'apiVersion: apps/v1\nkind: Deployment\n' ;;
   *' get validatingwebhookconfigurations.admissionregistration.k8s.io '*) printf 'validatingwebhookconfiguration.admissionregistration.k8s.io/kuberay-operator\n' ;;
   *' get mutatingwebhookconfigurations.admissionregistration.k8s.io '*) printf 'mutatingwebhookconfiguration.admissionregistration.k8s.io/kuberay-operator\n' ;;
-  *' get rayjobs.ray.io,rayclusters.ray.io,rayservices.ray.io '*) printf 'apiVersion: v1\nitems: []\n' ;;
-  *' get clusterqueues.kueue.x-k8s.io,resourceflavors.kueue.x-k8s.io,localqueues.kueue.x-k8s.io,workloads.kueue.x-k8s.io '*) printf 'apiVersion: v1\nitems: []\n' ;;
+  *' get rayjobs.ray.io,rayclusters.ray.io,rayservices.ray.io '*)
+    [[ "${FIXTURE_RESOURCES_READABLE:-1}" == 1 ]] || exit 1
+    printf 'apiVersion: v1\nitems: []\n'
+    ;;
+  *' get clusterqueues.kueue.x-k8s.io,resourceflavors.kueue.x-k8s.io,localqueues.kueue.x-k8s.io,workloads.kueue.x-k8s.io '*)
+    [[ "${FIXTURE_RESOURCES_READABLE:-1}" == 1 ]] || exit 1
+    printf 'apiVersion: v1\nitems: []\n'
+    ;;
   *' rollout status '*) printf 'deployment successfully rolled out\n' ;;
   *' replace -k '*) printf 'customresourcedefinition.apiextensions.k8s.io replaced\n' ;;
   *) printf 'fixture\n' ;;
@@ -167,15 +186,24 @@ fi
 if env "${fixture_env[@]}" FIXTURE_KUEUE_HEALTHY=0 "$preflight" >/dev/null 2>&1; then
   fail 'preflight accepted unhealthy Kueue'
 fi
+if env "${fixture_env[@]}" FIXTURE_CLUSTERQUEUES_HEALTHY=0 "$preflight" >/dev/null 2>&1; then
+  fail 'preflight accepted an inactive ClusterQueue'
+fi
 if env "${fixture_env[@]}" FIXTURE_OPERATOR_HEALTHY=0 "$preflight" >/dev/null 2>&1; then
   fail 'preflight accepted fewer than two ready operator replicas'
 fi
 if env "${fixture_env[@]}" FIXTURE_CRD_VERSIONS='v1 true false' "$preflight" >/dev/null 2>&1; then
   fail 'preflight accepted a CRD without v1 served/storage'
 fi
+if env "${fixture_env[@]}" FIXTURE_RESOURCES_READABLE=0 "$verify" >/dev/null 2>&1; then
+  fail 'verification accepted unreadable existing resources'
+fi
 
 if env "${fixture_env[@]}" "$backup" relative/path >/dev/null 2>&1; then
   fail 'backup accepted a relative target path'
+fi
+if env "${fixture_env[@]}" "$backup" "${temporary}/unsafe target" >/dev/null 2>&1; then
+  fail 'backup accepted an unsafe target name'
 fi
 backup_target="${temporary}/backup-output"
 env "${fixture_env[@]}" "$backup" "$backup_target" >/dev/null
@@ -189,6 +217,16 @@ if env "${fixture_env[@]}" "$upgrade" >/dev/null 2>&1; then
 fi
 if grep -Eq 'kubectl .*replace -k|helm upgrade' "${fixture_log}"; then
   fail 'upgrade mutated the fixture cluster without explicit confirmation'
+fi
+
+: >"${fixture_log}"
+if env "${fixture_env[@]}" CONFIRM_KUBERAY_UPGRADE=1 \
+  KUBERAY_CRD_KUSTOMIZE_URL='https://github.com/ray-project/kuberay/ray-operator/config/crd?ref=v1.6.20' \
+  "$upgrade" >/dev/null 2>&1; then
+  fail 'upgrade accepted a CRD source that was not pinned exactly to v1.6.2'
+fi
+if grep -Eq 'kubectl .*replace -k|helm upgrade' "${fixture_log}"; then
+  fail 'upgrade mutated the fixture cluster with an unsafe CRD source'
 fi
 
 : >"${fixture_log}"

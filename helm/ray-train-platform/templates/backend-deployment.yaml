@@ -267,6 +267,12 @@ spec:
               value: {{ join "," .Values.backend.corsOrigins | quote }}
             - name: RAY_VERSION
               value: {{ .Values.backend.rayVersion | quote }}
+            - name: RAY_TRAIN_MANAGED_ENABLED
+              value: {{ .Values.rayTrain.managedEnabled | quote }}
+            - name: RAY_TRAIN_CANARY_ENABLED
+              value: {{ .Values.rayTrain.canaryEnabled | quote }}
+            - name: RAY_TRAIN_CANARY_TENANTS
+              value: {{ join "," .Values.rayTrain.canaryTenants | quote }}
             - name: KUBERAY_RAYJOB_CLUSTER_SPEC_FIELD
               value: {{ .Values.backend.rayJobClusterSpecField | quote }}
             - name: RAY_JOB_SERVICE_ACCOUNT
