@@ -95,6 +95,9 @@ for expected in \
   'verify.sh'; do
   require_in "$upgrade" "$expected"
 done
+for state_field in 'phase=' 'write_started=' 'verified='; do
+  require_in "$upgrade" "$state_field"
+done
 require_in "$upgrade" '--kube-context'
 require_in "$upgrade" '.status.replicas'
 require_in "$upgrade" 'KUBERAY_CONTEXT="$target_context" "${script_dir}/preflight-upgrade.sh"'
@@ -174,9 +177,22 @@ case "${command_line}" in
   *' scale deployment/ray-train-backend '*--replicas=0*) printf '0\n' >"${FIXTURE_STATE_DIR}/backend-replicas"; if [[ "${FIXTURE_BACKEND_DRAIN_STUCK:-0}" == 1 ]]; then printf '1\n' >"${FIXTURE_STATE_DIR}/backend-current"; else printf '0\n' >"${FIXTURE_STATE_DIR}/backend-current"; fi ;;
   *' scale deployment/ray-train-backend '*--replicas=2*) printf '2\n' >"${FIXTURE_STATE_DIR}/backend-replicas"; printf '2\n' >"${FIXTURE_STATE_DIR}/backend-current" ;;
   *' patch clusterqueue queue-a '*Hold*) printf 'Hold\n' >"${FIXTURE_STATE_DIR}/queue-policy" ;;
-  *' patch clusterqueue queue-a '*stopPolicy*null*) printf 'None\n' >"${FIXTURE_STATE_DIR}/queue-policy" ;;
-  *' patch clusterqueue queue-a '*stopPolicy*None*) printf 'None\n' >"${FIXTURE_STATE_DIR}/queue-policy" ;;
-  *' wait --for=condition=Active=false clusterqueue/queue-a '*) [[ "$(cat "${FIXTURE_STATE_DIR}/queue-policy")" == Hold ]] ;;
+  *' patch clusterqueue queue-a '*stopPolicy*null*)
+    [[ "${FIXTURE_QUEUE_RESTORE_FAIL:-0}" == 0 ]] || exit 1
+    printf 'None\n' >"${FIXTURE_STATE_DIR}/queue-policy"
+    ;;
+  *' patch clusterqueue queue-a '*stopPolicy*None*)
+    [[ "${FIXTURE_QUEUE_RESTORE_FAIL:-0}" == 0 ]] || exit 1
+    printf 'None\n' >"${FIXTURE_STATE_DIR}/queue-policy"
+    ;;
+  *' wait --for=condition=Active=false clusterqueue/queue-a '*)
+    case "${FIXTURE_PREWRITE_SIGNAL:-}" in
+      INT) kill -INT "$PPID"; exit 130 ;;
+      TERM) kill -TERM "$PPID"; exit 143 ;;
+    esac
+    [[ "$(cat "${FIXTURE_STATE_DIR}/queue-policy")" == Hold ]]
+    ;;
+  *' wait --for=condition=Active=true clusterqueue/queue-a '*) [[ "$(cat "${FIXTURE_STATE_DIR}/queue-policy")" == None ]] ;;
   *' wait --for=condition=Available=false deployment/ray-train-backend '*) [[ "$(cat "${FIXTURE_STATE_DIR}/backend-replicas")" == 0 ]] ;;
   *' get deployment '*'.spec.template.spec.containers'*)
     if [[ -f "${FIXTURE_STATE_DIR}/helm-upgraded" ]]; then printf 'kuberay-operator quay.io/kuberay/operator:%s\n' "${FIXTURE_OPERATOR_IMAGE_TAG:-v1.6.2}"; else printf 'kuberay-operator quay.io/kuberay/operator:v1.3.0\n'; fi
@@ -207,7 +223,10 @@ case "${command_line}" in
     printf 'apiVersion: v1\nitems: []\n'
     ;;
   *' rollout status '*) printf 'deployment successfully rolled out\n' ;;
-  *' replace -k '*) printf 'customresourcedefinition.apiextensions.k8s.io replaced\n' ;;
+  *' replace -k '*)
+    printf 'customresourcedefinition.apiextensions.k8s.io replaced\n'
+    [[ "${FIXTURE_REPLACE_FAIL:-0}" == 0 ]] || exit 1
+    ;;
   *) printf 'fixture\n' ;;
 esac
 FIXTURE
@@ -226,7 +245,15 @@ case " $* " in
   *' get manifest '*) printf 'apiVersion: apps/v1\nkind: Deployment\n' ;;
   *' list '*) printf '[{"name":"kuberay-operator","chart":"kuberay-operator-%s"}]\n' "${FIXTURE_HELM_CHART_VERSION:-1.6.2}" ;;
   *' show chart '*) printf 'name: kuberay-operator\nversion: 1.6.2\n' ;;
-  *' upgrade '*) touch "${FIXTURE_STATE_DIR}/helm-upgraded"; printf 'Release upgraded\n' ;;
+  *' upgrade '*)
+    case "${FIXTURE_UPGRADE_SIGNAL:-}" in
+      INT) kill -INT "$PPID"; exit 130 ;;
+      TERM) kill -TERM "$PPID"; exit 143 ;;
+    esac
+    [[ "${FIXTURE_HELM_UPGRADE_FAIL:-0}" == 0 ]] || exit 1
+    touch "${FIXTURE_STATE_DIR}/helm-upgraded"
+    printf 'Release upgraded\n'
+    ;;
   *) printf 'fixture\n' ;;
 esac
 FIXTURE
@@ -248,12 +275,14 @@ done
 case "$url" in
   https://github.com/ray-project/kuberay-helm/releases/download/kuberay-operator-1.6.2/kuberay-operator-1.6.2.tgz)
     printf 'fixture kuberay operator chart 1.6.2\n' >"$output"
+    [[ "${FIXTURE_TAMPER_CHART:-0}" == 0 ]] || printf 'tampered\n' >>"$output"
     ;;
   https://raw.githubusercontent.com/ray-project/kuberay/598eb66/*)
     crd_file="${url##*/}"
     crd_name="${crd_file#ray.io_}"
     crd_name="${crd_name%.yaml}.ray.io"
     printf 'apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata:\n  name: %s\n' "$crd_name" >"$output"
+    [[ "${FIXTURE_TAMPER_CRD_FILE:-}" != "$crd_file" ]] || printf 'tampered: true\n' >>"$output"
     ;;
   *) exit 22 ;;
 esac
@@ -265,12 +294,17 @@ set -euo pipefail
 file="${!#}"
 case "$(basename -- "$file")" in
   kuberay-operator-1.6.2.tgz)
-    if [[ "${FIXTURE_CHART_CHECKSUM_MISMATCH:-0}" == 1 ]]; then digest="$(printf '%064d' 0)"; else digest='660e709573ea49455fea0b34b40a38afc217b8354bcf0f17aab2a3249d3c1b5f'; fi
+    expected='fixture kuberay operator chart 1.6.2'
+    if [[ "$(cat "$file")" == "$expected" && "$(wc -l <"$file" | tr -d ' ')" == 1 ]]; then
+      digest='660e709573ea49455fea0b34b40a38afc217b8354bcf0f17aab2a3249d3c1b5f'
+    else
+      digest="$(/usr/bin/shasum -a 256 "$file")"
+      digest="${digest%%[[:space:]]*}"
+    fi
     printf '%s  %s\n' "$digest" "$file"
     ;;
   crds.aggregate)
-    if [[ "${FIXTURE_CRD_CHECKSUM_MISMATCH:-0}" == 1 ]]; then digest="$(printf '%064d' 0)"; else digest="${EXPECTED_KUBERAY_CRD_SHA256}"; fi
-    printf '%s  %s\n' "$digest" "$file"
+    /usr/bin/shasum -a 256 "$file"
     ;;
   *) /usr/bin/shasum "$@" ;;
 esac
@@ -307,6 +341,18 @@ printf '2\n' >"${temporary}/state/backend-replicas"
 printf '2\n' >"${temporary}/state/backend-current"
 printf 'None\n' >"${temporary}/state/queue-policy"
 
+fixture_crd_aggregate="${temporary}/expected-crds.aggregate"
+: >"$fixture_crd_aggregate"
+for fixture_crd_file in ray.io_rayclusters.yaml ray.io_rayjobs.yaml ray.io_rayservices.yaml ray.io_raycronjobs.yaml; do
+  fixture_crd_name="${fixture_crd_file#ray.io_}"
+  fixture_crd_name="${fixture_crd_name%.yaml}.ray.io"
+  printf 'FILE %s\n' "$fixture_crd_file" >>"$fixture_crd_aggregate"
+  printf 'apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata:\n  name: %s\n' "$fixture_crd_name" >>"$fixture_crd_aggregate"
+done
+fixture_crd_digest="$(/usr/bin/shasum -a 256 "$fixture_crd_aggregate")"
+fixture_crd_digest="${fixture_crd_digest%%[[:space:]]*}"
+[[ "$fixture_crd_digest" =~ ^[0-9a-f]{64}$ ]] || fail 'fixture CRD digest is invalid'
+
 fixture_env=(
   "PATH=${temporary}/bin:${PATH}"
   "FIXTURE_LOG=${fixture_log}"
@@ -318,8 +364,8 @@ fixture_env=(
   'CONFIRM_KUBE_CONTEXT=fixture-context'
   'KUBERAY_NAMESPACE=kuberay-system'
   'KUBERAY_RELEASE=kuberay-operator'
-  'EXPECTED_KUBERAY_CRD_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-  'CONFIRM_KUBERAY_CRD_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  "EXPECTED_KUBERAY_CRD_SHA256=${fixture_crd_digest}"
+  "CONFIRM_KUBERAY_CRD_SHA256=${fixture_crd_digest}"
   'EXPECTED_KUBERAY_OPERATOR_IMAGE_DIGEST=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
   'CONFIRM_KUBERAY_OPERATOR_IMAGE_DIGEST=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
 )
@@ -391,6 +437,28 @@ assert_no_cluster_writes() {
   fi
 }
 
+assert_gates_held() {
+  [[ "$(cat "${temporary}/state/backend-replicas")" == 0 ]] || fail "$1: backend was scaled up"
+  [[ "$(cat "${temporary}/state/backend-current")" == 0 ]] || fail "$1: backend Pod remained running"
+  [[ "$(cat "${temporary}/state/queue-policy")" == Hold ]] || fail "$1: ClusterQueue was unheld"
+  if grep -Fq 'scale deployment/ray-train-backend --replicas=2' "$fixture_log"; then fail "$1: scale-up command was issued"; fi
+  if grep -Eq 'patch clusterqueue .*stopPolicy.*(null|None)' "$fixture_log"; then fail "$1: queue restore command was issued"; fi
+}
+
+assert_manual_recovery_notice() {
+  grep -Fq 'backup path:' <<<"$2" || fail "$1: backup path was not reported"
+  grep -Fq 'manual recovery required' <<<"$2" || fail "$1: manual recovery guidance was not reported"
+}
+
+assert_safe_restore_order() {
+  local queue_patch_line queue_active_line backend_scale_line
+  queue_patch_line="$(grep -n 'patch clusterqueue queue-a .*stopPolicy.*null' "$fixture_log" | tail -1 | cut -d: -f1)"
+  queue_active_line="$(grep -n 'wait --for=condition=Active=true clusterqueue/queue-a' "$fixture_log" | tail -1 | cut -d: -f1)"
+  backend_scale_line="$(grep -n 'scale deployment/ray-train-backend --replicas=2' "$fixture_log" | tail -1 | cut -d: -f1)"
+  [[ -n "$queue_patch_line" && -n "$queue_active_line" && -n "$backend_scale_line" ]] || fail "$1: restore commands are incomplete"
+  [[ "$queue_patch_line" -lt "$queue_active_line" && "$queue_active_line" -lt "$backend_scale_line" ]] || fail "$1: backend was restored before all queues were Active"
+}
+
 reset_fixture_state
 if env "${fixture_env[@]}" "$upgrade" >/dev/null 2>&1; then
   fail 'upgrade ran without CONFIRM_KUBERAY_UPGRADE=1'
@@ -398,16 +466,16 @@ fi
 assert_no_cluster_writes 'upgrade mutated the fixture cluster without explicit confirmation'
 
 reset_fixture_state
-if env "${fixture_env[@]}" CONFIRM_KUBERAY_UPGRADE=1 FIXTURE_CHART_CHECKSUM_MISMATCH=1 "$upgrade" >/dev/null 2>&1; then
-  fail 'upgrade accepted a chart checksum mismatch'
+if env "${fixture_env[@]}" CONFIRM_KUBERAY_UPGRADE=1 FIXTURE_TAMPER_CHART=1 "$upgrade" >/dev/null 2>&1; then
+  fail 'upgrade accepted tampered chart bytes'
 fi
-assert_no_cluster_writes 'chart checksum mismatch caused a cluster write'
+assert_no_cluster_writes 'tampered chart bytes caused a cluster write'
 
 reset_fixture_state
-if env "${fixture_env[@]}" CONFIRM_KUBERAY_UPGRADE=1 FIXTURE_CRD_CHECKSUM_MISMATCH=1 "$upgrade" >/dev/null 2>&1; then
-  fail 'upgrade accepted a CRD aggregate checksum mismatch'
+if env "${fixture_env[@]}" CONFIRM_KUBERAY_UPGRADE=1 FIXTURE_TAMPER_CRD_FILE=ray.io_rayjobs.yaml "$upgrade" >/dev/null 2>&1; then
+  fail 'upgrade accepted tampered CRD bytes'
 fi
-assert_no_cluster_writes 'CRD checksum mismatch caused a cluster write'
+assert_no_cluster_writes 'tampered CRD bytes caused a cluster write'
 
 reset_fixture_state
 if env "${fixture_env[@]}" CONFIRM_KUBERAY_UPGRADE=1 KUBERAY_CHART_URL='https://evil.example/kuberay-operator-1.6.2.tgz' "$upgrade" >/dev/null 2>&1; then
@@ -451,6 +519,25 @@ if grep -Eq 'kubectl replace -k|helm upgrade' "${fixture_log}"; then
 fi
 [[ "$(cat "${temporary}/state/backend-replicas")" == 2 ]] || fail 'backend replicas were not restored after a gated preflight failure'
 [[ "$(cat "${temporary}/state/queue-policy")" == None ]] || fail 'ClusterQueue stopPolicy was not restored after a gated preflight failure'
+assert_safe_restore_order 'pre-write failure'
+
+reset_fixture_state
+if prewrite_signal_output="$(env "${fixture_env[@]}" CONFIRM_KUBERAY_UPGRADE=1 FIXTURE_PREWRITE_SIGNAL=TERM "$upgrade" 2>&1)"; then
+  fail 'upgrade accepted a pre-write SIGTERM'
+fi
+if grep -Eq 'kubectl replace -k|helm upgrade' "$fixture_log"; then fail 'pre-write SIGTERM reached a cluster upgrade write'; fi
+[[ "$(cat "${temporary}/state/backend-replicas")" == 2 ]] || fail 'pre-write SIGTERM did not restore backend replicas'
+[[ "$(cat "${temporary}/state/queue-policy")" == None ]] || fail 'pre-write SIGTERM did not restore the ClusterQueue'
+assert_safe_restore_order 'pre-write SIGTERM'
+
+reset_fixture_state
+if restore_failure_output="$(env "${fixture_env[@]}" CONFIRM_KUBERAY_UPGRADE=1 FIXTURE_POST_GATE_WORKLOADS=$'tenant-a race-workload False\n' FIXTURE_QUEUE_RESTORE_FAIL=1 "$upgrade" 2>&1)"; then
+  fail 'upgrade succeeded when a pre-write queue restoration failed'
+fi
+[[ "$(cat "${temporary}/state/backend-replicas")" == 0 ]] || fail 'queue restoration failure scaled backend up'
+[[ "$(cat "${temporary}/state/queue-policy")" == Hold ]] || fail 'queue restoration failure did not preserve the admission gate'
+if grep -Fq 'scale deployment/ray-train-backend --replicas=2' "$fixture_log"; then fail 'queue restoration failure issued a backend scale-up'; fi
+assert_manual_recovery_notice 'queue restoration failure' "$restore_failure_output"
 
 reset_fixture_state
 if env "${fixture_env[@]}" CONFIRM_KUBERAY_UPGRADE=1 FIXTURE_POST_GATE_RAYJOBS=$'tenant-a race-job RUNNING\n' "$upgrade" >/dev/null 2>&1; then
@@ -463,6 +550,23 @@ if env "${fixture_env[@]}" CONFIRM_KUBERAY_UPGRADE=1 FIXTURE_POST_GATE_RAYCLUSTE
   fail 'upgrade ignored a RayCluster created before the maintenance gate closed'
 fi
 if grep -Eq 'kubectl replace -k|helm upgrade' "${fixture_log}"; then fail 'post-gate RayCluster caused an upgrade mutation'; fi
+
+for failure_mode in replace helm verify INT TERM; do
+  reset_fixture_state
+  failure_env=()
+  case "$failure_mode" in
+    replace) failure_env=('FIXTURE_REPLACE_FAIL=1') ;;
+    helm) failure_env=('FIXTURE_HELM_UPGRADE_FAIL=1') ;;
+    verify) failure_env=('FIXTURE_OPERATOR_IMAGE_TAG=v1.3.0') ;;
+    INT|TERM) failure_env=("FIXTURE_UPGRADE_SIGNAL=${failure_mode}") ;;
+  esac
+  if post_write_output="$(env "${fixture_env[@]}" "${failure_env[@]}" CONFIRM_KUBERAY_UPGRADE=1 "$upgrade" 2>&1)"; then
+    fail "upgrade accepted post-write failure: ${failure_mode}"
+  fi
+  grep -Fq 'kubectl replace -k' "$fixture_log" || fail "${failure_mode}: CRD write was not recorded before failure"
+  assert_gates_held "post-write ${failure_mode} failure"
+  assert_manual_recovery_notice "post-write ${failure_mode} failure" "$post_write_output"
+done
 
 touch "${temporary}/state/helm-upgraded"
 if env "${fixture_env[@]}" FIXTURE_HELM_CHART_VERSION=1.3.0 "$verify" >/dev/null 2>&1; then
@@ -487,6 +591,7 @@ grep -Fq -- '--set replicas=2' "${fixture_log}" || fail 'operator replica count 
 grep -Fq -- '/apis/ray.io/v1' "${fixture_log}" || fail "post-upgrade verification did not run: ${upgrade_output}"
 [[ "$(cat "${temporary}/state/backend-replicas")" == 2 ]] || fail 'backend replicas were not restored after success'
 [[ "$(cat "${temporary}/state/queue-policy")" == None ]] || fail 'ClusterQueue stopPolicy was not restored after success'
+assert_safe_restore_order 'successful verification'
 while read -r mutation; do
   [[ "$mutation" == *'--context fixture-context'* || "$mutation" == helm\ upgrade*'--kube-context fixture-context'* ]] || fail "mutation omitted explicit context: $mutation"
 done < <(grep -E '^(kubectl (scale|patch|replace)|helm upgrade)' "${fixture_log}")

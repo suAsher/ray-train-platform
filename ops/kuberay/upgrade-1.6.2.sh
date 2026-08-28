@@ -25,8 +25,12 @@ readonly MAINTENANCE_WAIT_ATTEMPTS="${MAINTENANCE_WAIT_ATTEMPTS:-30}"
 readonly MAINTENANCE_WAIT_INTERVAL_SECONDS="${MAINTENANCE_WAIT_INTERVAL_SECONDS:-2}"
 
 artifact_dir=''
+backup_dir=''
 maintenance_active=false
 queues_patched=false
+phase='initializing'
+write_started=false
+verified=false
 backend_replicas=''
 queue_state_file=''
 target_context=''
@@ -78,10 +82,6 @@ wait_for_backend_replicas() {
 
 restore_maintenance() {
   local failed=0 name policy patch
-  if [[ -n "$backend_replicas" ]]; then
-    kubectl scale "deployment/${PLATFORM_BACKEND_DEPLOYMENT}" --replicas="$backend_replicas" --context "$target_context" -n "$PLATFORM_NAMESPACE" >/dev/null || failed=1
-    wait_for_backend_replicas "$backend_replicas" || failed=1
-  fi
   if [[ "$queues_patched" == true && -s "$queue_state_file" ]]; then
     while IFS=$'\t' read -r name policy; do
       [[ -n "$name" ]] || continue
@@ -91,19 +91,42 @@ restore_maintenance() {
         patch="{\"spec\":{\"stopPolicy\":\"${policy}\"}}"
       fi
       kubectl patch clusterqueue "$name" --type merge -p "$patch" --context "$target_context" >/dev/null || failed=1
-      if [[ "$policy" == __ABSENT__ || "$policy" == None ]]; then
-        kubectl wait --for=condition=Active=true "clusterqueue/${name}" --timeout=120s --context "$target_context" >/dev/null || failed=1
-      fi
     done <"$queue_state_file"
+    [[ "$failed" == 0 ]] || return 1
+    while IFS=$'\t' read -r name policy; do
+      [[ -n "$name" ]] || continue
+      kubectl wait --for=condition=Active=true "clusterqueue/${name}" --timeout=120s --context "$target_context" >/dev/null || failed=1
+    done <"$queue_state_file"
+    [[ "$failed" == 0 ]] || return 1
   fi
-  return "$failed"
+  if [[ -n "$backend_replicas" ]]; then
+    kubectl scale "deployment/${PLATFORM_BACKEND_DEPLOYMENT}" --replicas="$backend_replicas" --context "$target_context" -n "$PLATFORM_NAMESPACE" >/dev/null || return 1
+    wait_for_backend_replicas "$backend_replicas" || return 1
+  fi
+  return 0
+}
+
+report_manual_recovery() {
+  echo "KubeRay upgrade is fail-closed in maintenance phase ${phase}." >&2
+  [[ -z "$backup_dir" ]] || echo "backup path: ${backup_dir}" >&2
+  echo "manual recovery required: inspect the backup and cluster state before restoring ClusterQueues and scaling the platform backend." >&2
 }
 
 cleanup() {
   local status=$?
   trap - EXIT INT TERM
   if [[ "$maintenance_active" == true ]]; then
-    restore_maintenance || status=1
+    if [[ "$write_started" == true && "$verified" != true ]] || [[ "$phase" == restore_failed ]]; then
+      report_manual_recovery
+    elif restore_maintenance; then
+      maintenance_active=false
+      queues_patched=false
+      phase=restored
+    else
+      status=1
+      phase=restore_failed
+      report_manual_recovery
+    fi
   fi
   if [[ -n "$artifact_dir" && -d "$artifact_dir" ]]; then
     rm -rf -- "$artifact_dir"
@@ -193,6 +216,7 @@ for required_backup_file in context.txt crds.yaml operator-deployment.yaml opera
   [[ "$verified_backup_names" == *"|${required_backup_file}|"* ]] || die "backup checksum manifest is missing: $required_backup_file"
 done
 echo "backup path: ${backup_dir}" >&2
+phase=backup_verified
 
 backend_replicas="$(kubectl get deployment "$PLATFORM_BACKEND_DEPLOYMENT" --context "$target_context" -n "$PLATFORM_NAMESPACE" -o jsonpath='{.spec.replicas}{"\n"}')" || die 'cannot record backend replica count'
 [[ "$backend_replicas" =~ ^[0-9]+$ && "$backend_replicas" -gt 0 ]] || die 'backend must have a positive replica count before maintenance'
@@ -206,6 +230,7 @@ while IFS=$'\t' read -r name policy; do
 done <<<"$queue_rows"
 [[ -s "$queue_state_file" ]] || die 'no ClusterQueue state was recorded'
 
+phase=maintenance
 maintenance_active=true
 kubectl scale "deployment/${PLATFORM_BACKEND_DEPLOYMENT}" --replicas=0 --context "$target_context" -n "$PLATFORM_NAMESPACE" >/dev/null
 wait_for_backend_replicas 0 || die 'backend maintenance gate did not reach zero Ready replicas'
@@ -216,7 +241,10 @@ while IFS=$'\t' read -r name _policy; do
 done <"$queue_state_file"
 
 PREFLIGHT_EXPECT_QUEUES_HELD=1 KUBERAY_CONTEXT="$target_context" "${script_dir}/preflight-upgrade.sh"
+phase=writing_crds
+write_started=true
 kubectl replace -k "$crd_dir" --context "$target_context"
+phase=upgrading_operator
 helm upgrade "$KUBERAY_RELEASE" "$chart_path" \
   --namespace "$KUBERAY_NAMESPACE" \
   --kube-context "$target_context" \
@@ -227,10 +255,18 @@ helm upgrade "$KUBERAY_RELEASE" "$chart_path" \
   --atomic --wait --timeout 10m
 
 export EXPECTED_KUBERAY_OPERATOR_IMAGE_DIGEST CONFIRM_KUBERAY_OPERATOR_IMAGE_DIGEST
+phase=verifying
 KUBERAY_CONTEXT="$target_context" "${script_dir}/verify.sh"
-restore_maintenance || die 'upgrade succeeded but maintenance admission restoration failed'
+verified=true
+phase=verified
+phase=restoring
+if ! restore_maintenance; then
+  phase=restore_failed
+  die 'upgrade verified but maintenance admission restoration failed'
+fi
 maintenance_active=false
 queues_patched=false
+phase=complete
 rm -rf -- "$artifact_dir"
 artifact_dir=''
 trap - EXIT INT TERM
