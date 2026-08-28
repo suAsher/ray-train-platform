@@ -173,6 +173,18 @@ func TestRayDataModeRejectsRenderingWithoutDualNVMeCapability(t *testing.T) {
 	}
 }
 
+func TestRayDataModeRejectsRenderingWithoutResolvedGovernedInput(t *testing.T) {
+	job := managedJobWithDataMode(t, domain.DataModeRayData)
+	job.Spec.ResolvedDataMounts.Input = nil
+	manifest, err := RenderRayJob(job, runtimeCacheRenderOptions())
+	if err == nil || !strings.Contains(err.Error(), "resolved governed input mount") {
+		t.Fatalf("ray-data without governed input returned manifest=%#v err=%v", manifest, err)
+	}
+	if manifest != nil {
+		t.Fatalf("ray-data without governed input rendered a workload: %#v", manifest)
+	}
+}
+
 func podHasMountPath(pod map[string]any, wanted string) bool {
 	containers, _ := pod["containers"].([]any)
 	if len(containers) == 0 {

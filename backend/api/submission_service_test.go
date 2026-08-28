@@ -232,6 +232,167 @@ func TestSubmissionRejectsInvalidRayDataModesBeforeJobAndOutboxPersistence(t *te
 	}
 }
 
+func TestRayDataSubmissionRequiresResolvedGovernedInputBeforePersistence(t *testing.T) {
+	image, baseSpec := rayDataSubmissionFixture(t)
+	for _, test := range []struct {
+		name       string
+		input      domain.DataLocation
+		bindings   []domain.DataMountBinding
+		wantDetail string
+	}{
+		{name: "missing logical input", wantDetail: "resolved governed input mount"},
+		{
+			name:  "input binding is not ready",
+			input: domain.DataLocation{Space: domain.DataSpaceTeamShared, RelativePath: "datasets/train"},
+			bindings: []domain.DataMountBinding{{
+				ID: "team", TenantID: "tenant-a", Scope: domain.DataMountScopeTenant,
+				SpaceID: domain.DataSpaceTeamShared, ClaimName: "data-team-a", ReadOnly: true, Status: domain.DataMountBindingPending,
+			}},
+			wantDetail: "data-space mount is not ready",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &submissionServiceRepository{}
+			dataSpaceEnsureCalls := 0
+			service := NewSubmissionService(repository, SubmissionServiceOptions{
+				Images:            &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{image}}},
+				RuntimePolicy:     runtimecatalog.Policy{ManagedEnabled: true},
+				LocalCache:        rayDataLocalCachePolicy(),
+				DataSpaces:        &fakeDataSpaceStore{bindings: test.bindings},
+				DataSpacesEnabled: true,
+				EnsureDataSpaces: func(context.Context, auth.Principal) error {
+					dataSpaceEnsureCalls++
+					return nil
+				},
+				NewID: func() (string, error) { return "job-ray-data-input", nil },
+			})
+			spec := baseSpec
+			spec.Input = test.input
+
+			job, err := service.Submit(context.Background(), SubmissionInput{
+				Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+				Spec:      spec, Origin: domain.SubmissionOriginPortal,
+			})
+			if job != nil || !errors.Is(err, ErrSubmissionDataMountNotReady) || !strings.Contains(err.Error(), test.wantDetail) {
+				t.Fatalf("ray-data input boundary returned job=%+v err=%v", job, err)
+			}
+			if repository.createCalls != 0 || repository.created != nil || repository.identityCalls != 0 || dataSpaceEnsureCalls != 0 {
+				t.Fatalf("invalid ray-data input crossed provisioning/persistence: dataSpaces=%d creates=%d identity=%d job=%+v", dataSpaceEnsureCalls, repository.createCalls, repository.identityCalls, repository.created)
+			}
+		})
+	}
+}
+
+func TestRayDataSubmissionRequiresDualNVMeCapabilityBeforePersistence(t *testing.T) {
+	image, spec := rayDataSubmissionFixture(t)
+	spec.Input = domain.DataLocation{Space: domain.DataSpaceTeamShared, RelativePath: "datasets/train"}
+	for _, test := range []struct {
+		name       string
+		policy     LocalCachePolicy
+		wantDetail string
+	}{
+		{name: "runtime cache disabled", wantDetail: "runtime cache capability is disabled"},
+		{
+			name: "second local cache device unavailable",
+			policy: LocalCachePolicy{
+				Enabled: true, AllowedSizes: []string{"200Gi"}, DefaultSize: "200Gi", MaxSize: "200Gi",
+				MountPaths: []string{"/mnt/cache"},
+			},
+			wantDetail: "dual-NVMe",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &submissionServiceRepository{}
+			service := NewSubmissionService(repository, SubmissionServiceOptions{
+				Images:        &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{image}}},
+				RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true},
+				LocalCache:    test.policy,
+			})
+
+			job, err := service.Submit(context.Background(), SubmissionInput{
+				Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+				Spec:      spec, Origin: domain.SubmissionOriginPortal,
+			})
+			if job != nil || !errors.Is(err, ErrSubmissionInvalidJobSpec) || !strings.Contains(err.Error(), test.wantDetail) {
+				t.Fatalf("ray-data cache capability returned job=%+v err=%v", job, err)
+			}
+			if repository.createCalls != 0 || repository.created != nil || repository.identityCalls != 0 {
+				t.Fatalf("unsupported ray-data crossed identity/job/outbox persistence: creates=%d identity=%d job=%+v", repository.createCalls, repository.identityCalls, repository.created)
+			}
+		})
+	}
+}
+
+func TestRayDataSubmissionNormalizesRuntimeCacheAndResolvedInput(t *testing.T) {
+	image, spec := rayDataSubmissionFixture(t)
+	spec.Input = domain.DataLocation{Space: domain.DataSpaceTeamShared, RelativePath: "datasets/train"}
+	repository := &submissionServiceRepository{}
+	dataSpaceEnsureCalls := 0
+	service := NewSubmissionService(repository, SubmissionServiceOptions{
+		Images:        &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{image}}},
+		RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true},
+		LocalCache:    rayDataLocalCachePolicy(),
+		DataSpaces: &fakeDataSpaceStore{bindings: []domain.DataMountBinding{{
+			ID: "team", TenantID: "tenant-a", Scope: domain.DataMountScopeTenant,
+			SpaceID: domain.DataSpaceTeamShared, ClaimName: "data-team-a", ReadOnly: true, Status: domain.DataMountBindingReady,
+		}}},
+		DataSpacesEnabled: true,
+		EnsureDataSpaces: func(context.Context, auth.Principal) error {
+			dataSpaceEnsureCalls++
+			if repository.identityCalls != 1 {
+				t.Fatalf("ray-data initialized data spaces before identity persistence: identity=%d", repository.identityCalls)
+			}
+			return nil
+		},
+		NewID: func() (string, error) { return "job-ray-data-ready", nil },
+	})
+
+	job, err := service.Submit(context.Background(), SubmissionInput{
+		Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+		Spec:      spec, Origin: domain.SubmissionOriginPortal,
+	})
+	if err != nil {
+		t.Fatalf("submit ready ray-data job: %v", err)
+	}
+	if job.Spec.Cache.Mode != domain.CacheModeRuntime || job.Spec.Cache.Size != "200Gi" || job.Spec.Cache.Preload != "" {
+		t.Fatalf("ray-data cache was not normalized internally: %+v", job.Spec.Cache)
+	}
+	input := job.Spec.ResolvedDataMounts.Input
+	if input == nil || input.MountPath != domain.DataMountInputPath || !input.ReadOnly {
+		t.Fatalf("ray-data input did not resolve to the read-only governed path: %+v", input)
+	}
+	if dataSpaceEnsureCalls != 1 || repository.createCalls != 1 || repository.identityCalls != 1 || repository.created == nil || repository.created.Spec.Cache != job.Spec.Cache {
+		t.Fatalf("valid ray-data persistence mismatch: dataSpaces=%d creates=%d identity=%d persisted=%+v", dataSpaceEnsureCalls, repository.createCalls, repository.identityCalls, repository.created)
+	}
+}
+
+func rayDataSubmissionFixture(t *testing.T) (domain.PlatformImage, domain.JobSpec) {
+	t.Helper()
+	reference := "harbor.example/ray-runtime:production"
+	image := domain.PlatformImage{
+		ID: "managed-image", Name: "Ray managed", Kind: domain.ImageKindTraining, Reference: reference,
+		RayVersion: domain.RayVersionProduction, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayTrain},
+	}
+	config, err := domain.NewRayDataDatasetConfig(domain.RayDataFormatImages, "images/train")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := submissionSpec(reference)
+	spec.TrainingEngine = domain.TrainingEngineRayTrain
+	spec.DataMode = domain.DataModeRayData
+	spec.Managed = domain.ManagedTrainingPolicy{
+		MaxFailures: 2, Checkpoint: domain.CheckpointPolicy{EveryEpochs: 1, KeepLatest: 3, KeepBest: 1}, RayData: config,
+	}
+	return image, spec
+}
+
+func rayDataLocalCachePolicy() LocalCachePolicy {
+	return LocalCachePolicy{
+		Enabled: true, AllowedSizes: []string{"200Gi"}, DefaultSize: "200Gi", MaxSize: "200Gi",
+		MountPath: "/mnt/cache", MountPaths: []string{"/mnt/cache", "/mnt/cache2"},
+	}
+}
+
 func TestSubmitAllowlistFallbackIsLegacyOnly(t *testing.T) {
 	reference := "harbor.example/legacy:stable"
 	principal := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal}

@@ -122,6 +122,47 @@ func TestManagedPolicyRequiresRayDataConfigOnlyInRayDataMode(t *testing.T) {
 	}
 }
 
+func TestManagedPolicyRequiresResolvedGovernedInputForRayData(t *testing.T) {
+	config, err := NewRayDataDatasetConfig(RayDataFormatImages, "images/train")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := ManagedTrainingPolicy{RayData: config}
+	validInput := &ResolvedDataMount{
+		Space: DataSpaceTeamShared, BindingSpace: DataSpaceTeamShared,
+		ClaimName: "data-team-a", SubPath: "datasets/train", MountPath: DataMountInputPath, ReadOnly: true,
+	}
+
+	for _, test := range []struct {
+		name    string
+		mode    DataMode
+		mounts  ResolvedDataSpaceMounts
+		wantErr string
+	}{
+		{name: "mount mode has no ray data requirement", mode: DataModeMount},
+		{name: "ray data missing input", mode: DataModeRayData, wantErr: "resolved governed input mount"},
+		{name: "ray data writable input", mode: DataModeRayData, mounts: ResolvedDataSpaceMounts{Input: &ResolvedDataMount{
+			Space: DataSpaceTeamShared, BindingSpace: DataSpaceTeamShared,
+			ClaimName: "data-team-a", SubPath: "datasets/train", MountPath: DataMountInputPath,
+		}}, wantErr: "read-only at /mnt/data/input"},
+		{name: "ray data wrong input path", mode: DataModeRayData, mounts: ResolvedDataSpaceMounts{Input: &ResolvedDataMount{
+			Space: DataSpaceTeamShared, BindingSpace: DataSpaceTeamShared,
+			ClaimName: "data-team-a", SubPath: "datasets/train", MountPath: "/mnt/data/other", ReadOnly: true,
+		}}, wantErr: "read-only at /mnt/data/input"},
+		{name: "ray data governed input", mode: DataModeRayData, mounts: ResolvedDataSpaceMounts{Input: validInput}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := policy.ValidateResolvedDataMode(test.mode, test.mounts)
+			if test.wantErr == "" && err != nil {
+				t.Fatalf("validate resolved data mode: %v", err)
+			}
+			if test.wantErr != "" && (err == nil || !strings.Contains(err.Error(), test.wantErr)) {
+				t.Fatalf("expected error containing %q, got %v", test.wantErr, err)
+			}
+		})
+	}
+}
+
 func TestRayDataDatasetConfigJSONRoundTripRevalidatesTheStableURI(t *testing.T) {
 	config, err := NewRayDataDatasetConfig(RayDataFormatParquet, "tables/train.parquet")
 	if err != nil {

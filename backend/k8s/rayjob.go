@@ -100,6 +100,9 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	if err := job.Spec.Managed.ValidateDataMode(job.Spec.DataMode); err != nil {
 		return nil, fmt.Errorf("validate data mode: %w", err)
 	}
+	if err := job.Spec.Managed.ValidateResolvedDataMode(job.Spec.DataMode, job.Spec.ResolvedDataMounts); err != nil {
+		return nil, fmt.Errorf("validate resolved data mode: %w", err)
+	}
 	if err := domain.ValidatePinnedImage(options.SourceMaterializerImage); err != nil {
 		return nil, fmt.Errorf("source materializer image: %w", err)
 	}

@@ -218,8 +218,11 @@ func (service *SubmissionService) Submit(ctx context.Context, input SubmissionIn
 			return nil, err
 		}
 	}
-	if err := service.repository.EnsureIdentity(ctx, input.Principal); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrSubmissionIdentityPersist, err)
+	deferIdentityPersistence := spec.DataMode == domain.DataModeRayData
+	if !deferIdentityPersistence {
+		if err := service.repository.EnsureIdentity(ctx, input.Principal); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrSubmissionIdentityPersist, err)
+		}
 	}
 	if service.ensureTenantRuntime != nil {
 		namespace := "tenant-" + sanitizeDNS(input.Principal.TenantID)
@@ -227,7 +230,7 @@ func (service *SubmissionService) Submit(ctx context.Context, input SubmissionIn
 			return nil, fmt.Errorf("%w: %v", ErrSubmissionQueueProvision, err)
 		}
 	}
-	if service.ensureDataSpaces != nil {
+	if service.ensureDataSpaces != nil && !deferIdentityPersistence {
 		if err := service.ensureDataSpaces(ctx, input.Principal); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrSubmissionDataSpacesUnavailable, err)
 		}
@@ -246,6 +249,9 @@ func (service *SubmissionService) Submit(ctx context.Context, input SubmissionIn
 		return nil, err
 	}
 	spec.ResolvedDataMounts = resolvedDataMounts
+	if err := spec.Managed.ValidateResolvedDataMode(spec.DataMode, spec.ResolvedDataMounts); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrSubmissionDataMountNotReady, err)
+	}
 	if service.ensureOutputDirectory != nil && spec.ResolvedDataMounts.Output != nil {
 		if err := service.ensureOutputDirectory(ctx, input.Principal, spec.ResolvedDataMounts); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrSubmissionDataMountNotReady, err)
@@ -258,6 +264,16 @@ func (service *SubmissionService) Submit(ctx context.Context, input SubmissionIn
 	spec.ResolvedDataRoots = resolvedDataRoots
 	if (spec.Source.Type == "workspace" || spec.Source.Type == "workspace-archive") && spec.ResolvedDataRoots.Personal == nil {
 		return nil, ErrSubmissionDataMountNotReady
+	}
+	if deferIdentityPersistence {
+		if err := service.repository.EnsureIdentity(ctx, input.Principal); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrSubmissionIdentityPersist, err)
+		}
+		if service.ensureDataSpaces != nil {
+			if err := service.ensureDataSpaces(ctx, input.Principal); err != nil {
+				return nil, fmt.Errorf("%w: %v", ErrSubmissionDataSpacesUnavailable, err)
+			}
+		}
 	}
 	job := &domain.TrainingJob{
 		ID: id, TenantID: input.Principal.TenantID, UserID: input.Principal.Subject,
@@ -487,7 +503,15 @@ func normalizeSubmissionSpec(principal auth.Principal, origin domain.SubmissionO
 	spec.ResolvedStorage = domain.ResolvedStorageMounts{}
 	spec.ResolvedDataMounts = domain.ResolvedDataSpaceMounts{}
 	spec.ResolvedDataRoots = domain.ResolvedDataSpaceRoots{}
-	cache, err := normalizeCacheRequest(spec.Cache, cachePolicy)
+	if spec.DataMode == domain.DataModeRayData {
+		if err := spec.Managed.ValidateDataMode(spec.DataMode); err != nil {
+			return domain.JobSpec{}, fmt.Errorf("%w: %v", ErrSubmissionInvalidJobSpec, err)
+		}
+		if spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain {
+			return domain.JobSpec{}, fmt.Errorf("%w: ray-data requires ray-train", ErrSubmissionInvalidJobSpec)
+		}
+	}
+	cache, err := normalizeDataModeCacheRequest(spec.DataMode, spec.Cache, cachePolicy)
 	if err != nil {
 		return domain.JobSpec{}, fmt.Errorf("%w: %v", ErrSubmissionInvalidJobSpec, err)
 	}
@@ -505,6 +529,41 @@ func normalizeSubmissionSpec(principal auth.Principal, origin domain.SubmissionO
 		return domain.JobSpec{}, ErrSubmissionCodeSourceNotAllowed
 	}
 	return spec, nil
+}
+
+func normalizeDataModeCacheRequest(mode domain.DataMode, cache domain.CacheRequest, policy LocalCachePolicy) (domain.CacheRequest, error) {
+	if mode != domain.DataModeRayData {
+		return normalizeCacheRequest(cache, policy)
+	}
+	if !policy.Enabled {
+		return domain.CacheRequest{}, fmt.Errorf("ray-data runtime cache capability is disabled")
+	}
+	if !hasDualLocalCacheMounts(policy) {
+		return domain.CacheRequest{}, fmt.Errorf("ray-data requires dual-NVMe runtime cache capability")
+	}
+
+	cache.Mode = domain.CacheMode(strings.TrimSpace(string(cache.Mode)))
+	cache.Size = strings.TrimSpace(cache.Size)
+	cache.Preload = domain.CachePreloadMode(strings.TrimSpace(string(cache.Preload)))
+	if cache.Mode == "" {
+		cache.Mode = domain.CacheModeRuntime
+	}
+	if cache.Mode != domain.CacheModeRuntime {
+		return domain.CacheRequest{}, fmt.Errorf("ray-data requires runtime cache")
+	}
+	if cache.Preload != "" {
+		return domain.CacheRequest{}, fmt.Errorf("ray-data mode does not support cache preload")
+	}
+	return normalizeCacheRequest(cache, policy)
+}
+
+func hasDualLocalCacheMounts(policy LocalCachePolicy) bool {
+	if len(policy.MountPaths) < 2 {
+		return false
+	}
+	first := strings.TrimSpace(policy.MountPaths[0])
+	second := strings.TrimSpace(policy.MountPaths[1])
+	return first != "" && second != "" && first != second
 }
 
 func normalizeCacheRequest(cache domain.CacheRequest, policy LocalCachePolicy) (domain.CacheRequest, error) {

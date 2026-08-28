@@ -219,3 +219,19 @@ func (policy ManagedTrainingPolicy) ValidateDataMode(mode DataMode) error {
 	}
 	return nil
 }
+
+// ValidateResolvedDataMode enforces the server-resolved storage contract that
+// cannot be checked while validating an untrusted submission payload. Ray
+// Data reads only from the governed input PVC mounted at its stable path.
+func (policy ManagedTrainingPolicy) ValidateResolvedDataMode(mode DataMode, mounts ResolvedDataSpaceMounts) error {
+	if mode != DataModeRayData {
+		return nil
+	}
+	if mounts.Input == nil {
+		return fmt.Errorf("ray-data requires a resolved governed input mount")
+	}
+	if mounts.Input.MountPath != DataMountInputPath || !mounts.Input.ReadOnly {
+		return fmt.Errorf("ray-data input must be mounted read-only at %s", DataMountInputPath)
+	}
+	return nil
+}
