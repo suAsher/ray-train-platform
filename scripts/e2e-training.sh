@@ -1,44 +1,336 @@
 #!/usr/bin/env bash
-set -Eeuo pipefail
+set -euo pipefail
 
-API_URL="${API_URL:?set API_URL, for example https://ai-training.internal.example}"
-ACCESS_TOKEN="${ACCESS_TOKEN:-}"
-ALLOW_ANONYMOUS="${ALLOW_ANONYMOUS:-false}"
-IMAGE="${IMAGE:?set an immutable image reference with @sha256:<64 hex chars>}"
-GIT_URL="${GIT_URL:?set a Git repository URL allowed by the platform}"
-GIT_COMMIT="${GIT_COMMIT:?set an immutable Git commit SHA}"
-ENTRYPOINT="${ENTRYPOINT:-python train.py}"
-WORKER_REPLICAS="${WORKER_REPLICAS:-1}"
-GPUS_PER_WORKER="${GPUS_PER_WORKER:-1}"
-JOB_NAME="${JOB_NAME:-e2e-ray-training-$(date +%s)}"
+E2E_ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+DRY_RUN="${DRY_RUN:-1}"
+RUN_RAY_TRAIN_E2E="${RUN_RAY_TRAIN_E2E:-0}"
+E2E_TIMEOUT_SECONDS="${E2E_TIMEOUT_SECONDS:-1800}"
+E2E_POLL_SECONDS="${E2E_POLL_SECONDS:-5}"
+E2E_COMMAND_TIMEOUT_SECONDS="${E2E_COMMAND_TIMEOUT_SECONDS:-60}"
+ACCEPTANCE_LABEL_KEY='ray.io/job-id'
+CLEANUP_LEDGER="${CLEANUP_LEDGER:-}"
 
-if [[ -z "$ACCESS_TOKEN" && "$ALLOW_ANONYMOUS" != "true" ]]; then
-  printf 'set ACCESS_TOKEN, or explicitly set ALLOW_ANONYMOUS=true for the isolated demo profile\n' >&2
-  exit 1
-fi
-AUTH_ARGS=()
-if [[ -n "$ACCESS_TOKEN" ]]; then
-  AUTH_ARGS=(-H "Authorization: Bearer $ACCESS_TOKEN")
-fi
+e2e_die() {
+  echo "Ray Train E2E failed: $*" >&2
+  return 1
+}
 
-need() { command -v "$1" >/dev/null 2>&1 || { printf 'missing command: %s\n' "$1" >&2; exit 1; }; }
-need curl
-need jq
+generate_acceptance_prefix() {
+  printf 'acc-%s-%s-%s\n' "$(date +%s)" "$$" "$RANDOM"
+}
 
-payload="$(jq -n --arg name "$JOB_NAME" --arg image "$IMAGE" --arg url "$GIT_URL" --arg commit "$GIT_COMMIT" --arg entrypoint "$ENTRYPOINT" --argjson workers "$WORKER_REPLICAS" --argjson gpus "$GPUS_PER_WORKER" '{spec:{name:$name,image:$image,source:{type:"git",url:$url,commit:$commit},entrypoint:{command:[($entrypoint|split(" "))[0]],args:(($entrypoint|split(" "))[1:])},resources:{workerReplicas:$workers,gpusPerWorker:$gpus,cpuPerWorker:8,memoryPerWorker:"32Gi"},queue:""}}')"
-response="$(curl --fail-with-body --silent --show-error -X POST "$API_URL/api/v1/jobs" "${AUTH_ARGS[@]}" -H 'Content-Type: application/json' -H "Idempotency-Key: $JOB_NAME" -d "$payload")"
-job_id="$(jq -r '.data.id' <<<"$response")"
-[[ -n "$job_id" && "$job_id" != null ]] || { printf '%s\n' "$response" >&2; exit 1; }
+validate_acceptance_prefix() {
+  local value="${1:-}"
+  [[ "$value" =~ ^acc-[a-z0-9][a-z0-9-]{7,23}[a-z0-9]$ ]] || e2e_die 'ACCEPTANCE_PREFIX must be a unique 12-30 character lowercase acceptance name'
+}
 
-for _ in $(seq 1 120); do
-  detail="$(curl --fail --silent --show-error "$API_URL/api/v1/jobs/$job_id" "${AUTH_ARGS[@]}")"
-  state="$(jq -r '.data.observedState' <<<"$detail")"
-  printf '%s %s\n' "$job_id" "$state"
-  case "$state" in
-    SUCCEEDED) curl --fail --silent "$API_URL/api/v1/jobs/$job_id/logs?limit=20" "${AUTH_ARGS[@]}" >/dev/null; exit 0 ;;
-    FAILED|CANCELED|TIMED_OUT) printf '%s\n' "$detail" >&2; exit 1 ;;
+validate_tenant_namespace() {
+  [[ "${1:-}" =~ ^tenant-[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || e2e_die 'TENANT_NAMESPACE must be one concrete tenant namespace'
+}
+
+acceptance_setup() {
+  if [[ "${ACCEPTANCE_PREFIX+x}" == x ]]; then
+    validate_acceptance_prefix "$ACCEPTANCE_PREFIX"
+  else
+    ACCEPTANCE_PREFIX="$(generate_acceptance_prefix)"
+    validate_acceptance_prefix "$ACCEPTANCE_PREFIX"
+  fi
+  if [[ -z "$CLEANUP_LEDGER" ]]; then
+    CLEANUP_LEDGER="${TMPDIR:-/tmp}/ray-train-${ACCEPTANCE_PREFIX}-ledger.tsv"
+  fi
+  [[ "$CLEANUP_LEDGER" == /* && "$CLEANUP_LEDGER" != *$'\n'* && "$CLEANUP_LEDGER" != *'/../'* && "$CLEANUP_LEDGER" != */.. ]] || e2e_die 'CLEANUP_LEDGER must be an absolute safe path'
+  [[ "$E2E_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ && "$E2E_TIMEOUT_SECONDS" -le 7200 ]] || e2e_die 'E2E_TIMEOUT_SECONDS must be between 1 and 7200'
+  [[ "$E2E_POLL_SECONDS" =~ ^[1-9][0-9]*$ && "$E2E_POLL_SECONDS" -le 60 ]] || e2e_die 'E2E_POLL_SECONDS must be between 1 and 60'
+  [[ "$E2E_COMMAND_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ && "$E2E_COMMAND_TIMEOUT_SECONDS" -le 300 ]] || e2e_die 'E2E_COMMAND_TIMEOUT_SECONDS must be between 1 and 300'
+}
+
+_ledger_parent() {
+  local parent
+  parent="$(dirname -- "$CLEANUP_LEDGER")"
+  [[ -d "$parent" && ! -L "$parent" ]] || e2e_die 'cleanup ledger parent must be an existing real directory'
+  (cd -- "$parent" && pwd -P)
+}
+
+ledger_init() {
+  validate_acceptance_prefix "$ACCEPTANCE_PREFIX"
+  local parent temporary
+  parent="$(_ledger_parent)"
+  [[ ! -e "$CLEANUP_LEDGER" && ! -L "$CLEANUP_LEDGER" ]] || e2e_die 'cleanup ledger already exists; choose a unique acceptance prefix or resume it explicitly'
+  temporary="$(mktemp "${parent}/.$(basename -- "$CLEANUP_LEDGER").tmp.XXXXXXXX")"
+  chmod 600 "$temporary"
+  printf '# kind\tid\tnamespace\tacceptance-prefix\townership-label\n' >"$temporary"
+  if ! ln -- "$temporary" "$CLEANUP_LEDGER"; then
+    rm -f -- "$temporary"
+    e2e_die 'cleanup ledger was created concurrently; refusing to overwrite it'
+    return 1
+  fi
+  rm -f -- "$temporary"
+}
+
+ledger_resume() {
+  validate_acceptance_prefix "$ACCEPTANCE_PREFIX"
+  [[ -f "$CLEANUP_LEDGER" && ! -L "$CLEANUP_LEDGER" ]] || e2e_die 'cleanup ledger is missing or unsafe'
+  local permissions kind identifier namespace prefix ownership_label
+  permissions="$(stat -f '%Lp' "$CLEANUP_LEDGER" 2>/dev/null || stat -c '%a' "$CLEANUP_LEDGER")"
+  [[ "$permissions" == 600 ]] || e2e_die 'cleanup ledger must be mode 0600'
+  IFS= read -r kind <"$CLEANUP_LEDGER"
+  [[ "$kind" == $'# kind\tid\tnamespace\tacceptance-prefix\townership-label' ]] || e2e_die 'cleanup ledger header is invalid'
+  while IFS=$'\t' read -r kind identifier namespace prefix ownership_label; do
+    [[ -n "$kind" && "$kind" != \#* ]] || continue
+    [[ "$prefix" == "$ACCEPTANCE_PREFIX" ]] || e2e_die 'cleanup ledger contains a foreign acceptance prefix'
+    [[ "$identifier" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,252}$ ]] || e2e_die 'cleanup ledger contains an unsafe identifier'
+    [[ "$namespace" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || e2e_die 'cleanup ledger contains an unsafe namespace'
+    [[ "$ownership_label" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$ ]] || e2e_die 'cleanup ledger contains an unsafe ownership label'
+  done <"$CLEANUP_LEDGER"
+}
+
+ledger_record() {
+  local kind="${1:-}" identifier="${2:-}" namespace="${3:-}" ownership_label="${4:-$ACCEPTANCE_PREFIX}"
+  case "$kind" in
+    job|sourceartifact|rayjob|raycluster|k8sjob|service|pvc|workload|pod|gpuallocation|dnschaos|networkchaos|node-fault) ;;
+    *) e2e_die "unsupported cleanup ledger kind: $kind"; return 1 ;;
   esac
-  sleep 5
-done
-printf 'training job timed out in acceptance window: %s\n' "$job_id" >&2
-exit 1
+  [[ "$identifier" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,252}$ ]] || e2e_die 'cleanup ledger identifier is unsafe'
+  [[ "$namespace" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || e2e_die 'cleanup ledger namespace is unsafe'
+  [[ "$ownership_label" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$ ]] || e2e_die 'cleanup ledger ownership label is unsafe'
+  [[ -f "$CLEANUP_LEDGER" && ! -L "$CLEANUP_LEDGER" ]] || e2e_die 'cleanup ledger is missing or unsafe'
+  local parent temporary
+  parent="$(_ledger_parent)"
+  temporary="$(mktemp "${parent}/.$(basename -- "$CLEANUP_LEDGER").tmp.XXXXXXXX")"
+  chmod 600 "$temporary"
+  cp -- "$CLEANUP_LEDGER" "$temporary"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$kind" "$identifier" "$namespace" "$ACCEPTANCE_PREFIX" "$ownership_label" >>"$temporary"
+  mv -- "$temporary" "$CLEANUP_LEDGER"
+}
+
+ledger_cleanup() {
+  [[ -f "$CLEANUP_LEDGER" && ! -L "$CLEANUP_LEDGER" ]] || e2e_die 'cleanup ledger is missing or unsafe'
+  local kind identifier namespace prefix ownership_label actual_label resource
+  while IFS=$'\t' read -r kind identifier namespace prefix ownership_label; do
+    [[ -n "$kind" && "$kind" != \#* ]] || continue
+    [[ "$prefix" == "$ACCEPTANCE_PREFIX" ]] || { echo "SKIP foreign ledger row: $kind $identifier" >&2; continue; }
+    if [[ "${EXECUTE_LEDGER_CLEANUP:-0}" != 1 ]]; then
+      printf 'CLEANUP_DRY_RUN kind=%s id=%s namespace=%s label=%s\n' "$kind" "$identifier" "$namespace" "$ownership_label"
+      continue
+    fi
+    case "$kind" in
+      rayjob) resource='rayjobs.ray.io' ;;
+      raycluster) resource='rayclusters.ray.io' ;;
+      service) resource='services' ;;
+      pvc) resource='persistentvolumeclaims' ;;
+      workload) resource='workloads.kueue.x-k8s.io' ;;
+      pod) resource='pods' ;;
+      k8sjob) resource='jobs.batch' ;;
+      dnschaos) resource='dnschaos.chaos-mesh.org' ;;
+      networkchaos) resource='networkchaos.chaos-mesh.org' ;;
+      job|sourceartifact|gpuallocation|node-fault)
+        printf 'CLEANUP_MANUAL kind=%s id=%s namespace=%s\n' "$kind" "$identifier" "$namespace"
+        continue
+        ;;
+      *) e2e_die "unsafe ledger kind during cleanup: $kind"; return 1 ;;
+    esac
+    actual_label="$(kube get "$resource" "$identifier" --namespace "$namespace" -o "jsonpath={.metadata.labels.${ACCEPTANCE_LABEL_KEY//./\\.}}")"
+    [[ "$actual_label" == "$ownership_label" ]] || { echo "SKIP ownership mismatch: $resource/$identifier" >&2; continue; }
+    kube delete "$resource" "$identifier" --namespace "$namespace" --wait=false
+  done <"$CLEANUP_LEDGER"
+}
+
+e2e_live_enabled() {
+  [[ "$RUN_RAY_TRAIN_E2E" == 1 && "$DRY_RUN" == 0 ]]
+}
+
+bounded_command() {
+  command perl -e 'alarm shift; exec @ARGV or die "exec failed: $!\\n"' "$E2E_COMMAND_TIMEOUT_SECONDS" "$@"
+}
+
+kube() {
+  bounded_command kubectl --request-timeout="${E2E_COMMAND_TIMEOUT_SECONDS}s" "$@"
+}
+
+entrypoint_for_engine() {
+  case "$1" in
+    ray-ddp) printf 'python ddp_smoke.py\n' ;;
+    ray-train) printf 'python ray_train_smoke.py\n' ;;
+    *) e2e_die "unsupported training engine: $1" ;;
+  esac
+}
+
+require_live_configuration() {
+  e2e_live_enabled || e2e_die 'live execution requires RUN_RAY_TRAIN_E2E=1 and DRY_RUN=0'
+  [[ "${API_URL:-}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?/?$ ]] || e2e_die 'API_URL must be a concrete HTTPS origin'
+  [[ "${TRAINING_IMAGE:-}" =~ ^[^@[:space:]]+@sha256:[0-9a-f]{64}$ ]] || e2e_die 'TRAINING_IMAGE must be an immutable lowercase SHA-256 reference'
+  [[ -d "${ACCEPTANCE_SOURCE_DIR:-}" && ! -L "${ACCEPTANCE_SOURCE_DIR:-}" ]] || e2e_die 'ACCEPTANCE_SOURCE_DIR must be a real directory'
+  [[ -f "${SPK_RAYJOB_CONFIG:-}" && ! -L "${SPK_RAYJOB_CONFIG:-}" ]] || e2e_die 'SPK_RAYJOB_CONFIG must be a regular file'
+  validate_tenant_namespace "${TENANT_NAMESPACE:-}"
+  command -v jq >/dev/null || e2e_die 'jq is required'
+  command -v spk-rayjob >/dev/null || e2e_die 'spk-rayjob is required'
+  command -v perl >/dev/null || e2e_die 'perl is required for bounded subprocesses'
+  _secure_config_token "$SPK_RAYJOB_CONFIG" >/dev/null
+}
+
+_secure_config_token() {
+  local config="$1" permissions credential_value
+  [[ -f "$config" && ! -L "$config" ]] || e2e_die 'session config must be a real file'
+  permissions="$(stat -f '%Lp' "$config" 2>/dev/null || stat -c '%a' "$config")"
+  [[ "$permissions" == 600 ]] || e2e_die 'session config must be mode 0600'
+  credential_value="$(jq -r '.token // empty' "$config")"
+  [[ "${#credential_value}" -ge 16 && "${#credential_value}" -le 8192 ]] || e2e_die 'session config has no bounded token'
+  [[ "$credential_value" =~ ^[A-Za-z0-9._~+/=-]+$ ]] || e2e_die 'Bearer token contains unsafe characters'
+  printf '%s\n' "$credential_value"
+}
+
+portal_api_request() (
+  local method="$1" path="$2" payload="${3:-}" bearer_material config='' output
+  [[ "$method" == GET || "$method" == POST ]] || e2e_die 'unsupported Portal API method'
+  [[ "$path" == /* && "$path" != *$'\n'* && "$path" != *$'\r'* ]] || e2e_die 'unsafe Portal API path'
+  bearer_material="$(_secure_config_token "${PORTAL_SESSION_CONFIG:?set PORTAL_SESSION_CONFIG}")"
+  config="$(mktemp "${TMPDIR:-/tmp}/ray-train-portal.XXXXXXXX")"
+  trap 'rm -f -- "$config"' EXIT HUP INT TERM
+  chmod 600 "$config"
+  printf 'silent\nshow-error\nfail-with-body\nconnect-timeout = 5\nmax-time = %s\nheader = "Authorization: Bearer %s"\n' "$E2E_COMMAND_TIMEOUT_SECONDS" "$bearer_material" >"$config"
+  if [[ -n "$payload" ]]; then
+    if ! output="$(curl --config "$config" -X "$method" -H 'Content-Type: application/json' --data "$payload" "${API_URL%/}${path}")"; then
+      return 1
+    fi
+  elif ! output="$(curl --config "$config" -X "$method" "${API_URL%/}${path}")"; then
+    return 1
+  fi
+  printf '%s\n' "$output"
+)
+
+submit_portal_job() {
+  local name="$1" engine="$2" workers="$3" gpus="$4" mode="$5" parent_job_id="${6:-}" request response entrypoint
+  [[ -n "${PORTAL_SOURCE_SNAPSHOT_ID:-}" ]] || e2e_die 'PORTAL_SOURCE_SNAPSHOT_ID is required for real Portal submission'
+  entrypoint="$(entrypoint_for_engine "$engine")"
+  request="$(jq -cn --arg name "$name" --arg image "$TRAINING_IMAGE" --arg snapshot "$PORTAL_SOURCE_SNAPSHOT_ID" --arg engine "$engine" --arg entrypoint "$entrypoint" --arg mode "$mode" --arg parent "$parent_job_id" --argjson workers "$workers" --argjson gpus "$gpus" '{spec:{name:$name,image:$image,source:{type:"workspace",snapshot:$snapshot},entrypoint:{command:($entrypoint|split(" "))},trainingEngine:$engine,execution:{mode:$mode},parentJobId:$parent,resources:{workerReplicas:$workers,gpusPerWorker:$gpus,cpuPerWorker:32,memoryPerWorker:"128Gi"},queue:"",managed:{maxFailures:2,checkpoint:{everyEpochs:1,keepLatest:3,keepBest:1}},output:{space:"my-runs",relativePath:("acceptance/"+$name)},timeoutSeconds:1800,cleanupPolicy:{successTtlSeconds:60,failureTtlSeconds:600}}}')"
+  response="$(portal_api_request POST '/api/v1/jobs' "$request")"
+  jq -er '.data.id' <<<"$response"
+}
+
+submit_spk_job() {
+  local name="$1" engine="$2" workers="$3" gpus="$4" mode="$5" parent_job_id="${6:-}" response entrypoint
+  entrypoint="$(entrypoint_for_engine "$engine")"
+  local args=(submit --output json --config "$SPK_RAYJOB_CONFIG" --server "$API_URL" --dir "$ACCEPTANCE_SOURCE_DIR" --name "$name" --image "$TRAINING_IMAGE" --entrypoint "$entrypoint" --engine "$engine" --workers "$workers" --gpus-per-worker "$gpus" --cpu-per-worker 32 --memory-per-worker 128Gi --execution-mode "$mode" --output-path "acceptance/$name")
+  if [[ "$engine" == ray-train ]]; then
+    args+=(--max-failures 2 --checkpoint-every-epochs 1 --checkpoint-keep-latest 3 --checkpoint-keep-best 1)
+  fi
+  [[ -z "$parent_job_id" ]] || args+=(--resume-from-job "$parent_job_id")
+  response="$(bounded_command spk-rayjob "${args[@]}")"
+  jq -er '.id // .data.id' <<<"$response"
+}
+
+submit_native_ray_job() (
+  local name="$1" engine="$2" workers="$3" gpus="$4" _mode="$5" parent_job_id="${6:-}"
+  [[ -z "$parent_job_id" ]] || e2e_die 'native Ray resume is unsupported; submit the child through spk-rayjob'
+  [[ "${RAY_CLI_IMAGE:-}" =~ ^[^@[:space:]]+@sha256:[0-9a-f]{64}$ ]] || e2e_die 'RAY_CLI_IMAGE must be an immutable lowercase SHA-256 reference'
+  command -v docker >/dev/null || e2e_die 'docker is required for native Ray submission'
+  local metadata env_file='' external_id platform_job deadline bearer_material entrypoint entrypoint_command entrypoint_file
+  trap '[[ -z "$env_file" ]] || rm -f -- "$env_file"' EXIT HUP INT TERM
+  external_id="${name//-/_}"
+  metadata="$(jq -cn --arg image "$TRAINING_IMAGE" --arg workers "$workers" --arg gpus "$gpus" --arg engine "$engine" '{"ray-platform.image":$image,"ray-platform.worker-replicas":$workers,"ray-platform.gpus-per-worker":$gpus,"ray-platform.cpu-per-worker":"32","ray-platform.memory-per-worker":"128Gi","ray-platform.queue":"","platform.training.engine":$engine}')"
+  entrypoint="$(entrypoint_for_engine "$engine")"
+  read -r entrypoint_command entrypoint_file <<<"$entrypoint"
+  [[ "$entrypoint_command" == python && "$entrypoint_file" =~ ^[a-z0-9_]+\.py$ ]] || e2e_die 'native entrypoint is not the fixed acceptance Python script'
+  bearer_material="$(_secure_config_token "$SPK_RAYJOB_CONFIG")"
+  env_file="$(mktemp "${TMPDIR:-/tmp}/ray-train-native.XXXXXXXX")"
+  chmod 600 "$env_file"
+  printf 'RAY_ADDRESS=%s/ray\nRAY_JOB_HEADERS={"Authorization":"Bearer %s"}\n' "${API_URL%/}" "$bearer_material" >"$env_file"
+  if ! bounded_command docker run --rm --env-file "$env_file" -v "$ACCEPTANCE_SOURCE_DIR:/source:ro" -w /source "$RAY_CLI_IMAGE" ray job submit --no-wait --submission-id "$external_id" --working-dir . --metadata-json "$metadata" -- "$entrypoint_command" "$entrypoint_file"; then
+    return 1
+  fi
+  rm -f -- "$env_file"
+  env_file=''
+  deadline=$(( $(date +%s) + E2E_TIMEOUT_SECONDS ))
+  platform_job=''
+  while [[ -z "$platform_job" && "$(date +%s)" -lt "$deadline" ]]; do
+    platform_job="$(bounded_command spk-rayjob jobs --config "$SPK_RAYJOB_CONFIG" --server "$API_URL" --output json | jq -r --arg id "$external_id" '.items[] | select(.externalSubmissionId == $id) | .id' | head -1)"
+    [[ -n "$platform_job" ]] || sleep "$E2E_POLL_SECONDS"
+  done
+  [[ -n "$platform_job" ]] || e2e_die 'native Ray submission did not create a persisted platform job'
+  printf '%s\n' "$platform_job"
+)
+
+submit_acceptance_job() {
+  local flow="$1"
+  shift
+  case "$flow" in
+    portal) submit_portal_job "$@" ;;
+    spk-rayjob) submit_spk_job "$@" ;;
+    native-ray) submit_native_ray_job "$@" ;;
+    *) e2e_die "unsupported submission flow: $flow" ;;
+  esac
+}
+
+job_status_json() {
+  bounded_command spk-rayjob status --config "$SPK_RAYJOB_CONFIG" --server "$API_URL" --output json "$1"
+}
+
+wait_for_job() {
+  local job_id="$1" deadline detail state
+  deadline=$(( $(date +%s) + E2E_TIMEOUT_SECONDS ))
+  while [[ "$(date +%s)" -lt "$deadline" ]]; do
+    detail="$(job_status_json "$job_id")"
+    state="$(jq -r '.observedState // .data.observedState // empty' <<<"$detail")"
+    printf 'JOB_ID=%s STATE=%s\n' "$job_id" "$state" >&2
+    case "$state" in
+      SUCCEEDED) printf '%s\n' "$detail"; return 0 ;;
+      FAILED|CANCELED|TIMED_OUT) printf '%s\n' "$detail" >&2; return 1 ;;
+    esac
+    sleep "$E2E_POLL_SECONDS"
+  done
+  e2e_die "bounded timeout waiting for job $job_id"
+}
+
+verify_persisted_job() {
+  local detail="$1" expected_engine="$2" expected_version="$3" expected_origin="$4" expected_workers="$5" expected_gpus="$6"
+  jq -e --arg engine "$expected_engine" --arg version "$expected_version" --arg origin "$expected_origin" --argjson workers "$expected_workers" --argjson gpus "$expected_gpus" '(.data // .) as $job | $job.submissionOrigin == $origin and $job.spec.trainingEngine == $engine and $job.spec.rayVersion == $version and $job.spec.resources.workerReplicas == $workers and $job.spec.resources.gpusPerWorker == $gpus' <<<"$detail" >/dev/null || e2e_die 'persisted engine/rayVersion/origin/topology does not match the submitted case'
+}
+
+verify_acceptance_identity() {
+  local detail="$1" flow="$2" expected_name="$3" external_id
+  validate_acceptance_prefix "$ACCEPTANCE_PREFIX"
+  [[ "$expected_name" == "${ACCEPTANCE_PREFIX}-"* ]] || e2e_die 'submitted name lost its acceptance prefix'
+  case "$flow" in
+    portal|spk-rayjob)
+      jq -e --arg name "$expected_name" '(.data // .).spec.name == $name' <<<"$detail" >/dev/null || e2e_die 'persisted job name lost its acceptance identity'
+      ;;
+    native-ray)
+      external_id="${expected_name//-/_}"
+      jq -e --arg id "$external_id" '(.data // .).externalSubmissionId == $id' <<<"$detail" >/dev/null || e2e_die 'native persisted job lost its acceptance submission identity'
+      ;;
+    *) e2e_die "unsupported identity flow: $flow" ;;
+  esac
+}
+
+record_persisted_resources() {
+  local detail="$1" job_id namespace ray_job ray_cluster source_artifact
+  job_id="$(jq -er '(.data // .).id' <<<"$detail")"
+  namespace="$(jq -er '(.data // .).kubernetesNamespace' <<<"$detail")"
+  ray_job="$(jq -er '(.data // .).rayJobName' <<<"$detail")"
+  ray_cluster="$(jq -er '(.data // .).rayClusterName' <<<"$detail")"
+  source_artifact="$(jq -r '(.data // .).sourceArtifactId // empty' <<<"$detail")"
+  ledger_record rayjob "$ray_job" "$namespace" "$job_id"
+  ledger_record raycluster "$ray_cluster" "$namespace" "$job_id"
+  [[ -z "$source_artifact" ]] || ledger_record sourceartifact "$source_artifact" "$namespace" "$job_id"
+}
+
+legacy_e2e_main() {
+  acceptance_setup
+  printf 'ACCEPTANCE_PREFIX=%s\n' "$ACCEPTANCE_PREFIX"
+  if ! e2e_live_enabled; then
+    echo 'DRY_RUN legacy training harness made no submission'
+    return 0
+  fi
+  : "${API_URL:?set API_URL}"
+  : "${IMAGE:?set IMAGE}"
+  : "${GIT_URL:?set GIT_URL}"
+  : "${GIT_COMMIT:?set GIT_COMMIT}"
+  local access_token="${ACCESS_TOKEN:-}" allow_anonymous="${ALLOW_ANONYMOUS:-false}"
+  [[ -n "$access_token" || "$allow_anonymous" == true ]] || e2e_die 'set ACCESS_TOKEN or explicitly set ALLOW_ANONYMOUS=true'
+  echo 'Legacy e2e-training entrypoint remains available; Task 16 acceptance uses the dedicated harnesses.'
+  exec python3 "${E2E_ROOT_DIR}/scripts/e2e_training.py"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  legacy_e2e_main "$@"
+fi

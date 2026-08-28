@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Same DDP proof as ddp_smoke, intended for a Ray-managed multi-node run."""
+"""Ray Train API proof with complete checkpoints and deterministic resume."""
 
-from ddp_smoke import main
+from ray_train_checkpoint_smoke import main
 
 
 if __name__ == "__main__":
