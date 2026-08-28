@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -41,6 +42,8 @@ const (
 	// 10,000-line query contract.
 	maxLogPlatformResponseBytes int64 = 32 << 20
 )
+
+var stableSourceArtifactID = regexp.MustCompile(`^artifact-[0-9a-f]{24}$`)
 
 type localLogin struct {
 	Token    string `json:"token"`
@@ -218,6 +221,13 @@ func (client *Client) LoginCheck(ctx context.Context) (json.RawMessage, error) {
 }
 
 func (client *Client) SubmitDirectory(ctx context.Context, directory string, spec domain.JobSpec) (Job, error) {
+	return client.SubmitDirectoryWithArtifactID(ctx, directory, spec, "")
+}
+
+func (client *Client) SubmitDirectoryWithArtifactID(ctx context.Context, directory string, spec domain.JobSpec, artifactID string) (Job, error) {
+	if artifactID != "" && !stableSourceArtifactID.MatchString(artifactID) {
+		return Job{}, fmt.Errorf("source artifact ID must match artifact- followed by 24 lowercase hexadecimal characters")
+	}
 	if err := validateArchiveJobSpec(spec); err != nil {
 		return Job{}, err
 	}
@@ -231,7 +241,7 @@ func (client *Client) SubmitDirectory(ctx context.Context, directory string, spe
 		return Job{}, err
 	}
 	defer os.Remove(archive.Path)
-	return client.submitArchive(ctx, archive, spec)
+	return client.submitArchiveWithArtifactID(ctx, archive, spec, artifactID)
 }
 
 func (client *Client) preflightManagedImage(ctx context.Context, spec domain.JobSpec) (domain.JobSpec, error) {
@@ -259,10 +269,14 @@ func (client *Client) preflightManagedImage(ctx context.Context, spec domain.Job
 }
 
 func (client *Client) submitArchive(ctx context.Context, archive Archive, spec domain.JobSpec) (Job, error) {
+	return client.submitArchiveWithArtifactID(ctx, archive, spec, "")
+}
+
+func (client *Client) submitArchiveWithArtifactID(ctx context.Context, archive Archive, spec domain.JobSpec, artifactID string) (Job, error) {
 	if err := validateArchiveJobSpec(spec); err != nil {
 		return Job{}, err
 	}
-	artifact, err := client.CreateArtifact(ctx, archive)
+	artifact, err := client.CreateArtifactWithID(ctx, archive, artifactID)
 	if err != nil {
 		return Job{}, err
 	}
@@ -283,11 +297,27 @@ func (client *Client) submitArchive(ctx context.Context, archive Archive, spec d
 }
 
 func (client *Client) CreateArtifact(ctx context.Context, archive Archive) (Artifact, error) {
-	body, err := json.Marshal(map[string]any{"sha256": archive.SHA256, "sizeBytes": archive.SizeBytes})
+	return client.CreateArtifactWithID(ctx, archive, "")
+}
+
+func (client *Client) CreateArtifactWithID(ctx context.Context, archive Archive, artifactID string) (Artifact, error) {
+	if artifactID != "" && !stableSourceArtifactID.MatchString(artifactID) {
+		return Artifact{}, fmt.Errorf("source artifact ID must match artifact- followed by 24 lowercase hexadecimal characters")
+	}
+	body, err := json.Marshal(struct {
+		ArtifactID string `json:"artifactId,omitempty"`
+		SHA256     string `json:"sha256"`
+		SizeBytes  int64  `json:"sizeBytes"`
+	}{ArtifactID: artifactID, SHA256: archive.SHA256, SizeBytes: archive.SizeBytes})
 	if err != nil {
 		return Artifact{}, err
 	}
 	data, err := client.request(ctx, http.MethodPost, "/api/v1/source-artifacts", body, nil)
+	if err != nil && artifactID != "" && ctx.Err() == nil {
+		// A stable caller identity makes one bounded retry safe when the server
+		// committed creation but its response was lost in transit.
+		data, err = client.request(ctx, http.MethodPost, "/api/v1/source-artifacts", body, nil)
+	}
 	if err != nil {
 		return Artifact{}, err
 	}

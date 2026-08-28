@@ -346,6 +346,7 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	var format outputFormatFlag
 	bindOutputFormatFlag(set, &format)
 	directory := set.String("dir", ".", "source directory")
+	sourceArtifactID := set.String("source-artifact-id", "", "stable source artifact identity for recoverable automation")
 	name := set.String("name", "", "job DNS name")
 	image := set.String("image", "", "catalogued training image with an explicit tag or sha256 digest")
 	entrypoint := set.String("entrypoint", "", "shell command to run")
@@ -371,6 +372,9 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	watch := set.Bool("watch", false, "wait until the job reaches a terminal state")
 	if err := set.Parse(arguments); err != nil || set.NArg() != 0 {
 		return errors.New("invalid submit arguments; run spk-rayjob help")
+	}
+	if *sourceArtifactID != "" && !stableSourceArtifactID.MatchString(*sourceArtifactID) {
+		return errors.New("--source-artifact-id must match artifact- followed by 24 lowercase hexadecimal characters")
 	}
 	// Committed defaults make "edit code, submit" a single command. A flag the
 	// user actually typed still wins over the file.
@@ -506,7 +510,7 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 		}
 		defer os.Remove(archive.Path)
 	}
-	job, err := client.submitArchive(ctx, archive, spec)
+	job, err := client.submitArchiveWithArtifactID(ctx, archive, spec, *sourceArtifactID)
 	if err != nil {
 		return err
 	}

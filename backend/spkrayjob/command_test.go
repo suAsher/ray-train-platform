@@ -186,6 +186,42 @@ func TestRunSubmitOmitsQueueAndLetsPlatformResolveIt(t *testing.T) {
 	}
 }
 
+func TestRunSubmitPropagatesCallerSourceArtifactID(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "train.py"), []byte("print('train')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const artifactID = "artifact-0123456789abcdef01234567"
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/source-artifacts":
+			var create struct {
+				ArtifactID string `json:"artifactId"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&create); err != nil {
+				t.Fatal(err)
+			}
+			if create.ArtifactID != artifactID {
+				t.Fatalf("artifactID=%q", create.ArtifactID)
+			}
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"artifactId": artifactID, "state": "READY", "uploadRequired": false})
+		case "/api/v1/jobs":
+			writeClientSuccess(t, writer, http.StatusAccepted, map[string]any{"id": "job-test"})
+		default:
+			t.Fatalf("unexpected request %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	err := Run(context.Background(), []string{
+		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root,
+		"--name", "external-submit", "--image", "harbor.example/train@sha256:" + strings.Repeat("a", 64),
+		"--entrypoint", "python train.py", "--source-artifact-id", artifactID,
+	}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunSubmitMapsLogicalDataSpacesWithoutObjectStorePaths(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "train.py"), []byte("print('train')\n"), 0o600); err != nil {

@@ -23,7 +23,7 @@ origin_for_flow() {
 }
 
 main() {
-  acceptance_setup
+  acceptance_setup || return
   printf 'ACCEPTANCE_PREFIX=%s\n' "$ACCEPTANCE_PREFIX"
   if ! e2e_live_enabled; then
     echo 'DRY_RUN runtime Ray DDP 2.56.1 acceptance matrix'
@@ -35,27 +35,29 @@ main() {
     return 0
   fi
 
-  require_live_configuration
-  [[ -f "${PORTAL_SESSION_CONFIG:-}" ]] || e2e_die 'PORTAL_SESSION_CONFIG is required; Portal cannot be emulated with a PAT'
-  [[ -n "${PORTAL_SOURCE_SNAPSHOT_ID:-}" ]] || e2e_die "Portal ${PORTAL_JOBS_ENDPOINT} submission requires PORTAL_SOURCE_SNAPSHOT_ID"
-  command -v docker >/dev/null || e2e_die 'docker is required for the native Ray acceptance flow'
-  verify_interactive_portal_session
-  ledger_init
+  require_live_configuration || return
+  [[ -f "${PORTAL_SESSION_CONFIG:-}" ]] || { e2e_die 'PORTAL_SESSION_CONFIG is required; Portal cannot be emulated with a PAT'; return 1; }
+  [[ -n "${PORTAL_SOURCE_SNAPSHOT_ID:-}" ]] || { e2e_die "Portal ${PORTAL_JOBS_ENDPOINT} submission requires PORTAL_SOURCE_SNAPSHOT_ID"; return 1; }
+  command -v docker >/dev/null || { e2e_die 'docker is required for the native Ray acceptance flow'; return 1; }
+  verify_interactive_portal_session || return
+  ledger_init || return
+  local name job_id detail origin
   while IFS=$'\t' read -r topology workers gpus mode; do
     for flow in "${submission_flows[@]}"; do
       name="${ACCEPTANCE_PREFIX}-r-${topology}-${flow//-}"
-      job_id="$(submit_acceptance_job "$flow" "$name" "$expected_engine" "$workers" "$gpus" "$mode")"
-      [[ "$job_id" =~ ^job-[0-9a-f]{24}$ ]] || e2e_die "submission returned an unsafe persisted job ID: $job_id"
-      ledger_record job "$job_id" "$TENANT_NAMESPACE" "$job_id"
-      ledger_record gpuallocation "$job_id" "$TENANT_NAMESPACE" "$job_id"
-      detail="$(wait_for_job "$job_id")"
-      verify_persisted_job "$detail" "$expected_engine" "$expected_ray_version" "$(origin_for_flow "$flow")" "$workers" "$gpus"
-      verify_acceptance_identity "$detail" "$flow" "$name"
-      record_persisted_resources "$detail"
+      job_id="$(submit_acceptance_job "$flow" "$name" "$expected_engine" "$workers" "$gpus" "$mode")" || return
+      [[ "$job_id" =~ ^job-[0-9a-f]{24}$ ]] || { e2e_die "submission returned an unsafe persisted job ID: $job_id"; return 1; }
+      ledger_record job "$job_id" "$TENANT_NAMESPACE" "$job_id" || return
+      ledger_record gpuallocation "$job_id" "$TENANT_NAMESPACE" "$job_id" || return
+      detail="$(wait_for_job "$job_id")" || return
+      origin="$(origin_for_flow "$flow")" || return
+      verify_persisted_job "$detail" "$expected_engine" "$expected_ray_version" "$origin" "$workers" "$gpus" || return
+      verify_acceptance_identity "$detail" "$flow" "$name" || return
+      record_persisted_resources "$detail" || return
       printf 'PASS topology=%s flow=%s job=%s\n' "$topology" "$flow" "$job_id"
     done
   done <<<"$runtime_matrix"
-  ledger_cleanup
+  ledger_cleanup || return
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

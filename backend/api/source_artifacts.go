@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -18,6 +19,8 @@ import (
 )
 
 const SourceArtifactUploadTTL = 15 * time.Minute
+
+var callerSourceArtifactID = regexp.MustCompile(`^artifact-[0-9a-f]{24}$`)
 
 type SourceArtifactRepository interface {
 	EnsureIdentity(context.Context, auth.Principal) error
@@ -52,8 +55,9 @@ type SourceArtifactHandler struct {
 }
 
 type createSourceArtifactRequest struct {
-	SHA256    string `json:"sha256"`
-	SizeBytes int64  `json:"sizeBytes"`
+	ArtifactID string `json:"artifactId"`
+	SHA256     string `json:"sha256"`
+	SizeBytes  int64  `json:"sizeBytes"`
 }
 
 type sourceArtifactResponse struct {
@@ -114,14 +118,22 @@ func (handler *SourceArtifactHandler) create(c *gin.Context) {
 	if !handler.bindCreateSourceArtifactRequest(c, &request) {
 		return
 	}
+	if request.ArtifactID != "" && !callerSourceArtifactID.MatchString(request.ArtifactID) {
+		handler.writeError(c, http.StatusBadRequest, "INVALID_SOURCE_ARTIFACT_ID", "artifactId must use the supported immutable format")
+		return
+	}
 	if err := handler.repository.EnsureIdentity(c.Request.Context(), principal); err != nil {
 		handler.writeError(c, http.StatusInternalServerError, "IDENTITY_PERSIST_FAILED", "could not persist authenticated identity")
 		return
 	}
-	id, err := handler.newID()
-	if err != nil {
-		handler.writeError(c, http.StatusInternalServerError, "ID_GENERATION_FAILED", "could not allocate source artifact id")
-		return
+	id := request.ArtifactID
+	if id == "" {
+		var err error
+		id, err = handler.newID()
+		if err != nil {
+			handler.writeError(c, http.StatusInternalServerError, "ID_GENERATION_FAILED", "could not allocate source artifact id")
+			return
+		}
 	}
 	now := handler.now().UTC()
 	storageRoot, err := handler.personalSourceArtifactRoot(c.Request.Context(), principal)

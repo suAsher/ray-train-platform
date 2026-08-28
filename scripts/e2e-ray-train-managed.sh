@@ -23,30 +23,30 @@ origin_for_flow() {
 }
 
 require_job_id() {
-  [[ "${1:-}" =~ ^job-[0-9a-f]{24}$ ]] || e2e_die 'expected a persisted platform job ID'
+  [[ "${1:-}" =~ ^job-[0-9a-f]{24}$ ]] || { e2e_die 'expected a persisted platform job ID'; return 1; }
 }
 
 verify_managed_surfaces() {
   local job_id="$1" expected_workers="$2" performance logs checkpoints mlflow dashboard checkpoint_id checkpoint_step
-  require_job_id "$job_id"
+  require_job_id "$job_id" || return
 
-  performance="$(portal_api_request GET "/api/v1/jobs/${job_id}/training-performance?window=1h")"
-  jq -e --argjson expected "$expected_workers" '.data.workers | type == "array" and length == $expected' <<<"$performance" >/dev/null || e2e_die 'training-performance did not expose the exact Ray Train worker count'
+  performance="$(portal_api_request GET "/api/v1/jobs/${job_id}/training-performance?window=1h")" || return
+  jq -e --argjson expected "$expected_workers" '.data.workers | type == "array" and length == $expected' <<<"$performance" >/dev/null || { e2e_die 'training-performance did not expose the exact Ray Train worker count'; return 1; }
 
-  logs="$(portal_api_request GET "/api/v1/jobs/${job_id}/logs?limit=200&direction=backward")"
-  jq -e '(.data.items // .data.lines // []) | type == "array" and length > 0' <<<"$logs" >/dev/null || e2e_die 'job /logs contained no training output'
+  logs="$(portal_api_request GET "/api/v1/jobs/${job_id}/logs?limit=200&direction=backward")" || return
+  jq -e '(.data.items // .data.lines // []) | type == "array" and length > 0' <<<"$logs" >/dev/null || { e2e_die 'job /logs contained no training output'; return 1; }
 
-  mlflow="$(portal_api_request POST '/api/v1/mlflow-dashboard-access')"
-  jq -e '.data.url | type == "string" and startswith("/api/")' <<<"$mlflow" >/dev/null || e2e_die 'MLflow access was not issued'
+  mlflow="$(portal_api_request POST '/api/v1/mlflow-dashboard-access')" || return
+  jq -e '.data.url | type == "string" and startswith("/api/")' <<<"$mlflow" >/dev/null || { e2e_die 'MLflow access was not issued'; return 1; }
 
-  dashboard="$(portal_api_request POST "/api/v1/jobs/${job_id}/dashboard-access")"
-  jq -e --arg job "$job_id" '.data.url | type == "string" and contains(("/jobs/" + $job + "/dashboard/"))' <<<"$dashboard" >/dev/null || e2e_die 'job dashboard access was not issued for the persisted job'
+  dashboard="$(portal_api_request POST "/api/v1/jobs/${job_id}/dashboard-access")" || return
+  jq -e --arg job "$job_id" '.data.url | type == "string" and contains(("/jobs/" + $job + "/dashboard/"))' <<<"$dashboard" >/dev/null || { e2e_die 'job dashboard access was not issued for the persisted job'; return 1; }
 
-  checkpoints="$(portal_api_request GET "/api/v1/jobs/${job_id}/checkpoints")"
-  checkpoint_id="$(jq -er --arg job "$job_id" '.data as $data | select($data.jobId == $job) | [$data.items[] | select(.complete == true and (.manifestSha256 | test("^[0-9a-f]{64}$")))] | sort_by(.step) | last | .id' <<<"$checkpoints")" || e2e_die 'no complete checkpoint manifest was published'
-  checkpoint_step="$(jq -er --arg id "$checkpoint_id" '.data.items[] | select(.id == $id and .complete == true) | .step' <<<"$checkpoints")" || e2e_die 'complete checkpoint has no persisted step'
-  [[ "$checkpoint_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || e2e_die 'checkpoint ID is unsafe'
-  [[ "$checkpoint_step" =~ ^[0-9]+$ ]] || e2e_die 'checkpoint step is unsafe'
+  checkpoints="$(portal_api_request GET "/api/v1/jobs/${job_id}/checkpoints")" || return
+  checkpoint_id="$(jq -er --arg job "$job_id" '.data as $data | select($data.jobId == $job) | [$data.items[] | select(.complete == true and (.manifestSha256 | test("^[0-9a-f]{64}$")))] | sort_by(.step) | last | .id' <<<"$checkpoints")" || { e2e_die 'no complete checkpoint manifest was published'; return 1; }
+  checkpoint_step="$(jq -er --arg id "$checkpoint_id" '.data.items[] | select(.id == $id and .complete == true) | .step' <<<"$checkpoints")" || { e2e_die 'complete checkpoint has no persisted step'; return 1; }
+  [[ "$checkpoint_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || { e2e_die 'checkpoint ID is unsafe'; return 1; }
+  [[ "$checkpoint_step" =~ ^[0-9]+$ ]] || { e2e_die 'checkpoint step is unsafe'; return 1; }
   printf '%s\t%s\n' "$checkpoint_id" "$checkpoint_step"
 }
 
@@ -87,7 +87,7 @@ _validated_exact_json() {
 _owned_resources() {
   local detail="$1" job_id tenant_id namespace ray_job ray_job_uid ray_cluster
   local cluster_json cluster_uid pods_json pod_rows pod_name pod_uid volume_name pvc_name pvc_json
-  local services_json workloads_json jobs_json rows
+  local services_json workloads_json jobs_json rows service_count
   job_id="$(jq -er '(.data // .).id' <<<"$detail")" || return 1
   tenant_id="$(jq -er '(.data // .).tenantId' <<<"$detail")" || return 1
   namespace="$(jq -er '(.data // .).kubernetesNamespace' <<<"$detail")" || return 1
@@ -136,7 +136,8 @@ _owned_resources() {
   done <<<"$pod_rows"
 
   services_json="$(_validated_list_json Services get services --namespace "$namespace" --selector "ray.io/cluster=${ray_cluster}" -o json)" || return 1
-  if [[ "$(jq '.items | length' <<<"$services_json")" -gt 0 && -z "$cluster_uid" ]]; then
+  service_count="$(jq '.items | length' <<<"$services_json")" || return 1
+  if [[ "$service_count" -gt 0 && -z "$cluster_uid" ]]; then
     e2e_die 'Service exists without the exact persisted RayCluster owner'
     return 1
   fi
@@ -171,7 +172,7 @@ discover_owned_resources() {
   owned="$(_owned_resources "$detail")" || return 1
   while IFS=$'\t' read -r kind item; do
     [[ -n "$kind" ]] || continue
-    ledger_record "$kind" "$item" "$namespace" "$job_id"
+    ledger_record "$kind" "$item" "$namespace" "$job_id" || return
   done <<<"$owned"
 }
 
@@ -184,7 +185,7 @@ wait_for_ttl_cleanup() {
   deadline=$(( $(date +%s) + successTtlSeconds + E2E_TIMEOUT_SECONDS ))
   while [[ "$(date +%s)" -lt "$deadline" ]]; do
     owned="$(_owned_resources "$detail")" || return 1
-    count="$(awk -F '\t' '$1 == "service" || $1 == "pvc" || $1 == "raycluster" || $1 == "workload" {count++} END {print count+0}' <<<"$owned")"
+    count="$(awk -F '\t' '$1 == "service" || $1 == "pvc" || $1 == "raycluster" || $1 == "workload" {count++} END {print count+0}' <<<"$owned")" || return
     allocations="$(portal_api_request GET "$gpuallocations_endpoint")" || return 1
     jq -e '.data | type == "array"' <<<"$allocations" >/dev/null || { e2e_die 'GPU allocation cleanup query returned malformed JSON'; return 1; }
     allocation_count="$(jq --arg id "$job_id" '[.data[] | select(.id == $id)] | length' <<<"$allocations")" || return 1
@@ -204,19 +205,19 @@ verify_resume_consumption() {
   [[ "$parent_step" =~ ^[0-9]+$ ]] || { e2e_die 'parent checkpoint step is unsafe'; return 1; }
   expected_step=$(( parent_step + 1 ))
   logs="$(portal_api_request GET "/api/v1/jobs/${child_job_id}/logs?limit=200&direction=forward")" || return 1
-  jq -e --argjson step "$expected_step" '[(.data.items // .data.lines // [])[] | (.line // .message // .) | select(type == "string" and contains("RAY_TRAIN_CHECKPOINT_SMOKE rank=0 ") and contains("resumed=True")) | capture("step=(?<step>[0-9]+)") | .step | tonumber] | first == $step' <<<"$logs" >/dev/null || e2e_die 'child logs do not prove the first resumed step consumed the parent checkpoint'
+  jq -e --argjson step "$expected_step" '[(.data.items // .data.lines // [])[] | (.line // .message // .) | select(type == "string" and contains("RAY_TRAIN_CHECKPOINT_SMOKE rank=0 ") and contains("resumed=True")) | capture("step=(?<step>[0-9]+)") | .step | tonumber] | first == $step' <<<"$logs" >/dev/null || { e2e_die 'child logs do not prove the first resumed step consumed the parent checkpoint'; return 1; }
   artifact="$(portal_api_request GET "/api/v1/jobs/${child_job_id}/artifacts/preview?path=ray-train-checkpoint-smoke-result.json")" || return 1
   content="$(jq -er '.data.content' <<<"$artifact")" || return 1
-  jq -e --argjson parent "$parent_step" --argjson first "$expected_step" '.resumed == true and .parentStep == $parent and .firstStep == $first' <<<"$content" >/dev/null || e2e_die 'child result artifact does not prove checkpoint consumption'
+  jq -e --argjson parent "$parent_step" --argjson first "$expected_step" '.resumed == true and .parentStep == $parent and .firstStep == $first' <<<"$content" >/dev/null || { e2e_die 'child result artifact does not prove checkpoint consumption'; return 1; }
 }
 
 verify_resume_provenance() {
   local child_detail="$1" parent_job_id="$2" expected_checkpoint="$3"
-  jq -e --arg parent "$parent_job_id" --arg checkpoint "$expected_checkpoint" '(.data // .) as $job | $job.spec.parentJobId == $parent and $job.resumeCheckpointId == $checkpoint' <<<"$child_detail" >/dev/null || e2e_die 'child parentJobId/resumeCheckpointId provenance is incomplete'
+  jq -e --arg parent "$parent_job_id" --arg checkpoint "$expected_checkpoint" '(.data // .) as $job | $job.spec.parentJobId == $parent and $job.resumeCheckpointId == $checkpoint' <<<"$child_detail" >/dev/null || { e2e_die 'child parentJobId/resumeCheckpointId provenance is incomplete'; return 1; }
 }
 
 main() {
-  acceptance_setup
+  acceptance_setup || return
   printf 'ACCEPTANCE_PREFIX=%s\n' "$ACCEPTANCE_PREFIX"
   if ! e2e_live_enabled; then
     echo 'DRY_RUN managed Ray Train 2.56.1 acceptance matrix'
@@ -230,49 +231,51 @@ main() {
     return 0
   fi
 
-  require_live_configuration
-  [[ -f "${PORTAL_SESSION_CONFIG:-}" ]] || e2e_die 'PORTAL_SESSION_CONFIG is required for scoped observability checks'
-  [[ -n "${PORTAL_SOURCE_SNAPSHOT_ID:-}" ]] || e2e_die 'PORTAL_SOURCE_SNAPSHOT_ID is required for a real Portal submission'
-  command -v kubectl >/dev/null || e2e_die 'kubectl is required for exact-label residual checks'
-  command -v docker >/dev/null || e2e_die 'docker is required for the native Ray acceptance flow'
-  verify_interactive_portal_session
-  ledger_init
+  require_live_configuration || return
+  [[ -f "${PORTAL_SESSION_CONFIG:-}" ]] || { e2e_die 'PORTAL_SESSION_CONFIG is required for scoped observability checks'; return 1; }
+  [[ -n "${PORTAL_SOURCE_SNAPSHOT_ID:-}" ]] || { e2e_die 'PORTAL_SOURCE_SNAPSHOT_ID is required for a real Portal submission'; return 1; }
+  command -v kubectl >/dev/null || { e2e_die 'kubectl is required for exact-label residual checks'; return 1; }
+  command -v docker >/dev/null || { e2e_die 'docker is required for the native Ray acceptance flow'; return 1; }
+  verify_interactive_portal_session || return
+  ledger_init || return
 
   while IFS=$'\t' read -r topology workers gpus mode; do
     for flow in "${submission_flows[@]}"; do
-      local name job_id detail expected_workers checkpoint_id checkpoint_step child_id child_detail
+      local name job_id detail expected_workers checkpoint_id checkpoint_step child_id child_detail origin surface_result
       name="${ACCEPTANCE_PREFIX}-m-${topology}-${flow//-}"
-      job_id="$(submit_acceptance_job "$flow" "$name" "$expected_engine" "$workers" "$gpus" "$mode")"
-      require_job_id "$job_id"
-      ledger_record job "$job_id" "$TENANT_NAMESPACE" "$job_id"
-      ledger_record gpuallocation "$job_id" "$TENANT_NAMESPACE" "$job_id"
-      detail="$(wait_for_job "$job_id")"
-      verify_persisted_job "$detail" "$expected_engine" "$expected_ray_version" "$(origin_for_flow "$flow")" "$workers" "$gpus"
-      verify_acceptance_identity "$detail" "$flow" "$name"
-      record_persisted_resources "$detail"
+      job_id="$(submit_acceptance_job "$flow" "$name" "$expected_engine" "$workers" "$gpus" "$mode")" || return
+      require_job_id "$job_id" || return
+      ledger_record job "$job_id" "$TENANT_NAMESPACE" "$job_id" || return
+      ledger_record gpuallocation "$job_id" "$TENANT_NAMESPACE" "$job_id" || return
+      detail="$(wait_for_job "$job_id")" || return
+      origin="$(origin_for_flow "$flow")" || return
+      verify_persisted_job "$detail" "$expected_engine" "$expected_ray_version" "$origin" "$workers" "$gpus" || return
+      verify_acceptance_identity "$detail" "$flow" "$name" || return
+      record_persisted_resources "$detail" || return
       expected_workers=$(( workers * gpus ))
       if [[ "$topology" == 2x8gpu ]]; then expected_workers=16; fi
-      IFS=$'\t' read -r checkpoint_id checkpoint_step <<<"$(verify_managed_surfaces "$job_id" "$expected_workers")"
-      discover_owned_resources "$detail"
+      surface_result="$(verify_managed_surfaces "$job_id" "$expected_workers")" || return
+      IFS=$'\t' read -r checkpoint_id checkpoint_step <<<"$surface_result" || return
+      discover_owned_resources "$detail" || return
 
-      child_id="$(submit_acceptance_job spk-rayjob "${name}-resume" "$expected_engine" "$workers" "$gpus" "$mode" "$job_id")"
-      require_job_id "$child_id"
-      ledger_record job "$child_id" "$TENANT_NAMESPACE" "$child_id"
-      ledger_record gpuallocation "$child_id" "$TENANT_NAMESPACE" "$child_id"
-      child_detail="$(wait_for_job "$child_id")"
-      verify_persisted_job "$child_detail" "$expected_engine" "$expected_ray_version" ray-cli "$workers" "$gpus"
-      verify_acceptance_identity "$child_detail" spk-rayjob "${name}-resume"
-      verify_resume_provenance "$child_detail" "$job_id" "$checkpoint_id"
-      verify_resume_consumption "$child_id" "$checkpoint_step"
-      record_persisted_resources "$child_detail"
-      verify_managed_surfaces "$child_id" "$expected_workers" >/dev/null
-      discover_owned_resources "$child_detail"
-      wait_for_ttl_cleanup "$detail"
-      wait_for_ttl_cleanup "$child_detail"
+      child_id="$(submit_acceptance_job spk-rayjob "${name}-resume" "$expected_engine" "$workers" "$gpus" "$mode" "$job_id")" || return
+      require_job_id "$child_id" || return
+      ledger_record job "$child_id" "$TENANT_NAMESPACE" "$child_id" || return
+      ledger_record gpuallocation "$child_id" "$TENANT_NAMESPACE" "$child_id" || return
+      child_detail="$(wait_for_job "$child_id")" || return
+      verify_persisted_job "$child_detail" "$expected_engine" "$expected_ray_version" ray-cli "$workers" "$gpus" || return
+      verify_acceptance_identity "$child_detail" spk-rayjob "${name}-resume" || return
+      verify_resume_provenance "$child_detail" "$job_id" "$checkpoint_id" || return
+      verify_resume_consumption "$child_id" "$checkpoint_step" || return
+      record_persisted_resources "$child_detail" || return
+      verify_managed_surfaces "$child_id" "$expected_workers" >/dev/null || return
+      discover_owned_resources "$child_detail" || return
+      wait_for_ttl_cleanup "$detail" || return
+      wait_for_ttl_cleanup "$child_detail" || return
       printf 'PASS topology=%s flow=%s parent=%s child=%s\n' "$topology" "$flow" "$job_id" "$child_id"
     done
   done <<<"$managed_matrix"
-  ledger_cleanup
+  ledger_cleanup || return
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

@@ -153,6 +153,80 @@ verify_interactive_portal_session >/dev/null || fail 'Portal session rejected OI
 portal_api_request() { printf '{"data":{"authType":"local"}}\n'; }
 verify_interactive_portal_session >/dev/null || fail 'Portal session rejected local auth'
 
+insecure_portal_config="$temporary/insecure-portal-config.json"
+portal_curl_log="$temporary/portal-curl.log"
+printf '{"token":"abcdefghijklmnop"}\n' >"$insecure_portal_config"
+chmod 644 "$insecure_portal_config"
+: >"$portal_curl_log"
+if API_URL=https://platform.example PORTAL_SESSION_CONFIG="$insecure_portal_config" PORTAL_CURL_LOG="$portal_curl_log" \
+  bash -c '
+    source "$1"
+    curl() { printf "curl invoked\n" >>"$PORTAL_CURL_LOG"; return 0; }
+    verify_interactive_portal_session
+  ' fixture "$shared_harness" >/dev/null 2>&1; then
+  fail 'Portal session accepted an insecure token configuration'
+fi
+[[ ! -s "$portal_curl_log" ]] || fail 'Portal session invoked curl after token configuration validation failed'
+
+ledger_failure_marker="$temporary/ledger-failure-submit"
+if TENANT_NAMESPACE=tenant-contract LEDGER_FAILURE_MARKER="$ledger_failure_marker" \
+  bash -c '
+    source "$1"
+    ACCEPTANCE_PREFIX=acc-contract-1234
+    ledger_record() { return 55; }
+    submit_portal_job() { : >"$LEDGER_FAILURE_MARKER"; printf "job-cccccccccccccccccccccccc\n"; }
+    set +e
+    submit_acceptance_job portal acc-contract-1234-ledger ray-ddp 1 1 single_gpu "" >/dev/null
+    status=$?
+    set -e
+    [[ "$status" -eq 55 && ! -e "$LEDGER_FAILURE_MARKER" ]]
+  ' fixture "$shared_harness"; then
+  :
+else
+  fail 'ledger publication failure did not stop submission with its original status'
+fi
+
+secure_config="$temporary/secure-config.json"
+printf '{"token":"abcdefghijklmnop"}\n' >"$secure_config"
+chmod 600 "$secure_config"
+artifact_failure_ledger="$temporary/artifact-failure-ledger.tsv"
+artifact_cli_log="$temporary/artifact-cli.log"
+if TENANT_NAMESPACE=tenant-contract CLEANUP_LEDGER="$artifact_failure_ledger" ARTIFACT_CLI_LOG="$artifact_cli_log" \
+  SPK_RAYJOB_CONFIG="$secure_config" API_URL=https://platform.example ACCEPTANCE_SOURCE_DIR="$temporary/source" \
+  TRAINING_IMAGE='registry.example/train@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+  bash -c '
+    source "$1"
+    ACCEPTANCE_PREFIX=acc-contract-1234
+    mkdir -p "$ACCEPTANCE_SOURCE_DIR"
+    ledger_init
+    bounded_command() {
+      local artifact_id="" previous=""
+      for argument in "$@"; do
+        if [[ "$previous" == --source-artifact-id ]]; then artifact_id="$argument"; fi
+        previous="$argument"
+      done
+      [[ "$artifact_id" =~ ^artifact-[0-9a-f]{24}$ ]] || return 61
+      grep -Fq $'"'"'sourceartifact\t'"'"'"$artifact_id"$'"'"'\ttenant-contract\tacc-contract-1234'"'"' "$CLEANUP_LEDGER" || return 62
+      printf "%s\n" "$artifact_id" >"$ARTIFACT_CLI_LOG"
+      return 28
+    }
+    reconcile_submission_intent() { return 1; }
+    set +e
+    submit_acceptance_job spk-rayjob acc-contract-1234-artifact ray-ddp 1 1 single_gpu "" >/dev/null
+    status=$?
+    set -e
+    [[ "$status" -ne 0 && -s "$ARTIFACT_CLI_LOG" ]]
+  ' fixture "$shared_harness"; then
+  :
+else
+  fail 'spk artifact upload failure was not pre-ledgered with a stable exact identity'
+fi
+artifact_id_recorded="$(cat "$artifact_cli_log")"
+grep -Fq $'sourceartifact\t'"$artifact_id_recorded"$'\ttenant-contract\tacc-contract-1234' "$artifact_failure_ledger" || fail 'stable source artifact was absent from the cleanup ledger'
+if grep -Fq 'foreign-artifact' "$artifact_failure_ledger"; then
+  fail 'artifact reconciliation polluted the ledger with a non-acceptance artifact'
+fi
+
 response_loss_ledger="$temporary/response-loss-ledger.tsv"
 CLEANUP_LEDGER="$response_loss_ledger"
 ledger_init
@@ -195,6 +269,34 @@ fi
 # A failed scoped discovery must never be mistaken for an empty/clean result.
 # shellcheck source=scripts/e2e-ray-train-managed.sh
 source "$managed_harness"
+
+for surface_mode in malformed-performance empty-logs; do
+  if SURFACE_MODE="$surface_mode" bash -c '
+    source "$1"
+    portal_api_request() {
+      case "$2" in
+        *training-performance*)
+          if [[ "$SURFACE_MODE" == malformed-performance ]]; then printf "{malformed\\n"; else printf "{\"data\":{\"workers\":[{}]}}\\n"; fi
+          ;;
+        *logs*)
+          if [[ "$SURFACE_MODE" == empty-logs ]]; then printf "{\"data\":{\"items\":[]}}\\n"; else printf "{\"data\":{\"items\":[{\"line\":\"trained\"}]}}\\n"; fi
+          ;;
+        *mlflow-dashboard-access*) printf "{\"data\":{\"url\":\"/api/mlflow\"}}\\n" ;;
+        *dashboard-access*) printf "{\"data\":{\"url\":\"/api/v1/jobs/job-0123456789abcdef01234567/dashboard/\"}}\\n" ;;
+        *checkpoints*) printf "{\"data\":{\"jobId\":\"job-0123456789abcdef01234567\",\"items\":[{\"id\":\"checkpoint-1\",\"complete\":true,\"manifestSha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"step\":7}]}}\\n" ;;
+        *) return 1 ;;
+      esac
+    }
+    if verify_managed_surfaces job-0123456789abcdef01234567 1 >/dev/null 2>&1; then
+      exit 1
+    fi
+  ' fixture "$managed_harness"; then
+    :
+  else
+    fail "managed surface verification accepted $surface_mode"
+  fi
+done
+
 kube() { return 42; }
 resource_detail='{"data":{"id":"job-0123456789abcdef01234567","tenantId":"tenant-a","kubernetesNamespace":"tenant-contract","rayJobName":"rayjob-a","rayJobUid":"rayjob-uid-a","rayClusterName":"cluster-a"}}'
 if discover_owned_resources "$resource_detail" >/dev/null 2>&1; then

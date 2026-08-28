@@ -86,6 +86,101 @@ func TestSubmitDirectoryCreatesUploadsCompletesThenSubmits(t *testing.T) {
 	}
 }
 
+func TestSubmitDirectoryRetriesLostArtifactCreateResponseWithStableID(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "train.py"), []byte("print('train')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const artifactID = "artifact-0123456789abcdef01234567"
+	createRequests := 0
+	jobRequests := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/source-artifacts":
+			createRequests++
+			var create struct {
+				ArtifactID string `json:"artifactId"`
+				SHA256     string `json:"sha256"`
+				SizeBytes  int64  `json:"sizeBytes"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&create); err != nil {
+				t.Fatal(err)
+			}
+			if create.ArtifactID != artifactID || create.SHA256 == "" || create.SizeBytes < 1 {
+				t.Fatalf("unstable create request: %+v", create)
+			}
+			if createRequests == 1 {
+				http.Error(writer, "response was lost", http.StatusServiceUnavailable)
+				return
+			}
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"artifactId": artifactID, "state": "READY", "uploadRequired": false})
+		case "/api/v1/jobs":
+			jobRequests++
+			writeClientSuccess(t, writer, http.StatusAccepted, map[string]any{"id": "job-test"})
+		default:
+			t.Fatalf("unexpected request %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientOptions{ServerURL: server.URL, Token: "test-token", HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := client.SubmitDirectoryWithArtifactID(context.Background(), root, testJobSpec(), artifactID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.ID != "job-test" || createRequests != 2 || jobRequests != 1 {
+		t.Fatalf("job=%+v createRequests=%d jobRequests=%d", job, createRequests, jobRequests)
+	}
+}
+
+func TestSubmitDirectoryUploadFailureLeavesStableArtifactAndNoJob(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "train.py"), []byte("print('train')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const artifactID = "artifact-fedcba987654321001234567"
+	jobRequests := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/source-artifacts":
+			var create struct {
+				ArtifactID string `json:"artifactId"`
+				SizeBytes  int64  `json:"sizeBytes"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&create); err != nil {
+				t.Fatal(err)
+			}
+			if create.ArtifactID != artifactID {
+				t.Fatalf("artifactID=%q", create.ArtifactID)
+			}
+			writeClientSuccess(t, writer, http.StatusCreated, map[string]any{
+				"artifactId": artifactID, "state": "PENDING", "uploadRequired": true,
+				"uploadUrl": serverURL(request) + "/upload", "contentLength": create.SizeBytes,
+			})
+		case "/upload":
+			http.Error(writer, "upload failed", http.StatusServiceUnavailable)
+		case "/api/v1/jobs":
+			jobRequests++
+		default:
+			t.Fatalf("unexpected request %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientOptions{ServerURL: server.URL, Token: "test-token", HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.SubmitDirectoryWithArtifactID(context.Background(), root, testJobSpec(), artifactID)
+	if err == nil {
+		t.Fatal("upload failure unexpectedly submitted a job")
+	}
+	if jobRequests != 0 {
+		t.Fatalf("upload failure created %d jobs", jobRequests)
+	}
+}
+
 func TestSubmitDirectoryManagedPreflightsImageBeforeBuildingArchive(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Symlink(filepath.Join(root, "missing"), filepath.Join(root, "broken")); err != nil {

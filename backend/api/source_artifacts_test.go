@@ -200,6 +200,40 @@ func TestCreateSourceArtifactReturnsPresignWithoutCachingOrCredentialLeak(t *tes
 	}
 }
 
+func TestCreateSourceArtifactHonorsValidatedCallerArtifactID(t *testing.T) {
+	now := time.Date(2026, 8, 28, 3, 0, 0, 0, time.UTC)
+	const requestedID = "artifact-0123456789abcdef01234567"
+	repo := &fakeSourceArtifactRepository{}
+	store := &fakeArtifactStore{presign: objectstore.PresignedPut{
+		URL: "https://objects.example/upload", ExpiresAt: now.Add(SourceArtifactUploadTTL), ContentLength: 100,
+	}}
+	principal := auth.Principal{Subject: "user", TenantID: "tenant", Roles: []string{"Engineer"}, AuthType: auth.AuthTypeOIDC}
+	response := performArtifactRequest(
+		artifactTestRouter(t, repo, store, principal, now),
+		http.MethodPost,
+		"/api/v1/source-artifacts",
+		`{"artifactId":"`+requestedID+`","sha256":"`+apiArtifactDigest+`","sizeBytes":100}`,
+	)
+	if response.Code != http.StatusCreated || repo.artifact == nil || repo.artifact.ID != requestedID || !strings.Contains(response.Body.String(), `"artifactId":"`+requestedID+`"`) {
+		t.Fatalf("caller artifact identity was not preserved: status=%d artifact=%+v body=%s", response.Code, repo.artifact, response.Body.String())
+	}
+}
+
+func TestCreateSourceArtifactRejectsUnsafeCallerArtifactIDBeforePersistence(t *testing.T) {
+	now := time.Date(2026, 8, 28, 3, 0, 0, 0, time.UTC)
+	repo := &fakeSourceArtifactRepository{}
+	principal := auth.Principal{Subject: "user", TenantID: "tenant", Roles: []string{"Engineer"}, AuthType: auth.AuthTypeOIDC}
+	response := performArtifactRequest(
+		artifactTestRouter(t, repo, &fakeArtifactStore{}, principal, now),
+		http.MethodPost,
+		"/api/v1/source-artifacts",
+		`{"artifactId":"artifact-../../foreign","sha256":"`+apiArtifactDigest+`","sizeBytes":100}`,
+	)
+	if response.Code != http.StatusBadRequest || repo.identity != 0 || repo.artifact != nil {
+		t.Fatalf("unsafe artifact identity reached persistence: status=%d identity=%d artifact=%+v", response.Code, repo.identity, repo.artifact)
+	}
+}
+
 func TestCreateSourceArtifactReadyReuseDoesNotIssueUploadURL(t *testing.T) {
 	now := time.Now().UTC()
 	ready, err := domain.NewSourceArtifact(domain.SourceArtifactInput{ID: "ready", TenantID: "tenant", UserID: "user", SHA256: apiArtifactDigest, SizeBytes: 100}, now.Add(15*time.Minute), now)
