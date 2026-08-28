@@ -142,6 +142,72 @@ func TestManagedCleanupAcceptsOnlyExactlyIssuedCreationFences(t *testing.T) {
 	}
 }
 
+func TestSupersededManagedCreationDeletesExactlyIssuedLowerFence(t *testing.T) {
+	job := managedEmptyAttempt(2, domain.StateRecovering)
+	job.RayJobName = job.ID + "-a2"
+	name, uid := job.RayJobName, "uid-issued-lower"
+	store := &memoryJobStore{
+		job: &job,
+		managedResources: map[int]domain.ManagedAttemptResource{2: {
+			JobID: job.ID, ClusterAttempt: 2, KubernetesNS: job.KubernetesNS,
+			RayJobName: name, State: domain.ManagedAttemptResourceCreating,
+			LeaseOwner: "replica-current", LeaseVersion: 3, ResourceFence: 3,
+		}},
+		issuedFences: map[int]map[int64]bool{2: {1: true, 3: true}},
+	}
+	dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
+	createManagedAttemptResourceWithFence(t, dynamicClient, job, 2, 1, name, uid)
+	reconciler := NewReconciler(store, NewClientFromInterfaces(dynamicClient, nil), testRenderOptions())
+	resource, err := reconciler.client.GetRayJob(context.Background(), job.KubernetesNS, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reconciler.removeSupersededManagedCreation(context.Background(), &job, resource, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reconciler.client.GetRayJob(context.Background(), job.KubernetesNS, name); !apierrors.IsNotFound(err) {
+		t.Fatalf("exactly issued lower fence was not deleted: %v", err)
+	}
+	if len(store.quarantineEvents) != 0 {
+		t.Fatalf("issued lower fence was incorrectly quarantined: %+v", store.quarantineEvents)
+	}
+}
+
+func TestSupersededManagedCreationQuarantinesUnissuedLowerFenceWithoutDeleting(t *testing.T) {
+	job := managedEmptyAttempt(2, domain.StateRecovering)
+	job.RayJobName = job.ID + "-a2"
+	name, uid := job.RayJobName, "uid-unissued-lower"
+	store := &memoryJobStore{
+		job: &job,
+		managedResources: map[int]domain.ManagedAttemptResource{2: {
+			JobID: job.ID, ClusterAttempt: 2, KubernetesNS: job.KubernetesNS,
+			RayJobName: name, State: domain.ManagedAttemptResourceCreating,
+			LeaseOwner: "replica-current", LeaseVersion: 3, ResourceFence: 3,
+		}},
+		issuedFences: map[int]map[int64]bool{2: {1: true, 3: true}},
+	}
+	dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
+	createManagedAttemptResourceWithFence(t, dynamicClient, job, 2, 2, name, uid)
+	reconciler := NewReconciler(store, NewClientFromInterfaces(dynamicClient, nil), testRenderOptions())
+	resource, err := reconciler.client.GetRayJob(context.Background(), job.KubernetesNS, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reconciler.removeSupersededManagedCreation(context.Background(), &job, resource, 2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reconciler.client.GetRayJob(context.Background(), job.KubernetesNS, name); err != nil {
+		t.Fatalf("unissued lower fence was deleted instead of quarantined: %v", err)
+	}
+	ledger := store.managedResources[2]
+	if ledger.State != domain.ManagedAttemptResourceQuarantined || ledger.RayJobUID != uid {
+		t.Fatalf("unissued lower fence did not retain durable quarantine identity: %+v", ledger)
+	}
+	if len(store.quarantineEvents) != 1 || !store.quarantineEvents[0].Permanent || !strings.Contains(store.quarantineEvents[0].Message, "unissued") {
+		t.Fatalf("unissued lower fence did not emit quarantine alert intent: %+v", store.quarantineEvents)
+	}
+}
+
 func TestPendingForegroundDeletesBeyondFirstBatchProgressAcrossPasses(t *testing.T) {
 	job := managedEmptyAttempt(30, domain.StateCanceled)
 	store := &memoryJobStore{job: &job, managedResources: map[int]domain.ManagedAttemptResource{}, issuedFences: map[int]map[int64]bool{}}

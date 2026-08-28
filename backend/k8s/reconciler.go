@@ -582,6 +582,28 @@ func (r *Reconciler) removeSupersededManagedCreation(ctx context.Context, job *d
 	if err := verifyManagedRayJobFence(resource, job.ID, uid, job.ClusterAttempt, fence); err != nil {
 		return err
 	}
+	issued, err := r.store.IsManagedAttemptFenceIssued(ctx, job.ID, job.ClusterAttempt, fence)
+	if err != nil {
+		return fmt.Errorf("verify superseded managed RayJob creation fence: %w", err)
+	}
+	if !issued {
+		retiring, _, retireErr := r.store.RetireManagedAttemptResource(ctx, domain.ManagedAttemptRetireRequest{
+			JobID: job.ID, ClusterAttempt: job.ClusterAttempt, KubernetesNS: resource.GetNamespace(),
+			RayJobName: resource.GetName(), RayJobUID: uid,
+		})
+		if retireErr != nil {
+			return retireErr
+		}
+		if retiring == nil {
+			return fmt.Errorf("unissued managed creation fence retirement returned no resource")
+		}
+		return r.store.RecordManagedAttemptCleanupFailure(ctx, domain.ManagedAttemptCleanupFailureRequest{
+			JobID: retiring.JobID, ClusterAttempt: retiring.ClusterAttempt,
+			RayJobName: retiring.RayJobName, RayJobUID: retiring.RayJobUID,
+			Message:   fmt.Sprintf("refusing to delete superseded RayJob with unissued creation fence %d", fence),
+			Permanent: true, ObservedAt: r.now(),
+		})
+	}
 	if err := r.client.DeleteRayJob(ctx, resource.GetNamespace(), resource.GetName(), job.ID, uid); err != nil {
 		return err
 	}

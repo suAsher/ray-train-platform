@@ -36,6 +36,7 @@ type memoryJobStore struct {
 	cancelDuringAdopt    bool
 	managedResources     map[int]domain.ManagedAttemptResource
 	issuedFences         map[int]map[int64]bool
+	quarantineEvents     []domain.ManagedAttemptCleanupFailureRequest
 }
 
 func (s *memoryJobStore) IsManagedAttemptFenceIssued(_ context.Context, _ string, attempt int, fence int64) (bool, error) {
@@ -248,6 +249,13 @@ func (s *memoryJobStore) AcquireManagedAttemptCreation(_ context.Context, reques
 	expires := now.Add(request.LeaseDuration)
 	resource.State, resource.LeaseOwner, resource.LeaseVersion, resource.ResourceFence, resource.LeaseExpiresAt = domain.ManagedAttemptResourceCreating, request.LeaseOwner, resource.LeaseVersion+1, resource.LeaseVersion+1, &expires
 	s.managedResources[request.ExpectedClusterAttempt] = resource
+	if s.issuedFences == nil {
+		s.issuedFences = map[int]map[int64]bool{}
+	}
+	if s.issuedFences[request.ExpectedClusterAttempt] == nil {
+		s.issuedFences[request.ExpectedClusterAttempt] = map[int64]bool{}
+	}
+	s.issuedFences[request.ExpectedClusterAttempt][resource.ResourceFence] = true
 	resourceCopy := resource
 	return &copyJob, &resourceCopy, true, nil
 }
@@ -359,6 +367,7 @@ func (s *memoryJobStore) RecordManagedAttemptCleanupFailure(_ context.Context, r
 	resource.NextCheckAt = request.ObservedAt.Add(5 * time.Second)
 	if request.Permanent {
 		resource.State = domain.ManagedAttemptResourceQuarantined
+		s.quarantineEvents = append(s.quarantineEvents, request)
 	}
 	s.managedResources[request.ClusterAttempt] = resource
 	return nil
@@ -898,7 +907,7 @@ func TestCreatorCrashAdoptsFailedResourceBeforeManagedRecovery(t *testing.T) {
 	}
 	store := &memoryJobStore{job: &job, recoveryAllowed: true, recoveryCheckpointID: "checkpoint-current", managedResources: map[int]domain.ManagedAttemptResource{
 		2: {JobID: job.ID, ClusterAttempt: 2, KubernetesNS: job.KubernetesNS, RayJobName: job.RayJobName, State: domain.ManagedAttemptResourceCreating, LeaseOwner: "crashed", LeaseVersion: 1, LeaseExpiresAt: timePointer(time.Now().Add(-time.Minute))},
-	}}
+	}, issuedFences: map[int]map[int64]bool{2: {1: true}}}
 	dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
 	client := NewClientFromInterfaces(dynamicClient, nil)
 	options := testRenderOptions()
@@ -951,7 +960,7 @@ func TestCreatorCrashAdoptsFailedResourceAndFailsClosedWithoutCheckpoint(t *test
 	job.RayJobName = job.ID + "-a2"
 	store := &memoryJobStore{job: &job, recoveryAllowed: false, managedResources: map[int]domain.ManagedAttemptResource{
 		2: {JobID: job.ID, ClusterAttempt: 2, KubernetesNS: job.KubernetesNS, RayJobName: job.RayJobName, State: domain.ManagedAttemptResourceCreating, LeaseOwner: "crashed", LeaseVersion: 1, LeaseExpiresAt: timePointer(time.Now().Add(-time.Minute))},
-	}}
+	}, issuedFences: map[int]map[int64]bool{2: {1: true}}}
 	dynamicClient := newFakeDynamicClient().(*dynamicfake.FakeDynamicClient)
 	client := NewClientFromInterfaces(dynamicClient, nil)
 	options := testRenderOptions()
