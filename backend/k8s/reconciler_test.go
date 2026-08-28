@@ -39,6 +39,7 @@ type memoryJobStore struct {
 	quarantineEvents     []domain.ManagedAttemptCleanupFailureRequest
 	reservationCalls     int
 	reservationCallLimit int
+	terminalEvents       int
 }
 
 func (s *memoryJobStore) IsManagedAttemptFenceIssued(_ context.Context, _ string, attempt int, fence int64) (bool, error) {
@@ -82,15 +83,25 @@ func (s *memoryJobStore) GetByID(context.Context, string) (*domain.TrainingJob, 
 }
 
 func (s *memoryJobStore) ListReconcileCandidates(context.Context, int) ([]string, error) {
+	if terminalJobState(s.job.ObservedState) {
+		return nil, nil
+	}
 	return []string{s.job.ID}, nil
 }
 
 func (s *memoryJobStore) ApplyObservedState(_ context.Context, state domain.ObservedJobState) error {
 	s.observed = append(s.observed, state)
+	if terminalJobState(s.job.ObservedState) {
+		return nil
+	}
 	if s.job.ClusterAttempt != state.ExpectedClusterAttempt || s.job.RayJobName != state.ExpectedRayJobName || s.job.RayJobUID != state.ExpectedRayJobUID {
 		return nil
 	}
-	if s.job.RayJobName != "" && s.job.RayJobName != state.RayJobName {
+	currentName := s.job.RayJobName
+	if currentName == "" {
+		currentName = managedAttemptRayJobName(*s.job)
+	}
+	if currentName != state.RayJobName {
 		return nil
 	}
 	if s.job.RayJobUID != "" && s.job.RayJobUID != state.RayJobUID {
@@ -102,6 +113,9 @@ func (s *memoryJobStore) ApplyObservedState(_ context.Context, state domain.Obse
 	s.job.KubernetesNS = state.KubernetesNS
 	s.job.RayJobName = state.RayJobName
 	s.job.RayJobUID = state.RayJobUID
+	if terminalJobState(state.State) {
+		s.terminalEvents++
+	}
 	return nil
 }
 
@@ -832,6 +846,25 @@ func TestCanceledEmptyAttemptReservationCreatesNothing(t *testing.T) {
 	}
 	if store.job.ObservedState != domain.StateCanceled {
 		t.Fatalf("latest canceled state was not reconciled: %+v", store.job)
+	}
+	if store.job.RayJobName != current.ID+"-a2" {
+		t.Fatalf("canceled attempt did not persist deterministic identity: %+v", store.job)
+	}
+	if store.terminalEvents != 1 {
+		t.Fatalf("canceled attempt emitted %d terminal events, want 1", store.terminalEvents)
+	}
+	candidates, err := store.ListReconcileCandidates(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("terminal canceled attempt remained a reconcile candidate: %v", candidates)
+	}
+	if err := reconciler.ReconcileJob(context.Background(), current.ID); err != nil {
+		t.Fatal(err)
+	}
+	if store.terminalEvents != 1 {
+		t.Fatalf("terminal canceled attempt was processed repeatedly: events=%d", store.terminalEvents)
 	}
 }
 

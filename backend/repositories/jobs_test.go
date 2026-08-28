@@ -379,6 +379,51 @@ func TestListReconcileCandidatesExcludesTerminalActiveJobs(t *testing.T) {
 	}
 }
 
+func TestCanceledManagedJobBeforeReservationAcceptsDeterministicTerminalIdentity(t *testing.T) {
+	repo, job := managedRecoveryJob(t, 2)
+	if err := repo.db.Model(&JobRecord{}).Where("id = ?", job.ID).Updates(map[string]any{
+		"observed_state": domain.StateSubmitted,
+		"ray_job_name":   "",
+		"ray_job_uid":    "",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetDesiredState(context.Background(), job.TenantID, job.ID, domain.DesiredCanceled); err != nil {
+		t.Fatal(err)
+	}
+
+	observed := domain.ObservedJobState{
+		ID: job.ID, State: domain.StateCanceled, KubernetesNS: job.KubernetesNS,
+		ExpectedClusterAttempt: 1,
+		RayJobName:             job.ID,
+	}
+	if err := repo.ApplyObservedState(context.Background(), observed); err != nil {
+		t.Fatal(err)
+	}
+
+	current, err := repo.Get(context.Background(), job.TenantID, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.ObservedState != domain.StateCanceled || current.RayJobName != job.ID {
+		t.Fatalf("deterministic terminal identity did not complete cancellation: %+v", current)
+	}
+	var terminalEvents int64
+	if err := repo.db.Model(&OutboxRecord{}).Where("event_type = ? AND aggregate_id = ?", "TRAINING_JOB_TERMINAL", job.ID).Count(&terminalEvents).Error; err != nil {
+		t.Fatal(err)
+	}
+	if terminalEvents != 1 {
+		t.Fatalf("terminal cancellation emitted %d terminal events, want 1", terminalEvents)
+	}
+	candidates, err := repo.ListReconcileCandidates(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("terminal canceled job remained a reconcile candidate: %v", candidates)
+	}
+}
+
 func TestCreateRoundTripsArtifactSubmissionMetadata(t *testing.T) {
 	repo := testRepository(t)
 	job := testJob()

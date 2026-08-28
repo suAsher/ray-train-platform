@@ -884,7 +884,7 @@ func (r *Reconciler) reconcileManagedCancellation(ctx context.Context, job *doma
 	}
 	observed := domain.ObservedJobState{
 		ID: job.ID, State: domain.StateCanceled, KubernetesNS: managedJobNamespace(*job),
-		RayJobName: job.RayJobName, RayJobUID: job.RayJobUID,
+		RayJobName: name, RayJobUID: job.RayJobUID,
 	}
 	setObservedStateFence(&observed, *job)
 	return r.store.ApplyObservedState(ctx, observed)
