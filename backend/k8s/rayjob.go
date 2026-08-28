@@ -519,9 +519,6 @@ func managedRecoveryCheckpointPath(job domain.TrainingJob) (string, error) {
 	if checkpointID == "" {
 		return "", nil
 	}
-	if job.ClusterAttempt <= 1 {
-		return "", fmt.Errorf("resume checkpoint requires a recovery attempt")
-	}
 	if len(checkpointID) > domain.TrainingCheckpointIDMaxBytes || path.Base(checkpointID) != checkpointID {
 		return "", fmt.Errorf("checkpoint ID is not a safe path segment")
 	}
@@ -531,6 +528,19 @@ func managedRecoveryCheckpointPath(job domain.TrainingJob) (string, error) {
 		if !valid {
 			return "", fmt.Errorf("checkpoint ID is not a safe identifier")
 		}
+	}
+	if job.ClusterAttempt == 1 {
+		if strings.TrimSpace(job.Spec.ParentJobID) == "" {
+			return "", fmt.Errorf("initial resume checkpoint requires a parent job")
+		}
+		checkpoint := job.Spec.ResolvedDataMounts.Checkpoint
+		if checkpoint == nil || checkpoint.MountPath != domain.DataMountCheckpointPath || !checkpoint.ReadOnly {
+			return "", fmt.Errorf("child resume requires the governed read-only checkpoint mount")
+		}
+		return "", nil
+	}
+	if job.ClusterAttempt <= 1 {
+		return "", fmt.Errorf("resume checkpoint requires an initial child or recovery attempt")
 	}
 	output := job.Spec.ResolvedDataMounts.Output
 	if output == nil || output.MountPath != domain.DataMountOutputPath || output.ReadOnly {

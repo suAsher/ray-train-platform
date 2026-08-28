@@ -126,9 +126,15 @@ func TestRenderRayJobOmitsActiveDeadlineWhenNoTimeout(t *testing.T) {
 
 func TestManagedRecoveryAttemptUsesBoundedAttemptNameAndCheckpoint(t *testing.T) {
 	job := managedRenderJob(domain.RayVersionProduction)
+	job.Spec.ParentJobID = "job-0123456789abcdef01234567"
 	job.ClusterAttempt = 2
 	job.RayJobUID = "uid-attempt-2"
 	job.ResumeCheckpointID = "checkpoint-epoch-4"
+	job.Spec.ResolvedDataMounts.Checkpoint = &domain.ResolvedDataMount{
+		Space: domain.DataSpaceMyRuns, BindingSpace: domain.DataSpaceWorkspace,
+		ClaimName: "tenant-data", SubPath: "runs/parent/.platform/ray-train/job-0123456789abcdef01234567/checkpoints/checkpoint-parent",
+		MountPath: domain.DataMountCheckpointPath, ReadOnly: true,
+	}
 	job.Spec.ResolvedDataMounts.Output = &domain.ResolvedDataMount{
 		Space: domain.DataSpaceMyRuns, BindingSpace: domain.DataSpaceWorkspace,
 		ClaimName: "tenant-data", SubPath: "tenants/tenant-a/users/user-01/runs/job-01",
@@ -148,6 +154,46 @@ func TestManagedRecoveryAttemptUsesBoundedAttemptNameAndCheckpoint(t *testing.T)
 	}
 	if manifest.GetLabels()["ray.io/job-id"] != job.ID || manifest.GetLabels()["kueue.x-k8s.io/queue-name"] != job.Spec.Queue {
 		t.Fatalf("recovery lost immutable provenance: %#v", manifest.GetLabels())
+	}
+}
+
+func TestManagedChildResumeInitialAttemptUsesResolvedCheckpointMount(t *testing.T) {
+	job := managedRenderJob(domain.RayVersionProduction)
+	job.Spec.ParentJobID = "job-0123456789abcdef01234567"
+	job.ClusterAttempt = 1
+	job.ResumeCheckpointID = "checkpoint-epoch-4"
+	job.Spec.ResolvedDataMounts.Checkpoint = &domain.ResolvedDataMount{
+		Space: domain.DataSpaceMyRuns, BindingSpace: domain.DataSpaceWorkspace,
+		ClaimName: "tenant-data", SubPath: "runs/parent/job-0123456789abcdef01234567/.platform/ray-train/job-0123456789abcdef01234567/checkpoints/checkpoint-epoch-4",
+		MountPath: domain.DataMountCheckpointPath, ReadOnly: true,
+	}
+	job.Spec.ResolvedDataMounts.Output = &domain.ResolvedDataMount{
+		Space: domain.DataSpaceMyRuns, BindingSpace: domain.DataSpaceWorkspace,
+		ClaimName: "tenant-data", SubPath: "tenants/tenant-a/users/user-01/runs/job-01",
+		MountPath: domain.DataMountOutputPath, ReadOnly: false,
+	}
+
+	manifest := managedManifest(t, job)
+	worker := cacheWorkerPodSpec(t, manifest.Object)
+	if got := podEnvironment(worker)["PLATFORM_CHECKPOINT_PATH"]; got != domain.DataMountCheckpointPath {
+		t.Fatalf("child resume checkpoint path=%q want resolved mount %q", got, domain.DataMountCheckpointPath)
+	}
+	assertGovernedDataMount(t, worker, "platform-data-checkpoint", "tenant-data", domain.DataMountCheckpointPath, job.Spec.ResolvedDataMounts.Checkpoint.SubPath, true)
+}
+
+func TestManagedInitialAttemptRejectsResumeCheckpointWithoutParent(t *testing.T) {
+	job := managedRenderJob(domain.RayVersionProduction)
+	job.ClusterAttempt = 1
+	job.ResumeCheckpointID = "checkpoint-epoch-4"
+	job.Spec.ResolvedDataMounts.Checkpoint = &domain.ResolvedDataMount{
+		Space: domain.DataSpaceMyRuns, BindingSpace: domain.DataSpaceWorkspace,
+		ClaimName: "tenant-data", SubPath: "runs/unbound/checkpoints/checkpoint-epoch-4",
+		MountPath: domain.DataMountCheckpointPath, ReadOnly: true,
+	}
+
+	_, err := RenderRayJob(job, testRenderOptions())
+	if err == nil || !strings.Contains(err.Error(), "managed recovery checkpoint") {
+		t.Fatalf("attempt 1 resume without parent must fail closed, got %v", err)
 	}
 }
 
