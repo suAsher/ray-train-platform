@@ -2,6 +2,8 @@
 
 本文说明训练平台的节点本地 NVMe 缓存：用户如何用参数开启、平台实际做了什么、代码如何读取、如何估算容量，以及遇到问题如何排查。
 
+缓存同时支持 Ray 编排 DDP 与 Ray Train 托管；它是数据模式，不是训练引擎。托管引擎的 `mount`、`cache`、`ray-data` 选择及性能指标见 [Ray Train 托管指南](RAY_TRAIN_MANAGED_GUIDE.md)。
+
 ## 1. 最短结论
 
 用户不需要复制脚本、不需要重新构建训练镜像，也不需要接触 StorageClass、PVC、节点目录或 TOS 凭据。
@@ -253,3 +255,11 @@ Ray Worker 删除 -> 临时 PVC 删除 -> 本地 PV 删除 -> provisioner 删除
 10. 对同一代码、数据和 batch 比较直读与 NVMe 的预热时间、稳态 step time 和总耗时。
 
 底层安装、节点注册、StorageClass、监控和故障恢复请参阅平台运维文档；普通用户不需要这些权限。
+
+## 13. 与 Ray Train 托管的关系
+
+- `mount` 直接读取 TOS、FSX 或已登记 IDC 数据源，适合先建立正确性基线。
+- `cache` 使用本文的任务级 NVMe 预热或 Ray 临时目录；持久输入和 checkpoint 仍以 TOS/FSX/IDC 为真相。
+- `ray-data` 只用于 `ray-train`，由 Ray Data 给 Train worker 分片；它不会自动开启 NVMe，也不能与手工 rank 分片叠加。
+
+托管性能页会显示 cache bytes、累计 hit/miss 和 preloader duration。缺失 exporter 或尚未产生 series 时值应为空，而不是零。修改 DataLoader、Python 或配置后仍是代码随任务上传，无需重建训练镜像。

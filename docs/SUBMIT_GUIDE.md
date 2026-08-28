@@ -4,7 +4,7 @@
 > 文档版本：2026-08-22
 > 用户只需平台账号、本文和自己的代码目录。
 
-本文从一份可以在本机运行的原始训练代码开始，说明如何完成代码改造、选择数据和镜像、提交任务、查看 RayCluster、日志、Dashboard 与产物。
+本文从一份可以在本机运行的原始训练代码开始，说明如何完成代码改造、选择数据和镜像、提交任务、查看 RayCluster、日志、Dashboard 与产物。`--engine ray-ddp` 是现有 PyTorch/DDP 兼容引擎，`--engine ray-train` 是受门禁保护的 Ray Train 托管引擎；后者的 Python 入口、MMCV、checkpoint/resume 和性能契约见 [Ray Train 托管指南](RAY_TRAIN_MANAGED_GUIDE.md)。
 
 ## 1. 先选择一种入口
 
@@ -64,13 +64,15 @@ output_root.mkdir(parents=True, exist_ok=True)
 
 ### 2.2 分布式代码约束
 
-- 命令写普通入口，例如 `python3 train.py`，不要写 `torchrun`。
+- `ray-ddp` 命令写普通入口，例如 `python3 train.py`，不要写 `torchrun`；`ray-train` 只支持托管指南列出的 `python` 入口。
 - 接受平台注入的 `LOCAL_RANK`、`RANK`、`WORLD_SIZE`。
 - 不写死 GPU 编号、主机地址、rank 或 world size。
 - 只让 rank 0 写共享 checkpoint；每个 rank 独立输出必须带 rank 后缀。
 - 日志写 stdout，平台才能在 Loki 中聚合。
 
 平台根据资源档案包装命令：
+
+下面的 `ray_train` 是兼容 `ray-ddp` 引擎中历史保留的多节点 execution mode 名，不是 `--engine ray-train`。训练引擎与执行档案必须分别理解。
 
 | 档案 | 资源 | 平台执行方式 |
 | --- | --- | --- |
@@ -182,6 +184,7 @@ if ($actual -ne $expected) { throw 'spk-rayjob checksum mismatch' }
 cd ~/my-training-project
 
 spk-rayjob submit \
+  --engine ray-ddp \
   --name my-smoke \
   --entrypoint 'python3 train.py' \
   --input-space public \
@@ -198,6 +201,7 @@ spk-rayjob submit \
 
 ```bash
 spk-rayjob submit \
+  --engine ray-ddp \
   --name my-train-2x8 \
   --image 'harbor.wellspiking.ai/<个人项目>/<镜像>@sha256:<digest>' \
   --entrypoint 'python3 train.py --config configs/train.yaml' \
@@ -233,6 +237,7 @@ spk-rayjob submit --watch
 ```bash
 cat > .spk-rayjob.yaml <<'YAML'
 name: bevfusion-3dod-2x8
+engine: ray-ddp
 image: harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion@sha256:66b906d062870131121b07e4455783dc5f2913e285b29fdbb2cf1decc100f553
 entrypoint: >-
   raytrain-bevfusion-prepare python3 tools/westwell_train.py
@@ -295,7 +300,7 @@ spk-rayjob cancel <平台任务ID>
 ### 4.1 准备 PAT 与 Ray CLI
 
 ```bash
-python3 -m pip install 'ray[default]==2.35.0'
+python3 -m pip install 'ray[default]==2.56.1'
 command -v jq >/dev/null || {
   echo '请先通过操作系统包管理器安装 jq' >&2
   exit 1
@@ -323,7 +328,8 @@ META="$(jq -cn --arg image "$IMAGE" '{
   "ray-platform.gpus-per-worker":"8",
   "ray-platform.cpu-per-worker":"64",
   "ray-platform.memory-per-worker":"256Gi",
-  "ray-platform.queue":"local-gpu"
+  "ray-platform.queue":"local-gpu",
+  "platform.training.engine":"ray-ddp"
 }')"
 
 ray job submit \
@@ -347,7 +353,7 @@ ray job submit \
 
 ### 4.3 如何在平台找到原生任务
 
-原生 Ray CLI 返回的是 `submission-id`；平台同时创建自己的任务 ID。任务列表会显示 `submissionOrigin=ray-cli` 和 `externalSubmissionId=my-native-2x8-001`，提交人是 PAT 对应账号。之后可在网页看，也可用：
+原生 Ray CLI 返回的是 `submission-id`；平台同时创建自己的任务 ID。原生入口的产品来源语义为 `submissionOrigin=ray-native`，并记录 `externalSubmissionId=my-native-2x8-001`；`spk-rayjob` 才使用 `submissionOrigin=ray-cli`，Portal 使用交互会话并记录 `submissionOrigin=portal`。提交人始终是认证主体。若目标环境返回不同来源值，应停止验收并检查版本，而不是按客户端输入覆盖。之后可在网页看，也可用：
 
 ```bash
 ray job status my-native-2x8-001

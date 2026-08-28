@@ -2,7 +2,7 @@
 
 ![RayTrain 生产架构](architecture/ray-training-platform-production-architecture-v3.svg)
 
-本文描述当前生产基线。部署和升级请看 [构建与部署](BUILD_AND_DEPLOY.md)，用户操作请看 [用户使用手册](USER_GUIDE.md)。
+本文描述当前生产基线和受门禁保护的下一代运行时边界。部署和升级请看 [构建与部署](BUILD_AND_DEPLOY.md)，用户操作请看 [用户使用手册](USER_GUIDE.md)，双引擎契约见 [Ray Train 托管指南](RAY_TRAIN_MANAGED_GUIDE.md)。文中的 KubeRay 1.6.2 与 Ray 2.56.1 是目标版本，不代表集群已完成升级或生产验证。
 
 ## 一图读懂
 
@@ -106,6 +106,8 @@ flowchart TB
 
 ## GPU 训练与调试
 
+平台是多租户双引擎架构：**Ray 编排 DDP** 保留现有项目兼容性，**Ray Train 托管**提供受管 worker、checkpoint/resume 与训练性能序列。两者复用认证、租户 namespace、Kueue 准入和任务级 RayCluster，但使用并行运行时镜像与显式 feature gate；平台绝不原地改变运行中 RayJob 的引擎或版本。
+
 | 工作流 | 实现 | 用户看到的行为 |
 | --- | --- | --- |
 | 交互式调试 | 一个 Ray head + 一个带 GPU 的 worker | JupyterLab、VS Code、Terminal 代理到 GPU worker；`/workspace` 与个人数据可持续使用。 |
@@ -180,7 +182,7 @@ flowchart TB
 
 当前全量原始数据主要位于公共根的 `labeled/`，索引位于 `0429_pkl/`、`0813_pkl/` 等目录。任务选择公共根时，`PLATFORM_DATASET_PATH=/mnt/data/input` 对应该根；任务选择某个子目录时，该变量只对应所选子目录。代码必须使用相对所选目录的路径，不能把逻辑空间、桶名或所选子目录重复拼接进去。
 
-数据真相在 TOS / 已登记 IDC 数据源。GPU 节点的 `/data1`、`/data2` 只能作为按任务隔离的可回收缓存；所有 checkpoint、模型和训练结果必须写入 `PLATFORM_OUTPUT_PATH`（个人 TOS 空间）。当前本地 CSI 缓存开关默认关闭，须在所有 GPU 节点统一完成 StorageClass 验收后再启用。
+数据真相在 TOS、FSX 或已登记 IDC 数据源。GPU 节点的 `/data1`、`/data2` NVMe 只能作为按任务隔离的可回收缓存；所有 checkpoint、模型和训练结果必须写入 `PLATFORM_OUTPUT_PATH`（个人持久空间）。当前本地 CSI 缓存开关默认关闭，须在所有 GPU 节点统一完成 StorageClass 验收后再启用。
 
 ### NVMe 缓存生效时的链路
 

@@ -14,6 +14,9 @@
   `kube-prometheus-stack` Chart，不随每次 Portal/API 镜像发布重复安装。
 - MLflow 使用独立 `mlflow-system` namespace、独立 PostgreSQL 和独立部署流程，不复用平台数据库，也不随每次 Portal/API 发版重复安装。
 - 构建和部署必须来自一个无未提交改动的 Git commit；生产验收通过后创建同版本 annotated tag。镜像 digest、Helm revision 和 tag 共同构成回滚证据，不能只保留构建机上的工作目录。
+- Ray 编排 DDP 与 Ray Train 托管使用并行的不可变运行时镜像。托管生产版本固定 Ray 2.56.1、canary 固定 Ray 2.58.0；门禁默认关闭，不能用平台日常发布替代 KubeRay 1.6.2 的独立零负载升级流程。
+
+双引擎发布参数、三种提交入口和代码适配见 [Ray Train 托管指南](RAY_TRAIN_MANAGED_GUIDE.md)；KubeRay 备份、升级、核验与回滚门禁见 [生产运维手册](OPERATIONS_GUIDE.md)。这些说明不表示目标集群已经升级或完成生产验证。
 
 ## 2. 本地校验
 
@@ -202,15 +205,15 @@ curl -fsS https://raytrain.wellspiking.ai/healthz
 curl -fsS https://raytrain.wellspiking.ai/downloads/spk-rayjob/SHA256SUMS
 ```
 
-Ray 2.35 Jobs API 的版本响应必须把协议版本和 Ray 版本分开。发布后检查：
+Ray Jobs API 的版本响应必须把协议版本和 Ray 版本分开。托管生产运行时发布后检查：
 
 ```bash
 curl -fsS https://raytrain.wellspiking.ai/ray/api/version | jq .
 ```
 
-正确形状为 `version: "4"`、`ray_version: "2.35.0"`，并包含字符串字段
-`ray_commit`、`session_name`。如果错误地把 `version` 也设成 `2.35.0`，任务会先被接收，
-随后官方 CLI 因 `int("2.35.0")` 失败而返回非零退出码，造成“提交成功但本地显示失败”。
+正确形状为协议字段 `version: "4"`、运行时字段 `ray_version: "2.56.1"`，并包含字符串字段
+`ray_commit`、`session_name`。如果错误地把 `version` 也设成 Ray 版本，任务会先被接收，
+随后官方 CLI 因尝试把语义版本转为协议整数而返回非零退出码，造成“提交成功但本地显示失败”。
 
 CLI 发布文件必须用标准相对文件名生成校验表。构建机验收：
 
@@ -245,15 +248,15 @@ IMAGE="harbor.wellspiking.ai/${REGISTRY_PROJECT}/ray-train-pytorch@sha256:<appro
 
 # 1. spk-rayjob：日常外部开发机入口
 cd examples/distributed-demo
-spk-rayjob submit --dir . --image "$IMAGE" \
+spk-rayjob submit --dir . --engine ray-ddp --image "$IMAGE" \
   --entrypoint 'python storage_gpu_smoke.py' \
   --input-space public \
   --input-path bevfusion/fz-3dod-v1/platform-validation/annotations/fz-0429-platform-smoke-128 \
   --output-path acceptance/manual-spk --watch
 
-# 2. 官方 Ray 2.35 working-dir 入口
-cd ../..
-bash scripts/e2e_native_ray_submit.sh --image "$IMAGE"
+# 2. 官方 Ray 2.56.1 working-dir 入口（来源语义为 ray-native）
+# 按 RAY_TRAIN_MANAGED_GUIDE.md 的原生 Ray API 完整示例提交，
+# 并在持久化任务详情核对 engine、rayVersion、origin 与拓扑。
 
 # 3. 与网页完全相同的“上传工作区 → 快照 → Portal JobSpec”入口
 bash scripts/e2e_portal_submit.sh --image "$IMAGE"

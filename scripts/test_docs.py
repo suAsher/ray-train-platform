@@ -33,8 +33,12 @@ NVME_CACHE_PLAN = (
     / "2026-08-23-nvme-cache-and-gpu-fallback-placement.md"
 )
 PLATFORM_ROADMAP = ROOT / "docs" / "PLATFORM_ROADMAP.md"
+RAY_TRAIN_MANAGED_GUIDE = ROOT / "docs" / "RAY_TRAIN_MANAGED_GUIDE.md"
 CONTRACT_DOCS = PUBLIC_DOCS + (
     ROOT / "docs" / "BUILD_AND_DEPLOY.md",
+    ROOT / "docs" / "OPERATIONS_GUIDE.md",
+    ROOT / "docs" / "NVME_CACHE_GUIDE.md",
+    RAY_TRAIN_MANAGED_GUIDE,
     ROOT / "docs" / "BEVFUSION_RUNBOOK.md",
     ROOT / "ops" / "mlflow" / "README.md",
     NVME_CACHE_DESIGN,
@@ -54,6 +58,18 @@ MLFLOW_PUBLIC_DOCS = (
     ROOT / "docs" / "ARCHITECTURE.md",
     BUILD_AND_DEPLOY,
     ROOT / "docs" / "USER_GUIDE.md",
+)
+TASK17_DOCS = (
+    ROOT / "README.md",
+    ROOT / "docs" / "ARCHITECTURE.md",
+    ROOT / "docs" / "BUILD_AND_DEPLOY.md",
+    ROOT / "docs" / "OPERATIONS_GUIDE.md",
+    ROOT / "docs" / "USER_GUIDE.md",
+    ROOT / "docs" / "SUBMIT_GUIDE.md",
+    ROOT / "docs" / "NVME_CACHE_GUIDE.md",
+    ROOT / "docs" / "BEVFUSION_END_TO_END_GUIDE.md",
+    PLATFORM_ROADMAP,
+    RAY_TRAIN_MANAGED_GUIDE,
 )
 LINK = re.compile(r"(?<!!)\[[^]]+\]\(([^)]+)\)")
 
@@ -90,6 +106,167 @@ class DocumentationContractTest(unittest.TestCase):
                     section,
                     f"{label} is missing required marker: {marker}",
                 )
+
+    def test_managed_guide_names_exact_versions_engines_and_feature_gate(
+        self,
+    ) -> None:
+        self.assertTrue(
+            RAY_TRAIN_MANAGED_GUIDE.is_file(),
+            "docs/RAY_TRAIN_MANAGED_GUIDE.md must be delivered",
+        )
+        guide = RAY_TRAIN_MANAGED_GUIDE.read_text(encoding="utf-8")
+        for marker in (
+            "Ray 2.56.1",
+            "KubeRay 1.6.2",
+            "--engine ray-train",
+            "--engine ray-ddp",
+            "RAY_TRAIN_MANAGED_ENABLED",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, guide)
+
+    def test_managed_guide_covers_complete_supported_workflows(self) -> None:
+        guide = RAY_TRAIN_MANAGED_GUIDE.read_text(encoding="utf-8")
+        for marker in (
+            "Web Portal",
+            "spk-rayjob submit",
+            "ray job submit",
+            "代码随任务上传",
+            "python file.py",
+            "python -m package.module",
+            "configure_ray_train_managed_hook",
+            "RayTrainManagedRestoreHook",
+            "RayTrainManagedHook",
+            "checkpoint",
+            "resume",
+            "mount",
+            "cache",
+            "ray-data",
+            "Ray Dashboard",
+            "MLflow",
+            "Loki",
+            "Prometheus",
+            "step_time",
+            "data_time",
+            "NCCL",
+            "失败含义",
+            "修改 Python 或配置代码无需重建镜像",
+            "submissionOrigin=portal",
+            "submissionOrigin=ray-cli",
+            "submissionOrigin=ray-native",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, guide)
+
+    def test_managed_examples_match_public_submission_contract(self) -> None:
+        guide = RAY_TRAIN_MANAGED_GUIDE.read_text(encoding="utf-8")
+        for marker in (
+            "Portal 工作区快照不接受 PAT",
+            "--max-failures 2",
+            "--checkpoint-every-epochs 1",
+            '"platform.training.engine":"ray-train"',
+            '"platform.data.input-space":"public"',
+            '"platform.data.input-path":"datasets/example/v1"',
+            '"ray-platform.worker-replicas":"2"',
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, guide)
+        for stale in (
+            "--max-worker-failures",
+            "--checkpoint-interval-seconds",
+            '"platform.data.mode"',
+            '"platform.training.workers"',
+        ):
+            with self.subTest(stale=stale):
+                self.assertNotIn(stale, guide)
+
+    def test_submission_origin_semantics_are_consistent(self) -> None:
+        submit = (ROOT / "docs" / "SUBMIT_GUIDE.md").read_text(encoding="utf-8")
+        bevfusion = (ROOT / "docs" / "BEVFUSION_END_TO_END_GUIDE.md").read_text(
+            encoding="utf-8"
+        )
+        for document in (submit, bevfusion):
+            self.assertIn("submissionOrigin=portal", document)
+            self.assertIn("submissionOrigin=ray-cli", document)
+            self.assertIn("submissionOrigin=ray-native", document)
+
+    def test_managed_operations_are_fail_closed_and_preserve_running_jobs(
+        self,
+    ) -> None:
+        operations = (ROOT / "docs" / "OPERATIONS_GUIDE.md").read_text(
+            encoding="utf-8"
+        )
+        for marker in (
+            "不得修改运行中 RayJob",
+            "RAY_TRAIN_MANAGED_ENABLED",
+            "RAY_TRAIN_CANARY_ENABLED",
+            "RAY_TRAIN_CANARY_TENANTS",
+            "并行运行时镜像",
+            "零训练负载",
+            "ops/kuberay/preflight-upgrade.sh",
+            "ops/kuberay/backup.sh",
+            "ops/kuberay/upgrade-1.6.2.sh",
+            "ops/kuberay/verify.sh",
+            "KubeRay 1.6.2",
+            "Ray 2.35",
+            "History Server",
+            "alpha",
+            "Operator 绝不在训练期间升级",
+            "回滚",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, operations)
+
+    def test_readme_and_architecture_are_managed_training_entrypoints(self) -> None:
+        for path in (ROOT / "README.md", ROOT / "docs" / "ARCHITECTURE.md"):
+            document = path.read_text(encoding="utf-8")
+            for marker in (
+                "Ray 编排 DDP",
+                "Ray Train 托管",
+                "Kueue",
+                "多租户",
+                "TOS",
+                "FSX",
+                "IDC",
+                "NVMe",
+                "Loki",
+                "Prometheus",
+                "Grafana",
+                "MLflow",
+                "Ray Dashboard",
+                "RAY_TRAIN_MANAGED_GUIDE.md",
+            ):
+                with self.subTest(document=path.name, marker=marker):
+                    self.assertIn(marker, document)
+
+    def test_task17_docs_have_no_legacy_cli_private_paths_ips_or_acceptance_flags(
+        self,
+    ) -> None:
+        combined = "\n".join(
+            path.read_text(encoding="utf-8") for path in TASK17_DOCS if path.exists()
+        )
+        self.assertNotIn("rayctl", combined)
+        self.assertNotIn("/opt/guofeng/", combined)
+        self.assertNotRegex(combined, r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+        self.assertNotRegex(combined, r"glpat-[A-Za-z0-9_-]{12,}")
+        self.assertNotRegex(combined, r"rpt_[A-Za-z0-9_-]{20,}")
+        self.assertNotRegex(combined, r"AKLT[A-Za-z0-9+/=]{12,}")
+        self.assertNotIn("ALLOW_DESTRUCTIVE_FAULT_TESTS", combined)
+        self.assertNotIn("ACCEPTANCE_PREFIX", combined)
+
+    def test_user_submission_examples_use_the_managed_runtime_version(self) -> None:
+        user_docs = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (
+                ROOT / "docs" / "USER_GUIDE.md",
+                ROOT / "docs" / "SUBMIT_GUIDE.md",
+                ROOT / "docs" / "BEVFUSION_END_TO_END_GUIDE.md",
+                RAY_TRAIN_MANAGED_GUIDE,
+            )
+            if path.exists()
+        )
+        self.assertNotIn("ray[default]==2.35.0", user_docs)
+        self.assertIn("ray[default]==2.56.1", user_docs)
 
     def test_nvme_cache_is_per_job_opt_in_without_training_image_rebuilds(
         self,

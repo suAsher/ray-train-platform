@@ -1,6 +1,6 @@
 # Ray 训练平台产品与工程路线图
 
-更新日期：2026-08-23
+更新日期：2026-08-28
 
 本路线图用于统一产品、训练、数据和平台运维的实施顺序。每一期必须独立上线、独立验收、独立回滚；不会把尚未验证的能力一次性叠加到生产训练链路。
 
@@ -12,6 +12,8 @@
 - 个人与团队数据由平台治理，用户不接触 TOS AK/SK；
 - Loki、Prometheus/Grafana 和 MLflow 已接入训练日志、基础设施指标和实验记录；
 - 两个 BEVFusion 分支的 2×8 GPU 训练已有可复现验收基线。
+
+这组已验证基线属于兼容的 Ray 编排 DDP。Ray Train 托管代码已经按计划交付，但 `RAY_TRAIN_MANAGED_ENABLED` 默认关闭；Ray 2.56.1 生产运行时、Ray 2.58.0 canary 和 KubeRay 1.6.2 仍需在目标环境按零训练负载流程独立升级、canary 和验收，不在路线图中写成已上线事实。用户契约见 [Ray Train 托管指南](RAY_TRAIN_MANAGED_GUIDE.md)。
 
 ## 交付顺序
 
@@ -46,3 +48,5 @@
 - 数据同步到 IDC、团队共享目录或公共目录仍需审批与审计，不会开放网页下载或向用户暴露 AK/SK；
 - PostgreSQL 高可用、跨团队身份模型和自动清理属于高风险变更，必须单独设计和迁移；
 - 任一期上线都不得修改运行中 RayJob/RayCluster 的 Pod 模板，不得重启 kubelet、containerd、CNI、FSX Agent 或 GPU 驱动。
+- 双引擎长期并行：`ray-ddp` 保持既有任务与镜像兼容，`ray-train` 只通过显式租户 canary 开放；Portal、`spk-rayjob` 和原生 Ray API 必须分别持久化正确来源与不可变运行时信息。
+- KubeRay Operator 只能在零 RayJob、RayCluster、debug workspace 和活动 Kueue Workload 的维护窗升级；备份、维护门禁、制品摘要、verify 和失败后人工恢复缺一不可。
