@@ -52,7 +52,12 @@ func (r *GormRepository) CreateSourceArtifactForRequestWithLimits(ctx context.Co
 				}
 				return fmt.Errorf("load requested source artifact: %w", loadErr)
 			}
-			converted, reuseErr := reuseSourceArtifactRecord(tx, &existing, artifact)
+			if existing.SHA256 != artifact.SHA256 || existing.SizeBytes != artifact.SizeBytes || existing.StorageRoot != artifact.StorageRoot {
+				return ErrSourceArtifactConflict
+			}
+			retry := *artifact
+			retry.ObjectKey = existing.ObjectKey
+			converted, reuseErr := reuseSourceArtifactRecord(tx, &existing, &retry)
 			if reuseErr != nil {
 				return reuseErr
 			}

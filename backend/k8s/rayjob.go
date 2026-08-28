@@ -154,7 +154,7 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 		if strings.TrimSpace(job.Spec.Source.ArtifactID) == "" || strings.TrimSpace(job.Spec.Source.ArtifactSHA256) == "" {
 			return nil, fmt.Errorf("workspace archive source must be materialized before rendering")
 		}
-		if !domain.IsSourceArtifactObjectKeyForTenant(job.TenantID, job.Spec.Source.ArtifactObjectKey, job.Spec.Source.ArtifactSHA256) {
+		if _, err := domain.SourceArtifactMountedArchivePath(job.TenantID, job.Spec.Source.ArtifactObjectKey, job.Spec.Source.ArtifactID, job.Spec.Source.ArtifactSHA256); err != nil {
 			return nil, fmt.Errorf("workspace archive source is not owner scoped")
 		}
 	}
@@ -192,14 +192,14 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	// only there: Ray distributes that runtime env to the driver and workers.
 	// This prevents every Pod from independently fetching the same Git source
 	// and keeps private Git credentials out of the Ray cluster Pods.
-	submitterPod := podTemplate("ray-job-submitter", job.Spec.Image, "1", "2Gi", 0, job.Spec.Source, job.Spec, options, true, false, true)
+	submitterPod := podTemplate("ray-job-submitter", job.Spec.Image, "1", "2Gi", 0, job.TenantID, job.Spec.Source, job.Spec, options, true, false, true)
 	// KubeRay wraps this template in a batch Job, whose pod spec requires an
 	// explicit restartPolicy; without it the submitter Job is rejected and the
 	// RayJob stalls in Initializing forever.
 	submitterPod["spec"].(map[string]any)["restartPolicy"] = "Never"
 	addPodLabels(submitterPod, job.ID, job.TenantID)
-	headPod := podTemplate("ray-head", job.Spec.Image, "4", "16Gi", 0, job.Spec.Source, job.Spec, options, true, true, false)
-	workerPod := podTemplate("ray-worker", job.Spec.Image, workerCPU, workerMemory, gpusPerWorker, job.Spec.Source, job.Spec, options, false, true, false)
+	headPod := podTemplate("ray-head", job.Spec.Image, "4", "16Gi", 0, job.TenantID, job.Spec.Source, job.Spec, options, true, true, false)
+	workerPod := podTemplate("ray-worker", job.Spec.Image, workerCPU, workerMemory, gpusPerWorker, job.TenantID, job.Spec.Source, job.Spec, options, false, true, false)
 	addPodLabels(headPod, job.ID, job.TenantID)
 	addPodLabels(workerPod, job.ID, job.TenantID)
 	managedMultiNode := job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain && workerReplicas > 1
@@ -604,7 +604,7 @@ func runtimeEnvironmentYAML(job domain.TrainingJob) string {
 		"  RAYTRAIN_CLUSTER_ATTEMPT: " + strconv.Quote(strconv.Itoa(job.ClusterAttempt)) + "\n"
 }
 
-func podTemplate(containerName, image, cpu, memory string, gpus int64, source domain.CodeSource, jobSpec domain.JobSpec, options RenderOptions, head, mountData, materializeSource bool) map[string]any {
+func podTemplate(containerName, image, cpu, memory string, gpus int64, tenantID string, source domain.CodeSource, jobSpec domain.JobSpec, options RenderOptions, head, mountData, materializeSource bool) map[string]any {
 	resources := map[string]any{
 		"requests": map[string]any{"cpu": cpu, "memory": memory},
 		"limits":   map[string]any{"cpu": cpu, "memory": memory},
@@ -724,7 +724,7 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 		"volumes":                      volumes,
 	}
 	if materializeSource {
-		podSpec["initContainers"] = []any{sourceMaterializer(source, jobSpec, options)}
+		podSpec["initContainers"] = []any{sourceMaterializer(tenantID, source, jobSpec, options)}
 	}
 	if preloadInput {
 		podSpec["initContainers"] = []any{datasetCachePreloader(options.SourceMaterializerImage, volumeMounts, options.LocalCache, options.trainingEventJobID)}
@@ -1088,7 +1088,7 @@ func hasAnyResolvedDataRoots(roots domain.ResolvedDataSpaceRoots) bool {
 	return roots.Personal != nil || roots.Team != nil || roots.Public != nil || hasGovernedIDCDataRoots(roots)
 }
 
-func sourceMaterializer(source domain.CodeSource, jobSpec domain.JobSpec, options RenderOptions) map[string]any {
+func sourceMaterializer(tenantID string, source domain.CodeSource, jobSpec domain.JobSpec, options RenderOptions) map[string]any {
 	command := "set -eu\nfind /workspace -mindepth 1 -maxdepth 1 -exec rm -rf {} +\n"
 	switch source.Type {
 	case "git":
@@ -1124,7 +1124,12 @@ func sourceMaterializer(source domain.CodeSource, jobSpec domain.JobSpec, option
 		// were copied, which causes a needless submitter retry.
 		command += "cp -R " + shellQuote("/mnt/platform-workspace-snapshot/snapshots/"+source.Snapshot) + "/. /workspace/\n"
 	case "workspace-archive":
-		command += "python3 /usr/local/bin/platform-safe-extract.py --archive " + shellQuote("/mnt/platform-workspace-snapshot/workspace/.ray-train-archives/"+source.ArtifactSHA256+".zip") + " --destination /workspace\n"
+		archivePath, err := domain.SourceArtifactMountedArchivePath(tenantID, source.ArtifactObjectKey, source.ArtifactID, source.ArtifactSHA256)
+		if err != nil {
+			command += "echo 'source materialization failed: invalid workspace archive path' >&2\nexit 1\n"
+			break
+		}
+		command += "python3 /usr/local/bin/platform-safe-extract.py --archive " + shellQuote(archivePath) + " --destination /workspace\n"
 	}
 	env := []any{}
 	if source.Type == "git" && options.GitCredentialSecret != "" {

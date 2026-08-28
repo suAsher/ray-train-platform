@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"ray-train-platform-backend/domain"
@@ -298,6 +299,46 @@ func TestRenderRayJobMaterializesRaySDKArchiveFromPersonalPVC(t *testing.T) {
 		if strings.Contains(encoded, forbidden) {
 			t.Fatalf("Ray SDK archive renderer leaked %q: %s", forbidden, encoded)
 		}
+	}
+}
+
+func TestRenderRayJobMaterializesRequestScopedArchiveFromItsUniquePath(t *testing.T) {
+	job := validRenderJob()
+	digest := strings.Repeat("a", 64)
+	artifact, err := domain.NewRequestScopedSourceArtifact(domain.SourceArtifactInput{
+		ID: "artifact-0123456789abcdef01234567", TenantID: job.TenantID, UserID: job.UserID,
+		SHA256: digest, SizeBytes: 100,
+	}, time.Now().Add(15*time.Minute), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	job.Spec.Source = domain.CodeSource{Type: "workspace-archive", ArtifactID: artifact.ID, ArtifactObjectKey: artifact.ObjectKey, ArtifactSHA256: digest}
+	job.Spec.ResolvedDataRoots.Personal = &domain.ResolvedDataRoot{Space: domain.DataSpaceWorkspace, ClaimName: "data-user-01"}
+	manifest, err := RenderRayJob(job, testRenderOptions())
+	if err != nil {
+		t.Fatalf("render request-scoped archive job: %v", err)
+	}
+	encoded := fmt.Sprintf("%#v", manifest.Object)
+	wantPath := "/mnt/platform-workspace-snapshot/workspace/.ray-train-archives/" + artifact.ID + "/" + digest + ".zip"
+	if !strings.Contains(encoded, wantPath) {
+		t.Fatalf("request archive renderer did not use unique mounted path %q: %s", wantPath, encoded)
+	}
+}
+
+func TestRenderRayJobRejectsRequestArchivePathForDifferentArtifactID(t *testing.T) {
+	job := validRenderJob()
+	digest := strings.Repeat("a", 64)
+	artifact, err := domain.NewRequestScopedSourceArtifact(domain.SourceArtifactInput{
+		ID: "artifact-0123456789abcdef01234567", TenantID: job.TenantID, UserID: job.UserID,
+		SHA256: digest, SizeBytes: 100,
+	}, time.Now().Add(15*time.Minute), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	job.Spec.Source = domain.CodeSource{Type: "workspace-archive", ArtifactID: "artifact-aaaaaaaaaaaaaaaaaaaaaaaa", ArtifactObjectKey: artifact.ObjectKey, ArtifactSHA256: digest}
+	job.Spec.ResolvedDataRoots.Personal = &domain.ResolvedDataRoot{Space: domain.DataSpaceWorkspace, ClaimName: "data-user-01"}
+	if _, err := RenderRayJob(job, testRenderOptions()); err == nil {
+		t.Fatal("renderer accepted a request object key belonging to another artifact ID")
 	}
 }
 

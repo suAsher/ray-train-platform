@@ -6,9 +6,22 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"ray-train-platform-backend/domain"
 )
 
 const testSourceRequestID = "source-request-0123456789abcdef01234567"
+
+func pendingRequestArtifact(t *testing.T, id, tenant, user string, size int64, expires time.Time) *domain.SourceArtifact {
+	t.Helper()
+	artifact, err := domain.NewRequestScopedSourceArtifact(domain.SourceArtifactInput{
+		ID: id, TenantID: tenant, UserID: user, SHA256: repositoryArtifactDigest, SizeBytes: size,
+	}, expires, expires.Add(-15*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &artifact
+}
 
 func TestSourceArtifactRequestDoesNotBindAnUnrelatedDigestReuse(t *testing.T) {
 	repo := artifactTestRepository(t)
@@ -19,7 +32,7 @@ func TestSourceArtifactRequestDoesNotBindAnUnrelatedDigestReuse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	requested := pendingArtifact(t, "artifact-request-a", "tenant-a", "user-a", 100, now.Add(20*time.Minute))
+	requested := pendingRequestArtifact(t, "artifact-request-a", "tenant-a", "user-a", 100, now.Add(20*time.Minute))
 	created, err := repo.CreateSourceArtifactForRequestWithLimits(context.Background(), requested, testSourceRequestID, DefaultSourceArtifactLimits())
 	if err != nil {
 		t.Fatal(err)
@@ -27,24 +40,27 @@ func TestSourceArtifactRequestDoesNotBindAnUnrelatedDigestReuse(t *testing.T) {
 	if created.ID != requested.ID || created.ID == legacyCreated.ID {
 		t.Fatalf("request was bound to legacy digest reuse: legacy=%q request=%q", legacyCreated.ID, created.ID)
 	}
+	if created.ObjectKey == legacyCreated.ObjectKey {
+		t.Fatalf("request artifact reused immutable legacy object key %q", created.ObjectKey)
+	}
 }
 
 func TestSourceArtifactRequestIsIdempotentWithinOwnerAndPayload(t *testing.T) {
 	repo := artifactTestRepository(t)
 	ensureArtifactIdentity(t, repo, "tenant-a", "user-a")
 	now := time.Date(2026, 8, 28, 4, 0, 0, 0, time.UTC)
-	first := pendingArtifact(t, "artifact-first", "tenant-a", "user-a", 100, now.Add(15*time.Minute))
+	first := pendingRequestArtifact(t, "artifact-first", "tenant-a", "user-a", 100, now.Add(15*time.Minute))
 	created, err := repo.CreateSourceArtifactForRequestWithLimits(context.Background(), first, testSourceRequestID, DefaultSourceArtifactLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
-	retry := pendingArtifact(t, "artifact-random-retry", "tenant-a", "user-a", 100, now.Add(30*time.Minute))
+	retry := pendingRequestArtifact(t, "artifact-random-retry", "tenant-a", "user-a", 100, now.Add(30*time.Minute))
 	reused, err := repo.CreateSourceArtifactForRequestWithLimits(context.Background(), retry, testSourceRequestID, DefaultSourceArtifactLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reused.ID != created.ID || reused.UploadExpiresAt != retry.UploadExpiresAt {
-		t.Fatalf("request retry mismatch: created=%q reused=%q expiry=%s", created.ID, reused.ID, reused.UploadExpiresAt)
+	if reused.ID != created.ID || reused.ObjectKey != created.ObjectKey || reused.UploadExpiresAt != retry.UploadExpiresAt {
+		t.Fatalf("request retry mismatch: created=%q/%q reused=%q/%q expiry=%s", created.ID, created.ObjectKey, reused.ID, reused.ObjectKey, reused.UploadExpiresAt)
 	}
 	resolved, err := repo.GetSourceArtifactByClientRequestID(context.Background(), "tenant-a", "user-a", testSourceRequestID)
 	if err != nil || resolved.ID != created.ID {
@@ -57,11 +73,11 @@ func TestSourceArtifactRequestIdentityIsOwnerScoped(t *testing.T) {
 	ensureArtifactIdentity(t, repo, "tenant-a", "user-a")
 	ensureArtifactIdentity(t, repo, "tenant-b", "user-b")
 	now := time.Date(2026, 8, 28, 4, 0, 0, 0, time.UTC)
-	first, err := repo.CreateSourceArtifactForRequestWithLimits(context.Background(), pendingArtifact(t, "artifact-a", "tenant-a", "user-a", 100, now.Add(15*time.Minute)), testSourceRequestID, DefaultSourceArtifactLimits())
+	first, err := repo.CreateSourceArtifactForRequestWithLimits(context.Background(), pendingRequestArtifact(t, "artifact-a", "tenant-a", "user-a", 100, now.Add(15*time.Minute)), testSourceRequestID, DefaultSourceArtifactLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := repo.CreateSourceArtifactForRequestWithLimits(context.Background(), pendingArtifact(t, "artifact-b", "tenant-b", "user-b", 100, now.Add(15*time.Minute)), testSourceRequestID, DefaultSourceArtifactLimits())
+	second, err := repo.CreateSourceArtifactForRequestWithLimits(context.Background(), pendingRequestArtifact(t, "artifact-b", "tenant-b", "user-b", 100, now.Add(15*time.Minute)), testSourceRequestID, DefaultSourceArtifactLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,11 +96,11 @@ func TestSourceArtifactRequestRejectsChangedPayloadWithoutExistenceLeak(t *testi
 	repo := artifactTestRepository(t)
 	ensureArtifactIdentity(t, repo, "tenant-a", "user-a")
 	now := time.Date(2026, 8, 28, 4, 0, 0, 0, time.UTC)
-	_, err := repo.CreateSourceArtifactForRequestWithLimits(context.Background(), pendingArtifact(t, "artifact-a", "tenant-a", "user-a", 100, now.Add(15*time.Minute)), testSourceRequestID, DefaultSourceArtifactLimits())
+	_, err := repo.CreateSourceArtifactForRequestWithLimits(context.Background(), pendingRequestArtifact(t, "artifact-a", "tenant-a", "user-a", 100, now.Add(15*time.Minute)), testSourceRequestID, DefaultSourceArtifactLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
-	changed := pendingArtifact(t, "artifact-b", "tenant-a", "user-a", 101, now.Add(15*time.Minute))
+	changed := pendingRequestArtifact(t, "artifact-b", "tenant-a", "user-a", 101, now.Add(15*time.Minute))
 	changed.SHA256 = strings.Repeat("b", 64)
 	changed.ObjectKey = strings.Replace(changed.ObjectKey, repositoryArtifactDigest, changed.SHA256, 1)
 	if _, err := repo.CreateSourceArtifactForRequestWithLimits(context.Background(), changed, testSourceRequestID, DefaultSourceArtifactLimits()); !errors.Is(err, ErrSourceArtifactConflict) {

@@ -140,10 +140,16 @@ func (handler *SourceArtifactHandler) create(c *gin.Context) {
 		handler.writeError(c, http.StatusServiceUnavailable, "DATA_SPACE_LOOKUP_FAILED", "could not resolve the personal code workspace")
 		return
 	}
-	artifact, err := domain.NewSourceArtifact(domain.SourceArtifactInput{
+	artifactInput := domain.SourceArtifactInput{
 		ID: id, TenantID: principal.TenantID, UserID: principal.Subject, StorageRoot: storageRoot,
 		SHA256: request.SHA256, SizeBytes: request.SizeBytes,
-	}, now.Add(SourceArtifactUploadTTL), now)
+	}
+	var artifact domain.SourceArtifact
+	if request.ClientRequestID == "" {
+		artifact, err = domain.NewSourceArtifact(artifactInput, now.Add(SourceArtifactUploadTTL), now)
+	} else {
+		artifact, err = domain.NewRequestScopedSourceArtifact(artifactInput, now.Add(SourceArtifactUploadTTL), now)
+	}
 	if err != nil {
 		handler.writeError(c, http.StatusBadRequest, "INVALID_SOURCE_ARTIFACT", "sha256, sizeBytes, or authenticated identity is invalid")
 		return
