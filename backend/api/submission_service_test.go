@@ -253,6 +253,7 @@ func TestRayDataSubmissionRequiresResolvedGovernedInputBeforePersistence(t *test
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			repository := &submissionServiceRepository{}
+			tenantRuntimeEnsureCalls := 0
 			dataSpaceEnsureCalls := 0
 			service := NewSubmissionService(repository, SubmissionServiceOptions{
 				Images:            &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{image}}},
@@ -260,6 +261,10 @@ func TestRayDataSubmissionRequiresResolvedGovernedInputBeforePersistence(t *test
 				LocalCache:        rayDataLocalCachePolicy(),
 				DataSpaces:        &fakeDataSpaceStore{bindings: test.bindings},
 				DataSpacesEnabled: true,
+				EnsureTenantRuntime: func(context.Context, string, string, string, string) error {
+					tenantRuntimeEnsureCalls++
+					return nil
+				},
 				EnsureDataSpaces: func(context.Context, auth.Principal) error {
 					dataSpaceEnsureCalls++
 					return nil
@@ -276,8 +281,8 @@ func TestRayDataSubmissionRequiresResolvedGovernedInputBeforePersistence(t *test
 			if job != nil || !errors.Is(err, ErrSubmissionDataMountNotReady) || !strings.Contains(err.Error(), test.wantDetail) {
 				t.Fatalf("ray-data input boundary returned job=%+v err=%v", job, err)
 			}
-			if repository.createCalls != 0 || repository.created != nil || repository.identityCalls != 0 || dataSpaceEnsureCalls != 0 {
-				t.Fatalf("invalid ray-data input crossed provisioning/persistence: dataSpaces=%d creates=%d identity=%d job=%+v", dataSpaceEnsureCalls, repository.createCalls, repository.identityCalls, repository.created)
+			if tenantRuntimeEnsureCalls != 0 || dataSpaceEnsureCalls != 0 || repository.createCalls != 0 || repository.created != nil || repository.identityCalls != 0 {
+				t.Fatalf("invalid ray-data input crossed provisioning/persistence: tenantRuntime=%d dataSpaces=%d creates=%d identity=%d job=%+v", tenantRuntimeEnsureCalls, dataSpaceEnsureCalls, repository.createCalls, repository.identityCalls, repository.created)
 			}
 		})
 	}
@@ -327,6 +332,7 @@ func TestRayDataSubmissionNormalizesRuntimeCacheAndResolvedInput(t *testing.T) {
 	image, spec := rayDataSubmissionFixture(t)
 	spec.Input = domain.DataLocation{Space: domain.DataSpaceTeamShared, RelativePath: "datasets/train"}
 	repository := &submissionServiceRepository{}
+	tenantRuntimeEnsureCalls := 0
 	dataSpaceEnsureCalls := 0
 	service := NewSubmissionService(repository, SubmissionServiceOptions{
 		Images:        &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{image}}},
@@ -337,10 +343,17 @@ func TestRayDataSubmissionNormalizesRuntimeCacheAndResolvedInput(t *testing.T) {
 			SpaceID: domain.DataSpaceTeamShared, ClaimName: "data-team-a", ReadOnly: true, Status: domain.DataMountBindingReady,
 		}}},
 		DataSpacesEnabled: true,
+		EnsureTenantRuntime: func(context.Context, string, string, string, string) error {
+			tenantRuntimeEnsureCalls++
+			if repository.identityCalls != 0 || dataSpaceEnsureCalls != 0 || repository.createCalls != 0 {
+				t.Fatalf("ray-data tenant runtime provisioning order changed: identity=%d dataSpaces=%d creates=%d", repository.identityCalls, dataSpaceEnsureCalls, repository.createCalls)
+			}
+			return nil
+		},
 		EnsureDataSpaces: func(context.Context, auth.Principal) error {
 			dataSpaceEnsureCalls++
-			if repository.identityCalls != 1 {
-				t.Fatalf("ray-data initialized data spaces before identity persistence: identity=%d", repository.identityCalls)
+			if tenantRuntimeEnsureCalls != 1 || repository.identityCalls != 1 || repository.createCalls != 0 {
+				t.Fatalf("ray-data data-space provisioning order changed: tenantRuntime=%d identity=%d creates=%d", tenantRuntimeEnsureCalls, repository.identityCalls, repository.createCalls)
 			}
 			return nil
 		},
@@ -361,8 +374,8 @@ func TestRayDataSubmissionNormalizesRuntimeCacheAndResolvedInput(t *testing.T) {
 	if input == nil || input.MountPath != domain.DataMountInputPath || !input.ReadOnly {
 		t.Fatalf("ray-data input did not resolve to the read-only governed path: %+v", input)
 	}
-	if dataSpaceEnsureCalls != 1 || repository.createCalls != 1 || repository.identityCalls != 1 || repository.created == nil || repository.created.Spec.Cache != job.Spec.Cache {
-		t.Fatalf("valid ray-data persistence mismatch: dataSpaces=%d creates=%d identity=%d persisted=%+v", dataSpaceEnsureCalls, repository.createCalls, repository.identityCalls, repository.created)
+	if tenantRuntimeEnsureCalls != 1 || dataSpaceEnsureCalls != 1 || repository.createCalls != 1 || repository.identityCalls != 1 || repository.created == nil || repository.created.Spec.Cache != job.Spec.Cache {
+		t.Fatalf("valid ray-data persistence mismatch: tenantRuntime=%d dataSpaces=%d creates=%d identity=%d persisted=%+v", tenantRuntimeEnsureCalls, dataSpaceEnsureCalls, repository.createCalls, repository.identityCalls, repository.created)
 	}
 }
 

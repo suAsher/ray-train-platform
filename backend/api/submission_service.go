@@ -224,7 +224,7 @@ func (service *SubmissionService) Submit(ctx context.Context, input SubmissionIn
 			return nil, fmt.Errorf("%w: %v", ErrSubmissionIdentityPersist, err)
 		}
 	}
-	if service.ensureTenantRuntime != nil {
+	if service.ensureTenantRuntime != nil && !deferIdentityPersistence {
 		namespace := "tenant-" + sanitizeDNS(input.Principal.TenantID)
 		if err := service.ensureTenantRuntime(ctx, input.Principal.TenantID, namespace, spec.Queue, service.clusterQueue); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrSubmissionQueueProvision, err)
@@ -266,6 +266,12 @@ func (service *SubmissionService) Submit(ctx context.Context, input SubmissionIn
 		return nil, ErrSubmissionDataMountNotReady
 	}
 	if deferIdentityPersistence {
+		if service.ensureTenantRuntime != nil {
+			namespace := "tenant-" + sanitizeDNS(input.Principal.TenantID)
+			if err := service.ensureTenantRuntime(ctx, input.Principal.TenantID, namespace, spec.Queue, service.clusterQueue); err != nil {
+				return nil, fmt.Errorf("%w: %v", ErrSubmissionQueueProvision, err)
+			}
+		}
 		if err := service.repository.EnsureIdentity(ctx, input.Principal); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrSubmissionIdentityPersist, err)
 		}
