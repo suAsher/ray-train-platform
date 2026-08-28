@@ -13,9 +13,13 @@ import (
 	"testing"
 	"time"
 
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
 	"ray-train-platform-backend/objectstore"
+	"ray-train-platform-backend/repositories"
 )
 
 type immutableTOSMock struct {
@@ -161,6 +165,95 @@ func TestRequestScopedArtifactUploadsBesideExistingImmutableDigestObject(t *test
 			}
 			if !bytes.Equal(store.object(legacy.ObjectKey), oldPayload) || !bytes.Equal(store.object(repo.artifact.ObjectKey), newPayload) {
 				t.Fatalf("immutable objects changed unexpectedly: old=%q new=%q", store.object(legacy.ObjectKey), store.object(repo.artifact.ObjectKey))
+			}
+		})
+	}
+}
+
+func TestLegacyAPIArtifactIgnoresEarlierRequestScopedArtifact(t *testing.T) {
+	now := time.Date(2026, 8, 28, 9, 30, 0, 0, time.UTC)
+	principal := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Username: "user-a", Roles: []string{"Engineer"}, AuthType: auth.AuthTypePAT, Scopes: []string{domain.PATScopeSourcesWrite}}
+	for _, requestState := range []domain.SourceArtifactState{domain.SourceArtifactReady, domain.SourceArtifactPending} {
+		t.Run(string(requestState), func(t *testing.T) {
+			database, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "-")+"?mode=memory&cache=shared"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := database.AutoMigrate(&repositories.TenantRecord{}, &repositories.UserRecord{}, &repositories.SourceArtifactRecord{}, &repositories.SourceArtifactRequestRecord{}, &repositories.DataMountBindingRecord{}); err != nil {
+				t.Fatal(err)
+			}
+			repo := repositories.NewGormRepository(database)
+			if err := repo.EnsureIdentity(context.Background(), principal); err != nil {
+				t.Fatal(err)
+			}
+			requested, err := domain.NewRequestScopedSourceArtifact(domain.SourceArtifactInput{
+				ID: "artifact-0123456789abcdef01234567", TenantID: principal.TenantID, UserID: principal.Subject,
+				SHA256: apiArtifactDigest, SizeBytes: 7,
+			}, now.Add(15*time.Minute), now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			storedRequest, err := repo.CreateSourceArtifactForRequestWithLimits(context.Background(), &requested, "source-request-0123456789abcdef01234567", repositories.DefaultSourceArtifactLimits())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if requestState == domain.SourceArtifactReady {
+				if _, err := repo.MarkSourceArtifactReady(context.Background(), principal.TenantID, principal.Subject, storedRequest.ID, now.Add(time.Minute)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			store := newImmutableTOSMock(t)
+			requestPayload := []byte("request")
+			legacyPayload := []byte("legacy!")
+			store.seed(storedRequest.ObjectKey, apiArtifactDigest, requestPayload)
+			router := artifactTestRouter(t, repo, store, principal, now.Add(2*time.Minute))
+			body := `{"sha256":"` + apiArtifactDigest + `","sizeBytes":7}`
+			created := performArtifactRequest(router, http.MethodPost, "/api/v1/source-artifacts", body)
+			if created.Code != http.StatusCreated {
+				t.Fatalf("legacy API create after %s request status=%d body=%s", requestState, created.Code, created.Body.String())
+			}
+			var envelope struct {
+				Data sourceArtifactResponse `json:"data"`
+			}
+			if err := json.Unmarshal(created.Body.Bytes(), &envelope); err != nil {
+				t.Fatal(err)
+			}
+			legacy, err := repo.GetSourceArtifact(context.Background(), principal.TenantID, principal.Subject, envelope.Data.ArtifactID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantKey, err := domain.SourceArtifactObjectKey(principal.TenantID, principal.Subject, apiArtifactDigest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if legacy.ObjectKey != wantKey || legacy.ID == storedRequest.ID {
+				t.Fatalf("legacy API artifact mismatch: request=%q/%q legacy=%q/%q want=%q", storedRequest.ID, storedRequest.ObjectKey, legacy.ID, legacy.ObjectKey, wantKey)
+			}
+			upload, err := http.NewRequest(http.MethodPut, envelope.Data.UploadURL, bytes.NewReader(legacyPayload))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for key, value := range envelope.Data.RequiredHeaders {
+				upload.Header.Set(key, value)
+			}
+			uploadResponse, err := store.server.Client().Do(upload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			uploadResponse.Body.Close()
+			if uploadResponse.StatusCode != http.StatusOK {
+				t.Fatalf("legacy immutable upload after %s request status=%d", requestState, uploadResponse.StatusCode)
+			}
+			completed := performArtifactRequest(router, http.MethodPost, "/api/v1/source-artifacts/"+legacy.ID+"/complete", "")
+			if completed.Code != http.StatusOK {
+				t.Fatalf("legacy complete after %s request status=%d body=%s", requestState, completed.Code, completed.Body.String())
+			}
+			if !bytes.Equal(store.object(storedRequest.ObjectKey), requestPayload) || !bytes.Equal(store.object(legacy.ObjectKey), legacyPayload) {
+				t.Fatalf("request or legacy immutable object changed: request=%q legacy=%q", store.object(storedRequest.ObjectKey), store.object(legacy.ObjectKey))
+			}
+			retry := performArtifactRequest(router, http.MethodPost, "/api/v1/source-artifacts", body)
+			if retry.Code != http.StatusOK || !strings.Contains(retry.Body.String(), `"artifactId":"`+legacy.ID+`"`) {
+				t.Fatalf("legacy API retry did not reuse artifact: status=%d body=%s", retry.Code, retry.Body.String())
 			}
 		})
 	}

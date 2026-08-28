@@ -139,7 +139,7 @@ func artifactPrincipalMiddleware(principal auth.Principal) gin.HandlerFunc {
 	}
 }
 
-func artifactTestRouter(t *testing.T, repo *fakeSourceArtifactRepository, store objectstore.Store, principal auth.Principal, now time.Time) *gin.Engine {
+func artifactTestRouter(t *testing.T, repo SourceArtifactRepository, store objectstore.Store, principal auth.Principal, now time.Time) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	handler, err := NewSourceArtifactHandler(repo, store, SourceArtifactOptions{

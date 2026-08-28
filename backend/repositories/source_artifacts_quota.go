@@ -40,12 +40,19 @@ func (r *GormRepository) CreateOrReuseSourceArtifactWithLimits(ctx context.Conte
 	if err := artifact.Validate(); err != nil {
 		return nil, fmt.Errorf("validate source artifact: %w", err)
 	}
+	legacyObjectKey, err := domain.SourceArtifactObjectKeyForRoot(artifact.TenantID, artifact.StorageRoot, artifact.SHA256)
+	if err != nil {
+		return nil, fmt.Errorf("derive legacy source artifact key: %w", err)
+	}
+	if artifact.ObjectKey != legacyObjectKey {
+		return nil, ErrSourceArtifactConflict
+	}
 	if err := limits.validate(); err != nil {
 		return nil, err
 	}
 	incoming := sourceArtifactRecordFromDomain(*artifact)
 	var result *domain.SourceArtifact
-	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var owner UserRecord
 		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Select("id").Where("id = ? AND tenant_id = ?", artifact.UserID, artifact.TenantID).
@@ -59,7 +66,9 @@ func (r *GormRepository) CreateOrReuseSourceArtifactWithLimits(ctx context.Conte
 
 		var existing SourceArtifactRecord
 		err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("tenant_id = ? AND user_id = ? AND sha256 = ?", artifact.TenantID, artifact.UserID, artifact.SHA256).
+			Where("tenant_id = ? AND user_id = ? AND storage_root = ? AND sha256 = ? AND size_bytes = ? AND object_key = ?",
+				artifact.TenantID, artifact.UserID, artifact.StorageRoot, artifact.SHA256, artifact.SizeBytes, legacyObjectKey).
+			Where("NOT EXISTS (SELECT 1 FROM source_artifact_requests WHERE source_artifact_requests.artifact_id = source_artifacts.id AND source_artifact_requests.tenant_id = source_artifacts.tenant_id AND source_artifact_requests.user_id = source_artifacts.user_id)").
 			Order("created_at ASC, id ASC").
 			First(&existing).Error
 		if err == nil {
@@ -72,6 +81,20 @@ func (r *GormRepository) CreateOrReuseSourceArtifactWithLimits(ctx context.Conte
 		}
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return fmt.Errorf("load existing source artifact: %w", err)
+		}
+
+		// A canonical legacy object key is immutable. Detect inconsistent legacy
+		// metadata before creating another row that would address the same object.
+		var conflicting SourceArtifactRecord
+		err = tx.Where("tenant_id = ? AND user_id = ? AND storage_root = ? AND sha256 = ? AND object_key = ?",
+			artifact.TenantID, artifact.UserID, artifact.StorageRoot, artifact.SHA256, legacyObjectKey).
+			Where("NOT EXISTS (SELECT 1 FROM source_artifact_requests WHERE source_artifact_requests.artifact_id = source_artifacts.id AND source_artifact_requests.tenant_id = source_artifacts.tenant_id AND source_artifact_requests.user_id = source_artifacts.user_id)").
+			First(&conflicting).Error
+		if err == nil {
+			return ErrSourceArtifactConflict
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("check legacy source artifact key: %w", err)
 		}
 
 		if err := enforceSourceArtifactOwnerQuota(tx, artifact, limits); err != nil {
