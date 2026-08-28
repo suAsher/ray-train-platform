@@ -3,6 +3,7 @@ set -euo pipefail
 
 readonly root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 readonly manifest="${root_dir}/ops/observability/prometheus-operator/60-ray-pod-monitor.yaml"
+readonly values="${root_dir}/ops/observability/prometheus-operator/20-values-production.yaml"
 
 [[ -f "${manifest}" ]] || { echo 'Ray PodMonitor manifest is missing' >&2; exit 1; }
 for expected in \
@@ -23,6 +24,13 @@ for expected in \
   '__meta_kubernetes_pod_node_name' \
   'targetLabel: node'; do
   grep -Fq -- "${expected}" "${manifest}" || { echo "Ray PodMonitor missing: ${expected}" >&2; exit 1; }
+done
+
+for expected in \
+  '    podMonitorSelectorNilUsesHelmValues: false' \
+  '    podMonitorSelector: {}' \
+  '    podMonitorNamespaceSelector: {}'; do
+  grep -Fxq -- "${expected}" "${values}" || { echo "production values do not discover PodMonitors: ${expected}" >&2; exit 1; }
 done
 
 echo 'Ray PodMonitor contract verified'

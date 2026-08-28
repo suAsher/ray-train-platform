@@ -42,13 +42,14 @@ type TrainingRecoveryPoint struct {
 }
 
 type TrainingPerformance struct {
-	Workload    TrainingWorkloadRef               `json:"workload"`
-	Window      string                            `json:"window"`
-	StepSeconds int                               `json:"stepSeconds"`
-	StartedAt   time.Time                         `json:"startedAt"`
-	EndedAt     time.Time                         `json:"endedAt"`
-	Workers     []TrainingWorkerPerformance       `json:"workers"`
-	Series      map[string][]TrainingMetricSeries `json:"series"`
-	Summary     map[string]*float64               `json:"summary"`
-	Recovery    []TrainingRecoveryPoint           `json:"recovery"`
+	Workload           TrainingWorkloadRef               `json:"workload"`
+	Window             string                            `json:"window"`
+	StepSeconds        int                               `json:"stepSeconds"`
+	StartedAt          time.Time                         `json:"startedAt"`
+	EndedAt            time.Time                         `json:"endedAt"`
+	Workers            []TrainingWorkerPerformance       `json:"workers"`
+	Series             map[string][]TrainingMetricSeries `json:"series"`
+	Summary            map[string]*float64               `json:"summary"`
+	UnavailableMetrics []string                          `json:"unavailableMetrics"`
+	Recovery           []TrainingRecoveryPoint           `json:"recovery"`
 }

@@ -1,13 +1,43 @@
 import os
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 import stage_dataset
 
 
 class StageDatasetTest(unittest.TestCase):
+    def test_main_keeps_completed_stage_when_metric_publication_fails(self):
+        staged = stage_dataset.StageResult(
+            path=Path("/cache/dataset-view"), copied=True, files=1, bytes=4,
+            seconds=0.2, roots=(stage_dataset.RootStageResult(path="/cache", files=1, bytes=4),),
+        )
+        environment = {
+            "PLATFORM_DATASET_PATH": "/dataset",
+            "PLATFORM_CACHE_PATH": "/cache",
+            "PLATFORM_JOB_ID": "job-01",
+            "PLATFORM_POD_NAMESPACE": "tenant-a",
+            "PLATFORM_RAY_CLUSTER": "job-01-cluster",
+            "PLATFORM_RAY_NODE_TYPE": "worker",
+            "PLATFORM_POD_NAME": "job-01-cluster-worker-abc",
+        }
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, environment, clear=True), mock.patch.object(
+            stage_dataset, "stage_selected_dataset", return_value=staged
+        ), mock.patch.object(
+            stage_dataset, "write_preload_metrics", side_effect=OSError("disk path and secret detail")
+        ), redirect_stdout(stdout), redirect_stderr(stderr):
+            result = stage_dataset.main()
+
+        self.assertEqual(result, 0)
+        self.assertIn("/cache/dataset-view", stdout.getvalue())
+        self.assertIn("RAYTRAIN_CACHE_METRICS_WARNING=publication_failed", stderr.getvalue())
+        self.assertNotIn("secret detail", stderr.getvalue())
+
     def test_writes_atomic_strict_job_scoped_preload_metrics(self):
         with tempfile.TemporaryDirectory() as root:
             base = Path(root)

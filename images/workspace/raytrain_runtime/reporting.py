@@ -29,6 +29,7 @@ _GAUGE_TAG_KEYS = (
     "ray_io_node_type",
     "pod",
     "rank",
+    "gpu",
 )
 _CUSTOM_METRIC_NAMES = {
     "step": "platform_training_step",
@@ -42,6 +43,7 @@ _CUSTOM_GAUGES: dict[str, Any] = {}
 _CUSTOM_GAUGES_LOCK = threading.Lock()
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SAFE_DNS_VALUE = re.compile(r"^[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?$")
+_SAFE_GPU_IDENTITY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
 def _scalar(value: Any) -> float | None:
@@ -368,6 +370,9 @@ def _load_gauge_class() -> Any:
 
 
 def _managed_metric_tags(rank: int) -> dict[str, str] | None:
+    assigned_gpu = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",", 1)[0].strip()
+    if not _SAFE_GPU_IDENTITY.fullmatch(assigned_gpu):
+        assigned_gpu = ""
     tags = {
         "platform_job_id": os.environ.get("PLATFORM_JOB_ID", "").strip(),
         "exported_namespace": os.environ.get("PLATFORM_POD_NAMESPACE", "").strip(),
@@ -375,6 +380,7 @@ def _managed_metric_tags(rank: int) -> dict[str, str] | None:
         "ray_io_node_type": os.environ.get("PLATFORM_RAY_NODE_TYPE", "").strip(),
         "pod": os.environ.get("PLATFORM_POD_NAME", "").strip(),
         "rank": str(rank),
+        "gpu": assigned_gpu,
     }
     if not _SAFE_IDENTIFIER.fullmatch(tags["platform_job_id"]):
         return None

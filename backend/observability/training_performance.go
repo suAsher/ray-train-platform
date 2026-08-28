@@ -3,10 +3,12 @@ package observability
 import (
 	"context"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -15,10 +17,11 @@ import (
 )
 
 const (
-	maxTrainingPerformanceQueries = 24
-	maxTrainingPerformanceSeries  = 2048
-	maxTrainingPerformancePoints  = 2048
-	trainingPerformanceTimeout    = 5 * time.Second
+	maxTrainingPerformanceQueries  = 24
+	maxTrainingPerformanceSeries   = 2048
+	maxTrainingPerformancePoints   = 2048
+	trainingPerformanceTimeout     = 5 * time.Second
+	trainingPerformanceConcurrency = 5
 )
 
 type trainingPerformanceWindow struct {
@@ -36,36 +39,56 @@ var trainingPerformanceWindows = map[string]trainingPerformanceWindow{
 type trainingPerformanceMetric struct {
 	name       string
 	expression func(domain.TrainingWorkloadRef) string
+	reducer    trainingSummaryReducer
 }
+
+type trainingSummaryReducer uint8
+
+const (
+	trainingSummaryAverage trainingSummaryReducer = iota
+	trainingSummarySum
+	trainingSummaryMax
+)
 
 var trainingPerformanceMetrics = []trainingPerformanceMetric{
-	{name: "cpuCores", expression: cadvisorRate("container_cpu_usage_seconds_total", `container!="",container!="POD"`)},
-	{name: "memoryWorkingSetBytes", expression: cadvisorSum("container_memory_working_set_bytes", `container!="",container!="POD"`)},
-	{name: "networkReceiveBytesPerSecond", expression: cadvisorRate("container_network_receive_bytes_total", "")},
-	{name: "networkTransmitBytesPerSecond", expression: cadvisorRate("container_network_transmit_bytes_total", "")},
-	{name: "nodeNetworkReceiveBytesPerSecond", expression: nodeRateMetric("node_network_receive_bytes_total")},
-	{name: "nodeNetworkTransmitBytesPerSecond", expression: nodeRateMetric("node_network_transmit_bytes_total")},
-	{name: "gpuUtilizationPercent", expression: dcgmInstant(gpuMetricNames.utilization)},
-	{name: "gpuMemoryUsedMiB", expression: dcgmInstant(gpuMetricNames.memoryUsed)},
-	{name: "gpuPowerWatts", expression: dcgmInstant(gpuMetricNames.power)},
-	{name: "gpuTemperatureCelsius", expression: dcgmInstant(gpuMetricNames.temperature)},
-	{name: "objectStoreBytes", expression: rayInstant("ray_object_store_memory")},
-	{name: "objectStoreSpillBytesPerSecond", expression: rayRate("ray_object_store_spilled_bytes_total")},
-	{name: "cacheBytes", expression: cacheMetric("ray_cache_bytes", "sum")},
-	{name: "cacheHitsPerSecond", expression: cacheMetric("ray_cache_hits_total", "sum")},
-	{name: "cacheMissesPerSecond", expression: cacheMetric("ray_cache_misses_total", "sum")},
-	{name: "cachePreloaderDurationSeconds", expression: cacheMetric("ray_cache_preloader_duration_seconds", "max")},
-	{name: "stepTimeSeconds", expression: rayInstant("ray_platform_training_step_time_seconds")},
-	{name: "dataTimeSeconds", expression: rayInstant("ray_platform_training_data_time_seconds")},
-	{name: "ncclDurationSeconds", expression: rayInstant("ray_platform_training_nccl_duration_seconds")},
-	{name: "step", expression: rayInstant("ray_platform_training_step")},
-	{name: "restarts", expression: kubernetesInstant("kube_pod_container_status_restarts_total", `container="ray-worker"`)},
+	{name: "cpuCores", expression: cadvisorRate("container_cpu_usage_seconds_total", `container!="",container!="POD"`), reducer: trainingSummarySum},
+	{name: "memoryWorkingSetBytes", expression: cadvisorSum("container_memory_working_set_bytes", `container!="",container!="POD"`), reducer: trainingSummarySum},
+	{name: "networkReceiveBytesPerSecond", expression: cadvisorRate("container_network_receive_bytes_total", ""), reducer: trainingSummarySum},
+	{name: "networkTransmitBytesPerSecond", expression: cadvisorRate("container_network_transmit_bytes_total", ""), reducer: trainingSummarySum},
+	{name: "nodeNetworkReceiveBytesPerSecond", expression: nodeRateMetric("node_network_receive_bytes_total"), reducer: trainingSummarySum},
+	{name: "nodeNetworkTransmitBytesPerSecond", expression: nodeRateMetric("node_network_transmit_bytes_total"), reducer: trainingSummarySum},
+	{name: "gpuUtilizationPercent", expression: dcgmInstant(gpuMetricNames.utilization), reducer: trainingSummaryAverage},
+	{name: "gpuMemoryUsedMiB", expression: dcgmInstant(gpuMetricNames.memoryUsed), reducer: trainingSummaryAverage},
+	{name: "gpuPowerWatts", expression: dcgmInstant(gpuMetricNames.power), reducer: trainingSummaryAverage},
+	{name: "gpuTemperatureCelsius", expression: dcgmInstant(gpuMetricNames.temperature), reducer: trainingSummaryAverage},
+	{name: "objectStoreBytes", expression: rayInstant("ray_object_store_memory"), reducer: trainingSummarySum},
+	{name: "objectStoreSpillBytesPerSecond", expression: rayRate("ray_object_store_spilled_bytes_total"), reducer: trainingSummarySum},
+	{name: "cacheBytes", expression: cacheMetric("ray_cache_bytes", "sum"), reducer: trainingSummarySum},
+	{name: "cacheHitsTotal", expression: cacheMetric("ray_cache_hits_total", "sum"), reducer: trainingSummarySum},
+	{name: "cacheMissesTotal", expression: cacheMetric("ray_cache_misses_total", "sum"), reducer: trainingSummarySum},
+	{name: "cachePreloaderDurationSeconds", expression: cacheMetric("ray_cache_preloader_duration_seconds", "max"), reducer: trainingSummaryMax},
+	{name: "stepTimeSeconds", expression: rayInstant("ray_platform_training_step_time_seconds"), reducer: trainingSummaryAverage},
+	{name: "dataTimeSeconds", expression: rayInstant("ray_platform_training_data_time_seconds"), reducer: trainingSummaryAverage},
+	{name: "ncclDurationSeconds", expression: rayInstant("ray_platform_training_nccl_duration_seconds"), reducer: trainingSummaryAverage},
+	{name: "step", expression: rayInstant("ray_platform_training_step"), reducer: trainingSummaryMax},
+	{name: "restarts", expression: kubernetesInstant("kube_pod_container_status_restarts_total", `container="ray-worker"`), reducer: trainingSummaryMax},
 	{name: "state", expression: func(ref domain.TrainingWorkloadRef) string {
 		return fmt.Sprintf("max by (pod, node, phase) (kube_pod_status_phase%s == 1)", kubernetesSelector(ref, `phase=~"Pending|Running|Succeeded|Failed|Unknown"`))
-	}},
+	}, reducer: trainingSummaryMax},
 }
 
-const trainingPerformanceGroup = "pod, exported_pod, node, rank, worker_rank, UUID, state, phase"
+const trainingPerformanceGroup = "pod, exported_pod, node, rank, worker_rank, gpu, UUID, state, phase"
+
+type trainingMetricQueryResult struct {
+	metric trainingPerformanceMetric
+	series []MetricSeries
+	err    error
+}
+
+type trainingWorkerAssembly struct {
+	worker       *domain.TrainingWorkerPerformance
+	latestValues map[string][]float64
+}
 
 func workerPodRegex(ref domain.TrainingWorkloadRef) string {
 	return "^" + regexp.QuoteMeta(ref.RayClusterName) + "-.*-worker-.*$"
@@ -166,7 +189,7 @@ func (c *PrometheusClient) QueryTrainingPerformance(ctx context.Context, ref dom
 	result := domain.TrainingPerformance{
 		Workload: ref, Window: window, StepSeconds: int(spec.step / time.Second), StartedAt: start, EndedAt: end,
 		Workers: []domain.TrainingWorkerPerformance{}, Series: map[string][]domain.TrainingMetricSeries{},
-		Summary: map[string]*float64{}, Recovery: []domain.TrainingRecoveryPoint{},
+		Summary: map[string]*float64{}, UnavailableMetrics: []string{}, Recovery: []domain.TrainingRecoveryPoint{},
 	}
 	for _, metric := range trainingPerformanceMetrics {
 		result.Series[metric.name] = []domain.TrainingMetricSeries{}
@@ -175,67 +198,38 @@ func (c *PrometheusClient) QueryTrainingPerformance(ctx context.Context, ref dom
 
 	queryCtx, cancel := context.WithTimeout(ctx, trainingPerformanceTimeout)
 	defer cancel()
-	workers := map[string]*domain.TrainingWorkerPerformance{}
-	workerLatest := map[string]map[string]domain.TrainingMetricPoint{}
-	summaryLatest := map[string]domain.TrainingMetricPoint{}
+	queryResults := c.queryTrainingMetrics(queryCtx, ref, start, end, spec.step)
+	successfulQueries := 0
 	totalSeries := 0
-	for _, metric := range trainingPerformanceMetrics {
-		series, err := c.queryRangeWithStep(queryCtx, metric.expression(ref), start, end, spec.step)
-		if err != nil {
-			return domain.TrainingPerformance{}, fmt.Errorf("query training performance metric %s: %w", metric.name, err)
+	for _, queryResult := range queryResults {
+		if queryResult.err != nil {
+			result.UnavailableMetrics = append(result.UnavailableMetrics, queryResult.metric.name)
+			continue
 		}
-		totalSeries += len(series)
+		successfulQueries++
+		totalSeries += len(queryResult.series)
 		if totalSeries > maxTrainingPerformanceSeries {
 			return domain.TrainingPerformance{}, fmt.Errorf("training performance result contains too many series")
 		}
-		converted := make([]domain.TrainingMetricSeries, 0, len(series))
-		for _, item := range series {
+		converted := make([]domain.TrainingMetricSeries, 0, len(queryResult.series))
+		for _, item := range queryResult.series {
 			if len(item.Points) > maxTrainingPerformancePoints {
 				return domain.TrainingPerformance{}, fmt.Errorf("training performance series contains too many points")
 			}
 			points := trainingPoints(item.Points)
 			labels := cloneLabels(item.Labels)
 			converted = append(converted, domain.TrainingMetricSeries{Labels: labels, Points: points})
-			if latest, ok := latestTrainingPoint(points); ok {
-				if current, found := summaryLatest[metric.name]; !found || latest.Timestamp.After(current.Timestamp) {
-					summaryLatest[metric.name] = latest
-					value := latest.Value
-					result.Summary[metric.name] = &value
-				}
-			}
-			pod := firstLabel(labels, "pod", "exported_pod")
-			if pod == "" {
-				continue
-			}
-			worker := workers[pod]
-			if worker == nil {
-				worker = newTrainingWorker(pod, labels)
-				workers[pod] = worker
-				workerLatest[pod] = map[string]domain.TrainingMetricPoint{}
-			} else {
-				mergeTrainingWorkerLabels(worker, labels)
-			}
-			worker.Series[metric.name] = append(worker.Series[metric.name], points...)
-			if latest, ok := latestTrainingPoint(points); ok {
-				if current, found := workerLatest[pod][metric.name]; !found || latest.Timestamp.After(current.Timestamp) {
-					workerLatest[pod][metric.name] = latest
-					value := latest.Value
-					worker.Summary[metric.name] = &value
-					if metric.name == "restarts" && latest.Value >= 0 {
-						restarts := int(latest.Value)
-						worker.Restarts = &restarts
-					}
-					if metric.name == "step" && latest.Value >= 0 {
-						step := int64(latest.Value)
-						worker.Step = &step
-					}
-				}
-			}
 		}
-		result.Series[metric.name] = converted
+		result.Series[queryResult.metric.name] = converted
+		result.Summary[queryResult.metric.name] = reduceTrainingMetric(queryResult.metric.reducer, converted)
 	}
+	if successfulQueries == 0 {
+		return domain.TrainingPerformance{}, fmt.Errorf("training performance metrics unavailable")
+	}
+
+	workers := assembleTrainingWorkers(result.Series)
 	for _, worker := range workers {
-		result.Workers = append(result.Workers, *worker)
+		result.Workers = append(result.Workers, *worker.worker)
 	}
 	sort.SliceStable(result.Workers, func(i, j int) bool {
 		left, right := result.Workers[i], result.Workers[j]
@@ -248,9 +242,184 @@ func (c *PrometheusClient) QueryTrainingPerformance(ctx context.Context, ref dom
 		if left.Rank == nil && right.Rank != nil {
 			return false
 		}
-		return left.Pod < right.Pod
+		if left.Pod != right.Pod {
+			return left.Pod < right.Pod
+		}
+		return left.GPU < right.GPU
 	})
 	return result, nil
+}
+
+func (c *PrometheusClient) queryTrainingMetrics(ctx context.Context, ref domain.TrainingWorkloadRef, start, end time.Time, step time.Duration) []trainingMetricQueryResult {
+	results := make([]trainingMetricQueryResult, len(trainingPerformanceMetrics))
+	semaphore := make(chan struct{}, trainingPerformanceConcurrency)
+	var wait sync.WaitGroup
+	for index, metric := range trainingPerformanceMetrics {
+		wait.Add(1)
+		go func(index int, metric trainingPerformanceMetric) {
+			defer wait.Done()
+			select {
+			case semaphore <- struct{}{}:
+				defer func() { <-semaphore }()
+			case <-ctx.Done():
+				results[index] = trainingMetricQueryResult{metric: metric, err: ctx.Err()}
+				return
+			}
+			series, err := c.queryRangeWithStep(ctx, metric.expression(ref), start, end, step)
+			results[index] = trainingMetricQueryResult{metric: metric, series: series, err: err}
+		}(index, metric)
+	}
+	wait.Wait()
+	return results
+}
+
+func reduceTrainingMetric(reducer trainingSummaryReducer, series []domain.TrainingMetricSeries) *float64 {
+	values := make([]float64, 0, len(series))
+	for _, item := range series {
+		latest, ok := latestTrainingPoint(item.Points)
+		if ok && !math.IsNaN(latest.Value) && !math.IsInf(latest.Value, 0) {
+			values = append(values, latest.Value)
+		}
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	value := values[0]
+	switch reducer {
+	case trainingSummarySum:
+		for _, candidate := range values[1:] {
+			value += candidate
+		}
+	case trainingSummaryMax:
+		for _, candidate := range values[1:] {
+			if candidate > value {
+				value = candidate
+			}
+		}
+	default:
+		for _, candidate := range values[1:] {
+			value += candidate
+		}
+		value /= float64(len(values))
+	}
+	return &value
+}
+
+func assembleTrainingWorkers(seriesByMetric map[string][]domain.TrainingMetricSeries) []*trainingWorkerAssembly {
+	workers := make([]*trainingWorkerAssembly, 0)
+	aliases := map[string]*trainingWorkerAssembly{}
+	byPod := map[string][]*trainingWorkerAssembly{}
+
+	for _, metric := range trainingPerformanceMetrics {
+		for _, item := range seriesByMetric[metric.name] {
+			pod := preferredTrainingPod(item.Labels)
+			identity := trainingWorkerAliases(pod, item.Labels)
+			if pod == "" || len(identity) == 0 {
+				continue
+			}
+			worker := findTrainingWorker(aliases, identity)
+			if worker == nil {
+				worker = &trainingWorkerAssembly{worker: newTrainingWorker(pod, item.Labels), latestValues: map[string][]float64{}}
+				workers = append(workers, worker)
+				byPod[pod] = append(byPod[pod], worker)
+			}
+			registerTrainingWorkerAliases(aliases, worker, identity)
+			mergeTrainingWorkerLabels(worker.worker, item.Labels)
+		}
+	}
+
+	for _, metric := range trainingPerformanceMetrics {
+		for _, item := range seriesByMetric[metric.name] {
+			pod := preferredTrainingPod(item.Labels)
+			if pod == "" {
+				continue
+			}
+			identity := trainingWorkerAliases(pod, item.Labels)
+			targets := make([]*trainingWorkerAssembly, 0, 1)
+			if len(identity) > 0 {
+				if worker := findTrainingWorker(aliases, identity); worker != nil {
+					targets = append(targets, worker)
+				}
+			} else {
+				targets = append(targets, byPod[pod]...)
+			}
+			if len(targets) == 0 {
+				worker := &trainingWorkerAssembly{worker: newTrainingWorker(pod, item.Labels), latestValues: map[string][]float64{}}
+				workers = append(workers, worker)
+				byPod[pod] = append(byPod[pod], worker)
+				registerTrainingWorkerAliases(aliases, worker, identity)
+				targets = append(targets, worker)
+			}
+			for _, target := range targets {
+				mergeTrainingWorkerLabels(target.worker, item.Labels)
+				target.worker.Series[metric.name] = append(target.worker.Series[metric.name], item.Points...)
+				if latest, ok := latestTrainingPoint(item.Points); ok && !math.IsNaN(latest.Value) && !math.IsInf(latest.Value, 0) {
+					target.latestValues[metric.name] = append(target.latestValues[metric.name], latest.Value)
+				}
+			}
+		}
+	}
+
+	for _, assembly := range workers {
+		for _, metric := range trainingPerformanceMetrics {
+			values := assembly.latestValues[metric.name]
+			metricSeries := make([]domain.TrainingMetricSeries, 0, len(values))
+			for _, value := range values {
+				metricSeries = append(metricSeries, domain.TrainingMetricSeries{Points: []domain.TrainingMetricPoint{{Value: value}}})
+			}
+			assembly.worker.Summary[metric.name] = reduceTrainingMetric(metric.reducer, metricSeries)
+		}
+		if value := assembly.worker.Summary["restarts"]; value != nil && *value >= 0 {
+			restarts := int(*value)
+			assembly.worker.Restarts = &restarts
+		}
+		if value := assembly.worker.Summary["step"]; value != nil && *value >= 0 {
+			step := int64(*value)
+			assembly.worker.Step = &step
+		}
+	}
+	return workers
+}
+
+func preferredTrainingPod(labels map[string]string) string {
+	return firstLabel(labels, "exported_pod", "pod")
+}
+
+func trainingWorkerAliases(pod string, labels map[string]string) []string {
+	if pod == "" {
+		return nil
+	}
+	result := make([]string, 0, 4)
+	if gpu := labels["gpu"]; gpu != "" {
+		result = append(result, pod+"|identity:"+gpu)
+		if _, err := strconv.Atoi(gpu); err == nil {
+			result = append(result, pod+"|rank:"+gpu)
+		}
+	}
+	if uuid := labels["UUID"]; uuid != "" {
+		result = append(result, pod+"|identity:"+uuid)
+	}
+	if rank := firstLabel(labels, "rank", "worker_rank"); rank != "" {
+		result = append(result, pod+"|rank:"+rank)
+	}
+	return result
+}
+
+func findTrainingWorker(index map[string]*trainingWorkerAssembly, aliases []string) *trainingWorkerAssembly {
+	for _, alias := range aliases {
+		if worker := index[alias]; worker != nil {
+			return worker
+		}
+	}
+	return nil
+}
+
+func registerTrainingWorkerAliases(index map[string]*trainingWorkerAssembly, worker *trainingWorkerAssembly, aliases []string) {
+	for _, alias := range aliases {
+		if index[alias] == nil {
+			index[alias] = worker
+		}
+	}
 }
 
 func validateTrainingWorkloadRef(ref domain.TrainingWorkloadRef) error {

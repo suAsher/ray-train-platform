@@ -359,13 +359,16 @@ def main() -> int:
         "pod": os.environ.get("PLATFORM_POD_NAME", "").strip(),
     }
     if any(identity_values.values()):
-        if not all(identity_values.values()):
-            raise ValueError("cache metric identity is incomplete")
-        write_preload_metrics(
-            [Path(item) for item in paths_value.split(":") if item],
-            result,
-            MetricIdentity(**identity_values),
-        )
+        try:
+            if not all(identity_values.values()):
+                raise ValueError("cache metric identity is incomplete")
+            write_preload_metrics(
+                [Path(item) for item in paths_value.split(":") if item],
+                result,
+                MetricIdentity(**identity_values),
+            )
+        except Exception:
+            print("RAYTRAIN_CACHE_METRICS_WARNING=publication_failed", file=sys.stderr, flush=True)
     print(
         "RAYTRAIN_DATASET_CACHE=" + json.dumps(_result_payload(result), ensure_ascii=False),
         file=sys.stderr,

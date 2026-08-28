@@ -185,6 +185,7 @@ class ReportMetricsTest(unittest.TestCase):
             "PLATFORM_RAY_CLUSTER": "job-01-cluster",
             "PLATFORM_RAY_NODE_TYPE": "worker",
             "PLATFORM_POD_NAME": "job-01-cluster-worker-abc",
+            "CUDA_VISIBLE_DEVICES": "3,7",
         }
         metrics = {
             "step": 7,
@@ -211,8 +212,25 @@ class ReportMetricsTest(unittest.TestCase):
         )
         self.assertEqual(len(FakeGauge.created), 4)
         self.assertTrue(all(record[2]["rank"] == "3" for record in FakeGauge.records))
+        self.assertTrue(all(record[2]["gpu"] == "3" for record in FakeGauge.records))
         self.assertTrue(all(record[2]["exported_namespace"] == "tenant-a" for record in FakeGauge.records))
         self.assertNotIn("loss", {record[0] for record in FakeGauge.records})
+
+    def test_invalid_assigned_gpu_identity_falls_back_without_blocking_reporting(self):
+        environment = {
+            "PLATFORM_JOB_ID": "job-01",
+            "PLATFORM_POD_NAMESPACE": "tenant-a",
+            "PLATFORM_RAY_CLUSTER": "job-01-cluster",
+            "PLATFORM_RAY_NODE_TYPE": "worker",
+            "PLATFORM_POD_NAME": "job-01-cluster-worker-abc",
+            "CUDA_VISIBLE_DEVICES": '0"} or vector(1)',
+        }
+        with mock.patch.dict(os.environ, environment, clear=True):
+            tags = reporting._managed_metric_tags(5)
+
+        self.assertIsNotNone(tags)
+        self.assertEqual(tags["rank"], "5")
+        self.assertEqual(tags["gpu"], "")
 
     def test_metrics_export_fails_open_when_ray_metrics_are_unavailable(self):
         train = _FakeTrain(rank=0)

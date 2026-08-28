@@ -59,7 +59,10 @@ test('normalizes training performance without aliases or false zero values', asy
       dataTimeSeconds: null,
       ncclDurationSeconds: Number.NaN,
       gpuUtilizationPercent: 0,
+      cacheHitsTotal: 8,
+      cacheMissesTotal: 2,
     },
+    unavailableMetrics: ['gpuPowerWatts', '', 'gpuPowerWatts', 9],
     recovery: [{
       at: '2026-08-28T01:30:00Z',
       clusterAttempt: 2,
@@ -80,6 +83,10 @@ test('normalizes training performance without aliases or false zero values', asy
   assert.equal(normalized.summary.dataTimeSeconds, null)
   assert.equal(normalized.summary.ncclDurationSeconds, null)
   assert.equal(normalized.summary.objectStoreSpillBytesPerSecond, null)
+  assert.equal(normalized.summary.cacheHitsTotal, 8)
+  assert.equal(normalized.summary.cacheMissesTotal, 2)
+  assert.equal(normalized.summary.cacheHitsPerSecond, undefined)
+  assert.deepEqual(normalized.unavailableMetrics, ['gpuPowerWatts'])
   assert.equal(normalized.recovery[0].checkpointStep, null)
 
   normalized.workers[0].summary.cpuCores = 99
@@ -106,6 +113,7 @@ test('normalizer keeps nulls for an empty or malformed response', async () => {
   assert.equal(normalized.summary.gpuUtilizationPercent, null)
   assert.deepEqual(normalized.series.gpuUtilizationPercent, [])
   assert.deepEqual(normalized.recovery, [])
+  assert.deepEqual(normalized.unavailableMetrics, [])
 })
 
 test('diagnoses data wait first at the exact 20 percent boundary', async () => {
@@ -192,6 +200,9 @@ test('performance components expose responsive accessible read-only contracts', 
     assert.match(dataPanel, new RegExp(label))
   }
   assert.match(dataPanel, /暂无数据/)
+  assert.match(dataPanel, /cacheHitsTotal/)
+  assert.match(dataPanel, /cacheMissesTotal/)
+  assert.doesNotMatch(dataPanel, /cacheHitsPerSecond|cacheMissesPerSecond/)
   assert.doesNotMatch(dataPanel, /<(?:input|button|el-input|el-slider)\b/)
 
   for (const label of ['集群尝试', '恢复检查点', '重启次数', '暂无恢复记录']) {

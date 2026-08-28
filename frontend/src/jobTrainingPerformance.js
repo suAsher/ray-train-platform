@@ -19,8 +19,8 @@ export const TRAINING_PERFORMANCE_METRICS = Object.freeze([
   'objectStoreBytes',
   'objectStoreSpillBytesPerSecond',
   'cacheBytes',
-  'cacheHitsPerSecond',
-  'cacheMissesPerSecond',
+  'cacheHitsTotal',
+  'cacheMissesTotal',
   'cachePreloaderDurationSeconds',
   'stepTimeSeconds',
   'dataTimeSeconds',
@@ -134,6 +134,11 @@ export function normalizeTrainingPerformance(payload) {
     workers: Array.isArray(source.workers) ? source.workers.map(normalizeWorker) : [],
     series: normalizeGlobalSeries(source.series),
     summary: normalizeSummary(source.summary),
+    unavailableMetrics: Array.isArray(source.unavailableMetrics)
+      ? [...new Set(source.unavailableMetrics
+          .filter((metric) => typeof metric === 'string' && TRAINING_PERFORMANCE_METRICS.includes(metric)))]
+          .slice(0, TRAINING_PERFORMANCE_METRICS.length)
+      : [],
     recovery: Array.isArray(source.recovery) ? source.recovery.map(normalizeRecoveryPoint) : [],
   }
 }

@@ -2,25 +2,158 @@ package observability
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"ray-train-platform-backend/domain"
 )
 
+func prometheusMatrixResponse(request *http.Request, result string) *http.Response {
+	body := `{"status":"success","data":{"result":` + result + `}}`
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Request: request}
+}
+
+func TestTrainingPerformanceKeepsRanksInOnePodAndPrefersExportedPod(t *testing.T) {
+	client := PrometheusClient{BaseURL: "http://prometheus.internal", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		name := metricNameFromExpression(request.URL.Query().Get("query"))
+		switch name {
+		case "ray_platform_training_step_time_seconds":
+			return prometheusMatrixResponse(request, `[
+				{"metric":{"pod":"cluster-a-worker-shared","rank":"0","gpu":"0"},"values":[[1000,"4"]]},
+				{"metric":{"pod":"cluster-a-worker-shared","rank":"1","gpu":"1"},"values":[[1000,"6"]]}
+			]`), nil
+		case "DCGM_FI_DEV_GPU_UTIL":
+			return prometheusMatrixResponse(request, `[
+				{"metric":{"pod":"dcgm-exporter-x","exported_pod":"cluster-a-worker-shared","gpu":"0","UUID":"GPU-A"},"values":[[1000,"40"]]},
+				{"metric":{"pod":"dcgm-exporter-x","exported_pod":"cluster-a-worker-shared","gpu":"1","UUID":"GPU-B"},"values":[[1000,"60"]]}
+			]`), nil
+		case "ray_cache_bytes":
+			return prometheusMatrixResponse(request, `[{"metric":{"pod":"cache-exporter-x","exported_pod":"cluster-a-worker-shared"},"values":[[1000,"12"]]}]`), nil
+		default:
+			return prometheusMatrixResponse(request, `[]`), nil
+		}
+	})}}
+
+	got, err := client.QueryTrainingPerformance(context.Background(), domain.TrainingWorkloadRef{JobID: "job-a", Namespace: "tenant-a", RayClusterName: "cluster-a", RayJobName: "job-a"}, "15m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Workers) != 2 {
+		t.Fatalf("same-pod ranks collapsed or exporter row leaked: %+v", got.Workers)
+	}
+	for index, worker := range got.Workers {
+		if worker.Pod != "cluster-a-worker-shared" || worker.Rank == nil || *worker.Rank != index {
+			t.Fatalf("unexpected worker %d: %+v", index, worker)
+		}
+		wantGPU := []string{"GPU-A", "GPU-B"}[index]
+		if worker.GPU != wantGPU {
+			t.Fatalf("rank %d GPU = %q, want %q", index, worker.GPU, wantGPU)
+		}
+	}
+}
+
+func TestTrainingPerformancePartialFailuresAreBoundedAndDeterministic(t *testing.T) {
+	var active, maximum int32
+	client := PrometheusClient{BaseURL: "http://prometheus.internal", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		current := atomic.AddInt32(&active, 1)
+		for {
+			seen := atomic.LoadInt32(&maximum)
+			if current <= seen || atomic.CompareAndSwapInt32(&maximum, seen, current) {
+				break
+			}
+		}
+		defer atomic.AddInt32(&active, -1)
+		time.Sleep(10 * time.Millisecond)
+		name := metricNameFromExpression(request.URL.Query().Get("query"))
+		if name == "DCGM_FI_DEV_POWER_USAGE" || name == "ray_cache_misses_total" {
+			return nil, errors.New("dial http://prometheus.internal bearer-secret")
+		}
+		return prometheusMatrixResponse(request, `[]`), nil
+	})}}
+
+	got, err := client.QueryTrainingPerformance(context.Background(), domain.TrainingWorkloadRef{JobID: "job-a", Namespace: "tenant-a", RayClusterName: "cluster-a", RayJobName: "job-a"}, "15m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if maximum < 2 || maximum > 5 {
+		t.Fatalf("query concurrency = %d, want 2..5", maximum)
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	want := []any{"gpuPowerWatts", "cacheMissesTotal"}
+	if !reflect.DeepEqual(payload["unavailableMetrics"], want) {
+		t.Fatalf("unavailable metrics = %#v, want %#v", payload["unavailableMetrics"], want)
+	}
+}
+
+func TestTrainingPerformanceAllMetricFailuresReturnGenericError(t *testing.T) {
+	client := PrometheusClient{BaseURL: "http://prometheus.internal", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return nil, errors.New("dial http://prometheus.internal bearer-secret")
+	})}}
+	_, err := client.QueryTrainingPerformance(context.Background(), domain.TrainingWorkloadRef{JobID: "job-a", Namespace: "tenant-a", RayClusterName: "cluster-a", RayJobName: "job-a"}, "15m")
+	if err == nil || err.Error() != "training performance metrics unavailable" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestTrainingPerformanceSummaryUsesExplicitReducers(t *testing.T) {
+	client := PrometheusClient{BaseURL: "http://prometheus.internal", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		name := metricNameFromExpression(request.URL.Query().Get("query"))
+		values := map[string][2]string{
+			"ray_platform_training_step_time_seconds": {"4", "6"},
+			"DCGM_FI_DEV_GPU_UTIL":                    {"40", "60"},
+			"ray_cache_bytes":                         {"10", "20"},
+			"ray_platform_training_step":              {"7", "9"},
+			"ray_cache_preloader_duration_seconds":    {"1", "3"},
+		}
+		pair, ok := values[name]
+		if !ok {
+			return prometheusMatrixResponse(request, `[]`), nil
+		}
+		result := `[{"metric":{"pod":"cluster-a-worker-a","rank":"0","gpu":"0"},"values":[[1000,"` + pair[0] + `"]]},` +
+			`{"metric":{"pod":"cluster-a-worker-b","rank":"1","gpu":"1"},"values":[[1000,"` + pair[1] + `"]]}]`
+		return prometheusMatrixResponse(request, result), nil
+	})}}
+	got, err := client.QueryTrainingPerformance(context.Background(), domain.TrainingWorkloadRef{JobID: "job-a", Namespace: "tenant-a", RayClusterName: "cluster-a", RayJobName: "job-a"}, "15m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wants := map[string]float64{"stepTimeSeconds": 5, "gpuUtilizationPercent": 50, "cacheBytes": 30, "step": 9, "cachePreloaderDurationSeconds": 3}
+	for name, want := range wants {
+		if got.Summary[name] == nil || *got.Summary[name] != want {
+			t.Fatalf("summary %s = %v, want %v", name, got.Summary[name], want)
+		}
+	}
+}
+
 func TestTrainingPerformanceUsesMetricFamilySpecificProductionSelectors(t *testing.T) {
 	requests := 0
 	queries := map[string]string{}
+	badStep := ""
+	var mutex sync.Mutex
 	client := PrometheusClient{BaseURL: "http://prometheus.internal", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		mutex.Lock()
+		defer mutex.Unlock()
 		requests++
 		expression := request.URL.Query().Get("query")
 		queries[metricNameFromExpression(expression)] = expression
 		if request.URL.Query().Get("step") != "30" {
-			t.Fatalf("unexpected step: %s", request.URL.RawQuery)
+			badStep = request.URL.RawQuery
 		}
 		body := `{"status":"success","data":{"result":[]}}`
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
@@ -31,6 +164,9 @@ func TestTrainingPerformanceUsesMetricFamilySpecificProductionSelectors(t *testi
 	}, "1h")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if badStep != "" {
+		t.Fatalf("unexpected step: %s", badStep)
 	}
 	if requests == 0 || requests > maxTrainingPerformanceQueries {
 		t.Fatalf("query count outside bounds: %d", requests)

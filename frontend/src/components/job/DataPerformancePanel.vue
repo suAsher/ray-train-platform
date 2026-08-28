@@ -58,8 +58,8 @@ function ratioHint(ratio, fallback) {
 
 function cacheValue(summary) {
   const cacheBytes = bytes(summary.cacheBytes)
-  const hits = summary.cacheHitsPerSecond
-  const misses = summary.cacheMissesPerSecond
+  const hits = summary.cacheHitsTotal
+  const misses = summary.cacheMissesTotal
   if (!finite(hits) || !finite(misses) || hits + misses <= 0) return cacheBytes
   const hitRatio = `${decimal((hits / (hits + misses)) * 100, 1)}% 命中`
   return cacheBytes === noData ? hitRatio : `${cacheBytes} · ${hitRatio}`
