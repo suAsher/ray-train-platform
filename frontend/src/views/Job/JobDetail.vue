@@ -227,6 +227,42 @@
             </div>
           </div>
 
+          <section class="space-y-5 rounded-2xl border border-slate-800/80 bg-slate-950/45 p-5" aria-labelledby="training-performance-title">
+            <div class="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <h4 id="training-performance-title" class="text-base font-bold text-white">受管训练性能</h4>
+                <p class="mt-1 text-xs text-slate-400">按 Worker 查看计算、数据、通信与恢复状态；每 30 秒独立刷新。</p>
+              </div>
+              <el-radio-group v-model="selectedPerformanceWindow" size="small" aria-label="训练性能时间范围">
+                <el-radio-button
+                  v-for="item in TRAINING_PERFORMANCE_WINDOWS"
+                  :key="item.value"
+                  :value="item.value"
+                >{{ item.label }}</el-radio-button>
+              </el-radio-group>
+            </div>
+
+            <el-alert
+              v-if="trainingPerformanceError"
+              type="warning"
+              show-icon
+              :closable="false"
+              title="训练性能刷新失败"
+            >
+              {{ trainingPerformanceError }} 已保留上一次成功数据，将在 30 秒后重试。
+            </el-alert>
+
+            <div v-loading="trainingPerformanceLoading" class="space-y-6">
+              <div class="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-800/80 bg-slate-950/70 px-4 py-3 text-xs text-slate-400">
+                <span>采样窗口：<b class="font-mono text-slate-200">{{ trainingPerformance.window || selectedPerformanceWindow }}</b></span>
+                <span>{{ formatDateTime(trainingPerformance.startedAt) }} — {{ formatDateTime(trainingPerformance.endedAt) }}</span>
+              </div>
+              <DataPerformancePanel :summary="trainingPerformance.summary" :diagnosis="trainingPerformanceDiagnosis" />
+              <WorkerTable :workers="trainingPerformance.workers" />
+              <RecoveryTimeline :points="trainingPerformance.recovery" />
+            </div>
+          </section>
+
           <section class="space-y-5 rounded-2xl border border-slate-800/80 bg-slate-950/45 p-5">
             <div class="flex flex-wrap items-start justify-between gap-4">
               <div>
@@ -352,7 +388,11 @@ import CopyBlock from '../../components/CopyBlock.vue'
 import { copyToClipboard } from '../../clipboard'
 import { apiGet, apiPost } from '../../api/client'
 import { fetchJobGPUHistory } from '../../api/jobGpuMetrics'
+import { fetchJobTrainingPerformance } from '../../api/jobTrainingPerformance'
 import JobArtifactBrowser from '../../components/JobArtifactBrowser.vue'
+import DataPerformancePanel from '../../components/job/DataPerformancePanel.vue'
+import RecoveryTimeline from '../../components/job/RecoveryTimeline.vue'
+import WorkerTable from '../../components/job/WorkerTable.vue'
 import GPUTrendChart from '../../components/gpu/GPUTrendChart.vue'
 import { roles, userId } from '../../stores/session'
 import { canCancelJob } from '../../jobPermissions'
@@ -366,6 +406,7 @@ import { cacheQueryForJob } from '../../platformLimits'
 import { equivalentSubmitCommandForJob } from '../../submission'
 import { jobRuntimeDetails, resubmitRuntimeQuery } from '../../trainingEngine.js'
 import { GPU_TIME_WINDOWS, jobMetricChartSeries, jobMetricSummary, normalizeGPUHistory, sampleFreshness } from '../../gpuMetrics'
+import { diagnosePerformance, normalizeTrainingPerformance, TRAINING_PERFORMANCE_WINDOWS } from '../../jobTrainingPerformance.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -388,6 +429,10 @@ const gpuHistory = ref(normalizeGPUHistory(null))
 const gpuHistoryError = ref('')
 const gpuHistoryLoading = ref(false)
 const selectedGPUWindow = ref('1h')
+const trainingPerformance = ref(normalizeTrainingPerformance(null))
+const trainingPerformanceError = ref('')
+const trainingPerformanceLoading = ref(false)
+const selectedPerformanceWindow = ref('1h')
 const gpuHistoryController = createJobGPUHistoryController({
   fetchHistory: fetchJobGPUHistory,
   normalizeHistory: normalizeGPUHistory,
@@ -424,6 +469,7 @@ const learningRate = computed(() => latestMetric(experiment.value, ['learning_ra
 const currentEpoch = computed(() => latestMetric(experiment.value, ['epoch', 'train_epoch']))
 const lossSeries = computed(() => metricSeries(experiment.value, ['train_loss', 'training_loss', 'loss']))
 const lossSparkline = computed(() => sparklinePoints(lossSeries.value?.points, 640, 220))
+const trainingPerformanceDiagnosis = computed(() => diagnosePerformance(trainingPerformance.value.summary))
 const formatMetric = value => value == null ? '—' : Number(value).toLocaleString('zh-CN', { maximumSignificantDigits: 6 })
 const gpuLatestSampleAt = computed(() => {
   let latestTimestamp = ''
@@ -611,6 +657,47 @@ const statusDotClass = (status) => {
   return 'bg-blue-400 animate-pulse'
 }
 
+let performanceActive = false
+let performanceInFlight
+
+const resetTrainingPerformance = () => {
+  performanceInFlight = undefined
+  trainingPerformance.value = normalizeTrainingPerformance(null)
+  trainingPerformanceError.value = ''
+  trainingPerformanceLoading.value = false
+}
+
+const refreshTrainingPerformance = () => {
+  if (!performanceActive) return Promise.resolve()
+  const requestJobId = String(route.params.id)
+  const requestWindow = selectedPerformanceWindow.value
+  const requestKey = JSON.stringify([requestJobId, requestWindow])
+  if (performanceInFlight?.key === requestKey) return performanceInFlight.promise
+
+  const entry = { key: requestKey, promise: null }
+  performanceInFlight = entry
+  trainingPerformanceLoading.value = true
+  entry.promise = Promise.resolve()
+    .then(() => fetchJobTrainingPerformance(requestJobId, requestWindow))
+    .then((payload) => {
+      if (!performanceActive || performanceInFlight !== entry) return
+      if (requestJobId !== String(route.params.id) || requestWindow !== selectedPerformanceWindow.value) return
+      trainingPerformance.value = normalizeTrainingPerformance(payload)
+      trainingPerformanceError.value = ''
+    })
+    .catch((error) => {
+      if (!performanceActive || performanceInFlight !== entry) return
+      if (requestJobId !== String(route.params.id) || requestWindow !== selectedPerformanceWindow.value) return
+      trainingPerformanceError.value = error?.message || '训练性能指标暂时不可用。'
+    })
+    .finally(() => {
+      if (performanceInFlight !== entry) return
+      performanceInFlight = undefined
+      if (performanceActive) trainingPerformanceLoading.value = false
+    })
+  return entry.promise
+}
+
 const refreshLogs = createSingleFlight(async () => {
   const requestJobId = String(route.params.id)
   const initialTail = rawLogs.value.length === 0
@@ -741,8 +828,14 @@ const gpuSummary = computed(() => {
 let refreshTimer
 let logRefreshTimer
 let clockTimer
+let performanceRefreshTimer
 
 watch(selectedGPUWindow, (window) => gpuHistoryController.changeWindow(window))
+
+watch(selectedPerformanceWindow, (window, previousWindow) => {
+  if (window === previousWindow) return
+  refreshTrainingPerformance()
+})
 
 watch(() => route.params.id, (nextJobId, previousJobId) => {
   if (String(nextJobId) === String(previousJobId)) return
@@ -752,27 +845,36 @@ watch(() => route.params.id, (nextJobId, previousJobId) => {
   experiment.value = null
   metricsError.value = ''
   experimentError.value = ''
+  resetTrainingPerformance()
   resetLogState()
   fetchDetail()
   refreshLogs()
+  refreshTrainingPerformance()
   gpuHistoryController.changeJob(nextJobId)
 })
 
 onMounted(() => {
+  performanceActive = true
   fetchDetail()
   refreshLogs()
+  refreshTrainingPerformance()
   gpuHistoryController.start(route.params.id, selectedGPUWindow.value)
   refreshTimer = window.setInterval(fetchDetail, 5000)
   logRefreshTimer = window.setInterval(refreshLogs, 5000)
+  performanceRefreshTimer = window.setInterval(refreshTrainingPerformance, 30000)
   // A running job's elapsed time is measured against now, so the clock has to
   // advance even between detail refreshes.
   clockTimer = window.setInterval(() => { nowTick.value = new Date().toISOString() }, 1000)
 })
 
 onUnmounted(() => {
+  performanceActive = false
+  performanceInFlight = undefined
+  trainingPerformanceLoading.value = false
   gpuHistoryController.stop()
   window.clearInterval(refreshTimer)
   window.clearInterval(logRefreshTimer)
+  window.clearInterval(performanceRefreshTimer)
   window.clearInterval(clockTimer)
 })
 </script>
