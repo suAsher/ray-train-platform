@@ -46,32 +46,57 @@ func TestResolveRejectsDisabledManagedAndCanaryRuntimes(t *testing.T) {
 	})
 }
 
-func TestEffectivePolicyScopesCanaryToExplicitTenants(t *testing.T) {
-	tenants := []string{" tenant-a ", "tenant-a", "", "tenant-b"}
-	policy := NewPolicy(true, true, tenants)
-	tenants[0] = "tenant-c"
+func TestEffectivePolicyScopesManagedAndCanaryToExplicitTenants(t *testing.T) {
+	managedTenants := []string{" tenant-a ", "tenant-a", ""}
+	canaryTenants := []string{"tenant-a", "tenant-b"}
+	policy := NewPolicy(false, true, managedTenants, canaryTenants)
+	managedTenants[0] = "tenant-c"
+	canaryTenants[0] = "tenant-c"
 
-	if effective := policy.EffectiveForTenant(" tenant-a "); !effective.CanaryEnabled {
-		t.Fatalf("allowlisted tenant did not receive canary: %+v", effective)
+	if effective := policy.EffectiveForTenant(" tenant-a "); !effective.ManagedEnabled || !effective.CanaryEnabled {
+		t.Fatalf("managed and canary allowlisted tenant did not receive both capabilities: %+v", effective)
 	}
-	if effective := policy.EffectiveForTenant("tenant-c"); effective.CanaryEnabled {
-		t.Fatalf("caller mutation changed canary policy: %+v", effective)
+	if effective := policy.EffectiveForTenant("tenant-b"); effective.ManagedEnabled || effective.CanaryEnabled {
+		t.Fatalf("canary allowlist bypassed managed permission: %+v", effective)
 	}
-	if effective := NewPolicy(true, true, nil).EffectiveForTenant("tenant-a"); effective.CanaryEnabled {
-		t.Fatalf("empty allowlist enabled canary: %+v", effective)
+	if effective := policy.EffectiveForTenant("tenant-c"); effective.ManagedEnabled || effective.CanaryEnabled {
+		t.Fatalf("caller mutation changed tenant policy: %+v", effective)
 	}
-	if effective := NewPolicy(true, false, []string{"tenant-a"}).EffectiveForTenant("tenant-a"); effective.CanaryEnabled {
+	if effective := NewPolicy(false, true, nil, nil).EffectiveForTenant("tenant-a"); effective.ManagedEnabled || effective.CanaryEnabled {
+		t.Fatalf("empty allowlists enabled managed runtime: %+v", effective)
+	}
+	if effective := NewPolicy(true, true, nil, []string{"tenant-a"}).EffectiveForTenant(""); effective.ManagedEnabled || effective.CanaryEnabled {
+		t.Fatalf("empty tenant inherited global managed permission: %+v", effective)
+	}
+	if effective := NewPolicy(true, false, nil, []string{"tenant-a"}).EffectiveForTenant("tenant-a"); !effective.ManagedEnabled || effective.CanaryEnabled {
 		t.Fatalf("disabled master switch enabled canary: %+v", effective)
 	}
 }
 
-func TestPolicyCloneDefensivelyCopiesCanaryTenants(t *testing.T) {
-	policy := NewPolicy(true, true, []string{"tenant-a"})
+func TestPolicyCloneDefensivelyCopiesManagedAndCanaryTenants(t *testing.T) {
+	policy := NewPolicy(false, true, []string{"tenant-a"}, []string{"tenant-a"})
 	clone := policy.Clone()
+	policy.managedTenants[0] = "tenant-b"
 	policy.canaryTenants[0] = "tenant-b"
 
-	if !clone.EffectiveForTenant("tenant-a").CanaryEnabled || clone.EffectiveForTenant("tenant-b").CanaryEnabled {
+	if !clone.EffectiveForTenant("tenant-a").ManagedEnabled || !clone.EffectiveForTenant("tenant-a").CanaryEnabled || clone.EffectiveForTenant("tenant-b").ManagedEnabled || clone.EffectiveForTenant("tenant-b").CanaryEnabled {
 		t.Fatalf("clone retained mutable tenant storage")
+	}
+}
+
+func TestResolveScopesManagedProductionWithoutAffectingRayDDP(t *testing.T) {
+	managedImage := runtimeImage(domain.RayVersionProduction, domain.TrainingEngineRayTrain)
+	ddpImage := runtimeImage(domain.RayVersionProduction, domain.TrainingEngineRayDDP)
+	policy := NewPolicy(false, false, []string{"tenant-a"}, nil)
+
+	if _, err := Resolve(managedImage, domain.TrainingEngineRayTrain, policy.EffectiveForTenant("tenant-a")); err != nil {
+		t.Fatalf("allowlisted managed submission rejected: %v", err)
+	}
+	if _, err := Resolve(managedImage, domain.TrainingEngineRayTrain, policy.EffectiveForTenant("tenant-b")); err == nil || !strings.Contains(err.Error(), "managed engine is not enabled") {
+		t.Fatalf("non-allowlisted managed submission error=%v", err)
+	}
+	if _, err := Resolve(ddpImage, domain.TrainingEngineRayDDP, policy.EffectiveForTenant("tenant-b")); err != nil {
+		t.Fatalf("ray-ddp was affected by managed allowlist: %v", err)
 	}
 }
 
@@ -79,7 +104,7 @@ func TestResolveCanaryRequiresEffectiveTenantPolicy(t *testing.T) {
 	image := runtimeImage(domain.RayVersionCanary, domain.TrainingEngineRayTrain)
 
 	t.Run("allowlisted", func(t *testing.T) {
-		policy := NewPolicy(true, true, []string{"tenant-a"}).EffectiveForTenant("tenant-a")
+		policy := NewPolicy(true, true, nil, []string{"tenant-a"}).EffectiveForTenant("tenant-a")
 		snapshot, err := Resolve(image, domain.TrainingEngineRayTrain, policy)
 		if err != nil || snapshot.RayVersion != domain.RayVersionCanary {
 			t.Fatalf("snapshot=%+v err=%v", snapshot, err)
@@ -90,9 +115,9 @@ func TestResolveCanaryRequiresEffectiveTenantPolicy(t *testing.T) {
 		name   string
 		policy Policy
 	}{
-		{name: "unscoped master policy", policy: NewPolicy(true, true, []string{"tenant-a"})},
-		{name: "non-allowlisted", policy: NewPolicy(true, true, []string{"tenant-a"}).EffectiveForTenant("tenant-b")},
-		{name: "empty allowlist", policy: NewPolicy(true, true, nil).EffectiveForTenant("tenant-a")},
+		{name: "unscoped master policy", policy: NewPolicy(true, true, nil, []string{"tenant-a"})},
+		{name: "non-allowlisted", policy: NewPolicy(true, true, nil, []string{"tenant-a"}).EffectiveForTenant("tenant-b")},
+		{name: "empty allowlist", policy: NewPolicy(true, true, nil, nil).EffectiveForTenant("tenant-a")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if _, err := Resolve(image, domain.TrainingEngineRayTrain, test.policy); err == nil || !strings.Contains(err.Error(), "restricted to canary") {

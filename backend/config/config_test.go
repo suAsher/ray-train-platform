@@ -105,6 +105,7 @@ func TestLoadRayTrainRuntimeFlagsAreDisabledByDefaultAndExplicitlyConfigurable(t
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("PAT_ENABLED", "false")
 	t.Setenv("RAY_TRAIN_MANAGED_ENABLED", "")
+	t.Setenv("RAY_TRAIN_MANAGED_TENANTS", "")
 	t.Setenv("RAY_TRAIN_CANARY_ENABLED", "")
 	t.Setenv("RAY_TRAIN_CANARY_TENANTS", "")
 
@@ -115,8 +116,8 @@ func TestLoadRayTrainRuntimeFlagsAreDisabledByDefaultAndExplicitlyConfigurable(t
 	if cfg.RayTrainManagedEnabled || cfg.RayTrainCanaryEnabled {
 		t.Fatalf("runtime flags must default off: %+v", cfg)
 	}
-	if len(cfg.RayTrainCanaryTenants) != 0 {
-		t.Fatalf("canary tenant allowlist must default empty: %v", cfg.RayTrainCanaryTenants)
+	if len(cfg.RayTrainManagedTenants) != 0 || len(cfg.RayTrainCanaryTenants) != 0 {
+		t.Fatalf("tenant allowlists must default empty: managed=%v canary=%v", cfg.RayTrainManagedTenants, cfg.RayTrainCanaryTenants)
 	}
 
 	t.Setenv("RAY_TRAIN_MANAGED_ENABLED", "true")
@@ -130,17 +131,21 @@ func TestLoadRayTrainRuntimeFlagsAreDisabledByDefaultAndExplicitlyConfigurable(t
 	}
 }
 
-func TestLoadNormalizesRayTrainCanaryTenants(t *testing.T) {
+func TestLoadNormalizesRayTrainManagedAndCanaryTenants(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("RAY_TRAIN_MANAGED_TENANTS", " tenant-a,tenant-b, tenant-a ,, tenant-b ")
 	t.Setenv("RAY_TRAIN_CANARY_ENABLED", "true")
-	t.Setenv("RAY_TRAIN_CANARY_TENANTS", " tenant-a,tenant-b, tenant-a ,, tenant-b ")
+	t.Setenv("RAY_TRAIN_CANARY_TENANTS", " tenant-a,tenant-a ,, tenant-c ")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("load canary tenants: %v", err)
 	}
-	if strings.Join(cfg.RayTrainCanaryTenants, ",") != "tenant-a,tenant-b" {
+	if strings.Join(cfg.RayTrainManagedTenants, ",") != "tenant-a,tenant-b" {
+		t.Fatalf("unexpected normalized managed tenants: %v", cfg.RayTrainManagedTenants)
+	}
+	if strings.Join(cfg.RayTrainCanaryTenants, ",") != "tenant-a,tenant-c" {
 		t.Fatalf("unexpected normalized canary tenants: %v", cfg.RayTrainCanaryTenants)
 	}
 }

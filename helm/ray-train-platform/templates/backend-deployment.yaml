@@ -269,6 +269,8 @@ spec:
               value: {{ .Values.backend.rayVersion | quote }}
             - name: RAY_TRAIN_MANAGED_ENABLED
               value: {{ .Values.rayTrain.managedEnabled | quote }}
+            - name: RAY_TRAIN_MANAGED_TENANTS
+              value: {{ join "," .Values.rayTrain.managedTenants | quote }}
             - name: RAY_TRAIN_CANARY_ENABLED
               value: {{ .Values.rayTrain.canaryEnabled | quote }}
             - name: RAY_TRAIN_CANARY_TENANTS

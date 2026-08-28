@@ -82,6 +82,7 @@ type Config struct {
 	IDCMountPath                     string
 	RayVersion                       string
 	RayTrainManagedEnabled           bool
+	RayTrainManagedTenants           []string
 	RayTrainCanaryEnabled            bool
 	RayTrainCanaryTenants            []string
 	RayJobClusterSpecField           string
@@ -152,6 +153,7 @@ func Load() (Config, error) {
 		DataSpacesPublicRoot:        envOr("DATA_SPACES_PUBLIC_ROOT", domain.DefaultPublicDataRoot),
 		IDCDataSpacesMountCapacity:  strings.TrimSpace(os.Getenv("IDC_DATA_SPACES_MOUNT_CAPACITY")),
 		RayVersion:                  envOr("RAY_VERSION", "2.35.0"),
+		RayTrainManagedTenants:      splitUniqueList(os.Getenv("RAY_TRAIN_MANAGED_TENANTS")),
 		RayTrainCanaryTenants:       splitUniqueList(os.Getenv("RAY_TRAIN_CANARY_TENANTS")),
 		RayJobClusterSpecField:      envOr("KUBERAY_RAYJOB_CLUSTER_SPEC_FIELD", "rayClusterSpec"),
 		RayJobServiceAccount:        os.Getenv("RAY_JOB_SERVICE_ACCOUNT"),

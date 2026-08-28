@@ -113,7 +113,7 @@ func TestPlatformLimitsExposeEffectiveRuntimeCapabilities(t *testing.T) {
 	})
 
 	t.Run("feature flags enabled", func(t *testing.T) {
-		handler := NewHandler(&fakeJobRepository{}, Options{RuntimePolicy: runtimecatalog.NewPolicy(true, true, []string{"local"})})
+		handler := NewHandler(&fakeJobRepository{}, Options{RuntimePolicy: runtimecatalog.NewPolicy(true, true, nil, []string{"local"})})
 		response := httptest.NewRecorder()
 		limitsRouter(handler, &principal).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/limits", nil))
 
@@ -130,16 +130,18 @@ func TestPlatformLimitsExposeEffectiveRuntimeCapabilities(t *testing.T) {
 	})
 }
 
-func TestPlatformLimitsScopeCanaryCapabilityToCallerTenant(t *testing.T) {
+func TestPlatformLimitsScopeManagedAndCanaryCapabilitiesToCallerTenant(t *testing.T) {
 	handler := NewHandler(&fakeJobRepository{}, Options{
-		RuntimePolicy: runtimecatalog.NewPolicy(true, true, []string{"tenant-a"}),
+		RuntimePolicy: runtimecatalog.NewPolicy(false, true, []string{"tenant-a"}, []string{"tenant-a", "tenant-b"}),
 	})
 	tests := []struct {
-		tenantID   string
-		wantCanary bool
+		tenantID    string
+		wantManaged bool
+		wantCanary  bool
 	}{
-		{tenantID: "tenant-a", wantCanary: true},
-		{tenantID: "tenant-b", wantCanary: false},
+		{tenantID: "tenant-a", wantManaged: true, wantCanary: true},
+		{tenantID: "tenant-b", wantManaged: false, wantCanary: false},
+		{tenantID: "", wantManaged: false, wantCanary: false},
 	}
 
 	for _, test := range tests {
@@ -151,8 +153,9 @@ func TestPlatformLimitsScopeCanaryCapabilityToCallerTenant(t *testing.T) {
 			if response.Code != http.StatusOK {
 				t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
 			}
-			if got := decodePlatformLimits(t, response.Body.Bytes()).Runtime.CanaryEnabled; got != test.wantCanary {
-				t.Fatalf("tenant %q canary=%t want %t", test.tenantID, got, test.wantCanary)
+			runtime := decodePlatformLimits(t, response.Body.Bytes()).Runtime
+			if runtime.ManagedEnabled != test.wantManaged || runtime.CanaryEnabled != test.wantCanary {
+				t.Fatalf("tenant %q runtime=%+v want managed=%t canary=%t", test.tenantID, runtime, test.wantManaged, test.wantCanary)
 			}
 			if strings.Contains(response.Body.String(), "tenant-a") || strings.Contains(response.Body.String(), "tenant-b") {
 				t.Fatalf("limits leaked canary tenant allowlist: %s", response.Body.String())

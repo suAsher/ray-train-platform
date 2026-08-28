@@ -9,6 +9,7 @@ readonly cpu_ha_profile="${root_dir}/deploy/profiles/vke-cpu-ha.yaml"
 
 for expected in \
   '  managedEnabled: false' \
+  '  managedTenants: []' \
   '  canaryEnabled: false' \
   '  canaryTenants: []' \
   '  productionVersion: "2.56.1"' \
@@ -22,12 +23,16 @@ for expected in \
     exit 1
   }
 done
-for expected in RAY_TRAIN_MANAGED_ENABLED RAY_TRAIN_CANARY_ENABLED RAY_TRAIN_CANARY_TENANTS; do
+for expected in RAY_TRAIN_MANAGED_ENABLED RAY_TRAIN_MANAGED_TENANTS RAY_TRAIN_CANARY_ENABLED RAY_TRAIN_CANARY_TENANTS; do
   grep -Fq -- "${expected}" "${chart_dir}/templates/backend-deployment.yaml" || {
     echo "backend feature-gate environment missing: ${expected}" >&2
     exit 1
   }
 done
+grep -Fq -- 'join "," .Values.rayTrain.managedTenants' "${chart_dir}/templates/backend-deployment.yaml" || {
+  echo 'RAY_TRAIN_MANAGED_TENANTS must render as a comma-separated array' >&2
+  exit 1
+}
 grep -Fq -- 'join "," .Values.rayTrain.canaryTenants' "${chart_dir}/templates/backend-deployment.yaml" || {
   echo 'RAY_TRAIN_CANARY_TENANTS must render as a comma-separated array' >&2
   exit 1
@@ -51,8 +56,9 @@ helm template ray-platform "$chart_dir" --namespace ray-train-platform --values 
 helm template ray-platform "$chart_dir" --namespace ray-train-platform --values "$cpu_ha_profile" --set albInstance.enabled=true >"$network_rendered"
 helm template ray-platform "$chart_dir" --namespace ray-train-platform --values "$test_profile" \
   --set rayTrain.managedEnabled=true \
+  --set 'rayTrain.managedTenants={tenant-managed-a,tenant-managed-b}' \
   --set rayTrain.canaryEnabled=true \
-  --set 'rayTrain.canaryTenants={tenant-a,tenant-b}' >"$canary_rendered"
+  --set 'rayTrain.canaryTenants={tenant-canary}' >"$canary_rendered"
 
 require() {
   local file="$1"
@@ -99,10 +105,12 @@ require "$cpu_ha_rendered" 'value: "/mnt/cache2"'
 require "$cpu_ha_rendered" 'value: "200Gi,500Gi,1Ti,2Ti,4Ti,5Ti"'
 require "$cpu_ha_rendered" 'value: "5Ti"'
 require "$test_rendered" 'name: RAY_TRAIN_MANAGED_ENABLED'
+require "$test_rendered" 'name: RAY_TRAIN_MANAGED_TENANTS'
 require "$test_rendered" 'name: RAY_TRAIN_CANARY_ENABLED'
 require "$test_rendered" 'name: RAY_TRAIN_CANARY_TENANTS'
 require "$test_rendered" 'value: "false"'
-require "$canary_rendered" 'value: "tenant-a,tenant-b"'
+require "$canary_rendered" 'value: "tenant-managed-a,tenant-managed-b"'
+require "$canary_rendered" 'value: "tenant-canary"'
 require "$cpu_ha_rendered" 'name: spk-rayjob-release'
 require "$cpu_ha_rendered" 'ingressClassName: raytrain-prod-alb'
 require "$network_rendered" 'kind: ALBInstance'

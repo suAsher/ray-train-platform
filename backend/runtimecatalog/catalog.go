@@ -12,17 +12,27 @@ import (
 type Policy struct {
 	ManagedEnabled bool
 	CanaryEnabled  bool
+	managedTenants []string
 	canaryTenants  []string
-	canaryScoped   bool
+	tenantScoped   bool
 }
 
 // NewPolicy constructs a deployment policy without retaining the caller's
-// tenant slice. Tenant IDs are trimmed, empty entries are dropped and the
+// tenant slices. Tenant IDs are trimmed, empty entries are dropped and the
 // original order is preserved while duplicates are removed.
-func NewPolicy(managedEnabled, canaryEnabled bool, canaryTenants []string) Policy {
-	seen := make(map[string]struct{}, len(canaryTenants))
-	normalized := make([]string, 0, len(canaryTenants))
-	for _, candidate := range canaryTenants {
+func NewPolicy(managedEnabled, canaryEnabled bool, managedTenants, canaryTenants []string) Policy {
+	return Policy{
+		ManagedEnabled: managedEnabled,
+		CanaryEnabled:  canaryEnabled,
+		managedTenants: normalizeTenants(managedTenants),
+		canaryTenants:  normalizeTenants(canaryTenants),
+	}
+}
+
+func normalizeTenants(tenants []string) []string {
+	seen := make(map[string]struct{}, len(tenants))
+	normalized := make([]string, 0, len(tenants))
+	for _, candidate := range tenants {
 		tenantID := strings.TrimSpace(candidate)
 		if tenantID == "" {
 			continue
@@ -33,39 +43,44 @@ func NewPolicy(managedEnabled, canaryEnabled bool, canaryTenants []string) Polic
 		seen[tenantID] = struct{}{}
 		normalized = append(normalized, tenantID)
 	}
-	return Policy{
-		ManagedEnabled: managedEnabled,
-		CanaryEnabled:  canaryEnabled,
-		canaryTenants:  normalized,
-	}
+	return normalized
 }
 
-// Clone returns an independent policy value. The canary allowlist remains
-// private so API responses and downstream callers cannot enumerate it.
+// Clone returns an independent policy value. The allowlists remain private so
+// API responses and downstream callers cannot enumerate them.
 func (policy Policy) Clone() Policy {
 	clone := policy
+	clone.managedTenants = append([]string(nil), policy.managedTenants...)
 	clone.canaryTenants = append([]string(nil), policy.canaryTenants...)
 	return clone
 }
 
-// EffectiveForTenant applies the global canary master switch to one explicit
-// tenant. An empty allowlist, empty tenant or non-member always disables
-// canary. Resolve only trusts a policy that has passed through this method.
+// EffectiveForTenant applies the deployment switches and private allowlists to
+// one explicit tenant. Empty tenant identities always fail closed. Canary also
+// requires that the tenant has managed runtime permission.
 func (policy Policy) EffectiveForTenant(tenantID string) Policy {
 	effective := policy.Clone()
+	effective.ManagedEnabled = false
 	effective.CanaryEnabled = false
-	effective.canaryScoped = true
+	effective.tenantScoped = true
 	tenantID = strings.TrimSpace(tenantID)
-	if !policy.CanaryEnabled || tenantID == "" {
+	if tenantID == "" {
 		return effective
 	}
-	for _, allowed := range policy.canaryTenants {
-		if allowed == tenantID {
-			effective.CanaryEnabled = true
-			break
-		}
+	effective.ManagedEnabled = policy.ManagedEnabled || tenantAllowed(policy.managedTenants, tenantID)
+	if effective.ManagedEnabled && policy.CanaryEnabled && tenantAllowed(policy.canaryTenants, tenantID) {
+		effective.CanaryEnabled = true
 	}
 	return effective
+}
+
+func tenantAllowed(tenants []string, tenantID string) bool {
+	for _, allowed := range tenants {
+		if allowed == tenantID {
+			return true
+		}
+	}
+	return false
 }
 
 // Snapshot is the immutable runtime identity persisted with a submitted job.
@@ -92,7 +107,7 @@ func Resolve(image domain.PlatformImage, requested domain.TrainingEngine, policy
 	if !image.Supports(engine) {
 		return Snapshot{}, fmt.Errorf("image %q does not support %s", image.Name, engine)
 	}
-	if image.RayVersion == domain.RayVersionCanary && (!policy.canaryScoped || !policy.CanaryEnabled) {
+	if image.RayVersion == domain.RayVersionCanary && (!policy.tenantScoped || !policy.CanaryEnabled) {
 		return Snapshot{}, fmt.Errorf("Ray %s is restricted to canary tenants", image.RayVersion)
 	}
 

@@ -507,9 +507,9 @@ func TestSubmitScopesCanaryRuntimeToPrincipalTenant(t *testing.T) {
 		policy     runtimecatalog.Policy
 		wantAccept bool
 	}{
-		{name: "allowlisted tenant", tenantID: "tenant-a", policy: runtimecatalog.NewPolicy(true, true, []string{"tenant-a"}), wantAccept: true},
-		{name: "non-allowlisted tenant", tenantID: "tenant-b", policy: runtimecatalog.NewPolicy(true, true, []string{"tenant-a"})},
-		{name: "empty allowlist", tenantID: "tenant-a", policy: runtimecatalog.NewPolicy(true, true, nil)},
+		{name: "allowlisted tenant", tenantID: "tenant-a", policy: runtimecatalog.NewPolicy(true, true, nil, []string{"tenant-a"}), wantAccept: true},
+		{name: "non-allowlisted tenant", tenantID: "tenant-b", policy: runtimecatalog.NewPolicy(true, true, nil, []string{"tenant-a"})},
+		{name: "empty allowlist", tenantID: "tenant-a", policy: runtimecatalog.NewPolicy(true, true, nil, nil)},
 	}
 
 	for _, test := range tests {
@@ -543,7 +543,7 @@ func TestSubmitScopesCanaryRuntimeToPrincipalTenant(t *testing.T) {
 func TestSubmissionServiceDefensivelyCopiesRuntimePolicy(t *testing.T) {
 	reference := "harbor.example/ray-runtime:canary"
 	tenants := []string{"tenant-a"}
-	policy := runtimecatalog.NewPolicy(true, true, tenants)
+	policy := runtimecatalog.NewPolicy(true, true, nil, tenants)
 	service := NewSubmissionService(&submissionServiceRepository{}, SubmissionServiceOptions{
 		Images: &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{{
 			ID: "canary-image", Name: "Ray canary", Kind: domain.ImageKindTraining, Reference: reference,

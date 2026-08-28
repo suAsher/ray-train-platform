@@ -23,6 +23,7 @@ placement:
 # post-build smoke testing.
 rayTrain:
   managedEnabled: false
+  managedTenants: []
   canaryEnabled: false
   canaryTenants: []
   productionVersion: "2.56.1"

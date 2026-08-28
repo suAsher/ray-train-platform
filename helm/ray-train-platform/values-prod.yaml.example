@@ -22,6 +22,7 @@ global:
 # 验证下列精确 digest。
 rayTrain:
   managedEnabled: false
+  managedTenants: []
   canaryEnabled: false
   canaryTenants: []
   productionVersion: "2.56.1"
