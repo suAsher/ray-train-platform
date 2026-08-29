@@ -20,6 +20,7 @@ _STABLE_OUTPUT_ROOT = pathlib.Path("/mnt/data/output")
 _MANAGED_STORAGE_ROOT = _STABLE_OUTPUT_ROOT / ".platform" / "ray-train"
 _SAFE_JOB_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _PARENT_JOB_ID = re.compile(r"^job-[0-9a-f]{24}$")
+_RAY_JOB_WORKING_DIR_URI = re.compile(r"^gcs://_ray_pkg_[0-9a-f]+(?:\.zip)?$")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -50,6 +51,7 @@ class _RayComponents:
     RunConfig: Any
     FailureConfig: Any
     CheckpointConfig: Any
+    DataConfig: Any
 
 
 class _ArgumentParser(argparse.ArgumentParser):
@@ -72,7 +74,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--parent-job-id", default="")
     parser.add_argument("--storage-path", default="")
     parser.add_argument(
-        "--data-mode", choices=("mount", "cache", "ray-data"), default="mount"
+        "--data-mode", choices=("mount", "cache", "ray-data", "ray-data-stage"), default="mount"
     )
     parser.add_argument("--dataset-format", default="")
     parser.add_argument("--dataset-uri", default="")
@@ -165,7 +167,7 @@ def parse_driver_config(
         raise ValueError("best metric must not contain control characters")
 
     dataset = None
-    if options.data_mode == "ray-data":
+    if options.data_mode in ("ray-data", "ray-data-stage"):
         from .ray_data import DatasetConfig
 
         dataset = DatasetConfig(format=options.dataset_format, uri=options.dataset_uri)
@@ -192,7 +194,7 @@ def parse_driver_config(
 
 
 def _load_ray_components() -> _RayComponents:
-    from ray.train import CheckpointConfig, FailureConfig, RunConfig, ScalingConfig
+    from ray.train import CheckpointConfig, DataConfig, FailureConfig, RunConfig, ScalingConfig
     from ray.train.torch import TorchTrainer
 
     return _RayComponents(
@@ -201,7 +203,25 @@ def _load_ray_components() -> _RayComponents:
         RunConfig=RunConfig,
         FailureConfig=FailureConfig,
         CheckpointConfig=CheckpointConfig,
+        DataConfig=DataConfig,
     )
+
+
+def _validated_worker_runtime_env(runtime_env: Mapping[str, Any]) -> dict[str, str]:
+    """Reuse only the immutable code package created by the enclosing Ray Job."""
+
+    working_dir = str(runtime_env.get("working_dir", "")).strip()
+    if not _RAY_JOB_WORKING_DIR_URI.fullmatch(working_dir):
+        raise ValueError("managed Ray Train requires a Ray Job gcs:// working directory URI")
+    return {"working_dir": working_dir}
+
+
+def _current_job_worker_runtime_env() -> dict[str, str]:
+    import ray
+
+    if not ray.is_initialized():
+        ray.init(address="auto")
+    return _validated_worker_runtime_env(ray.get_runtime_context().runtime_env)
 
 
 def _load_ray_data_dataset(config: Any) -> Any:
@@ -251,6 +271,30 @@ def _train_loop_environment(loop_config: Mapping[str, Any]) -> dict[str, str | N
     }
 
 
+def _stage_ray_data_for_worker(loop_config: Mapping[str, Any]) -> None:
+    if str(loop_config.get("data_mode", "")) != "ray-data-stage":
+        return
+    from ray import train
+    from ray.train import collective
+    from .ray_data import stage_binary_dataset
+
+    context = train.get_context()
+    if context.get_local_rank() == 0:
+        iterator = train.get_dataset_shard("train")
+        if iterator is None:
+            raise RuntimeError("Ray Data staging dataset is unavailable")
+        stage_binary_dataset(
+            iterator,
+            source_root=os.environ.get("PLATFORM_DATASET_SOURCE_PATH", "/mnt/data/input"),
+            cache_paths=os.environ.get("PLATFORM_CACHE_PATHS", ""),
+            copy_workers=int(os.environ.get("RAYTRAIN_RAY_DATA_STAGE_WORKERS", "64")),
+        )
+    collective.barrier()
+    dataset_path = pathlib.Path(os.environ.get("PLATFORM_DATASET_PATH", ""))
+    if not dataset_path.is_dir():
+        raise RuntimeError(f"Ray Data staged view is unavailable: {dataset_path}")
+
+
 def _load_resume_checkpoint() -> Any | None:
     """Load Ray's worker checkpoint lazily so this module remains importable alone."""
 
@@ -258,7 +302,16 @@ def _load_resume_checkpoint() -> Any | None:
         from ray import train
     except ImportError:
         return None
-    return train.get_checkpoint()
+    try:
+        return train.get_checkpoint()
+    except RuntimeError as exc:
+        # Ray 2.56 raises when this helper is exercised outside a Trainer worker
+        # (for example by image smoke tests).  Treat only that documented
+        # context error as "no resume checkpoint"; all real checkpoint errors
+        # must still fail the run.
+        if "cannot be used outside of a Ray Train training function" not in str(exc):
+            raise
+        return None
 
 
 @contextlib.contextmanager
@@ -283,13 +336,19 @@ def _train_loop(loop_config: Mapping[str, Any]) -> None:
         target=str(payload["target"]),
         argv=tuple(str(value) for value in payload["argv"]),
     )
+    _stage_ray_data_for_worker(loop_config)
     with _resume_checkpoint_environment() as resume_environment:
         environment = {**_train_loop_environment(loop_config), **resume_environment}
         with _temporary_environment(environment):
             execute(entrypoint)
 
 
-def build_trainer(config: DriverConfig, *, ray_components: Any | None = None) -> Any:
+def build_trainer(
+    config: DriverConfig,
+    *,
+    ray_components: Any | None = None,
+    worker_runtime_env: Mapping[str, Any] | None = None,
+) -> Any:
     """Construct a deterministic ``TorchTrainer`` without starting it."""
 
     storage_path = _validated_managed_storage(
@@ -297,6 +356,10 @@ def build_trainer(config: DriverConfig, *, ray_components: Any | None = None) ->
         _resolved(_STABLE_OUTPUT_ROOT),
     )
     ray_api = ray_components if ray_components is not None else _load_ray_components()
+    if worker_runtime_env is None:
+        worker_runtime_env = (
+            {} if ray_components is not None else _current_job_worker_runtime_env()
+        )
     workers = config.nodes * config.gpus_per_node
     cpus_per_worker = max(1, config.cpus_per_node // config.gpus_per_node)
     ray_copy_limit = config.keep_latest + config.keep_best
@@ -310,6 +373,7 @@ def build_trainer(config: DriverConfig, *, ray_components: Any | None = None) ->
         "job_id": config.job_id,
         "parent_job_id": config.parent_job_id,
         "storage_path": storage_path,
+        "data_mode": config.data_mode,
     }
     trainer_options = {
         "train_loop_per_worker": _train_loop,
@@ -323,18 +387,24 @@ def build_trainer(config: DriverConfig, *, ray_components: Any | None = None) ->
         "run_config": ray_api.RunConfig(
             name=config.job_id,
             storage_path=storage_path,
+            # Ray Train workers do not automatically inherit the enclosing Ray
+            # Job's code. Reuse its immutable GCS package URI; passing the local
+            # extracted path is rejected by Ray and is not portable to workers.
+            worker_runtime_env=dict(worker_runtime_env),
             failure_config=ray_api.FailureConfig(max_failures=config.max_failures),
             checkpoint_config=ray_api.CheckpointConfig(
                 num_to_keep=ray_copy_limit or None,
             ),
         ),
     }
-    if config.data_mode == "ray-data":
+    if config.data_mode in ("ray-data", "ray-data-stage"):
         if config.dataset is None:
             raise ValueError("ray-data mode requires a dataset config")
         trainer_options["datasets"] = {
             "train": _load_ray_data_dataset(config.dataset)
         }
+        if config.data_mode == "ray-data-stage":
+            trainer_options["dataset_config"] = ray_api.DataConfig(datasets_to_split=[])
     return ray_api.TorchTrainer(**trainer_options)
 
 

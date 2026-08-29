@@ -2,7 +2,7 @@
 
 ![RayTrain 生产架构](architecture/ray-training-platform-production-architecture-v3.svg)
 
-本文描述当前生产基线和受门禁保护的下一代运行时边界。部署和升级请看 [构建与部署](BUILD_AND_DEPLOY.md)，用户操作请看 [用户使用手册](USER_GUIDE.md)，双引擎契约见 [Ray Train 托管指南](RAY_TRAIN_MANAGED_GUIDE.md)。文中的 KubeRay 1.6.2 与 Ray 2.56.1 是目标版本，不代表集群已完成升级或生产验证。
+本文描述当前生产基线和运行时边界。部署和升级请看 [构建与部署](BUILD_AND_DEPLOY.md)，用户操作请看 [用户使用手册](USER_GUIDE.md)，双引擎契约见 [Ray Train 托管指南](RAY_TRAIN_MANAGED_GUIDE.md)。生产集群已部署 KubeRay 1.6.2，并向全部团队开放 Ray Train 2.56.1；既有 Ray 编排 DDP 路径继续兼容。
 
 ## 一图读懂
 
@@ -182,7 +182,7 @@ flowchart TB
 
 当前全量原始数据主要位于公共根的 `labeled/`，索引位于 `0429_pkl/`、`0813_pkl/` 等目录。任务选择公共根时，`PLATFORM_DATASET_PATH=/mnt/data/input` 对应该根；任务选择某个子目录时，该变量只对应所选子目录。代码必须使用相对所选目录的路径，不能把逻辑空间、桶名或所选子目录重复拼接进去。
 
-数据真相在 TOS、FSX 或已登记 IDC 数据源。GPU 节点的 `/data1`、`/data2` NVMe 只能作为按任务隔离的可回收缓存；所有 checkpoint、模型和训练结果必须写入 `PLATFORM_OUTPUT_PATH`（个人持久空间）。当前本地 CSI 缓存开关默认关闭，须在所有 GPU 节点统一完成 StorageClass 验收后再启用。
+数据真相在 TOS、FSX 或已登记 IDC 数据源。GPU 节点的 `/data1`、`/data2` NVMe 只能作为按任务隔离的可回收缓存；所有 checkpoint、模型和训练结果必须写入 `PLATFORM_OUTPUT_PATH`（个人持久空间）。生产环境已支持运行时双 NVMe 缓存；用户可在任务中选择直接读取、兼容预热或 Ray Data 分布式预热，缓存随 Pod 回收，不作为数据唯一副本。
 
 ### NVMe 缓存生效时的链路
 

@@ -34,7 +34,7 @@
         <dd class="mt-1 break-all text-slate-200">{{ outputSummary }}</dd>
       </div>
       <div>
-        <dt class="text-slate-500">运行时缓存</dt>
+        <dt class="text-slate-500">数据读取方式</dt>
         <dd class="mt-1 break-all text-slate-200">{{ cacheSummary }}</dd>
       </div>
       <div v-if="form.trainingEngine === 'ray-train'">
@@ -87,11 +87,17 @@ const outputSummary = computed(() => (props.form.output?.spaceId === 'my-runs'
   : '尚未选择训练结果空间'))
 
 const cacheSummary = computed(() => {
-  if (props.form.cacheMode !== 'runtime') return '已关闭'
+  const labels = {
+    mount: '直接读取 TOS/IDC',
+    cache: 'NVMe 预热',
+    'ray-data-stage': 'Ray Data 分布式预热 + NVMe',
+  }
+  const label = labels[props.form.dataMode] || '直接读取 TOS/IDC'
+  if (props.form.cacheMode !== 'runtime') return label
   const size = String(props.form.cacheSize || '').trim() || '尚未选择容量'
   const mountPath = String(props.cachePolicy.mountPath || '').trim() || '挂载路径未提供'
 	const preload = props.form.cachePreload === 'input' ? ' · 自动预热所选输入' : ''
-  return `运行时 · ${size} · 挂载到 ${mountPath}${preload}`
+  return `${label} · ${size} · 挂载到 ${mountPath}${preload}`
 })
 
 const cliCommand = computed(() => equivalentSubmitCommand(props.form))

@@ -36,9 +36,10 @@ func (engine TrainingEngine) Resolved() TrainingEngine {
 type DataMode string
 
 const (
-	DataModeMount   DataMode = "mount"
-	DataModeCache   DataMode = "cache"
-	DataModeRayData DataMode = "ray-data"
+	DataModeMount        DataMode = "mount"
+	DataModeCache        DataMode = "cache"
+	DataModeRayData      DataMode = "ray-data"
+	DataModeRayDataStage DataMode = "ray-data-stage"
 )
 
 type RayDataFormat string
@@ -46,6 +47,7 @@ type RayDataFormat string
 const (
 	RayDataFormatParquet RayDataFormat = "parquet"
 	RayDataFormatImages  RayDataFormat = "images"
+	RayDataFormatFiles   RayDataFormat = "files"
 )
 
 // RayDataDatasetConfig is an immutable, validated reference to a registered
@@ -60,7 +62,7 @@ type RayDataDatasetConfig struct {
 func NewRayDataDatasetConfig(format RayDataFormat, relativePath string) (RayDataDatasetConfig, error) {
 	format = RayDataFormat(strings.TrimSpace(string(format)))
 	switch format {
-	case RayDataFormatParquet, RayDataFormatImages:
+	case RayDataFormatParquet, RayDataFormatImages, RayDataFormatFiles:
 	default:
 		return RayDataDatasetConfig{}, fmt.Errorf("unsupported Ray Data format %q", format)
 	}
@@ -89,15 +91,22 @@ func NewRayDataDatasetConfig(format RayDataFormat, relativePath string) (RayData
 		return RayDataDatasetConfig{}, fmt.Errorf("Ray Data dataset path must be relative to %s", DataMountInputPath)
 	}
 	for _, segment := range strings.Split(relativePath, "/") {
-		if segment == "." || segment == ".." {
+		if segment == ".." || (segment == "." && !(relativePath == "." && format == RayDataFormatFiles)) {
 			return RayDataDatasetConfig{}, fmt.Errorf("Ray Data dataset path must not contain traversal segments")
 		}
 	}
 	cleaned := path.Clean(relativePath)
-	if cleaned == "." || strings.HasPrefix(cleaned, "../") || cleaned != relativePath {
+	if cleaned == "." && format != RayDataFormatFiles {
+		return RayDataDatasetConfig{}, fmt.Errorf("Ray Data dataset path is required")
+	}
+	if strings.HasPrefix(cleaned, "../") || cleaned != relativePath {
 		return RayDataDatasetConfig{}, fmt.Errorf("Ray Data dataset path must be a clean relative path")
 	}
-	return RayDataDatasetConfig{format: format, uri: path.Join(DataMountInputPath, cleaned)}, nil
+	uri := DataMountInputPath
+	if cleaned != "." {
+		uri = path.Join(DataMountInputPath, cleaned)
+	}
+	return RayDataDatasetConfig{format: format, uri: uri}, nil
 }
 
 func (config RayDataDatasetConfig) Format() RayDataFormat { return config.format }
@@ -112,11 +121,15 @@ func (config RayDataDatasetConfig) Validate() error {
 	if config.IsZero() {
 		return fmt.Errorf("Ray Data dataset config is required")
 	}
-	prefix := DataMountInputPath + "/"
-	if !strings.HasPrefix(config.uri, prefix) {
-		return fmt.Errorf("Ray Data dataset URI must stay below %s", DataMountInputPath)
+	relative := "."
+	if config.uri != DataMountInputPath {
+		prefix := DataMountInputPath + "/"
+		if !strings.HasPrefix(config.uri, prefix) {
+			return fmt.Errorf("Ray Data dataset URI must stay below %s", DataMountInputPath)
+		}
+		relative = strings.TrimPrefix(config.uri, prefix)
 	}
-	validated, err := NewRayDataDatasetConfig(config.format, strings.TrimPrefix(config.uri, prefix))
+	validated, err := NewRayDataDatasetConfig(config.format, relative)
 	if err != nil {
 		return err
 	}
@@ -159,11 +172,15 @@ func (config *RayDataDatasetConfig) UnmarshalJSON(payload []byte) error {
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return fmt.Errorf("decode Ray Data dataset config: trailing JSON content")
 	}
-	prefix := DataMountInputPath + "/"
-	if !strings.HasPrefix(encoded.URI, prefix) {
-		return fmt.Errorf("Ray Data dataset URI must stay below %s", DataMountInputPath)
+	relative := "."
+	if encoded.URI != DataMountInputPath {
+		prefix := DataMountInputPath + "/"
+		if !strings.HasPrefix(encoded.URI, prefix) {
+			return fmt.Errorf("Ray Data dataset URI must stay below %s", DataMountInputPath)
+		}
+		relative = strings.TrimPrefix(encoded.URI, prefix)
 	}
-	validated, err := NewRayDataDatasetConfig(encoded.Format, strings.TrimPrefix(encoded.URI, prefix))
+	validated, err := NewRayDataDatasetConfig(encoded.Format, relative)
 	if err != nil {
 		return err
 	}
@@ -211,8 +228,17 @@ func (policy ManagedTrainingPolicy) ValidateDataMode(mode DataMode) error {
 	if err := policy.Validate(); err != nil {
 		return err
 	}
-	if mode == DataModeRayData {
-		return policy.RayData.Validate()
+	if mode == DataModeRayData || mode == DataModeRayDataStage {
+		if err := policy.RayData.Validate(); err != nil {
+			return err
+		}
+		if mode == DataModeRayDataStage && policy.RayData.Format() != RayDataFormatFiles {
+			return fmt.Errorf("ray-data-stage requires files format")
+		}
+		if mode == DataModeRayData && policy.RayData.Format() == RayDataFormatFiles {
+			return fmt.Errorf("ray-data streaming requires parquet or images format")
+		}
+		return nil
 	}
 	if !policy.RayData.IsZero() {
 		return fmt.Errorf("Ray Data dataset config requires ray-data mode")
@@ -224,7 +250,7 @@ func (policy ManagedTrainingPolicy) ValidateDataMode(mode DataMode) error {
 // cannot be checked while validating an untrusted submission payload. Ray
 // Data reads only from the governed input PVC mounted at its stable path.
 func (policy ManagedTrainingPolicy) ValidateResolvedDataMode(mode DataMode, mounts ResolvedDataSpaceMounts) error {
-	if mode != DataModeRayData {
+	if mode != DataModeRayData && mode != DataModeRayDataStage {
 		return nil
 	}
 	if mounts.Input == nil {

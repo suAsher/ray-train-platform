@@ -272,6 +272,10 @@ func TestJobSpecDataModeValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	stagedFiles, err := NewRayDataDatasetConfig(RayDataFormatFiles, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, test := range []struct {
 		name    string
 		prepare func(*JobSpec)
@@ -307,6 +311,33 @@ func TestJobSpecDataModeValidation(t *testing.T) {
 		{name: "ray data with legacy engine", prepare: func(spec *JobSpec) {
 			spec.DataMode = DataModeRayData
 		}, wantErr: "ray-data requires ray-train"},
+		{name: "ray data staging with managed engine", prepare: func(spec *JobSpec) {
+			spec.TrainingEngine = TrainingEngineRayTrain
+			spec.RayVersion = RayVersionProduction
+			spec.DataMode = DataModeRayDataStage
+			spec.Managed.RayData = stagedFiles
+			spec.Cache = CacheRequest{Mode: CacheModeRuntime, Size: "200Gi"}
+			spec.Input = DataLocation{Space: DataSpacePublic, RelativePath: "datasets/train"}
+		}},
+		{name: "ray data staging rejects a whole data space", prepare: func(spec *JobSpec) {
+			spec.TrainingEngine = TrainingEngineRayTrain
+			spec.RayVersion = RayVersionProduction
+			spec.DataMode = DataModeRayDataStage
+			spec.Managed.RayData = stagedFiles
+			spec.Cache = CacheRequest{Mode: CacheModeRuntime, Size: "200Gi"}
+			spec.Input = DataLocation{Space: DataSpacePublic}
+		}, wantErr: "non-empty input path"},
+		{name: "ray data staging rejects the legacy preloader", prepare: func(spec *JobSpec) {
+			spec.TrainingEngine = TrainingEngineRayTrain
+			spec.RayVersion = RayVersionProduction
+			spec.DataMode = DataModeRayDataStage
+			spec.Managed.RayData = stagedFiles
+			spec.Cache = CacheRequest{Mode: CacheModeRuntime, Size: "200Gi", Preload: CachePreloadInput}
+			spec.Input = DataLocation{Space: DataSpacePublic, RelativePath: "datasets/train"}
+		}, wantErr: "does not support cache preload"},
+		{name: "ray data staging with legacy engine", prepare: func(spec *JobSpec) {
+			spec.DataMode = DataModeRayDataStage
+		}, wantErr: "ray-data-stage requires ray-train"},
 		{name: "cache with runtime input preload", prepare: func(spec *JobSpec) {
 			spec.DataMode = DataModeCache
 			spec.Cache = CacheRequest{Mode: CacheModeRuntime, Size: "200Gi", Preload: CachePreloadInput}

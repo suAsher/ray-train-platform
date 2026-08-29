@@ -290,6 +290,44 @@ func TestRayDataSubmissionRequiresResolvedGovernedInputBeforePersistence(t *test
 	}
 }
 
+func TestRayDataStagePendingInputDoesNotProvisionOrPersistIdentity(t *testing.T) {
+	image, spec := rayDataSubmissionFixture(t)
+	files, err := domain.NewRayDataDatasetConfig(domain.RayDataFormatFiles, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec.DataMode = domain.DataModeRayDataStage
+	spec.Managed.RayData = files
+	spec.Input = domain.DataLocation{Space: domain.DataSpaceTeamShared, RelativePath: "datasets/train"}
+
+	repository := &submissionServiceRepository{}
+	tenantRuntimeEnsureCalls := 0
+	dataSpaceEnsureCalls := 0
+	service := NewSubmissionService(repository, SubmissionServiceOptions{
+		Images:        &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{image}}},
+		RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true}, LocalCache: rayDataLocalCachePolicy(),
+		DataSpaces: &fakeDataSpaceStore{bindings: []domain.DataMountBinding{{
+			ID: "team", TenantID: "tenant-a", Scope: domain.DataMountScopeTenant,
+			SpaceID: domain.DataSpaceTeamShared, ClaimName: "data-team-a", ReadOnly: true, Status: domain.DataMountBindingPending,
+		}}},
+		DataSpacesEnabled:   true,
+		EnsureTenantRuntime: func(context.Context, string, string, string, string) error { tenantRuntimeEnsureCalls++; return nil },
+		EnsureDataSpaces:    func(context.Context, auth.Principal) error { dataSpaceEnsureCalls++; return nil },
+		NewID:               func() (string, error) { return "job-ray-data-stage-pending", nil },
+	})
+
+	job, submitErr := service.Submit(context.Background(), SubmissionInput{
+		Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+		Spec:      spec, Origin: domain.SubmissionOriginPortal,
+	})
+	if job != nil || !errors.Is(submitErr, ErrSubmissionDataMountNotReady) {
+		t.Fatalf("pending stage input returned job=%+v err=%v", job, submitErr)
+	}
+	if tenantRuntimeEnsureCalls != 0 || dataSpaceEnsureCalls != 0 || repository.identityCalls != 0 || repository.createCalls != 0 {
+		t.Fatalf("pending stage input crossed side-effect boundary: runtime=%d spaces=%d identity=%d creates=%d", tenantRuntimeEnsureCalls, dataSpaceEnsureCalls, repository.identityCalls, repository.createCalls)
+	}
+}
+
 func TestRayDataSubmissionRequiresDualNVMeCapabilityBeforePersistence(t *testing.T) {
 	image, spec := rayDataSubmissionFixture(t)
 	spec.Input = domain.DataLocation{Space: domain.DataSpaceTeamShared, RelativePath: "datasets/train"}

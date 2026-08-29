@@ -92,6 +92,11 @@ const helpText = `spk-rayjob — 分布式训练任务命令行客户端
 训练引擎：
   --engine ray-ddp    默认；兼容现有 Actor + torchrun 单机/多机 DDP
   --engine ray-train  Ray Train 托管 workers、故障恢复和 Checkpoint；仅在平台开启后可用
+  --data-mode mount            直接读取已授权数据挂载
+  --data-mode cache            使用现有 NVMe 预热器
+  --data-mode ray-data-stage   Ray Data 分布式读取并生成双 NVMe 本地视图
+  --data-mode ray-data --ray-data-format images --ray-data-path images/train
+                              直接把 Parquet/图片数据分片交给用户的 Ray Data 训练代码
   --max-failures 2                 ray-train Worker 最大恢复次数（0-10）
   --checkpoint-every-epochs 1      ray-train 每隔多少 Epoch 保存 Checkpoint
   --checkpoint-keep-latest 3       ray-train 保留最近 Checkpoint 数
@@ -310,6 +315,7 @@ func runInit(arguments []string, stdout io.Writer) error {
 	image := set.String("image", "", "catalogued training image with an explicit tag or sha256 digest")
 	entrypoint := set.String("entrypoint", "python train.py", "training command, without torchrun")
 	engine := set.String("engine", string(domain.TrainingEngineRayDDP), "training engine: ray-ddp or ray-train")
+	dataMode := set.String("data-mode", "", "data mode: mount, cache, ray-data-stage, ray-data")
 	gpus := set.Int("gpus-per-worker", 1, "GPUs per worker")
 	workers := set.Int("workers", 1, "worker replicas")
 	if err := set.Parse(arguments); err != nil || set.NArg() != 0 {
@@ -318,6 +324,13 @@ func runInit(arguments []string, stdout io.Writer) error {
 	resolvedEngine, err := parseTrainingEngine(*engine)
 	if err != nil {
 		return err
+	}
+	resolvedDataMode, err := parseDataMode(*dataMode, projectCache{})
+	if err != nil {
+		return err
+	}
+	if (resolvedDataMode == domain.DataModeRayData || resolvedDataMode == domain.DataModeRayDataStage) && resolvedEngine != domain.TrainingEngineRayTrain {
+		return fmt.Errorf("%s 需要 --engine ray-train", resolvedDataMode)
 	}
 	jobName := sanitizeJobName(*name)
 	if jobName == "" {
@@ -329,7 +342,7 @@ func runInit(arguments []string, stdout io.Writer) error {
 	}
 	starter := project{
 		Name: jobName, Image: strings.TrimSpace(*image), Entrypoint: strings.TrimSpace(*entrypoint),
-		Engine:  string(resolvedEngine),
+		Engine: string(resolvedEngine), DataMode: string(resolvedDataMode),
 		Workers: *workers, GPUsPerWorker: *gpus, CPUPerWorker: 8, MemoryPerWorker: "32Gi",
 		ExecutionMode: string(execution.Mode), Output: projectLocation{Path: jobName},
 	}
@@ -353,6 +366,7 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	image := set.String("image", "", "catalogued training image with an explicit tag or sha256 digest")
 	entrypoint := set.String("entrypoint", "", "shell command to run")
 	engine := set.String("engine", string(domain.TrainingEngineRayDDP), "training engine: ray-ddp or ray-train")
+	dataMode := set.String("data-mode", "", "data mode: mount, cache, ray-data-stage, ray-data")
 	maxFailures := set.Int("max-failures", 2, "ray-train worker recovery limit (0-10)")
 	checkpointEveryEpochs := set.Int("checkpoint-every-epochs", 1, "ray-train checkpoint interval in epochs")
 	checkpointKeepLatest := set.Int("checkpoint-keep-latest", 3, "ray-train latest checkpoint retention")
@@ -365,6 +379,8 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	cacheMode := set.String("cache-mode", "", "cache mode: off, runtime")
 	cacheSize := set.String("cache-size", "", "runtime cache size allowed by the platform")
 	cachePreload := set.String("cache-preload", "", "automatic cache preload: input")
+	rayDataFormat := set.String("ray-data-format", "", "Ray Data streaming format: parquet or images")
+	rayDataPath := set.String("ray-data-path", "", "path relative to the selected input")
 	inputSpace := set.String("input-space", "", "logical input data space")
 	inputPath := set.String("input-path", "", "path relative to the input data space")
 	checkpointSpace := set.String("checkpoint-space", "", "logical checkpoint data space")
@@ -386,9 +402,10 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	}
 	provided := providedFlags(set)
 	resolved := defaults.merge(submitOverrides{
-		Name: *name, Image: *image, Entrypoint: *entrypoint, Engine: *engine, Workers: *workers, GPUsPerWorker: *gpus,
+		Name: *name, Image: *image, Entrypoint: *entrypoint, Engine: *engine, DataMode: *dataMode, Workers: *workers, GPUsPerWorker: *gpus,
 		CPUPerWorker: *cpu, MemoryPerWorker: *memory, ExecutionMode: *executionMode,
 		Cache:                projectCache{Mode: *cacheMode, Size: *cacheSize, Preload: *cachePreload},
+		RayData:              projectRayData{Format: *rayDataFormat, Path: *rayDataPath},
 		Input:                projectLocation{Space: *inputSpace, Path: *inputPath},
 		Checkpoint:           projectLocation{Space: *checkpointSpace, Path: *checkpointPath},
 		Output:               projectLocation{Path: *outputPath},
@@ -396,6 +413,7 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 		providedImage:        provided["image"],
 		providedEntrypoint:   provided["entrypoint"],
 		providedEngine:       provided["engine"],
+		providedDataMode:     provided["data-mode"],
 		providedWorkers:      provided["workers"],
 		providedGPUs:         provided["gpus-per-worker"],
 		providedCPU:          provided["cpu-per-worker"],
@@ -404,10 +422,19 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 		providedCacheMode:    provided["cache-mode"],
 		providedCacheSize:    provided["cache-size"],
 		providedCachePreload: provided["cache-preload"],
+		providedRayData:      provided["ray-data-format"] || provided["ray-data-path"],
 		providedInput:        provided["input-space"] || provided["input-path"],
 		providedCheckpoint:   provided["checkpoint-space"] || provided["checkpoint-path"],
 		providedOutput:       provided["output-path"],
 	})
+	if resolved.DataMode == string(domain.DataModeRayDataStage) {
+		if strings.TrimSpace(resolved.Cache.Mode) == "" {
+			resolved.Cache.Mode = string(domain.CacheModeRuntime)
+		}
+		// The distributed Ray Data stage replaces the legacy init-container
+		// preloader.  Clear stale project defaults when a user switches modes.
+		resolved.Cache.Preload = ""
+	}
 	cacheDraft, err := newProjectCacheDraft(resolved.Cache)
 	if err != nil {
 		return err
@@ -452,6 +479,7 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 		return err
 	}
 	if draft.spec.TrainingEngine == domain.TrainingEngineRayTrain {
+		managedPolicy.RayData = draft.spec.Managed.RayData
 		draft.spec.Managed = managedPolicy
 	}
 	var archive Archive
@@ -700,9 +728,19 @@ func (value project) jobSpec() (domain.JobSpec, error) {
 	if err != nil {
 		return domain.JobSpec{}, err
 	}
+	dataMode, err := parseDataMode(value.DataMode, value.Cache)
+	if err != nil {
+		return domain.JobSpec{}, err
+	}
+	if (dataMode == domain.DataModeRayData || dataMode == domain.DataModeRayDataStage) && engine != domain.TrainingEngineRayTrain {
+		return domain.JobSpec{}, fmt.Errorf("%s 需要 --engine ray-train", dataMode)
+	}
 	input, err := commandDataLocation(value.Input.Space, value.Input.Path, "input")
 	if err != nil {
 		return domain.JobSpec{}, err
+	}
+	if dataMode == domain.DataModeRayDataStage && (input.Space == "" || strings.TrimSpace(input.RelativePath) == "") {
+		return domain.JobSpec{}, errors.New("ray-data-stage requires a governed input data space with a non-empty input path")
 	}
 	checkpoint, err := commandDataLocation(value.Checkpoint.Space, value.Checkpoint.Path, "checkpoint")
 	if err != nil {
@@ -732,6 +770,7 @@ func (value project) jobSpec() (domain.JobSpec, error) {
 	spec := domain.JobSpec{
 		Name: strings.TrimSpace(value.Name), Image: strings.TrimSpace(value.Image),
 		TrainingEngine: engine,
+		DataMode:       dataMode,
 		Entrypoint:     domain.Entrypoint{Command: []string{"/bin/sh", "-lc", strings.TrimSpace(value.Entrypoint)}},
 		Execution:      execution,
 		Resources:      domain.Resources{WorkerReplicas: workers, GPUsPerWorker: gpus, CPUPerWorker: cpu, MemoryPerWorker: memory},
@@ -745,6 +784,23 @@ func (value project) jobSpec() (domain.JobSpec, error) {
 	}
 	if engine == domain.TrainingEngineRayTrain {
 		spec.Managed = defaultManagedTrainingPolicy()
+		if dataMode == domain.DataModeRayDataStage {
+			rayData, rayDataErr := domain.NewRayDataDatasetConfig(domain.RayDataFormatFiles, ".")
+			if rayDataErr != nil {
+				return domain.JobSpec{}, rayDataErr
+			}
+			spec.Managed.RayData = rayData
+		}
+		if dataMode == domain.DataModeRayData {
+			rayData, rayDataErr := domain.NewRayDataDatasetConfig(
+				domain.RayDataFormat(strings.TrimSpace(value.RayData.Format)),
+				strings.TrimSpace(value.RayData.Path),
+			)
+			if rayDataErr != nil {
+				return domain.JobSpec{}, rayDataErr
+			}
+			spec.Managed.RayData = rayData
+		}
 	}
 	return spec, nil
 }

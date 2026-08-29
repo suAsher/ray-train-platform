@@ -108,6 +108,48 @@ test('managed engine is opt-in and carries managed recovery and checkpoint polic
   assert.deepEqual(form, before)
 })
 
+test('Ray Data staging is explicit, uses the selected input root, and keeps init preload disabled', () => {
+  const spec = buildJobSpec({
+    ...baseForm(),
+    trainingEngine: 'ray-train',
+    maxFailures: 2,
+    checkpointEveryEpochs: 1,
+    checkpointKeepLatest: 3,
+    checkpointKeepBest: 1,
+    dataMode: 'ray-data-stage',
+    cacheMode: 'runtime',
+    cacheSize: '200Gi',
+    cachePreload: '',
+    input: { spaceId: 'public', relativePath: 'labeled' },
+  }, cacheLimits())
+
+  assert.equal(spec.dataMode, 'ray-data-stage')
+  assert.deepEqual(spec.cache, { mode: 'runtime', size: '200Gi' })
+  assert.deepEqual(spec.managed.rayData, { format: 'files', uri: '/mnt/data/input' })
+})
+
+test('Ray Data staging rejects the compatibility engine before submit', () => {
+  assert.throws(() => buildJobSpec({
+    ...baseForm(),
+    trainingEngine: 'ray-ddp',
+    dataMode: 'ray-data-stage',
+    cacheMode: 'runtime',
+    cacheSize: '200Gi',
+    input: { spaceId: 'public', relativePath: 'labeled' },
+}, cacheLimits()), /Ray Train/)
+})
+
+test('Ray Data staging rejects a whole governed space without a dataset path', () => {
+  assert.throws(() => buildJobSpec({
+    ...baseForm(),
+    trainingEngine: 'ray-train',
+    dataMode: 'ray-data-stage',
+    cacheMode: 'runtime',
+    cacheSize: '200Gi',
+    input: { spaceId: 'public', relativePath: '' },
+  }, cacheLimits()), /具体的数据集子目录/)
+})
+
 test('legacy DDP payload omits managed policy even when stale managed fields are present', () => {
   const spec = buildJobSpec({
     ...baseForm(),

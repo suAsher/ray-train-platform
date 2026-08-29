@@ -110,9 +110,9 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 		return nil, fmt.Errorf("local cache: %w", err)
 	}
 	cacheRequest := job.Spec.Cache
-	if job.Spec.DataMode == domain.DataModeRayData {
+	if job.Spec.DataMode == domain.DataModeRayData || job.Spec.DataMode == domain.DataModeRayDataStage {
 		if cacheRequest.Preload != "" {
-			return nil, fmt.Errorf("ray-data mode does not support cache preload")
+			return nil, fmt.Errorf("%s mode does not support cache preload", job.Spec.DataMode)
 		}
 		if cacheRequest.Mode == "" || cacheRequest.Mode == domain.CacheModeOff {
 			cacheRequest = domain.CacheRequest{Mode: domain.CacheModeRuntime, Size: options.LocalCache.DefaultSize}
@@ -326,7 +326,7 @@ func trainingEntrypoint(spec domain.JobSpec) []string {
 	if spec.DataMode != "" {
 		launcher = append(launcher, "--data-mode", string(spec.DataMode))
 	}
-	if spec.DataMode == domain.DataModeRayData {
+	if spec.DataMode == domain.DataModeRayData || spec.DataMode == domain.DataModeRayDataStage {
 		launcher = append(launcher,
 			"--dataset-format", string(spec.Managed.RayData.Format()),
 			"--dataset-uri", spec.Managed.RayData.URI(),
@@ -685,14 +685,14 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, tenantID 
 		}
 	}
 	if mountData && options.LocalCache.runtime {
-		dualCacheDevices := !head || jobSpec.DataMode == domain.DataModeRayData
+		dualCacheDevices := !head || jobSpec.DataMode == domain.DataModeRayData || jobSpec.DataMode == domain.DataModeRayDataStage
 		volumeMounts, volumes = appendLocalCache(volumeMounts, volumes, options.LocalCache, dualCacheDevices)
 		cachePaths := options.LocalCache.MountPathData1
 		if dualCacheDevices {
 			cachePaths += ":" + options.LocalCache.MountPathData2
 		}
 		spillDirectories := []string{path.Join(options.LocalCache.MountPathData1, "ray-spill", "objects")}
-		if jobSpec.DataMode == domain.DataModeRayData {
+		if jobSpec.DataMode == domain.DataModeRayData || jobSpec.DataMode == domain.DataModeRayDataStage {
 			spillDirectories = append(spillDirectories, path.Join(options.LocalCache.MountPathData2, "ray-spill", "objects"))
 		}
 		env = append(
@@ -713,6 +713,12 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, tenantID 
 		env = setEnvironmentValue(env, "PLATFORM_DATASET_PATH", path.Join(options.LocalCache.MountPathData1, "dataset-view"))
 		env = setEnvironmentValue(env, "PLATFORM_CACHE_PRELOAD", string(domain.CachePreloadInput))
 	}
+	if mountData && !head && options.LocalCache.runtime && jobSpec.DataMode == domain.DataModeRayDataStage {
+		sourcePath := environmentValue(env, "PLATFORM_DATASET_PATH")
+		env = setEnvironmentValue(env, "PLATFORM_DATASET_SOURCE_PATH", sourcePath)
+		env = setEnvironmentValue(env, "PLATFORM_DATASET_PATH", path.Join(options.LocalCache.MountPathData1, "dataset-view"))
+		env = setEnvironmentValue(env, "PLATFORM_CACHE_PRELOAD", string(domain.DataModeRayDataStage))
+	}
 	container := map[string]any{
 		"name":            containerName,
 		"image":           image,
@@ -723,7 +729,17 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, tenantID 
 		"volumeMounts":    volumeMounts,
 		"securityContext": map[string]any{"allowPrivilegeEscalation": false, "capabilities": map[string]any{"drop": []any{"ALL"}}},
 	}
-	if jobSpec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain && (containerName == "ray-head" || containerName == "ray-worker") {
+	if jobSpec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain && containerName == "ray-head" {
+		// Once a container declares any ports, KubeRay does not inject its default
+		// head ports. Keep every control endpoint explicit so the operator can
+		// submit the RayJob and the platform can proxy the dashboard.
+		container["ports"] = []any{
+			map[string]any{"name": "gcs", "containerPort": int64(6379), "protocol": "TCP"},
+			map[string]any{"name": "dashboard", "containerPort": int64(8265), "protocol": "TCP"},
+			map[string]any{"name": "client", "containerPort": int64(10001), "protocol": "TCP"},
+			map[string]any{"name": "metrics", "containerPort": int64(8080), "protocol": "TCP"},
+		}
+	} else if jobSpec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain && containerName == "ray-worker" {
 		container["ports"] = []any{map[string]any{"name": "metrics", "containerPort": int64(8080), "protocol": "TCP"}}
 	}
 	podSpec := map[string]any{

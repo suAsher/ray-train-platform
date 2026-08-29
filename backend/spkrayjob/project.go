@@ -19,6 +19,22 @@ func parseTrainingEngine(value string) (domain.TrainingEngine, error) {
 	return engine, nil
 }
 
+func parseDataMode(value string, cache projectCache) (domain.DataMode, error) {
+	mode := domain.DataMode(strings.TrimSpace(value))
+	if mode == "" {
+		if strings.TrimSpace(cache.Preload) == string(domain.CachePreloadInput) {
+			return domain.DataModeCache, nil
+		}
+		return domain.DataModeMount, nil
+	}
+	switch mode {
+	case domain.DataModeMount, domain.DataModeCache, domain.DataModeRayData, domain.DataModeRayDataStage:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("不支持的数据模式 %q；可选值为 mount、cache、ray-data-stage 或 ray-data", value)
+	}
+}
+
 // projectFileName is committed next to the training code. It turns the daily
 // loop into "edit, then run spk-rayjob submit" instead of retyping an approved
 // image reference, GPU layout and data paths on every iteration.
@@ -35,17 +51,24 @@ type projectCache struct {
 	Preload string `json:"preload,omitempty"`
 }
 
+type projectRayData struct {
+	Format string `json:"format,omitempty"`
+	Path   string `json:"path,omitempty"`
+}
+
 type project struct {
 	Name            string          `json:"name,omitempty"`
 	Image           string          `json:"image,omitempty"`
 	Entrypoint      string          `json:"entrypoint,omitempty"`
 	Engine          string          `json:"engine,omitempty"`
+	DataMode        string          `json:"dataMode,omitempty"`
 	Workers         int             `json:"workers,omitempty"`
 	GPUsPerWorker   int             `json:"gpusPerWorker,omitempty"`
 	CPUPerWorker    int64           `json:"cpuPerWorker,omitempty"`
 	MemoryPerWorker string          `json:"memoryPerWorker,omitempty"`
 	ExecutionMode   string          `json:"executionMode,omitempty"`
 	Cache           projectCache    `json:"cache,omitempty"`
+	RayData         projectRayData  `json:"rayData,omitempty"`
 	Input           projectLocation `json:"input,omitempty"`
 	Checkpoint      projectLocation `json:"checkpoint,omitempty"`
 	Output          projectLocation `json:"output,omitempty"`
@@ -59,12 +82,14 @@ type submitOverrides struct {
 	Image           string
 	Entrypoint      string
 	Engine          string
+	DataMode        string
 	Workers         int
 	GPUsPerWorker   int
 	CPUPerWorker    int64
 	MemoryPerWorker string
 	ExecutionMode   string
 	Cache           projectCache
+	RayData         projectRayData
 	Input           projectLocation
 	Checkpoint      projectLocation
 	Output          projectLocation
@@ -73,6 +98,7 @@ type submitOverrides struct {
 	providedImage        bool
 	providedEntrypoint   bool
 	providedEngine       bool
+	providedDataMode     bool
 	providedWorkers      bool
 	providedGPUs         bool
 	providedCPU          bool
@@ -81,6 +107,7 @@ type submitOverrides struct {
 	providedCacheMode    bool
 	providedCacheSize    bool
 	providedCachePreload bool
+	providedRayData      bool
 	providedInput        bool
 	providedCheckpoint   bool
 	providedOutput       bool
@@ -99,6 +126,9 @@ func (base project) merge(overrides submitOverrides) project {
 	}
 	if overrides.providedEngine {
 		merged.Engine = overrides.Engine
+	}
+	if overrides.providedDataMode {
+		merged.DataMode = overrides.DataMode
 	}
 	if overrides.providedWorkers {
 		merged.Workers = overrides.Workers
@@ -127,6 +157,9 @@ func (base project) merge(overrides submitOverrides) project {
 	}
 	if overrides.providedCachePreload {
 		merged.Cache.Preload = overrides.Cache.Preload
+	}
+	if overrides.providedRayData {
+		merged.RayData = overrides.RayData
 	}
 	if overrides.providedInput {
 		merged.Input = overrides.Input
@@ -198,12 +231,14 @@ type starterProject struct {
 	Image           string           `json:"image,omitempty"`
 	Entrypoint      string           `json:"entrypoint,omitempty"`
 	Engine          string           `json:"engine,omitempty"`
+	DataMode        string           `json:"dataMode,omitempty"`
 	Workers         int              `json:"workers,omitempty"`
 	GPUsPerWorker   int              `json:"gpusPerWorker,omitempty"`
 	CPUPerWorker    int64            `json:"cpuPerWorker,omitempty"`
 	MemoryPerWorker string           `json:"memoryPerWorker,omitempty"`
 	ExecutionMode   string           `json:"executionMode,omitempty"`
 	Cache           *projectCache    `json:"cache,omitempty"`
+	RayData         *projectRayData  `json:"rayData,omitempty"`
 	Input           *projectLocation `json:"input,omitempty"`
 	Checkpoint      *projectLocation `json:"checkpoint,omitempty"`
 	Output          *projectLocation `json:"output,omitempty"`
@@ -222,12 +257,19 @@ func newStarterProject(value project) starterProject {
 		}
 		return &cache
 	}
+	optionalRayData := func(config projectRayData) *projectRayData {
+		if config.Format == "" && config.Path == "" {
+			return nil
+		}
+		return &config
+	}
 	return starterProject{
-		Name: value.Name, Image: value.Image, Entrypoint: value.Entrypoint, Engine: value.Engine,
+		Name: value.Name, Image: value.Image, Entrypoint: value.Entrypoint, Engine: value.Engine, DataMode: value.DataMode,
 		Workers: value.Workers, GPUsPerWorker: value.GPUsPerWorker, CPUPerWorker: value.CPUPerWorker,
 		MemoryPerWorker: value.MemoryPerWorker, ExecutionMode: value.ExecutionMode,
-		Cache: optionalCache(value.Cache),
-		Input: optional(value.Input), Checkpoint: optional(value.Checkpoint), Output: optional(value.Output),
+		Cache:   optionalCache(value.Cache),
+		RayData: optionalRayData(value.RayData),
+		Input:   optional(value.Input), Checkpoint: optional(value.Checkpoint), Output: optional(value.Output),
 	}
 }
 
@@ -259,6 +301,7 @@ const projectFileHeader = `# spk-rayjob submission defaults for this repository.
 #   ray-ddp    兼容引擎：Ray Actor 编排 + 平台 torchrun
 #   ray-train  托管引擎：Ray Train workers + 故障恢复/Checkpoint
 # 省略 engine 时保持 ray-ddp 兼容行为；Ray 版本由平台根据镜像固化。
+# dataMode: mount（直读）、cache（NVMe 预热）、ray-data-stage（Ray Data + NVMe）。
 #
 # executionMode:
 #   single_gpu  1 worker x 1 GPU

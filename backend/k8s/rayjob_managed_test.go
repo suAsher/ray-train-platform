@@ -256,16 +256,25 @@ func TestManagedWorkerReceivesDownwardAPIMetricIdentityOnly(t *testing.T) {
 	}
 }
 
-func TestManagedRayPodsExposeNamedMetricsPortWithoutChangingLegacyPods(t *testing.T) {
+func TestManagedRayPodsExposeControlAndMetricsPortsWithoutChangingLegacyPods(t *testing.T) {
 	manifest := managedManifest(t, managedRenderJob(domain.RayVersionProduction))
 	cluster, _, _ := unstructured.NestedMap(manifest.Object, "spec", "rayClusterSpec")
 	headContainers, _, _ := nestedSlice(cluster, "headGroupSpec", "template", "spec", "containers")
 	workers, _, _ := nestedSlice(cluster, "workerGroupSpecs")
 	workerContainers, _, _ := nestedSlice(workers[0].(map[string]any), "template", "spec", "containers")
+	wantPorts := map[string]map[string]int64{
+		"head":   {"gcs": 6379, "dashboard": 8265, "client": 10001, "metrics": 8080},
+		"worker": {"metrics": 8080},
+	}
 	for name, container := range map[string]map[string]any{"head": headContainers[0].(map[string]any), "worker": workerContainers[0].(map[string]any)} {
 		ports, _ := container["ports"].([]any)
-		if len(ports) != 1 || ports[0].(map[string]any)["name"] != "metrics" || ports[0].(map[string]any)["containerPort"] != int64(8080) {
-			t.Fatalf("managed %s has no named Ray metrics port: %#v", name, ports)
+		got := make(map[string]int64, len(ports))
+		for _, raw := range ports {
+			port := raw.(map[string]any)
+			got[port["name"].(string)] = port["containerPort"].(int64)
+		}
+		if !reflect.DeepEqual(got, wantPorts[name]) {
+			t.Fatalf("managed %s ports = %#v, want %#v", name, got, wantPorts[name])
 		}
 	}
 	legacy, err := RenderRayJob(validRenderJob(), testRenderOptions())

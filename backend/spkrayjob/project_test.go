@@ -206,6 +206,44 @@ func TestProjectJobSpecRejectsUnknownEngine(t *testing.T) {
 	}
 }
 
+func TestProjectJobSpecBuildsRayDataNodeLocalStaging(t *testing.T) {
+	value := project{
+		Name: "bevfusion-stage", Image: "registry.example/img@sha256:" + strings.Repeat("6", 64),
+		Entrypoint: "python tools/train.py configs/x.yaml", Engine: "ray-train",
+		DataMode: "ray-data-stage", Workers: 2, GPUsPerWorker: 8,
+		Cache: projectCache{Mode: "runtime", Size: "2Ti"},
+		Input: projectLocation{Space: "public", Path: "labeled/fz-v1"},
+	}
+
+	spec, err := value.jobSpec()
+	if err != nil {
+		t.Fatalf("build staged project spec: %v", err)
+	}
+	if spec.TrainingEngine != domain.TrainingEngineRayTrain || spec.DataMode != domain.DataModeRayDataStage {
+		t.Fatalf("staging must use managed Ray Train: %+v", spec)
+	}
+	if spec.Managed.RayData.Format() != domain.RayDataFormatFiles || spec.Managed.RayData.URI() != domain.DataMountInputPath {
+		t.Fatalf("staging must consume the complete governed input with Ray Data: %+v", spec.Managed.RayData)
+	}
+	if spec.Cache.Mode != domain.CacheModeRuntime || spec.Cache.Size != "2Ti" || spec.Cache.Preload != "" {
+		t.Fatalf("staging must reserve runtime NVMe without the legacy init preloader: %+v", spec.Cache)
+	}
+}
+
+func TestProjectJobSpecRejectsRayDataStagingAtDataSpaceRoot(t *testing.T) {
+	value := project{
+		Name: "unsafe-stage", Image: "registry.example/img@sha256:" + strings.Repeat("6", 64),
+		Entrypoint: "python train.py", Engine: "ray-train", DataMode: "ray-data-stage",
+		Workers: 1, GPUsPerWorker: 1, Cache: projectCache{Mode: "runtime", Size: "200Gi"},
+		Input: projectLocation{Space: "public"},
+	}
+
+	_, err := value.jobSpec()
+	if err == nil || !strings.Contains(err.Error(), "non-empty input path") {
+		t.Fatalf("whole-space staging must be rejected, got %v", err)
+	}
+}
+
 func TestStarterAndHelpExplainOptionalDisposableRuntimeCache(t *testing.T) {
 	root := t.TempDir()
 	if err := writeProject(root, project{Name: "my-training"}); err != nil {

@@ -668,6 +668,19 @@ func (s JobSpec) validateTrainingRuntime() error {
 		if engine != TrainingEngineRayTrain {
 			return fmt.Errorf("ray-data requires ray-train")
 		}
+	case DataModeRayDataStage:
+		if engine != TrainingEngineRayTrain {
+			return fmt.Errorf("ray-data-stage requires ray-train")
+		}
+		if s.Input.Space == "" || strings.TrimSpace(s.Input.RelativePath) == "" {
+			return fmt.Errorf("ray-data-stage requires a governed input data space with a non-empty input path")
+		}
+		if s.Cache.Mode != CacheModeRuntime {
+			return fmt.Errorf("ray-data-stage requires runtime cache")
+		}
+		if s.Cache.Preload != "" {
+			return fmt.Errorf("ray-data-stage does not support cache preload")
+		}
 	default:
 		return fmt.Errorf("unsupported data mode %q", s.DataMode)
 	}

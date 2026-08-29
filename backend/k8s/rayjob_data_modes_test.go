@@ -45,11 +45,19 @@ func managedJobWithDataMode(t *testing.T, mode domain.DataMode) domain.TrainingJ
 		}
 		job.Spec.Managed.RayData = config
 	}
+	if mode == domain.DataModeRayDataStage {
+		config, err := domain.NewRayDataDatasetConfig(domain.RayDataFormatFiles, ".")
+		if err != nil {
+			t.Fatal(err)
+		}
+		job.Spec.Managed.RayData = config
+		job.Spec.Cache = domain.CacheRequest{Mode: domain.CacheModeRuntime, Size: "1Ti"}
+	}
 	return job
 }
 
 func TestEveryDataModeKeepsStableContainerPaths(t *testing.T) {
-	for _, mode := range []domain.DataMode{domain.DataModeMount, domain.DataModeCache, domain.DataModeRayData} {
+	for _, mode := range []domain.DataMode{domain.DataModeMount, domain.DataModeCache, domain.DataModeRayData, domain.DataModeRayDataStage} {
 		t.Run(string(mode), func(t *testing.T) {
 			job := managedJobWithDataMode(t, mode)
 			manifest, err := RenderRayJob(job, runtimeCacheRenderOptions())
@@ -67,7 +75,7 @@ func TestEveryDataModeKeepsStableContainerPaths(t *testing.T) {
 				if env["PLATFORM_CHECKPOINT_PATH"] != domain.DataMountCheckpointPath {
 					t.Fatalf("%s %s changed checkpoint path: %#v", mode, name, env)
 				}
-				if mode != domain.DataModeCache && env["PLATFORM_DATASET_PATH"] != domain.DataMountInputPath {
+				if mode != domain.DataModeCache && mode != domain.DataModeRayDataStage && env["PLATFORM_DATASET_PATH"] != domain.DataMountInputPath {
 					t.Fatalf("%s %s changed governed input path: %#v", mode, name, env)
 				}
 				for _, root := range []string{domain.PublicStorageMountPath, domain.MyStorageMountPath, domain.TeamStorageMountPath} {
@@ -125,6 +133,70 @@ func TestRayDataModeUsesNamedDatasetAndDualNVMeSpilling(t *testing.T) {
 		t.Fatalf("ray-data must not run the cache preloader: %#v", init)
 	}
 	assertGovernedDataMount(t, worker, "platform-data-input", "data-team-a", domain.DataMountInputPath, "datasets/train", true)
+}
+
+func TestRayDataStageUsesNamedBinaryDatasetAndNodeLocalView(t *testing.T) {
+	job := managedJobWithDataMode(t, domain.DataModeRayDataStage)
+	manifest, err := RenderRayJob(job, runtimeCacheRenderOptions())
+	if err != nil {
+		t.Fatalf("render ray-data-stage mode: %v", err)
+	}
+	entrypoint, _, _ := unstructured.NestedString(manifest.Object, "spec", "entrypoint")
+	for _, expected := range []string{
+		"--data-mode ray-data-stage",
+		"--dataset-format files",
+		"--dataset-uri /mnt/data/input",
+	} {
+		if !strings.Contains(entrypoint, expected) {
+			t.Fatalf("managed staging entrypoint missing %q: %q", expected, entrypoint)
+		}
+	}
+	worker := cacheWorkerPodSpec(t, manifest.Object)
+	env := podEnvironment(worker)
+	if env["PLATFORM_DATASET_SOURCE_PATH"] != domain.DataMountInputPath || env["PLATFORM_DATASET_PATH"] != "/mnt/cache/dataset-view" {
+		t.Fatalf("staging paths are not stable: %#v", env)
+	}
+	if init, ok := worker["initContainers"].([]any); ok && len(init) != 0 {
+		t.Fatalf("Ray Data staging must not use the legacy init preloader: %#v", init)
+	}
+	for _, mountPath := range []string{"/mnt/cache", "/mnt/cache2"} {
+		if !podHasMountPath(worker, mountPath) {
+			t.Fatalf("Ray Data staging worker missing %s", mountPath)
+		}
+	}
+}
+
+func TestManagedRayTrainHeadExposesKubeRayControlPorts(t *testing.T) {
+	job := managedJobWithDataMode(t, domain.DataModeRayDataStage)
+	manifest, err := RenderRayJob(job, runtimeCacheRenderOptions())
+	if err != nil {
+		t.Fatalf("render managed Ray Train job: %v", err)
+	}
+	head := cacheHeadPodSpec(t, manifest.Object)
+	containers, _ := head["containers"].([]any)
+	if len(containers) != 1 {
+		t.Fatalf("unexpected head containers: %#v", containers)
+	}
+	container, _ := containers[0].(map[string]any)
+	ports, _ := container["ports"].([]any)
+	want := map[string]int64{
+		"gcs":       6379,
+		"dashboard": 8265,
+		"client":    10001,
+		"metrics":   8080,
+	}
+	got := make(map[string]int64, len(ports))
+	for _, raw := range ports {
+		port, _ := raw.(map[string]any)
+		name, _ := port["name"].(string)
+		value, _ := port["containerPort"].(int64)
+		got[name] = value
+	}
+	for name, value := range want {
+		if got[name] != value {
+			t.Fatalf("managed Ray Train head port %s: got %d, want %d (all ports: %#v)", name, got[name], value, got)
+		}
+	}
 }
 
 func TestMountAndCacheModesKeepLegacyCacheDeviceSemantics(t *testing.T) {

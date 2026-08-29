@@ -1,6 +1,8 @@
 # Ray Train 托管训练使用指南
 
-本文说明如何在同一平台上选择兼容的 **Ray 编排 DDP** 与新的 **Ray Train 托管** 引擎。生产托管运行时目标固定为 **Ray 2.56.1**，Kubernetes 控制器升级目标固定为 **KubeRay 1.6.2**；Ray 2.58.0 只用于显式租户 canary。托管能力默认关闭。本文是发布与验收契约，不代表任一集群已经升级、切换默认版本或完成生产验证。
+本文说明如何在同一平台上选择兼容的 **Ray 编排 DDP** 与 **Ray Train 托管** 引擎。当前生产集群已部署 **KubeRay 1.6.2**，Ray Train 生产运行时固定为 **Ray 2.56.1**，并向所有当前和未来团队开放；Ray 2.58.0 仍只作为关闭状态的 canary 版本。既有 Ray DDP 任务和镜像不会被原地改写。
+
+2026-08-29 的生产验收任务 `job-861f7b92a2acc28ca2317277` 由普通团队用户通过 `spk-rayjob` 提交并成功结束。验收覆盖 KubeRay 自动创建 RayCluster、Ray Train Worker、Ray Data 文件读取、双 NVMe 分布、GPU collective、用户代码随任务上传、个人结果写入和 Portal 数据 API 可见性。该任务是平台通用链路验收，不代表 BEVFusion 已切换到托管镜像。
 
 | 引擎 | CLI 参数 | 适用代码 | 运行语义 |
 | --- | --- | --- | --- |
@@ -18,9 +20,44 @@
 | `RAY_TRAIN_MANAGED_ENABLED=true`，tenant 非空 | 全局允许 | canary 还必须同时满足 `RAY_TRAIN_CANARY_ENABLED=true` 且 tenant 在 `RAY_TRAIN_CANARY_TENANTS` |
 | 全局开关关闭、租户在 managed allowlist `RAY_TRAIN_MANAGED_TENANTS` | 仅该租户允许 | canary 还必须同时满足 canary 开关和 canary allowlist |
 | 全局开关关闭、租户不在 managed allowlist | 拒绝 | 拒绝 |
-| 空 tenant 或空 allowlist | fail closed；不能因空值获得权限 | fail closed |
+| tenant 为空 | fail closed；不能提交托管任务 | fail closed |
+| managed allowlist 为空 | 全局开关开启时允许所有非空团队；全局开关关闭时不授予任何团队 | canary 仍按独立开关与 allowlist 判定 |
 
-Chart 当前保持 `backend.rayVersion: "2.35.0"`，Deployment 通过 `RAY_VERSION` 注入 Ray Jobs API 兼容层；`/ray/api/version` 的 `ray_version` 返回这个配置，而不是写死 2.56.1。Ray 2.56.1 是 managed 镜像和 **Task 18** 的发布目标：只有 Task 18 完成目标环境升级、canary、验收并切换并发布后，才可把相应环境的 API 版本响应验收为 2.56.1。协议字段 `version` 始终是 Ray Jobs API 协议版本 `4`。
+生产发布值为 `RAY_TRAIN_MANAGED_ENABLED=true` 且 managed tenant allowlist 为空，因此所有非空团队都可提交 Ray 2.56.1 托管任务。`/api/v1/limits` 的 `runtime.availableEngines` 应包含 `ray-ddp` 和 `ray-train`，`runtime.productionRayVersion` 应为 `2.56.1`。协议字段 `version` 始终是 Ray Jobs API 协议版本 `4`，不要把它与 Ray 运行时版本混为一谈。
+
+## 数据读取模式
+
+Portal 的运行环境步骤提供三种模式；训练代码始终读取 `PLATFORM_DATASET_PATH`，不需要为缓存改造路径：
+
+| Portal 选项 | CLI `--data-mode` | 行为 | 适用场景 |
+| --- | --- | --- | --- |
+| 直接读取 | `mount` | 直接读取所选 TOS/IDC 挂载 | 大文件、一次性任务、启动速度优先 |
+| NVMe 预热 | `cache` | 每个 Worker 启动前由兼容预热器复制到本地缓存 | 既有 Ray DDP 任务、大量小文件 |
+| Ray Data + NVMe | `ray-data-stage` | Ray Data 分布式枚举并复制到每个训练节点的两块 NVMe，建立稳定本地视图后再启动原 DataLoader | Ray Train 托管、大量小文件、希望看到预热统计 |
+
+`ray-data-stage` 必须选择具体的数据集子目录，禁止选择整个公共、团队或个人根目录，避免误把多 TB 根目录一次性复制到每个节点。两块盘分别挂载为 `/mnt/cache` 与 `/mnt/cache2`，按文件摘要稳定分布；任务结束后临时卷随 Pod 回收，数据真相仍在 TOS/IDC，输出和 checkpoint 始终写持久存储。
+
+CLI 示例：
+
+```bash
+spk-rayjob submit \
+  --engine ray-train \
+  --data-mode ray-data-stage \
+  --image 'harbor.wellspiking.ai/guofeng.su/ray-train-pytorch-ray-train@sha256:e5a526eba5643ec50cb1ef135af8203594c0a78849cc2081056bc5fa352ff26c' \
+  --workers 2 \
+  --gpus-per-worker 8 \
+  --cpu-per-worker 64 \
+  --memory-per-worker 256Gi \
+  --cache-mode runtime \
+  --cache-size 1Ti \
+  --input-space public \
+  --input-path labeled/<具体数据集版本> \
+  --output-path managed-example \
+  --entrypoint 'python train.py --config configs/train.yaml' \
+  --watch
+```
+
+日志中的 `RAYTRAIN_RAY_DATA_STAGE_COMPLETE files=... bytes=... seconds=...` 表示预热完成。之后用户入口看到的 `PLATFORM_DATASET_PATH` 是双 NVMe 本地视图；用户不接触 TOS AK/SK，也不填写节点路径。
 
 ## 代码、镜像与入口契约
 
@@ -202,7 +239,7 @@ for step in range(resume_start_step(state), max_steps):
 
 | 现象 | 含义 | 处理 |
 | --- | --- | --- |
-| 提交被拒绝为功能未启用 | 租户未通过 feature gate | 使用 `--engine ray-ddp`，或由管理员按 canary 流程启用；不要修改已有任务。 |
+| 提交被拒绝为功能未启用 | 全局托管开关被关闭，或目标环境不是当前生产 Profile | 使用 `--engine ray-ddp`，并让管理员核对生产 Profile；不要修改已有任务。 |
 | `PENDING` | 等待 Kueue 准入、配额或节点 | 查看队列原因；不要删除别人的 Workload。 |
 | worker restart / 新 cluster attempt | Ray Train 正在受策略限制地恢复 | 核对 recovery timeline、checkpoint 和首个恢复 step。 |
 | checkpoint incomplete | complete manifest 缺失或校验失败 | 修复持久化路径后新建任务，不得选择不完整 checkpoint。 |
@@ -211,4 +248,4 @@ for step in range(resume_start_step(state), max_steps):
 
 ## 发布与回退边界
 
-管理员先在零训练负载窗口升级并核验 KubeRay 1.6.2，再以租户 canary 启用托管引擎。关闭 `RAY_TRAIN_MANAGED_ENABLED` 只阻止新托管任务，不会、也不得改写运行中的 RayJob。回退时停止新准入，等待或保留现有任务，恢复已备份的控制面版本；不要把运行中任务转换成另一引擎。
+生产环境已经完成 KubeRay 1.6.2 和 Ray Train 2.56.1 验收。以后升级控制面时仍须选择零训练负载窗口，并先走独立 canary。关闭 `RAY_TRAIN_MANAGED_ENABLED` 只阻止新托管任务，不会、也不得改写运行中的 RayJob。回退时停止新准入，等待或保留现有任务，恢复已备份的控制面版本；不要把运行中任务转换成另一引擎。

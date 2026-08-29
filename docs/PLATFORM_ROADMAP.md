@@ -13,7 +13,7 @@
 - Loki、Prometheus/Grafana 和 MLflow 已接入训练日志、基础设施指标和实验记录；
 - 两个 BEVFusion 分支的 2×8 GPU 训练已有可复现验收基线。
 
-这组已验证基线属于兼容的 Ray 编排 DDP。Ray Train 托管代码已经按计划交付，但 `RAY_TRAIN_MANAGED_ENABLED` 默认关闭；Ray 2.56.1 生产运行时、Ray 2.58.0 canary 和 KubeRay 1.6.2 仍需在目标环境按零训练负载流程独立升级、canary 和验收，不在路线图中写成已上线事实。用户契约见 [Ray Train 托管指南](RAY_TRAIN_MANAGED_GUIDE.md)。
+兼容的 Ray 编排 DDP 基线继续保留。生产集群现已部署 KubeRay 1.6.2，Ray Train 2.56.1 已向全部团队开放，并完成通用 Ray Train + Ray Data + 双 NVMe 生产验收；Ray 2.58.0 canary 仍关闭。BEVFusion 等业务镜像是否切换到托管引擎，必须分别做依赖兼容与性能验收，不能由通用链路验收代替。用户契约见 [Ray Train 托管指南](RAY_TRAIN_MANAGED_GUIDE.md)。
 
 ## 交付顺序
 

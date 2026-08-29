@@ -180,7 +180,7 @@ class DocumentationContractTest(unittest.TestCase):
             with self.subTest(stale=stale):
                 self.assertNotIn(stale, guide)
 
-    def test_managed_rollout_matrix_and_runtime_version_are_conditional(self) -> None:
+    def test_managed_rollout_matrix_matches_production_global_enablement(self) -> None:
         guide = RAY_TRAIN_MANAGED_GUIDE.read_text(encoding="utf-8")
         rollout = markdown_section(guide, "## 发布门禁与运行时版本")
         self.assert_section_markers(
@@ -191,15 +191,16 @@ class DocumentationContractTest(unittest.TestCase):
                 "全局开关关闭、租户在 managed allowlist",
                 "全局开关关闭、租户不在 managed allowlist",
                 "canary 还必须同时满足",
-                "空 tenant",
-                'backend.rayVersion: "2.35.0"',
-                "RAY_VERSION",
-                "/ray/api/version",
-                "Task 18",
-                "切换并发布后",
+                "tenant 为空",
+                "managed allowlist 为空",
+                "所有非空团队",
+                "runtime.availableEngines",
+                "runtime.productionRayVersion",
+                "Ray Jobs API 协议版本 `4`",
             ),
         )
-        self.assertNotIn("当前 `/ray/api/version` 固定返回 2.56.1", rollout)
+        self.assertNotIn('backend.rayVersion: "2.35.0"', rollout)
+        self.assertNotIn("Task 18", rollout)
 
     def test_native_managed_output_and_resume_are_server_bound(self) -> None:
         guide = RAY_TRAIN_MANAGED_GUIDE.read_text(encoding="utf-8")
@@ -266,13 +267,14 @@ class DocumentationContractTest(unittest.TestCase):
             ),
         )
 
-    def test_build_guide_does_not_claim_ray_api_has_switched_before_task18(self) -> None:
+    def test_build_guide_records_current_managed_runtime_without_conflating_protocol_version(self) -> None:
         build = BUILD_AND_DEPLOY.read_text(encoding="utf-8")
-        self.assertIn('backend.rayVersion: "2.35.0"', build)
-        self.assertIn("Task 18", build)
-        self.assertIn("RAY_VERSION", build)
-        self.assertIn("只有切换并发布后", build)
-        self.assertNotIn('正确形状为协议字段 `version: "4"`、运行时字段 `ray_version: "2.56.1"`', build)
+        self.assertIn("生产托管运行时为 Ray 2.56.1", build)
+        self.assertIn('协议字段 `version: "4"`', build)
+        self.assertIn("runtime.availableEngines", build)
+        self.assertIn("runtime.productionRayVersion", build)
+        self.assertNotIn('backend.rayVersion: "2.35.0"', build)
+        self.assertNotIn("Task 18", build)
 
     def test_submission_origin_semantics_are_consistent(self) -> None:
         documents = tuple(

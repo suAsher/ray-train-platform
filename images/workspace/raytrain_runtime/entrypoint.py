@@ -88,6 +88,28 @@ def parse_python_entrypoint(argv: Sequence[str]) -> PythonEntrypoint:
     return PythonEntrypoint("path", target, (target, *words[2:]))
 
 
+def _worker_script_path(target: str) -> str:
+    """Find a relative script in Ray's governed working-dir PYTHONPATH.
+
+    Ray Train workers receive the Ray Job package as a runtime environment,
+    but Ray 2.56 does not guarantee that their process cwd changes to that
+    package. The working-dir plugin does prepend the extracted package to
+    ``sys.path``, so use only those interpreter-controlled roots as fallback.
+    """
+
+    direct = pathlib.Path(target)
+    if direct.is_file():
+        return target
+    for raw_root in tuple(sys.path):
+        if not raw_root:
+            continue
+        root = pathlib.Path(raw_root)
+        candidate = root.joinpath(target)
+        if candidate.is_file():
+            return str(candidate.resolve())
+    return target
+
+
 def execute(entrypoint: PythonEntrypoint) -> None:
     """Execute user Python in the current Ray Train worker process."""
 
@@ -96,12 +118,13 @@ def execute(entrypoint: PythonEntrypoint) -> None:
     try:
         sys.argv = list(entrypoint.argv)
         if entrypoint.kind == "path":
-            script_directory = str(pathlib.Path(entrypoint.target).resolve().parent)
+            script_target = _worker_script_path(entrypoint.target)
+            script_directory = str(pathlib.Path(script_target).resolve().parent)
             if sys.path:
                 sys.path[0] = script_directory
             else:
                 sys.path.insert(0, script_directory)
-            runpy.run_path(entrypoint.target, run_name="__main__")
+            runpy.run_path(script_target, run_name="__main__")
         elif entrypoint.kind == "module":
             runpy.run_module(entrypoint.target, run_name="__main__", alter_sys=True)
         else:

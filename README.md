@@ -92,7 +92,7 @@ PLATFORM_CHECKPOINT_PATH  续训时挂载的历史结果目录（可选）
 
 完整命令、参数和 BEVFusion 示例见[多方式提交手册](docs/SUBMIT_GUIDE.md)。
 
-Ray Train 托管生产运行时固定为 Ray 2.56.1，KubeRay 升级目标为 1.6.2，功能门禁默认关闭；这不表示任一线上环境已经升级或完成托管训练验证。入口、代码适配、checkpoint/resume 与性能诊断见 [Ray Train 托管指南](docs/RAY_TRAIN_MANAGED_GUIDE.md)。
+生产集群现已部署 KubeRay 1.6.2，并向全部团队开放 Ray Train 2.56.1。新建任务可在“直接读取 / NVMe 预热 / Ray Data + NVMe”之间选择；既有 Ray DDP 任务与镜像保持兼容。入口、数据模式、代码适配、checkpoint/resume 与验收边界见 [Ray Train 托管指南](docs/RAY_TRAIN_MANAGED_GUIDE.md)。
 
 ## 已验证基线
 

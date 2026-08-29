@@ -44,6 +44,7 @@ export function useJobForm(route, catalogLoaders = defaultCatalogLoaders) {
     workspaceSnapshot: '',
     entrypoint: 'python train.py',
     trainingEngine: normalizeTrainingEngine(route?.query?.trainingEngine),
+    dataMode: String(route?.query?.dataMode || 'mount'),
     ...copiedManagedPolicy,
     parentJobId: String(route?.query?.parentJobId || ''),
     workerReplicas: 1,
@@ -99,6 +100,7 @@ export function useJobForm(route, catalogLoaders = defaultCatalogLoaders) {
       form.cacheMode = normalized.cacheMode
       form.cacheSize = normalized.cacheSize
 		if (normalized.cacheMode !== 'runtime') form.cachePreload = ''
+		if (normalized.cacheMode !== 'runtime' && form.dataMode !== 'mount') form.dataMode = 'mount'
     },
     { deep: true },
   )
@@ -167,6 +169,7 @@ export function useJobForm(route, catalogLoaders = defaultCatalogLoaders) {
     form.cacheMode = copiedCache.cacheMode
     form.cacheSize = copiedCache.cacheSize
 	form.cachePreload = copiedCache.cacheMode === 'runtime' && route?.query?.cachePreload === 'input' ? 'input' : ''
+    form.dataMode = String(route?.query?.dataMode || (form.cachePreload === 'input' ? 'cache' : 'mount'))
     trainingImages.value = imagesResult.status === 'fulfilled' ? imagesResult.value || [] : []
     workspaceSnapshots.value = snapshotsResult.status === 'fulfilled' ? snapshotsResult.value || [] : []
     const preferred = trainingImages.value.find((image) => image.isDefault) || trainingImages.value[0]

@@ -3,6 +3,16 @@ import { MANAGED_POLICY_LIMITS, normalizeTrainingEngine, RAY_TRAIN_ENGINE } from
 const gitCommitPattern = /^[0-9a-f]{7,64}$/i
 const snapshotPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const jobIDPattern = /^job-[0-9a-f]{24}$/
+const dataModes = new Set(['mount', 'cache', 'ray-data', 'ray-data-stage'])
+
+function normalizeDataMode(form) {
+  const requested = String(form.dataMode || '').trim()
+  if (requested) {
+    if (!dataModes.has(requested)) throw new Error('请选择有效的数据读取方式')
+    return requested
+  }
+  return form.cacheMode === 'runtime' && form.cachePreload === 'input' ? 'cache' : 'mount'
+}
 
 export function parseEntrypoint(value) {
   const parts = []
@@ -28,11 +38,13 @@ export function equivalentSubmitCommand(form) {
   ]
   parts.push(`--entrypoint ${shellArg(form.entrypoint || '<启动命令>')}`)
   const trainingEngine = normalizeTrainingEngine(form.trainingEngine)
+  const dataMode = normalizeDataMode(form)
   parts.push(
     `--engine ${shellArg(trainingEngine)}`,
     `--workers ${shellArg(form.workerReplicas)}`,
     `--gpus-per-worker ${shellArg(form.gpusPerWorker)}`,
   )
+  if (dataMode !== 'mount') parts.push(`--data-mode ${shellArg(dataMode)}`)
   if (trainingEngine === RAY_TRAIN_ENGINE) {
     const policy = managedPolicy(form)
     parts.push(
@@ -70,6 +82,7 @@ export function equivalentSubmitCommandForJob(job) {
     name: job?.name || spec.name || '',
     image: spec.image || '',
     trainingEngine: normalizeTrainingEngine(spec.trainingEngine),
+    dataMode: spec.dataMode || (spec.cache?.preload === 'input' ? 'cache' : 'mount'),
     maxFailures: spec.managed?.maxFailures,
     checkpointEveryEpochs: spec.managed?.checkpoint?.everyEpochs,
     checkpointKeepLatest: spec.managed?.checkpoint?.keepLatest,
@@ -92,6 +105,20 @@ export function buildJobSpec(form, platformLimits = {}) {
   }
   const cache = buildCache(form, platformLimits.cache)
   const trainingEngine = normalizeTrainingEngine(form.trainingEngine)
+  const dataMode = normalizeDataMode(form)
+  if ((dataMode === 'ray-data' || dataMode === 'ray-data-stage') && trainingEngine !== RAY_TRAIN_ENGINE) {
+    throw new Error('Ray Data 需要选择 Ray Train 托管引擎')
+  }
+  if (dataMode === 'cache' && (!cache || cache.preload !== 'input')) {
+    throw new Error('NVMe 预热需要选择运行时缓存并开启输入预热')
+  }
+  if (dataMode === 'ray-data-stage' && (!cache || cache.preload)) {
+    throw new Error('Ray Data 分布式预热需要运行时缓存，且不能同时开启旧预热器')
+  }
+  const input = dataLocation(form.input, '训练输入')
+  if (dataMode === 'ray-data-stage' && (!input.space || !input.relativePath)) {
+    throw new Error('Ray Data 分布式预热必须选择具体的数据集子目录，不能选择整个数据空间')
+  }
 
   const spec = {
     name: requiredText(form.name, '任务名称'),
@@ -106,9 +133,10 @@ export function buildJobSpec(form, platformLimits = {}) {
     },
     execution: { mode: executionMode(form) },
     trainingEngine,
+    dataMode,
     // Data locations are logical spaces, never a TOS URI, object key, or
     // PVC. The backend derives the caller's permitted root at submission.
-    input: dataLocation(form.input, '训练输入'),
+    input,
     checkpoint: dataLocation(form.checkpoint, 'Checkpoint 输入'),
     output: outputLocation(form.output),
     queue: '',
@@ -129,7 +157,7 @@ export function buildJobSpec(form, platformLimits = {}) {
 }
 
 function managedPolicy(form) {
-  return {
+  const policy = {
     maxFailures: managedPolicyInteger(form.maxFailures, 'maxFailures'),
     checkpoint: {
       everyEpochs: managedPolicyInteger(form.checkpointEveryEpochs, 'checkpointEveryEpochs'),
@@ -137,6 +165,16 @@ function managedPolicy(form) {
       keepBest: managedPolicyInteger(form.checkpointKeepBest, 'checkpointKeepBest'),
     },
   }
+  const dataMode = normalizeDataMode(form)
+  if (dataMode === 'ray-data-stage') {
+    policy.rayData = { format: 'files', uri: '/mnt/data/input' }
+  } else if (dataMode === 'ray-data') {
+    policy.rayData = {
+      format: requiredText(form.rayDataFormat, 'Ray Data 格式'),
+      uri: requiredText(form.rayDataURI, 'Ray Data 数据路径'),
+    }
+  }
+  return policy
 }
 
 function managedPolicyInteger(value, field) {

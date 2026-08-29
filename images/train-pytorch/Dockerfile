@@ -68,6 +68,8 @@ COPY workspace/raytrain-managed /usr/local/bin/raytrain-managed
 RUN chmod 0755 /usr/local/bin/raytrain-managed \
  && chmod 0755 /usr/local/bin/raytrain-launch \
  && find /usr/local/lib/raytrain-platform/raytrain_runtime -type f -name '*.py' -exec chmod 0644 {} + \
+ && python3 -c "import site, pathlib; pathlib.Path(site.getsitepackages()[0], 'raytrain_platform.pth').write_text('/usr/local/lib/raytrain-platform\\n', encoding='utf-8')" \
+ && python3 -c "import raytrain_runtime, raytrain_runtime.managed_driver, raytrain_runtime.ray_data" \
  && chown -R ray:users /home/ray
 ENV PLATFORM_TRAINING_ENGINE=ray-train
 ENV RAY_TRAIN_V2_ENABLED=1

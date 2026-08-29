@@ -21,6 +21,7 @@ import raytrain_runtime.managed_driver as managed_driver  # noqa: E402
 from raytrain_runtime.managed_driver import (  # noqa: E402
     DriverConfig,
     _train_loop,
+    _validated_worker_runtime_env,
     build_trainer,
     main,
     parse_driver_config,
@@ -263,7 +264,12 @@ class TrainerFactoryTest(unittest.TestCase):
             storage_path=f"/mnt/data/output/.platform/ray-train/{JOB_ID}",
         )
 
-        trainer = build_trainer(config, ray_components=FAKE_RAY)
+        worker_runtime_env = {"working_dir": "gcs://_ray_pkg_0123456789abcdef.zip"}
+        trainer = build_trainer(
+            config,
+            ray_components=FAKE_RAY,
+            worker_runtime_env=worker_runtime_env,
+        )
 
         self.assertIsInstance(trainer, CapturedTrainer)
         scaling = trainer.kwargs["scaling_config"].kwargs
@@ -275,6 +281,10 @@ class TrainerFactoryTest(unittest.TestCase):
         run = trainer.kwargs["run_config"].kwargs
         self.assertEqual(run["name"], JOB_ID)
         self.assertEqual(run["storage_path"], config.storage_path)
+        self.assertEqual(
+            run["worker_runtime_env"],
+            worker_runtime_env,
+        )
         self.assertEqual(run["failure_config"].kwargs["max_failures"], 2)
         checkpoint = run["checkpoint_config"].kwargs
         self.assertEqual(checkpoint["num_to_keep"], 6)
@@ -287,6 +297,18 @@ class TrainerFactoryTest(unittest.TestCase):
         self.assertEqual(loop["keep_best"], 2)
         self.assertEqual(loop["parent_job_id"], PARENT_JOB_ID)
         self.assertEqual(loop["storage_path"], config.storage_path)
+
+    def test_worker_runtime_env_reuses_only_ray_job_package_uri(self):
+        self.assertEqual(
+            _validated_worker_runtime_env(
+                {"working_dir": "gcs://_ray_pkg_0123456789abcdef.zip", "env_vars": {"X": "1"}}
+            ),
+            {"working_dir": "gcs://_ray_pkg_0123456789abcdef.zip"},
+        )
+        for value in ("", "/tmp/code", "file:///tmp/code", "https://example.test/code.zip"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "gcs://"):
+                    _validated_worker_runtime_env({"working_dir": value})
 
     def test_cpu_per_worker_has_floor_of_one(self):
         config = DriverConfig(
@@ -451,6 +473,42 @@ class TrainLoopEnvironmentTest(unittest.TestCase):
             loaded = managed_driver._load_resume_checkpoint()
 
         self.assertIs(loaded, sentinel)
+
+    def test_resume_checkpoint_loader_treats_driver_context_as_no_checkpoint(self):
+        fake_train = types.ModuleType("ray.train")
+
+        def outside_training_function():
+            raise RuntimeError(
+                "`get_checkpoint` cannot be used outside of a Ray Train "
+                "training function."
+            )
+
+        fake_train.get_checkpoint = outside_training_function
+        fake_ray = types.ModuleType("ray")
+        fake_ray.train = fake_train
+
+        with mock.patch.dict(
+            sys.modules, {"ray": fake_ray, "ray.train": fake_train}
+        ):
+            loaded = managed_driver._load_resume_checkpoint()
+
+        self.assertIsNone(loaded)
+
+    def test_resume_checkpoint_loader_preserves_unexpected_runtime_errors(self):
+        fake_train = types.ModuleType("ray.train")
+
+        def broken_checkpoint_backend():
+            raise RuntimeError("checkpoint backend unavailable")
+
+        fake_train.get_checkpoint = broken_checkpoint_backend
+        fake_ray = types.ModuleType("ray")
+        fake_ray.train = fake_train
+
+        with mock.patch.dict(
+            sys.modules, {"ray": fake_ray, "ray.train": fake_train}
+        ):
+            with self.assertRaisesRegex(RuntimeError, "backend unavailable"):
+                managed_driver._load_resume_checkpoint()
 
     def test_checkpoint_paths_are_scoped_by_job_storage(self):
         observed = []

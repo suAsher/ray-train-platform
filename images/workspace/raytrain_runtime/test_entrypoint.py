@@ -113,6 +113,20 @@ class EntrypointTest(unittest.TestCase):
         run_module.assert_called_once_with("package.train", run_name="__main__", alter_sys=True)
         self.assertEqual(sys.argv, original)
 
+    def test_execute_path_finds_ray_worker_working_dir_on_pythonpath(self):
+        original_path = list(sys.path)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            package = pathlib.Path(temporary_directory)
+            (package / "train.py").write_text("VALUE = 1\n", encoding="utf-8")
+            sys.path.insert(0, str(package))
+            try:
+                with mock.patch("raytrain_runtime.entrypoint.runpy.run_path") as run_path:
+                    execute(PythonEntrypoint("path", "train.py", ("train.py",)))
+            finally:
+                sys.path[:] = original_path
+
+        run_path.assert_called_once_with(str((package / "train.py").resolve()), run_name="__main__")
+
     def test_execute_path_supports_sibling_import_and_restores_process_state_on_failure(self):
         module_name = "task9_sibling_helper"
         original_argv = list(sys.argv)

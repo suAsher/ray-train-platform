@@ -604,6 +604,114 @@ entrypoint: python train.py
 	}
 }
 
+func TestSubmitRayDataStageBuildsManagedDatasetAndRuntimeCache(t *testing.T) {
+	root := seedProject(t, `name: ray-data-stage
+entrypoint: python train.py
+engine: ray-train
+workers: 2
+gpusPerWorker: 8
+input:
+  space: public
+  path: labeled/fz-v1
+`)
+	var submitted domain.JobSpec
+	stub := artifactStubHandler(t, func(spec domain.JobSpec) { submitted = spec })
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/limits":
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{
+				"runtime": map[string]any{
+					"availableEngines": []string{"ray-ddp", "ray-train"}, "managedEnabled": true,
+					"productionRayVersion": "2.56.1", "canaryRayVersion": "2.58.0",
+				},
+				"cache": map[string]any{
+					"enabled": true, "modes": []string{"off", "runtime"},
+					"allowedSizes": []string{"2Ti"}, "defaultSize": "2Ti", "maxSize": "5Ti",
+				},
+			})
+			return
+		case "/api/v1/images":
+			writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
+				"name": "Managed", "reference": "harbor.example/managed:2.56.1", "isDefault": true,
+				"rayVersion": "2.56.1", "supportedEngines": []string{"ray-ddp", "ray-train"},
+			}})
+			return
+		}
+		stub(writer, request)
+	}))
+	defer server.Close()
+
+	err := Run(context.Background(), []string{
+		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root,
+		"--data-mode", "ray-data-stage", "--cache-size", "2Ti",
+	}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+	if err != nil {
+		t.Fatalf("submit Ray Data staging job: %v", err)
+	}
+	if submitted.TrainingEngine != domain.TrainingEngineRayTrain || submitted.DataMode != domain.DataModeRayDataStage {
+		t.Fatalf("staged submit lost managed runtime selection: %+v", submitted)
+	}
+	if submitted.Managed.RayData.Format() != domain.RayDataFormatFiles || submitted.Managed.RayData.URI() != domain.DataMountInputPath {
+		t.Fatalf("staged submit lost its governed binary dataset: %+v", submitted.Managed.RayData)
+	}
+	if submitted.Cache != (domain.CacheRequest{Mode: domain.CacheModeRuntime, Size: "2Ti"}) {
+		t.Fatalf("staged submit must use runtime cache without the legacy preloader: %+v", submitted.Cache)
+	}
+}
+
+func TestSubmitRayDataStageClearsInheritedLegacyPreload(t *testing.T) {
+	root := seedProject(t, `name: ray-data-stage-stale-preload
+entrypoint: python train.py
+engine: ray-train
+dataMode: ray-data-stage
+workers: 1
+gpusPerWorker: 1
+cache:
+  mode: runtime
+  size: 2Ti
+  preload: input
+input:
+  space: public
+  path: labeled/fz-v1
+`)
+	var submitted domain.JobSpec
+	stub := artifactStubHandler(t, func(spec domain.JobSpec) { submitted = spec })
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/limits":
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{
+				"runtime": map[string]any{
+					"availableEngines": []string{"ray-ddp", "ray-train"}, "managedEnabled": true,
+					"productionRayVersion": "2.56.1", "canaryRayVersion": "2.58.0",
+				},
+				"cache": map[string]any{
+					"enabled": true, "modes": []string{"off", "runtime"},
+					"allowedSizes": []string{"2Ti"}, "defaultSize": "2Ti", "maxSize": "5Ti",
+				},
+			})
+			return
+		case "/api/v1/images":
+			writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
+				"name": "Managed", "reference": "harbor.example/managed:2.56.1", "isDefault": true,
+				"rayVersion": "2.56.1", "supportedEngines": []string{"ray-ddp", "ray-train"},
+			}})
+			return
+		}
+		stub(writer, request)
+	}))
+	defer server.Close()
+
+	err := Run(context.Background(), []string{
+		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root,
+	}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+	if err != nil {
+		t.Fatalf("submit staging job with stale project preload: %v", err)
+	}
+	if submitted.Cache.Preload != "" {
+		t.Fatalf("staging must clear inherited legacy preload: %+v", submitted.Cache)
+	}
+}
+
 func TestSubmitRuntimeCacheUsesServerDefaultBeforeUpload(t *testing.T) {
 	root := seedProject(t, `name: cache-training
 image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`

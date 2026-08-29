@@ -13,6 +13,9 @@ export function jobFormStepIssues({ step, form, limits, commandWarnings = [] }) 
 	if (form.cachePreload === 'input' && (!String(form.input?.spaceId || '').trim() || !String(form.input?.relativePath || '').trim())) {
 		issues.push('自动预热需要先选择一个具体的数据集子目录，不能选择整个数据空间根目录')
 	}
+	if (form.dataMode === 'ray-data-stage' && (!String(form.input?.spaceId || '').trim() || !String(form.input?.relativePath || '').trim())) {
+		issues.push('Ray Data 分布式预热需要先选择一个具体的数据集子目录')
+	}
   issues.push(...commandWarnings)
   return issues
 }

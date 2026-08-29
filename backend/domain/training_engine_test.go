@@ -83,6 +83,16 @@ func TestRayDataDatasetConfigValidatesStableMountedPaths(t *testing.T) {
 	}
 }
 
+func TestRayDataFileStagingAcceptsTheSelectedInputRoot(t *testing.T) {
+	config, err := NewRayDataDatasetConfig(RayDataFormatFiles, ".")
+	if err != nil {
+		t.Fatalf("create file staging dataset: %v", err)
+	}
+	if config.Format() != RayDataFormatFiles || config.URI() != DataMountInputPath {
+		t.Fatalf("unexpected file staging dataset: format=%q uri=%q", config.Format(), config.URI())
+	}
+}
+
 func TestRayDataDatasetConfigRejectsUnsupportedOrUnsafeInputs(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -119,6 +129,26 @@ func TestManagedPolicyRequiresRayDataConfigOnlyInRayDataMode(t *testing.T) {
 	}
 	if err := policy.ValidateDataMode(DataModeMount); err == nil {
 		t.Fatal("mount mode accepted a Ray Data config")
+	}
+}
+
+func TestManagedPolicyDistinguishesStreamingFromNodeLocalStaging(t *testing.T) {
+	stream, err := NewRayDataDatasetConfig(RayDataFormatImages, "images/train")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := NewRayDataDatasetConfig(RayDataFormatFiles, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (ManagedTrainingPolicy{RayData: stream}).ValidateDataMode(DataModeRayDataStage); err == nil || !strings.Contains(err.Error(), "files") {
+		t.Fatalf("staging accepted a streaming dataset: %v", err)
+	}
+	if err := (ManagedTrainingPolicy{RayData: files}).ValidateDataMode(DataModeRayData); err == nil || !strings.Contains(err.Error(), "parquet or images") {
+		t.Fatalf("streaming accepted a file staging dataset: %v", err)
+	}
+	if err := (ManagedTrainingPolicy{RayData: files}).ValidateDataMode(DataModeRayDataStage); err != nil {
+		t.Fatalf("file staging policy rejected: %v", err)
 	}
 }
 

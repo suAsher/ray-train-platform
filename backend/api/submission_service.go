@@ -224,7 +224,7 @@ func (service *SubmissionService) Submit(ctx context.Context, input SubmissionIn
 			return nil, err
 		}
 	}
-	deferIdentityPersistence := spec.DataMode == domain.DataModeRayData
+	deferIdentityPersistence := spec.DataMode == domain.DataModeRayData || spec.DataMode == domain.DataModeRayDataStage
 	if !deferIdentityPersistence {
 		if err := service.repository.EnsureIdentity(ctx, input.Principal); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrSubmissionIdentityPersist, err)
@@ -548,12 +548,12 @@ func normalizeSubmissionSpec(principal auth.Principal, origin domain.SubmissionO
 	spec.ResolvedStorage = domain.ResolvedStorageMounts{}
 	spec.ResolvedDataMounts = domain.ResolvedDataSpaceMounts{}
 	spec.ResolvedDataRoots = domain.ResolvedDataSpaceRoots{}
-	if spec.DataMode == domain.DataModeRayData {
+	if spec.DataMode == domain.DataModeRayData || spec.DataMode == domain.DataModeRayDataStage {
 		if err := spec.Managed.ValidateDataMode(spec.DataMode); err != nil {
 			return domain.JobSpec{}, fmt.Errorf("%w: %v", ErrSubmissionInvalidJobSpec, err)
 		}
 		if spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain {
-			return domain.JobSpec{}, fmt.Errorf("%w: ray-data requires ray-train", ErrSubmissionInvalidJobSpec)
+			return domain.JobSpec{}, fmt.Errorf("%w: %s requires ray-train", ErrSubmissionInvalidJobSpec, spec.DataMode)
 		}
 	}
 	cache, err := normalizeDataModeCacheRequest(spec.DataMode, spec.Cache, cachePolicy)
@@ -577,14 +577,14 @@ func normalizeSubmissionSpec(principal auth.Principal, origin domain.SubmissionO
 }
 
 func normalizeDataModeCacheRequest(mode domain.DataMode, cache domain.CacheRequest, policy LocalCachePolicy) (domain.CacheRequest, error) {
-	if mode != domain.DataModeRayData {
+	if mode != domain.DataModeRayData && mode != domain.DataModeRayDataStage {
 		return normalizeCacheRequest(cache, policy)
 	}
 	if !policy.Enabled {
-		return domain.CacheRequest{}, fmt.Errorf("ray-data runtime cache capability is disabled")
+		return domain.CacheRequest{}, fmt.Errorf("%s runtime cache capability is disabled", mode)
 	}
 	if !hasDualLocalCacheMounts(policy) {
-		return domain.CacheRequest{}, fmt.Errorf("ray-data requires dual-NVMe runtime cache capability")
+		return domain.CacheRequest{}, fmt.Errorf("%s requires dual-NVMe runtime cache capability", mode)
 	}
 
 	cache.Mode = domain.CacheMode(strings.TrimSpace(string(cache.Mode)))
@@ -594,10 +594,10 @@ func normalizeDataModeCacheRequest(mode domain.DataMode, cache domain.CacheReque
 		cache.Mode = domain.CacheModeRuntime
 	}
 	if cache.Mode != domain.CacheModeRuntime {
-		return domain.CacheRequest{}, fmt.Errorf("ray-data requires runtime cache")
+		return domain.CacheRequest{}, fmt.Errorf("%s requires runtime cache", mode)
 	}
 	if cache.Preload != "" {
-		return domain.CacheRequest{}, fmt.Errorf("ray-data mode does not support cache preload")
+		return domain.CacheRequest{}, fmt.Errorf("%s mode does not support cache preload", mode)
 	}
 	return normalizeCacheRequest(cache, policy)
 }
