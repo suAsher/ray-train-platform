@@ -2,6 +2,8 @@
 
 本手册从一份全新的 BEVFusion checkout 开始，完成代码改造、数据预检、1 卡检查、2×8 卡训练、日志查看、Ray Dashboard、Checkpoint 和断点续训。
 
+本文保留的是已经验证的 **Ray 编排 DDP**（`--engine ray-ddp`）流程。Ray Train 托管需要额外的 MMCV Hook 和 checkpoint/report 适配，见 [Ray Train 托管指南](RAY_TRAIN_MANAGED_GUIDE.md)。本文不声称目标集群已经升级到 KubeRay 1.6.2，也不声称 BEVFusion 托管引擎已完成生产验证。
+
 最终训练形态为：
 
 ```text
@@ -1009,6 +1011,7 @@ $PLATFORM_DATASET_PATH/0429_pkl/fz/merged_nuscenes_infos_val.pkl
 IMAGE='harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion@sha256:66b906d062870131121b07e4455783dc5f2913e285b29fdbb2cf1decc100f553'
 
 spk-rayjob submit \
+  --engine ray-ddp \
   --name bevfusion-fz-data-preflight \
   --image "$IMAGE" \
   --entrypoint 'python3 tools/platform_data_preflight.py --train 0429_pkl/fz/merged_nuscenes_infos_train.pkl --val 0429_pkl/fz/merged_nuscenes_infos_val.pkl --max-train 1024 --max-val 512' \
@@ -1143,7 +1146,10 @@ if args.fail_after_print:
 目录探针示例。注意它与 smoke 使用相同的子目录选择：
 
 ```bash
+OLD_OUTPUT_RELATIVE='bevfusion/runs'
+OLD_JOB_ID='<已有成功任务ID>'
 spk-rayjob submit \
+  --engine ray-ddp \
   --name "bevfusion-dir-probe-$(date +%H%M%S)" \
   --image "$IMAGE" \
   --entrypoint 'python3 tools/platform_directory_probe.py platform-validation/annotations/fz-0429-platform-smoke-128/' \
@@ -1159,6 +1165,7 @@ MLflow 探针示例：
 
 ```bash
 spk-rayjob submit \
+  --engine ray-ddp \
   --name "bevfusion-mlflow-probe-$(date +%H%M%S)" \
   --image "$IMAGE" \
   --entrypoint 'python3 tools/platform_mlflow_probe.py' \
@@ -1168,14 +1175,16 @@ spk-rayjob submit \
   --execution-mode single_gpu --watch
 ```
 
-读取历史结果探针示例。`--resume-from-job` 只读挂载指定任务的结果：
+兼容 `ray-ddp` 的历史结果探针仍使用 owner-scoped 的逻辑 My Runs 路径。`--resume-from-job` 已保留给 managed `ray-train` 的完整 checkpoint 选择；不要用它把整个 DDP 结果目录伪装成 complete checkpoint：
 
 ```bash
 spk-rayjob submit \
+  --engine ray-ddp \
   --name "bevfusion-result-probe-$(date +%H%M%S)" \
   --image "$IMAGE" \
   --entrypoint 'python3 tools/platform_result_probe.py epoch_1.pth' \
-  --resume-from-job <已有成功任务ID> \
+  --checkpoint-space my-runs \
+  --checkpoint-path "$OLD_OUTPUT_RELATIVE/$OLD_JOB_ID" \
   --output-path bevfusion/probes/result \
   --workers 1 --gpus-per-worker 1 \
   --cpu-per-worker 8 --memory-per-worker 32Gi \
@@ -1194,6 +1203,7 @@ spk-rayjob submit \
 
 ```yaml
 name: bevfusion-fz-smoke-2x8
+engine: ray-ddp
 image: harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion@sha256:66b906d062870131121b07e4455783dc5f2913e285b29fdbb2cf1decc100f553
 entrypoint: >-
   raytrain-bevfusion-prepare python3 tools/westwell_train.py
@@ -1246,6 +1256,7 @@ data.test.ann_file="$PLATFORM_DATASET_PATH/platform-validation/annotations/fz-04
 
 ```yaml
 name: bevfusion-fz-full-2x8
+engine: ray-ddp
 image: harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion@sha256:66b906d062870131121b07e4455783dc5f2913e285b29fdbb2cf1decc100f553
 entrypoint: >-
   raytrain-bevfusion-prepare python3 tools/westwell_train.py
@@ -1295,6 +1306,7 @@ spk-rayjob submit --watch
 IMAGE='harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion@sha256:66b906d062870131121b07e4455783dc5f2913e285b29fdbb2cf1decc100f553'
 
 spk-rayjob submit \
+  --engine ray-ddp \
   --name bevfusion-fz-full-2x8 \
   --image "$IMAGE" \
   --entrypoint 'raytrain-bevfusion-prepare python3 tools/westwell_train.py configs/westwell/det/transfusion/secfpn/lidar/voxelnet_0p075.yaml --launcher pytorch --run-dir "$PLATFORM_OUTPUT_PATH" dataset_root="$PLATFORM_DATASET_PATH/0429_pkl/fz/" eval_dataset_root="$PLATFORM_DATASET_PATH/0429_pkl/fz/" data.train.dataset.ann_file="$PLATFORM_DATASET_PATH/0429_pkl/fz/merged_nuscenes_infos_train.pkl" data.val.ann_file="$PLATFORM_DATASET_PATH/0429_pkl/fz/merged_nuscenes_infos_val.pkl" data.test.ann_file="$PLATFORM_DATASET_PATH/0429_pkl/fz/merged_nuscenes_infos_val.pkl" data.samples_per_gpu=1 data.workers_per_gpu=1 optimizer.lr=1.0e-5 runner.max_epochs=1 log_config.interval=20 evaluation.interval=1' \
@@ -1398,7 +1410,7 @@ spk-rayjob package --dir . --output "/tmp/source-$(date +%s).zip"
 安装与安全配置：
 
 ```bash
-python3 -m pip install 'ray[default]==2.35.0'
+python3 -m pip install 'ray[default]==2.56.1'
 
 export RAY_ADDRESS='https://raytrain.wellspiking.ai/ray'
 read -rsp '平台个人访问令牌: ' RAYTRAIN_PAT
@@ -1421,7 +1433,8 @@ META="$(jq -cn --arg image "$IMAGE" '{
   "ray-platform.gpus-per-worker":"8",
   "ray-platform.cpu-per-worker":"64",
   "ray-platform.memory-per-worker":"256Gi",
-  "ray-platform.queue":"local-gpu"
+  "ray-platform.queue":"local-gpu",
+  "platform.training.engine":"ray-ddp"
 }')"
 
 ray job submit \
@@ -1446,7 +1459,7 @@ ray job submit \
   log_config.interval=20 evaluation.interval=1
 ```
 
-原生入口没有 `spk-rayjob` 的逻辑目录参数，因此这里明确使用平台稳定容器路径；它们不是节点路径，也不会暴露对象存储凭据。令牌只保存在当前 shell 环境，不能写入仓库或脚本。任务会同时出现在 Web Portal，提交人是该 PAT 对应的平台用户。
+原生入口没有 `spk-rayjob` 的逻辑目录参数，因此这里明确使用平台稳定容器路径；它们不是节点路径，也不会暴露对象存储凭据。令牌只保存在当前 shell 环境，不能写入仓库或脚本。任务会同时出现在 Web Portal，提交人是该 PAT 对应的平台用户。原生 Ray API 与 `spk-rayjob` 都持久化为 `submissionOrigin=ray-cli`，原生入口另以 `externalSubmissionId` 和接入方式识别；Portal 交互会话持久化为 `submissionOrigin=portal`。
 
 任务提交完成后清理当前 shell 中的认证头：
 
@@ -1584,11 +1597,15 @@ latest.pth
 raytrain-topology.json
 ```
 
-续训会创建一个新任务，把旧任务结果只读挂载为 `$PLATFORM_CHECKPOINT_PATH`，新结果仍写新的 `$PLATFORM_OUTPUT_PATH`：
+下面是已验证兼容 `ray-ddp` 流程的显式逻辑路径读取：它会创建新任务，把当前用户 My Runs 下指定旧目录只读挂载为 `$PLATFORM_CHECKPOINT_PATH`，新结果仍写新的 `$PLATFORM_OUTPUT_PATH`。托管 `ray-train` 应改用 `--resume-from-job`，由 checkpoint API 选择具体 complete checkpoint：
 
 ```bash
+OLD_OUTPUT_RELATIVE='bevfusion/runs'
+OLD_JOB_ID='<上一次的平台任务ID>'
 spk-rayjob submit \
-  --resume-from-job <上一次的平台任务ID> \
+  --engine ray-ddp \
+  --checkpoint-space my-runs \
+  --checkpoint-path "$OLD_OUTPUT_RELATIVE/$OLD_JOB_ID" \
   --entrypoint 'raytrain-bevfusion-prepare python3 tools/westwell_train.py configs/westwell/det/transfusion/secfpn/lidar/voxelnet_0p075.yaml --launcher pytorch --run-dir "$PLATFORM_OUTPUT_PATH" resume_from="$PLATFORM_CHECKPOINT_PATH/epoch_1.pth" dataset_root="$PLATFORM_DATASET_PATH/0429_pkl/fz/" eval_dataset_root="$PLATFORM_DATASET_PATH/0429_pkl/fz/" data.train.dataset.ann_file="$PLATFORM_DATASET_PATH/0429_pkl/fz/merged_nuscenes_infos_train.pkl" data.val.ann_file="$PLATFORM_DATASET_PATH/0429_pkl/fz/merged_nuscenes_infos_val.pkl" data.test.ann_file="$PLATFORM_DATASET_PATH/0429_pkl/fz/merged_nuscenes_infos_val.pkl"' \
   --watch
 ```

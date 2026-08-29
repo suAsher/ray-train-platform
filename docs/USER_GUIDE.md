@@ -1,6 +1,6 @@
 # RayTrain 用户使用手册
 
-本手册面向算法工程师。浏览器入口是 [https://raytrain.wellspiking.ai](https://raytrain.wellspiking.ai)；管理员操作看 [管理员手册](ADMIN_GUIDE.md)。运行现有 BEVFusion 分支时使用 [BEVFusion 代码改造与验收](BEVFUSION_CODE_CHANGES.md)；接入其他代码使用 [新训练代码接入手册](NEW_TRAINING_CODE_GUIDE.md)。
+本手册面向算法工程师。浏览器入口是 [https://raytrain.wellspiking.ai](https://raytrain.wellspiking.ai)；管理员操作看 [管理员手册](ADMIN_GUIDE.md)。运行现有 BEVFusion 分支时使用 [BEVFusion 代码改造与验收](BEVFUSION_CODE_CHANGES.md)；接入其他代码使用 [新训练代码接入手册](NEW_TRAINING_CODE_GUIDE.md)。平台支持兼容的 Ray 编排 DDP 和受门禁保护的 Ray Train 托管双引擎；托管入口与恢复语义见 [Ray Train 托管指南](RAY_TRAIN_MANAGED_GUIDE.md)。
 
 ## 日常最短路径
 
@@ -31,7 +31,7 @@
 1. 在 **我的数据** 确认输入数据的具体子目录，并在 **交互式调试** 中确认该目录可读、个人工作区可写。
 2. 用同一份镜像和代码提交最小可运行规模；普通 PyTorch 先用 `1 × 1 GPU`，强制初始化 DDP 的旧项目应从 `1 × 2 GPU` 的 `torchrun` 档案开始。输入使用 `PLATFORM_DATASET_PATH`，输出使用 `PLATFORM_OUTPUT_PATH`。
 3. 在任务详情查看提交器、Ray head、worker 三类日志；确认 stdout 中有 loss 或首个业务输出，并在“我的运行结果”看到产物。
-4. 代码已支持 PyTorch DDP 时，再选择“单机多卡 DDP”；单机通过后，才选择“多机多卡 Ray Train”。
+4. 代码已支持 PyTorch DDP 时，再选择 Ray 编排 DDP 的单机或多机档案；完成 Ray Train 适配后，才选择 Ray Train 托管引擎。两者是不同 engine，不能只凭 Worker 数推断。
 
 不要从 TOS 根目录猜数据位置，也不要把 TOS URI 写进训练命令。页面选择的子目录和三项环境变量才是训练代码与存储的稳定契约。
 
@@ -141,7 +141,7 @@ python train.py \
 | --- | --- | --- | --- |
 | 单卡 | 1 节点 × 1 GPU | 命令在一张 Ray GPU worker 上运行 | 第一次验证代码、数据、日志。 |
 | 单机多卡 DDP | 1 节点 × 2/4/8 GPU | worker 内执行 `torchrun --nproc_per_node=N` | 已有 PyTorch/MMCV DDP 代码。 |
-| 多机多卡 Ray Train | 2 节点 × N GPU | Ray 严格跨主机放置，再在每个节点执行 `torchrun` | 跨节点训练与 NCCL 验收。 |
+| 多机多卡 DDP | 2 节点 × N GPU | Ray 严格跨主机放置，再在每个节点执行 `torchrun` | `ray-ddp` 跨节点训练与 NCCL 验收。 |
 
 平台执行档案生成的 `raytrain-topology.json` 会显示实际主机、node rank、world size、GPU 数和各节点返回码；通用 DDP demo 还会生成 `ddp-rank-*.json`。这比只看申请 GPU 数更能证明分布式训练真正启动。具体提交命令见 [多方式提交手册](SUBMIT_GUIDE.md)。
 
@@ -216,7 +216,7 @@ Dashboard 用于查看运行中的 Ray node、task、actor、object store 和资
 
 Ray Dashboard 与两种 MLflow 视图的生命周期不同：Ray Dashboard 随任务 RayCluster 回收；实验中心和原生 MLflow 的运行记录长期保留。
 
-当前租户默认训练环境是平台镜像目录中的 `BEVFusion CUDA 11.3 + MLflow`，固定为 `PyTorch 1.10.1 / CUDA 11.3 / Ray 2.10 / MLflow client 2.17.2`。MLflow client 采用 2.17.2 是为了兼容该镜像的 Python 3.8；平台 Tracking Server 为 3.14，标准 Tracking API 已完成兼容验证。自定义镜像若要使用实验中心，也必须预装与自身 Python 版本兼容的 `mlflow-skinny`，不要在每次任务启动时临时安装。
+镜像目录会分别标出 `rayVersion` 与 `supportedEngines`：现有 BEVFusion 镜像只用于其已验证的 `ray-ddp` 兼容流程，Ray Train 托管生产镜像固定为 Ray 2.56.1，不能混用。MLflow client 必须与镜像 Python 版本兼容；自定义镜像若要使用实验中心，也必须预装兼容的 `mlflow-skinny`，不要在每次任务启动时临时安装。
 
 平台会向每个训练任务注入 MLflow 地址、实验名、任务名和由控制面签发的来源标记。训练代码可以读取这些值，但篡改后不会通过实验中心的任务归属校验；它们不应被当作用户不可见的秘密。训练代码只需在 rank 0 使用这些环境变量，不要把服务地址、租户或任务 ID 写死：
 
@@ -293,7 +293,7 @@ unset RAY_PLATFORM_USERNAME RAY_PLATFORM_PASSWORD
 
 ```bash
 cd ~/my-training-project
-spk-rayjob submit --dir . --name experiment-001 \
+spk-rayjob submit --dir . --engine ray-ddp --name experiment-001 \
   --image 'harbor.wellspiking.ai/<你的项目>/<镜像>@sha256:<digest>' \
   --entrypoint 'python train.py --data-root "$PLATFORM_DATASET_PATH" --work-dir "$PLATFORM_OUTPUT_PATH"' \
   --workers 1 --gpus-per-worker 1 --cpu-per-worker 8 --memory-per-worker 32Gi \
@@ -305,15 +305,17 @@ spk-rayjob submit --dir . --name experiment-001 \
 
 ```bash
 # 一个节点内的 8 卡 DDP
-spk-rayjob submit ... --execution-mode torchrun --workers 1 --gpus-per-worker 8
+spk-rayjob submit ... --engine ray-ddp --execution-mode torchrun --workers 1 --gpus-per-worker 8
 
 # 两台 8 卡节点
-spk-rayjob submit ... --execution-mode ray_train --workers 2 --gpus-per-worker 8
+spk-rayjob submit ... --engine ray-ddp --execution-mode ray_train --workers 2 --gpus-per-worker 8
 ```
+
+这里的 `execution-mode=ray_train` 是兼容引擎中历史保留的多节点编排档案名，不等于 `--engine ray-train`。新托管引擎必须显式选择 engine，并使用托管指南中的普通 `python` 入口。
 
 `spk-rayjob` 会按 `.gitignore` 与可选的 `.rayignore` 打包当前目录，忽略 `.git`，上传为不可变源码包，再创建与页面相同的 RayJob。每次修改代码后重新执行提交即可；任务会立刻出现在同一账号的“我的训练任务”中。
 
-日常推荐 `spk-rayjob`，因为它提供数据选择、输出隔离、执行档案和断点续训。原生 Ray 2.35 CLI 的协议链路已独立验收，协议版本为 `4`：无 metadata 时走平台默认 1×1，只有传入完整的 `ray-platform.*` metadata 才会按 1×N、N×M 推导执行模式。原生 CLI 没有平台的逻辑数据选择参数，使用者还必须明确传入容器内的受控路径；2026-08-22 的两个 BEVFusion 分支、三种入口共六个 fresh-clone 任务均已通过，完整多卡示例见 [提交指南](SUBMIT_GUIDE.md)。
+日常推荐 `spk-rayjob`，因为它提供数据选择、输出隔离、执行档案和断点续训。新的托管客户端基线为 Ray 2.56.1；协议版本与运行时版本是不同字段。原生 CLI 没有平台的逻辑数据选择参数，使用者还必须明确传入容器内的受控路径。2026-08-22 的两个 BEVFusion 分支、三种入口共六个 fresh-clone 任务验证的是兼容 `ray-ddp` 流程，不代表托管运行时已在线上启用；完整多卡示例见 [提交指南](SUBMIT_GUIDE.md)。
 
 ### 5.1 把提交默认值写进仓库（推荐）
 
@@ -327,6 +329,7 @@ $EDITOR .spk-rayjob.yaml
 
 ```yaml
 name: bevfusion-lidar
+engine: ray-ddp
 image: harbor.wellspiking.ai/<项目>/<镜像>@sha256:<digest>
 entrypoint: python tools/westwell_train.py configs/lidar.yaml --launcher pytorch
 workers: 1
@@ -368,14 +371,12 @@ spk-rayjob logs -f <任务ID>    # 跟随日志
 | 命令 | 用途 |
 | --- | --- |
 | `spk-rayjob submit --watch` | 提交并阻塞显示 排队 → 运行 → 结束 |
-| `spk-rayjob submit --resume-from-job <ID>` | 把上一次运行的结果目录作为只读 checkpoint 续训 |
+| `spk-rayjob submit --engine ray-train --resume-from-job <ID>` | 从 owner-scoped checkpoint API 选择该任务最新的完整 checkpoint，并只读挂载其具体目录；无完整 checkpoint 时拒绝提交 |
 | `spk-rayjob jobs --state RUNNING` | 按状态列出任务 |
 | `spk-rayjob status <ID>` | 查看单个任务的状态、规模与结果目录 |
 | `spk-rayjob logs -f <ID>` | 实时跟随日志，任务结束自动退出 |
 | `spk-rayjob cancel <ID>` | 停止任务 |
 | `<任意命令> --output json` | 输出原始 JSON，供脚本解析（默认是可读文本） |
-
-> 该客户端原名 `rayctl`。旧的下载地址仍然可用，但请改用新命令名 `spk-rayjob`。
 
 ## 6. Checkpoint 与断点续跑
 
@@ -396,15 +397,15 @@ python train.py \
 
 页面上的「提交失败重试」只会重新创建一次 Ray 提交流程（覆盖镜像拉取、节点中断这类提交期故障），会**从头重跑**，**不会自动猜测哪个 checkpoint 可恢复**。只有训练脚本支持 resume 且你显式选择 checkpoint，才是可靠的断点续跑。
 
-续训有三个入口，效果相同：
+续训有三个入口；所有来源都必须属于当前用户，但具体选择契约取决于引擎：
 
 | 入口 | 操作 |
 | --- | --- |
 | 任务列表 | 终态任务的「续训」按钮 |
 | 任务详情 | 「续训（从此结果继续）」 |
-| 命令行 | `spk-rayjob submit --resume-from-job <上一次的任务ID>` |
+| 命令行 | `spk-rayjob submit --engine ray-train --resume-from-job <上一次的任务ID>`；CLI 不接受调用方提供 checkpoint ObjectPath |
 
-三者都会把**上一次运行自己的结果目录**（`我的训练结果/<路径>/<任务ID>`）作为只读 checkpoint 挂到新任务的 `PLATFORM_CHECKPOINT_PATH`。这是一个新任务，不会修改原任务。
+managed `ray-train` 命令行入口会由 checkpoint API 选择父任务最新的 complete checkpoint，并只读挂载含 `manifest.json` 的具体目录。页面选择的初始 checkpoint 仍显示其受控来源；调用方不能借任一入口指定其他用户的目录或任意对象路径。续训始终创建新任务，不会修改父任务。
 
 ### 权重在哪里，怎么继续使用
 

@@ -48,6 +48,37 @@ func TestNewSourceArtifactSeparatesOpaqueOwnerFromPersistedStorageRoot(t *testin
 	}
 }
 
+func TestNewRequestScopedSourceArtifactUsesServerArtifactIDInCanonicalKey(t *testing.T) {
+	now := time.Date(2026, 8, 28, 6, 0, 0, 0, time.UTC)
+	artifact, err := NewRequestScopedSourceArtifact(SourceArtifactInput{
+		ID: "artifact-0123456789abcdef01234567", TenantID: "tenant-a", UserID: "user-a",
+		SHA256: artifactDigest, SizeBytes: 10,
+	}, now.Add(15*time.Minute), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "ray-train/tenants/tenant-a/users/user-a/workspace/.ray-train-archives/artifact-0123456789abcdef01234567/" + artifactDigest + ".zip"
+	if artifact.ObjectKey != want {
+		t.Fatalf("request artifact key=%q want=%q", artifact.ObjectKey, want)
+	}
+	if err := artifact.Validate(); err != nil {
+		t.Fatalf("request-scoped artifact should validate: %v", err)
+	}
+	mounted, err := SourceArtifactMountedArchivePath("tenant-a", artifact.ObjectKey, artifact.ID, artifactDigest)
+	if err != nil || mounted != "/mnt/platform-workspace-snapshot/workspace/.ray-train-archives/artifact-0123456789abcdef01234567/"+artifactDigest+".zip" {
+		t.Fatalf("mounted request archive=%q err=%v", mounted, err)
+	}
+}
+
+func TestNewRequestScopedSourceArtifactRejectsUnsafeServerArtifactID(t *testing.T) {
+	now := time.Now().UTC()
+	for _, id := range []string{"../artifact", "artifact/foreign", "artifact\nforeign", strings.Repeat("a", 129)} {
+		if _, err := NewRequestScopedSourceArtifact(SourceArtifactInput{ID: id, TenantID: "tenant-a", UserID: "user-a", SHA256: artifactDigest, SizeBytes: 10}, now.Add(time.Minute), now); err == nil {
+			t.Fatalf("unsafe server artifact ID accepted in object key: %q", id)
+		}
+	}
+}
+
 func TestNewSourceArtifactRejectsInvalidDigestAndSizeBoundaries(t *testing.T) {
 	tests := []struct {
 		name   string

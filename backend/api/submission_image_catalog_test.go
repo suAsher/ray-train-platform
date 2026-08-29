@@ -60,6 +60,7 @@ func (s *stubImageStore) SetImageShared(_ context.Context, tenantID, id string, 
 func catalogImage(reference string) domain.PlatformImage {
 	return domain.PlatformImage{
 		ID: "img-1", Name: "PyTorch", Kind: domain.ImageKindTraining, Reference: reference, IsDefault: true,
+		RayVersion: domain.RayVersionLegacy, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayDDP},
 	}
 }
 

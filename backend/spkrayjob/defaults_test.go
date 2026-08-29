@@ -3,7 +3,60 @@ package spkrayjob
 import (
 	"strings"
 	"testing"
+
+	"ray-train-platform-backend/domain"
 )
+
+func TestManagedDefaultImageSkipsAnIncompatibleLegacyDefault(t *testing.T) {
+	legacy := "registry/legacy@sha256:" + strings.Repeat("a", 64)
+	managed := "registry/managed@sha256:" + strings.Repeat("b", 64)
+	selected, err := managedImage([]catalogImage{
+		{Reference: legacy, Name: "Legacy", IsDefault: true, RayVersion: domain.RayVersionLegacy, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayDDP}},
+		{Reference: managed, Name: "Managed", RayVersion: domain.RayVersionProduction, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayDDP, domain.TrainingEngineRayTrain}},
+	}, "", PlatformRuntimeLimits{
+		AvailableEngines: []string{"ray-ddp", "ray-train"}, ManagedEnabled: true,
+		ProductionRayVersion: domain.RayVersionProduction, CanaryRayVersion: domain.RayVersionCanary,
+	})
+	if err != nil || selected.Reference != managed {
+		t.Fatalf("managed default must select the compatible image, got %+v err=%v", selected, err)
+	}
+}
+
+func TestManagedImageRequiresExactCatalogCompatibility(t *testing.T) {
+	legacy := catalogImage{
+		Reference: "registry/legacy@sha256:" + strings.Repeat("c", 64), Name: "Legacy", IsDefault: true,
+		RayVersion: domain.RayVersionLegacy, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayDDP},
+	}
+	runtime := PlatformRuntimeLimits{
+		AvailableEngines: []string{"ray-ddp", "ray-train"}, ManagedEnabled: true,
+		ProductionRayVersion: domain.RayVersionProduction, CanaryRayVersion: domain.RayVersionCanary,
+	}
+	if _, err := managedImage([]catalogImage{legacy}, legacy.Reference, runtime); err == nil || !strings.Contains(err.Error(), "ray-train") {
+		t.Fatalf("legacy image was accepted for managed training: %v", err)
+	}
+	if _, err := managedImage([]catalogImage{legacy}, "registry/missing:tag", runtime); err == nil || !strings.Contains(err.Error(), "镜像目录") {
+		t.Fatalf("an image absent from the catalog was accepted: %v", err)
+	}
+}
+
+func TestManagedImageAllowsCanaryOnlyWhenServerEnablesCanary(t *testing.T) {
+	canary := catalogImage{
+		Reference: "registry/canary:2.58", Name: "Canary", RayVersion: domain.RayVersionCanary,
+		SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayTrain},
+	}
+	runtime := PlatformRuntimeLimits{
+		AvailableEngines: []string{"ray-ddp", "ray-train"}, ManagedEnabled: true,
+		ProductionRayVersion: domain.RayVersionProduction, CanaryRayVersion: domain.RayVersionCanary,
+	}
+	if _, err := managedImage([]catalogImage{canary}, canary.Reference, runtime); err == nil {
+		t.Fatal("canary image was accepted while canary capability was disabled")
+	}
+	runtime.CanaryEnabled = true
+	selected, err := managedImage([]catalogImage{canary}, canary.Reference, runtime)
+	if err != nil || selected.Reference != canary.Reference {
+		t.Fatalf("enabled canary image was rejected: %+v err=%v", selected, err)
+	}
+}
 
 // The daily loop should be "edit code, submit". Requiring --name on every run
 // makes the user invent a name for something that already has one: the

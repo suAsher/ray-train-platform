@@ -1,5 +1,18 @@
+import { MANAGED_POLICY_LIMITS, normalizeTrainingEngine, RAY_TRAIN_ENGINE } from './trainingEngine.js'
+
 const gitCommitPattern = /^[0-9a-f]{7,64}$/i
 const snapshotPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
+const jobIDPattern = /^job-[0-9a-f]{24}$/
+const dataModes = new Set(['mount', 'cache', 'ray-data', 'ray-data-stage'])
+
+function normalizeDataMode(form) {
+  const requested = String(form.dataMode || '').trim()
+  if (requested) {
+    if (!dataModes.has(requested)) throw new Error('请选择有效的数据读取方式')
+    return requested
+  }
+  return form.cacheMode === 'runtime' && form.cachePreload === 'input' ? 'cache' : 'mount'
+}
 
 export function parseEntrypoint(value) {
   const parts = []
@@ -24,10 +37,23 @@ export function equivalentSubmitCommand(form) {
     `--image ${shellArg(form.image || '<镜像 digest>')}`,
   ]
   parts.push(`--entrypoint ${shellArg(form.entrypoint || '<启动命令>')}`)
+  const trainingEngine = normalizeTrainingEngine(form.trainingEngine)
+  const dataMode = normalizeDataMode(form)
   parts.push(
+    `--engine ${shellArg(trainingEngine)}`,
     `--workers ${shellArg(form.workerReplicas)}`,
     `--gpus-per-worker ${shellArg(form.gpusPerWorker)}`,
   )
+  if (dataMode !== 'mount') parts.push(`--data-mode ${shellArg(dataMode)}`)
+  if (trainingEngine === RAY_TRAIN_ENGINE) {
+    const policy = managedPolicy(form)
+    parts.push(
+      `--max-failures ${shellArg(policy.maxFailures)}`,
+      `--checkpoint-every-epochs ${shellArg(policy.checkpoint.everyEpochs)}`,
+      `--checkpoint-keep-latest ${shellArg(policy.checkpoint.keepLatest)}`,
+      `--checkpoint-keep-best ${shellArg(policy.checkpoint.keepBest)}`,
+    )
+  }
   if (form.cacheMode === 'runtime') {
     parts.push(
       `--cache-mode ${shellArg('runtime')}`,
@@ -55,6 +81,12 @@ export function equivalentSubmitCommandForJob(job) {
   return equivalentSubmitCommand({
     name: job?.name || spec.name || '',
     image: spec.image || '',
+    trainingEngine: normalizeTrainingEngine(spec.trainingEngine),
+    dataMode: spec.dataMode || (spec.cache?.preload === 'input' ? 'cache' : 'mount'),
+    maxFailures: spec.managed?.maxFailures,
+    checkpointEveryEpochs: spec.managed?.checkpoint?.everyEpochs,
+    checkpointKeepLatest: spec.managed?.checkpoint?.keepLatest,
+    checkpointKeepBest: spec.managed?.checkpoint?.keepBest,
     entrypoint: job?.entrypoint || persistedEntrypoint,
     workerReplicas: resources.workerReplicas || 1,
     gpusPerWorker: resources.gpusPerWorker || 1,
@@ -72,6 +104,21 @@ export function buildJobSpec(form, platformLimits = {}) {
     throw new Error('请输入训练启动命令')
   }
   const cache = buildCache(form, platformLimits.cache)
+  const trainingEngine = normalizeTrainingEngine(form.trainingEngine)
+  const dataMode = normalizeDataMode(form)
+  if ((dataMode === 'ray-data' || dataMode === 'ray-data-stage') && trainingEngine !== RAY_TRAIN_ENGINE) {
+    throw new Error('Ray Data 需要选择 Ray Train 托管引擎')
+  }
+  if (dataMode === 'cache' && (!cache || cache.preload !== 'input')) {
+    throw new Error('NVMe 预热需要选择运行时缓存并开启输入预热')
+  }
+  if (dataMode === 'ray-data-stage' && (!cache || cache.preload)) {
+    throw new Error('Ray Data 分布式预热需要运行时缓存，且不能同时开启旧预热器')
+  }
+  const input = dataLocation(form.input, '训练输入')
+  if (dataMode === 'ray-data-stage' && (!input.space || !input.relativePath)) {
+    throw new Error('Ray Data 分布式预热必须选择具体的数据集子目录，不能选择整个数据空间')
+  }
 
   const spec = {
     name: requiredText(form.name, '任务名称'),
@@ -85,22 +132,65 @@ export function buildJobSpec(form, platformLimits = {}) {
       memoryPerWorker: requiredText(form.memoryPerWorker || '32Gi', '每节点内存'),
     },
     execution: { mode: executionMode(form) },
+    trainingEngine,
+    dataMode,
     // Data locations are logical spaces, never a TOS URI, object key, or
     // PVC. The backend derives the caller's permitted root at submission.
-    input: dataLocation(form.input, '训练输入'),
+    input,
     checkpoint: dataLocation(form.checkpoint, 'Checkpoint 输入'),
     output: outputLocation(form.output),
     queue: '',
     timeoutSeconds: nonNegativeInteger(form.timeoutSeconds || 0, '最长运行时间'),
     retryPolicy: { maxRetries: boundedInteger(form.maxRetries || 0, '自动重试次数', 0, 3) },
     ...(cache ? { cache } : {}),
+    ...(trainingEngine === RAY_TRAIN_ENGINE ? { managed: managedPolicy(form) } : {}),
   }
+
+  const parentJobId = optionalJobID(form.parentJobId)
+  if (parentJobId) spec.parentJobId = parentJobId
 
   const priority = String(form.priority || '').trim()
   if (priority) {
     spec.priority = priority
   }
   return spec
+}
+
+function managedPolicy(form) {
+  const policy = {
+    maxFailures: managedPolicyInteger(form.maxFailures, 'maxFailures'),
+    checkpoint: {
+      everyEpochs: managedPolicyInteger(form.checkpointEveryEpochs, 'checkpointEveryEpochs'),
+      keepLatest: managedPolicyInteger(form.checkpointKeepLatest, 'checkpointKeepLatest'),
+      keepBest: managedPolicyInteger(form.checkpointKeepBest, 'checkpointKeepBest'),
+    },
+  }
+  const dataMode = normalizeDataMode(form)
+  if (dataMode === 'ray-data-stage') {
+    policy.rayData = { format: 'files', uri: '/mnt/data/input' }
+  } else if (dataMode === 'ray-data') {
+    policy.rayData = {
+      format: requiredText(form.rayDataFormat, 'Ray Data 格式'),
+      uri: requiredText(form.rayDataURI, 'Ray Data 数据路径'),
+    }
+  }
+  return policy
+}
+
+function managedPolicyInteger(value, field) {
+  const policy = MANAGED_POLICY_LIMITS[field]
+  const candidate = value === undefined ? policy.fallback : value
+  if (candidate == null || candidate === '') throw new Error(`${policy.label}必须是非负整数`)
+  return boundedInteger(candidate, policy.label, 0, policy.maximum)
+}
+
+function optionalJobID(value) {
+  const raw = String(value || '')
+  const id = raw.trim()
+  if (!id) return ''
+  if (raw !== id) throw new Error('续训来源任务 ID 格式不合法')
+  if (!jobIDPattern.test(id)) throw new Error('续训来源任务 ID 格式不合法')
+  return id
 }
 
 function buildCache(form, policy) {

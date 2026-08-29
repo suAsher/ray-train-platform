@@ -2,6 +2,8 @@
 
 本文说明训练平台的节点本地 NVMe 缓存：用户如何用参数开启、平台实际做了什么、代码如何读取、如何估算容量，以及遇到问题如何排查。
 
+缓存同时支持 Ray 编排 DDP 与 Ray Train 托管；它是数据模式，不是训练引擎。托管引擎的 `mount`、`cache`、`ray-data` 选择及性能指标见 [Ray Train 托管指南](RAY_TRAIN_MANAGED_GUIDE.md)。
+
 ## 1. 最短结论
 
 提交任务时指定四项即可：
@@ -234,3 +236,28 @@ Ray Worker 删除 -> 临时 PVC 删除 -> 本地 PV 删除 -> provisioner 删除
 ```
 
 训练结果、Checkpoint、MLflow 记录和原始 TOS/FSX 数据不在回收链路中。成功任务较快释放缓存；失败任务为保留诊断窗口，可能延迟数分钟释放。任何必须保留的文件都要写入 `PLATFORM_OUTPUT_PATH`。
+
+## 12. 管理员验收
+
+上线后至少验证：
+
+1. 缓存关闭的旧任务仍可提交；
+2. 只开启 runtime、不开启 preload 的任务没有预热容器；
+3. 开启 preload 的每个 Worker 各有两个临时 PVC；
+4. Head 和 Submitter 不复制数据；
+5. 两块盘都出现文件且统一视图完整；
+6. 超容量、空输入目录和符号链接能在训练前失败；
+7. 输出和 Checkpoint 仍在持久目录；
+8. 任务删除后 PVC、PV 和节点隔离目录自动回收；
+9. 新 GPU 节点完成双盘注册后可正常预热；
+10. 对同一代码、数据和 batch 比较直读与 NVMe 的预热时间、稳态 step time 和总耗时。
+
+底层安装、节点注册、StorageClass、监控和故障恢复请参阅平台运维文档；普通用户不需要这些权限。
+
+## 13. 与 Ray Train 托管的关系
+
+- `mount` 直接读取 TOS、FSX 或已登记 IDC 数据源，适合先建立正确性基线。
+- `cache` 使用本文的任务级 NVMe 预热或 Ray 临时目录；持久输入和 checkpoint 仍以 TOS/FSX/IDC 为真相。
+- `ray-data` 只用于 `ray-train`，由 Ray Data 给 Train worker 分片；它不会自动开启 NVMe，也不能与手工 rank 分片叠加。
+
+托管性能页会显示 cache bytes、累计 hit/miss 和 preloader duration。缺失 exporter 或尚未产生 series 时值应为空，而不是零。修改 DataLoader、Python 或配置后仍是代码随任务上传，无需重建训练镜像。

@@ -5,6 +5,7 @@ const ACTIVE_JOB_STATES = new Set([
   'ADMITTED',
   'PROVISIONING',
   'RUNNING',
+  'RECOVERING',
   'CANCELING',
 ])
 

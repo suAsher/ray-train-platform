@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -11,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
@@ -313,9 +315,143 @@ func (c *Client) GetRayJob(ctx context.Context, namespace, name string) (*unstru
 	return c.dynamic.Resource(rayJobGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 }
 
-func (c *Client) DeleteRayJob(ctx context.Context, namespace, name, jobID string) error {
+func (c *Client) GetOwnedRayJob(ctx context.Context, namespace, name, jobID, expectedUID string) (*unstructured.Unstructured, error) {
+	if strings.TrimSpace(jobID) == "" || strings.TrimSpace(expectedUID) == "" {
+		return nil, fmt.Errorf("expected RayJob owner and UID are required")
+	}
+	resource, err := c.GetRayJob(ctx, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	if resource.GetLabels()["ray.io/job-id"] != jobID {
+		return nil, fmt.Errorf("refusing to observe RayJob owned by another job")
+	}
+	if string(resource.GetUID()) != expectedUID {
+		return nil, fmt.Errorf("refusing to observe RayJob with an unexpected UID")
+	}
+	return resource, nil
+}
+
+// ActivateManagedRayJob removes the creation quarantine only after PostgreSQL
+// has adopted the exact Kubernetes UID and lease fence. Until this update
+// succeeds the RayJob remains suspended and has no Kueue queue, so an expired
+// creator cannot leave runnable work behind.
+func (c *Client) ActivateManagedRayJob(ctx context.Context, namespace, name, jobID, expectedUID string, attempt int, fence int64, queue string) (*unstructured.Unstructured, error) {
+	if c == nil || c.dynamic == nil {
+		return nil, fmt.Errorf("Kubernetes dynamic client is not initialized")
+	}
+	if strings.TrimSpace(namespace) == "" || strings.TrimSpace(name) == "" || strings.TrimSpace(jobID) == "" || strings.TrimSpace(expectedUID) == "" {
+		return nil, fmt.Errorf("managed RayJob namespace, name, owner, and UID are required")
+	}
+	if attempt < 1 || fence < 1 {
+		return nil, fmt.Errorf("managed RayJob attempt and creation fence must be positive")
+	}
+	if strings.TrimSpace(queue) == "" {
+		return nil, fmt.Errorf("managed RayJob queue is required")
+	}
+
+	jobs := c.dynamic.Resource(rayJobGVR).Namespace(namespace)
+	var result *unstructured.Unstructured
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		current, err := jobs.Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		if err := verifyManagedRayJobFence(current, jobID, expectedUID, attempt, fence); err != nil {
+			return err
+		}
+		labels := current.GetLabels()
+		annotations := current.GetAnnotations()
+		if labels["kueue.x-k8s.io/queue-name"] == queue && annotations[managedPendingAdoptionKey] == "" {
+			result = current
+			return nil
+		}
+		updated := current.DeepCopy()
+		labels = copyStringMap(updated.GetLabels())
+		labels["kueue.x-k8s.io/queue-name"] = queue
+		updated.SetLabels(labels)
+		annotations = copyStringMap(updated.GetAnnotations())
+		delete(annotations, managedPendingAdoptionKey)
+		updated.SetAnnotations(annotations)
+		result, err = jobs.Update(ctx, updated, metav1.UpdateOptions{})
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("activate managed RayJob %s/%s: %w", namespace, name, err)
+	}
+	return result, nil
+}
+
+// DeactivateManagedRayJob removes Kueue visibility before a losing activation
+// is deleted. Exact UID/attempt/fence checks prevent a stale replica from
+// suspending a replacement resource.
+func (c *Client) DeactivateManagedRayJob(ctx context.Context, namespace, name, jobID, expectedUID string, attempt int, fence int64) error {
 	if c == nil || c.dynamic == nil {
 		return fmt.Errorf("Kubernetes dynamic client is not initialized")
+	}
+	jobs := c.dynamic.Resource(rayJobGVR).Namespace(namespace)
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		current, err := jobs.Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		if err := verifyManagedRayJobFence(current, jobID, expectedUID, attempt, fence); err != nil {
+			return err
+		}
+		suspended, found, err := unstructured.NestedBool(current.Object, "spec", "suspend")
+		if err != nil {
+			return fmt.Errorf("read managed RayJob suspension: %w", err)
+		}
+		if current.GetLabels()["kueue.x-k8s.io/queue-name"] == "" && found && suspended {
+			return nil
+		}
+		updated := current.DeepCopy()
+		labels := copyStringMap(updated.GetLabels())
+		delete(labels, "kueue.x-k8s.io/queue-name")
+		updated.SetLabels(labels)
+		annotations := copyStringMap(updated.GetAnnotations())
+		annotations[managedPendingAdoptionKey] = "true"
+		updated.SetAnnotations(annotations)
+		if err := unstructured.SetNestedField(updated.Object, true, "spec", "suspend"); err != nil {
+			return fmt.Errorf("suspend managed RayJob: %w", err)
+		}
+		_, err = jobs.Update(ctx, updated, metav1.UpdateOptions{})
+		return err
+	})
+}
+
+func verifyManagedRayJobFence(resource *unstructured.Unstructured, jobID, expectedUID string, attempt int, fence int64) error {
+	if resource.GetLabels()["ray.io/job-id"] != jobID {
+		return fmt.Errorf("refusing to activate RayJob owned by another job")
+	}
+	if string(resource.GetUID()) != expectedUID {
+		return fmt.Errorf("refusing to activate RayJob with an unexpected UID")
+	}
+	expectedAttempt := strconv.Itoa(attempt)
+	if resource.GetLabels()[managedAttemptIdentityKey] != expectedAttempt || resource.GetAnnotations()[managedAttemptIdentityKey] != expectedAttempt {
+		return fmt.Errorf("refusing to activate RayJob with an unexpected cluster attempt")
+	}
+	expectedFence := strconv.FormatInt(fence, 10)
+	if resource.GetLabels()[managedCreationFenceKey] != expectedFence || resource.GetAnnotations()[managedCreationFenceKey] != expectedFence {
+		return fmt.Errorf("refusing to activate RayJob with an unexpected creation fence")
+	}
+	return nil
+}
+
+func copyStringMap(source map[string]string) map[string]string {
+	result := make(map[string]string, len(source)+1)
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
+}
+
+func (c *Client) DeleteRayJob(ctx context.Context, namespace, name, jobID, expectedUID string) error {
+	if c == nil || c.dynamic == nil {
+		return fmt.Errorf("Kubernetes dynamic client is not initialized")
+	}
+	if strings.TrimSpace(expectedUID) == "" {
+		return fmt.Errorf("expected RayJob UID is required")
 	}
 	jobs := c.dynamic.Resource(rayJobGVR).Namespace(namespace)
 	existing, err := jobs.Get(ctx, name, metav1.GetOptions{})
@@ -328,11 +464,23 @@ func (c *Client) DeleteRayJob(ctx context.Context, namespace, name, jobID string
 	if jobID != "" && existing.GetLabels()["ray.io/job-id"] != jobID {
 		return fmt.Errorf("refusing to delete RayJob owned by another job")
 	}
-	propagation := metav1.DeletePropagationBackground
-	if err := jobs.Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &propagation}); err != nil && !apierrors.IsNotFound(err) {
+	if string(existing.GetUID()) != expectedUID {
+		return fmt.Errorf("refusing to delete RayJob with an unexpected UID")
+	}
+	options := rayJobDeleteOptions(expectedUID)
+	if err := jobs.Delete(ctx, name, options); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete RayJob %s/%s: %w", namespace, name, err)
 	}
 	return nil
+}
+
+func rayJobDeleteOptions(expectedUID string) metav1.DeleteOptions {
+	propagation := metav1.DeletePropagationForeground
+	uid := types.UID(expectedUID)
+	return metav1.DeleteOptions{
+		PropagationPolicy: &propagation,
+		Preconditions:     &metav1.Preconditions{UID: &uid},
+	}
 }
 
 func (c *Client) WaitForRayJobDeletion(ctx context.Context, namespace, name string) error {

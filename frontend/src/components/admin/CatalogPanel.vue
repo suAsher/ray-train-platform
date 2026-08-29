@@ -28,6 +28,16 @@
           </template>
         </el-table-column>
         <el-table-column prop="framework" label="框架" width="120" />
+        <el-table-column prop="rayVersion" label="Ray 版本" width="105" />
+        <el-table-column label="训练引擎" min-width="155">
+          <template #default="scope">
+            <div class="flex flex-wrap gap-1">
+              <el-tag v-for="engine in scope.row.supportedEngines || []" :key="engine" size="small" effect="plain">
+                {{ engine }}
+              </el-tag>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column prop="reference" label="镜像（tag / digest）" min-width="260">
           <template #default="scope">
             <span class="break-all font-mono text-[11px] text-slate-400">{{ scope.row.reference }}</span>

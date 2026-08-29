@@ -52,7 +52,7 @@ func (r *GormRepository) ListTenantSummaries(ctx context.Context) ([]TenantSumma
 				continue
 			}
 			switch domain.State(job.ObservedState) {
-			case domain.StateSubmitted, domain.StateValidating, domain.StateQueued, domain.StateAdmitted, domain.StateProvisioning, domain.StateRunning:
+			case domain.StateSubmitted, domain.StateValidating, domain.StateQueued, domain.StateAdmitted, domain.StateProvisioning, domain.StateRunning, domain.StateRecovering:
 				summary.ActiveJobsCount++
 			case domain.StateSucceeded, domain.StateFailed, domain.StateCanceled, domain.StateTimedOut:
 			}

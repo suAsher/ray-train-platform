@@ -5,15 +5,90 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"ray-train-platform-backend/domain"
 )
 
 // catalogImage is the administrator-approved training environment as the
 // platform's image catalogue returns it.
 type catalogImage struct {
-	Reference string `json:"reference"`
-	Name      string `json:"name"`
-	Framework string `json:"framework"`
-	IsDefault bool   `json:"isDefault"`
+	Reference        string                  `json:"reference"`
+	Name             string                  `json:"name"`
+	Framework        string                  `json:"framework"`
+	IsDefault        bool                    `json:"isDefault"`
+	RayVersion       string                  `json:"rayVersion"`
+	SupportedEngines []domain.TrainingEngine `json:"supportedEngines"`
+}
+
+func cloneCatalogImage(image catalogImage) catalogImage {
+	cloned := image
+	cloned.SupportedEngines = append([]domain.TrainingEngine(nil), image.SupportedEngines...)
+	return cloned
+}
+
+func normalizeCatalogImage(image catalogImage) (catalogImage, error) {
+	candidate := domain.PlatformImage{
+		Name: image.Name, Reference: image.Reference, Kind: domain.ImageKindTraining,
+		Framework: image.Framework, IsDefault: image.IsDefault, RayVersion: image.RayVersion,
+		SupportedEngines: append([]domain.TrainingEngine(nil), image.SupportedEngines...),
+	}
+	if err := candidate.Validate(); err != nil {
+		return catalogImage{}, err
+	}
+	return cloneCatalogImage(image), nil
+}
+
+func managedImage(images []catalogImage, requestedReference string, runtime PlatformRuntimeLimits) (catalogImage, error) {
+	if !runtime.ManagedAvailable() {
+		return catalogImage{}, fmt.Errorf("当前平台未开启 Ray Train 托管引擎")
+	}
+	compatible := func(image catalogImage) bool {
+		if !containsTrainingEngine(image.SupportedEngines, domain.TrainingEngineRayTrain) {
+			return false
+		}
+		if image.RayVersion == runtime.ProductionRayVersion {
+			return true
+		}
+		return runtime.CanaryEnabled && image.RayVersion == runtime.CanaryRayVersion
+	}
+	requested := strings.TrimSpace(requestedReference)
+	if requested != "" {
+		for _, image := range images {
+			if strings.TrimSpace(image.Reference) != requested {
+				continue
+			}
+			if !compatible(image) {
+				return catalogImage{}, fmt.Errorf("镜像 %q 不支持当前 ray-train 托管运行时", requested)
+			}
+			return cloneCatalogImage(image), nil
+		}
+		return catalogImage{}, fmt.Errorf("镜像 %q 不在平台镜像目录中", requested)
+	}
+	managed := make([]catalogImage, 0, len(images))
+	for _, image := range images {
+		if compatible(image) {
+			managed = append(managed, cloneCatalogImage(image))
+		}
+	}
+	reference, err := defaultImage(managed)
+	if err != nil {
+		return catalogImage{}, fmt.Errorf("没有可用的 ray-train 托管镜像：%w", err)
+	}
+	for _, image := range managed {
+		if image.Reference == reference {
+			return cloneCatalogImage(image), nil
+		}
+	}
+	return catalogImage{}, fmt.Errorf("托管镜像目录不一致")
+}
+
+func containsTrainingEngine(values []domain.TrainingEngine, want domain.TrainingEngine) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func fixedClock() time.Time { return time.Date(2026, 8, 19, 21, 30, 0, 0, time.UTC) }

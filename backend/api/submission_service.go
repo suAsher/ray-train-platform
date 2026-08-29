@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/resource"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
 	"ray-train-platform-backend/repositories"
+	"ray-train-platform-backend/runtimecatalog"
 )
 
 var (
@@ -36,6 +38,7 @@ var (
 	ErrSubmissionDataSpacesUnavailable     = errors.New("data spaces are unavailable")
 	ErrSubmissionDataMountNotReady         = errors.New("data-space mount is not ready")
 	ErrSubmissionWorkspaceSnapshotNotFound = errors.New("workspace snapshot was not found")
+	ErrSubmissionResumeCheckpointNotFound  = errors.New("resume checkpoint was not found")
 )
 
 type SourceArtifactLookup interface {
@@ -60,6 +63,7 @@ type SubmissionServiceOptions struct {
 	// the fallback for deployments that have not populated it yet.
 	Images                ImageStore
 	ImageAllowlist        []string
+	RuntimePolicy         runtimecatalog.Policy
 	GitAllowlist          []string
 	ClusterQueue          string
 	EnsureTenantRuntime   TenantRuntimeEnsurer
@@ -88,6 +92,7 @@ type SubmissionService struct {
 	repository            JobRepository
 	images                ImageStore
 	imageAllowlist        []string
+	runtimePolicy         runtimecatalog.Policy
 	gitAllowlist          []string
 	clusterQueue          string
 	ensureTenantRuntime   TenantRuntimeEnsurer
@@ -120,6 +125,7 @@ func NewSubmissionService(repository JobRepository, options SubmissionServiceOpt
 		repository:            repository,
 		images:                options.Images,
 		imageAllowlist:        append([]string(nil), options.ImageAllowlist...),
+		runtimePolicy:         options.RuntimePolicy.Clone(),
 		gitAllowlist:          append([]string(nil), options.GitAllowlist...),
 		clusterQueue:          strings.TrimSpace(options.ClusterQueue),
 		ensureTenantRuntime:   options.EnsureTenantRuntime,
@@ -147,20 +153,41 @@ func cloneLocalCachePolicy(policy LocalCachePolicy) LocalCachePolicy {
 	}
 }
 
-// imagePermitted resolves the requested image against the catalogue first. A
-// populated catalogue is the allowlist, so an administrator controls exactly
-// which environments can run without also editing deployment values.
-func (service *SubmissionService) imagePermitted(ctx context.Context, tenantID, reference string) bool {
+// resolveRuntime resolves the selected catalog entry once and snapshots its
+// authoritative image, engine and Ray version before JobSpec validation. A
+// deployment without catalog metadata retains only the legacy allowlist path.
+func (service *SubmissionService) resolveRuntime(ctx context.Context, tenantID string, spec domain.JobSpec) (domain.JobSpec, error) {
+	reference := strings.TrimSpace(spec.Image)
 	if service.images != nil {
-		if _, err := service.images.ImageByReference(ctx, tenantID, domain.ImageKindTraining, reference); err == nil {
-			return true
-		}
 		catalog, err := service.images.ListImages(ctx, tenantID, domain.ImageKindTraining)
-		if err == nil && len(catalog) > 0 {
-			return false
+		if err != nil {
+			return domain.JobSpec{}, ErrSubmissionImageNotAllowed
+		}
+		for _, image := range catalog {
+			if image.Reference != reference {
+				continue
+			}
+			effectivePolicy := service.runtimePolicy.EffectiveForTenant(tenantID)
+			snapshot, resolveErr := runtimecatalog.Resolve(image, spec.TrainingEngine, effectivePolicy)
+			if resolveErr != nil {
+				return domain.JobSpec{}, ErrSubmissionImageNotAllowed
+			}
+			spec.Image = snapshot.ImageDigest
+			spec.TrainingEngine = snapshot.Engine
+			spec.RayVersion = snapshot.RayVersion
+			return spec, nil
+		}
+		if len(catalog) > 0 {
+			return domain.JobSpec{}, ErrSubmissionImageNotAllowed
 		}
 	}
-	return matchesAllowlist(reference, service.imageAllowlist)
+	if !matchesAllowlist(reference, service.imageAllowlist) || spec.TrainingEngine.Resolved() != domain.TrainingEngineRayDDP {
+		return domain.JobSpec{}, ErrSubmissionImageNotAllowed
+	}
+	spec.Image = reference
+	spec.TrainingEngine = domain.TrainingEngineRayDDP
+	spec.RayVersion = domain.RayVersionLegacy
+	return spec, nil
 }
 
 func (service *SubmissionService) Submit(ctx context.Context, input SubmissionInput) (*domain.TrainingJob, error) {
@@ -170,12 +197,17 @@ func (service *SubmissionService) Submit(ctx context.Context, input SubmissionIn
 	if err := input.Origin.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrSubmissionInvalidOrigin, err)
 	}
-	spec, err := normalizeSubmissionSpec(input.Principal, input.Origin, input.Spec, service.localCache)
+	resolvedSpec, err := service.resolveRuntime(ctx, input.Principal.TenantID, input.Spec)
 	if err != nil {
 		return nil, err
 	}
-	if !service.imagePermitted(ctx, input.Principal.TenantID, spec.Image) {
-		return nil, ErrSubmissionImageNotAllowed
+	spec, err := normalizeSubmissionSpec(input.Principal, input.Origin, resolvedSpec, service.localCache)
+	if err != nil {
+		return nil, err
+	}
+	resumeCheckpointID, err := service.resolveResumeCheckpoint(ctx, input.Principal, spec)
+	if err != nil {
+		return nil, err
 	}
 	if spec.Source.Type == "git" && !matchesGitAllowlist(spec.Source.URL, service.gitAllowlist) {
 		return nil, ErrSubmissionGitNotAllowed
@@ -192,16 +224,19 @@ func (service *SubmissionService) Submit(ctx context.Context, input SubmissionIn
 			return nil, err
 		}
 	}
-	if err := service.repository.EnsureIdentity(ctx, input.Principal); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrSubmissionIdentityPersist, err)
+	deferIdentityPersistence := spec.DataMode == domain.DataModeRayData || spec.DataMode == domain.DataModeRayDataStage
+	if !deferIdentityPersistence {
+		if err := service.repository.EnsureIdentity(ctx, input.Principal); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrSubmissionIdentityPersist, err)
+		}
 	}
-	if service.ensureTenantRuntime != nil {
+	if service.ensureTenantRuntime != nil && !deferIdentityPersistence {
 		namespace := "tenant-" + sanitizeDNS(input.Principal.TenantID)
 		if err := service.ensureTenantRuntime(ctx, input.Principal.TenantID, namespace, spec.Queue, service.clusterQueue); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrSubmissionQueueProvision, err)
 		}
 	}
-	if service.ensureDataSpaces != nil {
+	if service.ensureDataSpaces != nil && !deferIdentityPersistence {
 		if err := service.ensureDataSpaces(ctx, input.Principal); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrSubmissionDataSpacesUnavailable, err)
 		}
@@ -220,6 +255,9 @@ func (service *SubmissionService) Submit(ctx context.Context, input SubmissionIn
 		return nil, err
 	}
 	spec.ResolvedDataMounts = resolvedDataMounts
+	if err := spec.Managed.ValidateResolvedDataMode(spec.DataMode, spec.ResolvedDataMounts); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrSubmissionDataMountNotReady, err)
+	}
 	if service.ensureOutputDirectory != nil && spec.ResolvedDataMounts.Output != nil {
 		if err := service.ensureOutputDirectory(ctx, input.Principal, spec.ResolvedDataMounts); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrSubmissionDataMountNotReady, err)
@@ -233,11 +271,28 @@ func (service *SubmissionService) Submit(ctx context.Context, input SubmissionIn
 	if (spec.Source.Type == "workspace" || spec.Source.Type == "workspace-archive") && spec.ResolvedDataRoots.Personal == nil {
 		return nil, ErrSubmissionDataMountNotReady
 	}
+	if deferIdentityPersistence {
+		if service.ensureTenantRuntime != nil {
+			namespace := "tenant-" + sanitizeDNS(input.Principal.TenantID)
+			if err := service.ensureTenantRuntime(ctx, input.Principal.TenantID, namespace, spec.Queue, service.clusterQueue); err != nil {
+				return nil, fmt.Errorf("%w: %v", ErrSubmissionQueueProvision, err)
+			}
+		}
+		if err := service.repository.EnsureIdentity(ctx, input.Principal); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrSubmissionIdentityPersist, err)
+		}
+		if service.ensureDataSpaces != nil {
+			if err := service.ensureDataSpaces(ctx, input.Principal); err != nil {
+				return nil, fmt.Errorf("%w: %v", ErrSubmissionDataSpacesUnavailable, err)
+			}
+		}
+	}
 	job := &domain.TrainingJob{
 		ID: id, TenantID: input.Principal.TenantID, UserID: input.Principal.Subject,
 		Spec: spec, DesiredState: domain.DesiredActive, ObservedState: domain.StateSubmitted,
 		KubernetesNS:     "tenant-" + sanitizeDNS(input.Principal.TenantID),
 		SubmissionOrigin: input.Origin, ExternalSubmissionID: strings.TrimSpace(input.ExternalSubmissionID),
+		ResumeCheckpointID: resumeCheckpointID,
 	}
 	if spec.Source.Type == "workspace-archive" {
 		job.SourceArtifactID = spec.Source.ArtifactID
@@ -246,6 +301,38 @@ func (service *SubmissionService) Submit(ctx context.Context, input SubmissionIn
 		return nil, err
 	}
 	return job, nil
+}
+
+func (service *SubmissionService) resolveResumeCheckpoint(ctx context.Context, principal auth.Principal, spec domain.JobSpec) (string, error) {
+	if spec.ParentJobID == "" {
+		return "", nil
+	}
+	if spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain || spec.Checkpoint.Space != domain.DataSpaceMyRuns {
+		return "", ErrSubmissionResumeCheckpointNotFound
+	}
+	parent, err := service.repository.Get(ctx, principal.TenantID, spec.ParentJobID)
+	if err != nil || parent == nil || parent.ID != spec.ParentJobID || parent.TenantID != principal.TenantID || parent.UserID != principal.Subject || parent.Spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain || parent.Spec.Output.Space != domain.DataSpaceMyRuns {
+		return "", ErrSubmissionResumeCheckpointNotFound
+	}
+	store, ok := service.repository.(checkpointStore)
+	if !ok {
+		return "", ErrSubmissionResumeCheckpointNotFound
+	}
+	checkpoints, err := store.ListUsableCheckpoints(ctx, parent.TenantID, parent.UserID, parent.ID)
+	if err != nil {
+		return "", ErrSubmissionResumeCheckpointNotFound
+	}
+	for _, checkpoint := range checkpoints {
+		if !checkpoint.Complete || checkpoint.JobID != parent.ID || checkpoint.TenantID != parent.TenantID || checkpoint.UserID != parent.UserID || checkpoint.Validate() != nil {
+			continue
+		}
+		expectedObjectPath := path.Join(domain.DataMountOutputPath, ".platform", "ray-train", parent.ID, "checkpoints", checkpoint.ID)
+		expectedRelativePath := path.Join(strings.Trim(parent.Spec.Output.RelativePath, "/"), parent.ID, ".platform", "ray-train", parent.ID, "checkpoints", checkpoint.ID)
+		if checkpoint.ObjectPath == expectedObjectPath && spec.Checkpoint.RelativePath == expectedRelativePath {
+			return checkpoint.ID, nil
+		}
+	}
+	return "", ErrSubmissionResumeCheckpointNotFound
 }
 
 func (service *SubmissionService) authorizeWorkspaceSnapshot(ctx context.Context, principal auth.Principal, snapshotID string) error {
@@ -461,7 +548,15 @@ func normalizeSubmissionSpec(principal auth.Principal, origin domain.SubmissionO
 	spec.ResolvedStorage = domain.ResolvedStorageMounts{}
 	spec.ResolvedDataMounts = domain.ResolvedDataSpaceMounts{}
 	spec.ResolvedDataRoots = domain.ResolvedDataSpaceRoots{}
-	cache, err := normalizeCacheRequest(spec.Cache, cachePolicy)
+	if spec.DataMode == domain.DataModeRayData || spec.DataMode == domain.DataModeRayDataStage {
+		if err := spec.Managed.ValidateDataMode(spec.DataMode); err != nil {
+			return domain.JobSpec{}, fmt.Errorf("%w: %v", ErrSubmissionInvalidJobSpec, err)
+		}
+		if spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain {
+			return domain.JobSpec{}, fmt.Errorf("%w: %s requires ray-train", ErrSubmissionInvalidJobSpec, spec.DataMode)
+		}
+	}
+	cache, err := normalizeDataModeCacheRequest(spec.DataMode, spec.Cache, cachePolicy)
 	if err != nil {
 		return domain.JobSpec{}, fmt.Errorf("%w: %v", ErrSubmissionInvalidJobSpec, err)
 	}
@@ -479,6 +574,41 @@ func normalizeSubmissionSpec(principal auth.Principal, origin domain.SubmissionO
 		return domain.JobSpec{}, ErrSubmissionCodeSourceNotAllowed
 	}
 	return spec, nil
+}
+
+func normalizeDataModeCacheRequest(mode domain.DataMode, cache domain.CacheRequest, policy LocalCachePolicy) (domain.CacheRequest, error) {
+	if mode != domain.DataModeRayData && mode != domain.DataModeRayDataStage {
+		return normalizeCacheRequest(cache, policy)
+	}
+	if !policy.Enabled {
+		return domain.CacheRequest{}, fmt.Errorf("%s runtime cache capability is disabled", mode)
+	}
+	if !hasDualLocalCacheMounts(policy) {
+		return domain.CacheRequest{}, fmt.Errorf("%s requires dual-NVMe runtime cache capability", mode)
+	}
+
+	cache.Mode = domain.CacheMode(strings.TrimSpace(string(cache.Mode)))
+	cache.Size = strings.TrimSpace(cache.Size)
+	cache.Preload = domain.CachePreloadMode(strings.TrimSpace(string(cache.Preload)))
+	if cache.Mode == "" {
+		cache.Mode = domain.CacheModeRuntime
+	}
+	if cache.Mode != domain.CacheModeRuntime {
+		return domain.CacheRequest{}, fmt.Errorf("%s requires runtime cache", mode)
+	}
+	if cache.Preload != "" {
+		return domain.CacheRequest{}, fmt.Errorf("%s mode does not support cache preload", mode)
+	}
+	return normalizeCacheRequest(cache, policy)
+}
+
+func hasDualLocalCacheMounts(policy LocalCachePolicy) bool {
+	if len(policy.MountPaths) < 2 {
+		return false
+	}
+	first := strings.TrimSpace(policy.MountPaths[0])
+	second := strings.TrimSpace(policy.MountPaths[1])
+	return first != "" && second != "" && first != second
 }
 
 func normalizeCacheRequest(cache domain.CacheRequest, policy LocalCachePolicy) (domain.CacheRequest, error) {
@@ -549,7 +679,8 @@ func (service *SubmissionService) materializeArtifact(ctx context.Context, princ
 		OutputStorage: spec.OutputStorage, Input: spec.Input, Checkpoint: spec.Checkpoint, Output: spec.Output,
 		ResolvedStorage: spec.ResolvedStorage, ResolvedDataMounts: spec.ResolvedDataMounts, ResolvedDataRoots: spec.ResolvedDataRoots, TimeoutSeconds: spec.TimeoutSeconds,
 		RetryPolicy: spec.RetryPolicy, CleanupPolicy: spec.CleanupPolicy,
-		Cache: spec.Cache,
+		TrainingEngine: spec.TrainingEngine, RayVersion: spec.RayVersion, Managed: spec.Managed,
+		DataMode: spec.DataMode, ParentJobID: spec.ParentJobID, Cache: spec.Cache,
 	}, nil
 }
 

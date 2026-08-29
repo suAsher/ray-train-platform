@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -19,10 +20,14 @@ import (
 
 const SourceArtifactUploadTTL = 15 * time.Minute
 
+var sourceArtifactClientRequestID = regexp.MustCompile(`^source-request-[0-9a-f]{24}$`)
+
 type SourceArtifactRepository interface {
 	EnsureIdentity(context.Context, auth.Principal) error
 	CreateOrReuseSourceArtifact(context.Context, *domain.SourceArtifact) (*domain.SourceArtifact, error)
 	CreateOrReuseSourceArtifactWithLimits(context.Context, *domain.SourceArtifact, repositories.SourceArtifactLimits) (*domain.SourceArtifact, error)
+	CreateSourceArtifactForRequestWithLimits(context.Context, *domain.SourceArtifact, string, repositories.SourceArtifactLimits) (*domain.SourceArtifact, error)
+	GetSourceArtifactByClientRequestID(context.Context, string, string, string) (*domain.SourceArtifact, error)
 	GetSourceArtifact(context.Context, string, string, string) (*domain.SourceArtifact, error)
 	ReopenSourceArtifactUploadWithLimits(context.Context, string, string, string, time.Time, repositories.SourceArtifactLimits) (*domain.SourceArtifact, error)
 	MarkSourceArtifactReady(context.Context, string, string, string, time.Time) (*domain.SourceArtifact, error)
@@ -52,8 +57,9 @@ type SourceArtifactHandler struct {
 }
 
 type createSourceArtifactRequest struct {
-	SHA256    string `json:"sha256"`
-	SizeBytes int64  `json:"sizeBytes"`
+	ClientRequestID string `json:"clientRequestId"`
+	SHA256          string `json:"sha256"`
+	SizeBytes       int64  `json:"sizeBytes"`
 }
 
 type sourceArtifactResponse struct {
@@ -99,6 +105,7 @@ func (handler *SourceArtifactHandler) RegisterRoutes(group *gin.RouterGroup) {
 	write := group.Group("")
 	write.Use(auth.RequireScopes(domain.PATScopeSourcesWrite))
 	write.POST("/source-artifacts", handler.create)
+	write.GET("/source-artifact-requests/:requestId", handler.resolveRequest)
 	write.POST("/source-artifacts/:id/complete", handler.complete)
 }
 
@@ -112,6 +119,10 @@ func (handler *SourceArtifactHandler) create(c *gin.Context) {
 	}
 	var request createSourceArtifactRequest
 	if !handler.bindCreateSourceArtifactRequest(c, &request) {
+		return
+	}
+	if request.ClientRequestID != "" && !sourceArtifactClientRequestID.MatchString(request.ClientRequestID) {
+		handler.writeError(c, http.StatusBadRequest, "INVALID_SOURCE_REQUEST_ID", "clientRequestId must use the supported immutable format")
 		return
 	}
 	if err := handler.repository.EnsureIdentity(c.Request.Context(), principal); err != nil {
@@ -129,15 +140,26 @@ func (handler *SourceArtifactHandler) create(c *gin.Context) {
 		handler.writeError(c, http.StatusServiceUnavailable, "DATA_SPACE_LOOKUP_FAILED", "could not resolve the personal code workspace")
 		return
 	}
-	artifact, err := domain.NewSourceArtifact(domain.SourceArtifactInput{
+	artifactInput := domain.SourceArtifactInput{
 		ID: id, TenantID: principal.TenantID, UserID: principal.Subject, StorageRoot: storageRoot,
 		SHA256: request.SHA256, SizeBytes: request.SizeBytes,
-	}, now.Add(SourceArtifactUploadTTL), now)
+	}
+	var artifact domain.SourceArtifact
+	if request.ClientRequestID == "" {
+		artifact, err = domain.NewSourceArtifact(artifactInput, now.Add(SourceArtifactUploadTTL), now)
+	} else {
+		artifact, err = domain.NewRequestScopedSourceArtifact(artifactInput, now.Add(SourceArtifactUploadTTL), now)
+	}
 	if err != nil {
 		handler.writeError(c, http.StatusBadRequest, "INVALID_SOURCE_ARTIFACT", "sha256, sizeBytes, or authenticated identity is invalid")
 		return
 	}
-	stored, err := handler.repository.CreateOrReuseSourceArtifactWithLimits(c.Request.Context(), &artifact, handler.limits)
+	var stored *domain.SourceArtifact
+	if request.ClientRequestID == "" {
+		stored, err = handler.repository.CreateOrReuseSourceArtifactWithLimits(c.Request.Context(), &artifact, handler.limits)
+	} else {
+		stored, err = handler.repository.CreateSourceArtifactForRequestWithLimits(c.Request.Context(), &artifact, request.ClientRequestID, handler.limits)
+	}
 	if errors.Is(err, repositories.ErrSourceArtifactQuotaExceeded) {
 		handler.writeError(c, http.StatusTooManyRequests, "SOURCE_ARTIFACT_QUOTA_EXCEEDED", "source artifact owner quota exceeded")
 		return
@@ -190,6 +212,34 @@ func (handler *SourceArtifactHandler) create(c *gin.Context) {
 		ArtifactID: stored.ID, State: stored.State, SHA256: stored.SHA256, SizeBytes: stored.SizeBytes,
 		UploadURL: presigned.URL, RequiredHeaders: presigned.RequiredHeaders, ContentLength: presigned.ContentLength,
 		ExpiresAt: &expiresAt, UploadRequired: true,
+	})
+}
+
+func (handler *SourceArtifactHandler) resolveRequest(c *gin.Context) {
+	principal, ok := handler.engineerPrincipal(c)
+	if !ok {
+		return
+	}
+	if !handler.allowSourceArtifactAction(c, principal, sourceArtifactActionCreate) {
+		return
+	}
+	clientRequestID := c.Param("requestId")
+	if !sourceArtifactClientRequestID.MatchString(clientRequestID) {
+		handler.writeError(c, http.StatusNotFound, "SOURCE_ARTIFACT_REQUEST_NOT_FOUND", "source artifact request was not found")
+		return
+	}
+	artifact, err := handler.repository.GetSourceArtifactByClientRequestID(c.Request.Context(), principal.TenantID, principal.Subject, clientRequestID)
+	if errors.Is(err, repositories.ErrSourceArtifactNotFound) {
+		handler.writeError(c, http.StatusNotFound, "SOURCE_ARTIFACT_REQUEST_NOT_FOUND", "source artifact request was not found")
+		return
+	}
+	if err != nil {
+		handler.writeError(c, http.StatusInternalServerError, "SOURCE_ARTIFACT_REQUEST_LOOKUP_FAILED", "could not load source artifact request")
+		return
+	}
+	handler.writeSuccess(c, http.StatusOK, sourceArtifactResponse{
+		ArtifactID: artifact.ID, State: artifact.State, SHA256: artifact.SHA256,
+		SizeBytes: artifact.SizeBytes, UploadRequired: artifact.State != domain.SourceArtifactReady,
 	})
 }
 

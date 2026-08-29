@@ -92,7 +92,7 @@ func TestTenantGPUQuotaExcludesTerminalJobs(t *testing.T) {
 	if err := repo.Create(context.Background(), &job, "quota-terminal"); err != nil {
 		t.Fatalf("create job: %v", err)
 	}
-	if err := repo.ApplyObservedState(context.Background(), domain.ObservedJobState{ID: job.ID, State: domain.StateSucceeded}); err != nil {
+	if err := repo.ApplyObservedState(context.Background(), observedStateForTest(job, domain.StateSucceeded)); err != nil {
 		t.Fatalf("apply terminal state: %v", err)
 	}
 

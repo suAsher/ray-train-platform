@@ -27,6 +27,7 @@ import (
 	"ray-train-platform-backend/observability"
 	"ray-train-platform-backend/rayapi"
 	"ray-train-platform-backend/repositories"
+	"ray-train-platform-backend/runtimecatalog"
 )
 
 func main() {
@@ -124,7 +125,7 @@ func main() {
 	}
 	dataObjectStore, _ := directoryLister.(objectstore.DataSpaceStore)
 	workspaceSnapshotStore, _ := directoryLister.(objectstore.WorkspaceSnapshotStore)
-	jobHandler := api.NewHandler(repository, api.Options{AllowAnonymous: cfg.DemoMode, Logs: logs, Metrics: metrics, Experiments: experiments, ImageAllowlist: cfg.RayImageAllowlist, GitAllowlist: cfg.GitAllowlist, Workspaces: repository, Kubernetes: kubeClient, WorkspaceImage: cfg.WorkspaceImage, RayVersion: cfg.RayVersion, ServiceAccount: cfg.RayJobServiceAccount, ImagePullSecrets: cfg.ImagePullSecrets, PlatformNamespace: runtimeNamespace(), IDCClaim: cfg.IDCExistingClaim, IDCMountPath: cfg.IDCMountPath, KueueClusterQueue: cfg.KueueClusterQueue, Admin: repository, GPUAllocations: repository, Quota: repository, WorkspacePepper: []byte(cfg.PATPepper), TrainingNodeSelector: cfg.TrainingNodeSelector, Images: repository, GitCredentials: repository, StorageAssets: repository, DataSpaces: repository, DataSpacesEnabled: cfg.DataSpacesEnabled, DataSpacesFSXAttributes: cfg.DataSpacesFSXAttributes, DataSpacesMountCapacity: cfg.DataSpacesMountCapacity, DataSpacesPublicRoot: cfg.DataSpacesPublicRoot, IDCDataSpacesEnabled: cfg.IDCDataSpacesEnabled, IDCDataSpacesMountCapacity: cfg.IDCDataSpacesMountCapacity, IDCDataSpaceSources: idcDataSpaceSources(cfg), DirectoryLister: directoryLister, DirectoryInitializer: directoryInitializer, DataObjectStore: dataObjectStore, WorkspaceSnapshotStore: workspaceSnapshotStore, WorkspaceSnapshots: repository, ArtifactLister: artifactLister, ArtifactReader: artifactReader, LocalCache: api.LocalCachePolicy{Enabled: cfg.LocalCacheEnabled, AllowedSizes: cfg.LocalCacheAllowedSizes, DefaultSize: cfg.LocalCacheSize, MaxSize: cfg.LocalCacheMaxSize, MountPath: cfg.LocalCacheMountPathData1, MountPaths: []string{cfg.LocalCacheMountPathData1, cfg.LocalCacheMountPathData2}}, MLflowDashboardEnabled: cfg.MLflowDashboardEnabled, MLflowDashboardStore: repository, MLflowTrackingURL: cfg.MLflowTrackingURL, MLflowPublicOrigin: cfg.MLflowPublicOrigin, MLflowDashboardPepper: []byte(cfg.PATPepper), MLflowDashboardSessionTTL: time.Duration(cfg.MLflowDashboardSessionHours) * time.Hour})
+	jobHandler := api.NewHandler(repository, api.Options{AllowAnonymous: cfg.DemoMode, Logs: logs, Metrics: metrics, Experiments: experiments, ImageAllowlist: cfg.RayImageAllowlist, GitAllowlist: cfg.GitAllowlist, Workspaces: repository, Kubernetes: kubeClient, WorkspaceImage: cfg.WorkspaceImage, RayVersion: cfg.RayVersion, ServiceAccount: cfg.RayJobServiceAccount, ImagePullSecrets: cfg.ImagePullSecrets, PlatformNamespace: runtimeNamespace(), IDCClaim: cfg.IDCExistingClaim, IDCMountPath: cfg.IDCMountPath, KueueClusterQueue: cfg.KueueClusterQueue, Admin: repository, GPUAllocations: repository, Quota: repository, WorkspacePepper: []byte(cfg.PATPepper), TrainingNodeSelector: cfg.TrainingNodeSelector, Images: repository, GitCredentials: repository, StorageAssets: repository, DataSpaces: repository, DataSpacesEnabled: cfg.DataSpacesEnabled, DataSpacesFSXAttributes: cfg.DataSpacesFSXAttributes, DataSpacesMountCapacity: cfg.DataSpacesMountCapacity, DataSpacesPublicRoot: cfg.DataSpacesPublicRoot, IDCDataSpacesEnabled: cfg.IDCDataSpacesEnabled, IDCDataSpacesMountCapacity: cfg.IDCDataSpacesMountCapacity, IDCDataSpaceSources: idcDataSpaceSources(cfg), DirectoryLister: directoryLister, DirectoryInitializer: directoryInitializer, DataObjectStore: dataObjectStore, WorkspaceSnapshotStore: workspaceSnapshotStore, WorkspaceSnapshots: repository, ArtifactLister: artifactLister, ArtifactReader: artifactReader, LocalCache: api.LocalCachePolicy{Enabled: cfg.LocalCacheEnabled, AllowedSizes: cfg.LocalCacheAllowedSizes, DefaultSize: cfg.LocalCacheSize, MaxSize: cfg.LocalCacheMaxSize, MountPath: cfg.LocalCacheMountPathData1, MountPaths: []string{cfg.LocalCacheMountPathData1, cfg.LocalCacheMountPathData2}}, RuntimePolicy: runtimecatalog.NewPolicy(cfg.RayTrainManagedEnabled, cfg.RayTrainCanaryEnabled, cfg.RayTrainManagedTenants, cfg.RayTrainCanaryTenants), MLflowDashboardEnabled: cfg.MLflowDashboardEnabled, MLflowDashboardStore: repository, MLflowTrackingURL: cfg.MLflowTrackingURL, MLflowPublicOrigin: cfg.MLflowPublicOrigin, MLflowDashboardPepper: []byte(cfg.PATPepper), MLflowDashboardSessionTTL: time.Duration(cfg.MLflowDashboardSessionHours) * time.Hour})
 	rayHandler, err := newRayAPIHandler(repository, jobHandler.SubmissionService(), logs, cfg)
 	if err != nil {
 		log.Fatalf("initialize Ray Jobs API compatibility: %v", err)
@@ -256,6 +257,9 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	// MLflow authenticates browser navigation with its own path-scoped cookie,
 	// so the proxy must remain outside bearer middleware.
 	jobs.RegisterMLflowDashboardProxyRoute(router.Group(""))
+	// Managed workers authenticate with a random job-scoped credential rather
+	// than a user session or cluster-wide service-account token.
+	jobs.RegisterTrainingEventRoutes(router.Group("/api/v1/internal"))
 
 	protected := router.Group("")
 	protected.Use(auth.HybridMiddlewareWithLocal(oidc, pat, localSessions, cfg.OIDCRequired), auth.DemoIdentityMiddleware(cfg.DemoMode))
@@ -265,6 +269,7 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	// navigation with its own workspace-scoped token.
 	jobs.RegisterWorkspaceProxyRoute(v1)
 	jobs.RegisterTrainingRoutes(v1)
+	jobs.RegisterCheckpointRoutes(v1)
 	if artifacts != nil {
 		artifacts.RegisterRoutes(v1)
 	}
@@ -311,7 +316,11 @@ func newKubernetesClient(cfg config.Config) (*k8s.Client, error) {
 }
 
 func newReconcilerWithQuotaSync(repository *repositories.GormRepository, client *k8s.Client, cfg config.Config, options k8s.RenderOptions) *k8s.Reconciler {
-	return k8s.NewReconciler(repository, client, options).WithGitCredentials(repository).WithQuotaSync(k8s.QuotaSyncOptions{
+	store := k8s.JobStore(repository)
+	if client != nil {
+		store = &managedCredentialJobStore{GormRepository: repository, kubernetes: client, now: time.Now}
+	}
+	return k8s.NewReconciler(store, client, options).WithGitCredentials(repository).WithQuotaSync(k8s.QuotaSyncOptions{
 		ClusterQueueName: cfg.KueueClusterQueue,
 		Enabled:          cfg.KueueAutoQuota,
 	})
@@ -346,7 +355,54 @@ func newReconciler(repository *repositories.GormRepository, client *k8s.Client, 
 			ExperimentPrefix: cfg.MLflowExperimentPrefix,
 			ProvenanceKey:    []byte(cfg.PATPepper),
 		},
+		TrainingEventBaseURL: managedTrainingEventBaseURL(runtimeNamespace()),
 	})
+}
+
+const managedTrainingEventTokenTTL = 30 * 24 * time.Hour
+
+// managedCredentialJobStore is a narrow reconciler adapter. Before a managed
+// Ray Train manifest can be rendered, it makes the namespace-local Secret and
+// PostgreSQL digest agree. The raw credential never enters a JobRecord.
+type managedCredentialJobStore struct {
+	*repositories.GormRepository
+	kubernetes *k8s.Client
+	now        func() time.Time
+}
+
+func (store *managedCredentialJobStore) GetByID(ctx context.Context, jobID string) (*domain.TrainingJob, error) {
+	job, err := store.GormRepository.GetByID(ctx, jobID)
+	if err != nil || job.Spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain {
+		return job, err
+	}
+	namespace := strings.TrimSpace(job.KubernetesNS)
+	if namespace == "" {
+		namespace = "tenant-" + job.TenantID
+	}
+	token, err := store.kubernetes.EnsureTrainingEventTokenSecret(ctx, namespace, job.ID)
+	if err != nil {
+		return nil, fmt.Errorf("ensure managed training event credential: %w", err)
+	}
+	now := store.now().UTC()
+	ttl := managedTrainingEventTokenTTL
+	if job.Spec.TimeoutSeconds > int64(ttl/time.Second) {
+		ttl = time.Duration(job.Spec.TimeoutSeconds)*time.Second + 24*time.Hour
+	}
+	if err := store.GormRepository.EnsureTrainingEventToken(ctx, job.ID, token, now.Add(ttl)); err != nil {
+		return nil, fmt.Errorf("persist managed training event credential: %w", err)
+	}
+	return job, nil
+}
+
+func managedTrainingEventBaseURL(namespace string) string {
+	if configured := strings.TrimSpace(os.Getenv("TRAINING_EVENT_BASE_URL")); configured != "" {
+		return strings.TrimRight(configured, "/")
+	}
+	namespace = strings.TrimSpace(namespace)
+	if namespace == "" {
+		namespace = "ray-train-platform"
+	}
+	return "http://ray-train-backend." + namespace + ".svc.cluster.local:8080/api/v1/internal"
 }
 
 func requestIDMiddleware() gin.HandlerFunc {

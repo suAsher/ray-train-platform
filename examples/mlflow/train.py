@@ -21,6 +21,7 @@ def platform_tags() -> dict[str, str]:
         "platform.tenant_id": required_env("RAYTRAIN_TENANT_ID"),
         "platform.submitter_user_id": required_env("RAYTRAIN_SUBMITTER_USER_ID"),
         "platform.provenance": required_env("RAYTRAIN_MLFLOW_PROVENANCE"),
+        "platform.cluster_attempt": required_env("RAYTRAIN_CLUSTER_ATTEMPT"),
     }
 
 

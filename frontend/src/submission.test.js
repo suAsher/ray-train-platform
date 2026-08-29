@@ -83,6 +83,102 @@ test('buildJobSpec maps a Git submission into the platform runtime contract', ()
   assert.equal('datasetUri' in spec, false)
   assert.equal(spec.timeoutSeconds, 3600)
   assert.deepEqual(spec.retryPolicy, { maxRetries: 1 })
+  assert.equal(spec.trainingEngine, 'ray-ddp')
+  assert.equal('rayVersion' in spec, false)
+})
+
+test('managed engine is opt-in and carries managed recovery and checkpoint policy', () => {
+  const form = {
+    ...baseForm(),
+    trainingEngine: 'ray-train',
+    maxFailures: 2,
+    checkpointEveryEpochs: 1,
+    checkpointKeepLatest: 3,
+    checkpointKeepBest: 1,
+  }
+  const before = structuredClone(form)
+  const spec = buildJobSpec(form)
+
+  assert.equal(spec.trainingEngine, 'ray-train')
+  assert.deepEqual(spec.managed, {
+    maxFailures: 2,
+    checkpoint: { everyEpochs: 1, keepLatest: 3, keepBest: 1 },
+  })
+  assert.equal('rayVersion' in spec, false)
+  assert.deepEqual(form, before)
+})
+
+test('Ray Data staging is explicit, uses the selected input root, and keeps init preload disabled', () => {
+  const spec = buildJobSpec({
+    ...baseForm(),
+    trainingEngine: 'ray-train',
+    maxFailures: 2,
+    checkpointEveryEpochs: 1,
+    checkpointKeepLatest: 3,
+    checkpointKeepBest: 1,
+    dataMode: 'ray-data-stage',
+    cacheMode: 'runtime',
+    cacheSize: '200Gi',
+    cachePreload: '',
+    input: { spaceId: 'public', relativePath: 'labeled' },
+  }, cacheLimits())
+
+  assert.equal(spec.dataMode, 'ray-data-stage')
+  assert.deepEqual(spec.cache, { mode: 'runtime', size: '200Gi' })
+  assert.deepEqual(spec.managed.rayData, { format: 'files', uri: '/mnt/data/input' })
+})
+
+test('Ray Data staging rejects the compatibility engine before submit', () => {
+  assert.throws(() => buildJobSpec({
+    ...baseForm(),
+    trainingEngine: 'ray-ddp',
+    dataMode: 'ray-data-stage',
+    cacheMode: 'runtime',
+    cacheSize: '200Gi',
+    input: { spaceId: 'public', relativePath: 'labeled' },
+}, cacheLimits()), /Ray Train/)
+})
+
+test('Ray Data staging rejects a whole governed space without a dataset path', () => {
+  assert.throws(() => buildJobSpec({
+    ...baseForm(),
+    trainingEngine: 'ray-train',
+    dataMode: 'ray-data-stage',
+    cacheMode: 'runtime',
+    cacheSize: '200Gi',
+    input: { spaceId: 'public', relativePath: '' },
+  }, cacheLimits()), /具体的数据集子目录/)
+})
+
+test('legacy DDP payload omits managed policy even when stale managed fields are present', () => {
+  const spec = buildJobSpec({
+    ...baseForm(),
+    trainingEngine: 'ray-ddp',
+    maxFailures: 9,
+    checkpointEveryEpochs: 9,
+    checkpointKeepLatest: 9,
+    checkpointKeepBest: 9,
+  })
+
+  assert.equal(spec.trainingEngine, 'ray-ddp')
+  assert.equal('managed' in spec, false)
+})
+
+test('resume submission carries an immutable parent job relationship', () => {
+  const parentJobId = 'job-0123456789abcdef01234567'
+  const spec = buildJobSpec({ ...baseForm(), parentJobId })
+  assert.equal(spec.parentJobId, parentJobId)
+})
+
+test('resume submission enforces the exact backend parent job ID contract', () => {
+  for (const parentJobId of [
+    'job-0123456789abcdef0123456',
+    'job-0123456789ABCDEF01234567',
+    ' job-0123456789abcdef01234567',
+    'job-0123456789abcdef01234567 ',
+  ]) {
+    assert.throws(() => buildJobSpec({ ...baseForm(), parentJobId }), /任务 ID 格式不合法/)
+  }
 })
 
 test('buildJobSpec rejects a multi-worker torchrun request before submitting it', () => {
@@ -177,6 +273,35 @@ test('equivalent submit command includes the selected runtime cache flags', () =
   assert.match(command, /--cache-mode 'runtime' \\\n  --cache-size '200Gi'/)
 })
 
+test('equivalent submit command shows the effective engine but never exposes a Ray version selector', () => {
+  const command = equivalentSubmitCommand({
+    ...baseForm(),
+    trainingEngine: 'ray-train',
+    maxFailures: 7,
+    checkpointEveryEpochs: 4,
+    checkpointKeepLatest: 9,
+    checkpointKeepBest: 2,
+  })
+  assert.match(command, /--engine 'ray-train'/)
+  assert.match(command, /--max-failures '7'/)
+  assert.match(command, /--checkpoint-every-epochs '4'/)
+  assert.match(command, /--checkpoint-keep-latest '9'/)
+  assert.match(command, /--checkpoint-keep-best '2'/)
+  assert.doesNotMatch(command, /--ray-version/)
+})
+
+test('equivalent submit command omits managed policy flags for Ray DDP', () => {
+  const command = equivalentSubmitCommand({
+    ...baseForm(),
+    trainingEngine: 'ray-ddp',
+    maxFailures: 7,
+    checkpointEveryEpochs: 4,
+    checkpointKeepLatest: 9,
+    checkpointKeepBest: 2,
+  })
+  assert.doesNotMatch(command, /--(?:max-failures|checkpoint-every-epochs|checkpoint-keep-latest|checkpoint-keep-best)/)
+})
+
 test('equivalent submit command includes automatic input preload as one user parameter', () => {
   const command = equivalentSubmitCommand({
     ...baseForm(), cacheMode: 'runtime', cacheSize: '200Gi', cachePreload: 'input',
@@ -217,6 +342,7 @@ test('equivalent submit command shell-quotes every interpolated flag value exact
     "--name 'team'\"'\"'s run; $(name) `name` && next'",
     "--image 'registry.example/train image:latest; $(image) `image` && next'\"'\"'s'",
     "--entrypoint 'python train.py --run '\"'\"'alpha beta'\"'\"'; $(entrypoint) `entrypoint` && next'",
+    "--engine 'ray-ddp'",
     "--workers '2; $(workers)'",
     "--gpus-per-worker '8 && `gpus`'",
     "--cache-mode 'runtime'",
@@ -258,6 +384,26 @@ test('JobDetail equivalent command preserves automatic preload', () => {
   assert.match(command, /--cache-preload 'input'/)
 })
 
+test('JobDetail equivalent command accepts every backend checkpoint boundary', () => {
+  const command = equivalentSubmitCommandForJob({
+    name: 'managed-boundary', entrypoint: 'python train.py',
+    spec: {
+      image: 'registry.example/ray@sha256:' + 'a'.repeat(64),
+      trainingEngine: 'ray-train',
+      resources: { workerReplicas: 2, gpusPerWorker: 8 },
+      managed: {
+        maxFailures: 10,
+        checkpoint: { everyEpochs: 100000, keepLatest: 1000, keepBest: 1000 },
+      },
+    },
+  })
+
+  assert.match(command, /--max-failures '10'/)
+  assert.match(command, /--checkpoint-every-epochs '100000'/)
+  assert.match(command, /--checkpoint-keep-latest '1000'/)
+  assert.match(command, /--checkpoint-keep-best '1000'/)
+})
+
 test('JobDetail equivalent command shell-quotes persisted values exactly', () => {
   const command = equivalentSubmitCommandForJob({
     name: "saved job's; $(name) `name` && next",
@@ -282,6 +428,7 @@ test('JobDetail equivalent command shell-quotes persisted values exactly', () =>
     "--name 'saved job'\"'\"'s; $(name) `name` && next'",
     "--image 'registry.example/saved image:latest; $(image) `image` && next'\"'\"'s'",
     "--entrypoint 'python saved.py --run '\"'\"'alpha beta'\"'\"'; $(entrypoint) `entrypoint` && next'",
+    "--engine 'ray-ddp'",
     "--workers '3; $(workers)'",
     "--gpus-per-worker '4 && `gpus`'",
     "--cache-mode 'runtime'",

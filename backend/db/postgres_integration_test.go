@@ -25,7 +25,7 @@ func TestPostgresMigrationsIntegration(t *testing.T) {
 	if err := database.Raw("SELECT version FROM schema_migrations ORDER BY version").Scan(&versions).Error; err != nil {
 		t.Fatalf("load migration versions: %v", err)
 	}
-	if want := []int{1, 2, 3}; !reflectIntSlicesEqual(versions, want) {
+	if want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22}; !reflectIntSlicesEqual(versions, want) {
 		t.Fatalf("migration versions = %v, want %v", versions, want)
 	}
 
@@ -39,13 +39,87 @@ func TestPostgresMigrationsIntegration(t *testing.T) {
 		}
 	}
 
-	for _, column := range []string{"source_artifact_id", "submission_origin", "external_submission_id"} {
+	for _, column := range []string{
+		"source_artifact_id",
+		"submission_origin",
+		"external_submission_id",
+		"training_engine",
+		"ray_version",
+		"cluster_attempt",
+		"worker_restart_count",
+		"resume_checkpoint_id",
+		"parent_job_id",
+	} {
 		var count int64
 		if err := database.Raw("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'training_jobs' AND column_name = ?", column).Scan(&count).Error; err != nil {
 			t.Fatalf("check training_jobs.%s: %v", column, err)
 		}
 		if count != 1 {
 			t.Errorf("training_jobs.%s count = %d, want 1", column, count)
+		}
+	}
+
+	runtimeColumnDefaults := map[string]string{
+		"training_engine":      "'ray-ddp'::text",
+		"ray_version":          "'2.35.0'::text",
+		"cluster_attempt":      "1",
+		"worker_restart_count": "0",
+		"resume_checkpoint_id": "''::text",
+		"parent_job_id":        "''::text",
+	}
+	for column, expectedDefault := range runtimeColumnDefaults {
+		var metadata struct {
+			ColumnName    string
+			IsNullable    string
+			ColumnDefault string
+		}
+		if err := database.Raw(`
+SELECT column_name, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'training_jobs'
+  AND column_name = ?`, column).Scan(&metadata).Error; err != nil {
+			t.Fatalf("load training_jobs.%s metadata: %v", column, err)
+		}
+		if metadata.ColumnName != column {
+			t.Errorf("training_jobs.%s metadata not found", column)
+			continue
+		}
+		if metadata.IsNullable != "NO" {
+			t.Errorf("training_jobs.%s is_nullable = %q, want NO", column, metadata.IsNullable)
+		}
+		if metadata.ColumnDefault != expectedDefault {
+			t.Errorf("training_jobs.%s default = %q, want %q", column, metadata.ColumnDefault, expectedDefault)
+		}
+	}
+
+	imageCompatibilityDefaults := map[string]string{
+		"ray_version":       "'2.35.0'::text",
+		"supported_engines": "'[\"ray-ddp\"]'::jsonb",
+	}
+	for column, expectedDefault := range imageCompatibilityDefaults {
+		var metadata struct {
+			ColumnName    string
+			IsNullable    string
+			ColumnDefault string
+		}
+		if err := database.Raw(`
+SELECT column_name, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'platform_images'
+  AND column_name = ?`, column).Scan(&metadata).Error; err != nil {
+			t.Fatalf("load platform_images.%s metadata: %v", column, err)
+		}
+		if metadata.ColumnName != column {
+			t.Errorf("platform_images.%s metadata not found", column)
+			continue
+		}
+		if metadata.IsNullable != "NO" {
+			t.Errorf("platform_images.%s is_nullable = %q, want NO", column, metadata.IsNullable)
+		}
+		if metadata.ColumnDefault != expectedDefault {
+			t.Errorf("platform_images.%s default = %q, want %q", column, metadata.ColumnDefault, expectedDefault)
 		}
 	}
 
@@ -56,7 +130,18 @@ func TestPostgresMigrationsIntegration(t *testing.T) {
 		"source_artifacts_sha256_check",
 		"source_artifacts_size_check",
 		"source_artifacts_state_check",
-		"source_artifacts_tenant_user_sha256_key",
+		"source_artifact_requests_client_request_id_check",
+		"source_artifact_requests_user_tenant_fk",
+		"source_artifact_requests_artifact_owner_fk",
+		"training_jobs_training_engine_check",
+		"training_jobs_ray_version_check",
+		"training_jobs_engine_ray_version_check",
+		"training_jobs_cluster_attempt_check",
+		"training_jobs_worker_restart_count_check",
+		"training_jobs_parent_job_id_check",
+		"platform_images_ray_version_check",
+		"platform_images_supported_engines_check",
+		"platform_images_engine_ray_version_check",
 	}
 	for _, constraint := range requiredConstraints {
 		var count int64
@@ -71,6 +156,76 @@ WHERE n.nspname = current_schema() AND c.conname = ?`, constraint).Scan(&count).
 		if count != 1 {
 			t.Errorf("constraint %s count = %d, want 1", constraint, count)
 		}
+	}
+
+	if err := database.Exec(`
+INSERT INTO platform_images(id, name, reference, kind)
+VALUES ('image-default-compatibility', 'Default compatibility', 'registry.example/runtime:legacy', 'training')`).Error; err != nil {
+		t.Fatalf("insert image using compatibility defaults: %v", err)
+	}
+	var defaultCompatibility struct {
+		RayVersion       string
+		SupportedEngines string
+	}
+	if err := database.Raw(`
+SELECT ray_version, supported_engines::text AS supported_engines
+FROM platform_images WHERE id = 'image-default-compatibility'`).Scan(&defaultCompatibility).Error; err != nil {
+		t.Fatalf("read image compatibility defaults: %v", err)
+	}
+	if defaultCompatibility.RayVersion != "2.35.0" || defaultCompatibility.SupportedEngines != `["ray-ddp"]` {
+		t.Errorf("platform image defaults = %+v, want Ray 2.35.0/ray-ddp", defaultCompatibility)
+	}
+
+	invalidCompatibilityRows := []struct {
+		name             string
+		id               string
+		rayVersion       string
+		supportedEngines string
+	}{
+		{name: "duplicate ray-ddp", id: "image-duplicate-ddp", rayVersion: "2.56.1", supportedEngines: `["ray-ddp","ray-ddp"]`},
+		{name: "duplicate ray-train", id: "image-duplicate-train", rayVersion: "2.56.1", supportedEngines: `["ray-train","ray-train"]`},
+		{name: "mixed duplicate", id: "image-mixed-duplicate", rayVersion: "2.56.1", supportedEngines: `["ray-ddp","ray-train","ray-ddp"]`},
+		{name: "unknown engine", id: "image-unknown-engine", rayVersion: "2.56.1", supportedEngines: `["unknown"]`},
+		{name: "empty engines", id: "image-empty-engines", rayVersion: "2.56.1", supportedEngines: `[]`},
+		{name: "legacy ray-train", id: "image-legacy-train", rayVersion: "2.35.0", supportedEngines: `["ray-train"]`},
+	}
+	for _, test := range invalidCompatibilityRows {
+		t.Run("rejects "+test.name, func(t *testing.T) {
+			// Keep every constraint probe outside a surrounding transaction. A
+			// rejected statement must not poison the following PostgreSQL checks.
+			err := database.Exec(`
+INSERT INTO platform_images(id, name, reference, kind, ray_version, supported_engines)
+VALUES (?, ?, ?, 'training', ?, CAST(? AS JSONB))`,
+				test.id, test.name, "registry.example/runtime:"+test.id, test.rayVersion, test.supportedEngines,
+			).Error
+			if err == nil {
+				t.Fatalf("platform image compatibility constraint accepted %s", test.supportedEngines)
+			}
+		})
+	}
+
+	if err := database.Exec(`
+INSERT INTO platform_images(id, name, reference, kind, ray_version, supported_engines)
+VALUES ('image-valid-mixed-engines', 'Valid mixed engines', 'registry.example/runtime:valid-mixed',
+        'training', '2.56.1', '["ray-ddp","ray-train"]'::jsonb)`).Error; err != nil {
+		t.Fatalf("valid Ray 2.56.1 mixed-engine image was rejected: %v", err)
+	}
+
+	for _, index := range []string{"training_jobs_engine_state_idx", "training_jobs_parent_idx"} {
+		var count int64
+		if err := database.Raw("SELECT COUNT(*) FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'training_jobs' AND indexname = ?", index).Scan(&count).Error; err != nil {
+			t.Fatalf("check index %s: %v", index, err)
+		}
+		if count != 1 {
+			t.Errorf("index %s count = %d, want 1", index, count)
+		}
+	}
+	var parentIndexDefinition string
+	if err := database.Raw("SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'training_jobs' AND indexname = 'training_jobs_parent_idx'").Scan(&parentIndexDefinition).Error; err != nil {
+		t.Fatalf("load training_jobs_parent_idx definition: %v", err)
+	}
+	if normalized := strings.ToLower(parentIndexDefinition); !strings.Contains(normalized, "where") || !strings.Contains(normalized, "parent_job_id") || !strings.Contains(normalized, "<> ''::text") {
+		t.Errorf("training_jobs_parent_idx is not partial: %q", parentIndexDefinition)
 	}
 
 	seedPostgresIdentityRows(t, database)
@@ -236,8 +391,18 @@ VALUES (?, 'tenant-a', 'user-a2', ?, 1, 'user-a2.zip', NOW() + INTERVAL '1 hour'
 	}
 	if err := database.Exec(`
 INSERT INTO source_artifacts(id, tenant_id, user_id, sha256, size_bytes, object_key, upload_expires_at)
-VALUES (?, 'tenant-a', 'user-a1', ?, 1, 'duplicate.zip', NOW() + INTERVAL '1 hour')`, "artifact-duplicate", sha).Error; err == nil {
-		t.Fatal("duplicate digest for the same tenant/user succeeded")
+VALUES (?, 'tenant-a', 'user-a1', ?, 1, 'duplicate.zip', NOW() + INTERVAL '1 hour')`, "artifact-duplicate", sha).Error; err != nil {
+		t.Fatalf("same-owner duplicate digest should be available for request-scoped idempotency: %v", err)
+	}
+	if err := database.Exec(`
+INSERT INTO source_artifact_requests(tenant_id, user_id, client_request_id, artifact_id)
+VALUES ('tenant-a', 'user-a1', 'source-request-0123456789abcdef01234567', 'artifact-duplicate')`).Error; err != nil {
+		t.Fatalf("insert owner-scoped source artifact request: %v", err)
+	}
+	if err := database.Exec(`
+INSERT INTO source_artifact_requests(tenant_id, user_id, client_request_id, artifact_id)
+VALUES ('tenant-b', 'user-b1', 'source-request-0123456789abcdef01234567', 'artifact-a1')`).Error; err == nil {
+		t.Fatal("cross-owner source artifact request mapping succeeded")
 	}
 }
 

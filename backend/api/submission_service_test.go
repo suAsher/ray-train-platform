@@ -9,13 +9,600 @@ import (
 
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
+	"ray-train-platform-backend/repositories"
+	"ray-train-platform-backend/runtimecatalog"
 )
 
 type submissionServiceRepository struct {
 	created        *domain.TrainingJob
+	createCalls    int
 	identityCalls  int
 	artifact       *domain.SourceArtifact
 	artifactLookup string
+	parent         *domain.TrainingJob
+	checkpoints    []domain.TrainingCheckpoint
+}
+
+type countingRuntimeImageStore struct {
+	stubImageStore
+	lookupCalls int
+	listCalls   int
+	listErr     error
+}
+
+func (store *countingRuntimeImageStore) ImageByReference(_ context.Context, tenantID, kind, reference string) (domain.PlatformImage, error) {
+	store.lookupCalls++
+	for _, image := range store.images {
+		if image.Kind == kind && image.Reference == reference && (image.TenantID == "" || image.TenantID == tenantID) {
+			return image, nil
+		}
+	}
+	return domain.PlatformImage{}, repositories.ErrImageNotFound
+}
+
+func (store *countingRuntimeImageStore) ListImages(ctx context.Context, tenantID, kind string) ([]domain.PlatformImage, error) {
+	store.listCalls++
+	if store.listErr != nil {
+		return nil, store.listErr
+	}
+	return store.stubImageStore.ListImages(ctx, tenantID, kind)
+}
+
+func TestSubmitSnapshotsCatalogRuntimeAndIgnoresForgedRayVersion(t *testing.T) {
+	reference := "harbor.example/ray-runtime:production"
+	store := &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{{
+		ID: "managed-image", Name: "Ray managed", Kind: domain.ImageKindTraining, Reference: reference,
+		RayVersion: domain.RayVersionProduction, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayTrain},
+	}}}}
+	repository := &submissionServiceRepository{}
+	service := NewSubmissionService(repository, SubmissionServiceOptions{
+		Images: store, RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true},
+		NewID: func() (string, error) { return "job-runtime-snapshot", nil },
+	})
+	spec := submissionSpec("  " + reference + "  ")
+	spec.TrainingEngine = domain.TrainingEngineRayTrain
+	spec.RayVersion = domain.RayVersionCanary
+
+	job, err := service.Submit(context.Background(), SubmissionInput{
+		Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+		Spec:      spec, Origin: domain.SubmissionOriginPortal,
+	})
+
+	if err != nil {
+		t.Fatalf("submit managed runtime: %v", err)
+	}
+	if job.Spec.Image != reference || job.Spec.TrainingEngine != domain.TrainingEngineRayTrain || job.Spec.RayVersion != domain.RayVersionProduction {
+		t.Fatalf("catalog runtime was not authoritative: %+v", job.Spec)
+	}
+	if repository.created == nil || repository.created.Spec.RayVersion != domain.RayVersionProduction {
+		t.Fatalf("resolved runtime was not persisted: %+v", repository.created)
+	}
+	if store.lookupCalls != 0 || store.listCalls != 1 {
+		t.Fatalf("selected image must use one catalog snapshot, lookup=%d list=%d", store.lookupCalls, store.listCalls)
+	}
+}
+
+func TestSubmissionRejectsManagedCheckpointOverflowBeforePortalOrNativePersistence(t *testing.T) {
+	reference := "harbor.example/ray-runtime:production"
+	image := domain.PlatformImage{
+		ID: "managed-image", Name: "Ray managed", Kind: domain.ImageKindTraining, Reference: reference,
+		RayVersion: domain.RayVersionProduction, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayTrain},
+	}
+	tests := []struct {
+		name   string
+		origin domain.SubmissionOrigin
+		mutate func(*domain.JobSpec)
+		field  string
+	}{
+		{name: "portal checkpoint frequency", origin: domain.SubmissionOriginPortal, mutate: func(spec *domain.JobSpec) { spec.Managed.Checkpoint.EveryEpochs = 100001 }, field: "everyEpochs"},
+		{name: "portal latest retention", origin: domain.SubmissionOriginPortal, mutate: func(spec *domain.JobSpec) { spec.Managed.Checkpoint.KeepLatest = 1001 }, field: "keepLatest"},
+		{name: "portal best retention", origin: domain.SubmissionOriginPortal, mutate: func(spec *domain.JobSpec) { spec.Managed.Checkpoint.KeepBest = 1001 }, field: "keepBest"},
+		{name: "native checkpoint frequency", origin: domain.SubmissionOriginRayCLI, mutate: func(spec *domain.JobSpec) { spec.Managed.Checkpoint.EveryEpochs = 100001 }, field: "everyEpochs"},
+		{name: "native latest retention", origin: domain.SubmissionOriginRayCLI, mutate: func(spec *domain.JobSpec) { spec.Managed.Checkpoint.KeepLatest = 1001 }, field: "keepLatest"},
+		{name: "native best retention", origin: domain.SubmissionOriginRayCLI, mutate: func(spec *domain.JobSpec) { spec.Managed.Checkpoint.KeepBest = 1001 }, field: "keepBest"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &submissionServiceRepository{}
+			service := NewSubmissionService(repository, SubmissionServiceOptions{
+				Images:        &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{image}}},
+				RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true},
+			})
+			spec := submissionSpec(reference)
+			spec.TrainingEngine = domain.TrainingEngineRayTrain
+			spec.Managed.MaxFailures = 2
+			test.mutate(&spec)
+
+			_, err := service.Submit(context.Background(), SubmissionInput{
+				Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+				Spec:      spec, Origin: test.origin,
+			})
+			if !errors.Is(err, ErrSubmissionInvalidJobSpec) || !strings.Contains(err.Error(), test.field) {
+				t.Fatalf("expected %s overflow rejection, got %v", test.field, err)
+			}
+			if repository.created != nil || repository.identityCalls != 0 {
+				t.Fatalf("overflow reached persistence: identity=%d job=%+v", repository.identityCalls, repository.created)
+			}
+		})
+	}
+}
+
+func TestSubmissionRejectsUnsafeManagedEntrypointBeforePersistence(t *testing.T) {
+	reference := "harbor.example/ray-runtime:production"
+	image := domain.PlatformImage{
+		ID: "managed-image", Name: "Ray managed", Kind: domain.ImageKindTraining, Reference: reference,
+		RayVersion: domain.RayVersionProduction, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayTrain},
+	}
+	tests := []struct {
+		name       string
+		origin     domain.SubmissionOrigin
+		entrypoint domain.Entrypoint
+	}{
+		{name: "portal direct torchrun", origin: domain.SubmissionOriginPortal, entrypoint: domain.Entrypoint{Command: []string{"torchrun", "train.py"}}},
+		{name: "native legacy wrapper operator", origin: domain.SubmissionOriginRayCLI, entrypoint: domain.Entrypoint{Command: []string{"/bin/sh", "-lc", "python train.py && echo unsafe"}}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &submissionServiceRepository{}
+			service := NewSubmissionService(repository, SubmissionServiceOptions{
+				Images:        &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{image}}},
+				RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true},
+			})
+			spec := submissionSpec(reference)
+			spec.TrainingEngine = domain.TrainingEngineRayTrain
+			spec.Managed = domain.ManagedTrainingPolicy{
+				MaxFailures: 2,
+				Checkpoint:  domain.CheckpointPolicy{EveryEpochs: 1, KeepLatest: 3, KeepBest: 1},
+			}
+			spec.Entrypoint = test.entrypoint
+
+			job, err := service.Submit(context.Background(), SubmissionInput{
+				Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+				Spec:      spec, Origin: test.origin,
+			})
+			if job != nil || !errors.Is(err, ErrSubmissionInvalidJobSpec) || !strings.Contains(err.Error(), "managed entrypoint") {
+				t.Fatalf("unsafe managed entrypoint returned a job or unclear error: job=%+v err=%v", job, err)
+			}
+			if repository.created != nil || repository.identityCalls != 0 {
+				t.Fatalf("unsafe entrypoint reached persistence: identity=%d job=%+v", repository.identityCalls, repository.created)
+			}
+		})
+	}
+}
+
+func TestSubmissionRejectsInvalidRayDataModesBeforeJobAndOutboxPersistence(t *testing.T) {
+	reference := "harbor.example/ray-runtime:production"
+	image := domain.PlatformImage{
+		ID: "managed-image", Name: "Ray managed", Kind: domain.ImageKindTraining, Reference: reference,
+		RayVersion: domain.RayVersionProduction, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayTrain},
+	}
+	rayData, err := domain.NewRayDataDatasetConfig(domain.RayDataFormatImages, "images/train")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name    string
+		mutate  func(*domain.JobSpec)
+		wantErr string
+	}{
+		{name: "ray data missing config", mutate: func(spec *domain.JobSpec) {
+			spec.DataMode = domain.DataModeRayData
+		}, wantErr: "Ray Data dataset config is required"},
+		{name: "mount carries ray data config", mutate: func(spec *domain.JobSpec) {
+			spec.DataMode = domain.DataModeMount
+			spec.Managed.RayData = rayData
+		}, wantErr: "requires ray-data mode"},
+		{name: "cache carries ray data config", mutate: func(spec *domain.JobSpec) {
+			spec.DataMode = domain.DataModeCache
+			spec.Managed.RayData = rayData
+			spec.Cache = domain.CacheRequest{Mode: domain.CacheModeRuntime, Size: "200Gi", Preload: domain.CachePreloadInput}
+			spec.Input = domain.DataLocation{Space: domain.DataSpacePublic, RelativePath: "datasets/train"}
+		}, wantErr: "requires ray-data mode"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &submissionServiceRepository{}
+			service := NewSubmissionService(repository, SubmissionServiceOptions{
+				Images:        &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{image}}},
+				RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true},
+				LocalCache: LocalCachePolicy{
+					Enabled: true, AllowedSizes: []string{"200Gi"}, DefaultSize: "200Gi", MaxSize: "200Gi",
+				},
+			})
+			spec := submissionSpec(reference)
+			spec.TrainingEngine = domain.TrainingEngineRayTrain
+			spec.Managed = domain.ManagedTrainingPolicy{
+				MaxFailures: 2,
+				Checkpoint:  domain.CheckpointPolicy{EveryEpochs: 1, KeepLatest: 3, KeepBest: 1},
+			}
+			test.mutate(&spec)
+
+			job, submitErr := service.Submit(context.Background(), SubmissionInput{
+				Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+				Spec:      spec, Origin: domain.SubmissionOriginPortal,
+			})
+			if job != nil || !errors.Is(submitErr, ErrSubmissionInvalidJobSpec) || !strings.Contains(submitErr.Error(), test.wantErr) {
+				t.Fatalf("invalid Ray Data spec returned job=%+v err=%v", job, submitErr)
+			}
+			if repository.createCalls != 0 || repository.created != nil || repository.identityCalls != 0 {
+				t.Fatalf("invalid Ray Data spec crossed job/outbox persistence boundary: creates=%d identity=%d job=%+v", repository.createCalls, repository.identityCalls, repository.created)
+			}
+		})
+	}
+}
+
+func TestRayDataSubmissionRequiresResolvedGovernedInputBeforePersistence(t *testing.T) {
+	image, baseSpec := rayDataSubmissionFixture(t)
+	for _, test := range []struct {
+		name       string
+		input      domain.DataLocation
+		bindings   []domain.DataMountBinding
+		wantDetail string
+	}{
+		{name: "missing logical input", wantDetail: "resolved governed input mount"},
+		{
+			name:  "input binding is not ready",
+			input: domain.DataLocation{Space: domain.DataSpaceTeamShared, RelativePath: "datasets/train"},
+			bindings: []domain.DataMountBinding{{
+				ID: "team", TenantID: "tenant-a", Scope: domain.DataMountScopeTenant,
+				SpaceID: domain.DataSpaceTeamShared, ClaimName: "data-team-a", ReadOnly: true, Status: domain.DataMountBindingPending,
+			}},
+			wantDetail: "data-space mount is not ready",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &submissionServiceRepository{}
+			tenantRuntimeEnsureCalls := 0
+			dataSpaceEnsureCalls := 0
+			service := NewSubmissionService(repository, SubmissionServiceOptions{
+				Images:            &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{image}}},
+				RuntimePolicy:     runtimecatalog.Policy{ManagedEnabled: true},
+				LocalCache:        rayDataLocalCachePolicy(),
+				DataSpaces:        &fakeDataSpaceStore{bindings: test.bindings},
+				DataSpacesEnabled: true,
+				EnsureTenantRuntime: func(context.Context, string, string, string, string) error {
+					tenantRuntimeEnsureCalls++
+					return nil
+				},
+				EnsureDataSpaces: func(context.Context, auth.Principal) error {
+					dataSpaceEnsureCalls++
+					return nil
+				},
+				NewID: func() (string, error) { return "job-ray-data-input", nil },
+			})
+			spec := baseSpec
+			spec.Input = test.input
+
+			job, err := service.Submit(context.Background(), SubmissionInput{
+				Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+				Spec:      spec, Origin: domain.SubmissionOriginPortal,
+			})
+			if job != nil || !errors.Is(err, ErrSubmissionDataMountNotReady) || !strings.Contains(err.Error(), test.wantDetail) {
+				t.Fatalf("ray-data input boundary returned job=%+v err=%v", job, err)
+			}
+			if tenantRuntimeEnsureCalls != 0 || dataSpaceEnsureCalls != 0 || repository.createCalls != 0 || repository.created != nil || repository.identityCalls != 0 {
+				t.Fatalf("invalid ray-data input crossed provisioning/persistence: tenantRuntime=%d dataSpaces=%d creates=%d identity=%d job=%+v", tenantRuntimeEnsureCalls, dataSpaceEnsureCalls, repository.createCalls, repository.identityCalls, repository.created)
+			}
+		})
+	}
+}
+
+func TestRayDataStagePendingInputDoesNotProvisionOrPersistIdentity(t *testing.T) {
+	image, spec := rayDataSubmissionFixture(t)
+	files, err := domain.NewRayDataDatasetConfig(domain.RayDataFormatFiles, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec.DataMode = domain.DataModeRayDataStage
+	spec.Managed.RayData = files
+	spec.Input = domain.DataLocation{Space: domain.DataSpaceTeamShared, RelativePath: "datasets/train"}
+
+	repository := &submissionServiceRepository{}
+	tenantRuntimeEnsureCalls := 0
+	dataSpaceEnsureCalls := 0
+	service := NewSubmissionService(repository, SubmissionServiceOptions{
+		Images:        &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{image}}},
+		RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true}, LocalCache: rayDataLocalCachePolicy(),
+		DataSpaces: &fakeDataSpaceStore{bindings: []domain.DataMountBinding{{
+			ID: "team", TenantID: "tenant-a", Scope: domain.DataMountScopeTenant,
+			SpaceID: domain.DataSpaceTeamShared, ClaimName: "data-team-a", ReadOnly: true, Status: domain.DataMountBindingPending,
+		}}},
+		DataSpacesEnabled:   true,
+		EnsureTenantRuntime: func(context.Context, string, string, string, string) error { tenantRuntimeEnsureCalls++; return nil },
+		EnsureDataSpaces:    func(context.Context, auth.Principal) error { dataSpaceEnsureCalls++; return nil },
+		NewID:               func() (string, error) { return "job-ray-data-stage-pending", nil },
+	})
+
+	job, submitErr := service.Submit(context.Background(), SubmissionInput{
+		Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+		Spec:      spec, Origin: domain.SubmissionOriginPortal,
+	})
+	if job != nil || !errors.Is(submitErr, ErrSubmissionDataMountNotReady) {
+		t.Fatalf("pending stage input returned job=%+v err=%v", job, submitErr)
+	}
+	if tenantRuntimeEnsureCalls != 0 || dataSpaceEnsureCalls != 0 || repository.identityCalls != 0 || repository.createCalls != 0 {
+		t.Fatalf("pending stage input crossed side-effect boundary: runtime=%d spaces=%d identity=%d creates=%d", tenantRuntimeEnsureCalls, dataSpaceEnsureCalls, repository.identityCalls, repository.createCalls)
+	}
+}
+
+func TestRayDataSubmissionRequiresDualNVMeCapabilityBeforePersistence(t *testing.T) {
+	image, spec := rayDataSubmissionFixture(t)
+	spec.Input = domain.DataLocation{Space: domain.DataSpaceTeamShared, RelativePath: "datasets/train"}
+	for _, test := range []struct {
+		name       string
+		policy     LocalCachePolicy
+		wantDetail string
+	}{
+		{name: "runtime cache disabled", wantDetail: "runtime cache capability is disabled"},
+		{
+			name: "second local cache device unavailable",
+			policy: LocalCachePolicy{
+				Enabled: true, AllowedSizes: []string{"200Gi"}, DefaultSize: "200Gi", MaxSize: "200Gi",
+				MountPaths: []string{"/mnt/cache"},
+			},
+			wantDetail: "dual-NVMe",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &submissionServiceRepository{}
+			service := NewSubmissionService(repository, SubmissionServiceOptions{
+				Images:        &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{image}}},
+				RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true},
+				LocalCache:    test.policy,
+			})
+
+			job, err := service.Submit(context.Background(), SubmissionInput{
+				Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+				Spec:      spec, Origin: domain.SubmissionOriginPortal,
+			})
+			if job != nil || !errors.Is(err, ErrSubmissionInvalidJobSpec) || !strings.Contains(err.Error(), test.wantDetail) {
+				t.Fatalf("ray-data cache capability returned job=%+v err=%v", job, err)
+			}
+			if repository.createCalls != 0 || repository.created != nil || repository.identityCalls != 0 {
+				t.Fatalf("unsupported ray-data crossed identity/job/outbox persistence: creates=%d identity=%d job=%+v", repository.createCalls, repository.identityCalls, repository.created)
+			}
+		})
+	}
+}
+
+func TestRayDataSubmissionNormalizesRuntimeCacheAndResolvedInput(t *testing.T) {
+	image, spec := rayDataSubmissionFixture(t)
+	spec.Input = domain.DataLocation{Space: domain.DataSpaceTeamShared, RelativePath: "datasets/train"}
+	repository := &submissionServiceRepository{}
+	tenantRuntimeEnsureCalls := 0
+	dataSpaceEnsureCalls := 0
+	service := NewSubmissionService(repository, SubmissionServiceOptions{
+		Images:        &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{image}}},
+		RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true},
+		LocalCache:    rayDataLocalCachePolicy(),
+		DataSpaces: &fakeDataSpaceStore{bindings: []domain.DataMountBinding{{
+			ID: "team", TenantID: "tenant-a", Scope: domain.DataMountScopeTenant,
+			SpaceID: domain.DataSpaceTeamShared, ClaimName: "data-team-a", ReadOnly: true, Status: domain.DataMountBindingReady,
+		}}},
+		DataSpacesEnabled: true,
+		EnsureTenantRuntime: func(context.Context, string, string, string, string) error {
+			tenantRuntimeEnsureCalls++
+			if repository.identityCalls != 0 || dataSpaceEnsureCalls != 0 || repository.createCalls != 0 {
+				t.Fatalf("ray-data tenant runtime provisioning order changed: identity=%d dataSpaces=%d creates=%d", repository.identityCalls, dataSpaceEnsureCalls, repository.createCalls)
+			}
+			return nil
+		},
+		EnsureDataSpaces: func(context.Context, auth.Principal) error {
+			dataSpaceEnsureCalls++
+			if tenantRuntimeEnsureCalls != 1 || repository.identityCalls != 1 || repository.createCalls != 0 {
+				t.Fatalf("ray-data data-space provisioning order changed: tenantRuntime=%d identity=%d creates=%d", tenantRuntimeEnsureCalls, repository.identityCalls, repository.createCalls)
+			}
+			return nil
+		},
+		NewID: func() (string, error) { return "job-ray-data-ready", nil },
+	})
+
+	job, err := service.Submit(context.Background(), SubmissionInput{
+		Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+		Spec:      spec, Origin: domain.SubmissionOriginPortal,
+	})
+	if err != nil {
+		t.Fatalf("submit ready ray-data job: %v", err)
+	}
+	if job.Spec.Cache.Mode != domain.CacheModeRuntime || job.Spec.Cache.Size != "200Gi" || job.Spec.Cache.Preload != "" {
+		t.Fatalf("ray-data cache was not normalized internally: %+v", job.Spec.Cache)
+	}
+	input := job.Spec.ResolvedDataMounts.Input
+	if input == nil || input.MountPath != domain.DataMountInputPath || !input.ReadOnly {
+		t.Fatalf("ray-data input did not resolve to the read-only governed path: %+v", input)
+	}
+	if tenantRuntimeEnsureCalls != 1 || dataSpaceEnsureCalls != 1 || repository.createCalls != 1 || repository.identityCalls != 1 || repository.created == nil || repository.created.Spec.Cache != job.Spec.Cache {
+		t.Fatalf("valid ray-data persistence mismatch: tenantRuntime=%d dataSpaces=%d creates=%d identity=%d persisted=%+v", tenantRuntimeEnsureCalls, dataSpaceEnsureCalls, repository.createCalls, repository.identityCalls, repository.created)
+	}
+}
+
+func rayDataSubmissionFixture(t *testing.T) (domain.PlatformImage, domain.JobSpec) {
+	t.Helper()
+	reference := "harbor.example/ray-runtime:production"
+	image := domain.PlatformImage{
+		ID: "managed-image", Name: "Ray managed", Kind: domain.ImageKindTraining, Reference: reference,
+		RayVersion: domain.RayVersionProduction, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayTrain},
+	}
+	config, err := domain.NewRayDataDatasetConfig(domain.RayDataFormatImages, "images/train")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := submissionSpec(reference)
+	spec.TrainingEngine = domain.TrainingEngineRayTrain
+	spec.DataMode = domain.DataModeRayData
+	spec.Managed = domain.ManagedTrainingPolicy{
+		MaxFailures: 2, Checkpoint: domain.CheckpointPolicy{EveryEpochs: 1, KeepLatest: 3, KeepBest: 1}, RayData: config,
+	}
+	return image, spec
+}
+
+func rayDataLocalCachePolicy() LocalCachePolicy {
+	return LocalCachePolicy{
+		Enabled: true, AllowedSizes: []string{"200Gi"}, DefaultSize: "200Gi", MaxSize: "200Gi",
+		MountPath: "/mnt/cache", MountPaths: []string{"/mnt/cache", "/mnt/cache2"},
+	}
+}
+
+func TestSubmitAllowlistFallbackIsLegacyOnly(t *testing.T) {
+	reference := "harbor.example/legacy:stable"
+	principal := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal}
+
+	t.Run("omitted engine snapshots legacy runtime", func(t *testing.T) {
+		store := &countingRuntimeImageStore{}
+		repository := &submissionServiceRepository{}
+		service := NewSubmissionService(repository, SubmissionServiceOptions{
+			Images: store, ImageAllowlist: []string{reference},
+			NewID: func() (string, error) { return "job-legacy-fallback", nil },
+		})
+		spec := submissionSpec(reference)
+		spec.RayVersion = domain.RayVersionCanary
+
+		job, err := service.Submit(context.Background(), SubmissionInput{Principal: principal, Spec: spec, Origin: domain.SubmissionOriginPortal})
+		if err != nil {
+			t.Fatalf("submit legacy fallback: %v", err)
+		}
+		if job.Spec.TrainingEngine != domain.TrainingEngineRayDDP || job.Spec.RayVersion != domain.RayVersionLegacy || job.Spec.Image != reference {
+			t.Fatalf("unexpected fallback snapshot: %+v", job.Spec)
+		}
+		if store.lookupCalls != 0 || store.listCalls != 1 {
+			t.Fatalf("unexpected catalog calls: lookup=%d list=%d", store.lookupCalls, store.listCalls)
+		}
+	})
+
+	t.Run("managed requires catalog metadata", func(t *testing.T) {
+		store := &countingRuntimeImageStore{}
+		repository := &submissionServiceRepository{}
+		service := NewSubmissionService(repository, SubmissionServiceOptions{
+			Images: store, ImageAllowlist: []string{reference}, RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true},
+		})
+		spec := submissionSpec(reference)
+		spec.TrainingEngine = domain.TrainingEngineRayTrain
+
+		_, err := service.Submit(context.Background(), SubmissionInput{Principal: principal, Spec: spec, Origin: domain.SubmissionOriginPortal})
+		if !errors.Is(err, ErrSubmissionImageNotAllowed) {
+			t.Fatalf("expected managed fallback rejection, got %v", err)
+		}
+		if repository.created != nil {
+			t.Fatalf("managed fallback reached persistence: %+v", repository.created)
+		}
+	})
+}
+
+func TestSubmitFailsClosedWhenRuntimeCatalogIsUnavailable(t *testing.T) {
+	reference := "harbor.example/legacy:stable"
+	store := &countingRuntimeImageStore{
+		listErr: errors.New("database unavailable"),
+	}
+	repository := &submissionServiceRepository{}
+	service := NewSubmissionService(repository, SubmissionServiceOptions{
+		Images: store, ImageAllowlist: []string{reference},
+	})
+
+	_, err := service.Submit(context.Background(), SubmissionInput{
+		Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+		Spec:      submissionSpec(reference), Origin: domain.SubmissionOriginPortal,
+	})
+
+	if !errors.Is(err, ErrSubmissionImageNotAllowed) {
+		t.Fatalf("catalog outage must fail closed with the existing public error, got %v", err)
+	}
+	if repository.created != nil {
+		t.Fatalf("catalog outage reached persistence: %+v", repository.created)
+	}
+}
+
+func TestNewHandlerWiresRuntimePolicyIntoSubmission(t *testing.T) {
+	reference := "harbor.example/ray-runtime:production"
+	store := &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{{
+		ID: "managed-image", Name: "Ray managed", Kind: domain.ImageKindTraining, Reference: reference,
+		RayVersion: domain.RayVersionProduction, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayTrain},
+	}}}}
+	handler := NewHandler(&submissionServiceRepository{}, Options{
+		Images: store, RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true},
+	})
+	spec := submissionSpec(reference)
+	spec.TrainingEngine = domain.TrainingEngineRayTrain
+
+	job, err := handler.SubmissionService().Submit(context.Background(), SubmissionInput{
+		Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+		Spec:      spec, Origin: domain.SubmissionOriginPortal,
+	})
+	if err != nil || job.Spec.RayVersion != domain.RayVersionProduction {
+		t.Fatalf("handler runtime policy was not wired: job=%+v err=%v", job, err)
+	}
+}
+
+func TestSubmitScopesCanaryRuntimeToPrincipalTenant(t *testing.T) {
+	reference := "harbor.example/ray-runtime:canary"
+	image := domain.PlatformImage{
+		ID: "canary-image", Name: "Ray canary", Kind: domain.ImageKindTraining, Reference: reference,
+		RayVersion: domain.RayVersionCanary, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayTrain},
+	}
+	tests := []struct {
+		name       string
+		tenantID   string
+		policy     runtimecatalog.Policy
+		wantAccept bool
+	}{
+		{name: "allowlisted tenant", tenantID: "tenant-a", policy: runtimecatalog.NewPolicy(true, true, nil, []string{"tenant-a"}), wantAccept: true},
+		{name: "non-allowlisted tenant", tenantID: "tenant-b", policy: runtimecatalog.NewPolicy(true, true, nil, []string{"tenant-a"})},
+		{name: "empty allowlist", tenantID: "tenant-a", policy: runtimecatalog.NewPolicy(true, true, nil, nil)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &submissionServiceRepository{}
+			service := NewSubmissionService(repository, SubmissionServiceOptions{
+				Images:        &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{image}}},
+				RuntimePolicy: test.policy,
+				NewID:         func() (string, error) { return "job-canary-snapshot", nil },
+			})
+			spec := submissionSpec(reference)
+			spec.TrainingEngine = domain.TrainingEngineRayTrain
+
+			job, err := service.Submit(context.Background(), SubmissionInput{
+				Principal: auth.Principal{Subject: "user-a", TenantID: test.tenantID, Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+				Spec:      spec, Origin: domain.SubmissionOriginPortal,
+			})
+			if test.wantAccept {
+				if err != nil || job.Spec.RayVersion != domain.RayVersionCanary {
+					t.Fatalf("job=%+v err=%v", job, err)
+				}
+				return
+			}
+			if !errors.Is(err, ErrSubmissionImageNotAllowed) || repository.created != nil {
+				t.Fatalf("non-canary tenant was not rejected: job=%+v err=%v", repository.created, err)
+			}
+		})
+	}
+}
+
+func TestSubmissionServiceDefensivelyCopiesRuntimePolicy(t *testing.T) {
+	reference := "harbor.example/ray-runtime:canary"
+	tenants := []string{"tenant-a"}
+	policy := runtimecatalog.NewPolicy(true, true, nil, tenants)
+	service := NewSubmissionService(&submissionServiceRepository{}, SubmissionServiceOptions{
+		Images: &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{{
+			ID: "canary-image", Name: "Ray canary", Kind: domain.ImageKindTraining, Reference: reference,
+			RayVersion: domain.RayVersionCanary, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayTrain},
+		}}}},
+		RuntimePolicy: policy,
+		NewID:         func() (string, error) { return "job-policy-copy", nil },
+	})
+	tenants[0] = "tenant-b"
+	spec := submissionSpec(reference)
+	spec.TrainingEngine = domain.TrainingEngineRayTrain
+
+	job, err := service.Submit(context.Background(), SubmissionInput{
+		Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+		Spec:      spec, Origin: domain.SubmissionOriginPortal,
+	})
+	if err != nil || job.Spec.RayVersion != domain.RayVersionCanary {
+		t.Fatalf("caller mutation changed service policy: job=%+v err=%v", job, err)
+	}
 }
 
 func TestSubmissionNormalizesAndEnforcesRuntimeCachePolicy(t *testing.T) {
@@ -427,14 +1014,87 @@ func TestSubmissionInitializesServerGeneratedOutputDirectoryBeforePersistingJob(
 	}
 }
 
+func TestSubmissionPersistsOnlyOwnerScopedCompleteResumeCheckpoint(t *testing.T) {
+	const parentID = "job-0123456789abcdef01234567"
+	const childID = "job-fedcba9876543210fedcba98"
+	reference := "registry.example/ray@sha256:" + strings.Repeat("c", 64)
+	parent := domain.TrainingJob{
+		ID: parentID, TenantID: "tenant-a", UserID: "user-a",
+		Spec: domain.JobSpec{TrainingEngine: domain.TrainingEngineRayTrain, Output: domain.DataLocation{Space: domain.DataSpaceMyRuns, RelativePath: "parent-run"}},
+	}
+	checkpoint := domain.TrainingCheckpoint{
+		ID: "checkpoint-20", JobID: parentID, TenantID: "tenant-a", UserID: "user-a", Epoch: 2, Step: 20,
+		ObjectPath: "/mnt/data/output/.platform/ray-train/" + parentID + "/checkpoints/checkpoint-20",
+		Complete:   true, ManifestSHA256: strings.Repeat("a", 64),
+	}
+	repository := &submissionServiceRepository{parent: &parent, checkpoints: []domain.TrainingCheckpoint{checkpoint}}
+	spaces := &fakeDataSpaceStore{bindings: []domain.DataMountBinding{{
+		ID: "mine", TenantID: "tenant-a", UserID: "user-a", Scope: domain.DataMountScopePersonal, SpaceID: domain.DataSpaceWorkspace,
+		ClaimName: "data-user-a", Status: domain.DataMountBindingReady,
+	}}}
+	service := NewSubmissionService(repository, SubmissionServiceOptions{
+		Images: &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{{
+			ID: "managed", Name: "managed", Kind: domain.ImageKindTraining, Reference: reference,
+			RayVersion: domain.RayVersionProduction, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayTrain},
+		}}}},
+		RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true}, DataSpaces: spaces, DataSpacesEnabled: true,
+		NewID: func() (string, error) { return childID, nil },
+	})
+	spec := submissionSpec(reference)
+	spec.TrainingEngine = domain.TrainingEngineRayTrain
+	spec.Managed = domain.ManagedTrainingPolicy{MaxFailures: 2, Checkpoint: domain.CheckpointPolicy{EveryEpochs: 1, KeepLatest: 3, KeepBest: 1}}
+	spec.ParentJobID = parentID
+	spec.Checkpoint = domain.DataLocation{Space: domain.DataSpaceMyRuns, RelativePath: "parent-run/" + parentID + "/.platform/ray-train/" + parentID + "/checkpoints/checkpoint-20"}
+	spec.Output = domain.DataLocation{Space: domain.DataSpaceMyRuns, RelativePath: "child-run"}
+
+	job, err := service.Submit(context.Background(), SubmissionInput{
+		Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+		Spec:      spec, Origin: domain.SubmissionOriginRayCLI,
+	})
+	if err != nil || job.ResumeCheckpointID != checkpoint.ID || repository.created == nil || repository.created.ResumeCheckpointID != checkpoint.ID {
+		t.Fatalf("resume provenance was not persisted: job=%+v persisted=%+v err=%v", job, repository.created, err)
+	}
+
+	foreign := *repository
+	foreign.created = nil
+	foreignService := NewSubmissionService(&foreign, SubmissionServiceOptions{
+		Images: &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{{
+			ID: "managed", Name: "managed", Kind: domain.ImageKindTraining, Reference: reference,
+			RayVersion: domain.RayVersionProduction, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayTrain},
+		}}}}, RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true}, NewID: func() (string, error) { return childID, nil },
+	})
+	_, err = foreignService.Submit(context.Background(), SubmissionInput{
+		Principal: auth.Principal{Subject: "user-b", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+		Spec:      spec, Origin: domain.SubmissionOriginRayCLI,
+	})
+	if !errors.Is(err, ErrSubmissionResumeCheckpointNotFound) || foreign.created != nil {
+		t.Fatalf("foreign parent checkpoint was accepted: job=%+v err=%v", foreign.created, err)
+	}
+}
+
 func (repository *submissionServiceRepository) Create(_ context.Context, job *domain.TrainingJob, _ string) error {
+	repository.createCalls++
 	copy := *job
 	repository.created = &copy
 	return nil
 }
 
-func (repository *submissionServiceRepository) Get(_ context.Context, _, _ string) (*domain.TrainingJob, error) {
-	return nil, context.Canceled
+func (repository *submissionServiceRepository) Get(_ context.Context, tenantID, id string) (*domain.TrainingJob, error) {
+	if repository.parent == nil || repository.parent.TenantID != tenantID || repository.parent.ID != id {
+		return nil, context.Canceled
+	}
+	copy := *repository.parent
+	return &copy, nil
+}
+
+func (repository *submissionServiceRepository) ListUsableCheckpoints(_ context.Context, tenantID, userID, jobID string) ([]domain.TrainingCheckpoint, error) {
+	items := make([]domain.TrainingCheckpoint, 0, len(repository.checkpoints))
+	for _, checkpoint := range repository.checkpoints {
+		if checkpoint.TenantID == tenantID && checkpoint.UserID == userID && checkpoint.JobID == jobID {
+			items = append(items, checkpoint)
+		}
+	}
+	return items, nil
 }
 
 func (repository *submissionServiceRepository) List(_ context.Context, _ domain.JobFilter) (domain.Page[domain.TrainingJob], error) {

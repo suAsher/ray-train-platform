@@ -33,6 +33,7 @@
           <el-option label="排队中" value="QUEUED" />
           <el-option label="启动中" value="PROVISIONING" />
           <el-option label="运行中" value="RUNNING" />
+          <el-option label="恢复中" value="RECOVERING" />
           <el-option label="已成功" value="SUCCEEDED" />
           <el-option label="失败" value="FAILED" />
         </el-select>
@@ -240,7 +241,7 @@ const emptyHint = computed(() => {
   return '试着清空关键词或状态筛选。'
 })
 
-const ACTIVE_STATES = ['QUEUED', 'PROVISIONING', 'RUNNING', 'SUBMITTED', 'ADMITTED']
+const ACTIVE_STATES = ['QUEUED', 'PROVISIONING', 'RUNNING', 'RECOVERING', 'SUBMITTED', 'ADMITTED']
 const TERMINAL_STATES = ['SUCCEEDED', 'FAILED', 'CANCELED', 'TIMED_OUT']
 
 const summaryCards = computed(() => {
@@ -265,13 +266,14 @@ const summaryCards = computed(() => {
 
 const STATUS_LABELS = {
   SUBMITTED: '已提交', VALIDATING: '校验中', QUEUED: '排队中', ADMITTED: '已准入',
-  PROVISIONING: '启动中', RUNNING: '运行中', SUCCEEDED: '已成功', FAILED: '失败',
+  PROVISIONING: '启动中', RUNNING: '运行中', RECOVERING: '恢复中', SUCCEEDED: '已成功', FAILED: '失败',
   CANCELING: '取消中', CANCELED: '已取消', TIMED_OUT: '已超时', DELETING: '清理中', UNKNOWN: '未知'
 }
 const statusLabel = (status) => STATUS_LABELS[status] || status
 const getStatusType = (status) => {
   switch (status) {
-    case 'RUNNING': return 'primary'
+    case 'RUNNING':
+    case 'RECOVERING': return 'primary'
     case 'SUCCEEDED': return 'success'
     case 'FAILED':
     case 'TIMED_OUT': return 'danger'

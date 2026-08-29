@@ -118,6 +118,11 @@ type JobSpec struct {
 	Source             CodeSource              `json:"source"`
 	Entrypoint         Entrypoint              `json:"entrypoint"`
 	Execution          ExecutionProfile        `json:"execution,omitempty"`
+	TrainingEngine     TrainingEngine          `json:"trainingEngine,omitempty"`
+	RayVersion         string                  `json:"rayVersion,omitempty"`
+	Managed            ManagedTrainingPolicy   `json:"managed,omitempty"`
+	DataMode           DataMode                `json:"dataMode,omitempty"`
+	ParentJobID        string                  `json:"parentJobId,omitempty"`
 	Resources          Resources               `json:"resources"`
 	Queue              string                  `json:"queue"`
 	Priority           string                  `json:"priority,omitempty"`
@@ -156,6 +161,9 @@ type TrainingJob struct {
 	RayJobUID            string           `json:"rayJobUid"`
 	RayClusterName       string           `json:"rayClusterName"`
 	ResourceVersion      string           `json:"resourceVersion"`
+	ClusterAttempt       int              `json:"clusterAttempt"`
+	WorkerRestartCount   int              `json:"workerRestartCount"`
+	ResumeCheckpointID   string           `json:"resumeCheckpointId,omitempty"`
 	CreatedAt            time.Time        `json:"createdAt"`
 	UpdatedAt            time.Time        `json:"updatedAt"`
 	LastObservedAt       *time.Time       `json:"lastObservedAt,omitempty"`
@@ -193,11 +201,345 @@ type ObservedJobState struct {
 	RayJobUID       string
 	RayClusterName  string
 	ResourceVersion string
+	// ExpectedClusterAttempt and the expected RayJob identity are copied from
+	// the row loaded by the reconciler. They form the compare-and-swap fence
+	// that prevents an old attempt from overwriting a newer recovery attempt.
+	ExpectedClusterAttempt int
+	ExpectedRayJobName     string
+	ExpectedRayJobUID      string
 	// StartedAt and FinishedAt come from the workload itself, not from the
 	// control plane's clock at poll time. Both stay nil until the workload
 	// publishes them, so "not started" is never rendered as an epoch date.
 	StartedAt  *time.Time
 	FinishedAt *time.Time
+}
+
+const (
+	ManagedRecoveryFailureClassMaxBytes   = 128
+	ManagedRecoveryFailureMessageMaxBytes = 4096
+)
+
+// NormalizeManagedInfrastructureFailureClass is the complete outer-recovery
+// allowlist. It intentionally classifies only pod/cluster loss, eviction,
+// deletion and unavailability signals; user exits, code errors, OOM and NaN
+// never become recoverable because of message keyword matching.
+func NormalizeManagedInfrastructureFailureClass(reason string) (string, bool) {
+	normalized := strings.ToUpper(strings.TrimSpace(reason))
+	normalized = strings.NewReplacer("-", "_", " ", "_").Replace(normalized)
+	switch normalized {
+	case "DRIVER_POD_LOST", "DRIVERPODLOST":
+		return "DRIVER_POD_LOST", true
+	case "DRIVER_POD_EVICTED", "DRIVERPODEVICTED":
+		return "DRIVER_POD_EVICTED", true
+	case "DRIVER_POD_DELETED", "DRIVERPODDELETED":
+		return "DRIVER_POD_DELETED", true
+	case "DRIVER_POD_NOT_FOUND", "DRIVERPODNOTFOUND":
+		return "DRIVER_POD_NOT_FOUND", true
+	case "HEAD_POD_LOST", "HEADPODLOST":
+		return "HEAD_POD_LOST", true
+	case "HEAD_POD_EVICTED", "HEADPODEVICTED":
+		return "HEAD_POD_EVICTED", true
+	case "HEAD_POD_DELETED", "HEADPODDELETED":
+		return "HEAD_POD_DELETED", true
+	case "HEAD_POD_NOT_FOUND", "HEADPODNOTFOUND":
+		return "HEAD_POD_NOT_FOUND", true
+	case "RAY_CLUSTER_FAILED", "RAYCLUSTERFAILED":
+		return "RAY_CLUSTER_FAILED", true
+	case "RAY_CLUSTER_UNAVAILABLE", "RAYCLUSTERUNAVAILABLE":
+		return "RAY_CLUSTER_UNAVAILABLE", true
+	case "RAY_CLUSTER_DELETED", "RAYCLUSTERDELETED":
+		return "RAY_CLUSTER_DELETED", true
+	case "WHOLE_CLUSTER_UNAVAILABLE", "WHOLECLUSTERUNAVAILABLE":
+		return "WHOLE_CLUSTER_UNAVAILABLE", true
+	default:
+		return "", false
+	}
+}
+
+// ManagedRecoveryRequest is produced only by the reconciler after it has
+// classified a failed managed RayJob. ExpectedClusterAttempt is a CAS token:
+// a stale backend replica cannot advance a job that another replica recovered.
+type ManagedRecoveryRequest struct {
+	JobID                  string
+	ExpectedClusterAttempt int
+	ExpectedRayJobName     string
+	ExpectedRayJobUID      string
+	FailureClass           string
+	FailureMessage         string
+}
+
+func (request ManagedRecoveryRequest) Validate() error {
+	if strings.TrimSpace(request.JobID) == "" {
+		return fmt.Errorf("managed recovery job ID is required")
+	}
+	if request.ExpectedClusterAttempt < 1 {
+		return fmt.Errorf("managed recovery expected cluster attempt must be positive")
+	}
+	if strings.TrimSpace(request.ExpectedRayJobName) == "" || strings.TrimSpace(request.ExpectedRayJobUID) == "" {
+		return fmt.Errorf("managed recovery expected RayJob name and UID are required")
+	}
+	failureClass := strings.TrimSpace(request.FailureClass)
+	if failureClass == "" || len(failureClass) > ManagedRecoveryFailureClassMaxBytes {
+		return fmt.Errorf("managed recovery failure class is required and bounded")
+	}
+	if _, ok := NormalizeManagedInfrastructureFailureClass(failureClass); !ok {
+		return fmt.Errorf("managed recovery failure class is not recoverable")
+	}
+	if len(request.FailureMessage) > ManagedRecoveryFailureMessageMaxBytes {
+		return fmt.Errorf("managed recovery failure message is too large")
+	}
+	return nil
+}
+
+// ManagedRetiringIdentityRequest clears the previous Kubernetes workload
+// identity only after that exact UID has reached NotFound. The attempt, name
+// and UID form one CAS fence across backend replicas.
+type ManagedRetiringIdentityRequest struct {
+	JobID                  string
+	ExpectedClusterAttempt int
+	RayJobName             string
+	RayJobUID              string
+}
+
+func (request ManagedRetiringIdentityRequest) Validate() error {
+	if strings.TrimSpace(request.JobID) == "" {
+		return fmt.Errorf("managed retiring identity job ID is required")
+	}
+	if request.ExpectedClusterAttempt < 1 {
+		return fmt.Errorf("managed retiring identity expected cluster attempt must be positive")
+	}
+	if strings.TrimSpace(request.RayJobName) == "" || strings.TrimSpace(request.RayJobUID) == "" {
+		return fmt.Errorf("managed retiring RayJob name and UID are required")
+	}
+	return nil
+}
+
+// ManagedAttemptReservationRequest reserves the deterministic Kubernetes name
+// for one managed cluster attempt before any create-capable client call. An
+// empty ExpectedRayJobName is the first reservation; the deterministic name is
+// used as ExpectedRayJobName when a later reconciler revalidates it.
+type ManagedAttemptReservationRequest struct {
+	JobID                  string
+	ExpectedClusterAttempt int
+	ExpectedState          State
+	ExpectedRayJobName     string
+	RayJobName             string
+	KubernetesNS           string
+}
+
+func (request ManagedAttemptReservationRequest) Validate() error {
+	if strings.TrimSpace(request.JobID) == "" {
+		return fmt.Errorf("managed attempt reservation job ID is required")
+	}
+	if request.ExpectedClusterAttempt < 1 {
+		return fmt.Errorf("managed attempt reservation expected cluster attempt must be positive")
+	}
+	if strings.TrimSpace(string(request.ExpectedState)) == "" {
+		return fmt.Errorf("managed attempt reservation expected state is required")
+	}
+	if !managedAttemptReservableState(request.ExpectedState) {
+		return fmt.Errorf("managed attempt reservation expected state is not active")
+	}
+	name := strings.TrimSpace(request.RayJobName)
+	if name == "" || len(name) > 63 || !dnsLabel.MatchString(name) {
+		return fmt.Errorf("managed attempt reservation RayJob name must be a DNS label")
+	}
+	if expected := strings.TrimSpace(request.ExpectedRayJobName); expected != "" && expected != name {
+		return fmt.Errorf("managed attempt reservation expected name must be empty or deterministic")
+	}
+	if namespace := strings.TrimSpace(request.KubernetesNS); namespace == "" || len(namespace) > 63 || !dnsLabel.MatchString(namespace) {
+		return fmt.Errorf("managed attempt reservation namespace must be a DNS label")
+	}
+	return nil
+}
+
+type ManagedAttemptResourceState string
+
+const (
+	ManagedAttemptResourceReserved    ManagedAttemptResourceState = "RESERVED"
+	ManagedAttemptResourceCreating    ManagedAttemptResourceState = "CREATING"
+	ManagedAttemptResourceActivating  ManagedAttemptResourceState = "ACTIVATING"
+	ManagedAttemptResourceActive      ManagedAttemptResourceState = "ACTIVE"
+	ManagedAttemptResourceRetiring    ManagedAttemptResourceState = "RETIRING"
+	ManagedAttemptResourceCleaned     ManagedAttemptResourceState = "CLEANED"
+	ManagedAttemptResourceQuarantined ManagedAttemptResourceState = "QUARANTINED"
+)
+
+type ManagedAttemptResource struct {
+	JobID            string
+	ClusterAttempt   int
+	KubernetesNS     string
+	RayJobName       string
+	RayJobUID        string
+	State            ManagedAttemptResourceState
+	LeaseOwner       string
+	LeaseVersion     int64
+	ResourceFence    int64
+	LeaseExpiresAt   *time.Time
+	CleanupFailures  int
+	CleanupLastError string
+	NextCheckAt      time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+type ManagedAttemptCreationLeaseRequest struct {
+	JobID                  string
+	ExpectedClusterAttempt int
+	ExpectedState          State
+	RayJobName             string
+	LeaseOwner             string
+	LeaseDuration          time.Duration
+}
+
+func (request ManagedAttemptCreationLeaseRequest) Validate() error {
+	if strings.TrimSpace(request.JobID) == "" || request.ExpectedClusterAttempt < 1 {
+		return fmt.Errorf("managed attempt creation job and attempt are required")
+	}
+	if !managedAttemptReservableState(request.ExpectedState) {
+		return fmt.Errorf("managed attempt creation expected state is not active")
+	}
+	if name := strings.TrimSpace(request.RayJobName); name == "" || len(name) > 63 || !dnsLabel.MatchString(name) {
+		return fmt.Errorf("managed attempt creation RayJob name must be a DNS label")
+	}
+	if owner := strings.TrimSpace(request.LeaseOwner); owner == "" || len(owner) > 128 {
+		return fmt.Errorf("managed attempt creation lease owner is required and bounded")
+	}
+	if request.LeaseDuration < time.Second || request.LeaseDuration > 5*time.Minute {
+		return fmt.Errorf("managed attempt creation lease duration must be between one second and five minutes")
+	}
+	return nil
+}
+
+type ManagedAttemptCleanupRequest struct {
+	JobID          string
+	ClusterAttempt int
+	RayJobName     string
+	RayJobUID      string
+}
+
+func (request ManagedAttemptCleanupRequest) Validate() error {
+	if strings.TrimSpace(request.JobID) == "" || request.ClusterAttempt < 1 {
+		return fmt.Errorf("managed attempt cleanup job and attempt are required")
+	}
+	if strings.TrimSpace(request.RayJobName) == "" {
+		return fmt.Errorf("managed attempt cleanup RayJob name is required")
+	}
+	return nil
+}
+
+// ManagedAttemptAdoptionRequest binds the exact UID returned by Kubernetes to
+// a previously reserved attempt name before its status is interpreted.
+type ManagedAttemptAdoptionRequest struct {
+	JobID                  string
+	ExpectedClusterAttempt int
+	ExpectedState          State
+	RayJobName             string
+	RayJobUID              string
+	KubernetesNS           string
+	ResourceVersion        string
+	LeaseOwner             string
+	LeaseVersion           int64
+	ResourceFence          int64
+}
+
+func (request ManagedAttemptAdoptionRequest) Validate() error {
+	if strings.TrimSpace(request.JobID) == "" {
+		return fmt.Errorf("managed attempt adoption job ID is required")
+	}
+	if request.ExpectedClusterAttempt < 1 {
+		return fmt.Errorf("managed attempt adoption expected cluster attempt must be positive")
+	}
+	if strings.TrimSpace(string(request.ExpectedState)) == "" {
+		return fmt.Errorf("managed attempt adoption expected state is required")
+	}
+	if !managedAttemptReservableState(request.ExpectedState) {
+		return fmt.Errorf("managed attempt adoption expected state is not active")
+	}
+	if strings.TrimSpace(request.RayJobName) == "" || strings.TrimSpace(request.RayJobUID) == "" {
+		return fmt.Errorf("managed attempt adoption RayJob name and UID are required")
+	}
+	if strings.TrimSpace(request.KubernetesNS) == "" {
+		return fmt.Errorf("managed attempt adoption Kubernetes namespace is required")
+	}
+	if owner := strings.TrimSpace(request.LeaseOwner); owner == "" || len(owner) > 128 || request.LeaseVersion < 1 {
+		return fmt.Errorf("managed attempt adoption lease owner and version are required")
+	}
+	if request.ResourceFence < 1 {
+		return fmt.Errorf("managed attempt adoption resource fence is required")
+	}
+	return nil
+}
+
+// ManagedAttemptActivationRequest authorizes or confirms exposing exactly one
+// adopted RayJob to Kueue. The fence is bound during adoption and cannot be
+// inferred from a later Kubernetes observation.
+type ManagedAttemptActivationRequest struct {
+	JobID                  string
+	ExpectedClusterAttempt int
+	RayJobName             string
+	RayJobUID              string
+	ResourceFence          int64
+}
+
+func (request ManagedAttemptActivationRequest) Validate() error {
+	if strings.TrimSpace(request.JobID) == "" || request.ExpectedClusterAttempt < 1 {
+		return fmt.Errorf("managed attempt activation job and attempt are required")
+	}
+	if strings.TrimSpace(request.RayJobName) == "" || strings.TrimSpace(request.RayJobUID) == "" || request.ResourceFence < 1 {
+		return fmt.Errorf("managed attempt activation identity and fence are required")
+	}
+	return nil
+}
+
+type ManagedAttemptCleanupFailureRequest struct {
+	JobID          string
+	ClusterAttempt int
+	RayJobName     string
+	RayJobUID      string
+	Message        string
+	Permanent      bool
+	ObservedAt     time.Time
+}
+
+func (request ManagedAttemptCleanupFailureRequest) Validate() error {
+	if strings.TrimSpace(request.JobID) == "" || request.ClusterAttempt < 1 || strings.TrimSpace(request.RayJobName) == "" {
+		return fmt.Errorf("managed attempt cleanup failure identity is required")
+	}
+	if strings.TrimSpace(request.Message) == "" {
+		return fmt.Errorf("managed attempt cleanup failure message is required")
+	}
+	return nil
+}
+
+type ManagedAttemptRetireRequest struct {
+	JobID          string
+	ClusterAttempt int
+	KubernetesNS   string
+	RayJobName     string
+	RayJobUID      string
+}
+
+func (request ManagedAttemptRetireRequest) Validate() error {
+	if strings.TrimSpace(request.JobID) == "" || request.ClusterAttempt < 1 {
+		return fmt.Errorf("managed attempt retirement job and attempt are required")
+	}
+	if namespace := strings.TrimSpace(request.KubernetesNS); namespace == "" || len(namespace) > 63 || !dnsLabel.MatchString(namespace) {
+		return fmt.Errorf("managed attempt retirement namespace must be a DNS label")
+	}
+	if name := strings.TrimSpace(request.RayJobName); name == "" || len(name) > 63 || !dnsLabel.MatchString(name) {
+		return fmt.Errorf("managed attempt retirement RayJob name must be a DNS label")
+	}
+	return nil
+}
+
+func managedAttemptReservableState(state State) bool {
+	switch state {
+	case StateSubmitted, StateValidating, StateQueued, StateAdmitted, StateProvisioning, StateRunning, StateRecovering, StateUnknown:
+		return true
+	default:
+		return false
+	}
 }
 
 var dnsLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
@@ -207,6 +549,7 @@ var imagePathComponent = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*$`)
 var imageRegistryComponent = regexp.MustCompile(`^[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*(?::[0-9]+)?$`)
 var gitCommit = regexp.MustCompile(`^[0-9a-fA-F]{7,64}$`)
 var snapshotID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+var jobID = regexp.MustCompile(`^job-[0-9a-f]{24}$`)
 
 func (s JobSpec) Validate() error {
 	if s.Name == "" || len(s.Name) > 63 || !dnsLabel.MatchString(s.Name) {
@@ -221,6 +564,11 @@ func (s JobSpec) Validate() error {
 	if len(s.Entrypoint.Command) == 0 || strings.TrimSpace(s.Entrypoint.Command[0]) == "" {
 		return fmt.Errorf("entrypoint command is required")
 	}
+	if s.TrainingEngine.Resolved() == TrainingEngineRayTrain {
+		if err := validateManagedEntrypoint(s.Entrypoint); err != nil {
+			return err
+		}
+	}
 	limits := CurrentResourceLimits()
 	if s.Resources.WorkerReplicas < 1 || s.Resources.WorkerReplicas > limits.MaxWorkerReplicas {
 		return fmt.Errorf("workerReplicas must be between 1 and %d", limits.MaxWorkerReplicas)
@@ -232,6 +580,12 @@ func (s JobSpec) Validate() error {
 		return fmt.Errorf("total GPUs cannot exceed %d", limits.MaxTotalGPUs)
 	}
 	if err := s.Execution.Validate(s.Resources); err != nil {
+		return err
+	}
+	if err := s.validateTrainingRuntime(); err != nil {
+		return err
+	}
+	if err := s.Managed.ValidateDataMode(s.DataMode); err != nil {
 		return err
 	}
 	if strings.TrimSpace(s.Queue) == "" {
@@ -272,6 +626,67 @@ func (s JobSpec) Validate() error {
 	}
 	if s.RetryPolicy.MaxRetries < 0 || s.RetryPolicy.MaxRetries > 3 {
 		return fmt.Errorf("maxRetries must be between 0 and 3")
+	}
+	return nil
+}
+
+func (s JobSpec) validateTrainingRuntime() error {
+	switch s.RayVersion {
+	case "", RayVersionLegacy, RayVersionProduction, RayVersionCanary:
+	default:
+		return fmt.Errorf("unsupported Ray version %q", s.RayVersion)
+	}
+
+	engine := s.TrainingEngine.Resolved()
+	switch engine {
+	case TrainingEngineRayDDP:
+		if s.Managed != (ManagedTrainingPolicy{}) {
+			return fmt.Errorf("managed policy requires ray-train")
+		}
+	case TrainingEngineRayTrain:
+		if s.RayVersion != RayVersionProduction && s.RayVersion != RayVersionCanary {
+			return fmt.Errorf("ray-train requires Ray 2.56.1 or Ray 2.58.0")
+		}
+		if err := s.Managed.Validate(); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unsupported training engine %q", s.TrainingEngine)
+	}
+
+	dataMode := s.DataMode
+	if strings.TrimSpace(string(dataMode)) == "" {
+		dataMode = ""
+	}
+	switch dataMode {
+	case "", DataModeMount:
+	case DataModeCache:
+		if s.Cache.Mode != CacheModeRuntime || s.Cache.Preload != CachePreloadInput {
+			return fmt.Errorf("cache data mode requires runtime cache with preload=input")
+		}
+	case DataModeRayData:
+		if engine != TrainingEngineRayTrain {
+			return fmt.Errorf("ray-data requires ray-train")
+		}
+	case DataModeRayDataStage:
+		if engine != TrainingEngineRayTrain {
+			return fmt.Errorf("ray-data-stage requires ray-train")
+		}
+		if s.Input.Space == "" || strings.TrimSpace(s.Input.RelativePath) == "" {
+			return fmt.Errorf("ray-data-stage requires a governed input data space with a non-empty input path")
+		}
+		if s.Cache.Mode != CacheModeRuntime {
+			return fmt.Errorf("ray-data-stage requires runtime cache")
+		}
+		if s.Cache.Preload != "" {
+			return fmt.Errorf("ray-data-stage does not support cache preload")
+		}
+	default:
+		return fmt.Errorf("unsupported data mode %q", s.DataMode)
+	}
+
+	if s.ParentJobID != "" && !jobID.MatchString(s.ParentJobID) {
+		return fmt.Errorf("parentJobId must match the platform job ID format")
 	}
 	return nil
 }

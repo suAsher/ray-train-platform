@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"ray-train-platform-backend/domain"
 )
 
 // The daily loop is "edit code, submit". Retyping image digests, GPU counts and
@@ -20,6 +22,7 @@ gpusPerWorker: 8
 cpuPerWorker: 32
 memoryPerWorker: 128Gi
 executionMode: torchrun
+engine: ray-train
 cache:
   mode: runtime
   size: 200Gi
@@ -37,7 +40,7 @@ output:
 	if err != nil {
 		t.Fatalf("load project: %v", err)
 	}
-	if project.Name != "bevfusion-lidar" || project.GPUsPerWorker != 8 || project.ExecutionMode != "torchrun" {
+	if project.Name != "bevfusion-lidar" || project.GPUsPerWorker != 8 || project.ExecutionMode != "torchrun" || project.Engine != "ray-train" {
 		t.Fatalf("unexpected project: %+v", project)
 	}
 	if project.Input.Space != "public" || project.Input.Path != "bevfusion/2026-08-0429" {
@@ -96,12 +99,12 @@ func TestProjectFileRejectsBooleanLikeCacheModes(t *testing.T) {
 // Explicit flags always win: a project file is a default, not a lock.
 func TestExplicitFlagsOverrideProjectDefaults(t *testing.T) {
 	project := project{
-		Name: "from-file", Workers: 1, GPUsPerWorker: 8, ExecutionMode: "torchrun",
+		Name: "from-file", Workers: 1, GPUsPerWorker: 8, ExecutionMode: "torchrun", Engine: "ray-train",
 		Cache: projectCache{Mode: "runtime", Size: "100Gi", Preload: "input"},
 	}
 	resolved := project.merge(submitOverrides{
-		Name: "from-flag", GPUsPerWorker: 2, Cache: projectCache{Size: "200Gi"},
-		providedGPUs: true, providedName: true, providedCacheSize: true,
+		Name: "from-flag", GPUsPerWorker: 2, Engine: "ray-ddp", Cache: projectCache{Size: "200Gi"},
+		providedGPUs: true, providedName: true, providedEngine: true, providedCacheSize: true,
 	})
 
 	if resolved.Name != "from-flag" || resolved.GPUsPerWorker != 2 {
@@ -109,6 +112,9 @@ func TestExplicitFlagsOverrideProjectDefaults(t *testing.T) {
 	}
 	if resolved.Workers != 1 || resolved.ExecutionMode != "torchrun" {
 		t.Fatalf("unset flags must keep project defaults, got %+v", resolved)
+	}
+	if resolved.Engine != "ray-ddp" {
+		t.Fatalf("an explicit engine flag must override the project default, got %+v", resolved)
 	}
 	if resolved.Cache.Mode != "runtime" || resolved.Cache.Size != "200Gi" {
 		t.Fatalf("cache flags must override project defaults independently, got %+v", resolved.Cache)
@@ -144,7 +150,7 @@ func TestWriteProjectProducesAReadableStarterFile(t *testing.T) {
 	if err := writeProject(root, project{
 		Name: "my-training", Image: "registry.example/img@sha256:2222222222222222222222222222222222222222222222222222222222222222",
 		Entrypoint: "python train.py", Workers: 1, GPUsPerWorker: 8, CPUPerWorker: 32,
-		MemoryPerWorker: "128Gi", ExecutionMode: "torchrun", Cache: projectCache{Mode: "runtime", Size: "200Gi", Preload: "input"},
+		MemoryPerWorker: "128Gi", ExecutionMode: "torchrun", Engine: "ray-train", Cache: projectCache{Mode: "runtime", Size: "200Gi", Preload: "input"},
 	}); err != nil {
 		t.Fatalf("write project: %v", err)
 	}
@@ -152,14 +158,89 @@ func TestWriteProjectProducesAReadableStarterFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"name: my-training", "gpusPerWorker: 8", "executionMode: torchrun", "cache:", "mode: runtime", "size: 200Gi", "preload: input"} {
+	for _, expected := range []string{"name: my-training", "gpusPerWorker: 8", "executionMode: torchrun", "engine: ray-train", "cache:", "mode: runtime", "size: 200Gi", "preload: input"} {
 		if !strings.Contains(string(written), expected) {
 			t.Fatalf("expected %q in the starter file:\n%s", expected, written)
 		}
 	}
 	reloaded, err := loadProject(root)
-	if err != nil || reloaded.Name != "my-training" || reloaded.GPUsPerWorker != 8 || reloaded.Cache.Mode != "runtime" || reloaded.Cache.Size != "200Gi" {
+	if err != nil || reloaded.Name != "my-training" || reloaded.GPUsPerWorker != 8 || reloaded.Engine != "ray-train" || reloaded.Cache.Mode != "runtime" || reloaded.Cache.Size != "200Gi" {
 		t.Fatalf("the starter file must round-trip, got %+v (%v)", reloaded, err)
+	}
+}
+
+func TestProjectJobSpecDefaultsEngineWithoutForgingRayVersion(t *testing.T) {
+	value := project{
+		Name: "legacy", Image: "registry.example/img@sha256:" + strings.Repeat("4", 64),
+		Entrypoint: "python train.py", Workers: 1, GPUsPerWorker: 1,
+	}
+	spec, err := value.jobSpec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.TrainingEngine != "ray-ddp" || spec.RayVersion != "" || spec.Managed.MaxFailures != 0 {
+		t.Fatalf("legacy project must use the compatibility engine without a client Ray version: %+v", spec)
+	}
+
+	value.Engine = "ray-train"
+	spec, err = value.jobSpec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPolicy := domain.ManagedTrainingPolicy{
+		MaxFailures: 2,
+		Checkpoint:  domain.CheckpointPolicy{EveryEpochs: 1, KeepLatest: 3, KeepBest: 1},
+	}
+	if spec.TrainingEngine != "ray-train" || spec.RayVersion != "" || spec.Managed != wantPolicy {
+		t.Fatalf("managed project must use the design recovery default without a client Ray version: %+v", spec)
+	}
+}
+
+func TestProjectJobSpecRejectsUnknownEngine(t *testing.T) {
+	_, err := (project{
+		Name: "bad-engine", Image: "registry.example/img@sha256:" + strings.Repeat("5", 64),
+		Entrypoint: "python train.py", Engine: "ray-magic", Workers: 1, GPUsPerWorker: 1,
+	}).jobSpec()
+	if err == nil || !strings.Contains(err.Error(), "ray-ddp") || !strings.Contains(err.Error(), "ray-train") {
+		t.Fatalf("unknown engine must fail with the supported values, got %v", err)
+	}
+}
+
+func TestProjectJobSpecBuildsRayDataNodeLocalStaging(t *testing.T) {
+	value := project{
+		Name: "bevfusion-stage", Image: "registry.example/img@sha256:" + strings.Repeat("6", 64),
+		Entrypoint: "python tools/train.py configs/x.yaml", Engine: "ray-train",
+		DataMode: "ray-data-stage", Workers: 2, GPUsPerWorker: 8,
+		Cache: projectCache{Mode: "runtime", Size: "2Ti"},
+		Input: projectLocation{Space: "public", Path: "labeled/fz-v1"},
+	}
+
+	spec, err := value.jobSpec()
+	if err != nil {
+		t.Fatalf("build staged project spec: %v", err)
+	}
+	if spec.TrainingEngine != domain.TrainingEngineRayTrain || spec.DataMode != domain.DataModeRayDataStage {
+		t.Fatalf("staging must use managed Ray Train: %+v", spec)
+	}
+	if spec.Managed.RayData.Format() != domain.RayDataFormatFiles || spec.Managed.RayData.URI() != domain.DataMountInputPath {
+		t.Fatalf("staging must consume the complete governed input with Ray Data: %+v", spec.Managed.RayData)
+	}
+	if spec.Cache.Mode != domain.CacheModeRuntime || spec.Cache.Size != "2Ti" || spec.Cache.Preload != "" {
+		t.Fatalf("staging must reserve runtime NVMe without the legacy init preloader: %+v", spec.Cache)
+	}
+}
+
+func TestProjectJobSpecRejectsRayDataStagingAtDataSpaceRoot(t *testing.T) {
+	value := project{
+		Name: "unsafe-stage", Image: "registry.example/img@sha256:" + strings.Repeat("6", 64),
+		Entrypoint: "python train.py", Engine: "ray-train", DataMode: "ray-data-stage",
+		Workers: 1, GPUsPerWorker: 1, Cache: projectCache{Mode: "runtime", Size: "200Gi"},
+		Input: projectLocation{Space: "public"},
+	}
+
+	_, err := value.jobSpec()
+	if err == nil || !strings.Contains(err.Error(), "non-empty input path") {
+		t.Fatalf("whole-space staging must be rejected, got %v", err)
 	}
 }
 

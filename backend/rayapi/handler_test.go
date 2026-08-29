@@ -16,12 +16,16 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 	"ray-train-platform-backend/api"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
 	"ray-train-platform-backend/objectstore"
 	"ray-train-platform-backend/observability"
 	"ray-train-platform-backend/repositories"
+	"ray-train-platform-backend/runtimecatalog"
 )
 
 type rayTestRepository struct {
@@ -34,6 +38,29 @@ type rayTestRepository struct {
 	reopens   int
 	limits    repositories.SourceArtifactLimits
 }
+
+type managedRayImageStore struct{}
+
+func (managedRayImageStore) CreateImage(context.Context, domain.PlatformImage) error { return nil }
+func (managedRayImageStore) ListImages(_ context.Context, _ string, kind string) ([]domain.PlatformImage, error) {
+	if kind != domain.ImageKindTraining {
+		return nil, nil
+	}
+	return []domain.PlatformImage{{
+		ID: "managed-native", Name: "managed-native", Kind: domain.ImageKindTraining, Reference: testImageDigest,
+		RayVersion: domain.RayVersionProduction, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayTrain},
+	}}, nil
+}
+func (managedRayImageStore) DefaultImage(context.Context, string, string) (domain.PlatformImage, error) {
+	return domain.PlatformImage{}, repositories.ErrImageNotFound
+}
+func (managedRayImageStore) ImageByReference(context.Context, string, string, string) (domain.PlatformImage, error) {
+	return domain.PlatformImage{}, repositories.ErrImageNotFound
+}
+func (managedRayImageStore) SetImageShared(context.Context, string, string, bool, string) (domain.PlatformImage, error) {
+	return domain.PlatformImage{}, repositories.ErrImageNotFound
+}
+func (managedRayImageStore) DeleteImage(context.Context, string, string, bool) error { return nil }
 
 func readyRayPersonalDataBinding(tenantID, userID string) domain.DataMountBinding {
 	return domain.DataMountBinding{
@@ -187,6 +214,31 @@ func rayRouter(t *testing.T, repository *rayTestRepository, store *rayTestStore,
 	return rayRouterWithCachePolicy(t, repository, store, principal, api.LocalCachePolicy{})
 }
 
+func rayRouterForRepository(t *testing.T, repository Repository, store objectstore.Store, principal auth.Principal) *gin.Engine {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	submission := api.NewSubmissionService(repository, api.SubmissionServiceOptions{
+		DataSpaces: repository, DataSpacesEnabled: true,
+		NewID: func() (string, error) { return "job-ray", nil },
+	})
+	handler, err := NewHandler(repository, store, submission, Options{
+		SpoolDir: t.TempDir(), Defaults: SubmissionDefaults{
+			Image: testImageDigest, WorkerReplicas: 1, GPUsPerWorker: 1, CPUPerWorker: 8, MemoryPerWorker: "32Gi",
+		}, Logs: &recoveryLogs{lines: []observability.LogLine{{Line: "ray-sdk-log-marker"}}},
+		Now: func() time.Time { return time.Date(2026, 8, 28, 10, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatalf("new Ray API handler: %v", err)
+	}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("ray-platform-principal", principal)
+		c.Next()
+	})
+	handler.RegisterRoutes(router.Group("/ray"))
+	return router
+}
+
 func rayRouterWithCachePolicy(t *testing.T, repository *rayTestRepository, store *rayTestStore, principal auth.Principal, cache api.LocalCachePolicy) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -240,6 +292,38 @@ func TestRayRoutesReturnRayJobsProtocolAndRuntimeVersion(t *testing.T) {
 	}
 	if _, ok := version["session_name"]; !ok {
 		t.Fatalf("version response is missing session_name: %v", version)
+	}
+}
+
+func TestRayVersionResponseUsesConfiguredRuntimeAndLegacyFallback(t *testing.T) {
+	principal := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{"Engineer"}, AuthType: auth.AuthTypeOIDC}
+	for _, test := range []struct {
+		name       string
+		configured string
+		want       string
+	}{
+		{name: "configured", configured: domain.RayVersionProduction, want: domain.RayVersionProduction},
+		{name: "blank falls back", configured: "  ", want: domain.RayVersionLegacy},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &rayTestRepository{}
+			submission := api.NewSubmissionService(repository, api.SubmissionServiceOptions{DataSpaces: repository, DataSpacesEnabled: true})
+			handler, err := NewHandler(repository, &rayTestStore{}, submission, Options{SpoolDir: t.TempDir(), RayVersion: test.configured})
+			if err != nil {
+				t.Fatalf("new handler: %v", err)
+			}
+			router := gin.New()
+			router.Use(func(c *gin.Context) { c.Set("ray-platform-principal", principal) })
+			handler.RegisterRoutes(router.Group("/ray"))
+			response := rayRequest(router, http.MethodGet, "/ray/api/version", "")
+			var version map[string]string
+			if err := json.Unmarshal(response.Body.Bytes(), &version); err != nil {
+				t.Fatal(err)
+			}
+			if version["ray_version"] != test.want {
+				t.Fatalf("ray_version=%q want %q", version["ray_version"], test.want)
+			}
+		})
 	}
 }
 
@@ -322,6 +406,99 @@ func TestRayPackagePutHeadAndSubmitAreOwnerScoped(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), `"deleted":true`) {
 		t.Fatalf("delete response is not Ray-compatible: %s", response.Body.String())
+	}
+}
+
+func TestManagedNativeSubmitPersistsOwnerScopedServerOutput(t *testing.T) {
+	principal := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{"Engineer"}, AuthType: auth.AuthTypeOIDC}
+	repository := &rayTestRepository{}
+	store := &rayTestStore{}
+	submission := api.NewSubmissionService(repository, api.SubmissionServiceOptions{
+		Images: managedRayImageStore{}, RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true},
+		DataSpaces: repository, DataSpacesEnabled: true, NewID: func() (string, error) { return "job-native-managed", nil },
+	})
+	handler, err := NewHandler(repository, store, submission, Options{
+		SpoolDir: t.TempDir(), Defaults: SubmissionDefaults{Image: testImageDigest, WorkerReplicas: 1, GPUsPerWorker: 1, CPUPerWorker: 8, MemoryPerWorker: "32Gi"},
+	})
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+	router := gin.New()
+	router.Use(func(c *gin.Context) { c.Set("ray-platform-principal", principal) })
+	handler.RegisterRoutes(router.Group("/ray"))
+	packageName := testPackageSHA256 + ".zip"
+	if response := rayRequest(router, http.MethodPut, "/ray/api/packages/gcs/"+packageName, "PKpayload"); response.Code != http.StatusOK {
+		t.Fatalf("upload status=%d body=%s", response.Code, response.Body.String())
+	}
+	body := `{"entrypoint":"python train.py","submission_id":"managed_native","runtime_env":{"working_dir":"gcs://` + packageName + `"},"metadata":{"platform.training.engine":"ray-train"}}`
+	if response := rayRequest(router, http.MethodPost, "/ray/api/jobs/", body); response.Code != http.StatusOK {
+		t.Fatalf("submit status=%d body=%s", response.Code, response.Body.String())
+	}
+	job := repository.created
+	if job == nil || job.Spec.Output != (domain.DataLocation{Space: domain.DataSpaceMyRuns, RelativePath: "native-ray"}) {
+		t.Fatalf("managed native output was not server-selected: %+v", job)
+	}
+	output := job.Spec.ResolvedDataMounts.Output
+	if output == nil || output.Space != domain.DataSpaceMyRuns || output.BindingSpace != domain.DataSpaceWorkspace || output.ClaimName != "data-user-a" || output.SubPath != "runs/native-ray/job-native-managed" || output.MountPath != domain.DataMountOutputPath || output.ReadOnly {
+		t.Fatalf("managed native output was not owner-scoped: %+v", output)
+	}
+}
+
+func TestRayPackagePutIgnoresEarlierRequestScopedArtifactWithSameDigest(t *testing.T) {
+	principal := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Username: "user-a", Roles: []string{"Engineer"}, AuthType: auth.AuthTypeOIDC}
+	payload := []byte("PK\x03\x04request-first")
+	digestValue := sha256.Sum256(payload)
+	digest := hex.EncodeToString(digestValue[:])
+	for _, requestState := range []domain.SourceArtifactState{domain.SourceArtifactReady, domain.SourceArtifactPending} {
+		t.Run(string(requestState), func(t *testing.T) {
+			database, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "-")+"?mode=memory&cache=shared"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := database.AutoMigrate(&repositories.TenantRecord{}, &repositories.UserRecord{}, &repositories.SourceArtifactRecord{}, &repositories.SourceArtifactRequestRecord{}, &repositories.DataMountBindingRecord{}); err != nil {
+				t.Fatal(err)
+			}
+			repository := repositories.NewGormRepository(database)
+			if err := repository.EnsureIdentity(context.Background(), principal); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Date(2026, 8, 28, 10, 0, 0, 0, time.UTC)
+			requested, err := domain.NewRequestScopedSourceArtifact(domain.SourceArtifactInput{
+				ID: "artifact-0123456789abcdef01234567", TenantID: principal.TenantID, UserID: principal.Subject,
+				SHA256: digest, SizeBytes: int64(len(payload)),
+			}, now.Add(15*time.Minute), now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			storedRequest, err := repository.CreateSourceArtifactForRequestWithLimits(context.Background(), &requested, "source-request-0123456789abcdef01234567", repositories.DefaultSourceArtifactLimits())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if requestState == domain.SourceArtifactReady {
+				if _, err := repository.MarkSourceArtifactReady(context.Background(), principal.TenantID, principal.Subject, storedRequest.ID, now.Add(time.Minute)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			store := &rayTestStore{}
+			router := rayRouterForRepository(t, repository, store, principal)
+			packageName := testPackageSHA256 + ".zip"
+			request := httptest.NewRequest(http.MethodPut, "/ray/api/packages/gcs/"+packageName, bytes.NewReader(payload))
+			request.Header.Set("Content-Length", strconv.Itoa(len(payload)))
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("Ray package put after %s request status=%d body=%s", requestState, response.Code, response.Body.String())
+			}
+			legacyID := rayPackageArtifactID(principal.TenantID, principal.Subject, packageName)
+			legacy, err := repository.GetSourceArtifact(context.Background(), principal.TenantID, principal.Subject, legacyID)
+			if err != nil || legacy.ID == storedRequest.ID || legacy.ObjectKey == storedRequest.ObjectKey {
+				t.Fatalf("Ray package did not create its legacy artifact: legacy=%+v request=%+v err=%v", legacy, storedRequest, err)
+			}
+			wantKey, err := domain.SourceArtifactObjectKey(principal.TenantID, principal.Subject, digest)
+			if err != nil || legacy.ObjectKey != wantKey || legacy.State != domain.SourceArtifactReady {
+				t.Fatalf("Ray package legacy key/state mismatch: artifact=%+v wantKey=%q err=%v", legacy, wantKey, err)
+			}
+		})
 	}
 }
 

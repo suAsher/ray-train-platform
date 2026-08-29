@@ -3,6 +3,7 @@ package k8s
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"path"
 	"strconv"
 	"strings"
@@ -14,9 +15,12 @@ import (
 )
 
 const (
-	RayAPIVersion  = "ray.io/v1"
-	RayJobKind     = "RayJob"
-	RayJobResource = "rayjobs"
+	RayAPIVersion             = "ray.io/v1"
+	RayJobKind                = "RayJob"
+	RayJobResource            = "rayjobs"
+	managedAttemptIdentityKey = "raytrain.wellspiking.ai/cluster-attempt"
+	managedCreationFenceKey   = "raytrain.wellspiking.ai/creation-fence"
+	managedPendingAdoptionKey = "raytrain.wellspiking.ai/pending-adoption"
 )
 
 type RenderOptions struct {
@@ -35,6 +39,13 @@ type RenderOptions struct {
 	// GIT_USERNAME/GIT_TOKEN for a private repository. Empty for public ones.
 	GitCredentialSecret string
 	MLflow              MLflowOptions
+	// TrainingEventBaseURL is an internal control-plane URL. The renderer adds
+	// the immutable job path and never obtains it from a submission request.
+	TrainingEventBaseURL string
+	trainingEventJobID   string
+	managedResumePath    string
+	clusterAttempt       int
+	managedCreationFence int64
 }
 
 // MLflowOptions carries only non-secret, in-cluster routing information.
@@ -86,13 +97,28 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	if err := job.Spec.Validate(); err != nil {
 		return nil, fmt.Errorf("validate job spec: %w", err)
 	}
+	if err := job.Spec.Managed.ValidateDataMode(job.Spec.DataMode); err != nil {
+		return nil, fmt.Errorf("validate data mode: %w", err)
+	}
+	if err := job.Spec.Managed.ValidateResolvedDataMode(job.Spec.DataMode, job.Spec.ResolvedDataMounts); err != nil {
+		return nil, fmt.Errorf("validate resolved data mode: %w", err)
+	}
 	if err := domain.ValidatePinnedImage(options.SourceMaterializerImage); err != nil {
 		return nil, fmt.Errorf("source materializer image: %w", err)
 	}
 	if err := options.LocalCache.Validate(); err != nil {
 		return nil, fmt.Errorf("local cache: %w", err)
 	}
-	localCache, err := options.LocalCache.resolve(job.Spec.Cache)
+	cacheRequest := job.Spec.Cache
+	if job.Spec.DataMode == domain.DataModeRayData || job.Spec.DataMode == domain.DataModeRayDataStage {
+		if cacheRequest.Preload != "" {
+			return nil, fmt.Errorf("%s mode does not support cache preload", job.Spec.DataMode)
+		}
+		if cacheRequest.Mode == "" || cacheRequest.Mode == domain.CacheModeOff {
+			cacheRequest = domain.CacheRequest{Mode: domain.CacheModeRuntime, Size: options.LocalCache.DefaultSize}
+		}
+	}
+	localCache, err := options.LocalCache.resolve(cacheRequest)
 	if err != nil {
 		return nil, fmt.Errorf("local cache: %w", err)
 	}
@@ -102,6 +128,18 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	}
 	if err := options.MLflow.Validate(); err != nil {
 		return nil, fmt.Errorf("MLflow: %w", err)
+	}
+	if job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain {
+		trainingEventBaseURL, err := validateTrainingEventBaseURL(options.TrainingEventBaseURL)
+		if err != nil {
+			return nil, fmt.Errorf("training event callback: %w", err)
+		}
+		options.TrainingEventBaseURL = trainingEventBaseURL
+		resumePath, err := managedRecoveryCheckpointPath(job)
+		if err != nil {
+			return nil, fmt.Errorf("managed recovery checkpoint: %w", err)
+		}
+		options.managedResumePath = resumePath
 	}
 	if job.Spec.Source.Type != "git" && job.Spec.Source.Type != "workspace" && job.Spec.Source.Type != "workspace-archive" {
 		// Defense in depth for callers that bypass the HTTP submission service.
@@ -116,7 +154,7 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 		if strings.TrimSpace(job.Spec.Source.ArtifactID) == "" || strings.TrimSpace(job.Spec.Source.ArtifactSHA256) == "" {
 			return nil, fmt.Errorf("workspace archive source must be materialized before rendering")
 		}
-		if !domain.IsSourceArtifactObjectKeyForTenant(job.TenantID, job.Spec.Source.ArtifactObjectKey, job.Spec.Source.ArtifactSHA256) {
+		if _, err := domain.SourceArtifactMountedArchivePath(job.TenantID, job.Spec.Source.ArtifactObjectKey, job.Spec.Source.ArtifactID, job.Spec.Source.ArtifactSHA256); err != nil {
 			return nil, fmt.Errorf("workspace archive source is not owner scoped")
 		}
 	}
@@ -134,44 +172,44 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	if clusterSpecField != "rayClusterConfig" && clusterSpecField != "rayClusterSpec" {
 		return nil, fmt.Errorf("unsupported RayJob cluster spec field %q", clusterSpecField)
 	}
-	rayVersion := strings.TrimSpace(options.RayVersion)
-	if rayVersion == "" {
-		rayVersion = "2.35.0"
-	}
+	rayVersion := resolvedRayVersion(job.Spec, options)
 	workerReplicas := int64(job.Spec.Resources.WorkerReplicas)
 	gpusPerWorker := int64(job.Spec.Resources.GPUsPerWorker)
-	workerCPU := strconv.FormatInt(job.Spec.Resources.CPUPerWorker, 10)
-	if job.Spec.Resources.CPUPerWorker <= 0 {
-		workerCPU = "8"
-	}
+	workerCPU := effectiveWorkerCPU(job.Spec.Resources)
 	workerMemory := job.Spec.Resources.MemoryPerWorker
 	if strings.TrimSpace(workerMemory) == "" {
 		workerMemory = "32Gi"
 	}
-	entrypoint := executionProfileEntrypoint(job.Spec)
+	entrypoint := trainingEntrypoint(job.Spec)
 	options.MLflow.jobID = job.ID
 	options.MLflow.tenantID = job.TenantID
 	options.MLflow.userID = job.UserID
+	options.trainingEventJobID = job.ID
+	options.clusterAttempt = job.ClusterAttempt
 
 	// The submitter runs `ray job submit`, and Ray uploads the runtime env's
 	// working_dir from the submitter's own filesystem. Materialize the source
 	// only there: Ray distributes that runtime env to the driver and workers.
 	// This prevents every Pod from independently fetching the same Git source
 	// and keeps private Git credentials out of the Ray cluster Pods.
-	submitterPod := podTemplate("ray-job-submitter", job.Spec.Image, "1", "2Gi", 0, job.Spec.Source, job.Spec, options, true, false, true)
+	submitterPod := podTemplate("ray-job-submitter", job.Spec.Image, "1", "2Gi", 0, job.TenantID, job.Spec.Source, job.Spec, options, true, false, true)
 	// KubeRay wraps this template in a batch Job, whose pod spec requires an
 	// explicit restartPolicy; without it the submitter Job is rejected and the
 	// RayJob stalls in Initializing forever.
 	submitterPod["spec"].(map[string]any)["restartPolicy"] = "Never"
 	addPodLabels(submitterPod, job.ID, job.TenantID)
-	headPod := podTemplate("ray-head", job.Spec.Image, "4", "16Gi", 0, job.Spec.Source, job.Spec, options, true, true, false)
-	workerPod := podTemplate("ray-worker", job.Spec.Image, workerCPU, workerMemory, gpusPerWorker, job.Spec.Source, job.Spec, options, false, true, false)
+	headPod := podTemplate("ray-head", job.Spec.Image, "4", "16Gi", 0, job.TenantID, job.Spec.Source, job.Spec, options, true, true, false)
+	workerPod := podTemplate("ray-worker", job.Spec.Image, workerCPU, workerMemory, gpusPerWorker, job.TenantID, job.Spec.Source, job.Spec, options, false, true, false)
 	addPodLabels(headPod, job.ID, job.TenantID)
 	addPodLabels(workerPod, job.ID, job.TenantID)
-	if job.Spec.Execution.ResolvedMode() == domain.ExecutionModeRayTrain {
-		// A Ray-managed DDP worker represents one physical training node. Require
+	managedMultiNode := job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain && workerReplicas > 1
+	legacyRayTrain := job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayDDP && job.Spec.Execution.ResolvedMode() == domain.ExecutionModeRayTrain
+	if managedMultiNode || legacyRayTrain {
+		// Each distributed worker represents one physical training node. Require
 		// an even host spread so a multi-worker submission is a real multi-node
-		// validation rather than two worker Pods packed onto one 8-GPU server.
+		// run rather than two worker Pods packed onto one 8-GPU server. The legacy
+		// ray_train profile retains its historical behavior, while the managed
+		// engine applies this independently of the legacy execution mode.
 		workerPod["spec"].(map[string]any)["topologySpreadConstraints"] = []any{map[string]any{
 			"maxSkew":           int64(1),
 			"minDomains":        int64(2),
@@ -212,23 +250,90 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 		"platform_tenant_id":           job.TenantID,
 		"kueue.x-k8s.io/queue-name":    job.Spec.Queue,
 	}
+	annotations := map[string]any{
+		"ray-train-platform/job-id": job.ID,
+		"ray-train-platform/owner":  job.UserID,
+	}
+	if job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain {
+		attempt := strconv.Itoa(job.ClusterAttempt)
+		labels[managedAttemptIdentityKey] = attempt
+		annotations[managedAttemptIdentityKey] = attempt
+		if options.managedCreationFence > 0 {
+			fence := strconv.FormatInt(options.managedCreationFence, 10)
+			labels[managedCreationFenceKey] = fence
+			annotations[managedCreationFenceKey] = fence
+		}
+		if strings.TrimSpace(job.RayJobUID) == "" {
+			delete(labels, "kueue.x-k8s.io/queue-name")
+			annotations[managedPendingAdoptionKey] = "true"
+		}
+	}
 	jobObject := map[string]any{
 		"apiVersion": RayAPIVersion,
 		"kind":       RayJobKind,
 		"metadata": map[string]any{
 			// The display name is reusable. Kubernetes identity comes from the
 			// immutable platform job ID so repeated project runs never collide.
-			"name":      rayJobResourceName(job),
-			"namespace": namespace,
-			"labels":    labels,
-			"annotations": map[string]any{
-				"ray-train-platform/job-id": job.ID,
-				"ray-train-platform/owner":  job.UserID,
-			},
+			"name":        rayJobResourceName(job),
+			"namespace":   namespace,
+			"labels":      labels,
+			"annotations": annotations,
 		},
 		"spec": jobSpecFields(job, clusterSpecField, clusterSpec, entrypoint, submitterPod),
 	}
 	return &unstructured.Unstructured{Object: jobObject}, nil
+}
+
+func resolvedRayVersion(spec domain.JobSpec, options RenderOptions) string {
+	if version := strings.TrimSpace(spec.RayVersion); version != "" {
+		return version
+	}
+	if strings.TrimSpace(string(spec.TrainingEngine)) == "" {
+		if version := strings.TrimSpace(options.RayVersion); version != "" {
+			return version
+		}
+	}
+	return domain.RayVersionLegacy
+}
+
+func effectiveWorkerCPU(resources domain.Resources) string {
+	if resources.CPUPerWorker <= 0 {
+		return "8"
+	}
+	return strconv.FormatInt(resources.CPUPerWorker, 10)
+}
+
+// trainingEntrypoint routes on the immutable training engine before consulting
+// the legacy execution profile. This preserves the historical meaning of
+// execution.mode=ray_train while allowing the official managed Ray Train
+// driver to own worker orchestration for explicitly selected jobs.
+func trainingEntrypoint(spec domain.JobSpec) []string {
+	if spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain {
+		return executionProfileEntrypoint(spec)
+	}
+	command := append([]string(nil), spec.Entrypoint.Command...)
+	command = append(command, spec.Entrypoint.Args...)
+	launcher := []string{
+		"raytrain-managed",
+		"--nodes", strconv.Itoa(spec.Resources.WorkerReplicas),
+		"--gpus-per-node", strconv.Itoa(spec.Resources.GPUsPerWorker),
+		"--cpus-per-node", effectiveWorkerCPU(spec.Resources),
+		"--max-failures", strconv.Itoa(spec.Managed.MaxFailures),
+		"--checkpoint-every-epochs", strconv.Itoa(spec.Managed.Checkpoint.EveryEpochs),
+		"--checkpoint-keep-latest", strconv.Itoa(spec.Managed.Checkpoint.KeepLatest),
+		"--checkpoint-keep-best", strconv.Itoa(spec.Managed.Checkpoint.KeepBest),
+	}
+	if spec.DataMode != "" {
+		launcher = append(launcher, "--data-mode", string(spec.DataMode))
+	}
+	if spec.DataMode == domain.DataModeRayData || spec.DataMode == domain.DataModeRayDataStage {
+		launcher = append(launcher,
+			"--dataset-format", string(spec.Managed.RayData.Format()),
+			"--dataset-uri", spec.Managed.RayData.URI(),
+		)
+	}
+	launcher = append(launcher, "--")
+	return append(launcher, command...)
 }
 
 // executionProfileEntrypoint keeps compatibility for persisted V1 jobs while routing
@@ -361,10 +466,16 @@ func configureRayCache(rayStartParams map[string]any, cache LocalCacheOptions) {
 	rayStartParams["temp-dir"] = path.Join(cache.MountPathData1, "ray")
 }
 
-func rayObjectSpillingConfig(directory string) string {
+func rayObjectSpillingConfig(directories ...string) string {
+	directoryPath := any("")
+	if len(directories) == 1 {
+		directoryPath = directories[0]
+	} else {
+		directoryPath = append([]string(nil), directories...)
+	}
 	config, _ := json.Marshal(map[string]any{
 		"type":   "filesystem",
-		"params": map[string]string{"directory_path": directory},
+		"params": map[string]any{"directory_path": directoryPath},
 	})
 	return string(config)
 }
@@ -385,7 +496,57 @@ func rayJobResourceName(job domain.TrainingJob) string {
 	if persisted := strings.TrimSpace(job.RayJobName); persisted != "" {
 		return persisted
 	}
+	return managedAttemptRayJobName(job)
+}
+
+func managedAttemptRayJobName(job domain.TrainingJob) string {
+	if job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain && job.ClusterAttempt > 1 {
+		suffix := "-a" + strconv.Itoa(job.ClusterAttempt)
+		base := sanitizeDNS(job.ID)
+		if maximum := 63 - len(suffix); len(base) > maximum {
+			base = strings.Trim(base[:maximum], "-")
+		}
+		if base == "" {
+			base = "job"
+		}
+		return base + suffix
+	}
 	return sanitizeDNS(job.ID)
+}
+
+func managedRecoveryCheckpointPath(job domain.TrainingJob) (string, error) {
+	checkpointID := strings.TrimSpace(job.ResumeCheckpointID)
+	if checkpointID == "" {
+		return "", nil
+	}
+	if len(checkpointID) > domain.TrainingCheckpointIDMaxBytes || path.Base(checkpointID) != checkpointID {
+		return "", fmt.Errorf("checkpoint ID is not a safe path segment")
+	}
+	for index, char := range checkpointID {
+		valid := (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || (index > 0 && (char == '.' || char == '_' || char == '-'))
+		if !valid {
+			return "", fmt.Errorf("checkpoint ID is not a safe identifier")
+		}
+	}
+	if job.ClusterAttempt == 1 {
+		if strings.TrimSpace(job.Spec.ParentJobID) == "" {
+			return "", fmt.Errorf("initial resume checkpoint requires a parent job")
+		}
+		checkpoint := job.Spec.ResolvedDataMounts.Checkpoint
+		if checkpoint == nil || checkpoint.MountPath != domain.DataMountCheckpointPath || !checkpoint.ReadOnly {
+			return "", fmt.Errorf("child resume requires the governed read-only checkpoint mount")
+		}
+		return "", nil
+	}
+	if job.ClusterAttempt <= 1 {
+		return "", fmt.Errorf("resume checkpoint requires an initial child or recovery attempt")
+	}
+	output := job.Spec.ResolvedDataMounts.Output
+	if output == nil || output.MountPath != domain.DataMountOutputPath || output.ReadOnly {
+		return "", fmt.Errorf("recovery requires the governed writable output mount")
+	}
+	return path.Join(domain.DataMountOutputPath, ".platform", "ray-train", job.ID, "checkpoints", checkpointID), nil
 }
 
 func successCleanupTTL(job domain.TrainingJob) int64 {
@@ -414,7 +575,7 @@ func jobSpecFields(job domain.TrainingJob, clusterSpecField string, clusterSpec 
 		// The working directory comes from the runtime env below, which is also
 		// what ships the materialized source to the driver and workers.
 		"entrypoint":     shellJoin(entrypoint),
-		"runtimeEnvYAML": "working_dir: /workspace\nenv_vars:\n  PYTHONUNBUFFERED: \"1\"\n",
+		"runtimeEnvYAML": runtimeEnvironmentYAML(job),
 		clusterSpecField: clusterSpec,
 		// Release the GPUs as soon as the run ends; without this the RayCluster
 		// outlives the job and the worker Pods keep their nvidia.com/gpu claims.
@@ -441,7 +602,19 @@ func jobSpecFields(job domain.TrainingJob, clusterSpecField string, clusterSpec 
 	return spec
 }
 
-func podTemplate(containerName, image, cpu, memory string, gpus int64, source domain.CodeSource, jobSpec domain.JobSpec, options RenderOptions, head, mountData, materializeSource bool) map[string]any {
+func runtimeEnvironmentYAML(job domain.TrainingJob) string {
+	runtimeEnv := "working_dir: /workspace\nenv_vars:\n  PYTHONUNBUFFERED: \"1\"\n"
+	if job.Spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain {
+		return runtimeEnv
+	}
+	return runtimeEnv +
+		"  RAY_TRAIN_V2_ENABLED: \"1\"\n" +
+		"  PLATFORM_TRAINING_ENGINE: \"ray-train\"\n" +
+		"  PLATFORM_JOB_ID: " + strconv.Quote(job.ID) + "\n" +
+		"  RAYTRAIN_CLUSTER_ATTEMPT: " + strconv.Quote(strconv.Itoa(job.ClusterAttempt)) + "\n"
+}
+
+func podTemplate(containerName, image, cpu, memory string, gpus int64, tenantID string, source domain.CodeSource, jobSpec domain.JobSpec, options RenderOptions, head, mountData, materializeSource bool) map[string]any {
 	resources := map[string]any{
 		"requests": map[string]any{"cpu": cpu, "memory": memory},
 		"limits":   map[string]any{"cpu": cpu, "memory": memory},
@@ -454,8 +627,14 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 		map[string]any{"name": "PYTHONUNBUFFERED", "value": "1"},
 		map[string]any{"name": "RAY_DISABLE_DOCKER_CPU_WARNING", "value": "1"},
 	}
+	if jobSpec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain {
+		env = append(env, map[string]any{"name": "RAYTRAIN_CLUSTER_ATTEMPT", "value": strconv.Itoa(options.clusterAttempt)})
+		if !head && containerName == "ray-worker" {
+			env = append(env, managedMetricIdentityEnvironment(options.trainingEventJobID)...)
+		}
+	}
 	if mountData {
-		env = append(env, platformDataEnvironment(jobSpec)...)
+		env = append(env, platformDataEnvironment(jobSpec, options.managedResumePath)...)
 	}
 	if options.MLflow.Enabled {
 		env = append(env, mlflowEnvironment(options.MLflow)...)
@@ -496,6 +675,9 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 		volumeMounts, volumes = appendTrainingDataRoots(volumeMounts, volumes, jobSpec.ResolvedDataRoots)
 		volumeMounts, volumes = appendResolvedDataSpaceMounts(volumeMounts, volumes, jobSpec.ResolvedDataMounts)
 	}
+	if mountData && jobSpec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain {
+		volumeMounts, volumes, env = appendTrainingEventCredential(volumeMounts, volumes, env, options)
+	}
 	if materializeSource && (source.Type == "workspace" || source.Type == "workspace-archive") {
 		personal := jobSpec.ResolvedDataRoots.Personal
 		if personal != nil {
@@ -503,10 +685,15 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 		}
 	}
 	if mountData && options.LocalCache.runtime {
-		volumeMounts, volumes = appendLocalCache(volumeMounts, volumes, options.LocalCache, head)
+		dualCacheDevices := !head || jobSpec.DataMode == domain.DataModeRayData || jobSpec.DataMode == domain.DataModeRayDataStage
+		volumeMounts, volumes = appendLocalCache(volumeMounts, volumes, options.LocalCache, dualCacheDevices)
 		cachePaths := options.LocalCache.MountPathData1
-		if !head {
+		if dualCacheDevices {
 			cachePaths += ":" + options.LocalCache.MountPathData2
+		}
+		spillDirectories := []string{path.Join(options.LocalCache.MountPathData1, "ray-spill", "objects")}
+		if jobSpec.DataMode == domain.DataModeRayData || jobSpec.DataMode == domain.DataModeRayDataStage {
+			spillDirectories = append(spillDirectories, path.Join(options.LocalCache.MountPathData2, "ray-spill", "objects"))
 		}
 		env = append(
 			env,
@@ -514,38 +701,59 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 			map[string]any{"name": "PLATFORM_CACHE_PATHS", "value": cachePaths},
 			map[string]any{
 				"name":  "RAY_object_spilling_config",
-				"value": rayObjectSpillingConfig(path.Join(options.LocalCache.MountPathData1, "ray-spill", "objects")),
+				"value": rayObjectSpillingConfig(spillDirectories...),
 			},
 		)
 	}
-	preloadInput := mountData && !head && options.LocalCache.runtime && jobSpec.Cache.Preload == domain.CachePreloadInput
+	preloadMode := jobSpec.DataMode == "" || jobSpec.DataMode == domain.DataModeCache
+	preloadInput := mountData && !head && options.LocalCache.runtime && preloadMode && jobSpec.Cache.Preload == domain.CachePreloadInput
 	if preloadInput {
 		sourcePath := environmentValue(env, "PLATFORM_DATASET_PATH")
 		env = setEnvironmentValue(env, "PLATFORM_DATASET_SOURCE_PATH", sourcePath)
 		env = setEnvironmentValue(env, "PLATFORM_DATASET_PATH", path.Join(options.LocalCache.MountPathData1, "dataset-view"))
 		env = setEnvironmentValue(env, "PLATFORM_CACHE_PRELOAD", string(domain.CachePreloadInput))
 	}
+	if mountData && !head && options.LocalCache.runtime && jobSpec.DataMode == domain.DataModeRayDataStage {
+		sourcePath := environmentValue(env, "PLATFORM_DATASET_PATH")
+		env = setEnvironmentValue(env, "PLATFORM_DATASET_SOURCE_PATH", sourcePath)
+		env = setEnvironmentValue(env, "PLATFORM_DATASET_PATH", path.Join(options.LocalCache.MountPathData1, "dataset-view"))
+		env = setEnvironmentValue(env, "PLATFORM_CACHE_PRELOAD", string(domain.DataModeRayDataStage))
+	}
+	container := map[string]any{
+		"name":            containerName,
+		"image":           image,
+		"imagePullPolicy": domain.RuntimeImagePullPolicy(image),
+		"workingDir":      "/workspace",
+		"resources":       resources,
+		"env":             env,
+		"volumeMounts":    volumeMounts,
+		"securityContext": map[string]any{"allowPrivilegeEscalation": false, "capabilities": map[string]any{"drop": []any{"ALL"}}},
+	}
+	if jobSpec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain && containerName == "ray-head" {
+		// Once a container declares any ports, KubeRay does not inject its default
+		// head ports. Keep every control endpoint explicit so the operator can
+		// submit the RayJob and the platform can proxy the dashboard.
+		container["ports"] = []any{
+			map[string]any{"name": "gcs", "containerPort": int64(6379), "protocol": "TCP"},
+			map[string]any{"name": "dashboard", "containerPort": int64(8265), "protocol": "TCP"},
+			map[string]any{"name": "client", "containerPort": int64(10001), "protocol": "TCP"},
+			map[string]any{"name": "metrics", "containerPort": int64(8080), "protocol": "TCP"},
+		}
+	} else if jobSpec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain && containerName == "ray-worker" {
+		container["ports"] = []any{map[string]any{"name": "metrics", "containerPort": int64(8080), "protocol": "TCP"}}
+	}
 	podSpec := map[string]any{
 		"serviceAccountName":           options.ServiceAccount,
 		"automountServiceAccountToken": options.ServiceAccount != "",
 		"securityContext":              map[string]any{"seccompProfile": map[string]any{"type": "RuntimeDefault"}},
-		"containers": []any{map[string]any{
-			"name":            containerName,
-			"image":           image,
-			"imagePullPolicy": domain.RuntimeImagePullPolicy(image),
-			"workingDir":      "/workspace",
-			"resources":       resources,
-			"env":             env,
-			"volumeMounts":    volumeMounts,
-			"securityContext": map[string]any{"allowPrivilegeEscalation": false, "capabilities": map[string]any{"drop": []any{"ALL"}}},
-		}},
-		"volumes": volumes,
+		"containers":                   []any{container},
+		"volumes":                      volumes,
 	}
 	if materializeSource {
-		podSpec["initContainers"] = []any{sourceMaterializer(source, jobSpec, options)}
+		podSpec["initContainers"] = []any{sourceMaterializer(tenantID, source, jobSpec, options)}
 	}
 	if preloadInput {
-		podSpec["initContainers"] = []any{datasetCachePreloader(options.SourceMaterializerImage, volumeMounts, options.LocalCache)}
+		podSpec["initContainers"] = []any{datasetCachePreloader(options.SourceMaterializerImage, volumeMounts, options.LocalCache, options.trainingEventJobID)}
 	}
 	if mountData && options.LocalCache.runtime {
 		podSpec["securityContext"].(map[string]any)["fsGroup"] = int64(1000)
@@ -560,6 +768,47 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, source do
 		delete(podSpec, "serviceAccountName")
 	}
 	return map[string]any{"spec": podSpec}
+}
+
+const trainingEventTokenMountPath = "/var/run/secrets/raytrain-events"
+
+func validateTrainingEventBaseURL(value string) (string, error) {
+	value = strings.TrimRight(strings.TrimSpace(value), "/")
+	if value == "" {
+		value = "http://ray-train-backend.ray-train-platform.svc.cluster.local:8080/api/v1/internal"
+	}
+	if strings.ContainsAny(value, "\x00\r\n\t") {
+		return "", fmt.Errorf("base URL contains control characters")
+	}
+	parsed, err := url.ParseRequestURI(value)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("base URL must be an HTTP(S) origin and path without credentials, query, or fragment")
+	}
+	if parsed.Path == "" || path.Clean(parsed.Path) != parsed.Path || strings.Contains(parsed.Path, "..") {
+		return "", fmt.Errorf("base URL path is invalid")
+	}
+	return value, nil
+}
+
+func appendTrainingEventCredential(volumeMounts, volumes, environment []any, options RenderOptions) ([]any, []any, []any) {
+	jobID := strings.TrimSpace(options.trainingEventJobID)
+	baseURL := strings.TrimRight(strings.TrimSpace(options.TrainingEventBaseURL), "/")
+	secretName := TrainingEventSecretName(jobID)
+	volumeMounts = append(volumeMounts, map[string]any{
+		"name": "managed-training-events", "mountPath": trainingEventTokenMountPath, "readOnly": true,
+	})
+	volumes = append(volumes, map[string]any{
+		"name": "managed-training-events",
+		"secret": map[string]any{
+			"secretName": secretName, "defaultMode": int64(0400),
+			"items": []any{map[string]any{"key": TrainingEventTokenKey, "path": TrainingEventTokenKey}},
+		},
+	})
+	environment = append(environment,
+		map[string]any{"name": "RAYTRAIN_EVENT_TOKEN_FILE", "value": path.Join(trainingEventTokenMountPath, TrainingEventTokenKey)},
+		map[string]any{"name": "RAYTRAIN_EVENT_ENDPOINT", "value": baseURL + "/jobs/" + jobID + "/train-events"},
+	)
+	return volumeMounts, volumes, environment
 }
 
 func environmentValue(environment []any, name string) string {
@@ -591,7 +840,7 @@ func setEnvironmentValue(environment []any, name, value string) []any {
 	return updated
 }
 
-func datasetCachePreloader(image string, workerMounts []any, cache LocalCacheOptions) map[string]any {
+func datasetCachePreloader(image string, workerMounts []any, cache LocalCacheOptions, jobID string) map[string]any {
 	mounts := make([]any, 0, 3)
 	for _, item := range workerMounts {
 		mount, _ := item.(map[string]any)
@@ -611,13 +860,13 @@ func datasetCachePreloader(image string, workerMounts []any, cache LocalCacheOpt
 		"image":           image,
 		"imagePullPolicy": "IfNotPresent",
 		"command":         []any{"python3", "/usr/local/bin/platform-stage-dataset.py"},
-		"env": []any{
+		"env": append([]any{
 			map[string]any{"name": "PLATFORM_DATASET_SOURCE_PATH", "value": domain.DataMountInputPath},
 			map[string]any{"name": "PLATFORM_CACHE_PATHS", "value": cache.MountPathData1 + ":" + cache.MountPathData2},
 			map[string]any{"name": "PLATFORM_CACHE_STAGE_TIMEOUT", "value": "14400"},
 			map[string]any{"name": "PLATFORM_CACHE_COPY_WORKERS", "value": "32"},
 			map[string]any{"name": "PLATFORM_CACHE_LIMIT_BYTES_PER_DISK", "value": strconv.FormatInt(perDisk.Value(), 10)},
-		},
+		}, managedMetricIdentityEnvironment(jobID)...),
 		"resources": map[string]any{
 			"requests": map[string]any{"cpu": "2", "memory": "1Gi"},
 			"limits":   map[string]any{"cpu": "8", "memory": "4Gi"},
@@ -630,6 +879,19 @@ func datasetCachePreloader(image string, workerMounts []any, cache LocalCacheOpt
 			"capabilities":             map[string]any{"drop": []any{"ALL"}},
 		},
 		"volumeMounts": mounts,
+	}
+}
+
+func managedMetricIdentityEnvironment(jobID string) []any {
+	field := func(name, fieldPath string) map[string]any {
+		return map[string]any{"name": name, "valueFrom": map[string]any{"fieldRef": map[string]any{"apiVersion": "v1", "fieldPath": fieldPath}}}
+	}
+	return []any{
+		map[string]any{"name": "PLATFORM_JOB_ID", "value": strings.TrimSpace(jobID)},
+		field("PLATFORM_POD_NAMESPACE", "metadata.namespace"),
+		field("PLATFORM_POD_NAME", "metadata.name"),
+		field("PLATFORM_RAY_CLUSTER", "metadata.labels['ray.io/cluster']"),
+		field("PLATFORM_RAY_NODE_TYPE", "metadata.labels['ray.io/node-type']"),
 	}
 }
 
@@ -666,7 +928,7 @@ func mlflowEnvironment(options MLflowOptions) []any {
 	}
 }
 
-func appendLocalCache(volumeMounts, volumes []any, cache LocalCacheOptions, head bool) ([]any, []any) {
+func appendLocalCache(volumeMounts, volumes []any, cache LocalCacheOptions, includeSecondDevice bool) ([]any, []any) {
 	devices := []struct {
 		name         string
 		storageClass string
@@ -674,7 +936,7 @@ func appendLocalCache(volumeMounts, volumes []any, cache LocalCacheOptions, head
 	}{
 		{name: "local-cache-data1", storageClass: cache.StorageClassData1, mountPath: cache.MountPathData1},
 	}
-	if !head {
+	if includeSecondDevice {
 		devices = append(devices, struct {
 			name         string
 			storageClass string
@@ -701,7 +963,7 @@ func appendLocalCache(volumeMounts, volumes []any, cache LocalCacheOptions, head
 	return volumeMounts, volumes
 }
 
-func platformDataEnvironment(spec domain.JobSpec) []any {
+func platformDataEnvironment(spec domain.JobSpec, managedResumePath string) []any {
 	locations := []struct {
 		name  string
 		value string
@@ -747,6 +1009,17 @@ func platformDataEnvironment(spec domain.JobSpec) []any {
 			continue
 		}
 		env = append(env, map[string]any{"name": item.name, "value": item.mount.MountPath})
+	}
+	if managedResumePath != "" {
+		filtered := env[:0]
+		for _, value := range env {
+			item, ok := value.(map[string]any)
+			if ok && item["name"] == "PLATFORM_CHECKPOINT_PATH" {
+				continue
+			}
+			filtered = append(filtered, value)
+		}
+		env = append(filtered, map[string]any{"name": "PLATFORM_CHECKPOINT_PATH", "value": managedResumePath})
 	}
 	return env
 }
@@ -841,7 +1114,7 @@ func hasAnyResolvedDataRoots(roots domain.ResolvedDataSpaceRoots) bool {
 	return roots.Personal != nil || roots.Team != nil || roots.Public != nil || hasGovernedIDCDataRoots(roots)
 }
 
-func sourceMaterializer(source domain.CodeSource, jobSpec domain.JobSpec, options RenderOptions) map[string]any {
+func sourceMaterializer(tenantID string, source domain.CodeSource, jobSpec domain.JobSpec, options RenderOptions) map[string]any {
 	command := "set -eu\nfind /workspace -mindepth 1 -maxdepth 1 -exec rm -rf {} +\n"
 	switch source.Type {
 	case "git":
@@ -877,7 +1150,12 @@ func sourceMaterializer(source domain.CodeSource, jobSpec domain.JobSpec, option
 		// were copied, which causes a needless submitter retry.
 		command += "cp -R " + shellQuote("/mnt/platform-workspace-snapshot/snapshots/"+source.Snapshot) + "/. /workspace/\n"
 	case "workspace-archive":
-		command += "python3 /usr/local/bin/platform-safe-extract.py --archive " + shellQuote("/mnt/platform-workspace-snapshot/workspace/.ray-train-archives/"+source.ArtifactSHA256+".zip") + " --destination /workspace\n"
+		archivePath, err := domain.SourceArtifactMountedArchivePath(tenantID, source.ArtifactObjectKey, source.ArtifactID, source.ArtifactSHA256)
+		if err != nil {
+			command += "echo 'source materialization failed: invalid workspace archive path' >&2\nexit 1\n"
+			break
+		}
+		command += "python3 /usr/local/bin/platform-safe-extract.py --archive " + shellQuote(archivePath) + " --destination /workspace\n"
 	}
 	env := []any{}
 	if source.Type == "git" && options.GitCredentialSecret != "" {

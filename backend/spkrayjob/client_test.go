@@ -86,6 +86,376 @@ func TestSubmitDirectoryCreatesUploadsCompletesThenSubmits(t *testing.T) {
 	}
 }
 
+func TestCheckpointsUsesOwnerScopedJobEndpointAndDecodesOrderedItems(t *testing.T) {
+	const jobID = "job-0123456789abcdef01234567"
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/api/v1/jobs/"+jobID+"/checkpoints" || request.Header.Get("Authorization") != "Bearer test-token" {
+			t.Fatalf("unexpected checkpoint request %s %s", request.Method, request.URL.Path)
+		}
+		writeClientSuccess(t, writer, http.StatusOK, map[string]any{"jobId": jobID, "items": []map[string]any{{
+			"id": "checkpoint-2", "jobId": jobID, "tenantId": "tenant-a", "userId": "user-a", "epoch": 2, "step": 20,
+			"objectPath": "/mnt/data/output/.platform/ray-train/" + jobID + "/checkpoints/checkpoint-2", "complete": true, "manifestSha256": strings.Repeat("a", 64),
+		}}})
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientOptions{ServerURL: server.URL, Token: "test-token", HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := client.Checkpoints(context.Background(), jobID)
+	if err != nil || page.JobID != jobID || len(page.Items) != 1 || page.Items[0].ID != "checkpoint-2" {
+		t.Fatalf("page=%+v err=%v", page, err)
+	}
+}
+
+func TestSubmitDirectoryRetriesLostArtifactCreateResponseWithRequestID(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "train.py"), []byte("print('train')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const requestID = "source-request-0123456789abcdef01234567"
+	const artifactID = "artifact-server-generated"
+	createRequests := 0
+	jobRequests := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/source-artifacts":
+			createRequests++
+			var create struct {
+				ClientRequestID string `json:"clientRequestId"`
+				SHA256          string `json:"sha256"`
+				SizeBytes       int64  `json:"sizeBytes"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&create); err != nil {
+				t.Fatal(err)
+			}
+			if create.ClientRequestID != requestID || create.SHA256 == "" || create.SizeBytes < 1 {
+				t.Fatalf("unstable create request: %+v", create)
+			}
+			if createRequests == 1 {
+				http.Error(writer, "response was lost", http.StatusServiceUnavailable)
+				return
+			}
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"artifactId": artifactID, "state": "READY", "uploadRequired": false})
+		case "/api/v1/jobs":
+			jobRequests++
+			writeClientSuccess(t, writer, http.StatusAccepted, map[string]any{"id": "job-test"})
+		default:
+			t.Fatalf("unexpected request %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientOptions{ServerURL: server.URL, Token: "test-token", HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := client.SubmitDirectoryWithRequestID(context.Background(), root, testJobSpec(), requestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.ID != "job-test" || createRequests != 2 || jobRequests != 1 {
+		t.Fatalf("job=%+v createRequests=%d jobRequests=%d", job, createRequests, jobRequests)
+	}
+}
+
+func TestSubmitDirectoryUploadFailureLeavesResolvableRequestAndNoJob(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "train.py"), []byte("print('train')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const requestID = "source-request-fedcba987654321001234567"
+	const artifactID = "artifact-server-generated"
+	jobRequests := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/source-artifacts":
+			var create struct {
+				ClientRequestID string `json:"clientRequestId"`
+				SizeBytes       int64  `json:"sizeBytes"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&create); err != nil {
+				t.Fatal(err)
+			}
+			if create.ClientRequestID != requestID {
+				t.Fatalf("clientRequestID=%q", create.ClientRequestID)
+			}
+			writeClientSuccess(t, writer, http.StatusCreated, map[string]any{
+				"artifactId": artifactID, "state": "PENDING", "uploadRequired": true,
+				"uploadUrl": serverURL(request) + "/upload", "contentLength": create.SizeBytes,
+			})
+		case "/upload":
+			http.Error(writer, "upload failed", http.StatusServiceUnavailable)
+		case "/api/v1/source-artifact-requests/" + requestID:
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"artifactId": artifactID, "state": "PENDING", "uploadRequired": true})
+		case "/api/v1/jobs":
+			jobRequests++
+		default:
+			t.Fatalf("unexpected request %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientOptions{ServerURL: server.URL, Token: "test-token", HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.SubmitDirectoryWithRequestID(context.Background(), root, testJobSpec(), requestID)
+	if err == nil {
+		t.Fatal("upload failure unexpectedly submitted a job")
+	}
+	if jobRequests != 0 {
+		t.Fatalf("upload failure created %d jobs", jobRequests)
+	}
+	resolved, resolveErr := client.ResolveArtifactRequest(context.Background(), requestID)
+	if resolveErr != nil || resolved.ArtifactID != artifactID {
+		t.Fatalf("resolve upload failure request: artifact=%+v err=%v", resolved, resolveErr)
+	}
+}
+
+func TestSubmitDirectoryManagedPreflightsImageBeforeBuildingArchive(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Symlink(filepath.Join(root, "missing"), filepath.Join(root, "broken")); err != nil {
+		t.Fatal(err)
+	}
+	artifactRequests := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/limits":
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"runtime": map[string]any{
+				"availableEngines": []string{"ray-ddp", "ray-train"}, "managedEnabled": true,
+				"productionRayVersion": domain.RayVersionProduction, "canaryRayVersion": domain.RayVersionCanary,
+			}})
+		case "/api/v1/images":
+			writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
+				"name": "Legacy", "reference": "registry/legacy:2.35", "rayVersion": domain.RayVersionLegacy,
+				"supportedEngines": []string{"ray-ddp"},
+			}})
+		default:
+			artifactRequests++
+			t.Fatalf("managed preflight must finish before artifact work: %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientOptions{ServerURL: server.URL, Token: "test-token", HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := testJobSpec()
+	spec.Image = "registry/legacy:2.35"
+	spec.TrainingEngine = domain.TrainingEngineRayTrain
+	spec.Managed.MaxFailures = 2
+	_, err = client.SubmitDirectory(context.Background(), root, spec)
+	if err == nil || !strings.Contains(err.Error(), "ray-train") {
+		t.Fatalf("expected image compatibility error before broken archive, got %v", err)
+	}
+	if artifactRequests != 0 {
+		t.Fatalf("artifact work started %d times", artifactRequests)
+	}
+}
+
+func TestSubmitManagedPreflightsImageBeforeCreatingJob(t *testing.T) {
+	jobRequests := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/limits":
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"runtime": map[string]any{
+				"availableEngines": []string{"ray-ddp", "ray-train"}, "managedEnabled": true,
+				"productionRayVersion": domain.RayVersionProduction, "canaryRayVersion": domain.RayVersionCanary,
+			}})
+		case "/api/v1/images":
+			writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
+				"name": "Legacy", "reference": "registry/legacy:2.35", "rayVersion": domain.RayVersionLegacy,
+				"supportedEngines": []string{"ray-ddp"},
+			}})
+		case "/api/v1/jobs":
+			jobRequests++
+			writeClientSuccess(t, writer, http.StatusAccepted, map[string]any{"id": "must-not-submit"})
+		default:
+			t.Fatalf("unexpected request %s %s", request.Method, request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientOptions{ServerURL: server.URL, Token: "test-token", HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := testJobSpec()
+	spec.Source = domain.CodeSource{Type: "workspace-archive", ArtifactID: "artifact-ready"}
+	spec.Image = "registry/legacy:2.35"
+	spec.TrainingEngine = domain.TrainingEngineRayTrain
+	spec.Managed.MaxFailures = 2
+	_, err = client.Submit(context.Background(), spec)
+	if err == nil || !strings.Contains(err.Error(), "ray-train") {
+		t.Fatalf("expected image compatibility error before job creation, got %v", err)
+	}
+	if jobRequests != 0 {
+		t.Fatalf("job creation started %d times", jobRequests)
+	}
+}
+
+func TestSubmitDirectoryRejectsInvalidManagedSpecBeforeNetworkOrArchive(t *testing.T) {
+	tests := []struct {
+		name      string
+		mutate    func(*domain.JobSpec)
+		wantError string
+	}{
+		{
+			name: "resources",
+			mutate: func(spec *domain.JobSpec) {
+				spec.Resources.CPUPerWorker = 0
+			},
+			wantError: "cpuPerWorker must be positive",
+		},
+		{
+			name: "timeout",
+			mutate: func(spec *domain.JobSpec) {
+				spec.TimeoutSeconds = -1
+			},
+			wantError: "timeoutSeconds must not be negative",
+		},
+		{
+			name: "checkpoint frequency overflow",
+			mutate: func(spec *domain.JobSpec) {
+				spec.Managed.Checkpoint.EveryEpochs = 100001
+			},
+			wantError: "everyEpochs",
+		},
+		{
+			name: "latest checkpoint retention overflow",
+			mutate: func(spec *domain.JobSpec) {
+				spec.Managed.Checkpoint.KeepLatest = 1001
+			},
+			wantError: "keepLatest",
+		},
+		{
+			name: "best checkpoint retention overflow",
+			mutate: func(spec *domain.JobSpec) {
+				spec.Managed.Checkpoint.KeepBest = 1001
+			},
+			wantError: "keepBest",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.Symlink(filepath.Join(root, "missing-target"), filepath.Join(root, "broken-link")); err != nil {
+				t.Fatal(err)
+			}
+			requests := 0
+			client, err := NewClient(ClientOptions{
+				ServerURL: "https://platform.invalid",
+				Token:     "test-token",
+				HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+					requests++
+					return nil, errors.New("unexpected request")
+				})},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			spec := testJobSpec()
+			spec.TrainingEngine = domain.TrainingEngineRayTrain
+			spec.Managed.MaxFailures = 2
+			test.mutate(&spec)
+			original := spec
+
+			_, err = client.SubmitDirectory(context.Background(), root, spec)
+			if requests != 0 {
+				t.Fatalf("invalid managed directory submit made %d HTTP requests", requests)
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("expected local validation error containing %q, got %v", test.wantError, err)
+			}
+			if !reflect.DeepEqual(spec, original) {
+				t.Fatalf("directory submit mutated the caller's spec: before=%+v after=%+v", original, spec)
+			}
+		})
+	}
+}
+
+func TestSubmitRejectsInvalidManagedSpecsBeforeAnyRequest(t *testing.T) {
+	tests := []struct {
+		name      string
+		mutate    func(*domain.JobSpec)
+		wantError string
+	}{
+		{
+			name: "resources",
+			mutate: func(spec *domain.JobSpec) {
+				spec.Resources.CPUPerWorker = 0
+			},
+			wantError: "cpuPerWorker must be positive",
+		},
+		{
+			name: "timeout",
+			mutate: func(spec *domain.JobSpec) {
+				spec.TimeoutSeconds = -1
+			},
+			wantError: "timeoutSeconds must not be negative",
+		},
+		{
+			name: "engine",
+			mutate: func(spec *domain.JobSpec) {
+				spec.TrainingEngine = domain.TrainingEngine("ray-unknown")
+			},
+			wantError: "unsupported training engine",
+		},
+		{
+			name: "checkpoint frequency overflow",
+			mutate: func(spec *domain.JobSpec) {
+				spec.Managed.Checkpoint.EveryEpochs = 100001
+			},
+			wantError: "everyEpochs",
+		},
+		{
+			name: "latest checkpoint retention overflow",
+			mutate: func(spec *domain.JobSpec) {
+				spec.Managed.Checkpoint.KeepLatest = 1001
+			},
+			wantError: "keepLatest",
+		},
+		{
+			name: "best checkpoint retention overflow",
+			mutate: func(spec *domain.JobSpec) {
+				spec.Managed.Checkpoint.KeepBest = 1001
+			},
+			wantError: "keepBest",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requests := 0
+			client, err := NewClient(ClientOptions{
+				ServerURL: "https://platform.invalid",
+				Token:     "test-token",
+				HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+					requests++
+					return nil, errors.New("unexpected request")
+				})},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			spec := testJobSpec()
+			spec.Source = domain.CodeSource{Type: "workspace-archive", ArtifactID: "artifact-ready"}
+			spec.TrainingEngine = domain.TrainingEngineRayTrain
+			spec.Managed.MaxFailures = 2
+			test.mutate(&spec)
+			original := spec
+
+			_, err = client.Submit(context.Background(), spec)
+			if requests != 0 {
+				t.Fatalf("invalid managed submit made %d HTTP requests", requests)
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("expected local validation error containing %q, got %v", test.wantError, err)
+			}
+			if !reflect.DeepEqual(spec, original) {
+				t.Fatalf("submit mutated the caller's spec: before=%+v after=%+v", original, spec)
+			}
+		})
+	}
+}
+
 func TestSubmitRejectsInvalidFinalSpecBeforeCreateAPI(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -154,6 +524,9 @@ func TestPlatformLimitsDecodesAuthenticatedCachePolicy(t *testing.T) {
 		writeClientSuccess(t, writer, http.StatusOK, map[string]any{"cache": map[string]any{
 			"enabled": true, "modes": []string{"off", "runtime"}, "allowedSizes": []string{"100Gi", "200Gi"},
 			"defaultSize": "200Gi", "maxSize": "500Gi",
+		}, "runtime": map[string]any{
+			"availableEngines": []string{"ray-ddp", "ray-train"}, "managedEnabled": true,
+			"productionRayVersion": "2.56.1", "canaryRayVersion": "2.58.0",
 		}})
 	}))
 	defer server.Close()
@@ -167,6 +540,83 @@ func TestPlatformLimitsDecodesAuthenticatedCachePolicy(t *testing.T) {
 	}
 	if !limits.Cache.Enabled || limits.Cache.DefaultSize != "200Gi" || limits.Cache.MaxSize != "500Gi" || !reflect.DeepEqual(limits.Cache.Modes, []string{"off", "runtime"}) || !reflect.DeepEqual(limits.Cache.AllowedSizes, []string{"100Gi", "200Gi"}) {
 		t.Fatalf("unexpected limits: %+v", limits)
+	}
+	if !limits.Runtime.ManagedEnabled || !reflect.DeepEqual(limits.Runtime.AvailableEngines, []string{"ray-ddp", "ray-train"}) || limits.Runtime.ProductionRayVersion != "2.56.1" {
+		t.Fatalf("unexpected runtime capabilities: %+v", limits.Runtime)
+	}
+}
+
+func TestPlatformLimitsRejectsInconsistentManagedCapabilities(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writeClientSuccess(t, writer, http.StatusOK, map[string]any{"runtime": map[string]any{
+			"availableEngines": []string{"ray-train"}, "managedEnabled": true,
+		}})
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientOptions{ServerURL: server.URL, Token: "test-token", HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.PlatformLimits(context.Background()); err == nil || !strings.Contains(err.Error(), "runtime") {
+		t.Fatalf("inconsistent capabilities must fail closed, got %v", err)
+	}
+}
+
+func TestTrainingImagesDecodesAndCopiesRuntimeCompatibility(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
+			"name": "Managed", "reference": "registry/managed:2.56.1", "framework": "pytorch", "isDefault": true,
+			"rayVersion": domain.RayVersionProduction, "supportedEngines": []string{"ray-ddp", "ray-train"},
+		}})
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientOptions{ServerURL: server.URL, Token: "test-token", HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	images, err := client.TrainingImages(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(images) != 1 || images[0].RayVersion != domain.RayVersionProduction || !reflect.DeepEqual(images[0].SupportedEngines, []domain.TrainingEngine{domain.TrainingEngineRayDDP, domain.TrainingEngineRayTrain}) {
+		t.Fatalf("runtime compatibility was not decoded: %+v", images)
+	}
+	copy := cloneCatalogImage(images[0])
+	images[0].SupportedEngines[0] = domain.TrainingEngineRayTrain
+	if copy.SupportedEngines[0] != domain.TrainingEngineRayDDP {
+		t.Fatalf("catalog engine slices alias caller-owned memory: %+v", copy)
+	}
+}
+
+func TestTrainingImagesRejectsMalformedRuntimeCompatibility(t *testing.T) {
+	tests := []struct {
+		name    string
+		version any
+		engines any
+	}{
+		{name: "missing version", version: "", engines: []string{"ray-ddp"}},
+		{name: "unknown version", version: "2.99.0", engines: []string{"ray-ddp"}},
+		{name: "empty engines", version: domain.RayVersionProduction, engines: []string{}},
+		{name: "unknown engine", version: domain.RayVersionProduction, engines: []string{"ray-magic"}},
+		{name: "duplicate engine", version: domain.RayVersionProduction, engines: []string{"ray-ddp", "ray-ddp"}},
+		{name: "legacy managed", version: domain.RayVersionLegacy, engines: []string{"ray-train"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
+					"name": "Broken", "reference": "registry/broken:tag", "rayVersion": test.version, "supportedEngines": test.engines,
+				}})
+			}))
+			defer server.Close()
+			client, err := NewClient(ClientOptions{ServerURL: server.URL, Token: "test-token", HTTPClient: server.Client()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.TrainingImages(context.Background()); err == nil || !strings.Contains(err.Error(), "image catalogue") {
+				t.Fatalf("malformed image metadata was accepted: %v", err)
+			}
+		})
 	}
 }
 

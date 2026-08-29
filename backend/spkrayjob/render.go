@@ -4,14 +4,28 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path"
+	"regexp"
 	"strings"
 	"text/tabwriter"
+
+	"ray-train-platform-backend/domain"
 )
+
+func renderSubmitCommand(engine domain.TrainingEngine, runtime PlatformRuntimeLimits) string {
+	command := "spk-rayjob submit"
+	if runtime.ManagedAvailable() {
+		command += " --engine " + string(engine.Resolved())
+	}
+	return command + " --watch"
+}
 
 // jobView is the subset of a job the CLI renders. Decoding into a narrow struct
 // rather than a map keeps the output stable when the API adds fields.
 type jobView struct {
 	ID               string `json:"id"`
+	TenantID         string `json:"tenantId"`
+	UserID           string `json:"userId"`
 	ObservedState    string `json:"observedState"`
 	StatusReason     string `json:"statusReason"`
 	StatusMessage    string `json:"statusMessage"`
@@ -20,9 +34,10 @@ type jobView struct {
 	CreatedAt        string `json:"createdAt"`
 	FinishedAt       string `json:"finishedAt"`
 	Spec             struct {
-		Name      string `json:"name"`
-		Image     string `json:"image"`
-		Execution struct {
+		Name           string                `json:"name"`
+		Image          string                `json:"image"`
+		TrainingEngine domain.TrainingEngine `json:"trainingEngine"`
+		Execution      struct {
 			Mode string `json:"mode"`
 		} `json:"execution"`
 		Resources struct {
@@ -34,6 +49,13 @@ type jobView struct {
 			RelativePath string `json:"relativePath"`
 		} `json:"output"`
 	} `json:"spec"`
+}
+
+var platformJobID = regexp.MustCompile(`^job-[0-9a-f]{24}$`)
+
+type resumeCheckpointSelection struct {
+	Location     projectLocation
+	CheckpointID string
 }
 
 type jobPage struct {
@@ -79,6 +101,7 @@ func renderJobDetail(writer io.Writer, payload json.RawMessage) error {
 		{"任务 ID", job.ID},
 		{"名称", orDash(job.Spec.Name)},
 		{"状态", orDash(job.ObservedState)},
+		{"训练引擎", string(job.Spec.TrainingEngine.Resolved())},
 		{"执行方式", orDash(job.Spec.Execution.Mode)},
 		{"规模", gpuSummary(job)},
 		{"镜像", orDash(job.Spec.Image)},
@@ -141,24 +164,52 @@ func isTerminalJobState(state string) bool {
 	}
 }
 
-// checkpointLocationForPreviousRun turns "resume from that run" into an
-// ordinary read-only selection. The platform writes each run to
-// <output path>/<job id>, so the previous run's own directory is the
-// checkpoint the next run reads.
-func checkpointLocationForPreviousRun(payload json.RawMessage) (projectLocation, error) {
+// checkpointLocationForPreviousRun binds a resume to the first complete
+// checkpoint returned by the owner-scoped API. ObjectPath is accepted only as
+// proof of the exact managed checkpoint layout; the submitted logical path is
+// derived from validated server identities rather than copied from that field.
+func checkpointLocationForPreviousRun(payload json.RawMessage, page JobCheckpointPage) (resumeCheckpointSelection, error) {
 	var job jobView
 	if err := json.Unmarshal(payload, &job); err != nil {
-		return projectLocation{}, fmt.Errorf("decode previous job")
+		return resumeCheckpointSelection{}, fmt.Errorf("decode previous job")
 	}
-	space := strings.TrimSpace(job.Spec.Output.Space)
-	if space == "" || strings.TrimSpace(job.ID) == "" {
-		return projectLocation{}, fmt.Errorf("该任务没有平台管理的结果目录，无法作为断点来源")
+	job.ID = strings.TrimSpace(job.ID)
+	job.TenantID = strings.TrimSpace(job.TenantID)
+	job.UserID = strings.TrimSpace(job.UserID)
+	if !platformJobID.MatchString(job.ID) || job.TenantID == "" || job.UserID == "" || page.JobID != job.ID {
+		return resumeCheckpointSelection{}, fmt.Errorf("断点响应与父任务身份不一致")
 	}
-	path := strings.Trim(job.Spec.Output.RelativePath, "/")
-	if path != "" {
-		path += "/"
+	if domain.DataSpaceID(strings.TrimSpace(job.Spec.Output.Space)) != domain.DataSpaceMyRuns {
+		return resumeCheckpointSelection{}, fmt.Errorf("该任务没有平台管理的结果目录，无法作为断点来源")
 	}
-	return projectLocation{Space: space, Path: path + job.ID}, nil
+	outputRoot := strings.Trim(job.Spec.Output.RelativePath, "/")
+	if outputRoot != "" {
+		if _, err := domain.NewDataLocation(domain.DataSpaceMyRuns, outputRoot); err != nil {
+			return resumeCheckpointSelection{}, fmt.Errorf("父任务结果目录无效")
+		}
+	}
+	for _, checkpoint := range page.Items {
+		if !checkpoint.Complete {
+			continue
+		}
+		if checkpoint.JobID != job.ID || checkpoint.TenantID != job.TenantID || checkpoint.UserID != job.UserID || checkpoint.Validate() != nil {
+			return resumeCheckpointSelection{}, fmt.Errorf("断点响应与父任务属主不一致或内容无效")
+		}
+		expectedObjectPath := path.Join(domain.DataMountOutputPath, ".platform", "ray-train", job.ID, "checkpoints", checkpoint.ID)
+		if checkpoint.ObjectPath != expectedObjectPath {
+			return resumeCheckpointSelection{}, fmt.Errorf("断点路径不属于父任务")
+		}
+		relativePath := path.Join(outputRoot, job.ID, ".platform", "ray-train", job.ID, "checkpoints", checkpoint.ID)
+		location, err := domain.NewDataLocation(domain.DataSpaceMyRuns, relativePath)
+		if err != nil {
+			return resumeCheckpointSelection{}, fmt.Errorf("断点路径无效")
+		}
+		return resumeCheckpointSelection{
+			Location:     projectLocation{Space: string(location.Space), Path: location.RelativePath},
+			CheckpointID: checkpoint.ID,
+		}, nil
+	}
+	return resumeCheckpointSelection{}, fmt.Errorf("父任务没有完整 checkpoint，无法恢复")
 }
 
 func gpuSummary(job jobView) string {

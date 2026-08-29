@@ -82,6 +82,7 @@ func TestSubmitWithDerivedNameAndPlatformDefaultImageStillNeedsNoJobOptions(t *t
 		if request.URL.Path == "/api/v1/images" {
 			writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
 				"name": "default", "reference": "harbor.example/train@sha256:" + strings.Repeat("b", 64), "isDefault": true,
+				"rayVersion": domain.RayVersionLegacy, "supportedEngines": []string{"ray-ddp"},
 			}})
 			return
 		}
@@ -108,6 +109,7 @@ func TestSubmitAcceptsExplicitTaggedPlatformImage(t *testing.T) {
 		if request.URL.Path == "/api/v1/images" {
 			writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
 				"name": "tagged-default", "reference": "harbor.example/train:production", "isDefault": true,
+				"rayVersion": domain.RayVersionLegacy, "supportedEngines": []string{"ray-ddp"},
 			}})
 			return
 		}

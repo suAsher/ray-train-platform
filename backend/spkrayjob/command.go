@@ -52,6 +52,8 @@ func RunWithInput(ctx context.Context, arguments []string, stdin io.Reader, stdo
 		return runPackage(arguments[1:], stdout)
 	case "submit":
 		return runSubmit(ctx, arguments[1:], stdout, stderr, getenv)
+	case "source-artifact":
+		return runSourceArtifact(ctx, arguments[1:], stdout, stderr, getenv)
 	case "jobs":
 		return runJobs(ctx, arguments[1:], stdout, stderr, getenv)
 	case "status":
@@ -86,6 +88,20 @@ const helpText = `spk-rayjob — 分布式训练任务命令行客户端
     --cache-preload input --input-space public --input-path <数据集目录>
   加上 --cache-preload input 后，平台会在每个 Worker 启动前把所选输入预热到双 NVMe；
   不加该参数时不会自动缓存 /mnt/storage/public，只加速 Ray 临时文件和训练代码主动写入缓存的内容。
+
+训练引擎：
+  --engine ray-ddp    默认；兼容现有 Actor + torchrun 单机/多机 DDP
+  --engine ray-train  Ray Train 托管 workers、故障恢复和 Checkpoint；仅在平台开启后可用
+  --data-mode mount            直接读取已授权数据挂载
+  --data-mode cache            使用现有 NVMe 预热器
+  --data-mode ray-data-stage   Ray Data 分布式读取并生成双 NVMe 本地视图
+  --data-mode ray-data --ray-data-format images --ray-data-path images/train
+                              直接把 Parquet/图片数据分片交给用户的 Ray Data 训练代码
+  --max-failures 2                 ray-train Worker 最大恢复次数（0-10）
+  --checkpoint-every-epochs 1      ray-train 每隔多少 Epoch 保存 Checkpoint
+  --checkpoint-keep-latest 3       ray-train 保留最近 Checkpoint 数
+  --checkpoint-keep-best 1         ray-train 保留最佳 Checkpoint 数
+  客户端不接受 Ray 版本参数；版本由平台根据管理员登记的镜像固化。
 
 通用参数：
   --output json    输出原始 JSON，供脚本使用（默认为可读文本）
@@ -298,10 +314,23 @@ func runInit(arguments []string, stdout io.Writer) error {
 	name := set.String("name", "", "default job name; defaults to the directory name")
 	image := set.String("image", "", "catalogued training image with an explicit tag or sha256 digest")
 	entrypoint := set.String("entrypoint", "python train.py", "training command, without torchrun")
+	engine := set.String("engine", string(domain.TrainingEngineRayDDP), "training engine: ray-ddp or ray-train")
+	dataMode := set.String("data-mode", "", "data mode: mount, cache, ray-data-stage, ray-data")
 	gpus := set.Int("gpus-per-worker", 1, "GPUs per worker")
 	workers := set.Int("workers", 1, "worker replicas")
 	if err := set.Parse(arguments); err != nil || set.NArg() != 0 {
 		return errors.New("invalid init arguments")
+	}
+	resolvedEngine, err := parseTrainingEngine(*engine)
+	if err != nil {
+		return err
+	}
+	resolvedDataMode, err := parseDataMode(*dataMode, projectCache{})
+	if err != nil {
+		return err
+	}
+	if (resolvedDataMode == domain.DataModeRayData || resolvedDataMode == domain.DataModeRayDataStage) && resolvedEngine != domain.TrainingEngineRayTrain {
+		return fmt.Errorf("%s 需要 --engine ray-train", resolvedDataMode)
 	}
 	jobName := sanitizeJobName(*name)
 	if jobName == "" {
@@ -313,6 +342,7 @@ func runInit(arguments []string, stdout io.Writer) error {
 	}
 	starter := project{
 		Name: jobName, Image: strings.TrimSpace(*image), Entrypoint: strings.TrimSpace(*entrypoint),
+		Engine: string(resolvedEngine), DataMode: string(resolvedDataMode),
 		Workers: *workers, GPUsPerWorker: *gpus, CPUPerWorker: 8, MemoryPerWorker: "32Gi",
 		ExecutionMode: string(execution.Mode), Output: projectLocation{Path: jobName},
 	}
@@ -331,9 +361,16 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	var format outputFormatFlag
 	bindOutputFormatFlag(set, &format)
 	directory := set.String("dir", ".", "source directory")
+	sourceRequestID := set.String("source-request-id", "", "owner-scoped source request identity for recoverable automation")
 	name := set.String("name", "", "job DNS name")
 	image := set.String("image", "", "catalogued training image with an explicit tag or sha256 digest")
 	entrypoint := set.String("entrypoint", "", "shell command to run")
+	engine := set.String("engine", string(domain.TrainingEngineRayDDP), "training engine: ray-ddp or ray-train")
+	dataMode := set.String("data-mode", "", "data mode: mount, cache, ray-data-stage, ray-data")
+	maxFailures := set.Int("max-failures", 2, "ray-train worker recovery limit (0-10)")
+	checkpointEveryEpochs := set.Int("checkpoint-every-epochs", 1, "ray-train checkpoint interval in epochs")
+	checkpointKeepLatest := set.Int("checkpoint-keep-latest", 3, "ray-train latest checkpoint retention")
+	checkpointKeepBest := set.Int("checkpoint-keep-best", 1, "ray-train best checkpoint retention")
 	workers := set.Int("workers", 1, "worker replicas")
 	gpus := set.Int("gpus-per-worker", 1, "GPUs per worker")
 	cpu := set.Int64("cpu-per-worker", 8, "CPUs per worker")
@@ -342,15 +379,20 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	cacheMode := set.String("cache-mode", "", "cache mode: off, runtime")
 	cacheSize := set.String("cache-size", "", "runtime cache size allowed by the platform")
 	cachePreload := set.String("cache-preload", "", "automatic cache preload: input")
+	rayDataFormat := set.String("ray-data-format", "", "Ray Data streaming format: parquet or images")
+	rayDataPath := set.String("ray-data-path", "", "path relative to the selected input")
 	inputSpace := set.String("input-space", "", "logical input data space")
 	inputPath := set.String("input-path", "", "path relative to the input data space")
 	checkpointSpace := set.String("checkpoint-space", "", "logical checkpoint data space")
 	checkpointPath := set.String("checkpoint-path", "", "path relative to the checkpoint data space")
 	outputPath := set.String("output-path", "", "path relative to My runs")
-	resumeFromJob := set.String("resume-from-job", "", "read a previous run's result directory as a read-only checkpoint")
+	resumeFromJob := set.String("resume-from-job", "", "select the latest complete checkpoint from a previous managed job")
 	watch := set.Bool("watch", false, "wait until the job reaches a terminal state")
 	if err := set.Parse(arguments); err != nil || set.NArg() != 0 {
 		return errors.New("invalid submit arguments; run spk-rayjob help")
+	}
+	if *sourceRequestID != "" && !stableSourceRequestID.MatchString(*sourceRequestID) {
+		return errors.New("--source-request-id must match source-request- followed by 24 lowercase hexadecimal characters")
 	}
 	// Committed defaults make "edit code, submit" a single command. A flag the
 	// user actually typed still wins over the file.
@@ -360,15 +402,18 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	}
 	provided := providedFlags(set)
 	resolved := defaults.merge(submitOverrides{
-		Name: *name, Image: *image, Entrypoint: *entrypoint, Workers: *workers, GPUsPerWorker: *gpus,
+		Name: *name, Image: *image, Entrypoint: *entrypoint, Engine: *engine, DataMode: *dataMode, Workers: *workers, GPUsPerWorker: *gpus,
 		CPUPerWorker: *cpu, MemoryPerWorker: *memory, ExecutionMode: *executionMode,
 		Cache:                projectCache{Mode: *cacheMode, Size: *cacheSize, Preload: *cachePreload},
+		RayData:              projectRayData{Format: *rayDataFormat, Path: *rayDataPath},
 		Input:                projectLocation{Space: *inputSpace, Path: *inputPath},
 		Checkpoint:           projectLocation{Space: *checkpointSpace, Path: *checkpointPath},
 		Output:               projectLocation{Path: *outputPath},
 		providedName:         provided["name"],
 		providedImage:        provided["image"],
 		providedEntrypoint:   provided["entrypoint"],
+		providedEngine:       provided["engine"],
+		providedDataMode:     provided["data-mode"],
 		providedWorkers:      provided["workers"],
 		providedGPUs:         provided["gpus-per-worker"],
 		providedCPU:          provided["cpu-per-worker"],
@@ -377,16 +422,55 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 		providedCacheMode:    provided["cache-mode"],
 		providedCacheSize:    provided["cache-size"],
 		providedCachePreload: provided["cache-preload"],
+		providedRayData:      provided["ray-data-format"] || provided["ray-data-path"],
 		providedInput:        provided["input-space"] || provided["input-path"],
 		providedCheckpoint:   provided["checkpoint-space"] || provided["checkpoint-path"],
 		providedOutput:       provided["output-path"],
 	})
+	if resolved.DataMode == string(domain.DataModeRayDataStage) {
+		if strings.TrimSpace(resolved.Cache.Mode) == "" {
+			resolved.Cache.Mode = string(domain.CacheModeRuntime)
+		}
+		// The distributed Ray Data stage replaces the legacy init-container
+		// preloader.  Clear stale project defaults when a user switches modes.
+		resolved.Cache.Preload = ""
+	}
 	cacheDraft, err := newProjectCacheDraft(resolved.Cache)
 	if err != nil {
 		return err
 	}
 	previousJobID := strings.TrimSpace(*resumeFromJob)
 	checkpointProvided := provided["checkpoint-space"] || provided["checkpoint-path"]
+	if previousJobID != "" && checkpointProvided {
+		return errors.New("--resume-from-job cannot be combined with --checkpoint-space or --checkpoint-path")
+	}
+	if previousJobID != "" && !platformJobID.MatchString(previousJobID) {
+		return errors.New("--resume-from-job 必须是有效的平台 job ID")
+	}
+	resolvedEngine, err := parseTrainingEngine(resolved.Engine)
+	if err != nil {
+		return err
+	}
+	if previousJobID != "" && resolvedEngine != domain.TrainingEngineRayTrain {
+		return errors.New("--resume-from-job 仅支持 --engine ray-train")
+	}
+	managedFlagsProvided := provided["max-failures"] || provided["checkpoint-every-epochs"] || provided["checkpoint-keep-latest"] || provided["checkpoint-keep-best"]
+	if resolvedEngine != domain.TrainingEngineRayTrain && managedFlagsProvided {
+		return errors.New("--max-failures 与 --checkpoint-* 参数仅支持 --engine ray-train，不能用于 ray-ddp")
+	}
+	managedPolicy := domain.ManagedTrainingPolicy{
+		MaxFailures: *maxFailures,
+		Checkpoint: domain.CheckpointPolicy{
+			EveryEpochs: *checkpointEveryEpochs,
+			KeepLatest:  *checkpointKeepLatest,
+			KeepBest:    *checkpointKeepBest,
+		},
+	}
+	if resolvedEngine == domain.TrainingEngineRayTrain {
+		if err := managedPolicy.Validate(); err != nil {
+			return fmt.Errorf("无效的 Ray Train 托管策略：%w", err)
+		}
+	}
 	if err := validateLocalSubmit(resolved, previousJobID, checkpointProvided); err != nil {
 		return err
 	}
@@ -394,38 +478,86 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	if err != nil {
 		return err
 	}
-	defer os.Remove(draft.archive.Path)
+	if draft.spec.TrainingEngine == domain.TrainingEngineRayTrain {
+		managedPolicy.RayData = draft.spec.Managed.RayData
+		draft.spec.Managed = managedPolicy
+	}
+	var archive Archive
+	if draft.spec.TrainingEngine != domain.TrainingEngineRayTrain {
+		archive, err = BuildArchive(*directory)
+		if err != nil {
+			return err
+		}
+		defer os.Remove(archive.Path)
+	}
 	client, err := newCommandClient(connection, getenv, stderr)
 	if err != nil {
 		return err
 	}
-	resolvedCache, err := resolveProjectCache(ctx, cacheDraft, client)
+	runtimeCapabilities := PlatformRuntimeLimits{}
+	var limitsSnapshot *PlatformLimits
+	if draft.spec.TrainingEngine == domain.TrainingEngineRayTrain || cacheDraft.mode == domain.CacheModeRuntime {
+		limits, limitsErr := client.PlatformLimits(ctx)
+		if limitsErr != nil {
+			return fmt.Errorf("读取平台提交能力失败：%w", limitsErr)
+		}
+		limitsSnapshot = &limits
+		runtimeCapabilities = limits.Runtime
+	}
+	if draft.spec.TrainingEngine == domain.TrainingEngineRayTrain {
+		if !runtimeCapabilities.ManagedAvailable() {
+			return errors.New("当前平台未开启 Ray Train 托管引擎，请改用 --engine ray-ddp")
+		}
+	}
+	resolvedCache, err := resolveProjectCache(cacheDraft, limitsSnapshot)
 	if err != nil {
 		return err
 	}
-	if err := applyPlatformDerivedDefaults(ctx, &draft.values, client, stdout); err != nil {
+	if draft.spec.TrainingEngine == domain.TrainingEngineRayTrain {
+		if err := applyManagedImage(ctx, &draft.values, client, runtimeCapabilities, stdout); err != nil {
+			return err
+		}
+	} else if err := applyPlatformDerivedDefaults(ctx, &draft.values, client, stdout); err != nil {
 		return err
 	}
 	if err := draft.values.validateForSubmit(); err != nil {
 		return err
 	}
-	// Resuming is an ordinary read-only selection of the previous run's own
-	// managed result directory; the platform contract does not change.
+	// Resume is bound to one complete checkpoint returned by the owner-scoped
+	// API. Neither an object path nor a checkpoint ID is accepted from flags.
 	if previousJobID != "" {
 		previous, statusErr := client.Status(ctx, previousJobID)
 		if statusErr != nil {
 			return fmt.Errorf("read the previous job: %w", statusErr)
 		}
-		location, resolveErr := checkpointLocationForPreviousRun(previous.Raw)
+		if previous.ID != previousJobID {
+			return errors.New("父任务响应与请求的 job ID 不一致")
+		}
+		checkpoints, checkpointErr := client.Checkpoints(ctx, previousJobID)
+		if checkpointErr != nil {
+			return fmt.Errorf("read the previous job checkpoints: %w", checkpointErr)
+		}
+		selection, resolveErr := checkpointLocationForPreviousRun(previous.Raw, checkpoints)
 		if resolveErr != nil {
 			return resolveErr
 		}
-		if err := draft.setCheckpoint(location); err != nil {
+		if err := draft.setCheckpoint(selection.Location); err != nil {
 			return err
 		}
+		draft.spec.ParentJobID = previousJobID
 	}
 	spec := draft.finalSpec(resolvedCache)
-	job, err := client.submitArchive(ctx, draft.archive, spec)
+	if err := validateArchiveJobSpec(spec); err != nil {
+		return err
+	}
+	if archive.Path == "" {
+		archive, err = BuildArchive(*directory)
+		if err != nil {
+			return err
+		}
+		defer os.Remove(archive.Path)
+	}
+	job, err := client.submitArchiveWithRequestID(ctx, archive, spec, *sourceRequestID)
 	if err != nil {
 		return err
 	}
@@ -433,13 +565,45 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 		if err := writeJSON(stdout, job.Raw); err != nil {
 			return err
 		}
-	} else if _, err := fmt.Fprintf(stdout, "已提交 %s（%s）。查看日志：spk-rayjob logs -f %s\n", job.ID, draft.values.Name, job.ID); err != nil {
+	} else if _, err := fmt.Fprintf(stdout, "已提交 %s（%s）。查看日志：spk-rayjob logs -f %s\n下一步示例（不会复现本次临时参数）：%s\n", job.ID, draft.values.Name, job.ID, renderSubmitCommand(spec.TrainingEngine, runtimeCapabilities)); err != nil {
 		return err
 	}
 	if !*watch {
 		return nil
 	}
 	return watchJob(ctx, client, job.ID, stdout, format.json)
+}
+
+func runSourceArtifact(ctx context.Context, arguments []string, stdout, stderr io.Writer, getenv func(string) string) error {
+	if len(arguments) == 0 || arguments[0] != "resolve" {
+		return errors.New("source-artifact requires the resolve subcommand")
+	}
+	set := flag.NewFlagSet("source-artifact resolve", flag.ContinueOnError)
+	set.SetOutput(io.Discard)
+	var connection connectionFlags
+	bindConnectionFlags(set, &connection)
+	var format outputFormatFlag
+	bindOutputFormatFlag(set, &format)
+	requestID := set.String("request-id", "", "owner-scoped source request identity")
+	if err := set.Parse(arguments[1:]); err != nil || set.NArg() != 0 {
+		return errors.New("invalid source-artifact resolve arguments")
+	}
+	if !stableSourceRequestID.MatchString(*requestID) {
+		return errors.New("--request-id must match source-request- followed by 24 lowercase hexadecimal characters")
+	}
+	client, err := newCommandClient(connection, getenv, stderr)
+	if err != nil {
+		return err
+	}
+	artifact, err := client.ResolveArtifactRequest(ctx, *requestID)
+	if err != nil {
+		return err
+	}
+	if format.json {
+		return writeJSON(stdout, artifact)
+	}
+	_, err = fmt.Fprintln(stdout, artifact.ArtifactID)
+	return err
 }
 
 func validateLocalSubmit(value project, previousJobID string, checkpointProvided bool) error {
@@ -453,9 +617,8 @@ func validateLocalSubmit(value project, previousJobID string, checkpointProvided
 }
 
 type localSubmitDraft struct {
-	values  project
-	spec    domain.JobSpec
-	archive Archive
+	values project
+	spec   domain.JobSpec
 }
 
 func newLocalSubmitDraft(value project, directory string, stdout io.Writer) (localSubmitDraft, error) {
@@ -469,11 +632,7 @@ func newLocalSubmitDraft(value project, directory string, stdout io.Writer) (loc
 	if err := validatePreflightJobSpec(spec); err != nil {
 		return localSubmitDraft{}, err
 	}
-	archive, err := BuildArchive(directory)
-	if err != nil {
-		return localSubmitDraft{}, err
-	}
-	return localSubmitDraft{values: value, spec: spec, archive: archive}, nil
+	return localSubmitDraft{values: value, spec: spec}, nil
 }
 
 func (draft *localSubmitDraft) setCheckpoint(location projectLocation) error {
@@ -529,6 +688,23 @@ func applyPlatformDerivedDefaults(ctx context.Context, value *project, client *C
 	return nil
 }
 
+func applyManagedImage(ctx context.Context, value *project, client *Client, runtime PlatformRuntimeLimits, stdout io.Writer) error {
+	images, err := client.TrainingImages(ctx)
+	if err != nil {
+		return fmt.Errorf("读取镜像目录失败：%w", err)
+	}
+	requested := strings.TrimSpace(value.Image)
+	selected, err := managedImage(images, requested, runtime)
+	if err != nil {
+		return err
+	}
+	value.Image = selected.Reference
+	if requested == "" {
+		fmt.Fprintf(stdout, "训练镜像：%s（平台默认的 ray-train 兼容镜像，可用 --image 覆盖）\n", selected.Reference)
+	}
+	return nil
+}
+
 func (value project) validateForSubmit() error {
 	missing := make([]string, 0, 3)
 	if strings.TrimSpace(value.Name) == "" {
@@ -548,9 +724,23 @@ func (value project) validateForSubmit() error {
 }
 
 func (value project) jobSpec() (domain.JobSpec, error) {
+	engine, err := parseTrainingEngine(value.Engine)
+	if err != nil {
+		return domain.JobSpec{}, err
+	}
+	dataMode, err := parseDataMode(value.DataMode, value.Cache)
+	if err != nil {
+		return domain.JobSpec{}, err
+	}
+	if (dataMode == domain.DataModeRayData || dataMode == domain.DataModeRayDataStage) && engine != domain.TrainingEngineRayTrain {
+		return domain.JobSpec{}, fmt.Errorf("%s 需要 --engine ray-train", dataMode)
+	}
 	input, err := commandDataLocation(value.Input.Space, value.Input.Path, "input")
 	if err != nil {
 		return domain.JobSpec{}, err
+	}
+	if dataMode == domain.DataModeRayDataStage && (input.Space == "" || strings.TrimSpace(input.RelativePath) == "") {
+		return domain.JobSpec{}, errors.New("ray-data-stage requires a governed input data space with a non-empty input path")
 	}
 	checkpoint, err := commandDataLocation(value.Checkpoint.Space, value.Checkpoint.Path, "checkpoint")
 	if err != nil {
@@ -577,19 +767,49 @@ func (value project) jobSpec() (domain.JobSpec, error) {
 	if memory == "" {
 		memory = "32Gi"
 	}
-	return domain.JobSpec{
+	spec := domain.JobSpec{
 		Name: strings.TrimSpace(value.Name), Image: strings.TrimSpace(value.Image),
-		Entrypoint: domain.Entrypoint{Command: []string{"/bin/sh", "-lc", strings.TrimSpace(value.Entrypoint)}},
-		Execution:  execution,
-		Resources:  domain.Resources{WorkerReplicas: workers, GPUsPerWorker: gpus, CPUPerWorker: cpu, MemoryPerWorker: memory},
-		Input:      input,
-		Checkpoint: checkpoint,
-		Output:     output,
+		TrainingEngine: engine,
+		DataMode:       dataMode,
+		Entrypoint:     domain.Entrypoint{Command: []string{"/bin/sh", "-lc", strings.TrimSpace(value.Entrypoint)}},
+		Execution:      execution,
+		Resources:      domain.Resources{WorkerReplicas: workers, GPUsPerWorker: gpus, CPUPerWorker: cpu, MemoryPerWorker: memory},
+		Input:          input,
+		Checkpoint:     checkpoint,
+		Output:         output,
 		Cache: domain.CacheRequest{
 			Mode: domain.CacheMode(strings.TrimSpace(value.Cache.Mode)), Size: strings.TrimSpace(value.Cache.Size),
 			Preload: domain.CachePreloadMode(strings.TrimSpace(value.Cache.Preload)),
 		},
-	}, nil
+	}
+	if engine == domain.TrainingEngineRayTrain {
+		spec.Managed = defaultManagedTrainingPolicy()
+		if dataMode == domain.DataModeRayDataStage {
+			rayData, rayDataErr := domain.NewRayDataDatasetConfig(domain.RayDataFormatFiles, ".")
+			if rayDataErr != nil {
+				return domain.JobSpec{}, rayDataErr
+			}
+			spec.Managed.RayData = rayData
+		}
+		if dataMode == domain.DataModeRayData {
+			rayData, rayDataErr := domain.NewRayDataDatasetConfig(
+				domain.RayDataFormat(strings.TrimSpace(value.RayData.Format)),
+				strings.TrimSpace(value.RayData.Path),
+			)
+			if rayDataErr != nil {
+				return domain.JobSpec{}, rayDataErr
+			}
+			spec.Managed.RayData = rayData
+		}
+	}
+	return spec, nil
+}
+
+func defaultManagedTrainingPolicy() domain.ManagedTrainingPolicy {
+	return domain.ManagedTrainingPolicy{
+		MaxFailures: 2,
+		Checkpoint:  domain.CheckpointPolicy{EveryEpochs: 1, KeepLatest: 3, KeepBest: 1},
+	}
 }
 
 func oneIfZero(value int) int {

@@ -44,3 +44,23 @@ func TestStateTransitionAllowsCancellationAndTimeout(t *testing.T) {
 		t.Fatal("canceling job must reach canceled")
 	}
 }
+
+func TestRunningManagedJobCanEnterRecovering(t *testing.T) {
+	if !CanTransition(StateRunning, StateRecovering) {
+		t.Fatal("running managed job must be able to enter recovery")
+	}
+	for _, target := range []State{StateRunning, StateFailed, StateCanceled, StateTimedOut} {
+		if !CanTransition(StateRecovering, target) {
+			t.Fatalf("recovering job must be able to transition to %s", target)
+		}
+	}
+}
+
+func TestRecoveringIsNotTerminalOrAProvisioningRegression(t *testing.T) {
+	if CanTransition(StateRecovering, StateSucceeded) {
+		t.Fatal("a recovering attempt cannot succeed before it returns to running")
+	}
+	if CanTransition(StateProvisioning, StateRecovering) {
+		t.Fatal("initial provisioning failures must not masquerade as checkpoint recovery")
+	}
+}

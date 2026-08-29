@@ -10,7 +10,7 @@ ARG CODE_SERVER_IMAGE=harbor.wellspiking.ai/hub/codercom/code-server:4.93.1
 ARG WORKSPACE_RAY_BASE_IMAGE=harbor.wellspiking.ai/hub/rayproject/ray:2.35.0-py310-gpu
 FROM ${CODE_SERVER_IMAGE} AS code-server
 
-FROM ${WORKSPACE_RAY_BASE_IMAGE}
+FROM ${WORKSPACE_RAY_BASE_IMAGE} AS workspace-legacy
 
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 ARG APT_MIRROR=http://repo.wellspiking.ai/repository/ubuntu-jammy
@@ -81,3 +81,33 @@ ENV PYTHONPYCACHEPREFIX=/workspace/.cache/pycache
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 # 8888 JupyterLab, 8443 code-server (VS Code in the browser)
 EXPOSE 8888 8443
+
+# Ray 2.56.1 interactive workspace. It inherits the same CUDA, PyTorch,
+# JupyterLab, code-server, internal package mirrors, and persistent pip cache as
+# the existing Ray 2.35 workspace.
+FROM workspace-legacy AS workspace-ray256
+ARG RAY_VERSION=2.56.1
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+USER root
+RUN test "${RAY_VERSION}" = "2.56.1" \
+ && python3 -m pip uninstall -y \
+      azure-cli-core \
+      conda-content-trust \
+      opentelemetry-exporter-otlp \
+      opentelemetry-exporter-otlp-proto-grpc \
+ && python3 -m pip install --index-url "${PIP_INDEX_URL}" \
+      "ray[default,train,tune]==${RAY_VERSION}" \
+      "google-api-core==2.34.0" \
+      "googleapis-common-protos==1.75.2" \
+      "opentelemetry-exporter-otlp==1.44.0" \
+ && python3 -c "import opentelemetry.exporter.prometheus, ray, ray.train, ray.tune; assert ray.__version__ == '${RAY_VERSION}', ray.__version__" \
+ && python3 -m pip check \
+ && chmod 0755 /usr/local/bin/raytrain-launch \
+ && chown -R ray:users /home/ray /workspace
+
+ENV PLATFORM_TRAINING_ENGINE=ray-ddp
+USER ray
+WORKDIR /home/ray
+
+# Preserve the legacy default for direct builds that do not select a stage.
+FROM workspace-legacy AS workspace-legacy-default

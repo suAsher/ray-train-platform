@@ -30,8 +30,104 @@ func TestMigrationVersionsEmbedded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("migrationVersions() error = %v", err)
 	}
-	if want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}; !reflect.DeepEqual(versions, want) {
+	if want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23}; !reflect.DeepEqual(versions, want) {
 		t.Fatalf("migrationVersions() = %v, want %v", versions, want)
+	}
+}
+
+func TestSourceArtifactRequestMigrationScopesIdempotencyToOwner(t *testing.T) {
+	contents, err := migrationFiles.ReadFile("migrations/0023_source_artifact_requests.up.sql")
+	if err != nil {
+		t.Fatalf("read source artifact request migration: %v", err)
+	}
+	sql := strings.Join(strings.Fields(string(contents)), " ")
+	for _, fragment := range []string{
+		"DROP CONSTRAINT IF EXISTS source_artifacts_tenant_user_sha256_key",
+		"CREATE TABLE IF NOT EXISTS source_artifact_requests",
+		"PRIMARY KEY (tenant_id, user_id, client_request_id)",
+		"FOREIGN KEY (artifact_id, tenant_id, user_id) REFERENCES source_artifacts(id, tenant_id, user_id)",
+		"client_request_id ~ '^source-request-[0-9a-f]{24}$'",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("migration 23 missing %q", fragment)
+		}
+	}
+	if strings.Contains(sql, "UNIQUE (client_request_id)") {
+		t.Fatal("client request identity is globally unique instead of owner scoped")
+	}
+}
+
+func TestImageRuntimeCompatibilityMigrationEnforcesUniqueSupportedEngines(t *testing.T) {
+	contents, err := migrationFiles.ReadFile("migrations/0021_image_runtime_compatibility.up.sql")
+	if err != nil {
+		t.Fatalf("read image runtime compatibility migration: %v", err)
+	}
+
+	sql := strings.Join(strings.Fields(string(contents)), " ")
+	uniqueEngineCount := strings.Join(strings.Fields(`
+jsonb_array_length(supported_engines) =
+  (CASE WHEN supported_engines @> '["ray-ddp"]'::jsonb THEN 1 ELSE 0 END) +
+  (CASE WHEN supported_engines @> '["ray-train"]'::jsonb THEN 1 ELSE 0 END)
+`), " ")
+	if !strings.Contains(sql, uniqueEngineCount) {
+		t.Fatalf("migration 21 does not enforce unique supported engines; missing %q", uniqueEngineCount)
+	}
+}
+
+func TestTrainingCheckpointMigrationEnforcesManagedEventContracts(t *testing.T) {
+	contents, err := migrationFiles.ReadFile("migrations/0022_training_checkpoints.up.sql")
+	if err != nil {
+		t.Fatalf("read training checkpoint migration: %v", err)
+	}
+
+	sql := strings.Join(strings.Fields(string(contents)), " ")
+	required := []string{
+		"PRIMARY KEY (job_id, id)",
+		"token_sha256 ~ '^[0-9a-f]{64}$'",
+		"event_type IN ('WORKER_GROUP_STARTED', 'CHECKPOINT_COMPLETE', 'TRAINING_PROGRESS')",
+		"last_generation BETWEEN 0 AND 1000000000000",
+		"last_epoch BETWEEN 0 AND 1000000000000",
+		"last_step BETWEEN 0 AND 1000000000000",
+		"rate_count BETWEEN 0 AND 120",
+		"generation BIGINT NOT NULL DEFAULT 1",
+		"generation BETWEEN 1 AND 1000000000000",
+		"epoch BETWEEN 0 AND 1000000000000",
+		"step BETWEEN 0 AND 1000000000000",
+		"complete = FALSE OR manifest_sha256 ~ '^[0-9a-f]{64}$'",
+		"WHERE complete = TRUE",
+		"CREATE TABLE IF NOT EXISTS managed_attempt_resources",
+		"CREATE TABLE IF NOT EXISTS managed_attempt_fences",
+		"PRIMARY KEY (job_id, cluster_attempt)",
+		"PRIMARY KEY (job_id, cluster_attempt, fence)",
+		"FOREIGN KEY (job_id, cluster_attempt) REFERENCES managed_attempt_resources(job_id, cluster_attempt) ON DELETE CASCADE",
+		"fence >= 1",
+		"UNIQUE (namespace, ray_job_name)",
+		"state IN ('RESERVED', 'CREATING', 'ACTIVATING', 'ACTIVE', 'RETIRING', 'CLEANED', 'QUARANTINED')",
+		"cluster_attempt BETWEEN 1 AND 1000000",
+		"lease_version BIGINT NOT NULL DEFAULT 0",
+		"resource_fence BIGINT NOT NULL DEFAULT 0",
+		"cleanup_failures INTEGER NOT NULL DEFAULT 0",
+		"cleanup_last_error TEXT NOT NULL DEFAULT ''",
+		"lease_expires_at TIMESTAMPTZ",
+		"next_check_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+		"managed_attempt_resources_cleanup_idx",
+		"WHERE state IN ('RETIRING', 'RESERVED', 'CREATING')",
+		"managed_attempt_resources_tombstone_probe_idx",
+		"WHERE state = 'CLEANED'",
+		"INSERT INTO managed_attempt_resources",
+		"FROM training_jobs",
+		"WHERE training_engine = 'ray-train' AND ray_job_name <> ''",
+	}
+	for _, fragment := range required {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("migration 22 missing %q", fragment)
+		}
+	}
+	if strings.Contains(string(contents), "\n  id TEXT PRIMARY KEY,") {
+		t.Error("migration 22 scopes checkpoint identity globally instead of by job")
+	}
+	if strings.Count(sql, "event_type IN (") != 1 {
+		t.Error("migration 22 event allowlist is missing or ambiguous")
 	}
 }
 

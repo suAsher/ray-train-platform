@@ -1,0 +1,31 @@
+# Reviewed release overlay for the VKE production cluster.
+# Apply together with Helm --reuse-values so every unrelated production value
+# remains identical to the previously deployed release. Secrets are never
+# stored in this file.
+backend:
+  image:
+    repository: ray-train-backend
+    tag: raydata-stage-20260829-r3
+    digest: sha256:ed1c87bf9ca415a147c4f19b77597e129b74d92298fa4540c8369ca5d88046b4
+
+frontend:
+  image:
+    repository: ray-train-frontend
+    tag: raydata-stage-20260829-r2
+    digest: sha256:1706797020c7cfeab6b28fd6ff528bd97718b761205f27f4ea03188a4f5da522
+
+spkRayjobRelease:
+  image:
+    repository: spk-rayjob-release
+    tag: raydata-stage-20260829-r2
+    digest: sha256:16105de213aa0777a4d559d4cc708a65a2caeba7cf52950adeebc8495c85ba6c
+
+rayTrain:
+  # Empty tenant allowlist plus managedEnabled=true means every current and
+  # future team receives the managed Ray Train capability.
+  managedEnabled: true
+  managedTenants: []
+  productionManaged:
+    rayVersion: "2.56.1"
+    reference: harbor.wellspiking.ai/guofeng.su/ray-train-pytorch-ray-train@sha256:e5a526eba5643ec50cb1ef135af8203594c0a78849cc2081056bc5fa352ff26c
+    supportedEngines: ["ray-train"]

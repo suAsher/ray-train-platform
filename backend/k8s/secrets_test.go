@@ -2,7 +2,9 @@ package k8s
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -10,7 +12,116 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
+	"ray-train-platform-backend/domain"
 )
+
+func TestEnsureTrainingEventTokenSecretUsesCryptoRandomImmutableJobScope(t *testing.T) {
+	client := NewClientFromInterfaces(nil, k8sfake.NewSimpleClientset())
+	raw, err := client.EnsureTrainingEventTokenSecret(context.Background(), "tenant-a", "job-0123456789abcdef01234567")
+	if err != nil {
+		t.Fatalf("ensure training event token: %v", err)
+	}
+	if len(raw) != TrainingEventTokenBytes {
+		t.Fatalf("raw token bytes=%d, want %d", len(raw), TrainingEventTokenBytes)
+	}
+	secret, err := client.kubernetes.CoreV1().Secrets("tenant-a").Get(context.Background(), TrainingEventSecretName("job-0123456789abcdef01234567"), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secret.Immutable == nil || !*secret.Immutable || secret.Labels[trainingEventJobLabel] != "job-0123456789abcdef01234567" {
+		t.Fatalf("event token Secret is not immutable and job scoped: %#v", secret)
+	}
+	encoded := string(secret.Data[TrainingEventTokenKey])
+	decoded, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil || string(decoded) != string(raw) {
+		t.Fatalf("Secret does not contain the encoded random token: %v", err)
+	}
+	again, err := client.EnsureTrainingEventTokenSecret(context.Background(), "tenant-a", "job-0123456789abcdef01234567")
+	if err != nil || string(again) != string(raw) {
+		t.Fatalf("retry rotated the job token: same=%t err=%v", string(again) == string(raw), err)
+	}
+}
+
+func TestEnsureTrainingEventTokenSecretRefusesUnmanagedCollision(t *testing.T) {
+	name := TrainingEventSecretName("job-0123456789abcdef01234567")
+	core := k8sfake.NewSimpleClientset(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "tenant-a"}, Data: map[string][]byte{TrainingEventTokenKey: []byte("attacker")}})
+	client := NewClientFromInterfaces(nil, core)
+	if _, err := client.EnsureTrainingEventTokenSecret(context.Background(), "tenant-a", "job-0123456789abcdef01234567"); err == nil {
+		t.Fatal("unmanaged Secret collision was accepted")
+	}
+}
+
+func TestRenderManagedRayJobMountsEventTokenOnlyIntoHeadAndWorkers(t *testing.T) {
+	job := validRenderJob()
+	job.ID = "job-0123456789abcdef01234567"
+	job.Spec.TrainingEngine = domain.TrainingEngineRayTrain
+	job.Spec.RayVersion = domain.RayVersionProduction
+	job.Spec.Managed = domain.ManagedTrainingPolicy{MaxFailures: 2, Checkpoint: domain.CheckpointPolicy{EveryEpochs: 1, KeepLatest: 3, KeepBest: 1}}
+	options := testRenderOptions()
+	options.TrainingEventBaseURL = "http://ray-train-backend.ray-train-platform.svc:8080/api/v1/internal"
+	manifest, err := RenderRayJob(job, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, _, _ := nestedMap(manifest.Object, "spec")
+	submitter, _, _ := nestedMap(spec, "submitterPodTemplate", "spec")
+	cluster, _, _ := nestedMap(spec, "rayClusterSpec")
+	head, _, _ := nestedMap(cluster, "headGroupSpec", "template", "spec")
+	workers, _, _ := nestedSlice(cluster, "workerGroupSpecs")
+	worker, _, _ := nestedMap(workers[0].(map[string]any), "template", "spec")
+
+	assertNoTrainingEventSecret(t, submitter, job.ID)
+	assertTrainingEventSecret(t, head, job.ID)
+	assertTrainingEventSecret(t, worker, job.ID)
+
+	legacy := job
+	legacy.Spec.TrainingEngine = domain.TrainingEngineRayDDP
+	legacy.Spec.RayVersion = domain.RayVersionLegacy
+	legacy.Spec.Managed = domain.ManagedTrainingPolicy{}
+	legacyManifest, err := RenderRayJob(legacy, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if encoded := fmt.Sprintf("%#v", legacyManifest.Object); strings.Contains(encoded, TrainingEventTokenKey) || strings.Contains(encoded, TrainingEventSecretName(job.ID)) {
+		t.Fatalf("legacy Ray DDP workload received a managed event credential: %s", encoded)
+	}
+}
+
+func TestRenderManagedRayJobRejectsUnsafeTrainingEventBaseURL(t *testing.T) {
+	job := validRenderJob()
+	job.ID = "job-0123456789abcdef01234567"
+	job.Spec.TrainingEngine = domain.TrainingEngineRayTrain
+	job.Spec.RayVersion = domain.RayVersionProduction
+	job.Spec.Managed = domain.ManagedTrainingPolicy{MaxFailures: 2, Checkpoint: domain.CheckpointPolicy{EveryEpochs: 1, KeepLatest: 3, KeepBest: 1}}
+	for _, candidate := range []string{
+		"http://user:password@backend/api/v1/internal",
+		"http://backend/api/v1/../admin",
+		"http://backend/api/v1/internal\nINJECTED=value",
+	} {
+		options := testRenderOptions()
+		options.TrainingEventBaseURL = candidate
+		if _, err := RenderRayJob(job, options); err == nil {
+			t.Fatalf("unsafe training event base URL accepted: %q", candidate)
+		}
+	}
+}
+
+func assertNoTrainingEventSecret(t *testing.T, pod map[string]any, jobID string) {
+	t.Helper()
+	if strings.Contains(fmt.Sprintf("%#v", pod), TrainingEventSecretName(jobID)) {
+		t.Fatal("submitter received the managed training event Secret")
+	}
+}
+
+func assertTrainingEventSecret(t *testing.T, pod map[string]any, jobID string) {
+	t.Helper()
+	encoded := fmt.Sprintf("%#v", pod)
+	for _, fragment := range []string{TrainingEventSecretName(jobID), TrainingEventTokenKey, "RAYTRAIN_EVENT_TOKEN_FILE", "RAYTRAIN_EVENT_ENDPOINT"} {
+		if !strings.Contains(encoded, fragment) {
+			t.Fatalf("managed pod is missing %q: %s", fragment, encoded)
+		}
+	}
+}
 
 func TestEnsureGitCredentialSecretRotatesExistingSecretWithResourceVersion(t *testing.T) {
 	const namespace = "tenant-a"

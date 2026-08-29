@@ -2,6 +2,7 @@ package rayapi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -10,8 +11,31 @@ import (
 	"testing"
 
 	"ray-train-platform-backend/auth"
+	"ray-train-platform-backend/domain"
 	"ray-train-platform-backend/observability"
 )
+
+func TestManagedRaySubmitContractResponseRemainsSDKCompatible(t *testing.T) {
+	encoded, err := json.Marshal(jobSubmitResponse{SubmissionID: "raysubmit_managed", JobID: "job-managed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response map[string]any
+	if err := json.Unmarshal(encoded, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["submission_id"] != "raysubmit_managed" || response["job_id"] != "job-managed" || len(response) != 2 {
+		t.Fatalf("managed selection must not change the Ray SDK response contract: %s", encoded)
+	}
+
+	translated, err := TranslateSubmitRequestWithDefaults(JobSubmitRequest{
+		Entrypoint: "python train.py", RuntimeEnv: map[string]any{"working_dir": "gcs://" + testPackageSHA256 + ".zip"},
+		Metadata: map[string]string{metadataTrainingEngine: string(domain.TrainingEngineRayTrain)},
+	}, SubmissionDefaults{Image: testImageDigest, WorkerReplicas: 1, GPUsPerWorker: 1, CPUPerWorker: 8, MemoryPerWorker: "32Gi"})
+	if err != nil || translated.Spec.TrainingEngine != domain.TrainingEngineRayTrain {
+		t.Fatalf("managed request did not preserve the existing contract path: %+v err=%v", translated, err)
+	}
+}
 
 type contractTailLogs struct {
 	mu      sync.Mutex

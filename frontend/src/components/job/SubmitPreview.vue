@@ -14,6 +14,10 @@
 
     <dl class="mt-4 grid gap-3 text-sm sm:grid-cols-2">
       <div>
+        <dt class="text-slate-500">训练引擎</dt>
+        <dd class="mt-1 text-slate-200">{{ engineLabel }}</dd>
+      </div>
+      <div>
         <dt class="text-slate-500">代码来源</dt>
         <dd class="mt-1 break-all text-slate-200">{{ sourceSummary }}</dd>
       </div>
@@ -30,8 +34,12 @@
         <dd class="mt-1 break-all text-slate-200">{{ outputSummary }}</dd>
       </div>
       <div>
-        <dt class="text-slate-500">运行时缓存</dt>
+        <dt class="text-slate-500">数据读取方式</dt>
         <dd class="mt-1 break-all text-slate-200">{{ cacheSummary }}</dd>
+      </div>
+      <div v-if="form.trainingEngine === 'ray-train'">
+        <dt class="text-slate-500">托管恢复策略</dt>
+        <dd class="mt-1 text-slate-200">{{ managedSummary }}</dd>
       </div>
     </dl>
 
@@ -48,6 +56,7 @@
 import { computed } from 'vue'
 
 import { equivalentSubmitCommand } from '../../submission'
+import { trainingEngineLabel } from '../../trainingEngine.js'
 import CopyBlock from '../CopyBlock.vue'
 
 const props = defineProps({
@@ -67,16 +76,28 @@ const sourceSummary = computed(() => {
   return props.form.workspaceSnapshot || '尚未选择工作区快照'
 })
 
+const engineLabel = computed(() => trainingEngineLabel(props.form.trainingEngine))
+const managedSummary = computed(() => (
+  `最多恢复 ${Number(props.form.maxFailures || 0)} 次；每 ${Number(props.form.checkpointEveryEpochs || 0)} Epoch 保存，` +
+  `保留最近 ${Number(props.form.checkpointKeepLatest || 0)} / 最佳 ${Number(props.form.checkpointKeepBest || 0)}`
+))
+
 const outputSummary = computed(() => (props.form.output?.spaceId === 'my-runs'
   ? '我的训练结果 · 平台自动创建独立 runs/<job-id>'
   : '尚未选择训练结果空间'))
 
 const cacheSummary = computed(() => {
-  if (props.form.cacheMode !== 'runtime') return '已关闭'
+  const labels = {
+    mount: '直接读取 TOS/IDC',
+    cache: 'NVMe 预热',
+    'ray-data-stage': 'Ray Data 分布式预热 + NVMe',
+  }
+  const label = labels[props.form.dataMode] || '直接读取 TOS/IDC'
+  if (props.form.cacheMode !== 'runtime') return label
   const size = String(props.form.cacheSize || '').trim() || '尚未选择容量'
   const mountPath = String(props.cachePolicy.mountPath || '').trim() || '挂载路径未提供'
 	const preload = props.form.cachePreload === 'input' ? ' · 自动预热所选输入' : ''
-  return `运行时 · ${size} · 挂载到 ${mountPath}${preload}`
+  return `${label} · ${size} · 挂载到 ${mountPath}${preload}`
 })
 
 const cliCommand = computed(() => equivalentSubmitCommand(props.form))

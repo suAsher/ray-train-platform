@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"ray-train-platform-backend/domain"
 )
 
@@ -183,6 +185,52 @@ func TestRenderRayJobRoutesRayTrainWorkersThroughLauncher(t *testing.T) {
 	}
 }
 
+func TestLegacyRayTrainExecutionModeStillUsesActorLauncher(t *testing.T) {
+	job := validRenderJob()
+	job.Spec.TrainingEngine = domain.TrainingEngineRayDDP
+	job.Spec.Execution = domain.ExecutionProfile{Mode: domain.ExecutionModeRayTrain}
+	manifest, err := RenderRayJob(job, testRenderOptions())
+	if err != nil {
+		t.Fatalf("render legacy Ray Train profile: %v", err)
+	}
+	entrypoint, _, _ := unstructured.NestedString(manifest.Object, "spec", "entrypoint")
+	if !strings.HasPrefix(entrypoint, "raytrain-launch --mode ray_train") {
+		t.Fatalf("legacy serialized mode changed meaning: %s", entrypoint)
+	}
+}
+
+func TestRayDDPUsesPerJobRayVersionWithOptionsOnlyAsLegacyFallback(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		engine        domain.TrainingEngine
+		jobVersion    string
+		optionVersion string
+		want          string
+	}{
+		{name: "per-job snapshot wins", engine: domain.TrainingEngineRayDDP, jobVersion: domain.RayVersionProduction, optionVersion: domain.RayVersionLegacy, want: domain.RayVersionProduction},
+		{name: "explicit ray-ddp never inherits global production version", engine: domain.TrainingEngineRayDDP, optionVersion: domain.RayVersionProduction, want: domain.RayVersionLegacy},
+		{name: "explicit ray-ddp never inherits global canary version", engine: domain.TrainingEngineRayDDP, optionVersion: domain.RayVersionCanary, want: domain.RayVersionLegacy},
+		{name: "option supports true pre-upgrade rows", optionVersion: domain.RayVersionProduction, want: domain.RayVersionProduction},
+		{name: "empty pre-upgrade values use legacy default", want: domain.RayVersionLegacy},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			job := validRenderJob()
+			job.Spec.TrainingEngine = test.engine
+			job.Spec.RayVersion = test.jobVersion
+			options := testRenderOptions()
+			options.RayVersion = test.optionVersion
+			manifest, err := RenderRayJob(job, options)
+			if err != nil {
+				t.Fatalf("render ray-ddp job: %v", err)
+			}
+			got, _, _ := unstructured.NestedString(manifest.Object, "spec", "rayClusterSpec", "rayVersion")
+			if got != test.want {
+				t.Fatalf("rayVersion=%q want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestRenderRayJobCanMountIDCClaim(t *testing.T) {
 	job := validRenderJob()
 	options := testRenderOptions()
@@ -251,6 +299,46 @@ func TestRenderRayJobMaterializesRaySDKArchiveFromPersonalPVC(t *testing.T) {
 		if strings.Contains(encoded, forbidden) {
 			t.Fatalf("Ray SDK archive renderer leaked %q: %s", forbidden, encoded)
 		}
+	}
+}
+
+func TestRenderRayJobMaterializesRequestScopedArchiveFromItsUniquePath(t *testing.T) {
+	job := validRenderJob()
+	digest := strings.Repeat("a", 64)
+	artifact, err := domain.NewRequestScopedSourceArtifact(domain.SourceArtifactInput{
+		ID: "artifact-0123456789abcdef01234567", TenantID: job.TenantID, UserID: job.UserID,
+		SHA256: digest, SizeBytes: 100,
+	}, time.Now().Add(15*time.Minute), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	job.Spec.Source = domain.CodeSource{Type: "workspace-archive", ArtifactID: artifact.ID, ArtifactObjectKey: artifact.ObjectKey, ArtifactSHA256: digest}
+	job.Spec.ResolvedDataRoots.Personal = &domain.ResolvedDataRoot{Space: domain.DataSpaceWorkspace, ClaimName: "data-user-01"}
+	manifest, err := RenderRayJob(job, testRenderOptions())
+	if err != nil {
+		t.Fatalf("render request-scoped archive job: %v", err)
+	}
+	encoded := fmt.Sprintf("%#v", manifest.Object)
+	wantPath := "/mnt/platform-workspace-snapshot/workspace/.ray-train-archives/" + artifact.ID + "/" + digest + ".zip"
+	if !strings.Contains(encoded, wantPath) {
+		t.Fatalf("request archive renderer did not use unique mounted path %q: %s", wantPath, encoded)
+	}
+}
+
+func TestRenderRayJobRejectsRequestArchivePathForDifferentArtifactID(t *testing.T) {
+	job := validRenderJob()
+	digest := strings.Repeat("a", 64)
+	artifact, err := domain.NewRequestScopedSourceArtifact(domain.SourceArtifactInput{
+		ID: "artifact-0123456789abcdef01234567", TenantID: job.TenantID, UserID: job.UserID,
+		SHA256: digest, SizeBytes: 100,
+	}, time.Now().Add(15*time.Minute), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	job.Spec.Source = domain.CodeSource{Type: "workspace-archive", ArtifactID: "artifact-aaaaaaaaaaaaaaaaaaaaaaaa", ArtifactObjectKey: artifact.ObjectKey, ArtifactSHA256: digest}
+	job.Spec.ResolvedDataRoots.Personal = &domain.ResolvedDataRoot{Space: domain.DataSpaceWorkspace, ClaimName: "data-user-01"}
+	if _, err := RenderRayJob(job, testRenderOptions()); err == nil {
+		t.Fatal("renderer accepted a request object key belonging to another artifact ID")
 	}
 }
 

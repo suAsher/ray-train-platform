@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"ray-train-platform-backend/domain"
+	"ray-train-platform-backend/runtimecatalog"
 )
 
 // platformLimitsResponse is the single source of truth the Portal and the CLI
@@ -19,6 +20,15 @@ type platformLimitsResponse struct {
 	MountPaths        governedMountPaths           `json:"mountPaths"`
 	ExecutionProfiles []executionProfileDescriptor `json:"executionProfiles"`
 	Cache             cachePolicyDescriptor        `json:"cache"`
+	Runtime           runtimeCapabilityDescriptor  `json:"runtime"`
+}
+
+type runtimeCapabilityDescriptor struct {
+	AvailableEngines     []string `json:"availableEngines"`
+	ProductionRayVersion string   `json:"productionRayVersion"`
+	CanaryRayVersion     string   `json:"canaryRayVersion"`
+	ManagedEnabled       bool     `json:"managedEnabled"`
+	CanaryEnabled        bool     `json:"canaryEnabled"`
 }
 
 type cachePolicyDescriptor struct {
@@ -101,7 +111,22 @@ func (h *Handler) platformLimits(c *gin.Context) {
 		},
 		ExecutionProfiles: executionProfileDescriptors(limits),
 		Cache:             cachePolicyDescriptorFor(h.localCache),
+		Runtime:           runtimeCapabilityDescriptorFor(h.runtimePolicy.EffectiveForTenant(principal.TenantID)),
 	})
+}
+
+func runtimeCapabilityDescriptorFor(policy runtimecatalog.Policy) runtimeCapabilityDescriptor {
+	engines := []string{string(domain.TrainingEngineRayDDP)}
+	if policy.ManagedEnabled {
+		engines = append(engines, string(domain.TrainingEngineRayTrain))
+	}
+	return runtimeCapabilityDescriptor{
+		AvailableEngines:     append([]string(nil), engines...),
+		ProductionRayVersion: domain.RayVersionProduction,
+		CanaryRayVersion:     domain.RayVersionCanary,
+		ManagedEnabled:       policy.ManagedEnabled,
+		CanaryEnabled:        policy.CanaryEnabled,
+	}
 }
 
 func cachePolicyDescriptorFor(policy LocalCachePolicy) cachePolicyDescriptor {

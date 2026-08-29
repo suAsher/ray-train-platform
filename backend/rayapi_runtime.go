@@ -29,6 +29,7 @@ func rayAPIOptions(cfg config.Config, logs api.LogProvider) rayapi.Options {
 		Logs:                logs,
 		UploadMaxConcurrent: cfg.RayAPIUploadMaxConcurrent,
 		UploadRateLimit:     cfg.RayAPIUploadRateLimit,
+		RayVersion:          cfg.RayVersion,
 		Defaults: rayapi.SubmissionDefaults{
 			Image: cfg.RayAPIDefaultImage, WorkerReplicas: 1, GPUsPerWorker: 1,
 			CPUPerWorker: 8, MemoryPerWorker: "32Gi",

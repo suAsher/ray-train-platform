@@ -118,6 +118,352 @@ input:
 	}
 }
 
+func TestSubmitCarriesManagedEngineWithoutRayVersionOverride(t *testing.T) {
+	root := seedProject(t, `name: managed-training
+image: harbor.example/train@sha256:`+strings.Repeat("b", 64)+`
+entrypoint: python train.py
+`)
+	var submitted domain.JobSpec
+	limitsRead := 0
+	stub := artifactStubHandler(t, func(spec domain.JobSpec) { submitted = spec })
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/limits":
+			limitsRead++
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"runtime": map[string]any{
+				"availableEngines": []string{"ray-ddp", "ray-train"}, "managedEnabled": true,
+				"productionRayVersion": "2.56.1", "canaryRayVersion": "2.58.0",
+			}})
+			return
+		case "/api/v1/images":
+			writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
+				"name": "Managed", "reference": "harbor.example/train@sha256:" + strings.Repeat("b", 64),
+				"rayVersion": "2.56.1", "supportedEngines": []string{"ray-ddp", "ray-train"},
+			}})
+			return
+		}
+		stub(writer, request)
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := Run(context.Background(), []string{
+		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root, "--engine", "ray-train",
+	}, &stdout, &bytes.Buffer{}, testEnvironment)
+	if err != nil {
+		t.Fatalf("submit managed engine: %v", err)
+	}
+	if limitsRead != 1 {
+		t.Fatalf("managed submission must authenticate capabilities exactly once, calls=%d", limitsRead)
+	}
+	if submitted.TrainingEngine != domain.TrainingEngineRayTrain || submitted.RayVersion != "" || submitted.Managed.MaxFailures != 2 {
+		t.Fatalf("CLI must select managed engine/default policy but not forge Ray version: %+v", submitted)
+	}
+	if !strings.Contains(stdout.String(), "下一步示例") || !strings.Contains(stdout.String(), "spk-rayjob submit --engine ray-train --watch") || strings.Contains(stdout.String(), "再次提交") {
+		t.Fatalf("managed-capable server must render a copyable engine command: %s", stdout.String())
+	}
+}
+
+func TestManagedSubmitCarriesExplicitRecoveryAndCheckpointPolicy(t *testing.T) {
+	root := seedProject(t, `name: managed-policy
+image: harbor.example/train@sha256:`+strings.Repeat("b", 64)+`
+entrypoint: python train.py
+`)
+	var submitted domain.JobSpec
+	stub := artifactStubHandler(t, func(spec domain.JobSpec) { submitted = spec })
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/limits":
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"runtime": map[string]any{
+				"availableEngines": []string{"ray-ddp", "ray-train"}, "managedEnabled": true,
+				"productionRayVersion": "2.56.1", "canaryRayVersion": "2.58.0",
+			}})
+			return
+		case "/api/v1/images":
+			writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
+				"name": "Managed", "reference": "harbor.example/train@sha256:" + strings.Repeat("b", 64),
+				"rayVersion": "2.56.1", "supportedEngines": []string{"ray-ddp", "ray-train"},
+			}})
+			return
+		}
+		stub(writer, request)
+	}))
+	defer server.Close()
+
+	err := Run(context.Background(), []string{
+		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root,
+		"--engine", "ray-train", "--max-failures", "10", "--checkpoint-every-epochs", "100000",
+		"--checkpoint-keep-latest", "1000", "--checkpoint-keep-best", "1000",
+	}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+	if err != nil {
+		t.Fatalf("submit managed policy: %v", err)
+	}
+	want := domain.ManagedTrainingPolicy{
+		MaxFailures: 10,
+		Checkpoint:  domain.CheckpointPolicy{EveryEpochs: 100000, KeepLatest: 1000, KeepBest: 1000},
+	}
+	if submitted.Managed != want {
+		t.Fatalf("copied Portal policy did not reach JobSpec: got %+v want %+v", submitted.Managed, want)
+	}
+}
+
+func TestManagedPolicyFlagsRejectRayDDPBeforeNetworkOrArchive(t *testing.T) {
+	for _, flagAndValue := range [][]string{
+		{"--max-failures", "2"},
+		{"--checkpoint-every-epochs", "1"},
+		{"--checkpoint-keep-latest", "3"},
+		{"--checkpoint-keep-best", "1"},
+	} {
+		t.Run(flagAndValue[0], func(t *testing.T) {
+			root := seedProject(t, "name: ddp-policy\nentrypoint: python train.py\nengine: ray-ddp\n")
+			if err := os.Symlink(filepath.Join(root, "missing"), filepath.Join(root, "broken")); err != nil {
+				t.Fatal(err)
+			}
+			requests := 0
+			server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+			defer server.Close()
+			arguments := []string{"submit", "--server", server.URL, "--dir", root}
+			arguments = append(arguments, flagAndValue...)
+			err := Run(context.Background(), arguments, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+			if err == nil || !strings.Contains(err.Error(), "ray-ddp") {
+				t.Fatalf("expected local ray-ddp policy rejection, got %v", err)
+			}
+			if requests != 0 {
+				t.Fatalf("invalid policy reached network %d times", requests)
+			}
+		})
+	}
+}
+
+func TestManagedPolicyValuesValidateBeforeNetworkOrArchive(t *testing.T) {
+	for _, flagAndValue := range [][]string{
+		{"--max-failures", "11"},
+		{"--checkpoint-every-epochs", "-1"},
+		{"--checkpoint-every-epochs", "100001"},
+		{"--checkpoint-keep-latest", "-1"},
+		{"--checkpoint-keep-latest", "1001"},
+		{"--checkpoint-keep-best", "-1"},
+		{"--checkpoint-keep-best", "1001"},
+	} {
+		t.Run(strings.Join(flagAndValue, "="), func(t *testing.T) {
+			root := seedProject(t, "name: bad-managed-policy\nentrypoint: python train.py\nengine: ray-train\n")
+			requests := 0
+			server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+			defer server.Close()
+			arguments := []string{"submit", "--server", server.URL, "--dir", root}
+			arguments = append(arguments, flagAndValue...)
+			err := Run(context.Background(), arguments, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+			if err == nil {
+				t.Fatal("expected local managed policy validation error")
+			}
+			if requests != 0 {
+				t.Fatalf("invalid policy reached network %d times", requests)
+			}
+		})
+	}
+}
+
+func TestManagedSubmitRejectsIncompatibleExplicitImageBeforeArchiveOrUpload(t *testing.T) {
+	root := seedProject(t, `name: incompatible-managed
+image: harbor.example/legacy@sha256:`+strings.Repeat("1", 64)+`
+entrypoint: python train.py
+engine: ray-train
+`)
+	// A broken symlink makes BuildArchive fail. The expected catalog error proves
+	// managed preflight completes before archive construction even starts.
+	if err := os.Symlink(filepath.Join(root, "missing-target"), filepath.Join(root, "broken-link")); err != nil {
+		t.Fatal(err)
+	}
+	sourceRequests := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/limits":
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"runtime": map[string]any{
+				"availableEngines": []string{"ray-ddp", "ray-train"}, "managedEnabled": true,
+				"productionRayVersion": "2.56.1", "canaryRayVersion": "2.58.0",
+			}})
+		case "/api/v1/images":
+			writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
+				"name": "Legacy", "reference": "harbor.example/legacy@sha256:" + strings.Repeat("1", 64),
+				"rayVersion": "2.35.0", "supportedEngines": []string{"ray-ddp"}, "isDefault": true,
+			}})
+		default:
+			sourceRequests++
+			t.Fatalf("managed image rejection must happen before source artifact work: %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	err := Run(context.Background(), []string{"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+	if err == nil || !strings.Contains(err.Error(), "ray-train") {
+		t.Fatalf("expected managed image compatibility error before archive, got %v", err)
+	}
+	if sourceRequests != 0 {
+		t.Fatalf("source artifact work started %d times", sourceRequests)
+	}
+}
+
+func TestManagedSubmitWithCacheReadsLimitsOnceAndSelectsCompatibleDefault(t *testing.T) {
+	root := seedProject(t, `name: managed-cache
+entrypoint: python train.py
+engine: ray-train
+cache:
+  mode: runtime
+  size: 100Gi
+`)
+	limitsRead := 0
+	var submitted domain.JobSpec
+	stub := artifactStubHandler(t, func(spec domain.JobSpec) { submitted = spec })
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/limits":
+			limitsRead++
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{
+				"runtime": map[string]any{"availableEngines": []string{"ray-ddp", "ray-train"}, "managedEnabled": true, "productionRayVersion": "2.56.1", "canaryRayVersion": "2.58.0"},
+				"cache":   map[string]any{"enabled": true, "modes": []string{"off", "runtime"}, "allowedSizes": []string{"100Gi"}, "defaultSize": "100Gi", "maxSize": "1Ti"},
+			})
+			return
+		case "/api/v1/images":
+			writeClientSuccess(t, writer, http.StatusOK, []map[string]any{
+				{"name": "Legacy default", "reference": "harbor.example/legacy:2.35", "isDefault": true, "rayVersion": "2.35.0", "supportedEngines": []string{"ray-ddp"}},
+				{"name": "Managed", "reference": "harbor.example/managed:2.56", "rayVersion": "2.56.1", "supportedEngines": []string{"ray-ddp", "ray-train"}},
+			})
+			return
+		}
+		stub(writer, request)
+	}))
+	defer server.Close()
+	err := Run(context.Background(), []string{"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+	if err != nil {
+		t.Fatalf("managed cached submit: %v", err)
+	}
+	if limitsRead != 1 {
+		t.Fatalf("managed+cache must share one limits snapshot, calls=%d", limitsRead)
+	}
+	if submitted.Image != "harbor.example/managed:2.56" || submitted.Cache.Size != "100Gi" {
+		t.Fatalf("managed image/cache preflight was not applied: %+v", submitted)
+	}
+}
+
+func TestInitWritesSelectedEngineAndRejectsUnknownEngine(t *testing.T) {
+	root := t.TempDir()
+	if err := Run(context.Background(), []string{"init", "--dir", root, "--engine", "ray-train"}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment); err != nil {
+		t.Fatalf("init managed project: %v", err)
+	}
+	loaded, err := loadProject(root)
+	if err != nil || loaded.Engine != "ray-train" {
+		t.Fatalf("init did not persist the engine: %+v err=%v", loaded, err)
+	}
+
+	invalidRoot := t.TempDir()
+	err = Run(context.Background(), []string{"init", "--dir", invalidRoot, "--engine", "ray-magic"}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+	if err == nil || !strings.Contains(err.Error(), "ray-ddp") {
+		t.Fatalf("init must reject unknown engines locally, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(invalidRoot, projectFileName)); !os.IsNotExist(statErr) {
+		t.Fatalf("invalid init wrote a project file: %v", statErr)
+	}
+}
+
+func TestSubmitEngineFlagOverridesProjectAndLegacySkipsLimits(t *testing.T) {
+	root := seedProject(t, `name: engine-override
+image: harbor.example/train@sha256:`+strings.Repeat("c", 64)+`
+entrypoint: python train.py
+engine: ray-train
+`)
+	var submitted domain.JobSpec
+	stub := artifactStubHandler(t, func(spec domain.JobSpec) { submitted = spec })
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v1/limits" {
+			t.Fatal("legacy engine without another gated feature must not request platform limits")
+		}
+		stub(writer, request)
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	err := Run(context.Background(), []string{
+		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root, "--engine", "ray-ddp",
+	}, &stdout, &bytes.Buffer{}, testEnvironment)
+	if err != nil {
+		t.Fatalf("submit legacy override: %v", err)
+	}
+	if submitted.TrainingEngine != domain.TrainingEngineRayDDP || submitted.Managed != (domain.ManagedTrainingPolicy{}) {
+		t.Fatalf("legacy override was not preserved: %+v", submitted)
+	}
+	if strings.Contains(stdout.String(), "--engine") || !strings.Contains(stdout.String(), "spk-rayjob submit --watch") {
+		t.Fatalf("legacy-only command must not claim engine selection is available: %s", stdout.String())
+	}
+}
+
+func TestSubmitRejectsUnknownEngineBeforeNetworkOrUpload(t *testing.T) {
+	root := seedProject(t, `name: invalid-engine
+image: harbor.example/train@sha256:`+strings.Repeat("d", 64)+`
+entrypoint: python train.py
+`)
+	requests := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+	defer server.Close()
+
+	err := Run(context.Background(), []string{
+		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root, "--engine", "ray-magic",
+	}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+	if err == nil || !strings.Contains(err.Error(), "ray-ddp") {
+		t.Fatalf("unknown engine must fail locally, got %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("unknown engine reached the network %d times", requests)
+	}
+}
+
+func TestSubmitDoesNotExposeRayVersionFlag(t *testing.T) {
+	root := seedProject(t, `name: no-version-override
+image: harbor.example/train@sha256:`+strings.Repeat("f", 64)+`
+entrypoint: python train.py
+`)
+	requests := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+	defer server.Close()
+	err := Run(context.Background(), []string{
+		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root, "--ray-version", "2.58.0",
+	}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+	if err == nil {
+		t.Fatal("a public Ray version override was accepted")
+	}
+	if requests != 0 {
+		t.Fatalf("an unsupported Ray version flag reached the network %d times", requests)
+	}
+}
+
+func TestSubmitRejectsManagedEngineWhenServerDoesNotAdvertiseItBeforeUpload(t *testing.T) {
+	root := seedProject(t, `name: unavailable-managed
+image: harbor.example/train@sha256:`+strings.Repeat("e", 64)+`
+entrypoint: python train.py
+engine: ray-train
+`)
+	uploaded := false
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v1/limits" {
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"runtime": map[string]any{
+				"availableEngines": []string{"ray-ddp"}, "managedEnabled": false,
+			}})
+			return
+		}
+		uploaded = true
+		t.Fatalf("managed capability rejection must happen before upload: %s", request.URL.Path)
+	}))
+	defer server.Close()
+
+	err := Run(context.Background(), []string{
+		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root,
+	}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+	if err == nil || !strings.Contains(err.Error(), "Ray Train") {
+		t.Fatalf("expected managed capability error, got %v", err)
+	}
+	if uploaded {
+		t.Fatal("unavailable managed submission uploaded source")
+	}
+}
+
 func TestSubmitRuntimeCacheUsesIndependentFlagOverride(t *testing.T) {
 	root := seedProject(t, `name: cache-training
 image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
@@ -255,6 +601,114 @@ entrypoint: python train.py
 	}
 	if submitted.Input.Space != domain.DataSpacePublic || submitted.Input.RelativePath != "labeled/fz-v1" {
 		t.Fatalf("selected input was not preserved: %+v", submitted.Input)
+	}
+}
+
+func TestSubmitRayDataStageBuildsManagedDatasetAndRuntimeCache(t *testing.T) {
+	root := seedProject(t, `name: ray-data-stage
+entrypoint: python train.py
+engine: ray-train
+workers: 2
+gpusPerWorker: 8
+input:
+  space: public
+  path: labeled/fz-v1
+`)
+	var submitted domain.JobSpec
+	stub := artifactStubHandler(t, func(spec domain.JobSpec) { submitted = spec })
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/limits":
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{
+				"runtime": map[string]any{
+					"availableEngines": []string{"ray-ddp", "ray-train"}, "managedEnabled": true,
+					"productionRayVersion": "2.56.1", "canaryRayVersion": "2.58.0",
+				},
+				"cache": map[string]any{
+					"enabled": true, "modes": []string{"off", "runtime"},
+					"allowedSizes": []string{"2Ti"}, "defaultSize": "2Ti", "maxSize": "5Ti",
+				},
+			})
+			return
+		case "/api/v1/images":
+			writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
+				"name": "Managed", "reference": "harbor.example/managed:2.56.1", "isDefault": true,
+				"rayVersion": "2.56.1", "supportedEngines": []string{"ray-ddp", "ray-train"},
+			}})
+			return
+		}
+		stub(writer, request)
+	}))
+	defer server.Close()
+
+	err := Run(context.Background(), []string{
+		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root,
+		"--data-mode", "ray-data-stage", "--cache-size", "2Ti",
+	}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+	if err != nil {
+		t.Fatalf("submit Ray Data staging job: %v", err)
+	}
+	if submitted.TrainingEngine != domain.TrainingEngineRayTrain || submitted.DataMode != domain.DataModeRayDataStage {
+		t.Fatalf("staged submit lost managed runtime selection: %+v", submitted)
+	}
+	if submitted.Managed.RayData.Format() != domain.RayDataFormatFiles || submitted.Managed.RayData.URI() != domain.DataMountInputPath {
+		t.Fatalf("staged submit lost its governed binary dataset: %+v", submitted.Managed.RayData)
+	}
+	if submitted.Cache != (domain.CacheRequest{Mode: domain.CacheModeRuntime, Size: "2Ti"}) {
+		t.Fatalf("staged submit must use runtime cache without the legacy preloader: %+v", submitted.Cache)
+	}
+}
+
+func TestSubmitRayDataStageClearsInheritedLegacyPreload(t *testing.T) {
+	root := seedProject(t, `name: ray-data-stage-stale-preload
+entrypoint: python train.py
+engine: ray-train
+dataMode: ray-data-stage
+workers: 1
+gpusPerWorker: 1
+cache:
+  mode: runtime
+  size: 2Ti
+  preload: input
+input:
+  space: public
+  path: labeled/fz-v1
+`)
+	var submitted domain.JobSpec
+	stub := artifactStubHandler(t, func(spec domain.JobSpec) { submitted = spec })
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/limits":
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{
+				"runtime": map[string]any{
+					"availableEngines": []string{"ray-ddp", "ray-train"}, "managedEnabled": true,
+					"productionRayVersion": "2.56.1", "canaryRayVersion": "2.58.0",
+				},
+				"cache": map[string]any{
+					"enabled": true, "modes": []string{"off", "runtime"},
+					"allowedSizes": []string{"2Ti"}, "defaultSize": "2Ti", "maxSize": "5Ti",
+				},
+			})
+			return
+		case "/api/v1/images":
+			writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
+				"name": "Managed", "reference": "harbor.example/managed:2.56.1", "isDefault": true,
+				"rayVersion": "2.56.1", "supportedEngines": []string{"ray-ddp", "ray-train"},
+			}})
+			return
+		}
+		stub(writer, request)
+	}))
+	defer server.Close()
+
+	err := Run(context.Background(), []string{
+		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root,
+	}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
+	if err != nil {
+		t.Fatalf("submit staging job with stale project preload: %v", err)
+	}
+	if submitted.Cache.Preload != "" {
+		t.Fatalf("staging must clear inherited legacy preload: %+v", submitted.Cache)
 	}
 }
 
@@ -432,12 +886,12 @@ executionMode: torchrun
 	}
 }
 
-// Resuming reads the previous run's own managed result directory. The user
-// supplies one job ID instead of reconstructing a storage path.
-func TestSubmitResumeFromJobSelectsThePreviousRunAsReadOnlyCheckpoint(t *testing.T) {
+func TestSubmitResumeFromJobBindsLatestCompleteCheckpointAndParent(t *testing.T) {
+	const parentID = "job-0123456789abcdef01234567"
 	root := seedProject(t, `name: bevfusion-lidar
 image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
 entrypoint: python tools/westwell_train.py configs/lidar.yaml --launcher pytorch --auto-resume
+engine: ray-train
 workers: 1
 gpusPerWorker: 8
 executionMode: torchrun
@@ -445,11 +899,30 @@ executionMode: torchrun
 	var submitted domain.JobSpec
 	stub := artifactStubHandler(t, func(spec domain.JobSpec) { submitted = spec })
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/api/v1/jobs/job-previous" {
+		switch request.URL.Path {
+		case "/api/v1/limits":
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"runtime": map[string]any{
+				"availableEngines": []string{"ray-ddp", "ray-train"}, "managedEnabled": true,
+				"productionRayVersion": "2.56.1", "canaryRayVersion": "2.58.0",
+			}})
+			return
+		case "/api/v1/images":
+			writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
+				"name": "Managed", "reference": "harbor.example/train@sha256:" + strings.Repeat("a", 64),
+				"rayVersion": "2.56.1", "supportedEngines": []string{"ray-train"},
+			}})
+			return
+		case "/api/v1/jobs/" + parentID:
 			writeClientSuccess(t, writer, http.StatusOK, map[string]any{
-				"id": "job-previous", "observedState": "FAILED",
+				"id": parentID, "tenantId": "tenant-a", "userId": "user-a", "observedState": "FAILED",
 				"spec": map[string]any{"output": map[string]any{"space": "my-runs", "relativePath": "bevfusion-lidar"}},
 			})
+			return
+		case "/api/v1/jobs/" + parentID + "/checkpoints":
+			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"jobId": parentID, "items": []map[string]any{{
+				"id": "checkpoint-20", "jobId": parentID, "tenantId": "tenant-a", "userId": "user-a", "epoch": 2, "step": 20,
+				"objectPath": "/mnt/data/output/.platform/ray-train/" + parentID + "/checkpoints/checkpoint-20", "complete": true, "manifestSha256": strings.Repeat("c", 64),
+			}}})
 			return
 		}
 		stub(writer, request)
@@ -458,13 +931,14 @@ executionMode: torchrun
 
 	err := Run(context.Background(), []string{
 		"submit", "--server", server.URL, "--ca-file", writeTestCA(t, server), "--dir", root,
-		"--resume-from-job", "job-previous",
+		"--resume-from-job", parentID,
 	}, &bytes.Buffer{}, &bytes.Buffer{}, testEnvironment)
 	if err != nil {
 		t.Fatalf("resume submit failed: %v", err)
 	}
-	if submitted.Checkpoint.Space != domain.DataSpaceMyRuns || submitted.Checkpoint.RelativePath != "bevfusion-lidar/job-previous" {
-		t.Fatalf("expected the previous run directory as checkpoint, got %+v", submitted.Checkpoint)
+	wantPath := "bevfusion-lidar/" + parentID + "/.platform/ray-train/" + parentID + "/checkpoints/checkpoint-20"
+	if submitted.ParentJobID != parentID || submitted.Checkpoint.Space != domain.DataSpaceMyRuns || submitted.Checkpoint.RelativePath != wantPath {
+		t.Fatalf("expected concrete parent checkpoint binding, got parent=%q checkpoint=%+v", submitted.ParentJobID, submitted.Checkpoint)
 	}
 }
 
@@ -825,6 +1299,38 @@ cache:
 	want := "--resume-from-job cannot be combined with --checkpoint-space or --checkpoint-path"
 	if err == nil || err.Error() != want {
 		t.Fatalf("expected the original resume/checkpoint conflict error %q, got %v", want, err)
+	}
+}
+
+func TestResumeFromJobRequiresManagedEngineBeforeClientConfiguration(t *testing.T) {
+	root := seedProject(t, `name: legacy-training
+image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
+entrypoint: python train.py
+engine: ray-ddp
+`)
+	getenv := func(key string) string {
+		t.Fatalf("managed resume validation must not read connection settings: %s", key)
+		return ""
+	}
+	err := Run(context.Background(), []string{"submit", "--dir", root, "--resume-from-job", "job-0123456789abcdef01234567"}, &bytes.Buffer{}, &bytes.Buffer{}, getenv)
+	if err == nil || !strings.Contains(err.Error(), "--engine ray-train") {
+		t.Fatalf("legacy engine accepted managed resume: %v", err)
+	}
+}
+
+func TestResumeFromJobRejectsUnsafeParentIDBeforeClientConfiguration(t *testing.T) {
+	root := seedProject(t, `name: managed-training
+image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
+entrypoint: python train.py
+engine: ray-train
+`)
+	getenv := func(key string) string {
+		t.Fatalf("unsafe parent ID validation must not read connection settings: %s", key)
+		return ""
+	}
+	err := Run(context.Background(), []string{"submit", "--dir", root, "--resume-from-job", "../foreign-job"}, &bytes.Buffer{}, &bytes.Buffer{}, getenv)
+	if err == nil || !strings.Contains(err.Error(), "平台 job ID") {
+		t.Fatalf("unsafe parent ID was not rejected locally: %v", err)
 	}
 }
 

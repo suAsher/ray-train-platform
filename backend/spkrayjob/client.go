@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -42,6 +43,8 @@ const (
 	maxLogPlatformResponseBytes int64 = 32 << 20
 )
 
+var stableSourceRequestID = regexp.MustCompile(`^source-request-[0-9a-f]{24}$`)
+
 type localLogin struct {
 	Token    string `json:"token"`
 	Username string `json:"username"`
@@ -62,6 +65,11 @@ type Job struct {
 	ID            string          `json:"id"`
 	ObservedState domain.State    `json:"observedState"`
 	Raw           json.RawMessage `json:"-"`
+}
+
+type JobCheckpointPage struct {
+	JobID string                      `json:"jobId"`
+	Items []domain.TrainingCheckpoint `json:"items"`
 }
 
 type LogEntry struct {
@@ -91,7 +99,20 @@ type LogPageOptions struct {
 }
 
 type PlatformLimits struct {
-	Cache PlatformCacheLimits `json:"cache"`
+	Cache   PlatformCacheLimits   `json:"cache"`
+	Runtime PlatformRuntimeLimits `json:"runtime"`
+}
+
+type PlatformRuntimeLimits struct {
+	AvailableEngines     []string `json:"availableEngines"`
+	ProductionRayVersion string   `json:"productionRayVersion"`
+	CanaryRayVersion     string   `json:"canaryRayVersion"`
+	ManagedEnabled       bool     `json:"managedEnabled"`
+	CanaryEnabled        bool     `json:"canaryEnabled"`
+}
+
+func (limits PlatformRuntimeLimits) ManagedAvailable() bool {
+	return limits.ManagedEnabled && containsTrimmed(limits.AvailableEngines, string(domain.TrainingEngineRayDDP)) && containsTrimmed(limits.AvailableEngines, string(domain.TrainingEngineRayTrain))
 }
 
 type PlatformCacheLimits struct {
@@ -205,19 +226,62 @@ func (client *Client) LoginCheck(ctx context.Context) (json.RawMessage, error) {
 }
 
 func (client *Client) SubmitDirectory(ctx context.Context, directory string, spec domain.JobSpec) (Job, error) {
+	return client.SubmitDirectoryWithRequestID(ctx, directory, spec, "")
+}
+
+func (client *Client) SubmitDirectoryWithRequestID(ctx context.Context, directory string, spec domain.JobSpec, clientRequestID string) (Job, error) {
+	if clientRequestID != "" && !stableSourceRequestID.MatchString(clientRequestID) {
+		return Job{}, fmt.Errorf("source request ID must match source-request- followed by 24 lowercase hexadecimal characters")
+	}
+	if err := validateArchiveJobSpec(spec); err != nil {
+		return Job{}, err
+	}
+	resolved, err := client.preflightManagedImage(ctx, spec)
+	if err != nil {
+		return Job{}, err
+	}
+	spec = resolved
 	archive, err := BuildArchive(directory)
 	if err != nil {
 		return Job{}, err
 	}
 	defer os.Remove(archive.Path)
-	return client.submitArchive(ctx, archive, spec)
+	return client.submitArchiveWithRequestID(ctx, archive, spec, clientRequestID)
+}
+
+func (client *Client) preflightManagedImage(ctx context.Context, spec domain.JobSpec) (domain.JobSpec, error) {
+	if spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain {
+		return spec, nil
+	}
+	limits, err := client.PlatformLimits(ctx)
+	if err != nil {
+		return domain.JobSpec{}, fmt.Errorf("read managed runtime capabilities: %w", err)
+	}
+	if !limits.Runtime.ManagedAvailable() {
+		return domain.JobSpec{}, fmt.Errorf("Ray Train managed engine is not available")
+	}
+	images, err := client.TrainingImages(ctx)
+	if err != nil {
+		return domain.JobSpec{}, err
+	}
+	selected, err := managedImage(images, spec.Image, limits.Runtime)
+	if err != nil {
+		return domain.JobSpec{}, err
+	}
+	resolved := spec
+	resolved.Image = selected.Reference
+	return resolved, nil
 }
 
 func (client *Client) submitArchive(ctx context.Context, archive Archive, spec domain.JobSpec) (Job, error) {
+	return client.submitArchiveWithRequestID(ctx, archive, spec, "")
+}
+
+func (client *Client) submitArchiveWithRequestID(ctx context.Context, archive Archive, spec domain.JobSpec, clientRequestID string) (Job, error) {
 	if err := validateArchiveJobSpec(spec); err != nil {
 		return Job{}, err
 	}
-	artifact, err := client.CreateArtifact(ctx, archive)
+	artifact, err := client.CreateArtifactWithRequestID(ctx, archive, clientRequestID)
 	if err != nil {
 		return Job{}, err
 	}
@@ -238,17 +302,51 @@ func (client *Client) submitArchive(ctx context.Context, archive Archive, spec d
 }
 
 func (client *Client) CreateArtifact(ctx context.Context, archive Archive) (Artifact, error) {
-	body, err := json.Marshal(map[string]any{"sha256": archive.SHA256, "sizeBytes": archive.SizeBytes})
+	return client.CreateArtifactWithRequestID(ctx, archive, "")
+}
+
+func (client *Client) CreateArtifactWithRequestID(ctx context.Context, archive Archive, clientRequestID string) (Artifact, error) {
+	if clientRequestID != "" && !stableSourceRequestID.MatchString(clientRequestID) {
+		return Artifact{}, fmt.Errorf("source request ID must match source-request- followed by 24 lowercase hexadecimal characters")
+	}
+	body, err := json.Marshal(struct {
+		ClientRequestID string `json:"clientRequestId,omitempty"`
+		SHA256          string `json:"sha256"`
+		SizeBytes       int64  `json:"sizeBytes"`
+	}{ClientRequestID: clientRequestID, SHA256: archive.SHA256, SizeBytes: archive.SizeBytes})
 	if err != nil {
 		return Artifact{}, err
 	}
 	data, err := client.request(ctx, http.MethodPost, "/api/v1/source-artifacts", body, nil)
+	if err != nil && clientRequestID != "" && ctx.Err() == nil {
+		// An owner-scoped idempotency key makes one bounded retry safe when the server
+		// committed creation but its response was lost in transit.
+		data, err = client.request(ctx, http.MethodPost, "/api/v1/source-artifacts", body, nil)
+	}
 	if err != nil {
 		return Artifact{}, err
 	}
 	var artifact Artifact
 	if err := json.Unmarshal(data, &artifact); err != nil {
 		return Artifact{}, fmt.Errorf("decode source artifact response")
+	}
+	return artifact, nil
+}
+
+func (client *Client) ResolveArtifactRequest(ctx context.Context, clientRequestID string) (Artifact, error) {
+	if !stableSourceRequestID.MatchString(clientRequestID) {
+		return Artifact{}, fmt.Errorf("source request ID must match source-request- followed by 24 lowercase hexadecimal characters")
+	}
+	data, err := client.request(ctx, http.MethodGet, "/api/v1/source-artifact-requests/"+url.PathEscape(clientRequestID), nil, nil)
+	if err != nil {
+		return Artifact{}, err
+	}
+	var artifact Artifact
+	if err := json.Unmarshal(data, &artifact); err != nil {
+		return Artifact{}, fmt.Errorf("decode source artifact request response")
+	}
+	if strings.TrimSpace(artifact.ArtifactID) == "" {
+		return Artifact{}, fmt.Errorf("source artifact request response had no artifact ID")
 	}
 	return artifact, nil
 }
@@ -313,7 +411,14 @@ func (client *Client) CompleteArtifact(ctx context.Context, artifactID string) (
 }
 
 func (client *Client) Submit(ctx context.Context, spec domain.JobSpec) (Job, error) {
-	return client.submit(ctx, spec, "")
+	if err := validateFinalJobSpec(spec); err != nil {
+		return Job{}, err
+	}
+	resolved, err := client.preflightManagedImage(ctx, spec)
+	if err != nil {
+		return Job{}, err
+	}
+	return client.submit(ctx, resolved, "")
 }
 
 func (client *Client) submit(ctx context.Context, spec domain.JobSpec, origin domain.SubmissionOrigin) (Job, error) {
@@ -345,7 +450,15 @@ func (client *Client) TrainingImages(ctx context.Context) ([]catalogImage, error
 	if err := json.Unmarshal(raw, &images); err != nil {
 		return nil, fmt.Errorf("decode image catalogue: %w", err)
 	}
-	return images, nil
+	normalized := make([]catalogImage, 0, len(images))
+	for _, image := range images {
+		validated, err := normalizeCatalogImage(image)
+		if err != nil {
+			return nil, fmt.Errorf("decode image catalogue: %w", err)
+		}
+		normalized = append(normalized, validated)
+	}
+	return normalized, nil
 }
 
 func (client *Client) PlatformLimits(ctx context.Context) (PlatformLimits, error) {
@@ -359,7 +472,42 @@ func (client *Client) PlatformLimits(ctx context.Context) (PlatformLimits, error
 	}
 	limits.Cache.Modes = append([]string(nil), limits.Cache.Modes...)
 	limits.Cache.AllowedSizes = append([]string(nil), limits.Cache.AllowedSizes...)
+	runtime, err := normalizeRuntimeLimits(limits.Runtime)
+	if err != nil {
+		return PlatformLimits{}, fmt.Errorf("decode platform runtime limits: %w", err)
+	}
+	limits.Runtime = runtime
 	return limits, nil
+}
+
+func normalizeRuntimeLimits(limits PlatformRuntimeLimits) (PlatformRuntimeLimits, error) {
+	normalized := limits
+	normalized.AvailableEngines = make([]string, 0, len(limits.AvailableEngines))
+	seen := make(map[string]struct{}, len(limits.AvailableEngines))
+	for _, raw := range limits.AvailableEngines {
+		engine := strings.TrimSpace(raw)
+		if engine != string(domain.TrainingEngineRayDDP) && engine != string(domain.TrainingEngineRayTrain) {
+			return PlatformRuntimeLimits{}, fmt.Errorf("unsupported engine %q", raw)
+		}
+		if _, duplicate := seen[engine]; duplicate {
+			return PlatformRuntimeLimits{}, fmt.Errorf("duplicate engine %q", engine)
+		}
+		seen[engine] = struct{}{}
+		normalized.AvailableEngines = append(normalized.AvailableEngines, engine)
+	}
+	if limits.ManagedEnabled && !normalized.ManagedAvailable() {
+		return PlatformRuntimeLimits{}, fmt.Errorf("managed engine capability is inconsistent")
+	}
+	if limits.CanaryEnabled && !limits.ManagedEnabled {
+		return PlatformRuntimeLimits{}, fmt.Errorf("canary is enabled while managed engine is disabled")
+	}
+	if limits.ManagedEnabled && (strings.TrimSpace(limits.ProductionRayVersion) != domain.RayVersionProduction || strings.TrimSpace(limits.CanaryRayVersion) != domain.RayVersionCanary) {
+		return PlatformRuntimeLimits{}, fmt.Errorf("managed Ray version capability is inconsistent")
+	}
+	if !limits.ManagedEnabled && containsTrimmed(normalized.AvailableEngines, string(domain.TrainingEngineRayTrain)) {
+		return PlatformRuntimeLimits{}, fmt.Errorf("ray-train is advertised while managed engine is disabled")
+	}
+	return normalized, nil
 }
 
 func (client *Client) Status(ctx context.Context, jobID string) (Job, error) {
@@ -368,6 +516,22 @@ func (client *Client) Status(ctx context.Context, jobID string) (Job, error) {
 		return Job{}, err
 	}
 	return decodeJob(data)
+}
+
+// Checkpoints reads the server-authorized checkpoint list for one job. The
+// endpoint applies tenant and owner scope; selection and path validation remain
+// client-side so a malformed response cannot become a submitted storage path.
+func (client *Client) Checkpoints(ctx context.Context, jobID string) (JobCheckpointPage, error) {
+	data, err := client.request(ctx, http.MethodGet, "/api/v1/jobs/"+url.PathEscape(jobID)+"/checkpoints", nil, nil)
+	if err != nil {
+		return JobCheckpointPage{}, err
+	}
+	var page JobCheckpointPage
+	if err := json.Unmarshal(data, &page); err != nil {
+		return JobCheckpointPage{}, fmt.Errorf("decode checkpoint response")
+	}
+	page.Items = append([]domain.TrainingCheckpoint(nil), page.Items...)
+	return page, nil
 }
 
 // ListJobs returns the caller's visible jobs. The server owns tenant scoping;

@@ -46,6 +46,24 @@ func TestListTenantSummariesUsesTheSameGPUUsageAsEnforcement(t *testing.T) {
 	}
 }
 
+func TestListTenantSummariesCountsRecoveringJobOnceAsActiveAndAllocated(t *testing.T) {
+	repo := testRepository(t)
+	job := testJob()
+	job.Spec.Resources.WorkerReplicas = 2
+	job.Spec.Resources.GPUsPerWorker = 4
+	if err := repo.Create(context.Background(), &job, "admin-recovering-job"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.db.Model(&JobRecord{}).Where("id = ?", job.ID).Update("observed_state", domain.StateRecovering).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	summary := tenantSummaryForTest(t, repo, job.TenantID)
+	if summary.ActiveJobsCount != 1 || summary.GPUQuotaUsed != 8 {
+		t.Fatalf("recovering job was not counted exactly once as active: %+v", summary)
+	}
+}
+
 func TestSetTenantGPUQuotaRejectsNegativeLimit(t *testing.T) {
 	repo := testRepository(t)
 

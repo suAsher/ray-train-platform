@@ -12,17 +12,19 @@ import (
 )
 
 const (
-	metadataImage          = "ray-platform.image"
-	metadataWorkerReplicas = "ray-platform.worker-replicas"
-	metadataGPUsPerWorker  = "ray-platform.gpus-per-worker"
-	metadataCPUPerWorker   = "ray-platform.cpu-per-worker"
-	metadataMemoryWorker   = "ray-platform.memory-per-worker"
-	metadataQueue          = "ray-platform.queue"
-	metadataCacheMode      = "platform.cache.mode"
-	metadataCacheSize      = "platform.cache.size"
-	metadataCachePreload   = "platform.cache.preload"
-	metadataInputSpace     = "platform.data.input-space"
-	metadataInputPath      = "platform.data.input-path"
+	metadataImage           = "ray-platform.image"
+	metadataWorkerReplicas  = "ray-platform.worker-replicas"
+	metadataGPUsPerWorker   = "ray-platform.gpus-per-worker"
+	metadataCPUPerWorker    = "ray-platform.cpu-per-worker"
+	metadataMemoryWorker    = "ray-platform.memory-per-worker"
+	metadataQueue           = "ray-platform.queue"
+	metadataCacheMode       = "platform.cache.mode"
+	metadataCacheSize       = "platform.cache.size"
+	metadataCachePreload    = "platform.cache.preload"
+	metadataInputSpace      = "platform.data.input-space"
+	metadataInputPath       = "platform.data.input-path"
+	metadataTrainingEngine  = "platform.training.engine"
+	nativeManagedOutputRoot = "native-ray"
 )
 
 var (
@@ -78,6 +80,10 @@ func TranslateSubmitRequestWithDefaults(request JobSubmitRequest, defaults Submi
 }
 
 func translateSubmitRequest(request JobSubmitRequest, resources domain.Resources, queue, image string, cache domain.CacheRequest, input domain.DataLocation) (TranslatedSubmitRequest, error) {
+	engine, managed, err := parseTrainingMetadata(request.Metadata)
+	if err != nil {
+		return TranslatedSubmitRequest{}, err
+	}
 	if strings.TrimSpace(request.Entrypoint) == "" || len(request.Entrypoint) > 8192 {
 		return TranslatedSubmitRequest{}, fmt.Errorf("invalid entrypoint")
 	}
@@ -100,20 +106,47 @@ func translateSubmitRequest(request JobSubmitRequest, resources domain.Resources
 		nameSeed = packageName.Name + "\\x00" + request.Entrypoint
 	}
 	nameHash := sha256.Sum256([]byte(nameSeed))
+	output := domain.DataLocation{}
+	if engine == domain.TrainingEngineRayTrain {
+		output = domain.DataLocation{Space: domain.DataSpaceMyRuns, RelativePath: nativeManagedOutputRoot}
+	}
 	return TranslatedSubmitRequest{
 		Package: packageName,
 		Spec: domain.JobSpec{
-			Name:       "rayjob-" + hex.EncodeToString(nameHash[:])[:24],
-			Image:      image,
-			Entrypoint: domain.Entrypoint{Command: []string{"/bin/sh", "-lc", request.Entrypoint}},
-			Execution:  executionProfileForResources(resources),
-			Resources:  resources,
-			Queue:      queue,
-			Cache:      cache,
-			Input:      input,
+			Name:           "rayjob-" + hex.EncodeToString(nameHash[:])[:24],
+			Image:          image,
+			TrainingEngine: engine,
+			Entrypoint:     domain.Entrypoint{Command: []string{"/bin/sh", "-lc", request.Entrypoint}},
+			Execution:      executionProfileForResources(resources),
+			Resources:      resources,
+			Queue:          queue,
+			Cache:          cache,
+			Input:          input,
+			Output:         output,
+			Managed:        managed,
 		},
 		ExternalSubmissionID: externalID,
 	}, nil
+}
+
+func parseTrainingMetadata(metadata map[string]string) (domain.TrainingEngine, domain.ManagedTrainingPolicy, error) {
+	for key := range metadata {
+		if strings.HasPrefix(key, "platform.training.") && key != metadataTrainingEngine {
+			return "", domain.ManagedTrainingPolicy{}, fmt.Errorf("unsupported training metadata %q", key)
+		}
+	}
+	engine := domain.TrainingEngine(strings.TrimSpace(metadata[metadataTrainingEngine])).Resolved()
+	if engine != domain.TrainingEngineRayDDP && engine != domain.TrainingEngineRayTrain {
+		return "", domain.ManagedTrainingPolicy{}, fmt.Errorf("unsupported training engine %q", engine)
+	}
+	managed := domain.ManagedTrainingPolicy{}
+	if engine == domain.TrainingEngineRayTrain {
+		managed = domain.ManagedTrainingPolicy{
+			MaxFailures: 2,
+			Checkpoint:  domain.CheckpointPolicy{EveryEpochs: 1, KeepLatest: 3, KeepBest: 1},
+		}
+	}
+	return engine, managed, nil
 }
 
 func parseCacheMetadata(metadata map[string]string) (domain.CacheRequest, error) {

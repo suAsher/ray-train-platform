@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 
 from runtime_patch import patch_gitignore, patch_training_entrypoint
+from ray_train_managed import patch_managed_training_entrypoint
 
 
 def main() -> int:
@@ -23,7 +24,9 @@ def main() -> int:
         return 2
 
     original = target.read_text(encoding="utf-8")
-    patched = patch_training_entrypoint(original)
+    patched = patch_managed_training_entrypoint(
+        patch_training_entrypoint(original)
+    )
     original_gitignore = gitignore.read_text(encoding="utf-8")
     patched_gitignore = patch_gitignore(original_gitignore)
 

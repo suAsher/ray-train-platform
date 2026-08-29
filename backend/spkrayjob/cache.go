@@ -1,7 +1,6 @@
 package spkrayjob
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -51,13 +50,12 @@ func newProjectCacheDraft(cache projectCache) (projectCacheDraft, error) {
 	}
 }
 
-func resolveProjectCache(ctx context.Context, draft projectCacheDraft, client *Client) (domain.CacheRequest, error) {
+func resolveProjectCache(draft projectCacheDraft, limits *PlatformLimits) (domain.CacheRequest, error) {
 	if draft.mode == "" || draft.mode == domain.CacheModeOff {
 		return domain.CacheRequest{}, nil
 	}
-	limits, err := client.PlatformLimits(ctx)
-	if err != nil {
-		return domain.CacheRequest{}, fmt.Errorf("读取平台缓存限制失败：%w", err)
+	if limits == nil {
+		return domain.CacheRequest{}, errors.New("平台缓存限制快照缺失")
 	}
 	if !limits.Cache.Enabled {
 		return domain.CacheRequest{}, errors.New("平台未启用 runtime 临时缓存")
@@ -72,6 +70,7 @@ func resolveProjectCache(ctx context.Context, draft projectCacheDraft, client *C
 		if size == "" {
 			return domain.CacheRequest{}, errors.New("平台未提供 runtime 临时缓存默认容量，请使用 --cache-size 指定")
 		}
+		var err error
 		requested, err = positiveCacheQuantity(size)
 		if err != nil {
 			return domain.CacheRequest{}, fmt.Errorf("缓存容量 %q 无效，必须是正的 Kubernetes 容量：%w", size, err)

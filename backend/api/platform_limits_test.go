@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
+	"ray-train-platform-backend/runtimecatalog"
 )
 
 type fakePlatformQuotaStore struct {
@@ -88,6 +89,78 @@ func TestPlatformLimitsReportTheDeploymentCeilingsTheServerEnforces(t *testing.T
 	limits := decodePlatformLimits(t, response.Body.Bytes())
 	if limits.MaxWorkerReplicas != 2 || limits.MaxGPUsPerWorker != 8 || limits.MaxTotalGPUs != 16 {
 		t.Fatalf("expected the configured ceilings, got %+v", limits)
+	}
+}
+
+func TestPlatformLimitsExposeEffectiveRuntimeCapabilities(t *testing.T) {
+	principal := auth.Principal{Subject: "admin", TenantID: "local", Roles: []string{domain.RoleSuperAdmin}, AuthType: auth.AuthTypeLocal}
+
+	t.Run("feature flags disabled", func(t *testing.T) {
+		handler := NewHandler(&fakeJobRepository{}, Options{})
+		response := httptest.NewRecorder()
+		limitsRouter(handler, &principal).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/limits", nil))
+
+		runtime := decodePlatformLimits(t, response.Body.Bytes()).Runtime
+		if runtime.ManagedEnabled || runtime.CanaryEnabled {
+			t.Fatalf("disabled features advertised as enabled: %+v", runtime)
+		}
+		if strings.Join(runtime.AvailableEngines, ",") != string(domain.TrainingEngineRayDDP) {
+			t.Fatalf("unexpected disabled engine list: %+v", runtime)
+		}
+		if runtime.ProductionRayVersion != domain.RayVersionProduction || runtime.CanaryRayVersion != domain.RayVersionCanary {
+			t.Fatalf("unexpected runtime versions: %+v", runtime)
+		}
+	})
+
+	t.Run("feature flags enabled", func(t *testing.T) {
+		handler := NewHandler(&fakeJobRepository{}, Options{RuntimePolicy: runtimecatalog.NewPolicy(true, true, nil, []string{"local"})})
+		response := httptest.NewRecorder()
+		limitsRouter(handler, &principal).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/limits", nil))
+
+		limits := decodePlatformLimits(t, response.Body.Bytes())
+		if !limits.Runtime.ManagedEnabled || !limits.Runtime.CanaryEnabled || strings.Join(limits.Runtime.AvailableEngines, ",") != "ray-ddp,ray-train" {
+			t.Fatalf("enabled capabilities missing: %+v", limits.Runtime)
+		}
+		limits.Runtime.AvailableEngines[0] = "mutated"
+		second := httptest.NewRecorder()
+		limitsRouter(handler, &principal).ServeHTTP(second, httptest.NewRequest(http.MethodGet, "/api/v1/limits", nil))
+		if got := decodePlatformLimits(t, second.Body.Bytes()).Runtime.AvailableEngines[0]; got != string(domain.TrainingEngineRayDDP) {
+			t.Fatalf("runtime capabilities retained mutable response state: %q", got)
+		}
+	})
+}
+
+func TestPlatformLimitsScopeManagedAndCanaryCapabilitiesToCallerTenant(t *testing.T) {
+	handler := NewHandler(&fakeJobRepository{}, Options{
+		RuntimePolicy: runtimecatalog.NewPolicy(false, true, []string{"tenant-a"}, []string{"tenant-a", "tenant-b"}),
+	})
+	tests := []struct {
+		tenantID    string
+		wantManaged bool
+		wantCanary  bool
+	}{
+		{tenantID: "tenant-a", wantManaged: true, wantCanary: true},
+		{tenantID: "tenant-b", wantManaged: false, wantCanary: false},
+		{tenantID: "", wantManaged: false, wantCanary: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.tenantID, func(t *testing.T) {
+			principal := auth.Principal{Subject: "admin", TenantID: test.tenantID, Roles: []string{domain.RoleSuperAdmin}, AuthType: auth.AuthTypeLocal}
+			response := httptest.NewRecorder()
+			limitsRouter(handler, &principal).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/limits", nil))
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+			}
+			runtime := decodePlatformLimits(t, response.Body.Bytes()).Runtime
+			if runtime.ManagedEnabled != test.wantManaged || runtime.CanaryEnabled != test.wantCanary {
+				t.Fatalf("tenant %q runtime=%+v want managed=%t canary=%t", test.tenantID, runtime, test.wantManaged, test.wantCanary)
+			}
+			if strings.Contains(response.Body.String(), "tenant-a") || strings.Contains(response.Body.String(), "tenant-b") {
+				t.Fatalf("limits leaked canary tenant allowlist: %s", response.Body.String())
+			}
+		})
 	}
 }
 

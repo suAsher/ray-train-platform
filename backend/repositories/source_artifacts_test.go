@@ -22,7 +22,7 @@ func artifactTestRepository(t *testing.T) *GormRepository {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := database.AutoMigrate(&TenantRecord{}, &UserRecord{}, &SourceArtifactRecord{}); err != nil {
+	if err := database.AutoMigrate(&TenantRecord{}, &UserRecord{}, &SourceArtifactRecord{}, &SourceArtifactRequestRecord{}); err != nil {
 		t.Fatalf("migrate artifact database: %v", err)
 	}
 	return NewGormRepository(database)

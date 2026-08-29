@@ -1,6 +1,8 @@
 package k8s
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -18,6 +20,42 @@ func renderSpec(t *testing.T, job domain.TrainingJob) map[string]any {
 		t.Fatalf("manifest has no spec: %v", err)
 	}
 	return spec
+}
+
+func TestPreUpgradeRayTrainJobKeepsLegacyLifecycleAndLauncherFields(t *testing.T) {
+	job := validRenderJob()
+	job.Spec.TrainingEngine = ""
+	job.Spec.RayVersion = ""
+	job.Spec.Execution = domain.ExecutionProfile{Mode: domain.ExecutionModeRayTrain}
+	manifest, err := RenderRayJob(job, testRenderOptions())
+	if err != nil {
+		t.Fatalf("render pre-upgrade job: %v", err)
+	}
+
+	spec, _, _ := unstructured.NestedMap(manifest.Object, "spec")
+	if got := spec["entrypoint"]; got != "raytrain-launch --mode ray_train --workers 2 --gpus-per-worker 8 -- python train.py --epochs 3" {
+		t.Fatalf("legacy launcher changed: %#v", got)
+	}
+	cluster := spec["rayClusterSpec"].(map[string]any)
+	if got := cluster["rayVersion"]; got != domain.RayVersionLegacy {
+		t.Fatalf("legacy Ray version changed: %#v", got)
+	}
+	workers := cluster["workerGroupSpecs"].([]any)
+	worker := workers[0].(map[string]any)
+	constraints, found, _ := nestedSlice(worker, "template", "spec", "topologySpreadConstraints")
+	if !found || len(constraints) != 1 {
+		t.Fatalf("legacy multi-node topology spread changed: %#v", constraints)
+	}
+	if spec["suspend"] != true || spec["ttlSecondsAfterFinished"] != int64(defaultFailureCleanupTTLSeconds) {
+		t.Fatalf("legacy lifecycle changed: suspend=%#v ttl=%#v", spec["suspend"], spec["ttlSecondsAfterFinished"])
+	}
+	runtimeEnv := spec["runtimeEnvYAML"].(string)
+	encoded := fmt.Sprintf("%#v", manifest.Object)
+	for _, forbidden := range []string{"RAY_TRAIN_V2_ENABLED", "PLATFORM_TRAINING_ENGINE", "PLATFORM_JOB_ID", "callback", "Callback"} {
+		if strings.Contains(runtimeEnv, forbidden) || strings.Contains(encoded, forbidden) {
+			t.Fatalf("pre-upgrade job gained managed field %q", forbidden)
+		}
+	}
 }
 
 // A finished RayJob must tear its RayCluster down, otherwise every completed
@@ -84,4 +122,110 @@ func TestRenderRayJobOmitsActiveDeadlineWhenNoTimeout(t *testing.T) {
 	if _, present := spec["activeDeadlineSeconds"]; present {
 		t.Fatalf("no timeout configured, activeDeadlineSeconds must be omitted")
 	}
+}
+
+func TestManagedRecoveryAttemptUsesBoundedAttemptNameAndCheckpoint(t *testing.T) {
+	job := managedRenderJob(domain.RayVersionProduction)
+	job.Spec.ParentJobID = "job-0123456789abcdef01234567"
+	job.ClusterAttempt = 2
+	job.RayJobUID = "uid-attempt-2"
+	job.ResumeCheckpointID = "checkpoint-epoch-4"
+	job.Spec.ResolvedDataMounts.Checkpoint = &domain.ResolvedDataMount{
+		Space: domain.DataSpaceMyRuns, BindingSpace: domain.DataSpaceWorkspace,
+		ClaimName: "tenant-data", SubPath: "runs/parent/.platform/ray-train/job-0123456789abcdef01234567/checkpoints/checkpoint-parent",
+		MountPath: domain.DataMountCheckpointPath, ReadOnly: true,
+	}
+	job.Spec.ResolvedDataMounts.Output = &domain.ResolvedDataMount{
+		Space: domain.DataSpaceMyRuns, BindingSpace: domain.DataSpaceWorkspace,
+		ClaimName: "tenant-data", SubPath: "tenants/tenant-a/users/user-01/runs/job-01",
+		MountPath: domain.DataMountOutputPath, ReadOnly: false,
+	}
+	manifest := managedManifest(t, job)
+	if got := manifest.GetName(); got != job.ID+"-a2" {
+		t.Fatalf("unexpected recovery attempt name %q", got)
+	}
+	cluster, _, _ := nestedMap(manifest.Object, "spec", "rayClusterSpec")
+	workers, _, _ := nestedSlice(cluster, "workerGroupSpecs")
+	worker := workers[0].(map[string]any)
+	workerPod, _, _ := nestedMap(worker, "template", "spec")
+	wantCheckpoint := domain.DataMountOutputPath + "/.platform/ray-train/" + job.ID + "/checkpoints/" + job.ResumeCheckpointID
+	if got := podEnvironment(workerPod)["PLATFORM_CHECKPOINT_PATH"]; got != wantCheckpoint {
+		t.Fatalf("recovery checkpoint path=%q want=%q", got, wantCheckpoint)
+	}
+	if manifest.GetLabels()["ray.io/job-id"] != job.ID || manifest.GetLabels()["kueue.x-k8s.io/queue-name"] != job.Spec.Queue {
+		t.Fatalf("recovery lost immutable provenance: %#v", manifest.GetLabels())
+	}
+}
+
+func TestManagedChildResumeInitialAttemptUsesResolvedCheckpointMount(t *testing.T) {
+	job := managedRenderJob(domain.RayVersionProduction)
+	job.Spec.ParentJobID = "job-0123456789abcdef01234567"
+	job.ClusterAttempt = 1
+	job.ResumeCheckpointID = "checkpoint-epoch-4"
+	job.Spec.ResolvedDataMounts.Checkpoint = &domain.ResolvedDataMount{
+		Space: domain.DataSpaceMyRuns, BindingSpace: domain.DataSpaceWorkspace,
+		ClaimName: "tenant-data", SubPath: "runs/parent/job-0123456789abcdef01234567/.platform/ray-train/job-0123456789abcdef01234567/checkpoints/checkpoint-epoch-4",
+		MountPath: domain.DataMountCheckpointPath, ReadOnly: true,
+	}
+	job.Spec.ResolvedDataMounts.Output = &domain.ResolvedDataMount{
+		Space: domain.DataSpaceMyRuns, BindingSpace: domain.DataSpaceWorkspace,
+		ClaimName: "tenant-data", SubPath: "tenants/tenant-a/users/user-01/runs/job-01",
+		MountPath: domain.DataMountOutputPath, ReadOnly: false,
+	}
+
+	manifest := managedManifest(t, job)
+	worker := cacheWorkerPodSpec(t, manifest.Object)
+	if got := podEnvironment(worker)["PLATFORM_CHECKPOINT_PATH"]; got != domain.DataMountCheckpointPath {
+		t.Fatalf("child resume checkpoint path=%q want resolved mount %q", got, domain.DataMountCheckpointPath)
+	}
+	assertGovernedDataMount(t, worker, "platform-data-checkpoint", "tenant-data", domain.DataMountCheckpointPath, job.Spec.ResolvedDataMounts.Checkpoint.SubPath, true)
+}
+
+func TestManagedInitialAttemptRejectsResumeCheckpointWithoutParent(t *testing.T) {
+	job := managedRenderJob(domain.RayVersionProduction)
+	job.ClusterAttempt = 1
+	job.ResumeCheckpointID = "checkpoint-epoch-4"
+	job.Spec.ResolvedDataMounts.Checkpoint = &domain.ResolvedDataMount{
+		Space: domain.DataSpaceMyRuns, BindingSpace: domain.DataSpaceWorkspace,
+		ClaimName: "tenant-data", SubPath: "runs/unbound/checkpoints/checkpoint-epoch-4",
+		MountPath: domain.DataMountCheckpointPath, ReadOnly: true,
+	}
+
+	_, err := RenderRayJob(job, testRenderOptions())
+	if err == nil || !strings.Contains(err.Error(), "managed recovery checkpoint") {
+		t.Fatalf("attempt 1 resume without parent must fail closed, got %v", err)
+	}
+}
+
+func TestInitialAndLegacyRayJobNamesRemainBackwardCompatible(t *testing.T) {
+	initial := managedRenderJob(domain.RayVersionProduction)
+	initial.ClusterAttempt = 1
+	if got := managedManifest(t, initial).GetName(); got != initial.ID {
+		t.Fatalf("initial managed attempt name changed: %q", got)
+	}
+	legacy := validRenderJob()
+	legacy.Spec.TrainingEngine = domain.TrainingEngineRayDDP
+	legacy.ClusterAttempt = 7
+	if got := renderManifestName(t, legacy); got != legacy.ID {
+		t.Fatalf("legacy job gained managed attempt suffix: %q", got)
+	}
+}
+
+func TestManagedRecoveryAttemptNameKeepsSuffixWhenJobIDNeedsBounding(t *testing.T) {
+	job := managedRenderJob(domain.RayVersionProduction)
+	job.ID = "job-" + strings.Repeat("a", 80)
+	job.ClusterAttempt = domain.ManagedMaxFailuresLimit + 1
+	name := rayJobResourceName(job)
+	if len(name) > 63 || !strings.HasSuffix(name, "-a11") {
+		t.Fatalf("bounded recovery name lost attempt suffix: %q", name)
+	}
+}
+
+func renderManifestName(t *testing.T, job domain.TrainingJob) string {
+	t.Helper()
+	manifest, err := RenderRayJob(job, testRenderOptions())
+	if err != nil {
+		t.Fatalf("render RayJob: %v", err)
+	}
+	return manifest.GetName()
 }

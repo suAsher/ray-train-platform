@@ -7,6 +7,7 @@ import concurrent.futures
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -30,6 +31,103 @@ class StageResult:
     bytes: int
     seconds: float
     roots: tuple[RootStageResult, ...]
+
+
+@dataclass(frozen=True)
+class MetricIdentity:
+    job_id: str
+    namespace: str
+    ray_cluster: str
+    node_type: str
+    pod: str
+
+
+_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_DNS_VALUE = re.compile(r"^[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?$")
+_METRIC_KEYS = (
+    "version", "platform_job_id", "exported_namespace", "ray_io_cluster",
+    "ray_io_node_type", "pod", "bytes", "files", "seconds", "copied", "hits", "misses",
+)
+
+
+def _validate_metric_identity(identity: MetricIdentity) -> None:
+    if not _IDENTIFIER.fullmatch(identity.job_id):
+        raise ValueError("job metric label is invalid")
+    for value in (identity.namespace, identity.ray_cluster, identity.pod):
+        if len(value) > 253 or not _DNS_VALUE.fullmatch(value):
+            raise ValueError("Kubernetes metric label is invalid")
+    if identity.node_type != "worker":
+        raise ValueError("worker metric label is invalid")
+
+
+def _read_metric_counts(path: Path, identity: MetricIdentity) -> tuple[int, int]:
+    if not path.exists():
+        return 0, 0
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 4096:
+        return 0, 0
+    values: dict[str, str] = {}
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            key, separator, value = line.partition("=")
+            if not separator or key in values or key not in _METRIC_KEYS:
+                return 0, 0
+            values[key] = value
+    except OSError:
+        return 0, 0
+    expected = {
+        "platform_job_id": identity.job_id,
+        "exported_namespace": identity.namespace,
+        "ray_io_cluster": identity.ray_cluster,
+        "ray_io_node_type": identity.node_type,
+        "pod": identity.pod,
+    }
+    if set(values) != set(_METRIC_KEYS) or values.get("version") != "1" or any(values.get(key) != value for key, value in expected.items()):
+        return 0, 0
+    try:
+        hits, misses = int(values["hits"]), int(values["misses"])
+    except ValueError:
+        return 0, 0
+    return (hits, misses) if 0 <= hits <= 1_000_000_000 and 0 <= misses <= 1_000_000_000 else (0, 0)
+
+
+def write_preload_metrics(cache_roots: Sequence[Path], result: StageResult, identity: MetricIdentity) -> None:
+    _validate_metric_identity(identity)
+    by_root = {str(Path(item.path).resolve()): item for item in result.roots}
+    for raw_root in cache_roots:
+        root = Path(raw_root).resolve()
+        metric_dir = root / ".ray-cache-metrics"
+        if metric_dir.is_symlink():
+            raise ValueError("cache metric directory must not be a symbolic link")
+        metric_dir.mkdir(mode=0o755, exist_ok=True)
+        if metric_dir.is_symlink() or not metric_dir.is_dir():
+            raise ValueError("cache metric directory must be a real directory")
+        metric_path = metric_dir / "preload.metrics"
+        hits, misses = _read_metric_counts(metric_path, identity)
+        hits += 0 if result.copied else 1
+        misses += 1 if result.copied else 0
+        root_result = by_root.get(str(root), RootStageResult(path=str(root), files=0, bytes=0))
+        values = {
+            "version": "1", "platform_job_id": identity.job_id,
+            "exported_namespace": identity.namespace, "ray_io_cluster": identity.ray_cluster,
+            "ray_io_node_type": identity.node_type, "pod": identity.pod,
+            "bytes": str(max(root_result.bytes, 0)), "files": str(max(root_result.files, 0)),
+            "seconds": format(max(result.seconds, 0.0), ".6f"),
+            "copied": "1" if result.copied else "0",
+            "hits": str(hits), "misses": str(misses),
+        }
+        encoded = "".join(f"{key}={values[key]}\n" for key in _METRIC_KEYS)
+        temporary = metric_path.with_name(f".preload.{os.getpid()}.{time.time_ns()}.tmp")
+        try:
+            with temporary.open("x", encoding="utf-8") as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, metric_path)
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def _is_within(path: Path, root: Path) -> bool:
@@ -212,6 +310,7 @@ def stage_selected_dataset(
         temporary_ready.replace(ready)
         return result
 
+    reuse_started = time.perf_counter()
     deadline = time.monotonic() + timeout_seconds
     while not ready.is_file():
         if time.monotonic() >= deadline:
@@ -225,7 +324,7 @@ def stage_selected_dataset(
         copied=False,
         files=int(payload.get("files", 0)),
         bytes=int(payload.get("bytes", 0)),
-        seconds=float(payload.get("seconds", 0.0)),
+        seconds=round(max(time.perf_counter() - reuse_started, 1e-9), 6),
         roots=tuple(RootStageResult(**entry) for entry in payload.get("roots", [])),
     )
 
@@ -252,6 +351,24 @@ def main() -> int:
         copy_workers=int(os.environ.get("PLATFORM_CACHE_COPY_WORKERS", "32")),
         max_bytes_per_root=int(os.environ.get("PLATFORM_CACHE_LIMIT_BYTES_PER_DISK", "0")),
     )
+    identity_values = {
+        "job_id": os.environ.get("PLATFORM_JOB_ID", "").strip(),
+        "namespace": os.environ.get("PLATFORM_POD_NAMESPACE", "").strip(),
+        "ray_cluster": os.environ.get("PLATFORM_RAY_CLUSTER", "").strip(),
+        "node_type": os.environ.get("PLATFORM_RAY_NODE_TYPE", "").strip(),
+        "pod": os.environ.get("PLATFORM_POD_NAME", "").strip(),
+    }
+    if any(identity_values.values()):
+        try:
+            if not all(identity_values.values()):
+                raise ValueError("cache metric identity is incomplete")
+            write_preload_metrics(
+                [Path(item) for item in paths_value.split(":") if item],
+                result,
+                MetricIdentity(**identity_values),
+            )
+        except Exception:
+            print("RAYTRAIN_CACHE_METRICS_WARNING=publication_failed", file=sys.stderr, flush=True)
     print(
         "RAYTRAIN_DATASET_CACHE=" + json.dumps(_result_payload(result), ensure_ascii=False),
         file=sys.stderr,

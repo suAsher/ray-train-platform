@@ -48,6 +48,7 @@ type Options struct {
 	UploadRateLimit     int
 	TailPollInterval    time.Duration
 	Now                 func() time.Time
+	RayVersion          string
 }
 
 type Handler struct {
@@ -62,6 +63,7 @@ type Handler struct {
 	uploads       chan struct{}
 	tailPoll      time.Duration
 	now           func() time.Time
+	rayVersion    string
 }
 
 func NewHandler(repository Repository, store objectstore.Store, submission *api.SubmissionService, options Options) (*Handler, error) {
@@ -108,7 +110,11 @@ func NewHandler(repository Repository, store objectstore.Store, submission *api.
 	if now == nil {
 		now = time.Now
 	}
-	return &Handler{repository: repository, store: store, submission: submission, limits: limits, spoolDir: spoolDir, defaults: options.Defaults, logs: options.Logs, uploadLimiter: limiter, uploads: make(chan struct{}, maxConcurrent), tailPoll: tailPoll, now: now}, nil
+	rayVersion := strings.TrimSpace(options.RayVersion)
+	if rayVersion == "" {
+		rayVersion = domain.RayVersionLegacy
+	}
+	return &Handler{repository: repository, store: store, submission: submission, limits: limits, spoolDir: spoolDir, defaults: options.Defaults, logs: options.Logs, uploadLimiter: limiter, uploads: make(chan struct{}, maxConcurrent), tailPoll: tailPoll, now: now, rayVersion: rayVersion}, nil
 }
 
 func validateSpoolDir(spoolDir string) error {
@@ -158,7 +164,7 @@ func (handler *Handler) RegisterRoutes(group *gin.RouterGroup) {
 func (handler *Handler) version(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"version":      "4",
-		"ray_version":  "2.35.0",
+		"ray_version":  handler.rayVersion,
 		"ray_commit":   "",
 		"session_name": "ray-training-platform",
 	})
@@ -833,7 +839,7 @@ func jobDetails(job domain.TrainingJob) jobDetailsResponse {
 
 func rayStatus(state domain.State) string {
 	switch state {
-	case domain.StateRunning:
+	case domain.StateRunning, domain.StateRecovering:
 		return "RUNNING"
 	case domain.StateSucceeded:
 		return "SUCCEEDED"

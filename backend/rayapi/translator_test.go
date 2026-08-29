@@ -117,6 +117,63 @@ func TestTranslateSubmitRequestWithDefaultsAcceptsBareRayCLIWorkingDirectory(t *
 	if translated.Spec.Cache != (domain.CacheRequest{}) {
 		t.Fatalf("omitted cache metadata must leave cache off, got %+v", translated.Spec.Cache)
 	}
+	if translated.Spec.TrainingEngine != domain.TrainingEngineRayDDP || translated.Spec.RayVersion != "" || translated.Spec.Managed != (domain.ManagedTrainingPolicy{}) {
+		t.Fatalf("native Ray metadata must default to legacy engine without forging a Ray version: %+v", translated.Spec)
+	}
+}
+
+func TestTranslateSubmitRequestCarriesManagedTrainingEngine(t *testing.T) {
+	translated, err := TranslateSubmitRequestWithDefaults(JobSubmitRequest{
+		Entrypoint: "python train.py", RuntimeEnv: map[string]any{"working_dir": "gcs://" + testPackageSHA256 + ".zip"},
+		Metadata: map[string]string{metadataTrainingEngine: "ray-train"},
+	}, SubmissionDefaults{Image: testImageDigest, WorkerReplicas: 1, GPUsPerWorker: 1, CPUPerWorker: 8, MemoryPerWorker: "32Gi"})
+	if err != nil {
+		t.Fatalf("translate managed metadata: %v", err)
+	}
+	wantManaged := domain.ManagedTrainingPolicy{
+		MaxFailures: 2,
+		Checkpoint:  domain.CheckpointPolicy{EveryEpochs: 1, KeepLatest: 3, KeepBest: 1},
+	}
+	if translated.Spec.TrainingEngine != domain.TrainingEngineRayTrain || translated.Spec.RayVersion != "" || translated.Spec.Managed != wantManaged {
+		t.Fatalf("managed metadata must select engine/default recovery but not Ray version: %+v", translated.Spec)
+	}
+	if translated.Spec.Output.Space != domain.DataSpaceMyRuns || translated.Spec.Output.RelativePath != "native-ray" {
+		t.Fatalf("managed native submission did not receive the server-owned output root: %+v", translated.Spec.Output)
+	}
+	if got := translated.Spec.Entrypoint.Command; len(got) != 3 || got[0] != "/bin/sh" || got[1] != "-lc" || got[2] != "python train.py" {
+		t.Fatalf("working-dir shell entrypoint compatibility changed: %#v", got)
+	}
+}
+
+func TestTranslateSubmitRequestRejectsMetadataThatCouldControlPlacementOrOutput(t *testing.T) {
+	defaults := SubmissionDefaults{Image: testImageDigest, WorkerReplicas: 1, GPUsPerWorker: 1, CPUPerWorker: 8, MemoryPerWorker: "32Gi"}
+	for _, forbidden := range []string{"platform.data.output-path", "ray-platform.namespace", "ray-platform.node-selector"} {
+		t.Run(forbidden, func(t *testing.T) {
+			_, err := TranslateSubmitRequestWithDefaults(JobSubmitRequest{
+				Entrypoint: "python train.py", RuntimeEnv: map[string]any{"working_dir": "gcs://" + testPackageSHA256 + ".zip"},
+				Metadata: map[string]string{metadataTrainingEngine: string(domain.TrainingEngineRayTrain), forbidden: "attacker-controlled"},
+			}, defaults)
+			if err == nil {
+				t.Fatalf("accepted placement/output metadata %q", forbidden)
+			}
+		})
+	}
+}
+
+func TestTranslateSubmitRequestRejectsUnknownTrainingMetadata(t *testing.T) {
+	defaults := SubmissionDefaults{Image: testImageDigest, WorkerReplicas: 1, GPUsPerWorker: 1, CPUPerWorker: 8, MemoryPerWorker: "32Gi"}
+	for _, metadata := range []map[string]string{
+		{metadataTrainingEngine: "ray-magic"},
+		{"platform.training.ray-version": "2.58.0"},
+		{"platform.training.max-failures": "9"},
+	} {
+		_, err := TranslateSubmitRequestWithDefaults(JobSubmitRequest{
+			Entrypoint: "python train.py", RuntimeEnv: map[string]any{"working_dir": "gcs://" + testPackageSHA256 + ".zip"}, Metadata: metadata,
+		}, defaults)
+		if err == nil {
+			t.Fatalf("unsupported training metadata was accepted: %#v", metadata)
+		}
+	}
 }
 
 func TestTranslateSubmitRequestWithDefaultsTreatsExplicitCacheOffAsZero(t *testing.T) {

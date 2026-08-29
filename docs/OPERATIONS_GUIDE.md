@@ -162,10 +162,11 @@ Alloy 使用 Kubernetes API 拉取 Pod 日志，不要求每个 GPU 节点运行
   → preflight / deploy / verify
 ```
 
-当前构建机标准目录：
+发布 shell 必须由维护者显式提供仓库绝对路径，例如：
 
-```text
-/opt/guofeng/vke-cluster/ray-platform
+```bash
+PLATFORM_REPO_ROOT='<absolute-build-directory>'
+test -d "$PLATFORM_REPO_ROOT/.git"
 ```
 
 本地开发目录可用于编码和评审，但线上发布必须对应一个可追溯 commit/tag。不要长期双向 rsync 本地和构建机，也不要以构建机未提交工作区作为唯一源码。
@@ -173,8 +174,8 @@ Alloy 使用 Kubernetes API 拉取 Pod 日志，不要求每个 GPU 节点运行
 若构建机仓库因目录属主不同出现 `detected dubious ownership`，先核对目录确实是本项目，再使用单次只读参数检查：
 
 ```bash
-git -c safe.directory=/opt/guofeng/vke-cluster/ray-platform status --short
-git -c safe.directory=/opt/guofeng/vke-cluster/ray-platform rev-parse HEAD
+git -c safe.directory="$PLATFORM_REPO_ROOT" status --short
+git -c safe.directory="$PLATFORM_REPO_ROOT" rev-parse HEAD
 ```
 
 长期应统一构建目录属主和发布用户。不要配置 `safe.directory=*`，也不要在没有确认来源的目录上全局豁免 Git 安全检查。
@@ -343,7 +344,7 @@ chmod -R go-rwx "$backup_dir"
 ### 5.3 平台原子升级
 
 ```bash
-cd /opt/guofeng/vke-cluster/ray-platform
+cd "${PLATFORM_REPO_ROOT:?set PLATFORM_REPO_ROOT to the checkout root}"
 
 bash ops/platform/preflight.sh \
   --profile deploy/profiles/vke-cpu-ha.yaml \
@@ -404,7 +405,7 @@ bash ops/platform/restore-secrets.sh \
 MLflow 使用独立 namespace、独立 PostgreSQL 和独立 Artifact PVC：
 
 ```bash
-cd /opt/guofeng/vke-cluster/ray-platform
+cd "${PLATFORM_REPO_ROOT:?set PLATFORM_REPO_ROOT to the checkout root}"
 bash ops/mlflow/deploy.sh
 bash ops/mlflow/verify.sh
 ```
@@ -455,7 +456,7 @@ bash ops/dns/deploy-coredns-split-dns.sh --check
 
 调度脚本使 CoreDNS 优先运行在 CPU 控制面节点，并允许生产 GPU 节点兜底，但不允许虚拟节点。每副本请求 `250m` CPU / `256Mi` 内存，限额为 `2` CPU / `1Gi`，不占用 GPU 卡。
 
-分流脚本把火山服务域名转发到 VKE VPC DNS `100.96.0.2/100.96.0.3`，并把 CoreDNS 默认根转发器显式设置为 IDC DNS `192.168.110.61/192.168.111.63`。不要使用 `/etc/resolv.conf` 作为默认转发器，否则 `gitlab.qomolo.com` 等 IDC 域名可能被解析到不可达的公网地址。脚本在 rollout 失败时自动恢复旧 Corefile。
+分流脚本把云服务域名转发到当前环境配置的 VKE VPC DNS，并把 CoreDNS 默认根转发器显式设置为当前环境配置的 IDC DNS。地址只存在于受控环境配置，不写入公开手册。不要使用 `/etc/resolv.conf` 作为默认转发器，否则 IDC 私有域名可能被解析到不可达的公网地址。脚本在 rollout 失败时自动恢复旧 Corefile。
 
 hostNetwork 的 FSX Agent 不一定使用 CoreDNS；新节点还要执行节点侧分流：
 
@@ -463,6 +464,63 @@ hostNetwork 的 FSX Agent 不一定使用 CoreDNS；新节点还要执行节点�
 sudo bash ops/storage/shanghai-data-transfer/50-configure-node-split-dns.sh --apply
 sudo bash ops/storage/shanghai-data-transfer/50-configure-node-split-dns.sh --check
 ```
+
+### 5.10 Ray Train feature gates 与 KubeRay 1.6.2 升级
+
+Ray 编排 DDP 与 Ray Train 托管使用**并行运行时镜像**，不得把现有 Ray 2.35 镜像就地覆盖。生产托管镜像固定 Ray 2.56.1，canary 镜像固定 Ray 2.58.0；`ray-ddp` 兼容路径继续使用其已验收 digest。平台 Chart 的四个门禁为：
+
+```text
+RAY_TRAIN_MANAGED_ENABLED=false
+RAY_TRAIN_MANAGED_TENANTS=
+RAY_TRAIN_CANARY_ENABLED=false
+RAY_TRAIN_CANARY_TENANTS=
+```
+
+默认值全部关闭。`RAY_TRAIN_MANAGED_ENABLED=true` 表示对所有非空 tenant 开放 2.56.1 managed；保持 false 时，仅 `RAY_TRAIN_MANAGED_TENANTS` 中的明确 tenant 可用。2.58.0 还必须同时满足 managed 权限、`RAY_TRAIN_CANARY_ENABLED=true` 和 `RAY_TRAIN_CANARY_TENANTS`。空 tenant 与空 allowlist 一律 fail closed。先对明确租户完成 Portal、`spk-rayjob`、原生 Ray API、恢复和清理验收后，才可评审全局开关。关闭门禁只影响新提交，**不得修改运行中 RayJob**，也不得切换已持久化任务的引擎、RayCluster identity 或镜像。
+
+KubeRay Operator 只允许在**零训练负载**维护窗升级到 **KubeRay 1.6.2**。这里的零负载不是仅看 `Running` phase：所有 namespace 中不得存在非终态 RayJob、仍运行 RayCluster、运行中的 debug workspace 或活动 Kueue Workload。**Operator 绝不在训练期间升级**，也不能依靠“任务应该很快结束”绕过预检。
+
+升级流程必须使用仓库中固定制品和显式目标 context：
+
+1. 记录并人工确认当前 kube context。运行 `ops/kuberay/preflight-upgrade.sh`，确认 API、CRD、Kueue、Operator 双副本和全部负载状态。
+2. 由 `ops/kuberay/backup.sh` 在调用者提供的受保护父目录下生成唯一备份。必须看到校验和与原子 `COMPLETE` 标记；备份包括 CRD、Operator Deployment/Pod image 与 imageID、Helm values/status/history/manifest，以及 Ray/Kueue 资源。
+3. 运行 `ops/kuberay/upgrade-1.6.2.sh`。脚本先建立维护门禁：Backend 缩容为零、所有 ClusterQueue admission 设为 Hold；门禁生效后再次预检。任何备份不完整或二次预检失败都必须发生在首次 CRD 写入前。
+4. 脚本只使用已固定并校验摘要的 KubeRay 1.6.2 CRD 和 Chart，先更新 CRD，再升级 Operator；不修改 Ray runtime 镜像和租户资源。
+5. `ops/kuberay/verify.sh` 核验 CRD served/storage、Helm chart 版本、Operator 两副本 rollout、Pod image/imageID digest、webhook/API 和既有资源可读性。
+
+下面是完整参数模板。`EXPECTED_*` 必须抄自变更单或 release evidence 中的**预先审计记录**，由第二位审阅者核对；禁止在维护现场临时计算摘要后自行确认，也不能把尖括号占位符直接执行。`upgrade-1.6.2.sh` 会在任何维护门禁或 CRD 写入前自动创建另一份强制备份；单独运行 `backup.sh` 是维护窗前的可读性与恢复材料检查，不替代该硬前置：
+
+```bash
+export KUBERAY_CONTEXT='<reviewed-context>'
+export CONFIRM_KUBE_CONTEXT="$KUBERAY_CONTEXT"
+export KUBERAY_NAMESPACE='kuberay-system'
+export KUBERAY_RELEASE='kuberay-operator'
+export KUBERAY_BACKUP_PARENT='/secure/backup-parent'
+
+export EXPECTED_KUBERAY_CRD_SHA256='<pre-audited-64-lowercase-hex>'
+export CONFIRM_KUBERAY_CRD_SHA256="$EXPECTED_KUBERAY_CRD_SHA256"
+export EXPECTED_KUBERAY_OPERATOR_IMAGE_DIGEST='<pre-audited-64-lowercase-hex>'
+export CONFIRM_KUBERAY_OPERATOR_IMAGE_DIGEST="$EXPECTED_KUBERAY_OPERATOR_IMAGE_DIGEST"
+
+: "只读预检；必须确认所有 namespace 零训练、debug、Kueue 活动负载。"
+bash ops/kuberay/preflight-upgrade.sh
+
+: "维护窗前独立备份检查；记录唯一目录并核对 COMPLETE/checksums.sha256。"
+bash ops/kuberay/backup.sh "$KUBERAY_BACKUP_PARENT"
+
+: "审批人确认 context、审计摘要、备份父目录和回滚责任人后才设置。"
+export CONFIRM_KUBERAY_UPGRADE=1
+bash ops/kuberay/upgrade-1.6.2.sh
+
+: "upgrade 已自动调用 verify；保留显式复验命令作为变更记录。"
+bash ops/kuberay/verify.sh
+```
+
+首次 CRD 写操作开始后，CRD、Helm 或 verify 任一失败都必须保持 Backend 为零、ClusterQueue 为 Hold，并输出备份路径和人工恢复提示。只有 verify 完整成功后，才先恢复全部 ClusterQueue 并确认 Active，再恢复 Backend 原副本并确认 Ready；任一队列恢复失败时 Backend 必须保持为零。
+
+回滚不是盲目执行 `helm rollback`。先保持维护门禁，保存失败现场，用备份中的 chart metadata、manifest、CRD 和镜像/imageID 确定兼容回退路径；CRD storage version 已变化时必须由变更评审确认迁移兼容性。恢复完成后重新执行 verify，最后按“队列先 Active、Backend 后 Ready”的顺序恢复流量。
+
+Ray 2.35 的已知风险包括旧 Jobs API/客户端协议差异、较旧 KubeRay 状态语义以及与托管 checkpoint/recovery 契约不一致；它只属于 `ray-ddp` 兼容基线，不能作为 `ray-train` 托管镜像。Ray History Server 当前仍为 **alpha** 能力，不作为生产历史真相或升级成功条件；终态历史依赖平台数据库、Loki、Prometheus/Grafana、MLflow 和持久 checkpoint/产物。
 
 ## 6. GPU 节点扩容和下线
 
@@ -555,7 +613,7 @@ kubectl -n <namespace> get events --field-selector involvedObject.name=<pod> --s
 
 ```bash
 kubectl -n ray-train-platform get ingress
-kubectl -n ray-train-platform describe ingress ray-platform-rayctl-https-ingress
+kubectl -n ray-train-platform describe ingress <platform-ingress-name>
 kubectl -n ray-train-platform get svc,endpoints,endpointslice
 kubectl -n ray-train-platform get deploy,pods -o wide
 kubectl -n ray-train-platform logs deploy/ray-train-frontend --tail=200
@@ -677,7 +735,7 @@ Pod 最多接受 3 个 nameserver。把 4 个 DNS 同时写进 Pod `dnsConfig.na
 
 当前策略：
 
-- 火山 TOS/STS/API 域名通过 CoreDNS 分流到 `100.96.0.2`、`100.96.0.3`。
+- 云 TOS/STS/API 域名通过 CoreDNS 分流到受控环境配置的 VPC DNS。
 - IDC 域名走原 IDC DNS 链。
 - hostNetwork FSX Agent 由节点 `systemd-resolved` 路由分流。
 

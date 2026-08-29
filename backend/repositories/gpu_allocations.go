@@ -16,6 +16,7 @@ var activeGPUAllocationJobStates = []string{
 	string(domain.StateAdmitted),
 	string(domain.StateProvisioning),
 	string(domain.StateRunning),
+	string(domain.StateRecovering),
 	string(domain.StateCanceling),
 	string(domain.StateDeleting),
 	string(domain.StateUnknown),

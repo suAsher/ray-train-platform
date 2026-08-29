@@ -1,0 +1,17 @@
+name: ray-data-stage-smoke
+image: harbor.wellspiking.ai/guofeng.su/ray-train-pytorch-ray-train@sha256:e5a526eba5643ec50cb1ef135af8203594c0a78849cc2081056bc5fa352ff26c
+entrypoint: python train.py
+engine: ray-train
+dataMode: ray-data-stage
+workers: 1
+gpusPerWorker: 1
+cpuPerWorker: 8
+memoryPerWorker: 32Gi
+cache:
+  mode: runtime
+  size: 200Gi
+input:
+  space: public
+  path: bevfusion/fz-3dod-v1/platform-validation/annotations/fz-0429-platform-smoke-128
+output:
+  path: acceptance/ray-data-stage-smoke

@@ -7,6 +7,37 @@ readonly test_profile="${root_dir}/deploy/profiles/test.yaml"
 readonly production_profile="${root_dir}/deploy/profiles/production.yaml.example"
 readonly cpu_ha_profile="${root_dir}/deploy/profiles/vke-cpu-ha.yaml"
 
+for expected in \
+  '  managedEnabled: false' \
+  '  managedTenants: []' \
+  '  canaryEnabled: false' \
+  '  canaryTenants: []' \
+  '  productionVersion: "2.56.1"' \
+  '  canaryVersion: "2.58.0"'; do
+  grep -Fq -- "${expected}" "${chart_dir}/values.yaml" || {
+    echo "default Ray Train feature gate missing: ${expected}" >&2
+    exit 1
+  }
+  grep -Fq -- "${expected}" "${chart_dir}/values-prod.yaml.example" || {
+    echo "production Ray Train feature gate missing: ${expected}" >&2
+    exit 1
+  }
+done
+for expected in RAY_TRAIN_MANAGED_ENABLED RAY_TRAIN_MANAGED_TENANTS RAY_TRAIN_CANARY_ENABLED RAY_TRAIN_CANARY_TENANTS; do
+  grep -Fq -- "${expected}" "${chart_dir}/templates/backend-deployment.yaml" || {
+    echo "backend feature-gate environment missing: ${expected}" >&2
+    exit 1
+  }
+done
+grep -Fq -- 'join "," .Values.rayTrain.managedTenants' "${chart_dir}/templates/backend-deployment.yaml" || {
+  echo 'RAY_TRAIN_MANAGED_TENANTS must render as a comma-separated array' >&2
+  exit 1
+}
+grep -Fq -- 'join "," .Values.rayTrain.canaryTenants' "${chart_dir}/templates/backend-deployment.yaml" || {
+  echo 'RAY_TRAIN_CANARY_TENANTS must render as a comma-separated array' >&2
+  exit 1
+}
+
 for command in helm grep mktemp; do
   command -v "$command" >/dev/null || { echo "missing command: ${command}" >&2; exit 1; }
 done
@@ -15,13 +46,19 @@ test_rendered="$(mktemp)"
 production_rendered="$(mktemp)"
 cpu_ha_rendered="$(mktemp)"
 network_rendered="$(mktemp)"
-trap 'rm -f "$test_rendered" "$production_rendered" "$cpu_ha_rendered" "$network_rendered"' EXIT
+canary_rendered="$(mktemp)"
+trap 'rm -f "$test_rendered" "$production_rendered" "$cpu_ha_rendered" "$network_rendered" "$canary_rendered"' EXIT
 
 helm lint "$chart_dir" --values "$test_profile" >/dev/null
 helm template ray-platform "$chart_dir" --namespace ray-train-platform --values "$test_profile" >"$test_rendered"
 helm template ray-platform "$chart_dir" --namespace ray-train-platform --values "$production_profile" >"$production_rendered"
 helm template ray-platform "$chart_dir" --namespace ray-train-platform --values "$cpu_ha_profile" >"$cpu_ha_rendered"
 helm template ray-platform "$chart_dir" --namespace ray-train-platform --values "$cpu_ha_profile" --set albInstance.enabled=true >"$network_rendered"
+helm template ray-platform "$chart_dir" --namespace ray-train-platform --values "$test_profile" \
+  --set rayTrain.managedEnabled=true \
+  --set 'rayTrain.managedTenants={tenant-managed-a,tenant-managed-b}' \
+  --set rayTrain.canaryEnabled=true \
+  --set 'rayTrain.canaryTenants={tenant-canary}' >"$canary_rendered"
 
 require() {
   local file="$1"
@@ -67,6 +104,13 @@ require "$cpu_ha_rendered" 'name: LOCAL_CACHE_MOUNT_PATH_DATA2'
 require "$cpu_ha_rendered" 'value: "/mnt/cache2"'
 require "$cpu_ha_rendered" 'value: "200Gi,500Gi,1Ti,2Ti,4Ti,5Ti"'
 require "$cpu_ha_rendered" 'value: "5Ti"'
+require "$test_rendered" 'name: RAY_TRAIN_MANAGED_ENABLED'
+require "$test_rendered" 'name: RAY_TRAIN_MANAGED_TENANTS'
+require "$test_rendered" 'name: RAY_TRAIN_CANARY_ENABLED'
+require "$test_rendered" 'name: RAY_TRAIN_CANARY_TENANTS'
+require "$test_rendered" 'value: "false"'
+require "$canary_rendered" 'value: "tenant-managed-a,tenant-managed-b"'
+require "$canary_rendered" 'value: "tenant-canary"'
 require "$cpu_ha_rendered" 'name: spk-rayjob-release'
 require "$cpu_ha_rendered" 'ingressClassName: raytrain-prod-alb'
 require "$network_rendered" 'kind: ALBInstance'
@@ -122,4 +166,5 @@ bash "${root_dir}/ops/platform/test/verify-rendered-ingress-test.sh"
 bash "${root_dir}/ops/platform/test/ha-rollout-template-test.sh"
 bash "${root_dir}/scripts/test-external-spk-rayjob-e2e-contract.sh"
 bash "${root_dir}/scripts/test-go-builder-path-contract.sh"
+bash "${root_dir}/scripts/test-ray-runtime-images.sh" --contract-only
 bash "${root_dir}/scripts/test-nvme-cache-delivery.sh"

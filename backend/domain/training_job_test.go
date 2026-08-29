@@ -205,3 +205,255 @@ func TestJobSpecValidateRequiresArtifactIDForArtifactSource(t *testing.T) {
 		t.Fatalf("artifact source with artifactId should be valid before materialization: %v", err)
 	}
 }
+
+func TestManagedEngineRejectsRay235(t *testing.T) {
+	spec := validJobSpec()
+	spec.TrainingEngine = TrainingEngineRayTrain
+	spec.RayVersion = "2.35.0"
+	if err := spec.Validate(); err == nil || !strings.Contains(err.Error(), "Ray 2.56.1") {
+		t.Fatalf("expected managed-runtime version rejection, got %v", err)
+	}
+}
+
+func TestManagedEngineAcceptsProductionAndCanaryVersions(t *testing.T) {
+	for _, version := range []string{RayVersionProduction, RayVersionCanary} {
+		t.Run(version, func(t *testing.T) {
+			spec := validJobSpec()
+			spec.TrainingEngine = TrainingEngineRayTrain
+			spec.RayVersion = version
+			spec.Managed = ManagedTrainingPolicy{
+				MaxFailures: 2,
+				Checkpoint:  CheckpointPolicy{EveryEpochs: 1, KeepLatest: 3, KeepBest: 1},
+			}
+			if err := spec.Validate(); err != nil {
+				t.Fatalf("expected Ray %s to support managed training: %v", version, err)
+			}
+		})
+	}
+}
+
+func TestManagedEngineValidatesPolicy(t *testing.T) {
+	spec := validJobSpec()
+	spec.TrainingEngine = TrainingEngineRayTrain
+	spec.RayVersion = RayVersionProduction
+	spec.Managed.MaxFailures = 11
+	if err := spec.Validate(); err == nil || !strings.Contains(err.Error(), "maxFailures") {
+		t.Fatalf("expected managed policy rejection, got %v", err)
+	}
+}
+
+func TestJobSpecTrainingEngineValidation(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		engine  TrainingEngine
+		wantErr string
+	}{
+		{name: "omitted legacy engine"},
+		{name: "whitespace legacy engine", engine: " \t"},
+		{name: "explicit ray ddp", engine: TrainingEngineRayDDP},
+		{name: "unknown engine", engine: "spark", wantErr: "unsupported training engine"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			spec := validJobSpec()
+			spec.TrainingEngine = test.engine
+			err := spec.Validate()
+			if test.wantErr == "" && err != nil {
+				t.Fatalf("validate job spec: %v", err)
+			}
+			if test.wantErr != "" && (err == nil || !strings.Contains(err.Error(), test.wantErr)) {
+				t.Fatalf("expected error containing %q, got %v", test.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestJobSpecDataModeValidation(t *testing.T) {
+	rayData, err := NewRayDataDatasetConfig(RayDataFormatImages, "images/train")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagedFiles, err := NewRayDataDatasetConfig(RayDataFormatFiles, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name    string
+		prepare func(*JobSpec)
+		wantErr string
+	}{
+		{name: "omitted mode", prepare: func(*JobSpec) {}},
+		{name: "mount mode", prepare: func(spec *JobSpec) { spec.DataMode = DataModeMount }},
+		{name: "ray data with managed engine", prepare: func(spec *JobSpec) {
+			spec.TrainingEngine = TrainingEngineRayTrain
+			spec.RayVersion = RayVersionProduction
+			spec.DataMode = DataModeRayData
+			spec.Managed.RayData = rayData
+		}},
+		{name: "ray data without dataset config", prepare: func(spec *JobSpec) {
+			spec.TrainingEngine = TrainingEngineRayTrain
+			spec.RayVersion = RayVersionProduction
+			spec.DataMode = DataModeRayData
+		}, wantErr: "Ray Data dataset config is required"},
+		{name: "mount with ray data config", prepare: func(spec *JobSpec) {
+			spec.TrainingEngine = TrainingEngineRayTrain
+			spec.RayVersion = RayVersionProduction
+			spec.DataMode = DataModeMount
+			spec.Managed.RayData = rayData
+		}, wantErr: "requires ray-data mode"},
+		{name: "cache with ray data config", prepare: func(spec *JobSpec) {
+			spec.TrainingEngine = TrainingEngineRayTrain
+			spec.RayVersion = RayVersionProduction
+			spec.DataMode = DataModeCache
+			spec.Managed.RayData = rayData
+			spec.Cache = CacheRequest{Mode: CacheModeRuntime, Size: "200Gi", Preload: CachePreloadInput}
+			spec.Input = DataLocation{Space: DataSpacePublic, RelativePath: "datasets/train"}
+		}, wantErr: "requires ray-data mode"},
+		{name: "ray data with legacy engine", prepare: func(spec *JobSpec) {
+			spec.DataMode = DataModeRayData
+		}, wantErr: "ray-data requires ray-train"},
+		{name: "ray data staging with managed engine", prepare: func(spec *JobSpec) {
+			spec.TrainingEngine = TrainingEngineRayTrain
+			spec.RayVersion = RayVersionProduction
+			spec.DataMode = DataModeRayDataStage
+			spec.Managed.RayData = stagedFiles
+			spec.Cache = CacheRequest{Mode: CacheModeRuntime, Size: "200Gi"}
+			spec.Input = DataLocation{Space: DataSpacePublic, RelativePath: "datasets/train"}
+		}},
+		{name: "ray data staging rejects a whole data space", prepare: func(spec *JobSpec) {
+			spec.TrainingEngine = TrainingEngineRayTrain
+			spec.RayVersion = RayVersionProduction
+			spec.DataMode = DataModeRayDataStage
+			spec.Managed.RayData = stagedFiles
+			spec.Cache = CacheRequest{Mode: CacheModeRuntime, Size: "200Gi"}
+			spec.Input = DataLocation{Space: DataSpacePublic}
+		}, wantErr: "non-empty input path"},
+		{name: "ray data staging rejects the legacy preloader", prepare: func(spec *JobSpec) {
+			spec.TrainingEngine = TrainingEngineRayTrain
+			spec.RayVersion = RayVersionProduction
+			spec.DataMode = DataModeRayDataStage
+			spec.Managed.RayData = stagedFiles
+			spec.Cache = CacheRequest{Mode: CacheModeRuntime, Size: "200Gi", Preload: CachePreloadInput}
+			spec.Input = DataLocation{Space: DataSpacePublic, RelativePath: "datasets/train"}
+		}, wantErr: "does not support cache preload"},
+		{name: "ray data staging with legacy engine", prepare: func(spec *JobSpec) {
+			spec.DataMode = DataModeRayDataStage
+		}, wantErr: "ray-data-stage requires ray-train"},
+		{name: "cache with runtime input preload", prepare: func(spec *JobSpec) {
+			spec.DataMode = DataModeCache
+			spec.Cache = CacheRequest{Mode: CacheModeRuntime, Size: "200Gi", Preload: CachePreloadInput}
+			spec.Input = DataLocation{Space: DataSpacePublic, RelativePath: "datasets/train"}
+		}},
+		{name: "cache without runtime cache", prepare: func(spec *JobSpec) {
+			spec.DataMode = DataModeCache
+		}, wantErr: "cache data mode requires runtime cache with preload=input"},
+		{name: "cache without input preload", prepare: func(spec *JobSpec) {
+			spec.DataMode = DataModeCache
+			spec.Cache = CacheRequest{Mode: CacheModeRuntime, Size: "200Gi"}
+		}, wantErr: "cache data mode requires runtime cache with preload=input"},
+		{name: "unknown mode", prepare: func(spec *JobSpec) {
+			spec.DataMode = "stream"
+		}, wantErr: "unsupported data mode"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			spec := validJobSpec()
+			test.prepare(&spec)
+			err := spec.Validate()
+			if test.wantErr == "" && err != nil {
+				t.Fatalf("validate job spec: %v", err)
+			}
+			if test.wantErr != "" && (err == nil || !strings.Contains(err.Error(), test.wantErr)) {
+				t.Fatalf("expected error containing %q, got %v", test.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestJobSpecParentJobIDValidation(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		parentJobID string
+		wantErr     bool
+	}{
+		{name: "omitted"},
+		{name: "generated job id", parentJobID: "job-0123456789abcdef01234567"},
+		{name: "too short", parentJobID: "job-0123", wantErr: true},
+		{name: "uppercase hexadecimal", parentJobID: "job-0123456789ABCDEF01234567", wantErr: true},
+		{name: "surrounding whitespace", parentJobID: " job-0123456789abcdef01234567 ", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			spec := validJobSpec()
+			spec.ParentJobID = test.parentJobID
+			err := spec.Validate()
+			if !test.wantErr && err != nil {
+				t.Fatalf("validate job spec: %v", err)
+			}
+			if test.wantErr && (err == nil || !strings.Contains(err.Error(), "parentJobId")) {
+				t.Fatalf("expected parentJobId rejection, got %v", err)
+			}
+		})
+	}
+}
+
+func TestRayDDPRejectsUnsupportedRayVersion(t *testing.T) {
+	spec := validJobSpec()
+	spec.TrainingEngine = TrainingEngineRayDDP
+	spec.RayVersion = "bogus"
+	if err := spec.Validate(); err == nil || !strings.Contains(err.Error(), "unsupported Ray version") {
+		t.Fatalf("expected unsupported Ray version rejection, got %v", err)
+	}
+}
+
+func TestRayDDPAcceptsPlatformRayVersions(t *testing.T) {
+	for _, version := range []string{"", RayVersionLegacy, RayVersionProduction, RayVersionCanary} {
+		t.Run(version, func(t *testing.T) {
+			spec := validJobSpec()
+			spec.TrainingEngine = TrainingEngineRayDDP
+			spec.RayVersion = version
+			if err := spec.Validate(); err != nil {
+				t.Fatalf("expected ray-ddp to accept Ray version %q: %v", version, err)
+			}
+		})
+	}
+}
+
+func TestRayDDPRejectsNonZeroManagedTrainingPolicy(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		policy ManagedTrainingPolicy
+	}{
+		{name: "invalid policy", policy: ManagedTrainingPolicy{MaxFailures: 11}},
+		{name: "valid max failures", policy: ManagedTrainingPolicy{MaxFailures: 1}},
+		{name: "valid checkpoint policy", policy: ManagedTrainingPolicy{Checkpoint: CheckpointPolicy{EveryEpochs: 1, KeepLatest: 2, KeepBest: 1}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			spec := validJobSpec()
+			spec.TrainingEngine = TrainingEngineRayDDP
+			spec.Managed = test.policy
+			if err := spec.Validate(); err == nil || !strings.Contains(err.Error(), "managed policy requires ray-train") {
+				t.Fatalf("expected ray-ddp managed policy rejection, got %v", err)
+			}
+		})
+	}
+}
+
+func TestLegacyExecutionRayTrainDoesNotSelectManagedEngine(t *testing.T) {
+	spec := validJobSpec()
+	spec.Execution.Mode = ExecutionModeRayTrain
+	if err := spec.Validate(); err != nil {
+		t.Fatalf("expected legacy ray_train execution mode to remain valid: %v", err)
+	}
+	if got := spec.TrainingEngine.Resolved(); got != TrainingEngineRayDDP {
+		t.Fatalf("legacy execution mode resolved training engine to %q", got)
+	}
+}
+
+func validJobSpec() JobSpec {
+	return JobSpec{
+		Name:       "managed-train-001",
+		Image:      "registry.example.com/ray-train@sha256:" + strings.Repeat("a", 64),
+		Source:     CodeSource{Type: "git", URL: "https://git.example.com/team/train.git", Commit: "0123456789abcdef"},
+		Entrypoint: Entrypoint{Command: []string{"python", "train.py"}},
+		Resources:  Resources{WorkerReplicas: 2, GPUsPerWorker: 8, CPUPerWorker: 32, MemoryPerWorker: "128Gi"},
+		Queue:      "team-gpu-queue",
+	}
+}

@@ -41,9 +41,27 @@ NGINX_RUNTIME_IMAGE_ARG="${NGINX_RUNTIME_IMAGE:-harbor.wellspiking.ai/hub/nginxi
 # runtime libraries on the 4090 worker pool.
 RAY_BASE_IMAGE_ARG="${RAY_BASE_IMAGE:-harbor.wellspiking.ai/hub/rayproject/ray:2.35.0-py310-gpu}"
 WORKSPACE_RAY_BASE_IMAGE_ARG="${WORKSPACE_RAY_BASE_IMAGE:-harbor.wellspiking.ai/hub/rayproject/ray:2.35.0-py310-gpu}"
+RAY_PRODUCTION_VERSION="2.56.1"
+RAY_VERSION_ARG="${RAY_VERSION:-$RAY_PRODUCTION_VERSION}"
+RAY_RUNTIME_VARIANTS=(pytorch-ray-ddp pytorch-ray-train workspace-ray256)
 BEVFUSION_BASE_IMAGE_ARG="${BEVFUSION_BASE_IMAGE:-harbor.wellspiking.ai/guofeng.su/bevfusion@sha256:88e9c5045ced1b4b3dc49ddf1f2e22a8c9702574fd8103afcdff83577784a5ee}"
 CODE_SERVER_IMAGE_ARG="${CODE_SERVER_IMAGE:-harbor.wellspiking.ai/hub/codercom/code-server:4.93.1}"
 SPK_RAYJOB_VERSION_ARG="${SPK_RAYJOB_VERSION:-$IMAGE_TAG}"
+# Bash 3.2 with `set -u` treats expansion of an empty array as unbound inside
+# an EXIT trap. The empty sentinel keeps early validation failures clean; the
+# cleanup helper skips it and only removes exact mktemp files registered later.
+TEMP_DOCKERFILES=("")
+
+cleanup_temp_dockerfiles() {
+  local dockerfile
+  for dockerfile in "${TEMP_DOCKERFILES[@]}"; do
+    if [ -n "$dockerfile" ] && [ -f "$dockerfile" ]; then
+      rm -f -- "$dockerfile"
+    fi
+  done
+}
+
+trap cleanup_temp_dockerfiles EXIT
 
 trim() {
   local value="${1:-}"
@@ -66,7 +84,7 @@ Ray Training Platform image builder
 Environment variables:
   REGISTRY=harbor.wellspiking.ai/guofeng.su
   IMAGE_TAG=test-20260809
-  BUILD_TARGETS=all|backend,frontend,source-materializer,test-training,workspace,train-pytorch,bevfusion-runtime,tos-prefix-init,spk-rayjob
+  BUILD_TARGETS=all|backend,frontend,source-materializer,test-training,workspace,train-pytorch,pytorch-ray-ddp,pytorch-ray-train,workspace-ray256,bevfusion-runtime,tos-prefix-init,spk-rayjob
   PUSH_IMAGE=false|true
   USE_BUILDX=true|false
   BUILD_PLATFORM=linux/amd64
@@ -82,6 +100,7 @@ Environment variables:
   NGINX_RUNTIME_IMAGE=harbor.wellspiking.ai/hub/nginxinc/nginx-unprivileged:1.31-alpine
   RAY_BASE_IMAGE=harbor.wellspiking.ai/hub/rayproject/ray:2.35.0-py310-gpu
   WORKSPACE_RAY_BASE_IMAGE=harbor.wellspiking.ai/hub/rayproject/ray:2.35.0-py310-gpu
+  RAY_VERSION=2.56.1 (production runtime variants are fixed to this version)
   BEVFUSION_BASE_IMAGE=harbor.wellspiking.ai/guofeng.su/bevfusion@sha256:...
   CODE_SERVER_IMAGE=harbor.wellspiking.ai/hub/codercom/code-server:4.93.1
   SPK_RAYJOB_VERSION=<release-version>
@@ -91,9 +110,14 @@ Build targets:
   frontend            Vue/Nginx portal image
   source-materializer Git and governed-workspace code materializer image
   test-training       Single-GPU smoke Ray image
+  workspace           Existing Ray 2.35 interactive workspace (rollback)
+  train-pytorch       Existing Ray 2.35 PyTorch runtime (rollback)
+  pytorch-ray-ddp     Ray 2.56.1 PyTorch runtime for Ray-orchestrated DDP
+  pytorch-ray-train   Explicit Task 9 target for managed Ray Train
+  workspace-ray256    Ray 2.56.1 interactive workspace
   tos-prefix-init     Native TOS SDK utility for controlled training roots
   spk-rayjob          Self-service external submission CLI release image
-  all                 All platform images (default)
+  all                 All currently buildable platform images (default)
 
 The script requires an authenticated Docker/BuildKit session when pushing.
 It prints remote image digests after a successful push.
@@ -103,33 +127,42 @@ EOF
 target_spec() {
   case "$1" in
     backend)
-      printf '%s\n' 'backend/Dockerfile|ray-train-backend|backend'
+      printf '%s\n' 'backend/Dockerfile|ray-train-backend|backend|-'
       ;;
     frontend)
-      printf '%s\n' 'frontend/Dockerfile|ray-train-frontend|frontend'
+      printf '%s\n' 'frontend/Dockerfile|ray-train-frontend|frontend|-'
       ;;
     source-materializer)
-      printf '%s\n' 'images/source-materializer/Dockerfile|ray-source-materializer|.'
+      printf '%s\n' 'images/source-materializer/Dockerfile|ray-source-materializer|.|-'
       ;;
     test-training)
-      printf '%s\n' 'images/test-training/Dockerfile|ray-test|images/test-training'
+      printf '%s\n' 'images/test-training/Dockerfile|ray-test|images/test-training|-'
       ;;
     tos-prefix-init)
-      printf '%s\n' 'images/tos-prefix-init/Dockerfile|ray-tos-prefix-init|.'
+      printf '%s\n' 'images/tos-prefix-init/Dockerfile|ray-tos-prefix-init|.|-'
       ;;
     workspace)
-      printf '%s\n' 'images/workspace/Dockerfile|ray-workspace|images/workspace'
+      printf '%s\n' 'images/workspace/Dockerfile|ray-workspace|images/workspace|workspace-legacy'
       ;;
     train-pytorch)
       # The default training runtime shares the tested Ray placement launcher
       # with the interactive workspace image, so its build context is images.
-      printf '%s\n' 'images/train-pytorch/Dockerfile|ray-train-pytorch|images'
+      printf '%s\n' 'images/train-pytorch/Dockerfile|ray-train-pytorch|images|pytorch-legacy'
+      ;;
+    pytorch-ray-ddp)
+      printf '%s\n' 'images/train-pytorch/Dockerfile|ray-train-pytorch-ray-ddp|images|pytorch-ray-ddp'
+      ;;
+    pytorch-ray-train)
+      printf '%s\n' 'images/train-pytorch/Dockerfile|ray-train-pytorch-ray-train|images|pytorch-ray-train'
+      ;;
+    workspace-ray256)
+      printf '%s\n' 'images/workspace/Dockerfile|ray-workspace-ray256|images/workspace|workspace-ray256'
       ;;
     bevfusion-runtime)
-      printf '%s\n' 'images/bevfusion-runtime/Dockerfile|ray-train-bevfusion|.'
+      printf '%s\n' 'images/bevfusion-runtime/Dockerfile|ray-train-bevfusion|.|-'
       ;;
     spk-rayjob)
-      printf '%s\n' 'backend/Dockerfile.spk-rayjob|spk-rayjob-release|backend'
+      printf '%s\n' 'backend/Dockerfile.spk-rayjob|spk-rayjob-release|backend|-'
       ;;
     *)
       return 1
@@ -140,7 +173,7 @@ target_spec() {
 normalize_targets() {
   local raw target
   if [ "$(trim "$BUILD_TARGETS_RAW")" = "all" ]; then
-    printf '%s\n' backend frontend source-materializer test-training workspace train-pytorch bevfusion-runtime tos-prefix-init spk-rayjob
+    printf '%s\n' backend frontend source-materializer test-training workspace train-pytorch "${RAY_RUNTIME_VARIANTS[@]}" bevfusion-runtime tos-prefix-init spk-rayjob
     return
   fi
 
@@ -150,7 +183,7 @@ normalize_targets() {
     [ -n "$target" ] || continue
     target_spec "$target" >/dev/null || {
       echo "ERROR: unknown BUILD_TARGETS entry: $target" >&2
-      echo "       valid values: backend, frontend, source-materializer, test-training, workspace, train-pytorch, bevfusion-runtime, tos-prefix-init, spk-rayjob, all" >&2
+      echo "       valid values: backend, frontend, source-materializer, test-training, workspace, train-pytorch, pytorch-ray-ddp, pytorch-ray-train, workspace-ray256, bevfusion-runtime, tos-prefix-init, spk-rayjob, all" >&2
       exit 1
     }
     printf '%s\n' "$target"
@@ -200,6 +233,29 @@ while IFS= read -r normalized_target; do
 done < <(normalize_targets)
 [ "${#BUILD_TARGETS_LIST[@]}" -gt 0 ] || { echo 'ERROR: BUILD_TARGETS is empty' >&2; exit 1; }
 
+for target in "${BUILD_TARGETS_LIST[@]}"; do
+  if [ "$target" = "pytorch-ray-train" ]; then
+    [ -x "$SCRIPT_DIR/images/workspace/raytrain-managed" ] || {
+      echo 'ERROR: pytorch-ray-train requires executable images/workspace/raytrain-managed' >&2
+      exit 1
+    }
+    for runtime_source in __init__.py entrypoint.py managed_driver.py; do
+      [ -f "$SCRIPT_DIR/images/workspace/raytrain_runtime/$runtime_source" ] || {
+        echo "ERROR: pytorch-ray-train requires images/workspace/raytrain_runtime/$runtime_source" >&2
+        exit 1
+      }
+    done
+  fi
+  case "$target" in
+    pytorch-ray-ddp|pytorch-ray-train|workspace-ray256)
+      [ "$RAY_VERSION_ARG" = "$RAY_PRODUCTION_VERSION" ] || {
+        echo "ERROR: production runtime variants require RAY_VERSION=$RAY_PRODUCTION_VERSION" >&2
+        exit 1
+      }
+      ;;
+  esac
+done
+
 if ! is_true "$DRY_RUN"; then
   command -v docker >/dev/null 2>&1 || { echo 'ERROR: Docker is not installed' >&2; exit 1; }
   docker info >/dev/null 2>&1 || { echo 'ERROR: Docker daemon is not available' >&2; exit 1; }
@@ -226,16 +282,24 @@ echo "Alpine runtime: $ALPINE_RUNTIME_IMAGE_ARG"
 echo "Nginx runtime:  $NGINX_RUNTIME_IMAGE_ARG"
 echo "Ray base:       $RAY_BASE_IMAGE_ARG"
 echo "Workspace base: $WORKSPACE_RAY_BASE_IMAGE_ARG"
+echo "Ray production: $RAY_VERSION_ARG"
 echo "BEVFusion base: $BEVFUSION_BASE_IMAGE_ARG"
 echo "Code server:    $CODE_SERVER_IMAGE_ARG"
 echo "Targets:        ${BUILD_TARGETS_LIST[*]}"
 echo ''
 
 for target in "${BUILD_TARGETS_LIST[@]}"; do
-  IFS='|' read -r dockerfile image_name context_dir <<< "$(target_spec "$target")"
+  IFS='|' read -r dockerfile image_name context_dir docker_target <<< "$(target_spec "$target")"
   dockerfile_path="$SCRIPT_DIR/$dockerfile"
   context_path="$SCRIPT_DIR/$context_dir"
-  image="$REGISTRY/$image_name:$IMAGE_TAG"
+  case "$target" in
+    pytorch-ray-ddp|pytorch-ray-train|workspace-ray256)
+      image="$REGISTRY/$image_name:$RAY_VERSION_ARG-$IMAGE_TAG"
+      ;;
+    *)
+      image="$REGISTRY/$image_name:$IMAGE_TAG"
+      ;;
+  esac
 
   [ -f "$dockerfile_path" ] || { echo "ERROR: missing Dockerfile: $dockerfile_path" >&2; exit 1; }
   [ -d "$context_path" ] || { echo "ERROR: missing build context: $context_path" >&2; exit 1; }
@@ -248,6 +312,7 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
     # Resolve the base-image variables into a temporary Dockerfile so later
     # stages build correctly without requiring BuildKit/Buildx.
     tmp_dockerfile=$(mktemp)
+    TEMP_DOCKERFILES+=("$tmp_dockerfile")
     sed \
       -e "s|^FROM \${GO_BUILDER_IMAGE}|FROM $GO_BUILDER_IMAGE_ARG|" \
       -e "s|^FROM \${NODE_BUILDER_IMAGE}|FROM $NODE_BUILDER_IMAGE_ARG|" \
@@ -275,10 +340,12 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
       --build-arg "NGINX_RUNTIME_IMAGE=$NGINX_RUNTIME_IMAGE_ARG"
       --build-arg "RAY_BASE_IMAGE=$RAY_BASE_IMAGE_ARG"
       --build-arg "WORKSPACE_RAY_BASE_IMAGE=$WORKSPACE_RAY_BASE_IMAGE_ARG"
+      --build-arg "RAY_VERSION=${RAY_VERSION_ARG}"
       --build-arg "BEVFUSION_BASE_IMAGE=$BEVFUSION_BASE_IMAGE_ARG"
       --build-arg "CODE_SERVER_IMAGE=$CODE_SERVER_IMAGE_ARG"
       --build-arg "SPK_RAYJOB_VERSION=$SPK_RAYJOB_VERSION_ARG"
     )
+    [ "$docker_target" = "-" ] || build_cmd+=(--target "$docker_target")
     is_true "$NO_CACHE" && build_cmd+=(--no-cache)
     is_true "$PULL_BASE_IMAGES" && build_cmd+=(--pull)
     if is_true "$PUSH_IMAGE"; then
@@ -305,10 +372,12 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
       --build-arg "NGINX_RUNTIME_IMAGE=$NGINX_RUNTIME_IMAGE_ARG"
       --build-arg "RAY_BASE_IMAGE=$RAY_BASE_IMAGE_ARG"
       --build-arg "WORKSPACE_RAY_BASE_IMAGE=$WORKSPACE_RAY_BASE_IMAGE_ARG"
+      --build-arg "RAY_VERSION=${RAY_VERSION_ARG}"
       --build-arg "BEVFUSION_BASE_IMAGE=$BEVFUSION_BASE_IMAGE_ARG"
       --build-arg "CODE_SERVER_IMAGE=$CODE_SERVER_IMAGE_ARG"
       --build-arg "SPK_RAYJOB_VERSION=$SPK_RAYJOB_VERSION_ARG"
     )
+    [ "$docker_target" = "-" ] || build_cmd+=(--target "$docker_target")
     is_true "$NO_CACHE" && build_cmd+=(--no-cache)
     is_true "$PULL_BASE_IMAGES" && build_cmd+=(--pull)
     build_cmd+=("$context_path")
@@ -330,16 +399,13 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
     echo "    Digest: $(remote_digest "$image")"
   fi
 
-  if ! is_true "$USE_BUILDX" && [ -n "${tmp_dockerfile:-}" ] && [ -f "$tmp_dockerfile" ]; then
-    rm -f "$tmp_dockerfile"
-  fi
   echo "    Done:   $image"
 done
 
 echo ''
 echo 'Build complete.'
 if is_true "$PUSH_IMAGE"; then
-  echo 'Use the printed @sha256 digest for backend.workspaceImage and backend.sourceMaterializerImage.'
+  echo 'Use the printed @sha256 digests for backend images and rayTrain.runtimeCatalog; never replace the Ray 2.35 rollback entries.'
 else
   echo 'Images were not pushed. Set PUSH_IMAGE=true after docker login to push them.'
 fi

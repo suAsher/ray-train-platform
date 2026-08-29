@@ -1,8 +1,5 @@
 import { computed, reactive, ref, watch } from 'vue'
 
-import { fetchPlatformLimits } from '../api/platform'
-import { fetchImages } from '../api/catalog'
-import { fetchWorkspaceSnapshots } from '../api/dataSpaces'
 import {
   clampResources,
   containerPathFor,
@@ -12,8 +9,14 @@ import {
   normalizeCacheSelection,
   profilesFromLimits,
   resolveExecutionMode,
-} from '../platformLimits'
-import { entrypointWarnings, previewCommand } from '../commandPreview'
+} from '../platformLimits.js'
+import { entrypointWarnings, previewCommand } from '../commandPreview.js'
+import {
+  managedEngineAvailability,
+  managedPolicyFromQuery,
+  managedPolicyIssues,
+  normalizeTrainingEngine,
+} from '../trainingEngine.js'
 import { jobFormStepIssues } from './jobFormIssues.js'
 
 /**
@@ -24,12 +27,13 @@ import { jobFormStepIssues } from './jobFormIssues.js'
  * is what let a user pick the single-GPU card, raise the GPU count, and only
  * discover the mismatch when the server rejected the submit.
  */
-export function useJobForm(route) {
+export function useJobForm(route, catalogLoaders = defaultCatalogLoaders) {
   const limits = ref(defaultPlatformLimits)
   const trainingImages = ref([])
   const workspaceSnapshots = ref([])
   const loadingCatalog = ref(false)
 
+  const copiedManagedPolicy = managedPolicyFromQuery(route?.query)
   const form = reactive({
     name: '',
     image: '',
@@ -39,6 +43,10 @@ export function useJobForm(route) {
     gitCommit: '',
     workspaceSnapshot: '',
     entrypoint: 'python train.py',
+    trainingEngine: normalizeTrainingEngine(route?.query?.trainingEngine),
+    dataMode: String(route?.query?.dataMode || 'mount'),
+    ...copiedManagedPolicy,
+    parentJobId: String(route?.query?.parentJobId || ''),
     workerReplicas: 1,
     gpusPerWorker: 1,
     cpuPerWorker: 8,
@@ -68,6 +76,11 @@ export function useJobForm(route) {
 
   const activeProfile = computed(() => profiles.value.find((profile) =>
     profile.workers === Number(form.workerReplicas) && profile.gpus === Number(form.gpusPerWorker)))
+  const managedAvailability = computed(() => managedEngineAvailability({
+    limits: limits.value,
+    images: trainingImages.value,
+    imageReference: form.image,
+  }))
 
   // A shape beyond the deployment ceiling is corrected as the user types rather
   // than accepted and rejected later by the API.
@@ -87,6 +100,7 @@ export function useJobForm(route) {
       form.cacheMode = normalized.cacheMode
       form.cacheSize = normalized.cacheSize
 		if (normalized.cacheMode !== 'runtime') form.cachePreload = ''
+		if (normalized.cacheMode !== 'runtime' && form.dataMode !== 'mount') form.dataMode = 'mount'
     },
     { deep: true },
   )
@@ -116,6 +130,10 @@ export function useJobForm(route) {
       }
     }
     if (step === 1) {
+      if (form.trainingEngine === 'ray-train' && !managedAvailability.value.available) {
+        issues.push(managedAvailability.value.reason)
+      }
+      if (form.trainingEngine === 'ray-train') issues.push(...managedPolicyIssues(form))
       issues.push(...jobFormStepIssues({
         step,
         form,
@@ -128,7 +146,11 @@ export function useJobForm(route) {
 
   const loadCatalog = async () => {
     loadingCatalog.value = true
-    const results = await Promise.allSettled([fetchPlatformLimits(), fetchImages('training'), fetchWorkspaceSnapshots()])
+    const results = await Promise.allSettled([
+      catalogLoaders.fetchPlatformLimits(),
+      catalogLoaders.fetchImages('training'),
+      catalogLoaders.fetchWorkspaceSnapshots(),
+    ])
     const [limitsResult, imagesResult, snapshotsResult] = results
     if (limitsResult.status === 'fulfilled' && limitsResult.value) {
       limits.value = {
@@ -147,6 +169,7 @@ export function useJobForm(route) {
     form.cacheMode = copiedCache.cacheMode
     form.cacheSize = copiedCache.cacheSize
 	form.cachePreload = copiedCache.cacheMode === 'runtime' && route?.query?.cachePreload === 'input' ? 'input' : ''
+    form.dataMode = String(route?.query?.dataMode || (form.cachePreload === 'input' ? 'cache' : 'mount'))
     trainingImages.value = imagesResult.status === 'fulfilled' ? imagesResult.value || [] : []
     workspaceSnapshots.value = snapshotsResult.status === 'fulfilled' ? snapshotsResult.value || [] : []
     const preferred = trainingImages.value.find((image) => image.isDefault) || trainingImages.value[0]
@@ -166,6 +189,7 @@ export function useJobForm(route) {
     commandWarnings,
     mountPaths,
     trainingImages,
+    managedAvailability,
     workspaceSnapshots,
     loadingCatalog,
     applyProfile,
@@ -174,3 +198,9 @@ export function useJobForm(route) {
     loadCatalog,
   }
 }
+
+const defaultCatalogLoaders = Object.freeze({
+  fetchPlatformLimits: (...arguments_) => import('../api/platform.js').then(({ fetchPlatformLimits }) => fetchPlatformLimits(...arguments_)),
+  fetchImages: (...arguments_) => import('../api/catalog.js').then(({ fetchImages }) => fetchImages(...arguments_)),
+  fetchWorkspaceSnapshots: (...arguments_) => import('../api/dataSpaces.js').then(({ fetchWorkspaceSnapshots }) => fetchWorkspaceSnapshots(...arguments_)),
+})
