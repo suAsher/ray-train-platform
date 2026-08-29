@@ -2,7 +2,7 @@
 
 本文说明如何在同一平台上选择兼容的 **Ray 编排 DDP** 与 **Ray Train 托管** 引擎。当前生产集群已部署 **KubeRay 1.6.2**，Ray Train 生产运行时固定为 **Ray 2.56.1**，并向所有当前和未来团队开放；Ray 2.58.0 仍只作为关闭状态的 canary 版本。既有 Ray DDP 任务和镜像不会被原地改写。
 
-2026-08-29 的生产验收任务 `job-861f7b92a2acc28ca2317277` 由普通团队用户通过 `spk-rayjob` 提交并成功结束。验收覆盖 KubeRay 自动创建 RayCluster、Ray Train Worker、Ray Data 文件读取、双 NVMe 分布、GPU collective、用户代码随任务上传、个人结果写入和 Portal 数据 API 可见性。该任务是平台通用链路验收，不代表 BEVFusion 已切换到托管镜像。
+2026-08-29 的生产验收任务 `job-861f7b92a2acc28ca2317277` 由普通团队用户通过 `spk-rayjob` 提交并成功结束。真实 S1H 数据 I/O 验收任务 `job-66808647523a42b4726f013a` 又覆盖了 20,010 个文件、19.03 GB 输入的 Ray Data 枚举、双 NVMe 预热和本地读取。两项验收覆盖 KubeRay 自动创建 RayCluster、Ray Train Worker、Ray Data、GPU collective、用户代码随任务上传、个人结果写入和 Portal 数据 API 可见性；它们是平台通用链路与真实数据 I/O 验收，不代表 BEVFusion 模型本身已切换到托管镜像。
 
 | 引擎 | CLI 参数 | 适用代码 | 运行语义 |
 | --- | --- | --- | --- |
@@ -43,7 +43,7 @@ CLI 示例：
 spk-rayjob submit \
   --engine ray-train \
   --data-mode ray-data-stage \
-  --image 'harbor.wellspiking.ai/guofeng.su/ray-train-pytorch-ray-train@sha256:e5a526eba5643ec50cb1ef135af8203594c0a78849cc2081056bc5fa352ff26c' \
+  --image 'harbor.wellspiking.ai/guofeng.su/ray-train-pytorch-ray-train@sha256:46bd487ccaa6b19a0ceac2089942fd39e00697494325155d50f2e2bc2e7fdf0a' \
   --workers 2 \
   --gpus-per-worker 8 \
   --cpu-per-worker 64 \
@@ -58,6 +58,18 @@ spk-rayjob submit \
 ```
 
 日志中的 `RAYTRAIN_RAY_DATA_STAGE_COMPLETE files=... bytes=... seconds=...` 表示预热完成。之后用户入口看到的 `PLATFORM_DATASET_PATH` 是双 NVMe 本地视图；用户不接触 TOS AK/SK，也不填写节点路径。
+
+平台会自动为 Ray Data 算子保留 Ray 逻辑 CPU：64 CPU/8 GPU 的 Worker 节点中，每个 Train Worker 申请 7 CPU，给数据读取留下 8 CPU；16 CPU/1 GPU 时 Train Worker 申请 12 CPU。Pod 的 CPU request/limit 不变，原生 DataLoader 仍可使用容器 CPU。若节点连“每 GPU 1 CPU”之外的一个空闲 CPU 都没有，提交会在启动前明确失败，而不是永久等待。
+
+同一批真实 S1H 文件的生产结果如下。预热是一次性冷启动成本，后续 epoch 重复读取才体现收益：
+
+| 路径 | 文件/容量 | 冷启动或读取耗时 | 有效吞吐 |
+| --- | ---: | ---: | ---: |
+| 直接挂载读取 | 20,010 / 19.03 GB | 93.50 秒 | 203.5 MB/s，214 files/s |
+| Ray Data 写入双 NVMe | 20,010 / 19.03 GB | 134.91 秒 | 一次性预热 |
+| 双 NVMe 热读取 | 20,010 / 19.03 GB | 1.24 秒 | 15.38 GB/s，16,173 files/s |
+
+Ray 在 Worker 和数据算子刚启动的数秒内可能打印一次 `Cluster resources are not enough...` 瞬时告警；只要随后出现 `RAYTRAIN_RAY_DATA_STAGE_PROGRESS` 就表示任务已获得资源。若 60 秒仍无任何 progress，再按资源不足处理。
 
 ## 代码、镜像与入口契约
 

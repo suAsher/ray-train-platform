@@ -298,6 +298,117 @@ class TrainerFactoryTest(unittest.TestCase):
         self.assertEqual(loop["parent_job_id"], PARENT_JOB_ID)
         self.assertEqual(loop["storage_path"], config.storage_path)
 
+    def test_ray_data_stage_reserves_node_cpu_for_read_tasks(self):
+        config = DriverConfig(
+            entrypoint=PythonEntrypoint("path", "train.py", ("train.py",)),
+            nodes=2,
+            gpus_per_node=8,
+            cpus_per_node=64,
+            max_failures=0,
+            checkpoint_every_epochs=0,
+            keep_latest=0,
+            keep_best=0,
+            best_metric="",
+            best_mode="min",
+            job_id=JOB_ID,
+            parent_job_id="",
+            storage_path=f"/mnt/data/output/.platform/ray-train/{JOB_ID}",
+            data_mode="ray-data-stage",
+            dataset=object(),
+        )
+
+        with mock.patch.object(
+            managed_driver, "_load_ray_data_dataset", return_value=object()
+        ):
+            trainer = build_trainer(
+                config,
+                ray_components=types.SimpleNamespace(
+                    **vars(FAKE_RAY), DataConfig=CapturedConfig
+                ),
+            )
+
+        scaling = trainer.kwargs["scaling_config"].kwargs
+        self.assertEqual(scaling["resources_per_worker"], {"CPU": 7})
+
+    def test_ray_data_stage_rejects_a_node_without_cpu_headroom(self):
+        config = DriverConfig(
+            entrypoint=PythonEntrypoint("path", "train.py", ("train.py",)),
+            nodes=1,
+            gpus_per_node=1,
+            cpus_per_node=1,
+            max_failures=0,
+            checkpoint_every_epochs=0,
+            keep_latest=0,
+            keep_best=0,
+            best_metric="",
+            best_mode="min",
+            job_id=JOB_ID,
+            parent_job_id="",
+            storage_path=f"/mnt/data/output/.platform/ray-train/{JOB_ID}",
+            data_mode="ray-data-stage",
+            dataset=object(),
+        )
+
+        with mock.patch.object(
+            managed_driver, "_load_ray_data_dataset", return_value=object()
+        ):
+            with self.assertRaisesRegex(ValueError, "CPU headroom"):
+                build_trainer(config, ray_components=FAKE_RAY)
+
+    def test_ray_data_and_stage_use_the_same_cpu_headroom_policy(self):
+        for data_mode in ("ray-data", "ray-data-stage"):
+            with self.subTest(data_mode=data_mode):
+                config = DriverConfig(
+                    entrypoint=PythonEntrypoint("path", "train.py", ("train.py",)),
+                    nodes=1,
+                    gpus_per_node=1,
+                    cpus_per_node=16,
+                    max_failures=0,
+                    checkpoint_every_epochs=0,
+                    keep_latest=0,
+                    keep_best=0,
+                    best_metric="",
+                    best_mode="min",
+                    job_id=JOB_ID,
+                    parent_job_id="",
+                    storage_path=f"/mnt/data/output/.platform/ray-train/{JOB_ID}",
+                    data_mode=data_mode,
+                    dataset=object(),
+                )
+                ray_api = types.SimpleNamespace(
+                    **vars(FAKE_RAY), DataConfig=CapturedConfig
+                )
+                with mock.patch.object(
+                    managed_driver, "_load_ray_data_dataset", return_value=object()
+                ):
+                    trainer = build_trainer(config, ray_components=ray_api)
+                scaling = trainer.kwargs["scaling_config"].kwargs
+                self.assertEqual(scaling["resources_per_worker"], {"CPU": 12})
+
+    def test_ray_data_cpu_headroom_is_best_effort_above_one_cpu_per_gpu(self):
+        for cpus, gpus, expected in ((4, 1, 1), (16, 1, 12), (9, 8, 1), (64, 8, 7)):
+            with self.subTest(cpus=cpus, gpus=gpus):
+                config = DriverConfig(
+                    entrypoint=PythonEntrypoint("path", "train.py", ("train.py",)),
+                    nodes=1,
+                    gpus_per_node=gpus,
+                    cpus_per_node=cpus,
+                    max_failures=0,
+                    checkpoint_every_epochs=0,
+                    keep_latest=0,
+                    keep_best=0,
+                    best_metric="",
+                    best_mode="min",
+                    job_id=JOB_ID,
+                    parent_job_id="",
+                    storage_path=f"/mnt/data/output/.platform/ray-train/{JOB_ID}",
+                    data_mode="ray-data",
+                    dataset=object(),
+                )
+                self.assertEqual(
+                    managed_driver._cpus_per_train_worker(config), expected
+                )
+
     def test_worker_runtime_env_reuses_only_ray_job_package_uri(self):
         self.assertEqual(
             _validated_worker_runtime_env(

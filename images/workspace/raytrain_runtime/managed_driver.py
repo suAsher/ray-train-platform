@@ -343,6 +343,27 @@ def _train_loop(loop_config: Mapping[str, Any]) -> None:
             execute(entrypoint)
 
 
+def _cpus_per_train_worker(config: DriverConfig) -> int:
+    """Reserve node CPU for Ray Data operators when datasets are managed by Ray."""
+
+    cpus_per_worker = max(1, config.cpus_per_node // config.gpus_per_node)
+    if config.data_mode not in ("ray-data", "ray-data-stage"):
+        return cpus_per_worker
+
+    maximum_headroom = config.cpus_per_node - config.gpus_per_node
+    if maximum_headroom < 1:
+        raise ValueError(
+            "Ray Data requires CPU headroom beyond one CPU per training worker"
+        )
+
+    desired_headroom = min(8, max(4, config.cpus_per_node // 8))
+    reserved_headroom = min(desired_headroom, maximum_headroom)
+    return max(
+        1,
+        (config.cpus_per_node - reserved_headroom) // config.gpus_per_node,
+    )
+
+
 def build_trainer(
     config: DriverConfig,
     *,
@@ -361,7 +382,7 @@ def build_trainer(
             {} if ray_components is not None else _current_job_worker_runtime_env()
         )
     workers = config.nodes * config.gpus_per_node
-    cpus_per_worker = max(1, config.cpus_per_node // config.gpus_per_node)
+    cpus_per_worker = _cpus_per_train_worker(config)
     ray_copy_limit = config.keep_latest + config.keep_best
     loop_config = {
         "entrypoint": dataclasses.asdict(config.entrypoint),
