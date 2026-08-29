@@ -45,52 +45,41 @@ git show --stat --oneline v1.1.0
 
 若内部 Git 尚未配置，可以先在本地创建 commit/tag；配置受保护的内部 remote 后再推送分支和 tag。构建机只接收源码副本，不作为 Git 历史的唯一保存位置。
 
-## 3. 同步到构建机并构建
+## 3. 在构建机检出确定版本并构建
 
-先在发布 shell 中填写本环境参数。尖括号占位符必须替换；不要把这组本地参数提交到
-Git。`PLATFORM_REPO_ROOT` 必须是构建机上的绝对目录，`REGISTRY_PROJECT` 是当前环境
-获准推送的 Harbor 项目：
+生产发布使用 Git，不使用双向 `rsync`。本地开发目录、Git 远端和构建机 checkout 的职责必须分开：本地负责修改和测试，Git 保存唯一历史，构建机只从已经推送的 commit 构建。
 
-```bash
-BUILD_USER='<ssh-user>'
-BUILD_HOST='<build-host>'
-SSH_KEY='<path-to-private-key>'
-PLATFORM_REPO_ROOT='<absolute-build-directory>'
-REGISTRY_PROJECT='<registry-project>'
-CORPORATE_DNS_A='<dns-server-a>'
-CORPORATE_DNS_B='<dns-server-b>'
-CERTIFICATE_ID='<certificate-id>'
-
-export BUILD_USER BUILD_HOST SSH_KEY PLATFORM_REPO_ROOT REGISTRY_PROJECT
-export CORPORATE_DNS_A CORPORATE_DNS_B CERTIFICATE_ID
-
-test -f "$SSH_KEY"
-case "$PLATFORM_REPO_ROOT" in
-  /*) ;;
-  *) echo 'PLATFORM_REPO_ROOT 必须是绝对目录' >&2; exit 2 ;;
-esac
-```
-
-先创建目标目录，再安全同步源码；不把 `.git`、`node_modules`、构建产物或恢复备份同步
-进去：
+先在本地提交、推送并记录完整 commit：
 
 ```bash
-ssh -i "$SSH_KEY" "${BUILD_USER}@${BUILD_HOST}" \
-  "mkdir -p '$PLATFORM_REPO_ROOT'"
-
-rsync -az \
-  --exclude .git --exclude .playwright-cli --exclude frontend/node_modules \
-  --exclude frontend/dist --exclude output --exclude deploy/release-records \
-  -e "ssh -i $SSH_KEY" \
-  ./ "${BUILD_USER}@${BUILD_HOST}:${PLATFORM_REPO_ROOT}/"
+git status --short
+git diff --check
+git push origin main
+git rev-parse HEAD
+git ls-remote origin refs/heads/main
 ```
 
-登录构建机后重新设置仓库根目录，再创建新标签并推送。后续所有部署命令也都从这个目录
-执行：
+`git status --short` 必须为空，最后两条命令的 commit 必须一致。生产验收前不要提前移动正式 release tag；tag 在验证成功后创建。
+
+登录构建机，在受控的绝对目录 checkout 后执行：
 
 ```bash
 export PLATFORM_REPO_ROOT='<absolute-build-directory>'
-cd "${PLATFORM_REPO_ROOT:?set PLATFORM_REPO_ROOT to the checkout root}"
+export EXPECTED_COMMIT='<full-commit-from-reviewed-main>'
+
+cd "${PLATFORM_REPO_ROOT:?}"
+git fetch --prune origin
+git checkout main
+git pull --ff-only origin main
+test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+test -z "$(git status --short)"
+```
+
+如果最后两个检查失败，停止发布：不要在构建机现场修改代码，不要用 `git reset --hard` 覆盖不明改动，也不要用本地目录覆盖构建目录。先确认改动所有者并回到 Git 流程处理。
+
+使用时间戳或正式候选版本作为镜像 tag，再由构建脚本推送 Harbor：
+
+```bash
 IMAGE_TAG=prod-$(date -u +%Y%m%d-%H%M%S) \
 BUILD_TARGETS=backend,frontend,spk-rayjob,source-materializer,workspace,train-pytorch \
 PUSH_IMAGE=true USE_BUILDX=true \
@@ -101,15 +90,14 @@ bash build-image.sh
 builder 在大镜像上出现“本地构建成功、远端节点无法拉取”的 manifest 兼容性问题。构建机
 已安装 Buildx；如新建构建机，先执行 `docker buildx version` 确认可用。
 
-构建完成后更新目标 Profile：
+构建完成后记录每个镜像的 digest，并更新目标 Profile：
 
 - `backend.image.tag`、`frontend.image.tag` 与 `spkRayjobRelease.image.tag` 使用新 tag；
 - `backend.workspaceImage`、`backend.sourceMaterializerImage` 使用输出的 digest；
 - 生产 Profile 还要填写 API/Portal 的 `image.digest` 并保留
   `release.requireImageDigests=true`。
 
-Profile 是审阅对象：将环境 Profile 与代码一并提交到内部 Git，或由 GitOps 仓库
-维护。不要把数据库 URL、AK/SK 或管理员密码放入其中。
+Profile 是审阅对象：把 digest 更新提交并推送后，再让构建机 checkout 这一份最终发布 commit。环境 Profile 可以与代码放在同一受保护仓库，也可以由专用 GitOps 仓库维护，但不能只存在于构建机。不要把数据库 URL、AK/SK 或管理员密码放入其中。
 
 ## 4. 原子升级与验收
 
@@ -312,25 +300,31 @@ kubectl label node <gpu-node-a> <gpu-node-b> accelerator=nvidia-rtx-4090 --overw
 
 ### 启用 GPU 节点 NVMe 缓存
 
-当前生产 Profile 中该能力关闭，因为集群尚无 `ray-cache-local` StorageClass。不要只把 `enabled` 改为 `true`；顺序必须是：
+当前生产已安装两套本地供应器与 StorageClass，分别管理 `/data1/ray-cache` 和 `/data2/ray-cache`。新集群或新 GPU 节点仍必须按以下顺序交付：
 
-1. 在每个 GPU 节点确认 `/data1`、`/data2` 为独立可丢弃缓存盘。
-2. 安装经评审的 VKE 本地 CSI/LVM 驱动，建立 `ray-cache-local`（RWO、`WaitForFirstConsumer`、Delete）。这一步包含集群级 RBAC，必须单独审批。
-3. 在两台 GPU 节点各创建一个临时 PVC/Pod，验证定位、写入、删除和容量回收。
-4. 更新 Profile：
+1. 确认每个 GPU 节点的 `/data1`、`/data2` 是独立、可丢弃的缓存盘。
+2. 执行 `bash ops/storage/nvme-cache/preflight.sh`，再执行 `bash ops/storage/nvme-cache/install.sh`。该安装包含集群级 RBAC，首次安装必须经过审批。
+3. 执行 `verify.sh` 与 `verify-dual.sh`，验证双盘定位、写入、删除和宿主机目录回收。
+4. 在 Profile 保持缓存基础设施可用、任务默认关闭，并登记两套 StorageClass：
 
 ```yaml
 training:
   localCache:
-    enabled: true
-    storageClass: ray-cache-local
-    size: 200Gi
-    mountPath: /mnt/cache
+    available: true
+    storageClassData1: ray-cache-local-data1
+    storageClassData2: ray-cache-local-data2
+    mountPathData1: /mnt/cache
+    mountPathData2: /mnt/cache2
+    policy:
+      defaultMode: "off"
+      allowedSizes: [200Gi, 500Gi, 1Ti, 2Ti, 4Ti, 5Ti]
+      defaultSize: 200Gi
+      maxSize: 5Ti
 ```
 
-5. 提交 1×1 smoke，确认 worker 中有 `PLATFORM_CACHE_PATH=/mnt/cache`，Ray `temp-dir` 和 object spilling 位于该卷，任务删除后临时 PVC 自动回收。
+5. 分别提交 off、runtime、preload 的 1×1 smoke，确认环境变量、Ray 临时目录、输入路径切换和任务结束后的 PVC/宿主机目录回收。
 
-该能力不改变数据读写契约：数据从 TOS/IDC 读，结果写 `PLATFORM_OUTPUT_PATH`。
+该能力不改变数据读写契约：持久数据来自 TOS/IDC，结果写 `PLATFORM_OUTPUT_PATH`。用户参数和性能 A/B 见 [NVMe 缓存指南](NVME_CACHE_GUIDE.md)。
 
 ### 公共数据根目录迁移
 

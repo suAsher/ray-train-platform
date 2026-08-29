@@ -260,7 +260,7 @@ MLflow Artifact 与 `/mnt/storage/public` 治理数据隔离。Artifact 底层�
 
 - **数据真相**：个人、团队、公共数据在 TOS；IDC 数据在管理员登记的只读导出。
 - **训练读取**：所有 Ray worker 都读取相同的受控输入路径。
-- **本地 NVMe**：GPU 节点的 `/data1`、`/data2` 只用于可丢弃缓存。当前集群没有 `ray-cache-local` StorageClass，生产 Profile 中 `training.localCache.enabled=false`，所以本地 NVMe **尚未对训练生效**。启用后，每个 Ray head/worker 获得一个调度到本节点的临时 PVC，挂载为 `/mnt/cache`；Ray session 和 object spilling 写入该目录，Pod 删除后 PVC 一并回收。数据真相仍在 TOS/IDC，checkpoint 和产物仍必须写 `PLATFORM_OUTPUT_PATH`。
+- **本地 NVMe**：GPU 节点的 `/data1`、`/data2` 只用于可丢弃缓存。平台已提供两套本地 StorageClass；任务默认不启用，用户可在提交时选择运行时缓存或输入预热。开启后每个 Worker 获得本节点的临时卷，训练读取 `PLATFORM_DATASET_PATH`，无需在代码中写节点路径。Pod 删除后缓存回收；数据真相仍在 TOS/IDC，Checkpoint 和产物始终写 `PLATFORM_OUTPUT_PATH`。
 - **结果**：每次训练固定写入个人 `my-runs`，在页面与调试环境中都能看到。
 
 ## 5. 集群外开发机如何提交

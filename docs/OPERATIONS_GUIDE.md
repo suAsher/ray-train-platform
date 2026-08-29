@@ -132,7 +132,7 @@ tos://shanghai-data-transfer/ray-train/public/
 | `/mnt/data/checkpoints` | 只读 | 续训所选历史任务目录 | `PLATFORM_CHECKPOINT_PATH`。 |
 | `/mnt/idc/*` | 按登记策略只读 | IDC NFS | 可选 IDC 数据源；当前生产 Profile 未启用。 |
 
-TOS 通过 `fsx.csi.volcengine.com` 静态 PV/PVC 挂载。身份在 `kube-system/fsx-agent` 上通过 IRSA 获取，训练 Pod 看不到 AK/SK。平台目前关闭 GPU NVMe 缓存，因此 `/data1`、`/data2` 还不是用户数据路径，不能作为数据真相。
+TOS 通过 `fsx.csi.volcengine.com` 静态 PV/PVC 挂载。身份在 `kube-system/fsx-agent` 上通过 IRSA 获取，训练 Pod 看不到 AK/SK。双 NVMe 缓存基础设施已可用，但任务默认关闭、按需启用；`/data1`、`/data2` 永远不是持久数据真相，也不直接作为用户路径暴露。
 
 EBS 用于 PostgreSQL、Prometheus 和 Loki 的本地状态；TOS 用于训练数据、用户结果、Checkpoint、日志对象和 MLflow Artifact。两者用途不能互换。
 
@@ -858,11 +858,11 @@ bash ops/platform/reset.sh \
 3. 平台 NetworkPolicy 当前未启用；MLflow 有独立 NetworkPolicy。
 4. IDC DNS 最近从 GPU 节点出现间歇性超时。VKE DNS 分流保证 TOS/STS 优先走 VPC DNS，但 IDC Git/NFS/私有域仍依赖 IDC DNS。
 5. FSX 探针目前是常驻 DaemonSet。它提供节点级预警，但长期方案应改为轻量 DNS exporter 加有界周期 FSX canary，替代告警上线后再删除当前探针。
-6. GPU NVMe 缓存未启用；训练仍直接读取 FSX/TOS，不应宣称已有本地缓存加速。
+6. GPU 双 NVMe 缓存和输入预热已交付，但默认关闭；只对显式开启的任务生效，性能收益必须用同参数 off/preload A/B 证明。
 7. IDC 与 TOS 的用户自助审批式双向同步未开放。
 8. 原生 MLflow 当前对已认证用户开放完整管理能力；共享实验和 Artifact 的删除/修改会影响全平台。
-9. 2026-08-23 巡检发现线上 Helm revision 85 的 Backend 镜像和 MLflow tracking 配置与 `deploy/profiles/vke-cpu-ha.yaml` 不一致。下一次平台发布前必须确定正确基线并回写 Profile。
-10. 构建机仓库当前存在未提交文件，且构建目录属主与 root 发布用户不一致；它不能直接作为正式 release 证据。应以本地已提交版本为基础整理内部 Git release，再让构建机使用干净 checkout。
+9. 2026-08-27 已重新核对：本地、构建机和 GitHub `main` 指向同一提交；构建机工作区干净。以后每次发布仍必须重新核对，不能把本条当作永久结论。
+10. 当前 GitHub 尚无 annotated release tag；下一次完成生产验收后，应把 commit、镜像 digest、Helm revision 与 tag 固化为同一发布记录。
 
 ## 13. 故障升级需要收集什么
 

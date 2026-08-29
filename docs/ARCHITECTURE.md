@@ -1,6 +1,8 @@
 # RayTrain 生产架构
 
-![RayTrain 生产架构](architecture/ray-training-platform-production-architecture-v3.svg)
+![RayTrain 组件级生产架构](architecture/ray-training-platform-production-architecture-v4.svg)
+
+总图只表达稳定组件和责任边界，不展示环境 IP、机器规格或副本数量；灰色虚线卡片是明确规划，不代表已经上线。
 
 本文描述当前生产基线。部署和升级请看 [构建与部署](BUILD_AND_DEPLOY.md)，用户操作请看 [用户使用手册](USER_GUIDE.md)。
 
@@ -99,10 +101,20 @@ flowchart TB
 
 ## 控制面与高可用
 
+![控制面、多租户与资源准入](architecture/ray-training-platform-control-plane-tenancy-v1.svg)
+
+这张图解释认证主体如何贯穿 Portal、CLI、任务所有权、团队 namespace 和 Kueue 准入；不展开单个 API 的字段和数据库表结构。
+
 - Frontend、Backend、spk-rayjob 发布服务均为 2 副本，带 HPA、PDB 和 CPU 节点反亲和；滚动升级不会中断已经创建的 RayJob。
 - Backend 通过 PostgreSQL 持久化用户、目录、任务、代码包、审计与运行时状态；Kubernetes Reconciler 使用 Lease 选主，避免多副本重复创建 RayJob。
 - PostgreSQL 当前是单副本 StatefulSet，使用持久卷。它是控制面唯一单点；需要跨可用区数据库高可用时，迁移到托管 PostgreSQL 或 Patroni，而不是把训练数据放到数据库中。
 - KubeRay 负责 RayJob / RayCluster 生命周期；Kueue 以租户队列、GPU/CPU/内存配额控制准入。
+
+## 训练任务生命周期
+
+![训练任务生命周期与故障边界](architecture/ray-training-platform-job-lifecycle-v1.svg)
+
+生命周期图区分预检、排队、RayCluster 运行期、失败分支和持久保留边界。TTL 回收 Ray Head、Worker 与 Dashboard，但不会删除平台任务历史、Loki 日志、Prometheus 指标、MLflow Run、Checkpoint 或持久结果。
 
 ## GPU 训练与调试
 
@@ -156,6 +168,10 @@ flowchart TB
 
 ## 数据契约
 
+![存储、双 NVMe 缓存与可观测性](architecture/ray-training-platform-storage-observability-v1.svg)
+
+存储图说明用户稳定路径如何映射到 TOS/FSX、任务级双 NVMe 缓存如何按需启用，以及日志、资源指标和实验指标分别进入哪些持久系统；它不把缓存描述成数据真相。
+
 训练容器没有 TOS AK/SK。TOS 访问由 CSI/FSX 的 IRSA 身份完成，平台根据登录身份和任务配置生成受控挂载。
 
 | 逻辑空间 | Pod 路径 | 权限 | 用途 |
@@ -180,16 +196,17 @@ flowchart TB
 
 当前全量原始数据主要位于公共根的 `labeled/`，索引位于 `0429_pkl/`、`0813_pkl/` 等目录。任务选择公共根时，`PLATFORM_DATASET_PATH=/mnt/data/input` 对应该根；任务选择某个子目录时，该变量只对应所选子目录。代码必须使用相对所选目录的路径，不能把逻辑空间、桶名或所选子目录重复拼接进去。
 
-数据真相在 TOS / 已登记 IDC 数据源。GPU 节点的 `/data1`、`/data2` 只能作为按任务隔离的可回收缓存；所有 checkpoint、模型和训练结果必须写入 `PLATFORM_OUTPUT_PATH`（个人 TOS 空间）。当前本地 CSI 缓存开关默认关闭，须在所有 GPU 节点统一完成 StorageClass 验收后再启用。
+数据真相在 TOS / 已登记 IDC 数据源。GPU 节点的 `/data1`、`/data2` 只能作为按任务隔离的可回收缓存；所有 checkpoint、模型和训练结果必须写入 `PLATFORM_OUTPUT_PATH`（个人 TOS 空间）。当前双盘供应器和两套 StorageClass 已通过交付验收，平台能力可用，但每个任务默认 `off`，只有用户显式选择 `runtime` 或输入预热时才创建临时卷。
 
 ### NVMe 缓存生效时的链路
 
-1. 节点把两块盘分别交给本地 CSI/LVM 存储池，不做跨盘 RAID，不向用户暴露宽泛 `hostPath`。
-2. 集群提供 `ray-cache-local` StorageClass：`ReadWriteOnce`、`WaitForFirstConsumer`、`reclaimPolicy: Delete`。
-3. 平台为每个 Ray head/worker 生成 generic ephemeral PVC，挂载为 `/mnt/cache`，并注入 `PLATFORM_CACHE_PATH`。
-4. Ray `temp-dir` 使用 `/mnt/cache/ray`，object spilling 使用 `/mnt/cache/ray-spill/objects`。任务结束后 Pod/PVC 与缓存一起删除。
+1. 两块盘分别由 `ray-cache-local-data1`、`ray-cache-local-data2` 供应器管理，不做跨盘 RAID，也不向用户暴露宽泛 `hostPath`。
+2. 两套 StorageClass 都使用 `ReadWriteOnce`、`WaitForFirstConsumer` 和 `reclaimPolicy: Delete`，保证卷与消费它的 Worker 同节点。
+3. `runtime` 模式为 Worker 创建两个 generic ephemeral PVC，分别挂载为 `/mnt/cache` 与 `/mnt/cache2`，并配置 Ray 临时目录和 object spilling。
+4. 开启 `preload: input` 时，平台 initContainer 把所选输入预热到两块盘的缓存视图，再把 `PLATFORM_DATASET_PATH` 指向该视图；训练代码继续遵守同一个路径契约。
+5. 多机训练的每个 Worker 在所在节点拥有独立副本。任务结束后 Pod、PVC 和缓存一起回收；预热失败会显式失败，不把 NVMe 当作数据真相。
 
-这个基线只加速 Ray 临时文件和对象溢写，**不会自动把 TOS 数据集整体预热到 NVMe**。需要数据集缓存时，应再增加基于对象 ETag/版本摘要的 initContainer 预热与容量回收机制，缓存未命中时仍从 TOS/IDC 读取。
+缓存是否有收益取决于数据规模、文件数量、epoch 数和复用次数。短任务可能因为预热成本变慢；正式判断以相同代码、参数、数据和节点上的 off/preload A/B 为准。
 
 底层 FSX 的一个租户根目录只发布一次可写 PVC；任务的输入、checkpoint 和输出只通过不同的 `subPath` 映射为逻辑目录。即使公共输入来自同一租户根，也只在容器级别以只读方式挂载，避免同一 FSX 源同时被 Kubernetes 作为读写、只读卷发布而整体退化为只读。这是平台内部实现细节，用户始终只选择逻辑目录与上表中的稳定路径。
 

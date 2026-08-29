@@ -4,7 +4,7 @@
 
 训练代码随任务上传，镜像只提供固定的 CUDA、PyTorch、Ray 和系统依赖。修改 Python 或配置文件后可以直接重新提交，不需要为每次代码变更重建镜像。
 
-![Ray 分布式训练平台生产架构](docs/architecture/ray-training-platform-production-architecture-v3.svg)
+![Ray 分布式训练平台组件级生产架构](docs/architecture/ray-training-platform-production-architecture-v4.svg)
 
 ## 平台解决什么问题
 
@@ -113,7 +113,7 @@ PLATFORM_CHECKPOINT_PATH  续训时挂载的历史结果目录（可选）
 
 - Frontend、Backend 和 CLI 发布服务支持多副本；内置 PostgreSQL 当前为单实例。严格控制面高可用应迁移到外部 HA PostgreSQL。
 - 本地账号仍保留；Keycloak/OIDC 已作为架构接入点设计，但当前环境未强制启用。
-- GPU 节点 NVMe 的任务级临时缓存契约已实现，但 `ray-cache-local` StorageClass 未完成集群验收前保持关闭，不宣称已获得数据加速。
+- GPU 节点双 NVMe 缓存基础设施、两套 StorageClass 与任务级预热已经完成交付；任务默认仍为 `off`，用户按需选择 `runtime` 或输入预热。缓存是可回收副本，Checkpoint 和结果仍写个人持久空间。
 - IDC 数据源可由管理员登记为受控只读挂载；IDC 与 TOS 的用户自助双向迁移尚未作为生产入口开放。
 - Ray Dashboard 只用于运行期诊断。任务集群回收后，历史分析使用平台任务详情、Loki、Prometheus/Grafana 和训练产物。
 - MLflow 独立运行于 `mlflow-system`，使用自己的 PostgreSQL；Artifact 存储是 `vke-cluster/ray-train/platform/mlflow-artifacts/` 专用前缀的 FSX CSI 静态 PV/PVC。MLflow Pod 只看到 `/mlflow-artifacts` 挂载根，不直连对象存储，也不注入 TOS/AWS AK/SK。实验中心是平台筛选视图，适合按当前用户或团队查看训练指标；登录后的原生 MLflow 是全平台共享的完整管理界面。
@@ -136,6 +136,7 @@ PLATFORM_CHECKPOINT_PATH  续训时挂载的历史结果目录（可选）
 
 ### 管理与运维文档
 
+- [交接与入手手册](docs/HANDOVER_GUIDE.md)：源码基线、组件清单、第一小时、日常维护、发布、排障与交接验收。
 - [管理员手册](docs/ADMIN_GUIDE.md)：租户、用户、角色、GPU 配额、镜像、Git 凭据和数据发布。
 - [生产架构](docs/ARCHITECTURE.md)：网络、高可用、调度、存储、安全与可观测性。
 - [构建与部署](docs/BUILD_AND_DEPLOY.md)：安装、升级、回滚和迁移到新集群。

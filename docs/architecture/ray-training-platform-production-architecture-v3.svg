@@ -86,9 +86,10 @@
   <rect x="1256" y="742" width="228" height="38" rx="10" fill="#df7b2e"/>
   <circle cx="1279" cy="761" r="12" fill="#fff"/><text x="1279" y="766" text-anchor="middle" font-size="14" font-weight="800" fill="#df7b2e">6</text>
   <text x="1297" y="768" font-size="18" font-weight="800" class="white">可观测性与缓存</text>
-  <g filter="url(#shadow)"><rect x="1274" y="800" width="170" height="88" rx="13" fill="#fff9ef" stroke="#df8b45"/><text x="1359" y="831" class="boxTitle" text-anchor="middle">日志链路</text><text x="1359" y="856" class="boxText" text-anchor="middle">Alloy → Loki</text><text x="1359" y="877" class="small" text-anchor="middle">任务 / Pod 日志</text></g>
-  <g filter="url(#shadow)"><rect x="1468" y="800" width="170" height="88" rx="13" fill="#fff9ef" stroke="#df8b45"/><text x="1553" y="831" class="boxTitle" text-anchor="middle">指标链路</text><text x="1553" y="856" class="boxText" text-anchor="middle">Prometheus / DCGM</text><text x="1553" y="877" class="small" text-anchor="middle">Grafana / 告警</text></g>
-  <g filter="url(#shadow)"><rect x="1662" y="800" width="188" height="88" rx="13" fill="#faf6ff" stroke="#9c83e1"/><text x="1756" y="831" class="boxTitle" text-anchor="middle">节点 NVMe 缓存</text><text x="1756" y="856" class="boxText" text-anchor="middle">数据预热 / 临时加速</text><text x="1756" y="877" class="small" text-anchor="middle">可回收副本</text></g>
+  <g filter="url(#shadow)"><rect x="1258" y="800" width="138" height="88" rx="13" fill="#fff9ef" stroke="#df8b45"/><text x="1327" y="831" class="boxTitle" text-anchor="middle">日志</text><text x="1327" y="856" class="boxText" text-anchor="middle">Alloy → Loki</text><text x="1327" y="877" class="small" text-anchor="middle">任务 / Pod</text></g>
+  <g filter="url(#shadow)"><rect x="1408" y="800" width="138" height="88" rx="13" fill="#fff9ef" stroke="#df8b45"/><text x="1477" y="831" class="boxTitle" text-anchor="middle">资源指标</text><text x="1477" y="856" class="boxText" text-anchor="middle">Prometheus / DCGM</text><text x="1477" y="877" class="small" text-anchor="middle">Grafana / 告警</text></g>
+  <g filter="url(#shadow)"><rect x="1558" y="800" width="138" height="88" rx="13" fill="#f3fff8" stroke="#64b987"/><text x="1627" y="831" class="boxTitle" text-anchor="middle">实验追踪</text><text x="1627" y="856" class="boxText" text-anchor="middle">MLflow</text><text x="1627" y="877" class="small" text-anchor="middle">参数 / Loss / 产物</text></g>
+  <g filter="url(#shadow)"><rect x="1708" y="800" width="138" height="88" rx="13" fill="#faf6ff" stroke="#9c83e1"/><text x="1777" y="831" class="boxTitle" text-anchor="middle">NVMe 缓存</text><text x="1777" y="856" class="boxText" text-anchor="middle">双盘输入预热</text><text x="1777" y="877" class="small" text-anchor="middle">可回收副本</text></g>
 
   <!-- 7 用户闭环 -->
   <rect x="34" y="934" width="1852" height="116" rx="16" fill="#f7faff" stroke="#87b4ef" stroke-width="1.6"/>
@@ -107,6 +108,6 @@
   <path class="arrow" d="M418 209V235H473V322"/><path class="arrow" d="M776 209V235H753V322"/>
   <path class="arrow" d="M875 358H1012"/><path class="arrow" d="M1417 394V512H815V550"/><path class="arrow" d="M1697 394V512H1195V550"/>
   <path class="arrow" d="M980 613H1030"/><path class="dash" d="M1195 676V718H620V800"/><path class="dash" d="M435 676V718H170V800"/>
-  <path class="dash" d="M815 676V718H1359V800"/><path class="dash" d="M1195 676V718H1553V800"/><path class="dash" d="M1195 676V718H1756V800"/>
+  <path class="dash" d="M815 676V718H1327V800"/><path class="dash" d="M1195 676V718H1477V800"/><path class="dash" d="M815 676V718H1627V800"/><path class="dash" d="M1195 676V718H1777V800"/>
   <path class="arrow" d="M460 989H510"/><path class="arrow" d="M670 989H720"/><path class="arrow" d="M880 989H930"/><path class="arrow" d="M1090 989H1140"/><path class="arrow" d="M1320 989H1370"/><path class="arrow" d="M1530 989H1580"/>
 </svg>

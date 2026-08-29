@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import re
 import unittest
 from pathlib import Path
@@ -34,7 +35,9 @@ NVME_CACHE_PLAN = (
 )
 PLATFORM_ROADMAP = ROOT / "docs" / "PLATFORM_ROADMAP.md"
 CONTRACT_DOCS = PUBLIC_DOCS + (
+    ROOT / "docs" / "HANDOVER_GUIDE.md",
     ROOT / "docs" / "BUILD_AND_DEPLOY.md",
+    ROOT / "docs" / "OPERATIONS_GUIDE.md",
     ROOT / "docs" / "BEVFUSION_RUNBOOK.md",
     ROOT / "ops" / "mlflow" / "README.md",
     NVME_CACHE_DESIGN,
@@ -49,6 +52,37 @@ USER_FACING_DOCS = (
     ROOT / "docs" / "BEVFUSION_RUNBOOK.md",
 )
 BUILD_AND_DEPLOY = ROOT / "docs" / "BUILD_AND_DEPLOY.md"
+ARCHITECTURE_ASSETS = {
+    "overview": ROOT / "docs/architecture/ray-training-platform-production-architecture-v4",
+    "control": ROOT / "docs/architecture/ray-training-platform-control-plane-tenancy-v1",
+    "lifecycle": ROOT / "docs/architecture/ray-training-platform-job-lifecycle-v1",
+    "storage": ROOT / "docs/architecture/ray-training-platform-storage-observability-v1",
+}
+ARCHITECTURE_COMPONENTS = {
+    "overview": (
+        "Web Portal", "spk-rayjob", "Ray Jobs API", "IDC NGINX Ingress",
+        "私网 ALB", "Backend API", "Kueue", "KubeRay Operator",
+        "Ray Head", "Ray Worker", "TOS", "FSX CSI", "双 NVMe",
+        "Alloy", "Loki", "Prometheus Operator", "MLflow",
+    ),
+    "control": (
+        "SuperAdmin", "TenantAdmin", "Engineer", "本地会话", "OIDC 会话",
+        "PAT", "Git 凭据", "tenant-&lt;team&gt;", "LocalQueue",
+        "ClusterQueue", "ResourceFlavor", "PostgreSQL",
+    ),
+    "lifecycle": (
+        "提交前检查", "Kueue Workload", "RayJob", "Submitter",
+        "GCS", "Dashboard", "PyTorch DDP", "NCCL", "TTL 回收",
+        "任务历史", "Checkpoint",
+    ),
+    "storage": (
+        "/mnt/storage/me", "/mnt/storage/team", "/mnt/storage/public",
+        "PLATFORM_DATASET_PATH", "PLATFORM_OUTPUT_PATH",
+        "PLATFORM_CHECKPOINT_PATH", "IRSA", "FSX Agent", "PV / PVC",
+        "preload: input", "DCGM Exporter", "Node Exporter",
+        "kube-state-metrics", "MLflow PostgreSQL", "Artifact 空间",
+    ),
+}
 MLFLOW_PUBLIC_DOCS = (
     ROOT / "README.md",
     ROOT / "docs" / "ARCHITECTURE.md",
@@ -77,6 +111,13 @@ def markdown_section(markdown: str, heading: str) -> str:
     if start is None:
         raise AssertionError(f"Markdown heading not found: {heading}")
     return "\n".join(lines[start:])
+
+
+def png_dimensions(path: Path) -> tuple[int, int]:
+    data = path.read_bytes()[:24]
+    if len(data) != 24 or data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise AssertionError(f"not a PNG file: {path}")
+    return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
 
 
 class DocumentationContractTest(unittest.TestCase):
@@ -281,11 +322,14 @@ class DocumentationContractTest(unittest.TestCase):
             (
                 "按任务选择",
                 "默认关闭",
-                "100Gi / 200Gi / 500Gi",
-                "只为 Ray Head/Worker 挂载 `/mnt/cache`",
+                "200Gi / 500Gi / 1Ti / 2Ti / 4Ti / 5Ti",
+                "最大 5Ti",
+                "Ray Head/Worker 挂载 `/mnt/cache`、`/mnt/cache2`",
                 "`PLATFORM_CACHE_PATH`",
                 "Ray temp-dir",
                 "object spilling",
+                "`preload: input`",
+                "`PLATFORM_DATASET_PATH`",
                 "训练镜像保持不变",
             ),
         )
@@ -497,10 +541,16 @@ class DocumentationContractTest(unittest.TestCase):
         self.assertNotRegex(deployment, r"AKLT[A-Za-z0-9+/=]{12,}")
         self.assertNotIn("BEGIN PRIVATE KEY", deployment)
 
+        for git_first_marker in (
+            "git fetch --prune origin",
+            "git pull --ff-only origin main",
+            "EXPECTED_COMMIT='<full-commit-from-reviewed-main>'",
+            'test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"',
+            'test -z "$(git status --short)"',
+        ):
+            self.assertIn(git_first_marker, deployment)
+
         for portable_setting in (
-            "BUILD_USER='<ssh-user>'",
-            "BUILD_HOST='<build-host>'",
-            "SSH_KEY='<path-to-private-key>'",
             "PLATFORM_REPO_ROOT='<absolute-build-directory>'",
             "REGISTRY_PROJECT='<registry-project>'",
             "CORPORATE_DNS_A='<dns-server-a>'",
@@ -658,6 +708,63 @@ class DocumentationContractTest(unittest.TestCase):
         self.assertIn("带前导 `/` 的同名写法都可能误伤", guide)
         self.assertIn("mmdet3d/datasets", guide)
         self.assertNotRegex(guide, r"(?m)^/?(?:data|datasets|work_dirs)/$")
+
+    def test_component_architecture_assets_exist_and_are_4k(self) -> None:
+        for name, base in ARCHITECTURE_ASSETS.items():
+            with self.subTest(diagram=name):
+                svg = base.with_suffix(".svg")
+                png = base.with_suffix(".png")
+                self.assertTrue(svg.is_file(), svg)
+                self.assertTrue(png.is_file(), png)
+                self.assertEqual(png_dimensions(png), (3840, 2160))
+
+    def test_component_architecture_diagrams_contain_approved_components(self) -> None:
+        for name, markers in ARCHITECTURE_COMPONENTS.items():
+            svg = ARCHITECTURE_ASSETS[name].with_suffix(".svg").read_text(
+                encoding="utf-8"
+            )
+            for marker in markers:
+                with self.subTest(diagram=name, marker=marker):
+                    self.assertIn(marker, svg)
+
+    def test_component_architecture_diagrams_do_not_leak_environment_details(self) -> None:
+        for name, base in ARCHITECTURE_ASSETS.items():
+            svg = base.with_suffix(".svg").read_text(encoding="utf-8")
+            with self.subTest(diagram=name):
+                self.assertNotRegex(svg, r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+                self.assertNotIn("qomolo-desktop", svg)
+                self.assertNotIn("welldriver", svg)
+                self.assertNotRegex(svg, r"(?:×|x)\s*\d+\s*(?:副本|Pod|节点)")
+                self.assertNotRegex(svg, r"(?:RTX|4090|180C|780G)")
+
+    def test_component_architecture_renderer_escapes_and_is_deterministic(self) -> None:
+        path = ROOT / "scripts/generate_architecture_diagrams.py"
+        spec = importlib.util.spec_from_file_location("architecture_renderer", path)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.assertEqual(
+            module.svg_text("tenant-<team> & PAT"),
+            "tenant-&lt;team&gt; &amp; PAT",
+        )
+        box = module.Box(10, 20, 180, 90, "tenant-<team>", ("PAT & OIDC",), "purple")
+        self.assertEqual(module.render_box(box), module.render_box(box))
+        self.assertNotIn("<team>", module.render_box(box))
+
+    def test_active_docs_reference_v4_and_component_subdiagrams(self) -> None:
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        docs_index = (ROOT / "docs/README.md").read_text(encoding="utf-8")
+        architecture = (ROOT / "docs/ARCHITECTURE.md").read_text(encoding="utf-8")
+        handover = (ROOT / "docs/HANDOVER_GUIDE.md").read_text(encoding="utf-8")
+        self.assertIn("ray-training-platform-production-architecture-v4.svg", readme)
+        for base in ARCHITECTURE_ASSETS.values():
+            filename = base.with_suffix(".svg").name
+            self.assertIn(filename, docs_index)
+            self.assertIn(filename, architecture)
+        self.assertIn("ray-training-platform-production-architecture-v4.svg", handover)
+        combined = "\n".join((readme, docs_index, architecture, handover))
+        self.assertNotIn("ray-training-platform-production-architecture-v3.svg", combined)
 
     def test_code_fences_are_balanced(self) -> None:
         unbalanced = []
