@@ -156,6 +156,12 @@ test('defaults stay conservative when the platform has not answered yet', () => 
     defaultSize: '',
     maxSize: '',
     mountPath: '',
+    mountPaths: [],
+  })
+  assert.deepEqual(defaultPlatformLimits.datasets, {
+    versioningEnabled: false,
+    streamingEnabled: false,
+    publisherEnabled: false,
   })
 })
 
@@ -176,7 +182,10 @@ test('selecting runtime cache uses the valid server default or first allowed siz
     defaultSize: '200Gi',
     maxSize: '200Gi',
     mountPath: '/mnt/cache',
+    mountPaths: ['/mnt/cache', '/mnt/cache2'],
   })
+
+  assert.deepEqual(policy.mountPaths, ['/mnt/cache', '/mnt/cache2'])
 
   assert.deepEqual(
     normalizeCacheSelection({ cacheMode: 'runtime', cacheSize: '' }, policy, { selectRuntimeDefault: true }),

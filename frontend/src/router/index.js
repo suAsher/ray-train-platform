@@ -62,6 +62,12 @@ const routes = [
         meta: { title: '数据集与模型产物 (TOS)', requiresAuth: true }
       },
       {
+        path: 'datasets',
+        name: 'Datasets',
+        component: () => import('../views/Datasets/index.vue'),
+        meta: { title: '版本化数据集', requiresAuth: true }
+      },
+      {
         path: 'external-submit',
         name: 'ExternalSubmit',
         component: () => import('../views/ExternalSubmit/index.vue'),

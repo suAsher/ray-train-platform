@@ -116,6 +116,103 @@ test('normalizer keeps nulls for an empty or malformed response', async () => {
   assert.deepEqual(normalized.unavailableMetrics, [])
 })
 
+test('derives streaming source, Ray wait, bounded cache, and spill details from safe telemetry', async () => {
+  const { normalizeTrainingPerformance } = await loadPerformanceModule()
+  const sensitiveTokenLabel = ['to', 'ken'].join('')
+  const startedAt = '2026-08-28T01:00:00Z'
+  const endedAt = '2026-08-28T01:00:10Z'
+  const counterSeries = (start, end) => [{
+    labels: {
+      pod: 'worker-a',
+      dataset_id: 'labeled-full',
+      dataset_version_id: 'v42',
+      object_key: 'must-not-reach-the-browser',
+      [sensitiveTokenLabel]: 'must-not-reach-the-browser',
+    },
+    points: [
+      { timestamp: startedAt, value: start },
+      { timestamp: endedAt, value: end },
+    ],
+  }]
+  const normalized = normalizeTrainingPerformance({
+    series: {
+      datasetSourceBytesTotal: counterSeries(1_000, 5_000),
+      datasetCacheBytesReadTotal: counterSeries(500, 2_500),
+      datasetSourceReadsTotal: counterSeries(2, 12),
+      datasetSamplesTotal: counterSeries(4, 24),
+      datasetPrefetchWaitSecondsTotal: counterSeries(0.5, 2.5),
+      datasetBackpressureSecondsTotal: counterSeries(0, 1),
+      objectStoreSpillBytesPerSecond: [{
+        labels: { pod: 'worker-a' },
+        points: [
+          { timestamp: startedAt, value: 100 },
+          { timestamp: endedAt, value: 100 },
+        ],
+      }],
+      objectKey: counterSeries(0, 1),
+    },
+    summary: {
+      datasetSourceReadP95Seconds: 0.125,
+      datasetCacheReadP95Seconds: 0.025,
+      datasetPrefetchWaitP95Seconds: 0.075,
+      datasetCacheHitsTotal: 9,
+      datasetCacheMissesTotal: 1,
+      datasetCacheBytesTotal: 4_096,
+      datasetCacheEvictionsTotal: 2,
+      datasetCacheChecksumFailuresTotal: 1,
+      objectStoreSpillBytesPerSecond: 100,
+      accessToken: 123,
+    },
+  })
+
+  assert.equal(normalized.summary.datasetSourceBytesPerSecond, 400)
+  assert.equal(normalized.summary.datasetCacheBytesPerSecond, 200)
+  assert.equal(normalized.summary.datasetSourceShardsPerSecond, 1)
+  assert.equal(normalized.summary.datasetSourceSamplesPerSecond, 2)
+  assert.equal(normalized.summary.datasetSourceReadP95Seconds, 0.125)
+  assert.equal(normalized.summary.datasetCacheReadP95Seconds, 0.025)
+  assert.equal(normalized.summary.datasetPrefetchWaitP95Seconds, 0.075)
+  assert.equal(normalized.summary.datasetPrefetchWaitRatio, 0.2)
+  assert.equal(normalized.summary.datasetBackpressureRatio, 0.1)
+  assert.equal(normalized.summary.datasetCacheHitRatio, 0.9)
+  assert.equal(normalized.summary.datasetCacheBytesTotal, 4_096)
+  assert.equal(normalized.summary.datasetCacheEvictionsTotal, 2)
+  assert.equal(normalized.summary.datasetCacheChecksumFailuresTotal, 1)
+  assert.equal(normalized.summary.objectStoreSpillBytes, 1_000)
+  assert.deepEqual(normalized.series.datasetSourceBytesTotal[0].labels, {
+    pod: 'worker-a',
+    dataset_id: 'labeled-full',
+    dataset_version_id: 'v42',
+  })
+  assert.equal(Object.hasOwn(normalized.series, 'objectKey'), false)
+  assert.equal(Object.hasOwn(normalized.summary, 'accessToken'), false)
+  assert.equal(JSON.stringify(normalized).includes('must-not-reach-the-browser'), false)
+})
+
+test('keeps derived streaming details unavailable for historical jobs with missing counters', async () => {
+  const { normalizeTrainingPerformance } = await loadPerformanceModule()
+  const normalized = normalizeTrainingPerformance({
+    summary: {
+      gpuUtilizationPercent: 0,
+      datasetCacheHitsTotal: 0,
+      datasetCacheMissesTotal: 0,
+      objectStoreSpillBytesPerSecond: 0,
+    },
+  })
+
+  assert.equal(normalized.summary.gpuUtilizationPercent, 0)
+  assert.equal(normalized.summary.objectStoreSpillBytesPerSecond, 0)
+  assert.equal(normalized.summary.datasetSourceBytesPerSecond, null)
+  assert.equal(normalized.summary.datasetSourceShardsPerSecond, null)
+  assert.equal(normalized.summary.datasetSourceReadP95Seconds, null)
+  assert.equal(normalized.summary.datasetCacheReadP95Seconds, null)
+  assert.equal(normalized.summary.datasetPrefetchWaitP95Seconds, null)
+  assert.equal(normalized.summary.datasetPrefetchWaitRatio, null)
+  assert.equal(normalized.summary.datasetBackpressureRatio, null)
+  assert.equal(normalized.summary.datasetCacheHitRatio, null)
+  assert.equal(normalized.summary.objectStoreSpillBytes, null)
+})
+
 test('diagnoses data wait first at the exact 20 percent boundary', async () => {
   const { diagnosePerformance } = await loadPerformanceModule()
   const diagnosis = diagnosePerformance({
@@ -129,6 +226,8 @@ test('diagnoses data wait first at the exact 20 percent boundary', async () => {
   assert.equal(diagnosis.severity, 'warning')
   assert.equal(diagnosis.ratios.data, 0.2)
   assert.match(diagnosis.advice, /数据|DataLoader/)
+  assert.equal(diagnosis.dataStall.status, 'detected')
+  assert.match(diagnosis.dataStall.reason, /GPU|数据/)
 })
 
 test('diagnoses communication before low GPU utilization', async () => {
@@ -169,8 +268,42 @@ test('diagnoses balanced performance at 50 percent GPU utilization or with missi
     ncclDurationSeconds: 1,
     gpuUtilizationPercent: 50,
   }).code, 'BALANCED')
+  assert.equal(diagnosePerformance({
+    stepTimeSeconds: 10,
+    dataTimeSeconds: 0.5,
+    datasetPrefetchWaitRatio: 0.05,
+    datasetBackpressureRatio: 0.02,
+    gpuUtilizationPercent: 85,
+  }).dataStall.status, 'clear')
   assert.equal(diagnosePerformance({}).code, 'BALANCED')
   assert.equal(diagnosePerformance({}).severity, 'success')
+  assert.equal(diagnosePerformance({}).dataStall.status, 'unknown')
+})
+
+test('identifies GPU data stalls from Ray prefetch or backpressure without treating missing values as zero', async () => {
+  const { diagnosePerformance } = await loadPerformanceModule()
+
+  const prefetchStall = diagnosePerformance({
+    stepTimeSeconds: 4,
+    dataTimeSeconds: 0.2,
+    datasetPrefetchWaitRatio: 0.25,
+    datasetBackpressureRatio: 0.05,
+    gpuUtilizationPercent: 45,
+  })
+  assert.equal(prefetchStall.dataStall.status, 'detected')
+  assert.equal(prefetchStall.dataStall.signal, 'prefetch')
+
+  const backpressureStall = diagnosePerformance({
+    stepTimeSeconds: 4,
+    dataTimeSeconds: 0.2,
+    datasetPrefetchWaitRatio: 0.05,
+    datasetBackpressureRatio: 0.3,
+    gpuUtilizationPercent: 45,
+  })
+  assert.equal(backpressureStall.dataStall.status, 'detected')
+  assert.equal(backpressureStall.dataStall.signal, 'backpressure')
+
+  assert.equal(diagnosePerformance({ gpuUtilizationPercent: 20 }).dataStall.status, 'unknown')
 })
 
 test('API wrapper delegates only the bounded authenticated same-origin path', async () => {
@@ -196,13 +329,34 @@ test('performance components expose responsive accessible read-only contracts', 
   assert.match(workerTable, /aria-label=/)
   assert.match(workerTable, /暂无数据/)
 
-  for (const label of ['性能诊断', 'Step 时间', '数据等待', 'NCCL 通信', 'Object Spill', '缓存']) {
+  for (const label of [
+    '性能诊断',
+    'Step 时间',
+    '数据等待',
+    'NCCL 通信',
+    '源读取吞吐',
+    '源分片速率',
+    '源读取 P95',
+    'Ray 预取等待',
+    'Ray 背压',
+    'GPU 数据停顿',
+    'NVMe 有界缓存',
+    '缓存读取吞吐',
+    '缓存淘汰',
+    '校验失败',
+    'Object Spill',
+    '窗口内溢写',
+  ]) {
     assert.match(dataPanel, new RegExp(label))
   }
   assert.match(dataPanel, /暂无数据/)
-  assert.match(dataPanel, /cacheHitsTotal/)
-  assert.match(dataPanel, /cacheMissesTotal/)
+  assert.match(dataPanel, /datasetCacheHitRatio/)
+  assert.match(dataPanel, /datasetCacheBytesTotal/)
+  assert.match(dataPanel, /datasetCacheReadP95Seconds/)
+  assert.match(dataPanel, /datasetPrefetchWaitP95Seconds/)
+  assert.match(dataPanel, /objectStoreSpillBytesPerSecond/)
   assert.doesNotMatch(dataPanel, /cacheHitsPerSecond|cacheMissesPerSecond/)
+  assert.doesNotMatch(dataPanel, /object[_ -]?key|access[_ -]?token|secret[_ -]?key/i)
   assert.doesNotMatch(dataPanel, /<(?:input|button|el-input|el-slider)\b/)
 
   for (const label of ['集群尝试', '恢复检查点', '重启次数', '暂无恢复记录']) {

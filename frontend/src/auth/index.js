@@ -6,10 +6,10 @@
  * rest of the app talks to this module so no view needs to know which one is
  * active.
  */
-import * as keycloak from './keycloak'
-import { localToken, localUser, logoutLocal, clearLocalSession } from './localSession'
+import * as keycloak from './keycloak.js'
+import { localToken, localUser, logoutLocal, clearLocalSession } from './localSession.js'
 
-export { loginWithPassword, fetchAuthProviders } from './localSession'
+export { loginWithPassword, fetchAuthProviders } from './localSession.js'
 
 export async function initAuth() {
   // A local session takes precedence: if the user signed in with a password we

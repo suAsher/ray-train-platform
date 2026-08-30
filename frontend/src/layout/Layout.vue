@@ -100,6 +100,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { ArrowDown, VideoPlay, Platform, FolderOpened, Lock, DataAnalysis, Monitor, UploadFilled, TrendCharts } from '@element-plus/icons-vue'
 import { logout } from '../auth'
 import { fetchMyQuota } from '../api/quota'
+import { fetchPlatformLimits } from '../api/platform'
+import { normalizeDatasetCapabilities } from '../datasetCatalog.js'
 import { session, isAdmin, isDemoSession, roles } from '../stores/session'
 import { adminNavigation } from '../adminNav'
 
@@ -108,15 +110,18 @@ const REFRESH_INTERVAL_MS = 15000
 const route = useRoute()
 const router = useRouter()
 const quota = ref(null)
+const datasetCapabilities = ref(normalizeDatasetCapabilities())
 let quotaTimer
 
-const workspaceNav = [
+const datasetCatalogEnabled = computed(() => datasetCapabilities.value.catalogEnabled)
+const workspaceNav = computed(() => [
   { to: '/job', label: '我的训练任务', icon: VideoPlay },
   { to: '/experiments', label: '实验中心', icon: TrendCharts },
   { to: '/devcenter', label: '交互式调试', icon: Platform },
   { to: '/datacache', label: '我的数据', icon: FolderOpened },
+  ...(datasetCatalogEnabled.value ? [{ to: '/datasets', label: '版本化数据集', icon: FolderOpened }] : []),
   { to: '/external-submit', label: '外部提交', icon: UploadFilled }
-]
+])
 
 const adminIcons = { console: Lock, cluster: DataAnalysis, nodes: Monitor }
 const adminNav = adminNavigation.map((item) => ({ ...item, icon: adminIcons[item.id] }))
@@ -132,9 +137,22 @@ async function refreshQuota() {
   }
 }
 
+async function refreshDatasetCapabilities() {
+  try {
+    const limits = await fetchPlatformLimits()
+    datasetCapabilities.value = normalizeDatasetCapabilities(limits?.datasets)
+  } catch {
+    datasetCapabilities.value = normalizeDatasetCapabilities()
+  }
+}
+
 onMounted(() => {
   refreshQuota()
-  quotaTimer = window.setInterval(refreshQuota, REFRESH_INTERVAL_MS)
+  refreshDatasetCapabilities()
+  quotaTimer = window.setInterval(() => {
+    refreshQuota()
+    refreshDatasetCapabilities()
+  }, REFRESH_INTERVAL_MS)
 })
 onUnmounted(() => window.clearInterval(quotaTimer))
 

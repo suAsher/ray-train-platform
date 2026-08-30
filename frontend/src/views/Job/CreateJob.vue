@@ -59,6 +59,7 @@
             :warnings="commandWarnings"
             :workspace-path="mountPaths.workspace"
             :managed-availability="managedAvailability"
+            :streaming-availability="streamingAvailability"
             @apply-profile="applyProfile"
           />
         </div>
@@ -72,6 +73,7 @@
             :execution-mode="executionMode"
             :command-preview="commandPreview"
             :cache-policy="limits.cache"
+            :preflight="visiblePreflight"
           />
         </template>
 
@@ -136,11 +138,12 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 
 import { apiPost } from '../../api/client'
 import { buildJobSpec } from '../../submission'
+import { assertStreamingPreflightCurrent, pinStreamingPreflight, preflightFingerprint } from '../../datasetCatalog.js'
 import { useJobForm } from '../../composables/useJobForm'
 import { trainingEngineLabel } from '../../trainingEngine.js'
 import StepCode from '../../components/job/StepCode.vue'
@@ -152,11 +155,14 @@ const router = useRouter()
 const route = useRoute()
 const currentStep = ref(0)
 const submitting = ref(false)
+const preflightResult = ref(null)
+const preflightSignature = ref('')
 const stepTitles = ['代码与环境', '运行规模', '数据与确认']
 
 const {
   form, limits, quotaModel, profiles, executionMode, totalGPUs, commandPreview, commandWarnings, mountPaths,
-  trainingImages, workspaceSnapshots, loadingCatalog, managedAvailability, applyProfile, toSubmission, stepIssues, loadCatalog,
+  trainingImages, workspaceSnapshots, loadingCatalog, managedAvailability, streamingAvailability,
+  applyProfile, toSubmission, stepIssues, loadCatalog,
 } = useJobForm(route)
 
 // Element Plus input-number requires max >= min. When quota is zero the form
@@ -167,7 +173,16 @@ const formLimits = computed(() => quotaModel.value.blocked
 
 const fromWorkspaceSnapshot = computed(() => ['dev_workspace', 'workspace_snapshot'].includes(String(route.query.from || '')))
 const resumeCheckpointPath = computed(() => String(route.query.checkpointPath || '').trim())
-const allIssues = computed(() => [...stepIssues(0), ...stepIssues(1)])
+const allIssues = computed(() => [...stepIssues(0), ...stepIssues(1), ...stepIssues(2)])
+const visiblePreflight = computed(() => {
+  if (!preflightResult.value || !preflightSignature.value) return null
+  try {
+    const spec = buildJobSpec(toSubmission(), limits.value)
+    return preflightFingerprint(spec) === preflightSignature.value ? preflightResult.value : null
+  } catch {
+    return null
+  }
+})
 
 const executionModeLabels = {
   single_gpu: '单卡',
@@ -193,12 +208,31 @@ const submitJob = async () => {
   }
   submitting.value = true
   try {
-    const spec = buildJobSpec(toSubmission(), limits.value)
+    const requestedSpec = buildJobSpec(toSubmission(), limits.value)
+    let spec = requestedSpec
+    if (requestedSpec.dataMode === 'streaming') {
+      const checked = await apiPost('/api/v1/jobs/preflight', { spec: requestedSpec })
+      assertStreamingPreflightCurrent(requestedSpec, buildJobSpec(toSubmission(), limits.value))
+      spec = pinStreamingPreflight(requestedSpec, checked, streamingAvailability.value.rayVersion)
+      preflightResult.value = checked
+      preflightSignature.value = preflightFingerprint(requestedSpec)
+      await ElMessageBox.confirm(
+        `提交前检查已通过。数据版本已固定为 ${checked.dataset.version}（${checked.dataset.versionId}），` +
+          `共 ${Number(checked.dataset.trainSamples || 0).toLocaleString('zh-CN')} 个训练样本，是否继续提交？`,
+        '确认固定数据版本',
+        { confirmButtonText: '提交训练任务', cancelButtonText: '返回检查', type: 'success' },
+      )
+      assertStreamingPreflightCurrent(requestedSpec, buildJobSpec(toSubmission(), limits.value))
+    } else {
+      preflightResult.value = null
+      preflightSignature.value = ''
+    }
     const idempotencyKey = globalThis.crypto?.randomUUID?.() || `portal-${Date.now()}`
     const data = await apiPost('/api/v1/jobs', { spec }, { headers: { 'Idempotency-Key': idempotencyKey } })
     ElMessage.success('训练任务已提交，正在等待队列准入')
     router.push(`/job/detail/${data.id}`)
   } catch (error) {
+    if (error === 'cancel' || error === 'close') return
     ElMessage.error(error.message || '提交训练任务失败')
   } finally {
     submitting.value = false

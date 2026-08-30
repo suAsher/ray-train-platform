@@ -1,4 +1,4 @@
-import { getToken } from '../auth'
+import { getToken } from '../auth/index.js'
 
 export class ApiError extends Error {
   constructor(message, status, code) {

@@ -3,7 +3,9 @@ import { MANAGED_POLICY_LIMITS, normalizeTrainingEngine, RAY_TRAIN_ENGINE } from
 const gitCommitPattern = /^[0-9a-f]{7,64}$/i
 const snapshotPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const jobIDPattern = /^job-[0-9a-f]{24}$/
-const dataModes = new Set(['mount', 'cache', 'ray-data', 'ray-data-stage'])
+const dataModes = new Set(['mount', 'cache', 'ray-data', 'ray-data-stage', 'streaming'])
+const datasetIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/
+const datasetCachePolicies = new Set(['auto', 'off', 'bounded'])
 
 function normalizeDataMode(form) {
   const requested = String(form.dataMode || '').trim()
@@ -45,6 +47,13 @@ export function equivalentSubmitCommand(form) {
     `--gpus-per-worker ${shellArg(form.gpusPerWorker)}`,
   )
   if (dataMode !== 'mount') parts.push(`--data-mode ${shellArg(dataMode)}`)
+  if (dataMode === 'streaming') {
+    const reference = normalizedDatasetReference(form.datasetRef)
+    parts.push(
+      `--dataset ${shellArg(`${reference.dataset}:${reference.version}`)}`,
+      `--cache-policy ${shellArg(normalizedDatasetCachePolicy(form.datasetCachePolicy || form.cachePolicy))}`,
+    )
+  }
   if (trainingEngine === RAY_TRAIN_ENGINE) {
     const policy = managedPolicy(form)
     parts.push(
@@ -61,7 +70,7 @@ export function equivalentSubmitCommand(form) {
     )
     if (form.cachePreload === 'input') parts.push(`--cache-preload ${shellArg('input')}`)
   }
-  if (form.input?.spaceId) {
+  if (dataMode !== 'streaming' && form.input?.spaceId) {
     parts.push(`--input-space ${shellArg(form.input.spaceId)}`)
     if (form.input.relativePath) parts.push(`--input-path ${shellArg(form.input.relativePath)}`)
   }
@@ -71,6 +80,19 @@ export function equivalentSubmitCommand(form) {
   }
   parts.push('--watch')
   return parts.join(' \\\n  ')
+}
+
+/**
+ * Build a non-blocking command preview while the form is still incomplete.
+ * Submission continues to use equivalentSubmitCommand so invalid values can
+ * never be hidden by the preview fallback.
+ */
+export function equivalentSubmitCommandPreview(form) {
+  try {
+    return equivalentSubmitCommand(form)
+  } catch {
+    return '# 完成上述必填项后，平台会生成等价的 spk-rayjob 提交命令。'
+  }
 }
 
 /** Adapt the persisted job shape used by JobDetail to the shared CLI builder. */
@@ -93,6 +115,10 @@ export function equivalentSubmitCommandForJob(job) {
     cacheMode: spec.cache?.mode,
     cacheSize: spec.cache?.size,
     cachePreload: spec.cache?.preload,
+    datasetRef: spec.datasetRef || (job?.datasetProvenance?.datasetId && job?.datasetProvenance?.datasetVersionId
+      ? { dataset: job.datasetProvenance.datasetId, version: job.datasetProvenance.datasetVersionId }
+      : {}),
+    datasetCachePolicy: spec.cachePolicy || job?.datasetProvenance?.cachePolicy,
     input: spec.input?.space ? { spaceId: spec.input.space, relativePath: spec.input.relativePath } : {},
     checkpoint: spec.checkpoint?.space ? { spaceId: spec.checkpoint.space, relativePath: spec.checkpoint.relativePath } : {},
   })
@@ -103,23 +129,28 @@ export function buildJobSpec(form, platformLimits = {}) {
   if (command.length === 0) {
     throw new Error('请输入训练启动命令')
   }
-  const cache = buildCache(form, platformLimits.cache)
   const trainingEngine = normalizeTrainingEngine(form.trainingEngine)
   const dataMode = normalizeDataMode(form)
-  if ((dataMode === 'ray-data' || dataMode === 'ray-data-stage') && trainingEngine !== RAY_TRAIN_ENGINE) {
+  if ((dataMode === 'ray-data' || dataMode === 'ray-data-stage' || dataMode === 'streaming') && trainingEngine !== RAY_TRAIN_ENGINE) {
     throw new Error('Ray Data 需要选择 Ray Train 托管引擎')
   }
+  const cache = dataMode === 'streaming'
+    ? validateStreamingCacheSelection(form)
+    : buildCache(form, platformLimits.cache)
   if (dataMode === 'cache' && (!cache || cache.preload !== 'input')) {
     throw new Error('NVMe 预热需要选择运行时缓存并开启输入预热')
   }
   if (dataMode === 'ray-data-stage' && (!cache || cache.preload)) {
     throw new Error('Ray Data 分布式预热需要运行时缓存，且不能同时开启旧预热器')
   }
-  const input = dataLocation(form.input, '训练输入')
+  const input = dataMode === 'streaming' ? {} : dataLocation(form.input, '训练输入')
   if (dataMode === 'ray-data-stage' && (!input.space || !input.relativePath)) {
     throw new Error('Ray Data 分布式预热必须选择具体的数据集子目录，不能选择整个数据空间')
   }
 
+  const dataset = dataMode === 'streaming'
+    ? streamingDatasetSelection(form, platformLimits.cache)
+    : null
   const spec = {
     name: requiredText(form.name, '任务名称'),
     image: requiredText(form.image, '训练镜像'),
@@ -143,6 +174,7 @@ export function buildJobSpec(form, platformLimits = {}) {
     timeoutSeconds: nonNegativeInteger(form.timeoutSeconds || 0, '最长运行时间'),
     retryPolicy: { maxRetries: boundedInteger(form.maxRetries || 0, '自动重试次数', 0, 3) },
     ...(cache ? { cache } : {}),
+    ...(dataset ? { datasetRef: dataset.reference, cachePolicy: dataset.cachePolicy } : {}),
     ...(trainingEngine === RAY_TRAIN_ENGINE ? { managed: managedPolicy(form) } : {}),
   }
 
@@ -154,6 +186,44 @@ export function buildJobSpec(form, platformLimits = {}) {
     spec.priority = priority
   }
   return spec
+}
+
+function validateStreamingCacheSelection(form) {
+  const mode = String(form.cacheMode || 'off').trim() || 'off'
+  const size = String(form.cacheSize || '').trim()
+  const preload = String(form.cachePreload || '').trim()
+  if (mode !== 'off' || size || preload) {
+    throw new Error('版本化流式训练通过数据缓存策略管理 NVMe，不能同时启用旧运行时预热')
+  }
+  return null
+}
+
+function streamingDatasetSelection(form, cachePolicy) {
+  const reference = normalizedDatasetReference(form.datasetRef)
+  const policy = normalizedDatasetCachePolicy(form.datasetCachePolicy || form.cachePolicy)
+  if (policy === 'bounded') {
+    const mountPaths = Array.isArray(cachePolicy?.mountPaths)
+      ? cachePolicy.mountPaths.map((value) => String(value || '').trim()).filter(Boolean)
+      : []
+    if (cachePolicy?.enabled !== true || new Set(mountPaths).size < 2) {
+      throw new Error('有界工作集缓存需要平台提供两块 NVMe')
+    }
+  }
+  return { reference, cachePolicy: policy }
+}
+
+function normalizedDatasetReference(value) {
+  const dataset = String(value?.dataset || '').trim()
+  const version = String(value?.version || '').trim()
+  if (!dataset || !datasetIdentifierPattern.test(dataset)) throw new Error('请选择有效的数据集')
+  if (!version || (version !== 'latest' && !datasetIdentifierPattern.test(version))) throw new Error('请选择有效的数据集版本')
+  return { dataset, version }
+}
+
+function normalizedDatasetCachePolicy(value) {
+  const policy = String(value || 'auto').trim() || 'auto'
+  if (!datasetCachePolicies.has(policy)) throw new Error('请选择有效的数据缓存策略')
+  return policy
 }
 
 function managedPolicy(form) {

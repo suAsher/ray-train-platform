@@ -120,7 +120,7 @@
 
     <div class="mt-5 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
       <label class="field-label">数据读取方式</label>
-      <div class="mt-3 grid gap-3 lg:grid-cols-3">
+      <div class="mt-3 grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
         <button type="button" class="rounded-xl border p-3 text-left transition" :class="dataModeClass('mount')" @click="selectDataMode('mount')">
           <p class="text-sm font-semibold text-white">直接读取</p>
           <p class="mt-1 text-xs leading-5 text-slate-400">从已授权的 TOS/IDC 挂载读取，启动最快；大量小文件可能受远端元数据延迟影响。</p>
@@ -142,9 +142,24 @@
           </div>
           <p class="mt-1 text-xs leading-5 text-slate-400">Ray Data 分布式读取，每个训练节点生成完整本地视图，再交给原 DataLoader。</p>
         </button>
+        <button
+          type="button"
+          class="rounded-xl border p-3 text-left transition"
+          :class="dataModeClass('streaming')"
+          :disabled="!streamingAvailability.available"
+          :aria-disabled="!streamingAvailability.available"
+          @click="selectDataMode('streaming')"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <p class="text-sm font-semibold text-white">版本化流式</p>
+            <el-tag size="small" type="success" effect="plain">Ray Data</el-tag>
+          </div>
+          <p class="mt-1 text-xs leading-5 text-slate-400">选择不可变数据版本，Ray Train 按 Worker 分片流式读取；可自动使用双 NVMe 有界工作集。</p>
+          <p v-if="!streamingAvailability.available" class="mt-2 text-xs text-amber-300">{{ streamingAvailability.reason }}</p>
+        </button>
       </div>
       <el-select
-        v-if="form.dataMode !== 'mount'"
+        v-if="['cache', 'ray-data-stage'].includes(form.dataMode)"
         :model-value="form.cacheSize"
         class="mt-3 w-full"
         placeholder="选择缓存容量"
@@ -153,13 +168,15 @@
         <el-option v-for="size in cachePolicy.allowedSizes" :key="size" :label="size" :value="size" />
       </el-select>
       <el-alert
-        v-if="form.dataMode !== 'mount' && !hasExactInput"
+        v-if="['cache', 'ray-data-stage'].includes(form.dataMode) && !hasExactInput"
         class="mt-3" type="warning" show-icon :closable="false"
         title="请先在数据步骤选择一个具体的数据集子目录；不能预热整个 public、团队或个人根目录。"
       />
       <p class="field-help">
-        两种缓存都是随任务结束释放的一次性缓存，也承载 Ray 临时文件和 object spill；训练代码继续读取 <code>PLATFORM_DATASET_PATH</code>。Ray Data 模式会在日志与数据性能页展示
-        预热进度、文件数、字节数和耗时；冷启动需要准备数据，热训练阶段从 NVMe 读取。输出和 Checkpoint 始终写入持久存储。
+        旧的预热模式会生成任务级完整本地视图；版本化流式模式只缓存当前工作集，并由平台固定数据版本。输出和 Checkpoint 始终写入持久存储。
+      </p>
+      <p class="field-help">
+        “NVMe 预热”和“Ray Data + NVMe”使用随任务结束释放的一次性缓存，预热进度会在任务状态与日志中展示；它不是 Ray 临时文件，也不是 object spill。
       </p>
     </div>
 
@@ -224,6 +241,10 @@ const props = defineProps({
     type: Object,
     default: () => ({ available: false, reason: '当前团队未开放 Ray Train 托管' }),
   },
+  streamingAvailability: {
+    type: Object,
+    default: () => ({ available: false, reason: '当前团队未开放版本化流式训练' }),
+  },
 })
 
 defineEmits(['apply-profile'])
@@ -246,9 +267,16 @@ const selectCacheSize = (cacheSize) => {
 
 const selectDataMode = (mode) => {
   if ((mode === 'cache' || mode === 'ray-data-stage') && !runtimeCacheAvailable.value) return
+  if (mode === 'streaming' && !props.streamingAvailability.available) return
   if (mode === 'ray-data-stage') {
     if (!props.managedAvailability.available) return
     props.form.trainingEngine = 'ray-train'
+  }
+  if (mode === 'streaming') {
+    props.form.trainingEngine = 'ray-train'
+    applyCacheSelection({ cacheMode: 'off', cacheSize: '' })
+    props.form.cachePreload = ''
+    if (!['auto', 'off', 'bounded'].includes(props.form.datasetCachePolicy)) props.form.datasetCachePolicy = 'auto'
   }
   props.form.dataMode = mode
   if (mode === 'mount') {
@@ -256,6 +284,7 @@ const selectDataMode = (mode) => {
     props.form.cachePreload = ''
     return
   }
+  if (mode === 'streaming') return
   applyCacheSelection({ cacheMode: 'runtime', cacheSize: props.form.cacheSize }, true)
   props.form.cachePreload = mode === 'cache' ? 'input' : ''
 }
@@ -263,12 +292,13 @@ const selectDataMode = (mode) => {
 const selectTrainingEngine = (engine) => {
   if (engine === 'ray-train' && !props.managedAvailability.available) return
   props.form.trainingEngine = engine
-  if (engine !== 'ray-train' && props.form.dataMode === 'ray-data-stage') selectDataMode('mount')
+  if (engine !== 'ray-train' && ['ray-data-stage', 'streaming'].includes(props.form.dataMode)) selectDataMode('mount')
 }
 
 const dataModeClass = (mode) => {
   const disabled = (mode === 'cache' || mode === 'ray-data-stage') && !runtimeCacheAvailable.value
     || mode === 'ray-data-stage' && !props.managedAvailability.available
+    || mode === 'streaming' && !props.streamingAvailability.available
   if (disabled) return 'cursor-not-allowed border-slate-800 bg-slate-900/30 opacity-60'
   return props.form.dataMode === mode
     ? 'border-blue-400 bg-blue-950/30'

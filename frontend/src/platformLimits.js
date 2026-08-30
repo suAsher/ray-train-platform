@@ -28,6 +28,12 @@ export const defaultPlatformLimits = Object.freeze({
     defaultSize: '',
     maxSize: '',
     mountPath: '',
+    mountPaths: Object.freeze([]),
+  }),
+  datasets: Object.freeze({
+    versioningEnabled: false,
+    streamingEnabled: false,
+    publisherEnabled: false,
   }),
 })
 
@@ -35,7 +41,12 @@ export const zeroQuotaMessage = '团队当前没有可用 GPU 配额，请等待
 
 /** Normalize the cache descriptor served by GET /api/v1/limits. */
 export function normalizeCachePolicy(policy) {
-  if (policy?.enabled !== true) return { ...defaultPlatformLimits.cache }
+  if (policy?.enabled !== true) return {
+    ...defaultPlatformLimits.cache,
+    modes: [...defaultPlatformLimits.cache.modes],
+    allowedSizes: [],
+    mountPaths: [],
+  }
   return {
     enabled: true,
     defaultMode: String(policy.defaultMode || '').trim(),
@@ -44,6 +55,7 @@ export function normalizeCachePolicy(policy) {
     defaultSize: String(policy.defaultSize || '').trim(),
     maxSize: String(policy.maxSize || '').trim(),
     mountPath: String(policy.mountPath || '').trim(),
+    mountPaths: normalizedStrings(policy.mountPaths),
   }
 }
 

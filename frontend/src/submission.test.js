@@ -6,10 +6,26 @@ import * as submission from './submission.js'
 const {
   buildJobSpec,
   equivalentSubmitCommand,
+  equivalentSubmitCommandPreview,
   equivalentSubmitCommandForJob,
   parseEntrypoint,
   shellArg,
 } = submission
+
+test('submit preview remains renderable while a streaming dataset is incomplete', () => {
+  const form = {
+    ...baseForm(),
+    trainingEngine: 'ray-train',
+    dataMode: 'streaming',
+    datasetRef: { dataset: '', version: 'latest' },
+    datasetCachePolicy: 'auto',
+    workerReplicas: 2,
+    gpusPerWorker: 8,
+  }
+
+  assert.throws(() => equivalentSubmitCommand(form), /数据集/)
+  assert.match(equivalentSubmitCommandPreview(form), /完成上述必填项/)
+})
 
 const baseForm = () => ({
   name: 'support-sft-001',
@@ -148,6 +164,63 @@ test('Ray Data staging rejects a whole governed space without a dataset path', (
     cacheSize: '200Gi',
     input: { spaceId: 'public', relativePath: '' },
   }, cacheLimits()), /具体的数据集子目录/)
+})
+
+test('versioned streaming submits only a logical immutable dataset selector and cache policy', () => {
+  const form = {
+    ...baseForm(),
+    trainingEngine: 'ray-train',
+    maxFailures: 2,
+    checkpointEveryEpochs: 1,
+    checkpointKeepLatest: 3,
+    checkpointKeepBest: 1,
+    dataMode: 'streaming',
+    datasetRef: { dataset: 'labeled-full', version: 'latest' },
+    datasetCachePolicy: 'auto',
+    cacheMode: 'off',
+    cacheSize: '',
+    input: {},
+  }
+  const spec = buildJobSpec(form, cacheLimits({ mountPaths: ['/mnt/cache', '/mnt/cache2'] }))
+
+  assert.equal(spec.dataMode, 'streaming')
+  assert.deepEqual(spec.datasetRef, { dataset: 'labeled-full', version: 'latest' })
+  assert.equal(spec.cachePolicy, 'auto')
+  assert.deepEqual(spec.input, {})
+  assert.equal('cache' in spec, false)
+  assert.equal('rayData' in spec.managed, false)
+})
+
+test('versioned streaming validates engine, dataset selector, and bounded dual-NVMe capability', () => {
+  const streaming = {
+    ...baseForm(),
+    trainingEngine: 'ray-train',
+    dataMode: 'streaming',
+    datasetRef: { dataset: 'labeled-full', version: 'latest' },
+    datasetCachePolicy: 'bounded',
+    input: {},
+  }
+
+  assert.throws(() => buildJobSpec({ ...streaming, trainingEngine: 'ray-ddp' }, cacheLimits()), /Ray Train/)
+  assert.throws(() => buildJobSpec({ ...streaming, datasetRef: { dataset: '', version: 'latest' } }, cacheLimits()), /数据集/)
+  assert.throws(() => buildJobSpec(streaming, cacheLimits({ mountPaths: ['/mnt/cache'] })), /两块 NVMe/)
+  assert.doesNotThrow(() => buildJobSpec(streaming, cacheLimits({ mountPaths: ['/mnt/cache', '/mnt/cache2'] })))
+})
+
+test('equivalent command renders versioned streaming without internal storage paths', () => {
+  const command = equivalentSubmitCommand({
+    ...baseForm(),
+    trainingEngine: 'ray-train',
+    dataMode: 'streaming',
+    datasetRef: { dataset: 'labeled-full', version: 'latest' },
+    datasetCachePolicy: 'auto',
+    input: {},
+  })
+
+  assert.match(command, /--dataset 'labeled-full:latest'/)
+  assert.match(command, /--data-mode 'streaming'/)
+  assert.match(command, /--cache-policy 'auto'/)
+  assert.doesNotMatch(command, /--input-(?:space|path)|tos:\/\/|manifest/)
 })
 
 test('legacy DDP payload omits managed policy even when stale managed fields are present', () => {

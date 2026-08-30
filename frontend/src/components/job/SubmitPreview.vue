@@ -37,6 +37,17 @@
         <dt class="text-slate-500">数据读取方式</dt>
         <dd class="mt-1 break-all text-slate-200">{{ cacheSummary }}</dd>
       </div>
+      <div v-if="form.dataMode === 'streaming'">
+        <dt class="text-slate-500">固定数据版本</dt>
+        <dd class="mt-1 break-all text-slate-200">{{ fixedDatasetSummary }}</dd>
+      </div>
+      <div v-if="form.dataMode === 'streaming'">
+        <dt class="text-slate-500">提交前检查</dt>
+        <dd class="mt-1 text-slate-200">
+          <el-tag v-if="preflight" size="small" type="success" effect="plain">已通过</el-tag>
+          <span v-else class="text-amber-300">提交时检查镜像、GPU、版本摘要与数据完整性</span>
+        </dd>
+      </div>
       <div v-if="form.trainingEngine === 'ray-train'">
         <dt class="text-slate-500">托管恢复策略</dt>
         <dd class="mt-1 text-slate-200">{{ managedSummary }}</dd>
@@ -55,8 +66,9 @@
 <script setup>
 import { computed } from 'vue'
 
-import { equivalentSubmitCommand } from '../../submission'
+import { equivalentSubmitCommandPreview } from '../../submission'
 import { trainingEngineLabel } from '../../trainingEngine.js'
+import { formatDatasetCount } from '../../datasetCatalog.js'
 import CopyBlock from '../CopyBlock.vue'
 
 const props = defineProps({
@@ -66,6 +78,7 @@ const props = defineProps({
   executionMode: { type: String, default: 'single_gpu' },
   commandPreview: { type: String, default: '' },
   cachePolicy: { type: Object, default: () => ({}) },
+  preflight: { type: Object, default: null },
 })
 
 const sourceSummary = computed(() => {
@@ -91,14 +104,31 @@ const cacheSummary = computed(() => {
     mount: '直接读取 TOS/IDC',
     cache: 'NVMe 预热',
     'ray-data-stage': 'Ray Data 分布式预热 + NVMe',
+    streaming: '版本化 Ray Data 流式读取',
   }
   const label = labels[props.form.dataMode] || '直接读取 TOS/IDC'
+  if (props.form.dataMode === 'streaming') {
+    const policies = { auto: '平台自动选择缓存', off: '关闭工作集缓存', bounded: '双 NVMe 有界工作集' }
+    return `${label} · ${policies[props.form.datasetCachePolicy] || policies.auto}`
+  }
   if (props.form.cacheMode !== 'runtime') return label
   const size = String(props.form.cacheSize || '').trim() || '尚未选择容量'
   const mountPath = String(props.cachePolicy.mountPath || '').trim() || '挂载路径未提供'
-	const preload = props.form.cachePreload === 'input' ? ' · 自动预热所选输入' : ''
+  const preload = props.form.cachePreload === 'input' ? ' · 自动预热所选输入' : ''
   return `${label} · ${size} · 挂载到 ${mountPath}${preload}`
 })
 
-const cliCommand = computed(() => equivalentSubmitCommand(props.form))
+const fixedDatasetSummary = computed(() => {
+  const dataset = props.preflight?.dataset
+  if (dataset) {
+    return `${dataset.datasetSlug || dataset.datasetId} · ${dataset.version} · ${formatDatasetCount(dataset.trainSamples)} train`
+  }
+  const selected = props.form.datasetRef || {}
+  if (!selected.dataset) return '尚未选择数据集'
+  return selected.version === 'latest'
+    ? `${selected.dataset} · 最新可用（提交时固定为具体版本）`
+    : `${selected.dataset} · ${selected.version}`
+})
+
+const cliCommand = computed(() => equivalentSubmitCommandPreview(props.form))
 </script>

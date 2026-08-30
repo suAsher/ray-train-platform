@@ -17,7 +17,13 @@ import {
   managedPolicyIssues,
   normalizeTrainingEngine,
 } from '../trainingEngine.js'
+import {
+  normalizeDatasetCapabilities,
+  streamingDatasetAvailability,
+} from '../datasetCatalog.js'
 import { jobFormStepIssues } from './jobFormIssues.js'
+
+const datasetCachePolicies = new Set(['auto', 'off', 'bounded'])
 
 /**
  * State and rules for the submit form.
@@ -45,6 +51,13 @@ export function useJobForm(route, catalogLoaders = defaultCatalogLoaders) {
     entrypoint: 'python train.py',
     trainingEngine: normalizeTrainingEngine(route?.query?.trainingEngine),
     dataMode: String(route?.query?.dataMode || 'mount'),
+    datasetRef: {
+      dataset: String(route?.query?.dataset || ''),
+      version: String(route?.query?.datasetVersion || 'latest') || 'latest',
+    },
+    datasetCachePolicy: datasetCachePolicies.has(String(route?.query?.cachePolicy || ''))
+      ? String(route.query.cachePolicy)
+      : 'auto',
     ...copiedManagedPolicy,
     parentJobId: String(route?.query?.parentJobId || ''),
     workerReplicas: 1,
@@ -55,7 +68,7 @@ export function useJobForm(route, catalogLoaders = defaultCatalogLoaders) {
     maxRetries: 0,
     cacheMode: 'off',
     cacheSize: '',
-	cachePreload: '',
+    cachePreload: '',
     input: { spaceId: String(route?.query?.dataSpace || ''), relativePath: String(route?.query?.dataPath || '') },
     checkpoint: {},
     output: {},
@@ -81,6 +94,12 @@ export function useJobForm(route, catalogLoaders = defaultCatalogLoaders) {
     images: trainingImages.value,
     imageReference: form.image,
   }))
+  const datasetCapabilities = computed(() => normalizeDatasetCapabilities(limits.value.datasets))
+  const streamingAvailability = computed(() => streamingDatasetAvailability({
+    limits: limits.value,
+    images: trainingImages.value,
+    imageReference: form.image,
+  }))
 
   // A shape beyond the deployment ceiling is corrected as the user types rather
   // than accepted and rejected later by the API.
@@ -99,8 +118,8 @@ export function useJobForm(route, catalogLoaders = defaultCatalogLoaders) {
       const normalized = normalizeCacheSelection(form, cachePolicy, { selectRuntimeDefault: true })
       form.cacheMode = normalized.cacheMode
       form.cacheSize = normalized.cacheSize
-		if (normalized.cacheMode !== 'runtime') form.cachePreload = ''
-		if (normalized.cacheMode !== 'runtime' && form.dataMode !== 'mount') form.dataMode = 'mount'
+      if (normalized.cacheMode !== 'runtime') form.cachePreload = ''
+      if (normalized.cacheMode !== 'runtime' && !['mount', 'streaming'].includes(form.dataMode)) form.dataMode = 'mount'
     },
     { deep: true },
   )
@@ -133,6 +152,9 @@ export function useJobForm(route, catalogLoaders = defaultCatalogLoaders) {
       if (form.trainingEngine === 'ray-train' && !managedAvailability.value.available) {
         issues.push(managedAvailability.value.reason)
       }
+      if (form.dataMode === 'streaming' && !streamingAvailability.value.available) {
+        issues.push(streamingAvailability.value.reason)
+      }
       if (form.trainingEngine === 'ray-train') issues.push(...managedPolicyIssues(form))
       issues.push(...jobFormStepIssues({
         step,
@@ -140,6 +162,10 @@ export function useJobForm(route, catalogLoaders = defaultCatalogLoaders) {
         limits: limits.value,
         commandWarnings: commandWarnings.value,
       }))
+    }
+    if (step === 2 && form.dataMode === 'streaming') {
+      if (!String(form.datasetRef?.dataset || '').trim()) issues.push('请选择数据集')
+      if (!String(form.datasetRef?.version || '').trim()) issues.push('请选择可训练的数据版本')
     }
     return issues
   }
@@ -157,6 +183,7 @@ export function useJobForm(route, catalogLoaders = defaultCatalogLoaders) {
         ...defaultPlatformLimits,
         ...limitsResult.value,
         cache: normalizeCachePolicy(limitsResult.value.cache),
+        datasets: normalizeDatasetCapabilities(limitsResult.value.datasets),
       }
       const bounded = clampResources({ workers: form.workerReplicas, gpus: form.gpusPerWorker }, limits.value)
       form.workerReplicas = bounded.workers
@@ -168,12 +195,22 @@ export function useJobForm(route, catalogLoaders = defaultCatalogLoaders) {
     }, limits.value.cache)
     form.cacheMode = copiedCache.cacheMode
     form.cacheSize = copiedCache.cacheSize
-	form.cachePreload = copiedCache.cacheMode === 'runtime' && route?.query?.cachePreload === 'input' ? 'input' : ''
+    form.cachePreload = copiedCache.cacheMode === 'runtime' && route?.query?.cachePreload === 'input' ? 'input' : ''
     form.dataMode = String(route?.query?.dataMode || (form.cachePreload === 'input' ? 'cache' : 'mount'))
     trainingImages.value = imagesResult.status === 'fulfilled' ? imagesResult.value || [] : []
     workspaceSnapshots.value = snapshotsResult.status === 'fulfilled' ? snapshotsResult.value || [] : []
-    const preferred = trainingImages.value.find((image) => image.isDefault) || trainingImages.value[0]
+    const canaryRayVersion = String(limits.value.runtime?.canaryRayVersion || '2.58.0').trim()
+    const streamingPreferred = form.dataMode === 'streaming'
+      ? trainingImages.value.find((image) =>
+          String(image?.rayVersion || '').trim() === canaryRayVersion &&
+          Array.isArray(image?.supportedEngines) && image.supportedEngines.includes('ray-train'))
+      : null
+    const preferred = streamingPreferred || trainingImages.value.find((image) => image.isDefault) || trainingImages.value[0]
     if (preferred && !form.image) form.image = preferred.reference
+    if (form.dataMode === 'streaming' && !streamingAvailability.value.available) {
+      form.dataMode = 'mount'
+      form.datasetCachePolicy = 'auto'
+    }
     loadingCatalog.value = false
   }
 
@@ -190,6 +227,8 @@ export function useJobForm(route, catalogLoaders = defaultCatalogLoaders) {
     mountPaths,
     trainingImages,
     managedAvailability,
+    datasetCapabilities,
+    streamingAvailability,
     workspaceSnapshots,
     loadingCatalog,
     applyProfile,

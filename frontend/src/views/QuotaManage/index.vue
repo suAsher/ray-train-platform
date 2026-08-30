@@ -70,6 +70,15 @@
         </div>
       </el-tab-pane>
 
+      <el-tab-pane v-if="datasetCapabilities.catalogEnabled" label="数据集治理" name="datasets">
+        <div class="p-4">
+          <DatasetGovernancePanel
+            :capabilities="datasetCapabilities"
+            :is-super-admin="isSuperAdmin"
+          />
+        </div>
+      </el-tab-pane>
+
       <el-tab-pane label="队列与运行中" name="queue">
         <div class="p-4">
           <QueuePanel
@@ -251,6 +260,7 @@ import { apiDelete, apiGet, apiPost } from '../../api/client'
 import { createGitCredential, createImage, createTenant, deleteGitCredential, deleteImage, fetchGitCredentials, fetchImages, testGitCredential, updateImageScope } from '../../api/catalog'
 import { fetchPlatformLimits } from '../../api/platform'
 import { adminQuotaModel, defaultPlatformLimits } from '../../platformLimits'
+import { normalizeDatasetCapabilities } from '../../datasetCatalog.js'
 import { roles, session } from '../../stores/session'
 import { formatStorageQuota, storageQuotaGiBFromQuantity, storageQuotaGiBToBytes } from '../../storageQuota'
 import TenantPanel from '../../components/admin/TenantPanel.vue'
@@ -258,6 +268,7 @@ import UserPanel from '../../components/admin/UserPanel.vue'
 import CatalogPanel from '../../components/admin/CatalogPanel.vue'
 import StoragePanel from '../../components/admin/StoragePanel.vue'
 import QueuePanel from '../../components/admin/QueuePanel.vue'
+import DatasetGovernancePanel from '../../components/admin/DatasetGovernancePanel.vue'
 import { queueJobAction } from '../../components/admin/queuePanelActions.js'
 import { normalizeGPUAllocations } from '../../gpuAllocations'
 import { buildCreateImageRequest, defaultImageCompatibilityState, reconcileImageCompatibility } from '../../imageCompatibility'
@@ -283,6 +294,7 @@ const quotaCopy = computed(() => adminQuotaModel({
   tenants: tenants.value,
 }))
 const clusterGPUs = computed(() => quotaCopy.value.capacityGPUs)
+const datasetCapabilities = computed(() => normalizeDatasetCapabilities(limits.value.datasets))
 
 const storageQuotaEnabled = Boolean(window.__RAY_PLATFORM_CONFIG__?.personalStorageQuotaEnabled)
 const runtimeStorageQuotaDefault = storageQuotaGiBFromQuantity(window.__RAY_PLATFORM_CONFIG__?.personalStorageDefaultQuota) || 100
@@ -323,6 +335,10 @@ const newCredential = ref({ name: '', host: '', username: '', token: '', scope: 
 
 watch(() => newImage.value.rayVersion, (rayVersion) => {
   newImage.value = reconcileImageCompatibility(newImage.value, rayVersion)
+})
+
+watch(() => datasetCapabilities.value.catalogEnabled, (enabled) => {
+  if (!enabled && activeTab.value === 'datasets') activeTab.value = 'tenants'
 })
 
 const loadTenants = async () => {
