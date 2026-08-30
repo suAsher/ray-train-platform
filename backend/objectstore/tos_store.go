@@ -74,6 +74,7 @@ type tosArtifactListRequest struct {
 type tosArtifactObject struct {
 	Key          string
 	SizeBytes    int64
+	ETag         string
 	LastModified time.Time
 }
 
@@ -103,9 +104,11 @@ type tosArtifactReadRequest struct {
 }
 
 type tosArtifactReadResponse struct {
-	Content     io.ReadCloser
-	SizeBytes   int64
-	ContentType string
+	Content      io.ReadCloser
+	SizeBytes    int64
+	ContentType  string
+	ETag         string
+	LastModified time.Time
 }
 
 type tosArtifactReadClient interface {

@@ -153,7 +153,7 @@ func (client *sdkTOSClient) ListArtifacts(ctx context.Context, request tosArtifa
 	}
 	objects := make([]tosArtifactObject, 0, len(output.Contents))
 	for _, object := range output.Contents {
-		objects = append(objects, tosArtifactObject{Key: object.Key, SizeBytes: object.Size, LastModified: object.LastModified})
+		objects = append(objects, tosArtifactObject{Key: object.Key, SizeBytes: object.Size, ETag: object.ETag, LastModified: object.LastModified})
 	}
 	return tosArtifactListResponse{Directories: directories, Objects: objects, NextContinuationToken: output.NextContinuationToken}, nil
 }
@@ -188,14 +188,21 @@ func (client *sdkTOSClient) ReadArtifact(ctx context.Context, request tosArtifac
 		}
 		return tosArtifactReadResponse{}, ErrUnavailable
 	}
-	return tosArtifactReadResponse{Content: output.Content, SizeBytes: output.ContentLength, ContentType: output.ContentType}, nil
+	return tosArtifactReadResponse{
+		Content: output.Content, SizeBytes: output.ContentLength, ContentType: output.ContentType,
+		ETag: output.ETag, LastModified: output.LastModified,
+	}, nil
 }
 
 func (client *sdkTOSClient) Put(ctx context.Context, request tosPutRequest) error {
+	contentType := request.ContentType
+	if contentType == "" {
+		contentType = "application/zip"
+	}
 	_, err := client.client.PutObjectV2(ctx, &tos.PutObjectV2Input{
 		PutObjectBasicInput: tos.PutObjectBasicInput{
 			Bucket: request.Bucket, Key: request.Key, ContentLength: request.SizeBytes,
-			ContentType: "application/zip", ForbidOverwrite: true,
+			ContentType: contentType, ForbidOverwrite: true,
 			Meta: map[string]string{"sha256": request.SHA256},
 		},
 		Content:      request.Body,
@@ -208,6 +215,17 @@ func (client *sdkTOSClient) Put(ctx context.Context, request tosPutRequest) erro
 		return ErrAlreadyExists
 	}
 	return ErrUnavailable
+}
+
+func (client *sdkTOSClient) DeleteObject(ctx context.Context, bucket, key string) error {
+	_, err := client.client.DeleteObjectV2(ctx, &tos.DeleteObjectV2Input{Bucket: bucket, Key: key})
+	if err != nil {
+		if tos.StatusCode(err) == http.StatusNotFound {
+			return ErrNotFound
+		}
+		return ErrUnavailable
+	}
+	return nil
 }
 
 func (store *TOSStore) Put(ctx context.Context, objectKey, digest string, sizeBytes int64, body io.Reader) error {

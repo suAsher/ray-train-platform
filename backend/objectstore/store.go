@@ -25,6 +25,58 @@ type ObjectInfo struct {
 	Metadata  map[string]string
 }
 
+type PublicationObjectInfo struct {
+	SizeBytes  int64
+	SHA256     string
+	ETag       string
+	ObservedAt time.Time
+	Metadata   map[string]string
+}
+
+func (info PublicationObjectInfo) Clone() PublicationObjectInfo {
+	return PublicationObjectInfo{
+		SizeBytes: info.SizeBytes, SHA256: info.SHA256, ETag: info.ETag,
+		ObservedAt: info.ObservedAt, Metadata: cloneObjectMetadata(info.Metadata),
+	}
+}
+
+type PublicationListedObject struct {
+	Key        string
+	SizeBytes  int64
+	SHA256     string
+	ETag       string
+	ObservedAt time.Time
+}
+
+type PublicationObjectPage struct {
+	Objects    []PublicationListedObject
+	NextCursor string
+}
+
+type PublicationSourceBackend interface {
+	List(context.Context, string, string, int) (PublicationObjectPage, error)
+	Head(context.Context, string) (PublicationObjectInfo, error)
+	Get(context.Context, string) (io.ReadCloser, PublicationObjectInfo, error)
+}
+
+type PublicationDerivedBackend interface {
+	Head(context.Context, string) (PublicationObjectInfo, error)
+	PutImmutable(context.Context, string, string, int64, io.Reader) error
+	CopyImmutable(context.Context, string, string) error
+	Delete(context.Context, string) error
+}
+
+func cloneObjectMetadata(metadata map[string]string) map[string]string {
+	if metadata == nil {
+		return nil
+	}
+	clone := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		clone[key] = value
+	}
+	return clone
+}
+
 // DirectoryPage is deliberately smaller than an object-store list response:
 // it contains only direct child directory names and an opaque continuation
 // cursor. Bucket names, full prefixes, object keys, and credentials never
