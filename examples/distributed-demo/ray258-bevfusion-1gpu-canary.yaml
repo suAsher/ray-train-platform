@@ -6,7 +6,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: ray258-bevfusion-canary-code-r2
+  name: ray258-bevfusion-canary-code-r3
   namespace: tenant-local
 data:
   canary.py: |
@@ -130,12 +130,12 @@ data:
 apiVersion: ray.io/v1
 kind: RayJob
 metadata:
-  name: ray258-bevfusion-canary-0831-r2
+  name: ray258-bevfusion-canary-0831-r3
   namespace: tenant-local
   labels:
     app.kubernetes.io/part-of: ray-train-platform
     kueue.x-k8s.io/queue-name: local-gpu
-    validation.raytrain.wellspiking.ai/run: ray258-bevfusion-0831-r2
+    validation.raytrain.wellspiking.ai/run: ray258-bevfusion-0831-r3
 spec:
   shutdownAfterJobFinishes: true
   ttlSecondsAfterFinished: 600
@@ -150,7 +150,7 @@ spec:
       template:
         metadata:
           labels:
-            validation.raytrain.wellspiking.ai/run: ray258-bevfusion-0831-r2
+            validation.raytrain.wellspiking.ai/run: ray258-bevfusion-0831-r3
         spec:
           nodeSelector:
             accelerator: nvidia-rtx-4090
@@ -159,7 +159,7 @@ spec:
             - name: harbor-registry
           containers:
             - name: ray-head
-              image: harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion-ray258@sha256:a5a920303d943f29d8e3f2280ba828e93104f47a9b774e4a891c1a24682ea1ad
+              image: harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion-ray258@sha256:89eeca3065cc8be7ce0a8302fe432ad6d6105e5cbe779c294dc0f419429f1c7b
               imagePullPolicy: IfNotPresent
               resources:
                 requests: {cpu: "2", memory: 8Gi}
@@ -174,7 +174,7 @@ spec:
           volumes:
             - name: canary-code
               configMap:
-                name: ray258-bevfusion-canary-code-r2
+                name: ray258-bevfusion-canary-code-r3
     workerGroupSpecs:
       - groupName: canary-worker
         replicas: 1
@@ -185,7 +185,7 @@ spec:
         template:
           metadata:
             labels:
-              validation.raytrain.wellspiking.ai/run: ray258-bevfusion-0831-r2
+              validation.raytrain.wellspiking.ai/run: ray258-bevfusion-0831-r3
           spec:
             nodeSelector:
               accelerator: nvidia-rtx-4090
@@ -194,7 +194,7 @@ spec:
               - name: harbor-registry
             containers:
               - name: ray-worker
-                image: harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion-ray258@sha256:a5a920303d943f29d8e3f2280ba828e93104f47a9b774e4a891c1a24682ea1ad
+                image: harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion-ray258@sha256:89eeca3065cc8be7ce0a8302fe432ad6d6105e5cbe779c294dc0f419429f1c7b
                 imagePullPolicy: IfNotPresent
                 resources:
                   requests: {cpu: "4", memory: 16Gi, nvidia.com/gpu: "1"}
@@ -209,7 +209,7 @@ spec:
             volumes:
               - name: canary-code
                 configMap:
-                  name: ray258-bevfusion-canary-code-r2
+                  name: ray258-bevfusion-canary-code-r3
   submitterPodTemplate:
     spec:
       restartPolicy: Never
@@ -220,7 +220,7 @@ spec:
         - name: harbor-registry
       containers:
         - name: ray-job-submitter
-          image: harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion-ray258@sha256:a5a920303d943f29d8e3f2280ba828e93104f47a9b774e4a891c1a24682ea1ad
+          image: harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion-ray258@sha256:89eeca3065cc8be7ce0a8302fe432ad6d6105e5cbe779c294dc0f419429f1c7b
           imagePullPolicy: IfNotPresent
           resources:
             requests: {cpu: "1", memory: 2Gi}
@@ -235,4 +235,4 @@ spec:
       volumes:
         - name: canary-code
           configMap:
-            name: ray258-bevfusion-canary-code-r2
+            name: ray258-bevfusion-canary-code-r3
