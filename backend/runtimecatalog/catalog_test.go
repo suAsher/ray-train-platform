@@ -111,13 +111,20 @@ func TestResolveCanaryRequiresEffectiveTenantPolicy(t *testing.T) {
 		}
 	})
 
+	t.Run("empty allowlist enables every authenticated tenant", func(t *testing.T) {
+		policy := NewPolicy(true, true, nil, nil).EffectiveForTenant("tenant-a")
+		snapshot, err := Resolve(image, domain.TrainingEngineRayTrain, policy)
+		if err != nil || snapshot.RayVersion != domain.RayVersionCanary {
+			t.Fatalf("snapshot=%+v err=%v", snapshot, err)
+		}
+	})
+
 	for _, test := range []struct {
 		name   string
 		policy Policy
 	}{
 		{name: "unscoped master policy", policy: NewPolicy(true, true, nil, []string{"tenant-a"})},
 		{name: "non-allowlisted", policy: NewPolicy(true, true, nil, []string{"tenant-a"}).EffectiveForTenant("tenant-b")},
-		{name: "empty allowlist", policy: NewPolicy(true, true, nil, nil).EffectiveForTenant("tenant-a")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if _, err := Resolve(image, domain.TrainingEngineRayTrain, test.policy); err == nil || !strings.Contains(err.Error(), "restricted to canary") {

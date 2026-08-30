@@ -550,7 +550,7 @@ func TestSubmitScopesCanaryRuntimeToPrincipalTenant(t *testing.T) {
 	}{
 		{name: "allowlisted tenant", tenantID: "tenant-a", policy: runtimecatalog.NewPolicy(true, true, nil, []string{"tenant-a"}), wantAccept: true},
 		{name: "non-allowlisted tenant", tenantID: "tenant-b", policy: runtimecatalog.NewPolicy(true, true, nil, []string{"tenant-a"})},
-		{name: "empty allowlist", tenantID: "tenant-a", policy: runtimecatalog.NewPolicy(true, true, nil, nil)},
+		{name: "empty allowlist enables all tenants", tenantID: "tenant-a", policy: runtimecatalog.NewPolicy(true, true, nil, nil), wantAccept: true},
 	}
 
 	for _, test := range tests {

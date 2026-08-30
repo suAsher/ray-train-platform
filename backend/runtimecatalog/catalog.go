@@ -68,7 +68,11 @@ func (policy Policy) EffectiveForTenant(tenantID string) Policy {
 		return effective
 	}
 	effective.ManagedEnabled = policy.ManagedEnabled || tenantAllowed(policy.managedTenants, tenantID)
-	if effective.ManagedEnabled && policy.CanaryEnabled && tenantAllowed(policy.canaryTenants, tenantID) {
+	// An empty canary allowlist deliberately means every authenticated tenant
+	// once the deployment-wide switch is enabled. A non-empty list narrows the
+	// rollout to those tenants. The master switch remains fail-closed by
+	// default, so the zero-value policy still enables nothing.
+	if effective.ManagedEnabled && policy.CanaryEnabled && (len(policy.canaryTenants) == 0 || tenantAllowed(policy.canaryTenants, tenantID)) {
 		effective.CanaryEnabled = true
 	}
 	return effective
