@@ -2,7 +2,7 @@
 
 日期：2026-08-30
 
-状态：待规格确认
+状态：已确认，进入实施
 首个接入对象：`bev_3dod_s1h` / 用户 `yihan.she` 的真实训练配置
 
 ## 1. 背景与结论
@@ -171,7 +171,7 @@ labeled-full-20260830.2+sha256-12ab34cd
 | `split` | string | train/val/test |
 | `class_ids` | list<int16> | CBGS 类别平衡 |
 | `timestamp` | int64 | 顺序和复现 |
-| `points` | large_binary | lidar 原始字节 |
+| `points` | binary | lidar 原始字节；单样本超过 2 GiB 时才使用 large_binary |
 | `info` | binary/struct | 标注、位姿和标定 |
 | `source_digest` | fixed binary/string | 回溯和校验 |
 
@@ -184,8 +184,8 @@ S1H lidar-only 第一版不打包未使用相机。相机融合扩展增加固�
 ### 8.1 Runtime
 
 - 先构建 Ray 2.58.0 canary 的 S1H 运行镜像。
-- 优先保持 Torch 1.10.1 + CUDA 11.3 算法环境，使用 Python 3.9 安装 Ray 2.58，并重新编译 MMCV/mmdet3d CUDA 扩展。
-- 若依赖无法可靠组合，才进入 Torch/Python 升级分支，并用同权重、同输入做数值回归后决定。
+- Ray 2.58 要求 Python 3.10+，因此不能沿用 Python 3.9 + Torch 1.10.1 组合。canary 以现有托管运行时的 Python 3.10、Torch 2.4.1、CUDA 12.1 为基线，并重新编译/适配 MMCV 与 mmdet3d CUDA 扩展。
+- 旧 Torch 1.10.1 + CUDA 11.3 镜像继续保留给 legacy 对照；只有同权重、同输入的数值回归通过后，Ray 2.58 canary 才能成为默认镜像。
 - 镜像必须包含平台 `raytrain-managed`、MMCV hook、Ray Data 适配器和 PyArrow。
 - 镜像按 digest 登记；用户修改代码不重新构建镜像。
 
