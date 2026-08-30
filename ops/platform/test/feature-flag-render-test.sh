@@ -87,8 +87,8 @@ normalize_feature_env_values() {
 assert_source_contract
 
 if ! command -v helm >/dev/null 2>&1; then
-  echo 'Feature-flag static template contract verified; Helm render NOT RUN (helm unavailable)'
-  exit 0
+  echo 'Helm is required for the feature-flag rendered-template contract; static assertions passed, render NOT RUN' >&2
+  exit 1
 fi
 
 disabled_render="$(mktemp)"
