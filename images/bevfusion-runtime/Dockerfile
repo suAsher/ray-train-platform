@@ -41,7 +41,7 @@ WORKDIR /workspace
 FROM ${RAY258_BASE_IMAGE} AS bevfusion-ray258-canary
 ARG RAY_CANARY_VERSION=2.58.0
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-ARG TORCH_INDEX_URL=https://mirrors.aliyun.com/pytorch-wheels/cu121
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121
 
 USER root
 RUN test "${RAY_CANARY_VERSION}" = "2.58.0" \
