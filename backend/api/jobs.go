@@ -65,6 +65,9 @@ type Handler struct {
 	images                 ImageStore
 	gitCredentials         GitCredentialStore
 	storageAssets          StorageAssetStore
+	datasets               DatasetCatalogStore
+	datasetPublications    DatasetPublicationManager
+	datasetInternalPrefix  string
 	dataSpaces             DataSpaceStore
 	dataSpacesEnabled      bool
 	dataSpacesFSXAttrs     string
@@ -138,6 +141,9 @@ type Options struct {
 	Images                  ImageStore
 	GitCredentials          GitCredentialStore
 	StorageAssets           StorageAssetStore
+	Datasets                DatasetCatalogStore
+	DatasetPublications     DatasetPublicationManager
+	DatasetInternalPrefix   string
 	DataSpaces              DataSpaceStore
 	DataSpacesEnabled       bool
 	DataSpacesFSXAttributes string
@@ -175,7 +181,10 @@ func NewHandler(repository JobRepository, options Options) *Handler {
 	for space, source := range options.IDCDataSpaceSources {
 		idcSources[space] = source
 	}
-	handler := &Handler{repository: repository, logs: options.Logs, metrics: options.Metrics, experiments: options.Experiments, allowAnonymous: options.AllowAnonymous, imageAllowlist: append([]string(nil), options.ImageAllowlist...), gitAllowlist: append([]string(nil), options.GitAllowlist...), workspaces: options.Workspaces, kubernetes: options.Kubernetes, workspaceImage: options.WorkspaceImage, rayVersion: options.RayVersion, serviceAccount: options.ServiceAccount, imagePullSecrets: append([]string(nil), options.ImagePullSecrets...), platformNamespace: strings.TrimSpace(options.PlatformNamespace), idcClaim: options.IDCClaim, idcMountPath: options.IDCMountPath, clusterQueue: options.KueueClusterQueue, admin: options.Admin, gpuAllocations: options.GPUAllocations, quota: options.Quota, workspacePepper: append([]byte(nil), options.WorkspacePepper...), trainingNodeSelector: options.TrainingNodeSelector, images: options.Images, gitCredentials: options.GitCredentials, storageAssets: options.StorageAssets, dataSpaces: options.DataSpaces, dataSpacesEnabled: options.DataSpacesEnabled, dataSpacesFSXAttrs: options.DataSpacesFSXAttributes, dataSpacesCapacity: options.DataSpacesMountCapacity, dataSpacesPublicRoot: strings.TrimSpace(options.DataSpacesPublicRoot), idcDataSpacesEnabled: options.IDCDataSpacesEnabled, idcDataSpacesCapacity: options.IDCDataSpacesMountCapacity, idcDataSpaceSources: idcSources, directoryLister: options.DirectoryLister, directoryInitializer: options.DirectoryInitializer, dataObjectStore: options.DataObjectStore, workspaceSnapshotStore: options.WorkspaceSnapshotStore, workspaceSnapshots: options.WorkspaceSnapshots, artifactLister: options.ArtifactLister, artifactReader: options.ArtifactReader, gitCredentialTester: options.GitCredentialTester, gitRefResolver: options.GitRefResolver, newID: newJobID, mlflowDashboardEnabled: options.MLflowDashboardEnabled, mlflowDashboardStore: options.MLflowDashboardStore, mlflowTrackingURL: strings.TrimSpace(options.MLflowTrackingURL), mlflowPublicOrigin: strings.TrimSpace(options.MLflowPublicOrigin), mlflowDashboardPepper: append([]byte(nil), options.MLflowDashboardPepper...), mlflowDashboardTTL: options.MLflowDashboardSessionTTL, mlflowDashboardNow: options.MLflowDashboardNow, mlflowDashboardRandom: options.MLflowDashboardRandom}
+	handler := &Handler{repository: repository, logs: options.Logs, metrics: options.Metrics, experiments: options.Experiments, allowAnonymous: options.AllowAnonymous, imageAllowlist: append([]string(nil), options.ImageAllowlist...), gitAllowlist: append([]string(nil), options.GitAllowlist...), workspaces: options.Workspaces, kubernetes: options.Kubernetes, workspaceImage: options.WorkspaceImage, rayVersion: options.RayVersion, serviceAccount: options.ServiceAccount, imagePullSecrets: append([]string(nil), options.ImagePullSecrets...), platformNamespace: strings.TrimSpace(options.PlatformNamespace), idcClaim: options.IDCClaim, idcMountPath: options.IDCMountPath, clusterQueue: options.KueueClusterQueue, admin: options.Admin, gpuAllocations: options.GPUAllocations, quota: options.Quota, workspacePepper: append([]byte(nil), options.WorkspacePepper...), trainingNodeSelector: options.TrainingNodeSelector, images: options.Images, gitCredentials: options.GitCredentials, storageAssets: options.StorageAssets, datasets: options.Datasets, datasetPublications: options.DatasetPublications, datasetInternalPrefix: strings.TrimSuffix(strings.TrimSpace(options.DatasetInternalPrefix), "/"), dataSpaces: options.DataSpaces, dataSpacesEnabled: options.DataSpacesEnabled, dataSpacesFSXAttrs: options.DataSpacesFSXAttributes, dataSpacesCapacity: options.DataSpacesMountCapacity, dataSpacesPublicRoot: strings.TrimSpace(options.DataSpacesPublicRoot), idcDataSpacesEnabled: options.IDCDataSpacesEnabled, idcDataSpacesCapacity: options.IDCDataSpacesMountCapacity, idcDataSpaceSources: idcSources, directoryLister: options.DirectoryLister, directoryInitializer: options.DirectoryInitializer, dataObjectStore: options.DataObjectStore, workspaceSnapshotStore: options.WorkspaceSnapshotStore, workspaceSnapshots: options.WorkspaceSnapshots, artifactLister: options.ArtifactLister, artifactReader: options.ArtifactReader, gitCredentialTester: options.GitCredentialTester, gitRefResolver: options.GitRefResolver, newID: newJobID, mlflowDashboardEnabled: options.MLflowDashboardEnabled, mlflowDashboardStore: options.MLflowDashboardStore, mlflowTrackingURL: strings.TrimSpace(options.MLflowTrackingURL), mlflowPublicOrigin: strings.TrimSpace(options.MLflowPublicOrigin), mlflowDashboardPepper: append([]byte(nil), options.MLflowDashboardPepper...), mlflowDashboardTTL: options.MLflowDashboardSessionTTL, mlflowDashboardNow: options.MLflowDashboardNow, mlflowDashboardRandom: options.MLflowDashboardRandom}
+	if handler.datasetInternalPrefix == "" {
+		handler.datasetInternalPrefix = internalDatasetObjectPrefix
+	}
 	handler.localCache = cloneLocalCachePolicy(options.LocalCache)
 	handler.runtimePolicy = options.RuntimePolicy.Clone()
 	if handler.mlflowDashboardTTL <= 0 {

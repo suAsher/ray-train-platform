@@ -125,7 +125,7 @@ func main() {
 	}
 	dataObjectStore, _ := directoryLister.(objectstore.DataSpaceStore)
 	workspaceSnapshotStore, _ := directoryLister.(objectstore.WorkspaceSnapshotStore)
-	jobHandler := api.NewHandler(repository, api.Options{AllowAnonymous: cfg.DemoMode, Logs: logs, Metrics: metrics, Experiments: experiments, ImageAllowlist: cfg.RayImageAllowlist, GitAllowlist: cfg.GitAllowlist, Workspaces: repository, Kubernetes: kubeClient, WorkspaceImage: cfg.WorkspaceImage, RayVersion: cfg.RayVersion, ServiceAccount: cfg.RayJobServiceAccount, ImagePullSecrets: cfg.ImagePullSecrets, PlatformNamespace: runtimeNamespace(), IDCClaim: cfg.IDCExistingClaim, IDCMountPath: cfg.IDCMountPath, KueueClusterQueue: cfg.KueueClusterQueue, Admin: repository, GPUAllocations: repository, Quota: repository, WorkspacePepper: []byte(cfg.PATPepper), TrainingNodeSelector: cfg.TrainingNodeSelector, Images: repository, GitCredentials: repository, StorageAssets: repository, DataSpaces: repository, DataSpacesEnabled: cfg.DataSpacesEnabled, DataSpacesFSXAttributes: cfg.DataSpacesFSXAttributes, DataSpacesMountCapacity: cfg.DataSpacesMountCapacity, DataSpacesPublicRoot: cfg.DataSpacesPublicRoot, IDCDataSpacesEnabled: cfg.IDCDataSpacesEnabled, IDCDataSpacesMountCapacity: cfg.IDCDataSpacesMountCapacity, IDCDataSpaceSources: idcDataSpaceSources(cfg), DirectoryLister: directoryLister, DirectoryInitializer: directoryInitializer, DataObjectStore: dataObjectStore, WorkspaceSnapshotStore: workspaceSnapshotStore, WorkspaceSnapshots: repository, ArtifactLister: artifactLister, ArtifactReader: artifactReader, LocalCache: api.LocalCachePolicy{Enabled: cfg.LocalCacheEnabled, AllowedSizes: cfg.LocalCacheAllowedSizes, DefaultSize: cfg.LocalCacheSize, MaxSize: cfg.LocalCacheMaxSize, MountPath: cfg.LocalCacheMountPathData1, MountPaths: []string{cfg.LocalCacheMountPathData1, cfg.LocalCacheMountPathData2}}, RuntimePolicy: runtimecatalog.NewPolicy(cfg.RayTrainManagedEnabled, cfg.RayTrainCanaryEnabled, cfg.RayTrainManagedTenants, cfg.RayTrainCanaryTenants), MLflowDashboardEnabled: cfg.MLflowDashboardEnabled, MLflowDashboardStore: repository, MLflowTrackingURL: cfg.MLflowTrackingURL, MLflowPublicOrigin: cfg.MLflowPublicOrigin, MLflowDashboardPepper: []byte(cfg.PATPepper), MLflowDashboardSessionTTL: time.Duration(cfg.MLflowDashboardSessionHours) * time.Hour})
+	jobHandler := api.NewHandler(repository, api.Options{AllowAnonymous: cfg.DemoMode, Logs: logs, Metrics: metrics, Experiments: experiments, ImageAllowlist: cfg.RayImageAllowlist, GitAllowlist: cfg.GitAllowlist, Workspaces: repository, Kubernetes: kubeClient, WorkspaceImage: cfg.WorkspaceImage, RayVersion: cfg.RayVersion, ServiceAccount: cfg.RayJobServiceAccount, ImagePullSecrets: cfg.ImagePullSecrets, PlatformNamespace: runtimeNamespace(), IDCClaim: cfg.IDCExistingClaim, IDCMountPath: cfg.IDCMountPath, KueueClusterQueue: cfg.KueueClusterQueue, Admin: repository, GPUAllocations: repository, Quota: repository, WorkspacePepper: []byte(cfg.PATPepper), TrainingNodeSelector: cfg.TrainingNodeSelector, Images: repository, GitCredentials: repository, StorageAssets: repository, Datasets: repository, DatasetInternalPrefix: cfg.DatasetInternalPrefix, DataSpaces: repository, DataSpacesEnabled: cfg.DataSpacesEnabled, DataSpacesFSXAttributes: cfg.DataSpacesFSXAttributes, DataSpacesMountCapacity: cfg.DataSpacesMountCapacity, DataSpacesPublicRoot: cfg.DataSpacesPublicRoot, IDCDataSpacesEnabled: cfg.IDCDataSpacesEnabled, IDCDataSpacesMountCapacity: cfg.IDCDataSpacesMountCapacity, IDCDataSpaceSources: idcDataSpaceSources(cfg), DirectoryLister: directoryLister, DirectoryInitializer: directoryInitializer, DataObjectStore: dataObjectStore, WorkspaceSnapshotStore: workspaceSnapshotStore, WorkspaceSnapshots: repository, ArtifactLister: artifactLister, ArtifactReader: artifactReader, LocalCache: api.LocalCachePolicy{Enabled: cfg.LocalCacheEnabled, AllowedSizes: cfg.LocalCacheAllowedSizes, DefaultSize: cfg.LocalCacheSize, MaxSize: cfg.LocalCacheMaxSize, MountPath: cfg.LocalCacheMountPathData1, MountPaths: []string{cfg.LocalCacheMountPathData1, cfg.LocalCacheMountPathData2}}, RuntimePolicy: runtimecatalog.NewPolicy(cfg.RayTrainManagedEnabled, cfg.RayTrainCanaryEnabled, cfg.RayTrainManagedTenants, cfg.RayTrainCanaryTenants), MLflowDashboardEnabled: cfg.MLflowDashboardEnabled, MLflowDashboardStore: repository, MLflowTrackingURL: cfg.MLflowTrackingURL, MLflowPublicOrigin: cfg.MLflowPublicOrigin, MLflowDashboardPepper: []byte(cfg.PATPepper), MLflowDashboardSessionTTL: time.Duration(cfg.MLflowDashboardSessionHours) * time.Hour})
 	rayHandler, err := newRayAPIHandler(repository, jobHandler.SubmissionService(), logs, cfg)
 	if err != nil {
 		log.Fatalf("initialize Ray Jobs API compatibility: %v", err)
@@ -270,6 +270,9 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	jobs.RegisterWorkspaceProxyRoute(v1)
 	jobs.RegisterTrainingRoutes(v1)
 	jobs.RegisterCheckpointRoutes(v1)
+	if cfg.DatasetVersioningEnabled {
+		jobs.RegisterDatasetReadRoutes(v1)
+	}
 	if artifacts != nil {
 		artifacts.RegisterRoutes(v1)
 	}
@@ -289,6 +292,9 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	jobs.RegisterAdminRoutes(oidcOnly)
 	jobs.RegisterImageRoutes(interactive)
 	jobs.RegisterStorageAssetRoutes(interactive)
+	if cfg.DatasetVersioningEnabled {
+		jobs.RegisterDatasetManagementRoutes(interactive)
+	}
 	jobs.RegisterDataSpaceRoutes(interactive)
 	jobs.RegisterWorkspaceSnapshotRoutes(interactive)
 	jobs.RegisterGitCredentialRoutes(interactive)
