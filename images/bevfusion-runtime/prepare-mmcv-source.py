@@ -17,6 +17,8 @@ CPP14_FLAG = "'-std=c++14'"
 CPP17_FLAG = "'-std=c++17'"
 PYTORCH_HELPER_INCLUDE = '#include "pytorch_cpp_helper.hpp"'
 QUEUE_AND_HELPER_INCLUDES = '#include <queue>\n#include "pytorch_cpp_helper.hpp"'
+THC_INCLUDE = "#include <THC/THC.h>\n"
+THC_DEVICE_UTILS_INCLUDE = "#include <THC/THCDeviceUtils.cuh>\n"
 
 
 def _replace_exact(
@@ -80,6 +82,29 @@ def prepare(source_root: pathlib.Path) -> None:
         "embedding.dim()",
         1,
         "mmcv pixel_group embedding assertion",
+    )
+    psamask = (
+        source_root
+        / "mmcv"
+        / "ops"
+        / "csrc"
+        / "pytorch"
+        / "cuda"
+        / "psamask_cuda.cu"
+    )
+    _replace_exact(
+        psamask,
+        THC_INCLUDE,
+        "",
+        1,
+        "mmcv psamask legacy THC include",
+    )
+    _replace_exact(
+        psamask,
+        THC_DEVICE_UTILS_INCLUDE,
+        "",
+        1,
+        "mmcv psamask legacy THC device include",
     )
 
 
