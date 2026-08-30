@@ -32,7 +32,9 @@ fi
 grep -Fq 'opencv-python==4.10.0.84' "$dockerfile"
 grep -Fq 'MMCV_WITH_OPS=1 FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST=8.9 MAX_JOBS=8' "$dockerfile"
 grep -Fq 'CXXFLAGS="-std=c++17"' "$dockerfile"
-grep -Fq 'mmcv-full==1.4.0 --no-deps' "$dockerfile"
+grep -Fq 'COPY images/bevfusion-runtime/prepare-mmcv-source.py /usr/local/bin/prepare-mmcv-source' "$dockerfile"
+grep -Fq '/usr/local/bin/prepare-mmcv-source /tmp/mmcv-src/mmcv-full-1.4.0' "$dockerfile"
+grep -Fq 'python3 setup.py bdist_wheel' "$dockerfile"
 grep -Fq 'COPY images/workspace/raytrain_runtime /usr/local/lib/raytrain-platform/raytrain_runtime' "$dockerfile"
 grep -Fq 'COPY images/workspace/raytrain-managed /usr/local/bin/raytrain-managed' "$dockerfile"
 grep -Fq 'COPY examples/bevfusion/patches/ray_data_s1h.py /usr/local/lib/raytrain-platform/bevfusion/ray_data_s1h.py' "$dockerfile"
@@ -41,5 +43,6 @@ grep -Fq 'ENV PLATFORM_RAY_VERSION=2.58.0' "$dockerfile"
 grep -Fq 'import mmcv, mmdet, mmdet3d, pyarrow, ray, torch' "$dockerfile"
 
 python3 -m unittest "$root/images/bevfusion-runtime/prepare_canary_source_test.py"
+python3 -m unittest "$root/images/bevfusion-runtime/prepare_mmcv_source_test.py"
 
 echo 'BEVFusion runtime Dockerfile contract: ok'

@@ -67,14 +67,21 @@ RUN python3 -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
       "google-api-core==2.34.0" "googleapis-common-protos==1.75.2" \
       "opentelemetry-exporter-otlp==1.44.0"
 
-# mmcv 1.4 predates Torch 2.4. Building it with the compiler's C++14 default
-# corrupts Torch's enum API and produces millions of cascading diagnostics.
-# Force the CUDA extension and the C++17 contract required by Torch 2.4. Keep
-# this in its own layer so dependency downloads survive extension iterations.
-RUN MMCV_WITH_OPS=1 FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST=8.9 MAX_JOBS=8 \
-      CXXFLAGS="-std=c++17" \
-      python3 -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
-      mmcv-full==1.4.0 --no-deps
+# mmcv 1.4 predates Torch 2.4. Backport the later upstream 1.x switch from
+# torch/extension.h to torch/types.h and C++17, then build the pinned source.
+# Keep this in its own layer so dependency downloads survive patch iterations.
+COPY images/bevfusion-runtime/prepare-mmcv-source.py /usr/local/bin/prepare-mmcv-source
+RUN chmod 0755 /usr/local/bin/prepare-mmcv-source \
+ && mkdir -p /tmp/mmcv-src \
+ && python3 -m pip download --no-deps --no-binary=:all: \
+      --index-url "${PIP_INDEX_URL}" --dest /tmp/mmcv-src mmcv-full==1.4.0 \
+ && tar -xzf /tmp/mmcv-src/mmcv-full-1.4.0.tar.gz -C /tmp/mmcv-src \
+ && /usr/local/bin/prepare-mmcv-source /tmp/mmcv-src/mmcv-full-1.4.0 \
+ && cd /tmp/mmcv-src/mmcv-full-1.4.0 \
+ && MMCV_WITH_OPS=1 FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST=8.9 MAX_JOBS=8 \
+      CXXFLAGS="-std=c++17" python3 setup.py bdist_wheel \
+ && python3 -m pip install --no-cache-dir --no-deps dist/mmcv_full-1.4.0-*.whl \
+ && rm -rf /tmp/mmcv-src
 
 COPY --from=bevfusion-source /home/westwell/bevfusion /opt/bevfusion
 COPY images/bevfusion-runtime/prepare-canary-source.py /usr/local/bin/prepare-bevfusion-canary-source
