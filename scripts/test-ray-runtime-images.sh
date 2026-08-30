@@ -155,10 +155,26 @@ assert_contracts() {
   require_literal images/train-pytorch/Dockerfile 'COPY workspace/raytrain-launch.py /usr/local/bin/raytrain-launch'
   require_literal images/workspace/Dockerfile 'COPY raytrain-launch.py /usr/local/bin/raytrain-launch'
 
+  require_literal images/dataset-publisher/Dockerfile 'ARG PYTHON_BASE_IMAGE='
+  require_literal images/dataset-publisher/Dockerfile 'COPY requirements.txt /app/requirements.txt'
+  require_literal images/dataset-publisher/Dockerfile 'python3 -m pip install --no-cache-dir'
+  require_literal images/dataset-publisher/Dockerfile 'COPY raytrain_publisher /app/raytrain_publisher'
+  require_literal images/dataset-publisher/Dockerfile 'USER 65532:65532'
+  require_literal images/dataset-publisher/Dockerfile 'ENTRYPOINT ["python3", "-m", "raytrain_publisher.pack"]'
+  require_literal images/dataset-publisher/.dockerignore '__pycache__/'
+  require_literal images/dataset-publisher/.dockerignore '*.pyc'
+  require_literal images/dataset-publisher/requirements.txt 'numpy=='
+  require_literal images/dataset-publisher/requirements.txt 'pyarrow=='
+  require_literal images/dataset-publisher/raytrain_publisher/schema.py 'source_digest'
+  require_literal images/dataset-publisher/raytrain_publisher/pack.py 'target_shard_bytes'
+  require_literal images/dataset-publisher/raytrain_publisher/pack.py 'target_row_group_bytes'
+
   require_literal build-image.sh 'RAY_RUNTIME_VARIANTS'
   require_literal build-image.sh 'pytorch-ray-ddp'
   require_literal build-image.sh 'pytorch-ray-train'
   require_literal build-image.sh 'workspace-ray256'
+  require_literal build-image.sh 'dataset-publisher'
+  require_literal build-image.sh 'PYTHON_BASE_IMAGE'
   require_literal build-image.sh 'RAY_VERSION=${RAY_VERSION_ARG}'
   require_literal build-image.sh "RAY_PRODUCTION_VERSION=\"${production_ray_version}\""
   require_literal build-image.sh 'cleanup_temp_dockerfiles()'
@@ -205,6 +221,7 @@ assert_contracts() {
   grep -Fq 'ray-train-pytorch-ray-ddp:2.56.1-contract' <<<"$dry_run"
   grep -Fq 'ray-train-pytorch-ray-train:2.56.1-contract' <<<"$dry_run"
   grep -Fq 'ray-workspace-ray256:2.56.1-contract' <<<"$dry_run"
+  grep -Fq 'ray-dataset-publisher:contract' <<<"$dry_run"
 }
 
 require_exact_image_ref() {

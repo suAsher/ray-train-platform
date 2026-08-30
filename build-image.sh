@@ -35,6 +35,7 @@ GO_BUILDER_IMAGE_ARG="${GO_BUILDER_IMAGE:-swr.cn-north-4.myhuaweicloud.com/ddn-k
 NODE_BUILDER_IMAGE_ARG="${NODE_BUILDER_IMAGE:-swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/node:20-alpine}"
 ALPINE_RUNTIME_IMAGE_ARG="${ALPINE_RUNTIME_IMAGE:-swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/alpine:3.20}"
 NGINX_RUNTIME_IMAGE_ARG="${NGINX_RUNTIME_IMAGE:-harbor.wellspiking.ai/hub/nginxinc/nginx-unprivileged:1.31-alpine}"
+PYTHON_BASE_IMAGE_ARG="${PYTHON_BASE_IMAGE:-harbor.wellspiking.ai/hub/python:3.11-slim-bookworm}"
 # Batch workloads import CUDA PyTorch and therefore need the Ray GPU runtime.
 # The workspace has always used this image; keeping the training default aligned
 # prevents a newly built "default" training image from silently lacking CUDA
@@ -84,7 +85,7 @@ Ray Training Platform image builder
 Environment variables:
   REGISTRY=harbor.wellspiking.ai/guofeng.su
   IMAGE_TAG=test-20260809
-  BUILD_TARGETS=all|backend,frontend,source-materializer,test-training,workspace,train-pytorch,pytorch-ray-ddp,pytorch-ray-train,workspace-ray256,bevfusion-runtime,tos-prefix-init,spk-rayjob
+  BUILD_TARGETS=all|backend,frontend,source-materializer,test-training,dataset-publisher,workspace,train-pytorch,pytorch-ray-ddp,pytorch-ray-train,workspace-ray256,bevfusion-runtime,tos-prefix-init,spk-rayjob
   PUSH_IMAGE=false|true
   USE_BUILDX=true|false
   BUILD_PLATFORM=linux/amd64
@@ -98,6 +99,7 @@ Environment variables:
   NODE_BUILDER_IMAGE=swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/node:20-alpine
   ALPINE_RUNTIME_IMAGE=swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/alpine:3.20
   NGINX_RUNTIME_IMAGE=harbor.wellspiking.ai/hub/nginxinc/nginx-unprivileged:1.31-alpine
+  PYTHON_BASE_IMAGE=harbor.wellspiking.ai/hub/python:3.11-slim-bookworm
   RAY_BASE_IMAGE=harbor.wellspiking.ai/hub/rayproject/ray:2.35.0-py310-gpu
   WORKSPACE_RAY_BASE_IMAGE=harbor.wellspiking.ai/hub/rayproject/ray:2.35.0-py310-gpu
   RAY_VERSION=2.56.1 (production runtime variants are fixed to this version)
@@ -110,6 +112,7 @@ Build targets:
   frontend            Vue/Nginx portal image
   source-materializer Git and governed-workspace code materializer image
   test-training       Single-GPU smoke Ray image
+  dataset-publisher   CPU-only immutable Parquet dataset publisher
   workspace           Existing Ray 2.35 interactive workspace (rollback)
   train-pytorch       Existing Ray 2.35 PyTorch runtime (rollback)
   pytorch-ray-ddp     Ray 2.56.1 PyTorch runtime for Ray-orchestrated DDP
@@ -137,6 +140,9 @@ target_spec() {
       ;;
     test-training)
       printf '%s\n' 'images/test-training/Dockerfile|ray-test|images/test-training|-'
+      ;;
+    dataset-publisher)
+      printf '%s\n' 'images/dataset-publisher/Dockerfile|ray-dataset-publisher|images/dataset-publisher|-'
       ;;
     tos-prefix-init)
       printf '%s\n' 'images/tos-prefix-init/Dockerfile|ray-tos-prefix-init|.|-'
@@ -173,7 +179,7 @@ target_spec() {
 normalize_targets() {
   local raw target
   if [ "$(trim "$BUILD_TARGETS_RAW")" = "all" ]; then
-    printf '%s\n' backend frontend source-materializer test-training workspace train-pytorch "${RAY_RUNTIME_VARIANTS[@]}" bevfusion-runtime tos-prefix-init spk-rayjob
+    printf '%s\n' backend frontend source-materializer test-training dataset-publisher workspace train-pytorch "${RAY_RUNTIME_VARIANTS[@]}" bevfusion-runtime tos-prefix-init spk-rayjob
     return
   fi
 
@@ -183,7 +189,7 @@ normalize_targets() {
     [ -n "$target" ] || continue
     target_spec "$target" >/dev/null || {
       echo "ERROR: unknown BUILD_TARGETS entry: $target" >&2
-      echo "       valid values: backend, frontend, source-materializer, test-training, workspace, train-pytorch, pytorch-ray-ddp, pytorch-ray-train, workspace-ray256, bevfusion-runtime, tos-prefix-init, spk-rayjob, all" >&2
+      echo "       valid values: backend, frontend, source-materializer, test-training, dataset-publisher, workspace, train-pytorch, pytorch-ray-ddp, pytorch-ray-train, workspace-ray256, bevfusion-runtime, tos-prefix-init, spk-rayjob, all" >&2
       exit 1
     }
     printf '%s\n' "$target"
@@ -280,6 +286,7 @@ echo "Go builder:     $GO_BUILDER_IMAGE_ARG"
 echo "Node builder:   $NODE_BUILDER_IMAGE_ARG"
 echo "Alpine runtime: $ALPINE_RUNTIME_IMAGE_ARG"
 echo "Nginx runtime:  $NGINX_RUNTIME_IMAGE_ARG"
+echo "Python base:    $PYTHON_BASE_IMAGE_ARG"
 echo "Ray base:       $RAY_BASE_IMAGE_ARG"
 echo "Workspace base: $WORKSPACE_RAY_BASE_IMAGE_ARG"
 echo "Ray production: $RAY_VERSION_ARG"
@@ -318,6 +325,7 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
       -e "s|^FROM \${NODE_BUILDER_IMAGE}|FROM $NODE_BUILDER_IMAGE_ARG|" \
       -e "s|^FROM \${ALPINE_RUNTIME_IMAGE}|FROM $ALPINE_RUNTIME_IMAGE_ARG|" \
       -e "s|^FROM \${NGINX_RUNTIME_IMAGE}|FROM $NGINX_RUNTIME_IMAGE_ARG|" \
+      -e "s|^FROM \${PYTHON_BASE_IMAGE}|FROM $PYTHON_BASE_IMAGE_ARG|" \
       -e "s|^FROM \${RAY_BASE_IMAGE}|FROM $RAY_BASE_IMAGE_ARG|" \
       -e "s|^FROM \${WORKSPACE_RAY_BASE_IMAGE}|FROM $WORKSPACE_RAY_BASE_IMAGE_ARG|" \
       -e "s|^FROM \${BEVFUSION_BASE_IMAGE}|FROM $BEVFUSION_BASE_IMAGE_ARG|" \
@@ -338,6 +346,7 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
       --build-arg "NODE_BUILDER_IMAGE=$NODE_BUILDER_IMAGE_ARG"
       --build-arg "ALPINE_RUNTIME_IMAGE=$ALPINE_RUNTIME_IMAGE_ARG"
       --build-arg "NGINX_RUNTIME_IMAGE=$NGINX_RUNTIME_IMAGE_ARG"
+      --build-arg "PYTHON_BASE_IMAGE=$PYTHON_BASE_IMAGE_ARG"
       --build-arg "RAY_BASE_IMAGE=$RAY_BASE_IMAGE_ARG"
       --build-arg "WORKSPACE_RAY_BASE_IMAGE=$WORKSPACE_RAY_BASE_IMAGE_ARG"
       --build-arg "RAY_VERSION=${RAY_VERSION_ARG}"
@@ -370,6 +379,7 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
       --build-arg "NODE_BUILDER_IMAGE=$NODE_BUILDER_IMAGE_ARG"
       --build-arg "ALPINE_RUNTIME_IMAGE=$ALPINE_RUNTIME_IMAGE_ARG"
       --build-arg "NGINX_RUNTIME_IMAGE=$NGINX_RUNTIME_IMAGE_ARG"
+      --build-arg "PYTHON_BASE_IMAGE=$PYTHON_BASE_IMAGE_ARG"
       --build-arg "RAY_BASE_IMAGE=$RAY_BASE_IMAGE_ARG"
       --build-arg "WORKSPACE_RAY_BASE_IMAGE=$WORKSPACE_RAY_BASE_IMAGE_ARG"
       --build-arg "RAY_VERSION=${RAY_VERSION_ARG}"
