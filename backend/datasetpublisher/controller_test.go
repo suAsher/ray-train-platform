@@ -15,7 +15,12 @@ import (
 
 func publicationControllerOptions() ControllerOptions {
 	return ControllerOptions{
+		Namespace:             "ray-train-platform",
 		Image:                 "registry.example/dataset-publisher@sha256:" + strings.Repeat("a", 64),
+		SourceBucket:          "shanghai-data-transfer",
+		TargetBucket:          "shanghai-data-transfer",
+		TOSEndpoint:           "tos-cn-shanghai.ivolces.com",
+		TOSRegion:             "cn-shanghai",
 		ServiceAccountName:    "dataset-publisher",
 		QueueName:             "dataset-publisher-low",
 		PriorityClassName:     "dataset-publisher-low",
@@ -31,6 +36,8 @@ func publicationControllerOptions() ControllerOptions {
 		Tolerations:           []PublicationToleration{{Key: "workload", Operator: "Equal", Value: "cpu", Effect: "NoSchedule"}},
 		ClientMaxAttempts:     3,
 		JobBackoffLimit:       2,
+		JobActiveDeadline:     7 * 24 * time.Hour,
+		JobTTLAfterFinished:   24 * time.Hour,
 		InitialRetryBackoff:   time.Second,
 		MaximumRetryBackoff:   4 * time.Second,
 		Now:                   func() time.Time { return time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC) },
@@ -52,6 +59,8 @@ func publicationReconcileRequest(runID string) ReconcileRequest {
 	return ReconcileRequest{
 		TenantID: "team-a", DatasetID: "dataset-team-a",
 		DatasetVersionID: "version-team-a", RunID: runID,
+		Version: "20260830.1", SchemaVersion: "s1h-lidar-parquet-v1",
+		SourceRoot: "ray-train/tenants/team-a/shared", SourceIndex: "labeled/train-infos.pkl",
 	}
 }
 
@@ -161,6 +170,12 @@ func TestControllerJobSpecIsImmutableCPUOnlyAndLowPriority(t *testing.T) {
 	if spec.RunID() != request.RunID || spec.DatasetID() != request.DatasetID || spec.DatasetVersionID() != request.DatasetVersionID {
 		t.Fatalf("job spec identity is not bound to publication: %+v", spec)
 	}
+	if spec.Namespace() != options.Namespace || spec.Version() != request.Version || spec.SchemaVersion() != request.SchemaVersion || spec.SourceRoot() != request.SourceRoot || spec.SourceIndex() != request.SourceIndex {
+		t.Fatalf("publication source identity was not preserved: namespace=%q version=%q schema=%q root=%q index=%q", spec.Namespace(), spec.Version(), spec.SchemaVersion(), spec.SourceRoot(), spec.SourceIndex())
+	}
+	if spec.SourceBucket() != options.SourceBucket || spec.TargetBucket() != options.TargetBucket || spec.TOSEndpoint() != options.TOSEndpoint || spec.TOSRegion() != options.TOSRegion {
+		t.Fatalf("publication storage endpoint was not preserved")
+	}
 	if spec.Image() != options.Image || spec.ServiceAccountName() != options.ServiceAccountName {
 		t.Fatalf("image=%q serviceAccount=%q", spec.Image(), spec.ServiceAccountName())
 	}
@@ -191,6 +206,9 @@ func TestControllerJobSpecIsImmutableCPUOnlyAndLowPriority(t *testing.T) {
 	}
 	if spec.BackoffLimit() != options.JobBackoffLimit {
 		t.Fatalf("job backoff limit=%d, want %d", spec.BackoffLimit(), options.JobBackoffLimit)
+	}
+	if spec.ActiveDeadline() != options.JobActiveDeadline || spec.TTLAfterFinished() != options.JobTTLAfterFinished || spec.InternalPrefix() != options.InternalPrefix {
+		t.Fatalf("job lifecycle/internal prefix=%s/%s/%q", spec.ActiveDeadline(), spec.TTLAfterFinished(), spec.InternalPrefix())
 	}
 	if spec.ImagePullPolicy() != options.ImagePullPolicy || spec.WorkingDirectory() != options.WorkingDirectory {
 		t.Fatalf("image pull policy=%q working directory=%q", spec.ImagePullPolicy(), spec.WorkingDirectory())
@@ -458,6 +476,16 @@ func TestControllerRejectsInvalidRequestsAndConfiguration(t *testing.T) {
 	if _, err := controller.Reconcile(context.Background(), invalidRequest); !errors.Is(err, ErrInvalidPublicationControllerRequest) {
 		t.Fatalf("invalid request error=%v", err)
 	}
+	unsafeSource := publicationReconcileRequest("publication-unsafe-source")
+	unsafeSource.SourceIndex = "../private/index.pkl"
+	if _, err := controller.Reconcile(context.Background(), unsafeSource); !errors.Is(err, ErrInvalidPublicationControllerRequest) {
+		t.Fatalf("unsafe publication source error=%v", err)
+	}
+	overlappingSource := publicationReconcileRequest("publication-overlapping-source")
+	overlappingSource.SourceRoot = domain.DefaultDatasetInternalPrefix
+	if _, err := controller.Reconcile(context.Background(), overlappingSource); !errors.Is(err, ErrInvalidPublicationControllerRequest) {
+		t.Fatalf("overlapping publication source error=%v", err)
+	}
 	anonymous := publicationReconcileRequest("publication-anonymous")
 	anonymous.TenantID = ""
 	if _, err := controller.Reconcile(context.Background(), anonymous); !errors.Is(err, ErrInvalidPublicationControllerRequest) {
@@ -471,6 +499,7 @@ func TestControllerRejectsInvalidRequestsAndConfiguration(t *testing.T) {
 
 	base := publicationControllerOptions()
 	invalidOptions := []ControllerOptions{
+		func() ControllerOptions { value := base; value.Namespace = ""; return value }(),
 		func() ControllerOptions {
 			value := base
 			value.Image = "registry.example/dataset-publisher:latest"
@@ -484,7 +513,17 @@ func TestControllerRejectsInvalidRequestsAndConfiguration(t *testing.T) {
 		func() ControllerOptions { value := base; value.CPURequest = "500 millicpu"; return value }(),
 		func() ControllerOptions { value := base; value.ClientMaxAttempts = 0; return value }(),
 		func() ControllerOptions { value := base; value.JobBackoffLimit = -1; return value }(),
+		func() ControllerOptions { value := base; value.JobActiveDeadline = 0; return value }(),
+		func() ControllerOptions { value := base; value.JobTTLAfterFinished = 31 * 24 * time.Hour; return value }(),
+		func() ControllerOptions { value := base; value.JobTTLAfterFinished += time.Millisecond; return value }(),
 		func() ControllerOptions { value := base; value.InitialRetryBackoff = -time.Second; return value }(),
+		func() ControllerOptions { value := base; value.SourceBucket = "tos://bucket"; return value }(),
+		func() ControllerOptions { value := base; value.TOSEndpoint = "https://tos.example.com"; return value }(),
+		func() ControllerOptions {
+			value := base
+			value.NodeSelector = map[string]string{"": "cpu"}
+			return value
+		}(),
 	}
 	for index, options := range invalidOptions {
 		if _, err := NewController(repository, jobs, options); !errors.Is(err, ErrInvalidPublicationController) {

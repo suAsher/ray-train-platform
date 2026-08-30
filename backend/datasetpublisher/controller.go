@@ -21,6 +21,8 @@ var (
 	ErrPublicationJobFailed                = errors.New("dataset publication job failed")
 )
 
+const maxPublicationJobDuration = 30 * 24 * time.Hour
+
 type PublicationRunRepository interface {
 	EnsureDatasetPublicationRun(context.Context, string, bool, domain.DatasetPublicationRun) (domain.DatasetPublicationRun, error)
 	ClaimDatasetPublicationRun(context.Context, string, bool, string, string, string, time.Time) (domain.DatasetPublicationRun, bool, error)
@@ -64,10 +66,19 @@ type ReconcileRequest struct {
 	RunID            string
 	DatasetID        string
 	DatasetVersionID string
+	Version          string
+	SchemaVersion    string
+	SourceRoot       string
+	SourceIndex      string
 }
 
 type ControllerOptions struct {
+	Namespace             string
 	Image                 string
+	SourceBucket          string
+	TargetBucket          string
+	TOSEndpoint           string
+	TOSRegion             string
 	ImagePullPolicy       string
 	ServiceAccountName    string
 	QueueName             string
@@ -83,6 +94,8 @@ type ControllerOptions struct {
 	MemoryLimit           string
 	ClientMaxAttempts     int
 	JobBackoffLimit       int
+	JobActiveDeadline     time.Duration
+	JobTTLAfterFinished   time.Duration
 	InitialRetryBackoff   time.Duration
 	MaximumRetryBackoff   time.Duration
 	Now                   func() time.Time
@@ -121,33 +134,55 @@ func (resources PublicationJobResources) Limits() map[string]string {
 // A Kubernetes adapter may translate it, but this package has no Kubernetes
 // type dependency.
 type PublicationJobSpec struct {
+	namespace             string
 	name                  string
 	runID                 string
 	datasetID             string
 	datasetVersionID      string
+	version               string
+	schemaVersion         string
+	sourceRoot            string
+	sourceIndex           string
 	image                 string
+	sourceBucket          string
+	targetBucket          string
+	tosEndpoint           string
+	tosRegion             string
 	imagePullPolicy       string
 	serviceAccountName    string
 	queueName             string
 	priorityClassName     string
 	workingDirectory      string
+	internalPrefix        string
 	nodeSelector          map[string]string
 	preferredNodeSelector map[string]string
 	tolerations           []PublicationToleration
 	resources             PublicationJobResources
 	backoffLimit          int
+	activeDeadline        time.Duration
+	ttlAfterFinished      time.Duration
 }
 
+func (spec PublicationJobSpec) Namespace() string          { return spec.namespace }
 func (spec PublicationJobSpec) Name() string               { return spec.name }
 func (spec PublicationJobSpec) RunID() string              { return spec.runID }
 func (spec PublicationJobSpec) DatasetID() string          { return spec.datasetID }
 func (spec PublicationJobSpec) DatasetVersionID() string   { return spec.datasetVersionID }
+func (spec PublicationJobSpec) Version() string            { return spec.version }
+func (spec PublicationJobSpec) SchemaVersion() string      { return spec.schemaVersion }
+func (spec PublicationJobSpec) SourceRoot() string         { return spec.sourceRoot }
+func (spec PublicationJobSpec) SourceIndex() string        { return spec.sourceIndex }
 func (spec PublicationJobSpec) Image() string              { return spec.image }
+func (spec PublicationJobSpec) SourceBucket() string       { return spec.sourceBucket }
+func (spec PublicationJobSpec) TargetBucket() string       { return spec.targetBucket }
+func (spec PublicationJobSpec) TOSEndpoint() string        { return spec.tosEndpoint }
+func (spec PublicationJobSpec) TOSRegion() string          { return spec.tosRegion }
 func (spec PublicationJobSpec) ImagePullPolicy() string    { return spec.imagePullPolicy }
 func (spec PublicationJobSpec) ServiceAccountName() string { return spec.serviceAccountName }
 func (spec PublicationJobSpec) QueueName() string          { return spec.queueName }
 func (spec PublicationJobSpec) PriorityClassName() string  { return spec.priorityClassName }
 func (spec PublicationJobSpec) WorkingDirectory() string   { return spec.workingDirectory }
+func (spec PublicationJobSpec) InternalPrefix() string     { return spec.internalPrefix }
 func (spec PublicationJobSpec) NodeSelector() map[string]string {
 	return clonePublicationStringMap(spec.nodeSelector)
 }
@@ -161,6 +196,12 @@ func (spec PublicationJobSpec) Resources() PublicationJobResources {
 	return spec.resources
 }
 func (spec PublicationJobSpec) BackoffLimit() int { return spec.backoffLimit }
+func (spec PublicationJobSpec) ActiveDeadline() time.Duration {
+	return spec.activeDeadline
+}
+func (spec PublicationJobSpec) TTLAfterFinished() time.Duration {
+	return spec.ttlAfterFinished
+}
 
 func (spec PublicationJobSpec) Labels() map[string]string {
 	return map[string]string{
@@ -211,6 +252,9 @@ func (controller *Controller) Reconcile(ctx context.Context, request ReconcileRe
 		return domain.DatasetPublicationRun{}, err
 	}
 	if !request.valid() {
+		return domain.DatasetPublicationRun{}, ErrInvalidPublicationControllerRequest
+	}
+	if publicationRootsOverlap(request.SourceRoot, controller.options.InternalPrefix) {
 		return domain.DatasetPublicationRun{}, ErrInvalidPublicationControllerRequest
 	}
 
@@ -435,12 +479,18 @@ func (controller *Controller) jobSpec(request ReconcileRequest) (PublicationJobS
 		return PublicationJobSpec{}, err
 	}
 	return PublicationJobSpec{
-		name: name, runID: request.RunID, datasetID: request.DatasetID,
-		datasetVersionID: request.DatasetVersionID, image: controller.options.Image,
+		namespace: controller.options.Namespace,
+		name:      name, runID: request.RunID, datasetID: request.DatasetID,
+		datasetVersionID: request.DatasetVersionID, version: request.Version,
+		schemaVersion: request.SchemaVersion, sourceRoot: request.SourceRoot,
+		sourceIndex: request.SourceIndex, image: controller.options.Image,
+		sourceBucket: controller.options.SourceBucket, targetBucket: controller.options.TargetBucket,
+		tosEndpoint: controller.options.TOSEndpoint, tosRegion: controller.options.TOSRegion,
 		imagePullPolicy:    controller.options.ImagePullPolicy,
 		serviceAccountName: controller.options.ServiceAccountName,
 		queueName:          controller.options.QueueName, priorityClassName: controller.options.PriorityClassName,
 		workingDirectory:      controller.options.WorkingDirectory,
+		internalPrefix:        controller.options.InternalPrefix,
 		nodeSelector:          clonePublicationStringMap(controller.options.NodeSelector),
 		preferredNodeSelector: clonePublicationStringMap(controller.options.PreferredNodeSelector),
 		tolerations:           append([]PublicationToleration(nil), controller.options.Tolerations...),
@@ -448,12 +498,16 @@ func (controller *Controller) jobSpec(request ReconcileRequest) (PublicationJobS
 			cpuRequest: controller.options.CPURequest, cpuLimit: controller.options.CPULimit,
 			memoryRequest: controller.options.MemoryRequest, memoryLimit: controller.options.MemoryLimit,
 		},
-		backoffLimit: controller.options.JobBackoffLimit,
+		backoffLimit:     controller.options.JobBackoffLimit,
+		activeDeadline:   controller.options.JobActiveDeadline,
+		ttlAfterFinished: controller.options.JobTTLAfterFinished,
 	}, nil
 }
 
 func (request ReconcileRequest) valid() bool {
-	if !validIdentifier(request.RunID) || !validIdentifier(request.DatasetID) || !validIdentifier(request.DatasetVersionID) {
+	if !validIdentifier(request.RunID) || !validIdentifier(request.DatasetID) || !validIdentifier(request.DatasetVersionID) ||
+		!validIdentifier(request.Version) || !validIdentifier(request.SchemaVersion) ||
+		!validPublicationRelativePath(request.SourceRoot) || !validPublicationRelativePath(request.SourceIndex) {
 		return false
 	}
 	if request.SuperAdmin && request.TenantID == "" {
@@ -480,7 +534,10 @@ func (progress PublicationProgress) complete() bool {
 }
 
 func validControllerOptions(options ControllerOptions) bool {
-	if domain.ValidatePinnedImage(options.Image) != nil ||
+	if !isPublicationDNSLabel(options.Namespace) ||
+		domain.ValidatePinnedImage(options.Image) != nil ||
+		!validPublicationBucket(options.SourceBucket) || !validPublicationBucket(options.TargetBucket) ||
+		!validPublicationEndpoint(options.TOSEndpoint) || !validPublicationRegion(options.TOSRegion) ||
 		!validPublicationImagePullPolicy(options.ImagePullPolicy) ||
 		!isPublicationDNSLabel(options.ServiceAccountName) ||
 		!isPublicationDNSLabel(options.QueueName) ||
@@ -498,7 +555,63 @@ func validControllerOptions(options ControllerOptions) bool {
 	}
 	return options.ClientMaxAttempts >= 1 && options.ClientMaxAttempts <= 10 &&
 		options.JobBackoffLimit >= 0 && options.JobBackoffLimit <= 10 &&
+		validPublicationJobDuration(options.JobActiveDeadline) &&
+		validPublicationJobDuration(options.JobTTLAfterFinished) &&
 		options.InitialRetryBackoff >= 0 && options.MaximumRetryBackoff >= options.InitialRetryBackoff
+}
+
+func validPublicationJobDuration(value time.Duration) bool {
+	return value >= time.Second && value <= maxPublicationJobDuration && value%time.Second == 0
+}
+
+func validPublicationRelativePath(value string) bool {
+	normalized, err := domain.NormalizeDatasetInternalPrefix(value)
+	return err == nil && normalized == value
+}
+
+func validPublicationBucket(value string) bool {
+	if len(value) < 3 || len(value) > 63 || strings.TrimSpace(value) != value {
+		return false
+	}
+	for index, character := range value {
+		if character >= 'a' && character <= 'z' || character >= '0' && character <= '9' || character == '-' {
+			if character == '-' && (index == 0 || index == len(value)-1) {
+				return false
+			}
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validPublicationEndpoint(value string) bool {
+	if value == "" || len(value) > 253 || strings.TrimSpace(value) != value || strings.ContainsAny(value, "/\\:@") {
+		return false
+	}
+	labels := strings.Split(value, ".")
+	if len(labels) < 2 {
+		return false
+	}
+	for _, label := range labels {
+		if !isPublicationDNSLabel(label) {
+			return false
+		}
+	}
+	return true
+}
+
+func validPublicationRegion(value string) bool {
+	if value == "" || len(value) > 63 || strings.TrimSpace(value) != value || value[0] == '-' || value[len(value)-1] == '-' {
+		return false
+	}
+	for _, character := range value {
+		if character >= 'a' && character <= 'z' || character >= '0' && character <= '9' || character == '-' {
+			continue
+		}
+		return false
+	}
+	return strings.Contains(value, "-")
 }
 
 func validPublicationImagePullPolicy(value string) bool {
@@ -512,7 +625,7 @@ func validPublicationWorkingDirectory(value string) bool {
 func validPublicationPlacement(nodeSelector, preferred map[string]string, tolerations []PublicationToleration) bool {
 	for _, selector := range []map[string]string{nodeSelector, preferred} {
 		for key, value := range selector {
-			if !validPublicationLabelToken(key, 253, true) || !validPublicationLabelToken(value, 63, false) {
+			if key == "" || !validPublicationLabelToken(key, 253, true) || !validPublicationLabelToken(value, 63, false) {
 				return false
 			}
 		}
