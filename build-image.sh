@@ -35,7 +35,7 @@ GO_BUILDER_IMAGE_ARG="${GO_BUILDER_IMAGE:-swr.cn-north-4.myhuaweicloud.com/ddn-k
 NODE_BUILDER_IMAGE_ARG="${NODE_BUILDER_IMAGE:-swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/node:20-alpine}"
 ALPINE_RUNTIME_IMAGE_ARG="${ALPINE_RUNTIME_IMAGE:-swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/alpine:3.20}"
 NGINX_RUNTIME_IMAGE_ARG="${NGINX_RUNTIME_IMAGE:-harbor.wellspiking.ai/hub/nginxinc/nginx-unprivileged:1.31-alpine}"
-PYTHON_BASE_IMAGE_ARG="${PYTHON_BASE_IMAGE:-harbor.wellspiking.ai/hub/python:3.11-slim-bookworm}"
+PYTHON_BASE_IMAGE_ARG="${PYTHON_BASE_IMAGE:-docker.m.daocloud.io/library/python:3.11-slim-bookworm}"
 # Batch workloads import CUDA PyTorch and therefore need the Ray GPU runtime.
 # The workspace has always used this image; keeping the training default aligned
 # prevents a newly built "default" training image from silently lacking CUDA
@@ -101,7 +101,7 @@ Environment variables:
   NODE_BUILDER_IMAGE=swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/node:20-alpine
   ALPINE_RUNTIME_IMAGE=swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/alpine:3.20
   NGINX_RUNTIME_IMAGE=harbor.wellspiking.ai/hub/nginxinc/nginx-unprivileged:1.31-alpine
-  PYTHON_BASE_IMAGE=harbor.wellspiking.ai/hub/python:3.11-slim-bookworm
+  PYTHON_BASE_IMAGE=docker.m.daocloud.io/library/python:3.11-slim-bookworm
   RAY_BASE_IMAGE=harbor.wellspiking.ai/hub/rayproject/ray:2.35.0-py310-gpu
   WORKSPACE_RAY_BASE_IMAGE=harbor.wellspiking.ai/hub/rayproject/ray:2.35.0-py310-gpu
   RAY_VERSION=2.56.1 (production runtime variants are fixed to this version)

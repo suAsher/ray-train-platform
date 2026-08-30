@@ -213,6 +213,7 @@ assert_contracts() {
   require_literal build-image.sh 'RAY_CANARY_FOUNDATION_IMAGE'
   require_literal build-image.sh 'dataset-publisher'
   require_literal build-image.sh 'PYTHON_BASE_IMAGE'
+  require_literal build-image.sh 'PYTHON_BASE_IMAGE_ARG="${PYTHON_BASE_IMAGE:-docker.m.daocloud.io/library/python:3.11-slim-bookworm}"'
   require_literal build-image.sh 'RAY_VERSION=${RAY_VERSION_ARG}'
   require_literal build-image.sh "RAY_PRODUCTION_VERSION=\"${production_ray_version}\""
   require_literal build-image.sh 'cleanup_temp_dockerfiles()'
