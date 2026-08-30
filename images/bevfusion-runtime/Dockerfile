@@ -52,10 +52,14 @@ RUN test "${RAY_CANARY_VERSION}" = "2.58.0" \
  && rm -rf /var/lib/apt/lists/* \
  && python3 -m pip uninstall -y \
       azure-cli-core conda-content-trust \
-      opentelemetry-exporter-otlp opentelemetry-exporter-otlp-proto-grpc \
- && python3 -m pip install --no-cache-dir --index-url "${TORCH_INDEX_URL}" \
-      torch==2.4.1 torchvision==0.19.1 \
- && python3 -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
+      opentelemetry-exporter-otlp opentelemetry-exporter-otlp-proto-grpc
+
+# Keep heavyweight dependency groups in separate layers so a compatibility
+# failure in the legacy OpenMMLab stack does not repeat apt or torch downloads.
+RUN python3 -m pip install --no-cache-dir --index-url "${TORCH_INDEX_URL}" \
+      torch==2.4.1 torchvision==0.19.1
+
+RUN python3 -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
       "ray[default,train,tune]==${RAY_CANARY_VERSION}" \
       pyarrow==18.1.0 numpy==1.23.5 numba==0.57.1 scipy==1.10.1 \
       mmcv-full==1.4.0 mmdet==2.20.0 nuscenes-devkit==1.1.10 \
