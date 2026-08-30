@@ -426,6 +426,23 @@ func visibleDatasetVersionQuery(database *gorm.DB, tenantID string, superAdmin b
 	return visibleDatasetQuery(query, tenantID, superAdmin)
 }
 
+// manageableDatasetQuery is intentionally stricter than the catalogue read
+// scope. PUBLIC datasets are readable by every tenant but may only be
+// published or mutated by a platform administrator. Team datasets are
+// mutable only by their owning tenant.
+func manageableDatasetQuery(query *gorm.DB, tenantID string, superAdmin bool) *gorm.DB {
+	if superAdmin {
+		return query
+	}
+	if strings.TrimSpace(tenantID) == "" {
+		return query.Where("datasets.id IS NULL")
+	}
+	return query.Where(
+		"datasets.visibility = ? AND datasets.owner_tenant_id = ?",
+		string(domain.DatasetVisibilityTeam), tenantID,
+	)
+}
+
 func isDatasetVersionDraftState(state domain.DatasetVersionState) bool {
 	switch state {
 	case domain.DatasetVersionDiscovering, domain.DatasetVersionStabilizing, domain.DatasetVersionValidating, domain.DatasetVersionPacking:
