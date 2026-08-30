@@ -9,7 +9,10 @@ import (
 	"unicode"
 )
 
-const DatasetIdentifierMaxBytes = 128
+const (
+	DatasetIdentifierMaxBytes = 128
+	DatasetPathMaxBytes       = 4096
+)
 
 type DatasetVisibility string
 
@@ -223,7 +226,7 @@ func (run DatasetPublicationRun) Validate() error {
 	if !knownDatasetVersionState(run.State) {
 		return fmt.Errorf("unsupported publication state %q", run.State)
 	}
-	if run.TotalPartitions < 0 || run.CompletedPartitions < 0 || run.FailedPartitions < 0 || run.CompletedPartitions+run.FailedPartitions > run.TotalPartitions {
+	if run.TotalPartitions < 0 || run.CompletedPartitions < 0 || run.FailedPartitions < 0 || run.CompletedPartitions > run.TotalPartitions || run.FailedPartitions > run.TotalPartitions-run.CompletedPartitions {
 		return fmt.Errorf("publication partition progress is invalid")
 	}
 	return validateProgressCounts(run.SourceObjectCount, run.ProcessedObjectCount, run.FailedObjectCount, 0, 0)
@@ -276,7 +279,7 @@ func validateDatasetIdentifier(name, value string) error {
 }
 
 func validateDatasetRelativePath(name, value string) error {
-	if value == "" || strings.TrimSpace(value) != value || strings.IndexFunc(value, unicode.IsControl) >= 0 || strings.Contains(value, `\`) || path.IsAbs(value) || path.Clean(value) != value || value == "." {
+	if value == "" || len(value) > DatasetPathMaxBytes || strings.TrimSpace(value) != value || strings.IndexFunc(value, unicode.IsControl) >= 0 || strings.Contains(value, `\`) || path.IsAbs(value) || path.Clean(value) != value || value == "." {
 		return fmt.Errorf("%s must be a clean relative path", name)
 	}
 	parsed, err := url.Parse(value)
@@ -301,7 +304,7 @@ func knownDatasetVersionState(state DatasetVersionState) bool {
 }
 
 func validateProgressCounts(total, processed, failed, logicalBytes, packedBytes int64) error {
-	if total < 0 || processed < 0 || failed < 0 || logicalBytes < 0 || packedBytes < 0 || processed+failed > total {
+	if total < 0 || processed < 0 || failed < 0 || logicalBytes < 0 || packedBytes < 0 || processed > total || failed > total-processed {
 		return fmt.Errorf("progress counters are invalid")
 	}
 	return nil

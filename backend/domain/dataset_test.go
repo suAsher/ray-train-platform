@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -47,6 +48,7 @@ func validDatasetVersion(state DatasetVersionState) DatasetVersion {
 
 func TestDatasetValidate(t *testing.T) {
 	longID := strings.Repeat("a", DatasetIdentifierMaxBytes+1)
+	longPath := strings.Repeat("a", DatasetPathMaxBytes+1)
 	tests := []struct {
 		name   string
 		mutate func(*Dataset)
@@ -64,6 +66,7 @@ func TestDatasetValidate(t *testing.T) {
 		{name: "non canonical source path", mutate: func(dataset *Dataset) { dataset.SourceRelativePath = "labeled//full" }},
 		{name: "source path whitespace", mutate: func(dataset *Dataset) { dataset.SourceRelativePath = " labeled/full" }},
 		{name: "source path control", mutate: func(dataset *Dataset) { dataset.SourceRelativePath = "labeled/\nfull" }},
+		{name: "source path too long", mutate: func(dataset *Dataset) { dataset.SourceRelativePath = longPath }},
 		{name: "unsafe schema version", mutate: func(dataset *Dataset) { dataset.SchemaVersion = "../v2" }},
 		{name: "unsupported visibility", mutate: func(dataset *Dataset) { dataset.Visibility = DatasetVisibility("PRIVATE") }},
 		{name: "public owner", mutate: func(dataset *Dataset) { dataset.OwnerTenantID = "tenant-a" }},
@@ -93,6 +96,7 @@ func TestDatasetValidate(t *testing.T) {
 }
 
 func TestDatasetVersionValidateManifestAndCounts(t *testing.T) {
+	longPath := strings.Repeat("a", DatasetPathMaxBytes+1)
 	tests := []struct {
 		name   string
 		state  DatasetVersionState
@@ -109,6 +113,7 @@ func TestDatasetVersionValidateManifestAndCounts(t *testing.T) {
 		{name: "missing ready object key", state: DatasetVersionReady, mutate: func(version *DatasetVersion) { version.ManifestObjectKey = "" }},
 		{name: "absolute object key", state: DatasetVersionReady, mutate: func(version *DatasetVersion) { version.ManifestObjectKey = "/manifest.json" }},
 		{name: "object key traversal", state: DatasetVersionReady, mutate: func(version *DatasetVersion) { version.ManifestObjectKey = "manifests/../private.json" }},
+		{name: "object key too long", state: DatasetVersionReady, mutate: func(version *DatasetVersion) { version.ManifestObjectKey = longPath }},
 		{name: "negative train samples", state: DatasetVersionReady, mutate: func(version *DatasetVersion) { version.TrainSamples = -1 }},
 		{name: "negative val samples", state: DatasetVersionReady, mutate: func(version *DatasetVersion) { version.ValSamples = -1 }},
 		{name: "negative test samples", state: DatasetVersionReady, mutate: func(version *DatasetVersion) { version.TestSamples = -1 }},
@@ -359,6 +364,20 @@ func TestDatasetProgressRecordsValidate(t *testing.T) {
 		{name: "partition", valid: validPartition.Validate, invalid: func() error { value := validPartition; value.ProcessedObjectCount = -1; return value.Validate() }},
 		{name: "publication", valid: validRun.Validate, invalid: func() error { value := validRun; value.CompletedPartitions = 11; return value.Validate() }},
 		{name: "cache observation", valid: validObservation.Validate, invalid: func() error { value := validObservation; value.CacheHitBytes = -1; return value.Validate() }},
+		{name: "partition overflow", valid: validPartition.Validate, invalid: func() error {
+			value := validPartition
+			value.SourceObjectCount = math.MaxInt64
+			value.ProcessedObjectCount = math.MaxInt64
+			value.FailedObjectCount = 1
+			return value.Validate()
+		}},
+		{name: "publication overflow", valid: validRun.Validate, invalid: func() error {
+			value := validRun
+			value.TotalPartitions = math.MaxInt64
+			value.CompletedPartitions = math.MaxInt64
+			value.FailedPartitions = 1
+			return value.Validate()
+		}},
 	}
 
 	for _, tc := range tests {
