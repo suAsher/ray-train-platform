@@ -61,7 +61,7 @@ RUN python3 -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
       pyarrow==25.0.1 numpy==1.23.5 numba==0.57.1 scipy==1.10.1 \
       mmcv-full==1.4.0 mmdet==2.20.0 nuscenes-devkit==1.1.10 \
       onnx==1.16.2 opencv-python-headless==4.10.0.84 \
-      pyquaternion==0.9.9 shapely==2.0.7 spconv-cu120==2.3.6 \
+      pyquaternion==0.9.9 shapely==1.8.5.post1 spconv-cu120==2.3.6 \
       tensorboard==2.17.1 timm==0.3.4 yapf==0.40.1 \
       mlflow-skinny==3.14.0 \
       "google-api-core==2.34.0" "googleapis-common-protos==1.75.2" \
