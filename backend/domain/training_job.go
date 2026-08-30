@@ -112,6 +112,93 @@ func (cache CacheRequest) Validate() error {
 	}
 }
 
+type DatasetCachePolicy string
+
+const (
+	DatasetCachePolicyAuto    DatasetCachePolicy = "auto"
+	DatasetCachePolicyOff     DatasetCachePolicy = "off"
+	DatasetCachePolicyBounded DatasetCachePolicy = "bounded"
+)
+
+func (policy DatasetCachePolicy) Validate() error {
+	switch policy {
+	case "", DatasetCachePolicyAuto, DatasetCachePolicyOff, DatasetCachePolicyBounded:
+		return nil
+	default:
+		return fmt.Errorf("unsupported dataset cache policy %q", policy)
+	}
+}
+
+type DatasetReference struct {
+	Dataset string `json:"dataset"`
+	Version string `json:"version,omitempty"`
+}
+
+func (ref DatasetReference) IsZero() bool {
+	return strings.TrimSpace(ref.Dataset) == "" && strings.TrimSpace(ref.Version) == ""
+}
+
+func (ref DatasetReference) Validate() error {
+	if ref.IsZero() {
+		return nil
+	}
+	if strings.TrimSpace(ref.Dataset) == "" || strings.TrimSpace(ref.Version) == "" {
+		return fmt.Errorf("datasetRef requires dataset and version")
+	}
+	if err := validateDatasetIdentifier("dataset reference", ref.Dataset); err != nil {
+		return err
+	}
+	if _, err := ParseDatasetVersionSelector(ref.Version); err != nil {
+		return err
+	}
+	return nil
+}
+
+type DatasetProvenance struct {
+	DatasetID        string             `json:"datasetId"`
+	DatasetVersionID string             `json:"datasetVersionId"`
+	ManifestSHA256   string             `json:"manifestSha256"`
+	DataMode         DataMode           `json:"dataMode"`
+	CachePolicy      DatasetCachePolicy `json:"cachePolicy"`
+}
+
+func (provenance DatasetProvenance) IsZero() bool {
+	return strings.TrimSpace(provenance.DatasetID) == "" &&
+		strings.TrimSpace(provenance.DatasetVersionID) == "" &&
+		strings.TrimSpace(provenance.ManifestSHA256) == "" &&
+		strings.TrimSpace(string(provenance.DataMode)) == "" &&
+		strings.TrimSpace(string(provenance.CachePolicy)) == ""
+}
+
+func (provenance DatasetProvenance) Validate() error {
+	if provenance.IsZero() {
+		return nil
+	}
+	if strings.TrimSpace(provenance.DatasetID) == "" ||
+		strings.TrimSpace(provenance.DatasetVersionID) == "" ||
+		strings.TrimSpace(provenance.ManifestSHA256) == "" ||
+		strings.TrimSpace(string(provenance.DataMode)) == "" ||
+		strings.TrimSpace(string(provenance.CachePolicy)) == "" {
+		return fmt.Errorf("dataset provenance must be empty or complete")
+	}
+	if err := validateDatasetIdentifier("dataset ID", provenance.DatasetID); err != nil {
+		return err
+	}
+	if err := ValidateResolvedDatasetVersionID(provenance.DatasetVersionID); err != nil {
+		return err
+	}
+	if !datasetDigestPattern.MatchString(provenance.ManifestSHA256) {
+		return fmt.Errorf("manifest SHA-256 must be 64 lowercase hexadecimal characters")
+	}
+	if provenance.DataMode != DataModeStreaming {
+		return fmt.Errorf("dataset provenance data mode must be %q", DataModeStreaming)
+	}
+	if err := provenance.CachePolicy.Validate(); err != nil {
+		return err
+	}
+	return nil
+}
+
 type JobSpec struct {
 	Name               string                  `json:"name"`
 	Image              string                  `json:"image"`
@@ -122,6 +209,8 @@ type JobSpec struct {
 	RayVersion         string                  `json:"rayVersion,omitempty"`
 	Managed            ManagedTrainingPolicy   `json:"managed,omitempty"`
 	DataMode           DataMode                `json:"dataMode,omitempty"`
+	DatasetRef         DatasetReference        `json:"datasetRef,omitzero"`
+	CachePolicy        DatasetCachePolicy      `json:"cachePolicy,omitempty"`
 	ParentJobID        string                  `json:"parentJobId,omitempty"`
 	Resources          Resources               `json:"resources"`
 	Queue              string                  `json:"queue"`
@@ -145,28 +234,29 @@ type JobSpec struct {
 }
 
 type TrainingJob struct {
-	ID                   string           `json:"id"`
-	TenantID             string           `json:"tenantId"`
-	UserID               string           `json:"userId"`
-	SourceArtifactID     string           `json:"sourceArtifactId,omitempty"`
-	SubmissionOrigin     SubmissionOrigin `json:"submissionOrigin"`
-	ExternalSubmissionID string           `json:"externalSubmissionId,omitempty"`
-	Spec                 JobSpec          `json:"spec"`
-	DesiredState         DesiredState     `json:"desiredState"`
-	ObservedState        State            `json:"observedState"`
-	StatusReason         string           `json:"statusReason"`
-	StatusMessage        string           `json:"statusMessage"`
-	KubernetesNS         string           `json:"kubernetesNamespace"`
-	RayJobName           string           `json:"rayJobName"`
-	RayJobUID            string           `json:"rayJobUid"`
-	RayClusterName       string           `json:"rayClusterName"`
-	ResourceVersion      string           `json:"resourceVersion"`
-	ClusterAttempt       int              `json:"clusterAttempt"`
-	WorkerRestartCount   int              `json:"workerRestartCount"`
-	ResumeCheckpointID   string           `json:"resumeCheckpointId,omitempty"`
-	CreatedAt            time.Time        `json:"createdAt"`
-	UpdatedAt            time.Time        `json:"updatedAt"`
-	LastObservedAt       *time.Time       `json:"lastObservedAt,omitempty"`
+	ID                   string            `json:"id"`
+	TenantID             string            `json:"tenantId"`
+	UserID               string            `json:"userId"`
+	SourceArtifactID     string            `json:"sourceArtifactId,omitempty"`
+	SubmissionOrigin     SubmissionOrigin  `json:"submissionOrigin"`
+	ExternalSubmissionID string            `json:"externalSubmissionId,omitempty"`
+	Spec                 JobSpec           `json:"spec"`
+	DatasetProvenance    DatasetProvenance `json:"datasetProvenance,omitzero"`
+	DesiredState         DesiredState      `json:"desiredState"`
+	ObservedState        State             `json:"observedState"`
+	StatusReason         string            `json:"statusReason"`
+	StatusMessage        string            `json:"statusMessage"`
+	KubernetesNS         string            `json:"kubernetesNamespace"`
+	RayJobName           string            `json:"rayJobName"`
+	RayJobUID            string            `json:"rayJobUid"`
+	RayClusterName       string            `json:"rayClusterName"`
+	ResourceVersion      string            `json:"resourceVersion"`
+	ClusterAttempt       int               `json:"clusterAttempt"`
+	WorkerRestartCount   int               `json:"workerRestartCount"`
+	ResumeCheckpointID   string            `json:"resumeCheckpointId,omitempty"`
+	CreatedAt            time.Time         `json:"createdAt"`
+	UpdatedAt            time.Time         `json:"updatedAt"`
+	LastObservedAt       *time.Time        `json:"lastObservedAt,omitempty"`
 	// StartedAt is when the workload began running, which is later than
 	// CreatedAt by however long the job waited for a GPU admission.
 	StartedAt  *time.Time `json:"startedAt,omitempty"`
@@ -588,6 +678,15 @@ func (s JobSpec) Validate() error {
 	if err := s.Managed.ValidateDataMode(s.DataMode); err != nil {
 		return err
 	}
+	if err := s.DatasetRef.Validate(); err != nil {
+		return err
+	}
+	if err := s.CachePolicy.Validate(); err != nil {
+		return err
+	}
+	if err := s.validateDatasetSelection(); err != nil {
+		return err
+	}
 	if strings.TrimSpace(s.Queue) == "" {
 		return fmt.Errorf("queue is required")
 	}
@@ -626,6 +725,27 @@ func (s JobSpec) Validate() error {
 	}
 	if s.RetryPolicy.MaxRetries < 0 || s.RetryPolicy.MaxRetries > 3 {
 		return fmt.Errorf("maxRetries must be between 0 and 3")
+	}
+	return nil
+}
+
+func (s JobSpec) validateDatasetSelection() error {
+	hasDatasetRef := !s.DatasetRef.IsZero()
+	hasCachePolicy := strings.TrimSpace(string(s.CachePolicy)) != ""
+	if s.DataMode == DataModeStreaming {
+		if !hasDatasetRef {
+			return fmt.Errorf("streaming requires datasetRef")
+		}
+		if !hasCachePolicy {
+			return fmt.Errorf("streaming requires cachePolicy")
+		}
+		return nil
+	}
+	if hasDatasetRef {
+		return fmt.Errorf("datasetRef requires streaming data mode")
+	}
+	if hasCachePolicy {
+		return fmt.Errorf("cachePolicy requires datasetRef")
 	}
 	return nil
 }
@@ -680,6 +800,16 @@ func (s JobSpec) validateTrainingRuntime() error {
 		}
 		if s.Cache.Preload != "" {
 			return fmt.Errorf("ray-data-stage does not support cache preload")
+		}
+	case DataModeStreaming:
+		if engine != TrainingEngineRayTrain {
+			return fmt.Errorf("streaming requires ray-train")
+		}
+		if s.RayVersion != RayVersionCanary {
+			return fmt.Errorf("streaming requires Ray 2.58.0")
+		}
+		if !s.Managed.RayData.IsZero() {
+			return fmt.Errorf("streaming does not support Ray Data dataset config")
 		}
 	default:
 		return fmt.Errorf("unsupported data mode %q", s.DataMode)

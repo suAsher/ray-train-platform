@@ -62,7 +62,7 @@ func TestTrainingRuntimeMetadataMigrationTargetsTrainingJobs(t *testing.T) {
 		t.Fatalf("read training runtime metadata migration: %v", err)
 	}
 
-	sql := string(contents)
+	sql := regexp.MustCompile(`\s+`).ReplaceAllString(stripSQLComments(string(contents)), " ")
 	for _, fragment := range []string{
 		"SET LOCAL lock_timeout = '5s';",
 		"SET LOCAL statement_timeout = '60s';",
@@ -93,7 +93,7 @@ func TestDatasetVersioningMigrationDefinesAdditiveSchema(t *testing.T) {
 		t.Fatalf("read dataset versioning migration: %v", err)
 	}
 
-	sql := string(contents)
+	sql := regexp.MustCompile(`\s+`).ReplaceAllString(stripSQLComments(string(contents)), " ")
 	tables := map[string]bool{}
 	for _, match := range createTablePattern.FindAllStringSubmatch(stripSQLComments(sql), -1) {
 		tables[strings.ToLower(match[1])] = true
@@ -155,8 +155,8 @@ func TestDatasetVersioningMigrationDefinesAdditiveSchema(t *testing.T) {
 		"FOREIGN KEY (dataset_version_id, dataset_id) REFERENCES dataset_versions(id, dataset_id) ON DELETE CASCADE",
 		"CONSTRAINT dataset_cache_observations_job_version_fk",
 		"FOREIGN KEY (training_job_id, dataset_version_id) REFERENCES training_jobs(id, dataset_version_id) ON DELETE CASCADE",
-		"manifest_object_key = 'ray-train/platform/datasets/' || dataset_id || '/manifests/' || id || '.parquet'",
-		"object_key = 'ray-train/platform/datasets/' || dataset_id || '/objects/sha256/' || left(shard_sha256, 2) || '/' || shard_sha256 || '.parquet'",
+		"right(manifest_object_key, length('/' || dataset_id || '/manifests/' || id || '.parquet')) = '/' || dataset_id || '/manifests/' || id || '.parquet'",
+		"right(object_key, length('/' || dataset_id || '/objects/sha256/' || left(shard_sha256, 2) || '/' || shard_sha256 || '.parquet')) = '/' || dataset_id || '/objects/sha256/' || left(shard_sha256, 2) || '/' || shard_sha256 || '.parquet'",
 	} {
 		if !strings.Contains(sql, fragment) {
 			t.Errorf("dataset versioning migration missing %q", fragment)
@@ -182,6 +182,10 @@ func TestDatasetVersioningMigrationDefinesAdditiveSchema(t *testing.T) {
 		if !regexp.MustCompile(`(?i)CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+` + regexp.QuoteMeta(index) + `\b`).MatchString(sql) {
 			t.Errorf("dataset versioning migration missing index %s", index)
 		}
+	}
+
+	if count := strings.Count(sql, "USING ERRCODE = 'P0001';"); count < 4 {
+		t.Errorf("dataset scope trigger must use an untranslated custom SQLSTATE for all four race checks, got %d", count)
 	}
 
 	if strings.Contains(sql, "slug TEXT NOT NULL UNIQUE") {
@@ -214,6 +218,33 @@ func TestDatasetVersioningTrainingJobProvenanceIsNullableWithoutBackfill(t *test
 	}
 	if strings.Contains(strings.ToLower(sql), "dataset_manifest_object_key") {
 		t.Error("training_jobs must not store an internal dataset manifest object key")
+	}
+}
+
+func TestDatasetVersioningPortabilityMigrationUpgradesAppliedSchema(t *testing.T) {
+	contents, err := migrationFiles.ReadFile("migrations/0025_dataset_versioning_portability.up.sql")
+	if err != nil {
+		t.Fatalf("read dataset portability migration: %v", err)
+	}
+	sql := regexp.MustCompile(`\s+`).ReplaceAllString(stripSQLComments(string(contents)), " ")
+	for _, fragment := range []string{
+		"ALTER TABLE dataset_versions DROP CONSTRAINT IF EXISTS dataset_versions_manifest_object_key_check;",
+		"ALTER TABLE dataset_version_shards DROP CONSTRAINT IF EXISTS dataset_version_shards_object_key_check;",
+		"ADD CONSTRAINT dataset_versions_manifest_object_key_check CHECK",
+		"ADD CONSTRAINT dataset_version_shards_object_key_check CHECK",
+		"right(manifest_object_key, length('/' || dataset_id || '/manifests/' || id || '.parquet'))",
+		"right(object_key, length('/' || dataset_id || '/objects/sha256/' || left(shard_sha256, 2) || '/' || shard_sha256 || '.parquet'))",
+		"CREATE OR REPLACE FUNCTION enforce_training_job_dataset_scope()",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("dataset portability migration missing %q", fragment)
+		}
+	}
+	if count := strings.Count(sql, "USING ERRCODE = 'P0001';"); count != 4 {
+		t.Errorf("dataset portability migration must preserve four classifiable race errors, got %d", count)
+	}
+	if strings.Contains(sql, "ray-train/platform/datasets/") {
+		t.Error("portability migration must not hardcode a deployment-specific internal prefix")
 	}
 }
 

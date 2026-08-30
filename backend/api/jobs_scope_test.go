@@ -24,6 +24,7 @@ func TestTrainingRoutesApplyReadAndWritePATScopes(t *testing.T) {
 		{name: "read PAT cannot submit", principal: auth.Principal{Subject: "user", TenantID: "tenant", AuthType: auth.AuthTypePAT, Scopes: []string{domain.PATScopeJobsRead}}, method: http.MethodPost, path: "/api/v1/jobs", body: `{}`, want: http.StatusForbidden},
 		{name: "write PAT cannot list", principal: auth.Principal{Subject: "user", TenantID: "tenant", AuthType: auth.AuthTypePAT, Scopes: []string{domain.PATScopeJobsWrite}}, method: http.MethodGet, path: "/api/v1/jobs", want: http.StatusForbidden},
 		{name: "write PAT reaches submit validation", principal: auth.Principal{Subject: "user", TenantID: "tenant", Roles: []string{"Engineer"}, AuthType: auth.AuthTypePAT, Scopes: []string{domain.PATScopeJobsWrite}}, method: http.MethodPost, path: "/api/v1/jobs", body: `{}`, want: http.StatusBadRequest},
+		{name: "write PAT reaches preflight validation", principal: auth.Principal{Subject: "user", TenantID: "tenant", Roles: []string{"Engineer"}, AuthType: auth.AuthTypePAT, Scopes: []string{domain.PATScopeJobsWrite}}, method: http.MethodPost, path: "/api/v1/jobs/preflight", body: `{}`, want: http.StatusBadRequest},
 		{name: "OIDC uses role authorization", principal: auth.Principal{Subject: "user", TenantID: "tenant", Roles: []string{"Engineer"}, AuthType: auth.AuthTypeOIDC}, method: http.MethodPost, path: "/api/v1/jobs", body: `{}`, want: http.StatusBadRequest},
 	}
 	for _, test := range tests {

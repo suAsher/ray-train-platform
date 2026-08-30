@@ -14,6 +14,8 @@ import (
 	"ray-train-platform-backend/domain"
 )
 
+var ErrDatasetSnapshotConflict = errors.New("dataset snapshot changed before job creation")
+
 type JobRecord struct {
 	ID       string `gorm:"primaryKey"`
 	TenantID string `gorm:"index"`
@@ -192,6 +194,9 @@ func (r *GormRepository) Create(ctx context.Context, job *domain.TrainingJob, id
 			return err
 		}
 		if err := tx.Create(&record).Error; err != nil {
+			if !job.DatasetProvenance.IsZero() && isDatasetSnapshotConstraintError(err) {
+				return ErrDatasetSnapshotConflict
+			}
 			return fmt.Errorf("create job: %w", err)
 		}
 		if err := tx.Create(&outbox).Error; err != nil {
@@ -199,6 +204,31 @@ func (r *GormRepository) Create(ctx context.Context, job *domain.TrainingJob, id
 		}
 		return nil
 	})
+}
+
+type sqlStateError interface {
+	SQLState() string
+}
+
+func isDatasetSnapshotConstraintError(err error) bool {
+	var state sqlStateError
+	if !errors.As(err, &state) || (state.SQLState() != "P0001" && state.SQLState() != "23503" && state.SQLState() != "23514") {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"training job dataset version",
+		"training jobs can only pin ready dataset versions",
+		"training job manifest digest",
+		"training job tenant cannot access team dataset version",
+		"training_jobs_dataset_version_fk",
+		"training_jobs_dataset_scope_guard",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // optionalID converts an empty identifier into SQL NULL so nullable foreign
@@ -222,6 +252,12 @@ func valueOrEmpty(value *string) string {
 // SQLSTATE 22P02 and fails the whole insert.
 func newJobRecord(job *domain.TrainingJob) (JobRecord, error) {
 	normalizeJobRuntimeMetadata(job)
+	if err := job.DatasetProvenance.Validate(); err != nil {
+		return JobRecord{}, fmt.Errorf("validate dataset provenance: %w", err)
+	}
+	if err := validateDatasetSnapshotConsistency(job.Spec, job.DatasetProvenance); err != nil {
+		return JobRecord{}, fmt.Errorf("validate dataset snapshot: %w", err)
+	}
 	specJSON, err := json.Marshal(job.Spec)
 	if err != nil {
 		return JobRecord{}, fmt.Errorf("marshal job spec: %w", err)
@@ -231,25 +267,30 @@ func newJobRecord(job *domain.TrainingJob) (JobRecord, error) {
 		return JobRecord{}, fmt.Errorf("marshal cleanup policy: %w", err)
 	}
 	return JobRecord{
-		ID:                   job.ID,
-		TenantID:             job.TenantID,
-		UserID:               job.UserID,
-		SourceArtifactID:     optionalID(job.SourceArtifactID),
-		SubmissionOrigin:     string(job.SubmissionOrigin),
-		ExternalSubmissionID: job.ExternalSubmissionID,
-		Name:                 job.Spec.Name,
-		SpecJSON:             string(specJSON),
-		DesiredState:         string(job.DesiredState),
-		ObservedState:        string(job.ObservedState),
-		KubernetesNS:         job.KubernetesNS,
-		TrainingEngine:       string(job.Spec.TrainingEngine),
-		RayVersion:           job.Spec.RayVersion,
-		ClusterAttempt:       job.ClusterAttempt,
-		WorkerRestartCount:   job.WorkerRestartCount,
-		ResumeCheckpointID:   job.ResumeCheckpointID,
-		ParentJobID:          job.Spec.ParentJobID,
-		TimeoutSeconds:       job.Spec.TimeoutSeconds,
-		CleanupJSON:          string(cleanupJSON),
+		ID:                    job.ID,
+		TenantID:              job.TenantID,
+		UserID:                job.UserID,
+		SourceArtifactID:      optionalID(job.SourceArtifactID),
+		DatasetID:             optionalID(job.DatasetProvenance.DatasetID),
+		DatasetVersionID:      optionalID(job.DatasetProvenance.DatasetVersionID),
+		DatasetManifestDigest: optionalID(job.DatasetProvenance.ManifestSHA256),
+		DatasetDataMode:       optionalID(string(job.DatasetProvenance.DataMode)),
+		DatasetCachePolicy:    optionalID(string(job.DatasetProvenance.CachePolicy)),
+		SubmissionOrigin:      string(job.SubmissionOrigin),
+		ExternalSubmissionID:  job.ExternalSubmissionID,
+		Name:                  job.Spec.Name,
+		SpecJSON:              string(specJSON),
+		DesiredState:          string(job.DesiredState),
+		ObservedState:         string(job.ObservedState),
+		KubernetesNS:          job.KubernetesNS,
+		TrainingEngine:        string(job.Spec.TrainingEngine),
+		RayVersion:            job.Spec.RayVersion,
+		ClusterAttempt:        job.ClusterAttempt,
+		WorkerRestartCount:    job.WorkerRestartCount,
+		ResumeCheckpointID:    job.ResumeCheckpointID,
+		ParentJobID:           job.Spec.ParentJobID,
+		TimeoutSeconds:        job.Spec.TimeoutSeconds,
+		CleanupJSON:           string(cleanupJSON),
 	}, nil
 }
 
@@ -265,6 +306,22 @@ func normalizeJobRuntimeMetadata(job *domain.TrainingJob) {
 	if job.WorkerRestartCount < 0 {
 		job.WorkerRestartCount = 0
 	}
+}
+
+func validateDatasetSnapshotConsistency(spec domain.JobSpec, provenance domain.DatasetProvenance) error {
+	if provenance.IsZero() {
+		if !spec.DatasetRef.IsZero() || spec.DataMode == domain.DataModeStreaming || strings.TrimSpace(string(spec.CachePolicy)) != "" {
+			return fmt.Errorf("streaming dataset selection requires immutable provenance")
+		}
+		return nil
+	}
+	if spec.DatasetRef.Dataset != provenance.DatasetID || spec.DatasetRef.Version != provenance.DatasetVersionID {
+		return fmt.Errorf("dataset reference does not match immutable provenance")
+	}
+	if spec.DataMode != provenance.DataMode || spec.CachePolicy != provenance.CachePolicy {
+		return fmt.Errorf("dataset execution policy does not match immutable provenance")
+	}
+	return nil
 }
 
 func effectiveGPUQuota(limit int) int {
@@ -1521,6 +1578,19 @@ func (r JobRecord) toDomain() (*domain.TrainingJob, error) {
 	if workerRestartCount < 0 {
 		workerRestartCount = 0
 	}
+	provenance := domain.DatasetProvenance{
+		DatasetID:        valueOrEmpty(r.DatasetID),
+		DatasetVersionID: valueOrEmpty(r.DatasetVersionID),
+		ManifestSHA256:   valueOrEmpty(r.DatasetManifestDigest),
+		DataMode:         domain.DataMode(valueOrEmpty(r.DatasetDataMode)),
+		CachePolicy:      domain.DatasetCachePolicy(valueOrEmpty(r.DatasetCachePolicy)),
+	}
+	if err := provenance.Validate(); err != nil {
+		return nil, fmt.Errorf("decode dataset provenance: %w", err)
+	}
+	if err := validateDatasetSnapshotConsistency(spec, provenance); err != nil {
+		return nil, fmt.Errorf("decode dataset snapshot: %w", err)
+	}
 	return &domain.TrainingJob{
 		ID:                   r.ID,
 		TenantID:             r.TenantID,
@@ -1529,6 +1599,7 @@ func (r JobRecord) toDomain() (*domain.TrainingJob, error) {
 		SubmissionOrigin:     domain.SubmissionOrigin(r.SubmissionOrigin),
 		ExternalSubmissionID: r.ExternalSubmissionID,
 		Spec:                 spec,
+		DatasetProvenance:    provenance,
 		DesiredState:         domain.DesiredState(r.DesiredState),
 		ObservedState:        domain.State(r.ObservedState),
 		StatusReason:         r.StatusReason,

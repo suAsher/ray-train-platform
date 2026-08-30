@@ -216,6 +216,31 @@ func TestLoadRejectsInvalidDatasetVersioningAndRayDataStreamingFlags(t *testing.
 	}
 }
 
+func TestLoadRejectsUnsafeDatasetInternalPrefix(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("DATASET_INTERNAL_PREFIX", "tos://bucket/private")
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "DATASET_INTERNAL_PREFIX") {
+		t.Fatalf("expected unsafe dataset prefix error, got %v", err)
+	}
+}
+
+func TestLoadNormalizesDatasetInternalPrefix(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("DATASET_INTERNAL_PREFIX", "private/platform/datasets/")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load normalized dataset prefix: %v", err)
+	}
+	if cfg.DatasetInternalPrefix != "private/platform/datasets" {
+		t.Fatalf("dataset internal prefix was not normalized: %q", cfg.DatasetInternalPrefix)
+	}
+}
+
 func TestLoadKeepsDataSpaceMountsDisabledUntilExplicitlyEnabled(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("PAT_ENABLED", "false")

@@ -10,8 +10,9 @@ import (
 )
 
 const (
-	DatasetIdentifierMaxBytes = 128
-	DatasetPathMaxBytes       = 4096
+	DatasetIdentifierMaxBytes    = 128
+	DatasetPathMaxBytes          = 4096
+	DefaultDatasetInternalPrefix = "ray-train/platform/datasets"
 )
 
 type DatasetVisibility string
@@ -140,13 +141,13 @@ func (version DatasetVersion) Validate() error {
 		if err := validateDatasetRelativePath("manifest object key", version.ManifestObjectKey); err != nil {
 			return err
 		}
-		expectedObjectKey := fmt.Sprintf(
-			"ray-train/platform/datasets/%s/manifests/%s.parquet",
-			version.DatasetID,
-			version.ID,
-		)
-		if version.ManifestObjectKey != expectedObjectKey {
-			return fmt.Errorf("manifest object key must use the version's internal dataset prefix")
+		suffix := path.Join(version.DatasetID, "manifests", version.ID+".parquet")
+		marker := "/" + suffix
+		if !strings.HasSuffix(version.ManifestObjectKey, marker) {
+			return fmt.Errorf("manifest object key must belong to its dataset and version")
+		}
+		if _, err := NormalizeDatasetInternalPrefix(strings.TrimSuffix(version.ManifestObjectKey, marker)); err != nil {
+			return fmt.Errorf("manifest object key has an invalid internal prefix: %w", err)
 		}
 	}
 	if version.State == DatasetVersionReady || version.State == DatasetVersionDeprecated || version.State == DatasetVersionRetired {
@@ -155,6 +156,36 @@ func (version DatasetVersion) Validate() error {
 		}
 	}
 	return nil
+}
+
+// ValidateWithInternalPrefix adds the deployment-specific storage boundary to
+// the structural DatasetVersion validation. Persistence can validate the
+// immutable key shape without configuration, while API and publisher paths
+// must call this method with their configured private prefix.
+func (version DatasetVersion) ValidateWithInternalPrefix(rawPrefix string) error {
+	if err := version.Validate(); err != nil {
+		return err
+	}
+	if version.ManifestObjectKey == "" {
+		return nil
+	}
+	prefix, err := NormalizeDatasetInternalPrefix(rawPrefix)
+	if err != nil {
+		return err
+	}
+	expected := path.Join(prefix, version.DatasetID, "manifests", version.ID+".parquet")
+	if version.ManifestObjectKey != expected {
+		return fmt.Errorf("manifest object key must use the configured internal dataset prefix")
+	}
+	return nil
+}
+
+func NormalizeDatasetInternalPrefix(raw string) (string, error) {
+	prefix := strings.TrimSuffix(strings.TrimSpace(raw), "/")
+	if err := validateDatasetRelativePath("dataset internal prefix", prefix); err != nil {
+		return "", err
+	}
+	return prefix, nil
 }
 
 func (version DatasetVersion) TransitionTo(next DatasetVersionState) (DatasetVersion, error) {

@@ -95,7 +95,8 @@ CREATE TABLE IF NOT EXISTS dataset_versions (
       AND position('#' IN manifest_object_key) = 0
       AND manifest_object_key !~ '^[A-Za-z][A-Za-z0-9+.-]*:'
       AND manifest_object_key !~ '[[:cntrl:]]'
-      AND manifest_object_key = 'ray-train/platform/datasets/' || dataset_id || '/manifests/' || id || '.parquet'
+      AND length(manifest_object_key) > length('/' || dataset_id || '/manifests/' || id || '.parquet')
+      AND right(manifest_object_key, length('/' || dataset_id || '/manifests/' || id || '.parquet')) = '/' || dataset_id || '/manifests/' || id || '.parquet'
     )
   ),
   CONSTRAINT dataset_versions_ready_manifest_check CHECK (
@@ -328,7 +329,8 @@ CREATE TABLE IF NOT EXISTS dataset_version_shards (
     AND position('#' IN object_key) = 0
     AND object_key !~ '^[A-Za-z][A-Za-z0-9+.-]*:'
     AND object_key !~ '[[:cntrl:]]'
-    AND object_key = 'ray-train/platform/datasets/' || dataset_id || '/objects/sha256/' || left(shard_sha256, 2) || '/' || shard_sha256 || '.parquet'
+    AND length(object_key) > length('/' || dataset_id || '/objects/sha256/' || left(shard_sha256, 2) || '/' || shard_sha256 || '.parquet')
+    AND right(object_key, length('/' || dataset_id || '/objects/sha256/' || left(shard_sha256, 2) || '/' || shard_sha256 || '.parquet')) = '/' || dataset_id || '/objects/sha256/' || left(shard_sha256, 2) || '/' || shard_sha256 || '.parquet'
   ),
   CONSTRAINT dataset_version_shards_counts_check CHECK (
     ordinal >= 0
@@ -463,19 +465,19 @@ BEGIN
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'training job dataset version does not exist'
-      USING ERRCODE = '23503';
+      USING ERRCODE = 'P0001';
   END IF;
   IF version_state <> 'READY' THEN
     RAISE EXCEPTION 'training jobs can only pin READY dataset versions'
-      USING ERRCODE = '23514';
+      USING ERRCODE = 'P0001';
   END IF;
   IF NEW.dataset_manifest_digest IS DISTINCT FROM version_manifest_sha256 THEN
     RAISE EXCEPTION 'training job manifest digest does not match its dataset version'
-      USING ERRCODE = '23514';
+      USING ERRCODE = 'P0001';
   END IF;
   IF dataset_visibility = 'TEAM' AND dataset_owner_tenant_id IS DISTINCT FROM NEW.tenant_id THEN
     RAISE EXCEPTION 'training job tenant cannot access TEAM dataset version'
-      USING ERRCODE = '23514';
+      USING ERRCODE = 'P0001';
   END IF;
 
   RETURN NEW;

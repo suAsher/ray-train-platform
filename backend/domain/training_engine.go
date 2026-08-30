@@ -40,6 +40,7 @@ const (
 	DataModeCache        DataMode = "cache"
 	DataModeRayData      DataMode = "ray-data"
 	DataModeRayDataStage DataMode = "ray-data-stage"
+	DataModeStreaming    DataMode = "streaming"
 )
 
 type RayDataFormat string

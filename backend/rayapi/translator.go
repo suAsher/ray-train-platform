@@ -12,19 +12,22 @@ import (
 )
 
 const (
-	metadataImage           = "ray-platform.image"
-	metadataWorkerReplicas  = "ray-platform.worker-replicas"
-	metadataGPUsPerWorker   = "ray-platform.gpus-per-worker"
-	metadataCPUPerWorker    = "ray-platform.cpu-per-worker"
-	metadataMemoryWorker    = "ray-platform.memory-per-worker"
-	metadataQueue           = "ray-platform.queue"
-	metadataCacheMode       = "platform.cache.mode"
-	metadataCacheSize       = "platform.cache.size"
-	metadataCachePreload    = "platform.cache.preload"
-	metadataInputSpace      = "platform.data.input-space"
-	metadataInputPath       = "platform.data.input-path"
-	metadataTrainingEngine  = "platform.training.engine"
-	nativeManagedOutputRoot = "native-ray"
+	metadataImage              = "ray-platform.image"
+	metadataWorkerReplicas     = "ray-platform.worker-replicas"
+	metadataGPUsPerWorker      = "ray-platform.gpus-per-worker"
+	metadataCPUPerWorker       = "ray-platform.cpu-per-worker"
+	metadataMemoryWorker       = "ray-platform.memory-per-worker"
+	metadataQueue              = "ray-platform.queue"
+	metadataCacheMode          = "platform.cache.mode"
+	metadataCacheSize          = "platform.cache.size"
+	metadataCachePreload       = "platform.cache.preload"
+	metadataInputSpace         = "platform.data.input-space"
+	metadataInputPath          = "platform.data.input-path"
+	metadataTrainingEngine     = "platform.training.engine"
+	metadataDatasetReference   = "platform.dataset.ref"
+	metadataDatasetVersion     = "platform.dataset.version"
+	metadataDatasetCachePolicy = "platform.dataset.cache-policy"
+	nativeManagedOutputRoot    = "native-ray"
 )
 
 var (
@@ -84,6 +87,20 @@ func translateSubmitRequest(request JobSubmitRequest, resources domain.Resources
 	if err != nil {
 		return TranslatedSubmitRequest{}, err
 	}
+	datasetRef, cachePolicy, err := parseDatasetMetadata(request.Metadata)
+	if err != nil {
+		return TranslatedSubmitRequest{}, err
+	}
+	dataMode := domain.DataMode("")
+	if !datasetRef.IsZero() {
+		if engine != domain.TrainingEngineRayTrain {
+			return TranslatedSubmitRequest{}, fmt.Errorf("streaming dataset requires ray-train")
+		}
+		if cache != (domain.CacheRequest{}) || input != (domain.DataLocation{}) {
+			return TranslatedSubmitRequest{}, fmt.Errorf("streaming dataset cannot use legacy input or cache metadata")
+		}
+		dataMode = domain.DataModeStreaming
+	}
 	if strings.TrimSpace(request.Entrypoint) == "" || len(request.Entrypoint) > 8192 {
 		return TranslatedSubmitRequest{}, fmt.Errorf("invalid entrypoint")
 	}
@@ -124,9 +141,46 @@ func translateSubmitRequest(request JobSubmitRequest, resources domain.Resources
 			Input:          input,
 			Output:         output,
 			Managed:        managed,
+			DataMode:       dataMode,
+			DatasetRef:     datasetRef,
+			CachePolicy:    cachePolicy,
 		},
 		ExternalSubmissionID: externalID,
 	}, nil
+}
+
+func parseDatasetMetadata(metadata map[string]string) (domain.DatasetReference, domain.DatasetCachePolicy, error) {
+	known := map[string]struct{}{
+		metadataDatasetReference: {}, metadataDatasetVersion: {}, metadataDatasetCachePolicy: {},
+	}
+	for key := range metadata {
+		if strings.HasPrefix(key, "platform.dataset.") {
+			if _, ok := known[key]; !ok {
+				return domain.DatasetReference{}, "", fmt.Errorf("unsupported dataset metadata %q", key)
+			}
+		}
+	}
+	ref := domain.DatasetReference{
+		Dataset: strings.TrimSpace(metadata[metadataDatasetReference]),
+		Version: strings.TrimSpace(metadata[metadataDatasetVersion]),
+	}
+	policy := domain.DatasetCachePolicy(strings.TrimSpace(metadata[metadataDatasetCachePolicy]))
+	if ref.IsZero() && policy == "" {
+		return domain.DatasetReference{}, "", nil
+	}
+	if ref.IsZero() {
+		return domain.DatasetReference{}, "", fmt.Errorf("dataset cache policy requires a dataset reference")
+	}
+	if err := ref.Validate(); err != nil {
+		return domain.DatasetReference{}, "", fmt.Errorf("invalid dataset metadata: %w", err)
+	}
+	if policy == "" {
+		policy = domain.DatasetCachePolicyAuto
+	}
+	if err := policy.Validate(); err != nil {
+		return domain.DatasetReference{}, "", fmt.Errorf("invalid dataset metadata: %w", err)
+	}
+	return ref, policy, nil
 }
 
 func parseTrainingMetadata(metadata map[string]string) (domain.TrainingEngine, domain.ManagedTrainingPolicy, error) {

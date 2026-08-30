@@ -15,7 +15,7 @@ import (
 	"ray-train-platform-backend/repositories"
 )
 
-const internalDatasetObjectPrefix = "ray-train/platform/datasets"
+const internalDatasetObjectPrefix = domain.DefaultDatasetInternalPrefix
 
 type DatasetCatalogStore interface {
 	CreateDataset(context.Context, domain.Dataset) error

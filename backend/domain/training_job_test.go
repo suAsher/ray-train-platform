@@ -103,6 +103,65 @@ func TestJobSpecJSONOmitsZeroValueCache(t *testing.T) {
 	}
 }
 
+func TestDatasetProvenanceValidation(t *testing.T) {
+	valid := DatasetProvenance{
+		DatasetID:        "dataset-labeled-full",
+		DatasetVersionID: "labeled-full-20260830.2+sha256-12ab34cd",
+		ManifestSHA256:   strings.Repeat("a", 64),
+		DataMode:         DataModeStreaming,
+		CachePolicy:      DatasetCachePolicyAuto,
+	}
+	for _, test := range []struct {
+		name    string
+		value   DatasetProvenance
+		wantErr string
+	}{
+		{name: "empty provenance is legacy-compatible"},
+		{name: "complete streaming provenance", value: valid},
+		{name: "partial provenance", value: DatasetProvenance{DatasetID: valid.DatasetID}, wantErr: "complete"},
+		{name: "latest version is unresolved", value: func() DatasetProvenance {
+			value := valid
+			value.DatasetVersionID = "latest"
+			return value
+		}(), wantErr: "latest"},
+		{name: "bad manifest digest", value: func() DatasetProvenance {
+			value := valid
+			value.ManifestSHA256 = "abc123"
+			return value
+		}(), wantErr: "manifest"},
+		{name: "non-streaming mode", value: func() DatasetProvenance {
+			value := valid
+			value.DataMode = DataModeRayData
+			return value
+		}(), wantErr: "streaming"},
+		{name: "unsupported cache policy", value: func() DatasetProvenance {
+			value := valid
+			value.CachePolicy = DatasetCachePolicy("always")
+			return value
+		}(), wantErr: "cache policy"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.value.Validate()
+			if test.wantErr == "" && err != nil {
+				t.Fatalf("validate dataset provenance: %v", err)
+			}
+			if test.wantErr != "" && (err == nil || !strings.Contains(err.Error(), test.wantErr)) {
+				t.Fatalf("expected error containing %q, got %v", test.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestTrainingJobJSONOmitsZeroDatasetProvenance(t *testing.T) {
+	payload, err := json.Marshal(TrainingJob{})
+	if err != nil {
+		t.Fatalf("encode zero-value training job: %v", err)
+	}
+	if strings.Contains(string(payload), "datasetProvenance") {
+		t.Fatalf("zero-value dataset provenance must be omitted: %s", payload)
+	}
+}
+
 func TestJobSpecValidateAcceptsPinnedTrainingJob(t *testing.T) {
 	spec := JobSpec{
 		Name:       "llama-sft-run-001",
@@ -350,6 +409,49 @@ func TestJobSpecDataModeValidation(t *testing.T) {
 			spec.DataMode = DataModeCache
 			spec.Cache = CacheRequest{Mode: CacheModeRuntime, Size: "200Gi"}
 		}, wantErr: "cache data mode requires runtime cache with preload=input"},
+		{name: "streaming with managed Ray 2.58", prepare: func(spec *JobSpec) {
+			spec.TrainingEngine = TrainingEngineRayTrain
+			spec.RayVersion = RayVersionCanary
+			spec.DataMode = DataModeStreaming
+			spec.CachePolicy = DatasetCachePolicyAuto
+			spec.DatasetRef = DatasetReference{Dataset: "labeled-full", Version: "latest"}
+		}},
+		{name: "streaming requires dataset reference", prepare: func(spec *JobSpec) {
+			spec.TrainingEngine = TrainingEngineRayTrain
+			spec.RayVersion = RayVersionCanary
+			spec.DataMode = DataModeStreaming
+			spec.CachePolicy = DatasetCachePolicyAuto
+		}, wantErr: "datasetRef"},
+		{name: "streaming requires cache policy", prepare: func(spec *JobSpec) {
+			spec.TrainingEngine = TrainingEngineRayTrain
+			spec.RayVersion = RayVersionCanary
+			spec.DataMode = DataModeStreaming
+			spec.DatasetRef = DatasetReference{Dataset: "labeled-full", Version: "latest"}
+		}, wantErr: "cachePolicy"},
+		{name: "dataset reference requires streaming", prepare: func(spec *JobSpec) {
+			spec.DatasetRef = DatasetReference{Dataset: "labeled-full", Version: "latest"}
+			spec.CachePolicy = DatasetCachePolicyAuto
+		}, wantErr: "requires streaming"},
+		{name: "cache policy requires dataset reference", prepare: func(spec *JobSpec) {
+			spec.CachePolicy = DatasetCachePolicyAuto
+		}, wantErr: "datasetRef"},
+		{name: "streaming rejects legacy engine", prepare: func(spec *JobSpec) {
+			spec.DataMode = DataModeStreaming
+		}, wantErr: "streaming requires ray-train"},
+		{name: "streaming rejects Ray 2.56", prepare: func(spec *JobSpec) {
+			spec.TrainingEngine = TrainingEngineRayTrain
+			spec.RayVersion = RayVersionProduction
+			spec.DataMode = DataModeStreaming
+		}, wantErr: "Ray 2.58.0"},
+		{name: "streaming rejects managed Ray Data config", prepare: func(spec *JobSpec) {
+			spec.TrainingEngine = TrainingEngineRayTrain
+			spec.RayVersion = RayVersionCanary
+			spec.DataMode = DataModeStreaming
+			spec.Managed.RayData = rayData
+		}, wantErr: "Ray Data"},
+		{name: "invalid dataset cache policy", prepare: func(spec *JobSpec) {
+			spec.CachePolicy = DatasetCachePolicy("always")
+		}, wantErr: "cache policy"},
 		{name: "unknown mode", prepare: func(spec *JobSpec) {
 			spec.DataMode = "stream"
 		}, wantErr: "unsupported data mode"},

@@ -145,6 +145,53 @@ func TestTranslateSubmitRequestCarriesManagedTrainingEngine(t *testing.T) {
 	}
 }
 
+func TestTranslateSubmitRequestCarriesVersionedStreamingDataset(t *testing.T) {
+	translated, err := TranslateSubmitRequestWithDefaults(JobSubmitRequest{
+		Entrypoint: "python train.py", RuntimeEnv: map[string]any{"working_dir": "gcs://" + testPackageSHA256 + ".zip"},
+		Metadata: map[string]string{
+			metadataTrainingEngine:     string(domain.TrainingEngineRayTrain),
+			metadataDatasetReference:   "labeled-full",
+			metadataDatasetVersion:     "latest",
+			metadataDatasetCachePolicy: string(domain.DatasetCachePolicyBounded),
+		},
+	}, SubmissionDefaults{Image: testImageDigest, WorkerReplicas: 1, GPUsPerWorker: 1, CPUPerWorker: 8, MemoryPerWorker: "32Gi"})
+	if err != nil {
+		t.Fatalf("translate streaming dataset metadata: %v", err)
+	}
+	if translated.Spec.DataMode != domain.DataModeStreaming ||
+		translated.Spec.DatasetRef != (domain.DatasetReference{Dataset: "labeled-full", Version: "latest"}) ||
+		translated.Spec.CachePolicy != domain.DatasetCachePolicyBounded {
+		t.Fatalf("streaming dataset metadata was not preserved: %+v", translated.Spec)
+	}
+}
+
+func TestTranslateSubmitRequestRejectsInvalidStreamingDatasetMetadata(t *testing.T) {
+	defaults := SubmissionDefaults{Image: testImageDigest, WorkerReplicas: 1, GPUsPerWorker: 1, CPUPerWorker: 8, MemoryPerWorker: "32Gi"}
+	tests := []struct {
+		name     string
+		metadata map[string]string
+	}{
+		{name: "missing version", metadata: map[string]string{metadataTrainingEngine: "ray-train", metadataDatasetReference: "labeled-full"}},
+		{name: "missing reference", metadata: map[string]string{metadataTrainingEngine: "ray-train", metadataDatasetVersion: "latest"}},
+		{name: "legacy engine", metadata: map[string]string{metadataDatasetReference: "labeled-full", metadataDatasetVersion: "latest"}},
+		{name: "invalid policy", metadata: map[string]string{metadataTrainingEngine: "ray-train", metadataDatasetReference: "labeled-full", metadataDatasetVersion: "latest", metadataDatasetCachePolicy: "unbounded"}},
+		{name: "policy without dataset", metadata: map[string]string{metadataTrainingEngine: "ray-train", metadataDatasetCachePolicy: "auto"}},
+		{name: "legacy input conflict", metadata: map[string]string{metadataTrainingEngine: "ray-train", metadataDatasetReference: "labeled-full", metadataDatasetVersion: "latest", metadataInputSpace: "public", metadataInputPath: "labeled"}},
+		{name: "legacy cache conflict", metadata: map[string]string{metadataTrainingEngine: "ray-train", metadataDatasetReference: "labeled-full", metadataDatasetVersion: "latest", metadataCacheMode: "runtime"}},
+		{name: "unknown dataset key", metadata: map[string]string{metadataTrainingEngine: "ray-train", "platform.dataset.internal-uri": "tos://private"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := TranslateSubmitRequestWithDefaults(JobSubmitRequest{
+				Entrypoint: "python train.py", RuntimeEnv: map[string]any{"working_dir": "gcs://" + testPackageSHA256 + ".zip"}, Metadata: test.metadata,
+			}, defaults)
+			if err == nil {
+				t.Fatalf("invalid streaming dataset metadata was accepted: %#v", test.metadata)
+			}
+		})
+	}
+}
+
 func TestTranslateSubmitRequestRejectsMetadataThatCouldControlPlacementOrOutput(t *testing.T) {
 	defaults := SubmissionDefaults{Image: testImageDigest, WorkerReplicas: 1, GPUsPerWorker: 1, CPUPerWorker: 8, MemoryPerWorker: "32Gi"}
 	for _, forbidden := range []string{"platform.data.output-path", "ray-platform.namespace", "ray-platform.node-selector"} {

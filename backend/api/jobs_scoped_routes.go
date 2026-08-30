@@ -24,6 +24,7 @@ func (h *Handler) registerTrainingRoutes(group *gin.RouterGroup) {
 
 	write := group.Group("")
 	write.Use(auth.RequireScopes(domain.PATScopeJobsWrite))
+	write.POST("/jobs/preflight", h.preflightJob)
 	write.POST("/jobs", h.submitJob)
 	write.POST("/jobs/submit", h.submitJob)
 	write.POST("/jobs/:id/cancel", h.cancelJob)

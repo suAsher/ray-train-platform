@@ -16,6 +16,7 @@ import (
 type submissionServiceRepository struct {
 	created        *domain.TrainingJob
 	createCalls    int
+	createErr      error
 	identityCalls  int
 	artifact       *domain.SourceArtifact
 	artifactLookup string
@@ -1076,7 +1077,7 @@ func (repository *submissionServiceRepository) Create(_ context.Context, job *do
 	repository.createCalls++
 	copy := *job
 	repository.created = &copy
-	return nil
+	return repository.createErr
 }
 
 func (repository *submissionServiceRepository) Get(_ context.Context, tenantID, id string) (*domain.TrainingJob, error) {

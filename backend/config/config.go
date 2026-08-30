@@ -155,7 +155,7 @@ func Load() (Config, error) {
 		DataSpacesMountCapacity:     strings.TrimSpace(os.Getenv("DATA_SPACES_MOUNT_CAPACITY")),
 		DataSpacesPublicRoot:        envOr("DATA_SPACES_PUBLIC_ROOT", domain.DefaultPublicDataRoot),
 		IDCDataSpacesMountCapacity:  strings.TrimSpace(os.Getenv("IDC_DATA_SPACES_MOUNT_CAPACITY")),
-		DatasetInternalPrefix:       envOr("DATASET_INTERNAL_PREFIX", "ray-train/platform/datasets"),
+		DatasetInternalPrefix:       envOr("DATASET_INTERNAL_PREFIX", domain.DefaultDatasetInternalPrefix),
 		RayVersion:                  envOr("RAY_VERSION", "2.35.0"),
 		RayTrainManagedTenants:      splitUniqueList(os.Getenv("RAY_TRAIN_MANAGED_TENANTS")),
 		RayTrainCanaryTenants:       splitUniqueList(os.Getenv("RAY_TRAIN_CANARY_TENANTS")),
@@ -185,6 +185,9 @@ func Load() (Config, error) {
 	cfg.LocalCacheMountPath = cfg.LocalCacheMountPathData1
 
 	var err error
+	if cfg.DatasetInternalPrefix, err = domain.NormalizeDatasetInternalPrefix(cfg.DatasetInternalPrefix); err != nil {
+		return Config{}, fmt.Errorf("DATASET_INTERNAL_PREFIX is invalid: %w", err)
+	}
 	if cfg.MigrationsOnly, err = parseBool("MIGRATIONS_ONLY", false); err != nil {
 		return Config{}, err
 	}

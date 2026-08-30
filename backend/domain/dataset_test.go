@@ -164,6 +164,40 @@ func TestDatasetVersionValidateManifestAndCounts(t *testing.T) {
 	}
 }
 
+func TestDatasetVersionValidatesConfiguredInternalPrefix(t *testing.T) {
+	version := validDatasetVersion(DatasetVersionReady)
+	version.ManifestObjectKey = "private/platform/datasets/" + version.DatasetID + "/manifests/" + version.ID + ".parquet"
+
+	if err := version.Validate(); err != nil {
+		t.Fatalf("structurally valid custom internal prefix was rejected: %v", err)
+	}
+	if err := version.ValidateWithInternalPrefix("private/platform/datasets"); err != nil {
+		t.Fatalf("configured internal prefix was rejected: %v", err)
+	}
+	if err := version.ValidateWithInternalPrefix(DefaultDatasetInternalPrefix); err == nil {
+		t.Fatal("version from a different internal prefix was accepted")
+	}
+
+	wrongDataset := version
+	wrongDataset.ManifestObjectKey = "private/platform/datasets/another-dataset/manifests/" + version.ID + ".parquet"
+	if err := wrongDataset.Validate(); err == nil {
+		t.Fatal("manifest object key for another dataset was accepted")
+	}
+}
+
+func TestNormalizeDatasetInternalPrefixRejectsUnsafeValues(t *testing.T) {
+	for _, value := range []string{"", "/private/datasets", "tos://bucket/private", "private/../datasets", "private%2fdatasets"} {
+		if _, err := NormalizeDatasetInternalPrefix(value); err == nil {
+			t.Fatalf("unsafe internal prefix %q was accepted", value)
+		}
+	}
+
+	got, err := NormalizeDatasetInternalPrefix("private/platform/datasets/")
+	if err != nil || got != "private/platform/datasets" {
+		t.Fatalf("normalized prefix=%q err=%v", got, err)
+	}
+}
+
 func TestDatasetVersionManifestObjectKeyIsPrivate(t *testing.T) {
 	encoded, err := json.Marshal(validDatasetVersion(DatasetVersionReady))
 	if err != nil {

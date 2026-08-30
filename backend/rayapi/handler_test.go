@@ -62,6 +62,55 @@ func (managedRayImageStore) SetImageShared(context.Context, string, string, bool
 }
 func (managedRayImageStore) DeleteImage(context.Context, string, string, bool) error { return nil }
 
+type streamingRayImageStore struct{ managedRayImageStore }
+
+func (streamingRayImageStore) ListImages(_ context.Context, _ string, kind string) ([]domain.PlatformImage, error) {
+	if kind != domain.ImageKindTraining {
+		return nil, nil
+	}
+	return []domain.PlatformImage{{
+		ID: "streaming-native", Name: "streaming-native", Kind: domain.ImageKindTraining, Reference: testImageDigest,
+		RayVersion: domain.RayVersionCanary, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayTrain},
+	}}, nil
+}
+
+type rayDatasetCatalog struct {
+	dataset domain.Dataset
+	version domain.DatasetVersion
+}
+
+func (catalog rayDatasetCatalog) CreateDataset(context.Context, domain.Dataset) error { return nil }
+func (catalog rayDatasetCatalog) GetDataset(_ context.Context, _ string, _ bool, datasetID string) (domain.Dataset, error) {
+	if datasetID != catalog.dataset.ID {
+		return domain.Dataset{}, repositories.ErrDatasetNotFound
+	}
+	return catalog.dataset, nil
+}
+func (catalog rayDatasetCatalog) ListDatasets(context.Context, string, bool) ([]domain.Dataset, error) {
+	return []domain.Dataset{catalog.dataset}, nil
+}
+func (catalog rayDatasetCatalog) GetDatasetVersion(_ context.Context, _ string, _ bool, datasetID, versionID string) (domain.DatasetVersion, error) {
+	if datasetID != catalog.dataset.ID || versionID != catalog.version.ID {
+		return domain.DatasetVersion{}, repositories.ErrDatasetVersionNotFound
+	}
+	return catalog.version, nil
+}
+func (catalog rayDatasetCatalog) ListDatasetVersions(_ context.Context, _ string, _ bool, datasetID string) ([]domain.DatasetVersion, error) {
+	if datasetID != catalog.dataset.ID {
+		return nil, repositories.ErrDatasetNotFound
+	}
+	return []domain.DatasetVersion{catalog.version}, nil
+}
+func (catalog rayDatasetCatalog) ResolveReadyDatasetVersion(_ context.Context, _ string, _ bool, datasetID string, selector domain.DatasetVersionSelector) (domain.DatasetVersion, error) {
+	if datasetID != catalog.dataset.ID || catalog.version.State != domain.DatasetVersionReady || (!selector.Latest && selector.VersionID != catalog.version.ID) {
+		return domain.DatasetVersion{}, repositories.ErrDatasetVersionNotReady
+	}
+	return catalog.version, nil
+}
+func (catalog rayDatasetCatalog) TransitionDatasetVersion(context.Context, string, string, domain.DatasetVersionState) (domain.DatasetVersion, error) {
+	return domain.DatasetVersion{}, errors.New("not implemented")
+}
+
 func readyRayPersonalDataBinding(tenantID, userID string) domain.DataMountBinding {
 	return domain.DataMountBinding{
 		ID: "personal-" + userID, TenantID: tenantID, UserID: userID,
@@ -441,6 +490,61 @@ func TestManagedNativeSubmitPersistsOwnerScopedServerOutput(t *testing.T) {
 	output := job.Spec.ResolvedDataMounts.Output
 	if output == nil || output.Space != domain.DataSpaceMyRuns || output.BindingSpace != domain.DataSpaceWorkspace || output.ClaimName != "data-user-a" || output.SubPath != "runs/native-ray/job-native-managed" || output.MountPath != domain.DataMountOutputPath || output.ReadOnly {
 		t.Fatalf("managed native output was not owner-scoped: %+v", output)
+	}
+}
+
+func TestNativeRaySubmitPinsResolvedStreamingDatasetProvenance(t *testing.T) {
+	principal := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{"Engineer"}, AuthType: auth.AuthTypeOIDC}
+	repository := &rayTestRepository{}
+	store := &rayTestStore{}
+	dataset := domain.Dataset{
+		ID: "dataset-labeled-full", Slug: "labeled-full", Name: "Labeled full", SourceSpace: domain.DataSpacePublic,
+		SourceRelativePath: "labeled", Visibility: domain.DatasetVisibilityPublic, SchemaVersion: "s1h-v1",
+	}
+	version := domain.DatasetVersion{
+		ID: "version-20260830", DatasetID: dataset.ID, Version: "2026.08.30", State: domain.DatasetVersionReady,
+		ManifestSHA256:    strings.Repeat("a", 64),
+		ManifestObjectKey: domain.DefaultDatasetInternalPrefix + "/" + dataset.ID + "/manifests/version-20260830.parquet",
+		SchemaVersion:     dataset.SchemaVersion, SourceObjectCount: 100, TrainSamples: 80, ValSamples: 20,
+	}
+	submission := api.NewSubmissionService(repository, api.SubmissionServiceOptions{
+		Images: streamingRayImageStore{}, RuntimePolicy: runtimecatalog.NewPolicy(true, true, nil, []string{"tenant-a"}),
+		DataSpaces: repository, DataSpacesEnabled: true, Datasets: rayDatasetCatalog{dataset: dataset, version: version},
+		DatasetVersioningEnabled: true, RayDataStreamingEnabled: true, DatasetInternalPrefix: domain.DefaultDatasetInternalPrefix,
+		NewID: func() (string, error) { return "job-native-streaming", nil },
+	})
+	handler, err := NewHandler(repository, store, submission, Options{
+		SpoolDir: t.TempDir(), Defaults: SubmissionDefaults{
+			Image: testImageDigest, WorkerReplicas: 1, GPUsPerWorker: 1, CPUPerWorker: 8, MemoryPerWorker: "32Gi",
+		},
+	})
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+	router := gin.New()
+	router.Use(func(c *gin.Context) { c.Set("ray-platform-principal", principal) })
+	handler.RegisterRoutes(router.Group("/ray"))
+	packageName := testPackageSHA256 + ".zip"
+	if response := rayRequest(router, http.MethodPut, "/ray/api/packages/gcs/"+packageName, "PKpayload"); response.Code != http.StatusOK {
+		t.Fatalf("upload status=%d body=%s", response.Code, response.Body.String())
+	}
+	body := `{"entrypoint":"python train.py","submission_id":"streaming_native","runtime_env":{"working_dir":"gcs://` + packageName + `"},"metadata":{"platform.training.engine":"ray-train","platform.dataset.ref":"labeled-full","platform.dataset.version":"latest"}}`
+	if response := rayRequest(router, http.MethodPost, "/ray/api/jobs/", body); response.Code != http.StatusOK {
+		t.Fatalf("submit status=%d body=%s", response.Code, response.Body.String())
+	}
+	job := repository.created
+	if job == nil {
+		t.Fatal("native submission did not persist a job")
+	}
+	if job.Spec.DatasetRef != (domain.DatasetReference{Dataset: dataset.ID, Version: version.ID}) || job.Spec.CachePolicy != domain.DatasetCachePolicyAuto || job.Spec.DataMode != domain.DataModeStreaming {
+		t.Fatalf("native dataset reference was not resolved and normalized: %+v", job.Spec)
+	}
+	wantProvenance := domain.DatasetProvenance{
+		DatasetID: dataset.ID, DatasetVersionID: version.ID, ManifestSHA256: version.ManifestSHA256,
+		DataMode: domain.DataModeStreaming, CachePolicy: domain.DatasetCachePolicyAuto,
+	}
+	if job.DatasetProvenance != wantProvenance || job.Spec.RayVersion != domain.RayVersionCanary || job.Spec.TrainingEngine != domain.TrainingEngineRayTrain {
+		t.Fatalf("native streaming provenance/runtime was not persisted: job=%+v", job)
 	}
 }
 

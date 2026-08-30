@@ -38,65 +38,67 @@ type globalJobReader interface {
 }
 
 type Handler struct {
-	repository             JobRepository
-	logs                   LogProvider
-	metrics                MetricsProvider
-	experiments            ExperimentProvider
-	allowAnonymous         bool
-	imageAllowlist         []string
-	gitAllowlist           []string
-	workspaces             WorkspaceStore
-	kubernetes             *k8s.Client
-	workspaceImage         string
-	rayVersion             string
-	serviceAccount         string
-	imagePullSecrets       []string
-	platformNamespace      string
-	idcClaim               string
-	idcMountPath           string
-	clusterQueue           string
-	admin                  AdminStore
-	gpuAllocations         GPUAllocationStore
-	quota                  QuotaStore
-	workspacePepper        []byte
-	trainingNodeSelector   map[string]string
-	workspaceUpstream      func(*domain.DevWorkspace) string
-	dashboardUpstream      func(context.Context, *domain.TrainingJob) (string, error)
-	images                 ImageStore
-	gitCredentials         GitCredentialStore
-	storageAssets          StorageAssetStore
-	datasets               DatasetCatalogStore
-	datasetPublications    DatasetPublicationManager
-	datasetInternalPrefix  string
-	dataSpaces             DataSpaceStore
-	dataSpacesEnabled      bool
-	dataSpacesFSXAttrs     string
-	dataSpacesCapacity     string
-	dataSpacesPublicRoot   string
-	idcDataSpacesEnabled   bool
-	idcDataSpacesCapacity  string
-	idcDataSpaceSources    map[domain.DataSpaceID]k8s.IDCDataMountSource
-	directoryLister        objectstore.DirectoryLister
-	directoryInitializer   objectstore.PersonalDataDirectoryInitializer
-	dataObjectStore        objectstore.DataSpaceStore
-	workspaceSnapshotStore objectstore.WorkspaceSnapshotStore
-	workspaceSnapshots     WorkspaceSnapshotRepository
-	artifactLister         objectstore.ArtifactLister
-	artifactReader         objectstore.ArtifactReader
-	gitCredentialTester    GitCredentialTester
-	gitRefResolver         GitRefResolver
-	newID                  func() (string, error)
-	submission             *SubmissionService
-	localCache             LocalCachePolicy
-	runtimePolicy          runtimecatalog.Policy
-	mlflowDashboardEnabled bool
-	mlflowDashboardStore   MLflowDashboardStore
-	mlflowTrackingURL      string
-	mlflowPublicOrigin     string
-	mlflowDashboardPepper  []byte
-	mlflowDashboardTTL     time.Duration
-	mlflowDashboardNow     func() time.Time
-	mlflowDashboardRandom  io.Reader
+	repository               JobRepository
+	logs                     LogProvider
+	metrics                  MetricsProvider
+	experiments              ExperimentProvider
+	allowAnonymous           bool
+	imageAllowlist           []string
+	gitAllowlist             []string
+	workspaces               WorkspaceStore
+	kubernetes               *k8s.Client
+	workspaceImage           string
+	rayVersion               string
+	serviceAccount           string
+	imagePullSecrets         []string
+	platformNamespace        string
+	idcClaim                 string
+	idcMountPath             string
+	clusterQueue             string
+	admin                    AdminStore
+	gpuAllocations           GPUAllocationStore
+	quota                    QuotaStore
+	workspacePepper          []byte
+	trainingNodeSelector     map[string]string
+	workspaceUpstream        func(*domain.DevWorkspace) string
+	dashboardUpstream        func(context.Context, *domain.TrainingJob) (string, error)
+	images                   ImageStore
+	gitCredentials           GitCredentialStore
+	storageAssets            StorageAssetStore
+	datasets                 DatasetCatalogStore
+	datasetPublications      DatasetPublicationManager
+	datasetInternalPrefix    string
+	datasetVersioningEnabled bool
+	rayDataStreamingEnabled  bool
+	dataSpaces               DataSpaceStore
+	dataSpacesEnabled        bool
+	dataSpacesFSXAttrs       string
+	dataSpacesCapacity       string
+	dataSpacesPublicRoot     string
+	idcDataSpacesEnabled     bool
+	idcDataSpacesCapacity    string
+	idcDataSpaceSources      map[domain.DataSpaceID]k8s.IDCDataMountSource
+	directoryLister          objectstore.DirectoryLister
+	directoryInitializer     objectstore.PersonalDataDirectoryInitializer
+	dataObjectStore          objectstore.DataSpaceStore
+	workspaceSnapshotStore   objectstore.WorkspaceSnapshotStore
+	workspaceSnapshots       WorkspaceSnapshotRepository
+	artifactLister           objectstore.ArtifactLister
+	artifactReader           objectstore.ArtifactReader
+	gitCredentialTester      GitCredentialTester
+	gitRefResolver           GitRefResolver
+	newID                    func() (string, error)
+	submission               *SubmissionService
+	localCache               LocalCachePolicy
+	runtimePolicy            runtimecatalog.Policy
+	mlflowDashboardEnabled   bool
+	mlflowDashboardStore     MLflowDashboardStore
+	mlflowTrackingURL        string
+	mlflowPublicOrigin       string
+	mlflowDashboardPepper    []byte
+	mlflowDashboardTTL       time.Duration
+	mlflowDashboardNow       func() time.Time
+	mlflowDashboardRandom    io.Reader
 }
 
 type LogProvider interface {
@@ -117,37 +119,39 @@ type ExperimentProvider interface {
 }
 
 type Options struct {
-	AllowAnonymous          bool
-	Logs                    LogProvider
-	Metrics                 MetricsProvider
-	Experiments             ExperimentProvider
-	ImageAllowlist          []string
-	GitAllowlist            []string
-	Workspaces              WorkspaceStore
-	Kubernetes              *k8s.Client
-	WorkspaceImage          string
-	RayVersion              string
-	ServiceAccount          string
-	ImagePullSecrets        []string
-	PlatformNamespace       string
-	IDCClaim                string
-	IDCMountPath            string
-	KueueClusterQueue       string
-	Admin                   AdminStore
-	GPUAllocations          GPUAllocationStore
-	Quota                   QuotaStore
-	WorkspacePepper         []byte
-	TrainingNodeSelector    map[string]string
-	Images                  ImageStore
-	GitCredentials          GitCredentialStore
-	StorageAssets           StorageAssetStore
-	Datasets                DatasetCatalogStore
-	DatasetPublications     DatasetPublicationManager
-	DatasetInternalPrefix   string
-	DataSpaces              DataSpaceStore
-	DataSpacesEnabled       bool
-	DataSpacesFSXAttributes string
-	DataSpacesMountCapacity string
+	AllowAnonymous           bool
+	Logs                     LogProvider
+	Metrics                  MetricsProvider
+	Experiments              ExperimentProvider
+	ImageAllowlist           []string
+	GitAllowlist             []string
+	Workspaces               WorkspaceStore
+	Kubernetes               *k8s.Client
+	WorkspaceImage           string
+	RayVersion               string
+	ServiceAccount           string
+	ImagePullSecrets         []string
+	PlatformNamespace        string
+	IDCClaim                 string
+	IDCMountPath             string
+	KueueClusterQueue        string
+	Admin                    AdminStore
+	GPUAllocations           GPUAllocationStore
+	Quota                    QuotaStore
+	WorkspacePepper          []byte
+	TrainingNodeSelector     map[string]string
+	Images                   ImageStore
+	GitCredentials           GitCredentialStore
+	StorageAssets            StorageAssetStore
+	Datasets                 DatasetCatalogStore
+	DatasetPublications      DatasetPublicationManager
+	DatasetInternalPrefix    string
+	DatasetVersioningEnabled bool
+	RayDataStreamingEnabled  bool
+	DataSpaces               DataSpaceStore
+	DataSpacesEnabled        bool
+	DataSpacesFSXAttributes  string
+	DataSpacesMountCapacity  string
 	// DataSpacesPublicRoot is deployment-owned and never comes from an HTTP
 	// request. It controls the public dataset root during an explicit data
 	// migration and defaults to ray-train/public/.
@@ -181,7 +185,7 @@ func NewHandler(repository JobRepository, options Options) *Handler {
 	for space, source := range options.IDCDataSpaceSources {
 		idcSources[space] = source
 	}
-	handler := &Handler{repository: repository, logs: options.Logs, metrics: options.Metrics, experiments: options.Experiments, allowAnonymous: options.AllowAnonymous, imageAllowlist: append([]string(nil), options.ImageAllowlist...), gitAllowlist: append([]string(nil), options.GitAllowlist...), workspaces: options.Workspaces, kubernetes: options.Kubernetes, workspaceImage: options.WorkspaceImage, rayVersion: options.RayVersion, serviceAccount: options.ServiceAccount, imagePullSecrets: append([]string(nil), options.ImagePullSecrets...), platformNamespace: strings.TrimSpace(options.PlatformNamespace), idcClaim: options.IDCClaim, idcMountPath: options.IDCMountPath, clusterQueue: options.KueueClusterQueue, admin: options.Admin, gpuAllocations: options.GPUAllocations, quota: options.Quota, workspacePepper: append([]byte(nil), options.WorkspacePepper...), trainingNodeSelector: options.TrainingNodeSelector, images: options.Images, gitCredentials: options.GitCredentials, storageAssets: options.StorageAssets, datasets: options.Datasets, datasetPublications: options.DatasetPublications, datasetInternalPrefix: strings.TrimSuffix(strings.TrimSpace(options.DatasetInternalPrefix), "/"), dataSpaces: options.DataSpaces, dataSpacesEnabled: options.DataSpacesEnabled, dataSpacesFSXAttrs: options.DataSpacesFSXAttributes, dataSpacesCapacity: options.DataSpacesMountCapacity, dataSpacesPublicRoot: strings.TrimSpace(options.DataSpacesPublicRoot), idcDataSpacesEnabled: options.IDCDataSpacesEnabled, idcDataSpacesCapacity: options.IDCDataSpacesMountCapacity, idcDataSpaceSources: idcSources, directoryLister: options.DirectoryLister, directoryInitializer: options.DirectoryInitializer, dataObjectStore: options.DataObjectStore, workspaceSnapshotStore: options.WorkspaceSnapshotStore, workspaceSnapshots: options.WorkspaceSnapshots, artifactLister: options.ArtifactLister, artifactReader: options.ArtifactReader, gitCredentialTester: options.GitCredentialTester, gitRefResolver: options.GitRefResolver, newID: newJobID, mlflowDashboardEnabled: options.MLflowDashboardEnabled, mlflowDashboardStore: options.MLflowDashboardStore, mlflowTrackingURL: strings.TrimSpace(options.MLflowTrackingURL), mlflowPublicOrigin: strings.TrimSpace(options.MLflowPublicOrigin), mlflowDashboardPepper: append([]byte(nil), options.MLflowDashboardPepper...), mlflowDashboardTTL: options.MLflowDashboardSessionTTL, mlflowDashboardNow: options.MLflowDashboardNow, mlflowDashboardRandom: options.MLflowDashboardRandom}
+	handler := &Handler{repository: repository, logs: options.Logs, metrics: options.Metrics, experiments: options.Experiments, allowAnonymous: options.AllowAnonymous, imageAllowlist: append([]string(nil), options.ImageAllowlist...), gitAllowlist: append([]string(nil), options.GitAllowlist...), workspaces: options.Workspaces, kubernetes: options.Kubernetes, workspaceImage: options.WorkspaceImage, rayVersion: options.RayVersion, serviceAccount: options.ServiceAccount, imagePullSecrets: append([]string(nil), options.ImagePullSecrets...), platformNamespace: strings.TrimSpace(options.PlatformNamespace), idcClaim: options.IDCClaim, idcMountPath: options.IDCMountPath, clusterQueue: options.KueueClusterQueue, admin: options.Admin, gpuAllocations: options.GPUAllocations, quota: options.Quota, workspacePepper: append([]byte(nil), options.WorkspacePepper...), trainingNodeSelector: options.TrainingNodeSelector, images: options.Images, gitCredentials: options.GitCredentials, storageAssets: options.StorageAssets, datasets: options.Datasets, datasetPublications: options.DatasetPublications, datasetInternalPrefix: strings.TrimSuffix(strings.TrimSpace(options.DatasetInternalPrefix), "/"), datasetVersioningEnabled: options.DatasetVersioningEnabled, rayDataStreamingEnabled: options.RayDataStreamingEnabled, dataSpaces: options.DataSpaces, dataSpacesEnabled: options.DataSpacesEnabled, dataSpacesFSXAttrs: options.DataSpacesFSXAttributes, dataSpacesCapacity: options.DataSpacesMountCapacity, dataSpacesPublicRoot: strings.TrimSpace(options.DataSpacesPublicRoot), idcDataSpacesEnabled: options.IDCDataSpacesEnabled, idcDataSpacesCapacity: options.IDCDataSpacesMountCapacity, idcDataSpaceSources: idcSources, directoryLister: options.DirectoryLister, directoryInitializer: options.DirectoryInitializer, dataObjectStore: options.DataObjectStore, workspaceSnapshotStore: options.WorkspaceSnapshotStore, workspaceSnapshots: options.WorkspaceSnapshots, artifactLister: options.ArtifactLister, artifactReader: options.ArtifactReader, gitCredentialTester: options.GitCredentialTester, gitRefResolver: options.GitRefResolver, newID: newJobID, mlflowDashboardEnabled: options.MLflowDashboardEnabled, mlflowDashboardStore: options.MLflowDashboardStore, mlflowTrackingURL: strings.TrimSpace(options.MLflowTrackingURL), mlflowPublicOrigin: strings.TrimSpace(options.MLflowPublicOrigin), mlflowDashboardPepper: append([]byte(nil), options.MLflowDashboardPepper...), mlflowDashboardTTL: options.MLflowDashboardSessionTTL, mlflowDashboardNow: options.MLflowDashboardNow, mlflowDashboardRandom: options.MLflowDashboardRandom}
 	if handler.datasetInternalPrefix == "" {
 		handler.datasetInternalPrefix = internalDatasetObjectPrefix
 	}
@@ -212,18 +216,22 @@ func NewHandler(repository JobRepository, options Options) *Handler {
 		handler.platformNamespace = "ray-train-platform"
 	}
 	handler.submission = NewSubmissionService(repository, SubmissionServiceOptions{
-		Images:               handler.images,
-		ImageAllowlist:       handler.imageAllowlist,
-		GitAllowlist:         handler.gitAllowlist,
-		ClusterQueue:         handler.clusterQueue,
-		StorageAssets:        handler.storageAssets,
-		DataSpaces:           handler.dataSpaces,
-		DataSpacesEnabled:    handler.dataSpacesEnabled,
-		DataSpacesPublicRoot: handler.dataSpacesPublicRoot,
-		IDCDataSpacesEnabled: handler.idcDataSpacesEnabled,
-		WorkspaceSnapshots:   handler.workspaceSnapshots,
-		LocalCache:           handler.localCache,
-		RuntimePolicy:        handler.runtimePolicy,
+		Images:                   handler.images,
+		ImageAllowlist:           handler.imageAllowlist,
+		GitAllowlist:             handler.gitAllowlist,
+		ClusterQueue:             handler.clusterQueue,
+		StorageAssets:            handler.storageAssets,
+		DataSpaces:               handler.dataSpaces,
+		DataSpacesEnabled:        handler.dataSpacesEnabled,
+		DataSpacesPublicRoot:     handler.dataSpacesPublicRoot,
+		IDCDataSpacesEnabled:     handler.idcDataSpacesEnabled,
+		WorkspaceSnapshots:       handler.workspaceSnapshots,
+		Datasets:                 handler.datasets,
+		DatasetVersioningEnabled: handler.datasetVersioningEnabled,
+		RayDataStreamingEnabled:  handler.rayDataStreamingEnabled,
+		DatasetInternalPrefix:    handler.datasetInternalPrefix,
+		LocalCache:               handler.localCache,
+		RuntimePolicy:            handler.runtimePolicy,
 		EnsureTenantRuntime: func(ctx context.Context, tenantID, namespace, queue, clusterQueue string) error {
 			if err := handler.ensureTenantNamespaceAndPullSecrets(ctx, tenantID, namespace); err != nil {
 				return err
@@ -343,6 +351,39 @@ type submitRequest struct {
 	Origin domain.SubmissionOrigin `json:"origin,omitempty"`
 }
 
+func (h *Handler) preflightJob(c *gin.Context) {
+	principal, ok := h.principal(c)
+	if !ok {
+		h.writeError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "authentication is required")
+		return
+	}
+	if !principal.Allowed(domain.RoleEngineer) {
+		h.writeError(c, http.StatusForbidden, "FORBIDDEN", "engineer role is required")
+		return
+	}
+	var request submitRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		h.writeError(c, http.StatusBadRequest, "INVALID_JSON", "request body is invalid")
+		return
+	}
+	origin := request.Origin
+	if origin == "" {
+		origin = domain.SubmissionOriginPortal
+	}
+	if origin != domain.SubmissionOriginPortal && origin != domain.SubmissionOriginRayCLI {
+		h.writeError(c, http.StatusBadRequest, "INVALID_SUBMISSION_ORIGIN", "submission origin is not supported by this endpoint")
+		return
+	}
+	result, err := h.submission.Preflight(c.Request.Context(), SubmissionInput{
+		Principal: principal, Spec: request.Spec, Origin: origin,
+	})
+	if err != nil {
+		h.writeSubmissionError(c, principal, err)
+		return
+	}
+	h.writeSuccess(c, http.StatusOK, result)
+}
+
 func (h *Handler) submitJob(c *gin.Context) {
 	principal, ok := h.principal(c)
 	if !ok {
@@ -379,6 +420,20 @@ func (h *Handler) submitJob(c *gin.Context) {
 
 func (h *Handler) writeSubmissionError(c *gin.Context, principal auth.Principal, err error) {
 	switch {
+	case errors.Is(err, ErrSubmissionDatasetFeatureDisabled):
+		h.writeError(c, http.StatusServiceUnavailable, "DATASET_STREAMING_DISABLED", "versioned streaming datasets are not enabled")
+	case errors.Is(err, ErrSubmissionDatasetNotFound):
+		h.writeError(c, http.StatusNotFound, "DATASET_NOT_FOUND", "the requested dataset was not found")
+	case errors.Is(err, ErrSubmissionDatasetVersionNotReady):
+		h.writeError(c, http.StatusConflict, "DATASET_VERSION_NOT_READY", "the requested dataset version is not ready")
+	case errors.Is(err, ErrSubmissionDatasetCatalogUnavailable):
+		h.writeError(c, http.StatusServiceUnavailable, "DATASET_CATALOG_UNAVAILABLE", "dataset catalogue is temporarily unavailable")
+	case errors.Is(err, ErrSubmissionDatasetIncompatible):
+		h.writeError(c, http.StatusBadRequest, "DATASET_RUNTIME_INCOMPATIBLE", "the selected dataset and runtime are not compatible")
+	case errors.Is(err, ErrSubmissionDatasetManifestInvalid):
+		h.writeError(c, http.StatusConflict, "DATASET_MANIFEST_INVALID", "the selected dataset version has no valid manifest")
+	case errors.Is(err, ErrSubmissionDatasetInternalPath):
+		h.writeError(c, http.StatusBadRequest, "DATASET_INTERNAL_PATH_FORBIDDEN", "internal dataset paths are managed by the platform")
 	case errors.Is(err, ErrSubmissionQueueNotAllowed):
 		h.writeError(c, http.StatusBadRequest, "QUEUE_NOT_ALLOWED", "jobs may only use the authenticated tenant queue")
 	case errors.Is(err, ErrSubmissionInvalidJobSpec):
