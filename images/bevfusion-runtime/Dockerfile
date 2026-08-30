@@ -58,7 +58,7 @@ RUN test "${RAY_CANARY_VERSION}" = "2.58.0" \
 # Ray only; keep its already accepted torch 2.4.1/CUDA 12.1/PyArrow stack.
 RUN python3 -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
       "ray[default,train,tune]==${RAY_CANARY_VERSION}" \
-      pyarrow==25.0.1 numpy==1.23.5 addict==2.4.0 numba==0.57.1 scipy==1.10.1 \
+      pyarrow==25.0.1 numpy==1.23.5 numba==0.57.1 scipy==1.10.1 \
       mmdet==2.20.0 nuscenes-devkit==1.1.10 \
       onnx==1.16.2 opencv-python==4.10.0.84 opencv-python-headless==4.10.0.84 \
       pyquaternion==0.9.9 shapely==1.8.5 spconv-cu120==2.3.6 \
@@ -89,6 +89,9 @@ RUN chmod 0755 /usr/local/bin/prepare-bevfusion-canary-source \
  && /usr/local/bin/prepare-bevfusion-canary-source /opt/bevfusion \
  && cd /opt/bevfusion \
  && FORCE_CUDA=1 MAX_JOBS=8 python3 setup.py build_ext --inplace
+
+RUN python3 -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
+      addict==2.4.0
 
 COPY images/workspace/raytrain-launch.py /usr/local/bin/raytrain-launch
 COPY images/workspace/raytrain-managed /usr/local/bin/raytrain-managed
