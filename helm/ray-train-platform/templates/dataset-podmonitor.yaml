@@ -1,0 +1,46 @@
+{{- $monitoring := default (dict) .Values.monitoring -}}
+{{- $podMonitor := default (dict) (get $monitoring "podMonitor") -}}
+{{- $podMonitorEnabled := or (not (hasKey $podMonitor "enabled")) (eq (get $podMonitor "enabled") true) -}}
+{{- if and (default false (get $monitoring "enabled")) $podMonitorEnabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "ray-train-platform.fullname" . }}-dataset-workers
+  namespace: {{ default .Values.namespace (get $monitoring "namespace") }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: dataset-observability
+spec:
+  namespaceSelector:
+    any: true
+  selector:
+    matchExpressions:
+      - key: app.kubernetes.io/part-of
+        operator: In
+        values: [ray-train-platform]
+      - key: platform_job_id
+        operator: Exists
+      - key: ray.io/node-type
+        operator: In
+        values: [worker]
+  podMetricsEndpoints:
+    - port: metrics
+      interval: {{ default "30s" (get $podMonitor "interval") }}
+      scrapeTimeout: {{ default "10s" (get $podMonitor "scrapeTimeout") }}
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: exported_namespace
+        - sourceLabels: [__meta_kubernetes_pod_label_platform_job_id]
+          targetLabel: platform_job_id
+        - sourceLabels: [__meta_kubernetes_pod_label_ray_io_cluster]
+          targetLabel: ray_io_cluster
+        - sourceLabels: [__meta_kubernetes_pod_label_ray_io_node_type]
+          targetLabel: ray_io_node_type
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: node
+      metricRelabelings:
+        - action: labeldrop
+          regex: '^(object_key|token|access_token|access_key|secret_key|storage_uri|manifest_uri)$'
+{{- end }}

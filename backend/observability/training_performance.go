@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	maxTrainingPerformanceQueries  = 40
+	maxTrainingPerformanceQueries  = 48
 	maxTrainingPerformanceSeries   = 2048
 	maxTrainingPerformancePoints   = 2048
 	trainingPerformanceTimeout     = 5 * time.Second
@@ -74,11 +74,16 @@ var trainingPerformanceMetrics = []trainingPerformanceMetric{
 	{name: "datasetPrefetchWaitSecondsTotal", expression: rayInstant("ray_platform_training_dataset_prefetch_wait_seconds_total"), reducer: trainingSummarySum},
 	{name: "datasetSourceReadSecondsTotal", expression: rayInstant("ray_platform_training_dataset_source_read_seconds_total"), reducer: trainingSummarySum},
 	{name: "datasetCacheReadSecondsTotal", expression: rayInstant("ray_platform_training_dataset_cache_read_seconds_total"), reducer: trainingSummarySum},
+	{name: "datasetSourceReadP95Seconds", expression: rayInstant("ray_platform_training_dataset_source_read_p95_seconds"), reducer: trainingSummaryMax},
+	{name: "datasetCacheReadP95Seconds", expression: rayInstant("ray_platform_training_dataset_cache_read_p95_seconds"), reducer: trainingSummaryMax},
+	{name: "datasetPrefetchWaitP95Seconds", expression: rayInstant("ray_platform_training_dataset_prefetch_wait_p95_seconds"), reducer: trainingSummaryMax},
 	{name: "datasetBatchesTotal", expression: rayInstant("ray_platform_training_dataset_batches_total"), reducer: trainingSummarySum},
 	{name: "datasetSamplesTotal", expression: rayInstant("ray_platform_training_dataset_samples_total"), reducer: trainingSummarySum},
 	{name: "datasetShardReadsTotal", expression: rayInstant("ray_platform_training_dataset_shard_reads_total"), reducer: trainingSummarySum},
 	{name: "datasetSourceReadsTotal", expression: rayInstant("ray_platform_training_dataset_source_reads_total"), reducer: trainingSummarySum},
 	{name: "datasetCacheReadsTotal", expression: rayInstant("ray_platform_training_dataset_cache_reads_total"), reducer: trainingSummarySum},
+	{name: "datasetSourceBytesTotal", expression: rayInstant("ray_platform_training_dataset_source_bytes_total"), reducer: trainingSummarySum},
+	{name: "datasetCacheBytesReadTotal", expression: rayInstant("ray_platform_training_dataset_cache_bytes_read_total"), reducer: trainingSummarySum},
 	{name: "datasetCacheHitsTotal", expression: rayInstant("ray_platform_training_dataset_cache_hits_total"), reducer: trainingSummarySum},
 	{name: "datasetCacheMissesTotal", expression: rayInstant("ray_platform_training_dataset_cache_misses_total"), reducer: trainingSummarySum},
 	{name: "datasetCacheDownloadsTotal", expression: rayInstant("ray_platform_training_dataset_cache_downloads_total"), reducer: trainingSummarySum},

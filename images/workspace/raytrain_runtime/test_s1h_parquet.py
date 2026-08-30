@@ -31,7 +31,14 @@ class _Metadata:
         self.num_row_groups = len(self.groups)
 
     def row_group(self, index):
-        return types.SimpleNamespace(num_rows=len(self.groups[index]))
+        row_count = len(self.groups[index])
+        return types.SimpleNamespace(
+            num_rows=row_count,
+            num_columns=2,
+            column=lambda column_index: types.SimpleNamespace(
+                total_compressed_size=(column_index + 1) * row_count,
+            ),
+        )
 
 
 class _ParquetFile:
@@ -219,6 +226,8 @@ class S1HParquetResolverTest(unittest.TestCase):
         self.assertEqual(metrics["dataset_cache_stale_temp_reclaimed_total"], 1.0)
         self.assertGreater(metrics["dataset_source_read_seconds_total"], 0)
         self.assertGreater(metrics["dataset_cache_read_seconds_total"], 0)
+        self.assertEqual(metrics["dataset_source_bytes_total"], 3.0)
+        self.assertEqual(metrics["dataset_cache_bytes_read_total"], 3.0)
         self.assertNotIn(str(root), str(metrics))
         self.assertNotIn("cached.parquet", str(metrics))
 

@@ -423,6 +423,39 @@ autoscaling:
     maxReplicas: 6
     targetCPUUtilizationPercentage: 70
 
+# Prometheus Operator integration for managed Ray Train + Ray Data workers.
+# The parent gate is deliberately off in the portable chart: clusters without
+# monitoring.coreos.com CRDs must still install and upgrade successfully.
+monitoring:
+  enabled: false
+  namespace: monitoring
+  podMonitor:
+    # Keep this off when the cluster already has the platform-wide
+    # ops/observability/prometheus-operator/60-ray-pod-monitor.yaml. Enable it
+    # only on portable installs that do not already scrape Ray workers.
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+  prometheusRule:
+    enabled: true
+    publicationFailedFor: 2m
+    publicationStalledFor: 15m
+    publicationStalledSeconds: 21600
+    sourceReadP95For: 10m
+    sourceReadP95Seconds: 2
+    cacheHitRatioFor: 15m
+    cacheHitRatioMinimum: 0.5
+    cacheMinimumRequests: 20
+    cacheEvictionFor: 10m
+    cacheEvictionsPer15m: 20
+    prefetchWaitFor: 10m
+    prefetchWaitRatio: 0.2
+    objectSpillFor: 10m
+    objectSpillBytesPerSecond: 104857600
+    gpuDataStallFor: 10m
+    gpuDataStallRatio: 0.2
+    gpuDataStallUtilizationPercent: 70
+
 tos:
   endpoint: "https://tos-cn-beijing.volces.com"
   region: "cn-beijing"

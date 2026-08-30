@@ -1,0 +1,144 @@
+{{- $monitoring := default (dict) .Values.monitoring -}}
+{{- $rules := default (dict) (get $monitoring "prometheusRule") -}}
+{{- $rulesEnabled := or (not (hasKey $rules "enabled")) (eq (get $rules "enabled") true) -}}
+{{- if and (default false (get $monitoring "enabled")) $rulesEnabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "ray-train-platform.fullname" . }}-dataset
+  namespace: {{ default .Values.namespace (get $monitoring "namespace") }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: dataset-observability
+spec:
+  groups:
+    - name: ray-train-platform.dataset-publication
+      rules:
+        - alert: RayDatasetPublicationFailed
+          expr: kube_job_status_failed{namespace={{ .Values.namespace | quote }},job_name=~"dataset-publisher-.*"} > 0
+          for: {{ default "2m" (get $rules "publicationFailedFor") }}
+          labels:
+            severity: critical
+          annotations:
+            summary: Dataset publication Job failed
+            description: Inspect the governed publication run and publisher logs before retrying.
+        - alert: RayDatasetPublicationStalled
+          expr: |
+            (time() - kube_job_status_start_time{namespace={{ .Values.namespace | quote }},job_name=~"dataset-publisher-.*"} > {{ default 21600 (get $rules "publicationStalledSeconds") }})
+            and on (namespace, job_name)
+            (kube_job_status_active{namespace={{ .Values.namespace | quote }},job_name=~"dataset-publisher-.*"} > 0)
+          for: {{ default "15m" (get $rules "publicationStalledFor") }}
+          labels:
+            severity: warning
+          annotations:
+            summary: Dataset publication has made no terminal progress within its expected window
+            description: Check source inventory growth, Kueue admission, TOS throughput and publisher logs.
+    - name: ray-train-platform.dataset-training
+      rules:
+        - alert: RayDatasetSourceReadP95High
+          expr: |
+            max by (exported_namespace, platform_job_id, dataset_id, dataset_version_id) (
+              ray_platform_training_dataset_source_read_p95_seconds{data_mode="streaming"}
+            ) > {{ default 2 (get $rules "sourceReadP95Seconds") }}
+          for: {{ default "10m" (get $rules "sourceReadP95For") }}
+          labels:
+            severity: warning
+          annotations:
+            summary: Versioned dataset source-read P95 is high
+            description: Compare source throughput with NVMe cache hits and Ray prefetch wait.
+        - alert: RayDatasetCacheHitRatioLow
+          expr: |
+            (
+              sum by (exported_namespace, platform_job_id) (clamp_min(delta(ray_platform_training_dataset_cache_hits_total{data_mode="streaming",cache_policy!="off"}[15m]), 0))
+              /
+              clamp_min(
+                sum by (exported_namespace, platform_job_id) (clamp_min(delta(ray_platform_training_dataset_cache_hits_total{data_mode="streaming",cache_policy!="off"}[15m]), 0))
+                +
+                sum by (exported_namespace, platform_job_id) (clamp_min(delta(ray_platform_training_dataset_cache_misses_total{data_mode="streaming",cache_policy!="off"}[15m]), 0)),
+                1
+              )
+            ) < {{ default 0.5 (get $rules "cacheHitRatioMinimum") }}
+            and on (exported_namespace, platform_job_id)
+            (
+              sum by (exported_namespace, platform_job_id) (clamp_min(delta(ray_platform_training_dataset_cache_hits_total{data_mode="streaming",cache_policy!="off"}[15m]), 0))
+              +
+              sum by (exported_namespace, platform_job_id) (clamp_min(delta(ray_platform_training_dataset_cache_misses_total{data_mode="streaming",cache_policy!="off"}[15m]), 0))
+              >= {{ default 20 (get $rules "cacheMinimumRequests") }}
+            )
+          for: {{ default "15m" (get $rules "cacheHitRatioFor") }}
+          labels:
+            severity: warning
+          annotations:
+            summary: Bounded NVMe cache hit ratio is low
+            description: The working set may exceed local capacity or be changing faster than it can be reused.
+        - alert: RayDatasetIntegrityFailure
+          expr: |
+            sum by (exported_namespace, platform_job_id, dataset_id, dataset_version_id) (
+              clamp_min(delta(ray_platform_training_dataset_cache_checksum_failures_total{data_mode="streaming"}[10m]), 0)
+            ) > 0
+          labels:
+            severity: critical
+          annotations:
+            summary: A pinned dataset shard failed digest verification
+            description: Stop consuming the version and verify its immutable manifest and shard objects before retrying.
+        - alert: RayDatasetCacheEvictionThrash
+          expr: |
+            sum by (exported_namespace, platform_job_id) (
+              clamp_min(delta(ray_platform_training_dataset_cache_evictions_total{data_mode="streaming",cache_policy!="off"}[15m]), 0)
+            ) > {{ default 20 (get $rules "cacheEvictionsPer15m") }}
+          for: {{ default "10m" (get $rules "cacheEvictionFor") }}
+          labels:
+            severity: warning
+          annotations:
+            summary: Bounded NVMe cache is repeatedly evicting its working set
+            description: Reduce the active working set, increase the governed cache budget, or disable cache for one-pass scans.
+        - alert: RayDatasetPrefetchWaitHigh
+          expr: |
+            avg by (exported_namespace, platform_job_id) (
+              clamp_min(delta(ray_platform_training_dataset_prefetch_wait_seconds_total{data_mode="streaming"}[10m]), 0) / 600
+            ) > {{ default 0.2 (get $rules "prefetchWaitRatio") }}
+          for: {{ default "10m" (get $rules "prefetchWaitFor") }}
+          labels:
+            severity: warning
+          annotations:
+            summary: Ray Data prefetch wait is consuming a large share of wall time
+            description: Inspect source P95, cache hit ratio, object spilling and CPU headroom.
+        - alert: RayDatasetObjectSpillHigh
+          expr: |
+            (
+              sum by (exported_namespace, platform_job_id) (
+                rate(ray_object_store_spilled_bytes_total{ray_io_node_type="worker"}[10m])
+              ) > {{ default 104857600 (get $rules "objectSpillBytesPerSecond") }}
+            )
+            and on (exported_namespace, platform_job_id)
+            (
+              max by (exported_namespace, platform_job_id) (
+                ray_platform_training_dataset_batches_total{data_mode="streaming"}
+              ) >= 0
+            )
+          for: {{ default "10m" (get $rules "objectSpillFor") }}
+          labels:
+            severity: warning
+          annotations:
+            summary: Ray object-store spill throughput is persistently high
+            description: This is Ray object spilling, not the governed dataset cache; inspect object-store memory and block sizing.
+        - alert: RayDatasetGPUDataStall
+          expr: |
+            (
+              avg by (exported_namespace, exported_pod, platform_job_id) (ray_platform_training_data_time_seconds{data_mode="streaming"})
+              /
+              clamp_min(avg by (exported_namespace, exported_pod, platform_job_id) (ray_platform_training_step_time_seconds{data_mode="streaming"}), 0.001)
+              > {{ default 0.2 (get $rules "gpuDataStallRatio") }}
+            )
+            and on (exported_namespace, exported_pod)
+            (
+              avg by (exported_namespace, exported_pod) (DCGM_FI_DEV_GPU_UTIL)
+              < {{ default 70 (get $rules "gpuDataStallUtilizationPercent") }}
+            )
+          for: {{ default "10m" (get $rules "gpuDataStallFor") }}
+          labels:
+            severity: warning
+          annotations:
+            summary: GPU utilization is low while the training loop waits for data
+            description: Compare source read P95, Ray prefetch wait, CPU headroom and NVMe cache behavior.
+{{- end }}

@@ -88,7 +88,7 @@ class S1HParquetBatchResolver:
                     if ref["shard_path"] == relative
                 )
                 read_started = time.perf_counter()
-                resolved = self._read_rows(readable, indexes)
+                resolved, read_bytes = self._read_rows(readable, indexes)
                 read_seconds = max(time.perf_counter() - read_started, 1e-9)
                 _observe_metric("dataset_shard_reads_total", 1)
                 _observe_metric(
@@ -103,6 +103,13 @@ class S1HParquetBatchResolver:
                     else "dataset_source_read_seconds_total",
                     read_seconds,
                 )
+                if read_bytes:
+                    _observe_metric(
+                        "dataset_cache_bytes_read_total"
+                        if readable != source
+                        else "dataset_source_bytes_total",
+                        read_bytes,
+                    )
                 rows_by_locator = {
                     **rows_by_locator,
                     **{
@@ -143,7 +150,7 @@ class S1HParquetBatchResolver:
         self,
         path: pathlib.Path,
         indexes: tuple[int, ...],
-    ) -> tuple[dict[str, Any], ...]:
+    ) -> tuple[tuple[dict[str, Any], ...], int]:
         parquet = self._parquet
         if parquet is None:
             try:
@@ -154,6 +161,10 @@ class S1HParquetBatchResolver:
             parquet_file = parquet.ParquetFile(path)
             locations = _row_group_locations(parquet_file.metadata, indexes)
             group_ids = tuple(dict.fromkeys(group for group, _local in locations))
+            read_bytes = _selected_row_group_compressed_bytes(
+                parquet_file.metadata,
+                group_ids,
+            )
             group_rows = {
                 group: parquet_file.read_row_group(
                     group,
@@ -161,9 +172,12 @@ class S1HParquetBatchResolver:
                 ).to_pylist()
                 for group in group_ids
             }
-            return tuple(
-                dict(group_rows[group][local])
-                for group, local in locations
+            return (
+                tuple(
+                    dict(group_rows[group][local])
+                    for group, local in locations
+                ),
+                read_bytes,
             )
         except (IndexError, KeyError, TypeError, ValueError):
             raise ValueError("invalid S1H shard row reference") from None
@@ -213,6 +227,30 @@ def _observe_metric(name: str, value: int | float) -> None:
     except Exception:
         # Metrics are supplementary and must never interrupt shard reads.
         return
+
+
+def _selected_row_group_compressed_bytes(metadata: Any, group_ids: Sequence[int]) -> int:
+    """Best-effort compressed bytes for only the selected Parquet row groups."""
+
+    try:
+        total = 0
+        for group_id in group_ids:
+            group = metadata.row_group(group_id)
+            column_count = group.num_columns
+            if (
+                isinstance(column_count, bool)
+                or not isinstance(column_count, int)
+                or column_count < 0
+            ):
+                return 0
+            for column_index in range(column_count):
+                size = group.column(column_index).total_compressed_size
+                if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+                    return 0
+                total += size
+        return total
+    except Exception:
+        return 0
 
 
 def _cache_metrics(cache: Any) -> dict[str, float]:

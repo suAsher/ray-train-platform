@@ -38,6 +38,7 @@ class RuntimeDataMetricsTest(unittest.TestCase):
             {
                 "dataset_batches_total": 3.0,
                 "dataset_cache_stale_temp_reclaimed_total": 1.0,
+                "dataset_source_read_p95_seconds": 0.25,
                 "dataset_source_read_seconds_total": 0.25,
             },
         )
@@ -65,6 +66,22 @@ class RuntimeDataMetricsTest(unittest.TestCase):
             snapshot_data_metrics(),
             {"dataset_cache_hits_total": 1.0},
         )
+
+    def test_reports_bounded_nearest_rank_p95_for_data_waits(self) -> None:
+        from raytrain_runtime.data_metrics import (
+            observe_data_metric,
+            snapshot_data_metrics,
+        )
+
+        for seconds in range(1, 21):
+            observe_data_metric("dataset_source_read_seconds_total", seconds)
+            observe_data_metric("dataset_cache_read_seconds_total", seconds / 10)
+            observe_data_metric("dataset_prefetch_wait_seconds_total", seconds / 100)
+
+        metrics = snapshot_data_metrics()
+        self.assertEqual(metrics["dataset_source_read_p95_seconds"], 19.0)
+        self.assertEqual(metrics["dataset_cache_read_p95_seconds"], 1.9)
+        self.assertAlmostEqual(metrics["dataset_prefetch_wait_p95_seconds"], 0.19)
 
 
 if __name__ == "__main__":

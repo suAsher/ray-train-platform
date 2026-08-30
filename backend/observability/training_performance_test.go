@@ -160,6 +160,7 @@ func TestTrainingPerformanceSummaryUsesExplicitReducers(t *testing.T) {
 			"ray_platform_training_step":                                {"7", "9"},
 			"ray_cache_preloader_duration_seconds":                      {"1", "3"},
 			"ray_platform_training_dataset_prefetch_wait_seconds_total": {"2", "4"},
+			"ray_platform_training_dataset_source_read_p95_seconds":     {"0.1", "0.3"},
 			"ray_platform_training_dataset_cache_hits_total":            {"8", "12"},
 		}
 		pair, ok := values[name]
@@ -174,7 +175,7 @@ func TestTrainingPerformanceSummaryUsesExplicitReducers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wants := map[string]float64{"stepTimeSeconds": 5, "gpuUtilizationPercent": 50, "cacheBytes": 30, "step": 9, "cachePreloaderDurationSeconds": 3, "datasetPrefetchWaitSecondsTotal": 6, "datasetCacheHitsTotal": 20}
+	wants := map[string]float64{"stepTimeSeconds": 5, "gpuUtilizationPercent": 50, "cacheBytes": 30, "step": 9, "cachePreloaderDurationSeconds": 3, "datasetPrefetchWaitSecondsTotal": 6, "datasetSourceReadP95Seconds": 0.3, "datasetCacheHitsTotal": 20}
 	for name, want := range wants {
 		if got.Summary[name] == nil || *got.Summary[name] != want {
 			t.Fatalf("summary %s = %v, want %v", name, got.Summary[name], want)
@@ -233,7 +234,7 @@ func TestTrainingPerformanceUsesMetricFamilySpecificProductionSelectors(t *testi
 			t.Fatalf("DCGM query is not exported-pod scoped: %s", expression)
 		}
 	}
-	for _, name := range []string{"ray_platform_training_step", "ray_platform_training_step_time_seconds", "ray_platform_training_data_time_seconds", "ray_platform_training_nccl_duration_seconds", "ray_platform_training_dataset_prefetch_wait_seconds_total", "ray_platform_training_dataset_source_read_seconds_total", "ray_platform_training_dataset_cache_read_seconds_total", "ray_platform_training_dataset_cache_hits_total", "ray_platform_training_dataset_cache_checksum_failures_total", "ray_platform_training_dataset_cache_stale_temp_reclaimed_total", "ray_object_store_memory"} {
+	for _, name := range []string{"ray_platform_training_step", "ray_platform_training_step_time_seconds", "ray_platform_training_data_time_seconds", "ray_platform_training_nccl_duration_seconds", "ray_platform_training_dataset_prefetch_wait_seconds_total", "ray_platform_training_dataset_source_read_seconds_total", "ray_platform_training_dataset_cache_read_seconds_total", "ray_platform_training_dataset_source_read_p95_seconds", "ray_platform_training_dataset_cache_read_p95_seconds", "ray_platform_training_dataset_prefetch_wait_p95_seconds", "ray_platform_training_dataset_source_bytes_total", "ray_platform_training_dataset_cache_bytes_read_total", "ray_platform_training_dataset_cache_hits_total", "ray_platform_training_dataset_cache_checksum_failures_total", "ray_platform_training_dataset_cache_stale_temp_reclaimed_total", "ray_object_store_memory"} {
 		expression := queries[name]
 		for _, selector := range []string{`exported_namespace="tenant-a"`, `ray_io_cluster="job-a-cluster"`, `ray_io_node_type="worker"`} {
 			if !strings.Contains(expression, selector) {
@@ -270,8 +271,10 @@ func metricNameFromExpression(expression string) string {
 		"ray_object_store_memory", "ray_object_store_spilled_bytes_total", "ray_cache_bytes", "ray_cache_hits_total", "ray_cache_misses_total", "ray_cache_preloader_duration_seconds",
 		"ray_platform_training_step_time_seconds", "ray_platform_training_data_time_seconds", "ray_platform_training_nccl_duration_seconds", "ray_platform_training_step",
 		"ray_platform_training_dataset_prefetch_wait_seconds_total", "ray_platform_training_dataset_source_read_seconds_total", "ray_platform_training_dataset_cache_read_seconds_total",
+		"ray_platform_training_dataset_source_read_p95_seconds", "ray_platform_training_dataset_cache_read_p95_seconds", "ray_platform_training_dataset_prefetch_wait_p95_seconds",
 		"ray_platform_training_dataset_batches_total", "ray_platform_training_dataset_samples_total", "ray_platform_training_dataset_shard_reads_total",
 		"ray_platform_training_dataset_source_reads_total", "ray_platform_training_dataset_cache_reads_total", "ray_platform_training_dataset_cache_hits_total",
+		"ray_platform_training_dataset_source_bytes_total", "ray_platform_training_dataset_cache_bytes_read_total",
 		"ray_platform_training_dataset_cache_misses_total", "ray_platform_training_dataset_cache_downloads_total", "ray_platform_training_dataset_cache_fallbacks_total", "ray_platform_training_dataset_cache_checksum_failures_total",
 		"ray_platform_training_dataset_cache_evictions_total", "ray_platform_training_dataset_cache_stale_temp_reclaimed_total", "ray_platform_training_dataset_cache_bytes_total",
 		"kube_pod_container_status_restarts_total", "kube_pod_status_phase",

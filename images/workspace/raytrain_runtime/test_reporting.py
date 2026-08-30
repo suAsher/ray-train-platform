@@ -197,6 +197,7 @@ class ReportMetricsTest(unittest.TestCase):
             "data_time": 0.4,
             "nccl_time": 0.2,
             "dataset_prefetch_wait_seconds_total": 0.75,
+            "dataset_source_read_p95_seconds": 0.125,
             "dataset_cache_hits_total": 11,
             "dataset_cache_stale_temp_reclaimed_total": 2,
             "loss": 9.0,
@@ -216,11 +217,12 @@ class ReportMetricsTest(unittest.TestCase):
                 "platform_training_data_time_seconds",
                 "platform_training_nccl_duration_seconds",
                 "platform_training_dataset_prefetch_wait_seconds_total",
+                "platform_training_dataset_source_read_p95_seconds",
                 "platform_training_dataset_cache_hits_total",
                 "platform_training_dataset_cache_stale_temp_reclaimed_total",
             },
         )
-        self.assertEqual(len(FakeGauge.created), 7)
+        self.assertEqual(len(FakeGauge.created), 8)
         self.assertTrue(all(record[2]["rank"] == "3" for record in FakeGauge.records))
         self.assertTrue(all(record[2]["gpu"] == "3" for record in FakeGauge.records))
         self.assertTrue(all(record[2]["exported_namespace"] == "tenant-a" for record in FakeGauge.records))
