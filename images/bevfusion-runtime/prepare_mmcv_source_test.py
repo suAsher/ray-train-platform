@@ -50,6 +50,12 @@ class PrepareMMCVSourceTest(unittest.TestCase):
                 '#include "psamask_cuda_kernel.cuh"\n',
                 encoding="utf-8",
             )
+            pybind = root / "mmcv" / "ops" / "csrc" / "pytorch" / "pybind.cpp"
+            pybind.write_text(
+                '#include "pytorch_cpp_helper.hpp"\n\n'
+                "PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {}\n",
+                encoding="utf-8",
+            )
             (root / "setup.py").write_text(
                 "extra_compile_args['cxx'] = ['-std=c++14']\n"
                 "extra_compile_args['nvcc'] += ['-std=c++14']\n",
@@ -73,6 +79,9 @@ class PrepareMMCVSourceTest(unittest.TestCase):
             self.assertNotIn("THC/THC.h", psamask_source)
             self.assertNotIn("THC/THCDeviceUtils.cuh", psamask_source)
             self.assertIn("#include <torch/serialize/tensor.h>", psamask_source)
+            pybind_source = pybind.read_text(encoding="utf-8")
+            self.assertTrue(pybind_source.startswith("#include <torch/extension.h>\n"))
+            self.assertIn('#include "pytorch_cpp_helper.hpp"', pybind_source)
 
     def test_fails_closed_when_upstream_source_shape_changes(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -19,6 +19,9 @@ PYTORCH_HELPER_INCLUDE = '#include "pytorch_cpp_helper.hpp"'
 QUEUE_AND_HELPER_INCLUDES = '#include <queue>\n#include "pytorch_cpp_helper.hpp"'
 THC_INCLUDE = "#include <THC/THC.h>\n"
 THC_DEVICE_UTILS_INCLUDE = "#include <THC/THCDeviceUtils.cuh>\n"
+PYBIND_TORCH_AND_HELPER_INCLUDES = (
+    '#include <torch/extension.h>\n#include "pytorch_cpp_helper.hpp"'
+)
 
 
 def _replace_exact(
@@ -105,6 +108,13 @@ def prepare(source_root: pathlib.Path) -> None:
         "",
         1,
         "mmcv psamask legacy THC device include",
+    )
+    _replace_exact(
+        source_root / "mmcv" / "ops" / "csrc" / "pytorch" / "pybind.cpp",
+        PYTORCH_HELPER_INCLUDE,
+        PYBIND_TORCH_AND_HELPER_INCLUDES,
+        1,
+        "mmcv pybind torch extension include",
     )
 
 
