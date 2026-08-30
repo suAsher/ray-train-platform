@@ -140,6 +140,14 @@ func (version DatasetVersion) Validate() error {
 		if err := validateDatasetRelativePath("manifest object key", version.ManifestObjectKey); err != nil {
 			return err
 		}
+		expectedObjectKey := fmt.Sprintf(
+			"ray-train/platform/datasets/%s/manifests/%s.parquet",
+			version.DatasetID,
+			version.ID,
+		)
+		if version.ManifestObjectKey != expectedObjectKey {
+			return fmt.Errorf("manifest object key must use the version's internal dataset prefix")
+		}
 	}
 	if version.State == DatasetVersionReady || version.State == DatasetVersionDeprecated || version.State == DatasetVersionRetired {
 		if version.ManifestSHA256 == "" || version.ManifestObjectKey == "" {

@@ -3,6 +3,7 @@ package repositories
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -47,6 +48,46 @@ func TestModelColumnsExistInMigrations(t *testing.T) {
 				t.Errorf("model %T field %s maps to column %q.%q, which the migrations do not create (have: %s)",
 					model, field.Name, parsed.Table, field.DBName, strings.Join(sortedKeys(columns), ", "))
 			}
+		}
+	}
+}
+
+func TestJobRecordDatasetProvenanceUsesExplicitNullableColumns(t *testing.T) {
+	recordType := reflect.TypeOf(JobRecord{})
+	parsed, err := schema.Parse(&JobRecord{}, &sync.Map{}, schema.NamingStrategy{})
+	if err != nil {
+		t.Fatalf("parse JobRecord: %v", err)
+	}
+
+	stringPointer := reflect.TypeOf((*string)(nil))
+	for _, expected := range []struct {
+		field  string
+		column string
+	}{
+		{field: "DatasetID", column: "dataset_id"},
+		{field: "DatasetVersionID", column: "dataset_version_id"},
+		{field: "DatasetManifestDigest", column: "dataset_manifest_digest"},
+		{field: "DatasetDataMode", column: "dataset_data_mode"},
+		{field: "DatasetCachePolicy", column: "dataset_cache_policy"},
+	} {
+		field, exists := recordType.FieldByName(expected.field)
+		if !exists {
+			t.Errorf("JobRecord is missing %s", expected.field)
+			continue
+		}
+		if field.Type != stringPointer {
+			t.Errorf("JobRecord.%s type = %s, want *string", expected.field, field.Type)
+		}
+		if tag := field.Tag.Get("gorm"); tag != "column:"+expected.column {
+			t.Errorf("JobRecord.%s gorm tag = %q, want explicit column:%s", expected.field, tag, expected.column)
+		}
+		parsedField := parsed.LookUpField(expected.field)
+		if parsedField == nil || parsedField.DBName != expected.column {
+			got := "<missing>"
+			if parsedField != nil {
+				got = parsedField.DBName
+			}
+			t.Errorf("JobRecord.%s database column = %q, want %q", expected.field, got, expected.column)
 		}
 	}
 }

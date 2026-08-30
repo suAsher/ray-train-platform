@@ -25,11 +25,20 @@ func TestPostgresMigrationsIntegration(t *testing.T) {
 	if err := database.Raw("SELECT version FROM schema_migrations ORDER BY version").Scan(&versions).Error; err != nil {
 		t.Fatalf("load migration versions: %v", err)
 	}
-	if want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22}; !reflectIntSlicesEqual(versions, want) {
+	if want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24}; !reflectIntSlicesEqual(versions, want) {
 		t.Fatalf("migration versions = %v, want %v", versions, want)
 	}
 
-	for _, table := range []string{"personal_access_tokens", "source_artifacts"} {
+	for _, table := range []string{
+		"personal_access_tokens",
+		"source_artifacts",
+		"datasets",
+		"dataset_versions",
+		"dataset_partitions",
+		"dataset_publication_runs",
+		"dataset_version_shards",
+		"dataset_cache_observations",
+	} {
 		var count int64
 		if err := database.Raw("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = ?", table).Scan(&count).Error; err != nil {
 			t.Fatalf("check table %s: %v", table, err)
@@ -49,6 +58,11 @@ func TestPostgresMigrationsIntegration(t *testing.T) {
 		"worker_restart_count",
 		"resume_checkpoint_id",
 		"parent_job_id",
+		"dataset_id",
+		"dataset_version_id",
+		"dataset_manifest_digest",
+		"dataset_data_mode",
+		"dataset_cache_policy",
 	} {
 		var count int64
 		if err := database.Raw("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'training_jobs' AND column_name = ?", column).Scan(&count).Error; err != nil {
@@ -90,6 +104,33 @@ WHERE table_schema = current_schema()
 		}
 		if metadata.ColumnDefault != expectedDefault {
 			t.Errorf("training_jobs.%s default = %q, want %q", column, metadata.ColumnDefault, expectedDefault)
+		}
+	}
+
+	for _, column := range []string{
+		"dataset_id",
+		"dataset_version_id",
+		"dataset_manifest_digest",
+		"dataset_data_mode",
+		"dataset_cache_policy",
+	} {
+		var metadata struct {
+			IsNullable    string
+			ColumnDefault *string
+		}
+		if err := database.Raw(`
+SELECT is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'training_jobs'
+  AND column_name = ?`, column).Scan(&metadata).Error; err != nil {
+			t.Fatalf("load training_jobs.%s metadata: %v", column, err)
+		}
+		if metadata.IsNullable != "YES" {
+			t.Errorf("training_jobs.%s is_nullable = %q, want YES", column, metadata.IsNullable)
+		}
+		if metadata.ColumnDefault != nil {
+			t.Errorf("training_jobs.%s default = %q, want NULL", column, *metadata.ColumnDefault)
 		}
 	}
 
@@ -230,6 +271,7 @@ VALUES ('image-valid-mixed-engines', 'Valid mixed engines', 'registry.example/ru
 
 	seedPostgresIdentityRows(t, database)
 	assertPostgresTenantIsolation(t, database)
+	assertPostgresDatasetVersioning(t, database)
 }
 
 func TestPostgresAdvisoryLockMutualExclusionAndRelease(t *testing.T) {
@@ -403,6 +445,103 @@ VALUES ('tenant-a', 'user-a1', 'source-request-0123456789abcdef01234567', 'artif
 INSERT INTO source_artifact_requests(tenant_id, user_id, client_request_id, artifact_id)
 VALUES ('tenant-b', 'user-b1', 'source-request-0123456789abcdef01234567', 'artifact-a1')`).Error; err == nil {
 		t.Fatal("cross-owner source artifact request mapping succeeded")
+	}
+}
+
+func assertPostgresDatasetVersioning(t *testing.T, database *gorm.DB) {
+	t.Helper()
+	digest := strings.Repeat("a", 64)
+	otherDigest := strings.Repeat("b", 64)
+
+	if err := database.Exec(`
+INSERT INTO datasets(id, slug, name, source_space, source_relative_path, owner_tenant_id, visibility, schema_version)
+VALUES
+  ('dataset-public', 'labeled', 'Public labeled', 'public', 'labeled', NULL, 'PUBLIC', 'bev-v1'),
+  ('dataset-team-a', 'private-scenes', 'Tenant A scenes', 'team-shared', 'private-scenes', 'tenant-a', 'TEAM', 'bev-v1'),
+  ('dataset-team-b', 'private-scenes', 'Tenant B scenes', 'team-shared', 'private-scenes', 'tenant-b', 'TEAM', 'bev-v1')`).Error; err != nil {
+		t.Fatalf("insert scoped datasets with repeated team slug: %v", err)
+	}
+	if err := database.Exec(`
+INSERT INTO datasets(id, slug, name, source_space, source_relative_path, owner_tenant_id, visibility, schema_version)
+VALUES ('dataset-team-a-duplicate', 'private-scenes', 'Duplicate', 'team-shared', 'duplicate', 'tenant-a', 'TEAM', 'bev-v1')`).Error; err == nil {
+		t.Fatal("duplicate slug in one tenant was accepted")
+	}
+
+	for _, datasetID := range []string{"dataset-public", "dataset-team-a"} {
+		versionID := datasetID + "-v1"
+		manifestKey := "ray-train/platform/datasets/" + datasetID + "/manifests/" + versionID + ".parquet"
+		if err := database.Exec(`
+INSERT INTO dataset_versions(id, dataset_id, version, state, schema_version)
+VALUES (?, ?, '20260830.1', 'PACKING', 'bev-v1')`, versionID, datasetID).Error; err != nil {
+			t.Fatalf("insert packing version %s: %v", versionID, err)
+		}
+		if err := database.Exec(`
+UPDATE dataset_versions
+SET state = 'READY', manifest_sha256 = ?, manifest_object_key = ?, source_object_count = 10, train_samples = 8, val_samples = 2
+WHERE id = ?`, digest, manifestKey, versionID).Error; err != nil {
+			t.Fatalf("publish ready version %s: %v", versionID, err)
+		}
+	}
+
+	if err := database.Exec(`
+INSERT INTO dataset_versions(id, dataset_id, version, state, manifest_sha256, manifest_object_key, schema_version)
+VALUES ('dataset-public-bad-path-v1', 'dataset-public', 'bad-path', 'READY', ?,
+        'ray-train/platform/datasets/another-dataset/manifests/dataset-public-bad-path-v1.parquet', 'bev-v1')`, digest).Error; err == nil {
+		t.Fatal("manifest outside the dataset internal prefix was accepted")
+	}
+
+	if err := database.Exec(`
+INSERT INTO training_jobs(id, tenant_id, user_id, name, spec_json, kubernetes_ns)
+VALUES ('job-000000000000000000000001', 'tenant-a', 'user-a1', 'legacy-null-dataset', '{}'::jsonb, 'tenant-a')`).Error; err != nil {
+		t.Fatalf("legacy job with null dataset provenance was rejected: %v", err)
+	}
+	if err := database.Exec(`
+INSERT INTO training_jobs(
+  id, tenant_id, user_id, name, spec_json, kubernetes_ns,
+  dataset_id, dataset_version_id, dataset_manifest_digest, dataset_data_mode, dataset_cache_policy
+) VALUES (
+  'job-000000000000000000000002', 'tenant-b', 'user-b1', 'public-dataset', '{}'::jsonb, 'tenant-b',
+  'dataset-public', 'dataset-public-v1', ?, 'streaming', 'bounded'
+)`, digest).Error; err != nil {
+		t.Fatalf("public dataset job was rejected: %v", err)
+	}
+	if err := database.Exec(`
+INSERT INTO training_jobs(
+  id, tenant_id, user_id, name, spec_json, kubernetes_ns,
+  dataset_id, dataset_version_id, dataset_manifest_digest, dataset_data_mode, dataset_cache_policy
+) VALUES (
+  'job-000000000000000000000003', 'tenant-b', 'user-b1', 'cross-tenant-team-dataset', '{}'::jsonb, 'tenant-b',
+  'dataset-team-a', 'dataset-team-a-v1', ?, 'streaming', 'bounded'
+)`, digest).Error; err == nil {
+		t.Fatal("cross-tenant TEAM dataset provenance was accepted")
+	}
+	if err := database.Exec(`
+INSERT INTO training_jobs(
+  id, tenant_id, user_id, name, spec_json, kubernetes_ns,
+  dataset_id, dataset_version_id, dataset_manifest_digest, dataset_data_mode, dataset_cache_policy
+) VALUES (
+  'job-000000000000000000000004', 'tenant-a', 'user-a1', 'wrong-manifest-digest', '{}'::jsonb, 'tenant-a',
+  'dataset-team-a', 'dataset-team-a-v1', ?, 'streaming', 'bounded'
+)`, otherDigest).Error; err == nil {
+		t.Fatal("job manifest digest differing from its pinned version was accepted")
+	}
+
+	if err := database.Exec(`
+UPDATE dataset_versions SET train_samples = train_samples + 1 WHERE id = 'dataset-public-v1'`).Error; err == nil {
+		t.Fatal("READY dataset version payload mutation was accepted")
+	}
+	if err := database.Exec(`
+UPDATE dataset_versions SET state = 'DEPRECATED' WHERE id = 'dataset-public-v1'`).Error; err != nil {
+		t.Fatalf("READY to DEPRECATED transition was rejected: %v", err)
+	}
+
+	if err := database.Exec(`
+INSERT INTO dataset_cache_observations(
+  id, dataset_version_id, training_job_id, node_name
+) VALUES (
+  'cache-observation-mismatch', 'dataset-team-a-v1', 'job-000000000000000000000002', 'gpu-node-1'
+)`).Error; err == nil {
+		t.Fatal("cache observation for a version not pinned by its job was accepted")
 	}
 }
 

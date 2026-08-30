@@ -20,35 +20,40 @@ type JobRecord struct {
 	UserID   string
 	// Nullable: a job whose source is git or a workspace snapshot has no
 	// artifact, and an empty string would violate the foreign key.
-	SourceArtifactID     *string
-	SubmissionOrigin     string
-	ExternalSubmissionID string
-	Name                 string `gorm:"index"`
-	SpecJSON             string `gorm:"type:jsonb"`
-	DesiredState         string `gorm:"index"`
-	ObservedState        string `gorm:"index"`
-	StatusReason         string
-	StatusMessage        string
-	KubernetesNS         string
-	RayJobName           string
-	RayJobUID            string
-	RayClusterName       string
-	ResourceVersion      string
-	TrainingEngine       string
-	RayVersion           string
-	ClusterAttempt       int
-	WorkerRestartCount   int
-	ResumeCheckpointID   string
-	ParentJobID          string
-	RetryCount           int
-	TimeoutSeconds       int64
-	CleanupJSON          string `gorm:"type:jsonb"`
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
-	LastObservedAt       *time.Time
-	StartedAt            *time.Time
-	FinishedAt           *time.Time
-	ArchivedAt           *time.Time `gorm:"index"`
+	SourceArtifactID      *string
+	DatasetID             *string `gorm:"column:dataset_id"`
+	DatasetVersionID      *string `gorm:"column:dataset_version_id"`
+	DatasetManifestDigest *string `gorm:"column:dataset_manifest_digest"`
+	DatasetDataMode       *string `gorm:"column:dataset_data_mode"`
+	DatasetCachePolicy    *string `gorm:"column:dataset_cache_policy"`
+	SubmissionOrigin      string
+	ExternalSubmissionID  string
+	Name                  string `gorm:"index"`
+	SpecJSON              string `gorm:"type:jsonb"`
+	DesiredState          string `gorm:"index"`
+	ObservedState         string `gorm:"index"`
+	StatusReason          string
+	StatusMessage         string
+	KubernetesNS          string
+	RayJobName            string
+	RayJobUID             string
+	RayClusterName        string
+	ResourceVersion       string
+	TrainingEngine        string
+	RayVersion            string
+	ClusterAttempt        int
+	WorkerRestartCount    int
+	ResumeCheckpointID    string
+	ParentJobID           string
+	RetryCount            int
+	TimeoutSeconds        int64
+	CleanupJSON           string `gorm:"type:jsonb"`
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	LastObservedAt        *time.Time
+	StartedAt             *time.Time
+	FinishedAt            *time.Time
+	ArchivedAt            *time.Time `gorm:"index"`
 }
 
 type OutboxRecord struct {
