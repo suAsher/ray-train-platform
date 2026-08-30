@@ -30,9 +30,9 @@ if grep -Fq 'shapely==1.8.5.post1' "$dockerfile"; then
   echo 'post-release Shapely is outside nuscenes-devkit 1.1.10 constraint' >&2
   exit 1
 fi
-grep -Fq 'opencv-python-headless==4.10.0.84' "$dockerfile"
-if grep -Eq '(^|[[:space:]])opencv-python==' "$dockerfile"; then
-  echo 'canary must install only the headless OpenCV wheel' >&2
+grep -Fq 'opencv-python==4.10.0.84' "$dockerfile"
+if grep -Fq 'opencv-python-headless' "$dockerfile"; then
+  echo 'nuscenes requires the GUI OpenCV distribution; do not also install headless' >&2
   exit 1
 fi
 grep -Fq 'COPY images/bevfusion-runtime/constraints-ray258.txt /opt/raytrain-build/constraints-ray258.txt' "$dockerfile"

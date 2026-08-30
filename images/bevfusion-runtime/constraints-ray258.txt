@@ -169,7 +169,7 @@ oauthlib==3.2.2
 onnx==1.16.2
 opencensus-context==0.1.3
 opencensus==0.11.3
-opencv-python-headless==4.10.0.84
+opencv-python==4.10.0.84
 opentelemetry-api==1.44.0
 opentelemetry-exporter-otlp-proto-common==1.44.0
 opentelemetry-exporter-otlp-proto-grpc==1.44.0
@@ -290,4 +290,3 @@ xxhash==4.0.1
 yapf==0.40.1
 yarl==1.24.5
 zipp==4.1.0
-
