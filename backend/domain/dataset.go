@@ -282,6 +282,10 @@ func validateDatasetRelativePath(name, value string) error {
 	if value == "" || len(value) > DatasetPathMaxBytes || strings.TrimSpace(value) != value || strings.IndexFunc(value, unicode.IsControl) >= 0 || strings.Contains(value, `\`) || path.IsAbs(value) || path.Clean(value) != value || value == "." {
 		return fmt.Errorf("%s must be a clean relative path", name)
 	}
+	unescaped, err := url.PathUnescape(value)
+	if err != nil || unescaped != value {
+		return fmt.Errorf("%s must not contain URL escapes", name)
+	}
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Scheme != "" || parsed.Host != "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return fmt.Errorf("%s must not be a URI", name)
