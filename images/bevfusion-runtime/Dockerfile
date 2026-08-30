@@ -99,11 +99,11 @@ COPY images/workspace/raytrain_runtime /usr/local/lib/raytrain-platform/raytrain
 COPY examples/bevfusion/raytrain-bevfusion-prepare-runtime.sh /usr/local/bin/raytrain-bevfusion-prepare
 COPY examples/bevfusion/patches/ray_data_s1h.py /usr/local/lib/raytrain-platform/bevfusion/ray_data_s1h.py
 RUN chmod 0755 /usr/local/bin/raytrain-launch /usr/local/bin/raytrain-managed /usr/local/bin/raytrain-bevfusion-prepare \
+ && install -d -o ray -g users /workspace \
  && python3 -c "import pathlib, site; pathlib.Path(site.getsitepackages()[0], 'raytrain_bevfusion_canary.pth').write_text('/opt/bevfusion\\n/usr/local/lib/raytrain-platform\\n/usr/local/lib/raytrain-platform/bevfusion\\n', encoding='utf-8')" \
  && python3 -c "import mmcv, mmdet, mmdet3d, pyarrow, ray, torch; assert ray.__version__ == '${RAY_CANARY_VERSION}'; assert torch.__version__.startswith('2.4.1')" \
  && python3 -c "from mmdet3d.ops.voxel import voxel_layer; import raytrain_runtime.managed_driver, raytrain_runtime.ray_data, ray_data_s1h" \
- && python3 -m pip check \
- && chown -R ray:users /home/ray /opt/bevfusion
+ && python3 -m pip check
 
 ENV RAY_TRAIN_V2_ENABLED=1
 ENV PLATFORM_TRAINING_ENGINE=ray-train
