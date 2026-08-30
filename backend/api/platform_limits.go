@@ -21,6 +21,7 @@ type platformLimitsResponse struct {
 	ExecutionProfiles []executionProfileDescriptor `json:"executionProfiles"`
 	Cache             cachePolicyDescriptor        `json:"cache"`
 	Runtime           runtimeCapabilityDescriptor  `json:"runtime"`
+	Datasets          datasetCapabilityDescriptor  `json:"datasets"`
 }
 
 type runtimeCapabilityDescriptor struct {
@@ -29,6 +30,16 @@ type runtimeCapabilityDescriptor struct {
 	CanaryRayVersion     string   `json:"canaryRayVersion"`
 	ManagedEnabled       bool     `json:"managedEnabled"`
 	CanaryEnabled        bool     `json:"canaryEnabled"`
+}
+
+// datasetCapabilityDescriptor is deliberately fail-closed. The Portal must
+// not render a versioned-data workflow merely because migrations exist: both
+// the deployment flag and the dependency that serves the operation must be
+// available to this backend revision.
+type datasetCapabilityDescriptor struct {
+	VersioningEnabled bool `json:"versioningEnabled"`
+	StreamingEnabled  bool `json:"streamingEnabled"`
+	PublisherEnabled  bool `json:"publisherEnabled"`
 }
 
 type cachePolicyDescriptor struct {
@@ -112,7 +123,19 @@ func (h *Handler) platformLimits(c *gin.Context) {
 		ExecutionProfiles: executionProfileDescriptors(limits),
 		Cache:             cachePolicyDescriptorFor(h.localCache),
 		Runtime:           runtimeCapabilityDescriptorFor(h.runtimePolicy.EffectiveForTenant(principal.TenantID)),
+		Datasets:          datasetCapabilityDescriptorFor(h),
 	})
+}
+
+func datasetCapabilityDescriptorFor(handler *Handler) datasetCapabilityDescriptor {
+	if handler == nil || handler.datasets == nil || !handler.datasetVersioningEnabled {
+		return datasetCapabilityDescriptor{}
+	}
+	return datasetCapabilityDescriptor{
+		VersioningEnabled: true,
+		StreamingEnabled:  handler.rayDataStreamingEnabled,
+		PublisherEnabled:  handler.datasetPublications != nil,
+	}
 }
 
 func runtimeCapabilityDescriptorFor(policy runtimecatalog.Policy) runtimeCapabilityDescriptor {

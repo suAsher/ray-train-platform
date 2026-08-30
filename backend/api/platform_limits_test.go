@@ -130,6 +130,51 @@ func TestPlatformLimitsExposeEffectiveRuntimeCapabilities(t *testing.T) {
 	})
 }
 
+func TestPlatformLimitsExposeDatasetCapabilitiesFailClosed(t *testing.T) {
+	principal := auth.Principal{Subject: "admin", TenantID: "local", Roles: []string{domain.RoleSuperAdmin}, AuthType: auth.AuthTypeLocal}
+
+	t.Run("disabled by default", func(t *testing.T) {
+		handler := NewHandler(&fakeJobRepository{}, Options{Datasets: &fakeDatasetCatalog{}})
+		response := httptest.NewRecorder()
+		limitsRouter(handler, &principal).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/limits", nil))
+
+		capabilities := decodePlatformLimits(t, response.Body.Bytes()).Datasets
+		if capabilities.VersioningEnabled || capabilities.StreamingEnabled || capabilities.PublisherEnabled {
+			t.Fatalf("dataset capabilities must fail closed: %+v", capabilities)
+		}
+	})
+
+	t.Run("enabled only when dependencies and flags are available", func(t *testing.T) {
+		handler := NewHandler(&fakeJobRepository{}, Options{
+			Datasets:                 &fakeDatasetCatalog{},
+			DatasetPublications:      &fakeDatasetPublicationManager{},
+			DatasetVersioningEnabled: true,
+			RayDataStreamingEnabled:  true,
+		})
+		response := httptest.NewRecorder()
+		limitsRouter(handler, &principal).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/limits", nil))
+
+		capabilities := decodePlatformLimits(t, response.Body.Bytes()).Datasets
+		if !capabilities.VersioningEnabled || !capabilities.StreamingEnabled || !capabilities.PublisherEnabled {
+			t.Fatalf("enabled dataset capabilities are missing: %+v", capabilities)
+		}
+	})
+
+	t.Run("missing catalogue or publisher stays disabled", func(t *testing.T) {
+		handler := NewHandler(&fakeJobRepository{}, Options{
+			DatasetVersioningEnabled: true,
+			RayDataStreamingEnabled:  true,
+		})
+		response := httptest.NewRecorder()
+		limitsRouter(handler, &principal).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/limits", nil))
+
+		capabilities := decodePlatformLimits(t, response.Body.Bytes()).Datasets
+		if capabilities.VersioningEnabled || capabilities.StreamingEnabled || capabilities.PublisherEnabled {
+			t.Fatalf("missing dependencies were advertised: %+v", capabilities)
+		}
+	})
+}
+
 func TestPlatformLimitsScopeManagedAndCanaryCapabilitiesToCallerTenant(t *testing.T) {
 	handler := NewHandler(&fakeJobRepository{}, Options{
 		RuntimePolicy: runtimecatalog.NewPolicy(false, true, []string{"tenant-a"}, []string{"tenant-a", "tenant-b"}),
