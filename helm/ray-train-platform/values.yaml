@@ -53,6 +53,11 @@ backend:
   appEnv: production
   oidcRequired: true
   demoMode: false
+  # Configuration-only gates for versioned Ray Data training. They stay off
+  # until the supporting API and domain components are deployed separately.
+  datasetVersioningEnabled: false
+  rayDataStreamingEnabled: false
+  datasetInternalPrefix: ray-train/platform/datasets
   # Disabled: user workloads use Git or immutable workspace snapshots, so no
   # object-store credential is ever injected into a Ray Pod.
   sourceArtifactsEnabled: false

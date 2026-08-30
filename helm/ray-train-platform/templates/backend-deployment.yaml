@@ -267,6 +267,12 @@ spec:
               value: {{ join "," .Values.backend.corsOrigins | quote }}
             - name: RAY_VERSION
               value: {{ .Values.backend.rayVersion | quote }}
+            - name: DATASET_VERSIONING_ENABLED
+              value: {{ default false .Values.backend.datasetVersioningEnabled | quote }}
+            - name: RAY_DATA_STREAMING_ENABLED
+              value: {{ default false .Values.backend.rayDataStreamingEnabled | quote }}
+            - name: DATASET_INTERNAL_PREFIX
+              value: {{ default "ray-train/platform/datasets" .Values.backend.datasetInternalPrefix | quote }}
             - name: RAY_TRAIN_MANAGED_ENABLED
               value: {{ .Values.rayTrain.managedEnabled | quote }}
             - name: RAY_TRAIN_MANAGED_TENANTS

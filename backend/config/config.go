@@ -40,6 +40,9 @@ type Config struct {
 	IDCDataSpacesEnabled             bool
 	IDCDataSpacesMountCapacity       string
 	IDCDataSpaceSources              map[string]IDCDataSpaceSource
+	DatasetVersioningEnabled         bool
+	RayDataStreamingEnabled          bool
+	DatasetInternalPrefix            string
 	LocalCacheStorageClass           string
 	LocalCacheStorageClassData1      string
 	LocalCacheStorageClassData2      string
@@ -152,6 +155,7 @@ func Load() (Config, error) {
 		DataSpacesMountCapacity:     strings.TrimSpace(os.Getenv("DATA_SPACES_MOUNT_CAPACITY")),
 		DataSpacesPublicRoot:        envOr("DATA_SPACES_PUBLIC_ROOT", domain.DefaultPublicDataRoot),
 		IDCDataSpacesMountCapacity:  strings.TrimSpace(os.Getenv("IDC_DATA_SPACES_MOUNT_CAPACITY")),
+		DatasetInternalPrefix:       envOr("DATASET_INTERNAL_PREFIX", "ray-train/platform/datasets"),
 		RayVersion:                  envOr("RAY_VERSION", "2.35.0"),
 		RayTrainManagedTenants:      splitUniqueList(os.Getenv("RAY_TRAIN_MANAGED_TENANTS")),
 		RayTrainCanaryTenants:       splitUniqueList(os.Getenv("RAY_TRAIN_CANARY_TENANTS")),
@@ -249,6 +253,12 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.IDCDataSpacesEnabled, err = parseBool("IDC_DATA_SPACES_ENABLED", false); err != nil {
+		return Config{}, err
+	}
+	if cfg.DatasetVersioningEnabled, err = parseBool("DATASET_VERSIONING_ENABLED", false); err != nil {
+		return Config{}, err
+	}
+	if cfg.RayDataStreamingEnabled, err = parseBool("RAY_DATA_STREAMING_ENABLED", false); err != nil {
 		return Config{}, err
 	}
 	if raw := strings.TrimSpace(os.Getenv("IDC_DATA_SPACES_SOURCES_JSON")); raw != "" {

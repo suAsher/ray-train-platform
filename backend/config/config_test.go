@@ -161,6 +161,61 @@ func TestLoadRejectsInvalidRayTrainRuntimeFlags(t *testing.T) {
 	}
 }
 
+func TestLoadDatasetVersioningAndRayDataStreamingDefaults(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("DATASET_VERSIONING_ENABLED", "")
+	t.Setenv("RAY_DATA_STREAMING_ENABLED", "")
+	t.Setenv("DATASET_INTERNAL_PREFIX", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load dataset feature defaults: %v", err)
+	}
+	if cfg.DatasetVersioningEnabled || cfg.RayDataStreamingEnabled {
+		t.Fatalf("dataset feature flags must default off: versioning=%t streaming=%t", cfg.DatasetVersioningEnabled, cfg.RayDataStreamingEnabled)
+	}
+	if cfg.DatasetInternalPrefix != "ray-train/platform/datasets" {
+		t.Fatalf("unexpected dataset internal prefix default: %q", cfg.DatasetInternalPrefix)
+	}
+}
+
+func TestLoadDatasetVersioningAndRayDataStreamingOverrides(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("DATASET_VERSIONING_ENABLED", "true")
+	t.Setenv("RAY_DATA_STREAMING_ENABLED", "true")
+	t.Setenv("DATASET_INTERNAL_PREFIX", "private/platform/datasets")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load dataset feature overrides: %v", err)
+	}
+	if !cfg.DatasetVersioningEnabled || !cfg.RayDataStreamingEnabled {
+		t.Fatalf("dataset feature flag overrides were not retained: versioning=%t streaming=%t", cfg.DatasetVersioningEnabled, cfg.RayDataStreamingEnabled)
+	}
+	if cfg.DatasetInternalPrefix != "private/platform/datasets" {
+		t.Fatalf("dataset internal prefix override = %q", cfg.DatasetInternalPrefix)
+	}
+}
+
+func TestLoadRejectsInvalidDatasetVersioningAndRayDataStreamingFlags(t *testing.T) {
+	for _, envName := range []string{"DATASET_VERSIONING_ENABLED", "RAY_DATA_STREAMING_ENABLED"} {
+		t.Run(envName, func(t *testing.T) {
+			t.Setenv("APP_ENV", "development")
+			t.Setenv("PAT_ENABLED", "false")
+			t.Setenv("DATASET_VERSIONING_ENABLED", "")
+			t.Setenv("RAY_DATA_STREAMING_ENABLED", "")
+			t.Setenv(envName, "enabled")
+
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), envName) {
+				t.Fatalf("expected invalid %s error, got %v", envName, err)
+			}
+		})
+	}
+}
+
 func TestLoadKeepsDataSpaceMountsDisabledUntilExplicitlyEnabled(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("PAT_ENABLED", "false")
