@@ -241,6 +241,13 @@ func (client *Client) SubmitDirectoryWithRequestID(ctx context.Context, director
 		return Job{}, err
 	}
 	spec = resolved
+	if spec.DataMode == domain.DataModeStreaming {
+		resolved, _, err = client.PreflightStreaming(ctx, spec)
+		if err != nil {
+			return Job{}, err
+		}
+		spec = resolved
+	}
 	archive, err := BuildArchive(directory)
 	if err != nil {
 		return Job{}, err
@@ -264,7 +271,7 @@ func (client *Client) preflightManagedImage(ctx context.Context, spec domain.Job
 	if err != nil {
 		return domain.JobSpec{}, err
 	}
-	selected, err := managedImage(images, spec.Image, limits.Runtime)
+	selected, err := managedImageForDataMode(images, spec.Image, limits.Runtime, spec.DataMode)
 	if err != nil {
 		return domain.JobSpec{}, err
 	}
@@ -417,6 +424,12 @@ func (client *Client) Submit(ctx context.Context, spec domain.JobSpec) (Job, err
 	resolved, err := client.preflightManagedImage(ctx, spec)
 	if err != nil {
 		return Job{}, err
+	}
+	if resolved.DataMode == domain.DataModeStreaming {
+		resolved, _, err = client.PreflightStreaming(ctx, resolved)
+		if err != nil {
+			return Job{}, err
+		}
 	}
 	return client.submit(ctx, resolved, "")
 }

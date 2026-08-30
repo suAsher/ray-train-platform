@@ -1,0 +1,29 @@
+{{- /*
+Publisher-owned resources need names that remain distinct across Helm releases.
+Keep short names readable; retain a hash when the DNS label must be truncated.
+*/ -}}
+{{- define "ray-train-platform.datasetPublisher.resourceName" -}}
+{{- $root := index . 0 -}}
+{{- $suffix := index . 1 -}}
+{{- $base := printf "%s-%s-dataset-publisher" $root.Release.Name (include "ray-train-platform.name" $root) | lower -}}
+{{- $raw := $base -}}
+{{- if $suffix -}}
+{{- $raw = printf "%s-%s" $base $suffix -}}
+{{- end -}}
+{{- if gt (len $raw) 63 -}}
+{{- printf "%s-%s" ($raw | trunc 54 | trimSuffix "-") ($raw | sha256sum | trunc 8) -}}
+{{- else -}}
+{{- $raw | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* Encode a deployment-owned label map in the backend config parser's
+comma-separated key=value format. Keys are sorted for deterministic rollouts. */ -}}
+{{- define "ray-train-platform.datasetPublisher.labelSelector" -}}
+{{- $selector := default (dict) . -}}
+{{- $pairs := list -}}
+{{- range $key := keys $selector | sortAlpha -}}
+{{- $pairs = append $pairs (printf "%s=%v" $key (get $selector $key)) -}}
+{{- end -}}
+{{- join "," $pairs -}}
+{{- end -}}

@@ -25,12 +25,14 @@ from raytrain_publisher.pack import (  # noqa: E402
     MIN_SHARD_BYTES,
     PackConfig,
     build_argument_parser,
+    build_cbgs_sample_plan,
     build_manifest,
     build_partition_summary,
     dump_trusted_index,
     estimate_row_bytes,
     iter_prepared_shard_plans,
     load_trusted_index,
+    load_trusted_index_document,
     plan_row_groups,
     plan_shards,
     prepare_rows,
@@ -61,14 +63,14 @@ class TrustedIndexAndInputTests(unittest.TestCase):
             "token": token,
             "scene": scene,
             "split": split,
-            "class_ids": [2, 1],
+            "class_ids": [0],
             "timestamp": timestamp,
             "lidar_path": lidar_path,
             "point_columns": 5,
             "info": {
                 "lidar_feature_count": 5,
-                "labels": [2, 1],
-                "pose": {"translation": [1.0, 2.0, 3.0]},
+                "boxes": [[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 0.25]],
+                "labels": [0],
             },
         }
 
@@ -85,11 +87,56 @@ class TrustedIndexAndInputTests(unittest.TestCase):
     def test_trusted_index_round_trip_requires_explicit_publisher_envelope(self) -> None:
         samples = [self._sample("token-a", "scene-a", 20, "scene-a/a.bin")]
 
-        encoded = dump_trusted_index(samples)
+        encoded = dump_trusted_index(samples, class_count=1, cbgs_seed=17)
 
         self.assertEqual(load_trusted_index(encoded), samples)
+        document = load_trusted_index_document(encoded)
+        self.assertEqual(document.class_count, 1)
+        self.assertEqual(document.cbgs_seed, 17)
+        self.assertEqual(list(document.samples), samples)
         with self.assertRaisesRegex(pickle.UnpicklingError, "trusted publisher"):
             load_trusted_index(pickle.dumps(samples))
+
+    def test_trusted_index_requires_explicit_cbgs_contract(self) -> None:
+        samples = [self._sample("token-a", "scene-a", 20, "scene-a/a.bin")]
+
+        with self.assertRaisesRegex(TypeError, "class_count"):
+            dump_trusted_index(samples)
+        with self.assertRaisesRegex(ValueError, "class_count"):
+            dump_trusted_index(samples, class_count=0)
+        with self.assertRaisesRegex(ValueError, "seed"):
+            dump_trusted_index(samples, class_count=1, cbgs_seed=-1)
+
+    def test_cbgs_plan_matches_legacy_reference_order_without_payload_copy(self) -> None:
+        def sample(token: str, scene: str, timestamp: int, class_ids: list[int], *, split: str = "train") -> dict:
+            value = self._sample(token, scene, timestamp, f"{scene}/{token}.bin", split=split)
+            return {
+                **value,
+                "class_ids": class_ids,
+                "info": {
+                    **value["info"],
+                    "boxes": value["info"]["boxes"] * len(class_ids),
+                    "labels": class_ids,
+                },
+            }
+
+        samples = [
+            sample("a", "scene-a", 1, [0]),
+            sample("b", "scene-b", 2, [0, 1]),
+            sample("c", "scene-c", 3, [1]),
+            sample("val", "scene-v", 4, [0], split="val"),
+        ]
+
+        planned = build_cbgs_sample_plan(samples, class_count=2, seed=23)
+
+        class_indices = {0: [0, 1], 1: [1, 2]}
+        random = np.random.RandomState(23)
+        expected = []
+        for indices in class_indices.values():
+            expected.extend(samples[index]["token"] for index in random.choice(indices, 2))
+        self.assertEqual([sample["token"] for sample in planned], expected)
+        self.assertTrue(all(sample["split"] == "train" for sample in planned))
+        self.assertIs(planned[0], next(sample for sample in samples if sample["token"] == expected[0]))
 
     def test_prepare_rows_is_lidar_only_sorted_and_byte_exact(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -152,6 +199,20 @@ class TrustedIndexAndInputTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "point_columns"):
                 prepare_rows([{**sample, "point_columns": 3}], input_root=input_root)
+
+            mismatched_labels = {
+                **sample,
+                "info": {**sample["info"], "labels": [1]},
+            }
+            with self.assertRaisesRegex(ValueError, "labels.*class_ids"):
+                prepare_rows([mismatched_labels], input_root=input_root)
+
+            with_pose = {
+                **sample,
+                "info": {**sample["info"], "pose": {"translation": [1.0, 2.0, 3.0]}},
+            }
+            with self.assertRaisesRegex(ValueError, "fields"):
+                prepare_rows([with_pose], input_root=input_root)
 
     def test_prepare_rows_rejects_nested_camera_and_internal_location_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -392,7 +453,7 @@ class ParquetPublicationTests(TrustedIndexAndInputTests):
             for index, sample in enumerate(samples):
                 self._write_points(input_root / sample["lidar_path"], float(index + 1))
             index_path = input_root / "index.pkl"
-            index_path.write_bytes(dump_trusted_index(samples))
+            index_path.write_bytes(dump_trusted_index(samples, class_count=1))
             output_dir = workspace / "output"
             config = PackConfig(target_shard_bytes=1024, target_row_group_bytes=256)
 
@@ -481,7 +542,10 @@ class ContainerContractTests(unittest.TestCase):
         dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
         dockerignore = (PROJECT_ROOT / ".dockerignore").read_text(encoding="utf-8")
 
-        self.assertEqual(requirements, ["numpy==2.3.5", "pyarrow==25.0.1"])
+        self.assertEqual(
+            requirements,
+            ["numpy==2.3.5", "pyarrow==25.0.1", "tos==2.9.2"],
+        )
         self.assertIn("ARG PYTHON_BASE_IMAGE=", dockerfile)
         self.assertIn("FROM ${PYTHON_BASE_IMAGE}", dockerfile)
         self.assertIn("COPY requirements.txt /app/requirements.txt", dockerfile)

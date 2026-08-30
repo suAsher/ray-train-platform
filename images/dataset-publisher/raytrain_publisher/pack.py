@@ -34,7 +34,7 @@ from .input_security import (
 )
 
 
-TRUSTED_INDEX_FORMAT = "trusted-index-v1"
+TRUSTED_INDEX_FORMAT = "trusted-index-v2"
 MIB = 1024 * 1024
 MIN_SHARD_BYTES = 256 * MIB
 MAX_SHARD_BYTES = 512 * MIB
@@ -48,6 +48,8 @@ _INDEX_REQUIRED_FIELDS = frozenset(
     {"token", "scene", "split", "class_ids", "timestamp", "lidar_path", "info"}
 )
 _INDEX_OPTIONAL_FIELDS = frozenset({"point_columns"})
+_MAX_CLASS_COUNT = 1 << 15
+_MAX_CBGS_SEED = int(np.iinfo(np.uint32).max)
 
 
 @dataclass(frozen=True)
@@ -63,6 +65,15 @@ class PackConfig:
             raise ValueError("target row group bytes must not exceed target shard bytes")
         if self.compression not in {"zstd", "none"}:
             raise ValueError("compression must be zstd or none")
+
+
+@dataclass(frozen=True)
+class TrustedIndexDocument:
+    """Publisher-owned sample order and immutable CBGS contract."""
+
+    samples: tuple[dict[str, Any], ...]
+    class_count: int
+    cbgs_seed: int
 
 
 @dataclass(frozen=True)
@@ -663,28 +674,129 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def dump_trusted_index(samples: object) -> bytes:
+def dump_trusted_index(
+    samples: object,
+    *,
+    class_count: int,
+    cbgs_seed: int = 0,
+) -> bytes:
     """Serialize the publisher's explicit sample-index structure."""
 
     if type(samples) is not list:
         raise ValueError("trusted index samples must be an explicit list")
+    _validate_cbgs_contract(class_count=class_count, seed=cbgs_seed)
     return dump_trusted_info(
-        {"index_format": TRUSTED_INDEX_FORMAT, "samples": samples}
+        {
+            "index_format": TRUSTED_INDEX_FORMAT,
+            "class_count": class_count,
+            "cbgs_seed": cbgs_seed,
+            "samples": samples,
+        }
     )
 
 
 def load_trusted_index(payload: object) -> list[dict[str, Any]]:
     """Load an index through the restricted trusted-info unpickler."""
 
+    document = load_trusted_index_document(payload)
+    return [dict(sample) for sample in document.samples]
+
+
+def load_trusted_index_document(payload: object) -> TrustedIndexDocument:
+    """Load the explicit v2 index and its publisher-side CBGS policy."""
+
     envelope = load_trusted_info(payload)
-    if set(envelope) != {"index_format", "samples"}:
+    if set(envelope) != {
+        "index_format",
+        "class_count",
+        "cbgs_seed",
+        "samples",
+    }:
         raise ValueError("trusted publisher index structure is invalid")
     if envelope["index_format"] != TRUSTED_INDEX_FORMAT:
         raise ValueError("trusted publisher index format is unsupported")
+    class_count, cbgs_seed = _validate_cbgs_contract(
+        class_count=envelope["class_count"],
+        seed=envelope["cbgs_seed"],
+    )
     samples = envelope["samples"]
     if type(samples) is not list or any(type(sample) is not dict for sample in samples):
         raise ValueError("trusted publisher index samples must be explicit dictionaries")
-    return samples
+    return TrustedIndexDocument(
+        samples=tuple(dict(sample) for sample in samples),
+        class_count=class_count,
+        cbgs_seed=cbgs_seed,
+    )
+
+
+def build_cbgs_sample_plan(
+    samples: Iterable[Mapping[str, Any]],
+    *,
+    class_count: int,
+    seed: int,
+) -> tuple[Mapping[str, Any], ...]:
+    """Build the legacy-equivalent train order from lightweight references.
+
+    The returned values reference caller-owned sample metadata and may repeat.
+    Parquet payload rows remain stored once.
+    """
+
+    class_count, seed = _validate_cbgs_contract(
+        class_count=class_count,
+        seed=seed,
+    )
+    original = tuple(samples)
+    normalized = tuple(_validate_index_sample(sample) for sample in original)
+    tokens = tuple(sample["token"] for sample in normalized)
+    if len(tokens) != len(set(tokens)):
+        raise ValueError("trusted index contains a duplicate token")
+
+    train_pairs = tuple(
+        (source, validated)
+        for source, validated in zip(original, normalized)
+        if validated["split"] == "train"
+    )
+    if not train_pairs:
+        raise ValueError("CBGS requires at least one train sample")
+    class_sample_indices = {class_id: [] for class_id in range(class_count)}
+    for index, (_source, sample) in enumerate(train_pairs):
+        for class_id in sample["class_ids"]:
+            if class_id not in class_sample_indices:
+                raise ValueError("sample class ID is outside the configured class range")
+            class_sample_indices[class_id].append(index)
+    for class_id, indexes in class_sample_indices.items():
+        if not indexes:
+            raise ValueError(f"CBGS class {class_id} has no samples")
+
+    duplicated_samples = sum(len(indexes) for indexes in class_sample_indices.values())
+    fraction = 1.0 / class_count
+    random = np.random.RandomState(seed)
+    selected: list[Mapping[str, Any]] = []
+    for indexes in class_sample_indices.values():
+        distribution = len(indexes) / duplicated_samples
+        count = int(len(indexes) * (fraction / distribution))
+        selected.extend(
+            train_pairs[int(index)][0] for index in random.choice(indexes, count)
+        )
+    return tuple(selected)
+
+
+def _validate_cbgs_contract(*, class_count: object, seed: object) -> tuple[int, int]:
+    if (
+        isinstance(class_count, bool)
+        or not isinstance(class_count, int)
+        or class_count <= 0
+        or class_count > _MAX_CLASS_COUNT
+    ):
+        raise ValueError("class_count must be between 1 and 32768")
+    if (
+        isinstance(seed, bool)
+        or not isinstance(seed, int)
+        or seed < 0
+        or seed > _MAX_CBGS_SEED
+    ):
+        raise ValueError("CBGS seed must fit an unsigned 32-bit integer")
+    return class_count, seed
 
 
 def prepare_rows(
@@ -734,6 +846,8 @@ def _validate_index_sample(sample: object) -> dict[str, Any]:
         class_ids=sample["class_ids"],
         timestamp=sample["timestamp"],
     )
+    if set(info["labels"]) != set(metadata["class_ids"]):
+        raise ValueError("info labels must match top-level class_ids")
     return {**sample, **metadata, "point_columns": point_columns}
 
 

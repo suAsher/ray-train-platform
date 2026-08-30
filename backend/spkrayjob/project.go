@@ -28,11 +28,55 @@ func parseDataMode(value string, cache projectCache) (domain.DataMode, error) {
 		return domain.DataModeMount, nil
 	}
 	switch mode {
-	case domain.DataModeMount, domain.DataModeCache, domain.DataModeRayData, domain.DataModeRayDataStage:
+	case domain.DataModeMount, domain.DataModeCache, domain.DataModeRayData, domain.DataModeRayDataStage, domain.DataModeStreaming:
 		return mode, nil
 	default:
-		return "", fmt.Errorf("不支持的数据模式 %q；可选值为 mount、cache、ray-data-stage 或 ray-data", value)
+		return "", fmt.Errorf("不支持的数据模式 %q；可选值为 mount、cache、ray-data-stage、ray-data 或 streaming", value)
 	}
+}
+
+type datasetFlagOverride struct {
+	Reference       domain.DatasetReference
+	DatasetProvided bool
+	VersionProvided bool
+}
+
+// parseDatasetFlag supports both the explicit two-flag form and the concise
+// DATASET:VERSION form documented for daily submissions. Dataset references
+// remain public catalogue identifiers; object-store paths are rejected later
+// by the shared domain validator rather than being translated by the client.
+func parseDatasetFlag(datasetValue, versionValue string, datasetProvided, versionProvided bool) (datasetFlagOverride, error) {
+	override := datasetFlagOverride{
+		Reference: domain.DatasetReference{
+			Dataset: strings.TrimSpace(datasetValue),
+			Version: strings.TrimSpace(versionValue),
+		},
+		DatasetProvided: datasetProvided,
+		VersionProvided: versionProvided,
+	}
+	if !datasetProvided {
+		return override, nil
+	}
+	if strings.ContainsAny(override.Reference.Dataset, "/\\") {
+		return datasetFlagOverride{}, fmt.Errorf("--dataset 只接受公开数据集 ID/slug，不能传对象存储或 manifest 路径")
+	}
+	if !strings.Contains(override.Reference.Dataset, ":") {
+		return override, nil
+	}
+	if strings.Count(override.Reference.Dataset, ":") != 1 {
+		return datasetFlagOverride{}, fmt.Errorf("--dataset 必须是 DATASET 或 DATASET:VERSION，不能是对象存储路径")
+	}
+	if versionProvided {
+		return datasetFlagOverride{}, fmt.Errorf("--dataset 中已包含版本时不能再传 --dataset-version")
+	}
+	parts := strings.SplitN(override.Reference.Dataset, ":", 2)
+	dataset, version := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+	if dataset == "" || version == "" {
+		return datasetFlagOverride{}, fmt.Errorf("--dataset 简写必须同时包含数据集和版本：DATASET:VERSION")
+	}
+	override.Reference = domain.DatasetReference{Dataset: dataset, Version: version}
+	override.VersionProvided = true
+	return override, nil
 }
 
 // projectFileName is committed next to the training code. It turns the daily
@@ -57,21 +101,23 @@ type projectRayData struct {
 }
 
 type project struct {
-	Name            string          `json:"name,omitempty"`
-	Image           string          `json:"image,omitempty"`
-	Entrypoint      string          `json:"entrypoint,omitempty"`
-	Engine          string          `json:"engine,omitempty"`
-	DataMode        string          `json:"dataMode,omitempty"`
-	Workers         int             `json:"workers,omitempty"`
-	GPUsPerWorker   int             `json:"gpusPerWorker,omitempty"`
-	CPUPerWorker    int64           `json:"cpuPerWorker,omitempty"`
-	MemoryPerWorker string          `json:"memoryPerWorker,omitempty"`
-	ExecutionMode   string          `json:"executionMode,omitempty"`
-	Cache           projectCache    `json:"cache,omitempty"`
-	RayData         projectRayData  `json:"rayData,omitempty"`
-	Input           projectLocation `json:"input,omitempty"`
-	Checkpoint      projectLocation `json:"checkpoint,omitempty"`
-	Output          projectLocation `json:"output,omitempty"`
+	Name            string                    `json:"name,omitempty"`
+	Image           string                    `json:"image,omitempty"`
+	Entrypoint      string                    `json:"entrypoint,omitempty"`
+	Engine          string                    `json:"engine,omitempty"`
+	DataMode        string                    `json:"dataMode,omitempty"`
+	DatasetRef      domain.DatasetReference   `json:"datasetRef,omitempty"`
+	CachePolicy     domain.DatasetCachePolicy `json:"cachePolicy,omitempty"`
+	Workers         int                       `json:"workers,omitempty"`
+	GPUsPerWorker   int                       `json:"gpusPerWorker,omitempty"`
+	CPUPerWorker    int64                     `json:"cpuPerWorker,omitempty"`
+	MemoryPerWorker string                    `json:"memoryPerWorker,omitempty"`
+	ExecutionMode   string                    `json:"executionMode,omitempty"`
+	Cache           projectCache              `json:"cache,omitempty"`
+	RayData         projectRayData            `json:"rayData,omitempty"`
+	Input           projectLocation           `json:"input,omitempty"`
+	Checkpoint      projectLocation           `json:"checkpoint,omitempty"`
+	Output          projectLocation           `json:"output,omitempty"`
 }
 
 // submitOverrides carries the flags a caller actually typed. The provided*
@@ -83,6 +129,8 @@ type submitOverrides struct {
 	Entrypoint      string
 	Engine          string
 	DataMode        string
+	DatasetRef      domain.DatasetReference
+	CachePolicy     domain.DatasetCachePolicy
 	Workers         int
 	GPUsPerWorker   int
 	CPUPerWorker    int64
@@ -94,23 +142,26 @@ type submitOverrides struct {
 	Checkpoint      projectLocation
 	Output          projectLocation
 
-	providedName         bool
-	providedImage        bool
-	providedEntrypoint   bool
-	providedEngine       bool
-	providedDataMode     bool
-	providedWorkers      bool
-	providedGPUs         bool
-	providedCPU          bool
-	providedMemory       bool
-	providedMode         bool
-	providedCacheMode    bool
-	providedCacheSize    bool
-	providedCachePreload bool
-	providedRayData      bool
-	providedInput        bool
-	providedCheckpoint   bool
-	providedOutput       bool
+	providedName           bool
+	providedImage          bool
+	providedEntrypoint     bool
+	providedEngine         bool
+	providedDataMode       bool
+	providedDataset        bool
+	providedDatasetVersion bool
+	providedCachePolicy    bool
+	providedWorkers        bool
+	providedGPUs           bool
+	providedCPU            bool
+	providedMemory         bool
+	providedMode           bool
+	providedCacheMode      bool
+	providedCacheSize      bool
+	providedCachePreload   bool
+	providedRayData        bool
+	providedInput          bool
+	providedCheckpoint     bool
+	providedOutput         bool
 }
 
 func (base project) merge(overrides submitOverrides) project {
@@ -129,6 +180,15 @@ func (base project) merge(overrides submitOverrides) project {
 	}
 	if overrides.providedDataMode {
 		merged.DataMode = overrides.DataMode
+	}
+	if overrides.providedDataset {
+		merged.DatasetRef.Dataset = overrides.DatasetRef.Dataset
+	}
+	if overrides.providedDatasetVersion {
+		merged.DatasetRef.Version = overrides.DatasetRef.Version
+	}
+	if overrides.providedCachePolicy {
+		merged.CachePolicy = overrides.CachePolicy
 	}
 	if overrides.providedWorkers {
 		merged.Workers = overrides.Workers
@@ -227,21 +287,23 @@ func yamlMappingValue(mapping *yamlv3.Node, key string) *yamlv3.Node {
 // pointers so an unset one is omitted entirely: a starter file that greets the
 // user with `input: {}` reads like a broken template rather than a default.
 type starterProject struct {
-	Name            string           `json:"name,omitempty"`
-	Image           string           `json:"image,omitempty"`
-	Entrypoint      string           `json:"entrypoint,omitempty"`
-	Engine          string           `json:"engine,omitempty"`
-	DataMode        string           `json:"dataMode,omitempty"`
-	Workers         int              `json:"workers,omitempty"`
-	GPUsPerWorker   int              `json:"gpusPerWorker,omitempty"`
-	CPUPerWorker    int64            `json:"cpuPerWorker,omitempty"`
-	MemoryPerWorker string           `json:"memoryPerWorker,omitempty"`
-	ExecutionMode   string           `json:"executionMode,omitempty"`
-	Cache           *projectCache    `json:"cache,omitempty"`
-	RayData         *projectRayData  `json:"rayData,omitempty"`
-	Input           *projectLocation `json:"input,omitempty"`
-	Checkpoint      *projectLocation `json:"checkpoint,omitempty"`
-	Output          *projectLocation `json:"output,omitempty"`
+	Name            string                    `json:"name,omitempty"`
+	Image           string                    `json:"image,omitempty"`
+	Entrypoint      string                    `json:"entrypoint,omitempty"`
+	Engine          string                    `json:"engine,omitempty"`
+	DataMode        string                    `json:"dataMode,omitempty"`
+	DatasetRef      *domain.DatasetReference  `json:"datasetRef,omitempty"`
+	CachePolicy     domain.DatasetCachePolicy `json:"cachePolicy,omitempty"`
+	Workers         int                       `json:"workers,omitempty"`
+	GPUsPerWorker   int                       `json:"gpusPerWorker,omitempty"`
+	CPUPerWorker    int64                     `json:"cpuPerWorker,omitempty"`
+	MemoryPerWorker string                    `json:"memoryPerWorker,omitempty"`
+	ExecutionMode   string                    `json:"executionMode,omitempty"`
+	Cache           *projectCache             `json:"cache,omitempty"`
+	RayData         *projectRayData           `json:"rayData,omitempty"`
+	Input           *projectLocation          `json:"input,omitempty"`
+	Checkpoint      *projectLocation          `json:"checkpoint,omitempty"`
+	Output          *projectLocation          `json:"output,omitempty"`
 }
 
 func newStarterProject(value project) starterProject {
@@ -263,8 +325,16 @@ func newStarterProject(value project) starterProject {
 		}
 		return &config
 	}
+	optionalDatasetRef := func(reference domain.DatasetReference) *domain.DatasetReference {
+		if reference.IsZero() {
+			return nil
+		}
+		copy := reference
+		return &copy
+	}
 	return starterProject{
 		Name: value.Name, Image: value.Image, Entrypoint: value.Entrypoint, Engine: value.Engine, DataMode: value.DataMode,
+		DatasetRef: optionalDatasetRef(value.DatasetRef), CachePolicy: value.CachePolicy,
 		Workers: value.Workers, GPUsPerWorker: value.GPUsPerWorker, CPUPerWorker: value.CPUPerWorker,
 		MemoryPerWorker: value.MemoryPerWorker, ExecutionMode: value.ExecutionMode,
 		Cache:   optionalCache(value.Cache),
@@ -301,7 +371,13 @@ const projectFileHeader = `# spk-rayjob submission defaults for this repository.
 #   ray-ddp    兼容引擎：Ray Actor 编排 + 平台 torchrun
 #   ray-train  托管引擎：Ray Train workers + 故障恢复/Checkpoint
 # 省略 engine 时保持 ray-ddp 兼容行为；Ray 版本由平台根据镜像固化。
-# dataMode: mount（直读）、cache（NVMe 预热）、ray-data-stage（Ray Data + NVMe）。
+# dataMode: mount（直读）、cache（NVMe 预热）、ray-data-stage（Ray Data + NVMe）、
+#           streaming（不可变数据集版本 + Ray Data 流式读取）。
+# streaming 只传入公开的数据集引用，不填 TOS 或内部 manifest 路径：
+# datasetRef:
+#   dataset: <数据集 ID 或 slug>
+#   version: <版本 ID 或 latest>
+# cachePolicy: bounded  # auto | off | bounded
 #
 # executionMode:
 #   single_gpu  1 worker x 1 GPU

@@ -810,7 +810,7 @@ func normalizeSubmissionSpec(principal auth.Principal, origin domain.SubmissionO
 			return domain.JobSpec{}, fmt.Errorf("%w: %s requires ray-train", ErrSubmissionInvalidJobSpec, spec.DataMode)
 		}
 	}
-	cache, err := normalizeDataModeCacheRequest(spec.DataMode, spec.Cache, cachePolicy)
+	cache, err := normalizeDataModeCacheRequest(spec.DataMode, spec.Cache, spec.CachePolicy, cachePolicy)
 	if err != nil {
 		return domain.JobSpec{}, fmt.Errorf("%w: %v", ErrSubmissionInvalidJobSpec, err)
 	}
@@ -830,10 +830,18 @@ func normalizeSubmissionSpec(principal auth.Principal, origin domain.SubmissionO
 	return spec, nil
 }
 
-func normalizeDataModeCacheRequest(mode domain.DataMode, cache domain.CacheRequest, policy LocalCachePolicy) (domain.CacheRequest, error) {
+func normalizeDataModeCacheRequest(mode domain.DataMode, cache domain.CacheRequest, datasetCachePolicy domain.DatasetCachePolicy, policy LocalCachePolicy) (domain.CacheRequest, error) {
 	if mode == domain.DataModeStreaming {
 		if cache != (domain.CacheRequest{}) {
 			return domain.CacheRequest{}, fmt.Errorf("streaming cache is selected through cachePolicy")
+		}
+		if datasetCachePolicy == domain.DatasetCachePolicyBounded {
+			if !policy.Enabled {
+				return domain.CacheRequest{}, fmt.Errorf("streaming runtime cache capability is disabled")
+			}
+			if !hasDualLocalCacheMounts(policy) {
+				return domain.CacheRequest{}, fmt.Errorf("streaming requires dual-NVMe runtime cache capability")
+			}
 		}
 		return domain.CacheRequest{}, nil
 	}

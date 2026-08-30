@@ -58,6 +58,12 @@ class PlatformMLflowTest(unittest.TestCase):
             "RAYTRAIN_SUBMITTER_USER_ID": "user-test",
             "RAYTRAIN_MLFLOW_PROVENANCE": "signed-provenance",
             "RAYTRAIN_CLUSTER_ATTEMPT": "2",
+            "PLATFORM_DATA_MODE": "streaming",
+            "PLATFORM_DATASET_ID": "labeled-full",
+            "PLATFORM_DATASET_VERSION_ID": "version-20260830",
+            "PLATFORM_DATASET_CACHE_POLICY": "bounded",
+            "PLATFORM_RAY_VERSION": "2.58.0",
+            "PLATFORM_DATASET_MANIFEST_PATH": "/private/platform/manifest.parquet",
         }
 
     def test_rank_zero_starts_owned_run_and_installs_scalar_logger(self) -> None:
@@ -83,6 +89,11 @@ class PlatformMLflowTest(unittest.TestCase):
                 "platform.submitter_user_id": "user-test",
                 "platform.provenance": "signed-provenance",
                 "platform.cluster_attempt": "2",
+                "platform.data_mode": "streaming",
+                "platform.dataset_id": "labeled-full",
+                "platform.dataset_version_id": "version-20260830",
+                "platform.dataset_cache_policy": "bounded",
+                "platform.ray_version": "2.58.0",
             },
         )
         fake_mlflow.log_params.assert_called_once_with(
@@ -93,8 +104,18 @@ class PlatformMLflowTest(unittest.TestCase):
                 "optimizer": "AdamW",
                 "seed": 42,
                 "world_size": 16,
+                "data_mode": "streaming",
+                "dataset_id": "labeled-full",
+                "dataset_version_id": "version-20260830",
+                "dataset_cache_policy": "bounded",
+                "ray_version": "2.58.0",
             }
         )
+        recorded = str(fake_mlflow.start_run.call_args) + str(
+            fake_mlflow.log_params.call_args
+        )
+        self.assertNotIn("manifest.parquet", recorded)
+        self.assertNotIn("/private", recorded)
         self.assertEqual(
             config.log_config.hooks[-1],
             {

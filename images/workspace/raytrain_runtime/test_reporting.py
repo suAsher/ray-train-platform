@@ -186,12 +186,19 @@ class ReportMetricsTest(unittest.TestCase):
             "PLATFORM_RAY_NODE_TYPE": "worker",
             "PLATFORM_POD_NAME": "job-01-cluster-worker-abc",
             "CUDA_VISIBLE_DEVICES": "3,7",
+            "PLATFORM_DATA_MODE": "streaming",
+            "PLATFORM_DATASET_ID": "labeled-full",
+            "PLATFORM_DATASET_VERSION_ID": "version-20260830",
+            "PLATFORM_RAY_VERSION": "2.58.0",
         }
         metrics = {
             "step": 7,
             "time": 1.5,
             "data_time": 0.4,
             "nccl_time": 0.2,
+            "dataset_prefetch_wait_seconds_total": 0.75,
+            "dataset_cache_hits_total": 11,
+            "dataset_cache_stale_temp_reclaimed_total": 2,
             "loss": 9.0,
         }
         train = _FakeTrain(rank=3)
@@ -208,13 +215,68 @@ class ReportMetricsTest(unittest.TestCase):
                 "platform_training_step_time_seconds",
                 "platform_training_data_time_seconds",
                 "platform_training_nccl_duration_seconds",
+                "platform_training_dataset_prefetch_wait_seconds_total",
+                "platform_training_dataset_cache_hits_total",
+                "platform_training_dataset_cache_stale_temp_reclaimed_total",
             },
         )
-        self.assertEqual(len(FakeGauge.created), 4)
+        self.assertEqual(len(FakeGauge.created), 7)
         self.assertTrue(all(record[2]["rank"] == "3" for record in FakeGauge.records))
         self.assertTrue(all(record[2]["gpu"] == "3" for record in FakeGauge.records))
         self.assertTrue(all(record[2]["exported_namespace"] == "tenant-a" for record in FakeGauge.records))
+        self.assertTrue(all(record[2]["dataset_id"] == "labeled-full" for record in FakeGauge.records))
+        self.assertTrue(all(record[2]["dataset_version_id"] == "version-20260830" for record in FakeGauge.records))
+        self.assertTrue(all(record[2]["ray_version"] == "2.58.0" for record in FakeGauge.records))
+        self.assertTrue(all(record[2]["data_mode"] == "streaming" for record in FakeGauge.records))
         self.assertNotIn("loss", {record[0] for record in FakeGauge.records})
+
+    def test_rank_zero_exports_supported_data_metrics_to_an_active_mlflow_run(self):
+        fake_mlflow = mock.Mock()
+        fake_mlflow.active_run.return_value = object()
+        train = _FakeTrain(rank=0)
+
+        with mock.patch.dict(
+            os.environ,
+            {"MLFLOW_TRACKING_URI": "http://mlflow-ingest:8080"},
+            clear=True,
+        ), mock.patch.dict(sys.modules, {"mlflow": fake_mlflow}):
+            report_metrics(
+                {
+                    "step": 12,
+                    "dataset_prefetch_wait_seconds_total": 1.5,
+                    "dataset_cache_hits_total": 9,
+                    "dataset_cache_stale_temp_reclaimed_total": 2,
+                    "loss": 0.4,
+                },
+                world_rank=0,
+                train_api=train,
+            )
+
+        fake_mlflow.log_metrics.assert_called_once_with(
+            {
+                "rank0_worker_dataset_cache_hits_total": 9.0,
+                "rank0_worker_dataset_cache_stale_temp_reclaimed_total": 2.0,
+                "rank0_worker_dataset_prefetch_wait_seconds_total": 1.5,
+            },
+            step=12,
+        )
+
+    def test_nonzero_rank_never_writes_mlflow_metrics(self):
+        fake_mlflow = mock.Mock()
+        fake_mlflow.active_run.return_value = object()
+
+        with mock.patch.dict(
+            os.environ,
+            {"MLFLOW_TRACKING_URI": "http://mlflow-ingest:8080"},
+            clear=True,
+        ), mock.patch.dict(sys.modules, {"mlflow": fake_mlflow}):
+            report_metrics(
+                {"dataset_cache_hits_total": 9},
+                world_rank=7,
+                train_api=_FakeTrain(rank=7),
+            )
+
+        fake_mlflow.log_metrics.assert_not_called()
 
     def test_invalid_assigned_gpu_identity_falls_back_without_blocking_reporting(self):
         environment = {

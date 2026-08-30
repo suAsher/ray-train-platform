@@ -58,6 +58,7 @@ type Reconciler struct {
 	clusterQueueName string
 	autoQuota        bool
 	gitCredentials   GitCredentialResolver
+	datasetManifests DatasetManifestResolver
 	experimentRuns   ExperimentFinalizer
 	lastQuotaError   string
 	leaseOwner       string
@@ -77,6 +78,45 @@ type QuotaSyncOptions struct {
 func (r *Reconciler) WithGitCredentials(resolver GitCredentialResolver) *Reconciler {
 	r.gitCredentials = resolver
 	return r
+}
+
+// WithDatasetManifestResolver wires the private catalogue lookup used only by
+// streaming jobs. Keeping this separate from JobStore makes the storage
+// boundary explicit and leaves every legacy reconciliation path unchanged.
+func (r *Reconciler) WithDatasetManifestResolver(resolver DatasetManifestResolver) *Reconciler {
+	r.datasetManifests = resolver
+	return r
+}
+
+func (r *Reconciler) renderOptionsForJob(ctx context.Context, job domain.TrainingJob) (RenderOptions, error) {
+	options := r.renderOptions
+	if job.Spec.DataMode != domain.DataModeStreaming {
+		return options, nil
+	}
+	if r.datasetManifests == nil {
+		return RenderOptions{}, fmt.Errorf("dataset manifest resolver is not configured")
+	}
+	if err := job.DatasetProvenance.Validate(); err != nil || job.DatasetProvenance.IsZero() {
+		if err == nil {
+			err = fmt.Errorf("immutable dataset provenance is required")
+		}
+		return RenderOptions{}, fmt.Errorf("resolve dataset manifest: %w", err)
+	}
+	request := DatasetManifestResolutionRequest{
+		TenantID:         job.TenantID,
+		DatasetID:        job.DatasetProvenance.DatasetID,
+		DatasetVersionID: job.DatasetProvenance.DatasetVersionID,
+		ManifestSHA256:   job.DatasetProvenance.ManifestSHA256,
+	}
+	mount, err := r.datasetManifests.ResolveDatasetManifestMount(ctx, request)
+	if err != nil {
+		return RenderOptions{}, fmt.Errorf("resolve dataset manifest: %w", err)
+	}
+	if err := mount.validate(job.DatasetProvenance); err != nil {
+		return RenderOptions{}, fmt.Errorf("resolve dataset manifest: %w", err)
+	}
+	options.DatasetManifest = &mount
+	return options, nil
 }
 
 func (r *Reconciler) WithQuotaSync(options QuotaSyncOptions) *Reconciler {
@@ -352,7 +392,10 @@ func (r *Reconciler) reconcileLoadedJob(ctx context.Context, job *domain.Trainin
 		}
 		job, creationLease = current, lease
 	}
-	options := r.renderOptions
+	options, err := r.renderOptionsForJob(ctx, *job)
+	if err != nil {
+		return err
+	}
 	if creationLease != nil {
 		options.managedCreationFence = creationLease.ResourceFence
 	}
@@ -825,11 +868,21 @@ func (r *Reconciler) reconcileCancellation(ctx context.Context, job *domain.Trai
 	}
 	namespace := job.KubernetesNS
 	if namespace == "" {
-		manifest, err := RenderRayJob(*job, r.renderOptions)
-		if err != nil {
-			return err
+		if job.Spec.DataMode == domain.DataModeStreaming {
+			// Cancellation must remain possible while the private catalogue or
+			// manifest PVC is unavailable. No workload is rendered in this path;
+			// derive the same tenant namespace RenderRayJob would have used.
+			namespace = "tenant-" + sanitizeDNS(job.TenantID)
+			if !isDNSLabel(namespace) {
+				return fmt.Errorf("kubernetes namespace must be a lowercase DNS label")
+			}
+		} else {
+			manifest, err := RenderRayJob(*job, r.renderOptions)
+			if err != nil {
+				return err
+			}
+			namespace = manifest.GetNamespace()
 		}
-		namespace = manifest.GetNamespace()
 	}
 	resource, err := r.client.GetRayJob(ctx, namespace, name)
 	if apierrors.IsNotFound(err) {

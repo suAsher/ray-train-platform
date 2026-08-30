@@ -717,7 +717,13 @@ class RayTrainManagedHook(_MMCVHook):
         metrics = extract_scalar_metrics(dict(output or {}))
         metrics["epoch"] = float(self._epoch(runner))
         metrics["step"] = float(self._step(runner))
-        return metrics
+        try:
+            from .data_metrics import snapshot_data_metrics
+
+            return {**metrics, **snapshot_data_metrics()}
+        except Exception:
+            # Streaming telemetry must remain fail-open for the training loop.
+            return metrics
 
     def after_train_iter(self, runner: Any) -> None:
         if self._step(runner) % self.interval:

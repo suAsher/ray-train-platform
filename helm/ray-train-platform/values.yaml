@@ -53,8 +53,9 @@ backend:
   appEnv: production
   oidcRequired: true
   demoMode: false
-  # Configuration-only gates for versioned Ray Data training. They stay off
-  # until the supporting API and domain components are deployed separately.
+  # Feature gates for versioned Ray Data training. They stay off until the
+  # supporting API and domain components are ready. Dataset publisher rollout
+  # is governed independently under datasetPublisher.
   datasetVersioningEnabled: false
   rayDataStreamingEnabled: false
   datasetInternalPrefix: ray-train/platform/datasets
@@ -125,6 +126,67 @@ backend:
   # Training and debug Pods run in tenant namespaces. Leave empty unless a
   # tenant-local, least-privilege ServiceAccount is provisioned separately.
   rayJobServiceAccount: ""
+
+# CPU-only batch settings for immutable dataset publication. This component has
+# its own default-off rollout gate and does not inherit the training Kueue gate.
+# The workload can obtain cloud credentials only through VKE IRSA; the chart
+# never creates or copies a TOS credential Secret.
+datasetPublisher:
+  enabled: false
+  # Empty values inherit the platform TOS bucket/endpoint/region. Keep the
+  # source and derived prefixes separate; credentials come only from IRSA.
+  sourceBucket: ""
+  targetBucket: ""
+  endpoint: ""
+  region: ""
+  sourceIndexName: .raytrain/trusted-index-v2.pkl
+  serviceAccount:
+    # Optional VKE IAM role TRN. Empty means no
+    # vke.volcengine.com/role-trn annotation is rendered.
+    irsaRoleTRN: ""
+  image:
+    repository: ray-dataset-publisher
+    tag: "REPLACE_WITH_IMMUTABLE_TAG"
+    digest: ""
+  imagePullPolicy: ""
+  kueue:
+    # Empty names are generated from the Helm release. Explicit values override
+    # the generated resource names.
+    resourceFlavorName: ""
+    clusterQueueName: ""
+    localQueueName: ""
+    cpuQuota: 16
+    memoryQuota: 64Gi
+    # Empty keeps the CPU-only flavor portable: publication Jobs can use spare
+    # CPU and memory on physical GPU nodes after any soft CPU-pool preference.
+    resourceFlavorNodeLabels: {}
+  # Empty creates a release-scoped low-priority class name.
+  priorityClassName: ""
+  priorityValue: -1000
+  resources:
+    requests:
+      cpu: 1000m
+      memory: 2Gi
+    limits:
+      cpu: 4000m
+      memory: 8Gi
+  job:
+    backoffLimit: 3
+    activeDeadlineSeconds: 604800
+    ttlSecondsAfterFinished: 86400
+  kubernetesClient:
+    maxAttempts: 3
+    initialRetryBackoffSeconds: 1
+    maximumRetryBackoffSeconds: 30
+  manager:
+    pollIntervalSeconds: 10
+  workingDirectory: /data/output
+  # The controller translates preferredNodeSelector into soft node affinity,
+  # so a cluster profile can prefer CPU nodes while retaining GPU-node CPU and
+  # memory fallback. nodeSelector remains an explicit hard-selection override.
+  preferredNodeSelector: {}
+  nodeSelector: {}
+  tolerations: []
 
 frontend:
   replicaCount: 2
@@ -299,8 +361,9 @@ idcDataSpaces:
 
 kueue:
   enabled: false
-  # True means this Helm release owns ResourceFlavor and ClusterQueue. False
-  # attaches to a queue managed outside this project.
+  # True means this Helm release owns the training ResourceFlavor and
+  # ClusterQueue. False attaches training to a queue managed outside this
+  # project. Dataset publisher queues are governed independently above.
   manageResources: false
   # Kueue's nominalQuota is a static field with no capacity discovery. With this
   # on, the controller keeps it equal to the allocatable capacity of the nodes

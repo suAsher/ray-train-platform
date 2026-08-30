@@ -18,6 +18,141 @@ var (
 	errDatasetPublicationRunCASLost     = errors.New("dataset publication run compare-and-swap lost")
 )
 
+const maximumActiveDatasetPublicationList = 256
+
+// CreateDatasetPublicationRequest persists the immutable version identity and
+// its first publication attempt in one transaction. A controller can never
+// observe an orphan DISCOVERING version without a corresponding run.
+func (r *GormRepository) CreateDatasetPublicationRequest(
+	ctx context.Context,
+	tenantID string,
+	superAdmin bool,
+	version domain.DatasetVersion,
+	run domain.DatasetPublicationRun,
+) (domain.DatasetPublicationRun, error) {
+	if err := publicationRunContextError(ctx); err != nil {
+		return domain.DatasetPublicationRun{}, err
+	}
+	if err := version.Validate(); err != nil {
+		return domain.DatasetPublicationRun{}, ErrDatasetPublicationRunConflict
+	}
+	if err := run.Validate(); err != nil || version.State != domain.DatasetVersionDiscovering || run.State != domain.DatasetVersionDiscovering ||
+		run.DatasetID != version.DatasetID || run.DatasetVersionID != version.ID {
+		return domain.DatasetPublicationRun{}, ErrDatasetPublicationRunConflict
+	}
+
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		query := manageableDatasetQuery(tx.Model(&DatasetRecord{}), tenantID, superAdmin)
+		var datasetCount int64
+		if err := query.Where("datasets.id = ?", version.DatasetID).Count(&datasetCount).Error; err != nil {
+			return publicationRunDatabaseError(ctx, "check publication dataset scope", err)
+		}
+		if datasetCount != 1 {
+			return ErrDatasetPublicationRunNotFound
+		}
+
+		now := time.Now().UTC()
+		versionRecord := datasetVersionRecordFromDomain(version, now)
+		versionResult := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&versionRecord)
+		if versionResult.Error != nil {
+			return publicationRunDatabaseError(ctx, "create publication dataset version", versionResult.Error)
+		}
+		if versionResult.RowsAffected != 1 {
+			return ErrDatasetPublicationRunConflict
+		}
+
+		runRecord := datasetPublicationRunRecordFromDomain(run, now)
+		runResult := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&runRecord)
+		if runResult.Error != nil {
+			return publicationRunDatabaseError(ctx, "create publication run", runResult.Error)
+		}
+		if runResult.RowsAffected != 1 {
+			return ErrDatasetPublicationRunConflict
+		}
+		return nil
+	})
+	if err != nil {
+		return domain.DatasetPublicationRun{}, publicationRunOperationError(ctx, err)
+	}
+	return run, nil
+}
+
+// ListActiveDatasetPublications is consumed only by the elected platform
+// controller. It is global by design, bounded, and fails closed if any joined
+// identity or state is inconsistent.
+func (r *GormRepository) ListActiveDatasetPublications(ctx context.Context, limit int) ([]domain.DatasetPublicationWork, error) {
+	if err := publicationRunContextError(ctx); err != nil {
+		return nil, err
+	}
+	if limit < 1 || limit > maximumActiveDatasetPublicationList {
+		return nil, ErrDatasetPublicationRunConflict
+	}
+	activeStates := []string{
+		string(domain.DatasetVersionDiscovering), string(domain.DatasetVersionStabilizing),
+		string(domain.DatasetVersionValidating), string(domain.DatasetVersionPacking),
+	}
+	var runs []DatasetPublicationRunRecord
+	if err := r.db.WithContext(ctx).Where("state IN ?", activeStates).
+		Order("created_at ASC, id ASC").Limit(limit).Find(&runs).Error; err != nil {
+		return nil, publicationRunDatabaseError(ctx, "list active dataset publications", err)
+	}
+	work := make([]domain.DatasetPublicationWork, 0, len(runs))
+	for _, runRecord := range runs {
+		run, err := runRecord.toDomain()
+		if err != nil {
+			return nil, ErrDatasetPublicationRunUnavailable
+		}
+		var versionRecord DatasetVersionRecord
+		if err := r.db.WithContext(ctx).Where("id = ? AND dataset_id = ?", run.DatasetVersionID, run.DatasetID).First(&versionRecord).Error; err != nil {
+			return nil, publicationRunDatabaseError(ctx, "load active dataset version", err)
+		}
+		version, err := versionRecord.toDomain()
+		if err != nil {
+			return nil, ErrDatasetPublicationRunUnavailable
+		}
+		var datasetRecord DatasetRecord
+		if err := r.db.WithContext(ctx).Where("id = ?", run.DatasetID).First(&datasetRecord).Error; err != nil {
+			return nil, publicationRunDatabaseError(ctx, "load active dataset", err)
+		}
+		dataset, err := datasetRecord.toDomain()
+		if err != nil {
+			return nil, ErrDatasetPublicationRunUnavailable
+		}
+		item := domain.DatasetPublicationWork{Dataset: dataset, Version: version, Run: run}
+		if err := item.Validate(); err != nil {
+			return nil, ErrDatasetPublicationRunUnavailable
+		}
+		work = append(work, item)
+	}
+	return work, nil
+}
+
+// ListDatasetVersionGCCandidates previews only deprecated, unreferenced
+// versions. It does not delete storage and therefore remains safe for the
+// administrator dry-run endpoint.
+func (r *GormRepository) ListDatasetVersionGCCandidates(ctx context.Context) ([]domain.DatasetVersion, error) {
+	if err := publicationRunContextError(ctx); err != nil {
+		return nil, err
+	}
+	var records []DatasetVersionRecord
+	query := r.db.WithContext(ctx).Model(&DatasetVersionRecord{}).
+		Where("dataset_versions.state = ?", string(domain.DatasetVersionDeprecated)).
+		Where("NOT EXISTS (SELECT 1 FROM training_jobs WHERE training_jobs.dataset_version_id = dataset_versions.id)").
+		Order("dataset_versions.created_at ASC, dataset_versions.id ASC")
+	if err := query.Find(&records).Error; err != nil {
+		return nil, publicationRunDatabaseError(ctx, "list dataset version GC candidates", err)
+	}
+	versions := make([]domain.DatasetVersion, 0, len(records))
+	for _, record := range records {
+		version, err := record.toDomain()
+		if err != nil || version.State != domain.DatasetVersionDeprecated {
+			return nil, ErrDatasetPublicationRunUnavailable
+		}
+		versions = append(versions, version)
+	}
+	return versions, nil
+}
+
 // EnsureDatasetPublicationRun creates a DISCOVERING run once. A retry with the
 // same run, dataset, and version identity returns the current persisted state;
 // an existing run ID can never be rebound to a different dataset version.

@@ -42,6 +42,10 @@ func TestManagedJobUsesPerJobVersionAndManagedDriver(t *testing.T) {
 			if entrypoint != want {
 				t.Fatalf("unexpected managed entrypoint:\n got: %q\nwant: %q", entrypoint, want)
 			}
+			runtimeEnv, _, _ := unstructured.NestedString(manifest.Object, "spec", "runtimeEnvYAML")
+			if !strings.Contains(runtimeEnv, "PLATFORM_RAY_VERSION: "+strconvQuote(version)) {
+				t.Fatalf("managed runtime is missing immutable Ray version provenance: %s", runtimeEnv)
+			}
 		})
 	}
 }

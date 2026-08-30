@@ -11,6 +11,11 @@ local-account deployment never contacts Keycloak. */}}
 {{- if contains "REPLACE_WITH" .Values.backend.sourceMaterializerImage }}{{- fail "backend.sourceMaterializerImage must be replaced with a pinned source materializer image" }}{{- end }}
 {{- if not (regexMatch `^[^@[:space:]]+@sha256:[0-9a-fA-F]{64}$` .Values.backend.sourceMaterializerImage) }}{{- fail "backend.sourceMaterializerImage must use @sha256:<64 hex>" }}{{- end }}
 {{- if not (regexMatch `^[^@[:space:]]+@sha256:[0-9a-fA-F]{64}$` .Values.backend.workspaceImage) }}{{- fail "backend.workspaceImage must use @sha256:<64 hex>" }}{{- end }}
+{{- $datasetPublisher := default (dict) .Values.datasetPublisher -}}
+{{- if (default false $datasetPublisher.enabled) -}}
+{{- $publisherDigest := default "" $datasetPublisher.image.digest -}}
+{{- if not (regexMatch `^sha256:[0-9a-fA-F]{64}$` $publisherDigest) }}{{- fail "datasetPublisher.image.digest must use sha256:<64 hex> when enabled" }}{{- end }}
+{{- end }}
 {{- /* Existing releases may predate training.localCache. Keep --reuse-values
       upgrades safe by treating that absent map as the disabled default. */}}
 {{- $localCache := default (dict) .Values.training.localCache }}
@@ -139,6 +144,11 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          {{- if (default false $datasetPublisher.enabled) }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "ray-train-platform.datasetPublisher.resourceName" (list . "") }}
+          {{- end }}
           env:
             - name: APP_ENV
               value: {{ .Values.backend.appEnv | quote }}
@@ -271,6 +281,8 @@ spec:
               value: {{ default false .Values.backend.datasetVersioningEnabled | quote }}
             - name: RAY_DATA_STREAMING_ENABLED
               value: {{ default false .Values.backend.rayDataStreamingEnabled | quote }}
+            - name: DATASET_PUBLISHER_ENABLED
+              value: {{ default false $datasetPublisher.enabled | quote }}
             - name: DATASET_INTERNAL_PREFIX
               value: {{ default "ray-train/platform/datasets" .Values.backend.datasetInternalPrefix | quote }}
             - name: RAY_TRAIN_MANAGED_ENABLED

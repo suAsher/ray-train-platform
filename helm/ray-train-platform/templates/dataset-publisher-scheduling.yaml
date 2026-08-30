@@ -1,0 +1,60 @@
+{{- if (default false .Values.datasetPublisher.enabled) }}
+{{- $publisher := .Values.datasetPublisher -}}
+{{- $priorityClassName := default (include "ray-train-platform.datasetPublisher.resourceName" (list . "priority")) $publisher.priorityClassName -}}
+{{- $resourceFlavorName := default (include "ray-train-platform.datasetPublisher.resourceName" (list . "flavor")) $publisher.kueue.resourceFlavorName -}}
+{{- $clusterQueueName := default (include "ray-train-platform.datasetPublisher.resourceName" (list . "clusterqueue")) $publisher.kueue.clusterQueueName -}}
+{{- $localQueueName := default (include "ray-train-platform.datasetPublisher.resourceName" (list . "queue")) $publisher.kueue.localQueueName -}}
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: {{ $priorityClassName }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: dataset-publisher
+value: {{ $publisher.priorityValue }}
+globalDefault: false
+preemptionPolicy: Never
+description: "Low-priority CPU-only immutable dataset publication"
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: {{ $resourceFlavorName }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: dataset-publisher
+spec:
+  nodeLabels: {{ default (dict) $publisher.kueue.resourceFlavorNodeLabels | toJson }}
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: {{ $clusterQueueName }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: dataset-publisher
+spec:
+  namespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: {{ .Values.namespace | quote }}
+  resourceGroups:
+    - coveredResources: ["cpu", "memory"]
+      flavors:
+        - name: {{ $resourceFlavorName }}
+          resources:
+            - name: cpu
+              nominalQuota: {{ $publisher.kueue.cpuQuota | quote }}
+            - name: memory
+              nominalQuota: {{ $publisher.kueue.memoryQuota | quote }}
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: {{ $localQueueName }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: dataset-publisher
+spec:
+  clusterQueue: {{ $clusterQueueName }}
+{{- end }}

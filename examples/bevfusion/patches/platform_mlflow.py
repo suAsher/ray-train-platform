@@ -8,7 +8,12 @@ continue to use ``PLATFORM_OUTPUT_PATH``.
 from __future__ import annotations
 
 import os
+import re
 from typing import Any, Dict, Optional
+
+
+_SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_RAY_VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$")
 
 
 def _required_environment(name: str) -> str:
@@ -27,8 +32,42 @@ def _mapping_value(value: Any, name: str, default: Any = None) -> Any:
     return default
 
 
+def _optional_environment(name: str, pattern: Any = _SAFE_IDENTIFIER) -> str:
+    value = os.environ.get(name, "").strip()
+    if value and pattern.fullmatch(value) is None:
+        raise RuntimeError("platform MLflow optional provenance is invalid")
+    return value
+
+
+def _streaming_provenance() -> Dict[str, str]:
+    data_mode = os.environ.get("PLATFORM_DATA_MODE", "").strip()
+    if data_mode not in ("", "mount", "cache", "ray-data", "ray-data-stage", "streaming"):
+        raise RuntimeError("platform MLflow optional provenance is invalid")
+    cache_policy = os.environ.get("PLATFORM_DATASET_CACHE_POLICY", "").strip()
+    if cache_policy not in ("", "off", "auto", "bounded"):
+        raise RuntimeError("platform MLflow optional provenance is invalid")
+    values = {
+        "data_mode": data_mode,
+        "dataset_id": _optional_environment("PLATFORM_DATASET_ID"),
+        "dataset_version_id": _optional_environment("PLATFORM_DATASET_VERSION_ID"),
+        "dataset_cache_policy": cache_policy,
+        "ray_version": _optional_environment("PLATFORM_RAY_VERSION", _RAY_VERSION),
+    }
+    if data_mode == "streaming" and not all(
+        values[name]
+        for name in (
+            "dataset_id",
+            "dataset_version_id",
+            "dataset_cache_policy",
+            "ray_version",
+        )
+    ):
+        raise RuntimeError("platform MLflow streaming provenance is incomplete")
+    return {name: value for name, value in values.items() if value}
+
+
 def _platform_tags() -> Dict[str, str]:
-    return {
+    base = {
         "platform.job_id": _required_environment("RAYTRAIN_JOB_ID"),
         "platform.tenant_id": _required_environment("RAYTRAIN_TENANT_ID"),
         "platform.submitter_user_id": _required_environment(
@@ -38,6 +77,11 @@ def _platform_tags() -> Dict[str, str]:
         "platform.cluster_attempt": _required_environment(
             "RAYTRAIN_CLUSTER_ATTEMPT"
         ),
+    }
+    provenance = _streaming_provenance()
+    return {
+        **base,
+        **{"platform." + name: value for name, value in provenance.items()},
     }
 
 
@@ -67,6 +111,7 @@ def start_platform_mlflow(cfg: Any, rank: int, world_size: int) -> Optional[Any]
             "optimizer": _mapping_value(optimizer, "type"),
             "seed": _mapping_value(cfg, "seed"),
             "world_size": world_size,
+            **_streaming_provenance(),
         }
     )
 

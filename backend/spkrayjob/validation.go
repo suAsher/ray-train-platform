@@ -67,6 +67,9 @@ func validateLocalJobSpec(spec domain.JobSpec, defaults localJobSpecDefaults) er
 	// their shape locally; this sentinel is never copied back into the request.
 	if candidate.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain && strings.TrimSpace(candidate.RayVersion) == "" {
 		candidate.RayVersion = domain.RayVersionProduction
+		if candidate.DataMode == domain.DataModeStreaming {
+			candidate.RayVersion = domain.RayVersionCanary
+		}
 	}
 	if err := candidate.Validate(); err != nil {
 		return err

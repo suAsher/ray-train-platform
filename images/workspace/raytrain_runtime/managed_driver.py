@@ -21,6 +21,7 @@ _MANAGED_STORAGE_ROOT = _STABLE_OUTPUT_ROOT / ".platform" / "ray-train"
 _SAFE_JOB_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _PARENT_JOB_ID = re.compile(r"^job-[0-9a-f]{24}$")
 _RAY_JOB_WORKING_DIR_URI = re.compile(r"^gcs://_ray_pkg_[0-9a-f]+(?:\.zip)?$")
+_RAY_VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -42,6 +43,7 @@ class DriverConfig:
     storage_path: str
     data_mode: str = "mount"
     dataset: Any | None = None
+    ray_version: str = ""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -74,10 +76,23 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--parent-job-id", default="")
     parser.add_argument("--storage-path", default="")
     parser.add_argument(
-        "--data-mode", choices=("mount", "cache", "ray-data", "ray-data-stage"), default="mount"
+        "--data-mode",
+        choices=("mount", "cache", "ray-data", "ray-data-stage", "streaming"),
+        default="mount",
     )
     parser.add_argument("--dataset-format", default="")
     parser.add_argument("--dataset-uri", default="")
+    parser.add_argument("--dataset-id", default="")
+    parser.add_argument("--dataset-version-id", default="")
+    parser.add_argument("--dataset-manifest-path", default="")
+    parser.add_argument("--dataset-manifest-sha256", default="")
+    parser.add_argument("--dataset-root", default="")
+    parser.add_argument("--dataset-train-samples", type=int)
+    parser.add_argument(
+        "--dataset-cache-policy", choices=("off", "auto", "bounded"), default=""
+    )
+    parser.add_argument("--dataset-prefetch-batches", type=int)
+    parser.add_argument("--dataset-shuffle-seed", type=int)
     return parser
 
 
@@ -165,14 +180,100 @@ def parse_driver_config(
     best_metric = (options.best_metric or environment.get("PLATFORM_BEST_METRIC", "")).strip()
     if any(character in best_metric for character in ("\n", "\r", "\x00")):
         raise ValueError("best metric must not contain control characters")
+    ray_version = environment.get("PLATFORM_RAY_VERSION", "").strip()
+    if ray_version and not _RAY_VERSION.fullmatch(ray_version):
+        raise ValueError("Ray version provenance is invalid")
 
     dataset = None
-    if options.data_mode in ("ray-data", "ray-data-stage"):
+    streaming_values = (
+        options.dataset_id,
+        options.dataset_version_id,
+        options.dataset_manifest_path,
+        options.dataset_manifest_sha256,
+        options.dataset_root,
+        options.dataset_train_samples,
+        options.dataset_cache_policy,
+        options.dataset_prefetch_batches,
+        options.dataset_shuffle_seed,
+    )
+    if options.data_mode == "streaming":
+        if options.dataset_format or options.dataset_uri:
+            raise ValueError("dataset format and URI are not used by streaming mode")
+        from .ray_data import StreamingDatasetConfig
+
+        def selected(option: Any, environment_name: str, default: Any = "") -> Any:
+            if option is not None and option != "":
+                return option
+            return environment.get(environment_name, default)
+
+        try:
+            train_samples = int(
+                selected(
+                    options.dataset_train_samples,
+                    "PLATFORM_DATASET_TRAIN_SAMPLES",
+                )
+            )
+            prefetch_batches = int(
+                selected(
+                    options.dataset_prefetch_batches,
+                    "RAYTRAIN_DATASET_PREFETCH_BATCHES",
+                    2,
+                )
+            )
+            shuffle_seed = int(
+                selected(
+                    options.dataset_shuffle_seed,
+                    "RAYTRAIN_DATASET_SHUFFLE_SEED",
+                    0,
+                )
+            )
+        except (TypeError, ValueError):
+            raise ValueError("streaming dataset numeric provenance is invalid") from None
+        dataset = StreamingDatasetConfig(
+            dataset_id=str(
+                selected(options.dataset_id, "PLATFORM_DATASET_ID")
+            ),
+            version_id=str(
+                selected(
+                    options.dataset_version_id,
+                    "PLATFORM_DATASET_VERSION_ID",
+                )
+            ),
+            manifest_path=str(
+                selected(
+                    options.dataset_manifest_path,
+                    "PLATFORM_DATASET_MANIFEST_PATH",
+                )
+            ),
+            manifest_sha256=str(
+                selected(
+                    options.dataset_manifest_sha256,
+                    "PLATFORM_DATASET_MANIFEST_SHA256",
+                )
+            ),
+            dataset_root=str(
+                selected(options.dataset_root, "PLATFORM_DATASET_ROOT")
+            ),
+            train_samples=train_samples,
+            cache_policy=str(
+                selected(
+                    options.dataset_cache_policy,
+                    "PLATFORM_DATASET_CACHE_POLICY",
+                )
+            ),
+            prefetch_batches=prefetch_batches,
+            shuffle_seed=shuffle_seed,
+        )
+    elif options.data_mode in ("ray-data", "ray-data-stage"):
         from .ray_data import DatasetConfig
 
         dataset = DatasetConfig(format=options.dataset_format, uri=options.dataset_uri)
+        if any(value not in (None, "") for value in streaming_values):
+            raise ValueError("streaming dataset provenance requires streaming mode")
     elif options.dataset_format or options.dataset_uri:
         raise ValueError("dataset format and URI require ray-data mode")
+    elif any(value not in (None, "") for value in streaming_values):
+        raise ValueError("streaming dataset provenance requires streaming mode")
 
     return DriverConfig(
         entrypoint=entrypoint,
@@ -190,6 +291,7 @@ def parse_driver_config(
         storage_path=_storage_path(options.storage_path, job_id, environment),
         data_mode=options.data_mode,
         dataset=dataset,
+        ray_version=ray_version,
     )
 
 
@@ -230,6 +332,16 @@ def _load_ray_data_dataset(config: Any) -> Any:
     return build_dataset(config)
 
 
+def _load_s1h_streaming_dataset(
+    config: Any,
+    *,
+    world_size: int,
+) -> tuple[Any, int, int]:
+    from .ray_data import build_s1h_streaming_dataset
+
+    return build_s1h_streaming_dataset(config, world_size=world_size)
+
+
 @contextlib.contextmanager
 def _temporary_environment(values: Mapping[str, str | None]):
     """Apply worker-scoped environment values and restore the exact prior state."""
@@ -256,7 +368,7 @@ def _train_loop_environment(loop_config: Mapping[str, Any]) -> dict[str, str | N
         pathlib.Path(str(loop_config["storage_path"])),
         _resolved(_STABLE_OUTPUT_ROOT),
     )
-    return {
+    environment = {
         "RAYTRAIN_CHECKPOINT_EVERY_EPOCHS": str(
             int(loop_config["checkpoint_every_epochs"])
         ),
@@ -269,6 +381,40 @@ def _train_loop_environment(loop_config: Mapping[str, Any]) -> dict[str, str | N
         ),
         "RAYTRAIN_RESUME_CHECKPOINT_PATH": None,
     }
+    ray_version = str(loop_config.get("ray_version", "")).strip()
+    if ray_version:
+        if not _RAY_VERSION.fullmatch(ray_version):
+            raise ValueError("Ray version provenance is invalid")
+        environment = {**environment, "PLATFORM_RAY_VERSION": ray_version}
+    if str(loop_config.get("data_mode", "")) == "streaming":
+        environment = {
+            **environment,
+            "PLATFORM_DATA_MODE": "streaming",
+            "PLATFORM_DATASET_ID": str(loop_config["dataset_id"]),
+            "PLATFORM_DATASET_VERSION_ID": str(
+                loop_config["dataset_version_id"]
+            ),
+            "PLATFORM_DATASET_MANIFEST_SHA256": str(
+                loop_config["dataset_manifest_sha256"]
+            ),
+            "PLATFORM_DATASET_ROOT": str(loop_config["dataset_root"]),
+            "PLATFORM_DATASET_CACHE_POLICY": str(
+                loop_config["dataset_cache_policy"]
+            ),
+            "RAYTRAIN_DATASET_WORKER_SAMPLES": str(
+                int(loop_config["worker_sample_count"])
+            ),
+            "RAYTRAIN_DATASET_PADDING_COUNT": str(
+                int(loop_config["dataset_padding_count"])
+            ),
+            "RAYTRAIN_DATASET_PREFETCH_BATCHES": str(
+                int(loop_config["dataset_prefetch_batches"])
+            ),
+            "RAYTRAIN_DATASET_SHUFFLE_SEED": str(
+                int(loop_config["dataset_shuffle_seed"])
+            ),
+        }
+    return environment
 
 
 def _stage_ray_data_for_worker(loop_config: Mapping[str, Any]) -> None:
@@ -347,7 +493,7 @@ def _cpus_per_train_worker(config: DriverConfig) -> int:
     """Reserve node CPU for Ray Data operators when datasets are managed by Ray."""
 
     cpus_per_worker = max(1, config.cpus_per_node // config.gpus_per_node)
-    if config.data_mode not in ("ray-data", "ray-data-stage"):
+    if config.data_mode not in ("ray-data", "ray-data-stage", "streaming"):
         return cpus_per_worker
 
     maximum_headroom = config.cpus_per_node - config.gpus_per_node
@@ -395,6 +541,7 @@ def build_trainer(
         "parent_job_id": config.parent_job_id,
         "storage_path": storage_path,
         "data_mode": config.data_mode,
+        "ray_version": config.ray_version,
     }
     trainer_options = {
         "train_loop_per_worker": _train_loop,
@@ -426,6 +573,26 @@ def build_trainer(
         }
         if config.data_mode == "ray-data-stage":
             trainer_options["dataset_config"] = ray_api.DataConfig(datasets_to_split=[])
+    elif config.data_mode == "streaming":
+        if config.dataset is None:
+            raise ValueError("streaming mode requires pinned dataset provenance")
+        streaming, samples_per_worker, padding_count = (
+            _load_s1h_streaming_dataset(config.dataset, world_size=workers)
+        )
+        trainer_options["datasets"] = {"train": streaming}
+        loop_config = {
+            **loop_config,
+            "worker_sample_count": samples_per_worker,
+            "dataset_padding_count": padding_count,
+            "dataset_id": config.dataset.dataset_id,
+            "dataset_version_id": config.dataset.version_id,
+            "dataset_manifest_sha256": config.dataset.manifest_sha256,
+            "dataset_root": config.dataset.dataset_root,
+            "dataset_cache_policy": config.dataset.cache_policy,
+            "dataset_prefetch_batches": config.dataset.prefetch_batches,
+            "dataset_shuffle_seed": config.dataset.shuffle_seed,
+        }
+        trainer_options["train_loop_config"] = loop_config
     return ray_api.TorchTrainer(**trainer_options)
 
 

@@ -256,6 +256,31 @@ type DatasetPublicationRun struct {
 	SourceObjectCount, ProcessedObjectCount, FailedObjectCount int64
 }
 
+// DatasetPublicationWork is the control-plane-only join used by the elected
+// publication manager. It keeps the user-facing dataset, immutable version,
+// and current publication attempt bound together across reconciler restarts.
+type DatasetPublicationWork struct {
+	Dataset Dataset
+	Version DatasetVersion
+	Run     DatasetPublicationRun
+}
+
+func (work DatasetPublicationWork) Validate() error {
+	if err := work.Dataset.Validate(); err != nil {
+		return err
+	}
+	if err := work.Version.Validate(); err != nil {
+		return err
+	}
+	if err := work.Run.Validate(); err != nil {
+		return err
+	}
+	if work.Version.DatasetID != work.Dataset.ID || work.Run.DatasetID != work.Dataset.ID || work.Run.DatasetVersionID != work.Version.ID || work.Run.State != work.Version.State {
+		return fmt.Errorf("dataset publication work identity or state is inconsistent")
+	}
+	return nil
+}
+
 func (run DatasetPublicationRun) Validate() error {
 	for name, value := range map[string]string{"publication ID": run.ID, "dataset ID": run.DatasetID, "dataset version ID": run.DatasetVersionID} {
 		if err := validateDatasetIdentifier(name, value); err != nil {

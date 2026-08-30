@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path"
@@ -11,103 +12,133 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/resource"
+	k8svalidation "k8s.io/apimachinery/pkg/util/validation"
 	"ray-train-platform-backend/domain"
 )
 
-var pinnedImagePattern = regexp.MustCompile(`^[^@\s]+@sha256:[0-9a-fA-F]{64}$`)
+var (
+	pinnedImagePattern                     = regexp.MustCompile(`^[^@\s]+@sha256:[0-9a-fA-F]{64}$`)
+	datasetPublisherPrivateEndpointPattern = regexp.MustCompile(`^tos[0-9]*-private$`)
+)
 
 type Config struct {
-	AppEnv                           string
-	HTTPAddr                         string
-	DatabaseURL                      string
-	OIDCIssuerURL                    string
-	OIDCClientID                     string
-	OIDCAudience                     string
-	OIDCGroupPrefix                  string
-	OIDCRequired                     bool
-	PATEnabled                       bool
-	PATPepper                        string
-	TrainingNodeSelector             map[string]string
-	KueueAutoQuota                   bool
-	MaxWorkerReplicas                int
-	MaxGPUsPerWorker                 int
-	MaxTotalGPUs                     int
-	LocalCacheEnabled                bool
-	DataSpacesEnabled                bool
-	DataSpacesFSXAttributes          string
-	DataSpacesMountCapacity          string
-	DataSpacesPublicRoot             string
-	IDCDataSpacesEnabled             bool
-	IDCDataSpacesMountCapacity       string
-	IDCDataSpaceSources              map[string]IDCDataSpaceSource
-	DatasetVersioningEnabled         bool
-	RayDataStreamingEnabled          bool
-	DatasetInternalPrefix            string
-	LocalCacheStorageClass           string
-	LocalCacheStorageClassData1      string
-	LocalCacheStorageClassData2      string
-	LocalCacheSize                   string
-	LocalCacheAllowedSizes           []string
-	LocalCacheMaxSize                string
-	LocalCacheMountPath              string
-	LocalCacheMountPathData1         string
-	LocalCacheMountPathData2         string
-	LocalAuthEnabled                 bool
-	LocalSessionHours                int
-	BootstrapAdminUsername           string
-	BootstrapAdminPassword           string
-	BootstrapAdminTenant             string
-	PATDefaultExpiryDays             int
-	PATMaxExpiryDays                 int
-	SourceArtifactsEnabled           bool
-	SourceArtifactMaxPending         int
-	SourceArtifactQuotaBytes         int64
-	RayAPISpoolDir                   string
-	RayAPISpoolSizeBytes             int64
-	RayAPIUploadMaxConcurrent        int
-	RayAPIUploadRateLimit            int
-	RayAPIDefaultImage               string
-	KubeConfig                       string
-	KubeContext                      string
-	LokiURL                          string
-	PrometheusURL                    string
-	MLflowEnabled                    bool
-	MLflowTrackingURL                string
-	MLflowIngestURL                  string
-	MLflowExperimentPrefix           string
-	MLflowDashboardEnabled           bool
-	MLflowPublicOrigin               string
-	MLflowDashboardSessionHours      int
-	KueueClusterQueue                string
-	IDCStorageEnabled                bool
-	IDCExistingClaim                 string
-	IDCStorageClass                  string
-	IDCMountPath                     string
-	RayVersion                       string
-	RayTrainManagedEnabled           bool
-	RayTrainManagedTenants           []string
-	RayTrainCanaryEnabled            bool
-	RayTrainCanaryTenants            []string
-	RayJobClusterSpecField           string
-	RayJobServiceAccount             string
-	ImagePullSecrets                 []string
-	SourceMaterializerImage          string
-	WorkspaceImage                   string
-	CORSOrigins                      []string
-	RayImageAllowlist                []string
-	GitAllowlist                     []string
-	TOSBucket                        string
-	TOSEndpoint                      string
-	TOSRegion                        string
-	TOSAccessKey                     string
-	TOSSecretKey                     string
-	TOSSecurityToken                 string
-	TOSSecretName                    string
-	TOSObjectSetQuotasEnabled        bool
-	PersonalStorageDefaultQuotaBytes int64
-	PersonalStorageMaxQuotaBytes     int64
-	MigrationsOnly                   bool
-	DemoMode                         bool
+	AppEnv                                   string
+	HTTPAddr                                 string
+	DatabaseURL                              string
+	OIDCIssuerURL                            string
+	OIDCClientID                             string
+	OIDCAudience                             string
+	OIDCGroupPrefix                          string
+	OIDCRequired                             bool
+	PATEnabled                               bool
+	PATPepper                                string
+	TrainingNodeSelector                     map[string]string
+	KueueAutoQuota                           bool
+	MaxWorkerReplicas                        int
+	MaxGPUsPerWorker                         int
+	MaxTotalGPUs                             int
+	LocalCacheEnabled                        bool
+	DataSpacesEnabled                        bool
+	DataSpacesFSXAttributes                  string
+	DataSpacesMountCapacity                  string
+	DataSpacesPublicRoot                     string
+	IDCDataSpacesEnabled                     bool
+	IDCDataSpacesMountCapacity               string
+	IDCDataSpaceSources                      map[string]IDCDataSpaceSource
+	DatasetVersioningEnabled                 bool
+	RayDataStreamingEnabled                  bool
+	DatasetPublisherEnabled                  bool
+	DatasetInternalPrefix                    string
+	DatasetPublisherImage                    string
+	DatasetPublisherImagePullPolicy          string
+	DatasetPublisherSourceBucket             string
+	DatasetPublisherTargetBucket             string
+	DatasetPublisherTOSEndpoint              string
+	DatasetPublisherTOSRegion                string
+	DatasetPublisherServiceAccount           string
+	DatasetPublisherQueueName                string
+	DatasetPublisherPriorityClassName        string
+	DatasetPublisherWorkingDirectory         string
+	DatasetPublisherSourceIndexName          string
+	DatasetPublisherCPURequest               string
+	DatasetPublisherCPULimit                 string
+	DatasetPublisherMemoryRequest            string
+	DatasetPublisherMemoryLimit              string
+	DatasetPublisherNodeSelector             map[string]string
+	DatasetPublisherPreferredNodeSelector    map[string]string
+	DatasetPublisherTolerations              []DatasetPublisherToleration
+	DatasetPublisherClientMaxAttempts        int
+	DatasetPublisherJobBackoffLimit          int
+	DatasetPublisherJobActiveDeadlineSeconds int
+	DatasetPublisherJobTTLSeconds            int
+	DatasetPublisherInitialRetrySeconds      int
+	DatasetPublisherMaximumRetrySeconds      int
+	DatasetPublisherPollIntervalSeconds      int
+	LocalCacheStorageClass                   string
+	LocalCacheStorageClassData1              string
+	LocalCacheStorageClassData2              string
+	LocalCacheSize                           string
+	LocalCacheAllowedSizes                   []string
+	LocalCacheMaxSize                        string
+	LocalCacheMountPath                      string
+	LocalCacheMountPathData1                 string
+	LocalCacheMountPathData2                 string
+	LocalAuthEnabled                         bool
+	LocalSessionHours                        int
+	BootstrapAdminUsername                   string
+	BootstrapAdminPassword                   string
+	BootstrapAdminTenant                     string
+	PATDefaultExpiryDays                     int
+	PATMaxExpiryDays                         int
+	SourceArtifactsEnabled                   bool
+	SourceArtifactMaxPending                 int
+	SourceArtifactQuotaBytes                 int64
+	RayAPISpoolDir                           string
+	RayAPISpoolSizeBytes                     int64
+	RayAPIUploadMaxConcurrent                int
+	RayAPIUploadRateLimit                    int
+	RayAPIDefaultImage                       string
+	KubeConfig                               string
+	KubeContext                              string
+	LokiURL                                  string
+	PrometheusURL                            string
+	MLflowEnabled                            bool
+	MLflowTrackingURL                        string
+	MLflowIngestURL                          string
+	MLflowExperimentPrefix                   string
+	MLflowDashboardEnabled                   bool
+	MLflowPublicOrigin                       string
+	MLflowDashboardSessionHours              int
+	KueueClusterQueue                        string
+	IDCStorageEnabled                        bool
+	IDCExistingClaim                         string
+	IDCStorageClass                          string
+	IDCMountPath                             string
+	RayVersion                               string
+	RayTrainManagedEnabled                   bool
+	RayTrainManagedTenants                   []string
+	RayTrainCanaryEnabled                    bool
+	RayTrainCanaryTenants                    []string
+	RayJobClusterSpecField                   string
+	RayJobServiceAccount                     string
+	ImagePullSecrets                         []string
+	SourceMaterializerImage                  string
+	WorkspaceImage                           string
+	CORSOrigins                              []string
+	RayImageAllowlist                        []string
+	GitAllowlist                             []string
+	TOSBucket                                string
+	TOSEndpoint                              string
+	TOSRegion                                string
+	TOSAccessKey                             string
+	TOSSecretKey                             string
+	TOSSecurityToken                         string
+	TOSSecretName                            string
+	TOSObjectSetQuotasEnabled                bool
+	PersonalStorageDefaultQuotaBytes         int64
+	PersonalStorageMaxQuotaBytes             int64
+	MigrationsOnly                           bool
+	DemoMode                                 bool
 }
 
 // IDCDataSpaceSource is a deployment-owned NFS export. It is deliberately
@@ -118,63 +149,86 @@ type IDCDataSpaceSource struct {
 	Path   string `json:"path"`
 }
 
+type DatasetPublisherToleration struct {
+	Key               string `json:"key"`
+	Operator          string `json:"operator"`
+	Value             string `json:"value,omitempty"`
+	Effect            string `json:"effect,omitempty"`
+	TolerationSeconds *int64 `json:"tolerationSeconds,omitempty"`
+}
+
 func Load() (Config, error) {
 	cfg := Config{
-		AppEnv:                      envOr("APP_ENV", "development"),
-		HTTPAddr:                    envOr("HTTP_ADDR", ":8080"),
-		DatabaseURL:                 os.Getenv("DATABASE_URL"),
-		OIDCIssuerURL:               os.Getenv("OIDC_ISSUER_URL"),
-		OIDCClientID:                os.Getenv("OIDC_CLIENT_ID"),
-		OIDCAudience:                os.Getenv("OIDC_AUDIENCE"),
-		OIDCGroupPrefix:             envOr("OIDC_GROUP_PREFIX", "platform/tenants/"),
-		PATPepper:                   os.Getenv("PAT_PEPPER"),
-		KubeConfig:                  os.Getenv("KUBECONFIG"),
-		KubeContext:                 os.Getenv("KUBE_CONTEXT"),
-		LokiURL:                     envOr("LOKI_URL", "http://loki-gateway.loki.svc.cluster.local"),
-		PrometheusURL:               envOr("PROMETHEUS_URL", "http://prometheus.monitoring.svc.cluster.local:9090"),
-		MLflowTrackingURL:           strings.TrimSpace(os.Getenv("MLFLOW_TRACKING_URL")),
-		MLflowIngestURL:             strings.TrimSpace(os.Getenv("MLFLOW_INGEST_URL")),
-		MLflowExperimentPrefix:      envOr("MLFLOW_EXPERIMENT_PREFIX", "raytrain"),
-		MLflowPublicOrigin:          strings.TrimSpace(os.Getenv("MLFLOW_PUBLIC_ORIGIN")),
-		MLflowDashboardSessionHours: 8,
-		KueueClusterQueue:           envOr("KUEUE_CLUSTER_QUEUE", "cluster-gpu-queue"),
-		IDCExistingClaim:            os.Getenv("IDC_EXISTING_CLAIM"),
-		IDCStorageClass:             os.Getenv("IDC_STORAGE_CLASS"),
-		IDCMountPath:                envOr("IDC_MOUNT_PATH", "/mnt/idc"),
-		LocalCacheStorageClass:      strings.TrimSpace(os.Getenv("LOCAL_CACHE_STORAGE_CLASS")),
-		LocalCacheStorageClassData1: strings.TrimSpace(envOr("LOCAL_CACHE_STORAGE_CLASS_DATA1", os.Getenv("LOCAL_CACHE_STORAGE_CLASS"))),
-		LocalCacheStorageClassData2: strings.TrimSpace(os.Getenv("LOCAL_CACHE_STORAGE_CLASS_DATA2")),
-		LocalCacheSize:              strings.TrimSpace(envOr("LOCAL_CACHE_SIZE", "200Gi")),
-		LocalCacheAllowedSizes:      splitList(envOr("LOCAL_CACHE_ALLOWED_SIZES", "200Gi,500Gi,1Ti,2Ti,4Ti,5Ti")),
-		LocalCacheMaxSize:           strings.TrimSpace(envOr("LOCAL_CACHE_MAX_SIZE", "5Ti")),
-		LocalCacheMountPath:         strings.TrimSpace(os.Getenv("LOCAL_CACHE_MOUNT_PATH")),
-		LocalCacheMountPathData1:    strings.TrimSpace(envOr("LOCAL_CACHE_MOUNT_PATH_DATA1", os.Getenv("LOCAL_CACHE_MOUNT_PATH"))),
-		LocalCacheMountPathData2:    strings.TrimSpace(os.Getenv("LOCAL_CACHE_MOUNT_PATH_DATA2")),
-		DataSpacesFSXAttributes:     strings.TrimSpace(os.Getenv("DATA_SPACES_FSX_VOLUME_ATTRIBUTES_JSON")),
-		RayAPIDefaultImage:          strings.TrimSpace(os.Getenv("RAY_API_DEFAULT_IMAGE")),
-		DataSpacesMountCapacity:     strings.TrimSpace(os.Getenv("DATA_SPACES_MOUNT_CAPACITY")),
-		DataSpacesPublicRoot:        envOr("DATA_SPACES_PUBLIC_ROOT", domain.DefaultPublicDataRoot),
-		IDCDataSpacesMountCapacity:  strings.TrimSpace(os.Getenv("IDC_DATA_SPACES_MOUNT_CAPACITY")),
-		DatasetInternalPrefix:       envOr("DATASET_INTERNAL_PREFIX", domain.DefaultDatasetInternalPrefix),
-		RayVersion:                  envOr("RAY_VERSION", "2.35.0"),
-		RayTrainManagedTenants:      splitUniqueList(os.Getenv("RAY_TRAIN_MANAGED_TENANTS")),
-		RayTrainCanaryTenants:       splitUniqueList(os.Getenv("RAY_TRAIN_CANARY_TENANTS")),
-		RayJobClusterSpecField:      envOr("KUBERAY_RAYJOB_CLUSTER_SPEC_FIELD", "rayClusterSpec"),
-		RayJobServiceAccount:        os.Getenv("RAY_JOB_SERVICE_ACCOUNT"),
-		ImagePullSecrets:            splitList(os.Getenv("IMAGE_PULL_SECRETS")),
-		SourceMaterializerImage:     os.Getenv("SOURCE_MATERIALIZER_IMAGE"),
-		WorkspaceImage:              os.Getenv("WORKSPACE_IMAGE"),
-		CORSOrigins:                 splitList(os.Getenv("CORS_ORIGINS")),
-		RayImageAllowlist:           splitList(os.Getenv("RAY_IMAGE_ALLOWLIST")),
-		GitAllowlist:                splitList(os.Getenv("GIT_ALLOWLIST")),
-		TOSBucket:                   os.Getenv("TOS_BUCKET"),
-		TOSEndpoint:                 os.Getenv("TOS_ENDPOINT"),
-		TOSRegion:                   os.Getenv("TOS_REGION"),
-		TOSAccessKey:                os.Getenv("TOS_ACCESS_KEY"),
-		TOSSecretKey:                os.Getenv("TOS_SECRET_KEY"),
-		TOSSecurityToken:            os.Getenv("TOS_SECURITY_TOKEN"),
-		TOSSecretName:               os.Getenv("TOS_SECRET_NAME"),
-		RayAPISpoolDir:              strings.TrimSpace(os.Getenv("RAY_API_SPOOL_DIR")),
+		AppEnv:                            envOr("APP_ENV", "development"),
+		HTTPAddr:                          envOr("HTTP_ADDR", ":8080"),
+		DatabaseURL:                       os.Getenv("DATABASE_URL"),
+		OIDCIssuerURL:                     os.Getenv("OIDC_ISSUER_URL"),
+		OIDCClientID:                      os.Getenv("OIDC_CLIENT_ID"),
+		OIDCAudience:                      os.Getenv("OIDC_AUDIENCE"),
+		OIDCGroupPrefix:                   envOr("OIDC_GROUP_PREFIX", "platform/tenants/"),
+		PATPepper:                         os.Getenv("PAT_PEPPER"),
+		KubeConfig:                        os.Getenv("KUBECONFIG"),
+		KubeContext:                       os.Getenv("KUBE_CONTEXT"),
+		LokiURL:                           envOr("LOKI_URL", "http://loki-gateway.loki.svc.cluster.local"),
+		PrometheusURL:                     envOr("PROMETHEUS_URL", "http://prometheus.monitoring.svc.cluster.local:9090"),
+		MLflowTrackingURL:                 strings.TrimSpace(os.Getenv("MLFLOW_TRACKING_URL")),
+		MLflowIngestURL:                   strings.TrimSpace(os.Getenv("MLFLOW_INGEST_URL")),
+		MLflowExperimentPrefix:            envOr("MLFLOW_EXPERIMENT_PREFIX", "raytrain"),
+		MLflowPublicOrigin:                strings.TrimSpace(os.Getenv("MLFLOW_PUBLIC_ORIGIN")),
+		MLflowDashboardSessionHours:       8,
+		KueueClusterQueue:                 envOr("KUEUE_CLUSTER_QUEUE", "cluster-gpu-queue"),
+		IDCExistingClaim:                  os.Getenv("IDC_EXISTING_CLAIM"),
+		IDCStorageClass:                   os.Getenv("IDC_STORAGE_CLASS"),
+		IDCMountPath:                      envOr("IDC_MOUNT_PATH", "/mnt/idc"),
+		LocalCacheStorageClass:            strings.TrimSpace(os.Getenv("LOCAL_CACHE_STORAGE_CLASS")),
+		LocalCacheStorageClassData1:       strings.TrimSpace(envOr("LOCAL_CACHE_STORAGE_CLASS_DATA1", os.Getenv("LOCAL_CACHE_STORAGE_CLASS"))),
+		LocalCacheStorageClassData2:       strings.TrimSpace(os.Getenv("LOCAL_CACHE_STORAGE_CLASS_DATA2")),
+		LocalCacheSize:                    strings.TrimSpace(envOr("LOCAL_CACHE_SIZE", "200Gi")),
+		LocalCacheAllowedSizes:            splitList(envOr("LOCAL_CACHE_ALLOWED_SIZES", "200Gi,500Gi,1Ti,2Ti,4Ti,5Ti")),
+		LocalCacheMaxSize:                 strings.TrimSpace(envOr("LOCAL_CACHE_MAX_SIZE", "5Ti")),
+		LocalCacheMountPath:               strings.TrimSpace(os.Getenv("LOCAL_CACHE_MOUNT_PATH")),
+		LocalCacheMountPathData1:          strings.TrimSpace(envOr("LOCAL_CACHE_MOUNT_PATH_DATA1", os.Getenv("LOCAL_CACHE_MOUNT_PATH"))),
+		LocalCacheMountPathData2:          strings.TrimSpace(os.Getenv("LOCAL_CACHE_MOUNT_PATH_DATA2")),
+		DataSpacesFSXAttributes:           strings.TrimSpace(os.Getenv("DATA_SPACES_FSX_VOLUME_ATTRIBUTES_JSON")),
+		RayAPIDefaultImage:                strings.TrimSpace(os.Getenv("RAY_API_DEFAULT_IMAGE")),
+		DataSpacesMountCapacity:           strings.TrimSpace(os.Getenv("DATA_SPACES_MOUNT_CAPACITY")),
+		DataSpacesPublicRoot:              envOr("DATA_SPACES_PUBLIC_ROOT", domain.DefaultPublicDataRoot),
+		IDCDataSpacesMountCapacity:        strings.TrimSpace(os.Getenv("IDC_DATA_SPACES_MOUNT_CAPACITY")),
+		DatasetInternalPrefix:             envOr("DATASET_INTERNAL_PREFIX", domain.DefaultDatasetInternalPrefix),
+		DatasetPublisherImage:             strings.TrimSpace(os.Getenv("DATASET_PUBLISHER_IMAGE")),
+		DatasetPublisherImagePullPolicy:   strings.TrimSpace(envOr("DATASET_PUBLISHER_IMAGE_PULL_POLICY", "IfNotPresent")),
+		DatasetPublisherSourceBucket:      strings.TrimSpace(envOr("DATASET_PUBLISHER_SOURCE_BUCKET", os.Getenv("TOS_BUCKET"))),
+		DatasetPublisherTargetBucket:      strings.TrimSpace(envOr("DATASET_PUBLISHER_TARGET_BUCKET", envOr("DATASET_PUBLISHER_SOURCE_BUCKET", os.Getenv("TOS_BUCKET")))),
+		DatasetPublisherTOSEndpoint:       configuredDatasetPublisherEndpoint(),
+		DatasetPublisherTOSRegion:         strings.TrimSpace(envOr("DATASET_PUBLISHER_REGION", os.Getenv("TOS_REGION"))),
+		DatasetPublisherServiceAccount:    strings.TrimSpace(os.Getenv("DATASET_PUBLISHER_SERVICE_ACCOUNT")),
+		DatasetPublisherQueueName:         strings.TrimSpace(os.Getenv("DATASET_PUBLISHER_QUEUE_NAME")),
+		DatasetPublisherPriorityClassName: strings.TrimSpace(os.Getenv("DATASET_PUBLISHER_PRIORITY_CLASS_NAME")),
+		DatasetPublisherWorkingDirectory:  strings.TrimSpace(envOr("DATASET_PUBLISHER_WORKING_DIRECTORY", "/tmp/raytrain-publisher")),
+		DatasetPublisherSourceIndexName:   strings.TrimSpace(envOr("DATASET_PUBLISHER_SOURCE_INDEX_NAME", ".raytrain/trusted-index-v2.pkl")),
+		DatasetPublisherCPURequest:        strings.TrimSpace(envOr("DATASET_PUBLISHER_CPU_REQUEST", "1000m")),
+		DatasetPublisherCPULimit:          strings.TrimSpace(envOr("DATASET_PUBLISHER_CPU_LIMIT", "4000m")),
+		DatasetPublisherMemoryRequest:     strings.TrimSpace(envOr("DATASET_PUBLISHER_MEMORY_REQUEST", "2Gi")),
+		DatasetPublisherMemoryLimit:       strings.TrimSpace(envOr("DATASET_PUBLISHER_MEMORY_LIMIT", "8Gi")),
+		RayVersion:                        envOr("RAY_VERSION", "2.35.0"),
+		RayTrainManagedTenants:            splitUniqueList(os.Getenv("RAY_TRAIN_MANAGED_TENANTS")),
+		RayTrainCanaryTenants:             splitUniqueList(os.Getenv("RAY_TRAIN_CANARY_TENANTS")),
+		RayJobClusterSpecField:            envOr("KUBERAY_RAYJOB_CLUSTER_SPEC_FIELD", "rayClusterSpec"),
+		RayJobServiceAccount:              os.Getenv("RAY_JOB_SERVICE_ACCOUNT"),
+		ImagePullSecrets:                  splitList(os.Getenv("IMAGE_PULL_SECRETS")),
+		SourceMaterializerImage:           os.Getenv("SOURCE_MATERIALIZER_IMAGE"),
+		WorkspaceImage:                    os.Getenv("WORKSPACE_IMAGE"),
+		CORSOrigins:                       splitList(os.Getenv("CORS_ORIGINS")),
+		RayImageAllowlist:                 splitList(os.Getenv("RAY_IMAGE_ALLOWLIST")),
+		GitAllowlist:                      splitList(os.Getenv("GIT_ALLOWLIST")),
+		TOSBucket:                         os.Getenv("TOS_BUCKET"),
+		TOSEndpoint:                       os.Getenv("TOS_ENDPOINT"),
+		TOSRegion:                         os.Getenv("TOS_REGION"),
+		TOSAccessKey:                      os.Getenv("TOS_ACCESS_KEY"),
+		TOSSecretKey:                      os.Getenv("TOS_SECRET_KEY"),
+		TOSSecurityToken:                  os.Getenv("TOS_SECURITY_TOKEN"),
+		TOSSecretName:                     os.Getenv("TOS_SECRET_NAME"),
+		RayAPISpoolDir:                    strings.TrimSpace(os.Getenv("RAY_API_SPOOL_DIR")),
 	}
 	if cfg.RayAPISpoolDir == "" && cfg.AppEnv != "production" {
 		cfg.RayAPISpoolDir = os.TempDir()
@@ -264,6 +318,39 @@ func Load() (Config, error) {
 	if cfg.RayDataStreamingEnabled, err = parseBool("RAY_DATA_STREAMING_ENABLED", false); err != nil {
 		return Config{}, err
 	}
+	if cfg.DatasetPublisherEnabled, err = parseBool("DATASET_PUBLISHER_ENABLED", false); err != nil {
+		return Config{}, err
+	}
+	if cfg.DatasetPublisherNodeSelector, err = parseLabelSelector("DATASET_PUBLISHER_NODE_SELECTOR"); err != nil {
+		return Config{}, err
+	}
+	if cfg.DatasetPublisherPreferredNodeSelector, err = parseLabelSelector("DATASET_PUBLISHER_PREFERRED_NODE_SELECTOR"); err != nil {
+		return Config{}, err
+	}
+	if cfg.DatasetPublisherTolerations, err = parseDatasetPublisherTolerations(); err != nil {
+		return Config{}, err
+	}
+	if cfg.DatasetPublisherClientMaxAttempts, err = parseInt("DATASET_PUBLISHER_CLIENT_MAX_ATTEMPTS", 3); err != nil {
+		return Config{}, err
+	}
+	if cfg.DatasetPublisherJobBackoffLimit, err = parseInt("DATASET_PUBLISHER_JOB_BACKOFF_LIMIT", 3); err != nil {
+		return Config{}, err
+	}
+	if cfg.DatasetPublisherJobActiveDeadlineSeconds, err = parseInt("DATASET_PUBLISHER_JOB_ACTIVE_DEADLINE_SECONDS", 7*24*60*60); err != nil {
+		return Config{}, err
+	}
+	if cfg.DatasetPublisherJobTTLSeconds, err = parseInt("DATASET_PUBLISHER_JOB_TTL_SECONDS", 24*60*60); err != nil {
+		return Config{}, err
+	}
+	if cfg.DatasetPublisherInitialRetrySeconds, err = parseInt("DATASET_PUBLISHER_INITIAL_RETRY_SECONDS", 1); err != nil {
+		return Config{}, err
+	}
+	if cfg.DatasetPublisherMaximumRetrySeconds, err = parseInt("DATASET_PUBLISHER_MAXIMUM_RETRY_SECONDS", 30); err != nil {
+		return Config{}, err
+	}
+	if cfg.DatasetPublisherPollIntervalSeconds, err = parseInt("DATASET_PUBLISHER_POLL_INTERVAL_SECONDS", 10); err != nil {
+		return Config{}, err
+	}
 	if raw := strings.TrimSpace(os.Getenv("IDC_DATA_SPACES_SOURCES_JSON")); raw != "" {
 		if err := json.Unmarshal([]byte(raw), &cfg.IDCDataSpaceSources); err != nil {
 			return Config{}, fmt.Errorf("IDC_DATA_SPACES_SOURCES_JSON must be a JSON object of NFS sources: %w", err)
@@ -339,7 +426,199 @@ func Load() (Config, error) {
 	if err := validateSourceArtifactConfig(cfg); err != nil {
 		return Config{}, err
 	}
+	if cfg.RayDataStreamingEnabled {
+		if !cfg.DatasetVersioningEnabled {
+			return Config{}, fmt.Errorf("RAY_DATA_STREAMING_ENABLED requires DATASET_VERSIONING_ENABLED")
+		}
+		if !strings.HasPrefix(cfg.DatasetInternalPrefix, "ray-train/") {
+			return Config{}, fmt.Errorf("DATASET_INTERNAL_PREFIX must remain below ray-train when RAY_DATA_STREAMING_ENABLED is true")
+		}
+	}
+	if err := validateDatasetPublisherConfig(cfg); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
+}
+
+func validateDatasetPublisherConfig(cfg Config) error {
+	if !cfg.DatasetPublisherEnabled {
+		return nil
+	}
+	if !cfg.DatasetVersioningEnabled {
+		return fmt.Errorf("DATASET_PUBLISHER_ENABLED requires DATASET_VERSIONING_ENABLED")
+	}
+	checks := []struct{ value, name string }{
+		{cfg.DatasetPublisherImage, "DATASET_PUBLISHER_IMAGE"},
+		{cfg.DatasetPublisherSourceBucket, "DATASET_PUBLISHER_SOURCE_BUCKET"},
+		{cfg.DatasetPublisherTargetBucket, "DATASET_PUBLISHER_TARGET_BUCKET"},
+		{cfg.DatasetPublisherTOSEndpoint, "DATASET_PUBLISHER_ENDPOINT"},
+		{cfg.DatasetPublisherTOSRegion, "DATASET_PUBLISHER_REGION"},
+		{cfg.DatasetPublisherServiceAccount, "DATASET_PUBLISHER_SERVICE_ACCOUNT"},
+		{cfg.DatasetPublisherQueueName, "DATASET_PUBLISHER_QUEUE_NAME"},
+		{cfg.DatasetPublisherPriorityClassName, "DATASET_PUBLISHER_PRIORITY_CLASS_NAME"},
+	}
+	for _, check := range checks {
+		if strings.TrimSpace(check.value) == "" {
+			return fmt.Errorf("%s is required when DATASET_VERSIONING_ENABLED is true", check.name)
+		}
+	}
+	if !pinnedImagePattern.MatchString(cfg.DatasetPublisherImage) {
+		return fmt.Errorf("DATASET_PUBLISHER_IMAGE must be pinned by sha256 digest")
+	}
+	if cfg.DatasetPublisherImagePullPolicy != "Always" && cfg.DatasetPublisherImagePullPolicy != "IfNotPresent" && cfg.DatasetPublisherImagePullPolicy != "Never" {
+		return fmt.Errorf("DATASET_PUBLISHER_IMAGE_PULL_POLICY must be Always, IfNotPresent, or Never")
+	}
+	if !validDatasetPublisherBucket(cfg.DatasetPublisherSourceBucket) {
+		return fmt.Errorf("DATASET_PUBLISHER_SOURCE_BUCKET must be a bare TOS bucket name")
+	}
+	if !validDatasetPublisherBucket(cfg.DatasetPublisherTargetBucket) {
+		return fmt.Errorf("DATASET_PUBLISHER_TARGET_BUCKET must be a bare TOS bucket name")
+	}
+	if !validDatasetPublisherRegion(cfg.DatasetPublisherTOSRegion) {
+		return fmt.Errorf("DATASET_PUBLISHER_REGION must be a lowercase cloud region")
+	}
+	if !validDatasetPublisherEndpoint(cfg.DatasetPublisherTOSEndpoint, cfg.DatasetPublisherTOSRegion) {
+		return fmt.Errorf("DATASET_PUBLISHER_ENDPOINT must be an approved Volcengine TOS DNS hostname for DATASET_PUBLISHER_REGION")
+	}
+	for _, named := range []struct{ value, name string }{
+		{cfg.DatasetPublisherServiceAccount, "DATASET_PUBLISHER_SERVICE_ACCOUNT"},
+		{cfg.DatasetPublisherQueueName, "DATASET_PUBLISHER_QUEUE_NAME"},
+		{cfg.DatasetPublisherPriorityClassName, "DATASET_PUBLISHER_PRIORITY_CLASS_NAME"},
+	} {
+		if !isDNSSubdomain(named.value) {
+			return fmt.Errorf("%s must be a valid Kubernetes name", named.name)
+		}
+	}
+	if !cleanAbsoluteDatasetPublisherDirectory(cfg.DatasetPublisherWorkingDirectory) {
+		return fmt.Errorf("DATASET_PUBLISHER_WORKING_DIRECTORY must be a clean non-root absolute path")
+	}
+	if !cleanDatasetPublisherRelativePath(cfg.DatasetPublisherSourceIndexName) {
+		return fmt.Errorf("DATASET_PUBLISHER_SOURCE_INDEX_NAME must be a clean relative path")
+	}
+	parsedQuantities := make(map[string]resource.Quantity, 4)
+	for _, quantity := range []struct{ value, name string }{
+		{cfg.DatasetPublisherCPURequest, "DATASET_PUBLISHER_CPU_REQUEST"},
+		{cfg.DatasetPublisherCPULimit, "DATASET_PUBLISHER_CPU_LIMIT"},
+		{cfg.DatasetPublisherMemoryRequest, "DATASET_PUBLISHER_MEMORY_REQUEST"},
+		{cfg.DatasetPublisherMemoryLimit, "DATASET_PUBLISHER_MEMORY_LIMIT"},
+	} {
+		parsed, err := resource.ParseQuantity(quantity.value)
+		if err != nil || parsed.Sign() <= 0 {
+			return fmt.Errorf("%s must be a positive Kubernetes quantity", quantity.name)
+		}
+		parsedQuantities[quantity.name] = parsed
+	}
+	if request, limit := parsedQuantities["DATASET_PUBLISHER_CPU_REQUEST"], parsedQuantities["DATASET_PUBLISHER_CPU_LIMIT"]; request.Cmp(limit) > 0 {
+		return fmt.Errorf("DATASET_PUBLISHER_CPU_LIMIT must be greater than or equal to DATASET_PUBLISHER_CPU_REQUEST")
+	}
+	if request, limit := parsedQuantities["DATASET_PUBLISHER_MEMORY_REQUEST"], parsedQuantities["DATASET_PUBLISHER_MEMORY_LIMIT"]; request.Cmp(limit) > 0 {
+		return fmt.Errorf("DATASET_PUBLISHER_MEMORY_LIMIT must be greater than or equal to DATASET_PUBLISHER_MEMORY_REQUEST")
+	}
+	if cfg.DatasetPublisherClientMaxAttempts < 1 || cfg.DatasetPublisherClientMaxAttempts > 10 {
+		return fmt.Errorf("DATASET_PUBLISHER_CLIENT_MAX_ATTEMPTS must be between 1 and 10")
+	}
+	if cfg.DatasetPublisherJobBackoffLimit < 0 || cfg.DatasetPublisherJobBackoffLimit > 10 {
+		return fmt.Errorf("DATASET_PUBLISHER_JOB_BACKOFF_LIMIT must be between 0 and 10")
+	}
+	const maximumLifecycleSeconds = 30 * 24 * 60 * 60
+	if cfg.DatasetPublisherJobActiveDeadlineSeconds < 1 || cfg.DatasetPublisherJobActiveDeadlineSeconds > maximumLifecycleSeconds {
+		return fmt.Errorf("DATASET_PUBLISHER_JOB_ACTIVE_DEADLINE_SECONDS must be between 1 and 2592000")
+	}
+	if cfg.DatasetPublisherJobTTLSeconds < 1 || cfg.DatasetPublisherJobTTLSeconds > maximumLifecycleSeconds {
+		return fmt.Errorf("DATASET_PUBLISHER_JOB_TTL_SECONDS must be between 1 and 2592000")
+	}
+	if cfg.DatasetPublisherInitialRetrySeconds < 0 || cfg.DatasetPublisherInitialRetrySeconds > cfg.DatasetPublisherMaximumRetrySeconds {
+		return fmt.Errorf("DATASET_PUBLISHER_INITIAL_RETRY_SECONDS must be nonnegative and no greater than DATASET_PUBLISHER_MAXIMUM_RETRY_SECONDS")
+	}
+	if cfg.DatasetPublisherMaximumRetrySeconds < 1 || cfg.DatasetPublisherMaximumRetrySeconds > 300 {
+		return fmt.Errorf("DATASET_PUBLISHER_MAXIMUM_RETRY_SECONDS must be between 1 and 300")
+	}
+	if cfg.DatasetPublisherPollIntervalSeconds < 1 || cfg.DatasetPublisherPollIntervalSeconds > 300 {
+		return fmt.Errorf("DATASET_PUBLISHER_POLL_INTERVAL_SECONDS must be between 1 and 300")
+	}
+	return nil
+}
+
+func normalizeDatasetPublisherEndpoint(raw string) string {
+	value := strings.TrimSpace(raw)
+	value = strings.TrimPrefix(value, "https://")
+	value = strings.TrimPrefix(value, "http://")
+	return strings.TrimSuffix(value, "/")
+}
+
+func configuredDatasetPublisherEndpoint() string {
+	if configured := strings.TrimSpace(os.Getenv("DATASET_PUBLISHER_ENDPOINT")); configured != "" {
+		return configured
+	}
+	return normalizeDatasetPublisherEndpoint(os.Getenv("TOS_ENDPOINT"))
+}
+
+func validDatasetPublisherBucket(value string) bool {
+	if len(value) < 3 || len(value) > 63 || strings.TrimSpace(value) != value || value[0] == '-' || value[len(value)-1] == '-' {
+		return false
+	}
+	for _, character := range value {
+		if character >= 'a' && character <= 'z' || character >= '0' && character <= '9' || character == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validDatasetPublisherEndpoint(value, region string) bool {
+	if value == "" || value != strings.ToLower(value) || strings.ContainsAny(value, "/\\:@?#") {
+		return false
+	}
+	if !validDatasetPublisherRegion(region) {
+		return false
+	}
+
+	officialSuffix := ""
+	switch {
+	case strings.HasSuffix(value, ".ivolces.com"):
+		officialSuffix = ".ivolces.com"
+	case strings.HasSuffix(value, ".volces.com"):
+		officialSuffix = ".volces.com"
+	default:
+		return false
+	}
+
+	endpointLabels := strings.Split(strings.TrimSuffix(value, officialSuffix), ".")
+	regionalService := "tos-" + region
+	regionalS3Service := "tos-s3-" + region
+	if len(endpointLabels) == 1 {
+		return endpointLabels[0] == regionalService || endpointLabels[0] == regionalS3Service
+	}
+	if len(endpointLabels) == 2 {
+		return validDatasetPublisherBucket(endpointLabels[0]) &&
+			(endpointLabels[1] == regionalService || endpointLabels[1] == regionalS3Service)
+	}
+	if officialSuffix == ".ivolces.com" && len(endpointLabels) == 3 {
+		return datasetPublisherPrivateEndpointPattern.MatchString(endpointLabels[0]) &&
+			endpointLabels[1] == region && endpointLabels[2] == "tos"
+	}
+	return false
+}
+
+func validDatasetPublisherRegion(value string) bool {
+	return strings.Contains(value, "-") && isDNSSubdomain(value)
+}
+
+func cleanAbsoluteDatasetPublisherDirectory(value string) bool {
+	return strings.HasPrefix(value, "/") && value != "/" && path.Clean(value) == value && strings.TrimSpace(value) == value
+}
+
+func cleanDatasetPublisherRelativePath(value string) bool {
+	if value == "" || path.IsAbs(value) || path.Clean(value) != value || value == "." || strings.TrimSpace(value) != value || strings.ContainsAny(value, `\\:@?#%`) {
+		return false
+	}
+	for _, segment := range strings.Split(value, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 func validateMLflowConfig(cfg Config) error {
@@ -823,4 +1102,47 @@ func parseLabelSelector(name string) (map[string]string, error) {
 		selector[key] = value
 	}
 	return selector, nil
+}
+
+func parseDatasetPublisherTolerations() ([]DatasetPublisherToleration, error) {
+	raw := strings.TrimSpace(os.Getenv("DATASET_PUBLISHER_TOLERATIONS_JSON"))
+	if raw == "" {
+		return nil, nil
+	}
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var tolerations []DatasetPublisherToleration
+	if err := decoder.Decode(&tolerations); err != nil {
+		return nil, fmt.Errorf("DATASET_PUBLISHER_TOLERATIONS_JSON must be a JSON array of explicit tolerations")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("DATASET_PUBLISHER_TOLERATIONS_JSON must contain exactly one JSON array")
+	}
+	if len(tolerations) > 64 {
+		return nil, fmt.Errorf("DATASET_PUBLISHER_TOLERATIONS_JSON must contain at most 64 tolerations")
+	}
+	result := make([]DatasetPublisherToleration, len(tolerations))
+	for index, toleration := range tolerations {
+		if toleration.Key == "" || len(k8svalidation.IsQualifiedName(toleration.Key)) != 0 {
+			return nil, fmt.Errorf("DATASET_PUBLISHER_TOLERATIONS_JSON contains an invalid key")
+		}
+		if toleration.Operator != "Equal" && toleration.Operator != "Exists" {
+			return nil, fmt.Errorf("DATASET_PUBLISHER_TOLERATIONS_JSON contains an invalid operator")
+		}
+		if toleration.Operator == "Equal" && (toleration.Value == "" || len(k8svalidation.IsValidLabelValue(toleration.Value)) != 0) {
+			return nil, fmt.Errorf("DATASET_PUBLISHER_TOLERATIONS_JSON contains an invalid value")
+		}
+		if toleration.Operator == "Exists" && toleration.Value != "" {
+			return nil, fmt.Errorf("DATASET_PUBLISHER_TOLERATIONS_JSON Exists tolerations must not set a value")
+		}
+		if toleration.Effect != "NoSchedule" && toleration.Effect != "PreferNoSchedule" && toleration.Effect != "NoExecute" {
+			return nil, fmt.Errorf("DATASET_PUBLISHER_TOLERATIONS_JSON contains an invalid effect")
+		}
+		if toleration.TolerationSeconds != nil && (toleration.Effect != "NoExecute" || *toleration.TolerationSeconds < 0 || *toleration.TolerationSeconds > 30*24*60*60) {
+			return nil, fmt.Errorf("DATASET_PUBLISHER_TOLERATIONS_JSON contains invalid tolerationSeconds")
+		}
+		result[index] = toleration
+	}
+	return result, nil
 }

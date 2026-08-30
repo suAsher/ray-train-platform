@@ -171,6 +171,35 @@ class MetricHookTest(unittest.TestCase):
         self.assertEqual(reports[0][0]["step"], 2.0)
         self.assertEqual(reports[0][1]["world_rank"], 7)
 
+    def test_reports_process_local_streaming_metrics_without_internal_paths(self):
+        from raytrain_runtime.data_metrics import (
+            observe_data_metric,
+            reset_data_metrics_for_tests,
+        )
+
+        reset_data_metrics_for_tests()
+        self.addCleanup(reset_data_metrics_for_tests)
+        observe_data_metric("dataset_source_read_seconds_total", 1.25)
+        observe_data_metric("dataset_cache_hits_total", 7)
+        reports = []
+        runner = _Runner()
+        runner.iter = 1
+        hook = RayTrainManagedHook(
+            interval=2,
+            checkpoint_every_epochs=0,
+            report_fn=lambda metrics, **kwargs: reports.append((metrics, kwargs)),
+            rank_fn=lambda: 3,
+        )
+
+        hook.after_train_iter(runner)
+
+        self.assertEqual(
+            reports[0][0]["dataset_source_read_seconds_total"], 1.25
+        )
+        self.assertEqual(reports[0][0]["dataset_cache_hits_total"], 7.0)
+        self.assertNotIn("dataset_root", reports[0][0])
+        self.assertNotIn("manifest_path", reports[0][0])
+
     def test_does_not_create_or_initialize_a_process_group(self):
         source = Path(sys.modules[RayTrainManagedHook.__module__].__file__).read_text(encoding="utf-8")
 

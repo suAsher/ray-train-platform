@@ -16,6 +16,7 @@ import (
 )
 
 var _ publisher.PublicationRunRepository = (*GormRepository)(nil)
+var _ publisher.PublicationManagerRepository = (*GormRepository)(nil)
 
 func publicationRunForTest(datasetID, versionID, runID string) domain.DatasetPublicationRun {
 	return domain.DatasetPublicationRun{
@@ -108,6 +109,134 @@ func TestEnsureDatasetPublicationRunIsIdempotentBoundAndImmutable(t *testing.T) 
 	visibleCollision := publicationRunForTest("dataset-team-a", secondVersion.ID, run.ID)
 	if _, err := repository.EnsureDatasetPublicationRun(context.Background(), "team-a", false, visibleCollision); !errors.Is(err, ErrDatasetPublicationRunConflict) {
 		t.Fatalf("visible run ID rebound error=%v, want ErrDatasetPublicationRunConflict", err)
+	}
+}
+
+func TestCreateDatasetPublicationRequestAtomicallyEnforcesManagementScope(t *testing.T) {
+	repository := datasetRepository(t)
+	team := teamDataset("dataset-team-a", "team-a-data", "team-a")
+	public := publicDataset("dataset-public", "public-data")
+	mustCreateDataset(t, repository, team)
+	mustCreateDataset(t, repository, public)
+
+	version := discoveringVersion(team.ID, "version-team-a", "20260830.1")
+	run := publicationRunForTest(team.ID, version.ID, "publication-team-a")
+	created, err := repository.CreateDatasetPublicationRequest(context.Background(), "team-a", false, version, run)
+	if err != nil || !reflect.DeepEqual(created, run) {
+		t.Fatalf("create publication request=%+v err=%v", created, err)
+	}
+	var versionCount, runCount int64
+	if err := repository.db.Model(&DatasetVersionRecord{}).Where("id = ?", version.ID).Count(&versionCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.db.Model(&DatasetPublicationRunRecord{}).Where("id = ?", run.ID).Count(&runCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if versionCount != 1 || runCount != 1 {
+		t.Fatalf("atomic create counts version=%d run=%d", versionCount, runCount)
+	}
+
+	unauthorizedVersion := discoveringVersion(public.ID, "version-public-denied", "20260830.2")
+	unauthorizedRun := publicationRunForTest(public.ID, unauthorizedVersion.ID, "publication-public-denied")
+	if _, err := repository.CreateDatasetPublicationRequest(context.Background(), "team-a", false, unauthorizedVersion, unauthorizedRun); !errors.Is(err, ErrDatasetPublicationRunNotFound) {
+		t.Fatalf("ordinary tenant public publication error=%v", err)
+	}
+	if err := repository.db.Model(&DatasetVersionRecord{}).Where("id = ?", unauthorizedVersion.ID).Count(&versionCount).Error; err != nil || versionCount != 0 {
+		t.Fatalf("unauthorized version persisted count=%d err=%v", versionCount, err)
+	}
+
+	rollbackVersion := discoveringVersion(team.ID, "version-rollback", "20260830.3")
+	conflictingRun := publicationRunForTest(team.ID, rollbackVersion.ID, run.ID)
+	if _, err := repository.CreateDatasetPublicationRequest(context.Background(), "team-a", false, rollbackVersion, conflictingRun); !errors.Is(err, ErrDatasetPublicationRunConflict) {
+		t.Fatalf("run collision error=%v", err)
+	}
+	if err := repository.db.Model(&DatasetVersionRecord{}).Where("id = ?", rollbackVersion.ID).Count(&versionCount).Error; err != nil || versionCount != 0 {
+		t.Fatalf("transaction did not roll back version count=%d err=%v", versionCount, err)
+	}
+}
+
+func TestListActiveDatasetPublicationsIsGlobalBoundedAndStateConsistent(t *testing.T) {
+	repository := datasetRepository(t)
+	public := publicDataset("dataset-public", "public-data")
+	team := teamDataset("dataset-team-a", "team-a-data", "team-a")
+	mustCreateDataset(t, repository, public)
+	mustCreateDataset(t, repository, team)
+
+	publicVersion := discoveringVersion(public.ID, "version-public", "20260830.1")
+	publicRun := publicationRunForTest(public.ID, publicVersion.ID, "publication-public")
+	if _, err := repository.CreateDatasetPublicationRequest(context.Background(), "", true, publicVersion, publicRun); err != nil {
+		t.Fatal(err)
+	}
+	teamVersion := discoveringVersion(team.ID, "version-team", "20260830.2")
+	teamRun := publicationRunForTest(team.ID, teamVersion.ID, "publication-team")
+	if _, err := repository.CreateDatasetPublicationRequest(context.Background(), "team-a", false, teamVersion, teamRun); err != nil {
+		t.Fatal(err)
+	}
+	if _, claimed, err := repository.ClaimDatasetPublicationRun(context.Background(), "team-a", false, team.ID, teamVersion.ID, teamRun.ID, time.Now()); err != nil || !claimed {
+		t.Fatalf("claim team publication claimed=%t err=%v", claimed, err)
+	}
+
+	failedVersion := discoveringVersion(public.ID, "version-failed", "20260830.3")
+	failedRun := publicationRunForTest(public.ID, failedVersion.ID, "publication-failed")
+	if _, err := repository.CreateDatasetPublicationRequest(context.Background(), "", true, failedVersion, failedRun); err != nil {
+		t.Fatal(err)
+	}
+	claimed, won, err := repository.ClaimDatasetPublicationRun(context.Background(), "", true, public.ID, failedVersion.ID, failedRun.ID, time.Now())
+	if err != nil || !won {
+		t.Fatalf("claim failed fixture won=%t err=%v", won, err)
+	}
+	claimed.State = domain.DatasetVersionFailed
+	if _, swapped, err := repository.CompareAndSwapDatasetPublicationRun(context.Background(), "", true, domain.DatasetVersionStabilizing, claimed, time.Now()); err != nil || !swapped {
+		t.Fatalf("fail fixture swapped=%t err=%v", swapped, err)
+	}
+
+	work, err := repository.ListActiveDatasetPublications(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("list active publications: %v", err)
+	}
+	if len(work) != 2 || work[0].Dataset.ID != public.ID || work[1].Dataset.ID != team.ID {
+		t.Fatalf("active work=%+v", work)
+	}
+	for _, item := range work {
+		if err := item.Validate(); err != nil {
+			t.Fatalf("invalid work item: %v", err)
+		}
+	}
+	bounded, err := repository.ListActiveDatasetPublications(context.Background(), 1)
+	if err != nil || len(bounded) != 1 {
+		t.Fatalf("bounded active work=%+v err=%v", bounded, err)
+	}
+	if _, err := repository.ListActiveDatasetPublications(context.Background(), 0); !errors.Is(err, ErrDatasetPublicationRunConflict) {
+		t.Fatalf("invalid limit error=%v", err)
+	}
+}
+
+func TestListDatasetVersionGCCandidatesExcludesReferencedAndNonDeprecatedVersions(t *testing.T) {
+	repository := datasetRepository(t)
+	if err := repository.db.AutoMigrate(&JobRecord{}); err != nil {
+		t.Fatalf("migrate job records: %v", err)
+	}
+	dataset := publicDataset("dataset-public", "public-data")
+	mustCreateDataset(t, repository, dataset)
+	deprecated := readyVersion(dataset.ID, "version-deprecated", "20260801.1")
+	deprecated.State = domain.DatasetVersionDeprecated
+	referenced := readyVersion(dataset.ID, "version-referenced", "20260801.2")
+	referenced.State = domain.DatasetVersionDeprecated
+	ready := readyVersion(dataset.ID, "version-ready", "20260801.3")
+	for _, version := range []domain.DatasetVersion{deprecated, referenced, ready} {
+		mustInsertDatasetVersion(t, repository, version, time.Now())
+	}
+	job := JobRecord{ID: "job-referencing-version", TenantID: "tenant-a", UserID: "user-a", Name: "reference", ObservedState: string(domain.StateSucceeded), DatasetID: &dataset.ID, DatasetVersionID: &referenced.ID}
+	if err := repository.db.Create(&job).Error; err != nil {
+		t.Fatalf("create referenced job: %v", err)
+	}
+
+	candidates, err := repository.ListDatasetVersionGCCandidates(context.Background())
+	if err != nil {
+		t.Fatalf("list GC candidates: %v", err)
+	}
+	if got := versionIDs(candidates); !reflect.DeepEqual(got, []string{deprecated.ID}) {
+		t.Fatalf("GC candidates=%v", got)
 	}
 }
 

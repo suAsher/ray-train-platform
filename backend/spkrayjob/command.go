@@ -56,6 +56,10 @@ func RunWithInput(ctx context.Context, arguments []string, stdin io.Reader, stdo
 		return runSourceArtifact(ctx, arguments[1:], stdout, stderr, getenv)
 	case "jobs":
 		return runJobs(ctx, arguments[1:], stdout, stderr, getenv)
+	case "datasets":
+		return runDatasets(ctx, arguments[1:], stdout, stderr, getenv)
+	case "dataset":
+		return runDataset(ctx, arguments[1:], stdout, stderr, getenv)
 	case "status":
 		return runStatus(ctx, arguments[1:], stdout, stderr, getenv)
 	case "logs":
@@ -73,6 +77,8 @@ const helpText = `spk-rayjob — 分布式训练任务命令行客户端
   spk-rayjob init                    在当前代码目录生成 .spk-rayjob.yaml 提交默认值
   spk-rayjob submit --watch          按默认值提交当前目录并等待结束
   spk-rayjob jobs                    列出我的任务
+	spk-rayjob datasets                列出我有权使用的数据集
+	spk-rayjob dataset versions <数据集>  列出不可变数据版本
   spk-rayjob status <JOB ID>         查看单个任务
   spk-rayjob logs -f <JOB ID>        实时跟随日志
   spk-rayjob cancel <JOB ID>         停止任务
@@ -97,6 +103,8 @@ const helpText = `spk-rayjob — 分布式训练任务命令行客户端
   --data-mode ray-data-stage   Ray Data 分布式读取并生成双 NVMe 本地视图
   --data-mode ray-data --ray-data-format images --ray-data-path images/train
                               直接把 Parquet/图片数据分片交给用户的 Ray Data 训练代码
+  --data-mode streaming --dataset <数据集>:<版本> --dataset-cache-policy bounded
+                              固定不可变数据集版本，由 Ray Data 按需流式读取
   --max-failures 2                 ray-train Worker 最大恢复次数（0-10）
   --checkpoint-every-epochs 1      ray-train 每隔多少 Epoch 保存 Checkpoint
   --checkpoint-keep-latest 3       ray-train 保留最近 Checkpoint 数
@@ -315,7 +323,7 @@ func runInit(arguments []string, stdout io.Writer) error {
 	image := set.String("image", "", "catalogued training image with an explicit tag or sha256 digest")
 	entrypoint := set.String("entrypoint", "python train.py", "training command, without torchrun")
 	engine := set.String("engine", string(domain.TrainingEngineRayDDP), "training engine: ray-ddp or ray-train")
-	dataMode := set.String("data-mode", "", "data mode: mount, cache, ray-data-stage, ray-data")
+	dataMode := set.String("data-mode", "", "data mode: mount, cache, ray-data-stage, ray-data, streaming")
 	gpus := set.Int("gpus-per-worker", 1, "GPUs per worker")
 	workers := set.Int("workers", 1, "worker replicas")
 	if err := set.Parse(arguments); err != nil || set.NArg() != 0 {
@@ -329,7 +337,7 @@ func runInit(arguments []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if (resolvedDataMode == domain.DataModeRayData || resolvedDataMode == domain.DataModeRayDataStage) && resolvedEngine != domain.TrainingEngineRayTrain {
+	if (resolvedDataMode == domain.DataModeRayData || resolvedDataMode == domain.DataModeRayDataStage || resolvedDataMode == domain.DataModeStreaming) && resolvedEngine != domain.TrainingEngineRayTrain {
 		return fmt.Errorf("%s 需要 --engine ray-train", resolvedDataMode)
 	}
 	jobName := sanitizeJobName(*name)
@@ -366,7 +374,10 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	image := set.String("image", "", "catalogued training image with an explicit tag or sha256 digest")
 	entrypoint := set.String("entrypoint", "", "shell command to run")
 	engine := set.String("engine", string(domain.TrainingEngineRayDDP), "training engine: ray-ddp or ray-train")
-	dataMode := set.String("data-mode", "", "data mode: mount, cache, ray-data-stage, ray-data")
+	dataMode := set.String("data-mode", "", "data mode: mount, cache, ray-data-stage, ray-data, streaming")
+	dataset := set.String("dataset", "", "public dataset ID/slug, optionally DATASET:VERSION")
+	datasetVersion := set.String("dataset-version", "", "immutable dataset version ID or latest")
+	cachePolicy := set.String("dataset-cache-policy", "", "streaming dataset cache policy: off, auto, bounded")
 	maxFailures := set.Int("max-failures", 2, "ray-train worker recovery limit (0-10)")
 	checkpointEveryEpochs := set.Int("checkpoint-every-epochs", 1, "ray-train checkpoint interval in epochs")
 	checkpointKeepLatest := set.Int("checkpoint-keep-latest", 3, "ray-train latest checkpoint retention")
@@ -401,32 +412,49 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 		return err
 	}
 	provided := providedFlags(set)
+	datasetOverride, err := parseDatasetFlag(*dataset, *datasetVersion, provided["dataset"], provided["dataset-version"])
+	if err != nil {
+		return err
+	}
 	resolved := defaults.merge(submitOverrides{
 		Name: *name, Image: *image, Entrypoint: *entrypoint, Engine: *engine, DataMode: *dataMode, Workers: *workers, GPUsPerWorker: *gpus,
+		DatasetRef: datasetOverride.Reference, CachePolicy: domain.DatasetCachePolicy(strings.TrimSpace(*cachePolicy)),
 		CPUPerWorker: *cpu, MemoryPerWorker: *memory, ExecutionMode: *executionMode,
-		Cache:                projectCache{Mode: *cacheMode, Size: *cacheSize, Preload: *cachePreload},
-		RayData:              projectRayData{Format: *rayDataFormat, Path: *rayDataPath},
-		Input:                projectLocation{Space: *inputSpace, Path: *inputPath},
-		Checkpoint:           projectLocation{Space: *checkpointSpace, Path: *checkpointPath},
-		Output:               projectLocation{Path: *outputPath},
-		providedName:         provided["name"],
-		providedImage:        provided["image"],
-		providedEntrypoint:   provided["entrypoint"],
-		providedEngine:       provided["engine"],
-		providedDataMode:     provided["data-mode"],
-		providedWorkers:      provided["workers"],
-		providedGPUs:         provided["gpus-per-worker"],
-		providedCPU:          provided["cpu-per-worker"],
-		providedMemory:       provided["memory-per-worker"],
-		providedMode:         provided["execution-mode"],
-		providedCacheMode:    provided["cache-mode"],
-		providedCacheSize:    provided["cache-size"],
-		providedCachePreload: provided["cache-preload"],
-		providedRayData:      provided["ray-data-format"] || provided["ray-data-path"],
-		providedInput:        provided["input-space"] || provided["input-path"],
-		providedCheckpoint:   provided["checkpoint-space"] || provided["checkpoint-path"],
-		providedOutput:       provided["output-path"],
+		Cache:                  projectCache{Mode: *cacheMode, Size: *cacheSize, Preload: *cachePreload},
+		RayData:                projectRayData{Format: *rayDataFormat, Path: *rayDataPath},
+		Input:                  projectLocation{Space: *inputSpace, Path: *inputPath},
+		Checkpoint:             projectLocation{Space: *checkpointSpace, Path: *checkpointPath},
+		Output:                 projectLocation{Path: *outputPath},
+		providedName:           provided["name"],
+		providedImage:          provided["image"],
+		providedEntrypoint:     provided["entrypoint"],
+		providedEngine:         provided["engine"],
+		providedDataMode:       provided["data-mode"],
+		providedDataset:        datasetOverride.DatasetProvided,
+		providedDatasetVersion: datasetOverride.VersionProvided,
+		providedCachePolicy:    provided["dataset-cache-policy"],
+		providedWorkers:        provided["workers"],
+		providedGPUs:           provided["gpus-per-worker"],
+		providedCPU:            provided["cpu-per-worker"],
+		providedMemory:         provided["memory-per-worker"],
+		providedMode:           provided["execution-mode"],
+		providedCacheMode:      provided["cache-mode"],
+		providedCacheSize:      provided["cache-size"],
+		providedCachePreload:   provided["cache-preload"],
+		providedRayData:        provided["ray-data-format"] || provided["ray-data-path"],
+		providedInput:          provided["input-space"] || provided["input-path"],
+		providedCheckpoint:     provided["checkpoint-space"] || provided["checkpoint-path"],
+		providedOutput:         provided["output-path"],
 	})
+	if resolved.DataMode == string(domain.DataModeStreaming) {
+		if provided["cache-mode"] || provided["cache-size"] || provided["cache-preload"] {
+			return errors.New("streaming 使用 --dataset-cache-policy off|auto|bounded，不能同时使用 --cache-mode/--cache-size/--cache-preload")
+		}
+		// Streaming uses the versioned dataset cache policy. Clear legacy cache
+		// defaults inherited from an older project file so they cannot leak into
+		// the public JobSpec or trigger a whole-dataset preload.
+		resolved.Cache = projectCache{}
+	}
 	if resolved.DataMode == string(domain.DataModeRayDataStage) {
 		if strings.TrimSpace(resolved.Cache.Mode) == "" {
 			resolved.Cache.Mode = string(domain.CacheModeRuntime)
@@ -550,6 +578,18 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	if err := validateArchiveJobSpec(spec); err != nil {
 		return err
 	}
+	if spec.DataMode == domain.DataModeStreaming {
+		resolvedSpec, preflight, preflightErr := client.PreflightStreaming(ctx, spec)
+		if preflightErr != nil {
+			return fmt.Errorf("提交前检查失败：%w", preflightErr)
+		}
+		spec = resolvedSpec
+		if !format.json {
+			if err := renderStreamingPreflight(stdout, preflight); err != nil {
+				return err
+			}
+		}
+	}
 	if archive.Path == "" {
 		archive, err = BuildArchive(*directory)
 		if err != nil {
@@ -572,6 +612,60 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 		return nil
 	}
 	return watchJob(ctx, client, job.ID, stdout, format.json)
+}
+
+func runDatasets(ctx context.Context, arguments []string, stdout, stderr io.Writer, getenv func(string) string) error {
+	set := flag.NewFlagSet("datasets", flag.ContinueOnError)
+	set.SetOutput(io.Discard)
+	var connection connectionFlags
+	bindConnectionFlags(set, &connection)
+	var format outputFormatFlag
+	bindOutputFormatFlag(set, &format)
+	if err := set.Parse(arguments); err != nil || set.NArg() != 0 {
+		return errors.New("datasets does not accept positional arguments")
+	}
+	client, err := newCommandClient(connection, getenv, stderr)
+	if err != nil {
+		return err
+	}
+	items, err := client.Datasets(ctx)
+	if err != nil {
+		return err
+	}
+	if format.json {
+		return writeJSON(stdout, items)
+	}
+	return renderDatasets(stdout, items)
+}
+
+func runDataset(ctx context.Context, arguments []string, stdout, stderr io.Writer, getenv func(string) string) error {
+	if len(arguments) == 0 || arguments[0] != "versions" {
+		return errors.New("dataset requires: dataset versions <dataset ID or slug>")
+	}
+	set := flag.NewFlagSet("dataset versions", flag.ContinueOnError)
+	set.SetOutput(io.Discard)
+	var connection connectionFlags
+	bindConnectionFlags(set, &connection)
+	var format outputFormatFlag
+	bindOutputFormatFlag(set, &format)
+	if err := set.Parse(arguments[1:]); err != nil || set.NArg() != 1 || strings.TrimSpace(set.Arg(0)) == "" {
+		return errors.New("dataset versions requires one dataset ID or slug")
+	}
+	client, err := newCommandClient(connection, getenv, stderr)
+	if err != nil {
+		return err
+	}
+	dataset, versions, err := client.DatasetVersions(ctx, set.Arg(0))
+	if err != nil {
+		return err
+	}
+	if format.json {
+		return writeJSON(stdout, struct {
+			Dataset  DatasetCatalogItem          `json:"dataset"`
+			Versions []DatasetVersionCatalogItem `json:"versions"`
+		}{Dataset: dataset, Versions: versions})
+	}
+	return renderDatasetVersions(stdout, dataset, versions)
 }
 
 func runSourceArtifact(ctx context.Context, arguments []string, stdout, stderr io.Writer, getenv func(string) string) error {
@@ -694,7 +788,7 @@ func applyManagedImage(ctx context.Context, value *project, client *Client, runt
 		return fmt.Errorf("读取镜像目录失败：%w", err)
 	}
 	requested := strings.TrimSpace(value.Image)
-	selected, err := managedImage(images, requested, runtime)
+	selected, err := managedImageForDataMode(images, requested, runtime, domain.DataMode(strings.TrimSpace(value.DataMode)))
 	if err != nil {
 		return err
 	}
@@ -732,12 +826,15 @@ func (value project) jobSpec() (domain.JobSpec, error) {
 	if err != nil {
 		return domain.JobSpec{}, err
 	}
-	if (dataMode == domain.DataModeRayData || dataMode == domain.DataModeRayDataStage) && engine != domain.TrainingEngineRayTrain {
+	if (dataMode == domain.DataModeRayData || dataMode == domain.DataModeRayDataStage || dataMode == domain.DataModeStreaming) && engine != domain.TrainingEngineRayTrain {
 		return domain.JobSpec{}, fmt.Errorf("%s 需要 --engine ray-train", dataMode)
 	}
-	input, err := commandDataLocation(value.Input.Space, value.Input.Path, "input")
-	if err != nil {
-		return domain.JobSpec{}, err
+	var input domain.DataLocation
+	if dataMode != domain.DataModeStreaming {
+		input, err = commandDataLocation(value.Input.Space, value.Input.Path, "input")
+		if err != nil {
+			return domain.JobSpec{}, err
+		}
 	}
 	if dataMode == domain.DataModeRayDataStage && (input.Space == "" || strings.TrimSpace(input.RelativePath) == "") {
 		return domain.JobSpec{}, errors.New("ray-data-stage requires a governed input data space with a non-empty input path")
@@ -767,20 +864,43 @@ func (value project) jobSpec() (domain.JobSpec, error) {
 	if memory == "" {
 		memory = "32Gi"
 	}
+	datasetRef := domain.DatasetReference{
+		Dataset: strings.TrimSpace(value.DatasetRef.Dataset),
+		Version: strings.TrimSpace(value.DatasetRef.Version),
+	}
+	cachePolicy := domain.DatasetCachePolicy(strings.TrimSpace(string(value.CachePolicy)))
+	if dataMode == domain.DataModeStreaming && cachePolicy == "" {
+		cachePolicy = domain.DatasetCachePolicyAuto
+	}
+	if err := datasetRef.Validate(); err != nil {
+		return domain.JobSpec{}, err
+	}
+	if err := cachePolicy.Validate(); err != nil {
+		return domain.JobSpec{}, err
+	}
+	if dataMode == domain.DataModeStreaming && datasetRef.IsZero() {
+		return domain.JobSpec{}, errors.New("streaming requires datasetRef")
+	}
+	cacheRequest := domain.CacheRequest{
+		Mode: domain.CacheMode(strings.TrimSpace(value.Cache.Mode)), Size: strings.TrimSpace(value.Cache.Size),
+		Preload: domain.CachePreloadMode(strings.TrimSpace(value.Cache.Preload)),
+	}
+	if dataMode == domain.DataModeStreaming {
+		cacheRequest = domain.CacheRequest{}
+	}
 	spec := domain.JobSpec{
 		Name: strings.TrimSpace(value.Name), Image: strings.TrimSpace(value.Image),
 		TrainingEngine: engine,
 		DataMode:       dataMode,
+		DatasetRef:     datasetRef,
+		CachePolicy:    cachePolicy,
 		Entrypoint:     domain.Entrypoint{Command: []string{"/bin/sh", "-lc", strings.TrimSpace(value.Entrypoint)}},
 		Execution:      execution,
 		Resources:      domain.Resources{WorkerReplicas: workers, GPUsPerWorker: gpus, CPUPerWorker: cpu, MemoryPerWorker: memory},
 		Input:          input,
 		Checkpoint:     checkpoint,
 		Output:         output,
-		Cache: domain.CacheRequest{
-			Mode: domain.CacheMode(strings.TrimSpace(value.Cache.Mode)), Size: strings.TrimSpace(value.Cache.Size),
-			Preload: domain.CachePreloadMode(strings.TrimSpace(value.Cache.Preload)),
-		},
+		Cache:          cacheRequest,
 	}
 	if engine == domain.TrainingEngineRayTrain {
 		spec.Managed = defaultManagedTrainingPolicy()

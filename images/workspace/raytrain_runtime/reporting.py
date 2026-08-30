@@ -30,6 +30,11 @@ _GAUGE_TAG_KEYS = (
     "pod",
     "rank",
     "gpu",
+    "dataset_id",
+    "dataset_version_id",
+    "ray_version",
+    "data_mode",
+    "cache_policy",
 )
 _CUSTOM_METRIC_NAMES = {
     "step": "platform_training_step",
@@ -38,6 +43,27 @@ _CUSTOM_METRIC_NAMES = {
     "data_time": "platform_training_data_time_seconds",
     "nccl_time": "platform_training_nccl_duration_seconds",
     "nccl_duration": "platform_training_nccl_duration_seconds",
+    "dataset_batches_total": "platform_training_dataset_batches_total",
+    "dataset_samples_total": "platform_training_dataset_samples_total",
+    "dataset_shard_reads_total": "platform_training_dataset_shard_reads_total",
+    "dataset_source_reads_total": "platform_training_dataset_source_reads_total",
+    "dataset_cache_reads_total": "platform_training_dataset_cache_reads_total",
+    "dataset_source_read_seconds_total": "platform_training_dataset_source_read_seconds_total",
+    "dataset_cache_read_seconds_total": "platform_training_dataset_cache_read_seconds_total",
+    "dataset_prefetch_wait_seconds_total": "platform_training_dataset_prefetch_wait_seconds_total",
+    "dataset_cache_hits_total": "platform_training_dataset_cache_hits_total",
+    "dataset_cache_misses_total": "platform_training_dataset_cache_misses_total",
+    "dataset_cache_downloads_total": "platform_training_dataset_cache_downloads_total",
+    "dataset_cache_fallbacks_total": "platform_training_dataset_cache_fallbacks_total",
+    "dataset_cache_checksum_failures_total": "platform_training_dataset_cache_checksum_failures_total",
+    "dataset_cache_evictions_total": "platform_training_dataset_cache_evictions_total",
+    "dataset_cache_stale_temp_reclaimed_total": "platform_training_dataset_cache_stale_temp_reclaimed_total",
+    "dataset_cache_bytes_total": "platform_training_dataset_cache_bytes_total",
+}
+_MLFLOW_DATA_METRICS = {
+    name: "rank0_worker_" + name
+    for name in _CUSTOM_METRIC_NAMES
+    if name.startswith("dataset_")
 }
 _CUSTOM_GAUGES: dict[str, Any] = {}
 _CUSTOM_GAUGES_LOCK = threading.Lock()
@@ -381,6 +407,15 @@ def _managed_metric_tags(rank: int) -> dict[str, str] | None:
         "pod": os.environ.get("PLATFORM_POD_NAME", "").strip(),
         "rank": str(rank),
         "gpu": assigned_gpu,
+        "dataset_id": os.environ.get("PLATFORM_DATASET_ID", "").strip(),
+        "dataset_version_id": os.environ.get(
+            "PLATFORM_DATASET_VERSION_ID", ""
+        ).strip(),
+        "ray_version": os.environ.get("PLATFORM_RAY_VERSION", "").strip(),
+        "data_mode": os.environ.get("PLATFORM_DATA_MODE", "").strip(),
+        "cache_policy": os.environ.get(
+            "PLATFORM_DATASET_CACHE_POLICY", ""
+        ).strip(),
     }
     if not _SAFE_IDENTIFIER.fullmatch(tags["platform_job_id"]):
         return None
@@ -388,6 +423,13 @@ def _managed_metric_tags(rank: int) -> dict[str, str] | None:
         if len(tags[key]) > 253 or not _SAFE_DNS_VALUE.fullmatch(tags[key]):
             return None
     if tags["ray_io_node_type"] != "worker" or rank < 0 or rank > 1_000_000:
+        return None
+    for key in ("dataset_id", "dataset_version_id", "ray_version"):
+        if tags[key] and not _SAFE_IDENTIFIER.fullmatch(tags[key]):
+            return None
+    if tags["data_mode"] not in ("", "mount", "cache", "ray-data", "ray-data-stage", "streaming"):
+        return None
+    if tags["cache_policy"] not in ("", "off", "auto", "bounded"):
         return None
     return tags
 
@@ -416,6 +458,37 @@ def _export_managed_metrics(metrics: Mapping[str, float], rank: int) -> None:
             continue
 
 
+def _export_mlflow_data_metrics(metrics: Mapping[str, float], rank: int) -> None:
+    """Attach honest rank-zero-local counters to the governed MLflow run.
+
+    Process-local counters cannot be described as job totals. Prometheus keeps
+    the authoritative per-rank series and platform-wide aggregate; MLflow uses
+    an explicit ``rank0_worker_`` prefix so experiment users cannot mistake the
+    representative worker values for a distributed sum.
+    """
+
+    if rank != 0 or not os.environ.get("MLFLOW_TRACKING_URI", "").strip():
+        return
+    selected = {
+        _MLFLOW_DATA_METRICS[key]: value
+        for key, value in metrics.items()
+        if key in _MLFLOW_DATA_METRICS
+    }
+    if not selected:
+        return
+    step_value = metrics.get("step", 0.0)
+    step = int(step_value) if 0 <= step_value <= 9_223_372_036_854_775_807 else 0
+    try:
+        import mlflow
+
+        if mlflow.active_run() is None:
+            return
+        mlflow.log_metrics(selected, step=step)
+    except Exception:
+        # MLflow is supplementary; a telemetry outage must not stop training.
+        return
+
+
 def world_rank(*, train_api: Any | None = None) -> int:
     api = train_api if train_api is not None else _load_train_api()
     return int(api.get_context().get_world_rank())
@@ -439,6 +512,7 @@ def report_metrics(
     api = train_api if train_api is not None else _load_train_api()
     rank = int(api.get_context().get_world_rank()) if world_rank is None else int(world_rank)
     _export_managed_metrics(clean, rank)
+    _export_mlflow_data_metrics(clean, rank)
     checkpoint = None
     checkpoint_error = None
     if checkpoint_dir is not None and rank == 0:

@@ -115,6 +115,49 @@ func TestDatasetPreflightResolvesLatestWithoutProvisioningResources(t *testing.T
 	}
 }
 
+func TestStreamingBoundedPreflightRequiresDualNVMeBeforeAnySideEffect(t *testing.T) {
+	dataset, version := streamingDatasetFixtures()
+	for _, test := range []struct {
+		name       string
+		policy     LocalCachePolicy
+		wantDetail string
+	}{
+		{name: "runtime cache disabled", wantDetail: "runtime cache capability is disabled"},
+		{
+			name: "only one cache mount",
+			policy: LocalCachePolicy{
+				Enabled: true, AllowedSizes: []string{"100Gi"}, DefaultSize: "100Gi", MaxSize: "100Gi",
+				MountPaths: []string{"/mnt/cache"},
+			},
+			wantDetail: "dual-NVMe",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &submissionServiceRepository{}
+			newIDCalls := 0
+			service := streamingSubmissionService(repository, &fakeDatasetCatalog{
+				datasets: []domain.Dataset{dataset}, versions: []domain.DatasetVersion{version},
+			}, true, true, domain.RayVersionCanary, func() (string, error) {
+				newIDCalls++
+				return "job-must-not-be-created", nil
+			})
+			service.localCache = test.policy
+			spec := streamingSubmissionSpec()
+			spec.CachePolicy = domain.DatasetCachePolicyBounded
+
+			result, err := service.Preflight(context.Background(), SubmissionInput{
+				Principal: streamingPrincipal(), Spec: spec, Origin: domain.SubmissionOriginRayCLI,
+			})
+			if result != (SubmissionPreflightResult{}) || !errors.Is(err, ErrSubmissionInvalidJobSpec) || !strings.Contains(err.Error(), test.wantDetail) {
+				t.Fatalf("bounded streaming preflight returned result=%+v err=%v", result, err)
+			}
+			if repository.created != nil || repository.identityCalls != 0 || repository.createCalls != 0 || newIDCalls != 0 {
+				t.Fatalf("invalid bounded streaming preflight crossed side-effect boundary: repository=%+v newIDs=%d", repository, newIDCalls)
+			}
+		})
+	}
+}
+
 func TestDatasetPreflightRouteReturnsSafeConcreteVersion(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	dataset, version := streamingDatasetFixtures()

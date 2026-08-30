@@ -7,6 +7,18 @@ import (
 
 const testPATPepper = "0123456789abcdef0123456789abcdef"
 
+func setValidDatasetPublisherConfig(t *testing.T) {
+	t.Helper()
+	t.Setenv("DATASET_PUBLISHER_ENABLED", "true")
+	t.Setenv("TOS_BUCKET", "source-bucket")
+	t.Setenv("TOS_ENDPOINT", "tos-cn-shanghai.ivolces.com")
+	t.Setenv("TOS_REGION", "cn-shanghai")
+	t.Setenv("DATASET_PUBLISHER_IMAGE", "registry.example/publisher@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	t.Setenv("DATASET_PUBLISHER_SERVICE_ACCOUNT", "release-dataset-publisher")
+	t.Setenv("DATASET_PUBLISHER_QUEUE_NAME", "release-dataset-publisher")
+	t.Setenv("DATASET_PUBLISHER_PRIORITY_CLASS_NAME", "release-dataset-publisher-low")
+}
+
 func setValidProductionConfig(t *testing.T) {
 	t.Helper()
 	t.Setenv("APP_ENV", "production")
@@ -172,8 +184,8 @@ func TestLoadDatasetVersioningAndRayDataStreamingDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load dataset feature defaults: %v", err)
 	}
-	if cfg.DatasetVersioningEnabled || cfg.RayDataStreamingEnabled {
-		t.Fatalf("dataset feature flags must default off: versioning=%t streaming=%t", cfg.DatasetVersioningEnabled, cfg.RayDataStreamingEnabled)
+	if cfg.DatasetVersioningEnabled || cfg.RayDataStreamingEnabled || cfg.DatasetPublisherEnabled {
+		t.Fatalf("dataset feature flags must default off: versioning=%t streaming=%t publisher=%t", cfg.DatasetVersioningEnabled, cfg.RayDataStreamingEnabled, cfg.DatasetPublisherEnabled)
 	}
 	if cfg.DatasetInternalPrefix != "ray-train/platform/datasets" {
 		t.Fatalf("unexpected dataset internal prefix default: %q", cfg.DatasetInternalPrefix)
@@ -185,22 +197,23 @@ func TestLoadDatasetVersioningAndRayDataStreamingOverrides(t *testing.T) {
 	t.Setenv("PAT_ENABLED", "false")
 	t.Setenv("DATASET_VERSIONING_ENABLED", "true")
 	t.Setenv("RAY_DATA_STREAMING_ENABLED", "true")
-	t.Setenv("DATASET_INTERNAL_PREFIX", "private/platform/datasets")
+	t.Setenv("DATASET_INTERNAL_PREFIX", "ray-train/private/platform/datasets")
+	setValidDatasetPublisherConfig(t)
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("load dataset feature overrides: %v", err)
 	}
-	if !cfg.DatasetVersioningEnabled || !cfg.RayDataStreamingEnabled {
-		t.Fatalf("dataset feature flag overrides were not retained: versioning=%t streaming=%t", cfg.DatasetVersioningEnabled, cfg.RayDataStreamingEnabled)
+	if !cfg.DatasetVersioningEnabled || !cfg.RayDataStreamingEnabled || !cfg.DatasetPublisherEnabled {
+		t.Fatalf("dataset feature flag overrides were not retained: versioning=%t streaming=%t publisher=%t", cfg.DatasetVersioningEnabled, cfg.RayDataStreamingEnabled, cfg.DatasetPublisherEnabled)
 	}
-	if cfg.DatasetInternalPrefix != "private/platform/datasets" {
+	if cfg.DatasetInternalPrefix != "ray-train/private/platform/datasets" {
 		t.Fatalf("dataset internal prefix override = %q", cfg.DatasetInternalPrefix)
 	}
 }
 
 func TestLoadRejectsInvalidDatasetVersioningAndRayDataStreamingFlags(t *testing.T) {
-	for _, envName := range []string{"DATASET_VERSIONING_ENABLED", "RAY_DATA_STREAMING_ENABLED"} {
+	for _, envName := range []string{"DATASET_VERSIONING_ENABLED", "RAY_DATA_STREAMING_ENABLED", "DATASET_PUBLISHER_ENABLED"} {
 		t.Run(envName, func(t *testing.T) {
 			t.Setenv("APP_ENV", "development")
 			t.Setenv("PAT_ENABLED", "false")
@@ -238,6 +251,150 @@ func TestLoadNormalizesDatasetInternalPrefix(t *testing.T) {
 	}
 	if cfg.DatasetInternalPrefix != "private/platform/datasets" {
 		t.Fatalf("dataset internal prefix was not normalized: %q", cfg.DatasetInternalPrefix)
+	}
+}
+
+func TestLoadRequiresCompleteDatasetPublisherConfigurationOnlyWhenPublisherIsEnabled(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("DATASET_VERSIONING_ENABLED", "true")
+	t.Setenv("DATASET_PUBLISHER_ENABLED", "true")
+	t.Setenv("DATASET_PUBLISHER_IMAGE", "")
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "DATASET_PUBLISHER_IMAGE") {
+		t.Fatalf("expected missing publisher image error, got %v", err)
+	}
+
+	t.Setenv("DATASET_PUBLISHER_ENABLED", "false")
+	if _, err := Load(); err != nil {
+		t.Fatalf("disabled publisher rollout must not require deployment settings: %v", err)
+	}
+}
+
+func TestLoadAllowsVersionCatalogWithoutPublisherRollout(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("DATASET_VERSIONING_ENABLED", "true")
+	t.Setenv("DATASET_PUBLISHER_ENABLED", "false")
+	t.Setenv("DATASET_PUBLISHER_IMAGE", "")
+
+	cfg, err := Load()
+	if err != nil || !cfg.DatasetVersioningEnabled || cfg.DatasetPublisherEnabled {
+		t.Fatalf("independent publisher rollout failed: cfg=%+v err=%v", cfg, err)
+	}
+}
+
+func TestLoadRejectsStreamingPrefixOutsideTenantStorageRoot(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("DATASET_VERSIONING_ENABLED", "true")
+	t.Setenv("RAY_DATA_STREAMING_ENABLED", "true")
+	t.Setenv("DATASET_INTERNAL_PREFIX", "private/platform/datasets")
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "DATASET_INTERNAL_PREFIX") {
+		t.Fatalf("streaming prefix outside ray-train was accepted: %v", err)
+	}
+}
+
+func TestLoadDatasetPublisherConfigurationUsesPinnedIRSAJobSettings(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("DATASET_VERSIONING_ENABLED", "true")
+	setValidDatasetPublisherConfig(t)
+	t.Setenv("TOS_ENDPOINT", "https://tos-cn-shanghai.ivolces.com")
+	t.Setenv("DATASET_PUBLISHER_TARGET_BUCKET", "derived-bucket")
+	t.Setenv("DATASET_PUBLISHER_NODE_SELECTOR", "pool=cpu")
+	t.Setenv("DATASET_PUBLISHER_PREFERRED_NODE_SELECTOR", "node-role=cpu")
+	t.Setenv("DATASET_PUBLISHER_TOLERATIONS_JSON", `[{"key":"dedicated","operator":"Equal","value":"platform","effect":"NoSchedule"}]`)
+	t.Setenv("DATASET_PUBLISHER_JOB_ACTIVE_DEADLINE_SECONDS", "7200")
+	t.Setenv("DATASET_PUBLISHER_JOB_TTL_SECONDS", "1800")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load dataset publisher configuration: %v", err)
+	}
+	if cfg.DatasetPublisherImage == "" || cfg.DatasetPublisherSourceBucket != "source-bucket" || cfg.DatasetPublisherTargetBucket != "derived-bucket" {
+		t.Fatalf("unexpected publisher object storage settings: %+v", cfg)
+	}
+	if cfg.DatasetPublisherTOSEndpoint != "tos-cn-shanghai.ivolces.com" || cfg.DatasetPublisherTOSRegion != "cn-shanghai" {
+		t.Fatalf("unexpected publisher endpoint settings: endpoint=%q region=%q", cfg.DatasetPublisherTOSEndpoint, cfg.DatasetPublisherTOSRegion)
+	}
+	if cfg.DatasetPublisherSourceIndexName != ".raytrain/trusted-index-v2.pkl" {
+		t.Fatalf("unexpected trusted index name: %q", cfg.DatasetPublisherSourceIndexName)
+	}
+	if cfg.DatasetPublisherJobActiveDeadlineSeconds != 7200 || cfg.DatasetPublisherJobTTLSeconds != 1800 {
+		t.Fatalf("unexpected publisher lifecycle: active=%d ttl=%d", cfg.DatasetPublisherJobActiveDeadlineSeconds, cfg.DatasetPublisherJobTTLSeconds)
+	}
+	if cfg.DatasetPublisherNodeSelector["pool"] != "cpu" || cfg.DatasetPublisherPreferredNodeSelector["node-role"] != "cpu" {
+		t.Fatalf("unexpected publisher placement: hard=%v preferred=%v", cfg.DatasetPublisherNodeSelector, cfg.DatasetPublisherPreferredNodeSelector)
+	}
+	if len(cfg.DatasetPublisherTolerations) != 1 || cfg.DatasetPublisherTolerations[0].Key != "dedicated" || cfg.DatasetPublisherTolerations[0].Effect != "NoSchedule" {
+		t.Fatalf("unexpected publisher tolerations: %+v", cfg.DatasetPublisherTolerations)
+	}
+}
+
+func TestLoadRejectsUnsafeDatasetPublisherConfiguration(t *testing.T) {
+	validImage := "registry.example/publisher@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	tests := []struct {
+		name  string
+		env   string
+		value string
+	}{
+		{name: "mutable image", env: "DATASET_PUBLISHER_IMAGE", value: "registry.example/publisher:latest"},
+		{name: "image pull policy", env: "DATASET_PUBLISHER_IMAGE_PULL_POLICY", value: "Sometimes"},
+		{name: "source bucket URI", env: "DATASET_PUBLISHER_SOURCE_BUCKET", value: "tos://source-bucket"},
+		{name: "endpoint URI", env: "DATASET_PUBLISHER_ENDPOINT", value: "https://tos-cn-shanghai.ivolces.com"},
+		{name: "loopback endpoint", env: "DATASET_PUBLISHER_ENDPOINT", value: "127.0.0.1"},
+		{name: "localhost endpoint", env: "DATASET_PUBLISHER_ENDPOINT", value: "localhost.localdomain"},
+		{name: "unapproved endpoint", env: "DATASET_PUBLISHER_ENDPOINT", value: "objects.example.com"},
+		{name: "forged TOS suffix", env: "DATASET_PUBLISHER_ENDPOINT", value: "tos-cn-shanghai.ivolces.com.attacker.example"},
+		{name: "wrong region endpoint", env: "DATASET_PUBLISHER_ENDPOINT", value: "tos-cn-beijing.ivolces.com"},
+		{name: "root workdir", env: "DATASET_PUBLISHER_WORKING_DIRECTORY", value: "/"},
+		{name: "unsafe index", env: "DATASET_PUBLISHER_SOURCE_INDEX_NAME", value: "../index.pkl"},
+		{name: "CPU limit below request", env: "DATASET_PUBLISHER_CPU_LIMIT", value: "500m"},
+		{name: "memory limit below request", env: "DATASET_PUBLISHER_MEMORY_LIMIT", value: "1Gi"},
+		{name: "invalid tolerations", env: "DATASET_PUBLISHER_TOLERATIONS_JSON", value: `[{"key":"dedicated","operator":"RunAnything"}]`},
+		{name: "zero attempts", env: "DATASET_PUBLISHER_CLIENT_MAX_ATTEMPTS", value: "0"},
+		{name: "excessive ttl", env: "DATASET_PUBLISHER_JOB_TTL_SECONDS", value: "2592001"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("APP_ENV", "development")
+			t.Setenv("PAT_ENABLED", "false")
+			t.Setenv("DATASET_VERSIONING_ENABLED", "true")
+			setValidDatasetPublisherConfig(t)
+			t.Setenv("DATASET_PUBLISHER_IMAGE", validImage)
+			t.Setenv(test.env, test.value)
+
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), test.env) {
+				t.Fatalf("expected %s validation error, got %v", test.env, err)
+			}
+		})
+	}
+}
+
+func TestLoadAcceptsApprovedVolcengineDatasetPublisherEndpoints(t *testing.T) {
+	for _, endpoint := range []string{
+		"tos-cn-shanghai.ivolces.com",
+		"tos-s3-cn-shanghai.ivolces.com",
+		"shanghai-data-transfer.tos-cn-shanghai.ivolces.com",
+		"tos-cn-shanghai.volces.com",
+		"tos2-private.cn-shanghai.tos.ivolces.com",
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			t.Setenv("APP_ENV", "development")
+			t.Setenv("PAT_ENABLED", "false")
+			t.Setenv("DATASET_VERSIONING_ENABLED", "true")
+			setValidDatasetPublisherConfig(t)
+			t.Setenv("DATASET_PUBLISHER_ENDPOINT", endpoint)
+
+			if _, err := Load(); err != nil {
+				t.Fatalf("expected approved TOS endpoint %q: %v", endpoint, err)
+			}
+		})
 	}
 }
 

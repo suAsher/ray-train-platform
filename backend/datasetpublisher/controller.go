@@ -537,7 +537,7 @@ func validControllerOptions(options ControllerOptions) bool {
 	if !isPublicationDNSLabel(options.Namespace) ||
 		domain.ValidatePinnedImage(options.Image) != nil ||
 		!validPublicationBucket(options.SourceBucket) || !validPublicationBucket(options.TargetBucket) ||
-		!validPublicationEndpoint(options.TOSEndpoint) || !validPublicationRegion(options.TOSRegion) ||
+		!validPublicationRegion(options.TOSRegion) || !validPublicationEndpoint(options.TOSEndpoint, options.TOSRegion) ||
 		!validPublicationImagePullPolicy(options.ImagePullPolicy) ||
 		!isPublicationDNSLabel(options.ServiceAccountName) ||
 		!isPublicationDNSLabel(options.QueueName) ||
@@ -585,16 +585,41 @@ func validPublicationBucket(value string) bool {
 	return true
 }
 
-func validPublicationEndpoint(value string) bool {
-	if value == "" || len(value) > 253 || strings.TrimSpace(value) != value || strings.ContainsAny(value, "/\\:@") {
+func validPublicationEndpoint(value, region string) bool {
+	if value == "" || len(value) > 253 || strings.TrimSpace(value) != value || value != strings.ToLower(value) || strings.ContainsAny(value, "/\\:@") || !validPublicationRegion(region) {
 		return false
 	}
-	labels := strings.Split(value, ".")
-	if len(labels) < 2 {
+	officialSuffix := ""
+	switch {
+	case strings.HasSuffix(value, ".ivolces.com"):
+		officialSuffix = ".ivolces.com"
+	case strings.HasSuffix(value, ".volces.com"):
+		officialSuffix = ".volces.com"
+	default:
 		return false
 	}
-	for _, label := range labels {
-		if !isPublicationDNSLabel(label) {
+	labels := strings.Split(strings.TrimSuffix(value, officialSuffix), ".")
+	regional := "tos-" + region
+	regionalS3 := "tos-s3-" + region
+	if len(labels) == 1 {
+		return labels[0] == regional || labels[0] == regionalS3
+	}
+	if len(labels) == 2 {
+		return validPublicationBucket(labels[0]) && (labels[1] == regional || labels[1] == regionalS3)
+	}
+	if officialSuffix == ".ivolces.com" && len(labels) == 3 {
+		return validPublicationPrivateEndpointLabel(labels[0]) && labels[1] == region && labels[2] == "tos"
+	}
+	return false
+}
+
+func validPublicationPrivateEndpointLabel(value string) bool {
+	if !strings.HasPrefix(value, "tos") || !strings.HasSuffix(value, "-private") {
+		return false
+	}
+	digits := strings.TrimSuffix(strings.TrimPrefix(value, "tos"), "-private")
+	for _, character := range digits {
+		if character < '0' || character > '9' {
 			return false
 		}
 	}

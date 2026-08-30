@@ -1,0 +1,45 @@
+{{- if (default false .Values.datasetPublisher.enabled) }}
+{{- $publisher := .Values.datasetPublisher -}}
+{{- $name := include "ray-train-platform.datasetPublisher.resourceName" (list . "") -}}
+{{- $localQueueName := default (include "ray-train-platform.datasetPublisher.resourceName" (list . "queue")) $publisher.kueue.localQueueName -}}
+{{- $priorityClassName := default (include "ray-train-platform.datasetPublisher.resourceName" (list . "priority")) $publisher.priorityClassName -}}
+{{- $sourceBucket := default .Values.tos.bucket $publisher.sourceBucket -}}
+{{- $targetBucket := default $sourceBucket $publisher.targetBucket -}}
+{{- $endpointRaw := default .Values.tos.endpoint $publisher.endpoint -}}
+{{- $endpoint := trimSuffix "/" (trimPrefix "https://" $endpointRaw) -}}
+{{- $region := default .Values.tos.region $publisher.region -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: dataset-publisher
+data:
+  DATASET_PUBLISHER_IMAGE: {{ include "ray-train-platform.image" (list . $publisher.image) | quote }}
+  DATASET_PUBLISHER_IMAGE_PULL_POLICY: {{ default .Values.global.imagePullPolicy $publisher.imagePullPolicy | quote }}
+  DATASET_PUBLISHER_SOURCE_BUCKET: {{ required "datasetPublisher source bucket is required" $sourceBucket | quote }}
+  DATASET_PUBLISHER_TARGET_BUCKET: {{ required "datasetPublisher target bucket is required" $targetBucket | quote }}
+  DATASET_PUBLISHER_ENDPOINT: {{ required "datasetPublisher endpoint is required" $endpoint | quote }}
+  DATASET_PUBLISHER_REGION: {{ required "datasetPublisher region is required" $region | quote }}
+  DATASET_PUBLISHER_SERVICE_ACCOUNT: {{ $name | quote }}
+  DATASET_PUBLISHER_QUEUE_NAME: {{ $localQueueName | quote }}
+  DATASET_PUBLISHER_PRIORITY_CLASS_NAME: {{ $priorityClassName | quote }}
+  DATASET_PUBLISHER_SOURCE_INDEX_NAME: {{ $publisher.sourceIndexName | quote }}
+  DATASET_PUBLISHER_CPU_REQUEST: {{ $publisher.resources.requests.cpu | quote }}
+  DATASET_PUBLISHER_CPU_LIMIT: {{ $publisher.resources.limits.cpu | quote }}
+  DATASET_PUBLISHER_MEMORY_REQUEST: {{ $publisher.resources.requests.memory | quote }}
+  DATASET_PUBLISHER_MEMORY_LIMIT: {{ $publisher.resources.limits.memory | quote }}
+  DATASET_PUBLISHER_JOB_BACKOFF_LIMIT: {{ $publisher.job.backoffLimit | quote }}
+  DATASET_PUBLISHER_JOB_ACTIVE_DEADLINE_SECONDS: {{ $publisher.job.activeDeadlineSeconds | quote }}
+  DATASET_PUBLISHER_JOB_TTL_SECONDS: {{ $publisher.job.ttlSecondsAfterFinished | quote }}
+  DATASET_PUBLISHER_CLIENT_MAX_ATTEMPTS: {{ $publisher.kubernetesClient.maxAttempts | quote }}
+  DATASET_PUBLISHER_INITIAL_RETRY_SECONDS: {{ $publisher.kubernetesClient.initialRetryBackoffSeconds | quote }}
+  DATASET_PUBLISHER_MAXIMUM_RETRY_SECONDS: {{ $publisher.kubernetesClient.maximumRetryBackoffSeconds | quote }}
+  DATASET_PUBLISHER_POLL_INTERVAL_SECONDS: {{ $publisher.manager.pollIntervalSeconds | quote }}
+  DATASET_PUBLISHER_WORKING_DIRECTORY: {{ $publisher.workingDirectory | quote }}
+  DATASET_PUBLISHER_PREFERRED_NODE_SELECTOR: {{ include "ray-train-platform.datasetPublisher.labelSelector" (default (dict) $publisher.preferredNodeSelector) | quote }}
+  DATASET_PUBLISHER_NODE_SELECTOR: {{ include "ray-train-platform.datasetPublisher.labelSelector" (default (dict) $publisher.nodeSelector) | quote }}
+  DATASET_PUBLISHER_TOLERATIONS_JSON: {{ default (list) $publisher.tolerations | toJson | quote }}
+{{- end }}

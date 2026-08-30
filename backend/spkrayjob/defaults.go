@@ -39,12 +39,26 @@ func normalizeCatalogImage(image catalogImage) (catalogImage, error) {
 }
 
 func managedImage(images []catalogImage, requestedReference string, runtime PlatformRuntimeLimits) (catalogImage, error) {
+	return managedImageForDataMode(images, requestedReference, runtime, "")
+}
+
+func managedImageForDataMode(images []catalogImage, requestedReference string, runtime PlatformRuntimeLimits, mode domain.DataMode) (catalogImage, error) {
 	if !runtime.ManagedAvailable() {
 		return catalogImage{}, fmt.Errorf("当前平台未开启 Ray Train 托管引擎")
+	}
+	requiredRayVersion := ""
+	if mode == domain.DataModeStreaming {
+		requiredRayVersion = runtime.CanaryRayVersion
+		if !runtime.CanaryEnabled || strings.TrimSpace(requiredRayVersion) != domain.RayVersionCanary {
+			return catalogImage{}, fmt.Errorf("streaming 需要平台开启 Ray %s canary 运行时", domain.RayVersionCanary)
+		}
 	}
 	compatible := func(image catalogImage) bool {
 		if !containsTrainingEngine(image.SupportedEngines, domain.TrainingEngineRayTrain) {
 			return false
+		}
+		if requiredRayVersion != "" {
+			return image.RayVersion == requiredRayVersion
 		}
 		if image.RayVersion == runtime.ProductionRayVersion {
 			return true
@@ -58,6 +72,9 @@ func managedImage(images []catalogImage, requestedReference string, runtime Plat
 				continue
 			}
 			if !compatible(image) {
+				if requiredRayVersion != "" {
+					return catalogImage{}, fmt.Errorf("镜像 %q 不支持 streaming 所需的 Ray %s", requested, requiredRayVersion)
+				}
 				return catalogImage{}, fmt.Errorf("镜像 %q 不支持当前 ray-train 托管运行时", requested)
 			}
 			return cloneCatalogImage(image), nil
@@ -72,6 +89,9 @@ func managedImage(images []catalogImage, requestedReference string, runtime Plat
 	}
 	reference, err := defaultImage(managed)
 	if err != nil {
+		if requiredRayVersion != "" {
+			return catalogImage{}, fmt.Errorf("没有可用的 streaming Ray %s 镜像：%w", requiredRayVersion, err)
+		}
 		return catalogImage{}, fmt.Errorf("没有可用的 ray-train 托管镜像：%w", err)
 	}
 	for _, image := range managed {

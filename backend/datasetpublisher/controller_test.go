@@ -519,6 +519,17 @@ func TestControllerRejectsInvalidRequestsAndConfiguration(t *testing.T) {
 		func() ControllerOptions { value := base; value.InitialRetryBackoff = -time.Second; return value }(),
 		func() ControllerOptions { value := base; value.SourceBucket = "tos://bucket"; return value }(),
 		func() ControllerOptions { value := base; value.TOSEndpoint = "https://tos.example.com"; return value }(),
+		func() ControllerOptions { value := base; value.TOSEndpoint = "objects.example.com"; return value }(),
+		func() ControllerOptions {
+			value := base
+			value.TOSEndpoint = "tos-cn-shanghai.ivolces.com.attacker.example"
+			return value
+		}(),
+		func() ControllerOptions {
+			value := base
+			value.TOSEndpoint = "tos-cn-beijing.ivolces.com"
+			return value
+		}(),
 		func() ControllerOptions {
 			value := base
 			value.NodeSelector = map[string]string{"": "cpu"}

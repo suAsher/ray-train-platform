@@ -19,6 +19,7 @@ import (
 	"ray-train-platform-backend/api"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/config"
+	"ray-train-platform-backend/datasetpublisher"
 	"ray-train-platform-backend/db"
 	"ray-train-platform-backend/domain"
 	"ray-train-platform-backend/httpapi"
@@ -123,9 +124,13 @@ func main() {
 		mlflowClient = &observability.MLflowClient{BaseURL: cfg.MLflowTrackingURL, ExperimentPrefix: cfg.MLflowExperimentPrefix, ProvenanceKey: []byte(cfg.PATPepper)}
 		experiments = mlflowClient
 	}
+	datasetPublicationManager, err := newDatasetPublicationManager(repository, kubeClient, cfg)
+	if err != nil {
+		log.Fatalf("initialize dataset publication controller: %v", err)
+	}
 	dataObjectStore, _ := directoryLister.(objectstore.DataSpaceStore)
 	workspaceSnapshotStore, _ := directoryLister.(objectstore.WorkspaceSnapshotStore)
-	jobHandler := api.NewHandler(repository, api.Options{AllowAnonymous: cfg.DemoMode, Logs: logs, Metrics: metrics, Experiments: experiments, ImageAllowlist: cfg.RayImageAllowlist, GitAllowlist: cfg.GitAllowlist, Workspaces: repository, Kubernetes: kubeClient, WorkspaceImage: cfg.WorkspaceImage, RayVersion: cfg.RayVersion, ServiceAccount: cfg.RayJobServiceAccount, ImagePullSecrets: cfg.ImagePullSecrets, PlatformNamespace: runtimeNamespace(), IDCClaim: cfg.IDCExistingClaim, IDCMountPath: cfg.IDCMountPath, KueueClusterQueue: cfg.KueueClusterQueue, Admin: repository, GPUAllocations: repository, Quota: repository, WorkspacePepper: []byte(cfg.PATPepper), TrainingNodeSelector: cfg.TrainingNodeSelector, Images: repository, GitCredentials: repository, StorageAssets: repository, Datasets: repository, DatasetInternalPrefix: cfg.DatasetInternalPrefix, DatasetVersioningEnabled: cfg.DatasetVersioningEnabled, RayDataStreamingEnabled: cfg.RayDataStreamingEnabled, DataSpaces: repository, DataSpacesEnabled: cfg.DataSpacesEnabled, DataSpacesFSXAttributes: cfg.DataSpacesFSXAttributes, DataSpacesMountCapacity: cfg.DataSpacesMountCapacity, DataSpacesPublicRoot: cfg.DataSpacesPublicRoot, IDCDataSpacesEnabled: cfg.IDCDataSpacesEnabled, IDCDataSpacesMountCapacity: cfg.IDCDataSpacesMountCapacity, IDCDataSpaceSources: idcDataSpaceSources(cfg), DirectoryLister: directoryLister, DirectoryInitializer: directoryInitializer, DataObjectStore: dataObjectStore, WorkspaceSnapshotStore: workspaceSnapshotStore, WorkspaceSnapshots: repository, ArtifactLister: artifactLister, ArtifactReader: artifactReader, LocalCache: api.LocalCachePolicy{Enabled: cfg.LocalCacheEnabled, AllowedSizes: cfg.LocalCacheAllowedSizes, DefaultSize: cfg.LocalCacheSize, MaxSize: cfg.LocalCacheMaxSize, MountPath: cfg.LocalCacheMountPathData1, MountPaths: []string{cfg.LocalCacheMountPathData1, cfg.LocalCacheMountPathData2}}, RuntimePolicy: runtimecatalog.NewPolicy(cfg.RayTrainManagedEnabled, cfg.RayTrainCanaryEnabled, cfg.RayTrainManagedTenants, cfg.RayTrainCanaryTenants), MLflowDashboardEnabled: cfg.MLflowDashboardEnabled, MLflowDashboardStore: repository, MLflowTrackingURL: cfg.MLflowTrackingURL, MLflowPublicOrigin: cfg.MLflowPublicOrigin, MLflowDashboardPepper: []byte(cfg.PATPepper), MLflowDashboardSessionTTL: time.Duration(cfg.MLflowDashboardSessionHours) * time.Hour})
+	jobHandler := api.NewHandler(repository, api.Options{AllowAnonymous: cfg.DemoMode, Logs: logs, Metrics: metrics, Experiments: experiments, ImageAllowlist: cfg.RayImageAllowlist, GitAllowlist: cfg.GitAllowlist, Workspaces: repository, Kubernetes: kubeClient, WorkspaceImage: cfg.WorkspaceImage, RayVersion: cfg.RayVersion, ServiceAccount: cfg.RayJobServiceAccount, ImagePullSecrets: cfg.ImagePullSecrets, PlatformNamespace: runtimeNamespace(), IDCClaim: cfg.IDCExistingClaim, IDCMountPath: cfg.IDCMountPath, KueueClusterQueue: cfg.KueueClusterQueue, Admin: repository, GPUAllocations: repository, Quota: repository, WorkspacePepper: []byte(cfg.PATPepper), TrainingNodeSelector: cfg.TrainingNodeSelector, Images: repository, GitCredentials: repository, StorageAssets: repository, Datasets: repository, DatasetPublications: datasetPublicationManager, DatasetInternalPrefix: cfg.DatasetInternalPrefix, DatasetVersioningEnabled: cfg.DatasetVersioningEnabled, RayDataStreamingEnabled: cfg.RayDataStreamingEnabled, DataSpaces: repository, DataSpacesEnabled: cfg.DataSpacesEnabled, DataSpacesFSXAttributes: cfg.DataSpacesFSXAttributes, DataSpacesMountCapacity: cfg.DataSpacesMountCapacity, DataSpacesPublicRoot: cfg.DataSpacesPublicRoot, IDCDataSpacesEnabled: cfg.IDCDataSpacesEnabled, IDCDataSpacesMountCapacity: cfg.IDCDataSpacesMountCapacity, IDCDataSpaceSources: idcDataSpaceSources(cfg), DirectoryLister: directoryLister, DirectoryInitializer: directoryInitializer, DataObjectStore: dataObjectStore, WorkspaceSnapshotStore: workspaceSnapshotStore, WorkspaceSnapshots: repository, ArtifactLister: artifactLister, ArtifactReader: artifactReader, LocalCache: api.LocalCachePolicy{Enabled: cfg.LocalCacheEnabled, AllowedSizes: cfg.LocalCacheAllowedSizes, DefaultSize: cfg.LocalCacheSize, MaxSize: cfg.LocalCacheMaxSize, MountPath: cfg.LocalCacheMountPathData1, MountPaths: []string{cfg.LocalCacheMountPathData1, cfg.LocalCacheMountPathData2}}, RuntimePolicy: runtimecatalog.NewPolicy(cfg.RayTrainManagedEnabled, cfg.RayTrainCanaryEnabled, cfg.RayTrainManagedTenants, cfg.RayTrainCanaryTenants), MLflowDashboardEnabled: cfg.MLflowDashboardEnabled, MLflowDashboardStore: repository, MLflowTrackingURL: cfg.MLflowTrackingURL, MLflowPublicOrigin: cfg.MLflowPublicOrigin, MLflowDashboardPepper: []byte(cfg.PATPepper), MLflowDashboardSessionTTL: time.Duration(cfg.MLflowDashboardSessionHours) * time.Hour})
 	rayHandler, err := newRayAPIHandler(repository, jobHandler.SubmissionService(), logs, cfg)
 	if err != nil {
 		log.Fatalf("initialize Ray Jobs API compatibility: %v", err)
@@ -141,6 +146,13 @@ func main() {
 		go func() {
 			if err := kubeClient.RunAsLeader(ctx, platformNamespace, "ray-train-platform-controller", reconciler.Run); err != nil && ctx.Err() == nil {
 				log.Printf("reconciler stopped: %v", err)
+			}
+		}()
+	}
+	if datasetPublicationManager != nil {
+		go func() {
+			if err := kubeClient.RunAsLeader(ctx, platformNamespace, "ray-train-platform-dataset-publisher", datasetPublicationManager.Run); err != nil && ctx.Err() == nil {
+				log.Printf("dataset publication controller stopped: %v", err)
 			}
 		}()
 	}
@@ -336,7 +348,7 @@ func newReconciler(repository *repositories.GormRepository, client *k8s.Client, 
 	if client == nil {
 		return nil
 	}
-	return newReconcilerWithQuotaSync(repository, client, cfg, k8s.RenderOptions{
+	reconciler := newReconcilerWithQuotaSync(repository, client, cfg, k8s.RenderOptions{
 		ClusterSpecField:        cfg.RayJobClusterSpecField,
 		RayVersion:              cfg.RayVersion,
 		ServiceAccount:          cfg.RayJobServiceAccount,
@@ -363,6 +375,86 @@ func newReconciler(repository *repositories.GormRepository, client *k8s.Client, 
 		},
 		TrainingEventBaseURL: managedTrainingEventBaseURL(runtimeNamespace()),
 	})
+	if cfg.DatasetVersioningEnabled && cfg.RayDataStreamingEnabled {
+		resolver, err := newPrivateDatasetManifestResolver(repository, cfg.DatasetInternalPrefix)
+		if err != nil {
+			// Configuration validation normally makes this unreachable. Keep the
+			// reconciler alive for legacy jobs while streaming remains fail-closed.
+			log.Printf("streaming dataset resolver disabled: %v", err)
+			return reconciler
+		}
+		reconciler.WithDatasetManifestResolver(resolver)
+	}
+	return reconciler
+}
+
+func newDatasetPublicationManager(
+	repository *repositories.GormRepository,
+	client *k8s.Client,
+	cfg config.Config,
+) (*datasetpublisher.Manager, error) {
+	if !cfg.DatasetPublisherEnabled {
+		return nil, nil
+	}
+	if repository == nil || client == nil {
+		return nil, fmt.Errorf("dataset publication requires PostgreSQL and Kubernetes")
+	}
+	controller, err := datasetpublisher.NewController(repository, client, datasetpublisher.ControllerOptions{
+		Namespace:             runtimeNamespace(),
+		Image:                 cfg.DatasetPublisherImage,
+		SourceBucket:          cfg.DatasetPublisherSourceBucket,
+		TargetBucket:          cfg.DatasetPublisherTargetBucket,
+		TOSEndpoint:           cfg.DatasetPublisherTOSEndpoint,
+		TOSRegion:             cfg.DatasetPublisherTOSRegion,
+		ImagePullPolicy:       cfg.DatasetPublisherImagePullPolicy,
+		ServiceAccountName:    cfg.DatasetPublisherServiceAccount,
+		QueueName:             cfg.DatasetPublisherQueueName,
+		PriorityClassName:     cfg.DatasetPublisherPriorityClassName,
+		WorkingDirectory:      cfg.DatasetPublisherWorkingDirectory,
+		InternalPrefix:        cfg.DatasetInternalPrefix,
+		NodeSelector:          cfg.DatasetPublisherNodeSelector,
+		PreferredNodeSelector: cfg.DatasetPublisherPreferredNodeSelector,
+		Tolerations:           datasetPublisherTolerations(cfg.DatasetPublisherTolerations),
+		CPURequest:            cfg.DatasetPublisherCPURequest,
+		CPULimit:              cfg.DatasetPublisherCPULimit,
+		MemoryRequest:         cfg.DatasetPublisherMemoryRequest,
+		MemoryLimit:           cfg.DatasetPublisherMemoryLimit,
+		ClientMaxAttempts:     cfg.DatasetPublisherClientMaxAttempts,
+		JobBackoffLimit:       cfg.DatasetPublisherJobBackoffLimit,
+		JobActiveDeadline:     time.Duration(cfg.DatasetPublisherJobActiveDeadlineSeconds) * time.Second,
+		JobTTLAfterFinished:   time.Duration(cfg.DatasetPublisherJobTTLSeconds) * time.Second,
+		InitialRetryBackoff:   time.Duration(cfg.DatasetPublisherInitialRetrySeconds) * time.Second,
+		MaximumRetryBackoff:   time.Duration(cfg.DatasetPublisherMaximumRetrySeconds) * time.Second,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("configure dataset publication jobs: %w", err)
+	}
+	manager, err := datasetpublisher.NewManager(repository, controller, datasetpublisher.ManagerOptions{
+		PublicRoot:      cfg.DataSpacesPublicRoot,
+		SourceIndexName: cfg.DatasetPublisherSourceIndexName,
+		PollInterval:    time.Duration(cfg.DatasetPublisherPollIntervalSeconds) * time.Second,
+		OnReconcileError: func(err error) {
+			log.Printf("dataset publication reconciliation deferred: %v", err)
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("configure dataset publication manager: %w", err)
+	}
+	return manager, nil
+}
+
+func datasetPublisherTolerations(values []config.DatasetPublisherToleration) []datasetpublisher.PublicationToleration {
+	result := make([]datasetpublisher.PublicationToleration, len(values))
+	for index, value := range values {
+		result[index] = datasetpublisher.PublicationToleration{
+			Key: value.Key, Operator: value.Operator, Value: value.Value, Effect: value.Effect,
+		}
+		if value.TolerationSeconds != nil {
+			result[index].Seconds = *value.TolerationSeconds
+			result[index].HasSeconds = true
+		}
+	}
+	return result
 }
 
 const managedTrainingEventTokenTTL = 30 * 24 * time.Hour

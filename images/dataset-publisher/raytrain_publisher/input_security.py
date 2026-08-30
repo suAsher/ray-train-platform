@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import math
 import re
 import stat
 from pathlib import Path
@@ -28,6 +29,47 @@ _WINDOWS_ABSOLUTE_PATH = re.compile(r"^[a-zA-Z]:[\\/]")
 
 
 def validate_lidar_only_info(value: object) -> None:
+    """Accept only the S1H v1 annotation fields consumed by the runtime."""
+
+    _validate_no_internal_locations(value)
+    if type(value) is not dict or set(value) not in (
+        {"boxes", "labels"},
+        {"boxes", "labels", "lidar_feature_count"},
+    ):
+        raise ValueError("lidar-only info fields must match the S1H v1 schema")
+    boxes = value["boxes"]
+    labels = value["labels"]
+    if type(boxes) is not list or type(labels) is not list or len(boxes) != len(labels):
+        raise ValueError("lidar-only boxes and labels must be equally sized lists")
+    for box in boxes:
+        if type(box) is not list or len(box) not in {7, 9}:
+            raise ValueError("lidar-only boxes must contain 7 or 9 finite values")
+        if any(
+            isinstance(item, bool)
+            or not isinstance(item, (int, float))
+            or not math.isfinite(float(item))
+            for item in box
+        ):
+            raise ValueError("lidar-only boxes must contain 7 or 9 finite values")
+    if any(
+        isinstance(label, bool)
+        or not isinstance(label, int)
+        or label < 0
+        or label > 32767
+        for label in labels
+    ):
+        raise ValueError("lidar-only labels must contain non-negative int16 values")
+    feature_count = value.get("lidar_feature_count", 5)
+    if (
+        isinstance(feature_count, bool)
+        or not isinstance(feature_count, int)
+        or feature_count < 1
+        or feature_count > 64
+    ):
+        raise ValueError("lidar-only feature count must be between 1 and 64")
+
+
+def _validate_no_internal_locations(value: object) -> None:
     """Reject camera metadata and every internal location representation."""
 
     if type(value) is dict:
@@ -50,11 +92,11 @@ def validate_lidar_only_info(value: object) -> None:
                 raise ValueError(
                     "lidar-only info must not contain an internal location"
                 )
-            validate_lidar_only_info(item)
+            _validate_no_internal_locations(item)
         return
     if type(value) is list:
         for item in value:
-            validate_lidar_only_info(item)
+            _validate_no_internal_locations(item)
         return
     if type(value) is str and (
         "://" in value

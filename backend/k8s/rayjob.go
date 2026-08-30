@@ -42,6 +42,10 @@ type RenderOptions struct {
 	// TrainingEventBaseURL is an internal control-plane URL. The renderer adds
 	// the immutable job path and never obtains it from a submission request.
 	TrainingEventBaseURL string
+	// DatasetManifest is resolved per streaming job by the reconciler from the
+	// private dataset catalogue. Static deployment configuration must not fill
+	// it, and non-streaming jobs deliberately ignore it.
+	DatasetManifest      *DatasetManifestMount
 	trainingEventJobID   string
 	managedResumePath    string
 	clusterAttempt       int
@@ -97,6 +101,11 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	if err := job.Spec.Validate(); err != nil {
 		return nil, fmt.Errorf("validate job spec: %w", err)
 	}
+	if job.Spec.DataMode == domain.DataModeStreaming {
+		if err := validateStreamingDatasetManifest(job, options.DatasetManifest); err != nil {
+			return nil, fmt.Errorf("streaming dataset: %w", err)
+		}
+	}
 	if err := job.Spec.Managed.ValidateDataMode(job.Spec.DataMode); err != nil {
 		return nil, fmt.Errorf("validate data mode: %w", err)
 	}
@@ -116,6 +125,18 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 		}
 		if cacheRequest.Mode == "" || cacheRequest.Mode == domain.CacheModeOff {
 			cacheRequest = domain.CacheRequest{Mode: domain.CacheModeRuntime, Size: options.LocalCache.DefaultSize}
+		}
+	}
+	if job.Spec.DataMode == domain.DataModeStreaming {
+		switch job.Spec.CachePolicy {
+		case domain.DatasetCachePolicyBounded:
+			cacheRequest = domain.CacheRequest{Mode: domain.CacheModeRuntime, Size: options.LocalCache.DefaultSize}
+		case domain.DatasetCachePolicyAuto:
+			if options.LocalCache.Enabled {
+				cacheRequest = domain.CacheRequest{Mode: domain.CacheModeRuntime, Size: options.LocalCache.DefaultSize}
+			}
+		case domain.DatasetCachePolicyOff:
+			cacheRequest = domain.CacheRequest{Mode: domain.CacheModeOff}
 		}
 	}
 	localCache, err := options.LocalCache.resolve(cacheRequest)
@@ -279,7 +300,7 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 			"labels":      labels,
 			"annotations": annotations,
 		},
-		"spec": jobSpecFields(job, clusterSpecField, clusterSpec, entrypoint, submitterPod),
+		"spec": jobSpecFields(job, clusterSpecField, clusterSpec, entrypoint, submitterPod, options.DatasetManifest),
 	}
 	return &unstructured.Unstructured{Object: jobObject}, nil
 }
@@ -565,7 +586,7 @@ func failureCleanupTTL(job domain.TrainingJob) int64 {
 	return ttl
 }
 
-func jobSpecFields(job domain.TrainingJob, clusterSpecField string, clusterSpec map[string]any, entrypoint []string, submitterPod map[string]any) map[string]any {
+func jobSpecFields(job domain.TrainingJob, clusterSpecField string, clusterSpec map[string]any, entrypoint []string, submitterPod map[string]any, datasetManifest *DatasetManifestMount) map[string]any {
 	spec := map[string]any{
 		"submissionMode": "K8sJobMode",
 		// KubeRay appends this to `ray job submit -- ...`. It must be a single
@@ -575,7 +596,7 @@ func jobSpecFields(job domain.TrainingJob, clusterSpecField string, clusterSpec 
 		// The working directory comes from the runtime env below, which is also
 		// what ships the materialized source to the driver and workers.
 		"entrypoint":     shellJoin(entrypoint),
-		"runtimeEnvYAML": runtimeEnvironmentYAML(job),
+		"runtimeEnvYAML": runtimeEnvironmentYAML(job, datasetManifest),
 		clusterSpecField: clusterSpec,
 		// Release the GPUs as soon as the run ends; without this the RayCluster
 		// outlives the job and the worker Pods keep their nvidia.com/gpu claims.
@@ -602,16 +623,21 @@ func jobSpecFields(job domain.TrainingJob, clusterSpecField string, clusterSpec 
 	return spec
 }
 
-func runtimeEnvironmentYAML(job domain.TrainingJob) string {
+func runtimeEnvironmentYAML(job domain.TrainingJob, datasetManifest *DatasetManifestMount) string {
 	runtimeEnv := "working_dir: /workspace\nenv_vars:\n  PYTHONUNBUFFERED: \"1\"\n"
 	if job.Spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain {
 		return runtimeEnv
 	}
-	return runtimeEnv +
+	runtimeEnv +=
 		"  RAY_TRAIN_V2_ENABLED: \"1\"\n" +
-		"  PLATFORM_TRAINING_ENGINE: \"ray-train\"\n" +
-		"  PLATFORM_JOB_ID: " + strconv.Quote(job.ID) + "\n" +
-		"  RAYTRAIN_CLUSTER_ATTEMPT: " + strconv.Quote(strconv.Itoa(job.ClusterAttempt)) + "\n"
+			"  PLATFORM_TRAINING_ENGINE: \"ray-train\"\n" +
+			"  PLATFORM_JOB_ID: " + strconv.Quote(job.ID) + "\n" +
+			"  PLATFORM_RAY_VERSION: " + strconv.Quote(job.Spec.RayVersion) + "\n" +
+			"  RAYTRAIN_CLUSTER_ATTEMPT: " + strconv.Quote(strconv.Itoa(job.ClusterAttempt)) + "\n"
+	if job.Spec.DataMode == domain.DataModeStreaming && datasetManifest != nil {
+		runtimeEnv += streamingDatasetRuntimeEnvironmentYAML(job.DatasetProvenance, *datasetManifest)
+	}
+	return runtimeEnv
 }
 
 func podTemplate(containerName, image, cpu, memory string, gpus int64, tenantID string, source domain.CodeSource, jobSpec domain.JobSpec, options RenderOptions, head, mountData, materializeSource bool) map[string]any {
@@ -675,6 +701,11 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, tenantID 
 		volumeMounts, volumes = appendTrainingDataRoots(volumeMounts, volumes, jobSpec.ResolvedDataRoots)
 		volumeMounts, volumes = appendResolvedDataSpaceMounts(volumeMounts, volumes, jobSpec.ResolvedDataMounts)
 	}
+	if mountData && jobSpec.DataMode == domain.DataModeStreaming {
+		volumeMounts, volumes, env = appendStreamingDatasetRoot(
+			volumeMounts, volumes, env, *options.DatasetManifest, jobSpec.CachePolicy,
+		)
+	}
 	if mountData && jobSpec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain {
 		volumeMounts, volumes, env = appendTrainingEventCredential(volumeMounts, volumes, env, options)
 	}
@@ -685,6 +716,9 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, tenantID 
 		}
 	}
 	if mountData && options.LocalCache.runtime {
+		// Streaming payload rows are resolved inside training workers. The head
+		// keeps one local volume for Ray control-plane spilling, while each worker
+		// receives both NVMe devices for shard caching and object spilling.
 		dualCacheDevices := !head || jobSpec.DataMode == domain.DataModeRayData || jobSpec.DataMode == domain.DataModeRayDataStage
 		volumeMounts, volumes = appendLocalCache(volumeMounts, volumes, options.LocalCache, dualCacheDevices)
 		cachePaths := options.LocalCache.MountPathData1
@@ -692,7 +726,7 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, tenantID 
 			cachePaths += ":" + options.LocalCache.MountPathData2
 		}
 		spillDirectories := []string{path.Join(options.LocalCache.MountPathData1, "ray-spill", "objects")}
-		if jobSpec.DataMode == domain.DataModeRayData || jobSpec.DataMode == domain.DataModeRayDataStage {
+		if dualCacheDevices {
 			spillDirectories = append(spillDirectories, path.Join(options.LocalCache.MountPathData2, "ray-spill", "objects"))
 		}
 		env = append(
