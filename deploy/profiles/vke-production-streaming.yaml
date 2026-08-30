@@ -1,0 +1,98 @@
+# Production overlay for immutable dataset versions and managed Ray Data.
+#
+# Apply only with `helm upgrade --reuse-values`: this file deliberately keeps
+# every unrelated production setting out of the rollout.  All new workload
+# images are pinned by digest and no TOS credential is stored here.
+backend:
+  image:
+    repository: ray-train-backend
+    tag: streaming-20260831-119fc3b
+    digest: sha256:c85d01f5a7462f09465a944e66bc9ca21ba3b1c2b1e38152b2d1780cfa67b9c7
+  datasetVersioningEnabled: true
+  rayDataStreamingEnabled: true
+  datasetInternalPrefix: ray-train/platform/datasets
+
+frontend:
+  image:
+    repository: ray-train-frontend
+    tag: streaming-20260831-c3457cb
+    digest: sha256:c4280f341c7c47f07acbb4ded7b127d3e8691d637fd63dc1ef6e60a6f1953f39
+
+spkRayjobRelease:
+  enabled: true
+  image:
+    repository: spk-rayjob-release
+    tag: streaming-20260831-c3457cb
+    digest: sha256:922a338155fc9d9468bc3a4d8e6c0041df391e49f1d161ed65f9c5ca6227adf0
+
+rayTrain:
+  managedEnabled: true
+  managedTenants: []
+  # Since backend commit 119fc3b, an empty canary allowlist means every
+  # authenticated current and future team.  A non-empty list narrows rollout.
+  canaryEnabled: true
+  canaryTenants: []
+  canaryVersion: "2.58.0"
+  runtimeCatalog:
+    canaryManagedBEVFusion:
+      reference: harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion-ray258@sha256:89eeca3065cc8be7ce0a8302fe432ad6d6105e5cbe779c294dc0f419429f1c7b
+      rayVersion: "2.58.0"
+      supportedEngines: ["ray-train"]
+
+datasetPublisher:
+  enabled: true
+  sourceBucket: shanghai-data-transfer
+  targetBucket: shanghai-data-transfer
+  endpoint: https://tos-cn-shanghai.ivolces.com
+  region: cn-shanghai
+  sourceIndexName: .raytrain/trusted-index-v2.pkl
+  serviceAccount:
+    # The role policy already covers the source and internal derived prefixes.
+    # Its OIDC trust must also allow the generated publisher ServiceAccount.
+    irsaRoleTRN: trn:iam::2103446203:role/tos-rw
+  image:
+    repository: ray-dataset-publisher
+    tag: streaming-20260831-c3457cb
+    digest: sha256:041eee5124fba342671a3b3c4b84d236299be70cacd31bd6582ecc61b6bbf5dc
+  imagePullPolicy: ""
+  preferredNodeSelector:
+    platform.wellspiking.ai/pool: control-plane
+  nodeSelector: {}
+  kueue:
+    resourceFlavorName: ""
+    clusterQueueName: ""
+    localQueueName: ""
+    cpuQuota: 16
+    memoryQuota: 64Gi
+    resourceFlavorNodeLabels: {}
+  priorityClassName: ""
+  priorityValue: -1000
+  resources:
+    requests:
+      cpu: 1000m
+      memory: 2Gi
+    limits:
+      cpu: 4000m
+      memory: 8Gi
+  job:
+    backoffLimit: 3
+    activeDeadlineSeconds: 604800
+    ttlSecondsAfterFinished: 86400
+  kubernetesClient:
+    maxAttempts: 3
+    initialRetryBackoffSeconds: 1
+    maximumRetryBackoffSeconds: 30
+  manager:
+    pollIntervalSeconds: 10
+  workingDirectory: /data/output
+  tolerations: []
+
+monitoring:
+  enabled: true
+  namespace: monitoring
+  # The cluster already has a platform-wide Ray PodMonitor.  Rendering a
+  # second one would duplicate every worker sample.
+  podMonitor:
+    enabled: false
+  prometheusRule:
+    enabled: true

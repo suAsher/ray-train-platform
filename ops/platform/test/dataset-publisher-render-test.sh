@@ -5,6 +5,7 @@ readonly ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 readonly CHART="${ROOT_DIR}/helm/ray-train-platform"
 readonly VALUES="${CHART}/values.yaml"
 readonly PROFILE="${ROOT_DIR}/deploy/profiles/test.yaml"
+readonly PRODUCTION_STREAMING_PROFILE="${ROOT_DIR}/deploy/profiles/vke-production-streaming.yaml"
 readonly BACKEND_TEMPLATE="${CHART}/templates/backend-deployment.yaml"
 readonly SERVICE_ACCOUNT_TEMPLATE="${CHART}/templates/dataset-publisher-serviceaccount.yaml"
 readonly RBAC_TEMPLATE="${CHART}/templates/dataset-publisher-rbac.yaml"
@@ -49,10 +50,19 @@ publisher_values() {
   ' "$VALUES"
 }
 
+production_publisher_values() {
+  awk '
+    /^datasetPublisher:$/ { in_publisher=1 }
+    in_publisher && /^[^[:space:]#]/ && $0 != "datasetPublisher:" { exit }
+    in_publisher { print }
+  ' "$PRODUCTION_STREAMING_PROFILE"
+}
+
 assert_source_contract() {
   local template
   local rbac_resource_rule_count
   local rbac_service_account_subject_count
+  local production_values_block
   local values_block
 
   require_file "$VALUES"
@@ -62,6 +72,7 @@ assert_source_contract() {
   require_file "$CONFIG_TEMPLATE"
   require_file "$HELPERS_TEMPLATE"
   require_file "$SCHEDULING_TEMPLATE"
+  require_file "$PRODUCTION_STREAMING_PROFILE"
 
   require_literal "$VALUES" '  datasetVersioningEnabled: false' \
     'DATASET_VERSIONING_ENABLED Helm value must default to false'
@@ -124,6 +135,34 @@ assert_source_contract() {
   if grep -Eiq 'nvidia\.com/gpu|^[[:space:]]*affinity:|^[[:space:]]{2}(backoffLimit|retryBackoffSeconds):' <<<"$values_block"; then
     fail 'publisher defaults must not request GPUs or impose hard affinity'
   fi
+
+  # This profile is applied with Helm --reuse-values. Newly introduced chart
+  # defaults are not inherited in that mode, so the publisher subtree must be
+  # self-contained instead of depending on values.yaml.
+  production_values_block="$(production_publisher_values)"
+  for required_block in \
+    '  priorityValue: -1000' \
+    '  resources:
+    requests:
+      cpu: 1000m
+      memory: 2Gi
+    limits:
+      cpu: 4000m
+      memory: 8Gi' \
+    '  job:
+    backoffLimit: 3
+    activeDeadlineSeconds: 604800
+    ttlSecondsAfterFinished: 86400' \
+    '  kubernetesClient:
+    maxAttempts: 3
+    initialRetryBackoffSeconds: 1
+    maximumRetryBackoffSeconds: 30' \
+    '  manager:
+    pollIntervalSeconds: 10' \
+    '  workingDirectory: /data/output'; do
+    grep -Fq "$required_block" <<<"$production_values_block" || \
+      fail "--reuse-values production profile is missing a complete publisher runtime block"
+  done
 
   for template in "$SERVICE_ACCOUNT_TEMPLATE" "$RBAC_TEMPLATE" "$CONFIG_TEMPLATE" "$SCHEDULING_TEMPLATE"; do
     require_literal "$template" '{{- if (default false .Values.datasetPublisher.enabled) }}' \
