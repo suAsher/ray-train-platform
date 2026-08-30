@@ -46,7 +46,7 @@ RAY_PRODUCTION_VERSION="2.56.1"
 RAY_VERSION_ARG="${RAY_VERSION:-$RAY_PRODUCTION_VERSION}"
 RAY_RUNTIME_VARIANTS=(pytorch-ray-ddp pytorch-ray-train workspace-ray256)
 RAY_CANARY_VERSION="2.58.0"
-RAY258_BASE_IMAGE_ARG="${RAY258_BASE_IMAGE:-harbor.wellspiking.ai/hub/rayproject/ray:2.58.0-py310-gpu}"
+RAY_CANARY_FOUNDATION_IMAGE_ARG="${RAY_CANARY_FOUNDATION_IMAGE:-harbor.wellspiking.ai/guofeng.su/ray-train-pytorch-ray-train@sha256:5bfa41f517c911e45e9856690ca66886f0b9c793b32938baa1dc24e697dc5a1d}"
 BEVFUSION_BASE_IMAGE_ARG="${BEVFUSION_BASE_IMAGE:-harbor.wellspiking.ai/guofeng.su/bevfusion@sha256:88e9c5045ced1b4b3dc49ddf1f2e22a8c9702574fd8103afcdff83577784a5ee}"
 CODE_SERVER_IMAGE_ARG="${CODE_SERVER_IMAGE:-harbor.wellspiking.ai/hub/codercom/code-server:4.93.1}"
 SPK_RAYJOB_VERSION_ARG="${SPK_RAYJOB_VERSION:-$IMAGE_TAG}"
@@ -105,7 +105,7 @@ Environment variables:
   RAY_BASE_IMAGE=harbor.wellspiking.ai/hub/rayproject/ray:2.35.0-py310-gpu
   WORKSPACE_RAY_BASE_IMAGE=harbor.wellspiking.ai/hub/rayproject/ray:2.35.0-py310-gpu
   RAY_VERSION=2.56.1 (production runtime variants are fixed to this version)
-  RAY258_BASE_IMAGE=harbor.wellspiking.ai/hub/rayproject/ray:2.58.0-py310-gpu
+  RAY_CANARY_FOUNDATION_IMAGE=harbor.wellspiking.ai/guofeng.su/ray-train-pytorch-ray-train@sha256:...
   BEVFUSION_BASE_IMAGE=harbor.wellspiking.ai/guofeng.su/bevfusion@sha256:...
   CODE_SERVER_IMAGE=harbor.wellspiking.ai/hub/codercom/code-server:4.93.1
   SPK_RAYJOB_VERSION=<release-version>
@@ -305,7 +305,7 @@ echo "Ray base:       $RAY_BASE_IMAGE_ARG"
 echo "Workspace base: $WORKSPACE_RAY_BASE_IMAGE_ARG"
 echo "Ray production: $RAY_VERSION_ARG"
 echo "Ray canary:     $RAY_CANARY_VERSION"
-echo "Ray 2.58 base:  $RAY258_BASE_IMAGE_ARG"
+echo "Canary base:    $RAY_CANARY_FOUNDATION_IMAGE_ARG"
 echo "BEVFusion base: $BEVFUSION_BASE_IMAGE_ARG"
 echo "Code server:    $CODE_SERVER_IMAGE_ARG"
 echo "Targets:        ${BUILD_TARGETS_LIST[*]}"
@@ -348,7 +348,7 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
       -e "s|^FROM \${RAY_BASE_IMAGE}|FROM $RAY_BASE_IMAGE_ARG|" \
       -e "s|^FROM \${WORKSPACE_RAY_BASE_IMAGE}|FROM $WORKSPACE_RAY_BASE_IMAGE_ARG|" \
       -e "s|^FROM \${BEVFUSION_BASE_IMAGE}|FROM $BEVFUSION_BASE_IMAGE_ARG|" \
-      -e "s|^FROM \${RAY258_BASE_IMAGE}|FROM $RAY258_BASE_IMAGE_ARG|" \
+      -e "s|^FROM \${RAY_CANARY_FOUNDATION_IMAGE}|FROM $RAY_CANARY_FOUNDATION_IMAGE_ARG|" \
       -e "s|^FROM \${CODE_SERVER_IMAGE}|FROM $CODE_SERVER_IMAGE_ARG|" \
       "$dockerfile_path" >"$tmp_dockerfile"
     dockerfile_path="$tmp_dockerfile"
@@ -371,7 +371,7 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
       --build-arg "WORKSPACE_RAY_BASE_IMAGE=$WORKSPACE_RAY_BASE_IMAGE_ARG"
       --build-arg "RAY_VERSION=${RAY_VERSION_ARG}"
       --build-arg "RAY_CANARY_VERSION=${RAY_CANARY_VERSION}"
-      --build-arg "RAY258_BASE_IMAGE=$RAY258_BASE_IMAGE_ARG"
+      --build-arg "RAY_CANARY_FOUNDATION_IMAGE=$RAY_CANARY_FOUNDATION_IMAGE_ARG"
       --build-arg "BEVFUSION_BASE_IMAGE=$BEVFUSION_BASE_IMAGE_ARG"
       --build-arg "CODE_SERVER_IMAGE=$CODE_SERVER_IMAGE_ARG"
       --build-arg "SPK_RAYJOB_VERSION=$SPK_RAYJOB_VERSION_ARG"
@@ -406,7 +406,7 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
       --build-arg "WORKSPACE_RAY_BASE_IMAGE=$WORKSPACE_RAY_BASE_IMAGE_ARG"
       --build-arg "RAY_VERSION=${RAY_VERSION_ARG}"
       --build-arg "RAY_CANARY_VERSION=${RAY_CANARY_VERSION}"
-      --build-arg "RAY258_BASE_IMAGE=$RAY258_BASE_IMAGE_ARG"
+      --build-arg "RAY_CANARY_FOUNDATION_IMAGE=$RAY_CANARY_FOUNDATION_IMAGE_ARG"
       --build-arg "BEVFUSION_BASE_IMAGE=$BEVFUSION_BASE_IMAGE_ARG"
       --build-arg "CODE_SERVER_IMAGE=$CODE_SERVER_IMAGE_ARG"
       --build-arg "SPK_RAYJOB_VERSION=$SPK_RAYJOB_VERSION_ARG"

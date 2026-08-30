@@ -1,7 +1,7 @@
 # Compatibility runtime for the existing BEVFusion stack. It layers only the
 # platform DDP launcher onto the already dependency-pinned BEVFusion image.
 ARG BEVFUSION_BASE_IMAGE=harbor.wellspiking.ai/guofeng.su/bevfusion@sha256:88e9c5045ced1b4b3dc49ddf1f2e22a8c9702574fd8103afcdff83577784a5ee
-ARG RAY258_BASE_IMAGE=harbor.wellspiking.ai/hub/rayproject/ray:2.58.0-py310-gpu
+ARG RAY_CANARY_FOUNDATION_IMAGE=harbor.wellspiking.ai/guofeng.su/ray-train-pytorch-ray-train@sha256:5bfa41f517c911e45e9856690ca66886f0b9c793b32938baa1dc24e697dc5a1d
 
 # Source-only handle for the validated S1H tree. The canary copies source from
 # here, never the Python 3.8 / CUDA 11.3 site-packages.
@@ -38,14 +38,14 @@ WORKDIR /workspace
 
 # Additive Ray 2.58 / CUDA 12.1 canary. This target is selected explicitly and
 # is not part of BUILD_TARGETS=all. The final stage remains the legacy runtime.
-FROM ${RAY258_BASE_IMAGE} AS bevfusion-ray258-canary
+FROM ${RAY_CANARY_FOUNDATION_IMAGE} AS bevfusion-ray258-canary
 ARG RAY_CANARY_VERSION=2.58.0
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121
 
 USER root
 RUN test "${RAY_CANARY_VERSION}" = "2.58.0" \
  && test "$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" = "3.10" \
+ && python3 -c "import pyarrow, ray, torch; assert ray.__version__ == '2.56.1'; assert torch.__version__.startswith('2.4.1'); assert torch.version.cuda == '12.1'; assert pyarrow.__version__ == '25.0.1'" \
  && apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       build-essential git libgl1 libglib2.0-0 ninja-build \
@@ -54,14 +54,11 @@ RUN test "${RAY_CANARY_VERSION}" = "2.58.0" \
       azure-cli-core conda-content-trust \
       opentelemetry-exporter-otlp opentelemetry-exporter-otlp-proto-grpc
 
-# Keep heavyweight dependency groups in separate layers so a compatibility
-# failure in the legacy OpenMMLab stack does not repeat apt or torch downloads.
-RUN python3 -m pip install --no-cache-dir --index-url "${TORCH_INDEX_URL}" \
-      torch==2.4.1 torchvision==0.19.1
-
+# The foundation is the immutable production Ray 2.56 managed image. Upgrade
+# Ray only; keep its already accepted torch 2.4.1/CUDA 12.1/PyArrow stack.
 RUN python3 -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
       "ray[default,train,tune]==${RAY_CANARY_VERSION}" \
-      pyarrow==18.1.0 numpy==1.23.5 numba==0.57.1 scipy==1.10.1 \
+      pyarrow==25.0.1 numpy==1.23.5 numba==0.57.1 scipy==1.10.1 \
       mmcv-full==1.4.0 mmdet==2.20.0 nuscenes-devkit==1.1.10 \
       onnx==1.16.2 opencv-python-headless==4.10.0.84 \
       pyquaternion==0.9.9 shapely==2.0.7 spconv-cu120==2.3.6 \
