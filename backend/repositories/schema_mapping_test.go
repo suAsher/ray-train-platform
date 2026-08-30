@@ -28,6 +28,8 @@ func TestModelColumnsExistInMigrations(t *testing.T) {
 		&DataMountBindingRecord{}, &GitCredentialRecord{}, &WorkspaceSnapshotRecord{},
 		&IDCConnectionRecord{}, &DataTransferRecord{},
 		&ManagedAttemptResourceRecord{}, &SourceArtifactRecord{}, &SourceArtifactRequestRecord{},
+		&DatasetRecord{}, &DatasetVersionRecord{}, &DatasetPartitionRecord{},
+		&DatasetPublicationRunRecord{}, &DatasetVersionShardRecord{}, &DatasetCacheObservationRecord{},
 	}
 
 	namer := schema.NamingStrategy{}
