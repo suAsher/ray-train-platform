@@ -110,6 +110,8 @@ ENV PLATFORM_TRAINING_ENGINE=ray-train
 ENV PLATFORM_RAY_VERSION=2.58.0
 ENV RAYTRAIN_IMAGE_SOURCE_ROOT=/opt/bevfusion/mmdet3d
 ENV PYTHONPATH=/opt/bevfusion:/usr/local/lib/raytrain-platform:/usr/local/lib/raytrain-platform/bevfusion
+ENV LD_LIBRARY_PATH=/home/ray/anaconda3/lib/python3.10/site-packages/torch/lib:${LD_LIBRARY_PATH}
+ENV MPLCONFIGDIR=/tmp/raytrain-matplotlib
 USER ray
 WORKDIR /workspace
 

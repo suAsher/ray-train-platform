@@ -41,6 +41,8 @@ grep -Fq 'COPY images/workspace/raytrain-managed /usr/local/bin/raytrain-managed
 grep -Fq 'COPY examples/bevfusion/patches/ray_data_s1h.py /usr/local/lib/raytrain-platform/bevfusion/ray_data_s1h.py' "$dockerfile"
 grep -Fq 'ENV RAY_TRAIN_V2_ENABLED=1' "$dockerfile"
 grep -Fq 'ENV PLATFORM_RAY_VERSION=2.58.0' "$dockerfile"
+grep -Fq 'ENV LD_LIBRARY_PATH=/home/ray/anaconda3/lib/python3.10/site-packages/torch/lib:${LD_LIBRARY_PATH}' "$dockerfile"
+grep -Fq 'ENV MPLCONFIGDIR=/tmp/raytrain-matplotlib' "$dockerfile"
 grep -Fq 'import mmcv, mmdet, mmdet3d, pyarrow, ray, torch' "$dockerfile"
 grep -Fq 'install -d -o ray -g users /workspace' "$dockerfile"
 if grep -Fq 'chown -R ray:users /home/ray /opt/bevfusion' "$dockerfile"; then
