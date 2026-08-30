@@ -53,6 +53,7 @@ class PrepareCanarySourceTest(unittest.TestCase):
                 ).read_text(encoding="utf-8")
                 self.assertNotIn("THC/THC.h", binding_source)
                 self.assertNotIn("THCState", binding_source)
+                self.assertIn("#include <ATen/cuda/CUDAContext.h>", binding_source)
                 self.assertIn("#include <torch/extension.h>", binding_source)
 
     def test_fails_closed_for_unknown_source_shape(self):

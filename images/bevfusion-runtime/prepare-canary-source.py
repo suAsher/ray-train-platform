@@ -12,6 +12,10 @@ LEGACY_ARCHES = """            \"-gencode=arch=compute_70,code=sm_70\",\n       
 CANARY_ARCH = '            "-gencode=arch=compute_89,code=sm_89",'
 THC_INCLUDE = "#include <THC/THC.h>\n"
 THC_STATE_DECLARATION = "extern THCState *state;\n"
+TORCH_EXTENSION_INCLUDE = "#include <torch/extension.h>\n"
+CUDA_CONTEXT_AND_TORCH_INCLUDES = (
+    "#include <ATen/cuda/CUDAContext.h>\n#include <torch/extension.h>\n"
+)
 THC_BINDING_PATHS = (
     pathlib.Path("mmdet3d/ops/ball_query/src/ball_query.cpp"),
     pathlib.Path(
@@ -66,6 +70,13 @@ def prepare(source_root: pathlib.Path) -> None:
             THC_STATE_DECLARATION,
             "",
             "legacy BEVFusion THCState declaration",
+            binding_path,
+        )
+        binding_source = _replace_once(
+            binding_source,
+            TORCH_EXTENSION_INCLUDE,
+            CUDA_CONTEXT_AND_TORCH_INCLUDES,
+            "BEVFusion CUDA context include",
             binding_path,
         )
         binding_updates.append((binding_path, binding_source))
