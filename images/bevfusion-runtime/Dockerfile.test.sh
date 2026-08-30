@@ -29,6 +29,10 @@ if grep -Fq 'shapely==1.8.5.post1' "$dockerfile"; then
   echo 'post-release Shapely is outside nuscenes-devkit 1.1.10 constraint' >&2
   exit 1
 fi
+grep -Fq 'opencv-python==4.10.0.84' "$dockerfile"
+grep -Fq 'MMCV_WITH_OPS=1 FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST=8.9 MAX_JOBS=8' "$dockerfile"
+grep -Fq 'CXXFLAGS="-std=c++17"' "$dockerfile"
+grep -Fq 'mmcv-full==1.4.0 --no-deps' "$dockerfile"
 grep -Fq 'COPY images/workspace/raytrain_runtime /usr/local/lib/raytrain-platform/raytrain_runtime' "$dockerfile"
 grep -Fq 'COPY images/workspace/raytrain-managed /usr/local/bin/raytrain-managed' "$dockerfile"
 grep -Fq 'COPY examples/bevfusion/patches/ray_data_s1h.py /usr/local/lib/raytrain-platform/bevfusion/ray_data_s1h.py' "$dockerfile"
