@@ -43,6 +43,10 @@ rayTrain:
     productionWorkspace:
       reference: <内部仓库>/ray-workspace-ray256@sha256:<64位digest>
       rayVersion: "2.56.1"
+    canaryManagedBEVFusion:
+      reference: <内部仓库>/ray-train-bevfusion-ray258@sha256:<64位digest>
+      rayVersion: "2.58.0"
+      supportedEngines: ["ray-train"]
 
 backend:
   # production 会强制要求数据库、Kubernetes 可用，并拒绝 demoMode

@@ -45,6 +45,8 @@ WORKSPACE_RAY_BASE_IMAGE_ARG="${WORKSPACE_RAY_BASE_IMAGE:-harbor.wellspiking.ai/
 RAY_PRODUCTION_VERSION="2.56.1"
 RAY_VERSION_ARG="${RAY_VERSION:-$RAY_PRODUCTION_VERSION}"
 RAY_RUNTIME_VARIANTS=(pytorch-ray-ddp pytorch-ray-train workspace-ray256)
+RAY_CANARY_VERSION="2.58.0"
+RAY258_BASE_IMAGE_ARG="${RAY258_BASE_IMAGE:-harbor.wellspiking.ai/hub/rayproject/ray:2.58.0-py310-gpu}"
 BEVFUSION_BASE_IMAGE_ARG="${BEVFUSION_BASE_IMAGE:-harbor.wellspiking.ai/guofeng.su/bevfusion@sha256:88e9c5045ced1b4b3dc49ddf1f2e22a8c9702574fd8103afcdff83577784a5ee}"
 CODE_SERVER_IMAGE_ARG="${CODE_SERVER_IMAGE:-harbor.wellspiking.ai/hub/codercom/code-server:4.93.1}"
 SPK_RAYJOB_VERSION_ARG="${SPK_RAYJOB_VERSION:-$IMAGE_TAG}"
@@ -85,7 +87,7 @@ Ray Training Platform image builder
 Environment variables:
   REGISTRY=harbor.wellspiking.ai/guofeng.su
   IMAGE_TAG=test-20260809
-  BUILD_TARGETS=all|backend,frontend,source-materializer,test-training,dataset-publisher,workspace,train-pytorch,pytorch-ray-ddp,pytorch-ray-train,workspace-ray256,bevfusion-runtime,tos-prefix-init,spk-rayjob
+  BUILD_TARGETS=all|backend,frontend,source-materializer,test-training,dataset-publisher,workspace,train-pytorch,pytorch-ray-ddp,pytorch-ray-train,workspace-ray256,bevfusion-runtime,bevfusion-ray258-canary,tos-prefix-init,spk-rayjob
   PUSH_IMAGE=false|true
   USE_BUILDX=true|false
   BUILD_PLATFORM=linux/amd64
@@ -103,6 +105,7 @@ Environment variables:
   RAY_BASE_IMAGE=harbor.wellspiking.ai/hub/rayproject/ray:2.35.0-py310-gpu
   WORKSPACE_RAY_BASE_IMAGE=harbor.wellspiking.ai/hub/rayproject/ray:2.35.0-py310-gpu
   RAY_VERSION=2.56.1 (production runtime variants are fixed to this version)
+  RAY258_BASE_IMAGE=harbor.wellspiking.ai/hub/rayproject/ray:2.58.0-py310-gpu
   BEVFUSION_BASE_IMAGE=harbor.wellspiking.ai/guofeng.su/bevfusion@sha256:...
   CODE_SERVER_IMAGE=harbor.wellspiking.ai/hub/codercom/code-server:4.93.1
   SPK_RAYJOB_VERSION=<release-version>
@@ -118,6 +121,8 @@ Build targets:
   pytorch-ray-ddp     Ray 2.56.1 PyTorch runtime for Ray-orchestrated DDP
   pytorch-ray-train   Explicit Task 9 target for managed Ray Train
   workspace-ray256    Ray 2.56.1 interactive workspace
+  bevfusion-runtime   Existing Python 3.8 BEVFusion compatibility runtime
+  bevfusion-ray258-canary  Isolated Ray 2.58 / torch 2.4.1 S1H canary
   tos-prefix-init     Native TOS SDK utility for controlled training roots
   spk-rayjob          Self-service external submission CLI release image
   all                 All currently buildable platform images (default)
@@ -167,6 +172,9 @@ target_spec() {
     bevfusion-runtime)
       printf '%s\n' 'images/bevfusion-runtime/Dockerfile|ray-train-bevfusion|.|-'
       ;;
+    bevfusion-ray258-canary)
+      printf '%s\n' 'images/bevfusion-runtime/Dockerfile|ray-train-bevfusion-ray258|.|bevfusion-ray258-canary'
+      ;;
     spk-rayjob)
       printf '%s\n' 'backend/Dockerfile.spk-rayjob|spk-rayjob-release|backend|-'
       ;;
@@ -189,7 +197,7 @@ normalize_targets() {
     [ -n "$target" ] || continue
     target_spec "$target" >/dev/null || {
       echo "ERROR: unknown BUILD_TARGETS entry: $target" >&2
-      echo "       valid values: backend, frontend, source-materializer, test-training, dataset-publisher, workspace, train-pytorch, pytorch-ray-ddp, pytorch-ray-train, workspace-ray256, bevfusion-runtime, tos-prefix-init, spk-rayjob, all" >&2
+      echo "       valid values: backend, frontend, source-materializer, test-training, dataset-publisher, workspace, train-pytorch, pytorch-ray-ddp, pytorch-ray-train, workspace-ray256, bevfusion-runtime, bevfusion-ray258-canary, tos-prefix-init, spk-rayjob, all" >&2
       exit 1
     }
     printf '%s\n' "$target"
@@ -259,6 +267,12 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
         exit 1
       }
       ;;
+    bevfusion-ray258-canary)
+      [ "$RAY_CANARY_VERSION" = "2.58.0" ] || {
+        echo 'ERROR: BEVFusion canary requires Ray 2.58.0' >&2
+        exit 1
+      }
+      ;;
   esac
 done
 
@@ -290,6 +304,8 @@ echo "Python base:    $PYTHON_BASE_IMAGE_ARG"
 echo "Ray base:       $RAY_BASE_IMAGE_ARG"
 echo "Workspace base: $WORKSPACE_RAY_BASE_IMAGE_ARG"
 echo "Ray production: $RAY_VERSION_ARG"
+echo "Ray canary:     $RAY_CANARY_VERSION"
+echo "Ray 2.58 base:  $RAY258_BASE_IMAGE_ARG"
 echo "BEVFusion base: $BEVFUSION_BASE_IMAGE_ARG"
 echo "Code server:    $CODE_SERVER_IMAGE_ARG"
 echo "Targets:        ${BUILD_TARGETS_LIST[*]}"
@@ -302,6 +318,9 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
   case "$target" in
     pytorch-ray-ddp|pytorch-ray-train|workspace-ray256)
       image="$REGISTRY/$image_name:$RAY_VERSION_ARG-$IMAGE_TAG"
+      ;;
+    bevfusion-ray258-canary)
+      image="$REGISTRY/$image_name:$RAY_CANARY_VERSION-$IMAGE_TAG"
       ;;
     *)
       image="$REGISTRY/$image_name:$IMAGE_TAG"
@@ -329,6 +348,7 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
       -e "s|^FROM \${RAY_BASE_IMAGE}|FROM $RAY_BASE_IMAGE_ARG|" \
       -e "s|^FROM \${WORKSPACE_RAY_BASE_IMAGE}|FROM $WORKSPACE_RAY_BASE_IMAGE_ARG|" \
       -e "s|^FROM \${BEVFUSION_BASE_IMAGE}|FROM $BEVFUSION_BASE_IMAGE_ARG|" \
+      -e "s|^FROM \${RAY258_BASE_IMAGE}|FROM $RAY258_BASE_IMAGE_ARG|" \
       -e "s|^FROM \${CODE_SERVER_IMAGE}|FROM $CODE_SERVER_IMAGE_ARG|" \
       "$dockerfile_path" >"$tmp_dockerfile"
     dockerfile_path="$tmp_dockerfile"
@@ -350,6 +370,8 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
       --build-arg "RAY_BASE_IMAGE=$RAY_BASE_IMAGE_ARG"
       --build-arg "WORKSPACE_RAY_BASE_IMAGE=$WORKSPACE_RAY_BASE_IMAGE_ARG"
       --build-arg "RAY_VERSION=${RAY_VERSION_ARG}"
+      --build-arg "RAY_CANARY_VERSION=${RAY_CANARY_VERSION}"
+      --build-arg "RAY258_BASE_IMAGE=$RAY258_BASE_IMAGE_ARG"
       --build-arg "BEVFUSION_BASE_IMAGE=$BEVFUSION_BASE_IMAGE_ARG"
       --build-arg "CODE_SERVER_IMAGE=$CODE_SERVER_IMAGE_ARG"
       --build-arg "SPK_RAYJOB_VERSION=$SPK_RAYJOB_VERSION_ARG"
@@ -383,6 +405,8 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
       --build-arg "RAY_BASE_IMAGE=$RAY_BASE_IMAGE_ARG"
       --build-arg "WORKSPACE_RAY_BASE_IMAGE=$WORKSPACE_RAY_BASE_IMAGE_ARG"
       --build-arg "RAY_VERSION=${RAY_VERSION_ARG}"
+      --build-arg "RAY_CANARY_VERSION=${RAY_CANARY_VERSION}"
+      --build-arg "RAY258_BASE_IMAGE=$RAY258_BASE_IMAGE_ARG"
       --build-arg "BEVFUSION_BASE_IMAGE=$BEVFUSION_BASE_IMAGE_ARG"
       --build-arg "CODE_SERVER_IMAGE=$CODE_SERVER_IMAGE_ARG"
       --build-arg "SPK_RAYJOB_VERSION=$SPK_RAYJOB_VERSION_ARG"

@@ -44,6 +44,10 @@ rayTrain:
     productionWorkspace:
       reference: "REPLACE_WITH_RAY_256_WORKSPACE_IMAGE@sha256:REPLACE_WITH_64_HEX_DIGEST"
       rayVersion: "2.56.1"
+    canaryManagedBEVFusion:
+      reference: "REPLACE_WITH_RAY_258_BEVFUSION_IMAGE@sha256:REPLACE_WITH_64_HEX_DIGEST"
+      rayVersion: "2.58.0"
+      supportedEngines: ["ray-train"]
 
 backend:
   replicaCount: 2

@@ -3,6 +3,7 @@ set -euo pipefail
 
 readonly root_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly production_ray_version="2.56.1"
+readonly canary_ray_version="2.58.0"
 
 require_literal() {
   local file="$1"
@@ -155,6 +156,28 @@ assert_contracts() {
   require_literal images/train-pytorch/Dockerfile 'COPY workspace/raytrain-launch.py /usr/local/bin/raytrain-launch'
   require_literal images/workspace/Dockerfile 'COPY raytrain-launch.py /usr/local/bin/raytrain-launch'
 
+  require_literal images/bevfusion-runtime/Dockerfile 'AS bevfusion-legacy'
+  require_literal images/bevfusion-runtime/Dockerfile 'AS bevfusion-ray258-canary'
+  require_literal images/bevfusion-runtime/Dockerfile 'AS bevfusion-legacy-default'
+  require_literal images/bevfusion-runtime/Dockerfile 'ARG RAY_CANARY_VERSION=2.58.0'
+  require_literal images/bevfusion-runtime/Dockerfile 'test "${RAY_CANARY_VERSION}" = "2.58.0"'
+  require_literal images/bevfusion-runtime/Dockerfile 'ray[default,train,tune]==${RAY_CANARY_VERSION}'
+  require_literal images/bevfusion-runtime/Dockerfile 'torch==2.4.1'
+  require_literal images/bevfusion-runtime/Dockerfile 'torchvision==0.19.1'
+  require_literal images/bevfusion-runtime/Dockerfile 'COPY images/workspace/raytrain_runtime /usr/local/lib/raytrain-platform/raytrain_runtime'
+  require_literal images/bevfusion-runtime/Dockerfile 'COPY images/workspace/raytrain-managed /usr/local/bin/raytrain-managed'
+  require_literal images/bevfusion-runtime/Dockerfile 'COPY examples/bevfusion/patches/ray_data_s1h.py /usr/local/lib/raytrain-platform/bevfusion/ray_data_s1h.py'
+  require_literal images/bevfusion-runtime/Dockerfile 'ENV PLATFORM_RAY_VERSION=2.58.0'
+  require_literal images/bevfusion-runtime/Dockerfile 'ENV RAY_TRAIN_V2_ENABLED=1'
+
+  local bevfusion_canary_stage
+  bevfusion_canary_stage="$(docker_stage images/bevfusion-runtime/Dockerfile bevfusion-ray258-canary)"
+  require_before "$bevfusion_canary_stage" 'test "${RAY_CANARY_VERSION}" = "2.58.0"' 'python3 -m pip install'
+  if grep -Fq 'Python 3.8' <<<"$bevfusion_canary_stage"; then
+    echo 'Ray 2.58 BEVFusion canary must not inherit the legacy Python 3.8 runtime' >&2
+    exit 1
+  fi
+
   require_literal images/dataset-publisher/Dockerfile 'ARG PYTHON_BASE_IMAGE='
   require_literal images/dataset-publisher/Dockerfile 'COPY requirements.txt /app/requirements.txt'
   require_literal images/dataset-publisher/Dockerfile 'python3 -m pip install --no-cache-dir'
@@ -173,6 +196,9 @@ assert_contracts() {
   require_literal build-image.sh 'pytorch-ray-ddp'
   require_literal build-image.sh 'pytorch-ray-train'
   require_literal build-image.sh 'workspace-ray256'
+  require_literal build-image.sh 'bevfusion-ray258-canary'
+  require_literal build-image.sh 'RAY_CANARY_VERSION="2.58.0"'
+  require_literal build-image.sh 'RAY258_BASE_IMAGE'
   require_literal build-image.sh 'dataset-publisher'
   require_literal build-image.sh 'PYTHON_BASE_IMAGE'
   require_literal build-image.sh 'RAY_VERSION=${RAY_VERSION_ARG}'
@@ -200,6 +226,8 @@ assert_contracts() {
   require_literal helm/ray-train-platform/values.yaml 'canaryTenants: []'
   require_literal helm/ray-train-platform/values.yaml 'supportedEngines: ["ray-ddp"]'
   require_literal helm/ray-train-platform/values.yaml 'supportedEngines: ["ray-train"]'
+  require_literal helm/ray-train-platform/values.yaml 'canaryManagedBEVFusion:'
+  require_literal helm/ray-train-platform/values.yaml 'rayVersion: "2.58.0"'
   require_literal helm/ray-train-platform/templates/backend-deployment.yaml 'RAY_TRAIN_MANAGED_ENABLED'
   require_literal helm/ray-train-platform/templates/backend-deployment.yaml 'RAY_TRAIN_CANARY_ENABLED'
   require_literal helm/ray-train-platform/templates/backend-deployment.yaml 'RAY_TRAIN_CANARY_TENANTS'
@@ -222,6 +250,20 @@ assert_contracts() {
   grep -Fq 'ray-train-pytorch-ray-train:2.56.1-contract' <<<"$dry_run"
   grep -Fq 'ray-workspace-ray256:2.56.1-contract' <<<"$dry_run"
   grep -Fq 'ray-dataset-publisher:contract' <<<"$dry_run"
+  if grep -Fq 'ray-train-bevfusion-ray258' <<<"$dry_run"; then
+    echo 'Ray 2.58 BEVFusion canary must not be part of BUILD_TARGETS=all' >&2
+    exit 1
+  fi
+
+  local canary_dry_run
+  canary_dry_run="$(
+    DRY_RUN=true \
+    IMAGE_TAG=contract \
+    BUILD_TARGETS=bevfusion-ray258-canary \
+    bash "${root_dir}/build-image.sh"
+  )"
+  grep -Fq "ray-train-bevfusion-ray258:${canary_ray_version}-contract" <<<"$canary_dry_run"
+  grep -Fq -- '--target bevfusion-ray258-canary' <<<"$canary_dry_run"
 }
 
 require_exact_image_ref() {
