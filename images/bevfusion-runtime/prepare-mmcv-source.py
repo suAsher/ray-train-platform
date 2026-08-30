@@ -15,6 +15,8 @@ TORCH_EXTENSION_INCLUDE = "#include <torch/extension.h>"
 TORCH_TYPES_INCLUDE = "#include <torch/types.h>"
 CPP14_FLAG = "'-std=c++14'"
 CPP17_FLAG = "'-std=c++17'"
+PYTORCH_HELPER_INCLUDE = '#include "pytorch_cpp_helper.hpp"'
+QUEUE_AND_HELPER_INCLUDES = '#include <queue>\n#include "pytorch_cpp_helper.hpp"'
 
 
 def _replace_exact(
@@ -55,6 +57,29 @@ def prepare(source_root: pathlib.Path) -> None:
         CPP17_FLAG,
         2,
         "mmcv compiler standard",
+    )
+    pixel_group = (
+        source_root
+        / "mmcv"
+        / "ops"
+        / "csrc"
+        / "pytorch"
+        / "cpu"
+        / "pixel_group.cpp"
+    )
+    _replace_exact(
+        pixel_group,
+        PYTORCH_HELPER_INCLUDE,
+        QUEUE_AND_HELPER_INCLUDES,
+        1,
+        "mmcv pixel_group queue include",
+    )
+    _replace_exact(
+        pixel_group,
+        "embedding_dim.dim()",
+        "embedding.dim()",
+        1,
+        "mmcv pixel_group embedding assertion",
     )
 
 
