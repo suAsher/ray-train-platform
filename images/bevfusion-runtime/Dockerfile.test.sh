@@ -30,7 +30,14 @@ if grep -Fq 'shapely==1.8.5.post1' "$dockerfile"; then
   echo 'post-release Shapely is outside nuscenes-devkit 1.1.10 constraint' >&2
   exit 1
 fi
-grep -Fq 'opencv-python==4.10.0.84' "$dockerfile"
+grep -Fq 'opencv-python-headless==4.10.0.84' "$dockerfile"
+if grep -Eq '(^|[[:space:]])opencv-python==' "$dockerfile"; then
+  echo 'canary must install only the headless OpenCV wheel' >&2
+  exit 1
+fi
+grep -Fq 'COPY images/bevfusion-runtime/constraints-ray258.txt /opt/raytrain-build/constraints-ray258.txt' "$dockerfile"
+grep -Fq -- '--constraint /opt/raytrain-build/constraints-ray258.txt' "$dockerfile"
+grep -Fq 'apt-get purge -y build-essential git ninja-build' "$dockerfile"
 grep -Fq 'MMCV_WITH_OPS=1 FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST=8.9 MAX_JOBS=8' "$dockerfile"
 grep -Fq 'CXXFLAGS="-std=c++17"' "$dockerfile"
 grep -Fq 'COPY images/bevfusion-runtime/prepare-mmcv-source.py /usr/local/bin/prepare-mmcv-source' "$dockerfile"
@@ -44,6 +51,15 @@ grep -Fq 'ENV PLATFORM_RAY_VERSION=2.58.0' "$dockerfile"
 grep -Fq 'ENV LD_LIBRARY_PATH=/home/ray/anaconda3/lib/python3.10/site-packages/torch/lib:${LD_LIBRARY_PATH}' "$dockerfile"
 grep -Fq 'ENV MPLCONFIGDIR=/tmp/raytrain-matplotlib' "$dockerfile"
 grep -Fq 'import mmcv, mmdet, mmdet3d, pyarrow, ray, torch' "$dockerfile"
+for extension in \
+  mmdet3d.ops.ball_query.ball_query_ext \
+  mmdet3d.ops.furthest_point_sample.furthest_point_sample_ext \
+  mmdet3d.ops.gather_points.gather_points_ext \
+  mmdet3d.ops.group_points.group_points_ext \
+  mmdet3d.ops.interpolate.interpolate_ext \
+  mmdet3d.ops.knn.knn_ext; do
+  grep -Fq "$extension" "$dockerfile"
+done
 grep -Fq 'install -d -o ray -g users /workspace' "$dockerfile"
 if grep -Fq 'chown -R ray:users /home/ray /opt/bevfusion' "$dockerfile"; then
   echo 'canary must not duplicate the foundation through a recursive chown layer' >&2

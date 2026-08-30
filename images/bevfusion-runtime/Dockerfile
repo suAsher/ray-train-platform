@@ -56,11 +56,13 @@ RUN test "${RAY_CANARY_VERSION}" = "2.58.0" \
 
 # The foundation is the immutable production Ray 2.56 managed image. Upgrade
 # Ray only; keep its already accepted torch 2.4.1/CUDA 12.1/PyArrow stack.
+COPY images/bevfusion-runtime/constraints-ray258.txt /opt/raytrain-build/constraints-ray258.txt
 RUN python3 -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
+      --constraint /opt/raytrain-build/constraints-ray258.txt \
       "ray[default,train,tune]==${RAY_CANARY_VERSION}" \
       pyarrow==25.0.1 numpy==1.23.5 numba==0.57.1 scipy==1.10.1 \
       mmdet==2.20.0 nuscenes-devkit==1.1.10 \
-      onnx==1.16.2 opencv-python==4.10.0.84 opencv-python-headless==4.10.0.84 \
+      onnx==1.16.2 opencv-python-headless==4.10.0.84 \
       pyquaternion==0.9.9 shapely==1.8.5 spconv-cu120==2.3.6 \
       tensorboard==2.17.1 timm==0.3.4 yapf==0.40.1 \
       mlflow-skinny==3.14.0 \
@@ -91,7 +93,10 @@ RUN chmod 0755 /usr/local/bin/prepare-bevfusion-canary-source \
  && FORCE_CUDA=1 MAX_JOBS=8 python3 setup.py build_ext --inplace
 
 RUN python3 -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
-      addict==2.4.0
+      --constraint /opt/raytrain-build/constraints-ray258.txt addict==2.4.0 \
+ && apt-get purge -y build-essential git ninja-build \
+ && apt-get autoremove -y \
+ && rm -rf /var/lib/apt/lists/* /root/.cache
 
 COPY images/workspace/raytrain-launch.py /usr/local/bin/raytrain-launch
 COPY images/workspace/raytrain-managed /usr/local/bin/raytrain-managed
@@ -102,6 +107,7 @@ RUN chmod 0755 /usr/local/bin/raytrain-launch /usr/local/bin/raytrain-managed /u
  && install -d -o ray -g users /workspace \
  && python3 -c "import pathlib, site; pathlib.Path(site.getsitepackages()[0], 'raytrain_bevfusion_canary.pth').write_text('/opt/bevfusion\\n/usr/local/lib/raytrain-platform\\n/usr/local/lib/raytrain-platform/bevfusion\\n', encoding='utf-8')" \
  && python3 -c "import mmcv, mmdet, mmdet3d, pyarrow, ray, torch; assert ray.__version__ == '${RAY_CANARY_VERSION}'; assert torch.__version__.startswith('2.4.1')" \
+ && python3 -c "import importlib; [importlib.import_module(name) for name in ('mmdet3d.ops.ball_query.ball_query_ext', 'mmdet3d.ops.furthest_point_sample.furthest_point_sample_ext', 'mmdet3d.ops.gather_points.gather_points_ext', 'mmdet3d.ops.group_points.group_points_ext', 'mmdet3d.ops.interpolate.interpolate_ext', 'mmdet3d.ops.knn.knn_ext')]" \
  && python3 -c "from mmdet3d.ops.voxel import voxel_layer; import raytrain_runtime.managed_driver, raytrain_runtime.ray_data, ray_data_s1h" \
  && python3 -m pip check
 
@@ -112,6 +118,7 @@ ENV RAYTRAIN_IMAGE_SOURCE_ROOT=/opt/bevfusion/mmdet3d
 ENV PYTHONPATH=/opt/bevfusion:/usr/local/lib/raytrain-platform:/usr/local/lib/raytrain-platform/bevfusion
 ENV LD_LIBRARY_PATH=/home/ray/anaconda3/lib/python3.10/site-packages/torch/lib:${LD_LIBRARY_PATH}
 ENV MPLCONFIGDIR=/tmp/raytrain-matplotlib
+ENV RAY_USAGE_STATS_ENABLED=0
 USER ray
 WORKDIR /workspace
 

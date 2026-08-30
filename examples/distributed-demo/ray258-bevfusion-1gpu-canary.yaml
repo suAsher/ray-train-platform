@@ -1,0 +1,238 @@
+# Isolated production canary for the Ray 2.58 BEVFusion runtime.
+#
+# This validation is intentionally submitted through the existing Kueue queue,
+# requests exactly one GPU, mounts no tenant data, and does not change any
+# platform default. Delete the RayJob and ConfigMap after collecting evidence.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ray258-bevfusion-canary-code-r2
+  namespace: tenant-local
+data:
+  canary.py: |
+    import json
+    import socket
+
+    import ray
+    import torch
+    from ray import train
+    from ray.train import ScalingConfig
+    from ray.train.torch import TorchTrainer
+
+
+    def train_loop_per_worker(config):
+        from mmcv.ops import nms
+        from mmdet3d.ops import Voxelization
+
+        if not torch.cuda.is_available():
+            raise RuntimeError("the canary worker did not receive a CUDA device")
+
+        context = train.get_context()
+        shard = train.get_dataset_shard("train")
+        row_count = 0
+        checksum = 0
+        for batch in shard.iter_batches(batch_size=128, batch_format="numpy"):
+            values = batch["id"]
+            row_count += len(values)
+            checksum += int(values.sum())
+        if row_count != config["expected_rows"]:
+            raise RuntimeError(
+                f"Ray Data delivered {row_count} rows, expected {config['expected_rows']}"
+            )
+        if checksum != config["expected_checksum"]:
+            raise RuntimeError(
+                f"Ray Data checksum was {checksum}, expected {config['expected_checksum']}"
+            )
+
+        device = torch.device("cuda", 0)
+        points = torch.tensor(
+            [
+                [0.10, 0.10, 0.10, 1.0],
+                [0.12, 0.11, 0.10, 0.8],
+                [0.80, 0.80, 0.80, 0.6],
+            ],
+            dtype=torch.float32,
+            device=device,
+        )
+        voxelizer = Voxelization(
+            voxel_size=[0.1, 0.1, 0.1],
+            point_cloud_range=[0, 0, 0, 1, 1, 1],
+            max_num_points=5,
+            max_voxels=32,
+        )
+        voxels, coordinates, points_per_voxel = voxelizer(points)
+
+        boxes = torch.tensor(
+            [[0.0, 0.0, 1.0, 1.0], [0.1, 0.1, 1.1, 1.1]],
+            dtype=torch.float32,
+            device=device,
+        )
+        scores = torch.tensor([0.9, 0.8], dtype=torch.float32, device=device)
+        detections, kept = nms(boxes, scores, 0.5)
+
+        tensor = torch.tensor([checksum], dtype=torch.int64, device=device)
+        if torch.distributed.is_initialized():
+            torch.distributed.all_reduce(tensor)
+
+        train.report(
+            {
+                "world_rank": context.get_world_rank(),
+                "world_size": context.get_world_size(),
+                "rows": row_count,
+                "checksum": int(tensor.item()),
+                "gpu": torch.cuda.get_device_name(0),
+                "cuda": torch.version.cuda,
+                "voxel_count": int(voxels.shape[0]),
+                "coordinate_count": int(coordinates.shape[0]),
+                "points_per_voxel": int(points_per_voxel.sum().item()),
+                "nms_detections": int(detections.shape[0]),
+                "nms_kept": int(kept.shape[0]),
+            }
+        )
+
+
+    ray.init(address="auto")
+    dataset = ray.data.range(1024, override_num_blocks=8)
+    trainer = TorchTrainer(
+        train_loop_per_worker,
+        train_loop_config={
+            "expected_rows": 1024,
+            "expected_checksum": sum(range(1024)),
+        },
+        scaling_config=ScalingConfig(
+            num_workers=1,
+            use_gpu=True,
+            resources_per_worker={"CPU": 2, "GPU": 1},
+        ),
+        datasets={"train": dataset},
+    )
+    result = trainer.fit()
+    metrics = getattr(result, "metrics", None)
+    metrics_frame = getattr(result, "metrics_dataframe", None)
+    if not metrics and metrics_frame is not None and not metrics_frame.empty:
+        metrics = metrics_frame.iloc[-1].to_dict()
+    print(
+        "RAY258_BEVFUSION_CANARY="
+        + json.dumps(
+            {
+                "driver_host": socket.gethostname(),
+                "ray": ray.__version__,
+                "torch": torch.__version__,
+                "metrics": metrics or {},
+                "result_path": str(getattr(result, "path", "")),
+            },
+            sort_keys=True,
+            default=str,
+        ),
+        flush=True,
+    )
+---
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: ray258-bevfusion-canary-0831-r2
+  namespace: tenant-local
+  labels:
+    app.kubernetes.io/part-of: ray-train-platform
+    kueue.x-k8s.io/queue-name: local-gpu
+    validation.raytrain.wellspiking.ai/run: ray258-bevfusion-0831-r2
+spec:
+  shutdownAfterJobFinishes: true
+  ttlSecondsAfterFinished: 600
+  submissionMode: K8sJobMode
+  entrypoint: python /opt/raytrain-canary/canary.py
+  rayClusterSpec:
+    rayVersion: "2.58.0"
+    headGroupSpec:
+      rayStartParams:
+        dashboard-host: "0.0.0.0"
+        num-gpus: "0"
+      template:
+        metadata:
+          labels:
+            validation.raytrain.wellspiking.ai/run: ray258-bevfusion-0831-r2
+        spec:
+          nodeSelector:
+            accelerator: nvidia-rtx-4090
+            platform.wellspiking.ai/gpu-pool: production
+          imagePullSecrets:
+            - name: harbor-registry
+          containers:
+            - name: ray-head
+              image: harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion-ray258@sha256:a5a920303d943f29d8e3f2280ba828e93104f47a9b774e4a891c1a24682ea1ad
+              imagePullPolicy: IfNotPresent
+              resources:
+                requests: {cpu: "2", memory: 8Gi}
+                limits: {cpu: "2", memory: 8Gi}
+              volumeMounts:
+                - name: canary-code
+                  mountPath: /opt/raytrain-canary
+                  readOnly: true
+              env:
+                - name: RAY_USAGE_STATS_ENABLED
+                  value: "0"
+          volumes:
+            - name: canary-code
+              configMap:
+                name: ray258-bevfusion-canary-code-r2
+    workerGroupSpecs:
+      - groupName: canary-worker
+        replicas: 1
+        minReplicas: 1
+        maxReplicas: 1
+        rayStartParams:
+          num-gpus: "1"
+        template:
+          metadata:
+            labels:
+              validation.raytrain.wellspiking.ai/run: ray258-bevfusion-0831-r2
+          spec:
+            nodeSelector:
+              accelerator: nvidia-rtx-4090
+              platform.wellspiking.ai/gpu-pool: production
+            imagePullSecrets:
+              - name: harbor-registry
+            containers:
+              - name: ray-worker
+                image: harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion-ray258@sha256:a5a920303d943f29d8e3f2280ba828e93104f47a9b774e4a891c1a24682ea1ad
+                imagePullPolicy: IfNotPresent
+                resources:
+                  requests: {cpu: "4", memory: 16Gi, nvidia.com/gpu: "1"}
+                  limits: {cpu: "4", memory: 16Gi, nvidia.com/gpu: "1"}
+                env:
+                  - name: RAY_USAGE_STATS_ENABLED
+                    value: "0"
+                volumeMounts:
+                  - name: canary-code
+                    mountPath: /opt/raytrain-canary
+                    readOnly: true
+            volumes:
+              - name: canary-code
+                configMap:
+                  name: ray258-bevfusion-canary-code-r2
+  submitterPodTemplate:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-rtx-4090
+        platform.wellspiking.ai/gpu-pool: production
+      imagePullSecrets:
+        - name: harbor-registry
+      containers:
+        - name: ray-job-submitter
+          image: harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion-ray258@sha256:a5a920303d943f29d8e3f2280ba828e93104f47a9b774e4a891c1a24682ea1ad
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests: {cpu: "1", memory: 2Gi}
+            limits: {cpu: "1", memory: 2Gi}
+          env:
+            - name: RAY_USAGE_STATS_ENABLED
+              value: "0"
+          volumeMounts:
+            - name: canary-code
+              mountPath: /opt/raytrain-canary
+              readOnly: true
+      volumes:
+        - name: canary-code
+          configMap:
+            name: ray258-bevfusion-canary-code-r2
