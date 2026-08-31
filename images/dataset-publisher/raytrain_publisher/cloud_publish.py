@@ -58,6 +58,7 @@ _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _MAX_RECEIPT_INTEGER = (1 << 63) - 1
 DEFAULT_HEAD_WORKERS = 64
 DEFAULT_HEAD_BATCH_SIZE = 4096
+DEFAULT_DOWNLOAD_WORKERS = 64
 
 
 class CloudPublishError(RuntimeError):
@@ -644,31 +645,58 @@ def _stage_sources(
     *,
     storage: Any,
     source_root: Path,
+    max_workers: int = DEFAULT_DOWNLOAD_WORKERS,
 ) -> None:
-    staged: set[str] = set()
-    for remote_sample in remote_shard.samples:
-        if remote_sample.source_key in staged:
-            continue
-        destination = source_root.joinpath(*remote_sample.source_key.split("/"))
-        destination.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
-        downloaded = storage.download_file(
-            remote_sample.source_key,
-            destination,
-            maximum_bytes=remote_sample.source.size,
+    if max_workers <= 0:
+        raise ValueError("source download worker count must be positive")
+    samples_by_key = {
+        sample.source_key: sample
+        for sample in remote_shard.samples
+    }
+    unique_samples = tuple(samples_by_key.values())
+    if not unique_samples:
+        return
+    with ThreadPoolExecutor(
+        max_workers=min(max_workers, len(unique_samples)),
+        thread_name_prefix="tos-download",
+    ) as executor:
+        tuple(
+            executor.map(
+                lambda sample: _stage_source(
+                    sample,
+                    storage=storage,
+                    source_root=source_root,
+                ),
+                unique_samples,
+            )
         )
-        actual_size = destination.stat().st_size
-        if actual_size != remote_sample.source.size or getattr(
-            downloaded, "size", None
-        ) != remote_sample.source.size:
-            raise ValueError("staged source object size verification failed")
-        expected_digest = remote_sample.source.sha256
-        downloaded_digest = getattr(downloaded, "sha256", None)
-        if expected_digest is not None and (
-            downloaded_digest != expected_digest
-            or _sha256_file(destination) != expected_digest
-        ):
-            raise ValueError("staged source object digest verification failed")
-        staged = {*staged, remote_sample.source_key}
+
+
+def _stage_source(
+    remote_sample: _RemoteSample,
+    *,
+    storage: Any,
+    source_root: Path,
+) -> None:
+    destination = source_root.joinpath(*remote_sample.source_key.split("/"))
+    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
+    downloaded = storage.download_file(
+        remote_sample.source_key,
+        destination,
+        maximum_bytes=remote_sample.source.size,
+    )
+    actual_size = destination.stat().st_size
+    if actual_size != remote_sample.source.size or getattr(
+        downloaded, "size", None
+    ) != remote_sample.source.size:
+        raise ValueError("staged source object size verification failed")
+    expected_digest = remote_sample.source.sha256
+    downloaded_digest = getattr(downloaded, "sha256", None)
+    if expected_digest is not None and (
+        downloaded_digest != expected_digest
+        or _sha256_file(destination) != expected_digest
+    ):
+        raise ValueError("staged source object digest verification failed")
 
 
 def build_reference_manifest_rows(

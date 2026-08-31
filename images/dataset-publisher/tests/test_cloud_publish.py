@@ -437,6 +437,84 @@ class CloudPublisherPipelineTests(unittest.TestCase):
         self.assertLessEqual(storage.peak, 4)
         self.assertEqual([item.sample["token"] for item in inspected], [item["token"] for item in samples])
 
+    def test_source_staging_is_parallel_bounded_and_deduplicated(self) -> None:
+        payloads = {
+            f"scene-{index}/points.bin": _points(float(index))
+            for index in range(12)
+        }
+        remote_samples = tuple(
+            cloud_publish._RemoteSample(
+                sample=_sample(
+                    f"sample-{index}",
+                    f"scene-{index}",
+                    key,
+                    timestamp=index,
+                ),
+                source_key=key,
+                source=cloud_publish._SourceObject(
+                    size=len(payload),
+                    sha256=hashlib.sha256(payload).hexdigest(),
+                ),
+                estimated_bytes=len(payload),
+            )
+            for index, (key, payload) in enumerate(payloads.items())
+        )
+        remote_samples = remote_samples + (remote_samples[0],)
+        remote_shard = cloud_publish._RemoteShard(
+            samples=remote_samples,
+            scenes=tuple(sample.sample["scene"] for sample in remote_samples[:-1]),
+            estimated_bytes=sum(len(payload) for payload in payloads.values()),
+        )
+
+        class ConcurrentStorage:
+            def __init__(self) -> None:
+                self.lock = threading.Lock()
+                self.active = 0
+                self.peak = 0
+                self.calls: list[str] = []
+
+            def download_file(
+                self,
+                key: str,
+                destination: str | Path,
+                *,
+                maximum_bytes: int,
+            ) -> TOSObjectInfo:
+                payload = payloads[key]
+                self.asserted_maximum = maximum_bytes
+                with self.lock:
+                    self.active += 1
+                    self.peak = max(self.peak, self.active)
+                    self.calls.append(key)
+                time.sleep(0.01)
+                Path(destination).write_bytes(payload)
+                with self.lock:
+                    self.active -= 1
+                return TOSObjectInfo(
+                    size=len(payload),
+                    sha256=hashlib.sha256(payload).hexdigest(),
+                )
+
+        storage = ConcurrentStorage()
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = Path(directory)
+            cloud_publish._stage_sources(
+                remote_shard,
+                storage=storage,
+                source_root=source_root,
+                max_workers=4,
+            )
+            staged = {
+                path.relative_to(source_root).as_posix(): path.read_bytes()
+                for path in source_root.rglob("*.bin")
+            }
+
+        self.assertEqual(staged, payloads)
+        self.assertEqual(set(storage.calls), set(payloads))
+        self.assertEqual(len(storage.calls), len(payloads))
+        self.assertGreater(storage.peak, 1)
+        self.assertLessEqual(storage.peak, 4)
+
     def test_reference_manifest_persists_publisher_cbgs_order_and_raw_eval_rows(self) -> None:
         samples = [
             _sample("train-a", "scene-a", "scene-a/a.bin", timestamp=1),
