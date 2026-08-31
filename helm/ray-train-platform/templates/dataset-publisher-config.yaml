@@ -28,8 +28,8 @@ data:
   {{- with $roleTRN }}
   DATASET_PUBLISHER_IRSA_ROLE_TRN: {{ . | quote }}
   {{- end }}
-  {{- with $publisher.proxy.existingSecret }}
-  DATASET_PUBLISHER_PROXY_SECRET: {{ . | quote }}
+  {{- with $publisher.credentials.existingSecret }}
+  DATASET_PUBLISHER_CREDENTIAL_SECRET: {{ . | quote }}
   {{- end }}
   DATASET_PUBLISHER_QUEUE_NAME: {{ $localQueueName | quote }}
   DATASET_PUBLISHER_PRIORITY_CLASS_NAME: {{ $priorityClassName | quote }}

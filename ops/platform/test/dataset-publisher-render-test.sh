@@ -97,9 +97,9 @@ assert_source_contract() {
   grep -Fq '    irsaRoleTRN: ""' <<<"$values_block" || \
     fail 'IRSA role TRN must default to empty'
   grep -Fq '    existingSecret: ""' <<<"$values_block" || \
-    fail 'publisher proxy Secret reference must default to empty'
-  require_literal "$CONFIG_TEMPLATE" 'DATASET_PUBLISHER_PROXY_SECRET:' \
-    'publisher ConfigMap must carry only the existing proxy Secret name'
+    fail 'publisher credential Secret reference must default to empty'
+  require_literal "$CONFIG_TEMPLATE" 'DATASET_PUBLISHER_CREDENTIAL_SECRET:' \
+    'publisher ConfigMap must carry only the existing credential Secret name'
   grep -Fq '    resourceFlavorName: ""' <<<"$values_block" || \
     fail 'publisher ResourceFlavor must default to an automatic release-scoped name'
   grep -Fq '    clusterQueueName: ""' <<<"$values_block" || \
@@ -146,8 +146,8 @@ assert_source_contract() {
   # defaults are not inherited in that mode, so the publisher subtree must be
   # self-contained instead of depending on values.yaml.
   production_values_block="$(production_publisher_values)"
-  grep -Fq '    existingSecret: ray-dataset-publisher-egress' <<<"$production_values_block" || \
-    fail 'production publisher must reference the managed egress proxy Secret'
+  grep -Fq '    existingSecret: tos-credentials' <<<"$production_values_block" || \
+    fail 'production publisher must reference the existing TOS credential Secret'
   for required_block in \
     '  priorityValue: -1000' \
     '  resources:

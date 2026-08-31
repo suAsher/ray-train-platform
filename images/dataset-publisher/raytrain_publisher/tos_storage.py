@@ -75,6 +75,7 @@ class TOSStorage:
         internal_dataset_prefix: str,
         irsa_provider: VKEIRSAProvider | None = None,
         credentials_provider: Any = None,
+        environment: Mapping[str, str] | None = None,
         tos_sdk: Any = None,
         client: Any = None,
     ) -> None:
@@ -111,19 +112,24 @@ class TOSStorage:
 
         effective_credentials = credentials_provider
         if effective_credentials is None:
-            effective_irsa = irsa_provider or VKEIRSAProvider()
             credential_module = getattr(sdk, "credential", None)
             if credential_module is None:
-                raise TOSStorageError("TOS federation credentials are unavailable")
-            provider_failed = False
-            try:
-                effective_credentials = create_federation_credentials(
-                    effective_irsa, credential_module
-                )
-            except Exception:
-                provider_failed = True
-            if provider_failed:
-                raise TOSStorageError("TOS federation credentials are unavailable")
+                raise TOSStorageError("TOS credentials are unavailable")
+            effective_environment = os.environ if environment is None else environment
+            effective_credentials = _static_credentials_from_environment(
+                effective_environment, credential_module
+            )
+            if effective_credentials is None:
+                effective_irsa = irsa_provider or VKEIRSAProvider()
+                provider_failed = False
+                try:
+                    effective_credentials = create_federation_credentials(
+                        effective_irsa, credential_module
+                    )
+                except Exception:
+                    provider_failed = True
+                if provider_failed:
+                    raise TOSStorageError("TOS federation credentials are unavailable")
 
         client_failed = False
         sdk_client = None
@@ -139,7 +145,6 @@ class TOSStorage:
             raise TOSStorageError("TOS client initialization failed")
         self._credentials_provider = effective_credentials
         self._client = sdk_client
-
     @property
     def source_bucket(self) -> str:
         return self._source_bucket
@@ -483,6 +488,33 @@ class TOSStorage:
             return self._source_prefix + "/"
         normalized = _normalize_prefix(relative_prefix)
         return self._source_prefix + "/" + normalized + "/"
+
+
+def _static_credentials_from_environment(
+    environment: Mapping[str, str], credential_module: Any
+) -> Any | None:
+    access_key = environment.get("TOS_ACCESS_KEY", "")
+    secret_key = environment.get("TOS_SECRET_KEY", "")
+    if not access_key and not secret_key:
+        return None
+    if (
+        not isinstance(access_key, str)
+        or not isinstance(secret_key, str)
+        or not access_key
+        or not secret_key
+        or len(access_key) > 4096
+        or len(secret_key) > 4096
+        or access_key.strip() != access_key
+        or secret_key.strip() != secret_key
+    ):
+        raise TOSStorageError("TOS static credentials are invalid")
+    provider_type = getattr(credential_module, "StaticCredentialsProvider", None)
+    if not callable(provider_type):
+        raise TOSStorageError("TOS static credentials are unavailable")
+    try:
+        return provider_type(access_key, secret_key)
+    except Exception:
+        raise TOSStorageError("TOS static credentials are unavailable") from None
 
 
 def _normalize_bucket(value: object) -> str:

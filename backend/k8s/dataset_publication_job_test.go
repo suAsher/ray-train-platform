@@ -119,7 +119,6 @@ func TestRenderDatasetPublicationJobIsSecureCPUOnlyAndImmutable(t *testing.T) {
 func TestRenderDatasetPublicationJobInjectsManualVKEIRSAWhenConfigured(t *testing.T) {
 	spec := publicationJobSpecForTest()
 	spec.irsaRoleTRN = "trn:iam::2103446203:role/tos-rw"
-	spec.proxySecretName = "dataset-publisher-egress"
 
 	job, err := renderDatasetPublicationJob(spec)
 	if err != nil {
@@ -137,15 +136,6 @@ func TestRenderDatasetPublicationJobInjectsManualVKEIRSAWhenConfigured(t *testin
 	wantEnv := []corev1.EnvVar{
 		{Name: "VOLCENGINE_OIDC_ROLE_TRN", Value: spec.irsaRoleTRN},
 		{Name: "VOLCENGINE_OIDC_TOKEN_FILE", Value: wantTokenFile},
-	}
-	for _, name := range []string{"http_proxy", "https_proxy", "no_proxy"} {
-		wantEnv = append(wantEnv, corev1.EnvVar{
-			Name: name,
-			ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{Name: spec.proxySecretName},
-				Key:                  name,
-			}},
-		})
 	}
 	if !reflect.DeepEqual(container.Env, wantEnv) || len(container.EnvFrom) != 0 {
 		t.Fatalf("manual IRSA env=%#v envFrom=%#v, want %#v and no envFrom", container.Env, container.EnvFrom, wantEnv)
@@ -182,7 +172,7 @@ func TestRenderDatasetPublicationJobInjectsManualVKEIRSAWhenConfigured(t *testin
 	}
 
 	manifest := string(mustJSON(job))
-	for _, forbidden := range []string{"secretRef", "TOS_ACCESS_KEY", "TOS_SECRET_KEY", "VOLCENGINE_ACCESS_KEY", "VOLCENGINE_SECRET_KEY"} {
+	for _, forbidden := range []string{"secretKeyRef", "secretRef", "TOS_ACCESS_KEY", "TOS_SECRET_KEY", "VOLCENGINE_ACCESS_KEY", "VOLCENGINE_SECRET_KEY"} {
 		if strings.Contains(manifest, forbidden) {
 			t.Fatalf("manual IRSA Job contains forbidden %q", forbidden)
 		}
@@ -194,6 +184,24 @@ func TestRenderDatasetPublicationJobInjectsManualVKEIRSAWhenConfigured(t *testin
 	}
 	if emptyJob.Annotations[publicationSpecHashAnnotation] == job.Annotations[publicationSpecHashAnnotation] {
 		t.Fatal("canonical spec hash did not bind the optional IRSA role TRN")
+	}
+}
+
+func TestRenderDatasetPublicationJobReferencesExistingTOSSecret(t *testing.T) {
+	spec := publicationJobSpecForTest()
+	spec.credentialSecretName = "tos-credentials"
+
+	job, err := renderDatasetPublicationJob(spec)
+	if err != nil {
+		t.Fatalf("render static credential publication Job: %v", err)
+	}
+	env := job.Spec.Template.Spec.Containers[0].Env
+	want := []corev1.EnvVar{
+		{Name: "TOS_ACCESS_KEY", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "tos-credentials"}, Key: "access-key"}}},
+		{Name: "TOS_SECRET_KEY", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "tos-credentials"}, Key: "secret-key"}}},
+	}
+	if !reflect.DeepEqual(env, want) || len(job.Spec.Template.Spec.Containers[0].EnvFrom) != 0 {
+		t.Fatalf("static credential env=%#v, want %#v", env, want)
 	}
 }
 
@@ -894,7 +902,7 @@ type fakePublicationJobSpec struct {
 	imagePullPolicy       string
 	serviceAccountName    string
 	irsaRoleTRN           string
-	proxySecretName       string
+	credentialSecretName  string
 	queueName             string
 	priorityClassName     string
 	workingDirectory      string
@@ -958,28 +966,28 @@ func cloneTestStringMap(source map[string]string) map[string]string {
 	return result
 }
 
-func (spec fakePublicationJobSpec) Namespace() string          { return spec.namespace }
-func (spec fakePublicationJobSpec) Name() string               { return spec.name }
-func (spec fakePublicationJobSpec) RunID() string              { return spec.runID }
-func (spec fakePublicationJobSpec) DatasetID() string          { return spec.datasetID }
-func (spec fakePublicationJobSpec) DatasetVersionID() string   { return spec.datasetVersionID }
-func (spec fakePublicationJobSpec) Version() string            { return spec.version }
-func (spec fakePublicationJobSpec) SchemaVersion() string      { return spec.schemaVersion }
-func (spec fakePublicationJobSpec) SourceRoot() string         { return spec.sourceRoot }
-func (spec fakePublicationJobSpec) SourceIndex() string        { return spec.sourceIndex }
-func (spec fakePublicationJobSpec) Image() string              { return spec.image }
-func (spec fakePublicationJobSpec) SourceBucket() string       { return spec.sourceBucket }
-func (spec fakePublicationJobSpec) TargetBucket() string       { return spec.targetBucket }
-func (spec fakePublicationJobSpec) TOSEndpoint() string        { return spec.tosEndpoint }
-func (spec fakePublicationJobSpec) TOSRegion() string          { return spec.tosRegion }
-func (spec fakePublicationJobSpec) ImagePullPolicy() string    { return spec.imagePullPolicy }
-func (spec fakePublicationJobSpec) ServiceAccountName() string { return spec.serviceAccountName }
-func (spec fakePublicationJobSpec) IRSARoleTRN() string        { return spec.irsaRoleTRN }
-func (spec fakePublicationJobSpec) ProxySecretName() string    { return spec.proxySecretName }
-func (spec fakePublicationJobSpec) QueueName() string          { return spec.queueName }
-func (spec fakePublicationJobSpec) PriorityClassName() string  { return spec.priorityClassName }
-func (spec fakePublicationJobSpec) WorkingDirectory() string   { return spec.workingDirectory }
-func (spec fakePublicationJobSpec) InternalPrefix() string     { return spec.internalPrefix }
+func (spec fakePublicationJobSpec) Namespace() string            { return spec.namespace }
+func (spec fakePublicationJobSpec) Name() string                 { return spec.name }
+func (spec fakePublicationJobSpec) RunID() string                { return spec.runID }
+func (spec fakePublicationJobSpec) DatasetID() string            { return spec.datasetID }
+func (spec fakePublicationJobSpec) DatasetVersionID() string     { return spec.datasetVersionID }
+func (spec fakePublicationJobSpec) Version() string              { return spec.version }
+func (spec fakePublicationJobSpec) SchemaVersion() string        { return spec.schemaVersion }
+func (spec fakePublicationJobSpec) SourceRoot() string           { return spec.sourceRoot }
+func (spec fakePublicationJobSpec) SourceIndex() string          { return spec.sourceIndex }
+func (spec fakePublicationJobSpec) Image() string                { return spec.image }
+func (spec fakePublicationJobSpec) SourceBucket() string         { return spec.sourceBucket }
+func (spec fakePublicationJobSpec) TargetBucket() string         { return spec.targetBucket }
+func (spec fakePublicationJobSpec) TOSEndpoint() string          { return spec.tosEndpoint }
+func (spec fakePublicationJobSpec) TOSRegion() string            { return spec.tosRegion }
+func (spec fakePublicationJobSpec) ImagePullPolicy() string      { return spec.imagePullPolicy }
+func (spec fakePublicationJobSpec) ServiceAccountName() string   { return spec.serviceAccountName }
+func (spec fakePublicationJobSpec) IRSARoleTRN() string          { return spec.irsaRoleTRN }
+func (spec fakePublicationJobSpec) CredentialSecretName() string { return spec.credentialSecretName }
+func (spec fakePublicationJobSpec) QueueName() string            { return spec.queueName }
+func (spec fakePublicationJobSpec) PriorityClassName() string    { return spec.priorityClassName }
+func (spec fakePublicationJobSpec) WorkingDirectory() string     { return spec.workingDirectory }
+func (spec fakePublicationJobSpec) InternalPrefix() string       { return spec.internalPrefix }
 func (spec fakePublicationJobSpec) NodeSelector() map[string]string {
 	return spec.nodeSelector
 }

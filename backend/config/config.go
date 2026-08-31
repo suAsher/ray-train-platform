@@ -58,7 +58,7 @@ type Config struct {
 	DatasetPublisherTOSRegion                string
 	DatasetPublisherServiceAccount           string
 	DatasetPublisherIRSARoleTRN              string
-	DatasetPublisherProxySecret              string
+	DatasetPublisherCredentialSecret         string
 	DatasetPublisherQueueName                string
 	DatasetPublisherPriorityClassName        string
 	DatasetPublisherWorkingDirectory         string
@@ -206,7 +206,7 @@ func Load() (Config, error) {
 		DatasetPublisherTOSRegion:         strings.TrimSpace(envOr("DATASET_PUBLISHER_REGION", os.Getenv("TOS_REGION"))),
 		DatasetPublisherServiceAccount:    strings.TrimSpace(os.Getenv("DATASET_PUBLISHER_SERVICE_ACCOUNT")),
 		DatasetPublisherIRSARoleTRN:       strings.TrimSpace(os.Getenv("DATASET_PUBLISHER_IRSA_ROLE_TRN")),
-		DatasetPublisherProxySecret:       strings.TrimSpace(os.Getenv("DATASET_PUBLISHER_PROXY_SECRET")),
+		DatasetPublisherCredentialSecret:  strings.TrimSpace(os.Getenv("DATASET_PUBLISHER_CREDENTIAL_SECRET")),
 		DatasetPublisherQueueName:         strings.TrimSpace(os.Getenv("DATASET_PUBLISHER_QUEUE_NAME")),
 		DatasetPublisherPriorityClassName: strings.TrimSpace(os.Getenv("DATASET_PUBLISHER_PRIORITY_CLASS_NAME")),
 		DatasetPublisherWorkingDirectory:  strings.TrimSpace(envOr("DATASET_PUBLISHER_WORKING_DIRECTORY", "/tmp/raytrain-publisher")),
@@ -488,8 +488,11 @@ func validateDatasetPublisherConfig(cfg Config) error {
 	if cfg.DatasetPublisherIRSARoleTRN != "" && !datasetPublisherIRSARoleTRNPattern.MatchString(cfg.DatasetPublisherIRSARoleTRN) {
 		return fmt.Errorf("DATASET_PUBLISHER_IRSA_ROLE_TRN must be a valid Volcengine IAM role TRN")
 	}
-	if cfg.DatasetPublisherProxySecret != "" && !isDNSSubdomain(cfg.DatasetPublisherProxySecret) {
-		return fmt.Errorf("DATASET_PUBLISHER_PROXY_SECRET must be a valid Kubernetes name")
+	if cfg.DatasetPublisherCredentialSecret != "" && !isDNSSubdomain(cfg.DatasetPublisherCredentialSecret) {
+		return fmt.Errorf("DATASET_PUBLISHER_CREDENTIAL_SECRET must be a valid Kubernetes name")
+	}
+	if cfg.DatasetPublisherCredentialSecret != "" && cfg.DatasetPublisherIRSARoleTRN != "" {
+		return fmt.Errorf("dataset publisher credentials must use either IRSA or a Secret, not both")
 	}
 	for _, named := range []struct{ value, name string }{
 		{cfg.DatasetPublisherServiceAccount, "DATASET_PUBLISHER_SERVICE_ACCOUNT"},

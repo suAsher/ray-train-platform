@@ -121,9 +121,16 @@ class _FakeFederationCredentials:
         self.refresh = refresh
 
 
+class _FakeStaticCredentialsProvider:
+    def __init__(self, access_key: str, secret_key: str) -> None:
+        self.access_key = access_key
+        self.secret_key = secret_key
+
+
 class _FakeCredentialModule:
     FederationToken = _FakeFederationToken
     FederationCredentials = _FakeFederationCredentials
+    StaticCredentialsProvider = _FakeStaticCredentialsProvider
 
 
 class _FakeTOSSDK:
@@ -243,6 +250,43 @@ class TOSSDKContractTests(unittest.TestCase):
 
 
 class TOSClientConstructionTests(unittest.TestCase):
+    def test_prefers_static_environment_credentials_without_calling_irsa(self) -> None:
+        client = _FakeTOSClient()
+        sdk = _FakeTOSSDK(client)
+        irsa = _RotatingIRSA()
+
+        TOSStorage(
+            source_bucket=SOURCE_BUCKET,
+            target_bucket=TARGET_BUCKET,
+            endpoint=ENDPOINT,
+            region=REGION,
+            source_prefix=SOURCE_PREFIX,
+            internal_dataset_prefix=INTERNAL_PREFIX,
+            environment={"TOS_ACCESS_KEY": "static-ak", "TOS_SECRET_KEY": "static-sk"},
+            irsa_provider=irsa,
+            tos_sdk=sdk,
+        )
+
+        provider = sdk.client_options["credentials_provider"]
+        self.assertIsInstance(provider, _FakeStaticCredentialsProvider)
+        self.assertEqual(provider.access_key, "static-ak")
+        self.assertEqual(provider.secret_key, "static-sk")
+        self.assertEqual(irsa.calls, 0)
+
+    def test_rejects_partial_static_credentials_without_falling_back_to_irsa(self) -> None:
+        with self.assertRaisesRegex(TOSStorageError, "static credentials are invalid"):
+            TOSStorage(
+                source_bucket=SOURCE_BUCKET,
+                target_bucket=TARGET_BUCKET,
+                endpoint=ENDPOINT,
+                region=REGION,
+                source_prefix=SOURCE_PREFIX,
+                internal_dataset_prefix=INTERNAL_PREFIX,
+                environment={"TOS_ACCESS_KEY": "static-ak"},
+                irsa_provider=_RotatingIRSA(),
+                tos_sdk=_FakeTOSSDK(_FakeTOSClient()),
+            )
+
     def test_builds_tos_client_with_refreshable_federation_provider(self) -> None:
         client = _FakeTOSClient()
         sdk = _FakeTOSSDK(client)

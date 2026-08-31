@@ -80,7 +80,7 @@ type publicationJobSpec interface {
 	ImagePullPolicy() string
 	ServiceAccountName() string
 	IRSARoleTRN() string
-	ProxySecretName() string
+	CredentialSecretName() string
 	QueueName() string
 	PriorityClassName() string
 	WorkingDirectory() string
@@ -412,8 +412,11 @@ func renderDatasetPublicationJob(spec publicationJobSpec) (*batchv1.Job, error) 
 	if !validPublicationIRSARoleTRN(spec.IRSARoleTRN()) {
 		return nil, errors.New("invalid dataset publication IRSA role TRN")
 	}
-	if spec.ProxySecretName() != "" && !isDNSSubdomain(spec.ProxySecretName()) {
-		return nil, errors.New("invalid dataset publication proxy Secret name")
+	if spec.CredentialSecretName() != "" && !isDNSSubdomain(spec.CredentialSecretName()) {
+		return nil, errors.New("invalid dataset publication credential Secret name")
+	}
+	if spec.CredentialSecretName() != "" && spec.IRSARoleTRN() != "" {
+		return nil, errors.New("dataset publication credentials must use either IRSA or a Secret")
 	}
 	if domain.ValidatePinnedImage(spec.Image()) != nil {
 		return nil, errors.New("dataset publication image must be pinned by digest")
@@ -508,16 +511,17 @@ func renderDatasetPublicationJob(spec publicationJobSpec) (*batchv1.Job, error) 
 			}},
 		})
 	}
-	if spec.ProxySecretName() != "" {
-		for _, name := range []string{"http_proxy", "https_proxy", "no_proxy"} {
+	if spec.CredentialSecretName() != "" {
+		for name, key := range map[string]string{"TOS_ACCESS_KEY": "access-key", "TOS_SECRET_KEY": "secret-key"} {
 			container.Env = append(container.Env, corev1.EnvVar{
 				Name: name,
 				ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{Name: spec.ProxySecretName()},
-					Key:                  name,
+					LocalObjectReference: corev1.LocalObjectReference{Name: spec.CredentialSecretName()},
+					Key:                  key,
 				}},
 			})
 		}
+		sort.Slice(container.Env, func(i, j int) bool { return container.Env[i].Name < container.Env[j].Name })
 	}
 	podSpec := corev1.PodSpec{
 		AutomountServiceAccountToken: &falseValue,
@@ -726,7 +730,7 @@ type canonicalPublicationJobSpec struct {
 	ImagePullPolicy       string                                   `json:"image_pull_policy"`
 	ServiceAccountName    string                                   `json:"service_account_name"`
 	IRSARoleTRN           string                                   `json:"irsa_role_trn,omitempty"`
-	ProxySecretName       string                                   `json:"proxy_secret_name,omitempty"`
+	CredentialSecretName  string                                   `json:"credential_secret_name,omitempty"`
 	QueueName             string                                   `json:"queue_name"`
 	PriorityClassName     string                                   `json:"priority_class_name"`
 	WorkingDirectory      string                                   `json:"working_directory"`
@@ -750,7 +754,7 @@ func publicationCanonicalSpecHash(spec publicationJobSpec, labels map[string]str
 		DatasetVersionID: spec.DatasetVersionID(), Version: spec.Version(), SchemaVersion: spec.SchemaVersion(),
 		SourceRoot: spec.SourceRoot(), SourceIndex: spec.SourceIndex(), Image: spec.Image(),
 		SourceBucket: spec.SourceBucket(), TargetBucket: spec.TargetBucket(), TOSEndpoint: spec.TOSEndpoint(), TOSRegion: spec.TOSRegion(),
-		ImagePullPolicy: spec.ImagePullPolicy(), ServiceAccountName: spec.ServiceAccountName(), IRSARoleTRN: spec.IRSARoleTRN(), ProxySecretName: spec.ProxySecretName(), QueueName: spec.QueueName(),
+		ImagePullPolicy: spec.ImagePullPolicy(), ServiceAccountName: spec.ServiceAccountName(), IRSARoleTRN: spec.IRSARoleTRN(), CredentialSecretName: spec.CredentialSecretName(), QueueName: spec.QueueName(),
 		PriorityClassName: spec.PriorityClassName(), WorkingDirectory: spec.WorkingDirectory(), InternalPrefix: spec.InternalPrefix(),
 		NodeSelector: clonePublicationJobStringMap(spec.NodeSelector()), PreferredNodeSelector: clonePublicationJobStringMap(spec.PreferredNodeSelector()),
 		Tolerations: append([]datasetpublisher.PublicationToleration(nil), spec.Tolerations()...),

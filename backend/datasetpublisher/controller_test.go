@@ -159,7 +159,6 @@ func TestControllerJobSpecIsImmutableCPUOnlyAndLowPriority(t *testing.T) {
 	}}}
 	options := publicationControllerOptions()
 	options.IRSARoleTRN = "trn:iam::2103446203:role/tos-rw"
-	options.ProxySecretName = "dataset-publisher-egress"
 	controller, err := NewController(repository, jobs, options)
 	if err != nil {
 		t.Fatal(err)
@@ -183,9 +182,6 @@ func TestControllerJobSpecIsImmutableCPUOnlyAndLowPriority(t *testing.T) {
 	}
 	if spec.IRSARoleTRN() != options.IRSARoleTRN {
 		t.Fatalf("IRSA role TRN=%q, want %q", spec.IRSARoleTRN(), options.IRSARoleTRN)
-	}
-	if spec.ProxySecretName() != options.ProxySecretName {
-		t.Fatalf("proxy Secret=%q, want %q", spec.ProxySecretName(), options.ProxySecretName)
 	}
 	requests := spec.Resources().Requests()
 	limits := spec.Resources().Limits()

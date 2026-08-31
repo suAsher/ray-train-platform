@@ -69,13 +69,13 @@ func TestDatasetPublicationControllerOptionsCarryOptionalIRSARoleTRN(t *testing.
 	}
 }
 
-func TestDatasetPublicationControllerOptionsCarryProxySecretReference(t *testing.T) {
+func TestDatasetPublicationControllerOptionsCarryCredentialSecretReference(t *testing.T) {
 	cfg := validDatasetPublicationManagerConfig()
-	cfg.DatasetPublisherProxySecret = "dataset-publisher-egress"
+	cfg.DatasetPublisherCredentialSecret = "tos-credentials"
 
 	options := datasetPublicationControllerOptions(cfg)
-	if options.ProxySecretName != cfg.DatasetPublisherProxySecret {
-		t.Fatalf("controller proxy Secret=%q, want %q", options.ProxySecretName, cfg.DatasetPublisherProxySecret)
+	if options.CredentialSecretName != cfg.DatasetPublisherCredentialSecret {
+		t.Fatalf("controller credential Secret=%q, want %q", options.CredentialSecretName, cfg.DatasetPublisherCredentialSecret)
 	}
 }
 

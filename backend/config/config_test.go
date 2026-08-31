@@ -19,18 +19,18 @@ func setValidDatasetPublisherConfig(t *testing.T) {
 	t.Setenv("DATASET_PUBLISHER_PRIORITY_CLASS_NAME", "release-dataset-publisher-low")
 }
 
-func TestLoadAcceptsDatasetPublisherProxySecretReference(t *testing.T) {
+func TestLoadAcceptsDatasetPublisherCredentialSecretReference(t *testing.T) {
 	setValidDatasetPublisherConfig(t)
 	t.Setenv("DATASET_VERSIONING_ENABLED", "true")
-	t.Setenv("DATASET_PUBLISHER_PROXY_SECRET", "dataset-publisher-egress")
+	t.Setenv("DATASET_PUBLISHER_CREDENTIAL_SECRET", "tos-credentials")
 	t.Setenv("PAT_PEPPER", testPATPepper)
 
 	cfg, err := Load()
 	if err != nil {
-		t.Fatalf("load publisher proxy Secret: %v", err)
+		t.Fatalf("load publisher credential Secret: %v", err)
 	}
-	if cfg.DatasetPublisherProxySecret != "dataset-publisher-egress" {
-		t.Fatalf("proxy Secret=%q", cfg.DatasetPublisherProxySecret)
+	if cfg.DatasetPublisherCredentialSecret != "tos-credentials" {
+		t.Fatalf("credential Secret=%q", cfg.DatasetPublisherCredentialSecret)
 	}
 }
 

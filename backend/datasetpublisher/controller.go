@@ -84,7 +84,7 @@ type ControllerOptions struct {
 	ImagePullPolicy       string
 	ServiceAccountName    string
 	IRSARoleTRN           string
-	ProxySecretName       string
+	CredentialSecretName  string
 	QueueName             string
 	PriorityClassName     string
 	WorkingDirectory      string
@@ -155,7 +155,7 @@ type PublicationJobSpec struct {
 	imagePullPolicy       string
 	serviceAccountName    string
 	irsaRoleTRN           string
-	proxySecretName       string
+	credentialSecretName  string
 	queueName             string
 	priorityClassName     string
 	workingDirectory      string
@@ -169,28 +169,28 @@ type PublicationJobSpec struct {
 	ttlAfterFinished      time.Duration
 }
 
-func (spec PublicationJobSpec) Namespace() string          { return spec.namespace }
-func (spec PublicationJobSpec) Name() string               { return spec.name }
-func (spec PublicationJobSpec) RunID() string              { return spec.runID }
-func (spec PublicationJobSpec) DatasetID() string          { return spec.datasetID }
-func (spec PublicationJobSpec) DatasetVersionID() string   { return spec.datasetVersionID }
-func (spec PublicationJobSpec) Version() string            { return spec.version }
-func (spec PublicationJobSpec) SchemaVersion() string      { return spec.schemaVersion }
-func (spec PublicationJobSpec) SourceRoot() string         { return spec.sourceRoot }
-func (spec PublicationJobSpec) SourceIndex() string        { return spec.sourceIndex }
-func (spec PublicationJobSpec) Image() string              { return spec.image }
-func (spec PublicationJobSpec) SourceBucket() string       { return spec.sourceBucket }
-func (spec PublicationJobSpec) TargetBucket() string       { return spec.targetBucket }
-func (spec PublicationJobSpec) TOSEndpoint() string        { return spec.tosEndpoint }
-func (spec PublicationJobSpec) TOSRegion() string          { return spec.tosRegion }
-func (spec PublicationJobSpec) ImagePullPolicy() string    { return spec.imagePullPolicy }
-func (spec PublicationJobSpec) ServiceAccountName() string { return spec.serviceAccountName }
-func (spec PublicationJobSpec) IRSARoleTRN() string        { return spec.irsaRoleTRN }
-func (spec PublicationJobSpec) ProxySecretName() string    { return spec.proxySecretName }
-func (spec PublicationJobSpec) QueueName() string          { return spec.queueName }
-func (spec PublicationJobSpec) PriorityClassName() string  { return spec.priorityClassName }
-func (spec PublicationJobSpec) WorkingDirectory() string   { return spec.workingDirectory }
-func (spec PublicationJobSpec) InternalPrefix() string     { return spec.internalPrefix }
+func (spec PublicationJobSpec) Namespace() string            { return spec.namespace }
+func (spec PublicationJobSpec) Name() string                 { return spec.name }
+func (spec PublicationJobSpec) RunID() string                { return spec.runID }
+func (spec PublicationJobSpec) DatasetID() string            { return spec.datasetID }
+func (spec PublicationJobSpec) DatasetVersionID() string     { return spec.datasetVersionID }
+func (spec PublicationJobSpec) Version() string              { return spec.version }
+func (spec PublicationJobSpec) SchemaVersion() string        { return spec.schemaVersion }
+func (spec PublicationJobSpec) SourceRoot() string           { return spec.sourceRoot }
+func (spec PublicationJobSpec) SourceIndex() string          { return spec.sourceIndex }
+func (spec PublicationJobSpec) Image() string                { return spec.image }
+func (spec PublicationJobSpec) SourceBucket() string         { return spec.sourceBucket }
+func (spec PublicationJobSpec) TargetBucket() string         { return spec.targetBucket }
+func (spec PublicationJobSpec) TOSEndpoint() string          { return spec.tosEndpoint }
+func (spec PublicationJobSpec) TOSRegion() string            { return spec.tosRegion }
+func (spec PublicationJobSpec) ImagePullPolicy() string      { return spec.imagePullPolicy }
+func (spec PublicationJobSpec) ServiceAccountName() string   { return spec.serviceAccountName }
+func (spec PublicationJobSpec) IRSARoleTRN() string          { return spec.irsaRoleTRN }
+func (spec PublicationJobSpec) CredentialSecretName() string { return spec.credentialSecretName }
+func (spec PublicationJobSpec) QueueName() string            { return spec.queueName }
+func (spec PublicationJobSpec) PriorityClassName() string    { return spec.priorityClassName }
+func (spec PublicationJobSpec) WorkingDirectory() string     { return spec.workingDirectory }
+func (spec PublicationJobSpec) InternalPrefix() string       { return spec.internalPrefix }
 func (spec PublicationJobSpec) NodeSelector() map[string]string {
 	return clonePublicationStringMap(spec.nodeSelector)
 }
@@ -494,11 +494,11 @@ func (controller *Controller) jobSpec(request ReconcileRequest) (PublicationJobS
 		sourceIndex: request.SourceIndex, image: controller.options.Image,
 		sourceBucket: controller.options.SourceBucket, targetBucket: controller.options.TargetBucket,
 		tosEndpoint: controller.options.TOSEndpoint, tosRegion: controller.options.TOSRegion,
-		imagePullPolicy:    controller.options.ImagePullPolicy,
-		serviceAccountName: controller.options.ServiceAccountName,
-		irsaRoleTRN:        controller.options.IRSARoleTRN,
-		proxySecretName:    controller.options.ProxySecretName,
-		queueName:          controller.options.QueueName, priorityClassName: controller.options.PriorityClassName,
+		imagePullPolicy:      controller.options.ImagePullPolicy,
+		serviceAccountName:   controller.options.ServiceAccountName,
+		irsaRoleTRN:          controller.options.IRSARoleTRN,
+		credentialSecretName: controller.options.CredentialSecretName,
+		queueName:            controller.options.QueueName, priorityClassName: controller.options.PriorityClassName,
 		workingDirectory:      controller.options.WorkingDirectory,
 		internalPrefix:        controller.options.InternalPrefix,
 		nodeSelector:          clonePublicationStringMap(controller.options.NodeSelector),
@@ -551,7 +551,8 @@ func validControllerOptions(options ControllerOptions) bool {
 		!validPublicationImagePullPolicy(options.ImagePullPolicy) ||
 		!isPublicationDNSLabel(options.ServiceAccountName) ||
 		!validPublicationIRSARoleTRN(options.IRSARoleTRN) ||
-		(options.ProxySecretName != "" && !isPublicationDNSLabel(options.ProxySecretName)) ||
+		(options.CredentialSecretName != "" && !isPublicationDNSLabel(options.CredentialSecretName)) ||
+		(options.CredentialSecretName != "" && options.IRSARoleTRN != "") ||
 		!isPublicationDNSLabel(options.QueueName) ||
 		!isPublicationDNSLabel(options.PriorityClassName) ||
 		!validPublicationWorkingDirectory(options.WorkingDirectory) ||
