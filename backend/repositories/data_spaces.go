@@ -277,20 +277,33 @@ func (r *GormRepository) UpdateDataBindingStatus(ctx context.Context, id string,
 }
 
 func dataMountBindingRecordFromDomain(binding domain.DataMountBinding, now time.Time) DataMountBindingRecord {
+	attributes := binding.VolumeAttributesJSON
+	// PostgreSQL json columns reject an empty string. IDC bindings have no CSI
+	// attributes by design, so persist an internal empty-object placeholder and
+	// restore the domain representation below. This keeps NFS endpoint details
+	// out of the database while making the record portable across PostgreSQL and
+	// SQLite test environments.
+	if binding.Scope == domain.DataMountScopeIDC && attributes == "" {
+		attributes = "{}"
+	}
 	return DataMountBindingRecord{
 		ID: binding.ID, TenantID: optionalID(binding.TenantID), UserID: optionalID(binding.UserID), StorageKey: binding.StorageKey, Scope: string(binding.Scope), SpaceID: string(binding.SpaceID),
 		ClaimName: binding.ClaimName, ServiceAccountName: binding.ServiceAccountName, Driver: binding.Driver,
-		VolumeAttributesJSON: binding.VolumeAttributesJSON, RootPrefix: binding.RootPrefix, ReadOnly: binding.ReadOnly,
+		VolumeAttributesJSON: attributes, RootPrefix: binding.RootPrefix, ReadOnly: binding.ReadOnly,
 		Status: string(binding.Status), CreatedAt: now, UpdatedAt: now,
 	}
 }
 
 func (record DataMountBindingRecord) toDomain() (domain.DataMountBinding, error) {
+	attributes := record.VolumeAttributesJSON
+	if domain.DataMountScope(record.Scope) == domain.DataMountScopeIDC && attributes == "{}" {
+		attributes = ""
+	}
 	binding := domain.DataMountBinding{
 		ID: record.ID, TenantID: valueOrEmpty(record.TenantID), UserID: valueOrEmpty(record.UserID), StorageKey: record.StorageKey,
 		Scope: domain.DataMountScope(record.Scope), SpaceID: domain.DataSpaceID(record.SpaceID), ClaimName: record.ClaimName,
 		ServiceAccountName: record.ServiceAccountName, Driver: record.Driver,
-		VolumeAttributesJSON: record.VolumeAttributesJSON, RootPrefix: record.RootPrefix,
+		VolumeAttributesJSON: attributes, RootPrefix: record.RootPrefix,
 		ReadOnly: record.ReadOnly, Status: domain.DataMountBindingStatus(record.Status),
 	}
 	if err := binding.Validate(); err != nil {

@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"testing"
+	"time"
 
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
@@ -178,6 +179,24 @@ func TestEnsureIDCDataBindingsUsesTenantLocalReadOnlyClaims(t *testing.T) {
 	repeated, err := repo.EnsureIDCDataBindings(ctx, bindings...)
 	if err != nil || repeated[0].ID != bindings[0].ID {
 		t.Fatalf("IDC bindings must be idempotent: bindings=%#v err=%v", repeated, err)
+	}
+}
+
+func TestIDCBindingUsesValidJSONStoragePlaceholderWithoutChangingDomainContract(t *testing.T) {
+	binding, err := domain.NewIDCDataMountBinding("idc-original-a", "tenant-a", domain.DataSpaceIDCOriginal, "idc-original-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := dataMountBindingRecordFromDomain(binding, time.Now())
+	if record.VolumeAttributesJSON != "{}" {
+		t.Fatalf("IDC binding must persist a valid JSON placeholder, got %q", record.VolumeAttributesJSON)
+	}
+	restored, err := record.toDomain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.VolumeAttributesJSON != "" || restored.Driver != "" || !restored.ReadOnly {
+		t.Fatalf("IDC domain contract must not expose JSON/driver implementation fields: %#v", restored)
 	}
 }
 
