@@ -18,6 +18,8 @@ grep -Fq 'data-public' "$runner" || fail 'job must discover the governed public 
 grep -Fq 'generate_s1h_public_indexes.py' "$runner" || fail 'job must generate fresh PKLs'
 grep -Fq 'build_s1h_trusted_index.py' "$runner" || fail 'job must generate the trusted index'
 grep -Fq 'trusted-index-v2.pkl' "$runner" || fail 'job must publish the platform index contract'
+grep -Fq 'trusted-index-v2.parts' "$runner" || fail 'job must publish bounded content-addressed index parts'
+grep -Fq 'manifest root committed last' "$runner" || fail 'job must commit the root manifest after every part'
 grep -Fq -- '--run-id' "$runner" || fail 'job must support an auditable retry without changing the dataset version'
 grep -Fq -- '--finalize-only' "$runner" || fail 'job must support resuming a validated build at publication'
 grep -Fq 'source metadata changed during index generation' \

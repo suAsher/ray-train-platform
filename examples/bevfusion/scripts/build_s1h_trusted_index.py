@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+import hashlib
 import json
 import math
 import pickle
@@ -20,7 +21,7 @@ from typing import Any
 
 import numpy as np
 
-from raytrain_publisher.pack import dump_trusted_index
+from raytrain_publisher.pack import dump_trusted_index, dump_trusted_index_manifest
 
 
 OBJECT_CLASSES = (
@@ -80,6 +81,7 @@ NAME_MAPPING = {
 }
 VALID_SPLITS = frozenset(("train", "val", "test"))
 POINT_COLUMNS = 4
+DEFAULT_SAMPLES_PER_PART = 2000
 
 
 def convert_infos(
@@ -134,6 +136,86 @@ def merge_splits(
 
 def dump_index(samples: list[dict[str, Any]], *, cbgs_seed: int) -> bytes:
     return dump_trusted_index(samples, class_count=len(OBJECT_CLASSES), cbgs_seed=cbgs_seed)
+
+
+def write_index_bundle(
+    samples: list[dict[str, Any]],
+    *,
+    output: Path,
+    cbgs_seed: int,
+    samples_per_part: int = DEFAULT_SAMPLES_PER_PART,
+) -> dict[str, int]:
+    """Write bounded v2 parts first and the small root manifest last."""
+
+    if not samples:
+        raise ValueError("trusted index requires at least one sample")
+    if samples_per_part < 1 or samples_per_part > 5000:
+        raise ValueError("samples_per_part must be between 1 and 5000")
+    target = Path(output)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    parts_directory_name = f"{target.stem}.parts"
+    parts_directory = target.parent / parts_directory_name
+    parts_directory.mkdir(parents=True, exist_ok=True)
+    records = []
+    total_part_bytes = 0
+    initial_chunks = (
+        samples[offset : offset + samples_per_part]
+        for offset in range(0, len(samples), samples_per_part)
+    )
+    encoded_parts = (
+        encoded
+        for chunk in initial_chunks
+        for encoded in _encode_bounded_parts(chunk, cbgs_seed=cbgs_seed)
+    )
+    for chunk, payload in encoded_parts:
+        digest = hashlib.sha256(payload).hexdigest()
+        filename = f"sha256-{digest}.pkl"
+        part_path = parts_directory / filename
+        if part_path.exists() and part_path.read_bytes() != payload:
+            raise ValueError("content-addressed trusted index part conflicts")
+        if not part_path.exists():
+            part_path.write_bytes(payload)
+        records.append(
+            {
+                "key": f"{parts_directory_name}/{filename}",
+                "sha256": digest,
+                "sample_count": len(chunk),
+            }
+        )
+        total_part_bytes += len(payload)
+    manifest = dump_trusted_index_manifest(
+        records,
+        class_count=len(OBJECT_CLASSES),
+        cbgs_seed=cbgs_seed,
+        sample_count=len(samples),
+    )
+    target.write_bytes(manifest)
+    return {
+        "index_bytes": len(manifest),
+        "part_bytes": total_part_bytes,
+        "part_count": len(records),
+    }
+
+
+def _encode_bounded_parts(
+    samples: list[dict[str, Any]], *, cbgs_seed: int
+) -> Iterable[tuple[list[dict[str, Any]], bytes]]:
+    """Bisect only serialization-size failures until every part is bounded."""
+
+    try:
+        yield samples, dump_index(samples, cbgs_seed=cbgs_seed)
+        return
+    except ValueError as error:
+        message = str(error).lower()
+        is_size_error = any(
+            fragment in message
+            for fragment in ("exceeds", "too many", "size limit", "supported size")
+        )
+        if not is_size_error or len(samples) == 1:
+            raise
+    midpoint = len(samples) // 2
+    yield from _encode_bounded_parts(samples[:midpoint], cbgs_seed=cbgs_seed)
+    yield from _encode_bounded_parts(samples[midpoint:], cbgs_seed=cbgs_seed)
 
 
 def _convert_info(
@@ -226,11 +308,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--summary", type=Path)
     parser.add_argument("--cbgs-seed", type=int, default=0)
     parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--samples-per-part", type=int, default=DEFAULT_SAMPLES_PER_PART)
     arguments = parser.parse_args(argv)
     if not arguments.train_pkl:
         parser.error("at least one --train-pkl is required")
     if arguments.workers < 1 or arguments.workers > 64:
         parser.error("--workers must be between 1 and 64")
+    if arguments.samples_per_part < 1 or arguments.samples_per_part > 5000:
+        parser.error("--samples-per-part must be between 1 and 5000")
     return arguments
 
 
@@ -244,12 +329,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         source_root=arguments.source_root,
         workers=arguments.workers,
     )
-    payload = dump_index(samples, cbgs_seed=arguments.cbgs_seed)
-    arguments.output.parent.mkdir(parents=True, exist_ok=True)
-    arguments.output.write_bytes(payload)
+    bundle = write_index_bundle(
+        samples,
+        output=arguments.output,
+        cbgs_seed=arguments.cbgs_seed,
+        samples_per_part=arguments.samples_per_part,
+    )
     summary = {
         "class_count": len(OBJECT_CLASSES),
-        "index_bytes": len(payload),
+        **bundle,
         "samples": len(samples),
         "train_samples": sum(sample["split"] == "train" for sample in samples),
         "val_samples": sum(sample["split"] == "val" for sample in samples),

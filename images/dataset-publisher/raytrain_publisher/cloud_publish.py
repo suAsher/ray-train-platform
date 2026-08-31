@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import posixpath
 import re
 import sys
 import tempfile
@@ -19,6 +20,7 @@ from .irsa import VKEIRSAProvider
 from .pack import (
     MAX_SHARD_BYTES,
     PackConfig,
+    TrustedIndexDocument,
     _prepare_output_directory,
     _require_pyarrow,
     _sha256_file,
@@ -26,6 +28,7 @@ from .pack import (
     _validate_publication_id,
     _write_parquet_shard,
     build_cbgs_sample_plan,
+    load_trusted_index_manifest,
     load_trusted_index_document,
     plan_shards,
     prepare_rows,
@@ -156,11 +159,11 @@ def _publish_cloud_dataset(
     validated = _validate_request(request)
     _validate_pack_config(pack_config)
 
-    index_payload = storage.get_index(
-        validated.source_index,
-        maximum_bytes=MAX_INDEX_BYTES,
+    index_document = load_cloud_trusted_index(
+        storage=storage,
+        source_root=validated.source_root,
+        source_index=validated.source_index,
     )
-    index_document = load_trusted_index_document(index_payload)
     if not index_document.samples:
         raise ValueError("trusted publisher index must contain at least one sample")
     samples = _validated_remote_samples(
@@ -255,6 +258,55 @@ def _publish_cloud_dataset(
         )
 
     return result
+
+
+def load_cloud_trusted_index(
+    *, storage: Any, source_root: str, source_index: str
+) -> TrustedIndexDocument:
+    """Load one v2 index or a verified set of bounded v2 index parts."""
+
+    index_payload = storage.get_index(source_index, maximum_bytes=MAX_INDEX_BYTES)
+    try:
+        return load_trusted_index_document(index_payload)
+    except ValueError:
+        manifest = load_trusted_index_manifest(index_payload)
+
+    manifest_directory = posixpath.dirname(source_index)
+    index_stem = posixpath.splitext(posixpath.basename(source_index))[0]
+    part_directory = f"{index_stem}.parts"
+    samples: list[dict[str, Any]] = []
+    seen_tokens: set[str] = set()
+    for part in manifest.parts:
+        expected_part_key = f"{part_directory}/sha256-{part.sha256}.pkl"
+        if part.key != expected_part_key:
+            raise ValueError("trusted index part key does not match its digest")
+        full_key = posixpath.join(manifest_directory, part.key)
+        if _normalize_relative_key(full_key) != full_key:
+            raise ValueError("trusted index part key must be normalized")
+        _validate_scoped_key(source_root, full_key)
+        payload = storage.get_index(full_key, maximum_bytes=MAX_INDEX_BYTES)
+        if hashlib.sha256(payload).hexdigest() != part.sha256:
+            raise ValueError("trusted index part digest verification failed")
+        document = load_trusted_index_document(payload)
+        if (
+            document.class_count != manifest.class_count
+            or document.cbgs_seed != manifest.cbgs_seed
+            or len(document.samples) != part.sample_count
+        ):
+            raise ValueError("trusted index part contract does not match manifest")
+        for sample in document.samples:
+            token = sample.get("token")
+            if token in seen_tokens:
+                raise ValueError("trusted index contains a duplicate token")
+            seen_tokens.add(token)
+            samples.append(dict(sample))
+    if len(samples) != manifest.sample_count:
+        raise ValueError("trusted index assembled sample count is invalid")
+    return TrustedIndexDocument(
+        samples=tuple(samples),
+        class_count=manifest.class_count,
+        cbgs_seed=manifest.cbgs_seed,
+    )
 
 
 def _validate_request(request: object) -> CloudPublishRequest:

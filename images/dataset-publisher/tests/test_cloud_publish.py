@@ -26,6 +26,7 @@ from raytrain_publisher.pack import (  # noqa: E402
     MIN_SHARD_BYTES,
     PackConfig,
     dump_trusted_index,
+    dump_trusted_index_manifest,
 )
 from raytrain_publisher.tos_storage import (  # noqa: E402
     MAX_INDEX_BYTES,
@@ -100,8 +101,10 @@ class _FakeTOSStorage:
         source_objects: dict[str, bytes],
         output_root: Path,
         fail_on_shard_attempt: int | None = None,
+        index_objects: dict[str, bytes] | None = None,
     ) -> None:
         self.index_payload = index_payload
+        self.index_objects = dict(index_objects or {})
         self.source_objects = dict(source_objects)
         self.output_root = output_root
         self.fail_on_shard_attempt = fail_on_shard_attempt
@@ -117,9 +120,10 @@ class _FakeTOSStorage:
     def get_index(self, key: str, *, maximum_bytes: int) -> bytes:
         self.events.append(("get_index", key))
         self.index_budgets.append(maximum_bytes)
-        if len(self.index_payload) > maximum_bytes:
+        payload = self.index_objects.get(key, self.index_payload)
+        if len(payload) > maximum_bytes:
             raise TOSStorageError("index read failed AK=index-secret")
-        return self.index_payload
+        return payload
 
     def head_source(self, key: str) -> TOSObjectInfo:
         self.head_calls.append(key)
@@ -242,6 +246,72 @@ def _storage(output_dir: Path) -> _FakeTOSStorage:
 
 
 class CloudPublisherCLIContractTests(unittest.TestCase):
+    def test_cloud_loader_reassembles_verified_trusted_index_parts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            samples = _samples()
+            first_payload = dump_trusted_index(samples[:2], class_count=1, cbgs_seed=7)
+            second_payload = dump_trusted_index(samples[2:], class_count=1, cbgs_seed=7)
+            first_digest = hashlib.sha256(first_payload).hexdigest()
+            second_digest = hashlib.sha256(second_payload).hexdigest()
+            first_relative = f"trusted-index-v2.parts/sha256-{first_digest}.pkl"
+            second_relative = f"trusted-index-v2.parts/sha256-{second_digest}.pkl"
+            first_key = f".raytrain/{first_relative}"
+            second_key = f".raytrain/{second_relative}"
+            manifest = dump_trusted_index_manifest(
+                [
+                    {"key": first_relative, "sha256": first_digest, "sample_count": 2},
+                    {"key": second_relative, "sha256": second_digest, "sample_count": 2},
+                ],
+                class_count=1,
+                cbgs_seed=7,
+                sample_count=4,
+            )
+            storage = _FakeTOSStorage(
+                index_payload=manifest,
+                index_objects={first_key: first_payload, second_key: second_payload},
+                source_objects=_source_objects(),
+                output_root=Path(temp_dir),
+            )
+
+            document = cloud_publish.load_cloud_trusted_index(
+                storage=storage,
+                source_root=_request(Path(temp_dir)).source_root,
+                source_index=_request(Path(temp_dir)).source_index,
+            )
+
+            self.assertEqual([sample["token"] for sample in document.samples], [
+                sample["token"] for sample in samples
+            ])
+            self.assertEqual(document.class_count, 1)
+            self.assertEqual(document.cbgs_seed, 7)
+
+    def test_cloud_loader_rejects_tampered_or_escaping_index_part(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload = dump_trusted_index(_samples()[:1], class_count=1)
+            digest = hashlib.sha256(payload).hexdigest()
+            for key, part_payload in (
+                ("trusted-index-v2.parts/escape.pkl", payload),
+                (f"trusted-index-v2.parts/sha256-{digest}.pkl", payload + b"tamper"),
+            ):
+                manifest = dump_trusted_index_manifest(
+                    [{"key": key, "sha256": digest, "sample_count": 1}],
+                    class_count=1,
+                    cbgs_seed=0,
+                    sample_count=1,
+                )
+                storage = _FakeTOSStorage(
+                    index_payload=manifest,
+                    index_objects={f".raytrain/{key}": part_payload},
+                    source_objects=_source_objects(),
+                    output_root=Path(temp_dir),
+                )
+                with self.assertRaises((ValueError, TOSStorageError)):
+                    cloud_publish.load_cloud_trusted_index(
+                        storage=storage,
+                        source_root=_request(Path(temp_dir)).source_root,
+                        source_index=_request(Path(temp_dir)).source_index,
+                    )
+
     def test_parser_accepts_the_exact_kubernetes_adapter_arguments(self) -> None:
         parser = cloud_publish.build_argument_parser()
         values = {

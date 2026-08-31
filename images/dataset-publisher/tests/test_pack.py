@@ -28,11 +28,13 @@ from raytrain_publisher.pack import (  # noqa: E402
     build_cbgs_sample_plan,
     build_manifest,
     build_partition_summary,
+    dump_trusted_index_manifest,
     dump_trusted_index,
     estimate_row_bytes,
     iter_prepared_shard_plans,
     load_trusted_index,
     load_trusted_index_document,
+    load_trusted_index_manifest,
     plan_row_groups,
     plan_shards,
     prepare_rows,
@@ -106,6 +108,52 @@ class TrustedIndexAndInputTests(unittest.TestCase):
             dump_trusted_index(samples, class_count=0)
         with self.assertRaisesRegex(ValueError, "seed"):
             dump_trusted_index(samples, class_count=1, cbgs_seed=-1)
+
+    def test_sharded_trusted_index_manifest_round_trip_is_bounded_and_explicit(self) -> None:
+        parts = [
+            {
+                "key": "trusted-index-v2.parts/sha256-" + "a" * 64 + ".pkl",
+                "sha256": "a" * 64,
+                "sample_count": 2000,
+            },
+            {
+                "key": "trusted-index-v2.parts/sha256-" + "b" * 64 + ".pkl",
+                "sha256": "b" * 64,
+                "sample_count": 153,
+            },
+        ]
+
+        encoded = dump_trusted_index_manifest(
+            parts,
+            class_count=10,
+            cbgs_seed=17,
+            sample_count=2153,
+        )
+        manifest = load_trusted_index_manifest(encoded)
+
+        self.assertEqual(manifest.class_count, 10)
+        self.assertEqual(manifest.cbgs_seed, 17)
+        self.assertEqual(manifest.sample_count, 2153)
+        self.assertEqual([part.key for part in manifest.parts], [part["key"] for part in parts])
+        self.assertLess(len(encoded), 64 * 1024)
+
+    def test_sharded_trusted_index_manifest_rejects_count_and_digest_errors(self) -> None:
+        part = {
+            "key": "trusted-index-v2.parts/sha256-" + "a" * 64 + ".pkl",
+            "sha256": "a" * 64,
+            "sample_count": 2,
+        }
+        with self.assertRaisesRegex(ValueError, "sample count"):
+            dump_trusted_index_manifest(
+                [part], class_count=1, cbgs_seed=0, sample_count=3
+            )
+        with self.assertRaisesRegex(ValueError, "digest"):
+            dump_trusted_index_manifest(
+                [{**part, "sha256": "not-a-digest"}],
+                class_count=1,
+                cbgs_seed=0,
+                sample_count=2,
+            )
 
     def test_cbgs_plan_matches_legacy_reference_order_without_payload_copy(self) -> None:
         def sample(token: str, scene: str, timestamp: int, class_ids: list[int], *, split: str = "train") -> dict:

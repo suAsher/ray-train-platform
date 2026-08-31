@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -99,6 +100,61 @@ class BuildS1HTrustedIndexTest(unittest.TestCase):
             )
 
         self.assertEqual([sample["token"] for sample in samples], ["first", "second"])
+
+    def test_writes_a_content_addressed_sharded_bundle(self):
+        from raytrain_publisher.pack import load_trusted_index_document, load_trusted_index_manifest
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lidar = root / "site" / "scene" / "samples" / "LIDAR_TOP" / "1.bin"
+            lidar.parent.mkdir(parents=True)
+            lidar.write_bytes(np.arange(8, dtype=np.float32).tobytes())
+            samples = []
+            for index in range(3):
+                info = self._info(lidar)
+                info["token"] = f"token-{index}"
+                samples.extend(self.adapter.convert_infos([info], split="train", source_root=root))
+            output = root / "trusted-index-v2.pkl"
+
+            summary = self.adapter.write_index_bundle(
+                samples,
+                output=output,
+                cbgs_seed=3,
+                samples_per_part=2,
+            )
+
+            manifest = load_trusted_index_manifest(output.read_bytes())
+            self.assertEqual(manifest.sample_count, 3)
+            self.assertEqual(len(manifest.parts), 2)
+            restored = []
+            for part in manifest.parts:
+                payload = (root / part.key).read_bytes()
+                self.assertEqual(__import__("hashlib").sha256(payload).hexdigest(), part.sha256)
+                restored.extend(load_trusted_index_document(payload).samples)
+            self.assertEqual([item["token"] for item in restored], ["token-0", "token-1", "token-2"])
+            self.assertEqual(summary["part_count"], 2)
+
+    def test_bundle_adaptively_splits_a_part_that_exceeds_the_restricted_format(self):
+        samples = [{"token": f"token-{index}"} for index in range(5)]
+        original_dump = self.adapter.dump_index
+
+        def bounded_dump(chunk, *, cbgs_seed):
+            if len(chunk) > 2:
+                raise ValueError("trusted info contains too many values")
+            return f"{cbgs_seed}:{','.join(item['token'] for item in chunk)}".encode()
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            self.adapter, "dump_index", side_effect=bounded_dump
+        ):
+            summary = self.adapter.write_index_bundle(
+                samples,
+                output=Path(directory) / "trusted-index-v2.pkl",
+                cbgs_seed=9,
+                samples_per_part=5,
+            )
+
+        self.assertEqual(summary["part_count"], 3)
+        self.assertEqual(original_dump.__name__, "dump_index")
 
     def test_rejects_path_escape_duplicate_token_and_invalid_boxes(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import posixpath
 import re
 import sys
 import tempfile
@@ -35,6 +36,7 @@ from .input_security import (
 
 
 TRUSTED_INDEX_FORMAT = "trusted-index-v2"
+TRUSTED_INDEX_MANIFEST_FORMAT = "trusted-index-sharded-v1"
 MIB = 1024 * 1024
 MIN_SHARD_BYTES = 256 * MIB
 MAX_SHARD_BYTES = 512 * MIB
@@ -74,6 +76,25 @@ class TrustedIndexDocument:
     samples: tuple[dict[str, Any], ...]
     class_count: int
     cbgs_seed: int
+
+
+@dataclass(frozen=True)
+class TrustedIndexPart:
+    """One bounded, content-addressed trusted-index part."""
+
+    key: str
+    sha256: str
+    sample_count: int
+
+
+@dataclass(frozen=True)
+class TrustedIndexManifest:
+    """Small root document for a large trusted index."""
+
+    parts: tuple[TrustedIndexPart, ...]
+    class_count: int
+    cbgs_seed: int
+    sample_count: int
 
 
 @dataclass(frozen=True)
@@ -695,6 +716,39 @@ def dump_trusted_index(
     )
 
 
+def dump_trusted_index_manifest(
+    parts: object,
+    *,
+    class_count: int,
+    cbgs_seed: int = 0,
+    sample_count: int,
+) -> bytes:
+    """Serialize a bounded root document for content-addressed v2 parts."""
+
+    _validate_cbgs_contract(class_count=class_count, seed=cbgs_seed)
+    normalized_parts = _validate_trusted_index_parts(parts)
+    if isinstance(sample_count, bool) or not isinstance(sample_count, int) or sample_count <= 0:
+        raise ValueError("trusted index sample count must be a positive integer")
+    if sum(part.sample_count for part in normalized_parts) != sample_count:
+        raise ValueError("trusted index part sample counts do not match sample count")
+    return dump_trusted_info(
+        {
+            "index_format": TRUSTED_INDEX_MANIFEST_FORMAT,
+            "class_count": class_count,
+            "cbgs_seed": cbgs_seed,
+            "sample_count": sample_count,
+            "parts": [
+                {
+                    "key": part.key,
+                    "sha256": part.sha256,
+                    "sample_count": part.sample_count,
+                }
+                for part in normalized_parts
+            ],
+        }
+    )
+
+
 def load_trusted_index(payload: object) -> list[dict[str, Any]]:
     """Load an index through the restricted trusted-info unpickler."""
 
@@ -727,6 +781,70 @@ def load_trusted_index_document(payload: object) -> TrustedIndexDocument:
         class_count=class_count,
         cbgs_seed=cbgs_seed,
     )
+
+
+def load_trusted_index_manifest(payload: object) -> TrustedIndexManifest:
+    """Load and validate a sharded trusted-index root document."""
+
+    envelope = load_trusted_info(payload)
+    if set(envelope) != {
+        "index_format",
+        "class_count",
+        "cbgs_seed",
+        "sample_count",
+        "parts",
+    }:
+        raise ValueError("trusted publisher index manifest structure is invalid")
+    if envelope["index_format"] != TRUSTED_INDEX_MANIFEST_FORMAT:
+        raise ValueError("trusted publisher index manifest format is unsupported")
+    class_count, cbgs_seed = _validate_cbgs_contract(
+        class_count=envelope["class_count"], seed=envelope["cbgs_seed"]
+    )
+    parts = _validate_trusted_index_parts(envelope["parts"])
+    sample_count = envelope["sample_count"]
+    if isinstance(sample_count, bool) or not isinstance(sample_count, int) or sample_count <= 0:
+        raise ValueError("trusted index sample count must be a positive integer")
+    if sum(part.sample_count for part in parts) != sample_count:
+        raise ValueError("trusted index part sample counts do not match sample count")
+    return TrustedIndexManifest(
+        parts=parts,
+        class_count=class_count,
+        cbgs_seed=cbgs_seed,
+        sample_count=sample_count,
+    )
+
+
+def _validate_trusted_index_parts(parts: object) -> tuple[TrustedIndexPart, ...]:
+    if type(parts) is not list or not parts:
+        raise ValueError("trusted index parts must be a non-empty explicit list")
+    normalized: list[TrustedIndexPart] = []
+    seen_keys: set[str] = set()
+    seen_digests: set[str] = set()
+    for value in parts:
+        if type(value) is not dict or set(value) != {"key", "sha256", "sample_count"}:
+            raise ValueError("trusted index part structure is invalid")
+        key = value["key"]
+        digest = value["sha256"]
+        count = value["sample_count"]
+        if (
+            not isinstance(key, str)
+            or not key
+            or key.startswith("/")
+            or "\\" in key
+            or posixpath.normpath(key) != key
+            or any(component in {"", ".", ".."} for component in key.split("/"))
+        ):
+            raise ValueError("trusted index part key must be a clean relative path")
+        if not isinstance(digest, str) or not _SHA256_PATTERN.fullmatch(digest):
+            raise ValueError("trusted index part digest is invalid")
+        if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+            raise ValueError("trusted index part sample count must be positive")
+        if key in seen_keys or digest in seen_digests:
+            raise ValueError("trusted index parts must be unique")
+        seen_keys.add(key)
+        seen_digests.add(digest)
+        normalized.append(TrustedIndexPart(key=key, sha256=digest, sample_count=count))
+    return tuple(normalized)
 
 
 def build_cbgs_sample_plan(
