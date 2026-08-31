@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
+import hashlib
 import json
 from pathlib import Path
 import pickle
@@ -26,6 +27,7 @@ class PackageSpec:
     name: str
     path: Path
     sample_count: int
+    fingerprint: str
 
 
 def discover_packages(source_root: Path) -> tuple[PackageSpec, ...]:
@@ -41,8 +43,11 @@ def discover_packages(source_root: Path) -> tuple[PackageSpec, ...]:
             if any(not (metadata / name).is_file() for name in REQUIRED_METADATA):
                 continue
             try:
-                samples = json.loads((metadata / "sample.json").read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as error:
+                metadata_files = {
+                    name: (metadata / name).read_bytes() for name in REQUIRED_METADATA
+                }
+                samples = json.loads(metadata_files["sample.json"].decode("utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
                 raise ValueError(f"invalid sample metadata in {collection.name}/{package.name}") from error
             if not isinstance(samples, list):
                 raise ValueError(f"sample metadata must be a list in {collection.name}/{package.name}")
@@ -52,6 +57,7 @@ def discover_packages(source_root: Path) -> tuple[PackageSpec, ...]:
                     name=package.name,
                     path=package,
                     sample_count=len(samples),
+                    fingerprint=_metadata_fingerprint(metadata_files),
                 )
             )
     return tuple(
@@ -63,6 +69,18 @@ def discover_packages(source_root: Path) -> tuple[PackageSpec, ...]:
             ),
         )
     )
+
+
+def _metadata_fingerprint(metadata_files: dict[str, bytes]) -> str:
+    digest = hashlib.sha256(b"raytrain-s1h-package-metadata-v1\x00")
+    for name in REQUIRED_METADATA:
+        payload = metadata_files[name]
+        encoded_name = name.encode("utf-8")
+        digest.update(len(encoded_name).to_bytes(8, byteorder="big", signed=False))
+        digest.update(encoded_name)
+        digest.update(len(payload).to_bytes(8, byteorder="big", signed=False))
+        digest.update(payload)
+    return digest.hexdigest()
 
 
 def merge_package_outputs(output_root: Path) -> dict[str, int]:
@@ -132,8 +150,19 @@ def _generate_package(arguments: tuple[PackageSpec, Path, int, int]) -> dict[str
     output = output_root / "packages" / package.collection / package.name
     train = output / "nuscenes_infos_train.pkl"
     val = output / "nuscenes_infos_val.pkl"
-    if train.is_file() and val.is_file():
+    receipt = output / "raytrain-package.json"
+    expected_receipt = {
+        "collection": package.collection,
+        "fingerprint": package.fingerprint,
+        "package": package.name,
+        "sample_count": package.sample_count,
+    }
+    if train.is_file() and val.is_file() and _receipt_matches(receipt, expected_receipt):
         return {"collection": package.collection, "package": package.name, "cached": True}
+    if train.exists() or val.exists() or receipt.exists():
+        raise ValueError(
+            f"stale package output requires a new output root: {package.collection}/{package.name}"
+        )
     output.mkdir(parents=True, exist_ok=True)
     from tools.data_converter.nuscenes_converter import create_nuscenes_infos
 
@@ -147,7 +176,20 @@ def _generate_package(arguments: tuple[PackageSpec, Path, int, int]) -> dict[str
         min_scene_samples=min_scene_samples,
         lidar_only=True,
     )
+    temporary_receipt = receipt.with_suffix(".json.tmp")
+    temporary_receipt.write_text(
+        json.dumps(expected_receipt, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary_receipt.replace(receipt)
     return {"collection": package.collection, "package": package.name, "cached": False}
+
+
+def _receipt_matches(path: Path, expected: dict[str, Any]) -> bool:
+    try:
+        return json.loads(path.read_text(encoding="utf-8")) == expected
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
 
 
 def parse_args() -> argparse.Namespace:
@@ -186,6 +228,8 @@ def main() -> int:
     with ProcessPoolExecutor(max_workers=arguments.workers) as executor:
         for result in executor.map(_generate_package, work):
             print(json.dumps({"package": result}, separators=(",", ":"), sort_keys=True), flush=True)
+    if discover_packages(arguments.source_root) != packages:
+        raise ValueError("source metadata changed during index generation; retry with a new output root")
     summary = merge_package_outputs(arguments.output_root)
     print(json.dumps({"merged": summary}, separators=(",", ":"), sort_keys=True), flush=True)
     return 0

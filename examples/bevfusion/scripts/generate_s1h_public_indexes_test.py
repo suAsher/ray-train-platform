@@ -70,6 +70,20 @@ class GenerateS1HPublicIndexesTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "scene_token"):
                 self.generator.merge_package_outputs(output)
 
+    def test_metadata_fingerprint_changes_when_a_package_is_updated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "labeled"
+            package = self._package(root, "site-a", "package-a", samples=3)
+            before = self.generator.discover_packages(root)
+
+            metadata = package / "v1.0-mini" / "scene.json"
+            metadata.write_text(json.dumps([{"token": "new-scene"}]), encoding="utf-8")
+            after = self.generator.discover_packages(root)
+
+        self.assertEqual(len(before), 1)
+        self.assertEqual(len(after), 1)
+        self.assertNotEqual(before[0].fingerprint, after[0].fingerprint)
+
     @staticmethod
     def _package(root: Path, collection: str, name: str, *, samples: int) -> Path:
         package = root / collection / name
