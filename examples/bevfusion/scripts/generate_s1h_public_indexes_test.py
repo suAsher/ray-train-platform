@@ -165,6 +165,35 @@ class GenerateS1HPublicIndexesTest(unittest.TestCase):
                 with self.assertRaisesRegex(OSError, "invalid storage operation"):
                     self.generator._generate_package((package, output, 0, 81))
 
+    def test_does_not_append_converter_logs_to_shared_storage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._package(root, "site-a", "package-a", samples=1)
+            package = self.generator.discover_packages(root)[0]
+            output = root / "output"
+
+            tools = types.ModuleType("tools")
+            data_converter = types.ModuleType("tools.data_converter")
+            converter = types.ModuleType("tools.data_converter.nuscenes_converter")
+            converter.create_nuscenes_infos = lambda *_args, **_kwargs: None
+            modules = {
+                "tools": tools,
+                "tools.data_converter": data_converter,
+                "tools.data_converter.nuscenes_converter": converter,
+            }
+            original_open = Path.open
+
+            def reject_shared_converter_log(path, *args, **kwargs):
+                if path.name == "converter.log":
+                    raise OSError(22, "append is unsupported on shared storage")
+                return original_open(path, *args, **kwargs)
+
+            with mock.patch.dict(sys.modules, modules):
+                with mock.patch.object(Path, "open", reject_shared_converter_log):
+                    result = self.generator._generate_package((package, output, 0, 81))
+
+        self.assertEqual(result["status"], "accepted")
+
     @staticmethod
     def _package(root: Path, collection: str, name: str, *, samples: int) -> Path:
         package = root / collection / name

@@ -172,9 +172,8 @@ def _generate_package(arguments: tuple[PackageSpec, Path, int, int]) -> dict[str
     output.mkdir(parents=True, exist_ok=True)
     from tools.data_converter.nuscenes_converter import create_nuscenes_infos
 
-    converter_log = output / "converter.log"
     try:
-        with converter_log.open("a", encoding="utf-8") as log_stream:
+        with open("/dev/null", "w", encoding="utf-8") as log_stream:
             with redirect_stdout(log_stream), redirect_stderr(log_stream):
                 create_nuscenes_infos(
                     str(package.path),
