@@ -261,7 +261,7 @@ func (manager *Manager) DryRunDatasetVersionGC(ctx context.Context) ([]domain.Da
 }
 
 func (manager *Manager) reconcileRequest(work domain.DatasetPublicationWork) (ReconcileRequest, error) {
-	if err := work.Validate(); err != nil || !activePublicationState(work.Run.State) {
+	if err := work.Validate(); err != nil || work.Run.State != domain.DatasetVersionDiscovering && !activePublicationState(work.Run.State) {
 		return ReconcileRequest{}, ErrInvalidPublicationRequest
 	}
 	tenantID, superAdmin := publicationMutationScope(work.Dataset)

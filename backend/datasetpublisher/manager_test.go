@@ -97,6 +97,26 @@ func TestManagerReconcilesPublicAndTeamSourcesWithoutExposingObjectURIs(t *testi
 	}
 }
 
+func TestManagerReconcilesNewDiscoveringPublication(t *testing.T) {
+	dataset := domain.Dataset{ID: "public-data", Slug: "labeled", Name: "Labeled", SourceSpace: domain.DataSpacePublic,
+		SourceRelativePath: "labeled", Visibility: domain.DatasetVisibilityPublic, SchemaVersion: "parquet-v1"}
+	work := publicationWork(dataset, "version-public", "publication-public", "20260830.1")
+	work.Version.State = domain.DatasetVersionDiscovering
+	work.Run.State = domain.DatasetVersionDiscovering
+	repository := &managerRepository{work: []domain.DatasetPublicationWork{work}}
+	controller := &recordingPublicationController{}
+	manager := mustPublicationManager(t, repository, controller, ManagerOptions{
+		PublicRoot: "ray-train/public", SourceIndexName: ".raytrain/trusted-index-v2.pkl",
+	})
+
+	if err := manager.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile discovering publication: %v", err)
+	}
+	if len(controller.requests) != 1 || controller.requests[0].RunID != work.Run.ID {
+		t.Fatalf("requests=%+v", controller.requests)
+	}
+}
+
 func TestManagerContinuesOtherPublicationsAndReportsSanitizedFailure(t *testing.T) {
 	dataset := domain.Dataset{ID: "public-data", Slug: "labeled", Name: "Labeled", SourceSpace: domain.DataSpacePublic,
 		SourceRelativePath: "labeled", Visibility: domain.DatasetVisibilityPublic, SchemaVersion: "parquet-v1"}
