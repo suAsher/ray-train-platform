@@ -4,7 +4,10 @@ FROM ${BASE_IMAGE}
 USER root
 
 WORKDIR /opt/bevfusion
-COPY mmdet3d /opt/bevfusion/mmdet3d
+# Merge the pinned branch's Python modules into the base image's retained
+# extension tree. Docker COPY preserves the prebuilt *.so files that are not
+# present in the source archive.
+COPY mmdet3d /home/westwell/bevfusion/mmdet3d
 COPY nuscenes_converter.py /opt/bevfusion/tools/data_converter/nuscenes_converter.py
 
 WORKDIR /opt/raytrain-indexer
@@ -12,7 +15,7 @@ COPY generate_s1h_public_indexes.py /opt/raytrain-indexer/generate_s1h_public_in
 COPY build_s1h_trusted_index.py /opt/raytrain-indexer/build_s1h_trusted_index.py
 COPY raytrain_publisher /opt/raytrain-indexer/raytrain_publisher
 
-ENV PYTHONPATH=/opt/raytrain-indexer:/opt/bevfusion \
+ENV PYTHONPATH=/opt/raytrain-indexer:/opt/bevfusion:/home/westwell/bevfusion \
     PYTHONUNBUFFERED=1
 
 # The index builder only reads metadata and point-file attributes. It never
