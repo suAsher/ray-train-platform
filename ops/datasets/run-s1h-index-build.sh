@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: run-s1h-index-build.sh --image <digest reference> --version <id> [--run-id retry1] [--namespace tenant-local] [--source labeled] [--wait]
+Usage: run-s1h-index-build.sh --image <digest reference> --version <id> [--run-id retry1] [--namespace tenant-local] [--source labeled] [--finalize-only] [--wait]
 EOF
 }
 
@@ -13,6 +13,7 @@ image=""
 version=""
 run_id=""
 wait_for_completion=false
+finalize_only=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --image) image="${2:-}"; shift 2 ;;
@@ -20,6 +21,7 @@ while [[ $# -gt 0 ]]; do
     --run-id) run_id="${2:-}"; shift 2 ;;
     --namespace) namespace="${2:-}"; shift 2 ;;
     --source) source_relative="${2:-}"; shift 2 ;;
+    --finalize-only) finalize_only=true; shift ;;
     --wait) wait_for_completion=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; exit 2 ;;
@@ -84,13 +86,18 @@ fi
 source_root="/mnt/storage/public/$source_relative"
 output_root="$source_root/.raytrain/index-builds/$version"
 final_index="$source_root/.raytrain/trusted-index-v2.pkl"
+if "$finalize_only"; then
+  generation_command='test -f "$output_root/merged_nuscenes_infos_train.pkl" -a -f "$output_root/merged_nuscenes_infos_val.pkl" -a -f "$output_root/rejected-packages.json" || { echo "validated index build outputs are incomplete" >&2; exit 4; }'
+else
+  generation_command='python3 /opt/raytrain-indexer/generate_s1h_public_indexes.py --source-root "$source_root" --output-root "$output_root" --workers 32 --max-sweeps 0 --min-scene-samples 81'
+fi
 command="$(printf '%s\n' \
   'set -euo pipefail' \
   "source_root='$source_root'" \
   "output_root='$output_root'" \
   "final_index='$final_index'" \
   'test ! -e "$final_index" || { echo "trusted index already exists; publish a new dataset source root instead of overwriting it" >&2; exit 3; }' \
-  'python3 /opt/raytrain-indexer/generate_s1h_public_indexes.py --source-root "$source_root" --output-root "$output_root" --workers 32 --max-sweeps 0 --min-scene-samples 81' \
+  "$generation_command" \
   'python3 /opt/raytrain-indexer/build_s1h_trusted_index.py --source-root "$source_root" --train-pkl "$output_root/merged_nuscenes_infos_train.pkl" --val-pkl "$output_root/merged_nuscenes_infos_val.pkl" --output "$output_root/trusted-index-v2.pkl" --summary "$output_root/trusted-index-v2.summary.json" --workers 32' \
   'export INDEX_SOURCE="$output_root/trusted-index-v2.pkl" INDEX_TARGET="$final_index"' \
   "export INDEX_TEMP='$source_root/.raytrain/.trusted-index-v2.$version.tmp'" \

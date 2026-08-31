@@ -19,6 +19,7 @@ grep -Fq 'generate_s1h_public_indexes.py' "$runner" || fail 'job must generate f
 grep -Fq 'build_s1h_trusted_index.py' "$runner" || fail 'job must generate the trusted index'
 grep -Fq 'trusted-index-v2.pkl' "$runner" || fail 'job must publish the platform index contract'
 grep -Fq -- '--run-id' "$runner" || fail 'job must support an auditable retry without changing the dataset version'
+grep -Fq -- '--finalize-only' "$runner" || fail 'job must support resuming a validated build at publication'
 grep -Fq 'source metadata changed during index generation' \
   "$root_dir/examples/bevfusion/scripts/generate_s1h_public_indexes.py" ||
   fail 'job generator must reject a changing source tree'
