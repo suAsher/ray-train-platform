@@ -14,7 +14,8 @@ fail() {
 [[ -x "$builder" ]] || fail 'build-s1h-indexer-image.sh must be executable'
 
 grep -Fq 'ARG BASE_IMAGE' "$dockerfile" || fail 'base image must be supplied explicitly'
-grep -Fq 'COPY nuscenes_converter.py' "$dockerfile" || fail 'pinned patched converter is missing'
+grep -Fq 'COPY tools/data_converter/__init__.py' "$dockerfile" || fail 'converter package marker is missing'
+grep -Fq 'COPY tools/data_converter/nuscenes_converter.py' "$dockerfile" || fail 'pinned patched converter is missing'
 grep -Fq 'COPY mmdet3d /home/westwell/bevfusion/mmdet3d' "$dockerfile" ||
   fail 'pinned Python modules must retain the base image extension tree'
 grep -Fq '/home/westwell/bevfusion' "$dockerfile" || fail 'retained extension tree must be importable'
