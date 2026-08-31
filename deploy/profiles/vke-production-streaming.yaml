@@ -96,3 +96,6 @@ monitoring:
     enabled: false
   prometheusRule:
     enabled: true
+    # Keep Helm --reuse-values from re-serializing this integer as scientific
+    # notation and producing an unrelated PrometheusRule rollout.
+    objectSpillBytesPerSecond: "104857600"
