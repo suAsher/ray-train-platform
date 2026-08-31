@@ -449,9 +449,16 @@ class TOSStorage:
                     or not full_key.startswith(self._source_prefix + "/")
                 ):
                     return None, True
+                size = raw_object.size
+                if (
+                    not isinstance(size, bool)
+                    and isinstance(size, int)
+                    and size == 0
+                    and full_key.endswith("/")
+                ):
+                    continue
                 relative_key = full_key[len(self._source_prefix) + 1 :]
                 normalized_key = _normalize_relative_key(relative_key)
-                size = raw_object.size
                 etag = raw_object.etag
                 if (
                     isinstance(size, bool)

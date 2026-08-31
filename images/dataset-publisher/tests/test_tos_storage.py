@@ -807,6 +807,21 @@ class TOSStorageReadTests(unittest.TestCase):
         with self.assertRaises(TOSStorageError):
             storage.list_source(max_keys=1)
 
+    def test_list_skips_only_zero_byte_directory_markers(self) -> None:
+        storage, client = _new_storage()
+        client.list_result = SimpleNamespace(
+            contents=[
+                SimpleNamespace(key=SOURCE_PREFIX + "/", size=0, etag="folder"),
+                SimpleNamespace(key=SOURCE_PREFIX + "/scene-a/", size=0, etag="folder"),
+                SimpleNamespace(key=SOURCE_PREFIX + "/scene-a/points.bin", size=4, etag="data"),
+            ],
+            next_marker=None,
+        )
+
+        page = storage.list_source()
+
+        self.assertEqual([item.key for item in page.objects], ["scene-a/points.bin"])
+
 
 class TOSStorageWriteTests(unittest.TestCase):
     def test_put_is_immutable_and_sets_both_sha256_controls(self) -> None:
