@@ -45,8 +45,8 @@ for required_publisher_value in \
   '  credentials:' \
   '    existingSecret: tos-credentials' \
   '    repository: ray-dataset-publisher' \
-  '    tag: tos-secret-r5' \
-  '    digest: sha256:d3853bcd882af93da92ad5cba5e233d206698ec4b5620f5bcee98275b6494434' \
+  '    tag: tos-list-r6' \
+  '    digest: sha256:2bf3a1dc590b1aeb4cdffc4149f9f1099e4f3560bb06e9f7c2ce564e73d1e4c0' \
   '  priorityValue: -1000' \
   '  workingDirectory: /data/output'; do
   require_block "$publisher" "$required_publisher_value" \
