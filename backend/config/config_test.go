@@ -335,6 +335,55 @@ func TestLoadDatasetPublisherConfigurationUsesPinnedIRSAJobSettings(t *testing.T
 	}
 }
 
+func TestLoadSanitizesOptionalDatasetPublisherIRSARoleTRN(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "empty", raw: "", want: ""},
+		{
+			name: "configured",
+			raw:  "  trn:iam::2103446203:role/tos-rw  ",
+			want: "trn:iam::2103446203:role/tos-rw",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("APP_ENV", "development")
+			t.Setenv("PAT_ENABLED", "false")
+			t.Setenv("DATASET_VERSIONING_ENABLED", "true")
+			setValidDatasetPublisherConfig(t)
+			t.Setenv("DATASET_PUBLISHER_IRSA_ROLE_TRN", test.raw)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("load dataset publisher IRSA role: %v", err)
+			}
+			if cfg.DatasetPublisherIRSARoleTRN != test.want {
+				t.Fatalf("IRSA role TRN=%q, want %q", cfg.DatasetPublisherIRSARoleTRN, test.want)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsUnsafeDatasetPublisherIRSARoleTRNWithoutEchoingIt(t *testing.T) {
+	unsafeRole := "trn:iam::2103446203:role/tos-rw\nVOLCENGINE_OIDC_TOKEN_FILE=/tmp/attacker-token"
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("DATASET_VERSIONING_ENABLED", "true")
+	setValidDatasetPublisherConfig(t)
+	t.Setenv("DATASET_PUBLISHER_IRSA_ROLE_TRN", unsafeRole)
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "DATASET_PUBLISHER_IRSA_ROLE_TRN") {
+		t.Fatalf("expected IRSA role validation error, got %v", err)
+	}
+	if strings.Contains(err.Error(), unsafeRole) || strings.Contains(err.Error(), "attacker-token") {
+		t.Fatalf("IRSA role validation error echoed unsafe configuration: %v", err)
+	}
+}
+
 func TestLoadRejectsUnsafeDatasetPublisherConfiguration(t *testing.T) {
 	validImage := "registry.example/publisher@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	tests := []struct {

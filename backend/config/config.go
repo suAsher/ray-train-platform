@@ -19,6 +19,7 @@ import (
 var (
 	pinnedImagePattern                     = regexp.MustCompile(`^[^@\s]+@sha256:[0-9a-fA-F]{64}$`)
 	datasetPublisherPrivateEndpointPattern = regexp.MustCompile(`^tos[0-9]*-private$`)
+	datasetPublisherIRSARoleTRNPattern     = regexp.MustCompile(`^trn:iam::[0-9]+:role/[A-Za-z0-9+=,.@_/-]+$`)
 )
 
 type Config struct {
@@ -56,6 +57,7 @@ type Config struct {
 	DatasetPublisherTOSEndpoint              string
 	DatasetPublisherTOSRegion                string
 	DatasetPublisherServiceAccount           string
+	DatasetPublisherIRSARoleTRN              string
 	DatasetPublisherQueueName                string
 	DatasetPublisherPriorityClassName        string
 	DatasetPublisherWorkingDirectory         string
@@ -202,6 +204,7 @@ func Load() (Config, error) {
 		DatasetPublisherTOSEndpoint:       configuredDatasetPublisherEndpoint(),
 		DatasetPublisherTOSRegion:         strings.TrimSpace(envOr("DATASET_PUBLISHER_REGION", os.Getenv("TOS_REGION"))),
 		DatasetPublisherServiceAccount:    strings.TrimSpace(os.Getenv("DATASET_PUBLISHER_SERVICE_ACCOUNT")),
+		DatasetPublisherIRSARoleTRN:       strings.TrimSpace(os.Getenv("DATASET_PUBLISHER_IRSA_ROLE_TRN")),
 		DatasetPublisherQueueName:         strings.TrimSpace(os.Getenv("DATASET_PUBLISHER_QUEUE_NAME")),
 		DatasetPublisherPriorityClassName: strings.TrimSpace(os.Getenv("DATASET_PUBLISHER_PRIORITY_CLASS_NAME")),
 		DatasetPublisherWorkingDirectory:  strings.TrimSpace(envOr("DATASET_PUBLISHER_WORKING_DIRECTORY", "/tmp/raytrain-publisher")),
@@ -479,6 +482,9 @@ func validateDatasetPublisherConfig(cfg Config) error {
 	}
 	if !validDatasetPublisherEndpoint(cfg.DatasetPublisherTOSEndpoint, cfg.DatasetPublisherTOSRegion) {
 		return fmt.Errorf("DATASET_PUBLISHER_ENDPOINT must be an approved Volcengine TOS DNS hostname for DATASET_PUBLISHER_REGION")
+	}
+	if cfg.DatasetPublisherIRSARoleTRN != "" && !datasetPublisherIRSARoleTRNPattern.MatchString(cfg.DatasetPublisherIRSARoleTRN) {
+		return fmt.Errorf("DATASET_PUBLISHER_IRSA_ROLE_TRN must be a valid Volcengine IAM role TRN")
 	}
 	for _, named := range []struct{ value, name string }{
 		{cfg.DatasetPublisherServiceAccount, "DATASET_PUBLISHER_SERVICE_ACCOUNT"},

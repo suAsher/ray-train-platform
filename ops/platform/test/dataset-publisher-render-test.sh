@@ -179,6 +179,10 @@ assert_source_contract() {
     'publisher names must share one release-scoped DNS-safe helper'
   require_literal "$HELPERS_TEMPLATE" 'sha256sum' \
     'publisher long-name truncation must retain a collision-resistant hash'
+  require_literal "$HELPERS_TEMPLATE" 'define "ray-train-platform.datasetPublisher.irsaRoleTRN"' \
+    'publisher IRSA role must use one shared sanitizing helper'
+  require_literal "$HELPERS_TEMPLATE" 'must be a valid Volcengine IAM role TRN' \
+    'publisher IRSA role helper must reject malformed values'
   require_literal "$BACKEND_TEMPLATE" '          envFrom:' \
     'backend must consume publisher non-secret configuration'
   require_literal "$BACKEND_TEMPLATE" 'name: {{ include "ray-train-platform.datasetPublisher.resourceName" (list . "") }}' \
@@ -222,7 +226,8 @@ assert_source_contract() {
     'publisher non-sensitive configuration must use a ConfigMap'
   for key in DATASET_PUBLISHER_IMAGE DATASET_PUBLISHER_IMAGE_PULL_POLICY \
     DATASET_PUBLISHER_SOURCE_BUCKET DATASET_PUBLISHER_TARGET_BUCKET DATASET_PUBLISHER_ENDPOINT \
-    DATASET_PUBLISHER_REGION DATASET_PUBLISHER_SERVICE_ACCOUNT DATASET_PUBLISHER_QUEUE_NAME \
+    DATASET_PUBLISHER_REGION DATASET_PUBLISHER_SERVICE_ACCOUNT DATASET_PUBLISHER_IRSA_ROLE_TRN \
+    DATASET_PUBLISHER_QUEUE_NAME \
     DATASET_PUBLISHER_PRIORITY_CLASS_NAME DATASET_PUBLISHER_SOURCE_INDEX_NAME \
     DATASET_PUBLISHER_CPU_REQUEST DATASET_PUBLISHER_CPU_LIMIT DATASET_PUBLISHER_MEMORY_REQUEST \
     DATASET_PUBLISHER_MEMORY_LIMIT DATASET_PUBLISHER_JOB_BACKOFF_LIMIT \
@@ -427,6 +432,9 @@ assert_rendered_contract() {
   if grep -Fq 'vke.volcengine.com/role-trn:' "$first_release_render"; then
     fail 'empty IRSA role TRN must not render an annotation'
   fi
+  if grep -Fq 'DATASET_PUBLISHER_IRSA_ROLE_TRN:' "$first_release_render"; then
+    fail 'empty IRSA role TRN must not render backend IRSA configuration'
+  fi
 
   require_literal "$first_release_render" 'DATASET_PUBLISHER_IMAGE: "registry.invalid/ray-platform/ray-dataset-publisher@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"' \
     'ConfigMap must resolve the publisher image through the global registry'
@@ -514,6 +522,11 @@ assert_rendered_contract() {
     --set-string "datasetPublisher.serviceAccount.irsaRoleTRN=${role_trn}"
   require_literal "$irsa_render" 'vke.volcengine.com/role-trn: "trn:iam::2100000000000000000:role/ray-dataset-publisher"' \
     'non-empty Volcengine IRSA role TRN must render on the dedicated ServiceAccount'
+  require_literal "$irsa_render" 'DATASET_PUBLISHER_IRSA_ROLE_TRN: "trn:iam::2100000000000000000:role/ray-dataset-publisher"' \
+    'non-empty Volcengine IRSA role TRN must flow through the non-secret publisher ConfigMap'
+  if grep -Eiq 'kind:[[:space:]]*Secret|secretKeyRef|secretRef|access[_-]?key|secret[_-]?key' "$irsa_render"; then
+    fail 'configured publisher IRSA render must not create or consume static credential Secrets'
+  fi
 
   render_publisher_templates "$placement_render" publisher-placement publication-system \
     --set datasetPublisher.enabled=true \
@@ -532,6 +545,19 @@ assert_rendered_contract() {
     fail 'ConfigMap must carry optional tolerations'
 }
 
+assert_invalid_irsa_role_rejected() {
+  local invalid_render="$1"
+
+  if render_publisher_templates "$invalid_render" publisher-invalid-irsa publication-system \
+    --set datasetPublisher.enabled=true \
+    --set-string datasetPublisher.image.tag=test \
+    --set-string datasetPublisher.serviceAccount.irsaRoleTRN=trn:iam::2103446203:user/not-a-role; then
+    fail 'malformed Volcengine IRSA role TRN must fail Helm rendering'
+  fi
+  require_literal "$invalid_render" 'datasetPublisher.serviceAccount.irsaRoleTRN must be a valid Volcengine IAM role TRN' \
+    'malformed publisher IRSA role must fail with a sanitized validation error'
+}
+
 assert_source_contract
 
 if ! command -v helm >/dev/null 2>&1; then
@@ -545,9 +571,11 @@ second_release_render="$(mktemp)"
 long_release_render="$(mktemp)"
 irsa_render="$(mktemp)"
 placement_render="$(mktemp)"
-trap 'rm -f "$disabled_render" "$first_release_render" "$second_release_render" "$long_release_render" "$irsa_render" "$placement_render"' EXIT
+invalid_irsa_render="$(mktemp)"
+trap 'rm -f "$disabled_render" "$first_release_render" "$second_release_render" "$long_release_render" "$irsa_render" "$placement_render" "$invalid_irsa_render"' EXIT
 
 assert_rendered_contract "$disabled_render" "$first_release_render" "$second_release_render" \
   "$long_release_render" "$irsa_render" "$placement_render"
+assert_invalid_irsa_role_rejected "$invalid_irsa_render"
 
 echo 'Dataset publisher rendered-template contract verified'

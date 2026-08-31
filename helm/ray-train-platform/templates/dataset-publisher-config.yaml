@@ -8,6 +8,7 @@
 {{- $endpointRaw := default .Values.tos.endpoint $publisher.endpoint -}}
 {{- $endpoint := trimSuffix "/" (trimPrefix "https://" $endpointRaw) -}}
 {{- $region := default .Values.tos.region $publisher.region -}}
+{{- $roleTRN := include "ray-train-platform.datasetPublisher.irsaRoleTRN" . -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -24,6 +25,9 @@ data:
   DATASET_PUBLISHER_ENDPOINT: {{ required "datasetPublisher endpoint is required" $endpoint | quote }}
   DATASET_PUBLISHER_REGION: {{ required "datasetPublisher region is required" $region | quote }}
   DATASET_PUBLISHER_SERVICE_ACCOUNT: {{ $name | quote }}
+  {{- with $roleTRN }}
+  DATASET_PUBLISHER_IRSA_ROLE_TRN: {{ . | quote }}
+  {{- end }}
   DATASET_PUBLISHER_QUEUE_NAME: {{ $localQueueName | quote }}
   DATASET_PUBLISHER_PRIORITY_CLASS_NAME: {{ $priorityClassName | quote }}
   DATASET_PUBLISHER_SOURCE_INDEX_NAME: {{ $publisher.sourceIndexName | quote }}

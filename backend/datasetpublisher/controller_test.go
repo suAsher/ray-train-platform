@@ -158,6 +158,7 @@ func TestControllerJobSpecIsImmutableCPUOnlyAndLowPriority(t *testing.T) {
 		status: PublicationJobStatus{Phase: PublicationJobPending},
 	}}}
 	options := publicationControllerOptions()
+	options.IRSARoleTRN = "trn:iam::2103446203:role/tos-rw"
 	controller, err := NewController(repository, jobs, options)
 	if err != nil {
 		t.Fatal(err)
@@ -178,6 +179,9 @@ func TestControllerJobSpecIsImmutableCPUOnlyAndLowPriority(t *testing.T) {
 	}
 	if spec.Image() != options.Image || spec.ServiceAccountName() != options.ServiceAccountName {
 		t.Fatalf("image=%q serviceAccount=%q", spec.Image(), spec.ServiceAccountName())
+	}
+	if spec.IRSARoleTRN() != options.IRSARoleTRN {
+		t.Fatalf("IRSA role TRN=%q, want %q", spec.IRSARoleTRN(), options.IRSARoleTRN)
 	}
 	requests := spec.Resources().Requests()
 	limits := spec.Resources().Limits()
@@ -508,6 +512,11 @@ func TestControllerRejectsInvalidRequestsAndConfiguration(t *testing.T) {
 		func() ControllerOptions {
 			value := base
 			value.ServiceAccountName = "Bad_Service_Account"
+			return value
+		}(),
+		func() ControllerOptions {
+			value := base
+			value.IRSARoleTRN = "trn:iam::2103446203:user/not-a-role"
 			return value
 		}(),
 		func() ControllerOptions { value := base; value.CPURequest = "500 millicpu"; return value }(),

@@ -17,6 +17,18 @@ Keep short names readable; retain a hash when the DNS label must be truncated.
 {{- end -}}
 {{- end -}}
 
+{{- /* Validate the optional VKE IAM role once and reuse the sanitized value
+for both the ServiceAccount annotation and the backend's non-secret config. */ -}}
+{{- define "ray-train-platform.datasetPublisher.irsaRoleTRN" -}}
+{{- $publisher := default (dict) .Values.datasetPublisher -}}
+{{- $serviceAccount := default (dict) $publisher.serviceAccount -}}
+{{- $roleTRN := trim (default "" $serviceAccount.irsaRoleTRN) -}}
+{{- if and $roleTRN (not (regexMatch `^trn:iam::[0-9]+:role/[A-Za-z0-9+=,.@_/-]+$` $roleTRN)) -}}
+{{- fail "datasetPublisher.serviceAccount.irsaRoleTRN must be a valid Volcengine IAM role TRN" -}}
+{{- end -}}
+{{- $roleTRN -}}
+{{- end -}}
+
 {{- /* Encode a deployment-owned label map in the backend config parser's
 comma-separated key=value format. Keys are sorted for deterministic rollouts. */ -}}
 {{- define "ray-train-platform.datasetPublisher.labelSelector" -}}

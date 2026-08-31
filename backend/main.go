@@ -399,7 +399,26 @@ func newDatasetPublicationManager(
 	if repository == nil || client == nil {
 		return nil, fmt.Errorf("dataset publication requires PostgreSQL and Kubernetes")
 	}
-	controller, err := datasetpublisher.NewController(repository, client, datasetpublisher.ControllerOptions{
+	controller, err := datasetpublisher.NewController(repository, client, datasetPublicationControllerOptions(cfg))
+	if err != nil {
+		return nil, fmt.Errorf("configure dataset publication jobs: %w", err)
+	}
+	manager, err := datasetpublisher.NewManager(repository, controller, datasetpublisher.ManagerOptions{
+		PublicRoot:      cfg.DataSpacesPublicRoot,
+		SourceIndexName: cfg.DatasetPublisherSourceIndexName,
+		PollInterval:    time.Duration(cfg.DatasetPublisherPollIntervalSeconds) * time.Second,
+		OnReconcileError: func(err error) {
+			log.Printf("dataset publication reconciliation deferred: %v", err)
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("configure dataset publication manager: %w", err)
+	}
+	return manager, nil
+}
+
+func datasetPublicationControllerOptions(cfg config.Config) datasetpublisher.ControllerOptions {
+	return datasetpublisher.ControllerOptions{
 		Namespace:             runtimeNamespace(),
 		Image:                 cfg.DatasetPublisherImage,
 		SourceBucket:          cfg.DatasetPublisherSourceBucket,
@@ -408,6 +427,7 @@ func newDatasetPublicationManager(
 		TOSRegion:             cfg.DatasetPublisherTOSRegion,
 		ImagePullPolicy:       cfg.DatasetPublisherImagePullPolicy,
 		ServiceAccountName:    cfg.DatasetPublisherServiceAccount,
+		IRSARoleTRN:           cfg.DatasetPublisherIRSARoleTRN,
 		QueueName:             cfg.DatasetPublisherQueueName,
 		PriorityClassName:     cfg.DatasetPublisherPriorityClassName,
 		WorkingDirectory:      cfg.DatasetPublisherWorkingDirectory,
@@ -425,22 +445,7 @@ func newDatasetPublicationManager(
 		JobTTLAfterFinished:   time.Duration(cfg.DatasetPublisherJobTTLSeconds) * time.Second,
 		InitialRetryBackoff:   time.Duration(cfg.DatasetPublisherInitialRetrySeconds) * time.Second,
 		MaximumRetryBackoff:   time.Duration(cfg.DatasetPublisherMaximumRetrySeconds) * time.Second,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("configure dataset publication jobs: %w", err)
 	}
-	manager, err := datasetpublisher.NewManager(repository, controller, datasetpublisher.ManagerOptions{
-		PublicRoot:      cfg.DataSpacesPublicRoot,
-		SourceIndexName: cfg.DatasetPublisherSourceIndexName,
-		PollInterval:    time.Duration(cfg.DatasetPublisherPollIntervalSeconds) * time.Second,
-		OnReconcileError: func(err error) {
-			log.Printf("dataset publication reconciliation deferred: %v", err)
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("configure dataset publication manager: %w", err)
-	}
-	return manager, nil
 }
 
 func datasetPublisherTolerations(values []config.DatasetPublisherToleration) []datasetpublisher.PublicationToleration {

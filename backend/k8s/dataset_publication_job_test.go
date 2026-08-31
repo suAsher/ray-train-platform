@@ -116,6 +116,77 @@ func TestRenderDatasetPublicationJobIsSecureCPUOnlyAndImmutable(t *testing.T) {
 	}
 }
 
+func TestRenderDatasetPublicationJobInjectsManualVKEIRSAWhenConfigured(t *testing.T) {
+	spec := publicationJobSpecForTest()
+	spec.irsaRoleTRN = "trn:iam::2103446203:role/tos-rw"
+
+	job, err := renderDatasetPublicationJob(spec)
+	if err != nil {
+		t.Fatalf("render configured IRSA publication Job: %v", err)
+	}
+	pod := job.Spec.Template.Spec
+	if pod.AutomountServiceAccountToken == nil || *pod.AutomountServiceAccountToken {
+		t.Fatalf("publisher Kubernetes API token automount changed: %v", pod.AutomountServiceAccountToken)
+	}
+	if len(pod.Containers) != 1 {
+		t.Fatalf("containers=%d, want 1", len(pod.Containers))
+	}
+	container := pod.Containers[0]
+	wantTokenFile := "/var/run/secrets/vke.volcengine.com/irsa-tokens/token"
+	wantEnv := []corev1.EnvVar{
+		{Name: "VOLCENGINE_OIDC_ROLE_TRN", Value: spec.irsaRoleTRN},
+		{Name: "VOLCENGINE_OIDC_TOKEN_FILE", Value: wantTokenFile},
+	}
+	if !reflect.DeepEqual(container.Env, wantEnv) || len(container.EnvFrom) != 0 {
+		t.Fatalf("manual IRSA env=%#v envFrom=%#v, want %#v and no envFrom", container.Env, container.EnvFrom, wantEnv)
+	}
+
+	const tokenMountPath = "/var/run/secrets/vke.volcengine.com/irsa-tokens"
+	var tokenMount *corev1.VolumeMount
+	for index := range container.VolumeMounts {
+		if container.VolumeMounts[index].MountPath == tokenMountPath {
+			tokenMount = &container.VolumeMounts[index]
+			break
+		}
+	}
+	if tokenMount == nil || !tokenMount.ReadOnly {
+		t.Fatalf("read-only VKE IRSA token mount is missing: %#v", container.VolumeMounts)
+	}
+	var tokenVolume *corev1.Volume
+	for index := range pod.Volumes {
+		if pod.Volumes[index].Name == tokenMount.Name {
+			tokenVolume = &pod.Volumes[index]
+			break
+		}
+	}
+	if tokenVolume == nil || tokenVolume.Projected == nil || len(tokenVolume.Projected.Sources) != 1 {
+		t.Fatalf("projected VKE IRSA token volume is missing: %#v", pod.Volumes)
+	}
+	projection := tokenVolume.Projected.Sources[0].ServiceAccountToken
+	if projection == nil || projection.Audience != "sts.volcengine.com" || projection.Path != "token" ||
+		projection.ExpirationSeconds == nil || *projection.ExpirationSeconds != 3600 {
+		t.Fatalf("VKE IRSA token projection=%#v", projection)
+	}
+	if len(pod.Volumes) != 3 || len(container.VolumeMounts) != 3 {
+		t.Fatalf("configured volumes=%d mounts=%d, want 3/3", len(pod.Volumes), len(container.VolumeMounts))
+	}
+
+	manifest := string(mustJSON(job))
+	for _, forbidden := range []string{"secretKeyRef", "secretRef", "TOS_ACCESS_KEY", "TOS_SECRET_KEY", "VOLCENGINE_ACCESS_KEY", "VOLCENGINE_SECRET_KEY"} {
+		if strings.Contains(manifest, forbidden) {
+			t.Fatalf("manual IRSA Job contains forbidden %q", forbidden)
+		}
+	}
+
+	emptyJob, err := renderDatasetPublicationJob(publicationJobSpecForTest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if emptyJob.Annotations[publicationSpecHashAnnotation] == job.Annotations[publicationSpecHashAnnotation] {
+		t.Fatal("canonical spec hash did not bind the optional IRSA role TRN")
+	}
+}
+
 func TestRenderDatasetPublicationJobRejectsUnsafeInputs(t *testing.T) {
 	base := publicationJobSpecForTest()
 	tests := []struct {
@@ -143,6 +214,9 @@ func TestRenderDatasetPublicationJobRejectsUnsafeInputs(t *testing.T) {
 		}},
 		{name: "Exists toleration with value", mutate: func(spec *fakePublicationJobSpec) {
 			spec.tolerations[0].Operator = "Exists"
+		}},
+		{name: "invalid IRSA role TRN", mutate: func(spec *fakePublicationJobSpec) {
+			spec.irsaRoleTRN = "trn:iam::2103446203:user/not-a-role"
 		}},
 	}
 	for _, test := range tests {
@@ -809,6 +883,7 @@ type fakePublicationJobSpec struct {
 	tosRegion             string
 	imagePullPolicy       string
 	serviceAccountName    string
+	irsaRoleTRN           string
 	queueName             string
 	priorityClassName     string
 	workingDirectory      string
@@ -888,6 +963,7 @@ func (spec fakePublicationJobSpec) TOSEndpoint() string        { return spec.tos
 func (spec fakePublicationJobSpec) TOSRegion() string          { return spec.tosRegion }
 func (spec fakePublicationJobSpec) ImagePullPolicy() string    { return spec.imagePullPolicy }
 func (spec fakePublicationJobSpec) ServiceAccountName() string { return spec.serviceAccountName }
+func (spec fakePublicationJobSpec) IRSARoleTRN() string        { return spec.irsaRoleTRN }
 func (spec fakePublicationJobSpec) QueueName() string          { return spec.queueName }
 func (spec fakePublicationJobSpec) PriorityClassName() string  { return spec.priorityClassName }
 func (spec fakePublicationJobSpec) WorkingDirectory() string   { return spec.workingDirectory }

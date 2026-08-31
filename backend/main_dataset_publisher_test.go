@@ -55,6 +55,20 @@ func TestNewDatasetPublicationManagerBuildsTheAPIAndLeaderController(t *testing.
 	var _ datasetpublisher.PublicationJobClient = client
 }
 
+func TestDatasetPublicationControllerOptionsCarryOptionalIRSARoleTRN(t *testing.T) {
+	for _, roleTRN := range []string{"", "trn:iam::2103446203:role/tos-rw"} {
+		t.Run(roleTRN, func(t *testing.T) {
+			cfg := validDatasetPublicationManagerConfig()
+			cfg.DatasetPublisherIRSARoleTRN = roleTRN
+
+			options := datasetPublicationControllerOptions(cfg)
+			if options.IRSARoleTRN != roleTRN {
+				t.Fatalf("controller IRSA role TRN=%q, want %q", options.IRSARoleTRN, roleTRN)
+			}
+		})
+	}
+}
+
 func validDatasetPublicationManagerConfig() config.Config {
 	return config.Config{
 		DatasetVersioningEnabled:                 true,

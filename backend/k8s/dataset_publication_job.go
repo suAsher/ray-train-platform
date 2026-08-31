@@ -12,6 +12,7 @@ import (
 	"math"
 	"path"
 	"reflect"
+	"regexp"
 	"sort"
 	"time"
 
@@ -27,11 +28,16 @@ import (
 )
 
 const (
-	datasetPublisherContainerName = "dataset-publisher"
-	publicationWorkVolumeName     = "work"
-	publicationTmpVolumeName      = "tmp"
-	publicationContainerUserID    = int64(65532)
-	publicationResultMaxBytes     = 4096
+	datasetPublisherContainerName  = "dataset-publisher"
+	publicationWorkVolumeName      = "work"
+	publicationTmpVolumeName       = "tmp"
+	publicationIRSATokenVolumeName = "vke-irsa-token"
+	publicationIRSATokenMountPath  = "/var/run/secrets/vke.volcengine.com/irsa-tokens"
+	publicationIRSATokenFilePath   = publicationIRSATokenMountPath + "/token"
+	publicationIRSAAudience        = "sts.volcengine.com"
+	publicationIRSATokenTTLSeconds = int64(3600)
+	publicationContainerUserID     = int64(65532)
+	publicationResultMaxBytes      = 4096
 
 	publicationManagedByLabel       = "app.kubernetes.io/managed-by"
 	publicationNameLabel            = "app.kubernetes.io/name"
@@ -73,6 +79,7 @@ type publicationJobSpec interface {
 	TOSRegion() string
 	ImagePullPolicy() string
 	ServiceAccountName() string
+	IRSARoleTRN() string
 	QueueName() string
 	PriorityClassName() string
 	WorkingDirectory() string
@@ -401,6 +408,9 @@ func renderDatasetPublicationJob(spec publicationJobSpec) (*batchv1.Job, error) 
 	if isNilPublicationJobSpec(spec) || !validPublicationRenderIdentity(spec) {
 		return nil, errors.New("invalid dataset publication Job identity")
 	}
+	if !validPublicationIRSARoleTRN(spec.IRSARoleTRN()) {
+		return nil, errors.New("invalid dataset publication IRSA role TRN")
+	}
 	if domain.ValidatePinnedImage(spec.Image()) != nil {
 		return nil, errors.New("dataset publication image must be pinned by digest")
 	}
@@ -472,6 +482,28 @@ func renderDatasetPublicationJob(spec publicationJobSpec) (*batchv1.Job, error) 
 			{Name: publicationTmpVolumeName, MountPath: "/tmp"},
 		},
 	}
+	volumes := []corev1.Volume{
+		{Name: publicationWorkVolumeName, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		{Name: publicationTmpVolumeName, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+	}
+	if spec.IRSARoleTRN() != "" {
+		expirationSeconds := publicationIRSATokenTTLSeconds
+		container.Env = []corev1.EnvVar{
+			{Name: "VOLCENGINE_OIDC_ROLE_TRN", Value: spec.IRSARoleTRN()},
+			{Name: "VOLCENGINE_OIDC_TOKEN_FILE", Value: publicationIRSATokenFilePath},
+		}
+		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+			Name: publicationIRSATokenVolumeName, MountPath: publicationIRSATokenMountPath, ReadOnly: true,
+		})
+		volumes = append(volumes, corev1.Volume{
+			Name: publicationIRSATokenVolumeName,
+			VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
+				Sources: []corev1.VolumeProjection{{ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
+					Audience: publicationIRSAAudience, ExpirationSeconds: &expirationSeconds, Path: "token",
+				}}},
+			}},
+		})
+	}
 	podSpec := corev1.PodSpec{
 		AutomountServiceAccountToken: &falseValue,
 		ServiceAccountName:           spec.ServiceAccountName(),
@@ -487,10 +519,7 @@ func renderDatasetPublicationJob(spec publicationJobSpec) (*batchv1.Job, error) 
 		Affinity:     publicationPreferredNodeAffinity(spec.PreferredNodeSelector()),
 		Tolerations:  tolerations,
 		Containers:   []corev1.Container{container},
-		Volumes: []corev1.Volume{
-			{Name: publicationWorkVolumeName, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-			{Name: publicationTmpVolumeName, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-		},
+		Volumes:      volumes,
 	}
 
 	return &batchv1.Job{
@@ -513,6 +542,12 @@ func renderDatasetPublicationJob(spec publicationJobSpec) (*batchv1.Job, error) 
 			},
 		},
 	}, nil
+}
+
+var publicationIRSARoleTRNPattern = regexp.MustCompile(`^trn:iam::[0-9]+:role/[A-Za-z0-9+=,.@_/-]+$`)
+
+func validPublicationIRSARoleTRN(value string) bool {
+	return value == "" || publicationIRSARoleTRNPattern.MatchString(value)
 }
 
 func validPublicationRenderIdentity(spec publicationJobSpec) bool {
@@ -675,6 +710,7 @@ type canonicalPublicationJobSpec struct {
 	TOSRegion             string                                   `json:"tos_region"`
 	ImagePullPolicy       string                                   `json:"image_pull_policy"`
 	ServiceAccountName    string                                   `json:"service_account_name"`
+	IRSARoleTRN           string                                   `json:"irsa_role_trn,omitempty"`
 	QueueName             string                                   `json:"queue_name"`
 	PriorityClassName     string                                   `json:"priority_class_name"`
 	WorkingDirectory      string                                   `json:"working_directory"`
@@ -698,7 +734,7 @@ func publicationCanonicalSpecHash(spec publicationJobSpec, labels map[string]str
 		DatasetVersionID: spec.DatasetVersionID(), Version: spec.Version(), SchemaVersion: spec.SchemaVersion(),
 		SourceRoot: spec.SourceRoot(), SourceIndex: spec.SourceIndex(), Image: spec.Image(),
 		SourceBucket: spec.SourceBucket(), TargetBucket: spec.TargetBucket(), TOSEndpoint: spec.TOSEndpoint(), TOSRegion: spec.TOSRegion(),
-		ImagePullPolicy: spec.ImagePullPolicy(), ServiceAccountName: spec.ServiceAccountName(), QueueName: spec.QueueName(),
+		ImagePullPolicy: spec.ImagePullPolicy(), ServiceAccountName: spec.ServiceAccountName(), IRSARoleTRN: spec.IRSARoleTRN(), QueueName: spec.QueueName(),
 		PriorityClassName: spec.PriorityClassName(), WorkingDirectory: spec.WorkingDirectory(), InternalPrefix: spec.InternalPrefix(),
 		NodeSelector: clonePublicationJobStringMap(spec.NodeSelector()), PreferredNodeSelector: clonePublicationJobStringMap(spec.PreferredNodeSelector()),
 		Tolerations: append([]datasetpublisher.PublicationToleration(nil), spec.Tolerations()...),

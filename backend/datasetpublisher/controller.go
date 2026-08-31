@@ -7,6 +7,7 @@ import (
 	"errors"
 	"path"
 	"reflect"
+	"regexp"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ var (
 	ErrPublicationControllerUnavailable    = errors.New("dataset publication controller unavailable")
 	ErrPublicationJobUnavailable           = errors.New("dataset publication job unavailable")
 	ErrPublicationJobFailed                = errors.New("dataset publication job failed")
+	publicationIRSARoleTRNPattern          = regexp.MustCompile(`^trn:iam::[0-9]+:role/[A-Za-z0-9+=,.@_/-]+$`)
 )
 
 const maxPublicationJobDuration = 30 * 24 * time.Hour
@@ -81,6 +83,7 @@ type ControllerOptions struct {
 	TOSRegion             string
 	ImagePullPolicy       string
 	ServiceAccountName    string
+	IRSARoleTRN           string
 	QueueName             string
 	PriorityClassName     string
 	WorkingDirectory      string
@@ -150,6 +153,7 @@ type PublicationJobSpec struct {
 	tosRegion             string
 	imagePullPolicy       string
 	serviceAccountName    string
+	irsaRoleTRN           string
 	queueName             string
 	priorityClassName     string
 	workingDirectory      string
@@ -179,6 +183,7 @@ func (spec PublicationJobSpec) TOSEndpoint() string        { return spec.tosEndp
 func (spec PublicationJobSpec) TOSRegion() string          { return spec.tosRegion }
 func (spec PublicationJobSpec) ImagePullPolicy() string    { return spec.imagePullPolicy }
 func (spec PublicationJobSpec) ServiceAccountName() string { return spec.serviceAccountName }
+func (spec PublicationJobSpec) IRSARoleTRN() string        { return spec.irsaRoleTRN }
 func (spec PublicationJobSpec) QueueName() string          { return spec.queueName }
 func (spec PublicationJobSpec) PriorityClassName() string  { return spec.priorityClassName }
 func (spec PublicationJobSpec) WorkingDirectory() string   { return spec.workingDirectory }
@@ -488,6 +493,7 @@ func (controller *Controller) jobSpec(request ReconcileRequest) (PublicationJobS
 		tosEndpoint: controller.options.TOSEndpoint, tosRegion: controller.options.TOSRegion,
 		imagePullPolicy:    controller.options.ImagePullPolicy,
 		serviceAccountName: controller.options.ServiceAccountName,
+		irsaRoleTRN:        controller.options.IRSARoleTRN,
 		queueName:          controller.options.QueueName, priorityClassName: controller.options.PriorityClassName,
 		workingDirectory:      controller.options.WorkingDirectory,
 		internalPrefix:        controller.options.InternalPrefix,
@@ -540,6 +546,7 @@ func validControllerOptions(options ControllerOptions) bool {
 		!validPublicationRegion(options.TOSRegion) || !validPublicationEndpoint(options.TOSEndpoint, options.TOSRegion) ||
 		!validPublicationImagePullPolicy(options.ImagePullPolicy) ||
 		!isPublicationDNSLabel(options.ServiceAccountName) ||
+		!validPublicationIRSARoleTRN(options.IRSARoleTRN) ||
 		!isPublicationDNSLabel(options.QueueName) ||
 		!isPublicationDNSLabel(options.PriorityClassName) ||
 		!validPublicationWorkingDirectory(options.WorkingDirectory) ||
@@ -558,6 +565,10 @@ func validControllerOptions(options ControllerOptions) bool {
 		validPublicationJobDuration(options.JobActiveDeadline) &&
 		validPublicationJobDuration(options.JobTTLAfterFinished) &&
 		options.InitialRetryBackoff >= 0 && options.MaximumRetryBackoff >= options.InitialRetryBackoff
+}
+
+func validPublicationIRSARoleTRN(value string) bool {
+	return value == "" || strings.TrimSpace(value) == value && publicationIRSARoleTRNPattern.MatchString(value)
 }
 
 func validPublicationJobDuration(value time.Duration) bool {
