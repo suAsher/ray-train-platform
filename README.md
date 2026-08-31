@@ -66,7 +66,7 @@ KubeRay 创建任务专属 RayCluster
 | `/mnt/storage/me` | 读写 | 个人文件、训练结果和 Checkpoint。 |
 | `/mnt/storage/team` | Pod 内只读 | 团队发布的数据集。TenantAdmin 可通过 Portal 发布内容。 |
 | `/mnt/storage/public` | Pod 内只读 | 平台管理员发布的公共训练数据。 |
-| `/mnt/idc/*` | 按登记策略只读 | 可选 IDC NFS 数据源。 |
+| `/mnt/.original`、`/mnt/.wellspiking`、`/mnt/.shared`、`/mnt/.spk-hybrid`、`/mnt/.spk-ssd` | 只读 | 平台登记的 IDC NFS 数据源；所有调试与训练 Pod 可见。 |
 
 训练入口会进一步注入：
 

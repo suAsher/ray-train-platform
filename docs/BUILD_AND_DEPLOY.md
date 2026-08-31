@@ -360,8 +360,9 @@ dataSpaces:
     bucket: shanghai-data-transfer
 ```
 
-首次启用硬配额还需设置 `personalStorage.objectSetQuota.enabled: true`，然后由 SuperAdmin 在 Portal 确认一次 ObjectSet 目录初始化。该确认和 FSX 挂载验收相互独立，均不会向用户 Pod 注入静态 TOS 凭据。IDC NFS 使用 `idcDataSpaces` 的三个管理员登记导出：
-它和 TOS 验收独立，只有节点到 NFS 的连通性、权限和只读挂载已验收后才可启用。不要
+首次启用硬配额还需设置 `personalStorage.objectSetQuota.enabled: true`，然后由 SuperAdmin 在 Portal 确认一次 ObjectSet 目录初始化。该确认和 FSX 挂载验收相互独立，均不会向用户 Pod 注入静态 TOS 凭据。
+
+IDC NFS 使用 `idcDataSpaces` 管理员登记的五个只读导出：`original`、`wellspiking`、`shared`、`spk-hybrid`、`spk-ssd`，在 Pod 内分别固定为 `/mnt/.original`、`/mnt/.wellspiking`、`/mnt/.shared`、`/mnt/.spk-hybrid`、`/mnt/.spk-ssd`。首次加入 GPU 节点时先以 root 运行 `ops/storage/idc-nfs/10-configure-gpu-node-dns.sh`，并安装 `nfs-common`；随后执行 `ops/storage/idc-nfs/41-verify-readonly-mount.sh` 验收。它和 TOS 验收独立，只有节点到 NFS 的连通性、权限和只读挂载已验收后才可启用。不要
 将 SSHFS、节点个人目录或旧的 `storage.existingClaim` 作为平台数据空间。
 
 ### IRSA 排障：`HeadBucket` 失败

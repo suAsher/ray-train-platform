@@ -130,7 +130,7 @@ tos://shanghai-data-transfer/ray-train/public/
 | `/mnt/data/input` | 只读 | 本任务选中的数据子目录 | `PLATFORM_DATASET_PATH`。 |
 | `/mnt/data/output` | 读写 | 本任务独立结果目录 | `PLATFORM_OUTPUT_PATH`。 |
 | `/mnt/data/checkpoints` | 只读 | 续训所选历史任务目录 | `PLATFORM_CHECKPOINT_PATH`。 |
-| `/mnt/idc/*` | 按登记策略只读 | IDC NFS | 可选 IDC 数据源；当前生产 Profile 未启用。 |
+| `/mnt/.original`、`/mnt/.wellspiking`、`/mnt/.shared`、`/mnt/.spk-hybrid`、`/mnt/.spk-ssd` | 只读 | IDC NFS | 当前生产 Profile 已启用；平台统一挂载，用户无需知道 NFS 地址。 |
 
 TOS 通过 `fsx.csi.volcengine.com` 静态 PV/PVC 挂载。身份在 `kube-system/fsx-agent` 上通过 IRSA 获取，训练 Pod 看不到 AK/SK。双 NVMe 缓存基础设施已可用，但任务默认关闭、按需启用；`/data1`、`/data2` 永远不是持久数据真相，也不直接作为用户路径暴露。
 
