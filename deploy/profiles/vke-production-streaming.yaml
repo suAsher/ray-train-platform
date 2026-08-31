@@ -35,7 +35,7 @@ rayTrain:
   canaryVersion: "2.58.0"
   runtimeCatalog:
     canaryManagedBEVFusion:
-      reference: harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion-ray258@sha256:89eeca3065cc8be7ce0a8302fe432ad6d6105e5cbe779c294dc0f419429f1c7b
+      reference: harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion-ray258@sha256:e5f2a0cb3167e5a0fe5df824ff0b856e95e9655161043c66f4cfab709216f31a
       rayVersion: "2.58.0"
       supportedEngines: ["ray-train"]
 
