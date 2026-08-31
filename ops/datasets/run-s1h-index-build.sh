@@ -81,7 +81,7 @@ command="$(printf '%s\n' \
   "output_root='$output_root'" \
   "final_index='$final_index'" \
   'test ! -e "$final_index" || { echo "trusted index already exists; publish a new dataset source root instead of overwriting it" >&2; exit 3; }' \
-  'python3 /opt/raytrain-indexer/generate_s1h_public_indexes.py --source-root "$source_root" --output-root "$output_root" --workers 16 --max-sweeps 0 --min-scene-samples 81' \
+  'python3 /opt/raytrain-indexer/generate_s1h_public_indexes.py --source-root "$source_root" --output-root "$output_root" --workers 32 --max-sweeps 0 --min-scene-samples 81' \
   'python3 /opt/raytrain-indexer/build_s1h_trusted_index.py --source-root "$source_root" --train-pkl "$output_root/merged_nuscenes_infos_train.pkl" --val-pkl "$output_root/merged_nuscenes_infos_val.pkl" --output "$output_root/trusted-index-v2.pkl" --summary "$output_root/trusted-index-v2.summary.json"' \
   'export INDEX_SOURCE="$output_root/trusted-index-v2.pkl" INDEX_TARGET="$final_index"' \
   "export INDEX_TEMP='$source_root/.raytrain/.trusted-index-v2.$version.tmp'" \
@@ -136,8 +136,8 @@ jq -n \
               {name: "PYTHONDONTWRITEBYTECODE", value: "1"}
             ],
             resources: {
-              requests: {cpu: "16", memory: "64Gi"},
-              limits: {cpu: "32", memory: "128Gi"}
+              requests: {cpu: "32", memory: "128Gi"},
+              limits: {cpu: "64", memory: "256Gi"}
             },
             securityContext: {
               allowPrivilegeEscalation: false,
