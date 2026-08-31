@@ -542,7 +542,18 @@ def _plan_remote_shards(
         scene_samples = tuple(grouped)
         scene_size = sum(sample.estimated_bytes for sample in scene_samples)
         if scene_size > MAX_SHARD_BYTES:
-            raise ValueError("one scene exceeds the maximum immutable shard size")
+            if current:
+                planned.append(_remote_shard(current, current_size))
+                current = ()
+                current_size = 0
+            planned.extend(
+                _remote_shard(chunk, sum(sample.estimated_bytes for sample in chunk))
+                for chunk in _split_oversized_remote_scene(
+                    scene_samples,
+                    target_shard_bytes=target_shard_bytes,
+                )
+            )
+            continue
         if current and current_size + scene_size > target_shard_bytes:
             planned.append(_remote_shard(current, current_size))
             current = ()
@@ -554,6 +565,31 @@ def _plan_remote_shards(
     if not planned:
         raise ValueError("trusted publisher index did not produce any shards")
     return tuple(planned)
+
+
+def _split_oversized_remote_scene(
+    samples: tuple[_RemoteSample, ...],
+    *,
+    target_shard_bytes: int,
+) -> tuple[tuple[_RemoteSample, ...], ...]:
+    chunks: tuple[tuple[_RemoteSample, ...], ...] = ()
+    current: tuple[_RemoteSample, ...] = ()
+    current_size = 0
+    shard_limit = min(target_shard_bytes, MAX_SHARD_BYTES)
+    for sample in samples:
+        if sample.estimated_bytes <= 0 or sample.estimated_bytes > MAX_SHARD_BYTES:
+            raise ValueError("one sample exceeds the maximum immutable shard size")
+        if current and current_size + sample.estimated_bytes > shard_limit:
+            chunks = chunks + (current,)
+            current = ()
+            current_size = 0
+        current = current + (sample,)
+        current_size += sample.estimated_bytes
+    if current:
+        chunks = chunks + (current,)
+    if not chunks:
+        raise ValueError("oversized scene did not produce any shards")
+    return chunks
 
 
 def _remote_shard(

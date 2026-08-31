@@ -515,6 +515,41 @@ class CloudPublisherPipelineTests(unittest.TestCase):
         self.assertGreater(storage.peak, 1)
         self.assertLessEqual(storage.peak, 4)
 
+    def test_remote_planner_splits_a_scene_larger_than_the_immutable_bound(self) -> None:
+        sample_bytes = cloud_publish.MAX_SHARD_BYTES // 2 + 1
+        remote_samples = tuple(
+            cloud_publish._RemoteSample(
+                sample=_sample(
+                    f"sample-{index}",
+                    "oversized-scene",
+                    f"oversized-scene/{index}.bin",
+                    timestamp=index,
+                ),
+                source_key=f"oversized-scene/{index}.bin",
+                source=cloud_publish._SourceObject(size=sample_bytes, sha256=None),
+                estimated_bytes=sample_bytes,
+            )
+            for index in range(3)
+        )
+
+        shards = cloud_publish._plan_remote_shards(
+            remote_samples,
+            target_shard_bytes=cloud_publish.MAX_SHARD_BYTES,
+        )
+
+        self.assertEqual(len(shards), 3)
+        self.assertTrue(
+            all(shard.estimated_bytes <= cloud_publish.MAX_SHARD_BYTES for shard in shards)
+        )
+        self.assertEqual(
+            [sample.sample["token"] for shard in shards for sample in shard.samples],
+            ["sample-0", "sample-1", "sample-2"],
+        )
+        self.assertEqual(
+            [shard.scenes for shard in shards],
+            [("oversized-scene",)] * 3,
+        )
+
     def test_reference_manifest_persists_publisher_cbgs_order_and_raw_eval_rows(self) -> None:
         samples = [
             _sample("train-a", "scene-a", "scene-a/a.bin", timestamp=1),
