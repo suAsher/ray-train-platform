@@ -80,6 +80,26 @@ class BuildS1HTrustedIndexTest(unittest.TestCase):
         self.assertEqual(document.cbgs_seed, 17)
         self.assertEqual(document.samples[0]["split"], "val")
 
+    def test_parallel_conversion_preserves_input_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = Path(directory)
+            lidar = source_root / "site" / "scene" / "samples" / "LIDAR_TOP" / "1.bin"
+            lidar.parent.mkdir(parents=True)
+            lidar.write_bytes(np.arange(8, dtype=np.float32).tobytes())
+            first = self._info(lidar)
+            first["token"] = "first"
+            second = self._info(lidar)
+            second["token"] = "second"
+
+            samples = self.adapter.convert_infos(
+                [first, second],
+                split="train",
+                source_root=source_root,
+                workers=2,
+            )
+
+        self.assertEqual([sample["token"] for sample in samples], ["first", "second"])
+
     def test_rejects_path_escape_duplicate_token_and_invalid_boxes(self):
         with tempfile.TemporaryDirectory() as directory:
             source_root = Path(directory)

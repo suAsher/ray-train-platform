@@ -91,7 +91,7 @@ command="$(printf '%s\n' \
   "final_index='$final_index'" \
   'test ! -e "$final_index" || { echo "trusted index already exists; publish a new dataset source root instead of overwriting it" >&2; exit 3; }' \
   'python3 /opt/raytrain-indexer/generate_s1h_public_indexes.py --source-root "$source_root" --output-root "$output_root" --workers 32 --max-sweeps 0 --min-scene-samples 81' \
-  'python3 /opt/raytrain-indexer/build_s1h_trusted_index.py --source-root "$source_root" --train-pkl "$output_root/merged_nuscenes_infos_train.pkl" --val-pkl "$output_root/merged_nuscenes_infos_val.pkl" --output "$output_root/trusted-index-v2.pkl" --summary "$output_root/trusted-index-v2.summary.json"' \
+  'python3 /opt/raytrain-indexer/build_s1h_trusted_index.py --source-root "$source_root" --train-pkl "$output_root/merged_nuscenes_infos_train.pkl" --val-pkl "$output_root/merged_nuscenes_infos_val.pkl" --output "$output_root/trusted-index-v2.pkl" --summary "$output_root/trusted-index-v2.summary.json" --workers 32' \
   'export INDEX_SOURCE="$output_root/trusted-index-v2.pkl" INDEX_TARGET="$final_index"' \
   "export INDEX_TEMP='$source_root/.raytrain/.trusted-index-v2.$version.tmp'" \
   'python3 -c '\''import os, shutil; from pathlib import Path; source=Path(os.environ["INDEX_SOURCE"]); target=Path(os.environ["INDEX_TARGET"]); temporary=Path(os.environ["INDEX_TEMP"]); target.parent.mkdir(parents=True, exist_ok=True); target.exists() and (_ for _ in ()).throw(RuntimeError("trusted index already exists")); shutil.copyfile(source, temporary); temporary.replace(target); print(f"published {target} bytes={target.stat().st_size}")'\''' \

@@ -9,6 +9,8 @@ explicit ``trusted-index-v2`` structure consumed by the dataset publisher.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 import json
 import math
 import pickle
@@ -85,6 +87,7 @@ def convert_infos(
     *,
     split: str,
     source_root: Path,
+    workers: int = 1,
 ) -> list[dict[str, Any]]:
     """Convert one converter split without retaining camera or internal paths."""
 
@@ -93,10 +96,13 @@ def convert_infos(
     root = Path(source_root).resolve(strict=True)
     if not root.is_dir():
         raise ValueError("source root must be a directory")
-    samples = []
-    for raw_info in infos:
-        samples.append(_convert_info(raw_info, split=split, source_root=root))
-    return samples
+    if workers < 1 or workers > 64:
+        raise ValueError("workers must be between 1 and 64")
+    convert = partial(_convert_info, split=split, source_root=root)
+    if workers == 1:
+        return [convert(raw_info) for raw_info in infos]
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        return list(executor.map(convert, infos))
 
 
 def merge_splits(
@@ -104,9 +110,22 @@ def merge_splits(
     train_infos: Iterable[Mapping[str, Any]],
     val_infos: Iterable[Mapping[str, Any]],
     source_root: Path,
+    workers: int = 1,
 ) -> list[dict[str, Any]]:
-    samples = convert_infos(train_infos, split="train", source_root=source_root)
-    samples.extend(convert_infos(val_infos, split="val", source_root=source_root))
+    samples = convert_infos(
+        train_infos,
+        split="train",
+        source_root=source_root,
+        workers=workers,
+    )
+    samples.extend(
+        convert_infos(
+            val_infos,
+            split="val",
+            source_root=source_root,
+            workers=workers,
+        )
+    )
     tokens = [sample["token"] for sample in samples]
     if len(tokens) != len(set(tokens)):
         raise ValueError("trusted index contains a duplicate token across splits")
@@ -206,9 +225,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--summary", type=Path)
     parser.add_argument("--cbgs-seed", type=int, default=0)
+    parser.add_argument("--workers", type=int, default=1)
     arguments = parser.parse_args(argv)
     if not arguments.train_pkl:
         parser.error("at least one --train-pkl is required")
+    if arguments.workers < 1 or arguments.workers > 64:
+        parser.error("--workers must be between 1 and 64")
     return arguments
 
 
@@ -220,6 +242,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         train_infos=train_infos,
         val_infos=val_infos,
         source_root=arguments.source_root,
+        workers=arguments.workers,
     )
     payload = dump_index(samples, cbgs_seed=arguments.cbgs_seed)
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
