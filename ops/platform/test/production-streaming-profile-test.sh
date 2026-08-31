@@ -43,8 +43,8 @@ for required_publisher_value in \
   '  sourceIndexName: .raytrain/trusted-index-v2.pkl' \
   '    irsaRoleTRN: trn:iam::2103446203:role/tos-rw' \
   '    repository: ray-dataset-publisher' \
-  '    tag: sharded-index-v1' \
-  '    digest: sha256:a1fef87c71097393d0f8d35253b029ff17fddf93018aed1a8331dc9acd28a307' \
+  '    tag: module-path-r2' \
+  '    digest: sha256:227ca0074d0e1ec11b60f6eed8df96ae2bb12fc64c654d0c50433f44803d7964' \
   '  priorityValue: -1000' \
   '  workingDirectory: /data/output'; do
   require_block "$publisher" "$required_publisher_value" \

@@ -52,8 +52,8 @@ datasetPublisher:
     irsaRoleTRN: trn:iam::2103446203:role/tos-rw
   image:
     repository: ray-dataset-publisher
-    tag: sharded-index-v1
-    digest: sha256:a1fef87c71097393d0f8d35253b029ff17fddf93018aed1a8331dc9acd28a307
+    tag: module-path-r2
+    digest: sha256:227ca0074d0e1ec11b60f6eed8df96ae2bb12fc64c654d0c50433f44803d7964
   imagePullPolicy: ""
   preferredNodeSelector:
     platform.wellspiking.ai/pool: control-plane
