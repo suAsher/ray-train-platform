@@ -52,8 +52,8 @@ datasetPublisher:
     irsaRoleTRN: trn:iam::2103446203:role/tos-rw
   image:
     repository: ray-dataset-publisher
-    tag: streaming-20260831-c3457cb
-    digest: sha256:041eee5124fba342671a3b3c4b84d236299be70cacd31bd6582ecc61b6bbf5dc
+    tag: sharded-index-v1
+    digest: sha256:a1fef87c71097393d0f8d35253b029ff17fddf93018aed1a8331dc9acd28a307
   imagePullPolicy: ""
   preferredNodeSelector:
     platform.wellspiking.ai/pool: control-plane
