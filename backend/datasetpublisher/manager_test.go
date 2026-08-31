@@ -3,7 +3,9 @@ package datasetpublisher
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,6 +114,52 @@ func TestManagerContinuesOtherPublicationsAndReportsSanitizedFailure(t *testing.
 	if err.Error() != ErrPublicationManagerUnavailable.Error() {
 		t.Fatalf("dependency details leaked: %q", err)
 	}
+	diagnostic := ReconcileDiagnostic(err)
+	if diagnostic != "controller reconcile failed for publication-a" {
+		t.Fatalf("diagnostic=%q", diagnostic)
+	}
+	if strings.Contains(diagnostic, "secret endpoint response") {
+		t.Fatalf("dependency details leaked through diagnostic: %q", diagnostic)
+	}
+}
+
+func TestManagerReportsKnownControllerFailureClassWithoutDependencyDetails(t *testing.T) {
+	dataset := domain.Dataset{ID: "public-data", Slug: "labeled", Name: "Labeled", SourceSpace: domain.DataSpacePublic,
+		SourceRelativePath: "labeled", Visibility: domain.DatasetVisibilityPublic, SchemaVersion: "parquet-v1"}
+	repository := &managerRepository{work: []domain.DatasetPublicationWork{publicationWork(dataset, "version-a", "publication-a", "20260830.1")}}
+	controller := &recordingPublicationController{failRunID: "publication-a", failure: fmt.Errorf("wrapped secret: %w", ErrPublicationJobUnavailable)}
+	manager := mustPublicationManager(t, repository, controller, ManagerOptions{PublicRoot: "ray-train/public", SourceIndexName: ".raytrain/trusted-index-v2.pkl"})
+
+	err := manager.ReconcileOnce(context.Background())
+	want := "controller reconcile: publication job unavailable failed for publication-a"
+	if got := ReconcileDiagnostic(err); got != want || strings.Contains(got, "wrapped secret") {
+		t.Fatalf("diagnostic=%q want=%q", got, want)
+	}
+}
+
+func TestManagerReportsSafeListAndRequestDiagnostics(t *testing.T) {
+	dataset := domain.Dataset{ID: "public-data", Slug: "labeled", Name: "Labeled", SourceSpace: domain.DataSpacePublic,
+		SourceRelativePath: "labeled", Visibility: domain.DatasetVisibilityPublic, SchemaVersion: "parquet-v1"}
+	tests := []struct {
+		name       string
+		repository *managerRepository
+		want       string
+	}{
+		{name: "list", repository: &managerRepository{listFailure: errors.New("database DSN with secret")}, want: "list active publications failed"},
+		{name: "request", repository: &managerRepository{work: []domain.DatasetPublicationWork{publicationWork(dataset, "version-a", "publication-a", "bad/version")}}, want: "build reconcile request failed for publication-a"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manager := mustPublicationManager(t, test.repository, &recordingPublicationController{}, ManagerOptions{PublicRoot: "ray-train/public", SourceIndexName: ".raytrain/trusted-index-v2.pkl"})
+			err := manager.ReconcileOnce(context.Background())
+			if !errors.Is(err, ErrPublicationManagerUnavailable) || err.Error() != ErrPublicationManagerUnavailable.Error() {
+				t.Fatalf("error=%v", err)
+			}
+			if got := ReconcileDiagnostic(err); got != test.want || strings.Contains(got, "secret") {
+				t.Fatalf("diagnostic=%q want=%q", got, test.want)
+			}
+		})
+	}
 }
 
 func TestManagerGCDryRunDelegatesToAuthoritativeRepository(t *testing.T) {
@@ -155,6 +203,7 @@ type managerRepository struct {
 	work             []domain.DatasetPublicationWork
 	listLimit        int
 	gc               []domain.DatasetVersion
+	listFailure      error
 }
 
 func (repository *managerRepository) CreateDatasetPublicationRequest(_ context.Context, tenantID string, superAdmin bool, version domain.DatasetVersion, run domain.DatasetPublicationRun) (domain.DatasetPublicationRun, error) {
@@ -165,6 +214,9 @@ func (repository *managerRepository) CreateDatasetPublicationRequest(_ context.C
 
 func (repository *managerRepository) ListActiveDatasetPublications(_ context.Context, limit int) ([]domain.DatasetPublicationWork, error) {
 	repository.listLimit = limit
+	if repository.listFailure != nil {
+		return nil, repository.listFailure
+	}
 	return append([]domain.DatasetPublicationWork(nil), repository.work...), nil
 }
 

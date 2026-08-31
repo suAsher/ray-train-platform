@@ -408,7 +408,7 @@ func newDatasetPublicationManager(
 		SourceIndexName: cfg.DatasetPublisherSourceIndexName,
 		PollInterval:    time.Duration(cfg.DatasetPublisherPollIntervalSeconds) * time.Second,
 		OnReconcileError: func(err error) {
-			log.Printf("dataset publication reconciliation deferred: %v", err)
+			log.Printf("dataset publication reconciliation deferred: %s", datasetpublisher.ReconcileDiagnostic(err))
 		},
 	})
 	if err != nil {

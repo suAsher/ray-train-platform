@@ -58,6 +58,32 @@ type Manager struct {
 	onReconcileError func(error)
 }
 
+// publicationReconcileError keeps a bounded, non-secret stage marker for
+// operators while preserving the intentionally generic public error string.
+// Dependency errors, object paths, credentials, and response bodies are never
+// retained in this value.
+type publicationReconcileError struct {
+	stage string
+	runID string
+}
+
+func (err *publicationReconcileError) Error() string { return ErrPublicationManagerUnavailable.Error() }
+
+func (err *publicationReconcileError) Unwrap() error { return ErrPublicationManagerUnavailable }
+
+// ReconcileDiagnostic returns an operator-safe failure location. It is meant
+// for server logs only; user-facing API errors remain generic.
+func ReconcileDiagnostic(err error) string {
+	var diagnostic *publicationReconcileError
+	if !errors.As(err, &diagnostic) {
+		return ErrPublicationManagerUnavailable.Error()
+	}
+	if diagnostic.runID == "" {
+		return diagnostic.stage + " failed"
+	}
+	return diagnostic.stage + " failed for " + diagnostic.runID
+}
+
 func NewManager(repository PublicationManagerRepository, controller PublicationReconciler, options ManagerOptions) (*Manager, error) {
 	if isNilPublicationDependency(repository) || isNilPublicationDependency(controller) {
 		return nil, ErrInvalidPublicationManager
@@ -150,25 +176,45 @@ func (manager *Manager) ReconcileOnce(ctx context.Context) error {
 		if contextError := ctx.Err(); contextError != nil {
 			return contextError
 		}
-		return ErrPublicationManagerUnavailable
+		return &publicationReconcileError{stage: "list active publications"}
 	}
-	failed := false
+	var firstFailure *publicationReconcileError
 	for _, item := range work {
 		request, err := manager.reconcileRequest(item)
+		stage := "build reconcile request"
 		if err == nil {
+			stage = "controller reconcile"
 			_, err = manager.controller.Reconcile(ctx, request)
+			stage = safePublicationFailureStage(stage, err)
 		}
 		if err != nil {
 			if contextError := ctx.Err(); contextError != nil {
 				return contextError
 			}
-			failed = true
+			if firstFailure == nil {
+				firstFailure = &publicationReconcileError{stage: stage, runID: item.Run.ID}
+			}
 		}
 	}
-	if failed {
-		return ErrPublicationManagerUnavailable
+	if firstFailure != nil {
+		return firstFailure
 	}
 	return nil
+}
+
+func safePublicationFailureStage(stage string, err error) string {
+	switch {
+	case errors.Is(err, ErrInvalidPublicationControllerRequest):
+		return stage + ": invalid request"
+	case errors.Is(err, ErrPublicationJobUnavailable):
+		return stage + ": publication job unavailable"
+	case errors.Is(err, ErrPublicationJobFailed):
+		return stage + ": publication job failed"
+	case errors.Is(err, ErrPublicationControllerUnavailable):
+		return stage + ": controller unavailable"
+	default:
+		return stage
+	}
 }
 
 func (manager *Manager) Run(ctx context.Context) error {
@@ -183,7 +229,7 @@ func (manager *Manager) Run(ctx context.Context) error {
 				return contextError
 			}
 			if manager.onReconcileError != nil {
-				manager.onReconcileError(ErrPublicationManagerUnavailable)
+				manager.onReconcileError(err)
 			}
 		}
 		select {
