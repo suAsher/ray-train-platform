@@ -80,6 +80,8 @@ assert_source_contract() {
     'backend must expose DATASET_VERSIONING_ENABLED'
   require_literal "$BACKEND_TEMPLATE" '              value: {{ default false .Values.backend.datasetVersioningEnabled | quote }}' \
     'DATASET_VERSIONING_ENABLED must use the same default-off Helm gate'
+  require_literal "$BACKEND_TEMPLATE" 'checksum/dataset-publisher-config:' \
+    'backend pods must roll when dataset publisher ConfigMap values change'
   require_literal "$VALUES" 'datasetPublisher:' \
     'values must provide datasetPublisher configuration'
 
@@ -144,11 +146,11 @@ assert_source_contract() {
     '  priorityValue: -1000' \
     '  resources:
     requests:
-      cpu: 1000m
-      memory: 2Gi
+      cpu: 16
+      memory: 64Gi
     limits:
-      cpu: 4000m
-      memory: 8Gi' \
+      cpu: 64
+      memory: 256Gi' \
     '  job:
     backoffLimit: 3
     activeDeadlineSeconds: 604800

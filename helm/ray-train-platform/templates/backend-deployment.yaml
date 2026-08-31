@@ -88,6 +88,10 @@ spec:
       app: ray-train-backend
   template:
     metadata:
+      {{- if (default false $datasetPublisher.enabled) }}
+      annotations:
+        checksum/dataset-publisher-config: {{ include (print $.Template.BasePath "/dataset-publisher-config.yaml") . | sha256sum }}
+      {{- end }}
       labels:
         {{- include "ray-train-platform.commonLabels" . | nindent 8 }}
         app.kubernetes.io/component: api
