@@ -54,8 +54,8 @@ datasetPublisher:
     existingSecret: tos-credentials
   image:
     repository: ray-dataset-publisher
-    tag: scene-split-r8
-    digest: sha256:9226af81823fd5b6ef1be4cb2902763a5564885a8f6028f1be795f6c88c44161
+    tag: shard-parallel-r9
+    digest: sha256:8a2ec0b6e2e0451b3bf07f73001b9c9f644c0e934842be76976b07a1f866f049
   imagePullPolicy: ""
   preferredNodeSelector:
     platform.wellspiking.ai/gpu-pool: production
