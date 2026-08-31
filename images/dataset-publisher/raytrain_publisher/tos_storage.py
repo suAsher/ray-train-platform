@@ -98,6 +98,7 @@ class TOSStorage:
         if client is not None:
             self._client = client
             self._credentials_provider = credentials_provider
+            self._tos_sdk = None
             return
 
         sdk = tos_sdk
@@ -144,6 +145,7 @@ class TOSStorage:
         if client_failed or sdk_client is None:
             raise TOSStorageError("TOS client initialization failed")
         self._credentials_provider = effective_credentials
+        self._tos_sdk = sdk
         self._client = sdk_client
     @property
     def source_bucket(self) -> str:
@@ -168,6 +170,22 @@ class TOSStorage:
     @property
     def internal_dataset_prefix(self) -> str:
         return self._internal_dataset_prefix
+
+    def fork(self) -> "TOSStorage":
+        """Create an independent SDK client with the same scoped credentials."""
+
+        if self._tos_sdk is None:
+            raise TOSStorageError("TOS client cannot be forked")
+        return type(self)(
+            source_bucket=self._source_bucket,
+            target_bucket=self._target_bucket,
+            endpoint=self._endpoint,
+            region=self._region,
+            source_prefix=self._source_prefix,
+            internal_dataset_prefix=self._internal_dataset_prefix,
+            credentials_provider=self._credentials_provider,
+            tos_sdk=self._tos_sdk,
+        )
 
     def head_source(self, key: str) -> TOSObjectInfo:
         """HEAD one object below the configured source prefix."""

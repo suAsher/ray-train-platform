@@ -145,6 +145,18 @@ class _FakeTOSSDK:
         return self.client
 
 
+class _ClientFactoryTOSSDK:
+    credential = _FakeCredentialModule
+
+    def __init__(self) -> None:
+        self.clients: list[_FakeTOSClient] = []
+
+    def TosClientV2(self, **_kwargs: object) -> _FakeTOSClient:
+        client = _FakeTOSClient()
+        self.clients.append(client)
+        return client
+
+
 class _RotatingIRSA:
     def __init__(self) -> None:
         self.calls = 0
@@ -250,6 +262,31 @@ class TOSSDKContractTests(unittest.TestCase):
 
 
 class TOSClientConstructionTests(unittest.TestCase):
+    def test_fork_builds_an_independent_sdk_client_without_exposing_credentials(
+        self,
+    ) -> None:
+        sdk = _ClientFactoryTOSSDK()
+        storage = TOSStorage(
+            source_bucket=SOURCE_BUCKET,
+            target_bucket=TARGET_BUCKET,
+            endpoint=ENDPOINT,
+            region=REGION,
+            source_prefix=SOURCE_PREFIX,
+            internal_dataset_prefix=INTERNAL_PREFIX,
+            environment={"TOS_ACCESS_KEY": "static-ak", "TOS_SECRET_KEY": "static-sk"},
+            tos_sdk=sdk,
+        )
+
+        first = storage.fork()
+        second = storage.fork()
+
+        self.assertIsInstance(first, TOSStorage)
+        self.assertIsInstance(second, TOSStorage)
+        self.assertEqual(len(sdk.clients), 3)
+        self.assertEqual(len({id(client) for client in sdk.clients}), 3)
+        self.assertFalse(hasattr(first, "client"))
+        self.assertFalse(hasattr(second, "client"))
+
     def test_prefers_static_environment_credentials_without_calling_irsa(self) -> None:
         client = _FakeTOSClient()
         sdk = _FakeTOSSDK(client)

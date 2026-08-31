@@ -120,6 +120,7 @@ class _FakeTOSStorage:
         self.stage_snapshots: list[tuple[str, tuple[str, ...]]] = []
         self.conflicts = 0
         self._shard_attempts = 0
+        self._lock = threading.Lock()
 
     def get_index(self, key: str, *, maximum_bytes: int) -> bytes:
         self.events.append(("get_index", key))
@@ -179,29 +180,33 @@ class _FakeTOSStorage:
             position = content.tell()
             payload = content.read()
             content.seek(position)
-        staged = tuple(
-            sorted(
-                path.name
-                for path in self.output_root.rglob("*.bin")
-                if path.is_file()
-            )
-        )
-        self.stage_snapshots.append((key, staged))
-        self.events.append(("put", key))
-        if "/shards/" in key:
-            self._shard_attempts += 1
-            if self._shard_attempts == self.fail_on_shard_attempt:
-                raise TOSStorageError(
-                    "immutable put failed AK=secret-ak SK=secret-sk tos://private/path"
+        with self._lock:
+            try:
+                staged = tuple(
+                    sorted(
+                        path.name
+                        for path in self.output_root.rglob("*.bin")
+                        if path.is_file()
+                    )
                 )
-        if key in self.objects:
-            self.conflicts += 1
-            raise TOSStorageError("immutable object already exists")
-        if size != len(payload) or len(payload) > maximum_bytes:
-            raise TOSStorageError("immutable upload size validation failed")
-        if hashlib.sha256(payload).hexdigest() != sha256:
-            raise TOSStorageError("immutable upload digest validation failed")
-        self.objects[key] = (payload, sha256)
+            except OSError:
+                staged = ()
+            self.stage_snapshots.append((key, staged))
+            self.events.append(("put", key))
+            if "/shards/" in key:
+                self._shard_attempts += 1
+                if self._shard_attempts == self.fail_on_shard_attempt:
+                    raise TOSStorageError(
+                        "immutable put failed AK=secret-ak SK=secret-sk tos://private/path"
+                    )
+            if key in self.objects:
+                self.conflicts += 1
+                raise TOSStorageError("immutable object already exists")
+            if size != len(payload) or len(payload) > maximum_bytes:
+                raise TOSStorageError("immutable upload size validation failed")
+            if hashlib.sha256(payload).hexdigest() != sha256:
+                raise TOSStorageError("immutable upload digest validation failed")
+            self.objects[key] = (payload, sha256)
 
     def verify_immutable(
         self,
@@ -210,16 +215,17 @@ class _FakeTOSStorage:
         expected_size: int,
         expected_sha256: str,
     ) -> TOSObjectInfo:
-        self.events.append(("verify", key))
-        stored = self.objects.get(key)
-        if (
-            stored is None
-            or len(stored[0]) != expected_size
-            or stored[1] != expected_sha256
-        ):
-            raise TOSStorageError(
-                "immutable verification failed AK=verify-secret private/path"
-            )
+        with self._lock:
+            self.events.append(("verify", key))
+            stored = self.objects.get(key)
+            if (
+                stored is None
+                or len(stored[0]) != expected_size
+                or stored[1] != expected_sha256
+            ):
+                raise TOSStorageError(
+                    "immutable verification failed AK=verify-secret private/path"
+                )
         return TOSObjectInfo(size=expected_size, sha256=expected_sha256)
 
 
@@ -1078,8 +1084,15 @@ class CloudPublisherEntrypointTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertEqual(stderr.getvalue(), "")
-            stdout_payload = stdout.getvalue().strip()
+            stdout_lines = stdout.getvalue().strip().splitlines()
+            stdout_payload = stdout_lines[-1]
             self.assertEqual(termination_log.read_text(encoding="utf-8"), stdout_payload)
+            self.assertTrue(
+                all(
+                    json.loads(line).get("component") == "dataset-publisher"
+                    for line in stdout_lines[:-1]
+                )
+            )
             self.assertLessEqual(len(stdout_payload.encode("utf-8")), 4096)
             self.assertEqual(json.loads(stdout_payload)["receipt"]["dataset_id"], "dataset-s1h")
             self.assertEqual(cloud_publish.DEFAULT_TERMINATION_LOG_PATH, Path("/dev/termination-log"))

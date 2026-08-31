@@ -15,6 +15,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from itertools import groupby
 from pathlib import Path
+from threading import local
 from typing import Any
 
 from .irsa import VKEIRSAProvider
@@ -702,13 +703,19 @@ def _publish_remote_shards(
 
     published: list[_PublishedShard | None] = [None] * len(work)
     completed_samples = 0
+    worker_state = local()
 
     def publish(item: tuple[int, _RemoteShard]) -> _PublishedShard:
         ordinal, remote_shard = item
+        worker_storage = getattr(worker_state, "storage", None)
+        if worker_storage is None:
+            fork_storage = getattr(storage, "fork", None)
+            worker_storage = fork_storage() if callable(fork_storage) else storage
+            worker_state.storage = worker_storage
         return _publish_one_shard(
             remote_shard,
             request=request,
-            storage=storage,
+            storage=worker_storage,
             pack_config=pack_config,
             publication_root=publication_root,
             pa=pa,
@@ -731,6 +738,9 @@ def _publish_remote_shards(
         try:
             while pending:
                 done, _ = wait(tuple(pending), return_when=FIRST_COMPLETED)
+                failed = [future for future in done if future.exception() is not None]
+                if failed:
+                    failed[0].result()
                 for future in done:
                     result_index = pending.pop(future)
                     result = future.result()
