@@ -547,15 +547,16 @@ assert_rendered_contract() {
 
 assert_invalid_irsa_role_rejected() {
   local invalid_render="$1"
+  local error_output
 
-  if render_publisher_templates "$invalid_render" publisher-invalid-irsa publication-system \
+  if error_output="$(render_publisher_templates "$invalid_render" publisher-invalid-irsa publication-system \
     --set datasetPublisher.enabled=true \
     --set-string datasetPublisher.image.tag=test \
-    --set-string datasetPublisher.serviceAccount.irsaRoleTRN=trn:iam::2103446203:user/not-a-role; then
+    --set-string datasetPublisher.serviceAccount.irsaRoleTRN=trn:iam::2103446203:user/not-a-role 2>&1)"; then
     fail 'malformed Volcengine IRSA role TRN must fail Helm rendering'
   fi
-  require_literal "$invalid_render" 'datasetPublisher.serviceAccount.irsaRoleTRN must be a valid Volcengine IAM role TRN' \
-    'malformed publisher IRSA role must fail with a sanitized validation error'
+  grep -Fq 'datasetPublisher.serviceAccount.irsaRoleTRN must be a valid Volcengine IAM role TRN' <<<"$error_output" || \
+    fail 'malformed publisher IRSA role must fail with a sanitized validation error'
 }
 
 assert_source_contract
