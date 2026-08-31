@@ -22,6 +22,8 @@ grep -Fq 'USER 1000:1000' "$dockerfile" || fail 'runtime must be non-root'
 
 grep -Fq 'git -C "$source_dir" archive' "$builder" || fail 'build input must come from a Git commit'
 grep -Fq 's1h_lidar_converter_patch.py' "$builder" || fail 'build must apply the reviewed LiDAR-only patch'
+grep -A1 -F 's1h_lidar_converter_patch.py' "$builder" | grep -Fq '"$context_dir"' ||
+  fail 'LiDAR-only patch must receive the temporary repository root'
 grep -Fq 'docker build --pull=false' "$builder" || fail 'build must not silently change the base image'
 grep -Fq 'push-oci-image.sh' "$builder" || fail 'build must use the registry compatibility push helper'
 
