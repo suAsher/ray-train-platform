@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import dataclasses
+import importlib.util
 import os
 import pathlib
 import re
@@ -22,6 +23,8 @@ _SAFE_JOB_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _PARENT_JOB_ID = re.compile(r"^job-[0-9a-f]{24}$")
 _RAY_JOB_WORKING_DIR_URI = re.compile(r"^gcs://_ray_pkg_[0-9a-f]+(?:\.zip)?$")
 _RAY_VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$")
+_MANAGED_RUNTIME_ROOT = pathlib.Path(__file__).resolve().parent.parent
+_PREPARE_HOOK_ENV = "RAYTRAIN_MANAGED_PREPARE_HOOK"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -486,7 +489,50 @@ def _train_loop(loop_config: Mapping[str, Any]) -> None:
     with _resume_checkpoint_environment() as resume_environment:
         environment = {**_train_loop_environment(loop_config), **resume_environment}
         with _temporary_environment(environment):
+            _run_worker_prepare_hook()
             execute(entrypoint)
+
+
+def _run_worker_prepare_hook(
+    *, runtime_root: pathlib.Path = _MANAGED_RUNTIME_ROOT
+) -> None:
+    """Run an optional image-owned hook before importing user training code."""
+
+    raw_hook = os.environ.get(_PREPARE_HOOK_ENV, "").strip()
+    if not raw_hook:
+        return
+    relative = pathlib.PurePosixPath(raw_hook)
+    if (
+        relative.is_absolute()
+        or not relative.parts
+        or any(part in ("", ".", "..") for part in relative.parts)
+        or relative.suffix != ".py"
+        or "\\" in raw_hook
+        or len(raw_hook.encode("utf-8")) > 512
+    ):
+        raise RuntimeError("managed worker prepare hook is invalid")
+    trusted_root = pathlib.Path(runtime_root).resolve(strict=True)
+    hook_path = trusted_root.joinpath(*relative.parts).resolve(strict=True)
+    try:
+        hook_path.relative_to(trusted_root)
+    except ValueError:
+        raise RuntimeError("managed worker prepare hook is invalid") from None
+    if not hook_path.is_file():
+        raise RuntimeError("managed worker prepare hook is invalid")
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "_raytrain_managed_prepare_hook", hook_path
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        prepare = getattr(module, "prepare_current_worker", None)
+        if not callable(prepare):
+            raise RuntimeError
+        prepare()
+    except Exception:
+        raise RuntimeError("managed worker prepare hook failed") from None
 
 
 def _cpus_per_train_worker(config: DriverConfig) -> int:

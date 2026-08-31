@@ -113,6 +113,42 @@ class EntrypointTest(unittest.TestCase):
         run_module.assert_called_once_with("package.train", run_name="__main__", alter_sys=True)
         self.assertEqual(sys.argv, original)
 
+    def test_execute_module_uses_discovered_working_directory_for_relative_inputs(self):
+        original_path = list(sys.path)
+        original_cwd = pathlib.Path.cwd()
+        module_names = ("task9_package", "task9_package.train")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = pathlib.Path(temporary_directory)
+            package = root / module_names[0]
+            outside = root / "outside"
+            package.mkdir()
+            outside.mkdir()
+            (root / "config.txt").write_text("ready", encoding="utf-8")
+            (package / "__init__.py").write_text("", encoding="utf-8")
+            (package / "train.py").write_text(
+                "from pathlib import Path\n"
+                "assert Path('config.txt').read_text(encoding='utf-8') == 'ready'\n",
+                encoding="utf-8",
+            )
+            sys.path.insert(0, str(root))
+            os.chdir(outside)
+            try:
+                execute(
+                    PythonEntrypoint(
+                        "module",
+                        "task9_package.train",
+                        ("task9_package.train",),
+                    )
+                )
+            finally:
+                os.chdir(original_cwd)
+                sys.path[:] = original_path
+                for module_name in module_names:
+                    sys.modules.pop(module_name, None)
+
+        self.assertEqual(pathlib.Path.cwd(), original_cwd)
+        self.assertEqual(sys.path, original_path)
+
     def test_execute_path_finds_ray_worker_working_dir_on_pythonpath(self):
         original_path = list(sys.path)
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -126,6 +162,32 @@ class EntrypointTest(unittest.TestCase):
                 sys.path[:] = original_path
 
         run_path.assert_called_once_with(str((package / "train.py").resolve()), run_name="__main__")
+
+    def test_execute_path_uses_discovered_working_directory_for_relative_inputs(self):
+        original_path = list(sys.path)
+        original_cwd = pathlib.Path.cwd()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = pathlib.Path(temporary_directory)
+            package = root / "package"
+            outside = root / "outside"
+            package.mkdir()
+            outside.mkdir()
+            (package / "config.txt").write_text("ready", encoding="utf-8")
+            (package / "train.py").write_text(
+                "from pathlib import Path\n"
+                "assert Path('config.txt').read_text(encoding='utf-8') == 'ready'\n",
+                encoding="utf-8",
+            )
+            sys.path.insert(0, str(package))
+            os.chdir(outside)
+            try:
+                execute(PythonEntrypoint("path", "train.py", ("train.py",)))
+            finally:
+                os.chdir(original_cwd)
+                sys.path[:] = original_path
+
+        self.assertEqual(pathlib.Path.cwd(), original_cwd)
+        self.assertEqual(sys.path, original_path)
 
     def test_execute_path_supports_sibling_import_and_restores_process_state_on_failure(self):
         module_name = "task9_sibling_helper"

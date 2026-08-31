@@ -471,6 +471,60 @@ class TrainerFactoryTest(unittest.TestCase):
 
 
 class TrainLoopEnvironmentTest(unittest.TestCase):
+    def test_train_loop_runs_trusted_prepare_hook_before_user_entrypoint(self):
+        events = []
+
+        with (
+            mock.patch.object(
+                managed_driver,
+                "_run_worker_prepare_hook",
+                side_effect=lambda: events.append("prepare"),
+            ),
+            mock.patch(
+                "raytrain_runtime.managed_driver.execute",
+                side_effect=lambda _entrypoint: events.append("execute"),
+            ),
+        ):
+            _train_loop(loop_config())
+
+        self.assertEqual(events, ["prepare", "execute"])
+
+    def test_worker_prepare_hook_loads_only_from_trusted_runtime_root(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            hook = root / "bevfusion" / "worker.py"
+            marker = root / "prepared"
+            hook.parent.mkdir()
+            hook.write_text(
+                "import os\nfrom pathlib import Path\n"
+                "def prepare_current_worker():\n"
+                "    Path(os.environ['HOOK_MARKER']).write_text('ready', encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "RAYTRAIN_MANAGED_PREPARE_HOOK": "bevfusion/worker.py",
+                    "HOOK_MARKER": str(marker),
+                },
+                clear=True,
+            ):
+                managed_driver._run_worker_prepare_hook(runtime_root=root)
+
+            self.assertEqual(marker.read_text(encoding="utf-8"), "ready")
+
+    def test_worker_prepare_hook_rejects_path_traversal(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with mock.patch.dict(
+                os.environ,
+                {"RAYTRAIN_MANAGED_PREPARE_HOOK": "../outside.py"},
+                clear=True,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "prepare hook"):
+                    managed_driver._run_worker_prepare_hook(
+                        runtime_root=pathlib.Path(temporary)
+                    )
+
     def test_non_default_policy_and_job_checkpoint_path_reach_user_entrypoint(self):
         observed = {}
 

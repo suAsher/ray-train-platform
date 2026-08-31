@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import os
 import pathlib
 import re
 import runpy
@@ -88,7 +89,7 @@ def parse_python_entrypoint(argv: Sequence[str]) -> PythonEntrypoint:
     return PythonEntrypoint("path", target, (target, *words[2:]))
 
 
-def _worker_script_path(target: str) -> str:
+def _worker_script_location(target: str) -> tuple[str, pathlib.Path | None]:
     """Find a relative script in Ray's governed working-dir PYTHONPATH.
 
     Ray Train workers receive the Ray Job package as a runtime environment,
@@ -99,15 +100,31 @@ def _worker_script_path(target: str) -> str:
 
     direct = pathlib.Path(target)
     if direct.is_file():
-        return target
+        return target, None
     for raw_root in tuple(sys.path):
         if not raw_root:
             continue
         root = pathlib.Path(raw_root)
         candidate = root.joinpath(target)
         if candidate.is_file():
-            return str(candidate.resolve())
-    return target
+            return str(candidate.resolve()), root.resolve()
+    return target, None
+
+
+def _worker_module_root(target: str) -> pathlib.Path | None:
+    """Find the governed working-dir root that contains a Python module."""
+
+    module_parts = target.split(".")
+    for raw_root in tuple(sys.path):
+        if not raw_root:
+            continue
+        root = pathlib.Path(raw_root)
+        candidate = root.joinpath(*module_parts)
+        if candidate.with_suffix(".py").is_file() or (
+            candidate / "__init__.py"
+        ).is_file():
+            return root.resolve()
+    return None
 
 
 def execute(entrypoint: PythonEntrypoint) -> None:
@@ -115,10 +132,13 @@ def execute(entrypoint: PythonEntrypoint) -> None:
 
     previous = tuple(sys.argv)
     previous_path = tuple(sys.path)
+    previous_cwd = pathlib.Path.cwd()
     try:
         sys.argv = list(entrypoint.argv)
         if entrypoint.kind == "path":
-            script_target = _worker_script_path(entrypoint.target)
+            script_target, package_root = _worker_script_location(entrypoint.target)
+            if package_root is not None:
+                os.chdir(package_root)
             script_directory = str(pathlib.Path(script_target).resolve().parent)
             if sys.path:
                 sys.path[0] = script_directory
@@ -126,9 +146,13 @@ def execute(entrypoint: PythonEntrypoint) -> None:
                 sys.path.insert(0, script_directory)
             runpy.run_path(script_target, run_name="__main__")
         elif entrypoint.kind == "module":
+            package_root = _worker_module_root(entrypoint.target)
+            if package_root is not None:
+                os.chdir(package_root)
             runpy.run_module(entrypoint.target, run_name="__main__", alter_sys=True)
         else:
             raise ValueError(f"unsupported Python entrypoint kind {entrypoint.kind!r}")
     finally:
+        os.chdir(previous_cwd)
         sys.argv = list(previous)
         sys.path[:] = previous_path
