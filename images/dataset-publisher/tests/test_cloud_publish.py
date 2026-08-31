@@ -250,6 +250,102 @@ def _storage(output_dir: Path) -> _FakeTOSStorage:
 
 
 class CloudPublisherCLIContractTests(unittest.TestCase):
+    def test_publishes_remote_shards_with_bounded_parallelism_and_stable_order(
+        self,
+    ) -> None:
+        remote_shards = (
+            cloud_publish._RemoteShard(
+                samples=(mock.Mock(),), scenes=("a",), estimated_bytes=1
+            ),
+            cloud_publish._RemoteShard(
+                samples=(mock.Mock(), mock.Mock()), scenes=("b",), estimated_bytes=1
+            ),
+            cloud_publish._RemoteShard(
+                samples=(mock.Mock(),), scenes=("c",), estimated_bytes=1
+            ),
+        )
+        active = 0
+        peak = 0
+        lock = threading.Lock()
+        first_ordinals: list[int] = []
+        download_workers: list[int] = []
+
+        def publish_one(remote_shard, **kwargs):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+                first_ordinals.append(kwargs["first_ordinal"])
+                download_workers.append(kwargs["download_workers"])
+            time.sleep(0.05)
+            with lock:
+                active -= 1
+            return cloud_publish._PublishedShard(
+                manifest_rows=({"scene": remote_shard.scenes[0]},),
+                size=1,
+            )
+
+        with mock.patch.object(
+            cloud_publish, "_publish_one_shard", side_effect=publish_one
+        ):
+            published = cloud_publish._publish_remote_shards(
+                remote_shards,
+                request=mock.Mock(),
+                storage=mock.Mock(),
+                pack_config=mock.Mock(),
+                publication_root=mock.Mock(),
+                pa=mock.Mock(),
+                parquet=mock.Mock(),
+                max_workers=2,
+            )
+
+        self.assertGreater(peak, 1)
+        self.assertLessEqual(peak, 2)
+        self.assertEqual(sorted(first_ordinals), [0, 1, 3])
+        self.assertEqual(download_workers, [8, 8, 8])
+        self.assertEqual(
+            [item.manifest_rows[0]["scene"] for item in published],
+            ["a", "b", "c"],
+        )
+
+    def test_remote_shard_failure_does_not_schedule_the_remaining_publication(
+        self,
+    ) -> None:
+        remote_shards = tuple(
+            cloud_publish._RemoteShard(
+                samples=(mock.Mock(),), scenes=(str(index),), estimated_bytes=1
+            )
+            for index in range(10)
+        )
+        calls = 0
+        lock = threading.Lock()
+
+        def publish_one(remote_shard, **_kwargs):
+            nonlocal calls
+            with lock:
+                calls += 1
+            if remote_shard.scenes == ("0",):
+                raise ValueError("injected shard failure")
+            time.sleep(0.1)
+            return cloud_publish._PublishedShard(manifest_rows=(), size=1)
+
+        with mock.patch.object(
+            cloud_publish, "_publish_one_shard", side_effect=publish_one
+        ):
+            with self.assertRaisesRegex(ValueError, "injected shard failure"):
+                cloud_publish._publish_remote_shards(
+                    remote_shards,
+                    request=mock.Mock(),
+                    storage=mock.Mock(),
+                    pack_config=mock.Mock(),
+                    publication_root=mock.Mock(),
+                    pa=mock.Mock(),
+                    parquet=mock.Mock(),
+                    max_workers=2,
+                )
+
+        self.assertLessEqual(calls, 2)
+
     def test_cloud_loader_reassembles_verified_trusted_index_parts(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             samples = _samples()
@@ -598,7 +694,7 @@ class CloudPublisherPipelineTests(unittest.TestCase):
         self.assertEqual(len({row["shard_path"] for row in rows}), 1)
 
     @unittest.skipUnless(HAS_PYARROW, "the pinned PyArrow dependency is unavailable")
-    def test_stages_one_bounded_shard_at_a_time_and_commits_real_manifest_last(
+    def test_stages_bounded_shards_and_commits_real_manifest_last(
         self,
     ) -> None:
         import pyarrow.parquet as parquet
@@ -620,7 +716,8 @@ class CloudPublisherPipelineTests(unittest.TestCase):
             manifest_key = "dataset-s1h/manifests/version-123.parquet"
             shard_keys = put_keys[:-1]
             self.assertEqual(put_keys[-1], manifest_key)
-            self.assertEqual(verify_keys, put_keys)
+            self.assertEqual(verify_keys[-1], manifest_key)
+            self.assertEqual(sorted(verify_keys[:-1]), sorted(shard_keys))
             self.assertEqual(len(shard_keys), 3)
             self.assertTrue(
                 all(
@@ -630,19 +727,8 @@ class CloudPublisherPipelineTests(unittest.TestCase):
                 )
             )
 
-            self.assertEqual(
-                [staged for _key, staged in storage.stage_snapshots],
-                [
-                    ("a-1.bin", "a-2.bin"),
-                    ("b-1.bin",),
-                    ("c-1.bin",),
-                    (),
-                ],
-            )
-            self.assertLess(
-                max(len(staged) for _key, staged in storage.stage_snapshots),
-                len(storage.source_objects),
-            )
+            self.assertEqual(len(storage.stage_snapshots), 4)
+            self.assertEqual(storage.stage_snapshots[-1], (manifest_key, ()))
             self.assertEqual(
                 sorted(storage.download_calls),
                 sorted((key, len(payload)) for key, payload in storage.source_objects.items()),
@@ -767,7 +853,8 @@ class CloudPublisherPipelineTests(unittest.TestCase):
             retry_verifies = [
                 key for operation, key in retry_events if operation == "verify"
             ]
-            self.assertEqual(retry_verifies, retry_puts)
+            self.assertEqual(sorted(retry_verifies[:-1]), sorted(retry_puts[:-1]))
+            self.assertEqual(retry_verifies[-1], retry_puts[-1])
             self.assertTrue(retry_puts[-1].endswith("/manifests/version-123.parquet"))
 
     @unittest.skipUnless(HAS_PYARROW, "the pinned PyArrow dependency is unavailable")

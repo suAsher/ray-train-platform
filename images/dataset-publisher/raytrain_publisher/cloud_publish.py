@@ -11,7 +11,7 @@ import sys
 import tempfile
 from collections import Counter
 from collections.abc import Mapping
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from itertools import groupby
 from pathlib import Path
@@ -59,6 +59,8 @@ _MAX_RECEIPT_INTEGER = (1 << 63) - 1
 DEFAULT_HEAD_WORKERS = 64
 DEFAULT_HEAD_BATCH_SIZE = 4096
 DEFAULT_DOWNLOAD_WORKERS = 64
+DEFAULT_SHARD_WORKERS = 16
+DEFAULT_SHARD_DOWNLOAD_WORKERS = 8
 
 
 class CloudPublishError(RuntimeError):
@@ -202,26 +204,19 @@ def _publish_cloud_dataset(
     ) as publication_directory:
         publication_root = Path(publication_directory)
         manifest_path = publication_root / "reference-manifest.parquet"
-        for shard_index, remote_shard in enumerate(remote_shards, start=1):
-            published = _publish_one_shard(
-                remote_shard,
-                request=validated,
-                storage=storage,
-                pack_config=pack_config,
-                publication_root=publication_root,
-                pa=pa,
-                parquet=parquet,
-                first_ordinal=payload_row_count,
-            )
+        published_shards = _publish_remote_shards(
+            remote_shards,
+            request=validated,
+            storage=storage,
+            pack_config=pack_config,
+            publication_root=publication_root,
+            pa=pa,
+            parquet=parquet,
+        )
+        for published in published_shards:
             payload_locators.extend(published.manifest_rows)
             payload_row_count += len(published.manifest_rows)
             packed_shard_bytes += published.size
-            _emit_progress(
-                "shard-published",
-                completed=shard_index,
-                total=len(remote_shards),
-                samples=payload_row_count,
-            )
 
         if payload_row_count != len(samples):
             raise ValueError("manifest row count does not match the trusted index")
@@ -614,6 +609,7 @@ def _publish_one_shard(
     pa: Any,
     parquet: Any,
     first_ordinal: int,
+    download_workers: int = DEFAULT_SHARD_DOWNLOAD_WORKERS,
 ) -> _PublishedShard:
     if (
         remote_shard.estimated_bytes <= 0
@@ -629,7 +625,12 @@ def _publish_one_shard(
         packed_root = shard_root / "packed"
         source_root.mkdir(mode=0o750)
         packed_root.mkdir(mode=0o750)
-        _stage_sources(remote_shard, storage=storage, source_root=source_root)
+        _stage_sources(
+            remote_shard,
+            storage=storage,
+            source_root=source_root,
+            max_workers=download_workers,
+        )
 
         rows = prepare_rows(
             (sample.sample for sample in remote_shard.samples),
@@ -674,6 +675,85 @@ def _publish_one_shard(
             for row_index, row in enumerate(local_plan.rows)
         )
         return _PublishedShard(manifest_rows=manifest_rows, size=shard_size)
+
+
+def _publish_remote_shards(
+    remote_shards: tuple[_RemoteShard, ...],
+    *,
+    request: CloudPublishRequest,
+    storage: Any,
+    pack_config: PackConfig,
+    publication_root: Path,
+    pa: Any,
+    parquet: Any,
+    max_workers: int = DEFAULT_SHARD_WORKERS,
+) -> tuple[_PublishedShard, ...]:
+    """Publish bounded shards concurrently while preserving manifest order."""
+
+    if max_workers < 1 or max_workers > 16:
+        raise ValueError("remote shard worker count is outside its allowed bound")
+    first_ordinal = 0
+    work = []
+    for remote_shard in remote_shards:
+        work.append((first_ordinal, remote_shard))
+        first_ordinal += len(remote_shard.samples)
+    if not work:
+        return ()
+
+    published: list[_PublishedShard | None] = [None] * len(work)
+    completed_samples = 0
+
+    def publish(item: tuple[int, _RemoteShard]) -> _PublishedShard:
+        ordinal, remote_shard = item
+        return _publish_one_shard(
+            remote_shard,
+            request=request,
+            storage=storage,
+            pack_config=pack_config,
+            publication_root=publication_root,
+            pa=pa,
+            parquet=parquet,
+            first_ordinal=ordinal,
+            download_workers=DEFAULT_SHARD_DOWNLOAD_WORKERS,
+        )
+
+    with ThreadPoolExecutor(
+        max_workers=min(max_workers, len(work)),
+        thread_name_prefix="parquet-shard",
+    ) as executor:
+        next_index = 0
+        pending = {}
+        for _ in range(min(max_workers, len(work))):
+            future = executor.submit(publish, work[next_index])
+            pending[future] = next_index
+            next_index += 1
+        completed = 0
+        try:
+            while pending:
+                done, _ = wait(tuple(pending), return_when=FIRST_COMPLETED)
+                for future in done:
+                    result_index = pending.pop(future)
+                    result = future.result()
+                    published[result_index] = result
+                    completed += 1
+                    completed_samples += len(result.manifest_rows)
+                    _emit_progress(
+                        "shard-published",
+                        completed=completed,
+                        total=len(work),
+                        samples=completed_samples,
+                    )
+                    if next_index < len(work):
+                        future = executor.submit(publish, work[next_index])
+                        pending[future] = next_index
+                        next_index += 1
+        except Exception:
+            for future in pending:
+                future.cancel()
+            raise
+    if any(result is None for result in published):
+        raise ValueError("remote shard publication is incomplete")
+    return tuple(result for result in published if result is not None)
 
 
 def _stage_sources(
