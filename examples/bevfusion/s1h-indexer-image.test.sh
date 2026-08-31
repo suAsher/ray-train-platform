@@ -15,6 +15,7 @@ fail() {
 
 grep -Fq 'ARG BASE_IMAGE' "$dockerfile" || fail 'base image must be supplied explicitly'
 grep -Fq 'COPY nuscenes_converter.py' "$dockerfile" || fail 'pinned patched converter is missing'
+grep -Fq 'COPY mmdet3d' "$dockerfile" || fail 'converter Python dependencies from the pinned commit are missing'
 grep -Fq 'COPY generate_s1h_public_indexes.py' "$dockerfile" || fail 'fresh PKL generator is missing'
 grep -Fq 'COPY build_s1h_trusted_index.py' "$dockerfile" || fail 'trusted index adapter is missing'
 grep -Fq 'COPY raytrain_publisher' "$dockerfile" || fail 'restricted publisher schema package is missing'

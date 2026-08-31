@@ -4,6 +4,7 @@ FROM ${BASE_IMAGE}
 USER root
 
 WORKDIR /opt/bevfusion
+COPY mmdet3d /opt/bevfusion/mmdet3d
 COPY nuscenes_converter.py /opt/bevfusion/tools/data_converter/nuscenes_converter.py
 
 WORKDIR /opt/raytrain-indexer
