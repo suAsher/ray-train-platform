@@ -256,6 +256,38 @@ def _storage(output_dir: Path) -> _FakeTOSStorage:
 
 
 class CloudPublisherCLIContractTests(unittest.TestCase):
+    def test_default_shard_concurrency_uses_the_publisher_resource_budget(self):
+        self.assertEqual(cloud_publish.DEFAULT_SHARD_WORKERS, 64)
+
+        self.assertEqual(
+            cloud_publish._publish_remote_shards(
+                (),
+                request=mock.Mock(),
+                storage=mock.Mock(),
+                pack_config=mock.Mock(),
+                publication_root=mock.Mock(),
+                pa=mock.Mock(),
+                parquet=mock.Mock(),
+                max_workers=64,
+            ),
+            (),
+        )
+
+        remote_shard = cloud_publish._RemoteShard(
+            samples=(mock.Mock(),), scenes=("scene",), estimated_bytes=1
+        )
+        with self.assertRaisesRegex(ValueError, "worker count"):
+            cloud_publish._publish_remote_shards(
+                (remote_shard,),
+                request=mock.Mock(),
+                storage=mock.Mock(),
+                pack_config=mock.Mock(),
+                publication_root=mock.Mock(),
+                pa=mock.Mock(),
+                parquet=mock.Mock(),
+                max_workers=65,
+            )
+
     def test_publishes_remote_shards_with_bounded_parallelism_and_stable_order(
         self,
     ) -> None:

@@ -60,7 +60,8 @@ _MAX_RECEIPT_INTEGER = (1 << 63) - 1
 DEFAULT_HEAD_WORKERS = 64
 DEFAULT_HEAD_BATCH_SIZE = 4096
 DEFAULT_DOWNLOAD_WORKERS = 64
-DEFAULT_SHARD_WORKERS = 16
+DEFAULT_SHARD_WORKERS = 64
+MAX_SHARD_WORKERS = 64
 DEFAULT_SHARD_DOWNLOAD_WORKERS = 8
 
 
@@ -691,7 +692,7 @@ def _publish_remote_shards(
 ) -> tuple[_PublishedShard, ...]:
     """Publish bounded shards concurrently while preserving manifest order."""
 
-    if max_workers < 1 or max_workers > 16:
+    if max_workers < 1 or max_workers > MAX_SHARD_WORKERS:
         raise ValueError("remote shard worker count is outside its allowed bound")
     first_ordinal = 0
     work = []
