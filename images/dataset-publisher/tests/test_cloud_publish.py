@@ -8,6 +8,8 @@ import json
 import pickle
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -352,6 +354,45 @@ class CloudPublisherCLIContractTests(unittest.TestCase):
 
 
 class CloudPublisherPipelineTests(unittest.TestCase):
+    def test_remote_metadata_inspection_is_parallel_bounded_and_deduplicated(self) -> None:
+        samples = tuple(
+            _sample(f"sample-{index}", f"scene-{index}", f"scene-{index}/points.bin", timestamp=index)
+            for index in range(12)
+        )
+        samples = samples + (dict(samples[0]),)
+
+        class ConcurrentStorage:
+            def __init__(self) -> None:
+                self.lock = threading.Lock()
+                self.active = 0
+                self.peak = 0
+                self.calls: list[str] = []
+
+            def head_source(self, key: str) -> object:
+                with self.lock:
+                    self.active += 1
+                    self.peak = max(self.peak, self.active)
+                    self.calls.append(key)
+                time.sleep(0.01)
+                with self.lock:
+                    self.active -= 1
+                return type("ObjectInfo", (), {"size": 128, "sha256": None})()
+
+        storage = ConcurrentStorage()
+        inspected, source_objects = cloud_publish._inspect_remote_samples(
+            samples,
+            storage=storage,
+            max_workers=4,
+            batch_size=5,
+        )
+
+        self.assertEqual(len(inspected), len(samples))
+        self.assertEqual(len(source_objects), 12)
+        self.assertEqual(len(storage.calls), 12)
+        self.assertGreater(storage.peak, 1)
+        self.assertLessEqual(storage.peak, 4)
+        self.assertEqual([item.sample["token"] for item in inspected], [item["token"] for item in samples])
+
     def test_reference_manifest_persists_publisher_cbgs_order_and_raw_eval_rows(self) -> None:
         samples = [
             _sample("train-a", "scene-a", "scene-a/a.bin", timestamp=1),

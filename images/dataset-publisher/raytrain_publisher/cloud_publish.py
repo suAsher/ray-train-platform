@@ -11,6 +11,7 @@ import sys
 import tempfile
 from collections import Counter
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from itertools import groupby
 from pathlib import Path
@@ -55,6 +56,8 @@ _SANITIZED_FAILURE = "dataset cloud publication failed"
 _PARQUET_CONTENT_TYPE = "application/vnd.apache.parquet"
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _MAX_RECEIPT_INTEGER = (1 << 63) - 1
+DEFAULT_HEAD_WORKERS = 64
+DEFAULT_HEAD_BATCH_SIZE = 4096
 
 
 class CloudPublishError(RuntimeError):
@@ -166,6 +169,7 @@ def _publish_cloud_dataset(
     )
     if not index_document.samples:
         raise ValueError("trusted publisher index must contain at least one sample")
+    _emit_progress("index-loaded", samples=len(index_document.samples))
     samples = _validated_remote_samples(
         list(index_document.samples),
         source_root=validated.source_root,
@@ -174,10 +178,12 @@ def _publish_cloud_dataset(
     # Validate the entire untrusted path surface before making source-object calls.
     pa, parquet = _require_pyarrow()
     remote_samples, source_objects = _inspect_remote_samples(samples, storage=storage)
+    _emit_progress("source-metadata-verified", objects=len(source_objects))
     remote_shards = _plan_remote_shards(
         remote_samples,
         target_shard_bytes=pack_config.target_shard_bytes,
     )
+    _emit_progress("shards-planned", shards=len(remote_shards))
     output_dir = _prepare_output_directory(validated.output_dir)
     manifest_key = (
         f"{validated.dataset_id}/manifests/"
@@ -195,7 +201,7 @@ def _publish_cloud_dataset(
     ) as publication_directory:
         publication_root = Path(publication_directory)
         manifest_path = publication_root / "reference-manifest.parquet"
-        for remote_shard in remote_shards:
+        for shard_index, remote_shard in enumerate(remote_shards, start=1):
             published = _publish_one_shard(
                 remote_shard,
                 request=validated,
@@ -209,6 +215,12 @@ def _publish_cloud_dataset(
             payload_locators.extend(published.manifest_rows)
             payload_row_count += len(published.manifest_rows)
             packed_shard_bytes += published.size
+            _emit_progress(
+                "shard-published",
+                completed=shard_index,
+                total=len(remote_shards),
+                samples=payload_row_count,
+            )
 
         if payload_row_count != len(samples):
             raise ValueError("manifest row count does not match the trusted index")
@@ -256,8 +268,18 @@ def _publish_cloud_dataset(
             sha256=manifest_digest,
             size=manifest_size,
         )
+        _emit_progress(
+            "publication-ready",
+            partitions=len(remote_shards),
+            samples=len(manifest_rows),
+        )
 
     return result
+
+
+def _emit_progress(stage: str, **counts: int) -> None:
+    payload = {"component": "dataset-publisher", "stage": stage, **counts}
+    print(json.dumps(payload, sort_keys=True, separators=(",", ":")), flush=True)
 
 
 def load_cloud_trusted_index(
@@ -381,25 +403,39 @@ def _inspect_remote_samples(
     samples: tuple[dict[str, Any], ...],
     *,
     storage: Any,
+    max_workers: int = DEFAULT_HEAD_WORKERS,
+    batch_size: int = DEFAULT_HEAD_BATCH_SIZE,
 ) -> tuple[tuple[_RemoteSample, ...], dict[str, _SourceObject]]:
-    source_objects: dict[str, _SourceObject] = {}
-    inspected = []
-    for sample in samples:
-        source_key = sample["lidar_path"]
-        source = source_objects.get(source_key)
-        if source is None:
-            raw_info = storage.head_source(source_key)
-            source = _validated_source_object(raw_info)
-            source_objects = {**source_objects, source_key: source}
-        inspected.append(
-            _RemoteSample(
-                sample=sample,
-                source_key=source_key,
-                source=source,
-                estimated_bytes=_estimate_remote_sample_bytes(sample, source.size),
+    if max_workers < 1 or max_workers > 128 or batch_size < max_workers:
+        raise ValueError("remote metadata inspection bounds are invalid")
+    source_keys = tuple(dict.fromkeys(sample["lidar_path"] for sample in samples))
+    inspected_sources: list[_SourceObject] = []
+    with ThreadPoolExecutor(
+        max_workers=min(max_workers, len(source_keys)),
+        thread_name_prefix="tos-head",
+    ) as executor:
+        for offset in range(0, len(source_keys), batch_size):
+            batch = source_keys[offset : offset + batch_size]
+            inspected_sources.extend(
+                _validated_source_object(info)
+                for info in executor.map(storage.head_source, batch)
             )
+    if len(inspected_sources) != len(source_keys):
+        raise ValueError("remote metadata inspection count is invalid")
+    source_objects = dict(zip(source_keys, inspected_sources))
+    inspected = tuple(
+        _RemoteSample(
+            sample=sample,
+            source_key=sample["lidar_path"],
+            source=source_objects[sample["lidar_path"]],
+            estimated_bytes=_estimate_remote_sample_bytes(
+                sample,
+                source_objects[sample["lidar_path"]].size,
+            ),
         )
-    return tuple(inspected), source_objects
+        for sample in samples
+    )
+    return inspected, source_objects
 
 
 def _validated_source_object(info: object) -> _SourceObject:
