@@ -13,7 +13,7 @@ selector="${TRAINING_NODE_SELECTOR:-}"
 [[ -n "$sources" ]] || { printf '%s\n' 'IDC_DATA_SPACES_SOURCES_JSON is required' >&2; exit 2; }
 [[ -n "$selector" ]] || { printf '%s\n' 'TRAINING_NODE_SELECTOR is required' >&2; exit 2; }
 
-for name in original wellspiking shared; do
+for name in original wellspiking shared spk-hybrid spk-ssd; do
   jq -e --arg name "$name" '.[$name] | .server | strings | select(length > 0)' <<<"$sources" >/dev/null || { printf 'IDC source %s.server is required\n' "$name" >&2; exit 2; }
   jq -e --arg name "$name" '.[$name] | .path | strings | select(startswith("/") and . != "/")' <<<"$sources" >/dev/null || { printf 'IDC source %s.path is invalid\n' "$name" >&2; exit 2; }
 done
@@ -33,6 +33,10 @@ export IDC_NFS_WELLSPIKING_SERVER="$(jq -r '.wellspiking.server' <<<"$sources")"
 export IDC_NFS_WELLSPIKING_PATH="$(jq -r '.wellspiking.path' <<<"$sources")"
 export IDC_NFS_SHARED_SERVER="$(jq -r '.shared.server' <<<"$sources")"
 export IDC_NFS_SHARED_PATH="$(jq -r '.shared.path' <<<"$sources")"
+export IDC_NFS_SPK_HYBRID_SERVER="$(jq -r '.spk-hybrid.server' <<<"$sources")"
+export IDC_NFS_SPK_HYBRID_PATH="$(jq -r '.spk-hybrid.path' <<<"$sources")"
+export IDC_NFS_SPK_SSD_SERVER="$(jq -r '.spk-ssd.server' <<<"$sources")"
+export IDC_NFS_SPK_SSD_PATH="$(jq -r '.spk-ssd.path' <<<"$sources")"
 export IDC_SMOKE_NAME="ray-idc-nfs-$(date +%s)"
 export IDC_SMOKE_NAMESPACE="$IDC_SMOKE_NAME"
 export IDC_SMOKE_NODE_SELECTOR_JSON="$selector_json"

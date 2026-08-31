@@ -148,8 +148,9 @@ type Config struct {
 // configuration-only: callers can select a logical data space but cannot
 // submit an arbitrary NFS server or path through the API.
 type IDCDataSpaceSource struct {
-	Server string `json:"server"`
-	Path   string `json:"path"`
+	Server       string   `json:"server"`
+	Path         string   `json:"path"`
+	MountOptions []string `json:"mountOptions"`
 }
 
 type DatasetPublisherToleration struct {
@@ -780,7 +781,7 @@ func validateIDCDataSpaceConfig(cfg Config) error {
 	if err != nil || quantity.Sign() <= 0 {
 		return fmt.Errorf("IDC_DATA_SPACES_MOUNT_CAPACITY must be a positive Kubernetes storage quantity")
 	}
-	for _, name := range []string{"original", "wellspiking", "shared"} {
+	for _, name := range []string{"original", "wellspiking", "shared", "spk-hybrid", "spk-ssd"} {
 		source, ok := cfg.IDCDataSpaceSources[name]
 		if !ok {
 			return fmt.Errorf("IDC_DATA_SPACES_SOURCES_JSON requires %s", name)
@@ -791,6 +792,29 @@ func validateIDCDataSpaceConfig(cfg Config) error {
 		if !strings.HasPrefix(source.Path, "/") || source.Path == "/" || strings.TrimSpace(source.Path) != source.Path || path.Clean(source.Path) != source.Path {
 			return fmt.Errorf("IDC_DATA_SPACES_SOURCES_JSON.%s.path must be a clean non-root absolute export path", name)
 		}
+		if err := validateIDCMountOptions(source.MountOptions); err != nil {
+			return fmt.Errorf("IDC_DATA_SPACES_SOURCES_JSON.%s.mountOptions: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func validateIDCMountOptions(options []string) error {
+	allowed := map[string]bool{
+		"ro": true, "hard": true, "noatime": true, "_netdev": true, "nofail": true,
+		"vers=3": true, "timeo=600": true, "retrans=2": true,
+		"rsize=1048576": true, "wsize=1048576": true,
+	}
+	seenRO := false
+	for _, raw := range options {
+		option := strings.TrimSpace(raw)
+		if option == "" || option != raw || !allowed[option] {
+			return fmt.Errorf("option %q is not in the read-only allowlist", raw)
+		}
+		seenRO = seenRO || option == "ro"
+	}
+	if len(options) > 0 && !seenRO {
+		return fmt.Errorf("must include ro")
 	}
 	return nil
 }

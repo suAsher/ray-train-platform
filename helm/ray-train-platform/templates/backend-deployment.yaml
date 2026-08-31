@@ -58,7 +58,7 @@ local-account deployment never contacts Keycloak. */}}
 {{- if not (default "" $idcDataSpaces.mountCapacity) }}{{- fail "idcDataSpaces.mountCapacity is required when idcDataSpaces.enabled is true" }}{{- end }}
 {{- $idcSources := default (dict) $idcDataSpaces.sources }}
 {{- if not (kindIs "map" $idcSources) }}{{- fail "idcDataSpaces.sources must be a YAML map when idcDataSpaces.enabled is true" }}{{- end }}
-{{- range $name := list "original" "wellspiking" "shared" }}
+{{- range $name := list "original" "wellspiking" "shared" "spk-hybrid" "spk-ssd" }}
 {{- $source := get $idcSources $name }}
 {{- if not (kindIs "map" $source) }}{{- fail (printf "idcDataSpaces.sources.%s must be a YAML map when idcDataSpaces.enabled is true" $name) }}{{- end }}
 {{- $server := default "" (get $source "server") }}

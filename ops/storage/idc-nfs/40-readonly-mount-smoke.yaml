@@ -1,4 +1,4 @@
-# Rendered by 41-verify-readonly-mount.sh. This Pod uses the three configured
+# Rendered by 41-verify-readonly-mount.sh. This Pod uses the five configured
 # NFS exports directly so it validates the same node-side mount path that a
 # tenant-local static PV/PVC will use. No object-store credential or user
 # supplied server/path appears in this template.
@@ -24,20 +24,26 @@ spec:
       command: ["/bin/sh", "-ec"]
       args:
         - |
-          for directory in /mnt/idc/original /mnt/idc/wellspiking /mnt/idc/shared; do
+          for directory in /mnt/.original /mnt/.wellspiking /mnt/.shared /mnt/.spk-hybrid /mnt/.spk-ssd; do
             test -d "$directory"
             test ! -w "$directory"
           done
           printf '%s\n' 'idc-readonly-mount-contract-verified'
       volumeMounts:
         - name: original
-          mountPath: /mnt/idc/original
+          mountPath: /mnt/.original
           readOnly: true
         - name: wellspiking
-          mountPath: /mnt/idc/wellspiking
+          mountPath: /mnt/.wellspiking
           readOnly: true
         - name: shared
-          mountPath: /mnt/idc/shared
+          mountPath: /mnt/.shared
+          readOnly: true
+        - name: spk-hybrid
+          mountPath: /mnt/.spk-hybrid
+          readOnly: true
+        - name: spk-ssd
+          mountPath: /mnt/.spk-ssd
           readOnly: true
   volumes:
     - name: original
@@ -54,4 +60,14 @@ spec:
       nfs:
         server: ${IDC_NFS_SHARED_SERVER}
         path: ${IDC_NFS_SHARED_PATH}
+        readOnly: true
+    - name: spk-hybrid
+      nfs:
+        server: ${IDC_NFS_SPK_HYBRID_SERVER}
+        path: ${IDC_NFS_SPK_HYBRID_PATH}
+        readOnly: true
+    - name: spk-ssd
+      nfs:
+        server: ${IDC_NFS_SPK_SSD_SERVER}
+        path: ${IDC_NFS_SPK_SSD_PATH}
         readOnly: true

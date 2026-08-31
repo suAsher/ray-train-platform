@@ -113,18 +113,16 @@ func (r *GormRepository) EnsureTenantRootDataBinding(ctx context.Context, reques
 // and is never stored in this inventory, so database access cannot be used to
 // discover or alter an internal export.
 func (r *GormRepository) EnsureIDCDataBindings(ctx context.Context, requested ...domain.DataMountBinding) ([]domain.DataMountBinding, error) {
-	if len(requested) != 3 {
-		return nil, fmt.Errorf("exactly original, wellspiking, and shared IDC bindings are required")
+	if len(requested) == 0 {
+		return nil, fmt.Errorf("at least one configured IDC binding is required")
 	}
-	wanted := map[domain.DataSpaceID]bool{
-		domain.DataSpaceIDCOriginal: true, domain.DataSpaceIDCWellspiking: true, domain.DataSpaceIDCShared: true,
-	}
+	wanted := make(map[domain.DataSpaceID]bool, len(requested))
 	result := make([]domain.DataMountBinding, 0, len(requested))
 	for _, binding := range requested {
-		if binding.Scope != domain.DataMountScopeIDC || !wanted[binding.SpaceID] {
+		if binding.Scope != domain.DataMountScopeIDC || wanted[binding.SpaceID] {
 			return nil, fmt.Errorf("only configured IDC bindings are supported")
 		}
-		delete(wanted, binding.SpaceID)
+		wanted[binding.SpaceID] = true
 		if err := binding.Validate(); err != nil {
 			return nil, err
 		}
@@ -147,9 +145,6 @@ func (r *GormRepository) EnsureIDCDataBindings(ctx context.Context, requested ..
 		default:
 			return nil, fmt.Errorf("look up IDC data binding: %w", err)
 		}
-	}
-	if len(wanted) != 0 {
-		return nil, fmt.Errorf("all configured IDC bindings are required")
 	}
 	return result, nil
 }

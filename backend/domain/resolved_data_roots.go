@@ -25,6 +25,8 @@ type ResolvedDataSpaceRoots struct {
 	IDCOriginal    *ResolvedDataRoot `json:"idcOriginal,omitempty"`
 	IDCWellspiking *ResolvedDataRoot `json:"idcWellspiking,omitempty"`
 	IDCShared      *ResolvedDataRoot `json:"idcShared,omitempty"`
+	IDCSPKHybrid   *ResolvedDataRoot `json:"idcSpkHybrid,omitempty"`
+	IDCSPKSSD      *ResolvedDataRoot `json:"idcSpkSsd,omitempty"`
 }
 
 func (roots ResolvedDataSpaceRoots) Validate() error {
@@ -40,6 +42,8 @@ func (roots ResolvedDataSpaceRoots) Validate() error {
 		{name: "IDC original", root: roots.IDCOriginal, space: DataSpaceIDCOriginal, readOnly: true},
 		{name: "IDC Wellspiking", root: roots.IDCWellspiking, space: DataSpaceIDCWellspiking, readOnly: true},
 		{name: "IDC shared", root: roots.IDCShared, space: DataSpaceIDCShared, readOnly: true},
+		{name: "IDC SPK Hybrid", root: roots.IDCSPKHybrid, space: DataSpaceIDCSPKHybrid, readOnly: true},
+		{name: "IDC SPK SSD", root: roots.IDCSPKSSD, space: DataSpaceIDCSPKSSD, readOnly: true},
 	}
 	for _, check := range checks {
 		if check.root == nil {

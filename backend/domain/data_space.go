@@ -21,6 +21,8 @@ const (
 	DataSpaceIDCOriginal    DataSpaceID = "idc-original"
 	DataSpaceIDCWellspiking DataSpaceID = "idc-wellspiking"
 	DataSpaceIDCShared      DataSpaceID = "idc-shared"
+	DataSpaceIDCSPKHybrid   DataSpaceID = "idc-spk-hybrid"
+	DataSpaceIDCSPKSSD      DataSpaceID = "idc-spk-ssd"
 	// DataSpaceTenantStorageRoot is a control-plane-only adapter. It is never
 	// returned in the data-space catalogue and cannot be selected in a request.
 	// A single PVC rooted at ray-train/ is staged once and user-visible paths
@@ -34,9 +36,11 @@ const (
 	MyFilesMountPath        = MyStorageMountPath + "/files"
 	TeamStorageMountPath    = "/mnt/storage/team"
 	PublicStorageMountPath  = "/mnt/storage/public"
-	IDCOriginalMountPath    = "/mnt/idc/original"
-	IDCWellspikingMountPath = "/mnt/idc/wellspiking"
-	IDCSharedMountPath      = "/mnt/idc/shared"
+	IDCOriginalMountPath    = "/mnt/.original"
+	IDCWellspikingMountPath = "/mnt/.wellspiking"
+	IDCSharedMountPath      = "/mnt/.shared"
+	IDCSPKHybridMountPath   = "/mnt/.spk-hybrid"
+	IDCSPKSSDMountPath      = "/mnt/.spk-ssd"
 	// DefaultPublicDataRoot is the stable production location for data made
 	// available to every tenant. A tenant-confined temporary root may be used
 	// only during an explicitly configured migration; see NormalizePublicDataRoot.
@@ -154,6 +158,14 @@ func personalDataSpacesForRoot(tenantID, personalRoot, publicRoot string) ([]Dat
 			ID: DataSpaceIDCShared, Name: "IDC 共享数据", Description: "IDC 只读共享数据",
 			Provider: StorageProviderIDC, MountPath: IDCSharedMountPath, ReadOnly: true,
 		},
+		{
+			ID: DataSpaceIDCSPKHybrid, Name: "IDC SPK Hybrid 数据", Description: "IDC 只读混合存储数据",
+			Provider: StorageProviderIDC, MountPath: IDCSPKHybridMountPath, ReadOnly: true,
+		},
+		{
+			ID: DataSpaceIDCSPKSSD, Name: "IDC SPK SSD 数据", Description: "IDC 只读 SSD 存储数据",
+			Provider: StorageProviderIDC, MountPath: IDCSPKSSDMountPath, ReadOnly: true,
+		},
 	}
 	return spaces, nil
 }
@@ -213,7 +225,7 @@ func FindDataSpace(spaces []DataSpace, id DataSpaceID) (DataSpace, bool) {
 func IsKnownDataSpace(id DataSpaceID) bool {
 	for _, candidate := range []DataSpaceID{
 		DataSpaceWorkspace, DataSpaceMyStorage, DataSpaceMyFiles, DataSpaceMyRuns, DataSpaceTeamShared, DataSpacePublic,
-		DataSpaceIDCOriginal, DataSpaceIDCWellspiking, DataSpaceIDCShared,
+		DataSpaceIDCOriginal, DataSpaceIDCWellspiking, DataSpaceIDCShared, DataSpaceIDCSPKHybrid, DataSpaceIDCSPKSSD,
 	} {
 		if id == candidate {
 			return true

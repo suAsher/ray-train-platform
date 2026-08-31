@@ -566,7 +566,9 @@ func TestLoadAcceptsGovernedIDCDataSpacesWithoutLegacyClaim(t *testing.T) {
 	t.Setenv("IDC_DATA_SPACES_SOURCES_JSON", `{
       "original":{"server":"192.0.2.10","path":"/exports/original"},
       "wellspiking":{"server":"192.0.2.11","path":"/exports/wellspiking"},
-      "shared":{"server":"storage.example.internal","path":"/exports/shared"}
+      "shared":{"server":"storage.example.internal","path":"/exports/shared"},
+      "spk-hybrid":{"server":"192.0.2.12","path":"/exports/hybrid","mountOptions":["ro","vers=3"]},
+      "spk-ssd":{"server":"192.0.2.13","path":"/exports/ssd","mountOptions":["ro","vers=3"]}
     }`)
 
 	cfg, err := Load()
@@ -588,6 +590,24 @@ func TestLoadRejectsIncompleteGovernedIDCDataSpaces(t *testing.T) {
 
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "wellspiking") {
 		t.Fatalf("expected complete IDC source validation error, got %v", err)
+	}
+}
+
+func TestLoadRejectsWritableIDCMountOption(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("IDC_STORAGE_ENABLED", "false")
+	t.Setenv("IDC_DATA_SPACES_ENABLED", "true")
+	t.Setenv("IDC_DATA_SPACES_MOUNT_CAPACITY", "1Pi")
+	t.Setenv("IDC_DATA_SPACES_SOURCES_JSON", `{
+      "original":{"server":"192.0.2.10","path":"/exports/original","mountOptions":["rw"]},
+      "wellspiking":{"server":"192.0.2.11","path":"/exports/wellspiking","mountOptions":["ro"]},
+      "shared":{"server":"192.0.2.12","path":"/exports/shared","mountOptions":["ro"]},
+      "spk-hybrid":{"server":"192.0.2.13","path":"/exports/hybrid","mountOptions":["ro","vers=3"]},
+      "spk-ssd":{"server":"192.0.2.14","path":"/exports/ssd","mountOptions":["ro","vers=3"]}
+    }`)
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "mountOptions") {
+		t.Fatalf("expected read-only IDC mount option validation error, got %v", err)
 	}
 }
 

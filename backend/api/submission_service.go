@@ -638,7 +638,7 @@ func (service *SubmissionService) resolveLogicalDataMounts(ctx context.Context, 
 
 func (service *SubmissionService) dataSpaceMountingEnabled(space domain.DataSpaceID) bool {
 	switch space {
-	case domain.DataSpaceIDCOriginal, domain.DataSpaceIDCWellspiking, domain.DataSpaceIDCShared:
+	case domain.DataSpaceIDCOriginal, domain.DataSpaceIDCWellspiking, domain.DataSpaceIDCShared, domain.DataSpaceIDCSPKHybrid, domain.DataSpaceIDCSPKSSD:
 		return service.idcDataSpacesEnabled
 	default:
 		return service.dataSpacesEnabled
@@ -768,9 +768,9 @@ func (service *SubmissionService) resolveDataSpaceRoots(ctx context.Context, pri
 	}
 	roots := domain.ResolvedDataSpaceRoots{
 		Personal: root(domain.DataSpaceWorkspace, false), Team: root(domain.DataSpaceTeamShared, true), Public: root(domain.DataSpacePublic, true),
-		IDCOriginal: root(domain.DataSpaceIDCOriginal, true), IDCWellspiking: root(domain.DataSpaceIDCWellspiking, true), IDCShared: root(domain.DataSpaceIDCShared, true),
+		IDCOriginal: root(domain.DataSpaceIDCOriginal, true), IDCWellspiking: root(domain.DataSpaceIDCWellspiking, true), IDCShared: root(domain.DataSpaceIDCShared, true), IDCSPKHybrid: root(domain.DataSpaceIDCSPKHybrid, true), IDCSPKSSD: root(domain.DataSpaceIDCSPKSSD, true),
 	}
-	if service.idcDataSpacesEnabled && (roots.IDCOriginal == nil || roots.IDCWellspiking == nil || roots.IDCShared == nil) {
+	if service.idcDataSpacesEnabled && (roots.IDCOriginal == nil || roots.IDCWellspiking == nil || roots.IDCShared == nil || roots.IDCSPKHybrid == nil || roots.IDCSPKSSD == nil) {
 		return domain.ResolvedDataSpaceRoots{}, ErrSubmissionDataMountNotReady
 	}
 	if err := roots.Validate(); err != nil {

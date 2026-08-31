@@ -165,7 +165,7 @@ func (h *Handler) ensureIDCDataMounts(ctx context.Context, principal auth.Princi
 		return fmt.Errorf("data-space repository cannot initialize IDC mounts")
 	}
 	tenantKey := dataMountTenantKey(principal.TenantID)
-	requested := make([]domain.DataMountBinding, 0, 3)
+	requested := make([]domain.DataMountBinding, 0, len(h.idcDataSpaceSources))
 	for _, item := range []struct {
 		space domain.DataSpaceID
 		name  string
@@ -173,15 +173,20 @@ func (h *Handler) ensureIDCDataMounts(ctx context.Context, principal auth.Princi
 		{space: domain.DataSpaceIDCOriginal, name: "original"},
 		{space: domain.DataSpaceIDCWellspiking, name: "wellspiking"},
 		{space: domain.DataSpaceIDCShared, name: "shared"},
+		{space: domain.DataSpaceIDCSPKHybrid, name: "spk-hybrid"},
+		{space: domain.DataSpaceIDCSPKSSD, name: "spk-ssd"},
 	} {
 		if _, ok := h.idcDataSpaceSources[item.space]; !ok {
-			return fmt.Errorf("IDC source %s is not configured", item.name)
+			continue
 		}
 		binding, err := domain.NewIDCDataMountBinding("idc-"+item.name+"-"+tenantKey, principal.TenantID, item.space, "idc-"+item.name+"-"+tenantKey)
 		if err != nil {
 			return err
 		}
 		requested = append(requested, binding)
+	}
+	if len(requested) == 0 {
+		return fmt.Errorf("no IDC sources are configured")
 	}
 	bindings, err := ensurer.EnsureIDCDataBindings(ctx, requested...)
 	if err != nil {
@@ -604,7 +609,7 @@ func dataSpaceStorageStatus(space domain.DataSpace, tosStorageAvailable bool) st
 
 func dataSpaceMountingEnabled(space domain.DataSpaceID, tosMountingEnabled, idcMountingEnabled bool) bool {
 	switch space {
-	case domain.DataSpaceIDCOriginal, domain.DataSpaceIDCWellspiking, domain.DataSpaceIDCShared:
+	case domain.DataSpaceIDCOriginal, domain.DataSpaceIDCWellspiking, domain.DataSpaceIDCShared, domain.DataSpaceIDCSPKHybrid, domain.DataSpaceIDCSPKSSD:
 		return idcMountingEnabled
 	default:
 		return tosMountingEnabled

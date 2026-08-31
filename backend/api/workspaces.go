@@ -177,7 +177,7 @@ func (h *Handler) resolveWorkspaceDataMountPlan(ctx context.Context, principal a
 	}
 	plan := k8s.DataMountPlan{
 		Personal: root(domain.DataSpaceWorkspace, false), Team: root(domain.DataSpaceTeamShared, true), Public: root(domain.DataSpacePublic, true),
-		IDCOriginal: root(domain.DataSpaceIDCOriginal, true), IDCWellspiking: root(domain.DataSpaceIDCWellspiking, true), IDCShared: root(domain.DataSpaceIDCShared, true),
+		IDCOriginal: root(domain.DataSpaceIDCOriginal, true), IDCWellspiking: root(domain.DataSpaceIDCWellspiking, true), IDCShared: root(domain.DataSpaceIDCShared, true), IDCSPKHybrid: root(domain.DataSpaceIDCSPKHybrid, true), IDCSPKSSD: root(domain.DataSpaceIDCSPKSSD, true),
 	}
 	if plan.Validate() != nil {
 		return k8s.DataMountPlan{}, ErrSubmissionDataMountNotReady
@@ -185,7 +185,7 @@ func (h *Handler) resolveWorkspaceDataMountPlan(ctx context.Context, principal a
 	if h.dataSpacesEnabled && plan.Personal == nil {
 		return k8s.DataMountPlan{}, ErrSubmissionDataMountNotReady
 	}
-	if h.idcDataSpacesEnabled && (plan.IDCOriginal == nil || plan.IDCWellspiking == nil || plan.IDCShared == nil) {
+	if h.idcDataSpacesEnabled && (plan.IDCOriginal == nil || plan.IDCWellspiking == nil || plan.IDCShared == nil || plan.IDCSPKHybrid == nil || plan.IDCSPKSSD == nil) {
 		return k8s.DataMountPlan{}, ErrSubmissionDataMountNotReady
 	}
 	return plan, nil

@@ -189,10 +189,10 @@ func idcDataSpaceSources(cfg config.Config) map[domain.DataSpaceID]k8s.IDCDataMo
 	sources := make(map[domain.DataSpaceID]k8s.IDCDataMountSource, len(cfg.IDCDataSpaceSources))
 	for name, source := range cfg.IDCDataSpaceSources {
 		space := map[string]domain.DataSpaceID{
-			"original": domain.DataSpaceIDCOriginal, "wellspiking": domain.DataSpaceIDCWellspiking, "shared": domain.DataSpaceIDCShared,
+			"original": domain.DataSpaceIDCOriginal, "wellspiking": domain.DataSpaceIDCWellspiking, "shared": domain.DataSpaceIDCShared, "spk-hybrid": domain.DataSpaceIDCSPKHybrid, "spk-ssd": domain.DataSpaceIDCSPKSSD,
 		}[name]
 		if space != "" {
-			sources[space] = k8s.IDCDataMountSource{Server: source.Server, Path: source.Path}
+			sources[space] = k8s.IDCDataMountSource{Server: source.Server, Path: source.Path, MountOptions: source.MountOptions}
 		}
 	}
 	return sources

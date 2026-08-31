@@ -130,7 +130,7 @@ func (binding DataMountBinding) validateSpace() error {
 			return fmt.Errorf("tenant data mount binding must use a governed shared or storage-root space")
 		}
 	case DataMountScopeIDC:
-		if binding.SpaceID != DataSpaceIDCOriginal && binding.SpaceID != DataSpaceIDCWellspiking && binding.SpaceID != DataSpaceIDCShared {
+		if !isIDCDataSpace(binding.SpaceID) {
 			return fmt.Errorf("IDC data mount binding must use an IDC data space")
 		}
 	}
@@ -429,7 +429,7 @@ func NewIDCDataMountBinding(id, tenantID string, spaceID DataSpaceID, claimName 
 	if err := validateDataSpaceIdentity("tenant", tenantID); err != nil {
 		return DataMountBinding{}, err
 	}
-	if spaceID != DataSpaceIDCOriginal && spaceID != DataSpaceIDCWellspiking && spaceID != DataSpaceIDCShared {
+	if !isIDCDataSpace(spaceID) {
 		return DataMountBinding{}, fmt.Errorf("IDC data mount space must be an IDC data space")
 	}
 	if strings.TrimSpace(claimName) == "" || !dnsLabel.MatchString(claimName) {
@@ -443,4 +443,13 @@ func NewIDCDataMountBinding(id, tenantID string, spaceID DataSpaceID, claimName 
 		return DataMountBinding{}, err
 	}
 	return binding, nil
+}
+
+func isIDCDataSpace(spaceID DataSpaceID) bool {
+	switch spaceID {
+	case DataSpaceIDCOriginal, DataSpaceIDCWellspiking, DataSpaceIDCShared, DataSpaceIDCSPKHybrid, DataSpaceIDCSPKSSD:
+		return true
+	default:
+		return false
+	}
 }

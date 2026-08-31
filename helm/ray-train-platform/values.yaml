@@ -353,7 +353,7 @@ personalStorage:
 
 # Administrator-configured IDC NFS exports. This replaces the legacy single
 # storage.existingClaim compatibility path. Each enabled tenant gets three
-# retained ReadOnlyMany PVC adapters, mounted in workloads at /mnt/idc/*.
+# retained ReadOnlyMany PVC adapters, mounted in workloads at /mnt/.*.
 # Do not put user-specific mount paths or personal SSHFS credentials here.
 idcDataSpaces:
   enabled: false
@@ -362,12 +362,23 @@ idcDataSpaces:
     original:
       server: ""
       path: ""
+      mountOptions: []
     wellspiking:
       server: ""
       path: ""
+      mountOptions: []
     shared:
       server: ""
       path: ""
+      mountOptions: []
+    spk-hybrid:
+      server: ""
+      path: ""
+      mountOptions: []
+    spk-ssd:
+      server: ""
+      path: ""
+      mountOptions: []
 
 kueue:
   enabled: false

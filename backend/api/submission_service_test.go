@@ -891,6 +891,8 @@ func TestSubmissionInitializesDataSpacesBeforeResolvingLogicalLocations(t *testi
 		{ID: "idc", TenantID: "tenant-a", Scope: domain.DataMountScopeIDC, SpaceID: domain.DataSpaceIDCOriginal, ClaimName: "idc-original-a", ReadOnly: true, Status: domain.DataMountBindingReady},
 		{ID: "idc-wellspiking", TenantID: "tenant-a", Scope: domain.DataMountScopeIDC, SpaceID: domain.DataSpaceIDCWellspiking, ClaimName: "idc-wellspiking-a", ReadOnly: true, Status: domain.DataMountBindingReady},
 		{ID: "idc-shared", TenantID: "tenant-a", Scope: domain.DataMountScopeIDC, SpaceID: domain.DataSpaceIDCShared, ClaimName: "idc-shared-a", ReadOnly: true, Status: domain.DataMountBindingReady},
+		{ID: "idc-spk-hybrid", TenantID: "tenant-a", Scope: domain.DataMountScopeIDC, SpaceID: domain.DataSpaceIDCSPKHybrid, ClaimName: "idc-spk-hybrid-a", ReadOnly: true, Status: domain.DataMountBindingReady},
+		{ID: "idc-spk-ssd", TenantID: "tenant-a", Scope: domain.DataMountScopeIDC, SpaceID: domain.DataSpaceIDCSPKSSD, ClaimName: "idc-spk-ssd-a", ReadOnly: true, Status: domain.DataMountBindingReady},
 	}}
 	initialized := 0
 	service := NewSubmissionService(&submissionServiceRepository{}, SubmissionServiceOptions{

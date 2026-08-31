@@ -25,6 +25,23 @@ func TestBuildIDCDataMountResourcesCreatesRetainedReadOnlyNFSVolume(t *testing.T
 	}
 }
 
+func TestBuildIDCDataMountResourcesPreservesApprovedNFSv3Options(t *testing.T) {
+	binding, err := domain.NewIDCDataMountBinding("idc-spk-ssd-a", "tenant-a", "idc-spk-ssd", "idc-spk-ssd-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pv, _, err := BuildIDCDataMountResources(binding, "tenant-tenant-a", "1Pi", IDCDataMountSource{
+		Server: "nfs-flash-yrfs.wellspiking.ai", Path: "/mnt/yrfs/wellspiking/data",
+		MountPath: "/mnt/.spk-ssd", MountOptions: []string{"ro", "vers=3", "hard", "timeo=600", "retrans=2", "rsize=1048576", "wsize=1048576", "noatime", "_netdev", "nofail"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pv.Spec.NFS.ReadOnly || !reflect.DeepEqual(pv.Spec.MountOptions, []string{"ro", "vers=3", "hard", "timeo=600", "retrans=2", "rsize=1048576", "wsize=1048576", "noatime", "_netdev", "nofail"}) {
+		t.Fatalf("IDC NFSv3 mount options are not preserved as an immutable read-only contract: %#v", pv.Spec)
+	}
+}
+
 func TestBuildDataMountResourcesCreatesSecretlessRetainedFSXVolume(t *testing.T) {
 	binding := domain.DataMountBinding{
 		ID: "mount-abc123", TenantID: "tenant-a", UserID: "user-a", Scope: domain.DataMountScopePersonal, SpaceID: domain.DataSpaceWorkspace,

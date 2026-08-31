@@ -22,6 +22,8 @@ type DataMountPlan struct {
 	IDCOriginal    *DataMountRoot
 	IDCWellspiking *DataMountRoot
 	IDCShared      *DataMountRoot
+	IDCSPKHybrid   *DataMountRoot
+	IDCSPKSSD      *DataMountRoot
 }
 
 type DataMountRoot struct {
@@ -39,8 +41,16 @@ type DataMountRoot struct {
 // or a data-mount binding, which prevents a tenant from choosing an arbitrary
 // internal NFS export.
 type IDCDataMountSource struct {
-	Server string
-	Path   string
+	// ID and presentation fields are deployment-owned metadata. They are never
+	// accepted from an end-user request; the renderer only receives claims that
+	// were created for one of these registered sources.
+	ID           domain.DataSpaceID
+	Name         string
+	Description  string
+	MountPath    string
+	Server       string
+	Path         string
+	MountOptions []string
 }
 
 const managedDataMountLabel = "ray-train-platform/data-mount-id"
@@ -152,6 +162,9 @@ func BuildIDCDataMountResources(binding domain.DataMountBinding, namespace, size
 	if !strings.HasPrefix(source.Path, "/") || source.Path == "/" || strings.TrimSpace(source.Path) != source.Path || path.Clean(source.Path) != source.Path {
 		return nil, nil, fmt.Errorf("IDC data mount NFS path must be a clean non-root absolute export path")
 	}
+	if err := validateIDCNFSMountOptions(source.MountOptions); err != nil {
+		return nil, nil, err
+	}
 	capacity, err := resource.ParseQuantity(strings.TrimSpace(size))
 	if err != nil || capacity.Sign() <= 0 {
 		return nil, nil, fmt.Errorf("IDC data mount capacity must be a positive Kubernetes quantity")
@@ -170,6 +183,7 @@ func BuildIDCDataMountResources(binding domain.DataMountBinding, namespace, size
 		Spec: corev1.PersistentVolumeSpec{
 			Capacity:                      corev1.ResourceList{corev1.ResourceStorage: capacity},
 			AccessModes:                   []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany},
+			MountOptions:                  append([]string(nil), source.MountOptions...),
 			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
 			PersistentVolumeSource:        corev1.PersistentVolumeSource{NFS: &corev1.NFSVolumeSource{Server: source.Server, Path: source.Path, ReadOnly: true}},
 		},
@@ -183,6 +197,32 @@ func BuildIDCDataMountResources(binding domain.DataMountBinding, namespace, size
 		},
 	}
 	return pv, pvc, nil
+}
+
+// validateIDCNFSMountOptions deliberately accepts only the read-only NFS
+// tuning flags that the platform supports. This keeps a deployment profile
+// from accidentally turning a governed IDC source into a writable or
+// executable host escape route.
+func validateIDCNFSMountOptions(options []string) error {
+	allowed := map[string]bool{
+		"ro": true, "hard": true, "noatime": true, "_netdev": true, "nofail": true,
+		"vers=3": true, "timeo=600": true, "retrans=2": true,
+		"rsize=1048576": true, "wsize=1048576": true,
+	}
+	seenRO := false
+	for _, raw := range options {
+		option := strings.TrimSpace(raw)
+		if option == "" || option != raw || !allowed[option] {
+			return fmt.Errorf("IDC data mount option %q is not in the read-only allowlist", raw)
+		}
+		if option == "ro" {
+			seenRO = true
+		}
+	}
+	if len(options) > 0 && !seenRO {
+		return fmt.Errorf("IDC data mount options must include ro")
+	}
+	return nil
 }
 
 func noStorageClass() *string {
@@ -205,6 +245,8 @@ func (plan DataMountPlan) Validate() error {
 		{name: "IDC original", root: plan.IDCOriginal},
 		{name: "IDC Wellspiking", root: plan.IDCWellspiking},
 		{name: "IDC shared", root: plan.IDCShared},
+		{name: "IDC SPK Hybrid", root: plan.IDCSPKHybrid},
+		{name: "IDC SPK SSD", root: plan.IDCSPKSSD},
 	} {
 		if root.root != nil {
 			if err := root.root.validate(root.name, true); err != nil {
@@ -216,7 +258,7 @@ func (plan DataMountPlan) Validate() error {
 }
 
 func (plan DataMountPlan) hasGovernedIDC() bool {
-	return plan.IDCOriginal != nil || plan.IDCWellspiking != nil || plan.IDCShared != nil
+	return plan.IDCOriginal != nil || plan.IDCWellspiking != nil || plan.IDCShared != nil || plan.IDCSPKHybrid != nil || plan.IDCSPKSSD != nil
 }
 
 func (root DataMountRoot) validate(name string, readOnly bool) error {
@@ -267,6 +309,8 @@ func appendDataMountPlan(volumeMounts, volumes []any, plan DataMountPlan) ([]any
 		{volumeName: "platform-data-idc-original", mountPath: domain.IDCOriginalMountPath, root: plan.IDCOriginal},
 		{volumeName: "platform-data-idc-wellspiking", mountPath: domain.IDCWellspikingMountPath, root: plan.IDCWellspiking},
 		{volumeName: "platform-data-idc-shared", mountPath: domain.IDCSharedMountPath, root: plan.IDCShared},
+		{volumeName: "platform-data-idc-spk-hybrid", mountPath: domain.IDCSPKHybridMountPath, root: plan.IDCSPKHybrid},
+		{volumeName: "platform-data-idc-spk-ssd", mountPath: domain.IDCSPKSSDMountPath, root: plan.IDCSPKSSD},
 	} {
 		if root.root == nil {
 			continue
@@ -291,7 +335,7 @@ func dataMountPlanFromResolvedRoots(roots domain.ResolvedDataSpaceRoots) DataMou
 	}
 	return DataMountPlan{
 		Personal: root(roots.Personal), Team: root(roots.Team), Public: root(roots.Public),
-		IDCOriginal: root(roots.IDCOriginal), IDCWellspiking: root(roots.IDCWellspiking), IDCShared: root(roots.IDCShared),
+		IDCOriginal: root(roots.IDCOriginal), IDCWellspiking: root(roots.IDCWellspiking), IDCShared: root(roots.IDCShared), IDCSPKHybrid: root(roots.IDCSPKHybrid), IDCSPKSSD: root(roots.IDCSPKSSD),
 	}
 }
 
@@ -320,6 +364,8 @@ func appendTrainingDataRoots(volumeMounts, volumes []any, roots domain.ResolvedD
 		{volumeName: "platform-data-idc-original", mountPath: domain.IDCOriginalMountPath, root: plan.IDCOriginal},
 		{volumeName: "platform-data-idc-wellspiking", mountPath: domain.IDCWellspikingMountPath, root: plan.IDCWellspiking},
 		{volumeName: "platform-data-idc-shared", mountPath: domain.IDCSharedMountPath, root: plan.IDCShared},
+		{volumeName: "platform-data-idc-spk-hybrid", mountPath: domain.IDCSPKHybridMountPath, root: plan.IDCSPKHybrid},
+		{volumeName: "platform-data-idc-spk-ssd", mountPath: domain.IDCSPKSSDMountPath, root: plan.IDCSPKSSD},
 	} {
 		if root.root == nil {
 			continue

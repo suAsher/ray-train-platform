@@ -1141,7 +1141,7 @@ func renderImagePullSecrets(names []string) []any {
 }
 
 func hasGovernedIDCDataRoots(roots domain.ResolvedDataSpaceRoots) bool {
-	return roots.IDCOriginal != nil || roots.IDCWellspiking != nil || roots.IDCShared != nil
+	return roots.IDCOriginal != nil || roots.IDCWellspiking != nil || roots.IDCShared != nil || roots.IDCSPKHybrid != nil || roots.IDCSPKSSD != nil
 }
 
 func hasAnyResolvedDataRoots(roots domain.ResolvedDataSpaceRoots) bool {
