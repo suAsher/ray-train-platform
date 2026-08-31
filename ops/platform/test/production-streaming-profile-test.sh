@@ -41,7 +41,9 @@ for required_publisher_value in \
   '  endpoint: https://tos-cn-shanghai.ivolces.com' \
   '  region: cn-shanghai' \
   '  sourceIndexName: .raytrain/trusted-index-v2.pkl' \
-  '    irsaRoleTRN: trn:iam::2103446203:role/tos-rw' \
+  '    irsaRoleTRN: ""' \
+  '  credentials:' \
+  '    existingSecret: tos-credentials' \
   '    repository: ray-dataset-publisher' \
   '    tag: tos-secret-r5' \
   '    digest: sha256:d3853bcd882af93da92ad5cba5e233d206698ec4b5620f5bcee98275b6494434' \
