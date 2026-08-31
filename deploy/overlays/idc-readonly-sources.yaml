@@ -1,0 +1,33 @@
+# Minimal production overlay for governed IDC read-only NFS sources. Apply it
+# with `helm upgrade --reuse-values` so unrelated production values and active
+# workloads remain untouched.
+backend:
+  image:
+    repository: ray-train-backend
+    tag: idc-r1
+    digest: sha256:0d90e9f1f817c0d8cb418990540bcc7662780d0eab1886e8d34194064f27cf52
+
+idcDataSpaces:
+  enabled: true
+  mountCapacity: 1Pi
+  sources:
+    original:
+      server: 192.168.117.117
+      path: /storage/data-e2e/original
+      mountOptions: [ro, hard, timeo=600, retrans=2, rsize=1048576, wsize=1048576, noatime, _netdev]
+    wellspiking:
+      server: 192.168.117.117
+      path: /storage/data-e2e/wellspiking
+      mountOptions: [ro, hard, timeo=600, retrans=2, rsize=1048576, wsize=1048576, noatime, _netdev]
+    shared:
+      server: storage.westwell-lab.info
+      path: /mnt/yrfs/wellspiking-training/shared
+      mountOptions: [ro, hard, timeo=600, retrans=2, rsize=1048576, wsize=1048576, noatime, _netdev]
+    spk-hybrid:
+      server: nfs-mixed-yrfs.wellspiking.ai
+      path: /mnt/yrfs/wellspiking/data
+      mountOptions: [ro, vers=3, hard, timeo=600, retrans=2, rsize=1048576, wsize=1048576, noatime, _netdev, nofail]
+    spk-ssd:
+      server: nfs-flash-yrfs.wellspiking.ai
+      path: /mnt/yrfs/wellspiking/data
+      mountOptions: [ro, vers=3, hard, timeo=600, retrans=2, rsize=1048576, wsize=1048576, noatime, _netdev, nofail]
