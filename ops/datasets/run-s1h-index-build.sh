@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: run-s1h-index-build.sh --image <digest reference> --version <id> [--namespace tenant-local] [--source labeled] [--wait]
+Usage: run-s1h-index-build.sh --image <digest reference> --version <id> [--run-id retry1] [--namespace tenant-local] [--source labeled] [--wait]
 EOF
 }
 
@@ -11,11 +11,13 @@ namespace="tenant-local"
 source_relative="labeled"
 image=""
 version=""
+run_id=""
 wait_for_completion=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --image) image="${2:-}"; shift 2 ;;
     --version) version="${2:-}"; shift 2 ;;
+    --run-id) run_id="${2:-}"; shift 2 ;;
     --namespace) namespace="${2:-}"; shift 2 ;;
     --source) source_relative="${2:-}"; shift 2 ;;
     --wait) wait_for_completion=true; shift ;;
@@ -30,6 +32,10 @@ done
 }
 [[ "$version" =~ ^[a-z0-9]([a-z0-9.-]{0,38}[a-z0-9])?$ ]] || {
   echo '--version must be a lowercase release identifier with at most 40 characters' >&2
+  exit 2
+}
+[[ -z "$run_id" || "$run_id" =~ ^[a-z0-9]([a-z0-9.-]{0,18}[a-z0-9])?$ ]] || {
+  echo '--run-id must be a lowercase identifier with at most 20 characters' >&2
   exit 2
 }
 [[ "$namespace" =~ ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$ ]] || {
@@ -66,6 +72,9 @@ done < <(kubectl -n "$namespace" get pvc -o json | jq -r '.items[] | [.metadata.
 }
 
 job_name="s1h-index-${version//./-}"
+if [[ -n "$run_id" ]]; then
+  job_name="$job_name-${run_id//./-}"
+fi
 job_name="${job_name:0:63}"
 if kubectl -n "$namespace" get job "$job_name" >/dev/null 2>&1; then
   echo "job already exists: $namespace/$job_name" >&2

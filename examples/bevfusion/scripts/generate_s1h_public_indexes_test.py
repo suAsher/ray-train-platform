@@ -114,6 +114,33 @@ class GenerateS1HPublicIndexesTest(unittest.TestCase):
         self.assertEqual(result["package"], "package-a")
         self.assertIn("missing.bin", result["reason"])
 
+    def test_rejects_package_with_broken_metadata_references(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._package(root, "site-a", "package-a", samples=1)
+            package = self.generator.discover_packages(root)[0]
+            output = root / "output"
+
+            tools = types.ModuleType("tools")
+            data_converter = types.ModuleType("tools.data_converter")
+            converter = types.ModuleType("tools.data_converter.nuscenes_converter")
+
+            def fail_for_broken_reference(*_args, **_kwargs):
+                raise KeyError("missing-category-token")
+
+            converter.create_nuscenes_infos = fail_for_broken_reference
+            modules = {
+                "tools": tools,
+                "tools.data_converter": data_converter,
+                "tools.data_converter.nuscenes_converter": converter,
+            }
+            with mock.patch.dict(sys.modules, modules):
+                result = self.generator._generate_package((package, output, 0, 81))
+
+        self.assertEqual(result["status"], "rejected")
+        self.assertEqual(result["error_type"], "KeyError")
+        self.assertIn("missing-category-token", result["reason"])
+
     @staticmethod
     def _package(root: Path, collection: str, name: str, *, samples: int) -> Path:
         package = root / collection / name
