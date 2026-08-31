@@ -12,6 +12,12 @@ grep -Fq 'ln "$lock_candidate" "$prepare_lock"' \
   "$repo_root/examples/bevfusion/raytrain-bevfusion-prepare-runtime.sh"
 grep -Fq 'from yapf.yapflib.yapf_api import FormatCode' \
   "$repo_root/examples/bevfusion/raytrain-bevfusion-prepare-runtime.sh"
+grep -Fq 'runtime_patcher=' \
+  "$repo_root/examples/bevfusion/raytrain-bevfusion-prepare-runtime.sh"
+grep -Fq 'PLATFORM_TRAINING_ENGINE' \
+  "$repo_root/examples/bevfusion/raytrain-bevfusion-prepare-runtime.sh"
+grep -Fq '"$runtime_patcher" "$runtime_root"' \
+  "$repo_root/examples/bevfusion/raytrain-bevfusion-prepare-runtime.sh"
 
 image_root="$temporary_dir/image/mmdet3d"
 runtime_root="$temporary_dir/runtime"
@@ -175,5 +181,42 @@ test "$child_status" -eq 0
 test -f "$parallel_stale_root/.raytrain-prepare.complete"
 test "$(wc -l < "$parallel_stale_log")" -eq 1
 test ! -e "$parallel_stale_root/.raytrain-prepare.lock.v2"
+
+# Managed Ray Train applies the image-owned source transform to the ephemeral
+# Ray working directory exactly once. Legacy launch modes never invoke it.
+managed_root="$temporary_dir/managed-runtime"
+managed_patcher="$temporary_dir/fake-platform-patcher"
+managed_log="$temporary_dir/managed-platform-patcher.log"
+mkdir -p "$managed_root/mmdet3d"
+cat > "$managed_patcher" <<'EOF'
+#!/usr/bin/env sh
+set -eu
+printf '%s\n' "$1" > "$RAYTRAIN_PATCH_LOG"
+EOF
+chmod 0755 "$managed_patcher"
+PLATFORM_TRAINING_ENGINE=ray-train \
+PLATFORM_DATA_MODE=streaming \
+RAYTRAIN_BEVFUSION_PATCHER="$managed_patcher" \
+RAYTRAIN_PATCH_LOG="$managed_log" \
+RAYTRAIN_IMAGE_SOURCE_ROOT="$image_root" \
+RAYTRAIN_SOURCE_ROOT="$managed_root" \
+"$repo_root/examples/bevfusion/raytrain-bevfusion-prepare-runtime.sh" /usr/bin/true
+test "$(cat "$managed_log")" = "$managed_root"
+test -f "$managed_root/.raytrain-prepare.complete"
+
+# Managed Ray Train legacy data modes keep their existing source behavior and
+# must not require the S1H streaming patch surface.
+legacy_managed_root="$temporary_dir/managed-mount-runtime"
+legacy_managed_log="$temporary_dir/managed-mount-platform-patcher.log"
+mkdir -p "$legacy_managed_root/mmdet3d"
+PLATFORM_TRAINING_ENGINE=ray-train \
+PLATFORM_DATA_MODE=mount \
+RAYTRAIN_BEVFUSION_PATCHER="$managed_patcher" \
+RAYTRAIN_PATCH_LOG="$legacy_managed_log" \
+RAYTRAIN_IMAGE_SOURCE_ROOT="$image_root" \
+RAYTRAIN_SOURCE_ROOT="$legacy_managed_root" \
+"$repo_root/examples/bevfusion/raytrain-bevfusion-prepare-runtime.sh" /usr/bin/true
+test ! -e "$legacy_managed_log"
+test -f "$legacy_managed_root/.raytrain-prepare.complete"
 
 echo 'raytrain BEVFusion compatibility overlay: ok'

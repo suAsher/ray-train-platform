@@ -12,6 +12,7 @@ target_root="$runtime_root/mmdet3d"
 prepare_lock="$runtime_root/.raytrain-prepare.lock.v2"
 legacy_prepare_lock="$runtime_root/.raytrain-prepare.lock"
 prepare_complete="$runtime_root/.raytrain-prepare.complete"
+runtime_patcher="${RAYTRAIN_BEVFUSION_PATCHER:-/usr/local/bin/apply-raytrain-bevfusion-runtime}"
 # YAPF 0.40.x generates versioned grammar pickles on first import. Eight local
 # ranks importing it concurrently can observe a partially written cache file.
 # Keep the cache with this node's extracted working directory and generate it
@@ -145,6 +146,14 @@ if [[ -d "$source_root" && -d "$target_root" && ! -f "$prepare_complete" ]]; the
         'import importlib.util,sys;sys.exit(0 if importlib.util.find_spec("yapf") else 1)'; then
         python3 -c \
           'from yapf.yapflib.yapf_api import FormatCode; FormatCode("value = 1\n")'
+      fi
+      if [[ "${PLATFORM_TRAINING_ENGINE:-}" == "ray-train" \
+        && "${PLATFORM_DATA_MODE:-}" == "streaming" ]]; then
+        if [[ ! -x "$runtime_patcher" ]]; then
+          echo "BEVFusion platform runtime patcher is unavailable" >&2
+          exit 1
+        fi
+        "$runtime_patcher" "$runtime_root"
       fi
       : > "$prepare_complete"
     fi

@@ -58,7 +58,14 @@ def patch_managed_training_entrypoint(source: str) -> str:
     """Add one custom Hook and avoid a duplicate distributed process group."""
 
     helper_present = "def configure_ray_train_managed_hook(cfg):" in source
-    guarded = "if distributed and not torch.distributed.is_initialized():" in source
+    guarded = any(
+        marker in source
+        for marker in (
+            "if distributed and not torch.distributed.is_initialized():",
+            "if not torch.distributed.is_initialized():\n"
+            "            init_dist(args.launcher, backend='nccl')",
+        )
+    )
     if helper_present and guarded:
         return source
     if helper_present != guarded:
@@ -77,11 +84,28 @@ def patch_managed_training_entrypoint(source: str) -> str:
         "    cfg = configure_ray_train_managed_hook(cfg)\n",
         "managed hook configuration",
     )
-    patched = _replace_once(
-        patched,
-        "    if distributed:\n        init_dist(args.launcher, **cfg.dist_params)\n",
-        "    if distributed and not torch.distributed.is_initialized():\n"
-        "        init_dist(args.launcher, **cfg.dist_params)\n",
-        "distributed initialization",
+    standard_initialization = (
+        "    if distributed:\n"
+        "        init_dist(args.launcher, **cfg.dist_params)\n"
     )
-    return patched
+    s1h_initialization = "        init_dist(args.launcher, backend='nccl')\n"
+    standard_count = patched.count(standard_initialization)
+    s1h_count = patched.count(s1h_initialization)
+    if (standard_count, s1h_count) == (1, 0):
+        return patched.replace(
+            standard_initialization,
+            "    if distributed and not torch.distributed.is_initialized():\n"
+            "        init_dist(args.launcher, **cfg.dist_params)\n",
+            1,
+        )
+    if (standard_count, s1h_count) == (0, 1):
+        return patched.replace(
+            s1h_initialization,
+            "        if not torch.distributed.is_initialized():\n"
+            "            init_dist(args.launcher, backend='nccl')\n",
+            1,
+        )
+    raise ValueError(
+        "unexpected westwell_train.py layout for distributed initialization: "
+        f"expected one supported match, found {standard_count + s1h_count}"
+    )

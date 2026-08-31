@@ -36,6 +36,25 @@ def main():
 '''
 
 
+S1H_SOURCE = '''import os
+import torch
+from mmcv.runner import get_dist_info, init_dist
+
+
+def main():
+    cfg = Config(recursive_eval(configs), filename=args.config)
+    if args.launcher == 'none':
+        distributed = False
+    else:
+        distributed = True
+        init_dist(args.launcher, backend='nccl')
+        _, world_size = get_dist_info()
+        cfg.gpu_ids = range(world_size)
+    model = build_model(cfg.model)
+    train_model(model, datasets, cfg, distributed=distributed)
+'''
+
+
 class RayTrainManagedPatchTest(unittest.TestCase):
     def setUp(self):
         self.patched = patch_managed_training_entrypoint(SOURCE)
@@ -53,6 +72,18 @@ class RayTrainManagedPatchTest(unittest.TestCase):
             self.patched,
         )
         self.assertEqual(self.patched.count("init_dist(args.launcher, **cfg.dist_params)"), 1)
+
+    def test_guards_s1h_explicit_nccl_initialization_without_changing_topology(self):
+        patched = patch_managed_training_entrypoint(S1H_SOURCE)
+
+        self.assertIn(
+            "if not torch.distributed.is_initialized():\n"
+            "            init_dist(args.launcher, backend='nccl')",
+            patched,
+        )
+        self.assertIn("_, world_size = get_dist_info()", patched)
+        self.assertEqual(patch_managed_training_entrypoint(patched), patched)
+        compile(patched, "westwell_train.py", "exec")
 
     def test_is_idempotent_and_syntactically_valid(self):
         self.assertEqual(patch_managed_training_entrypoint(self.patched), self.patched)

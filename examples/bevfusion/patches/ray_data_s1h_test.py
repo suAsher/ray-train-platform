@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import copy
+import dataclasses
 import importlib
 import inspect
 from pathlib import Path
 import sys
+import types
 import unittest
 from unittest import mock
+
+import numpy as np
 
 
 PATCH_DIR = Path(__file__).resolve().parent
@@ -26,7 +31,329 @@ def _adapter_module():
         ) from error
 
 
+def _lidar_only_cbgs_config(*pipeline):
+    if not pipeline:
+        pipeline = (
+            {
+                "type": "LoadPointsFromFile",
+                "coord_type": "LIDAR",
+                "load_dim": 5,
+                "use_dim": 5,
+            },
+            {
+                "type": "LoadAnnotations3D",
+                "with_bbox_3d": True,
+                "with_label_3d": True,
+                "with_attr_label": False,
+            },
+            {"type": "PointShuffle"},
+            {
+                "type": "DefaultFormatBundle3D",
+                "classes": ["car", "pedestrian"],
+            },
+            {
+                "type": "Collect3D",
+                "keys": ["points", "gt_bboxes_3d", "gt_labels_3d"],
+            },
+        )
+    return {
+        "type": "CBGSDataset",
+        "dataset": {
+            "type": "NuScenesDataset",
+            "pipeline": list(pipeline),
+            "object_classes": ["car", "pedestrian"],
+            "modality": {
+                "use_lidar": True,
+                "use_camera": False,
+                "use_radar": False,
+                "use_map": False,
+                "use_external": False,
+            },
+            "test_mode": False,
+            "box_type_3d": "LiDAR",
+        },
+    }
+
+
+def _fake_bevfusion_modules(compose_type, points_type, boxes_type, box_mode):
+    mmdet3d = types.ModuleType("mmdet3d")
+    core = types.ModuleType("mmdet3d.core")
+    bbox = types.ModuleType("mmdet3d.core.bbox")
+    bbox.get_box_type = mock.Mock(return_value=(boxes_type, box_mode))
+    points = types.ModuleType("mmdet3d.core.points")
+    points.LiDARPoints = points_type
+    datasets = types.ModuleType("mmdet3d.datasets")
+    pipelines = types.ModuleType("mmdet3d.datasets.pipelines")
+    pipelines.Compose = compose_type
+    return {
+        "mmdet3d": mmdet3d,
+        "mmdet3d.core": core,
+        "mmdet3d.core.bbox": bbox,
+        "mmdet3d.core.points": points,
+        "mmdet3d.datasets": datasets,
+        "mmdet3d.datasets.pipelines": pipelines,
+    }, bbox.get_box_type
+
+
 class RayDataS1HPatchTest(unittest.TestCase):
+    def test_streaming_proxy_is_frozen_and_forwards_set_epoch_to_transforms(self):
+        adapter = _adapter_module()
+
+        class EpochTransform:
+            def __init__(self):
+                self.epochs = []
+
+            def set_epoch(self, epoch):
+                self.epochs.append(epoch)
+
+        epoch_transform = EpochTransform()
+
+        class FakeCompose:
+            def __init__(self, _pipeline):
+                self.transforms = [epoch_transform, object()]
+
+            def __call__(self, sample):
+                return sample
+
+        class FakePoints:
+            pass
+
+        class FakeBoxes:
+            pass
+
+        modules, _get_box_type = _fake_bevfusion_modules(
+            FakeCompose, FakePoints, FakeBoxes, "LIDAR_MODE"
+        )
+        with mock.patch.dict(sys.modules, modules):
+            proxy = adapter.build_streaming_dataset_proxy(
+                _lidar_only_cbgs_config()
+            )
+
+        self.assertIsInstance(proxy, adapter.StreamingDatasetProxy)
+        self.assertEqual(proxy.CLASSES, ("car", "pedestrian"))
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            proxy.pipeline = mock.Mock()
+        self.assertIsNone(proxy.set_epoch(4))
+        self.assertEqual(epoch_transform.epochs, [4])
+        for invalid_epoch in (-1, True, 1.5):
+            with self.subTest(invalid_epoch=invalid_epoch):
+                with self.assertRaisesRegex(ValueError, "epoch"):
+                    proxy.set_epoch(invalid_epoch)
+
+    def test_streaming_proxy_adapts_decoded_arrays_then_runs_remaining_compose(self):
+        adapter = _adapter_module()
+        compose_instances = []
+
+        class FakeCompose:
+            def __init__(self, pipeline):
+                self.config = copy.deepcopy(pipeline)
+                self.transforms = []
+                self.received = []
+                compose_instances.append(self)
+
+            def __call__(self, sample):
+                self.received.append(sample)
+                return {"composed": sample}
+
+        class FakePoints:
+            def __init__(self, values, *, points_dim, attribute_dims=None):
+                self.values = values
+                self.points_dim = points_dim
+                self.attribute_dims = attribute_dims
+
+        class FakeBoxes:
+            def __init__(self, values, *, box_dim, origin):
+                self.values = values
+                self.box_dim = box_dim
+                self.origin = origin
+                self.converted_to = None
+
+            def convert_to(self, box_mode):
+                self.converted_to = box_mode
+                return self
+
+        modules, get_box_type = _fake_bevfusion_modules(
+            FakeCompose, FakePoints, FakeBoxes, "LIDAR_MODE"
+        )
+        config = _lidar_only_cbgs_config()
+        original_config = copy.deepcopy(config)
+        with mock.patch.dict(sys.modules, modules):
+            proxy = adapter.build_streaming_dataset_proxy(config)
+
+        self.assertEqual(config, original_config)
+        get_box_type.assert_called_once_with("LiDAR")
+        self.assertEqual(
+            [transform["type"] for transform in compose_instances[0].config],
+            [
+                "LoadAnnotations3D",
+                "PointShuffle",
+                "DefaultFormatBundle3D",
+                "Collect3D",
+            ],
+        )
+
+        points = np.arange(10, dtype=np.float32).reshape(2, 5)
+        boxes = np.arange(18, dtype=np.float32).reshape(2, 9)
+        labels = np.asarray([0, 1], dtype=np.int64)
+        decoded = {
+            "token": "sample-a",
+            "points": points,
+            "ann_info": {
+                "gt_bboxes_3d": boxes,
+                "gt_labels_3d": labels,
+            },
+        }
+
+        result = proxy.pipeline(decoded)
+        prepared = result["composed"]
+        self.assertIs(decoded["points"], points)
+        self.assertIs(decoded["ann_info"]["gt_bboxes_3d"], boxes)
+        self.assertIsInstance(prepared["points"], FakePoints)
+        self.assertIs(prepared["points"].values, points)
+        self.assertEqual(prepared["points"].points_dim, 5)
+        self.assertIsNone(prepared["points"].attribute_dims)
+        converted_boxes = prepared["ann_info"]["gt_bboxes_3d"]
+        self.assertIsInstance(converted_boxes, FakeBoxes)
+        self.assertIs(converted_boxes.values, boxes)
+        self.assertEqual(converted_boxes.box_dim, 9)
+        self.assertEqual(converted_boxes.origin, (0.5, 0.5, 0))
+        self.assertEqual(converted_boxes.converted_to, "LIDAR_MODE")
+        self.assertIs(prepared["ann_info"]["gt_labels_3d"], labels)
+        self.assertEqual(prepared["img_fields"], [])
+        self.assertEqual(prepared["bbox3d_fields"], [])
+        self.assertEqual(prepared["pts_mask_fields"], [])
+        self.assertEqual(prepared["pts_seg_fields"], [])
+        self.assertEqual(prepared["bbox_fields"], [])
+        self.assertEqual(prepared["mask_fields"], [])
+        self.assertEqual(prepared["seg_fields"], [])
+        self.assertIs(prepared["box_type_3d"], FakeBoxes)
+        self.assertEqual(prepared["box_mode_3d"], "LIDAR_MODE")
+
+    def test_streaming_proxy_rejects_non_v1_or_ambiguous_pipelines_redacted(self):
+        adapter = _adapter_module()
+        private_path = "tos://access-key:secret@internal/private.pkl"
+        first = {
+            "type": "LoadPointsFromFile",
+            "coord_type": "LIDAR",
+            "load_dim": 5,
+            "use_dim": 5,
+        }
+        invalid_configs = {
+            "not_cbgs": {"type": "NuScenesDataset", "dataset": {}},
+            "wrong_inner_dataset": _lidar_only_cbgs_config(),
+            "camera": _lidar_only_cbgs_config(
+                first,
+                {"type": "LoadMultiViewImageFromFiles", "path": private_path},
+            ),
+            "multisweep": _lidar_only_cbgs_config(
+                first,
+                {"type": "LoadPointsFromMultiSweeps", "path": private_path},
+            ),
+            "object_paste": _lidar_only_cbgs_config(
+                first,
+                {"type": "ObjectPaste", "info_path": private_path},
+            ),
+            "load_points_not_first": _lidar_only_cbgs_config(
+                {"type": "PointShuffle"}, first
+            ),
+            "second_load_points": _lidar_only_cbgs_config(
+                first, {**first, "path": private_path}
+            ),
+            "missing_training_format": _lidar_only_cbgs_config(
+                first,
+                {
+                    "type": "LoadAnnotations3D",
+                    "with_bbox_3d": True,
+                    "with_label_3d": True,
+                },
+                {
+                    "type": "Collect3D",
+                    "keys": ["points", "gt_bboxes_3d", "gt_labels_3d"],
+                },
+            ),
+        }
+        invalid_configs["wrong_inner_dataset"]["dataset"]["type"] = "OtherDataset"
+        camera_modality = _lidar_only_cbgs_config()
+        camera_modality["dataset"]["modality"]["use_camera"] = True
+        camera_modality["dataset"]["dataset_root"] = private_path
+        invalid_configs["camera_modality"] = camera_modality
+        unknown_modality = _lidar_only_cbgs_config()
+        unknown_modality["dataset"]["modality"]["use_depth"] = True
+        invalid_configs["unknown_modality"] = unknown_modality
+
+        compose_calls = []
+
+        class UnexpectedCompose:
+            def __init__(self, _pipeline):
+                compose_calls.append(_pipeline)
+                raise AssertionError("invalid config reached Compose")
+
+        modules, _get_box_type = _fake_bevfusion_modules(
+            UnexpectedCompose, object, object, "LIDAR_MODE"
+        )
+        with mock.patch.dict(sys.modules, modules):
+            for label, config in invalid_configs.items():
+                with self.subTest(label=label):
+                    with self.assertRaisesRegex(ValueError, "lidar-only v1") as caught:
+                        adapter.build_streaming_dataset_proxy(config)
+                    self.assertNotIn(private_path, str(caught.exception))
+                    self.assertNotIn("access-key", str(caught.exception))
+                    self.assertNotIn("secret", str(caught.exception))
+                    self.assertNotIn("internal", str(caught.exception))
+        self.assertEqual(compose_calls, [])
+
+    def test_streaming_pipeline_redacts_dependency_and_transform_errors(self):
+        adapter = _adapter_module()
+        private_path = "tos://access-key:secret@internal/private.bin"
+
+        class BrokenCompose:
+            def __init__(self, _pipeline):
+                raise OSError(private_path)
+
+        modules, _get_box_type = _fake_bevfusion_modules(
+            BrokenCompose, object, object, "LIDAR_MODE"
+        )
+        with mock.patch.dict(sys.modules, modules):
+            with self.assertRaisesRegex(ValueError, "construct") as caught:
+                adapter.build_streaming_dataset_proxy(_lidar_only_cbgs_config())
+        self.assertNotIn(private_path, str(caught.exception))
+
+        class RuntimeBrokenCompose:
+            def __init__(self, _pipeline):
+                self.transforms = []
+
+            def __call__(self, _sample):
+                raise OSError(private_path)
+
+        class FakePoints:
+            def __init__(self, _values, **_kwargs):
+                pass
+
+        class FakeBoxes:
+            def __init__(self, _values, **_kwargs):
+                pass
+
+            def convert_to(self, _box_mode):
+                return self
+
+        modules, _get_box_type = _fake_bevfusion_modules(
+            RuntimeBrokenCompose, FakePoints, FakeBoxes, "LIDAR_MODE"
+        )
+        with mock.patch.dict(sys.modules, modules):
+            proxy = adapter.build_streaming_dataset_proxy(
+                _lidar_only_cbgs_config()
+            )
+        sample = {
+            "points": np.zeros((1, 5), dtype=np.float32),
+            "ann_info": {
+                "gt_bboxes_3d": np.zeros((0, 9), dtype=np.float32),
+                "gt_labels_3d": np.zeros((0,), dtype=np.int64),
+            },
+        }
+        with self.assertRaisesRegex(RuntimeError, "pipeline failed") as caught:
+            proxy.pipeline(sample)
+        self.assertNotIn(private_path, str(caught.exception))
+
     def test_streaming_loader_accepts_exact_count_and_keeps_per_gpu_batch(self):
         adapter = _adapter_module()
         pipeline = mock.Mock(side_effect=lambda sample: {**sample, "augmented": True})

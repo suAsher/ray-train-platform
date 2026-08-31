@@ -47,10 +47,11 @@ datasetPublisher:
   region: cn-shanghai
   sourceIndexName: .raytrain/trusted-index-v2.pkl
   serviceAccount:
-    # The role policy already covers the source and internal derived prefixes.
-    # Its OIDC trust must also allow the generated publisher ServiceAccount.
+    # Static credentials are selected below, so this IRSA role must stay empty.
     irsaRoleTRN: ""
   credentials:
+    # Referenced only by publisher Jobs in ray-train-platform. Tenant training
+    # and debug Pods never receive this Secret or its values.
     existingSecret: tos-credentials
   image:
     repository: ray-dataset-publisher

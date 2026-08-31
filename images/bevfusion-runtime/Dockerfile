@@ -103,7 +103,11 @@ COPY images/workspace/raytrain-managed /usr/local/bin/raytrain-managed
 COPY images/workspace/raytrain_runtime /usr/local/lib/raytrain-platform/raytrain_runtime
 COPY examples/bevfusion/raytrain-bevfusion-prepare-runtime.sh /usr/local/bin/raytrain-bevfusion-prepare
 COPY examples/bevfusion/patches/ray_data_s1h.py /usr/local/lib/raytrain-platform/bevfusion/ray_data_s1h.py
-RUN chmod 0755 /usr/local/bin/raytrain-launch /usr/local/bin/raytrain-managed /usr/local/bin/raytrain-bevfusion-prepare \
+COPY examples/bevfusion/patches/runtime_patch.py /usr/local/lib/raytrain-platform/bevfusion/runtime_patch.py
+COPY examples/bevfusion/patches/ray_train_managed.py /usr/local/lib/raytrain-platform/bevfusion/ray_train_managed.py
+COPY examples/bevfusion/patches/ray_data_s1h_integration.py /usr/local/lib/raytrain-platform/bevfusion/ray_data_s1h_integration.py
+COPY examples/bevfusion/patches/apply-platform-runtime.py /usr/local/bin/apply-raytrain-bevfusion-runtime
+RUN chmod 0755 /usr/local/bin/raytrain-launch /usr/local/bin/raytrain-managed /usr/local/bin/raytrain-bevfusion-prepare /usr/local/bin/apply-raytrain-bevfusion-runtime \
  && install -d -o ray -g users /workspace \
  && python3 -c "import pathlib, site; pathlib.Path(site.getsitepackages()[0], 'raytrain_bevfusion_canary.pth').write_text('/opt/bevfusion\\n/usr/local/lib/raytrain-platform\\n/usr/local/lib/raytrain-platform/bevfusion\\n', encoding='utf-8')" \
  && python3 -c "import mmcv, mmdet, mmdet3d, pyarrow, ray, torch; assert ray.__version__ == '${RAY_CANARY_VERSION}'; assert torch.__version__.startswith('2.4.1')" \

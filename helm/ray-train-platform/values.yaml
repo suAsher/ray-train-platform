@@ -133,12 +133,14 @@ backend:
 
 # CPU-only batch settings for immutable dataset publication. This component has
 # its own default-off rollout gate and does not inherit the training Kueue gate.
-# The workload can obtain cloud credentials only through VKE IRSA; the chart
-# never creates or copies a TOS credential Secret.
+# The workload obtains cloud credentials through exactly one platform-owned
+# source: VKE IRSA or an existing namespace-scoped TOS Secret. Helm never
+# creates or copies that Secret, and tenant training/debug Pods never consume it.
 datasetPublisher:
   enabled: false
   # Empty values inherit the platform TOS bucket/endpoint/region. Keep the
-  # source and derived prefixes separate; credentials come only from IRSA.
+  # source and derived prefixes separate. Select exactly one credential source
+  # below; production may reference an existing platform-managed Secret.
   sourceBucket: ""
   targetBucket: ""
   endpoint: ""
