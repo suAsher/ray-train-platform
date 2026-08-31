@@ -45,8 +45,8 @@ for required_publisher_value in \
   '  credentials:' \
   '    existingSecret: tos-credentials' \
   '    repository: ray-dataset-publisher' \
-  '    tag: shard-parallel-r9' \
-  '    digest: sha256:8a2ec0b6e2e0451b3bf07f73001b9c9f644c0e934842be76976b07a1f866f049' \
+  '    tag: shard-parallel-r10' \
+  '    digest: sha256:9be1e1b2f25b9450c5309ed878c2afc3d187dd08a30ee990a0fba58c0550ba92' \
   '  priorityValue: -1000' \
   '  workingDirectory: /data/output'; do
   require_block "$publisher" "$required_publisher_value" \
