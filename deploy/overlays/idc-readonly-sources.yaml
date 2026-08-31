@@ -4,8 +4,8 @@
 backend:
   image:
     repository: ray-train-backend
-    tag: idc-r1
-    digest: sha256:0d90e9f1f817c0d8cb418990540bcc7662780d0eab1886e8d34194064f27cf52
+    tag: idc-r2
+    digest: sha256:04f45d1393b58492738837cf25eae6658168c33ae478c614c990eb2d1b70d071
 
 idcDataSpaces:
   enabled: true
