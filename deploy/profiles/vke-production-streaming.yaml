@@ -6,8 +6,8 @@
 backend:
   image:
     repository: ray-train-backend
-    tag: irsa-20260831-4741073
-    digest: sha256:2c652104b21858dc9f2560c783bafc0a94873e42eacc5d8d1d68915ff89c6870
+    tag: publisher-diag-r1
+    digest: sha256:058efdbed7179cdc8a7a4e9c79787f129a7224fa0d7de52c62a37ce01f3c81c2
   datasetVersioningEnabled: true
   rayDataStreamingEnabled: true
   datasetInternalPrefix: ray-train/platform/datasets
