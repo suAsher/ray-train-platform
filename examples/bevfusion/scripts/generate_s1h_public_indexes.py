@@ -5,14 +5,12 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ProcessPoolExecutor
-from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 import hashlib
 import json
-import os
 from pathlib import Path
 import pickle
-import sys
 from typing import Any
 
 
@@ -148,27 +146,6 @@ def _dump_generated_infos(path: Path, infos: list[dict[str, Any]], metadata: dic
     temporary.replace(path)
 
 
-@contextmanager
-def _redirect_process_output(stream: Any):
-    """Redirect Python and native progress output in one worker process."""
-    sys.stdout.flush()
-    sys.stderr.flush()
-    stdout_fd = os.dup(1)
-    stderr_fd = os.dup(2)
-    try:
-        os.dup2(stream.fileno(), 1)
-        os.dup2(stream.fileno(), 2)
-        with redirect_stdout(stream), redirect_stderr(stream):
-            yield
-    finally:
-        sys.stdout.flush()
-        sys.stderr.flush()
-        os.dup2(stdout_fd, 1)
-        os.dup2(stderr_fd, 2)
-        os.close(stdout_fd)
-        os.close(stderr_fd)
-
-
 def _generate_package(arguments: tuple[PackageSpec, Path, int, int]) -> dict[str, Any]:
     package, output_root, max_sweeps, min_scene_samples = arguments
     output = output_root / "packages" / package.collection / package.name
@@ -198,7 +175,7 @@ def _generate_package(arguments: tuple[PackageSpec, Path, int, int]) -> dict[str
     converter_log = output / "converter.log"
     try:
         with converter_log.open("a", encoding="utf-8") as log_stream:
-            with _redirect_process_output(log_stream):
+            with redirect_stdout(log_stream), redirect_stderr(log_stream):
                 create_nuscenes_infos(
                     str(package.path),
                     str(output),
@@ -209,7 +186,7 @@ def _generate_package(arguments: tuple[PackageSpec, Path, int, int]) -> dict[str
                     min_scene_samples=min_scene_samples,
                     lidar_only=True,
                 )
-    except Exception as error:
+    except (FileNotFoundError, KeyError, ValueError, AssertionError, IndexError) as error:
         train.unlink(missing_ok=True)
         val.unlink(missing_ok=True)
         receipt.unlink(missing_ok=True)

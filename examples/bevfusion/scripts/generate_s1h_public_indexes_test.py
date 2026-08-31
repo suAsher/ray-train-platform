@@ -141,6 +141,30 @@ class GenerateS1HPublicIndexesTest(unittest.TestCase):
         self.assertEqual(result["error_type"], "KeyError")
         self.assertIn("missing-category-token", result["reason"])
 
+    def test_does_not_quarantine_infrastructure_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._package(root, "site-a", "package-a", samples=1)
+            package = self.generator.discover_packages(root)[0]
+            output = root / "output"
+
+            tools = types.ModuleType("tools")
+            data_converter = types.ModuleType("tools.data_converter")
+            converter = types.ModuleType("tools.data_converter.nuscenes_converter")
+
+            def fail_for_storage_error(*_args, **_kwargs):
+                raise OSError(22, "invalid storage operation")
+
+            converter.create_nuscenes_infos = fail_for_storage_error
+            modules = {
+                "tools": tools,
+                "tools.data_converter": data_converter,
+                "tools.data_converter.nuscenes_converter": converter,
+            }
+            with mock.patch.dict(sys.modules, modules):
+                with self.assertRaisesRegex(OSError, "invalid storage operation"):
+                    self.generator._generate_package((package, output, 0, 81))
+
     @staticmethod
     def _package(root: Path, collection: str, name: str, *, samples: int) -> Path:
         package = root / collection / name
