@@ -6,8 +6,8 @@
 backend:
   image:
     repository: ray-train-backend
-    tag: publisher-diag-r1
-    digest: sha256:058efdbed7179cdc8a7a4e9c79787f129a7224fa0d7de52c62a37ce01f3c81c2
+    tag: publisher-state-r2
+    digest: sha256:473cda7e5e112992ed0d031c1baf83e48104168c8d3aa11424778a5e0f7657ba
   datasetVersioningEnabled: true
   rayDataStreamingEnabled: true
   datasetInternalPrefix: ray-train/platform/datasets
