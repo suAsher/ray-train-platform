@@ -428,6 +428,7 @@ func datasetPublicationControllerOptions(cfg config.Config) datasetpublisher.Con
 		ImagePullPolicy:       cfg.DatasetPublisherImagePullPolicy,
 		ServiceAccountName:    cfg.DatasetPublisherServiceAccount,
 		IRSARoleTRN:           cfg.DatasetPublisherIRSARoleTRN,
+		ProxySecretName:       cfg.DatasetPublisherProxySecret,
 		QueueName:             cfg.DatasetPublisherQueueName,
 		PriorityClassName:     cfg.DatasetPublisherPriorityClassName,
 		WorkingDirectory:      cfg.DatasetPublisherWorkingDirectory,

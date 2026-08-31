@@ -50,6 +50,8 @@ datasetPublisher:
     # The role policy already covers the source and internal derived prefixes.
     # Its OIDC trust must also allow the generated publisher ServiceAccount.
     irsaRoleTRN: trn:iam::2103446203:role/tos-rw
+  proxy:
+    existingSecret: ray-dataset-publisher-egress
   image:
     repository: ray-dataset-publisher
     tag: list-inventory-r4

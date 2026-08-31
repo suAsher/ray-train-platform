@@ -148,6 +148,10 @@ datasetPublisher:
     # Optional VKE IAM role TRN. Empty means no
     # vke.volcengine.com/role-trn annotation is rendered.
     irsaRoleTRN: ""
+  # Optional existing Secret with http_proxy, https_proxy and no_proxy keys.
+  # The chart never stores or renders the proxy values themselves.
+  proxy:
+    existingSecret: ""
   image:
     repository: ray-dataset-publisher
     tag: "REPLACE_WITH_IMMUTABLE_TAG"

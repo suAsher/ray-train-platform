@@ -84,6 +84,7 @@ type ControllerOptions struct {
 	ImagePullPolicy       string
 	ServiceAccountName    string
 	IRSARoleTRN           string
+	ProxySecretName       string
 	QueueName             string
 	PriorityClassName     string
 	WorkingDirectory      string
@@ -154,6 +155,7 @@ type PublicationJobSpec struct {
 	imagePullPolicy       string
 	serviceAccountName    string
 	irsaRoleTRN           string
+	proxySecretName       string
 	queueName             string
 	priorityClassName     string
 	workingDirectory      string
@@ -184,6 +186,7 @@ func (spec PublicationJobSpec) TOSRegion() string          { return spec.tosRegi
 func (spec PublicationJobSpec) ImagePullPolicy() string    { return spec.imagePullPolicy }
 func (spec PublicationJobSpec) ServiceAccountName() string { return spec.serviceAccountName }
 func (spec PublicationJobSpec) IRSARoleTRN() string        { return spec.irsaRoleTRN }
+func (spec PublicationJobSpec) ProxySecretName() string    { return spec.proxySecretName }
 func (spec PublicationJobSpec) QueueName() string          { return spec.queueName }
 func (spec PublicationJobSpec) PriorityClassName() string  { return spec.priorityClassName }
 func (spec PublicationJobSpec) WorkingDirectory() string   { return spec.workingDirectory }
@@ -494,6 +497,7 @@ func (controller *Controller) jobSpec(request ReconcileRequest) (PublicationJobS
 		imagePullPolicy:    controller.options.ImagePullPolicy,
 		serviceAccountName: controller.options.ServiceAccountName,
 		irsaRoleTRN:        controller.options.IRSARoleTRN,
+		proxySecretName:    controller.options.ProxySecretName,
 		queueName:          controller.options.QueueName, priorityClassName: controller.options.PriorityClassName,
 		workingDirectory:      controller.options.WorkingDirectory,
 		internalPrefix:        controller.options.InternalPrefix,
@@ -547,6 +551,7 @@ func validControllerOptions(options ControllerOptions) bool {
 		!validPublicationImagePullPolicy(options.ImagePullPolicy) ||
 		!isPublicationDNSLabel(options.ServiceAccountName) ||
 		!validPublicationIRSARoleTRN(options.IRSARoleTRN) ||
+		(options.ProxySecretName != "" && !isPublicationDNSLabel(options.ProxySecretName)) ||
 		!isPublicationDNSLabel(options.QueueName) ||
 		!isPublicationDNSLabel(options.PriorityClassName) ||
 		!validPublicationWorkingDirectory(options.WorkingDirectory) ||

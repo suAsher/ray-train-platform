@@ -69,6 +69,16 @@ func TestDatasetPublicationControllerOptionsCarryOptionalIRSARoleTRN(t *testing.
 	}
 }
 
+func TestDatasetPublicationControllerOptionsCarryProxySecretReference(t *testing.T) {
+	cfg := validDatasetPublicationManagerConfig()
+	cfg.DatasetPublisherProxySecret = "dataset-publisher-egress"
+
+	options := datasetPublicationControllerOptions(cfg)
+	if options.ProxySecretName != cfg.DatasetPublisherProxySecret {
+		t.Fatalf("controller proxy Secret=%q, want %q", options.ProxySecretName, cfg.DatasetPublisherProxySecret)
+	}
+}
+
 func validDatasetPublicationManagerConfig() config.Config {
 	return config.Config{
 		DatasetVersioningEnabled:                 true,

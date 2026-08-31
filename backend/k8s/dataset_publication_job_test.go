@@ -119,6 +119,7 @@ func TestRenderDatasetPublicationJobIsSecureCPUOnlyAndImmutable(t *testing.T) {
 func TestRenderDatasetPublicationJobInjectsManualVKEIRSAWhenConfigured(t *testing.T) {
 	spec := publicationJobSpecForTest()
 	spec.irsaRoleTRN = "trn:iam::2103446203:role/tos-rw"
+	spec.proxySecretName = "dataset-publisher-egress"
 
 	job, err := renderDatasetPublicationJob(spec)
 	if err != nil {
@@ -136,6 +137,15 @@ func TestRenderDatasetPublicationJobInjectsManualVKEIRSAWhenConfigured(t *testin
 	wantEnv := []corev1.EnvVar{
 		{Name: "VOLCENGINE_OIDC_ROLE_TRN", Value: spec.irsaRoleTRN},
 		{Name: "VOLCENGINE_OIDC_TOKEN_FILE", Value: wantTokenFile},
+	}
+	for _, name := range []string{"http_proxy", "https_proxy", "no_proxy"} {
+		wantEnv = append(wantEnv, corev1.EnvVar{
+			Name: name,
+			ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: spec.proxySecretName},
+				Key:                  name,
+			}},
+		})
 	}
 	if !reflect.DeepEqual(container.Env, wantEnv) || len(container.EnvFrom) != 0 {
 		t.Fatalf("manual IRSA env=%#v envFrom=%#v, want %#v and no envFrom", container.Env, container.EnvFrom, wantEnv)
@@ -172,7 +182,7 @@ func TestRenderDatasetPublicationJobInjectsManualVKEIRSAWhenConfigured(t *testin
 	}
 
 	manifest := string(mustJSON(job))
-	for _, forbidden := range []string{"secretKeyRef", "secretRef", "TOS_ACCESS_KEY", "TOS_SECRET_KEY", "VOLCENGINE_ACCESS_KEY", "VOLCENGINE_SECRET_KEY"} {
+	for _, forbidden := range []string{"secretRef", "TOS_ACCESS_KEY", "TOS_SECRET_KEY", "VOLCENGINE_ACCESS_KEY", "VOLCENGINE_SECRET_KEY"} {
 		if strings.Contains(manifest, forbidden) {
 			t.Fatalf("manual IRSA Job contains forbidden %q", forbidden)
 		}
@@ -884,6 +894,7 @@ type fakePublicationJobSpec struct {
 	imagePullPolicy       string
 	serviceAccountName    string
 	irsaRoleTRN           string
+	proxySecretName       string
 	queueName             string
 	priorityClassName     string
 	workingDirectory      string
@@ -964,6 +975,7 @@ func (spec fakePublicationJobSpec) TOSRegion() string          { return spec.tos
 func (spec fakePublicationJobSpec) ImagePullPolicy() string    { return spec.imagePullPolicy }
 func (spec fakePublicationJobSpec) ServiceAccountName() string { return spec.serviceAccountName }
 func (spec fakePublicationJobSpec) IRSARoleTRN() string        { return spec.irsaRoleTRN }
+func (spec fakePublicationJobSpec) ProxySecretName() string    { return spec.proxySecretName }
 func (spec fakePublicationJobSpec) QueueName() string          { return spec.queueName }
 func (spec fakePublicationJobSpec) PriorityClassName() string  { return spec.priorityClassName }
 func (spec fakePublicationJobSpec) WorkingDirectory() string   { return spec.workingDirectory }
