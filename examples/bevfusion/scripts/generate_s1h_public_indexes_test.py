@@ -72,6 +72,29 @@ class GenerateS1HPublicIndexesTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "scene_token"):
                 self.generator.merge_package_outputs(output)
 
+    def test_quarantines_whole_package_when_tokens_overlap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            package_a = output / "packages" / "site-a" / "package-a"
+            package_b = output / "packages" / "site-b" / "package-b"
+            self._write_pkl(package_a / "nuscenes_infos_train.pkl", [self._info("shared")])
+            self._write_pkl(package_a / "nuscenes_infos_val.pkl", [])
+            self._write_pkl(
+                package_b / "nuscenes_infos_train.pkl",
+                [self._info("shared"), self._info("unique-b")],
+            )
+            self._write_pkl(package_b / "nuscenes_infos_val.pkl", [])
+            rejected = []
+
+            summary = self.generator.merge_package_outputs(output, rejected)
+            merged = self._read_pkl(output / "merged_nuscenes_infos_train.pkl")
+
+        self.assertEqual([item["token"] for item in merged], ["shared"])
+        self.assertEqual(summary, {"train_samples": 1, "val_samples": 0})
+        self.assertEqual(rejected[0]["collection"], "site-b")
+        self.assertEqual(rejected[0]["package"], "package-b")
+        self.assertEqual(rejected[0]["error_type"], "DuplicateToken")
+
     def test_metadata_fingerprint_changes_when_a_package_is_updated(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "labeled"

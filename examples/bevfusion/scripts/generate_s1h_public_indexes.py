@@ -84,7 +84,10 @@ def _metadata_fingerprint(metadata_files: dict[str, bytes]) -> str:
     return digest.hexdigest()
 
 
-def merge_package_outputs(output_root: Path) -> dict[str, int]:
+def merge_package_outputs(
+    output_root: Path,
+    rejected_packages: list[dict[str, str]] | None = None,
+) -> dict[str, int]:
     root = Path(output_root)
     train_infos: list[dict[str, Any]] = []
     val_infos: list[dict[str, Any]] = []
@@ -95,20 +98,41 @@ def merge_package_outputs(output_root: Path) -> dict[str, int]:
         val_file = train_file.with_name("nuscenes_infos_val.pkl")
         if not val_file.is_file():
             raise ValueError(f"missing paired validation PKL for {train_file.parent.name}")
-        for split, source, destination in (
-            ("train", train_file, train_infos),
-            ("val", val_file, val_infos),
+        package_splits: dict[str, list[dict[str, Any]]] = {}
+        package_tokens: set[str] = set()
+        for split, source in (
+            ("train", train_file),
+            ("val", val_file),
         ):
+            split_infos: list[dict[str, Any]] = []
             for info in _load_generated_infos(source):
                 token = info.get("token")
                 if not isinstance(token, str) or not token:
                     raise ValueError(f"{split} info must contain a token")
-                if token in seen_tokens:
+                if token in package_tokens:
                     raise ValueError("generated PKLs contain a duplicate token")
                 if not isinstance(info.get("scene_token"), str) or not info["scene_token"]:
                     raise ValueError("generated PKLs must contain scene_token provenance")
-                seen_tokens.add(token)
-                destination.append(dict(info))
+                package_tokens.add(token)
+                split_infos.append(dict(info))
+            package_splits[split] = split_infos
+
+        overlapping = sorted(package_tokens & seen_tokens)
+        if overlapping:
+            if rejected_packages is None:
+                raise ValueError("generated PKLs contain a duplicate token")
+            rejected_packages.append(
+                {
+                    "collection": train_file.parent.parent.name,
+                    "error_type": "DuplicateToken",
+                    "package": train_file.parent.name,
+                    "reason": f"package overlaps {len(overlapping)} token(s) already accepted",
+                }
+            )
+            continue
+        seen_tokens.update(package_tokens)
+        train_infos.extend(package_splits["train"])
+        val_infos.extend(package_splits["val"])
 
     if not train_files:
         raise ValueError("no generated package PKLs were found")
@@ -273,10 +297,10 @@ def main() -> int:
                         "reason": str(result["reason"]),
                     }
                 )
-    _write_json_atomic(arguments.output_root / "rejected-packages.json", rejected)
     if discover_packages(arguments.source_root) != packages:
         raise ValueError("source metadata changed during index generation; retry with a new output root")
-    summary = merge_package_outputs(arguments.output_root)
+    summary = merge_package_outputs(arguments.output_root, rejected)
+    _write_json_atomic(arguments.output_root / "rejected-packages.json", rejected)
     summary["accepted_packages"] = len(packages) - len(rejected)
     summary["rejected_packages"] = len(rejected)
     print(json.dumps({"merged": summary}, separators=(",", ":"), sort_keys=True), flush=True)
