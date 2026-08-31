@@ -32,6 +32,8 @@ from raytrain_publisher.pack import (  # noqa: E402
 )
 from raytrain_publisher.tos_storage import (  # noqa: E402
     MAX_INDEX_BYTES,
+    TOSListedObject,
+    TOSListPage,
     TOSObjectInfo,
     TOSStorageError,
 )
@@ -354,6 +356,48 @@ class CloudPublisherCLIContractTests(unittest.TestCase):
 
 
 class CloudPublisherPipelineTests(unittest.TestCase):
+    def test_remote_metadata_prefers_paginated_listing_over_per_object_head(self) -> None:
+        samples = tuple(
+            _sample(f"sample-{index}", f"scene-{index}", f"scene-{index}/points.bin", timestamp=index)
+            for index in range(3)
+        )
+
+        class ListingStorage:
+            def __init__(self) -> None:
+                self.markers: list[str | None] = []
+
+            def list_source(self, marker: str | None = None, max_keys: int = 1000) -> TOSListPage:
+                self.markers.append(marker)
+                self.asserted_max_keys = max_keys
+                if marker is None:
+                    return TOSListPage(
+                        objects=(
+                            TOSListedObject(key="ignored.bin", size=7, etag="ignored"),
+                            TOSListedObject(key="scene-0/points.bin", size=128, etag="a"),
+                            TOSListedObject(key="scene-1/points.bin", size=256, etag="b"),
+                        ),
+                        next_marker="page-2",
+                    )
+                return TOSListPage(
+                    objects=(TOSListedObject(key="scene-2/points.bin", size=512, etag="c"),),
+                    next_marker=None,
+                )
+
+            def head_source(self, _key: str) -> object:
+                raise AssertionError("listing-capable storage must not issue per-object HEAD")
+
+        storage = ListingStorage()
+        inspected, source_objects = cloud_publish._inspect_remote_samples(samples, storage=storage)
+
+        self.assertEqual(storage.markers, [None, "page-2"])
+        self.assertEqual(storage.asserted_max_keys, 1000)
+        self.assertEqual({key: value.size for key, value in source_objects.items()}, {
+            "scene-0/points.bin": 128,
+            "scene-1/points.bin": 256,
+            "scene-2/points.bin": 512,
+        })
+        self.assertEqual([item.source.size for item in inspected], [128, 256, 512])
+
     def test_remote_metadata_inspection_is_parallel_bounded_and_deduplicated(self) -> None:
         samples = tuple(
             _sample(f"sample-{index}", f"scene-{index}", f"scene-{index}/points.bin", timestamp=index)

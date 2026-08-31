@@ -409,20 +409,15 @@ def _inspect_remote_samples(
     if max_workers < 1 or max_workers > 128 or batch_size < max_workers:
         raise ValueError("remote metadata inspection bounds are invalid")
     source_keys = tuple(dict.fromkeys(sample["lidar_path"] for sample in samples))
-    inspected_sources: list[_SourceObject] = []
-    with ThreadPoolExecutor(
-        max_workers=min(max_workers, len(source_keys)),
-        thread_name_prefix="tos-head",
-    ) as executor:
-        for offset in range(0, len(source_keys), batch_size):
-            batch = source_keys[offset : offset + batch_size]
-            inspected_sources.extend(
-                _validated_source_object(info)
-                for info in executor.map(storage.head_source, batch)
-            )
-    if len(inspected_sources) != len(source_keys):
-        raise ValueError("remote metadata inspection count is invalid")
-    source_objects = dict(zip(source_keys, inspected_sources))
+    if callable(getattr(storage, "list_source", None)):
+        source_objects = _list_remote_source_objects(source_keys, storage=storage)
+    else:
+        source_objects = _head_remote_source_objects(
+            source_keys,
+            storage=storage,
+            max_workers=max_workers,
+            batch_size=batch_size,
+        )
     inspected = tuple(
         _RemoteSample(
             sample=sample,
@@ -436,6 +431,70 @@ def _inspect_remote_samples(
         for sample in samples
     )
     return inspected, source_objects
+
+
+def _head_remote_source_objects(
+    source_keys: tuple[str, ...],
+    *,
+    storage: Any,
+    max_workers: int,
+    batch_size: int,
+) -> dict[str, _SourceObject]:
+    inspected_sources: list[_SourceObject] = []
+    with ThreadPoolExecutor(
+        max_workers=min(max_workers, len(source_keys)),
+        thread_name_prefix="tos-head",
+    ) as executor:
+        for offset in range(0, len(source_keys), batch_size):
+            batch = source_keys[offset : offset + batch_size]
+            inspected_sources.extend(
+                _validated_source_object(info)
+                for info in executor.map(storage.head_source, batch)
+            )
+    if len(inspected_sources) != len(source_keys):
+        raise ValueError("remote metadata inspection count is invalid")
+    return dict(zip(source_keys, inspected_sources))
+
+
+def _list_remote_source_objects(
+    source_keys: tuple[str, ...],
+    *,
+    storage: Any,
+) -> dict[str, _SourceObject]:
+    required = frozenset(source_keys)
+    found: dict[str, _SourceObject] = {}
+    marker = None
+    seen_markers: set[str] = set()
+    page_count = 0
+    listed_count = 0
+    while True:
+        page = storage.list_source(marker=marker, max_keys=1000)
+        page_count += 1
+        objects = getattr(page, "objects", None)
+        next_marker = getattr(page, "next_marker", None)
+        if not isinstance(objects, tuple):
+            raise ValueError("source listing returned invalid objects")
+        listed_count += len(objects)
+        for listed in objects:
+            key = getattr(listed, "key", None)
+            if key in required:
+                found[key] = _validated_source_object(listed)
+        if page_count % 100 == 0 or next_marker is None:
+            _emit_progress(
+                "source-list-progress",
+                pages=page_count,
+                listed=listed_count,
+                matched=len(found),
+            )
+        if next_marker is None:
+            break
+        if not isinstance(next_marker, str) or not next_marker or next_marker in seen_markers:
+            raise ValueError("source listing marker is invalid")
+        seen_markers.add(next_marker)
+        marker = next_marker
+    if set(found) != set(required):
+        raise ValueError("trusted index references missing source objects")
+    return {key: found[key] for key in source_keys}
 
 
 def _validated_source_object(info: object) -> _SourceObject:
