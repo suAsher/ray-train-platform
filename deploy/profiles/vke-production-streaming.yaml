@@ -52,11 +52,11 @@ datasetPublisher:
     irsaRoleTRN: trn:iam::2103446203:role/tos-rw
   image:
     repository: ray-dataset-publisher
-    tag: module-path-r2
-    digest: sha256:227ca0074d0e1ec11b60f6eed8df96ae2bb12fc64c654d0c50433f44803d7964
+    tag: parallel-head-r3
+    digest: sha256:8121be0553a1bc7717303fab2f98fbacc9eff29048118142d95b107eed2d0889
   imagePullPolicy: ""
   preferredNodeSelector:
-    platform.wellspiking.ai/pool: control-plane
+    platform.wellspiking.ai/gpu-pool: production
   nodeSelector: {}
   kueue:
     resourceFlavorName: ""
@@ -69,11 +69,11 @@ datasetPublisher:
   priorityValue: -1000
   resources:
     requests:
-      cpu: 1000m
-      memory: 2Gi
+      cpu: 16
+      memory: 64Gi
     limits:
-      cpu: 4000m
-      memory: 8Gi
+      cpu: 64
+      memory: 256Gi
   job:
     backoffLimit: 3
     activeDeadlineSeconds: 604800

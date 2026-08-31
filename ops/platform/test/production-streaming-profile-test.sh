@@ -43,8 +43,8 @@ for required_publisher_value in \
   '  sourceIndexName: .raytrain/trusted-index-v2.pkl' \
   '    irsaRoleTRN: trn:iam::2103446203:role/tos-rw' \
   '    repository: ray-dataset-publisher' \
-  '    tag: module-path-r2' \
-  '    digest: sha256:227ca0074d0e1ec11b60f6eed8df96ae2bb12fc64c654d0c50433f44803d7964' \
+  '    tag: parallel-head-r3' \
+  '    digest: sha256:8121be0553a1bc7717303fab2f98fbacc9eff29048118142d95b107eed2d0889' \
   '  priorityValue: -1000' \
   '  workingDirectory: /data/output'; do
   require_block "$publisher" "$required_publisher_value" \
@@ -66,11 +66,11 @@ require_block "$publisher" '  tolerations: []' \
   'publisher tolerations must be explicit under --reuse-values'
 require_block "$publisher" '  resources:
     requests:
-      cpu: 1000m
-      memory: 2Gi
+      cpu: 16
+      memory: 64Gi
     limits:
-      cpu: 4000m
-      memory: 8Gi' \
+      cpu: 64
+      memory: 256Gi' \
   'publisher CPU-only resources must be complete'
 require_block "$publisher" '  job:
     backoffLimit: 3
@@ -86,7 +86,7 @@ require_block "$publisher" '  manager:
     pollIntervalSeconds: 10' \
   'publisher manager polling must be explicit under --reuse-values'
 require_block "$publisher" '  preferredNodeSelector:
-    platform.wellspiking.ai/pool: control-plane' \
+    platform.wellspiking.ai/gpu-pool: production' \
   'publisher soft placement preference must be explicit under --reuse-values'
 require_block "$publisher" '  nodeSelector: {}' \
   'publisher hard node selector must be explicitly empty for GPU-node fallback'
