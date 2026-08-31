@@ -6,8 +6,8 @@
 backend:
   image:
     repository: ray-train-backend
-    tag: publisher-egress-r3
-    digest: sha256:d90fde226ea2fe334ad7bbcd1e0d1c09fdb3a8a58da7c4fd2b69bac0927220ba
+    tag: tos-secret-r5
+    digest: sha256:9c046f94bff45f7bf0d11bad4d9b4321ecfbec7c00dc78c29bd01a05238de94a
   datasetVersioningEnabled: true
   rayDataStreamingEnabled: true
   datasetInternalPrefix: ray-train/platform/datasets
@@ -54,8 +54,8 @@ datasetPublisher:
     existingSecret: tos-credentials
   image:
     repository: ray-dataset-publisher
-    tag: list-inventory-r4
-    digest: sha256:ac06835d94377cdbfbe93309088992fa897ba553f8e2f22a44eb094ed8bb40cb
+    tag: tos-secret-r5
+    digest: sha256:d3853bcd882af93da92ad5cba5e233d206698ec4b5620f5bcee98275b6494434
   imagePullPolicy: ""
   preferredNodeSelector:
     platform.wellspiking.ai/gpu-pool: production
