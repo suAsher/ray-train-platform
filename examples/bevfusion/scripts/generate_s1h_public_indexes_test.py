@@ -7,7 +7,9 @@ from pathlib import Path
 import pickle
 import sys
 import tempfile
+import types
 import unittest
+from unittest import mock
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -83,6 +85,34 @@ class GenerateS1HPublicIndexesTest(unittest.TestCase):
         self.assertEqual(len(before), 1)
         self.assertEqual(len(after), 1)
         self.assertNotEqual(before[0].fingerprint, after[0].fingerprint)
+
+    def test_rejects_package_with_missing_payload_without_aborting_other_packages(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package_path = self._package(root, "site-a", "package-a", samples=1)
+            package = self.generator.discover_packages(root)[0]
+            output = root / "output"
+
+            tools = types.ModuleType("tools")
+            data_converter = types.ModuleType("tools.data_converter")
+            converter = types.ModuleType("tools.data_converter.nuscenes_converter")
+
+            def fail_for_missing_payload(*_args, **_kwargs):
+                raise FileNotFoundError(str(package_path / "samples/LIDAR_TOP/missing.bin"))
+
+            converter.create_nuscenes_infos = fail_for_missing_payload
+            modules = {
+                "tools": tools,
+                "tools.data_converter": data_converter,
+                "tools.data_converter.nuscenes_converter": converter,
+            }
+            with mock.patch.dict(sys.modules, modules):
+                result = self.generator._generate_package((package, output, 0, 81))
+
+        self.assertEqual(result["status"], "rejected")
+        self.assertEqual(result["collection"], "site-a")
+        self.assertEqual(result["package"], "package-a")
+        self.assertIn("missing.bin", result["reason"])
 
     @staticmethod
     def _package(root: Path, collection: str, name: str, *, samples: int) -> Path:

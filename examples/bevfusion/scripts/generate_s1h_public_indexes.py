@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ProcessPoolExecutor
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 import hashlib
 import json
@@ -158,7 +159,12 @@ def _generate_package(arguments: tuple[PackageSpec, Path, int, int]) -> dict[str
         "sample_count": package.sample_count,
     }
     if train.is_file() and val.is_file() and _receipt_matches(receipt, expected_receipt):
-        return {"collection": package.collection, "package": package.name, "cached": True}
+        return {
+            "collection": package.collection,
+            "package": package.name,
+            "cached": True,
+            "status": "accepted",
+        }
     if train.exists() or val.exists() or receipt.exists():
         raise ValueError(
             f"stale package output requires a new output root: {package.collection}/{package.name}"
@@ -166,23 +172,42 @@ def _generate_package(arguments: tuple[PackageSpec, Path, int, int]) -> dict[str
     output.mkdir(parents=True, exist_ok=True)
     from tools.data_converter.nuscenes_converter import create_nuscenes_infos
 
-    create_nuscenes_infos(
-        str(package.path),
-        str(output),
-        "nuscenes",
-        version="v1.0-mini",
-        max_sweeps=max_sweeps,
-        site_name=None,
-        min_scene_samples=min_scene_samples,
-        lidar_only=True,
-    )
+    converter_log = output / "converter.log"
+    try:
+        with converter_log.open("a", encoding="utf-8") as log_stream:
+            with redirect_stdout(log_stream), redirect_stderr(log_stream):
+                create_nuscenes_infos(
+                    str(package.path),
+                    str(output),
+                    "nuscenes",
+                    version="v1.0-mini",
+                    max_sweeps=max_sweeps,
+                    site_name=None,
+                    min_scene_samples=min_scene_samples,
+                    lidar_only=True,
+                )
+    except FileNotFoundError as error:
+        train.unlink(missing_ok=True)
+        val.unlink(missing_ok=True)
+        receipt.unlink(missing_ok=True)
+        return {
+            "collection": package.collection,
+            "package": package.name,
+            "reason": str(error),
+            "status": "rejected",
+        }
     temporary_receipt = receipt.with_suffix(".json.tmp")
     temporary_receipt.write_text(
         json.dumps(expected_receipt, ensure_ascii=False, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     temporary_receipt.replace(receipt)
-    return {"collection": package.collection, "package": package.name, "cached": False}
+    return {
+        "collection": package.collection,
+        "package": package.name,
+        "cached": False,
+        "status": "accepted",
+    }
 
 
 def _receipt_matches(path: Path, expected: dict[str, Any]) -> bool:
@@ -190,6 +215,16 @@ def _receipt_matches(path: Path, expected: dict[str, Any]) -> bool:
         return json.loads(path.read_text(encoding="utf-8")) == expected
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return False
+
+
+def _write_json_atomic(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
 
 
 def parse_args() -> argparse.Namespace:
@@ -225,12 +260,24 @@ def main() -> int:
         (package, arguments.output_root, arguments.max_sweeps, arguments.min_scene_samples)
         for package in packages
     )
+    rejected: list[dict[str, str]] = []
     with ProcessPoolExecutor(max_workers=arguments.workers) as executor:
         for result in executor.map(_generate_package, work):
             print(json.dumps({"package": result}, separators=(",", ":"), sort_keys=True), flush=True)
+            if result.get("status") == "rejected":
+                rejected.append(
+                    {
+                        "collection": str(result["collection"]),
+                        "package": str(result["package"]),
+                        "reason": str(result["reason"]),
+                    }
+                )
+    _write_json_atomic(arguments.output_root / "rejected-packages.json", rejected)
     if discover_packages(arguments.source_root) != packages:
         raise ValueError("source metadata changed during index generation; retry with a new output root")
     summary = merge_package_outputs(arguments.output_root)
+    summary["accepted_packages"] = len(packages) - len(rejected)
+    summary["rejected_packages"] = len(rejected)
     print(json.dumps({"merged": summary}, separators=(",", ":"), sort_keys=True), flush=True)
     return 0
 
