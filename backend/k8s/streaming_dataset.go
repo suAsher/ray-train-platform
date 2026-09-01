@@ -135,15 +135,19 @@ func appendStreamingDatasetRoot(
 	mount DatasetManifestMount,
 	cachePolicy domain.DatasetCachePolicy,
 ) ([]any, []any, []any) {
+	volumeName := pvcVolumeName(volumes, mount.ClaimName)
+	if volumeName == "" {
+		volumeName = datasetRootVolumeName
+		volumes = append(volumes, map[string]any{
+			"name": datasetRootVolumeName,
+			"persistentVolumeClaim": map[string]any{
+				"claimName": mount.ClaimName, "readOnly": true,
+			},
+		})
+	}
 	volumeMounts = append(volumeMounts, map[string]any{
-		"name": datasetRootVolumeName, "mountPath": datasetContainerPath(mount.DatasetID),
+		"name": volumeName, "mountPath": datasetContainerPath(mount.DatasetID),
 		"subPath": mount.DatasetRootSubPath, "readOnly": true,
-	})
-	volumes = append(volumes, map[string]any{
-		"name": datasetRootVolumeName,
-		"persistentVolumeClaim": map[string]any{
-			"claimName": mount.ClaimName, "readOnly": true,
-		},
 	})
 	environment = append(environment, streamingDatasetEnvironmentEntries(mount, cachePolicy)...)
 	return volumeMounts, volumes, environment

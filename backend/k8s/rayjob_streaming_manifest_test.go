@@ -137,6 +137,42 @@ func TestRenderStreamingJobMountsOnlyExactDatasetRootReadOnlyOnHeadAndWorkers(t 
 	}
 }
 
+func TestRenderStreamingJobReusesWritableTenantRootForReadOnlyDataset(t *testing.T) {
+	job := streamingManifestJob()
+	job.Spec.Output = domain.DataLocation{Space: domain.DataSpaceMyRuns, RelativePath: "streaming"}
+	job.Spec.ResolvedDataRoots = domain.ResolvedDataSpaceRoots{
+		Personal: &domain.ResolvedDataRoot{
+			Space: domain.DataSpaceWorkspace, ClaimName: "data-tenant-local",
+			SubPath: "tenants/local/users/user-a",
+		},
+		Public: &domain.ResolvedDataRoot{
+			Space: domain.DataSpacePublic, ClaimName: "data-tenant-local",
+			SubPath: "public", ReadOnly: true,
+		},
+	}
+	job.Spec.ResolvedDataMounts.Output = &domain.ResolvedDataMount{
+		Space: domain.DataSpaceMyRuns, BindingSpace: domain.DataSpaceWorkspace,
+		ClaimName: "data-tenant-local", SubPath: "tenants/local/users/user-a/runs/streaming/job-01",
+		MountPath: domain.DataMountOutputPath,
+	}
+
+	manifest, err := RenderRayJob(job, streamingRenderOptions())
+	if err != nil {
+		t.Fatalf("render tenant-root streaming job: %v", err)
+	}
+	for name, pod := range map[string]map[string]any{
+		"head": cacheHeadPodSpec(t, manifest.Object), "worker": cacheWorkerPodSpec(t, manifest.Object),
+	} {
+		if got := countPVCVolumes(pod, "data-tenant-local"); got != 1 {
+			t.Fatalf("%s declared the shared tenant PVC %d times; duplicate read-only sources make output read-only", name, got)
+		}
+		assertStorageMountWithSubPath(t, pod, "platform-data-personal", "data-tenant-local",
+			domain.DataMountOutputPath, "tenants/local/users/user-a/runs/streaming/job-01", false)
+		assertStorageMountWithSubPath(t, pod, "platform-data-personal", "data-tenant-local",
+			streamingDatasetMountPath, streamingDatasetRootSubPath, true)
+	}
+}
+
 func TestRenderStreamingBoundedCacheUsesDualNVMeOnWorkersAndOneSpillVolumeOnHead(t *testing.T) {
 	job := streamingManifestJob()
 	job.Spec.CachePolicy = domain.DatasetCachePolicyBounded
