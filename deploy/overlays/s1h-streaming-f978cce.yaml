@@ -7,8 +7,8 @@ backend:
 datasetPublisher:
   image:
     repository: ray-dataset-publisher
-    tag: s1h-streaming-f978cce
-    digest: sha256:783d24f167c4fb84c2bd47ef39985736bf0e04d86966e7cc79c56667c77e4675
+    tag: s1h-wait-bc4b423
+    digest: sha256:9e318b631e6ce704f6791a6029f0cac04ee5162fbcbd6c614a51f3d52c1cd9ed
   distributed:
     # The legacy v1 scanner currently holds one publisher slot. Keeping the
     # new pack fan-out at 15 prevents a 16+1 Kueue quota deadlock without
