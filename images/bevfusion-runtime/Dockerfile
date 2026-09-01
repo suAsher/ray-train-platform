@@ -41,8 +41,6 @@ WORKDIR /workspace
 FROM ${RAY_CANARY_FOUNDATION_IMAGE} AS bevfusion-ray258-canary
 ARG RAY_CANARY_VERSION=2.58.0
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-ARG RESNET50_URL=https://download.pytorch.org/models/resnet50-0676ba61.pth
-ARG RESNET50_SHA256=0676ba61b6795bbe1773cffd859882e5e297624d384b6993f7c9e683e722fb8a
 
 USER root
 RUN test "${RAY_CANARY_VERSION}" = "2.58.0" \
@@ -94,6 +92,8 @@ RUN chmod 0755 /usr/local/bin/prepare-bevfusion-canary-source \
  && cd /opt/bevfusion \
  && FORCE_CUDA=1 MAX_JOBS=8 python3 setup.py build_ext --inplace
 
+ARG RESNET50_URL=https://download.pytorch.org/models/resnet50-0676ba61.pth
+ARG RESNET50_SHA256=0676ba61b6795bbe1773cffd859882e5e297624d384b6993f7c9e683e722fb8a
 RUN python3 -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
       --constraint /opt/raytrain-build/constraints-ray258.txt \
       addict==2.4.0 torchpack==0.3.1 \
