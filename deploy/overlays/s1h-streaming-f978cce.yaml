@@ -1,0 +1,24 @@
+backend:
+  image:
+    repository: ray-train-backend
+    tag: s1h-streaming-f978cce
+    digest: sha256:d4d7bb5b16233445a3dbf2ffb964945c26ad399759304b8f681fb05f9e1e3930
+
+datasetPublisher:
+  image:
+    repository: ray-dataset-publisher
+    tag: s1h-streaming-f978cce
+    digest: sha256:783d24f167c4fb84c2bd47ef39985736bf0e04d86966e7cc79c56667c77e4675
+  distributed:
+    # The legacy v1 scanner currently holds one publisher slot. Keeping the
+    # new pack fan-out at 15 prevents a 16+1 Kueue quota deadlock without
+    # deleting or mutating that in-flight publication.
+    maxParallelism: 15
+
+rayTrain:
+  runtimeCatalog:
+    canaryManagedBEVFusion:
+      reference: harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion-ray258@sha256:1509370cf803ef46734c8cd74837523b125929f2cc95e49569bcc347090777d5
+      rayVersion: 2.58.0
+      supportedEngines:
+        - ray-train
