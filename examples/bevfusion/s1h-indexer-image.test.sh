@@ -16,6 +16,7 @@ fail() {
 grep -Fq 'ARG BASE_IMAGE' "$dockerfile" || fail 'base image must be supplied explicitly'
 grep -Fq 'COPY tools/data_converter/__init__.py' "$dockerfile" || fail 'converter package marker is missing'
 grep -Fq 'COPY tools/data_converter/nuscenes_converter.py' "$dockerfile" || fail 'pinned patched converter is missing'
+grep -Fq 'COPY tools/data_converter/eval_scenes_by_site.txt' "$dockerfile" || fail 'pinned validation split is missing'
 grep -Fq 'COPY mmdet3d /home/westwell/bevfusion/mmdet3d' "$dockerfile" ||
   fail 'pinned Python modules must retain the base image extension tree'
 grep -Fq '/home/westwell/bevfusion' "$dockerfile" || fail 'retained extension tree must be importable'
@@ -25,6 +26,7 @@ grep -Fq 'COPY raytrain_publisher' "$dockerfile" || fail 'restricted publisher s
 grep -Fq 'USER 1000:1000' "$dockerfile" || fail 'runtime must be non-root'
 
 grep -Fq 'git -C "$source_dir" archive' "$builder" || fail 'build input must come from a Git commit'
+grep -Fq 'tools/data_converter/eval_scenes_by_site.txt' "$builder" || fail 'build context must include the pinned validation split'
 grep -Fq 's1h_lidar_converter_patch.py' "$builder" || fail 'build must apply the reviewed LiDAR-only patch'
 grep -A1 -F 's1h_lidar_converter_patch.py' "$builder" | grep -Fq '"$context_dir"' ||
   fail 'LiDAR-only patch must receive the temporary repository root'

@@ -24,6 +24,7 @@ grep -Fq -- '--format multimodal-v2' "$runner" || fail 'job must explicitly sele
 grep -Fq -- '--max-sweeps 10' "$runner" || fail 'job must preserve S1H sweep inputs'
 grep -Fq 'manifest root committed last' "$runner" || fail 'job must commit the root manifest after every part'
 grep -Fq -- '--run-id' "$runner" || fail 'job must support an auditable retry without changing the dataset version'
+grep -Fq 'output_key="$version-$run_id"' "$runner" || fail 'a retry must use an isolated resumable output root'
 grep -Fq -- '--finalize-only' "$runner" || fail 'job must support resuming a validated build at publication'
 grep -Fq 'source metadata changed during index generation' \
   "$root_dir/examples/bevfusion/scripts/generate_s1h_public_indexes.py" ||

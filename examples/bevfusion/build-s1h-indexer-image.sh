@@ -15,7 +15,7 @@ cleanup() { rm -rf "$context_dir"; }
 trap cleanup EXIT
 
 mkdir -p "$context_dir/raytrain_publisher"
-git -C "$source_dir" archive HEAD mmdet3d tools/data_converter/__init__.py tools/data_converter/nuscenes_converter.py |
+git -C "$source_dir" archive HEAD mmdet3d tools/data_converter/__init__.py tools/data_converter/nuscenes_converter.py tools/data_converter/eval_scenes_by_site.txt |
   tar -x -C "$context_dir"
 
 python3 "$platform_root/examples/bevfusion/patches/s1h_lidar_converter_patch.py" \

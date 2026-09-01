@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 import sys
 import unittest
@@ -25,6 +26,10 @@ class S1HLidarConverterPatchTest(unittest.TestCase):
         self.assertIn("site_name=site_name, lidar_only=lidar_only", patched)
         self.assertIn('"scene_token": sample["scene_token"]', patched)
         self.assertIn("        if not lidar_only:\n            # obtain 6 image", patched)
+        self.assertIn(
+            'camera_types = _raytrain_camera_types(sample["data"], site_name)',
+            patched,
+        )
         self.assertIn("        # obtain sweeps for a single key-frame", patched)
         self.assertEqual(patch_converter_source(patched), patched)
 
@@ -33,6 +38,83 @@ class S1HLidarConverterPatchTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "layout"):
             patch_converter_source("def unrelated():\n    pass\n")
+
+    def test_selects_the_pinned_camera_family_from_each_samples_real_channels(self):
+        from s1h_lidar_converter_patch import patch_converter_source
+
+        patched = patch_converter_source(self._baseline())
+        module = ast.parse(patched)
+        helper = next(
+            node
+            for node in module.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_raytrain_camera_types"
+        )
+        namespace = {}
+        exec(
+            compile(ast.Module(body=[helper], type_ignores=[]), "<camera-helper>", "exec"),
+            namespace,
+        )
+        select = namespace["_raytrain_camera_types"]
+
+        self.assertEqual(
+            select(
+                {
+                    "CAM_FRONT_MID": "front",
+                    "CAM_FRONT_MID_RIGHT": "right",
+                    "CAM_FRONT_MID_LEFT": "left",
+                    "CAM_REAR_TOP_LEFT": "rear-left",
+                    "CAM_REAR_TOP_RIGHT": "rear-right",
+                }
+            ),
+            [
+                "CAM_FRONT_MID",
+                "CAM_FRONT_MID_RIGHT",
+                "CAM_FRONT_MID_LEFT",
+                "CAM_REAR_TOP_LEFT",
+                "CAM_REAR_TOP_RIGHT",
+            ],
+        )
+        self.assertEqual(
+            select(
+                {
+                    "CAM_FRONT_MID": "front",
+                    "CAM_FRONT_MID_RIGHT": "right",
+                    "CAM_FRONT_LEFT_TOP": "left",
+                    "CAM_REAR_LEFT": "rear-left",
+                    "CAM_REAR_RIGHT": "rear-right",
+                    "CAM_FRONT_LEFT": "extra-left",
+                    "CAM_FRONT_RIGHT": "extra-right",
+                }
+            ),
+            [
+                "CAM_FRONT_MID",
+                "CAM_FRONT_MID_RIGHT",
+                "CAM_FRONT_LEFT_TOP",
+                "CAM_REAR_LEFT",
+                "CAM_REAR_RIGHT",
+            ],
+        )
+        self.assertEqual(
+            select(
+                {
+                    "CAM_FRONT_MID": "front",
+                    "CAM_FRONT_RIGHT": "right",
+                    "CAM_FRONT_LEFT": "left",
+                    "CAM_REAR_LEFT": "rear-left",
+                    "CAM_REAR_RIGHT": "rear-right",
+                }
+            ),
+            [
+                "CAM_FRONT_MID",
+                "CAM_FRONT_RIGHT",
+                "CAM_FRONT_LEFT",
+                "CAM_REAR_LEFT",
+                "CAM_REAR_RIGHT",
+            ],
+        )
+        with self.assertRaisesRegex(KeyError, "unsupported camera layout"):
+            select({"CAM_UNKNOWN": "token"})
 
     @staticmethod
     def _baseline() -> str:

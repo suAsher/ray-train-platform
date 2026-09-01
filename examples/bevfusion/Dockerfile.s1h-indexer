@@ -10,6 +10,7 @@ WORKDIR /opt/bevfusion
 COPY mmdet3d /home/westwell/bevfusion/mmdet3d
 COPY tools/data_converter/__init__.py /opt/bevfusion/tools/data_converter/__init__.py
 COPY tools/data_converter/nuscenes_converter.py /opt/bevfusion/tools/data_converter/nuscenes_converter.py
+COPY tools/data_converter/eval_scenes_by_site.txt /opt/bevfusion/tools/data_converter/eval_scenes_by_site.txt
 
 WORKDIR /opt/raytrain-indexer
 COPY generate_s1h_public_indexes.py /opt/raytrain-indexer/generate_s1h_public_indexes.py

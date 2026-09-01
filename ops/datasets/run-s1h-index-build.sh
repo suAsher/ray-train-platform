@@ -84,7 +84,11 @@ if kubectl -n "$namespace" get job "$job_name" >/dev/null 2>&1; then
 fi
 
 source_root="/mnt/storage/public/$source_relative"
-output_root="$source_root/.raytrain/index-builds/$version"
+output_key="$version"
+if [[ -n "$run_id" ]]; then
+  output_key="$version-$run_id"
+fi
+output_root="$source_root/.raytrain/index-builds/$output_key"
 final_index="$source_root/.raytrain/indexes/$version/trusted-index-v3.json"
 if "$finalize_only"; then
   generation_command='test -f "$output_root/merged_nuscenes_infos_train.pkl" -a -f "$output_root/merged_nuscenes_infos_val.pkl" -a -f "$output_root/rejected-packages.json" || { echo "validated index build outputs are incomplete" >&2; exit 4; }'
