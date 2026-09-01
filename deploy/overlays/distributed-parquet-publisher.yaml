@@ -2,6 +2,16 @@
 # only together with --reuse-values so every existing release value (including
 # IDC read-only mounts) remains intact.  This does not alter RayJob templates.
 datasetPublisher:
+  # Kueue accounts an Indexed Job as maxParallelism copies of the Pod
+  # request. Keep the per-partition request bounded so 16 concurrent pack
+  # workers fit exactly in this publisher-only queue (16 CPU / 64 GiB).
+  resources:
+    requests:
+      cpu: "1"
+      memory: 4Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
   distributed:
     enabled: true
     # Each partition may produce several 256–512 MiB Parquet shards.  The
