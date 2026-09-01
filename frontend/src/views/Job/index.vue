@@ -51,7 +51,7 @@
 
     <!-- Jobs Table -->
     <div class="panel overflow-hidden">
-      <el-table :data="filteredJobs" style="width: 100%" class="!bg-transparent text-xs" v-loading="loading">
+      <el-table :data="jobs" style="width: 100%" class="!bg-transparent text-xs" v-loading="loading">
         <template #empty>
           <div class="py-12 space-y-3">
             <p class="text-slate-300 font-semibold">{{ emptyTitle }}</p>
@@ -133,12 +133,25 @@
           </template>
         </el-table-column>
       </el-table>
+      <div v-if="totalJobs > 0" class="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 px-5 py-4">
+        <p class="text-xs text-slate-500">共 {{ totalJobs }} 个任务</p>
+        <el-pagination
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
+          background
+          layout="prev, pager, next, sizes"
+          :page-sizes="[25, 50, 100, 200]"
+          :total="totalJobs"
+          @current-change="fetchJobs"
+          @size-change="resetAndFetch"
+        />
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { apiDelete, apiGet } from '../../api/client'
@@ -148,6 +161,7 @@ import { displayJobOwner } from '../../jobOwner'
 import { finishedLabel, formatDateTime, jobTimeline, originLabel } from '../../jobTimeline'
 import { copyToClipboard } from '../../clipboard'
 import { cacheQueryForJob } from '../../platformLimits'
+import { jobListPath, normalizeJobListPage } from '../../jobListPagination'
 
 const router = useRouter()
 const scope = ref('mine')
@@ -155,8 +169,12 @@ const searchKeyword = ref('')
 const statusFilter = ref('')
 const loading = ref(false)
 const jobs = ref([])
+const totalJobs = ref(0)
+const currentPage = ref(1)
+const pageSize = ref(50)
 const submitterNamesByID = ref(new Map())
 let refreshTimer
+let filterTimer
 
 const normalizeJob = (job) => {
   const spec = job.spec || {}
@@ -184,13 +202,18 @@ const normalizeJob = (job) => {
 const fetchJobs = async () => {
   loading.value = true
   try {
-    const query = new URLSearchParams()
-    if (statusFilter.value) query.set('status', statusFilter.value)
-    if (searchKeyword.value) query.set('keyword', searchKeyword.value)
-    const page = await apiGet(`/api/v1/jobs${query.size ? `?${query}` : ''}`)
-    jobs.value = (page.items || []).map(normalizeJob)
+    const page = normalizeJobListPage(await apiGet(jobListPath({
+      scope: scope.value,
+      limit: pageSize.value,
+      offset: (currentPage.value - 1) * pageSize.value,
+      status: statusFilter.value,
+      keyword: searchKeyword.value.trim(),
+    })))
+    jobs.value = page.items.map(normalizeJob)
+    totalJobs.value = page.total
   } catch (error) {
     jobs.value = []
+    totalJobs.value = 0
     ElMessage.error(error.message || '无法读取任务列表')
   } finally {
     loading.value = false
@@ -215,20 +238,8 @@ const loadSubmitterDirectory = async () => {
 
 const ownerLabel = (job) => displayJobOwner(job.userId, userId.value, submitterNamesByID.value)
 
-// The API already scopes results to the caller's tenant; this narrows further
-// to the jobs the signed-in user submitted.
-const scopedJobs = computed(() => (scope.value === 'mine' ? jobs.value.filter((j) => j.isMine) : jobs.value))
-
-const filteredJobs = computed(() => {
-  const keyword = searchKeyword.value.trim().toLowerCase()
-  return scopedJobs.value.filter((j) => {
-    const matchKey = !keyword || j.name.toLowerCase().includes(keyword) || j.id.toLowerCase().includes(keyword)
-    const matchStatus = !statusFilter.value || j.status === statusFilter.value
-    return matchKey && matchStatus
-  })
-})
-
-const hasAnyJob = computed(() => scopedJobs.value.length > 0)
+const scopedJobs = computed(() => jobs.value)
+const hasAnyJob = computed(() => totalJobs.value > 0)
 
 const emptyTitle = computed(() => {
   if (loading.value) return '正在读取任务…'
@@ -341,5 +352,19 @@ onMounted(() => {
   refreshTimer = window.setInterval(fetchJobs, 5000)
 })
 
-onUnmounted(() => window.clearInterval(refreshTimer))
+const resetAndFetch = () => {
+  currentPage.value = 1
+  fetchJobs()
+}
+
+watch([scope, statusFilter], resetAndFetch)
+watch(searchKeyword, () => {
+  window.clearTimeout(filterTimer)
+  filterTimer = window.setTimeout(resetAndFetch, 300)
+})
+
+onUnmounted(() => {
+  window.clearInterval(refreshTimer)
+  window.clearTimeout(filterTimer)
+})
 </script>

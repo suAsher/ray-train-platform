@@ -265,6 +265,9 @@ type TrainingJob struct {
 
 type JobFilter struct {
 	TenantID string
+	// UserID narrows a tenant-scoped list to the authenticated submitter. API
+	// handlers own this value; callers may not choose another user's identity.
+	UserID string
 	// AllTenants is reserved for platform-wide administrative views. API
 	// handlers must only set it after authorizing a SuperAdmin principal.
 	AllTenants bool

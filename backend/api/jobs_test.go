@@ -18,6 +18,7 @@ type fakeJobRepository struct {
 	identity    int
 	identityErr error
 	canceled    string
+	listFilter  domain.JobFilter
 }
 
 func (f *fakeJobRepository) Create(_ context.Context, job *domain.TrainingJob, _ string) error {
@@ -44,13 +45,22 @@ func (f *fakeJobRepository) GetByID(_ context.Context, id string) (*domain.Train
 	return nil, context.Canceled
 }
 func (f *fakeJobRepository) List(_ context.Context, filter domain.JobFilter) (domain.Page[domain.TrainingJob], error) {
+	f.listFilter = filter
 	items := make([]domain.TrainingJob, 0)
 	for _, job := range f.jobs {
-		if filter.AllTenants || job.TenantID == filter.TenantID {
+		if (filter.AllTenants || job.TenantID == filter.TenantID) && (filter.UserID == "" || job.UserID == filter.UserID) {
 			items = append(items, job)
 		}
 	}
-	return domain.Page[domain.TrainingJob]{Items: items, Total: int64(len(items))}, nil
+	start := filter.Offset
+	if start < 0 || start > len(items) {
+		start = 0
+	}
+	end := start + filter.Limit
+	if filter.Limit <= 0 || end > len(items) {
+		end = len(items)
+	}
+	return domain.Page[domain.TrainingJob]{Items: items[start:end], Limit: filter.Limit, Offset: filter.Offset, Total: int64(len(items))}, nil
 }
 func (f *fakeJobRepository) SetDesiredState(_ context.Context, tenant, id string, state domain.DesiredState) error {
 	f.canceled = tenant + "/" + id + "/" + string(state)
@@ -231,6 +241,50 @@ func TestSuperAdminListsJobsAcrossTenantBoundaries(t *testing.T) {
 
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "job-team-a") || !strings.Contains(response.Body.String(), "job-team-b") {
 		t.Fatalf("super administrator must see every tenant job, got %d: %s", response.Code, response.Body.String())
+	}
+}
+
+func TestListJobsPaginatesAndScopesMineToAuthenticatedUser(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repository := &fakeJobRepository{jobs: []domain.TrainingJob{
+		{ID: "job-owned-1", TenantID: "team-a", UserID: "user-a", Spec: domain.JobSpec{Name: "owned-1"}},
+		{ID: "job-owned-2", TenantID: "team-a", UserID: "user-a", Spec: domain.JobSpec{Name: "owned-2"}},
+		{ID: "job-other", TenantID: "team-a", UserID: "user-b", Spec: domain.JobSpec{Name: "other"}},
+	}}
+	handler := NewHandler(repository, Options{})
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("ray-platform-principal", auth.Principal{Subject: "user-a", TenantID: "team-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal})
+		c.Next()
+	})
+	handler.RegisterTrainingRoutes(router.Group("/api/v1"))
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/jobs?scope=mine&limit=1&offset=1", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected success, got %d: %s", response.Code, response.Body.String())
+	}
+	if repository.listFilter.UserID != "user-a" || repository.listFilter.Limit != 1 || repository.listFilter.Offset != 1 {
+		t.Fatalf("unexpected list filter: %+v", repository.listFilter)
+	}
+	if !strings.Contains(response.Body.String(), "job-owned-2") || strings.Contains(response.Body.String(), "job-other") || !strings.Contains(response.Body.String(), `"total":2`) {
+		t.Fatalf("unexpected paginated response: %s", response.Body.String())
+	}
+}
+
+func TestListJobsRejectsUnknownScope(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := NewHandler(&fakeJobRepository{}, Options{})
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("ray-platform-principal", auth.Principal{Subject: "user-a", TenantID: "team-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal})
+		c.Next()
+	})
+	handler.RegisterTrainingRoutes(router.Group("/api/v1"))
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/jobs?scope=all", nil))
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "INVALID_SCOPE") {
+		t.Fatalf("unexpected response: %d %s", response.Code, response.Body.String())
 	}
 }
 

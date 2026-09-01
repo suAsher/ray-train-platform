@@ -451,6 +451,9 @@ func (r *GormRepository) List(ctx context.Context, filter domain.JobFilter) (dom
 	if !filter.AllTenants {
 		query = query.Where("tenant_id = ?", filter.TenantID)
 	}
+	if filter.UserID != "" {
+		query = query.Where("user_id = ?", filter.UserID)
+	}
 	if filter.Status != "" {
 		query = query.Where("observed_state = ?", filter.Status)
 	}

@@ -504,6 +504,14 @@ func (h *Handler) listJobs(c *gin.Context) {
 	offset, _ := strconv.Atoi(c.Query("offset"))
 	tenantID := strings.TrimSpace(c.Query("tenantId"))
 	filter := domain.JobFilter{TenantID: principal.TenantID, Status: domain.State(c.Query("status")), Keyword: c.Query("keyword"), Limit: limit, Offset: offset}
+	switch c.DefaultQuery("scope", "team") {
+	case "team":
+	case "mine":
+		filter.UserID = principal.Subject
+	default:
+		h.writeError(c, http.StatusBadRequest, "INVALID_SCOPE", "scope must be mine or team")
+		return
+	}
 	if principal.HasRole(domain.RoleSuperAdmin) {
 		if tenantID == "" {
 			filter.AllTenants = true
