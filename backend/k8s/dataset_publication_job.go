@@ -252,7 +252,12 @@ func readDatasetPublicationJobStatus(
 			return datasetpublisher.PublicationJobStatus{Phase: datasetpublisher.PublicationJobStabilizing}, nil
 		case datasetpublisher.PublicationExecutionPack:
 			return datasetpublisher.PublicationJobStatus{
-				Phase: datasetpublisher.PublicationJobValidating,
+				// An active Indexed pack must expose its monotonic completion
+				// count without advancing VALIDATING to PACKING. The controller's
+				// distributed PublicationJobPacking branch records progress in
+				// place; only PublicationJobPacked (all indexes complete) advances
+				// the persisted lifecycle state.
+				Phase: datasetpublisher.PublicationJobPacking,
 				Progress: datasetpublisher.PublicationProgress{
 					TotalPartitions: int64(spec.PartitionCount()), CompletedPartitions: int64(job.Status.Succeeded),
 				},

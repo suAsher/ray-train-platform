@@ -508,10 +508,10 @@ func TestEnsureDatasetPublicationJobMapsRunningAndFailedConditions(t *testing.T)
 			wantPhase: datasetpublisher.PublicationJobStabilizing,
 		},
 		{
-			name:      "distributed pack active stays validating until every index succeeds",
+			name:      "distributed pack active reports packing progress without advancing state",
 			phase:     datasetpublisher.PublicationExecutionPack,
 			status:    batchv1.JobStatus{Active: 16, Succeeded: 32},
-			wantPhase: datasetpublisher.PublicationJobValidating,
+			wantPhase: datasetpublisher.PublicationJobPacking,
 			wantDone:  32,
 		},
 		{
