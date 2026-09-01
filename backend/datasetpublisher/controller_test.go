@@ -194,6 +194,41 @@ func TestControllerDoesNotAdvanceDistributedPhaseWhileJobIsActive(t *testing.T) 
 	}
 }
 
+func TestControllerRepairsPrematureDistributedPackingStateBeforeFinalize(t *testing.T) {
+	repository := newMemoryPublicationRunRepository("team-a")
+	jobs := &scriptedPublicationJobClient{results: []publicationJobResult{
+		{status: PublicationJobStatus{Phase: PublicationJobPacking, Progress: PublicationProgress{TotalPartitions: 8}}},
+		{status: PublicationJobStatus{Phase: PublicationJobPacked, Progress: PublicationProgress{TotalPartitions: 8, CompletedPartitions: 8}}},
+		{status: PublicationJobStatus{Phase: PublicationJobPending}},
+	}}
+	options := publicationControllerOptions()
+	options.DistributedEnabled = true
+	options.PartitionCount = 8
+	options.MaxParallelism = 2
+	controller, err := NewController(repository, jobs, options)
+	if err != nil {
+		t.Fatalf("new controller: %v", err)
+	}
+	request := publicationReconcileRequest("publication-premature-packing")
+	repository.run = &domain.DatasetPublicationRun{
+		ID: request.RunID, DatasetID: request.DatasetID, DatasetVersionID: request.DatasetVersionID,
+		ExecutionMode: domain.DatasetPublicationExecutionDistributed, State: domain.DatasetVersionPacking,
+		TotalPartitions: 8,
+	}
+	for attempt := 0; attempt < 3; attempt++ {
+		if _, err := controller.Reconcile(context.Background(), request); err != nil {
+			t.Fatalf("reconcile %d: %v", attempt+1, err)
+		}
+	}
+	specs := jobs.recordedSpecs()
+	wantPhases := []PublicationExecutionPhase{PublicationExecutionPack, PublicationExecutionPack, PublicationExecutionFinalize}
+	for index, want := range wantPhases {
+		if specs[index].ExecutionPhase() != want {
+			t.Fatalf("spec %d phase=%q want=%q", index, specs[index].ExecutionPhase(), want)
+		}
+	}
+}
+
 func TestControllerKeepsPersistedLegacyRunOnLegacyJobAfterDistributedUpgrade(t *testing.T) {
 	repository := newMemoryPublicationRunRepository("team-a")
 	jobs := &scriptedPublicationJobClient{results: []publicationJobResult{{status: PublicationJobStatus{Phase: PublicationJobPending}}}}

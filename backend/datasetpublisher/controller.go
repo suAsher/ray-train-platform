@@ -549,7 +549,18 @@ func (controller *Controller) jobSpec(request ReconcileRequest, run domain.Datas
 		case domain.DatasetVersionValidating:
 			phase = PublicationExecutionPack
 		case domain.DatasetVersionPacking:
-			phase = PublicationExecutionFinalize
+			// PACKING is the externally visible state after all Indexed
+			// completions. A rollout can observe a stale PACKING state from an
+			// older controller, though, so use the persisted immutable completion
+			// aggregate as the finalization gate. Until every partition is
+			// recorded complete, reconcile the Indexed pack Job again.
+			if run.TotalPartitions == int64(controller.options.PartitionCount) &&
+				run.CompletedPartitions == int64(controller.options.PartitionCount) &&
+				run.FailedPartitions == 0 {
+				phase = PublicationExecutionFinalize
+			} else {
+				phase = PublicationExecutionPack
+			}
 		default:
 			return PublicationJobSpec{}, ErrPublicationControllerUnavailable
 		}
