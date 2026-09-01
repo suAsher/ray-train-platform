@@ -93,7 +93,8 @@ RUN chmod 0755 /usr/local/bin/prepare-bevfusion-canary-source \
  && FORCE_CUDA=1 MAX_JOBS=8 python3 setup.py build_ext --inplace
 
 RUN python3 -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
-      --constraint /opt/raytrain-build/constraints-ray258.txt addict==2.4.0 \
+      --constraint /opt/raytrain-build/constraints-ray258.txt \
+      addict==2.4.0 torchpack==0.3.1 \
  && apt-get purge -y build-essential git ninja-build \
  && apt-get autoremove -y \
  && rm -rf /var/lib/apt/lists/* /root/.cache
@@ -111,7 +112,7 @@ COPY examples/bevfusion/patches/apply-platform-runtime.py /usr/local/bin/apply-r
 RUN chmod 0755 /usr/local/bin/raytrain-launch /usr/local/bin/raytrain-managed /usr/local/bin/raytrain-bevfusion-prepare /usr/local/bin/apply-raytrain-bevfusion-runtime \
  && install -d -o ray -g users /workspace \
  && python3 -c "import pathlib, site; pathlib.Path(site.getsitepackages()[0], 'raytrain_bevfusion_canary.pth').write_text('/opt/bevfusion\\n/usr/local/lib/raytrain-platform\\n/usr/local/lib/raytrain-platform/bevfusion\\n', encoding='utf-8')" \
- && python3 -c "import mmcv, mmdet, mmdet3d, pyarrow, ray, torch; assert ray.__version__ == '${RAY_CANARY_VERSION}'; assert torch.__version__.startswith('2.4.1')" \
+ && python3 -c "import mmcv, mmdet, mmdet3d, pyarrow, ray, torch, torchpack; assert ray.__version__ == '${RAY_CANARY_VERSION}'; assert torch.__version__.startswith('2.4.1')" \
  && python3 -c "import importlib; [importlib.import_module(name) for name in ('mmdet3d.ops.ball_query.ball_query_ext', 'mmdet3d.ops.furthest_point_sample.furthest_point_sample_ext', 'mmdet3d.ops.gather_points.gather_points_ext', 'mmdet3d.ops.group_points.group_points_ext', 'mmdet3d.ops.interpolate.interpolate_ext', 'mmdet3d.ops.knn.knn_ext')]" \
  && python3 -c "from mmdet3d.ops.voxel import voxel_layer; import raytrain_runtime.managed_driver, raytrain_runtime.ray_data, ray_data_s1h, raytrain_bevfusion_worker" \
  && python3 -m pip check

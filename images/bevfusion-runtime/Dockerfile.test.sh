@@ -25,6 +25,7 @@ grep -Fq "assert torch.__version__.startswith('2.4.1')" "$dockerfile"
 grep -Fq 'ray[default,train,tune]==${RAY_CANARY_VERSION}' "$dockerfile"
 grep -Fq 'pyarrow==25.0.1' "$dockerfile"
 grep -Fq 'addict==2.4.0' "$dockerfile"
+grep -Fq 'torchpack==0.3.1' "$dockerfile"
 grep -Fq 'shapely==1.8.5' "$dockerfile"
 if grep -Fq 'shapely==1.8.5.post1' "$dockerfile"; then
   echo 'post-release Shapely is outside nuscenes-devkit 1.1.10 constraint' >&2
@@ -54,7 +55,7 @@ grep -Fq 'ENV PLATFORM_RAY_VERSION=2.58.0' "$dockerfile"
 grep -Fq 'ENV RAYTRAIN_MANAGED_PREPARE_HOOK=bevfusion/raytrain_bevfusion_worker.py' "$dockerfile"
 grep -Fq 'ENV LD_LIBRARY_PATH=/home/ray/anaconda3/lib/python3.10/site-packages/torch/lib:${LD_LIBRARY_PATH}' "$dockerfile"
 grep -Fq 'ENV MPLCONFIGDIR=/tmp/raytrain-matplotlib' "$dockerfile"
-grep -Fq 'import mmcv, mmdet, mmdet3d, pyarrow, ray, torch' "$dockerfile"
+grep -Fq 'import mmcv, mmdet, mmdet3d, pyarrow, ray, torch, torchpack' "$dockerfile"
 for extension in \
   mmdet3d.ops.ball_query.ball_query_ext \
   mmdet3d.ops.furthest_point_sample.furthest_point_sample_ext \

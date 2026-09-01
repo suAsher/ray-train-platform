@@ -165,6 +165,7 @@ assert_contracts() {
   require_literal images/bevfusion-runtime/Dockerfile 'ray[default,train,tune]==${RAY_CANARY_VERSION}'
   require_literal images/bevfusion-runtime/Dockerfile "assert torch.__version__.startswith('2.4.1')"
   require_literal images/bevfusion-runtime/Dockerfile 'pyarrow==25.0.1'
+  require_literal images/bevfusion-runtime/Dockerfile 'torchpack==0.3.1'
   require_literal images/bevfusion-runtime/Dockerfile 'COPY images/bevfusion-runtime/constraints-ray258.txt /opt/raytrain-build/constraints-ray258.txt'
   require_literal images/bevfusion-runtime/Dockerfile '--constraint /opt/raytrain-build/constraints-ray258.txt'
   require_literal images/bevfusion-runtime/Dockerfile 'apt-get purge -y build-essential git ninja-build'
@@ -181,6 +182,7 @@ assert_contracts() {
   require_literal images/bevfusion-runtime/Dockerfile 'COPY examples/bevfusion/patches/ray_data_s1h.py /usr/local/lib/raytrain-platform/bevfusion/ray_data_s1h.py'
   require_literal images/bevfusion-runtime/Dockerfile 'ENV PLATFORM_RAY_VERSION=2.58.0'
   require_literal images/bevfusion-runtime/Dockerfile 'ENV RAY_TRAIN_V2_ENABLED=1'
+  require_literal images/bevfusion-runtime/Dockerfile 'import mmcv, mmdet, mmdet3d, pyarrow, ray, torch, torchpack'
 
   local bevfusion_canary_stage
   bevfusion_canary_stage="$(docker_stage images/bevfusion-runtime/Dockerfile bevfusion-ray258-canary)"
