@@ -491,11 +491,32 @@ func TestEnsureDatasetPublicationJobMapsRunningAndFailedConditions(t *testing.T)
 	spec := publicationJobSpecForTest()
 	tests := []struct {
 		name      string
+		phase     datasetpublisher.PublicationExecutionPhase
 		status    batchv1.JobStatus
 		wantPhase datasetpublisher.PublicationJobPhase
+		wantDone  int64
 	}{
 		{
-			name:      "active is packing",
+			name:      "legacy active is packing",
+			status:    batchv1.JobStatus{Active: 1},
+			wantPhase: datasetpublisher.PublicationJobPacking,
+		},
+		{
+			name:      "distributed plan active stays stabilizing",
+			phase:     datasetpublisher.PublicationExecutionPlan,
+			status:    batchv1.JobStatus{Active: 1},
+			wantPhase: datasetpublisher.PublicationJobStabilizing,
+		},
+		{
+			name:      "distributed pack active stays validating until every index succeeds",
+			phase:     datasetpublisher.PublicationExecutionPack,
+			status:    batchv1.JobStatus{Active: 16, Succeeded: 32},
+			wantPhase: datasetpublisher.PublicationJobValidating,
+			wantDone:  32,
+		},
+		{
+			name:      "distributed finalize active remains packing",
+			phase:     datasetpublisher.PublicationExecutionFinalize,
 			status:    batchv1.JobStatus{Active: 1},
 			wantPhase: datasetpublisher.PublicationJobPacking,
 		},
@@ -517,6 +538,13 @@ func TestEnsureDatasetPublicationJobMapsRunningAndFailedConditions(t *testing.T)
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			spec := spec.deepCopy()
+			spec.executionPhase = test.phase
+			if test.phase != datasetpublisher.PublicationExecutionLegacy {
+				spec.name += "-" + string(test.phase)
+				spec.partitionCount = 256
+				spec.maxParallelism = 16
+			}
 			job := mustRenderPublicationJob(t, spec)
 			job.Status = test.status
 			clientset := k8sfake.NewSimpleClientset(job)
@@ -527,6 +555,9 @@ func TestEnsureDatasetPublicationJobMapsRunningAndFailedConditions(t *testing.T)
 			}
 			if status.Phase != test.wantPhase || status.Receipt != nil {
 				t.Fatalf("status=%+v, want phase %s", status, test.wantPhase)
+			}
+			if status.Progress.CompletedPartitions != test.wantDone {
+				t.Fatalf("completed partitions=%d, want %d", status.Progress.CompletedPartitions, test.wantDone)
 			}
 			for _, action := range clientset.Actions() {
 				if action.Matches("list", "pods") {
