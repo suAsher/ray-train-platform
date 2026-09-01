@@ -16,8 +16,9 @@
     <div class="panel flex flex-wrap items-center justify-between gap-4 p-5">
       <div class="flex flex-wrap items-center gap-3">
         <el-radio-group v-model="scope" size="default">
-          <el-radio-button label="mine">我提交的</el-radio-button>
-          <el-radio-button label="team">全team</el-radio-button>
+          <el-radio-button v-for="option in jobScopeOptions" :key="option.value" :label="option.value">
+            {{ option.label }}
+          </el-radio-button>
         </el-radio-group>
 
         <el-input 
@@ -161,7 +162,7 @@ import { displayJobOwner } from '../../jobOwner'
 import { finishedLabel, formatDateTime, jobTimeline, originLabel } from '../../jobTimeline'
 import { copyToClipboard } from '../../clipboard'
 import { cacheQueryForJob } from '../../platformLimits'
-import { jobListPath, normalizeJobListPage } from '../../jobListPagination'
+import { jobListPath, normalizeJobListPage, visibleJobScopes } from '../../jobListPagination'
 
 const router = useRouter()
 const scope = ref('mine')
@@ -175,6 +176,11 @@ const pageSize = ref(50)
 const submitterNamesByID = ref(new Map())
 let refreshTimer
 let filterTimer
+
+const jobScopeOptions = computed(() => visibleJobScopes(roles.value).map((value) => ({
+  value,
+  label: value === 'mine' ? '我提交的' : '全 team',
+})))
 
 const normalizeJob = (job) => {
   const spec = job.spec || {}
@@ -358,6 +364,9 @@ const resetAndFetch = () => {
 }
 
 watch([scope, statusFilter], resetAndFetch)
+watch(jobScopeOptions, (options) => {
+  if (!options.some((option) => option.value === scope.value)) scope.value = 'mine'
+})
 watch(searchKeyword, () => {
   window.clearTimeout(filterTimer)
   filterTimer = window.setTimeout(resetAndFetch, 300)

@@ -504,8 +504,12 @@ func (h *Handler) listJobs(c *gin.Context) {
 	offset, _ := strconv.Atoi(c.Query("offset"))
 	tenantID := strings.TrimSpace(c.Query("tenantId"))
 	filter := domain.JobFilter{TenantID: principal.TenantID, Status: domain.State(c.Query("status")), Keyword: c.Query("keyword"), Limit: limit, Offset: offset}
-	switch c.DefaultQuery("scope", "team") {
+	switch c.DefaultQuery("scope", "mine") {
 	case "team":
+		if !principal.HasRole(domain.RoleTenantAdmin) && !principal.HasRole(domain.RoleSuperAdmin) {
+			h.writeError(c, http.StatusForbidden, "TEAM_JOB_LIST_FORBIDDEN", "team training jobs require a tenant administrator role")
+			return
+		}
 	case "mine":
 		filter.UserID = principal.Subject
 	default:
