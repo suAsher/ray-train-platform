@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import concurrent.futures
+import copy
 import hashlib
 import os
 import pathlib
@@ -384,6 +385,7 @@ def worker_s1h_webdataset_batches(
     prefetch_batches: int = 2,
     pipeline: Any,
     batch_resolver: Any | None = None,
+    expected_sample_count: int | None = None,
 ) -> Iterator[list[Any]]:
     """Materialize current v2 TAR members, run the fusion pipeline, then clean."""
 
@@ -401,6 +403,8 @@ def worker_s1h_webdataset_batches(
         raise ValueError("prefetch_batches is invalid")
     if not callable(pipeline):
         raise ValueError("WebDataset pipeline must be callable")
+    if expected_sample_count is not None:
+        _validate_positive_integer("expected_sample_count", expected_sample_count)
     if batch_resolver is None:
         from .s1h_webdataset import resolver_from_environment
 
@@ -424,6 +428,10 @@ def worker_s1h_webdataset_batches(
             prefetch_batches=prefetch_batches,
         )
     )
+    decoded_buffer: list[Any] = []
+    fallback_samples: list[Any] = []
+    raw_sample_count = 0
+    emitted_sample_count = 0
     while True:
         waiting_started = time.perf_counter()
         try:
@@ -452,12 +460,66 @@ def worker_s1h_webdataset_batches(
             raise
         except Exception:
             raise RuntimeError("S1H WebDataset batch resolution failed") from None
-        if decoded:
-            if len(decoded) > samples_per_gpu:
-                raise ValueError("Ray Data returned a batch larger than samples_per_gpu")
+        if len(decoded) > samples_per_gpu:
+            raise ValueError("Ray Data returned a batch larger than samples_per_gpu")
+        if expected_sample_count is None:
+            if decoded:
+                observe_data_metric("dataset_batches_total", 1)
+                observe_data_metric("dataset_samples_total", len(decoded))
+                yield decoded
+            continue
+
+        raw_sample_count += len(decoded)
+        for sample in decoded:
+            if _sample_has_valid_training_targets(sample):
+                decoded_buffer.append(sample)
+                if len(fallback_samples) < samples_per_gpu:
+                    fallback_samples.append(sample)
+        while len(decoded_buffer) >= samples_per_gpu:
+            batch = decoded_buffer[:samples_per_gpu]
+            del decoded_buffer[:samples_per_gpu]
+            emitted_sample_count += len(batch)
             observe_data_metric("dataset_batches_total", 1)
-            observe_data_metric("dataset_samples_total", len(decoded))
-            yield decoded
+            observe_data_metric("dataset_samples_total", len(batch))
+            yield batch
+
+    if expected_sample_count is None:
+        return
+    if raw_sample_count != expected_sample_count:
+        raise RuntimeError("S1H worker shard sample count does not match provenance")
+    if emitted_sample_count + len(decoded_buffer) < expected_sample_count:
+        if not fallback_samples:
+            raise RuntimeError("S1H worker shard has no valid training targets")
+        fallback_index = 0
+        while emitted_sample_count + len(decoded_buffer) < expected_sample_count:
+            decoded_buffer.append(
+                copy.deepcopy(fallback_samples[fallback_index % len(fallback_samples)])
+            )
+            fallback_index += 1
+    while decoded_buffer:
+        remaining = expected_sample_count - emitted_sample_count
+        batch_size = min(samples_per_gpu, remaining)
+        batch = decoded_buffer[:batch_size]
+        del decoded_buffer[:batch_size]
+        emitted_sample_count += len(batch)
+        observe_data_metric("dataset_batches_total", 1)
+        observe_data_metric("dataset_samples_total", len(batch))
+        yield batch
+
+
+def _sample_has_valid_training_targets(sample: object) -> bool:
+    if not isinstance(sample, Mapping):
+        return False
+    labels = sample.get("gt_labels_3d")
+    labels = getattr(labels, "_data", labels)
+    try:
+        if hasattr(labels, "numel") and labels.numel() == 0:
+            return False
+        if hasattr(labels, "tolist"):
+            labels = labels.tolist()
+        return any(int(label) >= 0 for label in labels)
+    except (TypeError, ValueError):
+        return False
 
 
 def _python_batch_value(value: Any) -> Any:

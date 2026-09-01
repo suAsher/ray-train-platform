@@ -637,6 +637,7 @@ class RayDataS1HPatchTest(unittest.TestCase):
             samples_per_gpu=1,
             prefetch_batches=2,
             pipeline=loader.pipeline,
+            expected_sample_count=1,
         )
 
     def test_streaming_loader_reports_a_redacted_short_shard_at_end(self):

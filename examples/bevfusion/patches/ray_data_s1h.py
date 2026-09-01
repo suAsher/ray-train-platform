@@ -654,6 +654,7 @@ class S1HWorkerDataLoader:
             == _MULTIMODAL_SCHEMA_VERSION
         ):
             worker_batches = ray_data.worker_s1h_webdataset_batches
+            worker_arguments["expected_sample_count"] = self.worker_sample_count
         for samples in worker_batches(
             **worker_arguments,
         ):

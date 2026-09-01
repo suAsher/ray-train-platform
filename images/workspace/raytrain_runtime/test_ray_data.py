@@ -158,6 +158,67 @@ class DatasetConfigTest(unittest.TestCase):
             {"batch_size": 1, "batch_format": "numpy", "prefetch_batches": 2},
         )
 
+    def test_webdataset_worker_resamples_post_pipeline_empty_targets(self):
+        def ref(token, ordinal):
+            return {
+                "ordinal": ordinal,
+                "token": token,
+                "scene": "scene-token",
+                "class_ids": [0],
+                "timestamp": 123 + ordinal,
+                "source_digest": chr(ord("b") + ordinal) * 64,
+                "split": "train",
+                "shard_path": f"dataset-s1h/shards/sha256-{'a' * 64}.tar",
+                "shard_sha256": "a" * 64,
+                "shard_size": 1024,
+                "metadata_member": f"{token}/metadata.json",
+            }
+
+        refs = (ref("empty-token", 0), ref("valid-token", 1))
+
+        class Shard:
+            def iter_batches(self, **kwargs):
+                for item in refs:
+                    yield {
+                        field: np.asarray([item[field]], dtype=object)
+                        for field in WEB_DATASET_REF_COLUMNS
+                    }
+
+        class Resolver:
+            @contextlib.contextmanager
+            def resolve_batch(self, batch_refs):
+                yield tuple({"token": item["token"]} for item in batch_refs)
+
+        class DataContainer:
+            def __init__(self, values):
+                self._data = np.asarray(values, dtype=np.int64)
+
+        def pipeline(sample):
+            labels = [] if sample["token"] == "empty-token" else [0]
+            return {**sample, "gt_labels_3d": DataContainer(labels)}
+
+        fake_train = types.ModuleType("ray.train")
+        fake_train.get_dataset_shard = mock.Mock(return_value=Shard())
+        fake_ray = types.ModuleType("ray")
+        fake_ray.train = fake_train
+        with mock.patch.dict(sys.modules, {"ray": fake_ray, "ray.train": fake_train}):
+            batches = list(
+                worker_s1h_webdataset_batches(
+                    samples_per_gpu=1,
+                    prefetch_batches=0,
+                    pipeline=pipeline,
+                    batch_resolver=Resolver(),
+                    expected_sample_count=2,
+                )
+            )
+
+        self.assertEqual(len(batches), 2)
+        self.assertEqual([batch[0]["token"] for batch in batches], [
+            "valid-token",
+            "valid-token",
+        ])
+        self.assertIsNot(batches[0][0], batches[1][0])
+
 class AdapterTest(unittest.TestCase):
     def test_build_dataset_dispatches_only_registered_formats(self):
         fake_data = types.ModuleType("ray.data")
