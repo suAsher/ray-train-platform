@@ -63,6 +63,84 @@ class BuildS1HTrustedIndexTest(unittest.TestCase):
         self.assertEqual(sample["info"]["labels"], [0, 9])
         self.assertEqual(len(sample["info"]["boxes"]), 2)
 
+    def test_converts_multimodal_info_to_path_free_v2_payload_descriptors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = Path(directory)
+            lidar = source_root / "site" / "samples" / "LIDAR_TOP" / "1.bin"
+            sweep = source_root / "site" / "sweeps" / "LIDAR_TOP" / "0.bin"
+            camera = source_root / "site" / "samples" / "CAM_FRONT" / "1.jpg"
+            for payload_path, payload in (
+                (lidar, np.arange(8, dtype=np.float32).tobytes()),
+                (sweep, np.arange(8, dtype=np.float32).tobytes()),
+                (camera, b"jpeg-payload"),
+            ):
+                payload_path.parent.mkdir(parents=True, exist_ok=True)
+                payload_path.write_bytes(payload)
+            info = self._info(lidar)
+            info.update(
+                {
+                    "sweeps": [
+                        {
+                            "lidar_path": str(sweep),
+                            "timestamp": 123400,
+                            "sensor2lidar_rotation": np.eye(3),
+                            "sensor2lidar_translation": np.zeros(3),
+                        }
+                    ],
+                    "cams": {
+                        "CAM_FRONT": {
+                            "data_path": str(camera),
+                            "sensor2lidar_rotation": np.eye(3),
+                            "sensor2lidar_translation": np.zeros(3),
+                            "sensor2ego_rotation": np.eye(3),
+                            "sensor2ego_translation": np.zeros(3),
+                            "camera_intrinsics": np.eye(3),
+                        }
+                    },
+                    "lidar2ego_rotation": np.eye(3),
+                    "lidar2ego_translation": np.zeros(3),
+                    "ego2global_rotation": np.eye(3),
+                    "ego2global_translation": np.zeros(3),
+                    "num_lidar_pts": np.array([4]),
+                    "gt_velocity": np.array([[0.0, 0.0]], dtype=np.float32),
+                }
+            )
+
+            samples = self.adapter.convert_multimodal_infos(
+                [info], split="train", source_root=source_root
+            )
+            from raytrain_publisher.multimodal import pack_multimodal_shard
+
+            packed = pack_multimodal_shard(samples, input_root=source_root)
+
+        self.assertEqual(len(samples), 1)
+        sample = samples[0]
+        self.assertEqual(sample["schema_version"], "s1h-multimodal-webdataset-v2")
+        self.assertNotIn("lidar_path", sample)
+        self.assertEqual(sample["payloads"]["lidar"], "site/samples/LIDAR_TOP/1.bin")
+        self.assertEqual(sample["payloads"]["sweeps"], ["site/sweeps/LIDAR_TOP/0.bin"])
+        self.assertEqual(sample["payloads"]["cameras"], {"CAM_FRONT": "site/samples/CAM_FRONT/1.jpg"})
+        self.assertEqual(sample["info"]["sweeps"][0]["timestamp"], 123400)
+        self.assertEqual(packed.members[0]["token"], "sample-token")
+        self.assertEqual(sample["info"]["cams"]["CAM_FRONT"]["camera_intrinsics"], [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+        serialized = __import__("json").dumps(sample, sort_keys=True)
+        self.assertNotIn(str(source_root), serialized)
+        self.assertNotIn("data_path", serialized)
+
+    def test_rejects_multimodal_info_with_unsafe_or_incomplete_camera_payloads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = Path(directory)
+            lidar = source_root / "site" / "samples" / "LIDAR_TOP" / "1.bin"
+            lidar.parent.mkdir(parents=True)
+            lidar.write_bytes(np.arange(8, dtype=np.float32).tobytes())
+            incomplete = self._info(lidar)
+            incomplete["sweeps"] = []
+            incomplete["cams"] = {"CAM_FRONT": {"data_path": "../escape.jpg"}}
+            with self.assertRaisesRegex(ValueError, "camera"):
+                self.adapter.convert_multimodal_infos(
+                    [incomplete], split="train", source_root=source_root
+                )
+
     def test_serializes_output_with_the_publisher_restricted_contract(self):
         from raytrain_publisher.pack import load_trusted_index_document
 

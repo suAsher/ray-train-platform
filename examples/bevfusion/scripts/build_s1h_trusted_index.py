@@ -82,6 +82,7 @@ NAME_MAPPING = {
 VALID_SPLITS = frozenset(("train", "val", "test"))
 POINT_COLUMNS = 4
 DEFAULT_SAMPLES_PER_PART = 2000
+MULTIMODAL_SCHEMA_VERSION = "s1h-multimodal-webdataset-v2"
 
 
 def convert_infos(
@@ -132,6 +133,35 @@ def merge_splits(
     if len(tokens) != len(set(tokens)):
         raise ValueError("trusted index contains a duplicate token across splits")
     return samples
+
+
+def convert_multimodal_infos(
+    infos: Iterable[Mapping[str, Any]],
+    *,
+    split: str,
+    source_root: Path,
+    workers: int = 1,
+) -> list[dict[str, Any]]:
+    """Build path-free S1H fusion descriptors for the v2 publisher.
+
+    The returned descriptor intentionally contains only relative object keys in
+    ``payloads``.  Calibration and annotation metadata is copied into a small,
+    JSON-compatible structure; the v2 publisher later fetches the referenced
+    bytes and writes them into immutable WebDataset shards.
+    """
+
+    if split not in VALID_SPLITS:
+        raise ValueError("split must be train, val, or test")
+    root = Path(source_root).resolve(strict=True)
+    if not root.is_dir():
+        raise ValueError("source root must be a directory")
+    if workers < 1 or workers > 64:
+        raise ValueError("workers must be between 1 and 64")
+    convert = partial(_convert_multimodal_info, split=split, source_root=root)
+    if workers == 1:
+        return [convert(raw_info) for raw_info in infos]
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        return list(executor.map(convert, infos))
 
 
 def dump_index(samples: list[dict[str, Any]], *, cbgs_seed: int) -> bytes:
@@ -269,6 +299,141 @@ def _convert_info(
     }
 
 
+def _convert_multimodal_info(
+    raw_info: Mapping[str, Any],
+    *,
+    split: str,
+    source_root: Path,
+) -> dict[str, Any]:
+    """Normalize one BEVFusion sample without serializing source locations."""
+
+    base = _convert_info(raw_info, split=split, source_root=source_root)
+    sweeps = raw_info.get("sweeps")
+    cameras = raw_info.get("cams")
+    if type(cameras) is not dict or not cameras:
+        raise ValueError("multimodal camera metadata is required")
+    if type(sweeps) is not list:
+        raise ValueError("multimodal sweeps must be an explicit list")
+
+    normalized_sweeps = []
+    sweep_paths = []
+    for index, sweep in enumerate(sweeps):
+        if type(sweep) is not dict:
+            raise ValueError("multimodal sweep metadata must be a dictionary")
+        path_value = sweep.get("data_path", sweep.get("lidar_path"))
+        sweep_paths.append(
+            _relative_payload_path(
+                path_value,
+                source_root,
+                field_name="multimodal sweep payload",
+            )
+        )
+        normalized_sweeps.append(
+            {
+                "timestamp": _required_timestamp(sweep, "multimodal sweep timestamp"),
+                "sensor2lidar_rotation": _matrix(
+                    sweep.get("sensor2lidar_rotation"),
+                    field_name="multimodal sweep sensor2lidar_rotation",
+                ),
+                "sensor2lidar_translation": _vector(
+                    sweep.get("sensor2lidar_translation"),
+                    field_name="multimodal sweep sensor2lidar_translation",
+                ),
+            }
+        )
+
+    normalized_cameras: dict[str, dict[str, list[list[float]] | list[float]]] = {}
+    camera_paths: dict[str, str] = {}
+    for camera_name in sorted(cameras, key=lambda value: str(value).encode("utf-8")):
+        if not isinstance(camera_name, str) or not camera_name or camera_name.strip() != camera_name:
+            raise ValueError("multimodal camera name must be a non-empty normalized string")
+        camera = cameras[camera_name]
+        if type(camera) is not dict:
+            raise ValueError("multimodal camera metadata must be a dictionary")
+        camera_paths[camera_name] = _relative_payload_path(
+            camera.get("data_path"),
+            source_root,
+            field_name="multimodal camera payload",
+        )
+        normalized_cameras[camera_name] = {
+            "sensor2lidar_rotation": _matrix(
+                camera.get("sensor2lidar_rotation"),
+                field_name="multimodal camera sensor2lidar_rotation",
+            ),
+            "sensor2lidar_translation": _vector(
+                camera.get("sensor2lidar_translation"),
+                field_name="multimodal camera sensor2lidar_translation",
+            ),
+            "sensor2ego_rotation": _matrix(
+                camera.get("sensor2ego_rotation"),
+                field_name="multimodal camera sensor2ego_rotation",
+            ),
+            "sensor2ego_translation": _vector(
+                camera.get("sensor2ego_translation"),
+                field_name="multimodal camera sensor2ego_translation",
+            ),
+            "camera_intrinsics": _matrix(
+                camera.get("camera_intrinsics"),
+                field_name="multimodal camera_intrinsics",
+            ),
+        }
+
+    selected_indexes = _selected_annotation_indexes(raw_info)
+    info = {
+        "boxes": base["info"]["boxes"],
+        "labels": base["info"]["labels"],
+        "lidar_feature_count": POINT_COLUMNS,
+        "lidar2ego_rotation": _matrix(
+            raw_info.get("lidar2ego_rotation"),
+            field_name="multimodal lidar2ego_rotation",
+        ),
+        "lidar2ego_translation": _vector(
+            raw_info.get("lidar2ego_translation"),
+            field_name="multimodal lidar2ego_translation",
+        ),
+        "ego2global_rotation": _matrix(
+            raw_info.get("ego2global_rotation"),
+            field_name="multimodal ego2global_rotation",
+        ),
+        "ego2global_translation": _vector(
+            raw_info.get("ego2global_translation"),
+            field_name="multimodal ego2global_translation",
+        ),
+        "sweeps": normalized_sweeps,
+        "cams": normalized_cameras,
+    }
+    num_lidar_points = raw_info.get("num_lidar_pts")
+    if num_lidar_points is not None:
+        info["num_lidar_pts"] = _selected_finite_vector(
+            num_lidar_points,
+            selected_indexes,
+            field_name="multimodal num_lidar_pts",
+        )
+    velocity = raw_info.get("gt_velocity")
+    if velocity is not None:
+        info["gt_velocity"] = _selected_finite_matrix(
+            velocity,
+            selected_indexes,
+            columns=2,
+            field_name="multimodal gt_velocity",
+        )
+
+    return {
+        "token": base["token"],
+        "scene": base["scene"],
+        "split": base["split"],
+        "class_ids": base["class_ids"],
+        "timestamp": base["timestamp"],
+        "schema_version": MULTIMODAL_SCHEMA_VERSION,
+        "payloads": {
+            "lidar": base["lidar_path"],
+            "sweeps": sweep_paths,
+            "cameras": camera_paths,
+        },
+        "info": info,
+    }
+
+
 def _required_identifier(info: Mapping[str, Any], field: str) -> str:
     value = info.get(field)
     if not isinstance(value, str) or not value or value.strip() != value:
@@ -277,17 +442,105 @@ def _required_identifier(info: Mapping[str, Any], field: str) -> str:
 
 
 def _relative_lidar_path(value: object, source_root: Path) -> str:
+    return _relative_payload_path(value, source_root, field_name="lidar_path")
+
+
+def _relative_payload_path(value: object, source_root: Path, *, field_name: str) -> str:
     if not isinstance(value, str) or not value:
-        raise ValueError("lidar_path must be a non-empty string")
+        raise ValueError(f"{field_name} must be a non-empty string")
     candidate = Path(value)
-    resolved = (source_root / candidate).resolve(strict=True) if not candidate.is_absolute() else candidate.resolve(strict=True)
+    try:
+        resolved = (source_root / candidate).resolve(strict=True) if not candidate.is_absolute() else candidate.resolve(strict=True)
+    except OSError as error:
+        raise ValueError(f"{field_name} is not accessible inside the source root") from error
     try:
         relative = resolved.relative_to(source_root)
     except ValueError as error:
-        raise ValueError("lidar_path must remain inside the source root") from error
+        raise ValueError(f"{field_name} must remain inside the source root") from error
     if not resolved.is_file():
-        raise ValueError("lidar_path must identify a regular file inside the source root")
+        raise ValueError(f"{field_name} must identify a regular file inside the source root")
     return relative.as_posix()
+
+
+def _required_timestamp(value: Mapping[str, Any], field_name: str) -> int:
+    timestamp = value.get("timestamp")
+    if isinstance(timestamp, bool) or not isinstance(timestamp, (int, np.integer)):
+        raise ValueError(f"{field_name} must be an integer")
+    return int(timestamp)
+
+
+def _matrix(value: object, *, field_name: str) -> list[list[float]]:
+    matrix = np.asarray(value)
+    if matrix.shape != (3, 3):
+        raise ValueError(f"{field_name} must have shape [3, 3]")
+    try:
+        normalized = matrix.astype(np.float64)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{field_name} must be numeric") from error
+    if not np.isfinite(normalized).all():
+        raise ValueError(f"{field_name} must contain finite values")
+    return [[float(item) for item in row] for row in normalized.tolist()]
+
+
+def _vector(value: object, *, field_name: str) -> list[float]:
+    vector = np.asarray(value)
+    if vector.shape != (3,):
+        raise ValueError(f"{field_name} must have shape [3]")
+    try:
+        normalized = vector.astype(np.float64)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{field_name} must be numeric") from error
+    if not np.isfinite(normalized).all():
+        raise ValueError(f"{field_name} must contain finite values")
+    return [float(item) for item in normalized.tolist()]
+
+
+def _selected_annotation_indexes(raw_info: Mapping[str, Any]) -> list[int]:
+    names = np.asarray(raw_info.get("gt_names"))
+    return [
+        index
+        for index, raw_name in enumerate(names)
+        if NAME_MAPPING.get(str(raw_name)) in CLASS_TO_ID
+    ]
+
+
+def _selected_finite_vector(
+    value: object,
+    indexes: list[int],
+    *,
+    field_name: str,
+) -> list[float]:
+    values = np.asarray(value)
+    if values.ndim != 1 or len(values) < (max(indexes) + 1 if indexes else 0):
+        raise ValueError(f"{field_name} must align with gt_names")
+    try:
+        normalized = values.astype(np.float64)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{field_name} must be numeric") from error
+    selected = normalized[indexes]
+    if not np.isfinite(selected).all():
+        raise ValueError(f"{field_name} must contain finite values")
+    return [float(item) for item in selected.tolist()]
+
+
+def _selected_finite_matrix(
+    value: object,
+    indexes: list[int],
+    *,
+    columns: int,
+    field_name: str,
+) -> list[list[float]]:
+    values = np.asarray(value)
+    if values.ndim != 2 or values.shape[1] != columns or len(values) < (max(indexes) + 1 if indexes else 0):
+        raise ValueError(f"{field_name} must align with gt_names and have shape [N, {columns}]")
+    try:
+        normalized = values.astype(np.float64)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{field_name} must be numeric") from error
+    selected = normalized[indexes]
+    if not np.isfinite(selected).all():
+        raise ValueError(f"{field_name} must contain finite values")
+    return [[float(item) for item in row] for row in selected.tolist()]
 
 
 def load_infos(path: Path) -> list[Mapping[str, Any]]:
