@@ -49,13 +49,23 @@
               <p class="mt-1 font-mono text-xs text-blue-300">{{ row.dataset.slug }}</p>
               <p v-if="row.dataset.description" class="mt-2 max-w-3xl text-sm leading-6 text-slate-400">{{ row.dataset.description }}</p>
             </div>
-            <el-button
-              type="primary"
-              :disabled="!row.latestReady"
-              @click="createTraining(row.dataset, 'latest')"
-            >
-              使用最新版本训练
-            </el-button>
+            <div class="flex flex-wrap gap-2">
+              <el-button
+                v-if="canPublishDataset(row.dataset)"
+                :loading="publishing[row.dataset.id] === true"
+                :disabled="!datasetCapabilities.publisherEnabled"
+                @click="publishDataset(row.dataset)"
+              >
+                发布新版本
+              </el-button>
+              <el-button
+                type="primary"
+                :disabled="!row.latestReady"
+                @click="createTraining(row.dataset, 'latest')"
+              >
+                使用最新版本训练
+              </el-button>
+            </div>
           </div>
 
           <el-alert v-if="row.versionError" class="mt-5" type="warning" :closable="false">
@@ -163,11 +173,13 @@
 </template>
 
 <script setup>
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
-import { fetchDatasets, fetchDatasetVersions } from '../../api/datasets.js'
+import { fetchDatasets, fetchDatasetVersions, requestDatasetPublication } from '../../api/datasets.js'
 import { fetchPlatformLimits } from '../../api/platform.js'
+import { roles, session } from '../../stores/session.js'
 import {
   datasetVersionDelta,
   datasetVersionPresentation,
@@ -187,6 +199,17 @@ const datasetCapabilities = ref(normalizeDatasetCapabilities())
 const datasets = ref([])
 const versionsByDataset = ref(new Map())
 const versionErrors = ref(new Map())
+const publishing = ref({})
+
+const canPublishDataset = (dataset) => {
+  if (!datasetCapabilities.value.publisherEnabled) return false
+  if (roles.value.includes('SuperAdmin')) return true
+  return roles.value.includes('TenantAdmin') && dataset?.visibility === 'TEAM' && dataset.ownerTenantId === session.value?.tenantId
+}
+
+const setPublishing = (datasetID, value) => {
+  publishing.value = { ...publishing.value, [datasetID]: value }
+}
 
 const datasetRows = computed(() => datasets.value.map((dataset) => {
   const versions = versionsByDataset.value.get(dataset.id) || []
@@ -309,6 +332,29 @@ const createTraining = (dataset, version) => router.push({
     cachePolicy: 'auto',
   },
 })
+
+const publishDataset = async (dataset) => {
+  if (!canPublishDataset(dataset)) return
+  try {
+    await ElMessageBox.confirm(
+      `将从「${dataset.name || dataset.slug}」创建新的不可变版本。是否继续？`,
+      '发布新版本',
+      { confirmButtonText: '开始发布', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  setPublishing(dataset.id, true)
+  try {
+    await requestDatasetPublication(dataset.id)
+    ElMessage.success('发布请求已受理，可在版本记录中查看进度')
+    await loadPage()
+  } catch (error) {
+    ElMessage.error(error?.message || '发布新版本失败，请稍后重试')
+  } finally {
+    setPublishing(dataset.id, false)
+  }
+}
 
 onMounted(loadPage)
 </script>
