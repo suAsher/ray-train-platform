@@ -395,6 +395,46 @@ func TestCompareAndSwapDatasetPublicationRunAdvancesAndCompletes(t *testing.T) {
 	}
 }
 
+func TestUpdateDatasetPublicationRunProgressIsSameStateAndMonotonic(t *testing.T) {
+	repository := datasetRepository(t)
+	seedPublicationDatasetVersion(t, repository, teamDataset("dataset-team-a", "team-a-data", "team-a"), "version-team-a")
+	run := publicationRunForTest("dataset-team-a", "version-team-a", "publication-progress")
+	if _, err := repository.EnsureDatasetPublicationRun(context.Background(), "team-a", false, run); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	claimed, won, err := repository.ClaimDatasetPublicationRun(context.Background(), "team-a", false, run.DatasetID, run.DatasetVersionID, run.ID, now)
+	if err != nil || !won {
+		t.Fatalf("claim run=%+v won=%t err=%v", claimed, won, err)
+	}
+	validating := claimed
+	validating.State = domain.DatasetVersionValidating
+	validating.TotalPartitions = 8
+	validating.SourceObjectCount = 64
+	validating, swapped, err := repository.CompareAndSwapDatasetPublicationRun(context.Background(), "team-a", false, domain.DatasetVersionStabilizing, validating, now)
+	if err != nil || !swapped {
+		t.Fatalf("advance validating run=%+v swapped=%t err=%v", validating, swapped, err)
+	}
+
+	progress := validating
+	progress.CompletedPartitions = 3
+	progress.ProcessedObjectCount = 24
+	updated, swapped, err := repository.UpdateDatasetPublicationRunProgress(context.Background(), "team-a", false, domain.DatasetVersionValidating, progress, now.Add(time.Second))
+	if err != nil || !swapped || updated.State != domain.DatasetVersionValidating || updated.CompletedPartitions != 3 || updated.ProcessedObjectCount != 24 {
+		t.Fatalf("persist progress run=%+v swapped=%t err=%v", updated, swapped, err)
+	}
+
+	stale := updated
+	stale.CompletedPartitions = 2
+	stale.ProcessedObjectCount = 16
+	if _, _, err := repository.UpdateDatasetPublicationRunProgress(context.Background(), "team-a", false, domain.DatasetVersionValidating, stale, now.Add(2*time.Second)); !errors.Is(err, ErrDatasetPublicationRunConflict) {
+		t.Fatalf("regressing progress error=%v, want conflict", err)
+	}
+	if version := storedPublicationVersion(t, repository, run.DatasetVersionID); version.State != string(domain.DatasetVersionValidating) {
+		t.Fatalf("progress update changed dataset version state: %+v", version)
+	}
+}
+
 func TestFinalizeDatasetPublicationRunRejectsReceiptWithoutPartialReadyState(t *testing.T) {
 	repository := datasetRepository(t)
 	seedPublicationDatasetVersion(t, repository, teamDataset("dataset-team-a", "team-a-data", "team-a"), "version-team-a")

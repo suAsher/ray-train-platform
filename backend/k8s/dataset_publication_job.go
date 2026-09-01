@@ -247,6 +247,19 @@ func readDatasetPublicationJobStatus(
 		return readCompletedDatasetPublicationJob(ctx, coreClient, job, spec)
 	}
 	if job.Status.Active > 0 {
+		switch spec.ExecutionPhase() {
+		case datasetpublisher.PublicationExecutionPlan:
+			return datasetpublisher.PublicationJobStatus{Phase: datasetpublisher.PublicationJobStabilizing}, nil
+		case datasetpublisher.PublicationExecutionPack:
+			return datasetpublisher.PublicationJobStatus{
+				Phase: datasetpublisher.PublicationJobValidating,
+				Progress: datasetpublisher.PublicationProgress{
+					TotalPartitions: int64(spec.PartitionCount()), CompletedPartitions: int64(job.Status.Succeeded),
+				},
+			}, nil
+		case datasetpublisher.PublicationExecutionFinalize:
+			return datasetpublisher.PublicationJobStatus{Phase: datasetpublisher.PublicationJobPacking}, nil
+		}
 		return datasetpublisher.PublicationJobStatus{Phase: datasetpublisher.PublicationJobPacking}, nil
 	}
 	return datasetpublisher.PublicationJobStatus{Phase: datasetpublisher.PublicationJobPending}, nil

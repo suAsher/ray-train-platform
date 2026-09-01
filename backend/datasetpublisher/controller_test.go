@@ -160,7 +160,7 @@ func TestControllerDoesNotAdvanceDistributedPhaseWhileJobIsActive(t *testing.T) 
 	jobs := &scriptedPublicationJobClient{results: []publicationJobResult{
 		{status: PublicationJobStatus{Phase: PublicationJobPacking}},
 		{status: PublicationJobStatus{Phase: PublicationJobValidating, Progress: PublicationProgress{TotalPartitions: 8}}},
-		{status: PublicationJobStatus{Phase: PublicationJobPacking, Progress: PublicationProgress{TotalPartitions: 8}}},
+		{status: PublicationJobStatus{Phase: PublicationJobPacking, Progress: PublicationProgress{TotalPartitions: 8, CompletedPartitions: 3}}},
 		{status: PublicationJobStatus{Phase: PublicationJobPacked, Progress: PublicationProgress{TotalPartitions: 8, CompletedPartitions: 8}}},
 	}}
 	options := publicationControllerOptions()
@@ -183,6 +183,9 @@ func TestControllerDoesNotAdvanceDistributedPhaseWhileJobIsActive(t *testing.T) 
 		run, reconcileErr := controller.Reconcile(context.Background(), request)
 		if reconcileErr != nil || run.State != want {
 			t.Fatalf("reconcile %d run=%+v err=%v, want state %q", index+1, run, reconcileErr, want)
+		}
+		if index == 2 && (run.TotalPartitions != 8 || run.CompletedPartitions != 3) {
+			t.Fatalf("active Indexed Job progress was not persisted: %+v", run)
 		}
 	}
 	specs := jobs.recordedSpecs()
@@ -860,6 +863,23 @@ func (repository *memoryPublicationRunRepository) CompareAndSwapDatasetPublicati
 	copy := next
 	repository.run = &copy
 	repository.transitions = append(repository.transitions, copy.State)
+	return copy, true, nil
+}
+
+func (repository *memoryPublicationRunRepository) UpdateDatasetPublicationRunProgress(_ context.Context, tenantID string, superAdmin bool, expectedState domain.DatasetVersionState, next domain.DatasetPublicationRun, _ time.Time) (domain.DatasetPublicationRun, bool, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	if repository.casError != nil {
+		return domain.DatasetPublicationRun{}, false, repository.casError
+	}
+	if repository.run == nil || (!superAdmin && tenantID != repository.tenantID) || repository.run.ID != next.ID || repository.run.DatasetID != next.DatasetID || repository.run.DatasetVersionID != next.DatasetVersionID {
+		return domain.DatasetPublicationRun{}, false, errors.New("publication run not found")
+	}
+	if repository.run.State != expectedState {
+		return *repository.run, false, nil
+	}
+	copy := next
+	repository.run = &copy
 	return copy, true, nil
 }
 

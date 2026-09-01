@@ -447,6 +447,75 @@ func (r *GormRepository) CompareAndSwapDatasetPublicationRun(
 	return current, swapped, nil
 }
 
+// UpdateDatasetPublicationRunProgress records progress for an active state
+// without advancing the immutable dataset version state. It rejects counter
+// regressions so a stale controller observation cannot make a publication look
+// less complete after a restart.
+func (r *GormRepository) UpdateDatasetPublicationRunProgress(
+	ctx context.Context,
+	tenantID string,
+	superAdmin bool,
+	expectedState domain.DatasetVersionState,
+	next domain.DatasetPublicationRun,
+	observedAt time.Time,
+) (domain.DatasetPublicationRun, bool, error) {
+	if err := publicationRunContextError(ctx); err != nil {
+		return domain.DatasetPublicationRun{}, false, err
+	}
+	if next.State != expectedState || !activeDatasetPublicationState(expectedState) || next.Validate() != nil {
+		return domain.DatasetPublicationRun{}, false, ErrDatasetPublicationRunConflict
+	}
+	observedAt = normalizedPublicationRunTime(observedAt)
+	var current domain.DatasetPublicationRun
+	swapped := false
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		record, err := getManageableDatasetPublicationRunRecord(tx.Clauses(clause.Locking{Strength: "UPDATE"}), tenantID, superAdmin, next.DatasetID, next.DatasetVersionID, next.ID)
+		if err != nil {
+			return err
+		}
+		current, err = record.toDomain()
+		if err != nil {
+			return ErrDatasetPublicationRunUnavailable
+		}
+		if current.State != expectedState {
+			return nil
+		}
+		if !publicationProgressMonotonic(current, next) {
+			return ErrDatasetPublicationRunConflict
+		}
+		version, err := getManageableDatasetVersionRecord(tx.Clauses(clause.Locking{Strength: "UPDATE"}), tenantID, superAdmin, next.DatasetID, next.DatasetVersionID)
+		if err != nil {
+			return err
+		}
+		if version.State != string(expectedState) {
+			return ErrDatasetPublicationRunUnavailable
+		}
+		updates := publicationRunUpdates(next, observedAt)
+		delete(updates, "state")
+		delete(updates, "finished_at")
+		result := tx.Model(&DatasetPublicationRunRecord{}).
+			Where("id = ? AND dataset_id = ? AND dataset_version_id = ? AND state = ?", next.ID, next.DatasetID, next.DatasetVersionID, string(expectedState)).
+			Updates(updates)
+		if result.Error != nil {
+			return publicationRunDatabaseError(ctx, "update publication progress", result.Error)
+		}
+		if result.RowsAffected != 1 {
+			return errDatasetPublicationRunCASLost
+		}
+		current = next
+		swapped = true
+		return nil
+	})
+	if errors.Is(err, errDatasetPublicationRunCASLost) {
+		current, loadErr := r.GetDatasetPublicationRun(ctx, tenantID, superAdmin, next.DatasetID, next.DatasetVersionID, next.ID)
+		return current, false, loadErr
+	}
+	if err != nil {
+		return domain.DatasetPublicationRun{}, false, publicationRunOperationError(ctx, err)
+	}
+	return current, swapped, nil
+}
+
 // FinalizeDatasetPublicationRun atomically commits the immutable publisher
 // receipt and transitions both the catalogue version and its run to READY.
 // A READY run can therefore never be visible without a resolvable manifest.
@@ -740,6 +809,23 @@ func validatePublicationRunTransition(expectedState domain.DatasetVersionState, 
 		return ErrDatasetPublicationRunConflict
 	}
 	return nil
+}
+
+func publicationProgressMonotonic(current, next domain.DatasetPublicationRun) bool {
+	if current.ID != next.ID || current.DatasetID != next.DatasetID || current.DatasetVersionID != next.DatasetVersionID ||
+		current.ExecutionMode.Normalized() != next.ExecutionMode.Normalized() {
+		return false
+	}
+	return next.TotalPartitions >= current.TotalPartitions &&
+		next.CompletedPartitions >= current.CompletedPartitions &&
+		next.FailedPartitions >= current.FailedPartitions &&
+		next.SourceObjectCount >= current.SourceObjectCount &&
+		next.ProcessedObjectCount >= current.ProcessedObjectCount &&
+		next.FailedObjectCount >= current.FailedObjectCount
+}
+
+func activeDatasetPublicationState(state domain.DatasetVersionState) bool {
+	return state == domain.DatasetVersionStabilizing || state == domain.DatasetVersionValidating || state == domain.DatasetVersionPacking
 }
 
 func publicationRunUpdates(next domain.DatasetPublicationRun, observedAt time.Time) map[string]any {

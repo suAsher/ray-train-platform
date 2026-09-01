@@ -126,6 +126,22 @@
                 <el-tag size="small" :type="statePresentation(version.state).type">{{ statePresentation(version.state).label }}</el-tag>
               </template>
             </el-table-column>
+            <el-table-column label="发布进度" min-width="210">
+              <template #default="{ row: version }">
+                <template v-if="publicationFor(version.id)">
+                  <el-progress
+                    :percentage="publicationPercent(publicationFor(version.id))"
+                    :status="publicationFor(version.id).failedPartitions > 0 ? 'exception' : undefined"
+                    :stroke-width="7"
+                    class="min-w-[120px]"
+                  />
+                  <p class="mt-1 text-[11px] text-slate-400">
+                    分区 {{ formatDatasetCount(publicationFor(version.id).completedPartitions) }} / {{ formatDatasetCount(publicationFor(version.id).totalPartitions) }}，失败 {{ formatDatasetCount(publicationFor(version.id).failedPartitions) }}
+                  </p>
+                </template>
+                <span v-else class="text-slate-600">{{ version.state === 'READY' ? '已完成' : '等待发布器更新' }}</span>
+              </template>
+            </el-table-column>
             <el-table-column label="train / val / test" min-width="180">
               <template #default="{ row: version }">
                 <span class="font-mono text-slate-300">
@@ -177,7 +193,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
-import { fetchDatasets, fetchDatasetVersions, requestDatasetPublication } from '../../api/datasets.js'
+import { fetchDatasetPublication, fetchDatasets, fetchDatasetVersions, requestDatasetPublication } from '../../api/datasets.js'
 import { fetchPlatformLimits } from '../../api/platform.js'
 import { roles, session } from '../../stores/session.js'
 import {
@@ -198,6 +214,7 @@ const catalogError = ref('')
 const datasetCapabilities = ref(normalizeDatasetCapabilities())
 const datasets = ref([])
 const versionsByDataset = ref(new Map())
+const publicationsByVersion = ref(new Map())
 const versionErrors = ref(new Map())
 const publishing = ref({})
 
@@ -215,10 +232,10 @@ const datasetRows = computed(() => datasets.value.map((dataset) => {
   const versions = versionsByDataset.value.get(dataset.id) || []
   const readyVersions = versions.filter(({ state }) => state === 'READY')
   const versionRows = versions.map((version) => {
-    if (version.state !== 'READY') return { ...version, delta: null }
+    if (version.state !== 'READY') return { ...version, delta: null, publication: publicationFor(version.id) }
     const readyIndex = readyVersions.findIndex(({ id }) => id === version.id)
     const previous = readyIndex >= 0 ? readyVersions[readyIndex + 1] : null
-    return { ...version, delta: previous ? datasetVersionDelta(version, previous) : null }
+    return { ...version, delta: previous ? datasetVersionDelta(version, previous) : null, publication: publicationFor(version.id) }
   })
   const latestReady = readyVersions[0] || null
   const previousReady = readyVersions[1] || null
@@ -235,6 +252,22 @@ const datasetRows = computed(() => datasets.value.map((dataset) => {
 
 const visibilityLabel = (visibility) => visibility === 'PUBLIC' ? '全平台可见' : '本团队可见'
 const statePresentation = datasetVersionPresentation
+const activePublicationStates = new Set(['DISCOVERING', 'STABILIZING', 'VALIDATING', 'PACKING', 'FAILED'])
+const nonNegativeCount = (value) => {
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0
+}
+const normalizePublication = (value) => ({
+  totalPartitions: nonNegativeCount(value?.totalPartitions),
+  completedPartitions: nonNegativeCount(value?.completedPartitions),
+  failedPartitions: nonNegativeCount(value?.failedPartitions),
+})
+const publicationFor = (versionID) => publicationsByVersion.value.get(versionID) || null
+const publicationPercent = (publication) => {
+  const total = nonNegativeCount(publication?.totalPartitions)
+  const completed = nonNegativeCount(publication?.completedPartitions)
+  return total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0
+}
 const digestSummary = (digest) => {
   const value = String(digest || '').trim()
   return value ? `${value.slice(0, 12)}…${value.slice(-8)}` : '尚未生成'
@@ -265,20 +298,36 @@ const compactDelta = (delta) => hasDelta(delta)
 
 const fetchVersionsForDataset = async (dataset) => {
   try {
-    return { datasetId: dataset.id, versions: normalizeDatasetVersions(await fetchDatasetVersions(dataset.id)), error: '' }
+    const versions = normalizeDatasetVersions(await fetchDatasetVersions(dataset.id))
+    const publications = await Promise.all(versions
+      .filter((version) => activePublicationStates.has(version.state))
+      .map(async (version) => {
+        try {
+          return [version.id, normalizePublication(await fetchDatasetPublication(dataset.id, version.id))]
+        } catch {
+          return [version.id, null]
+        }
+      }))
+    return { datasetId: dataset.id, versions, publications, error: '' }
   } catch (error) {
-    return { datasetId: dataset.id, versions: [], error: error?.message || '无法读取版本，请稍后重试。' }
+    return { datasetId: dataset.id, versions: [], publications: [], error: error?.message || '无法读取版本，请稍后重试。' }
   }
 }
 
 const retryDatasetVersions = async (dataset) => {
   const result = await fetchVersionsForDataset(dataset)
   const nextVersions = new Map(versionsByDataset.value)
+  const nextPublications = new Map(publicationsByVersion.value)
   const nextErrors = new Map(versionErrors.value)
   nextVersions.set(result.datasetId, result.versions)
+  for (const [versionID, publication] of result.publications) {
+    if (publication) nextPublications.set(versionID, publication)
+    else nextPublications.delete(versionID)
+  }
   if (result.error) nextErrors.set(result.datasetId, result.error)
   else nextErrors.delete(result.datasetId)
   versionsByDataset.value = nextVersions
+  publicationsByVersion.value = nextPublications
   versionErrors.value = nextErrors
 }
 
@@ -290,6 +339,7 @@ const loadPage = async () => {
   datasetCapabilities.value = normalizeDatasetCapabilities()
   datasets.value = []
   versionsByDataset.value = new Map()
+  publicationsByVersion.value = new Map()
   versionErrors.value = new Map()
 
   try {
@@ -317,6 +367,7 @@ const loadPage = async () => {
     datasets.value = visibleDatasets
     const results = await Promise.all(visibleDatasets.map(fetchVersionsForDataset))
     versionsByDataset.value = new Map(results.map(({ datasetId, versions }) => [datasetId, versions]))
+    publicationsByVersion.value = new Map(results.flatMap(({ publications }) => publications.filter(([, publication]) => publication)))
     versionErrors.value = new Map(results.filter(({ error }) => error).map(({ datasetId, error }) => [datasetId, error]))
   } finally {
     loading.value = false

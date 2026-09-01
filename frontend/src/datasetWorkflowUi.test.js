@@ -20,6 +20,9 @@ test('dataset navigation and pages are capability-gated and never expose storage
 	assert.match(page, /发布新版本/)
 	assert.match(page, /requestDatasetPublication/)
 	assert.match(page, /canPublishDataset/)
+	assert.match(page, /发布进度/)
+	assert.match(page, /fetchDatasetPublication/)
+	assert.match(page, /publicationPercent/)
   assert.match(picker, /最新可用/)
   assert.match(picker, /train.*val.*test/is)
   for (const source of [page, picker]) {

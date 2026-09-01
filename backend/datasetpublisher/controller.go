@@ -29,6 +29,7 @@ type PublicationRunRepository interface {
 	EnsureDatasetPublicationRun(context.Context, string, bool, domain.DatasetPublicationRun) (domain.DatasetPublicationRun, error)
 	ClaimDatasetPublicationRun(context.Context, string, bool, string, string, string, time.Time) (domain.DatasetPublicationRun, bool, error)
 	CompareAndSwapDatasetPublicationRun(context.Context, string, bool, domain.DatasetVersionState, domain.DatasetPublicationRun, time.Time) (domain.DatasetPublicationRun, bool, error)
+	UpdateDatasetPublicationRunProgress(context.Context, string, bool, domain.DatasetVersionState, domain.DatasetPublicationRun, time.Time) (domain.DatasetPublicationRun, bool, error)
 	FinalizeDatasetPublicationRun(context.Context, string, bool, domain.DatasetVersionState, domain.DatasetPublicationRun, domain.DatasetPublicationReceipt, string, time.Time) (domain.DatasetPublicationRun, bool, error)
 }
 
@@ -404,7 +405,7 @@ func (controller *Controller) applyJobStatus(
 		// PACKING. Treating an active plan as generic PACKING would skip every
 		// partition and start finalization with no receipts.
 		if current.ExecutionMode.Normalized() == domain.DatasetPublicationExecutionDistributed {
-			return current, nil
+			return controller.recordActiveProgress(ctx, request, current, status.Progress)
 		}
 		return controller.advanceTo(ctx, request, current, domain.DatasetVersionPacking, status.Progress)
 	case PublicationJobPacked:
@@ -450,6 +451,38 @@ func (controller *Controller) applyJobStatus(
 	}
 }
 
+// recordActiveProgress persists the monotonic aggregate reported by an active
+// Indexed Job without changing the externally visible lifecycle state. A
+// reconciler restart can therefore resume from the last observed partition
+// count, while out-of-order Kubernetes status reads never move the UI back.
+func (controller *Controller) recordActiveProgress(
+	ctx context.Context,
+	request ReconcileRequest,
+	current domain.DatasetPublicationRun,
+	progress PublicationProgress,
+) (domain.DatasetPublicationRun, error) {
+	if progress.empty() {
+		return current, nil
+	}
+	next := progress.merge(current)
+	if reflect.DeepEqual(next, current) {
+		return current, nil
+	}
+	if err := next.Validate(); err != nil {
+		return current, ErrPublicationControllerUnavailable
+	}
+	updated, swapped, err := controller.repository.UpdateDatasetPublicationRunProgress(
+		ctx, request.TenantID, request.SuperAdmin, current.State, next, controller.now().UTC(),
+	)
+	if err != nil {
+		return current, cleanDependencyError(ctx, err)
+	}
+	if !swapped && updated.State == domain.DatasetVersionFailed {
+		return updated, ErrPublicationJobFailed
+	}
+	return updated, nil
+}
+
 func (controller *Controller) validReceipt(request ReconcileRequest, receipt *domain.DatasetPublicationReceipt) bool {
 	if receipt == nil || receipt.DatasetID != request.DatasetID || receipt.DatasetVersionID != request.DatasetVersionID {
 		return false
@@ -465,7 +498,10 @@ func (controller *Controller) advanceTo(
 	progress PublicationProgress,
 ) (domain.DatasetPublicationRun, error) {
 	for step := 0; step < 3; step++ {
-		if current.State == target || publicationStateOrder(current.State) > publicationStateOrder(target) {
+		if current.State == target {
+			return controller.recordActiveProgress(ctx, request, current, progress)
+		}
+		if publicationStateOrder(current.State) > publicationStateOrder(target) {
 			return current, nil
 		}
 		nextState, ok := nextPublicationState(current.State)
@@ -628,6 +664,29 @@ func (progress PublicationProgress) apply(run domain.DatasetPublicationRun, stat
 	result.ProcessedObjectCount = progress.ProcessedObjectCount
 	result.FailedObjectCount = progress.FailedObjectCount
 	return result
+}
+
+func (progress PublicationProgress) merge(run domain.DatasetPublicationRun) domain.DatasetPublicationRun {
+	result := run
+	result.TotalPartitions = maxPublicationProgress(run.TotalPartitions, progress.TotalPartitions)
+	result.CompletedPartitions = maxPublicationProgress(run.CompletedPartitions, progress.CompletedPartitions)
+	result.FailedPartitions = maxPublicationProgress(run.FailedPartitions, progress.FailedPartitions)
+	result.SourceObjectCount = maxPublicationProgress(run.SourceObjectCount, progress.SourceObjectCount)
+	result.ProcessedObjectCount = maxPublicationProgress(run.ProcessedObjectCount, progress.ProcessedObjectCount)
+	result.FailedObjectCount = maxPublicationProgress(run.FailedObjectCount, progress.FailedObjectCount)
+	return result
+}
+
+func (progress PublicationProgress) empty() bool {
+	return progress.TotalPartitions == 0 && progress.CompletedPartitions == 0 && progress.FailedPartitions == 0 &&
+		progress.SourceObjectCount == 0 && progress.ProcessedObjectCount == 0 && progress.FailedObjectCount == 0
+}
+
+func maxPublicationProgress(left, right int64) int64 {
+	if right > left {
+		return right
+	}
+	return left
 }
 
 func (progress PublicationProgress) complete() bool {
