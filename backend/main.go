@@ -282,6 +282,7 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	jobs.RegisterWorkspaceProxyRoute(v1)
 	jobs.RegisterTrainingRoutes(v1)
 	jobs.RegisterCheckpointRoutes(v1)
+	jobs.RegisterImageReadRoutes(v1)
 	if cfg.DatasetVersioningEnabled {
 		jobs.RegisterDatasetReadRoutes(v1)
 	}
@@ -302,7 +303,7 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	oidcOnly := interactive
 	jobs.RegisterWorkspaceRoutes(oidcOnly)
 	jobs.RegisterAdminRoutes(oidcOnly)
-	jobs.RegisterImageRoutes(interactive)
+	jobs.RegisterImageManagementRoutes(interactive)
 	jobs.RegisterStorageAssetRoutes(interactive)
 	if cfg.DatasetVersioningEnabled {
 		jobs.RegisterDatasetManagementRoutes(interactive)

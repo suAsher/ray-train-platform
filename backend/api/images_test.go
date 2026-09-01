@@ -53,6 +53,57 @@ func imageScopeRouter(store ImageStore, principal auth.Principal) *gin.Engine {
 	return router
 }
 
+func TestImageReadAndManagementRoutesUseSeparateAuthenticationBoundaries(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := NewHandler(nil, Options{Images: &stubImageStore{}})
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("ray-platform-principal", auth.Principal{
+			Subject: "cli-user", TenantID: "team-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypePAT,
+			Scopes: []string{domain.PATScopeJobsWrite},
+		})
+		c.Next()
+	})
+	handler.RegisterImageReadRoutes(router.Group("/api/v1"))
+	management := router.Group("/api/v1")
+	management.Use(auth.RequireInteractiveSession(false))
+	handler.RegisterImageManagementRoutes(management)
+
+	readResponse := httptest.NewRecorder()
+	router.ServeHTTP(readResponse, httptest.NewRequest(http.MethodGet, "/api/v1/images?kind=training", nil))
+	if readResponse.Code != http.StatusOK {
+		t.Fatalf("PAT image list status=%d body=%s", readResponse.Code, readResponse.Body.String())
+	}
+
+	writeResponse := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/images", strings.NewReader(`{}`))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(writeResponse, request)
+	if writeResponse.Code != http.StatusForbidden || !strings.Contains(writeResponse.Body.String(), "INTERACTIVE_LOGIN_REQUIRED") {
+		t.Fatalf("PAT image management status=%d body=%s", writeResponse.Code, writeResponse.Body.String())
+	}
+}
+
+func TestImageReadRouteRequiresJobWriteScopeForPAT(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := NewHandler(nil, Options{Images: &stubImageStore{}})
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("ray-platform-principal", auth.Principal{
+			Subject: "read-only-cli", TenantID: "team-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypePAT,
+			Scopes: []string{domain.PATScopeJobsRead},
+		})
+		c.Next()
+	})
+	handler.RegisterImageReadRoutes(router.Group("/api/v1"))
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/images?kind=training", nil))
+	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "INSUFFICIENT_SCOPE") {
+		t.Fatalf("read-only PAT image list status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestSuperAdminCanPromoteExistingImageToPlatformScope(t *testing.T) {
 	store := &stubImageStore{}
 	router := imageScopeRouter(store, auth.Principal{

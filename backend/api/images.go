@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
 	"ray-train-platform-backend/repositories"
 )
@@ -22,9 +23,22 @@ type ImageStore interface {
 }
 
 func (h *Handler) RegisterImageRoutes(group *gin.RouterGroup) {
-	// Listing is open to any signed-in user: choosing an environment is part of
-	// submitting a job. Publishing and removing are administrative.
-	group.GET("/images", h.listImages)
+	h.RegisterImageReadRoutes(group)
+	h.RegisterImageManagementRoutes(group)
+}
+
+// RegisterImageReadRoutes stays on the authenticated API group because CLI
+// machine tokens must resolve and validate an administrator-approved runtime
+// before submitting a job.
+func (h *Handler) RegisterImageReadRoutes(group *gin.RouterGroup) {
+	read := group.Group("")
+	read.Use(auth.RequireScopes(domain.PATScopeJobsWrite))
+	read.GET("/images", h.listImages)
+}
+
+// RegisterImageManagementRoutes is mounted behind the interactive-session
+// guard. Publishing or changing catalogue entries remains a human admin action.
+func (h *Handler) RegisterImageManagementRoutes(group *gin.RouterGroup) {
 	group.POST("/images", h.createImage)
 	group.PATCH("/images/:id", h.updateImageScope)
 	group.DELETE("/images/:id", h.deleteImage)
