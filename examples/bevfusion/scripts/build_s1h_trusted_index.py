@@ -17,7 +17,7 @@ import math
 import pickle
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 
@@ -87,6 +87,10 @@ MULTIMODAL_INDEX_MANIFEST_FORMAT = "trusted-index-sharded-v2"
 MAX_MULTIMODAL_INDEX_PART_BYTES = 64 * 1024 * 1024
 
 
+class MissingSourcePayloadError(ValueError):
+    """A referenced raw payload disappeared from the continuously synced source."""
+
+
 def convert_infos(
     infos: Iterable[Mapping[str, Any]],
     *,
@@ -143,6 +147,7 @@ def convert_multimodal_infos(
     split: str,
     source_root: Path,
     workers: int = 1,
+    skip_missing_payloads: bool = False,
 ) -> list[dict[str, Any]]:
     """Build path-free S1H fusion descriptors for the v2 publisher.
 
@@ -159,11 +164,18 @@ def convert_multimodal_infos(
         raise ValueError("source root must be a directory")
     if workers < 1 or workers > 64:
         raise ValueError("workers must be between 1 and 64")
-    convert = partial(_convert_multimodal_info, split=split, source_root=root)
+    convert = partial(
+        _convert_multimodal_info_with_policy,
+        split=split,
+        source_root=root,
+        skip_missing_payloads=skip_missing_payloads,
+    )
     if workers == 1:
-        return [convert(raw_info) for raw_info in infos]
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        return list(executor.map(convert, infos))
+        converted = [convert(raw_info) for raw_info in infos]
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            converted = list(executor.map(convert, infos))
+    return [sample for sample in converted if sample is not None]
 
 
 def merge_multimodal_splits(
@@ -172,13 +184,22 @@ def merge_multimodal_splits(
     val_infos: Iterable[Mapping[str, Any]],
     source_root: Path,
     workers: int = 1,
+    skip_missing_payloads: bool = False,
 ) -> list[dict[str, Any]]:
     samples = convert_multimodal_infos(
-        train_infos, split="train", source_root=source_root, workers=workers
+        train_infos,
+        split="train",
+        source_root=source_root,
+        workers=workers,
+        skip_missing_payloads=skip_missing_payloads,
     )
     samples.extend(
         convert_multimodal_infos(
-            val_infos, split="val", source_root=source_root, workers=workers
+            val_infos,
+            split="val",
+            source_root=source_root,
+            workers=workers,
+            skip_missing_payloads=skip_missing_payloads,
         )
     )
     tokens = [sample["token"] for sample in samples]
@@ -542,6 +563,25 @@ def _convert_multimodal_info(
     }
 
 
+def _convert_multimodal_info_with_policy(
+    raw_info: Mapping[str, Any],
+    *,
+    split: str,
+    source_root: Path,
+    skip_missing_payloads: bool,
+) -> Optional[dict[str, Any]]:
+    try:
+        return _convert_multimodal_info(
+            raw_info,
+            split=split,
+            source_root=source_root,
+        )
+    except MissingSourcePayloadError:
+        if not skip_missing_payloads:
+            raise
+        return None
+
+
 def _required_identifier(info: Mapping[str, Any], field: str) -> str:
     value = info.get(field)
     if not isinstance(value, str) or not value or value.strip() != value:
@@ -559,6 +599,10 @@ def _relative_payload_path(value: object, source_root: Path, *, field_name: str)
     candidate = Path(value)
     try:
         resolved = (source_root / candidate).resolve(strict=True) if not candidate.is_absolute() else candidate.resolve(strict=True)
+    except FileNotFoundError as error:
+        raise MissingSourcePayloadError(
+            f"{field_name} disappeared from the continuously synced source"
+        ) from error
     except OSError as error:
         raise ValueError(f"{field_name} is not accessible inside the source root") from error
     try:
@@ -566,7 +610,9 @@ def _relative_payload_path(value: object, source_root: Path, *, field_name: str)
     except ValueError as error:
         raise ValueError(f"{field_name} must remain inside the source root") from error
     if not resolved.is_file():
-        raise ValueError(f"{field_name} must identify a regular file inside the source root")
+        raise MissingSourcePayloadError(
+            f"{field_name} disappeared from the continuously synced source"
+        )
     return relative.as_posix()
 
 
@@ -746,6 +792,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             val_infos=val_infos,
             source_root=arguments.source_root,
             workers=arguments.workers,
+            skip_missing_payloads=True,
         )
         bundle = write_multimodal_index_bundle(
             samples,
@@ -774,6 +821,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "train_samples": sum(sample["split"] == "train" for sample in samples),
         "val_samples": sum(sample["split"] == "val" for sample in samples),
     }
+    if arguments.format == "multimodal-v2":
+        summary["quarantined_missing_payload_samples"] = (
+            len(train_infos) + len(val_infos) - len(samples)
+        )
     if arguments.summary is not None:
         arguments.summary.parent.mkdir(parents=True, exist_ok=True)
         arguments.summary.write_text(

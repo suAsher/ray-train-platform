@@ -143,6 +143,31 @@ class BuildS1HTrustedIndexTest(unittest.TestCase):
                     [incomplete], split="train", source_root=source_root
                 )
 
+    def test_can_quarantine_only_source_payloads_missing_during_publication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = Path(directory)
+            lidar = source_root / "site" / "samples" / "LIDAR_TOP" / "1.bin"
+            lidar.parent.mkdir(parents=True)
+            lidar.write_bytes(np.arange(8, dtype=np.float32).tobytes())
+            missing = self._info(lidar)
+            missing["sweeps"] = []
+            missing["cams"] = {
+                "CAM_FRONT": {"data_path": str(source_root / "missing.jpg")}
+            }
+
+            with self.assertRaises(self.adapter.MissingSourcePayloadError):
+                self.adapter.convert_multimodal_infos(
+                    [missing], split="train", source_root=source_root
+                )
+            samples = self.adapter.convert_multimodal_infos(
+                [missing],
+                split="train",
+                source_root=source_root,
+                skip_missing_payloads=True,
+            )
+
+        self.assertEqual(samples, [])
+
     def test_serializes_output_with_the_publisher_restricted_contract(self):
         from raytrain_publisher.pack import load_trusted_index_document
 
