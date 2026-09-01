@@ -155,6 +155,45 @@ func TestControllerRunsDistributedPlanPackThenFinalizeWithoutChangingLegacyMode(
 	}
 }
 
+func TestControllerDoesNotAdvanceDistributedPhaseWhileJobIsActive(t *testing.T) {
+	repository := newMemoryPublicationRunRepository("team-a")
+	jobs := &scriptedPublicationJobClient{results: []publicationJobResult{
+		{status: PublicationJobStatus{Phase: PublicationJobPacking}},
+		{status: PublicationJobStatus{Phase: PublicationJobValidating, Progress: PublicationProgress{TotalPartitions: 8}}},
+		{status: PublicationJobStatus{Phase: PublicationJobPacking, Progress: PublicationProgress{TotalPartitions: 8}}},
+		{status: PublicationJobStatus{Phase: PublicationJobPacked, Progress: PublicationProgress{TotalPartitions: 8, CompletedPartitions: 8}}},
+	}}
+	options := publicationControllerOptions()
+	options.DistributedEnabled = true
+	options.PartitionCount = 8
+	options.MaxParallelism = 2
+	controller, err := NewController(repository, jobs, options)
+	if err != nil {
+		t.Fatalf("new controller: %v", err)
+	}
+	request := publicationReconcileRequest("publication-active-distributed")
+	repository.run = &domain.DatasetPublicationRun{ID: request.RunID, DatasetID: request.DatasetID, DatasetVersionID: request.DatasetVersionID, ExecutionMode: domain.DatasetPublicationExecutionDistributed, State: domain.DatasetVersionDiscovering}
+	wantStates := []domain.DatasetVersionState{
+		domain.DatasetVersionStabilizing,
+		domain.DatasetVersionValidating,
+		domain.DatasetVersionValidating,
+		domain.DatasetVersionPacking,
+	}
+	for index, want := range wantStates {
+		run, reconcileErr := controller.Reconcile(context.Background(), request)
+		if reconcileErr != nil || run.State != want {
+			t.Fatalf("reconcile %d run=%+v err=%v, want state %q", index+1, run, reconcileErr, want)
+		}
+	}
+	specs := jobs.recordedSpecs()
+	wantPhases := []PublicationExecutionPhase{PublicationExecutionPlan, PublicationExecutionPlan, PublicationExecutionPack, PublicationExecutionPack}
+	for index, want := range wantPhases {
+		if specs[index].ExecutionPhase() != want {
+			t.Fatalf("spec %d phase=%q want=%q", index, specs[index].ExecutionPhase(), want)
+		}
+	}
+}
+
 func TestControllerKeepsPersistedLegacyRunOnLegacyJobAfterDistributedUpgrade(t *testing.T) {
 	repository := newMemoryPublicationRunRepository("team-a")
 	jobs := &scriptedPublicationJobClient{results: []publicationJobResult{{status: PublicationJobStatus{Phase: PublicationJobPending}}}}

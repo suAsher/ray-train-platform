@@ -398,6 +398,14 @@ func (controller *Controller) applyJobStatus(
 	case PublicationJobValidating:
 		return controller.advanceTo(ctx, request, current, domain.DatasetVersionValidating, status.Progress)
 	case PublicationJobPacking:
+		// A distributed plan, Indexed pack, and finalizer can all have an
+		// active Kubernetes Job. Their execution phase is fixed on the run;
+		// only an Indexed pack completion is allowed to advance VALIDATING to
+		// PACKING. Treating an active plan as generic PACKING would skip every
+		// partition and start finalization with no receipts.
+		if current.ExecutionMode.Normalized() == domain.DatasetPublicationExecutionDistributed {
+			return current, nil
+		}
 		return controller.advanceTo(ctx, request, current, domain.DatasetVersionPacking, status.Progress)
 	case PublicationJobPacked:
 		return controller.advanceTo(ctx, request, current, domain.DatasetVersionPacking, status.Progress)
