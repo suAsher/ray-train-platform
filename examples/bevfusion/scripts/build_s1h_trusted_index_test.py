@@ -212,6 +212,49 @@ class BuildS1HTrustedIndexTest(unittest.TestCase):
             self.assertEqual([item["token"] for item in restored], ["token-0", "token-1", "token-2"])
             self.assertEqual(summary["part_count"], 2)
 
+    def test_writes_a_sharded_multimodal_v2_index_without_source_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lidar = root / "site" / "samples" / "LIDAR_TOP" / "1.bin"
+            camera = root / "site" / "samples" / "CAM_FRONT" / "1.jpg"
+            for path, payload in ((lidar, np.arange(8, dtype=np.float32).tobytes()), (camera, b"camera")):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(payload)
+            info = self._info(lidar)
+            info.update(
+                {
+                    "sweeps": [],
+                    "cams": {"CAM_FRONT": {"data_path": str(camera), "sensor2lidar_rotation": np.eye(3), "sensor2lidar_translation": np.zeros(3), "sensor2ego_rotation": np.eye(3), "sensor2ego_translation": np.zeros(3), "camera_intrinsics": np.eye(3)}},
+                    "lidar2ego_rotation": np.eye(3), "lidar2ego_translation": np.zeros(3),
+                    "ego2global_rotation": np.eye(3), "ego2global_translation": np.zeros(3),
+                }
+            )
+            samples = self.adapter.convert_multimodal_infos([info], split="train", source_root=root)
+            output = root / "trusted-index-v3.json"
+
+            summary = self.adapter.write_multimodal_index_bundle(
+                samples, output=output, cbgs_seed=7, samples_per_part=1
+            )
+            manifest = __import__("json").loads(output.read_text(encoding="utf-8"))
+            part_path = root / manifest["parts"][0]["key"]
+            part = __import__("json").loads(part_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(manifest["format"], "trusted-index-sharded-v2")
+        self.assertEqual(manifest["sample_schema_version"], "s1h-multimodal-webdataset-v2")
+        self.assertEqual(part["format"], "trusted-index-v3")
+        self.assertEqual(part["samples"][0]["token"], "sample-token")
+        self.assertEqual(summary["part_count"], 1)
+        self.assertNotIn(str(root), __import__("json").dumps(part, sort_keys=True))
+
+    def test_cli_requires_explicit_multimodal_format_selection(self):
+        arguments = self.adapter.parse_args(
+            [
+                "--source-root", "source", "--train-pkl", "train.pkl",
+                "--output", "trusted-index-v3.json", "--format", "multimodal-v2",
+            ]
+        )
+        self.assertEqual(arguments.format, "multimodal-v2")
+
     def test_bundle_adaptively_splits_a_part_that_exceeds_the_restricted_format(self):
         samples = [{"token": f"token-{index}"} for index in range(5)]
         original_dump = self.adapter.dump_index

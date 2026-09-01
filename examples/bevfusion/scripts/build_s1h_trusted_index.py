@@ -83,6 +83,9 @@ VALID_SPLITS = frozenset(("train", "val", "test"))
 POINT_COLUMNS = 4
 DEFAULT_SAMPLES_PER_PART = 2000
 MULTIMODAL_SCHEMA_VERSION = "s1h-multimodal-webdataset-v2"
+MULTIMODAL_INDEX_FORMAT = "trusted-index-v3"
+MULTIMODAL_INDEX_MANIFEST_FORMAT = "trusted-index-sharded-v2"
+MAX_MULTIMODAL_INDEX_PART_BYTES = 64 * 1024 * 1024
 
 
 def convert_infos(
@@ -164,6 +167,27 @@ def convert_multimodal_infos(
         return list(executor.map(convert, infos))
 
 
+def merge_multimodal_splits(
+    *,
+    train_infos: Iterable[Mapping[str, Any]],
+    val_infos: Iterable[Mapping[str, Any]],
+    source_root: Path,
+    workers: int = 1,
+) -> list[dict[str, Any]]:
+    samples = convert_multimodal_infos(
+        train_infos, split="train", source_root=source_root, workers=workers
+    )
+    samples.extend(
+        convert_multimodal_infos(
+            val_infos, split="val", source_root=source_root, workers=workers
+        )
+    )
+    tokens = [sample["token"] for sample in samples]
+    if len(tokens) != len(set(tokens)):
+        raise ValueError("multimodal trusted index contains a duplicate token across splits")
+    return samples
+
+
 def dump_index(samples: list[dict[str, Any]], *, cbgs_seed: int) -> bytes:
     return dump_trusted_index(samples, class_count=len(OBJECT_CLASSES), cbgs_seed=cbgs_seed)
 
@@ -227,6 +251,66 @@ def write_index_bundle(
     }
 
 
+def write_multimodal_index_bundle(
+    samples: list[dict[str, Any]],
+    *,
+    output: Path,
+    cbgs_seed: int,
+    samples_per_part: int = DEFAULT_SAMPLES_PER_PART,
+) -> dict[str, int]:
+    """Write a bounded, content-addressed v3 fusion index bundle.
+
+    The legacy pickle index remains exclusively for LiDAR v1.  The v3 index is
+    canonical JSON so the distributed WebDataset publisher can inspect and
+    verify it without accepting an executable serialization format.
+    """
+
+    if not samples:
+        raise ValueError("multimodal trusted index requires at least one sample")
+    if samples_per_part < 1 or samples_per_part > 5000:
+        raise ValueError("samples_per_part must be between 1 and 5000")
+    if isinstance(cbgs_seed, bool) or not isinstance(cbgs_seed, int) or cbgs_seed < 0:
+        raise ValueError("cbgs_seed must be a non-negative integer")
+    target = Path(output)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    parts_directory_name = f"{target.stem}.parts"
+    parts_directory = target.parent / parts_directory_name
+    parts_directory.mkdir(parents=True, exist_ok=True)
+    parts = []
+    total_part_bytes = 0
+    for offset in range(0, len(samples), samples_per_part):
+        for chunk, payload in _encode_multimodal_parts(
+            samples[offset : offset + samples_per_part], cbgs_seed=cbgs_seed
+        ):
+            digest = hashlib.sha256(payload).hexdigest()
+            filename = f"sha256-{digest}.json"
+            path = parts_directory / filename
+            if path.exists() and path.read_bytes() != payload:
+                raise ValueError("content-addressed multimodal index part conflicts")
+            if not path.exists():
+                path.write_bytes(payload)
+            parts.append(
+                {
+                    "key": f"{parts_directory_name}/{filename}",
+                    "sha256": digest,
+                    "sample_count": len(chunk),
+                }
+            )
+            total_part_bytes += len(payload)
+    manifest = _canonical_json(
+        {
+            "format": MULTIMODAL_INDEX_MANIFEST_FORMAT,
+            "sample_schema_version": MULTIMODAL_SCHEMA_VERSION,
+            "class_count": len(OBJECT_CLASSES),
+            "cbgs_seed": cbgs_seed,
+            "sample_count": len(samples),
+            "parts": parts,
+        }
+    )
+    target.write_bytes(manifest)
+    return {"index_bytes": len(manifest), "part_bytes": total_part_bytes, "part_count": len(parts)}
+
+
 def _encode_bounded_parts(
     samples: list[dict[str, Any]], *, cbgs_seed: int
 ) -> Iterable[tuple[list[dict[str, Any]], bytes]]:
@@ -246,6 +330,32 @@ def _encode_bounded_parts(
     midpoint = len(samples) // 2
     yield from _encode_bounded_parts(samples[:midpoint], cbgs_seed=cbgs_seed)
     yield from _encode_bounded_parts(samples[midpoint:], cbgs_seed=cbgs_seed)
+
+
+def _encode_multimodal_parts(
+    samples: list[dict[str, Any]], *, cbgs_seed: int
+) -> Iterable[tuple[list[dict[str, Any]], bytes]]:
+    payload = _canonical_json(
+        {
+            "format": MULTIMODAL_INDEX_FORMAT,
+            "sample_schema_version": MULTIMODAL_SCHEMA_VERSION,
+            "class_count": len(OBJECT_CLASSES),
+            "cbgs_seed": cbgs_seed,
+            "samples": samples,
+        }
+    )
+    if len(payload) <= MAX_MULTIMODAL_INDEX_PART_BYTES:
+        yield samples, payload
+        return
+    if len(samples) == 1:
+        raise ValueError("one multimodal index sample exceeds the bounded part size")
+    midpoint = len(samples) // 2
+    yield from _encode_multimodal_parts(samples[:midpoint], cbgs_seed=cbgs_seed)
+    yield from _encode_multimodal_parts(samples[midpoint:], cbgs_seed=cbgs_seed)
+
+
+def _canonical_json(value: object) -> bytes:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
 def _convert_info(
@@ -562,6 +672,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--cbgs-seed", type=int, default=0)
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--samples-per-part", type=int, default=DEFAULT_SAMPLES_PER_PART)
+    parser.add_argument(
+        "--format",
+        choices=("lidar-v1", "multimodal-v2"),
+        default="lidar-v1",
+        help="use multimodal-v2 only for the S1H camera+LiDAR WebDataset publisher",
+    )
     arguments = parser.parse_args(argv)
     if not arguments.train_pkl:
         parser.error("at least one --train-pkl is required")
@@ -576,20 +692,35 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parse_args(argv)
     train_infos = [info for path in arguments.train_pkl for info in load_infos(path)]
     val_infos = [info for path in arguments.val_pkl for info in load_infos(path)]
-    samples = merge_splits(
-        train_infos=train_infos,
-        val_infos=val_infos,
-        source_root=arguments.source_root,
-        workers=arguments.workers,
-    )
-    bundle = write_index_bundle(
-        samples,
-        output=arguments.output,
-        cbgs_seed=arguments.cbgs_seed,
-        samples_per_part=arguments.samples_per_part,
-    )
+    if arguments.format == "multimodal-v2":
+        samples = merge_multimodal_splits(
+            train_infos=train_infos,
+            val_infos=val_infos,
+            source_root=arguments.source_root,
+            workers=arguments.workers,
+        )
+        bundle = write_multimodal_index_bundle(
+            samples,
+            output=arguments.output,
+            cbgs_seed=arguments.cbgs_seed,
+            samples_per_part=arguments.samples_per_part,
+        )
+    else:
+        samples = merge_splits(
+            train_infos=train_infos,
+            val_infos=val_infos,
+            source_root=arguments.source_root,
+            workers=arguments.workers,
+        )
+        bundle = write_index_bundle(
+            samples,
+            output=arguments.output,
+            cbgs_seed=arguments.cbgs_seed,
+            samples_per_part=arguments.samples_per_part,
+        )
     summary = {
         "class_count": len(OBJECT_CLASSES),
+        "format": arguments.format,
         **bundle,
         "samples": len(samples),
         "train_samples": sum(sample["split"] == "train" for sample in samples),
