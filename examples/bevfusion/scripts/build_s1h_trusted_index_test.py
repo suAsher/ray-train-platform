@@ -54,13 +54,13 @@ class BuildS1HTrustedIndexTest(unittest.TestCase):
         self.assertEqual(sample["token"], "sample-token")
         self.assertEqual(sample["scene"], "scene-token")
         self.assertEqual(sample["split"], "train")
-        self.assertEqual(sample["class_ids"], [0, 9])
+        self.assertEqual(sample["class_ids"], [0, 2])
         self.assertEqual(
             sample["lidar_path"],
             "cnfzhjyg/package/samples/LIDAR_TOP/1.bin",
         )
         self.assertEqual(sample["point_columns"], 4)
-        self.assertEqual(sample["info"]["labels"], [0, 9])
+        self.assertEqual(sample["info"]["labels"], [0, 2])
         self.assertEqual(len(sample["info"]["boxes"]), 2)
 
     def test_converts_multimodal_info_to_path_free_v2_payload_descriptors(self):
@@ -156,7 +156,7 @@ class BuildS1HTrustedIndexTest(unittest.TestCase):
             payload = self.adapter.dump_index(samples, cbgs_seed=17)
 
         document = load_trusted_index_document(payload)
-        self.assertEqual(document.class_count, 10)
+        self.assertEqual(document.class_count, 9)
         self.assertEqual(document.cbgs_seed, 17)
         self.assertEqual(document.samples[0]["split"], "val")
 

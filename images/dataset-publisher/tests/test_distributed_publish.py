@@ -13,6 +13,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from raytrain_publisher.distributed_publish import (  # noqa: E402
     build_partition_plan,
     run_plan,
+    wait_for_multimodal_source_index,
 )
 from raytrain_publisher.cloud_publish import CloudPublishRequest  # noqa: E402
 from raytrain_publisher.multimodal import (  # noqa: E402
@@ -32,6 +33,47 @@ class _IndexStorage:
 
 
 class DistributedPublicationPlanTest(unittest.TestCase):
+    def test_multimodal_plan_waits_for_its_immutable_source_index(self) -> None:
+        class Storage:
+            def __init__(self) -> None:
+                self.availability = iter((False, False, True))
+
+            def source_exists(self, key: str) -> bool:
+                self.key = key
+                return next(self.availability)
+
+        storage = Storage()
+        clock_values = iter((0.0, 0.0, 10.0, 20.0))
+        sleeps: list[float] = []
+
+        wait_for_multimodal_source_index(
+            self._request(),
+            storage=storage,
+            timeout_seconds=60,
+            poll_seconds=10,
+            monotonic=lambda: next(clock_values),
+            sleep=sleeps.append,
+        )
+
+        self.assertEqual(storage.key, ".raytrain/trusted-index-v3.json")
+        self.assertEqual(sleeps, [10, 10])
+
+    def test_multimodal_plan_stops_waiting_after_the_bounded_deadline(self) -> None:
+        class Storage:
+            def source_exists(self, _key: str) -> bool:
+                return False
+
+        clock_values = iter((0.0, 0.0, 31.0))
+        with self.assertRaisesRegex(ValueError, "source index is unavailable"):
+            wait_for_multimodal_source_index(
+                self._request(),
+                storage=Storage(),
+                timeout_seconds=30,
+                poll_seconds=30,
+                monotonic=lambda: next(clock_values),
+                sleep=lambda _seconds: None,
+            )
+
     def test_plan_is_stable_and_reuses_only_matching_verified_receipts(self) -> None:
         samples = (
             {"token": "sample-a", "source_key": "a.bin", "size": 10, "sha256": "a" * 64},
@@ -132,6 +174,24 @@ class DistributedPublicationPlanTest(unittest.TestCase):
         return json.dumps(
             value, ensure_ascii=False, separators=(",", ":"), sort_keys=True
         ).encode("utf-8")
+
+    @staticmethod
+    def _request() -> CloudPublishRequest:
+        return CloudPublishRequest(
+            run_id="publication-test",
+            dataset_id="dataset-test",
+            dataset_version_id="version-test",
+            version="20260901T000000Z+test",
+            schema_version="s1h-multimodal-webdataset-v2",
+            source_bucket="source-bucket",
+            target_bucket="target-bucket",
+            tos_endpoint="tos-cn-shanghai.ivolces.com",
+            tos_region="cn-shanghai",
+            source_root="ray-train/public/labeled",
+            source_index=".raytrain/trusted-index-v3.json",
+            internal_prefix="ray-train/platform/datasets",
+            output_dir=Path("/tmp/raytrain-test"),
+        )
 
     @staticmethod
     def _multimodal_sample() -> dict:

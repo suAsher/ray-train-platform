@@ -197,6 +197,23 @@ class TOSStorage:
             failure_message="TOS source HEAD failed",
         )
 
+    def source_exists(self, key: str) -> bool:
+        """Return false only when a scoped source object is definitely absent."""
+
+        full_key = self._source_key(key)
+        try:
+            output = self._client.head_object(self._source_bucket, full_key)
+        except Exception as error:
+            status_code = getattr(error, "status_code", None)
+            if status_code == 404:
+                return False
+            raise TOSStorageError("TOS source availability check failed") from None
+        _object_info_from_head(
+            output,
+            failure_message="TOS source availability check failed",
+        )
+        return True
+
     def get_index(
         self,
         key: str,

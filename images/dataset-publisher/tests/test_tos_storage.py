@@ -102,6 +102,12 @@ class _FakeTOSClient:
         return self.list_result
 
 
+class _FakeTOSServiceError(RuntimeError):
+    def __init__(self, status_code: int, message: str = "sensitive provider detail") -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 class _FakeFederationToken:
     def __init__(
         self,
@@ -639,6 +645,24 @@ class TOSStorageReadTests(unittest.TestCase):
                 ("get_object", (SOURCE_BUCKET, full_key), {}),
             ],
         )
+
+    def test_source_exists_distinguishes_missing_from_storage_failure(self) -> None:
+        storage, client = _new_storage()
+        full_key = SOURCE_PREFIX + "/indexes/version.json"
+        client.head_results[(SOURCE_BUCKET, full_key)] = SimpleNamespace(
+            content_length=1,
+            meta={},
+        )
+
+        self.assertTrue(storage.source_exists("indexes/version.json"))
+
+        client.failure = _FakeTOSServiceError(404)
+        self.assertFalse(storage.source_exists("indexes/version.json"))
+
+        client.failure = _FakeTOSServiceError(503)
+        with self.assertRaisesRegex(TOSStorageError, "source availability check failed") as raised:
+            storage.source_exists("indexes/version.json")
+        self.assertNotIn("sensitive provider detail", str(raised.exception))
 
     def test_index_get_rejects_head_or_stream_larger_than_bound(self) -> None:
         storage, client = _new_storage()

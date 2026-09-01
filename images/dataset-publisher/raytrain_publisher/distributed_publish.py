@@ -15,6 +15,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from collections import Counter
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -56,6 +57,8 @@ from .irsa import VKEIRSAProvider
 _MAX_PARTITIONS = 100_000
 _RECEIPT_FORMAT = "raytrain-partition-receipt-v1"
 _JSON_CONTENT_TYPE = "application/json"
+_MULTIMODAL_INDEX_WAIT_SECONDS = 24 * 60 * 60
+_MULTIMODAL_INDEX_POLL_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -244,6 +247,40 @@ def run_plan(request: CloudPublishRequest, *, storage: Any, partition_count: int
     # Partition membership is deterministic and can be recomputed after a
     # controller restart; no mutable plan object is required.
     _ = sum(1 for sample in index.samples if _sample_partition(sample["token"], partition_count) >= 0)
+
+
+def wait_for_multimodal_source_index(
+    request: CloudPublishRequest,
+    *,
+    storage: Any,
+    timeout_seconds: float = _MULTIMODAL_INDEX_WAIT_SECONDS,
+    poll_seconds: float = _MULTIMODAL_INDEX_POLL_SECONDS,
+    monotonic: Any = time.monotonic,
+    sleep: Any = time.sleep,
+) -> None:
+    """Wait for the version-scoped v2 index without hiding storage failures."""
+
+    if request.schema_version != MULTIMODAL_SCHEMA_VERSION:
+        return
+    if timeout_seconds <= 0 or poll_seconds <= 0:
+        raise ValueError("source index wait configuration is invalid")
+    deadline = monotonic() + timeout_seconds
+    while not storage.source_exists(request.source_index):
+        if monotonic() >= deadline:
+            raise ValueError("multimodal source index is unavailable")
+        print(
+            json.dumps(
+                {
+                    "component": "dataset-publisher",
+                    "stage": "source-index-waiting",
+                    "dataset_version_id": request.dataset_version_id,
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        sleep(poll_seconds)
 
 
 def _load_publication_index(request: CloudPublishRequest, *, storage: Any) -> Any:
@@ -661,6 +698,7 @@ def main(argv: list[str] | None = None) -> int:
         count = _validated_partition_count(arguments.partition_count)
         storage = TOSStorage(source_bucket=request.source_bucket, target_bucket=request.target_bucket, endpoint=request.tos_endpoint, region=request.tos_region, source_prefix=request.source_root, internal_dataset_prefix=request.internal_prefix, irsa_provider=VKEIRSAProvider())
         if arguments.phase == "plan":
+            wait_for_multimodal_source_index(request, storage=storage)
             run_plan(request, storage=storage, partition_count=count)
         elif arguments.phase == "pack":
             ordinal = _partition_ordinal(os.environ.get("DATASET_PUBLISHER_PARTITION_ORDINAL", ""), count)

@@ -34,7 +34,6 @@ OBJECT_CLASSES = (
     "Fork_lift",
     "Cone",
     "Pedestrian",
-    "IGV",
 )
 CLASS_TO_ID = {name: index for index, name in enumerate(OBJECT_CLASSES)}
 NAME_MAPPING = {
@@ -53,10 +52,10 @@ NAME_MAPPING = {
     "Truck_trailer.w_container": "Vehicle",
     "Vehicle": "Vehicle",
     "vehicle": "Vehicle",
-    "igv.w_container": "IGV",
-    "igv.w_containerer": "IGV",
-    "igv.wo_container": "IGV",
-    "igv.wo_containerer": "IGV",
+    "igv.w_container": "Vehicle",
+    "igv.w_containerer": "Vehicle",
+    "igv.wo_container": "Vehicle",
+    "igv.wo_containerer": "Vehicle",
     "Bus": "Vehicle",
     "bus": "Vehicle",
     "Van": "Vehicle",
