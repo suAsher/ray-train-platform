@@ -41,6 +41,8 @@ WORKDIR /workspace
 FROM ${RAY_CANARY_FOUNDATION_IMAGE} AS bevfusion-ray258-canary
 ARG RAY_CANARY_VERSION=2.58.0
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG RESNET50_URL=https://download.pytorch.org/models/resnet50-0676ba61.pth
+ARG RESNET50_SHA256=0676ba61b6795bbe1773cffd859882e5e297624d384b6993f7c9e683e722fb8a
 
 USER root
 RUN test "${RAY_CANARY_VERSION}" = "2.58.0" \
@@ -95,6 +97,10 @@ RUN chmod 0755 /usr/local/bin/prepare-bevfusion-canary-source \
 RUN python3 -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
       --constraint /opt/raytrain-build/constraints-ray258.txt \
       addict==2.4.0 torchpack==0.3.1 \
+ && install -d -m 0755 /opt/raytrain-cache/torch/hub/checkpoints \
+ && python3 -c "import shutil, urllib.request; response=urllib.request.urlopen('${RESNET50_URL}', timeout=300); target=open('/opt/raytrain-cache/torch/hub/checkpoints/resnet50-0676ba61.pth', 'wb'); shutil.copyfileobj(response, target); target.close(); response.close()" \
+ && echo "${RESNET50_SHA256}  /opt/raytrain-cache/torch/hub/checkpoints/resnet50-0676ba61.pth" | sha256sum -c - \
+ && chmod 0444 /opt/raytrain-cache/torch/hub/checkpoints/resnet50-0676ba61.pth \
  && apt-get purge -y build-essential git ninja-build \
  && apt-get autoremove -y \
  && rm -rf /var/lib/apt/lists/* /root/.cache
@@ -125,6 +131,7 @@ ENV RAYTRAIN_IMAGE_SOURCE_ROOT=/opt/bevfusion/mmdet3d
 ENV PYTHONPATH=/opt/bevfusion:/usr/local/lib/raytrain-platform:/usr/local/lib/raytrain-platform/bevfusion
 ENV LD_LIBRARY_PATH=/home/ray/anaconda3/lib/python3.10/site-packages/torch/lib:${LD_LIBRARY_PATH}
 ENV MPLCONFIGDIR=/tmp/raytrain-matplotlib
+ENV TORCH_HOME=/opt/raytrain-cache/torch
 ENV RAY_USAGE_STATS_ENABLED=0
 USER ray
 WORKDIR /workspace

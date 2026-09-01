@@ -166,6 +166,9 @@ assert_contracts() {
   require_literal images/bevfusion-runtime/Dockerfile "assert torch.__version__.startswith('2.4.1')"
   require_literal images/bevfusion-runtime/Dockerfile 'pyarrow==25.0.1'
   require_literal images/bevfusion-runtime/Dockerfile 'torchpack==0.3.1'
+  require_literal images/bevfusion-runtime/Dockerfile 'ARG RESNET50_SHA256=0676ba61b6795bbe1773cffd859882e5e297624d384b6993f7c9e683e722fb8a'
+  require_literal images/bevfusion-runtime/Dockerfile 'https://download.pytorch.org/models/resnet50-0676ba61.pth'
+  require_literal images/bevfusion-runtime/Dockerfile 'ENV TORCH_HOME=/opt/raytrain-cache/torch'
   require_literal images/bevfusion-runtime/Dockerfile 'COPY images/bevfusion-runtime/constraints-ray258.txt /opt/raytrain-build/constraints-ray258.txt'
   require_literal images/bevfusion-runtime/Dockerfile '--constraint /opt/raytrain-build/constraints-ray258.txt'
   require_literal images/bevfusion-runtime/Dockerfile 'apt-get purge -y build-essential git ninja-build'

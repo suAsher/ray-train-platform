@@ -26,6 +26,9 @@ grep -Fq 'ray[default,train,tune]==${RAY_CANARY_VERSION}' "$dockerfile"
 grep -Fq 'pyarrow==25.0.1' "$dockerfile"
 grep -Fq 'addict==2.4.0' "$dockerfile"
 grep -Fq 'torchpack==0.3.1' "$dockerfile"
+grep -Fq 'ARG RESNET50_SHA256=0676ba61b6795bbe1773cffd859882e5e297624d384b6993f7c9e683e722fb8a' "$dockerfile"
+grep -Fq 'https://download.pytorch.org/models/resnet50-0676ba61.pth' "$dockerfile"
+grep -Fq 'ENV TORCH_HOME=/opt/raytrain-cache/torch' "$dockerfile"
 grep -Fq 'shapely==1.8.5' "$dockerfile"
 if grep -Fq 'shapely==1.8.5.post1' "$dockerfile"; then
   echo 'post-release Shapely is outside nuscenes-devkit 1.1.10 constraint' >&2
