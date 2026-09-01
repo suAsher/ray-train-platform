@@ -44,6 +44,34 @@ class GenerateS1HPublicIndexesTest(unittest.TestCase):
         self.assertEqual(packages[0].path, complete_a.resolve())
         self.assertEqual(packages[1].path, complete_b.resolve())
 
+    def test_package_metadata_discovery_uses_bounded_io_parallelism(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "labeled"
+            self._package(root, "site-a", "package-a", samples=1)
+            self._package(root, "site-a", "package-b", samples=1)
+            worker_counts = []
+
+            class RecordingExecutor:
+                def __init__(self, *, max_workers):
+                    worker_counts.append(max_workers)
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *_args):
+                    return False
+
+                def map(self, function, values):
+                    return map(function, values)
+
+            with mock.patch.object(
+                self.generator, "ThreadPoolExecutor", RecordingExecutor
+            ):
+                packages = self.generator.discover_packages(root, workers=2)
+
+        self.assertEqual(worker_counts, [2])
+        self.assertEqual([package.name for package in packages], ["package-a", "package-b"])
+
     def test_merges_generated_pkls_and_requires_scene_provenance(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)

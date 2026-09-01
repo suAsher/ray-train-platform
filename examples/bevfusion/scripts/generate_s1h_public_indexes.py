@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 import hashlib
@@ -31,44 +31,43 @@ class PackageSpec:
     fingerprint: str
 
 
-def discover_packages(source_root: Path) -> tuple[PackageSpec, ...]:
+def discover_packages(source_root: Path, *, workers: int = 8) -> tuple[PackageSpec, ...]:
     root = Path(source_root).resolve(strict=True)
     if not root.is_dir():
         raise ValueError("source root must be a directory")
-    packages = []
+    if isinstance(workers, bool) or not isinstance(workers, int) or not 1 <= workers <= 32:
+        raise ValueError("discovery workers must be between 1 and 32")
+    candidates = []
     for collection in _safe_directories(root):
         for package in _safe_directories(collection):
-            metadata = package / "v1.0-mini"
-            if metadata.is_symlink() or not metadata.is_dir():
-                continue
-            if any(not (metadata / name).is_file() for name in REQUIRED_METADATA):
-                continue
-            try:
-                metadata_files = {
-                    name: (metadata / name).read_bytes() for name in REQUIRED_METADATA
-                }
-                samples = json.loads(metadata_files["sample.json"].decode("utf-8"))
-            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-                raise ValueError(f"invalid sample metadata in {collection.name}/{package.name}") from error
-            if not isinstance(samples, list):
-                raise ValueError(f"sample metadata must be a list in {collection.name}/{package.name}")
-            packages.append(
-                PackageSpec(
-                    collection=collection.name,
-                    name=package.name,
-                    path=package,
-                    sample_count=len(samples),
-                    fingerprint=_metadata_fingerprint(metadata_files),
-                )
-            )
-    return tuple(
-        sorted(
-            packages,
-            key=lambda item: (
-                item.collection.encode("utf-8"),
-                item.name.encode("utf-8"),
-            ),
-        )
+            candidates.append((collection.name, package))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        inspected = executor.map(_inspect_package, candidates)
+        return tuple(package for package in inspected if package is not None)
+
+
+def _inspect_package(candidate: tuple[str, Path]) -> PackageSpec | None:
+    collection_name, package = candidate
+    metadata = package / "v1.0-mini"
+    if metadata.is_symlink() or not metadata.is_dir():
+        return None
+    if any(not (metadata / name).is_file() for name in REQUIRED_METADATA):
+        return None
+    try:
+        metadata_files = {
+            name: (metadata / name).read_bytes() for name in REQUIRED_METADATA
+        }
+        samples = json.loads(metadata_files["sample.json"].decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"invalid sample metadata in {collection_name}/{package.name}") from error
+    if not isinstance(samples, list):
+        raise ValueError(f"sample metadata must be a list in {collection_name}/{package.name}")
+    return PackageSpec(
+        collection=collection_name,
+        name=package.name,
+        path=package,
+        sample_count=len(samples),
+        fingerprint=_metadata_fingerprint(metadata_files),
     )
 
 
@@ -273,7 +272,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     arguments = parse_args()
-    packages = discover_packages(arguments.source_root)
+    packages = discover_packages(arguments.source_root, workers=arguments.workers)
     inventory = {
         "collections": len({package.collection for package in packages}),
         "packages": len(packages),
@@ -305,7 +304,7 @@ def main() -> int:
                         "reason": str(result["reason"]),
                     }
                 )
-    if discover_packages(arguments.source_root) != packages:
+    if discover_packages(arguments.source_root, workers=arguments.workers) != packages:
         raise ValueError("source metadata changed during index generation; retry with a new output root")
     summary = merge_package_outputs(arguments.output_root, rejected)
     _write_json_atomic(arguments.output_root / "rejected-packages.json", rejected)
