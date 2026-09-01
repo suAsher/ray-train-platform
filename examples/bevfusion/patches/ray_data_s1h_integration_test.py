@@ -39,6 +39,12 @@ def train_model(
         )
         for ds in dataset
     ]
+
+    model = MMDistributedDataParallel(
+        model.cuda(),
+        device_ids=[torch.cuda.current_device()],
+        broadcast_buffers=False,
+    )
     runner = build_runner(cfg.runner)
     if hasattr(runner, "set_dataset"):
         runner.set_dataset(dataset)
@@ -82,6 +88,10 @@ class RayDataS1HIntegrationPatchTest(unittest.TestCase):
         self.assertIn("RAYTRAIN_DATASET_PREFETCH_BATCHES", patched)
         self.assertEqual(patched.count("build_dataloader("), 1)
         self.assertIn("legacy_builder=legacy_builder", patched)
+        self.assertIn("class _PlatformMMDistributedDataParallel", patched)
+        self.assertIn("def _platform_distributed_wrapper", patched)
+        self.assertIn("model = _platform_distributed_wrapper()(", patched)
+        self.assertNotIn("model = MMDistributedDataParallel(", patched)
         compile(patched, "mmdet3d/apis/train.py", "exec")
 
     def test_entrypoint_uses_proxy_and_skips_legacy_validation_only_for_streaming(self):

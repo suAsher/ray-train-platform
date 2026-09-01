@@ -46,6 +46,22 @@ TRAIN_DATALOADER_HELPER = NATIVE_STREAMING_HELPER + '''def _platform_build_train
     )
 
 
+class _PlatformMMDistributedDataParallel(MMDistributedDataParallel):
+    """Bridge MMCV 1.4 to PyTorch versions that removed _sync_params."""
+
+    def _sync_params(self):
+        return None
+
+
+def _platform_distributed_wrapper():
+    if (
+        _platform_uses_native_streaming()
+        and not hasattr(MMDistributedDataParallel, "_sync_params")
+    ):
+        return _PlatformMMDistributedDataParallel
+    return MMDistributedDataParallel
+
+
 '''
 
 
@@ -96,9 +112,23 @@ def patch_s1h_train_api(source: str) -> str:
     marker = "def _platform_build_train_dataloader(ds, cfg, distributed):"
     native_gate_present = "def _platform_uses_native_streaming():" in source
     streaming_block_present = STREAMING_DATALOADER_BLOCK in source
-    if marker in source and native_gate_present and streaming_block_present:
+    ddp_wrapper_present = (
+        "def _platform_distributed_wrapper():" in source
+        and "model = _platform_distributed_wrapper()(" in source
+    )
+    if (
+        marker in source
+        and native_gate_present
+        and streaming_block_present
+        and ddp_wrapper_present
+    ):
         return source
-    if marker in source or native_gate_present or streaming_block_present:
+    if (
+        marker in source
+        or native_gate_present
+        or streaming_block_present
+        or ddp_wrapper_present
+    ):
         raise ValueError("partially applied S1H data loader patch")
 
     patched = source
@@ -115,11 +145,17 @@ def patch_s1h_train_api(source: str) -> str:
         TRAIN_DATALOADER_HELPER + "def train_model(\n",
         "data loader helper insertion",
     )
-    return _replace_once(
+    patched = _replace_once(
         patched,
         LEGACY_DATALOADER_BLOCK,
         STREAMING_DATALOADER_BLOCK,
         "data loader selection",
+    )
+    return _replace_once(
+        patched,
+        "    model = MMDistributedDataParallel(\n",
+        "    model = _platform_distributed_wrapper()(\n",
+        "MMCV distributed wrapper selection",
     )
 
 

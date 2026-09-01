@@ -347,11 +347,13 @@ def _prepare_multimodal_input(
             raise ValueError("configured multimodal camera is unavailable")
         ordered_camera_names = camera_names
     elif camera_indices is not None:
-        if any(index >= len(ordered_camera_names) for index in camera_indices):
-            raise ValueError("configured multimodal camera index is unavailable")
         ordered_camera_names = tuple(
-            ordered_camera_names[index] for index in camera_indices
+            ordered_camera_names[index]
+            for index in camera_indices
+            if index < len(ordered_camera_names)
         )
+        if not ordered_camera_names:
+            raise ValueError("configured multimodal cameras are unavailable")
     camera_items = [(name, cameras[name]) for name in ordered_camera_names]
     data.update(
         image_paths=[],
@@ -385,6 +387,8 @@ def _prepare_multimodal_input(
 
     boxes = numpy.asarray(info["boxes"], dtype=numpy.float32)
     labels = numpy.asarray(info["labels"], dtype=numpy.int64)
+    if boxes.size == 0:
+        boxes = numpy.empty((0, 7), dtype=numpy.float32)
     if boxes.ndim != 2 or boxes.shape[1] not in (7, 9) or labels.ndim != 1 or len(boxes) != len(labels):
         raise ValueError("multimodal annotations are invalid")
     point_counts = numpy.asarray(info.get("num_lidar_pts", [1] * len(boxes)), dtype=numpy.float32)

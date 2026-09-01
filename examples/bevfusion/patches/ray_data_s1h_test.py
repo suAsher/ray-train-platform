@@ -232,6 +232,67 @@ class RayDataS1HPatchTest(unittest.TestCase):
         self.assertEqual(boxes.origin, (0.5, 0.5, 0))
         np.testing.assert_array_equal(boxes.values[0, -2:], np.asarray([1.5, 0]))
 
+    def test_multimodal_camera_indices_ignore_missing_views_like_legacy_dataset(self):
+        adapter = _adapter_module()
+
+        class FakeBoxes:
+            def __init__(self, values, *, box_dim, origin):
+                self.values = values
+
+            def convert_to(self, _box_mode):
+                return self
+
+        identity = np.eye(3, dtype=np.float32).tolist()
+        camera = {
+            "sensor2lidar_rotation": identity,
+            "sensor2lidar_translation": [0, 0, 0],
+            "sensor2ego_rotation": identity,
+            "sensor2ego_translation": [0, 0, 0],
+            "camera_intrinsics": identity,
+        }
+        sample = {
+            "token": "sample-a",
+            "timestamp": 42,
+            "payload_paths": {
+                "lidar": "/tmp/batch/lidar.bin",
+                "sweeps": [],
+                "cameras": {
+                    "CAM_FRONT": "/tmp/batch/front.jpg",
+                    "CAM_REAR": "/tmp/batch/rear.jpg",
+                },
+            },
+            "info": {
+                "boxes": [],
+                "labels": [],
+                "lidar2ego_rotation": identity,
+                "lidar2ego_translation": [0, 0, 0],
+                "ego2global_rotation": identity,
+                "ego2global_translation": [0, 0, 0],
+                "sweeps": [],
+                "cams": {"CAM_FRONT": camera, "CAM_REAR": camera},
+            },
+        }
+
+        prepared = adapter._prepare_multimodal_input(
+            sample,
+            numpy=np,
+            boxes_type=FakeBoxes,
+            box_mode_3d="LIDAR_MODE",
+            with_velocity=False,
+            class_names=("Car",),
+            camera_names=None,
+            camera_indices=(0, 1, 4),
+        )
+
+        self.assertEqual(
+            prepared["image_paths"],
+            ["/tmp/batch/front.jpg", "/tmp/batch/rear.jpg"],
+        )
+        self.assertEqual(
+            prepared["ann_info"]["gt_bboxes_3d"].values.shape,
+            (0, 7),
+        )
+
     def test_streaming_proxy_is_frozen_and_forwards_set_epoch_to_transforms(self):
         adapter = _adapter_module()
 
