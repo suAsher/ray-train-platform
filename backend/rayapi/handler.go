@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -414,6 +415,7 @@ func (handler *Handler) submitJob(c *gin.Context) {
 	}
 	translated, err := TranslateSubmitRequestWithDefaults(request, handler.defaults)
 	if err != nil {
+		logRaySubmissionFailure("translate", request.SubmissionID, err)
 		handler.writeError(c, http.StatusBadRequest)
 		return
 	}
@@ -442,10 +444,21 @@ func (handler *Handler) submitJob(c *gin.Context) {
 		Principal: principal, Spec: translated.Spec, Origin: domain.SubmissionOriginRayCLI, ExternalSubmissionID: translated.ExternalSubmissionID,
 	})
 	if err != nil || job == nil {
+		if err == nil {
+			err = errors.New("submission returned no job")
+		}
+		logRaySubmissionFailure("submit", translated.ExternalSubmissionID, err)
 		handler.writeError(c, http.StatusBadRequest)
 		return
 	}
 	c.JSON(http.StatusOK, jobSubmitResponse{SubmissionID: translated.ExternalSubmissionID, JobID: job.ID})
+}
+
+// logRaySubmissionFailure keeps the Ray-compatible HTTP error deliberately
+// generic while preserving an operator-visible reason. Never pass request
+// bodies, metadata, entrypoints, or authorization material to this helper.
+func logRaySubmissionFailure(stage, submissionID string, err error) {
+	log.Printf("Ray API job submission rejected: stage=%s submission_id=%q error=%v", stage, submissionID, err)
 }
 
 func (handler *Handler) listJobs(c *gin.Context) {
