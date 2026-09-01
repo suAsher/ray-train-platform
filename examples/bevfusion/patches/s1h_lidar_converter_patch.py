@@ -74,6 +74,27 @@ CAMERA_SELECTOR_HELPER = '''def _raytrain_camera_types(sample_data, site_name=No
         cameras = site_families[family]
         if all(camera in available for camera in cameras):
             return list(cameras)
+    if len(available) == 5:
+        def camera_order(camera):
+            normalized = camera.replace(" ", "_").upper()
+            is_left = "LEFT" in normalized
+            is_right = "RIGHT" in normalized
+            is_front = "FRONT" in normalized
+            if is_front and not is_left and not is_right:
+                position = 0
+            elif is_front and is_right:
+                position = 1
+            elif is_front and is_left:
+                position = 2
+            elif is_left:
+                position = 3
+            elif is_right:
+                position = 4
+            else:
+                position = 5
+            return position, normalized
+
+        return sorted(available, key=camera_order)
     raise KeyError(f"unsupported camera layout, available: {sorted(available)}")
 
 
