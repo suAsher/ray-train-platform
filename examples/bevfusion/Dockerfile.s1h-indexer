@@ -15,6 +15,7 @@ COPY tools/data_converter/eval_scenes_by_site.txt /opt/bevfusion/tools/data_conv
 WORKDIR /opt/raytrain-indexer
 COPY generate_s1h_public_indexes.py /opt/raytrain-indexer/generate_s1h_public_indexes.py
 COPY build_s1h_trusted_index.py /opt/raytrain-indexer/build_s1h_trusted_index.py
+COPY slice_s1h_trusted_index.py /opt/raytrain-indexer/slice_s1h_trusted_index.py
 COPY raytrain_publisher /opt/raytrain-indexer/raytrain_publisher
 
 ENV PYTHONPATH=/opt/raytrain-indexer:/opt/bevfusion:/home/westwell/bevfusion \

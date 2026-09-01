@@ -26,6 +26,8 @@ grep -Fq 'manifest root committed last' "$runner" || fail 'job must commit the r
 grep -Fq -- '--run-id' "$runner" || fail 'job must support an auditable retry without changing the dataset version'
 grep -Fq 'output_key="$version-$run_id"' "$runner" || fail 'a retry must use an isolated resumable output root'
 grep -Fq -- '--finalize-only' "$runner" || fail 'job must support resuming a validated build at publication'
+grep -Fq -- '--slice-from-version' "$runner" || fail 'job must support a deterministic bounded acceptance version'
+grep -Fq 'slice_s1h_trusted_index.py' "$runner" || fail 'acceptance version must reuse a verified immutable source index'
 grep -Fq 'source metadata changed during index generation' \
   "$root_dir/examples/bevfusion/scripts/generate_s1h_public_indexes.py" ||
   fail 'job generator must reject a changing source tree'

@@ -22,11 +22,13 @@ grep -Fq 'COPY mmdet3d /home/westwell/bevfusion/mmdet3d' "$dockerfile" ||
 grep -Fq '/home/westwell/bevfusion' "$dockerfile" || fail 'retained extension tree must be importable'
 grep -Fq 'COPY generate_s1h_public_indexes.py' "$dockerfile" || fail 'fresh PKL generator is missing'
 grep -Fq 'COPY build_s1h_trusted_index.py' "$dockerfile" || fail 'trusted index adapter is missing'
+grep -Fq 'COPY slice_s1h_trusted_index.py' "$dockerfile" || fail 'bounded acceptance index slicer is missing'
 grep -Fq 'COPY raytrain_publisher' "$dockerfile" || fail 'restricted publisher schema package is missing'
 grep -Fq 'USER 1000:1000' "$dockerfile" || fail 'runtime must be non-root'
 
 grep -Fq 'git -C "$source_dir" archive' "$builder" || fail 'build input must come from a Git commit'
 grep -Fq 'tools/data_converter/eval_scenes_by_site.txt' "$builder" || fail 'build context must include the pinned validation split'
+grep -Fq 'slice_s1h_trusted_index.py' "$builder" || fail 'build context must include the acceptance index slicer'
 grep -Fq 's1h_lidar_converter_patch.py' "$builder" || fail 'build must apply the reviewed LiDAR-only patch'
 grep -A1 -F 's1h_lidar_converter_patch.py' "$builder" | grep -Fq '"$context_dir"' ||
   fail 'LiDAR-only patch must receive the temporary repository root'

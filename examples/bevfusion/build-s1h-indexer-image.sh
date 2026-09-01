@@ -22,6 +22,7 @@ python3 "$platform_root/examples/bevfusion/patches/s1h_lidar_converter_patch.py"
   "$context_dir"
 cp "$platform_root/examples/bevfusion/scripts/generate_s1h_public_indexes.py" "$context_dir/"
 cp "$platform_root/examples/bevfusion/scripts/build_s1h_trusted_index.py" "$context_dir/"
+cp "$platform_root/examples/bevfusion/scripts/slice_s1h_trusted_index.py" "$context_dir/"
 cp "$platform_root/images/dataset-publisher/raytrain_publisher/"*.py "$context_dir/raytrain_publisher/"
 
 base_image="${BASE_IMAGE:-harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion-packed@sha256:dba620167db021356abc8057104800a093589a9ffaa81644f0ffe108bd3a538d}"

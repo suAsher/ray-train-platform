@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: run-s1h-index-build.sh --image <digest reference> --version <id> [--run-id retry1] [--namespace tenant-local] [--source labeled] [--finalize-only] [--wait]
+Usage: run-s1h-index-build.sh --image <digest reference> --version <id> [--run-id retry1] [--namespace tenant-local] [--source labeled] [--finalize-only] [--slice-from-version <id> --train-samples <n> --val-samples <n>] [--wait]
 EOF
 }
 
@@ -14,6 +14,9 @@ version=""
 run_id=""
 wait_for_completion=false
 finalize_only=false
+slice_from_version=""
+train_sample_limit=""
+val_sample_limit=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --image) image="${2:-}"; shift 2 ;;
@@ -22,6 +25,9 @@ while [[ $# -gt 0 ]]; do
     --namespace) namespace="${2:-}"; shift 2 ;;
     --source) source_relative="${2:-}"; shift 2 ;;
     --finalize-only) finalize_only=true; shift ;;
+    --slice-from-version) slice_from_version="${2:-}"; shift 2 ;;
+    --train-samples) train_sample_limit="${2:-}"; shift 2 ;;
+    --val-samples) val_sample_limit="${2:-}"; shift 2 ;;
     --wait) wait_for_completion=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; exit 2 ;;
@@ -40,6 +46,23 @@ done
   echo '--run-id must be a lowercase identifier with at most 20 characters' >&2
   exit 2
 }
+if [[ -n "$slice_from_version" ]]; then
+  [[ "$slice_from_version" =~ ^[a-z0-9]([a-z0-9.-]{0,38}[a-z0-9])?$ ]] || {
+    echo '--slice-from-version must be a lowercase release identifier with at most 40 characters' >&2
+    exit 2
+  }
+  [[ "$train_sample_limit" =~ ^[1-9][0-9]{0,5}$ && "$val_sample_limit" =~ ^[1-9][0-9]{0,5}$ ]] || {
+    echo '--train-samples and --val-samples must be positive integers below one million' >&2
+    exit 2
+  }
+  "$finalize_only" && {
+    echo '--finalize-only cannot be combined with --slice-from-version' >&2
+    exit 2
+  }
+elif [[ -n "$train_sample_limit" || -n "$val_sample_limit" ]]; then
+  echo 'sample limits require --slice-from-version' >&2
+  exit 2
+fi
 [[ "$namespace" =~ ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$ ]] || {
   echo '--namespace must be a DNS label' >&2
   exit 2
@@ -90,7 +113,12 @@ if [[ -n "$run_id" ]]; then
 fi
 output_root="$source_root/.raytrain/index-builds/$output_key"
 final_index="$source_root/.raytrain/indexes/$version/trusted-index-v3.json"
-if "$finalize_only"; then
+index_command='python3 /opt/raytrain-indexer/build_s1h_trusted_index.py --source-root "$source_root" --train-pkl "$output_root/merged_nuscenes_infos_train.pkl" --val-pkl "$output_root/merged_nuscenes_infos_val.pkl" --output "$output_root/trusted-index-v3.json" --summary "$output_root/trusted-index-v3.summary.json" --workers 32 --format multimodal-v2'
+if [[ -n "$slice_from_version" ]]; then
+  slice_source="$source_root/.raytrain/indexes/$slice_from_version/trusted-index-v3.json"
+  generation_command='mkdir -p "$output_root"; test -f '"'"$slice_source"'"' || { echo "slice source index is unavailable" >&2; exit 4; }'
+  index_command='python3 /opt/raytrain-indexer/slice_s1h_trusted_index.py --source-index '"'"$slice_source"'"' --output "$output_root/trusted-index-v3.json" --train-samples '"$train_sample_limit"' --val-samples '"$val_sample_limit"
+elif "$finalize_only"; then
   generation_command='test -f "$output_root/merged_nuscenes_infos_train.pkl" -a -f "$output_root/merged_nuscenes_infos_val.pkl" -a -f "$output_root/rejected-packages.json" || { echo "validated index build outputs are incomplete" >&2; exit 4; }'
 else
   generation_command='python3 /opt/raytrain-indexer/generate_s1h_public_indexes.py --source-root "$source_root" --output-root "$output_root" --workers 32 --max-sweeps 10 --min-scene-samples 81 --multimodal'
@@ -102,7 +130,7 @@ command="$(printf '%s\n' \
   "final_index='$final_index'" \
   'test ! -e "$final_index" || { echo "trusted index already exists; publish a new dataset source root instead of overwriting it" >&2; exit 3; }' \
   "$generation_command" \
-  'python3 /opt/raytrain-indexer/build_s1h_trusted_index.py --source-root "$source_root" --train-pkl "$output_root/merged_nuscenes_infos_train.pkl" --val-pkl "$output_root/merged_nuscenes_infos_val.pkl" --output "$output_root/trusted-index-v3.json" --summary "$output_root/trusted-index-v3.summary.json" --workers 32 --format multimodal-v2' \
+  "$index_command" \
   'export INDEX_SOURCE="$output_root/trusted-index-v3.json" INDEX_TARGET="$final_index" INDEX_PARTS_SOURCE="$output_root/trusted-index-v3.parts" INDEX_PARTS_TARGET="$source_root/.raytrain/indexes/'"$version"'/trusted-index-v3.parts"' \
   "export INDEX_TEMP='$source_root/.raytrain/.trusted-index-v3.$version.tmp'" \
   'test -d "$INDEX_PARTS_SOURCE" || { echo "trusted index parts are missing" >&2; exit 5; }' \
