@@ -527,7 +527,7 @@ class RayDataS1HPatchTest(unittest.TestCase):
 
         self.assertEqual(len(loader), 2)
         self.assertIsNone(loader.sampler)
-        self.assertIsNone(loader.batch_sampler)
+        self.assertIsNone(loader.batch_sampler.sampler)
         self.assertEqual(loader.samples_per_gpu, 2)
         self.assertEqual(
             produced,
@@ -685,8 +685,31 @@ class RayDataS1HPatchTest(unittest.TestCase):
         )
 
         self.assertIsNone(loader.sampler)
-        self.assertIsNone(loader.batch_sampler)
+        self.assertIsNone(loader.batch_sampler.sampler)
         self.assertNotIn("DistributedSampler", inspect.getsource(adapter))
+
+    def test_streaming_loader_satisfies_mmcv_sampler_seed_hook_contract(self):
+        adapter = _adapter_module()
+        loader = adapter.build_bevfusion_train_dataloader(
+            data_mode="streaming",
+            legacy_builder=mock.Mock(side_effect=AssertionError("legacy loader used")),
+            pipeline=lambda sample: sample,
+            collate_fn=lambda samples, samples_per_gpu: samples,
+            samples_per_gpu=1,
+            worker_sample_count=1,
+        )
+
+        # MMCV's DistSamplerSeedHook falls through to
+        # data_loader.batch_sampler.sampler when the top-level sampler is not
+        # distributed. Ray Data owns sharding, so both sampler values remain
+        # inert, but the compatibility path must still be safe to traverse.
+        if hasattr(loader.sampler, "set_epoch"):
+            loader.sampler.set_epoch(3)
+        elif hasattr(loader.batch_sampler.sampler, "set_epoch"):
+            loader.batch_sampler.sampler.set_epoch(3)
+
+        self.assertIsNone(loader.sampler)
+        self.assertIsNone(loader.batch_sampler.sampler)
 
     def test_streaming_loader_forwards_the_platform_batch_resolver(self):
         adapter = _adapter_module()

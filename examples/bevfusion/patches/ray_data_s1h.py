@@ -575,6 +575,13 @@ def _validate_v1_transform_config(config: Mapping[str, Any]) -> None:
 
 
 @dataclasses.dataclass(frozen=True)
+class _MMCVBatchSamplerCompatibility:
+    """Inert sampler shape required by MMCV's sampler seed hook."""
+
+    sampler: None = dataclasses.field(default=None, init=False)
+
+
+@dataclasses.dataclass(frozen=True)
 class S1HWorkerDataLoader:
     """MMCV-compatible iterable over the current Ray Train worker shard.
 
@@ -595,7 +602,10 @@ class S1HWorkerDataLoader:
         [Sequence[Mapping[str, Any]]], Sequence[Mapping[str, Any]]
     ] | None = None
     sampler: None = dataclasses.field(default=None, init=False)
-    batch_sampler: None = dataclasses.field(default=None, init=False)
+    batch_sampler: _MMCVBatchSamplerCompatibility = dataclasses.field(
+        default_factory=_MMCVBatchSamplerCompatibility,
+        init=False,
+    )
 
     def __post_init__(self) -> None:
         if not callable(self.pipeline):
