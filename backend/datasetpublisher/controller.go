@@ -309,7 +309,7 @@ func (controller *Controller) Reconcile(ctx context.Context, request ReconcileRe
 
 	initial := domain.DatasetPublicationRun{
 		ID: request.RunID, DatasetID: request.DatasetID,
-		DatasetVersionID: request.DatasetVersionID, State: domain.DatasetVersionDiscovering,
+		DatasetVersionID: request.DatasetVersionID, ExecutionMode: controller.executionMode(), State: domain.DatasetVersionDiscovering,
 	}
 	current, err := controller.repository.EnsureDatasetPublicationRun(ctx, request.TenantID, request.SuperAdmin, initial)
 	if err != nil {
@@ -339,7 +339,7 @@ func (controller *Controller) Reconcile(ctx context.Context, request ReconcileRe
 		return current, ErrPublicationControllerUnavailable
 	}
 
-	spec, err := controller.jobSpec(request, current.State)
+	spec, err := controller.jobSpec(request, current)
 	if err != nil {
 		return current, err
 	}
@@ -524,9 +524,17 @@ func (controller *Controller) markFailed(
 	return current, ErrPublicationControllerUnavailable
 }
 
-func (controller *Controller) jobSpec(request ReconcileRequest, state domain.DatasetVersionState) (PublicationJobSpec, error) {
-	phase := PublicationExecutionLegacy
+func (controller *Controller) executionMode() domain.DatasetPublicationExecutionMode {
 	if controller.options.DistributedEnabled {
+		return domain.DatasetPublicationExecutionDistributed
+	}
+	return domain.DatasetPublicationExecutionLegacy
+}
+
+func (controller *Controller) jobSpec(request ReconcileRequest, run domain.DatasetPublicationRun) (PublicationJobSpec, error) {
+	state := run.State
+	phase := PublicationExecutionLegacy
+	if run.ExecutionMode.Normalized() == domain.DatasetPublicationExecutionDistributed {
 		switch state {
 		case domain.DatasetVersionStabilizing:
 			phase = PublicationExecutionPlan

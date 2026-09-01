@@ -134,6 +134,7 @@ func TestControllerRunsDistributedPlanPackThenFinalizeWithoutChangingLegacyMode(
 		t.Fatalf("new distributed controller: %v", err)
 	}
 	request := publicationReconcileRequest("publication-distributed")
+	repository.run = &domain.DatasetPublicationRun{ID: request.RunID, DatasetID: request.DatasetID, DatasetVersionID: request.DatasetVersionID, ExecutionMode: domain.DatasetPublicationExecutionDistributed, State: domain.DatasetVersionDiscovering}
 	for want := 0; want < 3; want++ {
 		if _, err := controller.Reconcile(context.Background(), request); err != nil {
 			t.Fatalf("distributed reconcile %d: %v", want+1, err)
@@ -151,6 +152,28 @@ func TestControllerRunsDistributedPlanPackThenFinalizeWithoutChangingLegacyMode(
 		if !strings.HasSuffix(specs[index].Name(), "-"+string(want)) {
 			t.Fatalf("distributed job name=%q, want phase suffix %q", specs[index].Name(), want)
 		}
+	}
+}
+
+func TestControllerKeepsPersistedLegacyRunOnLegacyJobAfterDistributedUpgrade(t *testing.T) {
+	repository := newMemoryPublicationRunRepository("team-a")
+	jobs := &scriptedPublicationJobClient{results: []publicationJobResult{{status: PublicationJobStatus{Phase: PublicationJobPending}}}}
+	options := publicationControllerOptions()
+	options.DistributedEnabled = true
+	options.PartitionCount = 8
+	options.MaxParallelism = 2
+	controller, err := NewController(repository, jobs, options)
+	if err != nil {
+		t.Fatalf("new controller: %v", err)
+	}
+	request := publicationReconcileRequest("publication-legacy-upgrade")
+	repository.run = &domain.DatasetPublicationRun{ID: request.RunID, DatasetID: request.DatasetID, DatasetVersionID: request.DatasetVersionID, ExecutionMode: domain.DatasetPublicationExecutionLegacy, State: domain.DatasetVersionPacking}
+	if _, err := controller.Reconcile(context.Background(), request); err != nil {
+		t.Fatalf("reconcile persisted legacy run: %v", err)
+	}
+	specs := jobs.recordedSpecs()
+	if len(specs) != 1 || specs[0].ExecutionPhase() != PublicationExecutionLegacy || strings.HasSuffix(specs[0].Name(), "-finalize") {
+		t.Fatalf("legacy run was reinterpreted after upgrade: %+v", specs)
 	}
 }
 

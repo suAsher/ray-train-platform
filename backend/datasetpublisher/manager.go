@@ -37,13 +37,14 @@ type PublicationReconciler interface {
 }
 
 type ManagerOptions struct {
-	PublicRoot       string
-	SourceIndexName  string
-	BatchLimit       int
-	PollInterval     time.Duration
-	Now              func() time.Time
-	NewID            func(string) (string, error)
-	OnReconcileError func(error)
+	PublicRoot         string
+	SourceIndexName    string
+	BatchLimit         int
+	PollInterval       time.Duration
+	Now                func() time.Time
+	NewID              func(string) (string, error)
+	OnReconcileError   func(error)
+	DistributedEnabled bool
 }
 
 type Manager struct {
@@ -56,6 +57,7 @@ type Manager struct {
 	now              func() time.Time
 	newID            func(string) (string, error)
 	onReconcileError func(error)
+	executionMode    domain.DatasetPublicationExecutionMode
 }
 
 // publicationReconcileError keeps a bounded, non-secret stage marker for
@@ -124,6 +126,12 @@ func NewManager(repository PublicationManagerRepository, controller PublicationR
 		publicRoot: strings.TrimSuffix(normalizedRoot, "/"), sourceIndexName: sourceIndex,
 		batchLimit: batchLimit, pollInterval: pollInterval, now: now, newID: newID,
 		onReconcileError: options.OnReconcileError,
+		executionMode: func() domain.DatasetPublicationExecutionMode {
+			if options.DistributedEnabled {
+				return domain.DatasetPublicationExecutionDistributed
+			}
+			return domain.DatasetPublicationExecutionLegacy
+		}(),
 	}, nil
 }
 
@@ -152,7 +160,7 @@ func (manager *Manager) RequestDatasetPublication(ctx context.Context, dataset d
 	if err := version.Validate(); err != nil {
 		return domain.DatasetPublicationRun{}, ErrPublicationManagerUnavailable
 	}
-	run := domain.DatasetPublicationRun{ID: runID, DatasetID: dataset.ID, DatasetVersionID: versionID, State: domain.DatasetVersionDiscovering}
+	run := domain.DatasetPublicationRun{ID: runID, DatasetID: dataset.ID, DatasetVersionID: versionID, ExecutionMode: manager.executionMode, State: domain.DatasetVersionDiscovering}
 	tenantID, superAdmin := publicationMutationScope(dataset)
 	created, err := manager.repository.CreateDatasetPublicationRequest(ctx, tenantID, superAdmin, version, run)
 	if err != nil || created.Validate() != nil || created.ID != run.ID || created.DatasetID != run.DatasetID || created.DatasetVersionID != run.DatasetVersionID {

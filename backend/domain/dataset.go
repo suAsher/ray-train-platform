@@ -343,8 +343,30 @@ func (attempt DatasetPublicationPartitionAttempt) Complete(receiptSHA256 string)
 	return result, nil
 }
 
+// DatasetPublicationExecutionMode is fixed when a version is requested. It
+// prevents enabling a new publisher implementation from changing the meaning
+// of an in-flight legacy version.
+type DatasetPublicationExecutionMode string
+
+const (
+	DatasetPublicationExecutionLegacy      DatasetPublicationExecutionMode = "legacy"
+	DatasetPublicationExecutionDistributed DatasetPublicationExecutionMode = "distributed"
+)
+
+func (mode DatasetPublicationExecutionMode) Valid() bool {
+	return mode == "" || mode == DatasetPublicationExecutionLegacy || mode == DatasetPublicationExecutionDistributed
+}
+
+func (mode DatasetPublicationExecutionMode) Normalized() DatasetPublicationExecutionMode {
+	if mode == "" {
+		return DatasetPublicationExecutionLegacy
+	}
+	return mode
+}
+
 type DatasetPublicationRun struct {
 	ID, DatasetID, DatasetVersionID                            string
+	ExecutionMode                                              DatasetPublicationExecutionMode
 	State                                                      DatasetVersionState
 	TotalPartitions, CompletedPartitions, FailedPartitions     int64
 	SourceObjectCount, ProcessedObjectCount, FailedObjectCount int64
@@ -383,6 +405,9 @@ func (run DatasetPublicationRun) Validate() error {
 	}
 	if !knownDatasetVersionState(run.State) {
 		return fmt.Errorf("unsupported publication state %q", run.State)
+	}
+	if !run.ExecutionMode.Valid() {
+		return fmt.Errorf("unsupported publication execution mode %q", run.ExecutionMode)
 	}
 	if run.TotalPartitions < 0 || run.CompletedPartitions < 0 || run.FailedPartitions < 0 || run.CompletedPartitions > run.TotalPartitions || run.FailedPartitions > run.TotalPartitions-run.CompletedPartitions {
 		return fmt.Errorf("publication partition progress is invalid")

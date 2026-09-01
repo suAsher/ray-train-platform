@@ -15,10 +15,11 @@ import (
 func TestManagerCreatesImmutablePublicationRequestsWithOwningScope(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 34, 56, 0, time.UTC)
 	tests := []struct {
-		name       string
-		dataset    domain.Dataset
-		wantTenant string
-		wantAdmin  bool
+		name        string
+		dataset     domain.Dataset
+		wantTenant  string
+		wantAdmin   bool
+		distributed bool
 	}{
 		{
 			name: "public",
@@ -27,10 +28,10 @@ func TestManagerCreatesImmutablePublicationRequestsWithOwningScope(t *testing.T)
 			wantAdmin: true,
 		},
 		{
-			name: "team",
+			name: "team distributed",
 			dataset: domain.Dataset{ID: "team-data", Slug: "team-labeled", Name: "Team labeled", SourceSpace: domain.DataSpaceTeamShared,
 				SourceRelativePath: "datasets/labeled", OwnerTenantID: "tenant-a", Visibility: domain.DatasetVisibilityTeam, SchemaVersion: "parquet-v1"},
-			wantTenant: "tenant-a",
+			wantTenant: "tenant-a", distributed: true,
 		},
 	}
 	for _, test := range tests {
@@ -39,7 +40,8 @@ func TestManagerCreatesImmutablePublicationRequestsWithOwningScope(t *testing.T)
 			ids := []string{"version-0123456789abcdef", "publication-0123456789abcdef"}
 			manager := mustPublicationManager(t, repository, &recordingPublicationController{}, ManagerOptions{
 				PublicRoot: "ray-train/public", SourceIndexName: ".raytrain/trusted-index-v2.pkl",
-				Now: func() time.Time { return now },
+				DistributedEnabled: test.distributed,
+				Now:                func() time.Time { return now },
 				NewID: func(_ string) (string, error) {
 					value := ids[0]
 					ids = ids[1:]
@@ -62,6 +64,13 @@ func TestManagerCreatesImmutablePublicationRequestsWithOwningScope(t *testing.T)
 			}
 			if run.ID != "publication-0123456789abcdef" || run.DatasetVersionID != repository.createdVersion.ID || run.State != domain.DatasetVersionDiscovering {
 				t.Fatalf("unexpected run: %+v", run)
+			}
+			wantMode := domain.DatasetPublicationExecutionLegacy
+			if test.distributed {
+				wantMode = domain.DatasetPublicationExecutionDistributed
+			}
+			if run.ExecutionMode != wantMode || repository.createdRun.ExecutionMode != wantMode {
+				t.Fatalf("run execution mode=%q persisted=%q want=%q", run.ExecutionMode, repository.createdRun.ExecutionMode, wantMode)
 			}
 		})
 	}
@@ -211,7 +220,7 @@ func publicationWork(dataset domain.Dataset, versionID, runID, version string) d
 	return domain.DatasetPublicationWork{
 		Dataset: dataset,
 		Version: domain.DatasetVersion{ID: versionID, DatasetID: dataset.ID, Version: version, State: domain.DatasetVersionStabilizing, SchemaVersion: dataset.SchemaVersion},
-		Run:     domain.DatasetPublicationRun{ID: runID, DatasetID: dataset.ID, DatasetVersionID: versionID, State: domain.DatasetVersionStabilizing},
+		Run:     domain.DatasetPublicationRun{ID: runID, DatasetID: dataset.ID, DatasetVersionID: versionID, ExecutionMode: domain.DatasetPublicationExecutionLegacy, State: domain.DatasetVersionStabilizing},
 	}
 }
 

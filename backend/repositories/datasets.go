@@ -87,6 +87,7 @@ type DatasetPublicationRunRecord struct {
 	ID                   string `gorm:"primaryKey"`
 	DatasetID            string `gorm:"column:dataset_id;index"`
 	DatasetVersionID     string `gorm:"column:dataset_version_id;index"`
+	ExecutionMode        string `gorm:"column:execution_mode"`
 	State                string `gorm:"index"`
 	TotalPartitions      int64
 	CompletedPartitions  int64

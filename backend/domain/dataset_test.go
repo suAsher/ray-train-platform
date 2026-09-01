@@ -389,7 +389,8 @@ func TestDatasetProgressRecordsValidate(t *testing.T) {
 	}
 	validRun := DatasetPublicationRun{
 		ID: "publication-1", DatasetID: "dataset-1", DatasetVersionID: "version-1",
-		State: DatasetVersionPacking, TotalPartitions: 10, CompletedPartitions: 7, FailedPartitions: 1,
+		ExecutionMode: DatasetPublicationExecutionDistributed,
+		State:         DatasetVersionPacking, TotalPartitions: 10, CompletedPartitions: 7, FailedPartitions: 1,
 		SourceObjectCount: 100, ProcessedObjectCount: 80, FailedObjectCount: 2,
 	}
 	validObservation := DatasetCacheObservation{
@@ -405,6 +406,7 @@ func TestDatasetProgressRecordsValidate(t *testing.T) {
 	}{
 		{name: "partition", valid: validPartition.Validate, invalid: func() error { value := validPartition; value.ProcessedObjectCount = -1; return value.Validate() }},
 		{name: "publication", valid: validRun.Validate, invalid: func() error { value := validRun; value.CompletedPartitions = 11; return value.Validate() }},
+		{name: "publication mode", valid: validRun.Validate, invalid: func() error { value := validRun; value.ExecutionMode = "invalid"; return value.Validate() }},
 		{name: "cache observation", valid: validObservation.Validate, invalid: func() error { value := validObservation; value.CacheHitBytes = -1; return value.Validate() }},
 		{name: "partition overflow", valid: validPartition.Validate, invalid: func() error {
 			value := validPartition

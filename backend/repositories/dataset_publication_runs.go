@@ -758,7 +758,8 @@ func publicationRunUpdates(next domain.DatasetPublicationRun, observedAt time.Ti
 func datasetPublicationRunRecordFromDomain(run domain.DatasetPublicationRun, now time.Time) DatasetPublicationRunRecord {
 	return DatasetPublicationRunRecord{
 		ID: run.ID, DatasetID: run.DatasetID, DatasetVersionID: run.DatasetVersionID,
-		State: string(run.State), TotalPartitions: run.TotalPartitions,
+		ExecutionMode: string(run.ExecutionMode.Normalized()),
+		State:         string(run.State), TotalPartitions: run.TotalPartitions,
 		CompletedPartitions: run.CompletedPartitions, FailedPartitions: run.FailedPartitions,
 		SourceObjectCount: run.SourceObjectCount, ProcessedObjectCount: run.ProcessedObjectCount,
 		FailedObjectCount: run.FailedObjectCount, CreatedAt: now, UpdatedAt: now,
@@ -768,7 +769,8 @@ func datasetPublicationRunRecordFromDomain(run domain.DatasetPublicationRun, now
 func (record DatasetPublicationRunRecord) toDomain() (domain.DatasetPublicationRun, error) {
 	run := domain.DatasetPublicationRun{
 		ID: record.ID, DatasetID: record.DatasetID, DatasetVersionID: record.DatasetVersionID,
-		State: domain.DatasetVersionState(record.State), TotalPartitions: record.TotalPartitions,
+		ExecutionMode: domain.DatasetPublicationExecutionMode(record.ExecutionMode).Normalized(),
+		State:         domain.DatasetVersionState(record.State), TotalPartitions: record.TotalPartitions,
 		CompletedPartitions: record.CompletedPartitions, FailedPartitions: record.FailedPartitions,
 		SourceObjectCount: record.SourceObjectCount, ProcessedObjectCount: record.ProcessedObjectCount,
 		FailedObjectCount: record.FailedObjectCount,

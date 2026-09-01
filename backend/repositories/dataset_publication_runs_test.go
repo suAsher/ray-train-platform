@@ -21,7 +21,8 @@ var _ publisher.PublicationManagerRepository = (*GormRepository)(nil)
 func publicationRunForTest(datasetID, versionID, runID string) domain.DatasetPublicationRun {
 	return domain.DatasetPublicationRun{
 		ID: runID, DatasetID: datasetID, DatasetVersionID: versionID,
-		State: domain.DatasetVersionDiscovering,
+		ExecutionMode: domain.DatasetPublicationExecutionLegacy,
+		State:         domain.DatasetVersionDiscovering,
 	}
 }
 

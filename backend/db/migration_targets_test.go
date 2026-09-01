@@ -221,6 +221,22 @@ func TestDatasetPublicationAttemptsMigrationKeepsPlansImmutable(t *testing.T) {
 	}
 }
 
+func TestDatasetPublicationExecutionModeMigrationPinsExistingRunsToLegacy(t *testing.T) {
+	contents, err := migrationFiles.ReadFile("migrations/0027_dataset_publication_execution_mode.up.sql")
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+	sql := string(contents)
+	for _, want := range []string{
+		"ADD COLUMN IF NOT EXISTS execution_mode TEXT NOT NULL DEFAULT 'legacy'",
+		"CHECK (execution_mode IN ('legacy', 'distributed'))",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("migration missing %q", want)
+		}
+	}
+}
+
 func TestDatasetVersioningTrainingJobProvenanceIsNullableWithoutBackfill(t *testing.T) {
 	contents, err := migrationFiles.ReadFile("migrations/0024_dataset_versioning.up.sql")
 	if err != nil {

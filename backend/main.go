@@ -404,9 +404,10 @@ func newDatasetPublicationManager(
 		return nil, fmt.Errorf("configure dataset publication jobs: %w", err)
 	}
 	manager, err := datasetpublisher.NewManager(repository, controller, datasetpublisher.ManagerOptions{
-		PublicRoot:      cfg.DataSpacesPublicRoot,
-		SourceIndexName: cfg.DatasetPublisherSourceIndexName,
-		PollInterval:    time.Duration(cfg.DatasetPublisherPollIntervalSeconds) * time.Second,
+		PublicRoot:         cfg.DataSpacesPublicRoot,
+		SourceIndexName:    cfg.DatasetPublisherSourceIndexName,
+		PollInterval:       time.Duration(cfg.DatasetPublisherPollIntervalSeconds) * time.Second,
+		DistributedEnabled: cfg.DatasetPublisherDistributedEnabled,
 		OnReconcileError: func(err error) {
 			log.Printf("dataset publication reconciliation deferred: %s", datasetpublisher.ReconcileDiagnostic(err))
 		},
