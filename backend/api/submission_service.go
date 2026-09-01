@@ -248,7 +248,13 @@ func (service *SubmissionService) resolveRuntime(ctx context.Context, tenantID s
 }
 
 func (service *SubmissionService) Preflight(ctx context.Context, input SubmissionInput) (SubmissionPreflightResult, error) {
-	prepared, err := service.prepareSubmission(ctx, input)
+	// The CLI deliberately resolves the immutable dataset version before it
+	// builds or uploads the source archive. Keep preflight side-effect free by
+	// validating an unresolved archive placeholder without looking it up.
+	if input.Spec.Source == (domain.CodeSource{}) {
+		input.Spec.Source = domain.CodeSource{Type: "workspace-archive", ArtifactID: "pending-artifact"}
+	}
+	prepared, err := service.prepareSubmission(ctx, input, false)
 	if err != nil {
 		return SubmissionPreflightResult{}, err
 	}
@@ -260,7 +266,7 @@ func (service *SubmissionService) Preflight(ctx context.Context, input Submissio
 	}, nil
 }
 
-func (service *SubmissionService) prepareSubmission(ctx context.Context, input SubmissionInput) (preparedSubmission, error) {
+func (service *SubmissionService) prepareSubmission(ctx context.Context, input SubmissionInput, materializeSource bool) (preparedSubmission, error) {
 	if service == nil || service.repository == nil {
 		return preparedSubmission{}, fmt.Errorf("submission service is not configured")
 	}
@@ -286,7 +292,7 @@ func (service *SubmissionService) prepareSubmission(ctx context.Context, input S
 	if spec.Source.Type == "git" && !matchesGitAllowlist(spec.Source.URL, service.gitAllowlist) {
 		return preparedSubmission{}, ErrSubmissionGitNotAllowed
 	}
-	if spec.Source.Type == "workspace-archive" {
+	if spec.Source.Type == "workspace-archive" && materializeSource {
 		var materializeErr error
 		spec, materializeErr = service.materializeArtifact(ctx, input.Principal, spec)
 		if materializeErr != nil {
@@ -306,7 +312,7 @@ func (service *SubmissionService) prepareSubmission(ctx context.Context, input S
 }
 
 func (service *SubmissionService) Submit(ctx context.Context, input SubmissionInput) (*domain.TrainingJob, error) {
-	prepared, err := service.prepareSubmission(ctx, input)
+	prepared, err := service.prepareSubmission(ctx, input, true)
 	if err != nil {
 		return nil, err
 	}

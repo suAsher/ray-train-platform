@@ -115,6 +115,29 @@ func TestDatasetPreflightResolvesLatestWithoutProvisioningResources(t *testing.T
 	}
 }
 
+func TestDatasetPreflightAllowsCLIArchiveBeforeItIsUploaded(t *testing.T) {
+	dataset, version := streamingDatasetFixtures()
+	repository := &submissionServiceRepository{}
+	service := streamingSubmissionService(repository, &fakeDatasetCatalog{
+		datasets: []domain.Dataset{dataset}, versions: []domain.DatasetVersion{version},
+	}, true, true, domain.RayVersionCanary, nil)
+	spec := streamingSubmissionSpec()
+	spec.Source = domain.CodeSource{}
+
+	result, err := service.Preflight(context.Background(), SubmissionInput{
+		Principal: streamingPrincipal(), Spec: spec, Origin: domain.SubmissionOriginRayCLI,
+	})
+	if err != nil {
+		t.Fatalf("preflight before CLI archive upload: %v", err)
+	}
+	if result.Dataset == nil || result.Dataset.VersionID != version.ID {
+		t.Fatalf("preflight did not resolve the immutable version: %+v", result)
+	}
+	if repository.created != nil || repository.identityCalls != 0 {
+		t.Fatalf("preflight created resources: %+v", repository)
+	}
+}
+
 func TestStreamingBoundedPreflightRequiresDualNVMeBeforeAnySideEffect(t *testing.T) {
 	dataset, version := streamingDatasetFixtures()
 	for _, test := range []struct {
