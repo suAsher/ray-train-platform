@@ -11,15 +11,12 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from build_s1h_trusted_index import write_multimodal_index_bundle
-from raytrain_publisher.multimodal import (
-    MULTIMODAL_INDEX_FORMAT,
-    MULTIMODAL_INDEX_MANIFEST_FORMAT,
-    MULTIMODAL_SCHEMA_VERSION,
-    _validate_sample,
-)
 
 
 SELECTION_DOMAIN = b"raytrain-s1h-acceptance-slice-v1\0"
+MULTIMODAL_SCHEMA_VERSION = "s1h-multimodal-webdataset-v2"
+MULTIMODAL_INDEX_FORMAT = "trusted-index-v3"
+MULTIMODAL_INDEX_MANIFEST_FORMAT = "trusted-index-sharded-v2"
 
 
 def select_samples(
@@ -109,7 +106,7 @@ def _iter_verified_samples(
         ):
             raise ValueError("slice source part contract is invalid")
         for value in document["samples"]:
-            sample = _validate_sample(value)
+            sample = _validated_source_sample(value)
             if sample["token"] in seen_tokens:
                 raise ValueError("slice source contains a duplicate token")
             seen_tokens.add(sample["token"])
@@ -117,6 +114,22 @@ def _iter_verified_samples(
         declared_count += count
     if declared_count != root["sample_count"]:
         raise ValueError("slice source sample count is invalid")
+
+
+def _validated_source_sample(value: object) -> dict[str, Any]:
+    if type(value) is not dict or value.get("schema_version") != MULTIMODAL_SCHEMA_VERSION:
+        raise ValueError("slice source sample is invalid")
+    token, split = value.get("token"), value.get("split")
+    if (
+        not isinstance(token, str)
+        or not token
+        or token.strip() != token
+        or split not in {"train", "val", "test"}
+        or type(value.get("payloads")) is not dict
+        or type(value.get("info")) is not dict
+    ):
+        raise ValueError("slice source sample is invalid")
+    return dict(value)
 
 
 def _json_document(payload: bytes, field_name: str) -> dict[str, Any]:
