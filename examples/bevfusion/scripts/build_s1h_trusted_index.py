@@ -520,10 +520,9 @@ def _convert_multimodal_info(
         )
     velocity = raw_info.get("gt_velocity")
     if velocity is not None:
-        info["gt_velocity"] = _selected_finite_matrix(
+        info["gt_velocity"] = _selected_velocity_matrix(
             velocity,
             selected_indexes,
-            columns=2,
             field_name="multimodal gt_velocity",
         )
 
@@ -674,6 +673,31 @@ def _selected_finite_matrix(
     selected = normalized[indexes]
     if not np.isfinite(selected).all():
         raise ValueError(f"{field_name} must contain finite values")
+    return [[float(item) for item in row] for row in selected.tolist()]
+
+
+def _selected_velocity_matrix(
+    value: object,
+    indexes: list[int],
+    *,
+    field_name: str,
+) -> list[list[float]]:
+    """Normalize unknown NuScenes velocities without weakening other metadata checks."""
+
+    values = np.asarray(value)
+    if values.ndim != 2 or values.shape[1] != 2 or len(values) < (max(indexes) + 1 if indexes else 0):
+        raise ValueError(f"{field_name} must align with gt_names and have shape [N, 2]")
+    try:
+        normalized = values.astype(np.float64)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{field_name} must be numeric") from error
+    selected = np.nan_to_num(
+        normalized[indexes],
+        copy=True,
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0,
+    )
     return [[float(item) for item in row] for row in selected.tolist()]
 
 

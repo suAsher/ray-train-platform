@@ -188,7 +188,7 @@ class RayDataS1HPatchTest(unittest.TestCase):
                 "boxes": [[1, 2, 3, 4, 5, 6, 0], [7, 8, 9, 1, 2, 3, 0]],
                 "labels": [0, 1],
                 "num_lidar_pts": [3, 0],
-                "gt_velocity": [[1.5, float("nan")], [9, 9]],
+                "gt_velocity": [[1.5, float("inf")], [9, 9]],
                 "lidar2ego_rotation": identity,
                 "lidar2ego_translation": [1, 2, 3],
                 "ego2global_rotation": identity,

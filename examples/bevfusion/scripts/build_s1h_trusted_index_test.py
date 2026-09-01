@@ -102,7 +102,7 @@ class BuildS1HTrustedIndexTest(unittest.TestCase):
                     "ego2global_rotation": np.array([1.0, 0.0, 0.0, 0.0]),
                     "ego2global_translation": np.zeros(3),
                     "num_lidar_pts": np.array([4]),
-                    "gt_velocity": np.array([[0.0, 0.0]], dtype=np.float32),
+                    "gt_velocity": np.array([[np.nan, np.inf]], dtype=np.float32),
                 }
             )
 
@@ -124,6 +124,7 @@ class BuildS1HTrustedIndexTest(unittest.TestCase):
         self.assertEqual(packed.members[0]["token"], "sample-token")
         self.assertEqual(sample["info"]["cams"]["CAM_FRONT"]["camera_intrinsics"], [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
         self.assertEqual(sample["info"]["lidar2ego_rotation"], [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+        self.assertEqual(sample["info"]["gt_velocity"], [[0.0, 0.0]])
         serialized = __import__("json").dumps(sample, sort_keys=True)
         self.assertNotIn(str(source_root), serialized)
         self.assertNotIn("data_path", serialized)

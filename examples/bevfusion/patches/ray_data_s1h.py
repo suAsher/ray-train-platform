@@ -398,7 +398,13 @@ def _prepare_multimodal_input(
         velocities = numpy.asarray(info.get("gt_velocity", [[0.0, 0.0]] * len(point_counts)), dtype=numpy.float32)[mask]
         if velocities.shape != (len(boxes), 2):
             raise ValueError("multimodal velocities are invalid")
-        velocities = numpy.nan_to_num(velocities, copy=True)
+        velocities = numpy.nan_to_num(
+            velocities,
+            copy=True,
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
         if boxes.shape[1] == 7:
             boxes = numpy.concatenate([boxes, velocities], axis=-1)
     data["ann_info"] = {
