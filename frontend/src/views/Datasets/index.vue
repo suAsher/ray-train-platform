@@ -33,6 +33,13 @@
         <template #title>{{ catalogError }}</template>
       </el-alert>
 
+      <el-alert v-else type="info" :closable="false" show-icon>
+        <template #title>原始同步区与版本化训练集不同</template>
+        <p class="mt-1 text-xs leading-5">
+          原始同步区持续接收数据；平台发布时创建独立、不可变的 Parquet 清单和大分片。只有 READY 版本可以训练，后续原始数据同步不会改写已提交任务。
+        </p>
+      </el-alert>
+
       <section v-if="!loading && !catalogError && !datasetRows.length" class="rounded-2xl border border-dashed border-slate-700 bg-[#131826] p-10">
         <el-empty :image-size="88" description="当前账号暂无可见的版本化数据集" />
       </section>
@@ -119,6 +126,7 @@
               <template #default="{ row: version }">
                 <p class="font-medium text-slate-200">{{ version.version }}</p>
                 <p class="mt-1 font-mono text-[11px] text-slate-500" :title="version.manifestSha256 || ''">{{ digestSummary(version.manifestSha256) }}</p>
+                <p class="mt-1 text-[11px] text-slate-500">{{ schemaDescription(version.schemaVersion) }}</p>
               </template>
             </el-table-column>
             <el-table-column label="状态" width="120">
@@ -252,6 +260,9 @@ const datasetRows = computed(() => datasets.value.map((dataset) => {
 
 const visibilityLabel = (visibility) => visibility === 'PUBLIC' ? '全平台可见' : '本团队可见'
 const statePresentation = datasetVersionPresentation
+const schemaDescription = (schemaVersion) => String(schemaVersion || '').includes('lidar-parquet')
+  ? 'LiDAR-only Parquet；不包含 BEVFusion 相机与 sweep 载荷'
+  : '平台版本化数据格式'
 const activePublicationStates = new Set(['DISCOVERING', 'STABILIZING', 'VALIDATING', 'PACKING', 'FAILED'])
 const nonNegativeCount = (value) => {
   const parsed = Number(value)

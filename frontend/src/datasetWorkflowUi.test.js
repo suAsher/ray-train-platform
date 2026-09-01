@@ -23,6 +23,8 @@ test('dataset navigation and pages are capability-gated and never expose storage
 	assert.match(page, /发布进度/)
 	assert.match(page, /fetchDatasetPublication/)
 	assert.match(page, /publicationPercent/)
+	assert.match(page, /原始同步区/)
+	assert.match(page, /LiDAR-only/)
   assert.match(picker, /最新可用/)
   assert.match(picker, /train.*val.*test/is)
   for (const source of [page, picker]) {
