@@ -2,6 +2,7 @@ import { MANAGED_POLICY_LIMITS, normalizeTrainingEngine, RAY_TRAIN_ENGINE } from
 
 const gitCommitPattern = /^[0-9a-f]{7,64}$/i
 const snapshotPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
+const sourceArtifactPattern = /^artifact-[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const jobIDPattern = /^job-[0-9a-f]{24}$/
 const dataModes = new Set(['mount', 'cache', 'ray-data', 'ray-data-stage', 'streaming'])
 const datasetIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/
@@ -319,9 +320,20 @@ function buildCodeSource(form) {
         type: 'workspace',
         snapshot: workspaceSnapshot(form.workspaceSnapshot),
       }
+    case 'workspace-archive':
+      return {
+        type: 'workspace-archive',
+        artifactId: sourceArtifactID(form.sourceArtifactId),
+      }
     default:
-      throw new Error('代码来源仅支持 Git 仓库或调试工作区代码版本')
+      throw new Error('代码来源仅支持 Git 仓库、调试工作区代码版本或上传代码包')
   }
+}
+
+function sourceArtifactID(value) {
+  const normalized = requiredText(value, '代码包')
+  if (!sourceArtifactPattern.test(normalized)) throw new Error('代码包标识格式不合法')
+  return normalized
 }
 
 function requiredText(value, label) {

@@ -824,7 +824,8 @@ func normalizeSubmissionSpec(principal auth.Principal, origin domain.SubmissionO
 	if err := spec.Validate(); err != nil {
 		return domain.JobSpec{}, fmt.Errorf("%w: %v", ErrSubmissionInvalidJobSpec, err)
 	}
-	if spec.Source.Type != "git" && spec.Source.Type != "workspace" && !(spec.Source.Type == "workspace-archive" && origin == domain.SubmissionOriginRayCLI) {
+	archiveOrigin := origin == domain.SubmissionOriginPortal || origin == domain.SubmissionOriginRayCLI
+	if spec.Source.Type != "git" && spec.Source.Type != "workspace" && !(spec.Source.Type == "workspace-archive" && archiveOrigin) {
 		return domain.JobSpec{}, ErrSubmissionCodeSourceNotAllowed
 	}
 	return spec, nil

@@ -274,10 +274,23 @@ test('buildJobSpec maps a workspace snapshot and rejects unsafe logical data pat
   assert.deepEqual(spec.input, { space: 'team-shared', relativePath: 'validation' })
 })
 
+test('buildJobSpec maps an owner-scoped uploaded code archive', () => {
+  const form = baseForm()
+  form.codeSourceType = 'workspace-archive'
+  form.sourceArtifactId = 'artifact-0123456789abcdef01234567'
+
+  const spec = buildJobSpec(form)
+
+  assert.deepEqual(spec.source, {
+    type: 'workspace-archive',
+    artifactId: 'artifact-0123456789abcdef01234567',
+  })
+})
+
 test('buildJobSpec rejects retired object-store source types', () => {
 	const form = baseForm()
 	form.codeSourceType = 'tos'
-	assert.throws(() => buildJobSpec(form), /Git 仓库或调试工作区代码版本/)
+	assert.throws(() => buildJobSpec(form), /Git 仓库、调试工作区代码版本或上传代码包/)
 })
 
 test('buildJobSpec always lets the platform allocate a task output directory', () => {

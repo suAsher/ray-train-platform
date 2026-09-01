@@ -778,24 +778,28 @@ func TestSubmissionRejectsLegacyObjectStoreCodeSources(t *testing.T) {
 	}
 }
 
-func TestSubmissionAllowsRayCLIWorkspaceArchiveOnlyWithReadyPersonalMount(t *testing.T) {
-	artifact := readySubmissionArtifact(t)
-	repository := &submissionServiceRepository{artifact: &artifact}
-	store := &fakeDataSpaceStore{bindings: []domain.DataMountBinding{{
-		ID: "mine", TenantID: "tenant-a", UserID: "user-01", Scope: domain.DataMountScopePersonal, SpaceID: domain.DataSpaceWorkspace,
-		ClaimName: "data-user-01", Status: domain.DataMountBindingReady,
-	}}}
-	service := NewSubmissionService(repository, SubmissionServiceOptions{
-		DataSpaces: store, DataSpacesEnabled: true, NewID: func() (string, error) { return "job-ray-sdk", nil },
-	})
-	spec := artifactSubmissionSpec()
-	spec.Source.Type = "workspace-archive"
-	job, err := service.Submit(context.Background(), SubmissionInput{
-		Principal: auth.Principal{Subject: "user-01", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeOIDC},
-		Spec:      spec, Origin: domain.SubmissionOriginRayCLI,
-	})
-	if err != nil || job == nil || job.Spec.Source.ArtifactObjectKey != artifact.ObjectKey || job.Spec.ResolvedDataRoots.Personal == nil {
-		t.Fatalf("Ray SDK workspace archive was not resolved safely: job=%#v err=%v", job, err)
+func TestSubmissionAllowsPortalAndRayCLIWorkspaceArchiveOnlyWithReadyPersonalMount(t *testing.T) {
+	for _, origin := range []domain.SubmissionOrigin{domain.SubmissionOriginPortal, domain.SubmissionOriginRayCLI} {
+		t.Run(string(origin), func(t *testing.T) {
+			artifact := readySubmissionArtifact(t)
+			repository := &submissionServiceRepository{artifact: &artifact}
+			store := &fakeDataSpaceStore{bindings: []domain.DataMountBinding{{
+				ID: "mine", TenantID: "tenant-a", UserID: "user-01", Scope: domain.DataMountScopePersonal, SpaceID: domain.DataSpaceWorkspace,
+				ClaimName: "data-user-01", Status: domain.DataMountBindingReady,
+			}}}
+			service := NewSubmissionService(repository, SubmissionServiceOptions{
+				DataSpaces: store, DataSpacesEnabled: true, NewID: func() (string, error) { return "job-uploaded-archive", nil },
+			})
+			spec := artifactSubmissionSpec()
+			spec.Source.Type = "workspace-archive"
+			job, err := service.Submit(context.Background(), SubmissionInput{
+				Principal: auth.Principal{Subject: "user-01", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeOIDC},
+				Spec:      spec, Origin: origin,
+			})
+			if err != nil || job == nil || job.Spec.Source.ArtifactObjectKey != artifact.ObjectKey || job.Spec.ResolvedDataRoots.Personal == nil {
+				t.Fatalf("%s workspace archive was not resolved safely: job=%#v err=%v", origin, job, err)
+			}
+		})
 	}
 }
 

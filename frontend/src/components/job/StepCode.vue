@@ -28,9 +28,10 @@
 
       <div>
         <label class="field-label">代码来源</label>
-        <el-radio-group v-model="form.codeSourceType" class="grid w-full gap-3 sm:grid-cols-2">
+        <el-radio-group v-model="form.codeSourceType" class="grid w-full gap-3 sm:grid-cols-3">
           <el-radio-button label="git">Git 仓库</el-radio-button>
           <el-radio-button label="workspace">调试快照</el-radio-button>
+          <el-radio-button label="workspace-archive">上传代码包</el-radio-button>
         </el-radio-group>
       </div>
 
@@ -57,7 +58,7 @@
         </div>
       </div>
 
-      <div v-else>
+      <div v-else-if="form.codeSourceType === 'workspace'">
         <label class="field-label">工作区代码版本</label>
         <el-select v-model="form.workspaceSnapshot" class="w-full" filterable clearable :loading="loading" placeholder="选择已创建的不可变代码版本">
           <el-option v-for="snapshot in snapshots" :key="snapshot.id" :label="snapshotLabel(snapshot)" :value="snapshot.id" />
@@ -66,6 +67,13 @@
           版本由“我的数据 → 我的工作区”创建；训练会只读复制该版本到 <code>{{ workspacePath }}</code>，不会使用可变工作区或对象存储密钥。
         </p>
         <router-link to="/datacache" class="mt-2 inline-block text-xs text-blue-300 hover:text-blue-200">还没有版本？前往我的工作区创建。</router-link>
+      </div>
+
+      <div v-else class="space-y-3">
+        <label class="field-label">不可变代码包</label>
+        <el-input v-model="form.sourceArtifactId" readonly placeholder="请先从我的工作区上传 ZIP 代码包" />
+        <p class="field-help">平台校验 ZIP 的 SHA-256 和大小后，按当前账号只读物化到训练工作区；任务不会再访问 GitLab。</p>
+        <router-link to="/datacache" class="inline-block text-xs text-blue-300 hover:text-blue-200">前往“我的工作区”上传代码 ZIP。</router-link>
       </div>
     </div>
   </div>

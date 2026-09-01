@@ -48,6 +48,7 @@ export function useJobForm(route, catalogLoaders = defaultCatalogLoaders) {
     gitRef: '',
     gitCommit: '',
     workspaceSnapshot: '',
+    sourceArtifactId: '',
     entrypoint: 'python train.py',
     trainingEngine: normalizeTrainingEngine(route?.query?.trainingEngine),
     dataMode: String(route?.query?.dataMode || 'mount'),
@@ -146,6 +147,9 @@ export function useJobForm(route, catalogLoaders = defaultCatalogLoaders) {
       }
       if (form.codeSourceType === 'workspace' && !String(form.workspaceSnapshot).trim()) {
         issues.push('请选择一个工作区代码版本')
+      }
+      if (form.codeSourceType === 'workspace-archive' && !String(form.sourceArtifactId).trim()) {
+        issues.push('请先上传一个不可变代码包')
       }
     }
     if (step === 1) {

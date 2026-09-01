@@ -14,6 +14,11 @@
       训练任务会从不可变快照物化代码；请继续补全运行规模和数据位置。
     </el-alert>
 
+    <el-alert v-if="fromWorkspaceArchive" type="success" :closable="false" class="!rounded-2xl">
+      <template #title>已带入校验后的不可变代码包</template>
+      训练任务会从账号私有代码包物化源码，不再访问 GitLab；请继续补全运行规模和数据位置。
+    </el-alert>
+
     <el-alert v-if="resumeCheckpointPath" type="warning" :closable="false" class="!rounded-2xl">
       <template #title>将从已有训练结果继续训练</template>
       已带入只读 Checkpoint：<code>我的训练结果/{{ resumeCheckpointPath }}</code>。这是一个新任务，不会修改原任务；
@@ -172,6 +177,7 @@ const formLimits = computed(() => quotaModel.value.blocked
   : limits.value)
 
 const fromWorkspaceSnapshot = computed(() => ['dev_workspace', 'workspace_snapshot'].includes(String(route.query.from || '')))
+const fromWorkspaceArchive = computed(() => String(route.query.from || '') === 'workspace_archive')
 const resumeCheckpointPath = computed(() => String(route.query.checkpointPath || '').trim())
 const allIssues = computed(() => [...stepIssues(0), ...stepIssues(1), ...stepIssues(2)])
 const visiblePreflight = computed(() => {
@@ -243,6 +249,10 @@ onMounted(async () => {
   if (fromWorkspaceSnapshot.value) {
     form.codeSourceType = 'workspace'
     form.workspaceSnapshot = String(route.query.snapshot || '')
+  }
+  if (fromWorkspaceArchive.value) {
+    form.codeSourceType = 'workspace-archive'
+    form.sourceArtifactId = String(route.query.artifact || '')
   }
   if (resumeCheckpointPath.value) {
     form.checkpoint = { spaceId: 'my-runs', relativePath: resumeCheckpointPath.value }

@@ -72,9 +72,11 @@
           <el-button v-if="canMutate" size="small" @click="folderDialogVisible = true">{{ selectedSpace.id === 'team-shared' ? '新建发布目录' : '新建文件夹' }}</el-button>
           <el-button v-if="canMutate" size="small" type="primary" :loading="uploading" @click="fileInput?.click()">{{ selectedSpace.id === 'team-shared' ? '发布文件' : '上传文件' }}</el-button>
           <el-button v-if="selectedSpace.id === 'workspace' && canMutate" size="small" :loading="uploading" @click="folderInput?.click()">上传代码文件夹</el-button>
+          <el-button v-if="selectedSpace.id === 'workspace' && canMutate" size="small" type="success" :loading="uploadingArchive" @click="archiveInput?.click()">上传代码 ZIP 并创建任务</el-button>
           <el-button v-if="selectedSpace.id === 'workspace' && canMutate" size="small" type="warning" :loading="creatingSnapshot" @click="createSnapshot">创建训练代码版本</el-button>
           <input ref="fileInput" type="file" class="hidden" @change="uploadFile">
           <input ref="folderInput" type="file" webkitdirectory multiple class="hidden" @change="uploadFolder">
+          <input ref="archiveInput" type="file" accept=".zip,application/zip" class="hidden" @change="uploadCodeArchive">
           <el-button size="small" :loading="loadingEntries" @click="loadEntries">刷新目录</el-button>
         </div>
 
@@ -136,6 +138,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { createDataSpaceFolder, createDataSpaceUpload, createWorkspaceSnapshot, fetchDataSpaceEntries, fetchDataSpaces, uploadDataSpaceFile } from '../../api/dataSpaces'
 import { folderUploadRelativePath } from '../../api/dataSpaceUpload'
+import { completeSourceArtifact, createSourceArtifact, uploadSourceArtifact } from '../../api/sourceArtifacts'
 import { canManageDataSpace, canMutateDataSpace, canUseDataSpaceForTraining, dataPageSpaces, dataSpaceAccessLabel, dataSpaceAccessType } from '../../dataSpaceActions'
 import { dataSpaceReadiness, dataSpaceStorageReady } from '../../dataSpaceReadiness'
 import { session } from '../../stores/session'
@@ -144,6 +147,7 @@ const maxUploadBytes = 5 * 1024 * 1024 * 1024
 const loading = ref(false)
 const loadingEntries = ref(false)
 const uploading = ref(false)
+const uploadingArchive = ref(false)
 const creatingFolder = ref(false)
 const creatingSnapshot = ref(false)
 const error = ref('')
@@ -153,6 +157,7 @@ const currentPath = ref('')
 const entries = ref([])
 const fileInput = ref(null)
 const folderInput = ref(null)
+const archiveInput = ref(null)
 const folderDialogVisible = ref(false)
 const newFolderName = ref('')
 const uploadState = ref(null)
@@ -296,6 +301,32 @@ const uploadFolder = async (event) => {
     await uploadItems(items, `已上传 ${files.length} 个代码文件`)
   } catch (requestError) {
     ElMessage.error(requestError.message || '上传代码文件夹失败')
+  }
+}
+
+const uploadCodeArchive = async (event) => {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file) return
+  uploadingArchive.value = true
+  uploadState.value = { totalFiles: 1, completedFiles: 0, totalBytes: Number(file.size || 0), uploadedBytes: 0, currentFile: file.name, retrying: false }
+  try {
+    let artifact = await createSourceArtifact(file)
+    if (artifact.uploadRequired) {
+      await uploadSourceArtifact(artifact, file, {
+        onProgress: ({ loaded }) => { uploadState.value.uploadedBytes = Math.min(uploadState.value.totalBytes, loaded) },
+      })
+      artifact = await completeSourceArtifact(artifact.artifactId)
+    }
+    uploadState.value.completedFiles = 1
+    uploadState.value.uploadedBytes = uploadState.value.totalBytes
+    ElMessage.success('不可变代码包已校验，可用于训练')
+    window.setTimeout(() => window.location.assign(`/job/create?from=workspace_archive&artifact=${encodeURIComponent(artifact.artifactId)}`), 350)
+  } catch (requestError) {
+    ElMessage.error(requestError.message || '上传代码包失败')
+  } finally {
+    uploadingArchive.value = false
+    uploadState.value = null
   }
 }
 
