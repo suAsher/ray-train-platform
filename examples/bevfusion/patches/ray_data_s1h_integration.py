@@ -46,18 +46,40 @@ TRAIN_DATALOADER_HELPER = NATIVE_STREAMING_HELPER + '''def _platform_build_train
     )
 
 
+def _platform_scatter_device_ids(device_ids):
+    """Use torch.device objects required by PyTorch 2.x copy streams."""
+    return [
+        torch.device("cuda", device_id)
+        if isinstance(device_id, int) and device_id >= 0
+        else device_id
+        for device_id in device_ids
+    ]
+
+
 class _PlatformMMDistributedDataParallel(MMDistributedDataParallel):
-    """Bridge MMCV 1.4 to PyTorch versions that removed _sync_params."""
+    """Bridge legacy MMCV distributed helpers to current PyTorch."""
 
     def _sync_params(self):
+        parent_sync = getattr(super(), "_sync_params", None)
+        if parent_sync is not None:
+            return parent_sync()
         return None
+
+    def to_kwargs(self, inputs, kwargs, device_id):
+        from mmcv.parallel.scatter_gather import scatter_kwargs
+
+        device_ids = _platform_scatter_device_ids([device_id])
+        return scatter_kwargs(inputs, kwargs, device_ids, dim=self.dim)
+
+    def scatter(self, inputs, kwargs, device_ids):
+        from mmcv.parallel.scatter_gather import scatter_kwargs
+
+        normalized = _platform_scatter_device_ids(device_ids)
+        return scatter_kwargs(inputs, kwargs, normalized, dim=self.dim)
 
 
 def _platform_distributed_wrapper():
-    if (
-        _platform_uses_native_streaming()
-        and not hasattr(MMDistributedDataParallel, "_sync_params")
-    ):
+    if _platform_uses_native_streaming():
         return _PlatformMMDistributedDataParallel
     return MMDistributedDataParallel
 
