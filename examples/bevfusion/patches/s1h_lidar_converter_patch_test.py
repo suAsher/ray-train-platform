@@ -113,6 +113,24 @@ class S1HLidarConverterPatchTest(unittest.TestCase):
                 "CAM_REAR_RIGHT",
             ],
         )
+        self.assertEqual(
+            select(
+                {
+                    "CAM_MID FRONT": "front",
+                    "CAM_FRONT RIGHT": "front-right",
+                    "CAM_FRONT LEFT": "front-left",
+                    "CAM_MID LEFT": "side-left",
+                    "CAM_MID RIGHT": "side-right",
+                }
+            ),
+            [
+                "CAM_MID FRONT",
+                "CAM_FRONT RIGHT",
+                "CAM_FRONT LEFT",
+                "CAM_MID LEFT",
+                "CAM_MID RIGHT",
+            ],
+        )
         with self.assertRaisesRegex(KeyError, "unsupported camera layout"):
             select({"CAM_UNKNOWN": "token"})
 

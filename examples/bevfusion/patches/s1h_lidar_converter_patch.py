@@ -29,6 +29,7 @@ CAMERA_SELECTOR_HELPER = '''def _raytrain_camera_types(sample_data, site_name=No
         "default": ("CAM_FRONT", "CAM_FRONT_RIGHT", "CAM_FRONT_LEFT", "CAM_BACK_LEFT", "CAM_BACK_RIGHT"),
         "common": ("CAM_FRONT_MID", "CAM_FRONT_RIGHT", "CAM_FRONT_LEFT", "CAM_REAR_LEFT", "CAM_REAR_RIGHT"),
         "rear-rear": ("CAM_FRONT_MID", "CAM_FRONT_RIGHT", "CAM_FRONT_LEFT", "CAM_REAR_LEFT", "CAM_REAR_REAR"),
+        "hactl": ("CAM_MID FRONT", "CAM_FRONT RIGHT", "CAM_FRONT LEFT", "CAM_MID LEFT", "CAM_MID RIGHT"),
         "mxg": ("CAM_MID FRONT", "CAM_FRONT RIGHT", "CAM_FRONT LEFT", "CAM_REAR LEFT", "CAM_REAR RIGHT"),
         "jx": ("CAM_MID FRONT", "CAM_RIGHT FRONT", "CAM_LEFT FRONT", "CAM_LEFT REAR", "CAM_RIGHT REAR"),
         "uk": ("CAM_FRONT_MID", "CAM_FRONT_MID_RIGHT", "CAM_FRONT_LEFT_TOP", "CAM_REAR_LEFT", "CAM_REAR_RIGHT"),
@@ -38,6 +39,7 @@ CAMERA_SELECTOR_HELPER = '''def _raytrain_camera_types(sample_data, site_name=No
     site_family = {
         "gy": "rear-rear",
         "xgcn": "rear-rear",
+        "hactl": "hactl",
         "mxg": "mxg",
         "jx": "jx",
         "uk": "uk",
@@ -46,7 +48,7 @@ CAMERA_SELECTOR_HELPER = '''def _raytrain_camera_types(sample_data, site_name=No
         "jk": "top",
     }
     common_sites = {
-        "jtg", "nt", "fz", "xm", "qz", "ez", "hactl", "ml", "xs",
+        "jtg", "nt", "fz", "xm", "qz", "ez", "ml", "xs",
         "jgj", "cl", "yq", "tz", "lz", "zk", "rz", "tpy",
     }
     if site_name in common_sites:
@@ -63,6 +65,7 @@ CAMERA_SELECTOR_HELPER = '''def _raytrain_camera_types(sample_data, site_name=No
         "mxg128",
         "uk",
         "rear-rear",
+        "hactl",
         "mxg",
         "jx",
         "common",
