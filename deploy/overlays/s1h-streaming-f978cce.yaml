@@ -18,7 +18,7 @@ datasetPublisher:
 rayTrain:
   runtimeCatalog:
     canaryManagedBEVFusion:
-      reference: harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion-ray258@sha256:124aaea5296c49d10ed0c8cb2b432af331f4fa0dca83d2e29809f3261f280a01
+      reference: harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion-ray258@sha256:1a5780e25f9a3090359d024b285baa8846242074999f0d9b470c5b38b72a7b67
       rayVersion: 2.58.0
       supportedEngines:
         - ray-train
