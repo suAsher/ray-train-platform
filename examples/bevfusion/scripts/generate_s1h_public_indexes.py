@@ -170,8 +170,8 @@ def _dump_generated_infos(path: Path, infos: list[dict[str, Any]], metadata: dic
     temporary.replace(path)
 
 
-def _generate_package(arguments: tuple[PackageSpec, Path, int, int]) -> dict[str, Any]:
-    package, output_root, max_sweeps, min_scene_samples = arguments
+def _generate_package(arguments: tuple[PackageSpec, Path, int, int, bool]) -> dict[str, Any]:
+    package, output_root, max_sweeps, min_scene_samples, multimodal = arguments
     output = output_root / "packages" / package.collection / package.name
     train = output / "nuscenes_infos_train.pkl"
     val = output / "nuscenes_infos_val.pkl"
@@ -181,6 +181,7 @@ def _generate_package(arguments: tuple[PackageSpec, Path, int, int]) -> dict[str
         "fingerprint": package.fingerprint,
         "package": package.name,
         "sample_count": package.sample_count,
+        "schema": "s1h-multimodal-v2" if multimodal else "s1h-lidar-v1",
     }
     if train.is_file() and val.is_file() and _receipt_matches(receipt, expected_receipt):
         return {
@@ -207,7 +208,7 @@ def _generate_package(arguments: tuple[PackageSpec, Path, int, int]) -> dict[str
                     max_sweeps=max_sweeps,
                     site_name=None,
                     min_scene_samples=min_scene_samples,
-                    lidar_only=True,
+                    lidar_only=not multimodal,
                 )
     except (FileNotFoundError, KeyError, ValueError, AssertionError, IndexError) as error:
         train.unlink(missing_ok=True)
@@ -259,6 +260,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-sweeps", type=int, default=0)
     parser.add_argument("--min-scene-samples", type=int, default=81)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--multimodal", action="store_true")
     arguments = parser.parse_args()
     if arguments.workers < 1 or arguments.workers > 32:
         parser.error("--workers must be between 1 and 32")
@@ -281,7 +283,13 @@ def main() -> int:
     if arguments.dry_run:
         return 0
     work = (
-        (package, arguments.output_root, arguments.max_sweeps, arguments.min_scene_samples)
+        (
+            package,
+            arguments.output_root,
+            arguments.max_sweeps,
+            arguments.min_scene_samples,
+            arguments.multimodal,
+        )
         for package in packages
     )
     rejected: list[dict[str, str]] = []

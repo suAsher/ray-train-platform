@@ -85,11 +85,11 @@ fi
 
 source_root="/mnt/storage/public/$source_relative"
 output_root="$source_root/.raytrain/index-builds/$version"
-final_index="$source_root/.raytrain/trusted-index-v2.pkl"
+final_index="$source_root/.raytrain/indexes/$version/trusted-index-v3.json"
 if "$finalize_only"; then
   generation_command='test -f "$output_root/merged_nuscenes_infos_train.pkl" -a -f "$output_root/merged_nuscenes_infos_val.pkl" -a -f "$output_root/rejected-packages.json" || { echo "validated index build outputs are incomplete" >&2; exit 4; }'
 else
-  generation_command='python3 /opt/raytrain-indexer/generate_s1h_public_indexes.py --source-root "$source_root" --output-root "$output_root" --workers 32 --max-sweeps 0 --min-scene-samples 81'
+  generation_command='python3 /opt/raytrain-indexer/generate_s1h_public_indexes.py --source-root "$source_root" --output-root "$output_root" --workers 32 --max-sweeps 10 --min-scene-samples 81 --multimodal'
 fi
 command="$(printf '%s\n' \
   'set -euo pipefail' \
@@ -98,12 +98,12 @@ command="$(printf '%s\n' \
   "final_index='$final_index'" \
   'test ! -e "$final_index" || { echo "trusted index already exists; publish a new dataset source root instead of overwriting it" >&2; exit 3; }' \
   "$generation_command" \
-  'python3 /opt/raytrain-indexer/build_s1h_trusted_index.py --source-root "$source_root" --train-pkl "$output_root/merged_nuscenes_infos_train.pkl" --val-pkl "$output_root/merged_nuscenes_infos_val.pkl" --output "$output_root/trusted-index-v2.pkl" --summary "$output_root/trusted-index-v2.summary.json" --workers 32' \
-  'export INDEX_SOURCE="$output_root/trusted-index-v2.pkl" INDEX_TARGET="$final_index" INDEX_PARTS_SOURCE="$output_root/trusted-index-v2.parts" INDEX_PARTS_TARGET="$source_root/.raytrain/trusted-index-v2.parts"' \
-  "export INDEX_TEMP='$source_root/.raytrain/.trusted-index-v2.$version.tmp'" \
+  'python3 /opt/raytrain-indexer/build_s1h_trusted_index.py --source-root "$source_root" --train-pkl "$output_root/merged_nuscenes_infos_train.pkl" --val-pkl "$output_root/merged_nuscenes_infos_val.pkl" --output "$output_root/trusted-index-v3.json" --summary "$output_root/trusted-index-v3.summary.json" --workers 32 --format multimodal-v2' \
+  'export INDEX_SOURCE="$output_root/trusted-index-v3.json" INDEX_TARGET="$final_index" INDEX_PARTS_SOURCE="$output_root/trusted-index-v3.parts" INDEX_PARTS_TARGET="$source_root/.raytrain/indexes/'"$version"'/trusted-index-v3.parts"' \
+  "export INDEX_TEMP='$source_root/.raytrain/.trusted-index-v3.$version.tmp'" \
   'test -d "$INDEX_PARTS_SOURCE" || { echo "trusted index parts are missing" >&2; exit 5; }' \
   'mkdir -p "$INDEX_PARTS_TARGET"' \
-  'part_count=0; for part in "$INDEX_PARTS_SOURCE"/sha256-*.pkl; do test -f "$part" || { echo "trusted index parts are empty" >&2; exit 5; }; destination="$INDEX_PARTS_TARGET/${part##*/}"; if test -e "$destination"; then cmp -s "$part" "$destination" || { echo "trusted index part conflict" >&2; exit 5; }; else cp "$part" "$destination"; fi; part_count=$((part_count + 1)); done' \
+  'part_count=0; for part in "$INDEX_PARTS_SOURCE"/sha256-*.json; do test -f "$part" || { echo "trusted index parts are empty" >&2; exit 5; }; destination="$INDEX_PARTS_TARGET/${part##*/}"; if test -e "$destination"; then cmp -s "$part" "$destination" || { echo "trusted index part conflict" >&2; exit 5; }; else cp "$part" "$destination"; fi; part_count=$((part_count + 1)); done' \
   'python3 -c '\''import os, shutil; from pathlib import Path; source=Path(os.environ["INDEX_SOURCE"]); target=Path(os.environ["INDEX_TARGET"]); temporary=Path(os.environ["INDEX_TEMP"]); target.parent.mkdir(parents=True, exist_ok=True); target.exists() and (_ for _ in ()).throw(RuntimeError("trusted index already exists")); shutil.copyfile(source, temporary); temporary.replace(target); print(f"manifest root committed last: published {target} bytes={target.stat().st_size}")'\''' \
 )"
 

@@ -474,7 +474,7 @@ def _convert_multimodal_info(
                 camera.get("sensor2lidar_translation"),
                 field_name="multimodal camera sensor2lidar_translation",
             ),
-            "sensor2ego_rotation": _matrix(
+            "sensor2ego_rotation": _rotation_matrix(
                 camera.get("sensor2ego_rotation"),
                 field_name="multimodal camera sensor2ego_rotation",
             ),
@@ -493,7 +493,7 @@ def _convert_multimodal_info(
         "boxes": base["info"]["boxes"],
         "labels": base["info"]["labels"],
         "lidar_feature_count": POINT_COLUMNS,
-        "lidar2ego_rotation": _matrix(
+        "lidar2ego_rotation": _rotation_matrix(
             raw_info.get("lidar2ego_rotation"),
             field_name="multimodal lidar2ego_rotation",
         ),
@@ -501,7 +501,7 @@ def _convert_multimodal_info(
             raw_info.get("lidar2ego_translation"),
             field_name="multimodal lidar2ego_translation",
         ),
-        "ego2global_rotation": _matrix(
+        "ego2global_rotation": _rotation_matrix(
             raw_info.get("ego2global_rotation"),
             field_name="multimodal ego2global_rotation",
         ),
@@ -590,6 +590,31 @@ def _matrix(value: object, *, field_name: str) -> list[list[float]]:
     if not np.isfinite(normalized).all():
         raise ValueError(f"{field_name} must contain finite values")
     return [[float(item) for item in row] for row in normalized.tolist()]
+
+
+def _rotation_matrix(value: object, *, field_name: str) -> list[list[float]]:
+    """Normalize the converter's quaternion or precomputed 3x3 rotation."""
+
+    rotation = np.asarray(value)
+    if rotation.shape == (3, 3):
+        return _matrix(rotation, field_name=field_name)
+    if rotation.shape != (4,):
+        raise ValueError(f"{field_name} must be a quaternion or have shape [3, 3]")
+    try:
+        quaternion = rotation.astype(np.float64)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{field_name} must be numeric") from error
+    if not np.isfinite(quaternion).all():
+        raise ValueError(f"{field_name} must contain finite values")
+    norm = float(np.linalg.norm(quaternion))
+    if norm <= 0.0:
+        raise ValueError(f"{field_name} quaternion must not be zero")
+    w, x, y, z = (float(item) / norm for item in quaternion.tolist())
+    return [
+        [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w)],
+        [2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w)],
+        [2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)],
+    ]
 
 
 def _vector(value: object, *, field_name: str) -> list[float]:

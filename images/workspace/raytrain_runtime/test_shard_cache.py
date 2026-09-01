@@ -155,6 +155,30 @@ class ShardCacheTest(unittest.TestCase):
             self.assertEqual(cache.metrics_snapshot()["hit"], 1)
             self.assertEqual(cache.metrics_snapshot()["bytes"], len(b"stable allocation"))
 
+    def test_content_addressed_tar_uses_the_same_bounded_cache(self):
+        from raytrain_runtime.shard_cache import ShardCache
+
+        with tempfile.TemporaryDirectory() as temporary:
+            base = pathlib.Path(temporary)
+            roots = (base / "data1", base / "data2")
+            for root in roots:
+                root.mkdir()
+            payload = b"webdataset-tar-payload"
+            digest = hashlib.sha256(payload).hexdigest()
+            source = base / "source" / f"sha256-{digest}.tar"
+            source.parent.mkdir()
+            source.write_bytes(payload)
+            cache = ShardCache(roots=roots, policy="bounded", suffix=".tar")
+
+            first = cache.resolve(source, digest)
+            second = cache.resolve(source, digest)
+
+            self.assertEqual(first, second)
+            self.assertEqual(first.suffix, ".tar")
+            self.assertEqual(first.read_bytes(), payload)
+            self.assertEqual(cache.metrics_snapshot()["download"], 1)
+            self.assertEqual(cache.metrics_snapshot()["hit"], 1)
+
     def test_copy_is_streamed_fsynced_and_atomically_renamed(self):
         from raytrain_runtime import shard_cache
 

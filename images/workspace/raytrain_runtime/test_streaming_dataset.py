@@ -62,6 +62,23 @@ def _manifest_row(ordinal: int, *, split: str = "train") -> dict:
     }
 
 
+def _multimodal_manifest_row(ordinal: int, *, split: str = "train") -> dict:
+    digest = "b" * 64
+    return {
+        "ordinal": ordinal,
+        "token": f"token-{ordinal}",
+        "scene": "scene-1",
+        "class_ids": [ordinal % 3],
+        "timestamp": ordinal,
+        "source_digest": hashlib.sha256(str(ordinal).encode()).hexdigest(),
+        "split": split,
+        "shard_path": f"dataset-s1h/shards/sha256-{digest}.tar",
+        "shard_sha256": digest,
+        "shard_size": 1024,
+        "metadata_member": f"token-{ordinal}/metadata.json",
+    }
+
+
 class StreamingDatasetConfigTest(unittest.TestCase):
     def test_config_is_frozen_and_confines_exact_manifest(self):
         from raytrain_runtime.ray_data import StreamingDatasetConfig
@@ -110,6 +127,38 @@ class StreamingDatasetConfigTest(unittest.TestCase):
 
 
 class StreamingDatasetBuildTest(unittest.TestCase):
+    def test_selects_multimodal_reference_columns_for_v2_manifest(self):
+        from raytrain_runtime.ray_data import (
+            StreamingDatasetConfig,
+            build_s1h_streaming_dataset,
+        )
+        from raytrain_runtime.s1h_webdataset import WEB_DATASET_REF_COLUMNS
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary).resolve()
+            manifest = root / "dataset-s1h" / "manifests" / "version-2.parquet"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_bytes(b"trusted-multimodal-reference-manifest")
+            dataset = _Dataset((_multimodal_manifest_row(0),))
+            data = types.SimpleNamespace(read_parquet=mock.Mock(return_value=dataset))
+            config = StreamingDatasetConfig(
+                dataset_id="dataset-s1h",
+                version_id="version-2",
+                manifest_path=str(manifest),
+                manifest_sha256=hashlib.sha256(manifest.read_bytes()).hexdigest(),
+                dataset_root=str(root),
+                train_samples=1,
+                cache_policy="bounded",
+                schema_version="s1h-multimodal-webdataset-v2",
+            )
+
+            prepared, per_worker, padding = build_s1h_streaming_dataset(
+                config, world_size=1, ray_data_module=data
+            )
+
+        self.assertEqual((per_worker, padding), (1, 0))
+        self.assertEqual(set(prepared.rows[0]), set(WEB_DATASET_REF_COLUMNS))
+
     def test_reads_verified_manifest_filters_train_and_pads_equal_worker_shards(self):
         from raytrain_runtime.ray_data import (
             StreamingDatasetConfig,

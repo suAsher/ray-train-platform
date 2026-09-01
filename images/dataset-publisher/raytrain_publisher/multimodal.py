@@ -11,6 +11,7 @@ import hashlib
 import io
 import json
 import math
+import posixpath
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -21,9 +22,12 @@ from typing import Any
 from .input_security import read_input_bytes
 from .pack import MAX_SHARD_BYTES
 from .schema import validate_sample_metadata
+from .tos_storage import MAX_INDEX_BYTES
 
 
 MULTIMODAL_SCHEMA_VERSION = "s1h-multimodal-webdataset-v2"
+MULTIMODAL_INDEX_FORMAT = "trusted-index-v3"
+MULTIMODAL_INDEX_MANIFEST_FORMAT = "trusted-index-sharded-v2"
 _PAYLOAD_FIELDS = frozenset({"lidar", "sweeps", "cameras"})
 _INFO_REQUIRED_FIELDS = frozenset(
     {
@@ -50,6 +54,146 @@ class MultimodalPackedShard:
     payload: bytes
     sha256: str
     members: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class MultimodalIndexDocument:
+    """Verified path-free S1H fusion publication descriptors."""
+
+    samples: tuple[dict[str, Any], ...]
+    class_count: int
+    cbgs_seed: int
+
+
+def load_cloud_multimodal_index(
+    *, storage: Any, source_root: str, source_index: str
+) -> MultimodalIndexDocument:
+    """Load a bounded JSON root and all digest-addressed v3 index parts."""
+
+    _clean_relative_path(source_root, field_name="multimodal source root")
+    _clean_relative_path(source_index, field_name="multimodal source index")
+    root = _load_json_document(
+        storage.get_index(source_index, maximum_bytes=MAX_INDEX_BYTES),
+        field_name="multimodal index manifest",
+    )
+    required = {
+        "format",
+        "sample_schema_version",
+        "class_count",
+        "cbgs_seed",
+        "sample_count",
+        "parts",
+    }
+    if set(root) != required or root["format"] != MULTIMODAL_INDEX_MANIFEST_FORMAT:
+        raise ValueError("multimodal index manifest is invalid")
+    class_count, cbgs_seed = _validate_index_policy(
+        root["class_count"], root["cbgs_seed"]
+    )
+    if root["sample_schema_version"] != MULTIMODAL_SCHEMA_VERSION:
+        raise ValueError("multimodal index schema is unsupported")
+    sample_count = root["sample_count"]
+    parts = root["parts"]
+    if (
+        isinstance(sample_count, bool)
+        or not isinstance(sample_count, int)
+        or sample_count < 1
+        or type(parts) is not list
+        or not parts
+    ):
+        raise ValueError("multimodal index manifest is invalid")
+
+    manifest_directory = posixpath.dirname(source_index)
+    part_directory = f"{posixpath.splitext(posixpath.basename(source_index))[0]}.parts"
+    samples: list[dict[str, Any]] = []
+    seen_tokens: set[str] = set()
+    declared_count = 0
+    for part in parts:
+        if type(part) is not dict or set(part) != {"key", "sha256", "sample_count"}:
+            raise ValueError("multimodal index part is invalid")
+        digest, count, key = part["sha256"], part["sample_count"], part["key"]
+        if (
+            not isinstance(digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)
+            or isinstance(count, bool)
+            or not isinstance(count, int)
+            or count < 1
+            or key != f"{part_directory}/sha256-{digest}.json"
+        ):
+            raise ValueError("multimodal index part is invalid")
+        full_key = posixpath.join(manifest_directory, key)
+        _clean_relative_path(full_key, field_name="multimodal index part")
+        payload = storage.get_index(full_key, maximum_bytes=MAX_INDEX_BYTES)
+        if hashlib.sha256(payload).hexdigest() != digest:
+            raise ValueError("multimodal index part digest verification failed")
+        document = _load_json_document(payload, field_name="multimodal index part")
+        if (
+            set(document)
+            != {
+                "format",
+                "sample_schema_version",
+                "class_count",
+                "cbgs_seed",
+                "samples",
+            }
+            or document["format"] != MULTIMODAL_INDEX_FORMAT
+            or document["sample_schema_version"] != MULTIMODAL_SCHEMA_VERSION
+            or document["class_count"] != class_count
+            or document["cbgs_seed"] != cbgs_seed
+            or type(document["samples"]) is not list
+            or len(document["samples"]) != count
+        ):
+            raise ValueError("multimodal index part contract is invalid")
+        for value in document["samples"]:
+            sample = _validate_sample(value)
+            if sample["token"] in seen_tokens:
+                raise ValueError("multimodal index contains a duplicate token")
+            seen_tokens.add(sample["token"])
+            samples.append(sample)
+        declared_count += count
+    if declared_count != sample_count or len(samples) != sample_count:
+        raise ValueError("multimodal index sample count is invalid")
+    return MultimodalIndexDocument(
+        samples=tuple(samples), class_count=class_count, cbgs_seed=cbgs_seed
+    )
+
+
+def _load_json_document(payload: object, *, field_name: str) -> dict[str, Any]:
+    if not isinstance(payload, (bytes, bytearray)):
+        raise ValueError(f"{field_name} is invalid")
+    try:
+        value = json.loads(bytes(payload))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise ValueError(f"{field_name} is invalid") from None
+    if type(value) is not dict:
+        raise ValueError(f"{field_name} is invalid")
+    return value
+
+
+def _validate_index_policy(class_count: object, cbgs_seed: object) -> tuple[int, int]:
+    if (
+        isinstance(class_count, bool)
+        or not isinstance(class_count, int)
+        or not 1 <= class_count <= 32768
+        or isinstance(cbgs_seed, bool)
+        or not isinstance(cbgs_seed, int)
+        or cbgs_seed < 0
+    ):
+        raise ValueError("multimodal index policy is invalid")
+    return class_count, cbgs_seed
+
+
+def _clean_relative_path(value: object, *, field_name: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value.startswith("/")
+        or "\\" in value
+        or "://" in value
+        or posixpath.normpath(value) != value
+        or any(part in {"", ".", ".."} for part in value.split("/"))
+    ):
+        raise ValueError(f"{field_name} is invalid")
+    return value
 
 
 def pack_multimodal_shard(

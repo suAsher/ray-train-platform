@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import os
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any
 
@@ -39,6 +40,7 @@ _TRAINING_FORMAT_TAIL = ("DefaultFormatBundle3D", "Collect3D")
 _UNSUPPORTED_CONFIG_MESSAGE = (
     "CBGSDataset config is not a supported lidar-only v1 pipeline"
 )
+_MULTIMODAL_SCHEMA_VERSION = "s1h-multimodal-webdataset-v2"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -158,6 +160,11 @@ def build_streaming_dataset_proxy(
     replaced by the array-to-``LiDARPoints`` conversion in this adapter.
     """
 
+    if (
+        os.environ.get("PLATFORM_DATASET_SCHEMA_VERSION", "").strip()
+        == _MULTIMODAL_SCHEMA_VERSION
+    ):
+        return build_multimodal_streaming_dataset_proxy(cbgs_config)
     dataset_config, remaining_pipeline, classes, load_dim, use_dim = (
         _validate_cbgs_lidar_only_v1(cbgs_config)
     )
@@ -186,6 +193,239 @@ def build_streaming_dataset_proxy(
         use_dim=use_dim,
     )
     return StreamingDatasetProxy(pipeline=pipeline, CLASSES=classes)
+
+
+@dataclasses.dataclass(frozen=True)
+class _MultimodalPipeline:
+    compose: Callable[[dict[str, Any]], Any]
+    boxes_type: type
+    box_mode_3d: Any
+    numpy: Any
+    with_velocity: bool
+    class_names: tuple[str, ...]
+    camera_names: tuple[str, ...] | None
+    camera_indices: tuple[int, ...] | None
+
+    @property
+    def transforms(self) -> Any:
+        return getattr(self.compose, "transforms", ())
+
+    def __call__(self, sample: dict[str, Any]) -> Any:
+        try:
+            prepared = _prepare_multimodal_input(
+                sample,
+                numpy=self.numpy,
+                boxes_type=self.boxes_type,
+                box_mode_3d=self.box_mode_3d,
+                with_velocity=self.with_velocity,
+                class_names=self.class_names,
+                camera_names=self.camera_names,
+                camera_indices=self.camera_indices,
+            )
+            return self.compose(prepared)
+        except Exception:
+            raise RuntimeError("BEVFusion multimodal v2 pipeline failed") from None
+
+
+def build_multimodal_streaming_dataset_proxy(
+    cbgs_config: Mapping[str, Any],
+) -> StreamingDatasetProxy:
+    """Reuse the unmodified S1H fusion transforms over batch-local TAR members."""
+
+    try:
+        import copy
+        import numpy as np
+        from mmdet3d.core.bbox import get_box_type
+        from mmdet3d.datasets.pipelines import Compose
+
+        if not isinstance(cbgs_config, Mapping) or cbgs_config.get("type") != "CBGSDataset":
+            raise ValueError
+        dataset = cbgs_config.get("dataset")
+        if not isinstance(dataset, Mapping) or dataset.get("type") != "NuScenesDataset":
+            raise ValueError
+        modality = dataset.get("modality")
+        if not isinstance(modality, Mapping) or modality.get("use_lidar") is not True or modality.get("use_camera") is not True:
+            raise ValueError
+        pipeline_config = dataset.get("pipeline")
+        if not isinstance(pipeline_config, Sequence) or isinstance(pipeline_config, (str, bytes)) or not pipeline_config:
+            raise ValueError
+        classes_value = dataset.get("object_classes", dataset.get("classes"))
+        if not isinstance(classes_value, Sequence) or isinstance(classes_value, (str, bytes)) or not classes_value:
+            raise ValueError
+        classes = tuple(classes_value)
+        if any(not isinstance(name, str) or not name for name in classes):
+            raise ValueError
+        camera_names_value = dataset.get("camera_names")
+        camera_names = (
+            tuple(camera_names_value) if camera_names_value is not None else None
+        )
+        if camera_names is not None and (
+            not camera_names
+            or any(not isinstance(name, str) or not name for name in camera_names)
+            or len(set(camera_names)) != len(camera_names)
+        ):
+            raise ValueError
+        camera_indices_value = dataset.get("camera_indices")
+        camera_indices = (
+            tuple(camera_indices_value) if camera_indices_value is not None else None
+        )
+        if camera_indices is not None and (
+            not camera_indices
+            or any(
+                isinstance(index, bool) or not isinstance(index, int) or index < 0
+                for index in camera_indices
+            )
+            or len(set(camera_indices)) != len(camera_indices)
+        ):
+            raise ValueError
+        if camera_names is not None and camera_indices is not None:
+            raise ValueError
+        boxes_type, box_mode_3d = get_box_type("LiDAR")
+        compose = Compose(copy.deepcopy(tuple(pipeline_config)))
+    except Exception:
+        raise ValueError("CBGSDataset config is not a supported multimodal v2 pipeline") from None
+    return StreamingDatasetProxy(
+        pipeline=_MultimodalPipeline(
+            compose=compose,
+            boxes_type=boxes_type,
+            box_mode_3d=box_mode_3d,
+            numpy=np,
+            with_velocity=dataset.get("with_velocity", True) is not False,
+            class_names=classes,
+            camera_names=camera_names,
+            camera_indices=camera_indices,
+        ),
+        CLASSES=classes,
+    )
+
+
+def _prepare_multimodal_input(
+    sample: Mapping[str, Any],
+    *,
+    numpy: Any,
+    boxes_type: type,
+    box_mode_3d: Any,
+    with_velocity: bool,
+    class_names: tuple[str, ...],
+    camera_names: tuple[str, ...] | None,
+    camera_indices: tuple[int, ...] | None,
+) -> dict[str, Any]:
+    if not isinstance(sample, Mapping):
+        raise ValueError("multimodal sample must be a mapping")
+    info, payloads = sample.get("info"), sample.get("payload_paths")
+    if not isinstance(info, Mapping) or not isinstance(payloads, Mapping):
+        raise ValueError("multimodal sample payload is invalid")
+    sweeps = info.get("sweeps")
+    sweep_paths = payloads.get("sweeps")
+    cameras = info.get("cams")
+    camera_paths = payloads.get("cameras")
+    if type(sweeps) is not list or type(sweep_paths) is not list or len(sweeps) != len(sweep_paths):
+        raise ValueError("multimodal sweep payload is invalid")
+    if type(cameras) is not dict or type(camera_paths) is not dict or set(cameras) != set(camera_paths):
+        raise ValueError("multimodal camera payload is invalid")
+
+    data: dict[str, Any] = {
+        "token": sample["token"],
+        "sample_idx": sample["token"],
+        "lidar_path": payloads["lidar"],
+        "sweeps": [
+            {**dict(metadata), "data_path": path}
+            for metadata, path in zip(sweeps, sweep_paths)
+        ],
+        "timestamp": sample["timestamp"],
+        "location": "",
+    }
+    data["ego2global"] = _homogeneous_transform(
+        info["ego2global_rotation"], info["ego2global_translation"], numpy=numpy
+    )
+    data["lidar2ego"] = _homogeneous_transform(
+        info["lidar2ego_rotation"], info["lidar2ego_translation"], numpy=numpy
+    )
+    ordered_camera_names = tuple(sorted(cameras))
+    if camera_names is not None:
+        if any(name not in cameras for name in camera_names):
+            raise ValueError("configured multimodal camera is unavailable")
+        ordered_camera_names = camera_names
+    elif camera_indices is not None:
+        if any(index >= len(ordered_camera_names) for index in camera_indices):
+            raise ValueError("configured multimodal camera index is unavailable")
+        ordered_camera_names = tuple(
+            ordered_camera_names[index] for index in camera_indices
+        )
+    camera_items = [(name, cameras[name]) for name in ordered_camera_names]
+    data.update(
+        image_paths=[],
+        lidar2camera=[],
+        lidar2image=[],
+        camera2ego=[],
+        camera_intrinsics=[],
+        camera2lidar=[],
+    )
+    for camera_name, camera in camera_items:
+        data["image_paths"].append(camera_paths[camera_name])
+        sensor2lidar_rotation = numpy.asarray(camera["sensor2lidar_rotation"], dtype=numpy.float32)
+        sensor2lidar_translation = numpy.asarray(camera["sensor2lidar_translation"], dtype=numpy.float32)
+        lidar2camera_rotation = numpy.linalg.inv(sensor2lidar_rotation)
+        lidar2camera_translation = sensor2lidar_translation @ lidar2camera_rotation.T
+        lidar2camera = numpy.eye(4, dtype=numpy.float32)
+        lidar2camera[:3, :3] = lidar2camera_rotation.T
+        lidar2camera[3, :3] = -lidar2camera_translation
+        lidar2camera = lidar2camera.T
+        intrinsics = numpy.eye(4, dtype=numpy.float32)
+        intrinsics[:3, :3] = numpy.asarray(camera["camera_intrinsics"], dtype=numpy.float32)
+        data["lidar2camera"].append(lidar2camera)
+        data["camera_intrinsics"].append(intrinsics)
+        data["lidar2image"].append(intrinsics @ lidar2camera)
+        data["camera2ego"].append(
+            _homogeneous_transform(camera["sensor2ego_rotation"], camera["sensor2ego_translation"], numpy=numpy)
+        )
+        data["camera2lidar"].append(
+            _homogeneous_transform(camera["sensor2lidar_rotation"], camera["sensor2lidar_translation"], numpy=numpy)
+        )
+
+    boxes = numpy.asarray(info["boxes"], dtype=numpy.float32)
+    labels = numpy.asarray(info["labels"], dtype=numpy.int64)
+    if boxes.ndim != 2 or boxes.shape[1] not in (7, 9) or labels.ndim != 1 or len(boxes) != len(labels):
+        raise ValueError("multimodal annotations are invalid")
+    point_counts = numpy.asarray(info.get("num_lidar_pts", [1] * len(boxes)), dtype=numpy.float32)
+    if point_counts.shape != (len(boxes),):
+        raise ValueError("multimodal point counts are invalid")
+    mask = point_counts > 0
+    boxes, labels = boxes[mask], labels[mask]
+    if len(labels) and (labels.min() < 0 or labels.max() >= len(class_names)):
+        raise ValueError("multimodal annotation label is outside configured classes")
+    if with_velocity:
+        velocities = numpy.asarray(info.get("gt_velocity", [[0.0, 0.0]] * len(point_counts)), dtype=numpy.float32)[mask]
+        if velocities.shape != (len(boxes), 2):
+            raise ValueError("multimodal velocities are invalid")
+        velocities = numpy.nan_to_num(velocities, copy=True)
+        if boxes.shape[1] == 7:
+            boxes = numpy.concatenate([boxes, velocities], axis=-1)
+    data["ann_info"] = {
+        "gt_bboxes_3d": boxes_type(
+            boxes, box_dim=boxes.shape[-1], origin=(0.5, 0.5, 0)
+        ).convert_to(box_mode_3d),
+        "gt_labels_3d": labels,
+        "gt_names": numpy.asarray(
+            [class_names[int(label)] for label in labels], dtype=object
+        ),
+    }
+    for field in _PRE_PIPELINE_LIST_FIELDS:
+        data[field] = []
+    data["box_type_3d"] = boxes_type
+    data["box_mode_3d"] = box_mode_3d
+    return data
+
+
+def _homogeneous_transform(rotation: Any, translation: Any, *, numpy: Any) -> Any:
+    matrix = numpy.eye(4, dtype=numpy.float32)
+    normalized_rotation = numpy.asarray(rotation, dtype=numpy.float32)
+    normalized_translation = numpy.asarray(translation, dtype=numpy.float32)
+    if normalized_rotation.shape != (3, 3) or normalized_translation.shape != (3,):
+        raise ValueError("multimodal transform is invalid")
+    matrix[:3, :3] = normalized_rotation
+    matrix[:3, 3] = normalized_translation
+    return matrix
 
 
 def _validate_cbgs_lidar_only_v1(
@@ -377,7 +617,7 @@ class S1HWorkerDataLoader:
         ) // self.samples_per_gpu
 
     def __iter__(self) -> Iterator[Any]:
-        from raytrain_runtime.ray_data import worker_s1h_batches
+        from raytrain_runtime import ray_data
 
         worker_arguments = {
             "name": self.dataset_name,
@@ -388,7 +628,13 @@ class S1HWorkerDataLoader:
         if self.batch_resolver is not None:
             worker_arguments["batch_resolver"] = self.batch_resolver
         observed_sample_count = 0
-        for samples in worker_s1h_batches(
+        worker_batches = ray_data.worker_s1h_batches
+        if (
+            os.environ.get("PLATFORM_DATASET_SCHEMA_VERSION", "").strip()
+            == _MULTIMODAL_SCHEMA_VERSION
+        ):
+            worker_batches = ray_data.worker_s1h_webdataset_batches
+        for samples in worker_batches(
             **worker_arguments,
         ):
             try:

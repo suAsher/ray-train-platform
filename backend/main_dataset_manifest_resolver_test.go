@@ -85,7 +85,7 @@ func TestPrivateDatasetManifestResolverReturnsOnlySelectedDatasetRoot(t *testing
 	}
 	want := k8s.DatasetManifestMount{
 		DatasetID: "dataset-labeled-full", DatasetVersionID: "version-20260830",
-		ManifestSHA256: testDatasetManifestDigest, TrainSamples: 15228,
+		ManifestSHA256: testDatasetManifestDigest, SchemaVersion: "s1h-lidar-parquet-v1", TrainSamples: 15228,
 		ClaimName: "data-tenant-local", DatasetRootSubPath: "platform/datasets/dataset-labeled-full",
 	}
 	if mount != want {

@@ -264,6 +264,12 @@ def parse_driver_config(
                     "PLATFORM_DATASET_CACHE_POLICY",
                 )
             ),
+            schema_version=str(
+                environment.get(
+                    "PLATFORM_DATASET_SCHEMA_VERSION",
+                    "s1h-lidar-parquet-v1",
+                )
+            ),
             prefetch_batches=prefetch_batches,
             shuffle_seed=shuffle_seed,
         )
@@ -403,6 +409,11 @@ def _train_loop_environment(loop_config: Mapping[str, Any]) -> dict[str, str | N
             "PLATFORM_DATASET_ROOT": str(loop_config["dataset_root"]),
             "PLATFORM_DATASET_CACHE_POLICY": str(
                 loop_config["dataset_cache_policy"]
+            ),
+            "PLATFORM_DATASET_SCHEMA_VERSION": str(
+                loop_config.get(
+                    "dataset_schema_version", "s1h-lidar-parquet-v1"
+                )
             ),
             "RAYTRAIN_DATASET_WORKER_SAMPLES": str(
                 int(loop_config["worker_sample_count"])
@@ -635,6 +646,7 @@ def build_trainer(
             "dataset_manifest_sha256": config.dataset.manifest_sha256,
             "dataset_root": config.dataset.dataset_root,
             "dataset_cache_policy": config.dataset.cache_policy,
+            "dataset_schema_version": config.dataset.schema_version,
             "dataset_prefetch_batches": config.dataset.prefetch_batches,
             "dataset_shuffle_seed": config.dataset.shuffle_seed,
         }

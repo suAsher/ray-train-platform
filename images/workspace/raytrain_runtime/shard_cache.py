@@ -18,9 +18,9 @@ from typing import BinaryIO
 
 _POLICIES = frozenset(("off", "auto", "bounded"))
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
-_OBJECT_NAME = re.compile(r"^sha256-([0-9a-f]{64})\.parquet$")
 _TEMPORARY_NAME = re.compile(r"^\.([0-9a-f]{64})\.[A-Za-z0-9_-]+\.tmp$")
 _NAMESPACE = ".raytrain-parquet-shards-v1"
+_SUPPORTED_SUFFIXES = frozenset((".parquet", ".tar"))
 _HIGH_WATERMARK = 0.85
 _LOW_WATERMARK = 0.70
 _DEFAULT_CHUNK_BYTES = 8 * 1024 * 1024
@@ -61,6 +61,7 @@ class ShardCache:
         policy: str,
         max_bytes: int | None = None,
         chunk_bytes: int = _DEFAULT_CHUNK_BYTES,
+        suffix: str = ".parquet",
     ) -> None:
         if policy not in _POLICIES:
             raise ValueError("dataset cache policy is invalid")
@@ -75,10 +76,16 @@ class ShardCache:
             or not 1 <= chunk_bytes <= _MAX_CHUNK_BYTES
         ):
             raise ValueError("cache chunk bytes is invalid")
+        if suffix not in _SUPPORTED_SUFFIXES:
+            raise ValueError("cache shard suffix is invalid")
 
         self._policy = policy
         self._max_bytes = max_bytes
         self._chunk_bytes = chunk_bytes
+        self._suffix = suffix
+        self._object_name = re.compile(
+            rf"^sha256-([0-9a-f]{{64}}){re.escape(suffix)}$"
+        )
         self._metrics = {name: 0 for name in _METRIC_NAMES}
         self._metrics_lock = threading.Lock()
         self._verified: dict[pathlib.Path, tuple[int, int, int, int, int]] = {}
@@ -180,7 +187,7 @@ class ShardCache:
     def _validate_digest_and_name(self, source: pathlib.Path, digest: str) -> None:
         if not isinstance(digest, str) or _DIGEST.fullmatch(digest) is None:
             raise ValueError("shard digest is invalid")
-        if source.name != f"sha256-{digest}.parquet":
+        if source.name != f"sha256-{digest}{self._suffix}":
             raise ValueError("source filename does not contain its shard digest")
 
     def _root_for_digest(self, digest: str) -> pathlib.Path:
@@ -195,7 +202,7 @@ class ShardCache:
             self._namespace(root)
             / "objects"
             / digest[:2]
-            / f"sha256-{digest}.parquet"
+            / f"sha256-{digest}{self._suffix}"
         )
 
     def _lock_path(self, digest: str) -> pathlib.Path:
@@ -515,7 +522,7 @@ class ShardCache:
             except OSError:
                 continue
             for child in children:
-                matched = _OBJECT_NAME.fullmatch(child.name)
+                matched = self._object_name.fullmatch(child.name)
                 if matched is None or matched.group(1)[:2] != prefix.name:
                     continue
                 try:

@@ -81,9 +81,12 @@ func TestManagerReconcilesPublicAndTeamSourcesWithoutExposingObjectURIs(t *testi
 		SourceRelativePath: "labeled", Visibility: domain.DatasetVisibilityPublic, SchemaVersion: "parquet-v1"}
 	team := domain.Dataset{ID: "team-data", Slug: "team-labeled", Name: "Team", SourceSpace: domain.DataSpaceTeamShared,
 		SourceRelativePath: "datasets/labeled", OwnerTenantID: "tenant-a", Visibility: domain.DatasetVisibilityTeam, SchemaVersion: "parquet-v1"}
+	multimodal := domain.Dataset{ID: "s1h-multimodal", Slug: "s1h-multimodal", Name: "S1H multimodal", SourceSpace: domain.DataSpacePublic,
+		SourceRelativePath: "labeled", Visibility: domain.DatasetVisibilityPublic, SchemaVersion: "s1h-multimodal-webdataset-v2"}
 	work := []domain.DatasetPublicationWork{
 		publicationWork(public, "version-public", "publication-public", "20260830.1"),
 		publicationWork(team, "version-team", "publication-team", "20260830.2"),
+		publicationWork(multimodal, "version-multimodal", "publication-multimodal", "20260830.3"),
 	}
 	repository := &managerRepository{work: work}
 	controller := &recordingPublicationController{}
@@ -94,12 +97,13 @@ func TestManagerReconcilesPublicAndTeamSourcesWithoutExposingObjectURIs(t *testi
 	if err := manager.ReconcileOnce(context.Background()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if repository.listLimit != 16 || len(controller.requests) != 2 {
+	if repository.listLimit != 16 || len(controller.requests) != 3 {
 		t.Fatalf("list limit=%d requests=%d", repository.listLimit, len(controller.requests))
 	}
 	want := []ReconcileRequest{
 		{TenantID: "", SuperAdmin: true, RunID: "publication-public", DatasetID: "public-data", DatasetVersionID: "version-public", Version: "20260830.1", SchemaVersion: "parquet-v1", SourceRoot: "ray-train/public/labeled", SourceIndex: ".raytrain/trusted-index-v2.pkl"},
 		{TenantID: "tenant-a", SuperAdmin: false, RunID: "publication-team", DatasetID: "team-data", DatasetVersionID: "version-team", Version: "20260830.2", SchemaVersion: "parquet-v1", SourceRoot: "ray-train/tenants/tenant-a/shared/datasets/labeled", SourceIndex: ".raytrain/trusted-index-v2.pkl"},
+		{TenantID: "", SuperAdmin: true, RunID: "publication-multimodal", DatasetID: "s1h-multimodal", DatasetVersionID: "version-multimodal", Version: "20260830.3", SchemaVersion: "s1h-multimodal-webdataset-v2", SourceRoot: "ray-train/public/labeled", SourceIndex: ".raytrain/indexes/version-multimodal/trusted-index-v3.json"},
 	}
 	if !reflect.DeepEqual(controller.requests, want) {
 		t.Fatalf("requests = %#v, want %#v", controller.requests, want)

@@ -24,6 +24,8 @@ const (
 	defaultPublicationBatchLimit   = 32
 	maximumPublicationBatchLimit   = 256
 	defaultPublicationPollInterval = 10 * time.Second
+	multimodalPublicationSchema    = "s1h-multimodal-webdataset-v2"
+	multimodalSourceIndexRoot      = ".raytrain/indexes"
 )
 
 type PublicationManagerRepository interface {
@@ -278,11 +280,15 @@ func (manager *Manager) reconcileRequest(work domain.DatasetPublicationWork) (Re
 		root = path.Join("ray-train", "tenants", work.Dataset.OwnerTenantID, "shared")
 	}
 	root = path.Join(root, work.Dataset.SourceRelativePath)
+	sourceIndex := manager.sourceIndexName
+	if work.Version.SchemaVersion == multimodalPublicationSchema {
+		sourceIndex = path.Join(multimodalSourceIndexRoot, work.Version.ID, "trusted-index-v3.json")
+	}
 	request := ReconcileRequest{
 		TenantID: tenantID, SuperAdmin: superAdmin,
 		RunID: work.Run.ID, DatasetID: work.Dataset.ID, DatasetVersionID: work.Version.ID,
 		Version: work.Version.Version, SchemaVersion: work.Version.SchemaVersion,
-		SourceRoot: root, SourceIndex: manager.sourceIndexName,
+		SourceRoot: root, SourceIndex: sourceIndex,
 	}
 	if !request.valid() {
 		return ReconcileRequest{}, ErrInvalidPublicationRequest

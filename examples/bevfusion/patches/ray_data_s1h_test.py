@@ -75,6 +75,35 @@ def _lidar_only_cbgs_config(*pipeline):
     }
 
 
+def _multimodal_cbgs_config():
+    return {
+        "type": "CBGSDataset",
+        "dataset": {
+            "type": "NuScenesDataset",
+            "pipeline": [
+                {"type": "LoadMultiViewImageFromFiles"},
+                {"type": "LoadPointsFromFile", "load_dim": 5, "use_dim": 5},
+                {"type": "LoadPointsFromMultiSweeps", "sweeps_num": 10},
+                {
+                    "type": "LoadAnnotations3D",
+                    "with_bbox_3d": True,
+                    "with_label_3d": True,
+                },
+            ],
+            "object_classes": ["Car", "IGV"],
+            "modality": {
+                "use_lidar": True,
+                "use_camera": True,
+                "use_radar": False,
+                "use_map": False,
+                "use_external": False,
+            },
+            "camera_names": ["CAM_REAR", "CAM_FRONT"],
+            "with_velocity": True,
+        },
+    }
+
+
 def _fake_bevfusion_modules(compose_type, points_type, boxes_type, box_mode):
     mmdet3d = types.ModuleType("mmdet3d")
     core = types.ModuleType("mmdet3d.core")
@@ -96,6 +125,113 @@ def _fake_bevfusion_modules(compose_type, points_type, boxes_type, box_mode):
 
 
 class RayDataS1HPatchTest(unittest.TestCase):
+    def test_multimodal_proxy_reconstructs_real_s1h_fusion_input(self):
+        adapter = _adapter_module()
+        compose_instances = []
+
+        class FakeCompose:
+            def __init__(self, pipeline):
+                self.config = copy.deepcopy(pipeline)
+                self.transforms = []
+                compose_instances.append(self)
+
+            def __call__(self, sample):
+                return sample
+
+        class FakeBoxes:
+            def __init__(self, values, *, box_dim, origin):
+                self.values = values
+                self.box_dim = box_dim
+                self.origin = origin
+
+            def convert_to(self, box_mode):
+                self.box_mode = box_mode
+                return self
+
+        modules, get_box_type = _fake_bevfusion_modules(
+            FakeCompose, object, FakeBoxes, "LIDAR_MODE"
+        )
+        config = _multimodal_cbgs_config()
+        original_config = copy.deepcopy(config)
+        with mock.patch.dict(sys.modules, modules), mock.patch.dict(
+            adapter.os.environ,
+            {"PLATFORM_DATASET_SCHEMA_VERSION": "s1h-multimodal-webdataset-v2"},
+        ):
+            proxy = adapter.build_streaming_dataset_proxy(config)
+
+        self.assertEqual(config, original_config)
+        self.assertEqual(proxy.CLASSES, ("Car", "IGV"))
+        get_box_type.assert_called_once_with("LiDAR")
+        self.assertEqual(
+            [item["type"] for item in compose_instances[0].config],
+            [
+                "LoadMultiViewImageFromFiles",
+                "LoadPointsFromFile",
+                "LoadPointsFromMultiSweeps",
+                "LoadAnnotations3D",
+            ],
+        )
+
+        identity = np.eye(3, dtype=np.float32).tolist()
+        sample = {
+            "token": "sample-a",
+            "timestamp": 42,
+            "payload_paths": {
+                "lidar": "/tmp/batch/lidar.bin",
+                "sweeps": ["/tmp/batch/sweep.bin"],
+                "cameras": {
+                    "CAM_FRONT": "/tmp/batch/front.jpg",
+                    "CAM_REAR": "/tmp/batch/rear.jpg",
+                },
+            },
+            "info": {
+                "boxes": [[1, 2, 3, 4, 5, 6, 0], [7, 8, 9, 1, 2, 3, 0]],
+                "labels": [0, 1],
+                "num_lidar_pts": [3, 0],
+                "gt_velocity": [[1.5, float("nan")], [9, 9]],
+                "lidar2ego_rotation": identity,
+                "lidar2ego_translation": [1, 2, 3],
+                "ego2global_rotation": identity,
+                "ego2global_translation": [4, 5, 6],
+                "sweeps": [
+                    {
+                        "timestamp": 41,
+                        "sensor2lidar_rotation": identity,
+                        "sensor2lidar_translation": [0, 0, 0],
+                    }
+                ],
+                "cams": {
+                    name: {
+                        "sensor2lidar_rotation": identity,
+                        "sensor2lidar_translation": [0, 0, 0],
+                        "sensor2ego_rotation": identity,
+                        "sensor2ego_translation": [0, 0, 0],
+                        "camera_intrinsics": identity,
+                    }
+                    for name in ("CAM_FRONT", "CAM_REAR")
+                },
+            },
+        }
+        prepared = proxy.pipeline(sample)
+
+        self.assertEqual(
+            prepared["image_paths"],
+            ["/tmp/batch/rear.jpg", "/tmp/batch/front.jpg"],
+        )
+        self.assertEqual(prepared["lidar_path"], "/tmp/batch/lidar.bin")
+        self.assertEqual(prepared["sweeps"][0]["data_path"], "/tmp/batch/sweep.bin")
+        np.testing.assert_array_equal(
+            prepared["ann_info"]["gt_names"], np.asarray(["Car"], dtype=object)
+        )
+        np.testing.assert_array_equal(
+            prepared["ann_info"]["gt_labels_3d"], np.asarray([0], dtype=np.int64)
+        )
+        boxes = prepared["ann_info"]["gt_bboxes_3d"]
+        self.assertIsInstance(boxes, FakeBoxes)
+        self.assertEqual(boxes.box_dim, 9)
+        self.assertEqual(boxes.origin, (0.5, 0.5, 0))
+        np.testing.assert_array_equal(boxes.values[0, -2:], np.asarray([1.5, 0]))
+
     def test_streaming_proxy_is_frozen_and_forwards_set_epoch_to_transforms(self):
         adapter = _adapter_module()
 
@@ -407,6 +543,40 @@ class RayDataS1HPatchTest(unittest.TestCase):
             pipeline=pipeline,
         )
         self.assertEqual(collate.call_count, 2)
+
+    def test_streaming_loader_selects_webdataset_worker_for_exact_v2_schema(self):
+        adapter = _adapter_module()
+        legacy_worker = mock.Mock(
+            side_effect=AssertionError("legacy v1 worker was selected")
+        )
+        webdataset_worker = mock.Mock(
+            return_value=iter(([{"token": "token-a"}],))
+        )
+        with mock.patch(
+            "raytrain_runtime.ray_data.worker_s1h_batches", legacy_worker
+        ), mock.patch(
+            "raytrain_runtime.ray_data.worker_s1h_webdataset_batches",
+            webdataset_worker,
+        ), mock.patch.dict(
+            adapter.os.environ,
+            {"PLATFORM_DATASET_SCHEMA_VERSION": "s1h-multimodal-webdataset-v2"},
+        ):
+            loader = adapter.build_bevfusion_train_dataloader(
+                data_mode="streaming",
+                legacy_builder=mock.Mock(),
+                pipeline=lambda sample: sample,
+                collate_fn=lambda samples, samples_per_gpu: samples,
+                samples_per_gpu=1,
+                worker_sample_count=1,
+            )
+            self.assertEqual(list(loader), [[{"token": "token-a"}]])
+
+        webdataset_worker.assert_called_once_with(
+            name="train",
+            samples_per_gpu=1,
+            prefetch_batches=2,
+            pipeline=loader.pipeline,
+        )
 
     def test_streaming_loader_reports_a_redacted_short_shard_at_end(self):
         adapter = _adapter_module()

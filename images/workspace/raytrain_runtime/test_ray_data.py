@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import contextlib
 import os
 import pathlib
 import sys
@@ -24,7 +25,9 @@ from raytrain_runtime.ray_data import (  # noqa: E402
     build_dataset,
     stage_binary_dataset,
     worker_iterator,
+    worker_s1h_webdataset_batches,
 )
+from raytrain_runtime.s1h_webdataset import WEB_DATASET_REF_COLUMNS  # noqa: E402
 from raytrain_runtime.test_s1h_dataset import _row  # noqa: E402
 from raytrain_runtime.test_managed_driver import (  # noqa: E402
     BASE_ENV,
@@ -87,13 +90,73 @@ class DatasetConfigTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "unsupported Ray Data format") as caught:
             DatasetConfig(format=private_format, uri="/mnt/data/input")
-
         message = str(caught.exception)
         self.assertNotIn("tos://", message)
         self.assertNotIn("access", message)
         self.assertNotIn("secret", message)
         self.assertNotIn("internal", message)
 
+    def test_webdataset_worker_materializes_only_current_ray_batch(self):
+        ref = {
+            "ordinal": 0,
+            "token": "sample-token",
+            "scene": "scene-token",
+            "class_ids": [0],
+            "timestamp": 123,
+            "source_digest": "b" * 64,
+            "split": "train",
+            "shard_path": f"dataset-s1h/shards/sha256-{'a' * 64}.tar",
+            "shard_sha256": "a" * 64,
+            "shard_size": 1024,
+            "metadata_member": "sample-token/metadata.json",
+        }
+
+        class Shard:
+            def iter_batches(self, **kwargs):
+                self.kwargs = kwargs
+                yield {
+                    field: np.asarray([ref[field]], dtype=object)
+                    for field in WEB_DATASET_REF_COLUMNS
+                }
+
+        class Resolver:
+            def __init__(self):
+                self.active = False
+                self.calls = []
+
+            @contextlib.contextmanager
+            def resolve_batch(self, refs):
+                self.active = True
+                self.calls.append(tuple(item["token"] for item in refs))
+                try:
+                    yield ({"token": "sample-token", "payload_paths": {}},)
+                finally:
+                    self.active = False
+
+        shard = Shard()
+        resolver = Resolver()
+        fake_train = types.ModuleType("ray.train")
+        fake_train.get_dataset_shard = mock.Mock(return_value=shard)
+        fake_ray = types.ModuleType("ray")
+        fake_ray.train = fake_train
+        with mock.patch.dict(sys.modules, {"ray": fake_ray, "ray.train": fake_train}):
+            batches = worker_s1h_webdataset_batches(
+                samples_per_gpu=1,
+                prefetch_batches=2,
+                pipeline=lambda sample: {**sample, "loaded": resolver.active},
+                batch_resolver=resolver,
+            )
+            first = next(batches)
+            with self.assertRaises(StopIteration):
+                next(batches)
+
+        self.assertEqual(resolver.calls, [("sample-token",)])
+        self.assertFalse(resolver.active)
+        self.assertTrue(first[0]["loaded"])
+        self.assertEqual(
+            shard.kwargs,
+            {"batch_size": 1, "batch_format": "numpy", "prefetch_batches": 2},
+        )
 
 class AdapterTest(unittest.TestCase):
     def test_build_dataset_dispatches_only_registered_formats(self):

@@ -97,8 +97,9 @@ func (resolver *privateDatasetManifestResolver) ResolveDatasetManifestMount(
 	datasetSubPath := path.Join(resolver.relativePrefix, request.DatasetID)
 	return k8s.DatasetManifestMount{
 		DatasetID: request.DatasetID, DatasetVersionID: request.DatasetVersionID,
-		ManifestSHA256: request.ManifestSHA256, TrainSamples: version.TrainSamples,
-		ClaimName: binding.ClaimName, DatasetRootSubPath: datasetSubPath,
+		ManifestSHA256: request.ManifestSHA256, SchemaVersion: version.SchemaVersion,
+		TrainSamples: version.TrainSamples,
+		ClaimName:    binding.ClaimName, DatasetRootSubPath: datasetSubPath,
 	}, nil
 }
 

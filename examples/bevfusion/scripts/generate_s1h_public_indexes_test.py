@@ -130,7 +130,7 @@ class GenerateS1HPublicIndexesTest(unittest.TestCase):
                 "tools.data_converter.nuscenes_converter": converter,
             }
             with mock.patch.dict(sys.modules, modules):
-                result = self.generator._generate_package((package, output, 0, 81))
+                result = self.generator._generate_package((package, output, 0, 81, False))
 
         self.assertEqual(result["status"], "rejected")
         self.assertEqual(result["collection"], "site-a")
@@ -158,7 +158,7 @@ class GenerateS1HPublicIndexesTest(unittest.TestCase):
                 "tools.data_converter.nuscenes_converter": converter,
             }
             with mock.patch.dict(sys.modules, modules):
-                result = self.generator._generate_package((package, output, 0, 81))
+                result = self.generator._generate_package((package, output, 0, 81, False))
 
         self.assertEqual(result["status"], "rejected")
         self.assertEqual(result["error_type"], "KeyError")
@@ -186,7 +186,7 @@ class GenerateS1HPublicIndexesTest(unittest.TestCase):
             }
             with mock.patch.dict(sys.modules, modules):
                 with self.assertRaisesRegex(OSError, "invalid storage operation"):
-                    self.generator._generate_package((package, output, 0, 81))
+                    self.generator._generate_package((package, output, 0, 81, False))
 
     def test_does_not_append_converter_logs_to_shared_storage(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -213,9 +213,39 @@ class GenerateS1HPublicIndexesTest(unittest.TestCase):
 
             with mock.patch.dict(sys.modules, modules):
                 with mock.patch.object(Path, "open", reject_shared_converter_log):
-                    result = self.generator._generate_package((package, output, 0, 81))
+                    result = self.generator._generate_package((package, output, 0, 81, False))
 
         self.assertEqual(result["status"], "accepted")
+
+    def test_multimodal_generation_keeps_cameras_and_sweeps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._package(root, "site-a", "package-a", samples=1)
+            package = self.generator.discover_packages(root)[0]
+            output = root / "output"
+            calls = []
+
+            tools = types.ModuleType("tools")
+            data_converter = types.ModuleType("tools.data_converter")
+            converter = types.ModuleType("tools.data_converter.nuscenes_converter")
+
+            def record_call(*_args, **kwargs):
+                calls.append(kwargs)
+
+            converter.create_nuscenes_infos = record_call
+            modules = {
+                "tools": tools,
+                "tools.data_converter": data_converter,
+                "tools.data_converter.nuscenes_converter": converter,
+            }
+            with mock.patch.dict(sys.modules, modules):
+                result = self.generator._generate_package(
+                    (package, output, 10, 81, True)
+                )
+
+        self.assertEqual(result["status"], "accepted")
+        self.assertEqual(calls[0]["max_sweeps"], 10)
+        self.assertFalse(calls[0]["lidar_only"])
 
     @staticmethod
     def _package(root: Path, collection: str, name: str, *, samples: int) -> Path:

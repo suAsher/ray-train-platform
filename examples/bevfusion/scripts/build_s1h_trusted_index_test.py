@@ -92,14 +92,14 @@ class BuildS1HTrustedIndexTest(unittest.TestCase):
                             "data_path": str(camera),
                             "sensor2lidar_rotation": np.eye(3),
                             "sensor2lidar_translation": np.zeros(3),
-                            "sensor2ego_rotation": np.eye(3),
+                            "sensor2ego_rotation": np.array([1.0, 0.0, 0.0, 0.0]),
                             "sensor2ego_translation": np.zeros(3),
                             "camera_intrinsics": np.eye(3),
                         }
                     },
-                    "lidar2ego_rotation": np.eye(3),
+                    "lidar2ego_rotation": np.array([1.0, 0.0, 0.0, 0.0]),
                     "lidar2ego_translation": np.zeros(3),
-                    "ego2global_rotation": np.eye(3),
+                    "ego2global_rotation": np.array([1.0, 0.0, 0.0, 0.0]),
                     "ego2global_translation": np.zeros(3),
                     "num_lidar_pts": np.array([4]),
                     "gt_velocity": np.array([[0.0, 0.0]], dtype=np.float32),
@@ -123,6 +123,7 @@ class BuildS1HTrustedIndexTest(unittest.TestCase):
         self.assertEqual(sample["info"]["sweeps"][0]["timestamp"], 123400)
         self.assertEqual(packed.members[0]["token"], "sample-token")
         self.assertEqual(sample["info"]["cams"]["CAM_FRONT"]["camera_intrinsics"], [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+        self.assertEqual(sample["info"]["lidar2ego_rotation"], [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
         serialized = __import__("json").dumps(sample, sort_keys=True)
         self.assertNotIn(str(source_root), serialized)
         self.assertNotIn("data_path", serialized)

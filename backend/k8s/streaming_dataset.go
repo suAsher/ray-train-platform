@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
@@ -23,6 +24,8 @@ const (
 	defaultStreamingDatasetPrefetchBatches = int64(2)
 	defaultStreamingDatasetShuffleSeed     = uint64(0)
 )
+
+var streamingDatasetSchemaPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$`)
 
 // DatasetManifestResolutionRequest is the immutable lookup key passed from
 // the reconciler to a private catalogue adapter. TrainingJob intentionally
@@ -44,6 +47,7 @@ type DatasetManifestMount struct {
 	DatasetID          string
 	DatasetVersionID   string
 	ManifestSHA256     string
+	SchemaVersion      string
 	TrainSamples       int64
 	ClaimName          string
 	DatasetRootSubPath string
@@ -88,6 +92,9 @@ func (mount DatasetManifestMount) validate(provenance domain.DatasetProvenance) 
 	}
 	if mount.TrainSamples <= 0 {
 		return fmt.Errorf("training sample count must be positive")
+	}
+	if mount.SchemaVersion != "" && !streamingDatasetSchemaPattern.MatchString(mount.SchemaVersion) {
+		return fmt.Errorf("dataset schema version is invalid")
 	}
 	if err := validateDatasetRootSubPath(mount.DatasetRootSubPath, provenance.DatasetID); err != nil {
 		return err
@@ -143,7 +150,7 @@ func appendStreamingDatasetRoot(
 }
 
 func streamingDatasetEnvironmentEntries(mount DatasetManifestMount, cachePolicy domain.DatasetCachePolicy) []any {
-	return []any{
+	environment := []any{
 		map[string]any{"name": "PLATFORM_DATASET_ID", "value": mount.DatasetID},
 		map[string]any{"name": "PLATFORM_DATASET_VERSION_ID", "value": mount.DatasetVersionID},
 		map[string]any{"name": "PLATFORM_DATASET_MANIFEST_SHA256", "value": mount.ManifestSHA256},
@@ -154,16 +161,24 @@ func streamingDatasetEnvironmentEntries(mount DatasetManifestMount, cachePolicy 
 		map[string]any{"name": "RAYTRAIN_DATASET_PREFETCH_BATCHES", "value": strconv.FormatInt(defaultStreamingDatasetPrefetchBatches, 10)},
 		map[string]any{"name": "RAYTRAIN_DATASET_SHUFFLE_SEED", "value": strconv.FormatUint(defaultStreamingDatasetShuffleSeed, 10)},
 	}
+	if mount.SchemaVersion != "" {
+		environment = append(environment, map[string]any{"name": "PLATFORM_DATASET_SCHEMA_VERSION", "value": mount.SchemaVersion})
+	}
+	return environment
 }
 
 func streamingDatasetRuntimeEnvironmentYAML(provenance domain.DatasetProvenance, mount DatasetManifestMount) string {
-	return "  PLATFORM_DATASET_ID: " + strconv.Quote(provenance.DatasetID) + "\n" +
+	environment := "  PLATFORM_DATASET_ID: " + strconv.Quote(provenance.DatasetID) + "\n" +
 		"  PLATFORM_DATASET_VERSION_ID: " + strconv.Quote(provenance.DatasetVersionID) + "\n" +
 		"  PLATFORM_DATASET_MANIFEST_SHA256: " + strconv.Quote(provenance.ManifestSHA256) + "\n" +
 		"  PLATFORM_DATASET_MANIFEST_PATH: " + strconv.Quote(datasetManifestContainerPath(provenance.DatasetID, provenance.DatasetVersionID)) + "\n" +
 		"  PLATFORM_DATASET_ROOT: " + strconv.Quote(DatasetRootContainerPath) + "\n" +
 		"  PLATFORM_DATASET_TRAIN_SAMPLES: " + strconv.Quote(strconv.FormatInt(mount.TrainSamples, 10)) + "\n" +
-		"  PLATFORM_DATASET_CACHE_POLICY: " + strconv.Quote(string(provenance.CachePolicy)) + "\n" +
+		"  PLATFORM_DATASET_CACHE_POLICY: " + strconv.Quote(string(provenance.CachePolicy)) + "\n"
+	if mount.SchemaVersion != "" {
+		environment += "  PLATFORM_DATASET_SCHEMA_VERSION: " + strconv.Quote(mount.SchemaVersion) + "\n"
+	}
+	return environment +
 		"  RAYTRAIN_DATASET_PREFETCH_BATCHES: " + strconv.Quote(strconv.FormatInt(defaultStreamingDatasetPrefetchBatches, 10)) + "\n" +
 		"  RAYTRAIN_DATASET_SHUFFLE_SEED: " + strconv.Quote(strconv.FormatUint(defaultStreamingDatasetShuffleSeed, 10)) + "\n"
 }

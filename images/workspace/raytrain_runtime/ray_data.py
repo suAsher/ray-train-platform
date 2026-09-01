@@ -35,6 +35,8 @@ _MAX_MANIFEST_BYTES = 512 * 1024 * 1024
 _SAFE_DATASET_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _DATASET_CACHE_POLICIES = frozenset(("off", "auto", "bounded"))
+_S1H_LIDAR_SCHEMA = "s1h-lidar-parquet-v1"
+_S1H_MULTIMODAL_SCHEMA = "s1h-multimodal-webdataset-v2"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -83,6 +85,7 @@ class StreamingDatasetConfig:
     dataset_root: str
     train_samples: int
     cache_policy: str
+    schema_version: str = _S1H_LIDAR_SCHEMA
     prefetch_batches: int = 2
     shuffle_seed: int = 0
 
@@ -106,6 +109,11 @@ class StreamingDatasetConfig:
         _validate_positive_integer("train_samples", self.train_samples)
         if self.cache_policy not in _DATASET_CACHE_POLICIES:
             raise ValueError("dataset cache policy is invalid")
+        if self.schema_version not in {
+            _S1H_LIDAR_SCHEMA,
+            _S1H_MULTIMODAL_SCHEMA,
+        }:
+            raise ValueError("streaming dataset schema is unsupported")
         if (
             isinstance(self.prefetch_batches, bool)
             or not isinstance(self.prefetch_batches, int)
@@ -146,10 +154,16 @@ def build_s1h_streaming_dataset(
         )
     except AttributeError:
         raise ValueError("streaming manifest requires a Ray Dataset-like value") from None
+    ref_columns = _S1H_REF_COLUMNS
+    if config.schema_version == _S1H_MULTIMODAL_SCHEMA:
+        from .s1h_webdataset import WEB_DATASET_REF_COLUMNS
+
+        ref_columns = WEB_DATASET_REF_COLUMNS
     return prepare_s1h_training_dataset(
         training,
         sample_count=config.train_samples,
         world_size=world_size,
+        ref_columns=ref_columns,
     )
 
 
@@ -230,6 +244,7 @@ def prepare_s1h_training_dataset(
     *,
     sample_count: int,
     world_size: int,
+    ref_columns: tuple[str, ...] = _S1H_REF_COLUMNS,
 ) -> tuple[Any, int, int]:
     """Lazily pad publisher-ordered refs for Ray Train's equal split.
 
@@ -245,7 +260,7 @@ def prepare_s1h_training_dataset(
         raise ValueError("sample_count must be greater than or equal to world_size")
 
     try:
-        refs = dataset.select_columns(list(_S1H_REF_COLUMNS))
+        refs = dataset.select_columns(list(ref_columns))
     except AttributeError:
         raise ValueError("S1H training requires a Ray Dataset-like value") from None
 
@@ -360,6 +375,100 @@ def worker_s1h_samples(
         batch_resolver=batch_resolver,
     ):
         yield from batch
+
+
+def worker_s1h_webdataset_batches(
+    *,
+    samples_per_gpu: int,
+    name: str = "train",
+    prefetch_batches: int = 2,
+    pipeline: Any,
+    batch_resolver: Any | None = None,
+) -> Iterator[list[Any]]:
+    """Materialize current v2 TAR members, run the fusion pipeline, then clean."""
+
+    if (
+        isinstance(samples_per_gpu, bool)
+        or not isinstance(samples_per_gpu, int)
+        or samples_per_gpu < 1
+    ):
+        raise ValueError("samples_per_gpu must be a positive integer")
+    if (
+        isinstance(prefetch_batches, bool)
+        or not isinstance(prefetch_batches, int)
+        or not 0 <= prefetch_batches <= _MAX_PREFETCH_BATCHES
+    ):
+        raise ValueError("prefetch_batches is invalid")
+    if not callable(pipeline):
+        raise ValueError("WebDataset pipeline must be callable")
+    if batch_resolver is None:
+        from .s1h_webdataset import resolver_from_environment
+
+        batch_resolver = resolver_from_environment()
+    resolve_batch = getattr(batch_resolver, "resolve_batch", None)
+    if not callable(resolve_batch):
+        raise ValueError("WebDataset batch resolver is invalid")
+
+    from ray import train
+    from .s1h_webdataset import WEB_DATASET_REF_COLUMNS
+
+    shard = train.get_dataset_shard(name)
+    if shard is None:
+        raise RuntimeError("Ray Data shard is unavailable")
+    from .data_metrics import observe_data_metric
+
+    raw_batches = iter(
+        shard.iter_batches(
+            batch_size=samples_per_gpu,
+            batch_format="numpy",
+            prefetch_batches=prefetch_batches,
+        )
+    )
+    while True:
+        waiting_started = time.perf_counter()
+        try:
+            raw_batch = next(raw_batches)
+        except StopIteration:
+            break
+        observe_data_metric(
+            "dataset_prefetch_wait_seconds_total",
+            max(0.0, time.perf_counter() - waiting_started),
+        )
+        if not isinstance(raw_batch, Mapping) or set(raw_batch) != set(
+            WEB_DATASET_REF_COLUMNS
+        ):
+            raise ValueError("Ray Data batch fields do not match S1H WebDataset v2")
+        refs = tuple(
+            {
+                name: _python_batch_value(value)
+                for name, value in row.items()
+            }
+            for row in _iter_numpy_batch_rows(raw_batch, WEB_DATASET_REF_COLUMNS)
+        )
+        try:
+            with resolve_batch(refs) as samples:
+                decoded = [pipeline(dict(sample)) for sample in samples]
+        except (ValueError, RuntimeError):
+            raise
+        except Exception:
+            raise RuntimeError("S1H WebDataset batch resolution failed") from None
+        if decoded:
+            if len(decoded) > samples_per_gpu:
+                raise ValueError("Ray Data returned a batch larger than samples_per_gpu")
+            observe_data_metric("dataset_batches_total", 1)
+            observe_data_metric("dataset_samples_total", len(decoded))
+            yield decoded
+
+
+def _python_batch_value(value: Any) -> Any:
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    if hasattr(value, "item"):
+        try:
+            value = value.item()
+        except (TypeError, ValueError):
+            pass
+    return value
 
 
 def _iter_s1h_batch_rows(
