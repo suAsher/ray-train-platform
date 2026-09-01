@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -142,11 +143,15 @@ class MultimodalDistributedPublicationTest(unittest.TestCase):
 
         if HAS_PYARROW:
             with tempfile.TemporaryDirectory() as finalize_directory:
-                result = run_finalize(
-                    self._request(Path(finalize_directory)),
-                    storage=storage,
-                    partition_count=1,
-                )
+                with patch(
+                    "raytrain_publisher.distributed_publish._load_publication_index",
+                    side_effect=AssertionError("full multimodal index load is forbidden"),
+                ):
+                    result = run_finalize(
+                        self._request(Path(finalize_directory)),
+                        storage=storage,
+                        partition_count=1,
+                    )
             self.assertEqual(result["receipt"]["schema_version"], "s1h-multimodal-webdataset-v2")
             self.assertIn("dataset-test/manifests/version-test.parquet", storage.objects)
 

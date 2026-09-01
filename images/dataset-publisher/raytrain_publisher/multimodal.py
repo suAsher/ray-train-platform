@@ -65,10 +65,54 @@ class MultimodalIndexDocument:
     cbgs_seed: int
 
 
+@dataclass(frozen=True)
+class MultimodalIndexPart:
+    """One digest-addressed, independently bounded index part."""
+
+    key: str
+    sha256: str
+    sample_count: int
+
+
+@dataclass(frozen=True)
+class MultimodalIndexManifest:
+    """Validated root metadata without materializing any sample descriptor."""
+
+    class_count: int
+    cbgs_seed: int
+    sample_count: int
+    parts: tuple[MultimodalIndexPart, ...]
+
+
 def load_cloud_multimodal_index(
     *, storage: Any, source_root: str, source_index: str
 ) -> MultimodalIndexDocument:
-    """Load a bounded JSON root and all digest-addressed v3 index parts."""
+    """Compatibility loader for bounded callers that need one full tuple."""
+
+    manifest = load_cloud_multimodal_manifest(
+        storage=storage,
+        source_root=source_root,
+        source_index=source_index,
+    )
+    samples = tuple(
+        iter_cloud_multimodal_samples(
+            storage=storage,
+            source_root=source_root,
+            source_index=source_index,
+            manifest=manifest,
+        )
+    )
+    return MultimodalIndexDocument(
+        samples=samples,
+        class_count=manifest.class_count,
+        cbgs_seed=manifest.cbgs_seed,
+    )
+
+
+def load_cloud_multimodal_manifest(
+    *, storage: Any, source_root: str, source_index: str
+) -> MultimodalIndexManifest:
+    """Load and validate only the small sharded-index root."""
 
     _clean_relative_path(source_root, field_name="multimodal source root")
     _clean_relative_path(source_index, field_name="multimodal source index")
@@ -104,8 +148,7 @@ def load_cloud_multimodal_index(
 
     manifest_directory = posixpath.dirname(source_index)
     part_directory = f"{posixpath.splitext(posixpath.basename(source_index))[0]}.parts"
-    samples: list[dict[str, Any]] = []
-    seen_tokens: set[str] = set()
+    validated_parts: list[MultimodalIndexPart] = []
     declared_count = 0
     for part in parts:
         if type(part) is not dict or set(part) != {"key", "sha256", "sample_count"}:
@@ -122,8 +165,65 @@ def load_cloud_multimodal_index(
             raise ValueError("multimodal index part is invalid")
         full_key = posixpath.join(manifest_directory, key)
         _clean_relative_path(full_key, field_name="multimodal index part")
-        payload = storage.get_index(full_key, maximum_bytes=MAX_INDEX_BYTES)
-        if hashlib.sha256(payload).hexdigest() != digest:
+        validated_parts.append(
+            MultimodalIndexPart(key=full_key, sha256=digest, sample_count=count)
+        )
+        declared_count += count
+    if declared_count != sample_count:
+        raise ValueError("multimodal index sample count is invalid")
+    return MultimodalIndexManifest(
+        class_count=class_count,
+        cbgs_seed=cbgs_seed,
+        sample_count=sample_count,
+        parts=tuple(validated_parts),
+    )
+
+
+def iter_cloud_multimodal_samples(
+    *,
+    storage: Any,
+    source_root: str,
+    source_index: str,
+    manifest: MultimodalIndexManifest | None = None,
+    part_indexes: Iterable[int] | None = None,
+) -> Iterable[dict[str, Any]]:
+    """Yield verified samples one bounded index part at a time.
+
+    Only the token set and one part's decoded JSON remain resident. This keeps
+    plan, partition pack, and finalize independent of the total index size.
+    """
+
+    _clean_relative_path(source_root, field_name="multimodal source root")
+    _clean_relative_path(source_index, field_name="multimodal source index")
+    resolved = manifest or load_cloud_multimodal_manifest(
+        storage=storage,
+        source_root=source_root,
+        source_index=source_index,
+    )
+    if not isinstance(resolved, MultimodalIndexManifest):
+        raise ValueError("multimodal index manifest is invalid")
+    if part_indexes is None:
+        selected_indexes = tuple(range(len(resolved.parts)))
+    else:
+        selected_indexes = tuple(part_indexes)
+        if (
+            len(set(selected_indexes)) != len(selected_indexes)
+            or any(
+                isinstance(index, bool)
+                or not isinstance(index, int)
+                or index < 0
+                or index >= len(resolved.parts)
+                for index in selected_indexes
+            )
+        ):
+            raise ValueError("multimodal index part selection is invalid")
+    expected_count = sum(resolved.parts[index].sample_count for index in selected_indexes)
+    seen_tokens: set[str] = set()
+    observed_count = 0
+    for index in selected_indexes:
+        part = resolved.parts[index]
+        payload = storage.get_index(part.key, maximum_bytes=MAX_INDEX_BYTES)
+        if hashlib.sha256(payload).hexdigest() != part.sha256:
             raise ValueError("multimodal index part digest verification failed")
         document = _load_json_document(payload, field_name="multimodal index part")
         if (
@@ -137,10 +237,10 @@ def load_cloud_multimodal_index(
             }
             or document["format"] != MULTIMODAL_INDEX_FORMAT
             or document["sample_schema_version"] != MULTIMODAL_SCHEMA_VERSION
-            or document["class_count"] != class_count
-            or document["cbgs_seed"] != cbgs_seed
+            or document["class_count"] != resolved.class_count
+            or document["cbgs_seed"] != resolved.cbgs_seed
             or type(document["samples"]) is not list
-            or len(document["samples"]) != count
+            or len(document["samples"]) != part.sample_count
         ):
             raise ValueError("multimodal index part contract is invalid")
         for value in document["samples"]:
@@ -148,13 +248,10 @@ def load_cloud_multimodal_index(
             if sample["token"] in seen_tokens:
                 raise ValueError("multimodal index contains a duplicate token")
             seen_tokens.add(sample["token"])
-            samples.append(sample)
-        declared_count += count
-    if declared_count != sample_count or len(samples) != sample_count:
+            observed_count += 1
+            yield sample
+    if observed_count != expected_count:
         raise ValueError("multimodal index sample count is invalid")
-    return MultimodalIndexDocument(
-        samples=tuple(samples), class_count=class_count, cbgs_seed=cbgs_seed
-    )
 
 
 def _load_json_document(payload: object, *, field_name: str) -> dict[str, Any]:

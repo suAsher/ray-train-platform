@@ -11,12 +11,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from raytrain_publisher.distributed_publish import (  # noqa: E402
+    _iter_multimodal_partition_samples,
     build_partition_plan,
     run_plan,
     wait_for_multimodal_source_index,
 )
 from raytrain_publisher.cloud_publish import CloudPublishRequest  # noqa: E402
 from raytrain_publisher.multimodal import (  # noqa: E402
+    iter_cloud_multimodal_samples,
     load_cloud_multimodal_index,
 )
 
@@ -24,8 +26,10 @@ from raytrain_publisher.multimodal import (  # noqa: E402
 class _IndexStorage:
     def __init__(self, objects: dict[str, bytes]) -> None:
         self.objects = objects
+        self.reads: list[str] = []
 
     def get_index(self, key: str, *, maximum_bytes: int) -> bytes:
+        self.reads.append(key)
         payload = self.objects[key]
         if len(payload) > maximum_bytes:
             raise ValueError("index exceeds bound")
@@ -33,6 +37,108 @@ class _IndexStorage:
 
 
 class DistributedPublicationPlanTest(unittest.TestCase):
+    def test_full_index_partition_reads_only_its_declared_part(self) -> None:
+        first = self._multimodal_sample()
+        second = {**first, "token": "sample-token-2", "timestamp": 123457}
+        descriptors = []
+        objects: dict[str, bytes] = {}
+        part_keys = []
+        for sample in (first, second):
+            payload = self._canonical_json(
+                {
+                    "format": "trusted-index-v3",
+                    "sample_schema_version": "s1h-multimodal-webdataset-v2",
+                    "class_count": 10,
+                    "cbgs_seed": 0,
+                    "samples": [sample],
+                }
+            )
+            digest = hashlib.sha256(payload).hexdigest()
+            key = f"trusted-index-v3.parts/sha256-{digest}.json"
+            descriptors.append({"key": key, "sha256": digest, "sample_count": 1})
+            objects[f".raytrain/{key}"] = payload
+            part_keys.append(f".raytrain/{key}")
+        objects[".raytrain/trusted-index-v3.json"] = self._canonical_json(
+            {
+                "format": "trusted-index-sharded-v2",
+                "sample_schema_version": "s1h-multimodal-webdataset-v2",
+                "class_count": 10,
+                "cbgs_seed": 0,
+                "sample_count": 2,
+                "parts": descriptors,
+            }
+        )
+        storage = _IndexStorage(objects)
+
+        selected = tuple(
+            _iter_multimodal_partition_samples(
+                self._request(), storage=storage, partition_count=2, ordinal=0
+            )
+        )
+
+        self.assertEqual([sample["token"] for sample in selected], [first["token"]])
+        self.assertEqual(
+            storage.reads,
+            [".raytrain/trusted-index-v3.json", part_keys[0]],
+        )
+
+    def test_multimodal_parts_are_consumed_lazily(self) -> None:
+        first = self._multimodal_sample()
+        second = {
+            **first,
+            "token": "sample-token-2",
+            "scene": "scene-token-2",
+            "timestamp": first["timestamp"] + 1,
+        }
+        part_payloads = []
+        descriptors = []
+        objects: dict[str, bytes] = {}
+        for ordinal, sample in enumerate((first, second)):
+            payload = self._canonical_json(
+                {
+                    "format": "trusted-index-v3",
+                    "sample_schema_version": "s1h-multimodal-webdataset-v2",
+                    "class_count": 10,
+                    "cbgs_seed": 0,
+                    "samples": [sample],
+                }
+            )
+            digest = hashlib.sha256(payload).hexdigest()
+            key = f"trusted-index-v3.parts/sha256-{digest}.json"
+            part_payloads.append((key, payload))
+            descriptors.append(
+                {"key": key, "sha256": digest, "sample_count": 1}
+            )
+        root = self._canonical_json(
+            {
+                "format": "trusted-index-sharded-v2",
+                "sample_schema_version": "s1h-multimodal-webdataset-v2",
+                "class_count": 10,
+                "cbgs_seed": 0,
+                "sample_count": 2,
+                "parts": descriptors,
+            }
+        )
+        objects[".raytrain/trusted-index-v3.json"] = root
+        for key, payload in part_payloads:
+            objects[f".raytrain/{key}"] = payload
+        storage = _IndexStorage(objects)
+
+        samples = iter_cloud_multimodal_samples(
+            storage=storage,
+            source_root="ray-train/public/labeled",
+            source_index=".raytrain/trusted-index-v3.json",
+        )
+        self.assertEqual(next(samples)["token"], first["token"])
+        self.assertEqual(
+            storage.reads,
+            [".raytrain/trusted-index-v3.json", f".raytrain/{part_payloads[0][0]}"],
+        )
+        self.assertEqual(next(samples)["token"], second["token"])
+        with self.assertRaises(StopIteration):
+            next(samples)
+        self.assertEqual(storage.reads[-1], f".raytrain/{part_payloads[1][0]}")
+
     def test_multimodal_plan_waits_for_its_immutable_source_index(self) -> None:
         class Storage:
             def __init__(self) -> None:

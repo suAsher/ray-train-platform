@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import time
@@ -46,7 +47,9 @@ from .cloud_publish import (
 from .pack import MAX_SHARD_BYTES, _prepare_output_directory, _require_pyarrow
 from .multimodal import (
     MULTIMODAL_SCHEMA_VERSION,
+    iter_cloud_multimodal_samples,
     load_cloud_multimodal_index,
+    load_cloud_multimodal_manifest,
     pack_multimodal_shard,
 )
 from .schema import dump_trusted_info
@@ -241,6 +244,25 @@ def _load_receipt(storage: Any, *, request: CloudPublishRequest, ordinal: int, p
 def run_plan(request: CloudPublishRequest, *, storage: Any, partition_count: int) -> None:
     """Fail early if the trusted index cannot be read before scheduling work."""
 
+    if request.schema_version == MULTIMODAL_SCHEMA_VERSION:
+        manifest = load_cloud_multimodal_manifest(
+            storage=storage,
+            source_root=request.source_root,
+            source_index=request.source_index,
+        )
+        observed = sum(
+            1
+            for sample in iter_cloud_multimodal_samples(
+                storage=storage,
+                source_root=request.source_root,
+                source_index=request.source_index,
+                manifest=manifest,
+            )
+            if _sample_partition(sample["token"], partition_count) >= 0
+        )
+        if observed != manifest.sample_count:
+            raise ValueError("trusted publisher index sample count is invalid")
+        return
     index = _load_publication_index(request, storage=storage)
     if not index.samples:
         raise ValueError("trusted publisher index must contain at least one sample")
@@ -298,9 +320,15 @@ def _load_publication_index(request: CloudPublishRequest, *, storage: Any) -> An
 
 
 def run_pack(request: CloudPublishRequest, *, storage: Any, partition_count: int, ordinal: int) -> None:
-    index = _load_publication_index(request, storage=storage)
-    selected = [sample for sample in index.samples if _sample_partition(sample["token"], partition_count) == ordinal]
     if request.schema_version == MULTIMODAL_SCHEMA_VERSION:
+        selected = list(
+            _iter_multimodal_partition_samples(
+                request,
+                storage=storage,
+                partition_count=partition_count,
+                ordinal=ordinal,
+            )
+        )
         _run_multimodal_pack(
             request,
             storage=storage,
@@ -309,6 +337,8 @@ def run_pack(request: CloudPublishRequest, *, storage: Any, partition_count: int
             selected=selected,
         )
         return
+    index = _load_publication_index(request, storage=storage)
+    selected = [sample for sample in index.samples if _sample_partition(sample["token"], partition_count) == ordinal]
     samples = _validated_remote_samples(selected, source_root=request.source_root)
     # Never list the whole source prefix for every Indexed completion.  HEAD
     # only the selected payload objects, bounded by the validated index.
@@ -354,6 +384,46 @@ def run_pack(request: CloudPublishRequest, *, storage: Any, partition_count: int
     }
     _put_verified_bytes(storage, key=shared_key, payload=_canonical_json(shared))
     _put_verified_bytes(storage, key=_receipt_key(request, ordinal), payload=_version_receipt(request, ordinal=ordinal, partition_count=partition_count, fingerprint=fingerprint, shared_key=shared_key))
+
+
+def _iter_multimodal_partition_samples(
+    request: CloudPublishRequest,
+    *,
+    storage: Any,
+    partition_count: int,
+    ordinal: int,
+) -> Any:
+    """Read one declared index part per worker for full sharded indexes.
+
+    Small acceptance indexes retain token hashing so all Indexed workers can
+    participate. Full indexes have roughly one bounded part per partition; in
+    that shape each worker reads only its own part instead of every worker
+    downloading the multi-GiB root payload set.
+    """
+
+    manifest = load_cloud_multimodal_manifest(
+        storage=storage,
+        source_root=request.source_root,
+        source_index=request.source_index,
+    )
+    if len(manifest.parts) >= max(1, partition_count // 2):
+        return iter_cloud_multimodal_samples(
+            storage=storage,
+            source_root=request.source_root,
+            source_index=request.source_index,
+            manifest=manifest,
+            part_indexes=range(ordinal, len(manifest.parts), partition_count),
+        )
+    return (
+        sample
+        for sample in iter_cloud_multimodal_samples(
+            storage=storage,
+            source_root=request.source_root,
+            source_index=request.source_index,
+            manifest=manifest,
+        )
+        if _sample_partition(sample["token"], partition_count) == ordinal
+    )
 
 
 def _run_multimodal_pack(
@@ -580,6 +650,12 @@ def _put_verified_blob(
 
 
 def run_finalize(request: CloudPublishRequest, *, storage: Any, partition_count: int) -> dict[str, Any]:
+    if request.schema_version == MULTIMODAL_SCHEMA_VERSION:
+        return _run_multimodal_finalize(
+            request,
+            storage=storage,
+            partition_count=partition_count,
+        )
     index = _load_publication_index(request, storage=storage)
     locators: dict[str, Mapping[str, Any]] = {}
     sources: dict[str, int] = {}
@@ -619,6 +695,317 @@ def run_finalize(request: CloudPublishRequest, *, storage: Any, partition_count:
         _put_verified_file(storage, key=manifest_key, path=manifest_path, sha256=digest, size=manifest_size)
     split_counts = Counter(row["split"] for row in rows)
     return _build_result(request=request, partition_count=partition_count, source_object_count=len(sources), logical_bytes=sum(sources.values()), packed_bytes=packed_bytes + manifest_size, split_counts=split_counts, manifest_digest=digest, manifest_key=manifest_key)
+
+
+_MULTIMODAL_LOCATOR_FIELDS = {
+    "token",
+    "scene",
+    "split",
+    "class_ids",
+    "timestamp",
+    "metadata_member",
+    "source_digest",
+    "shard_path",
+    "shard_sha256",
+    "shard_size",
+}
+
+
+def _run_multimodal_finalize(
+    request: CloudPublishRequest,
+    *,
+    storage: Any,
+    partition_count: int,
+) -> dict[str, Any]:
+    """Join receipts to the trusted index on disk and stream Parquet rows.
+
+    The full S1H index is several GiB as JSON. SQLite is used only as a local,
+    throw-away bounded join/sort surface; the immutable Parquet manifest remains
+    the published contract.
+    """
+
+    pa, parquet = _require_pyarrow()
+    output_dir = _prepare_output_directory(request.output_dir)
+    with tempfile.TemporaryDirectory(
+        prefix=".raytrain-multimodal-finalize-", dir=output_dir
+    ) as temporary:
+        temporary_root = Path(temporary)
+        database = sqlite3.connect(temporary_root / "finalize.sqlite3")
+        try:
+            database.executescript(
+                """
+                PRAGMA journal_mode=OFF;
+                PRAGMA synchronous=OFF;
+                PRAGMA temp_store=FILE;
+                CREATE TABLE locators (
+                    token TEXT PRIMARY KEY,
+                    scene TEXT NOT NULL,
+                    split TEXT NOT NULL,
+                    class_ids TEXT NOT NULL,
+                    timestamp INTEGER NOT NULL,
+                    locator_json TEXT NOT NULL
+                );
+                CREATE TABLE samples (
+                    token TEXT PRIMARY KEY,
+                    scene TEXT NOT NULL,
+                    split TEXT NOT NULL,
+                    class_ids TEXT NOT NULL,
+                    timestamp INTEGER NOT NULL
+                );
+                CREATE TABLE sources (
+                    source_key TEXT PRIMARY KEY,
+                    size INTEGER NOT NULL
+                );
+                """
+            )
+            packed_bytes = _ingest_multimodal_receipts(
+                database,
+                request=request,
+                storage=storage,
+                partition_count=partition_count,
+            )
+            manifest = load_cloud_multimodal_manifest(
+                storage=storage,
+                source_root=request.source_root,
+                source_index=request.source_index,
+            )
+            _ingest_multimodal_samples(
+                database,
+                samples=iter_cloud_multimodal_samples(
+                    storage=storage,
+                    source_root=request.source_root,
+                    source_index=request.source_index,
+                    manifest=manifest,
+                ),
+            )
+            _validate_multimodal_join(database, expected_samples=manifest.sample_count)
+            manifest_path = temporary_root / "reference-manifest.parquet"
+            split_counts = _write_multimodal_manifest(
+                database,
+                path=manifest_path,
+                schema=_multimodal_manifest_schema(pa, request.schema_version),
+                pa=pa,
+                parquet=parquet,
+            )
+            source_object_count, logical_bytes = database.execute(
+                "SELECT COUNT(*), COALESCE(SUM(size), 0) FROM sources"
+            ).fetchone()
+        finally:
+            database.close()
+        manifest_size = manifest_path.stat().st_size
+        if manifest_size <= 0 or manifest_size > MAX_SHARD_BYTES:
+            raise ValueError("reference manifest exceeds the immutable object bound")
+        digest = _sha256_file(manifest_path)
+        manifest_key = (
+            f"{request.dataset_id}/manifests/{request.dataset_version_id}.parquet"
+        )
+        _put_verified_file(
+            storage,
+            key=manifest_key,
+            path=manifest_path,
+            sha256=digest,
+            size=manifest_size,
+        )
+    return _build_result(
+        request=request,
+        partition_count=partition_count,
+        source_object_count=source_object_count,
+        logical_bytes=logical_bytes,
+        packed_bytes=packed_bytes + manifest_size,
+        split_counts=split_counts,
+        manifest_digest=digest,
+        manifest_key=manifest_key,
+    )
+
+
+def _ingest_multimodal_receipts(
+    database: sqlite3.Connection,
+    *,
+    request: CloudPublishRequest,
+    storage: Any,
+    partition_count: int,
+) -> int:
+    packed_bytes = 0
+    for ordinal in range(partition_count):
+        receipt = _load_receipt(
+            storage,
+            request=request,
+            ordinal=ordinal,
+            partition_count=partition_count,
+        )
+        value = receipt.get("packed_bytes")
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError("partition packed-byte receipt is invalid")
+        packed_bytes += value
+        for source in receipt["sources"]:
+            if (
+                not isinstance(source, dict)
+                or set(source) != {"key", "size"}
+                or not isinstance(source.get("key"), str)
+                or not source["key"]
+                or isinstance(source.get("size"), bool)
+                or not isinstance(source.get("size"), int)
+                or source["size"] <= 0
+            ):
+                raise ValueError("partition source receipt is invalid")
+            existing = database.execute(
+                "SELECT size FROM sources WHERE source_key = ?", (source["key"],)
+            ).fetchone()
+            if existing is not None and existing[0] != source["size"]:
+                raise ValueError("partition source receipt conflicts")
+            database.execute(
+                "INSERT OR IGNORE INTO sources(source_key, size) VALUES (?, ?)",
+                (source["key"], source["size"]),
+            )
+        for raw_locator in receipt["locators"]:
+            locator = _validated_multimodal_locator(raw_locator)
+            try:
+                database.execute(
+                    """
+                    INSERT INTO locators(
+                        token, scene, split, class_ids, timestamp, locator_json
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        locator["token"],
+                        locator["scene"],
+                        locator["split"],
+                        _canonical_json({"value": locator["class_ids"]}).decode("utf-8"),
+                        locator["timestamp"],
+                        _canonical_json(locator).decode("utf-8"),
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                raise ValueError("partition locator receipt is invalid") from None
+        database.commit()
+    return packed_bytes
+
+
+def _validated_multimodal_locator(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != _MULTIMODAL_LOCATOR_FIELDS:
+        raise ValueError("multimodal payload locator structure is invalid")
+    locator = dict(value)
+    if (
+        not isinstance(locator["token"], str)
+        or not locator["token"]
+        or not isinstance(locator["scene"], str)
+        or not locator["scene"]
+        or locator["split"] not in {"train", "val", "test"}
+        or type(locator["class_ids"]) is not list
+        or isinstance(locator["timestamp"], bool)
+        or not isinstance(locator["timestamp"], int)
+        or isinstance(locator["shard_size"], bool)
+        or not isinstance(locator["shard_size"], int)
+        or locator["shard_size"] <= 0
+    ):
+        raise ValueError("multimodal payload locator structure is invalid")
+    return locator
+
+
+def _ingest_multimodal_samples(
+    database: sqlite3.Connection,
+    *,
+    samples: Any,
+) -> None:
+    for sample in samples:
+        try:
+            database.execute(
+                """
+                INSERT INTO samples(token, scene, split, class_ids, timestamp)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    sample["token"],
+                    sample["scene"],
+                    sample["split"],
+                    _canonical_json({"value": list(sample["class_ids"])}).decode("utf-8"),
+                    sample["timestamp"],
+                ),
+            )
+        except sqlite3.IntegrityError:
+            raise ValueError("multimodal index contains a duplicate token") from None
+    database.commit()
+
+
+def _validate_multimodal_join(
+    database: sqlite3.Connection, *, expected_samples: int
+) -> None:
+    sample_count = database.execute("SELECT COUNT(*) FROM samples").fetchone()[0]
+    locator_count = database.execute("SELECT COUNT(*) FROM locators").fetchone()[0]
+    mismatch = database.execute(
+        """
+        SELECT 1
+        FROM samples AS samples
+        LEFT JOIN locators AS locators ON locators.token = samples.token
+        WHERE locators.token IS NULL
+           OR locators.scene != samples.scene
+           OR locators.split != samples.split
+           OR locators.class_ids != samples.class_ids
+           OR locators.timestamp != samples.timestamp
+        LIMIT 1
+        """
+    ).fetchone()
+    extra = database.execute(
+        """
+        SELECT 1
+        FROM locators AS locators
+        LEFT JOIN samples AS samples ON samples.token = locators.token
+        WHERE samples.token IS NULL
+        LIMIT 1
+        """
+    ).fetchone()
+    if (
+        sample_count != expected_samples
+        or locator_count != expected_samples
+        or mismatch is not None
+        or extra is not None
+    ):
+        raise ValueError("multimodal locator set does not match the trusted index")
+
+
+def _write_multimodal_manifest(
+    database: sqlite3.Connection,
+    *,
+    path: Path,
+    schema: Any,
+    pa: Any,
+    parquet: Any,
+) -> Counter[str]:
+    writer = parquet.ParquetWriter(
+        path,
+        schema,
+        compression="zstd",
+        use_dictionary=["token", "split", "shard_path"],
+        version="2.6",
+        write_statistics=True,
+    )
+    split_counts: Counter[str] = Counter()
+    rows: list[dict[str, Any]] = []
+    ordinal = 0
+    try:
+        cursor = database.execute(
+            """
+            SELECT locator_json
+            FROM locators
+            ORDER BY CASE WHEN split = 'train' THEN 0 ELSE 1 END,
+                     scene, timestamp, token
+            """
+        )
+        for (payload,) in cursor:
+            locator = json.loads(payload)
+            rows.append({**locator, "ordinal": ordinal})
+            split_counts[locator["split"]] += 1
+            ordinal += 1
+            if len(rows) == 8192:
+                writer.write_table(pa.Table.from_pylist(rows, schema=schema))
+                rows = []
+        if rows:
+            writer.write_table(pa.Table.from_pylist(rows, schema=schema))
+    finally:
+        writer.close()
+    if ordinal < 1:
+        raise ValueError("multimodal reference manifest must contain at least one row")
+    return split_counts
 
 
 def build_multimodal_reference_manifest_rows(
