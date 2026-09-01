@@ -66,6 +66,23 @@ type DatasetPartitionRecord struct {
 	UpdatedAt            time.Time
 }
 
+// DatasetPublicationPartitionAttemptRecord stores mutable execution state for
+// one immutable DatasetPartition. Keeping it separate preserves snapshot
+// immutability while workers retry, lease, and finalize individual partitions.
+type DatasetPublicationPartitionAttemptRecord struct {
+	DatasetVersionID string `gorm:"column:dataset_version_id;primaryKey"`
+	PartitionID      string `gorm:"column:partition_id;primaryKey"`
+	State            string
+	InputFingerprint string `gorm:"column:input_fingerprint"`
+	PlanSHA256       string `gorm:"column:plan_sha256"`
+	ReceiptSHA256    string `gorm:"column:receipt_sha256"`
+	Attempt          int64
+	LeaseOwner       string     `gorm:"column:lease_owner"`
+	LeaseExpiresAt   *time.Time `gorm:"column:lease_expires_at"`
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
 type DatasetPublicationRunRecord struct {
 	ID                   string `gorm:"primaryKey"`
 	DatasetID            string `gorm:"column:dataset_id;index"`
@@ -113,9 +130,12 @@ type DatasetCacheObservationRecord struct {
 	CreatedAt                time.Time
 }
 
-func (DatasetRecord) TableName() string                 { return "datasets" }
-func (DatasetVersionRecord) TableName() string          { return "dataset_versions" }
-func (DatasetPartitionRecord) TableName() string        { return "dataset_partitions" }
+func (DatasetRecord) TableName() string          { return "datasets" }
+func (DatasetVersionRecord) TableName() string   { return "dataset_versions" }
+func (DatasetPartitionRecord) TableName() string { return "dataset_partitions" }
+func (DatasetPublicationPartitionAttemptRecord) TableName() string {
+	return "dataset_publication_partition_attempts"
+}
 func (DatasetPublicationRunRecord) TableName() string   { return "dataset_publication_runs" }
 func (DatasetVersionShardRecord) TableName() string     { return "dataset_version_shards" }
 func (DatasetCacheObservationRecord) TableName() string { return "dataset_cache_observations" }

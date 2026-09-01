@@ -350,6 +350,38 @@ func TestLoadDatasetPublisherConfigurationUsesPinnedIRSAJobSettings(t *testing.T
 	}
 }
 
+func TestLoadDistributedDatasetPublisherDefaultsAndOverrides(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("DATASET_VERSIONING_ENABLED", "true")
+	setValidDatasetPublisherConfig(t)
+	t.Setenv("DATASET_PUBLISHER_DISTRIBUTED_ENABLED", "true")
+	t.Setenv("DATASET_PUBLISHER_PARTITION_COUNT", "7803")
+	t.Setenv("DATASET_PUBLISHER_MAX_PARALLELISM", "16")
+	t.Setenv("DATASET_PUBLISHER_PARTITION_LEASE_SECONDS", "900")
+	t.Setenv("DATASET_PUBLISHER_MAX_PARTITION_ATTEMPTS", "4")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load distributed publisher config: %v", err)
+	}
+	if !cfg.DatasetPublisherDistributedEnabled || cfg.DatasetPublisherPartitionCount != 7803 || cfg.DatasetPublisherMaxParallelism != 16 || cfg.DatasetPublisherPartitionLeaseSeconds != 900 || cfg.DatasetPublisherMaxPartitionAttempts != 4 {
+		t.Fatalf("unexpected distributed publisher config: %+v", cfg)
+	}
+}
+
+func TestLoadRejectsDistributedPublisherWithoutPublisherRollout(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("DATASET_PUBLISHER_ENABLED", "false")
+	t.Setenv("DATASET_PUBLISHER_DISTRIBUTED_ENABLED", "true")
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "DATASET_PUBLISHER_DISTRIBUTED_ENABLED") {
+		t.Fatalf("expected distributed publisher gate error, got %v", err)
+	}
+}
+
 func TestLoadSanitizesOptionalDatasetPublisherIRSARoleTRN(t *testing.T) {
 	tests := []struct {
 		name string

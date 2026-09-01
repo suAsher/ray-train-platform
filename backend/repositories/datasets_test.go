@@ -20,6 +20,7 @@ func datasetRepository(t *testing.T) *GormRepository {
 		&DatasetRecord{},
 		&DatasetVersionRecord{},
 		&DatasetPartitionRecord{},
+		&DatasetPublicationPartitionAttemptRecord{},
 		&DatasetPublicationRunRecord{},
 		&DatasetVersionShardRecord{},
 		&DatasetCacheObservationRecord{},
@@ -117,6 +118,9 @@ func TestDatasetRecordModelsMatchMigrationContracts(t *testing.T) {
 	}
 	if got := (DatasetPartitionRecord{}).TableName(); got != "dataset_partitions" {
 		t.Fatalf("DatasetPartitionRecord table = %q", got)
+	}
+	if got := (DatasetPublicationPartitionAttemptRecord{}).TableName(); got != "dataset_publication_partition_attempts" {
+		t.Fatalf("DatasetPublicationPartitionAttemptRecord table = %q", got)
 	}
 	if got := (DatasetPublicationRunRecord{}).TableName(); got != "dataset_publication_runs" {
 		t.Fatalf("DatasetPublicationRunRecord table = %q", got)

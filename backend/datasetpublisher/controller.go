@@ -43,8 +43,25 @@ const (
 	PublicationJobStabilizing PublicationJobPhase = "STABILIZING"
 	PublicationJobValidating  PublicationJobPhase = "VALIDATING"
 	PublicationJobPacking     PublicationJobPhase = "PACKING"
-	PublicationJobSucceeded   PublicationJobPhase = "SUCCEEDED"
-	PublicationJobFailed      PublicationJobPhase = "FAILED"
+	// PublicationJobPacked is emitted only by the distributed publisher after
+	// every Indexed Job completion has produced its immutable partition receipt.
+	// Keeping it distinct from PACKING prevents the controller from starting
+	// finalization while an Indexed Job is still active.
+	PublicationJobPacked    PublicationJobPhase = "PACKED"
+	PublicationJobSucceeded PublicationJobPhase = "SUCCEEDED"
+	PublicationJobFailed    PublicationJobPhase = "FAILED"
+)
+
+// PublicationExecutionPhase selects an immutable execution shape. Legacy is
+// deliberately the zero/default-compatible mode so existing releases retain
+// their single-job cloud_publish behavior until the feature flag is enabled.
+type PublicationExecutionPhase string
+
+const (
+	PublicationExecutionLegacy   PublicationExecutionPhase = ""
+	PublicationExecutionPlan     PublicationExecutionPhase = "plan"
+	PublicationExecutionPack     PublicationExecutionPhase = "pack"
+	PublicationExecutionFinalize PublicationExecutionPhase = "finalize"
 )
 
 type PublicationProgress struct {
@@ -102,6 +119,9 @@ type ControllerOptions struct {
 	JobTTLAfterFinished   time.Duration
 	InitialRetryBackoff   time.Duration
 	MaximumRetryBackoff   time.Duration
+	DistributedEnabled    bool
+	PartitionCount        int
+	MaxParallelism        int
 	Now                   func() time.Time
 	Wait                  func(context.Context, time.Duration) error
 }
@@ -167,6 +187,9 @@ type PublicationJobSpec struct {
 	backoffLimit          int
 	activeDeadline        time.Duration
 	ttlAfterFinished      time.Duration
+	executionPhase        PublicationExecutionPhase
+	partitionCount        int
+	maxParallelism        int
 }
 
 func (spec PublicationJobSpec) Namespace() string            { return spec.namespace }
@@ -210,6 +233,9 @@ func (spec PublicationJobSpec) ActiveDeadline() time.Duration {
 func (spec PublicationJobSpec) TTLAfterFinished() time.Duration {
 	return spec.ttlAfterFinished
 }
+func (spec PublicationJobSpec) ExecutionPhase() PublicationExecutionPhase { return spec.executionPhase }
+func (spec PublicationJobSpec) PartitionCount() int                       { return spec.partitionCount }
+func (spec PublicationJobSpec) MaxParallelism() int                       { return spec.maxParallelism }
 
 func (spec PublicationJobSpec) Labels() map[string]string {
 	return map[string]string{
@@ -250,6 +276,21 @@ func PublicationJobName(runID string) (string, error) {
 	}
 	digest := sha256.Sum256([]byte(runID))
 	return "dataset-publisher-" + hex.EncodeToString(digest[:16]), nil
+}
+
+// PublicationJobNameForPhase creates separate immutable Kubernetes Jobs for
+// a distributed run. Legacy callers keep PublicationJobName exactly as-is.
+func PublicationJobNameForPhase(runID string, phase PublicationExecutionPhase) (string, error) {
+	base, err := PublicationJobName(runID)
+	if err != nil {
+		return "", err
+	}
+	switch phase {
+	case PublicationExecutionPlan, PublicationExecutionPack, PublicationExecutionFinalize:
+		return base + "-" + string(phase), nil
+	default:
+		return "", ErrInvalidPublicationControllerRequest
+	}
 }
 
 func (controller *Controller) Reconcile(ctx context.Context, request ReconcileRequest) (domain.DatasetPublicationRun, error) {
@@ -298,7 +339,7 @@ func (controller *Controller) Reconcile(ctx context.Context, request ReconcileRe
 		return current, ErrPublicationControllerUnavailable
 	}
 
-	spec, err := controller.jobSpec(request)
+	spec, err := controller.jobSpec(request, current.State)
 	if err != nil {
 		return current, err
 	}
@@ -357,6 +398,8 @@ func (controller *Controller) applyJobStatus(
 	case PublicationJobValidating:
 		return controller.advanceTo(ctx, request, current, domain.DatasetVersionValidating, status.Progress)
 	case PublicationJobPacking:
+		return controller.advanceTo(ctx, request, current, domain.DatasetVersionPacking, status.Progress)
+	case PublicationJobPacked:
 		return controller.advanceTo(ctx, request, current, domain.DatasetVersionPacking, status.Progress)
 	case PublicationJobSucceeded:
 		if !status.Progress.complete() || !controller.validReceipt(request, status.Receipt) {
@@ -481,10 +524,29 @@ func (controller *Controller) markFailed(
 	return current, ErrPublicationControllerUnavailable
 }
 
-func (controller *Controller) jobSpec(request ReconcileRequest) (PublicationJobSpec, error) {
+func (controller *Controller) jobSpec(request ReconcileRequest, state domain.DatasetVersionState) (PublicationJobSpec, error) {
+	phase := PublicationExecutionLegacy
+	if controller.options.DistributedEnabled {
+		switch state {
+		case domain.DatasetVersionStabilizing:
+			phase = PublicationExecutionPlan
+		case domain.DatasetVersionValidating:
+			phase = PublicationExecutionPack
+		case domain.DatasetVersionPacking:
+			phase = PublicationExecutionFinalize
+		default:
+			return PublicationJobSpec{}, ErrPublicationControllerUnavailable
+		}
+	}
 	name, err := PublicationJobName(request.RunID)
 	if err != nil {
 		return PublicationJobSpec{}, err
+	}
+	if phase != PublicationExecutionLegacy {
+		name, err = PublicationJobNameForPhase(request.RunID, phase)
+		if err != nil {
+			return PublicationJobSpec{}, err
+		}
 	}
 	return PublicationJobSpec{
 		namespace: controller.options.Namespace,
@@ -511,6 +573,9 @@ func (controller *Controller) jobSpec(request ReconcileRequest) (PublicationJobS
 		backoffLimit:     controller.options.JobBackoffLimit,
 		activeDeadline:   controller.options.JobActiveDeadline,
 		ttlAfterFinished: controller.options.JobTTLAfterFinished,
+		executionPhase:   phase,
+		partitionCount:   controller.options.PartitionCount,
+		maxParallelism:   controller.options.MaxParallelism,
 	}, nil
 }
 
@@ -564,6 +629,9 @@ func validControllerOptions(options ControllerOptions) bool {
 	}
 	if !validPublicationResourceValue(options.CPURequest) || !validPublicationResourceValue(options.CPULimit) ||
 		!validPublicationResourceValue(options.MemoryRequest) || !validPublicationResourceValue(options.MemoryLimit) {
+		return false
+	}
+	if options.DistributedEnabled && (options.PartitionCount < 1 || options.PartitionCount > 100000 || options.MaxParallelism < 1 || options.MaxParallelism > options.PartitionCount) {
 		return false
 	}
 	return options.ClientMaxAttempts >= 1 && options.ClientMaxAttempts <= 10 &&

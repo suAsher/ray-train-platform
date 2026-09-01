@@ -23,6 +23,7 @@ type DatasetCatalogStore interface {
 	ListDatasets(context.Context, string, bool) ([]domain.Dataset, error)
 	GetDatasetVersion(context.Context, string, bool, string, string) (domain.DatasetVersion, error)
 	ListDatasetVersions(context.Context, string, bool, string) ([]domain.DatasetVersion, error)
+	GetDatasetPublicationRunForVersion(context.Context, string, bool, string, string) (domain.DatasetPublicationRun, error)
 	ResolveReadyDatasetVersion(context.Context, string, bool, string, domain.DatasetVersionSelector) (domain.DatasetVersion, error)
 	TransitionDatasetVersion(context.Context, string, string, domain.DatasetVersionState) (domain.DatasetVersion, error)
 }
@@ -99,6 +100,7 @@ func (h *Handler) RegisterDatasetReadRoutes(group *gin.RouterGroup) {
 	read.GET("/datasets/:id/versions", h.listDatasetVersions)
 	read.GET("/datasets/:id/versions/latest", h.getLatestDatasetVersion)
 	read.GET("/datasets/:id/versions/:versionID", h.getDatasetVersion)
+	read.GET("/datasets/:id/versions/:versionID/publication", h.getDatasetPublication)
 }
 
 // RegisterDatasetManagementRoutes requires the caller to have passed the
@@ -175,6 +177,25 @@ func (h *Handler) getDatasetVersion(c *gin.Context) {
 		return
 	}
 	h.writeSuccess(c, http.StatusOK, datasetVersionForResponse(version))
+}
+
+// getDatasetPublication exposes only aggregate immutable-version progress.
+// Source keys, Kubernetes Job names and credentials remain control-plane-only.
+func (h *Handler) getDatasetPublication(c *gin.Context) {
+	principal, ok := h.requireDatasetPrincipal(c)
+	if !ok || !h.requireDatasetCatalog(c) {
+		return
+	}
+	run, err := h.datasets.GetDatasetPublicationRunForVersion(c.Request.Context(), principal.TenantID, principal.HasRole(domain.RoleSuperAdmin), c.Param("id"), c.Param("versionID"))
+	if errors.Is(err, repositories.ErrDatasetPublicationRunNotFound) {
+		h.writeError(c, http.StatusNotFound, "DATASET_PUBLICATION_NOT_FOUND", "dataset publication was not found")
+		return
+	}
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "DATASET_PUBLICATION_LOOKUP_FAILED", "could not look up dataset publication")
+		return
+	}
+	h.writeSuccess(c, http.StatusOK, datasetPublicationForResponse(run))
 }
 
 func (h *Handler) getLatestDatasetVersion(c *gin.Context) {

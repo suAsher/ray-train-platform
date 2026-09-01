@@ -224,6 +224,38 @@ class TOSStorage:
             raise TOSStorageError("TOS source index size verification failed")
         return payload
 
+    def get_immutable(self, key: str, *, maximum_bytes: int) -> bytes:
+        """Read one bounded object below the internal immutable prefix.
+
+        Publication finalization uses this for deterministic partition receipts;
+        it never grants access to an arbitrary bucket or key.
+        """
+
+        _validate_positive_bound(
+            "maximum_bytes", maximum_bytes, maximum=MAX_INDEX_BYTES
+        )
+        full_key = self._target_key(key)
+        info = self._head(
+            self._target_bucket,
+            full_key,
+            failure_message="TOS immutable HEAD failed",
+        )
+        if info.size > maximum_bytes:
+            raise TOSStorageError("TOS immutable object exceeds the configured bound")
+        output = _safe_client_call(
+            "TOS immutable download failed",
+            self._client.get_object,
+            self._target_bucket,
+            full_key,
+        )
+        if not callable(getattr(output, "read", None)):
+            _close_download_output(output)
+            raise TOSStorageError("TOS immutable download returned invalid data")
+        payload, read_failed = _read_bounded_output(output, maximum_bytes)
+        if read_failed or len(payload) != info.size:
+            raise TOSStorageError("TOS immutable download failed")
+        return payload
+
     def download_stream(
         self,
         key: str,

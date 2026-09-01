@@ -403,11 +403,12 @@ def _inspect_remote_samples(
     storage: Any,
     max_workers: int = DEFAULT_HEAD_WORKERS,
     batch_size: int = DEFAULT_HEAD_BATCH_SIZE,
+    prefer_listing: bool = True,
 ) -> tuple[tuple[_RemoteSample, ...], dict[str, _SourceObject]]:
     if max_workers < 1 or max_workers > 128 or batch_size < max_workers:
         raise ValueError("remote metadata inspection bounds are invalid")
     source_keys = tuple(dict.fromkeys(sample["lidar_path"] for sample in samples))
-    if callable(getattr(storage, "list_source", None)):
+    if prefer_listing and callable(getattr(storage, "list_source", None)):
         source_objects = _list_remote_source_objects(source_keys, storage=storage)
     else:
         source_objects = _head_remote_source_objects(

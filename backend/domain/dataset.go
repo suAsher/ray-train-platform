@@ -6,6 +6,7 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -234,6 +235,15 @@ func ValidateResolvedDatasetVersionID(raw string) error {
 	return validateDatasetIdentifier("dataset version ID", raw)
 }
 
+type DatasetPartitionState string
+
+const (
+	DatasetPartitionPending   DatasetPartitionState = "PENDING"
+	DatasetPartitionLeased    DatasetPartitionState = "LEASED"
+	DatasetPartitionCompleted DatasetPartitionState = "COMPLETED"
+	DatasetPartitionFailed    DatasetPartitionState = "FAILED"
+)
+
 type DatasetPartition struct {
 	ID, DatasetVersionID, Name                   string
 	SourceObjectCount, ProcessedObjectCount      int64
@@ -247,6 +257,90 @@ func (partition DatasetPartition) Validate() error {
 		}
 	}
 	return validateProgressCounts(partition.SourceObjectCount, partition.ProcessedObjectCount, partition.FailedObjectCount, partition.LogicalBytes, partition.PackedBytes)
+}
+
+// DatasetPublicationPartitionAttempt is mutable execution state kept separate
+// from the immutable DatasetPartition plan row.
+type DatasetPublicationPartitionAttempt struct {
+	DatasetVersionID, PartitionID, InputFingerprint, PlanSHA256, ReceiptSHA256 string
+	State                                                                      DatasetPartitionState
+	Attempt                                                                    int64
+	LeaseOwner                                                                 string
+	LeaseExpiresAt                                                             *time.Time
+}
+
+func (attempt DatasetPublicationPartitionAttempt) Validate() error {
+	for name, value := range map[string]string{
+		"dataset version ID": attempt.DatasetVersionID,
+		"partition ID":       attempt.PartitionID,
+	} {
+		if err := validateDatasetIdentifier(name, value); err != nil {
+			return err
+		}
+	}
+	for name, value := range map[string]string{
+		"partition input fingerprint": attempt.InputFingerprint,
+		"partition plan SHA-256":      attempt.PlanSHA256,
+		"partition receipt SHA-256":   attempt.ReceiptSHA256,
+	} {
+		if value != "" && !datasetDigestPattern.MatchString(value) {
+			return fmt.Errorf("%s is invalid", name)
+		}
+	}
+	state := attempt.State
+	if state == "" {
+		state = DatasetPartitionPending
+	}
+	if !knownDatasetPartitionState(state) || attempt.Attempt < 0 {
+		return fmt.Errorf("partition lifecycle is invalid")
+	}
+	if state == DatasetPartitionCompleted && attempt.ReceiptSHA256 == "" {
+		return fmt.Errorf("completed partition requires a receipt")
+	}
+	if state == DatasetPartitionLeased {
+		if err := validateDatasetIdentifier("partition lease owner", attempt.LeaseOwner); err != nil || attempt.LeaseExpiresAt == nil {
+			return fmt.Errorf("partition lease is invalid")
+		}
+	} else if attempt.LeaseOwner != "" || attempt.LeaseExpiresAt != nil {
+		return fmt.Errorf("partition lease is invalid")
+	}
+	return nil
+}
+
+func (attempt DatasetPublicationPartitionAttempt) Lease(owner string, expiresAt time.Time) (DatasetPublicationPartitionAttempt, error) {
+	if err := attempt.Validate(); err != nil {
+		return DatasetPublicationPartitionAttempt{}, err
+	}
+	if attempt.State != "" && attempt.State != DatasetPartitionPending && attempt.State != DatasetPartitionFailed {
+		return DatasetPublicationPartitionAttempt{}, fmt.Errorf("dataset partition cannot be leased from %q", attempt.State)
+	}
+	result := attempt
+	result.State = DatasetPartitionLeased
+	result.Attempt++
+	result.LeaseOwner = owner
+	result.LeaseExpiresAt = &expiresAt
+	if err := result.Validate(); err != nil {
+		return DatasetPublicationPartitionAttempt{}, err
+	}
+	return result, nil
+}
+
+func (attempt DatasetPublicationPartitionAttempt) Complete(receiptSHA256 string) (DatasetPublicationPartitionAttempt, error) {
+	if err := attempt.Validate(); err != nil {
+		return DatasetPublicationPartitionAttempt{}, err
+	}
+	if attempt.State != DatasetPartitionLeased {
+		return DatasetPublicationPartitionAttempt{}, fmt.Errorf("dataset partition cannot complete from %q", attempt.State)
+	}
+	result := attempt
+	result.State = DatasetPartitionCompleted
+	result.ReceiptSHA256 = receiptSHA256
+	result.LeaseOwner = ""
+	result.LeaseExpiresAt = nil
+	if err := result.Validate(); err != nil {
+		return DatasetPublicationPartitionAttempt{}, err
+	}
+	return result, nil
 }
 
 type DatasetPublicationRun struct {
@@ -365,6 +459,15 @@ func validateDatasetRelativePath(name, value string) error {
 func knownDatasetVersionState(state DatasetVersionState) bool {
 	switch state {
 	case DatasetVersionDiscovering, DatasetVersionStabilizing, DatasetVersionValidating, DatasetVersionPacking, DatasetVersionReady, DatasetVersionFailed, DatasetVersionDeprecated, DatasetVersionRetired:
+		return true
+	default:
+		return false
+	}
+}
+
+func knownDatasetPartitionState(state DatasetPartitionState) bool {
+	switch state {
+	case DatasetPartitionPending, DatasetPartitionLeased, DatasetPartitionCompleted, DatasetPartitionFailed:
 		return true
 	default:
 		return false

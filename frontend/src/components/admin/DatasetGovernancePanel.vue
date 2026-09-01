@@ -74,31 +74,6 @@
         <el-table-column type="expand">
           <template #default="scope">
             <div class="space-y-3 px-4 py-2">
-              <div
-                v-if="currentPublication(scope.row.id)"
-                class="rounded-xl border border-blue-500/20 bg-blue-500/5 p-3"
-              >
-                <div class="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <p class="text-xs font-semibold text-blue-200">当前会话发布状态</p>
-                    <p class="mt-1 text-[11px] leading-5 text-slate-400">
-                      仅展示本页打开后发起的请求；平台目前没有可查询的历史发布列表。
-                    </p>
-                  </div>
-                  <el-button size="small" :loading="versionLoading[scope.row.id] === true" @click="loadDatasetVersions(scope.row.id)">
-                    刷新版本状态
-                  </el-button>
-                </div>
-                <div class="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-slate-300">
-                  <el-tag :type="versionState(currentPublicationState(scope.row.id)).type" size="small" effect="plain">
-                    {{ versionState(currentPublicationState(scope.row.id)).label }}
-                  </el-tag>
-                  <span>版本 {{ currentPublication(scope.row.id).datasetVersionId }}</span>
-                  <span>受理时 {{ formatAcceptedAt(currentPublication(scope.row.id).acceptedAt) }}</span>
-                  <span>受理时计数：已处理 {{ formatDatasetCount(currentPublication(scope.row.id).processedObjectCount) }} / {{ formatDatasetCount(currentPublication(scope.row.id).sourceObjectCount) }}，失败 {{ formatDatasetCount(currentPublication(scope.row.id).failedObjectCount) }}</span>
-                </div>
-              </div>
-
               <el-alert
                 v-if="versionErrors[scope.row.id]"
                 type="error"
@@ -120,6 +95,23 @@
                     <el-tag :type="versionState(versionScope.row.state).type" size="small" effect="plain">
                       {{ versionState(versionScope.row.state).label }}
                     </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="发布进度" min-width="220">
+                  <template #default="versionScope">
+                    <template v-if="publicationFor(versionScope.row.id)">
+                      <el-progress
+                        :percentage="publicationPercent(publicationFor(versionScope.row.id))"
+                        :status="publicationFor(versionScope.row.id).failedPartitions > 0 ? 'exception' : undefined"
+                        :stroke-width="7"
+                        class="min-w-[120px]"
+                      />
+                      <p class="mt-1 text-[11px] text-slate-400">
+                        分区 {{ formatDatasetCount(publicationFor(versionScope.row.id).completedPartitions) }} / {{ formatDatasetCount(publicationFor(versionScope.row.id).totalPartitions) }}，失败 {{ formatDatasetCount(publicationFor(versionScope.row.id).failedPartitions) }}
+                      </p>
+                      <p class="text-[11px] text-slate-500">对象 {{ formatDatasetCount(publicationFor(versionScope.row.id).processedObjectCount) }} / {{ formatDatasetCount(publicationFor(versionScope.row.id).sourceObjectCount) }}</p>
+                    </template>
+                    <span v-else class="text-slate-500">{{ versionScope.row.state === 'READY' ? '已完成' : '等待发布器更新' }}</span>
                   </template>
                 </el-table-column>
                 <el-table-column label="样本" min-width="190">
@@ -290,6 +282,7 @@ import {
   createDataset,
   deprecateDatasetVersion,
   fetchDatasets,
+  fetchDatasetPublication,
   fetchDatasetVersions,
   previewDatasetGarbageCollection,
   requestDatasetPublication,
@@ -321,7 +314,7 @@ const datasets = ref([])
 const versionsByDataset = ref({})
 const versionErrors = ref({})
 const versionLoading = ref({})
-const currentPublications = ref({})
+const publicationsByVersion = ref({})
 const publishing = ref({})
 const deprecating = ref({})
 const loading = ref(false)
@@ -366,19 +359,14 @@ const nonNegativeCount = (value) => {
   const parsed = Number(value)
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0
 }
-const formatAcceptedAt = (value) => {
-  const parsed = Date.parse(value)
-  return Number.isFinite(parsed) ? new Date(parsed).toLocaleString('zh-CN', { hour12: false }) : '—'
-}
 const versionsFor = (datasetId) => versionsByDataset.value[datasetId] || []
 const readyVersionCount = (datasetId) => versionsFor(datasetId).filter(({ state }) => state === 'READY').length
-const currentPublication = (datasetId) => currentPublications.value[datasetId] || null
 const datasetLabel = (datasetId) => datasets.value.find(({ id }) => id === datasetId)?.name || datasetId
-
-const currentPublicationState = (datasetId) => {
-  const publication = currentPublication(datasetId)
-  if (!publication) return ''
-  return versionsFor(datasetId).find(({ id }) => id === publication.datasetVersionId)?.state || publication.state
+const publicationFor = (versionId) => publicationsByVersion.value[versionId] || null
+const publicationPercent = (publication) => {
+  const total = nonNegativeCount(publication?.totalPartitions)
+  const completed = nonNegativeCount(publication?.completedPartitions)
+  return total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0
 }
 
 const setBooleanFlag = (target, key, enabled) => {
@@ -390,7 +378,7 @@ const clearCatalogState = () => {
   versionsByDataset.value = {}
   versionErrors.value = {}
   versionLoading.value = {}
-  currentPublications.value = {}
+  publicationsByVersion.value = {}
   catalogError.value = ''
   createDialogVisible.value = false
   gcDialogVisible.value = false
@@ -406,6 +394,21 @@ const loadDatasetVersions = async (datasetId, generation = loadGeneration) => {
     const versions = normalizeDatasetVersions(await fetchDatasetVersions(datasetId))
     if (generation !== loadGeneration || !datasetCapabilities.value.catalogEnabled) return
     versionsByDataset.value = { ...versionsByDataset.value, [datasetId]: versions }
+		const active = versions.filter(({ state }) => ['DISCOVERING', 'STABILIZING', 'VALIDATING', 'PACKING', 'FAILED'].includes(state))
+		const loaded = await Promise.all(active.map(async (version) => {
+			try {
+				return [version.id, await fetchDatasetPublication(datasetId, version.id)]
+			} catch (error) {
+				return [version.id, null]
+			}
+		}))
+		if (generation !== loadGeneration) return
+		const next = { ...publicationsByVersion.value }
+		for (const [versionId, publication] of loaded) {
+			if (publication) next[versionId] = publication
+			else delete next[versionId]
+		}
+		publicationsByVersion.value = next
   } catch (error) {
     if (generation !== loadGeneration) return
     versionsByDataset.value = { ...versionsByDataset.value, [datasetId]: [] }
@@ -568,12 +571,14 @@ const publishDataset = async (dataset) => {
       id: publicationId,
       datasetVersionId,
       state: String(response?.state || 'DISCOVERING').toUpperCase(),
+      totalPartitions: nonNegativeCount(response?.totalPartitions),
+      completedPartitions: nonNegativeCount(response?.completedPartitions),
+      failedPartitions: nonNegativeCount(response?.failedPartitions),
       sourceObjectCount: nonNegativeCount(response?.sourceObjectCount),
       processedObjectCount: nonNegativeCount(response?.processedObjectCount),
       failedObjectCount: nonNegativeCount(response?.failedObjectCount),
-      acceptedAt: new Date().toISOString(),
     }
-    currentPublications.value = { ...currentPublications.value, [dataset.id]: publication }
+    publicationsByVersion.value = { ...publicationsByVersion.value, [datasetVersionId]: publication }
     ElMessage.success('发布请求已受理，请通过版本状态跟踪结果')
     await loadDatasetVersions(dataset.id)
   } catch (error) {

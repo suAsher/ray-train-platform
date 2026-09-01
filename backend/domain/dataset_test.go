@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 const validDatasetDigest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -430,5 +431,39 @@ func TestDatasetProgressRecordsValidate(t *testing.T) {
 				t.Fatal("invalid record was accepted")
 			}
 		})
+	}
+}
+
+func TestDatasetPartitionCarriesRecoverablePublicationLifecycle(t *testing.T) {
+	typeOfPartition := reflect.TypeOf(DatasetPublicationPartitionAttempt{})
+	for _, name := range []string{
+		"InputFingerprint", "PlanSHA256", "ReceiptSHA256", "State",
+		"Attempt", "LeaseOwner", "LeaseExpiresAt",
+	} {
+		if _, ok := typeOfPartition.FieldByName(name); !ok {
+			t.Fatalf("DatasetPartition is missing %s", name)
+		}
+	}
+}
+
+func TestDatasetPublicationPartitionAttemptLeasesAndCompletes(t *testing.T) {
+	value := DatasetPublicationPartitionAttempt{
+		DatasetVersionID: "version-1", PartitionID: "partition-1",
+		InputFingerprint: validDatasetDigest, PlanSHA256: validDatasetDigest,
+	}
+	expiresAt := time.Date(2026, 9, 1, 1, 0, 0, 0, time.UTC)
+	leased, err := value.Lease("publisher-worker-1", expiresAt)
+	if err != nil {
+		t.Fatalf("Lease() error = %v", err)
+	}
+	if leased.State != DatasetPartitionLeased || leased.Attempt != 1 || leased.LeaseOwner != "publisher-worker-1" {
+		t.Fatalf("Lease() = %#v", leased)
+	}
+	completed, err := leased.Complete(validDatasetDigest)
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if completed.State != DatasetPartitionCompleted || completed.ReceiptSHA256 != validDatasetDigest || completed.LeaseOwner != "" {
+		t.Fatalf("Complete() = %#v", completed)
 	}
 }

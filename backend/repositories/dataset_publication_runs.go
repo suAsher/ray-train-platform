@@ -268,6 +268,39 @@ func (r *GormRepository) GetDatasetPublicationRun(
 	return run, nil
 }
 
+// GetDatasetPublicationRunForVersion returns the sole publication attempt
+// bound to an immutable version. The query is tenant-scoped and returns no
+// storage paths, credentials, or worker identities to callers above it.
+func (r *GormRepository) GetDatasetPublicationRunForVersion(
+	ctx context.Context,
+	tenantID string,
+	superAdmin bool,
+	datasetID string,
+	versionID string,
+) (domain.DatasetPublicationRun, error) {
+	if err := publicationRunContextError(ctx); err != nil {
+		return domain.DatasetPublicationRun{}, err
+	}
+	var record DatasetPublicationRunRecord
+	query := r.db.WithContext(ctx).Model(&DatasetPublicationRunRecord{}).
+		Joins("JOIN datasets ON datasets.id = dataset_publication_runs.dataset_id").
+		Where("dataset_publication_runs.dataset_id = ? AND dataset_publication_runs.dataset_version_id = ?", datasetID, versionID)
+	if !superAdmin {
+		query = query.Where("datasets.visibility = ? OR (datasets.visibility = ? AND datasets.owner_tenant_id = ?)", string(domain.DatasetVisibilityPublic), string(domain.DatasetVisibilityTeam), tenantID)
+	}
+	if err := query.Order("dataset_publication_runs.created_at DESC, dataset_publication_runs.id DESC").First(&record).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return domain.DatasetPublicationRun{}, ErrDatasetPublicationRunNotFound
+		}
+		return domain.DatasetPublicationRun{}, publicationRunDatabaseError(ctx, "get dataset publication version run", err)
+	}
+	run, err := record.toDomain()
+	if err != nil {
+		return domain.DatasetPublicationRun{}, ErrDatasetPublicationRunUnavailable
+	}
+	return run, nil
+}
+
 // ClaimDatasetPublicationRun is a single-winner DISCOVERING -> STABILIZING
 // compare-and-swap. Losing reconcilers receive the current state without an
 // error and must not create another publication Job.

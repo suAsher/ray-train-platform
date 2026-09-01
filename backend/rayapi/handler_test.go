@@ -101,6 +101,9 @@ func (catalog rayDatasetCatalog) ListDatasetVersions(_ context.Context, _ string
 	}
 	return []domain.DatasetVersion{catalog.version}, nil
 }
+func (catalog rayDatasetCatalog) GetDatasetPublicationRunForVersion(context.Context, string, bool, string, string) (domain.DatasetPublicationRun, error) {
+	return domain.DatasetPublicationRun{}, repositories.ErrDatasetPublicationRunNotFound
+}
 func (catalog rayDatasetCatalog) ResolveReadyDatasetVersion(_ context.Context, _ string, _ bool, datasetID string, selector domain.DatasetVersionSelector) (domain.DatasetVersion, error) {
 	if datasetID != catalog.dataset.ID || catalog.version.State != domain.DatasetVersionReady || (!selector.Latest && selector.VersionID != catalog.version.ID) {
 		return domain.DatasetVersion{}, repositories.ErrDatasetVersionNotReady

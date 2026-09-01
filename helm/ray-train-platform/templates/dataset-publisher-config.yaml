@@ -1,5 +1,6 @@
 {{- if (default false .Values.datasetPublisher.enabled) }}
 {{- $publisher := .Values.datasetPublisher -}}
+{{- $distributed := default (dict) $publisher.distributed -}}
 {{- $name := include "ray-train-platform.datasetPublisher.resourceName" (list . "") -}}
 {{- $localQueueName := default (include "ray-train-platform.datasetPublisher.resourceName" (list . "queue")) $publisher.kueue.localQueueName -}}
 {{- $priorityClassName := default (include "ray-train-platform.datasetPublisher.resourceName" (list . "priority")) $publisher.priorityClassName -}}
@@ -45,6 +46,11 @@ data:
   DATASET_PUBLISHER_INITIAL_RETRY_SECONDS: {{ $publisher.kubernetesClient.initialRetryBackoffSeconds | quote }}
   DATASET_PUBLISHER_MAXIMUM_RETRY_SECONDS: {{ $publisher.kubernetesClient.maximumRetryBackoffSeconds | quote }}
   DATASET_PUBLISHER_POLL_INTERVAL_SECONDS: {{ $publisher.manager.pollIntervalSeconds | quote }}
+  DATASET_PUBLISHER_DISTRIBUTED_ENABLED: {{ default false $distributed.enabled | quote }}
+  DATASET_PUBLISHER_PARTITION_COUNT: {{ default 256 $distributed.partitionCount | quote }}
+  DATASET_PUBLISHER_MAX_PARALLELISM: {{ default 4 $distributed.maxParallelism | quote }}
+  DATASET_PUBLISHER_PARTITION_LEASE_SECONDS: {{ default 900 $distributed.partitionLeaseSeconds | quote }}
+  DATASET_PUBLISHER_MAX_PARTITION_ATTEMPTS: {{ default 3 $distributed.maxPartitionAttempts | quote }}
   DATASET_PUBLISHER_WORKING_DIRECTORY: {{ $publisher.workingDirectory | quote }}
   DATASET_PUBLISHER_PREFERRED_NODE_SELECTOR: {{ include "ray-train-platform.datasetPublisher.labelSelector" (default (dict) $publisher.preferredNodeSelector) | quote }}
   DATASET_PUBLISHER_NODE_SELECTOR: {{ include "ray-train-platform.datasetPublisher.labelSelector" (default (dict) $publisher.nodeSelector) | quote }}

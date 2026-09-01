@@ -55,4 +55,7 @@ test('administrator console exposes governed publishing while flags off preserve
   assert.match(panel, /弃用版本/)
   assert.match(panel, /回收预览/)
   assert.match(panel, /publisherEnabled/)
+	assert.match(panel, /发布进度/)
+	assert.match(panel, /fetchDatasetPublication/)
+	assert.doesNotMatch(panel, /sourceRoot|objectKey|credential|jobName/)
 })

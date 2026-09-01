@@ -190,6 +190,14 @@ datasetPublisher:
     maximumRetryBackoffSeconds: 30
   manager:
     pollIntervalSeconds: 10
+  # Disabled by default: existing releases retain the one-Job publisher until
+  # the distributed plan/pack/finalize controller is explicitly enabled.
+  distributed:
+    enabled: false
+    partitionCount: 256
+    maxParallelism: 4
+    partitionLeaseSeconds: 900
+    maxPartitionAttempts: 3
   workingDirectory: /data/output
   # The controller translates preferredNodeSelector into soft node affinity,
   # so a cluster profile can prefer CPU nodes while retaining GPU-node CPU and

@@ -599,6 +599,25 @@ class TOSStorageValidationTests(unittest.TestCase):
 
 
 class TOSStorageReadTests(unittest.TestCase):
+    def test_bounded_immutable_get_uses_only_the_internal_target_prefix(self) -> None:
+        storage, client = _new_storage()
+        full_key = INTERNAL_PREFIX + "/dataset-a/publication/version-a/partitions/00000.json"
+        output = _StreamingOutput(b"receipt")
+        client.head_results[(TARGET_BUCKET, full_key)] = SimpleNamespace(
+            content_length=7,
+            meta={"sha256": hashlib.sha256(b"receipt").hexdigest()},
+        )
+        client.get_results[(TARGET_BUCKET, full_key)] = output
+
+        payload = storage.get_immutable("dataset-a/publication/version-a/partitions/00000.json", maximum_bytes=16)
+
+        self.assertEqual(payload, b"receipt")
+        self.assertTrue(output.closed)
+        self.assertEqual(client.calls, [
+            ("head_object", (TARGET_BUCKET, full_key), {}),
+            ("get_object", (TARGET_BUCKET, full_key), {}),
+        ])
+
     def test_bounded_index_get_uses_only_the_source_bucket_and_prefix(self) -> None:
         storage, client = _new_storage()
         full_key = SOURCE_PREFIX + "/indexes/current.json"

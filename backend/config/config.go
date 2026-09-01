@@ -49,6 +49,7 @@ type Config struct {
 	DatasetVersioningEnabled                 bool
 	RayDataStreamingEnabled                  bool
 	DatasetPublisherEnabled                  bool
+	DatasetPublisherDistributedEnabled       bool
 	DatasetInternalPrefix                    string
 	DatasetPublisherImage                    string
 	DatasetPublisherImagePullPolicy          string
@@ -77,6 +78,10 @@ type Config struct {
 	DatasetPublisherInitialRetrySeconds      int
 	DatasetPublisherMaximumRetrySeconds      int
 	DatasetPublisherPollIntervalSeconds      int
+	DatasetPublisherPartitionCount           int
+	DatasetPublisherMaxParallelism           int
+	DatasetPublisherPartitionLeaseSeconds    int
+	DatasetPublisherMaxPartitionAttempts     int
 	LocalCacheStorageClass                   string
 	LocalCacheStorageClassData1              string
 	LocalCacheStorageClassData2              string
@@ -327,6 +332,9 @@ func Load() (Config, error) {
 	if cfg.DatasetPublisherEnabled, err = parseBool("DATASET_PUBLISHER_ENABLED", false); err != nil {
 		return Config{}, err
 	}
+	if cfg.DatasetPublisherDistributedEnabled, err = parseBool("DATASET_PUBLISHER_DISTRIBUTED_ENABLED", false); err != nil {
+		return Config{}, err
+	}
 	if cfg.DatasetPublisherNodeSelector, err = parseLabelSelector("DATASET_PUBLISHER_NODE_SELECTOR"); err != nil {
 		return Config{}, err
 	}
@@ -355,6 +363,18 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.DatasetPublisherPollIntervalSeconds, err = parseInt("DATASET_PUBLISHER_POLL_INTERVAL_SECONDS", 10); err != nil {
+		return Config{}, err
+	}
+	if cfg.DatasetPublisherPartitionCount, err = parseInt("DATASET_PUBLISHER_PARTITION_COUNT", 256); err != nil {
+		return Config{}, err
+	}
+	if cfg.DatasetPublisherMaxParallelism, err = parseInt("DATASET_PUBLISHER_MAX_PARALLELISM", 4); err != nil {
+		return Config{}, err
+	}
+	if cfg.DatasetPublisherPartitionLeaseSeconds, err = parseInt("DATASET_PUBLISHER_PARTITION_LEASE_SECONDS", 900); err != nil {
+		return Config{}, err
+	}
+	if cfg.DatasetPublisherMaxPartitionAttempts, err = parseInt("DATASET_PUBLISHER_MAX_PARTITION_ATTEMPTS", 3); err != nil {
 		return Config{}, err
 	}
 	if raw := strings.TrimSpace(os.Getenv("IDC_DATA_SPACES_SOURCES_JSON")); raw != "" {
@@ -447,6 +467,9 @@ func Load() (Config, error) {
 }
 
 func validateDatasetPublisherConfig(cfg Config) error {
+	if cfg.DatasetPublisherDistributedEnabled && !cfg.DatasetPublisherEnabled {
+		return fmt.Errorf("DATASET_PUBLISHER_DISTRIBUTED_ENABLED requires DATASET_PUBLISHER_ENABLED")
+	}
 	if !cfg.DatasetPublisherEnabled {
 		return nil
 	}
@@ -550,6 +573,18 @@ func validateDatasetPublisherConfig(cfg Config) error {
 	}
 	if cfg.DatasetPublisherPollIntervalSeconds < 1 || cfg.DatasetPublisherPollIntervalSeconds > 300 {
 		return fmt.Errorf("DATASET_PUBLISHER_POLL_INTERVAL_SECONDS must be between 1 and 300")
+	}
+	if cfg.DatasetPublisherPartitionCount < 1 || cfg.DatasetPublisherPartitionCount > 100000 {
+		return fmt.Errorf("DATASET_PUBLISHER_PARTITION_COUNT must be between 1 and 100000")
+	}
+	if cfg.DatasetPublisherMaxParallelism < 1 || cfg.DatasetPublisherMaxParallelism > cfg.DatasetPublisherPartitionCount {
+		return fmt.Errorf("DATASET_PUBLISHER_MAX_PARALLELISM must be between 1 and DATASET_PUBLISHER_PARTITION_COUNT")
+	}
+	if cfg.DatasetPublisherPartitionLeaseSeconds < 60 || cfg.DatasetPublisherPartitionLeaseSeconds > 24*60*60 {
+		return fmt.Errorf("DATASET_PUBLISHER_PARTITION_LEASE_SECONDS must be between 60 and 86400")
+	}
+	if cfg.DatasetPublisherMaxPartitionAttempts < 1 || cfg.DatasetPublisherMaxPartitionAttempts > 10 {
+		return fmt.Errorf("DATASET_PUBLISHER_MAX_PARTITION_ATTEMPTS must be between 1 and 10")
 	}
 	return nil
 }

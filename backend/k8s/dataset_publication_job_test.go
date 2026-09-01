@@ -187,6 +187,46 @@ func TestRenderDatasetPublicationJobInjectsManualVKEIRSAWhenConfigured(t *testin
 	}
 }
 
+func TestRenderDistributedDatasetPublicationPackIsIndexedAndBound(t *testing.T) {
+	spec := publicationJobSpecForTest()
+	spec.name += "-pack"
+	spec.executionPhase = datasetpublisher.PublicationExecutionPack
+	spec.partitionCount = 256
+	spec.maxParallelism = 16
+	job, err := renderDatasetPublicationJob(spec)
+	if err != nil {
+		t.Fatalf("render Indexed publisher: %v", err)
+	}
+	if job.Spec.CompletionMode == nil || *job.Spec.CompletionMode != batchv1.IndexedCompletion || job.Spec.Completions == nil || *job.Spec.Completions != 256 || job.Spec.Parallelism == nil || *job.Spec.Parallelism != 16 {
+		t.Fatalf("distributed job is not bounded Indexed work: %#v", job.Spec)
+	}
+	container := job.Spec.Template.Spec.Containers[0]
+	if !reflect.DeepEqual(container.Command, []string{"python3", "-m", "raytrain_publisher.distributed_publish"}) || !containsTestString(container.Args, "--phase") || !containsTestString(container.Args, "pack") {
+		t.Fatalf("distributed publisher command is invalid: command=%q args=%q", container.Command, container.Args)
+	}
+	var ordinal *corev1.EnvVar
+	for index := range container.Env {
+		if container.Env[index].Name == "DATASET_PUBLISHER_PARTITION_ORDINAL" {
+			ordinal = &container.Env[index]
+		}
+	}
+	if ordinal == nil || ordinal.ValueFrom == nil || ordinal.ValueFrom.FieldRef == nil || ordinal.ValueFrom.FieldRef.FieldPath != "metadata.annotations['batch.kubernetes.io/job-completion-index']" {
+		t.Fatalf("Indexed completion ordinal was not projected safely: %#v", ordinal)
+	}
+	if job.Annotations[publicationSpecHashAnnotation] == "" {
+		t.Fatal("distributed job must bind execution parameters in its spec hash")
+	}
+}
+
+func containsTestString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestRenderDatasetPublicationJobReferencesExistingTOSSecret(t *testing.T) {
 	spec := publicationJobSpecForTest()
 	spec.credentialSecretName = "tos-credentials"
@@ -917,6 +957,9 @@ type fakePublicationJobSpec struct {
 	backoffLimit          int
 	activeDeadline        time.Duration
 	ttlAfterFinished      time.Duration
+	executionPhase        datasetpublisher.PublicationExecutionPhase
+	partitionCount        int
+	maxParallelism        int
 	labels                map[string]string
 }
 
@@ -1004,4 +1047,9 @@ func (spec fakePublicationJobSpec) MemoryLimit() string             { return spe
 func (spec fakePublicationJobSpec) BackoffLimit() int               { return spec.backoffLimit }
 func (spec fakePublicationJobSpec) ActiveDeadline() time.Duration   { return spec.activeDeadline }
 func (spec fakePublicationJobSpec) TTLAfterFinished() time.Duration { return spec.ttlAfterFinished }
-func (spec fakePublicationJobSpec) Labels() map[string]string       { return spec.labels }
+func (spec fakePublicationJobSpec) ExecutionPhase() datasetpublisher.PublicationExecutionPhase {
+	return spec.executionPhase
+}
+func (spec fakePublicationJobSpec) PartitionCount() int       { return spec.partitionCount }
+func (spec fakePublicationJobSpec) MaxParallelism() int       { return spec.maxParallelism }
+func (spec fakePublicationJobSpec) Labels() map[string]string { return spec.labels }

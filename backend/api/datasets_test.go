@@ -31,6 +31,8 @@ type fakeDatasetCatalog struct {
 	transitionNext      domain.DatasetVersionState
 	transitionedVersion domain.DatasetVersion
 	transitionErr       error
+	publicationRun      domain.DatasetPublicationRun
+	publicationErr      error
 }
 
 func (store *fakeDatasetCatalog) CreateDataset(_ context.Context, dataset domain.Dataset) error {
@@ -94,6 +96,16 @@ func (store *fakeDatasetCatalog) ListDatasetVersions(_ context.Context, tenantID
 		}
 	}
 	return versions, nil
+}
+
+func (store *fakeDatasetCatalog) GetDatasetPublicationRunForVersion(_ context.Context, tenantID string, superAdmin bool, datasetID, versionID string) (domain.DatasetPublicationRun, error) {
+	if store.publicationErr != nil {
+		return domain.DatasetPublicationRun{}, store.publicationErr
+	}
+	if _, err := store.GetDataset(context.Background(), tenantID, superAdmin, datasetID); err != nil || store.publicationRun.DatasetID != datasetID || store.publicationRun.DatasetVersionID != versionID {
+		return domain.DatasetPublicationRun{}, repositories.ErrDatasetPublicationRunNotFound
+	}
+	return store.publicationRun, nil
 }
 
 func (store *fakeDatasetCatalog) ResolveReadyDatasetVersion(_ context.Context, tenantID string, superAdmin bool, datasetID string, selector domain.DatasetVersionSelector) (domain.DatasetVersion, error) {
@@ -501,5 +513,26 @@ func TestDatasetAuthorizationMapsManagementFailuresWithoutSideEffects(t *testing
 	gcFailure := serveDatasetAPI(datasetAPIRouter(NewHandler(nil, Options{Datasets: &fakeDatasetCatalog{}, DatasetPublications: gcManager}), &superAdmin), http.MethodPost, "/api/v1/datasets/gc/dry-run", "{}")
 	if gcFailure.Code != http.StatusServiceUnavailable || strings.Contains(gcFailure.Body.String(), "TOS secret") {
 		t.Fatalf("GC failure status=%d body=%s", gcFailure.Code, gcFailure.Body.String())
+	}
+}
+
+func TestDatasetPublicationReadRouteReturnsOnlyAggregateProgress(t *testing.T) {
+	dataset := datasetForAPI("dataset-team-a", "TEAM", "team-a")
+	store := &fakeDatasetCatalog{datasets: []domain.Dataset{dataset}, publicationRun: domain.DatasetPublicationRun{
+		ID: "publication-1", DatasetID: dataset.ID, DatasetVersionID: "version-1", State: domain.DatasetVersionValidating,
+		TotalPartitions: 256, CompletedPartitions: 16, SourceObjectCount: 1000, ProcessedObjectCount: 100,
+	}}
+	principal := datasetPrincipal("admin-a", "team-a", domain.RoleTenantAdmin)
+	response := serveDatasetAPI(datasetAPIRouter(NewHandler(nil, Options{Datasets: store}), &principal), http.MethodGet, "/api/v1/datasets/dataset-team-a/versions/version-1/publication", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("publication response status=%d body=%s", response.Code, response.Body.String())
+	}
+	for _, forbidden := range []string{"sourceRoot", "objectKey", "credential", "jobName"} {
+		if strings.Contains(response.Body.String(), forbidden) {
+			t.Fatalf("publication API leaked %q: %s", forbidden, response.Body.String())
+		}
+	}
+	if !strings.Contains(response.Body.String(), `"completedPartitions":16`) {
+		t.Fatalf("publication response omitted progress: %s", response.Body.String())
 	}
 }

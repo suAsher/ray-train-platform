@@ -118,6 +118,42 @@ func TestControllerAdvancesPublicationRunThroughEveryState(t *testing.T) {
 	}
 }
 
+func TestControllerRunsDistributedPlanPackThenFinalizeWithoutChangingLegacyMode(t *testing.T) {
+	repository := newMemoryPublicationRunRepository("team-a")
+	jobs := &scriptedPublicationJobClient{results: []publicationJobResult{
+		{status: PublicationJobStatus{Phase: PublicationJobValidating, Progress: PublicationProgress{TotalPartitions: 8}}},
+		{status: PublicationJobStatus{Phase: PublicationJobPacked, Progress: PublicationProgress{TotalPartitions: 8, CompletedPartitions: 8}}},
+		{status: PublicationJobStatus{Phase: PublicationJobSucceeded, Progress: completedPublicationProgress(), Receipt: completedPublicationReceipt()}},
+	}}
+	options := publicationControllerOptions()
+	options.DistributedEnabled = true
+	options.PartitionCount = 8
+	options.MaxParallelism = 2
+	controller, err := NewController(repository, jobs, options)
+	if err != nil {
+		t.Fatalf("new distributed controller: %v", err)
+	}
+	request := publicationReconcileRequest("publication-distributed")
+	for want := 0; want < 3; want++ {
+		if _, err := controller.Reconcile(context.Background(), request); err != nil {
+			t.Fatalf("distributed reconcile %d: %v", want+1, err)
+		}
+	}
+	specs := jobs.recordedSpecs()
+	if len(specs) != 3 {
+		t.Fatalf("distributed spec count=%d, want 3", len(specs))
+	}
+	wantPhases := []PublicationExecutionPhase{PublicationExecutionPlan, PublicationExecutionPack, PublicationExecutionFinalize}
+	for index, want := range wantPhases {
+		if specs[index].ExecutionPhase() != want || specs[index].PartitionCount() != 8 || specs[index].MaxParallelism() != 2 {
+			t.Fatalf("distributed spec %d=%+v, want phase %q", index, specs[index], want)
+		}
+		if !strings.HasSuffix(specs[index].Name(), "-"+string(want)) {
+			t.Fatalf("distributed job name=%q, want phase suffix %q", specs[index].Name(), want)
+		}
+	}
+}
+
 func TestControllerEnsureIsIdempotentAndJobNameIsStableDNSLabel(t *testing.T) {
 	repository := newMemoryPublicationRunRepository("team-a")
 	jobs := &scriptedPublicationJobClient{results: []publicationJobResult{

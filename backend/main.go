@@ -446,6 +446,9 @@ func datasetPublicationControllerOptions(cfg config.Config) datasetpublisher.Con
 		JobTTLAfterFinished:   time.Duration(cfg.DatasetPublisherJobTTLSeconds) * time.Second,
 		InitialRetryBackoff:   time.Duration(cfg.DatasetPublisherInitialRetrySeconds) * time.Second,
 		MaximumRetryBackoff:   time.Duration(cfg.DatasetPublisherMaximumRetrySeconds) * time.Second,
+		DistributedEnabled:    cfg.DatasetPublisherDistributedEnabled,
+		PartitionCount:        cfg.DatasetPublisherPartitionCount,
+		MaxParallelism:        cfg.DatasetPublisherMaxParallelism,
 	}
 }
 

@@ -1,0 +1,13 @@
+# Explicit, additive production rollout gate for the new publisher.  Apply
+# only together with --reuse-values so every existing release value (including
+# IDC read-only mounts) remains intact.  This does not alter RayJob templates.
+datasetPublisher:
+  distributed:
+    enabled: true
+    # Each partition may produce several 256–512 MiB Parquet shards.  The
+    # number is intentionally independent of source-file count and bounded by
+    # the CPU-only Kueue queue, not training GPUs.
+    partitionCount: 256
+    maxParallelism: 16
+    partitionLeaseSeconds: 900
+    maxPartitionAttempts: 3

@@ -1,5 +1,13 @@
 # 日常构建与发布
 
+> 分布式 Parquet 发布器采用显式开关：默认保留原有单 Job `cloud_publish`。
+> 启用 `datasetPublisher.distributed.enabled` 后，新版本依次执行 CPU-only
+> `plan → Indexed pack → finalize`；每个 Indexed 分区写不可变回执，后续
+> 版本会校验源对象 identity 后复用未变化分区。发布进度在数据集治理页展示
+> 汇总计数，不展示对象路径、Kubernetes Job 名或凭据。生产启用时仅附加
+> `deploy/overlays/distributed-parquet-publisher.yaml`，并保留现有 IDC overlay
+> 与 release values；该开关不会修改已创建 RayJob 的模板。
+
 本文是唯一的部署入口，覆盖首次安装、日常发版、原子升级、验收与回滚。
 
 > 当前生产拓扑已包含 Frontend/Backend/CLI 发布服务双副本、私网 ALB、属主限定 Ray Dashboard、持久 MLflow 实验中心、同域原生 MLflow 管理界面、工作区源码快照与终态任务归档。Profile 暂用 `APP_ENV=development`，因为平台 PostgreSQL 仍是内置单实例且 Keycloak OIDC 尚未成为强制认证。不要只改这个开关；严格生产模式会拒绝内置 PostgreSQL 和缺失的 OIDC。完成外部 HA PostgreSQL 与 OIDC 配置后，再将 `backend.appEnv` 改为 `production` 并走本手册的完整 preflight/deploy/verify。

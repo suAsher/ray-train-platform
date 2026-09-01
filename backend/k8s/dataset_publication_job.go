@@ -95,6 +95,9 @@ type publicationJobSpec interface {
 	BackoffLimit() int
 	ActiveDeadline() time.Duration
 	TTLAfterFinished() time.Duration
+	ExecutionPhase() datasetpublisher.PublicationExecutionPhase
+	PartitionCount() int
+	MaxParallelism() int
 	Labels() map[string]string
 }
 
@@ -255,6 +258,24 @@ func readCompletedDatasetPublicationJob(
 	job *batchv1.Job,
 	spec publicationJobSpec,
 ) (datasetpublisher.PublicationJobStatus, error) {
+	// Indexed pack completions persist their detailed receipts under the scoped
+	// immutable prefix. Do not aggregate unbounded receipt payloads into Pod
+	// status; the controller only needs the authenticated completion count.
+	switch spec.ExecutionPhase() {
+	case datasetpublisher.PublicationExecutionPlan:
+		return datasetpublisher.PublicationJobStatus{
+			Phase:    datasetpublisher.PublicationJobValidating,
+			Progress: datasetpublisher.PublicationProgress{TotalPartitions: int64(spec.PartitionCount())},
+		}, nil
+	case datasetpublisher.PublicationExecutionPack:
+		if job.Status.Succeeded != int32(spec.PartitionCount()) {
+			return datasetpublisher.PublicationJobStatus{}, errors.New("dataset publication Indexed Job completion count is invalid")
+		}
+		return datasetpublisher.PublicationJobStatus{
+			Phase:    datasetpublisher.PublicationJobPacked,
+			Progress: datasetpublisher.PublicationProgress{TotalPartitions: int64(spec.PartitionCount()), CompletedPartitions: int64(spec.PartitionCount())},
+		}, nil
+	}
 	status := datasetpublisher.PublicationJobStatus{Phase: datasetpublisher.PublicationJobSucceeded}
 	if isNilPublicationInterface(coreClient) {
 		return datasetpublisher.PublicationJobStatus{}, errors.New("dataset publication Pod interface is not initialized")
@@ -467,11 +488,19 @@ func renderDatasetPublicationJob(spec publicationJobSpec) (*batchv1.Job, error) 
 		"--internal-prefix", spec.InternalPrefix(),
 		"--output-dir", spec.WorkingDirectory(),
 	}
+	command := []string{"python3", "-m", "raytrain_publisher.cloud_publish"}
+	if phase := spec.ExecutionPhase(); phase != datasetpublisher.PublicationExecutionLegacy {
+		if !validPublicationExecution(spec) {
+			return nil, errors.New("invalid distributed dataset publication execution")
+		}
+		command = []string{"python3", "-m", "raytrain_publisher.distributed_publish"}
+		args = append([]string{"--phase", string(phase), "--partition-count", fmt.Sprintf("%d", spec.PartitionCount())}, args...)
+	}
 	container := corev1.Container{
 		Name:            datasetPublisherContainerName,
 		Image:           spec.Image(),
 		ImagePullPolicy: pullPolicy,
-		Command:         []string{"python3", "-m", "raytrain_publisher.cloud_publish"},
+		Command:         command,
 		Args:            args,
 		WorkingDir:      spec.WorkingDirectory(),
 		Resources:       resources,
@@ -489,16 +518,24 @@ func renderDatasetPublicationJob(spec publicationJobSpec) (*batchv1.Job, error) 
 			{Name: publicationTmpVolumeName, MountPath: "/tmp"},
 		},
 	}
+	if spec.ExecutionPhase() == datasetpublisher.PublicationExecutionPack {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name: "DATASET_PUBLISHER_PARTITION_ORDINAL",
+			ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{
+				FieldPath: "metadata.annotations['batch.kubernetes.io/job-completion-index']",
+			}},
+		})
+	}
 	volumes := []corev1.Volume{
 		{Name: publicationWorkVolumeName, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 		{Name: publicationTmpVolumeName, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 	}
 	if spec.IRSARoleTRN() != "" {
 		expirationSeconds := publicationIRSATokenTTLSeconds
-		container.Env = []corev1.EnvVar{
+		container.Env = append(container.Env, []corev1.EnvVar{
 			{Name: "VOLCENGINE_OIDC_ROLE_TRN", Value: spec.IRSARoleTRN()},
 			{Name: "VOLCENGINE_OIDC_TOKEN_FILE", Value: publicationIRSATokenFilePath},
-		}
+		}...)
 		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
 			Name: publicationIRSATokenVolumeName, MountPath: publicationIRSATokenMountPath, ReadOnly: true,
 		})
@@ -541,6 +578,25 @@ func renderDatasetPublicationJob(spec publicationJobSpec) (*batchv1.Job, error) 
 		Volumes:      volumes,
 	}
 
+	jobSpec := batchv1.JobSpec{
+		BackoffLimit:            &backoff,
+		ActiveDeadlineSeconds:   &activeDeadline,
+		TTLSecondsAfterFinished: &ttl,
+		Template: corev1.PodTemplateSpec{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels:      clonePublicationJobStringMap(labels),
+				Annotations: clonePublicationJobStringMap(annotations),
+			},
+			Spec: podSpec,
+		},
+	}
+	if spec.ExecutionPhase() == datasetpublisher.PublicationExecutionPack {
+		indexed := batchv1.IndexedCompletion
+		completions, parallelism := int32(spec.PartitionCount()), int32(spec.MaxParallelism())
+		jobSpec.CompletionMode = &indexed
+		jobSpec.Completions = &completions
+		jobSpec.Parallelism = &parallelism
+	}
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:   spec.Namespace(),
@@ -548,19 +604,17 @@ func renderDatasetPublicationJob(spec publicationJobSpec) (*batchv1.Job, error) 
 			Labels:      clonePublicationJobStringMap(labels),
 			Annotations: clonePublicationJobStringMap(annotations),
 		},
-		Spec: batchv1.JobSpec{
-			BackoffLimit:            &backoff,
-			ActiveDeadlineSeconds:   &activeDeadline,
-			TTLSecondsAfterFinished: &ttl,
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels:      clonePublicationJobStringMap(labels),
-					Annotations: clonePublicationJobStringMap(annotations),
-				},
-				Spec: podSpec,
-			},
-		},
+		Spec: jobSpec,
 	}, nil
+}
+
+func validPublicationExecution(spec publicationJobSpec) bool {
+	switch spec.ExecutionPhase() {
+	case datasetpublisher.PublicationExecutionPlan, datasetpublisher.PublicationExecutionPack, datasetpublisher.PublicationExecutionFinalize:
+		return spec.PartitionCount() >= 1 && spec.PartitionCount() <= 100000 && spec.MaxParallelism() >= 1 && spec.MaxParallelism() <= spec.PartitionCount()
+	default:
+		return false
+	}
 }
 
 var publicationIRSARoleTRNPattern = regexp.MustCompile(`^trn:iam::[0-9]+:role/[A-Za-z0-9+=,.@_/-]+$`)
@@ -745,6 +799,9 @@ type canonicalPublicationJobSpec struct {
 	BackoffLimit          int                                      `json:"backoff_limit"`
 	ActiveDeadlineSeconds int64                                    `json:"active_deadline_seconds"`
 	TTLAfterFinished      int64                                    `json:"ttl_after_finished_seconds"`
+	ExecutionPhase        string                                   `json:"execution_phase"`
+	PartitionCount        int                                      `json:"partition_count"`
+	MaxParallelism        int                                      `json:"max_parallelism"`
 	Labels                map[string]string                        `json:"labels"`
 }
 
@@ -760,7 +817,8 @@ func publicationCanonicalSpecHash(spec publicationJobSpec, labels map[string]str
 		Tolerations: append([]datasetpublisher.PublicationToleration(nil), spec.Tolerations()...),
 		CPURequest:  spec.CPURequest(), CPULimit: spec.CPULimit(), MemoryRequest: spec.MemoryRequest(), MemoryLimit: spec.MemoryLimit(),
 		BackoffLimit: spec.BackoffLimit(), ActiveDeadlineSeconds: int64(spec.ActiveDeadline() / time.Second),
-		TTLAfterFinished: int64(spec.TTLAfterFinished() / time.Second), Labels: clonePublicationJobStringMap(labels),
+		TTLAfterFinished: int64(spec.TTLAfterFinished() / time.Second), ExecutionPhase: string(spec.ExecutionPhase()),
+		PartitionCount: spec.PartitionCount(), MaxParallelism: spec.MaxParallelism(), Labels: clonePublicationJobStringMap(labels),
 	}
 	payload, err := json.Marshal(canonical)
 	if err != nil {

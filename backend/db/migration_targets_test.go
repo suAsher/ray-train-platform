@@ -193,6 +193,34 @@ func TestDatasetVersioningMigrationDefinesAdditiveSchema(t *testing.T) {
 	}
 }
 
+func TestDatasetPublicationAttemptsMigrationKeepsPlansImmutable(t *testing.T) {
+	contents, err := migrationFiles.ReadFile("migrations/0026_dataset_publication_attempts.up.sql")
+	if err != nil {
+		t.Fatalf("read publication attempts migration: %v", err)
+	}
+
+	sql := regexp.MustCompile(`\s+`).ReplaceAllString(stripSQLComments(string(contents)), " ")
+	for _, fragment := range []string{
+		"CREATE TABLE IF NOT EXISTS dataset_publication_partition_attempts",
+		"dataset_version_id TEXT NOT NULL",
+		"partition_id TEXT NOT NULL",
+		"state TEXT NOT NULL DEFAULT 'PENDING'",
+		"input_fingerprint TEXT NOT NULL",
+		"plan_sha256 TEXT NOT NULL",
+		"receipt_sha256 TEXT NOT NULL DEFAULT ''",
+		"lease_expires_at TIMESTAMPTZ",
+		"FOREIGN KEY (partition_id, dataset_version_id) REFERENCES dataset_partitions(id, dataset_version_id) ON DELETE CASCADE",
+		"CREATE INDEX IF NOT EXISTS dataset_publication_partition_attempts_dispatch_idx",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("publication attempts migration missing %q", fragment)
+		}
+	}
+	if strings.Contains(sql, "ALTER TABLE dataset_partitions ADD COLUMN state") {
+		t.Fatal("publication attempts must not make immutable dataset partitions mutable")
+	}
+}
+
 func TestDatasetVersioningTrainingJobProvenanceIsNullableWithoutBackfill(t *testing.T) {
 	contents, err := migrationFiles.ReadFile("migrations/0024_dataset_versioning.up.sql")
 	if err != nil {

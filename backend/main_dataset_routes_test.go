@@ -52,6 +52,10 @@ func (*mainDatasetCatalog) ListDatasetVersions(context.Context, string, bool, st
 	return nil, nil
 }
 
+func (*mainDatasetCatalog) GetDatasetPublicationRunForVersion(context.Context, string, bool, string, string) (domain.DatasetPublicationRun, error) {
+	return domain.DatasetPublicationRun{}, repositories.ErrDatasetPublicationRunNotFound
+}
+
 func (*mainDatasetCatalog) ResolveReadyDatasetVersion(context.Context, string, bool, string, domain.DatasetVersionSelector) (domain.DatasetVersion, error) {
 	return domain.DatasetVersion{}, repositories.ErrDatasetVersionNotReady
 }

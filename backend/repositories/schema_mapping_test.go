@@ -29,6 +29,7 @@ func TestModelColumnsExistInMigrations(t *testing.T) {
 		&IDCConnectionRecord{}, &DataTransferRecord{},
 		&ManagedAttemptResourceRecord{}, &SourceArtifactRecord{}, &SourceArtifactRequestRecord{},
 		&DatasetRecord{}, &DatasetVersionRecord{}, &DatasetPartitionRecord{},
+		&DatasetPublicationPartitionAttemptRecord{},
 		&DatasetPublicationRunRecord{}, &DatasetVersionShardRecord{}, &DatasetCacheObservationRecord{},
 	}
 

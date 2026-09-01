@@ -15,6 +15,10 @@ export function fetchDatasetVersions(datasetId) {
   return apiGet(datasetVersionsPath(datasetId))
 }
 
+export function fetchDatasetPublication(datasetId, versionId) {
+  return apiGet(`${datasetVersionPath(datasetId, versionId)}/publication`)
+}
+
 export function fetchLatestDatasetVersion(datasetId) {
   return apiGet(`${datasetVersionsPath(datasetId)}/latest`)
 }
