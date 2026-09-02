@@ -222,7 +222,7 @@ func TestPublicTrainingJobRedactsResolvedPVCClaims(t *testing.T) {
 	}
 }
 
-func TestSuperAdminListsJobsAcrossTenantBoundaries(t *testing.T) {
+func TestSuperAdminTeamScopeListsJobsAcrossTenantBoundaries(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repository := &fakeJobRepository{jobs: []domain.TrainingJob{
 		{ID: "job-team-a", TenantID: "team-a", Spec: domain.JobSpec{Name: "team-a-job"}},
@@ -237,7 +237,7 @@ func TestSuperAdminListsJobsAcrossTenantBoundaries(t *testing.T) {
 	handler.RegisterTrainingRoutes(router.Group("/api/v1"))
 
 	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/jobs", nil))
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/jobs?scope=team", nil))
 
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "job-team-a") || !strings.Contains(response.Body.String(), "job-team-b") {
 		t.Fatalf("super administrator must see every tenant job, got %d: %s", response.Code, response.Body.String())
