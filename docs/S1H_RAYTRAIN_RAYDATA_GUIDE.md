@@ -90,7 +90,7 @@ git status --short
 当前验收镜像的不可变引用是：
 
 ```text
-harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion-ray258@sha256:9acbac27f786822ae51c26cfc210b43cb855b0409df29460ac285b30760029fe
+harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion-ray258@sha256:44cf506bd6842ef4e049278b3f4263966293bdb7f44b64c059669c746d63aea2
 ```
 
 不要改用浮动 tag，也不要把旧 `ray-ddp` 任务原地切换引擎；每次提交都会创建新任务，不影响既有任务。
@@ -111,7 +111,7 @@ RUN_ID="$(date +%Y%m%d-%H%M%S)"
 spk-rayjob submit \
   --name "s1h-raytrain-streaming-${RUN_ID}" \
   --dir . \
-  --image 'harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion-ray258@sha256:9acbac27f786822ae51c26cfc210b43cb855b0409df29460ac285b30760029fe' \
+  --image 'harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion-ray258@sha256:44cf506bd6842ef4e049278b3f4263966293bdb7f44b64c059669c746d63aea2' \
   --entrypoint 'python tools/westwell_train.py configs/westwell/det/transfusion/secfpn/camera+lidar/resnet50/convfuser.yaml --launcher pytorch --run-dir /mnt/data/output data.samples_per_gpu=1 data.workers_per_gpu=1 optimizer.lr=1.0e-5 model.heads.object.num_classes=10 runner.max_epochs=1 log_config.interval=10 evaluation.interval=1' \
   --engine ray-train \
   --execution-mode ray_train \
@@ -161,7 +161,7 @@ unset RAYTRAIN_PAT
 构造平台 metadata：
 
 ```bash
-IMAGE='harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion-ray258@sha256:9acbac27f786822ae51c26cfc210b43cb855b0409df29460ac285b30760029fe'
+IMAGE='harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion-ray258@sha256:44cf506bd6842ef4e049278b3f4263966293bdb7f44b64c059669c746d63aea2'
 DATASET_ID='dataset-091df388b464bf2ff76d6167'
 VERSION_ID='version-a26436a221f5f4b851863a3bde884d26'
 RUN_ID="$(date +%Y%m%d-%H%M%S)"
