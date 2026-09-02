@@ -132,9 +132,11 @@ func QueryJobLogsForLifecycle(ctx context.Context, provider LogProvider, job dom
 	}
 	if lifecycleProvider, ok := provider.(LifecycleLogProvider); ok {
 		start, end := JobLogQueryWindow(job, time.Now())
-		return lifecycleProvider.QueryJobLogsInRange(ctx, job.ID, limit, start, end)
+		lines, err := lifecycleProvider.QueryJobLogsInRange(ctx, job.ID, limit, start, end)
+		return sanitizeJobLogLines(lines), err
 	}
-	return provider.QueryJobLogs(ctx, job.ID, limit)
+	lines, err := provider.QueryJobLogs(ctx, job.ID, limit)
+	return sanitizeJobLogLines(lines), err
 }
 
 // QueryJobLogPage returns a deterministic chronological page while allowing
@@ -200,7 +202,10 @@ func QueryJobLogPage(ctx context.Context, provider LogProvider, job domain.Train
 			ordered = append([]observability.LogLine(nil), ordered[:request.Limit]...)
 		}
 	}
-	page.Lines = ordered
+	// Cursor and has-more semantics must follow Loki's raw entries. Terminal
+	// redraw noise may disappear from the response, but it still consumed a
+	// position in the source stream and the next request must advance past it.
+	page.Lines = sanitizeJobLogLines(ordered)
 	if len(ordered) > 0 {
 		cursorLine := ordered[len(ordered)-1]
 		if request.Direction == observability.LogDirectionBackward {

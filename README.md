@@ -131,6 +131,7 @@ PLATFORM_CHECKPOINT_PATH  续训时挂载的历史结果目录（可选）
 - [用户使用手册](docs/USER_GUIDE.md)：账号、目录、调试环境、训练状态、日志和结果。
 - [多方式提交手册](docs/SUBMIT_GUIDE.md)：Portal、`spk-rayjob`、原生 Ray Jobs API。
 - [Ray Train 托管指南](docs/RAY_TRAIN_MANAGED_GUIDE.md)：双引擎选择、三种提交入口、MMCV 适配、恢复和性能诊断。
+- [S1H Ray Train + Ray Data 完整操作手册](docs/S1H_RAYTRAIN_RAYDATA_GUIDE.md)：从拉取代码到 `spk-rayjob` / 原生 Ray 提交、全量流式训练、NVMe 缓存和派生子集。
 - [新训练代码接入](docs/NEW_TRAINING_CODE_GUIDE.md)：PyTorch/DDP 项目如何读取数据、写结果和适配多机多卡。
 - [BEVFusion 代码改造](docs/BEVFUSION_CODE_CHANGES.md)：现有两个分支的逐文件补丁。
 - [BEVFusion 端到端操作手册](docs/BEVFUSION_END_TO_END_GUIDE.md)：从全新拉取代码、应用补丁、数据预检到 2×8 卡提交、日志和续训。

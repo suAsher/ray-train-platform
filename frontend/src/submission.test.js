@@ -219,7 +219,8 @@ test('equivalent command renders versioned streaming without internal storage pa
 
   assert.match(command, /--dataset 'labeled-full:latest'/)
   assert.match(command, /--data-mode 'streaming'/)
-  assert.match(command, /--cache-policy 'auto'/)
+  assert.match(command, /--dataset-cache-policy 'auto'/)
+  assert.doesNotMatch(command, /(?:^|\s)--cache-policy/)
   assert.doesNotMatch(command, /--input-(?:space|path)|tos:\/\/|manifest/)
 })
 

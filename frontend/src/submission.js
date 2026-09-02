@@ -52,7 +52,7 @@ export function equivalentSubmitCommand(form) {
     const reference = normalizedDatasetReference(form.datasetRef)
     parts.push(
       `--dataset ${shellArg(`${reference.dataset}:${reference.version}`)}`,
-      `--cache-policy ${shellArg(normalizedDatasetCachePolicy(form.datasetCachePolicy || form.cachePolicy))}`,
+      `--dataset-cache-policy ${shellArg(normalizedDatasetCachePolicy(form.datasetCachePolicy || form.cachePolicy))}`,
     )
   }
   if (trainingEngine === RAY_TRAIN_ENGINE) {

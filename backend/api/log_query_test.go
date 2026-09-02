@@ -121,6 +121,31 @@ func TestQueryJobLogPageAppliesForwardCursorWithoutRepeatingBoundary(t *testing.
 	}
 }
 
+func TestQueryJobLogPageKeepsRawCursorProgressWhenNoiseIsFiltered(t *testing.T) {
+	created := time.Date(2026, 8, 22, 16, 0, 0, 0, time.UTC)
+	provider := &pagedLogProvider{lines: []observability.LogLine{
+		{Timestamp: created.Add(time.Second), Line: "\n"},
+		{Timestamp: created.Add(2 * time.Second), Line: "first visible"},
+		{Timestamp: created.Add(3 * time.Second), Line: "second visible"},
+	}}
+	page, err := QueryJobLogPage(context.Background(), provider, domain.TrainingJob{ID: "job-1", CreatedAt: created}, JobLogPageRequest{
+		Limit: 2, Direction: observability.LogDirectionForward,
+	}, created.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("query page: %v", err)
+	}
+	if len(page.Lines) != 1 || page.Lines[0].Line != "first visible" {
+		t.Fatalf("visible page lines = %+v, want one sanitized line", page.Lines)
+	}
+	if !page.HasMore {
+		t.Fatal("page must preserve raw has-more state after filtering terminal noise")
+	}
+	wantCursor := created.Add(2*time.Second).Format(time.RFC3339Nano) + "~1"
+	if page.NextCursor != wantCursor {
+		t.Fatalf("next cursor = %q, want raw boundary %q", page.NextCursor, wantCursor)
+	}
+}
+
 func TestQueryJobLogPageDoesNotLoseEqualTimestampsAcrossForwardPages(t *testing.T) {
 	created := time.Date(2026, 8, 22, 16, 0, 0, 0, time.UTC)
 	stamp := created.Add(time.Second)
