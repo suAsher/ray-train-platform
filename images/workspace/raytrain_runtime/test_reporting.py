@@ -256,12 +256,124 @@ class ReportMetricsTest(unittest.TestCase):
 
         fake_mlflow.log_metrics.assert_called_once_with(
             {
+                "loss": 0.4,
                 "rank0_worker_dataset_cache_hits_total": 9.0,
                 "rank0_worker_dataset_cache_stale_temp_reclaimed_total": 2.0,
                 "rank0_worker_dataset_prefetch_wait_seconds_total": 1.5,
             },
             step=12,
         )
+
+    def test_rank_zero_starts_governed_mlflow_run_with_safe_provenance(self):
+        fake_mlflow = mock.Mock()
+        fake_mlflow.active_run.return_value = None
+        environment = {
+            "MLFLOW_TRACKING_URI": "http://mlflow-ingest:8080",
+            "MLFLOW_EXPERIMENT_NAME": "raytrain-local",
+            "MLFLOW_RUN_NAME": "job-0123456789abcdef01234567",
+            "RAYTRAIN_JOB_ID": "job-0123456789abcdef01234567",
+            "RAYTRAIN_TENANT_ID": "local",
+            "RAYTRAIN_SUBMITTER_USER_ID": "user-a",
+            "RAYTRAIN_MLFLOW_PROVENANCE": "signed-provenance",
+            "RAYTRAIN_CLUSTER_ATTEMPT": "1",
+            "PLATFORM_DATA_MODE": "streaming",
+            "PLATFORM_DATASET_ID": "s1h-labeled-streaming-v2",
+            "PLATFORM_DATASET_VERSION_ID": "version-20260901",
+            "PLATFORM_DATASET_CACHE_POLICY": "bounded",
+            "PLATFORM_RAY_VERSION": "2.58.0",
+            "PLATFORM_DATASET_MANIFEST_PATH": "/private/manifest.parquet",
+        }
+
+        with mock.patch.dict(os.environ, environment, clear=True), mock.patch.dict(
+            sys.modules, {"mlflow": fake_mlflow}
+        ):
+            client, owned = reporting.start_managed_mlflow_run(
+                {
+                    "optimizer": {"type": "AdamW", "lr": 0.001},
+                    "runner": {"max_epochs": 1},
+                    "seed": 42,
+                    "secret_token": "must-not-leak",
+                },
+                rank=0,
+                world_size=16,
+            )
+
+        self.assertIs(client, fake_mlflow)
+        self.assertTrue(owned)
+        fake_mlflow.start_run.assert_called_once_with(
+            run_name="job-0123456789abcdef01234567",
+            tags={
+                "platform.job_id": "job-0123456789abcdef01234567",
+                "platform.tenant_id": "local",
+                "platform.submitter_user_id": "user-a",
+                "platform.provenance": "signed-provenance",
+                "platform.cluster_attempt": "1",
+                "platform.data_mode": "streaming",
+                "platform.dataset_id": "s1h-labeled-streaming-v2",
+                "platform.dataset_version_id": "version-20260901",
+                "platform.dataset_cache_policy": "bounded",
+                "platform.ray_version": "2.58.0",
+            },
+        )
+        fake_mlflow.log_params.assert_called_once_with(
+            {
+                "optimizer": "AdamW",
+                "learning_rate": 0.001,
+                "max_epochs": 1,
+                "seed": 42,
+                "world_size": 16,
+                "data_mode": "streaming",
+                "dataset_id": "s1h-labeled-streaming-v2",
+                "dataset_version_id": "version-20260901",
+                "dataset_cache_policy": "bounded",
+                "ray_version": "2.58.0",
+            }
+        )
+        recorded = str(fake_mlflow.start_run.call_args) + str(
+            fake_mlflow.log_params.call_args
+        )
+        self.assertNotIn("manifest.parquet", recorded)
+        self.assertNotIn("must-not-leak", recorded)
+
+    def test_managed_mlflow_reuses_existing_run_without_owning_it(self):
+        fake_mlflow = mock.Mock()
+        fake_mlflow.active_run.return_value = object()
+        with mock.patch.dict(
+            os.environ,
+            {"MLFLOW_TRACKING_URI": "http://mlflow-ingest:8080"},
+            clear=True,
+        ), mock.patch.dict(sys.modules, {"mlflow": fake_mlflow}):
+            client, owned = reporting.start_managed_mlflow_run(
+                {}, rank=0, world_size=16
+            )
+
+        self.assertIs(client, fake_mlflow)
+        self.assertFalse(owned)
+        fake_mlflow.start_run.assert_not_called()
+
+    def test_managed_mlflow_retains_run_ownership_when_param_logging_fails(self):
+        fake_mlflow = mock.Mock()
+        fake_mlflow.active_run.return_value = None
+        fake_mlflow.log_params.side_effect = RuntimeError("tracking outage")
+        environment = {
+            "MLFLOW_TRACKING_URI": "http://mlflow-ingest:8080",
+            "MLFLOW_EXPERIMENT_NAME": "raytrain-local",
+            "MLFLOW_RUN_NAME": "job-0123456789abcdef01234567",
+            "RAYTRAIN_JOB_ID": "job-0123456789abcdef01234567",
+            "RAYTRAIN_TENANT_ID": "local",
+            "RAYTRAIN_SUBMITTER_USER_ID": "user-a",
+            "RAYTRAIN_MLFLOW_PROVENANCE": "signed-provenance",
+            "RAYTRAIN_CLUSTER_ATTEMPT": "1",
+        }
+        with mock.patch.dict(os.environ, environment, clear=True), mock.patch.dict(
+            sys.modules, {"mlflow": fake_mlflow}
+        ):
+            client, owned = reporting.start_managed_mlflow_run(
+                {}, rank=0, world_size=16
+            )
+
+        self.assertIs(client, fake_mlflow)
+        self.assertTrue(owned)
 
     def test_nonzero_rank_never_writes_mlflow_metrics(self):
         fake_mlflow = mock.Mock()

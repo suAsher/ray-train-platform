@@ -171,6 +171,41 @@ class MetricHookTest(unittest.TestCase):
         self.assertEqual(reports[0][0]["step"], 2.0)
         self.assertEqual(reports[0][1]["world_rank"], 7)
 
+    def test_rank_zero_owns_one_mlflow_run_for_the_managed_runner(self):
+        runner = _Runner()
+        client = mock.Mock()
+        hook = RayTrainManagedHook(
+            checkpoint_every_epochs=0,
+            rank_fn=lambda: 0,
+            world_size_fn=lambda: 16,
+            mlflow_start_fn=lambda parameters, rank, world_size: (
+                client,
+                True,
+            ),
+            mlflow_finish_fn=mock.Mock(),
+        )
+
+        hook.before_train_iter(runner)
+        hook.before_train_iter(runner)
+        hook.after_run(runner)
+
+        self.assertTrue(hook._mlflow_started)
+        hook._mlflow_finish.assert_called_once_with(client, owned=True, status="FINISHED")
+
+    def test_nonzero_rank_does_not_start_mlflow(self):
+        starter = mock.Mock(return_value=(None, False))
+        hook = RayTrainManagedHook(
+            checkpoint_every_epochs=0,
+            rank_fn=lambda: 3,
+            world_size_fn=lambda: 16,
+            mlflow_start_fn=starter,
+        )
+
+        hook.before_train_iter(_Runner())
+
+        starter.assert_called_once()
+        self.assertTrue(hook._mlflow_started)
+
     def test_reports_process_local_streaming_metrics_without_internal_paths(self):
         from raytrain_runtime.data_metrics import (
             observe_data_metric,

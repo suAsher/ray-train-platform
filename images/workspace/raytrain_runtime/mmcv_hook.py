@@ -18,8 +18,10 @@ from .reporting import (
     RETENTION_INDEX_NAME,
     finalize_checkpoint,
     report_metrics,
+    finish_managed_mlflow_run,
     retain_checkpoints,
     sanitize_metrics,
+    start_managed_mlflow_run,
     validate_checkpoint,
     world_rank,
     world_size,
@@ -666,6 +668,8 @@ class RayTrainManagedHook(_MMCVHook):
         world_size_fn: Callable[[], int] | None = None,
         report_fn: Callable[..., None] | None = None,
         state_writer: Callable[[Any, Path, Mapping[str, Any]], Any] | None = None,
+        mlflow_start_fn: Callable[..., tuple[Any | None, bool]] | None = None,
+        mlflow_finish_fn: Callable[..., None] | None = None,
     ) -> None:
         if int(interval) < 1:
             raise ValueError("interval must be at least 1")
@@ -702,6 +706,20 @@ class RayTrainManagedHook(_MMCVHook):
         self._world_size = world_size_fn if world_size_fn is not None else world_size
         self._report = report_fn if report_fn is not None else report_metrics
         self._write_state = state_writer if state_writer is not None else write_runner_checkpoint
+        self._mlflow_start = (
+            mlflow_start_fn
+            if mlflow_start_fn is not None
+            else start_managed_mlflow_run
+        )
+        self._mlflow_start_injected = mlflow_start_fn is not None
+        self._mlflow_finish = (
+            mlflow_finish_fn
+            if mlflow_finish_fn is not None
+            else finish_managed_mlflow_run
+        )
+        self._mlflow_started = False
+        self._mlflow_client: Any | None = None
+        self._mlflow_owned = False
 
     @staticmethod
     def _epoch(runner: Any) -> int:
@@ -725,7 +743,29 @@ class RayTrainManagedHook(_MMCVHook):
             # Streaming telemetry must remain fail-open for the training loop.
             return metrics
 
+    def _ensure_mlflow(self, runner: Any) -> None:
+        if self._mlflow_started:
+            return
+        rank = int(self._rank())
+        if not self._mlflow_start_injected and (
+            rank != 0 or not os.environ.get("MLFLOW_TRACKING_URI", "").strip()
+        ):
+            self._mlflow_started = True
+            return
+        client, owned = self._mlflow_start(
+            bounded_training_parameters(runner),
+            rank=rank,
+            world_size=int(self._world_size()),
+        )
+        self._mlflow_client = client
+        self._mlflow_owned = bool(owned)
+        self._mlflow_started = True
+
+    def before_train_iter(self, runner: Any) -> None:
+        self._ensure_mlflow(runner)
+
     def after_train_iter(self, runner: Any) -> None:
+        self._ensure_mlflow(runner)
         if self._step(runner) % self.interval:
             return
         self._report(self._metrics(runner), world_rank=int(self._rank()))
@@ -762,6 +802,7 @@ class RayTrainManagedHook(_MMCVHook):
         return metadata
 
     def after_train_epoch(self, runner: Any) -> None:
+        self._ensure_mlflow(runner)
         if not self._checkpoint_due(runner):
             return
         metrics = self._metrics(runner)
@@ -799,6 +840,16 @@ class RayTrainManagedHook(_MMCVHook):
                 keep_best=self.keep_best,
                 best_mode=self.best_mode,
             )
+
+    def after_run(self, runner: Any) -> None:
+        del runner
+        if not self._mlflow_started:
+            return
+        self._mlflow_finish(
+            self._mlflow_client,
+            owned=self._mlflow_owned,
+            status="FINISHED",
+        )
 
 
 if _MMCV_HOOKS is not None:

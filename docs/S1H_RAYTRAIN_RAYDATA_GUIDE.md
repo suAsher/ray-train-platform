@@ -235,6 +235,55 @@ tenant GPU quota exceeded: quota=16 used=16 requested=16
 
 当前生产验收已经看到 Ray Data 在约 7.05 秒内处理 15,228 条训练索引（约 2.16k rows/s），分为 16 个训练 split，并继续进入真实 BEVFusion forward/backward。该证据验证的是全量数据链路和训练执行；1 epoch 的模型精度仍需算法负责人评审。
 
+### 6.1 启动后很慢是否正常
+
+先看 `data_time`，不要只看一个总 ETA。首轮访问某个 shard 时，Worker 需要从版本存储读取 TAR、校验 digest 并写入本机有界 NVMe；同一 shard 再次被使用时才是缓存命中。Ray Data 读取 Parquet 索引很快，并不等于二进制 payload 已全部位于本地。
+
+一次真实 2×8 全量任务的冷启动观测如下。这些数值用于解释阶段，不是固定 SLA：
+
+| 位置 | iteration time | data_time | 判断 |
+| --- | ---: | ---: | --- |
+| 10 / 952 | 12.63 s | 5.95 s | 冷 shard 与 CUDA/DDP 预热叠加 |
+| 60 / 952 | 8.48 s | 2.91 s | 缓存正在升温 |
+| 110 / 952 | 6.31 s | 1.61 s | I/O 等待继续下降 |
+| 已完成任务末段 | 约 0.3～1.8 s | 约 0.001～0.58 s | 热点 shard 已命中；不同 batch 计算量仍有波动 |
+
+正常现象是前几十到一百多步逐步下降。出现以下任一情况时，应在任务详情的“训练性能”中排查，而不是继续盲等：
+
+- 连续 100 步以上 `data_time / time` 仍大于 50%，且没有下降趋势；
+- GPU 利用率长期偏低，同时 source reads、cache misses 或 prefetch wait 持续增长；
+- cache eviction 与 miss 同时快速增长，说明有界缓存过小或 shard 访问局部性差；
+- checksum failure 或 fallback 非零；
+- Ray object-store spilling 很高，同时 Worker 内存长期接近上限。
+
+`bounded` NVMe 缓存和 Ray spilling 解决的是不同问题：前者缓存远端 WebDataset shard，后者在 Ray object store 内存不足时暂存数据 block。提高 spilling 不能替代 shard 缓存，也不应把 10 TB 全量数据预热到 NVMe。平台应依赖并行预取、热点复用和 LRU 淘汰，让训练边读边跑。
+
+### 6.2 在 MLflow 查看训练
+
+新提交的托管任务会由全局 rank 0 自动创建一个 MLflow Run，Run 名就是平台任务 ID。用户不需要在 S1H 代码中填写 Tracking URI、账号或对象存储凭据。
+
+自动记录的内容包括：
+
+- 参数：optimizer、learning rate、epoch、seed、world size；
+- provenance：dataset/version、cache policy、Ray version、cluster attempt；
+- 指标：loss、学习率、iteration time、data_time、epoch，以及评估阶段产生的 mAP/NDS；
+- 数据读取指标：以 `rank0_worker_dataset_*` 命名，明确表示 rank 0 的代表性 Worker 计数；全局逐 Worker 指标仍以任务性能页的 Prometheus 数据为准；
+- 终态：正常结束标记为 `FINISHED`；异常退出由平台终态协调器标记为 `FAILED` 或 `KILLED`。
+
+查看步骤：
+
+1. 打开 Portal 的“实验中心”；
+2. 按平台任务 ID 搜索 Run；
+3. 在曲线中同时选择 `loss`、`time`、`data_time`，判断慢在计算还是数据；
+4. 需要原生 Run 对比时点击“打开 MLflow”；浏览器仍走平台同域鉴权。
+
+若任务已开始但没有 Run：
+
+1. 确认任务使用文档列出的最新不可变镜像 digest；旧镜像中的运行任务不会被追溯补写；
+2. 在日志中搜索 `[raytrain][mlflow]`，该行只给出错误类型，不泄露内部地址或凭据；
+3. 确认任务确实为 `engine=ray-train`，而不是旧 `ray-ddp`；
+4. 将平台任务 ID 提供给管理员，不要在训练代码中手工硬编码 MLflow 地址。
+
 ## 7. 不想训练全量数据怎么办
 
 先区分三种需求：
@@ -295,6 +344,8 @@ Ray Data 和 Rich 会在真实终端中使用 ANSI 控制序列（例如光标�
 | `tenant GPU quota exceeded` | 当前团队配额已被占满；等待资源释放。 |
 | working directory 上传 413 | 检查排除规则和接入层上传上限；不要把数据或 checkpoint 打包。 |
 | 一直没有 Ray Data rows/s | 查看数据版本、manifest 和 Worker 事件；不要重复提交 16 卡任务。 |
+| 前 100 步很慢 | 对比 `time` 与 `data_time` 的下降趋势；冷 shard 正常，持续无下降才需要排查。 |
+| 实验中心没有 MLflow Run | 确认使用最新托管镜像，搜索 `[raytrain][mlflow]`；旧任务不会追溯补写。 |
 | loss/grad 为 NaN | 算法侧检查类别数、学习率、warmup、fp16 loss scale 和梯度裁剪。 |
 | 第二个 2×8 没有排队记录 | 当前实时配额门禁在创建前拒绝；这是现行行为。 |
 | 修改 Python 后是否重建镜像 | 不需要；当前 checkout 会随任务形成不可变代码包。 |

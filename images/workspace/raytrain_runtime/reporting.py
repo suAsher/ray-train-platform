@@ -13,6 +13,7 @@ import threading
 from pathlib import Path, PurePosixPath
 from collections.abc import Mapping
 import shutil
+import sys
 from typing import Any
 import uuid
 
@@ -75,6 +76,7 @@ _CUSTOM_GAUGES_LOCK = threading.Lock()
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SAFE_DNS_VALUE = re.compile(r"^[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?$")
 _SAFE_GPU_IDENTITY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_SAFE_MLFLOW_METRIC_KEY = re.compile(r"^[A-Za-z0-9_./ -]{1,250}$")
 
 
 def _scalar(value: Any) -> float | None:
@@ -463,8 +465,160 @@ def _export_managed_metrics(metrics: Mapping[str, float], rank: int) -> None:
             continue
 
 
-def _export_mlflow_data_metrics(metrics: Mapping[str, float], rank: int) -> None:
-    """Attach honest rank-zero-local counters to the governed MLflow run.
+def _required_mlflow_environment(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise ValueError(f"managed MLflow contract is missing {name}")
+    return value
+
+
+def _optional_mlflow_identifier(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if value and _SAFE_IDENTIFIER.fullmatch(value) is None:
+        raise ValueError("managed MLflow provenance is invalid")
+    return value
+
+
+def _managed_mlflow_provenance() -> dict[str, str]:
+    data_mode = os.environ.get("PLATFORM_DATA_MODE", "").strip()
+    if data_mode not in (
+        "",
+        "mount",
+        "cache",
+        "ray-data",
+        "ray-data-stage",
+        "streaming",
+    ):
+        raise ValueError("managed MLflow provenance is invalid")
+    cache_policy = os.environ.get("PLATFORM_DATASET_CACHE_POLICY", "").strip()
+    if cache_policy not in ("", "off", "auto", "bounded"):
+        raise ValueError("managed MLflow provenance is invalid")
+    values = {
+        "data_mode": data_mode,
+        "dataset_id": _optional_mlflow_identifier("PLATFORM_DATASET_ID"),
+        "dataset_version_id": _optional_mlflow_identifier(
+            "PLATFORM_DATASET_VERSION_ID"
+        ),
+        "dataset_cache_policy": cache_policy,
+        "ray_version": _optional_mlflow_identifier("PLATFORM_RAY_VERSION"),
+    }
+    if data_mode == "streaming" and not all(
+        values[name]
+        for name in (
+            "dataset_id",
+            "dataset_version_id",
+            "dataset_cache_policy",
+            "ray_version",
+        )
+    ):
+        raise ValueError("managed MLflow streaming provenance is incomplete")
+    return {name: value for name, value in values.items() if value}
+
+
+def _mapping_path(value: Any, *names: str) -> Any:
+    current = value
+    for name in names:
+        if not isinstance(current, Mapping):
+            return None
+        current = current.get(name)
+    if current is None or isinstance(current, (str, bool, int, float)):
+        return current
+    return None
+
+
+def start_managed_mlflow_run(
+    training_parameters: Mapping[str, Any], *, rank: int, world_size: int
+) -> tuple[Any | None, bool]:
+    """Create the governed rank-zero run without exposing storage paths.
+
+    MLflow is supplementary observability. A malformed contract or tracking
+    outage is reported to stderr but never interrupts a GPU training run.
+    """
+
+    tracking_uri = os.environ.get("MLFLOW_TRACKING_URI", "").strip()
+    if rank != 0 or not tracking_uri:
+        return None, False
+    client = None
+    owned = False
+    try:
+        import mlflow
+
+        client = mlflow
+        mlflow.set_tracking_uri(tracking_uri)
+        if mlflow.active_run() is not None:
+            return mlflow, False
+        provenance = _managed_mlflow_provenance()
+        cluster_attempt = _required_mlflow_environment("RAYTRAIN_CLUSTER_ATTEMPT")
+        if not cluster_attempt.isdigit() or int(cluster_attempt) < 1:
+            raise ValueError("managed MLflow cluster attempt is invalid")
+        tags = {
+            "platform.job_id": _required_mlflow_environment("RAYTRAIN_JOB_ID"),
+            "platform.tenant_id": _required_mlflow_environment(
+                "RAYTRAIN_TENANT_ID"
+            ),
+            "platform.submitter_user_id": _required_mlflow_environment(
+                "RAYTRAIN_SUBMITTER_USER_ID"
+            ),
+            "platform.provenance": _required_mlflow_environment(
+                "RAYTRAIN_MLFLOW_PROVENANCE"
+            ),
+            "platform.cluster_attempt": cluster_attempt,
+            **{"platform." + key: value for key, value in provenance.items()},
+        }
+        mlflow.set_experiment(_required_mlflow_environment("MLFLOW_EXPERIMENT_NAME"))
+        mlflow.start_run(
+            run_name=_required_mlflow_environment("MLFLOW_RUN_NAME"), tags=tags
+        )
+        owned = True
+        candidate_params = {
+            "optimizer": _mapping_path(training_parameters, "optimizer", "type"),
+            "learning_rate": _mapping_path(
+                training_parameters, "optimizer", "lr"
+            ),
+            "max_epochs": _mapping_path(
+                training_parameters, "runner", "max_epochs"
+            ),
+            "seed": _mapping_path(training_parameters, "seed"),
+            "world_size": int(world_size),
+            **provenance,
+        }
+        mlflow.log_params(
+            {
+                key: value
+                for key, value in candidate_params.items()
+                if value is not None
+            }
+        )
+        return mlflow, owned
+    except Exception as exc:
+        print(
+            f"[raytrain][mlflow] run unavailable: {type(exc).__name__}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return client, owned
+
+
+def finish_managed_mlflow_run(
+    client: Any | None, *, owned: bool, status: str
+) -> None:
+    """Finish only the run created by this managed Hook."""
+
+    if client is None or not owned:
+        return
+    try:
+        if client.active_run() is not None:
+            client.end_run(status=status)
+    except Exception as exc:
+        print(
+            f"[raytrain][mlflow] run finalization unavailable: {type(exc).__name__}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
+def _export_mlflow_metrics(metrics: Mapping[str, float], rank: int) -> None:
+    """Attach training scalars and honest rank-zero-local counters to MLflow.
 
     Process-local counters cannot be described as job totals. Prometheus keeps
     the authoritative per-rank series and platform-wide aggregate; MLflow uses
@@ -474,11 +628,18 @@ def _export_mlflow_data_metrics(metrics: Mapping[str, float], rank: int) -> None
 
     if rank != 0 or not os.environ.get("MLFLOW_TRACKING_URI", "").strip():
         return
-    selected = {
-        _MLFLOW_DATA_METRICS[key]: value
-        for key, value in metrics.items()
-        if key in _MLFLOW_DATA_METRICS
-    }
+    selected: dict[str, float] = {}
+    for key, value in sorted(metrics.items(), key=lambda item: item[0]):
+        metric_key = key.strip()
+        if metric_key == "step":
+            continue
+        if metric_key in _MLFLOW_DATA_METRICS:
+            metric_key = _MLFLOW_DATA_METRICS[metric_key]
+        if _SAFE_MLFLOW_METRIC_KEY.fullmatch(metric_key) is None:
+            continue
+        selected[metric_key] = value
+        if len(selected) >= 128:
+            break
     if not selected:
         return
     step_value = metrics.get("step", 0.0)
@@ -517,7 +678,7 @@ def report_metrics(
     api = train_api if train_api is not None else _load_train_api()
     rank = int(api.get_context().get_world_rank()) if world_rank is None else int(world_rank)
     _export_managed_metrics(clean, rank)
-    _export_mlflow_data_metrics(clean, rank)
+    _export_mlflow_metrics(clean, rank)
     checkpoint = None
     checkpoint_error = None
     if checkpoint_dir is not None and rank == 0:
