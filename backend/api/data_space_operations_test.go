@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
 	"ray-train-platform-backend/objectstore"
@@ -246,17 +247,69 @@ func TestDataSpaceUploadReportsUnavailableWhenObjectStorageIsUnavailable(t *test
 	}
 }
 
-func TestDataSpaceDownloadRouteIsNotRegistered(t *testing.T) {
+func downloadDataSpaceFixture(t *testing.T, roles ...string) (*fakeDataSpaceObjectStore, *gin.Engine) {
+	t.Helper()
+	if len(roles) == 0 {
+		roles = []string{domain.RoleEngineer}
+	}
 	store := &fakeDataSpaceObjectStore{readContent: "weights", readInfo: objectstore.ArtifactRead{SizeBytes: 7, ContentType: "application/octet-stream"}}
 	handler := NewHandler(&fakeJobRepository{}, Options{DataSpaces: &fakeDataSpaceStore{}, DataObjectStore: store})
-	router := dataSpaceRouter(handler, auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal})
+	router := dataSpaceRouter(handler, auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: roles, AuthType: auth.AuthTypeLocal})
+	return store, router
+}
 
+func getDataSpaceDownload(router *gin.Engine, target string) *httptest.ResponseRecorder {
 	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/data-spaces/my-runs/download?path=job-a/final.bin", nil))
-	if response.Code != http.StatusNotFound {
-		t.Fatalf("data download endpoint must not be exposed: status=%d body=%q", response.Code, response.Body.String())
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, nil))
+	return response
+}
+
+// Training runs pick their own output directory, so a checkpoint is frequently
+// reachable only by browsing personal storage. Owners may take those weights.
+func TestDataSpaceDownloadStreamsCheckpointFromPersonalSpace(t *testing.T) {
+	store, router := downloadDataSpaceFixture(t)
+
+	response := getDataSpaceDownload(router, "/api/v1/data-spaces/my-runs/download?path=job-a/epoch_1.pth")
+
+	if response.Code != http.StatusOK || response.Body.String() != "weights" {
+		t.Fatalf("owner must receive the checkpoint: status=%d body=%q", response.Code, response.Body.String())
+	}
+	if store.downloadPath != "job-a/epoch_1.pth" {
+		t.Fatalf("download must read the requested path: %q", store.downloadPath)
+	}
+	if disposition := response.Header().Get("Content-Disposition"); disposition != `attachment; filename="epoch_1.pth"` {
+		t.Fatalf("checkpoint must be saved rather than rendered: %q", disposition)
+	}
+}
+
+// Opening personal storage must not turn into a general file export: the space
+// still holds ordinary training data that has no business leaving the platform.
+func TestDataSpaceDownloadRejectsNonCheckpointFile(t *testing.T) {
+	store, router := downloadDataSpaceFixture(t)
+
+	response := getDataSpaceDownload(router, "/api/v1/data-spaces/my-runs/download?path=job-a/final.bin")
+
+	if response.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("only checkpoints may be downloaded: status=%d body=%q", response.Code, response.Body.String())
 	}
 	if store.downloadRoot != "" || store.downloadPath != "" {
-		t.Fatalf("disabled download route must not read object storage: root=%q path=%q", store.downloadRoot, store.downloadPath)
+		t.Fatalf("a rejected download must not read object storage: root=%q path=%q", store.downloadRoot, store.downloadPath)
+	}
+}
+
+// Governed data stays closed even for the administrators who may publish into
+// it, and even when the requested file happens to carry a checkpoint suffix.
+func TestDataSpaceDownloadRejectsGovernedSpaces(t *testing.T) {
+	for _, space := range []string{"team-shared", "public"} {
+		store, router := downloadDataSpaceFixture(t, domain.RoleEngineer, domain.RoleTenantAdmin, domain.RoleSuperAdmin)
+
+		response := getDataSpaceDownload(router, "/api/v1/data-spaces/"+space+"/download?path=weights/epoch_1.pth")
+
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("%s must not be downloadable: status=%d body=%q", space, response.Code, response.Body.String())
+		}
+		if store.downloadRoot != "" || store.downloadPath != "" {
+			t.Fatalf("%s must not be read from object storage: root=%q path=%q", space, store.downloadRoot, store.downloadPath)
+		}
 	}
 }

@@ -103,6 +103,13 @@
             <span v-else class="min-w-0 flex-1 truncate text-sm text-slate-200">{{ entry.name }}</span>
             <span class="hidden w-24 text-right text-xs text-slate-500 sm:inline">{{ entry.type === 'file' ? formatBytes(entry.sizeBytes) : '目录' }}</span>
             <span class="hidden w-36 text-right text-xs text-slate-500 md:inline">{{ entry.lastModified ? formatDate(entry.lastModified) : '—' }}</span>
+            <el-button
+              v-if="canDownloadEntry(entry)"
+              text
+              size="small"
+              :loading="downloading === entry.name"
+              @click="downloadEntry(entry.name)"
+            >下载</el-button>
           </div>
         </div>
         <div v-else class="mt-5 rounded-xl border border-dashed border-slate-700 bg-slate-950/40 p-5 text-sm leading-6 text-slate-500">
@@ -136,7 +143,8 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { createDataSpaceFolder, createDataSpaceUpload, createWorkspaceSnapshot, fetchDataSpaceEntries, fetchDataSpaces, uploadDataSpaceFile } from '../../api/dataSpaces'
+import { createDataSpaceFolder, createDataSpaceUpload, createWorkspaceSnapshot, downloadDataSpaceFile, fetchDataSpaceEntries, fetchDataSpaces, uploadDataSpaceFile } from '../../api/dataSpaces'
+import { isCheckpointFile, saveBlobAsFile } from '../../checkpointDownload'
 import { folderUploadRelativePath } from '../../api/dataSpaceUpload'
 import { completeSourceArtifact, createSourceArtifact, uploadSourceArtifact } from '../../api/sourceArtifacts'
 import { canManageDataSpace, canMutateDataSpace, canUseDataSpaceForTraining, dataPageSpaces, dataSpaceAccessLabel, dataSpaceAccessType } from '../../dataSpaceActions'
@@ -155,6 +163,7 @@ const spaces = ref([])
 const selectedSpace = ref(null)
 const currentPath = ref('')
 const entries = ref([])
+const downloading = ref('')
 const fileInput = ref(null)
 const folderInput = ref(null)
 const archiveInput = ref(null)
@@ -216,6 +225,25 @@ const selectSpace = async (space) => {
   currentPath.value = ''
   entries.value = []
   if (space.browseEnabled) await loadEntries()
+}
+
+// Only weights, and only in a space the user owns. Governed team/public roots
+// are read-only here and the API refuses them, so no button is offered there.
+function canDownloadEntry(entry) {
+  return entry?.type === 'file' && canMutate.value && isCheckpointFile(entry.name)
+}
+
+async function downloadEntry(name) {
+  if (downloading.value) return
+  downloading.value = name
+  const relativePath = currentPath.value ? `${currentPath.value}/${name}` : name
+  try {
+    saveBlobAsFile(await downloadDataSpaceFile(selectedSpace.value.id, relativePath), name)
+  } catch (requestError) {
+    ElMessage.error(requestError.message || '下载失败')
+  } finally {
+    downloading.value = ''
+  }
 }
 
 const loadEntries = async () => {

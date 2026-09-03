@@ -63,6 +63,7 @@ func (h *Handler) RegisterDataSpaceRoutes(group *gin.RouterGroup) {
 	group.GET("/data-spaces", h.listDataSpaces)
 	group.GET("/data-spaces/:id/directories", h.listDataSpaceDirectories)
 	group.GET("/data-spaces/:id/entries", h.listDataSpaceEntries)
+	group.GET("/data-spaces/:id/download", h.downloadDataSpaceFile)
 	group.POST("/data-spaces/:id/folders", h.createDataSpaceFolder)
 	group.POST("/data-spaces/:id/uploads", h.createDataSpaceUpload)
 }

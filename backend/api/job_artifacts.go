@@ -122,6 +122,20 @@ func downloadPolicy(relativePath string) (contentType string, allowed bool) {
 	}
 }
 
+// writeCheckpointDownloadHeaders is shared by the two places a caller may pull
+// their own weights from: a task's artifact browser and their personal data
+// space. Both stream the same kind of file and must agree on how a browser is
+// told to save it rather than render it.
+func writeCheckpointDownloadHeaders(c *gin.Context, contentType, fileName string, sizeBytes int64) {
+	c.Header("Cache-Control", "no-store")
+	c.Header("Content-Type", contentType)
+	c.Header("Content-Disposition", "attachment; filename=\""+fileName+"\"")
+	c.Header("X-Content-Type-Options", "nosniff")
+	if sizeBytes > 0 {
+		c.Header("Content-Length", strconv.FormatInt(sizeBytes, 10))
+	}
+}
+
 // downloadJobArtifact streams a trained checkpoint back to its owner.
 //
 // The body is copied straight from the object store rather than buffered, so a
@@ -162,13 +176,7 @@ func (h *Handler) downloadJobArtifact(c *gin.Context) {
 	}
 	defer artifact.Content.Close()
 
-	c.Header("Cache-Control", "no-store")
-	c.Header("Content-Type", contentType)
-	c.Header("Content-Disposition", "attachment; filename=\""+path.Base(relativePath)+"\"")
-	c.Header("X-Content-Type-Options", "nosniff")
-	if artifact.SizeBytes > 0 {
-		c.Header("Content-Length", strconv.FormatInt(artifact.SizeBytes, 10))
-	}
+	writeCheckpointDownloadHeaders(c, contentType, path.Base(relativePath), artifact.SizeBytes)
 	c.Status(http.StatusOK)
 	if _, err := io.Copy(c.Writer, artifact.Content); err != nil {
 		// The status line is already sent, so the truncated body is the only
@@ -233,6 +241,9 @@ func (h *Handler) jobArtifactRoot(c *gin.Context, principal auth.Principal, job 
 	if root, ok := h.logicalJobArtifactRoot(c, principal, job); ok {
 		return root, true
 	}
+	if root, ok := h.personalStorageJobArtifactRoot(c, principal, job); ok {
+		return root, true
+	}
 	if job != nil && job.Spec.ResolvedDataMounts.Output != nil {
 		if job.UserID != principal.Subject {
 			h.writeError(c, http.StatusForbidden, "ARTIFACTS_FORBIDDEN", "personal training artifacts belong only to the submitting user")
@@ -269,6 +280,82 @@ func (h *Handler) logicalJobArtifactRoot(c *gin.Context, principal auth.Principa
 		return "", false
 	}
 	return root, true
+}
+
+// personalStorageJobArtifactRoot covers the tasks that write results straight
+// into the submitter's own storage instead of the managed runs root. Those runs
+// choose their own output directory, so the two roots above never match them and
+// their weights were unreachable from the task page.
+//
+// The prefix is rebuilt from the caller's own spaces rather than from the job
+// record, so a task can only ever resolve to storage its submitter already owns.
+func (h *Handler) personalStorageJobArtifactRoot(c *gin.Context, principal auth.Principal, job *domain.TrainingJob) (string, bool) {
+	if job == nil || job.UserID != principal.Subject {
+		return "", false
+	}
+	output := job.Spec.ResolvedStorage.Output
+	if output == nil || output.ReadOnly {
+		return "", false
+	}
+	spaces, err := h.personalDataSpacesForPrincipal(c.Request.Context(), principal)
+	if err != nil {
+		return "", false
+	}
+	space, relativePath, found := personalSpaceForOutputMount(spaces, output.MountPath, output.RelativePath)
+	if !found {
+		return "", false
+	}
+	root := strings.TrimSuffix(space.RootPrefix, "/")
+	if relativePath != "" {
+		root += "/" + relativePath
+	}
+	if _, err := domain.NormalizeStorageRelativePath(root); err != nil {
+		return "", false
+	}
+	return root, true
+}
+
+// personalSpaceForOutputMount maps a task's persisted output location back onto
+// the space that contains it. The location is rebuilt the same way the platform
+// builds PLATFORM_OUTPUT_PATH for the training container, because that is the
+// directory the run actually wrote to.
+//
+// Only the caller's own writable spaces are considered: read-only team, public
+// and IDC roots must never become reachable through a task page. The longest
+// matching mount wins so a nested space is preferred over its parent.
+func personalSpaceForOutputMount(spaces []domain.DataSpace, mountPath, mountRelativePath string) (domain.DataSpace, string, bool) {
+	location := strings.TrimSuffix(strings.TrimSpace(mountPath), "/")
+	if location == "" {
+		return domain.DataSpace{}, "", false
+	}
+	if suffix := strings.Trim(strings.TrimSpace(mountRelativePath), "/"); suffix != "" {
+		location += "/" + suffix
+	}
+	best := domain.DataSpace{}
+	bestRelative := ""
+	found := false
+	for _, space := range spaces {
+		if !domain.IsWritableDataSpace(space.ID) || space.ReadOnly || space.Provider != domain.StorageProviderTOS || !space.BrowseEnabled {
+			continue
+		}
+		mount := strings.TrimSuffix(space.MountPath, "/")
+		if mount == "" || (location != mount && !strings.HasPrefix(location, mount+"/")) {
+			continue
+		}
+		if found && len(mount) <= len(strings.TrimSuffix(best.MountPath, "/")) {
+			continue
+		}
+		relative := strings.Trim(strings.TrimPrefix(location, mount), "/")
+		if relative != "" {
+			normalized, err := domain.NormalizeStorageRelativePath(relative)
+			if err != nil {
+				continue
+			}
+			relative = normalized
+		}
+		best, bestRelative, found = space, relative, true
+	}
+	return best, bestRelative, found
 }
 
 func (h *Handler) legacyJobArtifactRoot(c *gin.Context, principal auth.Principal, job *domain.TrainingJob) (string, bool) {

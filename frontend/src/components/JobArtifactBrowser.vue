@@ -34,7 +34,7 @@
           <div v-if="entry.type === 'file'" class="flex shrink-0 gap-1">
             <el-button text size="small" @click="preview(entry.name)">预览</el-button>
             <el-button
-              v-if="isCheckpoint(entry.name)"
+              v-if="isCheckpointFile(entry.name)"
               text
               size="small"
               :loading="downloading === entry.name"
@@ -65,6 +65,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 
 import { downloadJobArtifact, fetchJobArtifactPreview, fetchJobArtifacts } from '../api/jobArtifacts'
+import { isCheckpointFile, saveBlobAsFile } from '../checkpointDownload'
 
 const props = defineProps({ jobId: { type: String, required: true } })
 
@@ -82,33 +83,14 @@ const previewData = ref(null)
 const downloading = ref('')
 let requestSequence = 0
 
-// Mirrors the server-side download policy: only trained weights are offered,
-// so the button never appears for a file the API will reject.
-const CHECKPOINT_EXTENSIONS = ['.pth', '.pt', '.ckpt', '.onnx', '.safetensors']
-
-function isCheckpoint(name) {
-  const lower = String(name || '').toLowerCase()
-  return CHECKPOINT_EXTENSIONS.some((extension) => lower.endsWith(extension))
-}
-
 async function download(name) {
   if (downloading.value) return
   downloading.value = name
   const relativePath = currentPath.value ? `${currentPath.value}/${name}` : name
   try {
-    const blob = await downloadJobArtifact(props.jobId, relativePath)
-    const objectURL = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = objectURL
-    link.download = name
-    document.body.appendChild(link)
-    link.click()
-    link.remove()
-    // Revoking in the same tick can abort the download the click just started,
-    // so release the blob once the browser has taken it.
-    setTimeout(() => URL.revokeObjectURL(objectURL), 0)
-  } catch (error) {
-    ElMessage.error(error.message || '下载失败')
+    saveBlobAsFile(await downloadJobArtifact(props.jobId, relativePath), name)
+  } catch (requestError) {
+    ElMessage.error(requestError.message || '下载失败')
   } finally {
     downloading.value = ''
   }

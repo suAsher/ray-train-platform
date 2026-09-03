@@ -144,6 +144,55 @@ func downloadHandlerFixture() (*fakeArtifactReader, *Handler) {
 	return reader, NewHandler(repository, Options{StorageAssets: assets, ArtifactReader: reader})
 }
 
+// A task that writes into the submitter's own storage instead of the managed
+// runs root still owns browsable artifacts. Its output directory is chosen by
+// the run, so the prefix has to be rebuilt from the caller's personal space.
+func TestJobArtifactRootResolvesPersonalStorageOutput(t *testing.T) {
+	job := domain.TrainingJob{
+		ID: "job-a", TenantID: "tenant-a", UserID: "user-a",
+		Spec: domain.JobSpec{ResolvedStorage: domain.ResolvedStorageMounts{Output: &domain.ResolvedStorageMount{
+			ClaimName: "tos-personal", RelativePath: "bevfusion_model_stage/run-1",
+			MountPath: domain.MyStorageMountPath, ReadOnly: false,
+		}}},
+	}
+	reader := &fakeArtifactReader{content: "weights", info: objectstore.ArtifactRead{SizeBytes: 7, ContentType: "application/octet-stream"}}
+	handler := NewHandler(&fakeJobRepository{jobs: []domain.TrainingJob{job}}, Options{DataSpaces: &fakeDataSpaceStore{}, ArtifactReader: reader})
+	router := artifactRouter(handler, auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal})
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/jobs/job-a/artifacts/download?path=run_dir/epoch_1.pth", nil))
+
+	if response.Code != http.StatusOK || response.Body.String() != "weights" {
+		t.Fatalf("personal-storage output must be downloadable: status=%d body=%q", response.Code, response.Body.String())
+	}
+	if !strings.HasSuffix(reader.taskRoot, "/bevfusion_model_stage/run-1") {
+		t.Fatalf("task root must resolve to the run output directory: %q", reader.taskRoot)
+	}
+	if !strings.HasPrefix(reader.taskRoot, "ray-train/tenants/tenant-a/users/") {
+		t.Fatalf("task root must stay inside the caller's own tenant space: %q", reader.taskRoot)
+	}
+	if reader.path != "run_dir/epoch_1.pth" {
+		t.Fatalf("download must read the requested task-relative path: %q", reader.path)
+	}
+}
+
+// The output mount is persisted, but it must never let a task reach storage its
+// submitter does not own; read-only roots stay unreachable through a task page.
+func TestJobArtifactRootRejectsReadOnlyAndForeignOutput(t *testing.T) {
+	spaces, err := domain.PersonalDataSpacesFor("tenant-a", "user-a")
+	if err != nil {
+		t.Fatalf("build personal spaces: %v", err)
+	}
+	for _, mountPath := range []string{domain.TeamStorageMountPath, domain.PublicStorageMountPath, "/mnt/storage/elsewhere"} {
+		if _, _, found := personalSpaceForOutputMount(spaces, mountPath, "run-1"); found {
+			t.Fatalf("%s must not resolve to a personal space", mountPath)
+		}
+	}
+	if _, _, found := personalSpaceForOutputMount(spaces, domain.MyStorageMountPath, "../escape"); found {
+		t.Fatalf("a traversing output path must not resolve")
+	}
+}
+
 func TestJobArtifactDownloadStreamsCheckpointToOwner(t *testing.T) {
 	reader, handler := downloadHandlerFixture()
 	router := artifactRouter(handler, auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal})

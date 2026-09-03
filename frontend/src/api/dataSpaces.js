@@ -1,8 +1,8 @@
-import { apiGet, apiPost } from './client.js'
-import { dataSpaceDirectoriesPath, dataSpaceEntriesPath, dataSpacesPath, workspaceSnapshotsPath } from './dataSpacesPaths.js'
+import { apiDownload, apiGet, apiPost } from './client.js'
+import { dataSpaceDirectoriesPath, dataSpaceDownloadPath, dataSpaceEntriesPath, dataSpacesPath, workspaceSnapshotsPath } from './dataSpacesPaths.js'
 import { uploadDataSpaceFile } from './dataSpaceUpload.js'
 
-export { dataSpaceDirectoriesPath, dataSpaceEntriesPath, dataSpacesPath, workspaceSnapshotsPath }
+export { dataSpaceDirectoriesPath, dataSpaceDownloadPath, dataSpaceEntriesPath, dataSpacesPath, workspaceSnapshotsPath }
 
 export function fetchDataSpaces() {
   return apiGet(dataSpacesPath())
@@ -33,3 +33,9 @@ export function createWorkspaceSnapshot(sourcePath = '') {
 }
 
 export { uploadDataSpaceFile }
+
+// Checkpoints are binary and the API needs the bearer token, so a plain link
+// cannot be used: fetch the body and hand the browser a blob.
+export function downloadDataSpaceFile(spaceId, path) {
+  return apiDownload(dataSpaceDownloadPath(spaceId, path))
+}

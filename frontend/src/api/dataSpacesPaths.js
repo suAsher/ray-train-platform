@@ -10,6 +10,10 @@ export function dataSpaceEntriesPath(spaceId, path = '', cursor = '') {
 	return dataSpacePath(spaceId, 'entries', path, cursor)
 }
 
+export function dataSpaceDownloadPath(spaceId, path = '') {
+	return dataSpacePath(spaceId, 'download', path)
+}
+
 export function workspaceSnapshotsPath(limit = '') {
   const query = new URLSearchParams()
   if (String(limit || '').trim()) query.set('limit', String(limit).trim())
