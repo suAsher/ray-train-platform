@@ -134,23 +134,61 @@ func TestJobArtifactPreviewReturnsOnlySafeTaskRelativeContent(t *testing.T) {
 	}
 }
 
-func TestJobArtifactDownloadRouteIsNotRegistered(t *testing.T) {
+func downloadHandlerFixture() (*fakeArtifactReader, *Handler) {
 	repository := &fakeJobRepository{jobs: []domain.TrainingJob{artifactJob("job-a", "tenant-a")}}
 	assets := &fakeStorageAssetStore{assets: []domain.StorageAsset{{
 		ID: "outputs", Name: "训练产物", Kind: domain.StorageAssetOutput, Provider: domain.StorageProviderTOS,
 		ClaimName: "tos-outputs", RootPrefix: "platform/tenant-a/outputs", BrowseEnabled: true,
 	}}}
 	reader := &fakeArtifactReader{content: "weights", info: objectstore.ArtifactRead{SizeBytes: 7, ContentType: "application/octet-stream"}}
-	handler := NewHandler(repository, Options{StorageAssets: assets, ArtifactReader: reader})
+	return reader, NewHandler(repository, Options{StorageAssets: assets, ArtifactReader: reader})
+}
+
+func TestJobArtifactDownloadStreamsCheckpointToOwner(t *testing.T) {
+	reader, handler := downloadHandlerFixture()
 	router := artifactRouter(handler, auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal})
 
 	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/jobs/job-a/artifacts/download?path=checkpoints/final.bin", nil))
-	if response.Code != http.StatusNotFound {
-		t.Fatalf("artifact download endpoint must not be exposed: status=%d body=%q", response.Code, response.Body.String())
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/jobs/job-a/artifacts/download?path=run_dir/epoch_20.pth", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("approved download must succeed: status=%d body=%q", response.Code, response.Body.String())
 	}
-	if reader.taskRoot != "" || reader.path != "" {
-		t.Fatalf("disabled artifact download route must not read object storage: root=%q path=%q", reader.taskRoot, reader.path)
+	if response.Body.String() != "weights" {
+		t.Fatalf("download must stream the stored object: body=%q", response.Body.String())
+	}
+	if got := response.Header().Get("Content-Disposition"); got != `attachment; filename="epoch_20.pth"` {
+		t.Fatalf("download must be sent as an attachment: %q", got)
+	}
+	if reader.path != "run_dir/epoch_20.pth" {
+		t.Fatalf("download must read the requested task-relative path: %q", reader.path)
+	}
+}
+
+func TestJobArtifactDownloadRejectsNonCheckpointFile(t *testing.T) {
+	reader, handler := downloadHandlerFixture()
+	router := artifactRouter(handler, auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal})
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/jobs/job-a/artifacts/download?path=run_dir/train.log", nil))
+	if response.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("download must be limited to checkpoints: status=%d", response.Code)
+	}
+	if reader.path != "" {
+		t.Fatalf("a rejected content type must not read object storage: %q", reader.path)
+	}
+}
+
+func TestJobArtifactDownloadRejectsOtherTenant(t *testing.T) {
+	reader, handler := downloadHandlerFixture()
+	router := artifactRouter(handler, auth.Principal{Subject: "user-b", TenantID: "tenant-b", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal})
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/jobs/job-a/artifacts/download?path=run_dir/epoch_20.pth", nil))
+	if response.Code == http.StatusOK {
+		t.Fatalf("a caller must not reach another tenant's checkpoints")
+	}
+	if reader.path != "" {
+		t.Fatalf("cross-tenant download must not read object storage: %q", reader.path)
 	}
 }
 

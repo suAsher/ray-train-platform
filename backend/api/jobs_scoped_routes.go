@@ -21,6 +21,7 @@ func (h *Handler) registerTrainingRoutes(group *gin.RouterGroup) {
 	read.POST("/jobs/:id/dashboard-access", h.issueJobDashboardAccess)
 	read.GET("/jobs/:id/artifacts", h.listJobArtifacts)
 	read.GET("/jobs/:id/artifacts/preview", h.previewJobArtifact)
+	read.GET("/jobs/:id/artifacts/download", h.downloadJobArtifact)
 
 	write := group.Group("")
 	write.Use(auth.RequireScopes(domain.PATScopeJobsWrite))

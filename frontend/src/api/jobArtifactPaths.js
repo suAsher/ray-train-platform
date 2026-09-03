@@ -18,3 +18,7 @@ export function jobArtifactsPath(jobId, path = '', cursor = '', limit = 0) {
 export function jobArtifactPreviewPath(jobId, path) {
   return `${jobPath(jobId)}/preview${artifactQuery(path)}`
 }
+
+export function jobArtifactDownloadPath(jobId, path) {
+  return `${jobPath(jobId)}/download${artifactQuery(path)}`
+}

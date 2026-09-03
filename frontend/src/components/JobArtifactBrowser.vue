@@ -33,6 +33,13 @@
           <span class="hidden w-36 text-right text-xs text-slate-500 md:inline">{{ entry.lastModified ? formatDate(entry.lastModified) : '—' }}</span>
           <div v-if="entry.type === 'file'" class="flex shrink-0 gap-1">
             <el-button text size="small" @click="preview(entry.name)">预览</el-button>
+            <el-button
+              v-if="isCheckpoint(entry.name)"
+              text
+              size="small"
+              :loading="downloading === entry.name"
+              @click="download(entry.name)"
+            >下载</el-button>
           </div>
         </div>
       </div>
@@ -57,7 +64,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 
-import { fetchJobArtifactPreview, fetchJobArtifacts } from '../api/jobArtifacts'
+import { downloadJobArtifact, fetchJobArtifactPreview, fetchJobArtifacts } from '../api/jobArtifacts'
 
 const props = defineProps({ jobId: { type: String, required: true } })
 
@@ -72,7 +79,40 @@ const previewLoading = ref(false)
 const previewError = ref('')
 const previewTitle = ref('')
 const previewData = ref(null)
+const downloading = ref('')
 let requestSequence = 0
+
+// Mirrors the server-side download policy: only trained weights are offered,
+// so the button never appears for a file the API will reject.
+const CHECKPOINT_EXTENSIONS = ['.pth', '.pt', '.ckpt', '.onnx', '.safetensors']
+
+function isCheckpoint(name) {
+  const lower = String(name || '').toLowerCase()
+  return CHECKPOINT_EXTENSIONS.some((extension) => lower.endsWith(extension))
+}
+
+async function download(name) {
+  if (downloading.value) return
+  downloading.value = name
+  const relativePath = currentPath.value ? `${currentPath.value}/${name}` : name
+  try {
+    const blob = await downloadJobArtifact(props.jobId, relativePath)
+    const objectURL = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = objectURL
+    link.download = name
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    // Revoking in the same tick can abort the download the click just started,
+    // so release the blob once the browser has taken it.
+    setTimeout(() => URL.revokeObjectURL(objectURL), 0)
+  } catch (error) {
+    ElMessage.error(error.message || '下载失败')
+  } finally {
+    downloading.value = ''
+  }
+}
 
 const breadcrumbs = computed(() => currentPath.value ? currentPath.value.split('/') : [])
 const imagePreviewURL = computed(() => {

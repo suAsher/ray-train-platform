@@ -107,6 +107,76 @@ func (h *Handler) previewJobArtifact(c *gin.Context) {
 	h.writeSuccess(c, http.StatusOK, map[string]string{"kind": kind, "contentType": contentType, "content": base64.StdEncoding.EncodeToString(contents)})
 }
 
+// downloadPolicy decides which artifacts may leave the platform. Preview keeps
+// its own allowlist for what a browser can render; download is about model
+// weights, so it admits the checkpoint formats and nothing else. Anything a
+// user only wants to look at should stay on the preview path.
+//
+// Access is the same as browsing: a caller reaches only their own task output.
+func downloadPolicy(relativePath string) (contentType string, allowed bool) {
+	switch strings.ToLower(path.Ext(relativePath)) {
+	case ".pth", ".pt", ".ckpt", ".onnx", ".safetensors":
+		return "application/octet-stream", true
+	default:
+		return "", false
+	}
+}
+
+// downloadJobArtifact streams a trained checkpoint back to its owner.
+//
+// The body is copied straight from the object store rather than buffered, so a
+// multi-gigabyte checkpoint does not sit in backend memory. Ownership and the
+// task output root are resolved exactly as they are for browsing, so a caller
+// still cannot reach another tenant's artifacts or escape the task prefix, and
+// the object key never crosses the HTTP boundary.
+func (h *Handler) downloadJobArtifact(c *gin.Context) {
+	principal, ok := h.principal(c)
+	if !ok {
+		h.writeError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "authentication is required")
+		return
+	}
+	job, ok := h.authorizedArtifactJob(c, principal)
+	if !ok {
+		return
+	}
+	if h.artifactReader == nil {
+		h.writeError(c, http.StatusServiceUnavailable, "ARTIFACTS_UNAVAILABLE", "training artifacts are not configured")
+		return
+	}
+	taskRoot, ok := h.jobArtifactRoot(c, principal, job)
+	if !ok {
+		return
+	}
+	relativePath, ok := h.artifactFilePath(c)
+	if !ok {
+		return
+	}
+	contentType, allowed := downloadPolicy(relativePath)
+	if !allowed {
+		h.writeError(c, http.StatusUnsupportedMediaType, "ARTIFACT_DOWNLOAD_UNSUPPORTED", "only trained checkpoints may be downloaded")
+		return
+	}
+	artifact, ok := h.readArtifact(c, taskRoot, relativePath)
+	if !ok {
+		return
+	}
+	defer artifact.Content.Close()
+
+	c.Header("Cache-Control", "no-store")
+	c.Header("Content-Type", contentType)
+	c.Header("Content-Disposition", "attachment; filename=\""+path.Base(relativePath)+"\"")
+	c.Header("X-Content-Type-Options", "nosniff")
+	if artifact.SizeBytes > 0 {
+		c.Header("Content-Length", strconv.FormatInt(artifact.SizeBytes, 10))
+	}
+	c.Status(http.StatusOK)
+	if _, err := io.Copy(c.Writer, artifact.Content); err != nil {
+		// The status line is already sent, so the truncated body is the only
+		// signal available to the client.
+		return
+	}
+}
+
 func (h *Handler) authorizedArtifactJob(c *gin.Context, principal auth.Principal) (*domain.TrainingJob, bool) {
 	job, err := h.repository.Get(c.Request.Context(), principal.TenantID, c.Param("id"))
 	if err != nil {
