@@ -29,7 +29,7 @@ type launchWorkspaceRequest struct {
 	Name       string `json:"name"`
 	Image      string `json:"image"`
 	SnapshotID string `json:"snapshotId"`
-	GPUCount   int    `json:"gpuCount"`
+	GPUCount   *int   `json:"gpuCount"`
 }
 
 func (h *Handler) launchWorkspace(c *gin.Context) {
@@ -51,11 +51,15 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "INVALID_JSON", "request body is invalid")
 		return
 	}
-	if request.GPUCount == 0 {
-		request.GPUCount = 1
+	// A pointer separates "the caller did not say" from "the caller asked for
+	// none". Zero is a real choice now - a debug session while every GPU is busy
+	// - so it must not be read as an unset field and quietly turned into one GPU.
+	gpuCount := 1
+	if request.GPUCount != nil {
+		gpuCount = *request.GPUCount
 	}
-	if request.GPUCount != 1 && request.GPUCount != 2 && request.GPUCount != 4 && request.GPUCount != 8 {
-		h.writeError(c, http.StatusBadRequest, "WORKSPACE_GPU_COUNT_INVALID", "debug workspace GPU count must be one of 1, 2, 4, or 8")
+	if !domain.IsSupportedWorkspaceGPUCount(gpuCount) {
+		h.writeError(c, http.StatusBadRequest, "WORKSPACE_GPU_COUNT_INVALID", "debug workspace GPU count must be 0, 1, 2, 4, or 8")
 		return
 	}
 	if existing, err := h.workspaces.GetWorkspace(c.Request.Context(), principal.TenantID, principal.Subject); err == nil && existing.State != domain.WorkspaceStopped {
@@ -97,7 +101,7 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 		workspaceName = workspaceName[:63]
 	}
 	namespace := "tenant-" + sanitizeDNS(principal.TenantID)
-	workspace := &domain.DevWorkspace{ID: "ws-" + workspaceID, TenantID: principal.TenantID, UserID: principal.Subject, Name: workspaceName, Namespace: namespace, RayClusterName: workspaceName, JupyterURL: "/api/v1/dev-workspaces/ws-" + workspaceID + "/proxy/", SnapshotID: request.SnapshotID, GPUCount: request.GPUCount, State: domain.WorkspaceSubmitted}
+	workspace := &domain.DevWorkspace{ID: "ws-" + workspaceID, TenantID: principal.TenantID, UserID: principal.Subject, Name: workspaceName, Namespace: namespace, RayClusterName: workspaceName, JupyterURL: "/api/v1/dev-workspaces/ws-" + workspaceID + "/proxy/", SnapshotID: request.SnapshotID, GPUCount: gpuCount, State: domain.WorkspaceSubmitted}
 	if err := h.workspaces.CreateWorkspace(c.Request.Context(), workspace, 3600); err != nil {
 		var quotaErr *repositories.GPUQuotaExceededError
 		if errors.As(err, &quotaErr) {

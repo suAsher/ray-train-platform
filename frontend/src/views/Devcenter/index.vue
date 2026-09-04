@@ -185,7 +185,9 @@ const normalizeWorkspace = (value) => value && ({
   ...value,
   jupyter_url: value.jupyterUrl || value.jupyter_url,
   snapshot_id: value.snapshotId || value.snapshot_id,
-  gpu_count: value.gpuCount || value.gpu_count || 1,
+  // A zero-GPU workspace is a real choice, so it must not fall through the
+  // falsy chain and be shown as a one-GPU one.
+  gpu_count: value.gpuCount ?? value.gpu_count ?? 1,
   status: value.state || value.status
 })
 

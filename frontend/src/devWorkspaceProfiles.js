@@ -1,4 +1,8 @@
+// Zero GPUs is first because it is the option that always works: training can
+// take every card, and a debug session is still needed to read data, check
+// paths and install dependencies while waiting.
 export const interactiveWorkspaceProfiles = Object.freeze([
+  Object.freeze({ id: 'gpu-0', gpuCount: 0, label: '无卡调试', topology: '1 节点 × 0 GPU', description: '不占用 GPU，适合读数据、验证路径和装依赖；训练把卡占满时也能启动。' }),
   Object.freeze({ id: 'gpu-1', gpuCount: 1, label: '单卡调试', topology: '1 节点 × 1 GPU', description: '验证代码、数据挂载和依赖。' }),
   Object.freeze({ id: 'gpu-2', gpuCount: 2, label: '双卡 DDP 调试', topology: '1 节点 × 2 GPU', description: '在终端直接运行 torchrun 做最小 DDP 验证。' }),
   Object.freeze({ id: 'gpu-4', gpuCount: 4, label: '4 卡调试', topology: '1 节点 × 4 GPU', description: '检查 batch、显存和单机通信。' }),

@@ -33,8 +33,10 @@ func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderO
 	if workspace.Namespace == "" || !isDNSLabel(workspace.Namespace) {
 		return nil, fmt.Errorf("workspace namespace must be a lowercase DNS label")
 	}
-	if workspace.GPUCount < 1 || workspace.GPUCount > 8 {
-		return nil, fmt.Errorf("dev workspace GPU count must be between 1 and 8")
+	// Zero is allowed: a debug session is most needed while training holds every
+	// GPU. The renderer then omits the device request rather than asking for none.
+	if !domain.IsSupportedWorkspaceGPUCount(workspace.GPUCount) {
+		return nil, fmt.Errorf("dev workspace GPU count must be 0, 1, 2, 4, or 8")
 	}
 	if err := domain.ValidateRuntimeImage(options.Image); err != nil {
 		return nil, fmt.Errorf("workspace image: %w", err)
@@ -121,8 +123,8 @@ func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderO
 					map[string]any{"name": "vscode", "containerPort": int64(8443)},
 				},
 				"lifecycle":    map[string]any{"postStart": map[string]any{"exec": map[string]any{"command": []any{"/bin/sh", "-c", interactiveTools}}}},
-				"resources":    map[string]any{"requests": map[string]any{"cpu": "4", "memory": "16Gi", "nvidia.com/gpu": strconv.Itoa(workspace.GPUCount)}, "limits": map[string]any{"cpu": "8", "memory": "32Gi", "nvidia.com/gpu": strconv.Itoa(workspace.GPUCount)}},
-				"env":          []any{map[string]any{"name": "NCCL_P2P_DISABLE", "value": "1"}, map[string]any{"name": "NCCL_IB_DISABLE", "value": "1"}},
+				"resources":    workspaceWorkerResources(workspace.GPUCount),
+				"env":          workspaceWorkerEnvironment(workspace.GPUCount),
 				"volumeMounts": workerMounts, "securityContext": containerSecurity,
 			}},
 			"volumes": volumesForPlan,
@@ -282,4 +284,36 @@ func (c *Client) DeleteWorkspaceService(ctx context.Context, namespace, clusterN
 func mustJSON(value any) []byte {
 	data, _ := json.Marshal(value)
 	return data
+}
+
+// workspaceWorkerResources omits the GPU key entirely for a CPU-only debug
+// workspace rather than requesting zero of them. A zero request is legal but
+// ambiguous, and the device plugin has no reason to see the workspace at all.
+//
+// CPU and memory are unchanged: the workspace still runs on a training node, so
+// it must stay small enough to sit beside a running job without competing.
+func workspaceWorkerResources(gpuCount int) map[string]any {
+	requests := map[string]any{"cpu": "4", "memory": "16Gi"}
+	limits := map[string]any{"cpu": "8", "memory": "32Gi"}
+	if gpuCount > 0 {
+		requests["nvidia.com/gpu"] = strconv.Itoa(gpuCount)
+		limits["nvidia.com/gpu"] = strconv.Itoa(gpuCount)
+	}
+	return map[string]any{"requests": requests, "limits": limits}
+}
+
+// workspaceWorkerEnvironment pins GPU visibility for a CPU-only workspace.
+// Under the NVIDIA container runtime a container that requests no GPU can still
+// inherit NVIDIA_VISIBLE_DEVICES=all and see every card on the node - including
+// the ones a training job is using. Setting it to void makes "no GPU" mean it,
+// so a debug session cannot reach into a neighbouring run's devices.
+func workspaceWorkerEnvironment(gpuCount int) []any {
+	env := []any{
+		map[string]any{"name": "NCCL_P2P_DISABLE", "value": "1"},
+		map[string]any{"name": "NCCL_IB_DISABLE", "value": "1"},
+	}
+	if gpuCount == 0 {
+		env = append(env, map[string]any{"name": "NVIDIA_VISIBLE_DEVICES", "value": "void"})
+	}
+	return env
 }

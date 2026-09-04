@@ -53,7 +53,7 @@ export const helpSections = [
         kind: 'steps',
         items: [
           { title: '选择与训练相同的镜像', body: '调试和训练用同一个环境，才能保证调通的东西提交后也能跑。' },
-          { title: '启动单卡调试环境', body: '状态变为运行中后，从页面打开 JupyterLab、VS Code 或终端。它们连接的是带 GPU 的 Worker，不是 Ray Head。' },
+          { title: '选规格并启动', body: '状态变为运行中后，从页面打开 JupyterLab、VS Code 或终端。训练把卡占满时选「无卡调试」——它不预留 GPU，照样能读数据、验证路径和装依赖，只是跑不了训练。' },
           { title: '在 /workspace 写代码，在 /mnt/storage/* 看数据', body: '工作区内容和 .venv 会保留，调试 Pod 本身不是永久实例。', code: DEBUG_SELFCHECK, codeLabel: '进去先自检', codeLang: 'bash' },
           { title: '用完立刻停止', body: '调试环境会一直占着 GPU。每位用户同时只能有一个，换镜像也要先停掉当前的。' },
         ],
@@ -66,7 +66,7 @@ export const helpSections = [
       },
       {
         kind: 'note',
-        text: '多机问题不要用调试环境排查——编辑器只会连到其中一个不确定的 Worker。直接提交一个多机多卡任务去验证。',
+        text: '多机问题不要用调试环境排查——编辑器只会连到其中一个不确定的 Worker，直接提交一个多机多卡任务去验证。另外「无卡调试」看不到任何 GPU，nvidia-smi 会是空的，这是刻意的：它不占卡，也就不能碰到别人正在训练的卡。',
       },
     ],
   },

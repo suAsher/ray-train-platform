@@ -33,3 +33,17 @@ type DevWorkspace struct {
 	State          WorkspaceState `json:"state"`
 	ExpiresAt      *time.Time     `json:"expiresAt,omitempty"`
 }
+
+// SupportedWorkspaceGPUCounts includes zero so a user can still open a debug
+// session when training has taken every GPU. A CPU-only workspace still runs on
+// a training node and mounts the same data; it simply reserves no device.
+var SupportedWorkspaceGPUCounts = []int{0, 1, 2, 4, 8}
+
+func IsSupportedWorkspaceGPUCount(value int) bool {
+	for _, supported := range SupportedWorkspaceGPUCounts {
+		if value == supported {
+			return true
+		}
+	}
+	return false
+}
