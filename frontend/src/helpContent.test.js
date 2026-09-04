@@ -85,3 +85,26 @@ test('the first section is something a user can follow, not just read', async ()
   // The download has to carry the script too, or it is not the same document.
   assert.ok(renderHelpMarkdown().includes(SMOKE_SCRIPT), 'the smoke script is missing from the download')
 })
+
+// Users reach the platform through the Portal and the CLI. They have no
+// checkout of this repository, no build machine and no cluster access, so
+// pointing them at a file path or an internal host names something they cannot
+// obtain - it reads as help but is a dead end. Anything the page cannot answer
+// itself has to hand off to somewhere they can actually go.
+test('user-facing pages never point at things a user cannot reach', async () => {
+  const pages = await Promise.all([
+    read('./views/Help/index.vue'),
+    read('./views/ExternalSubmit/index.vue'),
+  ])
+
+  for (const source of pages) {
+    const template = source.slice(0, source.indexOf('<script'))
+    for (const unreachable of ['docs/', '代码仓库', '提交指南', '构建机', 'build-image', 'helm ', 'kubectl']) {
+      assert.equal(
+        template.includes(unreachable),
+        false,
+        `a user-facing page mentions ${unreachable}, which users have no access to`,
+      )
+    }
+  }
+})

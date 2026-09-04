@@ -106,7 +106,7 @@
       </div>
       <CopyBlock :text="nativeRayCommand" label="原生 Ray 提交" />
       <p class="text-xs leading-5 text-slate-500">
-        默认为 1×1 GPU。多机多卡、数据目录选择和断点续训优先使用 <code>spk-rayjob</code>；原生 Ray 的完整 metadata 示例见提交指南。
+        默认为 1×1 GPU。多机多卡、数据目录选择和断点续训优先使用 <code>spk-rayjob</code>；完整参数见 <code>spk-rayjob --help</code>。
       </p>
     </section>
 

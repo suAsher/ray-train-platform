@@ -75,8 +75,10 @@
     </section>
 
     <p class="px-1 text-xs leading-6 text-slate-500">
-      更完整的手册（BEVFusion 端到端、性能诊断、管理员与运维）在代码仓库的 <code>docs/</code> 目录。
-      本页只保留每次提交都用得上的部分，因此可以整页读完。
+      这一页只放每次提交都用得上的部分，所以可以整页读完。
+      从自己的机器提交、CLI 的安装与登录见「<router-link class="text-blue-400 hover:text-blue-300" to="/external-submit">外部提交</router-link>」；
+      命令行的完整参数用 <code>spk-rayjob --help</code> 查看。
+      运行环境缺少你需要的依赖时，联系平台管理员登记新镜像 —— 镜像只提供环境，你的代码不进镜像，改完直接重新提交即可。
     </p>
   </div>
 </template>
