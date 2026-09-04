@@ -18,7 +18,7 @@
 - Modify: `backend/domain/data_space.go`
 
 1. Add failing table tests for zero-byte/small files, the 256 MiB boundary, >5 GiB files, the 10,000-part boundary, and integer overflow.
-2. Add constants for the 256 MiB multipart threshold, 64 MiB preferred part size, 5 GiB maximum part size, 10,000 maximum parts, and 24-hour session TTL.
+2. Add constants for the 256 MiB multipart threshold, 32 MiB ingress-safe preferred part size, 5 GiB maximum part size, 10,000 maximum parts, and 24-hour session TTL.
 3. Implement a checked layout calculation that grows the part size as needed and never introduces a separate platform-wide whole-file cap.
 4. Add immutable session/part domain records, lifecycle states, ownership checks, and expected-part-size calculation.
 5. Run `env GOCACHE=/tmp/resumable-go-cache go test ./domain`.

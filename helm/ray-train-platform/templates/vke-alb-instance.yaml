@@ -39,6 +39,11 @@ spec:
           certificateID: {{ $alb.https.certificateID | quote }}
       enableHTTP2: true
       enableQUIC: false
+      {{- if $alb.https.customizedCfgID }}
+      customizedConfig:
+        customizedConfigEnabled: "on"
+        customizedCfgID: {{ $alb.https.customizedCfgID | quote }}
+      {{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: IngressClass

@@ -111,7 +111,7 @@ func TestLargeDataSpaceUploadCreatesOpaqueMultipartTicketAndResumes(t *testing.T
 			t.Fatalf("ticket leaked %q: %s", forbidden, first.Body.String())
 		}
 	}
-	if !strings.Contains(first.Body.String(), `"mode":"multipart"`) || !strings.Contains(first.Body.String(), `"totalParts":96`) {
+	if !strings.Contains(first.Body.String(), `"mode":"multipart"`) || !strings.Contains(first.Body.String(), `"partSizeBytes":33554432`) || !strings.Contains(first.Body.String(), `"totalParts":192`) {
 		t.Fatalf("wrong multipart ticket: %s", first.Body.String())
 	}
 	second := postDataSpaceOperation(router, "/api/v1/data-spaces/my-files/uploads", body)

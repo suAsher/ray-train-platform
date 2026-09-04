@@ -308,6 +308,10 @@ albInstance:
     host: ""
     certificateSource: cert_center
     certificateID: ""
+    # Optional existing ALB customized configuration. Production large-file
+    # upload should set client_max_body_size to at least 5120M and disable
+    # proxy_request_buffering so dynamic TOS parts can reach their 5 GiB max.
+    customizedCfgID: ""
 
 # Where Ray head and worker Pods are allowed to run. Comma-separated
 # key=value labels. Adding GPU machines only means labelling them the same way

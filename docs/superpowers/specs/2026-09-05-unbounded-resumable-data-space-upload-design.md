@@ -62,11 +62,20 @@ checkpoints the same retry and resume behavior as files above 5 GiB. The
 
 The backend is authoritative for part sizing. It calculates:
 
-1. Start at 64 MiB.
-2. If `ceil(size / 64 MiB)` exceeds 10,000, choose the smallest whole-MiB part
+1. Start at 32 MiB. This stays below the production Volcengine ALB listener's
+   default 60 MiB request-body limit, which otherwise returns 413 before the
+   request reaches the frontend or backend.
+2. If `ceil(size / 32 MiB)` exceeds 10,000, choose the smallest whole-MiB part
    size for which `ceil(size / partSize) <= 10,000`.
 3. Reject only when the required part size exceeds 5 GiB or an input cannot be
    represented safely as a signed 64-bit byte count.
+
+The production ALB listener must bind a customized configuration with
+`client_max_body_size 5120M` and `proxy_request_buffering off` before dynamic
+parts are allowed to grow beyond the ALB default 60 MiB. The Helm value
+`albInstance.https.customizedCfgID` owns that binding. Without the cloud-side
+configuration, 32 MiB ordinary parts still support practical files above 5 GiB
+but the ALB will reject an individual dynamically grown part above 60 MiB.
 
 The response includes `partSizeBytes`, `totalParts`, and exact expected sizes
 for the final part. The frontend does not invent or override these values.
@@ -116,10 +125,10 @@ information:
 {
   "mode": "multipart",
   "sessionId": "upload-opaque-id",
-  "partSizeBytes": 67108864,
+  "partSizeBytes": 33554432,
   "totalParts": 129,
   "completedParts": [
-    {"partNumber": 1, "sizeBytes": 67108864, "sha256": "..."}
+    {"partNumber": 1, "sizeBytes": 33554432, "sha256": "..."}
   ],
   "expiresAt": "2026-09-06T00:00:00Z"
 }
