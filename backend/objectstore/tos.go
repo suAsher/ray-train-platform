@@ -194,6 +194,14 @@ func (client *sdkTOSClient) ReadArtifact(ctx context.Context, request tosArtifac
 	}, nil
 }
 
+type tosDataPutRequest struct {
+	Bucket      string
+	Key         string
+	ContentType string
+	SizeBytes   int64
+	Body        io.Reader
+}
+
 func (client *sdkTOSClient) Put(ctx context.Context, request tosPutRequest) error {
 	contentType := request.ContentType
 	if contentType == "" {
@@ -215,6 +223,27 @@ func (client *sdkTOSClient) Put(ctx context.Context, request tosPutRequest) erro
 		return ErrAlreadyExists
 	}
 	return ErrUnavailable
+}
+
+// PutData writes a data-space file. Unlike a source archive, which is immutable
+// and keyed by its own digest, a data file is a name the user chose and may be
+// re-uploaded, so overwriting is allowed here.
+func (client *sdkTOSClient) PutData(ctx context.Context, request tosDataPutRequest) error {
+	contentType := request.ContentType
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	_, err := client.client.PutObjectV2(ctx, &tos.PutObjectV2Input{
+		PutObjectBasicInput: tos.PutObjectBasicInput{
+			Bucket: request.Bucket, Key: request.Key,
+			ContentLength: request.SizeBytes, ContentType: contentType,
+		},
+		Content: request.Body,
+	})
+	if err != nil {
+		return ErrUnavailable
+	}
+	return nil
 }
 
 func (client *sdkTOSClient) DeleteObject(ctx context.Context, bucket, key string) error {

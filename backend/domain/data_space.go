@@ -11,6 +11,11 @@ import (
 // browser.
 type DataSpaceID string
 
+// MaxDataSpaceUploadBytes bounds a single relayed upload. The platform streams
+// these bytes rather than buffering them, but an unbounded declared length
+// would still let one request occupy a backend worker indefinitely.
+const MaxDataSpaceUploadBytes int64 = 5 * 1024 * 1024 * 1024
+
 const (
 	DataSpaceWorkspace      DataSpaceID = "workspace"
 	DataSpaceMyStorage      DataSpaceID = "my-storage"

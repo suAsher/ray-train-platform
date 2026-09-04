@@ -42,3 +42,17 @@ test('the upload transport keeps store headers and platform headers apart', asyn
   assert.match(source, /upload\.headers/)
   assert.match(source, /resolve\(xhr\)/, 'the caller cannot read the relay response header')
 })
+
+// Data space files and folders had the same defect as code archives: the ticket
+// named an object-store address the browser could not connect to. They now go
+// to the platform as well, and because that endpoint is authenticated the
+// ticket has to carry credentials.
+test('data space uploads are relayed through the platform with credentials', async () => {
+  const source = await read('./api/dataSpaces.js')
+
+  assert.match(source, /createDataSpaceUpload/)
+  assert.match(source, /Authorization/, 'the relay ticket carries no credentials')
+  assert.match(source, /getToken/)
+  // The destination comes from the platform ticket, not from object storage.
+  assert.equal(source.includes('requiredHeaders'), false, 'object-store upload headers are still being applied')
+})

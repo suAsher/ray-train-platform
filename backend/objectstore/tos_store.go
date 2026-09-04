@@ -370,6 +370,33 @@ func (store *TOSStore) PresignDataPut(ctx context.Context, rootPrefix, relativeP
 	return PresignedPut{URL: response.URL, RequiredHeaders: dataUploadHeaders(contentType), ContentLength: sizeBytes, ExpiresAt: store.now().UTC().Add(ttl)}, nil
 }
 
+// PutData streams a data-space file into the caller's own root. The platform
+// relays these bytes instead of handing out a presigned URL, because the object
+// store is only reachable from inside the cluster: a browser told to upload
+// directly to it can never connect.
+func (store *TOSStore) PutData(ctx context.Context, rootPrefix, relativePath, contentType string, sizeBytes int64, body io.Reader) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	key, err := scopedTOSDataFileKey(rootPrefix, relativePath)
+	if err != nil {
+		return err
+	}
+	if body == nil || sizeBytes < 0 || sizeBytes > maxDataUploadBytes || strings.TrimSpace(contentType) == "" || strings.ContainsAny(contentType, "\r\n") {
+		return fmt.Errorf("invalid data upload request")
+	}
+	client, ok := store.client.(interface {
+		PutData(context.Context, tosDataPutRequest) error
+	})
+	if !ok {
+		return ErrUnavailable
+	}
+	if err := client.PutData(ctx, tosDataPutRequest{Bucket: store.bucket, Key: key, ContentType: contentType, SizeBytes: sizeBytes, Body: body}); err != nil {
+		return ErrUnavailable
+	}
+	return nil
+}
+
 func (store *TOSStore) ReadData(ctx context.Context, rootPrefix, relativePath string) (ArtifactRead, error) {
 	if err := ctx.Err(); err != nil {
 		return ArtifactRead{}, err

@@ -132,6 +132,7 @@ type DataSpaceStore interface {
 	ListDataEntries(context.Context, string, string, string, int) (DataEntryPage, error)
 	PresignDataPut(context.Context, string, string, string, int64, time.Duration) (PresignedPut, error)
 	ReadData(context.Context, string, string) (ArtifactRead, error)
+	PutData(context.Context, string, string, string, int64, io.Reader) error
 	CreateDataDirectory(context.Context, string, string) error
 }
 

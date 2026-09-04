@@ -7,15 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"path"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
-	"ray-train-platform-backend/objectstore"
 )
 
 // DataSpaceStore owns the private inventory of platform-created mount
@@ -66,9 +65,17 @@ func (h *Handler) RegisterDataSpaceRoutes(group *gin.RouterGroup) {
 	group.GET("/data-spaces/:id/download", h.downloadDataSpaceFile)
 	group.POST("/data-spaces/:id/folders", h.createDataSpaceFolder)
 	group.POST("/data-spaces/:id/uploads", h.createDataSpaceUpload)
+	group.PUT("/data-spaces/:id/content", h.uploadDataSpaceContent)
 }
 
-const dataSpaceUploadTTL = 15 * time.Minute
+// dataSpaceUploadTicket tells the caller where to PUT the bytes. It replaces
+// the presigned object-store response and deliberately carries no credentials:
+// the destination is the platform's own authenticated API.
+type dataSpaceUploadTicket struct {
+	URL         string `json:"url"`
+	ContentType string `json:"contentType"`
+	SizeBytes   int64  `json:"sizeBytes"`
+}
 
 func (h *Handler) listDataSpaces(c *gin.Context) {
 	principal, ok := h.principal(c)
@@ -466,16 +473,63 @@ func (h *Handler) createDataSpaceUpload(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "INVALID_DATA_SPACE_UPLOAD", "upload path, content type, or size is invalid")
 		return
 	}
-	presigned, err := h.dataObjectStore.PresignDataPut(c.Request.Context(), space.RootPrefix, relativePath, strings.TrimSpace(request.ContentType), *request.SizeBytes, dataSpaceUploadTTL)
-	if errors.Is(err, objectstore.ErrUnavailable) {
-		h.writeError(c, http.StatusServiceUnavailable, "DATA_SPACE_STORE_UNAVAILABLE", "data-space storage is temporarily unavailable")
+	if *request.SizeBytes > domain.MaxDataSpaceUploadBytes {
+		h.writeError(c, http.StatusRequestEntityTooLarge, "DATA_SPACE_UPLOAD_TOO_LARGE", "this file exceeds the upload limit for a data space")
 		return
 	}
-	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "INVALID_DATA_SPACE_UPLOAD", "upload path or size is invalid")
+	// The caller is told to send the bytes back to the platform, not to the
+	// object store. A presigned URL points at a VPC-internal address that a
+	// browser outside the cluster cannot reach, so it would always fail.
+	h.writeSuccess(c, http.StatusCreated, dataSpaceUploadTicket{
+		URL:         "/api/v1/data-spaces/" + url.PathEscape(string(space.ID)) + "/content?path=" + url.QueryEscape(relativePath),
+		ContentType: strings.TrimSpace(request.ContentType),
+		SizeBytes:   *request.SizeBytes,
+	})
+}
+
+// uploadDataSpaceContent relays a file into the caller's own space. Uploads used
+// to go straight from the browser to a presigned object-store URL, but that
+// endpoint resolves to a VPC-internal address, so a browser outside the cluster
+// could never reach it and every upload silently failed.
+//
+// The body is streamed to the object store rather than buffered: these are data
+// files, routinely gigabytes, and must not sit in backend memory. The declared
+// length is capped before a single byte is read, and the reader is capped again
+// so a client that understates Content-Length cannot exceed the limit.
+func (h *Handler) uploadDataSpaceContent(c *gin.Context) {
+	_, space, ok := h.authorizeWritableDataSpace(c)
+	if !ok {
 		return
 	}
-	h.writeSuccess(c, http.StatusCreated, presigned)
+	if space.Provider != domain.StorageProviderTOS || !space.BrowseEnabled {
+		h.writeError(c, http.StatusConflict, "DATA_SPACE_BROWSER_NOT_AVAILABLE", "this data space is available in workloads but cannot be browsed in the portal")
+		return
+	}
+	if h.dataObjectStore == nil {
+		h.writeError(c, http.StatusServiceUnavailable, "DATA_SPACE_STORE_UNAVAILABLE", "data-space storage is not configured")
+		return
+	}
+	relativePath, err := domain.NormalizeStorageRelativePath(c.Query("path"))
+	if err != nil || relativePath == "" {
+		h.writeError(c, http.StatusBadRequest, "INVALID_DATA_SPACE_PATH", "file path must stay inside the selected data space")
+		return
+	}
+	contentType := strings.TrimSpace(c.GetHeader("Content-Type"))
+	if contentType == "" || strings.ContainsAny(contentType, "\r\n") {
+		contentType = "application/octet-stream"
+	}
+	sizeBytes := c.Request.ContentLength
+	if sizeBytes < 0 || sizeBytes > domain.MaxDataSpaceUploadBytes {
+		h.writeError(c, http.StatusRequestEntityTooLarge, "DATA_SPACE_UPLOAD_TOO_LARGE", "this file exceeds the upload limit for a data space")
+		return
+	}
+	body := http.MaxBytesReader(c.Writer, c.Request.Body, sizeBytes)
+	defer body.Close()
+	if err := h.dataObjectStore.PutData(c.Request.Context(), space.RootPrefix, relativePath, contentType, sizeBytes, body); err != nil {
+		h.writeError(c, http.StatusServiceUnavailable, "DATA_SPACE_STORE_UNAVAILABLE", "could not store this file")
+		return
+	}
+	h.writeSuccess(c, http.StatusOK, map[string]string{"path": relativePath})
 }
 
 func (h *Handler) authorizeDataSpace(c *gin.Context) (auth.Principal, domain.DataSpace, bool) {

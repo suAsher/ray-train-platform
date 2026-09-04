@@ -27,6 +27,12 @@ type fakeDataSpaceObjectStore struct {
 	presignErr   error
 	downloadRoot string
 	downloadPath string
+	putRoot      string
+	putPath      string
+	putType      string
+	putSize      int64
+	putContent   string
+	putErr       error
 	entries      objectstore.DataEntryPage
 	readContent  string
 	readInfo     objectstore.ArtifactRead
@@ -50,6 +56,16 @@ func (store *fakeDataSpaceObjectStore) ReadData(_ context.Context, root, relativ
 	result := store.readInfo
 	result.Content = io.NopCloser(strings.NewReader(store.readContent))
 	return result, nil
+}
+
+func (store *fakeDataSpaceObjectStore) PutData(_ context.Context, root, relativePath, contentType string, sizeBytes int64, body io.Reader) error {
+	store.putRoot, store.putPath, store.putType, store.putSize = root, relativePath, contentType, sizeBytes
+	contents, err := io.ReadAll(body)
+	store.putContent = string(contents)
+	if store.putErr != nil {
+		return store.putErr
+	}
+	return err
 }
 
 func (store *fakeDataSpaceObjectStore) CreateDataDirectory(_ context.Context, root, relativePath string) error {
@@ -94,8 +110,13 @@ func TestDataSpaceWritesRejectReadonlyRootsAndPresignOnlyWritablePersonalFiles(t
 	uploadRequest := httptest.NewRequest(http.MethodPost, "/api/v1/data-spaces/my-files/uploads", strings.NewReader(`{"path":"data/train.csv","contentType":"text/csv","sizeBytes":1234}`))
 	uploadRequest.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(upload, uploadRequest)
-	if upload.Code != http.StatusCreated || store.presignRoot != "ray-train/tenants/tenant-a/users/user-a/files/" || store.presignPath != "data/train.csv" || store.presignType != "text/csv" || store.presignSize != 1234 {
-		t.Fatalf("unsafe upload authorization: status=%d store=%#v body=%s", upload.Code, store, upload.Body.String())
+	// The ticket must point back at the platform and name only the caller's own
+	// space; it must never carry an object-store address.
+	if upload.Code != http.StatusCreated || !strings.Contains(upload.Body.String(), `"url":"/api/v1/data-spaces/my-files/content?path=data%2Ftrain.csv"`) {
+		t.Fatalf("unsafe upload authorization: status=%d body=%s", upload.Code, upload.Body.String())
+	}
+	if strings.Contains(upload.Body.String(), "http") {
+		t.Fatalf("upload ticket must not expose an object-store URL: %s", upload.Body.String())
 	}
 }
 
@@ -126,16 +147,15 @@ func TestDataSpaceUploadUsesLowerCamelCaseBrowserContract(t *testing.T) {
 
 	body := response.Body.String()
 	for _, expected := range []string{
-		`"url":"https://upload.example.invalid/signed"`,
-		`"requiredHeaders":{"Content-Type":"text/x-python"}`,
-		`"contentLength":42`,
-		`"expiresAt":"2026-08-12T10:00:00Z"`,
+		`"url":"/api/v1/data-spaces/workspace/content?path=project%2Ftrain.py"`,
+		`"contentType":"text/x-python"`,
+		`"sizeBytes":42`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("upload response must use the browser contract %q: %s", expected, body)
 		}
 	}
-	if strings.Contains(body, `"URL"`) || strings.Contains(body, `"RequiredHeaders"`) {
+	if strings.Contains(body, `"URL"`) || strings.Contains(body, `"SizeBytes"`) {
 		t.Fatalf("upload response must not expose Go field names: %s", body)
 	}
 }
@@ -146,19 +166,18 @@ func TestDataSpaceUploadAllowsZeroByteSourceFiles(t *testing.T) {
 	router := dataSpaceRouter(handler, auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal})
 
 	response := postDataSpaceOperation(router, "/api/v1/data-spaces/workspace/uploads", `{"path":"project/mmdet3d/__init__.py","contentType":"text/x-python","sizeBytes":0}`)
-	if response.Code != http.StatusCreated || store.presignPath != "project/mmdet3d/__init__.py" || store.presignSize != 0 {
+	if response.Code != http.StatusCreated || !strings.Contains(response.Body.String(), `"sizeBytes":0`) {
 		t.Fatalf("zero-byte source file must be preserved in workspace snapshots: status=%d store=%#v body=%s", response.Code, store, response.Body.String())
 	}
 
-	store.presignPath = ""
 	negative := postDataSpaceOperation(router, "/api/v1/data-spaces/workspace/uploads", `{"path":"project/bad.py","contentType":"text/x-python","sizeBytes":-1}`)
-	if negative.Code != http.StatusBadRequest || store.presignPath != "" {
-		t.Fatalf("negative upload size must be rejected: status=%d path=%q body=%s", negative.Code, store.presignPath, negative.Body.String())
+	if negative.Code != http.StatusBadRequest {
+		t.Fatalf("negative upload size must be rejected: status=%d body=%s", negative.Code, negative.Body.String())
 	}
 
 	missing := postDataSpaceOperation(router, "/api/v1/data-spaces/workspace/uploads", `{"path":"project/missing-size.py","contentType":"text/x-python"}`)
-	if missing.Code != http.StatusBadRequest || store.presignPath != "" {
-		t.Fatalf("missing upload size must be rejected rather than interpreted as zero: status=%d path=%q body=%s", missing.Code, store.presignPath, missing.Body.String())
+	if missing.Code != http.StatusBadRequest {
+		t.Fatalf("missing upload size must be rejected rather than interpreted as zero: status=%d body=%s", missing.Code, missing.Body.String())
 	}
 }
 
@@ -172,8 +191,8 @@ func TestDataSpaceWritesAllowOnlyResponsibleAdministratorsToMaintainSharedRoots(
 		t.Fatalf("tenant admin team folder: status=%d root=%q body=%s", teamFolder.Code, store.folderRoot, teamFolder.Body.String())
 	}
 	teamUpload := postDataSpaceOperation(tenantAdmin, "/api/v1/data-spaces/team-shared/uploads", `{"path":"datasets/version-1/train.csv","contentType":"text/csv","sizeBytes":1024}`)
-	if teamUpload.Code != http.StatusCreated || store.presignRoot != "ray-train/tenants/tenant-a/shared/" {
-		t.Fatalf("tenant admin team upload: status=%d root=%q body=%s", teamUpload.Code, store.presignRoot, teamUpload.Body.String())
+	if teamUpload.Code != http.StatusCreated || !strings.Contains(teamUpload.Body.String(), "/api/v1/data-spaces/team-shared/content") {
+		t.Fatalf("tenant admin team upload: status=%d body=%s", teamUpload.Code, teamUpload.Body.String())
 	}
 
 	engineer := dataSpaceRouter(handler, auth.Principal{Subject: "engineer-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal})
@@ -209,8 +228,8 @@ func TestDataSpaceWritesAllowOnlyResponsibleAdministratorsToMaintainSharedRoots(
 		t.Fatalf("super admin public folder: status=%d root=%q body=%s", publicFolder.Code, store.folderRoot, publicFolder.Body.String())
 	}
 	publicUpload := postDataSpaceOperation(superAdmin, "/api/v1/data-spaces/public/uploads", `{"path":"release-v1/data.csv","contentType":"text/csv","sizeBytes":12}`)
-	if publicUpload.Code != http.StatusCreated || store.presignRoot != domain.DefaultPublicDataRoot {
-		t.Fatalf("super admin public upload: status=%d root=%q body=%s", publicUpload.Code, store.presignRoot, publicUpload.Body.String())
+	if publicUpload.Code != http.StatusCreated || !strings.Contains(publicUpload.Body.String(), "/api/v1/data-spaces/public/content") {
+		t.Fatalf("super admin public upload: status=%d body=%s", publicUpload.Code, publicUpload.Body.String())
 	}
 
 	store.folderRoot = ""
@@ -233,17 +252,62 @@ func postDataSpaceOperation(router http.Handler, requestPath, body string) *http
 	return response
 }
 
+// The store is only touched when the bytes arrive, so an outage now surfaces on
+// the upload itself rather than when the ticket is issued.
 func TestDataSpaceUploadReportsUnavailableWhenObjectStorageIsUnavailable(t *testing.T) {
-	store := &fakeDataSpaceObjectStore{presignErr: objectstore.ErrUnavailable}
+	store := &fakeDataSpaceObjectStore{putErr: objectstore.ErrUnavailable}
 	handler := NewHandler(&fakeJobRepository{}, Options{DataSpaces: &fakeDataSpaceStore{}, DataObjectStore: store})
 	router := dataSpaceRouter(handler, auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal})
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/data-spaces/my-files/uploads", strings.NewReader(`{"path":"data/train.csv","contentType":"text/csv","sizeBytes":1234}`))
-	request.Header.Set("Content-Type", "application/json")
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/data-spaces/my-files/content?path=data/train.csv", strings.NewReader("payload"))
+	request.Header.Set("Content-Type", "text/csv")
 	response := httptest.NewRecorder()
 
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "DATA_SPACE_STORE_UNAVAILABLE") {
 		t.Fatalf("storage outage must be surfaced as retryable: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+// The relay is the whole point of the change: the bytes must land in the
+// caller's own space, and a read-only root must still refuse them.
+func TestDataSpaceContentRelayStoresBytesInTheCallersOwnSpace(t *testing.T) {
+	store := &fakeDataSpaceObjectStore{}
+	handler := NewHandler(&fakeJobRepository{}, Options{DataSpaces: &fakeDataSpaceStore{}, DataObjectStore: store})
+	router := dataSpaceRouter(handler, auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal})
+
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/data-spaces/my-files/content?path=data/train.csv", strings.NewReader("payload"))
+	request.Header.Set("Content-Type", "text/csv")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("relayed upload must succeed: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if store.putRoot != "ray-train/tenants/tenant-a/users/user-a/files/" || store.putPath != "data/train.csv" {
+		t.Fatalf("relayed upload escaped the caller's space: root=%q path=%q", store.putRoot, store.putPath)
+	}
+	if store.putContent != "payload" || store.putType != "text/csv" {
+		t.Fatalf("relayed upload altered the body: content=%q type=%q", store.putContent, store.putType)
+	}
+}
+
+func TestDataSpaceContentRelayRejectsReadOnlyRootsAndEscapingPaths(t *testing.T) {
+	for _, target := range []string{
+		"/api/v1/data-spaces/team-shared/content?path=data.csv",
+		"/api/v1/data-spaces/public/content?path=data.csv",
+		"/api/v1/data-spaces/my-files/content?path=../escape",
+		"/api/v1/data-spaces/my-files/content",
+	} {
+		store := &fakeDataSpaceObjectStore{}
+		handler := NewHandler(&fakeJobRepository{}, Options{DataSpaces: &fakeDataSpaceStore{}, DataObjectStore: store})
+		router := dataSpaceRouter(handler, auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal})
+
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodPut, target, strings.NewReader("payload")))
+
+		if response.Code < 400 || store.putRoot != "" {
+			t.Fatalf("%s must be refused before touching storage: status=%d root=%q", target, response.Code, store.putRoot)
+		}
 	}
 }
 

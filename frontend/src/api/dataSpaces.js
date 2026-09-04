@@ -1,3 +1,4 @@
+import { getToken } from '../auth/index.js'
 import { apiDownload, apiGet, apiPost } from './client.js'
 import { dataSpaceDirectoriesPath, dataSpaceDownloadPath, dataSpaceEntriesPath, dataSpacesPath, workspaceSnapshotsPath } from './dataSpacesPaths.js'
 import { uploadDataSpaceFile } from './dataSpaceUpload.js'
@@ -20,8 +21,17 @@ export function createDataSpaceFolder(spaceId, path) {
   return apiPost(`/api/v1/data-spaces/${encodeURIComponent(spaceId)}/folders`, { path })
 }
 
-export function createDataSpaceUpload(spaceId, path, contentType, sizeBytes) {
-  return apiPost(`/api/v1/data-spaces/${encodeURIComponent(spaceId)}/uploads`, { path, contentType, sizeBytes })
+// The platform now relays these bytes instead of handing out a presigned
+// object-store URL, because object storage resolves to a VPC-internal address
+// that a browser outside the cluster can never reach. The ticket therefore
+// points back at the platform's own authenticated API and needs credentials,
+// which a presigned URL must never receive.
+export async function createDataSpaceUpload(spaceId, path, contentType, sizeBytes) {
+  const ticket = await apiPost(`/api/v1/data-spaces/${encodeURIComponent(spaceId)}/uploads`, { path, contentType, sizeBytes })
+  const token = await getToken()
+  const headers = { 'Content-Type': ticket.contentType || contentType || 'application/octet-stream' }
+  if (token) headers.Authorization = `Bearer ${token}`
+  return { ...ticket, headers }
 }
 
 export function fetchWorkspaceSnapshots(limit = 50) {
