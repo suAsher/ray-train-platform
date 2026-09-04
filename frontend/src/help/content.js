@@ -19,20 +19,55 @@ checkpoint = os.environ.get("PLATFORM_CHECKPOINT_PATH", "")
 output.mkdir(parents=True, exist_ok=True)
 # 读 dataset；模型、checkpoint、评估结果只写 output。`
 
+export const SMOKE_SCRIPT = `# train.py —— 最小可跑通示例，用来确认平台链路正常
+import os
+from pathlib import Path
+
+dataset = Path(os.environ["PLATFORM_DATASET_PATH"])
+output = Path(os.environ["PLATFORM_OUTPUT_PATH"])
+output.mkdir(parents=True, exist_ok=True)
+
+# flush=True：日志实时进入平台日志流，不然可能看不到
+print(f"输入目录 {dataset}", flush=True)
+print(f"前 5 个条目 {[p.name for p in list(dataset.iterdir())[:5]]}", flush=True)
+
+import torch
+print(f"CUDA {torch.cuda.is_available()}，可见卡数 {torch.cuda.device_count()}", flush=True)
+
+(output / "hello.txt").write_text("产物写入成功\\n", encoding="utf-8")
+print("已写入产物，可在「训练产物」标签页看到 hello.txt", flush=True)`
+
 export const helpSections = [
   {
     id: 'quickstart',
-    title: '快速上手',
-    summary: '一次训练要走的五步。每步的细节在后面的章节展开。',
+    title: '第一次跑通',
+    summary: '先用下面这个最小示例确认平台链路是通的：环境变量能解析、输入目录读得到、GPU 可见、产物写得出去。这四件事是后面所有失败的根源，几分钟就能排除掉。确认之后再接你自己的代码。',
     blocks: [
       {
         kind: 'steps',
         items: [
-          { title: '选运行环境', body: '镜像由管理员登记，只提供环境，不含你的代码。缺少依赖时联系管理员补镜像。' },
-          { title: '接入代码', body: 'Git 提交（github.com、gitlab.qomolo.com、gitlab.wellspiking.ai 已放行）、个人工作区快照，或上传代码包。改完代码换一个 commit 重新提交即可，不需要重新构建镜像。' },
-          { title: '选数据', body: '在「我的数据」里先浏览确认目录真实存在，再回到提交表单选择。路径写错的任务通常在两分钟内失败。' },
-          { title: '写启动命令', body: '普通的 python 命令即可。多卡由平台启动 torchrun，你不要自己写。' },
-          { title: '取结果', body: '权重写在本任务的输出目录，可在「训练产物」标签页或「我的数据」中下载。' },
+          {
+            title: '把这个脚本放进你的代码目录',
+            body: '它不训练任何东西，只验证平台和代码之间的四个接口。',
+            code: SMOKE_SCRIPT,
+            codeLabel: 'train.py',
+            codeLang: 'python',
+          },
+          {
+            title: '在提交表单里填这条启动命令',
+            body: '先选 1 卡。多卡由平台启动 torchrun，你不需要也不应该自己写。',
+            code: 'python3 train.py',
+            codeLabel: '训练启动命令',
+            codeLang: 'bash',
+          },
+          {
+            title: '选输入数据和运行环境',
+            body: '输入目录先在「我的数据」里逐级点开确认真实存在——路径写错是最常见的失败，任务通常在两分钟内挂掉。运行环境选一个已登记的镜像即可。',
+          },
+          {
+            title: '提交后看这三处',
+            body: '日志里应出现输入目录和 CUDA 信息；任务详情的「训练产物」标签页应出现 hello.txt。三处都对，说明链路通了，可以换成你自己的训练脚本。',
+          },
         ],
       },
     ],
@@ -156,7 +191,13 @@ export function renderHelpMarkdown(sections = helpSections) {
 function renderBlock(block) {
   switch (block.kind) {
     case 'steps':
-      return [...block.items.flatMap((item, index) => [`${index + 1}. **${item.title}** — ${item.body}`]), '']
+      return [
+        ...block.items.flatMap((item, index) => {
+          const head = [`${index + 1}. **${item.title}** — ${item.body}`, '']
+          if (!item.code) return head
+          return [...head, '```' + (item.codeLang || ''), item.code, '```', '']
+        }),
+      ]
     case 'list':
       return [...block.items.map((item) => `- ${item}`), '']
     case 'checklist':

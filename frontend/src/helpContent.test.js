@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
-import { helpSections, renderHelpMarkdown, CONTRACT_SNIPPET } from './help/content.js'
+import { helpSections, renderHelpMarkdown, CONTRACT_SNIPPET, SMOKE_SCRIPT } from './help/content.js'
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8')
 
@@ -65,4 +65,23 @@ test('the help page downloads through the shared blob helper', async () => {
   assert.match(source, /import \{ saveBlobAsFile \} from '\.\.\/\.\.\/checkpointDownload'/)
   assert.match(source, /new Blob\(\[markdown\]/)
   assert.equal(source.includes('URL.createObjectURL'), false, 'the page must not carry its own object-URL handling')
+})
+
+// The page has to read like a walkthrough, not a reference manual: a first-time
+// user needs something to copy and run, not a list of rules to remember. The
+// smoke script verifies the four interfaces that every later failure comes from
+// - variables resolve, input is readable, GPU is visible, output is writable.
+test('the first section is something a user can follow, not just read', async () => {
+  const quickstart = helpSections.find((section) => section.id === 'quickstart')
+  const steps = quickstart.blocks.find((block) => block.kind === 'steps')
+
+  const runnable = steps.items.filter((item) => item.code)
+  assert.ok(runnable.length >= 2, 'the walkthrough must hand the user something to copy and run')
+  assert.ok(steps.items.every((item) => item.title && item.body), 'every step needs a title and an explanation')
+
+  for (const probe of ['PLATFORM_DATASET_PATH', 'PLATFORM_OUTPUT_PATH', 'cuda', 'flush=True']) {
+    assert.ok(SMOKE_SCRIPT.includes(probe), `the smoke script does not check ${probe}`)
+  }
+  // The download has to carry the script too, or it is not the same document.
+  assert.ok(renderHelpMarkdown().includes(SMOKE_SCRIPT), 'the smoke script is missing from the download')
 })
