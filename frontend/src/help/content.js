@@ -37,6 +37,35 @@ print(f"CUDA {torch.cuda.is_available()}，可见卡数 {torch.cuda.device_count
 (output / "hello.txt").write_text("产物写入成功\\n", encoding="utf-8")
 print("已写入产物，可在「训练产物」标签页看到 hello.txt", flush=True)`
 
+export const SUBMIT_SMOKE = `# 单卡冒烟：先确认链路通了
+spk-rayjob submit --watch \\
+  --name smoke --entrypoint "python3 train.py" \\
+  --input-space public --input-path bevfusion/2026-08-0429`
+
+export const SUBMIT_MULTINODE = `# 多机多卡：workers≥2，平台在每个 Worker 内启动 torchrun
+spk-rayjob submit --watch \\
+  --engine ray-train \\
+  --entrypoint "python3 tools/train.py configs/lidar.yaml --launcher pytorch" \\
+  --input-space public --input-path bevfusion/2026-08-0429 \\
+  --max-failures 2 --checkpoint-every-epochs 1`
+
+export const SUBMIT_RESUME = `# 续训：把上一次运行的结果目录作为只读 checkpoint 传入
+spk-rayjob submit --watch --resume-from-job <上一次的 JOB ID>`
+
+export const NATIVE_RAY_SUBMIT = `export RAY_ADDRESS="https://<平台地址>/ray"
+export RAY_JOB_HEADERS='{"Authorization":"Bearer <平台 PAT>"}'
+
+# 不带 ray-platform 元数据时默认 1 卡；要多卡必须把这组元数据写全
+ray job submit --address "$RAY_ADDRESS" --working-dir . \\
+  --metadata-json '{
+    "ray-platform.image": "harbor.wellspiking.ai/<项目>/<镜像>@sha256:<digest>",
+    "ray-platform.worker-replicas": "2",
+    "ray-platform.gpus-per-worker": "8",
+    "ray-platform.cpu-per-worker": "32",
+    "ray-platform.memory-per-worker": "128Gi"
+  }' \\
+  -- python3 tools/train.py configs/lidar.yaml --launcher pytorch`
+
 export const helpSections = [
   {
     id: 'quickstart',
@@ -110,6 +139,55 @@ export const helpSections = [
         ],
       },
       { kind: 'code', label: '示例', lang: 'bash', text: 'python3 tools/train.py configs/lidar.yaml --launcher pytorch' },
+    ],
+  },
+  {
+    id: 'submit',
+    title: '提交命令与参数',
+    summary: '网页提交把这些选项做成了表单；命令行提交需要自己写。两边是同一套参数。',
+    blocks: [
+      { kind: 'code', label: '① 单卡冒烟', lang: 'bash', text: SUBMIT_SMOKE },
+      { kind: 'code', label: '② 多机多卡', lang: 'bash', text: SUBMIT_MULTINODE },
+      { kind: 'code', label: '③ 续训', lang: 'bash', text: SUBMIT_RESUME },
+      {
+        kind: 'table',
+        headers: ['参数', '含义'],
+        rows: [
+          ['--name', '任务显示名，可重复，实际身份由平台分配的 ID 决定'],
+          ['--image', '运行环境镜像；不写则用项目默认值或平台默认镜像'],
+          ['--entrypoint', '训练启动命令，一条普通 python3 命令，不要写 torchrun'],
+          ['--engine', 'ray-ddp（默认）或 ray-train（托管 Worker、故障恢复、Checkpoint）'],
+          ['--input-space / --input-path', '输入数据的空间与子目录，对应 PLATFORM_DATASET_PATH'],
+          ['--data-mode', 'mount / cache / ray-data-stage / ray-data / streaming，见下一节'],
+          ['--resume-from-job', '把某次运行的结果目录作为只读 checkpoint 传入本次'],
+          ['--max-failures', 'ray-train 下 Worker 最大恢复次数（0-10）'],
+          ['--checkpoint-every-epochs', 'ray-train 下每隔多少 Epoch 保存一次'],
+          ['--cache-mode / --cache-size / --cache-preload', '本地 NVMe 缓存；不加 --cache-preload input 不会自动预热数据'],
+          ['--watch', '阻塞显示排队 → 运行 → 结束'],
+          ['--output json', '输出原始 JSON，供脚本解析'],
+        ],
+      },
+      {
+        kind: 'table',
+        headers: ['规模字段', '取值约束'],
+        rows: [
+          ['executionMode: single_gpu', '1 个 Worker × 1 卡。先用它跑通。'],
+          ['executionMode: torchrun', '1 个 Worker × 至少 2 卡，单机多卡。'],
+          ['executionMode: ray_train', '至少 2 个 Worker × 每个至少 1 卡，多机多卡。'],
+          ['workers', 'Worker 数，等于参与训练的物理节点数。'],
+          ['gpusPerWorker', '每个 Worker 独占的 GPU 数。总卡数 = workers × gpusPerWorker。'],
+        ],
+      },
+      {
+        kind: 'note',
+        text: '这些字段也可以写进代码目录下的 .spk-rayjob.yaml 固定下来，之后 spk-rayjob submit 不再需要任何参数，团队成员的提交形状也就一致了。',
+      },
+      { kind: 'code', label: '原生 ray job submit', lang: 'bash', text: NATIVE_RAY_SUBMIT },
+      {
+        kind: 'warning',
+        title: '原生提交不写元数据就是 1 卡',
+        text: '不带 ray-platform 元数据时，平台按默认的 1 卡环境执行。一旦写了其中任意一项，就必须把这一组写全，避免打字错误产生一个半配置的任务。多机多卡、数据目录选择和续训建议优先用 spk-rayjob。',
+      },
     ],
   },
   {

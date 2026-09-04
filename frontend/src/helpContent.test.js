@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
-import { helpSections, renderHelpMarkdown, CONTRACT_SNIPPET, SMOKE_SCRIPT } from './help/content.js'
+import { helpSections, renderHelpMarkdown, CONTRACT_SNIPPET, SMOKE_SCRIPT, NATIVE_RAY_SUBMIT } from './help/content.js'
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8')
 
@@ -106,5 +106,32 @@ test('user-facing pages never point at things a user cannot reach', async () => 
         `a user-facing page mentions ${unreachable}, which users have no access to`,
       )
     }
+  }
+})
+
+// Knowing the contract is not enough to submit anything. Both command-line
+// entrances need a command that can be copied and a meaning for each option,
+// otherwise the page explains the rules of a form the user cannot fill in.
+test('submission section gives runnable commands for both command-line entrances', async () => {
+  const markdown = renderHelpMarkdown()
+  const submit = helpSections.find((section) => section.id === 'submit')
+
+  const commands = submit.blocks.filter((block) => block.kind === 'code')
+  assert.ok(commands.length >= 4, 'the section must cover smoke, multi-node, resume and native Ray')
+  assert.ok(commands.some((block) => block.text.includes('spk-rayjob submit')))
+  assert.ok(commands.some((block) => block.text.includes('ray job submit')))
+
+  // A bare native submit silently runs on one GPU, so the resource metadata has
+  // to be shown rather than left for the user to discover.
+  assert.match(NATIVE_RAY_SUBMIT, /ray-platform\.worker-replicas/)
+  assert.match(NATIVE_RAY_SUBMIT, /ray-platform\.gpus-per-worker/)
+
+  // Every option shown in a command needs a meaning somewhere on the page.
+  for (const option of ['--engine', '--input-space', '--data-mode', '--resume-from-job', '--watch']) {
+    assert.ok(markdown.includes(option), `${option} is used but never explained`)
+  }
+  // The three execution modes carry constraints that reject a submission.
+  for (const mode of ['single_gpu', 'torchrun', 'ray_train']) {
+    assert.ok(markdown.includes(mode), `execution mode ${mode} is not documented`)
   }
 })
