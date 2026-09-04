@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"ray-train-platform-backend/domain"
+	"ray-train-platform-backend/httpapi"
 )
 
 func TestParseDataModeAcceptsStreamingAndListsItOnError(t *testing.T) {
@@ -169,13 +170,13 @@ func TestStreamingImageSelectionRequiresEnabledCanaryRuntime(t *testing.T) {
 func TestClientPreflightManagedStreamingSelectsCanaryImage(t *testing.T) {
 	canaryImage := "registry.example/canary@sha256:" + strings.Repeat("d", 64)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case "/api/v1/limits":
+		switch {
+		case request.URL.Path == "/api/v1/limits":
 			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"runtime": map[string]any{
 				"availableEngines": []string{"ray-ddp", "ray-train"}, "managedEnabled": true, "canaryEnabled": true,
 				"productionRayVersion": domain.RayVersionProduction, "canaryRayVersion": domain.RayVersionCanary,
 			}})
-		case "/api/v1/images":
+		case request.URL.Path == "/api/v1/images":
 			writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
 				"name": "Streaming", "reference": canaryImage, "rayVersion": domain.RayVersionCanary,
 				"supportedEngines": []string{"ray-train"},
@@ -237,18 +238,18 @@ gpusPerWorker: 8
 	var submitted domain.JobSpec
 	var submittedBody []byte
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case "/api/v1/limits":
+		switch {
+		case request.URL.Path == "/api/v1/limits":
 			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"runtime": map[string]any{
 				"availableEngines": []string{"ray-ddp", "ray-train"}, "managedEnabled": true, "canaryEnabled": true,
 				"productionRayVersion": domain.RayVersionProduction, "canaryRayVersion": domain.RayVersionCanary,
 			}})
-		case "/api/v1/images":
+		case request.URL.Path == "/api/v1/images":
 			writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
 				"name": "Streaming", "reference": canaryImage, "rayVersion": domain.RayVersionCanary,
 				"supportedEngines": []string{"ray-train"},
 			}})
-		case "/api/v1/jobs/preflight":
+		case request.URL.Path == "/api/v1/jobs/preflight":
 			writeClientSuccess(t, writer, http.StatusOK, map[string]any{
 				"image": canaryImage, "trainingEngine": "ray-train", "rayVersion": domain.RayVersionCanary, "requestedGpus": 16,
 				"dataset": map[string]any{
@@ -259,24 +260,10 @@ gpusPerWorker: 8
 					"dataMode": "streaming", "cachePolicy": "bounded",
 				},
 			})
-		case "/api/v1/source-artifacts":
-			var create struct {
-				SHA256    string `json:"sha256"`
-				SizeBytes int64  `json:"sizeBytes"`
-			}
-			if err := json.NewDecoder(request.Body).Decode(&create); err != nil {
-				t.Fatal(err)
-			}
-			writeClientSuccess(t, writer, http.StatusCreated, map[string]any{
-				"artifactId": "artifact-streaming", "state": "PENDING", "sha256": create.SHA256,
-				"sizeBytes": create.SizeBytes, "uploadUrl": serverURL(request) + "/upload",
-				"contentLength": create.SizeBytes, "uploadRequired": true,
-			})
-		case "/upload":
+		case request.Method == http.MethodPut && strings.HasPrefix(request.URL.Path, "/ray/api/packages/gcs/"):
+			writer.Header().Set(httpapi.SourceArtifactIDHeader, "raypkg-"+strings.Repeat("a", 64))
 			writer.WriteHeader(http.StatusOK)
-		case "/api/v1/source-artifacts/artifact-streaming/complete":
-			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"artifactId": "artifact-streaming", "state": "READY"})
-		case "/api/v1/jobs":
+		case request.URL.Path == "/api/v1/jobs":
 			body, err := io.ReadAll(request.Body)
 			if err != nil {
 				t.Fatal(err)

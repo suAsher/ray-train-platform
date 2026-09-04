@@ -22,6 +22,7 @@ import (
 	"ray-train-platform-backend/api"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
+	"ray-train-platform-backend/httpapi"
 	"ray-train-platform-backend/objectstore"
 	"ray-train-platform-backend/observability"
 	"ray-train-platform-backend/repositories"
@@ -424,17 +425,30 @@ func TestRayPackagePutHeadAndSubmitAreOwnerScoped(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("package put status=%d body=%s", response.Code, response.Body.String())
 	}
+	artifactID := rayPackageArtifactID(principal.TenantID, principal.Subject, packageName)
+	if got := response.Header().Get(httpapi.SourceArtifactIDHeader); got != artifactID {
+		t.Fatalf("package put artifact header=%q want %q", got, artifactID)
+	}
 	if !bytes.Equal(store.putBody, payload) {
 		t.Fatalf("store body=%q, want %q", store.putBody, payload)
 	}
 	computed := sha256.Sum256(payload)
-	artifactID := rayPackageArtifactID(principal.TenantID, principal.Subject, packageName)
 	artifact, err := repository.GetSourceArtifact(context.Background(), principal.TenantID, principal.Subject, artifactID)
 	if err != nil || artifact.State != domain.SourceArtifactReady || artifact.SHA256 != hex.EncodeToString(computed[:]) {
 		t.Fatalf("package was not persisted as a ready canonical artifact: artifact=%+v err=%v", artifact, err)
 	}
 	if response = rayRequest(router, http.MethodHead, "/ray/api/packages/gcs/"+packageName, ""); response.Code != http.StatusOK {
 		t.Fatalf("package head status=%d", response.Code)
+	}
+	if got := response.Header().Get(httpapi.SourceArtifactIDHeader); got != artifactID {
+		t.Fatalf("package head artifact header=%q want %q", got, artifactID)
+	}
+	retry := httptest.NewRequest(http.MethodPut, "/ray/api/packages/gcs/"+packageName, bytes.NewReader(payload))
+	retry.ContentLength = int64(len(payload))
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, retry)
+	if response.Code != http.StatusOK || response.Header().Get(httpapi.SourceArtifactIDHeader) != artifactID {
+		t.Fatalf("idempotent package put status=%d artifact=%q", response.Code, response.Header().Get(httpapi.SourceArtifactIDHeader))
 	}
 	if response = rayRequest(router, http.MethodPost, "/ray/api/jobs/", raySubmitBody(packageName)); response.Code != http.StatusOK {
 		t.Fatalf("submit status=%d body=%s", response.Code, response.Body.String())

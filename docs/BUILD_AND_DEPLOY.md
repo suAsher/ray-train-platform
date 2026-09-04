@@ -169,7 +169,9 @@ done
 再由其中的 `raytrain-vke-proxy` 以 HTTPS、保留 Host/SNI 的方式转发至 VKE 私网 ALB。
 不要把用户 DNS 直接指向 VKE ALB 地址，也不要为 Frontend 或 spk-rayjob 增加 NodePort。
 IDC 侧代理对象是独立共享网络资源，变更 ALB 或证书后必须一并复验该代理。
-原生 Ray `--working-dir` 会上传代码包，IDC Nginx Ingress 必须至少包含：
+`spk-rayjob submit` 和原生 Ray `--working-dir` 都会把代码包上传到平台中转端点，
+再由平台写入 TOS。用户主机只需能访问 `raytrain.wellspiking.ai`，不需要解析或
+直连 TOS endpoint。IDC Nginx Ingress 必须至少包含：
 
 ```yaml
 metadata:
@@ -184,7 +186,8 @@ metadata:
 ```
 
 缺少 `proxy-body-size` 时，小请求和 `/healthz` 仍会正常，但实际代码目录上传会返回
-`413 Request Entity Too Large`。不要用 NodePort 绕过这个问题。
+`413 Request Entity Too Large`。缺少长超时时，大代码包可能在上传中断。不要让用户改为直传
+TOS，也不要用 NodePort 绕过这个问题。
 
 证书 ID 同样由环境参数提供，并写入 Profile 的 `ingress.tls.certificateId`；不要在公开
 文档固化资源 ID，也不要将 PEM 私钥复制进 Git 或 Kubernetes Secret：

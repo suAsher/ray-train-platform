@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"ray-train-platform-backend/domain"
+	"ray-train-platform-backend/httpapi"
 )
 
 func testEnvironment(key string) string {
@@ -22,29 +23,16 @@ func testEnvironment(key string) string {
 	return ""
 }
 
-// artifactStubHandler answers the upload handshake every submission performs so
-// a workflow test can focus on the job specification the CLI composes.
+// artifactStubHandler answers the platform-relayed source upload every
+// submission performs so a workflow test can focus on the composed JobSpec.
 func artifactStubHandler(t *testing.T, onSubmit func(domain.JobSpec)) http.HandlerFunc {
 	t.Helper()
 	return func(writer http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case "/api/v1/source-artifacts":
-			var create struct {
-				SHA256    string `json:"sha256"`
-				SizeBytes int64  `json:"sizeBytes"`
-			}
-			if err := json.NewDecoder(request.Body).Decode(&create); err != nil {
-				t.Fatal(err)
-			}
-			writeClientSuccess(t, writer, http.StatusCreated, map[string]any{
-				"artifactId": "artifact-test", "state": "PENDING", "sha256": create.SHA256, "sizeBytes": create.SizeBytes,
-				"uploadUrl": serverURL(request) + "/upload", "contentLength": create.SizeBytes, "uploadRequired": true,
-			})
-		case "/upload":
+		switch {
+		case request.Method == http.MethodPut && strings.HasPrefix(request.URL.Path, "/ray/api/packages/gcs/"):
+			writer.Header().Set(httpapi.SourceArtifactIDHeader, "raypkg-"+strings.Repeat("a", 64))
 			writer.WriteHeader(http.StatusOK)
-		case "/api/v1/source-artifacts/artifact-test/complete":
-			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"artifactId": "artifact-test", "state": "READY", "uploadRequired": false})
-		case "/api/v1/jobs":
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/jobs":
 			var body struct {
 				Spec domain.JobSpec `json:"spec"`
 			}
@@ -731,7 +719,7 @@ cache:
 			}})
 			return
 		}
-		if request.URL.Path == "/api/v1/source-artifacts" && !limitsRead {
+		if request.Method == http.MethodPut && strings.HasPrefix(request.URL.Path, "/ray/api/packages/gcs/") && !limitsRead {
 			t.Fatal("limits must be resolved before source archive upload")
 		}
 		stub(writer, request)

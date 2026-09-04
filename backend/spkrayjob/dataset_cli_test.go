@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"ray-train-platform-backend/domain"
+	"ray-train-platform-backend/httpapi"
 )
 
 func TestDatasetsCommandListsOnlyLogicalCatalogFields(t *testing.T) {
@@ -104,18 +105,18 @@ gpusPerWorker: 8
 	var submitted domain.JobSpec
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		requestOrder = append(requestOrder, request.URL.Path)
-		switch request.URL.Path {
-		case "/api/v1/limits":
+		switch {
+		case request.URL.Path == "/api/v1/limits":
 			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"runtime": map[string]any{
 				"availableEngines": []string{"ray-ddp", "ray-train"}, "managedEnabled": true, "canaryEnabled": true,
 				"productionRayVersion": domain.RayVersionProduction, "canaryRayVersion": domain.RayVersionCanary,
 			}})
-		case "/api/v1/images":
+		case request.URL.Path == "/api/v1/images":
 			writeClientSuccess(t, writer, http.StatusOK, []map[string]any{{
 				"name": "Streaming", "reference": canaryImage, "rayVersion": domain.RayVersionCanary,
 				"supportedEngines": []string{"ray-train"},
 			}})
-		case "/api/v1/jobs/preflight":
+		case request.URL.Path == "/api/v1/jobs/preflight":
 			var body struct {
 				Spec domain.JobSpec `json:"spec"`
 			}
@@ -135,11 +136,10 @@ gpusPerWorker: 8
 					"dataMode": "streaming", "cachePolicy": "bounded",
 				},
 			})
-		case "/api/v1/source-artifacts":
-			writeClientSuccess(t, writer, http.StatusOK, map[string]any{
-				"artifactId": "artifact-streaming", "state": "READY", "uploadRequired": false,
-			})
-		case "/api/v1/jobs":
+		case request.Method == http.MethodPut && strings.HasPrefix(request.URL.Path, "/ray/api/packages/gcs/"):
+			writer.Header().Set(httpapi.SourceArtifactIDHeader, "raypkg-"+strings.Repeat("a", 64))
+			writer.WriteHeader(http.StatusOK)
+		case request.URL.Path == "/api/v1/jobs":
 			var body struct {
 				Spec domain.JobSpec `json:"spec"`
 			}
@@ -164,7 +164,7 @@ gpusPerWorker: 8
 	if submitted.DatasetRef != (domain.DatasetReference{Dataset: "dataset-labeled-full", Version: "version-20260830"}) {
 		t.Fatalf("latest was not pinned before submission: %+v", submitted.DatasetRef)
 	}
-	if len(requestOrder) < 4 || requestOrder[2] != "/api/v1/jobs/preflight" || requestOrder[3] != "/api/v1/source-artifacts" {
+	if len(requestOrder) < 4 || requestOrder[2] != "/api/v1/jobs/preflight" || !strings.HasPrefix(requestOrder[3], "/ray/api/packages/gcs/") {
 		t.Fatalf("preflight must precede source upload: %v", requestOrder)
 	}
 	for _, expected := range []string{"预检通过", "version-20260830", "15228", "16 GPU", "bounded"} {

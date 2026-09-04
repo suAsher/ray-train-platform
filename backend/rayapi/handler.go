@@ -25,6 +25,7 @@ import (
 	"ray-train-platform-backend/api"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
+	"ray-train-platform-backend/httpapi"
 	"ray-train-platform-backend/objectstore"
 	"ray-train-platform-backend/observability"
 	"ray-train-platform-backend/repositories"
@@ -181,7 +182,8 @@ func (handler *Handler) packageExists(c *gin.Context) {
 		handler.writeError(c, http.StatusBadRequest)
 		return
 	}
-	artifact, err := handler.repository.GetSourceArtifact(c.Request.Context(), principal.TenantID, principal.Subject, rayPackageArtifactID(principal.TenantID, principal.Subject, packageName.Name))
+	artifactID := rayPackageArtifactID(principal.TenantID, principal.Subject, packageName.Name)
+	artifact, err := handler.repository.GetSourceArtifact(c.Request.Context(), principal.TenantID, principal.Subject, artifactID)
 	if err != nil || artifact == nil || artifact.State != domain.SourceArtifactReady {
 		handler.writeError(c, http.StatusNotFound)
 		return
@@ -194,6 +196,7 @@ func (handler *Handler) packageExists(c *gin.Context) {
 		handler.writeArtifactError(c, status)
 		return
 	}
+	c.Header(httpapi.SourceArtifactIDHeader, artifactID)
 	c.Status(http.StatusOK)
 }
 
@@ -272,6 +275,7 @@ func (handler *Handler) putPackage(c *gin.Context) {
 		stored, status = handler.recoverReadyArtifact(c.Request.Context(), principal, stored)
 		switch status {
 		case http.StatusOK:
+			c.Header(httpapi.SourceArtifactIDHeader, artifactID)
 			c.Status(http.StatusOK)
 			return
 		case 0:
@@ -304,6 +308,7 @@ func (handler *Handler) putPackage(c *gin.Context) {
 		handler.writeError(c, http.StatusServiceUnavailable)
 		return
 	}
+	c.Header(httpapi.SourceArtifactIDHeader, artifactID)
 	c.Status(http.StatusOK)
 }
 

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"ray-train-platform-backend/domain"
+	"ray-train-platform-backend/httpapi"
 )
 
 func TestRunHelpUsesProductNeutralTitle(t *testing.T) {
@@ -135,24 +136,11 @@ func TestRunSubmitOmitsQueueAndLetsPlatformResolveIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case "/api/v1/source-artifacts":
-			var create struct {
-				SHA256    string `json:"sha256"`
-				SizeBytes int64  `json:"sizeBytes"`
-			}
-			if err := json.NewDecoder(request.Body).Decode(&create); err != nil {
-				t.Fatal(err)
-			}
-			writeClientSuccess(t, writer, http.StatusCreated, map[string]any{
-				"artifactId": "artifact-test", "state": "PENDING", "sha256": create.SHA256, "sizeBytes": create.SizeBytes,
-				"uploadUrl": serverURL(request) + "/upload", "contentLength": create.SizeBytes, "uploadRequired": true,
-			})
-		case "/upload":
+		switch {
+		case request.Method == http.MethodPut && strings.HasPrefix(request.URL.Path, "/ray/api/packages/gcs/"):
+			writer.Header().Set(httpapi.SourceArtifactIDHeader, "raypkg-"+strings.Repeat("a", 64))
 			writer.WriteHeader(http.StatusOK)
-		case "/api/v1/source-artifacts/artifact-test/complete":
-			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"artifactId": "artifact-test", "state": "READY", "uploadRequired": false})
-		case "/api/v1/jobs":
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/jobs":
 			var body struct {
 				Spec domain.JobSpec `json:"spec"`
 			}
@@ -192,21 +180,16 @@ func TestRunSubmitPropagatesCallerSourceRequestID(t *testing.T) {
 		t.Fatal(err)
 	}
 	const requestID = "source-request-0123456789abcdef01234567"
-	const artifactID = "artifact-server-generated"
+	const artifactID = "raypkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case "/api/v1/source-artifacts":
-			var create struct {
-				ClientRequestID string `json:"clientRequestId"`
+		switch {
+		case request.Method == http.MethodPut && strings.HasPrefix(request.URL.Path, "/ray/api/packages/gcs/"):
+			if request.URL.Path != "/ray/api/packages/gcs/"+sourceRequestPackageName(requestID) {
+				t.Fatalf("request ID did not produce stable package path: %s", request.URL.Path)
 			}
-			if err := json.NewDecoder(request.Body).Decode(&create); err != nil {
-				t.Fatal(err)
-			}
-			if create.ClientRequestID != requestID {
-				t.Fatalf("clientRequestID=%q", create.ClientRequestID)
-			}
-			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"artifactId": artifactID, "state": "READY", "uploadRequired": false})
-		case "/api/v1/jobs":
+			writer.Header().Set(httpapi.SourceArtifactIDHeader, artifactID)
+			writer.WriteHeader(http.StatusOK)
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/jobs":
 			writeClientSuccess(t, writer, http.StatusAccepted, map[string]any{"id": "job-test"})
 		default:
 			t.Fatalf("unexpected request %s", request.URL.Path)
@@ -226,6 +209,10 @@ func TestRunSubmitPropagatesCallerSourceRequestID(t *testing.T) {
 func TestRunSourceArtifactResolveReturnsServerArtifactID(t *testing.T) {
 	const requestID = "source-request-0123456789abcdef01234567"
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodHead && strings.HasPrefix(request.URL.Path, "/ray/api/packages/gcs/") {
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
 		if request.Method != http.MethodGet || request.URL.Path != "/api/v1/source-artifact-requests/"+requestID {
 			t.Fatalf("unexpected request %s %s", request.Method, request.URL.Path)
 		}
@@ -251,24 +238,11 @@ func TestRunSubmitMapsLogicalDataSpacesWithoutObjectStorePaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case "/api/v1/source-artifacts":
-			var create struct {
-				SHA256    string `json:"sha256"`
-				SizeBytes int64  `json:"sizeBytes"`
-			}
-			if err := json.NewDecoder(request.Body).Decode(&create); err != nil {
-				t.Fatal(err)
-			}
-			writeClientSuccess(t, writer, http.StatusCreated, map[string]any{
-				"artifactId": "artifact-data", "state": "PENDING", "sha256": create.SHA256, "sizeBytes": create.SizeBytes,
-				"uploadUrl": serverURL(request) + "/upload", "contentLength": create.SizeBytes, "uploadRequired": true,
-			})
-		case "/upload":
+		switch {
+		case request.Method == http.MethodPut && strings.HasPrefix(request.URL.Path, "/ray/api/packages/gcs/"):
+			writer.Header().Set(httpapi.SourceArtifactIDHeader, "raypkg-"+strings.Repeat("a", 64))
 			writer.WriteHeader(http.StatusOK)
-		case "/api/v1/source-artifacts/artifact-data/complete":
-			writeClientSuccess(t, writer, http.StatusOK, map[string]any{"artifactId": "artifact-data", "state": "READY", "uploadRequired": false})
-		case "/api/v1/jobs":
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/jobs":
 			var body struct {
 				Spec domain.JobSpec `json:"spec"`
 			}

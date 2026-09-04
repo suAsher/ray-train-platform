@@ -3,8 +3,10 @@ package spkrayjob
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,6 +20,7 @@ import (
 	"time"
 
 	"ray-train-platform-backend/domain"
+	"ray-train-platform-backend/httpapi"
 )
 
 type ClientOptions struct {
@@ -41,9 +44,13 @@ const (
 	// envelope size. Keep this bounded, but large enough for the documented
 	// 10,000-line query contract.
 	maxLogPlatformResponseBytes int64 = 32 << 20
+	// Source archives may be as large as 2 GiB. This matches the production
+	// ingress timeout for the platform-owned package upload relay.
+	sourceUploadTimeout = time.Hour
 )
 
 var stableSourceRequestID = regexp.MustCompile(`^source-request-[0-9a-f]{24}$`)
+var relayedSourceArtifactID = regexp.MustCompile(`^raypkg-[0-9a-f]{64}$`)
 
 type localLogin struct {
 	Token    string `json:"token"`
@@ -288,24 +295,68 @@ func (client *Client) submitArchiveWithRequestID(ctx context.Context, archive Ar
 	if err := validateArchiveJobSpec(spec); err != nil {
 		return Job{}, err
 	}
-	artifact, err := client.CreateArtifactWithRequestID(ctx, archive, clientRequestID)
+	artifact, err := client.relayArchive(ctx, archive, sourcePackageName(archive, clientRequestID))
 	if err != nil {
 		return Job{}, err
 	}
-	if artifact.UploadRequired {
-		if err := client.Upload(ctx, artifact, archive); err != nil {
-			return Job{}, err
-		}
-		artifact, err = client.CompleteArtifact(ctx, artifact.ArtifactID)
-		if err != nil {
-			return Job{}, err
-		}
-	}
-	if artifact.ArtifactID == "" || artifact.State != "READY" {
-		return Job{}, fmt.Errorf("source artifact was not ready")
-	}
 	spec.Source = domain.CodeSource{Type: "workspace-archive", ArtifactID: artifact.ArtifactID}
 	return client.submit(ctx, spec, domain.SubmissionOriginRayCLI)
+}
+
+func sourcePackageName(archive Archive, clientRequestID string) string {
+	if clientRequestID == "" {
+		return archive.SHA256 + ".zip"
+	}
+	digest := sha256.Sum256([]byte(clientRequestID))
+	return hex.EncodeToString(digest[:]) + ".zip"
+}
+
+func sourceRequestPackageName(clientRequestID string) string {
+	digest := sha256.Sum256([]byte(clientRequestID))
+	return hex.EncodeToString(digest[:]) + ".zip"
+}
+
+// relayArchive sends the source archive to the authenticated platform endpoint.
+// The platform owns the object-store connection, so CLI users only need network
+// access to the same server they use for all other spk-rayjob operations.
+func (client *Client) relayArchive(ctx context.Context, archive Archive, packageName string) (Artifact, error) {
+	file, err := os.Open(archive.Path)
+	if err != nil {
+		return Artifact{}, fmt.Errorf("open source archive: %w", err)
+	}
+	defer file.Close()
+
+	target := client.server.ResolveReference(&url.URL{Path: "/ray/api/packages/gcs/" + packageName})
+	request, err := http.NewRequestWithContext(ctx, http.MethodPut, target.String(), file)
+	if err != nil {
+		return Artifact{}, fmt.Errorf("create platform source upload request")
+	}
+	request.ContentLength = archive.SizeBytes
+	request.Header.Set("Authorization", "Bearer "+client.token)
+	request.Header.Set("Content-Type", "application/zip")
+	client.debugf("PUT %s", redactedURL(target))
+
+	uploadClient := *client.httpClient
+	if uploadClient.Timeout > 0 && uploadClient.Timeout < sourceUploadTimeout {
+		uploadClient.Timeout = sourceUploadTimeout
+	}
+	response, err := uploadClient.Do(request)
+	if err != nil {
+		return Artifact{}, fmt.Errorf("platform source upload request failed")
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return Artifact{}, fmt.Errorf("platform source upload failed with status %d", response.StatusCode)
+	}
+	return relayedArtifactFromResponse(response, archive)
+}
+
+func relayedArtifactFromResponse(response *http.Response, archive Archive) (Artifact, error) {
+	artifactID := strings.TrimSpace(response.Header.Get(httpapi.SourceArtifactIDHeader))
+	if !relayedSourceArtifactID.MatchString(artifactID) {
+		return Artifact{}, fmt.Errorf("platform source upload response had no valid artifact ID")
+	}
+	return Artifact{ArtifactID: artifactID, State: "READY", SHA256: archive.SHA256, SizeBytes: archive.SizeBytes}, nil
 }
 
 func (client *Client) CreateArtifact(ctx context.Context, archive Archive) (Artifact, error) {
@@ -344,18 +395,53 @@ func (client *Client) ResolveArtifactRequest(ctx context.Context, clientRequestI
 	if !stableSourceRequestID.MatchString(clientRequestID) {
 		return Artifact{}, fmt.Errorf("source request ID must match source-request- followed by 24 lowercase hexadecimal characters")
 	}
+	artifact, found, err := client.resolveRelayedArtifact(ctx, sourceRequestPackageName(clientRequestID))
+	if err != nil {
+		return Artifact{}, err
+	}
+	if found {
+		return artifact, nil
+	}
 	data, err := client.request(ctx, http.MethodGet, "/api/v1/source-artifact-requests/"+url.PathEscape(clientRequestID), nil, nil)
 	if err != nil {
 		return Artifact{}, err
 	}
-	var artifact Artifact
-	if err := json.Unmarshal(data, &artifact); err != nil {
+	var legacyArtifact Artifact
+	if err := json.Unmarshal(data, &legacyArtifact); err != nil {
 		return Artifact{}, fmt.Errorf("decode source artifact request response")
 	}
-	if strings.TrimSpace(artifact.ArtifactID) == "" {
+	if strings.TrimSpace(legacyArtifact.ArtifactID) == "" {
 		return Artifact{}, fmt.Errorf("source artifact request response had no artifact ID")
 	}
-	return artifact, nil
+	return legacyArtifact, nil
+}
+
+func (client *Client) resolveRelayedArtifact(ctx context.Context, packageName string) (Artifact, bool, error) {
+	target := client.server.ResolveReference(&url.URL{Path: "/ray/api/packages/gcs/" + packageName})
+	request, err := http.NewRequestWithContext(ctx, http.MethodHead, target.String(), nil)
+	if err != nil {
+		return Artifact{}, false, fmt.Errorf("create platform source lookup request")
+	}
+	request.Header.Set("Authorization", "Bearer "+client.token)
+	client.debugf("HEAD %s", redactedURL(target))
+	response, err := client.httpClient.Do(request)
+	if err != nil {
+		return Artifact{}, false, fmt.Errorf("platform source lookup request failed")
+	}
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusNotFound {
+		return Artifact{}, false, nil
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return Artifact{}, false, fmt.Errorf("platform source lookup failed with status %d", response.StatusCode)
+	}
+	artifactID := strings.TrimSpace(response.Header.Get(httpapi.SourceArtifactIDHeader))
+	if !relayedSourceArtifactID.MatchString(artifactID) {
+		// Older platform versions served the Ray package endpoint without the
+		// binding header. Fall back to the legacy request lookup during rollout.
+		return Artifact{}, false, nil
+	}
+	return Artifact{ArtifactID: artifactID, State: "READY", UploadRequired: false}, true, nil
 }
 
 func (client *Client) Upload(ctx context.Context, artifact Artifact, archive Archive) error {
