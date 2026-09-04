@@ -205,3 +205,38 @@ test('topics are grouped so the list stays scannable', async () => {
     assert.ok(size <= 7, `group ${group} has ${size} topics, which is no longer scannable`)
   }
 })
+
+// The manuals contain measured results and decision thresholds that took real
+// benchmark runs to produce. Restating them as "it may be faster" throws that
+// away and leaves the reader guessing, so the page carries the numbers.
+test('performance guidance carries measured evidence, not adjectives', async () => {
+  const markdown = renderHelpMarkdown()
+
+  // Whether warming the cache pays back depends on how many passes are made.
+  assert.match(markdown, /5,625 MiB\/s/, 'the NVMe read figure is missing')
+  assert.match(markdown, /13\.5%/, 'the single-pass payback is missing')
+  // A threshold, not a feeling, decides whether data reading is the bottleneck.
+  assert.match(markdown, /30%/, 'the data-wait threshold is missing')
+  assert.match(markdown, /数据等待占比/)
+  // Scaling is judged on throughput, and step time is expected not to fall.
+  assert.match(markdown, /样本吞吐/)
+  assert.match(markdown, /扩展效率/)
+  // NaN gradients are an algorithm problem and must not be chased as a platform
+  // performance issue.
+  assert.match(markdown, /grad_norm/)
+})
+
+// Losing a topic to a bad edit is silent otherwise: the page still renders and
+// the remaining topics look complete.
+test('every topic keeps its title, summary and at least one block', async () => {
+  for (const section of helpSections) {
+    assert.ok(section.title, `${section.id} has no title`)
+    assert.ok(section.blocks.length > 0, `${section.id} renders nothing`)
+    assert.ok(section.group, `${section.id} is unfiled`)
+  }
+  const ids = helpSections.map((section) => section.id)
+  assert.equal(new Set(ids).size, ids.length, 'duplicate topic ids')
+  for (const required of ['resume', 'diagnose', 'scaling', 'cache', 'debug']) {
+    assert.ok(ids.includes(required), `${required} disappeared`)
+  }
+})

@@ -13,6 +13,7 @@ import {
   NATIVE_RAY_SUBMIT,
   RAY_DATA_CODE,
   RESUME_CODE,
+  SCALING_AB,
   SMOKE_SCRIPT,
   SUBMIT_CACHE,
   SUBMIT_MULTINODE,
@@ -21,6 +22,7 @@ import {
   SUBMIT_RESUME,
   SUBMIT_SMOKE,
   SUBMIT_STREAMING,
+  THROUGHPUT_FORMULA,
 } from './snippets.js'
 
 export const helpSections = [
@@ -222,9 +224,30 @@ export const helpSections = [
         text: '只写 --cache-mode runtime 时，缓存盘只用于 Ray 临时文件和训练代码主动写入的内容，输入数据仍然从对象存储直接读。要预热输入必须显式加 --cache-preload input，并指定具体的输入目录。',
       },
       {
+        kind: 'table',
+        headers: ['口径（8,192 文件 / 5.2 GB / 2 Worker）', '聚合吞吐', '单文件 P95', '最慢 Worker'],
+        rows: [
+          ['持久数据首次读', '19.1 MiB/s', '约 146 ms', '259.1 s'],
+          ['持久数据同 Pod 重复读', '114.8 MiB/s', '约 15 ms', '43.2 s'],
+          ['NVMe 预热后读取', '5,625 MiB/s', '约 1.8 ms', '0.9 s'],
+        ],
+      },
+      {
+        kind: 'table',
+        headers: ['读几遍', '直读总耗时', '预热 + 读', '差异'],
+        rows: [
+          ['1 遍', '259.1 s', '223.1 + 0.9 = 224.0 s', '缩短约 13.5%'],
+          ['2 遍', '302.3 s', '223.1 + 0.9 + 1.0 = 225.0 s', '缩短约 25.6%'],
+        ],
+      },
+      {
+        kind: 'note',
+        text: '预热这 5.2 GB 本身花了 223 秒，所以只读一遍几乎不回本，读得越多轮越划算——这就是「短任务别开缓存」的具体依据。以上是一次真实 A/B，未清理宿主机缓存，属于业务可复现口径而非实验室裸盘数据；你的数据集特征不同，结果会变。',
+      },
+      {
         kind: 'list',
         items: [
-          '预热本身要花时间。短任务不一定收回这个成本，长训练和多 epoch 才是它的主场——同一份数据读得越多轮越划算。',
+          '判断该不该开：先看训练日志里的数据等待占比（data_time ÷ 单步耗时）。长期超过 30% 才值得考虑；5% 左右说明瓶颈不在读数据，开了也不会更快。',
           '缓存是可丢弃的临时卷，随 Pod 回收。数据真相仍在对象存储，权重和结果必须写 PLATFORM_OUTPUT_PATH。',
           '代码仍然读 PLATFORM_DATASET_PATH，不要在代码里写 /data1、/data2 这类节点路径。',
         ],
@@ -290,7 +313,7 @@ export const helpSections = [
   {
     id: 'observability',
     group: '排查',
-    title: '可观测性与训练诊断',
+    title: '在哪看训练状态',
     summary: '任务详情页有四个标签页，分别回答"在跑什么、跑得怎么样、产出了什么、跑在哪里"。',
     blocks: [
       {
@@ -310,9 +333,67 @@ export const helpSections = [
         kind: 'list',
         items: [
           '日志要加 flush=True，否则缓冲区可能迟迟不刷新，界面上看着像卡住了。',
-          '训练慢时先看 GPU 利用率曲线：每张卡都在忙说明是算力上限；有卡长期空闲说明卡在数据读取或同步上。',
-          '数据读取是不是瓶颈，看训练日志里的 data_time——明显高于 0 才需要考虑换数据模式。',
           'Ray Dashboard 只在任务的集群存活期间可用；任务结束后集群被回收，改看日志和指标。',
+        ],
+      },
+    ],
+  },
+  {
+    id: 'diagnose',
+    group: '排查',
+    title: '训练慢，怎么定位瓶颈',
+    summary: '先算清楚四个指标，再对照信号找瓶颈。凭感觉加 DataLoader 进程或加卡，通常不会更快。',
+    blocks: [
+      {
+        kind: 'table',
+        headers: ['指标', '含义', '常见误区'],
+        rows: [
+          ['单步耗时', '一个 iteration 的平均时间', '多机之后不一定明显下降，这是正常的'],
+          ['样本吞吐', '每秒完成的全局样本数', '这才是衡量扩卡效果的核心指标'],
+          ['每轮迭代数', '一个 epoch 要执行多少步', '全局 Batch 翻倍时通常减半'],
+          ['整轮耗时', '完成一个 epoch 的墙钟时间', '最直接反映任务是否真的加速'],
+        ],
+      },
+      { kind: 'code', label: '怎么算', lang: 'text', text: THROUGHPUT_FORMULA },
+      {
+        kind: 'note',
+        text: '举例：单机 8 卡与双机 16 卡都用 samples_per_gpu=8，全局 Batch 从 64 变 128。每张卡仍处理 8 个样本、计算量没变，所以单步耗时接近单机是正常的；但每步处理的样本翻倍、每轮迭代数减半，整轮训练才应该接近两倍快。只盯单步耗时，会把正常的扩卡误判成「多机没用」。',
+      },
+      {
+        kind: 'table',
+        headers: ['瓶颈', '典型信号', '往哪个方向优化'],
+        rows: [
+          ['数据读取', 'data_time 占单步耗时长期超过 30%；P95 明显高于中位数且周期性长尾；GPU 利用率锯齿状频繁掉底；加 DataLoader worker 后吞吐明显改善；热读明显快于首读', '换数据模式或开缓存'],
+          ['GPU 计算', 'GPU 利用率长期超过 80%；data_time 低；单步耗时稳定；加 CPU 或 DataLoader worker 没有改善', '混合精度、算子实现、每卡 Batch、编译优化'],
+          ['跨节点通信', '双机单步耗时明显高于单机；NCCL AllReduce 占比高；节点间网络接近带宽上限；各 rank 进度不一致；日志出现 NCCL timeout 或 connection reset', '减少通信量、梯度累积、检查网络'],
+          ['CPU / DataLoader 过配', '申请了远超实际使用的 CPU 与内存；workers_per_gpu 很大但 GPU 并没在等数据', '调小 workers_per_gpu，做 A/B 再定'],
+        ],
+      },
+      {
+        kind: 'warning',
+        title: 'grad_norm: nan 不是平台性能问题',
+        text: '日志里的 grad_norm nan、验证指标 NaN、loss 异常属于算法与数值稳定性问题。分别检查：学习率是否随全局 Batch 同步调整、FP16 loss scale、梯度裁剪、warmup、数据异常值，以及 checkpoint 是否与当前配置兼容。',
+      },
+      {
+        kind: 'note',
+        text: 'workers_per_gpu=8 在 8 个 rank 下会产生约 64 个 DataLoader 子进程。即使暂时没让 GPU 等待，它也会推高内存占用、小文件并发与元数据压力、进程切换开销，并在多任务并发时加剧存储抖动。建议用同一任务对 4 和 8 跑 300–500 步 A/B 再定默认值，不要因为节点 CPU 多就一路加上去。',
+      },
+    ],
+  },
+  {
+    id: 'scaling',
+    group: '排查',
+    title: '扩卡效果怎么验收',
+    summary: '扩卡测试有两种目的，预期结果不同，结论不能混用。先想清楚你要回答哪个问题。',
+    blocks: [
+      { kind: 'code', label: '两种测法', lang: 'text', text: SCALING_AB },
+      {
+        kind: 'list',
+        items: [
+          '固定测试条件：同一镜像摘要、同一数据目录、同一配置，只改规模。否则对比没有意义。',
+          '测量区间要跳过最初若干步——首个 epoch 的前几步包含预热、编译和首次读取，算进平均值会低估性能。',
+          '每次都记录：全局 Batch、平均单步耗时、样本吞吐、每轮迭代数、整轮耗时、数据等待占比。只记「快了多少」事后无法复查。',
+          '扩展效率 = 加速比 ÷ GPU 倍数。双机 16 卡相对单机 8 卡能到 0.8 以上通常是健康的；明显低于此，再按上一节找瓶颈。',
         ],
       },
     ],

@@ -1,5 +1,5 @@
 <template>
-  <div class="max-w-5xl space-y-6">
+  <div class="space-y-6">
     <section class="rounded-2xl border border-blue-500/20 bg-gradient-to-br from-blue-950/40 to-[#131826] p-7 shadow-xl">
       <p class="text-[11px] font-semibold uppercase tracking-[0.2em] text-blue-400">Usage</p>
       <div class="mt-2 flex flex-wrap items-start justify-between gap-4">
@@ -14,8 +14,8 @@
       </div>
     </section>
 
-    <div class="grid gap-6 lg:grid-cols-[15rem_minmax(0,1fr)]">
-      <nav class="panel h-fit p-3 lg:sticky lg:top-4">
+    <div class="grid gap-6 xl:grid-cols-[16rem_minmax(0,1fr)]">
+      <nav class="panel h-fit p-3 xl:sticky xl:top-4">
         <div v-for="group in groupedSections" :key="group.name" class="mb-3 last:mb-0">
           <p class="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">{{ group.name }}</p>
           <button
@@ -39,20 +39,20 @@
             <span class="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-500/15 font-mono text-xs font-semibold text-blue-300">{{ step + 1 }}</span>
             <div class="min-w-0 flex-1">
               <p class="text-sm font-semibold text-slate-100">{{ item.title }}</p>
-              <p class="mt-1 text-sm leading-6 text-slate-400">{{ item.body }}</p>
+              <p class="mt-1 max-w-3xl text-sm leading-6 text-slate-400">{{ item.body }}</p>
               <CopyBlock v-if="item.code" class="mt-3" :text="item.code" :label="item.codeLabel" />
             </div>
           </li>
         </ol>
 
         <ul v-else-if="block.kind === 'list'" class="mt-4 space-y-2">
-          <li v-for="item in block.items" :key="item" class="flex gap-2 text-sm leading-6 text-slate-300">
+          <li v-for="item in block.items" :key="item" class="flex max-w-4xl gap-2 text-sm leading-6 text-slate-300">
             <span class="text-blue-400">·</span><span>{{ item }}</span>
           </li>
         </ul>
 
         <ul v-else-if="block.kind === 'checklist'" class="mt-4 space-y-2">
-          <li v-for="item in block.items" :key="item" class="flex gap-2 text-sm leading-6 text-slate-300">
+          <li v-for="item in block.items" :key="item" class="flex max-w-4xl gap-2 text-sm leading-6 text-slate-300">
             <span class="mt-1.5 h-3 w-3 shrink-0 rounded border border-slate-600"></span><span>{{ item }}</span>
           </li>
         </ul>

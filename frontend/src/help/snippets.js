@@ -138,3 +138,22 @@ python3 -m venv /workspace/.venv && source /workspace/.venv/bin/activate
 
 # 容器以非 root 运行，apt install 不可用。
 # 需要系统库、CUDA 或编译器时，请让管理员登记新镜像。`
+
+export const THROUGHPUT_FORMULA = `全局 Batch   = Worker 数 × 每 Worker GPU 数 × samples_per_gpu
+样本吞吐     = 全局 Batch ÷ 平均单步耗时
+加速比       = 多机样本吞吐 ÷ 单机样本吞吐
+扩展效率     = 加速比 ÷ GPU 数量倍数
+数据等待占比 = 平均 data_time ÷ 平均单步耗时`
+
+export const SCALING_AB = `# 目的一：验证扩卡是否有效（每卡 Batch 不变）
+1×8 卡   samples_per_gpu=8   全局 Batch 64
+2×8 卡   samples_per_gpu=8   全局 Batch 128
+# 预期：单步耗时接近，样本吞吐≈2 倍，每轮迭代数≈减半
+
+# 目的二：比较相同优化语义下的训练时间（全局 Batch 固定）
+1×8 卡   samples_per_gpu=8   全局 Batch 64
+2×8 卡   samples_per_gpu=4   全局 Batch 64
+# 预期：单步耗时下降，但达不到严格 2 倍——多了跨节点 AllReduce，
+#       每张卡的计算粒度也变小了
+
+# 两种测法结论不能混用。`
