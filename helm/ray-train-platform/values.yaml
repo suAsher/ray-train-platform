@@ -121,6 +121,12 @@ backend:
   corsOrigins: []
   imageAllowlist:
     - cr-cn-beijing.volces.com/ray-platform/ray-train
+  # Finished RayJobs, their submitter Job and Pod are released this long after a
+  # run ends. KubeRay's own TTL only tears down the RayCluster, so without this
+  # those objects accumulate for the lifetime of the cluster. Matches the log
+  # retention window so a run inspectable in logs is inspectable in the cluster.
+  # Set to 0 to keep every finished resource.
+  rayJobRetentionSeconds: 2592000
   gitAllowlist:
     - git.example.com
   workspaceImage: "REPLACE_WITH_IMMUTABLE_WORKSPACE_IMAGE"

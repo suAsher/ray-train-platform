@@ -56,6 +56,7 @@ type JobRecord struct {
 	StartedAt             *time.Time
 	FinishedAt            *time.Time
 	ArchivedAt            *time.Time `gorm:"index"`
+	RayJobRetiredAt       *time.Time
 }
 
 type OutboxRecord struct {
@@ -560,6 +561,50 @@ func (r *GormRepository) ListReconcileCandidates(ctx context.Context, limit int)
 		ids = append(ids, record.ID)
 	}
 	return ids, nil
+}
+
+// ListExpiredRayJobs returns finished runs whose Kubernetes objects may be
+// released. Only terminal jobs qualify, and a terminal job is no longer a
+// reconcile candidate, so deleting its RayJob cannot race the control loop or
+// cause a NotFound to be observed as a state change.
+//
+// Legacy rows predate finished_at, so the age falls back to updated_at rather
+// than excluding those jobs from cleanup forever.
+func (r *GormRepository) ListExpiredRayJobs(ctx context.Context, before time.Time, limit int) ([]domain.ExpiredRayJob, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 20
+	}
+	var records []JobRecord
+	query := r.db.WithContext(ctx).
+		Where("ray_job_retired_at IS NULL").
+		Where("observed_state IN ?", terminalStates()).
+		Where("COALESCE(finished_at, updated_at) < ?", before.UTC()).
+		Where("ray_job_name <> '' AND kubernetes_ns <> '' AND ray_job_uid <> ''")
+	if err := query.Order("COALESCE(finished_at, updated_at) ASC").Limit(limit).Find(&records).Error; err != nil {
+		return nil, fmt.Errorf("list expired RayJobs: %w", err)
+	}
+	expired := make([]domain.ExpiredRayJob, 0, len(records))
+	for _, record := range records {
+		expired = append(expired, domain.ExpiredRayJob{
+			JobID: record.ID, KubernetesNS: record.KubernetesNS,
+			RayJobName: record.RayJobName, RayJobUID: record.RayJobUID,
+		})
+	}
+	return expired, nil
+}
+
+// MarkRayJobRetired makes the sweep idempotent. Without it a deleted RayJob
+// would be re-selected on every tick, because the job record keeps its resource
+// identity for provenance.
+func (r *GormRepository) MarkRayJobRetired(ctx context.Context, jobID string, retiredAt time.Time) error {
+	at := retiredAt.UTC()
+	result := r.db.WithContext(ctx).Model(&JobRecord{}).
+		Where("id = ? AND ray_job_retired_at IS NULL", jobID).
+		Update("ray_job_retired_at", &at)
+	if result.Error != nil {
+		return fmt.Errorf("mark RayJob retired: %w", result.Error)
+	}
+	return nil
 }
 
 func (r *GormRepository) ApplyObservedState(ctx context.Context, observed domain.ObservedJobState) error {

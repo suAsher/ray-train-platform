@@ -22,6 +22,9 @@ import (
 )
 
 type memoryJobStore struct {
+	expiredRayJobs       []domain.ExpiredRayJob
+	retiredRayJobs       []string
+	expiredBefore        time.Time
 	job                  *domain.TrainingJob
 	observed             []domain.ObservedJobState
 	recoveryAllowed      bool
@@ -1444,4 +1447,17 @@ func TestQuotaSyncPreservesLastKnownGoodLimitsOnEmptyOrFailedObservation(t *test
 			assertNoKueueUpdateActions(t, dynamicClient)
 		})
 	}
+}
+
+func (s *memoryJobStore) ListExpiredRayJobs(_ context.Context, before time.Time, limit int) ([]domain.ExpiredRayJob, error) {
+	s.expiredBefore = before
+	if limit < len(s.expiredRayJobs) {
+		return append([]domain.ExpiredRayJob(nil), s.expiredRayJobs[:limit]...), nil
+	}
+	return append([]domain.ExpiredRayJob(nil), s.expiredRayJobs...), nil
+}
+
+func (s *memoryJobStore) MarkRayJobRetired(_ context.Context, jobID string, _ time.Time) error {
+	s.retiredRayJobs = append(s.retiredRayJobs, jobID)
+	return nil
 }

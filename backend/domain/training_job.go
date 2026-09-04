@@ -930,3 +930,18 @@ func (s CodeSource) validate() error {
 	}
 	return nil
 }
+
+// ExpiredRayJob identifies the Kubernetes objects of a finished run that are
+// old enough to release. Deleting the RayJob cascades to its submitter Job and
+// Pod, which are otherwise kept forever: KubeRay's ttlSecondsAfterFinished only
+// tears down the RayCluster, never the RayJob itself.
+//
+// Nothing the platform needs is lost. The job record is retained indefinitely,
+// logs live in the log store for their own retention window, and artifacts are
+// written to the user's own storage.
+type ExpiredRayJob struct {
+	JobID        string
+	KubernetesNS string
+	RayJobName   string
+	RayJobUID    string
+}

@@ -339,10 +339,13 @@ func newReconcilerWithQuotaSync(repository *repositories.GormRepository, client 
 	if client != nil {
 		store = &managedCredentialJobStore{GormRepository: repository, kubernetes: client, now: time.Now}
 	}
-	return k8s.NewReconciler(store, client, options).WithGitCredentials(repository).WithQuotaSync(k8s.QuotaSyncOptions{
-		ClusterQueueName: cfg.KueueClusterQueue,
-		Enabled:          cfg.KueueAutoQuota,
-	})
+	return k8s.NewReconciler(store, client, options).
+		WithGitCredentials(repository).
+		WithRayJobRetention(time.Duration(cfg.RayJobRetentionSeconds) * time.Second).
+		WithQuotaSync(k8s.QuotaSyncOptions{
+			ClusterQueueName: cfg.KueueClusterQueue,
+			Enabled:          cfg.KueueAutoQuota,
+		})
 }
 
 func newReconciler(repository *repositories.GormRepository, client *k8s.Client, cfg config.Config) *k8s.Reconciler {

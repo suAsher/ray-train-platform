@@ -37,6 +37,8 @@ type JobStore interface {
 	ConfirmManagedAttemptActivation(context.Context, domain.ManagedAttemptActivationRequest) (*domain.TrainingJob, bool, error)
 	RetireManagedAttemptResource(context.Context, domain.ManagedAttemptRetireRequest) (*domain.ManagedAttemptResource, bool, error)
 	ListManagedAttemptCleanup(context.Context, int, time.Time) ([]domain.ManagedAttemptResource, error)
+	ListExpiredRayJobs(context.Context, time.Time, int) ([]domain.ExpiredRayJob, error)
+	MarkRayJobRetired(context.Context, string, time.Time) error
 	ListManagedAttemptTombstoneAudit(context.Context, int, time.Time) ([]domain.ManagedAttemptResource, error)
 	RecordManagedAttemptCleanupFailure(context.Context, domain.ManagedAttemptCleanupFailureRequest) error
 	GetManagedAttemptResource(context.Context, string, int) (*domain.ManagedAttemptResource, error)
@@ -65,6 +67,7 @@ type Reconciler struct {
 	creationLease    time.Duration
 	cleanupWait      time.Duration
 	cleanupPoll      time.Duration
+	rayJobRetention  time.Duration
 	now              func() time.Time
 }
 
@@ -119,6 +122,14 @@ func (r *Reconciler) renderOptionsForJob(ctx context.Context, job domain.Trainin
 	return options, nil
 }
 
+// WithRayJobRetention overrides how long a finished run's Kubernetes objects
+// are kept. A non-positive duration disables the sweep, which leaves the old
+// unbounded behaviour available if an operator needs to keep every resource.
+func (r *Reconciler) WithRayJobRetention(retention time.Duration) *Reconciler {
+	r.rayJobRetention = retention
+	return r
+}
+
 func (r *Reconciler) WithQuotaSync(options QuotaSyncOptions) *Reconciler {
 	r.clusterQueueName = options.ClusterQueueName
 	r.autoQuota = options.Enabled && options.ClusterQueueName != ""
@@ -163,7 +174,8 @@ func NewReconciler(store JobStore, client *Client, renderOptions RenderOptions) 
 		store: store, client: client, renderOptions: renderOptions, interval: 5 * time.Second,
 		leaseOwner: newReconcilerLeaseOwner(), creationLease: 30 * time.Second,
 		cleanupWait: 100 * time.Millisecond, cleanupPoll: 25 * time.Millisecond,
-		now: func() time.Time { return time.Now().UTC() },
+		rayJobRetention: defaultRayJobRetention,
+		now:             func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -200,6 +212,7 @@ func (r *Reconciler) Run(ctx context.Context) error {
 }
 
 func (r *Reconciler) ProcessOnce(ctx context.Context) error {
+	r.retireExpiredRayJobs(ctx)
 	cleanupErr := r.reconcileManagedAttemptCleanups(ctx)
 	events, err := r.store.ClaimOutbox(ctx, 50)
 	if err != nil {
@@ -230,6 +243,45 @@ func (r *Reconciler) ProcessOnce(ctx context.Context) error {
 		}
 	}
 	return firstErr
+}
+
+const (
+	// Terminal Kubernetes objects are kept as long as their logs, so a run that
+	// can still be inspected in the log store can still be inspected in the
+	// cluster. Everything the platform itself needs outlives both: the job
+	// record is permanent and artifacts belong to the user.
+	defaultRayJobRetention = 30 * 24 * time.Hour
+	// A bounded batch drains a backlog over several ticks instead of issuing
+	// hundreds of deletes at once against the API server.
+	rayJobRetirementBatch = 20
+)
+
+// retireExpiredRayJobs releases the Kubernetes objects of long-finished runs.
+// KubeRay's ttlSecondsAfterFinished only removes the RayCluster, so without
+// this sweep every RayJob and its submitter Job and Pod stay forever.
+//
+// Failures are logged and left for the next tick: cleanup must never block the
+// control loop that admits and observes live training.
+func (r *Reconciler) retireExpiredRayJobs(ctx context.Context) {
+	if r.rayJobRetention <= 0 {
+		return
+	}
+	expired, err := r.store.ListExpiredRayJobs(ctx, r.now().Add(-r.rayJobRetention), rayJobRetirementBatch)
+	if err != nil {
+		log.Printf("list expired RayJobs failed: %v", err)
+		return
+	}
+	for _, resource := range expired {
+		// A missing RayJob is the goal state, and DeleteRayJob already reports
+		// success for it, so both outcomes mark the job retired.
+		if err := r.client.DeleteRayJob(ctx, resource.KubernetesNS, resource.RayJobName, resource.JobID, resource.RayJobUID); err != nil {
+			log.Printf("retire RayJob %s/%s failed: %v", resource.KubernetesNS, resource.RayJobName, err)
+			continue
+		}
+		if err := r.store.MarkRayJobRetired(ctx, resource.JobID, r.now()); err != nil {
+			log.Printf("mark RayJob %s retired failed: %v", resource.JobID, err)
+		}
+	}
 }
 
 func (r *Reconciler) reconcileManagedAttemptCleanups(ctx context.Context) error {

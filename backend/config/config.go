@@ -75,6 +75,7 @@ type Config struct {
 	DatasetPublisherJobBackoffLimit          int
 	DatasetPublisherJobActiveDeadlineSeconds int
 	DatasetPublisherJobTTLSeconds            int
+	RayJobRetentionSeconds                   int
 	DatasetPublisherInitialRetrySeconds      int
 	DatasetPublisherMaximumRetrySeconds      int
 	DatasetPublisherPollIntervalSeconds      int
@@ -355,6 +356,11 @@ func Load() (Config, error) {
 	}
 	if cfg.DatasetPublisherJobTTLSeconds, err = parseInt("DATASET_PUBLISHER_JOB_TTL_SECONDS", 24*60*60); err != nil {
 		return Config{}, err
+		// Finished RayJobs are released on the same schedule as their logs, so a run
+		// that can still be inspected in the log store still has its cluster objects.
+		if cfg.RayJobRetentionSeconds, err = parseInt("RAYJOB_RETENTION_SECONDS", 30*24*60*60); err != nil {
+			return Config{}, err
+		}
 	}
 	if cfg.DatasetPublisherInitialRetrySeconds, err = parseInt("DATASET_PUBLISHER_INITIAL_RETRY_SECONDS", 1); err != nil {
 		return Config{}, err
@@ -564,6 +570,9 @@ func validateDatasetPublisherConfig(cfg Config) error {
 	}
 	if cfg.DatasetPublisherJobTTLSeconds < 1 || cfg.DatasetPublisherJobTTLSeconds > maximumLifecycleSeconds {
 		return fmt.Errorf("DATASET_PUBLISHER_JOB_TTL_SECONDS must be between 1 and 2592000")
+	}
+	if cfg.RayJobRetentionSeconds < 0 || cfg.RayJobRetentionSeconds > 365*24*60*60 {
+		return fmt.Errorf("RAYJOB_RETENTION_SECONDS must be between 0 (disabled) and one year")
 	}
 	if cfg.DatasetPublisherInitialRetrySeconds < 0 || cfg.DatasetPublisherInitialRetrySeconds > cfg.DatasetPublisherMaximumRetrySeconds {
 		return fmt.Errorf("DATASET_PUBLISHER_INITIAL_RETRY_SECONDS must be nonnegative and no greater than DATASET_PUBLISHER_MAXIMUM_RETRY_SECONDS")

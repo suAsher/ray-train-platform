@@ -277,6 +277,8 @@ spec:
               value: {{ default "raytrain" $mlflow.experimentPrefix | quote }}
             - name: KUEUE_CLUSTER_QUEUE
               value: {{ .Values.kueue.clusterQueueName | quote }}
+            - name: RAYJOB_RETENTION_SECONDS
+              value: {{ .Values.backend.rayJobRetentionSeconds | default 2592000 | quote }}
             - name: CORS_ORIGINS
               value: {{ join "," .Values.backend.corsOrigins | quote }}
             - name: RAY_VERSION
