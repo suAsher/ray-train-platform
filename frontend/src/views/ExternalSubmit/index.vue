@@ -1,5 +1,5 @@
 <template>
-  <div class="max-w-5xl space-y-6">
+  <div class="space-y-6">
     <section class="rounded-2xl border border-blue-500/20 bg-gradient-to-br from-blue-950/40 to-[#131826] p-7 shadow-xl">
       <p class="text-[11px] font-semibold uppercase tracking-[0.2em] text-blue-400">External Development</p>
       <h3 class="mt-2 text-2xl font-bold text-white">从集群外提交训练</h3>
@@ -19,7 +19,7 @@
       </div>
     </section>
 
-    <section class="grid gap-5 lg:grid-cols-4">
+    <section class="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
       <article v-for="step in steps" :key="step.number" class="panel panel-hover p-5">
         <p class="font-mono text-xs text-blue-400">0{{ step.number }}</p>
         <h4 class="mt-2 font-bold text-white">{{ step.title }}</h4>
@@ -31,7 +31,7 @@
       <div class="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h4 class="font-bold text-white">方式一：spk-rayjob</h4>
-          <p class="mt-1 text-xs leading-5 text-slate-400">
+          <p class="mt-1 max-w-3xl text-xs leading-5 text-slate-400">
             先安装客户端，然后按页面中的登录、初始化和提交命令操作。选择你的系统：
           </p>
         </div>
@@ -48,7 +48,7 @@
         <a :href="binaries[platform]" class="text-xs text-blue-400 hover:text-blue-300" download>直接下载二进制</a>
         <a :href="checksums" class="text-xs text-blue-400 hover:text-blue-300">SHA256SUMS</a>
       </div>
-      <p class="text-[11px] leading-5 text-slate-500">
+      <p class="max-w-3xl text-[11px] leading-5 text-slate-500">
         单文件、无依赖，不需要 Python 或 Docker。此客户端原名 rayctl，旧下载地址仍可用，但请改用新命令名 <code>spk-rayjob</code>。
       </p>
     </section>
@@ -56,12 +56,12 @@
     <section class="panel space-y-5 p-6">
       <div>
         <h4 class="font-bold text-white">2. 使用平台账号登录</h4>
-        <p class="mt-1 text-xs leading-5 text-slate-400">
+        <p class="mt-1 max-w-3xl text-xs leading-5 text-slate-400">
           与网页登录同一个账号。密码仅从标准输入换成短期会话，不进入 Shell 历史，也不会明文保存；会话过期后重新登录即可。
         </p>
       </div>
       <CopyBlock :text="loginCommand" label="登录命令" />
-      <p class="text-xs leading-5 text-slate-500">
+      <p class="max-w-3xl text-xs leading-5 text-slate-500">
         自动化脚本或企业 SSO 账号，请在“账户与安全 → 个人访问令牌”创建 PAT，再用下面这种方式登录。
       </p>
       <CopyBlock :text="tokenLoginCommand" label="使用 PAT 登录" />
@@ -70,7 +70,7 @@
     <section class="panel space-y-5 p-6">
       <div>
         <h4 class="font-bold text-white">3. 在代码目录写一次提交默认值</h4>
-        <p class="mt-1 text-xs leading-5 text-slate-400">
+        <p class="mt-1 max-w-3xl text-xs leading-5 text-slate-400">
           <code>init</code> 会生成 <code>.spk-rayjob.yaml</code>。把它提交进仓库，团队成员的提交形状就一致了；之后 <code>submit</code> 不再需要任何参数。
         </p>
       </div>
@@ -90,7 +90,7 @@
     <section class="panel space-y-5 p-6">
       <div>
         <h4 class="font-bold text-white">4. 日常循环：改代码即提交</h4>
-        <p class="mt-1 text-xs leading-5 text-slate-400">
+        <p class="mt-1 max-w-3xl text-xs leading-5 text-slate-400">
           代码按 <code>.gitignore</code> 与 <code>.rayignore</code> 打包成不可变版本。结果写入“我的训练结果”，可在网页浏览。
         </p>
       </div>
@@ -100,12 +100,12 @@
     <section class="panel space-y-5 p-6">
       <div>
         <h4 class="font-bold text-white">方式二：原生 Ray CLI</h4>
-        <p class="mt-1 text-xs leading-5 text-slate-400">
+        <p class="mt-1 max-w-3xl text-xs leading-5 text-slate-400">
           在“账户与安全 → 个人访问令牌”创建 PAT，安装与平台匹配的 Ray 2.35，然后在代码目录执行：
         </p>
       </div>
       <CopyBlock :text="nativeRayCommand" label="原生 Ray 提交" />
-      <p class="text-xs leading-5 text-slate-500">
+      <p class="max-w-3xl text-xs leading-5 text-slate-500">
         默认为 1×1 GPU。多机多卡、数据目录选择和断点续训优先使用 <code>spk-rayjob</code>；完整参数见 <code>spk-rayjob --help</code>。
       </p>
     </section>

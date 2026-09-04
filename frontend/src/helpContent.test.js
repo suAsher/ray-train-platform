@@ -240,3 +240,15 @@ test('every topic keeps its title, summary and at least one block', async () => 
     assert.ok(ids.includes(required), `${required} disappeared`)
   }
 })
+
+// Both documentation pages were capped narrower than the window while the rest
+// of the console filled it, which read as a rendering fault. They now use the
+// available width, with prose capped so lines stay readable.
+test('documentation pages use the available width', async () => {
+  for (const page of ['./views/Help/index.vue', './views/ExternalSubmit/index.vue']) {
+    const source = await read(page)
+    const root = source.slice(source.indexOf('<template>'), source.indexOf('\n', source.indexOf('<div class=')))
+    assert.equal(/<div class="[^"]*max-w-5xl/.test(root), false, `${page} still caps its root container`)
+    assert.match(source, /max-w-3xl|max-w-4xl/, `${page} has no readable width for prose`)
+  }
+})
