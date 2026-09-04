@@ -7,6 +7,8 @@
 
 import {
   CONTRACT_SNIPPET,
+  DEBUG_DEPS,
+  DEBUG_SELFCHECK,
   MLFLOW_CODE,
   NATIVE_RAY_SUBMIT,
   RAY_DATA_CODE,
@@ -24,6 +26,7 @@ import {
 export const helpSections = [
   {
     id: 'quickstart',
+    group: '入门',
     title: '第一次跑通',
     summary: '先用下面这个最小示例确认平台链路是通的：环境变量能解析、输入目录读得到、GPU 可见、产物写得出去。这四件事是后面所有失败的根源，几分钟就能排除掉。确认之后再接你自己的代码。',
     blocks: [
@@ -39,7 +42,35 @@ export const helpSections = [
     ],
   },
   {
+    id: 'debug',
+    group: '入门',
+    title: '交互式调试环境',
+    summary: '在带 GPU 的机器上先把代码和数据路径调通，再提交正式训练。省下的是每次改一行都要排队等一个任务的时间。',
+    blocks: [
+      {
+        kind: 'steps',
+        items: [
+          { title: '选择与训练相同的镜像', body: '调试和训练用同一个环境，才能保证调通的东西提交后也能跑。' },
+          { title: '启动单卡调试环境', body: '状态变为运行中后，从页面打开 JupyterLab、VS Code 或终端。它们连接的是带 GPU 的 Worker，不是 Ray Head。' },
+          { title: '在 /workspace 写代码，在 /mnt/storage/* 看数据', body: '工作区内容和 .venv 会保留，调试 Pod 本身不是永久实例。', code: DEBUG_SELFCHECK, codeLabel: '进去先自检', codeLang: 'bash' },
+          { title: '用完立刻停止', body: '调试环境会一直占着 GPU。每位用户同时只能有一个，换镜像也要先停掉当前的。' },
+        ],
+      },
+      { kind: 'code', label: '临时装依赖', lang: 'bash', text: DEBUG_DEPS },
+      {
+        kind: 'warning',
+        title: '不要把「运行时 apt 安装」当作生产方案',
+        text: '容器以非 root 运行，apt 不可用；pip --user 和工作区虚拟环境只适合临时调试。需要 CUDA、系统库或可复现的团队环境时，构建镜像并让管理员按固定摘要登记。',
+      },
+      {
+        kind: 'note',
+        text: '多机问题不要用调试环境排查——编辑器只会连到其中一个不确定的 Worker。直接提交一个多机多卡任务去验证。',
+      },
+    ],
+  },
+  {
     id: 'storage',
+    group: '数据',
     title: '数据从哪里读、写到哪里',
     summary: '容器里唯一稳定的东西是这几个环境变量。不要写死 TOS 地址、桶名、PVC 名或节点路径——它们在不同任务、不同数据模式下会解析到不同位置。',
     blocks: [
@@ -78,6 +109,7 @@ export const helpSections = [
   },
   {
     id: 'code',
+    group: '训练',
     title: '代码怎么进来',
     summary: '镜像只提供环境，你的代码不进镜像——所以改完代码不需要重新构建镜像，换一次提交就行。代码有三条路进平台。',
     blocks: [
@@ -102,6 +134,7 @@ export const helpSections = [
   },
   {
     id: 'submit',
+    group: '训练',
     title: '提交任务与分布式训练',
     summary: '网页提交把这些选项做成了表单；命令行提交需要自己写。两边是同一套参数。',
     blocks: [
@@ -155,6 +188,7 @@ export const helpSections = [
   },
   {
     id: 'data-mode',
+    group: '数据',
     title: '五种数据模式怎么选',
     summary: '默认用 mount。只有当你确认瓶颈在数据读取上时，才需要换其他模式——换错了不会更快，只会多一层复杂度。注意最后一列：有两种模式要求你改训练代码。',
     blocks: [
@@ -177,6 +211,7 @@ export const helpSections = [
   },
   {
     id: 'cache',
+    group: '数据',
     title: '如何使用缓存加速',
     summary: '把输入数据预热到 GPU 节点的两块本地 NVMe，之后训练从本地盘读。训练代码一行都不用改。',
     blocks: [
@@ -198,6 +233,7 @@ export const helpSections = [
   },
   {
     id: 'ray-data',
+    group: '数据',
     title: '如何使用 Ray Data',
     summary: 'Ray Data 有两种用法，差别很大：一种对你的代码透明，另一种要求你改训练循环。',
     blocks: [
@@ -230,6 +266,7 @@ export const helpSections = [
   },
   {
     id: 'streaming',
+    group: '数据',
     title: 'Ray Train 托管 + Ray Data + Parquet + NVMe',
     summary: '把小文件预先打包成 Parquet 分片、固定成不可变数据版本，由 Ray Train 托管的 Worker 通过 Ray Data 按需流式读取，本地 NVMe 作为有界工作集。这是为超出单机容量的数据集准备的路径。',
     blocks: [
@@ -252,6 +289,7 @@ export const helpSections = [
   },
   {
     id: 'observability',
+    group: '排查',
     title: '可观测性与训练诊断',
     summary: '任务详情页有四个标签页，分别回答"在跑什么、跑得怎么样、产出了什么、跑在哪里"。',
     blocks: [
@@ -281,6 +319,7 @@ export const helpSections = [
   },
   {
     id: 'resume',
+    group: '训练',
     title: '断点续训',
     summary: '平台不会替你猜哪个 checkpoint 可以恢复。可靠的续训需要两件事：训练脚本支持 resume，以及提交时显式选择要恢复的结果。',
     blocks: [
@@ -302,7 +341,93 @@ export const helpSections = [
     ],
   },
   {
+    id: 'artifacts',
+    group: '训练',
+    title: '取回训练结果与权重',
+    summary: '训练写进输出目录的东西，有两个地方可以拿到，都可以直接下载。',
+    blocks: [
+      {
+        kind: 'table',
+        headers: ['入口', '适合什么时候'],
+        rows: [
+          ['任务详情 →「训练产物」', '知道是哪次任务，按任务追溯它的输出'],
+          ['「我的数据」浏览个人空间', '只记得大概路径，想按目录翻找'],
+        ],
+      },
+      {
+        kind: 'list',
+        items: [
+          '权重文件（.pth / .pt / .ckpt / .onnx / .safetensors）可以直接下载到本地。',
+          '文本和图片可以在页面上直接预览，不用先下载。',
+          '平台不会暴露底层对象存储地址或访问凭据——你拿到的是文件本身。',
+          '训练结果不会自动复制到实验中心。实验中心记录的是参数和指标，权重仍在你的输出目录里。',
+        ],
+      },
+    ],
+  },
+  {
+    id: 'datasets',
+    group: '数据',
+    title: '版本化数据集',
+    summary: '把一份数据固定成不可变版本，训练记录版本号与摘要。之后数据再更新，也不会改变已经提交过的任务读到的内容。',
+    blocks: [
+      {
+        kind: 'list',
+        items: [
+          '解决的问题是实验可比性：两次训练如果读到的数据悄悄变了，指标差异就无法归因。',
+          '在「版本化数据集」页选择已发布的逻辑数据集和它的某个版本；提交时引用这个版本。',
+          '原始同步区和版本化训练集不是一回事——前者会持续变化，后者一经发布就固定。',
+          '该功能按团队开放。没有开放时，页面会说明，你仍可以照常用现有数据目录提交训练。',
+        ],
+      },
+    ],
+  },
+  {
+    id: 'access',
+    group: '进阶',
+    title: '令牌与私有仓库凭据',
+    summary: '在「账户与安全」里管理。集群外提交和拉取私有代码各需要一样东西。',
+    blocks: [
+      {
+        kind: 'table',
+        headers: ['要做什么', '需要什么'],
+        rows: [
+          ['从自己的机器用 spk-rayjob 提交', '个人访问令牌（PAT）'],
+          ['用原生 ray job submit 提交', '同一个 PAT，放进请求头'],
+          ['拉取你自己的私有 Git 仓库', '个人 Git 凭据'],
+        ],
+      },
+      {
+        kind: 'list',
+        items: [
+          'PAT 只在创建时显示一次，关掉窗口就看不到了，创建后立刻复制走。',
+          'PAT 的权限是最小集：提交、查看任务、上传代码。请设置过期时间，并在设备不再使用时撤销。',
+          '撤销后该设备立即不能提交、查看或取消任务。',
+          'Git 凭据只写入本团队的 Kubernetes Secret，不会在页面或数据库里回显；你自己的凭据优先于团队公共凭据。',
+        ],
+      },
+    ],
+  },
+  {
+    id: 'quota',
+    group: '进阶',
+    title: '配额与排队',
+    summary: 'GPU 是共享的。任务提交后先进队列，拿到卡才开始跑，所以"提交成功"不等于"已经在训练"。',
+    blocks: [
+      {
+        kind: 'list',
+        items: [
+          '左下角显示你当前的 GPU 配额。任务详情里的状态原因会说明它在等什么。',
+          '一直排队通常是两种情况：团队配额已用满，或者集群暂时没有满足规模要求的空闲卡。',
+          '最常见的浪费是没停掉的调试环境——它会一直占着卡，却没有在训练。先去看看还有没有开着的。',
+          '多机任务需要同时拿到多个节点的卡，比单机任务更容易排队。先用小规模验证代码，再申请大规模。',
+        ],
+      },
+    ],
+  },
+  {
     id: 'errors',
+    group: '排查',
     title: '常见错误速查',
     summary: '',
     blocks: [
@@ -325,6 +450,7 @@ export const helpSections = [
   },
   {
     id: 'preflight',
+    group: '排查',
     title: '提交前自检',
     summary: '八卡任务因为一个路径写错而在两分钟内失败，是这套平台上最常见的浪费。',
     blocks: [

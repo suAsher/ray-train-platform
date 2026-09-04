@@ -174,3 +174,34 @@ test('the page covers the requested topics with actionable content', async () =>
   // Retrying a submission is not the same as resuming training.
   assert.match(markdown, /不是续训|从头重跑/)
 })
+
+// A capability the platform has but the page never mentions is a capability
+// users do not know exists. These are the ones reachable from the sidebar.
+test('every user-facing platform capability is covered', async () => {
+  const markdown = renderHelpMarkdown()
+
+  for (const [capability, evidence] of [
+    ['交互式调试', /JupyterLab|调试环境/],
+    ['训练产物下载', /训练产物/],
+    ['版本化数据集', /不可变版本/],
+    ['访问令牌', /个人访问令牌|PAT/],
+    ['配额与排队', /配额/],
+    ['实验中心', /实验中心|MLflow/],
+  ]) {
+    assert.match(markdown, evidence, `${capability} is not explained anywhere`)
+  }
+})
+
+// A flat list of seventeen topics is a wall to scan, so each one is filed under
+// a stage of the journey rather than left to be read in order.
+test('topics are grouped so the list stays scannable', async () => {
+  const ungrouped = helpSections.filter((section) => !section.group)
+  assert.equal(ungrouped.length, 0, `topics without a group: ${ungrouped.map((s) => s.id).join(', ')}`)
+
+  const groups = [...new Set(helpSections.map((section) => section.group))]
+  assert.ok(groups.length >= 4 && groups.length <= 6, `grouping should stay coarse, got ${groups.length}`)
+  for (const group of groups) {
+    const size = helpSections.filter((section) => section.group === group).length
+    assert.ok(size <= 7, `group ${group} has ${size} topics, which is no longer scannable`)
+  }
+})

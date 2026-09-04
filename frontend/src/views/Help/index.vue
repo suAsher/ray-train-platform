@@ -16,14 +16,17 @@
 
     <div class="grid gap-6 lg:grid-cols-[15rem_minmax(0,1fr)]">
       <nav class="panel h-fit p-3 lg:sticky lg:top-4">
-        <button
-          v-for="section in helpSections"
-          :key="section.id"
-          type="button"
-          class="block w-full rounded-lg px-3 py-2 text-left text-sm transition"
-          :class="section.id === activeId ? 'bg-blue-500/15 font-semibold text-blue-200' : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'"
-          @click="select(section.id)"
-        >{{ section.title }}</button>
+        <div v-for="group in groupedSections" :key="group.name" class="mb-3 last:mb-0">
+          <p class="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">{{ group.name }}</p>
+          <button
+            v-for="section in group.sections"
+            :key="section.id"
+            type="button"
+            class="block w-full rounded-lg px-3 py-2 text-left text-sm leading-5 transition"
+            :class="section.id === activeId ? 'bg-blue-500/15 font-semibold text-blue-200' : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'"
+            @click="select(section.id)"
+          >{{ section.title }}</button>
+        </div>
       </nav>
 
       <section v-for="section in [activeSection]" :key="section.id" class="panel p-6">
@@ -120,6 +123,23 @@ function download() {
 // reader picked. The download still carries all of them, because a file kept on
 // a laptop is read differently from a page browsed with a question in mind.
 const activeId = ref(helpSections[0].id)
+
+// Seventeen topics in one flat list is a wall of text to scan. Grouping keeps
+// each list short enough to read, and the order matches how someone moves
+// through the platform: get something running, then data, then training.
+const groupedSections = computed(() => {
+  const order = []
+  const byGroup = new Map()
+  for (const section of helpSections) {
+    const name = section.group || '其他'
+    if (!byGroup.has(name)) {
+      byGroup.set(name, [])
+      order.push(name)
+    }
+    byGroup.get(name).push(section)
+  }
+  return order.map((name) => ({ name, sections: byGroup.get(name) }))
+})
 const activeSection = computed(
   () => helpSections.find((section) => section.id === activeId.value) || helpSections[0],
 )

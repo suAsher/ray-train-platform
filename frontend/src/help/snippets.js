@@ -119,3 +119,22 @@ import os, mlflow
 if int(os.environ.get("RANK", "0")) == 0:
     mlflow.log_params({"lr": lr, "batch_size": batch_size})
     mlflow.log_metric("loss", float(loss), step=global_step)`
+
+export const DEBUG_SELFCHECK = `# 在调试环境的终端里跑一遍，确认卡和数据都在
+nvidia-smi
+
+python3 - <<'PY'
+import torch, os
+print(torch.__version__, torch.cuda.is_available(), torch.cuda.device_count())
+PY
+
+ls -la /mnt/storage/public     # 公共数据
+ls -la /mnt/storage/me         # 你自己的空间`
+
+export const DEBUG_DEPS = `# 临时装依赖：装进工作区，重启后仍在
+pip install --user <包名>
+# 或者建一个虚拟环境
+python3 -m venv /workspace/.venv && source /workspace/.venv/bin/activate
+
+# 容器以非 root 运行，apt install 不可用。
+# 需要系统库、CUDA 或编译器时，请让管理员登记新镜像。`
