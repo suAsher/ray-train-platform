@@ -82,10 +82,11 @@
 
         <div v-if="uploadState" class="mt-4 rounded-xl border border-blue-900/60 bg-blue-950/20 p-4">
           <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-300">
-            <span>{{ uploadState.retrying ? '正在重试失败文件' : '正在上传' }}：{{ uploadState.currentFile }}</span>
+            <span>{{ uploadState.partState === 'retrying' ? '正在重试分片' : uploadState.partState === 'hashing' ? '正在校验分片' : uploadState.retrying ? '正在重试失败文件' : '正在上传' }}：{{ uploadState.currentFile }}</span>
             <span>{{ uploadState.completedFiles }}/{{ uploadState.totalFiles }} 个文件 · {{ formatBytes(uploadState.uploadedBytes) }} / {{ formatBytes(uploadState.totalBytes) }}</span>
           </div>
           <el-progress class="mt-3" :percentage="uploadPercentage" :stroke-width="8" :show-text="false" />
+          <p v-if="uploadState.totalParts" class="mt-2 text-xs text-slate-500">分片 {{ uploadState.currentPart || 0 }} / {{ uploadState.totalParts }}；网络中断时会自动重试，重新选择同一文件可继续未完成分片。</p>
         </div>
         <el-alert v-if="failedUploads.length" class="mt-4" type="warning" :closable="false">
           <template #title>{{ failedUploads.length }} 个文件未上传。已成功的文件不会重复上传；请修复网络或权限问题后重试失败文件。</template>
@@ -151,7 +152,6 @@ import { canManageDataSpace, canMutateDataSpace, canUseDataSpaceForTraining, dat
 import { dataSpaceReadiness, dataSpaceStorageReady } from '../../dataSpaceReadiness'
 import { session } from '../../stores/session'
 
-const maxUploadBytes = 5 * 1024 * 1024 * 1024
 const loading = ref(false)
 const loadingEntries = ref(false)
 const uploading = ref(false)
@@ -309,8 +309,8 @@ const uploadFile = async (event) => {
   const file = event.target.files?.[0]
   event.target.value = ''
   if (!file) return
-  if (file.size < 1 || file.size > maxUploadBytes) {
-    ElMessage.warning('单个文件必须大于 0 且不超过 5 GiB')
+  if (file.size < 1) {
+    ElMessage.warning('单个文件必须大于 0')
     return
   }
   await uploadItems([{ file, path: file.name }], '文件已上传')
@@ -320,8 +320,8 @@ const uploadFolder = async (event) => {
   const files = Array.from(event.target.files || [])
   event.target.value = ''
   if (!files.length) return
-  if (files.some((file) => file.size < 1 || file.size > maxUploadBytes)) {
-    ElMessage.warning('代码文件夹中的每个文件必须大于 0 且不超过 5 GiB')
+  if (files.some((file) => file.size < 1)) {
+    ElMessage.warning('代码文件夹中的每个文件必须大于 0')
     return
   }
   try {
@@ -374,6 +374,11 @@ const uploadItems = async (items, successMessage, retrying = false) => {
         await uploadDataSpaceFile(upload, item.file, {
           onProgress: ({ loaded }) => {
             nextState.uploadedBytes = Math.min(nextState.totalBytes, completedBytes + loaded)
+          },
+          onPart: ({ partNumber, totalParts, state }) => {
+            nextState.currentPart = partNumber
+            nextState.totalParts = totalParts
+            nextState.partState = state
           },
         })
         nextState.completedFiles += 1

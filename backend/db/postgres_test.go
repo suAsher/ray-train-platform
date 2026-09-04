@@ -30,8 +30,29 @@ func TestMigrationVersionsEmbedded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("migrationVersions() error = %v", err)
 	}
-	if want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28}; !reflect.DeepEqual(versions, want) {
+	if want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29}; !reflect.DeepEqual(versions, want) {
 		t.Fatalf("migrationVersions() = %v, want %v", versions, want)
+	}
+}
+
+func TestDataSpaceMultipartMigrationEnforcesIsolationAndBounds(t *testing.T) {
+	contents, err := migrationFiles.ReadFile("migrations/0029_data_space_multipart_uploads.up.sql")
+	if err != nil {
+		t.Fatalf("read multipart migration: %v", err)
+	}
+	sql := strings.Join(strings.Fields(string(contents)), " ")
+	for _, fragment := range []string{
+		"FOREIGN KEY (user_id, tenant_id) REFERENCES users(id, tenant_id) ON DELETE CASCADE",
+		"size_bytes > 268435456",
+		"part_size_bytes BETWEEN 1 AND 5368709120",
+		"total_parts BETWEEN 1 AND 10000",
+		"WHERE state IN ('ACTIVE', 'COMPLETING', 'ABORTING')",
+		"PRIMARY KEY (session_id, part_number)",
+		"sha256 ~ '^[0-9a-f]{64}$'",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("migration 29 missing %q", fragment)
+		}
 	}
 }
 

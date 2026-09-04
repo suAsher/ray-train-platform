@@ -246,6 +246,42 @@ func (client *sdkTOSClient) PutData(ctx context.Context, request tosDataPutReque
 	return nil
 }
 
+func (client *sdkTOSClient) CreateDataMultipart(ctx context.Context, request tosMultipartCreateRequest) (string, error) {
+	output, err := client.client.CreateMultipartUploadV2(ctx, &tos.CreateMultipartUploadV2Input{Bucket: request.Bucket, Key: request.Key, ContentType: request.ContentType})
+	if err != nil || output == nil || output.UploadID == "" {
+		return "", ErrUnavailable
+	}
+	return output.UploadID, nil
+}
+
+func (client *sdkTOSClient) UploadDataPart(ctx context.Context, request tosMultipartPartRequest) (string, error) {
+	output, err := client.client.UploadPartV2(ctx, &tos.UploadPartV2Input{UploadPartBasicInput: tos.UploadPartBasicInput{Bucket: request.Bucket, Key: request.Key, UploadID: request.UploadID, PartNumber: request.PartNumber}, Content: request.Body, ContentLength: request.SizeBytes})
+	if err != nil || output == nil || output.ETag == "" {
+		return "", ErrUnavailable
+	}
+	return output.ETag, nil
+}
+
+func (client *sdkTOSClient) CompleteDataMultipart(ctx context.Context, request tosMultipartCompleteRequest) error {
+	parts := make([]tos.UploadedPartV2, 0, len(request.Parts))
+	for _, part := range request.Parts {
+		parts = append(parts, tos.UploadedPartV2{PartNumber: part.PartNumber, ETag: part.ETag, Size: part.SizeBytes})
+	}
+	_, err := client.client.CompleteMultipartUploadV2(ctx, &tos.CompleteMultipartUploadV2Input{Bucket: request.Bucket, Key: request.Key, UploadID: request.UploadID, Parts: parts})
+	if err != nil {
+		return ErrUnavailable
+	}
+	return nil
+}
+
+func (client *sdkTOSClient) AbortDataMultipart(ctx context.Context, request tosMultipartAbortRequest) error {
+	_, err := client.client.AbortMultipartUpload(ctx, &tos.AbortMultipartUploadInput{Bucket: request.Bucket, Key: request.Key, UploadID: request.UploadID})
+	if err != nil && tos.StatusCode(err) != http.StatusNotFound {
+		return ErrUnavailable
+	}
+	return nil
+}
+
 func (client *sdkTOSClient) DeleteObject(ctx context.Context, bucket, key string) error {
 	_, err := client.client.DeleteObjectV2(ctx, &tos.DeleteObjectV2Input{Bucket: bucket, Key: key})
 	if err != nil {

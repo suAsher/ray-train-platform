@@ -65,6 +65,9 @@ func (h *Handler) RegisterDataSpaceRoutes(group *gin.RouterGroup) {
 	group.GET("/data-spaces/:id/download", h.downloadDataSpaceFile)
 	group.POST("/data-spaces/:id/folders", h.createDataSpaceFolder)
 	group.POST("/data-spaces/:id/uploads", h.createDataSpaceUpload)
+	group.PUT("/data-spaces/:id/uploads/:session/parts/:partNumber", h.uploadDataSpacePart)
+	group.POST("/data-spaces/:id/uploads/:session/complete", h.completeDataSpaceMultipart)
+	group.DELETE("/data-spaces/:id/uploads/:session", h.abortDataSpaceMultipart)
 	group.PUT("/data-spaces/:id/content", h.uploadDataSpaceContent)
 }
 
@@ -72,9 +75,10 @@ func (h *Handler) RegisterDataSpaceRoutes(group *gin.RouterGroup) {
 // the presigned object-store response and deliberately carries no credentials:
 // the destination is the platform's own authenticated API.
 type dataSpaceUploadTicket struct {
-	URL         string `json:"url"`
-	ContentType string `json:"contentType"`
-	SizeBytes   int64  `json:"sizeBytes"`
+	Mode        domain.DataSpaceUploadMode `json:"mode"`
+	URL         string                     `json:"url"`
+	ContentType string                     `json:"contentType"`
+	SizeBytes   int64                      `json:"sizeBytes"`
 }
 
 func (h *Handler) listDataSpaces(c *gin.Context) {
@@ -473,14 +477,20 @@ func (h *Handler) createDataSpaceUpload(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "INVALID_DATA_SPACE_UPLOAD", "upload path, content type, or size is invalid")
 		return
 	}
-	if *request.SizeBytes > domain.MaxDataSpaceUploadBytes {
-		h.writeError(c, http.StatusRequestEntityTooLarge, "DATA_SPACE_UPLOAD_TOO_LARGE", "this file exceeds the upload limit for a data space")
+	plan, err := domain.PlanDataSpaceUpload(*request.SizeBytes)
+	if err != nil {
+		h.writeError(c, http.StatusRequestEntityTooLarge, "DATA_SPACE_UPLOAD_PROVIDER_LIMIT", "this file exceeds the object store's multipart capacity")
+		return
+	}
+	if plan.Mode == domain.DataSpaceUploadMultipart {
+		h.createDataSpaceMultipart(c, space, relativePath, strings.TrimSpace(request.ContentType), plan)
 		return
 	}
 	// The caller is told to send the bytes back to the platform, not to the
 	// object store. A presigned URL points at a VPC-internal address that a
 	// browser outside the cluster cannot reach, so it would always fail.
 	h.writeSuccess(c, http.StatusCreated, dataSpaceUploadTicket{
+		Mode:        domain.DataSpaceUploadSingle,
 		URL:         "/api/v1/data-spaces/" + url.PathEscape(string(space.ID)) + "/content?path=" + url.QueryEscape(relativePath),
 		ContentType: strings.TrimSpace(request.ContentType),
 		SizeBytes:   *request.SizeBytes,
@@ -494,8 +504,8 @@ func (h *Handler) createDataSpaceUpload(c *gin.Context) {
 //
 // The body is streamed to the object store rather than buffered: these are data
 // files, routinely gigabytes, and must not sit in backend memory. The declared
-// length is capped before a single byte is read, and the reader is capped again
-// so a client that understates Content-Length cannot exceed the limit.
+// length is capped at the single-request threshold before a single byte is
+// read. Larger files use the independently retryable multipart endpoints.
 func (h *Handler) uploadDataSpaceContent(c *gin.Context) {
 	_, space, ok := h.authorizeWritableDataSpace(c)
 	if !ok {

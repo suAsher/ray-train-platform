@@ -31,7 +31,7 @@ export async function createDataSpaceUpload(spaceId, path, contentType, sizeByte
   const token = await getToken()
   const headers = { 'Content-Type': ticket.contentType || contentType || 'application/octet-stream' }
   if (token) headers.Authorization = `Bearer ${token}`
-  return { ...ticket, headers }
+  return { ...ticket, spaceId, headers }
 }
 
 export function fetchWorkspaceSnapshots(limit = 50) {

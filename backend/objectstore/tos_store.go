@@ -42,6 +42,31 @@ type tosClient interface {
 	Head(context.Context, string, string) (ObjectInfo, error)
 }
 
+type tosMultipartCreateRequest struct {
+	Bucket, Key, ContentType string
+}
+
+type tosMultipartPartRequest struct {
+	Bucket, Key, UploadID string
+	PartNumber            int
+	SizeBytes             int64
+	Body                  io.Reader
+}
+
+type tosMultipartCompleteRequest struct {
+	Bucket, Key, UploadID string
+	Parts                 []MultipartPart
+}
+
+type tosMultipartAbortRequest struct{ Bucket, Key, UploadID string }
+
+type tosMultipartClient interface {
+	CreateDataMultipart(context.Context, tosMultipartCreateRequest) (string, error)
+	UploadDataPart(context.Context, tosMultipartPartRequest) (string, error)
+	CompleteDataMultipart(context.Context, tosMultipartCompleteRequest) error
+	AbortDataMultipart(context.Context, tosMultipartAbortRequest) error
+}
+
 type tosDirectoryListRequest struct {
 	Bucket            string
 	Prefix            string
@@ -392,6 +417,73 @@ func (store *TOSStore) PutData(ctx context.Context, rootPrefix, relativePath, co
 		return ErrUnavailable
 	}
 	if err := client.PutData(ctx, tosDataPutRequest{Bucket: store.bucket, Key: key, ContentType: contentType, SizeBytes: sizeBytes, Body: body}); err != nil {
+		return ErrUnavailable
+	}
+	return nil
+}
+
+func (store *TOSStore) CreateDataMultipart(ctx context.Context, rootPrefix, relativePath, contentType string) (string, error) {
+	key, err := scopedTOSDataFileKey(rootPrefix, relativePath)
+	if err != nil || strings.TrimSpace(contentType) == "" || strings.ContainsAny(contentType, "\r\n") {
+		return "", fmt.Errorf("invalid multipart upload request")
+	}
+	client, ok := store.client.(tosMultipartClient)
+	if !ok {
+		return "", ErrUnavailable
+	}
+	uploadID, err := client.CreateDataMultipart(ctx, tosMultipartCreateRequest{Bucket: store.bucket, Key: key, ContentType: contentType})
+	if err != nil || strings.TrimSpace(uploadID) == "" {
+		return "", ErrUnavailable
+	}
+	return uploadID, nil
+}
+
+func (store *TOSStore) UploadDataPart(ctx context.Context, rootPrefix, relativePath, uploadID string, partNumber int, sizeBytes int64, body io.Reader) (string, error) {
+	key, err := scopedTOSDataFileKey(rootPrefix, relativePath)
+	if err != nil || strings.TrimSpace(uploadID) == "" || partNumber < 1 || partNumber > domain.DataSpaceMaxMultipartParts || sizeBytes < 1 || sizeBytes > domain.DataSpaceMaxPartBytes || body == nil {
+		return "", fmt.Errorf("invalid multipart part request")
+	}
+	client, ok := store.client.(tosMultipartClient)
+	if !ok {
+		return "", ErrUnavailable
+	}
+	etag, err := client.UploadDataPart(ctx, tosMultipartPartRequest{Bucket: store.bucket, Key: key, UploadID: uploadID, PartNumber: partNumber, SizeBytes: sizeBytes, Body: body})
+	if err != nil || strings.TrimSpace(etag) == "" {
+		return "", ErrUnavailable
+	}
+	return etag, nil
+}
+
+func (store *TOSStore) CompleteDataMultipart(ctx context.Context, rootPrefix, relativePath, uploadID string, parts []MultipartPart) error {
+	key, err := scopedTOSDataFileKey(rootPrefix, relativePath)
+	if err != nil || strings.TrimSpace(uploadID) == "" || len(parts) < 1 || len(parts) > domain.DataSpaceMaxMultipartParts {
+		return fmt.Errorf("invalid multipart completion request")
+	}
+	for index, part := range parts {
+		if part.PartNumber != index+1 || part.SizeBytes < 1 || part.SizeBytes > domain.DataSpaceMaxPartBytes || strings.TrimSpace(part.ETag) == "" {
+			return fmt.Errorf("invalid multipart completion part")
+		}
+	}
+	client, ok := store.client.(tosMultipartClient)
+	if !ok {
+		return ErrUnavailable
+	}
+	if err := client.CompleteDataMultipart(ctx, tosMultipartCompleteRequest{Bucket: store.bucket, Key: key, UploadID: uploadID, Parts: append([]MultipartPart(nil), parts...)}); err != nil {
+		return ErrUnavailable
+	}
+	return nil
+}
+
+func (store *TOSStore) AbortDataMultipart(ctx context.Context, rootPrefix, relativePath, uploadID string) error {
+	key, err := scopedTOSDataFileKey(rootPrefix, relativePath)
+	if err != nil || strings.TrimSpace(uploadID) == "" {
+		return fmt.Errorf("invalid multipart abort request")
+	}
+	client, ok := store.client.(tosMultipartClient)
+	if !ok {
+		return ErrUnavailable
+	}
+	if err := client.AbortDataMultipart(ctx, tosMultipartAbortRequest{Bucket: store.bucket, Key: key, UploadID: uploadID}); err != nil {
 		return ErrUnavailable
 	}
 	return nil

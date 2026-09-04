@@ -1,3 +1,5 @@
+import { uploadMultipartDataSpaceFile } from './dataSpaceMultipartUpload.js'
+
 // folderUploadRelativePath accepts the browser's webkitRelativePath exactly as
 // a relative object name. The browser is untrusted input: never coerce an
 // absolute or traversal path into a valid destination.
@@ -21,6 +23,7 @@ export function folderUploadRelativePath(file) {
 // authorization. A presigned object-store URL must never receive those, so the
 // caller decides: `requiredHeaders` comes from the store, `headers` from us.
 export function uploadDataSpaceFile(upload, file, options = {}) {
+	if (upload?.mode === 'multipart') return uploadMultipartDataSpaceFile(upload, file, options)
   const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {}
   const xhrFactory = options.xhrFactory || (() => new XMLHttpRequest())
   let lastLoaded = -1

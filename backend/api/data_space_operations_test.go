@@ -36,6 +36,10 @@ type fakeDataSpaceObjectStore struct {
 	entries      objectstore.DataEntryPage
 	readContent  string
 	readInfo     objectstore.ArtifactRead
+	multipartID  string
+	partBody     string
+	completed    []objectstore.MultipartPart
+	aborted      bool
 }
 
 func (store *fakeDataSpaceObjectStore) ListDataEntries(_ context.Context, root, relativePath, _ string, _ int) (objectstore.DataEntryPage, error) {
@@ -70,6 +74,29 @@ func (store *fakeDataSpaceObjectStore) PutData(_ context.Context, root, relative
 
 func (store *fakeDataSpaceObjectStore) CreateDataDirectory(_ context.Context, root, relativePath string) error {
 	store.folderRoot, store.folderPath = root, relativePath
+	return nil
+}
+
+func (store *fakeDataSpaceObjectStore) CreateDataMultipart(_ context.Context, _, _, _ string) (string, error) {
+	if store.multipartID == "" {
+		store.multipartID = "provider-secret"
+	}
+	return store.multipartID, nil
+}
+
+func (store *fakeDataSpaceObjectStore) UploadDataPart(_ context.Context, _, _, _ string, _ int, _ int64, body io.Reader) (string, error) {
+	contents, err := io.ReadAll(body)
+	store.partBody = string(contents)
+	return "etag-part", err
+}
+
+func (store *fakeDataSpaceObjectStore) CompleteDataMultipart(_ context.Context, _, _, _ string, parts []objectstore.MultipartPart) error {
+	store.completed = append([]objectstore.MultipartPart(nil), parts...)
+	return nil
+}
+
+func (store *fakeDataSpaceObjectStore) AbortDataMultipart(_ context.Context, _, _, _ string) error {
+	store.aborted = true
 	return nil
 }
 

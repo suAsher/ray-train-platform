@@ -156,6 +156,13 @@ func main() {
 			}
 		}()
 	}
+	if dataObjectStore != nil {
+		go func() {
+			if err := kubeClient.RunAsLeader(ctx, platformNamespace, "ray-train-platform-upload-cleaner", jobHandler.RunDataSpaceUploadCleanup); err != nil && ctx.Err() == nil {
+				log.Printf("data-space upload cleanup stopped: %v", err)
+			}
+		}()
+	}
 
 	router := gin.New()
 	router.Use(querySafeGINLogger(), querySafeGINRecovery(), requestIDMiddleware())
@@ -163,7 +170,7 @@ func main() {
 		router.Use(cors.New(cors.Config{
 			AllowOrigins:     cfg.CORSOrigins,
 			AllowMethods:     []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions},
-			AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "Idempotency-Key", "X-Request-ID"},
+			AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "Idempotency-Key", "X-Request-ID", "X-Part-SHA256"},
 			ExposeHeaders:    []string{"X-Request-ID"},
 			AllowCredentials: true,
 		}))

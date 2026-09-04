@@ -11,10 +11,10 @@ import (
 // browser.
 type DataSpaceID string
 
-// MaxDataSpaceUploadBytes bounds a single relayed upload. The platform streams
-// these bytes rather than buffering them, but an unbounded declared length
-// would still let one request occupy a backend worker indefinitely.
-const MaxDataSpaceUploadBytes int64 = 5 * 1024 * 1024 * 1024
+// MaxDataSpaceUploadBytes is retained as the bound for the legacy single HTTP
+// request. Larger files use resumable multipart uploads; it is not a product
+// level whole-file limit.
+const MaxDataSpaceUploadBytes int64 = DataSpaceMultipartThresholdBytes
 
 const (
 	DataSpaceWorkspace      DataSpaceID = "workspace"

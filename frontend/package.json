@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",
+    "@noble/hashes": "^1.8.0",
     "echarts": "^6.1.0",
     "element-plus": "^2.14.4",
     "keycloak-js": "^26.2.1",

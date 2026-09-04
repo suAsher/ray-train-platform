@@ -105,6 +105,12 @@ type DataEntryPage struct {
 	NextCursor string      `json:"nextCursor,omitempty"`
 }
 
+type MultipartPart struct {
+	PartNumber int
+	SizeBytes  int64
+	ETag       string
+}
+
 // DirectoryLister is separate from Store so source-artifact upload fakes do
 // not need TOS list permission. Only the storage catalogue browser uses it.
 type DirectoryLister interface {
@@ -134,6 +140,13 @@ type DataSpaceStore interface {
 	ReadData(context.Context, string, string) (ArtifactRead, error)
 	PutData(context.Context, string, string, string, int64, io.Reader) error
 	CreateDataDirectory(context.Context, string, string) error
+}
+
+type DataSpaceMultipartStore interface {
+	CreateDataMultipart(context.Context, string, string, string) (string, error)
+	UploadDataPart(context.Context, string, string, string, int, int64, io.Reader) (string, error)
+	CompleteDataMultipart(context.Context, string, string, string, []MultipartPart) error
+	AbortDataMultipart(context.Context, string, string, string) error
 }
 
 // WorkspaceSnapshotStore copies a server-authorized personal workspace into
