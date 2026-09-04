@@ -29,6 +29,13 @@ for expected in RAY_TRAIN_MANAGED_ENABLED RAY_TRAIN_MANAGED_TENANTS RAY_TRAIN_CA
     exit 1
   }
 done
+# Helm renders a large plain integer as a float, so `quote` alone would emit
+# "2.592e+06" and the backend would fail to parse its own retention setting at
+# startup. int64 keeps it an integer.
+grep -Fq -- 'rayJobRetentionSeconds | default 2592000 | int64 | quote' "${chart_dir}/templates/backend-deployment.yaml" || {
+  echo 'RAYJOB_RETENTION_SECONDS must render as an integer, not scientific notation' >&2
+  exit 1
+}
 grep -Fq -- 'join "," .Values.rayTrain.managedTenants' "${chart_dir}/templates/backend-deployment.yaml" || {
   echo 'RAY_TRAIN_MANAGED_TENANTS must render as a comma-separated array' >&2
   exit 1
