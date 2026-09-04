@@ -12,14 +12,21 @@
         </div>
         <el-button type="primary" :loading="downloading" @click="download">下载为 Markdown</el-button>
       </div>
-      <nav class="mt-5 flex flex-wrap gap-2">
-        <el-button v-for="section in helpSections" :key="section.id" size="small" @click="scrollTo(section.id)">
-          {{ section.title }}
-        </el-button>
-      </nav>
     </section>
 
-    <section v-for="section in helpSections" :id="`help-${section.id}`" :key="section.id" class="panel p-6">
+    <div class="grid gap-6 lg:grid-cols-[15rem_minmax(0,1fr)]">
+      <nav class="panel h-fit p-3 lg:sticky lg:top-4">
+        <button
+          v-for="section in helpSections"
+          :key="section.id"
+          type="button"
+          class="block w-full rounded-lg px-3 py-2 text-left text-sm transition"
+          :class="section.id === activeId ? 'bg-blue-500/15 font-semibold text-blue-200' : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'"
+          @click="select(section.id)"
+        >{{ section.title }}</button>
+      </nav>
+
+      <section v-for="section in [activeSection]" :key="section.id" class="panel p-6">
       <h4 class="text-lg font-bold text-white">{{ section.title }}</h4>
       <p v-if="section.summary" class="mt-2 max-w-3xl text-sm leading-6 text-slate-400">{{ section.summary }}</p>
 
@@ -72,7 +79,8 @@
           {{ block.text }}
         </p>
       </template>
-    </section>
+      </section>
+    </div>
 
     <p class="px-1 text-xs leading-6 text-slate-500">
       这一页只放每次提交都用得上的部分，所以可以整页读完。
@@ -84,8 +92,8 @@
 </template>
 
 <script setup>
-import { nextTick, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
 import CopyBlock from '../../components/CopyBlock.vue'
@@ -108,18 +116,25 @@ function download() {
   }
 }
 
-function scrollTo(id) {
-  document.getElementById(`help-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+// Twelve topics do not fit one readable scroll, so the page shows the one the
+// reader picked. The download still carries all of them, because a file kept on
+// a laptop is read differently from a page browsed with a question in mind.
+const activeId = ref(helpSections[0].id)
+const activeSection = computed(
+  () => helpSections.find((section) => section.id === activeId.value) || helpSections[0],
+)
+
+function select(id) {
+  activeId.value = id
+  if (route.hash !== `#${id}`) router.replace({ hash: `#${id}` })
 }
 
-// Links elsewhere in the app point at a section (/help#contract). Vue Router
-// does not scroll to a hash on its own, and the ids carry a prefix so they
-// cannot collide with other elements, so resolve it here after the first paint.
+// Links elsewhere in the app point at a topic (/help#data-mode), so honour the
+// hash on arrival instead of always opening the first one.
 const route = useRoute()
-onMounted(async () => {
+const router = useRouter()
+onMounted(() => {
   const target = route.hash.replace(/^#/, '')
-  if (!target) return
-  await nextTick()
-  scrollTo(target)
+  if (target && helpSections.some((section) => section.id === target)) activeId.value = target
 })
 </script>

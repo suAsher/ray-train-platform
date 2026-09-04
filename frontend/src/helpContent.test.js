@@ -135,3 +135,42 @@ test('submission section gives runnable commands for both command-line entrances
     assert.ok(markdown.includes(mode), `execution mode ${mode} is not documented`)
   }
 })
+
+// The question that exposed the gap: do the data modes require code changes?
+// Three are transparent and two are not, and getting that wrong means either
+// avoiding a mode that was free, or submitting a run that silently trains on a
+// fraction of the data.
+test('each data mode states whether it requires a code change', async () => {
+  const dataMode = helpSections.find((section) => section.id === 'data-mode')
+  const table = dataMode.blocks.find((block) => block.kind === 'table')
+
+  assert.ok(table.headers.some((header) => header.includes('改代码')), 'the table never answers the code-change question')
+  const answers = Object.fromEntries(table.rows.map((row) => [row[0], row[row.length - 1]]))
+  for (const transparent of ['mount', 'cache', 'ray-data-stage']) {
+    assert.equal(answers[transparent], '不用', `${transparent} is transparent to training code`)
+  }
+  for (const invasive of ['ray-data', 'streaming']) {
+    assert.equal(answers[invasive], '要改', `${invasive} requires the training loop to consume shards`)
+  }
+})
+
+// Each topic a user asked for has to be reachable and carry something to act
+// on, otherwise the page lists subjects instead of answering questions.
+test('the page covers the requested topics with actionable content', async () => {
+  const markdown = renderHelpMarkdown()
+  const ids = helpSections.map((section) => section.id)
+
+  for (const topic of ['cache', 'ray-data', 'streaming', 'submit', 'code', 'observability', 'resume', 'storage']) {
+    assert.ok(ids.includes(topic), `topic ${topic} is missing`)
+  }
+  // Ray Data's two forms differ in whether manual sharding must be removed;
+  // leaving that out is how a run silently trains on a fraction of the data.
+  assert.match(markdown, /DistributedSampler/)
+  assert.match(markdown, /iter_torch_batches/)
+  // The cache only prewarms input when asked to, which surprises people.
+  assert.match(markdown, /--cache-preload input/)
+  // The streaming path is not fully verified yet and must say so.
+  assert.match(markdown, /尚未完成全量验证/)
+  // Retrying a submission is not the same as resuming training.
+  assert.match(markdown, /不是续训|从头重跑/)
+})
