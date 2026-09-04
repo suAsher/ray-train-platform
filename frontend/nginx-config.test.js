@@ -24,6 +24,16 @@ test('API reverse proxies preserve the browser Host header for WebSocket origin 
   }
 })
 
+test('data-space uploads stream through the API proxy up to the backend limit', async () => {
+  const config = await readFile(configURL, 'utf8')
+  const block = locationBlock(config, '/api/')
+
+  assert.match(block, /client_max_body_size 5g;/)
+  assert.match(block, /proxy_request_buffering off;/)
+  assert.match(block, /proxy_read_timeout 3600s;/)
+  assert.match(block, /proxy_send_timeout 3600s;/)
+})
+
 test('health endpoints reach the backend instead of falling back to the SPA', async () => {
   const config = await readFile(configURL, 'utf8')
 
