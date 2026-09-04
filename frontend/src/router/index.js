@@ -68,6 +68,12 @@ const routes = [
         meta: { title: '版本化数据集', requiresAuth: true }
       },
       {
+        path: 'help',
+        name: 'Help',
+        component: () => import('../views/Help/index.vue'),
+        meta: { title: '使用说明', requiresAuth: true }
+      },
+      {
         path: 'external-submit',
         name: 'ExternalSubmit',
         component: () => import('../views/ExternalSubmit/index.vue'),

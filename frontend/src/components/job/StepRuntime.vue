@@ -103,6 +103,11 @@
       <label class="field-label">训练启动命令</label>
       <el-input v-model="form.entrypoint" type="textarea" :rows="3" placeholder="例如：python tools/train.py configs/lidar.yaml --launcher pytorch" />
       <p class="field-help">命令在 <code>{{ workspacePath }}</code> 下执行，只能是一条命令。带空格的参数请用引号。</p>
+      <p class="field-help">
+        数据和结果路径请在代码里用 <code>os.environ["PLATFORM_DATASET_PATH"]</code>、<code>os.environ["PLATFORM_OUTPUT_PATH"]</code> 读取。
+        写在启动命令里的 <code>$PLATFORM_*</code> 可能在提交侧就被求值成空字符串，训练随后会向根路径写入并报 PermissionError。
+        <router-link class="text-blue-400 hover:text-blue-300" to="/help#contract">查看对接契约与示例</router-link>
+      </p>
     </div>
 
     <div class="mt-4 rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
@@ -120,6 +125,10 @@
 
     <div class="mt-5 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
       <label class="field-label">数据读取方式</label>
+      <p class="field-help">
+        不确定就选「直接读取」。先跑通，再从训练日志里确认数据读取确实是瓶颈（<code>data_time</code> 明显不为 0），才需要换其他方式——换错不会更快，只会多一层复杂度。
+        <router-link class="text-blue-400 hover:text-blue-300" to="/help#data-mode">怎么选</router-link>
+      </p>
       <div class="mt-3 grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
         <button type="button" class="rounded-xl border p-3 text-left transition" :class="dataModeClass('mount')" @click="selectDataMode('mount')">
           <p class="text-sm font-semibold text-white">直接读取</p>

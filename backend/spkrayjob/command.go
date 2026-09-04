@@ -77,8 +77,8 @@ const helpText = `spk-rayjob — 分布式训练任务命令行客户端
   spk-rayjob init                    在当前代码目录生成 .spk-rayjob.yaml 提交默认值
   spk-rayjob submit --watch          按默认值提交当前目录并等待结束
   spk-rayjob jobs                    列出我的任务
-	spk-rayjob datasets                列出我有权使用的数据集
-	spk-rayjob dataset versions <数据集>  列出不可变数据版本
+  spk-rayjob datasets                列出我有权使用的数据集
+  spk-rayjob dataset versions <数据集>  列出不可变数据版本
   spk-rayjob status <JOB ID>         查看单个任务
   spk-rayjob logs -f <JOB ID>        实时跟随日志
   spk-rayjob cancel <JOB ID>         停止任务
@@ -116,6 +116,32 @@ const helpText = `spk-rayjob — 分布式训练任务命令行客户端
   --server         平台地址；未提供时读取 SPK_RAYJOB_URL 或已保存的登录配置
   --config         指定仅属主可读的配置文件
   --debug          将脱敏后的请求诊断写入 stderr
+
+平台注入的环境变量（训练代码只依赖这些，不要写死 TOS 地址、桶名或节点路径）：
+  PLATFORM_DATASET_PATH      只读；本次任务选中的输入数据目录
+  PLATFORM_OUTPUT_PATH       读写；本次任务独占的输出目录，权重和结果写这里
+  PLATFORM_CHECKPOINT_PATH   只读，可为空；续训时选中的历史任务结果
+  PLATFORM_CACHE_PATH        临时读写，可为空；本地 NVMe 缓存，任务结束即回收
+  PLATFORM_JOB_ID            只读；本次任务 ID，可用于命名实验或日志
+
+  在代码里用 os.environ 读取，不要依赖 entrypoint 里的 shell 展开：
+      dataset = Path(os.environ["PLATFORM_DATASET_PATH"])
+      output  = Path(os.environ["PLATFORM_OUTPUT_PATH"])
+  写在 entrypoint 里的 $PLATFORM_* 可能在提交侧就被求值成空字符串，训练随后
+  会向类似 /run_dir 的根路径写入并报 PermissionError。
+
+提交前自检：
+  先用 1 卡最小批量跑通几个 step，再扩到多卡多机；
+  所有 rank 使用 DistributedSampler，只有 rank 0 写 checkpoint；
+  输入目录先确认真实存在 —— 路径写错的多卡任务通常两分钟内就失败。
+
+常见错误：
+  python: not found              镜像只有 python3，入口命令改用 python3
+  KeyError: RANK                 代码强制走分布式入口，但任务是单卡直接执行
+  PermissionError 且路径像 /run_dir  entrypoint 里的 $PLATFORM_* 展开成了空值
+  FileNotFoundError 指向数据目录     选中的输入路径不存在，先在 Portal 里确认
+  No module named mmdet3d.ops    上传的源码覆盖了镜像里编译好的扩展
+  任务一直排队                    GPU 配额或空闲卡不足；检查是否有调试环境空占卡
 
 注意：单机多卡与多机多卡由平台负责启动 torchrun。entrypoint 里请写
       python tools/train.py ...，不要自己再写 torchrun 或 torchpack。

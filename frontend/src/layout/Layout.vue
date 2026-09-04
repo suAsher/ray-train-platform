@@ -97,7 +97,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowDown, VideoPlay, Platform, FolderOpened, Lock, DataAnalysis, Monitor, UploadFilled, TrendCharts } from '@element-plus/icons-vue'
+import { ArrowDown, DataAnalysis, FolderOpened, Lock, Monitor, Platform, Reading, TrendCharts, UploadFilled, VideoPlay } from '@element-plus/icons-vue'
 import { logout } from '../auth'
 import { fetchMyQuota } from '../api/quota'
 import { fetchPlatformLimits } from '../api/platform'
@@ -120,7 +120,8 @@ const workspaceNav = computed(() => [
   { to: '/devcenter', label: '交互式调试', icon: Platform },
   { to: '/datacache', label: '我的数据', icon: FolderOpened },
   ...(datasetCatalogEnabled.value ? [{ to: '/datasets', label: '版本化数据集', icon: FolderOpened }] : []),
-  { to: '/external-submit', label: '外部提交', icon: UploadFilled }
+  { to: '/external-submit', label: '外部提交', icon: UploadFilled },
+  { to: '/help', label: '使用说明', icon: Reading }
 ])
 
 const adminIcons = { console: Lock, cluster: DataAnalysis, nodes: Monitor }

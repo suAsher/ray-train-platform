@@ -1,0 +1,68 @@
+import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+import test from 'node:test'
+
+import { helpSections, renderHelpMarkdown, CONTRACT_SNIPPET } from './help/content.js'
+
+const read = (path) => readFile(new URL(path, import.meta.url), 'utf8')
+
+// The page and the downloaded file are built from one source so a user cannot
+// take away a copy that disagrees with what the platform told them on screen.
+test('the downloadable document is generated from the rendered sections', async () => {
+  const markdown = renderHelpMarkdown()
+
+  for (const section of helpSections) {
+    assert.ok(markdown.includes(`## ${section.title}`), `${section.title} is missing from the download`)
+  }
+  // The contract snippet is the one thing users copy into their own code.
+  assert.ok(markdown.includes(CONTRACT_SNIPPET), 'the Python contract snippet is missing from the download')
+  assert.match(markdown, /^# RayTrain 平台使用说明/)
+})
+
+// Each of these caused a real failure. Losing one from the help content means
+// the next user rediscovers it by burning GPU hours.
+test('help content keeps the guidance that prevents known failures', async () => {
+  const markdown = renderHelpMarkdown()
+
+  assert.match(markdown, /os\.environ/, 'reading paths from the environment is not explained')
+  assert.match(markdown, /PermissionError/, 'the empty shell-expansion failure is not explained')
+  assert.match(markdown, /torchrun/, 'the "do not write torchrun yourself" rule is missing')
+  assert.match(markdown, /python3/, 'the python vs python3 failure is missing')
+  for (const variable of ['PLATFORM_DATASET_PATH', 'PLATFORM_OUTPUT_PATH', 'PLATFORM_CHECKPOINT_PATH', 'PLATFORM_CACHE_PATH']) {
+    assert.ok(markdown.includes(variable), `${variable} is not documented`)
+  }
+  // Five data modes with no decision rule is what made the feature unusable.
+  for (const mode of ['mount', 'cache', 'ray-data-stage', 'ray-data', 'streaming']) {
+    assert.ok(markdown.includes(mode), `data mode ${mode} has no guidance`)
+  }
+})
+
+// A page that only exists behind a link nobody follows does not help, so the
+// guidance also appears at the two fields where the mistakes are actually made.
+test('the submit form carries the guidance inline and links to the help page', async () => {
+  const source = await read('./components/job/StepRuntime.vue')
+
+  assert.match(source, /PLATFORM_OUTPUT_PATH/, 'the entrypoint field does not mention the output path variable')
+  assert.match(source, /PermissionError/, 'the entrypoint field does not warn about shell expansion')
+  assert.match(source, /to="\/help#contract"/, 'the entrypoint field does not link to the contract section')
+  assert.match(source, /to="\/help#data-mode"/, 'the data mode selector does not link to the selection guidance')
+  assert.match(source, /data_time/, 'the data mode selector gives no rule for when to switch')
+})
+
+test('the help page is reachable from the workspace navigation', async () => {
+  const [router, layout] = await Promise.all([read('./router/index.js'), read('./layout/Layout.vue')])
+
+  assert.match(router, /path: 'help'/)
+  assert.match(router, /views\/Help\/index\.vue/)
+  assert.match(layout, /to: '\/help'/)
+})
+
+// Downloading reuses the shared blob helper rather than a second implementation
+// that could revoke the object URL before the browser has taken the file.
+test('the help page downloads through the shared blob helper', async () => {
+  const source = await read('./views/Help/index.vue')
+
+  assert.match(source, /import \{ saveBlobAsFile \} from '\.\.\/\.\.\/checkpointDownload'/)
+  assert.match(source, /new Blob\(\[markdown\]/)
+  assert.equal(source.includes('URL.createObjectURL'), false, 'the page must not carry its own object-URL handling')
+})
