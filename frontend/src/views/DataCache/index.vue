@@ -146,7 +146,7 @@ import { ElMessage } from 'element-plus'
 import { createDataSpaceFolder, createDataSpaceUpload, createWorkspaceSnapshot, downloadDataSpaceFile, fetchDataSpaceEntries, fetchDataSpaces, uploadDataSpaceFile } from '../../api/dataSpaces'
 import { isCheckpointFile, saveBlobAsFile } from '../../checkpointDownload'
 import { folderUploadRelativePath } from '../../api/dataSpaceUpload'
-import { completeSourceArtifact, createSourceArtifact, uploadSourceArtifact } from '../../api/sourceArtifacts'
+import { uploadSourceArchive } from '../../api/sourceArtifacts'
 import { canManageDataSpace, canMutateDataSpace, canUseDataSpaceForTraining, dataPageSpaces, dataSpaceAccessLabel, dataSpaceAccessType } from '../../dataSpaceActions'
 import { dataSpaceReadiness, dataSpaceStorageReady } from '../../dataSpaceReadiness'
 import { session } from '../../stores/session'
@@ -339,13 +339,9 @@ const uploadCodeArchive = async (event) => {
   uploadingArchive.value = true
   uploadState.value = { totalFiles: 1, completedFiles: 0, totalBytes: Number(file.size || 0), uploadedBytes: 0, currentFile: file.name, retrying: false }
   try {
-    let artifact = await createSourceArtifact(file)
-    if (artifact.uploadRequired) {
-      await uploadSourceArtifact(artifact, file, {
-        onProgress: ({ loaded }) => { uploadState.value.uploadedBytes = Math.min(uploadState.value.totalBytes, loaded) },
-      })
-      artifact = await completeSourceArtifact(artifact.artifactId)
-    }
+    const artifact = await uploadSourceArchive(file, {
+      onProgress: ({ loaded }) => { uploadState.value.uploadedBytes = Math.min(uploadState.value.totalBytes, loaded) },
+    })
     uploadState.value.completedFiles = 1
     uploadState.value.uploadedBytes = uploadState.value.totalBytes
     ElMessage.success('不可变代码包已校验，可用于训练')

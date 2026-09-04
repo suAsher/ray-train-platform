@@ -14,8 +14,12 @@ export function folderUploadRelativePath(file) {
 }
 
 // XMLHttpRequest is deliberate here. Fetch cannot expose browser upload
-// progress, while presigned PUT uploads must present useful progress and allow
-// failed files to be retried independently by the caller.
+// progress, while a large PUT must present useful progress and allow failed
+// files to be retried independently by the caller.
+//
+// `upload.headers` carries request headers the platform relay needs, such as
+// authorization. A presigned object-store URL must never receive those, so the
+// caller decides: `requiredHeaders` comes from the store, `headers` from us.
 export function uploadDataSpaceFile(upload, file, options = {}) {
   const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {}
   const xhrFactory = options.xhrFactory || (() => new XMLHttpRequest())
@@ -36,6 +40,9 @@ export function uploadDataSpaceFile(upload, file, options = {}) {
     for (const [name, value] of Object.entries(upload.requiredHeaders || {})) {
       xhr.setRequestHeader(name, value)
     }
+    for (const [name, value] of Object.entries(upload.headers || {})) {
+      xhr.setRequestHeader(name, value)
+    }
     xhr.upload.onprogress = (event) => {
       const total = event.lengthComputable ? event.total : Number(file?.size || 0)
       reportProgress(event.loaded, total)
@@ -43,7 +50,9 @@ export function uploadDataSpaceFile(upload, file, options = {}) {
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
         reportProgress(file?.size, file?.size)
-        resolve()
+        // The relay reports which artifact it stored in a response header, so
+        // resolve with the request rather than discarding it.
+        resolve(xhr)
         return
       }
       reject(uploadError(`上传失败 (${xhr.status || '网络错误'})`, xhr.status || 0, 'DATA_SPACE_UPLOAD_FAILED'))
