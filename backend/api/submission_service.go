@@ -135,19 +135,21 @@ type SubmissionInput struct {
 // DatasetPreflightSummary is deliberately limited to logical, immutable
 // metadata. Object-store keys and credentials never cross the API boundary.
 type DatasetPreflightSummary struct {
-	DatasetID      string                    `json:"datasetId"`
-	DatasetSlug    string                    `json:"datasetSlug"`
-	VersionID      string                    `json:"versionId"`
-	Version        string                    `json:"version"`
-	ManifestSHA256 string                    `json:"manifestSha256"`
-	SchemaVersion  string                    `json:"schemaVersion"`
-	TrainSamples   int64                     `json:"trainSamples"`
-	ValSamples     int64                     `json:"valSamples"`
-	TestSamples    int64                     `json:"testSamples"`
-	LogicalBytes   int64                     `json:"logicalBytes"`
-	PackedBytes    int64                     `json:"packedBytes"`
-	DataMode       domain.DataMode           `json:"dataMode"`
-	CachePolicy    domain.DatasetCachePolicy `json:"cachePolicy"`
+	Sites               domain.DatasetSites       `json:"sites,omitempty"`
+	SelectionValidation string                    `json:"selectionValidation,omitempty"`
+	DatasetID           string                    `json:"datasetId"`
+	DatasetSlug         string                    `json:"datasetSlug"`
+	VersionID           string                    `json:"versionId"`
+	Version             string                    `json:"version"`
+	ManifestSHA256      string                    `json:"manifestSha256"`
+	SchemaVersion       string                    `json:"schemaVersion"`
+	TrainSamples        int64                     `json:"trainSamples"`
+	ValSamples          int64                     `json:"valSamples"`
+	TestSamples         int64                     `json:"testSamples"`
+	LogicalBytes        int64                     `json:"logicalBytes"`
+	PackedBytes         int64                     `json:"packedBytes"`
+	DataMode            domain.DataMode           `json:"dataMode"`
+	CachePolicy         domain.DatasetCachePolicy `json:"cachePolicy"`
 }
 
 type SubmissionPreflightResult struct {
@@ -461,6 +463,7 @@ func (service *SubmissionService) resolveDatasetSnapshot(ctx context.Context, pr
 	}
 
 	provenance := domain.DatasetProvenance{
+		Sites:     spec.DatasetRef.Sites,
 		DatasetID: dataset.ID, DatasetVersionID: version.ID, ManifestSHA256: version.ManifestSHA256,
 		DataMode: domain.DataModeStreaming, CachePolicy: spec.CachePolicy,
 	}
@@ -468,13 +471,17 @@ func (service *SubmissionService) resolveDatasetSnapshot(ctx context.Context, pr
 		return domain.DatasetProvenance{}, nil, ErrSubmissionDatasetManifestInvalid
 	}
 	// latest is only an input selector. Persist a concrete immutable reference.
-	spec.DatasetRef = domain.DatasetReference{Dataset: dataset.ID, Version: version.ID}
+	spec.DatasetRef = domain.DatasetReference{Dataset: dataset.ID, Version: version.ID, Sites: provenance.Sites}
 	summary := &DatasetPreflightSummary{
+		Sites:     provenance.Sites,
 		DatasetID: dataset.ID, DatasetSlug: dataset.Slug, VersionID: version.ID, Version: version.Version,
 		ManifestSHA256: version.ManifestSHA256, SchemaVersion: version.SchemaVersion,
 		TrainSamples: version.TrainSamples, ValSamples: version.ValSamples, TestSamples: version.TestSamples,
 		LogicalBytes: version.LogicalBytes, PackedBytes: version.PackedBytes,
 		DataMode: domain.DataModeStreaming, CachePolicy: spec.CachePolicy,
+	}
+	if provenance.Sites != "" {
+		summary.SelectionValidation = "pending-manifest-validation"
 	}
 	return provenance, summary, nil
 }
@@ -564,6 +571,11 @@ func (service *SubmissionService) resolveResumeCheckpoint(ctx context.Context, p
 	}
 	parent, err := service.repository.Get(ctx, principal.TenantID, spec.ParentJobID)
 	if err != nil || parent == nil || parent.ID != spec.ParentJobID || parent.TenantID != principal.TenantID || parent.UserID != principal.Subject || parent.Spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain || parent.Spec.Output.Space != domain.DataSpaceMyRuns {
+		return "", ErrSubmissionResumeCheckpointNotFound
+	}
+	// A change from full-version to selected sites (or the reverse) is a new
+	// training experiment, not continuation of this checkpoint's data stream.
+	if parent.Spec.DatasetRef.Sites != spec.DatasetRef.Sites {
 		return "", ErrSubmissionResumeCheckpointNotFound
 	}
 	store, ok := service.repository.(checkpointStore)
@@ -801,6 +813,7 @@ func normalizeSubmissionSpec(principal auth.Principal, origin domain.SubmissionO
 	spec.ResolvedDataMounts = domain.ResolvedDataSpaceMounts{}
 	spec.ResolvedDataRoots = domain.ResolvedDataSpaceRoots{}
 	spec.DatasetRef = domain.DatasetReference{
+		Sites:   spec.DatasetRef.Sites,
 		Dataset: strings.TrimSpace(spec.DatasetRef.Dataset),
 		Version: strings.TrimSpace(spec.DatasetRef.Version),
 	}

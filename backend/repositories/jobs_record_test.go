@@ -85,6 +85,8 @@ func TestJobRecordRoundTripsDatasetProvenanceColumns(t *testing.T) {
 		DataMode:         domain.DataModeStreaming,
 		CachePolicy:      domain.DatasetCachePolicyBounded,
 	}
+	job.Spec.DatasetRef.Sites, _ = domain.NewDatasetSites([]string{"cnfzhjyg"})
+	job.DatasetProvenance.Sites = job.Spec.DatasetRef.Sites
 
 	record, err := newJobRecord(&job)
 	if err != nil {
@@ -135,6 +137,9 @@ func TestNewJobRecordRejectsMutableOrMismatchedDatasetProvenance(t *testing.T) {
 		{name: "version mismatch", mutate: func(job *domain.TrainingJob) { job.Spec.DatasetRef.Version = "version-other" }},
 		{name: "dataset mismatch", mutate: func(job *domain.TrainingJob) { job.Spec.DatasetRef.Dataset = "dataset-other" }},
 		{name: "cache policy mismatch", mutate: func(job *domain.TrainingJob) { job.Spec.CachePolicy = domain.DatasetCachePolicyOff }},
+		{name: "site mismatch", mutate: func(job *domain.TrainingJob) {
+			job.Spec.DatasetRef.Sites, _ = domain.NewDatasetSites([]string{"site-a"})
+		}},
 		{name: "missing provenance", mutate: func(job *domain.TrainingJob) { job.DatasetProvenance = domain.DatasetProvenance{} }},
 	}
 	for _, test := range tests {

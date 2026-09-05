@@ -71,7 +71,7 @@ func validateStreamingDatasetManifest(job domain.TrainingJob, mount *DatasetMani
 		return fmt.Errorf("immutable dataset provenance is required")
 	}
 	if job.Spec.DatasetRef.Dataset != provenance.DatasetID || job.Spec.DatasetRef.Version != provenance.DatasetVersionID ||
-		job.Spec.DataMode != provenance.DataMode || job.Spec.CachePolicy != provenance.CachePolicy {
+		job.Spec.DataMode != provenance.DataMode || job.Spec.CachePolicy != provenance.CachePolicy || job.Spec.DatasetRef.Sites != provenance.Sites {
 		return fmt.Errorf("streaming job spec does not match immutable dataset provenance")
 	}
 	if mount == nil {
@@ -134,6 +134,7 @@ func appendStreamingDatasetRoot(
 	environment []any,
 	mount DatasetManifestMount,
 	cachePolicy domain.DatasetCachePolicy,
+	sites domain.DatasetSites,
 ) ([]any, []any, []any) {
 	volumeName := pvcVolumeName(volumes, mount.ClaimName)
 	if volumeName == "" {
@@ -150,6 +151,7 @@ func appendStreamingDatasetRoot(
 		"subPath": mount.DatasetRootSubPath, "readOnly": true,
 	})
 	environment = append(environment, streamingDatasetEnvironmentEntries(mount, cachePolicy)...)
+	environment = append(environment, map[string]any{"name": "PLATFORM_DATASET_SITES_JSON", "value": sites.JSON()})
 	return volumeMounts, volumes, environment
 }
 
@@ -172,7 +174,8 @@ func streamingDatasetEnvironmentEntries(mount DatasetManifestMount, cachePolicy 
 }
 
 func streamingDatasetRuntimeEnvironmentYAML(provenance domain.DatasetProvenance, mount DatasetManifestMount) string {
-	environment := "  PLATFORM_DATASET_ID: " + strconv.Quote(provenance.DatasetID) + "\n" +
+	environment := "  PLATFORM_DATASET_SITES_JSON: " + strconv.Quote(provenance.Sites.JSON()) + "\n" +
+		"  PLATFORM_DATASET_ID: " + strconv.Quote(provenance.DatasetID) + "\n" +
 		"  PLATFORM_DATASET_VERSION_ID: " + strconv.Quote(provenance.DatasetVersionID) + "\n" +
 		"  PLATFORM_DATASET_MANIFEST_SHA256: " + strconv.Quote(provenance.ManifestSHA256) + "\n" +
 		"  PLATFORM_DATASET_MANIFEST_PATH: " + strconv.Quote(datasetManifestContainerPath(provenance.DatasetID, provenance.DatasetVersionID)) + "\n" +

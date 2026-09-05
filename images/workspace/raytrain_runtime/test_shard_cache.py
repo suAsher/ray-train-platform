@@ -77,6 +77,45 @@ class _GuardedReader:
 
 
 class ShardCacheTest(unittest.TestCase):
+    def test_verified_hit_does_not_stat_unavailable_source(self):
+        from raytrain_runtime.shard_cache import ShardCache
+
+        with tempfile.TemporaryDirectory() as temporary:
+            base = pathlib.Path(temporary)
+            roots = (base / "data1", base / "data2")
+            for root in roots:
+                root.mkdir()
+            source, digest = _write_source(base / "source", b"offline source")
+            cache = ShardCache(roots=roots, policy="bounded")
+            target = cache.resolve(source, digest)
+            source.unlink()
+            real_stat = pathlib.Path.stat
+
+            def checked_stat(path, *args, **kwargs):
+                if path == source:
+                    raise AssertionError("cache hit must not contact the source")
+                return real_stat(path, *args, **kwargs)
+
+            with mock.patch.object(pathlib.Path, "stat", checked_stat):
+                self.assertEqual(cache.resolve(source, digest), target)
+
+    def test_read_lease_prevents_eviction_until_consumer_finishes(self):
+        from raytrain_runtime.shard_cache import ShardCache
+
+        with tempfile.TemporaryDirectory() as temporary:
+            base = pathlib.Path(temporary)
+            roots = (base / "data1", base / "data2")
+            for root in roots:
+                root.mkdir()
+            source, digest = _write_source(base / "source", b"pinned payload")
+            cache = ShardCache(roots=roots, policy="bounded")
+            with cache.readable(source, digest) as path:
+                self.assertEqual(path.read_bytes(), b"pinned payload")
+                self.assertIsNone(cache._try_lock(cache._lock_path(digest)))
+            descriptor = cache._try_lock(cache._lock_path(digest))
+            self.assertIsNotNone(descriptor)
+            cache._unlock(descriptor)
+
     def test_off_returns_source_without_creating_cache_roots(self):
         from raytrain_runtime.shard_cache import ShardCache
 

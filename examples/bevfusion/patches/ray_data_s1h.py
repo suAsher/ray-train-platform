@@ -585,12 +585,22 @@ class _MMCVBatchSamplerCompatibility:
     sampler: None = dataclasses.field(default=None, init=False)
 
 
+@dataclasses.dataclass
+class _WorkerEpoch:
+    """Epoch bridge only; Ray Data remains responsible for partitioning."""
+
+    epoch: int = 0
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = _non_negative_integer("epoch", epoch)
+
+
 @dataclasses.dataclass(frozen=True)
 class S1HWorkerDataLoader:
     """MMCV-compatible iterable over the current Ray Train worker shard.
 
     Ray Data already owns worker partitioning. This adapter therefore exposes
-    no sampler and batches decoded rows with the config's per-GPU batch size.
+    an epoch-only sampler and batches decoded rows with the per-GPU batch size.
     The platform supplies the worker sample count as provenance so an
     epoch-based runner can determine its number of iterations. Iteration also
     enforces that exact count before accepting each complete batch.
@@ -602,10 +612,12 @@ class S1HWorkerDataLoader:
     worker_sample_count: int
     prefetch_batches: int = 2
     dataset_name: str = "train"
+    shuffle_seed: int | None = None
+    local_shuffle_buffer_size: int | None = None
     batch_resolver: Callable[
         [Sequence[Mapping[str, Any]]], Sequence[Mapping[str, Any]]
     ] | None = None
-    sampler: None = dataclasses.field(default=None, init=False)
+    sampler: _WorkerEpoch = dataclasses.field(default_factory=_WorkerEpoch, init=False)
     batch_sampler: _MMCVBatchSamplerCompatibility = dataclasses.field(
         default_factory=_MMCVBatchSamplerCompatibility,
         init=False,
@@ -618,6 +630,14 @@ class S1HWorkerDataLoader:
             raise ValueError("collate_fn must be callable")
         _positive_integer("samples_per_gpu", self.samples_per_gpu)
         _positive_integer("worker_sample_count", self.worker_sample_count)
+        if self.shuffle_seed is not None:
+            _non_negative_integer("shuffle_seed", self.shuffle_seed)
+        if self.local_shuffle_buffer_size is not None:
+            _positive_integer("local_shuffle_buffer_size", self.local_shuffle_buffer_size)
+            if self.local_shuffle_buffer_size < self.samples_per_gpu:
+                raise ValueError("local_shuffle_buffer_size must cover a full batch")
+            if self.shuffle_seed is None:
+                raise ValueError("local shuffle requires shuffle_seed")
         if (
             isinstance(self.prefetch_batches, bool)
             or not isinstance(self.prefetch_batches, int)
@@ -636,6 +656,10 @@ class S1HWorkerDataLoader:
             self.worker_sample_count + self.samples_per_gpu - 1
         ) // self.samples_per_gpu
 
+    def set_epoch(self, epoch: int) -> None:
+        """Use the runner's restored epoch, never an iterator invocation count."""
+        self.sampler.set_epoch(epoch)
+
     def __iter__(self) -> Iterator[Any]:
         from raytrain_runtime import ray_data
 
@@ -645,6 +669,12 @@ class S1HWorkerDataLoader:
             "prefetch_batches": self.prefetch_batches,
             "pipeline": self.pipeline,
         }
+        if self.shuffle_seed is not None:
+            worker_arguments.update(
+                shuffle_seed=self.shuffle_seed,
+                epoch=self.sampler.epoch,
+                local_shuffle_buffer_size=self.local_shuffle_buffer_size,
+            )
         if self.batch_resolver is not None:
             worker_arguments["batch_resolver"] = self.batch_resolver
         observed_sample_count = 0
@@ -689,6 +719,8 @@ def build_bevfusion_train_dataloader(
     samples_per_gpu: int,
     worker_sample_count: int,
     prefetch_batches: int = 2,
+    shuffle_seed: int | None = None,
+    local_shuffle_buffer_size: int | None = None,
     batch_resolver: Callable[
         [Sequence[Mapping[str, Any]]], Sequence[Mapping[str, Any]]
     ] | None = None,
@@ -711,6 +743,8 @@ def build_bevfusion_train_dataloader(
         samples_per_gpu=samples_per_gpu,
         worker_sample_count=worker_sample_count,
         prefetch_batches=prefetch_batches,
+        shuffle_seed=shuffle_seed,
+        local_shuffle_buffer_size=local_shuffle_buffer_size,
         batch_resolver=batch_resolver,
     )
 

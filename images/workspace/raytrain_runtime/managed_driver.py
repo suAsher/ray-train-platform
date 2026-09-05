@@ -6,6 +6,7 @@ import argparse
 import contextlib
 import dataclasses
 import importlib.util
+import json
 import os
 import pathlib
 import re
@@ -17,6 +18,10 @@ from .entrypoint import PythonEntrypoint, execute, parse_python_entrypoint
 from .reporting import validate_checkpoint
 
 
+# Checked by the server-generated launcher before accepting a scoped dataset.
+# Older images must fail closed instead of silently training the full version.
+SITE_SELECTION_PROTOCOL = 1
+
 _STABLE_OUTPUT_ROOT = pathlib.Path("/mnt/data/output")
 _MANAGED_STORAGE_ROOT = _STABLE_OUTPUT_ROOT / ".platform" / "ray-train"
 _SAFE_JOB_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -25,6 +30,12 @@ _RAY_JOB_WORKING_DIR_URI = re.compile(r"^gcs://_ray_pkg_[0-9a-f]+(?:\.zip)?$")
 _RAY_VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$")
 _MANAGED_RUNTIME_ROOT = pathlib.Path(__file__).resolve().parent.parent
 _PREPARE_HOOK_ENV = "RAYTRAIN_MANAGED_PREPARE_HOOK"
+
+
+def _selected_sites(environment: Mapping[str, str]) -> tuple[str, ...]:
+    from .site_selection import parse_sites_json
+
+    return parse_sites_json(environment.get("PLATFORM_DATASET_SITES_JSON", "[]"))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -272,6 +283,7 @@ def parse_driver_config(
             ),
             prefetch_batches=prefetch_batches,
             shuffle_seed=shuffle_seed,
+            sites=_selected_sites(environment),
         )
     elif options.data_mode in ("ray-data", "ray-data-stage"):
         from .ray_data import DatasetConfig
@@ -409,6 +421,9 @@ def _train_loop_environment(loop_config: Mapping[str, Any]) -> dict[str, str | N
             "PLATFORM_DATASET_ROOT": str(loop_config["dataset_root"]),
             "PLATFORM_DATASET_CACHE_POLICY": str(
                 loop_config["dataset_cache_policy"]
+            ),
+            "PLATFORM_DATASET_SITES_JSON": json.dumps(
+                loop_config.get("dataset_sites", ()), separators=(",", ":")
             ),
             "PLATFORM_DATASET_SCHEMA_VERSION": str(
                 loop_config.get(
@@ -649,6 +664,8 @@ def build_trainer(
             "dataset_schema_version": config.dataset.schema_version,
             "dataset_prefetch_batches": config.dataset.prefetch_batches,
             "dataset_shuffle_seed": config.dataset.shuffle_seed,
+            "dataset_sites": config.dataset.sites,
+            "dataset_selected_train_samples": samples_per_worker * workers - padding_count,
         }
         trainer_options["train_loop_config"] = loop_config
     return ray_api.TorchTrainer(**trainer_options)

@@ -118,13 +118,6 @@ class ShardCache:
         self._validate_digest_and_name(source, digest)
         if self._policy == "off":
             return source
-        try:
-            source_metadata = source.stat()
-        except OSError:
-            raise RuntimeError("source shard is unavailable") from None
-        if not stat.S_ISREG(source_metadata.st_mode):
-            raise RuntimeError("source shard is unavailable")
-
         target = self._target_path(digest)
         lock_path = self._lock_path(digest)
         try:
@@ -138,6 +131,9 @@ class ShardCache:
                 if self._path_exists(target):
                     self._discard_invalid_target(target)
                 self._increment("miss")
+                source_metadata = source.stat()
+                if not stat.S_ISREG(source_metadata.st_mode):
+                    raise RuntimeError("source shard is unavailable")
                 root = self._root_for_digest(digest)
                 with self._exclusive_lock(self._capacity_lock_path(root)):
                     if not self._ensure_capacity(
@@ -164,6 +160,34 @@ class ShardCache:
         except (OSError, RuntimeError):
             self._increment("fallback")
             return source
+
+    @contextlib.contextmanager
+    def readable(
+        self, source_path: str | os.PathLike[str], digest: str,
+    ) -> Iterator[pathlib.Path]:
+        """Pin a verified shard against cooperative eviction while it is read.
+
+        Resolve releases its download lock before returning, so revalidate under
+        a shared lock to close the resolve/open eviction race. Shared readers can
+        run concurrently; capacity eviction already uses a nonblocking exclusive
+        lock and will skip leased objects.
+        """
+        source = pathlib.Path(source_path)
+        for _attempt in range(3):
+            target = self.resolve(source, digest)
+            if target == source:
+                yield source
+                return
+            descriptor = self._open_lock(self._lock_path(digest))
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_SH)
+                if self._cached_file_is_valid(target, digest):
+                    yield target
+                    return
+            finally:
+                self._unlock(descriptor)
+        self._increment("fallback")
+        yield source
 
     def metrics_snapshot(self) -> dict[str, int]:
         """Return an independent, path-free process-local metrics snapshot."""

@@ -3,6 +3,14 @@ const identifierPattern = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/
 const readyState = 'READY'
 
 const text = (value) => typeof value === 'string' ? value.trim() : ''
+
+export function normalizeDatasetSites(value) {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > 256 || value.some((site) => typeof site !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(site))) {
+    throw new Error('场地编码需为字母、数字、下划线或连字符，最多选择 256 个场地')
+  }
+  return [...new Set(value)].sort()
+}
 const count = (value) => {
   const parsed = Number(value)
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0
@@ -152,6 +160,10 @@ export function assertStreamingPreflightCurrent(requestedSpec, currentSpec) {
 export function pinStreamingPreflight(spec, result, expectedRayVersion) {
   if (!spec || spec.dataMode !== 'streaming') throw new Error('提交前检查只适用于版本化流式训练')
   const dataset = result?.dataset
+  const sites = normalizeDatasetSites(spec.datasetRef?.sites)
+  if (JSON.stringify(sites) !== JSON.stringify(normalizeDatasetSites(dataset?.sites))) {
+    throw new Error('提交前检查返回的场地范围与当前选择不一致')
+  }
   const rayVersion = text(expectedRayVersion)
   const requestedGPUs = Number(spec.resources?.workerReplicas || 0) * Number(spec.resources?.gpusPerWorker || 0)
   const validDataset = dataset && text(dataset.datasetId) && text(dataset.versionId) && text(dataset.versionId) !== 'latest' &&
@@ -165,6 +177,6 @@ export function pinStreamingPreflight(spec, result, expectedRayVersion) {
   if (Number(result.requestedGpus) !== requestedGPUs) throw new Error('提交前检查返回的资源申请与当前选择不一致')
   return {
     ...spec,
-    datasetRef: { dataset: text(dataset.datasetId), version: text(dataset.versionId) },
+    datasetRef: { dataset: text(dataset.datasetId), version: text(dataset.versionId), ...(sites.length ? { sites } : {}) },
   }
 }

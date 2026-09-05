@@ -36,6 +36,7 @@ from .pack import (
     prepare_rows,
 )
 from .schema import dump_trusted_info
+from .site_metadata import sample_site_id
 from .tos_storage import (
     MAX_INDEX_BYTES,
     TOSStorage,
@@ -536,7 +537,16 @@ def _plan_remote_shards(
     planned = []
     current: tuple[_RemoteSample, ...] = ()
     current_size = 0
-    for _scene, grouped in groupby(samples, key=lambda value: value.sample["scene"]):
+    ordered = sorted(samples, key=lambda value: (
+        sample_site_id(value.sample), value.sample["scene"],
+        value.sample["timestamp"], value.sample["token"],
+    ))
+    for (site, _scene), grouped in groupby(
+        ordered, key=lambda value: (sample_site_id(value.sample), value.sample["scene"])
+    ):
+        if current and sample_site_id(current[0].sample) != site:
+            planned.append(_remote_shard(current, current_size))
+            current, current_size = (), 0
         scene_samples = tuple(grouped)
         scene_size = sum(sample.estimated_bytes for sample in scene_samples)
         if scene_size > MAX_SHARD_BYTES:
@@ -871,7 +881,7 @@ def build_reference_manifest_rows(
             or locator["split"] != canonical["split"]
         ):
             raise ValueError("payload locator metadata does not match the trusted index")
-        rows.append({**dict(locator), "ordinal": ordinal})
+        rows.append({**dict(locator), "ordinal": ordinal, "site_id": sample_site_id(canonical)})
     if not rows:
         raise ValueError("reference manifest must contain at least one row")
     return tuple(rows)
@@ -882,6 +892,7 @@ def _manifest_schema(pa: Any, schema_version: str) -> Any:
         [
             pa.field("ordinal", pa.int64(), nullable=False),
             pa.field("token", pa.string(), nullable=False),
+            pa.field("site_id", pa.string(), nullable=False),
             pa.field("class_ids", pa.list_(pa.int16()), nullable=False),
             pa.field("source_digest", pa.string(), nullable=False),
             pa.field("split", pa.string(), nullable=False),

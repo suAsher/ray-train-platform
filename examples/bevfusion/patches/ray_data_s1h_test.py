@@ -6,6 +6,7 @@ import copy
 import dataclasses
 import importlib
 import inspect
+import os
 from pathlib import Path
 import sys
 import types
@@ -587,7 +588,7 @@ class RayDataS1HPatchTest(unittest.TestCase):
             produced = list(loader)
 
         self.assertEqual(len(loader), 2)
-        self.assertIsNone(loader.sampler)
+        self.assertEqual(loader.sampler.epoch, 0)
         self.assertIsNone(loader.batch_sampler.sampler)
         self.assertEqual(loader.samples_per_gpu, 2)
         self.assertEqual(
@@ -746,7 +747,7 @@ class RayDataS1HPatchTest(unittest.TestCase):
             worker_sample_count=1,
         )
 
-        self.assertIsNone(loader.sampler)
+        self.assertEqual(loader.sampler.epoch, 0)
         self.assertIsNone(loader.batch_sampler.sampler)
         self.assertNotIn("DistributedSampler", inspect.getsource(adapter))
 
@@ -763,15 +764,47 @@ class RayDataS1HPatchTest(unittest.TestCase):
 
         # MMCV's DistSamplerSeedHook falls through to
         # data_loader.batch_sampler.sampler when the top-level sampler is not
-        # distributed. Ray Data owns sharding, so both sampler values remain
-        # inert, but the compatibility path must still be safe to traverse.
+        # distributed. This sampler forwards only the epoch; Ray Data owns
+        # worker partitioning.
         if hasattr(loader.sampler, "set_epoch"):
             loader.sampler.set_epoch(3)
         elif hasattr(loader.batch_sampler.sampler, "set_epoch"):
             loader.batch_sampler.sampler.set_epoch(3)
 
-        self.assertIsNone(loader.sampler)
+        self.assertEqual(loader.sampler.epoch, 3)
         self.assertIsNone(loader.batch_sampler.sampler)
+
+    def test_streaming_shuffle_uses_explicit_restored_epoch_without_auto_increment(self):
+        adapter = _adapter_module()
+        for schema, function_name in (
+            ("", "worker_s1h_batches"),
+            ("s1h-multimodal-webdataset-v2", "worker_s1h_webdataset_batches"),
+        ):
+            with self.subTest(schema=schema), mock.patch.dict(
+                os.environ, {"PLATFORM_DATASET_SCHEMA_VERSION": schema}
+            ), mock.patch(
+                "raytrain_runtime.ray_data." + function_name,
+                side_effect=lambda **kwargs: iter(([{"token": "one"}],)),
+            ) as batches:
+                loader = adapter.build_bevfusion_train_dataloader(
+                    data_mode="streaming", legacy_builder=mock.Mock(),
+                    pipeline=lambda sample: sample,
+                    collate_fn=lambda samples, samples_per_gpu: samples,
+                    samples_per_gpu=1, worker_sample_count=1,
+                    shuffle_seed=42, local_shuffle_buffer_size=8,
+                )
+                loader.set_epoch(7)
+                list(loader)
+                list(loader)
+                self.assertEqual([c.kwargs["epoch"] for c in batches.call_args_list], [7, 7])
+                self.assertEqual(batches.call_args.kwargs["shuffle_seed"], 42)
+                self.assertEqual(batches.call_args.kwargs["local_shuffle_buffer_size"], 8)
+                loader.sampler.set_epoch(8)
+                list(loader)
+                self.assertEqual(batches.call_args.kwargs["epoch"], 8)
+                for bad in (-1, True, 1.5):
+                    with self.assertRaises(ValueError):
+                        loader.set_epoch(bad)
 
     def test_streaming_loader_forwards_the_platform_batch_resolver(self):
         adapter = _adapter_module()

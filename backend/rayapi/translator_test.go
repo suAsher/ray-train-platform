@@ -153,13 +153,14 @@ func TestTranslateSubmitRequestCarriesVersionedStreamingDataset(t *testing.T) {
 			metadataDatasetReference:   "labeled-full",
 			metadataDatasetVersion:     "latest",
 			metadataDatasetCachePolicy: string(domain.DatasetCachePolicyBounded),
+			"platform.dataset.sites":   `["site-b","site-a","site-a"]`,
 		},
 	}, SubmissionDefaults{Image: testImageDigest, WorkerReplicas: 1, GPUsPerWorker: 1, CPUPerWorker: 8, MemoryPerWorker: "32Gi"})
 	if err != nil {
 		t.Fatalf("translate streaming dataset metadata: %v", err)
 	}
 	if translated.Spec.DataMode != domain.DataModeStreaming ||
-		translated.Spec.DatasetRef != (domain.DatasetReference{Dataset: "labeled-full", Version: "latest"}) ||
+		translated.Spec.DatasetRef != (domain.DatasetReference{Dataset: "labeled-full", Version: "latest", Sites: domain.DatasetSites(`["site-a","site-b"]`)}) ||
 		translated.Spec.CachePolicy != domain.DatasetCachePolicyBounded {
 		t.Fatalf("streaming dataset metadata was not preserved: %+v", translated.Spec)
 	}

@@ -649,6 +649,19 @@ class CloudPublisherPipelineTests(unittest.TestCase):
         self.assertGreater(storage.peak, 1)
         self.assertLessEqual(storage.peak, 4)
 
+    def test_remote_planner_never_mixes_known_sites(self) -> None:
+        remote_samples = tuple(
+            cloud_publish._RemoteSample(
+                sample=_sample(str(index), "same-scene", f"{site}/same-scene/{index}.bin", timestamp=index),
+                source_key=f"{site}/same-scene/{index}.bin",
+                source=cloud_publish._SourceObject(size=10, sha256=None),
+                estimated_bytes=10,
+            )
+            for index, site in enumerate(("b", "a", "b"))
+        )
+        shards = cloud_publish._plan_remote_shards(remote_samples, target_shard_bytes=1000)
+        self.assertEqual([[sample.sample["token"] for sample in shard.samples] for shard in shards], [["1"], ["0", "2"]])
+
     def test_remote_planner_splits_a_scene_larger_than_the_immutable_bound(self) -> None:
         sample_bytes = cloud_publish.MAX_SHARD_BYTES // 2 + 1
         remote_samples = tuple(
@@ -686,8 +699,8 @@ class CloudPublisherPipelineTests(unittest.TestCase):
 
     def test_reference_manifest_persists_publisher_cbgs_order_and_raw_eval_rows(self) -> None:
         samples = [
-            _sample("train-a", "scene-a", "scene-a/a.bin", timestamp=1),
-            _sample("train-b", "scene-b", "scene-b/b.bin", timestamp=2),
+            _sample("train-a", "scene-a", "site-a/scene-a/a.bin", timestamp=1),
+            _sample("train-b", "scene-b", "labeled/site-b/scene-b/b.bin", timestamp=2),
             _sample("train-c", "scene-c", "scene-c/c.bin", timestamp=3),
             _sample("val-a", "scene-v", "scene-v/v.bin", timestamp=4, split="val"),
         ]
@@ -718,6 +731,8 @@ class CloudPublisherPipelineTests(unittest.TestCase):
             class_count=2,
             cbgs_seed=23,
         )
+        expected_sites = {"train-a": "site-a", "train-b": "site-b", "train-c": "", "val-a": ""}
+        self.assertTrue(all(row["site_id"] == expected_sites[row["token"]] for row in rows))
 
         class_indices = {0: [0, 1], 1: [1, 2]}
         random = np.random.RandomState(23)
@@ -780,6 +795,7 @@ class CloudPublisherPipelineTests(unittest.TestCase):
                 [
                     "ordinal",
                     "token",
+                    "site_id",
                     "class_ids",
                     "source_digest",
                     "split",

@@ -89,8 +89,12 @@ class StreamingDatasetConfig:
     schema_version: str = _S1H_LIDAR_SCHEMA
     prefetch_batches: int = 2
     shuffle_seed: int = 0
+    sites: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        from .site_selection import normalize_sites
+
+        object.__setattr__(self, "sites", normalize_sites(self.sites))
         dataset_id = _validated_dataset_identifier("dataset ID", self.dataset_id)
         version_id = _validated_dataset_identifier("dataset version ID", self.version_id)
         if not isinstance(self.manifest_sha256, str) or not _SHA256.fullmatch(
@@ -145,11 +149,19 @@ def build_s1h_streaming_dataset(
         raise ValueError("streaming dataset config is invalid")
     _validate_positive_integer("world_size", world_size)
     _verify_manifest(config.manifest_path, config.manifest_sha256)
+    sample_count = config.train_samples
+    if config.sites:
+        from .site_selection import selected_training_count
+
+        sample_count = selected_training_count(config.manifest_path, config.sites)
     if ray_data_module is None:
         from ray import data as ray_data_module
 
     dataset = ray_data_module.read_parquet(config.manifest_path)
     try:
+        if config.sites:
+            selected_sites = frozenset(config.sites)
+            dataset = dataset.filter(lambda row: row["site_id"] in selected_sites)
         training = dataset.filter(lambda row: row["split"] == "train").sort(
             "ordinal"
         )
@@ -162,7 +174,7 @@ def build_s1h_streaming_dataset(
         ref_columns = WEB_DATASET_REF_COLUMNS
     return prepare_s1h_training_dataset(
         training,
-        sample_count=config.train_samples,
+        sample_count=sample_count,
         world_size=world_size,
         ref_columns=ref_columns,
     )
@@ -272,6 +284,20 @@ def prepare_s1h_training_dataset(
     return refs, samples_per_worker, padding_count
 
 
+def _epoch_shuffle_options(seed, epoch, buffer_size, batch_size) -> dict[str, int]:
+    if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch < 0:
+        raise ValueError("dataset epoch must be a non-negative integer")
+    if seed is None and buffer_size is None:
+        return {}
+    if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < 2**32:
+        raise ValueError("dataset shuffle seed must fit unsigned 32-bit")
+    if isinstance(buffer_size, bool) or not isinstance(buffer_size, int) or not batch_size <= buffer_size <= 65536:
+        raise ValueError("dataset shuffle buffer must cover a batch and be at most 65536 references")
+    # A worker-local bounded shuffle retains the equal Ray Train split and never
+    # materializes payloads globally. Restoring an epoch restores its seed.
+    return {"local_shuffle_buffer_size": buffer_size, "local_shuffle_seed": (seed + epoch) % 2**32}
+
+
 def worker_s1h_batches(
     *,
     samples_per_gpu: int,
@@ -279,6 +305,9 @@ def worker_s1h_batches(
     prefetch_batches: int = 2,
     pipeline: Any | None = None,
     batch_resolver: Any | None = None,
+    shuffle_seed: int | None = None,
+    epoch: int = 0,
+    local_shuffle_buffer_size: int | None = None,
 ) -> Iterator[list[Any]]:
     """Stream bounded, decoded S1H batches from this worker's Ray shard."""
 
@@ -314,6 +343,7 @@ def worker_s1h_batches(
             batch_size=samples_per_gpu,
             batch_format="numpy",
             prefetch_batches=prefetch_batches,
+            **_epoch_shuffle_options(shuffle_seed, epoch, local_shuffle_buffer_size, samples_per_gpu),
         )
     )
     resolved_batch_resolver = batch_resolver
@@ -386,6 +416,9 @@ def worker_s1h_webdataset_batches(
     pipeline: Any,
     batch_resolver: Any | None = None,
     expected_sample_count: int | None = None,
+    shuffle_seed: int | None = None,
+    epoch: int = 0,
+    local_shuffle_buffer_size: int | None = None,
 ) -> Iterator[list[Any]]:
     """Materialize current v2 TAR members, run the fusion pipeline, then clean."""
 
@@ -426,6 +459,7 @@ def worker_s1h_webdataset_batches(
             batch_size=samples_per_gpu,
             batch_format="numpy",
             prefetch_batches=prefetch_batches,
+            **_epoch_shuffle_options(shuffle_seed, epoch, local_shuffle_buffer_size, samples_per_gpu),
         )
     )
     decoded_buffer: list[Any] = []

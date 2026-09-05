@@ -84,6 +84,12 @@ test('rerun preserves the explicit immutable engine and resume creates a child r
     checkpointKeepBest: '1',
     parentJobId,
   })
+  const scoped = { ...job, spec: { ...job.spec, dataMode: 'streaming', datasetRef: { dataset: 'data', version: 'pinned', sites: ['site-a'] }, cachePolicy: 'bounded' } }
+  const query = resubmitRuntimeQuery(scoped, { resume: true })
+  assert.equal(query.datasetVersion, 'pinned')
+  assert.equal(query.datasetSites, 'site-a')
+  assert.equal(query.dataMode, 'streaming')
+  assert.equal(query.parentJobId, parentJobId)
 })
 
 test('job runtime details expose immutable runtime and recovery topology fields', () => {

@@ -127,6 +127,31 @@ class StreamingDatasetConfigTest(unittest.TestCase):
 
 
 class StreamingDatasetBuildTest(unittest.TestCase):
+    def test_site_selection_filters_before_padding_and_preserves_split(self):
+        from raytrain_runtime.ray_data import StreamingDatasetConfig, build_s1h_streaming_dataset
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary).resolve()
+            manifest = root / "dataset-s1h" / "manifests" / "version-1.parquet"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_bytes(b"verified-site-manifest")
+            config = StreamingDatasetConfig(
+                dataset_id="dataset-s1h", version_id="version-1", manifest_path=str(manifest),
+                manifest_sha256=hashlib.sha256(manifest.read_bytes()).hexdigest(),
+                dataset_root=str(root), train_samples=999, cache_policy="off", sites=("site_a",),
+            )
+            rows = [
+                {**_manifest_row(0), "site_id": "site_b"},
+                *({**_manifest_row(i), "site_id": "site_a"} for i in (1, 2, 3)),
+                {**_manifest_row(9, split="val"), "site_id": "site_a"},
+            ]
+            data = types.SimpleNamespace(read_parquet=mock.Mock(return_value=_Dataset(rows)))
+            with mock.patch("raytrain_runtime.site_selection.selected_training_count", return_value=3) as count:
+                prepared, per_worker, padding = build_s1h_streaming_dataset(config, world_size=2, ray_data_module=data)
+            count.assert_called_once_with(str(manifest), ("site_a",))
+            self.assertEqual((per_worker, padding), (2, 1))
+            self.assertEqual([row["token"] for row in prepared.rows], ["token-1", "token-2", "token-3", "token-1"])
+
     def test_selects_multimodal_reference_columns_for_v2_manifest(self):
         from raytrain_runtime.ray_data import (
             StreamingDatasetConfig,

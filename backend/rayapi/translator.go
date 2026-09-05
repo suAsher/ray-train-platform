@@ -3,6 +3,7 @@ package rayapi
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -151,7 +152,7 @@ func translateSubmitRequest(request JobSubmitRequest, resources domain.Resources
 
 func parseDatasetMetadata(metadata map[string]string) (domain.DatasetReference, domain.DatasetCachePolicy, error) {
 	known := map[string]struct{}{
-		metadataDatasetReference: {}, metadataDatasetVersion: {}, metadataDatasetCachePolicy: {},
+		metadataDatasetReference: {}, metadataDatasetVersion: {}, metadataDatasetCachePolicy: {}, "platform.dataset.sites": {},
 	}
 	for key := range metadata {
 		if strings.HasPrefix(key, "platform.dataset.") {
@@ -163,6 +164,11 @@ func parseDatasetMetadata(metadata map[string]string) (domain.DatasetReference, 
 	ref := domain.DatasetReference{
 		Dataset: strings.TrimSpace(metadata[metadataDatasetReference]),
 		Version: strings.TrimSpace(metadata[metadataDatasetVersion]),
+	}
+	if raw, ok := metadata["platform.dataset.sites"]; ok {
+		if err := json.Unmarshal([]byte(raw), &ref.Sites); err != nil {
+			return domain.DatasetReference{}, "", fmt.Errorf("invalid dataset sites: %w", err)
+		}
 	}
 	policy := domain.DatasetCachePolicy(strings.TrimSpace(metadata[metadataDatasetCachePolicy]))
 	if ref.IsZero() && policy == "" {

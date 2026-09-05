@@ -73,6 +73,8 @@ func TestRenderStreamingJobRequiresResolvedImmutableManifestMount(t *testing.T) 
 
 func TestRenderStreamingJobMountsOnlyExactDatasetRootReadOnlyOnHeadAndWorkers(t *testing.T) {
 	job := streamingManifestJob()
+	job.Spec.DatasetRef.Sites, _ = domain.NewDatasetSites([]string{"site-b", "site-a"})
+	job.DatasetProvenance.Sites = job.Spec.DatasetRef.Sites
 	manifest, err := RenderRayJob(job, streamingRenderOptions())
 	if err != nil {
 		t.Fatalf("render streaming RayJob: %v", err)
@@ -268,6 +270,9 @@ func TestRenderStreamingJobRejectsSpecThatDiffersFromPersistedProvenance(t *test
 		mutate func(*domain.TrainingJob)
 	}{
 		{name: "dataset", mutate: func(job *domain.TrainingJob) { job.Spec.DatasetRef.Dataset = "dataset-other" }},
+		{name: "sites", mutate: func(job *domain.TrainingJob) {
+			job.Spec.DatasetRef.Sites, _ = domain.NewDatasetSites([]string{"site-a"})
+		}},
 		{name: "version", mutate: func(job *domain.TrainingJob) { job.Spec.DatasetRef.Version = "version-20260831" }},
 		{name: "cache policy", mutate: func(job *domain.TrainingJob) { job.Spec.CachePolicy = domain.DatasetCachePolicyOff }},
 	}
@@ -476,6 +481,7 @@ func assertStreamingDatasetRootMount(t *testing.T, podName string, pod map[strin
 
 func streamingManifestEnvironment(job domain.TrainingJob) map[string]string {
 	return map[string]string{
+		"PLATFORM_DATASET_SITES_JSON":       job.DatasetProvenance.Sites.JSON(),
 		"PLATFORM_DATASET_ID":               job.DatasetProvenance.DatasetID,
 		"PLATFORM_DATASET_VERSION_ID":       job.DatasetProvenance.DatasetVersionID,
 		"PLATFORM_DATASET_MANIFEST_SHA256":  job.DatasetProvenance.ManifestSHA256,

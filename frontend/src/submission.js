@@ -1,4 +1,5 @@
 import { MANAGED_POLICY_LIMITS, normalizeTrainingEngine, RAY_TRAIN_ENGINE } from './trainingEngine.js'
+import { normalizeDatasetSites } from './datasetCatalog.js'
 
 const gitCommitPattern = /^[0-9a-f]{7,64}$/i
 const snapshotPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
@@ -54,6 +55,7 @@ export function equivalentSubmitCommand(form) {
       `--dataset ${shellArg(`${reference.dataset}:${reference.version}`)}`,
       `--dataset-cache-policy ${shellArg(normalizedDatasetCachePolicy(form.datasetCachePolicy || form.cachePolicy))}`,
     )
+    if (reference.sites?.length) parts.push(`--dataset-sites ${shellArg(reference.sites.join(','))}`)
   }
   if (trainingEngine === RAY_TRAIN_ENGINE) {
     const policy = managedPolicy(form)
@@ -117,7 +119,7 @@ export function equivalentSubmitCommandForJob(job) {
     cacheSize: spec.cache?.size,
     cachePreload: spec.cache?.preload,
     datasetRef: spec.datasetRef || (job?.datasetProvenance?.datasetId && job?.datasetProvenance?.datasetVersionId
-      ? { dataset: job.datasetProvenance.datasetId, version: job.datasetProvenance.datasetVersionId }
+      ? { dataset: job.datasetProvenance.datasetId, version: job.datasetProvenance.datasetVersionId, ...(job.datasetProvenance.sites?.length ? { sites: job.datasetProvenance.sites } : {}) }
       : {}),
     datasetCachePolicy: spec.cachePolicy || job?.datasetProvenance?.cachePolicy,
     input: spec.input?.space ? { spaceId: spec.input.space, relativePath: spec.input.relativePath } : {},
@@ -218,7 +220,8 @@ function normalizedDatasetReference(value) {
   const version = String(value?.version || '').trim()
   if (!dataset || !datasetIdentifierPattern.test(dataset)) throw new Error('请选择有效的数据集')
   if (!version || (version !== 'latest' && !datasetIdentifierPattern.test(version))) throw new Error('请选择有效的数据集版本')
-  return { dataset, version }
+  const sites = normalizeDatasetSites(value?.sites)
+  return { dataset, version, ...(sites.length ? { sites } : {}) }
 }
 
 function normalizedDatasetCachePolicy(value) {

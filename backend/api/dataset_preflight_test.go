@@ -97,8 +97,10 @@ func TestDatasetPreflightResolvesLatestWithoutProvisioningResources(t *testing.T
 		return "job-must-not-be-created", nil
 	})
 
+	spec := streamingSubmissionSpec()
+	spec.DatasetRef.Sites, _ = domain.NewDatasetSites([]string{"cnfzhjyg"})
 	result, err := service.Preflight(context.Background(), SubmissionInput{
-		Principal: streamingPrincipal(), Spec: streamingSubmissionSpec(), Origin: domain.SubmissionOriginRayCLI,
+		Principal: streamingPrincipal(), Spec: spec, Origin: domain.SubmissionOriginRayCLI,
 	})
 	if err != nil {
 		t.Fatalf("preflight streaming dataset: %v", err)
@@ -109,6 +111,9 @@ func TestDatasetPreflightResolvesLatestWithoutProvisioningResources(t *testing.T
 	}
 	if result.Image != streamingTestImage || result.TrainingEngine != domain.TrainingEngineRayTrain || result.RayVersion != domain.RayVersionCanary || result.RequestedGPUs != 1 {
 		t.Fatalf("preflight runtime/resource summary is wrong: %+v", result)
+	}
+	if result.Dataset.Sites != spec.DatasetRef.Sites || result.Dataset.SelectionValidation != "pending-manifest-validation" || result.Dataset.TrainSamples != version.TrainSamples {
+		t.Fatalf("site selection must remain pinned with full-version counts and explicit pending validation: %+v", result.Dataset)
 	}
 	if repository.created != nil || repository.identityCalls != 0 || newIDCalls != 0 {
 		t.Fatalf("preflight caused submission side effects: created=%+v identity=%d newID=%d", repository.created, repository.identityCalls, newIDCalls)

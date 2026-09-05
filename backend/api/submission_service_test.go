@@ -1061,6 +1061,23 @@ func TestSubmissionPersistsOnlyOwnerScopedCompleteResumeCheckpoint(t *testing.T)
 	if err != nil || job.ResumeCheckpointID != checkpoint.ID || repository.created == nil || repository.created.ResumeCheckpointID != checkpoint.ID {
 		t.Fatalf("resume provenance was not persisted: job=%+v persisted=%+v err=%v", job, repository.created, err)
 	}
+	selected, _ := domain.NewDatasetSites([]string{"site-a"})
+	changedScope := spec
+	changedScope.DatasetRef.Sites = selected
+	owner := auth.Principal{Subject: "user-a", TenantID: "tenant-a"}
+	if _, err := service.resolveResumeCheckpoint(context.Background(), owner, changedScope); !errors.Is(err, ErrSubmissionResumeCheckpointNotFound) {
+		t.Fatalf("full-version checkpoint accepted selected-site resume: %v", err)
+	}
+	scopedParent := parent
+	scopedParent.Spec.DatasetRef.Sites = selected
+	repository.parent = &scopedParent
+	if _, err := service.resolveResumeCheckpoint(context.Background(), owner, spec); !errors.Is(err, ErrSubmissionResumeCheckpointNotFound) {
+		t.Fatalf("selected-site checkpoint accepted full-version resume: %v", err)
+	}
+	if id, err := service.resolveResumeCheckpoint(context.Background(), owner, changedScope); err != nil || id != checkpoint.ID {
+		t.Fatalf("same-site checkpoint should resume: %s %v", id, err)
+	}
+	repository.parent = &parent
 
 	foreign := *repository
 	foreign.created = nil

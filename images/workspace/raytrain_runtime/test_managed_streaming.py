@@ -52,6 +52,15 @@ def _streaming_args(root: pathlib.Path, digest: str) -> list[str]:
 
 
 class ManagedStreamingParseTest(unittest.TestCase):
+    def test_site_environment_is_validated_and_canonicalized(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary).resolve()
+            args = _streaming_args(root, "a" * 64)
+            config = parse_driver_config(args, environ={**BASE_ENV, "PLATFORM_DATASET_SITES_JSON": '["b","a","b"]'})
+            self.assertEqual(config.dataset.sites, ("a", "b"))
+            with self.assertRaises(ValueError):
+                parse_driver_config(args, environ={**BASE_ENV, "PLATFORM_DATASET_SITES_JSON": '["../bad"]'})
+
     def test_parses_only_complete_pinned_streaming_provenance(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary).resolve()

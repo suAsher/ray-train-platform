@@ -130,15 +130,19 @@ func (policy DatasetCachePolicy) Validate() error {
 }
 
 type DatasetReference struct {
-	Dataset string `json:"dataset"`
-	Version string `json:"version,omitempty"`
+	Dataset string       `json:"dataset"`
+	Version string       `json:"version,omitempty"`
+	Sites   DatasetSites `json:"sites,omitempty"`
 }
 
 func (ref DatasetReference) IsZero() bool {
-	return strings.TrimSpace(ref.Dataset) == "" && strings.TrimSpace(ref.Version) == ""
+	return strings.TrimSpace(ref.Dataset) == "" && strings.TrimSpace(ref.Version) == "" && ref.Sites == ""
 }
 
 func (ref DatasetReference) Validate() error {
+	if err := ref.Sites.Validate(); err != nil {
+		return err
+	}
 	if ref.IsZero() {
 		return nil
 	}
@@ -155,6 +159,7 @@ func (ref DatasetReference) Validate() error {
 }
 
 type DatasetProvenance struct {
+	Sites            DatasetSites       `json:"sites,omitempty"`
 	DatasetID        string             `json:"datasetId"`
 	DatasetVersionID string             `json:"datasetVersionId"`
 	ManifestSHA256   string             `json:"manifestSha256"`
@@ -163,7 +168,7 @@ type DatasetProvenance struct {
 }
 
 func (provenance DatasetProvenance) IsZero() bool {
-	return strings.TrimSpace(provenance.DatasetID) == "" &&
+	return provenance.Sites == "" && strings.TrimSpace(provenance.DatasetID) == "" &&
 		strings.TrimSpace(provenance.DatasetVersionID) == "" &&
 		strings.TrimSpace(provenance.ManifestSHA256) == "" &&
 		strings.TrimSpace(string(provenance.DataMode)) == "" &&
@@ -171,6 +176,9 @@ func (provenance DatasetProvenance) IsZero() bool {
 }
 
 func (provenance DatasetProvenance) Validate() error {
+	if err := provenance.Sites.Validate(); err != nil {
+		return err
+	}
 	if provenance.IsZero() {
 		return nil
 	}

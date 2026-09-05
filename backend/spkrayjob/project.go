@@ -150,6 +150,7 @@ type submitOverrides struct {
 	providedDataset        bool
 	providedDatasetVersion bool
 	providedCachePolicy    bool
+	providedDatasetSites   bool
 	providedWorkers        bool
 	providedGPUs           bool
 	providedCPU            bool
@@ -183,9 +184,15 @@ func (base project) merge(overrides submitOverrides) project {
 	}
 	if overrides.providedDataset {
 		merged.DatasetRef.Dataset = overrides.DatasetRef.Dataset
+		if merged.DatasetRef.Dataset != base.DatasetRef.Dataset {
+			merged.DatasetRef.Sites = ""
+		}
 	}
 	if overrides.providedDatasetVersion {
 		merged.DatasetRef.Version = overrides.DatasetRef.Version
+	}
+	if overrides.providedDatasetSites {
+		merged.DatasetRef.Sites = overrides.DatasetRef.Sites
 	}
 	if overrides.providedCachePolicy {
 		merged.CachePolicy = overrides.CachePolicy

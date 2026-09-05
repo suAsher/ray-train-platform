@@ -141,6 +141,11 @@ test('preflight pins latest immutably and rejects incomplete or inconsistent ser
   const pinned = pinStreamingPreflight(spec, result, '2.58.0')
 
   assert.deepEqual(pinned.datasetRef, { dataset: 'dataset-a', version: 'version-ready-2' })
+  const scopedSpec = { ...spec, datasetRef: { ...spec.datasetRef, sites: ['site-b', 'site-a', 'site-a'] } }
+  const scopedResult = { ...result, dataset: { ...result.dataset, sites: ['site-a', 'site-b'], selectionValidation: 'pending-manifest-validation' } }
+  assert.deepEqual(pinStreamingPreflight(scopedSpec, scopedResult, '2.58.0').datasetRef.sites, ['site-a', 'site-b'])
+  assert.throws(() => pinStreamingPreflight(scopedSpec, result, '2.58.0'), /场地范围/)
+  assert.throws(() => pinStreamingPreflight({ ...scopedSpec, datasetRef: { ...scopedSpec.datasetRef, sites: ['../site'] } }, scopedResult, '2.58.0'), /场地编码/)
   assert.deepEqual(spec, original)
   assert.notEqual(pinned, spec)
   assert.notEqual(

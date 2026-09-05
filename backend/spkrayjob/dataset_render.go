@@ -41,6 +41,13 @@ func renderStreamingPreflight(writer io.Writer, result SubmissionPreflightResult
 		return nil
 	}
 	dataset := result.Dataset
+	if dataset.Sites != "" {
+		_, err := fmt.Fprintf(writer,
+			"版本预检通过：数据集 %s，固定版本 %s，场地 %s；筛选后的样本数待启动时校验。完整版本训练 %d / 验证 %d，打包 %s，镜像 %s，%d GPU，缓存 %s。\n",
+			dataset.DatasetSlug, dataset.VersionID, dataset.Sites.JSON(), dataset.TrainSamples, dataset.ValSamples,
+			formatIECBytes(dataset.PackedBytes), result.Image, result.RequestedGPUs, dataset.CachePolicy)
+		return err
+	}
 	_, err := fmt.Fprintf(writer,
 		"预检通过：数据集 %s，固定版本 %s（训练 %d / 验证 %d，打包 %s），镜像 %s，%d GPU，缓存 %s。\n",
 		dataset.DatasetSlug, dataset.VersionID, dataset.TrainSamples, dataset.ValSamples, formatIECBytes(dataset.PackedBytes),

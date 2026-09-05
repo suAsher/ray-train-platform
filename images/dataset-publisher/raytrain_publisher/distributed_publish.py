@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .site_metadata import sample_site_id
+
 from .cloud_publish import (
     DEFAULT_PACK_CONFIG,
     DEFAULT_TERMINATION_LOG_PATH,
@@ -584,6 +586,7 @@ def _plan_multimodal_groups(
     for sample in sorted(
         samples,
         key=lambda value: (
+            sample_site_id(value).encode("utf-8"),
             value["scene"].encode("utf-8"),
             value["timestamp"],
             value["token"].encode("utf-8"),
@@ -592,7 +595,10 @@ def _plan_multimodal_groups(
         estimated = sum(sources[key]["size"] for key in _multimodal_sample_source_keys(sample))
         if estimated <= 0 or estimated > MAX_SHARD_BYTES:
             raise ValueError("multimodal sample exceeds the immutable object bound")
-        if current and current_bytes + estimated > DEFAULT_PACK_CONFIG.target_shard_bytes:
+        if current and (
+            current_bytes + estimated > DEFAULT_PACK_CONFIG.target_shard_bytes
+            or sample_site_id(current[0]) != sample_site_id(sample)
+        ):
             groups.append(tuple(current))
             current, current_bytes = [], 0
         current.append(sample)
@@ -747,6 +753,7 @@ def _run_multimodal_finalize(
                 );
                 CREATE TABLE samples (
                     token TEXT PRIMARY KEY,
+                    site_id TEXT NOT NULL,
                     scene TEXT NOT NULL,
                     split TEXT NOT NULL,
                     class_ids TEXT NOT NULL,
@@ -911,11 +918,12 @@ def _ingest_multimodal_samples(
         try:
             database.execute(
                 """
-                INSERT INTO samples(token, scene, split, class_ids, timestamp)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO samples(token, site_id, scene, split, class_ids, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     sample["token"],
+                    sample_site_id(sample),
                     sample["scene"],
                     sample["split"],
                     _canonical_json({"value": list(sample["class_ids"])}).decode("utf-8"),
@@ -985,15 +993,15 @@ def _write_multimodal_manifest(
     try:
         cursor = database.execute(
             """
-            SELECT locator_json
-            FROM locators
-            ORDER BY CASE WHEN split = 'train' THEN 0 ELSE 1 END,
-                     scene, timestamp, token
+            SELECT locators.locator_json, samples.site_id
+            FROM locators JOIN samples ON samples.token = locators.token
+            ORDER BY CASE WHEN locators.split = 'train' THEN 0 ELSE 1 END,
+                     locators.scene, locators.timestamp, locators.token
             """
         )
-        for (payload,) in cursor:
+        for payload, site_id in cursor:
             locator = json.loads(payload)
-            rows.append({**locator, "ordinal": ordinal})
+            rows.append({**locator, "ordinal": ordinal, "site_id": site_id})
             split_counts[locator["split"]] += 1
             ordinal += 1
             if len(rows) == 8192:
@@ -1050,7 +1058,7 @@ def build_multimodal_reference_manifest_rows(
             for field in ("token", "scene", "split", "timestamp")
         ) or tuple(locator["class_ids"]) != tuple(sample["class_ids"]):
             raise ValueError("multimodal locator metadata does not match the trusted index")
-        rows.append({**locator, "ordinal": ordinal})
+        rows.append({**locator, "ordinal": ordinal, "site_id": sample_site_id(sample)})
     if not rows:
         raise ValueError("multimodal reference manifest must contain at least one row")
     return tuple(rows)
@@ -1061,6 +1069,7 @@ def _multimodal_manifest_schema(pa: Any, schema_version: str) -> Any:
         [
             pa.field("ordinal", pa.int64(), nullable=False),
             pa.field("token", pa.string(), nullable=False),
+            pa.field("site_id", pa.string(), nullable=False),
             pa.field("scene", pa.string(), nullable=False),
             pa.field("class_ids", pa.list_(pa.int16()), nullable=False),
             pa.field("timestamp", pa.int64(), nullable=False),

@@ -354,7 +354,11 @@ func trainingEntrypoint(spec domain.JobSpec) []string {
 		)
 	}
 	launcher = append(launcher, "--")
-	return append(launcher, command...)
+	launcher = append(launcher, command...)
+	if spec.DataMode == domain.DataModeStreaming && spec.DatasetRef.Sites != "" {
+		return append([]string{"python", "-I", "-c", streamingSiteRuntimeGuard}, launcher...)
+	}
+	return launcher
 }
 
 // executionProfileEntrypoint keeps compatibility for persisted V1 jobs while routing
@@ -703,7 +707,7 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, tenantID 
 	}
 	if mountData && jobSpec.DataMode == domain.DataModeStreaming {
 		volumeMounts, volumes, env = appendStreamingDatasetRoot(
-			volumeMounts, volumes, env, *options.DatasetManifest, jobSpec.CachePolicy,
+			volumeMounts, volumes, env, *options.DatasetManifest, jobSpec.CachePolicy, jobSpec.DatasetRef.Sites,
 		)
 	}
 	if mountData && jobSpec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain {

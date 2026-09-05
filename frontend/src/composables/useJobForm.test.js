@@ -74,12 +74,12 @@ test('streaming query is fail-closed until limits and a Ray 2.58 image authorize
     fetchWorkspaceSnapshots: async () => [],
   }
   const enabled = useJobForm({ query: {
-    trainingEngine: 'ray-train', dataMode: 'streaming', dataset: 'labeled-full', datasetVersion: 'latest', cachePolicy: 'bounded',
+    trainingEngine: 'ray-train', dataMode: 'streaming', dataset: 'labeled-full', datasetVersion: 'latest', datasetSites: 'site-a,site-b', cachePolicy: 'bounded',
   } }, enabledLoaders)
   await enabled.loadCatalog()
 
   assert.equal(enabled.form.dataMode, 'streaming')
-  assert.deepEqual(enabled.form.datasetRef, { dataset: 'labeled-full', version: 'latest' })
+  assert.deepEqual(enabled.form.datasetRef, { dataset: 'labeled-full', version: 'latest', sites: ['site-a', 'site-b'] })
   assert.equal(enabled.form.datasetCachePolicy, 'bounded')
   assert.equal(enabled.form.image, image.reference)
   assert.equal(enabled.datasetCapabilities.value.streamingEnabled, true)

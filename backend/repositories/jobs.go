@@ -28,6 +28,7 @@ type JobRecord struct {
 	DatasetManifestDigest *string `gorm:"column:dataset_manifest_digest"`
 	DatasetDataMode       *string `gorm:"column:dataset_data_mode"`
 	DatasetCachePolicy    *string `gorm:"column:dataset_cache_policy"`
+	DatasetSites          string  `gorm:"column:dataset_sites;not null;default:''"`
 	SubmissionOrigin      string
 	ExternalSubmissionID  string
 	Name                  string `gorm:"index"`
@@ -277,6 +278,7 @@ func newJobRecord(job *domain.TrainingJob) (JobRecord, error) {
 		DatasetManifestDigest: optionalID(job.DatasetProvenance.ManifestSHA256),
 		DatasetDataMode:       optionalID(string(job.DatasetProvenance.DataMode)),
 		DatasetCachePolicy:    optionalID(string(job.DatasetProvenance.CachePolicy)),
+		DatasetSites:          string(job.DatasetProvenance.Sites),
 		SubmissionOrigin:      string(job.SubmissionOrigin),
 		ExternalSubmissionID:  job.ExternalSubmissionID,
 		Name:                  job.Spec.Name,
@@ -316,7 +318,7 @@ func validateDatasetSnapshotConsistency(spec domain.JobSpec, provenance domain.D
 		}
 		return nil
 	}
-	if spec.DatasetRef.Dataset != provenance.DatasetID || spec.DatasetRef.Version != provenance.DatasetVersionID {
+	if spec.DatasetRef.Dataset != provenance.DatasetID || spec.DatasetRef.Version != provenance.DatasetVersionID || spec.DatasetRef.Sites != provenance.Sites {
 		return fmt.Errorf("dataset reference does not match immutable provenance")
 	}
 	if spec.DataMode != provenance.DataMode || spec.CachePolicy != provenance.CachePolicy {
@@ -1627,6 +1629,7 @@ func (r JobRecord) toDomain() (*domain.TrainingJob, error) {
 		workerRestartCount = 0
 	}
 	provenance := domain.DatasetProvenance{
+		Sites:            domain.DatasetSites(r.DatasetSites),
 		DatasetID:        valueOrEmpty(r.DatasetID),
 		DatasetVersionID: valueOrEmpty(r.DatasetVersionID),
 		ManifestSHA256:   valueOrEmpty(r.DatasetManifestDigest),

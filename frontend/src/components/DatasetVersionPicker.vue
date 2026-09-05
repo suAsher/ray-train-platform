@@ -96,7 +96,7 @@
 
         <div v-if="selectedVersion" class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <div class="metric-cell">
-            <p class="metric-label">train / val / test</p>
+            <p class="metric-label">完整版本 train / val / test</p>
             <p class="metric-value">
               {{ formatDatasetCount(selectedVersion.trainSamples) }} /
               {{ formatDatasetCount(selectedVersion.valSamples) }} /
@@ -116,6 +116,13 @@
             <p class="metric-value font-mono" :title="selectedVersion.manifestSha256 || ''">{{ digestSummary(selectedVersion.manifestSha256) }}</p>
           </div>
         </div>
+      </div>
+
+      <div v-if="selectedVersion" class="mt-5 space-y-2">
+        <label class="text-xs font-medium text-slate-300">训练场地（留空使用完整版本）</label>
+        <el-select v-model="selectedSites" multiple filterable allow-create default-first-option :reserve-keyword="false"
+          :disabled="disabled" class="w-full" placeholder="输入场地编码后按回车，例如 cnfzhjyg" />
+        <p class="text-xs leading-5 text-slate-500">使用发布清单中的场地编码。筛选后保持原有训练/验证划分；实际样本数在启动时校验。旧版本缺少场地信息或场地不存在时会拒绝训练，不会退回全量。</p>
       </div>
 
       <div class="mt-5">
@@ -192,6 +199,10 @@ const selectedVersionId = computed({
   get: () => String(props.modelValue?.version || ''),
   set: (version) => emitSelection(selectedDatasetId.value, String(version || '')),
 })
+const selectedSites = computed({
+  get: () => props.modelValue?.sites || [],
+  set: (sites) => emit('update:modelValue', { ...props.modelValue, sites: [...sites] }),
+})
 const cachePolicyModel = computed({
   get: () => allowedPolicies.has(props.cachePolicy) ? props.cachePolicy : 'auto',
   set: (value) => {
@@ -205,7 +216,8 @@ const selectedVersion = computed(() => {
 })
 
 const emitSelection = (dataset, version) => {
-  emit('update:modelValue', { dataset, version })
+  const sites = props.modelValue?.sites || []
+  emit('update:modelValue', { dataset, version, ...(sites.length ? { sites: [...sites] } : {}) })
 }
 
 const digestSummary = (digest) => {
@@ -241,7 +253,7 @@ const loadVersions = async (datasetId, preferredVersion = 'latest') => {
 }
 
 const selectDataset = (datasetId) => {
-  emitSelection(datasetId, datasetId ? 'latest' : '')
+  emit('update:modelValue', { dataset: datasetId, version: datasetId ? 'latest' : '' })
   void loadVersions(datasetId, 'latest')
 }
 

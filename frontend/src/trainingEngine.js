@@ -76,6 +76,13 @@ export function resubmitRuntimeQuery(job, { resume = false } = {}) {
     checkpointEveryEpochs: String(nonNegativeInteger(checkpoint.everyEpochs, 1)),
     checkpointKeepLatest: String(nonNegativeInteger(checkpoint.keepLatest, 3)),
     checkpointKeepBest: String(nonNegativeInteger(checkpoint.keepBest, 1)),
+    ...(spec.dataMode === 'streaming' && spec.datasetRef?.dataset ? {
+      dataMode: 'streaming',
+      dataset: spec.datasetRef.dataset,
+      datasetVersion: spec.datasetRef.version,
+      cachePolicy: spec.cachePolicy || 'auto',
+      ...(spec.datasetRef.sites?.length ? { datasetSites: spec.datasetRef.sites.join(',') } : {}),
+    } : {}),
   }
   return resume && job?.id ? { ...query, parentJobId: String(job.id) } : query
 }

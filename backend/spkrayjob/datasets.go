@@ -41,19 +41,21 @@ type DatasetVersionCatalogItem struct {
 }
 
 type DatasetPreflightSummary struct {
-	DatasetID      string                    `json:"datasetId"`
-	DatasetSlug    string                    `json:"datasetSlug"`
-	VersionID      string                    `json:"versionId"`
-	Version        string                    `json:"version"`
-	ManifestSHA256 string                    `json:"manifestSha256"`
-	SchemaVersion  string                    `json:"schemaVersion"`
-	TrainSamples   int64                     `json:"trainSamples"`
-	ValSamples     int64                     `json:"valSamples"`
-	TestSamples    int64                     `json:"testSamples"`
-	LogicalBytes   int64                     `json:"logicalBytes"`
-	PackedBytes    int64                     `json:"packedBytes"`
-	DataMode       domain.DataMode           `json:"dataMode"`
-	CachePolicy    domain.DatasetCachePolicy `json:"cachePolicy"`
+	Sites               domain.DatasetSites       `json:"sites,omitempty"`
+	SelectionValidation string                    `json:"selectionValidation,omitempty"`
+	DatasetID           string                    `json:"datasetId"`
+	DatasetSlug         string                    `json:"datasetSlug"`
+	VersionID           string                    `json:"versionId"`
+	Version             string                    `json:"version"`
+	ManifestSHA256      string                    `json:"manifestSha256"`
+	SchemaVersion       string                    `json:"schemaVersion"`
+	TrainSamples        int64                     `json:"trainSamples"`
+	ValSamples          int64                     `json:"valSamples"`
+	TestSamples         int64                     `json:"testSamples"`
+	LogicalBytes        int64                     `json:"logicalBytes"`
+	PackedBytes         int64                     `json:"packedBytes"`
+	DataMode            domain.DataMode           `json:"dataMode"`
+	CachePolicy         domain.DatasetCachePolicy `json:"cachePolicy"`
 }
 
 type SubmissionPreflightResult struct {
@@ -153,6 +155,7 @@ func validateStreamingPreflight(spec domain.JobSpec, result SubmissionPreflightR
 	}
 	dataset := result.Dataset
 	provenance := domain.DatasetProvenance{
+		Sites:     dataset.Sites,
 		DatasetID: dataset.DatasetID, DatasetVersionID: dataset.VersionID,
 		ManifestSHA256: dataset.ManifestSHA256, DataMode: dataset.DataMode, CachePolicy: dataset.CachePolicy,
 	}
@@ -163,11 +166,11 @@ func validateStreamingPreflight(spec domain.JobSpec, result SubmissionPreflightR
 	requestedGPUs := spec.Resources.WorkerReplicas * spec.Resources.GPUsPerWorker
 	if result.TrainingEngine != domain.TrainingEngineRayTrain || result.RayVersion != domain.RayVersionCanary ||
 		result.RequestedGPUs != requestedGPUs || result.Image != spec.Image || dataset.DataMode != domain.DataModeStreaming ||
-		dataset.CachePolicy != spec.CachePolicy {
+		dataset.CachePolicy != spec.CachePolicy || dataset.Sites != spec.DatasetRef.Sites {
 		return domain.JobSpec{}, fmt.Errorf("submission preflight is inconsistent with the requested runtime")
 	}
 	resolved := spec
-	resolved.DatasetRef = domain.DatasetReference{Dataset: dataset.DatasetID, Version: dataset.VersionID}
+	resolved.DatasetRef = domain.DatasetReference{Dataset: dataset.DatasetID, Version: dataset.VersionID, Sites: dataset.Sites}
 	if err := resolved.DatasetRef.Validate(); err != nil {
 		return domain.JobSpec{}, fmt.Errorf("submission preflight returned an invalid dataset reference")
 	}

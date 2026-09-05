@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+import contextlib
 import pathlib
 import re
 import time
+from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -27,7 +29,13 @@ _CACHE_POLICIES = frozenset(("off", "auto", "bounded"))
 
 
 class S1HParquetBatchResolver:
-    """Read only row groups referenced by the current Ray Data worker batch."""
+    """Read referenced row groups and retain bounded immutable Arrow buffers.
+
+    Cache keys include the published content-addressed shard path. Publishers
+    must never replace content under an existing digest. The budget bounds
+    retained groups, not the transient memory needed to decode one group or
+    materialize the requested training batch.
+    """
 
     def __init__(
         self,
@@ -38,6 +46,7 @@ class S1HParquetBatchResolver:
         cache_paths: str = "",
         cache: Any | None = None,
         parquet_module: Any | None = None,
+        row_group_cache_bytes: int = 128 * 1024 * 1024,
     ) -> None:
         self._root = _validated_root(dataset_root)
         self._dataset_id = _validated_identifier("dataset ID", dataset_id)
@@ -46,6 +55,11 @@ class S1HParquetBatchResolver:
         self._cache_policy = cache_policy
         self._parquet = parquet_module
         self._cache = cache
+        if isinstance(row_group_cache_bytes, bool) or not isinstance(row_group_cache_bytes, int) or row_group_cache_bytes < 0:
+            raise ValueError("row group cache bytes must be a nonnegative integer")
+        self._row_group_budget = row_group_cache_bytes
+        self._row_groups: OrderedDict[tuple[str, int], tuple[Any, int]] = OrderedDict()
+        self._row_group_bytes = 0
         if cache_policy != "off" and cache is None:
             roots = tuple(
                 pathlib.Path(value).resolve(strict=False)
@@ -75,20 +89,18 @@ class S1HParquetBatchResolver:
         try:
             for relative in sources:
                 source, digest = self._source_path(relative)
-                readable = source
-                if self._cache is not None:
-                    before = _cache_metrics(self._cache)
-                    try:
-                        readable = pathlib.Path(self._cache.resolve(source, digest))
-                    finally:
-                        _observe_cache_delta(before, _cache_metrics(self._cache))
                 indexes = tuple(
                     ref["row_index"]
                     for ref in validated
                     if ref["shard_path"] == relative
                 )
                 read_started = time.perf_counter()
-                resolved, read_bytes = self._read_rows(readable, indexes)
+                before = _cache_metrics(self._cache)
+                try:
+                    with self._readable(source, digest) as readable:
+                        resolved, read_bytes = self._read_rows(readable, indexes)
+                finally:
+                    _observe_cache_delta(before, _cache_metrics(self._cache))
                 read_seconds = max(time.perf_counter() - read_started, 1e-9)
                 _observe_metric("dataset_shard_reads_total", 1)
                 _observe_metric(
@@ -142,9 +154,17 @@ class S1HParquetBatchResolver:
             candidate.relative_to(self._root)
         except ValueError:
             raise ValueError("invalid shard reference") from None
-        if not candidate.is_file():
-            raise RuntimeError("platform S1H shard is unavailable")
         return candidate, matched.group(1)
+
+    def _readable(self, source: pathlib.Path, digest: str):
+        if self._cache is None:
+            return contextlib.nullcontext(source)
+        # Class lookup supports simple legacy cache adapters without treating
+        # dynamically-created mock attributes as a lease implementation.
+        lease = getattr(type(self._cache), "readable", None)
+        if callable(lease):
+            return lease(self._cache, source, digest)
+        return contextlib.nullcontext(pathlib.Path(self._cache.resolve(source, digest)))
 
     def _read_rows(
         self,
@@ -158,33 +178,51 @@ class S1HParquetBatchResolver:
             except ModuleNotFoundError:
                 raise RuntimeError("PyArrow is required for S1H streaming") from None
         try:
-            parquet_file = parquet.ParquetFile(path)
-            locations = _row_group_locations(parquet_file.metadata, indexes)
-            group_ids = tuple(dict.fromkeys(group for group, _local in locations))
-            read_bytes = _selected_row_group_compressed_bytes(
-                parquet_file.metadata,
-                group_ids,
-            )
-            group_rows = {
-                group: parquet_file.read_row_group(
-                    group,
-                    columns=list(ROW_FIELD_NAMES),
-                ).to_pylist()
-                for group in group_ids
-            }
-            return (
-                tuple(
-                    dict(group_rows[group][local])
-                    for group, local in locations
-                ),
-                read_bytes,
-            )
+            with contextlib.ExitStack() as stack:
+                parquet_file = parquet.ParquetFile(path)
+                close = getattr(parquet_file, "close", None)
+                if callable(close):
+                    stack.callback(close)
+                return self._read_open_rows(parquet_file, path, indexes)
         except (IndexError, KeyError, TypeError, ValueError):
             raise ValueError("invalid S1H shard row reference") from None
         except RuntimeError:
             raise
         except Exception:
             raise RuntimeError("platform S1H shard read failed") from None
+
+    def _read_open_rows(self, parquet_file: Any, path: pathlib.Path, indexes: tuple[int, ...]):
+        locations = _row_group_locations(parquet_file.metadata, indexes)
+        group_ids = tuple(dict.fromkeys(group for group, _local in locations))
+        read_bytes = 0
+        rows = {}
+        for group in group_ids:
+            key = (str(path), group)
+            cached = self._row_groups.get(key)
+            if cached is not None:
+                table = cached[0]
+                self._row_groups.move_to_end(key)
+            else:
+                table = parquet_file.read_row_group(group, columns=list(ROW_FIELD_NAMES))
+                self._remember_row_group(key, table)
+                read_bytes += _selected_row_group_compressed_bytes(parquet_file.metadata, (group,))
+            # Convert selected rows only; never expand an entire point cloud
+            # row group into Python objects for a small batch.
+            for local in dict.fromkeys(local for selected, local in locations if selected == group):
+                rows[(group, local)] = table.slice(local, 1).to_pylist()[0]
+        return tuple(dict(rows[location]) for location in locations), read_bytes
+
+    def _remember_row_group(self, key: tuple[str, int], table: Any) -> None:
+        # Arrow buffers avoid Python object expansion and expose their byte
+        # footprint. Unknown/oversized tables are consumed but never retained.
+        size = getattr(table, "nbytes", None)
+        if isinstance(size, bool) or not isinstance(size, int) or not 0 < size <= self._row_group_budget:
+            return
+        while self._row_groups and (self._row_group_bytes + size > self._row_group_budget or len(self._row_groups) >= 8):
+            _old_key, (_old_table, old_size) = self._row_groups.popitem(last=False)
+            self._row_group_bytes -= old_size
+        self._row_groups[key] = (table, size)
+        self._row_group_bytes += size
 
 
 def resolver_from_environment(

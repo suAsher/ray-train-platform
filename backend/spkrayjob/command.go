@@ -104,6 +104,7 @@ const helpText = `spk-rayjob — 分布式训练任务命令行客户端
   --data-mode ray-data --ray-data-format images --ray-data-path images/train
                               直接把 Parquet/图片数据分片交给用户的 Ray Data 训练代码
   --data-mode streaming --dataset <数据集>:<版本> --dataset-cache-policy bounded
+  --dataset-sites cnfzhjyg,cnzshytg（可选；留空使用完整版本，启动时校验场地及样本数）
                               固定不可变数据集版本，由 Ray Data 按需流式读取
   --max-failures 2                 ray-train Worker 最大恢复次数（0-10）
   --checkpoint-every-epochs 1      ray-train 每隔多少 Epoch 保存 Checkpoint
@@ -404,6 +405,7 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	dataset := set.String("dataset", "", "public dataset ID/slug, optionally DATASET:VERSION")
 	datasetVersion := set.String("dataset-version", "", "immutable dataset version ID or latest")
 	cachePolicy := set.String("dataset-cache-policy", "", "streaming dataset cache policy: off, auto, bounded")
+	datasetSites := set.String("dataset-sites", "", "comma-separated site IDs; empty selects the full version")
 	maxFailures := set.Int("max-failures", 2, "ray-train worker recovery limit (0-10)")
 	checkpointEveryEpochs := set.Int("checkpoint-every-epochs", 1, "ray-train checkpoint interval in epochs")
 	checkpointKeepLatest := set.Int("checkpoint-keep-latest", 3, "ray-train latest checkpoint retention")
@@ -442,6 +444,16 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	if err != nil {
 		return err
 	}
+	var siteIDs []string
+	if strings.TrimSpace(*datasetSites) != "" {
+		for _, site := range strings.Split(*datasetSites, ",") {
+			siteIDs = append(siteIDs, strings.TrimSpace(site))
+		}
+	}
+	datasetOverride.Reference.Sites, err = domain.NewDatasetSites(siteIDs)
+	if err != nil {
+		return err
+	}
 	resolved := defaults.merge(submitOverrides{
 		Name: *name, Image: *image, Entrypoint: *entrypoint, Engine: *engine, DataMode: *dataMode, Workers: *workers, GPUsPerWorker: *gpus,
 		DatasetRef: datasetOverride.Reference, CachePolicy: domain.DatasetCachePolicy(strings.TrimSpace(*cachePolicy)),
@@ -459,6 +471,7 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 		providedDataset:        datasetOverride.DatasetProvided,
 		providedDatasetVersion: datasetOverride.VersionProvided,
 		providedCachePolicy:    provided["dataset-cache-policy"],
+		providedDatasetSites:   provided["dataset-sites"],
 		providedWorkers:        provided["workers"],
 		providedGPUs:           provided["gpus-per-worker"],
 		providedCPU:            provided["cpu-per-worker"],

@@ -121,6 +121,7 @@ const cacheSummary = computed(() => {
 const fixedDatasetSummary = computed(() => {
   const dataset = props.preflight?.dataset
   if (dataset) {
+    if (dataset.sites?.length) return `${dataset.datasetSlug || dataset.datasetId} · ${dataset.version} · 场地：${dataset.sites.join('、')} · 筛选后样本数待启动校验（完整版本 ${formatDatasetCount(dataset.trainSamples)} train）`
     return `${dataset.datasetSlug || dataset.datasetId} · ${dataset.version} · ${formatDatasetCount(dataset.trainSamples)} train`
   }
   const selected = props.form.datasetRef || {}

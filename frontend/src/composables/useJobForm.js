@@ -55,6 +55,7 @@ export function useJobForm(route, catalogLoaders = defaultCatalogLoaders) {
     datasetRef: {
       dataset: String(route?.query?.dataset || ''),
       version: String(route?.query?.datasetVersion || 'latest') || 'latest',
+      ...(route?.query?.datasetSites ? { sites: String(route.query.datasetSites).split(',').map((site) => site.trim()) } : {}),
     },
     datasetCachePolicy: datasetCachePolicies.has(String(route?.query?.cachePolicy || ''))
       ? String(route.query.cachePolicy)

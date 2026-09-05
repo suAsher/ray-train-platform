@@ -185,6 +185,9 @@ test('versioned streaming submits only a logical immutable dataset selector and 
 
   assert.equal(spec.dataMode, 'streaming')
   assert.deepEqual(spec.datasetRef, { dataset: 'labeled-full', version: 'latest' })
+  const scopedForm = { ...form, datasetRef: { ...form.datasetRef, sites: ['site-b', 'site-a', 'site-b'] } }
+  assert.deepEqual(buildJobSpec(scopedForm, cacheLimits()).datasetRef.sites, ['site-a', 'site-b'])
+  assert.match(equivalentSubmitCommand(scopedForm), /--dataset-sites 'site-a,site-b'/)
   assert.equal(spec.cachePolicy, 'auto')
   assert.deepEqual(spec.input, {})
   assert.equal('cache' in spec, false)

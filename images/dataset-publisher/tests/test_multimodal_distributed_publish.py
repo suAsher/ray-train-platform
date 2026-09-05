@@ -18,6 +18,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from raytrain_publisher.cloud_publish import CloudPublishRequest  # noqa: E402
 from raytrain_publisher.distributed_publish import (  # noqa: E402
     build_multimodal_reference_manifest_rows,
+    _plan_multimodal_groups,
     run_finalize,
     run_pack,
 )
@@ -103,9 +104,10 @@ class _Storage:
 class MultimodalDistributedPublicationTest(unittest.TestCase):
     def test_pack_writes_content_addressed_tar_and_recoverable_receipt(self) -> None:
         sample = self._sample()
+        sample["payloads"]["lidar"] = "site/scene-token/samples/LIDAR_TOP/sample.bin"
         indexes = self._index_bundle(sample)
         sources = {
-            "site/lidar/sample.bin": b"lidar-payload",
+            sample["payloads"]["lidar"]: b"lidar-payload",
             "site/sweeps/previous.bin": b"sweep-payload",
             "site/cameras/front.jpg": b"camera-payload",
         }
@@ -139,6 +141,7 @@ class MultimodalDistributedPublicationTest(unittest.TestCase):
             {row["token"]: row for row in receipts[0]["locators"]},
         )
         self.assertEqual(rows[0]["ordinal"], 0)
+        self.assertEqual(rows[0]["site_id"], "site")
         self.assertEqual(rows[0]["metadata_member"], "sample-token/metadata.json")
 
         if HAS_PYARROW:
@@ -154,6 +157,22 @@ class MultimodalDistributedPublicationTest(unittest.TestCase):
                     )
             self.assertEqual(result["receipt"]["schema_version"], "s1h-multimodal-webdataset-v2")
             self.assertIn("dataset-test/manifests/version-test.parquet", storage.objects)
+            import pyarrow.parquet as parquet
+            manifest = parquet.read_table(io.BytesIO(storage.objects["dataset-test/manifests/version-test.parquet"]))
+            self.assertEqual(manifest.column("site_id").to_pylist(), ["site"])
+
+    def test_packing_separates_sites_even_when_shards_have_spare_capacity(self):
+        samples = []
+        sources = {}
+        for site in ("b", "a", "b"):
+            sample = self._sample()
+            sample["token"] = str(len(samples))
+            sample["payloads"]["lidar"] = f"{site}/scene-token/{sample['token']}.bin"
+            samples.append(sample)
+            for key in (sample["payloads"]["lidar"], *sample["payloads"]["sweeps"], *sample["payloads"]["cameras"].values()):
+                sources[key] = {"size": 10}
+        groups = _plan_multimodal_groups(samples, sources=sources)
+        self.assertEqual([[sample["token"] for sample in group] for group in groups], [["1"], ["0", "2"]])
 
     @staticmethod
     def _request(output_dir: Path) -> CloudPublishRequest:

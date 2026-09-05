@@ -43,7 +43,27 @@ TRAIN_DATALOADER_HELPER = NATIVE_STREAMING_HELPER + '''def _platform_build_train
         prefetch_batches=int(
             os.environ.get("RAYTRAIN_DATASET_PREFETCH_BATCHES", "2")
         ),
+        shuffle_seed=int(
+            cfg.seed if cfg.seed is not None
+            else os.environ.get("RAYTRAIN_DATASET_SHUFFLE_SEED", "0")
+        ),
+        local_shuffle_buffer_size=max(
+            int(cfg.data.samples_per_gpu),
+            int(os.environ.get("RAYTRAIN_DATASET_LOCAL_SHUFFLE_BUFFER_SIZE", "1024")),
+        ),
     )
+
+
+def _platform_register_data_epoch_hook(runner):
+    if not _platform_uses_native_streaming():
+        return
+    from mmcv.runner import Hook
+
+    class _PlatformDataEpochHook(Hook):
+        def before_train_epoch(self, runner):
+            runner.data_loader.set_epoch(runner.epoch)
+
+    runner.register_hook(_PlatformDataEpochHook(), priority="VERY_HIGH")
 
 
 def _platform_scatter_device_ids(device_ids):
@@ -108,6 +128,36 @@ STREAMING_DATALOADER_BLOCK = '''    data_loaders = [
 '''
 
 
+_EPOCH_HELPER_START = "def _platform_register_data_epoch_hook(runner):"
+_EPOCH_HELPER_END = "def _platform_scatter_device_ids(device_ids):"
+_SHUFFLE_ARGUMENTS = '''        shuffle_seed=int(
+            cfg.seed if cfg.seed is not None
+            else os.environ.get("RAYTRAIN_DATASET_SHUFFLE_SEED", "0")
+        ),
+        local_shuffle_buffer_size=max(
+            int(cfg.data.samples_per_gpu),
+            int(os.environ.get("RAYTRAIN_DATASET_LOCAL_SHUFFLE_BUFFER_SIZE", "1024")),
+        ),
+'''
+
+
+def _upgrade_epoch_helper(source: str) -> str:
+    """Upgrade the exact previous platform helper in reused source archives."""
+    epoch_start = TRAIN_DATALOADER_HELPER.index(_EPOCH_HELPER_START)
+    epoch_end = TRAIN_DATALOADER_HELPER.index(_EPOCH_HELPER_END)
+    old_helper = (
+        TRAIN_DATALOADER_HELPER[:epoch_start] + TRAIN_DATALOADER_HELPER[epoch_end:]
+    ).replace(_SHUFFLE_ARGUMENTS, "", 1)
+    source = _replace_once(
+        source, old_helper, TRAIN_DATALOADER_HELPER, "streaming epoch helper upgrade"
+    )
+    return _replace_once(
+        source, "    runner.run(",
+        "    _platform_register_data_epoch_hook(runner)\n    runner.run(",
+        "streaming epoch hook upgrade",
+    )
+
+
 LEGACY_DATASET_SELECTION = "    datasets = [build_dataset(cfg.data.train)]\n"
 STREAMING_DATASET_SELECTION = '''    if _platform_uses_native_streaming():
         from ray_data_s1h import build_streaming_dataset_proxy
@@ -144,7 +194,11 @@ def patch_s1h_train_api(source: str) -> str:
         and streaming_block_present
         and ddp_wrapper_present
     ):
-        return source
+        if _EPOCH_HELPER_START in source:
+            if "    _platform_register_data_epoch_hook(runner)\n    runner.run(" not in source:
+                raise ValueError("partially applied S1H epoch hook patch")
+            return source
+        return _upgrade_epoch_helper(source)
     if (
         marker in source
         or native_gate_present
@@ -172,6 +226,12 @@ def patch_s1h_train_api(source: str) -> str:
         LEGACY_DATALOADER_BLOCK,
         STREAMING_DATALOADER_BLOCK,
         "data loader selection",
+    )
+    patched = _replace_once(
+        patched,
+        "    runner.run(",
+        "    _platform_register_data_epoch_hook(runner)\n    runner.run(",
+        "streaming epoch hook",
     )
     return _replace_once(
         patched,
