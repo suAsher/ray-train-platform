@@ -53,3 +53,22 @@ existing page-source regression tests now follow that extracted module.
   upload navigation selected `#uploads`, and Back restored the previous topic.
   Preview was local-only and its temporary HTML entry was removed afterwards.
 - No backend changes, production deployment, or training-resource operations.
+
+## Authorized deployment — 2026-09-05
+
+After local acceptance the user requested deployment. Published frontend only:
+
+- Source: `96e6f02f9f1e9e1ed24b118ecab3edbce5ef881e`.
+- Image: `release-20260905-05`, digest
+  `sha256:a323aecdcc8eb00eacd18f5165c8145b519f4b3a8c8bdc6fe72e3afda8c875df`.
+- Helm revision 172; server dry-run differed only in the frontend image line.
+- Both frontend replicas Ready with the expected image ID. Health, help and
+  external-submit routes returned HTTP 200; the served help JavaScript contained
+  the new upload walkthrough and success-check guidance.
+- Active `tenant-local/job-29dc380420222684984b87cf` remained RUNNING with the
+  same UID and spec; head/worker Pod UIDs, specs and restart counts (zero) matched
+  the pre-release snapshot. No backend or training images were updated.
+- Pre-release repeat: 299 tests passed, frontend build passed, production npm
+  audit reported zero vulnerabilities. PowerShell execution remains unverified.
+- Values backup, minimal override and build log are retained on the build host
+  under `/root/ui-help-release-20260905/` for rollback and traceability.
