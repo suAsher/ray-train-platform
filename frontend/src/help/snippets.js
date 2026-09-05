@@ -21,7 +21,8 @@ output.mkdir(parents=True, exist_ok=True)
 
 # flush=True：日志实时进入平台日志流，不然可能看不到
 print(f"输入目录 {dataset}", flush=True)
-print(f"前 5 个条目 {[p.name for p in list(dataset.iterdir())[:5]]}", flush=True)
+from itertools import islice
+print(f"前 5 个条目 {[p.name for p in islice(dataset.iterdir(), 5)]}", flush=True)
 
 import torch
 print(f"CUDA {torch.cuda.is_available()}，可见卡数 {torch.cuda.device_count()}", flush=True)
@@ -31,18 +32,20 @@ print("已写入产物，可在「训练产物」标签页看到 hello.txt", flu
 
 export const SUBMIT_SMOKE = `# 单卡冒烟：先确认链路通了
 spk-rayjob submit --watch \\
+  --engine ray-ddp --workers 1 --gpus-per-worker 1 \\
   --name smoke --entrypoint "python3 train.py" \\
-  --input-space public --input-path bevfusion/2026-08-0429`
+  --input-space public --input-path "<已确认可读的子目录>"`
 
-export const SUBMIT_MULTINODE = `# 多机多卡：workers≥2，平台在每个 Worker 内启动 torchrun
+export const SUBMIT_MULTINODE = `# 2 个 Worker × 2 卡；入口必须已适配托管训练（以下是 BEVFusion 适配示例）
 spk-rayjob submit --watch \\
-  --engine ray-train \\
+  --engine ray-train --workers 2 --gpus-per-worker 2 \\
   --entrypoint "python3 tools/train.py configs/lidar.yaml --launcher pytorch" \\
   --input-space public --input-path bevfusion/2026-08-0429 \\
   --max-failures 2 --checkpoint-every-epochs 1`
 
 export const SUBMIT_RESUME = `# 续训：把上一次运行的结果目录作为只读 checkpoint 传入
-spk-rayjob submit --watch --resume-from-job <上一次的 JOB ID>`
+# 在原项目代码目录运行，保留原训练配置；将 JOB_ID 替换为真实任务 ID
+spk-rayjob submit --watch --resume-from-job JOB_ID`
 
 export const NATIVE_RAY_SUBMIT = `export RAY_ADDRESS="https://<平台地址>/ray"
 export RAY_JOB_HEADERS='{"Authorization":"Bearer <平台 PAT>"}'
@@ -89,28 +92,40 @@ for batch in shard.iter_torch_batches(batch_size=8):
 # 注意：DistributedSampler 与手工 rank 分片必须去掉，
 # 否则会和 Ray Data 的分片叠加，导致每张卡少看数据。`
 
-export const SUBMIT_STREAMING = `# 固定不可变数据版本，按需流式读取
+export const SUBMIT_STREAMING = `# 替换所有尖括号值；从 UI 选择支持场地筛选 protocol 1 的训练镜像
 spk-rayjob submit --watch \\
   --engine ray-train --data-mode streaming \\
-  --dataset <数据集>:<版本> --dataset-cache-policy bounded \\
-  --entrypoint "python3 tools/train_raydata.py"`
+  --workers 1 --gpus-per-worker 1 \\
+  --image "<管理员登记的兼容镜像摘要>" \\
+  --dataset "<数据集>:<READY版本>" --dataset-cache-policy bounded \\
+  --dataset-sites "<场地代码1>,<场地代码2>" \\
+  --entrypoint "python3 <已接入平台streaming适配器的训练脚本>"
+# 全量训练：删除 --dataset-sites；不要填写 public/labeled/... 路径。`
 
 export const RESUME_CODE = `# checkpoint 必须写进 PLATFORM_OUTPUT_PATH，续训时从 PLATFORM_CHECKPOINT_PATH 读
 import os
+import torch
 from pathlib import Path
 
 output = Path(os.environ["PLATFORM_OUTPUT_PATH"])
 resume_root = os.environ.get("PLATFORM_CHECKPOINT_PATH", "")
 
-# 保存（只让 rank 0 写）
+# 片段嵌入已有训练循环：model、optimizer、scheduler、epoch 已初始化。
+# AMP 训练还需保存/恢复 GradScaler；严格复现还需随机数与采样器状态。
+# 保存（只让 rank 0 写；model 指未包装的模型）
+state = {"model": model.state_dict(), "optimizer": optimizer.state_dict(),
+         "scheduler": scheduler.state_dict(), "epoch": epoch}
 if int(os.environ.get("RANK", "0")) == 0:
     (output / "checkpoints").mkdir(parents=True, exist_ok=True)
     torch.save(state, output / "checkpoints" / "latest.pth")
 
 # 恢复
 if resume_root:
-    state = torch.load(Path(resume_root) / "checkpoints" / "latest.pth")
+    # 只加载自己或可信团队产生的 checkpoint。
+    state = torch.load(Path(resume_root) / "checkpoints" / "latest.pth", map_location="cpu")
     model.load_state_dict(state["model"])
+    optimizer.load_state_dict(state["optimizer"])
+    scheduler.load_state_dict(state["scheduler"])
     start_epoch = state["epoch"] + 1`
 
 export const MLFLOW_CODE = `# 只让 rank 0 记录，否则每张卡都会写一份
@@ -131,9 +146,9 @@ PY
 ls -la /mnt/storage/public     # 公共数据
 ls -la /mnt/storage/me         # 你自己的空间`
 
-export const DEBUG_DEPS = `# 临时装依赖：装进工作区，重启后仍在
-pip install --user <包名>
-# 或者建一个虚拟环境
+export const DEBUG_DEPS = `# 临时装依赖：不保证随环境重建保留；将 PACKAGE_NAME 替换为包名
+pip install --user PACKAGE_NAME
+# 需要持久化时先确认 /workspace 是持久挂载，再建虚拟环境
 python3 -m venv /workspace/.venv && source /workspace/.venv/bin/activate
 
 # 容器以非 root 运行，apt install 不可用。

@@ -3,8 +3,59 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 import { helpSections, renderHelpMarkdown, CONTRACT_SNIPPET, SMOKE_SCRIPT, NATIVE_RAY_SUBMIT } from './help/content.js'
+import * as helpContent from './help/content.js'
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8')
+
+test('download includes prerequisites, success checks, troubleshooting and actionable links', () => {
+  const markdown = renderHelpMarkdown([{
+    id: 'fixture', title: 'Fixture', blocks: [],
+    prerequisites: ['登录后继续'], success: ['看到完成状态'],
+    troubleshooting: ['失败后重新登录'],
+    relatedLinks: [{ label: '账户与安全', to: '/account-security' }],
+  }])
+  for (const expected of ['开始前', '登录后继续', '成功标志', '看到完成状态', '失败处理', '失败后重新登录', '[账户与安全](/account-security)']) {
+    assert.ok(markdown.includes(expected), `missing ${expected}`)
+  }
+  assert.match(markdown, /2026-09-05/)
+  const portable = renderHelpMarkdown([{
+    title: '链接', blocks: [], relatedLinks: [{ label: '账户', to: '/account-security' }],
+  }], { origin: 'https://platform.example' })
+  assert.ok(portable.includes('[账户](https://platform.example/account-security)'))
+})
+
+test('download escapes pipes and line breaks in table cells', () => {
+  const markdown = renderHelpMarkdown([{ title: 'Table', blocks: [{
+    kind: 'table', headers: ['模式', '选项'], rows: [['a | b', '第一行\n第二行']],
+  }] }])
+  assert.ok(markdown.includes('| a \\| b | 第一行<br>第二行 |'))
+})
+
+test('help search matches content and prerequisites without changing topic objects', () => {
+  assert.equal(typeof helpContent.filterHelpSections, 'function')
+  const sections = [
+    { id: 'one', title: '上传', blocks: [{ kind: 'note', text: 'HTTP 413' }], prerequisites: ['使用新版 CLI'] },
+    { id: 'two', title: '其他', blocks: [], relatedLinks: [{ to: '/help#one', label: '下一步' }] },
+  ]
+  const before = JSON.stringify(sections)
+  assert.deepEqual(helpContent.filterHelpSections('  http 413 ', sections).map(s => s.id), ['one'])
+  assert.deepEqual(helpContent.filterHelpSections('新版 cli', sections).map(s => s.id), ['one'])
+  assert.deepEqual(helpContent.filterHelpSections('不存在', sections), [])
+  assert.deepEqual(helpContent.filterHelpSections(' ', sections), sections)
+  assert.equal(JSON.stringify(sections), before)
+})
+
+test('help page exposes search, metadata and reactive topic navigation', async () => {
+  const page = await read('./views/Help/index.vue')
+  assert.match(page, /filterHelpSections/)
+  assert.match(page, /section\.prerequisites/)
+  assert.match(page, /section\.success/)
+  assert.match(page, /section\.troubleshooting/)
+  assert.match(page, /section\.relatedLinks/)
+  assert.match(page, /watch\(\(\) => route\.hash/)
+  assert.match(page, /aria-current/)
+  assert.match(page, /scrollIntoView/)
+})
 
 // The page and the downloaded file are built from one source so a user cannot
 // take away a copy that disagrees with what the platform told them on screen.

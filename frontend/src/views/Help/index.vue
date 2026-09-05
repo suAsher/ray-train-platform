@@ -6,16 +6,21 @@
         <div>
           <h3 class="text-2xl font-bold text-white">平台使用说明</h3>
           <p class="mt-3 max-w-3xl text-sm leading-6 text-slate-300">
-            这里只放决定任务成败的部分：代码怎么和平台对接、启动命令怎么写、数据模式怎么选、报错了怎么办。
-            每条都对应真实发生过的失败。可以直接下载成 Markdown 带走。
+            先看“开始前”，再按步骤操作，最后核对“成功标志”；遇到问题看“失败处理”。
+            可按场景或错误关键词搜索，也可以下载全部说明。
           </p>
+          <p class="mt-2 max-w-3xl text-xs leading-5 text-slate-500">内容核对：{{ HELP_REVIEWED_AT }}。{{ HELP_SCOPE }}</p>
         </div>
         <el-button type="primary" :loading="downloading" @click="download">下载为 Markdown</el-button>
       </div>
     </section>
 
     <div class="grid gap-6 xl:grid-cols-[16rem_minmax(0,1fr)]">
-      <nav class="panel h-fit p-3 xl:sticky xl:top-4">
+      <nav class="panel h-fit p-3 xl:sticky xl:top-4" aria-label="使用说明目录">
+        <label for="help-search" class="mb-2 block px-1 text-xs text-slate-400">搜索主题、参数或错误</label>
+        <el-input id="help-search" v-model="query" clearable placeholder="例如：413、场地、续训" class="mb-3" />
+        <p class="mb-3 px-1 text-xs text-slate-500" role="status">{{ filteredSections.length }} / {{ helpSections.length }} 个主题</p>
+        <p v-if="!filteredSections.length" class="px-1 text-sm text-slate-400">没有匹配主题，试试更短的关键词。</p>
         <div v-for="group in groupedSections" :key="group.name" class="mb-3 last:mb-0">
           <p class="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">{{ group.name }}</p>
           <button
@@ -24,14 +29,21 @@
             type="button"
             class="block w-full rounded-lg px-3 py-2 text-left text-sm leading-5 transition"
             :class="section.id === activeId ? 'bg-blue-500/15 font-semibold text-blue-200' : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'"
+            :aria-current="section.id === activeId ? 'page' : undefined"
             @click="select(section.id)"
           >{{ section.title }}</button>
         </div>
       </nav>
 
-      <section v-for="section in [activeSection]" :key="section.id" class="panel p-6">
-      <h4 class="text-lg font-bold text-white">{{ section.title }}</h4>
+      <section v-for="section in [activeSection]" :key="section.id" class="panel p-6" aria-labelledby="help-topic-title">
+      <h4 id="help-topic-title" ref="topicTitle" tabindex="-1" class="text-lg font-bold text-white">{{ section.title }}</h4>
       <p v-if="section.summary" class="mt-2 max-w-3xl text-sm leading-6 text-slate-400">{{ section.summary }}</p>
+      <div v-if="section.prerequisites?.length" class="mt-5 rounded-xl border border-blue-500/20 bg-blue-500/5 p-4">
+        <h5 class="text-sm font-semibold text-blue-200">开始前</h5>
+        <ul class="mt-2 list-disc space-y-1 pl-5 text-sm leading-6 text-slate-300">
+          <li v-for="item in section.prerequisites" :key="item">{{ item }}</li>
+        </ul>
+      </div>
 
       <template v-for="(block, index) in section.blocks" :key="index">
         <ol v-if="block.kind === 'steps'" class="mt-5 space-y-6">
@@ -82,6 +94,23 @@
           {{ block.text }}
         </p>
       </template>
+      <div class="mt-6 grid gap-4 lg:grid-cols-2">
+        <div v-if="section.success?.length" class="rounded-xl border border-emerald-500/20 p-4">
+          <h5 class="text-sm font-semibold text-emerald-300">成功标志</h5>
+          <ul class="mt-2 list-disc space-y-1 pl-5 text-sm leading-6 text-slate-300">
+            <li v-for="item in section.success" :key="item">{{ item }}</li>
+          </ul>
+        </div>
+        <div v-if="section.troubleshooting?.length" class="rounded-xl border border-amber-500/20 p-4">
+          <h5 class="text-sm font-semibold text-amber-300">失败处理</h5>
+          <ul class="mt-2 list-disc space-y-1 pl-5 text-sm leading-6 text-slate-300">
+            <li v-for="item in section.troubleshooting" :key="item">{{ item }}</li>
+          </ul>
+        </div>
+      </div>
+      <nav v-if="section.relatedLinks?.length" class="mt-5 flex flex-wrap gap-4 text-sm" aria-label="相关入口">
+        <router-link v-for="link in section.relatedLinks" :key="link.to" :to="link.to" class="text-blue-400 underline underline-offset-4">{{ link.label }}</router-link>
+      </nav>
       </section>
     </div>
 
@@ -95,12 +124,12 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
 import CopyBlock from '../../components/CopyBlock.vue'
-import { helpSections, renderHelpMarkdown } from '../../help/content'
+import { filterHelpSections, HELP_REVIEWED_AT, HELP_SCOPE, helpSections, renderHelpMarkdown } from '../../help/content'
 import { saveBlobAsFile } from '../../checkpointDownload'
 
 const downloading = ref(false)
@@ -110,7 +139,7 @@ const downloading = ref(false)
 function download() {
   downloading.value = true
   try {
-    const markdown = renderHelpMarkdown()
+    const markdown = renderHelpMarkdown(helpSections, { origin: window.location.origin })
     saveBlobAsFile(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }), 'raytrain-使用说明.md')
   } catch (error) {
     ElMessage.error(error.message || '生成文档失败')
@@ -123,6 +152,9 @@ function download() {
 // reader picked. The download still carries all of them, because a file kept on
 // a laptop is read differently from a page browsed with a question in mind.
 const activeId = ref(helpSections[0].id)
+const query = ref('')
+const topicTitle = ref(null)
+const filteredSections = computed(() => filterHelpSections(query.value))
 
 // Seventeen topics in one flat list is a wall of text to scan. Grouping keeps
 // each list short enough to read, and the order matches how someone moves
@@ -130,7 +162,7 @@ const activeId = ref(helpSections[0].id)
 const groupedSections = computed(() => {
   const order = []
   const byGroup = new Map()
-  for (const section of helpSections) {
+  for (const section of filteredSections.value) {
     const name = section.group || '其他'
     if (!byGroup.has(name)) {
       byGroup.set(name, [])
@@ -146,15 +178,19 @@ const activeSection = computed(
 
 function select(id) {
   activeId.value = id
-  if (route.hash !== `#${id}`) router.replace({ hash: `#${id}` })
+  if (route.hash !== `#${id}`) router.push({ hash: `#${id}` })
 }
 
 // Links elsewhere in the app point at a topic (/help#data-mode), so honour the
 // hash on arrival instead of always opening the first one.
 const route = useRoute()
 const router = useRouter()
-onMounted(() => {
-  const target = route.hash.replace(/^#/, '')
-  if (target && helpSections.some((section) => section.id === target)) activeId.value = target
-})
+watch(() => route.hash, async (hash, previousHash) => {
+  const target = hash.replace(/^#/, '')
+  activeId.value = helpSections.some(section => section.id === target) ? target : helpSections[0].id
+  await nextTick()
+  const title = Array.isArray(topicTitle.value) ? topicTitle.value[0] : topicTitle.value
+  title?.focus({ preventScroll: true })
+  if (previousHash !== undefined) title?.scrollIntoView({ block: 'start' })
+}, { immediate: true })
 </script>

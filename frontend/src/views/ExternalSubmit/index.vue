@@ -44,6 +44,16 @@
       </el-radio-group>
 
       <CopyBlock :text="installCommands[platform]" label="安装命令" />
+      <p class="text-xs leading-6 text-slate-400">
+        支持 Linux x86_64、Apple Silicon macOS、Windows x64；Intel Mac / Linux ARM 暂无对应下载，请联系管理员。
+        升级时重新执行本页安装命令即可，它会同时下载二进制与 SHA256SUMS 并自动校验；无需另行手动下载清单。
+        校验失败请重新下载，不要绕过。成功后会输出版本，登录后运行 spk-rayjob login-check 确认连通性。
+      </p>
+      <p class="text-xs leading-6 text-slate-400">
+        PATH 修改仅对当前终端生效：Linux 将 <code>export PATH="$HOME/.local/bin:$PATH"</code> 加入 ~/.bashrc；
+        macOS 加入 ~/.zshrc；Windows 在“用户环境变量 → Path”加入 <code>%USERPROFILE%\.spk-rayjob</code> 后重开终端。
+        若升级后仍是旧版，用 Unix 的 <code>command -v spk-rayjob</code> 或 PowerShell 的 <code>Get-Command spk-rayjob</code> 检查旧文件是否遮蔽新版本。
+      </p>
       <div class="flex flex-wrap gap-3">
         <a :href="binaries[platform]" class="text-xs text-blue-400 hover:text-blue-300" download>直接下载二进制</a>
         <a :href="checksums" class="text-xs text-blue-400 hover:text-blue-300">SHA256SUMS</a>
@@ -75,6 +85,11 @@
         </p>
       </div>
       <CopyBlock :text="initCommand" label="初始化命令" />
+      <p class="text-xs leading-6 text-slate-400">
+        示例从 1 个 worker × 1 张 GPU 起步。先填写可用镜像和真实入口，再提交；init 不会验证训练脚本是否存在。
+        显式命令行参数优先于 .spk-rayjob.yaml 中的对应字段，未指定字段沿用项目配置；不要把登录凭据写入项目文件。
+        已有配置时先备份并编辑，不要为升级客户端重新初始化项目。
+      </p>
       <div class="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
         <p class="text-xs font-semibold text-slate-300">.spk-rayjob.yaml 示例</p>
         <CopyBlock class="mt-2" :text="projectFileExample" />
@@ -83,7 +98,7 @@
         <template #title>
           entrypoint 里不要写 torchrun、torch.distributed.launch 或 torchpack dist-run。
         </template>
-        平台会根据 <code>executionMode</code> 与 GPU 数自动启动 torchrun；重复包装会导致 rendezvous 失败。
+        torchrun 模式由平台启动 torchrun；single_gpu 直接执行入口，Ray Train 由训练器管理 workers，不能再套一层 torchrun。
       </el-alert>
     </section>
 
@@ -105,6 +120,12 @@
         </p>
       </div>
       <CopyBlock :text="nativeRayCommand" label="原生 Ray 提交" />
+      <p class="text-xs leading-6 text-slate-400">
+        系统选择也适用于本页其余命令（Windows 使用 PowerShell）。本机需要 Python 与 Ray CLI；train.py 在远端镜像中执行。
+        PAT 通过隐藏输入读取，不会写入命令历史；执行期间令牌位于当前进程环境，请勿打印环境或共享调试转储。
+        原生提交使用平台配置的默认训练镜像，需要自选镜像时请使用 spk-rayjob。
+        Ray 2.35.0 是此兼容入口的客户端版本，并非所有训练环境的 Ray 版本。
+      </p>
       <p class="max-w-3xl text-xs leading-5 text-slate-500">
         默认为 1×1 GPU。多机多卡、数据目录选择和断点续训优先使用 <code>spk-rayjob</code>；完整参数见 <code>spk-rayjob --help</code>。
       </p>
@@ -131,10 +152,11 @@
 <script setup>
 import { ElMessage } from 'element-plus'
 
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 
 import CopyBlock from '../../components/CopyBlock.vue'
 import { copyToClipboard } from '../../clipboard'
+import { externalSubmitCommands } from '../../help/externalSubmit'
 
 const platformURL = window.location.origin
 const checksums = `${platformURL}/downloads/spk-rayjob/SHA256SUMS`
@@ -147,76 +169,26 @@ const binaries = {
 
 const platform = ref('linux')
 
-// Each snippet verifies the published checksum before installing. The commands
-// differ per OS because the tooling does: sha256sum vs shasum vs Get-FileHash.
-const installCommands = {
-  linux: `mkdir -p ~/.local/bin ~/.cache/spk-rayjob
-curl -fL ${binaries.linux} -o ~/.cache/spk-rayjob/spk-rayjob
-curl -fL ${checksums} -o ~/.cache/spk-rayjob/SHA256SUMS
-grep 'spk-rayjob-linux-amd64$' ~/.cache/spk-rayjob/SHA256SUMS | awk '{print $1}' > /tmp/spk.want
-sha256sum ~/.cache/spk-rayjob/spk-rayjob | awk '{print $1}' > /tmp/spk.got
-diff -q /tmp/spk.want /tmp/spk.got && echo "校验通过"
-install -m 0755 ~/.cache/spk-rayjob/spk-rayjob ~/.local/bin/spk-rayjob
-export PATH="$HOME/.local/bin:$PATH"     # 建议写进 ~/.bashrc
-spk-rayjob version`,
-  macos: `mkdir -p ~/.local/bin ~/.cache/spk-rayjob
-curl -fL ${binaries.macos} -o ~/.cache/spk-rayjob/spk-rayjob
-curl -fL ${checksums} -o ~/.cache/spk-rayjob/SHA256SUMS
-grep 'spk-rayjob-darwin-arm64$' ~/.cache/spk-rayjob/SHA256SUMS | awk '{print $1}'
-shasum -a 256 ~/.cache/spk-rayjob/spk-rayjob | awk '{print $1}'   # 两行应一致
-install -m 0755 ~/.cache/spk-rayjob/spk-rayjob ~/.local/bin/spk-rayjob
-xattr -d com.apple.quarantine ~/.local/bin/spk-rayjob 2>/dev/null || true
-export PATH="$HOME/.local/bin:$PATH"     # 建议写进 ~/.zshrc
-spk-rayjob version`,
-  windows: `# PowerShell
-New-Item -ItemType Directory -Force "$env:USERPROFILE\\.spk-rayjob" | Out-Null
-Invoke-WebRequest -Uri "${binaries.windows}" -OutFile "$env:USERPROFILE\\.spk-rayjob\\spk-rayjob.exe"
-Invoke-WebRequest -Uri "${checksums}" -OutFile "$env:USERPROFILE\\.spk-rayjob\\SHA256SUMS"
-(Get-FileHash "$env:USERPROFILE\\.spk-rayjob\\spk-rayjob.exe" -Algorithm SHA256).Hash.ToLower()
-Select-String 'spk-rayjob-windows-amd64.exe$' "$env:USERPROFILE\\.spk-rayjob\\SHA256SUMS"   # 两值应一致
-$env:PATH += ";$env:USERPROFILE\\.spk-rayjob"
-spk-rayjob version`,
-}
+const commands = computed(() => externalSubmitCommands(platformURL, platform.value))
+const installCommands = Object.fromEntries(['linux', 'macos', 'windows'].map((os) => [os, externalSubmitCommands(platformURL, os).install]))
+const loginCommand = computed(() => commands.value.login)
+const tokenLoginCommand = computed(() => commands.value.tokenLogin)
+const initCommand = computed(() => commands.value.init)
+const dailyLoopCommand = computed(() => commands.value.dailyLoop)
+const nativeRayCommand = computed(() => commands.value.nativeRay)
 
-const loginCommand = `read -rp '平台用户名: ' SPK_USERNAME
-read -rs SPK_PASSWORD && echo
-printf '%s\\n' "$SPK_PASSWORD" | spk-rayjob login --server ${platformURL} \\
-  --username "$SPK_USERNAME" --password-stdin
-unset SPK_USERNAME SPK_PASSWORD`
-
-const tokenLoginCommand = `read -rs SPK_TOKEN && echo
-printf '%s\\n' "$SPK_TOKEN" | spk-rayjob login --server ${platformURL} --token-stdin
-unset SPK_TOKEN`
-
-const initCommand = `cd ~/my-training-project
-spk-rayjob init --name my-training --gpus-per-worker 8
-$EDITOR .spk-rayjob.yaml   # 填写 image 与 entrypoint`
-
-const projectFileExample = `name: bevfusion-lidar
-image: harbor.wellspiking.ai/<项目>/<镜像>@sha256:<digest>
-entrypoint: python tools/westwell_train.py configs/lidar.yaml --launcher pytorch
+const projectFileExample = `name: my-training
+# 从“提交训练 → 训练环境”获取可用镜像；不清楚完整地址时请管理员提供
+image: REPLACE_WITH_AVAILABLE_IMAGE
+# 替换为代码目录中真实存在的训练脚本
+entrypoint: python train.py
 workers: 1
-gpusPerWorker: 8
-cpuPerWorker: 32
-memoryPerWorker: 128Gi
-executionMode: torchrun      # single_gpu | torchrun | ray_train
-input:
-  space: public
-  path: bevfusion/2026-08-0429
+gpusPerWorker: 1
+cpuPerWorker: 4
+memoryPerWorker: 16Gi
+executionMode: single_gpu
 output:
-  path: bevfusion-lidar`
-
-const dailyLoopCommand = `vim tools/westwell_train.py      # 改代码
-spk-rayjob submit --watch        # 提交并等待结束
-spk-rayjob logs -f <JOB ID>      # 跟随日志
-spk-rayjob jobs --state RUNNING  # 看在跑什么`
-
-const nativeRayCommand = `python3 -m pip install "ray[default]==2.35.0"
-export RAY_ADDRESS="${platformURL}/ray"
-export RAY_JOB_HEADERS='{"Authorization":"Bearer <平台 PAT>"}'
-
-cd ~/my-training-project
-ray job submit --address "$RAY_ADDRESS" --working-dir . -- python3 train.py`
+  path: my-training`
 
 const steps = [
   { number: 1, title: '安装客户端', description: '单文件二进制，校验发布摘要后放进 PATH。' },

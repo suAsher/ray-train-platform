@@ -24,8 +24,9 @@ import {
   SUBMIT_STREAMING,
   THROUGHPUT_FORMULA,
 } from './snippets.js'
+import { walkthroughs, uploadTopic } from './topicWalkthroughs.js'
 
-export const helpSections = [
+const topics = [
   {
     id: 'quickstart',
     group: '入门',
@@ -36,7 +37,7 @@ export const helpSections = [
         kind: 'steps',
         items: [
           { title: '把这个脚本放进你的代码目录', body: '它不训练任何东西，只验证平台和代码之间的四个接口。', code: SMOKE_SCRIPT, codeLabel: 'train.py', codeLang: 'python' },
-          { title: '在提交表单里填这条启动命令', body: '先选 1 卡。多卡由平台启动 torchrun，你不需要也不应该自己写。', code: 'python3 train.py', codeLabel: '训练启动命令', codeLang: 'bash' },
+          { title: '在提交表单里填这条启动命令', body: '选 ray-ddp 引擎、1 个 Worker、每 Worker 1 卡和 mount 模式；这个脚本是链路自检，不是 Ray Train 训练适配器。', code: 'python3 train.py', codeLabel: '训练启动命令', codeLang: 'bash' },
           { title: '选输入数据和运行环境', body: '输入目录先在「我的数据」里逐级点开确认真实存在——路径写错是最常见的失败，任务通常在两分钟内挂掉。运行环境选一个已登记的镜像即可。' },
           { title: '提交后看这三处', body: '日志里应出现输入目录和 CUDA 信息；任务详情的「训练产物」标签页应出现 hello.txt。三处都对，说明链路通了，可以换成你自己的训练脚本。' },
         ],
@@ -121,7 +122,7 @@ export const helpSections = [
         rows: [
           ['Git 提交', '代码已在仓库里（推荐）', '填仓库地址和 commit。改完 push，重新提交时换 commit 即可，最适合日常迭代'],
           ['个人工作区快照', '不用 Git 的人', '先把代码传到「我的数据」的工作区，创建一次快照，提交时选它'],
-          ['上传代码 ZIP', '一次性试跑', '在「我的数据」直接上传打包好的代码'],
+          ['上传代码 ZIP', '一次性试跑', '在「我的数据 → 我的工作区」使用专用上传代码 ZIP 入口，校验完成后提交时选「上传代码包」；普通文件上传不会自动生成代码包身份'],
         ],
       },
       {
@@ -168,15 +169,15 @@ export const helpSections = [
           ['executionMode: single_gpu', '1 个 Worker × 1 卡。先用它跑通。'],
           ['executionMode: torchrun', '1 个 Worker × 至少 2 卡，单机多卡。'],
           ['executionMode: ray_train', '至少 2 个 Worker × 每个至少 1 卡，多机多卡。'],
-          ['workers', 'Worker 数，等于参与训练的物理节点数。'],
+          ['workers', 'Worker 副本数；实际物理节点分布以任务拓扑为准，不要仅凭这个数判断是否跨节点。'],
           ['gpusPerWorker', '每个 Worker 独占的 GPU 数。总卡数 = workers × gpusPerWorker。'],
         ],
       },
       {
         kind: 'list',
         items: [
-          '分布式由平台负责：它按所选规模在每个 Worker 内启动 torchrun，并注入 RANK、WORLD_SIZE 等变量。你的代码只需正常使用 DDP 与 DistributedSampler。',
-          '所有 rank 都要用 DistributedSampler，但只让 rank 0 写 checkpoint 和日志文件——多个 rank 同时写同一个文件在对象存储上会失败。',
+          'ray-ddp 使用平台的分布式启动链路；ray-train 使用托管 driver 与训练适配器，并非把任意 Python 脚本换个引擎就自动获得故障恢复。不要在入口外再套 torchrun。',
+          '普通文件 DataLoader 的多卡 DDP 使用 DistributedSampler，并逐 epoch 调用 set_epoch；Ray Data 已分片时不再加 DistributedSampler 或按 rank 再切一次。只让 rank 0 写共享 checkpoint 和日志文件。',
           '逐级放大：先 1 卡，再单机多卡，最后多机。每一级都核对 loss、样本数和 checkpoint 再往上走。',
         ],
       },
@@ -199,7 +200,7 @@ export const helpSections = [
         headers: ['模式', '什么时候用它', '要改代码吗'],
         rows: [
           ['mount', '默认。直接读已授权的数据挂载，不做任何缓存。先用它跑通，再谈优化。', '不用'],
-          ['cache', '同一份数据要被反复读很多轮。启动时预热到本地 NVMe，之后从本地读。', '不用'],
+          ['cache', '所选输入及临时文件放得进申请的 NVMe，且反复读取多轮时使用；显式设置输入预热。', '不用'],
           ['ray-data-stage', '海量小文件、读取延迟是瓶颈。Ray Data 分布式读取并在本地建立完整视图，再交给你原来的 DataLoader。', '不用'],
           ['ray-data', 'Ray Data 直接把分片交给每个 Train Worker，不再经过本地文件。', '要改'],
           ['streaming', '固定一个不可变数据集版本，按需流式读取，保证多次训练读到完全相同的数据。', '要改'],
@@ -207,7 +208,7 @@ export const helpSections = [
       },
       {
         kind: 'note',
-        text: '不确定就选 mount。先测出数据读取确实是瓶颈（比如训练日志里 data_time 明显高于 0），再考虑换模式。前三种模式对训练代码是透明的，可以随时切换对比。',
+        text: '不确定就选 mount。先测出数据读取确实是瓶颈，再考虑换模式。cache 与 ray-data-stage 需要给完整本地视图留足容量，不适合把放不下的全量数据硬塞进 NVMe；此时评估有界 streaming，并先做小规模兼容验证。',
       },
     ],
   },
@@ -296,7 +297,7 @@ export const helpSections = [
       {
         kind: 'warning',
         title: '这条链路尚未完成全量验证',
-        text: '各个环节已分别验证，但多机全量训练的端到端验证还没有完成，正在等待新节点。这里先给出用法，便于后续验证时对照；在验证通过之前，正式训练请使用 mount、cache 或 ray-data-stage。',
+        text: '场地筛选与有界缓存已实现；多机全量吞吐与恢复仍需在空闲资源上验收，不代表所有模型已经兼容。正式训练保留已验证路径；cache 与 ray-data-stage 也必须满足容量要求，不要为了试新链路中断现有任务。',
       },
       { kind: 'code', label: '提交命令', lang: 'bash', text: SUBMIT_STREAMING },
       {
@@ -305,7 +306,10 @@ export const helpSections = [
           '为什么要打包 Parquet：对象存储是按延迟计价的，读一个文件的固定开销远大于读它的内容。把大量小文件合并成分片后，同样的数据量所需的请求次数下降一个数量级。',
           '为什么要版本化：每个版本是不可变的，内容用摘要固定。多次训练引用同一版本，读到的数据保证完全一致，实验才可比。',
           'NVMe 在这里的角色是有界工作集，不是全量副本——数据集比本地盘大得多，所以只缓存当前用到的分片。',
-          '训练代码的消费方式与 ray-data 相同：从 Ray Train 拿分片，不要自己再分片。',
+          'Ray Data 在这里下发 manifest 分片引用，载荷由平台 Parquet/WebDataset 解析器和模型适配器读取、解码；不能复制普通 images 的 batch["image"] 示例直接训练。当前也不代表全部载荷预处理已迁移到 Ray Data。',
+          '场地填一个或多个代码（例如 cnfzhjyg），不是目录；留空训完整版本。发布器需要写入 site_id；旧版本缺失该列时，联系管理员从受信源重新发布新版本，不修改已有不可变版本。',
+          '选择支持场地筛选 protocol 1 的新训练镜像；旧镜像会明确失败，不会静默退回全量。提交预检中的 trainSamples 仍是完整版本数量，选定场地的实际数量待启动时扫描 manifest 校验后计算。',
+          '不存在、无训练样本或元数据不完整的场地会失败。版本和场地范围写入任务记录；恢复训练沿用原范围，换场地请新建实验，不当作原实验续训。',
         ],
       },
     ],
@@ -416,7 +420,7 @@ export const helpSections = [
         items: [
           'checkpoint 必须写进 PLATFORM_OUTPUT_PATH，否则下次任务读不到——本地缓存盘随 Pod 一起消失。',
           '只让 rank 0 写 checkpoint。多个 rank 同时写同一个文件在对象存储上会失败。',
-          '用 ray-train 引擎时可以让平台按 Epoch 周期保存并控制保留数量，见 --checkpoint-every-epochs 与 --checkpoint-keep-latest。',
+          'ray-train 的 --checkpoint-every-epochs 与 --checkpoint-keep-latest 需要训练适配器接入保存/上报协议；平台不能自动保存任意脚本的优化器状态。--max-failures 是同任务故障恢复预算，不等于手工发起续训。',
         ],
       },
     ],
@@ -541,7 +545,7 @@ export const helpSections = [
           '输入目录已在「我的数据」里点开确认存在，不是凭记忆写的路径。',
           '代码读 PLATFORM_DATASET_PATH、写 PLATFORM_OUTPUT_PATH，没有写死任何绝对路径。',
           '先用 1 卡最小批量跑通至少几个 step，再扩到多卡多机。',
-          '所有 rank 都用 DistributedSampler，只有 rank 0 写 checkpoint 和日志文件。',
+          '普通 DataLoader 的多卡 DDP 用 DistributedSampler；ray-data / streaming 已由 Ray Data 分片，不能再次手工分片。共享 checkpoint 和日志仅 rank 0 写。',
           '启动命令里没有 torchrun。',
           '如果用了 ray-data，已经去掉手工分片。',
           '调试环境用完已经停掉，不要空占 GPU。',
@@ -550,3 +554,8 @@ export const helpSections = [
     ],
   },
 ]
+
+export const helpSections = [...topics, uploadTopic].map((section) => ({
+  ...section,
+  ...walkthroughs[section.id],
+}))

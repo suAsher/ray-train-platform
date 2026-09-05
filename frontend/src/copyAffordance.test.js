@@ -27,8 +27,10 @@ test('install instructions cover each supported client platform', async () => {
   assert.match(source, /spk-rayjob-darwin-arm64/)
   assert.match(source, /spk-rayjob-windows-amd64\.exe/)
   // Each snippet must check the checksum before installing.
+  const commands = await read('./help/externalSubmit.js')
+  assert.match(source, /externalSubmitCommands\(platformURL/)
   for (const verifier of ['sha256sum', 'shasum -a 256', 'Get-FileHash']) {
-    assert.ok(source.includes(verifier), `${verifier} verification is missing`)
+    assert.ok(commands.includes(verifier), `${verifier} verification is missing`)
   }
   assert.equal(source.includes('不需要登录构建机'), false)
 })
