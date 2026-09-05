@@ -1,5 +1,51 @@
 # Site-scoped streaming development
 
+## Release status — 2026-09-05
+
+The development-only scope below is historical. User subsequently approved
+deployment while preserving running training, and explicitly approved pushing
+main. Code commit `1d7c655` was released as `release-20260905-04`, Helm revision
+**171**. Platform rollout and basic health checks passed; full-data/multi-GPU
+acceptance is still pending.
+
+| Component | Registry digest |
+| --- | --- |
+| backend | `sha256:0084784d54a06cd4d7dd47759a207a68ed3d6f022645a343c703bb8f55ba362f` |
+| frontend | `sha256:f7279860690fb4a040788a79b256e4f2f009f3ab5e67b13922c9dc2f69b0a9d9` |
+| spk-rayjob | `sha256:36d48679d3ed07a3d4ecb0fd5176045daf3ecc8f108a01add479120cd152f761` |
+| dataset-publisher | `sha256:d4775f35c17d0f238ee97b386464f367ca58b75d19f49c1fc0dca1a217f54f15` |
+| BEVFusion Ray 2.58 | `sha256:8defc2ea9982713b2e476ac40fb6fd33fd841979ea4de786f38555813fbde2a3` |
+
+New shared, non-default catalogue entry:
+`BEVFusion Ray Train 2.58 · 场地流式 release-20260905-04`,
+ID `job-dddc152d4fe4413822a83f0e`. Old environments/defaults remain unchanged.
+Helm runtimeCatalog values are release metadata, not the live image catalogue;
+the new selectable environment was registered through the platform API.
+
+Rollout evidence: migration 30 applied; backend/frontend/CLI pods Ready with
+the expected image IDs; healthz HTTP 200; downloaded CLI checksum matched and
+reported release-20260905-04 with `--dataset-sites` in help. The new training
+image's isolated protocol import passed. Its 204 CPU tests passed after
+isolating the generic test harness from the image's business prepare hook and
+`/opt/bevfusion` example path; unisolated execution initially failed two tests.
+No GPUs or production data were used for these tests.
+
+`tenant-local/job-29dc380420222684984b87cf` remained RUNNING with unchanged
+RayJob UID/spec and unchanged head/worker Pod UIDs/restart counts.
+Build-host backups and override: `/root/release-20260905-04/`.
+
+### Pending acceptance — manual follow-up, no hourly polling
+
+- [ ] After the existing training finishes and resources are available, perform
+  the limited fixture publication and multi-worker acceptance listed below.
+- [ ] Verify site inventory and new manifest metadata before selecting sites;
+  do not rewrite existing READY versions or start a full repack.
+- [ ] Measure epoch coverage, recovery, NVMe pressure and actual throughput.
+
+The scheduled checker is **PAUSED** at the user's request. Resume verification
+when the user reports completion; this release does not claim training-path
+acceptance.
+
 ## Approved scope
 
 Develop locally before production verification. Do not publish datasets, change
