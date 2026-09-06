@@ -56,6 +56,8 @@ func RunWithInput(ctx context.Context, arguments []string, stdin io.Reader, stdo
 		return runSourceArtifact(ctx, arguments[1:], stdout, stderr, getenv)
 	case "jobs":
 		return runJobs(ctx, arguments[1:], stdout, stderr, getenv)
+	case "images":
+		return runImages(ctx, arguments[1:], stdout, stderr, getenv)
 	case "datasets":
 		return runDatasets(ctx, arguments[1:], stdout, stderr, getenv)
 	case "dataset":
@@ -77,6 +79,7 @@ const helpText = `spk-rayjob — 分布式训练任务命令行客户端
   spk-rayjob init                    在当前代码目录生成 .spk-rayjob.yaml 提交默认值
   spk-rayjob submit --watch          按默认值提交当前目录并等待结束
   spk-rayjob jobs                    列出我的任务
+  spk-rayjob images                  查看已登记训练镜像、依赖环境和管理员说明
   spk-rayjob datasets                列出我有权使用的数据集
   spk-rayjob dataset versions <数据集>  列出不可变数据版本
   spk-rayjob status <JOB ID>         查看单个任务

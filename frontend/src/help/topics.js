@@ -25,6 +25,8 @@ import {
   THROUGHPUT_FORMULA,
 } from './snippets.js'
 import { walkthroughs, uploadTopic } from './topicWalkthroughs.js'
+import { environmentTopic } from './environmentTopic.js'
+import { commandRecipes } from './commandRecipes.js'
 
 const topics = [
   {
@@ -555,7 +557,7 @@ const topics = [
   },
 ]
 
-export const helpSections = [...topics, uploadTopic].map((section) => ({
+export const helpSections = [...topics, uploadTopic, environmentTopic, commandRecipes].map((section) => ({
   ...section,
   ...walkthroughs[section.id],
 }))

@@ -25,6 +25,7 @@ type PlatformImageRecord struct {
 	IsDefault            bool   `gorm:"column:is_default"`
 	RayVersion           string `gorm:"column:ray_version"`
 	SupportedEnginesJSON string `gorm:"column:supported_engines;type:jsonb"`
+	EnvironmentJSON      string `gorm:"column:environment;type:jsonb;not null;default:'{}'"`
 	CreatedBy            string
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
@@ -42,12 +43,17 @@ func (r *GormRepository) CreateImage(ctx context.Context, image domain.PlatformI
 		return fmt.Errorf("encode image supported engines: %w", err)
 	}
 	now := time.Now().UTC()
+	environmentJSON, err := json.Marshal(image.Environment)
+	if err != nil {
+		return fmt.Errorf("encode image environment: %w", err)
+	}
 	record := PlatformImageRecord{
 		ID: image.ID, TenantID: optionalID(image.TenantID), Name: image.Name,
 		Reference: image.Reference, Kind: image.Kind, Description: image.Description,
 		Framework: image.Framework, IsDefault: image.IsDefault, CreatedBy: image.CreatedBy,
 		RayVersion: image.RayVersion, SupportedEnginesJSON: string(supportedEnginesJSON),
-		CreatedAt: now, UpdatedAt: now,
+		EnvironmentJSON: string(environmentJSON),
+		CreatedAt:       now, UpdatedAt: now,
 	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// Only one default per kind, otherwise the form has no deterministic
@@ -194,6 +200,12 @@ func (r *GormRepository) SetImageShared(ctx context.Context, tenantID, id string
 }
 
 func platformImageFromRecord(record PlatformImageRecord) (domain.PlatformImage, error) {
+	var environment domain.ImageEnvironment
+	if record.EnvironmentJSON != "" {
+		if err := json.Unmarshal([]byte(record.EnvironmentJSON), &environment); err != nil {
+			return domain.PlatformImage{}, fmt.Errorf("decode image environment: %w", err)
+		}
+	}
 	var supportedEngines []domain.TrainingEngine
 	if err := json.Unmarshal([]byte(record.SupportedEnginesJSON), &supportedEngines); err != nil {
 		return domain.PlatformImage{}, fmt.Errorf("decode supported engines: %w", err)
@@ -202,7 +214,8 @@ func platformImageFromRecord(record PlatformImageRecord) (domain.PlatformImage, 
 		ID: record.ID, TenantID: valueOrEmpty(record.TenantID), Name: record.Name,
 		Reference: record.Reference, Kind: record.Kind, Description: record.Description,
 		Framework: record.Framework, IsDefault: record.IsDefault, CreatedBy: record.CreatedBy,
-		RayVersion: record.RayVersion, SupportedEngines: append([]domain.TrainingEngine(nil), supportedEngines...),
+		Environment: environment,
+		RayVersion:  record.RayVersion, SupportedEngines: append([]domain.TrainingEngine(nil), supportedEngines...),
 		CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt,
 	}
 	if err := image.Validate(); err != nil {

@@ -57,7 +57,8 @@ ray job submit --address "$RAY_ADDRESS" --working-dir . \\
     "ray-platform.worker-replicas": "2",
     "ray-platform.gpus-per-worker": "8",
     "ray-platform.cpu-per-worker": "32",
-    "ray-platform.memory-per-worker": "128Gi"
+    "ray-platform.memory-per-worker": "128Gi",
+    "ray-platform.queue": "REPLACE_WITH_TEAM_QUEUE"
   }' \\
   -- python3 tools/train.py configs/lidar.yaml --launcher pytorch`
 

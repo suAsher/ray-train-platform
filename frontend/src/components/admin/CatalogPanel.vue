@@ -8,6 +8,7 @@
           </h4>
           <p class="mt-1 text-[11px] text-slate-500">
             用户提交任务和启动调试环境时只能从这里选择。支持显式 tag 或 sha256 digest；生产基线推荐 digest。
+            展开每行可查看环境描述、依赖版本与管理员验证记录。
           </p>
         </div>
         <el-button size="small" icon="Plus" @click="$emit('create-image')">登记镜像</el-button>
@@ -19,6 +20,9 @@
       </el-alert>
 
       <el-table :data="images" class="!bg-transparent text-xs" empty-text="尚未登记任何镜像">
+        <el-table-column type="expand">
+          <template #default="scope"><ImageEnvironment :image="scope.row" /></template>
+        </el-table-column>
         <el-table-column prop="name" label="名称" min-width="150" />
         <el-table-column prop="kind" label="用途" width="110">
           <template #default="scope">
@@ -88,6 +92,7 @@
 </template>
 
 <script setup>
+import ImageEnvironment from '../ImageEnvironment.vue'
 defineProps({
   images: { type: Array, default: () => [] },
   credentials: { type: Array, default: () => [] },

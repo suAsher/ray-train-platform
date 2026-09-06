@@ -23,6 +23,7 @@ type PlatformImage struct {
 	Kind             string           `json:"kind"`
 	Description      string           `json:"description,omitempty"`
 	Framework        string           `json:"framework,omitempty"`
+	Environment      ImageEnvironment `json:"environment"`
 	IsDefault        bool             `json:"isDefault"`
 	RayVersion       string           `json:"rayVersion"`
 	SupportedEngines []TrainingEngine `json:"supportedEngines"`
@@ -54,6 +55,9 @@ func ValidateImageKind(kind string) error {
 }
 
 func (i PlatformImage) Validate() error {
+	if err := i.Environment.Validate(); err != nil {
+		return err
+	}
 	if strings.TrimSpace(i.Name) == "" {
 		return fmt.Errorf("image name is required")
 	}

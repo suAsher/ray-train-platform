@@ -19,6 +19,24 @@ test('image catalogue explains and accepts either a tag or a digest', () => {
   assert.doesNotMatch(quotaManage, /必须带 @sha256 digest/)
 })
 
+test('image request preserves declared environment and description without sharing form objects', () => {
+  const form = { reference: 'other.registry.test/team/train:v1', description: '训练依赖层', environment: { python: '3.11', dependencies: 'numpy==1.26.4' } }
+  const request = buildCreateImageRequest(form)
+  assert.equal(request.reference, form.reference)
+  assert.equal(request.description, form.description)
+  assert.deepEqual(request.environment, form.environment)
+  assert.notStrictEqual(request.environment, form.environment)
+})
+
+test('catalogue and training selector expose declared environment and custom environment help', () => {
+  const step = fs.readFileSync(new URL('./components/job/StepCode.vue', import.meta.url), 'utf8')
+  assert.match(catalogPanel, /ImageEnvironment/)
+  assert.match(step, /ImageEnvironment/)
+  assert.match(step, /\/help#custom-environment/)
+  assert.match(quotaManage, /newImage\.environment/)
+  assert.match(quotaManage, /管理员声明/)
+})
+
 test('super administrators can change an existing image between team and platform scope', () => {
   assert.match(catalogPanel, /edit-scope/)
   assert.match(quotaManage, /updateImageScope/)

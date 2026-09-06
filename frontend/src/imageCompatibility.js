@@ -33,5 +33,7 @@ export function buildCreateImageRequest(form) {
     shared: Boolean(form.shared),
     framework: form.framework,
     isDefault: form.isDefault,
+    ...(form.description !== undefined ? { description: form.description } : {}),
+    ...(form.environment ? { environment: { ...form.environment } } : {}),
   }
 }

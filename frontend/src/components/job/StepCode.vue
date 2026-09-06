@@ -24,6 +24,8 @@
         </el-select>
         <p class="field-help">只显示当前团队可用、管理员已批准的训练环境。正式基线推荐 digest；日常迭代可使用 tag。</p>
         <p v-if="!loading && images.length === 0" class="mt-2 text-xs text-amber-300">还没有可用镜像，请联系团队管理员登记训练环境。</p>
+        <router-link to="/help#custom-environment" class="mt-2 inline-block text-xs text-blue-300">没有合适环境？查看基础镜像、依赖派生与登记指南</router-link>
+        <ImageEnvironment v-if="selectedImage" :image="selectedImage" />
       </div>
 
       <div>
@@ -80,7 +82,8 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
+import ImageEnvironment from '../ImageEnvironment.vue'
 
 import { resolveGitRef } from '../../api/platform'
 
@@ -93,6 +96,7 @@ const props = defineProps({
 })
 
 const resolving = ref(false)
+const selectedImage = computed(() => props.images.find((image) => image.reference === props.form.image))
 const resolveError = ref('')
 
 const clearResolved = () => {

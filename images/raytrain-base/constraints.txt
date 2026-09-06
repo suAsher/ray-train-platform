@@ -1,0 +1,23 @@
+# Platform compatibility contract, not a complete dependency lock.
+# Core versions follow the immutable generic foundation and tested Ray 2.58 stack.
+# Model-specific packages are deliberately not included.
+ray==2.58.0
+torch==2.4.1
+torchvision==0.19.1
+pyarrow==25.0.1
+mlflow-skinny==3.14.0
+tensorboard==2.17.1
+transformers==4.44.2
+datasets==2.21.0
+accelerate==0.34.2
+google-api-core==2.34.0
+googleapis-common-protos==1.75.2
+opentelemetry-api==1.44.0
+opentelemetry-sdk==1.44.0
+opentelemetry-exporter-otlp==1.44.0
+opentelemetry-exporter-otlp-proto-common==1.44.0
+opentelemetry-exporter-otlp-proto-grpc==1.44.0
+opentelemetry-exporter-otlp-proto-http==1.44.0
+opentelemetry-exporter-prometheus==0.65b0
+opentelemetry-proto==1.44.0
+opentelemetry-semantic-conventions==0.65b0

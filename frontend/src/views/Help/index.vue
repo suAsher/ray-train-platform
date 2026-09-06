@@ -84,6 +84,7 @@
 
         <div v-else-if="block.kind === 'code'" class="mt-4">
           <CopyBlock :text="block.text" :label="block.label" />
+          <el-button v-if="block.filename" class="mt-2" size="small" @click="downloadTemplate(block)">下载 {{ block.filename }}</el-button>
         </div>
 
         <el-alert v-else-if="block.kind === 'warning'" class="mt-4 !rounded-xl" type="warning" show-icon :closable="false" :title="block.title">
@@ -133,6 +134,14 @@ import { filterHelpSections, HELP_REVIEWED_AT, HELP_SCOPE, helpSections, renderH
 import { saveBlobAsFile } from '../../checkpointDownload'
 
 const downloading = ref(false)
+
+function downloadTemplate(block) {
+  try {
+    saveBlobAsFile(new Blob([block.text + '\n'], { type: 'text/plain;charset=utf-8' }), block.filename)
+  } catch (error) {
+    ElMessage.error(error.message || '下载模板失败')
+  }
+}
 
 // The file is built from the same sections rendered above rather than fetched,
 // so it always matches what the user just read and needs no server round trip.

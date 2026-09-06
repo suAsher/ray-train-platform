@@ -109,5 +109,43 @@ spk-rayjob jobs --state RUNNING`
   unset SPK_TOKEN
   ray job submit --address ${shellQuote(`${origin}/ray`)} --working-dir . -- python3 train.py
 )`
-  return { install, login, tokenLogin, init, dailyLoop, nativeRay }
+  const customImage = windows ? `# 登录后在已初始化的项目代码目录执行；只列出当前账户可见的登记镜像
+& {
+  spk-rayjob images
+  if ($LASTEXITCODE -ne 0) { throw '读取镜像目录失败' }
+  $spkImage = Read-Host '复制登记镜像的完整地址（含 tag 或 digest）'
+  if ([string]::IsNullOrWhiteSpace($spkImage)) { throw '镜像不能为空' }
+  spk-rayjob submit --image $spkImage --engine ray-ddp --workers 1 --gpus-per-worker 1 --watch
+}` : `# 登录后在已初始化的项目代码目录执行；入口和数据路径沿用 .spk-rayjob.yaml
+(
+  set -e
+  spk-rayjob images
+  printf '复制登记镜像的完整地址（含 tag 或 digest）: '
+  read -r SPK_IMAGE
+  [ -n "$SPK_IMAGE" ] || { echo '镜像不能为空' >&2; exit 1; }
+  spk-rayjob submit --image "$SPK_IMAGE" --engine ray-ddp --workers 1 --gpus-per-worker 1 --watch
+)`
+  const metadataSetup = windows ? `    $spkImage = Read-Host '管理员已登记的完整镜像地址（含 tag 或 digest）'
+    $spkQueue = Read-Host '当前账户有权使用的队列名（向团队管理员确认）'
+    if ([string]::IsNullOrWhiteSpace($spkImage) -or [string]::IsNullOrWhiteSpace($spkQueue)) { throw '镜像和队列不能为空' }
+    $spkMetadata = @{
+      'ray-platform.image' = $spkImage
+      'ray-platform.worker-replicas' = '1'
+      'ray-platform.gpus-per-worker' = '1'
+      'ray-platform.cpu-per-worker' = '8'
+      'ray-platform.memory-per-worker' = '32Gi'
+      'ray-platform.queue' = $spkQueue
+    } | ConvertTo-Json -Compress
+` : `  printf '管理员已登记的完整镜像地址（含 tag 或 digest）: '
+  read -r SPK_IMAGE
+  printf '当前账户有权使用的队列名（向团队管理员确认）: '
+  read -r SPK_QUEUE
+  [ -n "$SPK_IMAGE" ] && [ -n "$SPK_QUEUE" ] || { echo '镜像和队列不能为空' >&2; exit 1; }
+  SPK_METADATA=$(python3 -c 'import json,sys; print(json.dumps({"ray-platform.image":sys.argv[1],"ray-platform.worker-replicas":"1","ray-platform.gpus-per-worker":"1","ray-platform.cpu-per-worker":"8","ray-platform.memory-per-worker":"32Gi","ray-platform.queue":sys.argv[2]}))' "$SPK_IMAGE" "$SPK_QUEUE")
+`
+  const nativeCustomImage = nativeRay.replace(
+    windows ? '    ray job submit' : '  ray job submit',
+    `${metadataSetup}${windows ? '    ' : '  '}ray job submit`,
+  ).replace('--working-dir . --', windows ? '--working-dir . --metadata-json $spkMetadata --' : '--working-dir . --metadata-json "$SPK_METADATA" --')
+  return { install, login, tokenLogin, init, dailyLoop, nativeRay, customImage, nativeCustomImage }
 }

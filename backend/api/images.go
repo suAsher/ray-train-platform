@@ -125,6 +125,7 @@ type createImageRequest struct {
 	Kind             string                   `json:"kind"`
 	Description      string                   `json:"description"`
 	Framework        string                   `json:"framework"`
+	Environment      domain.ImageEnvironment  `json:"environment"`
 	IsDefault        bool                     `json:"isDefault"`
 	Shared           bool                     `json:"shared"`
 	RayVersion       *string                  `json:"rayVersion"`
@@ -174,6 +175,7 @@ func (h *Handler) createImage(c *gin.Context) {
 		Kind:      request.Kind, Description: request.Description, Framework: request.Framework,
 		IsDefault: request.IsDefault, CreatedBy: principal.Subject,
 		RayVersion:       rayVersion,
+		Environment:      request.Environment,
 		SupportedEngines: supportedEngines,
 	}
 	if err := image.Validate(); err != nil {

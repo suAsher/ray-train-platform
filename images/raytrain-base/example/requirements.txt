@@ -1,0 +1,4 @@
+# Only add version-pinned project dependencies here, for example:
+# einops==0.8.1
+# Do not override Ray, Torch, CUDA, Python or platform constraints.
+# Training scripts and configuration are submitted separately, not copied here.

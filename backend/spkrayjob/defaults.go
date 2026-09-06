@@ -15,6 +15,8 @@ type catalogImage struct {
 	Reference        string                  `json:"reference"`
 	Name             string                  `json:"name"`
 	Framework        string                  `json:"framework"`
+	Description      string                  `json:"description,omitempty"`
+	Environment      domain.ImageEnvironment `json:"environment"`
 	IsDefault        bool                    `json:"isDefault"`
 	RayVersion       string                  `json:"rayVersion"`
 	SupportedEngines []domain.TrainingEngine `json:"supportedEngines"`

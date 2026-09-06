@@ -110,6 +110,9 @@
         </p>
       </div>
       <CopyBlock :text="dailyLoopCommand" label="日常循环" />
+      <p class="text-xs leading-6 text-slate-400">换依赖环境时，先用最新版客户端列出已登记镜像，再指定完整地址。下面示例使用 ray-ddp 单卡；先确认镜像支持该引擎、YAML 中入口和数据路径正确。训练代码仍通过提交上传，不需要放进镜像。</p>
+      <CopyBlock :text="commands.customImage" label="spk-rayjob：选择自定义登记镜像" />
+      <router-link to="/help#custom-environment" class="text-xs text-blue-300">没有合适环境？查看基础环境、构建与登记指南</router-link>
     </section>
 
     <section class="panel space-y-5 p-6">
@@ -123,9 +126,13 @@
       <p class="text-xs leading-6 text-slate-400">
         系统选择也适用于本页其余命令（Windows 使用 PowerShell）。本机需要 Python 与 Ray CLI；train.py 在远端镜像中执行。
         PAT 通过隐藏输入读取，不会写入命令历史；执行期间令牌位于当前进程环境，请勿打印环境或共享调试转储。
-        原生提交使用平台配置的默认训练镜像，需要自选镜像时请使用 spk-rayjob。
+        上面的简化提交使用平台配置的默认训练镜像；自选已登记镜像可使用下面的完整 metadata 示例。
         Ray 2.35.0 是此兼容入口的客户端版本，并非所有训练环境的 Ray 版本。
       </p>
+      <CopyBlock :text="commands.nativeCustomImage" label="原生 Ray：自选镜像与完整资源参数" />
+      <router-link to="/help#command-recipes" class="inline-block text-sm text-blue-400 underline">完整命令示例：环境清单、场地训练、日志与续训</router-link>
+      <p class="text-xs leading-6 text-slate-400">原生 metadata 一旦指定镜像，就必须同时提供 worker-replicas、gpus-per-worker、cpu-per-worker、memory-per-worker 和 queue；队列必须是当前账户获准使用的真实队列。示例默认 ray-ddp、1 卡、8 CPU、32Gi 内存，需满足团队配额。镜像支持 tag、digest 和其他仓库地址，但必须先登记且集群可拉取。</p>
+      <p class="text-xs leading-6 text-slate-400">原生入口也支持 platform.training.engine=ray-train 与版本化数据 metadata，但镜像及代码必须符合托管训练契约。不能用 Ray CLI 的 entrypoint 资源参数代替平台 Worker 资源参数。</p>
       <p class="max-w-3xl text-xs leading-5 text-slate-500">
         默认为 1×1 GPU。多机多卡、数据目录选择和断点续训优先使用 <code>spk-rayjob</code>；完整参数见 <code>spk-rayjob --help</code>。
       </p>

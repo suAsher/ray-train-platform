@@ -111,7 +111,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="showAddImageModal" title="登记镜像" width="480px">
+    <el-dialog v-model="showAddImageModal" title="登记镜像" width="min(640px, 95vw)">
       <el-form label-position="top" @submit.prevent>
         <el-form-item label="名称"><el-input v-model="newImage.name" placeholder="例如 BEVFusion CUDA 12.1" /></el-form-item>
         <el-form-item label="用途">
@@ -139,6 +139,12 @@
           <p class="mt-1 text-[11px] text-slate-500">tag 便于日常迭代，每次启动都会重新拉取；正式基线推荐使用不可变 digest。</p>
         </el-form-item>
         <el-form-item label="框架标注"><el-input v-model="newImage.framework" placeholder="可选，例如 PyTorch / BEVFusion" /></el-form-item>
+        <p class="mb-3 text-xs text-amber-300">环境信息是管理员声明，未经平台自动验证；请填写实际版本和检查结果，不要填写仓库密码或令牌。</p>
+        <p class="mb-3 text-xs text-slate-400">支持 harbor.wellspiking.ai 或其他镜像仓库；私有仓库需由集群管理员配置网络、证书及镜像拉取凭据（不是 Git 凭据）。</p>
+        <el-form-item label="环境描述"><el-input v-model="newImage.description" type="textarea" :maxlength="2000" placeholder="环境用途、限制与兼容性" /></el-form-item>
+        <el-form-item v-for="field in imageEnvironmentFields" :key="field.key" :label="field.label">
+          <el-input v-model="newImage.environment[field.key]" :type="field.max > 128 ? 'textarea' : 'text'" :maxlength="field.max" placeholder="未提供；请按镜像实际环境填写" />
+        </el-form-item>
         <div class="flex gap-6">
           <el-checkbox v-model="newImage.isDefault">设为该用途的默认镜像</el-checkbox>
           <el-checkbox v-model="newImage.shared" :disabled="!isSuperAdmin">全平台共享</el-checkbox>
@@ -253,6 +259,7 @@
 </template>
 
 <script setup>
+import { emptyImageEnvironment, imageEnvironmentFields } from '../../imageEnvironment'
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -322,6 +329,8 @@ const storageQuotaGiB = ref(Math.min(runtimeStorageQuotaDefault, storageQuotaMax
 const newTenant = ref({ id: '', name: '', gpuQuota: 8 })
 const newUser = ref({ username: '', password: '', role: 'Engineer', tenantId: '', storageQuotaGiB: Math.min(runtimeStorageQuotaDefault, storageQuotaMaxGiB) })
 const emptyImageForm = () => ({
+  description: '',
+  environment: emptyImageEnvironment(),
   name: '',
   kind: 'training',
   reference: '',
