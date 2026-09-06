@@ -70,3 +70,27 @@ Files: Help view, API wrapper, Markdown reader component, document editor and te
 ## Verification record
 
 2026-09-06: Backend `go test ./...` and `go build ./...` passed. Frontend 324/324 tests and production build passed. New backend help API/store/domain paths have approximately 90% statement coverage; this is not a claim of whole-repository coverage. Local Playwright browser with mocked authenticated APIs verified create/save/publish/edit/history/restore/unpublish, ordinary-user visibility, error/retry and empty/deep-link states. PostgreSQL migration and production integration are not yet exercised; no deployment or training resource changes. Existing layout icon warnings and existing production bundle-size warnings remain outside this feature. Independent backend and frontend reviews completed; offline-link and stale-response findings fixed and retested.
+
+## Production release — 2026-09-06
+
+User subsequently authorized deployment. Deployed source `070e9ea47f6dcfe651c481eed7f72db832b2a8b2`, Helm `ray-platform` revision **174**, at 17:00 CST. The earlier local-only verification status above describes the pre-release stage.
+
+| Component | Tag | Registry digest |
+| --- | --- | --- |
+| backend | release-20260906-02 | sha256:6a594eb991423cac8d8ba7ae86c7e21c363b6819ee2f342ed66eeb6e5ed40936 |
+| frontend | release-20260906-02-node22 | sha256:52b0ad5eedbe1ece9eee96759db1cd426e302268f246df646d26f504d82b83f5 |
+| spk-rayjob (unchanged) | release-20260906-01 | sha256:7178afd9fa260daac24b1d5c55c4922bfd8cdc63c61cf5c15291c8a1b4fc8f6c |
+
+The first frontend build used the mirror's Node 20.16 and emitted an `entities@8` engine warning (requires >=20.19). That image was **not deployed**. Rebuilt frontend with verified Node 22.15 using `NODE_BUILDER_IMAGE=swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/node:22-alpine@sha256:a73e7081874832dc455788ba110e31d1278f2352c043e4191f34093d4d7da60e`; use this override for subsequent builds until the default mirror is refreshed. No repository source edits were made on the build machine.
+
+Verification:
+
+- Fresh frontend 324/324 tests, backend full tests/build, frontend production build passed; production dependency audit reported zero vulnerabilities.
+- Helm server dry-run had exactly two image-line changes. `--reuse-values --atomic --wait` used; no other overlay/configuration changes.
+- PostgreSQL migration **32** applied. Exactly **22** help documents and **22** initial revisions; all published title/category/order/body fields match embedded seed, version1. Both backend replicas started successfully, confirming idempotent seed behavior.
+- Backend/frontend each 2/2 Ready with expected image IDs; existing CLI replicas retain previous digest. `/healthz` and `/help` HTTP200; actual frontend asset includes the document-management UI.
+- Unauthenticated reader/admin/history routes return401. Existing SuperAdmin interactive login verified reader/admin lists and seed history. Invalid create/save/publish/unpublish/restore payloads return400 without modifying documents; verification session logged out. Full mutation lifecycle and ordinary-user rejection were covered locally, not repeated against live content.
+- Running `tenant-local/job-29dc380420222684984b87cf` remained RUNNING; UID, spec, training Pod UIDs/specs and container restart counts unchanged. No RayJob/RayCluster/Pod mutation performed.
+- Private deployment evidence retained on build machine at `/root/help-release-20260906-02/`: original Helm values, database dump (0600), image override/digests, build and upgrade logs. Temporary bundle/dry-run/manifests/verification script removed after checks. Rollback target is revision173; additive help tables can remain on rollback.
+
+User entry: refresh **使用说明 → 管理文档** as SuperAdmin. Save draft, preview, then explicitly publish. Ordinary users and TenantAdmin do not get the management entry.
