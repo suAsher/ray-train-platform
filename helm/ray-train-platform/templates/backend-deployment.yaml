@@ -246,6 +246,8 @@ spec:
               value: {{ .Values.backend.localAuth.sessionHours | quote }}
             - name: BOOTSTRAP_ADMIN_USERNAME
               value: {{ .Values.backend.localAuth.bootstrapUsername | quote }}
+            - name: SPK_RAYJOB_MINIMUM_VERSION
+              value: {{ default "" .Values.backend.spkRayjobMinimumVersion | quote }}
             - name: BOOTSTRAP_ADMIN_TENANT
               value: {{ .Values.backend.localAuth.bootstrapTenant | quote }}
             {{- if .Values.backend.localAuth.bootstrapSecret }}

@@ -41,6 +41,9 @@ func TestSubmitDirectoryRelaysArchiveThroughPlatformThenSubmits(t *testing.T) {
 			writer.WriteHeader(http.StatusOK)
 		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/jobs":
 			steps = append(steps, "submit")
+			if request.Header.Get("X-Spk-Rayjob-Version") != Version {
+				t.Error("CLI release header missing from submission")
+			}
 			var submit struct {
 				Spec   domain.JobSpec          `json:"spec"`
 				Origin domain.SubmissionOrigin `json:"origin"`

@@ -528,14 +528,15 @@ Ray 2.35 的已知风险包括旧 Jobs API/客户端协议差异、较旧 KubeRa
 
 按顺序验收：
 
-1. Node Ready，containerd、CNI 正常。
+1. 新节点先 `kubectl cordon NODE_NAME`，保持不可调度；Node Ready，containerd、CNI 正常。
 2. NVIDIA 驱动、device plugin、DCGM exporter 正常。
 3. 每节点暴露 8 个 `nvidia.com/gpu`。
 4. FSX Agent 与 `csi-fsx-node` Ready。
 5. 节点 DNS 分流已安装并通过检查。
 6. TOS/FSX 前缀 mount smoke 通过。
-7. `/data1`、`/data2` 只登记为未来缓存盘，不直接挂给用户。
-8. 最后才增加生产标签，使其进入训练资源池。
+7. `/data1`、`/data2` 必须是真实独立挂载的缓存盘，准备 `/data1/ray-cache` 与 `/data2/ray-cache` 权限；它们已用于双盘缓存，不是未来预留。运行下面的注册检查，分别合并两套现有供应器配置并人工复核。
+8. 保持 cordon，增加生产标签以完成节点筛选与验收。标签本身不代替存储注册，也不应提前放开调度。
+9. 两套供应器升级、定向双盘挂载/写入/回收验收及资源上限复核全部通过后，最后 `kubectl uncordon NODE_NAME`；再提交 1 卡和多机训练 smoke。
 
 ```bash
 kubectl get node <node> -o wide
@@ -546,7 +547,15 @@ kubectl label node <node> accelerator=nvidia-rtx-4090 --overwrite
 kubectl label node <node> platform.wellspiking.ai/gpu-pool=production --overwrite
 ```
 
-标签完成后更新 Profile 中的任务形状上限，执行平台 `preflight → deploy → verify`，再提交 1 卡和多机 smoke。不要直接手工修改 ClusterQueue 后跳过 Profile，否则下一次 Helm 发布会产生漂移。
+节点仍处于 cordon 时，生成受控审阅材料（目录必须不存在）：
+
+```bash
+bash ops/storage/nvme-cache/register-node.sh --node NODE_NAME --output-dir /tmp/nvme-NODE_NAME-review
+```
+
+脚本读取 `ray-cache-local` namespace 中 `ray-cache-local-data1-config` 和 `ray-cache-local-data2-config` 的现有 `config.json`，分别输出 `data1-values-patch.yaml`、`data2-values-patch.yaml` 和验收报告。JSON 是合法 YAML。每份只增加对应盘路径，保留已有第三、第四及后续节点；不得合并成一个双路径 nodePathMap，也不能用旧双节点静态 Profile 覆盖线上映射。脚本只读取 Kubernetes，做受限远端写删探针，不执行 Helm、打标签或 uncordon；失败不发布可应用补丁。核对集群 context、报告和两份 diff 后，对各自 release 使用 `--reuse-values` 与对应补丁，先 dry-run，再按变更流程升级。配置发生并发变化时重新生成，不能应用旧快照。定向双盘验收须明确绑定新节点，通用 verify 中的旧节点通过不等于新节点已验收。
+
+标签完成后复核 Profile 中的任务形状上限，必要时走平台 `preflight → deploy → verify`。物理池容量由自动配额逻辑重新测量；团队 GPU 配额由管理员按需求手动调整，两者不等价。不要直接手工修改 ClusterQueue 后跳过 Profile，否则下一次 Helm 发布会产生漂移。任务的 workers 在创建时固定，新节点不会自动扩展正在运行的任务；需要更大规模时新建任务或通过托管 checkpoint 续训。不要为了扩容重启现有训练。
 
 ### 6.2 节点维护或下线
 

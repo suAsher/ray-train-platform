@@ -311,9 +311,15 @@ kubectl label node <gpu-node-a> <gpu-node-b> accelerator=nvidia-rtx-4090 --overw
 `preflight → deploy → verify`。生产数据库必须为外部/托管 HA PostgreSQL，Portal
 与 API 维持至少两个副本、HPA、PDB 和软反亲和。
 
+### CLI 发布信息与最低兼容版本
+
+CLI 下载目录的 `release.json`、`SHA256SUMS` 和各平台二进制属于同一次 CLI 构建产物；仅重建并发布 CLI 时更新这组 manifest 与摘要，不因单独更新平台 API/UI 改写 CLI 版本。构建参数 `SPK_RAYJOB_MINIMUM_VERSION` 写入 manifest 的 `minimumVersion`，须与部署配置 `backend.spkRayjobMinimumVersion` 保持一致。默认两者为空，表示不设置强制最低版本；提高最低版本前先确保对应 CLI 下载可用，再部署同一最低版本策略。不要让页面提示的最低版本与 API 实际拒绝规则冲突。
+
 ### 启用 GPU 节点 NVMe 缓存
 
-当前生产已安装两套本地供应器与 StorageClass，分别管理 `/data1/ray-cache` 和 `/data2/ray-cache`。新集群或新 GPU 节点仍必须按以下顺序交付：
+当前生产已安装两套本地供应器与 StorageClass，分别管理 `/data1/ray-cache` 和 `/data2/ray-cache`。下列安装流程用于首次安装。已有集群新增节点请按 [运维指南 6.1](OPERATIONS_GUIDE.md#61-新节点上线) 先 cordon，再用 `register-node.sh` 读取并分别合并两套现有 nodePathMap，保留全部已登记节点。不要重跑静态双节点 Profile 覆盖现网映射；生产标签在 cordon 下设置，双盘和资源验收通过后最后 uncordon。
+
+首次安装顺序：
 
 1. 确认每个 GPU 节点的 `/data1`、`/data2` 是独立、可丢弃的缓存盘。
 2. 执行 `bash ops/storage/nvme-cache/preflight.sh`，再执行 `bash ops/storage/nvme-cache/install.sh`。该安装包含集群级 RBAC，首次安装必须经过审批。

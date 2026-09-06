@@ -5,7 +5,7 @@ import { SUBMIT_MULTINODE, SUBMIT_SMOKE, SUBMIT_STREAMING, RESUME_CODE } from '.
 
 test('every walkthrough includes prerequisites, verification, recovery and valid destinations', () => {
   const routes = new Set(['/job', '/job/create', '/experiments', '/quota', '/devcenter', '/datacache', '/datasets', '/external-submit', '/account-security', '/help'])
-  assert.equal(helpSections.length, 22)
+  assert.equal(helpSections.length, 23)
   for (const section of helpSections) {
     for (const key of ['prerequisites', 'success', 'troubleshooting']) {
       assert.ok(section[key]?.length > 0, `${section.id}: ${key}`)

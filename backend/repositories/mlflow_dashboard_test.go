@@ -44,8 +44,11 @@ func mlflowDashboardTestRepositories(t *testing.T) (*GormRepository, *GormReposi
 	}
 
 	firstDatabase := open()
-	if err := firstDatabase.AutoMigrate(&MLflowDashboardTicketRecord{}, &AuditLogRecord{}, &LocalUserRecord{}); err != nil {
+	if err := firstDatabase.AutoMigrate(&MLflowDashboardTicketRecord{}, &AuditLogRecord{}, &LocalUserRecord{}, &TenantRecord{}); err != nil {
 		t.Fatalf("migrate MLflow dashboard database: %v", err)
+	}
+	if err := firstDatabase.Create(&TenantRecord{ID: "tenant-a", Namespace: "tenant-a"}).Error; err != nil {
+		t.Fatal(err)
 	}
 	return NewGormRepository(firstDatabase), NewGormRepository(open())
 }
@@ -100,6 +103,24 @@ func TestAuthorizeMLflowDashboardPrincipalAllowsOIDCWithoutLocalUserRecord(t *te
 	})
 	if err != nil || !allowed {
 		t.Fatalf("OIDC principal without local account: allowed=%t err=%v", allowed, err)
+	}
+}
+
+func TestAuthorizeMLflowDashboardPrincipalRejectsRetiredTenant(t *testing.T) {
+	for _, authType := range []auth.AuthenticationType{auth.AuthTypeOIDC, auth.AuthTypeDemo, auth.AuthTypeLocal} {
+		t.Run(string(authType), func(t *testing.T) {
+			repository, _ := mlflowDashboardTestRepositories(t)
+			if err := repository.db.Create(&LocalUserRecord{ID: "user-a", Username: "alice", TenantID: "tenant-a"}).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := repository.db.Model(&TenantRecord{}).Where("id = ?", "tenant-a").Update("retired_at", time.Now()).Error; err != nil {
+				t.Fatal(err)
+			}
+			allowed, err := repository.AuthorizeMLflowDashboardPrincipal(context.Background(), auth.Principal{Subject: "user-a", TenantID: "tenant-a", AuthType: authType})
+			if err != nil || allowed {
+				t.Fatalf("retired tenant dashboard authorization: allowed=%t err=%v", allowed, err)
+			}
+		})
 	}
 }
 

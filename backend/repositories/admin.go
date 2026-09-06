@@ -10,16 +10,18 @@ import (
 )
 
 type TenantSummary struct {
-	ID              string    `json:"id"`
-	Name            string    `json:"name"`
-	Namespace       string    `json:"namespace"`
-	QueueName       string    `json:"queueName"`
-	GPUQuotaLimit   int       `json:"gpuQuotaLimit"`
-	GPUQuotaUsed    int       `json:"gpuQuotaUsed"`
-	ActiveJobsCount int       `json:"activeJobsCount"`
-	QueuedJobsCount int       `json:"queuedJobsCount"`
-	MaxPriority     string    `json:"maxPriority"`
-	CreatedAt       time.Time `json:"createdAt"`
+	RetiredAt       *time.Time `json:"retiredAt"`
+	RetiredBy       string     `json:"retiredBy"`
+	ID              string     `json:"id"`
+	Name            string     `json:"name"`
+	Namespace       string     `json:"namespace"`
+	QueueName       string     `json:"queueName"`
+	GPUQuotaLimit   int        `json:"gpuQuotaLimit"`
+	GPUQuotaUsed    int        `json:"gpuQuotaUsed"`
+	ActiveJobsCount int        `json:"activeJobsCount"`
+	QueuedJobsCount int        `json:"queuedJobsCount"`
+	MaxPriority     string     `json:"maxPriority"`
+	CreatedAt       time.Time  `json:"createdAt"`
 }
 
 type UserSummary struct {
@@ -47,6 +49,7 @@ func (r *GormRepository) ListTenantSummaries(ctx context.Context) ([]TenantSumma
 			return nil, fmt.Errorf("calculate tenant %q gpu usage: %w", tenant.ID, err)
 		}
 		summary := TenantSummary{ID: tenant.ID, Name: tenant.Name, Namespace: tenant.Namespace, QueueName: tenant.LocalQueue, GPUQuotaLimit: effectiveGPUQuota(tenant.GPUQuotaLimit), GPUQuotaUsed: used, MaxPriority: tenant.MaxPriority, CreatedAt: tenant.CreatedAt}
+		summary.RetiredAt, summary.RetiredBy = tenant.RetiredAt, tenant.RetiredBy
 		for _, job := range jobs {
 			if job.TenantID != tenant.ID {
 				continue

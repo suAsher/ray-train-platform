@@ -50,6 +50,8 @@ RAY_CANARY_FOUNDATION_IMAGE_ARG="${RAY_CANARY_FOUNDATION_IMAGE:-harbor.wellspiki
 BEVFUSION_BASE_IMAGE_ARG="${BEVFUSION_BASE_IMAGE:-harbor.wellspiking.ai/guofeng.su/bevfusion@sha256:88e9c5045ced1b4b3dc49ddf1f2e22a8c9702574fd8103afcdff83577784a5ee}"
 CODE_SERVER_IMAGE_ARG="${CODE_SERVER_IMAGE:-harbor.wellspiking.ai/hub/codercom/code-server:4.93.1}"
 SPK_RAYJOB_VERSION_ARG="${SPK_RAYJOB_VERSION:-$IMAGE_TAG}"
+SPK_RAYJOB_MINIMUM_VERSION_ARG="${SPK_RAYJOB_MINIMUM_VERSION:-}"
+SPK_RAYJOB_RELEASE_NOTES_ARG="${SPK_RAYJOB_RELEASE_NOTES:-}"
 # Bash 3.2 with `set -u` treats expansion of an empty array as unbound inside
 # an EXIT trap. The empty sentinel keeps early validation failures clean; the
 # cleanup helper skips it and only removes exact mktemp files registered later.
@@ -109,6 +111,8 @@ Environment variables:
   BEVFUSION_BASE_IMAGE=harbor.wellspiking.ai/guofeng.su/bevfusion@sha256:...
   CODE_SERVER_IMAGE=harbor.wellspiking.ai/hub/codercom/code-server:4.93.1
   SPK_RAYJOB_VERSION=<release-version>
+  SPK_RAYJOB_MINIMUM_VERSION=<optional-minimum-compatible-release>
+  SPK_RAYJOB_RELEASE_NOTES=<optional-release-notes>
 
 Build targets:
   backend             Go API/control-plane image
@@ -379,6 +383,8 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
       --build-arg "BEVFUSION_BASE_IMAGE=$BEVFUSION_BASE_IMAGE_ARG"
       --build-arg "CODE_SERVER_IMAGE=$CODE_SERVER_IMAGE_ARG"
       --build-arg "SPK_RAYJOB_VERSION=$SPK_RAYJOB_VERSION_ARG"
+      --build-arg "SPK_RAYJOB_MINIMUM_VERSION=$SPK_RAYJOB_MINIMUM_VERSION_ARG"
+      --build-arg "SPK_RAYJOB_RELEASE_NOTES=$SPK_RAYJOB_RELEASE_NOTES_ARG"
     )
     [ "$docker_target" = "-" ] || build_cmd+=(--target "$docker_target")
     is_true "$NO_CACHE" && build_cmd+=(--no-cache)
@@ -414,6 +420,8 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
       --build-arg "BEVFUSION_BASE_IMAGE=$BEVFUSION_BASE_IMAGE_ARG"
       --build-arg "CODE_SERVER_IMAGE=$CODE_SERVER_IMAGE_ARG"
       --build-arg "SPK_RAYJOB_VERSION=$SPK_RAYJOB_VERSION_ARG"
+      --build-arg "SPK_RAYJOB_MINIMUM_VERSION=$SPK_RAYJOB_MINIMUM_VERSION_ARG"
+      --build-arg "SPK_RAYJOB_RELEASE_NOTES=$SPK_RAYJOB_RELEASE_NOTES_ARG"
     )
     [ "$docker_target" = "-" ] || build_cmd+=(--target "$docker_target")
     is_true "$NO_CACHE" && build_cmd+=(--no-cache)

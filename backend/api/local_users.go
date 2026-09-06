@@ -60,6 +60,24 @@ type localUserResponse struct {
 	StorageQuota *objectstore.PersonalStorageQuota `json:"storageQuota,omitempty"`
 }
 
+// Keep alternate stores compatible while requiring the production repository
+// to provide the target-tenant fence at compile time.
+var _ TenantWriteFence = (*repositories.GormRepository)(nil)
+
+func (h *LocalAuthHandler) withLocalUserTenantWrite(c *gin.Context, tenantID string, write func()) {
+	fence, supported := h.store.(TenantWriteFence)
+	if !supported {
+		write()
+		return
+	}
+	if err := fence.WithActiveTenantWrite(c.Request.Context(), tenantID, func() error {
+		write()
+		return nil
+	}); err != nil && !c.Writer.Written() {
+		writeAuthError(c, http.StatusForbidden, "TENANT_INACTIVE", "the selected team is inactive or unavailable")
+	}
+}
+
 func (h *LocalAuthHandler) administrator(c *gin.Context) (auth.Principal, bool) {
 	principal, ok := auth.PrincipalFromGin(c)
 	if !ok {
@@ -144,42 +162,44 @@ func (h *LocalAuthHandler) createUser(c *gin.Context) {
 	userPrincipal := auth.Principal{
 		Subject: id, Username: username, TenantID: tenantID, Roles: roles, AuthType: auth.AuthTypeLocal,
 	}
-	if h.personalStorageQuotaEnabled {
-		quotaBytes, quotaErr := personalStorageQuotaBytes(request.StorageQuotaGiB, true)
-		if quotaErr != nil {
-			writeAuthError(c, http.StatusBadRequest, "INVALID_STORAGE_QUOTA", "storage quota must be a positive whole number of GiB")
+	h.withLocalUserTenantWrite(c, tenantID, func() {
+		if h.personalStorageQuotaEnabled {
+			quotaBytes, quotaErr := personalStorageQuotaBytes(request.StorageQuotaGiB, true)
+			if quotaErr != nil {
+				writeAuthError(c, http.StatusBadRequest, "INVALID_STORAGE_QUOTA", "storage quota must be a positive whole number of GiB")
+				return
+			}
+			if h.personalStorageQuota == nil {
+				writeAuthError(c, http.StatusServiceUnavailable, "STORAGE_QUOTA_UNAVAILABLE", "personal storage quota management is not configured")
+				return
+			}
+			if _, quotaErr = h.personalStorageQuota.EnsurePersonalQuota(c.Request.Context(), tenantID, username, quotaBytes); quotaErr != nil {
+				h.writePersonalStorageQuotaError(c, quotaErr)
+				return
+			}
+		}
+		if h.personalDataInitializer != nil {
+			if err := h.personalDataInitializer.EnsurePersonalDataSpace(c.Request.Context(), userPrincipal); err != nil {
+				writeAuthError(c, http.StatusServiceUnavailable, "PERSONAL_DATA_SPACE_INITIALIZATION_FAILED", "could not prepare the user's personal data space; correct object storage readiness and try again")
+				return
+			}
+		}
+		if err := h.store.EnsureIdentity(c.Request.Context(), userPrincipal); err != nil {
+			writeAuthError(c, http.StatusInternalServerError, "IDENTITY_PERSIST_FAILED", "could not persist identity")
 			return
 		}
-		if h.personalStorageQuota == nil {
-			writeAuthError(c, http.StatusServiceUnavailable, "STORAGE_QUOTA_UNAVAILABLE", "personal storage quota management is not configured")
+		if err := h.store.CreateLocalUser(c.Request.Context(), user); err != nil {
+			if errors.Is(err, repositories.ErrUsernameTaken) {
+				writeAuthError(c, http.StatusConflict, "USERNAME_TAKEN", "the username is already in use")
+				return
+			}
+			writeAuthError(c, http.StatusInternalServerError, "USER_CREATE_FAILED", "could not create the account")
 			return
 		}
-		if _, quotaErr = h.personalStorageQuota.EnsurePersonalQuota(c.Request.Context(), tenantID, username, quotaBytes); quotaErr != nil {
-			h.writePersonalStorageQuotaError(c, quotaErr)
-			return
-		}
-	}
-	if h.personalDataInitializer != nil {
-		if err := h.personalDataInitializer.EnsurePersonalDataSpace(c.Request.Context(), userPrincipal); err != nil {
-			writeAuthError(c, http.StatusServiceUnavailable, "PERSONAL_DATA_SPACE_INITIALIZATION_FAILED", "could not prepare the user's personal data space; correct object storage readiness and try again")
-			return
-		}
-	}
-	if err := h.store.EnsureIdentity(c.Request.Context(), userPrincipal); err != nil {
-		writeAuthError(c, http.StatusInternalServerError, "IDENTITY_PERSIST_FAILED", "could not persist identity")
-		return
-	}
-	if err := h.store.CreateLocalUser(c.Request.Context(), user); err != nil {
-		if errors.Is(err, repositories.ErrUsernameTaken) {
-			writeAuthError(c, http.StatusConflict, "USERNAME_TAKEN", "the username is already in use")
-			return
-		}
-		writeAuthError(c, http.StatusInternalServerError, "USER_CREATE_FAILED", "could not create the account")
-		return
-	}
-	h.auditLocalAccountAction(c, "local_user.created", user.ID, principal)
-	user.PasswordHash = ""
-	writeAuthSuccess(c, http.StatusCreated, user)
+		h.auditLocalAccountAction(c, "local_user.created", user.ID, principal)
+		user.PasswordHash = ""
+		writeAuthSuccess(c, http.StatusCreated, user)
+	})
 }
 
 // setPersonalStorageQuota changes the native ObjectSet capacity limit. It is
@@ -208,13 +228,15 @@ func (h *LocalAuthHandler) setPersonalStorageQuota(c *gin.Context) {
 	if storageKey == "" {
 		storageKey = target.ID
 	}
-	quota, err := h.personalStorageQuota.SetPersonalQuota(c.Request.Context(), target.TenantID, storageKey, quotaBytes)
-	if err != nil {
-		h.writePersonalStorageQuotaError(c, err)
-		return
-	}
-	h.auditLocalAccountAction(c, "local_user.storage_quota_updated", target.ID, principal)
-	writeAuthSuccess(c, http.StatusOK, quota)
+	h.withLocalUserTenantWrite(c, target.TenantID, func() {
+		quota, err := h.personalStorageQuota.SetPersonalQuota(c.Request.Context(), target.TenantID, storageKey, quotaBytes)
+		if err != nil {
+			h.writePersonalStorageQuotaError(c, err)
+			return
+		}
+		h.auditLocalAccountAction(c, "local_user.storage_quota_updated", target.ID, principal)
+		writeAuthSuccess(c, http.StatusOK, quota)
+	})
 }
 
 // prepareObjectSetBucket performs the only bucket-wide storage-governance
@@ -277,16 +299,18 @@ func (h *LocalAuthHandler) resetUserPassword(c *gin.Context) {
 		writeAuthError(c, http.StatusBadRequest, "WEAK_PASSWORD", err.Error())
 		return
 	}
-	if err := h.store.SetLocalUserPassword(c.Request.Context(), target.ID, hash); err != nil {
-		writeAuthError(c, http.StatusInternalServerError, "PASSWORD_UPDATE_FAILED", "could not reset password")
-		return
-	}
-	if err := h.store.RevokeAllLocalSessions(c.Request.Context(), target.ID, h.now().UTC()); err != nil {
-		writeAuthError(c, http.StatusInternalServerError, "SESSION_REVOKE_FAILED", "could not revoke previous sessions")
-		return
-	}
-	h.auditLocalAccountAction(c, "local_user.password_reset", target.ID, principal)
-	writeAuthSuccess(c, http.StatusOK, map[string]bool{"updated": true})
+	h.withLocalUserTenantWrite(c, target.TenantID, func() {
+		if err := h.store.SetLocalUserPassword(c.Request.Context(), target.ID, hash); err != nil {
+			writeAuthError(c, http.StatusInternalServerError, "PASSWORD_UPDATE_FAILED", "could not reset password")
+			return
+		}
+		if err := h.store.RevokeAllLocalSessions(c.Request.Context(), target.ID, h.now().UTC()); err != nil {
+			writeAuthError(c, http.StatusInternalServerError, "SESSION_REVOKE_FAILED", "could not revoke previous sessions")
+			return
+		}
+		h.auditLocalAccountAction(c, "local_user.password_reset", target.ID, principal)
+		writeAuthSuccess(c, http.StatusOK, map[string]bool{"updated": true})
+	})
 }
 
 type setUserRolesRequest struct {
@@ -332,19 +356,21 @@ func (h *LocalAuthHandler) setUserRoles(c *gin.Context) {
 		writeAuthError(c, http.StatusBadRequest, "INVALID_ROLES", "the super administrator role cannot be granted here")
 		return
 	}
-	if err := setter.SetLocalUserRoles(c.Request.Context(), target.ID, roles); err != nil {
-		writeAuthError(c, http.StatusInternalServerError, "ROLE_UPDATE_FAILED", "could not update account roles")
-		return
-	}
-	// Roles are re-read from the user row on every request, so the change is
-	// already live. Sessions are revoked anyway so a downgraded operator cannot
-	// keep acting from an already-open page.
-	if err := h.store.RevokeAllLocalSessions(c.Request.Context(), target.ID, h.now().UTC()); err != nil {
-		writeAuthError(c, http.StatusInternalServerError, "SESSION_REVOKE_FAILED", "roles updated but sessions could not be revoked")
-		return
-	}
-	h.auditLocalAccountAction(c, "local_user.roles_changed", target.ID, principal)
-	writeAuthSuccess(c, http.StatusOK, map[string]any{"updated": true, "roles": roles})
+	h.withLocalUserTenantWrite(c, target.TenantID, func() {
+		if err := setter.SetLocalUserRoles(c.Request.Context(), target.ID, roles); err != nil {
+			writeAuthError(c, http.StatusInternalServerError, "ROLE_UPDATE_FAILED", "could not update account roles")
+			return
+		}
+		// Roles are re-read from the user row on every request, so the change is
+		// already live. Sessions are revoked anyway so a downgraded operator cannot
+		// keep acting from an already-open page.
+		if err := h.store.RevokeAllLocalSessions(c.Request.Context(), target.ID, h.now().UTC()); err != nil {
+			writeAuthError(c, http.StatusInternalServerError, "SESSION_REVOKE_FAILED", "roles updated but sessions could not be revoked")
+			return
+		}
+		h.auditLocalAccountAction(c, "local_user.roles_changed", target.ID, principal)
+		writeAuthSuccess(c, http.StatusOK, map[string]any{"updated": true, "roles": roles})
+	})
 }
 
 func (h *LocalAuthHandler) disableUser(c *gin.Context) {
@@ -370,24 +396,26 @@ func (h *LocalAuthHandler) decommissionUser(c *gin.Context) {
 		writeAuthError(c, http.StatusServiceUnavailable, "USER_DECOMMISSION_UNAVAILABLE", "account decommissioning is not configured")
 		return
 	}
-	if err := decommissioner.DecommissionLocalUser(c.Request.Context(), target.ID, h.now().UTC()); err != nil {
-		if errors.Is(err, repositories.ErrLocalUserActiveWorkloads) {
-			writeAuthError(c, http.StatusConflict, "USER_HAS_ACTIVE_WORKLOADS", "stop the user's running training jobs and debug environment before deleting the account")
+	h.withLocalUserTenantWrite(c, target.TenantID, func() {
+		if err := decommissioner.DecommissionLocalUser(c.Request.Context(), target.ID, h.now().UTC()); err != nil {
+			if errors.Is(err, repositories.ErrLocalUserActiveWorkloads) {
+				writeAuthError(c, http.StatusConflict, "USER_HAS_ACTIVE_WORKLOADS", "stop the user's running training jobs and debug environment before deleting the account")
+				return
+			}
+			if errors.Is(err, repositories.ErrLocalUserNotFound) {
+				writeAuthError(c, http.StatusNotFound, "LOCAL_USER_NOT_FOUND", "local account was not found")
+				return
+			}
+			writeAuthError(c, http.StatusInternalServerError, "USER_DECOMMISSION_FAILED", "could not decommission the account")
 			return
 		}
-		if errors.Is(err, repositories.ErrLocalUserNotFound) {
-			writeAuthError(c, http.StatusNotFound, "LOCAL_USER_NOT_FOUND", "local account was not found")
+		if err := h.store.RevokeAllLocalSessions(c.Request.Context(), target.ID, h.now().UTC()); err != nil {
+			writeAuthError(c, http.StatusInternalServerError, "SESSION_REVOKE_FAILED", "account was disabled but previous sessions could not be revoked")
 			return
 		}
-		writeAuthError(c, http.StatusInternalServerError, "USER_DECOMMISSION_FAILED", "could not decommission the account")
-		return
-	}
-	if err := h.store.RevokeAllLocalSessions(c.Request.Context(), target.ID, h.now().UTC()); err != nil {
-		writeAuthError(c, http.StatusInternalServerError, "SESSION_REVOKE_FAILED", "account was disabled but previous sessions could not be revoked")
-		return
-	}
-	h.auditLocalAccountAction(c, "local_user.decommissioned", target.ID, principal)
-	writeAuthSuccess(c, http.StatusOK, map[string]bool{"decommissioned": true, "storageRetained": true})
+		h.auditLocalAccountAction(c, "local_user.decommissioned", target.ID, principal)
+		writeAuthSuccess(c, http.StatusOK, map[string]bool{"decommissioned": true, "storageRetained": true})
+	})
 }
 
 func (h *LocalAuthHandler) setUserDisabled(c *gin.Context, disabled bool) {
@@ -395,22 +423,24 @@ func (h *LocalAuthHandler) setUserDisabled(c *gin.Context, disabled bool) {
 	if !ok {
 		return
 	}
-	if err := h.store.SetLocalUserDisabled(c.Request.Context(), target.ID, disabled); err != nil {
-		writeAuthError(c, http.StatusInternalServerError, "USER_STATE_UPDATE_FAILED", "could not update account state")
-		return
-	}
-	if disabled {
-		if err := h.store.RevokeAllLocalSessions(c.Request.Context(), target.ID, h.now().UTC()); err != nil {
-			writeAuthError(c, http.StatusInternalServerError, "SESSION_REVOKE_FAILED", "could not revoke previous sessions")
+	h.withLocalUserTenantWrite(c, target.TenantID, func() {
+		if err := h.store.SetLocalUserDisabled(c.Request.Context(), target.ID, disabled); err != nil {
+			writeAuthError(c, http.StatusInternalServerError, "USER_STATE_UPDATE_FAILED", "could not update account state")
 			return
 		}
-	}
-	action := "local_user.enabled"
-	if disabled {
-		action = "local_user.disabled"
-	}
-	h.auditLocalAccountAction(c, action, target.ID, principal)
-	writeAuthSuccess(c, http.StatusOK, map[string]bool{"disabled": disabled})
+		if disabled {
+			if err := h.store.RevokeAllLocalSessions(c.Request.Context(), target.ID, h.now().UTC()); err != nil {
+				writeAuthError(c, http.StatusInternalServerError, "SESSION_REVOKE_FAILED", "could not revoke previous sessions")
+				return
+			}
+		}
+		action := "local_user.enabled"
+		if disabled {
+			action = "local_user.disabled"
+		}
+		h.auditLocalAccountAction(c, action, target.ID, principal)
+		writeAuthSuccess(c, http.StatusOK, map[string]bool{"disabled": disabled})
+	})
 }
 
 func (h *LocalAuthHandler) manageableUser(c *gin.Context) (auth.Principal, domain.LocalUser, bool) {

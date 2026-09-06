@@ -40,6 +40,8 @@ func RunWithInput(ctx context.Context, arguments []string, stdin io.Reader, stdo
 	switch arguments[0] {
 	case "version":
 		return runVersion(arguments[1:], stdout)
+	case "upgrade":
+		return runUpgrade(ctx, arguments[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		return runHelp(stdout)
 	case "init":
@@ -76,6 +78,7 @@ func RunWithInput(ctx context.Context, arguments []string, stdin io.Reader, stdo
 const helpText = `spk-rayjob — 分布式训练任务命令行客户端
 
 日常用法：
+  spk-rayjob upgrade                 校验并升级当前客户端（使用已保存登录地址）
   spk-rayjob init                    在当前代码目录生成 .spk-rayjob.yaml 提交默认值
   spk-rayjob submit --watch          按默认值提交当前目录并等待结束
   spk-rayjob jobs                    列出我的任务
@@ -293,6 +296,11 @@ func runLogin(ctx context.Context, arguments []string, stdin io.Reader, stdout, 
 	}
 	message += "\n下一步：进入代码目录执行 spk-rayjob submit --watch"
 	_, err := fmt.Fprintln(stdout, message)
+	if err == nil {
+		if client, clientErr := NewClient(ClientOptions{ServerURL: connection.server, Token: token, CAFile: connection.caFile}); clientErr == nil {
+			_ = client.checkRelease(ctx, stderr, false)
+		}
+	}
 	return err
 }
 
@@ -562,6 +570,9 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	}
 	client, err := newCommandClient(connection, getenv, stderr)
 	if err != nil {
+		return err
+	}
+	if err := client.checkRelease(ctx, stderr, true); err != nil {
 		return err
 	}
 	runtimeCapabilities := PlatformRuntimeLimits{}

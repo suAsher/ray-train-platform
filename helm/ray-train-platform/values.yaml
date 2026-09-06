@@ -57,6 +57,9 @@ backend:
   appEnv: production
   oidcRequired: true
   demoMode: false
+  # Optional compatibility floor; leave empty for advisory-only CLI updates.
+  # When enabled, match the minimum in the deployed CLI release.json.
+  spkRayjobMinimumVersion: ""
   # Feature gates for versioned Ray Data training. They stay off until the
   # supporting API and domain components are ready. Dataset publisher rollout
   # is governed independently under datasetPublisher.

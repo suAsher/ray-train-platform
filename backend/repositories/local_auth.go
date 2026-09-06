@@ -95,7 +95,7 @@ func (r *GormRepository) CreateLocalUser(ctx context.Context, user domain.LocalU
 		RolesJSON: string(rolesJSON), PasswordHash: user.PasswordHash, Disabled: user.Disabled,
 		CreatedAt: now, UpdatedAt: now,
 	}
-	if err := r.db.WithContext(ctx).Create(&record).Error; err != nil {
+	if err := r.withActiveIdentityTenant(ctx, user.TenantID, func(tx *gorm.DB) error { return tx.Create(&record).Error }); err != nil {
 		if errors.Is(err, gorm.ErrDuplicatedKey) || strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "UNIQUE constraint") {
 			return ErrUsernameTaken
 		}
@@ -113,6 +113,12 @@ func (r *GormRepository) FindLocalUserByUsername(ctx context.Context, username s
 	if err != nil {
 		return domain.LocalUser{}, fmt.Errorf("find local user: %w", err)
 	}
+	if err := requireActiveIdentityTenant(r.db.WithContext(ctx), record.TenantID, false); err != nil {
+		if errors.Is(err, ErrTenantRetirementBlocked) || errors.Is(err, gorm.ErrRecordNotFound) {
+			return domain.LocalUser{}, ErrLocalUserNotFound
+		}
+		return domain.LocalUser{}, fmt.Errorf("find local user tenant: %w", err)
+	}
 	return r.toLocalUser(record)
 }
 
@@ -124,6 +130,12 @@ func (r *GormRepository) FindLocalUserByID(ctx context.Context, userID string) (
 	}
 	if err != nil {
 		return domain.LocalUser{}, fmt.Errorf("find local user by id: %w", err)
+	}
+	if err := requireActiveIdentityTenant(r.db.WithContext(ctx), record.TenantID, false); err != nil {
+		if errors.Is(err, ErrTenantRetirementBlocked) || errors.Is(err, gorm.ErrRecordNotFound) {
+			return domain.LocalUser{}, ErrLocalUserNotFound
+		}
+		return domain.LocalUser{}, fmt.Errorf("find local user tenant: %w", err)
 	}
 	return r.toLocalUser(record)
 }
@@ -157,7 +169,7 @@ func (r *GormRepository) CountLocalUsers(ctx context.Context) (int64, error) {
 // named it.
 func (r *GormRepository) TenantExists(ctx context.Context, tenantID string) (bool, error) {
 	var count int64
-	if err := r.db.WithContext(ctx).Model(&TenantRecord{}).Where("id = ?", strings.TrimSpace(tenantID)).Count(&count).Error; err != nil {
+	if err := r.db.WithContext(ctx).Model(&TenantRecord{}).Where("id = ? AND retired_at IS NULL", strings.TrimSpace(tenantID)).Count(&count).Error; err != nil {
 		return false, fmt.Errorf("check tenant: %w", err)
 	}
 	return count > 0, nil
@@ -252,7 +264,7 @@ func (r *GormRepository) CreateLocalSession(ctx context.Context, session domain.
 		ID: session.ID, PublicID: session.PublicID, UserID: session.UserID, TenantID: session.TenantID,
 		TokenDigest: digest, ExpiresAt: session.ExpiresAt, CreatedAt: session.CreatedAt,
 	}
-	if err := r.db.WithContext(ctx).Create(&record).Error; err != nil {
+	if err := r.withActiveIdentityTenant(ctx, session.TenantID, func(tx *gorm.DB) error { return tx.Create(&record).Error }); err != nil {
 		return fmt.Errorf("create local session: %w", err)
 	}
 	return nil
@@ -270,8 +282,14 @@ func (r *GormRepository) FindLocalSessionByPublicID(ctx context.Context, publicI
 	if err != nil {
 		return auth.LocalSessionRecord{}, fmt.Errorf("find local session: %w", err)
 	}
+	if err := requireActiveIdentityTenant(r.db.WithContext(ctx), record.TenantID, false); err != nil {
+		if errors.Is(err, ErrTenantRetirementBlocked) || errors.Is(err, gorm.ErrRecordNotFound) {
+			return auth.LocalSessionRecord{}, auth.ErrLocalSessionNotFound
+		}
+		return auth.LocalSessionRecord{}, fmt.Errorf("find local session tenant: %w", err)
+	}
 	var userRecord LocalUserRecord
-	if err := r.db.WithContext(ctx).Where("id = ?", record.UserID).First(&userRecord).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("id = ? AND tenant_id = ? AND decommissioned_at IS NULL", record.UserID, record.TenantID).First(&userRecord).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return auth.LocalSessionRecord{}, auth.ErrLocalSessionNotFound
 		}

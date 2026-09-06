@@ -58,3 +58,15 @@ export function createTenant(payload) {
 export function setTenantGPUQuota(tenantId, gpuQuota) {
   return apiPost(`/api/v1/tenants/${encodeURIComponent(tenantId)}/quota`, { gpuQuota })
 }
+
+export function fetchTenantsForRetirementAudit() {
+  return apiGet('/api/v1/tenants?includeRetired=true')
+}
+
+export function fetchTenantRetirementPreflight(tenantId) {
+  return apiGet(`/api/v1/tenants/${encodeURIComponent(tenantId)}/retirement-preflight`)
+}
+
+export function retireTenant(tenantId, confirmTenantId) {
+  return apiPost(`/api/v1/tenants/${encodeURIComponent(tenantId)}/retire`, { confirmTenantId })
+}

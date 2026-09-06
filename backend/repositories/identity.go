@@ -31,6 +31,8 @@ type TenantRecord struct {
 	CPUQuotaMillis int64 `gorm:"column:cpu_quota_millis"`
 	MemoryBytes    int64 `gorm:"column:memory_quota_bytes"`
 	MaxPriority    string
+	RetiredAt      *time.Time
+	RetiredBy      string
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
@@ -49,6 +51,42 @@ type UserRecord struct {
 func (TenantRecord) TableName() string { return "tenants" }
 func (UserRecord) TableName() string   { return "users" }
 
+// Identity writers acquire the advisory fence before any row lock, matching
+// retirement and the database tenant-write triggers' lock ordering.
+func lockIdentityTenantFence(tx *gorm.DB, tenantID string) error {
+	if tx.Dialector.Name() == "postgres" {
+		return tx.Exec("SELECT pg_advisory_xact_lock_shared(hashtextextended(?, 34781))", tenantID).Error
+	}
+	return nil
+}
+
+func requireActiveIdentityTenant(tx *gorm.DB, tenantID string, lock bool) error {
+	query := tx
+	if lock {
+		query = query.Clauses(clause.Locking{Strength: "SHARE"})
+	}
+	var tenant TenantRecord
+	if err := query.First(&tenant, "id = ?", tenantID).Error; err != nil {
+		return err
+	}
+	if tenant.RetiredAt != nil {
+		return ErrTenantRetirementBlocked
+	}
+	return nil
+}
+
+func (r *GormRepository) withActiveIdentityTenant(ctx context.Context, tenantID string, write func(*gorm.DB) error) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockIdentityTenantFence(tx, tenantID); err != nil {
+			return err
+		}
+		if err := requireActiveIdentityTenant(tx, tenantID, true); err != nil {
+			return err
+		}
+		return write(tx)
+	})
+}
+
 func (r *GormRepository) EnsureIdentity(ctx context.Context, principal auth.Principal) error {
 	if strings.TrimSpace(principal.Subject) == "" || strings.TrimSpace(principal.TenantID) == "" {
 		return fmt.Errorf("authenticated subject and tenant are required")
@@ -61,9 +99,15 @@ func (r *GormRepository) EnsureIdentity(ctx context.Context, principal auth.Prin
 	}
 	now := time.Now().UTC()
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockIdentityTenantFence(tx, principal.TenantID); err != nil {
+			return err
+		}
 		tenant := TenantRecord{ID: principal.TenantID, Name: principal.TenantID, Namespace: namespace, LocalQueue: queue, GPUQuotaLimit: defaultTenantGPUQuota(), MaxPriority: "normal", CreatedAt: now, UpdatedAt: now}
-		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.Assignments(map[string]any{"name": tenant.Name, "namespace": tenant.Namespace, "local_queue": tenant.LocalQueue, "updated_at": now})}).Create(&tenant).Error; err != nil {
+		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoNothing: true}).Create(&tenant).Error; err != nil {
 			return fmt.Errorf("upsert tenant: %w", err)
+		}
+		if err := requireActiveIdentityTenant(tx, principal.TenantID, true); err != nil {
+			return err
 		}
 		user := UserRecord{ID: principal.Subject, OIDCSubject: principal.Subject, Username: principal.Username, Email: principal.Email, TenantID: principal.TenantID, RolesJSON: string(roles), CreatedAt: now, UpdatedAt: now}
 		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "oidc_subject"}}, DoUpdates: clause.Assignments(map[string]any{"username": user.Username, "email": user.Email, "tenant_id": user.TenantID, "roles": user.RolesJSON, "updated_at": now})}).Create(&user).Error; err != nil {

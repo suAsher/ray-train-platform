@@ -77,6 +77,9 @@ func (h *Handler) proxyJobDashboard(c *gin.Context) {
 		h.writeError(c, http.StatusUnauthorized, "DASHBOARD_AUTH_REQUIRED", "open Ray Dashboard from the authenticated training job page")
 		return
 	}
+	if !h.activeProxyTenant(c, tenantID) {
+		return
+	}
 	job, err := h.repository.Get(c.Request.Context(), tenantID, c.Param("id"))
 	if err != nil || job.UserID != subject {
 		h.writeError(c, http.StatusForbidden, "DASHBOARD_FORBIDDEN", "Ray Dashboard access is not allowed for this job")
@@ -133,6 +136,9 @@ func (h *Handler) exchangeJobDashboardAccess(c *gin.Context) {
 	token := c.Query("access_token")
 	if len(h.workspacePepper) == 0 || domain.VerifyJobDashboardAccessToken(token, tenantID, jobID, subject, h.workspacePepper, time.Now()) != nil {
 		h.writeError(c, http.StatusUnauthorized, "DASHBOARD_TOKEN_INVALID", "Ray Dashboard access link is invalid or expired")
+		return
+	}
+	if !h.activeProxyTenant(c, tenantID) {
 		return
 	}
 	job, err := h.repository.Get(c.Request.Context(), tenantID, jobID)

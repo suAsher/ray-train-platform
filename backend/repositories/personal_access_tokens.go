@@ -49,7 +49,7 @@ func (r *GormRepository) CreatePersonalAccessToken(ctx context.Context, token do
 		TokenDigest: digest, ScopesJSON: string(scopesJSON), ExpiresAt: token.ExpiresAt,
 		LastUsedAt: token.LastUsedAt, RevokedAt: token.RevokedAt, CreatedAt: token.CreatedAt,
 	}
-	if err := r.db.WithContext(ctx).Create(&record).Error; err != nil {
+	if err := r.withActiveIdentityTenant(ctx, token.TenantID, func(tx *gorm.DB) error { return tx.Create(&record).Error }); err != nil {
 		return fmt.Errorf("create personal access token: %w", err)
 	}
 	return nil
@@ -78,6 +78,12 @@ func (r *GormRepository) FindPATByPublicID(ctx context.Context, publicID string)
 			return auth.PATRecord{}, auth.ErrPATNotFound
 		}
 		return auth.PATRecord{}, fmt.Errorf("find personal access token: %w", err)
+	}
+	if err := requireActiveIdentityTenant(r.db.WithContext(ctx), token.TenantID, false); err != nil {
+		if errors.Is(err, ErrTenantRetirementBlocked) || errors.Is(err, gorm.ErrRecordNotFound) {
+			return auth.PATRecord{}, auth.ErrPATNotFound
+		}
+		return auth.PATRecord{}, fmt.Errorf("find personal access token tenant: %w", err)
 	}
 	var user UserRecord
 	if err := r.db.WithContext(ctx).Where("id = ? AND tenant_id = ?", token.UserID, token.TenantID).First(&user).Error; err != nil {

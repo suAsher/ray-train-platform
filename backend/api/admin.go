@@ -19,6 +19,8 @@ type AdminStore interface {
 }
 
 func (h *Handler) RegisterAdminRoutes(group *gin.RouterGroup) {
+	group.GET("/tenants/:id/retirement-preflight", h.tenantRetirementPreflight)
+	group.POST("/tenants/:id/retire", h.retireTenant)
 	group.GET("/gpu-allocations", h.listGPUAllocations)
 	group.GET("/tenants", h.listTenants)
 	group.POST("/tenants", h.createTenant)
@@ -140,6 +142,17 @@ func (h *Handler) createTenant(c *gin.Context) {
 	if tenant.Name == "" {
 		tenant.Name = tenantID
 	}
+	if fence, ok := h.admin.(TenantWriteFence); ok {
+		err := fence.WithActiveTenantWrite(c.Request.Context(), tenant.ID, func() error { h.provisionTenant(c, tenant); return nil })
+		if err != nil {
+			h.writeError(c, http.StatusConflict, "TENANT_INACTIVE", "team is inactive or unavailable")
+		}
+		return
+	}
+	h.provisionTenant(c, tenant)
+}
+
+func (h *Handler) provisionTenant(c *gin.Context, tenant domain.Tenant) {
 	if err := h.admin.CreateTenant(c.Request.Context(), tenant); err != nil {
 		h.writeError(c, http.StatusConflict, "TENANT_CREATE_FAILED", err.Error())
 		return
@@ -147,11 +160,11 @@ func (h *Handler) createTenant(c *gin.Context) {
 	// Provision the cluster side too; without a namespace and LocalQueue the
 	// tenant cannot run anything.
 	if h.kubernetes != nil {
-		if err := h.kubernetes.EnsureNamespace(c.Request.Context(), namespace, tenantID); err != nil {
+		if err := h.kubernetes.EnsureNamespace(c.Request.Context(), tenant.Namespace, tenant.ID); err != nil {
 			h.writeError(c, http.StatusBadGateway, "NAMESPACE_CREATE_FAILED", "tenant saved but its namespace could not be created")
 			return
 		}
-		if err := h.kubernetes.EnsureLocalQueue(c.Request.Context(), namespace, tenant.LocalQueue, h.clusterQueue); err != nil {
+		if err := h.kubernetes.EnsureLocalQueue(c.Request.Context(), tenant.Namespace, tenant.LocalQueue, h.clusterQueue); err != nil {
 			h.writeError(c, http.StatusBadGateway, "QUEUE_PROVISION_FAILED", "tenant saved but its queue could not be created")
 			return
 		}
@@ -164,6 +177,11 @@ func (h *Handler) listTenants(c *gin.Context) {
 	if !ok {
 		return
 	}
+	includeRetired := c.Query("includeRetired") == "true"
+	if includeRetired && !principal.HasRole(domain.RoleSuperAdmin) {
+		h.writeError(c, http.StatusForbidden, "FORBIDDEN", "super administrator role is required to include retired teams")
+		return
+	}
 	if h.admin == nil {
 		h.writeError(c, http.StatusServiceUnavailable, "ADMIN_UNAVAILABLE", "admin data is not configured")
 		return
@@ -172,6 +190,15 @@ func (h *Handler) listTenants(c *gin.Context) {
 	if err != nil {
 		h.writeError(c, http.StatusInternalServerError, "TENANT_LIST_FAILED", "could not list tenants")
 		return
+	}
+	if !includeRetired {
+		active := make([]repositories.TenantSummary, 0, len(items))
+		for _, item := range items {
+			if item.RetiredAt == nil {
+				active = append(active, item)
+			}
+		}
+		items = active
 	}
 	if !principal.HasRole("SuperAdmin") {
 		filtered := make([]repositories.TenantSummary, 0, 1)

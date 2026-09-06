@@ -38,6 +38,7 @@ type globalJobReader interface {
 }
 
 type Handler struct {
+	bootstrapTenant          string
 	helpDocuments            HelpDocumentStore
 	repository               JobRepository
 	logs                     LogProvider
@@ -122,6 +123,7 @@ type ExperimentProvider interface {
 }
 
 type Options struct {
+	BootstrapTenant          string
 	AllowAnonymous           bool
 	Logs                     LogProvider
 	Metrics                  MetricsProvider
@@ -191,6 +193,7 @@ func NewHandler(repository JobRepository, options Options) *Handler {
 	}
 	handler := &Handler{repository: repository, logs: options.Logs, metrics: options.Metrics, experiments: options.Experiments, allowAnonymous: options.AllowAnonymous, imageAllowlist: append([]string(nil), options.ImageAllowlist...), gitAllowlist: append([]string(nil), options.GitAllowlist...), workspaces: options.Workspaces, kubernetes: options.Kubernetes, workspaceImage: options.WorkspaceImage, rayVersion: options.RayVersion, serviceAccount: options.ServiceAccount, imagePullSecrets: append([]string(nil), options.ImagePullSecrets...), platformNamespace: strings.TrimSpace(options.PlatformNamespace), idcClaim: options.IDCClaim, idcMountPath: options.IDCMountPath, clusterQueue: options.KueueClusterQueue, admin: options.Admin, gpuAllocations: options.GPUAllocations, quota: options.Quota, workspacePepper: append([]byte(nil), options.WorkspacePepper...), trainingNodeSelector: options.TrainingNodeSelector, images: options.Images, gitCredentials: options.GitCredentials, storageAssets: options.StorageAssets, datasets: options.Datasets, datasetPublications: options.DatasetPublications, datasetInternalPrefix: strings.TrimSuffix(strings.TrimSpace(options.DatasetInternalPrefix), "/"), datasetVersioningEnabled: options.DatasetVersioningEnabled, rayDataStreamingEnabled: options.RayDataStreamingEnabled, dataSpaces: options.DataSpaces, dataSpacesEnabled: options.DataSpacesEnabled, dataSpacesFSXAttrs: options.DataSpacesFSXAttributes, dataSpacesCapacity: options.DataSpacesMountCapacity, dataSpacesPublicRoot: strings.TrimSpace(options.DataSpacesPublicRoot), idcDataSpacesEnabled: options.IDCDataSpacesEnabled, idcDataSpacesCapacity: options.IDCDataSpacesMountCapacity, idcDataSpaceSources: idcSources, directoryLister: options.DirectoryLister, directoryInitializer: options.DirectoryInitializer, dataObjectStore: options.DataObjectStore, dataSpaceUploads: options.DataSpaceUploads, workspaceSnapshotStore: options.WorkspaceSnapshotStore, workspaceSnapshots: options.WorkspaceSnapshots, artifactLister: options.ArtifactLister, artifactReader: options.ArtifactReader, gitCredentialTester: options.GitCredentialTester, gitRefResolver: options.GitRefResolver, newID: newJobID, mlflowDashboardEnabled: options.MLflowDashboardEnabled, mlflowDashboardStore: options.MLflowDashboardStore, mlflowTrackingURL: strings.TrimSpace(options.MLflowTrackingURL), mlflowPublicOrigin: strings.TrimSpace(options.MLflowPublicOrigin), mlflowDashboardPepper: append([]byte(nil), options.MLflowDashboardPepper...), mlflowDashboardTTL: options.MLflowDashboardSessionTTL, mlflowDashboardNow: options.MLflowDashboardNow, mlflowDashboardRandom: options.MLflowDashboardRandom}
 	handler.dataMultipartStore, _ = options.DataObjectStore.(objectstore.DataSpaceMultipartStore)
+	handler.bootstrapTenant = strings.TrimSpace(options.BootstrapTenant)
 	handler.helpDocuments, _ = repository.(HelpDocumentStore)
 	if handler.dataSpaceUploads == nil {
 		handler.dataSpaceUploads, _ = repository.(DataSpaceUploadRepository)

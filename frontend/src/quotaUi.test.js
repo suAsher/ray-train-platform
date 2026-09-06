@@ -28,7 +28,7 @@ test('quota management views use role-aware copy while quota editing stays Super
   assert.match(tenantPanelSource, /copy\.panelSummary/)
   assert.match(tenantPanelSource, />管理员分配额度</)
   assert.match(tenantPanelSource, />已使用</)
-  assert.match(tenantPanelSource, /v-if="isSuperAdmin"[^>]*>修改配额/)
+  assert.match(tenantPanelSource, /<div v-if="isSuperAdmin && !tenant\.retiredAt"[^>]*>\s*<el-button[^>]*@click="openQuota\(tenant\)"[^>]*>修改配额/)
   assert.doesNotMatch(`${quotaManageSource}\n${tenantPanelSource}`, /有效配额|当前可用|集群当前可分配/)
 })
 

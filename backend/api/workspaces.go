@@ -435,6 +435,9 @@ func (h *Handler) proxyWorkspacePort(c *gin.Context, port int, stripPrefix bool)
 		h.writeError(c, http.StatusNotFound, "WORKSPACE_NOT_FOUND", "debug workspace was not found")
 		return
 	}
+	if !h.activeProxyTenant(c, workspace.TenantID) {
+		return
+	}
 	target, err := url.Parse(h.upstreamForPort(workspace, port))
 	if err != nil {
 		h.writeError(c, http.StatusBadGateway, "WORKSPACE_PROXY_FAILED", "invalid workspace service address")

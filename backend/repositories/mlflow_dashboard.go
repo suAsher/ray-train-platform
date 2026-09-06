@@ -12,6 +12,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"ray-train-platform-backend/auth"
 )
@@ -60,6 +61,12 @@ type MLflowAuditEvent struct {
 func (r *GormRepository) AuthorizeMLflowDashboardPrincipal(ctx context.Context, principal auth.Principal) (bool, error) {
 	if strings.TrimSpace(principal.Subject) == "" || strings.TrimSpace(principal.TenantID) == "" {
 		return false, nil
+	}
+	if err := requireActiveIdentityTenant(r.db.WithContext(ctx), principal.TenantID, false); err != nil {
+		if errors.Is(err, ErrTenantRetirementBlocked) || errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("verify MLflow dashboard tenant: %w", err)
 	}
 	switch principal.AuthType {
 	case auth.AuthTypeOIDC, auth.AuthTypeDemo:

@@ -44,6 +44,21 @@
       </el-radio-group>
 
       <CopyBlock :text="installCommands[platform]" label="安装命令" />
+      <div class="rounded-xl border border-slate-700 p-4" aria-live="polite">
+        <p class="text-xs text-amber-300">Windows 本次仍需使用安装命令手动更新；自更新替换待实机验收后开放。</p>
+        <p v-if="releaseLoading" class="text-sm text-slate-400">正在检查客户端发布版本…</p>
+        <template v-else-if="releaseInfo">
+          <p class="text-sm text-slate-200">最新客户端：{{ releaseInfo.latestVersion }}</p>
+          <p class="mt-1 text-xs text-slate-400">最低兼容版本：{{ releaseInfo.minimumVersion || '未设置强制升级要求' }}</p>
+          <p class="mt-2 whitespace-pre-wrap text-xs text-slate-300">{{ releaseInfo.releaseNotes || '本次未提供更新说明' }}</p>
+        </template>
+        <p v-else class="text-xs text-amber-300">{{ releaseError }}</p>
+        <el-button size="small" link :disabled="releaseLoading" @click="loadRelease">重新检查版本</el-button>
+      </div>
+      <CopyBlock text="spk-rayjob version
+spk-rayjob upgrade
+spk-rayjob login-check" label="新版客户端主动升级" />
+      <p class="text-xs leading-6 text-slate-400">旧客户端没有 upgrade 命令时，先重新执行本页安装命令一次。新版在登录和提交时提示更新，不会自动覆盖程序；普通更新不阻断兼容提交，只有不兼容版本需要先升级。平台前后端发布不等于客户端必须升级。</p>
       <p class="text-xs leading-6 text-slate-400">
         支持 Linux x86_64、Apple Silicon macOS、Windows x64；Intel Mac / Linux ARM 暂无对应下载，请联系管理员。
         升级时重新执行本页安装命令即可，它会同时下载二进制与 SHA256SUMS 并自动校验；无需另行手动下载清单。
@@ -159,11 +174,35 @@
 <script setup>
 import { ElMessage } from 'element-plus'
 
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 
 import CopyBlock from '../../components/CopyBlock.vue'
 import { copyToClipboard } from '../../clipboard'
 import { externalSubmitCommands } from '../../help/externalSubmit'
+import { fetchCLIRelease } from '../../cliRelease.js'
+
+const releaseInfo = ref(null)
+const releaseLoading = ref(false)
+const releaseError = ref('尚未检查客户端版本')
+let releaseController
+let releaseGeneration = 0
+const loadRelease = async () => {
+  const generation = ++releaseGeneration
+  releaseController?.abort()
+  releaseController = new AbortController()
+  releaseLoading.value = true
+  releaseInfo.value = null
+  try {
+    const info = await fetchCLIRelease(fetch, releaseController.signal)
+    if (generation === releaseGeneration) releaseInfo.value = info
+  } catch {
+    if (generation === releaseGeneration) releaseError.value = '暂时无法检查版本；不代表客户端已是最新。可重试或使用安装命令。'
+  } finally {
+    if (generation === releaseGeneration) releaseLoading.value = false
+  }
+}
+onMounted(loadRelease)
+onBeforeUnmount(() => { releaseGeneration++; releaseController?.abort() })
 
 const platformURL = window.location.origin
 const checksums = `${platformURL}/downloads/spk-rayjob/SHA256SUMS`

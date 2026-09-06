@@ -27,6 +27,7 @@ import {
 import { walkthroughs, uploadTopic } from './topicWalkthroughs.js'
 import { environmentTopic } from './environmentTopic.js'
 import { commandRecipes } from './commandRecipes.js'
+import { cliOnboarding } from './cliOnboarding.js'
 
 const topics = [
   {
@@ -557,7 +558,7 @@ const topics = [
   },
 ]
 
-export const helpSections = [...topics, uploadTopic, environmentTopic, commandRecipes].map((section) => ({
+export const helpSections = [...topics, uploadTopic, environmentTopic, commandRecipes, cliOnboarding].map((section) => ({
   ...section,
   ...walkthroughs[section.id],
 }))

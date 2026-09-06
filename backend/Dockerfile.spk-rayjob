@@ -9,6 +9,8 @@ ENV PATH=/usr/local/go/bin:$PATH
 ARG GOPROXY=https://goproxy.cn,direct
 ARG APK_MIRROR=https://repo.huaweicloud.com/repository/alpine
 ARG SPK_RAYJOB_VERSION=dev
+ARG SPK_RAYJOB_MINIMUM_VERSION=
+ARG SPK_RAYJOB_RELEASE_NOTES=
 
 WORKDIR /src
 
@@ -24,6 +26,7 @@ RUN mkdir -p /out \
   && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -X ray-train-platform-backend/spkrayjob.Version=${SPK_RAYJOB_VERSION}" -o /out/spk-rayjob-linux-amd64 ./cmd/spk-rayjob \
   && CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w -X ray-train-platform-backend/spkrayjob.Version=${SPK_RAYJOB_VERSION}" -o /out/spk-rayjob-darwin-arm64 ./cmd/spk-rayjob \
   && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w -X ray-train-platform-backend/spkrayjob.Version=${SPK_RAYJOB_VERSION}" -o /out/spk-rayjob-windows-amd64.exe ./cmd/spk-rayjob \
+  && go run ./cmd/spk-rayjob-release --dir /out --version "$SPK_RAYJOB_VERSION" --minimum-version "$SPK_RAYJOB_MINIMUM_VERSION" --release-notes "$SPK_RAYJOB_RELEASE_NOTES" > /out/release.json \
   && cd /out && sha256sum spk-rayjob-* > SHA256SUMS
 
 FROM ${NGINX_RUNTIME_IMAGE} AS release

@@ -15,6 +15,14 @@ metadata:
     {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: api
 rules:
+  # Retirement preflight inspects controllers as well as Pods. Read-only;
+  # retiring a team never grants deletion of its workloads or storage.
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list"]
   - apiGroups: ["ray.io"]
     resources: ["rayjobs", "rayclusters"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

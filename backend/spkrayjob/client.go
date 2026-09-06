@@ -188,6 +188,7 @@ func LoginWithLocalCredentials(ctx context.Context, serverURL, username, passwor
 		return localLogin{}, fmt.Errorf("create platform login request")
 	}
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Spk-Rayjob-Version", Version)
 	response, err := client.Do(request)
 	if err != nil {
 		return localLogin{}, fmt.Errorf("platform login request failed")
@@ -333,6 +334,7 @@ func (client *Client) relayArchive(ctx context.Context, archive Archive, package
 	}
 	request.ContentLength = archive.SizeBytes
 	request.Header.Set("Authorization", "Bearer "+client.token)
+	request.Header.Set("X-Spk-Rayjob-Version", Version)
 	request.Header.Set("Content-Type", "application/zip")
 	client.debugf("PUT %s", redactedURL(target))
 
@@ -423,6 +425,7 @@ func (client *Client) resolveRelayedArtifact(ctx context.Context, packageName st
 		return Artifact{}, false, fmt.Errorf("create platform source lookup request")
 	}
 	request.Header.Set("Authorization", "Bearer "+client.token)
+	request.Header.Set("X-Spk-Rayjob-Version", Version)
 	client.debugf("HEAD %s", redactedURL(target))
 	response, err := client.httpClient.Do(request)
 	if err != nil {
@@ -751,6 +754,7 @@ func (client *Client) request(ctx context.Context, method, relativePath string, 
 	}
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Authorization", "Bearer "+client.token)
+	request.Header.Set("X-Spk-Rayjob-Version", Version)
 	if len(body) > 0 {
 		request.Header.Set("Content-Type", "application/json")
 	}

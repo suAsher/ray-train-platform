@@ -23,6 +23,7 @@ var (
 )
 
 type Config struct {
+	SPKRayjobMinimumVersion                  string
 	AppEnv                                   string
 	HTTPAddr                                 string
 	DatabaseURL                              string
@@ -389,6 +390,12 @@ func Load() (Config, error) {
 		}
 	}
 	cfg.BootstrapAdminUsername = envOr("BOOTSTRAP_ADMIN_USERNAME", "admin")
+	cfg.SPKRayjobMinimumVersion = strings.TrimSpace(os.Getenv("SPK_RAYJOB_MINIMUM_VERSION"))
+	if cfg.SPKRayjobMinimumVersion != "" {
+		if _, err := domain.CompareCLIReleaseVersions(cfg.SPKRayjobMinimumVersion, cfg.SPKRayjobMinimumVersion); err != nil {
+			return Config{}, fmt.Errorf("SPK_RAYJOB_MINIMUM_VERSION must be a formal release version: %w", err)
+		}
+	}
 	cfg.BootstrapAdminPassword = os.Getenv("BOOTSTRAP_ADMIN_PASSWORD")
 	cfg.BootstrapAdminTenant = envOr("BOOTSTRAP_ADMIN_TENANT", "local")
 	if cfg.SourceArtifactsEnabled, err = parseBool("SOURCE_ARTIFACTS_ENABLED", cfg.AppEnv == "production"); err != nil {
