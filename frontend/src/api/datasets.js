@@ -1,4 +1,4 @@
-import { apiGet, apiPost } from './client.js'
+import { apiDelete, apiGet, apiPost } from './client.js'
 import { datasetPath, datasetPublicationPath, datasetVersionPath, datasetVersionsPath } from './datasetPaths.js'
 
 export { datasetPath, datasetPublicationPath, datasetVersionPath, datasetVersionsPath } from './datasetPaths.js'
@@ -17,6 +17,14 @@ export function fetchDatasetVersions(datasetId) {
 
 export function fetchDatasetPublication(datasetId, versionId) {
   return apiGet(`${datasetVersionPath(datasetId, versionId)}/publication`)
+}
+
+export function deleteFailedDatasetVersion(datasetId, versionId) {
+  return apiDelete(datasetVersionPath(datasetId, versionId))
+}
+
+export function deleteFailedDatasetPublication(datasetId, versionId) {
+  return apiDelete(`${datasetVersionPath(datasetId, versionId)}/publication`)
 }
 
 export function fetchLatestDatasetVersion(datasetId) {

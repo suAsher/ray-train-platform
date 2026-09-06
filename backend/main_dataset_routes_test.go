@@ -142,6 +142,15 @@ func TestDatasetCatalogPATCanReadButCannotUseInteractiveManagementRoutes(t *test
 	if mutationResponse.Code != http.StatusForbidden || len(store.created) != 0 {
 		t.Fatalf("PAT mutation status=%d created=%+v body=%s", mutationResponse.Code, store.created, mutationResponse.Body.String())
 	}
+	for _, suffix := range []string{"", "/publication"} {
+		request := httptest.NewRequest(http.MethodDelete, "/api/v1/datasets/public-data/versions/failed-version"+suffix, nil)
+		request.Header.Set("Authorization", "Bearer rpt_test-token")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("PAT cleanup %s status=%d", suffix, response.Code)
+		}
+	}
 
 	writeOnlyPAT := &mainDatasetPATVerifier{principal: pat.principal, scopes: []string{domain.PATScopeJobsWrite}}
 	writeOnlyRouter := mainDatasetRouter(store, writeOnlyPAT, nil)

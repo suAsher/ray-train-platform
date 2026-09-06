@@ -8,7 +8,7 @@
           从已发布的逻辑数据集中选择不可变版本。训练记录固定版本与摘要，后续数据更新不会改变已提交的任务。
         </p>
       </div>
-      <el-button :loading="loading" @click="loadPage">刷新</el-button>
+      <el-button :loading="loading" :disabled="cleanupBusy" @click="loadPage">刷新</el-button>
     </section>
 
     <section v-if="loading && !capabilityChecked" class="rounded-2xl border border-slate-800 bg-[#131826] p-6">
@@ -60,7 +60,7 @@
               <el-button
                 v-if="canPublishDataset(row.dataset)"
                 :loading="publishing[row.dataset.id] === true"
-                :disabled="!datasetCapabilities.publisherEnabled"
+                :disabled="!datasetCapabilities.publisherEnabled || cleanupBusy"
                 @click="publishDataset(row.dataset)"
               >
                 发布新版本
@@ -77,7 +77,7 @@
 
           <el-alert v-if="row.versionError" class="mt-5" type="warning" :closable="false">
             <template #title>{{ row.versionError }}</template>
-            <el-button class="mt-3" size="small" @click="retryDatasetVersions(row.dataset)">重试读取版本</el-button>
+            <el-button class="mt-3" size="small" :disabled="cleanupBusy || loading" @click="retryDatasetVersions(row.dataset)">重试读取版本</el-button>
           </el-alert>
 
           <div v-else-if="row.latestReady" class="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -118,10 +118,33 @@
               <h3 class="text-sm font-semibold text-slate-200">版本记录</h3>
               <p class="mt-1 text-xs text-slate-500">只有 READY 具体版本可直接提交；其他状态仅用于了解发布进度。</p>
             </div>
-            <span class="text-xs text-slate-500">{{ row.versions.length }} 个版本</span>
+            <div class="flex flex-wrap items-center gap-3">
+              <span class="text-xs text-slate-500">{{ row.versions.length }} 个版本 · {{ row.failedCount }} 个失败</span>
+              <el-switch v-model="showFailed" active-text="显示失败版本" :disabled="cleanupBusy" />
+              <el-button v-if="canManage(row.dataset) && showFailed" type="danger" plain size="small"
+                :disabled="loading || cleanupBusy || !selectedIds(row.dataset).length"
+                @click="removeFailed(row.dataset, selectedIds(row.dataset))">
+                批量移除失败版本（{{ selectedIds(row.dataset).length }}/100）
+              </el-button>
+            </div>
           </div>
 
-          <el-table :data="row.versionRows" class="!bg-transparent text-xs" empty-text="尚无版本记录">
+          <el-alert v-if="cleanupErrors[row.dataset.id]?.length" type="warning" :closable="false" class="mb-3">
+            <template #title>部分记录未移除，可核对原因后重试</template>
+            <p v-for="failure in cleanupErrors[row.dataset.id]" :key="failure.id" class="break-all text-xs">
+              {{ failure.id }}：{{ failure.reason }}
+            </p>
+          </el-alert>
+          <el-table :data="row.versionRows" class="!bg-transparent text-xs" :empty-text="!showFailed && row.failedCount ? '失败版本已收起，可开启“显示失败版本”查看' : '尚无版本记录'">
+            <el-table-column v-if="canManage(row.dataset) && showFailed" label="选择" width="65">
+              <template #default="{ row: version }">
+                <el-checkbox v-if="version.state === 'FAILED'"
+                  :model-value="selectedIds(row.dataset).includes(version.id)"
+                  :aria-label="`选择失败版本 ${version.version}`"
+                  :disabled="cleanupBusy || loading || (!selectedIds(row.dataset).includes(version.id) && selectedIds(row.dataset).length >= 100)"
+                  @change="value => selectVersion(row.dataset, version.id, value)" />
+              </template>
+            </el-table-column>
             <el-table-column label="版本 / 摘要" min-width="220">
               <template #default="{ row: version }">
                 <p class="font-medium text-slate-200">{{ version.version }}</p>
@@ -175,7 +198,7 @@
                 <span v-else class="text-slate-600">—</span>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="120" fixed="right" align="right">
+            <el-table-column label="操作" width="170" fixed="right" align="right">
               <template #default="{ row: version }">
                 <el-button
                   v-if="version.state === 'READY'"
@@ -186,6 +209,11 @@
                 >
                   使用此版本
                 </el-button>
+                <template v-else-if="version.state === 'FAILED' && canManage(row.dataset)">
+                  <el-button type="danger" link size="small" :disabled="cleanupBusy || loading" @click="removeFailed(row.dataset, [version.id])">移除失败版本</el-button>
+                  <el-button v-if="publicationFor(version.id)?.state === 'FAILED'" type="danger" link size="small"
+                    :disabled="cleanupBusy || loading" @click="removeFailed(row.dataset, [version.id], true)">移除失败发布记录</el-button>
+                </template>
                 <span v-else class="text-xs text-slate-600">不可提交</span>
               </template>
             </el-table-column>
@@ -201,7 +229,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
-import { fetchDatasetPublication, fetchDatasets, fetchDatasetVersions, requestDatasetPublication } from '../../api/datasets.js'
+import { deleteFailedDatasetPublication, deleteFailedDatasetVersion, fetchDatasetPublication, fetchDatasets, fetchDatasetVersions, requestDatasetPublication } from '../../api/datasets.js'
+import { canManageDataset, cleanupFailedVersions, cleanupNotice, visibleDatasetVersions } from '../../datasetCleanup.js'
 import { fetchPlatformLimits } from '../../api/platform.js'
 import { roles, session } from '../../stores/session.js'
 import {
@@ -225,6 +254,59 @@ const versionsByDataset = ref(new Map())
 const publicationsByVersion = ref(new Map())
 const versionErrors = ref(new Map())
 const publishing = ref({})
+const showFailed = ref(false)
+const cleanupBusy = ref(false)
+const cleanupSelection = ref({})
+const cleanupErrors = ref({})
+const canManage = (dataset) => canManageDataset(dataset, roles.value, session.value?.tenantId)
+const selectedIds = (dataset) => (cleanupSelection.value[dataset.id] || []).filter(id =>
+  (versionsByDataset.value.get(dataset.id) || []).some(version => version.id === id && version.state === 'FAILED'))
+const selectVersion = (dataset, id, selected) => {
+  const current = selectedIds(dataset)
+  cleanupSelection.value = { ...cleanupSelection.value, [dataset.id]: selected ? [...new Set([...current, id])].slice(0, 100) : current.filter(value => value !== id) }
+}
+
+const applyCleanupResult = (dataset, result, publicationOnly) => {
+  const removed = new Set(result.succeeded)
+  publicationsByVersion.value = new Map([...publicationsByVersion.value].filter(([id]) => !removed.has(id)))
+  if (!publicationOnly) {
+    versionsByDataset.value = new Map([...versionsByDataset.value].map(([id, versions]) => [
+      id, id === dataset.id ? versions.filter(version => !removed.has(version.id)) : versions,
+    ]))
+    cleanupSelection.value = {
+      ...cleanupSelection.value,
+      [dataset.id]: [...new Set([...selectedIds(dataset), ...result.failed.map(item => item.id)])].filter(id => !removed.has(id)),
+    }
+  }
+  cleanupErrors.value = { ...cleanupErrors.value, [dataset.id]: result.failed }
+}
+
+const removeFailed = async (dataset, ids, publicationOnly = false) => {
+  if (!canManage(dataset) || loading.value || cleanupBusy.value || Object.values(publishing.value).some(Boolean)) return
+  const versions = versionsByDataset.value.get(dataset.id) || []
+  if (!ids.length || ids.length > 100 || ids.some(id => !versions.some(version => version.id === id && version.state === 'FAILED'))) return
+  if (publicationOnly && ids.some(id => publicationFor(id)?.state !== 'FAILED')) return
+  cleanupBusy.value = true
+  try {
+    try {
+      await ElMessageBox.confirm(
+        `将移除 ${ids.length} 条失败${publicationOnly ? '发布记录' : '版本记录（及其失败发布记录）'}。${cleanupNotice}`,
+        publicationOnly ? '移除失败发布记录' : '移除失败版本',
+        { confirmButtonText: `确认移除 ${ids.length} 条`, cancelButtonText: '取消', type: 'warning' },
+      )
+    } catch {
+      return
+    }
+    if (!canManage(dataset)) return
+    const remove = publicationOnly ? deleteFailedDatasetPublication : deleteFailedDatasetVersion
+    const result = await cleanupFailedVersions(ids, id => remove(dataset.id, id))
+    applyCleanupResult(dataset, result, publicationOnly)
+    if (result.succeeded.length) ElMessage.success(`已移除 ${result.succeeded.length} 条失败记录，存储文件保持不变`)
+    if (result.failed.length) ElMessage.warning(`${result.failed.length} 条未移除，请查看逐项原因`)
+  } finally {
+    cleanupBusy.value = false
+  }
+}
 
 const canPublishDataset = (dataset) => {
   if (!datasetCapabilities.value.publisherEnabled) return false
@@ -250,7 +332,8 @@ const datasetRows = computed(() => datasets.value.map((dataset) => {
   return {
     dataset,
     versions,
-    versionRows,
+    versionRows: visibleDatasetVersions(versionRows, showFailed.value),
+    failedCount: versions.filter(version => version.state === 'FAILED').length,
     latestReady,
     previousReady,
     latestDelta: latestReady && previousReady ? datasetVersionDelta(latestReady, previousReady) : null,
@@ -269,6 +352,7 @@ const nonNegativeCount = (value) => {
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0
 }
 const normalizePublication = (value) => ({
+  state: value?.state,
   totalPartitions: nonNegativeCount(value?.totalPartitions),
   completedPartitions: nonNegativeCount(value?.completedPartitions),
   failedPartitions: nonNegativeCount(value?.failedPartitions),
@@ -326,23 +410,30 @@ const fetchVersionsForDataset = async (dataset) => {
 }
 
 const retryDatasetVersions = async (dataset) => {
-  const result = await fetchVersionsForDataset(dataset)
-  const nextVersions = new Map(versionsByDataset.value)
-  const nextPublications = new Map(publicationsByVersion.value)
-  const nextErrors = new Map(versionErrors.value)
-  nextVersions.set(result.datasetId, result.versions)
-  for (const [versionID, publication] of result.publications) {
-    if (publication) nextPublications.set(versionID, publication)
-    else nextPublications.delete(versionID)
+  if (cleanupBusy.value || loading.value) return
+  loading.value = true
+  try {
+    const result = await fetchVersionsForDataset(dataset)
+    const nextVersions = new Map(versionsByDataset.value)
+    const nextPublications = new Map(publicationsByVersion.value)
+    const nextErrors = new Map(versionErrors.value)
+    nextVersions.set(result.datasetId, result.versions)
+    for (const [versionID, publication] of result.publications) {
+      if (publication) nextPublications.set(versionID, publication)
+      else nextPublications.delete(versionID)
+    }
+    if (result.error) nextErrors.set(result.datasetId, result.error)
+    else nextErrors.delete(result.datasetId)
+    versionsByDataset.value = nextVersions
+    publicationsByVersion.value = nextPublications
+    versionErrors.value = nextErrors
+  } finally {
+    loading.value = false
   }
-  if (result.error) nextErrors.set(result.datasetId, result.error)
-  else nextErrors.delete(result.datasetId)
-  versionsByDataset.value = nextVersions
-  publicationsByVersion.value = nextPublications
-  versionErrors.value = nextErrors
 }
 
 const loadPage = async () => {
+  if (cleanupBusy.value) return
   loading.value = true
   capabilityChecked.value = false
   capabilityError.value = ''
@@ -396,7 +487,7 @@ const createTraining = (dataset, version) => router.push({
 })
 
 const publishDataset = async (dataset) => {
-  if (!canPublishDataset(dataset)) return
+  if (!canPublishDataset(dataset) || cleanupBusy.value) return
   try {
     await ElMessageBox.confirm(
       `将从「${dataset.name || dataset.slug}」创建新的不可变版本。是否继续？`,

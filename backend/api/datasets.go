@@ -106,6 +106,7 @@ func (h *Handler) RegisterDatasetReadRoutes(group *gin.RouterGroup) {
 // RegisterDatasetManagementRoutes requires the caller to have passed the
 // platform's interactive-session guard in addition to the role checks below.
 func (h *Handler) RegisterDatasetManagementRoutes(group *gin.RouterGroup) {
+	h.registerDatasetCleanupRoutes(group)
 	group.POST("/datasets", h.createDataset)
 	group.POST("/datasets/gc/dry-run", h.dryRunDatasetGC)
 	group.POST("/datasets/:id/publications", h.requestDatasetPublication)

@@ -36,6 +36,8 @@ type DatasetRecord struct {
 }
 
 type DatasetVersionRecord struct {
+	DeletedAt         gorm.DeletedAt `gorm:"index"`
+	DeletedBy         string
 	ID                string  `gorm:"primaryKey"`
 	DatasetID         string  `gorm:"column:dataset_id;uniqueIndex:dataset_version_identity"`
 	Version           string  `gorm:"uniqueIndex:dataset_version_identity"`
@@ -84,6 +86,8 @@ type DatasetPublicationPartitionAttemptRecord struct {
 }
 
 type DatasetPublicationRunRecord struct {
+	DeletedAt            gorm.DeletedAt `gorm:"index"`
+	DeletedBy            string
 	ID                   string `gorm:"primaryKey"`
 	DatasetID            string `gorm:"column:dataset_id;index"`
 	DatasetVersionID     string `gorm:"column:dataset_version_id;index"`
@@ -405,7 +409,7 @@ func (r *GormRepository) RecordDatasetCacheObservation(ctx context.Context, obse
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var matchingPins int64
 		err := tx.Table("training_jobs AS training_job").
-			Joins("JOIN dataset_versions AS dataset_version ON dataset_version.id = training_job.dataset_version_id AND dataset_version.dataset_id = training_job.dataset_id").
+			Joins("JOIN dataset_versions AS dataset_version ON dataset_version.id = training_job.dataset_version_id AND dataset_version.dataset_id = training_job.dataset_id AND dataset_version.deleted_at IS NULL").
 			Where("training_job.id = ? AND training_job.dataset_version_id = ? AND dataset_version.id = ?", observation.TrainingJobID, observation.DatasetVersionID, observation.DatasetVersionID).
 			Count(&matchingPins).Error
 		if err != nil {

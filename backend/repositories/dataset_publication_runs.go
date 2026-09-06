@@ -175,8 +175,11 @@ func (r *GormRepository) EnsureDatasetPublicationRun(
 	var ensured domain.DatasetPublicationRun
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var existing DatasetPublicationRunRecord
-		err := tx.Where("id = ?", run.ID).First(&existing).Error
+		err := tx.Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", run.ID).First(&existing).Error
 		if err == nil {
+			if existing.DeletedAt.Valid {
+				return ErrDatasetPublicationRunNotFound
+			}
 			visible, visibilityErr := manageableDatasetVersionExists(tx, tenantID, superAdmin, existing.DatasetID, existing.DatasetVersionID)
 			if visibilityErr != nil {
 				return publicationRunDatabaseError(ctx, "check existing publication scope", visibilityErr)
@@ -201,12 +204,12 @@ func (r *GormRepository) EnsureDatasetPublicationRun(
 			return publicationRunDatabaseError(ctx, "load publication run identity", err)
 		}
 
-		versionExists, err := manageableDatasetVersionExists(tx, tenantID, superAdmin, run.DatasetID, run.DatasetVersionID)
+		version, err := getManageableDatasetVersionRecord(tx.Clauses(clause.Locking{Strength: "UPDATE"}), tenantID, superAdmin, run.DatasetID, run.DatasetVersionID)
 		if err != nil {
-			return publicationRunDatabaseError(ctx, "check publication dataset version", err)
+			return err
 		}
-		if !versionExists {
-			return ErrDatasetPublicationRunNotFound
+		if version.State != string(domain.DatasetVersionDiscovering) {
+			return ErrDatasetPublicationRunConflict
 		}
 
 		now := time.Now().UTC()
@@ -283,6 +286,7 @@ func (r *GormRepository) GetDatasetPublicationRunForVersion(
 	}
 	var record DatasetPublicationRunRecord
 	query := r.db.WithContext(ctx).Model(&DatasetPublicationRunRecord{}).
+		Joins("JOIN dataset_versions ON dataset_versions.id = dataset_publication_runs.dataset_version_id AND dataset_versions.dataset_id = dataset_publication_runs.dataset_id AND dataset_versions.deleted_at IS NULL").
 		Joins("JOIN datasets ON datasets.id = dataset_publication_runs.dataset_id").
 		Where("dataset_publication_runs.dataset_id = ? AND dataset_publication_runs.dataset_version_id = ?", datasetID, versionID)
 	if !superAdmin {
@@ -736,7 +740,7 @@ func getDatasetPublicationRunRecordWithScope(
 	var record DatasetPublicationRunRecord
 	query := database.Model(&DatasetPublicationRunRecord{}).
 		Select("dataset_publication_runs.*").
-		Joins("JOIN dataset_versions ON dataset_versions.id = dataset_publication_runs.dataset_version_id AND dataset_versions.dataset_id = dataset_publication_runs.dataset_id").
+		Joins("JOIN dataset_versions ON dataset_versions.id = dataset_publication_runs.dataset_version_id AND dataset_versions.dataset_id = dataset_publication_runs.dataset_id AND dataset_versions.deleted_at IS NULL").
 		Joins("JOIN datasets ON datasets.id = dataset_publication_runs.dataset_id")
 	if mutation {
 		query = manageableDatasetQuery(query, tenantID, superAdmin)
@@ -779,7 +783,7 @@ func getManageableDatasetVersionRecord(
 }
 
 func manageableDatasetVersionExists(database *gorm.DB, tenantID string, superAdmin bool, datasetID, versionID string) (bool, error) {
-	query := database.Table("dataset_versions").
+	query := database.Model(&DatasetVersionRecord{}).
 		Joins("JOIN datasets ON datasets.id = dataset_versions.dataset_id")
 	query = manageableDatasetQuery(query, tenantID, superAdmin)
 	var count int64
