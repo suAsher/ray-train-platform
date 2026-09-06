@@ -48,7 +48,32 @@ Commands: `cd backend && go test ./spkrayjob && go build ./...`; expect all test
   upload-part rows, an actor fence during retirement, and short lifecycle checks
   before read responses (no long-lived DB connection while streaming).
 - Final rerun: backend all packages and build passed; frontend 342 tests and
-  build passed; migration SQL still requires execution against real PostgreSQL.
+  build passed; the subsequent isolated PostgreSQL 16 verification passed.
+
+### Production release record (2026-09-06)
+
+- User explicitly authorized platform-only deployment while training continues.
+- Code commit: `3a04c9fce1afe898b41e8c5abcf0f31f49359749`.
+- Release: `release-20260906-04`; Helm revision `176` (previous `175`).
+- Backend digest: `sha256:2c019281aaf38186048596371d13a3d8a82ed778a675885bd6ff7890218c8e9b`.
+- Frontend digest: `sha256:0de0df84419b908ec15be7acb733b8b4e9d70312cce0ed2bd9e815365d89bc97`.
+- CLI downloads digest: `sha256:6083a013b1bf076fa0afb0ae557f1d8290b2253addc9271335d8a8d9b12e6968`.
+- Server dry-run diff contained only these images, read-only retirement inventory
+  RBAC, and an empty optional CLI minimum-version variable. Used reuse-values
+  and atomic rollout; no training image, data settings or workload was modified.
+- All three deployments completed rollout with both replicas ready, zero
+  restarts and matching runtime image IDs. Health and UI returned HTTP 200;
+  unauthenticated retirement preflight returned 401. Production migration is 34.
+- Public release.json reports this version with no forced minimum. Downloaded
+  Linux binary checksum matched its manifest and `version` returned this release.
+- Existing running job `job-29dc380420222684984b87cf` remained RUNNING; its head,
+  worker and submitter Pod UIDs stayed unchanged with zero restarts. Task logs,
+  metrics and runtime API reads continued returning 200 after rollout.
+- No team was actually retired; production destructive-path acceptance and
+  native Windows self-upgrade were not performed. Windows self-upgrade stays
+  disabled; manual installation remains supported. No GPU test was submitted.
+- Values backup, previous manifest and exact image override are retained on
+  the build host under `/root/` with the release identifier in their filenames.
 
 ## 2. Node registration and user-facing instructions
 
