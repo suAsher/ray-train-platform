@@ -1,8 +1,8 @@
-# 通用训练基础环境（待构建发布）
+# 通用训练基础环境
 
-此目录是构建配方，不表示镜像已经发布或已通过 GPU 验证。发布后管理员应提供实际完整地址、tag/摘要、环境报告和验证状态，再用于用户派生模板。
+2026-09-06 已构建推送并完成真实 CPU 容器自检。正式地址：`harbor.wellspiking.ai/guofeng.su/raytrain-base:ray2.58.0-py310-torch2.4.1-cu121-20260906`。登记使用此 tag，不要求用户填写摘要。追溯摘要：`sha256:3ec73cf863847a42bcac035309259ad9d08fd74561384cc8476020c62264d6e2`。GPU 与多卡验收尚未执行。
 
-目标镜像名为 `harbor.wellspiking.ai/guofeng.su/raytrain-base:<发布标签>`。该地址当前仅为命名约定，不能直接当作可拉取镜像使用。包含 Python 3.10、CUDA 12.1、PyTorch 2.4.1、torchvision 0.19.1、Ray 2.58.0（Train/Data）、PyArrow 25.0.1、MLflow skinny 3.14.0、平台启动器与托管运行时。继承的通用依赖还包括 transformers 4.44.2、datasets 2.21.0、accelerate 0.34.2 和 TensorBoard 2.17.1。不包含用户训练代码或特定模型框架。
+包含 Python 3.10.14、CUDA 12.1、PyTorch 2.4.1、torchvision 0.19.1、Ray 2.58.0（Train/Data）、PyArrow 25.0.1、MLflow skinny 3.14.0、平台启动器与托管运行时。继承的通用依赖还包括 transformers 4.44.2、datasets 2.21.0、accelerate 0.34.2 和 TensorBoard 2.17.1。不包含用户训练代码或特定模型框架。
 
 维护者显式构建：`BUILD_TARGETS=raytrain-base IMAGE_TAG=<发布标签> USE_BUILDX=true bash build-image.sh`。不在默认 `all` 中，不会替换线上镜像。`constraints.txt` 是核心兼容约束，不是完整 lockfile；首次发布必须完成镜像构建、完整依赖清单归档与真实运行验收。
 
