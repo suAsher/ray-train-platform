@@ -1,5 +1,39 @@
 # Custom Training Environments Implementation Plan
 
+## Production release — 2026-09-06
+
+User approved publication and shared, tag-based registration. Released backend,
+frontend and CLI as `release-20260906-01`, source `cc42cb2`, Helm revision 173.
+Generic base built from `7de0cb5` and published as:
+
+`harbor.wellspiking.ai/guofeng.su/raytrain-base:ray2.58.0-py310-torch2.4.1-cu121-20260906`
+
+Shared non-default catalogue ID: `job-f0242b6e029a7068f43765d3`. Environment
+description and administrator validation notes populated; prior defaults unchanged.
+
+| Component | Digest |
+| --- | --- |
+| base (catalogue uses tag) | `sha256:3ec73cf863847a42bcac035309259ad9d08fd74561384cc8476020c62264d6e2` |
+| backend | `sha256:fc4186931a53a4deb95e71089d646ec7647913da0e8afa21dcc5f04f35c5a67a` |
+| frontend | `sha256:59c47a683e9ed3fb495e8143589c806f2250602d2113007f14a962bf40b468b3` |
+| CLI release | `sha256:7178afd9fa260daac24b1d5c55c4922bfd8cdc63c61cf5c15291c8a1b4fc8f6c` |
+
+Actual base CPU container selfcheck passed without network/GPU/host mounts:
+Python3.10.14, Ray2.58.0, Torch2.4.1, CUDA runtime12.1, torchvision0.19.1,
+PyArrow25.0.1, MLflow skinny3.14.0, protocol1 and pip check. GPU, NCCL and
+distributed/model acceptance remain unverified; no such jobs were submitted.
+
+Helm dry-run changed only three image lines. All three deployments have two Ready
+replicas with expected image IDs. Health/help/external-submit HTTP200; served JS
+contains published base tag. Downloaded Linux CLI passed SHA256 verification,
+reported release-20260906-01, and authenticated `images --output json` returned
+the new shared environment. Verification session was logged out afterwards.
+
+Active `tenant-local/job-29dc380420222684984b87cf` remained RUNNING: same UID,
+spec, head/worker Pod UIDs, specs and restart counters. Values backup, override,
+base selfcheck report, catalogue record and build logs retained on build host at
+`/root/base-release-20260906/`. Earlier development-only status below is historical.
+
 > **For agentic workers:** Use superpowers:subagent-driven-development or superpowers:executing-plans to implement the independent units below with failing tests first.
 
 **Goal:** Let users understand registered environments and derive dependency-only images without embedding training code.
