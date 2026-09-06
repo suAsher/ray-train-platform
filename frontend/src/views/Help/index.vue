@@ -1,205 +1,66 @@
 <template>
   <div class="space-y-6">
-    <section class="rounded-2xl border border-blue-500/20 bg-gradient-to-br from-blue-950/40 to-[#131826] p-7 shadow-xl">
-      <p class="text-[11px] font-semibold uppercase tracking-[0.2em] text-blue-400">Usage</p>
-      <div class="mt-2 flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h3 class="text-2xl font-bold text-white">平台使用说明</h3>
-          <p class="mt-3 max-w-3xl text-sm leading-6 text-slate-300">
-            先看“开始前”，再按步骤操作，最后核对“成功标志”；遇到问题看“失败处理”。
-            可按场景或错误关键词搜索，也可以下载全部说明。
-          </p>
-          <p class="mt-2 max-w-3xl text-xs leading-5 text-slate-500">内容核对：{{ HELP_REVIEWED_AT }}。{{ HELP_SCOPE }}</p>
-        </div>
-        <el-button type="primary" :loading="downloading" @click="download">下载为 Markdown</el-button>
+    <section class="panel p-6">
+      <div class="flex flex-wrap items-center justify-between gap-4">
+        <div><h3 class="text-2xl font-bold text-white">平台使用说明</h3><p class="mt-2 max-w-3xl text-sm text-slate-400">按场景、参数或错误关键词搜索；这里和下载文件都只展示已发布内容。</p></div>
+        <div class="flex gap-2"><el-button v-if="isSuperAdmin" @click="manage = true">管理文档</el-button><el-button type="primary" :disabled="!documents.length || loading || !!error" @click="download">下载为 Markdown</el-button></div>
       </div>
     </section>
-
-    <div class="grid gap-6 xl:grid-cols-[16rem_minmax(0,1fr)]">
-      <nav class="panel h-fit p-3 xl:sticky xl:top-4" aria-label="使用说明目录">
-        <label for="help-search" class="mb-2 block px-1 text-xs text-slate-400">搜索主题、参数或错误</label>
-        <el-input id="help-search" v-model="query" clearable placeholder="例如：413、场地、续训" class="mb-3" />
-        <p class="mb-3 px-1 text-xs text-slate-500" role="status">{{ filteredSections.length }} / {{ helpSections.length }} 个主题</p>
-        <p v-if="!filteredSections.length" class="px-1 text-sm text-slate-400">没有匹配主题，试试更短的关键词。</p>
-        <div v-for="group in groupedSections" :key="group.name" class="mb-3 last:mb-0">
-          <p class="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">{{ group.name }}</p>
-          <button
-            v-for="section in group.sections"
-            :key="section.id"
-            type="button"
-            class="block w-full rounded-lg px-3 py-2 text-left text-sm leading-5 transition"
-            :class="section.id === activeId ? 'bg-blue-500/15 font-semibold text-blue-200' : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'"
-            :aria-current="section.id === activeId ? 'page' : undefined"
-            @click="select(section.id)"
-          >{{ section.title }}</button>
+    <el-alert v-if="error" type="error" :title="error" :closable="false"><el-button @click="load">重新加载</el-button></el-alert>
+    <p v-if="loading" role="status">正在加载文档…</p>
+    <el-alert v-if="!loading && !error && missingLink" type="warning" title="此链接对应的文档不存在或已下架。你仍可从目录查看其他已发布文档。" :closable="false" />
+    <div v-if="!loading && !error" class="grid gap-6 xl:grid-cols-[16rem_minmax(0,1fr)]">
+      <nav class="panel h-fit p-3" aria-label="使用说明目录">
+        <label for="help-search" class="mb-2 block text-xs text-slate-400">搜索主题、参数或错误</label>
+        <el-input id="help-search" v-model="query" clearable placeholder="例如：413、场地、续训" />
+        <p class="my-3 text-xs text-slate-500" role="status">{{ filteredSections.length }} / {{ documents.length }} 个主题</p>
+        <p v-if="!filteredSections.length" class="text-sm text-slate-400">{{ documents.length ? '没有匹配主题，试试更短的关键词。' : '暂无已发布文档。' }}</p>
+        <div v-for="group in groupedSections" :key="group.name" class="mb-4">
+          <p class="my-2 text-xs text-slate-500">{{ group.name }}</p>
+          <button v-for="section in group.sections" :key="section.id" class="block w-full rounded px-3 py-2 text-left text-sm" :class="section.id === activeSection?.id ? 'bg-blue-500/15 text-blue-200' : 'text-slate-400'" :aria-current="section.id === activeSection?.id ? 'page' : undefined" @click="select(section.id)">{{ section.title }}</button>
         </div>
       </nav>
-
-      <section v-for="section in [activeSection]" :key="section.id" class="panel p-6" aria-labelledby="help-topic-title">
-      <h4 id="help-topic-title" ref="topicTitle" tabindex="-1" class="text-lg font-bold text-white">{{ section.title }}</h4>
-      <p v-if="section.summary" class="mt-2 max-w-3xl text-sm leading-6 text-slate-400">{{ section.summary }}</p>
-      <div v-if="section.prerequisites?.length" class="mt-5 rounded-xl border border-blue-500/20 bg-blue-500/5 p-4">
-        <h5 class="text-sm font-semibold text-blue-200">开始前</h5>
-        <ul class="mt-2 list-disc space-y-1 pl-5 text-sm leading-6 text-slate-300">
-          <li v-for="item in section.prerequisites" :key="item">{{ item }}</li>
-        </ul>
-      </div>
-
-      <template v-for="(block, index) in section.blocks" :key="index">
-        <ol v-if="block.kind === 'steps'" class="mt-5 space-y-6">
-          <li v-for="(item, step) in block.items" :key="item.title" class="flex gap-4">
-            <span class="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-500/15 font-mono text-xs font-semibold text-blue-300">{{ step + 1 }}</span>
-            <div class="min-w-0 flex-1">
-              <p class="text-sm font-semibold text-slate-100">{{ item.title }}</p>
-              <p class="mt-1 max-w-3xl text-sm leading-6 text-slate-400">{{ item.body }}</p>
-              <CopyBlock v-if="item.code" class="mt-3" :text="item.code" :label="item.codeLabel" />
-            </div>
-          </li>
-        </ol>
-
-        <ul v-else-if="block.kind === 'list'" class="mt-4 space-y-2">
-          <li v-for="item in block.items" :key="item" class="flex max-w-4xl gap-2 text-sm leading-6 text-slate-300">
-            <span class="text-blue-400">·</span><span>{{ item }}</span>
-          </li>
-        </ul>
-
-        <ul v-else-if="block.kind === 'checklist'" class="mt-4 space-y-2">
-          <li v-for="item in block.items" :key="item" class="flex max-w-4xl gap-2 text-sm leading-6 text-slate-300">
-            <span class="mt-1.5 h-3 w-3 shrink-0 rounded border border-slate-600"></span><span>{{ item }}</span>
-          </li>
-        </ul>
-
-        <div v-else-if="block.kind === 'table'" class="mt-4 overflow-x-auto rounded-xl border border-slate-800">
-          <table class="w-full text-left text-sm">
-            <thead class="bg-slate-900/70 text-xs uppercase tracking-wider text-slate-400">
-              <tr><th v-for="header in block.headers" :key="header" class="px-4 py-3 font-semibold">{{ header }}</th></tr>
-            </thead>
-            <tbody>
-              <tr v-for="(row, rowIndex) in block.rows" :key="rowIndex" class="border-t border-slate-800/80">
-                <td v-for="(cell, cellIndex) in row" :key="cellIndex" class="px-4 py-3 align-top leading-6" :class="cellIndex === 0 ? 'font-mono text-xs text-blue-300' : 'text-slate-300'">{{ cell }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div v-else-if="block.kind === 'code'" class="mt-4">
-          <CopyBlock :text="block.text" :label="block.label" />
-          <el-button v-if="block.filename" class="mt-2" size="small" @click="downloadTemplate(block)">下载 {{ block.filename }}</el-button>
-        </div>
-
-        <el-alert v-else-if="block.kind === 'warning'" class="mt-4 !rounded-xl" type="warning" show-icon :closable="false" :title="block.title">
-          <p class="text-xs leading-6">{{ block.text }}</p>
-        </el-alert>
-
-        <p v-else-if="block.kind === 'note'" class="mt-4 rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3 text-xs leading-6 text-slate-400">
-          {{ block.text }}
-        </p>
-      </template>
-      <div class="mt-6 grid gap-4 lg:grid-cols-2">
-        <div v-if="section.success?.length" class="rounded-xl border border-emerald-500/20 p-4">
-          <h5 class="text-sm font-semibold text-emerald-300">成功标志</h5>
-          <ul class="mt-2 list-disc space-y-1 pl-5 text-sm leading-6 text-slate-300">
-            <li v-for="item in section.success" :key="item">{{ item }}</li>
-          </ul>
-        </div>
-        <div v-if="section.troubleshooting?.length" class="rounded-xl border border-amber-500/20 p-4">
-          <h5 class="text-sm font-semibold text-amber-300">失败处理</h5>
-          <ul class="mt-2 list-disc space-y-1 pl-5 text-sm leading-6 text-slate-300">
-            <li v-for="item in section.troubleshooting" :key="item">{{ item }}</li>
-          </ul>
-        </div>
-      </div>
-      <nav v-if="section.relatedLinks?.length" class="mt-5 flex flex-wrap gap-4 text-sm" aria-label="相关入口">
-        <router-link v-for="link in section.relatedLinks" :key="link.to" :to="link.to" class="text-blue-400 underline underline-offset-4">{{ link.label }}</router-link>
-      </nav>
+      <section v-if="activeSection" class="panel min-w-0 p-6" aria-labelledby="help-topic-title">
+        <h4 id="help-topic-title" ref="topicTitle" tabindex="-1" class="text-xl font-bold text-white">{{ activeSection.title }}</h4>
+        <p class="my-2 text-xs text-slate-500">版本 {{ activeSection.version }} · {{ formatTime(activeSection.updatedAt) }} · {{ activeSection.updatedBy }}</p>
+        <HelpMarkdown :markdown="activeSection.markdown" />
       </section>
     </div>
-
-    <p class="px-1 text-xs leading-6 text-slate-500">
-      这一页只放每次提交都用得上的部分，所以可以整页读完。
-      从自己的机器提交、CLI 的安装与登录见「<router-link class="text-blue-400 hover:text-blue-300" to="/external-submit">外部提交</router-link>」；
-      命令行的完整参数用 <code>spk-rayjob --help</code> 查看。
-      运行环境缺少你需要的依赖时，联系平台管理员登记新镜像 —— 镜像只提供环境，你的代码不进镜像，改完直接重新提交即可。
-    </p>
+    <HelpManager v-if="manage && isSuperAdmin" @close="manage = false" @published="load" />
   </div>
 </template>
-
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-
-import CopyBlock from '../../components/CopyBlock.vue'
-import { filterHelpSections, HELP_REVIEWED_AT, HELP_SCOPE, helpSections, renderHelpMarkdown } from '../../help/content'
+import { roles } from '../../stores/session'
+import { listHelpDocuments } from '../../api/help.js'
+import { searchDocuments, downloadDocuments, missingDocumentLink } from '../../help/documents.js'
+import { createDocumentLoader } from '../../help/loader.js'
 import { saveBlobAsFile } from '../../checkpointDownload'
-
-const downloading = ref(false)
-
-function downloadTemplate(block) {
-  try {
-    saveBlobAsFile(new Blob([block.text + '\n'], { type: 'text/plain;charset=utf-8' }), block.filename)
-  } catch (error) {
-    ElMessage.error(error.message || '下载模板失败')
-  }
-}
-
-// The file is built from the same sections rendered above rather than fetched,
-// so it always matches what the user just read and needs no server round trip.
-function download() {
-  downloading.value = true
-  try {
-    const markdown = renderHelpMarkdown(helpSections, { origin: window.location.origin })
-    saveBlobAsFile(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }), 'raytrain-使用说明.md')
-  } catch (error) {
-    ElMessage.error(error.message || '生成文档失败')
-  } finally {
-    downloading.value = false
-  }
-}
-
-// Twelve topics do not fit one readable scroll, so the page shows the one the
-// reader picked. The download still carries all of them, because a file kept on
-// a laptop is read differently from a page browsed with a question in mind.
-const activeId = ref(helpSections[0].id)
-const query = ref('')
-const topicTitle = ref(null)
-const filteredSections = computed(() => filterHelpSections(query.value))
-
-// Seventeen topics in one flat list is a wall of text to scan. Grouping keeps
-// each list short enough to read, and the order matches how someone moves
-// through the platform: get something running, then data, then training.
+import HelpMarkdown from '../../components/HelpMarkdown.vue'
+import HelpManager from './HelpManager.vue'
+const route = useRoute(), router = useRouter()
+const { documents, loading, error, load } = createDocumentLoader(listHelpDocuments)
+const query = ref(''), manage = ref(false), topicTitle = ref(null)
+const isSuperAdmin = computed(() => roles.value.includes('SuperAdmin'))
+const filteredSections = computed(() => searchDocuments(documents.value, query.value))
+const missingLink = computed(() => missingDocumentLink(documents.value, route.hash))
+const activeSection = computed(() => filteredSections.value.find(section => '#' + section.id === route.hash) || filteredSections.value[0])
 const groupedSections = computed(() => {
-  const order = []
-  const byGroup = new Map()
-  for (const section of filteredSections.value) {
-    const name = section.group || '其他'
-    if (!byGroup.has(name)) {
-      byGroup.set(name, [])
-      order.push(name)
-    }
-    byGroup.get(name).push(section)
-  }
-  return order.map((name) => ({ name, sections: byGroup.get(name) }))
+  const groups = new Map()
+  for (const section of filteredSections.value) groups.set(section.category, [...(groups.get(section.category) || []), section])
+  return [...groups].map(([name, sections]) => ({ name, sections }))
 })
-const activeSection = computed(
-  () => helpSections.find((section) => section.id === activeId.value) || helpSections[0],
-)
-
-function select(id) {
-  activeId.value = id
-  if (route.hash !== `#${id}`) router.push({ hash: `#${id}` })
+function formatTime(value) { return value ? new Date(value).toLocaleString() : '' }
+function select(id) { if (route.hash !== '#' + id) router.push({ hash: '#' + id }) }
+watch(() => route.hash, async () => { await nextTick(); topicTitle.value?.focus({ preventScroll: true }) })
+function download() {
+  try {
+    const markdown = downloadDocuments(documents.value, { origin: window.location.origin })
+    saveBlobAsFile(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }), 'raytrain-使用说明.md')
+  }
+  catch (err) { ElMessage.error(err.message || '下载失败') }
 }
-
-// Links elsewhere in the app point at a topic (/help#data-mode), so honour the
-// hash on arrival instead of always opening the first one.
-const route = useRoute()
-const router = useRouter()
-watch(() => route.hash, async (hash, previousHash) => {
-  const target = hash.replace(/^#/, '')
-  activeId.value = helpSections.some(section => section.id === target) ? target : helpSections[0].id
-  await nextTick()
-  const title = Array.isArray(topicTitle.value) ? topicTitle.value[0] : topicTitle.value
-  title?.focus({ preventScroll: true })
-  if (previousHash !== undefined) title?.scrollIntoView({ block: 'start' })
-}, { immediate: true })
+onMounted(load)
 </script>

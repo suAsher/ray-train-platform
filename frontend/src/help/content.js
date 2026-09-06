@@ -24,17 +24,24 @@ export function renderHelpMarkdown(sections = helpSections, { origin = '' } = {}
   const lines = ['# RayTrain 平台使用说明', '', `内容核对：${HELP_REVIEWED_AT}。${HELP_SCOPE}`, '']
   for (const section of sections) {
     lines.push(`## ${section.title}`, '')
-    if (section.summary) lines.push(section.summary, '')
-    lines.push(...renderChecklist('开始前', section.prerequisites))
-    for (const block of section.blocks) {
-      lines.push(...renderBlock(block))
-    }
-    lines.push(...renderChecklist('成功标志', section.success))
-    lines.push(...renderChecklist('失败处理', section.troubleshooting))
-    if (section.relatedLinks?.length) {
-      lines.push('### 相关入口', '', ...section.relatedLinks.map(link =>
-        `- [${link.label}](${origin ? new URL(link.to, origin).href : link.to})`), '')
-    }
+    lines.push(renderHelpSectionMarkdown(section, { origin }))
+  }
+  return lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n'
+}
+
+// Used only to bootstrap persistent documents, not as a runtime fallback.
+export function renderHelpSectionMarkdown(section, { origin = '' } = {}) {
+  const lines = []
+  if (section.summary) lines.push(section.summary, '')
+  lines.push(...renderChecklist('开始前', section.prerequisites))
+  for (const block of section.blocks) {
+    lines.push(...renderBlock(block))
+  }
+  lines.push(...renderChecklist('成功标志', section.success))
+  lines.push(...renderChecklist('失败处理', section.troubleshooting))
+  if (section.relatedLinks?.length) {
+    lines.push('### 相关入口', '', ...section.relatedLinks.map(link =>
+      `- [${link.label}](${origin ? new URL(link.to, origin).href : link.to})`), '')
   }
   return lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n'
 }
@@ -65,7 +72,7 @@ function renderBlock(block) {
         '',
       ]
     case 'code':
-      return [block.label ? `**${block.label}**` : '', '', '```' + (block.lang || ''), block.text, '```', '']
+      return [block.label ? `**${block.label}**` : '', '', '```' + (block.lang || '') + (block.filename ? ` filename=${block.filename}` : ''), block.text, '```', '']
     case 'warning':
       return [`> **${block.title}**`, '>', `> ${block.text}`, '']
     case 'note':

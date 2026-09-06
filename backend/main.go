@@ -22,6 +22,7 @@ import (
 	"ray-train-platform-backend/datasetpublisher"
 	"ray-train-platform-backend/db"
 	"ray-train-platform-backend/domain"
+	"ray-train-platform-backend/helpdocs"
 	"ray-train-platform-backend/httpapi"
 	"ray-train-platform-backend/k8s"
 	"ray-train-platform-backend/objectstore"
@@ -52,6 +53,13 @@ func main() {
 		MaxTotalGPUs:      cfg.MaxTotalGPUs,
 	})
 	repository := repositories.NewGormRepository(database)
+	helpSeed, err := helpdocs.Documents()
+	if err != nil {
+		log.Fatalf("load help seed: %v", err)
+	}
+	if err := repository.SeedHelpDocuments(context.Background(), helpSeed); err != nil {
+		log.Fatalf("seed help documents: %v", err)
+	}
 
 	kubeClient, err := newKubernetesClient(cfg)
 	if err != nil {
@@ -290,6 +298,7 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	jobs.RegisterTrainingRoutes(v1)
 	jobs.RegisterCheckpointRoutes(v1)
 	jobs.RegisterImageReadRoutes(v1)
+	jobs.RegisterHelpReadRoutes(v1)
 	if cfg.DatasetVersioningEnabled {
 		jobs.RegisterDatasetReadRoutes(v1)
 	}
@@ -311,6 +320,7 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	jobs.RegisterWorkspaceRoutes(oidcOnly)
 	jobs.RegisterAdminRoutes(oidcOnly)
 	jobs.RegisterImageManagementRoutes(interactive)
+	jobs.RegisterHelpManagementRoutes(interactive)
 	jobs.RegisterStorageAssetRoutes(interactive)
 	if cfg.DatasetVersioningEnabled {
 		jobs.RegisterDatasetManagementRoutes(interactive)

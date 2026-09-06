@@ -1,0 +1,139 @@
+package repositories
+
+import (
+	"context"
+	"errors"
+	"ray-train-platform-backend/domain"
+	"testing"
+)
+
+func helpRepo(t *testing.T) *GormRepository {
+	t.Helper()
+	r := testRepository(t)
+	if err := r.db.AutoMigrate(&HelpDocumentRecord{}, &HelpRevisionRecord{}); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+func TestHelpDocumentLifecycle(t *testing.T) {
+	r := helpRepo(t)
+	ctx := context.Background()
+	d, err := r.CreateHelpDocument(ctx, domain.HelpDocument{ID: "first", Title: "Title", Category: "Start", Markdown: "original"}, "admin")
+	if err != nil || d.Version != 1 {
+		t.Fatalf("create: %+v %v", d, err)
+	}
+	items, err := r.ListHelpDocuments(ctx, false)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("draft leaked: %v %v", items, err)
+	}
+	d, err = r.ChangeHelpDocument(ctx, d.ID, 1, "publish", 0, nil, "admin")
+	if err != nil || d.PublishedVersion != 2 {
+		t.Fatalf("publish: %+v %v", d, err)
+	}
+	draft := d
+	draft.Markdown = "secret draft"
+	d, err = r.ChangeHelpDocument(ctx, d.ID, 2, "save", 0, &draft, "editor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err = r.ListHelpDocuments(ctx, false)
+	if err != nil || len(items) != 1 || items[0].Markdown != "original" {
+		t.Fatalf("snapshot leaked: %v %v", items, err)
+	}
+	if _, err = r.ChangeHelpDocument(ctx, d.ID, 2, "publish", 0, nil, "admin"); !errors.Is(err, ErrHelpConflict) {
+		t.Fatalf("stale update: %v", err)
+	}
+	d, err = r.ChangeHelpDocument(ctx, d.ID, 3, "restore", 1, nil, "admin")
+	if err != nil || d.Version != 4 || d.Markdown != "original" || d.PublishedVersion != 2 {
+		t.Fatalf("restore: %+v %v", d, err)
+	}
+	d, err = r.ChangeHelpDocument(ctx, d.ID, 4, "unpublish", 0, nil, "admin")
+	if err != nil || d.PublishedVersion != 0 {
+		t.Fatalf("unpublish: %+v %v", d, err)
+	}
+	if err = r.SeedHelpDocuments(ctx, []domain.HelpDocument{{ID: "first", Title: "seed", Category: "Start", Markdown: "seed"}}); err != nil {
+		t.Fatal(err)
+	}
+	items, err = r.ListHelpDocuments(ctx, false)
+	if err != nil || len(items) != 0 {
+		t.Fatal("seed republished document", items, err)
+	}
+	hist, err := r.HelpDocumentHistory(ctx, d.ID)
+	if err != nil || len(hist) != 5 || hist[0].UpdatedBy != "admin" || hist[0].Action != "unpublish" {
+		t.Fatalf("history: %v %v", hist, err)
+	}
+}
+func TestHelpSeedIdempotentAndTransactionRollback(t *testing.T) {
+	r := helpRepo(t)
+	ctx := context.Background()
+	seed := []domain.HelpDocument{{ID: "seed", Title: "Seed", Category: "Start", Markdown: "seed"}}
+	for i := 0; i < 2; i++ {
+		if err := r.SeedHelpDocuments(ctx, seed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, err := r.ListHelpDocuments(ctx, false)
+	if err != nil || len(items) != 1 || items[0].Version != 1 {
+		t.Fatalf("seed: %v %v", items, err)
+	}
+	if err := r.db.Migrator().DropTable(&HelpRevisionRecord{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.ChangeHelpDocument(ctx, "seed", 1, "unpublish", 0, nil, "admin"); err == nil {
+		t.Fatal("expected revision failure")
+	}
+	items, err = r.ListHelpDocuments(ctx, false)
+	if err != nil || len(items) != 1 || items[0].Version != 1 {
+		t.Fatalf("transaction leaked: %v %v", items, err)
+	}
+}
+
+func TestHelpStoreValidationAndMissingVersions(t *testing.T) {
+	r := helpRepo(t)
+	ctx := context.Background()
+	if _, err := r.CreateHelpDocument(ctx, domain.HelpDocument{}, "admin"); err == nil {
+		t.Fatal("invalid draft accepted")
+	}
+	if err := r.SeedHelpDocuments(ctx, []domain.HelpDocument{{}}); err == nil {
+		t.Fatal("invalid seed accepted")
+	}
+	if _, err := r.ChangeHelpDocument(ctx, "missing", 1, "publish", 0, nil, "admin"); !errors.Is(err, ErrHelpNotFound) {
+		t.Fatal(err)
+	}
+	d := domain.HelpDocument{ID: "first", Title: "Title", Category: "Start", Markdown: "body"}
+	if _, err := r.CreateHelpDocument(ctx, d, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CreateHelpDocument(ctx, d, "admin"); !errors.Is(err, ErrHelpConflict) {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"save", "unknown"} {
+		if _, err := r.ChangeHelpDocument(ctx, "first", 1, action, 0, nil, "admin"); err == nil {
+			t.Fatal(action, "accepted")
+		}
+	}
+	if _, err := r.ChangeHelpDocument(ctx, "first", 1, "restore", 99, nil, "admin"); !errors.Is(err, ErrHelpNotFound) {
+		t.Fatal(err)
+	}
+	d.Markdown = ""
+	if _, err := r.ChangeHelpDocument(ctx, "first", 1, "save", 0, &d, "admin"); err == nil {
+		t.Fatal("invalid save accepted")
+	}
+	if _, err := r.HelpDocumentHistory(ctx, "missing"); !errors.Is(err, ErrHelpNotFound) {
+		t.Fatal(err)
+	}
+	items, err := r.ListHelpDocuments(ctx, true)
+	if err != nil || len(items) != 1 || items[0].Markdown != "body" {
+		t.Fatal(items, err)
+	}
+	// Corrupt persistence must fail closed rather than leak a partial document.
+	if err := r.db.Model(&HelpDocumentRecord{}).Where("id = ?", "first").Update("draft_json", "invalid").Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.ListHelpDocuments(ctx, true); err == nil {
+		t.Fatal("corrupt draft accepted")
+	}
+	if _, err := r.ChangeHelpDocument(ctx, "first", 1, "publish", 0, nil, "admin"); err == nil {
+		t.Fatal("corrupt draft published")
+	}
+}

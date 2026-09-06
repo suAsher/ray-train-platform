@@ -47,14 +47,14 @@ test('help search matches content and prerequisites without changing topic objec
 
 test('help page exposes search, metadata and reactive topic navigation', async () => {
   const page = await read('./views/Help/index.vue')
-  assert.match(page, /filterHelpSections/)
-  assert.match(page, /section\.prerequisites/)
-  assert.match(page, /section\.success/)
-  assert.match(page, /section\.troubleshooting/)
-  assert.match(page, /section\.relatedLinks/)
+  assert.match(page, /searchDocuments\(documents.value/)
+  assert.match(page, /listHelpDocuments/)
+  assert.match(page, /HelpMarkdown :markdown="activeSection.markdown"/)
+  assert.doesNotMatch(page, /import.*helpSections/)
   assert.match(page, /watch\(\(\) => route\.hash/)
   assert.match(page, /aria-current/)
-  assert.match(page, /scrollIntoView/)
+  assert.match(page, /topicTitle.value\?\.focus/)
+  assert.match(page, /<div v-if="!loading && !error" class="grid/)
 })
 
 // The page and the downloaded file are built from one source so a user cannot
