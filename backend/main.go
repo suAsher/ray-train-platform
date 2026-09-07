@@ -151,6 +151,9 @@ func main() {
 	platformNamespace := runtimeNamespace()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if kubeClient != nil {
+		startTrainingCapacityObserver(ctx, kubeClient, cfg)
+	}
 	if reconciler != nil {
 		go func() {
 			if err := kubeClient.RunAsLeader(ctx, platformNamespace, "ray-train-platform-controller", reconciler.Run); err != nil && ctx.Err() == nil {

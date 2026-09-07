@@ -193,7 +193,9 @@ func (r *Reconciler) Run(ctx context.Context) error {
 	}
 	r.syncClusterQueueQuota(ctx)
 	if err := r.ProcessOnce(ctx); err != nil {
-		return err
+		// Startup is a normal reconcile cycle: a failed cleanup must not leave
+		// the elected leader holding its lease with no running control loop.
+		log.Printf("job reconciliation failed; retrying next cycle: %v", err)
 	}
 	ticker := time.NewTicker(r.interval)
 	defer ticker.Stop()
@@ -205,6 +207,7 @@ func (r *Reconciler) Run(ctx context.Context) error {
 			r.syncClusterQueueQuota(ctx)
 			if err := r.ProcessOnce(ctx); err != nil {
 				// A single transient Kubernetes or database error must not terminate the control loop.
+				log.Printf("job reconciliation failed; retrying next cycle: %v", err)
 				continue
 			}
 		}
