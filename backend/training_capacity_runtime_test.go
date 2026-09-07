@@ -31,7 +31,7 @@ func TestTrainingCapacityObserverStartupAndDisabled(t *testing.T) {
 		if _, ok := ctx.Deadline(); !ok {
 			t.Fatal("missing read deadline")
 		}
-		return k8s.TrainingPoolCapacity{Nodes: 3, GPUs: 24, GuaranteedGPUsPerWorker: 8}, nil
+		return k8s.TrainingPoolCapacity{Nodes: 3, GPUs: 24, GuaranteedGPUsPerWorker: 8, CPUMillis: 24_000, MemoryBytes: 96 << 30}, nil
 	})
 	startTrainingCapacityObserver(context.Background(), reader, config.Config{})
 	startTrainingCapacityObserver(context.Background(), nil, config.Config{KueueAutoQuota: true})
@@ -60,11 +60,31 @@ func TestTrainingCapacityObserverPreservesLastGoodAndDeduplicatesErrors(t *testi
 		t.Fatal("failed reads must retain last good capacity and avoid repeated logs")
 	}
 	o.reader = capacityReaderFunc(func(context.Context, map[string]string) (k8s.TrainingPoolCapacity, error) {
-		return k8s.TrainingPoolCapacity{}, nil
+		return k8s.TrainingPoolCapacity{CPUMillis: 1000}, nil
 	})
 	o.observe(context.Background())
 	if domain.CurrentResourceLimits().MaxTotalGPUs != 24 {
 		t.Fatal("invalid observation replaced capacity")
+	}
+}
+
+func TestTrainingCapacityObserverEmptyObservationClearsStaleLimit(t *testing.T) {
+	original := domain.CurrentResourceLimits()
+	t.Cleanup(func() { domain.SetResourceLimits(original) })
+	domain.SetResourceLimits(domain.ResourceLimits{MaxWorkerReplicas: 2, MaxGPUsPerWorker: 8, MaxTotalGPUs: 16})
+	o := trainingCapacityObserver{timeout: time.Second, logf: func(string, ...any) {}, reader: capacityReaderFunc(func(context.Context, map[string]string) (k8s.TrainingPoolCapacity, error) {
+		return k8s.TrainingPoolCapacity{}, nil
+	})}
+	o.observe(context.Background())
+	if got := domain.CurrentResourceLimits().MaxTotalGPUs; got != 0 {
+		t.Fatalf("successful empty observation retained stale GPU limit: %d", got)
+	}
+	o.reader = capacityReaderFunc(func(context.Context, map[string]string) (k8s.TrainingPoolCapacity, error) {
+		return k8s.TrainingPoolCapacity{}, errors.New("offline")
+	})
+	o.observe(context.Background())
+	if got := domain.CurrentResourceLimits().MaxTotalGPUs; got != 0 {
+		t.Fatalf("failed read must retain last valid zero: %d", got)
 	}
 }
 
@@ -103,7 +123,7 @@ func TestTrainingCapacityObserverReadTimeoutKeepsLastGood(t *testing.T) {
 	domain.SetResourceLimits(domain.ResourceLimits{MaxWorkerReplicas: 2, MaxGPUsPerWorker: 8, MaxTotalGPUs: 16})
 	o := trainingCapacityObserver{timeout: time.Millisecond, logf: func(string, ...any) {}, reader: capacityReaderFunc(func(ctx context.Context, _ map[string]string) (k8s.TrainingPoolCapacity, error) {
 		<-ctx.Done()
-		return k8s.TrainingPoolCapacity{Nodes: 3, GPUs: 24, GuaranteedGPUsPerWorker: 8}, nil
+		return k8s.TrainingPoolCapacity{Nodes: 3, GPUs: 24, GuaranteedGPUsPerWorker: 8, CPUMillis: 24_000, MemoryBytes: 96 << 30}, nil
 	})}
 	o.observe(context.Background())
 	if domain.CurrentResourceLimits().MaxTotalGPUs != 16 {
@@ -115,14 +135,14 @@ func TestTrainingCapacityObserverLogsOnlyChangedCapacity(t *testing.T) {
 	original := domain.CurrentResourceLimits()
 	t.Cleanup(func() { domain.SetResourceLimits(original) })
 	logs := 0
-	capacity := k8s.TrainingPoolCapacity{Nodes: 2, GPUs: 16, GuaranteedGPUsPerWorker: 8}
+	capacity := k8s.TrainingPoolCapacity{Nodes: 2, GPUs: 16, GuaranteedGPUsPerWorker: 8, CPUMillis: 16_000, MemoryBytes: 64 << 30}
 	o := trainingCapacityObserver{timeout: time.Second, logf: func(string, ...any) { logs++ }, reader: capacityReaderFunc(func(context.Context, map[string]string) (k8s.TrainingPoolCapacity, error) { return capacity, nil })}
 	o.observe(context.Background())
 	o.observe(context.Background())
 	if logs != 1 || domain.CurrentResourceLimits().MaxTotalGPUs != 16 {
 		t.Fatal("unchanged capacity should not repeat log")
 	}
-	capacity = k8s.TrainingPoolCapacity{Nodes: 3, GPUs: 24, GuaranteedGPUsPerWorker: 8}
+	capacity = k8s.TrainingPoolCapacity{Nodes: 3, GPUs: 24, GuaranteedGPUsPerWorker: 8, CPUMillis: 24_000, MemoryBytes: 96 << 30}
 	o.observe(context.Background())
 	if logs != 2 || domain.CurrentResourceLimits().MaxTotalGPUs != 24 {
 		t.Fatal("new capacity was not updated and logged")

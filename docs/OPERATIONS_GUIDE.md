@@ -533,9 +533,9 @@ Ray 2.35 的已知风险包括旧 Jobs API/客户端协议差异、较旧 KubeRa
 3. 每节点暴露 8 个 `nvidia.com/gpu`。
 4. FSX Agent 与 `csi-fsx-node` Ready。
 5. 节点 DNS 分流已安装并通过检查。
-6. TOS/FSX 前缀 mount smoke 通过。
-7. `/data1`、`/data2` 必须是真实独立挂载的缓存盘，准备 `/data1/ray-cache` 与 `/data2/ray-cache` 权限；它们已用于双盘缓存，不是未来预留。运行下面的注册检查，分别合并两套现有供应器配置并人工复核。
-8. 保持 cordon，增加生产标签以完成节点筛选与验收。标签本身不代替存储注册，也不应提前放开调度。
+6. 新节点宿主机具备 NFS 客户端 `mount.nfs`；TOS/FSX 前缀与 IDC NFS 分别完成挂载及读取 smoke。FSX Agent Ready 不能代替 NFS 验收。
+7. `/data1`、`/data2` 必须是真实独立挂载的缓存盘，准备 `/data1/ray-cache` 与 `/data2/ray-cache` 权限；父目录 `/data1` 与 `/data2` 必须为 root 拥有且不可被 group/world 写入，避免缓存子目录被非特权用户替换。它们已用于双盘缓存，不是未来预留。运行下面的注册检查，分别合并两套现有供应器配置并人工复核。
+8. 保持 cordon，增加生产标签以完成节点筛选与验收。标签不代表存储就绪，本身不代替存储注册，也不应提前放开调度。
 9. 两套供应器升级、定向双盘挂载/写入/回收验收及资源上限复核全部通过后，最后 `kubectl uncordon NODE_NAME`；再提交 1 卡和多机训练 smoke。
 
 ```bash
@@ -546,6 +546,21 @@ kubectl get pods -n kube-system -o wide --field-selector spec.nodeName=<node>
 kubectl label node <node> accelerator=nvidia-rtx-4090 --overwrite
 kubectl label node <node> platform.wellspiking.ai/gpu-pool=production --overwrite
 ```
+
+在 controller、训练 selector / ResourceFlavor 与 cache-ready gate 未生产启用并验收前，仅挂载 `/data1`、`/data2` 并设置上述两个生产标签不会自动接入，仍需执行人工注册及验收。Ubuntu 新节点须在**宿主机**检查 NFS helper，缺少时以 root 安装：
+
+```bash
+command -v mount.nfs
+# 仅在缺少工具时安装；不执行系统整体升级
+apt-get install --no-install-recommends nfs-common
+command -v mount.nfs
+```
+
+补装 NFS 客户端无需重启内核或 kubelet。安装后观察 kubelet 的挂载重试，并确认实际卷挂载与数据读取通过；命令存在不等于 NFS 网络、export 权限或挂载选项均正确。
+
+自动节点接入启用后，可以使用简流程，但前提是三类门禁已经在生产发布并验收：`ray-node-onboarding` controller 已启用，训练提交的 node selector / ResourceFlavor 只选择 `platform.wellspiking.ai/cache-ready=true` 的节点，且 cache-ready gate 已经覆盖所有训练入口。该前提不满足时，继续使用下面的人工注册流程，不宣称自动接入已部署。
+
+启用后的简流程：先完成基础驱动、device plugin、DCGM、DNS、NFS helper、FSX/CSI 与 TOS/FSX/IDC NFS 读取检查；确认 `/data1`、`/data2` 是独立挂载，父目录为 root:root 且模式不宽于 `0755`，再准备各自 `ray-cache` 子目录。设置生产池两个标签，但不要手工设置或修改 `platform.wellspiking.ai/cache-ready`。节点必须取消 cordon，让 controller 的定向 PVC 探针能够调度到该节点；平台显示 ready 之前，训练仍必须被 cache-ready gate 挡住，不能靠人工挑节点绕过。controller 自动完成准备、登记、挂载验收、回收与 ready 标记；平台随后发现物理容量，超级管理员再按需求分配团队配额。已有运行任务不会因为新节点接入而重启、迁移或自动扩容。
 
 节点仍处于 cordon 时，生成受控审阅材料（目录必须不存在）：
 
@@ -788,7 +803,11 @@ kubectl get nodes -l 'platform.wellspiking.ai/gpu-pool=production' \
 - `Insufficient cpu/memory`：请求超过节点剩余资源；CPU/内存是每个 Worker Pod 的值。
 - `didn't match Pod's node affinity/selector`：节点标签或 ResourceFlavor 错误。
 - Kueue 未 admitted：团队/集群配额不足或上一任务 TTL 尚未释放。
-- `FailedMount`：进入 FSX 排障，不属于调度故障。
+- `Scheduled`：Pod 已分配节点，不代表卷挂载、镜像拉取或容器启动完成。
+- `FailedMount`：卷挂载失败，不属于调度故障。先看事件中的卷类型与源地址；FSX 卷进入 8.6，IDC NFS 按下面检查宿主机客户端。
+- `ErrImagePull` / `ImagePullBackOff`：镜像拉取失败，检查镜像地址、digest、仓库访问和拉取凭据，不通过修改 GPU 标签解决。
+
+IDC NFS 卷出现 `bad option` 或 `might need /sbin/mount.<type> helper` 时，先在目标节点执行 `command -v mount.nfs`。Ubuntu 缺少 helper 时，以 root 执行 `apt-get install --no-install-recommends nfs-common`，再检查命令可用。此项修复无需重启内核或 kubelet；等待 kubelet 重试并检查该 Pod 的最新事件。若仍失败，再核对事件中的具体挂载选项、NFS 服务连通性和 export 权限。不要因这些事件重启已有训练或 FSX Agent；只有实际挂载、读取和容器启动通过，才能确认环境可用。
 
 ### 8.5 任务 Pod Error，但挂载正常
 

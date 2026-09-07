@@ -19,6 +19,20 @@ type TrainingPoolCapacity struct {
 	MemoryBytes             int64
 }
 
+// Validate rejects malformed capacity without mistaking a successful empty
+// node listing for a failed read. Only an entirely zero observation is empty.
+// Callers must check the node-list error before using any returned capacity.
+func (capacity TrainingPoolCapacity) Validate() error {
+	if capacity == (TrainingPoolCapacity{}) {
+		return nil
+	}
+	if capacity.Nodes <= 0 || capacity.GPUs <= 0 || capacity.CPUMillis <= 0 || capacity.MemoryBytes <= 0 ||
+		capacity.MaxGPUsPerNode < 0 || capacity.GuaranteedGPUsPerWorker < 0 {
+		return fmt.Errorf("invalid training pool capacity: expected positive nodes, GPUs, CPU and memory with nonnegative GPU shape, or an entirely empty observation")
+	}
+	return nil
+}
+
 // TrainingPoolCapacity sums allocatable resources over schedulable, Ready,
 // positive-GPU nodes that carry the training labels. Kueue cannot discover
 // capacity on its own, so the platform derives the admission budget from the

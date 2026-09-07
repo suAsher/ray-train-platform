@@ -99,16 +99,42 @@ func TestSyncClusterQueueQuotaIsNoOpWhenAlreadyCorrect(t *testing.T) {
 	}
 }
 
-// Losing every training node must not silently wipe the queue: a zero budget
-// would make every job hang in QUEUED with no explanation.
-func TestSyncClusterQueueQuotaRefusesEmptyPool(t *testing.T) {
+func TestSyncClusterQueueQuotaZerosSuccessfullyObservedEmptyPool(t *testing.T) {
 	client, dynamic := quotaTestClient(clusterQueueObject("cluster-gpu-queue", "24", "192", "1536Gi"))
 
-	_, err := client.SyncClusterQueueQuota(context.Background(), "cluster-gpu-queue", TrainingPoolCapacity{})
-	if err == nil {
-		t.Fatalf("expected an error when no training node is available")
+	changed, err := client.SyncClusterQueueQuota(context.Background(), "cluster-gpu-queue", TrainingPoolCapacity{})
+	if err != nil || !changed {
+		t.Fatalf("expected empty pool to clear stale quotas: changed=%v err=%v", changed, err)
 	}
-	if got := nominalQuotaFor(t, dynamic, "cluster-gpu-queue", "nvidia.com/gpu"); got != "24" {
-		t.Fatalf("existing quota must be left untouched, got %q", got)
+	for _, name := range []string{"nvidia.com/gpu", "cpu", "memory"} {
+		if got := nominalQuotaFor(t, dynamic, "cluster-gpu-queue", name); got != "0" {
+			t.Fatalf("%s quota must be zero, got %q", name, got)
+		}
+	}
+	changed, err = client.SyncClusterQueueQuota(context.Background(), "cluster-gpu-queue", TrainingPoolCapacity{})
+	if err != nil || changed {
+		t.Fatalf("repeated empty observation must be a no-op: changed=%v err=%v", changed, err)
+	}
+}
+
+func TestSyncClusterQueueQuotaRejectsMalformedCapacity(t *testing.T) {
+	for _, capacity := range []TrainingPoolCapacity{
+		{Nodes: -1}, {GPUs: -1}, {CPUMillis: -1}, {MemoryBytes: -1},
+		{GPUs: 8}, {CPUMillis: 1000}, {MemoryBytes: 1024},
+		{MaxGPUsPerNode: 8}, {GuaranteedGPUsPerWorker: 8}, {Nodes: 1},
+		{Nodes: 1, GPUs: 8, CPUMillis: -1}, {Nodes: 1, GPUs: 8, MemoryBytes: -1},
+		{Nodes: 1, GPUs: 8},
+		{Nodes: 1, GPUs: 8, CPUMillis: 1000},
+		{Nodes: 1, GPUs: 8, MemoryBytes: 1024},
+	} {
+		client, dynamic := quotaTestClient(clusterQueueObject("cluster-gpu-queue", "24", "192", "1536Gi"))
+		if changed, err := client.SyncClusterQueueQuota(context.Background(), "cluster-gpu-queue", capacity); err == nil || changed {
+			t.Fatalf("malformed capacity accepted: %+v", capacity)
+		}
+		for name, want := range map[string]string{"nvidia.com/gpu": "24", "cpu": "192", "memory": "1536Gi"} {
+			if got := nominalQuotaFor(t, dynamic, "cluster-gpu-queue", name); got != want {
+				t.Fatalf("invalid observation changed %s quota: %q", name, got)
+			}
+		}
 	}
 }

@@ -1,11 +1,16 @@
 package domain
 
 type GPUNodeUsage struct {
-	NodeName    string `json:"nodeName"`
-	Capacity    int64  `json:"capacity"`
-	Allocatable int64  `json:"allocatable"`
-	Allocated   int64  `json:"allocated"`
-	Available   int64  `json:"available"`
+	NodeName         string `json:"nodeName"`
+	Capacity         int64  `json:"capacity"`
+	Allocatable      int64  `json:"allocatable"`
+	Allocated        int64  `json:"allocated"`
+	Available        int64  `json:"available"`
+	NodeReady        *bool  `json:"nodeReady,omitempty"`
+	Cordoned         *bool  `json:"cordoned,omitempty"`
+	CacheReady       *bool  `json:"cacheReady,omitempty"`
+	OnboardingStage  string `json:"onboardingStage,omitempty"`
+	OnboardingReason string `json:"onboardingReason,omitempty"`
 }
 
 type ClusterTopologyOverview struct {

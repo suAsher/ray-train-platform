@@ -150,6 +150,9 @@ func (r *Reconciler) syncClusterQueueQuota(ctx context.Context) {
 	}
 	capacity, err := r.client.TrainingPoolCapacity(ctx, r.renderOptions.NodeSelector)
 	if err == nil {
+		err = capacity.Validate()
+	}
+	if err == nil {
 		err = domain.UpdateResourceLimitsFromCapacity(capacity.Nodes, capacity.GuaranteedGPUsPerWorker, capacity.GPUs)
 	}
 	if err == nil {

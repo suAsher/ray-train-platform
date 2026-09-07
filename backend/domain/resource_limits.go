@@ -47,6 +47,18 @@ func SetResourceLimits(limits ResourceLimits) {
 // after a complete, internally consistent training-pool observation. Invalid
 // observations leave the deployment profile or last valid observation intact.
 func UpdateResourceLimitsFromCapacity(readyNodes int, guaranteedGPUsPerWorker, totalGPUs int64) error {
+	if readyNodes == 0 && guaranteedGPUsPerWorker == 0 && totalGPUs == 0 {
+		limitsMutex.Lock()
+		defer limitsMutex.Unlock()
+		// Preserve the last worker shape for forms and recovery; a zero total
+		// still rejects every GPU job. Startup defaults are not observations.
+		currentLimits = ResourceLimits{
+			MaxWorkerReplicas: currentLimits.MaxWorkerReplicas,
+			MaxGPUsPerWorker:  currentLimits.MaxGPUsPerWorker,
+			MaxTotalGPUs:      0,
+		}
+		return nil
+	}
 	if readyNodes <= 0 {
 		return fmt.Errorf("observed training capacity must include at least one Ready node")
 	}

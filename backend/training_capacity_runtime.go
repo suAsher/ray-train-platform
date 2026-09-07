@@ -63,6 +63,9 @@ func (o *trainingCapacityObserver) observe(ctx context.Context) {
 		err = readCtx.Err()
 	}
 	if err == nil {
+		err = capacity.Validate()
+	}
+	if err == nil {
 		err = domain.UpdateResourceLimitsFromCapacity(capacity.Nodes, capacity.GuaranteedGPUsPerWorker, capacity.GPUs)
 	}
 	if err != nil {

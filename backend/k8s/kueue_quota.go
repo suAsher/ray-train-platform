@@ -30,11 +30,10 @@ func (c *Client) SyncClusterQueueQuota(ctx context.Context, clusterQueueName str
 	if clusterQueueName == "" {
 		return false, fmt.Errorf("cluster queue name is required")
 	}
-	// A pool that momentarily reports nothing — API hiccup, every node
-	// draining, a mistyped label — must not zero the queue and strand every
-	// job in QUEUED. Leave the last known good budget in place instead.
-	if capacity.Nodes == 0 || capacity.GPUs <= 0 {
-		return false, fmt.Errorf("refusing to set an empty quota: no ready training node matched the selector")
+	// A successful observation of no eligible nodes removes the admission
+	// budget. Failed node reads are handled by the caller and never reach here.
+	if err := capacity.Validate(); err != nil {
+		return false, err
 	}
 
 	queues := c.dynamic.Resource(clusterQueueGVR)

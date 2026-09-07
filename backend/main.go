@@ -578,8 +578,23 @@ func clusterTopologyHandler(client *k8s.Client) gin.HandlerFunc {
 			c.JSON(http.StatusBadGateway, gin.H{"success": false, "error": gin.H{"code": "TOPOLOGY_QUERY_FAILED", "message": "could not query Kubernetes topology"}})
 			return
 		}
-		c.JSON(http.StatusOK, httpapi.Success(httpapi.RequestID(c.GetHeader("X-Request-ID")), topology))
+		principal, _ := auth.PrincipalFromGin(c)
+		c.JSON(http.StatusOK, httpapi.Success(httpapi.RequestID(c.GetHeader("X-Request-ID")), topologyForPrincipal(topology, principal)))
 	}
+}
+
+func topologyForPrincipal(topology domain.ClusterTopologyOverview, principal auth.Principal) domain.ClusterTopologyOverview {
+	if principal.HasRole("SuperAdmin") {
+		return topology
+	}
+	result := topology
+	result.Nodes = make([]domain.GPUNodeUsage, len(topology.Nodes))
+	for i, node := range topology.Nodes {
+		node.NodeReady, node.Cordoned, node.CacheReady = nil, nil, nil
+		node.OnboardingStage, node.OnboardingReason = "", ""
+		result.Nodes[i] = node
+	}
+	return result
 }
 
 func readinessHandler(database interface{ DB() (*sql.DB, error) }, client *k8s.Client, production bool) gin.HandlerFunc {

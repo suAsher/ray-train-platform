@@ -39,8 +39,9 @@ test('quota UI contains no fixed 16 or 24 GPU fleet assumptions', () => {
 })
 
 test('quota capacity binds separate authoritative topology and limits, clearing failed reads', () => {
-  assert.match(quotaManageSource, /physicalGPUs\.value = topology\?\.totalGpus \?\? null/)
-  assert.match(quotaManageSource, /physicalGPUs\.value = null/)
+  assert.match(quotaManageSource, /const result = await refreshNodeTopology\(apiGet\)/)
+  assert.match(quotaManageSource, /physicalGPUs\.value = result\.physicalGPUs/)
+  assert.match(quotaManageSource, /nodeTopology\.value = result/)
   assert.match(quotaManageSource, /quotaLimits\.value = response \|\| \{\}/)
   assert.match(quotaManageSource, /quotaLimits\.value = \{\}/)
   assert.match(quotaManageSource, /:limits="quotaLimits"/)
@@ -52,6 +53,16 @@ test('quota capacity binds separate authoritative topology and limits, clearing 
 test('queue denominator does not turn an unknown capacity into zero', () => {
   assert.match(queuePanelSource, /clusterGPUs: \{ type: Number, default: null \}/)
   assert.match(queuePanelSource, /\$\{props\.clusterGPUs \?\? '—'\}/)
+})
+
+test('node onboarding table is read-only and SuperAdmin-only with unknown fallback', () => {
+  const section = tenantPanelSource.match(/<section v-if="isSuperAdmin"[^>]*aria-label="节点接入状态">([\s\S]*?)<\/section>/)?.[1]
+  assert.ok(section)
+  assert.match(section, /!nodeTopology.available/)
+  assert.match(section, /:data="onboardingRows"/)
+  assert.match(section, /prop="reason"/)
+  assert.doesNotMatch(section, /v-html|<el-button|@click/)
+  assert.match(quotaManageSource, /:node-topology="nodeTopology"/)
 })
 
 test('queue actions are tenant-scoped and TenantAdmin copy does not claim quota allocation', () => {

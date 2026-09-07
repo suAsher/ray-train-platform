@@ -23,6 +23,7 @@
             :is-super-admin="isSuperAdmin"
             :limits="quotaLimits"
             :physical-g-p-us="physicalGPUs"
+            :node-topology="nodeTopology"
             @create-tenant="showAddTenantModal = true"
             @changed="loadTenants"
           />
@@ -283,6 +284,7 @@ import { queueJobAction } from '../../components/admin/queuePanelActions.js'
 import { refreshAdminActiveJobs } from '../../adminActiveJobs.js'
 import { normalizeGPUAllocations } from '../../gpuAllocations'
 import { buildCreateImageRequest, defaultImageCompatibilityState, reconcileImageCompatibility } from '../../imageCompatibility'
+import { refreshNodeTopology } from '../../nodeOnboarding'
 
 const activeTab = ref('tenants')
 const loading = ref(false)
@@ -294,6 +296,7 @@ const gpuAllocationsLoaded = ref(false)
 const gpuAllocationError = ref('')
 const physicalAllocatedGPUs = ref(0)
 const physicalGPUs = ref(null)
+const nodeTopology = ref({ nodes: [], available: false, error: '节点状态尚未读取。' })
 const quotaLimits = ref({})
 const catalogImages = ref([])
 const gitCredentials = ref([])
@@ -383,14 +386,10 @@ const loadActiveJobs = async () => {
 }
 
 const loadClusterTopology = async () => {
-  try {
-    const topology = await apiGet('/api/v1/cluster/topology')
-    physicalGPUs.value = topology?.totalGpus ?? null
-    physicalAllocatedGPUs.value = Number(topology?.usedGpus || 0)
-  } catch {
-    physicalGPUs.value = null
-    physicalAllocatedGPUs.value = 0
-  }
+  const result = await refreshNodeTopology(apiGet)
+  nodeTopology.value = result
+  physicalGPUs.value = result.physicalGPUs
+  physicalAllocatedGPUs.value = result.allocatedGPUs
 }
 
 const loadGPUAllocations = async () => {

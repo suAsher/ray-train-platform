@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
@@ -51,9 +52,41 @@ func (c *Client) ListGPUNodeUsage(ctx context.Context) ([]GPUNodeUsage, error) {
 		if available < 0 {
 			available = 0
 		}
-		usage = append(usage, GPUNodeUsage{NodeName: node.Name, Capacity: capacity, Allocatable: allocatable, Allocated: used, Available: available})
+		item := GPUNodeUsage{NodeName: node.Name, Capacity: capacity, Allocatable: allocatable, Allocated: used, Available: available}
+		usage = append(usage, withNodeOnboarding(item, node))
 	}
 	return usage, nil
+}
+
+func withNodeOnboarding(item GPUNodeUsage, node corev1.Node) GPUNodeUsage {
+	ready, cordoned := false, node.Spec.Unschedulable
+	for _, condition := range node.Status.Conditions {
+		if condition.Type == corev1.NodeReady {
+			ready = condition.Status == corev1.ConditionTrue
+		}
+	}
+	item.NodeReady, item.Cordoned = &ready, &cordoned
+	raw := node.Annotations["platform.wellspiking.ai/onboarding-state"]
+	var state struct {
+		UID   string `json:"uid"`
+		Stage string `json:"stage"`
+	}
+	if len(raw) > 16384 || json.Unmarshal([]byte(raw), &state) != nil || state.UID == "" || state.UID != string(node.UID) {
+		return item
+	}
+	switch state.Stage {
+	case "prepare", "probe", "cleanup", "ready":
+	default:
+		return item
+	}
+	cacheReady := state.Stage == "ready" && node.Labels["platform.wellspiking.ai/cache-ready"] == "true"
+	item.CacheReady, item.OnboardingStage = &cacheReady, state.Stage
+	reason := []rune(node.Annotations["platform.wellspiking.ai/onboarding-reason"])
+	if len(reason) > 400 {
+		reason = reason[:400]
+	}
+	item.OnboardingReason = string(reason)
+	return item
 }
 
 // isVirtualNode reports whether a node is a serverless virtual-kubelet node

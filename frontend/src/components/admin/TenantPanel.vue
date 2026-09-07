@@ -17,6 +17,20 @@
     </el-alert>
     <p v-if="isSuperAdmin" class="text-xs text-slate-400">已接入 GPU 不等于可用于训练的 GPU；训练提交容量还受节点就绪、可调度状态、训练池条件和平台提交上限限制。节点满足训练池条件后，平台自动同步 Kueue 容量；团队配额独立管理。容量未知时请刷新重试，不能据此判断扩容是否生效。</p>
 
+    <section v-if="isSuperAdmin" class="panel p-4 space-y-2" aria-label="节点接入状态">
+      <h5 class="text-sm font-bold text-white">节点接入状态</h5>
+      <p class="text-xs text-slate-400">物理 GPU、节点就绪与存储验收分别显示；存储验收通过后仍需满足训练池与配额条件。未记录自动验收状态的节点按现有人工流程验收。</p>
+      <p v-if="!nodeTopology.available" class="text-xs text-amber-300">{{ nodeTopology.error || '节点状态未知，请刷新重试。' }}</p>
+      <el-table v-else :data="onboardingRows" empty-text="未发现物理 GPU 节点" size="small">
+        <el-table-column prop="name" label="节点" min-width="150" />
+        <el-table-column prop="gpus" label="物理 GPU" width="100" />
+        <el-table-column prop="ready" label="节点就绪" width="100" />
+        <el-table-column prop="scheduling" label="调度" width="120" />
+        <el-table-column prop="stage" label="存储验收" min-width="190" />
+        <el-table-column prop="reason" label="原因 / 进展" min-width="240" />
+      </el-table>
+    </section>
+
     <div class="grid gap-5 lg:grid-cols-3">
       <div
         v-for="tenant in displayedTenants"
@@ -114,13 +128,16 @@ import { ElMessage } from 'element-plus'
 import { fetchTenantsForRetirementAudit, fetchTenantRetirementPreflight, retireTenant, setTenantGPUQuota } from '../../api/catalog'
 import { adminQuotaModel, defaultPlatformLimits } from '../../platformLimits'
 import { canConfirmRetirement, visibleTenants, retirementCountRows, retirementBlockerText } from '../../tenantRetirement'
+import { nodeOnboardingRows } from '../../nodeOnboarding'
 
 const props = defineProps({
   tenants: { type: Array, default: () => [] },
   isSuperAdmin: { type: Boolean, default: false },
   limits: { type: Object, default: () => defaultPlatformLimits },
   physicalGPUs: { type: Number, default: null },
+  nodeTopology: { type: Object, default: () => ({ nodes: [], available: false, error: '' }) },
 })
+const onboardingRows = computed(() => nodeOnboardingRows(props.nodeTopology.nodes))
 const emit = defineEmits(['create-tenant', 'changed'])
 
 const quotaVisible = ref(false)

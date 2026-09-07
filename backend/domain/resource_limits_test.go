@@ -93,6 +93,9 @@ func TestUpdateResourceLimitsFromCapacityPreservesLastKnownGood(t *testing.T) {
 		guaranteedGPUsPerWorker int64
 		totalGPUs               int64
 	}{
+		{name: "negative nodes", readyNodes: -1},
+		{name: "negative GPU guarantee", guaranteedGPUsPerWorker: -1},
+		{name: "negative total GPUs", totalGPUs: -1},
 		{name: "zero nodes", readyNodes: 0, guaranteedGPUsPerWorker: 4, totalGPUs: 20},
 		{name: "zero per-node GPUs", readyNodes: 5, guaranteedGPUsPerWorker: 0, totalGPUs: 20},
 		{name: "zero total GPUs", readyNodes: 5, guaranteedGPUsPerWorker: 4, totalGPUs: 0},
@@ -113,5 +116,25 @@ func TestUpdateResourceLimitsFromCapacityPreservesLastKnownGood(t *testing.T) {
 				t.Fatalf("invalid capacity replaced last-known-good limits: got %+v, want %+v", got, want)
 			}
 		})
+	}
+}
+
+func TestUpdateResourceLimitsFromEmptyCapacityBlocksGPUJobsAndRecovers(t *testing.T) {
+	t.Cleanup(func() { SetResourceLimits(ResourceLimits{}) })
+	SetResourceLimits(ResourceLimits{MaxWorkerReplicas: 2, MaxGPUsPerWorker: 8, MaxTotalGPUs: 16})
+	if err := UpdateResourceLimitsFromCapacity(0, 0, 0); err != nil {
+		t.Fatalf("successful empty observation: %v", err)
+	}
+	if got := CurrentResourceLimits(); got != (ResourceLimits{MaxWorkerReplicas: 2, MaxGPUsPerWorker: 8, MaxTotalGPUs: 0}) {
+		t.Fatalf("empty capacity must zero total while retaining valid structural ceilings: %+v", got)
+	}
+	if err := specWithResources(1, 1).Validate(); err == nil {
+		t.Fatal("empty pool admitted a GPU job")
+	}
+	if err := UpdateResourceLimitsFromCapacity(1, 8, 8); err != nil {
+		t.Fatal(err)
+	}
+	if err := specWithResources(1, 8).Validate(); err != nil {
+		t.Fatalf("recovered pool must accept GPU jobs: %v", err)
 	}
 }

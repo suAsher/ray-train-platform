@@ -1408,7 +1408,7 @@ func TestQuotaSyncRefreshesRuntimeLimitsWhenKueueAlreadyMatches(t *testing.T) {
 	assertNoKueueUpdateActions(t, dynamicClient)
 }
 
-func TestQuotaSyncPreservesLastKnownGoodLimitsOnEmptyOrFailedObservation(t *testing.T) {
+func TestQuotaSyncDistinguishesEmptyFromFailedObservation(t *testing.T) {
 	t.Cleanup(func() { domain.SetResourceLimits(domain.ResourceLimits{}) })
 	want := domain.ResourceLimits{MaxWorkerReplicas: 4, MaxGPUsPerWorker: 6, MaxTotalGPUs: 28}
 
@@ -1441,10 +1441,22 @@ func TestQuotaSyncPreservesLastKnownGoodLimitsOnEmptyOrFailedObservation(t *test
 
 			reconciler.syncClusterQueueQuota(context.Background())
 
-			if got := domain.CurrentResourceLimits(); got != want {
-				t.Fatalf("observation replaced last-known-good limits: got %+v, want %+v", got, want)
+			expected := want
+			if test.name == "empty" {
+				expected.MaxTotalGPUs = 0
 			}
-			assertNoKueueUpdateActions(t, dynamicClient)
+			if got := domain.CurrentResourceLimits(); got != expected {
+				t.Fatalf("observation produced limits: got %+v, want %+v", got, expected)
+			}
+			if test.name == "empty" {
+				for _, name := range []string{"nvidia.com/gpu", "cpu", "memory"} {
+					if got := nominalQuotaFor(t, dynamicClient, "cluster-gpu-queue", name); got != "0" {
+						t.Fatalf("empty pool retained %s quota %s", name, got)
+					}
+				}
+			} else {
+				assertNoKueueUpdateActions(t, dynamicClient)
+			}
 		})
 	}
 }
