@@ -38,7 +38,11 @@ func normalizePodDefaults(spec *corev1.PodSpec) {
 		spec.PreemptionPolicy = pointer(corev1.PreemptLowerPriority)
 	}
 	if spec.Priority == nil {
-		spec.Priority = pointer(int32(0))
+		if spec.PriorityClassName == "node-onboarding-probe" {
+			spec.Priority = pointer(int32(-1000))
+		} else {
+			spec.Priority = pointer(int32(0))
+		}
 	}
 	if spec.DeprecatedServiceAccount == "" {
 		spec.DeprecatedServiceAccount = spec.ServiceAccountName

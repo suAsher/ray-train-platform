@@ -49,7 +49,10 @@ explicitly removing the proof-store binding first. The readiness label is likewi
 protected from other Node writers, while normal cordon and other Node management
 remain allowed. Preparations add only read-only `/sys/dev/block` and `/sys/devices`
 mounts for physical-device ancestry proof; no full `/sys` mount is permitted.
-Both probe kinds use `preemptionPolicy: Never`, the default scheduler and cluster
+Both probe kinds use the dedicated `node-onboarding-probe` PriorityClass with
+value `-1000`, `globalDefault: false`, and `preemptionPolicy: Never`; the Pod also
+sets `Never`. This keeps Kubernetes' Priority admission defaults consistent and
+prevents the checks from preempting training. They use the default scheduler and cluster
 DNS, without custom DNS or host aliases.
 
 To pause, set `activateController: false`; this preserves policies, external

@@ -35,8 +35,8 @@ spec:
         object.spec.schedulerName == 'default-scheduler' &&
         object.spec.dnsPolicy == 'ClusterFirst' && !has(object.spec.dnsConfig) &&
         (!has(object.spec.hostAliases) || size(object.spec.hostAliases) == 0) &&
-        (!has(object.spec.priorityClassName) || object.spec.priorityClassName == '') &&
-        (!has(object.spec.priority) || object.spec.priority == 0) &&
+        object.spec.priorityClassName == 'node-onboarding-probe' &&
+        object.spec.priority == -1000 &&
         object.spec.terminationGracePeriodSeconds == 10 &&
         (!has(object.spec.hostPID) || !object.spec.hostPID) &&
         (!has(object.spec.hostIPC) || !object.spec.hostIPC) &&

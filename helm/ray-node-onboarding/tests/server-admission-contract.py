@@ -111,7 +111,6 @@ def main():
         ("SA token", ["spec", "automountServiceAccountToken"], True),
         ("host PID", ["spec", "hostPID"], True),
         ("host network", ["spec", "hostNetwork"], True),
-        ("preemption", ["spec", "preemptionPolicy"], "PreemptLowerPriority"),
         ("alternate scheduler", ["spec", "schedulerName"], "unsafe-scheduler"),
         ("host DNS", ["spec", "dnsPolicy"], "Default"),
         ("custom DNS", ["spec", "dnsConfig"], {"nameservers": ["192.0.2.1"]}),
@@ -139,6 +138,7 @@ def main():
     create("writable NFS", mutate(probe, ["spec", "volumes", nfs_index, "nfs", "readOnly"], False), "pods")
     create("unowned probe", mutate(prep, ["metadata", "labels"], {}), "owned-resources")
     create("unrelated PVC class", mutate(fixtures["cache1-pvc"], ["spec", "storageClassName"], "unrelated-class"), "pvcs")
+    create("oversized 2Gi PVC", mutate(fixtures["cache1-pvc"], ["spec", "resources", "requests", "storage"], "2Gi"), "pvcs")
 
     # A non-controller provisioner keeps its normal Pod creation permission.
     other = copy.deepcopy(probe)

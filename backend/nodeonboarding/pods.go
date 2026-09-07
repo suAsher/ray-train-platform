@@ -53,6 +53,7 @@ func (c *Controller) basePod(node *corev1.Node, suffix, image string, uid int64)
 func (c *Controller) preparePod(node *corev1.Node) *corev1.Pod {
 	pod := c.basePod(node, "prepare", c.config.Image, 0)
 	pod.Spec.PreemptionPolicy = pointer(corev1.PreemptNever)
+	pod.Spec.PriorityClassName = "node-onboarding-probe"
 	pod.Spec.ServiceAccountName = c.config.ProbeServiceAccount
 	pod.Spec.ActiveDeadlineSeconds = pointer(int64(600))
 	warm := c.basePod(node, "warm", c.config.HelperImage, 1000).Spec.Containers[0]
@@ -80,6 +81,7 @@ func (c *Controller) preparePod(node *corev1.Node) *corev1.Pod {
 func (c *Controller) probePod(node *corev1.Node, shares []nfsShare) *corev1.Pod {
 	pod := c.basePod(node, "probe", c.config.HelperImage, 1000)
 	pod.Spec.PreemptionPolicy = pointer(corev1.PreemptNever)
+	pod.Spec.PriorityClassName = "node-onboarding-probe"
 	pod.Spec.ServiceAccountName = c.config.ProbeServiceAccount
 	pod.Spec.ActiveDeadlineSeconds = pointer(int64(600))
 	pod.Spec.SecurityContext.RunAsNonRoot = pointer(true)

@@ -245,3 +245,30 @@ func TestNodeOnboardingPodResourceCELContract(t *testing.T) {
 		}
 	}
 }
+
+func TestNodeOnboardingPVCResourceCELContract(t *testing.T) {
+	got, err := renderOnboardingChart(t, onboardingEnabledValues(), "ray-cache-local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"dyn(object.spec.resources).requests == {'storage': '1Gi'}",
+		"!has(dyn(object.spec.resources).limits) || size(dyn(object.spec.resources).limits) == 0",
+	} {
+		if !strings.Contains(got, required) {
+			t.Errorf("PVC resources require schema-compatible exact comparison: %s", required)
+		}
+	}
+}
+
+func TestNodeOnboardingProbePriorityClass(t *testing.T) {
+	got, err := renderOnboardingChart(t, onboardingEnabledValues(), "ray-cache-local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"kind: PriorityClass", "value: -1000", "globalDefault: false", "preemptionPolicy: Never", "object.spec.priorityClassName == 'node-onboarding-probe'", "object.spec.priority == -1000"} {
+		if !strings.Contains(got, required) {
+			t.Errorf("missing fixed non-preempting priority contract %q", required)
+		}
+	}
+}

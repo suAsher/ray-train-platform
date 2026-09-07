@@ -21,6 +21,10 @@ grep -Fq 'replicas: 0' "${rendered_dir}/staged.yaml"
 "${helm_bin}" template node-onboarding "${chart_dir}" "${enabled_args[@]}" --set activateController=true >"${rendered_dir}/active.yaml"
 grep -Fq 'replicas: 1' "${rendered_dir}/active.yaml"
 grep -Fq 'type: Recreate' "${rendered_dir}/active.yaml"
+grep -Fq 'kind: PriorityClass' "${rendered_dir}/active.yaml"
+grep -Fq 'value: -1000' "${rendered_dir}/active.yaml"
+grep -Fq 'globalDefault: false' "${rendered_dir}/active.yaml"
+grep -Fq 'preemptionPolicy: Never' "${rendered_dir}/active.yaml"
 grep -Fq -- '--probe-service-account=node-onboarding-probe' "${rendered_dir}/active.yaml"
 if grep -Eq '^kind: (Namespace|Service|DaemonSet)$' "${rendered_dir}/active.yaml"; then
   echo 'unexpected namespace or exposed service/workload' >&2

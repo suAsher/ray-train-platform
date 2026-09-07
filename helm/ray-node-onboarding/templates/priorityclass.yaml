@@ -1,0 +1,10 @@
+{{- if .Values.enabled }}
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: node-onboarding-probe
+value: -1000
+globalDefault: false
+preemptionPolicy: Never
+description: "Low-priority node storage checks must never preempt training workloads."
+{{- end }}
