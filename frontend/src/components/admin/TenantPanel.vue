@@ -11,10 +11,11 @@
       </div>
     </div>
 
-    <el-alert v-if="isSuperAdmin && copy.allocatedGPUs > copy.capacityGPUs" type="warning" show-icon :closable="false">
-      <template #title>已分配配额超过集群实际容量</template>
-      各租户配额之和为 {{ copy.allocatedGPUs }} 卡，超过物理集群的 {{ copy.capacityGPUs }} 卡。超额部分会在 Kueue 准入阶段排队，不会真的获得 GPU。
+    <el-alert v-if="isSuperAdmin && copy.overAllocated" type="warning" show-icon :closable="false">
+      <template #title>已分配配额超过当前训练提交容量</template>
+      各租户配额之和为 {{ copy.allocatedGPUs }} 卡，当前训练提交容量为 {{ copy.capacityGPUs }} 卡；配额不是 GPU 预留，实际运行仍受调度和 Kueue 准入限制。
     </el-alert>
+    <p v-if="isSuperAdmin" class="text-xs text-slate-400">已接入 GPU 不等于可用于训练的 GPU；训练提交容量还受节点就绪、可调度状态、训练池条件和平台提交上限限制。节点满足训练池条件后，平台自动同步 Kueue 容量；团队配额独立管理。容量未知时请刷新重试，不能据此判断扩容是否生效。</p>
 
     <div class="grid gap-5 lg:grid-cols-3">
       <div
@@ -118,6 +119,7 @@ const props = defineProps({
   tenants: { type: Array, default: () => [] },
   isSuperAdmin: { type: Boolean, default: false },
   limits: { type: Object, default: () => defaultPlatformLimits },
+  physicalGPUs: { type: Number, default: null },
 })
 const emit = defineEmits(['create-tenant', 'changed'])
 
@@ -204,6 +206,7 @@ const submitRetirement = async () => {
 const copy = computed(() => adminQuotaModel({
   isSuperAdmin: props.isSuperAdmin,
   limits: props.limits,
+  physicalGPUs: props.physicalGPUs,
   tenants: visibleTenants(props.tenants).filter((tenant) => !retiredIds.value.includes(tenant.id)),
 }))
 

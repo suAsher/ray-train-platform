@@ -1,6 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+[[ "$#" == 2 && "$1" == --node ]] || {
+  echo 'usage: verify-dual.sh --node NODE (target must already be cordoned)' >&2
+  exit 2
+}
+readonly target_node="$2"
+readonly node_pattern='^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'
+[[ "${#target_node}" -le 253 && "${target_node}" =~ ${node_pattern} ]] || {
+  echo 'invalid node name' >&2
+  exit 2
+}
+IFS='.' read -r -a node_labels <<<"${target_node}"
+for label in "${node_labels[@]}"; do
+  [[ "${#label}" -le 63 ]] || { echo 'invalid node label length' >&2; exit 2; }
+done
+
 readonly ops_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 RAY_CACHE_VERIFY_LIBRARY_ONLY=1
 export RAY_CACHE_VERIFY_LIBRARY_ONLY
@@ -9,7 +24,7 @@ source "${ops_dir}/verify.sh"
 unset RAY_CACHE_VERIFY_LIBRARY_ONLY
 
 readonly namespace="ray-cache-local"
-readonly nodes=(172.28.1.232 172.28.1.233)
+readonly nodes=("${target_node}")
 readonly ssh_options=(-o BatchMode=yes -o ConnectTimeout=10)
 readonly suffix="$(date +%s)-$((RANDOM % 65536))"
 
@@ -29,10 +44,14 @@ trap cleanup EXIT
 for command in kubectl ssh sed mktemp; do
   command -v "${command}" >/dev/null || { echo "missing command: ${command}" >&2; exit 1; }
 done
+[[ "$(kubectl get node "${target_node}" -o jsonpath='{.spec.unschedulable}')" == true ]] || {
+  echo "target ${target_node} must be cordoned before verification; run kubectl cordon ${target_node}" >&2
+  exit 1
+}
 kubectl get storageclass ray-cache-local-data1 ray-cache-local-data2 >/dev/null
 
 for node in "${nodes[@]}"; do
-  current_pod="ray-cache-dual-${suffix}-${node##*.}"
+  current_pod="ray-cache-dual-${suffix}"
   current_pvc1="${current_pod}-data1"
   current_pvc2="${current_pod}-data2"
   manifest="$(mktemp)"
@@ -65,11 +84,8 @@ for node in "${nodes[@]}"; do
   current_pvc1=''
   current_pvc2=''
   for pv in "${pv1}" "${pv2}"; do
-    for _ in {1..60}; do
-      kubectl get pv "${pv}" >/dev/null 2>&1 || break
-      sleep 2
-    done
-    kubectl get pv "${pv}" >/dev/null 2>&1 && { echo "PV ${pv} was not deleted" >&2; exit 1; }
+    # Authentication, transport and timeout errors are failures, not proof of deletion.
+    kubectl wait --for=delete "pv/${pv}" --timeout=120s
   done
   remote_path_absent "${node}" "${path1}"
   remote_path_absent "${node}" "${path2}"

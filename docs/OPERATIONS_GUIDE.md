@@ -557,6 +557,112 @@ bash ops/storage/nvme-cache/register-node.sh --node NODE_NAME --output-dir /tmp/
 
 标签完成后复核 Profile 中的任务形状上限，必要时走平台 `preflight → deploy → verify`。物理池容量由自动配额逻辑重新测量；团队 GPU 配额由管理员按需求手动调整，两者不等价。不要直接手工修改 ClusterQueue 后跳过 Profile，否则下一次 Helm 发布会产生漂移。任务的 workers 在创建时固定，新节点不会自动扩展正在运行的任务；需要更大规模时新建任务或通过托管 checkpoint 续训。不要为了扩容重启现有训练。
 
+#### 管理员自助接入命令（已有生产集群扩容）
+
+以下命令在具有集群管理权限的构建机上执行，使用最新仓库
+`/opt/guofeng/vke-cluster/ray-platform-main`。不需要联系 AI 确认，但必须逐项通过；
+失败时保持新节点 cordon，不允许只打标签就放行。`cordon` 不驱逐现有 Pod，
+这里仍仅用于新节点，不对旧训练节点执行 drain、重启或格式化。
+
+1. 设置目标、核对 context 和节点上的现有工作负载，再暂停新节点调度：
+
+```bash
+cd /opt/guofeng/vke-cluster/ray-platform-main
+NEW_GPU_NODE=172.28.1.229 # 每次替换为新节点的 Kubernetes NAME
+kubectl config current-context
+kubectl get node "$NEW_GPU_NODE" -o wide
+kubectl get pods -A --field-selector "spec.nodeName=$NEW_GPU_NODE" -o wide
+kubectl cordon "$NEW_GPU_NODE"
+kubectl wait "node/$NEW_GPU_NODE" --for=condition=Ready --timeout=120s
+kubectl describe node "$NEW_GPU_NODE"
+```
+
+通过标准：无 Memory/Disk/PID Pressure；8 卡机的 allocatable GPU 为 8；
+CNI、device plugin、DCGM、FSX Agent、CSI Ready。FSX DNS 探针 Ready 只证明
+DNS 检查通过，不等于实际 TOS/FSX/NFS 数据访问通过。
+
+2. 从同一管理机确认 SSH 和磁盘。脚本使用 `ssh root@节点`；应由管理员配置
+自己的 SSH 身份（必要时在 SSH config 对该节点指定 IdentityFile），不要复制私钥进仓库。
+鉴权失败先处理 SSH，不要绕过检查：
+
+```bash
+ssh -o BatchMode=yes -o ConnectTimeout=10 "root@$NEW_GPU_NODE" \
+  'nvidia-smi; findmnt /data1; findmnt /data2; df -h /data1 /data2'
+```
+
+确认 `/data1`、`/data2` 是两个独立块设备挂载而不是根盘目录；盘型/性能也须满足
+训练需求。按当前生产权限约定，`/data1`、`/data2` 应为 root:root、0755，
+缓存根目录为 root:root、0770，不能是符号链接。确认为新节点缓存盘后，
+在新节点准备目录（不要格式化或删除已有数据）：
+
+```bash
+ssh "root@$NEW_GPU_NODE" \
+  'set -eu; mountpoint -q /data1; mountpoint -q /data2; test ! -L /data1/ray-cache; test ! -L /data2/ray-cache; install -d -o root -g root -m 0770 /data1/ray-cache /data2/ray-cache'
+kubectl label node "$NEW_GPU_NODE" accelerator=nvidia-rtx-4090 \
+  platform.wellspiking.ai/gpu-pool=production --overwrite
+NODE_REVIEW_DIR="/tmp/nvme-${NEW_GPU_NODE}-$(date +%Y%m%d%H%M%S)"
+bash ops/storage/nvme-cache/register-node.sh --node "$NEW_GPU_NODE" --output-dir "$NODE_REVIEW_DIR"
+cat "$NODE_REVIEW_DIR/acceptance-report.txt"
+```
+
+3. 两套缓存供应器分别备份并 dry-run。禁止使用初装 `install.sh` 或旧静态
+双节点 values 覆盖扩容集群。以下循环只生成审阅文件，不应用：
+
+```bash
+umask 077
+for disk in data1 data2; do
+  helm get values "ray-cache-local-$disk" -n ray-cache-local -a > "$NODE_REVIEW_DIR/$disk-before-values.yaml"
+  helm get manifest "ray-cache-local-$disk" -n ray-cache-local > "$NODE_REVIEW_DIR/$disk-before.yaml"
+  helm upgrade "ray-cache-local-$disk" helm/ray-cache-local -n ray-cache-local \
+    --reuse-values -f "$NODE_REVIEW_DIR/$disk-values-patch.yaml" \
+    --dry-run=server --hide-secret > "$NODE_REVIEW_DIR/$disk-dryrun.txt"
+  awk '/^MANIFEST:/{f=1;next} f' "$NODE_REVIEW_DIR/$disk-dryrun.txt" > "$NODE_REVIEW_DIR/$disk-after.yaml"
+  diff -u "$NODE_REVIEW_DIR/$disk-before.yaml" "$NODE_REVIEW_DIR/$disk-after.yaml"
+done
+```
+
+`diff` 有预期差异会返回 1，不代表 Helm 失败。必须检查两份 dry-run 成功，差异仅为
+新增目标节点对应盘的映射及由其派生的校验和，旧节点映射、镜像、StorageClass 和
+其他配置不变。若差异超出预期或有人同时修改配置，停止并重新生成，不能直接继续。
+核对后执行：
+
+```bash
+(
+set -e
+for disk in data1 data2; do
+  helm upgrade "ray-cache-local-$disk" helm/ray-cache-local -n ray-cache-local \
+    --reuse-values -f "$NODE_REVIEW_DIR/$disk-values-patch.yaml" \
+    --atomic --wait --timeout 10m
+done
+bash ops/storage/nvme-cache/verify-dual.sh --node "$NEW_GPU_NODE"
+)
+```
+
+两套 release 都成功后才能验收。定向验收仅创建临时双 PVC/小型 CPU Pod，检查
+两盘共置、非 root 写入、PVC/PV 与宿主目录回收；通过输出为
+`dual NVMe provisioning, co-location, write and cleanup verified`。保留报告和备份。
+还需由管理员完成该节点实际数据挂载/读取验证；FSX Agent Ready 本身不能替代此项。
+
+4. 所有存储/网络检查通过后才放行，确认平台自动容量同步，再在 UI 分配团队配额：
+
+```bash
+kubectl uncordon "$NEW_GPU_NODE"
+kubectl get nodes -l platform.wellspiking.ai/gpu-pool=production
+kubectl get clusterqueue cluster-gpu-queue -o yaml
+```
+
+例如从两台 8 卡扩为三台，预期训练池 GPU nominalQuota 从 16 变为 24。
+平台启用 `KUEUE_AUTO_QUOTA=true` 时，每个调和周期（默认约 5 秒，API/控制器异常时
+可能延迟）自动计算 Ready、未 cordon、带生产标签的实体 GPU 节点容量并更新 Kueue。
+物理已接入 GPU、训练池容量、团队额度之和不是同一个数：未验收节点可以已被硬件
+监控识别，但不能提前计入训练池；团队额度是并发使用上限，不代表已占用或保留 GPU。
+若没有增加，检查自动配额控制器日志、标签和节点状态，不手工强改 ClusterQueue。
+之后管理员控制台把 local 配额从 8 改为 16（按实际分配需求），再提交新节点定向
+1 卡训练 smoke；多机可用仍需另做跨节点 Ray/NCCL smoke。新卡不会自动加入旧任务。
+
+可以在 GPU 节点池模板中预设驱动、DNS、磁盘挂载和缓存目录，减少重复工作；
+生产标签必须配合“新节点默认不可调度”的接入流程，不能让未验收节点自动进入训练池。
+
 ### 6.2 节点维护或下线
 
 先确认没有运行中的 RayJob、调试环境和 MLflow 唯一副本，再进行维护：

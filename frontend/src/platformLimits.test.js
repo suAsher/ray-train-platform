@@ -128,10 +128,11 @@ test('job quota model labels tenant limits as team availability and follows newl
 test('admin quota model separates physical fleet copy from own-team copy', () => {
   const superAdmin = adminQuotaModel({
     isSuperAdmin: true,
+    physicalGPUs: 40,
     limits: { ...limits, maxWorkerReplicas: 4, maxGpusPerWorker: 8, maxTotalGpus: 32 },
     tenants: [{ gpuQuotaLimit: 12 }, { gpuQuotaLimit: 9 }],
   })
-  assert.match(superAdmin?.pageSummary || '', /物理集群容量.*32/)
+  assert.match(superAdmin?.pageSummary || '', /已接入 GPU 40.*训练提交容量 32/)
   assert.match(superAdmin?.panelSummary || '', /已向租户分配总计 21/)
 
   const tenantAdmin = adminQuotaModel({
@@ -142,6 +143,29 @@ test('admin quota model separates physical fleet copy from own-team copy', () =>
   assert.equal(tenantAdmin?.title, '本团队 GPU 配额')
   assert.match(tenantAdmin?.pageSummary || '', /本团队.*管理员分配额度 8.*已使用 3.*当前可提交上限 5/)
   assert.doesNotMatch(`${tenantAdmin?.pageSummary} ${tenantAdmin?.panelSummary}`, /有效配额|当前可用|物理集群|全平台|各租户|分配总计/)
+})
+
+test('admin capacity warning uses submission capacity, not physical inventory', () => {
+  const model = adminQuotaModel({ isSuperAdmin: true, physicalGPUs: 24,
+    limits: { maxTotalGpus: 16 }, tenants: [{ gpuQuotaLimit: 16 }, { gpuQuotaLimit: 8 }] })
+  assert.equal(model.physicalGPUs, 24)
+  assert.equal(model.capacityGPUs, 16)
+  assert.equal(model.overAllocated, true)
+  assert.match(model.panelSummary, /已接入 GPU 24.*训练提交容量 16/)
+})
+
+test('admin capacity remains unknown without authoritative data and preserves real zero', () => {
+  for (const value of [undefined, null, '', NaN, -1]) {
+    const model = adminQuotaModel({ isSuperAdmin: true, physicalGPUs: value,
+      limits: { maxTotalGpus: value }, tenants: [{ gpuQuotaLimit: 8 }] })
+    assert.equal(model.capacityGPUs, null)
+    assert.equal(model.physicalGPUs, null)
+    assert.equal(model.overAllocated, false)
+    assert.match(model.panelSummary, /未知/)
+  }
+  const zero = adminQuotaModel({ isSuperAdmin: true, physicalGPUs: 0, limits: { maxTotalGpus: 0 }, tenants: [{ gpuQuotaLimit: 8 }] })
+  assert.equal(zero.capacityGPUs, 0)
+  assert.equal(zero.overAllocated, true)
 })
 
 test('defaults stay conservative when the platform has not answered yet', () => {

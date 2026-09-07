@@ -19,7 +19,12 @@
       </div>
     </div>
 
-    <el-table :data="jobs" class="!bg-transparent text-xs" empty-text="当前没有排队或运行中的任务">
+    <el-alert v-if="jobsError" type="error" :closable="false" show-icon>
+      <template #title>训练任务列表暂不可用{{ jobsAvailable ? '，当前显示上次成功结果，操作已禁用' : '' }}</template>
+      {{ jobsError }}。请点击页面顶部“刷新”重试。
+    </el-alert>
+    <p v-else-if="!jobsAvailable" class="text-sm text-slate-400">正在加载训练任务列表…</p>
+    <el-table v-if="jobsAvailable" :data="jobs" class="!bg-transparent text-xs" empty-text="当前没有排队或运行中的任务">
       <el-table-column prop="name" label="任务名称" min-width="220">
         <template #default="scope">
           <span class="font-mono font-bold text-slate-200">{{ scope.row.name }}</span>
@@ -40,6 +45,7 @@
         <template #default="scope">
           <el-button
             v-if="actionFor(scope.row)"
+            :disabled="Boolean(jobsError)"
             :type="actionFor(scope.row).kind === 'cancel-queue' ? 'warning' : 'danger'"
             link
             size="small"
@@ -78,10 +84,12 @@ import GPUAllocationTable from './GPUAllocationTable.vue'
 
 const props = defineProps({
   jobs: { type: Array, default: () => [] },
+  jobsAvailable: { type: Boolean, default: false },
+  jobsError: { type: String, default: '' },
   allocations: { type: Array, default: () => [] },
   allocationAvailable: { type: Boolean, default: false },
   allocationError: { type: String, default: '' },
-  clusterGPUs: { type: Number, default: 0 },
+  clusterGPUs: { type: Number, default: null },
   physicalAllocatedGPUs: { type: Number, default: 0 },
   currentTenantId: { type: String, default: '' },
   isSuperAdmin: { type: Boolean, default: false },
@@ -96,9 +104,9 @@ const debugGPUs = computed(() => debugAllocations.value.reduce((total, item) => 
 const cards = computed(() => {
   const stats = queuePanelStats(props.jobs, props.clusterGPUs, props.physicalAllocatedGPUs)
   return [
-    { label: '运行中任务', value: stats.runningJobs, tone: 'text-blue-400' },
-    { label: '排队 / 准备', value: stats.waitingJobs, tone: 'text-amber-400' },
-    { label: '任务申请 GPU', value: `${stats.activeRequestedGPUs} / ${stats.clusterGPUs}`, tone: 'text-emerald-400' },
+    { label: '运行中任务', value: props.jobsAvailable ? stats.runningJobs : '—', tone: 'text-blue-400' },
+    { label: '排队 / 准备', value: props.jobsAvailable ? stats.waitingJobs : '—', tone: 'text-amber-400' },
+    { label: '任务申请 GPU', value: props.jobsAvailable ? `${stats.activeRequestedGPUs} / ${props.clusterGPUs ?? '—'}` : '—', tone: 'text-emerald-400' },
     { label: stats.releasingGPUs > 0 ? '物理已分配（含释放中）' : '物理已分配 GPU', value: stats.physicalAllocatedGPUs, tone: 'text-slate-100' },
   ]
 })

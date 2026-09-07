@@ -38,4 +38,6 @@ helm upgrade --install ray-cache-local-data2 "${chart_dir}" \
   --wait \
   --timeout 10m
 
-bash "${ops_dir}/verify-dual.sh"
+echo 'Provisioners installed. Verify each explicitly chosen cordoned node separately:'
+echo "bash ${ops_dir}/verify-dual.sh --node NODE"
+echo 'Do not cordon existing production nodes automatically; plan any maintenance separately.'

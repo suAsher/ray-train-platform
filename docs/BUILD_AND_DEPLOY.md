@@ -323,7 +323,7 @@ CLI 下载目录的 `release.json`、`SHA256SUMS` 和各平台二进制属于同
 
 1. 确认每个 GPU 节点的 `/data1`、`/data2` 是独立、可丢弃的缓存盘。
 2. 执行 `bash ops/storage/nvme-cache/preflight.sh`，再执行 `bash ops/storage/nvme-cache/install.sh`。该安装包含集群级 RBAC，首次安装必须经过审批。
-3. 执行 `verify.sh` 与 `verify-dual.sh`，验证双盘定位、写入、删除和宿主机目录回收。
+3. 对每个保持 cordon 的新节点执行 `verify-dual.sh --node NODE_NAME`，验证双盘定位、写入、删除和宿主机目录回收。不要用旧节点的通用验收结果替代新节点验收；完整自助命令见 [运维指南 6.1](OPERATIONS_GUIDE.md#61-新节点上线)。
 4. 在 Profile 保持缓存基础设施可用、任务默认关闭，并登记两套 StorageClass：
 
 ```yaml

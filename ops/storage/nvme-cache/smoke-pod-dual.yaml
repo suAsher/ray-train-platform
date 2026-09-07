@@ -32,6 +32,10 @@ spec:
   restartPolicy: Never
   nodeSelector:
     kubernetes.io/hostname: __NODE_NAME__
+  tolerations:
+    - key: node.kubernetes.io/unschedulable
+      operator: Exists
+      effect: NoSchedule
   securityContext:
     runAsNonRoot: true
     runAsUser: 1000

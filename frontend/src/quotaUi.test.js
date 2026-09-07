@@ -38,6 +38,22 @@ test('quota UI contains no fixed 16 or 24 GPU fleet assumptions', () => {
   }
 })
 
+test('quota capacity binds separate authoritative topology and limits, clearing failed reads', () => {
+  assert.match(quotaManageSource, /physicalGPUs\.value = topology\?\.totalGpus \?\? null/)
+  assert.match(quotaManageSource, /physicalGPUs\.value = null/)
+  assert.match(quotaManageSource, /quotaLimits\.value = response \|\| \{\}/)
+  assert.match(quotaManageSource, /quotaLimits\.value = \{\}/)
+  assert.match(quotaManageSource, /:limits="quotaLimits"/)
+  assert.match(quotaManageSource, /:physical-g-p-us="physicalGPUs"/)
+  assert.match(tenantPanelSource, /isSuperAdmin && copy\.overAllocated/)
+  assert.doesNotMatch(tenantPanelSource, /超过集群实际容量|超过物理集群/)
+})
+
+test('queue denominator does not turn an unknown capacity into zero', () => {
+  assert.match(queuePanelSource, /clusterGPUs: \{ type: Number, default: null \}/)
+  assert.match(queuePanelSource, /\$\{props\.clusterGPUs \?\? '—'\}/)
+})
+
 test('queue actions are tenant-scoped and TenantAdmin copy does not claim quota allocation', () => {
   assert.match(quotaManageSource, /:current-tenant-id="currentTenantId"/)
   assert.match(quotaManageSource, /queueJobAction\(job, currentTenantId\.value, isSuperAdmin\.value\)/)
@@ -49,6 +65,6 @@ test('queue actions are tenant-scoped and TenantAdmin copy does not claim quota 
 })
 
 test('admin active job loading includes recovery and de-duplicates state-page races', () => {
-	assert.match(quotaManageSource, /['"]RECOVERING['"]/)
-	assert.match(quotaManageSource, /new Map\(\)/)
+  assert.match(quotaManageSource, /refreshAdminActiveJobs/)
+  // Runtime pagination/recovery/de-duplication assertions live in adminActiveJobs.test.js.
 })

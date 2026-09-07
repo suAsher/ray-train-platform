@@ -67,6 +67,8 @@ require_in "${ops_dir}/install.sh" 'ray-cache-local-data1'
 require_in "${ops_dir}/install.sh" 'ray-cache-local-data2'
 require_in "${ops_dir}/install.sh" 'dual-render-contract.sh'
 require_in "${ops_dir}/install.sh" 'verify-dual.sh'
+require_in "${ops_dir}/install.sh" '--node NODE'
+reject_in "${ops_dir}/install.sh" 'bash "${ops_dir}/verify-dual.sh"'
 require_in "${ops_dir}/install.sh" '--atomic'
 require_in "${ops_dir}/install.sh" '--wait'
 require_in "${ops_dir}/install.sh" 'preflight.sh'
@@ -114,6 +116,7 @@ require_in "${ops_dir}/verify-dual.sh" '/data1/ray-cache/'
 require_in "${ops_dir}/verify-dual.sh" '/data2/ray-cache/'
 
 bash "${ops_dir}/test/verify-path-test.sh"
+bash "${ops_dir}/test/verify-dual-node-test.sh"
 bash "${ops_dir}/test/preflight-owner-test.sh"
 bash "${ops_dir}/test/register-node-output-test.sh"
 

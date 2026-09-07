@@ -199,15 +199,20 @@ export function jobQuotaModel(limits = {}) {
 }
 
 /** Role-aware quota-console copy. TenantAdmin responses contain only their own tenant. */
-export function adminQuotaModel({ isSuperAdmin = false, limits = {}, tenants = [] } = {}) {
+export function adminQuotaModel({ isSuperAdmin = false, limits = {}, physicalGPUs = null, tenants = [] } = {}) {
   const jobModel = jobQuotaModel(limits)
   const allocatedGPUs = tenants.reduce((total, tenant) => total + nonNegativeInteger(tenant?.gpuQuotaLimit), 0)
   if (isSuperAdmin) {
+    const capacityGPUs = knownCapacity(limits.maxTotalGpus)
+    const physical = knownCapacity(physicalGPUs)
+    const summary = `已接入 GPU ${physical ?? '未知'} 卡，训练提交容量 ${capacityGPUs ?? '未知'} 卡，已向租户分配总计 ${allocatedGPUs} 卡。`
     return {
       title: '租户 GPU 配额',
-      pageSummary: `物理集群容量 ${jobModel.maxTotalGpus} 张 GPU（单任务最多 ${jobModel.maxWorkerReplicas} 节点 × ${jobModel.maxGpusPerWorker} 卡）；当前已向租户分配总计 ${allocatedGPUs} 张。`,
-      panelSummary: `物理集群 GPU 容量 ${jobModel.maxTotalGpus} 卡，已向租户分配总计 ${allocatedGPUs} 卡。`,
-      capacityGPUs: jobModel.maxTotalGpus,
+      pageSummary: summary,
+      panelSummary: summary,
+      capacityGPUs,
+      physicalGPUs: physical,
+      overAllocated: capacityGPUs !== null && allocatedGPUs > capacityGPUs,
       allocatedGPUs,
     }
   }
@@ -215,7 +220,7 @@ export function adminQuotaModel({ isSuperAdmin = false, limits = {}, tenants = [
   const ownTenant = tenants[0] || {}
   const gpuLimit = jobModel.isTenantScoped ? jobModel.gpuLimit : nonNegativeInteger(ownTenant.gpuQuotaLimit)
   const gpuUsed = jobModel.isTenantScoped ? jobModel.gpuUsed : nonNegativeInteger(ownTenant.gpuQuotaUsed)
-  const summary = `当前仅显示本团队：管理员分配额度 ${gpuLimit} 卡，已使用 ${gpuUsed} 卡，当前可提交上限 ${jobModel.maxTotalGpus} 卡。`
+  const summary = `当前仅显示本团队：管理员分配额度 ${gpuLimit} 卡，已使用 ${gpuUsed} 卡，当前可提交上限 ${knownCapacity(limits.maxTotalGpus) ?? '未知'} 卡。`
   return {
     title: '本团队 GPU 配额',
     pageSummary: summary,
@@ -223,6 +228,10 @@ export function adminQuotaModel({ isSuperAdmin = false, limits = {}, tenants = [
     capacityGPUs: gpuLimit,
     allocatedGPUs: gpuLimit,
   }
+}
+
+function knownCapacity(value) {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null
 }
 
 function nonNegativeInteger(value) {

@@ -21,7 +21,8 @@
           <TenantPanel
             :tenants="tenants"
             :is-super-admin="isSuperAdmin"
-            :limits="limits"
+            :limits="quotaLimits"
+            :physical-g-p-us="physicalGPUs"
             @create-tenant="showAddTenantModal = true"
             @changed="loadTenants"
           />
@@ -82,7 +83,9 @@
       <el-tab-pane label="队列与运行中" name="queue">
         <div class="p-4">
           <QueuePanel
-            :jobs="activeJobs"
+            :jobs="activeJobState.jobs"
+            :jobs-available="activeJobState.available"
+            :jobs-error="activeJobState.error"
             :allocations="gpuAllocations"
             :allocation-available="gpuAllocationsLoaded"
             :allocation-error="gpuAllocationError"
@@ -277,6 +280,7 @@ import StoragePanel from '../../components/admin/StoragePanel.vue'
 import QueuePanel from '../../components/admin/QueuePanel.vue'
 import DatasetGovernancePanel from '../../components/admin/DatasetGovernancePanel.vue'
 import { queueJobAction } from '../../components/admin/queuePanelActions.js'
+import { refreshAdminActiveJobs } from '../../adminActiveJobs.js'
 import { normalizeGPUAllocations } from '../../gpuAllocations'
 import { buildCreateImageRequest, defaultImageCompatibilityState, reconcileImageCompatibility } from '../../imageCompatibility'
 
@@ -284,11 +288,13 @@ const activeTab = ref('tenants')
 const loading = ref(false)
 const tenants = ref([])
 const users = ref([])
-const activeJobs = ref([])
+const activeJobState = ref({ jobs: [], available: false, error: '' })
 const gpuAllocations = ref([])
 const gpuAllocationsLoaded = ref(false)
 const gpuAllocationError = ref('')
 const physicalAllocatedGPUs = ref(0)
+const physicalGPUs = ref(null)
+const quotaLimits = ref({})
 const catalogImages = ref([])
 const gitCredentials = ref([])
 const limits = ref(defaultPlatformLimits)
@@ -297,7 +303,8 @@ const isSuperAdmin = computed(() => roles.value.includes('SuperAdmin'))
 const currentTenantId = computed(() => session.value?.tenantId || '')
 const quotaCopy = computed(() => adminQuotaModel({
   isSuperAdmin: isSuperAdmin.value,
-  limits: limits.value,
+  limits: quotaLimits.value,
+  physicalGPUs: physicalGPUs.value,
   tenants: tenants.value,
 }))
 const clusterGPUs = computed(() => quotaCopy.value.capacityGPUs)
@@ -372,31 +379,16 @@ const loadUsers = async () => {
 // Both queued and running jobs matter to an administrator: the running ones are
 // what actually hold the GPUs a queued job is waiting for.
 const loadActiveJobs = async () => {
-  const states = ['SUBMITTED', 'VALIDATING', 'QUEUED', 'ADMITTED', 'PROVISIONING', 'RUNNING', 'RECOVERING']
-  const pages = await Promise.allSettled(states.map((state) => apiGet(`/api/v1/jobs?status=${state}`)))
-  const rowsByID = new Map()
-  for (const page of pages) {
-    if (page.status !== 'fulfilled') continue
-    for (const job of page.value?.items || []) {
-      const resources = job.spec?.resources || {}
-      rowsByID.set(job.id, {
-        id: job.id,
-        name: job.spec?.name || job.id,
-        tenantId: job.tenantId,
-        state: job.observedState,
-        gpus: (resources.workerReplicas || 0) * (resources.gpusPerWorker || 0),
-        createdAt: job.createdAt ? new Date(job.createdAt).toLocaleString('zh-CN', { hour12: false }) : '',
-      })
-    }
-  }
-  activeJobs.value = [...rowsByID.values()]
+  activeJobState.value = await refreshAdminActiveJobs(apiGet, activeJobState.value)
 }
 
 const loadClusterTopology = async () => {
   try {
     const topology = await apiGet('/api/v1/cluster/topology')
+    physicalGPUs.value = topology?.totalGpus ?? null
     physicalAllocatedGPUs.value = Number(topology?.usedGpus || 0)
   } catch {
+    physicalGPUs.value = null
     physicalAllocatedGPUs.value = 0
   }
 }
@@ -420,8 +412,11 @@ const loadCatalog = async () => {
 
 const loadLimits = async () => {
   try {
-    limits.value = { ...defaultPlatformLimits, ...(await fetchPlatformLimits()) }
+    const response = await fetchPlatformLimits()
+    quotaLimits.value = response || {}
+    limits.value = { ...defaultPlatformLimits, ...response }
   } catch {
+    quotaLimits.value = {}
     limits.value = defaultPlatformLimits
   }
 }
