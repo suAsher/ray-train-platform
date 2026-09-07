@@ -78,6 +78,24 @@ def main():
         target[path[-1]] = value
         return obj
 
+    def check_eni(name, obj):
+        # VKE rewrites ENI quantities before validation. Accept only a policy
+        # denial or a proven safe final resource map, never the submitted value.
+        result = call(["create", "--dry-run=server", "-f", "-", "-o", "json"], obj)
+        if result.returncode:
+            if "node-onboarding-pods" not in result.stdout + result.stderr:
+                raise RuntimeError(f"{name}: unexpected rejection: {result.stderr}")
+            outcome = "denied"
+        else:
+            actual = json.loads(result.stdout)["spec"]["containers"][0]["resources"]
+            expected = {"requests": {"cpu": "20m", "memory": "32Mi", "vke.volcengine.com/eni-ip": "1"},
+                        "limits": {"cpu": "200m", "memory": "64Mi", "vke.volcengine.com/eni-ip": "1"}}
+            if actual != expected:
+                raise RuntimeError(f"{name}: unsafe final resources: {actual}")
+            outcome = "normalized by VKE to exact ENI=1"
+        passed.append(name)
+        print(f"PASS {name}: {outcome}", flush=True)
+
     for suffix in POLICIES:
         policy = get("validatingadmissionpolicy", f"node-onboarding-{suffix}")
         status = policy.get("status", {})
@@ -106,7 +124,6 @@ def main():
         ("altered command", ["spec", "containers", 0, "command"], ["/bin/sh", "-ec", "true"]),
         ("extra args", ["spec", "containers", 0, "args"], ["unexpected"]),
         ("env injection", ["spec", "containers", 0, "env"], [{"name": "ENV", "value": "/data1/payload"}]),
-        ("privileged", ["spec", "containers", 0, "securityContext", "privileged"], True),
         ("extra capability", ["spec", "containers", 0, "securityContext", "capabilities", "add"], ["SYS_ADMIN"]),
         ("SA token", ["spec", "automountServiceAccountToken"], True),
         ("host PID", ["spec", "hostPID"], True),
@@ -125,6 +142,12 @@ def main():
     ]
     for label, path, value in pod_mutations:
         create(label, mutate(prep, path, value), "pods")
+    # Keep the adversarial object API-valid so the intended policy, rather than
+    # core validation of privileged+allowPrivilegeEscalation=false, rejects it.
+    privileged = copy.deepcopy(prep)
+    privileged["spec"]["containers"][0]["securityContext"].update({
+        "privileged": True, "allowPrivilegeEscalation": True})
+    create("privileged", privileged, "pods")
     extra_resource = copy.deepcopy(prep)
     extra_resource["spec"]["containers"][0]["resources"]["requests"]["example.com/admission-test"] = "1"
     extra_resource["spec"]["containers"][0]["resources"]["limits"]["example.com/admission-test"] = "1"
@@ -143,7 +166,11 @@ def main():
     eni = copy.deepcopy(probe)
     eni["spec"]["containers"][0]["resources"]["requests"]["vke.volcengine.com/eni-ip"] = "2"
     eni["spec"]["containers"][0]["resources"]["limits"]["vke.volcengine.com/eni-ip"] = "2"
-    create("excess ENI allocation", eni, "pods")
+    check_eni("excess ENI allocation", eni)
+    asymmetric_eni = copy.deepcopy(probe)
+    asymmetric_eni["spec"]["containers"][0]["resources"]["requests"]["vke.volcengine.com/eni-ip"] = "1"
+    asymmetric_eni["spec"]["containers"][0]["resources"]["limits"].pop("vke.volcengine.com/eni-ip", None)
+    check_eni("asymmetric ENI allocation", asymmetric_eni)
     create("unrelated PVC class", mutate(fixtures["cache1-pvc"], ["spec", "storageClassName"], "unrelated-class"), "pvcs")
     create("oversized 2Gi PVC", mutate(fixtures["cache1-pvc"], ["spec", "resources", "requests", "storage"], "2Gi"), "pvcs")
 
