@@ -45,6 +45,16 @@ func TestDatasetCleanupIgnoresOtherPublicationWork(t *testing.T) {
 	}
 }
 
+func TestDatasetCleanupBlocksPublisherWithUnknownIdentity(t *testing.T) {
+	client := &Client{kubernetes: fake.NewSimpleClientset(&corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "legacy-publisher", Namespace: "platform", Labels: map[string]string{publicationNameLabel: publicationNameValue}},
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+	})}
+	if client.CheckDatasetCleanupQuiescent(context.Background(), "data", "version-one") == nil {
+		t.Fatal("publisher with missing identity labels was silently ignored")
+	}
+}
+
 func TestDatasetCleanupFailsClosedOnUnknownClusterState(t *testing.T) {
 	if (&Client{}).CheckDatasetCleanupQuiescent(context.Background(), "data", "version") == nil {
 		t.Fatal("missing client accepted")

@@ -37,9 +37,15 @@ UI's zero object/byte counters. Report retained shared/unknown content explicitl
   listing errors/cycles, cancellation, delete failure and retry.
 - Retired-user changed-function coverage: API 95.8%, repository lookup 100%,
   repository cleanup 94.4% after negative/concurrency-state tests.
-- Migrations 0035/0036 have real PostgreSQL behavioral tests, but those tests
-  have NOT yet run: uploading the two test binaries to the build host was
-  rejected by approval review. Explicit user permission was requested for
-  `/tmp/ray-cleanup-db-test` and `/tmp/ray-cleanup-repo-test` on
-  `root@14.103.49.106`, isolated temporary PostgreSQL only, with cleanup after.
-- No production data deletion, deployment, push or commit performed.
+- After explicit user permission, real PostgreSQL 16 verification passed on
+  2026-09-07 in a network-isolated, resource-limited temporary Docker container.
+  Tests covered all migrations through 36 (including repeat application),
+  monotonic retired-account cleanup, active training writes, failed version and
+  child-row purge, shared writer exclusion and stale identity recreation denial.
+  The first run exposed an outdated migration expectation of 34 in the PG-only
+  integration test; corrected to 36 and rerun successfully. No production DB
+  was used; the temporary container was removed after each run.
+- Implementation commit `2cccc9c` exists on main. Production is still revision
+  176; no production data was deleted and this change is not yet deployed.
+  Approval review requires separate explicit authorization to transfer the
+  source bundle to the build host; that authorization has been requested.
