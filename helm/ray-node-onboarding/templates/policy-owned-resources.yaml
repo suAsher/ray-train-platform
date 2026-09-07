@@ -1,0 +1,51 @@
+{{- if .Values.enabled }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: node-onboarding-owned-resources
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "DELETE"]
+        resources: ["pods", "persistentvolumeclaims"]
+        scope: Namespaced
+  matchConditions:
+    - name: controller-requester
+      expression: "request.userInfo.username == 'system:serviceaccount:ray-cache-local:node-onboarding'"
+  variables:
+    - name: target
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+  validations:
+    - expression: >-
+        request.namespace == 'ray-cache-local' &&
+        has(variables.target.metadata.labels) &&
+        'platform.wellspiking.ai/onboarding-node-uid' in variables.target.metadata.labels &&
+        has(variables.target.metadata.ownerReferences) && size(variables.target.metadata.ownerReferences) == 1 &&
+        variables.target.metadata.ownerReferences[0].apiVersion == 'v1' &&
+        variables.target.metadata.ownerReferences[0].kind == 'Node' &&
+        variables.target.metadata.ownerReferences[0].uid == variables.target.metadata.labels['platform.wellspiking.ai/onboarding-node-uid'] &&
+        variables.target.metadata.ownerReferences[0].uid.matches('^[a-f0-9-]{36}$') &&
+        (request.resource.resource == 'pods'
+          ? variables.target.metadata.name.matches('^onboard-[a-f0-9]{20}-(prepare|probe)$')
+          : variables.target.metadata.name.matches('^onboard-[a-f0-9]{20}-cache[12]$'))
+      message: "Controller may create/delete only its node-owned onboarding probes in ray-cache-local"
+    - expression: >-
+        request.operation != 'CREATE' ||
+        ((!has(object.metadata.finalizers) || size(object.metadata.finalizers) == 0 ||
+           (request.resource.resource == 'persistentvolumeclaims' && object.metadata.finalizers == ['kubernetes.io/pvc-protection'])) &&
+         (!has(object.metadata.annotations) || size(object.metadata.annotations) == 0) &&
+         size(object.metadata.labels) == 1 &&
+         (!has(object.metadata.ownerReferences[0].blockOwnerDeletion) || !object.metadata.ownerReferences[0].blockOwnerDeletion))
+      message: "New probes may not add finalizers, annotations, foreign labels or blocking owner references"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: node-onboarding-owned-resources
+spec:
+  policyName: node-onboarding-owned-resources
+  validationActions: [Deny]
+{{- end }}

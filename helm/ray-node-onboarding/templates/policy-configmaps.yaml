@@ -1,0 +1,50 @@
+{{- if .Values.enabled }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: node-onboarding-configmaps
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["UPDATE"]
+        resources: ["configmaps"]
+        scope: Namespaced
+  matchConditions:
+    - name: controller-requester
+      expression: "request.userInfo.username == 'system:serviceaccount:ray-cache-local:node-onboarding'"
+    - name: runtime-maps-only
+      expression: "object.metadata.name != 'node-onboarding-state'"
+  validations:
+    - expression: >-
+        request.namespace == 'ray-cache-local' &&
+        object.metadata.name in [{{ .Values.data1ConfigMap | toJson }}, {{ .Values.data2ConfigMap | toJson }}]
+      message: "Only the two external runtime ConfigMaps may change"
+    - expression: >-
+        object.metadata.name == oldObject.metadata.name &&
+        object.metadata.uid == oldObject.metadata.uid &&
+        object.metadata.?generateName == oldObject.metadata.?generateName &&
+        object.metadata.?deletionTimestamp == oldObject.metadata.?deletionTimestamp &&
+        object.metadata.?deletionGracePeriodSeconds == oldObject.metadata.?deletionGracePeriodSeconds &&
+        object.metadata.?labels == oldObject.metadata.?labels &&
+        object.metadata.?annotations == oldObject.metadata.?annotations &&
+        object.metadata.?finalizers == oldObject.metadata.?finalizers &&
+        object.metadata.?ownerReferences == oldObject.metadata.?ownerReferences &&
+        object.?immutable == oldObject.?immutable && object.?binaryData == oldObject.?binaryData
+      message: "Runtime map metadata and binary data must remain unchanged"
+    - expression: >-
+        has(object.data) && has(oldObject.data) && 'config.json' in object.data &&
+        object.data.all(k, k == 'config.json' || (k in oldObject.data && object.data[k] == oldObject.data[k])) &&
+        oldObject.data.all(k, k == 'config.json' || (k in object.data && object.data[k] == oldObject.data[k]))
+      message: "Only config.json may change; preserve all scripts and helperPod data"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: node-onboarding-configmaps
+spec:
+  policyName: node-onboarding-configmaps
+  validationActions: [Deny]
+{{- end }}

@@ -1,0 +1,29 @@
+{{- if .Values.enabled }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: node-onboarding-leases
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["coordination.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["leases"]
+        scope: Namespaced
+  matchConditions:
+    - name: controller-requester
+      expression: "request.userInfo.username == 'system:serviceaccount:ray-cache-local:node-onboarding'"
+  validations:
+    - expression: "request.namespace == 'ray-cache-local' && object.metadata.name == 'node-onboarding'"
+      message: "Controller may acquire only its own leader-election lease"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: node-onboarding-leases
+spec:
+  policyName: node-onboarding-leases
+  validationActions: [Deny]
+{{- end }}

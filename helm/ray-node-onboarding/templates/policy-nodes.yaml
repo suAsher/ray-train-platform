@@ -1,0 +1,64 @@
+{{- if .Values.enabled }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: node-onboarding-nodes
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["UPDATE"]
+        resources: ["nodes"]
+        scope: Cluster
+  matchConditions:
+    - name: controller-requester
+      expression: "request.userInfo.username == 'system:serviceaccount:ray-cache-local:node-onboarding'"
+  variables:
+    - name: labels
+      expression: "has(object.metadata.labels) ? object.metadata.labels : {}"
+    - name: oldLabels
+      expression: "has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}"
+    - name: annotations
+      expression: "has(object.metadata.annotations) ? object.metadata.annotations : {}"
+    - name: oldAnnotations
+      expression: "has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}"
+    - name: ownedAnnotations
+      expression: "['platform.wellspiking.ai/onboarding-state', 'platform.wellspiking.ai/onboarding-reason']"
+  validations:
+    - expression: "object.spec == oldObject.spec && object.?status == oldObject.?status"
+      message: "Onboarding may not change Node spec, cordon, taints or status"
+    - expression: >-
+        object.metadata.name == oldObject.metadata.name &&
+        object.metadata.uid == oldObject.metadata.uid &&
+        object.metadata.?generateName == oldObject.metadata.?generateName &&
+        object.metadata.?finalizers == oldObject.metadata.?finalizers &&
+        object.metadata.?ownerReferences == oldObject.metadata.?ownerReferences &&
+        object.metadata.?deletionTimestamp == oldObject.metadata.?deletionTimestamp &&
+        object.metadata.?deletionGracePeriodSeconds == oldObject.metadata.?deletionGracePeriodSeconds
+      message: "Node identity, ownership and deletion metadata must remain unchanged"
+    - expression: >-
+        variables.labels.all(k, k == 'platform.wellspiking.ai/cache-ready' ||
+          (k in variables.oldLabels && variables.labels[k] == variables.oldLabels[k])) &&
+        variables.oldLabels.all(k, k == 'platform.wellspiking.ai/cache-ready' ||
+          (k in variables.labels && variables.labels[k] == variables.oldLabels[k])) &&
+        (!('platform.wellspiking.ai/cache-ready' in variables.labels) ||
+          variables.labels['platform.wellspiking.ai/cache-ready'] == 'true')
+      message: "Only the cache-ready=true label may be added or removed"
+    - expression: >-
+        variables.annotations.all(k, k in variables.ownedAnnotations ||
+          (k in variables.oldAnnotations && variables.annotations[k] == variables.oldAnnotations[k])) &&
+        variables.oldAnnotations.all(k, k in variables.ownedAnnotations ||
+          (k in variables.annotations && variables.annotations[k] == variables.oldAnnotations[k])) &&
+        variables.annotations.all(k, !(k in variables.ownedAnnotations) || size(variables.annotations[k]) <= 4096)
+      message: "Only bounded onboarding state/reason annotations may change"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: node-onboarding-nodes
+spec:
+  policyName: node-onboarding-nodes
+  validationActions: [Deny]
+{{- end }}

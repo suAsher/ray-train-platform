@@ -1,0 +1,10 @@
+{{- if .Values.enabled }}
+{{- include "node-onboarding.validate" . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: node-onboarding-nfs
+  namespace: ray-cache-local
+data:
+  shares.json: {{ .Values.nfs.shares | toJson | quote }}
+{{- end }}

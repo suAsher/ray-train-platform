@@ -1,0 +1,37 @@
+{{- if .Values.enabled }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: node-onboarding-pvcs
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["persistentvolumeclaims"]
+        scope: Namespaced
+  matchConditions:
+    - name: controller-requester
+      expression: "request.userInfo.username == 'system:serviceaccount:ray-cache-local:node-onboarding'"
+  validations:
+    - expression: >-
+        request.namespace == 'ray-cache-local' &&
+        object.spec.storageClassName == (object.metadata.name.endsWith('-cache1') ? {{ .Values.data1StorageClass | toJson }} : {{ .Values.data2StorageClass | toJson }}) &&
+        object.spec.accessModes == ['ReadWriteOnce'] &&
+        object.spec.resources.requests == {'storage': '1Gi'} &&
+        (!has(object.spec.resources.limits) || size(object.spec.resources.limits) == 0) &&
+        (!has(object.spec.volumeMode) || object.spec.volumeMode == 'Filesystem') &&
+        (!has(object.spec.volumeName) || object.spec.volumeName == '') &&
+        !has(object.spec.selector) && !has(object.spec.dataSource) && !has(object.spec.dataSourceRef)
+      message: "Only empty 1Gi filesystem smoke claims on the two configured cache classes are allowed"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: node-onboarding-pvcs
+spec:
+  policyName: node-onboarding-pvcs
+  validationActions: [Deny]
+{{- end }}

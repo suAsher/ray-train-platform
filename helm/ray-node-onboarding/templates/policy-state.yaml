@@ -1,0 +1,49 @@
+{{- if .Values.enabled }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: node-onboarding-state
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["configmaps"]
+        scope: Namespaced
+  matchConditions:
+    - name: proof-store
+      expression: "request.namespace == 'ray-cache-local' && request.name == 'node-onboarding-state'"
+  variables:
+    - name: controller
+      expression: "request.userInfo.username == 'system:serviceaccount:ray-cache-local:node-onboarding'"
+  validations:
+    - expression: "request.operation != 'DELETE'"
+      message: "Proof-store deletion requires explicitly retiring its admission binding first"
+    - expression: >-
+        request.operation != 'CREATE' ||
+        ((!has(object.data) || size(object.data) == 0) &&
+         (!has(object.binaryData) || size(object.binaryData) == 0) &&
+         (!has(object.immutable) || !object.immutable))
+      message: "The initial proof store must be empty and writable"
+    - expression: >-
+        request.operation != 'UPDATE' ||
+        (object.?binaryData == oldObject.?binaryData && object.?immutable == oldObject.?immutable &&
+         (variables.controller
+           ? has(object.data) && size(object.data) == 1 && 'state.json' in object.data &&
+             object.metadata.?labels == oldObject.metadata.?labels &&
+             object.metadata.?annotations == oldObject.metadata.?annotations &&
+             object.metadata.?ownerReferences == oldObject.metadata.?ownerReferences &&
+             object.metadata.?finalizers == oldObject.metadata.?finalizers
+           : object.?data == oldObject.?data))
+      message: "Only the controller may write state.json; other writers may only maintain metadata"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: node-onboarding-state
+spec:
+  policyName: node-onboarding-state
+  validationActions: [Deny]
+{{- end }}

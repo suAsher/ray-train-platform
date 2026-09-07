@@ -1,6 +1,14 @@
 nameOverride: ""
 fullnameOverride: ""
 
+# Optional complete ConfigMap in the release namespace, managed outside Helm.
+# Clone the legacy <fullname>-config before switching: config.json, setup,
+# teardown, helperPod.yaml and collect-cache-metrics must all be present.
+# The controller owns only config.json; keep the other keys intact. The chart
+# still renders the legacy map so clearing this field restores the Helm config.
+# Use a literal DNS subdomain name (max 253 characters), never a template.
+existingConfigMap: ""
+
 images:
   provisioner: harbor.wellspiking.ai/guofeng.su/local-path-provisioner@sha256:7d30aa9da00db4d40dbe3d2bb41a0fb6a3a926cbe915908458b0ec470db73115
   helper: harbor.wellspiking.ai/guofeng.su/busybox@sha256:ff6bba6f18535e7ccb3c1bbed0b84e5c733d7d9dd8815f1ea93ee73073135aa4

@@ -1,0 +1,58 @@
+{{- if .Values.enabled }}
+{{- include "node-onboarding.validate" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: node-onboarding
+  namespace: ray-cache-local
+spec:
+  replicas: {{ if .Values.activateController }}1{{ else }}0{{ end }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: node-onboarding
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: node-onboarding
+    spec:
+      serviceAccountName: node-onboarding
+      automountServiceAccountToken: true
+      securityContext:
+        runAsUser: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: controller
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["/app/node-onboarding"]
+          args:
+            - --namespace=ray-cache-local
+            - --config-namespace=ray-cache-local
+            - --data1-config-map={{ .Values.data1ConfigMap }}
+            - --data2-config-map={{ .Values.data2ConfigMap }}
+            - --data1-storage-class={{ .Values.data1StorageClass }}
+            - --data2-storage-class={{ .Values.data2StorageClass }}
+            - --image={{ .Values.image }}
+            - --helper-image={{ .Values.helperImage }}
+            - --nfs-config-map=node-onboarding-nfs
+            - --state-config-map=node-onboarding-state
+            - --probe-service-account=node-onboarding-probe
+            - --leader-election-lease=node-onboarding
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+{{- end }}

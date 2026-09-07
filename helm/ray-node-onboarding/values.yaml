@@ -1,0 +1,22 @@
+# Install separately into the EXISTING ray-cache-local namespace. No resources
+# are emitted until enabled. Server-side policy validation is required first.
+enabled: false
+# Stage policies/RBAC first with zero controller replicas. Set true only after
+# server-side policy type checks and allowed/denied request tests pass.
+activateController: false
+
+# Required when enabled; use the independently built controller image digest.
+image: ""
+helperImage: harbor.wellspiking.ai/guofeng.su/busybox@sha256:ff6bba6f18535e7ccb3c1bbed0b84e5c733d7d9dd8815f1ea93ee73073135aa4
+
+# Seed complete external maps from the live provisioner maps before activation;
+# this chart never creates them. Only their config.json is controller-owned.
+data1ConfigMap: ray-cache-local-data1-runtime
+data2ConfigMap: ray-cache-local-data2-runtime
+data1StorageClass: ray-cache-local-data1
+data2StorageClass: ray-cache-local-data2
+
+nfs:
+  # Operators provide 1..8 fixed {server, path} entries. All mounts are read-only.
+  # Example: [{server: "10.0.0.10", path: "/datasets"}]
+  shares: []

@@ -1,0 +1,152 @@
+{{- if .Values.enabled }}
+{{- include "node-onboarding.validate" . }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: node-onboarding-pods
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+        scope: Namespaced
+  # Do not use objectSelector/label match conditions: omitting a label must not
+  # bypass validation. Existing provisioner helpers use a different requester.
+  matchConditions:
+    - name: controller-requester
+      expression: "request.userInfo.username == 'system:serviceaccount:ray-cache-local:node-onboarding'"
+  variables:
+    - name: prep
+      expression: "object.metadata.name.endsWith('-prepare')"
+    - name: uid
+      expression: "variables.prep ? 0 : 1000"
+    - name: check
+      expression: "object.spec.containers[0]"
+  validations:
+    - expression: >-
+        request.namespace == 'ray-cache-local' &&
+        object.spec.serviceAccountName == 'node-onboarding-probe' &&
+        object.spec.automountServiceAccountToken == false &&
+        object.spec.restartPolicy == 'Never' && object.spec.activeDeadlineSeconds == 600 &&
+        object.spec.preemptionPolicy == 'Never' &&
+        object.spec.schedulerName == 'default-scheduler' &&
+        object.spec.dnsPolicy == 'ClusterFirst' && !has(object.spec.dnsConfig) &&
+        (!has(object.spec.hostAliases) || size(object.spec.hostAliases) == 0) &&
+        (!has(object.spec.priorityClassName) || object.spec.priorityClassName == '') &&
+        (!has(object.spec.priority) || object.spec.priority == 0) &&
+        object.spec.terminationGracePeriodSeconds == 10 &&
+        (!has(object.spec.hostPID) || !object.spec.hostPID) &&
+        (!has(object.spec.hostIPC) || !object.spec.hostIPC) &&
+        (!has(object.spec.hostNetwork) || !object.spec.hostNetwork) &&
+        (!has(object.spec.shareProcessNamespace) || !object.spec.shareProcessNamespace) &&
+        !has(object.spec.runtimeClassName) &&
+        (!has(object.spec.initContainers) || size(object.spec.initContainers) == 0) &&
+        (!has(object.spec.ephemeralContainers) || size(object.spec.ephemeralContainers) == 0) &&
+        (!has(object.spec.imagePullSecrets) || size(object.spec.imagePullSecrets) == 0) &&
+        (!has(object.spec.tolerations) || object.spec.tolerations.all(t,
+          t.key in ['node.kubernetes.io/not-ready', 'node.kubernetes.io/unreachable'] &&
+          t.operator == 'Exists' && t.effect == 'NoExecute' && t.tolerationSeconds <= 300))
+      message: "Probes must be tokenless, bounded, isolated Pods with no extra containers or host namespaces"
+    - expression: >-
+        object.spec.securityContext.runAsUser == variables.uid &&
+        object.spec.securityContext.runAsGroup == variables.uid &&
+        (variables.prep || object.spec.securityContext.runAsNonRoot == true) &&
+        object.spec.securityContext.seccompProfile.type == 'RuntimeDefault' &&
+        !has(object.spec.securityContext.seLinuxOptions) &&
+        !has(object.spec.securityContext.windowsOptions) &&
+        !has(object.spec.securityContext.fsGroup) &&
+        (!has(object.spec.securityContext.supplementalGroups) || size(object.spec.securityContext.supplementalGroups) == 0) &&
+        (!has(object.spec.securityContext.sysctls) || size(object.spec.securityContext.sysctls) == 0)
+      message: "Probe identity and pod security settings must match the fixed profile"
+    - expression: >-
+        size(object.spec.containers) == (variables.prep ? 2 : 1) &&
+        object.spec.containers.all(c,
+          c.securityContext.allowPrivilegeEscalation == false &&
+          c.securityContext.readOnlyRootFilesystem == true &&
+          (!has(c.securityContext.privileged) || !c.securityContext.privileged) &&
+          c.securityContext.capabilities.drop == ['ALL'] &&
+          (!has(c.securityContext.capabilities.add) || size(c.securityContext.capabilities.add) == 0) &&
+          (!has(c.securityContext.procMount) || c.securityContext.procMount == 'Default') &&
+          (!has(c.securityContext.seccompProfile) || c.securityContext.seccompProfile.type == 'RuntimeDefault') &&
+          !has(c.securityContext.seLinuxOptions) && !has(c.securityContext.windowsOptions) &&
+          (!has(c.args) || size(c.args) == 0) &&
+          (!has(c.env) || size(c.env) == 0) && (!has(c.envFrom) || size(c.envFrom) == 0) &&
+          !has(c.lifecycle) && !has(c.livenessProbe) && !has(c.readinessProbe) && !has(c.startupProbe) &&
+          (!has(c.ports) || size(c.ports) == 0) &&
+          (!has(c.volumeDevices) || size(c.volumeDevices) == 0) &&
+          c.resources.requests == {'cpu': '20m', 'memory': '32Mi'} &&
+          c.resources.limits == {'cpu': '200m', 'memory': '64Mi'} &&
+          (!has(c.volumeMounts) || c.volumeMounts.all(m,
+            !has(m.subPath) && !has(m.subPathExpr) &&
+            (!has(m.mountPropagation) || m.mountPropagation == 'None'))))
+      message: "Every container must have fixed resource limits and deny privilege, commands via args/env/lifecycle, extra mounts and capabilities"
+    - expression: >-
+        variables.check.name == 'check' &&
+        (!has(variables.check.securityContext.runAsUser) || variables.check.securityContext.runAsUser == variables.uid) &&
+        (!has(variables.check.securityContext.runAsGroup) || variables.check.securityContext.runAsGroup == variables.uid) &&
+        (variables.prep
+          ? variables.check.image == {{ .Values.image | toJson }} && variables.check.command == ['/app/node-onboarding', 'prepare']
+          : variables.check.image == {{ .Values.helperImage | toJson }} && variables.check.command == ['/bin/sh', '-ec', {{ include "node-onboarding.probeScript" . | toJson }}])
+      message: "The check image and complete command must match the reviewed immutable probe"
+    - expression: >-
+        !variables.prep ||
+        (object.spec.containers[1].name == 'warm-helper' &&
+         object.spec.containers[1].image == {{ .Values.helperImage | toJson }} &&
+         object.spec.containers[1].command == ['/bin/sh', '-ec', 'true'] &&
+         object.spec.containers[1].securityContext.runAsUser == 1000 &&
+         object.spec.containers[1].securityContext.runAsGroup == 1000 &&
+         object.spec.containers[1].securityContext.runAsNonRoot == true &&
+         (!has(object.spec.containers[1].volumeMounts) || size(object.spec.containers[1].volumeMounts) == 0))
+      message: "Preparation may only add the unprivileged, mountless helper-image warmup"
+    - expression: >-
+        !variables.prep ||
+        (object.spec.nodeName == object.metadata.ownerReferences[0].name &&
+         size(object.spec.volumes) == 5 && size(variables.check.volumeMounts) == 5 &&
+         object.spec.volumes.all(v,
+           has(v.hostPath) &&
+           ((v.name == 'data1' && v.hostPath.path == '/data1' && v.hostPath.type == 'Directory') ||
+            (v.name == 'data2' && v.hostPath.path == '/data2' && v.hostPath.type == 'Directory') ||
+            (v.name == 'mountinfo' && v.hostPath.path == '/proc/1/mountinfo' && v.hostPath.type == 'File') ||
+            (v.name == 'sys-dev-block' && v.hostPath.path == '/sys/dev/block' && v.hostPath.type == 'Directory') ||
+            (v.name == 'sys-devices' && v.hostPath.path == '/sys/devices' && v.hostPath.type == 'Directory'))) &&
+         variables.check.volumeMounts.all(m,
+           ((m.name == 'data1' && m.mountPath == '/data1') || (m.name == 'data2' && m.mountPath == '/data2'))
+             ? (!has(m.readOnly) || !m.readOnly)
+             : (m.readOnly &&
+                ((m.name == 'mountinfo' && m.mountPath == '/host-mountinfo') ||
+                 (m.name == 'sys-dev-block' && m.mountPath == '/host-sys/dev/block') ||
+                 (m.name == 'sys-devices' && m.mountPath == '/host-sys/devices')))))
+      message: "Preparation may mount only the two data directories and exact read-only mount/block-device metadata"
+    - expression: >-
+        variables.prep ||
+        ((!has(object.spec.nodeName) || object.spec.nodeName == '') &&
+         size(object.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms) == 1 &&
+         size(object.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchFields) == 1 &&
+         object.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchFields[0].key == 'metadata.name' &&
+         object.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchFields[0].operator == 'In' &&
+         object.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchFields[0].values == [object.metadata.ownerReferences[0].name] &&
+         size(object.spec.volumes) == {{ add 2 (len .Values.nfs.shares) }} &&
+         size(variables.check.volumeMounts) == {{ add 2 (len .Values.nfs.shares) }} &&
+         object.spec.volumes.all(v,
+           ((v.name == 'cache1' || v.name == 'cache2') && has(v.persistentVolumeClaim) &&
+             v.persistentVolumeClaim.claimName == object.metadata.name.replace('-probe', '-' + v.name) &&
+             (!has(v.persistentVolumeClaim.readOnly) || !v.persistentVolumeClaim.readOnly))
+           {{- range $i, $share := .Values.nfs.shares }}
+           || (v.name == 'nfs-{{ $i }}' && has(v.nfs) && v.nfs.server == {{ $share.server | toJson }} && v.nfs.path == {{ $share.path | toJson }} && v.nfs.readOnly)
+           {{- end }}) &&
+         variables.check.volumeMounts.all(m,
+           m.mountPath == '/' + m.name &&
+           ((m.name == 'cache1' || m.name == 'cache2') ? (!has(m.readOnly) || !m.readOnly) : m.readOnly)))
+      message: "Smoke Pod must use its own two claims, exact node affinity and only configured read-only NFS exports"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: node-onboarding-pods
+spec:
+  policyName: node-onboarding-pods
+  validationActions: [Deny]
+{{- end }}

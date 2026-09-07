@@ -103,7 +103,7 @@ spec:
           emptyDir: {}
         - name: scripts
           configMap:
-            name: {{ include "ray-cache-local.fullname" . }}-config
+            name: {{ include "ray-cache-local.configMapName" . }}
             defaultMode: 0555
             items:
               - key: collect-cache-metrics

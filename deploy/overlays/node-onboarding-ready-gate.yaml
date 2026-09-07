@@ -1,0 +1,12 @@
+# Apply only AFTER all existing production GPU nodes have passed the independent
+# onboarding controller's real dual-PVC/NFS checks and carry cache-ready=true.
+# This changes placement for NEW workloads only; never edit existing RayClusters.
+# Keep both selectors aligned so capacity discovery and Kueue admit the same pool.
+training:
+  nodeSelector: accelerator=nvidia-rtx-4090,platform.wellspiking.ai/gpu-pool=production,platform.wellspiking.ai/cache-ready=true
+kueue:
+  autoQuota: true
+  resourceFlavorNodeLabels:
+    accelerator: nvidia-rtx-4090
+    platform.wellspiking.ai/gpu-pool: production
+    platform.wellspiking.ai/cache-ready: "true"

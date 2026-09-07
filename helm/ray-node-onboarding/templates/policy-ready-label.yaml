@@ -1,0 +1,35 @@
+{{- if .Values.enabled }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: node-onboarding-ready-label
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["nodes"]
+        scope: Cluster
+  variables:
+    - name: labels
+      expression: "has(object.metadata.labels) ? object.metadata.labels : {}"
+    - name: oldLabels
+      expression: "oldObject != null && has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}"
+  validations:
+    - expression: >-
+        request.userInfo.username == 'system:serviceaccount:ray-cache-local:node-onboarding' ||
+        ((('platform.wellspiking.ai/cache-ready' in variables.labels) == ('platform.wellspiking.ai/cache-ready' in variables.oldLabels)) &&
+         (!('platform.wellspiking.ai/cache-ready' in variables.labels) ||
+          variables.labels['platform.wellspiking.ai/cache-ready'] == variables.oldLabels['platform.wellspiking.ai/cache-ready']))
+      message: "Only verified onboarding may add, remove or change cache-ready; other Node management remains allowed"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: node-onboarding-ready-label
+spec:
+  policyName: node-onboarding-ready-label
+  validationActions: [Deny]
+{{- end }}

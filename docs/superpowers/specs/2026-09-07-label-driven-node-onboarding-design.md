@@ -1,6 +1,6 @@
 # Label-driven GPU node onboarding
 
-Status: simplified workflow approved; revised technical design pending review.
+Status: revised technical design approved by user on 2026-09-07.
 Automatic cache preparation/registration is not implemented or deployed yet.
 
 ## Operator contract
@@ -38,6 +38,9 @@ the existing administrator UI. No new multi-step wizard or manual acceptance.
 ## Automatic sequence
 
 1. Verify production labels, Node Ready, non-virtual node and allocatable GPUs.
+   NFS client support is an OS prerequisite: a real NFS volume mount smoke must
+   catch a missing host `mount.nfs`. Do not install host packages from the
+   controller; report the exact operator repair command instead.
 2. Run a fixed, resource/time-bounded preparation Pod. Read host mount metadata
    to prove `/data1` and `/data2` are independent mounted block devices, neither
    the host root device nor symlinks. Container bind mounts alone are not proof.

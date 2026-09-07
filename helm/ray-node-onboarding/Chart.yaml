@@ -1,0 +1,7 @@
+apiVersion: v2
+name: ray-node-onboarding
+description: Isolated label-driven node cache onboarding controller with mandatory admission guards
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.30.0-0"

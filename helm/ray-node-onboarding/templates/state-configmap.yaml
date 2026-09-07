@@ -1,0 +1,12 @@
+{{- if .Values.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: node-onboarding-state
+  namespace: ray-cache-local
+  annotations:
+    helm.sh/resource-policy: keep
+# Intentionally no data field: Helm must never overwrite live state.json.
+# The all-requester policy permits only an empty initial object and protects
+# controller-owned proof data against replacement and deletion while bound.
+{{- end }}
