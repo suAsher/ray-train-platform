@@ -1,4 +1,8 @@
-# SuperAdmin node onboarding wizard
+# SuperAdmin node onboarding wizard (superseded)
+
+Superseded by `2026-09-07-label-driven-node-onboarding-design.md`. The user
+explicitly requested mounted disks plus labels, with automatic preparation,
+not this multi-step wizard. This document is retained as design history only.
 
 Status: scope approved; implementation awaits review of this design. This is
 separate from the admin queue/quota display hotfix.
