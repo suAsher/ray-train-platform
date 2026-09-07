@@ -126,6 +126,11 @@
                 @click="removeFailed(row.dataset, selectedIds(row.dataset))">
                 批量移除失败版本（{{ selectedIds(row.dataset).length }}/100）
               </el-button>
+              <el-button v-if="canManage(row.dataset) && showFailed" type="danger" size="small"
+                :disabled="loading || cleanupBusy || !selectedIds(row.dataset).length"
+                @click="removeFailed(row.dataset, selectedIds(row.dataset), false, true)">
+                永久删除失败版本及独占产物（{{ selectedIds(row.dataset).length }}/100）
+              </el-button>
             </div>
           </div>
 
@@ -211,6 +216,7 @@
                 </el-button>
                 <template v-else-if="version.state === 'FAILED' && canManage(row.dataset)">
                   <el-button type="danger" link size="small" :disabled="cleanupBusy || loading" @click="removeFailed(row.dataset, [version.id])">移除失败版本</el-button>
+                  <el-button type="danger" link size="small" :disabled="cleanupBusy || loading" @click="removeFailed(row.dataset, [version.id], false, true)">永久删除及清理独占产物</el-button>
                   <el-button v-if="publicationFor(version.id)?.state === 'FAILED'" type="danger" link size="small"
                     :disabled="cleanupBusy || loading" @click="removeFailed(row.dataset, [version.id], true)">移除失败发布记录</el-button>
                 </template>
@@ -229,7 +235,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
-import { deleteFailedDatasetPublication, deleteFailedDatasetVersion, fetchDatasetPublication, fetchDatasets, fetchDatasetVersions, requestDatasetPublication } from '../../api/datasets.js'
+import { deleteFailedDatasetPublication, deleteFailedDatasetVersion, purgeFailedDatasetVersion, fetchDatasetPublication, fetchDatasets, fetchDatasetVersions, requestDatasetPublication } from '../../api/datasets.js'
 import { canManageDataset, cleanupFailedVersions, cleanupNotice, visibleDatasetVersions } from '../../datasetCleanup.js'
 import { fetchPlatformLimits } from '../../api/platform.js'
 import { roles, session } from '../../stores/session.js'
@@ -281,7 +287,7 @@ const applyCleanupResult = (dataset, result, publicationOnly) => {
   cleanupErrors.value = { ...cleanupErrors.value, [dataset.id]: result.failed }
 }
 
-const removeFailed = async (dataset, ids, publicationOnly = false) => {
+const removeFailed = async (dataset, ids, publicationOnly = false, permanent = false) => {
   if (!canManage(dataset) || loading.value || cleanupBusy.value || Object.values(publishing.value).some(Boolean)) return
   const versions = versionsByDataset.value.get(dataset.id) || []
   if (!ids.length || ids.length > 100 || ids.some(id => !versions.some(version => version.id === id && version.state === 'FAILED'))) return
@@ -290,18 +296,28 @@ const removeFailed = async (dataset, ids, publicationOnly = false) => {
   try {
     try {
       await ElMessageBox.confirm(
-        `将移除 ${ids.length} 条失败${publicationOnly ? '发布记录' : '版本记录（及其失败发布记录）'}。${cleanupNotice}`,
-        publicationOnly ? '移除失败发布记录' : '移除失败版本',
-        { confirmButtonText: `确认移除 ${ids.length} 条`, cancelButtonText: '取消', type: 'warning' },
+        permanent
+          ? `永久删除 ${ids.length} 个失败版本及发布记录，不可恢复。仅清理确认归属该版本且无引用的清单、发布临时文件等独占产物；原始数据、共享或归属不明的文件、训练任务及模型均保留。0 B 不代表没有残留文件。`
+          : `将移除 ${ids.length} 条失败${publicationOnly ? '发布记录' : '版本记录（及其失败发布记录）'}。${cleanupNotice}`,
+        permanent ? '永久删除失败版本及独占产物' : publicationOnly ? '移除失败发布记录' : '移除失败版本',
+        { confirmButtonText: `确认${permanent ? '永久删除' : '移除'} ${ids.length} 条`, cancelButtonText: '取消', type: 'warning' },
       )
     } catch {
       return
     }
     if (!canManage(dataset)) return
-    const remove = publicationOnly ? deleteFailedDatasetPublication : deleteFailedDatasetVersion
-    const result = await cleanupFailedVersions(ids, id => remove(dataset.id, id))
+    const remove = permanent ? purgeFailedDatasetVersion : publicationOnly ? deleteFailedDatasetPublication : deleteFailedDatasetVersion
+    const result = await cleanupFailedVersions(ids, async id => {
+      if (!canManage(dataset) || !datasetCapabilities.value.catalogEnabled) throw new Error('权限或数据集能力已变更，请刷新后重试')
+      try { return await remove(dataset.id, id) } catch (error) {
+        if (!permanent) throw error
+        throw new Error('清理未完成：版本可能仍被引用、发布器仍在运行或存储暂不可用，请刷新后重试')
+      }
+    })
     applyCleanupResult(dataset, result, publicationOnly)
-    if (result.succeeded.length) ElMessage.success(`已移除 ${result.succeeded.length} 条失败记录，存储文件保持不变`)
+    if (result.succeeded.length) ElMessage.success(permanent
+      ? `已删除 ${result.succeeded.length} 个失败版本；未确认无引用的共享产物仍保留`
+      : `已移除 ${result.succeeded.length} 条失败记录，存储文件保持不变`)
     if (result.failed.length) ElMessage.warning(`${result.failed.length} 条未移除，请查看逐项原因`)
   } finally {
     cleanupBusy.value = false

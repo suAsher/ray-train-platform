@@ -307,6 +307,27 @@ func (controller *Controller) Reconcile(ctx context.Context, request ReconcileRe
 	if publicationRootsOverlap(request.SourceRoot, controller.options.InternalPrefix) {
 		return domain.DatasetPublicationRun{}, ErrInvalidPublicationControllerRequest
 	}
+	if fence, ok := controller.repository.(interface {
+		WithDatasetPublicationWrite(context.Context, string, string, func() error) error
+	}); ok {
+		var result domain.DatasetPublicationRun
+		var reconcileErr error
+		err := fence.WithDatasetPublicationWrite(ctx, request.DatasetID, request.DatasetVersionID, func() error {
+			result, reconcileErr = controller.reconcileFenced(ctx, request)
+			return reconcileErr
+		})
+		if reconcileErr != nil {
+			return result, reconcileErr
+		}
+		if err != nil {
+			return result, cleanDependencyError(ctx, err)
+		}
+		return result, nil
+	}
+	return controller.reconcileFenced(ctx, request)
+}
+
+func (controller *Controller) reconcileFenced(ctx context.Context, request ReconcileRequest) (domain.DatasetPublicationRun, error) {
 
 	initial := domain.DatasetPublicationRun{
 		ID: request.RunID, DatasetID: request.DatasetID,

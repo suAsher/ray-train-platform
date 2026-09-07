@@ -23,6 +23,10 @@ export function deleteFailedDatasetVersion(datasetId, versionId) {
   return apiDelete(datasetVersionPath(datasetId, versionId))
 }
 
+export function purgeFailedDatasetVersion(datasetId, versionId) {
+  return apiDelete(`${datasetVersionPath(datasetId, versionId)}/purge`)
+}
+
 export function deleteFailedDatasetPublication(datasetId, versionId) {
   return apiDelete(`${datasetVersionPath(datasetId, versionId)}/publication`)
 }

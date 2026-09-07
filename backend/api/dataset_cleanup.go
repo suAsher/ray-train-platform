@@ -43,6 +43,7 @@ func (h *Handler) registerDatasetCleanupRoutes(group *gin.RouterGroup) {
 	})
 	cleanup.DELETE("/datasets/:id/versions/:versionID", func(c *gin.Context) { h.deleteFailedDatasetRecord(c, false) })
 	cleanup.DELETE("/datasets/:id/versions/:versionID/publication", func(c *gin.Context) { h.deleteFailedDatasetRecord(c, true) })
+	cleanup.DELETE("/datasets/:id/versions/:versionID/purge", h.purgeFailedDatasetVersion)
 }
 func (h *Handler) deleteFailedDatasetRecord(c *gin.Context, publicationOnly bool) {
 	datasetID, versionID := c.Param("id"), c.Param("versionID")

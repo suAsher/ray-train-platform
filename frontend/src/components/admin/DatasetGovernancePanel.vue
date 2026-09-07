@@ -30,7 +30,7 @@
           </p>
         </div>
         <div class="flex flex-wrap gap-2">
-          <el-button size="small" :loading="loading" @click="loadDatasets">刷新</el-button>
+          <el-button size="small" :loading="loading" :disabled="cleanupBusy" @click="loadDatasets">刷新</el-button>
           <el-button
             v-if="effectiveSuperAdmin"
             size="small"
@@ -74,6 +74,14 @@
         <el-table-column type="expand">
           <template #default="scope">
             <div class="space-y-3 px-4 py-2">
+              <div v-if="canManageDataset(scope.row) && failedIds(scope.row.id).length" class="flex items-center gap-3">
+                <el-button type="danger" size="small" :disabled="cleanupBusy || loading || publishing[scope.row.id] || versionLoading[scope.row.id]"
+                  @click="purgeVersions(scope.row, failedIds(scope.row.id).slice(0, 100))">批量删除失败版本（最多 100 条）</el-button>
+                <span class="text-xs text-slate-400">只删除失败记录及无引用的独占产物，保留原始数据和训练。</span>
+              </div>
+              <el-alert v-if="cleanupErrors[scope.row.id]?.length" type="warning" :closable="false" title="部分版本未删除，可核对后重试">
+                <p v-for="failure in cleanupErrors[scope.row.id]" :key="failure.id" class="break-all">{{ failure.id }}：{{ failure.reason }}</p>
+              </el-alert>
               <el-alert
                 v-if="versionErrors[scope.row.id]"
                 type="error"
@@ -134,14 +142,18 @@
                     <span class="font-mono text-[11px] text-slate-400">{{ shortDigest(versionScope.row.manifestSha256) }}</span>
                   </template>
                 </el-table-column>
-                <el-table-column label="操作" width="110" align="right">
+                <el-table-column label="操作" width="140" align="right">
                   <template #default="versionScope">
+                    <el-button v-if="versionScope.row.state === 'FAILED' && canManageDataset(scope.row)" type="danger" link size="small"
+                      :disabled="cleanupBusy || loading || publishing[scope.row.id] || versionLoading[scope.row.id]"
+                      @click="purgeVersions(scope.row, [versionScope.row.id])">删除失败版本</el-button>
                     <el-button
                       v-if="versionScope.row.state === 'READY' && canManageDataset(scope.row)"
                       type="danger"
                       link
                       size="small"
                       :loading="deprecating[versionScope.row.id] === true"
+                      :disabled="cleanupBusy"
                       @click="deprecateVersion(scope.row, versionScope.row)"
                     >
                       弃用版本
@@ -191,7 +203,7 @@
               type="primary"
               link
               size="small"
-              :disabled="!datasetCapabilities.publisherEnabled"
+              :disabled="!datasetCapabilities.publisherEnabled || cleanupBusy"
               :loading="publishing[scope.row.id] === true"
               @click="publishDataset(scope.row)"
             >
@@ -286,7 +298,9 @@ import {
   fetchDatasetVersions,
   previewDatasetGarbageCollection,
   requestDatasetPublication,
+  purgeFailedDatasetVersion,
 } from '../../api/datasets.js'
+import { cleanupFailedVersions } from '../../datasetCleanup.js'
 import {
   datasetVersionPresentation,
   formatDatasetBytes,
@@ -319,6 +333,8 @@ const publishing = ref({})
 const deprecating = ref({})
 const loading = ref(false)
 const catalogError = ref('')
+const cleanupBusy = ref(false)
+const cleanupErrors = ref({})
 const creating = ref(false)
 const createDialogVisible = ref(false)
 const gcLoading = ref(false)
@@ -361,6 +377,7 @@ const nonNegativeCount = (value) => {
 }
 const versionsFor = (datasetId) => versionsByDataset.value[datasetId] || []
 const readyVersionCount = (datasetId) => versionsFor(datasetId).filter(({ state }) => state === 'READY').length
+const failedIds = (datasetId) => versionsFor(datasetId).filter(({ state }) => state === 'FAILED').map(({ id }) => id)
 const datasetLabel = (datasetId) => datasets.value.find(({ id }) => id === datasetId)?.name || datasetId
 const publicationFor = (versionId) => publicationsByVersion.value[versionId] || null
 const publicationPercent = (publication) => {
@@ -422,6 +439,7 @@ const loadDatasetVersions = async (datasetId, generation = loadGeneration) => {
 }
 
 const loadDatasets = async () => {
+  if (cleanupBusy.value) return
   if (!datasetCapabilities.value.catalogEnabled || !canManageCatalog.value) return
   const generation = ++loadGeneration
   loading.value = true
@@ -447,6 +465,40 @@ const canManageDataset = (dataset) => {
   if (!canManageCatalog.value || !dataset) return false
   if (effectiveSuperAdmin.value) return true
   return dataset.visibility === 'TEAM' && dataset.ownerTenantId === (session.value?.tenantId || '')
+}
+
+const purgeVersions = async (dataset, requestedIds) => {
+  if (cleanupBusy.value || loading.value || versionLoading.value[dataset?.id] || Object.values(publishing.value).some(Boolean)) return
+  const ids = [...new Set(requestedIds)]
+  const allowed = () => datasetCapabilities.value.catalogEnabled && canManageDataset(dataset)
+    && ids.length > 0 && ids.length <= 100 && ids.every(id => failedIds(dataset.id).includes(id))
+  if (!allowed()) return
+  cleanupBusy.value = true
+  try {
+    await ElMessageBox.confirm(
+      `永久删除「${dataset.name}」的 ${ids.length} 个失败版本及发布记录，此操作不可恢复。仅清理确认归属该版本且无引用的清单、发布临时文件等独占产物；原始数据、共享或归属不明的文件、训练任务及模型均保留。显示 0 B 不代表没有残留文件。`,
+      '永久删除失败版本',
+      { confirmButtonText: '确认永久删除', cancelButtonText: '取消', type: 'warning' },
+    )
+    if (!allowed()) return
+    const result = await cleanupFailedVersions(ids, async id => {
+      if (!allowed()) throw new Error('权限或版本状态已变更，请刷新后重试')
+      try {
+        return await purgeFailedDatasetVersion(dataset.id, id)
+      } catch (error) {
+        throw new Error(safeErrorMessage(error, '清理未完成：版本可能仍被引用、发布器仍在运行或存储暂不可用，请刷新后重试'))
+      }
+    })
+    const removed = new Set(result.succeeded)
+    versionsByDataset.value = { ...versionsByDataset.value, [dataset.id]: versionsFor(dataset.id).filter(version => !removed.has(version.id)) }
+    publicationsByVersion.value = Object.fromEntries(Object.entries(publicationsByVersion.value).filter(([id]) => !removed.has(id)))
+    cleanupErrors.value = { ...cleanupErrors.value, [dataset.id]: result.failed }
+    if (result.succeeded.length) ElMessage.success(`已删除 ${result.succeeded.length} 个失败版本；未确认无引用的共享产物仍保留`)
+  } catch (error) {
+    if (!isDialogCancel(error)) ElMessage.error('无法完成删除确认，请重试')
+  } finally {
+    cleanupBusy.value = false
+  }
 }
 
 const syncSourceSpace = () => {
@@ -537,6 +589,7 @@ const submitCreateDataset = async () => {
 }
 
 const publishDataset = async (dataset) => {
+  if (cleanupBusy.value || publishing.value[dataset?.id]) return
   if (!datasetCapabilities.value.publisherEnabled) {
     ElMessage.warning('数据集发布器未启用')
     return
@@ -556,7 +609,7 @@ const publishDataset = async (dataset) => {
     ElMessage.error('无法完成发布确认')
     return
   }
-  if (!datasetCapabilities.value.publisherEnabled || !canManageDataset(dataset)) {
+  if (cleanupBusy.value || !datasetCapabilities.value.publisherEnabled || !canManageDataset(dataset)) {
     ElMessage.warning('发布能力或当前权限已变更，请刷新后重试')
     return
   }
@@ -589,7 +642,7 @@ const publishDataset = async (dataset) => {
 }
 
 const deprecateVersion = async (dataset, version) => {
-  if (!canManageDataset(dataset) || version?.state !== 'READY') return
+  if (cleanupBusy.value || !canManageDataset(dataset) || version?.state !== 'READY') return
   try {
     await ElMessageBox.confirm(
       `弃用版本 ${version.version} 后，新任务不再把它作为最新可用版本；已提交任务不受影响。`,
@@ -601,7 +654,7 @@ const deprecateVersion = async (dataset, version) => {
     ElMessage.error('无法完成弃用确认')
     return
   }
-  if (!datasetCapabilities.value.catalogEnabled || !canManageDataset(dataset)) {
+  if (cleanupBusy.value || !datasetCapabilities.value.catalogEnabled || !canManageDataset(dataset)) {
     ElMessage.warning('数据集治理能力或当前权限已变更，请刷新后重试')
     return
   }

@@ -387,6 +387,9 @@ func (h *LocalAuthHandler) enableUser(c *gin.Context) {
 // personal TOS root and historical job records remain available for the
 // platform retention window and an explicit, separately authorised purge.
 func (h *LocalAuthHandler) decommissionUser(c *gin.Context) {
+	if h.tryDecommissionRetiredUser(c) {
+		return
+	}
 	principal, target, ok := h.manageableUser(c)
 	if !ok {
 		return

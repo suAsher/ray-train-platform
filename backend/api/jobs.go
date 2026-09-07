@@ -69,6 +69,7 @@ type Handler struct {
 	storageAssets            StorageAssetStore
 	datasets                 DatasetCatalogStore
 	datasetPublications      DatasetPublicationManager
+	datasetPurgeObjects      DatasetPurgeObjects
 	datasetInternalPrefix    string
 	datasetVersioningEnabled bool
 	rayDataStreamingEnabled  bool
