@@ -230,3 +230,18 @@ func TestNodeOnboardingProofAndProbeContract(t *testing.T) {
 		}
 	}
 }
+
+func TestNodeOnboardingPodResourceCELContract(t *testing.T) {
+	got, err := renderOnboardingChart(t, onboardingEnabledValues(), "ray-cache-local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"dyn(c.resources).requests == {'cpu': '20m', 'memory': '32Mi'}",
+		"dyn(c.resources).limits == {'cpu': '200m', 'memory': '64Mi'}",
+	} {
+		if !strings.Contains(got, required) {
+			t.Errorf("resource limits require schema-compatible exact map comparison: %s", required)
+		}
+	}
+}

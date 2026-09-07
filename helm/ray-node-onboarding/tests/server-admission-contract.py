@@ -118,9 +118,18 @@ def main():
         ("host aliases", ["spec", "hostAliases"], [{"ip": "192.0.2.1", "hostnames": ["nfs.example"]}]),
         ("host root", ["spec", "volumes", 0, "hostPath", "path"], "/"),
         ("writable sysfs", ["spec", "containers", 0, "volumeMounts", 3, "readOnly"], False),
+        ("excess CPU limit", ["spec", "containers", 0, "resources", "limits", "cpu"], "1"),
+        ("excess memory limit", ["spec", "containers", 0, "resources", "limits", "memory"], "1Gi"),
+        ("altered CPU request", ["spec", "containers", 0, "resources", "requests", "cpu"], "10m"),
+        ("altered memory request", ["spec", "containers", 0, "resources", "requests", "memory"], "16Mi"),
+        ("missing memory limit", ["spec", "containers", 0, "resources", "limits"], {"cpu": "200m"}),
     ]
     for label, path, value in pod_mutations:
         create(label, mutate(prep, path, value), "pods")
+    extra_resource = copy.deepcopy(prep)
+    extra_resource["spec"]["containers"][0]["resources"]["requests"]["example.com/admission-test"] = "1"
+    extra_resource["spec"]["containers"][0]["resources"]["limits"]["example.com/admission-test"] = "1"
+    create("extra extended resource", extra_resource, "pods")
     # Give the extra container a unique name so admission, not core API schema,
     # is the reason for denial in the separate sidecar case.
     sidecar = copy.deepcopy(prep)
