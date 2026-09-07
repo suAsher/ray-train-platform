@@ -8,6 +8,10 @@
 
 **Tech Stack:** Go/client-go, Kubernetes Pods/PVCs/ConfigMaps/Leases, Helm, existing Vue help.
 
+**Completion status (2026-09-07 17:50 CST):** implementation and staged production
+activation are complete. The original planning checklist below is retained as
+historical scope; the final evidence and remaining limits are recorded at the end.
+
 ## Execution order and safety
 
 - [x] Diagnose current debug failure before configuration changes: Scheduled=True on 229, five NFS volumes fail with missing mount helper.
@@ -104,3 +108,59 @@ Backups and minimal overrides retained on build host:
 `/root/cache-data1-before-229-20260907.yaml`,
 `/root/cache-data2-before-229-20260907.yaml`, both `*-before-229-manifest.yaml`,
 `/root/ray-cache-229-data1.yaml`, `/root/ray-cache-229-data2.yaml`.
+
+## Final production activation (2026-09-07)
+
+- Platform `ray-platform` revision **181**: backend and frontend
+  `release-20260907-04`, built from `f7997b9`. Backend digest
+  `sha256:d7b48cd9b54b70027f108aca12db0a31c418a750bece7b08968308b61cefa24f`;
+  frontend digest
+  `sha256:b197a22b9550207b8dc4f64385eb9312098a3186f2066602f2af4ec3364b0e5b`.
+  Both deployments are 2/2 Ready and `/healthz` returns 200.
+- Independent `ray-node-onboarding` revision **8**: image
+  `release-20260907-07`, source `9b4ccc1`, digest
+  `sha256:3bcf54baab2d94ab08c84cab07f7a7180954de59619798c9396959ab03c31fbb`.
+  The running Pod imageID matches. Namespaced events reference the real protected
+  proof-store ConfigMap UID, retaining node UID and stage in the message.
+- CLI remains `release-20260906-04`, digest
+  `sha256:6083a013b1bf076fa0afb0ae557f1d8290b2253addc9271335d8a8d9b12e6968`;
+  this node release does not require a CLI upgrade.
+- Cache data1 revision **5**, data2 revision **3**, now read complete independent
+  runtime maps. Existing scripts, mappings and PV data were preserved. The first
+  data1 rollout timed out on a cold image pull and atomically rolled back; retry
+  with a longer rollout timeout succeeded. No training resources were restarted.
+- Full backend tests, frontend 367 tests/build and focused controller race/vet/
+  Linux build passed. Controller coverage was 81.6%. Helm/CEL contracts and all
+  **55 real API-server admission checks** passed before activation. Some ENI
+  negative inputs are normalized by VKE to the exact safe map; the contract checks
+  the final map rather than falsely reporting those as policy denials.
+- New-image receipts show 229 Ready at `09:41:27Z`, 233 at `09:41:35Z`, 232 at
+  `09:41:41Z`. Real non-root dual-cache writes and five read-only NFS mounts passed
+  on each node. All six test PVs and all test Pods/PVCs were reclaimed.
+- Only after all receipts were ready, added `cache-ready=true` to the shared
+  training selector and `gpu-4090-flavor`. The final platform diff contained only
+  these two settings. ClusterQueue converged to **24 GPU**, CPU `532023m`, memory
+  `2213411723072`. Team quota remains an administrator choice, not auto-allocation.
+- Original job `job-29dc380420222684984b87cf` head, worker and submitter retained
+  their UIDs and zero restarts. A user-submitted new worker
+  `job-b2e62df963cf077e86f0ce29-bf2fh-worker-group-worker-425z8` was observed
+  `1/1 Running` on 229 with UID `8d8dde9c-565f-4981-ba76-8356cc3dc7eb`, restart 0.
+  Its earlier Pending reason was insufficient GPUs, then scheduler placement
+  succeeded. This proves worker startup, not training convergence or multi-node
+  Ray Train / Parquet throughput; those are not claimed as verified here.
+- Runtime backups: `/root/rtp-before-ready-gate-values.yaml` and manifest,
+  `/root/rtp-after-ready-gate-values.yaml`,
+  `/root/rtp-onboarding-before-events-values.yaml` and manifest,
+  `/root/rtp-onboarding-20260907-07-values.yaml`, and both
+  `/root/cache-data*-before-runtime-values.yaml` / manifests. To pause onboarding,
+  set only `activateController=false`; retain ready gating, protected receipts,
+  runtime maps and cache data. Image/command changes require staged admission
+  revalidation. Never roll back an external runtime map to stale static values.
+- Independent observation requiring follow-up: historical managed attempts
+  `job-722620455425b65340574d98` and `job-66808647523a42b4726f013a` are already
+  `CLEANED` with empty RayJob UID, yet reconciliation retries retirement and hits
+  a database check constraint. This release did not change the repository/DB
+  implementation. No historical rows or constraints were altered as a workaround;
+  the exact cause and fix remain unverified.
+- Admin-edited help documents in the database were not overwritten. The current
+  expansion commands and production activation notice are in `OPERATIONS_GUIDE.md`.

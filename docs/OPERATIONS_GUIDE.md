@@ -558,9 +558,22 @@ command -v mount.nfs
 
 补装 NFS 客户端无需重启内核或 kubelet。安装后观察 kubelet 的挂载重试，并确认实际卷挂载与数据读取通过；命令存在不等于 NFS 网络、export 权限或挂载选项均正确。
 
-自动节点接入启用后，可以使用简流程，但前提是三类门禁已经在生产发布并验收：`ray-node-onboarding` controller 已启用，训练提交的 node selector / ResourceFlavor 只选择 `platform.wellspiking.ai/cache-ready=true` 的节点，且 cache-ready gate 已经覆盖所有训练入口。该前提不满足时，继续使用下面的人工注册流程，不宣称自动接入已部署。
+**2026-09-07 生产状态：自动接入已启用。** 平台 `ray-platform` revision 181 与独立 `ray-node-onboarding` revision 8 已验收，229/232/233 三台节点均 Ready，物理池为 24 卡。以下简流程是当前扩容入口；本节前后的手工缓存注册步骤仅供未启用自动接入的集群使用，当前生产不要再以旧静态 values 覆盖运行时缓存映射。
+
+使用简流程的前提是三类门禁已经在目标集群启用并验收：`ray-node-onboarding` controller 已启用，平台训练提交的 node selector / ResourceFlavor 只选择 `platform.wellspiking.ai/cache-ready=true` 的节点，且 cache-ready gate 已经覆盖平台训练入口。直接使用管理员 kubeconfig 绕过平台创建任意 Pod 不在此保证内。该前提不满足时，继续使用人工注册流程。
 
 启用后的简流程：先完成基础驱动、device plugin、DCGM、DNS、NFS helper、FSX/CSI 与 TOS/FSX/IDC NFS 读取检查；确认 `/data1`、`/data2` 是独立挂载，父目录为 root:root 且模式不宽于 `0755`，再准备各自 `ray-cache` 子目录。设置生产池两个标签，但不要手工设置或修改 `platform.wellspiking.ai/cache-ready`。节点必须取消 cordon，让 controller 的定向 PVC 探针能够调度到该节点；平台显示 ready 之前，训练仍必须被 cache-ready gate 挡住，不能靠人工挑节点绕过。controller 自动完成准备、登记、挂载验收、回收与 ready 标记；平台随后发现物理容量，超级管理员再按需求分配团队配额。已有运行任务不会因为新节点接入而重启、迁移或自动扩容。
+
+对于当前同型号 RTX 4090 节点，基础环境与挂盘就绪后，在集群管理端执行（将 `NODE_NAME` 替换为节点名）：
+
+```bash
+kubectl label node NODE_NAME accelerator=nvidia-rtx-4090 \
+  platform.wellspiking.ai/gpu-pool=production --overwrite
+kubectl uncordon NODE_NAME
+kubectl get node NODE_NAME -L platform.wellspiking.ai/cache-ready
+```
+
+等待自动验收显示 `cache-ready=true`，再到「管理员控制台 → 租户与配额」分配团队额度，无需手动修改 Kueue。缺失的 `ray-cache` 子目录由控制器创建；不会格式化磁盘或修复不安全的已有目录权限。失败时先看节点接入状态与事件：`kubectl -n ray-cache-local get events --field-selector involvedObject.name=node-onboarding-state`。不同 GPU 型号应先配置对应资源池/Flavor，不得照抄 RTX 4090 标签。
 
 节点仍处于 cordon 时，生成受控审阅材料（目录必须不存在）：
 
