@@ -45,7 +45,37 @@ UI's zero object/byte counters. Report retained shared/unknown content explicitl
   The first run exposed an outdated migration expectation of 34 in the PG-only
   integration test; corrected to 36 and rerun successfully. No production DB
   was used; the temporary container was removed after each run.
-- Implementation commit `2cccc9c` exists on main. Production is still revision
-  176; no production data was deleted and this change is not yet deployed.
-  Approval review requires separate explicit authorization to transfer the
-  source bundle to the build host; that authorization has been requested.
+- Final implementation commit `56bb97d` also rejects active publisher resources
+  with missing identity labels; the regression test was verified red then green.
+
+## Production release — 2026-09-07
+
+- User explicitly authorized source bundle transfer and API/UI deployment while
+  training runs, without changing training resources. Source was synchronized
+  via git bundle to the canonical build checkout.
+- Built backend/frontend from `56bb97d`, tag `release-20260907-01`.
+  Build-container downloads stalled; the same download worked from the host.
+  A build-only `docker buildx build --network host` resolved this without source,
+  Dockerfile, Kubernetes network or training configuration changes.
+- Backend digest:
+  `sha256:aa9f6ce5e21b0353c70e328c701e29d8179d79bda1863caf78d8c148669f714d`.
+- Frontend digest:
+  `sha256:04d0976a274e83874ca101e58f3655e78dc40aac8946d96802ca26b026055000`.
+- Server dry-run manifest diff contained exactly the two image changes.
+  Helm atomic upgrade completed: revision **177**, status **deployed**.
+  Both components have 2/2 ready updated replicas, zero restarts, and imageIDs
+  matching the registry digests. CLI deployment/image was unchanged.
+- Production schema migration version is **36**. Public UI and healthz return
+  200; unauthenticated permanent-cleanup request returns 401.
+- Running job `job-29dc380420222684984b87cf` remains RUNNING. Head, worker and
+  submitter Pod UIDs are unchanged and all restart counts remain zero.
+- No production publication/account was deleted during verification. Admins
+  must confirm actual cleanup in the UI; shared/unknown objects remain protected.
+- Separate log observation: retirement attempts for jobs
+  `job-722620455425b65340574d98` and `job-66808647523a42b4726f013a` hit a check
+  constraint. Read-only DB inspection shows both ledgers already CLEANED with
+  zero failures and no stored error; neither RayJob exists. Their retirement
+  implementation was unchanged in this release. This log issue remains for
+  separate investigation; no ledger or training resource was modified.
+- Release values/manifest backups and the exact image override remain under
+  `/root/` on the build host; temporary release bundle/dry-run files are removed.
