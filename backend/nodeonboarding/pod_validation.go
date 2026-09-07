@@ -4,6 +4,7 @@ import (
 	"fmt"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 // matchPodSpec compares the entire fixed template after normalizing only known
@@ -13,6 +14,18 @@ func matchPodSpec(actual, desired *corev1.Pod, node *corev1.Node) error {
 		return fmt.Errorf("probe scheduled to unexpected node")
 	}
 	a, d := actual.Spec.DeepCopy(), desired.Spec.DeepCopy()
+	// VKE injects one ENI only into the fixed scheduled probe. Strip only the
+	// observed symmetric pair; all other resources remain part of strict equality.
+	if actual.Name == resourceName(node, "probe") && desired.Name == actual.Name && len(a.Containers) == 1 && len(d.Containers) == 1 && a.Containers[0].Name == "check" && d.Containers[0].Name == "check" {
+		const eni corev1.ResourceName = "vke.volcengine.com/eni-ip"
+		request, hasRequest := a.Containers[0].Resources.Requests[eni]
+		limit, hasLimit := a.Containers[0].Resources.Limits[eni]
+		one := resource.MustParse("1")
+		if hasRequest && hasLimit && request.Cmp(one) == 0 && limit.Cmp(one) == 0 {
+			delete(a.Containers[0].Resources.Requests, eni)
+			delete(a.Containers[0].Resources.Limits, eni)
+		}
+	}
 	if d.NodeName == "" {
 		a.NodeName = ""
 	}

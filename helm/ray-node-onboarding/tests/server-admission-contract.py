@@ -137,6 +137,13 @@ def main():
     nfs_index = next(i for i, v in enumerate(probe["spec"]["volumes"]) if "nfs" in v)
     create("writable NFS", mutate(probe, ["spec", "volumes", nfs_index, "nfs", "readOnly"], False), "pods")
     create("unowned probe", mutate(prep, ["metadata", "labels"], {}), "owned-resources")
+    foreign_labels = dict(prep["metadata"]["labels"], **{"unrelated.example/label": "forbidden"})
+    create("foreign probe label", mutate(prep, ["metadata", "labels"], foreign_labels), "owned-resources")
+    create("foreign probe annotation", mutate(probe, ["metadata", "annotations"], {"unrelated.example/annotation": "forbidden"}), "owned-resources")
+    eni = copy.deepcopy(probe)
+    eni["spec"]["containers"][0]["resources"]["requests"]["vke.volcengine.com/eni-ip"] = "2"
+    eni["spec"]["containers"][0]["resources"]["limits"]["vke.volcengine.com/eni-ip"] = "2"
+    create("excess ENI allocation", eni, "pods")
     create("unrelated PVC class", mutate(fixtures["cache1-pvc"], ["spec", "storageClassName"], "unrelated-class"), "pvcs")
     create("oversized 2Gi PVC", mutate(fixtures["cache1-pvc"], ["spec", "resources", "requests", "storage"], "2Gi"), "pvcs")
 

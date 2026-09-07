@@ -77,8 +77,11 @@ spec:
           !has(c.lifecycle) && !has(c.livenessProbe) && !has(c.readinessProbe) && !has(c.startupProbe) &&
           (!has(c.ports) || size(c.ports) == 0) &&
           (!has(c.volumeDevices) || size(c.volumeDevices) == 0) &&
-          dyn(c.resources).requests == {'cpu': '20m', 'memory': '32Mi'} &&
-          dyn(c.resources).limits == {'cpu': '200m', 'memory': '64Mi'} &&
+          (dyn(c.resources).requests == {'cpu': '20m', 'memory': '32Mi'} ||
+           (!variables.prep && c.name == 'check' && dyn(c.resources).requests == {'cpu': '20m', 'memory': '32Mi', 'vke.volcengine.com/eni-ip': '1'})) &&
+          (dyn(c.resources).limits == {'cpu': '200m', 'memory': '64Mi'} ||
+           (!variables.prep && c.name == 'check' && dyn(c.resources).limits == {'cpu': '200m', 'memory': '64Mi', 'vke.volcengine.com/eni-ip': '1'})) &&
+          (('vke.volcengine.com/eni-ip' in dyn(c.resources).requests) == ('vke.volcengine.com/eni-ip' in dyn(c.resources).limits)) &&
           (!has(c.volumeMounts) || c.volumeMounts.all(m,
             !has(m.subPath) && !has(m.subPathExpr) &&
             (!has(m.mountPropagation) || m.mountPropagation == 'None'))))

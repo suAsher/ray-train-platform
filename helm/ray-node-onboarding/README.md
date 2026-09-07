@@ -40,6 +40,11 @@ policies match **requester identity**, not a removable object label. Resource
 labels and Node ownership are validated rather than used to skip validation.
 PVC admission accepts Kubernetes' automatic `kubernetes.io/pvc-protection`
 finalizer but no caller-chosen finalizers.
+The VKE admission additions are narrowly allowed: region/zone labels with values
+at most 63 characters, and on the smoke Pod only the annotation
+`vke.volcengine.com/cello-pod-evict-policy=allow` plus an optional exact
+`vke.volcengine.com/eni-ip: 1` alongside unchanged CPU/memory requests and limits.
+Other labels, annotations and extended resource requests remain rejected.
 
 The proof store `node-onboarding-state` starts without a `data` field so Helm
 upgrades preserve controller-owned `state.json`; `helm.sh/resource-policy: keep`

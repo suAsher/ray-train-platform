@@ -36,10 +36,15 @@ spec:
         request.operation != 'CREATE' ||
         ((!has(object.metadata.finalizers) || size(object.metadata.finalizers) == 0 ||
            (request.resource.resource == 'persistentvolumeclaims' && object.metadata.finalizers == ['kubernetes.io/pvc-protection'])) &&
-         (!has(object.metadata.annotations) || size(object.metadata.annotations) == 0) &&
-         size(object.metadata.labels) == 1 &&
+         (!has(object.metadata.annotations) || size(object.metadata.annotations) == 0 ||
+           (request.resource.resource == 'pods' && object.metadata.name.endsWith('-probe') &&
+            object.metadata.annotations.all(k,
+              k == 'vke.volcengine.com/cello-pod-evict-policy' && object.metadata.annotations[k] == 'allow'))) &&
+         object.metadata.labels.all(k,
+           k in ['platform.wellspiking.ai/onboarding-node-uid', 'topology.kubernetes.io/region', 'topology.kubernetes.io/zone'] &&
+           size(object.metadata.labels[k]) <= 63) &&
          (!has(object.metadata.ownerReferences[0].blockOwnerDeletion) || !object.metadata.ownerReferences[0].blockOwnerDeletion))
-      message: "New probes may not add finalizers, annotations, foreign labels or blocking owner references"
+      message: "New probes allow only the owner UID and bounded standard region/zone labels, no foreign metadata"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

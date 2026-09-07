@@ -272,3 +272,35 @@ func TestNodeOnboardingProbePriorityClass(t *testing.T) {
 		}
 	}
 }
+
+func TestNodeOnboardingAllowsOnlyBoundedTopologyLabels(t *testing.T) {
+	got, err := renderOnboardingChart(t, onboardingEnabledValues(), "ray-cache-local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"'topology.kubernetes.io/region'", "'topology.kubernetes.io/zone'", "size(object.metadata.labels[k]) <= 63", "object.metadata.labels.all(k,"} {
+		if !strings.Contains(got, required) {
+			t.Errorf("missing bounded topology label contract %q", required)
+		}
+	}
+	if strings.Contains(got, "size(object.metadata.labels) == 1") {
+		t.Error("must allow the two standard admission-injected topology labels")
+	}
+}
+
+func TestNodeOnboardingAllowsOnlyExactVKEProbeMetadata(t *testing.T) {
+	got, err := renderOnboardingChart(t, onboardingEnabledValues(), "ray-cache-local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"k == 'vke.volcengine.com/cello-pod-evict-policy' && object.metadata.annotations[k] == 'allow'",
+		"'cpu': '20m', 'memory': '32Mi', 'vke.volcengine.com/eni-ip': '1'",
+		"'cpu': '200m', 'memory': '64Mi', 'vke.volcengine.com/eni-ip': '1'",
+		"('vke.volcengine.com/eni-ip' in dyn(c.resources).requests) == ('vke.volcengine.com/eni-ip' in dyn(c.resources).limits)",
+	} {
+		if !strings.Contains(got, required) {
+			t.Errorf("missing exact VKE mutation contract %q", required)
+		}
+	}
+}
