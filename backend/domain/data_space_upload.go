@@ -18,14 +18,16 @@ const (
 	DataSpaceUploadSingle    DataSpaceUploadMode = "single"
 	DataSpaceUploadMultipart DataSpaceUploadMode = "multipart"
 
-	DataSpaceMultipartThresholdBytes int64 = 256 * 1024 * 1024
 	// Keep ordinary parts below Volcengine ALB's default 60 MiB request-body
 	// limit. Very large objects can still grow their parts once production has
 	// bound an ALB customized configuration that admits the TOS 5 GiB maximum.
 	DataSpacePreferredPartBytes int64 = 32 * 1024 * 1024
-	DataSpaceMaxPartBytes       int64 = 5 * 1024 * 1024 * 1024
-	DataSpaceMaxMultipartParts        = 10000
-	DataSpaceUploadSessionTTL         = 24 * time.Hour
+	// Requests at or below this size may use the legacy single-upload route.
+	// Larger files must be split before they reach the ALB.
+	DataSpaceMultipartThresholdBytes int64 = DataSpacePreferredPartBytes
+	DataSpaceMaxPartBytes            int64 = 5 * 1024 * 1024 * 1024
+	DataSpaceMaxMultipartParts             = 10000
+	DataSpaceUploadSessionTTL              = 24 * time.Hour
 )
 
 type DataSpaceUploadPlan struct {

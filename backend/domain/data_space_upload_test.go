@@ -16,7 +16,7 @@ func TestPlanDataSpaceUpload(t *testing.T) {
 	}{
 		{name: "empty remains single", size: 0, mode: DataSpaceUploadSingle},
 		{name: "threshold remains single", size: DataSpaceMultipartThresholdBytes, mode: DataSpaceUploadSingle},
-		{name: "first multipart byte uses ingress-safe parts", size: DataSpaceMultipartThresholdBytes + 1, mode: DataSpaceUploadMultipart, partSize: 32 * 1024 * 1024, totalParts: 9},
+		{name: "first multipart byte uses ingress-safe parts", size: DataSpaceMultipartThresholdBytes + 1, mode: DataSpaceUploadMultipart, partSize: 32 * 1024 * 1024, totalParts: 2},
 		{name: "larger than legacy five gib", size: 6 * 1024 * 1024 * 1024, mode: DataSpaceUploadMultipart, partSize: 32 * 1024 * 1024, totalParts: 192},
 		{name: "grows parts to stay below provider count", size: 32*1024*1024*DataSpaceMaxMultipartParts + 1, mode: DataSpaceUploadMultipart, partSize: 33 * 1024 * 1024, totalParts: 9697},
 		{name: "provider maximum", size: DataSpaceMaxPartBytes * DataSpaceMaxMultipartParts, mode: DataSpaceUploadMultipart, partSize: DataSpaceMaxPartBytes, totalParts: DataSpaceMaxMultipartParts},
@@ -37,6 +37,20 @@ func TestPlanDataSpaceUpload(t *testing.T) {
 				t.Fatalf("plan = %+v, want mode=%s partSize=%d totalParts=%d", plan, tt.mode, tt.partSize, tt.totalParts)
 			}
 		})
+	}
+}
+
+func TestPlanDataSpaceUploadUsesMultipartBeforeIngressLimit(t *testing.T) {
+	// The production ALB rejects request bodies above roughly 60 MiB. A 98 MiB
+	// pretrained weight must therefore be split before it reaches the proxy.
+	const resNet50Bytes int64 = 98 * 1024 * 1024
+
+	plan, err := PlanDataSpaceUpload(resNet50Bytes)
+	if err != nil {
+		t.Fatalf("PlanDataSpaceUpload(%d): %v", resNet50Bytes, err)
+	}
+	if plan.Mode != DataSpaceUploadMultipart || plan.PartSizeBytes != DataSpacePreferredPartBytes || plan.TotalParts != 4 {
+		t.Fatalf("plan = %+v; want 4 ingress-safe multipart parts", plan)
 	}
 }
 
