@@ -162,11 +162,6 @@ assert_contracts() {
   require_literal images/bevfusion-runtime/Dockerfile 'ARG RAY_CANARY_FOUNDATION_IMAGE=harbor.wellspiking.ai/guofeng.su/ray-train-pytorch-ray-train@sha256:5bfa41f517c911e45e9856690ca66886f0b9c793b32938baa1dc24e697dc5a1d'
   require_literal images/bevfusion-runtime/Dockerfile 'ARG RAY_CANARY_VERSION=2.58.0'
 
-  require_literal images/bevfusion-runtime/Dockerfile 'ARG APT_MIRROR=https://mirrors.aliyun.com/ubuntu'
-  require_literal images/bevfusion-runtime/Dockerfile 'test "${APT_MIRROR}" = "https://mirrors.aliyun.com/ubuntu"'
-  require_literal images/bevfusion-runtime/Dockerfile 'jammy main universe'
-  require_literal images/bevfusion-runtime/Dockerfile '> /etc/apt/sources.list'
-  require_literal images/bevfusion-runtime/Dockerfile 'rm -f /etc/apt/sources.list.d/*cuda*'
   require_literal images/bevfusion-runtime/Dockerfile 'test "${RAY_CANARY_VERSION}" = "2.58.0"'
   require_literal images/bevfusion-runtime/Dockerfile 'ray[default,train,tune]==${RAY_CANARY_VERSION}'
   require_literal images/bevfusion-runtime/Dockerfile "assert torch.__version__.startswith('2.4.1')"

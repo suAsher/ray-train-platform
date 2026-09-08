@@ -38,14 +38,6 @@ _GAUGE_TAG_KEYS = (
     "cache_policy",
 )
 _CUSTOM_METRIC_NAMES = {
-    # These names feed the platform's job-level curve API. Ray prefixes custom
-    # gauges with ``ray_`` when it exposes them through the worker metrics
-    # endpoint; the backend accepts both that managed form and the legacy form.
-    "loss": "platform_training_loss",
-    "learning_rate": "platform_learning_rate",
-    "lr": "platform_learning_rate",
-    "epoch": "platform_training_epoch",
-    "throughput": "platform_training_throughput",
     "step": "platform_training_step",
     "time": "platform_training_step_time_seconds",
     "step_time": "platform_training_step_time_seconds",

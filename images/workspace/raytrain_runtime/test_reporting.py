@@ -201,8 +201,6 @@ class ReportMetricsTest(unittest.TestCase):
             "dataset_cache_hits_total": 11,
             "dataset_cache_stale_temp_reclaimed_total": 2,
             "loss": 9.0,
-            "lr": 0.001,
-            "epoch": 2,
         }
         train = _FakeTrain(rank=3)
         with mock.patch.dict(os.environ, environment, clear=True), mock.patch.object(
@@ -214,9 +212,6 @@ class ReportMetricsTest(unittest.TestCase):
         self.assertEqual(
             {gauge.name for gauge in FakeGauge.created},
             {
-                "platform_training_loss",
-                "platform_learning_rate",
-                "platform_training_epoch",
                 "platform_training_step",
                 "platform_training_step_time_seconds",
                 "platform_training_data_time_seconds",
@@ -227,7 +222,7 @@ class ReportMetricsTest(unittest.TestCase):
                 "platform_training_dataset_cache_stale_temp_reclaimed_total",
             },
         )
-        self.assertEqual(len(FakeGauge.created), 11)
+        self.assertEqual(len(FakeGauge.created), 8)
         self.assertTrue(all(record[2]["rank"] == "3" for record in FakeGauge.records))
         self.assertTrue(all(record[2]["gpu"] == "3" for record in FakeGauge.records))
         self.assertTrue(all(record[2]["exported_namespace"] == "tenant-a" for record in FakeGauge.records))
@@ -235,7 +230,7 @@ class ReportMetricsTest(unittest.TestCase):
         self.assertTrue(all(record[2]["dataset_version_id"] == "version-20260830" for record in FakeGauge.records))
         self.assertTrue(all(record[2]["ray_version"] == "2.58.0" for record in FakeGauge.records))
         self.assertTrue(all(record[2]["data_mode"] == "streaming" for record in FakeGauge.records))
-        self.assertIn("platform_training_loss", {record[0] for record in FakeGauge.records})
+        self.assertNotIn("loss", {record[0] for record in FakeGauge.records})
 
     def test_rank_zero_exports_supported_data_metrics_to_an_active_mlflow_run(self):
         fake_mlflow = mock.Mock()

@@ -41,18 +41,11 @@ WORKDIR /workspace
 FROM ${RAY_CANARY_FOUNDATION_IMAGE} AS bevfusion-ray258-canary
 ARG RAY_CANARY_VERSION=2.58.0
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-# The isolated build host cannot reliably reach Ubuntu's public archive. Keep
-# this allowlisted rather than accepting an arbitrary build-time package host.
-ARG APT_MIRROR=https://mirrors.aliyun.com/ubuntu
 
 USER root
 RUN test "${RAY_CANARY_VERSION}" = "2.58.0" \
  && test "$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" = "3.10" \
  && python3 -c "import pyarrow, ray, torch; assert ray.__version__ == '2.56.1'; assert torch.__version__.startswith('2.4.1'); assert torch.version.cuda == '12.1'; assert pyarrow.__version__ == '25.0.1'" \
- && test "${APT_MIRROR}" = "https://mirrors.aliyun.com/ubuntu" \
- && printf '%s\n' "deb ${APT_MIRROR} jammy main universe" > /etc/apt/sources.list \
- && rm -f /etc/apt/sources.list.d/*cuda* \
- && printf '%s\n' 'Acquire::Retries "5";' 'Acquire::https::Timeout "60";' > /etc/apt/apt.conf.d/80raytrain-retry \
  && apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       build-essential git libgl1 libglib2.0-0 ninja-build \
