@@ -30,8 +30,26 @@ func TestMigrationVersionsEmbedded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("migrationVersions() error = %v", err)
 	}
-	if want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36}; !reflect.DeepEqual(versions, want) {
+	if want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37}; !reflect.DeepEqual(versions, want) {
 		t.Fatalf("migrationVersions() = %v, want %v", versions, want)
+	}
+}
+
+func TestDataSpaceMultipartIngressThresholdMigrationAllows32MiBParts(t *testing.T) {
+	contents, err := migrationFiles.ReadFile("migrations/0037_data_space_multipart_ingress_threshold.up.sql")
+	if err != nil {
+		t.Fatalf("read ingress-threshold migration: %v", err)
+	}
+	sql := strings.Join(strings.Fields(string(contents)), " ")
+	for _, fragment := range []string{
+		"SET LOCAL lock_timeout = '5s';",
+		"SET LOCAL statement_timeout = '60s';",
+		"ALTER TABLE data_space_uploads DROP CONSTRAINT IF EXISTS data_space_uploads_size_bytes_check;",
+		"ADD CONSTRAINT data_space_uploads_size_bytes_check CHECK (size_bytes > 33554432);",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("ingress-threshold migration missing %q", fragment)
+		}
 	}
 }
 
