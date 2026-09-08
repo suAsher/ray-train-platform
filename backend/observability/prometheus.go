@@ -37,10 +37,14 @@ type PrometheusClient struct {
 }
 
 var jobMetricQueries = map[string]string{
-	"loss":         `platform_training_loss{platform_job_id="%s"}`,
-	"throughput":   `platform_training_throughput{platform_job_id="%s"}`,
-	"learningRate": `platform_learning_rate{platform_job_id="%s"}`,
-	"epoch":        `platform_training_epoch{platform_job_id="%s"}`,
+	// A managed Ray Gauge is exported from a Ray worker as ray_<gauge name>.
+	// Keep the original platform_* form first for jobs submitted before managed
+	// training, then fall back to the aggregated per-rank series. Both branches
+	// intentionally retain only platform_job_id so PromQL's `or` is stable.
+	"loss":         `max by (platform_job_id) (platform_training_loss{platform_job_id="%[1]s"}) or avg by (platform_job_id) (ray_platform_training_loss{platform_job_id="%[1]s"})`,
+	"throughput":   `max by (platform_job_id) (platform_training_throughput{platform_job_id="%[1]s"}) or sum by (platform_job_id) (ray_platform_training_throughput{platform_job_id="%[1]s"})`,
+	"learningRate": `max by (platform_job_id) (platform_learning_rate{platform_job_id="%[1]s"}) or max by (platform_job_id) (ray_platform_learning_rate{platform_job_id="%[1]s"})`,
+	"epoch":        `max by (platform_job_id) (platform_training_epoch{platform_job_id="%[1]s"}) or max by (platform_job_id) (ray_platform_training_epoch{platform_job_id="%[1]s"})`,
 }
 
 func (c *PrometheusClient) QueryJobMetrics(ctx context.Context, jobID string, window time.Duration) (JobMetrics, error) {

@@ -2,6 +2,7 @@ package observability
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -28,6 +29,18 @@ func TestQueryJobMetricsReadsKnownTrainingMetrics(t *testing.T) {
 	}
 	if requests != len(jobMetricQueries) || metrics.Loss == nil || *metrics.Loss != 1.25 || metrics.Epoch == nil {
 		t.Fatalf("unexpected metrics: requests=%d metrics=%+v", requests, metrics)
+	}
+}
+
+func TestJobMetricQueriesAcceptLegacyAndManagedRayMetricNames(t *testing.T) {
+	for name, query := range jobMetricQueries {
+		rendered := fmt.Sprintf(query, "job-1")
+		if !strings.Contains(rendered, `platform_job_id="job-1"`) {
+			t.Fatalf("%s query must remain scoped to the platform job: %s", name, rendered)
+		}
+		if !strings.Contains(rendered, "ray_platform_") || strings.Contains(rendered, "%!") {
+			t.Fatalf("%s query must accept the managed Ray metric: %s", name, rendered)
+		}
 	}
 }
 
