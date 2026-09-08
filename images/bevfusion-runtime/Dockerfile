@@ -50,7 +50,8 @@ RUN test "${RAY_CANARY_VERSION}" = "2.58.0" \
  && test "$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" = "3.10" \
  && python3 -c "import pyarrow, ray, torch; assert ray.__version__ == '2.56.1'; assert torch.__version__.startswith('2.4.1'); assert torch.version.cuda == '12.1'; assert pyarrow.__version__ == '25.0.1'" \
  && test "${APT_MIRROR}" = "https://mirrors.aliyun.com/ubuntu" \
- && sed -i 's|http://archive.ubuntu.com/ubuntu|https://mirrors.aliyun.com/ubuntu|g; s|http://security.ubuntu.com/ubuntu|https://mirrors.aliyun.com/ubuntu|g' /etc/apt/sources.list \
+ && printf '%s\n' "deb ${APT_MIRROR} jammy main universe" > /etc/apt/sources.list \
+ && printf '%s\n' 'Acquire::Retries "5";' 'Acquire::https::Timeout "60";' > /etc/apt/apt.conf.d/80raytrain-retry \
  && apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       build-essential git libgl1 libglib2.0-0 ninja-build \

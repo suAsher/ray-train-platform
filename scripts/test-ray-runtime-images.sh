@@ -164,8 +164,8 @@ assert_contracts() {
 
   require_literal images/bevfusion-runtime/Dockerfile 'ARG APT_MIRROR=https://mirrors.aliyun.com/ubuntu'
   require_literal images/bevfusion-runtime/Dockerfile 'test "${APT_MIRROR}" = "https://mirrors.aliyun.com/ubuntu"'
-  require_literal images/bevfusion-runtime/Dockerfile 's|http://archive.ubuntu.com/ubuntu|https://mirrors.aliyun.com/ubuntu|g'
-  require_literal images/bevfusion-runtime/Dockerfile 's|http://security.ubuntu.com/ubuntu|https://mirrors.aliyun.com/ubuntu|g'
+  require_literal images/bevfusion-runtime/Dockerfile 'jammy main universe'
+  require_literal images/bevfusion-runtime/Dockerfile '> /etc/apt/sources.list'
   require_literal images/bevfusion-runtime/Dockerfile 'test "${RAY_CANARY_VERSION}" = "2.58.0"'
   require_literal images/bevfusion-runtime/Dockerfile 'ray[default,train,tune]==${RAY_CANARY_VERSION}'
   require_literal images/bevfusion-runtime/Dockerfile "assert torch.__version__.startswith('2.4.1')"
