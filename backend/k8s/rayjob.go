@@ -237,7 +237,8 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 			"topologyKey":       "kubernetes.io/hostname",
 			"whenUnsatisfiable": "DoNotSchedule",
 			"labelSelector": map[string]any{"matchLabels": map[string]any{
-				"platform_job_id": job.ID,
+				"platform_job_id":  job.ID,
+				"ray.io/node-type": "worker",
 			}},
 		}}
 	}

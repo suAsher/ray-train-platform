@@ -348,4 +348,8 @@ func TestManagedMultiNodeAlwaysUsesTopologySpreadIndependentOfLegacyMode(t *test
 	if constraint["whenUnsatisfiable"] != "DoNotSchedule" || constraint["minDomains"] != int64(2) {
 		t.Fatalf("unexpected managed topology spread: %#v", constraint)
 	}
+	selector := constraint["labelSelector"].(map[string]any)["matchLabels"].(map[string]any)
+	if selector["platform_job_id"] != job.ID || selector["ray.io/node-type"] != "worker" {
+		t.Fatalf("topology spread must count only GPU worker Pods, got %#v", selector)
+	}
 }
