@@ -674,8 +674,17 @@ func (h *Handler) getJobMetrics(c *gin.Context) {
 		h.writeError(c, http.StatusNotFound, "JOB_NOT_FOUND", "training job was not found")
 		return
 	}
-	metrics, err := h.metrics.QueryJobMetrics(c.Request.Context(), job.ID, 24*time.Hour)
-	if err != nil {
+	metrics, metricsErr := h.metrics.QueryJobMetrics(c.Request.Context(), job.ID, 24*time.Hour)
+	if h.experiments != nil && jobMetricsNeedMLflowFallback(metrics) {
+		experiment, experimentErr := h.experiments.QueryJobExperiment(c.Request.Context(), job.TenantID, job.ID)
+		if experimentErr == nil {
+			metrics = mergeMLflowMetricFallback(metrics, experiment)
+			if metricsErr != nil && len(metrics.Series) > 0 {
+				metricsErr = nil
+			}
+		}
+	}
+	if metricsErr != nil {
 		h.writeError(c, http.StatusBadGateway, "METRICS_QUERY_FAILED", "could not query job metrics")
 		return
 	}
