@@ -7,7 +7,7 @@ func TestEmbeddedDocumentsAreValidStableAndIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(docs) != 23 {
+	if len(docs) != 25 {
 		t.Fatalf("got %d seeded docs", len(docs))
 	}
 	seen := map[string]bool{}

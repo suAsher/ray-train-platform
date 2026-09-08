@@ -4,6 +4,15 @@
 > 全部数据来自 2026-08-29 在生产集群（2 × 8 RTX 4090）上的实测，数据集为
 > `public/labeled/mxvlkica128`（30 场景 / 42,363 样本 / 351 GB / 30 万个小文件）。
 
+> **2026-09-08 当前平台状态（先读这一段）**：本文第 2 节的 I/O 基准仍然有效，
+> 但下文早期“Ray Train / Ray Data 尚未就绪”的表述已经过期。当前已实际验证
+> `Ray Train + Ray Data + 版本化 Parquet + 有界 NVMe` 能完成 2 Worker × 8 GPU 的
+> 调度、16 个 DDP rank 启动、15,228 个训练样本的 Ray Data shuffle/split 和训练 step。
+> 这不等于任意 BEVFusion 分支都已自动兼容：训练入口必须消费平台 streaming 适配器，
+> 完整 epoch、故障恢复、指标上报和特定模型的 A/B 吞吐仍要按本指南验收。本文中的历史
+> 打包布局与代码片段是研究记录；实际提交以平台「使用说明」中的 streaming 命令与
+> READY 数据集 schema 为准。
+
 ---
 
 ## 1. 结论速览
@@ -206,15 +215,45 @@ public-packed/<数据集>/v<日期>/     平台打包产出（只读）
 
 ---
 
-## 4.5 关于 Ray Train / Ray Data
+## 4.5 当前的 Ray Train / Ray Data 托管路径
 
-平台的 `engine: ray-train` 和 `dataMode: ray-data` **正在开发中，暂不适用于 BEVFusion**：
-它们要求 Ray 2.56，而 Ray 2.56 没有 Python 3.8 的安装包，当前 BEVFusion 镜像是 Python 3.8。
+当前平台已提供 `engine: ray-train` + `data-mode: streaming`。它不是给旧的
+`DataLoader + pkl` 入口换一个命令行开关：训练镜像和入口必须实现平台的 streaming
+适配器，才能把版本 manifest 的分片交给 Ray Data 并交给每个 Train rank。
 
-本文档描述的方案用的是 `engine: ray-ddp`，**不依赖这两个能力**，性能已经验证与
-NVMe 缓存持平（0.573 vs 0.570 s/步）。等 Ray Train / Ray Data 就绪后会另行提供迁移说明，
-届时能额外获得 worker 故障恢复和 checkpoint 托管——对动辄十几小时的训练很有价值，
-但不影响现在先用起来。
+一次成功启动时，链路是：
+
+```
+READY 不可变版本（manifest + 内容摘要）
+  → Ray Data 读取、shuffle 并等量 split
+  → Ray Train 创建 N 个训练进程（每 GPU 一个 rank）
+  → DDP 前向 / 反向 / AllReduce
+  → rank 0 写 checkpoint、结构化指标与 MLflow（若代码已接入）
+```
+
+| 组件 | 它负责什么 | 它不负责什么 |
+| --- | --- | --- |
+| Ray Train | 创建和协调多机 rank、失败重试策略、托管 checkpoint 生命周期 | 不会把任意训练脚本自动改造成 Ray Data 或 MLflow 代码 |
+| Ray Data | 按 manifest 分片、shuffle、等量分给训练 worker | 不会自动理解旧 pkl 的绝对路径或替用户解码任意业务载荷 |
+| Parquet / 分片版本 | 将数据与 manifest 固化、降低小文件请求次数、提供摘要可追溯性 | SHA256 只能证明发布字节没有变，不能证明标签语义一定正确 |
+| 本地 NVMe | 保存临时、有界的热分片与 Ray 临时数据，避免全量复制超过磁盘容量 | 不保存唯一数据副本，也不会增加模型显存 |
+| MLflow | 记录代码显式上报的参数、标量和产物，用于跨任务对比 | 注入 `MLFLOW_TRACKING_URI` 本身不会产生一条 loss |
+
+**显存低不代表 Ray 没有工作。** 显存主要由模型参数、激活、精度和
+`samples_per_gpu` 决定；Ray Train、Ray Data、Parquet 和 NVMe 优化的是调度、分片与 I/O。
+例如 2 × 8 卡、`samples_per_gpu=1` 的全局 batch 是 16，单卡微批仍是 1，所以显存可能只有
+数 GiB。确认数值正确后，可用固定数据版本做 300–500 step A/B，逐级提高
+`samples_per_gpu` 并按全局 batch 调整学习率；不要把 `workers_per_gpu` 当成 GPU batch。
+
+**数据没有丢失应这样验收**：只选择 READY 版本，记录版本号与 manifest SHA256；核对
+train / val / test 样本数与预期；先对固定场地或小范围跑一次读取、解码和一个 epoch；再与
+发布前基线比较样本 ID 集合、每 split 数量和标签统计。发布器的分片 digest 能发现截断或
+被替换，不能替代这一层语义和训练适配器校验。
+
+**pkl 与 Parquet 不能只改后缀互换。** pkl 是 Python 序列化的索引/标注，旧训练通常从中取
+路径再逐个打开小文件；Parquet 是列式、可分片的不可变数据/manifest 表，由兼容适配器并行
+读取。继续用 pkl + `mount` 是兼容性最高的传统路径，但不会自动获得 Ray Data 分片；选择
+streaming 则需要兼容镜像、READY 版本和适配器，换来可追溯版本与大分片读取能力。
 
 ---
 
