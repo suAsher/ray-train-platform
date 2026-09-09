@@ -134,6 +134,17 @@
             <span v-else class="text-slate-500">尚未上报</span>
           </template>
         </el-table-column>
+
+        <el-table-column label="操作" width="130" fixed="right">
+          <template #default="scope">
+            <el-button
+              link
+              type="primary"
+              :disabled="dashboardOpening || !scope.row.runId"
+              @click="openMLflowRun(scope.row)"
+            >MLflow 详情</el-button>
+          </template>
+        </el-table-column>
       </el-table>
     </section>
   </div>
@@ -184,7 +195,7 @@ async function loadExperiments() {
   }
 }
 
-async function openMLflowDashboard() {
+async function openMLflowDashboard(runId = '') {
   if (dashboardOpening.value) return
 
   const popup = window.open('about:blank', '_blank')
@@ -196,7 +207,7 @@ async function openMLflowDashboard() {
 
   dashboardOpening.value = true
   try {
-    const accessURL = await requestMLflowDashboardAccess()
+    const accessURL = await requestMLflowDashboardAccess(runId ? { runId } : undefined)
     popup.location.replace(accessURL)
   } catch (error) {
     popup.close()
@@ -204,6 +215,11 @@ async function openMLflowDashboard() {
   } finally {
     dashboardOpening.value = false
   }
+}
+
+function openMLflowRun(run) {
+  if (!run?.runId) return
+  return openMLflowDashboard(run.runId)
 }
 
 onMounted(() => {

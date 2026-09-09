@@ -212,6 +212,12 @@ Dashboard 用于查看运行中的 Ray node、task、actor、object store 和资
 
 实验中心是平台筛选视图，用于按当前用户或团队查看任务参数、Loss、学习率、吞吐和 mAP/NDS。它适合日常训练排障，并保留平台任务、提交人、租户和训练指标之间的关联。
 
+#### 任务、Run 与模型不是同一个 ID
+
+平台任务 ID（例如 `job-...`）是平台调度、日志、结果目录和权限校验的主键；MLflow `run_id` 是 MLflow 在创建 Run 时生成的 32 位标识，二者**不能也不应强行相同**。平台会把任务 ID 写为 MLflow Run 名称，并写入可校验的 `platform.job_id`、租户、提交者和来源标签，因此可以可靠地反向关联；重试或恢复时，一个任务也可能有多个 Run。
+
+在“实验中心”每条记录的“训练任务”可返回平台任务详情；右侧的 **MLflow 详情** 会在新标签页直接打开该条 Run 的原生 MLflow 页面。该按钮只对当前用户有权看到、且由平台来源校验通过的 Run 生效；跳转使用一次性平台票据，不暴露集群内 MLflow 地址。
+
 实验中心中的按钮 **打开 MLflow 管理界面** 会在新标签页打开同域 `https://raytrain.wellspiking.ai/mlflow/`。原生 MLflow 是登录后可访问的完整管理界面，展示全平台实验。所有平台认证用户都可以创建、修改、删除实验、Run 和模型注册条目，并可上传、下载 MLflow Artifact。原生 MLflow 全功能开放是当前明确策略；这些操作直接改变共享 MLflow 数据，删除或修改前应确认目标对象。
 
 Ray Dashboard 与两种 MLflow 视图的生命周期不同：Ray Dashboard 随任务 RayCluster 回收；实验中心和原生 MLflow 的运行记录长期保留。
@@ -248,7 +254,20 @@ if int(os.getenv("RANK", "0")) == 0 and mlflow.active_run():
     mlflow.end_run(status="FINISHED")
 ```
 
+使用平台已适配的训练运行时时，运行时会创建带平台归属标签的 rank 0 Run；业务代码应直接在 `mlflow.active_run()` 存在时调用 `log_params`、`log_metric` 或 `log_metrics`，不要再无条件 `start_run()` 一次。使用自定义训练代码或镜像时才按上例创建 Run，并确保镜像预装与 Python 版本兼容的 `mlflow-skinny`。没有 Run、Loss 或其他指标通常不是任务未接入平台，而是训练代码/旧运行时没有创建 Run 或没有调用 `mlflow.log_metric`；仅注入 `MLFLOW_TRACKING_URI` 不会自动产生曲线。
+
+平台接口的边界如下：
+
+- `GET /api/v1/experiments`：实验中心读取当前用户可见的可信 Run 列表。
+- `GET /api/v1/jobs/:id/experiment`：任务详情读取该任务的可信 Run、参数和指标。
+- `POST /api/v1/mlflow-dashboard-access`：浏览器申请一次性原生 MLflow 访问票据；传入 `{"runId":"<MLflow run_id>"}` 时会直达该 Run。
+- `/mlflow/`：平台同域反向代理的原生 MLflow 界面。
+
+这些接口不是对外裸露的 MLflow 服务地址。其他平台用户应从实验中心打开原生界面；训练 Pod 内的代码使用平台注入的 `MLFLOW_TRACKING_URI` 写入。这样不会因为给浏览器或外部机器发放内部服务地址而绕过平台认证与任务归属校验。
+
 训练代码默认只把标量参数和指标写入 MLflow。模型、Checkpoint、配置快照和正式训练结果仍应写入 `PLATFORM_OUTPUT_PATH`，再从“我的运行结果”查看；普通训练 Pod 的 MLflow 写入网关不提供 Artifact 下载能力。
+
+任务成功并不会自动把 checkpoint 推送到 MLflow Model Registry 或其他模型仓。这样避免把每个中间 checkpoint、失败任务产物或含有不适合发布内容的文件自动公开。需要发布模型时，应先确认目标：若是当前 MLflow Model Registry，可在原生 MLflow 界面显式登记已选择的模型产物；若是外部模型仓，则需要单独配置目标地址、凭据、允许的模型格式和“谁可晋级”的审批策略。平台不把训练输出目录或对象存储凭据直接暴露给其他用户。
 
 MLflow Artifact 与 `/mnt/storage/public` 治理数据隔离。Artifact 底层存放在 `vke-cluster/ray-train/platform/mlflow-artifacts/` 专用前缀，由 FSX CSI 静态 PV/PVC 只向 MLflow 发布为 `/mlflow-artifacts`。MLflow Pod 只看到 `/mlflow-artifacts` 挂载根，不注入 TOS/AWS AK/SK。底层挂载由集群 `csi-fsx-node` 通过 IRSA 完成（`CREDENTIALS_TYPE=IRSA`、`ROLE_NAME_FOR_IRSA` 非空）；MLflow Pod、PV 和 PVC 都不包含 AK/SK 或 Secret 引用。平台管理员会在部署前确认 `fsx.csi.volcengine.com` CSIDriver 存在，并且 `kube-system/csi-fsx-node` DaemonSet 全部可用；用户无需配置任何对象存储凭据。
 

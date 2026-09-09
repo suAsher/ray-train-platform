@@ -22,6 +22,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
+	"ray-train-platform-backend/observability"
 	"ray-train-platform-backend/repositories"
 )
 
@@ -241,9 +242,65 @@ func TestMLflowDashboardAccessStoresOnlyTicketHashAndReturnsCleanURL(t *testing.
 	if record.ExpiresAt != now.Add(2*time.Minute) || record.CreatedAt != now {
 		t.Fatalf("unexpected ticket lifetime: created=%v expires=%v", record.CreatedAt, record.ExpiresAt)
 	}
+	if record.RedirectFragment != "" {
+		t.Fatalf("root dashboard ticket redirect = %q, want empty", record.RedirectFragment)
+	}
 	storedJSON, _ := json.Marshal(record)
 	if bytes.Contains(storedJSON, []byte(rawTicket)) {
 		t.Fatalf("raw ticket persisted: %s", storedJSON)
+	}
+}
+
+func TestMLflowDashboardAccessBindsVisibleRunToOneTimeTicketRedirect(t *testing.T) {
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	store := newFakeMLflowDashboardStore()
+	principal := auth.Principal{Subject: "user-a", Username: "alice", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal}
+	runID := "1e0205b5055349029258b16c45f9c1f5"
+	handler := newMLflowDashboardTestHandler(store, now)
+	handler.repository = &fakeJobRepository{jobs: []domain.TrainingJob{{ID: "job-01", TenantID: "tenant-a", UserID: "user-a"}}}
+	handler.experiments = &fakeExperimentProvider{catalog: observability.ExperimentCatalog{
+		ExperimentName: "raytrain-tenant-a",
+		ExperimentID:   "7",
+		Runs:           []observability.ExperimentRunSummary{{ID: runID, JobID: "job-01"}},
+	}}
+	router := mlflowAccessRouter(handler, &principal, false)
+
+	response := newMLflowResponseRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/mlflow-dashboard-access", strings.NewReader(`{"runId":"`+runID+`"}`)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("issue run dashboard access: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if len(store.created) != 1 || store.created[0].RedirectFragment != "#/experiments/7/runs/"+runID {
+		t.Fatalf("ticket redirect = %+v, want experiment run fragment", store.created)
+	}
+
+	var envelope struct {
+		Data struct {
+			URL string `json:"url"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode access response: %v", err)
+	}
+	exchange := httptest.NewRecorder()
+	mlflowProxyRouter(handler).ServeHTTP(exchange, httptest.NewRequest(http.MethodGet, envelope.Data.URL, nil))
+	if exchange.Code != http.StatusFound || exchange.Header().Get("Location") != "/mlflow/#/experiments/7/runs/"+runID {
+		t.Fatalf("ticket exchange = status=%d location=%q", exchange.Code, exchange.Header().Get("Location"))
+	}
+}
+
+func TestMLflowDashboardAccessRejectsRunOutsideCallerCatalog(t *testing.T) {
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	store := newFakeMLflowDashboardStore()
+	principal := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal}
+	handler := newMLflowDashboardTestHandler(store, now)
+	handler.experiments = &fakeExperimentProvider{catalog: observability.ExperimentCatalog{ExperimentID: "7"}}
+	router := mlflowAccessRouter(handler, &principal, false)
+
+	response := newMLflowResponseRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/mlflow-dashboard-access", strings.NewReader(`{"runId":"1e0205b5055349029258b16c45f9c1f5"}`)))
+	if response.Code != http.StatusNotFound || len(store.created) != 0 {
+		t.Fatalf("invisible run: status=%d tickets=%d body=%s", response.Code, len(store.created), response.Body.String())
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 var (
 	ErrMLflowDashboardTicketInvalid = errors.New("mlflow dashboard ticket is invalid")
 	mlflowDashboardTokenHashPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	mlflowDashboardRedirectPattern  = regexp.MustCompile(`^$|^#/experiments/[0-9]+/runs/[0-9a-f]{32}$`)
 )
 
 const (
@@ -35,12 +36,16 @@ const (
 // dashboard access ticket. TokenHash is intentionally the sole credential
 // field so callers cannot persist the raw bearer ticket through this model.
 type MLflowDashboardTicketRecord struct {
-	TokenHash  string     `gorm:"column:token_hash;primaryKey"`
-	TenantID   string     `gorm:"column:tenant_id"`
-	UserID     string     `gorm:"column:user_id"`
-	ExpiresAt  time.Time  `gorm:"column:expires_at"`
-	ConsumedAt *time.Time `gorm:"column:consumed_at"`
-	CreatedAt  time.Time  `gorm:"column:created_at"`
+	TokenHash string `gorm:"column:token_hash;primaryKey"`
+	TenantID  string `gorm:"column:tenant_id"`
+	UserID    string `gorm:"column:user_id"`
+	// RedirectFragment is a server-validated MLflow SPA fragment. It is bound
+	// to the one-time ticket, so callers cannot repurpose a valid ticket as an
+	// arbitrary redirect.
+	RedirectFragment string     `gorm:"column:redirect_fragment"`
+	ExpiresAt        time.Time  `gorm:"column:expires_at"`
+	ConsumedAt       *time.Time `gorm:"column:consumed_at"`
+	CreatedAt        time.Time  `gorm:"column:created_at"`
 }
 
 func (MLflowDashboardTicketRecord) TableName() string { return "mlflow_dashboard_tickets" }
@@ -88,11 +93,15 @@ func (r *GormRepository) AuthorizeMLflowDashboardPrincipal(ctx context.Context, 
 func (r *GormRepository) CreateMLflowDashboardTicket(ctx context.Context, record MLflowDashboardTicketRecord) error {
 	record.TenantID = strings.TrimSpace(record.TenantID)
 	record.UserID = strings.TrimSpace(record.UserID)
+	record.RedirectFragment = strings.TrimSpace(record.RedirectFragment)
 	if !mlflowDashboardTokenHashPattern.MatchString(record.TokenHash) {
 		return fmt.Errorf("%w: token hash must be 64 lower-case hexadecimal characters", ErrMLflowDashboardTicketInvalid)
 	}
 	if record.TenantID == "" || record.UserID == "" {
 		return fmt.Errorf("%w: tenant and user are required", ErrMLflowDashboardTicketInvalid)
+	}
+	if !mlflowDashboardRedirectPattern.MatchString(record.RedirectFragment) {
+		return fmt.Errorf("%w: redirect fragment is invalid", ErrMLflowDashboardTicketInvalid)
 	}
 	if record.CreatedAt.IsZero() {
 		record.CreatedAt = time.Now().UTC()

@@ -45,6 +45,7 @@ type JobExperiment struct {
 // storage topology or bypass the platform's no-download policy.
 type ExperimentCatalog struct {
 	ExperimentName string                 `json:"experimentName"`
+	ExperimentID   string                 `json:"experimentId"`
 	Runs           []ExperimentRunSummary `json:"runs"`
 }
 
@@ -177,6 +178,7 @@ func (c *MLflowClient) ListTenantExperiments(ctx context.Context, tenantID, subj
 	if err != nil || !found {
 		return result, err
 	}
+	result.ExperimentID = experimentID
 
 	endpoint, err := c.endpoint("/api/2.0/mlflow/runs/search")
 	if err != nil {

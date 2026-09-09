@@ -62,6 +62,12 @@ export const walkthroughs = {
     troubleshooting: ['没有曲线不等于训练停止，先看日志和 GPU；MLflow 为空先查代码是否记录、是否只有 rank 0 写。任务结束后 Ray Dashboard 不再可用，历史日志/指标以平台实际保留范围为准，关键记录及时导出。'],
     relatedLinks: [link('任务列表', '/job'), link('实验中心', '/experiments')],
   },
+  mlflow: {
+    prerequisites: ['通过 UI 或 spk-rayjob 提交任务；自定义镜像先确认已安装兼容的 mlflow-skinny。记录代码必须只在 global rank 0 执行。'],
+    success: ['实验中心出现任务关联的 Run，点击「MLflow 详情」可直达原生 Run 页面；参数、带 step 的 loss/lr 与验证指标可跨任务比较。'],
+    troubleshooting: ['MLflow 为空先检查代码是否创建/复用 active run 并调用 log_metric；不要用解析 stdout 的方式伪造指标。模型未出现在模型仓是正常的：checkpoint 默认仍在任务输出目录，需要明确选择后再登记。'],
+    relatedLinks: [link('实验中心', '/experiments'), link('任务列表', '/job')],
+  },
   diagnose: {
     prerequisites: ['固定镜像、代码、版本和场地，记录稳定区间至少数百步；区分首读、预热与热读。'],
     success: ['找到可复现的瓶颈信号，单次只改一个参数做 A/B，吞吐改善且样本数和数值结果没有异常。'],

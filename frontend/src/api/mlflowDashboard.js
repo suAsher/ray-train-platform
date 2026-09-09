@@ -19,9 +19,12 @@ function isValidMLflowAccessURL(value) {
   }
 }
 
-export async function requestMLflowDashboardAccess(request) {
-  const post = request || (await import('./client.js')).apiPost
-  const payload = await post('/api/v1/mlflow-dashboard-access', {})
+export async function requestMLflowDashboardAccess(options, request) {
+  const legacyRequest = typeof options === 'function' ? options : undefined
+  const post = request || legacyRequest || (await import('./client.js')).apiPost
+  const runId = typeof options === 'object' && options !== null ? options.runId : undefined
+  const body = typeof runId === 'string' && runId ? { runId } : {}
+  const payload = await post('/api/v1/mlflow-dashboard-access', body)
   const accessURL = payload?.url ?? payload?.data?.url
 
   if (!isValidMLflowAccessURL(accessURL)) {

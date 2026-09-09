@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +35,12 @@ const (
 	mlflowDashboardTicketLocal = byte('L')
 	mlflowDashboardTicketDemo  = byte('D')
 )
+
+var mlflowDashboardRunIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+type mlflowDashboardAccessRequest struct {
+	RunID string `json:"runId"`
+}
 
 type mlflowDashboardPassThroughBody struct {
 	reader io.Reader
@@ -87,6 +95,19 @@ func (h *Handler) issueMLflowDashboardAccess(c *gin.Context) {
 		h.writeError(c, http.StatusForbidden, "INTERACTIVE_LOGIN_REQUIRED", "an interactive user login is required")
 		return
 	}
+	request, err := decodeMLflowDashboardAccessRequest(c.Request.Body)
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "MLFLOW_DASHBOARD_REQUEST_INVALID", "MLflow Dashboard access request is invalid")
+		return
+	}
+	redirectFragment := ""
+	if request.RunID != "" {
+		redirectFragment, err = h.mlflowDashboardRunRedirect(c.Request.Context(), principal, request.RunID)
+		if err != nil {
+			h.writeError(c, http.StatusNotFound, "MLFLOW_RUN_NOT_FOUND", "MLflow run was not found")
+			return
+		}
+	}
 	randomTicket := make([]byte, mlflowDashboardTicketSize)
 	if _, err := io.ReadFull(h.mlflowDashboardRandom, randomTicket); err != nil {
 		h.writeError(c, http.StatusInternalServerError, "MLFLOW_DASHBOARD_ACCESS_FAILED", "could not issue MLflow Dashboard access")
@@ -99,11 +120,12 @@ func (h *Handler) issueMLflowDashboardAccess(c *gin.Context) {
 	tokenHash := sha256.Sum256([]byte(rawTicket))
 	now := h.mlflowDashboardNow().UTC()
 	record := repositories.MLflowDashboardTicketRecord{
-		TokenHash: hex.EncodeToString(tokenHash[:]),
-		TenantID:  principal.TenantID,
-		UserID:    principal.Subject,
-		CreatedAt: now,
-		ExpiresAt: now.Add(domain.MLflowDashboardTicketTTL),
+		TokenHash:        hex.EncodeToString(tokenHash[:]),
+		TenantID:         principal.TenantID,
+		UserID:           principal.Subject,
+		RedirectFragment: redirectFragment,
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(domain.MLflowDashboardTicketTTL),
 	}
 	if err := h.mlflowDashboardStore.CreateMLflowDashboardTicket(c.Request.Context(), record); err != nil {
 		h.writeError(c, http.StatusInternalServerError, "MLFLOW_DASHBOARD_ACCESS_FAILED", "could not issue MLflow Dashboard access")
@@ -111,6 +133,51 @@ func (h *Handler) issueMLflowDashboardAccess(c *gin.Context) {
 	}
 	c.Header("Cache-Control", "no-store")
 	h.writeSuccess(c, http.StatusOK, map[string]string{"url": mlflowDashboardBasePath + "?access_token=" + url.QueryEscape(rawTicket)})
+}
+
+func decodeMLflowDashboardAccessRequest(body io.Reader) (mlflowDashboardAccessRequest, error) {
+	if body == nil {
+		return mlflowDashboardAccessRequest{}, nil
+	}
+	decoder := json.NewDecoder(body)
+	decoder.DisallowUnknownFields()
+	var request mlflowDashboardAccessRequest
+	if err := decoder.Decode(&request); err != nil && err != io.EOF {
+		return mlflowDashboardAccessRequest{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return mlflowDashboardAccessRequest{}, fmt.Errorf("MLflow dashboard request has trailing data")
+	}
+	request.RunID = strings.TrimSpace(request.RunID)
+	if request.RunID != "" && !mlflowDashboardRunIDPattern.MatchString(request.RunID) {
+		return mlflowDashboardAccessRequest{}, fmt.Errorf("MLflow run identifier is invalid")
+	}
+	return request, nil
+}
+
+func (h *Handler) mlflowDashboardRunRedirect(ctx context.Context, principal auth.Principal, runID string) (string, error) {
+	if h.experiments == nil || !mlflowDashboardRunIDPattern.MatchString(runID) {
+		return "", fmt.Errorf("MLflow run is unavailable")
+	}
+	subject := principal.Subject
+	if principal.Allowed(domain.RoleTenantAdmin) {
+		subject = ""
+	}
+	catalog, err := h.experiments.ListTenantExperiments(ctx, principal.TenantID, subject, 100)
+	if err != nil || catalog.ExperimentID == "" {
+		return "", fmt.Errorf("MLflow run is unavailable")
+	}
+	for _, run := range catalog.Runs {
+		if run.ID != runID {
+			continue
+		}
+		job, jobErr := h.repository.Get(ctx, principal.TenantID, run.JobID)
+		if jobErr != nil || (job.UserID != principal.Subject && !principal.Allowed(domain.RoleTenantAdmin)) {
+			break
+		}
+		return "#/experiments/" + catalog.ExperimentID + "/runs/" + run.ID, nil
+	}
+	return "", fmt.Errorf("MLflow run is unavailable")
 }
 
 func (h *Handler) proxyMLflowDashboard(c *gin.Context) {
@@ -451,11 +518,14 @@ func (h *Handler) exchangeMLflowDashboardTicket(c *gin.Context) {
 		Name: mlflowDashboardCookieName, Value: session, Path: mlflowDashboardBasePath,
 		MaxAge: int(h.mlflowDashboardTTL.Seconds()), HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode,
 	})
-	query := c.Request.URL.Query()
-	query.Del("access_token")
-	location := c.Request.URL.Path
-	if encoded := query.Encode(); encoded != "" {
-		location += "?" + encoded
+	location := mlflowDashboardBasePath + record.RedirectFragment
+	if record.RedirectFragment == "" {
+		query := c.Request.URL.Query()
+		query.Del("access_token")
+		location = c.Request.URL.Path
+		if encoded := query.Encode(); encoded != "" {
+			location += "?" + encoded
+		}
 	}
 	c.Redirect(http.StatusFound, location)
 }

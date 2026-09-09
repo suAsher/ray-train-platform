@@ -346,6 +346,34 @@ const topics = [
     ],
   },
   {
+    id: 'mlflow',
+    group: '排查',
+    title: 'MLflow：记录、查看与模型晋级',
+    summary: 'MLflow 用于跨任务比较参数和指标；平台任务 ID、MLflow run_id 和模型仓条目分别承担不同职责，不能混为一个 ID。',
+    blocks: [
+      {
+        kind: 'table',
+        headers: ['对象', '负责什么', '在哪里看'],
+        rows: [
+          ['平台任务 ID', '调度、日志、产物目录、权限与停止任务', '任务列表与任务详情'],
+          ['MLflow run_id', 'MLflow 生成的实验记录主键；可关联参数、标量和 Artifact', '实验中心的 Run 列与「MLflow 详情」'],
+          ['模型仓条目', '可发布、可版本化的模型登记，不等于每个训练 checkpoint', '原生 MLflow Model Registry 或后续登记的外部模型仓'],
+        ],
+      },
+      { kind: 'code', label: '在 global rank 0 记录指标', lang: 'python', text: MLFLOW_CODE },
+      {
+        kind: 'list',
+        items: [
+          '通过 UI 或 spk-rayjob 提交的任务会注入 MLFLOW_TRACKING_URI、实验名、Run 名和平台归属标签；代码不需要写死地址、账号或密钥。自定义镜像需预装兼容的 mlflow-skinny。',
+          '平台任务 ID 会作为 Run 名和来源标签写入，但 MLflow 仍会生成独立 run_id。重试或恢复时一个任务可能关联多个 Run，所以不能强制两者相同。',
+          '实验中心的「MLflow 详情」只会为当前用户可见、且平台来源校验通过的 Run 创建一次性跳转；打开后可用原生 MLflow 比较、编辑和管理共享实验。',
+          '仅注入环境变量不会自动产生 loss。若没有 Run 或曲线，先确认代码只在 rank 0 调用了 mlflow.log_metric；不要让每个 rank 各创建一条 Run。',
+          'checkpoint 与正式结果仍写 PLATFORM_OUTPUT_PATH，任务成功不会自动推送到模型仓。选择要发布的模型、确认格式与评估后，再在 MLflow Model Registry 显式登记；外部模型仓还需要管理员配置地址、凭据与晋级权限。',
+        ],
+      },
+    ],
+  },
+  {
     id: 'diagnose',
     group: '排查',
     title: '训练慢，怎么定位瓶颈',

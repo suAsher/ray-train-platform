@@ -18,6 +18,20 @@ test('requests an authenticated MLflow access URL with an empty POST body', asyn
   assert.equal(result, '/mlflow/?access_token=ticket_123')
 })
 
+test('requests a one-time MLflow access URL bound to the selected Run', async () => {
+  const calls = []
+
+  await requestMLflowDashboardAccess({ runId: '1e0205b5055349029258b16c45f9c1f5' }, async (path, body) => {
+    calls.push([path, body])
+    return { url: '/mlflow/?access_token=ticket_123' }
+  })
+
+  assert.deepEqual(calls, [[
+    '/api/v1/mlflow-dashboard-access',
+    { runId: '1e0205b5055349029258b16c45f9c1f5' },
+  ]])
+})
+
 test('accepts the standard API envelope without returning any metadata', async () => {
   const result = await requestMLflowDashboardAccess(async () => ({
     data: { url: '/mlflow/?access_token=enveloped_ticket' },
@@ -54,7 +68,9 @@ test('Experiment Center exposes the native MLflow dashboard with its global-acce
   assert.match(source, /type="primary"[\s\S]*?>打开 MLflow 管理界面<\/el-button>/)
   assert.match(source, /所有已登录平台用户都可以查看和变更共享实验/)
   assert.match(source, /创建、修改、删除、模型注册表以及 MLflow Artifact 上传和下载均已启用/)
-  assert.match(source, /不会开放公开训练数据下载/)
+	assert.match(source, /不会开放公开训练数据下载/)
+	assert.match(source, /MLflow 详情/)
+	assert.match(source, /openMLflowRun\(scope\.row\)/)
 })
 
 test('Experiment Center opens a protected blank tab synchronously and handles every popup outcome', async () => {
@@ -63,7 +79,7 @@ test('Experiment Center opens a protected blank tab synchronously and handles ev
   const openIndex = source.indexOf("window.open('about:blank', '_blank')")
   const blockedGuardIndex = source.indexOf('if (!popup)')
   const openerIndex = source.indexOf('popup.opener = null')
-  const requestIndex = source.indexOf('await requestMLflowDashboardAccess()')
+  const requestIndex = source.indexOf('await requestMLflowDashboardAccess(runId ? { runId } : undefined)')
   const replaceIndex = source.indexOf('popup.location.replace(accessURL)')
   const closeIndex = source.indexOf('popup.close()')
   const errorIndex = source.indexOf('ElMessage.error')
