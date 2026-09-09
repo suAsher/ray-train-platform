@@ -2,10 +2,10 @@
 {{- if and .Values.release.requireImageDigests (not .Values.backend.image.digest) }}{{- fail "backend.image.digest is required when release.requireImageDigests is true" }}{{- end }}
 {{- if and .Values.backend.image.digest (not (regexMatch `^sha256:[0-9a-fA-F]{64}$` .Values.backend.image.digest)) }}{{- fail "backend.image.digest must use sha256:<64 hex>" }}{{- end }}
 {{- if and (eq .Values.backend.appEnv "production") (ne .Values.postgres.mode "external") }}{{- fail "production deployments must use postgres.mode=external" }}{{- end }}
-{{- /* The OIDC issuer only has to be real when OIDC is actually required; a
-local-account deployment never contacts Keycloak. */}}
-{{- if .Values.backend.oidcRequired }}
-{{- if contains "example" .Values.backend.oidc.issuerURL }}{{- fail "backend.oidc.issuerURL must point to the organization's Keycloak realm when oidcRequired is true" }}{{- end }}
+{{- /* Direct OIDC and OAuth2 Proxy access-token verification both contact the
+OIDC issuer. Local-only development does not. */}}
+{{- if or .Values.backend.oidcRequired (default false .Values.backend.oauth2ProxyAuthEnabled) }}
+{{- if contains "example" .Values.backend.oidc.issuerURL }}{{- fail "backend.oidc.issuerURL must point to the organization's Keycloak realm when OIDC authentication is enabled" }}{{- end }}
 {{- end }}
 {{- if contains "REPLACE_WITH" .Values.backend.workspaceImage }}{{- fail "backend.workspaceImage must be replaced with a pinned workspace image" }}{{- end }}
 {{- if contains "REPLACE_WITH" .Values.backend.sourceMaterializerImage }}{{- fail "backend.sourceMaterializerImage must be replaced with a pinned source materializer image" }}{{- end }}

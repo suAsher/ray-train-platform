@@ -117,6 +117,21 @@ func TestLoadAcceptsOAuth2ProxyAuthenticationInProduction(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsStagedOAuth2ProxyAndLocalAuthentication(t *testing.T) {
+	setValidProductionConfig(t)
+	t.Setenv("OIDC_REQUIRED", "false")
+	t.Setenv("OAUTH2_PROXY_AUTH_ENABLED", "true")
+	t.Setenv("LOCAL_AUTH_ENABLED", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected staged authentication configuration: %v", err)
+	}
+	if cfg.OIDCRequired || !cfg.OAuth2ProxyAuthEnabled || !cfg.LocalAuthEnabled {
+		t.Fatalf("unexpected staged authentication configuration: %#v", cfg)
+	}
+}
+
 func TestLoadRequiresOIDCVerifierConfigurationForOAuth2Proxy(t *testing.T) {
 	setValidProductionConfig(t)
 	t.Setenv("OIDC_REQUIRED", "false")

@@ -17,7 +17,7 @@ func TestOAuth2ProxyMiddlewareRequiresVerifiedProxyAccessToken(t *testing.T) {
 		{oauth2ProxyAccessTokenHeader: []string{"invalid-jwt"}},
 	} {
 		router := gin.New()
-		router.Use(OAuth2ProxyMiddleware(&fakeOIDCVerifier{err: errors.New("invalid token")}, nil, true))
+		router.Use(OAuth2ProxyMiddleware(&fakeOIDCVerifier{err: errors.New("invalid token")}, nil, nil, true))
 		router.GET("/", func(c *gin.Context) { c.Status(http.StatusNoContent) })
 		request := httptest.NewRequest(http.MethodGet, "/", nil)
 		request.Header = headers
@@ -36,7 +36,7 @@ func TestOAuth2ProxyMiddlewareBuildsInteractivePrincipalFromVerifiedToken(t *tes
 		TenantID: "local", Roles: []string{"TenantAdmin"},
 	}}
 	router := gin.New()
-	router.Use(OAuth2ProxyMiddleware(verifier, nil, true))
+	router.Use(OAuth2ProxyMiddleware(verifier, nil, nil, true))
 	router.GET("/", func(c *gin.Context) {
 		principal, ok := PrincipalFromGin(c)
 		if !ok || principal.AuthType != AuthTypeOAuth2Proxy || principal.Subject != "subject-1" || !principal.HasRole("TenantAdmin") {

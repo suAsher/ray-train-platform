@@ -305,7 +305,7 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 
 	protected := router.Group("")
 	if cfg.OAuth2ProxyAuthEnabled {
-		protected.Use(auth.OAuth2ProxyMiddleware(oidc, pat, true))
+		protected.Use(auth.OAuth2ProxyMiddleware(oidc, pat, localSessions, true))
 	} else {
 		protected.Use(auth.HybridMiddlewareWithLocal(oidc, pat, localSessions, cfg.OIDCRequired))
 	}
