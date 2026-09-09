@@ -44,31 +44,39 @@ func TestOAuth2ProxyMiddlewareRequiresVerifiedProxyAccessToken(t *testing.T) {
 }
 
 func TestOAuth2ProxyMiddlewareBuildsInteractivePrincipalFromVerifiedToken(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	verifier := &fakeOIDCVerifier{principal: Principal{
-		Subject: "keycloak-subject-1", Username: "alice", Email: "alice@example.com",
-	}}
-	resolver := &fakeOAuth2ProxyAccountResolver{found: true, user: domain.LocalUser{
-		ID: "platform-user-1", Username: "alice", Email: "platform-alice@example.com",
-		TenantID: "local", Roles: []string{"TenantAdmin"},
-	}}
-	router := gin.New()
-	router.Use(OAuth2ProxyMiddleware(verifier, resolver, nil, nil, true))
-	router.GET("/", func(c *gin.Context) {
-		principal, ok := PrincipalFromGin(c)
-		if !ok || principal.AuthType != AuthTypeOAuth2Proxy || principal.Subject != "platform-user-1" ||
-			principal.TenantID != "local" || principal.Email != "platform-alice@example.com" || !principal.HasRole("TenantAdmin") {
-			c.Status(http.StatusInternalServerError)
-			return
-		}
-		c.Status(http.StatusNoContent)
-	})
-	request := httptest.NewRequest(http.MethodGet, "/", nil)
-	request.Header.Set(oauth2ProxyAccessTokenHeader, "signed-jwt")
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, request)
-	if response.Code != http.StatusNoContent || verifier.calls != 1 || resolver.calls != 1 {
-		t.Fatalf("verified proxy identity was not accepted: status=%d verifier=%d resolver=%d body=%s", response.Code, verifier.calls, resolver.calls, response.Body.String())
+	for _, tokenSource := range []string{"xauth-header", "legacy-browser-bearer"} {
+		t.Run(tokenSource, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			verifier := &fakeOIDCVerifier{principal: Principal{
+				Subject: "keycloak-subject-1", Username: "alice", Email: "alice@example.com",
+			}}
+			resolver := &fakeOAuth2ProxyAccountResolver{found: true, user: domain.LocalUser{
+				ID: "platform-user-1", Username: "alice", Email: "platform-alice@example.com",
+				TenantID: "local", Roles: []string{"TenantAdmin"},
+			}}
+			router := gin.New()
+			router.Use(OAuth2ProxyMiddleware(verifier, resolver, nil, nil, true))
+			router.GET("/", func(c *gin.Context) {
+				principal, ok := PrincipalFromGin(c)
+				if !ok || principal.AuthType != AuthTypeOAuth2Proxy || principal.Subject != "platform-user-1" ||
+					principal.TenantID != "local" || principal.Email != "platform-alice@example.com" || !principal.HasRole("TenantAdmin") {
+					c.Status(http.StatusInternalServerError)
+					return
+				}
+				c.Status(http.StatusNoContent)
+			})
+			request := httptest.NewRequest(http.MethodGet, "/", nil)
+			if tokenSource == "xauth-header" {
+				request.Header.Set(oauth2ProxyAccessTokenHeader, "signed-jwt")
+			} else {
+				request.Header.Set("Authorization", "Bearer signed-jwt")
+			}
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != http.StatusNoContent || verifier.calls != 1 || resolver.calls != 1 {
+				t.Fatalf("verified proxy identity was not accepted: status=%d verifier=%d resolver=%d body=%s", response.Code, verifier.calls, resolver.calls, response.Body.String())
+			}
+		})
 	}
 }
 
