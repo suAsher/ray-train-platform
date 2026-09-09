@@ -36,8 +36,8 @@ func TestIDCDataSyncRunRequiresImmutableInventoryOnSuccess(t *testing.T) {
 	now := time.Date(2026, 9, 9, 3, 0, 0, 0, time.UTC)
 	valid := IDCDataSyncRun{
 		ID: "idc-sync-run-1", ConnectorID: "idc-sync-labeled", Mode: IDCDataSyncRunModeSync,
-		State: IDCDataSyncRunSucceeded, RequestedBy: "admin-1", StartedAt: &now, FinishedAt: &now,
-		InventorySHA256: strings.Repeat("a", 64), SourceObjectCount: 2, SourceBytes: 42,
+		State: IDCDataSyncRunSucceeded, RequestedBy: "admin-1", IdempotencyKey: "request-1", StartedAt: &now, FinishedAt: &now,
+		InventorySHA256: strings.Repeat("a", 64), InventoryObjectKey: "ray-train/platform/idc-inventories/idc-sync-run-1/" + strings.Repeat("a", 64) + ".json", SourceObjectCount: 2, SourceBytes: 42,
 	}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
@@ -45,6 +45,7 @@ func TestIDCDataSyncRunRequiresImmutableInventoryOnSuccess(t *testing.T) {
 
 	for name, mutate := range map[string]func(*IDCDataSyncRun){
 		"successful run has no inventory": func(item *IDCDataSyncRun) { item.InventorySHA256 = "" },
+		"successful run has no inventory object": func(item *IDCDataSyncRun) { item.InventoryObjectKey = "" },
 		"bad digest":                      func(item *IDCDataSyncRun) { item.InventorySHA256 = "not-a-digest" },
 		"negative bytes":                  func(item *IDCDataSyncRun) { item.SourceBytes = -1 },
 		"running run has finished time":   func(item *IDCDataSyncRun) { item.State = IDCDataSyncRunRunning },

@@ -16,10 +16,12 @@ CREATE TABLE IF NOT EXISTS idc_sync_connectors (
 CREATE TABLE IF NOT EXISTS idc_sync_runs (
   id TEXT PRIMARY KEY CHECK (id ~ '^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$'),
   connector_id TEXT NOT NULL REFERENCES idc_sync_connectors(id) ON DELETE RESTRICT,
+  idempotency_key TEXT NOT NULL CHECK (idempotency_key ~ '^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$'),
   mode TEXT NOT NULL CHECK (mode IN ('PLAN', 'SYNC')),
   state TEXT NOT NULL CHECK (state IN ('PENDING', 'PLANNING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED')),
   requested_by TEXT NOT NULL REFERENCES users(id),
   inventory_sha256 TEXT NOT NULL DEFAULT '' CHECK (inventory_sha256 = '' OR inventory_sha256 ~ '^[0-9a-f]{64}$'),
+  inventory_object_key TEXT NOT NULL DEFAULT '',
   source_object_count BIGINT NOT NULL DEFAULT 0 CHECK (source_object_count >= 0),
   source_bytes BIGINT NOT NULL DEFAULT 0 CHECK (source_bytes >= 0),
   new_object_count BIGINT NOT NULL DEFAULT 0 CHECK (new_object_count >= 0),
@@ -33,6 +35,7 @@ CREATE TABLE IF NOT EXISTS idc_sync_runs (
       OR (state IN ('FAILED', 'CANCELLED') AND finished_at IS NOT NULL)
       OR (state IN ('PENDING', 'PLANNING', 'RUNNING') AND finished_at IS NULL))
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idc_sync_runs_connector_idempotency_idx ON idc_sync_runs(connector_id, idempotency_key);
 CREATE INDEX IF NOT EXISTS idc_sync_runs_connector_created_idx ON idc_sync_runs(connector_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idc_sync_runs_active_idx ON idc_sync_runs(connector_id, created_at) WHERE state IN ('PENDING', 'PLANNING', 'RUNNING');
 
@@ -46,6 +49,18 @@ CREATE TABLE IF NOT EXISTS idc_sync_inventory_entries (
   PRIMARY KEY (run_id, relative_path)
 );
 CREATE INDEX IF NOT EXISTS idc_sync_inventory_entries_sha_idx ON idc_sync_inventory_entries(sha256);
+
+-- This table is the cleanup fence for immutable raw blobs. A later cleanup
+-- worker may delete an object only after its reference count reaches zero;
+-- source-side deletion never maps directly to a TOS delete.
+CREATE TABLE IF NOT EXISTS idc_sync_object_refs (
+  sha256 TEXT PRIMARY KEY CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+  object_key TEXT NOT NULL UNIQUE CHECK (object_key ~ '/idc-raw/sha256/[0-9a-f]{2}/[0-9a-f]{64}$'),
+  reference_count BIGINT NOT NULL CHECK (reference_count > 0),
+  size_bytes BIGINT NOT NULL CHECK (size_bytes >= 0),
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
 ALTER TABLE dataset_versions ADD COLUMN IF NOT EXISTS source_sync_run_id TEXT REFERENCES idc_sync_runs(id) ON DELETE RESTRICT;
 ALTER TABLE dataset_versions ADD COLUMN IF NOT EXISTS source_inventory_sha256 TEXT NOT NULL DEFAULT '' CHECK (source_inventory_sha256 = '' OR source_inventory_sha256 ~ '^[0-9a-f]{64}$');
