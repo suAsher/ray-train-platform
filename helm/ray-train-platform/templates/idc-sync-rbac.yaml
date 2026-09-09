@@ -1,8 +1,9 @@
-{{- if (default false .Values.idcSync.enabled) }}
+{{- $idcSync := default (dict) .Values.idcSync }}
+{{- if (default false $idcSync.enabled) }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ .Values.idcSync.serviceAccountName }}
+  name: {{ $idcSync.serviceAccountName }}
   namespace: {{ .Values.namespace }}
 automountServiceAccountToken: false
 ---
