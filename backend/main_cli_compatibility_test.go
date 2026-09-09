@@ -13,7 +13,7 @@ import (
 func TestCLICompatibilityIsWiredBeforeSubmission(t *testing.T) {
 	router := gin.New()
 	handler := api.NewHandler(&mainJobRepository{}, api.Options{AllowAnonymous: true})
-	registerAPIRoutesWithLocalAuth(router, handler, nil, nil, nil, nil, nil, nil, nil, nil, config.Config{DemoMode: true, SPKRayjobMinimumVersion: "release-20260906-02"})
+	registerAPIRoutesWithLocalAuth(router, handler, nil, nil, nil, nil, nil, nil, nil, nil, nil, config.Config{DemoMode: true, SPKRayjobMinimumVersion: "release-20260906-02"})
 	for _, version := range []string{"release-20260906-01", "release-20260906-10", ""} {
 		request := httptest.NewRequest("POST", "/api/v1/jobs", strings.NewReader("invalid-json"))
 		request.Header.Set("Content-Type", "application/json")

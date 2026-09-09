@@ -33,21 +33,44 @@ func NewValidator(ctx context.Context, issuer, clientID, audience, groupPrefix s
 }
 
 func (v *Validator) Verify(ctx context.Context, rawToken string) (Principal, error) {
+	claims, err := v.verifyClaims(ctx, rawToken)
+	if err != nil {
+		return Principal{}, err
+	}
+	return claims.Principal(v.groupPrefix)
+}
+
+func (v *Validator) VerifyIdentity(ctx context.Context, rawToken string) (OIDCIdentity, error) {
+	claims, err := v.verifyClaims(ctx, rawToken)
+	if err != nil {
+		return OIDCIdentity{}, err
+	}
+	if strings.TrimSpace(claims.Subject) == "" {
+		return OIDCIdentity{}, fmt.Errorf("OIDC token subject is required")
+	}
+	username := strings.TrimSpace(claims.PreferredUsername)
+	if username == "" {
+		return OIDCIdentity{}, fmt.Errorf("OIDC token preferred username is required")
+	}
+	return OIDCIdentity{Subject: claims.Subject, Username: username, Email: strings.TrimSpace(claims.Email)}, nil
+}
+
+func (v *Validator) verifyClaims(ctx context.Context, rawToken string) (TokenClaims, error) {
 	if v == nil || v.verifier == nil {
-		return Principal{}, fmt.Errorf("OIDC validator is not initialized")
+		return TokenClaims{}, fmt.Errorf("OIDC validator is not initialized")
 	}
 	idToken, err := v.verifier.Verify(ctx, rawToken)
 	if err != nil {
-		return Principal{}, fmt.Errorf("verify OIDC token: %w", err)
+		return TokenClaims{}, fmt.Errorf("verify OIDC token: %w", err)
 	}
 	if !contains(idToken.Audience, v.audience) {
-		return Principal{}, fmt.Errorf("OIDC token audience is not allowed")
+		return TokenClaims{}, fmt.Errorf("OIDC token audience is not allowed")
 	}
 	var claims TokenClaims
 	if err := idToken.Claims(&claims); err != nil {
-		return Principal{}, fmt.Errorf("decode OIDC claims: %w", err)
+		return TokenClaims{}, fmt.Errorf("decode OIDC claims: %w", err)
 	}
-	return claims.Principal(v.groupPrefix)
+	return claims, nil
 }
 
 func contains(items []string, expected string) bool {

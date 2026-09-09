@@ -122,6 +122,17 @@ func (r *GormRepository) FindLocalUserByUsername(ctx context.Context, username s
 	return r.toLocalUser(record)
 }
 
+func (r *GormRepository) ResolveOAuth2ProxyAccount(ctx context.Context, username string) (domain.LocalUser, bool, error) {
+	user, err := r.FindLocalUserByUsername(ctx, username)
+	if errors.Is(err, ErrLocalUserNotFound) {
+		return domain.LocalUser{}, false, nil
+	}
+	if err != nil {
+		return domain.LocalUser{}, false, err
+	}
+	return user, true, nil
+}
+
 func (r *GormRepository) FindLocalUserByID(ctx context.Context, userID string) (domain.LocalUser, error) {
 	var record LocalUserRecord
 	err := r.db.WithContext(ctx).Where("id = ? AND decommissioned_at IS NULL", userID).First(&record).Error

@@ -82,7 +82,7 @@ func (verifier *mainDatasetLocalVerifier) Authenticate(context.Context, string) 
 func mainDatasetRouter(store *mainDatasetCatalog, pat auth.PATVerifier, local auth.LocalSessionVerifier) *gin.Engine {
 	jobs := api.NewHandler(&mainJobRepository{}, api.Options{Datasets: store})
 	router := gin.New()
-	registerAPIRoutesWithLocalAuth(router, jobs, nil, nil, nil, nil, pat, local, nil, nil, config.Config{
+	registerAPIRoutesWithLocalAuth(router, jobs, nil, nil, nil, nil, nil, pat, local, nil, nil, config.Config{
 		OIDCRequired: true, DatasetVersioningEnabled: true,
 	})
 	return router

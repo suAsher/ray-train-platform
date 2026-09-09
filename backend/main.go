@@ -203,7 +203,7 @@ func main() {
 	}
 	router.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 	router.GET("/readyz", readinessHandler(database, kubeClient, cfg.AppEnv == "production"))
-	registerAPIRoutesWithLocalAuth(router, jobHandler, patHandler, sourceArtifactHandler, localAuthHandler, validator, patAuthenticator, localSessionAuthenticator, kubeClient, rayHandler, cfg)
+	registerAPIRoutesWithLocalAuth(router, jobHandler, patHandler, sourceArtifactHandler, localAuthHandler, repository, validator, patAuthenticator, localSessionAuthenticator, kubeClient, rayHandler, cfg)
 
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: router}
 	go func() {
@@ -282,10 +282,10 @@ func registerAPIRoutes(router *gin.Engine, jobs *api.Handler, pats *api.Personal
 }
 
 func registerAPIRoutesWithRay(router *gin.Engine, jobs *api.Handler, pats *api.PersonalAccessTokenHandler, artifacts *api.SourceArtifactHandler, oidc auth.OIDCVerifier, pat auth.PATVerifier, kubeClient *k8s.Client, rays *rayapi.Handler, cfg config.Config) {
-	registerAPIRoutesWithLocalAuth(router, jobs, pats, artifacts, nil, oidc, pat, nil, kubeClient, rays, cfg)
+	registerAPIRoutesWithLocalAuth(router, jobs, pats, artifacts, nil, nil, oidc, pat, nil, kubeClient, rays, cfg)
 }
 
-func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats *api.PersonalAccessTokenHandler, artifacts *api.SourceArtifactHandler, locals *api.LocalAuthHandler, oidc auth.OIDCVerifier, pat auth.PATVerifier, localSessions auth.LocalSessionVerifier, kubeClient *k8s.Client, rays *rayapi.Handler, cfg config.Config) {
+func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats *api.PersonalAccessTokenHandler, artifacts *api.SourceArtifactHandler, locals *api.LocalAuthHandler, oauthAccounts auth.OAuth2ProxyAccountResolver, oidc auth.OIDCVerifier, pat auth.PATVerifier, localSessions auth.LocalSessionVerifier, kubeClient *k8s.Client, rays *rayapi.Handler, cfg config.Config) {
 	// Sign-in must be reachable before the caller holds a credential, so it is
 	// mounted outside the authenticating group.
 	if locals != nil && cfg.LocalAuthEnabled {
@@ -305,7 +305,8 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 
 	protected := router.Group("")
 	if cfg.OAuth2ProxyAuthEnabled {
-		protected.Use(auth.OAuth2ProxyMiddleware(oidc, pat, localSessions, true))
+		proxyVerifier, _ := oidc.(auth.OIDCIdentityVerifier)
+		protected.Use(auth.OAuth2ProxyMiddleware(proxyVerifier, oauthAccounts, pat, localSessions, true))
 	} else {
 		protected.Use(auth.HybridMiddlewareWithLocal(oidc, pat, localSessions, cfg.OIDCRequired))
 	}

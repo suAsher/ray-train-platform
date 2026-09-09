@@ -18,6 +18,18 @@ type OIDCVerifier interface {
 	Verify(context.Context, string) (Principal, error)
 }
 
+type OIDCIdentity struct {
+	Subject  string
+	Username string
+	Email    string
+}
+
+// OIDCIdentityVerifier verifies the signed token while leaving platform
+// tenancy and authorization to the platform account directory.
+type OIDCIdentityVerifier interface {
+	VerifyIdentity(context.Context, string) (OIDCIdentity, error)
+}
+
 type PATVerifier interface {
 	Authenticate(context.Context, string) (PATIdentity, error)
 }

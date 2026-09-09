@@ -22,6 +22,11 @@ func (v *fakeOIDCVerifier) Verify(_ context.Context, _ string) (Principal, error
 	return v.principal, v.err
 }
 
+func (v *fakeOIDCVerifier) VerifyIdentity(_ context.Context, _ string) (OIDCIdentity, error) {
+	v.calls++
+	return OIDCIdentity{Subject: v.principal.Subject, Username: v.principal.Username, Email: v.principal.Email}, v.err
+}
+
 type fakePATVerifier struct {
 	identity PATIdentity
 	err      error
