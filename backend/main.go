@@ -232,7 +232,7 @@ func idcDataSpaceSources(cfg config.Config) map[domain.DataSpaceID]k8s.IDCDataMo
 }
 
 func newOIDCValidator(cfg config.Config) (*auth.Validator, error) {
-	if !cfg.OIDCRequired {
+	if !cfg.OIDCRequired && !cfg.OAuth2ProxyAuthEnabled {
 		return nil, nil
 	}
 	return auth.NewValidator(context.Background(), cfg.OIDCIssuerURL, cfg.OIDCClientID, cfg.OIDCAudience, cfg.OIDCGroupPrefix)
@@ -288,7 +288,7 @@ func registerAPIRoutesWithRay(router *gin.Engine, jobs *api.Handler, pats *api.P
 func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats *api.PersonalAccessTokenHandler, artifacts *api.SourceArtifactHandler, locals *api.LocalAuthHandler, oidc auth.OIDCVerifier, pat auth.PATVerifier, localSessions auth.LocalSessionVerifier, kubeClient *k8s.Client, rays *rayapi.Handler, cfg config.Config) {
 	// Sign-in must be reachable before the caller holds a credential, so it is
 	// mounted outside the authenticating group.
-	if locals != nil {
+	if locals != nil && cfg.LocalAuthEnabled {
 		locals.RegisterPublicRoutes(router.Group("/api/v1"))
 	}
 	// Browser navigation cannot attach the Portal's bearer token. This route
@@ -305,7 +305,7 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 
 	protected := router.Group("")
 	if cfg.OAuth2ProxyAuthEnabled {
-		protected.Use(auth.OAuth2ProxyMiddleware(pat, true, cfg.OIDCGroupPrefix))
+		protected.Use(auth.OAuth2ProxyMiddleware(oidc, pat, true))
 	} else {
 		protected.Use(auth.HybridMiddlewareWithLocal(oidc, pat, localSessions, cfg.OIDCRequired))
 	}
@@ -333,7 +333,7 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	interactive := v1.Group("")
 	interactive.Use(auth.RequireInteractiveSession(cfg.DemoMode))
 	jobs.RegisterMLflowDashboardAccessRoute(interactive)
-	if locals != nil {
+	if locals != nil && cfg.LocalAuthEnabled {
 		locals.RegisterAuthenticatedRoutes(interactive)
 		locals.RegisterUserAdminRoutes(interactive)
 	}

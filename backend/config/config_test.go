@@ -117,6 +117,19 @@ func TestLoadAcceptsOAuth2ProxyAuthenticationInProduction(t *testing.T) {
 	}
 }
 
+func TestLoadRequiresOIDCVerifierConfigurationForOAuth2Proxy(t *testing.T) {
+	setValidProductionConfig(t)
+	t.Setenv("OIDC_REQUIRED", "false")
+	t.Setenv("OAUTH2_PROXY_AUTH_ENABLED", "true")
+	t.Setenv("LOCAL_AUTH_ENABLED", "false")
+	t.Setenv("OIDC_ISSUER_URL", "")
+
+	_, err := Load()
+	if err == nil || err.Error() != "OIDC_ISSUER_URL is required in production" {
+		t.Fatalf("expected proxy token verifier configuration error, got %v", err)
+	}
+}
+
 func TestLoadAcceptsProductionConfiguration(t *testing.T) {
 	setValidProductionConfig(t)
 

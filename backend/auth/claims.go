@@ -9,9 +9,8 @@ type AuthenticationType string
 
 const (
 	AuthTypeOIDC AuthenticationType = "oidc"
-	// AuthTypeOAuth2Proxy is an interactive identity authenticated by the
-	// trusted OAuth2 Proxy in front of the platform.  The backend deliberately
-	// receives only the proxy's asserted identity headers, never a browser JWT.
+	// AuthTypeOAuth2Proxy is an interactive identity whose access token was
+	// forwarded by OAuth2 Proxy and independently verified by this backend.
 	AuthTypeOAuth2Proxy AuthenticationType = "oauth2-proxy"
 	AuthTypePAT         AuthenticationType = "pat"
 	AuthTypeDemo        AuthenticationType = "demo"

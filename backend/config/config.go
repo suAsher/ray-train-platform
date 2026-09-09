@@ -1043,7 +1043,12 @@ func validateProduction(cfg Config) error {
 		{cfg.SourceMaterializerImage, "SOURCE_MATERIALIZER_IMAGE is required in production"},
 		{cfg.WorkspaceImage, "WORKSPACE_IMAGE is required in production"},
 	}
-	if cfg.OIDCRequired {
+	for _, check := range checks {
+		if check.value == "" {
+			return fmt.Errorf("%s", check.message)
+		}
+	}
+	if cfg.OIDCRequired || cfg.OAuth2ProxyAuthEnabled {
 		for _, check := range []struct{ value, message string }{
 			{cfg.OIDCIssuerURL, "OIDC_ISSUER_URL is required in production"},
 			{cfg.OIDCClientID, "OIDC_CLIENT_ID is required in production"},
@@ -1052,11 +1057,6 @@ func validateProduction(cfg Config) error {
 			if check.value == "" {
 				return fmt.Errorf("%s", check.message)
 			}
-		}
-	}
-	for _, check := range checks {
-		if check.value == "" {
-			return fmt.Errorf("%s", check.message)
 		}
 	}
 	if !pinnedImagePattern.MatchString(cfg.SourceMaterializerImage) {
