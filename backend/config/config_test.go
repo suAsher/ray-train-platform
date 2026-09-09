@@ -102,6 +102,21 @@ func TestLoadRejectsDisabledOIDCInProduction(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsOAuth2ProxyAuthenticationInProduction(t *testing.T) {
+	setValidProductionConfig(t)
+	t.Setenv("OIDC_REQUIRED", "false")
+	t.Setenv("OAUTH2_PROXY_AUTH_ENABLED", "true")
+	t.Setenv("LOCAL_AUTH_ENABLED", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected oauth2-proxy production configuration: %v", err)
+	}
+	if cfg.OIDCRequired || !cfg.OAuth2ProxyAuthEnabled || cfg.LocalAuthEnabled {
+		t.Fatalf("unexpected authentication configuration: %#v", cfg)
+	}
+}
+
 func TestLoadAcceptsProductionConfiguration(t *testing.T) {
 	setValidProductionConfig(t)
 

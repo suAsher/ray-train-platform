@@ -28,7 +28,7 @@ func (h *Handler) registerDatasetCleanupRoutes(group *gin.RouterGroup) {
 			c.Abort()
 			return
 		}
-		if (principal.AuthType != auth.AuthTypeOIDC && principal.AuthType != auth.AuthTypeLocal) || (!principal.HasRole(domain.RoleSuperAdmin) && !principal.HasRole(domain.RoleTenantAdmin)) {
+		if !auth.IsInteractiveAuthType(principal.AuthType) || (!principal.HasRole(domain.RoleSuperAdmin) && !principal.HasRole(domain.RoleTenantAdmin)) {
 			h.writeError(c, 403, "FORBIDDEN", "仅管理员登录会话可删除失败记录")
 			c.Abort()
 			return

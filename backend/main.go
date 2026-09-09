@@ -260,24 +260,20 @@ func newPATComponents(repository *repositories.GormRepository, cfg config.Config
 // newLocalAuthComponents wires username/password login. It reuses the PAT
 // pepper so a deployment only has to manage one authentication secret.
 func newLocalAuthComponents(repository *repositories.GormRepository, cfg config.Config, directoryInitializer objectstore.PersonalDataDirectoryInitializer, personalStorageQuota objectstore.PersonalStorageQuotaManager) (auth.LocalSessionVerifier, *api.LocalAuthHandler, error) {
-	if !cfg.LocalAuthEnabled {
-		return nil, nil, nil
-	}
 	pepper := []byte(cfg.PATPepper)
+	handler := api.NewLocalAuthHandler(api.LocalAuthOptions{
+		Store: repository, Pepper: pepper, SessionLifetime: time.Duration(cfg.LocalSessionHours) * time.Hour,
+		Enabled: cfg.LocalAuthEnabled, OIDCConfigured: cfg.OIDCRequired || cfg.OAuth2ProxyAuthEnabled,
+		PersonalDataInitializer: api.NewPersonalDataSpaceInitializer(directoryInitializer), PersonalStorageQuota: personalStorageQuota,
+		PersonalStorageQuotaEnabled: cfg.TOSObjectSetQuotasEnabled,
+	})
+	if !cfg.LocalAuthEnabled {
+		return nil, handler, nil
+	}
 	authenticator, err := auth.NewLocalSessionAuthenticator(repository, pepper, time.Now)
 	if err != nil {
 		return nil, nil, err
 	}
-	handler := api.NewLocalAuthHandler(api.LocalAuthOptions{
-		Store:                       repository,
-		Pepper:                      pepper,
-		SessionLifetime:             time.Duration(cfg.LocalSessionHours) * time.Hour,
-		Enabled:                     true,
-		OIDCConfigured:              cfg.OIDCRequired,
-		PersonalDataInitializer:     api.NewPersonalDataSpaceInitializer(directoryInitializer),
-		PersonalStorageQuota:        personalStorageQuota,
-		PersonalStorageQuotaEnabled: cfg.TOSObjectSetQuotasEnabled,
-	})
 	return authenticator, handler, nil
 }
 
@@ -308,7 +304,12 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	jobs.RegisterIDCSyncInternalRoutes(router.Group("/api/v1/internal"))
 
 	protected := router.Group("")
-	protected.Use(auth.HybridMiddlewareWithLocal(oidc, pat, localSessions, cfg.OIDCRequired), auth.DemoIdentityMiddleware(cfg.DemoMode))
+	if cfg.OAuth2ProxyAuthEnabled {
+		protected.Use(auth.OAuth2ProxyMiddleware(pat, true, cfg.OIDCGroupPrefix))
+	} else {
+		protected.Use(auth.HybridMiddlewareWithLocal(oidc, pat, localSessions, cfg.OIDCRequired))
+	}
+	protected.Use(auth.DemoIdentityMiddleware(cfg.DemoMode))
 	protected.Use(jobs.TenantWriteGuard(), api.CLICompatibilityGuard(cfg.SPKRayjobMinimumVersion))
 	v1 := protected.Group("/api/v1")
 	jobs.RegisterSessionRoutes(v1)

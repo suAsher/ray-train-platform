@@ -22,7 +22,7 @@ type retiredLocalUserCleaner interface {
 // cannot log in; their already-revoked credentials and historical data stay put.
 func (h *LocalAuthHandler) tryDecommissionRetiredUser(c *gin.Context) bool {
 	p, ok := auth.PrincipalFromGin(c)
-	if !ok || !p.HasRole(domain.RoleSuperAdmin) || (p.AuthType != auth.AuthTypeLocal && p.AuthType != auth.AuthTypeOIDC) {
+	if !ok || !p.HasRole(domain.RoleSuperAdmin) || !auth.IsInteractiveAuthType(p.AuthType) {
 		return false
 	}
 	cleaner, ok := h.store.(retiredLocalUserCleaner)

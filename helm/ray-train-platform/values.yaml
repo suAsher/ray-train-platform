@@ -56,6 +56,9 @@ backend:
   nodeSelector: {}
   appEnv: production
   oidcRequired: true
+  # Enable only behind an ingress that authenticates every request with
+  # oauth2-proxy and overwrites X-Auth-Request-* headers.
+  oauth2ProxyAuthEnabled: false
   demoMode: false
   # Optional compatibility floor; leave empty for advisory-only CLI updates.
   # When enabled, match the minimum in the deployed CLI release.json.

@@ -181,18 +181,12 @@ func RequireScopes(scopes ...string) gin.HandlerFunc {
 					return
 				}
 			}
-		} else if !isInteractiveAuthType(principal.AuthType) && principal.AuthType != AuthTypeDemo {
+		} else if !IsInteractiveAuthType(principal.AuthType) && principal.AuthType != AuthTypeDemo {
 			abortAuthentication(c, http.StatusForbidden, "FORBIDDEN", "forbidden")
 			return
 		}
 		c.Next()
 	}
-}
-
-// isInteractiveAuthType reports whether the principal came from a human login
-// (OIDC or a local username/password session) rather than a machine token.
-func isInteractiveAuthType(authType AuthenticationType) bool {
-	return authType == AuthTypeOIDC || authType == AuthTypeLocal
 }
 
 // RequireInteractiveSession guards endpoints that a human must be logged in
@@ -204,7 +198,7 @@ func RequireInteractiveSession(allowDemo bool) gin.HandlerFunc {
 			abortAuthentication(c, http.StatusUnauthorized, "AUTH_REQUIRED", "authentication is required")
 			return
 		}
-		if isInteractiveAuthType(principal.AuthType) || (allowDemo && principal.AuthType == AuthTypeDemo) {
+		if IsInteractiveAuthType(principal.AuthType) || (allowDemo && principal.AuthType == AuthTypeDemo) {
 			c.Next()
 			return
 		}

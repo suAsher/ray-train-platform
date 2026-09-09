@@ -33,6 +33,7 @@ const (
 	mlflowDashboardRewriteMax  = 2 << 20
 	mlflowDashboardTicketOIDC  = byte('O')
 	mlflowDashboardTicketLocal = byte('L')
+	mlflowDashboardTicketProxy = byte('P')
 	mlflowDashboardTicketDemo  = byte('D')
 )
 
@@ -225,6 +226,8 @@ func mlflowDashboardAuthMarker(authType auth.AuthenticationType) (byte, bool) {
 		return mlflowDashboardTicketOIDC, true
 	case auth.AuthTypeLocal:
 		return mlflowDashboardTicketLocal, true
+	case auth.AuthTypeOAuth2Proxy:
+		return mlflowDashboardTicketProxy, true
 	case auth.AuthTypeDemo:
 		return mlflowDashboardTicketDemo, true
 	default:
@@ -238,6 +241,8 @@ func mlflowDashboardAuthType(marker byte) (auth.AuthenticationType, bool) {
 		return auth.AuthTypeOIDC, true
 	case mlflowDashboardTicketLocal:
 		return auth.AuthTypeLocal, true
+	case mlflowDashboardTicketProxy:
+		return auth.AuthTypeOAuth2Proxy, true
 	case mlflowDashboardTicketDemo:
 		return auth.AuthTypeDemo, true
 	default:

@@ -9,12 +9,23 @@ type AuthenticationType string
 
 const (
 	AuthTypeOIDC AuthenticationType = "oidc"
-	AuthTypePAT  AuthenticationType = "pat"
-	AuthTypeDemo AuthenticationType = "demo"
+	// AuthTypeOAuth2Proxy is an interactive identity authenticated by the
+	// trusted OAuth2 Proxy in front of the platform.  The backend deliberately
+	// receives only the proxy's asserted identity headers, never a browser JWT.
+	AuthTypeOAuth2Proxy AuthenticationType = "oauth2-proxy"
+	AuthTypePAT         AuthenticationType = "pat"
+	AuthTypeDemo        AuthenticationType = "demo"
 )
 
 type RealmAccess struct {
 	Roles []string `json:"roles"`
+}
+
+// IsInteractiveAuthType reports whether an identity came from a human login,
+// rather than a machine credential. Keep this exported so API authorization
+// checks cannot accidentally exclude a newly supported interactive provider.
+func IsInteractiveAuthType(authType AuthenticationType) bool {
+	return authType == AuthTypeOIDC || authType == AuthTypeLocal || authType == AuthTypeOAuth2Proxy
 }
 
 type TokenClaims struct {

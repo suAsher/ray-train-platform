@@ -32,6 +32,7 @@ type Config struct {
 	OIDCAudience                             string
 	OIDCGroupPrefix                          string
 	OIDCRequired                             bool
+	OAuth2ProxyAuthEnabled                   bool
 	PATEnabled                               bool
 	PATPepper                                string
 	TrainingNodeSelector                     map[string]string
@@ -274,6 +275,9 @@ func Load() (Config, error) {
 		return cfg, nil
 	}
 	if cfg.OIDCRequired, err = parseBool("OIDC_REQUIRED", cfg.AppEnv == "production"); err != nil {
+		return Config{}, err
+	}
+	if cfg.OAuth2ProxyAuthEnabled, err = parseBool("OAUTH2_PROXY_AUTH_ENABLED", false); err != nil {
 		return Config{}, err
 	}
 	if cfg.PATEnabled, err = parseBool("PAT_ENABLED", true); err != nil {
@@ -1031,16 +1035,24 @@ func validateProduction(cfg Config) error {
 	if cfg.AppEnv != "production" {
 		return nil
 	}
-	if !cfg.OIDCRequired {
+	if !cfg.OIDCRequired && !cfg.OAuth2ProxyAuthEnabled {
 		return fmt.Errorf("OIDC_REQUIRED cannot be disabled in production")
 	}
 	checks := []struct{ value, message string }{
 		{cfg.DatabaseURL, "DATABASE_URL is required in production"},
-		{cfg.OIDCIssuerURL, "OIDC_ISSUER_URL is required in production"},
-		{cfg.OIDCClientID, "OIDC_CLIENT_ID is required in production"},
-		{cfg.OIDCAudience, "OIDC_AUDIENCE is required in production"},
 		{cfg.SourceMaterializerImage, "SOURCE_MATERIALIZER_IMAGE is required in production"},
 		{cfg.WorkspaceImage, "WORKSPACE_IMAGE is required in production"},
+	}
+	if cfg.OIDCRequired {
+		for _, check := range []struct{ value, message string }{
+			{cfg.OIDCIssuerURL, "OIDC_ISSUER_URL is required in production"},
+			{cfg.OIDCClientID, "OIDC_CLIENT_ID is required in production"},
+			{cfg.OIDCAudience, "OIDC_AUDIENCE is required in production"},
+		} {
+			if check.value == "" {
+				return fmt.Errorf("%s", check.message)
+			}
+		}
 	}
 	for _, check := range checks {
 		if check.value == "" {

@@ -185,6 +185,8 @@ spec:
               value: {{ .Values.backend.oidc.groupPrefix | quote }}
             - name: OIDC_REQUIRED
               value: {{ .Values.backend.oidcRequired | quote }}
+            - name: OAUTH2_PROXY_AUTH_ENABLED
+              value: {{ default false .Values.backend.oauth2ProxyAuthEnabled | quote }}
             - name: DEMO_MODE
               value: {{ .Values.backend.demoMode | quote }}
             - name: PAT_PEPPER

@@ -63,7 +63,7 @@ func (h *Handler) requireGPUAdministrator(c *gin.Context) (auth.Principal, bool)
 		h.writeError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "authentication is required")
 		return auth.Principal{}, false
 	}
-	if principal.AuthType != auth.AuthTypeOIDC && principal.AuthType != auth.AuthTypeLocal && principal.AuthType != auth.AuthTypeDemo {
+	if !auth.IsInteractiveAuthType(principal.AuthType) && principal.AuthType != auth.AuthTypeDemo {
 		h.writeError(c, http.StatusForbidden, "INTERACTIVE_SESSION_REQUIRED", "该指标仅供交互式管理员会话访问")
 		return auth.Principal{}, false
 	}

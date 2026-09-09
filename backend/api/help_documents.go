@@ -31,7 +31,7 @@ func (h *Handler) helpGuard(admin bool) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		if admin && (!p.HasRole(domain.RoleSuperAdmin) || (p.AuthType != auth.AuthTypeLocal && p.AuthType != auth.AuthTypeOIDC)) {
+		if admin && (!p.HasRole(domain.RoleSuperAdmin) || !auth.IsInteractiveAuthType(p.AuthType)) {
 			h.writeError(c, 403, "FORBIDDEN", "仅超级管理员登录会话可管理文档")
 			c.Abort()
 			return

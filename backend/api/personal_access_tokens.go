@@ -182,7 +182,7 @@ func (h *PersonalAccessTokenHandler) managementPrincipal(c *gin.Context) (auth.P
 	// A machine token may only be minted from an interactive human login, so a
 	// PAT can never be used to mint another. Local username/password sessions
 	// count the same as OIDC here.
-	interactive := principal.AuthType == auth.AuthTypeOIDC || principal.AuthType == auth.AuthTypeLocal
+	interactive := auth.IsInteractiveAuthType(principal.AuthType)
 	if !interactive && !(h.allowDemo && principal.AuthType == auth.AuthTypeDemo) {
 		h.writeError(c, http.StatusForbidden, "INTERACTIVE_LOGIN_REQUIRED", "an interactive user login is required")
 		return auth.Principal{}, false
