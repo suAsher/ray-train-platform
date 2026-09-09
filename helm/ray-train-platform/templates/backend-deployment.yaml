@@ -251,7 +251,11 @@ spec:
             - name: IDC_SYNC_ENABLED
               value: {{ default false $idcSync.enabled | quote }}
             - name: IDC_SYNC_IMAGE
+              {{- if (default false $idcSync.enabled) }}
               value: {{ include "ray-train-platform.image" (list . (default (dict) $idcSync.image)) | quote }}
+              {{- else }}
+              value: ""
+              {{- end }}
             - name: IDC_SYNC_BUCKET
               value: {{ default "" $idcSync.bucket | quote }}
             - name: IDC_SYNC_TOSUTIL_CONFIG_SECRET
