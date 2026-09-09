@@ -102,6 +102,28 @@ func (r *GormRepository) ListIDCDataSyncConnectors(ctx context.Context) ([]domai
 	}
 	return items, nil
 }
+
+// ListIDCDataSyncRuns returns the recent, control-plane-owned history for one
+// connector. Inventory entries and object keys intentionally stay out of this
+// summary: the administrative UI only needs lifecycle/provenance status.
+func (r *GormRepository) ListIDCDataSyncRuns(ctx context.Context, connectorID string) ([]domain.IDCDataSyncRun, error) {
+	if strings.TrimSpace(connectorID) == "" {
+		return nil, ErrIDCDataSyncConnectorNotFound
+	}
+	var records []IDCDataSyncRunRecord
+	if err := r.db.WithContext(ctx).Where("connector_id = ?", connectorID).Order("created_at DESC").Limit(100).Find(&records).Error; err != nil {
+		return nil, fmt.Errorf("list IDC sync runs: %w", err)
+	}
+	items := make([]domain.IDCDataSyncRun, 0, len(records))
+	for _, record := range records {
+		item, err := record.run()
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
 func (r *GormRepository) CreateIDCDataSyncRun(ctx context.Context, run domain.IDCDataSyncRun) error {
 	if err := run.Validate(); err != nil || run.State != domain.IDCDataSyncRunPending {
 		return ErrIDCDataSyncConflict

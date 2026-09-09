@@ -12,6 +12,7 @@ import (
 type IDCDataSyncManager interface {
 	CreateConnector(context.Context, domain.IDCDataSyncConnector) error
 	ListConnectors(context.Context) ([]domain.IDCDataSyncConnector, error)
+	ListRuns(context.Context, string) ([]domain.IDCDataSyncRun, error)
 	Request(context.Context, domain.IDCDataSyncConnector, string) (domain.IDCDataSyncRun, error)
 }
 
@@ -27,8 +28,21 @@ type createIDCDataSyncConnectorRequest struct {
 // is required for the data-plane implementation.
 func (h *Handler) RegisterIDCSyncManagementRoutes(group *gin.RouterGroup) {
 	group.GET("/admin/idc-sync/connectors", h.listIDCDataSyncConnectors)
+	group.GET("/admin/idc-sync/connectors/:id/runs", h.listIDCDataSyncRuns)
 	group.POST("/admin/idc-sync/connectors", h.createIDCDataSyncConnector)
 	group.POST("/admin/idc-sync/connectors/:id/runs", h.requestIDCDataSyncRun)
+}
+
+func (h *Handler) listIDCDataSyncRuns(c *gin.Context) {
+	if _, ok := h.requireIDCDataSyncAdmin(c); !ok {
+		return
+	}
+	items, err := h.idcSyncManager.ListRuns(c.Request.Context(), strings.TrimSpace(c.Param("id")))
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "IDC_SYNC_LIST_FAILED", "could not list IDC sync runs")
+		return
+	}
+	h.writeSuccess(c, http.StatusOK, items)
 }
 
 func (h *Handler) requireIDCDataSyncAdmin(c *gin.Context) (string, bool) {

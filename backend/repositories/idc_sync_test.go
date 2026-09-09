@@ -49,4 +49,8 @@ func TestIDCDataSyncRepositoryCreatesOneActiveRunAndFinalizesInventory(t *testin
 	if err != nil || len(entries) != 1 || entries[0].ObjectKey != entry.ObjectKey {
 		t.Fatalf("inventory = %+v, %v", entries, err)
 	}
+	runs, err := repository.ListIDCDataSyncRuns(context.Background(), connector.ID)
+	if err != nil || len(runs) != 1 || runs[0].ID != run.ID || runs[0].InventoryObjectKey != "ray-train/platform/idc-inventories/sync-run-1/"+strings.Repeat("b", 64)+".json" {
+		t.Fatalf("runs = %+v, %v", runs, err)
+	}
 }

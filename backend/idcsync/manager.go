@@ -19,6 +19,7 @@ var ErrUnavailable = errors.New("IDC sync is not configured")
 type Repository interface {
 	CreateIDCDataSyncConnector(context.Context, domain.IDCDataSyncConnector) error
 	ListIDCDataSyncConnectors(context.Context) ([]domain.IDCDataSyncConnector, error)
+	ListIDCDataSyncRuns(context.Context, string) ([]domain.IDCDataSyncRun, error)
 	CreateIDCDataSyncRun(context.Context, domain.IDCDataSyncRun) error
 	ClaimIDCDataSyncRun(context.Context, string, time.Time) (domain.IDCDataSyncRun, bool, error)
 }
@@ -110,6 +111,13 @@ func (m *Manager) ListConnectors(ctx context.Context) ([]domain.IDCDataSyncConne
 		return nil, ErrUnavailable
 	}
 	return m.repository.ListIDCDataSyncConnectors(ctx)
+}
+
+func (m *Manager) ListRuns(ctx context.Context, connectorID string) ([]domain.IDCDataSyncRun, error) {
+	if m == nil {
+		return nil, ErrUnavailable
+	}
+	return m.repository.ListIDCDataSyncRuns(ctx, connectorID)
 }
 
 func (m *Manager) Request(ctx context.Context, connector domain.IDCDataSyncConnector, requestedBy string) (domain.IDCDataSyncRun, error) {
