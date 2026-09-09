@@ -17,6 +17,40 @@ description: "ray-train-platform 的开发、构建、部署全流程。当需�
 | Helm release | `ray-platform`,namespace `ray-train-platform` |
 | 本地 | 有 kubectl 但**不是训练集群**;无 docker、无 helm |
 
+### 前后端已经分仓
+
+| 组件 | 权威仓库/分支 | 发布方式 |
+|---|---|---|
+| 后端、Helm、运行时 | 本仓库 `main` | 本地开发后同时推 GitHub 与内部 GitLab，再用 bundle 同步构建机；镜像和 Helm 只在构建机发布 |
+| Portal 前端 | `ssh://git@gitlab.wellspiking.ai:32022/wellspiking/frontend/wellspiking-frontend.git` 的 `dev` | 只修改 `src/views/rayTrain/` 及其直接依赖，推 `dev` 后由 GitLab CI/CD 自动构建并部署 |
+
+前端迁移后的测试入口为 `https://spiking-dev.wellspiking.ai/raytrain/rayTrain/job/list`。本仓库旧 `frontend/` 不再是 Portal RayTrain 页面发布源；除非用户明确要求维护独立旧入口，否则不要构建或部署它，也不要把 Portal 前端镜像写进后端 Helm 覆盖文件。
+
+### 两套 Portal 代理 Ingress
+
+| 环境 | kubeconfig | 可写边界 | 清单 |
+|---|---|---|---|
+| 新前端 dev | `~/.kube/test-dev.conf` | `guofeng-su` namespace | `deploy/portal/test-dev-raytrain-ingress.yaml` |
+| 旧 common/生产 Portal | `~/.kube/common.conf` | 只可修改 `guofeng-su`，其他 namespace 只读参考 | `deploy/portal/common-raytrain-ingress.yaml` |
+
+这两个 Ingress 只代理 `/raytrain/api/...` 和 `/raytrain/ray/...`，绝不能写回 `/raytrain/(.*)`：NGINX 的正则匹配会把 SPA 路由 `/raytrain/rayTrain/...` 一并送到后端，表现为页面 401/404。`rewrite-target` 必须是 `/$1`。dev 清单只拥有 `spiking-dev.wellspiking.ai`；common 清单只拥有 `spiking.wellspiking.ai`，不要让两个集群声明同一个 dev host。
+
+Portal 浏览器认证走同域 OAuth2 Proxy。Ingress 通过 `auth-url` 验证会话并只转发 `X-Auth-Request-Access-Token` 等响应头；后端还会验证令牌签名、issuer 和 audience，再用 `preferred_username` 映射 RayTrain 成员。Keycloak/Portal 角色不能直接当作 `SuperAdmin` 或租户角色。平台成员表仍是 tenant、角色、配额和历史资源归属的权威来源，`spk-rayjob`/Ray CLI 仍用 PAT 访问生产域名。
+
+修改 Ingress 时先备份、再 server-side diff，并只应用对应环境的清单：
+
+```bash
+kubectl --kubeconfig="$HOME/.kube/test-dev.conf" -n guofeng-su get ingress raytrain-spking-vke-proxy -o yaml > /tmp/test-dev-raytrain-ingress-before.yaml
+kubectl --kubeconfig="$HOME/.kube/test-dev.conf" diff --server-side -f deploy/portal/test-dev-raytrain-ingress.yaml
+kubectl --kubeconfig="$HOME/.kube/test-dev.conf" apply --server-side -f deploy/portal/test-dev-raytrain-ingress.yaml
+
+kubectl --kubeconfig="$HOME/.kube/common.conf" -n guofeng-su get ingress raytrain-spking-vke-proxy -o yaml > /tmp/common-raytrain-ingress-before.yaml
+kubectl --kubeconfig="$HOME/.kube/common.conf" diff --server-side -f deploy/portal/common-raytrain-ingress.yaml
+kubectl --kubeconfig="$HOME/.kube/common.conf" apply --server-side -f deploy/portal/common-raytrain-ingress.yaml
+```
+
+应用后至少验证：SPA 返回 200；未登录 `/raytrain/api/v1/me` 返回 401；已登录 `/me` 返回平台成员的稳定 `subject/tenantId/roles`；大文件使用分片上传；`spk-rayjob` 仍通过 `https://raytrain.wellspiking.ai` 的 PAT 登录与提交。
+
 本机不能构建镜像,集群操作一律在构建机上做。
 
 同目录下还散落着多个陈旧副本(`*-sync-backup-*`、`*-ray-data-staging`、`releases/*` 等),拿错目录会构建到过期代码。**只用 `ray-platform-main`**,用户已明确要求不要再用旧的 `ray-platform` 目录。
@@ -27,6 +61,8 @@ description: "ray-train-platform 的开发、构建、部署全流程。当需�
 cd backend && gofmt -l . && go build ./... && go test ./...
 cd frontend && npm test && npm run build
 ```
+
+上面的 `frontend/` 命令只用于本仓库独立旧前端。Portal RayTrain 页面必须在前端仓库按其 CI 基线执行 `pnpm lint:check`、`pnpm check:ep`、`pnpm check:store`；不要从本仓库构建 Portal 前端。
 
 前端测试跑的是 `node --test`,**不是 vitest**。直接 `npx vitest run` 会让 55 个文件全部报 "No test suite found",那是跑错了工具,不是代码坏了。
 
@@ -73,13 +109,13 @@ rm -f /tmp/rtp-<short-sha>.bundle
 
 Harbor 凭据已存在于构建机 `/root/.docker/config.json`。**不要代替用户执行 `docker login`**,也不要把密码写进命令。验证凭据有效的方式是看报错是 `not found` 还是 `unauthorized`。
 
-只构建本次真正改动的组件。`BUILD_TARGETS=all` 会连带构建大量训练和工作区镜像,几十分钟起步:
+只构建本次真正改动的后端/运行时组件。Portal 前端已分仓，推送后由自己的 CI/CD 发布，不能在这里构建。`BUILD_TARGETS=all` 会连带构建大量训练和工作区镜像,几十分钟起步:
 
 ```bash
 cd /opt/guofeng/vke-cluster/ray-platform-main
 IMAGE_TAG=release-$(date -u +%Y%m%d)-01 \
 REGISTRY=harbor.wellspiking.ai/guofeng.su \
-BUILD_TARGETS=backend,frontend \
+BUILD_TARGETS=backend \
 PUSH_IMAGE=true USE_BUILDX=true BUILD_PLATFORM=linux/amd64 \
 bash build-image.sh
 ```
