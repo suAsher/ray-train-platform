@@ -69,6 +69,8 @@ def _safe_prefix(value: str, field: str) -> str:
 
 
 def _safe_relative_path(value: str) -> str:
+    if value.startswith("/"):
+        raise SyncError("invalid source relative path")
     value = value.strip("/")
     if not value or any(part in {"", ".", ".."} for part in value.split("/")):
         raise SyncError("invalid source relative path")
