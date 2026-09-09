@@ -53,3 +53,16 @@ func TestOAuth2ProxyMiddlewareBuildsInteractivePrincipalFromVerifiedToken(t *tes
 		t.Fatalf("verified proxy identity was not accepted: status=%d calls=%d body=%s", response.Code, verifier.calls, response.Body.String())
 	}
 }
+
+func TestOAuth2ProxyMiddlewarePreservesLocalSessionDuringMigration(t *testing.T) {
+	issued := issuedTestSession(t)
+	authenticator, err := NewLocalSessionAuthenticator(localStoreFor(issued), testAuthPepper(), nil)
+	if err != nil {
+		t.Fatalf("new local authenticator: %v", err)
+	}
+
+	response := serveMiddleware(t, OAuth2ProxyMiddleware(nil, nil, authenticator, true), "Bearer "+issued.Token)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("local migration session was not accepted: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
