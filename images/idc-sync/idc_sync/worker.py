@@ -58,7 +58,7 @@ def parser() -> argparse.ArgumentParser:
     # callback URL and token are rendered only by the platform controller. They
     # are intentionally not accepted from the public API.
     value.add_argument("--callback-url", required=True)
-    value.add_argument("--callback-token", required=True)
+    value.add_argument("--callback-token", default=os.environ.get("IDC_SYNC_CALLBACK_TOKEN", ""))
     return value
 
 
@@ -192,6 +192,8 @@ def run(arguments: list[str] | None = None) -> dict[str, object]:
     relative_path = _safe_relative_path(request.source_relative_path)
     mirror_prefix = _safe_prefix(request.mirror_prefix, "mirror prefix")
     internal_prefix = _safe_prefix(request.internal_prefix, "internal prefix")
+    if not request.callback_url.startswith("http://") or not request.callback_token:
+        raise SyncError("sync callback is unavailable")
     if request.parallelism < 1 or request.parallelism > 64:
         raise SyncError("invalid transfer parallelism")
     config = request.tosutil_config.resolve(strict=True)

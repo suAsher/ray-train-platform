@@ -47,6 +47,11 @@ type Config struct {
 	IDCDataSpacesEnabled                     bool
 	IDCDataSpacesMountCapacity               string
 	IDCDataSpaceSources                      map[string]IDCDataSpaceSource
+	IDCSyncEnabled                           bool
+	IDCSyncImage                             string
+	IDCSyncBucket                            string
+	IDCSyncTosutilConfigSecret               string
+	IDCSyncServiceAccount                    string
 	DatasetVersioningEnabled                 bool
 	RayDataStreamingEnabled                  bool
 	DatasetPublisherEnabled                  bool
@@ -205,6 +210,10 @@ func Load() (Config, error) {
 		DataSpacesMountCapacity:           strings.TrimSpace(os.Getenv("DATA_SPACES_MOUNT_CAPACITY")),
 		DataSpacesPublicRoot:              envOr("DATA_SPACES_PUBLIC_ROOT", domain.DefaultPublicDataRoot),
 		IDCDataSpacesMountCapacity:        strings.TrimSpace(os.Getenv("IDC_DATA_SPACES_MOUNT_CAPACITY")),
+		IDCSyncImage:                      strings.TrimSpace(os.Getenv("IDC_SYNC_IMAGE")),
+		IDCSyncBucket:                     strings.TrimSpace(envOr("IDC_SYNC_BUCKET", os.Getenv("TOS_BUCKET"))),
+		IDCSyncTosutilConfigSecret:        strings.TrimSpace(os.Getenv("IDC_SYNC_TOSUTIL_CONFIG_SECRET")),
+		IDCSyncServiceAccount:             strings.TrimSpace(os.Getenv("IDC_SYNC_SERVICE_ACCOUNT")),
 		DatasetInternalPrefix:             envOr("DATASET_INTERNAL_PREFIX", domain.DefaultDatasetInternalPrefix),
 		DatasetPublisherImage:             strings.TrimSpace(os.Getenv("DATASET_PUBLISHER_IMAGE")),
 		DatasetPublisherImagePullPolicy:   strings.TrimSpace(envOr("DATASET_PUBLISHER_IMAGE_PULL_POLICY", "IfNotPresent")),
@@ -323,6 +332,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.IDCDataSpacesEnabled, err = parseBool("IDC_DATA_SPACES_ENABLED", false); err != nil {
+		return Config{}, err
+	}
+	if cfg.IDCSyncEnabled, err = parseBool("IDC_SYNC_ENABLED", false); err != nil {
 		return Config{}, err
 	}
 	if cfg.DatasetVersioningEnabled, err = parseBool("DATASET_VERSIONING_ENABLED", false); err != nil {
@@ -476,7 +488,31 @@ func Load() (Config, error) {
 	if err := validateDatasetPublisherConfig(cfg); err != nil {
 		return Config{}, err
 	}
+	if err := validateIDCSyncConfig(cfg); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
+}
+
+func validateIDCSyncConfig(cfg Config) error {
+	if !cfg.IDCSyncEnabled {
+		return nil
+	}
+	if !cfg.IDCDataSpacesEnabled {
+		return fmt.Errorf("IDC_SYNC_ENABLED requires IDC_DATA_SPACES_ENABLED")
+	}
+	for _, required := range []struct{ value, name string }{{cfg.IDCSyncImage, "IDC_SYNC_IMAGE"}, {cfg.IDCSyncBucket, "IDC_SYNC_BUCKET"}, {cfg.IDCSyncTosutilConfigSecret, "IDC_SYNC_TOSUTIL_CONFIG_SECRET"}, {cfg.IDCSyncServiceAccount, "IDC_SYNC_SERVICE_ACCOUNT"}} {
+		if strings.TrimSpace(required.value) == "" {
+			return fmt.Errorf("%s is required when IDC_SYNC_ENABLED is true", required.name)
+		}
+	}
+	if !pinnedImagePattern.MatchString(cfg.IDCSyncImage) || !validDatasetPublisherBucket(cfg.IDCSyncBucket) || !isDNSSubdomain(cfg.IDCSyncTosutilConfigSecret) || !isDNSSubdomain(cfg.IDCSyncServiceAccount) {
+		return fmt.Errorf("IDC sync configuration is invalid")
+	}
+	if source, ok := cfg.IDCDataSpaceSources["original"]; !ok || strings.TrimSpace(source.Server) == "" || strings.TrimSpace(source.Path) == "" {
+		return fmt.Errorf("IDC_SYNC_ENABLED requires the configured original IDC source")
+	}
+	return nil
 }
 
 func validateDatasetPublisherConfig(cfg Config) error {

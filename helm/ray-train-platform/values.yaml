@@ -401,6 +401,20 @@ idcDataSpaces:
       path: ""
       mountOptions: []
 
+# Disabled by default. When enabled, a platform-owned CPU Job reads only the
+# configured `original` NFS export and uses an existing administrator-created
+# Secret whose `config` key is a tosutil configuration file. The Job has no
+# user-supplied endpoint, credential, command, or delete operation.
+idcSync:
+  enabled: false
+  image:
+    repository: ray-idc-sync
+    tag: "REPLACE_WITH_IMMUTABLE_TAG"
+    digest: ""
+  bucket: ""
+  tosutilConfigSecret: ""
+  serviceAccountName: ray-idc-sync
+
 kueue:
   enabled: false
   # True means this Helm release owns the training ResourceFlavor and

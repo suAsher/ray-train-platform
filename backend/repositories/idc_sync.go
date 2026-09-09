@@ -173,6 +173,7 @@ func (r *GormRepository) ClaimIDCDataSyncRun(ctx context.Context, runID string, 
 	})
 	return claimed, didClaim, err
 }
+
 // AppendIDCDataSyncInventory records one bounded worker callback. Repeating a
 // successful callback is harmless: a run/path pair is immutable and the
 // database rejects a conflicting rewrite.

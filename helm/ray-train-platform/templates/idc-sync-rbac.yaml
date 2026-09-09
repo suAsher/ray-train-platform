@@ -1,0 +1,32 @@
+{{- if (default false .Values.idcSync.enabled) }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.idcSync.serviceAccountName }}
+  namespace: {{ .Values.namespace }}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-idc-sync-controller
+  namespace: {{ .Values.namespace }}
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-idc-sync-controller
+  namespace: {{ .Values.namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: ray-train-platform-sa
+    namespace: {{ .Values.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-idc-sync-controller
+{{- end }}

@@ -40,6 +40,7 @@ local-account deployment never contacts Keycloak. */}}
 {{- $personalStorage := default (dict) .Values.personalStorage }}
 {{- $objectSetQuota := default (dict) $personalStorage.objectSetQuota }}
 {{- $idcDataSpaces := default (dict) .Values.idcDataSpaces }}
+{{- $idcSync := default (dict) .Values.idcSync }}
 {{- $legacyStorage := default (dict) .Values.storage }}
 {{- if (default false $legacyStorage.enabled) }}{{- fail "storage.enabled is deprecated; configure governed idcDataSpaces instead" }}{{- end }}
 {{- if (default false $dataSpaces.enabled) }}
@@ -65,6 +66,13 @@ local-account deployment never contacts Keycloak. */}}
 {{- $path := default "" (get $source "path") }}
 {{- if not $server }}{{- fail (printf "idcDataSpaces.sources.%s.server is required when idcDataSpaces.enabled is true" $name) }}{{- end }}
 {{- if or (not $path) (eq $path "/") (not (hasPrefix "/" $path)) }}{{- fail (printf "idcDataSpaces.sources.%s.path must be a non-root absolute export path" $name) }}{{- end }}
+{{- end }}
+{{- if (default false $idcSync.enabled) }}
+{{- $syncDigest := default "" (get (default (dict) $idcSync.image) "digest") }}
+{{- if not (regexMatch `^sha256:[0-9a-fA-F]{64}$` $syncDigest) }}{{- fail "idcSync.image.digest must use sha256:<64 hex> when enabled" }}{{- end }}
+{{- if not (default "" $idcSync.bucket) }}{{- fail "idcSync.bucket is required when enabled" }}{{- end }}
+{{- if not (default "" $idcSync.tosutilConfigSecret) }}{{- fail "idcSync.tosutilConfigSecret is required when enabled" }}{{- end }}
+{{- if not (default "" $idcSync.serviceAccountName) }}{{- fail "idcSync.serviceAccountName is required when enabled" }}{{- end }}
 {{- end }}
 {{- end }}
 apiVersion: apps/v1
@@ -238,6 +246,16 @@ spec:
               value: {{ default "" $idcDataSpaces.mountCapacity | quote }}
             - name: IDC_DATA_SPACES_SOURCES_JSON
               value: {{ toJson (default (dict) $idcDataSpaces.sources) | quote }}
+            - name: IDC_SYNC_ENABLED
+              value: {{ default false $idcSync.enabled | quote }}
+            - name: IDC_SYNC_IMAGE
+              value: {{ include "ray-train-platform.image" (list . (default (dict) $idcSync.image)) | quote }}
+            - name: IDC_SYNC_BUCKET
+              value: {{ default "" $idcSync.bucket | quote }}
+            - name: IDC_SYNC_TOSUTIL_CONFIG_SECRET
+              value: {{ default "" $idcSync.tosutilConfigSecret | quote }}
+            - name: IDC_SYNC_SERVICE_ACCOUNT
+              value: {{ default "" $idcSync.serviceAccountName | quote }}
             - name: KUEUE_AUTO_QUOTA
               value: {{ .Values.kueue.autoQuota | quote }}
             - name: LOCAL_AUTH_ENABLED
