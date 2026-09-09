@@ -377,38 +377,19 @@ func (h *Handler) workspacePrincipal(c *gin.Context) (string, bool) {
 	if len(h.workspacePepper) == 0 || workspaceID == "" {
 		return "", false
 	}
-	token := c.Query("access_token")
-	fromQuery := token != ""
-	if token == "" {
-		if cookie, err := c.Request.Cookie(workspaceAccessCookie); err == nil {
-			token = cookie.Value
-		}
+	token := ""
+	if cookie, err := c.Request.Cookie(workspaceAccessCookie); err == nil {
+		token = cookie.Value
 	}
 	if token == "" {
 		return "", false
 	}
-	subject := c.Query("subject")
-	if subject == "" {
-		if cookie, err := c.Request.Cookie(workspaceAccessCookie + "_subject"); err == nil {
-			subject = cookie.Value
-		}
+	subject := ""
+	if cookie, err := c.Request.Cookie(workspaceAccessCookie + "_subject"); err == nil {
+		subject = cookie.Value
 	}
 	if subject == "" || domain.VerifyWorkspaceAccessToken(token, workspaceID, subject, h.workspacePepper, time.Now()) != nil {
 		return "", false
-	}
-	if fromQuery {
-		// Scope the cookie to this workspace so both editors (/proxy and
-		// /vscode) can use it, while it stays unusable against another
-		// workspace or the rest of the API.
-		basePath := "/api/v1/dev-workspaces/" + workspaceID + "/"
-		http.SetCookie(c.Writer, &http.Cookie{
-			Name: workspaceAccessCookie, Value: token, Path: basePath,
-			HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: int(domain.WorkspaceAccessTokenTTL.Seconds()),
-		})
-		http.SetCookie(c.Writer, &http.Cookie{
-			Name: workspaceAccessCookie + "_subject", Value: subject, Path: basePath,
-			HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: int(domain.WorkspaceAccessTokenTTL.Seconds()),
-		})
 	}
 	return subject, true
 }
@@ -421,6 +402,10 @@ func (h *Handler) proxyWorkspace(c *gin.Context) {
 // code-server, which serves from the root, and false for JupyterLab, which is
 // configured with the proxy path as its base_url.
 func (h *Handler) proxyWorkspacePort(c *gin.Context, port int, stripPrefix bool) {
+	if c.Query("access_token") != "" {
+		h.exchangeWorkspaceAccess(c)
+		return
+	}
 	subject, ok := h.workspacePrincipal(c)
 	if !ok {
 		h.writeError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "authentication is required")
@@ -472,4 +457,51 @@ func (h *Handler) proxyWorkspacePort(c *gin.Context, port int, stripPrefix bool)
 	query.Del("subject")
 	c.Request.URL.RawQuery = query.Encode()
 	proxy.ServeHTTP(c.Writer, c.Request)
+}
+
+// exchangeWorkspaceAccess turns the short-lived credential in an editor URL
+// into a longer-lived, HttpOnly cookie which is scoped to exactly one
+// workspace. This lets JupyterLab and code-server reconnect their WebSockets
+// without keeping a bearer credential in the address bar.
+func (h *Handler) exchangeWorkspaceAccess(c *gin.Context) {
+	workspaceID := c.Param("id")
+	subject := strings.TrimSpace(c.Query("subject"))
+	token := c.Query("access_token")
+	if len(h.workspacePepper) == 0 || workspaceID == "" || subject == "" || domain.VerifyWorkspaceAccessToken(token, workspaceID, subject, h.workspacePepper, time.Now()) != nil {
+		h.writeError(c, http.StatusUnauthorized, "WORKSPACE_ACCESS_INVALID", "workspace access link is invalid or expired; reopen the editor from the platform")
+		return
+	}
+	if h.workspaces == nil {
+		h.writeError(c, http.StatusServiceUnavailable, "WORKSPACE_UNAVAILABLE", "workspace storage is not configured")
+		return
+	}
+	workspace, err := h.workspaces.GetWorkspaceByUser(c.Request.Context(), subject)
+	if err != nil || workspace.ID != workspaceID {
+		h.writeError(c, http.StatusNotFound, "WORKSPACE_NOT_FOUND", "debug workspace was not found")
+		return
+	}
+	if !h.activeProxyTenant(c, workspace.TenantID) {
+		return
+	}
+	session, err := domain.IssueWorkspaceAccessToken(workspaceID, subject, h.workspacePepper, time.Now(), domain.WorkspaceSessionTokenTTL)
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "WORKSPACE_SESSION_FAILED", "could not create workspace browser session")
+		return
+	}
+	basePath := "/api/v1/dev-workspaces/" + workspaceID + "/"
+	secure := c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https")
+	for name, value := range map[string]string{
+		workspaceAccessCookie:              session,
+		workspaceAccessCookie + "_subject": subject,
+	} {
+		http.SetCookie(c.Writer, &http.Cookie{Name: name, Value: value, Path: basePath, MaxAge: int(domain.WorkspaceSessionTokenTTL.Seconds()), HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode})
+	}
+	query := c.Request.URL.Query()
+	query.Del("access_token")
+	query.Del("subject")
+	location := c.Request.URL.Path
+	if encoded := query.Encode(); encoded != "" {
+		location += "?" + encoded
+	}
+	c.Redirect(http.StatusFound, location)
 }

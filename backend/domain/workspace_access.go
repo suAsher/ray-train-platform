@@ -12,8 +12,14 @@ import (
 
 // WorkspaceAccessTokenTTL is deliberately short. The token travels in a URL to
 // open JupyterLab in a browser tab, which cannot carry an Authorization
-// header, so it is exchanged for a path-scoped cookie on the first request.
+// header. The proxy exchanges it for a workspace-scoped browser session on the
+// first request, so the URL itself never becomes a long-lived credential.
 const WorkspaceAccessTokenTTL = 2 * time.Minute
+
+// WorkspaceSessionTokenTTL is long enough for a normal interactive debugging
+// session. It is used only in an HttpOnly cookie scoped to one workspace, never
+// in a Portal response URL.
+const WorkspaceSessionTokenTTL = 12 * time.Hour
 
 // IssueWorkspaceAccessToken mints a stateless token bound to one workspace and
 // one user. It is signed rather than stored: it lives for a couple of minutes

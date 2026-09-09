@@ -94,43 +94,47 @@ func TestWorkspaceAccessEndpointReturnsOpenableURL(t *testing.T) {
 	}
 }
 
-// The token in the query string is exchanged for a cookie so that JupyterLab's
-// sub-resource requests, which carry no query parameters, stay authorised.
-// The authorisation decision is exercised directly: driving the full route
-// would dial a Jupyter service that does not exist in a unit test.
-func TestWorkspaceProxySetsPathScopedCookieFromQueryToken(t *testing.T) {
+func TestWorkspaceProxyExchangesShortLivedURLTokenForCleanSession(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
 	_, handler := workspaceProxyRouter(t, false)
-	token, err := domain.IssueWorkspaceAccessToken("ws-1", "user-1", handler.workspacePepper, time.Now(), time.Minute)
+	handler.workspaceUpstream = func(*domain.DevWorkspace) string { return upstream.URL }
+	router := gin.New()
+	handler.RegisterWorkspaceProxyRoute(router.Group("/api/v1"))
+	portal := httptest.NewServer(router)
+	defer portal.Close()
+
+	accessToken, err := domain.IssueWorkspaceAccessToken("ws-1", "user-1", handler.workspacePepper, time.Now(), domain.WorkspaceAccessTokenTTL)
 	if err != nil {
-		t.Fatalf("issue token: %v", err)
+		t.Fatalf("issue access token: %v", err)
 	}
-
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/dev-workspaces/ws-1/proxy/?access_token="+token+"&subject=user-1", nil)
-	c.Params = gin.Params{{Key: "id", Value: "ws-1"}}
-
-	subject, ok := handler.workspacePrincipal(c)
-	if !ok || subject != "user-1" {
-		t.Fatalf("a valid access token must authorise the proxy, got subject=%q ok=%v", subject, ok)
+	client := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	response, err := client.Get(portal.URL + "/api/v1/dev-workspaces/ws-1/proxy/lab?access_token=" + accessToken + "&subject=user-1&keep=1")
+	if err != nil {
+		t.Fatalf("exchange access token: %v", err)
 	}
-
-	var cookie *http.Cookie
-	for _, candidate := range recorder.Result().Cookies() {
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusFound {
+		t.Fatalf("expected token exchange redirect, got %d", response.StatusCode)
+	}
+	if location := response.Header.Get("Location"); strings.Contains(location, "access_token") || strings.Contains(location, "subject") || location != "/api/v1/dev-workspaces/ws-1/proxy/lab?keep=1" {
+		t.Fatalf("redirect must remove credentials and preserve ordinary query values, got %q", location)
+	}
+	var session *http.Cookie
+	for _, candidate := range response.Cookies() {
 		if candidate.Name == workspaceAccessCookie {
-			cookie = candidate
+			session = candidate
 		}
 	}
-	if cookie == nil {
-		t.Fatalf("expected the access cookie to be installed")
+	if session == nil || session.MaxAge != int(domain.WorkspaceSessionTokenTTL.Seconds()) {
+		t.Fatalf("expected a long-lived workspace session cookie, got %+v", session)
 	}
-	// Scoped to the workspace so both JupyterLab and code-server can use it,
-	// but not to the rest of the API.
-	if cookie.Path != "/api/v1/dev-workspaces/ws-1/" {
-		t.Fatalf("cookie must be scoped to this workspace, got %q", cookie.Path)
-	}
-	if !cookie.HttpOnly {
-		t.Fatalf("the access cookie must be HttpOnly")
+	if session.Path != "/api/v1/dev-workspaces/ws-1/" || !session.HttpOnly {
+		t.Fatalf("session cookie must be HTTP-only and workspace-scoped, got %+v", session)
 	}
 }
 
@@ -150,7 +154,7 @@ func TestWorkspaceProxyRejectsTokenForAnotherWorkspace(t *testing.T) {
 
 func TestWorkspaceProxyAcceptsCookieOnFollowUpRequests(t *testing.T) {
 	_, handler := workspaceProxyRouter(t, false)
-	token, _ := domain.IssueWorkspaceAccessToken("ws-1", "user-1", handler.workspacePepper, time.Now(), time.Minute)
+	token, _ := domain.IssueWorkspaceAccessToken("ws-1", "user-1", handler.workspacePepper, time.Now(), domain.WorkspaceSessionTokenTTL)
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -200,7 +204,7 @@ func TestWorkspaceProxyForwardsBasePathAndStripsCredentials(t *testing.T) {
 	portal := httptest.NewServer(router)
 	defer portal.Close()
 
-	response, err := http.Get(portal.URL + "/api/v1/dev-workspaces/ws-1/proxy/lab?access_token=secret&subject=user-1&keep=1")
+	response, err := http.Get(portal.URL + "/api/v1/dev-workspaces/ws-1/proxy/lab?keep=1")
 	if err != nil {
 		t.Fatalf("request through proxy: %v", err)
 	}
