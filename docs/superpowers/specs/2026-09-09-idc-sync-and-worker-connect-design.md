@@ -18,22 +18,23 @@
 
 ```text
 NFS /.original/QP_NuScene/labeled (read-only)
-  -> IDC SyncJob
-  -> TOS raw mirror: ray-train/raw/<connector>/<content-sha256>
-  -> immutable inventory + SyncRun receipt
+  -> IDC SyncJob (tosutil sync)
+  -> mutable TOS transport mirror
+  -> immutable raw blobs + inventory + SyncRun receipt
   -> Dataset Publisher (explicit selected SyncRun)
   -> Parquet manifest + READY DatasetVersion
   -> TrainingJob provenance
 ```
 
-`IDC SyncJob` 是平台在控制命名空间创建的 Kubernetes Job：挂载固定、只读的 IDC PVC；使用专用 ServiceAccount 和仅允许写入 `ray-train/raw/<connector>/` 的 TOS 身份；不持有 IDC SSH 账号、密钥或可写 NFS 挂载。任务放在低优先级队列，不占 GPU。
+`IDC SyncJob` 是平台在控制命名空间创建的 Kubernetes Job：挂载固定、只读的 IDC PVC；使用专用 ServiceAccount 和仅允许写入 `ray-train/raw/<connector>/` 的 TOS 身份；不持有 IDC SSH 账号、密钥或可写 NFS 挂载。任务放在低优先级队列，不占 GPU。Job 内以 `tosutil` 作为传输引擎，而非由后端 API 进程逐文件上传。
 
 同步执行分为两个阶段：
 
-1. **预览 / inventory**：遍历允许目录并计算每个候选文件的相对路径、大小、mtime、SHA-256。结果按路径排序，写入不可变 inventory 对象；平台计算 canonical inventory digest，并与上一个成功 inventory 比较得到 added、modified、unchanged、tombstoned 数量和字节数。
-2. **镜像 / receipt**：只上传新增或内容变化的文件到内容寻址对象键。成功后写入不可变 receipt，引用 inventory digest、每个对象的内容摘要、目标键和统计信息；只有 receipt 完整时 SyncRun 才能变为 `SUCCEEDED`。
+1. **预览 / inventory**：遍历允许目录并记录每个候选文件的相对路径、大小、mtime。与上一次成功 inventory 的 `(path,size,mtime,SHA-256)` 比较：元数据未变的文件复用已验证的 SHA-256，新增或元数据变化的文件重新计算 SHA-256。连接器按配置周期执行全量重校验，重新计算全部内容摘要以发现同大小、同 mtime 的异常修改。结果按路径排序，写入不可变 inventory 对象；平台计算 canonical inventory digest，并得到 added、modified、unchanged、tombstoned 数量和字节数。
+2. **增量传输**：在持久 checkpoint 目录中运行 `tosutil sync`，把新增或变化的路径并发、可恢复地传入连接器专属的**可变传输镜像**前缀。同步不启用删除选项；中断重试复用 `tosutil` checkpoint，不重传已完成分片。
+3. **固化 / receipt**：校验传输镜像与稳定 inventory 一致后，将变更对象提升为按 SHA-256 命名的不可变 raw blob，并写入 immutable receipt。提升仅在 TOS 内进行，不回读 NFS；receipt 引用 inventory digest、每个对象内容摘要、immutable blob key 和统计信息。只有 receipt 完整时 SyncRun 才能变为 `SUCCEEDED`。
 
-内容变化以 SHA-256 为准；`size` 与 `mtime` 仅用于快速跳过明显未变文件，不能单独作为正确性依据。同一内容仅保存一份 raw blob；路径变化或修改生成新的 inventory 引用，绝不覆盖旧 blob。
+内容变化以 SHA-256 为准；`size` 与 `mtime` 仅用于快速跳过明显未变文件，不能单独作为正确性依据。同一内容仅保存一份 raw blob；路径变化或修改生成新的 inventory 引用，绝不覆盖旧 blob。传输镜像仅是 `tosutil` 的增量加速缓存，Dataset Publisher、训练、评估和模型包均不得引用它。
 
 源端消失的路径只在新 inventory 标为 tombstone。它不再进入以后发布的数据集版本，但不会自动删除 TOS raw blob、旧 inventory 或已发布版本。保留期届满后，只有 SuperAdmin 通过单独的“删除独占产物”操作才能清理未被任一 inventory、DatasetVersion、训练或评估记录引用的对象。
 
@@ -75,7 +76,7 @@ NFS /.original/QP_NuScene/labeled (read-only)
 
 ## 验收与安全性质
 
-- IDC NFS 以只读方式挂载；无 IDC SSH 凭据、无任意 NFS 地址或任意 TOS 前缀输入。
+- IDC NFS 以只读方式挂载；无 IDC SSH 凭据、无任意 NFS 地址或任意 TOS 前缀输入。`tosutil` 只在平台 SyncJob 内运行，使用受限 TOS 身份、持久 checkpoint 和禁用删除的同步参数。
 - 同一 inventory 的 canonical digest 在重试时稳定；原始文件修改不覆盖旧 raw object；源删除不会自动删对象。
 - DatasetVersion、TrainingJob provenance、SyncRun inventory/receipt 形成可追溯链；训练不能引用失败或未完成的 SyncRun。
 - Sync Job 崩溃、重复请求、对象上传中断和 Job 重试均保持幂等，不会产生可被发布器引用的半成品。
