@@ -106,8 +106,18 @@ func TestAuthorizeMLflowDashboardPrincipalAllowsOIDCWithoutLocalUserRecord(t *te
 	}
 }
 
+func TestAuthorizeMLflowDashboardPrincipalAllowsOAuth2ProxyWithoutLocalUserRecord(t *testing.T) {
+	repository, _ := mlflowDashboardTestRepositories(t)
+	allowed, err := repository.AuthorizeMLflowDashboardPrincipal(context.Background(), auth.Principal{
+		Subject: "proxy-subject-a", TenantID: "tenant-a", AuthType: auth.AuthTypeOAuth2Proxy,
+	})
+	if err != nil || !allowed {
+		t.Fatalf("oauth2-proxy principal without local account: allowed=%t err=%v", allowed, err)
+	}
+}
+
 func TestAuthorizeMLflowDashboardPrincipalRejectsRetiredTenant(t *testing.T) {
-	for _, authType := range []auth.AuthenticationType{auth.AuthTypeOIDC, auth.AuthTypeDemo, auth.AuthTypeLocal} {
+	for _, authType := range []auth.AuthenticationType{auth.AuthTypeOIDC, auth.AuthTypeOAuth2Proxy, auth.AuthTypeDemo, auth.AuthTypeLocal} {
 		t.Run(string(authType), func(t *testing.T) {
 			repository, _ := mlflowDashboardTestRepositories(t)
 			if err := repository.db.Create(&LocalUserRecord{ID: "user-a", Username: "alice", TenantID: "tenant-a"}).Error; err != nil {

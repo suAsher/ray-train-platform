@@ -74,7 +74,7 @@ func (r *GormRepository) AuthorizeMLflowDashboardPrincipal(ctx context.Context, 
 		return false, fmt.Errorf("verify MLflow dashboard tenant: %w", err)
 	}
 	switch principal.AuthType {
-	case auth.AuthTypeOIDC, auth.AuthTypeDemo:
+	case auth.AuthTypeOIDC, auth.AuthTypeOAuth2Proxy, auth.AuthTypeDemo:
 		return true, nil
 	case auth.AuthTypeLocal:
 		user, err := r.FindLocalUserByID(ctx, principal.Subject)
