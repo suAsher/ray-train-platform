@@ -55,16 +55,19 @@ kubectl --kubeconfig="$HOME/.kube/common.conf" apply --server-side -f deploy/por
 
 同目录下还散落着多个陈旧副本(`*-sync-backup-*`、`*-ray-data-staging`、`releases/*` 等),拿错目录会构建到过期代码。**只用 `ray-platform-main`**,用户已明确要求不要再用旧的 `ray-platform` 目录。
 
-## 一、本地开发
+## 一、开发与测试边界
+
+本机只编辑、做 `git diff --check` 和审阅 diff；用户已明确要求**编译、单元测试、lint 和镜像构建都不要消耗本机资源**。后端候选提交要先用 bundle 送到构建机的临时 detached worktree 测试，测试通过后才推两个远端并快进正式构建目录。不要为了测试先把未验证的 main 推出去。
+
+构建机 Go builder 镜像有两个已知环境坑，测试命令必须显式处理：`/usr/local/go/bin` 不在 PATH；默认 `proxy.golang.org` 不可达。使用项目 Dockerfile 相同的 Alpine 镜像源和已验证的 `GOPROXY=https://mirrors.tencent.com/go/`，不要关闭 go.sum 校验。完整基线是：
 
 ```bash
-cd backend && gofmt -l . && go build ./... && go test ./...
-cd frontend && npm test && npm run build
+go test -timeout=20m ./...
 ```
 
-上面的 `frontend/` 命令只用于本仓库独立旧前端。Portal RayTrain 页面必须在前端仓库按其 CI 基线执行 `pnpm lint:check`、`pnpm check:ep`、`pnpm check:store`；不要从本仓库构建 Portal 前端。
+Portal 前端也不在本机安装依赖或运行 lint。把 `dev` 候选 commit 用 `git archive` 生成不含 `.git`、`.env*` 和本地未跟踪文件的归档，送到构建机临时目录后执行 `docker build --pull -f docker/Dockerfile.lint .`。该门禁会依次运行 `pnpm lint:check`、`pnpm check:ep`、`pnpm check:store`；通过后才推 `dev`，随后由 GitLab CI/CD 再次验证并自动部署。不要从本仓库构建 Portal 前端。
 
-前端测试跑的是 `node --test`,**不是 vitest**。直接 `npx vitest run` 会让 55 个文件全部报 "No test suite found",那是跑错了工具,不是代码坏了。
+本仓库独立旧前端若被明确要求维护，测试命令是 `npm test && npm run build`；测试跑 `node --test`，**不是 vitest**。直接 `npx vitest run` 会把测试工具用错。
 
 ### 数据库迁移
 
@@ -83,27 +86,37 @@ SET LOCAL statement_timeout = '60s';
 
 如果你在有意变更策略(比如开放某个下载入口),**改断言、不要删测试**:保留原有仍然成立的边界,把新边界写成新断言钉住。删掉等于把护栏拆了。
 
-## 二、同步代码到构建机
+## 二、验证候选提交并同步四端
 
 构建机**到 GitHub 两条路都不通**:SSH 无密钥,HTTPS 间歇性 `GnuTLS recv error`。所以走 git bundle,**不要用 rsync 覆盖源码**:
 
 ```bash
-# 本地
-git push origin main
-git bundle create /tmp/rtp-<short-sha>.bundle <上游commit>..main
+# 1. 本地把已经审阅的改动提交为候选；作者必须是平台身份
+git -c user.name=guofeng.su -c user.email=guofeng.su@westwell-lab.com commit ...
+git bundle create /tmp/rtp-<short-sha>.bundle <构建机当前HEAD>..main
 scp -i ~/.ssh/qomolo-desktop.pem /tmp/rtp-<short-sha>.bundle root@14.103.49.106:/tmp/
 
-# 构建机
+# 2. 构建机只 fetch，不先修改正式 main；在 /tmp detached worktree 跑完整测试
 cd /opt/guofeng/vke-cluster/ray-platform-main
 git bundle verify /tmp/rtp-<short-sha>.bundle
 git fetch /tmp/rtp-<short-sha>.bundle main
+verify_dir="$(mktemp -d /tmp/rtp-verify.XXXXXX)"
+git worktree add --detach "$verify_dir" FETCH_HEAD
+# 在只读挂载 $verify_dir 的 Go builder 容器内运行 go test -timeout=20m ./...
+git worktree remove "$verify_dir"
+
+# 3. 测试通过后，本地同时推两个 main
+git push origin main
+git -c core.sshCommand='ssh -i ~/.ssh/id-spiking -p 32022 -o IdentitiesOnly=yes' push gitlab main
+
+# 4. 构建机正式目录只做快进，并再次核对
 git merge --ff-only FETCH_HEAD
-git rev-parse --short HEAD   # 必须等于计划发布的 commit
-git status --short           # 必须为空
+git rev-parse HEAD             # 必须等于本地/GitHub/GitLab 的计划 commit
+git status --short             # 必须为空
 rm -f /tmp/rtp-<short-sha>.bundle
 ```
 
-构建前确认 HEAD 正确且工作区干净。**不要在构建机上临时改源码再构建**,那样产出的镜像与任何 commit 都对不上,事后无法追溯。
+最终必须核对本地 `main`、GitHub `origin/main`、内部 GitLab `gitlab/main`、构建机 `ray-platform-main` 四个完整 SHA 相同。构建前正式目录还必须干净。**不要在构建机上临时改源码再构建**,那样产出的镜像与任何 commit 都对不上,事后无法追溯。
 
 ## 三、构建
 
