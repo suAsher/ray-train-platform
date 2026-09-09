@@ -70,7 +70,7 @@ type IDCDataSyncObjectRefRecord struct {
 func (IDCDataSyncConnectorRecord) TableName() string      { return "idc_sync_connectors" }
 func (IDCDataSyncRunRecord) TableName() string            { return "idc_sync_runs" }
 func (IDCDataSyncInventoryEntryRecord) TableName() string { return "idc_sync_inventory_entries" }
-func (IDCDataSyncObjectRefRecord) TableName() string       { return "idc_sync_object_refs" }
+func (IDCDataSyncObjectRefRecord) TableName() string      { return "idc_sync_object_refs" }
 
 func (r *GormRepository) CreateIDCDataSyncConnector(ctx context.Context, item domain.IDCDataSyncConnector) error {
 	if err := item.Validate(); err != nil {
@@ -213,7 +213,7 @@ func (r *GormRepository) CompleteIDCDataSyncRun(ctx context.Context, runID, inve
 		for _, entry := range entries {
 			ref := IDCDataSyncObjectRefRecord{SHA256: entry.SHA256, ObjectKey: entry.ObjectKey, ReferenceCount: 1, SizeBytes: entry.SizeBytes, FirstSeenAt: finished, LastSeenAt: finished}
 			if err := tx.Clauses(clause.OnConflict{
-				Columns: []clause.Column{{Name: "sha256"}},
+				Columns:   []clause.Column{{Name: "sha256"}},
 				DoUpdates: clause.Assignments(map[string]any{"reference_count": gorm.Expr("idc_sync_object_refs.reference_count + 1"), "last_seen_at": finished}),
 			}).Create(&ref).Error; err != nil {
 				return err

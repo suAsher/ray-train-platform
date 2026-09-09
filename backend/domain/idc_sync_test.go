@@ -44,11 +44,11 @@ func TestIDCDataSyncRunRequiresImmutableInventoryOnSuccess(t *testing.T) {
 	}
 
 	for name, mutate := range map[string]func(*IDCDataSyncRun){
-		"successful run has no inventory": func(item *IDCDataSyncRun) { item.InventorySHA256 = "" },
+		"successful run has no inventory":        func(item *IDCDataSyncRun) { item.InventorySHA256 = "" },
 		"successful run has no inventory object": func(item *IDCDataSyncRun) { item.InventoryObjectKey = "" },
-		"bad digest":                      func(item *IDCDataSyncRun) { item.InventorySHA256 = "not-a-digest" },
-		"negative bytes":                  func(item *IDCDataSyncRun) { item.SourceBytes = -1 },
-		"running run has finished time":   func(item *IDCDataSyncRun) { item.State = IDCDataSyncRunRunning },
+		"bad digest":                             func(item *IDCDataSyncRun) { item.InventorySHA256 = "not-a-digest" },
+		"negative bytes":                         func(item *IDCDataSyncRun) { item.SourceBytes = -1 },
+		"running run has finished time":          func(item *IDCDataSyncRun) { item.State = IDCDataSyncRunRunning },
 	} {
 		t.Run(name, func(t *testing.T) {
 			item := valid

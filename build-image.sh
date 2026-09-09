@@ -89,7 +89,7 @@ Ray Training Platform image builder
 Environment variables:
   REGISTRY=harbor.wellspiking.ai/guofeng.su
   IMAGE_TAG=test-20260809
-  BUILD_TARGETS=all|backend,frontend,source-materializer,test-training,dataset-publisher,workspace,train-pytorch,pytorch-ray-ddp,pytorch-ray-train,workspace-ray256,bevfusion-runtime,bevfusion-ray258-canary,raytrain-base,tos-prefix-init,spk-rayjob
+  BUILD_TARGETS=all|backend,frontend,source-materializer,test-training,dataset-publisher,idc-sync,workspace,train-pytorch,pytorch-ray-ddp,pytorch-ray-train,workspace-ray256,bevfusion-runtime,bevfusion-ray258-canary,raytrain-base,tos-prefix-init,spk-rayjob
   PUSH_IMAGE=false|true
   USE_BUILDX=true|false
   BUILD_PLATFORM=linux/amd64
@@ -120,6 +120,7 @@ Build targets:
   source-materializer Git and governed-workspace code materializer image
   test-training       Single-GPU smoke Ray image
   dataset-publisher   CPU-only immutable Parquet dataset publisher
+  idc-sync            CPU-only one-way IDC to TOS incremental sync worker
   workspace           Existing Ray 2.35 interactive workspace (rollback)
   train-pytorch       Existing Ray 2.35 PyTorch runtime (rollback)
   pytorch-ray-ddp     Ray 2.56.1 PyTorch runtime for Ray-orchestrated DDP
@@ -153,6 +154,9 @@ target_spec() {
       ;;
     dataset-publisher)
       printf '%s\n' 'images/dataset-publisher/Dockerfile|ray-dataset-publisher|images/dataset-publisher|-'
+      ;;
+    idc-sync)
+      printf '%s\n' 'images/idc-sync/Dockerfile|ray-idc-sync|images/idc-sync|-'
       ;;
     tos-prefix-init)
       printf '%s\n' 'images/tos-prefix-init/Dockerfile|ray-tos-prefix-init|.|-'
@@ -195,7 +199,7 @@ target_spec() {
 normalize_targets() {
   local raw target
   if [ "$(trim "$BUILD_TARGETS_RAW")" = "all" ]; then
-    printf '%s\n' backend frontend source-materializer test-training dataset-publisher workspace train-pytorch "${RAY_RUNTIME_VARIANTS[@]}" bevfusion-runtime tos-prefix-init spk-rayjob
+    printf '%s\n' backend frontend source-materializer test-training dataset-publisher idc-sync workspace train-pytorch "${RAY_RUNTIME_VARIANTS[@]}" bevfusion-runtime tos-prefix-init spk-rayjob
     return
   fi
 
@@ -205,7 +209,7 @@ normalize_targets() {
     [ -n "$target" ] || continue
     target_spec "$target" >/dev/null || {
       echo "ERROR: unknown BUILD_TARGETS entry: $target" >&2
-      echo "       valid values: backend, frontend, source-materializer, test-training, dataset-publisher, workspace, train-pytorch, pytorch-ray-ddp, pytorch-ray-train, workspace-ray256, bevfusion-runtime, bevfusion-ray258-canary, raytrain-base, tos-prefix-init, spk-rayjob, all" >&2
+      echo "       valid values: backend, frontend, source-materializer, test-training, dataset-publisher, idc-sync, workspace, train-pytorch, pytorch-ray-ddp, pytorch-ray-train, workspace-ray256, bevfusion-runtime,bevfusion-ray258-canary, raytrain-base, tos-prefix-init, spk-rayjob, all" >&2
       exit 1
     }
     printf '%s\n' "$target"
