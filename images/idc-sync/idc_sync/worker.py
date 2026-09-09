@@ -16,6 +16,9 @@ import os
 import re
 import subprocess
 import sys
+import urllib.error
+import urllib.request
+from datetime import UTC, datetime
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,6 +55,10 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--source-root", default="/data/source", type=Path)
     value.add_argument("--work-dir", default="/work", type=Path)
     value.add_argument("--parallelism", default=16, type=int)
+    # callback URL and token are rendered only by the platform controller. They
+    # are intentionally not accepted from the public API.
+    value.add_argument("--callback-url", required=True)
+    value.add_argument("--callback-token", required=True)
     return value
 
 
@@ -130,8 +137,18 @@ def _copy_immutable(source: Path, entry: InventoryEntry, bucket: str, config: Pa
 
 
 def _canonical_inventory(entries: list[InventoryEntry]) -> bytes:
-    payload = {"schema": 1, "entries": [entry.__dict__ for entry in entries]}
+    payload = {"schema": 1, "entries": [_entry_payload(entry) for entry in entries]}
     return json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":")).encode("ascii")
+
+
+def _entry_payload(entry: InventoryEntry) -> dict[str, object]:
+    return {
+        "relativePath": entry.relative_path,
+        "sizeBytes": entry.size_bytes,
+        "modifiedAt": datetime.fromtimestamp(entry.modified_at_ns / 1_000_000_000, tz=UTC).isoformat().replace("+00:00", "Z"),
+        "sha256": entry.sha256,
+        "objectKey": entry.object_key,
+    }
 
 
 def _write_receipt(payload: dict[str, object]) -> None:
@@ -143,6 +160,29 @@ def _write_receipt(payload: dict[str, object]) -> None:
     except OSError:
         # A local test may not provide Kubernetes' termination-log mount.
         pass
+
+
+def _post_callback(url: str, token: str, payload: dict[str, object]) -> None:
+    body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    request = urllib.request.Request(url, data=body, method="POST")
+    request.add_header("Authorization", "Bearer " + token)
+    request.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            if response.status // 100 != 2:
+                raise SyncError("sync receipt was rejected")
+    except (urllib.error.URLError, TimeoutError):
+        raise SyncError("sync receipt delivery failed") from None
+
+
+def _report_entries(callback_url: str, callback_token: str, run_id: str, entries: list[InventoryEntry]) -> None:
+    # 1,000 entries stay well below the API's bounded internal request size
+    # while keeping the number of control-plane calls practical for large data.
+    for start in range(0, len(entries), 1000):
+        _post_callback(callback_url + "/entries", callback_token, {
+            "runId": run_id,
+            "entries": [_entry_payload(entry) for entry in entries[start : start + 1000]],
+        })
 
 
 def run(arguments: list[str] | None = None) -> dict[str, object]:
@@ -178,6 +218,8 @@ def run(arguments: list[str] | None = None) -> dict[str, object]:
         for future in futures:
             future.result()
 
+    _report_entries(request.callback_url, request.callback_token, run_id, entries)
+
     inventory = _canonical_inventory(entries)
     inventory_digest = hashlib.sha256(inventory).hexdigest()
     inventory_path = work_dir / "inventory.json"
@@ -193,8 +235,11 @@ def run(arguments: list[str] | None = None) -> dict[str, object]:
         "inventoryObjectKey": inventory_key,
         "sourceObjectCount": len(entries),
         "sourceBytes": sum(entry.size_bytes for entry in entries),
-        "entries": [entry.__dict__ for entry in entries],
+        "entries": [_entry_payload(entry) for entry in entries],
     }
+    _post_callback(request.callback_url + "/complete", request.callback_token, {
+        key: value for key, value in receipt.items() if key != "entries"
+    })
     _write_receipt({key: value for key, value in receipt.items() if key != "entries"})
     return receipt
 

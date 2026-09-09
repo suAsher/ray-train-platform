@@ -173,14 +173,52 @@ func (r *GormRepository) ClaimIDCDataSyncRun(ctx context.Context, runID string, 
 	})
 	return claimed, didClaim, err
 }
-func (r *GormRepository) CompleteIDCDataSyncRun(ctx context.Context, runID, inventory, inventoryObjectKey string, entries []domain.IDCDataSyncInventoryEntry) (domain.IDCDataSyncRun, error) {
-	if len(entries) == 0 || len(inventory) != 64 {
-		return domain.IDCDataSyncRun{}, ErrIDCDataSyncConflict
+// AppendIDCDataSyncInventory records one bounded worker callback. Repeating a
+// successful callback is harmless: a run/path pair is immutable and the
+// database rejects a conflicting rewrite.
+func (r *GormRepository) AppendIDCDataSyncInventory(ctx context.Context, runID string, entries []domain.IDCDataSyncInventoryEntry) error {
+	if len(entries) == 0 || len(entries) > 1000 {
+		return ErrIDCDataSyncConflict
 	}
-	for _, item := range entries {
-		if item.RunID != runID || item.Validate() != nil {
-			return domain.IDCDataSyncRun{}, ErrIDCDataSyncConflict
+	for _, entry := range entries {
+		if entry.RunID != runID || entry.Validate() != nil {
+			return ErrIDCDataSyncConflict
 		}
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var run IDCDataSyncRunRecord
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", runID).First(&run).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrIDCDataSyncRunNotFound
+			}
+			return err
+		}
+		if run.State != string(domain.IDCDataSyncRunRunning) {
+			return ErrIDCDataSyncConflict
+		}
+		for _, entry := range entries {
+			record := entryRecord(entry)
+			result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&record)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				var existing IDCDataSyncInventoryEntryRecord
+				if err := tx.Where("run_id = ? AND relative_path = ?", runID, entry.RelativePath).First(&existing).Error; err != nil {
+					return err
+				}
+				if existing.SHA256 != entry.SHA256 || existing.SizeBytes != entry.SizeBytes || existing.ObjectKey != entry.ObjectKey {
+					return ErrIDCDataSyncConflict
+				}
+			}
+		}
+		return nil
+	})
+}
+
+func (r *GormRepository) CompleteIDCDataSyncRun(ctx context.Context, runID, inventory, inventoryObjectKey string) (domain.IDCDataSyncRun, error) {
+	if len(inventory) != 64 {
+		return domain.IDCDataSyncRun{}, ErrIDCDataSyncConflict
 	}
 	var completed domain.IDCDataSyncRun
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -196,19 +234,19 @@ func (r *GormRepository) CompleteIDCDataSyncRun(ctx context.Context, runID, inve
 			return ErrIDCDataSyncConflict
 		}
 		finished := time.Now().UTC()
+		var entries []IDCDataSyncInventoryEntryRecord
+		if err := tx.Where("run_id = ?", runID).Order("relative_path ASC").Find(&entries).Error; err != nil {
+			return err
+		}
+		if len(entries) == 0 {
+			return ErrIDCDataSyncConflict
+		}
 		current.State, current.FinishedAt, current.InventorySHA256, current.InventoryObjectKey, current.SourceObjectCount, current.SourceBytes = domain.IDCDataSyncRunSucceeded, &finished, inventory, inventoryObjectKey, int64(len(entries)), 0
 		for _, item := range entries {
 			current.SourceBytes += item.SizeBytes
 		}
 		if err := current.Validate(); err != nil {
 			return ErrIDCDataSyncConflict
-		}
-		records := make([]IDCDataSyncInventoryEntryRecord, 0, len(entries))
-		for _, item := range entries {
-			records = append(records, entryRecord(item))
-		}
-		if err := tx.Create(&records).Error; err != nil {
-			return err
 		}
 		for _, entry := range entries {
 			ref := IDCDataSyncObjectRefRecord{SHA256: entry.SHA256, ObjectKey: entry.ObjectKey, ReferenceCount: 1, SizeBytes: entry.SizeBytes, FirstSeenAt: finished, LastSeenAt: finished}

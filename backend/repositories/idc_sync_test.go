@@ -35,7 +35,10 @@ func TestIDCDataSyncRepositoryCreatesOneActiveRunAndFinalizesInventory(t *testin
 		t.Fatalf("ClaimIDCDataSyncRun() = claimed=%v err=%v", claimed, err)
 	}
 	entry := domain.IDCDataSyncInventoryEntry{RunID: run.ID, RelativePath: "site-a/frame.bin", SizeBytes: 42, ModifiedAt: time.Now().UTC(), SHA256: strings.Repeat("a", 64), ObjectKey: "ray-train/platform/idc-raw/sha256/aa/" + strings.Repeat("a", 64)}
-	completed, err := repository.CompleteIDCDataSyncRun(context.Background(), run.ID, strings.Repeat("b", 64), "ray-train/platform/idc-inventories/sync-run-1/"+strings.Repeat("b", 64)+".json", []domain.IDCDataSyncInventoryEntry{entry})
+	if err := repository.AppendIDCDataSyncInventory(context.Background(), run.ID, []domain.IDCDataSyncInventoryEntry{entry}); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := repository.CompleteIDCDataSyncRun(context.Background(), run.ID, strings.Repeat("b", 64), "ray-train/platform/idc-inventories/sync-run-1/"+strings.Repeat("b", 64)+".json")
 	if err != nil {
 		t.Fatal(err)
 	}
