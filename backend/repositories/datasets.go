@@ -36,23 +36,25 @@ type DatasetRecord struct {
 }
 
 type DatasetVersionRecord struct {
-	DeletedAt         gorm.DeletedAt `gorm:"index"`
-	DeletedBy         string
-	ID                string  `gorm:"primaryKey"`
-	DatasetID         string  `gorm:"column:dataset_id;uniqueIndex:dataset_version_identity"`
-	Version           string  `gorm:"uniqueIndex:dataset_version_identity"`
-	State             string  `gorm:"index"`
-	ManifestSHA256    *string `gorm:"column:manifest_sha256"`
-	ManifestObjectKey *string `gorm:"column:manifest_object_key"`
-	SchemaVersion     string
-	TrainSamples      int64
-	ValSamples        int64
-	TestSamples       int64
-	SourceObjectCount int64
-	LogicalBytes      int64
-	PackedBytes       int64
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	DeletedAt             gorm.DeletedAt `gorm:"index"`
+	DeletedBy             string
+	ID                    string  `gorm:"primaryKey"`
+	DatasetID             string  `gorm:"column:dataset_id;uniqueIndex:dataset_version_identity"`
+	Version               string  `gorm:"uniqueIndex:dataset_version_identity"`
+	State                 string  `gorm:"index"`
+	ManifestSHA256        *string `gorm:"column:manifest_sha256"`
+	ManifestObjectKey     *string `gorm:"column:manifest_object_key"`
+	SchemaVersion         string
+	TrainSamples          int64
+	ValSamples            int64
+	TestSamples           int64
+	SourceObjectCount     int64
+	LogicalBytes          int64
+	PackedBytes           int64
+	SourceSyncRunID       *string `gorm:"column:source_sync_run_id"`
+	SourceInventorySHA256 string  `gorm:"column:source_inventory_sha256;not null;default:''"`
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 type DatasetPartitionRecord struct {
@@ -506,6 +508,7 @@ func datasetVersionRecordFromDomain(version domain.DatasetVersion, now time.Time
 		SchemaVersion: version.SchemaVersion, TrainSamples: version.TrainSamples, ValSamples: version.ValSamples,
 		TestSamples: version.TestSamples, SourceObjectCount: version.SourceObjectCount,
 		LogicalBytes: version.LogicalBytes, PackedBytes: version.PackedBytes,
+		SourceSyncRunID: optionalID(version.SourceSyncRunID), SourceInventorySHA256: version.SourceInventorySHA256,
 		CreatedAt: now, UpdatedAt: now,
 	}
 }
@@ -517,6 +520,7 @@ func (record DatasetVersionRecord) toDomain() (domain.DatasetVersion, error) {
 		ManifestObjectKey: valueOrEmpty(record.ManifestObjectKey), SchemaVersion: record.SchemaVersion,
 		TrainSamples: record.TrainSamples, ValSamples: record.ValSamples, TestSamples: record.TestSamples,
 		SourceObjectCount: record.SourceObjectCount, LogicalBytes: record.LogicalBytes, PackedBytes: record.PackedBytes,
+		SourceSyncRunID: valueOrEmpty(record.SourceSyncRunID), SourceInventorySHA256: record.SourceInventorySHA256,
 	}
 	if err := version.Validate(); err != nil {
 		return domain.DatasetVersion{}, fmt.Errorf("invalid stored dataset version: %w", err)
@@ -537,7 +541,9 @@ func sameDatasetVersionPayload(left, right DatasetVersionRecord) bool {
 		left.TestSamples == right.TestSamples &&
 		left.SourceObjectCount == right.SourceObjectCount &&
 		left.LogicalBytes == right.LogicalBytes &&
-		left.PackedBytes == right.PackedBytes
+		left.PackedBytes == right.PackedBytes &&
+		sameOptionalString(left.SourceSyncRunID, right.SourceSyncRunID) &&
+		left.SourceInventorySHA256 == right.SourceInventorySHA256
 }
 
 func sameOptionalString(left, right *string) bool {

@@ -29,6 +29,8 @@ type JobRecord struct {
 	DatasetDataMode       *string `gorm:"column:dataset_data_mode"`
 	DatasetCachePolicy    *string `gorm:"column:dataset_cache_policy"`
 	DatasetSites          string  `gorm:"column:dataset_sites;not null;default:''"`
+	SourceSyncRunID       *string `gorm:"column:source_sync_run_id"`
+	SourceInventorySHA256 string  `gorm:"column:source_inventory_sha256;not null;default:''"`
 	SubmissionOrigin      string
 	ExternalSubmissionID  string
 	Name                  string `gorm:"index"`
@@ -279,6 +281,8 @@ func newJobRecord(job *domain.TrainingJob) (JobRecord, error) {
 		DatasetDataMode:       optionalID(string(job.DatasetProvenance.DataMode)),
 		DatasetCachePolicy:    optionalID(string(job.DatasetProvenance.CachePolicy)),
 		DatasetSites:          string(job.DatasetProvenance.Sites),
+		SourceSyncRunID:       optionalID(job.DatasetProvenance.SourceSyncRunID),
+		SourceInventorySHA256: job.DatasetProvenance.SourceInventorySHA256,
 		SubmissionOrigin:      string(job.SubmissionOrigin),
 		ExternalSubmissionID:  job.ExternalSubmissionID,
 		Name:                  job.Spec.Name,
@@ -1629,12 +1633,14 @@ func (r JobRecord) toDomain() (*domain.TrainingJob, error) {
 		workerRestartCount = 0
 	}
 	provenance := domain.DatasetProvenance{
-		Sites:            domain.DatasetSites(r.DatasetSites),
-		DatasetID:        valueOrEmpty(r.DatasetID),
-		DatasetVersionID: valueOrEmpty(r.DatasetVersionID),
-		ManifestSHA256:   valueOrEmpty(r.DatasetManifestDigest),
-		DataMode:         domain.DataMode(valueOrEmpty(r.DatasetDataMode)),
-		CachePolicy:      domain.DatasetCachePolicy(valueOrEmpty(r.DatasetCachePolicy)),
+		Sites:                 domain.DatasetSites(r.DatasetSites),
+		DatasetID:             valueOrEmpty(r.DatasetID),
+		DatasetVersionID:      valueOrEmpty(r.DatasetVersionID),
+		ManifestSHA256:        valueOrEmpty(r.DatasetManifestDigest),
+		DataMode:              domain.DataMode(valueOrEmpty(r.DatasetDataMode)),
+		CachePolicy:           domain.DatasetCachePolicy(valueOrEmpty(r.DatasetCachePolicy)),
+		SourceSyncRunID:       valueOrEmpty(r.SourceSyncRunID),
+		SourceInventorySHA256: r.SourceInventorySHA256,
 	}
 	if err := provenance.Validate(); err != nil {
 		return nil, fmt.Errorf("decode dataset provenance: %w", err)

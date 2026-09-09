@@ -1,0 +1,156 @@
+package domain
+
+import (
+	"fmt"
+	"strings"
+	"time"
+)
+
+// IDCDataSyncConnector describes a platform-owned, read-only IDC source. It
+// deliberately has no endpoint, credentials, command, or arbitrary PVC name:
+// those deployment concerns remain in Helm configuration and Kubernetes.
+type IDCDataSyncConnector struct {
+	ID                 string      `json:"id"`
+	Name               string      `json:"name"`
+	SourceSpace        DataSpaceID `json:"sourceSpace"`
+	SourceRelativePath string      `json:"sourceRelativePath"`
+	MirrorPrefix       string      `json:"mirrorPrefix"`
+	Enabled            bool        `json:"enabled"`
+	CreatedBy          string      `json:"createdBy"`
+	CreatedAt          time.Time   `json:"createdAt"`
+	UpdatedAt          time.Time   `json:"updatedAt"`
+}
+
+func (connector IDCDataSyncConnector) Validate() error {
+	if err := validateDatasetIdentifier("IDC sync connector ID", connector.ID); err != nil {
+		return err
+	}
+	if strings.TrimSpace(connector.Name) == "" || strings.TrimSpace(connector.Name) != connector.Name {
+		return fmt.Errorf("IDC sync connector name is invalid")
+	}
+	// Phase one is intentionally narrow. Opening a generic source selector
+	// would let an administrator accidentally turn platform sync into a data
+	// exfiltration surface. More source spaces require an explicit policy.
+	if connector.SourceSpace != DataSpaceIDCOriginal {
+		return fmt.Errorf("IDC sync connector source must be the governed IDC original space")
+	}
+	if err := validateDatasetRelativePath("IDC sync source path", connector.SourceRelativePath); err != nil {
+		return err
+	}
+	if _, err := NormalizeDatasetInternalPrefix(connector.MirrorPrefix); err != nil {
+		return fmt.Errorf("IDC sync mirror prefix: %w", err)
+	}
+	if err := validateDatasetIdentifier("IDC sync connector creator", connector.CreatedBy); err != nil {
+		return err
+	}
+	return nil
+}
+
+type IDCDataSyncRunMode string
+
+const (
+	IDCDataSyncRunModePlan IDCDataSyncRunMode = "PLAN"
+	IDCDataSyncRunModeSync IDCDataSyncRunMode = "SYNC"
+)
+
+type IDCDataSyncRunState string
+
+const (
+	IDCDataSyncRunPending   IDCDataSyncRunState = "PENDING"
+	IDCDataSyncRunPlanning  IDCDataSyncRunState = "PLANNING"
+	IDCDataSyncRunRunning   IDCDataSyncRunState = "RUNNING"
+	IDCDataSyncRunSucceeded IDCDataSyncRunState = "SUCCEEDED"
+	IDCDataSyncRunFailed    IDCDataSyncRunState = "FAILED"
+	IDCDataSyncRunCancelled IDCDataSyncRunState = "CANCELLED"
+)
+
+type IDCDataSyncRun struct {
+	ID                 string              `json:"id"`
+	ConnectorID        string              `json:"connectorId"`
+	Mode               IDCDataSyncRunMode  `json:"mode"`
+	State              IDCDataSyncRunState `json:"state"`
+	RequestedBy        string              `json:"requestedBy"`
+	InventorySHA256    string              `json:"inventorySha256,omitempty"`
+	SourceObjectCount  int64               `json:"sourceObjectCount"`
+	SourceBytes        int64               `json:"sourceBytes"`
+	NewObjectCount     int64               `json:"newObjectCount"`
+	ChangedObjectCount int64               `json:"changedObjectCount"`
+	ReusedObjectCount  int64               `json:"reusedObjectCount"`
+	FailureReason      string              `json:"failureReason,omitempty"`
+	CreatedAt          time.Time           `json:"createdAt"`
+	StartedAt          *time.Time          `json:"startedAt,omitempty"`
+	FinishedAt         *time.Time          `json:"finishedAt,omitempty"`
+}
+
+func (run IDCDataSyncRun) Validate() error {
+	if err := validateDatasetIdentifier("IDC sync run ID", run.ID); err != nil {
+		return err
+	}
+	if err := validateDatasetIdentifier("IDC sync connector ID", run.ConnectorID); err != nil {
+		return err
+	}
+	if run.Mode != IDCDataSyncRunModePlan && run.Mode != IDCDataSyncRunModeSync {
+		return fmt.Errorf("unsupported IDC sync run mode %q", run.Mode)
+	}
+	switch run.State {
+	case IDCDataSyncRunPending, IDCDataSyncRunPlanning, IDCDataSyncRunRunning, IDCDataSyncRunSucceeded, IDCDataSyncRunFailed, IDCDataSyncRunCancelled:
+	default:
+		return fmt.Errorf("unsupported IDC sync run state %q", run.State)
+	}
+	if err := validateDatasetIdentifier("IDC sync requester", run.RequestedBy); err != nil {
+		return err
+	}
+	for name, value := range map[string]int64{
+		"source object count": run.SourceObjectCount, "source bytes": run.SourceBytes,
+		"new object count": run.NewObjectCount, "changed object count": run.ChangedObjectCount,
+		"reused object count": run.ReusedObjectCount,
+	} {
+		if value < 0 {
+			return fmt.Errorf("IDC sync %s must be nonnegative", name)
+		}
+	}
+	if run.InventorySHA256 != "" && !datasetDigestPattern.MatchString(run.InventorySHA256) {
+		return fmt.Errorf("IDC sync inventory SHA-256 must be 64 lowercase hexadecimal characters")
+	}
+	if run.State == IDCDataSyncRunSucceeded && run.InventorySHA256 == "" {
+		return fmt.Errorf("successful IDC sync requires an immutable inventory digest")
+	}
+	if (run.State == IDCDataSyncRunRunning || run.State == IDCDataSyncRunPlanning) && run.FinishedAt != nil {
+		return fmt.Errorf("active IDC sync run cannot have a finish time")
+	}
+	if (run.State == IDCDataSyncRunSucceeded || run.State == IDCDataSyncRunFailed || run.State == IDCDataSyncRunCancelled) && run.FinishedAt == nil {
+		return fmt.Errorf("terminal IDC sync run requires a finish time")
+	}
+	return nil
+}
+
+// IDCDataSyncInventoryEntry binds a source-path observation to the immutable
+// content-addressed raw object used by future dataset publication. The mutable
+// tosutil mirror is deliberately not a valid ObjectKey here.
+type IDCDataSyncInventoryEntry struct {
+	RunID        string    `json:"runId"`
+	RelativePath string    `json:"relativePath"`
+	SizeBytes    int64     `json:"sizeBytes"`
+	ModifiedAt   time.Time `json:"modifiedAt"`
+	SHA256       string    `json:"sha256"`
+	ObjectKey    string    `json:"-"`
+}
+
+func (entry IDCDataSyncInventoryEntry) Validate() error {
+	if err := validateDatasetIdentifier("IDC sync inventory run ID", entry.RunID); err != nil {
+		return err
+	}
+	if err := validateDatasetRelativePath("IDC sync inventory path", entry.RelativePath); err != nil {
+		return err
+	}
+	if entry.SizeBytes < 0 {
+		return fmt.Errorf("IDC sync inventory size must be nonnegative")
+	}
+	if entry.ModifiedAt.IsZero() || !datasetDigestPattern.MatchString(entry.SHA256) {
+		return fmt.Errorf("IDC sync inventory entry is missing immutable content metadata")
+	}
+	if !strings.Contains(entry.ObjectKey, "/idc-raw/sha256/") || !strings.HasSuffix(entry.ObjectKey, "/"+entry.SHA256) {
+		return fmt.Errorf("IDC sync inventory object key must be content addressed")
+	}
+	return nil
+}

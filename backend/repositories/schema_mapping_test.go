@@ -31,6 +31,7 @@ func TestModelColumnsExistInMigrations(t *testing.T) {
 		&DatasetRecord{}, &DatasetVersionRecord{}, &DatasetPartitionRecord{},
 		&DatasetPublicationPartitionAttemptRecord{},
 		&DatasetPublicationRunRecord{}, &DatasetVersionShardRecord{}, &DatasetCacheObservationRecord{},
+		&IDCDataSyncConnectorRecord{}, &IDCDataSyncRunRecord{}, &IDCDataSyncInventoryEntryRecord{},
 	}
 
 	namer := schema.NamingStrategy{}
@@ -97,7 +98,7 @@ func TestJobRecordDatasetProvenanceUsesExplicitNullableColumns(t *testing.T) {
 
 var (
 	createTablePattern = regexp.MustCompile(`(?is)CREATE TABLE (?:IF NOT EXISTS )?([a-z_]+)\s*\((.*?)\n\);`)
-	addColumnPattern   = regexp.MustCompile(`(?is)ALTER TABLE\s+([a-z_]+)\s+ADD COLUMN (?:IF NOT EXISTS )?([a-z_]+)`)
+	addColumnPattern   = regexp.MustCompile(`(?is)ALTER TABLE\s+([a-z_]+)\s+ADD COLUMN (?:IF NOT EXISTS )?([a-z0-9_]+)`)
 )
 
 // loadMigrationTables builds table -> column set from the migration SQL. It is

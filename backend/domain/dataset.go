@@ -108,6 +108,11 @@ type DatasetVersion struct {
 	SourceObjectCount int64               `json:"sourceObjectCount"`
 	LogicalBytes      int64               `json:"logicalBytes"`
 	PackedBytes       int64               `json:"packedBytes"`
+	// SourceSyncRunID and SourceInventorySHA256 identify the immutable raw
+	// input snapshot from which this version was published. Legacy versions
+	// predate IDC sync and deliberately keep both fields empty.
+	SourceSyncRunID       string `json:"sourceSyncRunId,omitempty"`
+	SourceInventorySHA256 string `json:"sourceInventorySha256,omitempty"`
 }
 
 func (version DatasetVersion) Validate() error {
@@ -154,6 +159,17 @@ func (version DatasetVersion) Validate() error {
 	if version.State == DatasetVersionReady || version.State == DatasetVersionDeprecated || version.State == DatasetVersionRetired {
 		if version.ManifestSHA256 == "" || version.ManifestObjectKey == "" {
 			return fmt.Errorf("ready dataset version requires a manifest")
+		}
+	}
+	if (version.SourceSyncRunID == "") != (version.SourceInventorySHA256 == "") {
+		return fmt.Errorf("dataset version source sync provenance must be empty or complete")
+	}
+	if version.SourceSyncRunID != "" {
+		if err := validateDatasetIdentifier("source sync run ID", version.SourceSyncRunID); err != nil {
+			return err
+		}
+		if !datasetDigestPattern.MatchString(version.SourceInventorySHA256) {
+			return fmt.Errorf("source inventory SHA-256 must be 64 lowercase hexadecimal characters")
 		}
 	}
 	return nil

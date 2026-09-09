@@ -159,12 +159,14 @@ func (ref DatasetReference) Validate() error {
 }
 
 type DatasetProvenance struct {
-	Sites            DatasetSites       `json:"sites,omitempty"`
-	DatasetID        string             `json:"datasetId"`
-	DatasetVersionID string             `json:"datasetVersionId"`
-	ManifestSHA256   string             `json:"manifestSha256"`
-	DataMode         DataMode           `json:"dataMode"`
-	CachePolicy      DatasetCachePolicy `json:"cachePolicy"`
+	Sites                 DatasetSites       `json:"sites,omitempty"`
+	DatasetID             string             `json:"datasetId"`
+	DatasetVersionID      string             `json:"datasetVersionId"`
+	ManifestSHA256        string             `json:"manifestSha256"`
+	DataMode              DataMode           `json:"dataMode"`
+	CachePolicy           DatasetCachePolicy `json:"cachePolicy"`
+	SourceSyncRunID       string             `json:"sourceSyncRunId,omitempty"`
+	SourceInventorySHA256 string             `json:"sourceInventorySha256,omitempty"`
 }
 
 func (provenance DatasetProvenance) IsZero() bool {
@@ -172,7 +174,9 @@ func (provenance DatasetProvenance) IsZero() bool {
 		strings.TrimSpace(provenance.DatasetVersionID) == "" &&
 		strings.TrimSpace(provenance.ManifestSHA256) == "" &&
 		strings.TrimSpace(string(provenance.DataMode)) == "" &&
-		strings.TrimSpace(string(provenance.CachePolicy)) == ""
+		strings.TrimSpace(string(provenance.CachePolicy)) == "" &&
+		strings.TrimSpace(provenance.SourceSyncRunID) == "" &&
+		strings.TrimSpace(provenance.SourceInventorySHA256) == ""
 }
 
 func (provenance DatasetProvenance) Validate() error {
@@ -203,6 +207,17 @@ func (provenance DatasetProvenance) Validate() error {
 	}
 	if err := provenance.CachePolicy.Validate(); err != nil {
 		return err
+	}
+	if (strings.TrimSpace(provenance.SourceSyncRunID) == "") != (strings.TrimSpace(provenance.SourceInventorySHA256) == "") {
+		return fmt.Errorf("dataset source sync provenance must be empty or complete")
+	}
+	if provenance.SourceSyncRunID != "" {
+		if err := validateDatasetIdentifier("dataset source sync run ID", provenance.SourceSyncRunID); err != nil {
+			return err
+		}
+		if !datasetDigestPattern.MatchString(provenance.SourceInventorySHA256) {
+			return fmt.Errorf("dataset source inventory SHA-256 must be 64 lowercase hexadecimal characters")
+		}
 	}
 	return nil
 }
