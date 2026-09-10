@@ -16,11 +16,25 @@ type fakeOAuth2ProxyAccountResolver struct {
 	found bool
 	err   error
 	calls int
+	provisioned domain.LocalUser
+	provisionErr error
+	provisionCalls int
+	provisionUsername string
+	provisionEmail string
+	provisionTenant string
 }
 
 func (r *fakeOAuth2ProxyAccountResolver) ResolveOAuth2ProxyAccount(_ context.Context, _ string) (domain.LocalUser, bool, error) {
 	r.calls++
 	return r.user, r.found, r.err
+}
+
+func (r *fakeOAuth2ProxyAccountResolver) ProvisionOAuth2ProxyAccount(_ context.Context, username, email, tenantID string) (domain.LocalUser, error) {
+	r.provisionCalls++
+	r.provisionUsername = username
+	r.provisionEmail = email
+	r.provisionTenant = tenantID
+	return r.provisioned, r.provisionErr
 }
 
 func TestOAuth2ProxyMiddlewareRequiresVerifiedProxyAccessToken(t *testing.T) {
@@ -31,7 +45,7 @@ func TestOAuth2ProxyMiddlewareRequiresVerifiedProxyAccessToken(t *testing.T) {
 		{oauth2ProxyAccessTokenHeader: []string{"invalid-jwt"}},
 	} {
 		router := gin.New()
-		router.Use(OAuth2ProxyMiddleware(&fakeOIDCVerifier{err: errors.New("invalid token")}, &fakeOAuth2ProxyAccountResolver{}, nil, nil, true))
+		router.Use(OAuth2ProxyMiddleware(&fakeOIDCVerifier{err: errors.New("invalid token")}, &fakeOAuth2ProxyAccountResolver{}, nil, nil, true, OAuth2ProxyOptions{}))
 		router.GET("/", func(c *gin.Context) { c.Status(http.StatusNoContent) })
 		request := httptest.NewRequest(http.MethodGet, "/", nil)
 		request.Header = headers
@@ -55,7 +69,7 @@ func TestOAuth2ProxyMiddlewareBuildsInteractivePrincipalFromVerifiedToken(t *tes
 				TenantID: "local", Roles: []string{"TenantAdmin"},
 			}}
 			router := gin.New()
-			router.Use(OAuth2ProxyMiddleware(verifier, resolver, nil, nil, true))
+			router.Use(OAuth2ProxyMiddleware(verifier, resolver, nil, nil, true, OAuth2ProxyOptions{}))
 			router.GET("/", func(c *gin.Context) {
 				principal, ok := PrincipalFromGin(c)
 				if !ok || principal.AuthType != AuthTypeOAuth2Proxy || principal.Subject != "platform-user-1" ||
@@ -96,7 +110,7 @@ func TestOAuth2ProxyMiddlewareRejectsUnprovisionedOrDisabledAccounts(t *testing.
 			router := gin.New()
 			router.Use(OAuth2ProxyMiddleware(
 				&fakeOIDCVerifier{principal: Principal{Subject: "keycloak-subject-1", Username: "alice"}},
-				test.resolver, nil, nil, true,
+				test.resolver, nil, nil, true, OAuth2ProxyOptions{},
 			))
 			router.GET("/", func(c *gin.Context) { c.Status(http.StatusNoContent) })
 			request := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -117,8 +131,62 @@ func TestOAuth2ProxyMiddlewarePreservesLocalSessionDuringMigration(t *testing.T)
 		t.Fatalf("new local authenticator: %v", err)
 	}
 
-	response := serveMiddleware(t, OAuth2ProxyMiddleware(nil, nil, nil, authenticator, true), "Bearer "+issued.Token)
+	response := serveMiddleware(t, OAuth2ProxyMiddleware(nil, nil, nil, authenticator, true, OAuth2ProxyOptions{}), "Bearer "+issued.Token)
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("local migration session was not accepted: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestOAuth2ProxyMiddlewareJITProvisionsUnknownAccountAsConfiguredDefaultMember(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resolver := &fakeOAuth2ProxyAccountResolver{provisioned: domain.LocalUser{
+		ID: "oauth2-a1", Username: "alice", Email: "alice@example.com", TenantID: "local",
+		Roles: []string{domain.RoleEngineer}, IdentityProvider: domain.IdentityProviderOAuth2Proxy,
+	}}
+	router := gin.New()
+	router.Use(OAuth2ProxyMiddleware(
+		&fakeOIDCVerifier{principal: Principal{Subject: "keycloak-a1", Username: " Alice ", Email: "alice@example.com"}},
+		resolver, nil, nil, true,
+		OAuth2ProxyOptions{AutoProvision: true, DefaultTenantID: "local"},
+	))
+	router.GET("/", func(c *gin.Context) {
+		principal, ok := PrincipalFromGin(c)
+		if !ok || principal.Subject != "oauth2-a1" || principal.TenantID != "local" || !principal.HasRole(domain.RoleEngineer) {
+			c.Status(http.StatusInternalServerError)
+			return
+		}
+		c.Status(http.StatusNoContent)
+	})
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Set(oauth2ProxyAccessTokenHeader, "signed-jwt")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if resolver.provisionCalls != 1 || resolver.provisionUsername != "Alice" || resolver.provisionEmail != "alice@example.com" || resolver.provisionTenant != "local" {
+		t.Fatalf("unexpected provision request: %#v", resolver)
+	}
+}
+
+func TestOAuth2ProxyMiddlewareNeverReprovisionsExistingDisabledAccount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resolver := &fakeOAuth2ProxyAccountResolver{found: true, user: domain.LocalUser{
+		ID: "disabled-a1", Username: "alice", TenantID: "local", Roles: []string{domain.RoleEngineer}, Disabled: true,
+	}}
+	router := gin.New()
+	router.Use(OAuth2ProxyMiddleware(
+		&fakeOIDCVerifier{principal: Principal{Username: "alice"}}, resolver, nil, nil, true,
+		OAuth2ProxyOptions{AutoProvision: true, DefaultTenantID: "local"},
+	))
+	router.GET("/", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Set(oauth2ProxyAccessTokenHeader, "signed-jwt")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden || resolver.provisionCalls != 0 {
+		t.Fatalf("disabled account was reprovisioned: status=%d calls=%d", response.Code, resolver.provisionCalls)
 	}
 }

@@ -107,13 +107,26 @@ func TestLoadAcceptsOAuth2ProxyAuthenticationInProduction(t *testing.T) {
 	t.Setenv("OIDC_REQUIRED", "false")
 	t.Setenv("OAUTH2_PROXY_AUTH_ENABLED", "true")
 	t.Setenv("LOCAL_AUTH_ENABLED", "false")
+	t.Setenv("OAUTH2_PROXY_AUTO_PROVISION_ENABLED", "true")
+	t.Setenv("OAUTH2_PROXY_DEFAULT_TENANT", "local")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("expected oauth2-proxy production configuration: %v", err)
 	}
-	if cfg.OIDCRequired || !cfg.OAuth2ProxyAuthEnabled || cfg.LocalAuthEnabled {
+	if cfg.OIDCRequired || !cfg.OAuth2ProxyAuthEnabled || cfg.LocalAuthEnabled || !cfg.OAuth2ProxyAutoProvisionEnabled || cfg.OAuth2ProxyDefaultTenant != "local" {
 		t.Fatalf("unexpected authentication configuration: %#v", cfg)
+	}
+}
+
+func TestLoadRejectsOAuth2ProxyJITWithoutDefaultTenant(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("OAUTH2_PROXY_AUTH_ENABLED", "true")
+	t.Setenv("OAUTH2_PROXY_AUTO_PROVISION_ENABLED", "true")
+	t.Setenv("OAUTH2_PROXY_DEFAULT_TENANT", "")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "OAUTH2_PROXY_DEFAULT_TENANT") {
+		t.Fatalf("expected missing default tenant error, got %v", err)
 	}
 }
 
