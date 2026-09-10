@@ -73,6 +73,8 @@ if is_global_rank_zero():
 
 异常路径应调用 `mlflow.end_run(status="FAILED")`，或让进程以非零退出码结束后由平台终态协调器关闭已经带有可信归属标签的 Run。不要吞掉训练异常，也不要让每个 rank 分别调用 `start_run()`。
 
+MMCV 1.x 的 `MlflowLoggerHook` 会把训练指标写成 `train/loss`、`train/stats/...`，而学习率通常写成 `learning_rate`。平台任务详情与通用 Loss 曲线会识别 `loss` 和 `train/loss`，但不会把 `val/loss` 冒充训练 Loss；验证指标继续使用 `val/...`。使用 MMCV Hook 时先在 global rank 0 创建带上述平台标签的 active Run，再把 `MlflowLoggerHook` 加入 `log_config.hooks`，并设置 `log_model=False`：训练 Pod 当前不能向 MLflow Artifact 仓上传模型。
+
 ### Ray Train 代码
 
 Ray Train 不会替用户训练循环记录业务 loss。将 `mlflow.log_metrics()` 放在 `train_loop_per_worker` 内，并通过 `ray.train.get_context().get_world_rank() == 0` 限制写入；同时继续使用 `ray.train.report()` 上报 Ray Train 的 checkpoint / 恢复状态。两者职责不同，缺一不可。
@@ -119,6 +121,7 @@ MLflow Trace 需要代码或 OpenTelemetry 显式埋点，例如 `@mlflow.trace`
 | --- | --- | --- |
 | 实验中心没有 Run | 代码未调用 `start_run()`，或 Run 缺少可信平台标签 | 按第 2 节接入，只在 rank 0 创建 Run |
 | 有 Run 但没有曲线 | 未调用 `log_metric(s)`，没有 `step`，或记录发生在非 rank 0 | 在主训练循环写带 step 的标量 |
+| MLflow 详情有 `train/loss`，通用 Loss 卡片仍为空 | 页面或后端版本过旧，未兼容框架前缀 | 刷新页面；仍为空时把任务 ID、Run ID 和指标键交给管理员，不要改成解析 stdout |
 | Artifacts 为空 | 任务侧不允许 Artifact 上传 | 结果写入 `PLATFORM_OUTPUT_PATH`；小附件从原生界面明确上传 |
 | Models 为空 | 没有显式记录 / 登记 MLflow Model | 先完成合规 Artifact 发布，再显式 Register |
 | Traces 为空 | 没有 Trace 埋点，且平台未开放 Trace 网关 | 对推理/Agent 提交 Trace 接入申请 |

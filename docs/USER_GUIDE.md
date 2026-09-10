@@ -222,7 +222,11 @@ Dashboard 用于查看运行中的 Ray node、task、actor、object store 和资
 
 在“实验中心”每条记录的“训练任务”可返回平台任务详情；任务详情的 **Loss 收敛曲线与指标 → MLflow 详情** 会直接显示实验名、Run 名称、Run ID、状态、开始/结束时间和训练参数，并可在新标签页打开该 Run。该按钮只对当前用户有权看到、且由平台来源校验通过的 Run 生效；跳转使用一次性平台票据，不暴露集群内 MLflow 地址。
 
+MMCV 等框架可能把训练 Loss 记录为 `train/loss`，普通示例也可能使用 `loss`。平台会把这两个键统一显示为 Training Loss；`val/loss` 仍作为验证指标保留，不会覆盖训练曲线。若“MLflow 详情”已经显示 Run 与 `train/loss`，但通用 Loss 卡片仍为空，先刷新页面；持续出现时记录任务 ID、Run ID 和实际指标键交给管理员。
+
 实验中心中的按钮 **打开 MLflow 管理界面** 会在新标签页打开同域 `https://raytrain.wellspiking.ai/mlflow/`。原生 MLflow 是登录后可访问的完整管理界面，展示全平台实验。所有平台认证用户都可以创建、修改、删除实验、Run 和模型注册条目，并可上传、下载 MLflow Artifact。原生 MLflow 全功能开放是当前明确策略；这些操作直接改变共享 MLflow 数据，删除或修改前应确认目标对象。
+
+MLflow、JupyterLab 与 VS Code 都要求浏览器已有 Portal/OAuth2 Proxy 登录会话；PAT 只供 `spk-rayjob`、Ray CLI 和 API 使用，不能兑换浏览器工具票据。Portal 页面发起 API 请求仍走 `/raytrain/api/...`，但新标签页会打开稳定的 `raytrain.wellspiking.ai` 根路径，以保持 Cookie、静态资源和 WebSocket 路径正确。
 
 Ray Dashboard 与两种 MLflow 视图的生命周期不同：Ray Dashboard 随任务 RayCluster 回收；实验中心和原生 MLflow 的运行记录长期保留。
 

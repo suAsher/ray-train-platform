@@ -40,13 +40,13 @@ func mergeMLflowMetricFallback(metrics observability.JobMetrics, experiment obse
 
 func canonicalMLflowCurveName(key string) (string, bool) {
 	switch strings.ToLower(strings.TrimSpace(key)) {
-	case "loss":
+	case "loss", "train/loss":
 		return "loss", true
-	case "throughput", "samples_per_second":
+	case "throughput", "samples_per_second", "train/throughput", "train/samples_per_second":
 		return "throughput", true
-	case "learning_rate", "lr":
+	case "learning_rate", "lr", "train/learning_rate", "train/lr":
 		return "learningRate", true
-	case "epoch":
+	case "epoch", "train/epoch":
 		return "epoch", true
 	default:
 		return "", false

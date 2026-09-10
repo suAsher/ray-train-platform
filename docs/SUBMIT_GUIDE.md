@@ -203,6 +203,8 @@ spk-rayjob submit \
 
 `--workers 2` 表示两个 Ray Train Worker，不自动等于两台物理机器。TAS 切换前平台会优先把 Worker 分散到不同 hostname，但资源碎片时允许同机启动，避免任务已获 Kueue 配额却永远卡在 Pod Pending；要声称多机验证通过，必须在任务详情的 Worker 拓扑里看到两个不同节点名。TAS 完整启用后由 Kueue 在准入阶段保留跨主机资源，平台才会使用硬跨主机约束。
 
+管理员切换 TAS 时必须把 Kueue `Topology`、新的 `ResourceFlavor.spec.topologyName` 和平台开关作为同一批变更上线。只让任务请求 `kubernetes.io/hostname`、但仍使用没有 `topologyName` 的旧 Flavor，会让任务长期 `Suspended`；只改 Pod spread 又会造成“已准入但 Worker 永久 Pending”。当前安全回退会使用 `ScheduleAnyway`，普通用户只需保留任务 ID 并运行 `spk-rayjob status JOB_ID`，不需要自行检查或修改 Kueue。
+
 ```bash
 spk-rayjob submit \
   --engine ray-ddp \

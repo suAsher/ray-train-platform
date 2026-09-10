@@ -88,6 +88,26 @@ func TestMLflowFallbackNeverReplacesPrometheusCurve(t *testing.T) {
 	}
 }
 
+func TestCanonicalMLflowCurveNameSupportsFrameworkPrefixes(t *testing.T) {
+	tests := map[string]string{
+		"train/loss":               "loss",
+		"train/learning_rate":      "learningRate",
+		"train/lr":                 "learningRate",
+		"train/throughput":         "throughput",
+		"train/samples_per_second": "throughput",
+		"train/epoch":              "epoch",
+	}
+	for key, want := range tests {
+		got, ok := canonicalMLflowCurveName(key)
+		if !ok || got != want {
+			t.Errorf("canonicalMLflowCurveName(%q) = %q, %v; want %q, true", key, got, ok, want)
+		}
+	}
+	if got, ok := canonicalMLflowCurveName("val/loss"); ok {
+		t.Fatalf("validation loss must not replace the training loss curve: %q", got)
+	}
+}
+
 func TestGetJobMetricsDoesNotQueryMLflowWhenPrometheusIsComplete(t *testing.T) {
 	loss, throughput, learningRate, epoch := 1.0, 2.0, 0.01, 3.0
 	provider := &metricsFallbackExperimentProvider{}
