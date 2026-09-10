@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -40,5 +41,31 @@ func TestRunConnectRejectsNegativeWorkerOrdinal(t *testing.T) {
 	err := RunWithInput(context.Background(), []string{"connect", "--worker", "-1", "job-a"}, strings.NewReader(""), io.Discard, io.Discard, func(string) string { return "" })
 	if err == nil || !strings.Contains(err.Error(), "worker") {
 		t.Fatalf("expected worker validation error, got %v", err)
+	}
+}
+
+func TestRunConnectAcceptsDocumentedFlagsAfterJobID(t *testing.T) {
+	err := RunWithInput(
+		context.Background(),
+		[]string{"connect", "job-a", "--worker", "2", "--config", filepath.Join(t.TempDir(), "missing.json")},
+		strings.NewReader(""), io.Discard, io.Discard, func(string) string { return "" },
+	)
+	if err == nil {
+		t.Fatal("expected the missing config to stop the command")
+	}
+	if strings.Contains(err.Error(), "connect requires") {
+		t.Fatalf("documented job-first syntax was rejected before connection setup: %v", err)
+	}
+}
+
+func TestRunConnectHelpExplainsWorkerSelection(t *testing.T) {
+	var stdout bytes.Buffer
+	if err := RunWithInput(context.Background(), []string{"connect", "--help"}, strings.NewReader(""), &stdout, io.Discard, func(string) string { return "" }); err != nil {
+		t.Fatalf("connect help: %v", err)
+	}
+	for _, expected := range []string{"spk-rayjob connect JOB_ID", "--worker"} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Fatalf("help missing %q: %s", expected, stdout.String())
+		}
 	}
 }
