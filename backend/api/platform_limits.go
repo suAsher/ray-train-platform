@@ -13,15 +13,15 @@ import (
 // render their pickers from. Before it existed the Portal hard-coded a fleet
 // size, so a user could compose a job the server was always going to reject.
 type platformLimitsResponse struct {
-	MaxWorkerReplicas int                          `json:"maxWorkerReplicas"`
-	MaxGPUsPerWorker  int                          `json:"maxGpusPerWorker"`
-	MaxTotalGPUs      int                          `json:"maxTotalGpus"`
-	TenantQuota       *tenantQuotaDescriptor       `json:"tenantQuota,omitempty"`
-	MountPaths        governedMountPaths           `json:"mountPaths"`
-	ExecutionProfiles []executionProfileDescriptor `json:"executionProfiles"`
-	Cache             cachePolicyDescriptor        `json:"cache"`
-	Runtime           runtimeCapabilityDescriptor  `json:"runtime"`
-	Datasets          datasetCapabilityDescriptor  `json:"datasets"`
+	MaxWorkerReplicas int                            `json:"maxWorkerReplicas"`
+	MaxGPUsPerWorker  int                            `json:"maxGpusPerWorker"`
+	MaxTotalGPUs      int                            `json:"maxTotalGpus"`
+	TenantQuota       *tenantQuotaDescriptor         `json:"tenantQuota,omitempty"`
+	MountPaths        governedMountPaths             `json:"mountPaths"`
+	ExecutionProfiles []executionProfileDescriptor   `json:"executionProfiles"`
+	Cache             cachePolicyDescriptor          `json:"cache"`
+	Runtime           runtimeCapabilityDescriptor    `json:"runtime"`
+	Datasets          datasetCapabilityDescriptor    `json:"datasets"`
 	Scheduling        schedulingCapabilityDescriptor `json:"scheduling"`
 }
 
@@ -141,9 +141,6 @@ func schedulingCapabilityDescriptorFor() schedulingCapabilityDescriptor {
 	return schedulingCapabilityDescriptor{
 		AcceleratorClasses: []string{
 			string(domain.AcceleratorRTX4090),
-			string(domain.AcceleratorA100),
-			string(domain.AcceleratorA800),
-			string(domain.AcceleratorH20),
 		},
 		DefaultAcceleratorClass: string(domain.AcceleratorRTX4090),
 		Priorities: []string{

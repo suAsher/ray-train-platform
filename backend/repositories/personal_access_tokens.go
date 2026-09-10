@@ -86,6 +86,13 @@ func (r *GormRepository) FindPATByPublicID(ctx context.Context, publicID string)
 		}
 		return auth.PATRecord{}, fmt.Errorf("find personal access token tenant: %w", err)
 	}
+	// A backend can briefly serve against the pre-membership schema while the
+	// rollout migration is still being applied. Preserve PAT authentication in
+	// that window by using the legacy tenant-scoped owner record instead of
+	// turning a missing table into a server error.
+	if !r.db.Migrator().HasTable(&LocalUserRecord{}) {
+		return r.findLegacyPATOwner(ctx, token)
+	}
 	var account LocalUserRecord
 	if err := r.db.WithContext(ctx).Where("id = ? AND disabled = FALSE AND decommissioned_at IS NULL", token.UserID).First(&account).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {

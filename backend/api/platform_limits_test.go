@@ -90,7 +90,7 @@ func TestPlatformLimitsReportTheDeploymentCeilingsTheServerEnforces(t *testing.T
 	if limits.MaxWorkerReplicas != 2 || limits.MaxGPUsPerWorker != 8 || limits.MaxTotalGPUs != 16 {
 		t.Fatalf("expected the configured ceilings, got %+v", limits)
 	}
-	if strings.Join(limits.Scheduling.AcceleratorClasses, ",") != "rtx4090,a100,a800,h20" {
+	if strings.Join(limits.Scheduling.AcceleratorClasses, ",") != "rtx4090" {
 		t.Fatalf("unexpected accelerator classes: %+v", limits.Scheduling)
 	}
 	if limits.Scheduling.DefaultAcceleratorClass != "rtx4090" || limits.Scheduling.DefaultPriority != "normal" {

@@ -74,7 +74,7 @@ func (r *GormRepository) ListTenantMemberships(ctx context.Context, identityID s
 		items = append(items, domain.TenantMembership{
 			IdentityID: record.IdentityID, TenantID: record.TenantID, TenantName: tenant.Name,
 			Roles: roles, Status: domain.MembershipStatus(record.Status),
-			Active: account.activeTenantID() == record.TenantID,
+			Active:    account.activeTenantID() == record.TenantID,
 			CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt,
 		})
 	}
@@ -100,7 +100,7 @@ func (r *GormRepository) PutTenantMembership(ctx context.Context, membership dom
 			RolesJSON: roles, Status: string(membership.Status), CreatedAt: now, UpdatedAt: now,
 		}
 		return tx.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "identity_id"}, {Name: "tenant_id"}},
+			Columns:   []clause.Column{{Name: "identity_id"}, {Name: "tenant_id"}},
 			DoUpdates: clause.Assignments(map[string]any{"roles": roles, "status": membership.Status, "updated_at": now}),
 		}).Create(&record).Error
 	})

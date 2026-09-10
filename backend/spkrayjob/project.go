@@ -101,52 +101,52 @@ type projectRayData struct {
 }
 
 type project struct {
-	Name            string                    `json:"name,omitempty"`
-	Image           string                    `json:"image,omitempty"`
-	Entrypoint      string                    `json:"entrypoint,omitempty"`
-	Engine          string                    `json:"engine,omitempty"`
-	DataMode        string                    `json:"dataMode,omitempty"`
-	AcceleratorClass domain.AcceleratorClass  `json:"acceleratorClass,omitempty"`
-	Priority        string                    `json:"priority,omitempty"`
-	Preemptible     bool                      `json:"preemptible,omitempty"`
-	DatasetRef      domain.DatasetReference   `json:"datasetRef,omitempty"`
-	CachePolicy     domain.DatasetCachePolicy `json:"cachePolicy,omitempty"`
-	Workers         int                       `json:"workers,omitempty"`
-	GPUsPerWorker   int                       `json:"gpusPerWorker,omitempty"`
-	CPUPerWorker    int64                     `json:"cpuPerWorker,omitempty"`
-	MemoryPerWorker string                    `json:"memoryPerWorker,omitempty"`
-	ExecutionMode   string                    `json:"executionMode,omitempty"`
-	Cache           projectCache              `json:"cache,omitempty"`
-	RayData         projectRayData            `json:"rayData,omitempty"`
-	Input           projectLocation           `json:"input,omitempty"`
-	Checkpoint      projectLocation           `json:"checkpoint,omitempty"`
-	Output          projectLocation           `json:"output,omitempty"`
+	Name             string                    `json:"name,omitempty"`
+	Image            string                    `json:"image,omitempty"`
+	Entrypoint       string                    `json:"entrypoint,omitempty"`
+	Engine           string                    `json:"engine,omitempty"`
+	DataMode         string                    `json:"dataMode,omitempty"`
+	AcceleratorClass domain.AcceleratorClass   `json:"acceleratorClass,omitempty"`
+	Priority         string                    `json:"priority,omitempty"`
+	Preemptible      bool                      `json:"preemptible,omitempty"`
+	DatasetRef       domain.DatasetReference   `json:"datasetRef,omitempty"`
+	CachePolicy      domain.DatasetCachePolicy `json:"cachePolicy,omitempty"`
+	Workers          int                       `json:"workers,omitempty"`
+	GPUsPerWorker    int                       `json:"gpusPerWorker,omitempty"`
+	CPUPerWorker     int64                     `json:"cpuPerWorker,omitempty"`
+	MemoryPerWorker  string                    `json:"memoryPerWorker,omitempty"`
+	ExecutionMode    string                    `json:"executionMode,omitempty"`
+	Cache            projectCache              `json:"cache,omitempty"`
+	RayData          projectRayData            `json:"rayData,omitempty"`
+	Input            projectLocation           `json:"input,omitempty"`
+	Checkpoint       projectLocation           `json:"checkpoint,omitempty"`
+	Output           projectLocation           `json:"output,omitempty"`
 }
 
 // submitOverrides carries the flags a caller actually typed. The provided*
 // fields exist because zero is a meaningful value for a flag that was never
 // set, and a project default must survive it.
 type submitOverrides struct {
-	Name            string
-	Image           string
-	Entrypoint      string
-	Engine          string
-	DataMode        string
+	Name             string
+	Image            string
+	Entrypoint       string
+	Engine           string
+	DataMode         string
 	AcceleratorClass domain.AcceleratorClass
-	Priority        string
-	Preemptible     bool
-	DatasetRef      domain.DatasetReference
-	CachePolicy     domain.DatasetCachePolicy
-	Workers         int
-	GPUsPerWorker   int
-	CPUPerWorker    int64
-	MemoryPerWorker string
-	ExecutionMode   string
-	Cache           projectCache
-	RayData         projectRayData
-	Input           projectLocation
-	Checkpoint      projectLocation
-	Output          projectLocation
+	Priority         string
+	Preemptible      bool
+	DatasetRef       domain.DatasetReference
+	CachePolicy      domain.DatasetCachePolicy
+	Workers          int
+	GPUsPerWorker    int
+	CPUPerWorker     int64
+	MemoryPerWorker  string
+	ExecutionMode    string
+	Cache            projectCache
+	RayData          projectRayData
+	Input            projectLocation
+	Checkpoint       projectLocation
+	Output           projectLocation
 
 	providedName           bool
 	providedImage          bool
@@ -312,26 +312,26 @@ func yamlMappingValue(mapping *yamlv3.Node, key string) *yamlv3.Node {
 // pointers so an unset one is omitted entirely: a starter file that greets the
 // user with `input: {}` reads like a broken template rather than a default.
 type starterProject struct {
-	Name            string                    `json:"name,omitempty"`
-	Image           string                    `json:"image,omitempty"`
-	Entrypoint      string                    `json:"entrypoint,omitempty"`
-	Engine          string                    `json:"engine,omitempty"`
-	DataMode        string                    `json:"dataMode,omitempty"`
-	AcceleratorClass domain.AcceleratorClass  `json:"acceleratorClass,omitempty"`
-	Priority        string                    `json:"priority,omitempty"`
-	Preemptible     bool                      `json:"preemptible,omitempty"`
-	DatasetRef      *domain.DatasetReference  `json:"datasetRef,omitempty"`
-	CachePolicy     domain.DatasetCachePolicy `json:"cachePolicy,omitempty"`
-	Workers         int                       `json:"workers,omitempty"`
-	GPUsPerWorker   int                       `json:"gpusPerWorker,omitempty"`
-	CPUPerWorker    int64                     `json:"cpuPerWorker,omitempty"`
-	MemoryPerWorker string                    `json:"memoryPerWorker,omitempty"`
-	ExecutionMode   string                    `json:"executionMode,omitempty"`
-	Cache           *projectCache             `json:"cache,omitempty"`
-	RayData         *projectRayData           `json:"rayData,omitempty"`
-	Input           *projectLocation          `json:"input,omitempty"`
-	Checkpoint      *projectLocation          `json:"checkpoint,omitempty"`
-	Output          *projectLocation          `json:"output,omitempty"`
+	Name             string                    `json:"name,omitempty"`
+	Image            string                    `json:"image,omitempty"`
+	Entrypoint       string                    `json:"entrypoint,omitempty"`
+	Engine           string                    `json:"engine,omitempty"`
+	DataMode         string                    `json:"dataMode,omitempty"`
+	AcceleratorClass domain.AcceleratorClass   `json:"acceleratorClass,omitempty"`
+	Priority         string                    `json:"priority,omitempty"`
+	Preemptible      bool                      `json:"preemptible,omitempty"`
+	DatasetRef       *domain.DatasetReference  `json:"datasetRef,omitempty"`
+	CachePolicy      domain.DatasetCachePolicy `json:"cachePolicy,omitempty"`
+	Workers          int                       `json:"workers,omitempty"`
+	GPUsPerWorker    int                       `json:"gpusPerWorker,omitempty"`
+	CPUPerWorker     int64                     `json:"cpuPerWorker,omitempty"`
+	MemoryPerWorker  string                    `json:"memoryPerWorker,omitempty"`
+	ExecutionMode    string                    `json:"executionMode,omitempty"`
+	Cache            *projectCache             `json:"cache,omitempty"`
+	RayData          *projectRayData            `json:"rayData,omitempty"`
+	Input            *projectLocation          `json:"input,omitempty"`
+	Checkpoint       *projectLocation          `json:"checkpoint,omitempty"`
+	Output           *projectLocation          `json:"output,omitempty"`
 }
 
 func newStarterProject(value project) starterProject {
