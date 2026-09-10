@@ -343,8 +343,14 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	interactive := v1.Group("")
 	interactive.Use(auth.RequireInteractiveSession(cfg.DemoMode))
 	jobs.RegisterMLflowDashboardAccessRoute(interactive)
-	if locals != nil && cfg.LocalAuthEnabled {
-		locals.RegisterAuthenticatedRoutes(interactive)
+	if locals != nil {
+		if cfg.LocalAuthEnabled {
+			locals.RegisterAuthenticatedRoutes(interactive)
+		}
+		// Membership, tenant, role and storage governance remain platform
+		// responsibilities when browser authentication moves to OAuth2 Proxy.
+		// The create handler independently rejects password-account creation
+		// while local auth is disabled.
 		locals.RegisterUserAdminRoutes(interactive)
 	}
 	oidcOnly := interactive
