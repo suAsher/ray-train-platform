@@ -16,6 +16,7 @@ type managerRepository struct {
 	previous      domain.IDCDataSyncRun
 	previousFound bool
 	failed        []string
+	updated       []domain.IDCDataSyncConnector
 }
 
 func (r *managerRepository) CreateIDCDataSyncConnector(context.Context, domain.IDCDataSyncConnector) error {
@@ -46,6 +47,10 @@ func (r *managerRepository) LatestSuccessfulIDCDataSyncRun(context.Context, stri
 func (r *managerRepository) FailIDCDataSyncRun(_ context.Context, id, reason string, _ time.Time) (domain.IDCDataSyncRun, error) {
 	r.failed = append(r.failed, id+":"+reason)
 	return domain.IDCDataSyncRun{ID: id, State: domain.IDCDataSyncRunFailed}, nil
+}
+func (r *managerRepository) UpdateIDCDataSyncConnector(_ context.Context, connector domain.IDCDataSyncConnector) (domain.IDCDataSyncConnector, error) {
+	r.updated = append(r.updated, connector)
+	return connector, nil
 }
 
 type managerJobs struct {
@@ -131,5 +136,22 @@ func TestReconcileConvergesFailedAndReceiptlessSucceededJobs(t *testing.T) {
 				t.Fatalf("run did not converge: %v", repository.failed)
 			}
 		})
+	}
+}
+
+func TestReconcileStartsDueScheduledConnector(t *testing.T) {
+	now := time.Now().UTC()
+	repository := &managerRepository{connectors: []domain.IDCDataSyncConnector{{
+		ID: "labeled", Name: "labeled", SourceSpace: domain.DataSpaceIDCOriginal,
+		SourceRelativePath: "QP_NuScene/labeled", MirrorPrefix: "ray-train/platform/idc-mirror/labeled",
+		Enabled: true, SyncIntervalMinutes: 30, CreatedBy: "admin",
+	}}}
+	jobs := &managerJobs{}
+	manager := managerForTest(t, repository, jobs, now)
+	if err := manager.reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(repository.runs) != 1 || repository.runs[0].RequestedBy != ScheduledRequester {
+		t.Fatalf("scheduled run was not created: %#v", repository.runs)
 	}
 }

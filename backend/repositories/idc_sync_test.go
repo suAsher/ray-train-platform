@@ -93,3 +93,27 @@ func TestIDCDataSyncRepositoryReturnsPreviousInventoryAndConvergesFailure(t *tes
 		t.Fatalf("failed=%+v err=%v", failed, err)
 	}
 }
+
+func TestIDCDataSyncRepositoryUpdatesOnlyConnectorPolicy(t *testing.T) {
+	database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.AutoMigrate(&IDCDataSyncConnectorRecord{}); err != nil {
+		t.Fatal(err)
+	}
+	repository := NewGormRepository(database)
+	connector := domain.IDCDataSyncConnector{ID: "labeled", Name: "Labeled", SourceSpace: domain.DataSpaceIDCOriginal, SourceRelativePath: "QP_NuScene/labeled", MirrorPrefix: "ray-train/platform/idc-mirror/labeled", Enabled: true, CreatedBy: "admin"}
+	if err := repository.CreateIDCDataSyncConnector(context.Background(), connector); err != nil {
+		t.Fatal(err)
+	}
+	connector.Enabled = false
+	connector.SyncIntervalMinutes = 60
+	updated, err := repository.UpdateIDCDataSyncConnector(context.Background(), connector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Enabled || updated.SyncIntervalMinutes != 60 || updated.SourceRelativePath != "QP_NuScene/labeled" {
+		t.Fatalf("unexpected connector: %#v", updated)
+	}
+}
