@@ -57,6 +57,7 @@ type managerJobs struct {
 	spec        JobSpec
 	ensureErr   error
 	observation JobObservation
+	observeErr  error
 }
 
 func (j *managerJobs) EnsureIDCSyncJob(_ context.Context, spec JobSpec) error {
@@ -64,7 +65,37 @@ func (j *managerJobs) EnsureIDCSyncJob(_ context.Context, spec JobSpec) error {
 	return j.ensureErr
 }
 func (j *managerJobs) ObserveIDCSyncJob(context.Context, string, string) (JobObservation, error) {
-	return j.observation, nil
+	return j.observation, j.observeErr
+}
+
+func TestRunReportsReconcileFailures(t *testing.T) {
+	now := time.Now().UTC()
+	repository := &managerRepository{runs: []domain.IDCDataSyncRun{{ID: "run-1", State: domain.IDCDataSyncRunRunning, CreatedAt: now}}}
+	reported := make(chan error, 1)
+	manager, err := NewManager(repository, &managerJobs{observeErr: errors.New("temporary api outage")}, Options{
+		Namespace: "ray-train-platform", Image: "harbor/idc@sha256:" + "a", Bucket: "training-data",
+		InternalPrefix: "ray-train/platform", TosutilConfigSecret: "tosutil", SourceNFSServer: "10.0.0.1",
+		SourceNFSPath: "/original", CallbackURL: "http://backend", ServiceAccountName: "idc-sync",
+		WorkClaimName: "idc-sync-work", CallbackKey: []byte("0123456789abcdef"), Now: func() time.Time { return now },
+		ReconcileInterval: time.Hour,
+		OnReconcileError: func(reconcileErr error) {
+			reported <- reconcileErr
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = manager.Run(ctx) }()
+	select {
+	case reconcileErr := <-reported:
+		if !strings.Contains(reconcileErr.Error(), "temporary api outage") {
+			t.Fatalf("unexpected reconcile error: %v", reconcileErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reconcile failure was silently discarded")
+	}
 }
 
 func managerForTest(t *testing.T, repository Repository, jobs JobClient, now time.Time) *Manager {

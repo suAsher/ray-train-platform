@@ -81,6 +81,10 @@ func TestIDCDataSyncRepositoryReturnsPreviousInventoryAndConvergesFailure(t *tes
 	if err != nil || !found || latest.ID != "previous" {
 		t.Fatalf("latest=%+v found=%v err=%v", latest, found, err)
 	}
+	byID, foundByID, err := repository.GetIDCDataSyncRun(context.Background(), previous.ID)
+	if err != nil || !foundByID || byID.InventorySHA256 != previous.InventorySHA256 || byID.InventoryObjectKey != previous.InventoryObjectKey {
+		t.Fatalf("byID=%+v found=%t err=%v", byID, foundByID, err)
+	}
 	run := domain.IDCDataSyncRun{ID: "current", ConnectorID: connector.ID, IdempotencyKey: "current", Mode: domain.IDCDataSyncRunModeSync, State: domain.IDCDataSyncRunPending, RequestedBy: "admin-1"}
 	if err := repository.CreateIDCDataSyncRun(context.Background(), run); err != nil {
 		t.Fatal(err)

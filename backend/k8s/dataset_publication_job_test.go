@@ -965,6 +965,8 @@ type fakePublicationJobSpec struct {
 	schemaVersion         string
 	sourceRoot            string
 	sourceIndex           string
+	sourceInventoryKey    string
+	sourceInventorySHA256 string
 	image                 string
 	sourceBucket          string
 	targetBucket          string
@@ -1040,28 +1042,30 @@ func cloneTestStringMap(source map[string]string) map[string]string {
 	return result
 }
 
-func (spec fakePublicationJobSpec) Namespace() string            { return spec.namespace }
-func (spec fakePublicationJobSpec) Name() string                 { return spec.name }
-func (spec fakePublicationJobSpec) RunID() string                { return spec.runID }
-func (spec fakePublicationJobSpec) DatasetID() string            { return spec.datasetID }
-func (spec fakePublicationJobSpec) DatasetVersionID() string     { return spec.datasetVersionID }
-func (spec fakePublicationJobSpec) Version() string              { return spec.version }
-func (spec fakePublicationJobSpec) SchemaVersion() string        { return spec.schemaVersion }
-func (spec fakePublicationJobSpec) SourceRoot() string           { return spec.sourceRoot }
-func (spec fakePublicationJobSpec) SourceIndex() string          { return spec.sourceIndex }
-func (spec fakePublicationJobSpec) Image() string                { return spec.image }
-func (spec fakePublicationJobSpec) SourceBucket() string         { return spec.sourceBucket }
-func (spec fakePublicationJobSpec) TargetBucket() string         { return spec.targetBucket }
-func (spec fakePublicationJobSpec) TOSEndpoint() string          { return spec.tosEndpoint }
-func (spec fakePublicationJobSpec) TOSRegion() string            { return spec.tosRegion }
-func (spec fakePublicationJobSpec) ImagePullPolicy() string      { return spec.imagePullPolicy }
-func (spec fakePublicationJobSpec) ServiceAccountName() string   { return spec.serviceAccountName }
-func (spec fakePublicationJobSpec) IRSARoleTRN() string          { return spec.irsaRoleTRN }
-func (spec fakePublicationJobSpec) CredentialSecretName() string { return spec.credentialSecretName }
-func (spec fakePublicationJobSpec) QueueName() string            { return spec.queueName }
-func (spec fakePublicationJobSpec) PriorityClassName() string    { return spec.priorityClassName }
-func (spec fakePublicationJobSpec) WorkingDirectory() string     { return spec.workingDirectory }
-func (spec fakePublicationJobSpec) InternalPrefix() string       { return spec.internalPrefix }
+func (spec fakePublicationJobSpec) Namespace() string             { return spec.namespace }
+func (spec fakePublicationJobSpec) Name() string                  { return spec.name }
+func (spec fakePublicationJobSpec) RunID() string                 { return spec.runID }
+func (spec fakePublicationJobSpec) DatasetID() string             { return spec.datasetID }
+func (spec fakePublicationJobSpec) DatasetVersionID() string      { return spec.datasetVersionID }
+func (spec fakePublicationJobSpec) Version() string               { return spec.version }
+func (spec fakePublicationJobSpec) SchemaVersion() string         { return spec.schemaVersion }
+func (spec fakePublicationJobSpec) SourceRoot() string            { return spec.sourceRoot }
+func (spec fakePublicationJobSpec) SourceIndex() string           { return spec.sourceIndex }
+func (spec fakePublicationJobSpec) SourceInventoryKey() string    { return spec.sourceInventoryKey }
+func (spec fakePublicationJobSpec) SourceInventorySHA256() string { return spec.sourceInventorySHA256 }
+func (spec fakePublicationJobSpec) Image() string                 { return spec.image }
+func (spec fakePublicationJobSpec) SourceBucket() string          { return spec.sourceBucket }
+func (spec fakePublicationJobSpec) TargetBucket() string          { return spec.targetBucket }
+func (spec fakePublicationJobSpec) TOSEndpoint() string           { return spec.tosEndpoint }
+func (spec fakePublicationJobSpec) TOSRegion() string             { return spec.tosRegion }
+func (spec fakePublicationJobSpec) ImagePullPolicy() string       { return spec.imagePullPolicy }
+func (spec fakePublicationJobSpec) ServiceAccountName() string    { return spec.serviceAccountName }
+func (spec fakePublicationJobSpec) IRSARoleTRN() string           { return spec.irsaRoleTRN }
+func (spec fakePublicationJobSpec) CredentialSecretName() string  { return spec.credentialSecretName }
+func (spec fakePublicationJobSpec) QueueName() string             { return spec.queueName }
+func (spec fakePublicationJobSpec) PriorityClassName() string     { return spec.priorityClassName }
+func (spec fakePublicationJobSpec) WorkingDirectory() string      { return spec.workingDirectory }
+func (spec fakePublicationJobSpec) InternalPrefix() string        { return spec.internalPrefix }
 func (spec fakePublicationJobSpec) NodeSelector() map[string]string {
 	return spec.nodeSelector
 }

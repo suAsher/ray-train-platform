@@ -18,6 +18,8 @@ var (
 	ErrInvalidPublicationManager     = errors.New("invalid dataset publication manager")
 	ErrInvalidPublicationRequest     = errors.New("invalid dataset publication request")
 	ErrPublicationManagerUnavailable = errors.New("dataset publication manager unavailable")
+	ErrPublicationSourceNotFound     = errors.New("dataset publication source sync run not found")
+	ErrPublicationSourceNotReady     = errors.New("dataset publication source sync run is not ready")
 )
 
 const (
@@ -32,6 +34,7 @@ type PublicationManagerRepository interface {
 	CreateDatasetPublicationRequest(context.Context, string, bool, domain.DatasetVersion, domain.DatasetPublicationRun) (domain.DatasetPublicationRun, error)
 	ListActiveDatasetPublications(context.Context, int) ([]domain.DatasetPublicationWork, error)
 	ListDatasetVersionGCCandidates(context.Context) ([]domain.DatasetVersion, error)
+	GetIDCDataSyncRun(context.Context, string) (domain.IDCDataSyncRun, bool, error)
 }
 
 type PublicationReconciler interface {
@@ -137,7 +140,7 @@ func NewManager(repository PublicationManagerRepository, controller PublicationR
 	}, nil
 }
 
-func (manager *Manager) RequestDatasetPublication(ctx context.Context, dataset domain.Dataset, requestedBy string) (domain.DatasetPublicationRun, error) {
+func (manager *Manager) RequestDatasetPublication(ctx context.Context, dataset domain.Dataset, requestedBy, sourceSyncRunID string) (domain.DatasetPublicationRun, error) {
 	if manager == nil || isNilPublicationDependency(manager.repository) || isNilPublicationDependency(manager.controller) {
 		return domain.DatasetPublicationRun{}, ErrInvalidPublicationManager
 	}
@@ -146,6 +149,24 @@ func (manager *Manager) RequestDatasetPublication(ctx context.Context, dataset d
 	}
 	if err := dataset.Validate(); err != nil || !validPublicationRequester(requestedBy) {
 		return domain.DatasetPublicationRun{}, ErrInvalidPublicationRequest
+	}
+	var source domain.IDCDataSyncRun
+	if sourceSyncRunID != "" {
+		if dataset.Visibility != domain.DatasetVisibilityPublic || !validIdentifier(sourceSyncRunID) {
+			return domain.DatasetPublicationRun{}, ErrInvalidPublicationRequest
+		}
+		var found bool
+		var lookupErr error
+		source, found, lookupErr = manager.repository.GetIDCDataSyncRun(ctx, sourceSyncRunID)
+		if lookupErr != nil {
+			return domain.DatasetPublicationRun{}, ErrPublicationManagerUnavailable
+		}
+		if !found {
+			return domain.DatasetPublicationRun{}, ErrPublicationSourceNotFound
+		}
+		if source.State != domain.IDCDataSyncRunSucceeded || source.InventorySHA256 == "" || source.InventoryObjectKey == "" {
+			return domain.DatasetPublicationRun{}, ErrPublicationSourceNotReady
+		}
 	}
 	versionID, err := manager.newID("version")
 	if err != nil || !validIdentifier(versionID) {
@@ -158,6 +179,7 @@ func (manager *Manager) RequestDatasetPublication(ctx context.Context, dataset d
 	version := domain.DatasetVersion{
 		ID: versionID, DatasetID: dataset.ID, Version: publicationVersionName(manager.now().UTC(), versionID),
 		State: domain.DatasetVersionDiscovering, SchemaVersion: dataset.SchemaVersion,
+		SourceSyncRunID: source.ID, SourceInventorySHA256: source.InventorySHA256,
 	}
 	if err := version.Validate(); err != nil {
 		return domain.DatasetPublicationRun{}, ErrPublicationManagerUnavailable
@@ -190,7 +212,7 @@ func (manager *Manager) ReconcileOnce(ctx context.Context) error {
 	}
 	var firstFailure *publicationReconcileError
 	for _, item := range work {
-		request, err := manager.reconcileRequest(item)
+		request, err := manager.reconcileRequest(ctx, item)
 		stage := "build reconcile request"
 		if err == nil {
 			stage = "controller reconcile"
@@ -270,7 +292,7 @@ func (manager *Manager) DryRunDatasetVersionGC(ctx context.Context) ([]domain.Da
 	return result, nil
 }
 
-func (manager *Manager) reconcileRequest(work domain.DatasetPublicationWork) (ReconcileRequest, error) {
+func (manager *Manager) reconcileRequest(ctx context.Context, work domain.DatasetPublicationWork) (ReconcileRequest, error) {
 	if err := work.Validate(); err != nil || work.Run.State != domain.DatasetVersionDiscovering && !activePublicationState(work.Run.State) {
 		return ReconcileRequest{}, ErrInvalidPublicationRequest
 	}
@@ -289,6 +311,14 @@ func (manager *Manager) reconcileRequest(work domain.DatasetPublicationWork) (Re
 		RunID: work.Run.ID, DatasetID: work.Dataset.ID, DatasetVersionID: work.Version.ID,
 		Version: work.Version.Version, SchemaVersion: work.Version.SchemaVersion,
 		SourceRoot: root, SourceIndex: sourceIndex,
+	}
+	if work.Version.SourceSyncRunID != "" {
+		source, found, err := manager.repository.GetIDCDataSyncRun(ctx, work.Version.SourceSyncRunID)
+		if err != nil || !found || source.State != domain.IDCDataSyncRunSucceeded || source.InventorySHA256 != work.Version.SourceInventorySHA256 {
+			return ReconcileRequest{}, ErrInvalidPublicationRequest
+		}
+		request.SourceInventoryKey = source.InventoryObjectKey
+		request.SourceInventorySHA256 = source.InventorySHA256
 	}
 	if !request.valid() {
 		return ReconcileRequest{}, ErrInvalidPublicationRequest

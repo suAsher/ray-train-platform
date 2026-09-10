@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"ray-train-platform-backend/auth"
+	"ray-train-platform-backend/datasetpublisher"
 	"ray-train-platform-backend/domain"
 	"ray-train-platform-backend/repositories"
 )
@@ -32,7 +33,7 @@ type DatasetCatalogStore interface {
 // objects. Its implementation owns TOS object keys, IRSA and Kubernetes
 // identities; none of those values cross the user-facing API boundary.
 type DatasetPublicationManager interface {
-	RequestDatasetPublication(context.Context, domain.Dataset, string) (domain.DatasetPublicationRun, error)
+	RequestDatasetPublication(context.Context, domain.Dataset, string, string) (domain.DatasetPublicationRun, error)
 	DryRunDatasetVersionGC(context.Context) ([]domain.DatasetVersion, error)
 }
 
@@ -49,18 +50,24 @@ type datasetResponse struct {
 }
 
 type datasetVersionResponse struct {
-	ID                string                     `json:"id"`
-	DatasetID         string                     `json:"datasetId"`
-	Version           string                     `json:"version"`
-	State             domain.DatasetVersionState `json:"state"`
-	ManifestSHA256    string                     `json:"manifestSha256,omitempty"`
-	SchemaVersion     string                     `json:"schemaVersion"`
-	TrainSamples      int64                      `json:"trainSamples"`
-	ValSamples        int64                      `json:"valSamples"`
-	TestSamples       int64                      `json:"testSamples"`
-	SourceObjectCount int64                      `json:"sourceObjectCount"`
-	LogicalBytes      int64                      `json:"logicalBytes"`
-	PackedBytes       int64                      `json:"packedBytes"`
+	ID                    string                     `json:"id"`
+	DatasetID             string                     `json:"datasetId"`
+	Version               string                     `json:"version"`
+	State                 domain.DatasetVersionState `json:"state"`
+	ManifestSHA256        string                     `json:"manifestSha256,omitempty"`
+	SchemaVersion         string                     `json:"schemaVersion"`
+	TrainSamples          int64                      `json:"trainSamples"`
+	ValSamples            int64                      `json:"valSamples"`
+	TestSamples           int64                      `json:"testSamples"`
+	SourceObjectCount     int64                      `json:"sourceObjectCount"`
+	LogicalBytes          int64                      `json:"logicalBytes"`
+	PackedBytes           int64                      `json:"packedBytes"`
+	SourceSyncRunID       string                     `json:"sourceSyncRunId,omitempty"`
+	SourceInventorySHA256 string                     `json:"sourceInventorySha256,omitempty"`
+}
+
+type requestDatasetPublicationRequest struct {
+	SourceSyncRunID string `json:"sourceSyncRunId"`
 }
 
 type datasetPublicationResponse struct {
@@ -293,7 +300,24 @@ func (h *Handler) requestDatasetPublication(c *gin.Context) {
 		h.writeError(c, http.StatusServiceUnavailable, "DATASET_PUBLISHER_UNAVAILABLE", "dataset publisher is not configured")
 		return
 	}
-	run, err := h.datasetPublications.RequestDatasetPublication(c.Request.Context(), dataset, principal.Subject)
+	var request requestDatasetPublicationRequest
+	if c.Request.ContentLength != 0 {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 8<<10)
+		if err := c.ShouldBindJSON(&request); err != nil {
+			h.writeError(c, http.StatusBadRequest, "INVALID_DATASET_PUBLICATION", "dataset publication request is invalid")
+			return
+		}
+	}
+	request.SourceSyncRunID = strings.TrimSpace(request.SourceSyncRunID)
+	run, err := h.datasetPublications.RequestDatasetPublication(c.Request.Context(), dataset, principal.Subject, request.SourceSyncRunID)
+	if errors.Is(err, datasetpublisher.ErrPublicationSourceNotFound) {
+		h.writeError(c, http.StatusNotFound, "SOURCE_SYNC_RUN_NOT_FOUND", "source sync run was not found")
+		return
+	}
+	if errors.Is(err, datasetpublisher.ErrPublicationSourceNotReady) {
+		h.writeError(c, http.StatusConflict, "SOURCE_SYNC_RUN_NOT_READY", "source sync run is not ready for publication")
+		return
+	}
 	if err != nil || run.Validate() != nil || run.DatasetID != dataset.ID {
 		h.writeError(c, http.StatusServiceUnavailable, "DATASET_PUBLICATION_FAILED", "could not request dataset publication")
 		return
@@ -412,6 +436,7 @@ func datasetVersionForResponse(version domain.DatasetVersion) datasetVersionResp
 		ManifestSHA256: version.ManifestSHA256, SchemaVersion: version.SchemaVersion,
 		TrainSamples: version.TrainSamples, ValSamples: version.ValSamples, TestSamples: version.TestSamples,
 		SourceObjectCount: version.SourceObjectCount, LogicalBytes: version.LogicalBytes, PackedBytes: version.PackedBytes,
+		SourceSyncRunID: version.SourceSyncRunID, SourceInventorySHA256: version.SourceInventorySHA256,
 	}
 }
 

@@ -82,6 +82,15 @@ func localUserAdminRouter(handler *LocalAuthHandler, principal auth.Principal) *
 	return router
 }
 
+func TestExternalIdentityDeploymentRejectsLocalAccountCreation(t *testing.T) {
+	store := newFakeLocalAuthStore()
+	handler := NewLocalAuthHandler(LocalAuthOptions{Store: store, Enabled: false})
+	response := postUser(localUserAdminRouter(handler, superAdminPrincipal()), `{"username":"alice","password":"correct-horse","roles":["Engineer"],"tenantId":"team-a"}`)
+	if response.Code != http.StatusConflict || !strings.HasPrefix(errorCodeOf(t, response.Body.Bytes()), "LOCAL_ACCOUNT_CREATION_DISABLED|") || len(store.users) != 0 {
+		t.Fatalf("status=%d users=%d body=%s", response.Code, len(store.users), response.Body.String())
+	}
+}
+
 func userAdminRouter(store LocalAuthStore, principal auth.Principal) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()

@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import inspect
 import io
+import json
 import sys
 import tempfile
 import unittest
@@ -292,6 +293,46 @@ class TOSClientConstructionTests(unittest.TestCase):
         self.assertEqual(len({id(client) for client in sdk.clients}), 3)
         self.assertFalse(hasattr(first, "client"))
         self.assertFalse(hasattr(second, "client"))
+
+
+class ImmutableSourceInventoryTests(unittest.TestCase):
+    def test_inventory_binds_payload_reads_and_listing_to_content_addressed_objects(self) -> None:
+        client = _FakeTOSClient()
+        payload_digest = hashlib.sha256(PAYLOAD).hexdigest()
+        object_key = f"ray-train/platform/idc-raw/sha256/{payload_digest[:2]}/{payload_digest}"
+        document = {
+            "schema": 1,
+            "entries": [{
+                "relativePath": "scene/points.bin",
+                "sizeBytes": len(PAYLOAD),
+                "sha256": payload_digest,
+                "objectKey": object_key,
+            }],
+        }
+        encoded = json.dumps(document, separators=(",", ":"), sort_keys=True).encode()
+        inventory_digest = hashlib.sha256(encoded).hexdigest()
+        inventory_key = f"ray-train/platform/idc-inventories/sync-1/{inventory_digest}.json"
+        client.head_results[(SOURCE_BUCKET, inventory_key)] = SimpleNamespace(content_length=len(encoded), meta={"sha256": inventory_digest})
+        client.get_results[(SOURCE_BUCKET, inventory_key)] = _StreamingOutput(encoded)
+        client.head_results[(SOURCE_BUCKET, object_key)] = SimpleNamespace(content_length=len(PAYLOAD), meta={"sha256": payload_digest})
+
+        storage, _ = _new_storage(client, source_inventory_key=inventory_key, source_inventory_sha256=inventory_digest)
+        page = storage.list_source()
+        self.assertEqual([(item.key, item.size, item.sha256) for item in page.objects], [("scene/points.bin", len(PAYLOAD), payload_digest)])
+        self.assertEqual(storage.head_source("scene/points.bin").sha256, payload_digest)
+        self.assertIn(("head_object", (SOURCE_BUCKET, object_key), {}), client.calls)
+        with self.assertRaisesRegex(TOSStorageError, "absent from the immutable inventory"):
+            storage.head_source("scene/missing.bin")
+
+    def test_rejects_inventory_whose_payload_does_not_match_digest(self) -> None:
+        client = _FakeTOSClient()
+        encoded = b'{"schema":1,"entries":[]}'
+        digest = "a" * 64
+        key = f"ray-train/platform/idc-inventories/sync-1/{digest}.json"
+        client.head_results[(SOURCE_BUCKET, key)] = SimpleNamespace(content_length=len(encoded), meta={})
+        client.get_results[(SOURCE_BUCKET, key)] = _StreamingOutput(encoded)
+        with self.assertRaisesRegex(TOSStorageError, "verification failed"):
+            _new_storage(client, source_inventory_key=key, source_inventory_sha256=digest)
 
     def test_prefers_static_environment_credentials_without_calling_irsa(self) -> None:
         client = _FakeTOSClient()

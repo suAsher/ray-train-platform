@@ -49,7 +49,7 @@ func TestManagerCreatesImmutablePublicationRequestsWithOwningScope(t *testing.T)
 				},
 			})
 
-			run, err := manager.RequestDatasetPublication(context.Background(), test.dataset, "requesting-user")
+			run, err := manager.RequestDatasetPublication(context.Background(), test.dataset, "requesting-user", "")
 			if err != nil {
 				t.Fatalf("request publication: %v", err)
 			}
@@ -73,6 +73,58 @@ func TestManagerCreatesImmutablePublicationRequestsWithOwningScope(t *testing.T)
 				t.Fatalf("run execution mode=%q persisted=%q want=%q", run.ExecutionMode, repository.createdRun.ExecutionMode, wantMode)
 			}
 		})
+	}
+}
+
+func TestManagerBindsSuccessfulIDCSyncInventoryToPublicVersion(t *testing.T) {
+	now := time.Date(2026, 9, 10, 8, 0, 0, 0, time.UTC)
+	digest := strings.Repeat("a", 64)
+	finished := now.Add(-time.Minute)
+	source := domain.IDCDataSyncRun{
+		ID: "sync-full-labeled", ConnectorID: "labeled", IdempotencyKey: "sync-full-labeled",
+		Mode: domain.IDCDataSyncRunModeSync, State: domain.IDCDataSyncRunSucceeded,
+		RequestedBy: "root-admin", InventorySHA256: digest,
+		InventoryObjectKey: "ray-train/platform/idc-inventories/sync-full-labeled/" + digest + ".json",
+		CreatedAt:          finished, StartedAt: &finished, FinishedAt: &finished,
+	}
+	repository := &managerRepository{syncRuns: map[string]domain.IDCDataSyncRun{source.ID: source}}
+	ids := []string{"version-bound", "publication-bound"}
+	manager := mustPublicationManager(t, repository, &recordingPublicationController{}, ManagerOptions{
+		PublicRoot: "ray-train/public", SourceIndexName: ".raytrain/trusted-index-v2.pkl", Now: func() time.Time { return now },
+		NewID: func(string) (string, error) { value := ids[0]; ids = ids[1:]; return value, nil },
+	})
+	dataset := domain.Dataset{ID: "public-data", Slug: "labeled", Name: "Labeled", SourceSpace: domain.DataSpacePublic,
+		SourceRelativePath: "labeled", Visibility: domain.DatasetVisibilityPublic, SchemaVersion: "parquet-v1"}
+	if _, err := manager.RequestDatasetPublication(context.Background(), dataset, "root-admin", source.ID); err != nil {
+		t.Fatal(err)
+	}
+	if repository.createdVersion.SourceSyncRunID != source.ID || repository.createdVersion.SourceInventorySHA256 != digest {
+		t.Fatalf("version source=%+v", repository.createdVersion)
+	}
+
+	work := publicationWork(dataset, repository.createdVersion.ID, "publication-bound", repository.createdVersion.Version)
+	work.Version = repository.createdVersion
+	work.Run.State = domain.DatasetVersionDiscovering
+	repository.work = []domain.DatasetPublicationWork{work}
+	controller := &recordingPublicationController{}
+	manager.controller = controller
+	if err := manager.ReconcileOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(controller.requests) != 1 || controller.requests[0].SourceInventoryKey != source.InventoryObjectKey || controller.requests[0].SourceInventorySHA256 != digest {
+		t.Fatalf("reconcile source=%+v", controller.requests)
+	}
+}
+
+func TestManagerRejectsUnsuccessfulIDCSyncAsPublicationSource(t *testing.T) {
+	dataset := domain.Dataset{ID: "public-data", Slug: "labeled", Name: "Labeled", SourceSpace: domain.DataSpacePublic,
+		SourceRelativePath: "labeled", Visibility: domain.DatasetVisibilityPublic, SchemaVersion: "parquet-v1"}
+	repository := &managerRepository{syncRuns: map[string]domain.IDCDataSyncRun{
+		"sync-running": {ID: "sync-running", State: domain.IDCDataSyncRunRunning},
+	}}
+	manager := mustPublicationManager(t, repository, &recordingPublicationController{}, ManagerOptions{PublicRoot: "ray-train/public", SourceIndexName: ".raytrain/trusted-index-v2.pkl"})
+	if _, err := manager.RequestDatasetPublication(context.Background(), dataset, "root-admin", "sync-running"); !errors.Is(err, ErrPublicationSourceNotReady) {
+		t.Fatalf("err=%v", err)
 	}
 }
 
@@ -237,6 +289,7 @@ type managerRepository struct {
 	listLimit        int
 	gc               []domain.DatasetVersion
 	listFailure      error
+	syncRuns         map[string]domain.IDCDataSyncRun
 }
 
 func (repository *managerRepository) CreateDatasetPublicationRequest(_ context.Context, tenantID string, superAdmin bool, version domain.DatasetVersion, run domain.DatasetPublicationRun) (domain.DatasetPublicationRun, error) {
@@ -255,6 +308,14 @@ func (repository *managerRepository) ListActiveDatasetPublications(_ context.Con
 
 func (repository *managerRepository) ListDatasetVersionGCCandidates(context.Context) ([]domain.DatasetVersion, error) {
 	return append([]domain.DatasetVersion(nil), repository.gc...), nil
+}
+
+func (repository *managerRepository) GetIDCDataSyncRun(_ context.Context, runID string) (domain.IDCDataSyncRun, bool, error) {
+	run, found := repository.syncRuns[runID]
+	if !found {
+		return domain.IDCDataSyncRun{}, false, nil
+	}
+	return run, true, nil
 }
 
 type recordingPublicationController struct {

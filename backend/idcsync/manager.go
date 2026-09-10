@@ -81,6 +81,7 @@ type Manager struct {
 	reconcileInterval time.Duration
 	runTimeout        time.Duration
 	completionGrace   time.Duration
+	onReconcileError  func(error)
 }
 
 type Options struct {
@@ -93,6 +94,7 @@ type Options struct {
 	Now                                                           func() time.Time
 	Random                                                        func([]byte) (int, error)
 	ReconcileInterval, RunTimeout, CompletionGrace                time.Duration
+	OnReconcileError                                              func(error)
 }
 
 func NewManager(repository Repository, jobs JobClient, options Options) (*Manager, error) {
@@ -128,7 +130,7 @@ func NewManager(repository Repository, jobs JobClient, options Options) (*Manage
 	if completionGrace <= 0 {
 		completionGrace = 2 * time.Minute
 	}
-	return &Manager{repository: repository, jobs: jobs, namespace: strings.TrimSpace(options.Namespace), image: strings.TrimSpace(options.Image), bucket: strings.TrimSpace(options.Bucket), internal: strings.Trim(strings.TrimSpace(options.InternalPrefix), "/"), secret: strings.TrimSpace(options.TosutilConfigSecret), sourceHost: strings.TrimSpace(options.SourceNFSServer), sourcePath: strings.TrimSpace(options.SourceNFSPath), sourceOpts: append([]string(nil), options.SourceMountOptions...), callback: strings.TrimRight(strings.TrimSpace(options.CallbackURL), "/"), service: strings.TrimSpace(options.ServiceAccountName), workClaim: strings.TrimSpace(options.WorkClaimName), key: append([]byte(nil), options.CallbackKey...), now: now, random: random, reconcileInterval: reconcileInterval, runTimeout: runTimeout, completionGrace: completionGrace}, nil
+	return &Manager{repository: repository, jobs: jobs, namespace: strings.TrimSpace(options.Namespace), image: strings.TrimSpace(options.Image), bucket: strings.TrimSpace(options.Bucket), internal: strings.Trim(strings.TrimSpace(options.InternalPrefix), "/"), secret: strings.TrimSpace(options.TosutilConfigSecret), sourceHost: strings.TrimSpace(options.SourceNFSServer), sourcePath: strings.TrimSpace(options.SourceNFSPath), sourceOpts: append([]string(nil), options.SourceMountOptions...), callback: strings.TrimRight(strings.TrimSpace(options.CallbackURL), "/"), service: strings.TrimSpace(options.ServiceAccountName), workClaim: strings.TrimSpace(options.WorkClaimName), key: append([]byte(nil), options.CallbackKey...), now: now, random: random, reconcileInterval: reconcileInterval, runTimeout: runTimeout, completionGrace: completionGrace, onReconcileError: options.OnReconcileError}, nil
 }
 
 func (m *Manager) CreateConnector(ctx context.Context, connector domain.IDCDataSyncConnector) error {
@@ -196,7 +198,7 @@ func (m *Manager) Request(ctx context.Context, connector domain.IDCDataSyncConne
 }
 
 func (m *Manager) Run(ctx context.Context) error {
-	_ = m.reconcile(ctx)
+	m.reconcileAndReport(ctx)
 	ticker := time.NewTicker(m.reconcileInterval)
 	defer ticker.Stop()
 	for {
@@ -204,8 +206,14 @@ func (m *Manager) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			_ = m.reconcile(ctx)
+			m.reconcileAndReport(ctx)
 		}
+	}
+}
+
+func (m *Manager) reconcileAndReport(ctx context.Context) {
+	if err := m.reconcile(ctx); err != nil && m.onReconcileError != nil {
+		m.onReconcileError(err)
 	}
 }
 

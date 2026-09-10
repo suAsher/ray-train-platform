@@ -72,6 +72,8 @@ type publicationJobSpec interface {
 	SchemaVersion() string
 	SourceRoot() string
 	SourceIndex() string
+	SourceInventoryKey() string
+	SourceInventorySHA256() string
 	Image() string
 	SourceBucket() string
 	TargetBucket() string
@@ -505,6 +507,12 @@ func renderDatasetPublicationJob(spec publicationJobSpec) (*batchv1.Job, error) 
 		"--source-index", spec.SourceIndex(),
 		"--internal-prefix", spec.InternalPrefix(),
 		"--output-dir", spec.WorkingDirectory(),
+	}
+	if spec.SourceInventoryKey() != "" {
+		args = append(args,
+			"--source-inventory-key", spec.SourceInventoryKey(),
+			"--source-inventory-sha256", spec.SourceInventorySHA256(),
+		)
 	}
 	command := []string{"python3", "-m", "raytrain_publisher.cloud_publish"}
 	if phase := spec.ExecutionPhase(); phase != datasetpublisher.PublicationExecutionLegacy {

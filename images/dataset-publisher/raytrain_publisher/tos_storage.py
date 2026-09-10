@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import json
 import os
 import re
 import tempfile
@@ -16,6 +17,8 @@ from .irsa import VKEIRSAProvider, create_federation_credentials
 
 
 MAX_INDEX_BYTES = 64 * 1024 * 1024
+MAX_SOURCE_INVENTORY_BYTES = 512 * 1024 * 1024
+MAX_SOURCE_INVENTORY_ENTRIES = 2_000_000
 MAX_TRANSFER_BYTES = 2 * 1024 * 1024 * 1024
 DEFAULT_STREAM_CHUNK_BYTES = 1024 * 1024
 MAX_STREAM_CHUNK_BYTES = 16 * 1024 * 1024
@@ -48,6 +51,8 @@ class TOSListedObject:
     key: str
     size: int
     etag: str
+    sha256: str | None = None
+    object_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -73,6 +78,8 @@ class TOSStorage:
         region: str,
         source_prefix: str,
         internal_dataset_prefix: str,
+        source_inventory_key: str | None = None,
+        source_inventory_sha256: str | None = None,
         irsa_provider: VKEIRSAProvider | None = None,
         credentials_provider: Any = None,
         environment: Mapping[str, str] | None = None,
@@ -87,6 +94,9 @@ class TOSStorage:
         self._internal_dataset_prefix = _normalize_prefix(
             internal_dataset_prefix
         )
+        self._source_inventory_key = source_inventory_key
+        self._source_inventory_sha256 = source_inventory_sha256
+        self._source_inventory: dict[str, TOSListedObject] | None = None
         if (
             self._source_bucket == self._target_bucket
             and _prefixes_overlap(
@@ -99,6 +109,7 @@ class TOSStorage:
             self._client = client
             self._credentials_provider = credentials_provider
             self._tos_sdk = None
+            self._bind_source_inventory()
             return
 
         sdk = tos_sdk
@@ -147,6 +158,7 @@ class TOSStorage:
         self._credentials_provider = effective_credentials
         self._tos_sdk = sdk
         self._client = sdk_client
+        self._bind_source_inventory()
     @property
     def source_bucket(self) -> str:
         return self._source_bucket
@@ -183,6 +195,8 @@ class TOSStorage:
             region=self._region,
             source_prefix=self._source_prefix,
             internal_dataset_prefix=self._internal_dataset_prefix,
+            source_inventory_key=self._source_inventory_key,
+            source_inventory_sha256=self._source_inventory_sha256,
             credentials_provider=self._credentials_provider,
             tos_sdk=self._tos_sdk,
         )
@@ -382,8 +396,15 @@ class TOSStorage:
     ) -> TOSListPage:
         """List only objects below the configured source prefix."""
 
-        requested_prefix = self._source_list_prefix(relative_prefix)
         _validate_list_options(marker=marker, max_keys=max_keys)
+        if self._source_inventory is not None:
+            normalized_prefix = "" if relative_prefix == "" else _normalize_prefix(relative_prefix) + "/"
+            keys = [key for key in sorted(self._source_inventory) if key.startswith(normalized_prefix) and (marker is None or key > marker)]
+            selected = keys[:max_keys]
+            next_marker = selected[-1] if len(keys) > max_keys else None
+            return TOSListPage(tuple(self._source_inventory[key] for key in selected), next_marker)
+
+        requested_prefix = self._source_list_prefix(relative_prefix)
         request = {"prefix": requested_prefix, "max_keys": max_keys}
         if marker is not None:
             request["marker"] = marker
@@ -550,7 +571,66 @@ class TOSStorage:
         return TOSListPage(tuple(listed_objects), next_marker), False
 
     def _source_key(self, relative_key: str) -> str:
-        return self._source_prefix + "/" + _normalize_relative_key(relative_key)
+        normalized = _normalize_relative_key(relative_key)
+        if self._source_inventory is not None:
+            item = self._source_inventory.get(normalized)
+            if item is not None:
+                if item.object_key is None:
+                    raise TOSStorageError("TOS source inventory mapping is invalid")
+                return item.object_key
+            # Generated, version-scoped publisher indexes are metadata rather
+            # than raw samples. They remain under the scoped logical source
+            # root while every payload object is inventory-bound.
+            if not normalized.startswith(".raytrain/"):
+                raise TOSStorageError("TOS source object is absent from the immutable inventory")
+        return self._source_prefix + "/" + normalized
+
+    def _bind_source_inventory(self) -> None:
+        if (self._source_inventory_key is None) != (self._source_inventory_sha256 is None):
+            raise ValueError("source inventory key and digest must be provided together")
+        if self._source_inventory_key is None:
+            return
+        inventory_key = _normalize_relative_key(self._source_inventory_key)
+        digest = _validate_sha256(self._source_inventory_sha256)
+        if "/idc-inventories/" not in inventory_key or not inventory_key.endswith(f"/{digest}.json"):
+            raise ValueError("source inventory key is invalid")
+        info = self._head(self._source_bucket, inventory_key, failure_message="TOS source inventory HEAD failed")
+        if info.size > MAX_SOURCE_INVENTORY_BYTES:
+            raise TOSStorageError("TOS source inventory exceeds the configured bound")
+        output = self._get_source_output(inventory_key)
+        payload, read_failed = _read_bounded_output(output, MAX_SOURCE_INVENTORY_BYTES)
+        if read_failed or len(payload) != info.size or hashlib.sha256(payload).hexdigest() != digest:
+            raise TOSStorageError("TOS source inventory verification failed")
+        try:
+            document = json.loads(payload)
+            if not isinstance(document, dict) or document.get("schema") != 1 or not isinstance(document.get("entries"), list):
+                raise ValueError
+            if not 0 < len(document["entries"]) <= MAX_SOURCE_INVENTORY_ENTRIES:
+                raise ValueError
+            inventory_root = inventory_key.split("/idc-inventories/", 1)[0]
+            raw_prefix = inventory_root + "/idc-raw/sha256/"
+            inventory: dict[str, TOSListedObject] = {}
+            for raw in document["entries"]:
+                relative = _normalize_relative_key(raw["relativePath"])
+                object_key = _normalize_relative_key(raw["objectKey"])
+                object_digest = _validate_sha256(raw["sha256"])
+                size = _validate_nonnegative_size(raw["sizeBytes"])
+                if not object_key.startswith(raw_prefix) or not object_key.endswith("/" + object_digest) or relative in inventory:
+                    raise ValueError
+                inventory[relative] = TOSListedObject(
+                    key=relative,
+                    size=size,
+                    etag=object_digest,
+                    sha256=object_digest,
+                    object_key=object_key,
+                )
+            if not inventory:
+                raise ValueError
+        except Exception:
+            raise TOSStorageError("TOS source inventory is invalid") from None
+        self._source_inventory_key = inventory_key
+        self._source_inventory_sha256 = digest
+        self._source_inventory = inventory
 
     def _target_key(self, relative_key: str) -> str:
         return self._internal_dataset_prefix + "/" + _normalize_relative_key(

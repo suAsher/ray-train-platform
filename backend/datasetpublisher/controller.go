@@ -21,6 +21,7 @@ var (
 	ErrPublicationJobUnavailable           = errors.New("dataset publication job unavailable")
 	ErrPublicationJobFailed                = errors.New("dataset publication job failed")
 	publicationIRSARoleTRNPattern          = regexp.MustCompile(`^trn:iam::[0-9]+:role/[A-Za-z0-9+=,.@_/-]+$`)
+	publicationSHA256Pattern               = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
 const maxPublicationJobDuration = 30 * 24 * time.Hour
@@ -81,15 +82,17 @@ type PublicationJobStatus struct {
 }
 
 type ReconcileRequest struct {
-	TenantID         string
-	SuperAdmin       bool
-	RunID            string
-	DatasetID        string
-	DatasetVersionID string
-	Version          string
-	SchemaVersion    string
-	SourceRoot       string
-	SourceIndex      string
+	TenantID              string
+	SuperAdmin            bool
+	RunID                 string
+	DatasetID             string
+	DatasetVersionID      string
+	Version               string
+	SchemaVersion         string
+	SourceRoot            string
+	SourceIndex           string
+	SourceInventoryKey    string
+	SourceInventorySHA256 string
 }
 
 type ControllerOptions struct {
@@ -168,6 +171,8 @@ type PublicationJobSpec struct {
 	schemaVersion         string
 	sourceRoot            string
 	sourceIndex           string
+	sourceInventoryKey    string
+	sourceInventorySHA256 string
 	image                 string
 	sourceBucket          string
 	targetBucket          string
@@ -193,28 +198,30 @@ type PublicationJobSpec struct {
 	maxParallelism        int
 }
 
-func (spec PublicationJobSpec) Namespace() string            { return spec.namespace }
-func (spec PublicationJobSpec) Name() string                 { return spec.name }
-func (spec PublicationJobSpec) RunID() string                { return spec.runID }
-func (spec PublicationJobSpec) DatasetID() string            { return spec.datasetID }
-func (spec PublicationJobSpec) DatasetVersionID() string     { return spec.datasetVersionID }
-func (spec PublicationJobSpec) Version() string              { return spec.version }
-func (spec PublicationJobSpec) SchemaVersion() string        { return spec.schemaVersion }
-func (spec PublicationJobSpec) SourceRoot() string           { return spec.sourceRoot }
-func (spec PublicationJobSpec) SourceIndex() string          { return spec.sourceIndex }
-func (spec PublicationJobSpec) Image() string                { return spec.image }
-func (spec PublicationJobSpec) SourceBucket() string         { return spec.sourceBucket }
-func (spec PublicationJobSpec) TargetBucket() string         { return spec.targetBucket }
-func (spec PublicationJobSpec) TOSEndpoint() string          { return spec.tosEndpoint }
-func (spec PublicationJobSpec) TOSRegion() string            { return spec.tosRegion }
-func (spec PublicationJobSpec) ImagePullPolicy() string      { return spec.imagePullPolicy }
-func (spec PublicationJobSpec) ServiceAccountName() string   { return spec.serviceAccountName }
-func (spec PublicationJobSpec) IRSARoleTRN() string          { return spec.irsaRoleTRN }
-func (spec PublicationJobSpec) CredentialSecretName() string { return spec.credentialSecretName }
-func (spec PublicationJobSpec) QueueName() string            { return spec.queueName }
-func (spec PublicationJobSpec) PriorityClassName() string    { return spec.priorityClassName }
-func (spec PublicationJobSpec) WorkingDirectory() string     { return spec.workingDirectory }
-func (spec PublicationJobSpec) InternalPrefix() string       { return spec.internalPrefix }
+func (spec PublicationJobSpec) Namespace() string             { return spec.namespace }
+func (spec PublicationJobSpec) Name() string                  { return spec.name }
+func (spec PublicationJobSpec) RunID() string                 { return spec.runID }
+func (spec PublicationJobSpec) DatasetID() string             { return spec.datasetID }
+func (spec PublicationJobSpec) DatasetVersionID() string      { return spec.datasetVersionID }
+func (spec PublicationJobSpec) Version() string               { return spec.version }
+func (spec PublicationJobSpec) SchemaVersion() string         { return spec.schemaVersion }
+func (spec PublicationJobSpec) SourceRoot() string            { return spec.sourceRoot }
+func (spec PublicationJobSpec) SourceIndex() string           { return spec.sourceIndex }
+func (spec PublicationJobSpec) SourceInventoryKey() string    { return spec.sourceInventoryKey }
+func (spec PublicationJobSpec) SourceInventorySHA256() string { return spec.sourceInventorySHA256 }
+func (spec PublicationJobSpec) Image() string                 { return spec.image }
+func (spec PublicationJobSpec) SourceBucket() string          { return spec.sourceBucket }
+func (spec PublicationJobSpec) TargetBucket() string          { return spec.targetBucket }
+func (spec PublicationJobSpec) TOSEndpoint() string           { return spec.tosEndpoint }
+func (spec PublicationJobSpec) TOSRegion() string             { return spec.tosRegion }
+func (spec PublicationJobSpec) ImagePullPolicy() string       { return spec.imagePullPolicy }
+func (spec PublicationJobSpec) ServiceAccountName() string    { return spec.serviceAccountName }
+func (spec PublicationJobSpec) IRSARoleTRN() string           { return spec.irsaRoleTRN }
+func (spec PublicationJobSpec) CredentialSecretName() string  { return spec.credentialSecretName }
+func (spec PublicationJobSpec) QueueName() string             { return spec.queueName }
+func (spec PublicationJobSpec) PriorityClassName() string     { return spec.priorityClassName }
+func (spec PublicationJobSpec) WorkingDirectory() string      { return spec.workingDirectory }
+func (spec PublicationJobSpec) InternalPrefix() string        { return spec.internalPrefix }
 func (spec PublicationJobSpec) NodeSelector() map[string]string {
 	return clonePublicationStringMap(spec.nodeSelector)
 }
@@ -638,6 +645,7 @@ func (controller *Controller) jobSpec(request ReconcileRequest, run domain.Datas
 		datasetVersionID: request.DatasetVersionID, version: request.Version,
 		schemaVersion: request.SchemaVersion, sourceRoot: request.SourceRoot,
 		sourceIndex: request.SourceIndex, image: controller.options.Image,
+		sourceInventoryKey: request.SourceInventoryKey, sourceInventorySHA256: request.SourceInventorySHA256,
 		sourceBucket: controller.options.SourceBucket, targetBucket: controller.options.TargetBucket,
 		tosEndpoint: controller.options.TOSEndpoint, tosRegion: controller.options.TOSRegion,
 		imagePullPolicy:      controller.options.ImagePullPolicy,
@@ -667,6 +675,12 @@ func (request ReconcileRequest) valid() bool {
 	if !validIdentifier(request.RunID) || !validIdentifier(request.DatasetID) || !validIdentifier(request.DatasetVersionID) ||
 		!validIdentifier(request.Version) || !validIdentifier(request.SchemaVersion) ||
 		!validPublicationRelativePath(request.SourceRoot) || !validPublicationRelativePath(request.SourceIndex) {
+		return false
+	}
+	if (request.SourceInventoryKey == "") != (request.SourceInventorySHA256 == "") {
+		return false
+	}
+	if request.SourceInventoryKey != "" && (!validPublicationRelativePath(request.SourceInventoryKey) || !publicationSHA256Pattern.MatchString(request.SourceInventorySHA256)) {
 		return false
 	}
 	if request.SuperAdmin && request.TenantID == "" {

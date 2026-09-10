@@ -100,6 +100,10 @@ func (h *LocalAuthHandler) createUser(c *gin.Context) {
 		writeAuthError(c, http.StatusServiceUnavailable, "LOCAL_LOGIN_DISABLED", "local accounts are not enabled")
 		return
 	}
+	if !h.enabled {
+		writeAuthError(c, http.StatusConflict, "LOCAL_ACCOUNT_CREATION_DISABLED", "local account creation is disabled; the external identity provider provisions members on first access")
+		return
+	}
 	var request createUserRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
 		writeAuthError(c, http.StatusBadRequest, "INVALID_JSON", "request body is invalid")

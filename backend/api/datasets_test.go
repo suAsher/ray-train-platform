@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"ray-train-platform-backend/auth"
+	"ray-train-platform-backend/datasetpublisher"
 	"ray-train-platform-backend/domain"
 	"ray-train-platform-backend/repositories"
 )
@@ -133,16 +134,17 @@ func (store *fakeDatasetCatalog) TransitionDatasetVersion(_ context.Context, dat
 }
 
 type fakeDatasetPublicationManager struct {
-	dataset     domain.Dataset
-	requestedBy string
-	run         domain.DatasetPublicationRun
-	gcVersions  []domain.DatasetVersion
-	err         error
-	gcCalled    bool
+	dataset         domain.Dataset
+	requestedBy     string
+	sourceSyncRunID string
+	run             domain.DatasetPublicationRun
+	gcVersions      []domain.DatasetVersion
+	err             error
+	gcCalled        bool
 }
 
-func (manager *fakeDatasetPublicationManager) RequestDatasetPublication(_ context.Context, dataset domain.Dataset, requestedBy string) (domain.DatasetPublicationRun, error) {
-	manager.dataset, manager.requestedBy = dataset, requestedBy
+func (manager *fakeDatasetPublicationManager) RequestDatasetPublication(_ context.Context, dataset domain.Dataset, requestedBy, sourceSyncRunID string) (domain.DatasetPublicationRun, error) {
+	manager.dataset, manager.requestedBy, manager.sourceSyncRunID = dataset, requestedBy, sourceSyncRunID
 	return manager.run, manager.err
 }
 
@@ -361,6 +363,12 @@ func TestDatasetAuthorizationControlsPublicationDeprecationAndGlobalGCDryRun(t *
 	if publication.Code != http.StatusAccepted || publications.dataset.ID != teamDataset.ID || publications.requestedBy != "team-admin" {
 		t.Fatalf("publication status=%d dataset=%+v requester=%q body=%s", publication.Code, publications.dataset, publications.requestedBy, publication.Body.String())
 	}
+	publications.run.DatasetID = publicDataset.ID
+	rootAdmin := datasetPrincipal("root-admin", "platform", domain.RoleSuperAdmin)
+	bound := serveDatasetAPI(datasetAPIRouter(handler, &rootAdmin), http.MethodPost, "/api/v1/datasets/public-data/publications", `{"sourceSyncRunId":"sync-labeled-1"}`)
+	if bound.Code != http.StatusAccepted || publications.sourceSyncRunID != "sync-labeled-1" {
+		t.Fatalf("bound publication status=%d source=%q body=%s", bound.Code, publications.sourceSyncRunID, bound.Body.String())
+	}
 	deprecate := serveDatasetAPI(teamRouter, http.MethodPost, "/api/v1/datasets/team-a-data/versions/version-ready/deprecate", "{}")
 	if deprecate.Code != http.StatusOK || store.transitionNext != domain.DatasetVersionDeprecated || store.transitionDatasetID != teamDataset.ID || store.transitionVersionID != ready.ID {
 		t.Fatalf("deprecate status=%d transition=%s/%s->%s body=%s", deprecate.Code, store.transitionDatasetID, store.transitionVersionID, store.transitionNext, deprecate.Body.String())
@@ -408,6 +416,31 @@ func TestDatasetAPIMapsConflictsAndUnavailablePublisherWithoutLeakingErrors(t *t
 	mismatch := serveDatasetAPI(datasetAPIRouter(NewHandler(nil, Options{Datasets: store, DatasetPublications: mismatched}), &teamAdmin), http.MethodPost, "/api/v1/datasets/team-a-data/publications", "{}")
 	if mismatch.Code != http.StatusServiceUnavailable || strings.Contains(mismatch.Body.String(), "different-dataset") {
 		t.Fatalf("publisher mismatch status=%d body=%s", mismatch.Code, mismatch.Body.String())
+	}
+}
+
+func TestDatasetAPISafelyMapsSourceSyncRunFailures(t *testing.T) {
+	publicDataset := datasetForAPI("public-data", string(domain.DatasetVisibilityPublic), "")
+	store := &fakeDatasetCatalog{datasets: []domain.Dataset{publicDataset}}
+	principal := datasetPrincipal("root-admin", "platform", domain.RoleSuperAdmin)
+
+	for _, test := range []struct {
+		name string
+		err  error
+		want int
+		code string
+	}{
+		{name: "missing", err: datasetpublisher.ErrPublicationSourceNotFound, want: http.StatusNotFound, code: "SOURCE_SYNC_RUN_NOT_FOUND"},
+		{name: "incomplete", err: datasetpublisher.ErrPublicationSourceNotReady, want: http.StatusConflict, code: "SOURCE_SYNC_RUN_NOT_READY"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			manager := &fakeDatasetPublicationManager{err: test.err}
+			handler := NewHandler(nil, Options{Datasets: store, DatasetPublications: manager})
+			response := serveDatasetAPI(datasetAPIRouter(handler, &principal), http.MethodPost, "/api/v1/datasets/public-data/publications", `{"sourceSyncRunId":"sync-1"}`)
+			if response.Code != test.want || !strings.Contains(response.Body.String(), test.code) {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
 	}
 }
 

@@ -535,6 +535,9 @@ func validateIDCSyncConfig(cfg Config) error {
 	if source, ok := cfg.IDCDataSpaceSources["original"]; !ok || strings.TrimSpace(source.Server) == "" || strings.TrimSpace(source.Path) == "" {
 		return fmt.Errorf("IDC_SYNC_ENABLED requires the configured original IDC source")
 	}
+	if cfg.DatasetPublisherEnabled && cfg.IDCSyncBucket != cfg.DatasetPublisherSourceBucket {
+		return fmt.Errorf("IDC_SYNC_BUCKET must match DATASET_PUBLISHER_SOURCE_BUCKET when dataset publication is enabled")
+	}
 	return nil
 }
 

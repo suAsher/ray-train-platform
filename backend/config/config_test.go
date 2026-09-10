@@ -19,6 +19,22 @@ func setValidDatasetPublisherConfig(t *testing.T) {
 	t.Setenv("DATASET_PUBLISHER_PRIORITY_CLASS_NAME", "release-dataset-publisher-low")
 }
 
+func TestValidateIDCSyncRequiresPublisherToReadTheSameBucket(t *testing.T) {
+	cfg := Config{
+		IDCSyncEnabled: true, IDCDataSpacesEnabled: true,
+		IDCSyncImage:  "registry.example/idc-sync@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		IDCSyncBucket: "raw-sync-bucket", IDCSyncTosutilConfigSecret: "tosutil",
+		IDCSyncServiceAccount: "idc-sync", IDCSyncWorkClaimName: "idc-sync-work",
+		DatasetPublisherEnabled: true, DatasetPublisherSourceBucket: "publisher-source-bucket",
+		IDCDataSpaceSources: map[string]IDCDataSpaceSource{"original": {Server: "192.0.2.10", Path: "/exports/original"}},
+	}
+
+	err := validateIDCSyncConfig(cfg)
+	if err == nil || !strings.Contains(err.Error(), "DATASET_PUBLISHER_SOURCE_BUCKET") {
+		t.Fatalf("mismatched lifecycle buckets were accepted: %v", err)
+	}
+}
+
 func TestLoadAcceptsDatasetPublisherCredentialSecretReference(t *testing.T) {
 	setValidDatasetPublisherConfig(t)
 	t.Setenv("DATASET_VERSIONING_ENABLED", "true")

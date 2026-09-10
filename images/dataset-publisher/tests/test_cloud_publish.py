@@ -464,6 +464,8 @@ class CloudPublisherCLIContractTests(unittest.TestCase):
             "tos_region": "cn-shanghai",
             "source_root": "ray-train/team-a/labeled",
             "source_index": ".raytrain/trusted-index-v2.pkl",
+            "source_inventory_key": "ray-train/platform/idc-inventories/sync-1/" + "a" * 64 + ".json",
+            "source_inventory_sha256": "a" * 64,
             "internal_prefix": "ray-train/platform/datasets",
             "output_dir": "/work/publisher",
         }

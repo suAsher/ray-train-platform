@@ -128,6 +128,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source-index", required=True)
     parser.add_argument("--internal-prefix", required=True)
     parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--source-inventory-key")
+    parser.add_argument("--source-inventory-sha256")
     return parser
 
 
@@ -146,6 +148,8 @@ def _request(arguments: argparse.Namespace) -> CloudPublishRequest:
         source_index=arguments.source_index,
         internal_prefix=arguments.internal_prefix,
         output_dir=arguments.output_dir,
+        source_inventory_key=arguments.source_inventory_key,
+        source_inventory_sha256=arguments.source_inventory_sha256,
     )
 
 
@@ -1092,7 +1096,7 @@ def main(argv: list[str] | None = None) -> int:
         arguments = build_argument_parser().parse_args(argv)
         request = _validate_request(_request(arguments))
         count = _validated_partition_count(arguments.partition_count)
-        storage = TOSStorage(source_bucket=request.source_bucket, target_bucket=request.target_bucket, endpoint=request.tos_endpoint, region=request.tos_region, source_prefix=request.source_root, internal_dataset_prefix=request.internal_prefix, irsa_provider=VKEIRSAProvider())
+        storage = TOSStorage(source_bucket=request.source_bucket, target_bucket=request.target_bucket, endpoint=request.tos_endpoint, region=request.tos_region, source_prefix=request.source_root, internal_dataset_prefix=request.internal_prefix, source_inventory_key=request.source_inventory_key, source_inventory_sha256=request.source_inventory_sha256, irsa_provider=VKEIRSAProvider())
         if arguments.phase == "plan":
             wait_for_multimodal_source_index(request, storage=storage)
             run_plan(request, storage=storage, partition_count=count)

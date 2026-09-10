@@ -490,6 +490,9 @@ func newIDCSyncManager(repository *repositories.GormRepository, client *k8s.Clie
 		CallbackURL:        "http://ray-train-backend." + namespace + ".svc.cluster.local:8080",
 		ServiceAccountName: cfg.IDCSyncServiceAccount, WorkClaimName: cfg.IDCSyncWorkClaimName,
 		CallbackKey: []byte(cfg.PATPepper),
+		OnReconcileError: func(err error) {
+			log.Printf("IDC sync reconciliation deferred: %v", err)
+		},
 	})
 }
 

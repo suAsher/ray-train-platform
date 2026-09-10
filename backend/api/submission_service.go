@@ -466,6 +466,7 @@ func (service *SubmissionService) resolveDatasetSnapshot(ctx context.Context, pr
 		Sites:     spec.DatasetRef.Sites,
 		DatasetID: dataset.ID, DatasetVersionID: version.ID, ManifestSHA256: version.ManifestSHA256,
 		DataMode: domain.DataModeStreaming, CachePolicy: spec.CachePolicy,
+		SourceSyncRunID: version.SourceSyncRunID, SourceInventorySHA256: version.SourceInventorySHA256,
 	}
 	if err := provenance.Validate(); err != nil {
 		return domain.DatasetProvenance{}, nil, ErrSubmissionDatasetManifestInvalid

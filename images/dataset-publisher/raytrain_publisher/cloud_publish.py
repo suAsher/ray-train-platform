@@ -85,6 +85,8 @@ class CloudPublishRequest:
     source_index: str
     internal_prefix: str
     output_dir: Path
+    source_inventory_key: str | None = None
+    source_inventory_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -138,6 +140,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source-index", required=True)
     parser.add_argument("--internal-prefix", required=True)
     parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--source-inventory-key")
+    parser.add_argument("--source-inventory-sha256")
     return parser
 
 
@@ -353,6 +357,13 @@ def _validate_request(request: object) -> CloudPublishRequest:
     if _normalize_relative_key(request.source_index) != request.source_index:
         raise ValueError("source index must be normalized")
     _validate_scoped_key(request.source_root, request.source_index)
+    if (request.source_inventory_key is None) != (request.source_inventory_sha256 is None):
+        raise ValueError("source inventory key and digest must be provided together")
+    if request.source_inventory_key is not None:
+        if _normalize_relative_key(request.source_inventory_key) != request.source_inventory_key:
+            raise ValueError("source inventory key must be normalized")
+        if not isinstance(request.source_inventory_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", request.source_inventory_sha256):
+            raise ValueError("source inventory digest is invalid")
     generated_keys = (
         f"{request.dataset_id}/shards/sha256-{'0' * 64}.parquet",
         f"{request.dataset_id}/manifests/{request.dataset_version_id}.parquet",
@@ -1046,6 +1057,8 @@ def _request_from_arguments(arguments: argparse.Namespace) -> CloudPublishReques
         source_index=arguments.source_index,
         internal_prefix=arguments.internal_prefix,
         output_dir=arguments.output_dir,
+        source_inventory_key=arguments.source_inventory_key,
+        source_inventory_sha256=arguments.source_inventory_sha256,
     )
 
 
@@ -1070,6 +1083,8 @@ def main(argv: list[str] | None = None) -> int:
             region=request.tos_region,
             source_prefix=request.source_root,
             internal_dataset_prefix=request.internal_prefix,
+            source_inventory_key=request.source_inventory_key,
+            source_inventory_sha256=request.source_inventory_sha256,
             irsa_provider=VKEIRSAProvider(),
         )
         result = publish_cloud_dataset(
