@@ -587,16 +587,17 @@ bash ops/storage/nvme-cache/register-node.sh --node NODE_NAME --output-dir /tmp/
 
 #### 管理员自助接入命令（已有生产集群扩容）
 
-以下命令在具有集群管理权限的构建机上执行，使用最新仓库
-`/opt/guofeng/vke-cluster/ray-platform-main`。不需要联系 AI 确认，但必须逐项通过；
+以下命令在具有集群管理权限的构建机上执行，使用最新的
+`ray-train-platform` 仓库 checkout。仓库的实际绝对路径由本环境发布配置维护，
+不写进可分发手册。不需要联系 AI 确认，但必须逐项通过；
 失败时保持新节点 cordon，不允许只打标签就放行。`cordon` 不驱逐现有 Pod，
 这里仍仅用于新节点，不对旧训练节点执行 drain、重启或格式化。
 
 1. 设置目标、核对 context 和节点上的现有工作负载，再暂停新节点调度：
 
 ```bash
-cd /opt/guofeng/vke-cluster/ray-platform-main
-NEW_GPU_NODE=172.28.1.229 # 每次替换为新节点的 Kubernetes NAME
+cd <ray-train-platform-checkout>
+NEW_GPU_NODE=GPU_NODE_NAME # 每次替换为新节点的 Kubernetes NAME
 kubectl config current-context
 kubectl get node "$NEW_GPU_NODE" -o wide
 kubectl get pods -A --field-selector "spec.nodeName=$NEW_GPU_NODE" -o wide

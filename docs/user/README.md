@@ -45,6 +45,7 @@ checkpoint_root = os.getenv("PLATFORM_CHECKPOINT_PATH")
 ## 项目接入
 
 - 普通 PyTorch/DDP 项目：[新训练代码接入](../NEW_TRAINING_CODE_GUIDE.md)
+- MLflow Run、指标、Artifact、Models 与 Trace：[MLflow 用户使用标准](../MLFLOW_USER_GUIDE.md)
 - BEVFusion 从拉代码到 2×8 卡提交：[端到端操作手册](../BEVFUSION_END_TO_END_GUIDE.md)
 - BEVFusion 项目：[代码改造](../BEVFUSION_CODE_CHANGES.md)与[交付手册](../BEVFUSION_RUNBOOK.md)
 - 所有提交参数和命令：[多方式提交手册](../SUBMIT_GUIDE.md)
@@ -52,7 +53,7 @@ checkpoint_root = os.getenv("PLATFORM_CHECKPOINT_PATH")
 ## 常见边界
 
 - Ray Dashboard 只在任务 RayCluster 存活期间可用；历史日志和指标从平台任务详情查看。
-- MLflow 实验中心长期保留训练参数和指标。训练代码需显式调用 MLflow；平台不会从任意 stdout 自动猜测指标。
+- MLflow 实验中心长期保留训练参数和指标。训练代码需显式调用 MLflow；平台不会从任意 stdout 自动猜测指标。训练结果不会自动成为 MLflow Artifact 或 Model，Trace 仅适用于已接入的推理/Agent 服务。
 - 团队/公共目录在训练 Pod 中只读。发布新数据需要 TenantAdmin 或 SuperAdmin 权限。
 - 页面不提供数据下载；允许的上传、发布和训练读写范围由角色与数据空间共同决定。
 - 调试 Pod 可以停止和重建；持久的是工作区、个人数据、快照和用户环境，不是 Pod 本身。

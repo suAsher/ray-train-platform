@@ -90,6 +90,8 @@
 4. 在 `/workspace` 编辑代码；在 `/mnt/storage/*` 查看数据。工作区、个人数据和工作区中的 `.venv` 都会保留；调试 Pod 本身不是永久实例。
 5. 用完点击 **停止工作区**，立即释放 GPU。
 
+Portal 页面可以位于 `https://spiking-dev.wellspiking.ai/raytrain`（正式环境去掉 `-dev`），但 JupyterLab、VS Code 和 MLflow 会在新标签页打开稳定入口 `https://raytrain.wellspiking.ai`。这是预期行为：这些工具依赖根路径 Cookie、静态资源和 WebSocket。页面只接受平台后端签发的一次性链接，票据换成 HttpOnly Cookie 后会从地址栏清除；不要手工给工具地址加 `/raytrain`，也不要复制带 `access_token` 的中间链接。
+
 最小 GPU 自检：
 
 ```bash
@@ -212,17 +214,19 @@ Dashboard 用于查看运行中的 Ray node、task、actor、object store 和资
 
 实验中心是平台筛选视图，用于按当前用户或团队查看任务参数、Loss、学习率、吞吐和 mAP/NDS。它适合日常训练排障，并保留平台任务、提交人、租户和训练指标之间的关联。
 
+完整的能力边界、Rank 0 接入模板、Artifact / Model / Trace 的使用方式见 [MLflow 用户使用标准](MLFLOW_USER_GUIDE.md)。尤其需要注意：平台会注入 MLflow 环境变量，但不会为任意训练入口自动创建 Run，也不会自动把 checkpoint 写为 Artifact 或模型版本。
+
 #### 任务、Run 与模型不是同一个 ID
 
 平台任务 ID（例如 `job-...`）是平台调度、日志、结果目录和权限校验的主键；MLflow `run_id` 是 MLflow 在创建 Run 时生成的 32 位标识，二者**不能也不应强行相同**。平台会把任务 ID 写为 MLflow Run 名称，并写入可校验的 `platform.job_id`、租户、提交者和来源标签，因此可以可靠地反向关联；重试或恢复时，一个任务也可能有多个 Run。
 
-在“实验中心”每条记录的“训练任务”可返回平台任务详情；右侧的 **MLflow 详情** 会在新标签页直接打开该条 Run 的原生 MLflow 页面。该按钮只对当前用户有权看到、且由平台来源校验通过的 Run 生效；跳转使用一次性平台票据，不暴露集群内 MLflow 地址。
+在“实验中心”每条记录的“训练任务”可返回平台任务详情；任务详情的 **Loss 收敛曲线与指标 → MLflow 详情** 会直接显示实验名、Run 名称、Run ID、状态、开始/结束时间和训练参数，并可在新标签页打开该 Run。该按钮只对当前用户有权看到、且由平台来源校验通过的 Run 生效；跳转使用一次性平台票据，不暴露集群内 MLflow 地址。
 
 实验中心中的按钮 **打开 MLflow 管理界面** 会在新标签页打开同域 `https://raytrain.wellspiking.ai/mlflow/`。原生 MLflow 是登录后可访问的完整管理界面，展示全平台实验。所有平台认证用户都可以创建、修改、删除实验、Run 和模型注册条目，并可上传、下载 MLflow Artifact。原生 MLflow 全功能开放是当前明确策略；这些操作直接改变共享 MLflow 数据，删除或修改前应确认目标对象。
 
 Ray Dashboard 与两种 MLflow 视图的生命周期不同：Ray Dashboard 随任务 RayCluster 回收；实验中心和原生 MLflow 的运行记录长期保留。
 
-镜像目录会分别标出 `rayVersion` 与 `supportedEngines`：现有 BEVFusion 镜像只用于其已验证的 `ray-ddp` 兼容流程，Ray Train 托管生产镜像固定为 Ray 2.56.1，不能混用。MLflow client 必须与镜像 Python 版本兼容；自定义镜像若要使用实验中心，也必须预装兼容的 `mlflow-skinny`，不要在每次任务启动时临时安装。
+镜像目录会分别标出 `rayVersion` 与 `supportedEngines`：现有 BEVFusion 镜像只用于其已验证的 `ray-ddp` 兼容流程，当前 Ray Train 托管生产镜像固定为 Ray 2.58.0，不能混用。MLflow client 必须与镜像 Python 版本兼容；自定义镜像若要使用实验中心，也必须预装兼容的 `mlflow-skinny`，不要在每次任务启动时临时安装。
 
 平台会向每个训练任务注入 MLflow 地址、实验名、任务名和由控制面签发的来源标记。训练代码可以读取这些值，但篡改后不会通过实验中心的任务归属校验；它们不应被当作用户不可见的秘密。训练代码只需在 rank 0 使用这些环境变量，不要把服务地址、租户或任务 ID 写死：
 
@@ -254,7 +258,7 @@ if int(os.getenv("RANK", "0")) == 0 and mlflow.active_run():
     mlflow.end_run(status="FINISHED")
 ```
 
-使用平台已适配的训练运行时时，运行时会创建带平台归属标签的 rank 0 Run；业务代码应直接在 `mlflow.active_run()` 存在时调用 `log_params`、`log_metric` 或 `log_metrics`，不要再无条件 `start_run()` 一次。使用自定义训练代码或镜像时才按上例创建 Run，并确保镜像预装与 Python 版本兼容的 `mlflow-skinny`。没有 Run、Loss 或其他指标通常不是任务未接入平台，而是训练代码/旧运行时没有创建 Run 或没有调用 `mlflow.log_metric`；仅注入 `MLFLOW_TRACKING_URI` 不会自动产生曲线。
+项目显式配置 `raytrain_runtime` Hook 时，Hook 会创建带平台归属标签的 rank 0 Run；未配置 Hook 的任意训练代码（包括普通 `python tools/train.py ...`）都应按上例创建 Run，并确保镜像预装与 Python 版本兼容的 `mlflow-skinny`。没有 Run、Loss 或其他指标通常不是任务未接入平台，而是训练代码没有创建 Run 或没有调用 `mlflow.log_metric`；仅注入 `MLFLOW_TRACKING_URI` 不会自动产生曲线。
 
 平台接口的边界如下：
 
@@ -473,6 +477,8 @@ TOS 是对象存储，经 CSI/FSX 以文件系统语义呈现；目录遍历可�
 
 **任务一直是“排队中”怎么办？**
 检查团队 GPU 配额、当前正在运行的任务和未停止的调试环境。Kueue 只有在同时满足 GPU、CPU 和内存后才准入任务。新增节点会改变物理池容量，但团队配额仍由管理员调整，已有任务的 workers 不会自动增长。
+
+如果页面明确显示拓扑配置不匹配，把任务 ID 和完整原因交给平台管理员，不要反复重提。任务的 hostname 拓扑意图、`Topology` 对象和 `ResourceFlavor.spec.topologyName` 必须由管理员作为同一次切换配齐；平台关闭 TAS 时不会单独给新任务添加拓扑注解。普通用户只需运行 `spk-rayjob status JOB_ID`，不需要使用 `kubectl`。
 
 **如何确认训练真的用了 GPU 和选中的数据？**
 先用 1×1 小任务在 stdout 打印 `torch.cuda.get_device_name(0)` 和一个明确标注文件的 `stat`，再在任务详情核对 GPU 指标与输出目录。不要为了验收而对整个 TOS 根目录执行递归 `find/rglob`。

@@ -138,7 +138,7 @@ MLflow 是可选能力，不改变训练启动方式。平台已经注入 `MLFLO
 3. 模型和 Checkpoint 不调用 `mlflow.log_artifact`，仍写 `PLATFORM_OUTPUT_PATH`；
 4. 异常退出时把 run 标记为 `FAILED`，正常结束标记为 `FINISHED`。
 
-完整代码片段见[用户使用手册的 MLflow 实验中心章节](USER_GUIDE.md#mlflow-实验中心)。
+完整代码片段见[用户使用手册的 MLflow 实验中心章节](USER_GUIDE.md#mlflow-实验中心)；Artifact、Models、Trace 和外部平台集成的当前边界见 [MLflow 用户使用标准](MLFLOW_USER_GUIDE.md)。
 
 ## 6. 数据路径与索引文件
 
