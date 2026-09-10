@@ -73,6 +73,43 @@ func TestSubmitDirectoryRelaysArchiveThroughPlatformThenSubmits(t *testing.T) {
 	}
 }
 
+func TestSubmitDirectoryAcceptsLegacyArtifactReusedByDigestRelay(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "train.py"), []byte("print('train')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const artifactID = "artifact-0123456789abcdef01234567"
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodPut && strings.HasPrefix(request.URL.Path, "/ray/api/packages/gcs/"):
+			writer.Header().Set(httpapi.SourceArtifactIDHeader, artifactID)
+			writer.WriteHeader(http.StatusOK)
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/jobs":
+			var submit struct {
+				Spec domain.JobSpec `json:"spec"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&submit); err != nil {
+				t.Fatal(err)
+			}
+			if submit.Spec.Source.ArtifactID != artifactID {
+				t.Fatalf("submitted artifact=%q", submit.Spec.Source.ArtifactID)
+			}
+			writeClientSuccess(t, writer, http.StatusAccepted, map[string]any{"id": "job-legacy-reuse"})
+		default:
+			t.Fatalf("unexpected request %s %s", request.Method, request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientOptions{ServerURL: server.URL, Token: "test-token", HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := client.SubmitDirectory(context.Background(), root, testJobSpec())
+	if err != nil || job.ID != "job-legacy-reuse" {
+		t.Fatalf("job=%+v err=%v", job, err)
+	}
+}
+
 func TestCheckpointsUsesOwnerScopedJobEndpointAndDecodesOrderedItems(t *testing.T) {
 	const jobID = "job-0123456789abcdef01234567"
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

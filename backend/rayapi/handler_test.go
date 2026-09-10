@@ -216,6 +216,16 @@ func (repository *rayTestRepository) GetSourceArtifact(_ context.Context, tenant
 	return &copy, nil
 }
 
+func (repository *rayTestRepository) GetReadySourceArtifactBySHA256(_ context.Context, tenantID, userID, digest string) (*domain.SourceArtifact, error) {
+	for _, artifact := range repository.artifacts {
+		if artifact.TenantID == tenantID && artifact.UserID == userID && artifact.SHA256 == digest && artifact.State == domain.SourceArtifactReady {
+			copy := artifact
+			return &copy, nil
+		}
+	}
+	return nil, repositories.ErrSourceArtifactNotFound
+}
+
 func (repository *rayTestRepository) MarkSourceArtifactReady(_ context.Context, tenantID, userID, artifactID string, completedAt time.Time) (*domain.SourceArtifact, error) {
 	artifact, err := repository.GetSourceArtifact(context.Background(), tenantID, userID, artifactID)
 	if err != nil {
@@ -472,6 +482,48 @@ func TestRayPackagePutHeadAndSubmitAreOwnerScoped(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), `"deleted":true`) {
 		t.Fatalf("delete response is not Ray-compatible: %s", response.Body.String())
+	}
+}
+
+func TestDigestPackageReusesLegacyOwnerArtifactWithoutConflict(t *testing.T) {
+	principal := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{"Engineer"}, AuthType: auth.AuthTypeOIDC}
+	payload := []byte("PK\x03\x04legacy-content")
+	digest := sha256.Sum256(payload)
+	digestText := hex.EncodeToString(digest[:])
+	packageName := digestText + ".zip"
+	now := time.Now().UTC()
+	legacy, err := domain.NewSourceArtifact(domain.SourceArtifactInput{
+		ID: "artifact-0123456789abcdef01234567", TenantID: principal.TenantID, UserID: principal.Subject,
+		SHA256: digestText, SizeBytes: int64(len(payload)),
+	}, now.Add(time.Hour), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err = legacy.MarkReady(now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := &rayTestRepository{artifacts: map[string]domain.SourceArtifact{legacy.ID: legacy}}
+	store := &rayTestStore{objects: map[string]objectstore.ObjectInfo{
+		legacy.ObjectKey: {SizeBytes: legacy.SizeBytes, Metadata: map[string]string{"sha256": legacy.SHA256}},
+	}}
+	router := rayRouter(t, repository, store, principal)
+
+	request := httptest.NewRequest(http.MethodPut, "/ray/api/packages/gcs/"+packageName, bytes.NewReader(payload))
+	request.ContentLength = int64(len(payload))
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get(httpapi.SourceArtifactIDHeader) != legacy.ID {
+		t.Fatalf("legacy package reuse status=%d artifact=%q body=%s", response.Code, response.Header().Get(httpapi.SourceArtifactIDHeader), response.Body.String())
+	}
+	if response = rayRequest(router, http.MethodHead, "/ray/api/packages/gcs/"+packageName, ""); response.Code != http.StatusOK || response.Header().Get(httpapi.SourceArtifactIDHeader) != legacy.ID {
+		t.Fatalf("legacy package head status=%d artifact=%q", response.Code, response.Header().Get(httpapi.SourceArtifactIDHeader))
+	}
+	if response = rayRequest(router, http.MethodPost, "/ray/api/jobs/", raySubmitBody(packageName)); response.Code != http.StatusOK {
+		t.Fatalf("legacy package submit status=%d body=%s", response.Code, response.Body.String())
+	}
+	if repository.created == nil || repository.created.SourceArtifactID != legacy.ID {
+		t.Fatalf("legacy package submitted artifact=%+v", repository.created)
 	}
 }
 

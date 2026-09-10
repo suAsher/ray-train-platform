@@ -226,7 +226,7 @@ Dashboard 用于查看运行中的 Ray node、task、actor、object store 和资
 
 Ray Dashboard 与两种 MLflow 视图的生命周期不同：Ray Dashboard 随任务 RayCluster 回收；实验中心和原生 MLflow 的运行记录长期保留。
 
-镜像目录会分别标出 `rayVersion` 与 `supportedEngines`：现有 BEVFusion 镜像只用于其已验证的 `ray-ddp` 兼容流程，当前 Ray Train 托管生产镜像固定为 Ray 2.58.0，不能混用。MLflow client 必须与镜像 Python 版本兼容；自定义镜像若要使用实验中心，也必须预装兼容的 `mlflow-skinny`，不要在每次任务启动时临时安装。
+镜像目录会分别标出 `rayVersion` 与 `supportedEngines`：现有 BEVFusion 镜像只用于其已验证的 `ray-ddp` 兼容流程，当前 Ray Train 托管生产基线为 Ray 2.56.1；S1H 的 Ray Data streaming 验收镜像使用受控的 Ray 2.58.0 canary，二者不能随意混用。MLflow client 必须与镜像 Python 版本兼容；自定义镜像若要使用实验中心，也必须预装兼容的 `mlflow-skinny`，不要在每次任务启动时临时安装。
 
 平台会向每个训练任务注入 MLflow 地址、实验名、任务名和由控制面签发的来源标记。训练代码可以读取这些值，但篡改后不会通过实验中心的任务归属校验；它们不应被当作用户不可见的秘密。训练代码只需在 rank 0 使用这些环境变量，不要把服务地址、租户或任务 ID 写死：
 
@@ -493,6 +493,6 @@ TOS 是对象存储，经 CSI/FSX 以文件系统语义呈现；目录遍历可�
 
 升级还会检查实际可执行格式和架构。Unix 先保留 `.previous.*` 备份，再原子替换当前程序；Windows 在退出后替换，需重新执行 `spk-rayjob version` 确认。Windows 若已有 `.previous`，先确认当前版本可用，将备份移到安全位置后再升级，不会自动覆盖旧备份。异步替换失败可查看程序旁的 `.upgrade-error.txt`；不要为了重试关闭校验。
 
-本机原生 Ray CLI `2.35.0` 是 Jobs API 兼容版本；集群托管训练镜像的 Ray `2.58` 系列是另一组件。不要混淆两者。原生 Jobs API 没有平台托管续训参数，续训时在任务详情取得平台 JOB_ID，保持原镜像、入口、数据版本和场地，使用 `spk-rayjob submit --engine ray-train --resume-from-job JOB_ID`；不能混用原生 submission ID。
+本机原生 Ray CLI `2.35.0` 是 Jobs API 兼容版本；集群托管生产基线是 Ray `2.56.1`，S1H streaming 验收镜像使用 Ray `2.58.0` canary，它们是独立运行时。不要混淆这些版本。原生 Jobs API 没有平台托管续训参数，续训时在任务详情取得平台 JOB_ID，保持原镜像、入口、数据版本和场地，使用 `spk-rayjob submit --engine ray-train --resume-from-job JOB_ID`；不能混用原生 submission ID。
 
 帮助文档保存在可编辑文档库。新独立主题通过缺失 ID 补齐，已有管理员编辑内容不会被 seed 覆盖。修改源码或本手册不代表线上文档已更新；需发布对应组件并核对线上新主题与内容，旧文档如需更新由管理员在现有编辑入口保存。

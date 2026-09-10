@@ -50,7 +50,7 @@ const (
 )
 
 var stableSourceRequestID = regexp.MustCompile(`^source-request-[0-9a-f]{24}$`)
-var relayedSourceArtifactID = regexp.MustCompile(`^raypkg-[0-9a-f]{64}$`)
+var relayedSourceArtifactID = regexp.MustCompile(`^(?:raypkg-[0-9a-f]{64}|artifact-[0-9a-f]{24})$`)
 
 type localLogin struct {
 	Token    string `json:"token"`

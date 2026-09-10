@@ -37,6 +37,7 @@ type Repository interface {
 	CreateOrReuseSourceArtifactWithLimits(context.Context, *domain.SourceArtifact, repositories.SourceArtifactLimits) (*domain.SourceArtifact, error)
 	ReopenSourceArtifactUploadWithLimits(context.Context, string, string, string, time.Time, repositories.SourceArtifactLimits) (*domain.SourceArtifact, error)
 	GetSourceArtifact(context.Context, string, string, string) (*domain.SourceArtifact, error)
+	GetReadySourceArtifactBySHA256(context.Context, string, string, string) (*domain.SourceArtifact, error)
 	MarkSourceArtifactReady(context.Context, string, string, string, time.Time) (*domain.SourceArtifact, error)
 }
 
@@ -182,8 +183,7 @@ func (handler *Handler) packageExists(c *gin.Context) {
 		handler.writeError(c, http.StatusBadRequest)
 		return
 	}
-	artifactID := rayPackageArtifactID(principal.TenantID, principal.Subject, packageName.Name)
-	artifact, err := handler.repository.GetSourceArtifact(c.Request.Context(), principal.TenantID, principal.Subject, artifactID)
+	artifact, err := handler.resolvePackageArtifact(c.Request.Context(), principal, packageName.Name)
 	if err != nil || artifact == nil || artifact.State != domain.SourceArtifactReady {
 		handler.writeError(c, http.StatusNotFound)
 		return
@@ -196,7 +196,7 @@ func (handler *Handler) packageExists(c *gin.Context) {
 		handler.writeArtifactError(c, status)
 		return
 	}
-	c.Header(httpapi.SourceArtifactIDHeader, artifactID)
+	c.Header(httpapi.SourceArtifactIDHeader, artifact.ID)
 	c.Status(http.StatusOK)
 }
 
@@ -266,7 +266,7 @@ func (handler *Handler) putPackage(c *gin.Context) {
 		handler.writeError(c, http.StatusConflict)
 		return
 	}
-	if stored.ID != artifactID {
+	if stored.ID != artifactID && !digestPackageMatchesArtifact(packageName.Name, stored) {
 		handler.writeError(c, http.StatusConflict)
 		return
 	}
@@ -275,7 +275,7 @@ func (handler *Handler) putPackage(c *gin.Context) {
 		stored, status = handler.recoverReadyArtifact(c.Request.Context(), principal, stored)
 		switch status {
 		case http.StatusOK:
-			c.Header(httpapi.SourceArtifactIDHeader, artifactID)
+			c.Header(httpapi.SourceArtifactIDHeader, stored.ID)
 			c.Status(http.StatusOK)
 			return
 		case 0:
@@ -308,8 +308,27 @@ func (handler *Handler) putPackage(c *gin.Context) {
 		handler.writeError(c, http.StatusServiceUnavailable)
 		return
 	}
-	c.Header(httpapi.SourceArtifactIDHeader, artifactID)
+	c.Header(httpapi.SourceArtifactIDHeader, stored.ID)
 	c.Status(http.StatusOK)
+}
+
+func digestPackageMatchesArtifact(packageName string, artifact *domain.SourceArtifact) bool {
+	return artifact != nil && digestPackageName.MatchString(packageName) && strings.TrimSuffix(packageName, ".zip") == artifact.SHA256
+}
+
+func (handler *Handler) resolvePackageArtifact(ctx context.Context, principal auth.Principal, packageName string) (*domain.SourceArtifact, error) {
+	artifactID := rayPackageArtifactID(principal.TenantID, principal.Subject, packageName)
+	artifact, err := handler.repository.GetSourceArtifact(ctx, principal.TenantID, principal.Subject, artifactID)
+	if err == nil && artifact != nil {
+		return artifact, nil
+	}
+	if err != nil && !errors.Is(err, repositories.ErrSourceArtifactNotFound) {
+		return nil, err
+	}
+	if !digestPackageName.MatchString(packageName) {
+		return nil, err
+	}
+	return handler.repository.GetReadySourceArtifactBySHA256(ctx, principal.TenantID, principal.Subject, strings.TrimSuffix(packageName, ".zip"))
 }
 
 func (handler *Handler) personalSourceArtifactRoot(ctx context.Context, principal auth.Principal) (string, error) {
@@ -424,8 +443,7 @@ func (handler *Handler) submitJob(c *gin.Context) {
 		handler.writeError(c, http.StatusBadRequest)
 		return
 	}
-	artifactID := rayPackageArtifactID(principal.TenantID, principal.Subject, translated.Package.Name)
-	artifact, err := handler.repository.GetSourceArtifact(c.Request.Context(), principal.TenantID, principal.Subject, artifactID)
+	artifact, err := handler.resolvePackageArtifact(c.Request.Context(), principal, translated.Package.Name)
 	if err != nil || artifact == nil || artifact.State != domain.SourceArtifactReady {
 		handler.writeError(c, http.StatusNotFound)
 		return

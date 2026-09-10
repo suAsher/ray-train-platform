@@ -59,6 +59,25 @@ func (r *GormRepository) GetSourceArtifact(ctx context.Context, tenantID, userID
 	return record.toDomain()
 }
 
+// GetReadySourceArtifactBySHA256 resolves content-addressed package uploads
+// across the legacy artifact-* and current raypkg-* identifier schemes. The
+// owner predicate is part of the query so identical source in another tenant
+// or account can never be reused as an authorization shortcut.
+func (r *GormRepository) GetReadySourceArtifactBySHA256(ctx context.Context, tenantID, userID, digest string) (*domain.SourceArtifact, error) {
+	var record SourceArtifactRecord
+	err := r.db.WithContext(ctx).
+		Where("tenant_id = ? AND user_id = ? AND sha256 = ? AND state = ?", tenantID, userID, digest, string(domain.SourceArtifactReady)).
+		Order("created_at ASC, id ASC").
+		First(&record).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrSourceArtifactNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get ready source artifact by sha256: %w", err)
+	}
+	return record.toDomain()
+}
+
 func (r *GormRepository) GetSourceArtifactByClientRequestID(ctx context.Context, tenantID, userID, clientRequestID string) (*domain.SourceArtifact, error) {
 	var record SourceArtifactRecord
 	err := r.db.WithContext(ctx).Table("source_artifacts").
