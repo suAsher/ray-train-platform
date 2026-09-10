@@ -115,12 +115,53 @@ func (r *GormRepository) CreateHelpDocument(ctx context.Context, d domain.HelpDo
 func (r *GormRepository) SeedHelpDocuments(ctx context.Context, docs []domain.HelpDocument) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, d := range docs {
-			if _, _, err := insertHelp(tx, d, "platform-seed", true); err != nil {
+			if _, inserted, err := insertHelp(tx, d, "platform-seed", true); err != nil {
 				return err
+			} else if !inserted {
+				if err := refreshSeedHelp(tx, d); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
 	})
+}
+
+func refreshSeedHelp(tx *gorm.DB, seed domain.HelpDocument) error {
+	var rec HelpDocumentRecord
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", seed.ID).First(&rec).Error; err != nil {
+		return err
+	}
+	var current domain.HelpDocument
+	if err := json.Unmarshal([]byte(rec.DraftJSON), &current); err != nil {
+		return err
+	}
+	if current.UpdatedBy != "platform-seed" || sameHelpContent(current, seed) {
+		return nil
+	}
+	seed.Version = rec.Version + 1
+	seed.PublishedVersion = seed.Version
+	seed.UpdatedAt = time.Now().UTC()
+	seed.UpdatedBy = "platform-seed"
+	seed.Action = "seed"
+	raw, err := json.Marshal(seed)
+	if err != nil {
+		return err
+	}
+	result := tx.Model(&HelpDocumentRecord{}).Where("id = ? AND version = ?", seed.ID, rec.Version).Updates(map[string]any{
+		"version": rec.Version + 1, "draft_json": string(raw), "published_json": string(raw),
+	})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrHelpConflict
+	}
+	return tx.Create(&HelpRevisionRecord{DocumentID: seed.ID, Version: seed.Version, SnapshotJSON: string(raw)}).Error
+}
+
+func sameHelpContent(left, right domain.HelpDocument) bool {
+	return left.Title == right.Title && left.Category == right.Category && left.SortOrder == right.SortOrder && left.Markdown == right.Markdown
 }
 
 func (r *GormRepository) ChangeHelpDocument(ctx context.Context, id string, expected int64, action string, restore int64, input *domain.HelpDocument, actor string) (domain.HelpDocument, error) {
