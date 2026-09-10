@@ -201,6 +201,8 @@ spk-rayjob submit \
 
 ### 3.3 多机多卡提交
 
+`--workers 2` 表示两个 Ray Train Worker，不自动等于两台物理机器。TAS 切换前平台会优先把 Worker 分散到不同 hostname，但资源碎片时允许同机启动，避免任务已获 Kueue 配额却永远卡在 Pod Pending；要声称多机验证通过，必须在任务详情的 Worker 拓扑里看到两个不同节点名。TAS 完整启用后由 Kueue 在准入阶段保留跨主机资源，平台才会使用硬跨主机约束。
+
 ```bash
 spk-rayjob submit \
   --engine ray-ddp \

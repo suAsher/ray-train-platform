@@ -231,21 +231,26 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	managedMultiNode := job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain && workerReplicas > 1
 	legacyRayTrain := job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayDDP && job.Spec.Execution.ResolvedMode() == domain.ExecutionModeRayTrain
 	if managedMultiNode || legacyRayTrain {
-		// Each distributed worker represents one physical training node. Require
-		// an even host spread so a multi-worker submission is a real multi-node
-		// run rather than two worker Pods packed onto one 8-GPU server. The legacy
-		// ray_train profile retains its historical behavior, while the managed
-		// engine applies this independently of the legacy execution mode.
-		workerPod["spec"].(map[string]any)["topologySpreadConstraints"] = []any{map[string]any{
+		// Prefer one distributed worker per physical host. Before Kueue TAS is
+		// fully cut over, Kueue only admits aggregate GPU capacity and cannot
+		// guarantee that two hosts are available. Keep the spread soft in that
+		// compatibility mode so an admitted workload cannot deadlock at the Pod
+		// scheduler. Once TAS is enabled, Kueue reserves matching topology first
+		// and the worker spread can safely become a hard multi-node contract.
+		spread := map[string]any{
 			"maxSkew":           int64(1),
-			"minDomains":        int64(2),
 			"topologyKey":       "kubernetes.io/hostname",
-			"whenUnsatisfiable": "DoNotSchedule",
+			"whenUnsatisfiable": "ScheduleAnyway",
 			"labelSelector": map[string]any{"matchLabels": map[string]any{
 				"platform_job_id":  job.ID,
 				"ray.io/node-type": "worker",
 			}},
-		}}
+		}
+		if options.TopologyAwareScheduling {
+			spread["whenUnsatisfiable"] = "DoNotSchedule"
+			spread["minDomains"] = int64(2)
+		}
+		workerPod["spec"].(map[string]any)["topologySpreadConstraints"] = []any{spread}
 	}
 	headStartParams := map[string]any{"dashboard-host": "0.0.0.0", "num-gpus": "0"}
 	workerStartParams := map[string]any{"num-gpus": strconv.FormatInt(gpusPerWorker, 10)}

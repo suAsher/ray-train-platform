@@ -333,7 +333,7 @@ func TestManagedJobPreservesRayClusterResourcesAndKeepsHeadCPUOnly(t *testing.T)
 	}
 }
 
-func TestManagedMultiNodeAlwaysUsesTopologySpreadIndependentOfLegacyMode(t *testing.T) {
+func TestManagedMultiWorkerUsesSoftTopologySpreadUntilTASCutover(t *testing.T) {
 	job := managedRenderJob(domain.RayVersionProduction)
 	job.Spec.Execution = domain.ExecutionProfile{Mode: domain.ExecutionModeLegacy}
 	manifest := managedManifest(t, job)
@@ -345,11 +345,36 @@ func TestManagedMultiNodeAlwaysUsesTopologySpreadIndependentOfLegacyMode(t *test
 		t.Fatalf("managed multi-node job must enforce topology spread: found=%v err=%v constraints=%#v", found, err, constraints)
 	}
 	constraint := constraints[0].(map[string]any)
-	if constraint["whenUnsatisfiable"] != "DoNotSchedule" || constraint["minDomains"] != int64(2) {
-		t.Fatalf("unexpected managed topology spread: %#v", constraint)
+	if constraint["whenUnsatisfiable"] != "ScheduleAnyway" {
+		t.Fatalf("pre-cutover topology spread must prefer separate hosts without deadlocking admitted work: %#v", constraint)
+	}
+	if _, found := constraint["minDomains"]; found {
+		t.Fatalf("soft topology spread must not declare minDomains: %#v", constraint)
 	}
 	selector := constraint["labelSelector"].(map[string]any)["matchLabels"].(map[string]any)
 	if selector["platform_job_id"] != job.ID || selector["ray.io/node-type"] != "worker" {
 		t.Fatalf("topology spread must count only GPU worker Pods, got %#v", selector)
+	}
+}
+
+func TestManagedMultiWorkerUsesHardTopologySpreadAfterTASCutover(t *testing.T) {
+	job := managedRenderJob(domain.RayVersionProduction)
+	options := testRenderOptions()
+	options.TopologyAwareScheduling = true
+	options.managedCreationFence = 1
+	manifest, err := RenderRayJob(job, options)
+	if err != nil {
+		t.Fatalf("render managed RayJob with TAS: %v", err)
+	}
+	cluster, _, _ := unstructured.NestedMap(manifest.Object, "spec", "rayClusterSpec")
+	workers, _, _ := nestedSlice(cluster, "workerGroupSpecs")
+	worker := workers[0].(map[string]any)
+	constraints, found, err := nestedSlice(worker, "template", "spec", "topologySpreadConstraints")
+	if err != nil || !found || len(constraints) != 1 {
+		t.Fatalf("managed TAS job must enforce topology spread: found=%v err=%v constraints=%#v", found, err, constraints)
+	}
+	constraint := constraints[0].(map[string]any)
+	if constraint["whenUnsatisfiable"] != "DoNotSchedule" || constraint["minDomains"] != int64(2) {
+		t.Fatalf("post-cutover topology spread must require separate hosts: %#v", constraint)
 	}
 }

@@ -480,6 +480,8 @@ TOS 是对象存储，经 CSI/FSX 以文件系统语义呈现；目录遍历可�
 
 如果页面明确显示拓扑配置不匹配，把任务 ID 和完整原因交给平台管理员，不要反复重提。任务的 hostname 拓扑意图、`Topology` 对象和 `ResourceFlavor.spec.topologyName` 必须由管理员作为同一次切换配齐；平台关闭 TAS 时不会单独给新任务添加拓扑注解。普通用户只需运行 `spk-rayjob status JOB_ID`，不需要使用 `kubectl`。
 
+TAS 尚未完成切换时，多 Worker 任务会优先分散到不同主机；如果集群只有一台机器能容纳本次任务，平台允许这些 Worker 临时放到同一主机，避免 Kueue 已接纳而 Pod 永久 Pending。此时“2 个 Worker”只证明 Ray Train 的多 Worker 链路，不等于已经完成多机网络验证；任务详情必须显示两个不同的节点名，才能作为真实多机证据。TAS 完整启用后，平台会在准入阶段保证 hostname 拓扑并恢复硬跨主机约束。
+
 **如何确认训练真的用了 GPU 和选中的数据？**
 先用 1×1 小任务在 stdout 打印 `torch.cuda.get_device_name(0)` 和一个明确标注文件的 `stat`，再在任务详情核对 GPU 指标与输出目录。不要为了验收而对整个 TOS 根目录执行递归 `find/rglob`。
 
