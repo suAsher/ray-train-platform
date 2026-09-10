@@ -74,6 +74,37 @@ func TestJobArtifactRouteRejectsOtherTenant(t *testing.T) {
 	}
 }
 
+func TestJobArtifactRouteReturnsForbiddenForVisibleForeignPersonalOutput(t *testing.T) {
+	job := artifactJob("job-b", "tenant-b")
+	job.UserID = "user-b"
+	job.Spec.ResolvedStorage = domain.ResolvedStorageMounts{}
+	job.Spec.ResolvedDataMounts.Output = &domain.ResolvedDataMount{
+		Space:        domain.DataSpaceMyRuns,
+		BindingSpace: domain.DataSpaceWorkspace,
+		ClaimName:    "data-user-b",
+		SubPath:      "runs/job-b",
+		MountPath:    domain.DataMountOutputPath,
+	}
+	lister := &fakeArtifactLister{}
+	handler := NewHandler(&fakeJobRepository{jobs: []domain.TrainingJob{job}}, Options{ArtifactLister: lister})
+	router := artifactRouter(handler, auth.Principal{
+		Subject:  "admin",
+		TenantID: "local",
+		Roles:    []string{domain.RoleSuperAdmin},
+		AuthType: auth.AuthTypeLocal,
+	})
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/jobs/job-b/artifacts", nil))
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("visible personal output must be forbidden rather than hidden: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if lister.taskRoot != "" {
+		t.Fatalf("forbidden personal output must not touch object storage: root=%q", lister.taskRoot)
+	}
+}
+
 func TestJobArtifactRouteListsOnlyTaskRelativeEntries(t *testing.T) {
 	modified := time.Date(2026, 8, 12, 4, 0, 0, 0, time.UTC)
 	repository := &fakeJobRepository{jobs: []domain.TrainingJob{artifactJob("job-a", "tenant-a")}}
