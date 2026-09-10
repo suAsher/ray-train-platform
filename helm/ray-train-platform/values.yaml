@@ -429,6 +429,14 @@ idcSync:
 
 kueue:
   enabled: false
+  # Workload priority classes are safe to create before queue migration. They
+  # never trigger Kubernetes pod preemption; Kueue preemption remains disabled
+  # until the platform can prove that every eligible victim is checkpoint-safe.
+  priorityClasses:
+    enabled: true
+    productionValue: 1000
+    normalValue: 0
+    opportunisticValue: -1000
   # True means this Helm release owns the training ResourceFlavor and
   # ClusterQueue. False attaches training to a queue managed outside this
   # project. Dataset publisher queues are governed independently above.

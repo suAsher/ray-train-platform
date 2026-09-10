@@ -22,6 +22,15 @@ type platformLimitsResponse struct {
 	Cache             cachePolicyDescriptor        `json:"cache"`
 	Runtime           runtimeCapabilityDescriptor  `json:"runtime"`
 	Datasets          datasetCapabilityDescriptor  `json:"datasets"`
+	Scheduling        schedulingCapabilityDescriptor `json:"scheduling"`
+}
+
+type schedulingCapabilityDescriptor struct {
+	AcceleratorClasses      []string `json:"acceleratorClasses"`
+	DefaultAcceleratorClass string   `json:"defaultAcceleratorClass"`
+	Priorities              []string `json:"priorities"`
+	DefaultPriority         string   `json:"defaultPriority"`
+	PreemptionEnabled       bool     `json:"preemptionEnabled"`
 }
 
 type runtimeCapabilityDescriptor struct {
@@ -124,7 +133,27 @@ func (h *Handler) platformLimits(c *gin.Context) {
 		Cache:             cachePolicyDescriptorFor(h.localCache),
 		Runtime:           runtimeCapabilityDescriptorFor(h.runtimePolicy.EffectiveForTenant(principal.TenantID)),
 		Datasets:          datasetCapabilityDescriptorFor(h),
+		Scheduling:        schedulingCapabilityDescriptorFor(),
 	})
+}
+
+func schedulingCapabilityDescriptorFor() schedulingCapabilityDescriptor {
+	return schedulingCapabilityDescriptor{
+		AcceleratorClasses: []string{
+			string(domain.AcceleratorRTX4090),
+			string(domain.AcceleratorA100),
+			string(domain.AcceleratorA800),
+			string(domain.AcceleratorH20),
+		},
+		DefaultAcceleratorClass: string(domain.AcceleratorRTX4090),
+		Priorities: []string{
+			string(domain.WorkloadPriorityProduction),
+			string(domain.WorkloadPriorityNormal),
+			string(domain.WorkloadPriorityOpportunistic),
+		},
+		DefaultPriority:   string(domain.WorkloadPriorityNormal),
+		PreemptionEnabled: false,
+	}
 }
 
 func datasetCapabilityDescriptorFor(handler *Handler) datasetCapabilityDescriptor {

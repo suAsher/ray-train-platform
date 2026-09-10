@@ -1,0 +1,23 @@
+{{- if and .Values.kueue.enabled .Values.kueue.priorityClasses.enabled }}
+{{- $classes := list
+  (dict "name" "raytrain-production" "value" .Values.kueue.priorityClasses.productionValue "description" "Administrator-approved production training")
+  (dict "name" "raytrain-normal" "value" .Values.kueue.priorityClasses.normalValue "description" "Normal RayTrain workload")
+  (dict "name" "raytrain-opportunistic" "value" .Values.kueue.priorityClasses.opportunisticValue "description" "Checkpoint-safe idle capacity workload; Kueue preemption is activated separately")
+-}}
+{{- range $index, $class := $classes }}
+{{- if gt $index 0 }}
+---
+{{- end }}
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: {{ $class.name }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" $ | nindent 4 }}
+    app.kubernetes.io/component: scheduling
+value: {{ $class.value }}
+globalDefault: false
+preemptionPolicy: Never
+description: {{ $class.description | quote }}
+{{- end }}
+{{- end }}

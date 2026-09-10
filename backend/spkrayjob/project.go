@@ -106,6 +106,9 @@ type project struct {
 	Entrypoint      string                    `json:"entrypoint,omitempty"`
 	Engine          string                    `json:"engine,omitempty"`
 	DataMode        string                    `json:"dataMode,omitempty"`
+	AcceleratorClass domain.AcceleratorClass  `json:"acceleratorClass,omitempty"`
+	Priority        string                    `json:"priority,omitempty"`
+	Preemptible     bool                      `json:"preemptible,omitempty"`
 	DatasetRef      domain.DatasetReference   `json:"datasetRef,omitempty"`
 	CachePolicy     domain.DatasetCachePolicy `json:"cachePolicy,omitempty"`
 	Workers         int                       `json:"workers,omitempty"`
@@ -129,6 +132,9 @@ type submitOverrides struct {
 	Entrypoint      string
 	Engine          string
 	DataMode        string
+	AcceleratorClass domain.AcceleratorClass
+	Priority        string
+	Preemptible     bool
 	DatasetRef      domain.DatasetReference
 	CachePolicy     domain.DatasetCachePolicy
 	Workers         int
@@ -147,6 +153,9 @@ type submitOverrides struct {
 	providedEntrypoint     bool
 	providedEngine         bool
 	providedDataMode       bool
+	providedAccelerator    bool
+	providedPriority       bool
+	providedPreemptible    bool
 	providedDataset        bool
 	providedDatasetVersion bool
 	providedCachePolicy    bool
@@ -181,6 +190,15 @@ func (base project) merge(overrides submitOverrides) project {
 	}
 	if overrides.providedDataMode {
 		merged.DataMode = overrides.DataMode
+	}
+	if overrides.providedAccelerator {
+		merged.AcceleratorClass = overrides.AcceleratorClass
+	}
+	if overrides.providedPriority {
+		merged.Priority = overrides.Priority
+	}
+	if overrides.providedPreemptible {
+		merged.Preemptible = overrides.Preemptible
 	}
 	if overrides.providedDataset {
 		merged.DatasetRef.Dataset = overrides.DatasetRef.Dataset
@@ -299,6 +317,9 @@ type starterProject struct {
 	Entrypoint      string                    `json:"entrypoint,omitempty"`
 	Engine          string                    `json:"engine,omitempty"`
 	DataMode        string                    `json:"dataMode,omitempty"`
+	AcceleratorClass domain.AcceleratorClass  `json:"acceleratorClass,omitempty"`
+	Priority        string                    `json:"priority,omitempty"`
+	Preemptible     bool                      `json:"preemptible,omitempty"`
 	DatasetRef      *domain.DatasetReference  `json:"datasetRef,omitempty"`
 	CachePolicy     domain.DatasetCachePolicy `json:"cachePolicy,omitempty"`
 	Workers         int                       `json:"workers,omitempty"`
@@ -341,6 +362,7 @@ func newStarterProject(value project) starterProject {
 	}
 	return starterProject{
 		Name: value.Name, Image: value.Image, Entrypoint: value.Entrypoint, Engine: value.Engine, DataMode: value.DataMode,
+		AcceleratorClass: value.AcceleratorClass, Priority: value.Priority, Preemptible: value.Preemptible,
 		DatasetRef: optionalDatasetRef(value.DatasetRef), CachePolicy: value.CachePolicy,
 		Workers: value.Workers, GPUsPerWorker: value.GPUsPerWorker, CPUPerWorker: value.CPUPerWorker,
 		MemoryPerWorker: value.MemoryPerWorker, ExecutionMode: value.ExecutionMode,

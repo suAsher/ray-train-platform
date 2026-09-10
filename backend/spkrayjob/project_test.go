@@ -17,6 +17,8 @@ func TestProjectFileSuppliesSubmitDefaults(t *testing.T) {
 	contents := `name: bevfusion-lidar
 image: harbor.example.com/team/bevfusion@sha256:1111111111111111111111111111111111111111111111111111111111111111
 entrypoint: python tools/westwell_train.py configs/x.yaml --launcher pytorch
+acceleratorClass: a100
+priority: production
 workers: 1
 gpusPerWorker: 8
 cpuPerWorker: 32
@@ -42,6 +44,9 @@ output:
 	}
 	if project.Name != "bevfusion-lidar" || project.GPUsPerWorker != 8 || project.ExecutionMode != "torchrun" || project.Engine != "ray-train" {
 		t.Fatalf("unexpected project: %+v", project)
+	}
+	if project.AcceleratorClass != domain.AcceleratorA100 || project.Priority != string(domain.WorkloadPriorityProduction) {
+		t.Fatalf("unexpected scheduling defaults: %+v", project)
 	}
 	if project.Input.Space != "public" || project.Input.Path != "bevfusion/2026-08-0429" {
 		t.Fatalf("unexpected input: %+v", project.Input)
@@ -100,11 +105,14 @@ func TestProjectFileRejectsBooleanLikeCacheModes(t *testing.T) {
 func TestExplicitFlagsOverrideProjectDefaults(t *testing.T) {
 	project := project{
 		Name: "from-file", Workers: 1, GPUsPerWorker: 8, ExecutionMode: "torchrun", Engine: "ray-train",
+		AcceleratorClass: domain.AcceleratorRTX4090, Priority: string(domain.WorkloadPriorityNormal),
 		Cache: projectCache{Mode: "runtime", Size: "100Gi", Preload: "input"},
 	}
 	resolved := project.merge(submitOverrides{
 		Name: "from-flag", GPUsPerWorker: 2, Engine: "ray-ddp", Cache: projectCache{Size: "200Gi"},
+		AcceleratorClass: domain.AcceleratorH20, Priority: string(domain.WorkloadPriorityProduction),
 		providedGPUs: true, providedName: true, providedEngine: true, providedCacheSize: true,
+		providedAccelerator: true, providedPriority: true,
 	})
 
 	if resolved.Name != "from-flag" || resolved.GPUsPerWorker != 2 {
@@ -115,6 +123,9 @@ func TestExplicitFlagsOverrideProjectDefaults(t *testing.T) {
 	}
 	if resolved.Engine != "ray-ddp" {
 		t.Fatalf("an explicit engine flag must override the project default, got %+v", resolved)
+	}
+	if resolved.AcceleratorClass != domain.AcceleratorH20 || resolved.Priority != string(domain.WorkloadPriorityProduction) {
+		t.Fatalf("scheduling flags must win, got %+v", resolved)
 	}
 	if resolved.Cache.Mode != "runtime" || resolved.Cache.Size != "200Gi" {
 		t.Fatalf("cache flags must override project defaults independently, got %+v", resolved.Cache)
@@ -142,6 +153,21 @@ func TestExplicitFlagsOverrideProjectDefaults(t *testing.T) {
 	})
 	if runtimeModeOnly.Cache.Mode != "runtime" || runtimeModeOnly.Cache.Size != "100Gi" {
 		t.Fatalf("runtime mode alone must preserve the project size, got %+v", runtimeModeOnly.Cache)
+	}
+}
+
+func TestProjectJobSpecCarriesSchedulingContract(t *testing.T) {
+	value := project{
+		Name: "idle-training", Image: "registry.example/img@sha256:" + strings.Repeat("8", 64),
+		Entrypoint: "python train.py", Engine: "ray-train", Workers: 2, GPUsPerWorker: 8,
+		AcceleratorClass: domain.AcceleratorA800, Priority: string(domain.WorkloadPriorityOpportunistic), Preemptible: true,
+	}
+	spec, err := value.jobSpec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.AcceleratorClass != domain.AcceleratorA800 || spec.Priority != string(domain.WorkloadPriorityOpportunistic) || !spec.Preemptible {
+		t.Fatalf("unexpected scheduling contract: %+v", spec)
 	}
 }
 

@@ -362,6 +362,9 @@ func runInit(arguments []string, stdout io.Writer) error {
 	entrypoint := set.String("entrypoint", "python train.py", "training command, without torchrun")
 	engine := set.String("engine", string(domain.TrainingEngineRayDDP), "training engine: ray-ddp or ray-train")
 	dataMode := set.String("data-mode", "", "data mode: mount, cache, ray-data-stage, ray-data, streaming")
+	accelerator := set.String("accelerator", string(domain.AcceleratorRTX4090), "GPU class: rtx4090, a100, a800, h20")
+	priority := set.String("priority", string(domain.WorkloadPriorityNormal), "workload priority: production, normal, opportunistic")
+	preemptible := set.Bool("preemptible", false, "allow checkpoint-safe opportunistic preemption")
 	gpus := set.Int("gpus-per-worker", 1, "GPUs per worker")
 	workers := set.Int("workers", 1, "worker replicas")
 	if err := set.Parse(arguments); err != nil || set.NArg() != 0 {
@@ -389,6 +392,7 @@ func runInit(arguments []string, stdout io.Writer) error {
 	starter := project{
 		Name: jobName, Image: strings.TrimSpace(*image), Entrypoint: strings.TrimSpace(*entrypoint),
 		Engine: string(resolvedEngine), DataMode: string(resolvedDataMode),
+		AcceleratorClass: domain.AcceleratorClass(*accelerator), Priority: *priority, Preemptible: *preemptible,
 		Workers: *workers, GPUsPerWorker: *gpus, CPUPerWorker: 8, MemoryPerWorker: "32Gi",
 		ExecutionMode: string(execution.Mode), Output: projectLocation{Path: jobName},
 	}
@@ -413,6 +417,9 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	entrypoint := set.String("entrypoint", "", "shell command to run")
 	engine := set.String("engine", string(domain.TrainingEngineRayDDP), "training engine: ray-ddp or ray-train")
 	dataMode := set.String("data-mode", "", "data mode: mount, cache, ray-data-stage, ray-data, streaming")
+	accelerator := set.String("accelerator", string(domain.AcceleratorRTX4090), "GPU class: rtx4090, a100, a800, h20")
+	priority := set.String("priority", string(domain.WorkloadPriorityNormal), "workload priority: production, normal, opportunistic")
+	preemptible := set.Bool("preemptible", false, "allow checkpoint-safe opportunistic preemption")
 	dataset := set.String("dataset", "", "public dataset ID/slug, optionally DATASET:VERSION")
 	datasetVersion := set.String("dataset-version", "", "immutable dataset version ID or latest")
 	cachePolicy := set.String("dataset-cache-policy", "", "streaming dataset cache policy: off, auto, bounded")
@@ -467,6 +474,7 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	}
 	resolved := defaults.merge(submitOverrides{
 		Name: *name, Image: *image, Entrypoint: *entrypoint, Engine: *engine, DataMode: *dataMode, Workers: *workers, GPUsPerWorker: *gpus,
+		AcceleratorClass: domain.AcceleratorClass(*accelerator), Priority: *priority, Preemptible: *preemptible,
 		DatasetRef: datasetOverride.Reference, CachePolicy: domain.DatasetCachePolicy(strings.TrimSpace(*cachePolicy)),
 		CPUPerWorker: *cpu, MemoryPerWorker: *memory, ExecutionMode: *executionMode,
 		Cache:                  projectCache{Mode: *cacheMode, Size: *cacheSize, Preload: *cachePreload},
@@ -479,6 +487,9 @@ func runSubmit(ctx context.Context, arguments []string, stdout, stderr io.Writer
 		providedEntrypoint:     provided["entrypoint"],
 		providedEngine:         provided["engine"],
 		providedDataMode:       provided["data-mode"],
+		providedAccelerator:    provided["accelerator"],
+		providedPriority:       provided["priority"],
+		providedPreemptible:    provided["preemptible"],
 		providedDataset:        datasetOverride.DatasetProvided,
 		providedDatasetVersion: datasetOverride.VersionProvided,
 		providedCachePolicy:    provided["dataset-cache-policy"],
@@ -943,6 +954,9 @@ func (value project) jobSpec() (domain.JobSpec, error) {
 	}
 	spec := domain.JobSpec{
 		Name: strings.TrimSpace(value.Name), Image: strings.TrimSpace(value.Image),
+		AcceleratorClass: value.AcceleratorClass,
+		Priority: strings.TrimSpace(value.Priority),
+		Preemptible: value.Preemptible,
 		TrainingEngine: engine,
 		DataMode:       dataMode,
 		DatasetRef:     datasetRef,

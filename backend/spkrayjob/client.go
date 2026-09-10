@@ -106,8 +106,17 @@ type LogPageOptions struct {
 }
 
 type PlatformLimits struct {
-	Cache   PlatformCacheLimits   `json:"cache"`
-	Runtime PlatformRuntimeLimits `json:"runtime"`
+	Cache      PlatformCacheLimits      `json:"cache"`
+	Runtime    PlatformRuntimeLimits    `json:"runtime"`
+	Scheduling PlatformSchedulingLimits `json:"scheduling"`
+}
+
+type PlatformSchedulingLimits struct {
+	AcceleratorClasses      []string `json:"acceleratorClasses"`
+	DefaultAcceleratorClass string   `json:"defaultAcceleratorClass"`
+	Priorities              []string `json:"priorities"`
+	DefaultPriority         string   `json:"defaultPriority"`
+	PreemptionEnabled       bool     `json:"preemptionEnabled"`
 }
 
 type PlatformRuntimeLimits struct {
