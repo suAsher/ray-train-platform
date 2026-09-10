@@ -266,6 +266,8 @@ spec:
               value: {{ default "" $idcSync.workClaimName | quote }}
             - name: KUEUE_AUTO_QUOTA
               value: {{ .Values.kueue.autoQuota | quote }}
+            - name: KUEUE_TOPOLOGY_ENABLED
+              value: {{ .Values.kueue.topology.enabled | quote }}
             - name: LOCAL_AUTH_ENABLED
               value: {{ .Values.backend.localAuth.enabled | quote }}
             - name: OAUTH2_PROXY_AUTO_PROVISION_ENABLED

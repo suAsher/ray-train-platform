@@ -1,4 +1,5 @@
 {{- if and .Values.kueue.enabled .Values.kueue.manageResources }}
+{{- $resourceFlavorName := ternary .Values.kueue.topology.resourceFlavorName .Values.kueue.resourceFlavorName .Values.kueue.topology.enabled }}
 {{- if .Values.kueue.topology.enabled }}
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: Topology
@@ -15,7 +16,7 @@ spec:
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ResourceFlavor
 metadata:
-  name: {{ .Values.kueue.resourceFlavorName }}
+  name: {{ $resourceFlavorName }}
   labels:
     {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: scheduling
@@ -40,7 +41,7 @@ spec:
   resourceGroups:
     - coveredResources: ["cpu", "memory", "nvidia.com/gpu"]
       flavors:
-        - name: {{ .Values.kueue.resourceFlavorName }}
+        - name: {{ $resourceFlavorName }}
           resources:
             - name: cpu
               nominalQuota: {{ .Values.kueue.cpuQuota }}

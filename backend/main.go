@@ -412,6 +412,7 @@ func newReconciler(repository *repositories.GormRepository, client *k8s.Client, 
 	reconciler := newReconcilerWithQuotaSync(repository, client, cfg, k8s.RenderOptions{
 		ClusterSpecField:        cfg.RayJobClusterSpecField,
 		RayVersion:              cfg.RayVersion,
+		TopologyAwareScheduling: cfg.KueueTopologyEnabled,
 		ServiceAccount:          cfg.RayJobServiceAccount,
 		ImagePullSecrets:        cfg.ImagePullSecrets,
 		SourceMaterializerImage: cfg.SourceMaterializerImage,

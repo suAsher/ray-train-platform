@@ -443,12 +443,16 @@ kueue:
   manageResources: false
   # TAS is an explicit cutover because adding topologyName to an in-use flavor
   # changes queue admission semantics. Enable only after the legacy queue has
-  # no admitted workloads; the worker PodSet already carries the preferred
-  # hostname topology request and will start using it after this switch.
+  # no admitted workloads. The backend emits the worker PodSet hostname
+  # topology request from this same switch, so a half-enabled configuration
+  # cannot leave newly submitted RayJobs suspended.
   topology:
     enabled: false
     name: raytrain-hostname
     nodeLabel: kubernetes.io/hostname
+    # ResourceFlavor.spec becomes immutable after topologyName is set. TAS
+    # therefore uses a new flavor instead of patching gpu-4090-flavor.
+    resourceFlavorName: gpu-4090-tas-flavor
   # Kueue's nominalQuota is a static field with no capacity discovery. With this
   # on, the controller keeps it equal to the allocatable capacity of the nodes
   # matching training.nodeSelector, so adding a machine only means labelling it.

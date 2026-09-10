@@ -39,6 +39,7 @@ type Config struct {
 	PATPepper                                string
 	TrainingNodeSelector                     map[string]string
 	KueueAutoQuota                           bool
+	KueueTopologyEnabled                     bool
 	MaxWorkerReplicas                        int
 	MaxGPUsPerWorker                         int
 	MaxTotalGPUs                             int
@@ -316,6 +317,12 @@ func Load() (Config, error) {
 	// Kueue cannot discover capacity, so the platform keeps the admission
 	// budget aligned with the labelled training nodes by default.
 	if cfg.KueueAutoQuota, err = parseBool("KUEUE_AUTO_QUOTA", true); err != nil {
+		return Config{}, err
+	}
+	// The worker PodSet may only request TAS after the selected ResourceFlavor
+	// references a Topology. Keeping this deployment flag aligned with the Helm
+	// cutover avoids producing Workloads that no configured flavor can place.
+	if cfg.KueueTopologyEnabled, err = parseBool("KUEUE_TOPOLOGY_ENABLED", false); err != nil {
 		return Config{}, err
 	}
 	// Job size ceilings track the fleet; raising them needs no rebuild.

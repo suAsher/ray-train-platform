@@ -873,6 +873,27 @@ func TestLoadRejectsMissingOrWeakPATPepperWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestLoadKeepsKueueTopologyDisabledUntilExplicitCutover(t *testing.T) {
+	setValidProductionConfig(t)
+	t.Setenv("KUEUE_TOPOLOGY_ENABLED", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load default config: %v", err)
+	}
+	if cfg.KueueTopologyEnabled {
+		t.Fatal("TAS must remain disabled until the ResourceFlavor references a Topology")
+	}
+
+	t.Setenv("KUEUE_TOPOLOGY_ENABLED", "true")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("load TAS config: %v", err)
+	}
+	if !cfg.KueueTopologyEnabled {
+		t.Fatal("explicit TAS cutover was ignored")
+	}
+}
+
 func TestLoadAllowsDisabledPATWithoutPepperInProduction(t *testing.T) {
 	setValidProductionConfig(t)
 	t.Setenv("PAT_ENABLED", "false")

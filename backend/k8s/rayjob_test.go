@@ -81,8 +81,8 @@ func TestRenderRayJobProducesKueueManagedRayJob(t *testing.T) {
 		t.Fatalf("missing worker metadata: %#v", worker)
 	}
 	workerAnnotations, _ := workerMetadata["annotations"].(map[string]any)
-	if workerAnnotations["kueue.x-k8s.io/podset-preferred-topology"] != "kubernetes.io/hostname" {
-		t.Fatalf("worker must request topology-aware packing: %#v", workerAnnotations)
+	if _, found := workerAnnotations["kueue.x-k8s.io/podset-preferred-topology"]; found {
+		t.Fatalf("worker must not request TAS before the ResourceFlavor cutover: %#v", workerAnnotations)
 	}
 
 	workerTemplate, ok, err := nestedMap(worker, "template", "spec")
@@ -107,6 +107,24 @@ func TestRenderRayJobProducesKueueManagedRayJob(t *testing.T) {
 		if _, hasHostPath := v["hostPath"]; hasHostPath {
 			t.Fatalf("renderer must not emit hostPath: %#v", v)
 		}
+	}
+}
+
+func TestRenderRayJobRequestsTopologyPackingOnlyAfterTASCutover(t *testing.T) {
+	options := testRenderOptions()
+	options.TopologyAwareScheduling = true
+	manifest, err := RenderRayJob(validRenderJob(), options)
+	if err != nil {
+		t.Fatalf("render RayJob with TAS: %v", err)
+	}
+	spec, _, _ := nestedMap(manifest.Object, "spec")
+	cluster, _, _ := nestedMap(spec, "rayClusterSpec")
+	workers, _, _ := nestedSlice(cluster, "workerGroupSpecs")
+	worker := workers[0].(map[string]any)
+	metadata := worker["template"].(map[string]any)["metadata"].(map[string]any)
+	annotations, _ := metadata["annotations"].(map[string]any)
+	if annotations["kueue.x-k8s.io/podset-preferred-topology"] != "kubernetes.io/hostname" {
+		t.Fatalf("worker must request topology-aware packing after cutover: %#v", annotations)
 	}
 }
 

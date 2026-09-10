@@ -12,5 +12,12 @@
     "category": "数据",
     "sortOrder": 145,
     "markdown": "这条链路把持续变化的 IDC labeled 源数据与可复现的训练输入分开：\n\n```text\nIDC 只读 NFS → tosutil 增量镜像 → SHA-256 原始对象 + inventory\n→ 不可变数据集版本（Parquet + manifest） → Ray Train / Ray Data / NVMe\n```\n\n### 管理员操作\n\n1. 在「管理员控制台 → IDC 同步」登记受控的 `idc-original` 相对目录和 TOS 镜像前缀。不能填服务器、绝对路径、命令或凭据。\n2. 选择仅手动或自动间隔。自动和「立即增量同步」走同一个 `SyncRun`，同一连接器不会并发运行。\n3. 同步完成后核对总对象、容量、新增、变更、复用、源端消失数和 inventory SHA-256。源端消失只记录 tombstone，不自动删除 TOS 或已发布版本。\n4. 从成功的同步运行选择目标公共数据集，点「发布不可变版本」。发布器只按该 inventory 的内容地址读取，不会改写 labeled 源目录。\n5. 版本变为 `READY` 后，普通用户在「版本化数据集」选择固定版本或场地提交。训练记录保存同步 Run、inventory、数据版本和 manifest 摘要。\n\n### 安全与失败边界\n\n- 同步 Job 是 CPU-only、NFS 只读、无 shell 参数；不会挤占 GPU 训练配额。\n- 失败 Run 不能发布。先根据错误修复 NFS/TOS/配额，再重新发起；不会把部分清单标记为成功。\n- 首次全量 labeled 之前必须先用小目录验收对象数、容量、重试、断点与不变性；未验收不直接开启全量定时。"
+  },
+  {
+    "id": "portal-browser-tools-and-queue",
+    "title": "MLflow、调试工具与排队排查",
+    "category": "排查",
+    "sortOrder": 175,
+    "markdown": "Portal 中的 API 请求继续经过 `/raytrain`，但 JupyterLab、VS Code 和 MLflow 是带独立 Cookie、WebSocket 和静态资源根路径的浏览器工具。页面会先向平台申请一次性票据，再在新标签页打开 `https://raytrain.wellspiking.ai`上的受保护路径；这不是绕过 Portal 认证。\n\n### MLflow 详情\n\n- 任务详情的「Loss 收敛曲线与指标」会显示实验名、Run 名称、Run ID、状态、时间和训练参数。点「打开该 Run」直达原生 MLflow。\n- 没有 Run 或 Loss 不等于平台训练失败：自定义代码仍需在 global rank 0 调用 `mlflow.log_metric`。\n- 新标签页的票据会立即换成 HttpOnly Cookie 并从地址栏清除；不要复制或分享带 `access_token` 的中间地址。\n\n### JupyterLab / VS Code\n\n1. 调试环境状态变为「运行中」后再点打开；拉镜像期间打开会提示未就绪。\n2. 允许浏览器打开新标签页，且不要禁用 WebSocket 或安全 Cookie。\n3. 链接过期、用户被停用或工作区已停止时，回到调试中心重新点击，不手工改 URL。\n\n### Kueue 排队\n\n- `SUBMITTED/Suspended` 表示任务已入队但尚未准入，不是训练进程卡住。用 `spk-rayjob status JOB_ID` 或任务详情查看配额、卡型、物理空闲卡和拓扑原因。\n- 拓扑调度必须由管理员一次性配齐 `Topology`、`ResourceFlavor.spec.topologyName` 和任务 PodSet 意图。平台在切换开关关闭时不会单独下发任务拓扑注解，避免半配置导致新 RayJob 持续 Suspended。\n- 普通用户不需要、也不应该使用 `kubectl`。持续排队时保留任务 ID 和页面上的完整原因，不重复提交同一任务。\n\n### 成功标志\n\n- MLflow 和编辑器在新标签页打开，地址栏不保留票据；任务获得准入后由 Suspended 转为运行。"
   }
 ]

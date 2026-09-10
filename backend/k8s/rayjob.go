@@ -26,6 +26,7 @@ const (
 type RenderOptions struct {
 	ClusterSpecField        string
 	RayVersion              string
+	TopologyAwareScheduling bool
 	ServiceAccount          string
 	ImagePullSecrets        []string
 	SourceMaterializerImage string
@@ -224,7 +225,9 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	workerPod := podTemplate("ray-worker", job.Spec.Image, workerCPU, workerMemory, gpusPerWorker, job.TenantID, job.Spec.Source, job.Spec, options, false, true, false)
 	addPodLabels(headPod, job.ID, job.TenantID)
 	addPodLabels(workerPod, job.ID, job.TenantID)
-	addPodAnnotation(workerPod, "kueue.x-k8s.io/podset-preferred-topology", "kubernetes.io/hostname")
+	if options.TopologyAwareScheduling {
+		addPodAnnotation(workerPod, "kueue.x-k8s.io/podset-preferred-topology", "kubernetes.io/hostname")
+	}
 	managedMultiNode := job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain && workerReplicas > 1
 	legacyRayTrain := job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayDDP && job.Spec.Execution.ResolvedMode() == domain.ExecutionModeRayTrain
 	if managedMultiNode || legacyRayTrain {
@@ -266,14 +269,14 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 		}},
 	}
 	labels := map[string]any{
-		"app.kubernetes.io/part-of":    "ray-train-platform",
-		"app.kubernetes.io/managed-by": "ray-train-platform",
-		"ray.io/job-id":                job.ID,
-		"ray.io/tenant-id":             job.TenantID,
-		"platform_job_id":              job.ID,
-		"platform_tenant_id":           job.TenantID,
-		"kueue.x-k8s.io/queue-name":    job.Spec.Queue,
-		"kueue.x-k8s.io/priority-class": domain.WorkloadPriority(job.Spec.Priority).KubernetesPriorityClass(),
+		"app.kubernetes.io/part-of":                 "ray-train-platform",
+		"app.kubernetes.io/managed-by":              "ray-train-platform",
+		"ray.io/job-id":                             job.ID,
+		"ray.io/tenant-id":                          job.TenantID,
+		"platform_job_id":                           job.ID,
+		"platform_tenant_id":                        job.TenantID,
+		"kueue.x-k8s.io/queue-name":                 job.Spec.Queue,
+		"kueue.x-k8s.io/priority-class":             domain.WorkloadPriority(job.Spec.Priority).KubernetesPriorityClass(),
 		"platform.wellspiking.ai/accelerator-class": string(job.Spec.AcceleratorClass.Resolved()),
 	}
 	annotations := map[string]any{
