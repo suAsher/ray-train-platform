@@ -306,7 +306,9 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	protected := router.Group("")
 	if cfg.OAuth2ProxyAuthEnabled {
 		proxyVerifier, _ := oidc.(auth.OIDCIdentityVerifier)
-		protected.Use(auth.OAuth2ProxyMiddleware(proxyVerifier, oauthAccounts, pat, localSessions, true))
+		protected.Use(auth.OAuth2ProxyMiddleware(proxyVerifier, oauthAccounts, pat, localSessions, true, auth.OAuth2ProxyOptions{
+			AutoProvision: cfg.OAuth2ProxyAutoProvisionEnabled, DefaultTenantID: cfg.OAuth2ProxyDefaultTenant,
+		}))
 	} else {
 		protected.Use(auth.HybridMiddlewareWithLocal(oidc, pat, localSessions, cfg.OIDCRequired))
 	}

@@ -289,6 +289,10 @@ func (h *LocalAuthHandler) resetUserPassword(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if target.IdentityProvider != "" && target.IdentityProvider != domain.IdentityProviderLocal {
+		writeAuthError(c, http.StatusConflict, "EXTERNAL_IDENTITY_PASSWORD_UNAVAILABLE", "external identity members do not have a RayTrain password")
+		return
+	}
 	var request resetUserPasswordRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
 		writeAuthError(c, http.StatusBadRequest, "INVALID_JSON", "request body is invalid")

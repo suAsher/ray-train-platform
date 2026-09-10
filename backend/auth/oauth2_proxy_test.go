@@ -12,16 +12,16 @@ import (
 )
 
 type fakeOAuth2ProxyAccountResolver struct {
-	user  domain.LocalUser
-	found bool
-	err   error
-	calls int
-	provisioned domain.LocalUser
-	provisionErr error
-	provisionCalls int
+	user              domain.LocalUser
+	found             bool
+	err               error
+	calls             int
+	provisioned       domain.LocalUser
+	provisionErr      error
+	provisionCalls    int
 	provisionUsername string
-	provisionEmail string
-	provisionTenant string
+	provisionEmail    string
+	provisionTenant   string
 }
 
 func (r *fakeOAuth2ProxyAccountResolver) ResolveOAuth2ProxyAccount(_ context.Context, _ string) (domain.LocalUser, bool, error) {

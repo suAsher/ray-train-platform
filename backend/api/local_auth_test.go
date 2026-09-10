@@ -259,6 +259,18 @@ func TestLoginRejectsDisabledAccount(t *testing.T) {
 	}
 }
 
+func TestLoginRejectsOAuth2ProxyMemberEvenWithMatchingHash(t *testing.T) {
+	store := newFakeLocalAuthStore().withUser(t, "alice", "correct-horse", false)
+	user := store.users["alice"]
+	user.IdentityProvider = domain.IdentityProviderOAuth2Proxy
+	store.users["alice"] = user
+
+	response := postLogin(localAuthHandler(store), `{"username":"alice","password":"correct-horse"}`)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("external identity logged in locally: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestLoginLocksOutAfterRepeatedFailures(t *testing.T) {
 	store := newFakeLocalAuthStore().withUser(t, "alice", "correct-horse", false)
 	handler := localAuthHandler(store)

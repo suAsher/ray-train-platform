@@ -266,6 +266,10 @@ spec:
               value: {{ .Values.kueue.autoQuota | quote }}
             - name: LOCAL_AUTH_ENABLED
               value: {{ .Values.backend.localAuth.enabled | quote }}
+            - name: OAUTH2_PROXY_AUTO_PROVISION_ENABLED
+              value: {{ default false .Values.backend.oauth2Proxy.autoProvisionEnabled | quote }}
+            - name: OAUTH2_PROXY_DEFAULT_TENANT
+              value: {{ default "local" .Values.backend.oauth2Proxy.defaultTenant | quote }}
             - name: LOCAL_SESSION_HOURS
               value: {{ .Values.backend.localAuth.sessionHours | quote }}
             - name: BOOTSTRAP_ADMIN_USERNAME

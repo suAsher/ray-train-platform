@@ -112,6 +112,11 @@ backend:
     # Secret holding BOOTSTRAP_ADMIN_PASSWORD, used only to create the very
     # first administrator. Leave empty to skip bootstrapping.
     bootstrapSecret: ray-platform-bootstrap-admin
+  oauth2Proxy:
+    # A verified OAuth identity is created as an Engineer in this existing
+    # tenant on first access. Platform roles are never copied from IdP groups.
+    autoProvisionEnabled: false
+    defaultTenant: local
   # Stable in-cluster Loki gateway. The backend appends /loki/api/v1 paths.
   lokiURL: "http://loki-gateway.loki.svc.cluster.local"
   prometheusURL: "http://prometheus.monitoring.svc.cluster.local:9090"

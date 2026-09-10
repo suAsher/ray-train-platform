@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ var (
 	ErrLocalSessionNotFound     = errors.New("local session not found")
 	ErrUsernameTaken            = errors.New("username is already taken")
 	ErrLocalUserActiveWorkloads = errors.New("local user has active workloads")
+	ErrTenantNotFound           = errors.New("tenant not found")
 )
 
 const sessionLastUsedUpdateInterval = 5 * time.Minute
@@ -30,6 +32,7 @@ type LocalUserRecord struct {
 	TenantID         string `gorm:"column:tenant_id;index"`
 	RolesJSON        string `gorm:"column:roles;type:jsonb"`
 	PasswordHash     string `gorm:"column:password_hash"`
+	IdentityProvider string `gorm:"column:identity_provider"`
 	Disabled         bool   `gorm:"column:disabled"`
 	DecommissionedAt *time.Time
 	CreatedAt        time.Time
@@ -62,7 +65,8 @@ func (r *GormRepository) toLocalUser(record LocalUserRecord) (domain.LocalUser, 
 	return domain.LocalUser{
 		ID: record.ID, Username: record.Username, StorageKey: record.StorageKey, Email: record.Email, TenantID: record.TenantID,
 		Roles: roles, Disabled: record.Disabled, PasswordHash: record.PasswordHash,
-		CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt,
+		IdentityProvider: normalizeIdentityProvider(record.IdentityProvider),
+		CreatedAt:        record.CreatedAt, UpdatedAt: record.UpdatedAt,
 	}, nil
 }
 
@@ -90,9 +94,10 @@ func (r *GormRepository) CreateLocalUser(ctx context.Context, user domain.LocalU
 	if err := domain.ValidateUsername(storageKey); err != nil {
 		return fmt.Errorf("local user storage key: %w", err)
 	}
+	identityProvider := normalizeIdentityProvider(user.IdentityProvider)
 	record := LocalUserRecord{
 		ID: user.ID, Username: username, StorageKey: storageKey, Email: user.Email, TenantID: user.TenantID,
-		RolesJSON: string(rolesJSON), PasswordHash: user.PasswordHash, Disabled: user.Disabled,
+		RolesJSON: string(rolesJSON), PasswordHash: user.PasswordHash, IdentityProvider: identityProvider, Disabled: user.Disabled,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := r.withActiveIdentityTenant(ctx, user.TenantID, func(tx *gorm.DB) error { return tx.Create(&record).Error }); err != nil {
@@ -102,6 +107,14 @@ func (r *GormRepository) CreateLocalUser(ctx context.Context, user domain.LocalU
 		return fmt.Errorf("create local user: %w", err)
 	}
 	return nil
+}
+
+func normalizeIdentityProvider(provider string) string {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return domain.IdentityProviderLocal
+	}
+	return provider
 }
 
 func (r *GormRepository) FindLocalUserByUsername(ctx context.Context, username string) (domain.LocalUser, error) {
@@ -131,6 +144,52 @@ func (r *GormRepository) ResolveOAuth2ProxyAccount(ctx context.Context, username
 		return domain.LocalUser{}, false, err
 	}
 	return user, true, nil
+}
+
+// ProvisionOAuth2ProxyAccount creates the least-privileged platform membership
+// for a verified external identity. Existing active memberships are returned
+// unchanged; in particular, roles are never taken from OAuth/Keycloak claims.
+func (r *GormRepository) ProvisionOAuth2ProxyAccount(ctx context.Context, username, email, tenantID string) (domain.LocalUser, error) {
+	normalizedUsername := domain.NormalizeUsername(username)
+	if err := domain.ValidateUsername(normalizedUsername); err != nil {
+		return domain.LocalUser{}, err
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return domain.LocalUser{}, ErrTenantNotFound
+	}
+	if existing, err := r.FindLocalUserByUsername(ctx, normalizedUsername); err == nil {
+		return existing, nil
+	} else if !errors.Is(err, ErrLocalUserNotFound) {
+		return domain.LocalUser{}, err
+	}
+	exists, err := r.TenantExists(ctx, tenantID)
+	if err != nil {
+		return domain.LocalUser{}, err
+	}
+	if !exists {
+		return domain.LocalUser{}, ErrTenantNotFound
+	}
+	digest := sha256.Sum256([]byte("oauth2-proxy\x00" + normalizedUsername))
+	user := domain.LocalUser{
+		ID: "oauth2-" + fmt.Sprintf("%x", digest[:12]), Username: normalizedUsername,
+		StorageKey: normalizedUsername, Email: strings.TrimSpace(email), TenantID: tenantID,
+		Roles: []string{domain.RoleEngineer}, PasswordHash: "!external-only",
+		IdentityProvider: domain.IdentityProviderOAuth2Proxy,
+	}
+	if err := r.CreateLocalUser(ctx, user); err != nil {
+		if errors.Is(err, ErrUsernameTaken) {
+			if existing, lookupErr := r.FindLocalUserByUsername(ctx, normalizedUsername); lookupErr == nil {
+				return existing, nil
+			}
+		}
+		return domain.LocalUser{}, err
+	}
+	created, err := r.FindLocalUserByUsername(ctx, normalizedUsername)
+	if err != nil {
+		return domain.LocalUser{}, err
+	}
+	return created, nil
 }
 
 func (r *GormRepository) FindLocalUserByID(ctx context.Context, userID string) (domain.LocalUser, error) {

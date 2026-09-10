@@ -149,11 +149,11 @@ func (h *LocalAuthHandler) login(c *gin.Context) {
 	// so response timing cannot be used to enumerate usernames. The same
 	// generic error is returned for every failure reason.
 	passwordHash := user.PasswordHash
-	if lookupErr != nil {
+	if lookupErr != nil || user.IdentityProvider != "" && user.IdentityProvider != domain.IdentityProviderLocal {
 		passwordHash = dummyPasswordHash
 	}
 	passwordMatches := domain.VerifyPassword(passwordHash, request.Password)
-	if lookupErr != nil || user.Disabled || !passwordMatches {
+	if lookupErr != nil || user.Disabled || user.IdentityProvider != "" && user.IdentityProvider != domain.IdentityProviderLocal || !passwordMatches {
 		h.attempts.fail(username, h.now())
 		writeAuthError(c, http.StatusUnauthorized, "INVALID_CREDENTIALS", "invalid username or password")
 		return

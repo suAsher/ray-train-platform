@@ -33,6 +33,8 @@ type Config struct {
 	OIDCGroupPrefix                          string
 	OIDCRequired                             bool
 	OAuth2ProxyAuthEnabled                   bool
+	OAuth2ProxyAutoProvisionEnabled          bool
+	OAuth2ProxyDefaultTenant                 string
 	PATEnabled                               bool
 	PATPepper                                string
 	TrainingNodeSelector                     map[string]string
@@ -183,6 +185,7 @@ func Load() (Config, error) {
 		OIDCClientID:                      os.Getenv("OIDC_CLIENT_ID"),
 		OIDCAudience:                      os.Getenv("OIDC_AUDIENCE"),
 		OIDCGroupPrefix:                   envOr("OIDC_GROUP_PREFIX", "platform/tenants/"),
+		OAuth2ProxyDefaultTenant:          strings.TrimSpace(os.Getenv("OAUTH2_PROXY_DEFAULT_TENANT")),
 		PATPepper:                         os.Getenv("PAT_PEPPER"),
 		KubeConfig:                        os.Getenv("KUBECONFIG"),
 		KubeContext:                       os.Getenv("KUBE_CONTEXT"),
@@ -279,6 +282,20 @@ func Load() (Config, error) {
 	}
 	if cfg.OAuth2ProxyAuthEnabled, err = parseBool("OAUTH2_PROXY_AUTH_ENABLED", false); err != nil {
 		return Config{}, err
+	}
+	if cfg.OAuth2ProxyAutoProvisionEnabled, err = parseBool("OAUTH2_PROXY_AUTO_PROVISION_ENABLED", false); err != nil {
+		return Config{}, err
+	}
+	if cfg.OAuth2ProxyAutoProvisionEnabled {
+		if !cfg.OAuth2ProxyAuthEnabled {
+			return Config{}, fmt.Errorf("OAUTH2_PROXY_AUTO_PROVISION_ENABLED requires OAUTH2_PROXY_AUTH_ENABLED")
+		}
+		if cfg.OAuth2ProxyDefaultTenant == "" {
+			return Config{}, fmt.Errorf("OAUTH2_PROXY_DEFAULT_TENANT is required when OAuth2 Proxy auto-provisioning is enabled")
+		}
+		if problems := k8svalidation.IsDNS1123Label(cfg.OAuth2ProxyDefaultTenant); len(problems) != 0 {
+			return Config{}, fmt.Errorf("OAUTH2_PROXY_DEFAULT_TENANT is invalid: %s", strings.Join(problems, "; "))
+		}
 	}
 	if cfg.PATEnabled, err = parseBool("PAT_ENABLED", true); err != nil {
 		return Config{}, err

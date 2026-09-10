@@ -25,22 +25,25 @@ var platformRoles = map[string]string{
 }
 
 const (
-	RoleSuperAdmin  = "SuperAdmin"
-	RoleTenantAdmin = "TenantAdmin"
-	RoleEngineer    = "Engineer"
+	RoleSuperAdmin              = "SuperAdmin"
+	RoleTenantAdmin             = "TenantAdmin"
+	RoleEngineer                = "Engineer"
+	IdentityProviderLocal       = "local"
+	IdentityProviderOAuth2Proxy = "oauth2-proxy"
 )
 
 type LocalUser struct {
-	ID           string    `json:"id"`
-	Username     string    `json:"username"`
-	StorageKey   string    `json:"-"`
-	Email        string    `json:"email,omitempty"`
-	TenantID     string    `json:"tenantId"`
-	Roles        []string  `json:"roles"`
-	Disabled     bool      `json:"disabled"`
-	PasswordHash string    `json:"-"`
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
+	ID               string    `json:"id"`
+	Username         string    `json:"username"`
+	StorageKey       string    `json:"-"`
+	Email            string    `json:"email,omitempty"`
+	TenantID         string    `json:"tenantId"`
+	Roles            []string  `json:"roles"`
+	Disabled         bool      `json:"disabled"`
+	PasswordHash     string    `json:"-"`
+	IdentityProvider string    `json:"identityProvider"`
+	CreatedAt        time.Time `json:"createdAt"`
+	UpdatedAt        time.Time `json:"updatedAt"`
 }
 
 // NormalizeUsername lower-cases and trims so that lookups are stable and a
