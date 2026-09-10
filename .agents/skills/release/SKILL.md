@@ -62,8 +62,17 @@ kubectl --kubeconfig="$HOME/.kube/common.conf" apply --server-side -f deploy/por
 构建机 Go builder 镜像有两个已知环境坑，测试命令必须显式处理：`/usr/local/go/bin` 不在 PATH；默认 `proxy.golang.org` 不可达。使用项目 Dockerfile 相同的 Alpine 镜像源和已验证的 `GOPROXY=https://mirrors.tencent.com/go/`，不要关闭 go.sum 校验。完整基线是：
 
 ```bash
-go test -timeout=20m ./...
+GO_TEST_IMAGE='swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/golang:1.25-alpine@sha256:a9316ea600fe38d4527999823d67764dbd5b5ce4b4a0895266faf0134aa28264'
+docker run --rm \
+  -e GOPROXY=https://mirrors.tencent.com/go/ \
+  -e PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  -v "$verify_dir:/workspace:ro" \
+  -w /workspace/backend \
+  "$GO_TEST_IMAGE" \
+  sh -c 'alpine_version=$(cut -d. -f1-2 /etc/alpine-release); printf "%s/v%s/main\n%s/v%s/community\n" https://mirrors.aliyun.com/alpine "$alpine_version" https://mirrors.aliyun.com/alpine "$alpine_version" >/etc/apk/repositories; apk add --no-cache bash git build-base jq >/dev/null; go test -timeout=20m ./...'
 ```
+
+必须挂载整个候选 worktree，只把工作目录设为 `/workspace/backend`；`config`、`domain` 和 `k8s` 的合同测试会读取仓库根下的 `helm/`、`deploy/`、`ops/` 与 `scripts/`。必须用 `sh -c`，不能用 `sh -lc`：Alpine 登录 shell 会重置 PATH，再次造成 `go: not found`。`bash` 与 `jq` 是 `scripts/e2e-training.sh` 合同测试的运行依赖，不是可选工具。
 
 Portal 前端也不在本机安装依赖或运行 lint。把 `dev` 候选 commit 用 `git archive` 生成不含 `.git`、`.env*` 和本地未跟踪文件的归档，送到构建机临时目录后执行 `docker build --pull -f docker/Dockerfile.lint .`。该门禁会依次运行 `pnpm lint:check`、`pnpm check:ep`、`pnpm check:store`；通过后才推 `dev`，随后由 GitLab CI/CD 再次验证并自动部署。不要从本仓库构建 Portal 前端。
 
@@ -104,7 +113,7 @@ git bundle verify /tmp/rtp-<short-sha>.bundle
 git fetch /tmp/rtp-<short-sha>.bundle main
 verify_dir="$(mktemp -d /tmp/rtp-verify.XXXXXX)"
 git worktree add --detach "$verify_dir" FETCH_HEAD
-# 在只读挂载 $verify_dir 的 Go builder 容器内运行 go test -timeout=20m ./...
+# 使用上一节的固定 Go builder 命令，在只读挂载的完整 $verify_dir 上运行全部测试
 git worktree remove "$verify_dir"
 
 # 3. 测试通过后，本地同时推两个 main
