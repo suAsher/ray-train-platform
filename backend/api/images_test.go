@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
+	"ray-train-platform-backend/repositories"
 )
 
 type compatibilityImageStore struct {
@@ -170,6 +171,46 @@ func TestSharedImageDemotionRequiresTargetTenant(t *testing.T) {
 
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("expected demotion without a target tenant to be rejected, got %d: %s", response.Code, response.Body.String())
+	}
+}
+
+func TestSuperAdminCanAssignSharedImageToAnExistingTeam(t *testing.T) {
+	store := &stubImageStore{}
+	admin := &fakeAdminStore{tenants: []repositories.TenantSummary{{ID: "team-a"}, {ID: "algorithm"}}}
+	handler := NewHandler(nil, Options{Images: store, Admin: admin})
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("ray-platform-principal", auth.Principal{Subject: "root-admin", TenantID: "team-a", Roles: []string{domain.RoleSuperAdmin}, AuthType: auth.AuthTypeLocal})
+		c.Next()
+	})
+	handler.RegisterImageManagementRoutes(router.Group("/api/v1"))
+
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/images/img-shared", strings.NewReader(`{"shared":false,"targetTenantId":"algorithm"}`))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || store.updatedTargetTenantID != "algorithm" {
+		t.Fatalf("cross-team image assignment status=%d target=%q body=%s", response.Code, store.updatedTargetTenantID, response.Body.String())
+	}
+}
+
+func TestSuperAdminCannotAssignImageToUnknownTeam(t *testing.T) {
+	store := &stubImageStore{}
+	handler := NewHandler(nil, Options{Images: store, Admin: &fakeAdminStore{tenants: []repositories.TenantSummary{{ID: "team-a"}}}})
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("ray-platform-principal", auth.Principal{Subject: "root-admin", TenantID: "team-a", Roles: []string{domain.RoleSuperAdmin}, AuthType: auth.AuthTypeLocal})
+		c.Next()
+	})
+	handler.RegisterImageManagementRoutes(router.Group("/api/v1"))
+
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/images/img-shared", strings.NewReader(`{"shared":false,"targetTenantId":"missing"}`))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || store.updatedID != "" {
+		t.Fatalf("unknown team assignment status=%d store=%+v body=%s", response.Code, store, response.Body.String())
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/term"
 	"ray-train-platform-backend/domain"
 )
 
@@ -68,6 +69,8 @@ func RunWithInput(ctx context.Context, arguments []string, stdin io.Reader, stdo
 		return runStatus(ctx, arguments[1:], stdout, stderr, getenv)
 	case "logs":
 		return runLogs(ctx, arguments[1:], stdout, stderr, getenv)
+	case "connect":
+		return runConnect(ctx, arguments[1:], stdin, stdout, stderr, getenv)
 	case "cancel":
 		return runCancel(ctx, arguments[1:], stdout, stderr, getenv)
 	default:
@@ -87,6 +90,7 @@ const helpText = `spk-rayjob — 分布式训练任务命令行客户端
   spk-rayjob dataset versions <数据集>  列出不可变数据版本
   spk-rayjob status <JOB ID>         查看单个任务
   spk-rayjob logs -f <JOB ID>        实时跟随日志
+  spk-rayjob connect <JOB ID>        连接自己正在运行的第 1 个 Worker
   spk-rayjob cancel <JOB ID>         停止任务
 
 首次使用：
@@ -1371,6 +1375,32 @@ func runCancel(ctx context.Context, arguments []string, stdout, stderr io.Writer
 	}
 	_, err = fmt.Fprintf(stdout, "已请求停止 %s。\n", jobID)
 	return err
+}
+
+func runConnect(ctx context.Context, arguments []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) error {
+	set := flag.NewFlagSet("connect", flag.ContinueOnError)
+	set.SetOutput(io.Discard)
+	var connection connectionFlags
+	bindConnectionFlags(set, &connection)
+	worker := set.Int("worker", 0, "zero-based worker ordinal")
+	if err := set.Parse(arguments); err != nil || set.NArg() != 1 || strings.TrimSpace(set.Arg(0)) == "" || *worker < 0 || *worker > 999 {
+		return errors.New("connect requires a job ID and --worker between 0 and 999")
+	}
+	client, err := newCommandClient(connection, getenv, stderr)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(stderr, "正在连接 %s 的 Worker %d；输入 exit 退出，不会停止训练。\n", set.Arg(0), *worker)
+	if inputFile, inputOK := stdin.(*os.File); inputOK && term.IsTerminal(int(inputFile.Fd())) {
+		if outputFile, outputOK := stdout.(*os.File); outputOK && term.IsTerminal(int(outputFile.Fd())) {
+			state, rawErr := term.MakeRaw(int(inputFile.Fd()))
+			if rawErr != nil {
+				return fmt.Errorf("prepare interactive terminal: %w", rawErr)
+			}
+			defer term.Restore(int(inputFile.Fd()), state)
+		}
+	}
+	return client.ConnectWorker(ctx, set.Arg(0), *worker, stdin, stdout)
 }
 
 func parseJobCommand(command string, arguments []string, getenv func(string) string, stderr io.Writer) (*Client, string, outputFormatFlag, error) {

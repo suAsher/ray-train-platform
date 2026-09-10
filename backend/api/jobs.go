@@ -108,6 +108,7 @@ type Handler struct {
 	mlflowDashboardTTL       time.Duration
 	mlflowDashboardNow       func() time.Time
 	mlflowDashboardRandom    io.Reader
+	jobWorkerConnector      jobWorkerConnector
 }
 
 type LogProvider interface {
@@ -201,6 +202,9 @@ func NewHandler(repository JobRepository, options Options) *Handler {
 		idcSources[space] = source
 	}
 	handler := &Handler{repository: repository, logs: options.Logs, metrics: options.Metrics, experiments: options.Experiments, allowAnonymous: options.AllowAnonymous, imageAllowlist: append([]string(nil), options.ImageAllowlist...), gitAllowlist: append([]string(nil), options.GitAllowlist...), workspaces: options.Workspaces, kubernetes: options.Kubernetes, workspaceImage: options.WorkspaceImage, rayVersion: options.RayVersion, serviceAccount: options.ServiceAccount, imagePullSecrets: append([]string(nil), options.ImagePullSecrets...), platformNamespace: strings.TrimSpace(options.PlatformNamespace), idcClaim: options.IDCClaim, idcMountPath: options.IDCMountPath, clusterQueue: options.KueueClusterQueue, admin: options.Admin, gpuAllocations: options.GPUAllocations, quota: options.Quota, memberships: options.Memberships, workspacePepper: append([]byte(nil), options.WorkspacePepper...), trainingNodeSelector: options.TrainingNodeSelector, images: options.Images, gitCredentials: options.GitCredentials, storageAssets: options.StorageAssets, datasets: options.Datasets, datasetPublications: options.DatasetPublications, datasetInternalPrefix: strings.TrimSuffix(strings.TrimSpace(options.DatasetInternalPrefix), "/"), datasetVersioningEnabled: options.DatasetVersioningEnabled, rayDataStreamingEnabled: options.RayDataStreamingEnabled, dataSpaces: options.DataSpaces, dataSpacesEnabled: options.DataSpacesEnabled, dataSpacesFSXAttrs: options.DataSpacesFSXAttributes, dataSpacesCapacity: options.DataSpacesMountCapacity, dataSpacesPublicRoot: strings.TrimSpace(options.DataSpacesPublicRoot), idcDataSpacesEnabled: options.IDCDataSpacesEnabled, idcDataSpacesCapacity: options.IDCDataSpacesMountCapacity, idcDataSpaceSources: idcSources, directoryLister: options.DirectoryLister, directoryInitializer: options.DirectoryInitializer, dataObjectStore: options.DataObjectStore, dataSpaceUploads: options.DataSpaceUploads, workspaceSnapshotStore: options.WorkspaceSnapshotStore, workspaceSnapshots: options.WorkspaceSnapshots, idcSyncCallbacks: options.IDCDataSyncCallbacks, idcSyncCallbackKey: append([]byte(nil), options.IDCDataSyncCallbackKey...), idcSyncManager: options.IDCDataSyncManager, artifactLister: options.ArtifactLister, artifactReader: options.ArtifactReader, gitCredentialTester: options.GitCredentialTester, gitRefResolver: options.GitRefResolver, newID: newJobID, mlflowDashboardEnabled: options.MLflowDashboardEnabled, mlflowDashboardStore: options.MLflowDashboardStore, mlflowTrackingURL: strings.TrimSpace(options.MLflowTrackingURL), mlflowPublicOrigin: strings.TrimSpace(options.MLflowPublicOrigin), mlflowDashboardPepper: append([]byte(nil), options.MLflowDashboardPepper...), mlflowDashboardTTL: options.MLflowDashboardSessionTTL, mlflowDashboardNow: options.MLflowDashboardNow, mlflowDashboardRandom: options.MLflowDashboardRandom}
+	if handler.jobWorkerConnector == nil && handler.kubernetes != nil {
+		handler.jobWorkerConnector = handler.kubernetes
+	}
 	if handler.memberships == nil {
 		handler.memberships, _ = repository.(MembershipStore)
 	}

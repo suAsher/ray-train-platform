@@ -29,5 +29,6 @@ func (h *Handler) registerTrainingRoutes(group *gin.RouterGroup) {
 	write.POST("/jobs", h.submitJob)
 	write.POST("/jobs/submit", h.submitJob)
 	write.POST("/jobs/:id/cancel", h.cancelJob)
+	write.GET("/jobs/:id/connect", h.connectJobWorker)
 	write.DELETE("/jobs/:id", h.cancelJob)
 }

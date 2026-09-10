@@ -220,7 +220,7 @@ Dashboard 用于查看运行中的 Ray node、task、actor、object store 和资
 
 平台任务 ID（例如 `job-...`）是平台调度、日志、结果目录和权限校验的主键；MLflow `run_id` 是 MLflow 在创建 Run 时生成的 32 位标识，二者**不能也不应强行相同**。平台会把任务 ID 写为 MLflow Run 名称，并写入可校验的 `platform.job_id`、租户、提交者和来源标签，因此可以可靠地反向关联；重试或恢复时，一个任务也可能有多个 Run。
 
-在“实验中心”每条记录的“训练任务”可返回平台任务详情；任务详情的 **Loss 收敛曲线与指标 → MLflow 详情** 会直接显示实验名、Run 名称、Run ID、状态、开始/结束时间和训练参数，并可在新标签页打开该 Run。该按钮只对当前用户有权看到、且由平台来源校验通过的 Run 生效；跳转使用一次性平台票据，不暴露集群内 MLflow 地址。
+在“实验中心”每条记录的“操作”列可直接点 **MLflow 详情**，也可通过“训练任务”返回平台任务详情；任务详情的 **Loss 收敛曲线与指标 → MLflow 详情** 会直接显示实验名、Run 名称、Run ID、状态、开始/结束时间和训练参数，并可在新标签页打开该 Run。该按钮只对当前用户有权看到、且由平台来源校验通过的 Run 生效；跳转使用一次性平台票据，不暴露集群内 MLflow 地址。
 
 MMCV 等框架可能把训练 Loss 记录为 `train/loss`，普通示例也可能使用 `loss`。平台会把这两个键统一显示为 Training Loss；`val/loss` 仍作为验证指标保留，不会覆盖训练曲线。若“MLflow 详情”已经显示 Run 与 `train/loss`，但通用 Loss 卡片仍为空，先刷新页面；持续出现时记录任务 ID、Run ID 和实际指标键交给管理员。
 
@@ -402,6 +402,7 @@ spk-rayjob logs -f <任务ID>    # 跟随日志
 | `spk-rayjob jobs --state RUNNING` | 按状态列出任务 |
 | `spk-rayjob status <ID>` | 查看单个任务的状态、规模与结果目录 |
 | `spk-rayjob logs -f <ID>` | 实时跟随日志，任务结束自动退出 |
+| `spk-rayjob connect <ID>` | 任务运行后连接自己的第 1 个 Worker；多 Worker 用 `--worker 1` 选第 2 个 |
 | `spk-rayjob cancel <ID>` | 停止任务 |
 | `<任意命令> --output json` | 输出原始 JSON，供脚本解析（默认是可读文本） |
 
@@ -485,6 +486,10 @@ TOS 是对象存储，经 CSI/FSX 以文件系统语义呈现；目录遍历可�
 如果页面明确显示拓扑配置不匹配，把任务 ID 和完整原因交给平台管理员，不要反复重提。任务的 hostname 拓扑意图、`Topology` 对象和 `ResourceFlavor.spec.topologyName` 必须由管理员作为同一次切换配齐；平台关闭 TAS 时不会单独给新任务添加拓扑注解。普通用户只需运行 `spk-rayjob status JOB_ID`，不需要使用 `kubectl`。
 
 TAS 尚未完成切换时，多 Worker 任务会优先分散到不同主机；如果集群只有一台机器能容纳本次任务，平台允许这些 Worker 临时放到同一主机，避免 Kueue 已接纳而 Pod 永久 Pending。此时“2 个 Worker”只证明 Ray Train 的多 Worker 链路，不等于已经完成多机网络验证；任务详情必须显示两个不同的节点名，才能作为真实多机证据。TAS 完整启用后，平台会在准入阶段保证 hostname 拓扑并恢复硬跨主机约束。
+
+**怎么进入正在训练的 Worker？**
+
+任务状态变为 `RUNNING` 后执行 `spk-rayjob connect JOB_ID`。该能力默认可用，不要在提交时加 `--ssh`：平台不开 SSH 端口、不分发私钥，也不暴露 Pod 名。只有任务提交者可连接自己的运行中 Worker；`--worker` 是从 0 开始的序号。输入 `exit` 只关闭终端连接，不会取消任务。当任务尚在排队、Worker 尚未 Running、任务已结束，或镜像中没有 `/bin/sh` 时，连接会明确失败。
 
 **如何确认训练真的用了 GPU 和选中的数据？**
 先用 1×1 小任务在 stdout 打印 `torch.cuda.get_device_name(0)` 和一个明确标注文件的 `stat`，再在任务详情核对 GPU 指标与输出目录。不要为了验收而对整个 TOS 根目录执行递归 `find/rglob`。

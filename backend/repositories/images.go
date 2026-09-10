@@ -147,18 +147,14 @@ func (r *GormRepository) ImageByReference(ctx context.Context, tenantID, kind, r
 	return domain.PlatformImage{}, ErrImageNotFound
 }
 
-// SetImageShared moves an image visible to the acting super administrator
-// between that administrator's tenant catalogue and the platform catalogue.
-// The API reserves this operation for SuperAdmin; the repository still scopes
-// the lookup to the actor's tenant plus shared rows to avoid reassigning an
-// unrelated team's image by ID.
-func (r *GormRepository) SetImageShared(ctx context.Context, tenantID, id string, shared bool, targetTenantID string) (domain.PlatformImage, error) {
+// SetImageShared moves an image between a team catalogue and the platform
+// catalogue. The API reserves this operation for SuperAdmin and validates the
+// target team before calling the repository.
+func (r *GormRepository) SetImageShared(ctx context.Context, _ string, id string, shared bool, targetTenantID string) (domain.PlatformImage, error) {
 	var updated PlatformImageRecord
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var record PlatformImageRecord
-		err := tx.Where("id = ?", id).
-			Where("tenant_id IS NULL OR tenant_id = ?", tenantID).
-			First(&record).Error
+		err := tx.Where("id = ?", id).First(&record).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrImageNotFound
 		}

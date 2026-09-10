@@ -17,7 +17,9 @@ func TestConnectWorkerUsesAuthenticatedWebSocketAndStreamsBytes(t *testing.T) {
 			t.Errorf("missing bearer token")
 			return
 		}
-		_, _ = io.Copy(connection, connection)
+		buffer := make([]byte, len("echo-ready\n"))
+		_, _ = io.ReadFull(connection, buffer)
+		_, _ = connection.Write(buffer)
 	}))
 	defer server.Close()
 	client, err := NewClient(ClientOptions{ServerURL: server.URL, Token: "test-token", HTTPClient: server.Client()})

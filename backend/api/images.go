@@ -77,8 +77,17 @@ func (h *Handler) updateImageScope(c *gin.Context) {
 	targetTenantID := ""
 	if !*request.Shared {
 		targetTenantID = strings.TrimSpace(request.TargetTenantID)
-		if targetTenantID == "" || targetTenantID != principal.TenantID {
-			h.writeError(c, http.StatusBadRequest, "INVALID_IMAGE_SCOPE", "targetTenantId must be your current tenant when removing platform access")
+		if targetTenantID == "" || h.admin == nil {
+			h.writeError(c, http.StatusBadRequest, "INVALID_IMAGE_SCOPE", "targetTenantId must name an existing team when removing platform access")
+			return
+		}
+		tenants, err := h.admin.ListTenantSummaries(c.Request.Context())
+		if err != nil {
+			h.writeError(c, http.StatusInternalServerError, "TENANT_LIST_FAILED", "could not validate the target team")
+			return
+		}
+		if !containsTenant(tenants, targetTenantID) {
+			h.writeError(c, http.StatusBadRequest, "INVALID_IMAGE_SCOPE", "targetTenantId must name an existing team")
 			return
 		}
 	}

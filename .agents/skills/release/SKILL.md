@@ -67,6 +67,8 @@ go test -timeout=20m ./...
 
 Portal 前端也不在本机安装依赖或运行 lint。把 `dev` 候选 commit 用 `git archive` 生成不含 `.git`、`.env*` 和本地未跟踪文件的归档，送到构建机临时目录后执行 `docker build --pull -f docker/Dockerfile.lint .`。该门禁会依次运行 `pnpm lint:check`、`pnpm check:ep`、`pnpm check:store`；通过后才推 `dev`，随后由 GitLab CI/CD 再次验证并自动部署。不要从本仓库构建 Portal 前端。
 
+Portal 仓库的 pre-push hook 可能在本机安装依赖、自动修改文件或重复构建。候选已在构建机通过上述完整门禁时，推送使用 `git push --no-verify`，推送后再核对 GitLab CI/CD；禁止让 hook 在本机消耗构建资源或产生未审阅改动。
+
 本仓库独立旧前端若被明确要求维护，测试命令是 `npm test && npm run build`；测试跑 `node --test`，**不是 vitest**。直接 `npx vitest run` 会把测试工具用错。
 
 ### 数据库迁移
@@ -134,6 +136,8 @@ bash build-image.sh
 ```
 
 可选目标:`backend`、`frontend`、`spk-rayjob`、`dataset-publisher`、`workspace`、`bevfusion-ray258-canary`、`bevfusion-runtime`、`source-materializer`、`tos-prefix-init`、`test-training`。
+
+修改 `backend/spkrayjob/` 时必须同时构建 `backend,spk-rayjob`，并在 Helm 最小覆盖中同时更新 `backend.image` 与 `spkRayjobRelease.image`。只更新后端而不更新下载服务，会造成文档已显示新命令、用户下载的 CLI 却不认识它。
 
 构建耗时几分钟,放后台跑。完成后取权威摘要:
 
@@ -213,6 +217,8 @@ kubectl get raycluster -A --no-headers | wc -l   # 训练资源未受影响
 Pod 的 `imageID` 要等于你构建出的摘要 —— rollout 成功不等于跑的是新镜像。
 
 平台 API 从**本机连不通**,健康检查和接口探测要在构建机上做。新增路由验证未认证时应返回 401 而非 404(401 = 已注册)。
+
+Portal 发布后不能只看 SPA 首页 200。至少直接打开并验证：任务列表、任务详情、实验中心每行 MLflow 详情、使用说明 `/raytrain/rayTrain/help`、调试环境的 Jupyter/VS Code 一次性票据。同时用后端返回的一个 403/404 响应确认 Portal 显示 `error.message`，不得退化成无信息的“系统错误”。
 
 ## 六、回滚
 

@@ -26,5 +26,12 @@
     "category": "训练",
     "sortOrder": 176,
     "markdown": "平台只注入 MLflow 连接与可信归属信息，不会从 stdout 猜 Loss。训练代码必须在 global rank 0 创建 Run，并用单调递增的 step 记录标量。\n\n### 常见指标名\n\n- 普通 PyTorch 可记录 `loss`、`learning_rate`、`epoch` 和 `throughput`。\n- MMCV 的 `MlflowLoggerHook` 通常记录 `train/loss`、`train/stats/...` 和 `learning_rate`。平台把 `loss` 与 `train/loss` 统一显示为 Training Loss，但不会用 `val/loss` 覆盖训练曲线。\n- `ray.train.report()` 管理 Ray Train 的结果与 Checkpoint；`mlflow.log_metrics()` 管理跨任务实验曲线，两者不能相互替代。\n\n### 用户验收\n\n1. `spk-rayjob status JOB_ID` 确认任务正在运行。\n2. `spk-rayjob logs -f JOB_ID` 确认代码已经进入训练 step。\n3. 在任务详情的「Loss 收敛曲线与指标」确认 Run 名称等于平台任务 ID、world size 与资源一致，并能看到带 step 的 Training Loss。\n4. 点击「打开该 Run」进入 `raytrain.wellspiking.ai/mlflow/`；浏览器必须已有 Portal/OAuth 登录，PAT 不能兑换浏览器票据。\n\n### 空页面排查\n\n没有 Run：训练代码未创建 Run 或缺少可信平台标签。有 Run 没有曲线：未写带 step 的标量，或写在非 global rank 0。有 `train/loss` 但通用 Loss 仍为空：刷新页面，仍不恢复时把任务 ID、Run ID 和指标键交给管理员。Artifact、Models 与 Traces 为空是当前训练侧权限边界，不代表训练失败；Checkpoint 继续写 `PLATFORM_OUTPUT_PATH`。"
+  },
+  {
+    "id": "worker-connect-and-scheduling-boundary",
+    "title": "连接训练 Worker 与当前 GPU 调度边界",
+    "category": "训练",
+    "sortOrder": 177,
+    "markdown": "### 连接自己的 Worker\n\n任务变为 `RUNNING` 后执行 `spk-rayjob connect JOB_ID`；多 Worker 任务用 `--worker 0`、`--worker 1` 选择。输入 `exit` 只退出连接，不停止训练。只有任务提交者可连接；平台服务端根据任务选 Worker，用户不能传 namespace、Pod、container 或自定义命令。\n\n### 当前调度真实状态\n\n- 卡型、优先级和可恢复闲时任务的提交契约已实现，但线上抢占仍关闭；`opportunistic` 不会在未验证 checkpoint 恢复时被冒险开放。\n- TAS 当前整体关闭，平台不会单独给任务下发 hostname 拓扑请求，因此不存在「任务要求 TAS 但 Flavor 没有 topologyName」的半开配置。\n- TAS 切换需要等 admitted/running Workload 清零，再一次性创建 Topology、新 ResourceFlavor 并开启后端任务意图；不会为切换重启或删除现有训练。\n- 多团队成员、当前团队切换和 PAT 团队绑定已可用；独立的每团队/每卡型 ClusterQueue、Cohort 借用与抢占回收尚未上线，不应对用户宣称已完成。"
   }
 ]

@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/net/websocket"
 	"ray-train-platform-backend/domain"
 	"ray-train-platform-backend/httpapi"
 )
@@ -737,6 +738,51 @@ func (client *Client) LogsPage(ctx context.Context, jobID string, options LogPag
 
 func (client *Client) Cancel(ctx context.Context, jobID string) (json.RawMessage, error) {
 	return client.request(ctx, http.MethodPost, "/api/v1/jobs/"+url.PathEscape(jobID)+"/cancel", nil, nil)
+}
+
+// ConnectWorker opens the owner-authorized terminal endpoint for one running
+// worker. Namespace, Pod, container and command selection remain server-owned.
+func (client *Client) ConnectWorker(ctx context.Context, jobID string, worker int, stdin io.Reader, stdout io.Writer) error {
+	target := *client.server
+	target.Scheme = "wss"
+	target.Path = "/api/v1/jobs/" + url.PathEscape(jobID) + "/connect"
+	target.RawPath = ""
+	query := url.Values{}
+	query.Set("worker", strconv.Itoa(worker))
+	target.RawQuery = query.Encode()
+	origin := *client.server
+	origin.Path, origin.RawPath, origin.RawQuery = "/", "", ""
+	config, err := websocket.NewConfig(target.String(), origin.String())
+	if err != nil {
+		return fmt.Errorf("create worker connection")
+	}
+	config.Header.Set("Authorization", "Bearer "+client.token)
+	config.Header.Set("X-Spk-Rayjob-Version", Version)
+	if transport, ok := client.httpClient.Transport.(*http.Transport); ok && transport != nil && transport.TLSClientConfig != nil {
+		config.TlsConfig = transport.TLSClientConfig.Clone()
+	}
+	connection, err := websocket.DialConfig(config)
+	if err != nil {
+		return fmt.Errorf("worker connection rejected")
+	}
+	defer connection.Close()
+	done := make(chan struct{})
+	defer close(done)
+	connection.PayloadType = websocket.BinaryFrame
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = connection.Close()
+		case <-done:
+		}
+	}()
+	go func() {
+		_, _ = io.Copy(connection, stdin)
+	}()
+	if _, err := io.Copy(stdout, connection); err != nil && ctx.Err() == nil {
+		return fmt.Errorf("worker connection interrupted")
+	}
+	return ctx.Err()
 }
 
 func decodeJob(data json.RawMessage) (Job, error) {
