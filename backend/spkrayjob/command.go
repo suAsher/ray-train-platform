@@ -1378,12 +1378,23 @@ func runCancel(ctx context.Context, arguments []string, stdout, stderr io.Writer
 }
 
 func runConnect(ctx context.Context, arguments []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) error {
+	// The documented form keeps the job ID immediately after the command:
+	// `connect JOB_ID --worker 1`. Go's flag package stops parsing at the first
+	// positional argument, so move that one trusted positional value behind the
+	// remaining flags before parsing. The flags-first form remains supported.
+	if len(arguments) > 1 && !strings.HasPrefix(arguments[0], "-") {
+		reordered := append([]string(nil), arguments[1:]...)
+		arguments = append(reordered, arguments[0])
+	}
 	set := flag.NewFlagSet("connect", flag.ContinueOnError)
 	set.SetOutput(io.Discard)
 	var connection connectionFlags
 	bindConnectionFlags(set, &connection)
 	worker := set.Int("worker", 0, "zero-based worker ordinal")
-	if err := set.Parse(arguments); err != nil || set.NArg() != 1 || strings.TrimSpace(set.Arg(0)) == "" || *worker < 0 || *worker > 999 {
+	if err := set.Parse(arguments); errors.Is(err, flag.ErrHelp) {
+		_, writeErr := io.WriteString(stdout, "用法：spk-rayjob connect JOB_ID [--worker N]\n\n--worker 使用从 0 开始的 Worker 序号，默认 0。输入 exit 只退出连接，不会停止训练。\n")
+		return writeErr
+	} else if err != nil || set.NArg() != 1 || strings.TrimSpace(set.Arg(0)) == "" || *worker < 0 || *worker > 999 {
 		return errors.New("connect requires a job ID and --worker between 0 and 999")
 	}
 	client, err := newCommandClient(connection, getenv, stderr)
