@@ -305,6 +305,11 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	// MLflow authenticates browser navigation with its own path-scoped cookie,
 	// so the proxy must remain outside bearer middleware.
 	jobs.RegisterMLflowDashboardProxyRoute(router.Group(""))
+	// Editor tabs cannot attach the Portal's bearer token. These two proxy
+	// routes exchange their own short-lived, workspace-scoped token and must be
+	// reachable before the generic OAuth/session middleware. Workspace CRUD and
+	// ticket issuance remain protected below.
+	jobs.RegisterWorkspaceProxyRoute(router.Group("/api/v1"))
 	// Managed workers authenticate with a random job-scoped credential rather
 	// than a user session or cluster-wide service-account token.
 	jobs.RegisterTrainingEventRoutes(router.Group("/api/v1/internal"))
@@ -323,9 +328,6 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	protected.Use(jobs.TenantWriteGuard(), api.CLICompatibilityGuard(cfg.SPKRayjobMinimumVersion))
 	v1 := protected.Group("/api/v1")
 	jobs.RegisterSessionRoutes(v1)
-	// Mounted before the interactive guard: the proxy authorises browser
-	// navigation with its own workspace-scoped token.
-	jobs.RegisterWorkspaceProxyRoute(v1)
 	jobs.RegisterTrainingRoutes(v1)
 	jobs.RegisterCheckpointRoutes(v1)
 	jobs.RegisterImageReadRoutes(v1)
