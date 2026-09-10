@@ -45,7 +45,7 @@ func jobConnectPod(name, role string, phase corev1.PodPhase) *corev1.Pod {
 			Name: name, Namespace: "tenant-a",
 			Labels: map[string]string{platformJobIDLabel: "job-a", "ray.io/node-type": role},
 		},
-		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "ray-worker"}}},
+		Spec:   corev1.PodSpec{Containers: []corev1.Container{{Name: "ray-worker"}}},
 		Status: corev1.PodStatus{Phase: phase},
 	}
 }

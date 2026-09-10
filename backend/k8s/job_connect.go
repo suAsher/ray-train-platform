@@ -86,8 +86,8 @@ func (c *Client) ConnectJobWorker(ctx context.Context, target JobWorkerTarget, s
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: target.ContainerName,
-			Command: []string{"/bin/sh", "-lc", "if command -v bash >/dev/null 2>&1; then exec bash -l; else exec sh -l; fi"},
-			Stdin: true, Stdout: true, TTY: true,
+			Command:   []string{"/bin/sh", "-lc", "if command -v bash >/dev/null 2>&1; then exec bash -l; else exec sh -l; fi"},
+			Stdin:     true, Stdout: true, TTY: true,
 		}, scheme.ParameterCodec)
 	executor, err := remotecommand.NewSPDYExecutor(c.restConfig, "POST", request.URL())
 	if err != nil {

@@ -108,7 +108,7 @@ type Handler struct {
 	mlflowDashboardTTL       time.Duration
 	mlflowDashboardNow       func() time.Time
 	mlflowDashboardRandom    io.Reader
-	jobWorkerConnector      jobWorkerConnector
+	jobWorkerConnector       jobWorkerConnector
 }
 
 type LogProvider interface {
