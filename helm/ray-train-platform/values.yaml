@@ -429,9 +429,9 @@ idcSync:
 
 kueue:
   enabled: false
-  # Workload priority classes are safe to create before queue migration. They
-  # never trigger Kubernetes pod preemption; Kueue preemption remains disabled
-  # until the platform can prove that every eligible victim is checkpoint-safe.
+  # These are Kueue WorkloadPriorityClasses (not Kubernetes PriorityClasses).
+  # They only rank admission; queue preemption remains disabled until the
+  # platform can prove that every eligible victim is checkpoint-safe.
   priorityClasses:
     enabled: true
     productionValue: 1000
@@ -441,6 +441,14 @@ kueue:
   # ClusterQueue. False attaches training to a queue managed outside this
   # project. Dataset publisher queues are governed independently above.
   manageResources: false
+  # TAS is an explicit cutover because adding topologyName to an in-use flavor
+  # changes queue admission semantics. Enable only after the legacy queue has
+  # no admitted workloads; the worker PodSet already carries the preferred
+  # hostname topology request and will start using it after this switch.
+  topology:
+    enabled: false
+    name: raytrain-hostname
+    nodeLabel: kubernetes.io/hostname
   # Kueue's nominalQuota is a static field with no capacity discovery. With this
   # on, the controller keeps it equal to the allocatable capacity of the nodes
   # matching training.nodeSelector, so adding a machine only means labelling it.

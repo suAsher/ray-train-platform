@@ -1,4 +1,17 @@
 {{- if and .Values.kueue.enabled .Values.kueue.manageResources }}
+{{- if .Values.kueue.topology.enabled }}
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: Topology
+metadata:
+  name: {{ .Values.kueue.topology.name }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: scheduling
+spec:
+  levels:
+    - nodeLabel: {{ .Values.kueue.topology.nodeLabel }}
+---
+{{- end }}
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ResourceFlavor
 metadata:
@@ -7,6 +20,9 @@ metadata:
     {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: scheduling
 spec:
+  {{- if .Values.kueue.topology.enabled }}
+  topologyName: {{ .Values.kueue.topology.name }}
+  {{- end }}
   nodeLabels:
     {{- toYaml .Values.kueue.resourceFlavorNodeLabels | nindent 4 }}
 ---
