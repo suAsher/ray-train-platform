@@ -23,7 +23,7 @@ spec:
     - host: spiking-dev.wellspiking.ai
       http:
         paths:
-          - path: /raytrain/(api/.*|ray/.*)
+          - path: /raytrain/(api/.*|ray/.*|mlflow/.*)
             pathType: ImplementationSpecific
             backend:
               service:
