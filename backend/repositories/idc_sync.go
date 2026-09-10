@@ -31,23 +31,24 @@ type IDCDataSyncConnectorRecord struct {
 	UpdatedAt          time.Time
 }
 type IDCDataSyncRunRecord struct {
-	ID                 string `gorm:"primaryKey"`
-	ConnectorID        string `gorm:"column:connector_id;index"`
-	IdempotencyKey     string `gorm:"column:idempotency_key"`
-	Mode               string
-	State              string `gorm:"index"`
-	RequestedBy        string `gorm:"column:requested_by"`
-	InventorySHA256    string `gorm:"column:inventory_sha256"`
-	InventoryObjectKey string `gorm:"column:inventory_object_key"`
-	SourceObjectCount  int64
-	SourceBytes        int64
-	NewObjectCount     int64
-	ChangedObjectCount int64
-	ReusedObjectCount  int64
-	FailureReason      string
-	CreatedAt          time.Time
-	StartedAt          *time.Time
-	FinishedAt         *time.Time
+	ID                    string `gorm:"primaryKey"`
+	ConnectorID           string `gorm:"column:connector_id;index"`
+	IdempotencyKey        string `gorm:"column:idempotency_key"`
+	Mode                  string
+	State                 string `gorm:"index"`
+	RequestedBy           string `gorm:"column:requested_by"`
+	InventorySHA256       string `gorm:"column:inventory_sha256"`
+	InventoryObjectKey    string `gorm:"column:inventory_object_key"`
+	SourceObjectCount     int64
+	SourceBytes           int64
+	NewObjectCount        int64
+	ChangedObjectCount    int64
+	ReusedObjectCount     int64
+	TombstonedObjectCount int64
+	FailureReason         string
+	CreatedAt             time.Time
+	StartedAt             *time.Time
+	FinishedAt            *time.Time
 }
 type IDCDataSyncInventoryEntryRecord struct {
 	RunID        string `gorm:"column:run_id;primaryKey"`
@@ -239,8 +240,8 @@ func (r *GormRepository) AppendIDCDataSyncInventory(ctx context.Context, runID s
 	})
 }
 
-func (r *GormRepository) CompleteIDCDataSyncRun(ctx context.Context, runID, inventory, inventoryObjectKey string) (domain.IDCDataSyncRun, error) {
-	if len(inventory) != 64 {
+func (r *GormRepository) CompleteIDCDataSyncRun(ctx context.Context, runID string, completion domain.IDCDataSyncCompletion) (domain.IDCDataSyncRun, error) {
+	if len(completion.InventorySHA256) != 64 || completion.NewObjectCount < 0 || completion.ChangedObjectCount < 0 || completion.ReusedObjectCount < 0 || completion.TombstonedObjectCount < 0 {
 		return domain.IDCDataSyncRun{}, ErrIDCDataSyncConflict
 	}
 	var completed domain.IDCDataSyncRun
@@ -264,7 +265,11 @@ func (r *GormRepository) CompleteIDCDataSyncRun(ctx context.Context, runID, inve
 		if len(entries) == 0 {
 			return ErrIDCDataSyncConflict
 		}
-		current.State, current.FinishedAt, current.InventorySHA256, current.InventoryObjectKey, current.SourceObjectCount, current.SourceBytes = domain.IDCDataSyncRunSucceeded, &finished, inventory, inventoryObjectKey, int64(len(entries)), 0
+		if completion.NewObjectCount+completion.ChangedObjectCount+completion.ReusedObjectCount != int64(len(entries)) {
+			return ErrIDCDataSyncConflict
+		}
+		current.State, current.FinishedAt, current.InventorySHA256, current.InventoryObjectKey, current.SourceObjectCount, current.SourceBytes = domain.IDCDataSyncRunSucceeded, &finished, completion.InventorySHA256, completion.InventoryObjectKey, int64(len(entries)), 0
+		current.NewObjectCount, current.ChangedObjectCount, current.ReusedObjectCount, current.TombstonedObjectCount = completion.NewObjectCount, completion.ChangedObjectCount, completion.ReusedObjectCount, completion.TombstonedObjectCount
 		for _, item := range entries {
 			current.SourceBytes += item.SizeBytes
 		}
@@ -280,7 +285,7 @@ func (r *GormRepository) CompleteIDCDataSyncRun(ctx context.Context, runID, inve
 				return err
 			}
 		}
-		if result := tx.Model(&IDCDataSyncRunRecord{}).Where("id = ? AND state = ?", runID, string(domain.IDCDataSyncRunRunning)).Updates(map[string]any{"state": string(current.State), "inventory_sha256": current.InventorySHA256, "inventory_object_key": current.InventoryObjectKey, "source_object_count": current.SourceObjectCount, "source_bytes": current.SourceBytes, "finished_at": finished}); result.Error != nil || result.RowsAffected != 1 {
+		if result := tx.Model(&IDCDataSyncRunRecord{}).Where("id = ? AND state = ?", runID, string(domain.IDCDataSyncRunRunning)).Updates(map[string]any{"state": string(current.State), "inventory_sha256": current.InventorySHA256, "inventory_object_key": current.InventoryObjectKey, "source_object_count": current.SourceObjectCount, "source_bytes": current.SourceBytes, "new_object_count": current.NewObjectCount, "changed_object_count": current.ChangedObjectCount, "reused_object_count": current.ReusedObjectCount, "tombstoned_object_count": current.TombstonedObjectCount, "finished_at": finished}); result.Error != nil || result.RowsAffected != 1 {
 			if result.Error != nil {
 				return result.Error
 			}
@@ -290,6 +295,40 @@ func (r *GormRepository) CompleteIDCDataSyncRun(ctx context.Context, runID, inve
 		return nil
 	})
 	return completed, err
+}
+
+func (r *GormRepository) LatestSuccessfulIDCDataSyncRun(ctx context.Context, connectorID string) (domain.IDCDataSyncRun, bool, error) {
+	var record IDCDataSyncRunRecord
+	err := r.db.WithContext(ctx).Where("connector_id = ? AND state = ?", connectorID, string(domain.IDCDataSyncRunSucceeded)).Order("finished_at DESC").First(&record).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return domain.IDCDataSyncRun{}, false, nil
+	}
+	if err != nil {
+		return domain.IDCDataSyncRun{}, false, fmt.Errorf("find latest IDC sync run: %w", err)
+	}
+	run, err := record.run()
+	return run, err == nil, err
+}
+
+func (r *GormRepository) FailIDCDataSyncRun(ctx context.Context, runID, reason string, finishedAt time.Time) (domain.IDCDataSyncRun, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" || len(reason) > 512 {
+		return domain.IDCDataSyncRun{}, ErrIDCDataSyncConflict
+	}
+	result := r.db.WithContext(ctx).Model(&IDCDataSyncRunRecord{}).
+		Where("id = ? AND state IN ?", runID, []string{string(domain.IDCDataSyncRunPending), string(domain.IDCDataSyncRunPlanning), string(domain.IDCDataSyncRunRunning)}).
+		Updates(map[string]any{"state": string(domain.IDCDataSyncRunFailed), "failure_reason": reason, "finished_at": finishedAt.UTC()})
+	if result.Error != nil {
+		return domain.IDCDataSyncRun{}, fmt.Errorf("fail IDC sync run: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return domain.IDCDataSyncRun{}, ErrIDCDataSyncConflict
+	}
+	var record IDCDataSyncRunRecord
+	if err := r.db.WithContext(ctx).Where("id = ?", runID).First(&record).Error; err != nil {
+		return domain.IDCDataSyncRun{}, err
+	}
+	return record.run()
 }
 func (r *GormRepository) ListIDCDataSyncInventory(ctx context.Context, runID string) ([]domain.IDCDataSyncInventoryEntry, error) {
 	var records []IDCDataSyncInventoryEntryRecord
@@ -314,10 +353,10 @@ func (record IDCDataSyncConnectorRecord) connector() (domain.IDCDataSyncConnecto
 	return item, item.Validate()
 }
 func runRecord(item domain.IDCDataSyncRun, now time.Time) IDCDataSyncRunRecord {
-	return IDCDataSyncRunRecord{ID: item.ID, ConnectorID: item.ConnectorID, IdempotencyKey: item.IdempotencyKey, Mode: string(item.Mode), State: string(item.State), RequestedBy: item.RequestedBy, InventorySHA256: item.InventorySHA256, InventoryObjectKey: item.InventoryObjectKey, SourceObjectCount: item.SourceObjectCount, SourceBytes: item.SourceBytes, NewObjectCount: item.NewObjectCount, ChangedObjectCount: item.ChangedObjectCount, ReusedObjectCount: item.ReusedObjectCount, FailureReason: item.FailureReason, CreatedAt: now, StartedAt: item.StartedAt, FinishedAt: item.FinishedAt}
+	return IDCDataSyncRunRecord{ID: item.ID, ConnectorID: item.ConnectorID, IdempotencyKey: item.IdempotencyKey, Mode: string(item.Mode), State: string(item.State), RequestedBy: item.RequestedBy, InventorySHA256: item.InventorySHA256, InventoryObjectKey: item.InventoryObjectKey, SourceObjectCount: item.SourceObjectCount, SourceBytes: item.SourceBytes, NewObjectCount: item.NewObjectCount, ChangedObjectCount: item.ChangedObjectCount, ReusedObjectCount: item.ReusedObjectCount, TombstonedObjectCount: item.TombstonedObjectCount, FailureReason: item.FailureReason, CreatedAt: now, StartedAt: item.StartedAt, FinishedAt: item.FinishedAt}
 }
 func (record IDCDataSyncRunRecord) run() (domain.IDCDataSyncRun, error) {
-	item := domain.IDCDataSyncRun{ID: record.ID, ConnectorID: record.ConnectorID, IdempotencyKey: record.IdempotencyKey, Mode: domain.IDCDataSyncRunMode(record.Mode), State: domain.IDCDataSyncRunState(record.State), RequestedBy: record.RequestedBy, InventorySHA256: record.InventorySHA256, InventoryObjectKey: record.InventoryObjectKey, SourceObjectCount: record.SourceObjectCount, SourceBytes: record.SourceBytes, NewObjectCount: record.NewObjectCount, ChangedObjectCount: record.ChangedObjectCount, ReusedObjectCount: record.ReusedObjectCount, FailureReason: record.FailureReason, CreatedAt: record.CreatedAt, StartedAt: record.StartedAt, FinishedAt: record.FinishedAt}
+	item := domain.IDCDataSyncRun{ID: record.ID, ConnectorID: record.ConnectorID, IdempotencyKey: record.IdempotencyKey, Mode: domain.IDCDataSyncRunMode(record.Mode), State: domain.IDCDataSyncRunState(record.State), RequestedBy: record.RequestedBy, InventorySHA256: record.InventorySHA256, InventoryObjectKey: record.InventoryObjectKey, SourceObjectCount: record.SourceObjectCount, SourceBytes: record.SourceBytes, NewObjectCount: record.NewObjectCount, ChangedObjectCount: record.ChangedObjectCount, ReusedObjectCount: record.ReusedObjectCount, TombstonedObjectCount: record.TombstonedObjectCount, FailureReason: record.FailureReason, CreatedAt: record.CreatedAt, StartedAt: record.StartedAt, FinishedAt: record.FinishedAt}
 	return item, item.Validate()
 }
 func entryRecord(item domain.IDCDataSyncInventoryEntry) IDCDataSyncInventoryEntryRecord {

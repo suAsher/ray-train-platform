@@ -22,6 +22,8 @@ type Repository interface {
 	ListIDCDataSyncRuns(context.Context, string) ([]domain.IDCDataSyncRun, error)
 	CreateIDCDataSyncRun(context.Context, domain.IDCDataSyncRun) error
 	ClaimIDCDataSyncRun(context.Context, string, time.Time) (domain.IDCDataSyncRun, bool, error)
+	LatestSuccessfulIDCDataSyncRun(context.Context, string) (domain.IDCDataSyncRun, bool, error)
+	FailIDCDataSyncRun(context.Context, string, string, time.Time) (domain.IDCDataSyncRun, error)
 }
 
 type JobClient interface {
@@ -31,20 +33,21 @@ type JobClient interface {
 // JobSpec contains only platform-resolved values. In particular there is no
 // public endpoint, arbitrary NFS location, shell command or user credential.
 type JobSpec struct {
-	Namespace           string
-	RunID               string
-	SourceRelativePath  string
-	MirrorPrefix        string
-	InternalPrefix      string
-	Bucket              string
-	Image               string
-	TosutilConfigSecret string
-	SourceNFSServer     string
-	SourceNFSPath       string
-	SourceMountOptions  []string
-	CallbackURL         string
-	CallbackToken       string
-	ServiceAccountName  string
+	Namespace            string
+	RunID                string
+	SourceRelativePath   string
+	MirrorPrefix         string
+	InternalPrefix       string
+	Bucket               string
+	Image                string
+	TosutilConfigSecret  string
+	SourceNFSServer      string
+	SourceNFSPath        string
+	SourceMountOptions   []string
+	CallbackURL          string
+	CallbackToken        string
+	ServiceAccountName   string
+	PreviousInventoryKey string
 }
 
 type Manager struct {
@@ -139,8 +142,18 @@ func (m *Manager) Request(ctx context.Context, connector domain.IDCDataSyncConne
 	if !claimedNow {
 		return claimed, nil
 	}
-	spec := JobSpec{Namespace: m.namespace, RunID: claimed.ID, SourceRelativePath: connector.SourceRelativePath, MirrorPrefix: connector.MirrorPrefix, InternalPrefix: m.internal, Bucket: m.bucket, Image: m.image, TosutilConfigSecret: m.secret, SourceNFSServer: m.sourceHost, SourceNFSPath: m.sourcePath, SourceMountOptions: append([]string(nil), m.sourceOpts...), CallbackURL: m.callback + "/api/v1/internal/idc-sync/runs/" + claimed.ID, CallbackToken: m.callbackToken(claimed.ID), ServiceAccountName: m.service}
+	previous, found, err := m.repository.LatestSuccessfulIDCDataSyncRun(ctx, connector.ID)
+	if err != nil {
+		_, _ = m.repository.FailIDCDataSyncRun(ctx, claimed.ID, "previous inventory lookup failed", m.now().UTC())
+		return domain.IDCDataSyncRun{}, err
+	}
+	previousKey := ""
+	if found {
+		previousKey = previous.InventoryObjectKey
+	}
+	spec := JobSpec{Namespace: m.namespace, RunID: claimed.ID, SourceRelativePath: connector.SourceRelativePath, MirrorPrefix: connector.MirrorPrefix, InternalPrefix: m.internal, Bucket: m.bucket, Image: m.image, TosutilConfigSecret: m.secret, SourceNFSServer: m.sourceHost, SourceNFSPath: m.sourcePath, SourceMountOptions: append([]string(nil), m.sourceOpts...), CallbackURL: m.callback + "/api/v1/internal/idc-sync/runs/" + claimed.ID, CallbackToken: m.callbackToken(claimed.ID), ServiceAccountName: m.service, PreviousInventoryKey: previousKey}
 	if err := m.jobs.EnsureIDCSyncJob(ctx, spec); err != nil {
+		_, _ = m.repository.FailIDCDataSyncRun(ctx, claimed.ID, "Kubernetes sync Job could not be created", m.now().UTC())
 		return domain.IDCDataSyncRun{}, fmt.Errorf("create IDC sync workload: %w", err)
 	}
 	return claimed, nil

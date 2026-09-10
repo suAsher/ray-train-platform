@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"ray-train-platform-backend/domain"
@@ -18,7 +19,8 @@ import (
 // run; it cannot create connectors, select a source, or alter another run.
 type IDCDataSyncCallbackStore interface {
 	AppendIDCDataSyncInventory(context.Context, string, []domain.IDCDataSyncInventoryEntry) error
-	CompleteIDCDataSyncRun(context.Context, string, string, string) (domain.IDCDataSyncRun, error)
+	CompleteIDCDataSyncRun(context.Context, string, domain.IDCDataSyncCompletion) (domain.IDCDataSyncRun, error)
+	FailIDCDataSyncRun(context.Context, string, string, time.Time) (domain.IDCDataSyncRun, error)
 }
 
 type idcSyncEntriesRequest struct {
@@ -27,9 +29,13 @@ type idcSyncEntriesRequest struct {
 }
 
 type idcSyncCompleteRequest struct {
-	RunID              string `json:"runId"`
-	InventorySHA256    string `json:"inventorySha256"`
-	InventoryObjectKey string `json:"inventoryObjectKey"`
+	RunID string `json:"runId"`
+	domain.IDCDataSyncCompletion
+}
+
+type idcSyncFailedRequest struct {
+	RunID         string `json:"runId"`
+	FailureReason string `json:"failureReason"`
 }
 
 // RegisterIDCSyncInternalRoutes deliberately lives outside end-user auth.
@@ -41,6 +47,7 @@ func (h *Handler) RegisterIDCSyncInternalRoutes(group *gin.RouterGroup) {
 	}
 	group.POST("/idc-sync/runs/:id/entries", h.appendIDCDataSyncEntries)
 	group.POST("/idc-sync/runs/:id/complete", h.completeIDCDataSyncRun)
+	group.POST("/idc-sync/runs/:id/failed", h.failIDCDataSyncRun)
 }
 
 func (h *Handler) appendIDCDataSyncEntries(c *gin.Context) {
@@ -70,7 +77,24 @@ func (h *Handler) completeIDCDataSyncRun(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "IDC_SYNC_RECEIPT_INVALID", "sync receipt is invalid")
 		return
 	}
-	if _, err := h.idcSyncCallbacks.CompleteIDCDataSyncRun(c.Request.Context(), request.RunID, request.InventorySHA256, request.InventoryObjectKey); err != nil {
+	if _, err := h.idcSyncCallbacks.CompleteIDCDataSyncRun(c.Request.Context(), request.RunID, request.IDCDataSyncCompletion); err != nil {
+		h.writeIDCDataSyncCallbackError(c, err)
+		return
+	}
+	h.writeSuccess(c, http.StatusNoContent, nil)
+}
+
+func (h *Handler) failIDCDataSyncRun(c *gin.Context) {
+	if !h.authorizeIDCDataSyncCallback(c) {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 8<<10)
+	var request idcSyncFailedRequest
+	if err := c.ShouldBindJSON(&request); err != nil || request.RunID != c.Param("id") {
+		h.writeError(c, http.StatusBadRequest, "IDC_SYNC_RECEIPT_INVALID", "sync receipt is invalid")
+		return
+	}
+	if _, err := h.idcSyncCallbacks.FailIDCDataSyncRun(c.Request.Context(), request.RunID, request.FailureReason, time.Now().UTC()); err != nil {
 		h.writeIDCDataSyncCallbackError(c, err)
 		return
 	}
