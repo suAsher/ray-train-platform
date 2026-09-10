@@ -186,7 +186,7 @@ func (h *Handler) downloadJobArtifact(c *gin.Context) {
 }
 
 func (h *Handler) authorizedArtifactJob(c *gin.Context, principal auth.Principal) (*domain.TrainingJob, bool) {
-	job, err := h.repository.Get(c.Request.Context(), principal.TenantID, c.Param("id"))
+	job, err := h.jobForPrincipal(c.Request.Context(), principal, c.Param("id"))
 	if err != nil {
 		h.writeError(c, http.StatusNotFound, "JOB_NOT_FOUND", "training job was not found")
 		return nil, false
