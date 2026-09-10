@@ -16,6 +16,8 @@ import (
 
 var ErrUnavailable = errors.New("IDC sync is not configured")
 
+const ScheduledRequester = "system-idc-sync"
+
 type Repository interface {
 	CreateIDCDataSyncConnector(context.Context, domain.IDCDataSyncConnector) error
 	ListIDCDataSyncConnectors(context.Context) ([]domain.IDCDataSyncConnector, error)
@@ -25,6 +27,7 @@ type Repository interface {
 	LatestSuccessfulIDCDataSyncRun(context.Context, string) (domain.IDCDataSyncRun, bool, error)
 	FailIDCDataSyncRun(context.Context, string, string, time.Time) (domain.IDCDataSyncRun, error)
 	ListActiveIDCDataSyncRuns(context.Context) ([]domain.IDCDataSyncRun, error)
+	UpdateIDCDataSyncConnector(context.Context, domain.IDCDataSyncConnector) (domain.IDCDataSyncConnector, error)
 }
 
 type JobClient interface {
@@ -149,6 +152,13 @@ func (m *Manager) ListRuns(ctx context.Context, connectorID string) ([]domain.ID
 	return m.repository.ListIDCDataSyncRuns(ctx, connectorID)
 }
 
+func (m *Manager) UpdateConnector(ctx context.Context, connector domain.IDCDataSyncConnector) (domain.IDCDataSyncConnector, error) {
+	if m == nil {
+		return domain.IDCDataSyncConnector{}, ErrUnavailable
+	}
+	return m.repository.UpdateIDCDataSyncConnector(ctx, connector)
+}
+
 func (m *Manager) Request(ctx context.Context, connector domain.IDCDataSyncConnector, requestedBy string) (domain.IDCDataSyncRun, error) {
 	if m == nil {
 		return domain.IDCDataSyncRun{}, ErrUnavailable
@@ -235,6 +245,35 @@ func (m *Manager) reconcile(ctx context.Context) error {
 			if _, err := m.repository.FailIDCDataSyncRun(ctx, run.ID, reason, now); err != nil && !errors.Is(err, context.Canceled) {
 				return err
 			}
+		}
+	}
+	return m.scheduleDue(ctx, now)
+}
+
+func (m *Manager) scheduleDue(ctx context.Context, now time.Time) error {
+	connectors, err := m.repository.ListIDCDataSyncConnectors(ctx)
+	if err != nil {
+		return err
+	}
+	for _, connector := range connectors {
+		if !connector.Enabled || connector.SyncIntervalMinutes == 0 {
+			continue
+		}
+		runs, err := m.repository.ListIDCDataSyncRuns(ctx, connector.ID)
+		if err != nil {
+			return err
+		}
+		if len(runs) != 0 {
+			latest := runs[0]
+			if latest.State == domain.IDCDataSyncRunPending || latest.State == domain.IDCDataSyncRunPlanning || latest.State == domain.IDCDataSyncRunRunning {
+				continue
+			}
+			if latest.CreatedAt.Add(time.Duration(connector.SyncIntervalMinutes) * time.Minute).After(now) {
+				continue
+			}
+		}
+		if _, err := m.Request(ctx, connector, ScheduledRequester); err != nil {
+			return err
 		}
 	}
 	return nil

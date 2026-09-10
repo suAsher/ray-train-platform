@@ -10,15 +10,16 @@ import (
 // deliberately has no endpoint, credentials, command, or arbitrary PVC name:
 // those deployment concerns remain in Helm configuration and Kubernetes.
 type IDCDataSyncConnector struct {
-	ID                 string      `json:"id"`
-	Name               string      `json:"name"`
-	SourceSpace        DataSpaceID `json:"sourceSpace"`
-	SourceRelativePath string      `json:"sourceRelativePath"`
-	MirrorPrefix       string      `json:"mirrorPrefix"`
-	Enabled            bool        `json:"enabled"`
-	CreatedBy          string      `json:"createdBy"`
-	CreatedAt          time.Time   `json:"createdAt"`
-	UpdatedAt          time.Time   `json:"updatedAt"`
+	ID                  string      `json:"id"`
+	Name                string      `json:"name"`
+	SourceSpace         DataSpaceID `json:"sourceSpace"`
+	SourceRelativePath  string      `json:"sourceRelativePath"`
+	MirrorPrefix        string      `json:"mirrorPrefix"`
+	Enabled             bool        `json:"enabled"`
+	SyncIntervalMinutes int         `json:"syncIntervalMinutes"`
+	CreatedBy           string      `json:"createdBy"`
+	CreatedAt           time.Time   `json:"createdAt"`
+	UpdatedAt           time.Time   `json:"updatedAt"`
 }
 
 func (connector IDCDataSyncConnector) Validate() error {
@@ -42,6 +43,9 @@ func (connector IDCDataSyncConnector) Validate() error {
 	}
 	if err := validateDatasetIdentifier("IDC sync connector creator", connector.CreatedBy); err != nil {
 		return err
+	}
+	if connector.SyncIntervalMinutes != 0 && (connector.SyncIntervalMinutes < 5 || connector.SyncIntervalMinutes > 7*24*60) {
+		return fmt.Errorf("IDC sync interval must be zero or between 5 and 10080 minutes")
 	}
 	return nil
 }

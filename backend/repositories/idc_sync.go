@@ -20,15 +20,16 @@ var (
 )
 
 type IDCDataSyncConnectorRecord struct {
-	ID                 string `gorm:"primaryKey"`
-	Name               string
-	SourceSpace        string `gorm:"column:source_space"`
-	SourceRelativePath string `gorm:"column:source_relative_path"`
-	MirrorPrefix       string `gorm:"column:mirror_prefix"`
-	Enabled            bool
-	CreatedBy          string `gorm:"column:created_by"`
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	ID                  string `gorm:"primaryKey"`
+	Name                string
+	SourceSpace         string `gorm:"column:source_space"`
+	SourceRelativePath  string `gorm:"column:source_relative_path"`
+	MirrorPrefix        string `gorm:"column:mirror_prefix"`
+	Enabled             bool
+	SyncIntervalMinutes int    `gorm:"column:sync_interval_minutes"`
+	CreatedBy           string `gorm:"column:created_by"`
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 type IDCDataSyncRunRecord struct {
 	ID                    string `gorm:"primaryKey"`
@@ -87,6 +88,25 @@ func (r *GormRepository) CreateIDCDataSyncConnector(ctx context.Context, item do
 		return ErrIDCDataSyncConflict
 	}
 	return nil
+}
+
+func (r *GormRepository) UpdateIDCDataSyncConnector(ctx context.Context, item domain.IDCDataSyncConnector) (domain.IDCDataSyncConnector, error) {
+	if err := item.Validate(); err != nil {
+		return domain.IDCDataSyncConnector{}, fmt.Errorf("validate IDC sync connector: %w", err)
+	}
+	result := r.db.WithContext(ctx).Model(&IDCDataSyncConnectorRecord{}).Where("id = ?", item.ID).
+		Updates(map[string]any{"enabled": item.Enabled, "sync_interval_minutes": item.SyncIntervalMinutes, "updated_at": time.Now().UTC()})
+	if result.Error != nil {
+		return domain.IDCDataSyncConnector{}, fmt.Errorf("update IDC sync connector: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return domain.IDCDataSyncConnector{}, ErrIDCDataSyncConnectorNotFound
+	}
+	var record IDCDataSyncConnectorRecord
+	if err := r.db.WithContext(ctx).Where("id = ?", item.ID).First(&record).Error; err != nil {
+		return domain.IDCDataSyncConnector{}, err
+	}
+	return record.connector()
 }
 func (r *GormRepository) ListIDCDataSyncConnectors(ctx context.Context) ([]domain.IDCDataSyncConnector, error) {
 	var records []IDCDataSyncConnectorRecord
@@ -362,10 +382,10 @@ func (r *GormRepository) ListIDCDataSyncInventory(ctx context.Context, runID str
 	return items, nil
 }
 func connectorRecord(item domain.IDCDataSyncConnector, now time.Time) IDCDataSyncConnectorRecord {
-	return IDCDataSyncConnectorRecord{ID: item.ID, Name: item.Name, SourceSpace: string(item.SourceSpace), SourceRelativePath: item.SourceRelativePath, MirrorPrefix: item.MirrorPrefix, Enabled: item.Enabled, CreatedBy: item.CreatedBy, CreatedAt: now, UpdatedAt: now}
+	return IDCDataSyncConnectorRecord{ID: item.ID, Name: item.Name, SourceSpace: string(item.SourceSpace), SourceRelativePath: item.SourceRelativePath, MirrorPrefix: item.MirrorPrefix, Enabled: item.Enabled, SyncIntervalMinutes: item.SyncIntervalMinutes, CreatedBy: item.CreatedBy, CreatedAt: now, UpdatedAt: now}
 }
 func (record IDCDataSyncConnectorRecord) connector() (domain.IDCDataSyncConnector, error) {
-	item := domain.IDCDataSyncConnector{ID: record.ID, Name: record.Name, SourceSpace: domain.DataSpaceID(record.SourceSpace), SourceRelativePath: record.SourceRelativePath, MirrorPrefix: record.MirrorPrefix, Enabled: record.Enabled, CreatedBy: record.CreatedBy, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
+	item := domain.IDCDataSyncConnector{ID: record.ID, Name: record.Name, SourceSpace: domain.DataSpaceID(record.SourceSpace), SourceRelativePath: record.SourceRelativePath, MirrorPrefix: record.MirrorPrefix, Enabled: record.Enabled, SyncIntervalMinutes: record.SyncIntervalMinutes, CreatedBy: record.CreatedBy, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
 	return item, item.Validate()
 }
 func runRecord(item domain.IDCDataSyncRun, now time.Time) IDCDataSyncRunRecord {
