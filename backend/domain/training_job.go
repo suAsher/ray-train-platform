@@ -238,6 +238,8 @@ type JobSpec struct {
 	Resources          Resources               `json:"resources"`
 	Queue              string                  `json:"queue"`
 	Priority           string                  `json:"priority,omitempty"`
+	AcceleratorClass   AcceleratorClass        `json:"acceleratorClass,omitempty"`
+	Preemptible        bool                    `json:"preemptible,omitempty"`
 	DatasetURI         string                  `json:"datasetUri,omitempty"`
 	CheckpointURI      string                  `json:"checkpointUri,omitempty"`
 	OutputURI          string                  `json:"outputUri,omitempty"`
@@ -715,6 +717,9 @@ func (s JobSpec) Validate() error {
 	}
 	if strings.TrimSpace(s.Queue) == "" {
 		return fmt.Errorf("queue is required")
+	}
+	if err := s.validateScheduling(); err != nil {
+		return err
 	}
 	if err := s.Cache.Validate(); err != nil {
 		return err

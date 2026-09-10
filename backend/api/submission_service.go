@@ -841,6 +841,12 @@ func normalizeSubmissionSpec(principal auth.Principal, origin domain.SubmissionO
 	} else if spec.Queue != expectedQueue {
 		return domain.JobSpec{}, ErrSubmissionQueueNotAllowed
 	}
+	spec.AcceleratorClass = spec.AcceleratorClass.Resolved()
+	spec.Priority = string(domain.WorkloadPriority(spec.Priority).Resolved())
+	if spec.Priority == string(domain.WorkloadPriorityProduction) &&
+		!principal.HasRole(domain.RoleTenantAdmin) && !principal.HasRole(domain.RoleSuperAdmin) {
+		return domain.JobSpec{}, fmt.Errorf("%w: production priority requires a tenant administrator", ErrSubmissionInvalidJobSpec)
+	}
 	if err := spec.Validate(); err != nil {
 		return domain.JobSpec{}, fmt.Errorf("%w: %v", ErrSubmissionInvalidJobSpec, err)
 	}
@@ -963,7 +969,8 @@ func (service *SubmissionService) materializeArtifact(ctx context.Context, princ
 	materialized.ArtifactSHA256 = artifact.SHA256
 	return domain.JobSpec{
 		Name: spec.Name, Image: spec.Image, Source: materialized, Entrypoint: spec.Entrypoint, Execution: spec.Execution, Resources: spec.Resources,
-		Queue: spec.Queue, Priority: spec.Priority, DatasetURI: spec.DatasetURI, CheckpointURI: spec.CheckpointURI,
+		Queue: spec.Queue, Priority: spec.Priority, AcceleratorClass: spec.AcceleratorClass, Preemptible: spec.Preemptible,
+		DatasetURI: spec.DatasetURI, CheckpointURI: spec.CheckpointURI,
 		OutputURI: spec.OutputURI, DatasetStorage: spec.DatasetStorage, CheckpointStorage: spec.CheckpointStorage,
 		OutputStorage: spec.OutputStorage, Input: spec.Input, Checkpoint: spec.Checkpoint, Output: spec.Output,
 		ResolvedStorage: spec.ResolvedStorage, ResolvedDataMounts: spec.ResolvedDataMounts, ResolvedDataRoots: spec.ResolvedDataRoots, TimeoutSeconds: spec.TimeoutSeconds,

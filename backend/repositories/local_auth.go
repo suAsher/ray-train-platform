@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
 )
@@ -30,7 +31,9 @@ type LocalUserRecord struct {
 	StorageKey       string `gorm:"column:storage_key"`
 	Email            string `gorm:"column:email"`
 	TenantID         string `gorm:"column:tenant_id;index"`
+	ActiveTenantID   string `gorm:"column:active_tenant_id;index"`
 	RolesJSON        string `gorm:"column:roles;type:jsonb"`
+	GlobalRolesJSON  string `gorm:"column:global_roles;type:jsonb"`
 	PasswordHash     string `gorm:"column:password_hash"`
 	IdentityProvider string `gorm:"column:identity_provider"`
 	Disabled         bool   `gorm:"column:disabled"`
@@ -70,6 +73,45 @@ func (r *GormRepository) toLocalUser(record LocalUserRecord) (domain.LocalUser, 
 	}, nil
 }
 
+func (record LocalUserRecord) activeTenantID() string {
+	if tenantID := strings.TrimSpace(record.ActiveTenantID); tenantID != "" {
+		return tenantID
+	}
+	return record.TenantID
+}
+
+func (r *GormRepository) localUserWithActiveMembership(ctx context.Context, record LocalUserRecord) (domain.LocalUser, error) {
+	user, err := r.toLocalUser(record)
+	if err != nil {
+		return domain.LocalUser{}, err
+	}
+	activeTenantID := record.activeTenantID()
+	if !r.db.Migrator().HasTable(&TenantMembershipRecord{}) {
+		return user, nil
+	}
+	var membership TenantMembershipRecord
+	err = r.db.WithContext(ctx).Where("identity_id = ? AND tenant_id = ? AND status = ?", record.ID, activeTenantID, domain.MembershipStatusActive).First(&membership).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return domain.LocalUser{}, ErrLocalUserNotFound
+	}
+	if err != nil {
+		return domain.LocalUser{}, fmt.Errorf("load active tenant membership: %w", err)
+	}
+	roles, err := membershipRoles(membership.RolesJSON)
+	if err != nil {
+		return domain.LocalUser{}, err
+	}
+	var globalRoles []string
+	if strings.TrimSpace(record.GlobalRolesJSON) != "" {
+		if err := json.Unmarshal([]byte(record.GlobalRolesJSON), &globalRoles); err != nil {
+			return domain.LocalUser{}, fmt.Errorf("decode global roles: %w", err)
+		}
+	}
+	user.TenantID = activeTenantID
+	user.Roles = mergeMembershipRoles(roles, globalRoles)
+	return user, nil
+}
+
 func (r *GormRepository) CreateLocalUser(ctx context.Context, user domain.LocalUser) error {
 	roles, err := domain.NormalizeRoles(user.Roles)
 	if err != nil {
@@ -95,12 +137,33 @@ func (r *GormRepository) CreateLocalUser(ctx context.Context, user domain.LocalU
 		return fmt.Errorf("local user storage key: %w", err)
 	}
 	identityProvider := normalizeIdentityProvider(user.IdentityProvider)
+	globalRoles := make([]string, 0, 1)
+	for _, role := range roles {
+		if role == domain.RoleSuperAdmin {
+			globalRoles = append(globalRoles, role)
+		}
+	}
+	globalRolesJSON, err := json.Marshal(globalRoles)
+	if err != nil {
+		return fmt.Errorf("marshal global user roles: %w", err)
+	}
 	record := LocalUserRecord{
-		ID: user.ID, Username: username, StorageKey: storageKey, Email: user.Email, TenantID: user.TenantID,
-		RolesJSON: string(rolesJSON), PasswordHash: user.PasswordHash, IdentityProvider: identityProvider, Disabled: user.Disabled,
+		ID: user.ID, Username: username, StorageKey: storageKey, Email: user.Email, TenantID: user.TenantID, ActiveTenantID: user.TenantID,
+		RolesJSON: string(rolesJSON), GlobalRolesJSON: string(globalRolesJSON), PasswordHash: user.PasswordHash, IdentityProvider: identityProvider, Disabled: user.Disabled,
 		CreatedAt: now, UpdatedAt: now,
 	}
-	if err := r.withActiveIdentityTenant(ctx, user.TenantID, func(tx *gorm.DB) error { return tx.Create(&record).Error }); err != nil {
+	if err := r.withActiveIdentityTenant(ctx, user.TenantID, func(tx *gorm.DB) error {
+		if err := tx.Create(&record).Error; err != nil {
+			return err
+		}
+		if !tx.Migrator().HasTable(&TenantMembershipRecord{}) {
+			return nil
+		}
+		return tx.Create(&TenantMembershipRecord{
+			IdentityID: record.ID, TenantID: record.TenantID, RolesJSON: record.RolesJSON,
+			Status: string(domain.MembershipStatusActive), CreatedAt: now, UpdatedAt: now,
+		}).Error
+	}); err != nil {
 		if errors.Is(err, gorm.ErrDuplicatedKey) || strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "UNIQUE constraint") {
 			return ErrUsernameTaken
 		}
@@ -126,13 +189,13 @@ func (r *GormRepository) FindLocalUserByUsername(ctx context.Context, username s
 	if err != nil {
 		return domain.LocalUser{}, fmt.Errorf("find local user: %w", err)
 	}
-	if err := requireActiveIdentityTenant(r.db.WithContext(ctx), record.TenantID, false); err != nil {
+	if err := requireActiveIdentityTenant(r.db.WithContext(ctx), record.activeTenantID(), false); err != nil {
 		if errors.Is(err, ErrTenantRetirementBlocked) || errors.Is(err, gorm.ErrRecordNotFound) {
 			return domain.LocalUser{}, ErrLocalUserNotFound
 		}
 		return domain.LocalUser{}, fmt.Errorf("find local user tenant: %w", err)
 	}
-	return r.toLocalUser(record)
+	return r.localUserWithActiveMembership(ctx, record)
 }
 
 func (r *GormRepository) ResolveOAuth2ProxyAccount(ctx context.Context, username string) (domain.LocalUser, bool, error) {
@@ -201,13 +264,13 @@ func (r *GormRepository) FindLocalUserByID(ctx context.Context, userID string) (
 	if err != nil {
 		return domain.LocalUser{}, fmt.Errorf("find local user by id: %w", err)
 	}
-	if err := requireActiveIdentityTenant(r.db.WithContext(ctx), record.TenantID, false); err != nil {
+	if err := requireActiveIdentityTenant(r.db.WithContext(ctx), record.activeTenantID(), false); err != nil {
 		if errors.Is(err, ErrTenantRetirementBlocked) || errors.Is(err, gorm.ErrRecordNotFound) {
 			return domain.LocalUser{}, ErrLocalUserNotFound
 		}
 		return domain.LocalUser{}, fmt.Errorf("find local user tenant: %w", err)
 	}
-	return r.toLocalUser(record)
+	return r.localUserWithActiveMembership(ctx, record)
 }
 
 func (r *GormRepository) ListLocalUsers(ctx context.Context) ([]domain.LocalUser, error) {
@@ -217,7 +280,7 @@ func (r *GormRepository) ListLocalUsers(ctx context.Context) ([]domain.LocalUser
 	}
 	users := make([]domain.LocalUser, 0, len(records))
 	for _, record := range records {
-		user, err := r.toLocalUser(record)
+		user, err := r.localUserWithActiveMembership(ctx, record)
 		if err != nil {
 			return nil, err
 		}
@@ -271,16 +334,43 @@ func (r *GormRepository) SetLocalUserRoles(ctx context.Context, userID string, r
 	if err != nil {
 		return fmt.Errorf("encode roles: %w", err)
 	}
-	result := r.db.WithContext(ctx).Model(&LocalUserRecord{}).
-		Where("id = ?", userID).
-		Update("roles", string(encoded))
-	if result.Error != nil {
-		return fmt.Errorf("update local user roles: %w", result.Error)
+	globalRoles := make([]string, 0, 1)
+	for _, role := range normalized {
+		if role == domain.RoleSuperAdmin {
+			globalRoles = append(globalRoles, role)
+		}
 	}
-	if result.RowsAffected == 0 {
-		return ErrLocalUserNotFound
+	globalEncoded, err := json.Marshal(globalRoles)
+	if err != nil {
+		return fmt.Errorf("encode global roles: %w", err)
 	}
-	return nil
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var account LocalUserRecord
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", userID).First(&account).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrLocalUserNotFound
+			}
+			return fmt.Errorf("load local user roles: %w", err)
+		}
+		result := tx.Model(&LocalUserRecord{}).Where("id = ?", userID).Updates(map[string]any{
+			"roles": string(encoded), "global_roles": string(globalEncoded), "updated_at": time.Now().UTC(),
+		})
+		if result.Error != nil {
+			return fmt.Errorf("update local user roles: %w", result.Error)
+		}
+		if tx.Migrator().HasTable(&TenantMembershipRecord{}) {
+			result = tx.Model(&TenantMembershipRecord{}).
+				Where("identity_id = ? AND tenant_id = ?", userID, account.activeTenantID()).
+				Updates(map[string]any{"roles": string(encoded), "updated_at": time.Now().UTC()})
+			if result.Error != nil {
+				return fmt.Errorf("update active membership roles: %w", result.Error)
+			}
+			if result.RowsAffected == 0 {
+				return ErrMembershipNotFound
+			}
+		}
+		return nil
+	})
 }
 
 func (r *GormRepository) SetLocalUserDisabled(ctx context.Context, userID string, disabled bool) error {
@@ -352,20 +442,20 @@ func (r *GormRepository) FindLocalSessionByPublicID(ctx context.Context, publicI
 	if err != nil {
 		return auth.LocalSessionRecord{}, fmt.Errorf("find local session: %w", err)
 	}
-	if err := requireActiveIdentityTenant(r.db.WithContext(ctx), record.TenantID, false); err != nil {
-		if errors.Is(err, ErrTenantRetirementBlocked) || errors.Is(err, gorm.ErrRecordNotFound) {
-			return auth.LocalSessionRecord{}, auth.ErrLocalSessionNotFound
-		}
-		return auth.LocalSessionRecord{}, fmt.Errorf("find local session tenant: %w", err)
-	}
 	var userRecord LocalUserRecord
-	if err := r.db.WithContext(ctx).Where("id = ? AND tenant_id = ? AND decommissioned_at IS NULL", record.UserID, record.TenantID).First(&userRecord).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("id = ? AND decommissioned_at IS NULL", record.UserID).First(&userRecord).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return auth.LocalSessionRecord{}, auth.ErrLocalSessionNotFound
 		}
 		return auth.LocalSessionRecord{}, fmt.Errorf("find local session user: %w", err)
 	}
-	user, err := r.toLocalUser(userRecord)
+	if err := requireActiveIdentityTenant(r.db.WithContext(ctx), userRecord.activeTenantID(), false); err != nil {
+		if errors.Is(err, ErrTenantRetirementBlocked) || errors.Is(err, gorm.ErrRecordNotFound) {
+			return auth.LocalSessionRecord{}, auth.ErrLocalSessionNotFound
+		}
+		return auth.LocalSessionRecord{}, fmt.Errorf("find local session tenant: %w", err)
+	}
+	user, err := r.localUserWithActiveMembership(ctx, userRecord)
 	if err != nil {
 		return auth.LocalSessionRecord{}, err
 	}

@@ -52,6 +52,9 @@ func TestRenderRayJobProducesKueueManagedRayJob(t *testing.T) {
 	if labels["app.kubernetes.io/part-of"] != "ray-train-platform" {
 		t.Fatalf("RayJob must carry the platform ownership label: %#v", labels)
 	}
+	if labels["kueue.x-k8s.io/priority-class"] != "raytrain-normal" || labels["platform.wellspiking.ai/accelerator-class"] != "rtx4090" {
+		t.Fatalf("RayJob must carry normalized scheduling labels: %#v", labels)
+	}
 	spec, ok, err := nestedMap(manifest.Object, "spec")
 	if err != nil || !ok {
 		t.Fatalf("missing spec: %v", err)
@@ -72,6 +75,14 @@ func TestRenderRayJobProducesKueueManagedRayJob(t *testing.T) {
 	worker, ok := workers[0].(map[string]any)
 	if !ok || worker["replicas"] != int64(2) {
 		t.Fatalf("unexpected worker spec: %#v", worker)
+	}
+	workerMetadata, ok := worker["template"].(map[string]any)["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing worker metadata: %#v", worker)
+	}
+	workerAnnotations, _ := workerMetadata["annotations"].(map[string]any)
+	if workerAnnotations["kueue.x-k8s.io/podset-preferred-topology"] != "kubernetes.io/hostname" {
+		t.Fatalf("worker must request topology-aware packing: %#v", workerAnnotations)
 	}
 
 	workerTemplate, ok, err := nestedMap(worker, "template", "spec")

@@ -131,6 +131,44 @@ func TestPersonalAccessTokenRepositoryCreatesListsMetadataAndRestoresPrincipal(t
 	}
 }
 
+func TestTeamBoundPATStillUsesItsMembershipAfterInteractiveTeamSwitch(t *testing.T) {
+	repo := patTestRepository(t)
+	if err := repo.db.AutoMigrate(&LocalUserRecord{}, &TenantMembershipRecord{}); err != nil {
+		t.Fatalf("migrate membership tables: %v", err)
+	}
+	ensurePATIdentity(t, repo, "team-a", "user-a")
+	ensurePATIdentity(t, repo, "team-b", "seed-b")
+	if err := repo.CreateLocalUser(context.Background(), domain.LocalUser{
+		ID: "user-a", Username: "user-a", StorageKey: "stable-user-a", Email: "user-a@example.com",
+		TenantID: "team-a", Roles: []string{domain.RoleEngineer}, PasswordHash: "!external-only",
+		IdentityProvider: domain.IdentityProviderOAuth2Proxy,
+	}); err != nil {
+		t.Fatalf("create local account: %v", err)
+	}
+	if err := repo.PutTenantMembership(context.Background(), domain.TenantMembership{
+		IdentityID: "user-a", TenantID: "team-b", Roles: []string{domain.RoleEngineer}, Status: domain.MembershipStatusActive,
+	}); err != nil {
+		t.Fatalf("add second membership: %v", err)
+	}
+	issued := issueRepositoryPAT(t, repo, "team-a", "user-a", time.Now().UTC())
+	if err := repo.SetActiveTenant(context.Background(), "user-a", "team-b"); err != nil {
+		t.Fatalf("switch interactive team: %v", err)
+	}
+	record, err := repo.FindPATByPublicID(context.Background(), issued.PublicID)
+	if err != nil {
+		t.Fatalf("authenticate team-bound PAT: %v", err)
+	}
+	if record.Principal.TenantID != "team-a" || record.Principal.Username != "user-a" || !record.Principal.HasRole(domain.RoleEngineer) {
+		t.Fatalf("PAT principal drifted with interactive team: %+v", record.Principal)
+	}
+	if err := repo.SetTenantMembershipStatus(context.Background(), "user-a", "team-a", domain.MembershipStatusInactive); err != nil {
+		t.Fatalf("disable PAT membership: %v", err)
+	}
+	if _, err := repo.FindPATByPublicID(context.Background(), issued.PublicID); !errors.Is(err, auth.ErrPATNotFound) {
+		t.Fatalf("inactive membership must invalidate PAT, got %v", err)
+	}
+}
+
 func TestPersonalAccessTokenRepositoryEnforcesOwnerIsolationOnListAndRevoke(t *testing.T) {
 	repo := patTestRepository(t)
 	ensurePATIdentity(t, repo, "tenant-a", "user-a")

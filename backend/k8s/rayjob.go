@@ -207,6 +207,7 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	options.MLflow.userID = job.UserID
 	options.trainingEventJobID = job.ID
 	options.clusterAttempt = job.ClusterAttempt
+	options.NodeSelector = nodeSelectorForAccelerator(options.NodeSelector, job.Spec.AcceleratorClass)
 
 	// The submitter runs `ray job submit`, and Ray uploads the runtime env's
 	// working_dir from the submitter's own filesystem. Materialize the source
@@ -223,6 +224,7 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	workerPod := podTemplate("ray-worker", job.Spec.Image, workerCPU, workerMemory, gpusPerWorker, job.TenantID, job.Spec.Source, job.Spec, options, false, true, false)
 	addPodLabels(headPod, job.ID, job.TenantID)
 	addPodLabels(workerPod, job.ID, job.TenantID)
+	addPodAnnotation(workerPod, "kueue.x-k8s.io/podset-preferred-topology", "kubernetes.io/hostname")
 	managedMultiNode := job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain && workerReplicas > 1
 	legacyRayTrain := job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayDDP && job.Spec.Execution.ResolvedMode() == domain.ExecutionModeRayTrain
 	if managedMultiNode || legacyRayTrain {
@@ -271,6 +273,8 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 		"platform_job_id":              job.ID,
 		"platform_tenant_id":           job.TenantID,
 		"kueue.x-k8s.io/queue-name":    job.Spec.Queue,
+		"kueue.x-k8s.io/priority-class": domain.WorkloadPriority(job.Spec.Priority).KubernetesPriorityClass(),
+		"platform.wellspiking.ai/accelerator-class": string(job.Spec.AcceleratorClass.Resolved()),
 	}
 	annotations := map[string]any{
 		"ray-train-platform/job-id": job.ID,
@@ -1243,11 +1247,42 @@ func sourceMaterializer(tenantID string, source domain.CodeSource, jobSpec domai
 }
 
 func addPodLabels(template map[string]any, jobID, tenantID string) {
-	template["metadata"] = map[string]any{"labels": map[string]any{
+	metadata, _ := template["metadata"].(map[string]any)
+	if metadata == nil {
+		metadata = map[string]any{}
+		template["metadata"] = metadata
+	}
+	metadata["labels"] = map[string]any{
 		"app.kubernetes.io/part-of": "ray-train-platform",
 		"platform_job_id":           jobID,
 		"platform_tenant_id":        tenantID,
-	}}
+	}
+}
+
+func addPodAnnotation(template map[string]any, key, value string) {
+	metadata, _ := template["metadata"].(map[string]any)
+	if metadata == nil {
+		metadata = map[string]any{}
+		template["metadata"] = metadata
+	}
+	annotations, _ := metadata["annotations"].(map[string]any)
+	if annotations == nil {
+		annotations = map[string]any{}
+		metadata["annotations"] = annotations
+	}
+	annotations[key] = value
+}
+
+func nodeSelectorForAccelerator(configured map[string]string, accelerator domain.AcceleratorClass) map[string]string {
+	if accelerator == "" {
+		return configured
+	}
+	result := make(map[string]string, len(configured)+1)
+	for key, value := range configured {
+		result[key] = value
+	}
+	result["accelerator"] = accelerator.NodeLabelValue()
+	return result
 }
 
 func MapRayJobStatus(jobID string, status map[string]any, resourceVersion string) domain.ObservedJobState {

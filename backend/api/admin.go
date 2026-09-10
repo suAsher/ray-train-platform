@@ -28,6 +28,9 @@ func (h *Handler) RegisterAdminRoutes(group *gin.RouterGroup) {
 	// administrator can reallocate it here instead of editing Helm values.
 	group.POST("/tenants/:id/quota", h.setTenantQuota)
 	group.GET("/users", h.listUsers)
+	group.GET("/users/:id/memberships", h.listUserMemberships)
+	group.PUT("/users/:id/memberships", h.putUserMembership)
+	group.PATCH("/users/:id/memberships/:tenant", h.updateUserMembershipStatus)
 }
 
 // maxTenantGPUQuota bounds an administrator typo. It is deliberately far above

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -85,12 +86,65 @@ func (r *GormRepository) FindPATByPublicID(ctx context.Context, publicID string)
 		}
 		return auth.PATRecord{}, fmt.Errorf("find personal access token tenant: %w", err)
 	}
+	var account LocalUserRecord
+	if err := r.db.WithContext(ctx).Where("id = ? AND disabled = FALSE AND decommissioned_at IS NULL", token.UserID).First(&account).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return r.findLegacyPATOwner(ctx, token)
+		}
+		return auth.PATRecord{}, fmt.Errorf("load personal access token owner: %w", err)
+	}
+	var scopes []string
+	if err := json.Unmarshal([]byte(token.ScopesJSON), &scopes); err != nil {
+		return auth.PATRecord{}, fmt.Errorf("decode personal access token scopes: %w", err)
+	}
+	roles, err := r.rolesForPATMembership(ctx, account, token.TenantID)
+	if err != nil {
+		if errors.Is(err, ErrMembershipNotFound) {
+			return auth.PATRecord{}, auth.ErrPATNotFound
+		}
+		return auth.PATRecord{}, err
+	}
+	return auth.PATRecord{
+		PublicID: token.PublicID, Digest: token.TokenDigest,
+		Principal: auth.Principal{Subject: account.ID, Username: account.Username, Email: account.Email, TenantID: token.TenantID, Roles: roles},
+		Scopes:    scopes, ExpiresAt: token.ExpiresAt, RevokedAt: token.RevokedAt, LastUsedAt: token.LastUsedAt,
+	}, nil
+}
+
+func (r *GormRepository) rolesForPATMembership(ctx context.Context, account LocalUserRecord, tenantID string) ([]string, error) {
+	if !r.db.Migrator().HasTable(&TenantMembershipRecord{}) {
+		if account.TenantID != tenantID {
+			return nil, ErrMembershipNotFound
+		}
+		return membershipRoles(account.RolesJSON)
+	}
+	var membership TenantMembershipRecord
+	if err := r.db.WithContext(ctx).Where("identity_id = ? AND tenant_id = ? AND status = ?", account.ID, tenantID, domain.MembershipStatusActive).First(&membership).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrMembershipNotFound
+		}
+		return nil, fmt.Errorf("load personal access token membership: %w", err)
+	}
+	roles, err := membershipRoles(membership.RolesJSON)
+	if err != nil {
+		return nil, err
+	}
+	var globalRoles []string
+	if strings.TrimSpace(account.GlobalRolesJSON) != "" {
+		if err := json.Unmarshal([]byte(account.GlobalRolesJSON), &globalRoles); err != nil {
+			return nil, fmt.Errorf("decode personal access token global roles: %w", err)
+		}
+	}
+	return mergeMembershipRoles(roles, globalRoles), nil
+}
+
+func (r *GormRepository) findLegacyPATOwner(ctx context.Context, token PersonalAccessTokenRecord) (auth.PATRecord, error) {
 	var user UserRecord
 	if err := r.db.WithContext(ctx).Where("id = ? AND tenant_id = ?", token.UserID, token.TenantID).First(&user).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return auth.PATRecord{}, auth.ErrPATNotFound
 		}
-		return auth.PATRecord{}, fmt.Errorf("load personal access token owner: %w", err)
+		return auth.PATRecord{}, fmt.Errorf("load legacy personal access token owner: %w", err)
 	}
 	var scopes []string
 	if err := json.Unmarshal([]byte(token.ScopesJSON), &scopes); err != nil {
@@ -103,7 +157,7 @@ func (r *GormRepository) FindPATByPublicID(ctx context.Context, publicID string)
 	return auth.PATRecord{
 		PublicID: token.PublicID, Digest: token.TokenDigest,
 		Principal: auth.Principal{Subject: user.ID, Username: user.Username, Email: user.Email, TenantID: token.TenantID, Roles: roles},
-		Scopes:    scopes, ExpiresAt: token.ExpiresAt, RevokedAt: token.RevokedAt, LastUsedAt: token.LastUsedAt,
+		Scopes: scopes, ExpiresAt: token.ExpiresAt, RevokedAt: token.RevokedAt, LastUsedAt: token.LastUsedAt,
 	}, nil
 }
 
