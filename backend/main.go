@@ -182,6 +182,13 @@ func main() {
 			}
 		}()
 	}
+	if idcSyncManager != nil {
+		go func() {
+			if err := kubeClient.RunAsLeader(ctx, platformNamespace, "ray-train-platform-idc-sync", idcSyncManager.Run); err != nil && ctx.Err() == nil {
+				log.Printf("IDC sync controller stopped: %v", err)
+			}
+		}()
+	}
 	if dataObjectStore != nil {
 		go func() {
 			if err := kubeClient.RunAsLeader(ctx, platformNamespace, "ray-train-platform-upload-cleaner", jobHandler.RunDataSpaceUploadCleanup); err != nil && ctx.Err() == nil {
@@ -481,7 +488,8 @@ func newIDCSyncManager(repository *repositories.GormRepository, client *k8s.Clie
 		InternalPrefix: cfg.DatasetInternalPrefix, TosutilConfigSecret: cfg.IDCSyncTosutilConfigSecret,
 		SourceNFSServer: source.Server, SourceNFSPath: source.Path, SourceMountOptions: source.MountOptions,
 		CallbackURL:        "http://ray-train-backend." + namespace + ".svc.cluster.local:8080",
-		ServiceAccountName: cfg.IDCSyncServiceAccount, CallbackKey: []byte(cfg.PATPepper),
+		ServiceAccountName: cfg.IDCSyncServiceAccount, WorkClaimName: cfg.IDCSyncWorkClaimName,
+		CallbackKey: []byte(cfg.PATPepper),
 	})
 }
 

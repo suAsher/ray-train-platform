@@ -24,10 +24,17 @@ type Repository interface {
 	ClaimIDCDataSyncRun(context.Context, string, time.Time) (domain.IDCDataSyncRun, bool, error)
 	LatestSuccessfulIDCDataSyncRun(context.Context, string) (domain.IDCDataSyncRun, bool, error)
 	FailIDCDataSyncRun(context.Context, string, string, time.Time) (domain.IDCDataSyncRun, error)
+	ListActiveIDCDataSyncRuns(context.Context) ([]domain.IDCDataSyncRun, error)
 }
 
 type JobClient interface {
 	EnsureIDCSyncJob(context.Context, JobSpec) error
+	ObserveIDCSyncJob(context.Context, string, string) (JobObservation, error)
+}
+
+type JobObservation struct {
+	Exists, Active, Succeeded, Failed bool
+	Reason                            string
 }
 
 // JobSpec contains only platform-resolved values. In particular there is no
@@ -48,24 +55,29 @@ type JobSpec struct {
 	CallbackToken        string
 	ServiceAccountName   string
 	PreviousInventoryKey string
+	WorkClaimName        string
 }
 
 type Manager struct {
-	repository Repository
-	jobs       JobClient
-	namespace  string
-	image      string
-	bucket     string
-	internal   string
-	secret     string
-	sourceHost string
-	sourcePath string
-	sourceOpts []string
-	callback   string
-	service    string
-	key        []byte
-	now        func() time.Time
-	random     func([]byte) (int, error)
+	repository        Repository
+	jobs              JobClient
+	namespace         string
+	image             string
+	bucket            string
+	internal          string
+	secret            string
+	sourceHost        string
+	sourcePath        string
+	sourceOpts        []string
+	callback          string
+	service           string
+	workClaim         string
+	key               []byte
+	now               func() time.Time
+	random            func([]byte) (int, error)
+	reconcileInterval time.Duration
+	runTimeout        time.Duration
+	completionGrace   time.Duration
 }
 
 type Options struct {
@@ -73,16 +85,18 @@ type Options struct {
 	SourceNFSServer, SourceNFSPath                                string
 	SourceMountOptions                                            []string
 	CallbackURL, ServiceAccountName                               string
+	WorkClaimName                                                 string
 	CallbackKey                                                   []byte
 	Now                                                           func() time.Time
 	Random                                                        func([]byte) (int, error)
+	ReconcileInterval, RunTimeout, CompletionGrace                time.Duration
 }
 
 func NewManager(repository Repository, jobs JobClient, options Options) (*Manager, error) {
 	if repository == nil || jobs == nil {
 		return nil, ErrUnavailable
 	}
-	values := []string{options.Namespace, options.Image, options.Bucket, options.InternalPrefix, options.TosutilConfigSecret, options.SourceNFSServer, options.SourceNFSPath, options.CallbackURL, options.ServiceAccountName}
+	values := []string{options.Namespace, options.Image, options.Bucket, options.InternalPrefix, options.TosutilConfigSecret, options.SourceNFSServer, options.SourceNFSPath, options.CallbackURL, options.ServiceAccountName, options.WorkClaimName}
 	for _, value := range values {
 		if strings.TrimSpace(value) == "" {
 			return nil, ErrUnavailable
@@ -99,7 +113,19 @@ func NewManager(repository Repository, jobs JobClient, options Options) (*Manage
 	if random == nil {
 		random = rand.Read
 	}
-	return &Manager{repository: repository, jobs: jobs, namespace: strings.TrimSpace(options.Namespace), image: strings.TrimSpace(options.Image), bucket: strings.TrimSpace(options.Bucket), internal: strings.Trim(strings.TrimSpace(options.InternalPrefix), "/"), secret: strings.TrimSpace(options.TosutilConfigSecret), sourceHost: strings.TrimSpace(options.SourceNFSServer), sourcePath: strings.TrimSpace(options.SourceNFSPath), sourceOpts: append([]string(nil), options.SourceMountOptions...), callback: strings.TrimRight(strings.TrimSpace(options.CallbackURL), "/"), service: strings.TrimSpace(options.ServiceAccountName), key: append([]byte(nil), options.CallbackKey...), now: now, random: random}, nil
+	reconcileInterval := options.ReconcileInterval
+	if reconcileInterval <= 0 {
+		reconcileInterval = 30 * time.Second
+	}
+	runTimeout := options.RunTimeout
+	if runTimeout <= 0 {
+		runTimeout = 7 * 24 * time.Hour
+	}
+	completionGrace := options.CompletionGrace
+	if completionGrace <= 0 {
+		completionGrace = 2 * time.Minute
+	}
+	return &Manager{repository: repository, jobs: jobs, namespace: strings.TrimSpace(options.Namespace), image: strings.TrimSpace(options.Image), bucket: strings.TrimSpace(options.Bucket), internal: strings.Trim(strings.TrimSpace(options.InternalPrefix), "/"), secret: strings.TrimSpace(options.TosutilConfigSecret), sourceHost: strings.TrimSpace(options.SourceNFSServer), sourcePath: strings.TrimSpace(options.SourceNFSPath), sourceOpts: append([]string(nil), options.SourceMountOptions...), callback: strings.TrimRight(strings.TrimSpace(options.CallbackURL), "/"), service: strings.TrimSpace(options.ServiceAccountName), workClaim: strings.TrimSpace(options.WorkClaimName), key: append([]byte(nil), options.CallbackKey...), now: now, random: random, reconcileInterval: reconcileInterval, runTimeout: runTimeout, completionGrace: completionGrace}, nil
 }
 
 func (m *Manager) CreateConnector(ctx context.Context, connector domain.IDCDataSyncConnector) error {
@@ -151,12 +177,67 @@ func (m *Manager) Request(ctx context.Context, connector domain.IDCDataSyncConne
 	if found {
 		previousKey = previous.InventoryObjectKey
 	}
-	spec := JobSpec{Namespace: m.namespace, RunID: claimed.ID, SourceRelativePath: connector.SourceRelativePath, MirrorPrefix: connector.MirrorPrefix, InternalPrefix: m.internal, Bucket: m.bucket, Image: m.image, TosutilConfigSecret: m.secret, SourceNFSServer: m.sourceHost, SourceNFSPath: m.sourcePath, SourceMountOptions: append([]string(nil), m.sourceOpts...), CallbackURL: m.callback + "/api/v1/internal/idc-sync/runs/" + claimed.ID, CallbackToken: m.callbackToken(claimed.ID), ServiceAccountName: m.service, PreviousInventoryKey: previousKey}
+	spec := JobSpec{Namespace: m.namespace, RunID: claimed.ID, SourceRelativePath: connector.SourceRelativePath, MirrorPrefix: connector.MirrorPrefix, InternalPrefix: m.internal, Bucket: m.bucket, Image: m.image, TosutilConfigSecret: m.secret, SourceNFSServer: m.sourceHost, SourceNFSPath: m.sourcePath, SourceMountOptions: append([]string(nil), m.sourceOpts...), CallbackURL: m.callback + "/api/v1/internal/idc-sync/runs/" + claimed.ID, CallbackToken: m.callbackToken(claimed.ID), ServiceAccountName: m.service, PreviousInventoryKey: previousKey, WorkClaimName: m.workClaim}
 	if err := m.jobs.EnsureIDCSyncJob(ctx, spec); err != nil {
 		_, _ = m.repository.FailIDCDataSyncRun(ctx, claimed.ID, "Kubernetes sync Job could not be created", m.now().UTC())
 		return domain.IDCDataSyncRun{}, fmt.Errorf("create IDC sync workload: %w", err)
 	}
 	return claimed, nil
+}
+
+func (m *Manager) Run(ctx context.Context) error {
+	_ = m.reconcile(ctx)
+	ticker := time.NewTicker(m.reconcileInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			_ = m.reconcile(ctx)
+		}
+	}
+}
+
+func (m *Manager) reconcile(ctx context.Context) error {
+	runs, err := m.repository.ListActiveIDCDataSyncRuns(ctx)
+	if err != nil {
+		return fmt.Errorf("list active IDC sync runs: %w", err)
+	}
+	now := m.now().UTC()
+	for _, run := range runs {
+		observation, err := m.jobs.ObserveIDCSyncJob(ctx, m.namespace, run.ID)
+		if err != nil {
+			return fmt.Errorf("observe IDC sync Job: %w", err)
+		}
+		age := now.Sub(run.CreatedAt)
+		if run.StartedAt != nil {
+			age = now.Sub(*run.StartedAt)
+		}
+		reason := ""
+		switch {
+		case run.StartedAt != nil && age > m.runTimeout:
+			reason = "IDC sync exceeded its execution deadline"
+		case observation.Failed:
+			reason = "Kubernetes sync Job failed"
+			if strings.TrimSpace(observation.Reason) != "" {
+				reason += ": " + strings.TrimSpace(observation.Reason)
+			}
+		case observation.Succeeded && age > m.completionGrace:
+			reason = "Kubernetes sync Job completed without a valid receipt"
+		case !observation.Exists && age > m.completionGrace:
+			reason = "Kubernetes sync Job is missing"
+		}
+		if len(reason) > 512 {
+			reason = reason[:512]
+		}
+		if reason != "" {
+			if _, err := m.repository.FailIDCDataSyncRun(ctx, run.ID, reason, now); err != nil && !errors.Is(err, context.Canceled) {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (m *Manager) callbackToken(runID string) string {

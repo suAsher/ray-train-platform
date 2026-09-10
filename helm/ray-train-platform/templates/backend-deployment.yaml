@@ -262,6 +262,8 @@ spec:
               value: {{ default "" $idcSync.tosutilConfigSecret | quote }}
             - name: IDC_SYNC_SERVICE_ACCOUNT
               value: {{ default "" $idcSync.serviceAccountName | quote }}
+            - name: IDC_SYNC_WORK_CLAIM_NAME
+              value: {{ default "" $idcSync.workClaimName | quote }}
             - name: KUEUE_AUTO_QUOTA
               value: {{ .Values.kueue.autoQuota | quote }}
             - name: LOCAL_AUTH_ENABLED

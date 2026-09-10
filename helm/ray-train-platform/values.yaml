@@ -423,6 +423,9 @@ idcSync:
   bucket: ""
   tosutilConfigSecret: ""
   serviceAccountName: ray-idc-sync
+  # Platform-owned persistent workspace for resumable tosutil checkpoints.
+  # Required before IDC sync can be enabled.
+  workClaimName: ""
 
 kueue:
   enabled: false

@@ -186,6 +186,11 @@ def _load_previous_inventory(bucket: str, key: str, config: Path, work_dir: Path
             object_key = str(item["objectKey"])
         except (KeyError, TypeError, ValueError) as exc:
             raise SyncError("previous inventory is invalid") from exc
+        if modified_at_ns <= 0:
+            try:
+                modified_at_ns = int(datetime.fromisoformat(str(item["modifiedAt"]).replace("Z", "+00:00")).timestamp() * 1_000_000_000)
+            except (KeyError, TypeError, ValueError) as exc:
+                raise SyncError("previous inventory is invalid") from exc
         if size < 0 or modified_at_ns <= 0 or not re.fullmatch(r"[0-9a-f]{64}", digest):
             raise SyncError("previous inventory is invalid")
         if "/idc-raw/sha256/" not in object_key or not object_key.endswith("/" + digest):

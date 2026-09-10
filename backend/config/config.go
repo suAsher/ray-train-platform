@@ -55,6 +55,7 @@ type Config struct {
 	IDCSyncBucket                            string
 	IDCSyncTosutilConfigSecret               string
 	IDCSyncServiceAccount                    string
+	IDCSyncWorkClaimName                     string
 	DatasetVersioningEnabled                 bool
 	RayDataStreamingEnabled                  bool
 	DatasetPublisherEnabled                  bool
@@ -218,6 +219,7 @@ func Load() (Config, error) {
 		IDCSyncBucket:                     strings.TrimSpace(envOr("IDC_SYNC_BUCKET", os.Getenv("TOS_BUCKET"))),
 		IDCSyncTosutilConfigSecret:        strings.TrimSpace(os.Getenv("IDC_SYNC_TOSUTIL_CONFIG_SECRET")),
 		IDCSyncServiceAccount:             strings.TrimSpace(os.Getenv("IDC_SYNC_SERVICE_ACCOUNT")),
+		IDCSyncWorkClaimName:              strings.TrimSpace(os.Getenv("IDC_SYNC_WORK_CLAIM_NAME")),
 		DatasetInternalPrefix:             envOr("DATASET_INTERNAL_PREFIX", domain.DefaultDatasetInternalPrefix),
 		DatasetPublisherImage:             strings.TrimSpace(os.Getenv("DATASET_PUBLISHER_IMAGE")),
 		DatasetPublisherImagePullPolicy:   strings.TrimSpace(envOr("DATASET_PUBLISHER_IMAGE_PULL_POLICY", "IfNotPresent")),
@@ -522,12 +524,12 @@ func validateIDCSyncConfig(cfg Config) error {
 	if !cfg.IDCDataSpacesEnabled {
 		return fmt.Errorf("IDC_SYNC_ENABLED requires IDC_DATA_SPACES_ENABLED")
 	}
-	for _, required := range []struct{ value, name string }{{cfg.IDCSyncImage, "IDC_SYNC_IMAGE"}, {cfg.IDCSyncBucket, "IDC_SYNC_BUCKET"}, {cfg.IDCSyncTosutilConfigSecret, "IDC_SYNC_TOSUTIL_CONFIG_SECRET"}, {cfg.IDCSyncServiceAccount, "IDC_SYNC_SERVICE_ACCOUNT"}} {
+	for _, required := range []struct{ value, name string }{{cfg.IDCSyncImage, "IDC_SYNC_IMAGE"}, {cfg.IDCSyncBucket, "IDC_SYNC_BUCKET"}, {cfg.IDCSyncTosutilConfigSecret, "IDC_SYNC_TOSUTIL_CONFIG_SECRET"}, {cfg.IDCSyncServiceAccount, "IDC_SYNC_SERVICE_ACCOUNT"}, {cfg.IDCSyncWorkClaimName, "IDC_SYNC_WORK_CLAIM_NAME"}} {
 		if strings.TrimSpace(required.value) == "" {
 			return fmt.Errorf("%s is required when IDC_SYNC_ENABLED is true", required.name)
 		}
 	}
-	if !pinnedImagePattern.MatchString(cfg.IDCSyncImage) || !validDatasetPublisherBucket(cfg.IDCSyncBucket) || !isDNSSubdomain(cfg.IDCSyncTosutilConfigSecret) || !isDNSSubdomain(cfg.IDCSyncServiceAccount) {
+	if !pinnedImagePattern.MatchString(cfg.IDCSyncImage) || !validDatasetPublisherBucket(cfg.IDCSyncBucket) || !isDNSSubdomain(cfg.IDCSyncTosutilConfigSecret) || !isDNSSubdomain(cfg.IDCSyncServiceAccount) || !isDNSSubdomain(cfg.IDCSyncWorkClaimName) {
 		return fmt.Errorf("IDC sync configuration is invalid")
 	}
 	if source, ok := cfg.IDCDataSpaceSources["original"]; !ok || strings.TrimSpace(source.Server) == "" || strings.TrimSpace(source.Path) == "" {

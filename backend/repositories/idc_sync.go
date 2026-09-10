@@ -125,6 +125,22 @@ func (r *GormRepository) ListIDCDataSyncRuns(ctx context.Context, connectorID st
 	}
 	return items, nil
 }
+
+func (r *GormRepository) ListActiveIDCDataSyncRuns(ctx context.Context) ([]domain.IDCDataSyncRun, error) {
+	var records []IDCDataSyncRunRecord
+	if err := r.db.WithContext(ctx).Where("state IN ?", []string{string(domain.IDCDataSyncRunPending), string(domain.IDCDataSyncRunPlanning), string(domain.IDCDataSyncRunRunning)}).Order("created_at ASC").Find(&records).Error; err != nil {
+		return nil, fmt.Errorf("list active IDC sync runs: %w", err)
+	}
+	items := make([]domain.IDCDataSyncRun, 0, len(records))
+	for _, record := range records {
+		item, err := record.run()
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
 func (r *GormRepository) CreateIDCDataSyncRun(ctx context.Context, run domain.IDCDataSyncRun) error {
 	if err := run.Validate(); err != nil || run.State != domain.IDCDataSyncRunPending {
 		return ErrIDCDataSyncConflict
