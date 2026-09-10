@@ -38,7 +38,10 @@ func TestIDCDataSyncRepositoryCreatesOneActiveRunAndFinalizesInventory(t *testin
 	if err := repository.AppendIDCDataSyncInventory(context.Background(), run.ID, []domain.IDCDataSyncInventoryEntry{entry}); err != nil {
 		t.Fatal(err)
 	}
-	completed, err := repository.CompleteIDCDataSyncRun(context.Background(), run.ID, strings.Repeat("b", 64), "ray-train/platform/idc-inventories/sync-run-1/"+strings.Repeat("b", 64)+".json")
+	completed, err := repository.CompleteIDCDataSyncRun(context.Background(), run.ID, domain.IDCDataSyncCompletion{
+		InventorySHA256: strings.Repeat("b", 64), InventoryObjectKey: "ray-train/platform/idc-inventories/sync-run-1/" + strings.Repeat("b", 64) + ".json",
+		NewObjectCount: 1,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,5 +55,41 @@ func TestIDCDataSyncRepositoryCreatesOneActiveRunAndFinalizesInventory(t *testin
 	runs, err := repository.ListIDCDataSyncRuns(context.Background(), connector.ID)
 	if err != nil || len(runs) != 1 || runs[0].ID != run.ID || runs[0].InventoryObjectKey != "ray-train/platform/idc-inventories/sync-run-1/"+strings.Repeat("b", 64)+".json" {
 		t.Fatalf("runs = %+v, %v", runs, err)
+	}
+}
+
+func TestIDCDataSyncRepositoryReturnsPreviousInventoryAndConvergesFailure(t *testing.T) {
+	database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.AutoMigrate(&IDCDataSyncConnectorRecord{}, &IDCDataSyncRunRecord{}, &IDCDataSyncInventoryEntryRecord{}, &IDCDataSyncObjectRefRecord{}); err != nil {
+		t.Fatal(err)
+	}
+	repository := NewGormRepository(database)
+	connector := domain.IDCDataSyncConnector{ID: "idc-sync-labeled", Name: "labeled", SourceSpace: domain.DataSpaceIDCOriginal, SourceRelativePath: "QP_NuScene/labeled", MirrorPrefix: "ray-train/platform/idc-mirror/labeled", Enabled: true, CreatedBy: "admin-1"}
+	if err := repository.CreateIDCDataSyncConnector(context.Background(), connector); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	finished := now.Add(-time.Hour)
+	previous := IDCDataSyncRunRecord{ID: "previous", ConnectorID: connector.ID, IdempotencyKey: "previous", Mode: string(domain.IDCDataSyncRunModeSync), State: string(domain.IDCDataSyncRunSucceeded), RequestedBy: "admin-1", InventorySHA256: strings.Repeat("b", 64), InventoryObjectKey: "ray-train/platform/idc-inventories/previous/" + strings.Repeat("b", 64) + ".json", CreatedAt: finished, StartedAt: &finished, FinishedAt: &finished}
+	if err := database.Create(&previous).Error; err != nil {
+		t.Fatal(err)
+	}
+	latest, found, err := repository.LatestSuccessfulIDCDataSyncRun(context.Background(), connector.ID)
+	if err != nil || !found || latest.ID != "previous" {
+		t.Fatalf("latest=%+v found=%v err=%v", latest, found, err)
+	}
+	run := domain.IDCDataSyncRun{ID: "current", ConnectorID: connector.ID, IdempotencyKey: "current", Mode: domain.IDCDataSyncRunModeSync, State: domain.IDCDataSyncRunPending, RequestedBy: "admin-1"}
+	if err := repository.CreateIDCDataSyncRun(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	if _, claimed, err := repository.ClaimIDCDataSyncRun(context.Background(), run.ID, now); err != nil || !claimed {
+		t.Fatalf("claim=%v err=%v", claimed, err)
+	}
+	failed, err := repository.FailIDCDataSyncRun(context.Background(), run.ID, "Kubernetes Job failed", now.Add(time.Minute))
+	if err != nil || failed.State != domain.IDCDataSyncRunFailed || failed.FailureReason != "Kubernetes Job failed" || failed.FinishedAt == nil {
+		t.Fatalf("failed=%+v err=%v", failed, err)
 	}
 }
