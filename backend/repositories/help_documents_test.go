@@ -88,6 +88,49 @@ func TestHelpSeedIdempotentAndTransactionRollback(t *testing.T) {
 	}
 }
 
+func TestHelpSeedRefreshesOnlyUneditedPlatformDocuments(t *testing.T) {
+	r := helpRepo(t)
+	ctx := context.Background()
+	original := domain.HelpDocument{ID: "managed", Title: "Managed", Category: "Start", Markdown: "old seed"}
+	if err := r.SeedHelpDocuments(ctx, []domain.HelpDocument{original}); err != nil {
+		t.Fatal(err)
+	}
+
+	refreshed := original
+	refreshed.Markdown = "new seed"
+	if err := r.SeedHelpDocuments(ctx, []domain.HelpDocument{refreshed}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := r.ListHelpDocuments(ctx, false)
+	if err != nil || len(items) != 1 || items[0].Markdown != "new seed" || items[0].Version != 2 || items[0].PublishedVersion != 2 {
+		t.Fatalf("seed refresh: %+v %v", items, err)
+	}
+
+	if err := r.SeedHelpDocuments(ctx, []domain.HelpDocument{refreshed}); err != nil {
+		t.Fatal(err)
+	}
+	items, err = r.ListHelpDocuments(ctx, false)
+	if err != nil || items[0].Version != 2 {
+		t.Fatalf("identical seed was not idempotent: %+v %v", items, err)
+	}
+
+	custom := items[0]
+	custom.Markdown = "administrator draft"
+	custom, err = r.ChangeHelpDocument(ctx, custom.ID, custom.Version, "save", 0, &custom, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer := refreshed
+	newer.Markdown = "future seed"
+	if err := r.SeedHelpDocuments(ctx, []domain.HelpDocument{newer}); err != nil {
+		t.Fatal(err)
+	}
+	adminItems, err := r.ListHelpDocuments(ctx, true)
+	if err != nil || len(adminItems) != 1 || adminItems[0].Markdown != "administrator draft" || adminItems[0].Version != custom.Version {
+		t.Fatalf("seed overwrote administrator draft: %+v %v", adminItems, err)
+	}
+}
+
 func TestHelpStoreValidationAndMissingVersions(t *testing.T) {
 	r := helpRepo(t)
 	ctx := context.Background()
