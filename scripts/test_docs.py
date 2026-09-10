@@ -198,6 +198,24 @@ class DocumentationContractTest(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertIn(marker, guide)
 
+    def test_managed_ray_data_guide_prevents_nested_trainer_and_names_packaging_contract(self) -> None:
+        managed = RAY_TRAIN_MANAGED_GUIDE.read_text(encoding="utf-8")
+        submit = (ROOT / "docs" / "SUBMIT_GUIDE.md").read_text(encoding="utf-8")
+        user = (ROOT / "docs" / "USER_GUIDE.md").read_text(encoding="utf-8")
+        for marker in (
+            'ray.train.get_dataset_shard("train")',
+            "不要再调用 `ray.init()`",
+            "不要再构造 `TorchTrainer`",
+        ):
+            with self.subTest(document="managed", marker=marker):
+                self.assertIn(marker, managed)
+        for marker in (".rayignore", "spk-rayjob package"):
+            with self.subTest(document="submit", marker=marker):
+                self.assertIn(marker, submit)
+        for marker in ("acceleratorClass: rtx4090", "nvidia-rtx-4090"):
+            with self.subTest(document="user", marker=marker):
+                self.assertIn(marker, user)
+
     def test_managed_examples_match_public_submission_contract(self) -> None:
         guide = RAY_TRAIN_MANAGED_GUIDE.read_text(encoding="utf-8")
         for marker in (

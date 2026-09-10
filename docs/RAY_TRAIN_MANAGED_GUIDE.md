@@ -236,6 +236,20 @@ for step in range(resume_start_step(state), max_steps):
 | `cache` | `ray-ddp`、`ray-train` | 在任务级 NVMe PVC 中预热或运行期缓存；缓存可消失，TOS/FSX/IDC 仍是数据真相。 |
 | `ray-data` | 仅 `ray-train` | 由 Ray Data 构建 shard 并交给每个 Train worker；不要与用户手工 rank 切分叠加。 |
 
+使用 `ray-data` 时，平台外层已经创建唯一的 `TorchTrainer`，并用 `ReadParquet` 或登记 schema 对应的 reader 构建 Dataset。用户入口会在每个 Train worker 内执行，只消费平台分配的 shard：
+
+```python
+import ray.train
+
+shard = ray.train.get_dataset_shard("train")
+for batch in shard.iter_batches(batch_size=8, batch_format="numpy"):
+    train_one_batch(batch)
+```
+
+用户入口**不要再调用 `ray.init()`**，也**不要再构造 `TorchTrainer`**；否则就是在已获得 GPU 的 worker 中再启一层分布式训练，会额外等待 GPU 并形成资源自锁。`--ray-data-path` 是相对于所选输入目录的子路径；日志中的 `FileNotFoundError: /mnt/data/input/...` 表示这个子路径不存在，不是 Kueue 或 GPU 调度失败。
+
+2026-09-11 的生产冒烟验收使用任务 `job-078243ab019985c842f9f74b`：8 个 Parquet shard、6,400 行，通过 `spk-rayjob submit` 启动 2 节点 × 4 GPU，Ray Data 完整读取 6,400/6,400 行，8 个 rank 各处理 800 行，任务成功结束；MLflow run 为 `dd5228699de24096b72145f542c9eb2a`，并持久化了 8 份 rank 回执。该记录验证的是托管链路与数据完整性检查方法，不代表现有 775 GiB labeled 数据已经发布成 READY 的全量 Parquet 版本；全量验收仍必须绑定一个 READY 的不可变 Parquet manifest 后另行执行。
+
 缓存命中不改变输入版本；checkpoint 永远不能只写 NVMe。容量、清理和性能验收见 [NVMe 缓存指南](NVME_CACHE_GUIDE.md)。
 
 ## 观测、日志与性能诊断
@@ -257,6 +271,8 @@ for step in range(resume_start_step(state), max_steps):
 | checkpoint incomplete | complete manifest 缺失或校验失败 | 修复持久化路径后新建任务，不得选择不完整 checkpoint。 |
 | 指标为 `null` | 对应 exporter/series 暂时不可用 | 查看 unavailable metrics 与日志，不能解释为使用量为零。 |
 | `FAILED` | 入口、数据、代码、资源或恢复策略最终失败 | 保留任务 ID、attempt、rank 日志和产物摘要后排障。 |
+
+从 `PROVISIONING` 到第一个 step 的时间包含 RayCluster/GCS 启动、两个 Worker Pod Ready、working-dir 上传、Parquet schema sampling、Train worker group 和 NCCL process group 初始化。用 `spk-rayjob logs JOB_ID` 对照这些时间点；只看到十几秒或一分钟无 loss 不能直接判定读数据慢。任务结束后 RayCluster 回收，`runtime.pods` 为空是正常的；历史以日志、MLflow、性能序列和持久产物为准。
 
 ## 发布与回退边界
 

@@ -104,6 +104,15 @@ git check-ignore -v --no-index mmdet3d/runner/__init__.py || true
 git check-ignore -v --no-index mmdet3d/ops/__init__.py || true
 ```
 
+提交前还可以打包到临时目录并核对大小与内容：
+
+```bash
+spk-rayjob package --output /tmp/my-training-source.zip
+unzip -l /tmp/my-training-source.zip
+```
+
+只有 `.gitignore` 和 `.rayignore` 会生效，`.spkignore` 不是支持的文件名。数据集、checkpoint、本地虚拟环和日志应通过 `.rayignore` 排除；否则大文件会进入 working-dir 并在创建任务前触发上传 413。
+
 例如 `.gitignore` 的 `run*/` **会被 Git 自身匹配到 `mmdet3d/runner/`**。应改成只匹配仓库根输出目录的 `/run/`、`/run_dir/`，不要用过宽的目录模式。
 
 ## 3. 方式一：spk-rayjob（推荐）

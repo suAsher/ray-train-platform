@@ -1,6 +1,28 @@
 package helpdocs
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestRayDataHelpPreventsNestedTrainer(t *testing.T) {
+	docs, err := Documents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, doc := range docs {
+		if doc.ID != "ray-data" {
+			continue
+		}
+		for _, marker := range []string{"get_dataset_shard", "不要再调用 ray.init()", "不要再构造 TorchTrainer", ".rayignore", "rtx4090"} {
+			if !strings.Contains(doc.Markdown, marker) {
+				t.Fatalf("ray-data help is missing %q", marker)
+			}
+		}
+		return
+	}
+	t.Fatal("ray-data help document is missing")
+}
 
 func TestEmbeddedDocumentsAreValidStableAndIndependent(t *testing.T) {
 	docs, err := Documents()

@@ -371,6 +371,14 @@ output:
   path: bevfusion-lidar
 ```
 
+选择 GPU 卡型时使用平台提交枚举，不要把 Kubernetes 节点标签值原样复制进来：
+
+```yaml
+acceleratorClass: rtx4090
+```
+
+管理员接入节点时的 `accelerator=nvidia-rtx-4090` 是基础设施标签；用户 CLI/YAML 的卡型值是 `rtx4090`。优先从新建任务页或 `/api/v1/limits` 确认当前可选枚举，不要自行猜测。
+
 日常循环就变成：
 
 ```bash
