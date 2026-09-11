@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { logPagePath, mergeLogEntries, normalizeLogPage } from './jobLogPagination.js'
+import { collectAllLogPages, logPagePath, mergeLogEntries, normalizeLogPage } from './jobLogPagination.js'
 
 test('normalizes the API page and preserves stream identity', () => {
   const normalized = normalizeLogPage({
@@ -40,4 +40,47 @@ test('builds backward and forward cursor queries safely', () => {
     '/api/v1/jobs/job%2Fa/logs?limit=2000&direction=backward&before=2026-08-22T16%3A00%3A02%2B08%3A00',
   )
   assert.match(logPagePath('job-1', { direction: 'forward', cursor: 'cursor' }), /after=cursor/)
+})
+
+test('collects every backward page and reports export progress', async () => {
+  const pages = [
+    {
+      items: [{ timestamp: '2026-08-22T16:00:03Z', line: 'three', stream: { pod: 'worker-1' } }],
+      page: { hasMore: true, nextCursor: 'cursor-3' },
+    },
+    {
+      items: [{ timestamp: '2026-08-22T16:00:02Z', line: 'two', stream: { pod: 'worker-1' } }],
+      page: { hasMore: true, nextCursor: 'cursor-2' },
+    },
+    {
+      items: [{ timestamp: '2026-08-22T16:00:01Z', line: 'one', stream: { pod: 'worker-1' } }],
+      page: { hasMore: false, nextCursor: 'cursor-1' },
+    },
+  ]
+  const paths = []
+  const progress = []
+
+  const logs = await collectAllLogPages(
+    async path => {
+      paths.push(path)
+      return pages.shift()
+    },
+    'job/a',
+    { limit: 2, onProgress: count => progress.push(count) },
+  )
+
+  assert.deepEqual(logs.map(entry => entry.text), ['one', 'two', 'three'])
+  assert.deepEqual(progress, [1, 2, 3])
+  assert.equal(paths[0], '/api/v1/jobs/job%2Fa/logs?limit=2&direction=backward')
+  assert.match(paths[1], /before=cursor-3/)
+  assert.match(paths[2], /before=cursor-2/)
+})
+
+test('rejects a non-advancing export cursor instead of looping forever', async () => {
+  const page = {
+    items: [{ timestamp: '2026-08-22T16:00:03Z', line: 'same', stream: { pod: 'worker-1' } }],
+    page: { hasMore: true, nextCursor: 'stalled' },
+  }
+
+  await assert.rejects(() => collectAllLogPages(async () => page, 'job-1'), /cursor did not advance/)
 })
