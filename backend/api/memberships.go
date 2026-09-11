@@ -19,6 +19,10 @@ type MembershipStore interface {
 	SetTenantMembershipStatus(context.Context, string, string, domain.MembershipStatus) error
 }
 
+type membershipReassignmentStore interface {
+	ReassignActiveMembership(context.Context, string, string, string, []string, bool) error
+}
+
 type switchActiveTenantRequest struct {
 	TenantID string `json:"tenantId"`
 }
@@ -30,6 +34,12 @@ type putMembershipRequest struct {
 
 type membershipStatusRequest struct {
 	Status domain.MembershipStatus `json:"status"`
+}
+
+type reassignActiveMembershipRequest struct {
+	ExpectedTenantID string   `json:"expectedTenantId"`
+	TargetTenantID   string   `json:"targetTenantId"`
+	Roles            []string `json:"roles"`
 }
 
 func (h *Handler) listOwnMemberships(c *gin.Context) {
@@ -86,6 +96,47 @@ func (h *Handler) listUserMemberships(c *gin.Context) {
 		items = visible
 	}
 	h.writeSuccess(c, http.StatusOK, items)
+}
+
+func (h *Handler) reassignUserActiveMembership(c *gin.Context) {
+	principal, ok := h.adminPrincipal(c)
+	if !ok {
+		return
+	}
+	if !principal.HasRole(domain.RoleSuperAdmin) {
+		h.writeError(c, http.StatusForbidden, "FORBIDDEN", "super administrator role is required")
+		return
+	}
+	store, ok := h.memberships.(membershipReassignmentStore)
+	if !ok {
+		h.writeError(c, http.StatusServiceUnavailable, "MEMBERSHIP_UNAVAILABLE", "team reassignment is not configured")
+		return
+	}
+	var request reassignActiveMembershipRequest
+	if err := c.ShouldBindJSON(&request); err != nil || strings.TrimSpace(request.ExpectedTenantID) == "" || strings.TrimSpace(request.TargetTenantID) == "" || len(request.Roles) == 0 {
+		h.writeError(c, http.StatusBadRequest, "INVALID_MEMBERSHIP_REASSIGNMENT", "expectedTenantId, targetTenantId and roles are required")
+		return
+	}
+	for _, role := range request.Roles {
+		if strings.EqualFold(strings.TrimSpace(role), domain.RoleSuperAdmin) {
+			h.writeError(c, http.StatusBadRequest, "GLOBAL_ROLE_REQUIRED", "SuperAdmin cannot be assigned through a team membership")
+			return
+		}
+	}
+	err := store.ReassignActiveMembership(c.Request.Context(), strings.TrimSpace(c.Param("id")), strings.TrimSpace(request.ExpectedTenantID), strings.TrimSpace(request.TargetTenantID), append([]string(nil), request.Roles...), true)
+	if errors.Is(err, repositories.ErrActiveTenantChanged) {
+		h.writeError(c, http.StatusConflict, "ACTIVE_TENANT_CHANGED", "the user's active team changed; refresh and retry")
+		return
+	}
+	if errors.Is(err, repositories.ErrLocalUserNotFound) || errors.Is(err, repositories.ErrMembershipNotFound) {
+		h.writeError(c, http.StatusNotFound, "MEMBERSHIP_TARGET_NOT_FOUND", "the user or target team was not found")
+		return
+	}
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "MEMBERSHIP_REASSIGNMENT_FAILED", err.Error())
+		return
+	}
+	h.writeMembershipList(c, strings.TrimSpace(c.Param("id")))
 }
 
 func (h *Handler) putUserMembership(c *gin.Context) {

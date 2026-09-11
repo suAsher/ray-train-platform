@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -19,20 +20,76 @@ type AdminStore interface {
 	SetTenantAcceleratorClass(ctx context.Context, tenantID string, accelerator domain.AcceleratorClass) error
 }
 
+type tenantRenameStore interface {
+	SetTenantName(context.Context, string, string) error
+}
+
 func (h *Handler) RegisterAdminRoutes(group *gin.RouterGroup) {
 	group.GET("/tenants/:id/retirement-preflight", h.tenantRetirementPreflight)
 	group.POST("/tenants/:id/retire", h.retireTenant)
 	group.GET("/gpu-allocations", h.listGPUAllocations)
 	group.GET("/tenants", h.listTenants)
 	group.POST("/tenants", h.createTenant)
+	group.PATCH("/tenants/:id", h.renameTenant)
 	// The tenant GPU limit is enforced at submission from the database, so an
 	// administrator can reallocate it here instead of editing Helm values.
 	group.POST("/tenants/:id/quota", h.setTenantQuota)
 	group.PUT("/tenants/:id/scheduling", h.setTenantScheduling)
 	group.GET("/users", h.listUsers)
 	group.GET("/users/:id/memberships", h.listUserMemberships)
+	group.PUT("/users/:id/active-membership", h.reassignUserActiveMembership)
 	group.PUT("/users/:id/memberships", h.putUserMembership)
 	group.PATCH("/users/:id/memberships/:tenant", h.updateUserMembershipStatus)
+}
+
+type renameTenantRequest struct {
+	Name string `json:"name"`
+}
+
+func (h *Handler) renameTenant(c *gin.Context) {
+	principal, ok := h.principal(c)
+	if !ok {
+		h.writeError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "authentication is required")
+		return
+	}
+	if !principal.HasRole(domain.RoleSuperAdmin) {
+		h.writeError(c, http.StatusForbidden, "FORBIDDEN", "super administrator role is required")
+		return
+	}
+	store, ok := h.admin.(tenantRenameStore)
+	if !ok {
+		h.writeError(c, http.StatusServiceUnavailable, "ADMIN_UNAVAILABLE", "tenant rename is not configured")
+		return
+	}
+	var request renameTenantRequest
+	name := ""
+	if err := c.ShouldBindJSON(&request); err == nil {
+		name = strings.TrimSpace(request.Name)
+	}
+	if name == "" || len([]rune(name)) > 128 {
+		h.writeError(c, http.StatusBadRequest, "INVALID_TENANT_NAME", "team name must be between 1 and 128 characters")
+		return
+	}
+	if err := store.SetTenantName(c.Request.Context(), c.Param("id"), name); err != nil {
+		if errors.Is(err, repositories.ErrTenantNotFound) {
+			h.writeError(c, http.StatusNotFound, "TENANT_NOT_FOUND", "tenant was not found")
+			return
+		}
+		h.writeError(c, http.StatusInternalServerError, "TENANT_RENAME_FAILED", "could not rename the team")
+		return
+	}
+	items, err := h.admin.ListTenantSummaries(c.Request.Context())
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "TENANT_LIST_FAILED", "team renamed but could not be re-read")
+		return
+	}
+	for _, item := range items {
+		if item.ID == c.Param("id") {
+			h.writeSuccess(c, http.StatusOK, item)
+			return
+		}
+	}
+	h.writeError(c, http.StatusNotFound, "TENANT_NOT_FOUND", "tenant was not found")
 }
 
 // maxTenantGPUQuota bounds an administrator typo. It is deliberately far above

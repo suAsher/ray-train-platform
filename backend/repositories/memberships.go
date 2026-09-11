@@ -179,7 +179,7 @@ func (r *GormRepository) ReassignActiveMembership(ctx context.Context, identityI
 			return err
 		}
 		if deactivateOthers {
-			if err := tx.Model(&TenantMembershipRecord{}).Where("identity_id = ? AND tenant_id <> ? AND status = ?", identityID, targetTenantID).
+			if err := tx.Model(&TenantMembershipRecord{}).Where("identity_id = ? AND tenant_id <> ? AND status = ?", identityID, targetTenantID, domain.MembershipStatusActive).
 				Updates(map[string]any{"status": domain.MembershipStatusInactive, "updated_at": now}).Error; err != nil {
 				return err
 			}

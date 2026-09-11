@@ -14,8 +14,13 @@ import (
 )
 
 type fakeMembershipStore struct {
-	items    map[string][]domain.TenantMembership
-	switched string
+	items      map[string][]domain.TenantMembership
+	switched   string
+	reassigned struct {
+		identityID, expectedTenantID, targetTenantID string
+		roles                                        []string
+		deactivateOthers                             bool
+	}
 }
 
 func (store *fakeMembershipStore) ListTenantMemberships(_ context.Context, identityID string) ([]domain.TenantMembership, error) {
@@ -30,6 +35,15 @@ func (store *fakeMembershipStore) SetActiveTenant(_ context.Context, _, tenantID
 	return nil
 }
 func (store *fakeMembershipStore) SetTenantMembershipStatus(_ context.Context, _, _ string, _ domain.MembershipStatus) error {
+	return nil
+}
+func (store *fakeMembershipStore) ReassignActiveMembership(_ context.Context, identityID, expectedTenantID, targetTenantID string, roles []string, deactivateOthers bool) error {
+	store.reassigned.identityID = identityID
+	store.reassigned.expectedTenantID = expectedTenantID
+	store.reassigned.targetTenantID = targetTenantID
+	store.reassigned.roles = append([]string(nil), roles...)
+	store.reassigned.deactivateOthers = deactivateOthers
+	store.items[identityID] = []domain.TenantMembership{{IdentityID: identityID, TenantID: targetTenantID, Roles: roles, Status: domain.MembershipStatusActive, Active: true}}
 	return nil
 }
 
@@ -93,5 +107,34 @@ func TestTenantAdminCannotGrantSuperAdminInOwnTeam(t *testing.T) {
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestSuperAdminAtomicallyReassignsUserTeam(t *testing.T) {
+	store := &fakeMembershipStore{items: map[string][]domain.TenantMembership{}}
+	handler := NewHandler(&fakeJobRepository{}, Options{Memberships: store})
+	principal := auth.Principal{Subject: "root", TenantID: "local", Roles: []string{domain.RoleSuperAdmin}, AuthType: auth.AuthTypeOAuth2Proxy}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/users/user-b/active-membership", bytes.NewBufferString(`{"expectedTenantId":"local","targetTenantId":"devops","roles":["Engineer"]}`))
+	request.Header.Set("Content-Type", "application/json")
+	membershipRouter(handler, principal).ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("reassign response=%d %s", response.Code, response.Body.String())
+	}
+	if store.reassigned.identityID != "user-b" || store.reassigned.expectedTenantID != "local" || store.reassigned.targetTenantID != "devops" || !store.reassigned.deactivateOthers {
+		t.Fatalf("unexpected reassignment: %+v", store.reassigned)
+	}
+}
+
+func TestTenantAdminCannotReassignUserTeam(t *testing.T) {
+	store := &fakeMembershipStore{items: map[string][]domain.TenantMembership{}}
+	handler := NewHandler(&fakeJobRepository{}, Options{Memberships: store})
+	principal := auth.Principal{Subject: "lead", TenantID: "local", Roles: []string{domain.RoleTenantAdmin}, AuthType: auth.AuthTypeOAuth2Proxy}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/users/user-b/active-membership", bytes.NewBufferString(`{"expectedTenantId":"local","targetTenantId":"devops","roles":["Engineer"]}`))
+	request.Header.Set("Content-Type", "application/json")
+	membershipRouter(handler, principal).ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden || store.reassigned.identityID != "" {
+		t.Fatalf("tenant admin reassignment response=%d writes=%+v", response.Code, store.reassigned)
 	}
 }

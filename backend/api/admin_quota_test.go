@@ -22,10 +22,22 @@ type fakeAdminStore struct {
 		limit    int
 	}
 	setQuotaErr     error
+	renamedTenantID string
+	renamedName     string
 	acceleratorSets []struct {
 		tenantID    string
 		accelerator domain.AcceleratorClass
 	}
+}
+
+func (store *fakeAdminStore) SetTenantName(_ context.Context, tenantID, name string) error {
+	store.renamedTenantID, store.renamedName = tenantID, name
+	for index := range store.tenants {
+		if store.tenants[index].ID == tenantID {
+			store.tenants[index].Name = name
+		}
+	}
+	return nil
 }
 
 func (store *fakeAdminStore) SetTenantAcceleratorClass(_ context.Context, tenantID string, accelerator domain.AcceleratorClass) error {
@@ -182,5 +194,21 @@ func TestTenantAdminCannotAssignAcceleratorPool(t *testing.T) {
 	adminRouter(handler, principal).ServeHTTP(response, request)
 	if response.Code != http.StatusForbidden || len(store.acceleratorSets) != 0 {
 		t.Fatalf("tenant admin scheduling status=%d writes=%+v body=%s", response.Code, store.acceleratorSets, response.Body.String())
+	}
+}
+
+func TestSuperAdminRenamesTenantWithoutChangingStableID(t *testing.T) {
+	store := &fakeAdminStore{tenants: []repositories.TenantSummary{{ID: "local", Name: "local", Namespace: "tenant-local", QueueName: "local-gpu", GPUQuotaLimit: 24}}}
+	handler := NewHandler(&fakeJobRepository{}, Options{Admin: store})
+	principal := auth.Principal{Subject: "root", TenantID: "local", Roles: []string{domain.RoleSuperAdmin}}
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/tenants/local", strings.NewReader(`{"name":"感知应用算法团队"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	adminRouter(handler, principal).ServeHTTP(response, request)
+	if response.Code != http.StatusOK || store.renamedTenantID != "local" || store.renamedName != "感知应用算法团队" {
+		t.Fatalf("rename response=%d writes=%q/%q body=%s", response.Code, store.renamedTenantID, store.renamedName, response.Body.String())
+	}
+	if store.tenants[0].ID != "local" || store.tenants[0].GPUQuotaLimit != 24 {
+		t.Fatalf("rename changed stable tenant fields: %+v", store.tenants[0])
 	}
 }
