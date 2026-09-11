@@ -1,22 +1,20 @@
 # GPU 配额与 MLflow 候选验证记录
 
-日期：2026-09-12。状态：本地候选已开发验证，尚未推送或部署。本文之后若仅追加文档提交，业务代码的已验证提交仍以下表为准。
+日期：2026-09-12。状态：后端已开发验证并完成四端代码同步；Portal 候选已验证、未推送；均未部署。下表记录业务交付首次同步的完整 SHA，后续文档尾提交另行四端核对，不改变已验证业务代码。
 
 ## 版本与真实状态
 
 | 对象 | 本轮核对结果 |
 | --- | --- |
 | Backend 已验证代码 | `36388441026525ebf199e3e6f36396da801bffc0`；本地 main 上的候选 |
-| Backend GitHub main | `e25e983e17aa4b7dfcc56fefa41a816563d906d7` |
-| Backend 内部 GitLab main | `e25e983e17aa4b7dfcc56fefa41a816563d906d7` |
-| 构建机正式 main | `e25e983e17aa4b7dfcc56fefa41a816563d906d7`，工作区干净 |
+| Backend 本地 / GitHub / 内部 GitLab / 构建机 main（首次交付同步） | `3702ccfc984867603d78174e5b7837f331c562a0`，本地和构建机工作区干净 |
 | Portal 本地 dev | `8bf2e476dfb7f3e8e19b21a4dbff5fa0696a6173`；独立仓库 `/private/tmp/raytrain-portal-20260912` |
 | Portal 远端 dev | `9bca129581a36070b5e1c301c4b9b3a6680a1b91` |
 | 线上 Backend | `release-20260911-12`；Helm revision 211；2/2 ready；healthz 200 |
 | 线上 Backend digest | `sha256:93bc46b59db697175971d86e85791f1b0199c1e986532bbc5cbbb71c1a1043c7` |
 | schema / MLflow | schema 45；MLflow 3.14.0、2/2 ready |
 
-远端使用 `ls-remote` 实时复核，没有用旧 tracking ref 代替。四端目前有明确差异，不能称作同步完成。候选未产生生产镜像、Helm revision 或 Portal CI pipeline；Portal dev 推送本身会触发自动构建部署。
+远端使用 `ls-remote` 实时复核，没有用旧 tracking ref 代替。依据用户本轮“先验证候选，再推送并同步四端”要求，后端双远端推送成功后，构建机仅做 `--ff-only`。正式发布尚未执行，没有新的生产 Harbor 镜像、Helm revision 或 Portal CI pipeline；Portal dev 推送本身会触发自动构建部署，且新页面依赖后端新增 API，因此保留候选等待一起上线。后端 GitHub 历史 push CI 与生产发布链路不同，不能以其状态宣称线上升级。
 
 本轮开始和收尾时以下 RayJob 均为 RUNNING，UID 相同：
 
@@ -70,7 +68,7 @@ RED 证据包括首次缺少实现、大小写字段曾被错误接受、单字�
 
 ## 未完成与下一步
 
-1. 尚未授权执行并完成本候选的远端推送/生产发布；需要再次复核远端、同步 backend 四端、仅构建 backend，再按 release skill 完成最小 Helm dry-run 和运行训练保护；Portal 推 dev 会自动部署。
+1. 后端四端代码同步已完成。生产发布仍待本轮明确上线授权；需只构建 backend，按 release skill 完成最小 Helm dry-run 和运行训练保护；随后推送已验证的 Portal dev 并核对 CI、镜像和登录验收。上线前再次核对远端，不能覆盖其他人的更新。
 2. Portal dev Kubernetes API 本轮连接超时，未核实线上 Portal 镜像，未完成真实登录、原生 MLflow/编辑器票据和生产 API 联调。mock 浏览器通过不等于这些验收通过。
 3. 外部读写仅覆盖已有 Run 的参数/指标/标签。官方 SDK 全协议、外部创建 Run、Artifact API、Registry API、服务账号委托仍待建设；历史缺少完整归属标签的 Run 不做自动回填。
 4. 独立评估、模型审批发布和 Serving 尚未实现。设计为 Job → Run → 显式候选模型包 → 固定数据/代码评估 → 审批 → Registry 版本/别名 → 推理部署或外部发布；不能将 checkpoint 自动当成合规 MLflow Model。
