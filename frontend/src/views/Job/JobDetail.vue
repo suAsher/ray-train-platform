@@ -146,7 +146,9 @@
                 size="small" 
               />
               <el-checkbox v-model="autoScroll" class="text-xs text-slate-400">自动滚动底端</el-checkbox>
-              <el-button size="small" icon="Download" @click="downloadLogs">导出日志</el-button>
+              <el-button size="small" icon="Download" :loading="logsExporting" @click="downloadLogs">
+                {{ logsExporting ? `正在导出 ${exportedLogLines} 条` : '导出全量日志' }}
+              </el-button>
             </div>
           </div>
 
@@ -398,7 +400,7 @@ import { roles, userId } from '../../stores/session'
 import { canCancelJob } from '../../jobPermissions'
 import { canOpenRayDashboard, jobDashboardAccessPath } from '../../jobDashboard'
 import { buildLogStreamCards } from '../../jobLogStreams'
-import { logPagePath, mergeLogEntries, normalizeLogPage } from '../../jobLogPagination'
+import { collectAllLogPages, logPagePath, mergeLogEntries, normalizeLogPage } from '../../jobLogPagination'
 import { createSingleFlight, nextLogRequest } from '../../jobLogPolling'
 import { createJobGPUHistoryController } from '../../jobGpuHistoryController'
 import { latestMetric, metricSeries, sparklinePoints } from '../../mlflowExperiment'
@@ -451,6 +453,8 @@ const olderLogCursor = ref('')
 const followLogCursor = ref('')
 const olderPagesLoaded = ref(false)
 const logsLoadingOlder = ref(false)
+const logsExporting = ref(false)
+const exportedLogLines = ref(0)
 const nowTick = ref(new Date().toISOString())
 
 const terminalStates = new Set(['SUCCEEDED', 'FAILED', 'CANCELED', 'TIMED_OUT'])
@@ -560,14 +564,27 @@ const getLogLineClass = (text) => {
   return 'text-slate-300'
 }
 
-const downloadLogs = () => {
-  const content = rawLogs.value.map(log => `${log.timestamp || ''}\t${log.node || ''}\t${log.text}`).join('\n')
-  const url = URL.createObjectURL(new Blob([content], { type: 'text/plain;charset=utf-8' }))
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = `${route.params.id}.log`
-  anchor.click()
-  URL.revokeObjectURL(url)
+const downloadLogs = async () => {
+  if (logsExporting.value) return
+  logsExporting.value = true
+  exportedLogLines.value = 0
+  try {
+    const logs = await collectAllLogPages(apiGet, String(route.params.id), {
+      onProgress: count => { exportedLogLines.value = count },
+    })
+    const content = logs.map(log => `${log.timestamp || ''}\t${log.node || ''}\t${log.text}`).join('\n')
+    const url = URL.createObjectURL(new Blob([content], { type: 'text/plain;charset=utf-8' }))
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `${route.params.id}.log`
+    anchor.click()
+    URL.revokeObjectURL(url)
+    ElMessage.success(`已导出 ${logs.length} 条日志`)
+  } catch (error) {
+    ElMessage.error(error?.message || '全量日志导出失败')
+  } finally {
+    logsExporting.value = false
+  }
 }
 
 const scrollLogsToBottom = async () => {

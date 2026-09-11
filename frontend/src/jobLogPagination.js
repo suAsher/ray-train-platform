@@ -36,3 +36,21 @@ export function logPagePath(jobId, { limit = 2000, direction = 'backward', curso
   if (cursor) query.set(normalizedDirection === 'forward' ? 'after' : 'before', cursor)
   return `/api/v1/jobs/${encodeURIComponent(jobId)}/logs?${query.toString()}`
 }
+
+export async function collectAllLogPages(fetchPage, jobId, { limit = 2000, onProgress = () => {} } = {}) {
+  let cursor = ''
+  let logs = []
+  const visitedCursors = new Set()
+
+  for (;;) {
+    const page = normalizeLogPage(await fetchPage(logPagePath(jobId, { limit, direction: 'backward', cursor })))
+    logs = mergeLogEntries(page.logs, logs)
+    onProgress(logs.length)
+    if (!page.hasMore) return logs
+    if (!page.nextCursor || page.nextCursor === cursor || visitedCursors.has(page.nextCursor)) {
+      throw new Error('log export cursor did not advance')
+    }
+    visitedCursors.add(page.nextCursor)
+    cursor = page.nextCursor
+  }
+}
