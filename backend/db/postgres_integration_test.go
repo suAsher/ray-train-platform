@@ -25,7 +25,7 @@ func TestPostgresMigrationsIntegration(t *testing.T) {
 	if err := database.Raw("SELECT version FROM schema_migrations ORDER BY version").Scan(&versions).Error; err != nil {
 		t.Fatalf("load migration versions: %v", err)
 	}
-	if want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36}; !reflectIntSlicesEqual(versions, want) {
+	if want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45}; !reflectIntSlicesEqual(versions, want) {
 		t.Fatalf("migration versions = %v, want %v", versions, want)
 	}
 
@@ -38,6 +38,7 @@ func TestPostgresMigrationsIntegration(t *testing.T) {
 		"dataset_publication_runs",
 		"dataset_version_shards",
 		"dataset_cache_observations",
+		"identity_tenant_ownerships",
 	} {
 		var count int64
 		if err := database.Raw("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = ?", table).Scan(&count).Error; err != nil {
@@ -46,6 +47,18 @@ func TestPostgresMigrationsIntegration(t *testing.T) {
 		if count != 1 {
 			t.Errorf("table %s count = %d, want 1", table, count)
 		}
+	}
+
+	var storageTenantColumnCount int64
+	if err := database.Raw(`
+SELECT COUNT(*) FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'data_mount_bindings'
+  AND column_name = 'storage_tenant_id'`).Scan(&storageTenantColumnCount).Error; err != nil {
+		t.Fatalf("check data_mount_bindings.storage_tenant_id: %v", err)
+	}
+	if storageTenantColumnCount != 1 {
+		t.Errorf("data_mount_bindings.storage_tenant_id count = %d, want 1", storageTenantColumnCount)
 	}
 
 	for _, column := range []string{
@@ -196,6 +209,26 @@ WHERE n.nspname = current_schema() AND c.conname = ?`, constraint).Scan(&count).
 		}
 		if count != 1 {
 			t.Errorf("constraint %s count = %d, want 1", constraint, count)
+		}
+	}
+
+	for _, constraint := range []string{
+		"personal_access_tokens_user_tenant_fk",
+		"source_artifacts_user_tenant_fk",
+		"source_artifact_requests_user_tenant_fk",
+		"data_space_uploads_user_id_tenant_id_fkey",
+	} {
+		var definition string
+		if err := database.Raw(`
+SELECT pg_get_constraintdef(c.oid)
+FROM pg_constraint c
+JOIN pg_class r ON r.oid = c.conrelid
+JOIN pg_namespace n ON n.oid = r.relnamespace
+WHERE n.nspname = current_schema() AND c.conname = ?`, constraint).Scan(&definition).Error; err != nil {
+			t.Fatalf("load ownership constraint %s: %v", constraint, err)
+		}
+		if !strings.Contains(definition, "REFERENCES identity_tenant_ownerships(identity_id, tenant_id)") {
+			t.Errorf("constraint %s = %q, want identity ownership reference", constraint, definition)
 		}
 	}
 
