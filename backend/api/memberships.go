@@ -133,9 +133,15 @@ func (h *Handler) reassignUserActiveMembership(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "MEMBERSHIP_REASSIGNMENT_FAILED", err.Error())
+		h.writeError(c, http.StatusBadRequest, "MEMBERSHIP_REASSIGNMENT_FAILED", "could not reassign the user's active team")
 		return
 	}
+	h.recordAdministrativeAudit(c, repositories.AdministrativeAuditEvent{
+		Action:         "tenant_membership.reassigned",
+		ResourceID:     strings.TrimSpace(c.Param("id")),
+		SourceTenantID: strings.TrimSpace(request.ExpectedTenantID),
+		TargetTenantID: strings.TrimSpace(request.TargetTenantID),
+	})
 	h.writeMembershipList(c, strings.TrimSpace(c.Param("id")))
 }
 

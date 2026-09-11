@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 
@@ -22,6 +23,27 @@ type AdminStore interface {
 
 type tenantRenameStore interface {
 	SetTenantName(context.Context, string, string) error
+}
+
+type administrativeAuditStore interface {
+	CreateAdministrativeAuditLog(context.Context, repositories.AdministrativeAuditEvent) error
+}
+
+func (h *Handler) recordAdministrativeAudit(c *gin.Context, event repositories.AdministrativeAuditEvent) {
+	event.Principal, _ = h.principal(c)
+	event.RequestID = c.GetHeader("X-Request-ID")
+	var store administrativeAuditStore
+	if candidate, ok := h.admin.(administrativeAuditStore); ok {
+		store = candidate
+	} else if candidate, ok := h.memberships.(administrativeAuditStore); ok {
+		store = candidate
+	}
+	if store == nil {
+		return
+	}
+	if err := store.CreateAdministrativeAuditLog(c.Request.Context(), event); err != nil {
+		log.Printf("record administrative audit action %q for %q: %v", event.Action, event.ResourceID, err)
+	}
 }
 
 func (h *Handler) RegisterAdminRoutes(group *gin.RouterGroup) {
@@ -78,6 +100,9 @@ func (h *Handler) renameTenant(c *gin.Context) {
 		h.writeError(c, http.StatusInternalServerError, "TENANT_RENAME_FAILED", "could not rename the team")
 		return
 	}
+	h.recordAdministrativeAudit(c, repositories.AdministrativeAuditEvent{
+		Action: "tenant.renamed", ResourceID: strings.TrimSpace(c.Param("id")), NewName: name,
+	})
 	items, err := h.admin.ListTenantSummaries(c.Request.Context())
 	if err != nil {
 		h.writeError(c, http.StatusInternalServerError, "TENANT_LIST_FAILED", "team renamed but could not be re-read")
