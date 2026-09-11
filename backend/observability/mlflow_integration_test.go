@@ -86,3 +86,13 @@ func TestMLflowIntegrationWritesOnlyRunningRun(t *testing.T) {
 		})
 	}
 }
+
+func TestMLflowIntegrationLegacyRunReadableButNotWritable(t *testing.T) {
+	run:=integrationRunPayload("RUNNING")
+	tags:=run["data"].(map[string]any)["tags"].([]map[string]any)
+	run["data"].(map[string]any)["tags"]=[]map[string]any{tags[0],tags[3]}
+	writes:=0
+	client:=integrationClient(t,run,&writes)
+	if _,err:=client.QueryJobRun(context.Background(),"team-a","job-01","user-a",integrationRunID);err!=nil {t.Fatalf("legacy read rejected: %v",err)}
+	if err:=client.LogJobRunBatch(context.Background(),"team-a","job-01","user-a",integrationRunID,MLflowLogBatch{Params:[]MLflowKeyValue{{Key:"epochs",Value:"5"}}});!errors.Is(err,ErrMLflowRunNotFound)||writes!=0 {t.Fatalf("legacy write accepted: %v",err)}
+}

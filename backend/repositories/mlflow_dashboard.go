@@ -50,7 +50,15 @@ type MLflowDashboardTicketRecord struct {
 
 func (MLflowDashboardTicketRecord) TableName() string { return "mlflow_dashboard_tickets" }
 
+type MLflowAuditAction string
+
+const (
+	MLflowAuditDashboardProxy MLflowAuditAction = "mlflow.dashboard.proxy"
+	MLflowAuditRunLogBatch MLflowAuditAction = "mlflow.run.log_batch"
+)
+
 type MLflowAuditEvent struct {
+	Action MLflowAuditAction
 	Principal auth.Principal
 	Method    string
 	Path      string
@@ -145,12 +153,16 @@ func (r *GormRepository) ConsumeMLflowDashboardTicket(ctx context.Context, token
 }
 
 func (r *GormRepository) CreateMLflowAuditLog(ctx context.Context, event MLflowAuditEvent) error {
+	action:=event.Action
+	if action=="" {action=MLflowAuditDashboardProxy}
+	if action!=MLflowAuditDashboardProxy&&action!=MLflowAuditRunLogBatch {return fmt.Errorf("invalid MLflow audit action")}
 	normalizedPath := normalizeMLflowAuditPath(event.Path)
 	durationMilliseconds := event.Duration.Milliseconds()
 	if durationMilliseconds < 0 {
 		durationMilliseconds = 0
 	}
 	outcome := "success"
+	if action==MLflowAuditRunLogBatch&&event.Status==102 {outcome="attempt"}
 	if event.Status >= 400 {
 		outcome = "failure"
 	}
@@ -169,7 +181,7 @@ func (r *GormRepository) CreateMLflowAuditLog(ctx context.Context, event MLflowA
 	record := AuditLogRecord{
 		TenantID:     truncateMLflowAuditText(strings.TrimSpace(event.Principal.TenantID), mlflowAuditIdentityMaxLength),
 		UserID:       truncateMLflowAuditText(strings.TrimSpace(event.Principal.Subject), mlflowAuditIdentityMaxLength),
-		Action:       "mlflow.dashboard.proxy",
+		Action:       string(action),
 		ResourceType: "mlflow",
 		ResourceID:   normalizedPath,
 		RequestID:    truncateMLflowAuditText(strings.TrimSpace(event.RequestID), mlflowAuditRequestIDMaxLength),

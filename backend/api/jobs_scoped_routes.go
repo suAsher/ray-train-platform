@@ -7,6 +7,7 @@ import (
 )
 
 func (h *Handler) registerTrainingRoutes(group *gin.RouterGroup) {
+	h.registerMLflowIntegrationRoutes(group)
 	read := group.Group("")
 	read.Use(auth.RequireScopes(domain.PATScopeJobsRead))
 	read.GET("/jobs", h.listJobs)

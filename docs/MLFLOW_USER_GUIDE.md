@@ -128,9 +128,11 @@ MLflow Trace 需要代码或 OpenTelemetry 显式埋点，例如 `@mlflow.trace`
 
 ## 7. 与其他平台集成
 
+2026-09-12 开发候选新增“指定 Run 只读 + 本人 RUNNING Run 批量写入”的平台 REST 接口与独立 `mlflow:write` 权限，见 [外部对接说明](MLFLOW_INTEGRATION_API.md)。这不是完整官方 SDK Tracking URI；实际可用性以候选发布记录为准，未发布时以下现网边界仍成立。
+
 当前对外的浏览器接口 `POST /api/v1/mlflow-dashboard-access` 只签发一次性原生界面跳转票据，不是第三方数据接口。内部训练网关也不是外部 API。
 
-外部平台需要读取或写入实验数据时，应先明确方向：
+完整外部实验与模型生命周期集成仍需明确方向：
 
 - **它写入本平台 MLflow**：平台需提供带服务账号、团队范围、任务绑定、限流和审计的集成 API；不要给出内部 ClusterIP 地址。
 - **本平台发布到它的模型仓**：对方需提供认证方式、创建版本 / 幂等键、Artifact 上传或受控 URI、状态回调、失败语义和权限模型；平台再做异步、可重试的显式发布。
