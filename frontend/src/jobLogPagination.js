@@ -44,7 +44,9 @@ export async function collectAllLogPages(fetchPage, jobId, { limit = 2000, onPro
 
   for (;;) {
     const page = normalizeLogPage(await fetchPage(logPagePath(jobId, { limit, direction: 'backward', cursor })))
-    logs = mergeLogEntries(page.logs, logs)
+    // Cursor pages do not overlap. Keep duplicate entries because repeated
+    // training output is meaningful and a complete export must be lossless.
+    logs = [...page.logs, ...logs]
     onProgress(logs.length)
     if (!page.hasMore) return logs
     if (!page.nextCursor || page.nextCursor === cursor || visitedCursors.has(page.nextCursor)) {
