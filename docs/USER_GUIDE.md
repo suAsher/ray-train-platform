@@ -1,6 +1,14 @@
 # RayTrain 用户使用手册
 
-本手册面向算法工程师。浏览器入口是 [https://raytrain.wellspiking.ai](https://raytrain.wellspiking.ai)；管理员操作看 [管理员手册](ADMIN_GUIDE.md)。运行现有 BEVFusion 分支时使用 [BEVFusion 代码改造与验收](BEVFUSION_CODE_CHANGES.md)；接入其他代码使用 [新训练代码接入手册](NEW_TRAINING_CODE_GUIDE.md)。平台支持兼容的 Ray 编排 DDP 和受门禁保护的 Ray Train 托管双引擎；托管入口与恢复语义见 [Ray Train 托管指南](RAY_TRAIN_MANAGED_GUIDE.md)。
+本手册面向算法工程师。当前浏览器主入口是 [新 Portal](https://spiking-dev.wellspiking.ai/raytrain/rayTrain/job/list)；`https://raytrain.wellspiking.ai` 继续作为命令行、API、上传下载、浏览器工具和旧页面兼容入口。管理员操作看 [管理员手册](ADMIN_GUIDE.md)。运行现有 BEVFusion 分支时使用 [BEVFusion 代码改造与验收](BEVFUSION_CODE_CHANGES.md)；接入其他代码使用 [新训练代码接入手册](NEW_TRAINING_CODE_GUIDE.md)。平台支持兼容的 Ray 编排 DDP 和受门禁保护的 Ray Train 托管双引擎；托管入口与恢复语义见 [Ray Train 托管指南](RAY_TRAIN_MANAGED_GUIDE.md)。
+
+### 新旧入口如何选择
+
+- 新 Portal 是浏览器端的主入口，新功能和用户页面在这里持续维护。
+- 旧前端只承担过渡期兼容和必要修复，不再作为新功能的双份开发目标。
+- 两个前端共用同一个后端和同一批任务、数据、配额与产物；切换入口无需迁移或复制任何用户数据。
+- 浏览器使用统一登录；终端使用当前团队下创建的 PAT。已有脚本继续访问 `https://raytrain.wellspiking.ai`，无需修改 server 地址。
+- 新 Portal 的「使用说明」也可直接访问 `/raytrain/rayTrain/help`。管理员刚修改菜单后，先强制刷新；仍未显示时退出并重新登录，让动态菜单重新加载。
 
 ## 日常最短路径
 
@@ -156,6 +164,7 @@ python train.py \
 ### 日志
 
 - 在 **我的训练任务 → 任务详情 → 日志** 查看平台聚合的 Ray submitter、head、worker 日志。
+- 需要保存或交接时点击 **导出全量日志**。它会在 Loki 日志保留期内按游标取完全部分页，不是只下载当前屏幕或前 100 条；导出时保持页面打开，完成后再保存文件。
 - 终端同样可以执行 `spk-rayjob logs -f <任务ID>`；BEVFusion 会先打印很长的模型结构，查询历史日志时使用 `spk-rayjob logs --limit 3000 <任务ID>` 才能看到后面的 loss。特别大的输出优先使用实时跟随或 Portal 日志流，避免一次拉取整段模型结构。
 - 训练脚本应把关键指标写入 stdout，例如 epoch、loss、学习率、吞吐量和 checkpoint 路径。这样 Loki 中可检索，页面也能显示。
 
@@ -306,15 +315,13 @@ curl -fL https://raytrain.wellspiking.ai/downloads/spk-rayjob/SHA256SUMS \
 install -m 0755 ~/.cache/spk-rayjob/spk-rayjob-linux-amd64 ~/.local/bin/spk-rayjob
 export PATH="$HOME/.local/bin:$PATH"
 
-read -rp '平台用户名: ' RAY_PLATFORM_USERNAME
-read -rs RAY_PLATFORM_PASSWORD && echo
-printf '%s\n' "$RAY_PLATFORM_PASSWORD" | spk-rayjob login \
-  --server https://raytrain.wellspiking.ai \
-  --username "$RAY_PLATFORM_USERNAME" --password-stdin
-unset RAY_PLATFORM_USERNAME RAY_PLATFORM_PASSWORD
+read -rs RAY_PLATFORM_PAT && echo
+printf '%s\n' "$RAY_PLATFORM_PAT" | spk-rayjob login \
+  --server https://raytrain.wellspiking.ai --token-stdin
+unset RAY_PLATFORM_PAT
 ```
 
-网页登录和 spk-rayjob 登录使用同一个本地账号；SSO/自动化可使用在“账户与安全”创建的 PAT，并将 `--password-stdin` 替换为 `--token-stdin`。配置文件为仅当前用户可读，密码不会进入 shell 历史。
+PAT 在新 Portal 的 **账户与安全 → 个人访问令牌** 中为当前团队创建；它决定脚本提交到哪个团队，适合 `spk-rayjob`、Ray CLI 和自动化。浏览器统一登录的 Cookie 不能代替 PAT，本地用户名密码只作为已有账号的过渡期回退，不是新用户的标准登录方式。客户端配置文件仅当前用户可读，PAT 不会进入 shell 历史。
 
 ### 把当前修改提交为不可变代码版本
 
