@@ -54,6 +54,21 @@ func TestPersonalDataSpacesCanUseAStableStorageKeyRootWithoutChangingOwnerIdenti
 	}
 }
 
+func TestPersonalDataSpacesCanUseStorageHomeFromAnotherActiveTeam(t *testing.T) {
+	spaces, err := PersonalDataSpacesForStorageHome("team-b", "team-a", "ray-train/tenants/team-a/users/guofeng.su/", DefaultPublicDataRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	personal, ok := FindDataSpace(spaces, DataSpaceMyStorage)
+	if !ok || personal.RootPrefix != "ray-train/tenants/team-a/users/guofeng.su/" {
+		t.Fatalf("personal storage home changed: %#v", personal)
+	}
+	team, ok := FindDataSpace(spaces, DataSpaceTeamShared)
+	if !ok || team.RootPrefix != "ray-train/tenants/team-b/shared/" {
+		t.Fatalf("team-scoped data did not follow active team: %#v", team)
+	}
+}
+
 func TestDataSpacesDoNotExposeInfrastructureRootsInJSON(t *testing.T) {
 	space, ok := FindDataSpace(PersonalDataSpaces("local", "kc-7f3a"), DataSpaceWorkspace)
 	if !ok {

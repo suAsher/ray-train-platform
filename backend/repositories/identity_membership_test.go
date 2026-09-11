@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -90,3 +91,59 @@ func TestListUserSummariesUsesActiveMembership(t *testing.T) {
 	}
 }
 
+func TestActiveTeamChangePreservesPersonalStorageHome(t *testing.T) {
+	repository := identityMembershipRepository(t)
+	if err := repository.SetActiveTenant(context.Background(), "user-a", "team-b"); err != nil {
+		t.Fatalf("switch active team: %v", err)
+	}
+	user, err := repository.GetLocalUser(context.Background(), "user-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if user.TenantID != "team-b" || user.StorageTenantID != "team-a" || user.StorageKey != "stable-alice" {
+		t.Fatalf("active team and storage home were not separated: %+v", user)
+	}
+}
+
+func TestReassignActiveMembershipIsAtomicAndDeactivatesPreviousTeams(t *testing.T) {
+	repository := identityMembershipRepository(t)
+	if err := repository.ReassignActiveMembership(context.Background(), "user-a", "team-a", "team-b", []string{domain.RoleEngineer}, true); err != nil {
+		t.Fatalf("reassign active membership: %v", err)
+	}
+	items, err := repository.ListTenantMemberships(context.Background(), "user-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses := map[string]domain.MembershipStatus{}
+	for _, item := range items {
+		statuses[item.TenantID] = item.Status
+		if item.TenantID == "team-b" && !item.Active {
+			t.Fatalf("target membership was not made active: %+v", item)
+		}
+	}
+	if statuses["team-a"] != domain.MembershipStatusInactive || statuses["team-b"] != domain.MembershipStatusActive {
+		t.Fatalf("unexpected membership statuses: %#v", statuses)
+	}
+	user, err := repository.GetLocalUser(context.Background(), "user-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if user.TenantID != "team-b" || user.StorageTenantID != "team-a" {
+		t.Fatalf("reassignment moved personal storage: %+v", user)
+	}
+}
+
+func TestReassignActiveMembershipRejectsStaleSourceWithoutPartialChange(t *testing.T) {
+	repository := identityMembershipRepository(t)
+	err := repository.ReassignActiveMembership(context.Background(), "user-a", "team-b", "team-a", []string{domain.RoleEngineer}, true)
+	if !errors.Is(err, ErrActiveTenantChanged) {
+		t.Fatalf("error=%v, want stale active-team error", err)
+	}
+	user, lookupErr := repository.GetLocalUser(context.Background(), "user-a")
+	if lookupErr != nil {
+		t.Fatal(lookupErr)
+	}
+	if user.TenantID != "team-a" {
+		t.Fatalf("stale request changed active team: %+v", user)
+	}
+}

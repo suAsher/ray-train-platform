@@ -35,6 +35,20 @@ func TestNewPersonalDataMountBindingKeepsInternalOwnerAndUsesStableStorageKey(t 
 	}
 }
 
+func TestNewPersonalDataMountBindingCanKeepStorageHomeAcrossActiveTeams(t *testing.T) {
+	binding, err := NewPersonalDataMountBindingForStorageHome(
+		"mount-b", "team-b", "team-a", "oidc-62a5e911", "data-user-a",
+		`{"type":"TOS","bucket":"shanghai-data-transfer","server":"tos-cn-shanghai.ivolces.com","region":"cn-shanghai"}`,
+		"guofeng.su",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding.TenantID != "team-b" || binding.StorageTenantID != "team-a" || binding.RootPrefix != "ray-train/tenants/team-a/users/guofeng.su/" {
+		t.Fatalf("unexpected cross-team personal binding: %#v", binding)
+	}
+}
+
 func TestNewPersonalDataMountBindingRejectsConfiguredPathOrSecret(t *testing.T) {
 	for _, attributes := range []string{
 		`{"type":"TOS","bucket":"b","server":"s","region":"r","path":"/other"}`,
