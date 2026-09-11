@@ -54,11 +54,11 @@ type MLflowAuditAction string
 
 const (
 	MLflowAuditDashboardProxy MLflowAuditAction = "mlflow.dashboard.proxy"
-	MLflowAuditRunLogBatch MLflowAuditAction = "mlflow.run.log_batch"
+	MLflowAuditRunLogBatch    MLflowAuditAction = "mlflow.run.log_batch"
 )
 
 type MLflowAuditEvent struct {
-	Action MLflowAuditAction
+	Action    MLflowAuditAction
 	Principal auth.Principal
 	Method    string
 	Path      string
@@ -153,16 +153,22 @@ func (r *GormRepository) ConsumeMLflowDashboardTicket(ctx context.Context, token
 }
 
 func (r *GormRepository) CreateMLflowAuditLog(ctx context.Context, event MLflowAuditEvent) error {
-	action:=event.Action
-	if action=="" {action=MLflowAuditDashboardProxy}
-	if action!=MLflowAuditDashboardProxy&&action!=MLflowAuditRunLogBatch {return fmt.Errorf("invalid MLflow audit action")}
+	action := event.Action
+	if action == "" {
+		action = MLflowAuditDashboardProxy
+	}
+	if action != MLflowAuditDashboardProxy && action != MLflowAuditRunLogBatch {
+		return fmt.Errorf("invalid MLflow audit action")
+	}
 	normalizedPath := normalizeMLflowAuditPath(event.Path)
 	durationMilliseconds := event.Duration.Milliseconds()
 	if durationMilliseconds < 0 {
 		durationMilliseconds = 0
 	}
 	outcome := "success"
-	if action==MLflowAuditRunLogBatch&&event.Status==102 {outcome="attempt"}
+	if action == MLflowAuditRunLogBatch && event.Status == 102 {
+		outcome = "attempt"
+	}
 	if event.Status >= 400 {
 		outcome = "failure"
 	}
