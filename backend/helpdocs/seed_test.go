@@ -51,3 +51,30 @@ func TestEmbeddedDocumentsAreValidStableAndIndependent(t *testing.T) {
 		t.Fatal("seed reused mutable data")
 	}
 }
+
+func TestPortalUserFeatureMapCoversDailyUserWorkflows(t *testing.T) {
+	docs, err := Documents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, doc := range docs {
+		if doc.ID != "portal-user-feature-map" {
+			continue
+		}
+		for _, marker := range []string{
+			"新 Portal",
+			"旧前端",
+			"导出全量日志",
+			"spk-rayjob connect",
+			"MLflow 详情",
+			"版本化数据集",
+			"账户与安全",
+		} {
+			if !strings.Contains(doc.Markdown, marker) {
+				t.Fatalf("portal user feature map is missing %q", marker)
+			}
+		}
+		return
+	}
+	t.Fatal("portal user feature map document is missing")
+}
