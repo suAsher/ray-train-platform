@@ -76,6 +76,18 @@ test('collects every backward page and reports export progress', async () => {
   assert.match(paths[2], /before=cursor-2/)
 })
 
+test('preserves genuinely duplicated log lines during a complete export', async () => {
+  const duplicate = { timestamp: '2026-08-22T16:00:01Z', line: 'same', stream: { pod: 'worker-1' } }
+
+  const logs = await collectAllLogPages(
+    async () => ({ items: [duplicate, duplicate], page: { hasMore: false } }),
+    'job-1',
+  )
+
+  assert.equal(logs.length, 2)
+  assert.deepEqual(logs.map(entry => entry.text), ['same', 'same'])
+})
+
 test('rejects a non-advancing export cursor instead of looping forever', async () => {
   const page = {
     items: [{ timestamp: '2026-08-22T16:00:03Z', line: 'same', stream: { pod: 'worker-1' } }],
