@@ -40,5 +40,12 @@
     "category": "训练",
     "sortOrder": 177,
     "markdown": "### 连接自己的 Worker\n\n任务变为 `RUNNING` 后执行 `spk-rayjob connect JOB_ID`；多 Worker 任务用 `--worker 0`、`--worker 1` 选择。输入 `exit` 只退出连接，不停止训练。只有任务提交者可连接；平台服务端根据任务选 Worker，用户不能传 namespace、Pod、container 或自定义命令。\n\n### 当前调度真实状态\n\n- 卡型、优先级和可恢复闲时任务的提交契约已实现，但线上抢占仍关闭；`opportunistic` 不会在未验证 checkpoint 恢复时被冒险开放。\n- TAS 当前整体关闭，平台不会单独给任务下发 hostname 拓扑请求，因此不存在「任务要求 TAS 但 Flavor 没有 topologyName」的半开配置。\n- TAS 切换需要等 admitted/running Workload 清零，再一次性创建 Topology、新 ResourceFlavor 并开启后端任务意图；不会为切换重启或删除现有训练。\n- 多团队成员、当前团队切换和 PAT 团队绑定已可用；独立的每团队/每卡型 ClusterQueue、Cohort 借用与抢占回收尚未上线，不应对用户宣称已完成。"
+  },
+  {
+    "id": "mlflow-api-with-pat",
+    "title": "通过 API 读取 MLflow 训练记录",
+    "category": "进阶",
+    "sortOrder": 195,
+    "markdown": "浏览器里的原生 MLflow 与机器调用是两条不同通道。`https://raytrain.wellspiking.ai/mlflow/` 只接受从任务详情或实验中心签发的一次性浏览器票据；把 PAT 直接传给 `/mlflow/api/2.0/...` 会返回 `MLFLOW_DASHBOARD_AUTH_REQUIRED`，这是正常的安全隔离。\n\n### 创建只读令牌\n\n在「账户与安全」为当前团队创建 PAT，并至少选择 `jobs:read`。令牌只在创建时显示一次，不要写进代码仓、镜像、命令历史或日志。\n\n```bash\nexport RAYTRAIN_PAT='<账户与安全中创建的令牌>'\n```\n\n### 列出当前身份可见的可信 Run\n\n```bash\ncurl -fsS \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  'https://raytrain.wellspiking.ai/api/v1/experiments?limit=100'\n```\n\n返回值只包含当前用户或管理员有权查看、且平台来源签名校验通过的 Run；不会暴露内部 MLflow 地址或其他租户的记录。\n\n### 按平台任务读取参数、指标与曲线\n\n```bash\nJOB_ID='job-替换为实际任务ID'\ncurl -fsS \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  \"https://raytrain.wellspiking.ai/api/v1/jobs/${JOB_ID}/experiment\"\n```\n\n如果手里只有 MLflow `run_id`，先调用实验列表，在返回的 `runs` 中按 `id` 找到对应 `jobId`，再调用任务接口。Run 不在结果中表示它不属于当前令牌可见范围或未通过平台来源校验；不要改用原生 MLflow API 绕过。\n\n### 浏览器查看原生 Run\n\n在新 Portal 的任务详情点击「打开 MLflow」。页面会在新标签页打开 `raytrain.wellspiking.ai/mlflow/` 并直达 Run；跳到稳定域名是为了保持 MLflow 的 Cookie、静态资源和 WebSocket 路径，不是离开统一认证。"
   }
 ]

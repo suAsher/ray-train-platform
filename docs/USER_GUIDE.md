@@ -282,6 +282,27 @@ if int(os.getenv("RANK", "0")) == 0 and mlflow.active_run():
 
 这些接口不是对外裸露的 MLflow 服务地址。其他平台用户应从实验中心打开原生界面；训练 Pod 内的代码使用平台注入的 `MLFLOW_TRACKING_URI` 写入。这样不会因为给浏览器或外部机器发放内部服务地址而绕过平台认证与任务归属校验。
 
+#### 从脚本读取实验记录
+
+机器调用不要直接请求 `/mlflow/api/2.0/...`。该路径属于浏览器 Dashboard，要求任务详情或实验中心签发的一次性票据和 HttpOnly Cookie；直接访问会返回 `MLFLOW_DASHBOARD_AUTH_REQUIRED`。在「账户与安全」为当前团队创建至少带 `jobs:read` 的 PAT，然后调用平台的租户隔离接口：
+
+```bash
+export RAYTRAIN_PAT='<账户与安全中创建的令牌>'
+
+# 当前身份可见、且平台来源校验通过的 Run
+curl -fsS \
+  -H "Authorization: Bearer ${RAYTRAIN_PAT}" \
+  'https://raytrain.wellspiking.ai/api/v1/experiments?limit=100'
+
+# 一个平台任务对应的可信 Run、参数、最新指标和曲线
+JOB_ID='job-替换为实际任务ID'
+curl -fsS \
+  -H "Authorization: Bearer ${RAYTRAIN_PAT}" \
+  "https://raytrain.wellspiking.ai/api/v1/jobs/${JOB_ID}/experiment"
+```
+
+如果调用方只有 MLflow `run_id`，先从实验列表的 `runs` 中按 `id` 找到 `jobId`，再调用任务接口。Run 不在结果中表示它不属于当前 PAT 可见范围或未通过平台来源校验；不要改用原生 MLflow API 绕过。令牌只在创建时显示一次，不要写进 Git、镜像、日志或共享脚本。
+
 训练代码默认只把标量参数和指标写入 MLflow。模型、Checkpoint、配置快照和正式训练结果仍应写入 `PLATFORM_OUTPUT_PATH`，再从“我的运行结果”查看；普通训练 Pod 的 MLflow 写入网关不提供 Artifact 下载能力。
 
 任务成功并不会自动把 checkpoint 推送到 MLflow Model Registry 或其他模型仓。这样避免把每个中间 checkpoint、失败任务产物或含有不适合发布内容的文件自动公开。需要发布模型时，应先确认目标：若是当前 MLflow Model Registry，可在原生 MLflow 界面显式登记已选择的模型产物；若是外部模型仓，则需要单独配置目标地址、凭据、允许的模型格式和“谁可晋级”的审批策略。平台不把训练输出目录或对象存储凭据直接暴露给其他用户。

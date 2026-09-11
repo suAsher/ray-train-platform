@@ -29,7 +29,7 @@ func TestEmbeddedDocumentsAreValidStableAndIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(docs) != 31 {
+	if len(docs) != 32 {
 		t.Fatalf("got %d seeded docs", len(docs))
 	}
 	seen := map[string]bool{}
@@ -50,6 +50,31 @@ func TestEmbeddedDocumentsAreValidStableAndIndependent(t *testing.T) {
 	if again[0].Markdown == "changed" {
 		t.Fatal("seed reused mutable data")
 	}
+}
+
+func TestMLflowAPIHelpKeepsBrowserAndPATBoundariesSeparate(t *testing.T) {
+	docs, err := Documents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, doc := range docs {
+		if doc.ID != "mlflow-api-with-pat" {
+			continue
+		}
+		for _, marker := range []string{
+			"jobs:read",
+			"/api/v1/experiments?limit=100",
+			"/api/v1/jobs/${JOB_ID}/experiment",
+			"MLFLOW_DASHBOARD_AUTH_REQUIRED",
+			"不要改用原生 MLflow API 绕过",
+		} {
+			if !strings.Contains(doc.Markdown, marker) {
+				t.Fatalf("MLflow API help is missing %q", marker)
+			}
+		}
+		return
+	}
+	t.Fatal("MLflow API help document is missing")
 }
 
 func TestPortalUserFeatureMapCoversDailyUserWorkflows(t *testing.T) {
