@@ -75,7 +75,9 @@ func checkMLflowJSONValue(decoder *json.Decoder, depth int) error {
 			if !ok {
 				return observability.ErrMLflowBatchInvalid
 			}
-			key = strings.ToLower(key)
+			if key != strings.ToLower(key) {
+				return observability.ErrMLflowBatchInvalid
+			}
 			if _, exists := seen[key]; exists {
 				return observability.ErrMLflowBatchInvalid
 			}

@@ -16,7 +16,7 @@
 
 ## 请求合同
 
-所有请求使用 `Authorization: Bearer <PAT>`。POST 使用 `Content-Type: application/json`。响应保持平台信封，成功读取 `data`，失败读取 `error.code`、`error.message` 和 `requestId`。
+所有请求使用 `Authorization: Bearer <PAT>`。POST 使用 `Content-Type: application/json`。响应保持平台信封，成功读取 `data`，失败读取 `error.code`、`error.message` 和 `request_id`。
 
 | 方法与路径 | 权限 | 结果 |
 | --- | --- | --- |
@@ -37,7 +37,7 @@ POST 请求体示例（metric 时间戳单位毫秒，step 是明确的训练步
 }
 ```
 
-单次最大 256 KiB；metrics、params、tags 各最多 100 条。数值必须有限，step 和 timestamp 必须是非负整数；指标必须明确提供 value、step、timestamp。系统字段和 `platform.*`、`mlflow.*` 命名空间保留；不允许传入 run_id、tenant_id 等字段覆盖 URL 或服务端归属。不得把密码、访问令牌或内部地址写进参数/标签。
+单次最大 256 KiB；metrics、params、tags 各最多 100 条。键最长 128 字节，仅允许英文字母、数字、点、下划线、连字符与斜杠；参数值最长 1024 字节，标签值最长 5000 字节。数值必须有限，step 和 timestamp 必须是非负整数，timestamp 不超过 253402300799999；指标必须明确提供 value、step、timestamp。字段名称严格区分大小写，重复 JSON 字段或重复参数/标签键被拒绝。系统字段和 `platform.*`、`mlflow.*` 命名空间保留；不允许传入 run_id、tenant_id 等字段覆盖 URL 或服务端归属。不得把密码、访问令牌或内部地址写进参数/标签。
 
 读取结果最多包含 20 个有效指标键、每个指标最多 500 点、100 个参数；这是现有 UI 查询的有界视图，不适合声称已导出全部训练历史。缺失值保持未知，原始指标键不同就按不同指标处理。不同数据集/评测协议下的数值不能直接用来判定模型优劣。
 

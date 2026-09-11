@@ -46,9 +46,9 @@ type MLflowLogMetric struct {
 }
 
 type MLflowLogBatch struct {
-	Metrics []MLflowLogMetric `json:"metrics"`
-	Params  []MLflowKeyValue  `json:"params"`
-	Tags    []MLflowKeyValue  `json:"tags"`
+	Metrics []MLflowLogMetric `json:"metrics,omitempty"`
+	Params  []MLflowKeyValue  `json:"params,omitempty"`
+	Tags    []MLflowKeyValue  `json:"tags,omitempty"`
 }
 
 func (batch MLflowLogBatch) Validate() error {
