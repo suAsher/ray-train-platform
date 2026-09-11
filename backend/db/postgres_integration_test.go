@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"gorm.io/driver/postgres"
@@ -305,6 +306,72 @@ VALUES ('image-valid-mixed-engines', 'Valid mixed engines', 'registry.example/ru
 	seedPostgresIdentityRows(t, database)
 	assertPostgresTenantIsolation(t, database)
 	assertPostgresDatasetVersioning(t, database)
+}
+
+func TestIdentityStorageHomeMigrationPreservesHistoricalResourcesWithoutGrantingMembership(t *testing.T) {
+	database := openPostgresTestSchema(t)
+	applyPostgresMigrationsThrough(t, database, 44)
+	if err := database.Exec(`
+INSERT INTO tenants(id, name, namespace, local_queue)
+VALUES ('local', 'local', 'tenant-local', 'local-gpu'),
+       ('devops', 'devops', 'tenant-devops', 'devops-gpu')`).Error; err != nil {
+		t.Fatalf("insert migration tenants: %v", err)
+	}
+	if err := database.Exec(`
+INSERT INTO users(id, oidc_subject, username, tenant_id, roles)
+VALUES ('historical-user', 'historical-subject', 'historical-user', 'local', '["Engineer"]'::jsonb)`).Error; err != nil {
+		t.Fatalf("insert legacy user: %v", err)
+	}
+	if err := database.Exec(`
+INSERT INTO local_users(id, username, tenant_id, active_tenant_id, roles, password_hash, storage_key, identity_provider)
+VALUES ('historical-user', 'historical-user', 'local', 'local', '["Engineer"]'::jsonb, '!', 'historical-user', 'oauth2-proxy')`).Error; err != nil {
+		t.Fatalf("insert platform identity: %v", err)
+	}
+	digest := strings.Repeat("a", 64)
+	if err := database.Exec(`
+INSERT INTO source_artifacts(id, tenant_id, user_id, sha256, size_bytes, object_key, upload_expires_at)
+VALUES ('historical-artifact', 'local', 'historical-user', ?, 1, 'historical.zip', NOW() + INTERVAL '1 hour')`, digest).Error; err != nil {
+		t.Fatalf("insert historical artifact: %v", err)
+	}
+	if err := ApplyMigrations(database); err != nil {
+		t.Fatalf("apply identity storage migration: %v", err)
+	}
+
+	var ownershipCount, membershipCount, artifactCount int64
+	if err := database.Raw(`SELECT COUNT(*) FROM identity_tenant_ownerships WHERE identity_id = 'historical-user' AND tenant_id = 'local'`).Scan(&ownershipCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Raw(`SELECT COUNT(*) FROM tenant_memberships WHERE identity_id = 'historical-user'`).Scan(&membershipCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Raw(`SELECT COUNT(*) FROM source_artifacts WHERE id = 'historical-artifact'`).Scan(&artifactCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if ownershipCount != 1 || membershipCount != 0 || artifactCount != 1 {
+		t.Fatalf("migration changed authorization or history: ownership=%d memberships=%d artifacts=%d", ownershipCount, membershipCount, artifactCount)
+	}
+}
+
+func applyPostgresMigrationsThrough(t *testing.T, database *gorm.DB, maxVersion int) {
+	t.Helper()
+	selected := fstest.MapFS{}
+	migrations, err := discoverMigrations(migrationFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, migration := range migrations {
+		if migration.version > maxVersion {
+			continue
+		}
+		contents, err := migrationFiles.ReadFile(migration.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		selected[migration.path] = &fstest.MapFile{Data: contents}
+	}
+	if err := applyMigrations(database, selected); err != nil {
+		t.Fatalf("apply migrations through %d: %v", maxVersion, err)
+	}
 }
 
 func TestPostgresAdvisoryLockMutualExclusionAndRelease(t *testing.T) {
