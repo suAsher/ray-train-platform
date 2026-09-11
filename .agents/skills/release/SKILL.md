@@ -1,11 +1,19 @@
 ---
 name: release
-description: "ray-train-platform 的开发、构建、部署全流程。当需要改这个仓库的代码、跑测试、构建镜像、把改动上线到集群、验收上线结果或回滚时，使用本 skill。触发场景包括:「帮我上线」「发布一下」「部署到集群」「构建镜像」「helm 升级」「跑一下测试」「加个数据库迁移」「回滚」，以及任何改完 backend/ 或 frontend/ 代码后需要让改动生效的情况。集群操作有若干不查就会踩的坑(构建机连不上 GitHub、overlay 固定旧摘要会静默回滚、Helm 把大整数渲染成科学计数法)，所以即使只是「构建一下镜像」这种看起来很简单的请求也要先读本 skill。"
+description: "ray-train-platform 的代码定位、开发、测试、构建、四端同步、部署、spk-rayjob 真实提交验收、现网排障与回滚全流程。当需要改这个仓库的代码、跑测试、构建镜像、把改动上线到集群、核对版本、排查任务/队列/调试环境/MLflow/上传问题、验收上线结果或回滚时，使用本 skill。集群操作有若干不查就会踩的坑(构建机连不上 GitHub、overlay 固定旧摘要会静默回滚、Helm 把大整数渲染成科学计数法)，所以即使只是「构建一下镜像」也要先读本 skill。"
 ---
 
 # ray-train-platform 发布流程
 
 这套流程的正确性标准是**真实生产集群**,不是本地测试通过。下面每一条约束都对应一次真实事故或一次被拦下的事故,不是理论上的谨慎。
+
+## 按任务读取参考
+
+主文档是发布闸门，不能跳过。遇到下列任务时，再读对应的一份参考：
+
+- 不确定代码在哪、该构建哪个组件、如何核对四端版本：[references/repository-map.md](references/repository-map.md)
+- 进行 `spk-rayjob` 用户视角的单机/多机提交验收：[references/acceptance.md](references/acceptance.md)
+- 排查登录、路由、上传、队列、RayJob、调试环境、MLflow 或日志：[references/diagnostics.md](references/diagnostics.md)
 
 ## 环境事实
 

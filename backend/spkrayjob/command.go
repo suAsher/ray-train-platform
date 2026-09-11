@@ -30,13 +30,16 @@ func Run(ctx context.Context, arguments []string, stdout, stderr io.Writer, gete
 // command-line argument, which keeps it out of shell history and process lists.
 func RunWithInput(ctx context.Context, arguments []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) error {
 	if len(arguments) == 0 {
-		return errors.New("command is required")
+		return errors.New("command is required; run spk-rayjob --help")
 	}
 	if getenv == nil {
 		getenv = os.Getenv
 	}
 	if stdin == nil {
 		stdin = os.Stdin
+	}
+	if topic, requested := requestedHelpTopic(arguments); requested {
+		return runCommandHelp(topic, stdout)
 	}
 	switch arguments[0] {
 	case "version":
@@ -74,59 +77,80 @@ func RunWithInput(ctx context.Context, arguments []string, stdin io.Reader, stdo
 	case "cancel":
 		return runCancel(ctx, arguments[1:], stdout, stderr, getenv)
 	default:
-		return fmt.Errorf("unknown command")
+		return fmt.Errorf("unknown command %q; run spk-rayjob --help", arguments[0])
 	}
 }
 
 const helpText = `spk-rayjob — 分布式训练任务命令行客户端
 
-日常用法：
-  spk-rayjob upgrade                 校验并升级当前客户端（使用已保存登录地址）
-  spk-rayjob init                    在当前代码目录生成 .spk-rayjob.yaml 提交默认值
-  spk-rayjob submit --watch          按默认值提交当前目录并等待结束
-  spk-rayjob jobs                    列出我的任务
-  spk-rayjob images                  查看已登记训练镜像、依赖环境和管理员说明
-  spk-rayjob datasets                列出我有权使用的数据集
-  spk-rayjob dataset versions <数据集>  列出不可变数据版本
-  spk-rayjob status <JOB ID>         查看单个任务
-  spk-rayjob logs -f <JOB ID>        实时跟随日志
-  spk-rayjob connect <JOB ID>        连接自己正在运行的第 1 个 Worker
-  spk-rayjob cancel <JOB ID>         停止任务
+用法：
+  spk-rayjob <命令> [参数]
+  spk-rayjob <命令> --help
 
-首次使用：
-  spk-rayjob login --server https://<平台地址> --username <账号> --password-stdin
+首次使用（推荐 PAT）：
+  1. 在 Portal「账户与安全 → 个人访问令牌」为目标团队创建 PAT；PAT 决定任务归属团队。
+  2. 不要把 PAT 写进命令、Git 或脚本，使用标准输入登录：
+       read -rs SPK_PAT && echo
+       printf '%s\n' "$SPK_PAT" | spk-rayjob login \
+         --server https://raytrain.wellspiking.ai --token-stdin
+       unset SPK_PAT
+  3. 执行 spk-rayjob login-check。INVALID_AUTHENTICATION 表示 PAT 已过期、撤销或复制错误。
+  过渡期本地账号可用 --username <账号> --password-stdin；统一认证用户应使用 PAT。
 
-断点续训（把上一次运行的结果目录作为只读 checkpoint 传入本次运行）：
-  spk-rayjob submit --resume-from-job <上一次的 JOB ID> --watch
+最短提交路径：
+  cd <代码目录>
+  spk-rayjob init
+  # 编辑 .spk-rayjob.yaml 中的 image、entrypoint、资源与数据路径
+  spk-rayjob images
+  spk-rayjob submit --watch
 
-临时缓存（可选）：
+.spk-rayjob.yaml 示例（Ray Train 两个 Worker）：
+  name: my-training
+  image: harbor.wellspiking.ai/<project>/<image>:<tag>
+  engine: ray-train
+  dataMode: mount
+  executionMode: ray_train
+  workers: 2
+  gpusPerWorker: 1
+  cpuPerWorker: 8
+  memoryPerWorker: 32Gi
+  input:
+    space: public
+    path: <数据目录>
+  output:
+    path: experiments/my-training
+  entrypoint: python3 train.py
+
+资源与调度：
+  GPU 总数 = workers × gpusPerWorker；Ray Head 不占 GPU。
+  队列与 GPU 卡型由当前 PAT 所属团队策略自动选择，用户无需填写 queue 或卡型。
+  ray-train 托管模式至少需要 2 个 Worker，每个 Worker 至少 1 GPU。
+  ray-ddp 单机多卡示例：1 Worker × 8 GPU；ray-train 多机示例：2 Worker × 8 GPU。
+  在每台 8 卡的集群中，2 Worker × 8 GPU 可作为多机强制验收，每个 Worker 必须独占一台机器。
+  普通任务使用 normal；opportunistic 仅在管理员开启抢占后可用，且必须可从 Checkpoint 恢复。
+  GPU_QUOTA_EXCEEDED 表示团队已用量加本次申请超过配额；等待资源释放或联系管理员。
+
+训练引擎与数据：
+  --engine ray-ddp    兼容已有 Actor + torchrun；平台负责启动，不要在 entrypoint 再写 torchrun。
+  --engine ray-train  Ray Train 托管 Worker、分布式上下文、故障恢复与 Checkpoint。
+  --data-mode mount           直接读取授权数据挂载。
+  --data-mode cache           使用已有 NVMe 运行时缓存。
+  --data-mode ray-data-stage  Ray Data 分布式读取源数据，生成 Worker 本地 NVMe 视图。
+  --data-mode ray-data        训练代码直接消费 Ray Data 的 Parquet/图片分片。
+  --data-mode streaming       固定不可变数据集版本并按需流式读取。
+  流式示例：--data-mode streaming --dataset <数据集>:<版本> --dataset-cache-policy bounded
+  Parquet 负责列式索引、分区和批量扫描；NVMe 是可丢弃缓存，不是数据真相。
+  --max-failures 2                 Worker 最大恢复次数，0-10。
+  --checkpoint-every-epochs 1      每隔多少 Epoch 保存 Checkpoint。
+  --checkpoint-keep-latest 3       保留最近的 Checkpoint 数。
+  --checkpoint-keep-best 1         保留最佳 Checkpoint 数。
+  Ray Train、Ray Data 与闲时抢占只在平台开启后可用；提交前会读取平台能力并明确拒绝。
+
+临时 NVMe 预热（可选）：
   spk-rayjob submit --cache-mode runtime --cache-size 1Ti \
     --cache-preload input --input-space public --input-path <数据集目录>
   加上 --cache-preload input 后，平台会在每个 Worker 启动前把所选输入预热到双 NVMe；
   不加该参数时不会自动缓存 /mnt/storage/public，只加速 Ray 临时文件和训练代码主动写入缓存的内容。
-
-训练引擎：
-  --engine ray-ddp    默认；兼容现有 Actor + torchrun 单机/多机 DDP
-  --engine ray-train  Ray Train 托管 workers、故障恢复和 Checkpoint；仅在平台开启后可用
-  --data-mode mount            直接读取已授权数据挂载
-  --data-mode cache            使用现有 NVMe 预热器
-  --data-mode ray-data-stage   Ray Data 分布式读取并生成双 NVMe 本地视图
-  --data-mode ray-data --ray-data-format images --ray-data-path images/train
-                              直接把 Parquet/图片数据分片交给用户的 Ray Data 训练代码
-  --data-mode streaming --dataset <数据集>:<版本> --dataset-cache-policy bounded
-  --dataset-sites cnfzhjyg,cnzshytg（可选；留空使用完整版本，启动时校验场地及样本数）
-                              固定不可变数据集版本，由 Ray Data 按需流式读取
-  --max-failures 2                 ray-train Worker 最大恢复次数（0-10）
-  --checkpoint-every-epochs 1      ray-train 每隔多少 Epoch 保存 Checkpoint
-  --checkpoint-keep-latest 3       ray-train 保留最近 Checkpoint 数
-  --checkpoint-keep-best 1         ray-train 保留最佳 Checkpoint 数
-  客户端不接受 Ray 版本参数；版本由平台根据管理员登记的镜像固化。
-
-通用参数：
-  --output json    输出原始 JSON，供脚本使用（默认为可读文本）
-  --server         平台地址；未提供时读取 SPK_RAYJOB_URL 或已保存的登录配置
-  --config         指定仅属主可读的配置文件
-  --debug          将脱敏后的请求诊断写入 stderr
 
 平台注入的环境变量（训练代码只依赖这些，不要写死 TOS 地址、桶名或节点路径）：
   PLATFORM_DATASET_PATH      只读；本次任务选中的输入数据目录
@@ -141,25 +165,202 @@ const helpText = `spk-rayjob — 分布式训练任务命令行客户端
   写在 entrypoint 里的 $PLATFORM_* 可能在提交侧就被求值成空字符串，训练随后
   会向类似 /run_dir 的根路径写入并报 PermissionError。
 
+任务观察与操作：
+  spk-rayjob jobs --state RUNNING
+  spk-rayjob status <JOB ID>
+  spk-rayjob logs -f <JOB ID>                         实时跟随日志
+  spk-rayjob logs --limit 0 <JOB ID> > job.log        日志完整导出
+  spk-rayjob connect <JOB ID>                         连接运行中的第 1 个 Worker
+  spk-rayjob connect <JOB ID> --worker 1              连接指定 Worker；不需要 --ssh
+  spk-rayjob cancel <JOB ID>                          请求停止任务
+  Ctrl-C 只停止 --watch 或日志显示，不会自动停止平台任务。
+
+断点续训：
+  spk-rayjob submit --resume-from-job <上一次 JOB ID> --watch
+  训练代码必须把 Checkpoint 写入 PLATFORM_OUTPUT_PATH，并显式从 PLATFORM_CHECKPOINT_PATH 读取。
+
 提交前自检：
   先用 1 卡最小批量跑通几个 step，再扩到多卡多机；
   所有 rank 使用 DistributedSampler，只有 rank 0 写 checkpoint；
+  用 spk-rayjob images 确认镜像已登记且支持所选 engine；
   输入目录先确认真实存在 —— 路径写错的多卡任务通常两分钟内就失败。
 
 常见错误：
+  INVALID_AUTHENTICATION         重新创建/登录有效平台 PAT，不要使用 GitLab Token
+  GPU_QUOTA_EXCEEDED             团队 GPU 配额不足或已有任务占满配额
+  IMAGE_NOT_ALLOWED              镜像未登记、当前团队不可见或不支持所选引擎
   python: not found              镜像只有 python3，入口命令改用 python3
-  KeyError: RANK                 代码强制走分布式入口，但任务是单卡直接执行
+  KeyError: RANK                 代码错误地假定单卡任务也有 torchrun 环境
   PermissionError 且路径像 /run_dir  entrypoint 里的 $PLATFORM_* 展开成了空值
   FileNotFoundError 指向数据目录     选中的输入路径不存在，先在 Portal 里确认
   No module named mmdet3d.ops    上传的源码覆盖了镜像里编译好的扩展
   任务一直排队                    GPU 配额或空闲卡不足；检查是否有调试环境空占卡
 
-注意：单机多卡与多机多卡由平台负责启动 torchrun。entrypoint 里请写
-      python tools/train.py ...，不要自己再写 torchrun 或 torchpack。
+常用命令：
+  login, login-check, upgrade, init, submit, jobs, images, datasets,
+  dataset versions, status, logs, connect, cancel, version
+
+运行 spk-rayjob submit --help 查看全部提交参数和组合示例；其他命令也支持 --help。
 `
 
+const submitHelpText = `spk-rayjob submit — 打包当前代码目录并提交训练
+
+用法：
+  spk-rayjob submit [参数]
+
+常用参数：
+  --dir DIR                       代码目录，默认当前目录
+  --name NAME                     任务名；默认读取 .spk-rayjob.yaml
+  --image IMAGE                   已登记且当前团队可见的镜像 tag 或 digest
+  --entrypoint COMMAND             用户训练命令，不要重复写 torchrun
+  --engine ray-ddp|ray-train       训练引擎
+  --execution-mode MODE            auto|single_gpu|torchrun|ray_train
+  --workers N                      Worker 数量
+  --gpus-per-worker N              每个 Worker 的 GPU 数
+  --cpu-per-worker N               每个 Worker 的 CPU
+  --memory-per-worker SIZE         每个 Worker 的内存，例如 32Gi
+  --priority LEVEL                 production|normal|opportunistic
+  --preemptible                    声明闲时任务可被抢占；仅管理员开启后有效
+  --watch                          等到终态；Ctrl-C 只停止等待，不停止任务
+
+数据与结果：
+  --input-space SPACE              public、team、my-files 等逻辑空间
+  --input-path PATH                输入空间内相对路径
+  --output-path PATH               my-runs 下相对路径
+  --checkpoint-space SPACE         直接指定只读 Checkpoint 空间
+  --checkpoint-path PATH           Checkpoint 相对路径
+  --resume-from-job JOB_ID         使用历史托管任务最新完整 Checkpoint
+  --data-mode MODE                 mount|cache|ray-data-stage|ray-data|streaming
+  --ray-data-format FORMAT         parquet|images
+  --ray-data-path PATH             所选输入内的 Ray Data 相对路径
+  --dataset DATASET[:VERSION]      不可变数据集与可选版本
+  --dataset-version VERSION        不可变版本 ID 或 latest
+  --dataset-sites A,B              只选择给定场地；留空使用完整版本
+  --dataset-cache-policy POLICY    streaming 的 off|auto|bounded
+  --cache-mode runtime             启用 Worker 本地 NVMe
+  --cache-size SIZE                平台允许的缓存容量
+  --cache-preload input            训练前分布式预热输入
+
+Ray Train 恢复与保留：
+  --max-failures N                 Worker 最大恢复次数，0-10
+  --checkpoint-every-epochs N      每 N 个 Epoch 保存一次
+  --checkpoint-keep-latest N       保留最近 Checkpoint 数
+  --checkpoint-keep-best N         保留最佳 Checkpoint 数
+
+连接与输出：
+  --server URL                     覆盖已登录的平台地址
+  --config FILE                    使用另一份 0600 登录配置
+  --ca-file FILE                   私有 CA PEM
+  --output text|json               输出格式
+  --debug                          只向 stderr 写脱敏请求诊断
+
+示例：
+  # 读取项目文件中的全部默认值
+  spk-rayjob submit --watch
+
+  # 两个 Ray Train Worker；平台按团队自动选择队列和 GPU 卡型
+  spk-rayjob submit --engine ray-train --workers 2 --gpus-per-worker 1 --watch
+
+  # 多机强制验收：在每台 8 卡节点上，每个 Worker 独占一台
+  spk-rayjob submit --engine ray-train --workers 2 --gpus-per-worker 8 --watch
+
+  # 不可变数据集按场地流式训练
+  spk-rayjob submit --engine ray-train --data-mode streaming \
+    --dataset <数据集>:<版本> --dataset-sites <场地A>,<场地B> \
+    --dataset-cache-policy bounded --watch
+
+注意：命令行显式参数覆盖 .spk-rayjob.yaml；没有显式填写的值继续使用项目文件。
+`
+
+const loginHelpText = `spk-rayjob login — 安全保存平台会话或 PAT
+
+用法：
+  spk-rayjob login --server URL --token-stdin
+  spk-rayjob login --server URL --username USER --password-stdin
+
+推荐在 Portal「账户与安全」创建绑定目标团队的 PAT，再通过 --token-stdin 输入。
+PAT 和密码不会作为命令参数保存；配置文件权限固定为 0600。
+--config FILE 可指定另一份配置，--ca-file FILE 可指定私有 CA。
+`
+
+const logsHelpText = `spk-rayjob logs — 查看或导出训练日志
+
+用法：
+  spk-rayjob logs [--limit N] <JOB ID>
+  spk-rayjob logs -f [--limit N] <JOB ID>
+
+-f/--follow 实时跟随；--limit 0 表示文本日志完整导出，最大 250000 行。
+日志完整导出示例：spk-rayjob logs --limit 0 <JOB ID> > job.log
+JSON 输出必须使用 --output json --limit 1..10000，所有 flags 放在 JOB ID 前。
+`
+
+const connectHelpText = `spk-rayjob connect — 进入自己的运行中训练 Worker
+
+用法：
+  spk-rayjob connect JOB_ID
+  spk-rayjob connect JOB_ID --worker N
+
+默认连接第 1 个 Worker（序号 0）。任务必须正在运行且属于当前用户；不需要 --ssh。
+输入 exit 只退出连接，不会停止训练。平台使用短期连接票据，不向用户暴露 Kubernetes 凭据。
+`
+
+var simpleCommandHelp = map[string]string{
+	"upgrade":          "用法：spk-rayjob upgrade\n校验 SHA256 后升级当前客户端。\n",
+	"init":             "用法：spk-rayjob init [--dir DIR] [--name NAME] [--image IMAGE] [--entrypoint COMMAND] [--engine ray-ddp|ray-train] [--workers N] [--gpus-per-worker N]\n在代码目录创建 .spk-rayjob.yaml，不会提交任务。\n",
+	"login-check":      "用法：spk-rayjob login-check\n验证当前配置中的会话或 PAT。\n",
+	"jobs":             "用法：spk-rayjob jobs [--state STATE] [--limit 1..500] [--output text|json]\n列出当前用户在当前团队可见的任务。\n",
+	"images":           "用法：spk-rayjob images [--output text|json]\n列出当前团队可用的已登记训练镜像及支持的引擎。\n",
+	"datasets":         "用法：spk-rayjob datasets [--output text|json]\n列出当前用户可用的数据集。\n",
+	"dataset versions": "用法：spk-rayjob dataset versions [--output text|json] <数据集 ID 或 slug>\n列出可训练的不可变数据版本。\n",
+	"status":           "用法：spk-rayjob status [--output text|json] <JOB ID>\n查看任务状态、规模、镜像与结果目录；flags 必须放在 JOB ID 前。\n",
+	"cancel":           "用法：spk-rayjob cancel [--output text|json] <JOB ID>\n请求停止自己的任务；停止是异步操作。\n",
+	"version":          "用法：spk-rayjob version\n显示客户端发布版本。\n",
+	"package":          "用法：spk-rayjob package [--dir DIR] [--output FILE]\n仅为高级自动化生成源码包，不提交任务。\n",
+}
+
+func requestedHelpTopic(arguments []string) (string, bool) {
+	if len(arguments) == 0 {
+		return "", false
+	}
+	if arguments[0] == "help" {
+		return strings.Join(arguments[1:], " "), true
+	}
+	last := arguments[len(arguments)-1]
+	if last != "-h" && last != "--help" {
+		return "", false
+	}
+	if len(arguments) == 1 {
+		return "", true
+	}
+	return strings.Join(arguments[:len(arguments)-1], " "), true
+}
+
+func runCommandHelp(topic string, stdout io.Writer) error {
+	topic = strings.TrimSpace(topic)
+	var text string
+	switch topic {
+	case "", "help":
+		text = helpText
+	case "submit":
+		text = submitHelpText
+	case "login":
+		text = loginHelpText
+	case "logs":
+		text = logsHelpText
+	case "connect":
+		text = connectHelpText
+	default:
+		text = simpleCommandHelp[topic]
+	}
+	if text == "" {
+		return fmt.Errorf("unknown help topic %q; run spk-rayjob --help", topic)
+	}
+	_, err := io.WriteString(stdout, text)
+	return err
+}
+
 func runHelp(stdout io.Writer) error {
-	_, err := fmt.Fprint(stdout, helpText)
+	_, err := io.WriteString(stdout, helpText)
 	return err
 }
 
