@@ -27,9 +27,9 @@ PAT 时，直接修改旧 `users.tenant_id` 会触发外键并回滚；只修改
 
 ### 稳定身份和个人存储
 
-为 `local_users` 增加显式 `storage_tenant_id`，现有数据从原始 `tenant_id` 回填。它只标识现存个人
-对象根的历史归属，不随 active team 改变。旧 `tenant_id` 在兼容期保留为首次/归档团队字段，停止
-在每次请求中改写。
+将现有 `local_users.tenant_id` 明确收敛为首次/个人存储归属团队，不再随 active team 改写；
+`active_tenant_id` 继续只表示当前授权团队。Repository 向领域对象显式返回 `storageTenantId`，避免调用方
+再把两个概念混用。这样不需要更新或回填身份表，也不会触发退役身份的生命周期保护。
 
 个人数据挂载拆成两层含义：
 
@@ -45,16 +45,21 @@ tenant、root prefix、PVC、CSI 参数或凭据。团队共享目录仍严格�
 
 ### 历史资源与外键
 
+新增不可变的 `identity_tenant_ownerships(identity_id, tenant_id)`，表示“这个身份曾在该团队合法创建过
+资源”，但不授予当前访问权限。它从旧 `users` 归属、现有 memberships 和既有资源所有者安全回填。
+生产预检已发现 29 条旧 source artifact 来自已退役/测试身份，没有 membership；如果直接把外键改到
+membership，要么阻塞迁移，要么错误地恢复访问权。独立 ownership 表可以保留这些历史记录而不扩权。
+
 把以下 `(user_id, tenant_id)` 所有权外键从单行 `users(id, tenant_id)` 改为
-`tenant_memberships(identity_id, tenant_id)`：
+`identity_tenant_ownerships(identity_id, tenant_id)`：
 
 - `personal_access_tokens`；
 - `source_artifacts`；
 - `source_artifact_requests`；
 - `data_space_uploads`。
 
-membership 只改变 `status`，不物理删除，因此历史资源的引用完整性仍然成立。迁移前检查每条现有
-资源都有对应 membership；存在孤儿时迁移失败并停止发布，不自动补造权限。
+membership 创建时同步幂等登记 ownership；membership 停用只撤销授权，不删除 ownership，因此历史资源
+的引用完整性仍然成立。ownership 不参与 principal 或角色计算，也不能通过 HTTP 单独创建。
 
 `EnsureIdentity` 只更新全局用户名、邮箱和时间戳，不再修改旧 home tenant 或把当前团队角色覆盖到
 全局用户行。管理员用户摘要从 `local_users.active_tenant_id` 和 active membership 读取，不再展示陈旧

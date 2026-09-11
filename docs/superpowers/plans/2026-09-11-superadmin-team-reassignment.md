@@ -4,7 +4,7 @@
 
 **Goal:** Allow SuperAdmin to create/rename teams and atomically move users between teams without moving personal objects, while preserving historical ownership and leaving all GPU quotas unchanged.
 
-**Architecture:** Keep `local_users` as the global identity and add an immutable storage-home tenant distinct from the active authorization tenant. Replace legacy composite owner foreign keys with membership foreign keys, resolve all personal paths through a server-owned personal binding, and expose one audited atomic reassignment API. Add only the corresponding Portal management controls; retain backward-compatible old UI responses.
+**Architecture:** Keep `local_users.tenant_id` as the immutable storage-home tenant and use `active_tenant_id` only for authorization. Replace legacy composite owner foreign keys with a non-authorizing historical ownership table, resolve all personal paths through a server-owned personal binding, and expose one audited atomic reassignment API. Add only the corresponding Portal management controls; retain backward-compatible old UI responses.
 
 **Tech Stack:** Go 1.25, Gin, GORM, PostgreSQL migrations, Vue 3/Element Plus Portal, Kubernetes/Helm, GitLab CI.
 
@@ -20,8 +20,8 @@
 
 - [ ] **Step 1: Write the migration contract test**
 
-Add a test that reads migration 45 and requires `storage_tenant_id` on `local_users` and `data_mount_bindings`, a preflight orphan check, and replacement owner foreign keys referencing
-`tenant_memberships(identity_id, tenant_id)`. Require migration version 45 in the embedded sequence.
+Add a test that reads migration 45 and requires `storage_tenant_id` on `data_mount_bindings`, the immutable `identity_tenant_ownerships` table, safe backfill from legacy owners, and replacement owner foreign keys referencing
+`identity_tenant_ownerships(identity_id, tenant_id)`. Require migration version 45 in the embedded sequence.
 
 - [ ] **Step 2: Run the focused test on the build host and verify RED**
 
@@ -35,11 +35,11 @@ Expected: failure because migration 45 is absent.
 
 - [ ] **Step 3: Implement migration 45**
 
-The migration must begin with the required lock and statement timeouts, add and backfill both storage-home columns, fail if any existing owner pair lacks a membership, drop only the four known `users(id, tenant_id)` constraints, and recreate them against `tenant_memberships`. Do not drop legacy columns or delete rows.
+The migration must begin with the required lock and statement timeouts, add and backfill the binding storage-home column, create and backfill historical ownership from existing users/memberships/resources, drop only the four known `users(id, tenant_id)` constraints, and recreate them against `identity_tenant_ownerships`. Do not create memberships, grant roles, drop legacy columns or delete rows.
 
 - [ ] **Step 4: Extend PostgreSQL integration assertions**
 
-Assert that migration 45 applies twice idempotently, owner constraints reference `tenant_memberships`, storage-home columns are non-null after backfill, and deliberately orphaned data is rejected.
+Assert that migration 45 applies twice idempotently, owner constraints reference the ownership table, active personal bindings have a storage-home tenant, and historical resources without memberships remain preserved without gaining an active membership.
 
 - [ ] **Step 5: Run focused DB tests and verify GREEN**
 
@@ -73,7 +73,7 @@ Expected: failure because `EnsureIdentity` currently updates `users.tenant_id` a
 
 - [ ] **Step 3: Implement stable identity persistence**
 
-Add `StorageTenantID` to `LocalUserRecord`, initialize it at account creation, and stop updating `UserRecord.TenantID` or `roles` on conflict. Update summaries to join the active membership and merge only global SuperAdmin role. Keep the legacy fallback for databases before migration 43.
+Expose `StorageTenantID` from the existing immutable `LocalUserRecord.TenantID`, and stop updating `UserRecord.TenantID` or `roles` on conflict. Update summaries to join the active membership and merge only global SuperAdmin role. Keep the legacy fallback for databases before migration 43.
 
 - [ ] **Step 4: Run repository tests and verify GREEN**
 
