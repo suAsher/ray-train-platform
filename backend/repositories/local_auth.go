@@ -159,10 +159,13 @@ func (r *GormRepository) CreateLocalUser(ctx context.Context, user domain.LocalU
 		if !tx.Migrator().HasTable(&TenantMembershipRecord{}) {
 			return nil
 		}
-		return tx.Create(&TenantMembershipRecord{
+		if err := tx.Create(&TenantMembershipRecord{
 			IdentityID: record.ID, TenantID: record.TenantID, RolesJSON: record.RolesJSON,
 			Status: string(domain.MembershipStatusActive), CreatedAt: now, UpdatedAt: now,
-		}).Error
+		}).Error; err != nil {
+			return err
+		}
+		return ensureIdentityTenantOwnership(tx, record.ID, record.TenantID, now)
 	}); err != nil {
 		if errors.Is(err, gorm.ErrDuplicatedKey) || strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "UNIQUE constraint") {
 			return ErrUsernameTaken

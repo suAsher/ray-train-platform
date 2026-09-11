@@ -111,8 +111,19 @@ func (r *GormRepository) EnsureIdentity(ctx context.Context, principal auth.Prin
 			return err
 		}
 		user := UserRecord{ID: principal.Subject, OIDCSubject: principal.Subject, Username: principal.Username, Email: principal.Email, TenantID: principal.TenantID, RolesJSON: string(roles), CreatedAt: now, UpdatedAt: now}
-		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "oidc_subject"}}, DoUpdates: clause.Assignments(map[string]any{"username": user.Username, "email": user.Email, "tenant_id": user.TenantID, "roles": user.RolesJSON, "updated_at": now})}).Create(&user).Error; err != nil {
+		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "oidc_subject"}}, DoUpdates: clause.Assignments(map[string]any{"username": user.Username, "email": user.Email, "updated_at": now})}).Create(&user).Error; err != nil {
 			return fmt.Errorf("upsert user: %w", err)
+		}
+		if tx.Migrator().HasTable(&LocalUserRecord{}) {
+			var identities int64
+			if err := tx.Model(&LocalUserRecord{}).Where("id = ?", principal.Subject).Count(&identities).Error; err != nil {
+				return fmt.Errorf("check platform identity: %w", err)
+			}
+			if identities > 0 {
+				if err := ensureIdentityTenantOwnership(tx, principal.Subject, principal.TenantID, now); err != nil {
+					return fmt.Errorf("record identity tenant ownership: %w", err)
+				}
+			}
 		}
 		return nil
 	})

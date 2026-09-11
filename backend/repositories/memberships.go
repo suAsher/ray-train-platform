@@ -99,10 +99,13 @@ func (r *GormRepository) PutTenantMembership(ctx context.Context, membership dom
 			IdentityID: membership.IdentityID, TenantID: membership.TenantID,
 			RolesJSON: roles, Status: string(membership.Status), CreatedAt: now, UpdatedAt: now,
 		}
-		return tx.Clauses(clause.OnConflict{
+		if err := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "identity_id"}, {Name: "tenant_id"}},
 			DoUpdates: clause.Assignments(map[string]any{"roles": roles, "status": membership.Status, "updated_at": now}),
-		}).Create(&record).Error
+		}).Create(&record).Error; err != nil {
+			return err
+		}
+		return ensureIdentityTenantOwnership(tx, membership.IdentityID, membership.TenantID, now)
 	})
 }
 

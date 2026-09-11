@@ -118,6 +118,20 @@ func (r *GormRepository) SetTenantGPUQuota(ctx context.Context, tenantID string,
 }
 
 func (r *GormRepository) ListUserSummaries(ctx context.Context) ([]UserSummary, error) {
+	if r.db.Migrator().HasTable(&LocalUserRecord{}) && r.db.Migrator().HasTable(&TenantMembershipRecord{}) {
+		users, err := r.ListLocalUsers(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list active platform users: %w", err)
+		}
+		items := make([]UserSummary, 0, len(users))
+		for _, user := range users {
+			items = append(items, UserSummary{
+				ID: user.ID, Username: user.Username, Email: user.Email,
+				TenantID: user.TenantID, Roles: append([]string(nil), user.Roles...),
+			})
+		}
+		return items, nil
+	}
 	var users []UserRecord
 	if err := r.db.WithContext(ctx).Order("created_at ASC").Find(&users).Error; err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
