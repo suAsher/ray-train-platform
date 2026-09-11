@@ -1,5 +1,7 @@
 # RayTrain 生产架构
 
+> 最新核查请看 [2026-09-11 现状与完整架构图](CURRENT_STATE_20260911.md)。下文保留早期设计和验收背景，其中节点容量、运行时版本、入口与功能状态不能替代最新只读核查。
+
 ![RayTrain 组件级生产架构](architecture/ray-training-platform-production-architecture-v4.svg)
 
 总图只表达稳定组件和责任边界，不展示环境 IP、机器规格或副本数量；灰色虚线卡片是明确规划，不代表已经上线。

@@ -21,7 +21,7 @@ spk-rayjob / Portal
 
 | 现象 | 先查 | 含义/边界 |
 |---|---|---|
-| `INVALID_AUTHENTICATION` / 401 | `spk-rayjob login-check`、PAT 过期/团队绑定、OAuth2 issuer/audience | 401 表示路由通常已注册；不要换成 GitLab token |
+| `INVALID_AUTHENTICATION` / 401 | `spk-rayjob login-check`、PAT 过期/团队绑定、OAuth2 issuer/audience | 401 不足以证明具体路由已注册；不要换成 GitLab token |
 | Portal 404 | 请求 URL 是否多/少 `/raytrain`，Ingress 是否误吞 SPA 路由 | 先分辨 SPA 404 还是 API `JOB_NOT_FOUND` |
 | `IMAGE_NOT_ALLOWED` | 镜像登记、团队可见性、engine 能力、tag/digest | 超级管理员可跨团队登记；训练用户只看当前团队/全平台镜像 |
 | `GPU_QUOTA_EXCEEDED` | 团队配额、已用 GPU、活跃调试环境 | 在 RayJob 创建前拦截；不是 Pod 调度故障 |
@@ -36,10 +36,11 @@ spk-rayjob / Portal
 
 ## 队列与异构 GPU
 
+- 先核对 backend 的功能开关、实际 ClusterQueue/ResourceFlavor/Topology、团队策略和节点标签；文档或代码中出现 TAS/抢占不代表生产已启用。没有通过真实演练时，报告“已实现，未启用/未验收”，不要承诺已消除碎片。
 - 用户不显式选 GPU 型号；后端根据 PAT 所属团队的调度策略选择 accelerator class、ClusterQueue 和 ResourceFlavor。
-- 节点要有真实 accelerator 标签、平台 GPU pool/团队标签与 cache-ready 状态。A100/A800/H20/4090 不能混成一个 WorkerGroup。
-- 闲时任务必须是单 Worker、`opportunistic` 且 `preemptible`，并能从 Checkpoint 恢复；团队正常/生产任务可回收借用额度。
-- 不用节点物理绑定代替配额。团队节点池防止异构混调，Kueue 配额/优先级/抢占负责利用率。
+- 当前节点接入需真实 accelerator、平台 GPU pool 与 cache-ready；团队归属标签只有在对应的节点选择/队列隔离策略已实现并部署后才有效，不能只打标签就宣称物理隔离。A100/A800/H20/4090 不能混成一个 WorkerGroup。
+- 闲时任务的当前代码约束是单 Worker、单 GPU、`opportunistic` 且 `preemptible`，并能从 Checkpoint 恢复。团队正常/生产任务回收借用额度还依赖已启用的抢占策略和真实演练；开关关闭时提交会被拒绝。
+- 不用节点物理绑定代替配额。团队节点池与异构卡型隔离、Kueue 配额与抢占必须分别核实，不把设计目标当作生产事实。
 
 ## 改动前后的安全检查
 

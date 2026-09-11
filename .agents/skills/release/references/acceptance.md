@@ -15,9 +15,11 @@
 4. 执行 `spk-rayjob datasets` / `dataset versions`，确认输入合同。
 5. 查询当前团队配额、全集群可分配 GPU 和活跃调试环境。计算本次需求 `workers × gpusPerWorker`。
 
+以下 submit 示例只展示资源/引擎参数，前提是在已准备好的代码目录运行，且 `.spk-rayjob.yaml` 已填写已登记且当前团队可用的 image、实际 entrypoint、输入与输出路径。没有项目配置时必须显式提供这些参数，不能将缺少 image/entrypoint 的失败算作集群故障。原生 Ray 命令若在本次验收范围内，也需使用同一身份/团队和数据契约单独验证。
+
 ## 最小与多机验收
 
-Ray Train 托管模式至少两个 Worker，因此不要把 `1×1` 当作 Ray Train 验收：
+下例的 `--execution-mode ray_train` 是多节点执行模式，至少两个 Worker；不要把 `1×1` 当作多机验收。训练引擎 `--engine ray-train` 与 execution mode 是两个不同字段，不应从这一限制推断所有托管训练都不能单卡：
 
 ```bash
 spk-rayjob submit \
@@ -31,7 +33,7 @@ spk-rayjob submit \
 多机成功需同时有三类证据：
 
 1. `spk-rayjob` 显示任务进入 `SUCCEEDED`。
-2. 训练日志显示 `world_size=2`、不同 rank 和 CUDA 设备。
+2. 训练日志显示与预期总训练进程数一致的 world_size、不同 rank 和 CUDA 设备；下例 `2×1` 通常为 2，`2×8` 的 DDP 总进程数应为 16，不能两者都写死为 2。
 3. 只读集群事件或 Pod 节点列显示两个 Worker 落在不同 `kubernetes.io/hostname`。
 
 `2 Worker × 1 GPU` 可能被 bin-pack 到同一节点，也可能跨节点，所以必须看实际节点证据。在每台 8 卡的 4090 集群上，`2 Worker × 8 GPU` 会强制每个 Worker 独占一台机，是容量充足时的强验收：

@@ -9,6 +9,8 @@
 | 内部 GitLab | `gitlab/main` | Wellspiking 内部代码镜像 |
 | 构建机 | `/opt/guofeng/vke-cluster/ray-platform-main` 的 `main` | 唯一构建和 Helm 发布源 |
 
+远端必须核对为 `origin=git@github.com:suAsher/ray-train-platform.git`、`gitlab=ssh://git@gitlab.wellspiking.ai:32022/guofeng.su/ray-train-platform.git`；内部 GitLab 使用 `~/.ssh/id-spiking`。SSH 身份负责远端授权，commit author/committer 仍需设置平台身份，二者不是一回事。
+
 四端一致指四个**完整 commit SHA** 相同，不是文件看起来相同。镜像 digest 和 Helm revision 是另外两个版本维度：
 
 ```text
@@ -21,8 +23,8 @@
 
 ```bash
 git rev-parse HEAD
-git rev-parse origin/main
-git rev-parse gitlab/main
+git ls-remote origin refs/heads/main
+git -c core.sshCommand='ssh -i ~/.ssh/id-spiking -p 32022 -o IdentitiesOnly=yes' ls-remote gitlab refs/heads/main
 ssh -i ~/.ssh/qomolo-desktop.pem root@14.103.49.106 \
   'cd /opt/guofeng/vke-cluster/ray-platform-main && git rev-parse HEAD && git status --short'
 ssh -i ~/.ssh/qomolo-desktop.pem root@14.103.49.106 \
@@ -48,8 +50,9 @@ Portal RayTrain 的权威源不在四端后端仓库中：
 | REST API、权限、数据库、Kueue/RayJob 渲染 | `backend/api/`, `backend/httpapi/`, `backend/domain/`, `backend/db/`, `backend/k8s/` | `backend` + Helm backend digest |
 | `spk-rayjob` 命令、帮助、提交合同 | `backend/spkrayjob/`, `backend/cmd/spk-rayjob/` | `backend,spk-rayjob` + Helm 两个 digest |
 | Helm 参数与集群资源 | `helm/ray-train-platform/`, `deploy/`, `ops/` | 先做 server-side dry-run/diff，再 Helm |
-| 数据集发布运行时 | `dataset-publisher/` 及对应后端调度代码 | `dataset-publisher`；如合同变更同时构建 `backend` |
-| IDC 源同步/物化 | `source-materializer/` 及对应后端代码 | `source-materializer`；如 API/渲染变更同时构建 `backend` |
+| 数据集发布运行时 | `images/dataset-publisher/` 及对应后端调度代码 | `dataset-publisher`；如合同变更同时构建 `backend` |
+| IDC 增量同步 | `images/idc-sync/`、`backend/idcsync/` 及对应后端代码 | `idc-sync`；如 API/渲染变更同时构建 `backend` |
+| 代码包/源码物化 | `images/source-materializer/` 及对应后端代码 | `source-materializer`；如 API/渲染变更同时构建 `backend` |
 | 调试环境运行时 | workspace 镜像与 Helm 配置 | `workspace` |
 | Portal 页面/API 适配 | Portal `src/views/rayTrain/` | Portal lint 闸门 + 推 `dev`；不从本仓库构建 |
 
@@ -61,4 +64,4 @@ Portal RayTrain 的权威源不在四端后端仓库中：
 - 本地只编辑、审阅和 `git diff --check`；候选 commit 通过 bundle 到构建机的 detached worktree 测试。
 - 先测候选 commit，再推 GitHub/GitLab，最后快进构建机正式目录。
 - 不用 rsync/scp 覆盖正式源码，不在构建机正式目录直接改代码。
-- 四端核对还必须包含：本地和构建机 `git status --short` 均为空。
+- 四端核对还必须分别报告本地和构建机 `git status --short`。源码 HEAD 相同不代表工作区干净；正式构建/发布要求工作区干净，只读状态交接则明确列出未提交的文档或代码，不自动提交推送。
