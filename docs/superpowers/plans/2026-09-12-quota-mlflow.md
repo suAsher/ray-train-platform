@@ -27,6 +27,6 @@
 - [x] 构建机 Chromium 隔离 API 的四项页面交互回归；真实 MLflow 3.14 隔离服务的读写、历史 Run、终态拒写验证。
 - [ ] 有可用浏览器与认证时验证列表配额、搜索/比较、单条 Run 原生深链和使用说明；记录不可达环境，不用 mock 冒充生产验收。
 - [x] 按本轮先验证再推送的要求，复核双远端、后端候选 bundle，完成后端四端代码同步。
-- [ ] 本轮明确上线授权后：只构建 backend、最小 Helm dry-run diff、运行中任务 UID/重启数对比；随后 Portal dev 推送并按 CI/CD 验证。Portal dev 推送会自动部署，当前保留本地候选。
+- [x] 用户明确授权后只构建 backend，完成最小 Helm dry-run diff、运行中任务 UID/重启数对比并部署到 revision 212；Portal dev 3c4fb473 已推送，CI #33846 部署成功，日志 revision 1040。线上 Portal imageID 独立核实与完整浏览器验收尚待补齐。
 
-结果和边界见 [候选验证记录](../../QUOTA_MLFLOW_VALIDATION_20260912.md)。浏览器 mock 不代表生产登录验收。
+结果和边界见 [发布验证记录](../../QUOTA_MLFLOW_VALIDATION_20260912.md)。浏览器 mock 不代表生产登录验收。

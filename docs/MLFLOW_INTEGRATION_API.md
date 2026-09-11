@@ -1,6 +1,6 @@
 # MLflow 外部对接说明
 
-本说明对应 2026-09-12 开发候选。新增接口必须在后端候选发布后才能使用；具体上线状态以发布证据为准。现有 `/api/v1/experiments` 与 `/api/v1/jobs/{job_id}/experiment` 仍保持兼容。
+本说明对应已部署后端 `release-20260912-01-3800b753`（Helm revision 212、schema 45）。精确 Run 读取已用线上登录身份验证；读写协议已通过隔离 MLflow 3.14 验证，尚未向生产 Run 写入演示数据。具体证据与未完成项见 [发布验证记录](QUOTA_MLFLOW_VALIDATION_20260912.md)。现有 `/api/v1/experiments` 与 `/api/v1/jobs/{job_id}/experiment` 仍保持兼容。
 
 ## 需要交给对接方什么
 

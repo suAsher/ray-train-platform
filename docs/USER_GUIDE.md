@@ -276,7 +276,9 @@ if int(os.getenv("RANK", "0")) == 0 and mlflow.active_run():
 平台接口的边界如下：
 
 - `GET /api/v1/experiments`：实验中心读取当前用户可见的可信 Run 列表。
-- `GET /api/v1/jobs/:id/experiment`：任务详情读取该任务的可信 Run、参数和指标。
+- `GET /api/v1/jobs/:id/experiment`：任务详情读取该任务最新可信 Run、参数和指标。
+- `GET /api/v1/jobs/:id/mlflow/runs/:runId`：按 Job/Run 对精确读取历史或当前 Run。
+- `POST /api/v1/jobs/:id/mlflow/runs/:runId/log-batch`：同时具有 `jobs:read`、`mlflow:write` 的 PAT 向当前团队本人任务的已有 RUNNING Run 写参数、指标及自定义标签；详见 [外部对接合同](MLFLOW_INTEGRATION_API.md)。
 - `POST /api/v1/mlflow-dashboard-access`：浏览器申请一次性原生 MLflow 访问票据；传入 `{"runId":"<MLflow run_id>"}` 时会直达该 Run。
 - `/mlflow/`：平台同域反向代理的原生 MLflow 界面。
 
@@ -301,7 +303,7 @@ curl -fsS \
   "https://raytrain.wellspiking.ai/api/v1/jobs/${JOB_ID}/experiment"
 ```
 
-如果调用方只有 MLflow `run_id`，先从实验列表的 `runs` 中按 `id` 找到 `jobId`，再调用任务接口。Run 不在结果中表示它不属于当前 PAT 可见范围或未通过平台来源校验；不要改用原生 MLflow API 绕过。令牌只在创建时显示一次，不要写进 Git、镜像、日志或共享脚本。
+如果调用方只有 MLflow `run_id`，先从实验列表的 `runs` 中按 `id` 找到 `jobId`，再调用精确 Run 接口。列表最多返回最近 100 条；Run 不在结果中也可能只是超出查询窗口，不能据此断定无权限或 Run 不存在，不要改用原生 MLflow API 绕过。令牌只在创建时显示一次，不要写进 Git、镜像、日志或共享脚本。
 
 训练代码默认只把标量参数和指标写入 MLflow。模型、Checkpoint、配置快照和正式训练结果仍应写入 `PLATFORM_OUTPUT_PATH`，再从“我的运行结果”查看；普通训练 Pod 的 MLflow 写入网关不提供 Artifact 下载能力。
 
