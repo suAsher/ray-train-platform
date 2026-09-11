@@ -18,6 +18,7 @@ var ErrDataMountBindingNotFound = errors.New("data mount binding not found")
 type DataMountBindingRecord struct {
 	ID                   string  `gorm:"primaryKey"`
 	TenantID             *string `gorm:"column:tenant_id;index"`
+	StorageTenantID      *string `gorm:"column:storage_tenant_id;index"`
 	UserID               *string `gorm:"column:user_id;index"`
 	StorageKey           string  `gorm:"column:storage_key"`
 	Scope                string  `gorm:"index"`
@@ -178,6 +179,7 @@ func (r *GormRepository) EnsurePersonalDataBinding(ctx context.Context, requeste
 	switch {
 	case err == nil:
 		if existing.Status == string(domain.DataMountBindingPending) && existing.ClaimName == "" && existing.Driver == "" && existing.VolumeAttributesJSON == "" && existing.RootPrefix == "" {
+			existing.StorageTenantID = optionalID(requested.StorageTenantID)
 			existing.ClaimName = requested.ClaimName
 			existing.ServiceAccountName = requested.ServiceAccountName
 			existing.Driver = requested.Driver
@@ -287,7 +289,7 @@ func dataMountBindingRecordFromDomain(binding domain.DataMountBinding, now time.
 		attributes = "{}"
 	}
 	return DataMountBindingRecord{
-		ID: binding.ID, TenantID: optionalID(binding.TenantID), UserID: optionalID(binding.UserID), StorageKey: binding.StorageKey, Scope: string(binding.Scope), SpaceID: string(binding.SpaceID),
+		ID: binding.ID, TenantID: optionalID(binding.TenantID), StorageTenantID: optionalID(binding.StorageTenantID), UserID: optionalID(binding.UserID), StorageKey: binding.StorageKey, Scope: string(binding.Scope), SpaceID: string(binding.SpaceID),
 		ClaimName: binding.ClaimName, ServiceAccountName: binding.ServiceAccountName, Driver: binding.Driver,
 		VolumeAttributesJSON: attributes, RootPrefix: binding.RootPrefix, ReadOnly: binding.ReadOnly,
 		Status: string(binding.Status), CreatedAt: now, UpdatedAt: now,
@@ -300,7 +302,7 @@ func (record DataMountBindingRecord) toDomain() (domain.DataMountBinding, error)
 		attributes = ""
 	}
 	binding := domain.DataMountBinding{
-		ID: record.ID, TenantID: valueOrEmpty(record.TenantID), UserID: valueOrEmpty(record.UserID), StorageKey: record.StorageKey,
+		ID: record.ID, TenantID: valueOrEmpty(record.TenantID), StorageTenantID: valueOrEmpty(record.StorageTenantID), UserID: valueOrEmpty(record.UserID), StorageKey: record.StorageKey,
 		Scope: domain.DataMountScope(record.Scope), SpaceID: domain.DataSpaceID(record.SpaceID), ClaimName: record.ClaimName,
 		ServiceAccountName: record.ServiceAccountName, Driver: record.Driver,
 		VolumeAttributesJSON: attributes, RootPrefix: record.RootPrefix,

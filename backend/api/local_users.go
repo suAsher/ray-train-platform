@@ -232,8 +232,12 @@ func (h *LocalAuthHandler) setPersonalStorageQuota(c *gin.Context) {
 	if storageKey == "" {
 		storageKey = target.ID
 	}
-	h.withLocalUserTenantWrite(c, target.TenantID, func() {
-		quota, err := h.personalStorageQuota.SetPersonalQuota(c.Request.Context(), target.TenantID, storageKey, quotaBytes)
+	storageTenantID := target.StorageTenantID
+	if storageTenantID == "" {
+		storageTenantID = target.TenantID
+	}
+	h.withLocalUserTenantWrite(c, storageTenantID, func() {
+		quota, err := h.personalStorageQuota.SetPersonalQuota(c.Request.Context(), storageTenantID, storageKey, quotaBytes)
 		if err != nil {
 			h.writePersonalStorageQuotaError(c, err)
 			return
@@ -538,7 +542,11 @@ func (h *LocalAuthHandler) listUsers(c *gin.Context) {
 			if storageKey == "" {
 				storageKey = user.ID
 			}
-			if quota, quotaErr := h.personalStorageQuota.GetPersonalQuota(c.Request.Context(), user.TenantID, storageKey); quotaErr == nil {
+			storageTenantID := user.StorageTenantID
+			if storageTenantID == "" {
+				storageTenantID = user.TenantID
+			}
+			if quota, quotaErr := h.personalStorageQuota.GetPersonalQuota(c.Request.Context(), storageTenantID, storageKey); quotaErr == nil {
 				item.StorageQuota = &quota
 			}
 		}

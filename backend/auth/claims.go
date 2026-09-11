@@ -36,13 +36,15 @@ type TokenClaims struct {
 }
 
 type Principal struct {
-	Subject  string
-	Username string
-	Email    string
-	TenantID string
-	Roles    []string
-	AuthType AuthenticationType
-	Scopes   []string
+	Subject         string
+	Username        string
+	Email           string
+	TenantID        string
+	StorageTenantID string
+	StorageKey      string
+	Roles           []string
+	AuthType        AuthenticationType
+	Scopes          []string
 }
 
 func (c TokenClaims) Principal(groupPrefix string) (Principal, error) {

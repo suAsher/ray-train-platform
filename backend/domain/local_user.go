@@ -36,6 +36,7 @@ type LocalUser struct {
 	ID               string    `json:"id"`
 	Username         string    `json:"username"`
 	StorageKey       string    `json:"-"`
+	StorageTenantID  string    `json:"-"`
 	Email            string    `json:"email,omitempty"`
 	TenantID         string    `json:"tenantId"`
 	Roles            []string  `json:"roles"`

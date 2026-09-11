@@ -91,7 +91,14 @@ func newSourceArtifact(input SourceArtifactInput, uploadExpiresAt, now time.Time
 // SourceArtifactRequestObjectKeyForRoot derives a server-unique immutable
 // archive path while retaining the exact persisted owner storage prefix.
 func SourceArtifactRequestObjectKeyForRoot(tenantID, storageRoot, artifactID, digest string) (string, error) {
-	if _, err := PersonalDataSpacesForRoot(tenantID, storageRoot); err != nil {
+	if err := validateDataSpaceIdentity("tenant", tenantID); err != nil {
+		return "", err
+	}
+	storageTenantID, err := PersonalStorageTenantForRoot(storageRoot)
+	if err != nil {
+		return "", fmt.Errorf("source artifact storage root: %w", err)
+	}
+	if _, err := PersonalDataSpacesForStorageHome(tenantID, storageTenantID, storageRoot, DefaultPublicDataRoot); err != nil {
 		return "", fmt.Errorf("source artifact storage root: %w", err)
 	}
 	if !safeObjectKeySegment(artifactID) {
@@ -115,7 +122,14 @@ func SourceArtifactObjectKey(tenantID, userID, digest string) (string, error) {
 // personal storage root. Callers obtain that root only from a persisted
 // DataMountBinding; it is never accepted from an HTTP request.
 func SourceArtifactObjectKeyForRoot(tenantID, storageRoot, digest string) (string, error) {
-	if _, err := PersonalDataSpacesForRoot(tenantID, storageRoot); err != nil {
+	if err := validateDataSpaceIdentity("tenant", tenantID); err != nil {
+		return "", err
+	}
+	storageTenantID, err := PersonalStorageTenantForRoot(storageRoot)
+	if err != nil {
+		return "", fmt.Errorf("source artifact storage root: %w", err)
+	}
+	if _, err := PersonalDataSpacesForStorageHome(tenantID, storageTenantID, storageRoot, DefaultPublicDataRoot); err != nil {
 		return "", fmt.Errorf("source artifact storage root: %w", err)
 	}
 	if !artifactSHA256.MatchString(digest) {
@@ -131,7 +145,11 @@ func sourceArtifactStorageRoot(tenantID, userID, storageRoot string) (string, er
 	if storageRoot == "" {
 		return PersonalDataRootFor(tenantID, userID)
 	}
-	if _, err := PersonalDataSpacesForRoot(tenantID, storageRoot); err != nil {
+	storageTenantID, err := PersonalStorageTenantForRoot(storageRoot)
+	if err != nil {
+		return "", fmt.Errorf("source artifact storage root: %w", err)
+	}
+	if _, err := PersonalDataSpacesForStorageHome(tenantID, storageTenantID, storageRoot, DefaultPublicDataRoot); err != nil {
 		return "", fmt.Errorf("source artifact storage root: %w", err)
 	}
 	return storageRoot, nil
@@ -161,21 +179,23 @@ func SourceArtifactMountedArchivePath(tenantID, key, artifactID, digest string) 
 }
 
 func sourceArtifactArchiveRelativePath(tenantID, key, digest string) (string, error) {
-	prefix := "ray-train/tenants/" + tenantID + "/users/"
 	marker := "/workspace/.ray-train-archives/"
-	if !safeObjectKeySegment(tenantID) || !artifactSHA256.MatchString(digest) || !strings.HasPrefix(key, prefix) {
+	if !safeObjectKeySegment(tenantID) || !artifactSHA256.MatchString(digest) {
 		return "", fmt.Errorf("artifact object key is outside the tenant archive root")
 	}
-	remainder := strings.TrimPrefix(key, prefix)
-	markerIndex := strings.Index(remainder, marker)
+	markerIndex := strings.Index(key, marker)
 	if markerIndex < 1 {
 		return "", fmt.Errorf("artifact object key has no canonical archive root")
 	}
-	storageKey := remainder[:markerIndex]
-	archiveRelative := remainder[markerIndex+len(marker):]
-	if !safeObjectKeySegment(storageKey) {
+	storageRoot := key[:markerIndex] + "/"
+	storageTenantID, err := PersonalStorageTenantForRoot(storageRoot)
+	if err != nil {
 		return "", fmt.Errorf("artifact storage owner is unsafe")
 	}
+	if _, err := PersonalDataSpacesForStorageHome(tenantID, storageTenantID, storageRoot, DefaultPublicDataRoot); err != nil {
+		return "", fmt.Errorf("artifact object key is outside the tenant archive root")
+	}
+	archiveRelative := key[markerIndex+len(marker):]
 	legacy := digest + ".zip"
 	if archiveRelative == legacy {
 		return archiveRelative, nil

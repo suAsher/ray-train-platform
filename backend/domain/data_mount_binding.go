@@ -36,6 +36,7 @@ type DataMountBinding struct {
 	// ownership checks, while the former may be the administrator-approved
 	// username visible in the bucket layout.
 	StorageKey           string                 `json:"-"`
+	StorageTenantID      string                 `json:"-"`
 	Scope                DataMountScope         `json:"scope"`
 	SpaceID              DataSpaceID            `json:"spaceId"`
 	ClaimName            string                 `json:"claimName,omitempty"`
@@ -143,6 +144,11 @@ func (binding DataMountBinding) validateScopeIdentity() error {
 		if err := validateDataSpaceIdentity("tenant", binding.TenantID); err != nil {
 			return err
 		}
+		if binding.StorageTenantID != "" {
+			if err := validateDataSpaceIdentity("storage tenant", binding.StorageTenantID); err != nil {
+				return err
+			}
+		}
 		if err := validateDataSpaceIdentity("user", binding.UserID); err != nil {
 			return err
 		}
@@ -173,7 +179,11 @@ func (binding DataMountBinding) validateExpectedRoot(root string) error {
 		if err := validateDataSpaceIdentity("storage key", storageKey); err != nil {
 			return err
 		}
-		want := personalDataRoot(binding.TenantID, storageKey)
+		storageTenantID := binding.StorageTenantID
+		if storageTenantID == "" {
+			storageTenantID = binding.TenantID
+		}
+		want := personalDataRoot(storageTenantID, storageKey)
 		if root != want {
 			return fmt.Errorf("personal data mount binding root must equal the subject root")
 		}
@@ -243,7 +253,16 @@ func validateFSXAttributes(raw, root string) error {
 // endpoint attributes; a configured path or Secret reference is rejected
 // before a user-specific PV/PVC can be created.
 func NewPersonalDataMountBinding(id, tenantID, userID, claimName, fsxAttributes string, storageKeys ...string) (DataMountBinding, error) {
+	return NewPersonalDataMountBindingForStorageHome(id, tenantID, tenantID, userID, claimName, fsxAttributes, storageKeys...)
+}
+
+// NewPersonalDataMountBindingForStorageHome creates an active-team-local PVC
+// whose TOS path remains rooted in the identity's immutable storage home.
+func NewPersonalDataMountBindingForStorageHome(id, tenantID, storageTenantID, userID, claimName, fsxAttributes string, storageKeys ...string) (DataMountBinding, error) {
 	if err := validateDataSpaceIdentity("tenant", tenantID); err != nil {
+		return DataMountBinding{}, err
+	}
+	if err := validateDataSpaceIdentity("storage tenant", storageTenantID); err != nil {
 		return DataMountBinding{}, err
 	}
 	if err := validateDataSpaceIdentity("user", userID); err != nil {
@@ -274,14 +293,14 @@ func NewPersonalDataMountBinding(id, tenantID, userID, claimName, fsxAttributes 
 			return DataMountBinding{}, fmt.Errorf("FSX volume attributes must not preconfigure a path or secret reference")
 		}
 	}
-	root := personalDataRoot(tenantID, storageKey)
+	root := personalDataRoot(storageTenantID, storageKey)
 	attributes["path"] = "/" + strings.TrimSuffix(root, "/")
 	canonicalAttributes, err := json.Marshal(attributes)
 	if err != nil {
 		return DataMountBinding{}, fmt.Errorf("encode FSX volume attributes: %w", err)
 	}
 	binding := DataMountBinding{
-		ID: id, TenantID: tenantID, UserID: userID, StorageKey: storageKey, Scope: DataMountScopePersonal, SpaceID: DataSpaceWorkspace,
+		ID: id, TenantID: tenantID, StorageTenantID: storageTenantID, UserID: userID, StorageKey: storageKey, Scope: DataMountScopePersonal, SpaceID: DataSpaceWorkspace,
 		ClaimName: claimName, Driver: FSXCSIDriver, VolumeAttributesJSON: string(canonicalAttributes), RootPrefix: root,
 		Status: DataMountBindingPending,
 	}

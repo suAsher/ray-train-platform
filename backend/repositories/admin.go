@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"ray-train-platform-backend/domain"
@@ -113,6 +114,25 @@ func (r *GormRepository) SetTenantGPUQuota(ctx context.Context, tenantID string,
 	}
 	if result.RowsAffected == 0 {
 		return fmt.Errorf("tenant %q was not found", tenantID)
+	}
+	return nil
+}
+
+// SetTenantName changes only the human-readable display name. Stable IDs,
+// namespaces, queues, quotas and historical references are untouched.
+func (r *GormRepository) SetTenantName(ctx context.Context, tenantID, name string) error {
+	tenantID, name = strings.TrimSpace(tenantID), strings.TrimSpace(name)
+	if name == "" || len([]rune(name)) > 128 {
+		return fmt.Errorf("tenant name must be between 1 and 128 characters")
+	}
+	result := r.db.WithContext(ctx).Model(&TenantRecord{}).
+		Where("id = ? AND retired_at IS NULL", tenantID).
+		Updates(map[string]any{"name": name, "updated_at": time.Now().UTC()})
+	if result.Error != nil {
+		return fmt.Errorf("rename tenant: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return ErrTenantNotFound
 	}
 	return nil
 }

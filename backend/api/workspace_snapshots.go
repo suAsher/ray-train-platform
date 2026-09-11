@@ -97,7 +97,7 @@ func (h *Handler) createWorkspaceSnapshot(c *gin.Context) {
 		h.writeError(c, http.StatusServiceUnavailable, "WORKSPACE_SNAPSHOTS_UNAVAILABLE", "could not resolve your workspace storage")
 		return
 	}
-	prefix, err := domain.WorkspaceSnapshotPrefixForRoot(principal.TenantID, root, id)
+	prefix, err := domain.WorkspaceSnapshotPrefixForRoot(StorageTenantForPrincipal(principal), root, id)
 	if err != nil {
 		h.writeError(c, http.StatusInternalServerError, "WORKSPACE_SNAPSHOTS_UNAVAILABLE", "could not prepare workspace version")
 		return

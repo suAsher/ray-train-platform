@@ -14,8 +14,9 @@ import (
 )
 
 var (
-	ErrMembershipNotFound = errors.New("tenant membership not found")
-	ErrLastMembership     = errors.New("the last active membership cannot be disabled")
+	ErrMembershipNotFound  = errors.New("tenant membership not found")
+	ErrLastMembership      = errors.New("the last active membership cannot be disabled")
+	ErrActiveTenantChanged = errors.New("active tenant changed")
 )
 
 type TenantMembershipRecord struct {
@@ -128,6 +129,66 @@ func (r *GormRepository) SetActiveTenant(ctx context.Context, identityID, tenant
 			return fmt.Errorf("switch active tenant: %w", result.Error)
 		}
 		if result.RowsAffected == 0 {
+			return ErrLocalUserNotFound
+		}
+		return nil
+	})
+}
+
+// ReassignActiveMembership atomically activates the target membership,
+// switches the identity, and optionally deactivates every previous team.
+func (r *GormRepository) ReassignActiveMembership(ctx context.Context, identityID, expectedTenantID, targetTenantID string, roles []string, deactivateOthers bool) error {
+	identityID = strings.TrimSpace(identityID)
+	expectedTenantID = strings.TrimSpace(expectedTenantID)
+	targetTenantID = strings.TrimSpace(targetTenantID)
+	encodedRoles, err := encodeMembershipRoles(roles)
+	if err != nil {
+		return err
+	}
+	for _, role := range roles {
+		if strings.EqualFold(strings.TrimSpace(role), domain.RoleSuperAdmin) {
+			return fmt.Errorf("SuperAdmin is a global role")
+		}
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockIdentityTenantFence(tx, targetTenantID); err != nil {
+			return err
+		}
+		if err := requireActiveIdentityTenant(tx, targetTenantID, true); err != nil {
+			return ErrMembershipNotFound
+		}
+		var account LocalUserRecord
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND disabled = FALSE AND decommissioned_at IS NULL", identityID).First(&account).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrLocalUserNotFound
+			}
+			return err
+		}
+		if expectedTenantID == "" || account.activeTenantID() != expectedTenantID {
+			return ErrActiveTenantChanged
+		}
+		now := time.Now().UTC()
+		target := TenantMembershipRecord{IdentityID: identityID, TenantID: targetTenantID, RolesJSON: encodedRoles, Status: string(domain.MembershipStatusActive), CreatedAt: now, UpdatedAt: now}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "identity_id"}, {Name: "tenant_id"}},
+			DoUpdates: clause.Assignments(map[string]any{"roles": encodedRoles, "status": domain.MembershipStatusActive, "updated_at": now}),
+		}).Create(&target).Error; err != nil {
+			return err
+		}
+		if err := ensureIdentityTenantOwnership(tx, identityID, targetTenantID, now); err != nil {
+			return err
+		}
+		if deactivateOthers {
+			if err := tx.Model(&TenantMembershipRecord{}).Where("identity_id = ? AND tenant_id <> ? AND status = ?", identityID, targetTenantID).
+				Updates(map[string]any{"status": domain.MembershipStatusInactive, "updated_at": now}).Error; err != nil {
+				return err
+			}
+		}
+		result := tx.Model(&LocalUserRecord{}).Where("id = ?", identityID).Updates(map[string]any{"active_tenant_id": targetTenantID, "updated_at": now})
+		if result.Error != nil {
+			return fmt.Errorf("reassign active tenant: %w", result.Error)
+		}
+		if result.RowsAffected != 1 {
 			return ErrLocalUserNotFound
 		}
 		return nil

@@ -250,7 +250,7 @@ func (handler *SourceArtifactHandler) resolveRequest(c *gin.Context) {
 func (handler *SourceArtifactHandler) personalSourceArtifactRoot(ctx context.Context, principal auth.Principal) (string, error) {
 	store, ok := handler.repository.(sourceArtifactDataBindingStore)
 	if !ok {
-		return domain.PersonalDataRootFor(principal.TenantID, principal.Subject)
+		return domain.PersonalDataRootFor(StorageTenantForPrincipal(principal), StorageKeyForPrincipal(principal))
 	}
 	bindings, err := store.ListDataBindings(ctx, principal.TenantID, principal.Subject)
 	if err != nil {
@@ -260,12 +260,16 @@ func (handler *SourceArtifactHandler) personalSourceArtifactRoot(ctx context.Con
 		if binding.Scope != domain.DataMountScopePersonal || binding.SpaceID != domain.DataSpaceWorkspace || binding.UserID != principal.Subject || binding.TenantID != principal.TenantID || binding.RootPrefix == "" {
 			continue
 		}
-		if _, err := domain.PersonalDataSpacesForRoot(principal.TenantID, binding.RootPrefix); err != nil {
+		storageTenantID := binding.StorageTenantID
+		if storageTenantID == "" {
+			storageTenantID = StorageTenantForPrincipal(principal)
+		}
+		if _, err := domain.PersonalDataSpacesForStorageHome(principal.TenantID, storageTenantID, binding.RootPrefix, domain.DefaultPublicDataRoot); err != nil {
 			return "", err
 		}
 		return binding.RootPrefix, nil
 	}
-	return domain.PersonalDataRootFor(principal.TenantID, principal.Subject)
+	return domain.PersonalDataRootFor(StorageTenantForPrincipal(principal), StorageKeyForPrincipal(principal))
 }
 
 func (handler *SourceArtifactHandler) complete(c *gin.Context) {

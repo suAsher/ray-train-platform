@@ -51,7 +51,11 @@ func WorkspaceSnapshotPrefix(tenantID, userID, id string) (string, error) {
 // persisted personal data root used by a workload. This lets account IDs stay
 // opaque while a stable storage key controls the physical bucket layout.
 func WorkspaceSnapshotPrefixForRoot(tenantID, personalRoot, id string) (string, error) {
-	if _, err := PersonalDataSpacesForRoot(tenantID, personalRoot); err != nil {
+	storageTenantID, err := PersonalStorageTenantForRoot(personalRoot)
+	if err != nil {
+		return "", err
+	}
+	if _, err := PersonalDataSpacesForStorageHome(tenantID, storageTenantID, personalRoot, DefaultPublicDataRoot); err != nil {
 		return "", err
 	}
 	if !snapshotID.MatchString(strings.TrimSpace(id)) {

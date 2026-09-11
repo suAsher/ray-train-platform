@@ -66,7 +66,7 @@ func (r *GormRepository) toLocalUser(record LocalUserRecord) (domain.LocalUser, 
 		}
 	}
 	return domain.LocalUser{
-		ID: record.ID, Username: record.Username, StorageKey: record.StorageKey, Email: record.Email, TenantID: record.TenantID,
+		ID: record.ID, Username: record.Username, StorageKey: record.StorageKey, StorageTenantID: record.TenantID, Email: record.Email, TenantID: record.TenantID,
 		Roles: roles, Disabled: record.Disabled, PasswordHash: record.PasswordHash,
 		IdentityProvider: normalizeIdentityProvider(record.IdentityProvider),
 		CreatedAt:        record.CreatedAt, UpdatedAt: record.UpdatedAt,
@@ -467,7 +467,7 @@ func (r *GormRepository) FindLocalSessionByPublicID(ctx context.Context, publicI
 		Digest:   record.TokenDigest,
 		Principal: auth.Principal{
 			Subject: user.ID, Username: user.Username, Email: user.Email,
-			TenantID: user.TenantID, Roles: user.Roles,
+			TenantID: user.TenantID, StorageTenantID: user.StorageTenantID, StorageKey: user.StorageKey, Roles: user.Roles,
 		},
 		ExpiresAt:    record.ExpiresAt,
 		RevokedAt:    record.RevokedAt,

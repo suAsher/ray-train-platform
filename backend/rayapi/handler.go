@@ -340,12 +340,16 @@ func (handler *Handler) personalSourceArtifactRoot(ctx context.Context, principa
 		if binding.Scope != domain.DataMountScopePersonal || binding.SpaceID != domain.DataSpaceWorkspace || binding.UserID != principal.Subject || binding.TenantID != principal.TenantID || binding.RootPrefix == "" {
 			continue
 		}
-		if _, err := domain.PersonalDataSpacesForRoot(principal.TenantID, binding.RootPrefix); err != nil {
+		storageTenantID := binding.StorageTenantID
+		if storageTenantID == "" {
+			storageTenantID = api.StorageTenantForPrincipal(principal)
+		}
+		if _, err := domain.PersonalDataSpacesForStorageHome(principal.TenantID, storageTenantID, binding.RootPrefix, domain.DefaultPublicDataRoot); err != nil {
 			return "", err
 		}
 		return binding.RootPrefix, nil
 	}
-	return domain.PersonalDataRootFor(principal.TenantID, api.StorageKeyForPrincipal(principal))
+	return domain.PersonalDataRootFor(api.StorageTenantForPrincipal(principal), api.StorageKeyForPrincipal(principal))
 }
 
 func (handler *Handler) writeUploadBusy(c *gin.Context, retryAfter time.Duration) {

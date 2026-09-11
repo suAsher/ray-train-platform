@@ -24,7 +24,7 @@ func (initializer personalDataSpaceInitializer) EnsurePersonalDataSpace(ctx cont
 	if initializer.directories == nil {
 		return objectstore.ErrUnavailable
 	}
-	root, err := domain.PersonalDataRootFor(principal.TenantID, StorageKeyForPrincipal(principal))
+	root, err := domain.PersonalDataRootFor(StorageTenantForPrincipal(principal), StorageKeyForPrincipal(principal))
 	if err != nil {
 		return fmt.Errorf("derive personal data space: %w", err)
 	}

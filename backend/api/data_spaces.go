@@ -310,7 +310,7 @@ func (h *Handler) newPersonalDataBinding(id string, principal auth.Principal) (d
 		}, nil
 	}
 	claimName := "data-" + sanitizeDNS(id)
-	return domain.NewPersonalDataMountBinding(id, principal.TenantID, principal.Subject, claimName, h.dataSpacesFSXAttrs, StorageKeyForPrincipal(principal))
+	return domain.NewPersonalDataMountBindingForStorageHome(id, principal.TenantID, StorageTenantForPrincipal(principal), principal.Subject, claimName, h.dataSpacesFSXAttrs, StorageKeyForPrincipal(principal))
 }
 
 func (h *Handler) ensurePersonalDataMount(ctx context.Context, binding domain.DataMountBinding) {
@@ -587,11 +587,23 @@ func (h *Handler) dataSpaceForPrincipal(c *gin.Context, principal auth.Principal
 // different TOS prefix. Invalid IdP display names deliberately fall back to
 // the opaque subject rather than creating an unsafe object path.
 func StorageKeyForPrincipal(principal auth.Principal) string {
+	if storageKey := strings.TrimSpace(principal.StorageKey); storageKey != "" && domain.ValidateUsername(storageKey) == nil {
+		return storageKey
+	}
 	username := domain.NormalizeUsername(principal.Username)
 	if domain.ValidateUsername(username) == nil {
 		return username
 	}
 	return principal.Subject
+}
+
+// StorageTenantForPrincipal returns the immutable home used by personal TOS
+// data. Older principals fall back to their active tenant for compatibility.
+func StorageTenantForPrincipal(principal auth.Principal) string {
+	if tenantID := strings.TrimSpace(principal.StorageTenantID); tenantID != "" {
+		return tenantID
+	}
+	return principal.TenantID
 }
 
 func (h *Handler) personalDataRootForPrincipal(ctx context.Context, principal auth.Principal) (string, error) {
@@ -604,13 +616,17 @@ func (h *Handler) personalDataRootForPrincipal(ctx context.Context, principal au
 			if binding.Scope != domain.DataMountScopePersonal || binding.SpaceID != domain.DataSpaceWorkspace || binding.TenantID != principal.TenantID || binding.UserID != principal.Subject || binding.RootPrefix == "" {
 				continue
 			}
-			if _, err := domain.PersonalDataSpacesForRoot(principal.TenantID, binding.RootPrefix); err != nil {
+			storageTenantID := binding.StorageTenantID
+			if storageTenantID == "" {
+				storageTenantID = StorageTenantForPrincipal(principal)
+			}
+			if _, err := domain.PersonalDataSpacesForStorageHome(principal.TenantID, storageTenantID, binding.RootPrefix, domain.DefaultPublicDataRoot); err != nil {
 				return "", fmt.Errorf("validate personal data binding root: %w", err)
 			}
 			return binding.RootPrefix, nil
 		}
 	}
-	return domain.PersonalDataRootFor(principal.TenantID, StorageKeyForPrincipal(principal))
+	return domain.PersonalDataRootFor(StorageTenantForPrincipal(principal), StorageKeyForPrincipal(principal))
 }
 
 func (h *Handler) personalDataSpacesForPrincipal(ctx context.Context, principal auth.Principal) ([]domain.DataSpace, error) {
@@ -622,7 +638,7 @@ func (h *Handler) personalDataSpacesForPrincipal(ctx context.Context, principal 
 	if err != nil {
 		return nil, err
 	}
-	return domain.PersonalDataSpacesForRoots(principal.TenantID, root, publicRoot)
+	return domain.PersonalDataSpacesForStorageHome(principal.TenantID, StorageTenantForPrincipal(principal), root, publicRoot)
 }
 
 func (h *Handler) publicDataRootForTenant(tenantID string) (string, error) {

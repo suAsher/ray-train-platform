@@ -113,7 +113,7 @@ func (r *GormRepository) FindPATByPublicID(ctx context.Context, publicID string)
 	}
 	return auth.PATRecord{
 		PublicID: token.PublicID, Digest: token.TokenDigest,
-		Principal: auth.Principal{Subject: account.ID, Username: account.Username, Email: account.Email, TenantID: token.TenantID, Roles: roles},
+		Principal: auth.Principal{Subject: account.ID, Username: account.Username, Email: account.Email, TenantID: token.TenantID, StorageTenantID: account.TenantID, StorageKey: account.StorageKey, Roles: roles},
 		Scopes:    scopes, ExpiresAt: token.ExpiresAt, RevokedAt: token.RevokedAt, LastUsedAt: token.LastUsedAt,
 	}, nil
 }
@@ -164,7 +164,7 @@ func (r *GormRepository) findLegacyPATOwner(ctx context.Context, token PersonalA
 	return auth.PATRecord{
 		PublicID: token.PublicID, Digest: token.TokenDigest,
 		Principal: auth.Principal{Subject: user.ID, Username: user.Username, Email: user.Email, TenantID: token.TenantID, Roles: roles},
-		Scopes: scopes, ExpiresAt: token.ExpiresAt, RevokedAt: token.RevokedAt, LastUsedAt: token.LastUsedAt,
+		Scopes:    scopes, ExpiresAt: token.ExpiresAt, RevokedAt: token.RevokedAt, LastUsedAt: token.LastUsedAt,
 	}, nil
 }
 

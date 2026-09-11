@@ -100,7 +100,8 @@ func authenticateOAuth2ProxyAccount(c *gin.Context, oidc OIDCIdentityVerifier, a
 	}
 	principal := Principal{
 		Subject: account.ID, Username: account.Username, Email: email,
-		TenantID: account.TenantID, Roles: append([]string(nil), account.Roles...),
+		TenantID: account.TenantID, StorageTenantID: account.StorageTenantID, StorageKey: account.StorageKey,
+		Roles:    append([]string(nil), account.Roles...),
 		AuthType: AuthTypeOAuth2Proxy,
 	}
 	setPrincipal(c, principal)

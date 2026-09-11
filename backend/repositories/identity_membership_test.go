@@ -96,7 +96,7 @@ func TestActiveTeamChangePreservesPersonalStorageHome(t *testing.T) {
 	if err := repository.SetActiveTenant(context.Background(), "user-a", "team-b"); err != nil {
 		t.Fatalf("switch active team: %v", err)
 	}
-	user, err := repository.GetLocalUser(context.Background(), "user-a")
+	user, err := repository.FindLocalUserByID(context.Background(), "user-a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestReassignActiveMembershipIsAtomicAndDeactivatesPreviousTeams(t *testing.
 	if statuses["team-a"] != domain.MembershipStatusInactive || statuses["team-b"] != domain.MembershipStatusActive {
 		t.Fatalf("unexpected membership statuses: %#v", statuses)
 	}
-	user, err := repository.GetLocalUser(context.Background(), "user-a")
+	user, err := repository.FindLocalUserByID(context.Background(), "user-a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,11 +139,25 @@ func TestReassignActiveMembershipRejectsStaleSourceWithoutPartialChange(t *testi
 	if !errors.Is(err, ErrActiveTenantChanged) {
 		t.Fatalf("error=%v, want stale active-team error", err)
 	}
-	user, lookupErr := repository.GetLocalUser(context.Background(), "user-a")
+	user, lookupErr := repository.FindLocalUserByID(context.Background(), "user-a")
 	if lookupErr != nil {
 		t.Fatal(lookupErr)
 	}
 	if user.TenantID != "team-a" {
 		t.Fatalf("stale request changed active team: %+v", user)
+	}
+}
+
+func TestRenameTenantChangesOnlyDisplayName(t *testing.T) {
+	repository := identityMembershipRepository(t)
+	if err := repository.SetTenantName(context.Background(), "team-a", "感知应用算法团队"); err != nil {
+		t.Fatal(err)
+	}
+	var tenant TenantRecord
+	if err := repository.db.Where("id = ?", "team-a").First(&tenant).Error; err != nil {
+		t.Fatal(err)
+	}
+	if tenant.Name != "感知应用算法团队" || tenant.ID != "team-a" || tenant.Namespace != "tenant-team-a" || tenant.LocalQueue != "team-a-gpu" {
+		t.Fatalf("rename changed stable tenant fields: %+v", tenant)
 	}
 }

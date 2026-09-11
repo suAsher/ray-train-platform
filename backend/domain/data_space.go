@@ -101,22 +101,54 @@ func PersonalDataSpacesForRoot(tenantID, personalRoot string) ([]DataSpace, erro
 // HTTP request: it comes only from the deployment's governed data-space
 // configuration. This keeps a temporary migration root tenant-confined.
 func PersonalDataSpacesForRoots(tenantID, personalRoot, publicRoot string) ([]DataSpace, error) {
-	if err := validateDataSpaceIdentity("tenant", tenantID); err != nil {
+	return PersonalDataSpacesForStorageHome(tenantID, tenantID, personalRoot, publicRoot)
+}
+
+// PersonalDataSpacesForStorageHome keeps personal storage attached to a
+// stable identity home while team-shared and public views follow activeTenantID.
+func PersonalDataSpacesForStorageHome(activeTenantID, storageTenantID, personalRoot, publicRoot string) ([]DataSpace, error) {
+	if err := validateDataSpaceIdentity("tenant", activeTenantID); err != nil {
 		return nil, err
 	}
-	prefix := "ray-train/tenants/" + tenantID + "/users/"
+	if err := validateDataSpaceIdentity("storage tenant", storageTenantID); err != nil {
+		return nil, err
+	}
+	prefix := "ray-train/tenants/" + storageTenantID + "/users/"
 	if !strings.HasPrefix(personalRoot, prefix) || !strings.HasSuffix(personalRoot, "/") {
 		return nil, fmt.Errorf("personal data root is outside the tenant")
 	}
 	storageKey := strings.TrimSuffix(strings.TrimPrefix(personalRoot, prefix), "/")
-	if err := validateDataSpaceIdentity("storage key", storageKey); err != nil || personalRoot != personalDataRoot(tenantID, storageKey) {
+	if err := validateDataSpaceIdentity("storage key", storageKey); err != nil || personalRoot != personalDataRoot(storageTenantID, storageKey) {
 		return nil, fmt.Errorf("personal data root is invalid")
 	}
-	normalizedPublicRoot, err := PublicDataRootForTenant(tenantID, publicRoot)
+	normalizedPublicRoot, err := PublicDataRootForTenant(activeTenantID, publicRoot)
 	if err != nil {
 		return nil, err
 	}
-	return personalDataSpacesForRoot(tenantID, personalRoot, normalizedPublicRoot)
+	return personalDataSpacesForRoot(activeTenantID, personalRoot, normalizedPublicRoot)
+}
+
+// PersonalStorageTenantForRoot returns the storage-home tenant encoded in a
+// canonical platform-owned personal root. It never accepts an arbitrary path.
+func PersonalStorageTenantForRoot(personalRoot string) (string, error) {
+	normalized, err := normalizeStorageRoot(personalRoot)
+	if err != nil {
+		return "", err
+	}
+	parts := strings.Split(strings.TrimSuffix(normalized, "/"), "/")
+	if len(parts) != 5 || parts[0] != "ray-train" || parts[1] != "tenants" || parts[3] != "users" {
+		return "", fmt.Errorf("personal data root is invalid")
+	}
+	if err := validateDataSpaceIdentity("storage tenant", parts[2]); err != nil {
+		return "", err
+	}
+	if err := validateDataSpaceIdentity("storage key", parts[4]); err != nil {
+		return "", err
+	}
+	if normalized != personalDataRoot(parts[2], parts[4]) {
+		return "", fmt.Errorf("personal data root is invalid")
+	}
+	return parts[2], nil
 }
 
 func personalDataSpacesForRoot(tenantID, personalRoot, publicRoot string) ([]DataSpace, error) {
