@@ -90,6 +90,9 @@ func (spec JobSpec) validateScheduling() error {
 		if !spec.HasRecoverableCheckpointPolicy() {
 			return fmt.Errorf("opportunistic jobs require managed Ray Train checkpoint recovery")
 		}
+		if spec.Resources.WorkerReplicas != 1 || spec.Resources.GPUsPerWorker != 1 {
+			return fmt.Errorf("opportunistic jobs must use exactly one worker and one GPU")
+		}
 	}
 	return nil
 }

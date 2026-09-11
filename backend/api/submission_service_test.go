@@ -129,6 +129,51 @@ func TestSubmissionRejectsManagedCheckpointOverflowBeforePortalOrNativePersisten
 	}
 }
 
+func TestSubmissionGatesOpportunisticJobsUntilSafePreemptionIsEnabled(t *testing.T) {
+	reference := "harbor.example/ray-runtime:production"
+	image := domain.PlatformImage{
+		ID: "managed-image", Name: "Ray managed", Kind: domain.ImageKindTraining, Reference: reference,
+		RayVersion: domain.RayVersionProduction, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayTrain},
+	}
+	principal := auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal}
+	spec := submissionSpec(reference)
+	spec.TrainingEngine = domain.TrainingEngineRayTrain
+	spec.Priority = string(domain.WorkloadPriorityOpportunistic)
+	spec.Preemptible = true
+	spec.Managed = domain.ManagedTrainingPolicy{
+		MaxFailures: 2,
+		Checkpoint:  domain.CheckpointPolicy{EveryEpochs: 1, KeepLatest: 2},
+	}
+
+	for _, test := range []struct {
+		name              string
+		preemptionEnabled bool
+		wantDisabledError bool
+	}{
+		{name: "disabled rejects", wantDisabledError: true},
+		{name: "enabled accepts", preemptionEnabled: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &submissionServiceRepository{}
+			service := NewSubmissionService(repository, SubmissionServiceOptions{
+				Images:            &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{image}}},
+				RuntimePolicy:     runtimecatalog.Policy{ManagedEnabled: true},
+				PreemptionEnabled: test.preemptionEnabled,
+			})
+			_, err := service.Submit(context.Background(), SubmissionInput{Principal: principal, Spec: spec, Origin: domain.SubmissionOriginPortal})
+			if test.wantDisabledError {
+				if !errors.Is(err, ErrSubmissionPreemptionDisabled) || repository.created != nil {
+					t.Fatalf("disabled preemption reached persistence: job=%+v err=%v", repository.created, err)
+				}
+				return
+			}
+			if err != nil || repository.created == nil {
+				t.Fatalf("enabled opportunistic submission failed: job=%+v err=%v", repository.created, err)
+			}
+		})
+	}
+}
+
 func TestSubmissionRejectsUnsafeManagedEntrypointBeforePersistence(t *testing.T) {
 	reference := "harbor.example/ray-runtime:production"
 	image := domain.PlatformImage{

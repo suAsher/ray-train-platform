@@ -80,6 +80,20 @@ func TestSetTenantGPUQuotaRejectsNegativeLimit(t *testing.T) {
 	}
 }
 
+func TestTenantAcceleratorClassRoundTrip(t *testing.T) {
+	repo := testRepository(t)
+	if err := repo.SetTenantAcceleratorClass(context.Background(), "tenant-a", domain.AcceleratorA800); err != nil {
+		t.Fatalf("set accelerator class: %v", err)
+	}
+	got, err := repo.TenantAcceleratorClass(context.Background(), "tenant-a")
+	if err != nil || got != domain.AcceleratorA800 {
+		t.Fatalf("accelerator class=%q err=%v", got, err)
+	}
+	if summary := tenantSummaryForTest(t, repo, "tenant-a"); summary.AcceleratorClass != domain.AcceleratorA800 {
+		t.Fatalf("summary accelerator=%q", summary.AcceleratorClass)
+	}
+}
+
 func tenantSummaryForTest(t *testing.T, repo *GormRepository, tenantID string) TenantSummary {
 	t.Helper()
 	summaries, err := repo.ListTenantSummaries(context.Background())

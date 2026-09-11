@@ -8,6 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
+	"ray-train-platform-backend/domain"
 )
 
 func trainingNode(name string, labels map[string]string, gpus, cpu, memory string) *corev1.Node {
@@ -56,6 +57,27 @@ func TestTrainingPoolCapacitySumsMatchingNodes(t *testing.T) {
 	}
 	if capacity.Nodes != 3 {
 		t.Fatalf("expected 3 nodes, got %d", capacity.Nodes)
+	}
+}
+
+func TestTrainingPoolCapacitiesSeparatesAcceleratorClasses(t *testing.T) {
+	client := &Client{kubernetes: fake.NewSimpleClientset(
+		trainingNode("gpu-4090", map[string]string{"accelerator": "nvidia-rtx-4090", "platform.wellspiking.ai/gpu-pool": "production"}, "8", "64", "512Gi"),
+		trainingNode("gpu-a100", map[string]string{"accelerator": "nvidia-a100", "platform.wellspiking.ai/gpu-pool": "production"}, "4", "48", "256Gi"),
+	)}
+
+	capacities, err := client.TrainingPoolCapacities(context.Background(), map[string]string{"platform.wellspiking.ai/gpu-pool": "production"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := capacities[domain.AcceleratorRTX4090]; got.Nodes != 1 || got.GPUs != 8 {
+		t.Fatalf("4090 capacity=%+v", got)
+	}
+	if got := capacities[domain.AcceleratorA100]; got.Nodes != 1 || got.GPUs != 4 {
+		t.Fatalf("A100 capacity=%+v", got)
+	}
+	if got := capacities[domain.AcceleratorA800]; got != (TrainingPoolCapacity{}) {
+		t.Fatalf("missing A800 must have zero capacity, got %+v", got)
 	}
 }
 

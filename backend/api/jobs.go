@@ -109,6 +109,8 @@ type Handler struct {
 	mlflowDashboardNow       func() time.Time
 	mlflowDashboardRandom    io.Reader
 	jobWorkerConnector       jobWorkerConnector
+	tenantScheduling         TenantSchedulingStore
+	preemptionEnabled        bool
 }
 
 type LogProvider interface {
@@ -194,6 +196,8 @@ type Options struct {
 	MLflowDashboardRandom      io.Reader
 	LocalCache                 LocalCachePolicy
 	RuntimePolicy              runtimecatalog.Policy
+	TenantScheduling           TenantSchedulingStore
+	PreemptionEnabled          bool
 }
 
 func NewHandler(repository JobRepository, options Options) *Handler {
@@ -201,7 +205,10 @@ func NewHandler(repository JobRepository, options Options) *Handler {
 	for space, source := range options.IDCDataSpaceSources {
 		idcSources[space] = source
 	}
-	handler := &Handler{repository: repository, logs: options.Logs, metrics: options.Metrics, experiments: options.Experiments, allowAnonymous: options.AllowAnonymous, imageAllowlist: append([]string(nil), options.ImageAllowlist...), gitAllowlist: append([]string(nil), options.GitAllowlist...), workspaces: options.Workspaces, kubernetes: options.Kubernetes, workspaceImage: options.WorkspaceImage, rayVersion: options.RayVersion, serviceAccount: options.ServiceAccount, imagePullSecrets: append([]string(nil), options.ImagePullSecrets...), platformNamespace: strings.TrimSpace(options.PlatformNamespace), idcClaim: options.IDCClaim, idcMountPath: options.IDCMountPath, clusterQueue: options.KueueClusterQueue, admin: options.Admin, gpuAllocations: options.GPUAllocations, quota: options.Quota, memberships: options.Memberships, workspacePepper: append([]byte(nil), options.WorkspacePepper...), trainingNodeSelector: options.TrainingNodeSelector, images: options.Images, gitCredentials: options.GitCredentials, storageAssets: options.StorageAssets, datasets: options.Datasets, datasetPublications: options.DatasetPublications, datasetInternalPrefix: strings.TrimSuffix(strings.TrimSpace(options.DatasetInternalPrefix), "/"), datasetVersioningEnabled: options.DatasetVersioningEnabled, rayDataStreamingEnabled: options.RayDataStreamingEnabled, dataSpaces: options.DataSpaces, dataSpacesEnabled: options.DataSpacesEnabled, dataSpacesFSXAttrs: options.DataSpacesFSXAttributes, dataSpacesCapacity: options.DataSpacesMountCapacity, dataSpacesPublicRoot: strings.TrimSpace(options.DataSpacesPublicRoot), idcDataSpacesEnabled: options.IDCDataSpacesEnabled, idcDataSpacesCapacity: options.IDCDataSpacesMountCapacity, idcDataSpaceSources: idcSources, directoryLister: options.DirectoryLister, directoryInitializer: options.DirectoryInitializer, dataObjectStore: options.DataObjectStore, dataSpaceUploads: options.DataSpaceUploads, workspaceSnapshotStore: options.WorkspaceSnapshotStore, workspaceSnapshots: options.WorkspaceSnapshots, idcSyncCallbacks: options.IDCDataSyncCallbacks, idcSyncCallbackKey: append([]byte(nil), options.IDCDataSyncCallbackKey...), idcSyncManager: options.IDCDataSyncManager, artifactLister: options.ArtifactLister, artifactReader: options.ArtifactReader, gitCredentialTester: options.GitCredentialTester, gitRefResolver: options.GitRefResolver, newID: newJobID, mlflowDashboardEnabled: options.MLflowDashboardEnabled, mlflowDashboardStore: options.MLflowDashboardStore, mlflowTrackingURL: strings.TrimSpace(options.MLflowTrackingURL), mlflowPublicOrigin: strings.TrimSpace(options.MLflowPublicOrigin), mlflowDashboardPepper: append([]byte(nil), options.MLflowDashboardPepper...), mlflowDashboardTTL: options.MLflowDashboardSessionTTL, mlflowDashboardNow: options.MLflowDashboardNow, mlflowDashboardRandom: options.MLflowDashboardRandom}
+	handler := &Handler{repository: repository, logs: options.Logs, metrics: options.Metrics, experiments: options.Experiments, allowAnonymous: options.AllowAnonymous, imageAllowlist: append([]string(nil), options.ImageAllowlist...), gitAllowlist: append([]string(nil), options.GitAllowlist...), workspaces: options.Workspaces, kubernetes: options.Kubernetes, workspaceImage: options.WorkspaceImage, rayVersion: options.RayVersion, serviceAccount: options.ServiceAccount, imagePullSecrets: append([]string(nil), options.ImagePullSecrets...), platformNamespace: strings.TrimSpace(options.PlatformNamespace), idcClaim: options.IDCClaim, idcMountPath: options.IDCMountPath, clusterQueue: options.KueueClusterQueue, admin: options.Admin, gpuAllocations: options.GPUAllocations, quota: options.Quota, memberships: options.Memberships, workspacePepper: append([]byte(nil), options.WorkspacePepper...), trainingNodeSelector: options.TrainingNodeSelector, images: options.Images, gitCredentials: options.GitCredentials, storageAssets: options.StorageAssets, datasets: options.Datasets, datasetPublications: options.DatasetPublications, datasetInternalPrefix: strings.TrimSuffix(strings.TrimSpace(options.DatasetInternalPrefix), "/"), datasetVersioningEnabled: options.DatasetVersioningEnabled, rayDataStreamingEnabled: options.RayDataStreamingEnabled, dataSpaces: options.DataSpaces, dataSpacesEnabled: options.DataSpacesEnabled, dataSpacesFSXAttrs: options.DataSpacesFSXAttributes, dataSpacesCapacity: options.DataSpacesMountCapacity, dataSpacesPublicRoot: strings.TrimSpace(options.DataSpacesPublicRoot), idcDataSpacesEnabled: options.IDCDataSpacesEnabled, idcDataSpacesCapacity: options.IDCDataSpacesMountCapacity, idcDataSpaceSources: idcSources, directoryLister: options.DirectoryLister, directoryInitializer: options.DirectoryInitializer, dataObjectStore: options.DataObjectStore, dataSpaceUploads: options.DataSpaceUploads, workspaceSnapshotStore: options.WorkspaceSnapshotStore, workspaceSnapshots: options.WorkspaceSnapshots, idcSyncCallbacks: options.IDCDataSyncCallbacks, idcSyncCallbackKey: append([]byte(nil), options.IDCDataSyncCallbackKey...), idcSyncManager: options.IDCDataSyncManager, artifactLister: options.ArtifactLister, artifactReader: options.ArtifactReader, gitCredentialTester: options.GitCredentialTester, gitRefResolver: options.GitRefResolver, newID: newJobID, mlflowDashboardEnabled: options.MLflowDashboardEnabled, mlflowDashboardStore: options.MLflowDashboardStore, mlflowTrackingURL: strings.TrimSpace(options.MLflowTrackingURL), mlflowPublicOrigin: strings.TrimSpace(options.MLflowPublicOrigin), mlflowDashboardPepper: append([]byte(nil), options.MLflowDashboardPepper...), mlflowDashboardTTL: options.MLflowDashboardSessionTTL, mlflowDashboardNow: options.MLflowDashboardNow, mlflowDashboardRandom: options.MLflowDashboardRandom, tenantScheduling: options.TenantScheduling, preemptionEnabled: options.PreemptionEnabled}
+	if handler.tenantScheduling == nil {
+		handler.tenantScheduling, _ = repository.(TenantSchedulingStore)
+	}
 	if handler.jobWorkerConnector == nil && handler.kubernetes != nil {
 		handler.jobWorkerConnector = handler.kubernetes
 	}
@@ -260,6 +267,8 @@ func NewHandler(repository JobRepository, options Options) *Handler {
 		DatasetInternalPrefix:    handler.datasetInternalPrefix,
 		LocalCache:               handler.localCache,
 		RuntimePolicy:            handler.runtimePolicy,
+		Scheduling:               handler.tenantScheduling,
+		PreemptionEnabled:        handler.preemptionEnabled,
 		EnsureTenantRuntime: func(ctx context.Context, tenantID, namespace, queue, clusterQueue string) error {
 			if err := handler.ensureTenantNamespaceAndPullSecrets(ctx, tenantID, namespace); err != nil {
 				return err
@@ -464,6 +473,10 @@ func (h *Handler) writeSubmissionError(c *gin.Context, principal auth.Principal,
 		h.writeError(c, http.StatusBadRequest, "DATASET_INTERNAL_PATH_FORBIDDEN", "internal dataset paths are managed by the platform")
 	case errors.Is(err, ErrSubmissionQueueNotAllowed):
 		h.writeError(c, http.StatusBadRequest, "QUEUE_NOT_ALLOWED", "jobs may only use the authenticated tenant queue")
+	case errors.Is(err, ErrSubmissionSchedulingUnavailable):
+		h.writeError(c, http.StatusServiceUnavailable, "TENANT_SCHEDULING_UNAVAILABLE", "the team's GPU pool is not configured")
+	case errors.Is(err, ErrSubmissionPreemptionDisabled):
+		h.writeError(c, http.StatusServiceUnavailable, "OPPORTUNISTIC_SCHEDULING_DISABLED", "idle-capacity scheduling is not enabled")
 	case errors.Is(err, ErrSubmissionInvalidJobSpec):
 		h.writeError(c, http.StatusBadRequest, "INVALID_JOB_SPEC", "training job spec is invalid")
 	case errors.Is(err, ErrSubmissionImageNotAllowed):

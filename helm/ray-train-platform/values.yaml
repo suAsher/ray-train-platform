@@ -437,10 +437,20 @@ kueue:
     productionValue: 1000
     normalValue: 0
     opportunisticValue: -1000
+  # Enable only after an end-to-end checkpoint/requeue drill. When enabled,
+  # normal and production workloads may reclaim GPUs from lower-priority
+  # opportunistic jobs in the same ClusterQueue.
+  preemption:
+    enabled: false
   # True means this Helm release owns the training ResourceFlavor and
   # ClusterQueue. False attaches training to a queue managed outside this
   # project. Dataset publisher queues are governed independently above.
   manageResources: false
+  # Creating additional ResourceFlavors changes the live ClusterQueue. Keep
+  # this off during a rolling backend/UI release and enable it only when no
+  # training workload is admitted, together with the TAS cutover below.
+  multiFlavor:
+    enabled: false
   # TAS is an explicit cutover because adding topologyName to an in-use flavor
   # changes queue admission semantics. Enable only after the legacy queue has
   # no admitted workloads. The backend emits the worker PodSet hostname
@@ -465,6 +475,34 @@ kueue:
   memoryQuota: 1024Gi
   resourceFlavorNodeLabels:
     accelerator: nvidia-rtx-4090
+  # Every supported card type has its own Kueue flavor. Auto-quota rewrites
+  # each flavor independently from matching Ready, schedulable nodes; an
+  # absent card type therefore stays at zero capacity.
+  acceleratorFlavors:
+    rtx4090:
+      name: gpu-4090-flavor
+      tasName: gpu-4090-tas-flavor
+      nodeLabels:
+        accelerator: nvidia-rtx-4090
+      gpuQuota: 24
+    a100:
+      name: gpu-a100-flavor
+      tasName: gpu-a100-tas-flavor
+      nodeLabels:
+        accelerator: nvidia-a100
+      gpuQuota: 0
+    a800:
+      name: gpu-a800-flavor
+      tasName: gpu-a800-tas-flavor
+      nodeLabels:
+        accelerator: nvidia-a800
+      gpuQuota: 0
+    h20:
+      name: gpu-h20-flavor
+      tasName: gpu-h20-tas-flavor
+      nodeLabels:
+        accelerator: nvidia-h20
+      gpuQuota: 0
 
 storage:
   # Deprecated compatibility switch. Keep false: governed IDC data uses the

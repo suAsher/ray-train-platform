@@ -12,6 +12,7 @@ OIDC issuer. Local-only development does not. */}}
 {{- if not (regexMatch `^[^@[:space:]]+@sha256:[0-9a-fA-F]{64}$` .Values.backend.sourceMaterializerImage) }}{{- fail "backend.sourceMaterializerImage must use @sha256:<64 hex>" }}{{- end }}
 {{- if not (regexMatch `^[^@[:space:]]+@sha256:[0-9a-fA-F]{64}$` .Values.backend.workspaceImage) }}{{- fail "backend.workspaceImage must use @sha256:<64 hex>" }}{{- end }}
 {{- $datasetPublisher := default (dict) .Values.datasetPublisher -}}
+{{- $kueuePreemption := default (dict) .Values.kueue.preemption -}}
 {{- if (default false $datasetPublisher.enabled) -}}
 {{- $publisherDigest := default "" $datasetPublisher.image.digest -}}
 {{- if not (regexMatch `^sha256:[0-9a-fA-F]{64}$` $publisherDigest) }}{{- fail "datasetPublisher.image.digest must use sha256:<64 hex> when enabled" }}{{- end }}
@@ -268,6 +269,8 @@ spec:
               value: {{ .Values.kueue.autoQuota | quote }}
             - name: KUEUE_TOPOLOGY_ENABLED
               value: {{ .Values.kueue.topology.enabled | quote }}
+            - name: KUEUE_PREEMPTION_ENABLED
+              value: {{ default false (get $kueuePreemption "enabled") | quote }}
             - name: LOCAL_AUTH_ENABLED
               value: {{ .Values.backend.localAuth.enabled | quote }}
             - name: OAUTH2_PROXY_AUTO_PROVISION_ENABLED

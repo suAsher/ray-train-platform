@@ -399,13 +399,7 @@ output:
   path: bevfusion-lidar
 ```
 
-选择 GPU 卡型时使用平台提交枚举，不要把 Kubernetes 节点标签值原样复制进来：
-
-```yaml
-acceleratorClass: rtx4090
-```
-
-管理员接入节点时的 `accelerator=nvidia-rtx-4090` 是基础设施标签；用户 CLI/YAML 的卡型值是 `rtx4090`。优先从新建任务页或 `/api/v1/limits` 确认当前可选枚举，不要自行猜测。
+GPU 卡型由当前团队的资源池自动决定。用户不需要在网页、`.spk-rayjob.yaml` 或命令行中选择卡型，原有提交方式不变。旧版客户端仍可能发送 `acceleratorClass`，后端会用团队策略覆盖它；同一分布式任务的所有 Worker 会固化为同一卡型，不会混用 4090、A100、A800 或 H20。
 
 日常循环就变成：
 
@@ -417,7 +411,20 @@ spk-rayjob logs -f <任务ID>    # 跟随日志
 
 单次运行想临时改参数，直接加参数覆盖即可，不必改文件：`spk-rayjob submit --gpus-per-worker 1 --name quick-check`。
 
-### 5.2 `entrypoint` 里不要自己写 torchrun
+### 5.2 闲时任务（可抢占）
+
+闲时任务用于利用团队暂时空闲的单卡，不是低成本的分布式队列。平台强制它为 `1 Worker × 1 GPU`、Ray Train 托管恢复、有效 Checkpoint 策略和全平台最低优先级。团队正常或生产任务需要 GPU 时，Kueue 会回收它的准入；闲时任务在资源恢复后重新排队并从 Checkpoint 继续。
+
+```bash
+spk-rayjob submit --engine ray-train --workers 1 --gpus-per-worker 1 \
+  --priority opportunistic --preemptible \
+  --max-failures 2 --checkpoint-every-epochs 1 \
+  --checkpoint-keep-latest 3 --watch
+```
+
+只有平台完成抢占与恢复演练并显式开启能力后，页面才会允许选择“闲时任务”。管理员可在“队列与运行中 → 闲时任务”看到发起人、所属团队、卡型、状态和占用。
+
+### 5.3 `entrypoint` 里不要自己写 torchrun
 
 平台会根据 `executionMode` 和 GPU 数自动执行 `torchrun`，并把命令放到真正预留了 GPU 的 worker 上。你只需要写普通的 Python 命令：
 
@@ -429,7 +436,7 @@ spk-rayjob logs -f <任务ID>    # 跟随日志
 
 自己再写一层 `torchrun`、`torch.distributed.launch` 或 `torchpack dist-run` 会导致重复包装、rendezvous 失败或直接起不来。网页提交表单和 `spk-rayjob` 会显示警告，页面上的「平台实际执行」会显示展开后的完整命令；不要依赖警告替代提交前检查。
 
-### 5.3 常用命令
+### 5.4 常用命令
 
 | 命令 | 用途 |
 | --- | --- |

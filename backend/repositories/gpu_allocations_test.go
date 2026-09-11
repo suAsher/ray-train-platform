@@ -39,6 +39,8 @@ func TestListGPUAllocationsProjectsMixedWorkloadsInStableOrder(t *testing.T) {
 			TenantID: "tenant-a", UserID: "user-alice", Username: "alice",
 			State: string(domain.StateRunning), GPUCount: 6, Namespace: "tenant-a-ns",
 			ResourceName: "ray-job-b", CreatedAt: createdAt, StartedAt: &startedAt,
+			Priority: domain.WorkloadPriorityNormal, AcceleratorClass: domain.AcceleratorRTX4090,
+			WorkerReplicas: 2, GPUsPerWorker: 3,
 		},
 		{
 			ID: "workspace-a", Type: domain.GPUAllocationDebugWorkspace, Name: "debug-a",

@@ -1,5 +1,9 @@
 {{- if and .Values.kueue.enabled .Values.kueue.manageResources }}
-{{- $resourceFlavorName := ternary .Values.kueue.topology.resourceFlavorName .Values.kueue.resourceFlavorName .Values.kueue.topology.enabled }}
+{{- $legacyResourceFlavorName := ternary .Values.kueue.topology.resourceFlavorName .Values.kueue.resourceFlavorName .Values.kueue.topology.enabled }}
+{{- $multiFlavor := default (dict) .Values.kueue.multiFlavor }}
+{{- $preemption := default (dict) .Values.kueue.preemption }}
+{{- $multiFlavorEnabled := default false (get $multiFlavor "enabled") }}
+{{- $preemptionEnabled := default false (get $preemption "enabled") }}
 {{- if .Values.kueue.topology.enabled }}
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: Topology
@@ -13,10 +17,29 @@ spec:
     - nodeLabel: {{ .Values.kueue.topology.nodeLabel }}
 ---
 {{- end }}
+{{- if $multiFlavorEnabled }}
+{{- range $class, $flavor := .Values.kueue.acceleratorFlavors }}
+{{- $resourceFlavorName := ternary $flavor.tasName $flavor.name $.Values.kueue.topology.enabled }}
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ResourceFlavor
 metadata:
   name: {{ $resourceFlavorName }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" $ | nindent 4 }}
+    app.kubernetes.io/component: scheduling
+spec:
+  {{- if $.Values.kueue.topology.enabled }}
+  topologyName: {{ $.Values.kueue.topology.name }}
+  {{- end }}
+  nodeLabels:
+    {{- toYaml $flavor.nodeLabels | nindent 4 }}
+---
+{{- end }}
+{{- else }}
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: {{ $legacyResourceFlavorName }}
   labels:
     {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: scheduling
@@ -27,6 +50,7 @@ spec:
   nodeLabels:
     {{- toYaml .Values.kueue.resourceFlavorNodeLabels | nindent 4 }}
 ---
+{{- end }}
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ClusterQueue
 metadata:
@@ -38,10 +62,31 @@ spec:
   namespaceSelector:
     matchLabels:
       app.kubernetes.io/part-of: ray-train-platform
+  {{- if $preemptionEnabled }}
+  preemption:
+    reclaimWithinCohort: Never
+    withinClusterQueue: LowerPriority
+  {{- end }}
   resourceGroups:
     - coveredResources: ["cpu", "memory", "nvidia.com/gpu"]
       flavors:
-        - name: {{ $resourceFlavorName }}
+        {{- if $multiFlavorEnabled }}
+        {{- range $class, $flavor := .Values.kueue.acceleratorFlavors }}
+        {{- $gpuQuota := $flavor.gpuQuota }}
+        {{- if eq $class "rtx4090" }}
+        {{- $gpuQuota = $.Values.kueue.gpuQuota }}
+        {{- end }}
+        - name: {{ ternary $flavor.tasName $flavor.name $.Values.kueue.topology.enabled }}
+          resources:
+            - name: cpu
+              nominalQuota: {{ ternary $.Values.kueue.cpuQuota 0 (gt (int $gpuQuota) 0) }}
+            - name: memory
+              nominalQuota: {{ ternary $.Values.kueue.memoryQuota "0" (gt (int $gpuQuota) 0) }}
+            - name: nvidia.com/gpu
+              nominalQuota: {{ $gpuQuota }}
+        {{- end }}
+        {{- else }}
+        - name: {{ $legacyResourceFlavorName }}
           resources:
             - name: cpu
               nominalQuota: {{ .Values.kueue.cpuQuota }}
@@ -49,4 +94,5 @@ spec:
               nominalQuota: {{ .Values.kueue.memoryQuota }}
             - name: nvidia.com/gpu
               nominalQuota: {{ .Values.kueue.gpuQuota }}
+        {{- end }}
 {{- end }}

@@ -148,8 +148,27 @@ func (r *Reconciler) syncClusterQueueQuota(ctx context.Context) {
 	if !r.autoQuota || r.client == nil {
 		return
 	}
-	capacity, err := r.client.TrainingPoolCapacity(ctx, r.renderOptions.NodeSelector)
+	poolCapacities, err := r.client.TrainingPoolCapacities(ctx, r.renderOptions.NodeSelector)
+	capacity := TrainingPoolCapacity{}
+	flavorCapacities := make(map[string]TrainingPoolCapacity, len(poolCapacities))
 	if err == nil {
+		for accelerator, pool := range poolCapacities {
+			capacity.Nodes += pool.Nodes
+			capacity.GPUs += pool.GPUs
+			capacity.CPUMillis += pool.CPUMillis
+			capacity.MemoryBytes += pool.MemoryBytes
+			if pool.MaxGPUsPerNode > capacity.MaxGPUsPerNode {
+				capacity.MaxGPUsPerNode = pool.MaxGPUsPerNode
+			}
+			if pool.GuaranteedGPUsPerWorker > 0 && (capacity.GuaranteedGPUsPerWorker == 0 || pool.GuaranteedGPUsPerWorker < capacity.GuaranteedGPUsPerWorker) {
+				capacity.GuaranteedGPUsPerWorker = pool.GuaranteedGPUsPerWorker
+			}
+			flavorCapacities[acceleratorFlavorName(accelerator, r.renderOptions.TopologyAwareScheduling)] = pool
+		}
+		// A pre-migration deployment may own one custom-named flavor. Preserve
+		// automatic quota there without weakening multi-flavor isolation: the
+		// Kubernetes writer only consumes this fallback for a single-flavor queue.
+		flavorCapacities[""] = capacity
 		err = capacity.Validate()
 	}
 	if err == nil {
@@ -157,7 +176,7 @@ func (r *Reconciler) syncClusterQueueQuota(ctx context.Context) {
 	}
 	if err == nil {
 		var changed bool
-		changed, err = r.client.SyncClusterQueueQuota(ctx, r.clusterQueueName, capacity)
+		changed, err = r.client.SyncClusterQueueFlavorQuotas(ctx, r.clusterQueueName, flavorCapacities)
 		if err == nil {
 			r.lastQuotaError = ""
 			if changed {
@@ -170,6 +189,18 @@ func (r *Reconciler) syncClusterQueueQuota(ctx context.Context) {
 		r.lastQuotaError = message
 		log.Printf("kueue quota sync skipped: %v", err)
 	}
+}
+
+func acceleratorFlavorName(accelerator domain.AcceleratorClass, topology bool) string {
+	className := string(accelerator.Resolved())
+	if accelerator.Resolved() == domain.AcceleratorRTX4090 {
+		className = "4090"
+	}
+	name := "gpu-" + className
+	if topology {
+		return name + "-tas-flavor"
+	}
+	return name + "-flavor"
 }
 
 func NewReconciler(store JobStore, client *Client, renderOptions RenderOptions) *Reconciler {

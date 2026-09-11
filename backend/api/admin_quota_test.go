@@ -21,7 +21,24 @@ type fakeAdminStore struct {
 		tenantID string
 		limit    int
 	}
-	setQuotaErr error
+	setQuotaErr     error
+	acceleratorSets []struct {
+		tenantID    string
+		accelerator domain.AcceleratorClass
+	}
+}
+
+func (store *fakeAdminStore) SetTenantAcceleratorClass(_ context.Context, tenantID string, accelerator domain.AcceleratorClass) error {
+	store.acceleratorSets = append(store.acceleratorSets, struct {
+		tenantID    string
+		accelerator domain.AcceleratorClass
+	}{tenantID: tenantID, accelerator: accelerator})
+	for index, tenant := range store.tenants {
+		if tenant.ID == tenantID {
+			store.tenants[index].AcceleratorClass = accelerator
+		}
+	}
+	return nil
 }
 
 func (store *fakeAdminStore) ListTenantSummaries(context.Context) ([]repositories.TenantSummary, error) {
@@ -136,5 +153,34 @@ func TestTenantQuotaReportsAnUnknownTenant(t *testing.T) {
 	response := postQuota(t, handler, principal, "team-missing", `{"gpuQuota":8}`)
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d: %s", response.Code, response.Body.String())
+	}
+}
+
+func TestSuperAdminAssignsTeamAcceleratorPool(t *testing.T) {
+	store := &fakeAdminStore{tenants: []repositories.TenantSummary{{ID: "algorithm", AcceleratorClass: domain.AcceleratorRTX4090}}}
+	handler := NewHandler(&fakeJobRepository{}, Options{Admin: store})
+	principal := auth.Principal{Subject: "root", TenantID: "local", Roles: []string{domain.RoleSuperAdmin}}
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/tenants/algorithm/scheduling", strings.NewReader(`{"acceleratorClass":"a100"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	adminRouter(handler, principal).ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("scheduling update status=%d body=%s", response.Code, response.Body.String())
+	}
+	if len(store.acceleratorSets) != 1 || store.acceleratorSets[0].tenantID != "algorithm" || store.acceleratorSets[0].accelerator != domain.AcceleratorA100 {
+		t.Fatalf("unexpected scheduling writes: %+v", store.acceleratorSets)
+	}
+}
+
+func TestTenantAdminCannotAssignAcceleratorPool(t *testing.T) {
+	store := &fakeAdminStore{tenants: []repositories.TenantSummary{{ID: "algorithm"}}}
+	handler := NewHandler(&fakeJobRepository{}, Options{Admin: store})
+	principal := auth.Principal{Subject: "lead", TenantID: "algorithm", Roles: []string{domain.RoleTenantAdmin}}
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/tenants/algorithm/scheduling", strings.NewReader(`{"acceleratorClass":"h20"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	adminRouter(handler, principal).ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden || len(store.acceleratorSets) != 0 {
+		t.Fatalf("tenant admin scheduling status=%d writes=%+v body=%s", response.Code, store.acceleratorSets, response.Body.String())
 	}
 }

@@ -24,6 +24,25 @@ var clusterQueueGVR = schema.GroupVersionResource{Group: "kueue.x-k8s.io", Versi
 // It reports whether anything actually changed so the caller can avoid
 // pointless writes.
 func (c *Client) SyncClusterQueueQuota(ctx context.Context, clusterQueueName string, capacity TrainingPoolCapacity) (bool, error) {
+	return c.syncClusterQueueQuota(ctx, clusterQueueName, capacity)
+}
+
+// SyncClusterQueueFlavorQuotas updates each accelerator flavor from only the
+// nodes of that class. This prevents an A100/H20 flavor from inheriting 4090
+// capacity and admitting a workload that can never be placed.
+func (c *Client) SyncClusterQueueFlavorQuotas(ctx context.Context, clusterQueueName string, capacities map[string]TrainingPoolCapacity) (bool, error) {
+	for name, capacity := range capacities {
+		if err := capacity.Validate(); err != nil {
+			if name == "" {
+				return false, fmt.Errorf("legacy aggregate capacity: %w", err)
+			}
+			return false, fmt.Errorf("resource flavor %q: %w", name, err)
+		}
+	}
+	return c.syncClusterQueueQuotas(ctx, clusterQueueName, capacities)
+}
+
+func (c *Client) syncClusterQueueQuota(ctx context.Context, clusterQueueName string, capacity TrainingPoolCapacity) (bool, error) {
 	if c == nil || c.dynamic == nil {
 		return false, fmt.Errorf("Kubernetes dynamic client is not initialized")
 	}
@@ -36,6 +55,16 @@ func (c *Client) SyncClusterQueueQuota(ctx context.Context, clusterQueueName str
 		return false, err
 	}
 
+	return c.syncClusterQueueQuotas(ctx, clusterQueueName, map[string]TrainingPoolCapacity{"": capacity})
+}
+
+func (c *Client) syncClusterQueueQuotas(ctx context.Context, clusterQueueName string, capacities map[string]TrainingPoolCapacity) (bool, error) {
+	if c == nil || c.dynamic == nil {
+		return false, fmt.Errorf("Kubernetes dynamic client is not initialized")
+	}
+	if clusterQueueName == "" {
+		return false, fmt.Errorf("cluster queue name is required")
+	}
 	queues := c.dynamic.Resource(clusterQueueGVR)
 	existing, err := queues.Get(ctx, clusterQueueName, metav1.GetOptions{})
 	if err != nil {
@@ -43,12 +72,6 @@ func (c *Client) SyncClusterQueueQuota(ctx context.Context, clusterQueueName str
 			return false, fmt.Errorf("cluster queue %q does not exist", clusterQueueName)
 		}
 		return false, fmt.Errorf("get cluster queue: %w", err)
-	}
-
-	desired := map[string]string{
-		"cpu":            resource.NewMilliQuantity(capacity.CPUMillis, resource.DecimalSI).String(),
-		"memory":         resource.NewQuantity(capacity.MemoryBytes, resource.BinarySI).String(),
-		"nvidia.com/gpu": resource.NewQuantity(capacity.GPUs, resource.DecimalSI).String(),
 	}
 
 	updated := existing.DeepCopy()
@@ -68,6 +91,19 @@ func (c *Client) SyncClusterQueueQuota(ctx context.Context, clusterQueueName str
 			flavor, ok := flavorItem.(map[string]any)
 			if !ok {
 				continue
+			}
+			flavorName := fmt.Sprint(flavor["name"])
+			capacity, found := capacities[flavorName]
+			if !found && len(flavors) == 1 {
+				capacity, found = capacities[""]
+			}
+			if !found {
+				continue
+			}
+			desired := map[string]string{
+				"cpu":            resource.NewMilliQuantity(capacity.CPUMillis, resource.DecimalSI).String(),
+				"memory":         resource.NewQuantity(capacity.MemoryBytes, resource.BinarySI).String(),
+				"nvidia.com/gpu": resource.NewQuantity(capacity.GPUs, resource.DecimalSI).String(),
 			}
 			resources, _ := flavor["resources"].([]any)
 			for _, resourceItem := range resources {

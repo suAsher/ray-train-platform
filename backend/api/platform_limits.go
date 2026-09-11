@@ -118,6 +118,11 @@ func (h *Handler) platformLimits(c *gin.Context) {
 		tenantQuota = &descriptor
 		limits = tenantResourceLimits(limits, descriptor.GPUAvailable)
 	}
+	scheduling, err := schedulingCapabilityDescriptorFor(c, h, principal.TenantID)
+	if err != nil {
+		h.writeError(c, http.StatusServiceUnavailable, "TENANT_SCHEDULING_UNAVAILABLE", "could not resolve the team's GPU pool")
+		return
+	}
 	h.writeSuccess(c, http.StatusOK, platformLimitsResponse{
 		MaxWorkerReplicas: limits.MaxWorkerReplicas,
 		MaxGPUsPerWorker:  limits.MaxGPUsPerWorker,
@@ -133,24 +138,32 @@ func (h *Handler) platformLimits(c *gin.Context) {
 		Cache:             cachePolicyDescriptorFor(h.localCache),
 		Runtime:           runtimeCapabilityDescriptorFor(h.runtimePolicy.EffectiveForTenant(principal.TenantID)),
 		Datasets:          datasetCapabilityDescriptorFor(h),
-		Scheduling:        schedulingCapabilityDescriptorFor(),
+		Scheduling:        scheduling,
 	})
 }
 
-func schedulingCapabilityDescriptorFor() schedulingCapabilityDescriptor {
+func schedulingCapabilityDescriptorFor(c *gin.Context, handler *Handler, tenantID string) (schedulingCapabilityDescriptor, error) {
+	accelerator := domain.AcceleratorRTX4090
+	if handler != nil && handler.tenantScheduling != nil {
+		resolved, err := handler.tenantScheduling.TenantAcceleratorClass(c.Request.Context(), tenantID)
+		if err != nil {
+			return schedulingCapabilityDescriptor{}, err
+		}
+		accelerator = resolved.Resolved()
+	}
 	return schedulingCapabilityDescriptor{
 		AcceleratorClasses: []string{
-			string(domain.AcceleratorRTX4090),
+			string(accelerator),
 		},
-		DefaultAcceleratorClass: string(domain.AcceleratorRTX4090),
+		DefaultAcceleratorClass: string(accelerator),
 		Priorities: []string{
 			string(domain.WorkloadPriorityProduction),
 			string(domain.WorkloadPriorityNormal),
 			string(domain.WorkloadPriorityOpportunistic),
 		},
 		DefaultPriority:   string(domain.WorkloadPriorityNormal),
-		PreemptionEnabled: false,
-	}
+		PreemptionEnabled: handler != nil && handler.preemptionEnabled,
+	}, nil
 }
 
 func datasetCapabilityDescriptorFor(handler *Handler) datasetCapabilityDescriptor {

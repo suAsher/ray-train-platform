@@ -18,6 +18,12 @@ type stubImageStore struct {
 	updatedTargetTenantID string
 }
 
+type stubTenantSchedulingStore struct{ accelerator domain.AcceleratorClass }
+
+func (s stubTenantSchedulingStore) TenantAcceleratorClass(context.Context, string) (domain.AcceleratorClass, error) {
+	return s.accelerator, nil
+}
+
 func (s *stubImageStore) CreateImage(context.Context, domain.PlatformImage) error { return nil }
 func (s *stubImageStore) ListImages(_ context.Context, tenantID, kind string) ([]domain.PlatformImage, error) {
 	matching := make([]domain.PlatformImage, 0, len(s.images))
@@ -26,6 +32,15 @@ func (s *stubImageStore) ListImages(_ context.Context, tenantID, kind string) ([
 			continue
 		}
 		if image.TenantID == "" || image.TenantID == tenantID {
+			matching = append(matching, image)
+		}
+	}
+	return matching, nil
+}
+func (s *stubImageStore) ListAllImages(_ context.Context, kind string) ([]domain.PlatformImage, error) {
+	matching := make([]domain.PlatformImage, 0, len(s.images))
+	for _, image := range s.images {
+		if kind == "" || image.Kind == kind {
 			matching = append(matching, image)
 		}
 	}
@@ -85,6 +100,27 @@ func submitWithCatalog(t *testing.T, store ImageStore, allowlist []string, image
 		Origin:    domain.SubmissionOriginPortal,
 	})
 	return err
+}
+
+func TestSubmissionUsesTeamAcceleratorAndIgnoresClientSelection(t *testing.T) {
+	repository := &fakeJobRepository{}
+	image := catalogImage("registry.example/runtime:stable")
+	service := NewSubmissionService(repository, SubmissionServiceOptions{
+		Images:     &stubImageStore{images: []domain.PlatformImage{image}},
+		Scheduling: stubTenantSchedulingStore{accelerator: domain.AcceleratorH20},
+	})
+	spec := submissionSpec(image.Reference)
+	spec.AcceleratorClass = domain.AcceleratorA100
+	job, err := service.Submit(context.Background(), SubmissionInput{
+		Principal: auth.Principal{Subject: "user", TenantID: "algorithm", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
+		Spec:      spec, Origin: domain.SubmissionOriginPortal,
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if job.Spec.AcceleratorClass != domain.AcceleratorH20 {
+		t.Fatalf("job accelerator=%q, want team pool h20", job.Spec.AcceleratorClass)
+	}
 }
 
 // An image an administrator published must be submittable even though it is

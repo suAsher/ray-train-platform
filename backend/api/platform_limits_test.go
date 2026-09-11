@@ -21,6 +21,12 @@ type fakePlatformQuotaStore struct {
 	tenantIDs []string
 }
 
+type fakePlatformSchedulingStore struct{ accelerator domain.AcceleratorClass }
+
+func (store fakePlatformSchedulingStore) TenantAcceleratorClass(context.Context, string) (domain.AcceleratorClass, error) {
+	return store.accelerator, nil
+}
+
 type platformTenantQuotaPayload struct {
 	GPULimit     int `json:"gpuLimit"`
 	GPUUsed      int `json:"gpuUsed"`
@@ -98,6 +104,23 @@ func TestPlatformLimitsReportTheDeploymentCeilingsTheServerEnforces(t *testing.T
 	}
 	if limits.Scheduling.PreemptionEnabled {
 		t.Fatal("preemption must stay disabled until Kueue victim eligibility is enforced")
+	}
+}
+
+func TestPlatformLimitsExposeOnlyTheCallersTeamAccelerator(t *testing.T) {
+	principal := auth.Principal{Subject: "user", TenantID: "algorithm", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal}
+	quota := &fakePlatformQuotaStore{quota: domain.TenantQuota{TenantID: "algorithm", GPULimit: 8, GPUAvailable: 8}}
+	handler := NewHandler(&fakeJobRepository{}, Options{
+		Quota: quota, TenantScheduling: fakePlatformSchedulingStore{accelerator: domain.AcceleratorA100}, PreemptionEnabled: true,
+	})
+	response := httptest.NewRecorder()
+	limitsRouter(handler, &principal).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/limits", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("limits status=%d body=%s", response.Code, response.Body.String())
+	}
+	scheduling := decodePlatformLimits(t, response.Body.Bytes()).Scheduling
+	if strings.Join(scheduling.AcceleratorClasses, ",") != "a100" || scheduling.DefaultAcceleratorClass != "a100" || !scheduling.PreemptionEnabled {
+		t.Fatalf("unexpected scheduling descriptor: %+v", scheduling)
 	}
 }
 

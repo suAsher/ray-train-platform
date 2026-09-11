@@ -22,6 +22,10 @@ type ImageStore interface {
 	DeleteImage(ctx context.Context, tenantID, id string, superAdmin bool) error
 }
 
+type allTenantImageStore interface {
+	ListAllImages(ctx context.Context, kind string) ([]domain.PlatformImage, error)
+}
+
 func (h *Handler) RegisterImageRoutes(group *gin.RouterGroup) {
 	h.RegisterImageReadRoutes(group)
 	h.RegisterImageManagementRoutes(group)
@@ -120,7 +124,23 @@ func (h *Handler) listImages(c *gin.Context) {
 			return
 		}
 	}
-	images, err := h.images.ListImages(c.Request.Context(), principal.TenantID, kind)
+	includeAllTenants := c.Query("includeAllTenants") == "true"
+	if includeAllTenants && !principal.HasRole(domain.RoleSuperAdmin) {
+		h.writeError(c, http.StatusForbidden, "FORBIDDEN", "super administrator role is required to list every team's images")
+		return
+	}
+	var images []domain.PlatformImage
+	var err error
+	if includeAllTenants {
+		store, ok := h.images.(allTenantImageStore)
+		if !ok {
+			h.writeError(c, http.StatusServiceUnavailable, "IMAGE_CATALOG_UNAVAILABLE", "global image catalog is not configured")
+			return
+		}
+		images, err = store.ListAllImages(c.Request.Context(), kind)
+	} else {
+		images, err = h.images.ListImages(c.Request.Context(), principal.TenantID, kind)
+	}
 	if err != nil {
 		h.writeError(c, http.StatusInternalServerError, "IMAGE_LIST_FAILED", "could not list images")
 		return
@@ -137,6 +157,7 @@ type createImageRequest struct {
 	Environment      domain.ImageEnvironment  `json:"environment"`
 	IsDefault        bool                     `json:"isDefault"`
 	Shared           bool                     `json:"shared"`
+	TargetTenantID   string                   `json:"targetTenantId"`
 	RayVersion       *string                  `json:"rayVersion"`
 	SupportedEngines *[]domain.TrainingEngine `json:"supportedEngines"`
 }
@@ -163,6 +184,27 @@ func (h *Handler) createImage(c *gin.Context) {
 	// Only a super administrator may publish into the catalogue every tenant
 	// sees; a tenant admin's images stay inside their own tenant.
 	tenantID := principal.TenantID
+	targetTenantID := strings.TrimSpace(request.TargetTenantID)
+	if targetTenantID != "" && targetTenantID != principal.TenantID {
+		if !principal.HasRole(domain.RoleSuperAdmin) {
+			h.writeError(c, http.StatusForbidden, "CROSS_TENANT_IMAGE_FORBIDDEN", "only a super administrator can publish an image into another team")
+			return
+		}
+		if h.admin == nil {
+			h.writeError(c, http.StatusServiceUnavailable, "ADMIN_UNAVAILABLE", "team catalog is not configured")
+			return
+		}
+		tenants, err := h.admin.ListTenantSummaries(c.Request.Context())
+		if err != nil {
+			h.writeError(c, http.StatusInternalServerError, "TENANT_LIST_FAILED", "could not validate the target team")
+			return
+		}
+		if !containsTenant(tenants, targetTenantID) {
+			h.writeError(c, http.StatusBadRequest, "INVALID_IMAGE_SCOPE", "targetTenantId must name an existing team")
+			return
+		}
+		tenantID = targetTenantID
+	}
 	if request.Shared {
 		if !principal.HasRole(domain.RoleSuperAdmin) {
 			h.writeError(c, http.StatusForbidden, "SHARED_IMAGE_FORBIDDEN", "only a super administrator can publish a shared image")

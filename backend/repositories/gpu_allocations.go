@@ -59,17 +59,22 @@ func (r *GormRepository) ListGPUAllocations(ctx context.Context, tenantID string
 			return nil, fmt.Errorf("decode active training job %q spec: %w", record.ID, err)
 		}
 		allocations = append(allocations, domain.GPUAllocation{
-			ID:           record.ID,
-			Type:         domain.GPUAllocationTrainingJob,
-			Name:         record.Name,
-			TenantID:     record.TenantID,
-			UserID:       record.UserID,
-			State:        record.ObservedState,
-			GPUCount:     spec.Resources.WorkerReplicas * spec.Resources.GPUsPerWorker,
-			Namespace:    record.KubernetesNS,
-			ResourceName: record.RayJobName,
-			CreatedAt:    record.CreatedAt,
-			StartedAt:    record.StartedAt,
+			ID:               record.ID,
+			Type:             domain.GPUAllocationTrainingJob,
+			Name:             record.Name,
+			TenantID:         record.TenantID,
+			UserID:           record.UserID,
+			State:            record.ObservedState,
+			GPUCount:         spec.Resources.WorkerReplicas * spec.Resources.GPUsPerWorker,
+			Namespace:        record.KubernetesNS,
+			ResourceName:     record.RayJobName,
+			CreatedAt:        record.CreatedAt,
+			StartedAt:        record.StartedAt,
+			Priority:         domain.WorkloadPriority(spec.Priority).Resolved(),
+			Preemptible:      spec.Preemptible,
+			AcceleratorClass: spec.AcceleratorClass.Resolved(),
+			WorkerReplicas:   spec.Resources.WorkerReplicas,
+			GPUsPerWorker:    spec.Resources.GPUsPerWorker,
 		})
 		userIDs[record.UserID] = struct{}{}
 	}

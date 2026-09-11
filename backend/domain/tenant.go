@@ -13,6 +13,10 @@ type Tenant struct {
 	Namespace     string `json:"namespace"`
 	LocalQueue    string `json:"localQueue"`
 	GPUQuotaLimit int    `json:"gpuQuotaLimit"`
+	// AcceleratorClass is the team's platform-managed GPU pool. Submission
+	// clients never choose it, preventing one distributed job from mixing GPU
+	// architectures or escaping into another team's pool.
+	AcceleratorClass AcceleratorClass `json:"acceleratorClass"`
 }
 
 func (t Tenant) Validate() error {
@@ -24,6 +28,9 @@ func (t Tenant) Validate() error {
 	}
 	if t.GPUQuotaLimit < 0 {
 		return fmt.Errorf("gpu quota cannot be negative")
+	}
+	if err := t.AcceleratorClass.Validate(); err != nil {
+		return err
 	}
 	return nil
 }

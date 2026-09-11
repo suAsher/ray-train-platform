@@ -47,7 +47,13 @@ var (
 	ErrSubmissionDatasetIncompatible       = errors.New("dataset is incompatible with the selected runtime")
 	ErrSubmissionDatasetManifestInvalid    = errors.New("dataset manifest is invalid")
 	ErrSubmissionDatasetInternalPath       = errors.New("internal dataset paths are platform-managed")
+	ErrSubmissionSchedulingUnavailable     = errors.New("tenant scheduling policy is unavailable")
+	ErrSubmissionPreemptionDisabled        = errors.New("opportunistic scheduling is disabled")
 )
+
+type TenantSchedulingStore interface {
+	TenantAcceleratorClass(context.Context, string) (domain.AcceleratorClass, error)
+}
 
 type SourceArtifactLookup interface {
 	GetSourceArtifact(context.Context, string, string, string) (*domain.SourceArtifact, error)
@@ -89,6 +95,8 @@ type SubmissionServiceOptions struct {
 	DatasetInternalPrefix    string
 	NewID                    func() (string, error)
 	LocalCache               LocalCachePolicy
+	Scheduling               TenantSchedulingStore
+	PreemptionEnabled        bool
 }
 
 type LocalCachePolicy struct {
@@ -122,6 +130,8 @@ type SubmissionService struct {
 	datasetInternalPrefix    string
 	newID                    func() (string, error)
 	localCache               LocalCachePolicy
+	scheduling               TenantSchedulingStore
+	preemptionEnabled        bool
 }
 
 type SubmissionInput struct {
@@ -198,6 +208,8 @@ func NewSubmissionService(repository JobRepository, options SubmissionServiceOpt
 		datasetInternalPrefix:    datasetInternalPrefix,
 		newID:                    newID,
 		localCache:               cloneLocalCachePolicy(options.LocalCache),
+		scheduling:               options.Scheduling,
+		preemptionEnabled:        options.PreemptionEnabled,
 	}
 }
 
@@ -275,6 +287,18 @@ func (service *SubmissionService) prepareSubmission(ctx context.Context, input S
 	if err := input.Origin.Validate(); err != nil {
 		return preparedSubmission{}, fmt.Errorf("%w: %v", ErrSubmissionInvalidOrigin, err)
 	}
+	// The team, not the client, owns accelerator placement. Older CLI versions
+	// may still send --accelerator; overwrite it so the command remains
+	// compatible without allowing cross-pool or mixed-architecture placement.
+	accelerator := domain.AcceleratorRTX4090
+	if service.scheduling != nil {
+		var err error
+		accelerator, err = service.scheduling.TenantAcceleratorClass(ctx, input.Principal.TenantID)
+		if err != nil {
+			return preparedSubmission{}, fmt.Errorf("%w: %v", ErrSubmissionSchedulingUnavailable, err)
+		}
+	}
+	input.Spec.AcceleratorClass = accelerator.Resolved()
 	resolvedSpec, err := service.resolveRuntime(ctx, input.Principal.TenantID, input.Spec)
 	if err != nil {
 		return preparedSubmission{}, err
@@ -286,6 +310,9 @@ func (service *SubmissionService) prepareSubmission(ctx context.Context, input S
 	spec, err := normalizeSubmissionSpec(input.Principal, input.Origin, resolvedSpec, service.localCache)
 	if err != nil {
 		return preparedSubmission{}, err
+	}
+	if domain.WorkloadPriority(spec.Priority).Resolved() == domain.WorkloadPriorityOpportunistic && !service.preemptionEnabled {
+		return preparedSubmission{}, ErrSubmissionPreemptionDisabled
 	}
 	resumeCheckpointID, err := service.resolveResumeCheckpoint(ctx, input.Principal, spec)
 	if err != nil {

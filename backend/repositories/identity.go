@@ -23,18 +23,19 @@ func defaultTenantGPUQuota() int {
 }
 
 type TenantRecord struct {
-	ID             string `gorm:"primaryKey"`
-	Name           string
-	Namespace      string `gorm:"uniqueIndex"`
-	LocalQueue     string
-	GPUQuotaLimit  int
-	CPUQuotaMillis int64 `gorm:"column:cpu_quota_millis"`
-	MemoryBytes    int64 `gorm:"column:memory_quota_bytes"`
-	MaxPriority    string
-	RetiredAt      *time.Time
-	RetiredBy      string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID               string `gorm:"primaryKey"`
+	Name             string
+	Namespace        string `gorm:"uniqueIndex"`
+	LocalQueue       string
+	GPUQuotaLimit    int
+	CPUQuotaMillis   int64 `gorm:"column:cpu_quota_millis"`
+	MemoryBytes      int64 `gorm:"column:memory_quota_bytes"`
+	MaxPriority      string
+	AcceleratorClass string
+	RetiredAt        *time.Time
+	RetiredBy        string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 type UserRecord struct {
@@ -102,7 +103,7 @@ func (r *GormRepository) EnsureIdentity(ctx context.Context, principal auth.Prin
 		if err := lockIdentityTenantFence(tx, principal.TenantID); err != nil {
 			return err
 		}
-		tenant := TenantRecord{ID: principal.TenantID, Name: principal.TenantID, Namespace: namespace, LocalQueue: queue, GPUQuotaLimit: defaultTenantGPUQuota(), MaxPriority: "normal", CreatedAt: now, UpdatedAt: now}
+		tenant := TenantRecord{ID: principal.TenantID, Name: principal.TenantID, Namespace: namespace, LocalQueue: queue, GPUQuotaLimit: defaultTenantGPUQuota(), MaxPriority: "normal", AcceleratorClass: string(domain.AcceleratorRTX4090), CreatedAt: now, UpdatedAt: now}
 		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoNothing: true}).Create(&tenant).Error; err != nil {
 			return fmt.Errorf("upsert tenant: %w", err)
 		}
@@ -147,7 +148,7 @@ func (r *GormRepository) CreateTenant(ctx context.Context, tenant domain.Tenant)
 	now := time.Now().UTC()
 	record := TenantRecord{
 		ID: tenant.ID, Name: tenant.Name, Namespace: tenant.Namespace,
-		LocalQueue: tenant.LocalQueue, GPUQuotaLimit: tenant.GPUQuotaLimit, MaxPriority: "normal",
+		LocalQueue: tenant.LocalQueue, GPUQuotaLimit: tenant.GPUQuotaLimit, MaxPriority: "normal", AcceleratorClass: string(tenant.AcceleratorClass.Resolved()),
 		CreatedAt: now, UpdatedAt: now,
 	}
 	var existing TenantRecord

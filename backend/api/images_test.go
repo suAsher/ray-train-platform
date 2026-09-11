@@ -214,6 +214,85 @@ func TestSuperAdminCannotAssignImageToUnknownTeam(t *testing.T) {
 	}
 }
 
+func TestSuperAdminCanListEveryTeamsImagesForCatalogManagement(t *testing.T) {
+	store := &stubImageStore{images: []domain.PlatformImage{
+		{ID: "shared", TenantID: "", Kind: domain.ImageKindTraining},
+		{ID: "local", TenantID: "local", Kind: domain.ImageKindTraining},
+		{ID: "algorithm", TenantID: "algorithm", Kind: domain.ImageKindTraining},
+	}}
+	router := imageScopeRouter(store, auth.Principal{
+		Subject: "root-admin", TenantID: "local", Roles: []string{domain.RoleSuperAdmin}, AuthType: auth.AuthTypeLocal,
+	})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/images?kind=training&includeAllTenants=true", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("global catalog status=%d body=%s", response.Code, response.Body.String())
+	}
+	var envelope struct {
+		Data []domain.PlatformImage `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode images: %v", err)
+	}
+	if len(envelope.Data) != 3 {
+		t.Fatalf("super admin saw %d images, want 3: %+v", len(envelope.Data), envelope.Data)
+	}
+}
+
+func TestTenantAdminCannotListEveryTeamsImages(t *testing.T) {
+	store := &stubImageStore{images: []domain.PlatformImage{{ID: "foreign", TenantID: "algorithm", Kind: domain.ImageKindTraining}}}
+	router := imageScopeRouter(store, auth.Principal{
+		Subject: "team-admin", TenantID: "local", Roles: []string{domain.RoleTenantAdmin}, AuthType: auth.AuthTypeLocal,
+	})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/images?includeAllTenants=true", nil))
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("tenant admin global catalog status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestSuperAdminCanCreateImageDirectlyInAnotherTeam(t *testing.T) {
+	store := &compatibilityImageStore{}
+	handler := NewHandler(nil, Options{Images: store, Admin: &fakeAdminStore{tenants: []repositories.TenantSummary{{ID: "local"}, {ID: "algorithm"}}}})
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("ray-platform-principal", auth.Principal{Subject: "root-admin", TenantID: "local", Roles: []string{domain.RoleSuperAdmin}, AuthType: auth.AuthTypeLocal})
+		c.Next()
+	})
+	handler.RegisterImageRoutes(router.Group("/api/v1"))
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/images", strings.NewReader(`{
+		"name":"Algorithm runtime","reference":"registry.example/algorithm:stable","kind":"training",
+		"targetTenantId":"algorithm"
+	}`))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || store.created.TenantID != "algorithm" {
+		t.Fatalf("cross-team create status=%d tenant=%q body=%s", response.Code, store.created.TenantID, response.Body.String())
+	}
+}
+
+func TestTenantAdminCannotCreateImageInAnotherTeam(t *testing.T) {
+	store := &compatibilityImageStore{}
+	handler := NewHandler(nil, Options{Images: store, Admin: &fakeAdminStore{tenants: []repositories.TenantSummary{{ID: "local"}, {ID: "algorithm"}}}})
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("ray-platform-principal", auth.Principal{Subject: "team-admin", TenantID: "local", Roles: []string{domain.RoleTenantAdmin}, AuthType: auth.AuthTypeLocal})
+		c.Next()
+	})
+	handler.RegisterImageRoutes(router.Group("/api/v1"))
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/images", strings.NewReader(`{
+		"name":"Foreign runtime","reference":"registry.example/algorithm:stable","kind":"training",
+		"targetTenantId":"algorithm"
+	}`))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden || store.created.ID != "" {
+		t.Fatalf("tenant admin cross-team create status=%d image=%+v body=%s", response.Code, store.created, response.Body.String())
+	}
+}
+
 func TestImageCompatibilityTenantAdminPublishesTenantLocalMetadata(t *testing.T) {
 	store := &compatibilityImageStore{mutateStoreInput: true}
 	principal := auth.Principal{

@@ -10,18 +10,19 @@ import (
 )
 
 type TenantSummary struct {
-	RetiredAt       *time.Time `json:"retiredAt"`
-	RetiredBy       string     `json:"retiredBy"`
-	ID              string     `json:"id"`
-	Name            string     `json:"name"`
-	Namespace       string     `json:"namespace"`
-	QueueName       string     `json:"queueName"`
-	GPUQuotaLimit   int        `json:"gpuQuotaLimit"`
-	GPUQuotaUsed    int        `json:"gpuQuotaUsed"`
-	ActiveJobsCount int        `json:"activeJobsCount"`
-	QueuedJobsCount int        `json:"queuedJobsCount"`
-	MaxPriority     string     `json:"maxPriority"`
-	CreatedAt       time.Time  `json:"createdAt"`
+	RetiredAt        *time.Time              `json:"retiredAt"`
+	RetiredBy        string                  `json:"retiredBy"`
+	ID               string                  `json:"id"`
+	Name             string                  `json:"name"`
+	Namespace        string                  `json:"namespace"`
+	QueueName        string                  `json:"queueName"`
+	GPUQuotaLimit    int                     `json:"gpuQuotaLimit"`
+	GPUQuotaUsed     int                     `json:"gpuQuotaUsed"`
+	ActiveJobsCount  int                     `json:"activeJobsCount"`
+	QueuedJobsCount  int                     `json:"queuedJobsCount"`
+	MaxPriority      string                  `json:"maxPriority"`
+	AcceleratorClass domain.AcceleratorClass `json:"acceleratorClass"`
+	CreatedAt        time.Time               `json:"createdAt"`
 }
 
 type UserSummary struct {
@@ -48,7 +49,7 @@ func (r *GormRepository) ListTenantSummaries(ctx context.Context) ([]TenantSumma
 		if err != nil {
 			return nil, fmt.Errorf("calculate tenant %q gpu usage: %w", tenant.ID, err)
 		}
-		summary := TenantSummary{ID: tenant.ID, Name: tenant.Name, Namespace: tenant.Namespace, QueueName: tenant.LocalQueue, GPUQuotaLimit: effectiveGPUQuota(tenant.GPUQuotaLimit), GPUQuotaUsed: used, MaxPriority: tenant.MaxPriority, CreatedAt: tenant.CreatedAt}
+		summary := TenantSummary{ID: tenant.ID, Name: tenant.Name, Namespace: tenant.Namespace, QueueName: tenant.LocalQueue, GPUQuotaLimit: effectiveGPUQuota(tenant.GPUQuotaLimit), GPUQuotaUsed: used, MaxPriority: tenant.MaxPriority, AcceleratorClass: domain.AcceleratorClass(tenant.AcceleratorClass).Resolved(), CreatedAt: tenant.CreatedAt}
 		summary.RetiredAt, summary.RetiredBy = tenant.RetiredAt, tenant.RetiredBy
 		for _, job := range jobs {
 			if job.TenantID != tenant.ID {
@@ -66,6 +67,35 @@ func (r *GormRepository) ListTenantSummaries(ctx context.Context) ([]TenantSumma
 		summaries = append(summaries, summary)
 	}
 	return summaries, nil
+}
+
+func (r *GormRepository) TenantAcceleratorClass(ctx context.Context, tenantID string) (domain.AcceleratorClass, error) {
+	var tenant TenantRecord
+	if err := r.db.WithContext(ctx).Select("accelerator_class").Where("id = ? AND retired_at IS NULL", tenantID).First(&tenant).Error; err != nil {
+		return "", fmt.Errorf("read tenant accelerator class: %w", err)
+	}
+	accelerator := domain.AcceleratorClass(tenant.AcceleratorClass).Resolved()
+	if err := accelerator.Validate(); err != nil {
+		return "", err
+	}
+	return accelerator, nil
+}
+
+func (r *GormRepository) SetTenantAcceleratorClass(ctx context.Context, tenantID string, accelerator domain.AcceleratorClass) error {
+	accelerator = accelerator.Resolved()
+	if err := accelerator.Validate(); err != nil {
+		return err
+	}
+	result := r.db.WithContext(ctx).Model(&TenantRecord{}).
+		Where("id = ? AND retired_at IS NULL", tenantID).
+		Updates(map[string]any{"accelerator_class": string(accelerator), "updated_at": time.Now().UTC()})
+	if result.Error != nil {
+		return fmt.Errorf("update tenant accelerator class: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("tenant %q was not found", tenantID)
+	}
+	return nil
 }
 
 // SetTenantGPUQuota reallocates a team's GPU budget. The value is the same one

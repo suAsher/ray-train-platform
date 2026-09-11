@@ -63,6 +63,44 @@ func TestListImagesScopesToTenantPlusShared(t *testing.T) {
 	}
 }
 
+// Global catalogue access is a separate repository operation used only by
+// the SuperAdmin API. It must include every team while preserving kind
+// filtering; normal ListImages remains tenant-confined above.
+func TestListAllImagesIncludesEveryTeamAndFiltersByKind(t *testing.T) {
+	repo := imageRepo(t)
+	ctx := context.Background()
+	for _, image := range []domain.PlatformImage{
+		testImage("img-shared", "shared-train", domain.ImageKindTraining, "", false, '1'),
+		testImage("img-team-a", "team-a-train", domain.ImageKindTraining, "team-a", false, '2'),
+		testImage("img-team-b", "team-b-train", domain.ImageKindTraining, "team-b", false, '3'),
+		testImage("img-workspace", "shared-workspace", domain.ImageKindWorkspace, "", false, '4'),
+	} {
+		if err := repo.CreateImage(ctx, image); err != nil {
+			t.Fatalf("create image %q: %v", image.ID, err)
+		}
+	}
+
+	images, err := repo.ListAllImages(ctx, domain.ImageKindTraining)
+	if err != nil {
+		t.Fatalf("list global training catalogue: %v", err)
+	}
+	if len(images) != 3 {
+		t.Fatalf("global catalogue returned %d training images, want 3: %+v", len(images), images)
+	}
+	seenTenants := map[string]bool{}
+	for _, image := range images {
+		seenTenants[image.TenantID] = true
+		if image.Kind != domain.ImageKindTraining {
+			t.Fatalf("workspace image leaked through kind filter: %+v", image)
+		}
+	}
+	for _, tenantID := range []string{"", "team-a", "team-b"} {
+		if !seenTenants[tenantID] {
+			t.Fatalf("global catalogue is missing tenant %q: %+v", tenantID, images)
+		}
+	}
+}
+
 func TestListImagesFiltersByKind(t *testing.T) {
 	repo := imageRepo(t)
 	ctx := context.Background()

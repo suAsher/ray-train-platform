@@ -894,6 +894,23 @@ func TestLoadKeepsKueueTopologyDisabledUntilExplicitCutover(t *testing.T) {
 	}
 }
 
+func TestLoadKeepsKueuePreemptionDisabledUntilExplicitDrill(t *testing.T) {
+	setValidProductionConfig(t)
+	t.Setenv("KUEUE_PREEMPTION_ENABLED", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load default config: %v", err)
+	}
+	if cfg.KueuePreemptionEnabled {
+		t.Fatal("preemption must remain disabled until checkpoint requeue is proven")
+	}
+	t.Setenv("KUEUE_PREEMPTION_ENABLED", "true")
+	cfg, err = Load()
+	if err != nil || !cfg.KueuePreemptionEnabled {
+		t.Fatalf("explicit preemption switch not loaded: enabled=%t err=%v", cfg.KueuePreemptionEnabled, err)
+	}
+}
+
 func TestLoadAllowsDisabledPATWithoutPepperInProduction(t *testing.T) {
 	setValidProductionConfig(t)
 	t.Setenv("PAT_ENABLED", "false")

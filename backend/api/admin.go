@@ -16,6 +16,7 @@ type AdminStore interface {
 	ListUserSummaries(context.Context) ([]repositories.UserSummary, error)
 	CreateTenant(ctx context.Context, tenant domain.Tenant) error
 	SetTenantGPUQuota(ctx context.Context, tenantID string, limit int) error
+	SetTenantAcceleratorClass(ctx context.Context, tenantID string, accelerator domain.AcceleratorClass) error
 }
 
 func (h *Handler) RegisterAdminRoutes(group *gin.RouterGroup) {
@@ -27,6 +28,7 @@ func (h *Handler) RegisterAdminRoutes(group *gin.RouterGroup) {
 	// The tenant GPU limit is enforced at submission from the database, so an
 	// administrator can reallocate it here instead of editing Helm values.
 	group.POST("/tenants/:id/quota", h.setTenantQuota)
+	group.PUT("/tenants/:id/scheduling", h.setTenantScheduling)
 	group.GET("/users", h.listUsers)
 	group.GET("/users/:id/memberships", h.listUserMemberships)
 	group.PUT("/users/:id/memberships", h.putUserMembership)
@@ -105,9 +107,10 @@ func containsTenant(tenants []repositories.TenantSummary, tenantID string) bool 
 }
 
 type createTenantRequest struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	GPUQuota int    `json:"gpuQuota"`
+	ID               string                  `json:"id"`
+	Name             string                  `json:"name"`
+	GPUQuota         int                     `json:"gpuQuota"`
+	AcceleratorClass domain.AcceleratorClass `json:"acceleratorClass"`
 }
 
 // createTenant provisions a team: the database row, its Kubernetes namespace
@@ -141,6 +144,7 @@ func (h *Handler) createTenant(c *gin.Context) {
 	tenant := domain.Tenant{
 		ID: tenantID, Name: strings.TrimSpace(request.Name), Namespace: namespace,
 		LocalQueue: tenantQueue(tenantID), GPUQuotaLimit: request.GPUQuota,
+		AcceleratorClass: request.AcceleratorClass.Resolved(),
 	}
 	if tenant.Name == "" {
 		tenant.Name = tenantID
@@ -153,6 +157,62 @@ func (h *Handler) createTenant(c *gin.Context) {
 		return
 	}
 	h.provisionTenant(c, tenant)
+}
+
+type setTenantSchedulingRequest struct {
+	AcceleratorClass domain.AcceleratorClass `json:"acceleratorClass"`
+}
+
+func (h *Handler) setTenantScheduling(c *gin.Context) {
+	principal, ok := h.principal(c)
+	if !ok {
+		h.writeError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "authentication is required")
+		return
+	}
+	if !principal.HasRole(domain.RoleSuperAdmin) {
+		h.writeError(c, http.StatusForbidden, "FORBIDDEN", "super administrator role is required to assign a GPU pool")
+		return
+	}
+	if h.admin == nil {
+		h.writeError(c, http.StatusServiceUnavailable, "ADMIN_UNAVAILABLE", "admin data is not configured")
+		return
+	}
+	var request setTenantSchedulingRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		h.writeError(c, http.StatusBadRequest, "INVALID_JSON", "request body is invalid")
+		return
+	}
+	accelerator := request.AcceleratorClass.Resolved()
+	if err := accelerator.Validate(); err != nil {
+		h.writeError(c, http.StatusBadRequest, "INVALID_ACCELERATOR_CLASS", err.Error())
+		return
+	}
+	tenantID := c.Param("id")
+	tenants, err := h.admin.ListTenantSummaries(c.Request.Context())
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "TENANT_LIST_FAILED", "could not read tenants")
+		return
+	}
+	if !containsTenant(tenants, tenantID) {
+		h.writeError(c, http.StatusNotFound, "TENANT_NOT_FOUND", "tenant was not found")
+		return
+	}
+	if err := h.admin.SetTenantAcceleratorClass(c.Request.Context(), tenantID, accelerator); err != nil {
+		h.writeError(c, http.StatusInternalServerError, "TENANT_SCHEDULING_UPDATE_FAILED", "could not update the tenant GPU pool")
+		return
+	}
+	updated, err := h.admin.ListTenantSummaries(c.Request.Context())
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "TENANT_LIST_FAILED", "GPU pool saved but the tenant could not be re-read")
+		return
+	}
+	for _, tenant := range updated {
+		if tenant.ID == tenantID {
+			h.writeSuccess(c, http.StatusOK, tenant)
+			return
+		}
+	}
+	h.writeError(c, http.StatusNotFound, "TENANT_NOT_FOUND", "tenant was not found")
 }
 
 func (h *Handler) provisionTenant(c *gin.Context, tenant domain.Tenant) {

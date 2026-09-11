@@ -7,6 +7,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"ray-train-platform-backend/domain"
 )
 
 // TrainingPoolCapacity is the schedulable capacity of the GPU training pool.
@@ -78,6 +79,26 @@ func (c *Client) TrainingPoolCapacity(ctx context.Context, nodeSelector map[stri
 		capacity.MemoryBytes += memory.Value()
 	}
 	return capacity, nil
+}
+
+// TrainingPoolCapacities measures every supported accelerator independently.
+// Missing hardware is represented by a zero capacity so stale Kueue quota is
+// removed when a pool is drained or decommissioned.
+func (c *Client) TrainingPoolCapacities(ctx context.Context, baseSelector map[string]string) (map[domain.AcceleratorClass]TrainingPoolCapacity, error) {
+	result := make(map[domain.AcceleratorClass]TrainingPoolCapacity, 4)
+	for _, accelerator := range []domain.AcceleratorClass{domain.AcceleratorRTX4090, domain.AcceleratorA100, domain.AcceleratorA800, domain.AcceleratorH20} {
+		selector := make(map[string]string, len(baseSelector)+1)
+		for key, value := range baseSelector {
+			selector[key] = value
+		}
+		selector["accelerator"] = accelerator.NodeLabelValue()
+		capacity, err := c.TrainingPoolCapacity(ctx, selector)
+		if err != nil {
+			return nil, err
+		}
+		result[accelerator] = capacity
+	}
+	return result, nil
 }
 
 // isNodeReady only accepts an explicit Ready=True condition. A freshly

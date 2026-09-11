@@ -52,10 +52,30 @@ func (c *Client) ListGPUNodeUsage(ctx context.Context) ([]GPUNodeUsage, error) {
 		if available < 0 {
 			available = 0
 		}
-		item := GPUNodeUsage{NodeName: node.Name, Capacity: capacity, Allocatable: allocatable, Allocated: used, Available: available}
+		item := GPUNodeUsage{
+			NodeName: node.Name, Capacity: capacity, Allocatable: allocatable, Allocated: used, Available: available,
+			AcceleratorClass: acceleratorClassFromNodeLabel(node.Labels["accelerator"]),
+			GPUPool:          node.Labels["platform.wellspiking.ai/gpu-pool"],
+			AssignedTenant:   node.Labels["platform.wellspiking.ai/tenant"],
+		}
 		usage = append(usage, withNodeOnboarding(item, node))
 	}
 	return usage, nil
+}
+
+func acceleratorClassFromNodeLabel(value string) domain.AcceleratorClass {
+	switch value {
+	case "nvidia-a100":
+		return domain.AcceleratorA100
+	case "nvidia-a800":
+		return domain.AcceleratorA800
+	case "nvidia-h20":
+		return domain.AcceleratorH20
+	case "nvidia-rtx-4090":
+		return domain.AcceleratorRTX4090
+	default:
+		return ""
+	}
 }
 
 func withNodeOnboarding(item GPUNodeUsage, node corev1.Node) GPUNodeUsage {

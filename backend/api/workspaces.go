@@ -90,6 +90,21 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 		}
 		return
 	}
+	nodeSelector := make(map[string]string, len(h.trainingNodeSelector)+1)
+	for key, value := range h.trainingNodeSelector {
+		nodeSelector[key] = value
+	}
+	accelerator := domain.AcceleratorRTX4090
+	if h.tenantScheduling != nil {
+		accelerator, err = h.tenantScheduling.TenantAcceleratorClass(c.Request.Context(), principal.TenantID)
+		if err != nil {
+			h.writeError(c, http.StatusServiceUnavailable, "TENANT_SCHEDULING_UNAVAILABLE", "could not resolve the team's GPU pool")
+			return
+		}
+	}
+	if gpuCount > 0 {
+		nodeSelector["accelerator"] = accelerator.Resolved().NodeLabelValue()
+	}
 	name, err := h.newID()
 	if err != nil {
 		h.writeError(c, http.StatusInternalServerError, "ID_GENERATION_FAILED", "could not allocate workspace id")
@@ -116,7 +131,7 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 		h.writeError(c, http.StatusBadGateway, "WORKSPACE_RUNTIME_PREPARE_FAILED", "could not prepare the tenant workspace runtime")
 		return
 	}
-	manifest, err := k8s.RenderDevRayCluster(*workspace, k8s.WorkspaceRenderOptions{NodeSelector: h.trainingNodeSelector, Image: image, RayVersion: h.rayVersion, ServiceAccount: h.serviceAccount, ImagePullSecrets: h.imagePullSecrets, IDCExistingClaim: h.idcClaim, IDCMountPath: h.idcMountPath, JupyterBasePath: workspace.JupyterURL, DataMounts: dataMounts})
+	manifest, err := k8s.RenderDevRayCluster(*workspace, k8s.WorkspaceRenderOptions{NodeSelector: nodeSelector, Image: image, RayVersion: h.rayVersion, ServiceAccount: h.serviceAccount, ImagePullSecrets: h.imagePullSecrets, IDCExistingClaim: h.idcClaim, IDCMountPath: h.idcMountPath, JupyterBasePath: workspace.JupyterURL, DataMounts: dataMounts})
 	if err != nil {
 		_ = h.workspaces.UpdateWorkspaceState(c.Request.Context(), principal.TenantID, principal.Subject, domain.WorkspaceFailed)
 		h.writeError(c, http.StatusBadRequest, "WORKSPACE_SPEC_INVALID", err.Error())

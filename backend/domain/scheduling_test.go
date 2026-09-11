@@ -16,14 +16,14 @@ func TestSchedulingDefaultsPreserveExisting4090NormalJobs(t *testing.T) {
 }
 
 func TestOpportunisticSchedulingRequiresManagedRecovery(t *testing.T) {
-	base := JobSpec{Priority: string(WorkloadPriorityOpportunistic), Preemptible: true}
+	base := JobSpec{Priority: string(WorkloadPriorityOpportunistic), Preemptible: true, Resources: Resources{WorkerReplicas: 1, GPUsPerWorker: 1}}
 	if err := base.validateScheduling(); err == nil {
 		t.Fatal("opportunistic job without managed recovery must fail")
 	}
 	base.TrainingEngine = TrainingEngineRayTrain
 	base.Managed = ManagedTrainingPolicy{
 		MaxFailures: 1,
-		Checkpoint: CheckpointPolicy{EveryEpochs: 1, KeepLatest: 1},
+		Checkpoint:  CheckpointPolicy{EveryEpochs: 1, KeepLatest: 1},
 	}
 	if err := base.validateScheduling(); err != nil {
 		t.Fatalf("recoverable opportunistic job rejected: %v", err)
@@ -31,6 +31,22 @@ func TestOpportunisticSchedulingRequiresManagedRecovery(t *testing.T) {
 	base.Priority = string(WorkloadPriorityNormal)
 	if err := base.validateScheduling(); err == nil {
 		t.Fatal("normal job must not be marked preemptible")
+	}
+}
+
+func TestOpportunisticSchedulingRejectsDistributedOrMultiGPUWork(t *testing.T) {
+	base := JobSpec{
+		Priority: string(WorkloadPriorityOpportunistic), Preemptible: true,
+		TrainingEngine: TrainingEngineRayTrain,
+		Managed:        ManagedTrainingPolicy{MaxFailures: 1, Checkpoint: CheckpointPolicy{EveryEpochs: 1, KeepLatest: 1}},
+		Resources:      Resources{WorkerReplicas: 1, GPUsPerWorker: 1},
+	}
+	for _, resources := range []Resources{{WorkerReplicas: 2, GPUsPerWorker: 1}, {WorkerReplicas: 1, GPUsPerWorker: 2}} {
+		candidate := base
+		candidate.Resources = resources
+		if err := candidate.validateScheduling(); err == nil {
+			t.Fatalf("opportunistic resources %+v must be rejected", resources)
+		}
 	}
 }
 

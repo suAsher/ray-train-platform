@@ -63,6 +63,77 @@ func nominalQuotaFor(t *testing.T, dynamic *dynamicfake.FakeDynamicClient, name,
 	return ""
 }
 
+func flavorNominalQuotaFor(t *testing.T, dynamic *dynamicfake.FakeDynamicClient, queueName, flavorName, resourceName string) string {
+	t.Helper()
+	fetched, err := dynamic.Resource(clusterQueueGVR).Get(context.Background(), queueName, getOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups, _, _ := unstructured.NestedSlice(fetched.Object, "spec", "resourceGroups")
+	group, _ := groups[0].(map[string]any)
+	flavors, _ := group["flavors"].([]any)
+	for _, flavorItem := range flavors {
+		flavor, _ := flavorItem.(map[string]any)
+		if fmt.Sprint(flavor["name"]) != flavorName {
+			continue
+		}
+		resources, _ := flavor["resources"].([]any)
+		for _, item := range resources {
+			entry, _ := item.(map[string]any)
+			if entry["name"] == resourceName {
+				return fmt.Sprint(entry["nominalQuota"])
+			}
+		}
+	}
+	t.Fatalf("quota %s/%s not found", flavorName, resourceName)
+	return ""
+}
+
+func TestSyncClusterQueueFlavorQuotasKeepsAcceleratorCapacitySeparate(t *testing.T) {
+	queue := clusterQueueObject("cluster-gpu-queue", "32", "256", "1Ti")
+	groups, _, _ := unstructured.NestedSlice(queue.Object, "spec", "resourceGroups")
+	group := groups[0].(map[string]any)
+	base := group["flavors"].([]any)[0].(map[string]any)
+	base["name"] = "gpu-4090-flavor"
+	group["flavors"] = append(group["flavors"].([]any), map[string]any{
+		"name": "gpu-a100-flavor",
+		"resources": []any{
+			map[string]any{"name": "cpu", "nominalQuota": "0"},
+			map[string]any{"name": "memory", "nominalQuota": "0"},
+			map[string]any{"name": "nvidia.com/gpu", "nominalQuota": "0"},
+		},
+	})
+	_ = unstructured.SetNestedSlice(queue.Object, groups, "spec", "resourceGroups")
+	client, dynamic := quotaTestClient(queue)
+	changed, err := client.SyncClusterQueueFlavorQuotas(context.Background(), "cluster-gpu-queue", map[string]TrainingPoolCapacity{
+		"gpu-4090-flavor": {Nodes: 4, GPUs: 32, CPUMillis: 256000, MemoryBytes: 1024 * 1024 * 1024 * 1024},
+		"gpu-a100-flavor": {Nodes: 2, GPUs: 16, CPUMillis: 128000, MemoryBytes: 512 * 1024 * 1024 * 1024},
+	})
+	if err != nil || !changed {
+		t.Fatalf("sync flavor quotas changed=%v err=%v", changed, err)
+	}
+	if got := flavorNominalQuotaFor(t, dynamic, "cluster-gpu-queue", "gpu-4090-flavor", "nvidia.com/gpu"); got != "32" {
+		t.Fatalf("4090 quota=%s", got)
+	}
+	if got := flavorNominalQuotaFor(t, dynamic, "cluster-gpu-queue", "gpu-a100-flavor", "nvidia.com/gpu"); got != "16" {
+		t.Fatalf("a100 quota=%s", got)
+	}
+}
+
+func TestSyncClusterQueueFlavorQuotasUsesAggregateFallbackOnlyForLegacySingleFlavor(t *testing.T) {
+	queue := clusterQueueObject("cluster-gpu-queue", "16", "128", "512Gi")
+	client, dynamic := quotaTestClient(queue)
+	changed, err := client.SyncClusterQueueFlavorQuotas(context.Background(), "cluster-gpu-queue", map[string]TrainingPoolCapacity{
+		"": {Nodes: 3, GPUs: 24, CPUMillis: 192000, MemoryBytes: 768 * 1024 * 1024 * 1024},
+	})
+	if err != nil || !changed {
+		t.Fatalf("legacy fallback changed=%v err=%v", changed, err)
+	}
+	if got := nominalQuotaFor(t, dynamic, "cluster-gpu-queue", "nvidia.com/gpu"); got != "24" {
+		t.Fatalf("legacy flavor quota=%s", got)
+	}
+}
+
 // The whole point: an operator labels a new machine and the admission budget
 // follows, without anyone editing the ClusterQueue by hand.
 func TestSyncClusterQueueQuotaFollowsPoolCapacity(t *testing.T) {

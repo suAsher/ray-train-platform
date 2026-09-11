@@ -114,6 +114,29 @@ func (r *GormRepository) ListImages(ctx context.Context, tenantID, kind string) 
 	return images, nil
 }
 
+// ListAllImages is deliberately separate from ListImages: only the
+// SuperAdmin management endpoint calls it, while submission/runtime lookups
+// remain tenant-confined.
+func (r *GormRepository) ListAllImages(ctx context.Context, kind string) ([]domain.PlatformImage, error) {
+	query := r.db.WithContext(ctx).Model(&PlatformImageRecord{})
+	if kind != "" {
+		query = query.Where("kind = ?", kind)
+	}
+	var records []PlatformImageRecord
+	if err := query.Order("CASE WHEN tenant_id IS NULL THEN 0 ELSE 1 END ASC, tenant_id ASC, is_default DESC, name ASC").Find(&records).Error; err != nil {
+		return nil, fmt.Errorf("list all images: %w", err)
+	}
+	images := make([]domain.PlatformImage, 0, len(records))
+	for _, record := range records {
+		image, err := platformImageFromRecord(record)
+		if err != nil {
+			return nil, fmt.Errorf("decode image %s: %w", record.ID, err)
+		}
+		images = append(images, image)
+	}
+	return images, nil
+}
+
 // DefaultImage picks what a form should preselect: the tenant's default, else
 // any shared default, else nothing.
 func (r *GormRepository) DefaultImage(ctx context.Context, tenantID, kind string) (domain.PlatformImage, error) {
