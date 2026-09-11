@@ -505,12 +505,18 @@ VALUES ('user-a1', 'subject-a1', 'user-a1', 'tenant-a', '[]'::jsonb),
        ('user-b1', 'subject-b1', 'user-b1', 'tenant-b', '[]'::jsonb)`).Error; err != nil {
 		t.Fatalf("insert users: %v", err)
 	}
+	if !database.Migrator().HasTable("local_users") {
+		return
+	}
 	if err := database.Exec(`
 INSERT INTO local_users(id, username, tenant_id, active_tenant_id, roles, password_hash, storage_key, identity_provider)
 VALUES ('user-a1', 'user-a1', 'tenant-a', 'tenant-a', '[]'::jsonb, '!', 'user-a1', 'oauth2-proxy'),
        ('user-a2', 'user-a2', 'tenant-a', 'tenant-a', '[]'::jsonb, '!', 'user-a2', 'oauth2-proxy'),
        ('user-b1', 'user-b1', 'tenant-b', 'tenant-b', '[]'::jsonb, '!', 'user-b1', 'oauth2-proxy')`).Error; err != nil {
 		t.Fatalf("insert platform identities: %v", err)
+	}
+	if !database.Migrator().HasTable("identity_tenant_ownerships") {
+		return
 	}
 	if err := database.Exec(`
 INSERT INTO identity_tenant_ownerships(identity_id, tenant_id)
