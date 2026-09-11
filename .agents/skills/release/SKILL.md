@@ -127,8 +127,9 @@ scp -i ~/.ssh/qomolo-desktop.pem /tmp/rtp-<short-sha>.bundle root@14.103.49.106:
 cd /opt/guofeng/vke-cluster/ray-platform-main
 git bundle verify /tmp/rtp-<short-sha>.bundle
 git fetch /tmp/rtp-<short-sha>.bundle main
+candidate_sha="$(git rev-parse FETCH_HEAD)"  # 记录并核对完整计划 SHA
 verify_dir="$(mktemp -d /tmp/rtp-verify.XXXXXX)"
-git worktree add --detach "$verify_dir" FETCH_HEAD
+git worktree add --detach "$verify_dir" "$candidate_sha"
 # 使用上一节的固定 Go builder 命令，在只读挂载的完整 $verify_dir 上运行全部测试
 git worktree remove "$verify_dir"
 
@@ -136,14 +137,17 @@ git worktree remove "$verify_dir"
 git push origin main
 git -c core.sshCommand='ssh -i ~/.ssh/id-spiking -p 32022 -o IdentitiesOnly=yes' push gitlab main
 
-# 4. 构建机正式目录只做快进，并再次核对
-git merge --ff-only FETCH_HEAD
+# 4. 两个远端确认一致后，构建机正式目录只快进到已验证的完整 SHA
+# 新 SSH 会话需从发布记录恢复 candidate_sha，不重新依赖可能已变的 FETCH_HEAD
+git merge --ff-only "$candidate_sha"
 git rev-parse HEAD             # 必须等于本地/GitHub/GitLab 的计划 commit
 git status --short             # 必须为空
 rm -f /tmp/rtp-<short-sha>.bundle
 ```
 
 最终必须核对本地 `main`、GitHub `origin/main`、内部 GitLab `gitlab/main`、构建机 `ray-platform-main` 四个完整 SHA 相同。构建前正式目录还必须干净。**不要在构建机上临时改源码再构建**,那样产出的镜像与任何 commit 都对不上,事后无法追溯。
+
+两远端推送不是原子操作：推前再次 `ls-remote`，确认仍是测试所基于的远端状态；推后核对两者都等于候选完整 SHA，再快进构建机。任一推送失败或有并发更新，停止后续发布并报告部分同步状态；保留已成功推送的提交，不 force push、不自动回退远端，也不误报四端一致。整合他人更新后重新验证。
 
 比较远端时先 fetch 或直接 `git ls-remote`，不能只读可能陈旧的本地 remote-tracking ref。只有文档/skill/图片变化时无需重建镜像；审阅、链接/格式校验即可，报告未部署的文档差异。没有推送授权就保留本地交付，并明确四端 HEAD 与本地未提交文件的区别。
 
@@ -242,14 +246,14 @@ helm upgrade ray-platform helm/ray-train-platform -n ray-train-platform \
 
 ```bash
 kubectl -n ray-train-platform rollout status deployment/ray-train-backend --timeout=5m
-kubectl -n ray-train-platform get pods -o custom-columns='N:.metadata.name,ID:.status.containerStatuses[0].imageID' --no-headers | grep -E "backend|frontend"
+kubectl -n ray-train-platform get pods -l app=ray-train-backend -o custom-columns='N:.metadata.name,ID:.status.containerStatuses[0].imageID' --no-headers
 kubectl -n ray-train-platform get pods --no-headers | grep backend   # 确认不是 CrashLoopBackOff
 kubectl -n ray-train-platform logs deploy/ray-train-backend --tail=200 | grep -iE "panic|fatal|migration"
 curl -fsS -o /dev/null -w "%{http_code}\n" https://raytrain.wellspiking.ai/healthz
 kubectl get raycluster -A --no-headers         # 还需逐项对比发布前记录的 UID/重启数
 ```
 
-Pod 的 `imageID` 要等于你构建出的摘要 —— rollout 成功不等于跑的是新镜像。
+每个重建组件的 Pod `imageID` 要等于该组件自己的候选摘要 —— rollout 成功不等于跑的是新镜像。上例只查 backend；若还重建 spk-rayjob，再独立核对其下载服务。未重建的旧 frontend 等组件应保持原摘要，不拿 backend 摘要与它比较。
 
 平台 API 的本地可达性受网络影响，健康检查和接口探测优先在构建机上做。未认证返回 401 只能证明请求到达某个认证边界，通用 auth 也可能拦截不存在的路由；新增路由还必须用获准身份验证成功响应或预期业务错误，不能以 401 证明路由已注册。
 
