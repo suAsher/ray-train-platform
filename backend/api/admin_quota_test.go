@@ -28,6 +28,12 @@ type fakeAdminStore struct {
 		tenantID    string
 		accelerator domain.AcceleratorClass
 	}
+	audits []repositories.AdministrativeAuditEvent
+}
+
+func (store *fakeAdminStore) CreateAdministrativeAuditLog(_ context.Context, event repositories.AdministrativeAuditEvent) error {
+	store.audits = append(store.audits, event)
+	return nil
 }
 
 func (store *fakeAdminStore) SetTenantName(_ context.Context, tenantID, name string) error {
@@ -122,6 +128,24 @@ func TestSuperAdminChangesTheEnforcedTenantGPUQuota(t *testing.T) {
 	}
 	if envelope.Data.GPUQuotaLimit != 16 {
 		t.Fatalf("expected the updated tenant to be returned, got %+v", envelope.Data)
+	}
+}
+
+func TestSuperAdminTenantRenameIsAudited(t *testing.T) {
+	store := &fakeAdminStore{tenants: []repositories.TenantSummary{{ID: "local", Name: "local"}}}
+	handler := NewHandler(&fakeJobRepository{}, Options{Admin: store})
+	principal := auth.Principal{Subject: "root", Username: "root", TenantID: "local", Roles: []string{domain.RoleSuperAdmin}}
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/tenants/local", strings.NewReader(`{"name":"感知应用算法团队"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Request-ID", "request-rename")
+	response := httptest.NewRecorder()
+	adminRouter(handler, principal).ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("rename response=%d %s", response.Code, response.Body.String())
+	}
+	if len(store.audits) != 1 || store.audits[0].Action != "tenant.renamed" || store.audits[0].ResourceID != "local" || store.audits[0].NewName != "感知应用算法团队" {
+		t.Fatalf("unexpected audit events: %+v", store.audits)
 	}
 }
 

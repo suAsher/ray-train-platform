@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
+	"ray-train-platform-backend/repositories"
 )
 
 type fakeMembershipStore struct {
@@ -21,6 +23,13 @@ type fakeMembershipStore struct {
 		roles                                        []string
 		deactivateOthers                             bool
 	}
+	audits      []repositories.AdministrativeAuditEvent
+	reassignErr error
+}
+
+func (store *fakeMembershipStore) CreateAdministrativeAuditLog(_ context.Context, event repositories.AdministrativeAuditEvent) error {
+	store.audits = append(store.audits, event)
+	return nil
 }
 
 func (store *fakeMembershipStore) ListTenantMemberships(_ context.Context, identityID string) ([]domain.TenantMembership, error) {
@@ -38,6 +47,9 @@ func (store *fakeMembershipStore) SetTenantMembershipStatus(_ context.Context, _
 	return nil
 }
 func (store *fakeMembershipStore) ReassignActiveMembership(_ context.Context, identityID, expectedTenantID, targetTenantID string, roles []string, deactivateOthers bool) error {
+	if store.reassignErr != nil {
+		return store.reassignErr
+	}
 	store.reassigned.identityID = identityID
 	store.reassigned.expectedTenantID = expectedTenantID
 	store.reassigned.targetTenantID = targetTenantID
@@ -123,6 +135,22 @@ func TestSuperAdminAtomicallyReassignsUserTeam(t *testing.T) {
 	}
 	if store.reassigned.identityID != "user-b" || store.reassigned.expectedTenantID != "local" || store.reassigned.targetTenantID != "devops" || !store.reassigned.deactivateOthers {
 		t.Fatalf("unexpected reassignment: %+v", store.reassigned)
+	}
+	if len(store.audits) != 1 || store.audits[0].Action != "tenant_membership.reassigned" || store.audits[0].ResourceID != "user-b" || store.audits[0].SourceTenantID != "local" || store.audits[0].TargetTenantID != "devops" {
+		t.Fatalf("unexpected audit events: %+v", store.audits)
+	}
+}
+
+func TestMembershipReassignmentDoesNotExposeStoreErrors(t *testing.T) {
+	store := &fakeMembershipStore{items: map[string][]domain.TenantMembership{}, reassignErr: errors.New("pq: secret internal database detail")}
+	handler := NewHandler(&fakeJobRepository{}, Options{Memberships: store})
+	principal := auth.Principal{Subject: "root", TenantID: "local", Roles: []string{domain.RoleSuperAdmin}, AuthType: auth.AuthTypeOAuth2Proxy}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/users/user-b/active-membership", bytes.NewBufferString(`{"expectedTenantId":"local","targetTenantId":"devops","roles":["Engineer"]}`))
+	request.Header.Set("Content-Type", "application/json")
+	membershipRouter(handler, principal).ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || bytes.Contains(response.Body.Bytes(), []byte("secret internal database detail")) {
+		t.Fatalf("unexpected response=%d %s", response.Code, response.Body.String())
 	}
 }
 
