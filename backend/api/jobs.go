@@ -45,8 +45,8 @@ type Handler struct {
 	metrics                  MetricsProvider
 	experiments              ExperimentProvider
 	mlflowTracking           mlflowTrackingService
- trackingArtifacts trackingArtifactService
- mlflowIntegrations *MLflowIntegrationHandler
+	trackingArtifacts        trackingArtifactService
+	mlflowIntegrations       *MLflowIntegrationHandler
 	mlflowSDKRegistered      bool
 	allowAnonymous           bool
 	imageAllowlist           []string
@@ -141,8 +141,8 @@ type Options struct {
 	Metrics                  MetricsProvider
 	Experiments              ExperimentProvider
 	MLflowTracking           mlflowTrackingService
- TrackingArtifacts trackingArtifactService
- MLflowIntegrations *MLflowIntegrationHandler
+	TrackingArtifacts        trackingArtifactService
+	MLflowIntegrations       *MLflowIntegrationHandler
 	ImageAllowlist           []string
 	GitAllowlist             []string
 	Workspaces               WorkspaceStore

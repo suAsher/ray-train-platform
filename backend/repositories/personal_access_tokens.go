@@ -191,8 +191,12 @@ func (r *GormRepository) TouchPATLastUsed(ctx context.Context, publicID string, 
 	}
 	if result.RowsAffected == 0 {
 		var count int64
-		if err := r.db.WithContext(ctx).Model(&PersonalAccessTokenRecord{}).Where("public_id = ?", publicID).Count(&count).Error; err != nil { return err }
-		if count == 0 { return r.touchIntegrationPAT(ctx, publicID, usedAt) }
+		if err := r.db.WithContext(ctx).Model(&PersonalAccessTokenRecord{}).Where("public_id = ?", publicID).Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			return r.touchIntegrationPAT(ctx, publicID, usedAt)
+		}
 	}
 	return nil
 }

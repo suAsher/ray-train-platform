@@ -27,12 +27,12 @@ import (
 	"ray-train-platform-backend/idcsync"
 	"ray-train-platform-backend/k8s"
 	"ray-train-platform-backend/mlflowtracking"
- "ray-train-platform-backend/trackingartifacts"
 	"ray-train-platform-backend/objectstore"
 	"ray-train-platform-backend/observability"
 	"ray-train-platform-backend/rayapi"
 	"ray-train-platform-backend/repositories"
 	"ray-train-platform-backend/runtimecatalog"
+	"ray-train-platform-backend/trackingartifacts"
 )
 
 func main() {
@@ -161,7 +161,9 @@ func main() {
 		trackingService := mlflowtracking.New(trackingStore, mlflowClient, mlflowtracking.Options{CursorKey: []byte(cfg.PATPepper)})
 		jobOptions.MLflowTracking = api.NewGrantedMLflowTracking(trackingService, trackingStore, integrationStore, []byte(cfg.PATPepper))
 		integrationHandler, initErr := api.NewMLflowIntegrationHandler(integrationStore, api.MLflowIntegrationOptions{Pepper: []byte(cfg.PATPepper)})
-		if initErr != nil { log.Fatalf("initialize MLflow integration management: %v", initErr) }
+		if initErr != nil {
+			log.Fatalf("initialize MLflow integration management: %v", initErr)
+		}
 		jobOptions.MLflowIntegrations = integrationHandler
 		if tosStore, ok := directoryLister.(*objectstore.TOSStore); ok {
 			jobOptions.TrackingArtifacts = trackingartifacts.New(repositories.NewTrackingArtifactStore(database), tosStore.TrackingArtifacts())
