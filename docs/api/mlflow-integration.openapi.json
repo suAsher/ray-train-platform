@@ -1,0 +1,1169 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "RayTrain MLflow Integration API",
+    "version": "2026-09-12",
+    "description": "Public contract for the currently deployed RayTrain MLflow integration endpoints. These endpoints expose RayTrain-owned MLflow experiment summaries, exact job run lookup, and limited metric/parameter/tag writes for integrations. This is not a full MLflow SDK compatibility layer: only the four paths in this document are part of the contract. Read access requires a personal access token with jobs:read. Batch write requires jobs:read and mlflow:write, PAT authentication, current tenant ownership of the job, matching MLflow run provenance, and a RUNNING run. Existing default PAT scopes remain jobs:read, jobs:write, and sources:write; mlflow:write is opt-in. Returned metric snapshots are capped at 20 keys, metric history at 500 points per key, parameters at 100 entries, and tenant experiment listings at 100 runs."
+  },
+  "servers": [
+    {
+      "url": "https://raytrain.wellspiking.ai",
+      "description": "RayTrain production API"
+    }
+  ],
+  "tags": [
+    {
+      "name": "MLflow Integration",
+      "description": "RayTrain-scoped MLflow tracking read/write endpoints."
+    }
+  ],
+  "paths": {
+    "/api/v1/experiments": {
+      "get": {
+        "tags": [
+          "MLflow Integration"
+        ],
+        "operationId": "listTenantExperiments",
+        "summary": "List MLflow runs visible to the caller in the current tenant",
+        "description": "Lists RayTrain-verified MLflow runs for the current tenant. Tenant administrators see tenant runs; normal users see only their own jobs. The response is filtered through platform job ownership before it is returned.",
+        "security": [
+          {
+            "bearerPAT": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Experiment catalog for the current tenant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentCatalogEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "502": {
+            "$ref": "#/components/responses/MLflowQueryFailed"
+          },
+          "503": {
+            "$ref": "#/components/responses/MLflowUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{job_id}/experiment": {
+      "get": {
+        "tags": [
+          "MLflow Integration"
+        ],
+        "operationId": "getJobExperiment",
+        "summary": "Get the platform experiment summary for one job",
+        "description": "Returns the RayTrain-owned MLflow experiment view for a job. Owners and tenant administrators can read it. If the job has no trusted MLflow run yet, the response may contain an experimentName with no run and an empty series array.",
+        "security": [
+          {
+            "bearerPAT": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobID"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "MLflow experiment data associated with the job.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobExperimentEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/ExperimentForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/JobNotFound"
+          },
+          "502": {
+            "$ref": "#/components/responses/MLflowQueryFailed"
+          },
+          "503": {
+            "$ref": "#/components/responses/MLflowUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{job_id}/mlflow/runs/{run_id}": {
+      "get": {
+        "tags": [
+          "MLflow Integration"
+        ],
+        "operationId": "getExactJobRun",
+        "summary": "Read one exact MLflow run for a job",
+        "description": "Reads the exact MLflow run_id requested by the caller and verifies it belongs to the RayTrain job through trusted provenance tags. The platform job_id and MLflow run_id are different identifiers; use this endpoint to bind them. Owners and tenant administrators can read.",
+        "security": [
+          {
+            "bearerPAT": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobID"
+          },
+          {
+            "$ref": "#/components/parameters/RunID"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The exact verified run and up to 20 metric series.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobExperimentEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/ExperimentForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/RunOrJobNotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/MLflowRequestFailed"
+          },
+          "503": {
+            "$ref": "#/components/responses/MLflowUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{job_id}/mlflow/runs/{run_id}/log-batch": {
+      "post": {
+        "tags": [
+          "MLflow Integration"
+        ],
+        "operationId": "logExactJobRunBatch",
+        "summary": "Append metrics, params, and tags to one exact MLflow run",
+        "description": "Writes a bounded MLflow log batch to the exact verified run. The caller must use PAT authentication with jobs:read and mlflow:write, be the job owner in the current tenant, and target a trusted RUNNING run. Tenant administrators cannot write to another user's run. The request body limit is 256 KiB.",
+        "security": [
+          {
+            "bearerPAT": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobID"
+          },
+          {
+            "$ref": "#/components/parameters/RunID"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MLflowLogBatch"
+              },
+              "examples": {
+                "metricsAndParams": {
+                  "summary": "Log one metric and one parameter",
+                  "value": {
+                    "metrics": [
+                      {
+                        "key": "external/quality_score",
+                        "value": 0.123,
+                        "timestamp": 1799726400000,
+                        "step": 42
+                      }
+                    ],
+                    "params": [
+                      {
+                        "key": "external.evaluator_version",
+                        "value": "v1.0.0"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The batch was accepted by the platform and logged to MLflow.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogBatchEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/MLflowBatchInvalid"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/WriteForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/RunOrJobNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/BatchConflictOrRunNotRunning"
+          },
+          "413": {
+            "$ref": "#/components/responses/BatchTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/MLflowRequestFailed"
+          },
+          "503": {
+            "$ref": "#/components/responses/MLflowWriteUnavailable"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerPAT": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "RayTrain Personal Access Token",
+        "description": "Use a RayTrain personal access token. Read endpoints require jobs:read. The log-batch endpoint requires jobs:read and mlflow:write; mlflow:write is not included in the default PAT scopes."
+      }
+    },
+    "parameters": {
+      "JobID": {
+        "name": "job_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/JobID"
+        },
+        "description": "RayTrain platform job identifier."
+      },
+      "RunID": {
+        "name": "run_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/RunID"
+        },
+        "description": "MLflow run identifier. It must be 32 lower-case hexadecimal characters."
+      },
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 50
+        },
+        "description": "Maximum number of runs returned. The platform caps the value at 100; invalid or values below 1 are treated as 50 by the deployed API."
+      },
+      "XRequestID": {
+        "name": "X-Request-ID",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/RequestID"
+        },
+        "description": "Optional request id. The platform trims the supplied value and uses it only when the trimmed value is non-empty and at most 128 UTF-8 bytes; otherwise middleware may generate a new request id."
+      }
+    },
+    "headers": {
+      "NoStore": {
+        "description": "Exact run read/write endpoints disable intermediary caching.",
+        "schema": {
+          "type": "string",
+          "const": "no-store"
+        }
+      },
+      "RetryAfter": {
+        "description": "Seconds until another request should be attempted.",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "example": 60
+        }
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "Authentication is missing or invalid.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "examples": {
+              "authRequired": {
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "AUTH_REQUIRED",
+                    "message": "authentication required"
+                  },
+                  "request_id": "req_01J9Z..."
+                }
+              }
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "The caller is authenticated but lacks a required scope or role.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "ExperimentForbidden": {
+        "description": "The caller cannot access the requested job experiment.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "examples": {
+              "experimentForbidden": {
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "EXPERIMENT_FORBIDDEN",
+                    "message": "experiment access denied"
+                  },
+                  "request_id": "req_01J9Z..."
+                }
+              }
+            }
+          }
+        }
+      },
+      "WriteForbidden": {
+        "description": "The caller cannot write to the requested run. Common causes are missing mlflow:write, browser/session auth instead of PAT auth, or not being the job owner.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "examples": {
+              "patRequired": {
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "MLFLOW_PAT_REQUIRED",
+                    "message": "MLflow write API requires a personal access token"
+                  },
+                  "request_id": "req_01J9Z..."
+                }
+              },
+              "experimentForbidden": {
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "EXPERIMENT_FORBIDDEN",
+                    "message": "experiment write access denied"
+                  },
+                  "request_id": "req_01J9Z..."
+                }
+              }
+            }
+          }
+        }
+      },
+      "JobNotFound": {
+        "description": "The job does not exist in the caller's current tenant.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "examples": {
+              "jobNotFound": {
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "JOB_NOT_FOUND",
+                    "message": "job not found"
+                  },
+                  "request_id": "req_01J9Z..."
+                }
+              }
+            }
+          }
+        }
+      },
+      "RunOrJobNotFound": {
+        "description": "The job is not visible in the caller's current tenant, the run_id is malformed, or the MLflow run does not match RayTrain provenance for the job.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "examples": {
+              "runNotFound": {
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "MLFLOW_RUN_NOT_FOUND",
+                    "message": "MLflow run not found"
+                  },
+                  "request_id": "req_01J9Z..."
+                }
+              }
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "Too many exact run read/write requests.",
+        "headers": {
+          "Retry-After": {
+            "$ref": "#/components/headers/RetryAfter"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "examples": {
+              "rateLimited": {
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "RATE_LIMITED",
+                    "message": "too many MLflow integration requests"
+                  },
+                  "request_id": "req_01J9Z..."
+                }
+              }
+            }
+          }
+        }
+      },
+      "MLflowUnavailable": {
+        "description": "The platform MLflow provider is not configured or unavailable.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "examples": {
+              "unavailable": {
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "MLFLOW_UNAVAILABLE",
+                    "message": "MLflow integration unavailable"
+                  },
+                  "request_id": "req_01J9Z..."
+                }
+              }
+            }
+          }
+        }
+      },
+      "MLflowWriteUnavailable": {
+        "description": "MLflow or the required write audit store is unavailable.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "examples": {
+              "auditUnavailable": {
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "MLFLOW_AUDIT_UNAVAILABLE",
+                    "message": "MLflow write audit unavailable"
+                  },
+                  "request_id": "req_01J9Z..."
+                }
+              },
+              "auditIncomplete": {
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "MLFLOW_AUDIT_INCOMPLETE",
+                    "message": "MLflow may have accepted the batch; verify the run before retrying"
+                  },
+                  "request_id": "req_01J9Z..."
+                }
+              }
+            }
+          }
+        }
+      },
+      "MLflowQueryFailed": {
+        "description": "The platform could not query MLflow.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "examples": {
+              "queryFailed": {
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "MLFLOW_QUERY_FAILED",
+                    "message": "failed to query MLflow experiment"
+                  },
+                  "request_id": "req_01J9Z..."
+                }
+              }
+            }
+          }
+        }
+      },
+      "MLflowRequestFailed": {
+        "description": "The platform could not complete the MLflow request.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "examples": {
+              "requestFailed": {
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "MLFLOW_REQUEST_FAILED",
+                    "message": "MLflow request failed"
+                  },
+                  "request_id": "req_01J9Z..."
+                }
+              }
+            }
+          }
+        }
+      },
+      "MLflowBatchInvalid": {
+        "description": "The log batch body is malformed, too deeply nested, contains duplicate/unknown/non-lowercase JSON fields, has no entries, exceeds per-array limits, or uses invalid keys or values.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "examples": {
+              "invalid": {
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "MLFLOW_BATCH_INVALID",
+                    "message": "invalid MLflow log batch"
+                  },
+                  "request_id": "req_01J9Z..."
+                }
+              }
+            }
+          }
+        }
+      },
+      "BatchConflictOrRunNotRunning": {
+        "description": "The batch conflicts with existing MLflow state, or the target run is no longer RUNNING.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "examples": {
+              "runNotRunning": {
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "MLFLOW_RUN_NOT_RUNNING",
+                    "message": "MLflow run is not running"
+                  },
+                  "request_id": "req_01J9Z..."
+                }
+              },
+              "batchConflict": {
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "MLFLOW_BATCH_CONFLICT",
+                    "message": "MLflow batch conflicts with existing data"
+                  },
+                  "request_id": "req_01J9Z..."
+                }
+              }
+            }
+          }
+        }
+      },
+      "BatchTooLarge": {
+        "description": "The JSON request body is larger than 256 KiB.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "examples": {
+              "tooLarge": {
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "MLFLOW_BATCH_TOO_LARGE",
+                    "message": "MLflow log batch too large"
+                  },
+                  "request_id": "req_01J9Z..."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "ExperimentCatalogEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "data",
+          "request_id"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/ExperimentCatalog"
+          },
+          "request_id": {
+            "$ref": "#/components/schemas/RequestID"
+          }
+        }
+      },
+      "JobExperimentEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "data",
+          "request_id"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/JobExperiment"
+          },
+          "request_id": {
+            "$ref": "#/components/schemas/RequestID"
+          }
+        }
+      },
+      "LogBatchEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "data",
+          "request_id"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/MLflowLogBatchResult"
+          },
+          "request_id": {
+            "$ref": "#/components/schemas/RequestID"
+          }
+        }
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "error",
+          "request_id"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "$ref": "#/components/schemas/PlatformError"
+          },
+          "request_id": {
+            "$ref": "#/components/schemas/RequestID"
+          }
+        }
+      },
+      "PlatformError": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Stable platform error code, for example JOB_NOT_FOUND, EXPERIMENT_FORBIDDEN, MLFLOW_RUN_NOT_FOUND, MLFLOW_BATCH_INVALID, or RATE_LIMITED."
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "ExperimentCatalog": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "experimentName",
+          "experimentId",
+          "runs"
+        ],
+        "properties": {
+          "experimentName": {
+            "type": "string",
+            "description": "Tenant-scoped MLflow experiment name generated by RayTrain."
+          },
+          "experimentId": {
+            "type": "string",
+            "description": "MLflow experiment id."
+          },
+          "runs": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/ExperimentRunSummary"
+            }
+          }
+        }
+      },
+      "ExperimentRunSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "status",
+          "jobId",
+          "latest"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/RunID"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "MLflow run status returned by MLflow, such as RUNNING, FINISHED, FAILED, KILLED, or SCHEDULED."
+          },
+          "jobId": {
+            "$ref": "#/components/schemas/JobID"
+          },
+          "submitterUserId": {
+            "type": "string",
+            "description": "RayTrain user id of the job submitter when known and visible."
+          },
+          "startTimeMs": {
+            "$ref": "#/components/schemas/EpochMilliseconds"
+          },
+          "endTimeMs": {
+            "$ref": "#/components/schemas/EpochMilliseconds"
+          },
+          "latest": {
+            "$ref": "#/components/schemas/LatestMetrics"
+          }
+        }
+      },
+      "JobExperiment": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "experimentName",
+          "series"
+        ],
+        "properties": {
+          "experimentName": {
+            "type": "string",
+            "description": "Tenant-scoped MLflow experiment name generated by RayTrain."
+          },
+          "run": {
+            "$ref": "#/components/schemas/ExperimentRun"
+          },
+          "series": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "$ref": "#/components/schemas/MetricSeries"
+            },
+            "description": "Metric series are returned only for the latest metric keys retained in the run snapshot."
+          }
+        }
+      },
+      "ExperimentRun": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "status",
+          "latest"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/RunID"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "startTimeMs": {
+            "$ref": "#/components/schemas/EpochMilliseconds"
+          },
+          "endTimeMs": {
+            "$ref": "#/components/schemas/EpochMilliseconds"
+          },
+          "latest": {
+            "$ref": "#/components/schemas/LatestMetrics"
+          },
+          "params": {
+            "$ref": "#/components/schemas/RunParams"
+          }
+        }
+      },
+      "LatestMetrics": {
+        "type": "object",
+        "maxProperties": 20,
+        "additionalProperties": {
+          "type": "number",
+          "format": "double"
+        },
+        "propertyNames": {
+          "$ref": "#/components/schemas/MLflowKey"
+        },
+        "description": "Latest finite metric values by key. RayTrain returns at most 20 keys."
+      },
+      "RunParams": {
+        "type": "object",
+        "maxProperties": 100,
+        "additionalProperties": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "propertyNames": {
+          "$ref": "#/components/schemas/MLflowKey"
+        },
+        "description": "Run parameters by key. RayTrain returns at most 100 entries and truncates long values."
+      },
+      "MetricSeries": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "points"
+        ],
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/MLflowKey"
+          },
+          "points": {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+              "$ref": "#/components/schemas/MetricPoint"
+            }
+          }
+        }
+      },
+      "MetricPoint": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "value",
+          "timestampMs",
+          "step"
+        ],
+        "properties": {
+          "value": {
+            "type": "number",
+            "format": "double",
+            "description": "Finite metric value."
+          },
+          "timestampMs": {
+            "$ref": "#/components/schemas/EpochMilliseconds"
+          },
+          "step": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 9223372036854775807
+          }
+        }
+      },
+      "MLflowLogBatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "metrics": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/MLflowLogMetric"
+            }
+          },
+          "params": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/MLflowParam"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/MLflowTag"
+            }
+          }
+        },
+        "anyOf": [
+          {
+            "required": [
+              "metrics"
+            ],
+            "properties": {
+              "metrics": {
+                "minItems": 1
+              }
+            }
+          },
+          {
+            "required": [
+              "params"
+            ],
+            "properties": {
+              "params": {
+                "minItems": 1
+              }
+            }
+          },
+          {
+            "required": [
+              "tags"
+            ],
+            "properties": {
+              "tags": {
+                "minItems": 1
+              }
+            }
+          }
+        ],
+        "description": "Batch write payload. JSON object fields and nested object fields must be lower-case, unique, and known. The stable contract requires at least one non-empty array among metrics, params, and tags. The current Go decoder treats explicit null for these arrays like an omitted field, but clients should omit unused arrays instead of sending null."
+      },
+      "MLflowLogMetric": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "value",
+          "timestamp",
+          "step"
+        ],
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/MLflowWritableKey"
+          },
+          "value": {
+            "type": "number",
+            "format": "double",
+            "description": "Finite metric value."
+          },
+          "timestamp": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 253402300799999,
+            "description": "Unix epoch timestamp in milliseconds."
+          },
+          "step": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 9223372036854775807
+          }
+        }
+      },
+      "MLflowParam": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "value"
+        ],
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/MLflowWritableKey"
+          },
+          "value": {
+            "type": "string",
+            "maxLength": 1024,
+            "description": "Parameter value. JSON Schema maxLength counts characters; the deployed server enforces a 1024-byte UTF-8 limit.",
+            "x-maxBytes": 1024
+          }
+        }
+      },
+      "MLflowTag": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "value"
+        ],
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/MLflowWritableKey"
+          },
+          "value": {
+            "type": "string",
+            "maxLength": 5000,
+            "description": "Tag value. JSON Schema maxLength counts characters; the deployed server enforces a 5000-byte UTF-8 limit.",
+            "x-maxBytes": 5000
+          }
+        }
+      },
+      "MLflowLogBatchResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "runId",
+          "logged"
+        ],
+        "properties": {
+          "runId": {
+            "$ref": "#/components/schemas/RunID"
+          },
+          "logged": {
+            "type": "boolean",
+            "const": true
+          }
+        }
+      },
+      "RequestID": {
+        "type": "string",
+        "description": "Request id selected by middleware. A supplied X-Request-ID is trimmed and used only when the trimmed value is non-empty and at most 128 UTF-8 bytes; otherwise middleware may generate a new id.",
+        "examples": [
+          "req_01J9ZK7H5R7Z9S1D2E3F4G5H6J"
+        ]
+      },
+      "JobID": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "examples": [
+          "job-20260912-abc123"
+        ]
+      },
+      "RunID": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{32}$",
+        "examples": [
+          "0123456789abcdef0123456789abcdef"
+        ]
+      },
+      "EpochMilliseconds": {
+        "type": "integer",
+        "format": "int64",
+        "minimum": 0,
+        "description": "Unix epoch timestamp in milliseconds."
+      },
+      "MLflowKey": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9._\\-/]+$"
+      },
+      "MLflowWritableKey": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/MLflowKey"
+          }
+        ],
+        "description": "Writable metric, parameter, or tag key. Keys may contain letters, digits, dot, underscore, hyphen, and slash. Reserved RayTrain/MLflow names and prefixes are rejected, including platform.*, mlflow.*, run_id, run_name, experiment_id, experiment_name, job_id, tenant_id, submitter_user_id, user_id, owner_id, artifact_uri, provenance, status, start_time, and end_time after canonicalizing underscores and hyphens."
+      }
+    }
+  }
+}

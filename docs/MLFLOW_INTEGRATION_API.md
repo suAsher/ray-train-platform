@@ -4,6 +4,8 @@
 
 ## 需要交给对接方什么
 
+可直接使用 [对接交付单](MLFLOW_PARTNER_HANDOFF.md)、[OpenAPI 定义](api/mlflow-integration.openapi.json) 和 [Python REST 调用工具](../examples/mlflow_integration/README.md)。后续完整功能规格见 [模型生命周期设计](superpowers/specs/2026-09-12-mlflow-lifecycle-design.md)；未实现的接口不能作为当前服务地址交付。
+
 1. 平台 API 服务地址：`https://raytrain.wellspiking.ai`，请求路径以下表为准。所有调用使用 HTTPS。
 2. 对接方获准使用的平台身份与团队；令牌绑定创建时的团队。读写本人训练记录时，应由该任务所有者创建专门用于此次集成的 PAT，不共享管理员账号。
 3. 独立短期 PAT：在新 Portal“账户与安全 → 创建访问令牌”选择“实验读写”。scope 为 `jobs:read` 和 `mlflow:write`；仅查询时选择“实验只读”（`jobs:read`）。令牌通过获准的秘密传递渠道交付，不放在文档、URL、代码仓库或日志中。
@@ -11,6 +13,8 @@
 5. 这份请求合同、错误与重试说明、令牌到期/撤销方式。未给对接方创建账号或令牌前，不能宣称它已获访问权限。
 
 `job_id` 是 RayTrain 调度和资源标识；`run_id` 是 MLflow 实验记录标识，通常为 32 位小写十六进制。两者不应相等，一个任务可能产生多个 Run。先用实验列表获取关联，再按具体 Run 查询；旧任务实验接口只返回最新 Run。
+
+当前 PAT 没有按单个 Job/Run 限权，也不是第三方委托凭据。它允许该用户与团队下按角色及 scope 获准的操作；若对接方只应访问少数指定 Run，或需代写他人的任务，必须先建设资源 grant/集成身份，不能认为仅提供某个 Run ID 就限制了令牌权限。
 
 不要提供集群内 `MLFLOW_TRACKING_URI`、数据库连接、对象存储密钥或 `/mlflow/` 浏览器 Cookie。这些接口是 RayTrain REST 合同，不是官方 SDK 的完整 Tracking Server：不能把平台 URL 配给 `mlflow.set_tracking_uri()` 后假定所有 SDK 功能都可用。
 
@@ -95,6 +99,6 @@ MLflow batch 不保证所有字段原子写入；本接口不提供 exactly-once
 
 ## 第一阶段以外
 
-外部 Run 创建、官方 SDK 全协议、Artifact 上传/下载、Model Registry 写入、独立评测、审批发布与 Model Serving 不在这个接口内。详见 [产品设计](superpowers/specs/2026-09-12-quota-mlflow-design.md)。后续应从显式候选模型包和不可变评测证据出发，经过审批再提升生产别名、发布到外部仓或部署服务。
+外部 Run 创建、官方 SDK 全协议、Artifact 上传/下载、Model Registry 写入、独立评测、审批发布与 Model Serving 不在这个接口内。详见 [完整生命周期设计](superpowers/specs/2026-09-12-mlflow-lifecycle-design.md)。后续应从显式候选模型包和不可变评测证据出发，经过审批再提升生产别名、发布到外部仓或部署服务。
 
 原生 [MLflow REST API](https://mlflow.org/docs/latest/api_reference/rest-api.html) 是上游协议参考；平台开放范围以本文和实际发布版本为准。

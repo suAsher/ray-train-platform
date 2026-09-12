@@ -138,6 +138,50 @@ class ClientTest(unittest.TestCase):
                 instance.log_batch("job-01", RUN, payload)
         self.assertFalse(transport.requests)
 
+    def test_retry_after_is_exposed_but_never_retries_the_write(self):
+        body = b'{"success":false,"error":{"code":"RATE_LIMITED","message":"wait before retrying"},"request_id":"rate-1"}'
+        for header, expected in [("60", 60), ("0", 0), (None, None), ("-1", None), ("1.5", None), ("Wed, 21 Oct 2015 07:28:00 GMT", None), ("9" * 100, None), ("60\r\nInjected: yes", None)]:
+            with self.subTest(header=header):
+                instance, transport = self.make_client(body, 429, {} if header is None else {"Retry-After": header})
+                with self.assertRaises(client.PlatformAPIError) as caught:
+                    instance.log_batch("job-01", RUN, {"tags": [{"key": "external.source", "value": "test"}]})
+                self.assertEqual(caught.exception.retry_after, expected)
+                self.assertEqual(caught.exception.request_id, "rate-1")
+                self.assertEqual(len(transport.requests), 1)
+
+    def test_oversized_response_is_rejected_without_replaying_write(self):
+        instance, transport = self.make_client(b"x" * (client.MAX_RESPONSE_BYTES + 1))
+        with self.assertRaises(client.PlatformAPIError) as caught:
+            instance.log_batch("job-01", RUN, {"tags": [{"key": "external.source", "value": "test"}]})
+        self.assertEqual(caught.exception.code, "INVALID_RESPONSE")
+        self.assertIn("size limit", str(caught.exception))
+        self.assertEqual(len(transport.requests), 1)
+
+    def test_timeout_must_be_finite_positive_and_bounded(self):
+        for timeout in [0, -1, 121, float("nan"), float("inf"), True, "30"]:
+            with self.subTest(timeout=timeout), self.assertRaises(ValueError):
+                client.RayTrainMLflowClient(BASE, AUTH_FIXTURE, timeout=timeout)
+
+    def test_write_response_must_match_exact_target_and_logged_flag(self):
+        for data in [{"runId": "another-run", "logged": True}, {"runId": RUN, "logged": False}, {"runId": RUN}]:
+            instance, transport = self.make_client(json.dumps({"success": True, "data": data, "request_id": "write-uncertain"}).encode())
+            with self.assertRaises(client.PlatformAPIError) as caught:
+                instance.log_batch("job-01", RUN, {"tags": [{"key": "external.source", "value": "test"}]})
+            self.assertEqual(caught.exception.code, "INVALID_RESPONSE")
+            self.assertEqual(caught.exception.request_id, "write-uncertain")
+            self.assertIn("Verify", str(caught.exception))
+            self.assertEqual(len(transport.requests), 1)
+
+    def test_explicit_batch_is_sent_once_to_the_selected_run(self):
+        instance, transport = self.make_client(json.dumps({"success": True, "data": {"runId": RUN, "logged": True}, "request_id": "write-1"}).encode())
+        payload = {"tags": [{"key": "external.source", "value": "test"}]}
+        self.assertTrue(instance.log_batch("job-01", RUN, payload)["logged"])
+        self.assertEqual(len(transport.requests), 1)
+        request = transport.requests[0]
+        self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(request.full_url, BASE + "/api/v1/jobs/job-01/mlflow/runs/" + RUN + "/log-batch")
+        self.assertEqual(json.loads(request.data), payload)
+
     def test_cli_requires_explicit_action_and_does_not_write_on_read(self):
         output, error = io.StringIO(), io.StringIO()
         with mock.patch.dict(os.environ, {"RAYTRAIN_PAT": AUTH_FIXTURE}), mock.patch.object(client, "RayTrainMLflowClient") as factory, redirect_stdout(output), redirect_stderr(error):

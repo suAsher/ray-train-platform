@@ -26,6 +26,7 @@
 | 第一次使用、数据目录、调试、任务、日志、MLflow 实验和 Checkpoint | [用户使用手册](USER_GUIDE.md) |
 | MLflow Run、指标、Artifact、Models、Trace 与外部集成边界 | [MLflow 用户使用标准](MLFLOW_USER_GUIDE.md) |
 | MLflow 外部读写接口、PAT 权限与 Job/Run 对接合同 | [MLflow 外部对接说明](MLFLOW_INTEGRATION_API.md) |
+| 发给对接方的地址、身份、权限、OpenAPI 和调用工具 | [MLflow 接入交付单](MLFLOW_PARTNER_HANDOFF.md) |
 | Portal、`spk-rayjob`、原生 Ray Jobs API | [多方式提交手册](SUBMIT_GUIDE.md) |
 | 新 PyTorch/DDP 项目接入与多机多卡改造 | [新训练代码接入](NEW_TRAINING_CODE_GUIDE.md) |
 | 从全新 clone 到 BEVFusion 2×8 卡训练 | [BEVFusion 端到端操作手册](BEVFUSION_END_TO_END_GUIDE.md) |
