@@ -24,8 +24,8 @@ func TestHelpArticlesExposeThirtySixQuestionDocumentsFromPublishedSeed(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 36 {
-		t.Fatalf("public articles got %d want 36", len(items))
+	if len(items) != 38 {
+		t.Fatalf("public articles got %d want 38", len(items))
 	}
 	byID := helpArticlesByID(items)
 	for _, source := range seed {

@@ -13,8 +13,8 @@ func TestHelpArticleMetadataCoversUserSeedDocuments(t *testing.T) {
 		t.Fatal(err)
 	}
 	known := KnownHelpArticleIDs()
-	if len(known) != 36 {
-		t.Fatalf("known public article count got %d want 36", len(known))
+	if len(known) != 38 {
+		t.Fatalf("known public article count got %d want 38", len(known))
 	}
 	adminOnly := map[string]bool{
 		"admin-node-onboarding": true,

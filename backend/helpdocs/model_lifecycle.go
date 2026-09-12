@@ -8,7 +8,7 @@ const modelMaintenanceArticleID = "shared-model-maintenance"
 // Keep the original source catalog intact. Published documents with these IDs
 // take precedence over the built-in guides, including manually edited content.
 func withModelLifecycleDocuments(documents []domain.HelpDocument) []domain.HelpDocument {
-	out := make([]domain.HelpDocument, 0, len(documents)+2)
+	out := make([]domain.HelpDocument, 0, len(documents)+4)
 	out = append(out, documents...)
 	seen := make(map[string]bool, len(documents))
 	for _, document := range documents {
@@ -26,6 +26,8 @@ func modelLifecycleDocuments() []domain.HelpDocument {
 	return []domain.HelpDocument{
 		{ID: modelRegistrationArticleID, Title: "如何把训练权重保存成共享模型版本？", Category: "调试与训练结果", SortOrder: 350, Markdown: modelRegistrationGuide, Version: 1, PublishedVersion: 1, UpdatedBy: PlatformSeedActor, Action: "summary"},
 		{ID: modelMaintenanceArticleID, Title: "模型谁能看，如何维护与归档？", Category: "调试与训练结果", SortOrder: 360, Markdown: modelMaintenanceGuide, Version: 1, PublishedVersion: 1, UpdatedBy: PlatformSeedActor, Action: "summary"},
+		{ID: modelEvaluationStartID, Title: "如何用固定数据版本评估一个模型？", Category: "调试与训练结果", SortOrder: 370, Markdown: modelEvaluationStartGuide, Version: 1, PublishedVersion: 1, UpdatedBy: PlatformSeedActor, Action: "summary"},
+		{ID: modelEvaluationResultsID, Title: "评估报告在哪里看，为什么不能比较？", Category: "调试与训练结果", SortOrder: 380, Markdown: modelEvaluationResultsGuide, Version: 1, PublishedVersion: 1, UpdatedBy: PlatformSeedActor, Action: "summary"},
 	}
 }
 
@@ -88,4 +90,4 @@ const modelMaintenanceGuide = `「实验中心 → 模型」向平台全部成�
 
 RayTrain 的共享模型目录不会自动写入 MLflow Model Registry。现有原生 MLflow 页面、SDK 和 Registry 继续按原有方式使用，见[如何调用 MLflow API 查询实验与 Run？](#mlflow-api-with-pat)。
 
-本阶段提供模型登记、权重快照、下载和维护。独立评估、审批与 Serving 尚未上线；READY 只表示快照可用，不表示评估通过、获准发布或推理服务已经部署。`
+READY 只表示快照可用，不表示评估通过。需要评估时见[如何用固定数据版本评估一个模型？](#model-evaluation-start)。审批与 Serving 尚未上线；评估完成也不表示获准发布或推理服务已经部署。`
