@@ -2,6 +2,8 @@
 
 日期：2026-09-12。本文是后续建设的实施规格，不是已上线能力清单。当前线上事实见 [发布记录](../../QUOTA_MLFLOW_VALIDATION_20260912.md)，现有可调用合同见 [对接说明](../../MLFLOW_INTEGRATION_API.md)。本轮重新核对后端四端 `9105a47`、Helm 212、两个副本使用已发布摘要；未修改调度或用户数据。
 
+实施进展：阶段 B 已按 [外部实验合同](../../MLFLOW_EXTERNAL_TRACKING_API.md) 实现，发布与剩余验收见 [阶段 B 记录](../../MLFLOW_EXTERNAL_TRACKING_VALIDATION_20260912.md)。以下是批准时的完整目标规格，不能将其中“拟新增/尚未实现”的历史措辞当成当前状态。实际阶段 B 使用 `mlflow_tracking_experiments/runs` 两张归属表，保留创建意图并按请求重试对账，没有后台 outbox worker；SDK 前缀为 `/api/v1/mlflow-tracking`，仅支持 REST 预创建 Run 后的六项读写方法，`experiments:read/write` 已加入可选权限。完整历史导出、资源 grant、文件与候选、评估审批和 Serving 仍未实现。
+
 ## 1. 产品目标与现状
 
 用户从一次训练追溯到实验指标、产物、评估证据和实际发布的模型；外部程序通过同样的资源权限完成读写。平台负责身份、团队、授权和流程，MLflow 负责实验与模型元数据，存储服务负责文件，调度层负责明确提交的评估或推理资源。

@@ -1,6 +1,6 @@
 # MLflow external tracking API
 
-This document describes the external experiment tracking API being added for integrations. It documents the current code contract; do not treat it as deployed until the release report says the backend revision is live.
+This document describes the external experiment tracking API for integrations. The [release and validation record](MLFLOW_EXTERNAL_TRACKING_VALIDATION_20260912.md) separates deployed versions, isolated integration tests and outstanding production acceptance.
 
 Use this API when another service needs to create a platform-owned external experiment/run, append metrics, parameters or tags, read a run summary, or finish that run. The platform database owns identity, team membership, resource ownership, idempotency and audit. MLflow stores the tracking payload and is not the authorization source.
 
