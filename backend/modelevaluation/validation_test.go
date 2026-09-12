@@ -53,8 +53,16 @@ func TestSitesResourcesAndCanonicalInputAreImmutable(t *testing.T) {
 	for _,r:=range []domain.Resources{
 		{WorkerReplicas:2,GPUsPerWorker:1,CPUPerWorker:4,MemoryPerWorker:"16Gi"},
 		{WorkerReplicas:1,GPUsPerWorker:9,CPUPerWorker:4,MemoryPerWorker:"16Gi"},
+		{WorkerReplicas:1,GPUsPerWorker:8,CPUPerWorker:1,MemoryPerWorker:"16Gi"},
 		{WorkerReplicas:1,GPUsPerWorker:1,CPUPerWorker:33,MemoryPerWorker:"16Gi"},
 		{WorkerReplicas:1,GPUsPerWorker:1,CPUPerWorker:4,MemoryPerWorker:"129Gi"},
 		{WorkerReplicas:1,GPUsPerWorker:1,CPUPerWorker:4,MemoryPerWorker:"0"},
 	}{if !errors.Is(ValidateResources(r),ErrInvalid){t.Fatalf("unsafe resource accepted: %+v",r)}}
+}
+
+func TestEvaluationResourcesProvideOneCPUPerGPUWorker(t *testing.T) {
+	r:=domain.Resources{WorkerReplicas:1,GPUsPerWorker:8,CPUPerWorker:8,MemoryPerWorker:"16Gi"}
+	if err:=ValidateResources(r);err!=nil{t.Fatalf("equal CPU/GPU allocation rejected: %v",err)}
+	r.CPUPerWorker=7
+	if err:=ValidateResources(r);!errors.Is(err,ErrInvalid){t.Fatalf("insufficient CPU placement accepted: %v",err)}
 }

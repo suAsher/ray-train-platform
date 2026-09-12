@@ -170,6 +170,11 @@ func (r *GormRepository) Create(ctx context.Context, job *domain.TrainingJob, id
 		NextAttemptAt: time.Now().UTC(),
 	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if job.SubmissionOrigin == domain.SubmissionOriginEvaluation {
+			if err := lockEvaluationSubmission(tx, job.ExternalSubmissionID); err != nil {
+				return err
+			}
+		}
 		if idempotencyKey != "" {
 			idempotencyJSON, marshalErr := json.Marshal(map[string]string{"job_id": job.ID})
 			if marshalErr != nil {
@@ -192,6 +197,11 @@ func (r *GormRepository) Create(ctx context.Context, job *domain.TrainingJob, id
 					return fmt.Errorf("existing idempotency record is invalid")
 				}
 				return &IdempotencyConflictError{JobID: response.JobID}
+			}
+		}
+		if job.SubmissionOrigin == domain.SubmissionOriginEvaluation {
+			if err := validateEvaluationSubmissionReservation(tx, job); err != nil {
+				return err
 			}
 		}
 		if err := enforceTenantGPUQuota(tx, job); err != nil {

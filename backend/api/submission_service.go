@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+	"regexp"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -140,6 +141,9 @@ type SubmissionInput struct {
 	Origin               domain.SubmissionOrigin
 	IdempotencyKey       string
 	ExternalSubmissionID string
+	ReservedJobID                 string `json:"-"`
+	ExpectedImageDigest           string `json:"-"`
+	ExpectedDatasetManifestSHA256 string `json:"-"`
 }
 
 // DatasetPreflightSummary is deliberately limited to logical, immutable
@@ -176,6 +180,12 @@ type preparedSubmission struct {
 	dataset            domain.DatasetProvenance
 	datasetSummary     *DatasetPreflightSummary
 }
+
+var (
+	evaluationReservedJobID = regexp.MustCompile(`^job-[0-9a-f]{24}$`)
+	evaluationGitCommit    = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	evaluationSHA256       = regexp.MustCompile(`^[0-9a-f]{64}$`)
+)
 
 func NewSubmissionService(repository JobRepository, options SubmissionServiceOptions) *SubmissionService {
 	newID := options.NewID
@@ -280,12 +290,97 @@ func (service *SubmissionService) Preflight(ctx context.Context, input Submissio
 	}, nil
 }
 
+func validateEvaluationSubmissionInput(input SubmissionInput) error {
+	hasEvaluationControls := strings.TrimSpace(input.ReservedJobID) != "" ||
+		strings.TrimSpace(input.ExpectedImageDigest) != "" ||
+		strings.TrimSpace(input.ExpectedDatasetManifestSHA256) != ""
+	if input.Origin != domain.SubmissionOriginEvaluation {
+		if hasEvaluationControls {
+			return fmt.Errorf("%w: evaluation controls require evaluation origin", ErrSubmissionInvalidOrigin)
+		}
+		return nil
+	}
+	if !evaluationReservedJobID.MatchString(strings.TrimSpace(input.ReservedJobID)) {
+		return fmt.Errorf("%w: evaluation reserved job id must match job-[24 lowercase hex]", ErrSubmissionInvalidOrigin)
+	}
+	if _, ok := normalizeEvaluationExpectedDigest(input.ExpectedImageDigest); !ok {
+		return fmt.Errorf("%w: evaluation image digest must be a lowercase sha256 digest", ErrSubmissionInvalidOrigin)
+	}
+	if !evaluationSHA256.MatchString(strings.TrimSpace(input.ExpectedDatasetManifestSHA256)) {
+		return fmt.Errorf("%w: evaluation dataset manifest must be a lowercase sha256 digest", ErrSubmissionInvalidOrigin)
+	}
+	if strings.TrimSpace(input.Spec.Source.Type) != "git" || !evaluationGitCommit.MatchString(strings.TrimSpace(input.Spec.Source.Commit)) {
+		return fmt.Errorf("%w: evaluation source must pin a 40 character lowercase git commit", ErrSubmissionInvalidOrigin)
+	}
+	return nil
+}
+
+func validateEvaluationRuntime(input SubmissionInput, spec domain.JobSpec) error {
+	if input.Origin != domain.SubmissionOriginEvaluation {
+		return nil
+	}
+	actual, ok := extractImageSHA256Digest(spec.Image)
+	if !ok {
+		return fmt.Errorf("%w: evaluation resolved image digest is missing", ErrSubmissionInvalidOrigin)
+	}
+	expected, _ := normalizeEvaluationExpectedDigest(input.ExpectedImageDigest)
+	if actual != expected {
+		return fmt.Errorf("%w: evaluation image digest mismatch", ErrSubmissionInvalidOrigin)
+	}
+	return nil
+}
+
+func validateEvaluationDataset(input SubmissionInput, dataset domain.DatasetProvenance) error {
+	if input.Origin != domain.SubmissionOriginEvaluation {
+		return nil
+	}
+	expected := strings.TrimSpace(input.ExpectedDatasetManifestSHA256)
+	if dataset.ManifestSHA256 != expected {
+		return fmt.Errorf("%w: evaluation dataset manifest mismatch", ErrSubmissionInvalidOrigin)
+	}
+	return nil
+}
+
+// normalizeEvaluationExpectedDigest accepts the caller-frozen digest as either
+// the raw 64 character SHA256 hex string or the canonical sha256:<hex> form.
+// It always returns the raw lowercase hex so it can be compared with the
+// resolved image reference after catalog resolution.
+func normalizeEvaluationExpectedDigest(value string) (string, bool) {
+	candidate := strings.TrimSpace(value)
+	if strings.HasPrefix(candidate, "sha256:") {
+		candidate = strings.TrimPrefix(candidate, "sha256:")
+	}
+	if !evaluationSHA256.MatchString(candidate) {
+		return "", false
+	}
+	return candidate, true
+}
+
+// extractImageSHA256Digest defines the frozen runtime contract for evaluation
+// jobs: the runtime catalog must resolve the selected image to a content
+// digest reference ending in @sha256:<64 lowercase hex>.
+func extractImageSHA256Digest(reference string) (string, bool) {
+	candidate := strings.TrimSpace(reference)
+	index := strings.LastIndex(candidate, "@sha256:")
+	if index < 0 {
+		return "", false
+	}
+	digest := candidate[index+len("@sha256:"):]
+	if !evaluationSHA256.MatchString(digest) {
+		return "", false
+	}
+	return digest, true
+}
+
 func (service *SubmissionService) prepareSubmission(ctx context.Context, input SubmissionInput, materializeSource bool) (preparedSubmission, error) {
 	if service == nil || service.repository == nil {
 		return preparedSubmission{}, fmt.Errorf("submission service is not configured")
 	}
 	if err := input.Origin.Validate(); err != nil {
 		return preparedSubmission{}, fmt.Errorf("%w: %v", ErrSubmissionInvalidOrigin, err)
+	}
+	if err := validateEvaluationSubmissionInput(input); err != nil {
+		return preparedSubmission{}, err
 	}
 	// The team, not the client, owns accelerator placement. Older CLI versions
 	// may still send --accelerator; overwrite it so the command remains
@@ -301,6 +396,9 @@ func (service *SubmissionService) prepareSubmission(ctx context.Context, input S
 	input.Spec.AcceleratorClass = accelerator.Resolved()
 	resolvedSpec, err := service.resolveRuntime(ctx, input.Principal.TenantID, input.Spec)
 	if err != nil {
+		return preparedSubmission{}, err
+	}
+	if err := validateEvaluationRuntime(input, resolvedSpec); err != nil {
 		return preparedSubmission{}, err
 	}
 	if !resolvedSpec.DatasetRef.IsZero() && (resolvedSpec.DataMode != domain.DataModeStreaming ||
@@ -337,6 +435,9 @@ func (service *SubmissionService) prepareSubmission(ctx context.Context, input S
 	if err != nil {
 		return preparedSubmission{}, err
 	}
+	if err := validateEvaluationDataset(input, dataset); err != nil {
+		return preparedSubmission{}, err
+	}
 	return preparedSubmission{spec: spec, resumeCheckpointID: resumeCheckpointID, dataset: dataset, datasetSummary: summary}, nil
 }
 
@@ -363,9 +464,13 @@ func (service *SubmissionService) Submit(ctx context.Context, input SubmissionIn
 			return nil, fmt.Errorf("%w: %v", ErrSubmissionDataSpacesUnavailable, err)
 		}
 	}
-	id, err := service.newID()
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrSubmissionIDGeneration, err)
+	id := strings.TrimSpace(input.ReservedJobID)
+	if input.Origin != domain.SubmissionOriginEvaluation {
+		var err error
+		id, err = service.newID()
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrSubmissionIDGeneration, err)
+		}
 	}
 	resolvedStorage, err := service.resolveStorageSelections(ctx, input.Principal, spec, id)
 	if err != nil {

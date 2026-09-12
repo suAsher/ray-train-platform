@@ -62,6 +62,7 @@ type Reconciler struct {
 	gitCredentials   GitCredentialResolver
 	datasetManifests DatasetManifestResolver
 	experimentRuns   ExperimentFinalizer
+	evaluationJobs   EvaluationFinalizer
 	lastQuotaError   string
 	leaseOwner       string
 	creationLease    time.Duration
@@ -111,11 +112,15 @@ func (r *Reconciler) renderOptionsForJob(ctx context.Context, job domain.Trainin
 		DatasetVersionID: job.DatasetProvenance.DatasetVersionID,
 		ManifestSHA256:   job.DatasetProvenance.ManifestSHA256,
 	}
+	if job.SubmissionOrigin == domain.SubmissionOriginEvaluation && job.Spec.EvaluationRuntime != nil {
+		if err := job.Spec.EvaluationRuntime.Validate(); err != nil { return RenderOptions{}, err }
+		request.Evaluation = true
+	}
 	mount, err := r.datasetManifests.ResolveDatasetManifestMount(ctx, request)
 	if err != nil {
 		return RenderOptions{}, fmt.Errorf("resolve dataset manifest: %w", err)
 	}
-	if err := mount.validate(job.DatasetProvenance); err != nil {
+	if err := validateJobDatasetMount(job, mount); err != nil {
 		return RenderOptions{}, fmt.Errorf("resolve dataset manifest: %w", err)
 	}
 	options.DatasetManifest = &mount
@@ -379,7 +384,7 @@ func (r *Reconciler) processEvent(ctx context.Context, event domain.OutboxEvent)
 		return fmt.Errorf("invalid outbox payload for %s", event.ID)
 	}
 	if event.EventType == "TRAINING_JOB_TERMINAL" {
-		if r.experimentRuns == nil {
+		if r.experimentRuns == nil && r.evaluationJobs == nil {
 			return nil
 		}
 		job, err := r.store.GetByID(ctx, payload.JobID)
@@ -393,7 +398,14 @@ func (r *Reconciler) processEvent(ctx context.Context, event domain.OutboxEvent)
 		if job.FinishedAt != nil {
 			finishedAt = job.FinishedAt.UTC()
 		}
-		return r.experimentRuns.FinalizeJobRuns(ctx, job.TenantID, job.ID, job.ObservedState, finishedAt)
+		var evaluationErr, experimentErr error
+		if r.evaluationJobs != nil && job.SubmissionOrigin == domain.SubmissionOriginEvaluation {
+			evaluationErr = r.evaluationJobs.FinalizeEvaluationJob(ctx, job)
+		}
+		if r.experimentRuns != nil {
+			experimentErr = r.experimentRuns.FinalizeJobRuns(ctx, job.TenantID, job.ID, job.ObservedState, finishedAt)
+		}
+		return errors.Join(evaluationErr, experimentErr)
 	}
 	return r.ReconcileJob(ctx, payload.JobID)
 }
@@ -481,6 +493,8 @@ func (r *Reconciler) reconcileLoadedJob(ctx context.Context, job *domain.Trainin
 		}
 		job, creationLease = current, lease
 	}
+	job, err := r.restoreEvaluationRuntime(ctx, job)
+	if err != nil { return err }
 	options, err := r.renderOptionsForJob(ctx, *job)
 	if err != nil {
 		return err

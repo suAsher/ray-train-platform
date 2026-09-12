@@ -39,6 +39,8 @@ type globalJobReader interface {
 }
 
 type Handler struct {
+	modelEvaluations ModelEvaluationStore
+	modelEvaluationSubmission ModelEvaluationSubmission
 	models                   modellifecycle.Repository
 	modelSnapshots           modelSnapshotService
 	bootstrapTenant          string
@@ -139,6 +141,8 @@ type ExperimentProvider interface {
 }
 
 type Options struct {
+	ModelEvaluations ModelEvaluationStore
+	ModelEvaluationSubmission ModelEvaluationSubmission
 	Models                   modellifecycle.Repository
 	ModelSnapshots           modelSnapshotService
 	BootstrapTenant          string
@@ -302,6 +306,9 @@ func NewHandler(repository JobRepository, options Options) *Handler {
 		},
 		NewID: func() (string, error) { return handler.newID() },
 	})
+	handler.modelEvaluations = options.ModelEvaluations
+	handler.modelEvaluationSubmission = options.ModelEvaluationSubmission
+	if handler.modelEvaluationSubmission == nil { handler.modelEvaluationSubmission = handler.submission }
 	handler.models = options.Models
 	handler.modelSnapshots = options.ModelSnapshots
 	return handler

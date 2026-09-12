@@ -122,3 +122,46 @@ func TestEvaluationRuntimeRestoreRejectsDifferentDatabaseIdentity(t *testing.T){
   if _,err:=reconciler.restoreEvaluationRuntime(context.Background(),&current);err==nil{t.Fatal("mismatched trusted runtime copied")}
  }
 }
+
+func TestEvaluationEntrypointAlwaysUsesManagedDriverWrapper(t *testing.T){
+ job:=evaluationRenderFixture();job.Spec.Entrypoint=domain.Entrypoint{Command:[]string{"python","examples/model-evaluation/smoke_evaluator.py"}}
+ manifest,err:=RenderRayJob(job,testRenderOptions());if err!=nil{t.Fatal(err)}
+ spec,_,_:=nestedMap(manifest.Object,"spec");entrypoint,_:=spec["entrypoint"].(string)
+ if !strings.HasPrefix(entrypoint,"raytrain-managed ")||!strings.Contains(entrypoint," -- python examples/model-evaluation/smoke_evaluator.py"){t.Fatalf("evaluation bypassed managed worker wrapper: %s",entrypoint)}
+}
+
+func TestEvaluationMountedInputDoesNotInitializeTrainShard(t *testing.T){
+ job:=streamingManifestJob();job.SubmissionOrigin=domain.SubmissionOriginEvaluation;job.Spec.EvaluationRuntime=evaluationRenderFixture().Spec.EvaluationRuntime
+ job.Spec.EvaluationRuntime.DatasetManifestSHA256=job.DatasetProvenance.ManifestSHA256
+ manifest,err:=RenderRayJob(job,streamingRenderOptions());if err!=nil{t.Fatal(err)}
+ spec,_,_:=nestedMap(manifest.Object,"spec");entrypoint,_:=spec["entrypoint"].(string)
+ if !strings.Contains(entrypoint,"--data-mode mount")||strings.Contains(entrypoint,"--data-mode streaming")||strings.Contains(entrypoint,"--dataset-"){t.Fatalf("evaluation entrypoint initializes training data: %s",entrypoint)}
+ raw,_:=json.Marshal(manifest.Object)
+ if !strings.Contains(string(raw),"PLATFORM_DATASET_MANIFEST_PATH")||!strings.Contains(string(raw),streamingManifestDigest){t.Fatal("mounted input provenance lost")}
+ normal:=job;normal.SubmissionOrigin=domain.SubmissionOriginAPI
+ baseline,err:=RenderRayJob(normal,streamingRenderOptions());if err!=nil{t.Fatal(err)}
+ normalSpec,_,_:=nestedMap(baseline.Object,"spec");normalEntry,_:=normalSpec["entrypoint"].(string)
+ if !strings.Contains(normalEntry,"--data-mode streaming")||strings.Contains(normalEntry,"--data-mode mount"){t.Fatal("normal streaming driver changed")}
+ if job.Spec.DataMode!=domain.DataModeStreaming{t.Fatal("evaluation driver override mutated persisted data mode")}
+}
+
+func TestEvaluationMountAllowsZeroTrainSamplesWithoutWeakeningNormalTraining(t *testing.T){
+ job:=streamingManifestJob();job.SubmissionOrigin=domain.SubmissionOriginEvaluation;job.Spec.EvaluationRuntime=evaluationRenderFixture().Spec.EvaluationRuntime
+ job.Spec.EvaluationRuntime.DatasetManifestSHA256=job.DatasetProvenance.ManifestSHA256
+ options:=streamingRenderOptions();options.DatasetManifest.TrainSamples=0
+ if _,err:=RenderRayJob(job,options);err!=nil{t.Fatal(err)}
+ normal:=job;normal.SubmissionOrigin=domain.SubmissionOriginAPI
+ if _,err:=RenderRayJob(normal,options);err==nil{t.Fatal("normal training accepted zero train samples")}
+ options.DatasetManifest.TrainSamples=-1
+ if _,err:=RenderRayJob(job,options);err==nil{t.Fatal("evaluation accepted negative train samples")}
+}
+
+func TestEvaluationRuntimeValidationRejectsNonEvaluationInputs(t *testing.T){
+ for _,mutate:=range []func(*domain.EvaluationRuntime){
+  func(value *domain.EvaluationRuntime){value.DatasetSplit="train"},
+  func(value *domain.EvaluationRuntime){value.DatasetSampleCount=0},
+  func(value *domain.EvaluationRuntime){value.ConfigJSON="null"},
+  func(value *domain.EvaluationRuntime){value.ConfigJSON="not-json"},
+  func(value *domain.EvaluationRuntime){value.ConfigJSON=strings.Repeat(" ",16*1024+1)+"{}"},
+ }{value:=*evaluationRenderFixture().Spec.EvaluationRuntime;mutate(&value);if value.Validate()==nil{t.Fatal("invalid evaluation runtime accepted")}}
+}

@@ -36,6 +36,9 @@ type DatasetManifestResolutionRequest struct {
 	DatasetID        string
 	DatasetVersionID string
 	ManifestSHA256   string
+	// Evaluation is set only after the reconciler loads a trusted evaluation
+	// runtime. It allows val/test-only versions without fabricating train counts.
+	Evaluation bool
 }
 
 // DatasetManifestMount is a control-plane-resolved, read-only PVC directory
@@ -77,20 +80,33 @@ func validateStreamingDatasetManifest(job domain.TrainingJob, mount *DatasetMani
 	if mount == nil {
 		return fmt.Errorf("resolved dataset root is required for streaming")
 	}
-	if err := mount.validate(provenance); err != nil {
+	if err := validateJobDatasetMount(job, *mount); err != nil {
 		return fmt.Errorf("resolved dataset root: %w", err)
 	}
 	return nil
 }
 
 func (mount DatasetManifestMount) validate(provenance domain.DatasetProvenance) error {
+	return mount.validateForUse(provenance, false)
+}
+
+func validateJobDatasetMount(job domain.TrainingJob, mount DatasetManifestMount) error {
+	evaluation := job.SubmissionOrigin == domain.SubmissionOriginEvaluation && job.Spec.EvaluationRuntime != nil
+	if evaluation {
+		if err := job.Spec.EvaluationRuntime.Validate(); err != nil { return err }
+		if job.Spec.EvaluationRuntime.DatasetManifestSHA256 != job.DatasetProvenance.ManifestSHA256 { return fmt.Errorf("evaluation dataset digest does not match job provenance") }
+	}
+	return mount.validateForUse(job.DatasetProvenance, evaluation)
+}
+
+func (mount DatasetManifestMount) validateForUse(provenance domain.DatasetProvenance, evaluation bool) error {
 	if mount.DatasetID != provenance.DatasetID || mount.DatasetVersionID != provenance.DatasetVersionID || mount.ManifestSHA256 != provenance.ManifestSHA256 {
 		return fmt.Errorf("mount identity does not match immutable provenance")
 	}
 	if !isDNSSubdomain(strings.TrimSpace(mount.ClaimName)) || strings.TrimSpace(mount.ClaimName) != mount.ClaimName {
 		return fmt.Errorf("PVC claim name must be a canonical Kubernetes name")
 	}
-	if mount.TrainSamples <= 0 {
+	if mount.TrainSamples < 0 || (!evaluation && mount.TrainSamples == 0) {
 		return fmt.Errorf("training sample count must be positive")
 	}
 	if mount.SchemaVersion != "" && !streamingDatasetSchemaPattern.MatchString(mount.SchemaVersion) {

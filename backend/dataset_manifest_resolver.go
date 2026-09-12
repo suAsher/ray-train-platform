@@ -82,7 +82,7 @@ func (resolver *privateDatasetManifestResolver) ResolveDatasetManifestMount(
 	if version.DatasetID != request.DatasetID || version.ID != request.DatasetVersionID || version.ManifestSHA256 != request.ManifestSHA256 {
 		return k8s.DatasetManifestMount{}, fmt.Errorf("dataset provenance does not match the ready version")
 	}
-	if version.TrainSamples <= 0 {
+	if version.TrainSamples < 0 || (!request.Evaluation && version.TrainSamples == 0) {
 		return k8s.DatasetManifestMount{}, fmt.Errorf("dataset version has no training samples")
 	}
 

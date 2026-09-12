@@ -24,14 +24,15 @@ type CodeSource struct {
 type SubmissionOrigin string
 
 const (
-	SubmissionOriginPortal SubmissionOrigin = "portal"
-	SubmissionOriginAPI    SubmissionOrigin = "api"
-	SubmissionOriginRayCLI SubmissionOrigin = "ray-cli"
+	SubmissionOriginPortal     SubmissionOrigin = "portal"
+	SubmissionOriginAPI        SubmissionOrigin = "api"
+	SubmissionOriginRayCLI     SubmissionOrigin = "ray-cli"
+	SubmissionOriginEvaluation SubmissionOrigin = "evaluation"
 )
 
 func (origin SubmissionOrigin) Validate() error {
 	switch origin {
-	case SubmissionOriginPortal, SubmissionOriginAPI, SubmissionOriginRayCLI:
+	case SubmissionOriginPortal, SubmissionOriginAPI, SubmissionOriginRayCLI, SubmissionOriginEvaluation:
 		return nil
 	default:
 		return fmt.Errorf("unsupported submission origin %q", origin)
@@ -231,6 +232,7 @@ type JobSpec struct {
 	TrainingEngine     TrainingEngine          `json:"trainingEngine,omitempty"`
 	RayVersion         string                  `json:"rayVersion,omitempty"`
 	Managed            ManagedTrainingPolicy   `json:"managed,omitempty"`
+	EvaluationRuntime  *EvaluationRuntime      `json:"-"`
 	DataMode           DataMode                `json:"dataMode,omitempty"`
 	DatasetRef         DatasetReference        `json:"datasetRef,omitzero"`
 	CachePolicy        DatasetCachePolicy      `json:"cachePolicy,omitempty"`

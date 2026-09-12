@@ -90,4 +90,4 @@ const modelMaintenanceGuide = `「实验中心 → 模型」向平台全部成�
 
 RayTrain 的共享模型目录不会自动写入 MLflow Model Registry。现有原生 MLflow 页面、SDK 和 Registry 继续按原有方式使用，见[如何调用 MLflow API 查询实验与 Run？](#mlflow-api-with-pat)。
 
-READY 只表示快照可用，不表示评估通过。需要评估时见[如何用固定数据版本评估一个模型？](#model-evaluation-start)。审批与 Serving 尚未上线；评估完成也不表示获准发布或推理服务已经部署。`
+READY 只表示快照可用，不表示评估通过。需要独立评估时见[如何用固定数据版本评估一个模型？](#model-evaluation-start)。审批与 Serving 尚未上线；评估完成也不表示获准发布或推理服务已经部署。`

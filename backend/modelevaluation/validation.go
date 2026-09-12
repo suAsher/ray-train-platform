@@ -39,6 +39,7 @@ func CanonicalSites(sites []string)([]string,error) {
 }
 func ValidateResources(r domain.Resources)error {
 	if r.WorkerReplicas!=1||r.GPUsPerWorker<1||r.GPUsPerWorker>8||r.CPUPerWorker<1||r.CPUPerWorker>32||len(r.MemoryPerWorker)>32{return invalid("evaluation resources exceed bounds")}
+	if r.CPUPerWorker<int64(r.GPUsPerWorker){return invalid("evaluation requires at least one CPU per GPU worker")}
 	memory,err:=resource.ParseQuantity(r.MemoryPerWorker);max:=resource.MustParse("128Gi")
 	if err!=nil||memory.Sign()<=0||memory.Cmp(max)>0{return invalid("evaluation memory exceeds bounds")}
 	return nil

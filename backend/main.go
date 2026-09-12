@@ -115,6 +115,7 @@ func main() {
 	artifactLister, _ := directoryLister.(objectstore.ArtifactLister)
 	artifactReader, _ := directoryLister.(objectstore.ArtifactReader)
 	modelStore := repositories.NewModelLifecycleStore(database)
+	evaluationStore := repositories.NewModelEvaluationRepository(database)
 	var modelSnapshots *modellifecycle.Service
 	if store, ok := directoryLister.(*objectstore.TOSStore); ok {
 		modelSnapshots = modellifecycle.NewService(modelStore, store.ModelSnapshotSource(), store.ModelSnapshotObjects())
@@ -162,6 +163,7 @@ func main() {
 	workspaceSnapshotStore, _ := directoryLister.(objectstore.WorkspaceSnapshotStore)
 	jobOptions := api.Options{BootstrapTenant: cfg.BootstrapAdminTenant, AllowAnonymous: cfg.DemoMode, Logs: logs, Metrics: metrics, Experiments: experiments, ImageAllowlist: cfg.RayImageAllowlist, GitAllowlist: cfg.GitAllowlist, Workspaces: repository, Kubernetes: kubeClient, WorkspaceImage: cfg.WorkspaceImage, RayVersion: cfg.RayVersion, ServiceAccount: cfg.RayJobServiceAccount, ImagePullSecrets: cfg.ImagePullSecrets, PlatformNamespace: runtimeNamespace(), IDCClaim: cfg.IDCExistingClaim, IDCMountPath: cfg.IDCMountPath, KueueClusterQueue: cfg.KueueClusterQueue, Admin: repository, GPUAllocations: repository, Quota: repository, Memberships: repository, WorkspacePepper: []byte(cfg.PATPepper), TrainingNodeSelector: cfg.TrainingNodeSelector, Images: repository, GitCredentials: repository, StorageAssets: repository, Datasets: repository, DatasetPublications: datasetPublicationManager, DatasetInternalPrefix: cfg.DatasetInternalPrefix, DatasetVersioningEnabled: cfg.DatasetVersioningEnabled, RayDataStreamingEnabled: cfg.RayDataStreamingEnabled, DataSpaces: repository, DataSpacesEnabled: cfg.DataSpacesEnabled, DataSpacesFSXAttributes: cfg.DataSpacesFSXAttributes, DataSpacesMountCapacity: cfg.DataSpacesMountCapacity, DataSpacesPublicRoot: cfg.DataSpacesPublicRoot, IDCDataSpacesEnabled: cfg.IDCDataSpacesEnabled, IDCDataSpacesMountCapacity: cfg.IDCDataSpacesMountCapacity, IDCDataSpaceSources: idcDataSpaceSources(cfg), DirectoryLister: directoryLister, DirectoryInitializer: directoryInitializer, DataObjectStore: dataObjectStore, WorkspaceSnapshotStore: workspaceSnapshotStore, WorkspaceSnapshots: repository, IDCDataSyncCallbacks: idcSyncCallbacks, IDCDataSyncCallbackKey: idcSyncCallbackKey, IDCDataSyncManager: idcSyncManager, ArtifactLister: artifactLister, ArtifactReader: artifactReader, LocalCache: api.LocalCachePolicy{Enabled: cfg.LocalCacheEnabled, AllowedSizes: cfg.LocalCacheAllowedSizes, DefaultSize: cfg.LocalCacheSize, MaxSize: cfg.LocalCacheMaxSize, MountPath: cfg.LocalCacheMountPathData1, MountPaths: []string{cfg.LocalCacheMountPathData1, cfg.LocalCacheMountPathData2}}, RuntimePolicy: runtimecatalog.NewPolicy(cfg.RayTrainManagedEnabled, cfg.RayTrainCanaryEnabled, cfg.RayTrainManagedTenants, cfg.RayTrainCanaryTenants), TenantScheduling: repository, PreemptionEnabled: cfg.KueuePreemptionEnabled, MLflowDashboardEnabled: cfg.MLflowDashboardEnabled, MLflowDashboardStore: repository, MLflowTrackingURL: cfg.MLflowTrackingURL, MLflowPublicOrigin: cfg.MLflowPublicOrigin, MLflowDashboardPepper: []byte(cfg.PATPepper), MLflowDashboardSessionTTL: time.Duration(cfg.MLflowDashboardSessionHours) * time.Hour}
 	jobOptions.Models = modelStore
+	jobOptions.ModelEvaluations = evaluationStore
 	if modelSnapshots != nil {
 		jobOptions.ModelSnapshots = modelSnapshots
 	}
@@ -185,7 +187,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("initialize Ray Jobs API compatibility: %v", err)
 	}
-	reconciler := newReconciler(repository, kubeClient, cfg)
+	reconciler := newReconciler(repository, kubeClient, cfg, evaluationStore)
 	if reconciler != nil && mlflowClient != nil {
 		reconciler.WithExperimentFinalizer(mlflowClient)
 	}
@@ -345,6 +347,7 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	// Managed workers authenticate with a random job-scoped credential rather
 	// than a user session or cluster-wide service-account token.
 	jobs.RegisterTrainingEventRoutes(router.Group("/api/v1/internal"))
+	jobs.RegisterModelEvaluationInternalRoutes(router.Group("/api/v1/internal"))
 	jobs.RegisterIDCSyncInternalRoutes(router.Group("/api/v1/internal"))
 
 	protected := router.Group("")
@@ -369,6 +372,7 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	jobs.RegisterImageReadRoutes(v1)
 	jobs.RegisterHelpReadRoutes(v1)
 	jobs.RegisterModelReadRoutes(v1)
+	jobs.RegisterModelEvaluationReadRoutes(v1)
 	if cfg.DatasetVersioningEnabled {
 		jobs.RegisterDatasetReadRoutes(v1)
 	}
@@ -399,6 +403,7 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	jobs.RegisterImageManagementRoutes(interactive)
 	jobs.RegisterHelpManagementRoutes(interactive)
 	jobs.RegisterModelManagementRoutes(interactive)
+	jobs.RegisterModelEvaluationManagementRoutes(interactive)
 	jobs.RegisterStorageAssetRoutes(interactive)
 	if cfg.DatasetVersioningEnabled {
 		jobs.RegisterDatasetManagementRoutes(interactive)
@@ -429,21 +434,25 @@ func newKubernetesClient(cfg config.Config) (*k8s.Client, error) {
 	return k8s.NewClient(cfg)
 }
 
-func newReconcilerWithQuotaSync(repository *repositories.GormRepository, client *k8s.Client, cfg config.Config, options k8s.RenderOptions) *k8s.Reconciler {
+func newReconcilerWithQuotaSync(repository *repositories.GormRepository, client *k8s.Client, cfg config.Config, options k8s.RenderOptions, evaluations ...*repositories.ModelEvaluationRepository) *k8s.Reconciler {
 	store := k8s.JobStore(repository)
+	var evaluationStore *repositories.ModelEvaluationRepository
+	if len(evaluations) > 0 { evaluationStore = evaluations[0] }
 	if client != nil {
-		store = &managedCredentialJobStore{GormRepository: repository, kubernetes: client, now: time.Now}
+		store = &managedCredentialJobStore{GormRepository: repository, kubernetes: client, now: time.Now, evaluations: evaluationStore}
 	}
-	return k8s.NewReconciler(store, client, options).
+	reconciler := k8s.NewReconciler(store, client, options).
 		WithGitCredentials(repository).
 		WithRayJobRetention(time.Duration(cfg.RayJobRetentionSeconds) * time.Second).
 		WithQuotaSync(k8s.QuotaSyncOptions{
 			ClusterQueueName: cfg.KueueClusterQueue,
 			Enabled:          cfg.KueueAutoQuota,
 		})
+	if evaluationStore != nil { reconciler.WithEvaluationFinalizer(evaluationStore) }
+	return reconciler
 }
 
-func newReconciler(repository *repositories.GormRepository, client *k8s.Client, cfg config.Config) *k8s.Reconciler {
+func newReconciler(repository *repositories.GormRepository, client *k8s.Client, cfg config.Config, evaluations ...*repositories.ModelEvaluationRepository) *k8s.Reconciler {
 	if client == nil {
 		return nil
 	}
@@ -474,7 +483,7 @@ func newReconciler(repository *repositories.GormRepository, client *k8s.Client, 
 			ProvenanceKey:    []byte(cfg.PATPepper),
 		},
 		TrainingEventBaseURL: managedTrainingEventBaseURL(runtimeNamespace()),
-	})
+	}, evaluations...)
 	if cfg.DatasetVersioningEnabled && cfg.RayDataStreamingEnabled {
 		resolver, err := newPrivateDatasetManifestResolver(repository, cfg.DatasetInternalPrefix)
 		if err != nil {
@@ -601,10 +610,18 @@ type managedCredentialJobStore struct {
 	*repositories.GormRepository
 	kubernetes *k8s.Client
 	now        func() time.Time
+	evaluations *repositories.ModelEvaluationRepository
 }
 
 func (store *managedCredentialJobStore) GetByID(ctx context.Context, jobID string) (*domain.TrainingJob, error) {
 	job, err := store.GormRepository.GetByID(ctx, jobID)
+	if err != nil {
+		return job, err
+	}
+	if job.SubmissionOrigin == domain.SubmissionOriginEvaluation && store.evaluations == nil {
+		return nil, fmt.Errorf("evaluation runtime repository is not configured")
+	}
+	job, err = loadTrustedEvaluationRuntime(ctx, job, store.evaluations)
 	if err != nil || job.Spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain {
 		return job, err
 	}

@@ -151,6 +151,14 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	if err := options.MLflow.Validate(); err != nil {
 		return nil, fmt.Errorf("MLflow: %w", err)
 	}
+	if job.SubmissionOrigin == domain.SubmissionOriginEvaluation {
+		if job.Spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain || job.Spec.EvaluationRuntime == nil {
+			return nil, fmt.Errorf("evaluation requires a managed worker with trusted runtime")
+		}
+		if err := job.Spec.EvaluationRuntime.Validate(); err != nil { return nil, err }
+	} else {
+		job.Spec.EvaluationRuntime = nil
+	}
 	if job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain {
 		trainingEventBaseURL, err := validateTrainingEventBaseURL(options.TrainingEventBaseURL)
 		if err != nil {
@@ -357,10 +365,15 @@ func trainingEntrypoint(spec domain.JobSpec) []string {
 		"--checkpoint-keep-latest", strconv.Itoa(spec.Managed.Checkpoint.KeepLatest),
 		"--checkpoint-keep-best", strconv.Itoa(spec.Managed.Checkpoint.KeepBest),
 	}
-	if spec.DataMode != "" {
+	if spec.EvaluationRuntime != nil {
+		// Keep immutable streaming mounts and authorization on the JobSpec, but
+		// let the evaluator read its selected val/test split. The managed driver
+		// must not initialize a training shard before the evaluation entrypoint.
+		launcher = append(launcher, "--data-mode", "mount")
+	} else if spec.DataMode != "" {
 		launcher = append(launcher, "--data-mode", string(spec.DataMode))
 	}
-	if spec.DataMode == domain.DataModeRayData || spec.DataMode == domain.DataModeRayDataStage {
+	if spec.EvaluationRuntime == nil && (spec.DataMode == domain.DataModeRayData || spec.DataMode == domain.DataModeRayDataStage) {
 		launcher = append(launcher,
 			"--dataset-format", string(spec.Managed.RayData.Format()),
 			"--dataset-uri", spec.Managed.RayData.URI(),
@@ -368,7 +381,7 @@ func trainingEntrypoint(spec domain.JobSpec) []string {
 	}
 	launcher = append(launcher, "--")
 	launcher = append(launcher, command...)
-	if spec.DataMode == domain.DataModeStreaming && spec.DatasetRef.Sites != "" {
+	if spec.EvaluationRuntime == nil && spec.DataMode == domain.DataModeStreaming && spec.DatasetRef.Sites != "" {
 		return append([]string{"python", "-I", "-c", streamingSiteRuntimeGuard}, launcher...)
 	}
 	return launcher
@@ -725,6 +738,9 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, tenantID 
 	}
 	if mountData && jobSpec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain {
 		volumeMounts, volumes, env = appendTrainingEventCredential(volumeMounts, volumes, env, options)
+		if !head && containerName == "ray-worker" {
+			env = appendEvaluationRuntime(env, jobSpec.EvaluationRuntime, options)
+		}
 	}
 	if materializeSource && (source.Type == "workspace" || source.Type == "workspace-archive") {
 		personal := jobSpec.ResolvedDataRoots.Personal
