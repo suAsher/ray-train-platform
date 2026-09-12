@@ -75,3 +75,30 @@
 - 如果 custom ID 与 7 个主主题精确相同，它作为该主主题的唯一公开文档；同目标 legacy 章节继续追加到它下面，不产生重复主文档。
 - 管理员分类的未知 custom 文档不进入普通说明，避免团队运维 Runbook 暴露给普通用户。
 - 折叠只影响普通读取视图；管理列表、draft、published 原文和历史版本不改不删。
+## 2026-09-12 用户体验修正与真实验收
+
+用户指出“外部实验 / 集成接入 / 高级”的概念混淆，以及上次汇总后操作正文缺失。本轮把实验中心收敛为默认“训练记录”、第二页“MLflow API”和“打开 MLflow”按钮；API 页面直接显示 URI、PAT 创建位置、认证头、可复制的 HTTP/Python 查询与写入示例、Artifact 和模型版本用法、分页字段与错误处理。旧受限接口保留兼容，本轮没有改变任何鉴权或数据归属。
+
+### 版本
+
+- 后端业务 SHA：`4b5b943e32a0c794a5c34f634298d270f49bc8d2`，候选通过验证后同步本地、GitHub、内部 GitLab 与正式构建目录。
+- 后端：`release-20260912-08-4b5b943e`，Helm **219**，schema **48**。
+- 镜像：`sha256:7f1bb1b84693b56021273effd894d5e2dfc05103b70dbed9d13919f65328a91a`。两个实际 Pod imageID 与此一致，Ready，重启数均为 0。
+- Portal dev：`5c83c86c1c5c75d84a43c249d1ccdc8ebccdc285`，[CI 33863](https://gitlab.wellspiking.ai/wellspiking/frontend/wellspiking-frontend/-/pipelines/33863) lint / docker / helm 三项成功，jobs 89802 / 89803 / 89804。
+- Portal CI 镜像：`sha256:a05e813669342c9e397552c06f10f4e8f4070ab7f2f622e4b25f48e406a8306a`，CI Helm **1045**；登录浏览器实际加载 `index-BrtVd_RI.js` 和新版页面。使用本机 test-dev kubeconfig 核查 Pod imageID 时，`test-k8s.westwell-research.com:6443` 请求超时，因此实际 Portal Pod 摘要仍未独立核实，不能以 CI 摘要代替。
+
+### 验证
+
+1. 构建机完整 Go 测试通过，设置隔离 PostgreSQL DSN。旧 public projection 下新的全文回归失败；修正后保持七主题、原文、人工补充、旧 ID、重复标题及管理历史测试通过。首轮发现旧文案合同与两个新 marker 不符，按真实源文案修正后全量通过，没有删正文或安全护栏绕过。定向覆盖率：`publicHelpDocuments` 与 `appendLegacyPublicSections` 各 95.7%，其余三个帮助投影函数 100%；这是这些函数的覆盖率，不代表全仓。
+2. Portal 构建机完整 Dockerfile.lint、dev build 和 **11/11 Playwright** 测试通过。覆盖配额、同 Job 多 Run 精确比较、原生权限显式选择、旧服务兼容、两页入口、API 示例、七主题全文、章节/搜索定位、旧链接、Markdown 下载、HTML 与 URL 安全。
+3. 与生产同版本 MLflow 3.14.0 隔离服务器中，原样执行页面导出的全部 cURL 和 Python 示例：查询实验/Run、指标历史、创建与结束 Run、参数/指标、文件上传下载 SHA-256、真实含 MLmodel 的模型版本及 alias 读回。没有签发生产 PAT，没有向现有训练 Run 写入。
+4. 登录浏览器：实验中心实际只有两个 tab，默认训练记录；HTTP/Python 切换正常，可复制配置；本次查询到 25 行训练关联记录。“打开 MLflow”实际到达原生 Home 页面。分布式计算仍有 11 个菜单。任务列表显示 local 总额度 24 卡（本轮未修改），任务详情、现有 JupyterLab/VS Code 页面正常。
+5. 帮助真实接口均 200；公开主题保持 7 个。正文长度从 **16,055** 增至 **73,287** 字符。30 篇非 MLflow 用户源正文逐字完整包含；MLflow 指标说明首段后的完整正文保留；另外 3 篇旧接口说明改成原生 API 等价操作。管理端 **37 篇记录 JSON 与发布前完全一致**，包括人工 custom-environment / Worker 说明。3 篇管理员文章不公开。
+6. 实际帮助页提供章节目录，训练主题 56 小节；搜索 `413` 返回两处正文命中，点击到对应主题小节并聚焦，目录按钮同样定位，长文无横向溢出。
+7. Helm server dry-run **仅一行后端镜像摘要变化**。发布前后的 **4 个活跃 RayJob、4 个 RayCluster、9 个训练 Pod** 的 UID、状态、ready 与重启数逐项相同；这是本次发布时的新快照，不沿用前轮 5/5/11 数量。healthz 正常，schema 48 未变；无训练镜像构建，无调度/配额/个人数据变更。
+
+构建机发布证据保留于受限目录 `/root/raytrain-release-20260912-experiment-help-ux`。临时测试容器/网络/工作树在收尾删除；不处理其他人的测试资源，既有数据库回滚备份保留。
+
+### 未改变的能力边界
+
+本次完成实验中心呈现与用户帮助纠正；独立评估、模型审批发布与生产 Serving 闭环不由这次页面修改完成。团队节点池、TAS/闲时抢占、IDC 实际数据源同步仍以各自后续真实验收为准，没有借本轮变更启用。
