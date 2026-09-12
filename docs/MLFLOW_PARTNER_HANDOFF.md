@@ -95,4 +95,4 @@ client.set_terminated(run_id, status="FINISHED")
 - 超时、502/503 可能已部分写入，先读取再决定是否重试；批量写不是事务或 exactly-once。重试保留原 key/value/step/timestamp，不生成新时间戳无条件重放。
 - 保存测试时间、客户端版本、平台/上游 ID、request_id、响应状态和读回结果，不记录真实 PAT。到期或撤销后停止重试并更新获准凭据。
 
-**生产 PAT 写入验收尚未完成，也未为对接方创建或发送真实令牌。** 已部署版本、隔离测试和后续 SDK 读回修订分别以[发布验收记录](MLFLOW_EXTERNAL_TRACKING_VALIDATION_20260912.md)为准，不能把本文的接口说明当作对接方已经获准访问或完成生产联调的证据。
+**2026-09-12 已用明确获准的 guofeng.su / local 一天 PAT 完成专用生产外部实验的 REST、SDK 六方法、读回、幂等、只读拒写与终态拒写验收；两枚验收 PAT 已立即撤销，并实查撤销后返回 401。** 详见[生产补验记录](HELP_SDK_ACCEPTANCE_20260912.md)。没有为对接方创建或发送长期凭据，实际调用方身份、部署机器网络和跨真实用户/团队隔离仍需按交付目标验收。此前版本与隔离测试见[阶段 B 发布记录](MLFLOW_EXTERNAL_TRACKING_VALIDATION_20260912.md)，不能把管理员本次验收等同于对接方已获准接入。
