@@ -42,9 +42,9 @@ func TestPostgresMigrationsIntegration(t *testing.T) {
 		"identity_tenant_ownerships",
 		"mlflow_tracking_experiments",
 		"mlflow_tracking_runs",
- "model_catalog",
- "model_versions",
- "model_audits",
+		"model_catalog",
+		"model_versions",
+		"model_audits",
 	} {
 		var count int64
 		if err := database.Raw("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = ?", table).Scan(&count).Error; err != nil {

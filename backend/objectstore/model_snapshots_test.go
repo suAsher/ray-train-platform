@@ -186,12 +186,20 @@ func TestModelSnapshotVerifiesDeclaredStreamLength(t *testing.T) {
 		body := &modelSnapshotReadCloser{Reader: strings.NewReader("weights")}
 		client := &modelSnapshotClient{response: &tosArtifactReadResponse{Content: body, SizeBytes: size}}
 		stream, _, err := (&TOSStore{client: client}).ModelSnapshotObjects().Get(context.Background(), modelSnapshotTestID, 0)
-		if err != nil { t.Fatal(err) }
+		if err != nil {
+			t.Fatal(err)
+		}
 		_, err = io.ReadAll(stream)
 		_ = stream.Close()
-		if size == 7 && err != nil { t.Fatalf("valid length: %v", err) }
-		if size != 7 && !errors.Is(err, modellifecycle.ErrUnavailable) { t.Fatalf("size=%d error=%v", size, err) }
-		if !body.closed { t.Fatal("close did not close source stream") }
+		if size == 7 && err != nil {
+			t.Fatalf("valid length: %v", err)
+		}
+		if size != 7 && !errors.Is(err, modellifecycle.ErrUnavailable) {
+			t.Fatalf("size=%d error=%v", size, err)
+		}
+		if !body.closed {
+			t.Fatal("close did not close source stream")
+		}
 	}
 }
 
@@ -205,7 +213,9 @@ func TestModelSnapshotRetryRequiresMatchingMetadata(t *testing.T) {
 	} {
 		client := &modelSnapshotClient{putErr: ErrAlreadyExists, headOverride: &metadata}
 		err := (&TOSStore{client: client}).ModelSnapshotObjects().Put(context.Background(), modelSnapshotTestID, 0, digest, payload)
-		if !errors.Is(err, modellifecycle.ErrConflict) { t.Fatalf("mismatched metadata: %v", err) }
+		if !errors.Is(err, modellifecycle.ErrConflict) {
+			t.Fatalf("mismatched metadata: %v", err)
+		}
 	}
 	client := &modelSnapshotClient{putErr: ErrAlreadyExists, fakeTOSClient: fakeTOSClient{headErr: ErrUnavailable}}
 	if err := (&TOSStore{client: client}).ModelSnapshotObjects().Put(context.Background(), modelSnapshotTestID, 0, digest, payload); !errors.Is(err, modellifecycle.ErrUnavailable) {
@@ -219,10 +229,18 @@ func TestModelSnapshotCanceledCallsDoNotContactStorage(t *testing.T) {
 	client := &modelSnapshotClient{objects: map[string][]byte{}}
 	store := &TOSStore{client: client}
 	payload := []byte("weights")
-	if err := store.ModelSnapshotObjects().Put(ctx, modelSnapshotTestID, 0, modelSnapshotDigest(payload), payload); !errors.Is(err, context.Canceled) { t.Fatalf("put: %v", err) }
-	if _, _, err := store.ModelSnapshotObjects().Get(ctx, modelSnapshotTestID, 0); !errors.Is(err, context.Canceled) { t.Fatalf("get: %v", err) }
-	if _, _, _, err := store.ModelSnapshotSource().Read(ctx, "runs/job/output", "model.pt"); !errors.Is(err, context.Canceled) { t.Fatalf("source: %v", err) }
-	if client.putKey != "" || client.readKey != "" { t.Fatal("canceled request contacted storage") }
+	if err := store.ModelSnapshotObjects().Put(ctx, modelSnapshotTestID, 0, modelSnapshotDigest(payload), payload); !errors.Is(err, context.Canceled) {
+		t.Fatalf("put: %v", err)
+	}
+	if _, _, err := store.ModelSnapshotObjects().Get(ctx, modelSnapshotTestID, 0); !errors.Is(err, context.Canceled) {
+		t.Fatalf("get: %v", err)
+	}
+	if _, _, _, err := store.ModelSnapshotSource().Read(ctx, "runs/job/output", "model.pt"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("source: %v", err)
+	}
+	if client.putKey != "" || client.readKey != "" {
+		t.Fatal("canceled request contacted storage")
+	}
 }
 
 type modelSnapshotReadCloser struct {
@@ -234,38 +252,56 @@ func (r *modelSnapshotReadCloser) Close() error { r.closed = true; return nil }
 
 type modelSnapshotClient struct {
 	fakeTOSClient
-	objects map[string][]byte
-	putKey string
-	readKey string
-	putErr error
-	readErr error
-	response *tosArtifactReadResponse
+	objects      map[string][]byte
+	putKey       string
+	readKey      string
+	putErr       error
+	readErr      error
+	response     *tosArtifactReadResponse
 	headOverride *ObjectInfo
 }
 
 func (c *modelSnapshotClient) Head(_ context.Context, _, key string) (ObjectInfo, error) {
-	if c.headErr != nil { return ObjectInfo{}, c.headErr }
-	if c.headOverride != nil { return *c.headOverride, nil }
+	if c.headErr != nil {
+		return ObjectInfo{}, c.headErr
+	}
+	if c.headOverride != nil {
+		return *c.headOverride, nil
+	}
 	data, ok := c.objects[key]
-	if !ok { return ObjectInfo{}, ErrNotFound }
+	if !ok {
+		return ObjectInfo{}, ErrNotFound
+	}
 	return ObjectInfo{SizeBytes: int64(len(data)), Metadata: map[string]string{"sha256": modelSnapshotDigest(data)}}, nil
 }
 
 func (c *modelSnapshotClient) Put(_ context.Context, request tosPutRequest) error {
 	c.putKey = request.Key
-	if c.putErr != nil { return c.putErr }
-	if _, ok := c.objects[request.Key]; ok { return ErrAlreadyExists }
+	if c.putErr != nil {
+		return c.putErr
+	}
+	if _, ok := c.objects[request.Key]; ok {
+		return ErrAlreadyExists
+	}
 	data, err := io.ReadAll(request.Body)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	c.objects[request.Key] = data
 	return nil
 }
 
 func (c *modelSnapshotClient) ReadArtifact(_ context.Context, request tosArtifactReadRequest) (tosArtifactReadResponse, error) {
 	c.readKey = request.Key
-	if c.readErr != nil { return tosArtifactReadResponse{}, c.readErr }
-	if c.response != nil { return *c.response, nil }
+	if c.readErr != nil {
+		return tosArtifactReadResponse{}, c.readErr
+	}
+	if c.response != nil {
+		return *c.response, nil
+	}
 	data, ok := c.objects[request.Key]
-	if !ok { return tosArtifactReadResponse{}, ErrNotFound }
+	if !ok {
+		return tosArtifactReadResponse{}, ErrNotFound
+	}
 	return tosArtifactReadResponse{Content: io.NopCloser(bytes.NewReader(data)), SizeBytes: int64(len(data)), ETag: modelSnapshotTestETag}, nil
 }

@@ -152,7 +152,7 @@ func (o *modelSnapshotObjects) Get(ctx context.Context, id string, index int) (i
 type modelSnapshotSizedReader struct {
 	io.ReadCloser
 	remaining int64
-	err error
+	err       error
 }
 
 func (r *modelSnapshotSizedReader) Read(p []byte) (int, error) {

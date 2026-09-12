@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"gorm.io/gorm/schema"
- ml "ray-train-platform-backend/modellifecycle"
+	ml "ray-train-platform-backend/modellifecycle"
 )
 
 // The unit tests run against SQLite, which auto-creates whatever columns the
