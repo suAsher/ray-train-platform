@@ -1,0 +1,1251 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "RayTrain integration identities and controlled external Run artifacts",
+    "version": "1.0.0",
+    "description": "Implementation contract; consult release evidence before assuming deployment. Platform REST only, not native MLflow Artifact/Registry/Serving compatibility. Machine calls require token scopes AND live experiment grants; management requires interactive owner login. Upload only to RUNNING external platform Runs. Complete artifacts before finishing the Run. READY content is immutable and readable after Run completion. No personal-data migration or training submission. Management limits:20 owner identities including revoked,20 unrevoked tokens per identity,100 token list records with unrevoked first,100 grants including tombstones. 100GiB is a logical owner reservation budget, not physical storage capacity."
+  },
+  "servers": [
+    {
+      "url": "https://raytrain.wellspiking.ai/api/v1"
+    }
+  ],
+  "security": [
+    {
+      "BearerToken": []
+    }
+  ],
+  "paths": {
+    "/mlflow/integrations": {
+      "get": {
+        "operationId": "listIntegrations",
+        "summary": "List current interactive owner's integrations",
+        "security": [
+          {
+            "InteractiveSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/IdentityPage"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createIntegration",
+        "summary": "Create an owner/team-bound machine identity",
+        "security": [
+          {
+            "InteractiveSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateIdentity"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Identity"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/mlflow/integrations/{integrationId}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/IntegrationId"
+        }
+      ],
+      "delete": {
+        "operationId": "revokeIntegration",
+        "summary": "Revoke an owned identity and invalidate its machine access",
+        "security": [
+          {
+            "InteractiveSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Revoked"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/mlflow/integrations/{integrationId}/tokens": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/IntegrationId"
+        }
+      ],
+      "get": {
+        "operationId": "listIntegrationTokens",
+        "summary": "List token metadata without token plaintext",
+        "security": [
+          {
+            "InteractiveSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/TokenPage"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createIntegrationToken",
+        "summary": "Issue a 1–30 day machine token; protect the one-time response",
+        "security": [
+          {
+            "InteractiveSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateToken"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/IssuedToken"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/mlflow/integrations/{integrationId}/tokens/{tokenId}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/IntegrationId"
+        },
+        {
+          "name": "tokenId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/Id"
+          }
+        }
+      ],
+      "delete": {
+        "operationId": "revokeIntegrationToken",
+        "security": [
+          {
+            "InteractiveSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Revoked"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/mlflow/integrations/{integrationId}/grants": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/IntegrationId"
+        }
+      ],
+      "get": {
+        "operationId": "listIntegrationGrants",
+        "security": [
+          {
+            "InteractiveSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/GrantPage"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "setIntegrationGrant",
+        "summary": "Set permissions for one owner-authorized platform experiment",
+        "security": [
+          {
+            "InteractiveSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetGrant"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Grant"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/mlflow/integrations/{integrationId}/grants/{experimentId}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/IntegrationId"
+        },
+        {
+          "name": "experimentId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/Id"
+          }
+        }
+      ],
+      "delete": {
+        "operationId": "revokeIntegrationGrant",
+        "security": [
+          {
+            "InteractiveSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Revoked"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/mlflow/runs/{runId}/artifacts": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/RunId"
+        }
+      ],
+      "get": {
+        "operationId": "listExternalArtifacts",
+        "description": "Requires experiments:read and artifacts:read scopes, plus read and artifacts:read experiment grant for machine identities. Owner human reads remain governed by ownership.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ArtifactPage"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "initializeExternalArtifact",
+        "description": "Requires RUNNING Run, artifact read/write scopes and live read/artifact read/write grant. Nonempty file <=20 GiB, owner budget100 GiB, <=16 pending uploads, 24 hour lifetime. Same owner idempotency key and declaration return same artifact; changed Run/name/size/hash conflicts. Expired pending reservations persist until cancelled.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InitArtifact"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Artifact"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/mlflow/runs/{runId}/artifacts/{artifactId}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/RunId"
+        },
+        {
+          "$ref": "#/components/parameters/ArtifactId"
+        }
+      ],
+      "get": {
+        "operationId": "getExternalArtifact",
+        "summary": "Read live state and uploaded part hashes before resuming",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Artifact"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "cancelExternalArtifact",
+        "description": "Explicitly cancel an unpublished PENDING upload, including after Run finish or upload expiry. Requires current artifact write permission and authorization; does not require RUNNING. READY cannot be cancelled/deleted. Cleanup failure retains reservation; inspect state before retry.",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Artifact"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/mlflow/runs/{runId}/artifacts/{artifactId}/parts/{partNumber}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/RunId"
+        },
+        {
+          "$ref": "#/components/parameters/ArtifactId"
+        },
+        {
+          "name": "partNumber",
+          "in": "path",
+          "required": true,
+          "description": "One-based fixed part number; must be <=artifact.totalParts.",
+          "schema": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2560
+          }
+        }
+      ],
+      "put": {
+        "operationId": "uploadExternalArtifactPart",
+        "description": "RUNNING Run and unexpired PENDING artifact only. Exactly8 MiB except final remaining bytes. Same part number, size and SHA256 repeat is idempotent. No automatic retry after unknown outcome: GET state first. Upload request read deadline is 2 minutes, independent of the 15 minute complete/download limit.",
+        "parameters": [
+          {
+            "name": "X-Content-SHA256",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SHA256"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary",
+                "description": "Raw part bytes, never JSON/base64; maximum8388608 bytes",
+                "minLength": 1,
+                "maxLength": 8388608
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Artifact"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/mlflow/runs/{runId}/artifacts/{artifactId}/complete": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/RunId"
+        },
+        {
+          "$ref": "#/components/parameters/ArtifactId"
+        }
+      ],
+      "post": {
+        "operationId": "completeExternalArtifact",
+        "description": "Verify all part hashes and complete-file SHA256 with a15 minute hard operation limit, then publish immutable READY. Complete before finishing Run. Read state after timeout; never infer success from upload responses alone.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Artifact"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/mlflow/runs/{runId}/artifacts/{artifactId}/content": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/RunId"
+        },
+        {
+          "$ref": "#/components/parameters/ArtifactId"
+        }
+      ],
+      "get": {
+        "operationId": "downloadExternalArtifact",
+        "description": "READY only; read scope plus current grant/ownership. Streams full immutable file within15 minutes; no byte-range resume. Validate total bytes and metadata SHA256 locally. Never use remote name as a local path or expose object storage credentials.",
+        "responses": {
+          "200": {
+            "description": "Verified immutable file stream; validate again at client",
+            "headers": {
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "attachment; sanitized filename"
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              },
+              "X-Content-Type-Options": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "nosniff"
+                  ]
+                }
+              },
+              "X-Content-SHA256": {
+                "schema": {
+                  "$ref": "#/components/schemas/SHA256"
+                },
+                "description": "Whole-file immutable SHA256; verify against GET metadata and local download"
+              },
+              "Content-Length": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 1,
+                  "maximum": 21474836480
+                }
+              },
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "none"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "BearerToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Approved PAT or integration token; never in URL/log. Token scopes and resource authorization are both required."
+      },
+      "InteractiveSession": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Human interactive login obtained through the platform; PATs and integration tokens are forbidden for management. Do not extract/share browser credentials."
+      }
+    },
+    "parameters": {
+      "IntegrationId": {
+        "name": "integrationId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/Id"
+        }
+      },
+      "RunId": {
+        "name": "runId",
+        "in": "path",
+        "required": true,
+        "description": "External platform Run ID, never job_id or upstream MLflow run_id",
+        "schema": {
+          "$ref": "#/components/schemas/Id"
+        }
+      },
+      "ArtifactId": {
+        "name": "artifactId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/Id"
+        }
+      },
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 50
+        }
+      },
+      "Cursor": {
+        "name": "cursor",
+        "in": "query",
+        "description": "Use only the previous same-query nextCursor; do not construct a cursor",
+        "schema": {
+          "$ref": "#/components/schemas/Id"
+        }
+      },
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "description": "Stable 8–128 ASCII letters, digits, dot, underscore, colon or hyphen. Reuse only with the same Run and exact declaration. Internally scoped to caller/integration; cannot reuse another identity's key as authorization.",
+        "schema": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._:-]{8,128}$"
+        }
+      }
+    },
+    "schemas": {
+      "Id": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{32}$"
+      },
+      "SHA256": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      },
+      "Scopes": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 4,
+        "uniqueItems": true,
+        "description": "Must include experiments:read. artifacts:write requires artifacts:read.",
+        "items": {
+          "type": "string",
+          "enum": [
+            "experiments:read",
+            "experiments:write",
+            "artifacts:read",
+            "artifacts:write"
+          ]
+        }
+      },
+      "Permissions": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 4,
+        "uniqueItems": true,
+        "description": "Must include read. artifacts:write requires artifacts:read. Live grant and token scope must both authorize an operation.",
+        "items": {
+          "type": "string",
+          "enum": [
+            "read",
+            "write",
+            "artifacts:read",
+            "artifacts:write"
+          ]
+        }
+      },
+      "CreateIdentity": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Maximum128 UTF-8 bytes, no control characters"
+          },
+          "allowCreateExperiments": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "CreateToken": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scopes",
+          "expiresInDays"
+        ],
+        "properties": {
+          "scopes": {
+            "$ref": "#/components/schemas/Scopes"
+          },
+          "expiresInDays": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30
+          }
+        }
+      },
+      "SetGrant": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "experimentId",
+          "permissions"
+        ],
+        "properties": {
+          "experimentId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/Permissions"
+          }
+        }
+      },
+      "Identity": {
+        "type": "object",
+        "required": [
+          "id",
+          "tenantId",
+          "ownerUserId",
+          "name",
+          "allowCreateExperiments",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "tenantId": {
+            "type": "string"
+          },
+          "ownerUserId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "allowCreateExperiments": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revokedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TokenMetadata": {
+        "type": "object",
+        "required": [
+          "id",
+          "publicId",
+          "tenantId",
+          "userId",
+          "scopes",
+          "expiresAt",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "publicId": {
+            "type": "string"
+          },
+          "tenantId": {
+            "type": "string"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "scopes": {
+            "$ref": "#/components/schemas/Scopes"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastUsedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revokedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "IssuedToken": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TokenMetadata"
+          },
+          {
+            "type": "object",
+            "required": [
+              "token"
+            ],
+            "properties": {
+              "token": {
+                "type": "string",
+                "readOnly": true,
+                "description": "Secret one-time issued value. Never log or persist the response unprotected; subsequent lists omit this field."
+              }
+            }
+          }
+        ]
+      },
+      "Grant": {
+        "type": "object",
+        "required": [
+          "integrationId",
+          "experimentId",
+          "permissions",
+          "createdAt"
+        ],
+        "properties": {
+          "integrationId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "experimentId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/Permissions"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revokedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "InitArtifact": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "sizeBytes",
+          "sha256"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "description": "Single path component <=255 UTF-8 bytes; no slashes, backslashes, control chars, dot/dotdot or surrounding whitespace"
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "maximum": 21474836480
+          },
+          "sha256": {
+            "$ref": "#/components/schemas/SHA256"
+          }
+        }
+      },
+      "Part": {
+        "type": "object",
+        "required": [
+          "index",
+          "sizeBytes",
+          "sha256"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2560
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8388608
+          },
+          "sha256": {
+            "$ref": "#/components/schemas/SHA256"
+          }
+        }
+      },
+      "Artifact": {
+        "type": "object",
+        "required": [
+          "id",
+          "runId",
+          "name",
+          "sizeBytes",
+          "sha256",
+          "state",
+          "partSizeBytes",
+          "totalParts",
+          "uploadedParts",
+          "expiresAt",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "runId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "name": {
+            "type": "string"
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "maximum": 21474836480
+          },
+          "sha256": {
+            "$ref": "#/components/schemas/SHA256"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "READY",
+              "CANCELLED"
+            ]
+          },
+          "partSizeBytes": {
+            "type": "integer",
+            "enum": [
+              8388608
+            ]
+          },
+          "totalParts": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2560
+          },
+          "uploadedParts": {
+            "type": "array",
+            "maxItems": 2560,
+            "items": {
+              "$ref": "#/components/schemas/Part"
+            }
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "24 hour upload deadline; not a READY deletion time"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Success": {
+        "type": "object",
+        "required": [
+          "success",
+          "data",
+          "request_id"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "request_id": {
+            "type": "string"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "success",
+          "error",
+          "request_id"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "400 invalid request;401 unauthenticated/expired/revoked;403 missing scope/interactive login;404 absent or unauthorized resource;409 state/content/quota conflict;413 body too large;429 rate limit;503 outcome uncertain. Inspect error.code and read state before retry. No native SDK error envelope here. Range download requests return 416 ARTIFACT_RANGE_UNSUPPORTED.",
+        "headers": {
+          "Retry-After": {
+            "schema": {
+              "type": "string"
+            },
+            "description": "Rate-limit delay when provided"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Identity": {
+        "description": "Identity in platform envelope",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Success"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Identity"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "IdentityPage": {
+        "description": "Owner identity items",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Success"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "items"
+                      ],
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Identity"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "IssuedToken": {
+        "description": "One-time secret; no-store response, protect and do not log",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Success"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/IssuedToken"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "TokenPage": {
+        "description": "Metadata only; never token plaintext",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Success"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "items"
+                      ],
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/TokenMetadata"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "Grant": {
+        "description": "Grant in platform envelope",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Success"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Grant"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "GrantPage": {
+        "description": "Current grant items",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Success"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "items"
+                      ],
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Grant"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "Revoked": {
+        "description": "Revocation recorded",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Success"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "revoked"
+                      ],
+                      "properties": {
+                        "revoked": {
+                          "type": "boolean",
+                          "enum": [
+                            true
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "Artifact": {
+        "description": "Artifact state and registered uploadedParts",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Success"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Artifact"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "ArtifactPage": {
+        "description": "Bounded artifact page; absent nextCursor means no next page",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Success"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "items"
+                      ],
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Artifact"
+                          }
+                        },
+                        "nextCursor": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

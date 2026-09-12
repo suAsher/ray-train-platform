@@ -25,7 +25,7 @@ func integrationFixture(t *testing.T) (*GormRepository, *MLflowIntegrationStore,
 	if err := r.db.Create(&LocalUserRecord{ID: p.Subject, Username: "owner", TenantID: "team", ActiveTenantID: "team", StorageKey: "kept", RolesJSON: `["Engineer"]`, GlobalRolesJSON: `["SuperAdmin"]`}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := r.db.Create(&TenantMembershipRecord{IdentityID: p.Subject, TenantID: p.TenantID, RolesJSON: `["Engineer"]`, Status: domain.MembershipStatusActive}).Error; err != nil {
+	if err := r.db.Create(&TenantMembershipRecord{IdentityID: p.Subject, TenantID: p.TenantID, RolesJSON: `["Engineer"]`, Status: string(domain.MembershipStatusActive)}).Error; err != nil {
 		t.Fatal(err)
 	}
 	return r, NewMLflowIntegrationStore(r), p
@@ -59,7 +59,7 @@ func TestIntegrationAuthenticationRechecksOwnerMembershipRevocationAndDoesNotInh
 	for _, mutation := range []struct {
 		table, where, column string
 		value                any
-	}{{"tenant_memberships", "identity_id = 'owner'", "status", "inactive"}, {"local_users", "id = 'owner'", "disabled", true}, {"mlflow_integrations", "id = '" + identity.ID + "'", "revoked_at", now}} {
+	}{{"tenant_memberships", "identity_id = 'owner'", "status", string(domain.MembershipStatusInactive)}, {"local_users", "id = 'owner'", "disabled", true}, {"mlflow_integrations", "id = '" + identity.ID + "'", "revoked_at", now}} {
 		tx := r.db.Begin()
 		if err := tx.Table(mutation.table).Where(mutation.where).Update(mutation.column, mutation.value).Error; err != nil {
 			t.Fatal(err)

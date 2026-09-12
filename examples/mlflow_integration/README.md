@@ -73,3 +73,44 @@ experiment = integration.read_run(job_id, run_id)
 ```bash
 python3 -m unittest discover -s examples/mlflow_integration -p 'test_*.py' -v
 ```
+
+## 独立集成与受控产物（新增 REST 示例）
+
+`integration_artifacts.py` 面向**已存在的平台外部 Run**，不接受训练 Job ID 或上游 MLflow Run ID，不创建训练、不结束 Run，也不管理凭据。完整身份/grant/文件合同见[集成身份与受控产物](../../docs/MLFLOW_INTEGRATION_ARTIFACT_API.md)。是否已上线以发布验收记录为准；这不是 MLflow SDK Artifact API。
+
+通过秘密管理渠道注入获准的 `RAYTRAIN_PAT`（集成令牌也使用此变量），配置 `RAYTRAIN_API=https://raytrain.wellspiking.ai`。上传需 scope 与目标实验 grant 同时允许产物读写；读取需产物读权限。先上传完成，再结束 Run。
+
+```bash
+# 文件只读；第一次必须指定不存在的 receipt 路径。
+python3 examples/mlflow_integration/integration_artifacts.py upload \
+  --run-id "$PLATFORM_RUN_ID" --file ./checkpoint.pt \
+  --idempotency-key quality-checkpoint-v1 \
+  --receipt ./checkpoint-upload.json
+
+# 中断后先查状态，再显式续传：保留相同文件、Run、key、receipt。
+python3 examples/mlflow_integration/integration_artifacts.py status \
+  --run-id "$PLATFORM_RUN_ID" --artifact-id "$ARTIFACT_ID"
+python3 examples/mlflow_integration/integration_artifacts.py upload --resume \
+  --run-id "$PLATFORM_RUN_ID" --file ./checkpoint.pt \
+  --idempotency-key quality-checkpoint-v1 \
+  --receipt ./checkpoint-upload.json
+
+# 仅 READY 可以下载；输出必须是新文件，下载后校验整文件SHA256。
+python3 examples/mlflow_integration/integration_artifacts.py download \
+  --run-id "$PLATFORM_RUN_ID" --artifact-id "$ARTIFACT_ID" \
+  --output ./downloaded-checkpoint.pt
+
+# 只读列举；nextCursor 表示还有下一页，下次加 --cursor "$NEXT_CURSOR"。
+python3 examples/mlflow_integration/integration_artifacts.py list \
+  --run-id "$PLATFORM_RUN_ID"
+
+# 明确取消一个未完成上传，不删除 READY 或现有训练文件。
+python3 examples/mlflow_integration/integration_artifacts.py cancel \
+  --run-id "$PLATFORM_RUN_ID" --artifact-id "$ARTIFACT_ID"
+```
+
+单文件最大 20 GiB，固定 8 MiB 分片；示例流式计算整文件与分片 hash，内存不会读入完整文件。每片相同编号/大小/hash 可重传；示例先读取状态，只发送缺失片，不自动重试任何网络失败。源文件上传中变化时拒绝 complete。receipt 不含 PAT，以 0600 保存。初始化超时且 receipt 尚无 artifact ID 时，先 list 核对状态，再决定是否用原 key/正文显式重试；不要换 key 盲目创建第二份。
+
+示例 list 每页 20 条，避免大量分片元数据超过客户端有界 JSON 读取；如返回 nextCursor，显式传 `--cursor` 读取下一页。
+
+完整校验和下载最长按服务端 15 分钟限制；中断或 hash 不匹配不算成功。下载不会覆盖已有路径，失败删除本次创建的不完整文件。错误日志不输出令牌及原始响应。现有 `client.py`、`external_tracking.py` 和六方法 SDK 子集继续保持原合同。

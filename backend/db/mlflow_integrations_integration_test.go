@@ -20,7 +20,7 @@ func TestMLflowIntegrationsMigrationPreservesQuotaAndSerializesOwnerLimit(t *tes
 	if err := database.Exec(`INSERT INTO local_users(id,username,email,tenant_id,active_tenant_id,storage_key,roles,global_roles,password_hash,identity_provider) VALUES ('integration-test-owner','integration-test-owner','','tenant-a','tenant-a','unchanged-home','["Engineer"]','[]','unused','local')`).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := database.Exec(`INSERT INTO tenant_memberships(identity_id,tenant_id,roles,status) VALUES ('integration-test-owner','tenant-a','["Engineer"]','active')`).Error; err != nil {
+	if err := database.Exec(`INSERT INTO tenant_memberships(identity_id,tenant_id,roles,status) VALUES ('integration-test-owner','tenant-a','["Engineer"]','ACTIVE')`).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := database.Exec("UPDATE tenants SET gpu_quota_limit=24 WHERE id='tenant-a'").Error; err != nil {

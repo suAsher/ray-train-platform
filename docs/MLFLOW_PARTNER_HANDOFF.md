@@ -10,17 +10,20 @@
 | REST 版本 | `/api/v1`；HTTPS JSON，成功读取 `data`，失败读取 `error` 和 `request_id` |
 | SDK 版本 | 固定 `mlflow==3.14.0`，仅支持本文列出的六个方法 |
 | 外部实验 SDK Tracking URI | `https://raytrain.wellspiking.ai/api/v1/mlflow-tracking` |
-| 身份 | 明确平台用户、有效团队、用途、负责人、到期日 |
-| 凭据 | 由该身份在 Portal「账户与安全 → 创建访问令牌」申请独立用途、短期 PAT；通过获准秘密渠道交付 |
+| 身份 | 明确平台用户/集成身份、有效团队、用途、负责人、到期日 |
+| 凭据 | 机器接入使用「实验中心 → 集成接入」独立身份、实验授权及短期凭据；个人 PAT 仍在「账户与安全」申请。通过获准秘密渠道交付，集成扩展以本轮发布验收为准 |
 | 外部实验只读 scope | `experiments:read` |
 | 外部实验读写 scope | 同时有 `experiments:read`、`experiments:write` |
+| 产物读取/写入 | 读取为 `experiments:read` + `artifacts:read`；写入再加 `artifacts:write`；集成同时需要目标实验 read/artifacts 对应 grant，单纯文件上传不要求实验元数据 write |
 | 目标记录 | REST 创建返回的**平台** Experiment ID 和 Run ID |
 | 指标约定 | 名称、含义、单位、数据/代码版本、step 含义、毫秒 timestamp |
 | 接口与调用工具 | [外部实验 OpenAPI](api/mlflow-external-tracking.openapi.json)、[完整合同](MLFLOW_EXTERNAL_TRACKING_API.md)、[Python REST 客户端](../examples/mlflow_integration/README.md) |
 
 先在对接程序实际运行的机器上验证 DNS、443/TLS 和公司网络访问。用户浏览器连接 VPN 可以访问，不等于对接方服务器已经可达；不要关闭证书校验。不要交付内部 MLflow 地址、数据库或对象存储凭据、浏览器 Cookie。
 
-PAT 绑定用户和团队，外部实验只能读写该身份在当前有效团队中拥有的记录，管理员也没有代写权限。PAT 不是某个 Run 的专属令牌；按应用、按 Run 的授权或代写他人资源目前尚未提供，不应共享管理员 PAT 代替。
+个人 PAT 继续绑定用户和团队，只访问其本人资源，不是某个 Run 的专属令牌。**本轮新增独立集成身份与实验级 grant，当前实现待本轮发布验收确认。** 所有者在「实验中心 → 集成接入」创建身份、选择获准实验及权限、签发 1–30 天令牌；实际权限取令牌 scope 与实时实验 grant 的交集。默认不允许机器创建新实验，需要时由所有者明确开启。可分别撤销令牌、grant 或身份，不删除原实验。当前粒度为实验，尚无单 Run grant，也不扩展已有训练 Job API。不要共享管理员 PAT 代替机器授权。
+
+管理上限：所有者 20 个身份（含撤销）、每身份 20 枚未撤销令牌、100 个实验 grant（含撤销历史）；令牌列表最多 100 条、未撤销优先。详见[集成与产物合同](MLFLOW_INTEGRATION_ARTIFACT_API.md)及[OpenAPI](api/mlflow-integration-artifacts.openapi.json)。接口存在不代表已为实际对接方创建或交付凭据。
 
 ## 独立外部实验：先创建，再读写
 
@@ -70,7 +73,15 @@ client.set_terminated(run_id, status="FINISHED")
 
 支持的方法仅为 `get_run`、`log_batch`、`log_metric`、`log_param`、`set_tag`、`set_terminated`。get_run 提供有界的参数、安全自定义标签及最新指标视图；最新指标保留实际 timestamp/step，系统归属标签不对外返回。SDK 返回自身的 `error_code/message`，不使用 REST 响应信封。
 
-不支持 SDK `create_experiment/create_run/start_run`、自动创建 Run 的 autolog、完整历史导出、Artifact 上传、模型注册、审批、Traces 或 Serving。`raytrain-disabled:` artifact URI 表示文件通道未开放。原生 `/mlflow/` 是既有共享浏览器管理入口，不能用作本 SDK 地址，也不承诺与外部 API 同等的所有权隔离。
+不支持 SDK `create_experiment/create_run/start_run`、自动创建 Run 的 autolog、完整历史导出、Artifact 上传、模型注册、审批、Traces 或 Serving。`raytrain-disabled:` artifact URI 表示原生 SDK 文件通道未开放；本轮产物通过独立平台 REST 上传，不能调用 `mlflow.log_artifact()` 代替。原生 `/mlflow/` 是既有共享浏览器管理入口，不能用作本 SDK 地址，也不承诺与外部 API 同等的所有权隔离。
+
+## 本轮扩展：受控 Run 产物
+
+待对应版本部署验收后，可从「实验中心 → 外部实验 → Run 产物」浏览记录，机器使用 `/api/v1/mlflow/runs/{平台RunID}/artifacts` 初始化、读取状态与上传。上传 init 提供文件名、sizeBytes、完整 SHA256 和稳定 Idempotency-Key；按 1 起编号 PUT 固定 8 MiB 分片并带分片 SHA256，POST complete 完整校验后才成为不可变 READY。只允许在 RUNNING Run 中上传，**先完成文件再结束 Run**。
+
+单文件大于 0 且不超过 20 GiB；每所有者逻辑预算 100 GiB、最多 16 个待完成上传、24 小时有效期。下载仅 READY，通过 `.../content`，调用方校验大小和 SHA256。断连先读取 uploadedParts，仅续传缺失部分，不改 key 盲目重放；READY 不覆盖，未完成上传可明确取消。此存储与原生 MLflow 共享目录、用户训练输出目录分离，不迁移个人数据，也不执行模型文件。
+
+交付[标准库上传/续传/下载示例](../examples/mlflow_integration/integration_artifacts.py)和[运行说明](../examples/mlflow_integration/README.md)。receipt 仅记录非敏感平台 ID/hash/key，权限 0600；下载只创建明确的新文件路径，不覆盖已有文件。完整校验最长 15 分钟，文件成功不代表模型候选、独立评估或审批已完成。
 
 ## 已有平台训练记录：保留 Job/Run 接口
 

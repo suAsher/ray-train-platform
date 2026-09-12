@@ -95,7 +95,7 @@ func (s *artifactServiceFake) Download(_ context.Context, scope trackingartifact
 func artifactPrincipal() auth.Principal {
 	return trackingPrincipal(domain.PATScopeExperimentsRead, domain.PATScopeArtifactsRead, domain.PATScopeArtifactsWrite)
 }
-func artifactRouter(p auth.Principal, authorize mlflowTrackingService, store trackingArtifactService, audit MLflowDashboardStore) *gin.Engine {
+func mlflowArtifactTestRouter(p auth.Principal, authorize mlflowTrackingService, store trackingArtifactService, audit MLflowDashboardStore) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	h := NewHandler(&fakeJobRepository{}, Options{MLflowTracking: authorize, TrackingArtifacts: store, MLflowDashboardStore: audit})
 	r := gin.New()
@@ -118,7 +118,7 @@ func TestMLflowArtifactAuthorizationPrecedesStorage(t *testing.T) {
 		t.Run(methodPath[0]+methodPath[1], func(t *testing.T) {
 			a := &artifactAuthorizerFake{authErr: mlflowtracking.ErrNotFound}
 			s := &artifactServiceFake{}
-			r := artifactRouter(artifactPrincipal(), a, s, newFakeMLflowDashboardStore())
+			r := mlflowArtifactTestRouter(artifactPrincipal(), a, s, newFakeMLflowDashboardStore())
 			res := artifactRequest(r, methodPath[0], methodPath[1], "", 0)
 			if res.Code != 404 || s.calls != 0 || a.authCalls != 1 {
 				t.Fatalf("authorization ordering: status=%d auth=%d storage=%d body=%s", res.Code, a.authCalls, s.calls, res.Body.String())
@@ -134,7 +134,7 @@ func TestMLflowArtifactScopesAndPATRequired(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			a := &artifactAuthorizerFake{}
 			s := &artifactServiceFake{}
-			res := artifactRequest(artifactRouter(tc.p, a, s, newFakeMLflowDashboardStore()), tc.method, artifactPath, "", 0)
+			res := artifactRequest(mlflowArtifactTestRouter(tc.p, a, s, newFakeMLflowDashboardStore()), tc.method, artifactPath, "", 0)
 			if res.Code != 403 || s.calls != 0 || a.authCalls != 0 {
 				t.Fatalf("scope guard failed: status=%d auth=%d storage=%d", res.Code, a.authCalls, s.calls)
 			}
@@ -145,7 +145,7 @@ func TestMLflowArtifactScopesAndPATRequired(t *testing.T) {
 	p.Scopes = nil
 	a := &artifactAuthorizerFake{}
 	s := &artifactServiceFake{}
-	res := artifactRequest(artifactRouter(p, a, s, nil), "GET", artifactPath, "", 0)
+	res := artifactRequest(mlflowArtifactTestRouter(p, a, s, nil), "GET", artifactPath, "", 0)
 	if res.Code != 200 || s.calls != 1 {
 		t.Fatalf("interactive read failed: %d %s", res.Code, res.Body.String())
 	}
@@ -158,7 +158,7 @@ func TestMLflowArtifactGrantedOwnerAndAuditIdentity(t *testing.T) {
 	s := &artifactServiceFake{}
 	audit := newFakeMLflowDashboardStore()
 	body := `{"name":"model.bin","sizeBytes":4,"sha256":"` + artifactSHA + `"}`
-	res := artifactRequest(artifactRouter(p, a, s, audit), "POST", artifactPath, body, int64(len(body)))
+	res := artifactRequest(mlflowArtifactTestRouter(p, a, s, audit), "POST", artifactPath, body, int64(len(body)))
 	if res.Code != 201 || s.scope.OwnerID != "owner-a" || s.scope.RunID != artifactRunID || s.scope.TenantID != "team-a" || a.authActor.IntegrationID != "integration-a" || s.key == "artifact-init-key" {
 		t.Fatalf("grant scope/namespace: status=%d scope=%+v actor=%+v key=%q body=%s", res.Code, s.scope, a.authActor, s.key, res.Body.String())
 	}
@@ -173,7 +173,7 @@ func TestMLflowArtifactTerminalRunOnlyAllowsCancellation(t *testing.T) {
 	}{{"POST", artifactPath, 409}, {"PUT", artifactPath + "/" + artifactID + "/parts/1", 409}, {"POST", artifactPath + "/" + artifactID + "/complete", 409}, {"DELETE", artifactPath + "/" + artifactID, 200}} {
 		a := &artifactAuthorizerFake{state: "FINISHED"}
 		s := &artifactServiceFake{}
-		res := artifactRequest(artifactRouter(artifactPrincipal(), a, s, newFakeMLflowDashboardStore()), tc.method, tc.path, "", 0)
+		res := artifactRequest(mlflowArtifactTestRouter(artifactPrincipal(), a, s, newFakeMLflowDashboardStore()), tc.method, tc.path, "", 0)
 		if res.Code != tc.status {
 			t.Fatalf("%s %s: %d %s", tc.method, tc.path, res.Code, res.Body.String())
 		}
@@ -191,7 +191,7 @@ func TestMLflowArtifactPartValidationAndStreamingLimit(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			a := &artifactAuthorizerFake{}
 			s := &artifactServiceFake{artifact: trackingartifacts.Artifact{SizeBytes: 4, TotalParts: 1}}
-			r := artifactRouter(artifactPrincipal(), a, s, newFakeMLflowDashboardStore())
+			r := mlflowArtifactTestRouter(artifactPrincipal(), a, s, newFakeMLflowDashboardStore())
 			req := httptest.NewRequest("PUT", artifactPath+"/"+artifactID+"/parts/"+tc.part, strings.NewReader(tc.body))
 			req.ContentLength = tc.length
 			req.Header.Set("X-Content-SHA256", tc.sha)
@@ -210,7 +210,7 @@ func TestMLflowArtifactDownloadHeadersAndAudit(t *testing.T) {
 	reader := &countingReadCloser{reader: strings.NewReader("model-bytes")}
 	s := &artifactServiceFake{artifact: trackingartifacts.Artifact{Name: "模型.bin", SizeBytes: 11, State: "READY", SHA256: artifactSHA}, reader: reader}
 	audit := newFakeMLflowDashboardStore()
-	res := artifactRequest(artifactRouter(artifactPrincipal(), &artifactAuthorizerFake{}, s, audit), "GET", artifactPath+"/"+artifactID+"/content", "", 0)
+	res := artifactRequest(mlflowArtifactTestRouter(artifactPrincipal(), &artifactAuthorizerFake{}, s, audit), "GET", artifactPath+"/"+artifactID+"/content", "", 0)
 	if res.Code != 200 || res.Body.String() != "model-bytes" || !reader.closed || res.Header().Get("Content-Type") != "application/octet-stream" || res.Header().Get("X-Content-Type-Options") != "nosniff" || res.Header().Get("Cache-Control") != "no-store" || !strings.HasPrefix(res.Header().Get("Content-Disposition"), "attachment;") {
 		t.Fatalf("unsafe download: %d headers=%v body=%s", res.Code, res.Header(), res.Body.String())
 	}
@@ -222,13 +222,13 @@ func TestMLflowArtifactAuditUnavailablePreventsDownload(t *testing.T) {
 	audit := newFakeMLflowDashboardStore()
 	audit.auditErr = errors.New("private db failure")
 	s := &artifactServiceFake{}
-	res := artifactRequest(artifactRouter(artifactPrincipal(), &artifactAuthorizerFake{}, s, audit), "GET", artifactPath+"/"+artifactID+"/content", "", 0)
+	res := artifactRequest(mlflowArtifactTestRouter(artifactPrincipal(), &artifactAuthorizerFake{}, s, audit), "GET", artifactPath+"/"+artifactID+"/content", "", 0)
 	if res.Code != 503 || s.calls != 0 || strings.Contains(res.Body.String(), "private") {
 		t.Fatalf("unaudited download: %d calls=%d body=%s", res.Code, s.calls, res.Body.String())
 	}
 }
 func TestMLflowArtifactReadRateLimit(t *testing.T) {
-	r := artifactRouter(artifactPrincipal(), &artifactAuthorizerFake{}, &artifactServiceFake{}, nil)
+	r := mlflowArtifactTestRouter(artifactPrincipal(), &artifactAuthorizerFake{}, &artifactServiceFake{}, nil)
 	for i := 0; i < 120; i++ {
 		if res := artifactRequest(r, "GET", artifactPath, "", 0); res.Code != 200 {
 			t.Fatalf("attempt %d=%d", i, res.Code)
@@ -272,7 +272,7 @@ func TestMLflowArtifactDownloadFailureNeverAppendsJSON(t *testing.T) {
 		}
 		s := &artifactServiceFake{artifact: trackingartifacts.Artifact{Name: "model.bin", SizeBytes: size, State: "READY"}, reader: reader}
 		audit := &artifactDownloadAuditFake{fakeMLflowDashboardStore: newFakeMLflowDashboardStore(), failCompletion: failAudit}
-		res := artifactRequest(artifactRouter(artifactPrincipal(), &artifactAuthorizerFake{}, s, audit), "GET", artifactPath+"/"+artifactID+"/content", "", 0)
+		res := artifactRequest(mlflowArtifactTestRouter(artifactPrincipal(), &artifactAuthorizerFake{}, s, audit), "GET", artifactPath+"/"+artifactID+"/content", "", 0)
 		if res.Body.String() != "part" {
 			t.Fatalf("stream mixed with error response: %q", res.Body.String())
 		}
@@ -281,7 +281,7 @@ func TestMLflowArtifactDownloadFailureNeverAppendsJSON(t *testing.T) {
 func TestMLflowArtifactPaginationAndIDsAreBounded(t *testing.T) {
 	for _, path := range []string{artifactPath + "?cursor=foreign/path", artifactPath + "?limit=0", artifactPath + "?limit=invalid", artifactPath + "/not-hex"} {
 		s := &artifactServiceFake{}
-		res := artifactRequest(artifactRouter(artifactPrincipal(), &artifactAuthorizerFake{}, s, nil), "GET", path, "", 0)
+		res := artifactRequest(mlflowArtifactTestRouter(artifactPrincipal(), &artifactAuthorizerFake{}, s, nil), "GET", path, "", 0)
 		if res.Code != 400 || s.calls != 0 {
 			t.Fatalf("invalid query reached storage %s: %d %s", path, res.Code, res.Body.String())
 		}
@@ -294,14 +294,14 @@ func TestMLflowArtifactErrorsAreSanitized(t *testing.T) {
 		code   string
 	}{{trackingartifacts.ErrInvalid, 400, "ARTIFACT_INVALID_REQUEST"}, {trackingartifacts.ErrNotFound, 404, "ARTIFACT_NOT_FOUND"}, {trackingartifacts.ErrConflict, 409, "ARTIFACT_CONFLICT"}, {trackingartifacts.ErrQuota, 409, "ARTIFACT_QUOTA_EXCEEDED"}, {trackingartifacts.ErrUnavailable, 503, "ARTIFACT_UNAVAILABLE"}, {errors.New("private object credential"), 503, "ARTIFACT_UNAVAILABLE"}} {
 		s := &artifactServiceFake{err: tc.err}
-		res := artifactRequest(artifactRouter(artifactPrincipal(), &artifactAuthorizerFake{}, s, nil), "GET", artifactPath, "", 0)
+		res := artifactRequest(mlflowArtifactTestRouter(artifactPrincipal(), &artifactAuthorizerFake{}, s, nil), "GET", artifactPath, "", 0)
 		if res.Code != tc.status || !strings.Contains(res.Body.String(), tc.code) || strings.Contains(res.Body.String(), "private") {
 			t.Fatalf("unsafe error status=%d body=%s", res.Code, res.Body.String())
 		}
 	}
 }
 func TestMLflowArtifactWriteRateLimitAndJSONLimit(t *testing.T) {
-	r := artifactRouter(artifactPrincipal(), &artifactAuthorizerFake{}, &artifactServiceFake{}, newFakeMLflowDashboardStore())
+	r := mlflowArtifactTestRouter(artifactPrincipal(), &artifactAuthorizerFake{}, &artifactServiceFake{}, newFakeMLflowDashboardStore())
 	for i := 0; i < 60; i++ {
 		res := artifactRequest(r, "DELETE", artifactPath+"/"+artifactID, "", 0)
 		if res.Code != 200 {
@@ -314,7 +314,7 @@ func TestMLflowArtifactWriteRateLimitAndJSONLimit(t *testing.T) {
 	}
 	s := &artifactServiceFake{}
 	body := `{"name":"` + strings.Repeat("x", mlflowTrackingBodyLimit) + `"}`
-	res = artifactRequest(artifactRouter(artifactPrincipal(), &artifactAuthorizerFake{}, s, newFakeMLflowDashboardStore()), "POST", artifactPath, body, int64(len(body)))
+	res = artifactRequest(mlflowArtifactTestRouter(artifactPrincipal(), &artifactAuthorizerFake{}, s, newFakeMLflowDashboardStore()), "POST", artifactPath, body, int64(len(body)))
 	if res.Code != 413 || s.calls != 0 {
 		t.Fatalf("JSON limit failed %d calls=%d", res.Code, s.calls)
 	}
@@ -324,51 +324,63 @@ func TestMLflowArtifactWriteRateLimitAndJSONLimit(t *testing.T) {
 // sleeping client or a network connection. The existing recorder tests cover
 // writers that do not implement deadline support.
 type artifactDeadlineWriter struct {
- *httptest.ResponseRecorder
- deadlines []time.Time
- deadlineDuringWrite time.Time
- setErr error
+	*httptest.ResponseRecorder
+	deadlines           []time.Time
+	deadlineDuringWrite time.Time
+	setErr              error
 }
+
 func (w *artifactDeadlineWriter) SetWriteDeadline(deadline time.Time) error {
- w.deadlines = append(w.deadlines, deadline)
- return w.setErr
+	w.deadlines = append(w.deadlines, deadline)
+	return w.setErr
 }
 func (w *artifactDeadlineWriter) Write(body []byte) (int, error) {
- if len(w.deadlines) > 0 { w.deadlineDuringWrite = w.deadlines[len(w.deadlines)-1] }
- return w.ResponseRecorder.Write(body)
+	if len(w.deadlines) > 0 {
+		w.deadlineDuringWrite = w.deadlines[len(w.deadlines)-1]
+	}
+	return w.ResponseRecorder.Write(body)
 }
 func TestMLflowArtifactDownloadWriteDeadlineAndReset(t *testing.T) {
- for _,broken := range []bool{false,true} {
-  var reader io.ReadCloser = io.NopCloser(strings.NewReader("part"))
-  if broken { reader = &artifactBrokenReader{} }
-  s := &artifactServiceFake{artifact:trackingartifacts.Artifact{Name:"model.bin",SizeBytes:4,State:"READY"},reader:reader}
-  r := artifactRouter(artifactPrincipal(),&artifactAuthorizerFake{},s,newFakeMLflowDashboardStore())
-  req := httptest.NewRequest("GET",artifactPath+"/"+artifactID+"/content",nil)
-  before := time.Now()
-  w := &artifactDeadlineWriter{ResponseRecorder:httptest.NewRecorder()}
-  r.ServeHTTP(w,req)
-  if len(w.deadlines)!=2 || !w.deadlines[1].IsZero() || w.deadlines[0].Before(before.Add(14*time.Minute)) || w.deadlines[0].After(time.Now().Add(15*time.Minute)) || !w.deadlineDuringWrite.Equal(w.deadlines[0]) {
-   t.Fatalf("download deadline not active/reset: broken=%v calls=%v during=%v",broken,w.deadlines,w.deadlineDuringWrite)
-  }
-  if w.Body.String()!="part" { t.Fatalf("unexpected attachment: %q",w.Body.String()) }
- }
+	for _, broken := range []bool{false, true} {
+		var reader io.ReadCloser = io.NopCloser(strings.NewReader("part"))
+		if broken {
+			reader = &artifactBrokenReader{}
+		}
+		s := &artifactServiceFake{artifact: trackingartifacts.Artifact{Name: "model.bin", SizeBytes: 4, State: "READY"}, reader: reader}
+		r := mlflowArtifactTestRouter(artifactPrincipal(), &artifactAuthorizerFake{}, s, newFakeMLflowDashboardStore())
+		req := httptest.NewRequest("GET", artifactPath+"/"+artifactID+"/content", nil)
+		before := time.Now()
+		w := &artifactDeadlineWriter{ResponseRecorder: httptest.NewRecorder()}
+		r.ServeHTTP(w, req)
+		if len(w.deadlines) != 2 || !w.deadlines[1].IsZero() || w.deadlines[0].Before(before.Add(14*time.Minute)) || w.deadlines[0].After(time.Now().Add(15*time.Minute)) || !w.deadlineDuringWrite.Equal(w.deadlines[0]) {
+			t.Fatalf("download deadline not active/reset: broken=%v calls=%v during=%v", broken, w.deadlines, w.deadlineDuringWrite)
+		}
+		if w.Body.String() != "part" {
+			t.Fatalf("unexpected attachment: %q", w.Body.String())
+		}
+	}
 }
 func TestMLflowArtifactDownloadWriteDeadlinePreservesEarlierContext(t *testing.T) {
- s := &artifactServiceFake{artifact:trackingartifacts.Artifact{Name:"model.bin",SizeBytes:4,State:"READY"},reader:io.NopCloser(strings.NewReader("part"))}
- r := artifactRouter(artifactPrincipal(),&artifactAuthorizerFake{},s,newFakeMLflowDashboardStore())
- deadline := time.Now().Add(time.Minute)
- ctx,cancel := context.WithDeadline(context.Background(),deadline);defer cancel()
- req := httptest.NewRequest("GET",artifactPath+"/"+artifactID+"/content",nil).WithContext(ctx)
- w := &artifactDeadlineWriter{ResponseRecorder:httptest.NewRecorder()}
- r.ServeHTTP(w,req)
- if len(w.deadlines)!=2 || !w.deadlines[0].Equal(deadline) || !w.deadlines[1].IsZero() { t.Fatalf("request deadline lost: %v",w.deadlines) }
+	s := &artifactServiceFake{artifact: trackingartifacts.Artifact{Name: "model.bin", SizeBytes: 4, State: "READY"}, reader: io.NopCloser(strings.NewReader("part"))}
+	r := mlflowArtifactTestRouter(artifactPrincipal(), &artifactAuthorizerFake{}, s, newFakeMLflowDashboardStore())
+	deadline := time.Now().Add(time.Minute)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	req := httptest.NewRequest("GET", artifactPath+"/"+artifactID+"/content", nil).WithContext(ctx)
+	w := &artifactDeadlineWriter{ResponseRecorder: httptest.NewRecorder()}
+	r.ServeHTTP(w, req)
+	if len(w.deadlines) != 2 || !w.deadlines[0].Equal(deadline) || !w.deadlines[1].IsZero() {
+		t.Fatalf("request deadline lost: %v", w.deadlines)
+	}
 }
 func TestMLflowArtifactDownloadWriteDeadlineFailureStopsStream(t *testing.T) {
- reader := &countingReadCloser{reader:strings.NewReader("part")}
- s := &artifactServiceFake{artifact:trackingartifacts.Artifact{Name:"model.bin",SizeBytes:4,State:"READY"},reader:reader}
- r := artifactRouter(artifactPrincipal(),&artifactAuthorizerFake{},s,newFakeMLflowDashboardStore())
- req := httptest.NewRequest("GET",artifactPath+"/"+artifactID+"/content",nil)
- w := &artifactDeadlineWriter{ResponseRecorder:httptest.NewRecorder(),setErr:errors.New("socket deadline failure")}
- r.ServeHTTP(w,req)
- if w.Code!=503 || len(w.deadlines)!=1 || reader.bytesRead!=0 || !reader.closed { t.Fatalf("failed deadline still streamed: status=%d calls=%v read=%d closed=%v",w.Code,w.deadlines,reader.bytesRead,reader.closed) }
+	reader := &countingReadCloser{reader: strings.NewReader("part")}
+	s := &artifactServiceFake{artifact: trackingartifacts.Artifact{Name: "model.bin", SizeBytes: 4, State: "READY"}, reader: reader}
+	r := mlflowArtifactTestRouter(artifactPrincipal(), &artifactAuthorizerFake{}, s, newFakeMLflowDashboardStore())
+	req := httptest.NewRequest("GET", artifactPath+"/"+artifactID+"/content", nil)
+	w := &artifactDeadlineWriter{ResponseRecorder: httptest.NewRecorder(), setErr: errors.New("socket deadline failure")}
+	r.ServeHTTP(w, req)
+	if w.Code != 503 || len(w.deadlines) != 1 || reader.bytesRead != 0 || !reader.closed {
+		t.Fatalf("failed deadline still streamed: status=%d calls=%v read=%d closed=%v", w.Code, w.deadlines, reader.bytesRead, reader.closed)
+	}
 }
