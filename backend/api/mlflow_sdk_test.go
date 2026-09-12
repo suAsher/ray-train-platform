@@ -135,6 +135,27 @@ func TestMLflowSDKGetPreservesVirtualIDAndRejectsTransitionalStatus(t *testing.T
 	}
 }
 
+func TestMLflowSDKGetPreservesUserTagsAndLatestMetricMetadata(t *testing.T) {
+	id := "0123456789abcdef0123456789abcdef"
+	var detail mlflowtracking.RunDetail
+	if err := json.Unmarshal([]byte(`{"run":{"id":"`+id+`","state":"RUNNING"},"latest":{"loss":0.25},"latestMetrics":{"loss":{"value":0.25,"timestampMs":2000,"step":7}},"tags":{"review":"candidate","purpose":"sdk-smoke"},"series":[{"key":"loss","points":[{"value":0.9,"timestampMs":9000,"step":1}]}]}`), &detail); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	sdkServiceRouter(trackingPrincipal("experiments:read"), &fakeMLflowTrackingService{detail: detail}, newFakeMLflowDashboardStore()).ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/mlflow-tracking/api/2.0/mlflow/runs/get?run_id="+id, nil))
+	var body struct { Run struct { Data struct {
+		Metrics []struct { Key string; Value float64; Timestamp, Step int64 }
+		Tags []mlflowtracking.Pair
+	} } }
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil { t.Fatal(err) }
+	if w.Code != 200 || len(body.Run.Data.Metrics) != 1 || body.Run.Data.Metrics[0].Value != 0.25 || body.Run.Data.Metrics[0].Timestamp != 2000 || body.Run.Data.Metrics[0].Step != 7 {
+		t.Fatalf("latest metadata was lost or inferred from history: %s", w.Body.String())
+	}
+	if len(body.Run.Data.Tags) != 2 || body.Run.Data.Tags[0].Key != "purpose" || body.Run.Data.Tags[1].Key != "review" || body.Run.Data.Tags[1].Value != "candidate" {
+		t.Fatalf("user tags lost or unordered: %s", w.Body.String())
+	}
+}
+
 func TestMLflowSDKRateAndInputLimits(t *testing.T) {
 	service := &fakeMLflowTrackingService{err: mlflowtracking.ErrBusy}
 	r := sdkServiceRouter(trackingPrincipal("experiments:read", "experiments:write"), service, newFakeMLflowDashboardStore())

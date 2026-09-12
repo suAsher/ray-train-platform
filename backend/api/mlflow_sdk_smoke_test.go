@@ -85,7 +85,7 @@ func TestMLflowSDK314Integration(t *testing.T) {
 }
 
 const mlflowSDKSmokePython = `
-import sys
+import sys, os, json, urllib.request
 import mlflow
 from mlflow import MlflowClient
 from mlflow.entities import Metric, Param, RunTag
@@ -100,6 +100,12 @@ client.log_batch(run_id, metrics=[Metric("loss", 0.25, 2000, 2)], params=[Param(
 result = client.get_run(run_id)
 assert result.data.metrics["loss"] == 0.25
 assert result.data.params["epochs"] == "3"
+assert result.data.tags == {"review": "candidate", "purpose": "sdk-smoke"}, result.data.tags
+request = urllib.request.Request(sys.argv[1] + "/api/2.0/mlflow/runs/get?run_id=" + run_id, headers={"Authorization": "Bearer " + os.environ["MLFLOW_TRACKING_TOKEN"]})
+with urllib.request.urlopen(request) as response:
+    native = json.load(response)["run"]["data"]
+metric = next(metric for metric in native["metrics"] if metric["key"] == "loss")
+assert metric == {"key": "loss", "value": 0.25, "timestamp": 2000, "step": 2}, metric
 client.set_terminated(run_id, status="FINISHED")
 assert client.get_run(run_id).info.status == "FINISHED"
 print("MLflow 3.14.0 SDK get/log_param/log_metric/set_tag/log_batch/set_terminated: passed")
