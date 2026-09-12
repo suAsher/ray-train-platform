@@ -121,3 +121,53 @@ func TestSignedPaginationBindsOwnerResourceAndExpiry(t *testing.T) {
 	*now=now.Add(time.Hour)
 	if _,err:=s.ListExperiments(context.Background(),owner,1,page.NextCursor);!errors.Is(err,tracking.ErrInvalid) {t.Fatalf("expired cursor accepted: %v",err)}
 }
+
+func TestSuccessfulReadListsAndIdempotentCreation(t *testing.T) {
+	s,_,p,_:=fixture(t);ctx:=context.Background()
+	exp,run:=createPair(t,s)
+	again,err:=s.CreateExperiment(ctx,owner,"experiment-key-1","Quality evaluation");if err!=nil||again.ID!=exp.ID||p.experimentCreates!=1 {t.Fatalf("repeat experiment=%+v %v",again,err)}
+	againRun,err:=s.CreateRun(ctx,owner,exp.ID,"run-key-1","candidate-one");if err!=nil||againRun.ID!=run.ID||p.runCreates!=1 {t.Fatalf("repeat run=%+v %v",againRun,err)}
+	if _,err:=s.CreateExperiment(ctx,owner,"duplicate-name-key","Quality evaluation");!errors.Is(err,tracking.ErrConflict){t.Fatalf("duplicate private name=%v",err)}
+	if _,err:=s.CreateRun(ctx,owner,exp.ID,"run-key-1","different-name");!errors.Is(err,tracking.ErrConflict){t.Fatalf("changed run request=%v",err)}
+	detail,err:=s.GetRun(ctx,owner,run.ID);if err!=nil||detail.Run.ID!=run.ID||detail.Latest["loss"]!=0.5||detail.Params["epochs"]!="5" {t.Fatalf("detail=%+v %v",detail,err)}
+	second,err:=s.CreateRun(ctx,owner,exp.ID,"run-key-2","candidate-two");if err!=nil {t.Fatal(err)}
+	page,err:=s.ListRuns(ctx,owner,exp.ID,1,"");if err!=nil||len(page.Items)!=1||page.NextCursor=="" {t.Fatalf("run page=%+v %v",page,err)}
+	next,err:=s.ListRuns(ctx,owner,exp.ID,1,page.NextCursor);if err!=nil||len(next.Items)!=1||next.Items[0].ID==page.Items[0].ID||next.NextCursor!="" {t.Fatalf("next run=%+v %v",next,err)}
+	if second.ID==run.ID {t.Fatal("distinct requests reused public ID")}
+	empty,err:=s.ListExperiments(ctx,tracking.Actor{TenantID:"team-a",UserID:"empty-owner"},100,"");if err!=nil||len(empty.Items)!=0 {t.Fatalf("empty private catalog=%+v %v",empty,err)}
+}
+
+func TestInvalidRequestsFailBeforeUpstream(t *testing.T) {
+	s,_,p,_:=fixture(t);ctx:=context.Background();badID:="invalid/path"
+	checks:=[]func()error{
+		func()error{_,err:=s.CreateExperiment(ctx,owner,"bad key","name");return err},
+		func()error{_,err:=s.CreateExperiment(ctx,owner,"key"," name ");return err},
+		func()error{_,err:=s.CreateExperiment(ctx,tracking.Actor{},"key","name");return err},
+		func()error{_,err:=s.CreateRun(ctx,owner,badID,"key","name");return err},
+		func()error{_,err:=s.GetRun(ctx,owner,badID);return err},
+		func()error{return s.LogRun(ctx,owner,badID,tracking.Batch{})},
+		func()error{return s.LogRun(ctx,owner,strings.Repeat("b",32),tracking.Batch{})},
+		func()error{_,err:=s.FinishRun(ctx,owner,badID,"FINISHED");return err},
+		func()error{_,err:=s.ListExperiments(ctx,owner,101,"");return err},
+		func()error{_,err:=s.ListRuns(ctx,owner,badID,1,"");return err},
+		func()error{_,err:=s.ListExperiments(ctx,owner,1,"tampered.cursor");return err},
+		func()error{_,err:=s.ListExperiments(ctx,owner,1,strings.Repeat("x",2049));return err},
+	}
+	for i,check:=range checks {if err:=check();!errors.Is(err,tracking.ErrInvalid){t.Fatalf("invalid case %d=%v",i,err)}}
+	if p.experimentCreates+p.runCreates+p.logs+p.finishes!=0{t.Fatal("invalid inputs caused remote writes")}
+	disabled:=tracking.New(nil,nil,tracking.Options{})
+	if _,err:=disabled.ListExperiments(ctx,owner,1,"");!errors.Is(err,tracking.ErrUnavailable){t.Fatalf("disabled service=%v",err)}
+}
+
+func TestPendingRunsAndExperimentsRemainVisibleButNotWritable(t *testing.T) {
+	s,store,p,now:=fixture(t);ctx:=context.Background()
+	exp:=tracking.Experiment{ID:strings.Repeat("a",32),TenantID:owner.TenantID,UserID:owner.UserID,IdempotencyHash:strings.Repeat("a",64),Name:"pending",State:"PENDING",CreatedAt:*now,UpdatedAt:*now}
+	if _,_,err:=store.ReserveExperiment(ctx,exp);err!=nil{t.Fatal(err)}
+	if _,err:=s.CreateRun(ctx,owner,exp.ID,"run-key","name");!errors.Is(err,tracking.ErrPending){t.Fatalf("pending experiment accepted: %v",err)}
+	if _,err:=store.CompleteExperiment(ctx,owner,exp.ID,"1");err!=nil{t.Fatal(err)}
+	run:=tracking.Run{ID:strings.Repeat("b",32),ExperimentID:exp.ID,TenantID:owner.TenantID,UserID:owner.UserID,IdempotencyHash:strings.Repeat("b",64),Name:"pending-run",State:"PENDING",CreatedAt:*now,UpdatedAt:*now}
+	if _,_,err:=store.ReserveRun(ctx,run);err!=nil{t.Fatal(err)}
+	if _,err:=s.GetRun(ctx,owner,run.ID);!errors.Is(err,tracking.ErrPending){t.Fatalf("pending run read=%v",err)}
+	if err:=s.LogRun(ctx,owner,run.ID,tracking.Batch{Tags:[]tracking.Pair{{Key:"external.source",Value:"test"}}});!errors.Is(err,tracking.ErrPending){t.Fatalf("pending run logged=%v",err)}
+	if p.logs!=0{t.Fatal("pending run reached MLflow")}
+}

@@ -13,10 +13,12 @@ import (
 )
 
 const (
-	PATScopeJobsRead     = "jobs:read"
-	PATScopeJobsWrite    = "jobs:write"
-	PATScopeSourcesWrite = "sources:write"
-	PATScopeMLflowWrite  = "mlflow:write"
+	PATScopeJobsRead         = "jobs:read"
+	PATScopeJobsWrite        = "jobs:write"
+	PATScopeSourcesWrite     = "sources:write"
+	PATScopeExperimentsRead  = "experiments:read"
+	PATScopeExperimentsWrite = "experiments:write"
+	PATScopeMLflowWrite      = "mlflow:write"
 
 	defaultPATLifetime = 90 * 24 * time.Hour
 	maximumPATLifetime = 365 * 24 * time.Hour
@@ -25,6 +27,7 @@ const (
 
 var allowedPATScopes = map[string]struct{}{
 	PATScopeJobsRead: {}, PATScopeJobsWrite: {}, PATScopeSourcesWrite: {},
+	PATScopeExperimentsRead: {}, PATScopeExperimentsWrite: {},
 	PATScopeMLflowWrite: {},
 }
 

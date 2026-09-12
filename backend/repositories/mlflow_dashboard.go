@@ -53,8 +53,12 @@ func (MLflowDashboardTicketRecord) TableName() string { return "mlflow_dashboard
 type MLflowAuditAction string
 
 const (
-	MLflowAuditDashboardProxy MLflowAuditAction = "mlflow.dashboard.proxy"
-	MLflowAuditRunLogBatch    MLflowAuditAction = "mlflow.run.log_batch"
+	MLflowAuditDashboardProxy           MLflowAuditAction = "mlflow.dashboard.proxy"
+	MLflowAuditRunLogBatch              MLflowAuditAction = "mlflow.run.log_batch"
+	MLflowAuditTrackingExperimentCreate MLflowAuditAction = "mlflow.tracking.experiment.create"
+	MLflowAuditTrackingRunCreate        MLflowAuditAction = "mlflow.tracking.run.create"
+	MLflowAuditTrackingRunLogBatch      MLflowAuditAction = "mlflow.tracking.run.log_batch"
+	MLflowAuditTrackingRunFinish        MLflowAuditAction = "mlflow.tracking.run.finish"
 )
 
 type MLflowAuditEvent struct {
@@ -157,7 +161,7 @@ func (r *GormRepository) CreateMLflowAuditLog(ctx context.Context, event MLflowA
 	if action == "" {
 		action = MLflowAuditDashboardProxy
 	}
-	if action != MLflowAuditDashboardProxy && action != MLflowAuditRunLogBatch {
+	if !isAllowedMLflowAuditAction(action) {
 		return fmt.Errorf("invalid MLflow audit action")
 	}
 	normalizedPath := normalizeMLflowAuditPath(event.Path)
@@ -166,7 +170,7 @@ func (r *GormRepository) CreateMLflowAuditLog(ctx context.Context, event MLflowA
 		durationMilliseconds = 0
 	}
 	outcome := "success"
-	if action == MLflowAuditRunLogBatch && event.Status == 102 {
+	if event.Status == 102 && action != MLflowAuditDashboardProxy {
 		outcome = "attempt"
 	}
 	if event.Status >= 400 {
@@ -198,6 +202,20 @@ func (r *GormRepository) CreateMLflowAuditLog(ctx context.Context, event MLflowA
 		return fmt.Errorf("create MLflow audit log: %w", err)
 	}
 	return nil
+}
+
+func isAllowedMLflowAuditAction(action MLflowAuditAction) bool {
+	switch action {
+	case MLflowAuditDashboardProxy,
+		MLflowAuditRunLogBatch,
+		MLflowAuditTrackingExperimentCreate,
+		MLflowAuditTrackingRunCreate,
+		MLflowAuditTrackingRunLogBatch,
+		MLflowAuditTrackingRunFinish:
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeMLflowAuditMethod(method string) string {

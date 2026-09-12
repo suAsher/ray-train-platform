@@ -6,7 +6,15 @@ import (
 )
 
 func TestMLflowIntegrationAuditActionIsExplicitAndAllowlisted(t *testing.T) {
-	for _, action := range []MLflowAuditAction{"", MLflowAuditRunLogBatch, "unexpected.action"} {
+	for _, action := range []MLflowAuditAction{
+		"",
+		MLflowAuditRunLogBatch,
+		MLflowAuditTrackingExperimentCreate,
+		MLflowAuditTrackingRunCreate,
+		MLflowAuditTrackingRunLogBatch,
+		MLflowAuditTrackingRunFinish,
+		"unexpected.action",
+	} {
 		t.Run(string(action), func(t *testing.T) {
 			repo, _ := mlflowDashboardTestRepositories(t)
 			err := repo.CreateMLflowAuditLog(context.Background(), MLflowAuditEvent{Action: action, Method: "POST", Path: "/api/v1/jobs/job-01/mlflow/runs/run/log-batch", Status: 102})
@@ -23,9 +31,9 @@ func TestMLflowIntegrationAuditActionIsExplicitAndAllowlisted(t *testing.T) {
 			if err := repo.db.First(&record).Error; err != nil {
 				t.Fatal(err)
 			}
-			want := "mlflow.dashboard.proxy"
-			if action == MLflowAuditRunLogBatch {
-				want = "mlflow.run.log_batch"
+			want := string(action)
+			if action == "" {
+				want = string(MLflowAuditDashboardProxy)
 			}
 			if record.Action != want {
 				t.Fatalf("action=%s want=%s", record.Action, want)

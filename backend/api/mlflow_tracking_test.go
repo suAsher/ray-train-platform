@@ -125,7 +125,7 @@ func TestMLflowTrackingCapabilitiesAreTruthfulAndDowngradeable(t *testing.T) {
 	oidc := trackingPrincipal()
 	oidc.AuthType = auth.AuthTypeOIDC
 	oidc.Scopes = nil
-	empty := trackingRequest(trackingRouter(oidc, nil, nil), http.MethodGet, "/api/v1/mlflow-tracking/capabilities", "", "")
+	empty := trackingRequest(trackingRouter(oidc, nil, nil), http.MethodGet, "/api/v1/mlflow/capabilities", "", "")
 	if empty.Code != http.StatusOK {
 		t.Fatalf("expected capability downgrade success, got %d %s", empty.Code, empty.Body.String())
 	}
@@ -149,12 +149,18 @@ func TestMLflowTrackingCapabilitiesAreTruthfulAndDowngradeable(t *testing.T) {
 
 	withWrite := trackingPrincipal(domain.PATScopeExperimentsRead, domain.PATScopeExperimentsWrite)
 	service := &fakeMLflowTrackingService{}
-	ready := trackingRequest(trackingRouter(withWrite, service, nil), http.MethodGet, "/api/v1/mlflow-tracking/capabilities", "", "")
+	ready := trackingRequest(trackingRouter(withWrite, service, nil), http.MethodGet, "/api/v1/mlflow/capabilities", "", "")
 	var available struct {
-		Available bool `json:"available"`
-		Read      bool `json:"read"`
-		Write     bool `json:"write"`
-		Scopes    struct {
+		Available                bool     `json:"available"`
+		Read                     bool     `json:"read"`
+		Write                    bool     `json:"write"`
+		SDKCompatible            bool     `json:"sdkCompatible"`
+		SDKBasePath              string   `json:"sdkBasePath"`
+		SDKProtocol              string   `json:"sdkProtocol"`
+		SDKClientVersion         string   `json:"sdkClientVersion"`
+		SDKMethods               []string `json:"sdkMethods"`
+		SDKRequiresPrecreatedRun bool     `json:"sdkRequiresPrecreatedRun"`
+		Scopes                   struct {
 			Read  string `json:"read"`
 			Write string `json:"write"`
 		} `json:"scopes"`
@@ -173,17 +179,41 @@ func TestMLflowTrackingCapabilitiesAreTruthfulAndDowngradeable(t *testing.T) {
 	if !available.Available || !available.Read || !available.Write || available.Scopes.Read != "experiments:read" || available.Scopes.Write != "experiments:write" {
 		t.Fatalf("unexpected capability payload: %+v", available)
 	}
+	if available.SDKCompatible || available.SDKBasePath != "" || available.SDKProtocol != "tracking-subset" || available.SDKClientVersion != "3.14.0" || len(available.SDKMethods) != 6 || !available.SDKRequiresPrecreatedRun {
+		t.Fatalf("REST-only capabilities must describe an unregistered SDK subset without enabling it: %+v", available)
+	}
 	if !available.Supports.ExperimentTracking || available.Supports.ArtifactManagement || available.Supports.ModelRegistry || available.Supports.ModelEvaluation || available.Supports.ModelServing {
 		t.Fatalf("capabilities must only advertise implemented tracking support: %+v", available.Supports)
+	}
+
+	handler := NewHandler(&fakeJobRepository{}, Options{MLflowTracking: service})
+	handler.mlflowSDKRegistered = true
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("ray-platform-principal", withWrite)
+		c.Next()
+	})
+	handler.RegisterTrainingRoutes(router.Group("/api/v1"))
+	registered := trackingRequest(router, http.MethodGet, "/api/v1/mlflow/capabilities", "", "")
+	if registered.Code != http.StatusOK {
+		t.Fatalf("expected registered capability success, got %d %s", registered.Code, registered.Body.String())
+	}
+	var sdkReady struct {
+		SDKCompatible bool   `json:"sdkCompatible"`
+		SDKBasePath   string `json:"sdkBasePath"`
+	}
+	decodeTrackingData(t, registered, &sdkReady)
+	if !sdkReady.SDKCompatible || sdkReady.SDKBasePath != "/api/v1/mlflow-tracking" {
+		t.Fatalf("SDK registration was not reflected in capabilities: %+v", sdkReady)
 	}
 }
 
 func TestMLflowTrackingListExperimentsUsesActorAndBoundedPagination(t *testing.T) {
 	service := &fakeMLflowTrackingService{experimentPage: mlflowtracking.ExperimentPage{
-		Items:      []mlflowtracking.Experiment{{ID: "exp-01", Name: "external-eval", State: "ACTIVE", CreatedAt: time.Unix(100, 0).UTC(), UpstreamID: "12"}},
+		Items:      []mlflowtracking.Experiment{{ID: "11111111111111111111111111111111", Name: "external-eval", State: "ACTIVE", CreatedAt: time.Unix(100, 0).UTC(), UpstreamID: "12"}},
 		NextCursor: "signed-next",
 	}}
-	response := trackingRequest(trackingRouter(trackingPrincipal(), service, nil), http.MethodGet, "/api/v1/mlflow-tracking/experiments?limit=500&cursor=signed-current", "", "")
+	response := trackingRequest(trackingRouter(trackingPrincipal(), service, nil), http.MethodGet, "/api/v1/mlflow/experiments?limit=500&cursor=signed-current", "", "")
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d %s", response.Code, response.Body.String())
 	}
@@ -201,22 +231,26 @@ func TestMLflowTrackingListExperimentsUsesActorAndBoundedPagination(t *testing.T
 }
 
 func TestMLflowTrackingCreateExperimentRequiresPATWriteAndIdempotencyKey(t *testing.T) {
-	service := &fakeMLflowTrackingService{experiment: mlflowtracking.Experiment{ID: "exp-01", Name: "external-eval", State: "ACTIVE", CreatedAt: time.Unix(100, 0).UTC(), UpstreamID: "12"}}
-	noWrite := trackingRequest(trackingRouter(trackingPrincipal(domain.PATScopeExperimentsRead), service, nil), http.MethodPost, "/api/v1/mlflow-tracking/experiments", `{"name":"external-eval"}`, "idem-1")
+	service := &fakeMLflowTrackingService{experiment: mlflowtracking.Experiment{ID: "11111111111111111111111111111111", Name: "external-eval", State: "ACTIVE", CreatedAt: time.Unix(100, 0).UTC(), UpstreamID: "12"}}
+	noWrite := trackingRequest(trackingRouter(trackingPrincipal(domain.PATScopeExperimentsRead), service, nil), http.MethodPost, "/api/v1/mlflow/experiments", `{"name":"external-eval"}`, "idem-1")
 	if noWrite.Code != http.StatusForbidden {
 		t.Fatalf("expected missing write scope denied, got %d", noWrite.Code)
 	}
 	browser := trackingPrincipal(domain.PATScopeExperimentsRead, domain.PATScopeExperimentsWrite)
 	browser.AuthType = auth.AuthTypeOIDC
-	noPAT := trackingRequest(trackingRouter(browser, service, nil), http.MethodPost, "/api/v1/mlflow-tracking/experiments", `{"name":"external-eval"}`, "idem-1")
+	noPAT := trackingRequest(trackingRouter(browser, service, nil), http.MethodPost, "/api/v1/mlflow/experiments", `{"name":"external-eval"}`, "idem-1")
 	if noPAT.Code != http.StatusForbidden {
 		t.Fatalf("expected browser write denied, got %d", noPAT.Code)
 	}
-	missingKey := trackingRequest(trackingRouter(trackingPrincipal(domain.PATScopeExperimentsRead, domain.PATScopeExperimentsWrite), service, nil), http.MethodPost, "/api/v1/mlflow-tracking/experiments", `{"name":"external-eval"}`, "")
+	missingKey := trackingRequest(trackingRouter(trackingPrincipal(domain.PATScopeExperimentsRead, domain.PATScopeExperimentsWrite), service, nil), http.MethodPost, "/api/v1/mlflow/experiments", `{"name":"external-eval"}`, "")
 	if missingKey.Code != http.StatusBadRequest {
 		t.Fatalf("expected missing idempotency key rejected, got %d", missingKey.Code)
 	}
-	created := trackingRequest(trackingRouter(trackingPrincipal(domain.PATScopeExperimentsRead, domain.PATScopeExperimentsWrite), service, nil), http.MethodPost, "/api/v1/mlflow-tracking/experiments", `{"name":"external-eval"}`, "idem-1")
+	nonASCIIKey := trackingRequest(trackingRouter(trackingPrincipal(domain.PATScopeExperimentsRead, domain.PATScopeExperimentsWrite), service, nil), http.MethodPost, "/api/v1/mlflow/experiments", `{"name":"external-eval"}`, "幂等")
+	if nonASCIIKey.Code != http.StatusBadRequest {
+		t.Fatalf("expected non-ASCII idempotency key rejected, got %d", nonASCIIKey.Code)
+	}
+	created := trackingRequest(trackingRouter(trackingPrincipal(domain.PATScopeExperimentsRead, domain.PATScopeExperimentsWrite), service, newFakeMLflowDashboardStore()), http.MethodPost, "/api/v1/mlflow/experiments", `{"name":"external-eval"}`, "idem-1")
 	if created.Code != http.StatusCreated || service.createKey != "idem-1" || service.createName != "external-eval" {
 		t.Fatalf("unexpected create result status=%d key=%q name=%q body=%s", created.Code, service.createKey, service.createName, created.Body.String())
 	}
@@ -225,10 +259,10 @@ func TestMLflowTrackingCreateExperimentRequiresPATWriteAndIdempotencyKey(t *test
 func TestMLflowTrackingRunsLifecycleAndAudit(t *testing.T) {
 	audit := newFakeMLflowDashboardStore()
 	service := &fakeMLflowTrackingService{
-		runPage: mlflowtracking.RunPage{Items: []mlflowtracking.Run{{ID: "run-01", ExperimentID: "exp-01", Name: "candidate", State: "RUNNING", CreatedAt: time.Unix(200, 0).UTC(), UpstreamID: "0123456789abcdef0123456789abcdef"}}, NextCursor: "next-runs"},
-		run:     mlflowtracking.Run{ID: "run-01", ExperimentID: "exp-01", Name: "candidate", State: "FINISHED", CreatedAt: time.Unix(200, 0).UTC(), FinishedAt: timePtr(time.Unix(300, 0).UTC()), UpstreamID: "0123456789abcdef0123456789abcdef"},
+		runPage: mlflowtracking.RunPage{Items: []mlflowtracking.Run{{ID: "22222222222222222222222222222222", ExperimentID: "11111111111111111111111111111111", Name: "candidate", State: "RUNNING", CreatedAt: time.Unix(200, 0).UTC(), UpstreamID: "0123456789abcdef0123456789abcdef"}}, NextCursor: "next-runs"},
+		run:     mlflowtracking.Run{ID: "22222222222222222222222222222222", ExperimentID: "11111111111111111111111111111111", Name: "candidate", State: "FINISHED", CreatedAt: time.Unix(200, 0).UTC(), FinishedAt: timePtr(time.Unix(300, 0).UTC()), UpstreamID: "0123456789abcdef0123456789abcdef"},
 		detail: mlflowtracking.RunDetail{
-			Run:    mlflowtracking.Run{ID: "run-01", ExperimentID: "exp-01", Name: "candidate", State: "RUNNING", CreatedAt: time.Unix(200, 0).UTC(), UpstreamID: "0123456789abcdef0123456789abcdef"},
+			Run:    mlflowtracking.Run{ID: "22222222222222222222222222222222", ExperimentID: "11111111111111111111111111111111", Name: "candidate", State: "RUNNING", CreatedAt: time.Unix(200, 0).UTC(), UpstreamID: "0123456789abcdef0123456789abcdef"},
 			Latest: map[string]float64{"external/quality_score": 0.91},
 			Params: map[string]string{"external.evaluator_version": "v1"},
 		},
@@ -236,24 +270,24 @@ func TestMLflowTrackingRunsLifecycleAndAudit(t *testing.T) {
 	principal := trackingPrincipal(domain.PATScopeExperimentsRead, domain.PATScopeExperimentsWrite)
 	router := trackingRouter(principal, service, audit)
 
-	runs := trackingRequest(router, http.MethodGet, "/api/v1/mlflow-tracking/experiments/exp-01/runs?limit=25&cursor=signed", "", "")
-	if runs.Code != http.StatusOK || service.experimentID != "exp-01" || service.limit != 25 || service.cursor != "signed" {
+	runs := trackingRequest(router, http.MethodGet, "/api/v1/mlflow/experiments/11111111111111111111111111111111/runs?limit=25&cursor=signed", "", "")
+	if runs.Code != http.StatusOK || service.experimentID != "11111111111111111111111111111111" || service.limit != 25 || service.cursor != "signed" {
 		t.Fatalf("unexpected list runs status=%d exp=%q limit=%d cursor=%q", runs.Code, service.experimentID, service.limit, service.cursor)
 	}
-	create := trackingRequest(router, http.MethodPost, "/api/v1/mlflow-tracking/experiments/exp-01/runs", `{"name":"candidate"}`, "idem-run")
+	create := trackingRequest(router, http.MethodPost, "/api/v1/mlflow/experiments/11111111111111111111111111111111/runs", `{"name":"candidate"}`, "idem-run")
 	if create.Code != http.StatusCreated || service.createRunKey != "idem-run" || service.createRunName != "candidate" {
 		t.Fatalf("unexpected create run status=%d key=%q name=%q", create.Code, service.createRunKey, service.createRunName)
 	}
-	get := trackingRequest(router, http.MethodGet, "/api/v1/mlflow-tracking/runs/run-01", "", "")
-	if get.Code != http.StatusOK || service.runID != "run-01" {
+	get := trackingRequest(router, http.MethodGet, "/api/v1/mlflow/runs/22222222222222222222222222222222", "", "")
+	if get.Code != http.StatusOK || service.runID != "22222222222222222222222222222222" {
 		t.Fatalf("unexpected get run status=%d run=%q", get.Code, service.runID)
 	}
-	log := trackingRequest(router, http.MethodPost, "/api/v1/mlflow-tracking/runs/run-01/log-batch", `{"metrics":[{"key":"external/quality_score","value":0.91,"timestamp":1000,"step":1}],"params":[{"key":"external.evaluator_version","value":"v1"}]}`, "")
-	if log.Code != http.StatusOK || service.runID != "run-01" || len(service.loggedBatch.Metrics) != 1 || len(audit.audits) != 2 {
+	log := trackingRequest(router, http.MethodPost, "/api/v1/mlflow/runs/22222222222222222222222222222222/log-batch", `{"metrics":[{"key":"external/quality_score","value":0.91,"timestamp":1000,"step":1}],"params":[{"key":"external.evaluator_version","value":"v1"}]}`, "")
+	if log.Code != http.StatusOK || service.runID != "22222222222222222222222222222222" || len(service.loggedBatch.Metrics) != 1 || len(audit.audits) != 4 {
 		t.Fatalf("unexpected log result status=%d run=%q batch=%+v audits=%d body=%s", log.Code, service.runID, service.loggedBatch, len(audit.audits), log.Body.String())
 	}
-	finish := trackingRequest(router, http.MethodPost, "/api/v1/mlflow-tracking/runs/run-01/finish", `{"status":"FINISHED"}`, "")
-	if finish.Code != http.StatusOK || service.finishStatus != "FINISHED" || len(audit.audits) != 4 {
+	finish := trackingRequest(router, http.MethodPost, "/api/v1/mlflow/runs/22222222222222222222222222222222/finish", `{"status":"FINISHED"}`, "")
+	if finish.Code != http.StatusOK || service.finishStatus != "FINISHED" || len(audit.audits) != 6 {
 		t.Fatalf("unexpected finish result status=%d status=%q audits=%d", finish.Code, service.finishStatus, len(audit.audits))
 	}
 }
@@ -267,11 +301,11 @@ func TestMLflowTrackingStrictBodiesAndErrors(t *testing.T) {
 		body   string
 		key    string
 	}{
-		{http.MethodPost, "/api/v1/mlflow-tracking/experiments", `{"name":"external","extra":true}`, "idem"},
-		{http.MethodPost, "/api/v1/mlflow-tracking/experiments", `{"name":""}`, "idem"},
-		{http.MethodPost, "/api/v1/mlflow-tracking/experiments/exp-01/runs", `{"name":"candidate","extra":true}`, "idem"},
-		{http.MethodPost, "/api/v1/mlflow-tracking/runs/run-01/log-batch", `{"Metrics":[{"key":"external/quality_score","value":1,"timestamp":1,"step":0}]}`, ""},
-		{http.MethodPost, "/api/v1/mlflow-tracking/runs/run-01/finish", `{"status":"RUNNING"}`, ""},
+		{http.MethodPost, "/api/v1/mlflow/experiments", `{"name":"external","extra":true}`, "idem"},
+		{http.MethodPost, "/api/v1/mlflow/experiments", `{"name":""}`, "idem"},
+		{http.MethodPost, "/api/v1/mlflow/experiments/11111111111111111111111111111111/runs", `{"name":"candidate","extra":true}`, "idem"},
+		{http.MethodPost, "/api/v1/mlflow/runs/22222222222222222222222222222222/log-batch", `{"Metrics":[{"key":"external/quality_score","value":1,"timestamp":1,"step":0}]}`, ""},
+		{http.MethodPost, "/api/v1/mlflow/runs/22222222222222222222222222222222/finish", `{"status":"RUNNING"}`, ""},
 	} {
 		response := trackingRequest(router, request.method, request.path, request.body, request.key)
 		if response.Code != http.StatusBadRequest {
@@ -280,12 +314,12 @@ func TestMLflowTrackingStrictBodiesAndErrors(t *testing.T) {
 	}
 
 	service.err = mlflowtracking.ErrNotFound
-	missing := trackingRequest(router, http.MethodGet, "/api/v1/mlflow-tracking/runs/missing", "", "")
+	missing := trackingRequest(router, http.MethodGet, "/api/v1/mlflow/runs/33333333333333333333333333333333", "", "")
 	if missing.Code != http.StatusNotFound || !strings.Contains(missing.Body.String(), "MLFLOW_TRACKING_NOT_FOUND") {
 		t.Fatalf("not found not mapped safely: %d %s", missing.Code, missing.Body.String())
 	}
 	service.err = errors.New("s3://private upstream secret")
-	failed := trackingRequest(router, http.MethodGet, "/api/v1/mlflow-tracking/runs/run-01", "", "")
+	failed := trackingRequest(router, http.MethodGet, "/api/v1/mlflow/runs/22222222222222222222222222222222", "", "")
 	if failed.Code != http.StatusBadGateway || strings.Contains(failed.Body.String(), "s3://") {
 		t.Fatalf("unexpected generic error: %d %s", failed.Code, failed.Body.String())
 	}
@@ -296,7 +330,7 @@ func TestMLflowTrackingAuditFailureBlocksWrites(t *testing.T) {
 	audit.auditErr = errors.New("db unavailable")
 	service := &fakeMLflowTrackingService{}
 	router := trackingRouter(trackingPrincipal(domain.PATScopeExperimentsRead, domain.PATScopeExperimentsWrite), service, audit)
-	response := trackingRequest(router, http.MethodPost, "/api/v1/mlflow-tracking/runs/run-01/log-batch", `{"metrics":[{"key":"external/quality_score","value":1,"timestamp":1000,"step":0}]}`, "")
+	response := trackingRequest(router, http.MethodPost, "/api/v1/mlflow/runs/22222222222222222222222222222222/log-batch", `{"metrics":[{"key":"external/quality_score","value":1,"timestamp":1000,"step":0}]}`, "")
 	if response.Code != http.StatusServiceUnavailable || len(service.loggedBatch.Metrics) != 0 {
 		t.Fatalf("unaudited log reached service: status=%d batch=%+v", response.Code, service.loggedBatch)
 	}

@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -101,6 +102,27 @@ func TestMLflowTrackingReadRunRequiresExperimentAndOperationProof(t *testing.T) 
 	}
 }
 
+func TestMLflowTrackingRejectsInvalidUpstreamIdentifiersBeforeHTTP(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		t.Fatalf("invalid upstream identifiers should not reach HTTP: %s %s", r.Method, r.URL.String())
+	}))
+	defer server.Close()
+
+	client := &MLflowClient{BaseURL: server.URL, ExperimentPrefix: "raytrain", ProvenanceKey: []byte(strings.Repeat("k", 32)), HTTPClient: server.Client()}
+	operationID := "fedcba9876543210fedcba9876543210"
+	if _, _, err := client.FindRun(context.Background(), "not-numeric", operationID); !errors.Is(err, mlflowtracking.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for invalid experiment id, got %v", err)
+	}
+	if _, err := client.ReadRun(context.Background(), "9", "not-a-run-id", operationID); !errors.Is(err, mlflowtracking.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for invalid run id, got %v", err)
+	}
+	if called {
+		t.Fatal("invalid identifiers reached upstream HTTP")
+	}
+}
+
 func TestMLflowTrackingLogFinishAndHistoryUseVerifiedRun(t *testing.T) {
 	var loggedBatch mlflowtracking.Batch
 	var finishedStatus string
@@ -163,6 +185,60 @@ func TestMLflowTrackingLogFinishAndHistoryUseVerifiedRun(t *testing.T) {
 	}
 	if snapshot.Status != "RUNNING" || snapshot.Latest["loss"] != 1.5 || snapshot.Params["lr"] != "0.1" || len(snapshot.Series) != 1 {
 		t.Fatalf("unexpected snapshot %#v", snapshot)
+	}
+}
+
+func TestMLflowTrackingFinishRunAlreadyTerminalIsIdempotent(t *testing.T) {
+	updates := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/2.0/mlflow/runs/get":
+			_ = json.NewEncoder(w).Encode(map[string]any{"run": trackingRunPayload("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "9", "external", "FINISHED", "fedcba9876543210fedcba9876543210", nil, nil)})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/2.0/mlflow/runs/update":
+			updates++
+			t.Fatalf("already terminal run should not be updated")
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	client := &MLflowClient{BaseURL: server.URL, ExperimentPrefix: "raytrain", ProvenanceKey: []byte(strings.Repeat("k", 32)), HTTPClient: server.Client()}
+	if err := client.FinishRun(context.Background(), "9", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "fedcba9876543210fedcba9876543210", "FINISHED"); err != nil {
+		t.Fatal(err)
+	}
+	if updates != 0 {
+		t.Fatalf("unexpected update count %d", updates)
+	}
+}
+
+func TestMLflowTrackingFinishRunReconcilesAmbiguousUpdate(t *testing.T) {
+	gets := 0
+	updates := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/2.0/mlflow/runs/get":
+			gets++
+			status := "RUNNING"
+			if gets > 1 {
+				status = "FINISHED"
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"run": trackingRunPayload("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "9", "external", status, "fedcba9876543210fedcba9876543210", nil, nil)})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/2.0/mlflow/runs/update":
+			updates++
+			http.Error(w, "ambiguous upstream failure", http.StatusBadGateway)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	client := &MLflowClient{BaseURL: server.URL, ExperimentPrefix: "raytrain", ProvenanceKey: []byte(strings.Repeat("k", 32)), HTTPClient: server.Client()}
+	if err := client.FinishRun(context.Background(), "9", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "fedcba9876543210fedcba9876543210", "FINISHED"); err != nil {
+		t.Fatal(err)
+	}
+	if gets != 2 || updates != 1 {
+		t.Fatalf("unexpected reconciliation calls gets=%d updates=%d", gets, updates)
 	}
 }
 

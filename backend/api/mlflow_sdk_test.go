@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"ray-train-platform-backend/auth"
+	"ray-train-platform-backend/mlflowtracking"
 )
 
 func sdkTestRouter(principal auth.Principal) *gin.Engine {
@@ -17,6 +18,61 @@ func sdkTestRouter(principal auth.Principal) *gin.Engine {
 	h := NewHandler(&fakeJobRepository{}, Options{})
 	h.RegisterMLflowSDKRoutes(r.Group("/api/v1"))
 	return r
+}
+
+func sdkServiceRouter(p auth.Principal, service *fakeMLflowTrackingService, audit *fakeMLflowDashboardStore) *gin.Engine {
+	r:=gin.New();r.Use(func(c *gin.Context){c.Set("ray-platform-principal",p);c.Next()})
+	h:=NewHandler(&fakeJobRepository{},Options{MLflowTracking:service,MLflowDashboardStore:audit})
+	h.RegisterMLflowSDKRoutes(r.Group("/api/v1"));return r
+}
+
+func TestMLflowSDKNativeWriteContractAndAuthorization(t *testing.T) {
+	id:="0123456789abcdef0123456789abcdef"
+	for _,tc:=range []struct{ route,body string }{
+		{"log-batch",`{"params":[{"key":"epochs","value":"3"}]}`},
+		{"log-parameter",`{"key":"epochs","value":"3"}`},
+		{"set-tag",`{"key":"review","value":"candidate"}`},
+		{"log-metric",`{"key":"loss","value":0.5,"timestamp":1000,"step":1}`},
+		{"update",`{"status":"FINISHED","end_time":2000}`},
+	} {
+		t.Run(tc.route,func(t *testing.T){
+			for _,allowed:=range []bool{false,true} {
+				p:=trackingPrincipal("experiments:read");if allowed {p.Scopes=append(p.Scopes,"experiments:write")}
+				service:=&fakeMLflowTrackingService{run:mlflowtracking.Run{ID:id,State:"FINISHED"}}
+				audit:=newFakeMLflowDashboardStore();r:=sdkServiceRouter(p,service,audit)
+				w:=httptest.NewRecorder();body:=`{"run_id":"`+id+`",`+tc.body[1:]
+				r.ServeHTTP(w,httptest.NewRequest("POST","/api/v1/mlflow-tracking/api/2.0/mlflow/runs/"+tc.route,strings.NewReader(body)))
+				if !allowed {if w.Code!=403||service.runID!="" {t.Fatalf("scope bypass: %d",w.Code)};continue}
+				if w.Code!=200 || service.runID!=id || service.actor.UserID!=p.Subject || service.actor.TenantID!=p.TenantID || len(audit.audits)!=2 {t.Fatalf("mapping/audit mismatch: %d %s %+v",w.Code,w.Body.String(),service)}
+				if strings.Contains(w.Body.String(),`"success"`) {t.Fatal("platform envelope leaked into SDK response")}
+			}
+		})
+	}
+}
+
+func TestMLflowSDKServiceDenialAndAuditFailure(t *testing.T) {
+	for _,auditFailure:=range []bool{false,true} {
+		service:=&fakeMLflowTrackingService{err:mlflowtracking.ErrNotFound}
+		audit:=newFakeMLflowDashboardStore();if auditFailure {audit.auditErr=mlflowtracking.ErrUnavailable}
+		p:=trackingPrincipal("experiments:read","experiments:write")
+		r:=sdkServiceRouter(p,service,audit);w:=httptest.NewRecorder()
+		r.ServeHTTP(w,httptest.NewRequest("POST","/api/v1/mlflow-tracking/api/2.0/mlflow/runs/log-parameter",strings.NewReader(`{"run_id":"0123456789abcdef0123456789abcdef","key":"epochs","value":"3"}`)))
+		if auditFailure {if w.Code!=503||service.runID!="" {t.Fatal("unaudited mutation")}} else if w.Code!=404 {t.Fatalf("ownership error lost: %d",w.Code)}
+	}
+}
+
+func TestMLflowSDKRejectsInvalidBatchSemantics(t *testing.T) {
+	for _,body:=range []string{
+		`{"key":"platform.job_id","value":"forged"}`,
+		`{"key":"mlflow.runName","value":"forged"}`,
+		`{"key":"epochs","value":null}`,
+		`{"key":"epochs","value":"3","timestamp":0}`,
+		`{"key":"epochs","value":"3","status":"RUNNING"}`,
+	} {
+		var req mlflowSDKWriteRequest
+		if err:=json.Unmarshal([]byte(body),&req);err!=nil {t.Fatal(err)}
+		if _,err:=req.logBatch("log-parameter");err==nil {t.Fatalf("bad semantic body accepted %s",body)}
+	}
 }
 
 func TestMLflowSDKRequiresExplicitScopesAndPAT(t *testing.T) {
