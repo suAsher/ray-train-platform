@@ -34,18 +34,18 @@ type Actor struct {
 	Name string
 }
 type Model struct {
-	ID          string    `json:"id" gorm:"primaryKey"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	OwnerID     string    `json:"ownerId"`
-	OwnerName   string    `json:"ownerName"`
-	TenantID    string    `json:"tenantId"`
-	Archived    bool      `json:"archived"`
-	Revision    int64     `json:"revision"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
-	IdempotencyKey string `json:"-"`
-	RequestSHA256 string `json:"-"`
+	ID             string    `json:"id" gorm:"primaryKey"`
+	Name           string    `json:"name"`
+	Description    string    `json:"description"`
+	OwnerID        string    `json:"ownerId"`
+	OwnerName      string    `json:"ownerName"`
+	TenantID       string    `json:"tenantId"`
+	Archived       bool      `json:"archived"`
+	Revision       int64     `json:"revision"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
+	IdempotencyKey string    `json:"-"`
+	RequestSHA256  string    `json:"-"`
 }
 
 func (Model) TableName() string { return "model_catalog" }

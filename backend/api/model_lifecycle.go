@@ -32,6 +32,7 @@ func (h *Handler) modelRequestKey(c *gin.Context) (string, bool) {
 	}
 	return key, true
 }
+
 type modelResponse struct {
 	modellifecycle.Model
 	CanManage bool `json:"canManage"`
@@ -186,7 +187,9 @@ func (h *Handler) getModel(c *gin.Context) {
 }
 func (h *Handler) createModel(c *gin.Context) {
 	key, ok := h.modelRequestKey(c)
-	if !ok { return }
+	if !ok {
+		return
+	}
 	var input struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`

@@ -192,6 +192,10 @@ func TestCreateModelIdempotencyIsOwnerScopedAndAuditedOnce(t *testing.T) {
 
 func TestModelCreateIdempotencyFieldsArePrivate(t *testing.T) {
 	encoded, err := json.Marshal(ml.Model{IdempotencyKey: "private-key", RequestSHA256: "private-hash"})
-	if err != nil { t.Fatal(err) }
-	if strings.Contains(string(encoded), "private-") { t.Fatalf("private request identity exposed: %s", encoded) }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "private-") {
+		t.Fatalf("private request identity exposed: %s", encoded)
+	}
 }

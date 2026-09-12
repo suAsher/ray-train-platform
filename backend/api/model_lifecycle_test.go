@@ -21,7 +21,9 @@ type modelStoreFake struct {
 	updated bool
 }
 
-func (s *modelStoreFake) GetVersion(context.Context, string, string) (modellifecycle.Version, error) { return s.version, nil }
+func (s *modelStoreFake) GetVersion(context.Context, string, string) (modellifecycle.Version, error) {
+	return s.version, nil
+}
 
 func (s *modelStoreFake) GetModel(context.Context, string) (modellifecycle.Model, error) {
 	return s.model, nil
@@ -105,12 +107,17 @@ func TestModelUpdateRejectsUnknownAndOversizedBody(t *testing.T) {
 	}
 }
 
-func TestSharedModelCreationRequiresStableRequestKey(t *testing.T){
- for _,key:=range []string{"",strings.Repeat("x",129),"key with space"}{
-  h:=NewHandler(&fakeJobRepository{},Options{Models:&modelStoreFake{}})
-  r:=modelRouter(h,auth.Principal{Subject:"alice",TenantID:"local",AuthType:auth.AuthTypeLocal})
-  req:=httptest.NewRequest("POST","/api/v1/models",strings.NewReader(`{"name":"new model"}`));req.Header.Set("Content-Type","application/json");req.Header.Set("Idempotency-Key",key)
-  w:=httptest.NewRecorder();r.ServeHTTP(w,req)
-  if w.Code!=400{t.Fatalf("bad key status %d",w.Code)}
- }
+func TestSharedModelCreationRequiresStableRequestKey(t *testing.T) {
+	for _, key := range []string{"", strings.Repeat("x", 129), "key with space"} {
+		h := NewHandler(&fakeJobRepository{}, Options{Models: &modelStoreFake{}})
+		r := modelRouter(h, auth.Principal{Subject: "alice", TenantID: "local", AuthType: auth.AuthTypeLocal})
+		req := httptest.NewRequest("POST", "/api/v1/models", strings.NewReader(`{"name":"new model"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Idempotency-Key", key)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != 400 {
+			t.Fatalf("bad key status %d", w.Code)
+		}
+	}
 }

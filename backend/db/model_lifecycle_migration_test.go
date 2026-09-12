@@ -12,7 +12,7 @@ func TestModelLifecycleMigrationContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	sql := string(b)
-	for _, fragment := range []string{"SET LOCAL lock_timeout = '5s';\nSET LOCAL statement_timeout = '60s';", "CREATE TABLE IF NOT EXISTS model_catalog", "CREATE TABLE IF NOT EXISTS model_versions", "CREATE TABLE IF NOT EXISTS model_audits", "UNIQUE (model_id, number)", "UNIQUE (model_id, creator_id, idempotency_key)", "21474836480", "'PENDING', 'COPYING', 'READY', 'FAILED'", "model_versions_immutable", "source_etag TEXT NOT NULL CHECK (length(trim(source_etag)) > 0)"} {
+	for _, fragment := range []string{"SET LOCAL lock_timeout = '5s';\nSET LOCAL statement_timeout = '60s';", "CREATE TABLE IF NOT EXISTS model_catalog", "CREATE TABLE IF NOT EXISTS model_versions", "CREATE TABLE IF NOT EXISTS model_audits", "UNIQUE (model_id, number)", "UNIQUE (model_id, creator_id, idempotency_key)", "21474836480", "'PENDING', 'COPYING', 'READY', 'FAILED'", "model_versions_immutable", "CREATE UNIQUE INDEX IF NOT EXISTS model_catalog_request_idx ON model_catalog(owner_id, idempotency_key) WHERE idempotency_key <> ''", "source_etag TEXT NOT NULL CHECK (length(trim(source_etag)) > 0)"} {
 		if !strings.Contains(sql, fragment) {
 			t.Errorf("missing %q", fragment)
 		}

@@ -56,8 +56,10 @@ func (s *ModelLifecycleStore) CreateModel(ctx context.Context, m ml.Model) (ml.M
 	// Display names are mutable identity metadata and are not part of the request.
 	m.RequestSHA256 = ""
 	if m.IdempotencyKey != "" {
-		body, err := json.Marshal(struct { Name, Description, OwnerID, TenantID string }{requestName, m.Description, m.OwnerID, m.TenantID})
-		if err != nil { return ml.Model{}, err }
+		body, err := json.Marshal(struct{ Name, Description, OwnerID, TenantID string }{requestName, m.Description, m.OwnerID, m.TenantID})
+		if err != nil {
+			return ml.Model{}, err
+		}
 		digest := sha256.Sum256(body)
 		m.RequestSHA256 = hex.EncodeToString(digest[:])
 	}
@@ -74,11 +76,17 @@ func (s *ModelLifecycleStore) CreateModel(ctx context.Context, m ml.Model) (ml.M
 			insert = insert.Clauses(clause.OnConflict{DoNothing: true})
 		}
 		result := insert.Create(&m)
-		if result.Error != nil { return result.Error }
+		if result.Error != nil {
+			return result.Error
+		}
 		if result.RowsAffected == 0 {
 			var previous ml.Model
-			if err := tx.Where("owner_id = ? AND idempotency_key = ?", m.OwnerID, m.IdempotencyKey).First(&previous).Error; err != nil { return modelReadError(err) }
-			if previous.RequestSHA256 != m.RequestSHA256 { return ml.ErrConflict }
+			if err := tx.Where("owner_id = ? AND idempotency_key = ?", m.OwnerID, m.IdempotencyKey).First(&previous).Error; err != nil {
+				return modelReadError(err)
+			}
+			if previous.RequestSHA256 != m.RequestSHA256 {
+				return ml.ErrConflict
+			}
 			m = previous
 			return nil
 		}

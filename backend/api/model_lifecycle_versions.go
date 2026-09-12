@@ -40,7 +40,9 @@ func (h *Handler) createModelVersion(c *gin.Context) {
 		return
 	}
 	key, ok := h.modelRequestKey(c)
-	if !ok { return }
+	if !ok {
+		return
+	}
 	relative, err := domain.NormalizeStorageRelativePath(input.Path)
 	if err != nil || relative == "" {
 		h.writeError(c, 400, "INVALID_ARTIFACT_PATH", "请选择任务输出中的相对文件路径")

@@ -102,34 +102,49 @@ func TestModelVersionPublicationRejectsPathsAndUnapprovedExtensions(t *testing.T
 }
 
 func TestSuperAdminCannotPublishAnotherUsersPrivateWeights(t *testing.T) {
- job:=artifactJob("foreign-job","other-team");job.UserID="alice";job.ObservedState=domain.StateSucceeded
- snapshots:=&modelSnapshotsFake{}
- store:=&modelStoreFake{model:modellifecycle.Model{ID:"model-1",OwnerID:"someone-else"}}
- h:=NewHandler(&fakeJobRepository{jobs:[]domain.TrainingJob{job}},Options{Models:store,ModelSnapshots:snapshots})
- r:=modelRouter(h,auth.Principal{Subject:"admin",TenantID:"local",AuthType:auth.AuthTypeLocal,Roles:[]string{domain.RoleSuperAdmin}})
- req:=httptest.NewRequest("POST","/api/v1/models/model-1/versions",strings.NewReader(`{"jobId":"foreign-job","path":"weights.pth"}`));req.Header.Set("Idempotency-Key","explicit-request");req.Header.Set("Content-Type","application/json")
- w:=httptest.NewRecorder();r.ServeHTTP(w,req)
- if w.Code!=403||snapshots.request!=nil{t.Fatalf("admin source publication status %d, request %+v",w.Code,snapshots.request)}
+	job := artifactJob("foreign-job", "other-team")
+	job.UserID = "alice"
+	job.ObservedState = domain.StateSucceeded
+	snapshots := &modelSnapshotsFake{}
+	store := &modelStoreFake{model: modellifecycle.Model{ID: "model-1", OwnerID: "someone-else"}}
+	h := NewHandler(&fakeJobRepository{jobs: []domain.TrainingJob{job}}, Options{Models: store, ModelSnapshots: snapshots})
+	r := modelRouter(h, auth.Principal{Subject: "admin", TenantID: "local", AuthType: auth.AuthTypeLocal, Roles: []string{domain.RoleSuperAdmin}})
+	req := httptest.NewRequest("POST", "/api/v1/models/model-1/versions", strings.NewReader(`{"jobId":"foreign-job","path":"weights.pth"}`))
+	req.Header.Set("Idempotency-Key", "explicit-request")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != 403 || snapshots.request != nil {
+		t.Fatalf("admin source publication status %d, request %+v", w.Code, snapshots.request)
+	}
 }
-func TestSharedModelDownloadsOnlyReadyAcrossTenants(t *testing.T){
- for _,state:=range []string{modellifecycle.Pending,modellifecycle.Copying,modellifecycle.Failed,modellifecycle.Ready}{
-  t.Run(state,func(t *testing.T){
-   snapshots:=&modelSnapshotsFake{}
-   store:=&modelStoreFake{model:modellifecycle.Model{ID:"model-1",OwnerID:"alice",TenantID:"other"},version:modellifecycle.Version{ID:"version-1",ModelID:"model-1",State:state,SizeBytes:7,FileName:"weights.pth",SHA256:strings.Repeat("a",64)}}
-   h:=NewHandler(&fakeJobRepository{},Options{Models:store,ModelSnapshots:snapshots})
-   r:=modelRouter(h,auth.Principal{Subject:"bob",TenantID:"local",AuthType:auth.AuthTypeOIDC})
-   w:=httptest.NewRecorder();r.ServeHTTP(w,httptest.NewRequest("GET","/api/v1/models/model-1/versions/version-1/download",nil))
-   if state==modellifecycle.Ready {
-    if w.Code!=200||!snapshots.downloaded||w.Body.String()!="weights"||w.Header().Get("X-Content-SHA256")!=store.version.SHA256{t.Fatalf("ready download: %d %s",w.Code,w.Body.String())}
-   }else if w.Code!=409||snapshots.downloaded||w.Header().Get("Content-Disposition")!=""{t.Fatalf("nonready downloadable: %d %s",w.Code,w.Body.String())}
-  })
- }
+func TestSharedModelDownloadsOnlyReadyAcrossTenants(t *testing.T) {
+	for _, state := range []string{modellifecycle.Pending, modellifecycle.Copying, modellifecycle.Failed, modellifecycle.Ready} {
+		t.Run(state, func(t *testing.T) {
+			snapshots := &modelSnapshotsFake{}
+			store := &modelStoreFake{model: modellifecycle.Model{ID: "model-1", OwnerID: "alice", TenantID: "other"}, version: modellifecycle.Version{ID: "version-1", ModelID: "model-1", State: state, SizeBytes: 7, FileName: "weights.pth", SHA256: strings.Repeat("a", 64)}}
+			h := NewHandler(&fakeJobRepository{}, Options{Models: store, ModelSnapshots: snapshots})
+			r := modelRouter(h, auth.Principal{Subject: "bob", TenantID: "local", AuthType: auth.AuthTypeOIDC})
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/models/model-1/versions/version-1/download", nil))
+			if state == modellifecycle.Ready {
+				if w.Code != 200 || !snapshots.downloaded || w.Body.String() != "weights" || w.Header().Get("X-Content-SHA256") != store.version.SHA256 {
+					t.Fatalf("ready download: %d %s", w.Code, w.Body.String())
+				}
+			} else if w.Code != 409 || snapshots.downloaded || w.Header().Get("Content-Disposition") != "" {
+				t.Fatalf("nonready downloadable: %d %s", w.Code, w.Body.String())
+			}
+		})
+	}
 }
-func TestSharedModelCorruptionBeforeStreamingReturnsServiceError(t *testing.T){
- snapshots:=&modelSnapshotsFake{downloadErr:modellifecycle.ErrInvalid}
- store:=&modelStoreFake{model:modellifecycle.Model{ID:"model-1"},version:modellifecycle.Version{State:modellifecycle.Ready,SizeBytes:7,FileName:"weights.pth"}}
- h:=NewHandler(&fakeJobRepository{},Options{Models:store,ModelSnapshots:snapshots})
- r:=modelRouter(h,auth.Principal{Subject:"bob",TenantID:"local",AuthType:auth.AuthTypeLocal})
- w:=httptest.NewRecorder();r.ServeHTTP(w,httptest.NewRequest("GET","/api/v1/models/model-1/versions/version-1/download",nil))
- if w.Code!=503||w.Header().Get("Content-Length")!=""||w.Header().Get("Content-Disposition")!=""||!strings.Contains(w.Body.String(),"MODEL_DOWNLOAD_FAILED"){t.Fatalf("bad corruption response %d %s",w.Code,w.Body.String())}
+func TestSharedModelCorruptionBeforeStreamingReturnsServiceError(t *testing.T) {
+	snapshots := &modelSnapshotsFake{downloadErr: modellifecycle.ErrInvalid}
+	store := &modelStoreFake{model: modellifecycle.Model{ID: "model-1"}, version: modellifecycle.Version{State: modellifecycle.Ready, SizeBytes: 7, FileName: "weights.pth"}}
+	h := NewHandler(&fakeJobRepository{}, Options{Models: store, ModelSnapshots: snapshots})
+	r := modelRouter(h, auth.Principal{Subject: "bob", TenantID: "local", AuthType: auth.AuthTypeLocal})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/models/model-1/versions/version-1/download", nil))
+	if w.Code != 503 || w.Header().Get("Content-Length") != "" || w.Header().Get("Content-Disposition") != "" || !strings.Contains(w.Body.String(), "MODEL_DOWNLOAD_FAILED") {
+		t.Fatalf("bad corruption response %d %s", w.Code, w.Body.String())
+	}
 }
