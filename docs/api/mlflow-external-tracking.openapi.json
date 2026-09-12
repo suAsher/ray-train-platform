@@ -6,7 +6,7 @@
         "name": "cursor",
         "required": false,
         "schema": {
-          "maxLength": 4096,
+          "maxLength": 2048,
           "type": "string"
         }
       },
@@ -26,7 +26,7 @@
         "schema": {
           "maxLength": 128,
           "minLength": 1,
-          "pattern": "^[!-~]+$",
+          "pattern": "^[A-Za-z0-9._:-]{1,128}$",
           "type": "string"
         }
       },
@@ -48,6 +48,23 @@
         "schema": {
           "pattern": "^[0-9a-f]{32}$",
           "type": "string"
+        }
+      }
+    },
+    "responses": {
+      "SDKUnauthorized": {
+        "description": "PAT authentication is required.",
+        "content": {
+          "application/json": { "schema": { "$ref": "#/components/schemas/SDKError" } }
+        }
+      },
+      "SDKRateLimited": {
+        "description": "Request rate limit exceeded. No write is attempted by the route guard.",
+        "headers": {
+          "Retry-After": { "schema": { "type": "integer", "const": 60 }, "description": "Seconds before another request should be attempted." }
+        },
+        "content": {
+          "application/json": { "schema": { "$ref": "#/components/schemas/SDKError" } }
         }
       }
     },
@@ -372,70 +389,140 @@
         ],
         "type": "object"
       },
-      "MLflowSDKWriteRequest": {
+      "WritableKey": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9._/-]{1,128}$",
+        "description": "Server rejects platform. and mlflow. prefixes case-insensitively, and reserved run/experiment/job/tenant/user/owner/artifact/provenance/status/time identifiers."
+      },
+      "Metric": {
+        "type": "object",
         "additionalProperties": false,
         "properties": {
-          "end_time": {
-            "maximum": 253402300799999,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "key": {
-            "maxLength": 128,
-            "type": "string"
-          },
-          "metrics": {
-            "items": {
-              "$ref": "#/components/schemas/Metric"
-            },
-            "maxItems": 100,
-            "type": "array"
-          },
-          "params": {
-            "items": {
-              "$ref": "#/components/schemas/Pair"
-            },
-            "maxItems": 100,
-            "type": "array"
-          },
-          "run_id": {
-            "pattern": "^[0-9a-f]{32}$",
-            "type": "string"
-          },
-          "status": {
-            "enum": [
-              "FINISHED",
-              "FAILED",
-              "KILLED"
-            ]
-          },
-          "step": {
-            "minimum": 0,
-            "type": "integer"
-          },
-          "tags": {
-            "items": {
-              "$ref": "#/components/schemas/Pair"
-            },
-            "maxItems": 100,
-            "type": "array"
-          },
-          "timestamp": {
-            "maximum": 253402300799999,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "value": {},
+          "key": { "$ref": "#/components/schemas/WritableKey" },
+          "value": { "type": "number", "description": "Finite JSON number; NaN and Infinity are rejected." },
+          "timestamp": { "type": "integer", "minimum": 0, "maximum": 253402300799999 },
+          "step": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 }
+        },
+        "required": ["key", "value", "timestamp", "step"]
+      },
+      "Pair": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "key": { "$ref": "#/components/schemas/WritableKey" },
+          "value": { "type": "string" }
+        },
+        "required": ["key", "value"]
+      },
+      "ParameterPair": {
+        "allOf": [
+          { "$ref": "#/components/schemas/Pair" },
+          { "properties": { "value": { "maxLength": 1024, "description": "At most 1024 UTF-8 bytes; an empty string is valid." } } }
+        ]
+      },
+      "TagPair": {
+        "allOf": [
+          { "$ref": "#/components/schemas/Pair" },
+          { "properties": { "value": { "maxLength": 5000, "description": "At most 5000 UTF-8 bytes; an empty string is valid." } } }
+        ]
+      },
+      "MLflowSDKRunIdentity": {
+        "type": "object",
+        "properties": {
+          "run_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
           "run_uuid": {
             "type": "string",
             "pattern": "^[0-9a-f]{32}$",
-            "description": "MLflow 3.14 SDK legacy alias; when present must equal run_id."
+            "description": "Optional legacy alias; when supplied must equal run_id. Both are RayTrain platform IDs."
           }
         },
-        "required": [
-          "run_id"
-        ],
-        "type": "object"
+        "required": ["run_id"]
+      },
+      "MLflowSDKLogBatchRequest": {
+        "type": "object",
+        "unevaluatedProperties": false,
+        "description": "At most 256 KiB of strict JSON; duplicate or case-variant schema fields and non-finite numbers are rejected. At least one array must be nonempty. Parameter and tag keys must be unique within each array. Writes are not atomic and must not be retried blindly.",
+        "allOf": [
+          { "$ref": "#/components/schemas/MLflowSDKRunIdentity" },
+          {
+            "properties": {
+              "metrics": { "type": "array", "maxItems": 100, "items": { "$ref": "#/components/schemas/Metric" } },
+              "params": { "type": "array", "maxItems": 100, "items": { "$ref": "#/components/schemas/ParameterPair" } },
+              "tags": { "type": "array", "maxItems": 100, "items": { "$ref": "#/components/schemas/TagPair" } }
+            },
+            "anyOf": [
+              { "required": ["metrics"], "properties": { "metrics": { "minItems": 1 } } },
+              { "required": ["params"], "properties": { "params": { "minItems": 1 } } },
+              { "required": ["tags"], "properties": { "tags": { "minItems": 1 } } }
+            ]
+          }
+        ]
+      },
+      "MLflowSDKLogMetricRequest": {
+        "type": "object",
+        "unevaluatedProperties": false,
+        "allOf": [
+          { "$ref": "#/components/schemas/MLflowSDKRunIdentity" },
+          {
+            "properties": {
+              "key": { "$ref": "#/components/schemas/WritableKey" },
+              "value": { "type": "number", "description": "Finite JSON number." },
+              "timestamp": { "type": "integer", "minimum": 0, "maximum": 253402300799999 },
+              "step": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 }
+            },
+            "required": ["key", "value", "timestamp", "step"]
+          }
+        ]
+      },
+      "MLflowSDKLogParameterRequest": {
+        "type": "object",
+        "unevaluatedProperties": false,
+        "allOf": [
+          { "$ref": "#/components/schemas/MLflowSDKRunIdentity" },
+          {
+            "properties": {
+              "key": { "$ref": "#/components/schemas/WritableKey" },
+              "value": { "type": "string", "maxLength": 1024, "description": "At most 1024 UTF-8 bytes; an empty string is valid." }
+            },
+            "required": ["key", "value"]
+          }
+        ]
+      },
+      "MLflowSDKSetTagRequest": {
+        "type": "object",
+        "unevaluatedProperties": false,
+        "allOf": [
+          { "$ref": "#/components/schemas/MLflowSDKRunIdentity" },
+          {
+            "properties": {
+              "key": { "$ref": "#/components/schemas/WritableKey" },
+              "value": { "type": "string", "maxLength": 5000, "description": "At most 5000 UTF-8 bytes; an empty string is valid." }
+            },
+            "required": ["key", "value"]
+          }
+        ]
+      },
+      "MLflowSDKUpdateRequest": {
+        "type": "object",
+        "unevaluatedProperties": false,
+        "description": "Only terminal states are accepted. end_time must be at least the stored run start time. The first durable finish intent retains its end_time on retry; omission uses server time. A completed run cannot be reopened.",
+        "allOf": [
+          { "$ref": "#/components/schemas/MLflowSDKRunIdentity" },
+          {
+            "properties": {
+              "end_time": {
+                "maximum": 253402300799999,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "status": {
+                "type": "string",
+                "enum": ["FINISHED", "FAILED", "KILLED"]
+              }
+            },
+            "required": ["status"]
+          }
+        ]
       },
       "Run": {
         "properties": {
@@ -785,6 +872,8 @@
             },
             "description": "OK"
           },
+          "401": { "$ref": "#/components/responses/SDKUnauthorized" },
+          "429": { "$ref": "#/components/responses/SDKRateLimited" },
           "400": {
             "content": {
               "application/json": {
@@ -849,7 +938,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/MLflowSDKWriteRequest"
+                "$ref": "#/components/schemas/MLflowSDKLogBatchRequest"
               }
             }
           },
@@ -867,6 +956,8 @@
             },
             "description": "OK"
           },
+          "401": { "$ref": "#/components/responses/SDKUnauthorized" },
+          "429": { "$ref": "#/components/responses/SDKRateLimited" },
           "400": {
             "content": {
               "application/json": {
@@ -931,7 +1022,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/MLflowSDKWriteRequest"
+                "$ref": "#/components/schemas/MLflowSDKLogMetricRequest"
               }
             }
           },
@@ -949,6 +1040,8 @@
             },
             "description": "OK"
           },
+          "401": { "$ref": "#/components/responses/SDKUnauthorized" },
+          "429": { "$ref": "#/components/responses/SDKRateLimited" },
           "400": {
             "content": {
               "application/json": {
@@ -1013,7 +1106,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/MLflowSDKWriteRequest"
+                "$ref": "#/components/schemas/MLflowSDKLogParameterRequest"
               }
             }
           },
@@ -1031,6 +1124,8 @@
             },
             "description": "OK"
           },
+          "401": { "$ref": "#/components/responses/SDKUnauthorized" },
+          "429": { "$ref": "#/components/responses/SDKRateLimited" },
           "400": {
             "content": {
               "application/json": {
@@ -1095,7 +1190,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/MLflowSDKWriteRequest"
+                "$ref": "#/components/schemas/MLflowSDKSetTagRequest"
               }
             }
           },
@@ -1113,6 +1208,8 @@
             },
             "description": "OK"
           },
+          "401": { "$ref": "#/components/responses/SDKUnauthorized" },
+          "429": { "$ref": "#/components/responses/SDKRateLimited" },
           "400": {
             "content": {
               "application/json": {
@@ -1178,7 +1275,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/MLflowSDKWriteRequest"
+                "$ref": "#/components/schemas/MLflowSDKUpdateRequest"
               }
             }
           },
@@ -1195,6 +1292,8 @@
             },
             "description": "OK"
           },
+          "401": { "$ref": "#/components/responses/SDKUnauthorized" },
+          "429": { "$ref": "#/components/responses/SDKRateLimited" },
           "400": {
             "content": {
               "application/json": {
