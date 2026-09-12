@@ -43,6 +43,16 @@ func TestSanitizeTrackingTagsAreBoundedAndDeterministic(t *testing.T) {
 	}
 }
 
+func TestSanitizeTrackingMetadataDoesNotInventMissingOrInvalidValues(t *testing.T) {
+	var raw mlflowIntegrationRun
+	if err := json.Unmarshal([]byte(`{"data":{"metrics":[{"key":"missing","value":0.5},{"key":"negative","value":0.5,"timestamp":-1,"step":1},{"key":"future","value":0.5,"timestamp":253402300800000,"step":1},{"key":"bad-step","value":0.5,"timestamp":1,"step":-1},{"key":"zero","value":0.5,"timestamp":0,"step":0},{"key":"duplicate","value":0.25,"timestamp":2000,"step":7},{"key":"duplicate","value":0.9}]}}`), &raw); err != nil { t.Fatal(err) }
+	snapshot := sanitizeTrackingRun(raw)
+	if len(snapshot.LatestMetrics) != 2 || snapshot.LatestMetrics["zero"] != (mlflowtracking.MetricPoint{Value: 0.5}) || snapshot.LatestMetrics["duplicate"] != (mlflowtracking.MetricPoint{Value: 0.25, TimestampMS: 2000, Step: 7}) {
+		t.Fatalf("invalid or fabricated metadata: %+v", snapshot.LatestMetrics)
+	}
+	if len(snapshot.Latest) != 6 || snapshot.Latest["duplicate"] != 0.25 { t.Fatalf("legacy latest changed: %+v", snapshot.Latest) }
+}
+
 func TestMLflowTrackingCreateExperimentFindsDeterministicNameBeforeCreate(t *testing.T) {
 	var createdName string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

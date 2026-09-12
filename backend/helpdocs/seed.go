@@ -12,6 +12,9 @@ var seed []byte
 //go:embed lifecycle.json
 var lifecycleSeed []byte
 
+//go:embed admin.json
+var adminSeed []byte
+
 func Documents() ([]domain.HelpDocument, error) {
 	var documents []domain.HelpDocument
 	if err := json.Unmarshal(seed, &documents); err != nil {
@@ -22,5 +25,10 @@ func Documents() ([]domain.HelpDocument, error) {
 		return nil, err
 	}
 	documents = append(documents, lifecycle...)
+	var admin []domain.HelpDocument
+	if err := json.Unmarshal(adminSeed, &admin); err != nil {
+		return nil, err
+	}
+	documents = append(documents, admin...)
 	return documents, nil
 }

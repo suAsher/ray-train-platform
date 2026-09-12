@@ -576,6 +576,26 @@
       },
       "RunDetail": {
         "properties": {
+          "latestMetrics": {
+            "description": "Latest tuples from upstream runs/get, at most 20 keys. Missing or invalid timestamp/step metadata is omitted, never fabricated; legacy latest values remain available.",
+            "type": "object",
+            "maxProperties": 20,
+            "additionalProperties": {
+              "type": "object",
+              "required": ["value", "timestampMs", "step"],
+              "properties": {
+                "value": { "type": "number" },
+                "timestampMs": { "type": "integer", "minimum": 1 },
+                "step": { "type": "integer", "minimum": 0 }
+              }
+            }
+          },
+          "tags": {
+            "description": "Safe custom tags, sorted by key and limited to 100. Reserved platform/MLflow/internal/credential names are excluded. Values are UTF-8 and at most 5000 bytes; this is not a full native tag mirror.",
+            "type": "object",
+            "maxProperties": 100,
+            "additionalProperties": { "type": "string", "maxLength": 5000 }
+          },
           "latest": {
             "additionalProperties": {
               "type": "number"

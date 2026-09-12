@@ -338,17 +338,35 @@ func sanitizeTrackingRun(raw mlflowIntegrationRun) mlflowtracking.Snapshot {
 		StartTimeMS: raw.Info.StartTime,
 		EndTimeMS:   raw.Info.EndTime,
 		Latest:      map[string]float64{},
+		LatestMetrics: map[string]mlflowtracking.MetricPoint{},
 		Params:      map[string]string{},
+		Tags: map[string]string{},
 		Series:      []mlflowtracking.MetricSeries{},
 	}
 	for _, metric := range raw.Data.Metrics {
+		if _, exists := snapshot.Latest[metric.Key]; exists { continue }
 		if len(snapshot.Latest) < maxMLflowMetricKeys && safeMetricKey(metric.Key) && metric.Value.Valid {
 			snapshot.Latest[metric.Key] = metric.Value.Value
+			// MLflow's runs/get selects the latest metric by its own semantics.
+			// Keep that exact tuple; history is bounded and cannot reconstruct it.
+			if metric.Timestamp != nil && metric.Step != nil && *metric.Timestamp >= 0 && *metric.Timestamp <= 253402300799999 && *metric.Step >= 0 {
+				snapshot.LatestMetrics[metric.Key] = mlflowtracking.MetricPoint{Value: metric.Value.Value, TimestampMS: *metric.Timestamp, Step: *metric.Step}
+			}
 		}
 	}
 	for _, param := range raw.Data.Params {
 		if len(snapshot.Params) < 100 && validMLflowIntegrationKey(param.Key) {
 			snapshot.Params[param.Key] = truncate(param.Value, 1024)
+		}
+	}
+	tags := append([]MLflowKeyValue(nil), raw.Data.Tags...)
+	sort.Slice(tags, func(i, j int) bool { return tags[i].Key < tags[j].Key })
+	for _, tag := range tags {
+		if len(snapshot.Tags) == 100 {
+			break
+		}
+		if mlflowtracking.ReadableUserTag(mlflowtracking.Pair{Key: tag.Key, Value: tag.Value}) {
+			snapshot.Tags[tag.Key] = tag.Value
 		}
 	}
 	return snapshot

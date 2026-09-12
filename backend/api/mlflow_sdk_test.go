@@ -138,7 +138,7 @@ func TestMLflowSDKGetPreservesVirtualIDAndRejectsTransitionalStatus(t *testing.T
 func TestMLflowSDKGetPreservesUserTagsAndLatestMetricMetadata(t *testing.T) {
 	id := "0123456789abcdef0123456789abcdef"
 	var detail mlflowtracking.RunDetail
-	if err := json.Unmarshal([]byte(`{"run":{"id":"`+id+`","state":"RUNNING"},"latest":{"loss":0.25},"latestMetrics":{"loss":{"value":0.25,"timestampMs":2000,"step":7}},"tags":{"review":"candidate","purpose":"sdk-smoke"},"series":[{"key":"loss","points":[{"value":0.9,"timestampMs":9000,"step":1}]}]}`), &detail); err != nil {
+	if err := json.Unmarshal([]byte(`{"run":{"id":"`+id+`","state":"RUNNING"},"latest":{"loss":0.25},"latestMetrics":{"loss":{"value":0.25,"timestampMs":2000,"step":7}},"tags":{"review":"candidate","purpose":"sdk-smoke","platform.proof":"hidden","credential":"hidden"},"series":[{"key":"loss","points":[{"value":0.9,"timestampMs":9000,"step":1}]}]}`), &detail); err != nil {
 		t.Fatal(err)
 	}
 	w := httptest.NewRecorder()

@@ -81,13 +81,17 @@ type Snapshot struct {
 	Status                 string
 	StartTimeMS, EndTimeMS int64
 	Latest                 map[string]float64
+	LatestMetrics          map[string]MetricPoint
 	Params                 map[string]string
+	Tags                   map[string]string
 	Series                 []MetricSeries
 }
 type RunDetail struct {
 	Run    Run                `json:"run"`
 	Latest map[string]float64 `json:"latest"`
+	LatestMetrics map[string]MetricPoint `json:"latestMetrics"`
 	Params map[string]string  `json:"params"`
+	Tags map[string]string `json:"tags"`
 	Series []MetricSeries     `json:"series"`
 }
 type ExperimentPage struct {

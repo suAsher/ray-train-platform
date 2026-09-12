@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"path"
+	"sort"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -106,16 +107,32 @@ func (h *Handler) getMLflowSDKRun(c *gin.Context) {
 		sdkServiceError(c, mlflowtracking.ErrPending)
 		return
 	}
-	metrics := make([]gin.H, 0, len(detail.Latest))
-	for key, value := range detail.Latest {
-		metrics = append(metrics, gin.H{"key": key, "value": value, "timestamp": 0, "step": 0})
+	c.JSON(200, gin.H{"run": gin.H{"info": sdkRunInfo(detail.Run), "data": sdkRunData(detail)}})
+}
+
+func sdkRunData(detail mlflowtracking.RunDetail) gin.H {
+	metricKeys := make([]string, 0, len(detail.LatestMetrics))
+	for key := range detail.LatestMetrics { metricKeys = append(metricKeys, key) }
+	sort.Strings(metricKeys)
+	metrics := make([]gin.H, 0, len(metricKeys))
+	for _, key := range metricKeys {
+		point := detail.LatestMetrics[key]
+		metrics = append(metrics, gin.H{"key": key, "value": point.Value, "timestamp": point.TimestampMS, "step": point.Step})
 	}
 	params := make([]gin.H, 0, len(detail.Params))
 	for key, value := range detail.Params {
 		params = append(params, gin.H{"key": key, "value": value})
 	}
-	info := sdkRunInfo(detail.Run)
-	c.JSON(200, gin.H{"run": gin.H{"info": info, "data": gin.H{"metrics": metrics, "params": params, "tags": []gin.H{}}}})
+	sort.Slice(params, func(i, j int) bool { return params[i]["key"].(string) < params[j]["key"].(string) })
+	tagKeys := make([]string, 0, len(detail.Tags))
+	for key, value := range detail.Tags {
+		if mlflowtracking.ReadableUserTag(mlflowtracking.Pair{Key: key, Value: value}) { tagKeys = append(tagKeys, key) }
+	}
+	sort.Strings(tagKeys)
+	if len(tagKeys) > 100 { tagKeys = tagKeys[:100] }
+	tags := make([]gin.H, 0, len(tagKeys))
+	for _, key := range tagKeys { tags = append(tags, gin.H{"key": key, "value": detail.Tags[key]}) }
+	return gin.H{"metrics": metrics, "params": params, "tags": tags}
 }
 
 func sdkRunInfo(run mlflowtracking.Run) gin.H {

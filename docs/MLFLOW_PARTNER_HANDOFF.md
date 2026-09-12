@@ -1,77 +1,98 @@
 # 给对接方的 MLflow 接入交付单
 
-先按对接用途选择合同：**已有训练记录**使用下表保留的 Job/Run 接口；**独立外部实验**使用 [外部实验接口](MLFLOW_EXTERNAL_TRACKING_API.md)，通过 REST 创建资源，再用 REST 或受控 MLflow 3.14.0 SDK 子集读写。新增能力的上线状态以 [发布验证记录](MLFLOW_EXTERNAL_TRACKING_VALIDATION_20260912.md) 为准。两者都不提供完整 SDK、模型文件上传、Registry 写入或启动推理服务。
+本平台支持两种用途：**独立外部实验**先用 REST 创建实验和 Run，再用 REST 或 MLflow SDK 子集读写；**已有平台训练记录**使用 Job/Run 关联接口。请先选用途，不混用 scope、ID 或地址。
 
-独立外部实验需要另行提供 `experiments:read` / `experiments:write` PAT、平台 Experiment/Run ID、`https://raytrain.wellspiking.ai/api/v1/mlflow-tracking`（SDK 专用前缀）、指标合同及 [新 OpenAPI](api/mlflow-external-tracking.openapi.json)。SDK 的 `run_id` 是**平台 Run ID**；返回的 `mlflowRunId` 仅用于核对原生 MLflow 记录。外部实验 REST/SDK 只授权当前团队本人资源，原生 MLflow 管理界面仍是既有共享管理入口，并不承诺同等隔离。
+## 需要交付的内容
 
-## 交付内容
-
-| 内容 | 给对接方的值或说明 |
+| 项目 | 给对接方的值或要求 |
 | --- | --- |
 | API Base URL | `https://raytrain.wellspiking.ai` |
-| 协议 | HTTPS REST JSON，平台 success/data/error 响应信封 |
-| 认证 | `Authorization: Bearer <PAT>`；真实 PAT 通过获准秘密渠道单独交付 |
-| 读权限 | `jobs:read` |
-| 读写权限 | 同时具备 `jobs:read` 和 `mlflow:write` |
-| 身份与团队 | 填写令牌所属平台身份、当前有效团队、用途、负责人、到期日 |
-| 目标记录 | 明确的 `job_id` 与 `run_id`，由资源所有者确认 |
-| 指标合同 | 指标名、含义、单位、训练/评估数据版本、step 含义、毫秒 timestamp |
-| 接口定义 | [OpenAPI JSON](api/mlflow-integration.openapi.json)，可导入支持 OpenAPI 的调用工具 |
-| 调用工具 | [Python REST 客户端](../examples/mlflow_integration/README.md)，Python 3.10+ 标准库，无需安装 MLflow |
-| 完整约束 | [请求、错误及重试合同](MLFLOW_INTEGRATION_API.md) |
+| REST 版本 | `/api/v1`；HTTPS JSON，成功读取 `data`，失败读取 `error` 和 `request_id` |
+| SDK 版本 | 固定 `mlflow==3.14.0`，仅支持本文列出的六个方法 |
+| 外部实验 SDK Tracking URI | `https://raytrain.wellspiking.ai/api/v1/mlflow-tracking` |
+| 身份 | 明确平台用户、有效团队、用途、负责人、到期日 |
+| 凭据 | 由该身份在 Portal「账户与安全 → 创建访问令牌」申请独立用途、短期 PAT；通过获准秘密渠道交付 |
+| 外部实验只读 scope | `experiments:read` |
+| 外部实验读写 scope | 同时有 `experiments:read`、`experiments:write` |
+| 目标记录 | REST 创建返回的**平台** Experiment ID 和 Run ID |
+| 指标约定 | 名称、含义、单位、数据/代码版本、step 含义、毫秒 timestamp |
+| 接口与调用工具 | [外部实验 OpenAPI](api/mlflow-external-tracking.openapi.json)、[完整合同](MLFLOW_EXTERNAL_TRACKING_API.md)、[Python REST 客户端](../examples/mlflow_integration/README.md) |
 
-先用对接方运行程序的机器验证 DNS、443/TLS 和公司网络访问。浏览器在 VPN 下可访问，不能直接证明对接方服务器同样可达。不要关闭证书校验，也不要把管理员浏览器 Cookie 当作 API 凭据。
+先在对接程序实际运行的机器上验证 DNS、443/TLS 和公司网络访问。用户浏览器连接 VPN 可以访问，不等于对接方服务器已经可达；不要关闭证书校验。不要交付内部 MLflow 地址、数据库或对象存储凭据、浏览器 Cookie。
 
-## 身份和授权必须先确定
+PAT 绑定用户和团队，外部实验只能读写该身份在当前有效团队中拥有的记录，管理员也没有代写权限。PAT 不是某个 Run 的专属令牌；按应用、按 Run 的授权或代写他人资源目前尚未提供，不应共享管理员 PAT 代替。
 
-当前 PAT 绑定一个平台用户和团队；它不是“只允许某个 Job/Run”的专属令牌。`jobs:read` 可读取该身份按角色原本有权查看的任务；`mlflow:write` 可写该身份当前团队下本人任务的合规 RUNNING Run。仅把某个 Run ID 告诉对方，不会把 PAT 的能力限制在该 Run。
+## 独立外部实验：先创建，再读写
 
-因此：
+由秘密管理工具注入 `RAYTRAIN_PAT`，配置非敏感地址：
 
-1. 如果对接方读取/写入**其本人平台任务**，由其身份申请独立用途、短有效期的 PAT。
-2. 如果外部系统需**代写你的任务**，必须明确该系统获准使用何种身份和范围。当前尚无按应用、按 Run 的委托授权；不能给对方自己的 PAT 后假定它能写你的任务，也不应共享管理员 PAT。
-3. 如果只允许访问**某个项目或少数 Run**，应先落地资源 grant/集成身份，当前普通 PAT 无法表达这种范围。服务账号与委托授权已纳入 [后续设计](superpowers/specs/2026-09-12-mlflow-lifecycle-design.md)，尚未实现。
-
-令牌由所有者在 Portal“账户与安全 → 创建访问令牌”选择“实验读写”；不勾选无关训练提交权限。到期/撤销由令牌所有者管理；撤销后对接方应停止重试并更新获准凭据。本文没有创建或发送真实令牌。
-
-## 当前接口
-
-| 操作 | 方法与路径 |
-| --- | --- |
-| 找到可见的 Job/Run 对 | `GET /api/v1/experiments?limit=100` |
-| 读取某任务最新 Run | `GET /api/v1/jobs/{job_id}/experiment` |
-| 精确读取指定 Run | `GET /api/v1/jobs/{job_id}/mlflow/runs/{run_id}` |
-| 写入该 Run | `POST /api/v1/jobs/{job_id}/mlflow/runs/{run_id}/log-batch` |
-
-列表只返回最近记录窗口，最多 100 条，不是全量分页接口。结果里没找到某个 Run，不足以证明其不存在或无权限。已知 Job/Run 对应使用精确读取；一个 Job 可以有多个 Run，两个 ID 不应相等。
-
-示例写入体（仅合同示例，不会自动执行）：
-
-```json
-{
-  "metrics": [
-    {"key": "external/quality_score", "value": 0.87, "timestamp": 1789171200000, "step": 100}
-  ],
-  "params": [{"key": "external.evaluator_version", "value": "v1"}],
-  "tags": [{"key": "external.source", "value": "quality-service"}]
-}
+```bash
+export RAYTRAIN_API='https://raytrain.wellspiking.ai'
+curl -sS --fail-with-body \
+  -H "Authorization: Bearer ${RAYTRAIN_PAT}" \
+  "${RAYTRAIN_API}/api/v1/mlflow/capabilities"
 ```
 
-timestamp 在首次产生数据时填写，重试保留原值；step 由双方约定，不能用每次 HTTP 调用次数冒充训练步。自定义指标采用 `external/` 前缀，避开训练主进程的参数与指标。
+核对 `available`、`sdkClientVersion`、`sdkCompatible` 与 `sdkMethods`。浏览器登录身份的 `write=false` 表示当前通道不能写，程序写入需使用正确 scope 的 PAT。
 
-## 首次联调步骤
+1. `POST /api/v1/mlflow/experiments`，正文 `{"name":"external-evaluation"}`，保存响应 `data.id` 为平台 Experiment ID。
+2. `POST /api/v1/mlflow/experiments/{平台ExperimentID}/runs`，正文 `{"name":"candidate-run"}`，保存 `data.id` 为平台 Run ID。
+3. 两次创建分别提供稳定的 `Idempotency-Key`（1–128 个字母、数字或 `._:-`）。同一次创建重试复用原键及原正文，新资源使用新键；所有 POST 均加 `Content-Type: application/json`。
+4. 列表用 `GET /api/v1/mlflow/experiments` 或 `GET /api/v1/mlflow/experiments/{平台ExperimentID}/runs`；默认 50、最多 100 条，按响应 `data.nextCursor` 请求同一查询的下一页。
+5. REST 读取 `GET /api/v1/mlflow/runs/{平台RunID}`；写入 `/log-batch`；结束 `/finish`，正文为 `{"status":"FINISHED"}`、`FAILED` 或 `KILLED`。
 
-1. 提供获准身份、团队、令牌到期日、明确测试 Job/Run；不得把用户正在训练的 Run 当演示写入目标。
-2. GET 精确 Run，核对响应 Run ID、状态、参数和已有指标。保存 request_id，不记录 PAT。
-3. 对明确获准的测试 Run 写一个独立命名的指标和标签，再读取指标确认。参数具有不可覆盖约束，不能反复改同一个参数。
-4. 验证只读 PAT 写入被拒绝、其他用户或团队的 Run 被拒绝、终态 Run 写入返回 409。
-5. 对 429 按 Retry-After 等待；502/503/超时可能已经部分生效，先查后重试，不无条件重放。
-6. 记录测试时间、客户端版本、Job/Run、request_id、响应状态和读回结果。与对接方确认后结束联调，按用途撤销测试凭据。
+**REST 路径和 SDK 的 `run_id` 都使用平台 Run ID。** 返回的 `mlflowRunId` 仅用于核对上游记录；`mlflowExperimentId` 也不是平台 Experiment ID。独立外部 Run 没有训练 `job_id`，创建它不会申请 GPU 或启动训练。
 
-真实生产联调尚未完成。现有精确读取已通过线上登录身份验证，写入协议此前通过隔离 MLflow 3.14 服务测试；这些不等于外部系统已经获得访问权限。
+SDK 示例仅针对已由 REST 创建、状态为 `RUNNING` 的专用测试 Run。设置 `RAYTRAIN_PLATFORM_RUN_ID` 为平台 Run ID：
 
-## 如果对方要求官方 MLflow SDK
+```bash
+export MLFLOW_TRACKING_URI="${RAYTRAIN_API}/api/v1/mlflow-tracking"
+export MLFLOW_TRACKING_TOKEN="${RAYTRAIN_PAT}"
+```
 
-要先确认其实际调用，例如 `MlflowClient.get_run/log_batch`、`mlflow.start_run/log_model/log_artifact`、Registry 或 Serving。当前不要提供一个猜测的 `MLFLOW_TRACKING_URI`，也不要把 `/mlflow/` 管理页面地址或集群内服务地址给他。
+```python
+import os
+import time
+from mlflow.tracking import MlflowClient
 
-官方 SDK 兼容网关、Artifact 代理、模型版本和审批的详细方案见 [生命周期设计](superpowers/specs/2026-09-12-mlflow-lifecycle-design.md)。以逐项端点和固定版本真实测试定义兼容范围，不能用“支持 MLflow”概括所有能力。
+client = MlflowClient(tracking_uri=os.environ["MLFLOW_TRACKING_URI"])
+run_id = os.environ["RAYTRAIN_PLATFORM_RUN_ID"]
+client.get_run(run_id)
+client.log_param(run_id, "external.evaluator_version", "v1")
+client.log_metric(run_id, "external/quality_score", 0.91,
+                  timestamp=int(time.time() * 1000), step=1)
+client.set_tag(run_id, "external.source", "quality-service")
+result = client.get_run(run_id)
+assert result.data.metrics["external/quality_score"] == 0.91
+# 全部写入完成后结束；终态不再允许追加或重开。
+client.set_terminated(run_id, status="FINISHED")
+```
+
+支持的方法仅为 `get_run`、`log_batch`、`log_metric`、`log_param`、`set_tag`、`set_terminated`。get_run 提供有界的参数、安全自定义标签及最新指标视图；最新指标保留实际 timestamp/step，系统归属标签不对外返回。SDK 返回自身的 `error_code/message`，不使用 REST 响应信封。
+
+不支持 SDK `create_experiment/create_run/start_run`、自动创建 Run 的 autolog、完整历史导出、Artifact 上传、模型注册、审批、Traces 或 Serving。`raytrain-disabled:` artifact URI 表示文件通道未开放。原生 `/mlflow/` 是既有共享浏览器管理入口，不能用作本 SDK 地址，也不承诺与外部 API 同等的所有权隔离。
+
+## 已有平台训练记录：保留 Job/Run 接口
+
+如果对接方要读取或补充已有训练，使用以下独立合同：
+
+| 目标 | 权限与接口 |
+| --- | --- |
+| 查近期 Job/Run 关联 | `jobs:read`；`GET /api/v1/experiments?limit=100` |
+| 读任务最新 Run | `jobs:read`；`GET /api/v1/jobs/{job_id}/experiment` |
+| 精确读某个 Run | `jobs:read`；`GET /api/v1/jobs/{job_id}/mlflow/runs/{run_id}` |
+| 补充参数/指标/标签 | `jobs:read` + `mlflow:write`；`POST /api/v1/jobs/{job_id}/mlflow/runs/{run_id}/log-batch` |
+
+此处 `run_id` 是与 Job 可信关联的上游 MLflow Run ID，**与外部实验平台 Run ID 不同**；一个 Job 可有多个 Run，Job ID 与 Run ID 不要求相等。列表最多返回近期 100 条，并非全量分页；列表里没出现不代表记录不存在。
+
+只允许向当前团队本人任务的合规 `RUNNING` Run 写入；管理员也不能代写他人的任务。没有 Run 时接口不会自动创建。训练记录接口不是 SDK Tracking Server，详见[训练接口合同](MLFLOW_INTEGRATION_API.md)和[对应 OpenAPI](api/mlflow-integration.openapi.json)。
+
+## 首次联调与限制
+
+- 使用获准的专用测试资源；不要向用户正在训练的 Run 写演示指标。先读、再写独立 `external/` 指标和自定义标签、再读回，最后验证终态拒写、只读 PAT 拒写及跨用户/团队拒绝。
+- batch 最大 256 KiB，metrics/params/tags 各最多 100 条。参数不能覆盖；`platform.*`、`mlflow.*` 等系统字段保留。查询最多 20 个指标键、每键 500 点、100 个参数，是有界视图。
+- 400/413 修正请求；401/403 修正凭据和权限；404 核对用途和 ID；409 核对状态、处理中操作或参数冲突；429 按 `Retry-After` 等待。
+- 超时、502/503 可能已部分写入，先读取再决定是否重试；批量写不是事务或 exactly-once。重试保留原 key/value/step/timestamp，不生成新时间戳无条件重放。
+- 保存测试时间、客户端版本、平台/上游 ID、request_id、响应状态和读回结果，不记录真实 PAT。到期或撤销后停止重试并更新获准凭据。
+
+**生产 PAT 写入验收尚未完成，也未为对接方创建或发送真实令牌。** 已部署版本、隔离测试和后续 SDK 读回修订分别以[发布验收记录](MLFLOW_EXTERNAL_TRACKING_VALIDATION_20260912.md)为准，不能把本文的接口说明当作对接方已经获准访问或完成生产联调的证据。

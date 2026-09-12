@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -157,7 +158,28 @@ func (s *Service) GetRun(ctx context.Context, actor Actor, id string) (RunDetail
 	if err != nil {
 		return RunDetail{}, err
 	}
-	return RunDetail{Run: record, Latest: data.Latest, Params: data.Params, Series: data.Series}, nil
+	return RunDetail{Run: record, Latest: data.Latest, LatestMetrics: data.LatestMetrics, Params: data.Params, Tags: data.Tags, Series: data.Series}, nil
+}
+
+// ReadableUserTag uses the write allowlist and excludes infrastructure and
+// credential tag names before exposing upstream values to REST or SDK clients.
+func ReadableUserTag(pair Pair) bool {
+	if (Batch{Tags: []Pair{pair}}).Validate() != nil {
+		return false
+	}
+	lower := strings.ToLower(pair.Key)
+	canonical := strings.NewReplacer("_", "", "-", "", ".", "", "/", "").Replace(lower)
+	switch canonical {
+	case "accesstoken", "refreshtoken", "idtoken", "apikey", "accesskey", "secretkey", "privatekey", "systemtag":
+		return false
+	}
+	for _, segment := range strings.FieldsFunc(lower, func(r rune) bool { return strings.ContainsRune("._-/", r) }) {
+		switch segment {
+		case "credential", "credentials", "internal", "system", "systemtag", "provenance", "token", "secret", "password", "authorization":
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) runAndExperiment(ctx context.Context, actor Actor, id string) (Run, Experiment, error) {
