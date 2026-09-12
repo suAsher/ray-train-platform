@@ -6,6 +6,7 @@ import (
  "errors"
  "strings"
  "time"
+ "unicode/utf8"
 
  "github.com/google/uuid"
  "gorm.io/gorm"
@@ -32,7 +33,7 @@ func writeModelAudit(tx *gorm.DB,m,v string,a ml.Actor,action string,details any
 }
 func (s *ModelLifecycleStore) CreateModel(ctx context.Context,m ml.Model)(ml.Model,error) {
  m.Name=strings.TrimSpace(m.Name)
- if m.Name=="" || len(m.Name)>200 || len(m.Description)>4000 || m.OwnerID=="" || m.TenantID=="" {return ml.Model{},ml.ErrInvalid}
+ if m.Name=="" || utf8.RuneCountInString(m.Name)>200 || utf8.RuneCountInString(m.Description)>4000 || m.OwnerID=="" || m.TenantID=="" {return ml.Model{},ml.ErrInvalid}
  m.ID=uuid.NewString();m.Revision=1;m.Archived=false;m.CreatedAt=time.Now().UTC();m.UpdatedAt=m.CreatedAt
  err:=s.db.WithContext(ctx).Transaction(func(tx *gorm.DB)error{if err:=tx.Create(&m).Error;err!=nil{return err};return writeModelAudit(tx,m.ID,"",ml.Actor{ID:m.OwnerID,Name:m.OwnerName},"model.created",map[string]any{"name":m.Name,"revision":m.Revision})})
  return m,err
@@ -51,8 +52,8 @@ func (s *ModelLifecycleStore) ListModels(ctx context.Context,f ml.Filter)(ml.Mod
 func (s *ModelLifecycleStore) UpdateModel(ctx context.Context,id string,u ml.ModelUpdate,a ml.Actor)(ml.Model,error) {
  if u.Revision<1 || a.ID=="" || (u.Name==nil && u.Description==nil && u.Archived==nil){return ml.Model{},ml.ErrInvalid}
  updates:=map[string]any{"revision":gorm.Expr("revision + 1"),"updated_at":time.Now().UTC()}
- if u.Name!=nil {name:=strings.TrimSpace(*u.Name);if name=="" || len(name)>200{return ml.Model{},ml.ErrInvalid};updates["name"]=name}
- if u.Description!=nil {if len(*u.Description)>4000{return ml.Model{},ml.ErrInvalid};updates["description"]=*u.Description}
+ if u.Name!=nil {name:=strings.TrimSpace(*u.Name);if name=="" || utf8.RuneCountInString(name)>200{return ml.Model{},ml.ErrInvalid};updates["name"]=name}
+ if u.Description!=nil {if utf8.RuneCountInString(*u.Description)>4000{return ml.Model{},ml.ErrInvalid};updates["description"]=*u.Description}
  if u.Archived!=nil {updates["archived"]=*u.Archived}
  var m ml.Model
  err:=s.db.WithContext(ctx).Transaction(func(tx *gorm.DB)error{
@@ -69,7 +70,7 @@ func (s *ModelLifecycleStore) ListVersions(ctx context.Context,modelID,cursor st
  if len(result.Items)>limit {result.Items=result.Items[:limit];result.NextCursor=result.Items[limit-1].ID};return result,nil
 }
 func (s *ModelLifecycleStore) UpdateVersion(ctx context.Context,modelID,id string,u ml.VersionUpdate,a ml.Actor)(ml.Version,error) {
- if u.Revision<1 || len(u.Description)>4000 || a.ID=="" {return ml.Version{},ml.ErrInvalid}
+ if u.Revision<1 || utf8.RuneCountInString(u.Description)>4000 || a.ID=="" {return ml.Version{},ml.ErrInvalid}
  var v ml.Version
  err:=s.db.WithContext(ctx).Transaction(func(tx *gorm.DB)error{
   res:=tx.Model(&ml.Version{}).Where("model_id = ? AND id = ? AND revision = ?",modelID,id,u.Revision).Updates(map[string]any{"description":u.Description,"revision":gorm.Expr("revision + 1"),"updated_at":time.Now().UTC()})

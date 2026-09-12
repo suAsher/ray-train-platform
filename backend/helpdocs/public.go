@@ -9,7 +9,7 @@ func PublicGuides() []domain.HelpDocument {
 		{ID: "data", Title: "代码、镜像与数据准备", Category: "02 准备代码和数据", SortOrder: 110, Markdown: dataPublicGuide},
 		{ID: "training-guide", Title: "提交训练、分布式、续训与结果", Category: "03 提交与运行", SortOrder: 210, Markdown: trainingPublicGuide},
 		{ID: "debug", Title: "交互式调试与 Worker 连接", Category: "03 提交与运行", SortOrder: 260, Markdown: debugPublicGuide},
-		{ID: "mlflow", Title: "实验与 MLflow 接入", Category: "04 结果与MLflow", SortOrder: 310, Markdown: mlflowPublicGuide},
+		{ID: "mlflow", Title: "实验与 MLflow 接入", Category: "04 结果与MLflow", SortOrder: 310, Markdown: mlflowPublicGuide + "\n\n" + sharedModelsPublicSection},
 		{ID: "troubleshooting", Title: "常见错误与定位路径", Category: "05 故障排查", SortOrder: 410, Markdown: troubleshootingPublicGuide},
 	}
 }
@@ -192,7 +192,7 @@ const debugPublicGuide = `### 交互式调试
 
 const mlflowPublicGuide = `### 页面和记录关系
 
-「实验中心」保留两个主要入口：训练记录和 MLflow API。训练记录用于查看 RayTrain Job 与 MLflow Run 的关联；MLflow API 用于复制原生 Tracking URI、Python 示例和 HTTP 调用方式。需要进入原生页面时点击“打开 MLflow”。
+「实验中心」提供训练记录、模型和 MLflow API。训练记录用于查看 RayTrain Job 与 MLflow Run 的关联；模型用于查看共享模型和权重版本；MLflow API 用于复制原生 Tracking URI、Python 示例和 HTTP 调用方式。需要进入原生页面时点击“打开 MLflow”。
 
 训练任务可以关联一个或多个 MLflow Run；Job ID 不等于 Run ID。页面曲线取决于训练代码是否写入 MLflow metric，日志里有 loss 文本不代表页面一定有曲线。
 

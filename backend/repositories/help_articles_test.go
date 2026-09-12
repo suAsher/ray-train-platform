@@ -9,7 +9,7 @@ import (
 	"ray-train-platform-backend/helpdocs"
 )
 
-func TestHelpArticlesExposeThirtyFourQuestionDocumentsFromPublishedSeed(t *testing.T) {
+func TestHelpArticlesExposeThirtySixQuestionDocumentsFromPublishedSeed(t *testing.T) {
 	r := helpRepo(t)
 	ctx := context.Background()
 	seed, err := helpdocs.Documents()
@@ -24,8 +24,8 @@ func TestHelpArticlesExposeThirtyFourQuestionDocumentsFromPublishedSeed(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 34 {
-		t.Fatalf("public articles got %d want 34", len(items))
+	if len(items) != 36 {
+		t.Fatalf("public articles got %d want 36", len(items))
 	}
 	byID := helpArticlesByID(items)
 	for _, source := range seed {
@@ -49,6 +49,8 @@ func TestHelpArticlesExposeThirtyFourQuestionDocumentsFromPublishedSeed(t *testi
 	assertArticle(t, byID, "submit", "training", "如何提交单卡、单机多卡和多机训练？", []string{"python3 tools/train_managed.py", "--cpu-per-worker 8", "--memory-per-worker 32Gi"})
 	assertArticle(t, byID, "debug", "debug", "如何使用 JupyterLab 和 VS Code？", []string{"JupyterLab", "VS Code"})
 	assertArticle(t, byID, "worker-connect-and-scheduling-boundary", "debug", "如何连接自己的训练 Worker？", []string{"spk-rayjob connect JOB_ID"})
+	assertArticle(t, byID, "shared-model-registration", "debug", "如何把训练权重保存成共享模型版本？", []string{"8 MiB", "20 GiB", "READY", "未知 / 未登记", "用户补充"})
+	assertArticle(t, byID, "shared-model-maintenance", "debug", "模型谁能看，如何维护与归档？", []string{"跨团队", "SuperAdmin", "归档", "Serving 尚未上线"})
 	assertArticle(t, byID, "mlflow-api-with-pat", "mlflow", "如何调用 MLflow API 查询实验与 Run？", []string{"MLFLOW_TRACKING_URI='https://raytrain.wellspiking.ai/api/v1/mlflow-native'", "next_page_token 字段，把它原样放进下一次请求正文的 page_token", "403 查 PAT 是否包含 mlflow:full"})
 	assertArticle(t, byID, "errors", "troubleshooting", "遇到 401、403、Pending 等错误先检查什么？", []string{"401 / INVALID_AUTHENTICATION", "413"})
 }
