@@ -62,30 +62,38 @@ func appendEvaluationRuntime(environment []any, runtime *domain.EvaluationRuntim
 }
 
 func validateEvaluationCodeBaseURL(value string) error {
- parsed,err:=url.Parse(value)
- if err!=nil||parsed.User!=nil||parsed.RawQuery!=""||parsed.Fragment!=""||(parsed.Scheme!="http"&&parsed.Scheme!="https")||parsed.Path!="/api/v1/internal" {return fmt.Errorf("evaluation code endpoint must use the internal job callback service")}
- host:=parsed.Hostname()
- if !strings.HasSuffix(host,".svc")&&!strings.HasSuffix(host,".svc.cluster.local"){return fmt.Errorf("evaluation code endpoint must use a cluster service")}
- return nil
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Path != "/api/v1/internal" {
+		return fmt.Errorf("evaluation code endpoint must use the internal job callback service")
+	}
+	host := parsed.Hostname()
+	if !strings.HasSuffix(host, ".svc") && !strings.HasSuffix(host, ".svc.cluster.local") {
+		return fmt.Errorf("evaluation code endpoint must use a cluster service")
+	}
+	return nil
 }
 
 func evaluationSourceCredentialVolume(jobID string) map[string]any {
- return map[string]any{"name":"evaluation-source-events","secret":map[string]any{
-  "secretName":TrainingEventSecretName(jobID),"defaultMode":int64(0440),
-  "items":[]any{map[string]any{"key":TrainingEventTokenKey,"path":TrainingEventTokenKey}},
- }}
+	return map[string]any{"name": "evaluation-source-events", "secret": map[string]any{
+		"secretName": TrainingEventSecretName(jobID), "defaultMode": int64(0440),
+		"items": []any{map[string]any{"key": TrainingEventTokenKey, "path": TrainingEventTokenKey}},
+	}}
 }
 
 func evaluationCodeMaterializerCommand(spec domain.JobSpec, options RenderOptions) string {
- runtime:=spec.EvaluationRuntime
- if runtime==nil||runtime.ValidateCodeSource(spec.Source)!=nil||validateEvaluationCodeBaseURL(options.TrainingEventBaseURL)!=nil{
-  return "echo 'source materialization failed: invalid evaluation code snapshot' >&2\nexit 1\n"
- }
- archive:="/tmp/platform-evaluation-code.zip"
- command:=[]string{"python3","/usr/local/bin/platform-fetch-evaluation-code.py","--base-url",options.TrainingEventBaseURL,"--job-id",options.trainingEventJobID,
-  "--token-file",trainingEventTokenMountPath+"/"+TrainingEventTokenKey,"--sha256",runtime.CodeSHA256,"--size-bytes",strconv.FormatInt(runtime.CodeSizeBytes,10),"--output",archive}
- extract:=[]string{"python3","/usr/local/bin/platform-safe-extract.py","--archive",archive,"--destination","/workspace","--max-uncompressed-bytes","268435456"}
- entry:=append(append([]string(nil),spec.Entrypoint.Command...),spec.Entrypoint.Args...)
- if len(entry)>=3&&entry[1]=="-m"{extract=append(extract,"--required-module",entry[2])}else if len(entry)>=2{extract=append(extract,"--required-script",entry[1])}
- return shellJoin(command)+"\n"+shellJoin(extract)+"\nrm -f "+shellQuote(archive)+"\n"
+	runtime := spec.EvaluationRuntime
+	if runtime == nil || runtime.ValidateCodeSource(spec.Source) != nil || validateEvaluationCodeBaseURL(options.TrainingEventBaseURL) != nil {
+		return "echo 'source materialization failed: invalid evaluation code snapshot' >&2\nexit 1\n"
+	}
+	archive := "/tmp/platform-evaluation-code.zip"
+	command := []string{"python3", "/usr/local/bin/platform-fetch-evaluation-code.py", "--base-url", options.TrainingEventBaseURL, "--job-id", options.trainingEventJobID,
+		"--token-file", trainingEventTokenMountPath + "/" + TrainingEventTokenKey, "--sha256", runtime.CodeSHA256, "--size-bytes", strconv.FormatInt(runtime.CodeSizeBytes, 10), "--output", archive}
+	extract := []string{"python3", "/usr/local/bin/platform-safe-extract.py", "--archive", archive, "--destination", "/workspace", "--max-uncompressed-bytes", "268435456"}
+	entry := append(append([]string(nil), spec.Entrypoint.Command...), spec.Entrypoint.Args...)
+	if len(entry) >= 3 && entry[1] == "-m" {
+		extract = append(extract, "--required-module", entry[2])
+	} else if len(entry) >= 2 {
+		extract = append(extract, "--required-script", entry[1])
+	}
+	return shellJoin(command) + "\n" + shellJoin(extract) + "\nrm -f " + shellQuote(archive) + "\n"
 }

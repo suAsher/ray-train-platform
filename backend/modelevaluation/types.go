@@ -47,23 +47,23 @@ var (
 // Evaluator executable fields are immutable. Deactivation does not change
 // historical Evaluation.Evaluator snapshots or invalidate their reports.
 type Evaluator struct {
-	ID             string    `json:"id"`
-	Name           string    `json:"name"`
-	Description    string    `json:"description"`
-	OwnerID        string    `json:"ownerId"`
-	OwnerName      string    `json:"ownerName"`
-	TenantID       string    `json:"tenantId"`
-	Revision       int64     `json:"revision"`
-	Active         bool      `json:"active"`
-	ImageReference string    `json:"imageReference"`
-	ImageDigest    string    `json:"imageDigest"`
-	GitURL         string    `json:"gitUrl"`
-	GitCommit      string    `json:"gitCommit"`
+	ID             string        `json:"id"`
+	Name           string        `json:"name"`
+	Description    string        `json:"description"`
+	OwnerID        string        `json:"ownerId"`
+	OwnerName      string        `json:"ownerName"`
+	TenantID       string        `json:"tenantId"`
+	Revision       int64         `json:"revision"`
+	Active         bool          `json:"active"`
+	ImageReference string        `json:"imageReference"`
+	ImageDigest    string        `json:"imageDigest"`
+	GitURL         string        `json:"gitUrl"`
+	GitCommit      string        `json:"gitCommit"`
 	Code           *CodeSnapshot `json:"code,omitempty"`
-	EntryPoint     []string  `json:"entryPoint"`
-	SchemaVersion  string    `json:"schemaVersion"`
-	Protocol       string    `json:"protocol"`
-	CreatedAt      time.Time `json:"createdAt"`
+	EntryPoint     []string      `json:"entryPoint"`
+	SchemaVersion  string        `json:"schemaVersion"`
+	Protocol       string        `json:"protocol"`
+	CreatedAt      time.Time     `json:"createdAt"`
 }
 
 type DatasetSnapshot struct {

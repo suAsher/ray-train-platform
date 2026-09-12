@@ -158,7 +158,9 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 		if err := job.Spec.EvaluationRuntime.Validate(); err != nil {
 			return nil, err
 		}
-		if err := job.Spec.EvaluationRuntime.ValidateCodeSource(job.Spec.Source); err != nil { return nil, err }
+		if err := job.Spec.EvaluationRuntime.ValidateCodeSource(job.Spec.Source); err != nil {
+			return nil, err
+		}
 	} else {
 		job.Spec.EvaluationRuntime = nil
 	}
@@ -176,7 +178,9 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	}
 	evaluationArchive := job.SubmissionOrigin == domain.SubmissionOriginEvaluation && job.Spec.Source.Type == "evaluation-archive" && job.Spec.EvaluationRuntime != nil
 	if evaluationArchive {
-		if err := validateEvaluationCodeBaseURL(options.TrainingEventBaseURL); err != nil { return nil, err }
+		if err := validateEvaluationCodeBaseURL(options.TrainingEventBaseURL); err != nil {
+			return nil, err
+		}
 	}
 	if job.Spec.Source.Type != "git" && job.Spec.Source.Type != "workspace" && job.Spec.Source.Type != "workspace-archive" && !evaluationArchive {
 		// Defense in depth for callers that bypass the HTTP submission service.

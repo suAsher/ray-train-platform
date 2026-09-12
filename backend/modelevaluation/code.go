@@ -13,10 +13,10 @@ const MaxEvaluationCodeSize int64 = 64 << 20
 // CodeSnapshot identifies an independently retained, immutable code archive.
 // It deliberately contains neither an object key nor a mutable source path.
 type CodeSnapshot struct {
-	ID string `json:"id"`
-	SHA256 string `json:"sha256"`
-	SizeBytes int64 `json:"sizeBytes"`
-	Format string `json:"format"`
+	ID        string `json:"id"`
+	SHA256    string `json:"sha256"`
+	SizeBytes int64  `json:"sizeBytes"`
+	Format    string `json:"format"`
 }
 
 // Publish receives a READY artifact loaded with the authenticated caller's

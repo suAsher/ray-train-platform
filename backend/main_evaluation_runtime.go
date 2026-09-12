@@ -42,7 +42,9 @@ func loadTrustedEvaluationRuntime(ctx context.Context, job *domain.TrainingJob, 
 	if err := runtime.Validate(); err != nil {
 		return nil, err
 	}
-	if err := runtime.ValidateCodeSource(job.Spec.Source); err != nil { return nil, err }
+	if err := runtime.ValidateCodeSource(job.Spec.Source); err != nil {
+		return nil, err
+	}
 	loaded.Spec.EvaluationRuntime = runtime
 	return &loaded, nil
 }

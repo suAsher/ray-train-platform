@@ -10,16 +10,16 @@ import (
 )
 
 type createModelEvaluatorInput struct {
-	Name           string   `json:"name"`
-	Description    string   `json:"description"`
-	ImageReference string   `json:"imageReference"`
-	ImageDigest    string   `json:"imageDigest"`
-	SourceArtifactID string `json:"sourceArtifactId"`
-	GitURL         string   `json:"gitUrl"`
-	GitCommit      string   `json:"gitCommit"`
-	EntryPoint     []string `json:"entryPoint"`
-	SchemaVersion  string   `json:"schemaVersion"`
-	Protocol       string   `json:"protocol"`
+	Name             string   `json:"name"`
+	Description      string   `json:"description"`
+	ImageReference   string   `json:"imageReference"`
+	ImageDigest      string   `json:"imageDigest"`
+	SourceArtifactID string   `json:"sourceArtifactId"`
+	GitURL           string   `json:"gitUrl"`
+	GitCommit        string   `json:"gitCommit"`
+	EntryPoint       []string `json:"entryPoint"`
+	SchemaVersion    string   `json:"schemaVersion"`
+	Protocol         string   `json:"protocol"`
 }
 
 func (h *Handler) createModelEvaluator(c *gin.Context) {
@@ -45,13 +45,20 @@ func (h *Handler) createModelEvaluator(c *gin.Context) {
 	}
 	var artifact *domain.SourceArtifact
 	origin := domain.SubmissionOriginAPI
-	source := domain.CodeSource{Type:"git",URL:input.GitURL,Commit:input.GitCommit}
+	source := domain.CodeSource{Type: "git", URL: input.GitURL, Commit: input.GitCommit}
 	if input.SourceArtifactID != "" {
-		release, ok := h.acquireEvaluationCodeOperation(c); if !ok { return }; defer release()
+		release, ok := h.acquireEvaluationCodeOperation(c)
+		if !ok {
+			return
+		}
+		defer release()
 		var okSource bool
-		artifact, okSource = h.evaluationCodeSource(c, input.SourceArtifactID); if !okSource { return }
+		artifact, okSource = h.evaluationCodeSource(c, input.SourceArtifactID)
+		if !okSource {
+			return
+		}
 		origin = domain.SubmissionOriginPortal
-		source = domain.CodeSource{Type:"workspace-archive",ArtifactID:artifact.ID}
+		source = domain.CodeSource{Type: "workspace-archive", ArtifactID: artifact.ID}
 	}
 	// Catalogue and JobSpec validation is read-only. Uploaded source uses the
 	// existing interactive archive origin; generic API permissions stay narrow.
@@ -72,17 +79,27 @@ func (h *Handler) createModelEvaluator(c *gin.Context) {
 		return
 	}
 	id, err := newEvaluationID()
-	if h.modelEvaluationError(c, err) { return }
+	if h.modelEvaluationError(c, err) {
+		return
+	}
 	if artifact != nil {
-		key, ok := h.modelRequestKey(c); if !ok { return }
+		key, ok := h.modelRequestKey(c)
+		if !ok {
+			return
+		}
 		id = evaluationCodeRequestID(p, key)
 	}
 	evaluator := me.Evaluator{ID: id, Name: strings.TrimSpace(input.Name), Description: input.Description, OwnerID: p.Subject, OwnerName: p.Username, TenantID: p.TenantID, Revision: 1, Active: true, ImageReference: result.Image, ImageDigest: digest, GitURL: input.GitURL, GitCommit: input.GitCommit, EntryPoint: append([]string{}, input.EntryPoint...), SchemaVersion: input.SchemaVersion, Protocol: input.Protocol, CreatedAt: time.Now().UTC()}
-	if artifact != nil { evaluator.Code = &me.CodeSnapshot{ID:id,SHA256:artifact.SHA256,SizeBytes:artifact.SizeBytes,Format:"zip"} }
+	if artifact != nil {
+		evaluator.Code = &me.CodeSnapshot{ID: id, SHA256: artifact.SHA256, SizeBytes: artifact.SizeBytes, Format: "zip"}
+	}
 	if h.modelEvaluationError(c, me.ValidateEvaluator(evaluator)) {
 		return
 	}
-	if artifact != nil { h.publishModelEvaluatorCode(c, evaluator, *artifact); return }
+	if artifact != nil {
+		h.publishModelEvaluatorCode(c, evaluator, *artifact)
+		return
+	}
 	evaluator, err = h.modelEvaluations.CreateEvaluator(c.Request.Context(), evaluator)
 	if h.modelEvaluationError(c, err) {
 		return

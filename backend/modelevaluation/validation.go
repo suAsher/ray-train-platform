@@ -30,7 +30,9 @@ func ValidateEvaluator(e Evaluator) error {
 	if _, digest, ok := strings.Cut(e.ImageReference, "@"); ok && digest != e.ImageDigest {
 		return invalid("image reference and digest disagree")
 	}
-	if err := validateEvaluatorCodeSource(e); err != nil { return err }
+	if err := validateEvaluatorCodeSource(e); err != nil {
+		return err
+	}
 	if len(e.EntryPoint) < 1 || len(e.EntryPoint) > 32 || !identifierPattern.MatchString(e.SchemaVersion) || e.Protocol != Protocol {
 		return invalid("evaluator execution contract is invalid")
 	}
@@ -44,7 +46,9 @@ func ValidateEvaluator(e Evaluator) error {
 
 func validateEvaluatorCodeSource(e Evaluator) error {
 	if e.Code != nil {
-		if e.GitURL != "" || e.GitCommit != "" { return invalid("evaluator code archive cannot include a Git source") }
+		if e.GitURL != "" || e.GitCommit != "" {
+			return invalid("evaluator code archive cannot include a Git source")
+		}
 		return ValidateCodeSnapshot(*e.Code)
 	}
 	gitURL, err := url.Parse(e.GitURL)
@@ -52,9 +56,13 @@ func validateEvaluatorCodeSource(e Evaluator) error {
 		return invalid("evaluator git URL is invalid")
 	}
 	if gitURL.User != nil {
-		if _, password := gitURL.User.Password(); password || gitURL.Scheme != "ssh" || gitURL.User.Username() != "git" { return invalid("git credentials must not be embedded") }
+		if _, password := gitURL.User.Password(); password || gitURL.Scheme != "ssh" || gitURL.User.Username() != "git" {
+			return invalid("git credentials must not be embedded")
+		}
 	}
-	if !commitPattern.MatchString(e.GitCommit) { return invalid("evaluator Git commit must be fixed") }
+	if !commitPattern.MatchString(e.GitCommit) {
+		return invalid("evaluator Git commit must be fixed")
+	}
 	return nil
 }
 func CanonicalSites(sites []string) ([]string, error) {

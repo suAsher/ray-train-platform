@@ -59,10 +59,14 @@ func (runtime EvaluationRuntime) Validate() error {
 // job selector. Neither public JSON nor the job may choose an object-store key.
 func (runtime EvaluationRuntime) ValidateCodeSource(source CodeSource) error {
 	if runtime.CodeID == "" {
-		if source.Type == "evaluation-archive" { return fmt.Errorf("evaluation archive has no trusted code snapshot") }
+		if source.Type == "evaluation-archive" {
+			return fmt.Errorf("evaluation archive has no trusted code snapshot")
+		}
 		return nil
 	}
-	if err := runtime.Validate(); err != nil { return err }
+	if err := runtime.Validate(); err != nil {
+		return err
+	}
 	if source != (CodeSource{Type: "evaluation-archive", ArtifactID: runtime.CodeID, ArtifactSHA256: runtime.CodeSHA256}) {
 		return fmt.Errorf("evaluation source does not match the frozen code snapshot")
 	}
