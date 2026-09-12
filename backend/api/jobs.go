@@ -19,6 +19,7 @@ import (
 	"ray-train-platform-backend/domain"
 	"ray-train-platform-backend/httpapi"
 	"ray-train-platform-backend/k8s"
+	"ray-train-platform-backend/modellifecycle"
 	"ray-train-platform-backend/objectstore"
 	"ray-train-platform-backend/observability"
 	"ray-train-platform-backend/repositories"
@@ -38,6 +39,8 @@ type globalJobReader interface {
 }
 
 type Handler struct {
+	models                   modellifecycle.Repository
+	modelSnapshots           modelSnapshotService
 	bootstrapTenant          string
 	helpDocuments            HelpDocumentStore
 	repository               JobRepository
@@ -136,6 +139,8 @@ type ExperimentProvider interface {
 }
 
 type Options struct {
+	Models                   modellifecycle.Repository
+	ModelSnapshots           modelSnapshotService
 	BootstrapTenant          string
 	AllowAnonymous           bool
 	Logs                     LogProvider
@@ -297,6 +302,8 @@ func NewHandler(repository JobRepository, options Options) *Handler {
 		},
 		NewID: func() (string, error) { return handler.newID() },
 	})
+	handler.models = options.Models
+	handler.modelSnapshots = options.ModelSnapshots
 	return handler
 }
 

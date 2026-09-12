@@ -27,6 +27,7 @@ import (
 	"ray-train-platform-backend/idcsync"
 	"ray-train-platform-backend/k8s"
 	"ray-train-platform-backend/mlflowtracking"
+	"ray-train-platform-backend/modellifecycle"
 	"ray-train-platform-backend/objectstore"
 	"ray-train-platform-backend/observability"
 	"ray-train-platform-backend/rayapi"
@@ -113,6 +114,11 @@ func main() {
 	}
 	artifactLister, _ := directoryLister.(objectstore.ArtifactLister)
 	artifactReader, _ := directoryLister.(objectstore.ArtifactReader)
+	modelStore := repositories.NewModelLifecycleStore(database)
+	var modelSnapshots *modellifecycle.Service
+	if store, ok := directoryLister.(*objectstore.TOSStore); ok {
+		modelSnapshots = modellifecycle.NewService(modelStore, store.ModelSnapshotSource(), store.ModelSnapshotObjects())
+	}
 	localSessionAuthenticator, localAuthHandler, err := newLocalAuthComponents(repository, cfg, directoryInitializer, personalStorageQuota)
 	if err != nil {
 		log.Fatalf("initialize local authentication: %v", err)
@@ -155,6 +161,10 @@ func main() {
 	dataObjectStore, _ := directoryLister.(objectstore.DataSpaceStore)
 	workspaceSnapshotStore, _ := directoryLister.(objectstore.WorkspaceSnapshotStore)
 	jobOptions := api.Options{BootstrapTenant: cfg.BootstrapAdminTenant, AllowAnonymous: cfg.DemoMode, Logs: logs, Metrics: metrics, Experiments: experiments, ImageAllowlist: cfg.RayImageAllowlist, GitAllowlist: cfg.GitAllowlist, Workspaces: repository, Kubernetes: kubeClient, WorkspaceImage: cfg.WorkspaceImage, RayVersion: cfg.RayVersion, ServiceAccount: cfg.RayJobServiceAccount, ImagePullSecrets: cfg.ImagePullSecrets, PlatformNamespace: runtimeNamespace(), IDCClaim: cfg.IDCExistingClaim, IDCMountPath: cfg.IDCMountPath, KueueClusterQueue: cfg.KueueClusterQueue, Admin: repository, GPUAllocations: repository, Quota: repository, Memberships: repository, WorkspacePepper: []byte(cfg.PATPepper), TrainingNodeSelector: cfg.TrainingNodeSelector, Images: repository, GitCredentials: repository, StorageAssets: repository, Datasets: repository, DatasetPublications: datasetPublicationManager, DatasetInternalPrefix: cfg.DatasetInternalPrefix, DatasetVersioningEnabled: cfg.DatasetVersioningEnabled, RayDataStreamingEnabled: cfg.RayDataStreamingEnabled, DataSpaces: repository, DataSpacesEnabled: cfg.DataSpacesEnabled, DataSpacesFSXAttributes: cfg.DataSpacesFSXAttributes, DataSpacesMountCapacity: cfg.DataSpacesMountCapacity, DataSpacesPublicRoot: cfg.DataSpacesPublicRoot, IDCDataSpacesEnabled: cfg.IDCDataSpacesEnabled, IDCDataSpacesMountCapacity: cfg.IDCDataSpacesMountCapacity, IDCDataSpaceSources: idcDataSpaceSources(cfg), DirectoryLister: directoryLister, DirectoryInitializer: directoryInitializer, DataObjectStore: dataObjectStore, WorkspaceSnapshotStore: workspaceSnapshotStore, WorkspaceSnapshots: repository, IDCDataSyncCallbacks: idcSyncCallbacks, IDCDataSyncCallbackKey: idcSyncCallbackKey, IDCDataSyncManager: idcSyncManager, ArtifactLister: artifactLister, ArtifactReader: artifactReader, LocalCache: api.LocalCachePolicy{Enabled: cfg.LocalCacheEnabled, AllowedSizes: cfg.LocalCacheAllowedSizes, DefaultSize: cfg.LocalCacheSize, MaxSize: cfg.LocalCacheMaxSize, MountPath: cfg.LocalCacheMountPathData1, MountPaths: []string{cfg.LocalCacheMountPathData1, cfg.LocalCacheMountPathData2}}, RuntimePolicy: runtimecatalog.NewPolicy(cfg.RayTrainManagedEnabled, cfg.RayTrainCanaryEnabled, cfg.RayTrainManagedTenants, cfg.RayTrainCanaryTenants), TenantScheduling: repository, PreemptionEnabled: cfg.KueuePreemptionEnabled, MLflowDashboardEnabled: cfg.MLflowDashboardEnabled, MLflowDashboardStore: repository, MLflowTrackingURL: cfg.MLflowTrackingURL, MLflowPublicOrigin: cfg.MLflowPublicOrigin, MLflowDashboardPepper: []byte(cfg.PATPepper), MLflowDashboardSessionTTL: time.Duration(cfg.MLflowDashboardSessionHours) * time.Hour}
+	jobOptions.Models = modelStore
+	if modelSnapshots != nil {
+		jobOptions.ModelSnapshots = modelSnapshots
+	}
 	if mlflowClient != nil {
 		trackingStore := repositories.NewMLflowTrackingStore(database)
 		integrationStore := repositories.NewMLflowIntegrationStore(repository)
@@ -182,6 +192,11 @@ func main() {
 	platformNamespace := runtimeNamespace()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if modelSnapshots != nil {
+		// Database leases fence each snapshot across backend replicas; this loop
+		// does not create Kubernetes workloads or touch the training controller.
+		go modelSnapshots.Run(ctx)
+	}
 	if kubeClient != nil {
 		startTrainingCapacityObserver(ctx, kubeClient, cfg)
 	}
@@ -353,6 +368,7 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	jobs.RegisterCheckpointRoutes(v1)
 	jobs.RegisterImageReadRoutes(v1)
 	jobs.RegisterHelpReadRoutes(v1)
+	jobs.RegisterModelReadRoutes(v1)
 	if cfg.DatasetVersioningEnabled {
 		jobs.RegisterDatasetReadRoutes(v1)
 	}
@@ -382,6 +398,7 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	jobs.RegisterIDCSyncManagementRoutes(oidcOnly)
 	jobs.RegisterImageManagementRoutes(interactive)
 	jobs.RegisterHelpManagementRoutes(interactive)
+	jobs.RegisterModelManagementRoutes(interactive)
 	jobs.RegisterStorageAssetRoutes(interactive)
 	if cfg.DatasetVersioningEnabled {
 		jobs.RegisterDatasetManagementRoutes(interactive)
