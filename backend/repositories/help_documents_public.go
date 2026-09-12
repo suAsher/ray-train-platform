@@ -11,7 +11,7 @@ import (
 const platformSeedActor = "platform-seed"
 
 var platformSeedHelpIDs = map[string]bool{
-	"access":                                  true,
+	"access":                                 true,
 	"admin-node-onboarding":                  true,
 	"admin-team-retirement":                  true,
 	"artifacts":                              true,

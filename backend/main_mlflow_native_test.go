@@ -18,7 +18,9 @@ import (
 	"ray-train-platform-backend/repositories"
 )
 
-type nativeMLflowAuditStore struct{ events []repositories.MLflowAuditEvent }
+type nativeMLflowAuditStore struct {
+	events []repositories.MLflowAuditEvent
+}
 
 func (*nativeMLflowAuditStore) CreateMLflowDashboardTicket(context.Context, repositories.MLflowDashboardTicketRecord) error {
 	return nil
@@ -100,7 +102,12 @@ func TestNativeMLflowRegisteredRoutesShareUpstreamExperimentsRunsRegistryAndArti
 }
 
 func TestNativeMLflowRegisteredRoutesRequireExplicitPersonalScope(t *testing.T) {
-	for _, tc := range []struct{ name string; pat *mainDatasetPATVerifier; bearer string; want int }{
+	for _, tc := range []struct {
+		name   string
+		pat    *mainDatasetPATVerifier
+		bearer string
+		want   int
+	}{
 		{"anonymous", nil, "", 401},
 		{"ordinary PAT", nativeMLflowPAT("experiments:read", "experiments:write", "mlflow:write"), "rpt_ordinary", 403},
 		{"cookie session", nil, "rls_session", 403},

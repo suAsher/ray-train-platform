@@ -200,6 +200,6 @@ func rewriteMLflowNativeLocation(response *http.Response, target *url.URL) error
 	if !validMLflowNativePath(path) || hasMLflowNativeCredentialQuery(resolved.Query()) {
 		return fmt.Errorf("invalid MLflow redirect path")
 	}
-	response.Header.Set("Location", (&url.URL{Path: mlflowNativeBasePath+path, RawQuery: resolved.RawQuery}).String())
+	response.Header.Set("Location", (&url.URL{Path: mlflowNativeBasePath + path, RawQuery: resolved.RawQuery}).String())
 	return nil
 }
