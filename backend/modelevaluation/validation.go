@@ -49,6 +49,9 @@ func validateEvaluatorCodeSource(e Evaluator) error {
 		if e.GitURL != "" || e.GitCommit != "" {
 			return invalid("evaluator code archive cannot include a Git source")
 		}
+		if len(e.EntryPoint) < 2 || e.EntryPoint[0] != "python" {
+			return invalid("uploaded evaluator must directly use python file.py or python -m module")
+		}
 		return ValidateCodeSnapshot(*e.Code)
 	}
 	gitURL, err := url.Parse(e.GitURL)
