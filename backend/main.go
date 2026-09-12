@@ -346,6 +346,7 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	protected.Use(jobs.TenantWriteGuard(), api.CLICompatibilityGuard(cfg.SPKRayjobMinimumVersion))
 	v1 := protected.Group("/api/v1")
 	jobs.RegisterSessionRoutes(v1)
+	jobs.RegisterMLflowNativeRoutes(v1)
 	jobs.RegisterTrainingRoutes(v1)
 	jobs.RegisterMLflowSDKRoutes(v1)
 	jobs.RegisterMLflowIntegrationRoutes(v1)

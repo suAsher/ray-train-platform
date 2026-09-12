@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"ray-train-platform-backend/domain"
+	"strings"
 	"testing"
 )
 
@@ -128,6 +129,84 @@ func TestHelpSeedRefreshesOnlyUneditedPlatformDocuments(t *testing.T) {
 	adminItems, err := r.ListHelpDocuments(ctx, true)
 	if err != nil || len(adminItems) != 1 || adminItems[0].Markdown != "administrator draft" || adminItems[0].Version != custom.Version {
 		t.Fatalf("seed overwrote administrator draft: %+v %v", adminItems, err)
+	}
+}
+
+func TestPublicHelpDocumentsUseSummariesAndKeepCustomPublicDocs(t *testing.T) {
+	r := helpRepo(t)
+	ctx := context.Background()
+	seed := []domain.HelpDocument{
+		{ID: "quickstart", Title: "第一次跑通", Category: "01 开始使用", Markdown: "old quickstart", SortOrder: 10},
+		{ID: "code", Title: "代码怎么进来", Category: "02 准备代码和数据", Markdown: "old code", SortOrder: 110},
+		{ID: "mlflow-api-with-pat", Title: "API：读取或补充已有训练记录", Category: "04 结果与MLflow", Markdown: "old platform run id docs", SortOrder: 350},
+		{ID: "admin-node-onboarding", Title: "管理员：新增 GPU 节点与缓存验收", Category: "06 进阶与管理员", Markdown: "kubectl node admin docs", SortOrder: 610},
+	}
+	if err := r.SeedHelpDocuments(ctx, seed); err != nil {
+		t.Fatal(err)
+	}
+	custom, err := r.CreateHelpDocument(ctx, domain.HelpDocument{ID: "team-faq", Title: "团队 FAQ", Category: "07 团队补充", Markdown: "custom answer", SortOrder: 900}, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = r.ChangeHelpDocument(ctx, custom.ID, custom.Version, "publish", 0, nil, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	override, err := r.CreateHelpDocument(ctx, domain.HelpDocument{ID: "mlflow", Title: "团队 MLflow 补充", Category: "07 团队补充", Markdown: "custom mlflow override", SortOrder: 901}, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = r.ChangeHelpDocument(ctx, override.ID, override.Version, "publish", 0, nil, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	adminOnly, err := r.CreateHelpDocument(ctx, domain.HelpDocument{ID: "team-admin-runbook", Title: "团队管理员 Runbook", Category: "06 进阶与管理员", Markdown: "custom admin source", SortOrder: 902}, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = r.ChangeHelpDocument(ctx, adminOnly.ID, adminOnly.Version, "publish", 0, nil, "admin"); err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := r.ListHelpDocuments(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := make(map[string]domain.HelpDocument, len(items))
+	for _, item := range items {
+		byID[item.ID] = item
+	}
+	for _, id := range []string{"quickstart", "account-api", "data", "training-guide", "debug", "mlflow", "troubleshooting", "team-faq"} {
+		if _, ok := byID[id]; !ok {
+			t.Fatalf("public help is missing %s: %+v", id, items)
+		}
+	}
+	for _, oldID := range []string{"code", "mlflow-api-with-pat", "admin-node-onboarding", "team-admin-runbook"} {
+		if _, ok := byID[oldID]; ok {
+			t.Fatalf("old seed document %s leaked into public help: %+v", oldID, items)
+		}
+	}
+	if byID["team-faq"].Markdown != "custom answer" {
+		t.Fatalf("custom published document was not preserved: %+v", byID["team-faq"])
+	}
+	if byID["mlflow"].Markdown != "custom mlflow override" {
+		t.Fatalf("custom document did not override generated guide ID: %+v", byID["mlflow"])
+	}
+	mlflow := byID["mlflow"].Markdown
+	for _, marker := range []string{"custom mlflow override"} {
+		if !strings.Contains(mlflow, marker) {
+			t.Fatalf("public MLflow guide is missing %q", marker)
+		}
+	}
+
+	adminItems, err := r.ListHelpDocuments(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminByID := make(map[string]domain.HelpDocument, len(adminItems))
+	for _, item := range adminItems {
+		adminByID[item.ID] = item
+	}
+	if adminByID["admin-node-onboarding"].Markdown != "kubectl node admin docs" || adminByID["mlflow-api-with-pat"].Markdown != "old platform run id docs" {
+		t.Fatalf("admin source documents were not preserved: %+v", adminItems)
 	}
 }
 

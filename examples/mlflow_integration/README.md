@@ -1,4 +1,6 @@
-# RayTrain MLflow REST 客户端
+# RayTrain MLflow 接入示例
+
+**要查询和写入全部共享 MLflow，请先看[对接交付单](../../docs/MLFLOW_PARTNER_HANDOFF.md)**：标准 SDK 使用 `/api/v1/mlflow-native` 和显式 `mlflow:full` PAT，直接使用原生 Experiment / Run ID。下文的标准库脚本服务可选的平台受限接口，并不是完整 MLflow 的必经入口；原生程序入口的发布状态见交付单对应验收记录。
 
 本页 `client.py` 继续服务已有训练 Job/Run。新增独立外部实验请参阅 [外部实验接口与 SDK 子集](../../docs/MLFLOW_EXTERNAL_TRACKING_API.md) 和本目录 `external_tracking.py`；它们使用显式 `experiments:read/write`，不会扩展已有训练令牌。
 

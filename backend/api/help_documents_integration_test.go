@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/gin-gonic/gin"
@@ -10,12 +11,13 @@ import (
 	"path/filepath"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
+	"ray-train-platform-backend/helpdocs"
 	"ray-train-platform-backend/repositories"
 	"strings"
 	"testing"
 )
 
-func helpIntegrationRouter(t *testing.T) *gin.Engine {
+func helpIntegrationRouterAndStore(t *testing.T) (*gin.Engine, *repositories.GormRepository) {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "help.db")), &gorm.Config{})
 	if err != nil {
@@ -26,13 +28,20 @@ func helpIntegrationRouter(t *testing.T) *gin.Engine {
 	}
 	sqlDB, _ := db.DB()
 	t.Cleanup(func() { sqlDB.Close() })
-	h := NewHandler(repositories.NewGormRepository(db), Options{})
+	store := repositories.NewGormRepository(db)
+	h := NewHandler(store, Options{})
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
 		c.Set("ray-platform-principal", auth.Principal{Subject: "admin", TenantID: "team", Roles: []string{domain.RoleSuperAdmin}, AuthType: auth.AuthTypeLocal})
 	})
 	h.RegisterHelpReadRoutes(router.Group("/api/v1"))
 	h.RegisterHelpManagementRoutes(router.Group("/api/v1"))
+	return router, store
+}
+
+func helpIntegrationRouter(t *testing.T) *gin.Engine {
+	t.Helper()
+	router, _ := helpIntegrationRouterAndStore(t)
 	return router
 }
 func helpRequest(t *testing.T, r *gin.Engine, method, path, body string, want int) json.RawMessage {
@@ -87,6 +96,39 @@ func TestHelpAPIRealStoreLifecycle(t *testing.T) {
 	helpRequest(t, r, "GET", base+"/missing/history", "", 404)
 	helpRequest(t, r, "POST", base+"/faq/restore", `{"expectedVersion":5,"restoreVersion":99}`, 404)
 }
+
+func TestHelpAPIPublicRouteReturnsUserGuidesNotAdminSourceDocs(t *testing.T) {
+	r, store := helpIntegrationRouterAndStore(t)
+	seed, err := helpdocs.Documents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.SeedHelpDocuments(context.Background(), seed); err != nil {
+		t.Fatal(err)
+	}
+	custom := `{"id":"team-faq","title":"团队 FAQ","category":"07 团队补充","markdown":"custom answer","sortOrder":900}`
+	helpRequest(t, r, "POST", "admin/help/documents", custom, 201)
+	helpRequest(t, r, "POST", "admin/help/documents/team-faq/publish", `{"expectedVersion":1}`, 200)
+
+	data := helpRequest(t, r, "GET", "help/documents", "", 200)
+	body := string(data)
+	for _, marker := range []string{"快速开始：从登录到第一条训练任务", "实验与 MLflow 接入", "https://raytrain.wellspiking.ai/api/v1/mlflow-native", "custom answer"} {
+		if !strings.Contains(body, marker) {
+			t.Fatalf("public help response is missing %q: %s", marker, body)
+		}
+	}
+	for _, forbidden := range []string{"管理员：新增 GPU 节点与缓存验收", "API：读取或补充已有训练记录", `"id":"mlflow-api-with-pat"`} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("public help response leaked %q: %s", forbidden, body)
+		}
+	}
+
+	adminData := helpRequest(t, r, "GET", "admin/help/documents", "", 200)
+	if !strings.Contains(string(adminData), "管理员：新增 GPU 节点与缓存验收") || !strings.Contains(string(adminData), `"id":"mlflow-api-with-pat"`) {
+		t.Fatalf("admin help response lost source docs: %s", string(adminData))
+	}
+}
+
 func TestHelpAPIInputBounds(t *testing.T) {
 	r := helpIntegrationRouter(t)
 	base := "admin/help/documents"

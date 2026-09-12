@@ -54,6 +54,7 @@ type MLflowAuditAction string
 
 const (
 	MLflowAuditDashboardProxy           MLflowAuditAction = "mlflow.dashboard.proxy"
+	MLflowAuditNativeProxy              MLflowAuditAction = "mlflow.native.proxy"
 	MLflowAuditRunLogBatch              MLflowAuditAction = "mlflow.run.log_batch"
 	MLflowAuditTrackingExperimentCreate MLflowAuditAction = "mlflow.tracking.experiment.create"
 	MLflowAuditTrackingRunCreate        MLflowAuditAction = "mlflow.tracking.run.create"
@@ -209,7 +210,7 @@ func (r *GormRepository) CreateMLflowAuditLog(ctx context.Context, event MLflowA
 
 func isAllowedMLflowAuditAction(action MLflowAuditAction) bool {
 	switch action {
-	case MLflowAuditDashboardProxy,
+	case MLflowAuditDashboardProxy, MLflowAuditNativeProxy,
 		MLflowAuditRunLogBatch,
 		MLflowAuditTrackingExperimentCreate,
 		MLflowAuditTrackingRunCreate,

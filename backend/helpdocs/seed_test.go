@@ -54,6 +54,62 @@ func TestEmbeddedDocumentsAreValidStableAndIndependent(t *testing.T) {
 	}
 }
 
+func TestPublicGuidesAreCondensedUserFacingRunbooks(t *testing.T) {
+	docs := PublicGuides()
+	if len(docs) != 7 {
+		t.Fatalf("got %d public guides", len(docs))
+	}
+	seen := map[string]bool{}
+	body := strings.Builder{}
+	for _, doc := range docs {
+		if err := doc.Validate(); err != nil {
+			t.Fatalf("%s: %v", doc.ID, err)
+		}
+		if seen[doc.ID] {
+			t.Fatal("duplicate", doc.ID)
+		}
+		seen[doc.ID] = true
+		if strings.HasPrefix(doc.ID, "admin-") || doc.Category == "06 进阶与管理员" {
+			t.Fatalf("admin guide leaked into public set: %+v", doc)
+		}
+		body.WriteString(doc.Title)
+		body.WriteString("\n")
+		body.WriteString(doc.Markdown)
+		body.WriteString("\n")
+	}
+	all := body.String()
+	for _, forbidden := range []string{"spk-rayjob login https://", "旧主题", "管理员："} {
+		if strings.Contains(all, forbidden) {
+			t.Fatalf("public guides contain non-user-facing or invalid text %q", forbidden)
+		}
+	}
+	for _, marker := range []string{
+		"我的训练任务",
+		"我的 GPU 配额",
+		"数据与存储",
+		"版本化数据集",
+		"交互式调试",
+		"export PATH=\"$HOME/.local/bin:$PATH\"",
+		"spk-rayjob login --server 'https://raytrain.wellspiking.ai' --token-stdin",
+		"spk-rayjob submit --watch",
+		"--data-mode mount",
+		"--workers 2 --gpus-per-worker 2",
+		"--data-mode streaming",
+		"--resume-from-job JOB_ID",
+		"MLFLOW_TRACKING_URI='https://raytrain.wellspiking.ai/api/v1/mlflow-native'",
+		"mlflow==3.14.0",
+		"mlflow:full",
+		"mlflow.log_metric",
+		"mlflow.log_artifact",
+		"Job ID 不等于 Run ID",
+		"/api/v1/mlflow-tracking",
+	} {
+		if !strings.Contains(all, marker) {
+			t.Fatalf("public guides are missing %q", marker)
+		}
+	}
+}
+
 func TestHelpCatalogPreservesPublishedTopicsAndReadingOrder(t *testing.T) {
 	docs, err := Documents()
 	if err != nil {

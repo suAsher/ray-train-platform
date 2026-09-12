@@ -66,6 +66,9 @@ type mlflowTrackingCapabilities struct {
 	Limits                   mlflowTrackingCapabilityLimits   `json:"limits"`
 	Supports                 mlflowTrackingCapabilitySupports `json:"supports"`
 	IntegrationsAvailable    bool                             `json:"integrationsAvailable"`
+	NativeAvailable          bool                             `json:"nativeAvailable"`
+	NativeBasePath           string                           `json:"nativeBasePath,omitempty"`
+	NativeClientVersion      string                           `json:"nativeClientVersion"`
 	Artifacts                mlflowArtifactCapabilities       `json:"artifacts"`
 }
 
@@ -108,11 +111,13 @@ type mlflowTrackingCapabilitySupports struct {
 
 func (h *Handler) registerMLflowTrackingRoutes(group *gin.RouterGroup) {
 	limiter := newFixedWindowSourceArtifactLimiter(60, 120, 10000, time.Now)
-	base := group.Group("/mlflow", auth.RequireScopes(domain.PATScopeExperimentsRead), h.mlflowTrackingGuard(limiter, false))
-	base.GET("/capabilities", h.getMLflowTrackingCapabilities)
-	base.GET("/experiments", h.listMLflowTrackingExperiments)
-	base.GET("/experiments/:experimentId/runs", h.listMLflowTrackingRuns)
-	base.GET("/runs/:runId", h.getMLflowTrackingRun)
+	capabilities := group.Group("/mlflow", h.mlflowTrackingCapabilitiesGuard(limiter))
+	capabilities.GET("/capabilities", h.getMLflowTrackingCapabilities)
+
+	read := group.Group("/mlflow", auth.RequireScopes(domain.PATScopeExperimentsRead), h.mlflowTrackingGuard(limiter, false))
+	read.GET("/experiments", h.listMLflowTrackingExperiments)
+	read.GET("/experiments/:experimentId/runs", h.listMLflowTrackingRuns)
+	read.GET("/runs/:runId", h.getMLflowTrackingRun)
 
 	write := group.Group("/mlflow", auth.RequireScopes(domain.PATScopeExperimentsRead, domain.PATScopeExperimentsWrite), h.mlflowTrackingGuard(limiter, true))
 	write.POST("/experiments", h.createMLflowTrackingExperiment)
@@ -120,6 +125,38 @@ func (h *Handler) registerMLflowTrackingRoutes(group *gin.RouterGroup) {
 	write.POST("/runs/:runId/log-batch", h.logMLflowTrackingBatch)
 	write.POST("/runs/:runId/finish", h.finishMLflowTrackingRun)
 	h.registerMLflowArtifactRoutes(group)
+}
+
+func (h *Handler) mlflowTrackingCapabilitiesGuard(limiter SourceArtifactLimiter) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		principal, ok := auth.PrincipalFromGin(c)
+		if !ok {
+			h.writeError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "authentication is required")
+			c.Abort()
+			return
+		}
+		if principal.AuthType == auth.AuthTypePAT && !principal.HasScope(domain.PATScopeExperimentsRead) && !principal.HasScope(domain.PATScopeMLflowFull) {
+			h.writeError(c, http.StatusForbidden, "INSUFFICIENT_SCOPE", "the token does not have the required scope")
+			c.Abort()
+			return
+		}
+		if !auth.IsInteractiveAuthType(principal.AuthType) && principal.AuthType != auth.AuthTypeDemo && principal.AuthType != auth.AuthTypePAT {
+			h.writeError(c, http.StatusForbidden, "FORBIDDEN", "forbidden")
+			c.Abort()
+			return
+		}
+		if allowed, _ := limiter.Allow(principal.TenantID+"\x00"+principal.Subject, sourceArtifactActionComplete); !allowed {
+			c.Header("Retry-After", "60")
+			h.writeError(c, http.StatusTooManyRequests, "RATE_LIMITED", "MLflow tracking request rate limit exceeded")
+			c.Abort()
+			return
+		}
+		c.Header("Cache-Control", "no-store")
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+		defer cancel()
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	}
 }
 
 func (h *Handler) mlflowTrackingGuard(limiter SourceArtifactLimiter, write bool) gin.HandlerFunc {
@@ -161,10 +198,15 @@ func (h *Handler) getMLflowTrackingCapabilities(c *gin.Context) {
 	if sdkCompatible {
 		sdkBasePath = "/api/v1/mlflow-tracking"
 	}
+	nativeBasePath := ""
+	if h.mlflowNativeRegistered {
+		nativeBasePath = mlflowNativeBasePath
+	}
+	canRead := available && (principal.AuthType != auth.AuthTypePAT || principal.HasScope(domain.PATScopeExperimentsRead))
 	h.writeSuccess(c, http.StatusOK, mlflowTrackingCapabilities{
 		Available:                available,
-		Read:                     available,
-		Write:                    available && principal.AuthType == auth.AuthTypePAT && principal.HasScope(domain.PATScopeExperimentsWrite),
+		Read:                     canRead,
+		Write:                    canRead && principal.AuthType == auth.AuthTypePAT && principal.HasScope(domain.PATScopeExperimentsWrite),
 		SDKCompatible:            sdkCompatible,
 		SDKBasePath:              sdkBasePath,
 		SDKProtocol:              "tracking-subset",
@@ -172,6 +214,9 @@ func (h *Handler) getMLflowTrackingCapabilities(c *gin.Context) {
 		SDKMethods:               []string{"get_run", "log_batch", "log_metric", "log_param", "set_tag", "set_terminated"},
 		SDKRequiresPrecreatedRun: true,
 		IntegrationsAvailable:    available && h.mlflowIntegrations != nil,
+		NativeAvailable:          h.mlflowNativeRegistered,
+		NativeBasePath:           nativeBasePath,
+		NativeClientVersion:      "3.14.0",
 		Artifacts:                mlflowArtifactCapabilities{Available: available && h.trackingArtifacts != nil, Protocol: "platform-rest-parts-v1", ReadScope: domain.PATScopeArtifactsRead, WriteScope: domain.PATScopeArtifactsWrite, PartSizeBytes: trackingartifacts.PartSizeBytes, MaxFileBytes: trackingartifacts.MaxFileBytes, OwnerBudgetBytes: trackingartifacts.OwnerBudgetBytes, MaxPending: trackingartifacts.MaxPending, UploadLifetimeHours: 24},
 		Scopes: mlflowTrackingCapabilityScopes{
 			Read:  domain.PATScopeExperimentsRead,

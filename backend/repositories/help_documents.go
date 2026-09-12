@@ -54,6 +54,9 @@ func (r *GormRepository) ListHelpDocuments(ctx context.Context, admin bool) ([]d
 		}
 		items = append(items, d)
 	}
+	if !admin {
+		items = publicHelpDocuments(items)
+	}
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].SortOrder != items[j].SortOrder {
 			return items[i].SortOrder < items[j].SortOrder

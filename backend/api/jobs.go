@@ -107,6 +107,7 @@ type Handler struct {
 	mlflowDashboardEnabled   bool
 	mlflowDashboardStore     MLflowDashboardStore
 	mlflowTrackingURL        string
+	mlflowNativeRegistered   bool
 	mlflowPublicOrigin       string
 	mlflowDashboardPepper    []byte
 	mlflowDashboardTTL       time.Duration
