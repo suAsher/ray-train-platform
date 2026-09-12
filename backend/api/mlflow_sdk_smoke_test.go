@@ -23,38 +23,65 @@ import (
 // This opt-in test runs the real pinned SDK against the platform service and an
 // isolated MLflow server. Never point its explicit URL at production MLflow.
 func TestMLflowSDK314Integration(t *testing.T) {
-	upstream:=os.Getenv("MLFLOW_TRACKING_SMOKE_URL")
-	python:=os.Getenv("MLFLOW_SDK_SMOKE_PYTHON")
-	if upstream==""||python=="" {t.Skip("isolated MLflow and pinned Python SDK required")}
-	parsed,parseErr:=url.Parse(upstream)
-	if parseErr!=nil || parsed.Scheme!="http" || parsed.User!=nil || parsed.RawQuery!="" || parsed.Fragment!="" || (parsed.Hostname()!="tracking-mlflow" && parsed.Hostname()!="127.0.0.1" && parsed.Hostname()!="localhost") {t.Fatal("SDK smoke requires an explicitly isolated HTTP MLflow URL")}
-	database,err:=gorm.Open(sqlite.Open(filepath.Join(t.TempDir(),"tracking.db")),&gorm.Config{})
-	if err!=nil {t.Fatal(err)}
-	if err=database.AutoMigrate(&repositories.MLflowTrackingExperimentRecord{},&repositories.MLflowTrackingRunRecord{});err!=nil {t.Fatal(err)}
-	key:=make([]byte,32);if _,err=rand.Read(key);err!=nil {t.Fatal(err)}
-	service:=mlflowtracking.New(repositories.NewMLflowTrackingStore(database),&observability.MLflowClient{BaseURL:upstream,ProvenanceKey:key},mlflowtracking.Options{CursorKey:key})
-	actor:=mlflowtracking.Actor{TenantID:"sdk-smoke",UserID:"sdk-owner"}
-	idempotency:=hex.EncodeToString(key[:16])
-	experiment,err:=service.CreateExperiment(context.Background(),actor,idempotency,"sdk-smoke")
-	if err!=nil {t.Fatal(err)}
-	run,err:=service.CreateRun(context.Background(),actor,experiment.ID,idempotency,"sdk-roundtrip")
-	if err!=nil {t.Fatal(err)}
-	p:=trackingPrincipal("experiments:read","experiments:write");p.TenantID=actor.TenantID;p.Subject=actor.UserID
-	gin.SetMode(gin.TestMode);router:=gin.New()
-	router.Use(func(c *gin.Context){
-		if c.GetHeader("Authorization")!="Bearer "+hex.EncodeToString(key) {c.AbortWithStatus(401);return}
-		c.Set("ray-platform-principal",p);c.Next()
+	upstream := os.Getenv("MLFLOW_TRACKING_SMOKE_URL")
+	python := os.Getenv("MLFLOW_SDK_SMOKE_PYTHON")
+	if upstream == "" || python == "" {
+		t.Skip("isolated MLflow and pinned Python SDK required")
+	}
+	parsed, parseErr := url.Parse(upstream)
+	if parseErr != nil || parsed.Scheme != "http" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Hostname() != "tracking-mlflow" && parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost") {
+		t.Fatal("SDK smoke requires an explicitly isolated HTTP MLflow URL")
+	}
+	database, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "tracking.db")), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = database.AutoMigrate(&repositories.MLflowTrackingExperimentRecord{}, &repositories.MLflowTrackingRunRecord{}); err != nil {
+		t.Fatal(err)
+	}
+	key := make([]byte, 32)
+	if _, err = rand.Read(key); err != nil {
+		t.Fatal(err)
+	}
+	service := mlflowtracking.New(repositories.NewMLflowTrackingStore(database), &observability.MLflowClient{BaseURL: upstream, ProvenanceKey: key}, mlflowtracking.Options{CursorKey: key})
+	actor := mlflowtracking.Actor{TenantID: "sdk-smoke", UserID: "sdk-owner"}
+	idempotency := hex.EncodeToString(key[:16])
+	experiment, err := service.CreateExperiment(context.Background(), actor, idempotency, "sdk-smoke")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := service.CreateRun(context.Background(), actor, experiment.ID, idempotency, "sdk-roundtrip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := trackingPrincipal("experiments:read", "experiments:write")
+	p.TenantID = actor.TenantID
+	p.Subject = actor.UserID
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		if c.GetHeader("Authorization") != "Bearer "+hex.EncodeToString(key) {
+			c.AbortWithStatus(401)
+			return
+		}
+		c.Set("ray-platform-principal", p)
+		c.Next()
 	})
-	h:=NewHandler(&fakeJobRepository{},Options{MLflowTracking:service,MLflowDashboardStore:newFakeMLflowDashboardStore()})
+	h := NewHandler(&fakeJobRepository{}, Options{MLflowTracking: service, MLflowDashboardStore: newFakeMLflowDashboardStore()})
 	h.RegisterMLflowSDKRoutes(router.Group("/api/v1"))
-	server:=httptest.NewServer(router);defer server.Close()
-	cmd:=exec.Command(python,"-c",mlflowSDKSmokePython,server.URL+"/api/v1/mlflow-tracking",run.ID)
-	cmd.Env=append(os.Environ(),"MLFLOW_TRACKING_TOKEN="+hex.EncodeToString(key),"MLFLOW_ENABLE_ASYNC_LOGGING=false","MLFLOW_HTTP_REQUEST_MAX_RETRIES=0","MLFLOW_ENABLE_TELEMETRY=false")
-	output,err:=cmd.CombinedOutput()
-	if err!=nil {t.Fatalf("SDK failed: %v %s",err,strings.ReplaceAll(string(output),hex.EncodeToString(key),"[redacted]"))}
+	server := httptest.NewServer(router)
+	defer server.Close()
+	cmd := exec.Command(python, "-c", mlflowSDKSmokePython, server.URL+"/api/v1/mlflow-tracking", run.ID)
+	cmd.Env = append(os.Environ(), "MLFLOW_TRACKING_TOKEN="+hex.EncodeToString(key), "MLFLOW_ENABLE_ASYNC_LOGGING=false", "MLFLOW_HTTP_REQUEST_MAX_RETRIES=0", "MLFLOW_ENABLE_TELEMETRY=false")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("SDK failed: %v %s", err, strings.ReplaceAll(string(output), hex.EncodeToString(key), "[redacted]"))
+	}
 	t.Log(strings.TrimSpace(string(output)))
-	detail,err:=service.GetRun(context.Background(),actor,run.ID)
-	if err!=nil||detail.Run.State!="FINISHED"||detail.Params["epochs"]!="3"||detail.Latest["loss"]!=0.25 {t.Fatalf("roundtrip mismatch: %+v %v",detail,err)}
+	detail, err := service.GetRun(context.Background(), actor, run.ID)
+	if err != nil || detail.Run.State != "FINISHED" || detail.Params["epochs"] != "3" || detail.Latest["loss"] != 0.25 {
+		t.Fatalf("roundtrip mismatch: %+v %v", detail, err)
+	}
 }
 
 const mlflowSDKSmokePython = `
