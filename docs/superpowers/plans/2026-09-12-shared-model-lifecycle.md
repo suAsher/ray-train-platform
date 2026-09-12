@@ -10,14 +10,14 @@
 
 ## 阶段一：共享模型版本（本次先交付完整操作链）
 
-- [ ] `backend/modellifecycle/`：领域合同、输入验证、异步快照状态机与完整性校验。状态为 PENDING/COPYING/READY/FAILED；状态与版本评价/审批状态分离。
-- [ ] `backend/repositories/model_lifecycle.go` 与 migration 0049：模型、版本、操作记录；共享查询、所有者/管理员修改、乐观版本检查、复制租约、额度限制。
-- [ ] `backend/objectstore/model_snapshots.go`：仅服务端生成 ID 的独立不可变对象；8 MiB 分片、单文件上限20 GiB、流式计算文件和分片 SHA-256；不删除/改写源文件。
-- [ ] `backend/api/model_lifecycle*.go`：读共享目录/详情/下载；交互用户创建模型、从本人任务登记版本、编辑说明、归档/恢复。严格路径约束；仅允许明确权重格式；仅接受终态任务，避免读取仍在写入的权重。
-- [ ] `backend/main.go`：注入服务与后台复制任务；不修改既有训练 reconciler、运行时、调度和配额。
-- [ ] Portal `Experiments/Models/` 与 `components/JobArtifactBrowser.vue`：模型页、版本详情、来源、共享告知、本人管理、任务权重登记入口。加载失败可重试，状态由后端返回，未登记元数据明确显示。
-- [ ] 使用说明增加对应问题入口，保留既有内容。
-- [ ] 构建机单元/API/真实 PostgreSQL 新装升级重复执行/快照故障/Portal 门禁与 E2E；独立规格和质量审阅。
+- [x] `backend/modellifecycle/`：领域合同、输入验证、异步快照状态机与完整性校验。状态为 PENDING/COPYING/READY/FAILED；状态与版本评价/审批状态分离。
+- [x] `backend/repositories/model_lifecycle.go` 与 migration 0049：模型、版本、操作记录；共享查询、所有者/管理员修改、乐观版本检查、复制租约、额度限制。
+- [x] `backend/objectstore/model_snapshots.go`：仅服务端生成 ID 的独立不可变对象；8 MiB 分片、单文件上限20 GiB、流式计算文件和分片 SHA-256；不删除/改写源文件。
+- [x] `backend/api/model_lifecycle*.go`：读共享目录/详情/下载；交互用户创建模型、从本人任务登记版本、编辑说明、归档/恢复。严格路径约束；仅允许明确权重格式；仅接受终态任务，避免读取仍在写入的权重。
+- [x] `backend/main.go`：注入服务与后台复制任务；不修改既有训练 reconciler、运行时、调度和配额。
+- [x] Portal `Experiments/Models/` 与 `components/JobArtifactBrowser.vue`：模型页、版本详情、来源、共享告知、本人管理、任务权重登记入口。加载失败可重试，状态由后端返回，未登记元数据明确显示。
+- [x] 使用说明增加对应问题入口，保留既有内容。
+- [x] 构建机单元/API/真实 PostgreSQL 新装升级重复执行/快照故障/Portal 门禁与 E2E；独立规格和质量审阅。
 - [ ] 按 release skill 准备 schema 48→49 可恢复备份授权、候选验证、四端同步、只构建 backend、最小 Helm diff、Portal CI、上线验收及训练资源 UID/重启数对比。
 
 ### 第一阶段用户合同
