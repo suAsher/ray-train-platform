@@ -20,6 +20,7 @@ import (
 	"ray-train-platform-backend/httpapi"
 	"ray-train-platform-backend/k8s"
 	"ray-train-platform-backend/modellifecycle"
+	me "ray-train-platform-backend/modelevaluation"
 	"ray-train-platform-backend/objectstore"
 	"ray-train-platform-backend/observability"
 	"ray-train-platform-backend/repositories"
@@ -39,6 +40,9 @@ type globalJobReader interface {
 }
 
 type Handler struct {
+	evaluationCode me.EvaluationCodeStore
+	evaluationSourceArtifacts SourceArtifactLookup
+	evaluationCodeOperations chan struct{}
 	modelEvaluations          ModelEvaluationStore
 	modelEvaluationSubmission ModelEvaluationSubmission
 	models                    modellifecycle.Repository
@@ -141,6 +145,8 @@ type ExperimentProvider interface {
 }
 
 type Options struct {
+	EvaluationCode me.EvaluationCodeStore
+	EvaluationSourceArtifacts SourceArtifactLookup
 	ModelEvaluations          ModelEvaluationStore
 	ModelEvaluationSubmission ModelEvaluationSubmission
 	Models                    modellifecycle.Repository
@@ -306,6 +312,10 @@ func NewHandler(repository JobRepository, options Options) *Handler {
 		},
 		NewID: func() (string, error) { return handler.newID() },
 	})
+	handler.evaluationCode = options.EvaluationCode
+	handler.evaluationSourceArtifacts = options.EvaluationSourceArtifacts
+	if handler.evaluationSourceArtifacts == nil { handler.evaluationSourceArtifacts, _ = repository.(SourceArtifactLookup) }
+	handler.evaluationCodeOperations = make(chan struct{}, 4)
 	handler.modelEvaluations = options.ModelEvaluations
 	handler.modelEvaluationSubmission = options.ModelEvaluationSubmission
 	if handler.modelEvaluationSubmission == nil {

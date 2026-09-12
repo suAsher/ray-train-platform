@@ -22,7 +22,8 @@ func ComparisonFingerprint(e Evaluation) string {
 		EvaluatorID, ImageReference, ImageDigest, GitURL, GitCommit, EvaluatorSchema, Protocol, ConfigSHA256 string
 		EntryPoint                                                                                           []string
 		Resources                                                                                            domain.Resources
-	}{e.Dataset.ID, e.Dataset.VersionID, e.Dataset.ManifestSHA256, e.Dataset.SchemaVersion, e.Dataset.Split, sites, e.Dataset.SampleCount, e.Evaluator.ID, e.Evaluator.ImageReference, e.Evaluator.ImageDigest, e.Evaluator.GitURL, e.Evaluator.GitCommit, e.Evaluator.SchemaVersion, e.Evaluator.Protocol, e.ConfigSHA256, e.Evaluator.EntryPoint, e.Resources}
+		Code                                                                                                 *CodeSnapshot `json:",omitempty"`
+	}{e.Dataset.ID, e.Dataset.VersionID, e.Dataset.ManifestSHA256, e.Dataset.SchemaVersion, e.Dataset.Split, sites, e.Dataset.SampleCount, e.Evaluator.ID, e.Evaluator.ImageReference, e.Evaluator.ImageDigest, e.Evaluator.GitURL, e.Evaluator.GitCommit, e.Evaluator.SchemaVersion, e.Evaluator.Protocol, e.ConfigSHA256, e.Evaluator.EntryPoint, e.Resources, e.Evaluator.Code}
 	encoded, err := json.Marshal(setup)
 	if err != nil {
 		return ""

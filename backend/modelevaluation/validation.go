@@ -30,16 +30,8 @@ func ValidateEvaluator(e Evaluator) error {
 	if _, digest, ok := strings.Cut(e.ImageReference, "@"); ok && digest != e.ImageDigest {
 		return invalid("image reference and digest disagree")
 	}
-	gitURL, err := url.Parse(e.GitURL)
-	if err != nil || len(e.GitURL) > 2048 || gitURL.Hostname() == "" || gitURL.Path == "" || gitURL.RawQuery != "" || gitURL.Fragment != "" || strings.ContainsAny(e.GitURL, "\r\n\x00 ") || (gitURL.Scheme != "https" && gitURL.Scheme != "ssh") {
-		return invalid("evaluator git URL is invalid")
-	}
-	if gitURL.User != nil {
-		if _, password := gitURL.User.Password(); password || gitURL.Scheme != "ssh" || gitURL.User.Username() != "git" {
-			return invalid("git credentials must not be embedded")
-		}
-	}
-	if !commitPattern.MatchString(e.GitCommit) || len(e.EntryPoint) < 1 || len(e.EntryPoint) > 32 || !identifierPattern.MatchString(e.SchemaVersion) || e.Protocol != Protocol {
+	if err := validateEvaluatorCodeSource(e); err != nil { return err }
+	if len(e.EntryPoint) < 1 || len(e.EntryPoint) > 32 || !identifierPattern.MatchString(e.SchemaVersion) || e.Protocol != Protocol {
 		return invalid("evaluator execution contract is invalid")
 	}
 	for _, arg := range e.EntryPoint {
@@ -47,6 +39,22 @@ func ValidateEvaluator(e Evaluator) error {
 			return invalid("evaluator argv is invalid")
 		}
 	}
+	return nil
+}
+
+func validateEvaluatorCodeSource(e Evaluator) error {
+	if e.Code != nil {
+		if e.GitURL != "" || e.GitCommit != "" { return invalid("evaluator code archive cannot include a Git source") }
+		return ValidateCodeSnapshot(*e.Code)
+	}
+	gitURL, err := url.Parse(e.GitURL)
+	if err != nil || len(e.GitURL) > 2048 || gitURL.Hostname() == "" || gitURL.Path == "" || gitURL.RawQuery != "" || gitURL.Fragment != "" || strings.ContainsAny(e.GitURL, "\r\n\x00 ") || (gitURL.Scheme != "https" && gitURL.Scheme != "ssh") {
+		return invalid("evaluator git URL is invalid")
+	}
+	if gitURL.User != nil {
+		if _, password := gitURL.User.Password(); password || gitURL.Scheme != "ssh" || gitURL.User.Username() != "git" { return invalid("git credentials must not be embedded") }
+	}
+	if !commitPattern.MatchString(e.GitCommit) { return invalid("evaluator Git commit must be fixed") }
 	return nil
 }
 func CanonicalSites(sites []string) ([]string, error) {

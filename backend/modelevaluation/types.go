@@ -59,6 +59,7 @@ type Evaluator struct {
 	ImageDigest    string    `json:"imageDigest"`
 	GitURL         string    `json:"gitUrl"`
 	GitCommit      string    `json:"gitCommit"`
+	Code           *CodeSnapshot `json:"code,omitempty"`
 	EntryPoint     []string  `json:"entryPoint"`
 	SchemaVersion  string    `json:"schemaVersion"`
 	Protocol       string    `json:"protocol"`

@@ -26,7 +26,8 @@ type evaluationStoreFake struct {
 	cancelReservation                                                  bool
 }
 
-func (s *evaluationStoreFake) GetEvaluator(context.Context, string) (me.Evaluator, error) {
+func (s *evaluationStoreFake) GetEvaluator(_ context.Context, id string) (me.Evaluator, error) {
+	if id != s.evaluator.ID { return me.Evaluator{}, me.ErrNotFound }
 	return s.evaluator, s.err
 }
 func (s *evaluationStoreFake) ListEvaluators(context.Context, bool) ([]me.Evaluator, error) {

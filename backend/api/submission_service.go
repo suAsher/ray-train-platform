@@ -309,6 +309,12 @@ func validateEvaluationSubmissionInput(input SubmissionInput) error {
 	if !evaluationSHA256.MatchString(strings.TrimSpace(input.ExpectedDatasetManifestSHA256)) {
 		return fmt.Errorf("%w: evaluation dataset manifest must be a lowercase sha256 digest", ErrSubmissionInvalidOrigin)
 	}
+	if input.Spec.Source.Type == "evaluation-archive" {
+		if input.Spec.Source.ArtifactID == "" || !evaluationSHA256.MatchString(input.Spec.Source.ArtifactSHA256) {
+			return fmt.Errorf("%w: evaluation archive must pin its code id and SHA-256", ErrSubmissionInvalidOrigin)
+		}
+		return nil
+	}
 	if strings.TrimSpace(input.Spec.Source.Type) != "git" || !evaluationGitCommit.MatchString(strings.TrimSpace(input.Spec.Source.Commit)) {
 		return fmt.Errorf("%w: evaluation source must pin a 40 character lowercase git commit", ErrSubmissionInvalidOrigin)
 	}
@@ -945,6 +951,7 @@ func normalizeSubmissionSpec(principal auth.Principal, origin domain.SubmissionO
 	spec.ResolvedStorage = domain.ResolvedStorageMounts{}
 	spec.ResolvedDataMounts = domain.ResolvedDataSpaceMounts{}
 	spec.ResolvedDataRoots = domain.ResolvedDataSpaceRoots{}
+	spec.EvaluationRuntime = nil
 	spec.DatasetRef = domain.DatasetReference{
 		Sites:   spec.DatasetRef.Sites,
 		Dataset: strings.TrimSpace(spec.DatasetRef.Dataset),
@@ -983,7 +990,8 @@ func normalizeSubmissionSpec(principal auth.Principal, origin domain.SubmissionO
 		return domain.JobSpec{}, fmt.Errorf("%w: %v", ErrSubmissionInvalidJobSpec, err)
 	}
 	archiveOrigin := origin == domain.SubmissionOriginPortal || origin == domain.SubmissionOriginRayCLI
-	if spec.Source.Type != "git" && spec.Source.Type != "workspace" && !(spec.Source.Type == "workspace-archive" && archiveOrigin) {
+	evaluationArchive := spec.Source.Type == "evaluation-archive" && origin == domain.SubmissionOriginEvaluation
+	if spec.Source.Type != "git" && spec.Source.Type != "workspace" && !(spec.Source.Type == "workspace-archive" && archiveOrigin) && !evaluationArchive {
 		return domain.JobSpec{}, ErrSubmissionCodeSourceNotAllowed
 	}
 	return spec, nil

@@ -13,7 +13,7 @@ import (
 )
 
 var evaluationRequestFields = map[string]bool{"modelId": true, "versionId": true, "datasetId": true, "datasetVersionId": true, "evaluatorId": true, "split": true, "sites": true, "config": true, "resources": true}
-var evaluatorRequestFields = map[string]bool{"name": true, "description": true, "imageReference": true, "imageDigest": true, "gitUrl": true, "gitCommit": true, "entryPoint": true, "schemaVersion": true, "protocol": true}
+var evaluatorRequestFields = map[string]bool{"sourceArtifactId": true,"name": true, "description": true, "imageReference": true, "imageDigest": true, "gitUrl": true, "gitCommit": true, "entryPoint": true, "schemaVersion": true, "protocol": true}
 var evaluationResourceFields = map[string]bool{"workerReplicas": true, "gpusPerWorker": true, "cpuPerWorker": true, "memoryPerWorker": true}
 
 func (h *Handler) decodeEvaluationJSON(c *gin.Context, target any, allowed map[string]bool) bool {

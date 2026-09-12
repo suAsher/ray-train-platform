@@ -89,6 +89,7 @@ func (h *Handler) RegisterModelEvaluationInternalRoutes(group *gin.RouterGroup) 
 		c.Next()
 	})
 	internal.GET("/model", h.downloadEvaluationModel)
+	internal.GET("/code", h.downloadEvaluationCode)
 	internal.POST("/report", h.storeModelEvaluationReport)
 }
 func (h *Handler) downloadEvaluationModel(c *gin.Context) {

@@ -36,9 +36,13 @@ func loadTrustedEvaluationRuntime(ctx context.Context, job *domain.TrainingJob, 
 		ConfigJSON: string(evaluation.Config), ConfigSHA256: evaluation.ConfigSHA256,
 		EvaluatorID: evaluation.Evaluator.ID, Protocol: evaluation.Evaluator.Protocol,
 	}
+	if code := evaluation.Evaluator.Code; code != nil {
+		runtime.CodeID, runtime.CodeSHA256, runtime.CodeSizeBytes, runtime.CodeFormat = code.ID, code.SHA256, code.SizeBytes, code.Format
+	}
 	if err := runtime.Validate(); err != nil {
 		return nil, err
 	}
+	if err := runtime.ValidateCodeSource(job.Spec.Source); err != nil { return nil, err }
 	loaded.Spec.EvaluationRuntime = runtime
 	return &loaded, nil
 }

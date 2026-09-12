@@ -158,6 +158,7 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 		if err := job.Spec.EvaluationRuntime.Validate(); err != nil {
 			return nil, err
 		}
+		if err := job.Spec.EvaluationRuntime.ValidateCodeSource(job.Spec.Source); err != nil { return nil, err }
 	} else {
 		job.Spec.EvaluationRuntime = nil
 	}
@@ -173,7 +174,11 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 		}
 		options.managedResumePath = resumePath
 	}
-	if job.Spec.Source.Type != "git" && job.Spec.Source.Type != "workspace" && job.Spec.Source.Type != "workspace-archive" {
+	evaluationArchive := job.SubmissionOrigin == domain.SubmissionOriginEvaluation && job.Spec.Source.Type == "evaluation-archive" && job.Spec.EvaluationRuntime != nil
+	if evaluationArchive {
+		if err := validateEvaluationCodeBaseURL(options.TrainingEventBaseURL); err != nil { return nil, err }
+	}
+	if job.Spec.Source.Type != "git" && job.Spec.Source.Type != "workspace" && job.Spec.Source.Type != "workspace-archive" && !evaluationArchive {
 		// Defense in depth for callers that bypass the HTTP submission service.
 		// Ray workloads must not receive object-store credentials just to obtain
 		// their source code.
@@ -750,6 +755,9 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, tenantID 
 			volumes = append(volumes, pvcVolume("workspace-snapshot-source", personal.ClaimName, true))
 		}
 	}
+	if materializeSource && source.Type == "evaluation-archive" {
+		volumes = append(volumes, evaluationSourceCredentialVolume(options.trainingEventJobID))
+	}
 	if mountData && options.LocalCache.runtime {
 		// Streaming payload rows are resolved inside training workers. The head
 		// keeps one local volume for Ray control-plane spilling, while each worker
@@ -820,6 +828,9 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, tenantID 
 	}
 	if materializeSource {
 		podSpec["initContainers"] = []any{sourceMaterializer(tenantID, source, jobSpec, options)}
+		if source.Type == "evaluation-archive" {
+			podSpec["securityContext"].(map[string]any)["fsGroup"] = int64(1000)
+		}
 	}
 	if preloadInput {
 		podSpec["initContainers"] = []any{datasetCachePreloader(options.SourceMaterializerImage, volumeMounts, options.LocalCache, options.trainingEventJobID)}
@@ -1225,6 +1236,8 @@ func sourceMaterializer(tenantID string, source domain.CodeSource, jobSpec domai
 			break
 		}
 		command += "python3 /usr/local/bin/platform-safe-extract.py --archive " + shellQuote(archivePath) + " --destination /workspace\n"
+	case "evaluation-archive":
+		command += evaluationCodeMaterializerCommand(jobSpec, options)
 	}
 	env := []any{}
 	if source.Type == "git" && options.GitCredentialSecret != "" {
@@ -1238,6 +1251,9 @@ func sourceMaterializer(tenantID string, source domain.CodeSource, jobSpec domai
 		}
 	}
 	volumeMounts := []any{map[string]any{"name": "workspace", "mountPath": "/workspace"}}
+	if source.Type == "evaluation-archive" {
+		volumeMounts = append(volumeMounts, map[string]any{"name": "evaluation-source-events", "mountPath": trainingEventTokenMountPath, "readOnly": true})
+	}
 	if source.Type == "workspace" || source.Type == "workspace-archive" {
 		mount := map[string]any{"name": "workspace-snapshot-source", "mountPath": "/mnt/platform-workspace-snapshot", "readOnly": true}
 		if personal := jobSpec.ResolvedDataRoots.Personal; personal != nil && personal.SubPath != "" {

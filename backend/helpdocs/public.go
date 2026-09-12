@@ -93,6 +93,8 @@ const accountAPIPublicGuide = `### 身份和令牌
 
 Portal 登录会话用于网页；个人 PAT 用于 CLI、原生 Ray、MLflow SDK 和程序接口。不要把 GitLab token、Portal Cookie、MLflow 页面票据或集群凭据当作平台 PAT。
 
+普通成员可在「账户与安全 → 个人访问令牌 → 创建访问令牌」自行签发，不需要管理员代建。外部 MLflow SDK 选择“MLflow 全局读写”；令牌属于本人并绑定创建时的当前团队，明文仅显示一次。管理员在自己的账号创建的令牌仍属于管理员本人，集成令牌也不能代替 mlflow:full 个人 PAT。
+
 PAT 绑定当前有效团队和显式 scope。旧 token 不会自动获得新增权限；需要原生 MLflow 全局共享读写时重新签发 ` + "`mlflow:full`" + `。` + "`mlflow:full`" + ` 与 MLflow 网页共享范围一致，包含创建、修改、删除、Artifact 和 Registry 操作；平台训练任务、个人目录和调度仍走各自权限。
 
 ### 常用地址
@@ -145,6 +147,10 @@ const dataPublicGuide = `### 代码和镜像
 在「版本化数据集」选择 READY 版本。按场地训练时填场地代码，不填目录路径；留空代表完整版本。streaming 模式要求镜像和训练入口支持对应 schema。版本和场地范围会写入任务记录，续训沿用原范围；换场地应新建实验。
 
 训练集 train 用于学习模型参数，验证集 val 用于开发过程中的效果检查，测试集 test 用于独立测试。页面分别显示样本数；数量为 0 表示该版本没有对应划分，不会自动使用另一个划分。没有 READY 版本时，需等待有权限的管理员完成发布，上传目录不等于已发布数据版本。
+
+普通成员可查看 PUBLIC 和当前团队 TEAM 数据集，并选择有权使用的 READY 版本；不能创建数据集定义或发布版本。团队管理员（TenantAdmin）可管理本团队 TEAM 数据集，平台管理员（SuperAdmin）可管理公共及团队数据集。数据集目录和版本发布分别受功能是否启用控制，定义已存在不等于版本已经发布。
+
+普通训练需要 train 样本数大于 0；独立评估需要所选 val 或 test 样本数大于 0。只有验证或测试数据、train 为 0 的版本也可用于评估，不能因此判定版本无效。样本数量和数据格式必须来自所选固定版本，不能从目录名推测。
 
 训练数据和评估数据分别固定和记录：训练时选择的版本保存在任务来源中；[独立评估](#model-evaluation-start)还需另选具体版本与 val/test 划分，不能用修改模型说明来替换历史来源。评估不使用 latest；普通用户可以选择有权访问的版本，数据发布权限保持原样。`
 
@@ -268,6 +274,10 @@ const mlflowSeedPublicSection = `先区分平台训练任务和 MLflow Run。Job
 注册模型版本不等于已经部署推理服务。需要独立评估时，从共享模型版本[发起评估](#model-evaluation-start)，固定数据和方案并等待有效报告；审批与 Serving 尚未上线。`
 
 const mlflowNativeConnectionGuide = `该地址是外部程序访问共享 MLflow 的入口前缀，当前验证的客户端为 mlflow==3.14.0，范围包括 Tracking、Artifacts 和 Model Registry；其他版本或产品协议需另外验证。
+
+普通成员可以自行创建个人 PAT，不需要管理员代建：进入「账户与安全 → 个人访问令牌 → 创建访问令牌」，用途选择“MLflow 全局读写”，确认 mlflow:full 后设置有效期并“创建并显示一次”。令牌绑定本人和创建时的当前团队，但这个权限可访问全部共享 MLflow 内容，含修改和删除；它不包含提交、停止平台训练或访问个人数据的权限。管理员从自己的账号创建的仍是管理员本人的令牌，不能冒充其他用户。
+
+只有当前服务确认原生 MLflow 可用时才显示这一用途；看不到时先刷新并检查服务提示，不应改用训练 CLI 令牌。普通训练 PAT 不会自动获得 mlflow:full，集成令牌不能代替该个人 PAT；平台内训练继续使用已注入的连接，不需个人 PAT。
 
 - Python SDK 的 tracking_uri 只填 ` + "`https://raytrain.wellspiking.ai/api/v1/mlflow-native`" + `，可设置 MLFLOW_TRACKING_URI，或调用 ` + "`MlflowClient(tracking_uri=\"https://raytrain.wellspiking.ai/api/v1/mlflow-native\")`" + `。SDK 会自行拼接后续原生 API 路径，不把 /api/2.0/mlflow 加到 tracking_uri。
 - 直接用 HTTP 查询或记录实验时，在前缀后接 /api/2.0/mlflow/...，例如 ` + "`https://raytrain.wellspiking.ai/api/v1/mlflow-native/api/2.0/mlflow/runs/search`" + `。文件操作优先使用 SDK，避免把所有文件协议当作同一种 REST 路径。

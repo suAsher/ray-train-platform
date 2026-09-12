@@ -14,6 +14,7 @@ type createModelEvaluatorInput struct {
 	Description    string   `json:"description"`
 	ImageReference string   `json:"imageReference"`
 	ImageDigest    string   `json:"imageDigest"`
+	SourceArtifactID string `json:"sourceArtifactId"`
 	GitURL         string   `json:"gitUrl"`
 	GitCommit      string   `json:"gitCommit"`
 	EntryPoint     []string `json:"entryPoint"`
@@ -38,10 +39,24 @@ func (h *Handler) createModelEvaluator(c *gin.Context) {
 	if input.Protocol == "" {
 		input.Protocol = me.Protocol
 	}
-	// Resolve the catalogue reference using the same allowlists and JobSpec
-	// validation as submissions. No job, storage directory or runtime is created.
-	spec := domain.JobSpec{Name: "evaluator-validation", Image: input.ImageReference, Source: domain.CodeSource{Type: "git", URL: input.GitURL, Commit: input.GitCommit}, Entrypoint: domain.Entrypoint{Command: append([]string{}, input.EntryPoint...)}, TrainingEngine: domain.TrainingEngineRayTrain, RayVersion: domain.RayVersionCanary, Resources: evaluationDefaultResources()}
-	result, err := h.modelEvaluationSubmission.Preflight(c.Request.Context(), SubmissionInput{Principal: p, Spec: spec, Origin: domain.SubmissionOriginAPI})
+	if input.SourceArtifactID != "" && (input.GitURL != "" || input.GitCommit != "") {
+		h.modelEvaluationError(c, me.ErrInvalid)
+		return
+	}
+	var artifact *domain.SourceArtifact
+	origin := domain.SubmissionOriginAPI
+	source := domain.CodeSource{Type:"git",URL:input.GitURL,Commit:input.GitCommit}
+	if input.SourceArtifactID != "" {
+		release, ok := h.acquireEvaluationCodeOperation(c); if !ok { return }; defer release()
+		var okSource bool
+		artifact, okSource = h.evaluationCodeSource(c, input.SourceArtifactID); if !okSource { return }
+		origin = domain.SubmissionOriginPortal
+		source = domain.CodeSource{Type:"workspace-archive",ArtifactID:artifact.ID}
+	}
+	// Catalogue and JobSpec validation is read-only. Uploaded source uses the
+	// existing interactive archive origin; generic API permissions stay narrow.
+	spec := domain.JobSpec{Name: "evaluator-validation", Image: input.ImageReference, Source: source, Entrypoint: domain.Entrypoint{Command: append([]string{}, input.EntryPoint...)}, TrainingEngine: domain.TrainingEngineRayTrain, RayVersion: domain.RayVersionCanary, Resources: evaluationDefaultResources()}
+	result, err := h.modelEvaluationSubmission.Preflight(c.Request.Context(), SubmissionInput{Principal: p, Spec: spec, Origin: origin})
 	if err != nil {
 		h.writeSubmissionError(c, p, err)
 		return
@@ -57,13 +72,17 @@ func (h *Handler) createModelEvaluator(c *gin.Context) {
 		return
 	}
 	id, err := newEvaluationID()
-	if h.modelEvaluationError(c, err) {
-		return
+	if h.modelEvaluationError(c, err) { return }
+	if artifact != nil {
+		key, ok := h.modelRequestKey(c); if !ok { return }
+		id = evaluationCodeRequestID(p, key)
 	}
 	evaluator := me.Evaluator{ID: id, Name: strings.TrimSpace(input.Name), Description: input.Description, OwnerID: p.Subject, OwnerName: p.Username, TenantID: p.TenantID, Revision: 1, Active: true, ImageReference: result.Image, ImageDigest: digest, GitURL: input.GitURL, GitCommit: input.GitCommit, EntryPoint: append([]string{}, input.EntryPoint...), SchemaVersion: input.SchemaVersion, Protocol: input.Protocol, CreatedAt: time.Now().UTC()}
+	if artifact != nil { evaluator.Code = &me.CodeSnapshot{ID:id,SHA256:artifact.SHA256,SizeBytes:artifact.SizeBytes,Format:"zip"} }
 	if h.modelEvaluationError(c, me.ValidateEvaluator(evaluator)) {
 		return
 	}
+	if artifact != nil { h.publishModelEvaluatorCode(c, evaluator, *artifact); return }
 	evaluator, err = h.modelEvaluations.CreateEvaluator(c.Request.Context(), evaluator)
 	if h.modelEvaluationError(c, err) {
 		return

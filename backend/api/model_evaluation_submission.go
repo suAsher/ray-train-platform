@@ -142,7 +142,7 @@ func (h *Handler) freezeModelEvaluation(c *gin.Context, request me.Request) (me.
 	if h.modelEvaluationError(c, me.ValidateEvaluation(result)) {
 		return result, false
 	}
-	result.JobSpec = domain.JobSpec{Name: "evaluation-" + id, Image: evaluator.ImageReference, Source: domain.CodeSource{Type: "git", URL: evaluator.GitURL, Commit: evaluator.GitCommit}, Entrypoint: domain.Entrypoint{Command: append([]string{}, evaluator.EntryPoint...)}, TrainingEngine: domain.TrainingEngineRayTrain, RayVersion: domain.RayVersionCanary, DataMode: domain.DataModeStreaming, DatasetRef: domain.DatasetReference{Dataset: dataset.ID, Version: dataVersion.ID}, CachePolicy: domain.DatasetCachePolicyAuto, Resources: request.Resources, Output: domain.DataLocation{Space: domain.DataSpaceMyRuns, RelativePath: "evaluations/" + id}, TimeoutSeconds: 24 * 60 * 60}
+	result.JobSpec = domain.JobSpec{Name: "evaluation-" + id, Image: evaluator.ImageReference, Source: evaluationCodeJobSource(evaluator), Entrypoint: domain.Entrypoint{Command: append([]string{}, evaluator.EntryPoint...)}, TrainingEngine: domain.TrainingEngineRayTrain, RayVersion: domain.RayVersionCanary, DataMode: domain.DataModeStreaming, DatasetRef: domain.DatasetReference{Dataset: dataset.ID, Version: dataVersion.ID}, CachePolicy: domain.DatasetCachePolicyAuto, Resources: request.Resources, Output: domain.DataLocation{Space: domain.DataSpaceMyRuns, RelativePath: "evaluations/" + id}, TimeoutSeconds: 24 * 60 * 60}
 	preflight, err := h.modelEvaluationSubmission.Preflight(ctx, evaluationSubmissionInput(p, result))
 	if err != nil {
 		h.writeSubmissionError(c, p, err)
@@ -267,5 +267,5 @@ func (h *Handler) submitReservedModelEvaluation(c *gin.Context, p auth.Principal
 	return true
 }
 func evaluationJobMatches(job *domain.TrainingJob, e me.Evaluation) bool {
-	return job != nil && job.ID == e.JobID && job.UserID == e.OwnerID && job.TenantID == e.TenantID && job.SubmissionOrigin == domain.SubmissionOriginEvaluation && job.ExternalSubmissionID == e.ID && job.Spec.Source.Commit == e.Evaluator.GitCommit && strings.TrimSpace(job.Spec.Image) == strings.TrimSpace(e.JobSpec.Image)
+	return job != nil && job.ID == e.JobID && job.UserID == e.OwnerID && job.TenantID == e.TenantID && job.SubmissionOrigin == domain.SubmissionOriginEvaluation && job.ExternalSubmissionID == e.ID && evaluationCodeSourceMatches(job.Spec.Source, e.Evaluator) && strings.TrimSpace(job.Spec.Image) == strings.TrimSpace(e.JobSpec.Image)
 }

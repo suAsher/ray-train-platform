@@ -20,6 +20,12 @@ func TestMLflowExternalArticlesExplainSDKAndRESTConnectionBoundaries(t *testing.
 			"3.14.0",
 			"平台内训练",
 			"不要覆盖",
+			"普通成员可以自行创建",
+			"不需要管理员代建",
+			"账户与安全",
+			"绑定本人和创建时的当前团队",
+			"含修改和删除",
+			"集成令牌不能代替",
 		} {
 			if !strings.Contains(article.Markdown, marker) {
 				t.Errorf("article %s missing connection boundary %q", id, marker)
