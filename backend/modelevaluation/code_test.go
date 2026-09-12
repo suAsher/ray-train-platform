@@ -25,6 +25,7 @@ func TestEvaluatorSupportsExactlyOneImmutableCodeSource(t *testing.T) {
 		func(e *Evaluator) { e.GitURL = git.GitURL },
 		func(e *Evaluator) { e.GitCommit = git.GitCommit },
 		func(e *Evaluator) { e.Code = nil },
+		func(e *Evaluator) { e.EntryPoint = []string{"/bin/sh", "-lc", "python evaluate.py"} },
 	} {
 		e := uploaded
 		change(&e)
