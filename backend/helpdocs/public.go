@@ -14,6 +14,24 @@ func PublicGuides() []domain.HelpDocument {
 	}
 }
 
+func PublicSectionForSeedDocument(document domain.HelpDocument) domain.HelpDocument {
+	switch document.ID {
+	case "mlflow":
+		document.Title = "查看训练实验与结果"
+		document.Markdown = mlflowSeedPublicSection
+	case "mlflow-api-with-pat":
+		document.Title = "查询实验、Run 和历史指标"
+		document.Markdown = mlflowAPISeedPublicSection
+	case "mlflow-external-tracking":
+		document.Title = "在自己的程序中记录实验"
+		document.Markdown = mlflowExternalSeedPublicSection
+	case "mlflow-framework-metrics":
+		document.Title = "让训练指标显示在 MLflow"
+		document.Markdown = mlflowMetricsSeedPublicSection
+	}
+	return document
+}
+
 const quickstartPublicGuide = `### 从哪里开始
 
 第一次使用按这个顺序走：登录 Portal，确认当前团队，创建个人 PAT，安装 CLI，提交一条 1 卡小任务，再到任务详情查看日志、指标和结果。
@@ -88,9 +106,9 @@ PAT 绑定当前有效团队和显式 scope。旧 token 不会自动获得新增
 
 ### ID 边界
 
-Job ID 标识平台训练任务，MLflow Run ID 标识一次实验记录。一个 Job 可以关联多个 Run，两者不要求相等。原生 MLflow SDK 使用原生 Experiment ID / Run ID；旧的独立实验 REST 和六方法 SDK 才使用平台实验 ID / 平台 Run ID。
+Job ID 标识平台训练任务，MLflow Run ID 标识一次实验记录。一个 Job 可以关联多个 Run，两者不要求相等。原生 MLflow SDK、HTTP API 和页面都使用 MLflow 自己返回的 Experiment ID / Run ID。
 
-接口返回 401 先检查 token 是否过期、撤销或 scope 不够；403 先核对当前团队、角色、数据空间或实验授权。`
+接口返回 401 先检查 token 是否过期或撤销；403 先核对 PAT 是否包含 ` + "`mlflow:full`" + `，以及当前团队、角色和数据空间权限。`
 
 const dataPublicGuide = `### 代码和镜像
 
@@ -174,19 +192,21 @@ const debugPublicGuide = `### 交互式调试
 
 const mlflowPublicGuide = `### 页面和记录关系
 
-「实验中心」分为 MLflow 总览、训练记录、API 接入和高级能力。训练任务可以关联一个或多个 MLflow Run；Job ID 不等于 Run ID。页面曲线取决于训练代码是否写入 MLflow metric，日志里有 loss 文本不代表页面一定有曲线。
+「实验中心」保留两个主要入口：训练记录和 MLflow API。训练记录用于查看 RayTrain Job 与 MLflow Run 的关联；MLflow API 用于复制原生 Tracking URI、Python 示例和 HTTP 调用方式。需要进入原生页面时点击“打开 MLflow”。
+
+训练任务可以关联一个或多个 MLflow Run；Job ID 不等于 Run ID。页面曲线取决于训练代码是否写入 MLflow metric，日志里有 loss 文本不代表页面一定有曲线。
 
 ### 原生 MLflow SDK
 
-新接入优先使用原生全局共享入口；在「实验中心 → API 接入」可以查看当前原生能力、Tracking URI 和示例：
+新接入优先使用原生全局共享入口；在「实验中心 → MLflow API」可以查看当前原生能力、Tracking URI 和示例：
 
-` + "```bash\npip install 'mlflow==3.14.0'\nexport MLFLOW_TRACKING_URI='https://raytrain.wellspiking.ai/api/v1/mlflow-native'\nexport TOKEN=\"$RAYTRAIN_PAT\"\nexport MLFLOW_TRACKING_TOKEN=\"$TOKEN\"\n```" + `
+` + "```bash\npip install 'mlflow==3.14.0'\nexport MLFLOW_TRACKING_URI='https://raytrain.wellspiking.ai/api/v1/mlflow-native'\nexport MLFLOW_TRACKING_TOKEN=\"$RAYTRAIN_PAT\"\n```" + `
 
 个人 PAT 需要显式 ` + "`mlflow:full`" + `。原生 SDK 使用原生 Experiment ID / Run ID，可对共享实验、Run、Artifact 和 Registry 做读写修改删除。
 
 列出实验和 Run：
 
-` + "```python\nfrom mlflow import MlflowClient\nfrom mlflow.entities import ViewType\n\nclient = MlflowClient()\npage_token = None\nwhile True:\n    page = client.search_experiments(max_results=100, page_token=page_token, view_type=ViewType.ACTIVE_ONLY)\n    for experiment in page:\n        print(experiment.experiment_id, experiment.name)\n    page_token = page.token\n    if not page_token:\n        break\n\nrun_token = None\nwhile True:\n    runs = client.search_runs(experiment_ids=['1'], max_results=100, page_token=run_token)\n    for run in runs:\n        print(run.info.run_id, run.info.status, run.data.metrics)\n    run_token = runs.token\n    if not run_token:\n        break\n```" + `
+` + "```python\nfrom mlflow import MlflowClient\nfrom mlflow.entities import ViewType\n\nclient = MlflowClient()\nselected_experiment_id = None\npage_token = None\nwhile True:\n    page = client.search_experiments(max_results=100, page_token=page_token, view_type=ViewType.ACTIVE_ONLY)\n    for experiment in page:\n        print(experiment.experiment_id, experiment.name)\n        if experiment.name == 'REPLACE_EXPERIMENT_NAME':\n            selected_experiment_id = experiment.experiment_id\n    page_token = page.token\n    if not page_token:\n        break\n\nif selected_experiment_id is None:\n    raise SystemExit('没有找到目标实验，请从上面输出选择已有 Experiment ID')\n\nrun_token = None\nwhile True:\n    runs = client.search_runs(experiment_ids=[selected_experiment_id], max_results=100, page_token=run_token)\n    for run in runs:\n        print(run.info.run_id, run.info.status, run.data.metrics)\n    run_token = runs.token\n    if not run_token:\n        break\n```" + `
 
 默认查询活动实验和 Run；需要包含已删除实验时改用 ` + "`ViewType.ALL`" + `。` + "`max_results`" + ` 是每页大小，不是总量上限；继续使用返回的 ` + "`page.token`" + ` 或 ` + "`runs.token`" + ` 翻页。
 
@@ -194,11 +214,11 @@ const mlflowPublicGuide = `### 页面和记录关系
 
 ` + "```python\nimport tempfile\nimport uuid\nfrom pathlib import Path\nimport mlflow\n\nmlflow.set_experiment('integration-demo-' + uuid.uuid4().hex)\nwith mlflow.start_run(run_name='first-connection') as run:\n    mlflow.log_param('code_version', 'your-git-commit')\n    mlflow.log_metric('validation/accuracy', 0.91, step=1)\n    with tempfile.TemporaryDirectory() as directory:\n        report = Path(directory) / 'report.txt'\n        report.write_text('connection test\\n', encoding='utf-8')\n        mlflow.log_artifact(str(report), artifact_path='reports')\n    print(run.info.run_id)\n```" + `
 
-### 高级：独立实验和受限集成
+### 打开 MLflow 页面
 
-独立实验指没有 RayTrain Job 的受限平台记录，适合外部评估程序补充指标。旧 ` + "`/api/v1/mlflow`" + ` REST 和 ` + "`/api/v1/mlflow-tracking`" + ` 六方法 SDK 是可选进阶路径，使用平台实验 ID / 平台 Run ID，并受实验 grant、scope 和方法白名单限制。
+“打开 MLflow”进入共享 MLflow 页面，适合浏览实验、Run、Artifact 和 Registry。程序接入仍使用上面的 Tracking URI 和 PAT，不使用浏览器 Cookie 或页面跳转地址。
 
-Serving、独立评估调度、模型审批发布闭环不要当作已完成能力；注册模型版本也不等于已经部署推理服务。`
+注册模型版本不等于已经部署推理服务；不要把训练成功、文件上传或 Registry 条目写成 Serving 已完成。`
 
 const troubleshootingPublicGuide = `### 排障顺序
 
@@ -221,3 +241,99 @@ const troubleshootingPublicGuide = `### 排障顺序
 ### 性能定位
 
 记录全局 batch、平均单步耗时、样本吞吐、每轮迭代数、整轮耗时和 data_time 占比。扩卡后单步耗时接近单机是可能的；如果每步处理样本翻倍、每轮步数减半，整轮耗时才是关键。grad_norm nan、loss 异常和验证指标 NaN 属于算法或数值稳定性问题，先查学习率、FP16 loss scale、梯度裁剪、warmup、异常数据和 checkpoint 兼容性。`
+
+const mlflowSeedPublicSection = `先区分平台训练任务和 MLflow Run。Job ID 标识 RayTrain 训练任务，用于调度、日志、产物和权限；MLflow Run ID 标识一次实验记录。一个 Job 可以关联多个 Run，二者不要求相等。训练任务详情和「实验中心 → 训练记录」会展示平台 Job 与 Run 的关联；程序访问原生 MLflow 时使用 MLflow 自己返回的 Experiment ID / Run ID。
+
+### 推荐入口
+
+| 目的 | 去哪里 | 当前能做什么 |
+| --- | --- | --- |
+| 查看训练任务关联的指标 | 实验中心 → 训练记录；任务详情 | 查询本人有权查看的 RayTrain 任务、日志、指标和关联 Run |
+| 用程序读写共享实验 | 实验中心 → MLflow API | 使用 ` + "`https://raytrain.wellspiking.ai/api/v1/mlflow-native`" + ` 和 ` + "`mlflow==3.14.0`" + ` |
+| 浏览共享 MLflow 页面 | 打开 MLflow | 通过浏览器会话查看共享实验、Run、Artifact 和 Registry |
+| 下载训练权重和结果 | 任务详情 → 训练产物 | 取回写入 ` + "`PLATFORM_OUTPUT_PATH`" + ` 的文件 |
+
+原生 MLflow 是新的默认对接方式。个人 PAT 需要显式 ` + "`mlflow:full`" + `，旧 token 不会自动升级。该 scope 与共享 MLflow 页面范围一致，包含实验、Run、Metric、Param、Tag、Artifact、删除和 Model Registry 操作。平台训练任务、个人目录、数据空间和调度权限仍按 RayTrain 自身规则控制。
+
+### 训练代码如何产出指标
+
+平台会为训练注入 Tracking URI、实验名、Run 名和来源信息；镜像需安装兼容 MLflow 客户端，代码仍需主动创建或复用 Run 并记录指标。环境变量不会自动生成 loss，也不会把 stdout 转成曲线。
+
+只由 global rank 0 写 MLflow。已有框架集成或托管适配器时复用其 Run，不再启动第二条独立 Run。参数、代码版本、数据范围与带 step 的 loss/lr 应一起记录，比较结果时才可追溯。
+
+注册模型版本不等于已经部署推理服务；独立评估调度和 Serving 不应写成已完成流程。`
+
+const mlflowAPISeedPublicSection = `查询训练实验时，先列出自己能看到的实验，再从搜索结果里选择 Experiment ID 查询 Run。用户只需要 MLflow 自己返回的 Experiment ID / Run ID；Job ID 只用于回到 RayTrain 任务详情查日志、队列、产物和训练状态。
+
+### Python：读取实验、Run、指标历史和文件
+
+` + "```bash\npip install 'mlflow==3.14.0'\nexport MLFLOW_TRACKING_URI='https://raytrain.wellspiking.ai/api/v1/mlflow-native'\nexport MLFLOW_TRACKING_TOKEN=\"$RAYTRAIN_PAT\"\n```" + `
+
+` + "```python\nfrom mlflow import MlflowClient\nfrom mlflow.entities import ViewType\n\nclient = MlflowClient()\nselected_experiment_id = None\nexperiment_token = None\nwhile True:\n    experiments = client.search_experiments(\n        max_results=100,\n        page_token=experiment_token,\n        view_type=ViewType.ACTIVE_ONLY,\n    )\n    for experiment in experiments:\n        print(experiment.experiment_id, experiment.name)\n        if experiment.name == 'REPLACE_EXPERIMENT_NAME':\n            selected_experiment_id = experiment.experiment_id\n    experiment_token = experiments.token\n    if not experiment_token:\n        break\n\n# 需要已删除实验时，把 view_type 改成 ViewType.ALL。\nif selected_experiment_id is None:\n    raise SystemExit('没有找到目标实验，请从上面输出选择已有 Experiment ID')\n\nrun_token = None\nwhile True:\n    runs = client.search_runs(\n        experiment_ids=[selected_experiment_id],\n        filter_string=\"attributes.status = 'FINISHED'\",\n        max_results=100,\n        page_token=run_token,\n    )\n    for run in runs:\n        print(run.info.run_id, run.info.status, run.data.params, run.data.metrics)\n        print(client.get_metric_history(run.info.run_id, 'validation/accuracy'))\n        print(client.list_artifacts(run.info.run_id, 'reports'))\n    run_token = runs.token\n    if not run_token:\n        break\n```" + `
+
+默认查询活动实验和 Run；max_results 是每页大小，不是总量上限。继续使用返回的 page.token 或 runs.token 翻页。
+
+### HTTP：读取和分页
+
+` + "```bash\nexport MLFLOW_API='https://raytrain.wellspiking.ai/api/v1/mlflow-native/api/2.0/mlflow'\n\ncurl -sS --fail-with-body \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"max_results\":100,\"view_type\":\"ACTIVE_ONLY\"}' \\\n  \"${MLFLOW_API}/experiments/search\"\n\ncurl -sS --fail-with-body \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"experiment_ids\":[\"REPLACE_EXPERIMENT_ID_FROM_SEARCH\"],\"max_results\":100}' \\\n  \"${MLFLOW_API}/runs/search\"\n\ncurl -sS --fail-with-body \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  \"${MLFLOW_API}/metrics/get-history?run_id=REPLACE_RUN_ID&metric_key=validation%2Faccuracy\"\n\ncurl -sS --fail-with-body \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  \"${MLFLOW_API}/artifacts/list?run_id=REPLACE_RUN_ID&path=reports\"\n```" + `
+
+search 响应里如果有 next_page_token 字段，把它原样放进下一次请求正文的 page_token。HTTP 错误按 MLflow 原生响应处理；401 先查 PAT 是否有效、过期或撤销；403 查 PAT 是否包含 mlflow:full；404 查 Experiment ID / Run ID；429 按 Retry-After 等待；502/503 或超时先读回确认结果再重试。不要把 PAT 写进 URL、日志或截图。`
+
+const mlflowExternalSeedPublicSection = `外部训练脚本、评估脚本或 Notebook 想把结果记到 RayTrain 的共享 MLflow 时，直接使用原生 Tracking URI。程序会创建普通 MLflow Experiment 和 Run，不需要先创建平台训练 Job。
+
+### Python：创建实验、写参数/指标/文件
+
+` + "```bash\npip install 'mlflow==3.14.0'\nexport MLFLOW_TRACKING_URI='https://raytrain.wellspiking.ai/api/v1/mlflow-native'\nexport MLFLOW_TRACKING_TOKEN=\"$RAYTRAIN_PAT\"\n```" + `
+
+` + "```python\nimport tempfile\nimport uuid\nfrom pathlib import Path\nimport mlflow\nfrom mlflow import MlflowClient\n\nmlflow.set_experiment('program-demo-' + uuid.uuid4().hex)\nwith mlflow.start_run(run_name='first-connection') as run:\n    mlflow.log_param('code_version', 'your-git-commit')\n    mlflow.log_param('dataset_version', 'your-dataset-version')\n    for step, score in enumerate([0.82, 0.87, 0.91], start=1):\n        mlflow.log_metric('validation/accuracy', score, step=step)\n    with tempfile.TemporaryDirectory() as directory:\n        report = Path(directory) / 'report.txt'\n        report.write_text('connection test\\n', encoding='utf-8')\n        mlflow.log_artifact(str(report), artifact_path='reports')\n    run_id = run.info.run_id\n\nclient = MlflowClient()\nprint(client.get_run(run_id).data.metrics)\nprint(client.get_metric_history(run_id, 'validation/accuracy'))\nprint(client.list_artifacts(run_id, 'reports'))\n```" + `
+
+返回的是原生 MLflow Run ID。后续 get_run、get_metric_history、log_metric、log_artifact、delete_run、restore_run 和 Registry 操作都使用这个 ID。
+
+### HTTP：创建、写入和读回
+
+` + "```bash\nexport MLFLOW_API='https://raytrain.wellspiking.ai/api/v1/mlflow-native/api/2.0/mlflow'\n\ncurl -sS --fail-with-body -X POST \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"name\":\"program-demo-http\"}' \\\n  \"${MLFLOW_API}/experiments/create\"\n\ncurl -sS --fail-with-body -X POST \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"experiment_id\":\"REPLACE_EXPERIMENT_ID\",\"run_name\":\"first-http-run\"}' \\\n  \"${MLFLOW_API}/runs/create\"\n\ncurl -sS --fail-with-body -X POST \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"run_id\":\"REPLACE_RUN_ID\",\"params\":[{\"key\":\"code_version\",\"value\":\"your-git-commit\"}],\"metrics\":[{\"key\":\"validation/accuracy\",\"value\":0.91,\"timestamp\":1789171200000,\"step\":1}],\"tags\":[{\"key\":\"source\",\"value\":\"program-demo\"}]}' \\\n  \"${MLFLOW_API}/runs/log-batch\"\n\ncurl -sS --fail-with-body -X POST \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"run_id\":\"REPLACE_RUN_ID\",\"status\":\"FINISHED\"}' \\\n  \"${MLFLOW_API}/runs/update\"\n```" + `
+
+HTTP 适合服务端集成和批量写指标；文件上传建议使用 Python SDK 的 log_artifact，避免手写 artifact 存储路由。读取文件列表可用 artifacts/list，下载文件优先用 MlflowClient.download_artifacts。
+
+先在专用测试实验中联调，不向正在训练的 Run 写演示数据。注册模型版本、上传文件或结束 Run 不代表已经完成评估审批，也不代表已经部署 Serving。`
+
+const mlflowMetricsSeedPublicSection = `适用于在 RayTrain 上运行的训练代码。自己的脚本不创建 RayTrain Job、只想记录实验时，使用本页“在自己的程序中记录实验”的原生 MLflow 示例。
+
+平台提供连接和可信关联信息；训练代码仍需主动创建 Run、记录参数和指标，不会从 stdout 猜测 Loss。
+
+### 训练代码需要做什么
+
+1. 由 global rank 0 创建 Run，沿用平台注入的连接与归属信息，不覆盖 ` + "`platform.*`" + ` 等保留标签。
+2. 用单调递增的训练 step 记录标量；参数用于不随时间改变的配置，变化值用 metric。
+3. 记录可复现信息，例如代码版本、数据集版本、配置、随机种子。不要记录凭据。
+4. Checkpoint、模型和报告写到 ` + "`PLATFORM_OUTPUT_PATH`" + `，见[训练产物](#artifacts)。
+
+| 来源 | 建议指标 | 页面含义 |
+| --- | --- | --- |
+| 普通 PyTorch | ` + "`loss`" + `、` + "`learning_rate`" + `、` + "`epoch`" + `、` + "`throughput`" + ` | 按代码显式上报 |
+| MMCV MlflowLoggerHook | ` + "`train/loss`" + `、` + "`train/stats/...`" + `、` + "`learning_rate`" + ` | ` + "`loss`" + ` 与 ` + "`train/loss`" + ` 显示为 Training Loss |
+| 验证过程 | ` + "`val/loss`" + ` 或双方约定的评估键 | 不覆盖训练 Loss |
+
+` + "`ray.train.report()`" + ` 管理 Ray Train 的结果与 Checkpoint；` + "`mlflow.log_metrics()`" + ` 记录实验指标，两者不能互相替代。
+
+### 在已有 Run 中补充标量
+
+已使用平台托管 Hook 或框架 MlflowLoggerHook 的入口，先确认 Hook 已创建并关联 Run，再在训练循环调用下面的函数；不要额外调用 ` + "`start_run()`" + ` 创建第二条记录。` + "`global_rank`" + ` 应从训练框架获取全局 rank，不能用每台机器各有一个 0 的 local rank。
+
+` + "```python\nimport mlflow\n\n# 嵌入已有训练循环；loss、step 和 global_rank 由训练框架提供。\ndef log_training_metric(loss, step, global_rank):\n    if global_rank != 0:\n        return\n    if mlflow.active_run() is None:\n        print(\"MLflow Run 尚未初始化，请检查平台或框架 Hook\", flush=True)\n        return\n    try:\n        mlflow.log_metric(\"train/loss\", float(loss), step=int(step))\n    except Exception as exc:\n        # 辅助观测故障不应中断 GPU 训练；不输出可能含凭据的完整异常。\n        print(f\"MLflow 指标写入失败：{type(exc).__name__}\", flush=True)\n```" + `
+
+### 新训练入口还没有 Run 时
+
+先选兼容的已登记运行时并接入平台训练适配器。平台运行时的 ` + "`start_managed_mlflow_run(training_parameters, rank=global_rank, world_size=world_size)`" + ` 会使用注入的实验、Job/团队/用户及来源信息；结束时用配套 ` + "`finish_managed_mlflow_run(client, owned=owned, status=...)`" + `，只结束本入口创建的 Run。两者位于 ` + "`raytrain_runtime.reporting`" + `，需在镜像内确认该模块和对应版本可用。
+
+普通自定义镜像未安装这个适配器时，仅 ` + "`pip install mlflow`" + ` 或调用无标签的 ` + "`start_run()`" + ` 不会自动建立平台可信关联。应先让管理员或模型维护者按训练入口接入，并用单卡任务验证；不要手工猜造 ` + "`platform.*`" + ` 标签、复制其他任务的来源信息，或将平台来源环境变量打印出来。
+
+### 如何确认接入成功
+
+运行 ` + "`spk-rayjob status JOB_ID`" + ` 和 ` + "`spk-rayjob logs -f JOB_ID`" + `，确认已进入训练 step；再到任务详情核对关联的 Job、Run、参数与带 step 的曲线。
+
+**Job ID 与 MLflow run_id 不要求相等。** Run 名称可以包含任务 ID，但名称也不是归属凭据；一次任务可能关联多个 Run，核对时使用页面返回的明确关联。
+
+没有 Run：检查创建逻辑与平台关联。没有曲线：检查 global rank 0、指标键和 step。只有普通日志：补充主动上报。仍有问题时提供 Job ID、Run ID 和指标键，参见[工具排查](#portal-browser-tools-and-queue)。
+
+Artifact、Models 或 Traces 为空不能用来判定训练失败；当前训练接入不等于完整模型注册、审批或服务发布。`

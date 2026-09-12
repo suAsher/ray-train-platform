@@ -62,9 +62,10 @@ var legacyPublicHelpGuideIDs = map[string]string{
 	"custom-environment":                     "data",
 	"data-mode":                              "data",
 	"datasets":                               "data",
+	"debug":                                  "debug",
 	"diagnose":                               "troubleshooting",
 	"errors":                                 "troubleshooting",
-	"idc-sync-lifecycle":                     "data",
+	"mlflow":                                 "mlflow",
 	"mlflow-api-with-pat":                    "mlflow",
 	"mlflow-external-tracking":               "mlflow",
 	"mlflow-framework-metrics":               "mlflow",
@@ -73,6 +74,7 @@ var legacyPublicHelpGuideIDs = map[string]string{
 	"portal-user-feature-map":                "quickstart",
 	"preflight":                              "training-guide",
 	"quota":                                  "quickstart",
+	"quickstart":                             "quickstart",
 	"ray-data":                               "training-guide",
 	"resume":                                 "training-guide",
 	"scaling":                                "training-guide",
@@ -85,6 +87,22 @@ var legacyPublicHelpGuideIDs = map[string]string{
 	"unified-login-and-roles":                "quickstart",
 	"uploads":                                "data",
 	"worker-connect-and-scheduling-boundary": "debug",
+}
+
+var publicHelpGuideIDs = map[string]bool{
+	"account-api":     true,
+	"data":            true,
+	"debug":           true,
+	"mlflow":          true,
+	"quickstart":      true,
+	"training-guide":  true,
+	"troubleshooting": true,
+}
+
+var publicAdminOnlyHelpIDs = map[string]bool{
+	"admin-node-onboarding": true,
+	"admin-team-retirement": true,
+	"idc-sync-lifecycle":    true,
 }
 
 type helpSummaryMeta struct {
@@ -111,15 +129,24 @@ func publicHelpDocuments(items []domain.HelpDocument) []domain.HelpDocument {
 	custom := make([]domain.HelpDocument, 0, len(items))
 	customIDs := map[string]bool{}
 	folded := map[string][]domain.HelpDocument{}
+	guideIDs := publicGuideIDs()
 	for _, item := range items {
 		if isPublicAdminHelpDocument(item) {
 			continue
 		}
-		if item.UpdatedBy == platformSeedActor && platformSeedHelpIDs[item.ID] {
+		if item.UpdatedBy != platformSeedActor && guideIDs[item.ID] {
+			custom = append(custom, item)
+			customIDs[item.ID] = true
 			continue
 		}
 		if target, ok := legacyPublicHelpGuideIDs[item.ID]; ok {
+			if item.UpdatedBy == platformSeedActor {
+				item = helpdocs.PublicSectionForSeedDocument(item)
+			}
 			folded[target] = append(folded[target], item)
+			continue
+		}
+		if item.UpdatedBy == platformSeedActor && platformSeedHelpIDs[item.ID] {
 			continue
 		}
 		custom = append(custom, item)
@@ -146,6 +173,10 @@ func publicHelpDocuments(items []domain.HelpDocument) []domain.HelpDocument {
 	return out
 }
 
+func publicGuideIDs() map[string]bool {
+	return publicHelpGuideIDs
+}
+
 func publicHelpMeta(items []domain.HelpDocument) helpSummaryMeta {
 	var meta helpSummaryMeta
 	for _, item := range items {
@@ -167,7 +198,19 @@ func publicHelpMeta(items []domain.HelpDocument) helpSummaryMeta {
 }
 
 func isPublicAdminHelpDocument(item domain.HelpDocument) bool {
-	return strings.HasPrefix(item.ID, "admin-") || item.Category == "06 进阶与管理员"
+	if strings.HasPrefix(item.ID, "admin-") {
+		return true
+	}
+	if publicAdminOnlyHelpIDs[item.ID] {
+		return true
+	}
+	if publicHelpGuideIDs[item.ID] {
+		return false
+	}
+	if _, ok := legacyPublicHelpGuideIDs[item.ID]; ok {
+		return false
+	}
+	return item.Category == "06 进阶与管理员"
 }
 
 func appendLegacyPublicSections(guide domain.HelpDocument, sections []domain.HelpDocument) domain.HelpDocument {

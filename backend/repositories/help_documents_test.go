@@ -3,9 +3,11 @@ package repositories
 import (
 	"context"
 	"errors"
-	"ray-train-platform-backend/domain"
 	"strings"
 	"testing"
+
+	"ray-train-platform-backend/domain"
+	"ray-train-platform-backend/helpdocs"
 )
 
 func helpRepo(t *testing.T) *GormRepository {
@@ -201,7 +203,7 @@ func TestPublicHelpDocumentsUseSummariesAndKeepCustomPublicDocs(t *testing.T) {
 	if byID["team-faq"].Markdown != "custom answer" {
 		t.Fatalf("custom published document was not preserved: %+v", byID["team-faq"])
 	}
-	if byID["mlflow"].Markdown != "custom mlflow override" {
+	if !strings.HasPrefix(byID["mlflow"].Markdown, "custom mlflow override") || !strings.Contains(byID["mlflow"].Markdown, "查询实验、Run 和历史指标") {
 		t.Fatalf("custom document did not override generated guide ID: %+v", byID["mlflow"])
 	}
 	for _, marker := range []string{"团队镜像登记补充", "full custom environment body"} {
@@ -251,6 +253,282 @@ func TestPublicHelpDocumentsUseSummariesAndKeepCustomPublicDocs(t *testing.T) {
 	}
 }
 
+func TestPublicHelpDocumentsFoldPublishedSeedContentIntoSevenGuides(t *testing.T) {
+	r := helpRepo(t)
+	ctx := context.Background()
+	seed, err := helpdocs.Documents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.SeedHelpDocuments(ctx, seed); err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := r.ListHelpDocuments(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 7 {
+		t.Fatalf("public help should keep seven top-level guides, got %d: %+v", len(items), items)
+	}
+	byID := make(map[string]domain.HelpDocument, len(items))
+	for _, item := range items {
+		byID[item.ID] = item
+	}
+	for _, id := range []string{"quickstart", "account-api", "data", "training-guide", "debug", "mlflow", "troubleshooting"} {
+		if _, ok := byID[id]; !ok {
+			t.Fatalf("public help missing consolidated guide %s: %+v", id, items)
+		}
+	}
+	for _, oldID := range []string{
+		"access",
+		"cache",
+		"cli-onboarding-v2",
+		"code",
+		"command-recipes",
+		"custom-environment",
+		"data-mode",
+		"datasets",
+		"errors",
+		"mlflow-api-with-pat",
+		"mlflow-external-tracking",
+		"mlflow-framework-metrics",
+		"ray-data",
+		"resume",
+		"scaling",
+		"scheduling-topology",
+		"storage",
+		"streaming",
+		"streaming-validation",
+		"submit",
+		"uploads",
+		"worker-connect-and-scheduling-boundary",
+	} {
+		if _, ok := byID[oldID]; ok {
+			t.Fatalf("legacy seed document %s leaked as a top-level public document: %+v", oldID, items)
+		}
+	}
+	for _, adminID := range []string{"admin-node-onboarding", "admin-team-retirement", "idc-sync-lifecycle"} {
+		if _, ok := byID[adminID]; ok {
+			t.Fatalf("admin seed document %s leaked into public help: %+v", adminID, items)
+		}
+	}
+	assertMarkdownContains(t, byID["quickstart"].Markdown, []string{
+		"### 第一次跑通",
+		"### CLI 安装、登录与升级",
+		"SHA-256",
+		"spk-rayjob login --server 'https://raytrain.wellspiking.ai' --token-stdin",
+	})
+	assertMarkdownContains(t, byID["data"].Markdown, []string{
+		"### 代码怎么进来",
+		"### 缺少环境？自定义训练镜像",
+		"已发布基础镜像",
+		"raytrain-base:ray2.58.0-py310-torch2.4.1-cu121-20260906",
+		"### 如何使用缓存加速",
+		"5,625 MiB/s",
+		"### 五种数据模式怎么选",
+		"### 版本化数据集",
+		"### 大文件上传与恢复",
+	})
+	assertMarkdownContains(t, byID["training-guide"].Markdown, []string{
+		"### 命令提交示例：spk-rayjob 与原生 Ray",
+		"RAY_JOB_HEADERS",
+		"### 提交任务与分布式训练",
+		"### 如何使用 Ray Data",
+		"get_dataset_shard",
+		"### Ray Train 托管 + Ray Data + Parquet + NVMe",
+		"### 断点续训",
+		"### 扩卡效果怎么验收",
+		"### 多 Worker、多机与拓扑排队",
+		"### 验收固定版本的数据训练",
+	})
+	assertMarkdownContains(t, byID["debug"].Markdown, []string{
+		"### 交互式调试环境",
+		"### 连接自己的训练 Worker",
+	})
+	assertMarkdownContains(t, byID["mlflow"].Markdown, []string{
+		"MLFLOW_TRACKING_URI='https://raytrain.wellspiking.ai/api/v1/mlflow-native'",
+		"### 让训练指标显示在 MLflow",
+		"mlflow.log_metric",
+		"### 查询实验、Run 和历史指标",
+		"### 在自己的程序中记录实验",
+		"mlflow.log_artifact",
+		"experiments/search",
+		"runs/log-batch",
+		"artifacts/list",
+		"MlflowClient.download_artifacts",
+		"REPLACE_EXPERIMENT_ID_FROM_SEARCH",
+		"next_page_token 字段，把它原样放进下一次请求正文的 page_token",
+		"403 查 PAT 是否包含 mlflow:full",
+		"start_managed_mlflow_run(training_parameters, rank=global_rank, world_size=world_size)",
+	})
+	for _, staleMarker := range []string{
+		"MLflow 总览",
+		"API 接入",
+		"高级",
+		"外部实验",
+		"独立实验兼容入口",
+		"当前仅支持六个方法",
+		"SDK Tracking URI 为 `https://raytrain.wellspiking.ai/api/v1/mlflow-tracking`，不是原生管理页面的地址",
+		"平台 Run ID",
+		"平台实验 ID",
+		"受限集成",
+		"集成接入",
+		"mlflow-tracking",
+	} {
+		if strings.Contains(byID["mlflow"].Markdown, staleMarker) {
+			t.Fatalf("public MLflow guide exposed stale legacy wording %q in %q", staleMarker, byID["mlflow"].Markdown)
+		}
+	}
+	assertMarkdownContains(t, byID["mlflow"].Markdown, []string{
+		"HTTP 错误按 MLflow 原生响应处理",
+	})
+	assertMarkdownContains(t, byID["troubleshooting"].Markdown, []string{
+		"### 训练慢，怎么定位瓶颈",
+		"### 常见错误速查",
+		"### 打不开工具或任务一直排队",
+		"### 日志有 Loss，为什么页面没有曲线",
+	})
+
+	adminItems, err := r.ListHelpDocuments(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(adminItems) != len(seed) {
+		t.Fatalf("admin list should retain original seed documents, got %d want %d", len(adminItems), len(seed))
+	}
+	adminByID := make(map[string]domain.HelpDocument, len(adminItems))
+	for _, item := range adminItems {
+		adminByID[item.ID] = item
+	}
+	for _, source := range seed {
+		if adminByID[source.ID].Markdown != source.Markdown {
+			t.Fatalf("admin source markdown changed for %s", source.ID)
+		}
+	}
+}
+
+func TestPublicHelpDocumentsPreserveFullSeedMarkdownInFoldedGuides(t *testing.T) {
+	r := helpRepo(t)
+	ctx := context.Background()
+	seed, err := helpdocs.Documents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.SeedHelpDocuments(ctx, seed); err != nil {
+		t.Fatal(err)
+	}
+	items, err := r.ListHelpDocuments(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := make(map[string]domain.HelpDocument, len(items))
+	for _, item := range items {
+		byID[item.ID] = item
+	}
+	rewrittenMLflowSeed := map[string]bool{
+		"mlflow":                   true,
+		"mlflow-api-with-pat":      true,
+		"mlflow-external-tracking": true,
+	}
+	for _, source := range seed {
+		if publicAdminOnlyHelpIDs[source.ID] {
+			continue
+		}
+		target := legacyPublicHelpGuideIDs[source.ID]
+		if target == "" {
+			t.Fatalf("seed document %s has no public target", source.ID)
+		}
+		targetGuide, ok := byID[target]
+		if !ok {
+			t.Fatalf("public target %s for seed %s is missing", target, source.ID)
+		}
+		if rewrittenMLflowSeed[source.ID] {
+			continue
+		}
+		expected := source.Markdown
+		if source.ID == "mlflow-framework-metrics" {
+			expected = markdownAfterFirstParagraph(t, source.Markdown)
+		}
+		if !strings.Contains(targetGuide.Markdown, expected) {
+			t.Fatalf("public guide %s does not preserve full markdown for seed %s", target, source.ID)
+		}
+	}
+}
+
+func TestPublicHelpAllowsKnownUserAdvancedDocsButFiltersAdminDocs(t *testing.T) {
+	items := []domain.HelpDocument{
+		{ID: "quickstart", Title: "Seed", Category: "01 开始使用", Markdown: "seed", Version: 3, PublishedVersion: 3, UpdatedBy: platformSeedActor},
+		{ID: "cache", Title: "Cache", Category: "06 进阶与管理员", Markdown: "cache user guide", Version: 3, PublishedVersion: 3, UpdatedBy: platformSeedActor},
+		{ID: "ray-data", Title: "Ray Data", Category: "06 进阶与管理员", Markdown: "ray data user guide", Version: 3, PublishedVersion: 3, UpdatedBy: platformSeedActor},
+		{ID: "admin-node-onboarding", Title: "Admin", Category: "06 进阶与管理员", Markdown: "node admin guide", Version: 3, PublishedVersion: 3, UpdatedBy: platformSeedActor},
+		{ID: "team-admin-runbook", Title: "Admin Custom", Category: "06 进阶与管理员", Markdown: "team admin guide", Version: 2, PublishedVersion: 2, UpdatedBy: "admin"},
+	}
+
+	got := publicHelpDocuments(items)
+	byID := make(map[string]domain.HelpDocument, len(got))
+	for _, item := range got {
+		byID[item.ID] = item
+	}
+	if _, ok := byID["admin-node-onboarding"]; ok {
+		t.Fatalf("platform admin guide leaked into public help: %+v", got)
+	}
+	if _, ok := byID["team-admin-runbook"]; ok {
+		t.Fatalf("custom admin guide leaked into public help: %+v", got)
+	}
+	for _, marker := range []string{"cache user guide", "ray data user guide"} {
+		if !strings.Contains(byID["data"].Markdown, marker) && !strings.Contains(byID["training-guide"].Markdown, marker) {
+			t.Fatalf("known user advanced seed content was filtered by old admin category; missing %q in %+v", marker, got)
+		}
+	}
+}
+
+func TestPublicHelpSeedCoverageMapAccountsForEverySeedDocument(t *testing.T) {
+	seed, err := helpdocs.Documents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminOnly := map[string]bool{
+		"admin-node-onboarding": true,
+		"admin-team-retirement": true,
+		"idc-sync-lifecycle":    true,
+	}
+	guideIDs := publicGuideIDs()
+	for _, source := range seed {
+		target, mapped := legacyPublicHelpGuideIDs[source.ID]
+		if adminOnly[source.ID] {
+			if mapped {
+				t.Fatalf("admin seed %s should not map to public guide %s", source.ID, target)
+			}
+			continue
+		}
+		if !mapped {
+			t.Fatalf("user seed %s (%s) has no public guide mapping", source.ID, source.Title)
+		}
+		if _, ok := guideIDs[target]; !ok {
+			t.Fatalf("user seed %s maps to unknown public guide %s", source.ID, target)
+		}
+	}
+}
+
+func assertMarkdownContains(t *testing.T, markdown string, markers []string) {
+	t.Helper()
+	for _, marker := range markers {
+		if !strings.Contains(markdown, marker) {
+			t.Fatalf("markdown missing %q", marker)
+		}
+	}
+}
+
+func markdownAfterFirstParagraph(t *testing.T, markdown string) string {
+	t.Helper()
+	index := strings.Index(markdown, "\n\n")
+	if index < 0 {
+		t.Fatalf("markdown has no paragraph break: %q", markdown)
+	}
+	return markdown[index+2:]
+}
+
 func TestPublicHelpWithoutPlatformSeedKeepsLegacyCustomDocsInInputOrder(t *testing.T) {
 	items := []domain.HelpDocument{
 		{ID: "worker-connect-and-scheduling-boundary", Title: "Worker", Category: "03 提交与运行", Markdown: "worker original", SortOrder: 250, UpdatedBy: "admin"},
@@ -273,7 +551,7 @@ func TestPublicHelpFoldsLegacyIntoExactGuideOverrideOnce(t *testing.T) {
 	items := []domain.HelpDocument{
 		{ID: "quickstart", Title: "Seed", Category: "01 开始使用", Markdown: "seed", Version: 3, PublishedVersion: 3, UpdatedBy: platformSeedActor},
 		{ID: "custom-environment", Title: "Legacy Environment", Category: "02 准备代码和数据", Markdown: "  legacy leading\n\nlegacy trailing  ", Version: 2, PublishedVersion: 2, SortOrder: 150, UpdatedBy: "admin"},
-		{ID: "data", Title: "Data Override", Category: "07 团队补充", Markdown: "data override body", Version: 4, PublishedVersion: 4, SortOrder: 901, UpdatedBy: "admin"},
+		{ID: "data", Title: "Data Override", Category: "06 进阶与管理员", Markdown: "data override body", Version: 4, PublishedVersion: 4, SortOrder: 901, UpdatedBy: "admin"},
 	}
 	got := publicHelpDocuments(items)
 	var dataCount int

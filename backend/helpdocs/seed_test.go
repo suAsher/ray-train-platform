@@ -78,7 +78,22 @@ func TestPublicGuidesAreCondensedUserFacingRunbooks(t *testing.T) {
 		body.WriteString("\n")
 	}
 	all := body.String()
-	for _, forbidden := range []string{"spk-rayjob login https://", "旧主题", "管理员："} {
+	for _, forbidden := range []string{
+		"spk-rayjob login https://",
+		"旧主题",
+		"管理员：",
+		"MLflow 总览",
+		"API 接入",
+		"高级",
+		"外部实验",
+		"独立实验兼容入口",
+		"当前仅支持六个方法",
+		"平台 Run ID",
+		"平台实验 ID",
+		"受限集成",
+		"集成接入",
+		"mlflow-tracking",
+	} {
 		if strings.Contains(all, forbidden) {
 			t.Fatalf("public guides contain non-user-facing or invalid text %q", forbidden)
 		}
@@ -102,7 +117,10 @@ func TestPublicGuidesAreCondensedUserFacingRunbooks(t *testing.T) {
 		"mlflow.log_metric",
 		"mlflow.log_artifact",
 		"Job ID 不等于 Run ID",
-		"/api/v1/mlflow-tracking",
+		"MLflow API",
+		"打开 MLflow",
+		"REPLACE_EXPERIMENT_NAME",
+		"runs.token",
 	} {
 		if !strings.Contains(all, marker) {
 			t.Fatalf("public guides are missing %q", marker)
