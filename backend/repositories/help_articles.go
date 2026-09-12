@@ -14,7 +14,7 @@ func (r *GormRepository) ListHelpArticles(ctx context.Context) ([]domain.HelpArt
 	if err := r.db.WithContext(ctx).Where("published_json <> ?", "").Find(&records).Error; err != nil {
 		return nil, err
 	}
-	articles := make([]domain.HelpArticle, 0, len(records))
+	documents := make([]domain.HelpDocument, 0, len(records))
 	for _, record := range records {
 		var document domain.HelpDocument
 		if err := json.Unmarshal([]byte(record.PublishedJSON), &document); err != nil {
@@ -23,8 +23,9 @@ func (r *GormRepository) ListHelpArticles(ctx context.Context) ([]domain.HelpArt
 		if isPublicAdminHelpDocument(document) {
 			continue
 		}
-		articles = append(articles, helpdocs.ProjectHelpArticle(document))
+		documents = append(documents, document)
 	}
+	articles := helpdocs.ProjectHelpArticles(documents)
 	sort.SliceStable(articles, func(i, j int) bool {
 		if articles[i].SortOrder != articles[j].SortOrder {
 			return articles[i].SortOrder < articles[j].SortOrder

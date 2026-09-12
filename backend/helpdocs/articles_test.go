@@ -108,3 +108,142 @@ func TestProjectHelpArticleMLflowKeywordsSupportIDSearch(t *testing.T) {
 		}
 	}
 }
+
+func TestProjectHelpArticlesMovesPlatformSeedQueueSectionToScheduling(t *testing.T) {
+	seed, err := Documents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source domain.HelpDocument
+	for _, document := range seed {
+		if document.ID == queueAndToolArticleID {
+			source = document
+			break
+		}
+	}
+	if source.ID == "" {
+		t.Fatal("missing queue and tool seed document")
+	}
+	source.UpdatedBy = PlatformSeedActor
+	projectedMarkdown, movedSection, ok := splitSubmittedSuspendedSection(source.Markdown)
+	if !ok {
+		t.Fatal("seed queue section was not found")
+	}
+	articles := ProjectHelpArticles(withPlatformSeedActor(seed))
+	byID := helpArticleTestByID(articles)
+	queueArticle := byID[queueAndToolArticleID]
+	schedulingArticle := byID[schedulingArticleID]
+	if strings.Contains(queueArticle.Markdown, movedSection) {
+		t.Fatalf("queue article still contains moved submitted/suspended section: %q", queueArticle.Markdown)
+	}
+	if !strings.Contains(queueArticle.Markdown, projectedMarkdown) || !strings.Contains(queueArticle.Markdown, queueMovedNotice) {
+		t.Fatalf("queue article did not preserve non-moved source text with notice")
+	}
+	if !strings.Contains(schedulingArticle.Markdown, movedSection) {
+		t.Fatalf("scheduling article does not contain moved section: %q", schedulingArticle.Markdown)
+	}
+	assertHelpArticleAnchor(t, schedulingArticle, "troubleshooting", SectionAnchorID(submittedSuspendedSectionHeading), SectionAnchorID(submittedSuspendedSectionHeading))
+}
+
+func TestProjectHelpArticlesDoesNotSplitManualQueueArticle(t *testing.T) {
+	manualSection := submittedSuspendedSectionStart + "\n\nmanual queue body"
+	manualMarkdown := "manual intro\n\n" + manualSection + submittedSuspendedSectionEnd + "\n\nmanual tool body"
+	articles := ProjectHelpArticles([]domain.HelpDocument{
+		{ID: queueAndToolArticleID, Title: "人工工具排查", Category: "05 故障排查", SortOrder: 530, Markdown: manualMarkdown, UpdatedBy: "admin"},
+		{ID: schedulingArticleID, Title: "多 Worker、多机与拓扑排队", Category: "06 进阶与管理员", SortOrder: 560, Markdown: "scheduling seed body", UpdatedBy: PlatformSeedActor},
+	})
+	byID := helpArticleTestByID(articles)
+	if !strings.Contains(byID[queueAndToolArticleID].Markdown, manualSection) {
+		t.Fatalf("manual queue article was split or lost its section: %q", byID[queueAndToolArticleID].Markdown)
+	}
+	if strings.Contains(byID[schedulingArticleID].Markdown, "manual queue body") {
+		t.Fatalf("manual queue section moved into scheduling: %q", byID[schedulingArticleID].Markdown)
+	}
+}
+
+func withPlatformSeedActor(documents []domain.HelpDocument) []domain.HelpDocument {
+	out := make([]domain.HelpDocument, 0, len(documents))
+	for _, document := range documents {
+		document.UpdatedBy = PlatformSeedActor
+		out = append(out, document)
+	}
+	return out
+}
+
+func helpArticleTestByID(items []domain.HelpArticle) map[string]domain.HelpArticle {
+	out := make(map[string]domain.HelpArticle, len(items))
+	for _, item := range items {
+		out[item.ID] = item
+	}
+	return out
+}
+
+func assertHelpArticleAnchor(t *testing.T, article domain.HelpArticle, topicID, sectionID, articleSectionID string) {
+	t.Helper()
+	for _, anchor := range article.LegacyAnchors {
+		if anchor.TopicID == topicID && anchor.SectionID == sectionID && anchor.ArticleSectionID == articleSectionID {
+			return
+		}
+	}
+	t.Fatalf("article %s missing anchor %s/%s -> %q: %+v", article.ID, topicID, sectionID, articleSectionID, article.LegacyAnchors)
+}
+
+func TestProjectHelpArticlesKeepsQueueSectionWhenSchedulingTargetMissing(t *testing.T) {
+	seed, err := Documents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source domain.HelpDocument
+	for _, document := range seed {
+		if document.ID == queueAndToolArticleID {
+			source = document
+			break
+		}
+	}
+	if source.ID == "" {
+		t.Fatal("missing queue and tool seed document")
+	}
+	_, movedSection, ok := splitSubmittedSuspendedSection(source.Markdown)
+	if !ok {
+		t.Fatal("seed queue section was not found")
+	}
+	source.UpdatedBy = PlatformSeedActor
+	articles := ProjectHelpArticles([]domain.HelpDocument{source})
+	byID := helpArticleTestByID(articles)
+	if !strings.Contains(byID[queueAndToolArticleID].Markdown, movedSection) {
+		t.Fatalf("queue section was removed even though scheduling target is missing: %q", byID[queueAndToolArticleID].Markdown)
+	}
+}
+
+func TestProjectHelpArticlesKeepsQueueSectionWhenSchedulingTargetIsManual(t *testing.T) {
+	seed, err := Documents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source domain.HelpDocument
+	for _, document := range seed {
+		if document.ID == queueAndToolArticleID {
+			source = document
+			break
+		}
+	}
+	if source.ID == "" {
+		t.Fatal("missing queue and tool seed document")
+	}
+	_, movedSection, ok := splitSubmittedSuspendedSection(source.Markdown)
+	if !ok {
+		t.Fatal("seed queue section was not found")
+	}
+	source.UpdatedBy = PlatformSeedActor
+	articles := ProjectHelpArticles([]domain.HelpDocument{
+		source,
+		{ID: schedulingArticleID, Title: "人工排队文档", Category: "03 提交与运行", SortOrder: 240, Markdown: "manual scheduling body", UpdatedBy: "admin"},
+	})
+	byID := helpArticleTestByID(articles)
+	if !strings.Contains(byID[queueAndToolArticleID].Markdown, movedSection) {
+		t.Fatalf("queue section was removed even though scheduling target is manual: %q", byID[queueAndToolArticleID].Markdown)
+	}
+	if strings.Contains(byID[schedulingArticleID].Markdown, movedSection) {
+		t.Fatalf("queue section moved into manual scheduling article: %q", byID[schedulingArticleID].Markdown)
+	}
+}

@@ -9,6 +9,13 @@ import (
 
 const PlatformSeedActor = "platform-seed"
 
+const queueAndToolArticleID = "portal-browser-tools-and-queue"
+const schedulingArticleID = "scheduling-topology"
+const submittedSuspendedSectionHeading = "任务处于 SUBMITTED / Suspended"
+const submittedSuspendedSectionStart = "### " + submittedSuspendedSectionHeading
+const submittedSuspendedSectionEnd = "\n\n### JupyterLab / VS Code 打不开"
+const queueMovedNotice = "排队说明已移到[任务一直排队，为什么还没开始？](#scheduling-topology)，本篇保留浏览器工具和 MLflow 页面打不开的处理方法。"
+
 type HelpArticleMeta struct {
 	Title         string
 	CategoryID    string
@@ -126,6 +133,46 @@ func PublicGuideSectionTargets() []struct{ GuideID, Heading, ArticleID string } 
 	return out
 }
 
+func ProjectHelpArticles(documents []domain.HelpDocument) []domain.HelpArticle {
+	movedQueueSection := ""
+	canMoveQueueSection := hasPlatformSeedSchedulingTarget(documents)
+	projectedDocuments := make([]domain.HelpDocument, 0, len(documents))
+	for _, document := range documents {
+		projected := document
+		if canMoveQueueSection && document.ID == queueAndToolArticleID && document.UpdatedBy == PlatformSeedActor {
+			markdown, section, ok := splitSubmittedSuspendedSection(document.Markdown)
+			if ok {
+				projected.Markdown = markdown
+				movedQueueSection = section
+			}
+		}
+		projectedDocuments = append(projectedDocuments, projected)
+	}
+	articles := make([]domain.HelpArticle, 0, len(projectedDocuments))
+	for _, document := range projectedDocuments {
+		article := ProjectHelpArticle(document)
+		if document.ID == schedulingArticleID && document.UpdatedBy == PlatformSeedActor && movedQueueSection != "" {
+			article.Markdown += "\n\n" + movedQueueSection
+			article.LegacyAnchors = append(article.LegacyAnchors, domain.HelpArticleLegacyAnchor{
+				TopicID:          "troubleshooting",
+				SectionID:        SectionAnchorID(submittedSuspendedSectionHeading),
+				ArticleSectionID: SectionAnchorID(submittedSuspendedSectionHeading),
+			})
+		}
+		articles = append(articles, article)
+	}
+	return articles
+}
+
+func hasPlatformSeedSchedulingTarget(documents []domain.HelpDocument) bool {
+	for _, document := range documents {
+		if document.ID == schedulingArticleID && document.UpdatedBy == PlatformSeedActor {
+			return true
+		}
+	}
+	return false
+}
+
 func ProjectHelpArticle(document domain.HelpDocument) domain.HelpArticle {
 	meta, known := HelpArticleMetaForID(document.ID)
 	projected := document
@@ -167,6 +214,21 @@ func ProjectHelpArticle(document domain.HelpDocument) domain.HelpArticle {
 		})
 	}
 	return article
+}
+
+func splitSubmittedSuspendedSection(markdown string) (string, string, bool) {
+	start := strings.Index(markdown, submittedSuspendedSectionStart)
+	if start < 0 {
+		return markdown, "", false
+	}
+	endRelative := strings.Index(markdown[start+len(submittedSuspendedSectionStart):], submittedSuspendedSectionEnd)
+	if endRelative < 0 {
+		return markdown, "", false
+	}
+	end := start + len(submittedSuspendedSectionStart) + endRelative
+	section := markdown[start:end]
+	projected := markdown[:start] + queueMovedNotice + markdown[end:]
+	return projected, section, true
 }
 
 func articleSupplementForDocument(id string) string {

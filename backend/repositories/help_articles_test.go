@@ -78,6 +78,16 @@ func TestHelpArticlesPreserveSeedMarkdownAndPublicGuideSupplements(t *testing.T)
 			continue
 		}
 		article := byID[source.ID]
+		if source.ID == "portal-browser-tools-and-queue" {
+			projected, moved, ok := splitSubmittedSuspendedForArticleTest(t, source.Markdown)
+			if !ok {
+				t.Fatal("portal queue source did not contain submitted/suspended section")
+			}
+			if !strings.Contains(article.Markdown, projected) || strings.Contains(article.Markdown, moved) || !strings.Contains(byID["scheduling-topology"].Markdown, moved) {
+				t.Fatalf("portal queue section was not split into scheduling while preserving the rest")
+			}
+			continue
+		}
 		expected := source.Markdown
 		if source.ID == "mlflow-framework-metrics" {
 			expected = markdownAfterFirstParagraph(t, source.Markdown)
@@ -138,7 +148,9 @@ func TestHelpArticlesPreserveManualKnownArticleSourceAndHistory(t *testing.T) {
 	}
 	environmentBody := "  custom environment full body\n\nkeeps every byte  "
 	workerBody := "worker connect full body\nwith scheduling note"
-	for _, change := range []struct{ id, body string }{{"custom-environment", environmentBody}, {"worker-connect-and-scheduling-boundary", workerBody}} {
+	manualQueueSection := "### 任务处于 SUBMITTED / Suspended\n\nmanual queue body stays here"
+	portalBody := "manual tool intro\n\n" + manualQueueSection + "\n\n### JupyterLab / VS Code 打不开\n\nmanual browser body"
+	for _, change := range []struct{ id, body string }{{"custom-environment", environmentBody}, {"worker-connect-and-scheduling-boundary", workerBody}, {"portal-browser-tools-and-queue", portalBody}} {
 		adminItems, err := r.ListHelpDocuments(ctx, true)
 		if err != nil {
 			t.Fatal(err)
@@ -159,18 +171,21 @@ func TestHelpArticlesPreserveManualKnownArticleSourceAndHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	articleByID := helpArticlesByID(articles)
-	if !strings.HasPrefix(articleByID["custom-environment"].Markdown, environmentBody) || !strings.HasPrefix(articleByID["worker-connect-and-scheduling-boundary"].Markdown, workerBody) {
+	if !strings.HasPrefix(articleByID["custom-environment"].Markdown, environmentBody) || !strings.HasPrefix(articleByID["worker-connect-and-scheduling-boundary"].Markdown, workerBody) || !strings.Contains(articleByID["portal-browser-tools-and-queue"].Markdown, manualQueueSection) {
 		t.Fatal("manual published body must remain an unchanged prefix before any public supplement")
+	}
+	if strings.Contains(articleByID["scheduling-topology"].Markdown, "manual queue body stays here") {
+		t.Fatal("manual portal queue section must not move into scheduling article")
 	}
 	adminItems, err := r.ListHelpDocuments(ctx, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	adminByID := helpDocumentsByID(adminItems)
-	if adminByID["custom-environment"].Markdown != environmentBody || adminByID["worker-connect-and-scheduling-boundary"].Markdown != workerBody {
+	if adminByID["custom-environment"].Markdown != environmentBody || adminByID["worker-connect-and-scheduling-boundary"].Markdown != workerBody || adminByID["portal-browser-tools-and-queue"].Markdown != portalBody {
 		t.Fatalf("admin sources changed after article projection: %+v", adminByID)
 	}
-	for _, change := range []struct{ id, body string }{{"custom-environment", environmentBody}, {"worker-connect-and-scheduling-boundary", workerBody}} {
+	for _, change := range []struct{ id, body string }{{"custom-environment", environmentBody}, {"worker-connect-and-scheduling-boundary", workerBody}, {"portal-browser-tools-and-queue", portalBody}} {
 		history, err := r.HelpDocumentHistory(ctx, change.id)
 		if err != nil {
 			t.Fatal(err)
@@ -202,6 +217,7 @@ func TestHelpArticleLegacyAnchorsExposeOldGuideSections(t *testing.T) {
 	assertLegacyAnchor(t, byID["quickstart"], "quickstart", "section-第一次跑通", "")
 	assertLegacyAnchor(t, byID["debug"], "debug", "section-交互式调试环境", "")
 	assertLegacyAnchor(t, byID["mlflow"], "mlflow", "section-查看训练实验与结果", "")
+	assertLegacyAnchor(t, byID["scheduling-topology"], "troubleshooting", "section-任务处于-submitted-suspended", "section-任务处于-submitted-suspended")
 }
 
 func assertArticle(t *testing.T, byID map[string]domain.HelpArticle, id, categoryID, title string, markers []string) {
@@ -244,4 +260,22 @@ func helpDocumentsByID(items []domain.HelpDocument) map[string]domain.HelpDocume
 		out[item.ID] = item
 	}
 	return out
+}
+
+func splitSubmittedSuspendedForArticleTest(t *testing.T, markdown string) (string, string, bool) {
+	t.Helper()
+	startMarker := "### 任务处于 SUBMITTED / Suspended"
+	endMarker := "\n\n### JupyterLab / VS Code 打不开"
+	start := strings.Index(markdown, startMarker)
+	if start < 0 {
+		return markdown, "", false
+	}
+	endRelative := strings.Index(markdown[start+len(startMarker):], endMarker)
+	if endRelative < 0 {
+		return markdown, "", false
+	}
+	end := start + len(startMarker) + endRelative
+	moved := markdown[start:end]
+	projected := markdown[:start] + "排队说明已移到[任务一直排队，为什么还没开始？](#scheduling-topology)，本篇保留浏览器工具和 MLflow 页面打不开的处理方法。" + markdown[end:]
+	return projected, moved, true
 }
