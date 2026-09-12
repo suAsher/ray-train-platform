@@ -1,6 +1,8 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
 	"context"
 	"errors"
 	"io"
@@ -8,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"ray-train-platform-backend/auth"
@@ -180,12 +183,60 @@ func (h *Handler) initMLflowArtifact(c *gin.Context) {
 		return
 	}
 	var input trackingartifacts.InitInput
-	if !h.decodeMLflowTrackingJSON(c, &input) {
+	if !h.decodeMLflowArtifactInit(c, &input) {
 		return
 	}
 	h.mutateMLflowArtifact(c, 201, func(ctx context.Context) (trackingartifacts.Artifact, error) {
 		return h.trackingArtifacts.Init(ctx, scope, key, input)
 	})
+}
+
+// The artifact contract uses exact camelCase fields. Keep its decoder separate
+// from MLflow's protocol decoder, whose lowercase member rules remain intact.
+func (h *Handler) decodeMLflowArtifactInit(c *gin.Context, target *trackingartifacts.InitInput) bool {
+ body, err := io.ReadAll(http.MaxBytesReader(c.Writer,c.Request.Body,mlflowTrackingBodyLimit))
+ if err!=nil {
+  var oversized *http.MaxBytesError
+  if errors.As(err,&oversized) { h.writeError(c,413,"ARTIFACT_BODY_TOO_LARGE","artifact initialization body exceeds 64 KiB") } else { h.mlflowArtifactError(c,0,trackingartifacts.ErrInvalid) }
+  return false
+ }
+ input,err:=parseMLflowArtifactInitJSON(body)
+ if err!=nil { h.mlflowArtifactError(c,0,trackingartifacts.ErrInvalid);return false }
+ *target=input
+ return true
+}
+
+func parseMLflowArtifactInitJSON(body []byte) (trackingartifacts.InitInput,error) {
+ var input trackingartifacts.InitInput
+ if !utf8.Valid(body) { return input,trackingartifacts.ErrInvalid }
+ decoder:=json.NewDecoder(bytes.NewReader(body))
+ decoder.UseNumber()
+ token,err:=decoder.Token()
+ if err!=nil || token!=json.Delim('{') { return input,trackingartifacts.ErrInvalid }
+ seen:=make(map[string]bool,3)
+ for decoder.More() {
+  token,err:=decoder.Token()
+  if err!=nil { return input,trackingartifacts.ErrInvalid }
+  key,ok:=token.(string)
+  if !ok || seen[key] { return input,trackingartifacts.ErrInvalid }
+  seen[key]=true
+  value,err:=decoder.Token()
+  if err!=nil { return input,trackingartifacts.ErrInvalid }
+  switch key {
+  case "name":
+   text,ok:=value.(string);if !ok{return input,trackingartifacts.ErrInvalid};input.Name=text
+  case "sha256":
+   text,ok:=value.(string);if !ok{return input,trackingartifacts.ErrInvalid};input.SHA256=text
+  case "sizeBytes":
+   number,ok:=value.(json.Number);if !ok{return input,trackingartifacts.ErrInvalid}
+   size,err:=number.Int64();if err!=nil{return input,trackingartifacts.ErrInvalid};input.SizeBytes=size
+  default: return input,trackingartifacts.ErrInvalid
+  }
+ }
+ token,err=decoder.Token()
+ if err!=nil || token!=json.Delim('}') || len(seen)!=3 { return input,trackingartifacts.ErrInvalid }
+ if _,err=decoder.Token();err!=io.EOF { return input,trackingartifacts.ErrInvalid }
+ return input,nil
 }
 
 func (h *Handler) completeMLflowArtifact(c *gin.Context) {

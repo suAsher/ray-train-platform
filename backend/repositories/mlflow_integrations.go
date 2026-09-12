@@ -86,19 +86,24 @@ func integrationOwner(tx *gorm.DB, tenantID, ownerID string, lock bool) error {
 	if tenantID == "" || ownerID == "" {
 		return integrations.ErrNotFound
 	}
-	if err := requireActiveIdentityTenant(tx, tenantID, lock); err != nil {
+	if err := requireActiveIdentityTenant(tx.Session(&gorm.Session{NewDB: true}), tenantID, lock); err != nil {
 		return integrationError(err)
 	}
-	query := tx
+	// Clauses returns a reusable statement. Keep the two model queries separate
+	// so membership conditions cannot be appended to the local_users statement.
+	// NewDB clears statement state while retaining the transaction connection.
+	ownerQuery := tx.Session(&gorm.Session{NewDB: true}).Model(&LocalUserRecord{})
+	membershipQuery := tx.Session(&gorm.Session{NewDB: true}).Model(&TenantMembershipRecord{})
 	if lock {
-		query = query.Clauses(clause.Locking{Strength: "UPDATE"})
+		ownerQuery = ownerQuery.Clauses(clause.Locking{Strength: "UPDATE"})
+		membershipQuery = membershipQuery.Clauses(clause.Locking{Strength: "UPDATE"})
 	}
 	var owner LocalUserRecord
-	if err := query.Where("id = ? AND disabled = FALSE AND decommissioned_at IS NULL", ownerID).First(&owner).Error; err != nil {
+	if err := ownerQuery.Where("id = ? AND disabled = FALSE AND decommissioned_at IS NULL", ownerID).First(&owner).Error; err != nil {
 		return integrationError(err)
 	}
 	var membership TenantMembershipRecord
-	if err := query.Where("identity_id = ? AND tenant_id = ? AND status = ?", ownerID, tenantID, domain.MembershipStatusActive).First(&membership).Error; err != nil {
+	if err := membershipQuery.Where("identity_id = ? AND tenant_id = ? AND status = ?", ownerID, tenantID, domain.MembershipStatusActive).First(&membership).Error; err != nil {
 		return integrationError(err)
 	}
 	return nil

@@ -47,6 +47,7 @@ type artifactServiceFake struct {
 	calls    int
 	scope    trackingartifacts.Scope
 	key      string
+	input    trackingartifacts.InitInput
 	index    int
 	sha      string
 	body     string
@@ -56,9 +57,10 @@ type artifactServiceFake struct {
 }
 
 func (s *artifactServiceFake) mark(scope trackingartifacts.Scope) { s.calls++; s.scope = scope }
-func (s *artifactServiceFake) Init(_ context.Context, scope trackingartifacts.Scope, key string, _ trackingartifacts.InitInput) (trackingartifacts.Artifact, error) {
+func (s *artifactServiceFake) Init(_ context.Context, scope trackingartifacts.Scope, key string, input trackingartifacts.InitInput) (trackingartifacts.Artifact, error) {
 	s.mark(scope)
 	s.key = key
+	s.input = input
 	return s.artifact, s.err
 }
 func (s *artifactServiceFake) List(_ context.Context, scope trackingartifacts.Scope, _ string, _ int) (trackingartifacts.Page, error) {
@@ -383,4 +385,39 @@ func TestMLflowArtifactDownloadWriteDeadlineFailureStopsStream(t *testing.T) {
 	if w.Code != 503 || len(w.deadlines) != 1 || reader.bytesRead != 0 || !reader.closed {
 		t.Fatalf("failed deadline still streamed: status=%d calls=%v read=%d closed=%v", w.Code, w.deadlines, reader.bytesRead, reader.closed)
 	}
+}
+
+func TestMLflowArtifactInitAcceptsExactCamelCaseContract(t *testing.T) {
+ input:=trackingartifacts.InitInput{Name:"model.bin",SizeBytes:4,SHA256:artifactSHA}
+ expected:=trackingartifacts.Artifact{ID:artifactID,RunID:artifactRunID,Name:input.Name,SizeBytes:input.SizeBytes,SHA256:input.SHA256,State:"PENDING"}
+ s:=&artifactServiceFake{artifact:expected}
+ body:=`{"name":"model.bin","sizeBytes":4,"sha256":"`+artifactSHA+`"}`
+ res:=artifactRequest(mlflowArtifactTestRouter(artifactPrincipal(),&artifactAuthorizerFake{},s,newFakeMLflowDashboardStore()),"POST",artifactPath,body,int64(len(body)))
+ if res.Code!=201 || s.calls!=1 || s.input!=input { t.Fatalf("valid init rejected or altered: status=%d input=%+v body=%s",res.Code,s.input,res.Body.String()) }
+ var artifact trackingartifacts.Artifact
+ decodeTrackingData(t,res,&artifact)
+ if artifact.ID!=artifactID || artifact.State!="PENDING" || artifact.SizeBytes!=4 || artifact.SHA256!=artifactSHA { t.Fatalf("unexpected init response: %+v",artifact) }
+}
+func TestMLflowArtifactInitRejectsAmbiguousJSON(t *testing.T) {
+ valid:=`{"name":"model.bin","sizeBytes":4,"sha256":"`+artifactSHA+`"}`
+ cases:=map[string]string{
+  "duplicate":strings.Replace(valid,`"sizeBytes":4`,`"sizeBytes":4,"sizeBytes":5`,1),
+  "escaped duplicate":strings.Replace(valid,`"name":"model.bin"`,`"name":"model.bin","na\u006de":"other.bin"`,1),
+  "unknown":strings.Replace(valid,`"sizeBytes":4`,`"sizeBytes":4,"ownerId":"other"`,1),
+  "case":strings.Replace(valid,`"sizeBytes"`,`"SizeBytes"`,1),
+  "snake case":strings.Replace(valid,`"sizeBytes"`,`"size_bytes"`,1),
+  "fraction":strings.Replace(valid,`"sizeBytes":4`,`"sizeBytes":4.5`,1),
+  "numeric string":strings.Replace(valid,`"sizeBytes":4`,`"sizeBytes":"4"`,1),
+  "nested":strings.Replace(valid,`"sizeBytes":4`,`"sizeBytes":{"sizeBytes":4}`,1),
+  "missing":`{"name":"model.bin","sha256":"`+artifactSHA+`"}`,
+  "null field":strings.Replace(valid,`"sizeBytes":4`,`"sizeBytes":null`,1),
+  "root null":"null",
+  "root array":"["+valid+"]",
+  "trailing":valid+valid,
+ }
+ for name,body:=range cases { t.Run(name,func(t *testing.T){
+  s:=&artifactServiceFake{}
+  res:=artifactRequest(mlflowArtifactTestRouter(artifactPrincipal(),&artifactAuthorizerFake{},s,newFakeMLflowDashboardStore()),"POST",artifactPath,body,int64(len(body)))
+  if res.Code!=400 || s.calls!=0 { t.Fatalf("ambiguous init accepted: status=%d calls=%d body=%s",res.Code,s.calls,res.Body.String()) }
+ }) }
 }
