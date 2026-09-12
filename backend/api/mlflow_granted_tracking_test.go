@@ -2,10 +2,14 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/integrations"
 	"ray-train-platform-backend/mlflowtracking"
@@ -117,4 +121,127 @@ func TestGrantedTrackingChecksWriteGrantAndCursorIdentity(t *testing.T) {
 
 func machineTestContext(a mlflowtracking.Actor) context.Context {
 	return auth.SetPrincipalContext(context.Background(), auth.Principal{Subject: a.UserID, TenantID: a.TenantID, IntegrationID: a.IntegrationID, AuthType: auth.AuthTypePAT, Scopes: []string{"experiments:read", "experiments:write", "artifacts:read", "artifacts:write"}})
+}
+
+type grantedTimedTrackingFake struct {
+	*fakeMLflowTrackingService
+	finishCalls      int
+	endTimeMS        int64
+	contextPrincipal auth.Principal
+}
+
+func (f *grantedTimedTrackingFake) FinishRunAt(ctx context.Context, actor mlflowtracking.Actor, id, status string, endTimeMS int64) (mlflowtracking.Run, error) {
+	f.finishCalls++
+	f.endTimeMS = endTimeMS
+	f.contextPrincipal, _ = auth.PrincipalFromContext(ctx)
+	run, err := f.fakeMLflowTrackingService.FinishRun(ctx, actor, id, status)
+	run.EndTimeMS = endTimeMS
+	return run, err
+}
+
+type grantedFinishAccessFake struct {
+	integrationAccessFake
+	denyGrant bool
+}
+
+func (f *grantedFinishAccessFake) Authorize(ctx context.Context, p auth.Principal, id, permission string) (integrations.Identity, error) {
+	f.permission = permission
+	if f.denyGrant {
+		return integrations.Identity{}, integrations.ErrNotFound
+	}
+	return f.integrationAccessFake.Authorize(ctx, p, id, permission)
+}
+
+// Register the actual SDK adapter against the production wrapper, preserving
+// both principal locations populated by the authentication middleware.
+func grantedSDKTestRouter(p auth.Principal, service mlflowTrackingService, audit *fakeMLflowDashboardStore) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("ray-platform-principal", p)
+		c.Request = c.Request.WithContext(auth.SetPrincipalContext(c.Request.Context(), p))
+		c.Next()
+	})
+	h := NewHandler(&fakeJobRepository{}, Options{MLflowTracking: service, MLflowDashboardStore: audit})
+	h.RegisterMLflowSDKRoutes(r.Group("/api/v1"))
+	return r
+}
+
+func TestGrantedTrackingImplementsSDKTimedFinisher(t *testing.T) {
+	service := NewGrantedMLflowTracking(&fakeMLflowTrackingService{}, integrationTrackingRecordsFake{}, &integrationAccessFake{}, []byte(strings.Repeat("k", 32)))
+	if _, ok := any(service).(mlflowTrackingTimedFinisher); !ok {
+		t.Fatal("production wrapper hides FinishRunAt from the MLflow SDK adapter")
+	}
+}
+
+func TestGrantedTrackingSDKUpdatePreservesEndTimeAndAuditIdentity(t *testing.T) {
+	for _, machine := range []bool{false, true} {
+		t.Run(fmt.Sprintf("machine=%t", machine), func(t *testing.T) {
+			p := trackingPrincipal("experiments:read", "experiments:write")
+			ownerID := p.Subject
+			if machine {
+				p.IntegrationID = strings.Repeat("a", 32)
+				p.Subject = "integration:" + p.IntegrationID
+				ownerID = "owner"
+			}
+			runID, expID := strings.Repeat("b", 32), strings.Repeat("c", 32)
+			upstream := &grantedTimedTrackingFake{fakeMLflowTrackingService: &fakeMLflowTrackingService{run: mlflowtracking.Run{ID: runID, ExperimentID: expID, State: "FINISHED", StartTimeMS: 1000}}}
+			access := &grantedFinishAccessFake{}
+			service := NewGrantedMLflowTracking(upstream, integrationTrackingRecordsFake{run: mlflowtracking.Run{ID: runID, ExperimentID: expID}}, access, []byte(strings.Repeat("k", 32)))
+			audit := newFakeMLflowDashboardStore()
+			response := httptest.NewRecorder()
+			const endTimeMS int64 = 1789187654321
+			body := fmt.Sprintf(`{"run_id":%q,"status":"FINISHED","end_time":%d}`, runID, endTimeMS)
+			grantedSDKTestRouter(p, service, audit).ServeHTTP(response, httptest.NewRequest("POST", "/api/v1/mlflow-tracking/api/2.0/mlflow/runs/update", strings.NewReader(body)))
+			if response.Code != 200 {
+				t.Fatalf("SDK update through wrapper returned %d: %s", response.Code, response.Body.String())
+			}
+			var result struct {
+				RunInfo struct {
+					RunID   string `json:"run_id"`
+					EndTime int64  `json:"end_time"`
+				} `json:"run_info"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if upstream.finishCalls != 1 || upstream.endTimeMS != endTimeMS || result.RunInfo.EndTime != endTimeMS || result.RunInfo.RunID != runID {
+				t.Fatalf("SDK end_time was dropped or replaced: calls=%d passed=%d returned=%d", upstream.finishCalls, upstream.endTimeMS, result.RunInfo.EndTime)
+			}
+			if upstream.actor.UserID != ownerID || upstream.actor.TenantID != p.TenantID || upstream.actor.IntegrationID != "" || upstream.contextPrincipal.Subject != p.Subject || upstream.contextPrincipal.IntegrationID != p.IntegrationID {
+				t.Fatalf("timed finish lost owner delegation or machine context: actor=%+v principal=%+v", upstream.actor, upstream.contextPrincipal)
+			}
+			if len(audit.audits) != 2 {
+				t.Fatalf("missing SDK audit pair: %d", len(audit.audits))
+			}
+			for _, event := range audit.audits {
+				if event.Principal.Subject != p.Subject || event.Principal.IntegrationID != p.IntegrationID {
+					t.Fatalf("audit principal was replaced: %+v", event.Principal)
+				}
+			}
+			if machine && access.permission != "write" {
+				t.Fatal("timed finish bypassed write grant")
+			}
+		})
+	}
+}
+
+func TestGrantedTrackingSDKTimedFinishDeniesGrantBeforeUpstream(t *testing.T) {
+	p := trackingPrincipal("experiments:read", "experiments:write")
+	p.IntegrationID = strings.Repeat("a", 32)
+	p.Subject = "integration:" + p.IntegrationID
+	runID, expID := strings.Repeat("b", 32), strings.Repeat("c", 32)
+	upstream := &grantedTimedTrackingFake{fakeMLflowTrackingService: &fakeMLflowTrackingService{}}
+	access := &grantedFinishAccessFake{denyGrant: true}
+	service := NewGrantedMLflowTracking(upstream, integrationTrackingRecordsFake{run: mlflowtracking.Run{ID: runID, ExperimentID: expID}}, access, []byte(strings.Repeat("k", 32)))
+	audit := newFakeMLflowDashboardStore()
+	response := httptest.NewRecorder()
+	body := fmt.Sprintf(`{"run_id":%q,"status":"FINISHED","end_time":1789187654321}`, runID)
+	grantedSDKTestRouter(p, service, audit).ServeHTTP(response, httptest.NewRequest("POST", "/api/v1/mlflow-tracking/api/2.0/mlflow/runs/update", strings.NewReader(body)))
+	if response.Code != 404 || access.permission != "write" || upstream.finishCalls != 0 || upstream.runID != "" {
+		t.Fatalf("grant denial was lost or reached upstream: status=%d permission=%s calls=%d", response.Code, access.permission, upstream.finishCalls)
+	}
+	if len(audit.audits) != 2 || audit.audits[1].Principal.Subject != p.Subject {
+		t.Fatal("denied machine operation lost its audit identity")
+	}
 }

@@ -186,6 +186,30 @@ func (s *GrantedMLflowTracking) FinishRun(ctx context.Context, a mlflowtracking.
 	}
 	return s.base.FinishRun(ctx, owner, id, status)
 }
+
+// Keep optional SDK capabilities visible through the authorization wrapper.
+var _ mlflowTrackingTimedFinisher = (*GrantedMLflowTracking)(nil)
+
+func (s *GrantedMLflowTracking) FinishRunAt(ctx context.Context, a mlflowtracking.Actor, id, status string, endTimeMS int64) (mlflowtracking.Run, error) {
+	owner := a
+	if a.IntegrationID == "" {
+		if _, err := trackingMachinePrincipal(ctx, a); err != nil {
+			return mlflowtracking.Run{}, err
+		}
+	} else {
+		var err error
+		owner, _, err = s.runOwner(ctx, a, id, "write")
+		if err != nil {
+			return mlflowtracking.Run{}, err
+		}
+	}
+	timed, ok := s.base.(mlflowTrackingTimedFinisher)
+	if !ok {
+		return mlflowtracking.Run{}, mlflowtracking.ErrUnavailable
+	}
+	return timed.FinishRunAt(ctx, owner, id, status, endTimeMS)
+}
+
 func (s *GrantedMLflowTracking) ListExperiments(ctx context.Context, a mlflowtracking.Actor, limit int, cursor string) (mlflowtracking.ExperimentPage, error) {
 	owner, p, _, err := s.owner(ctx, a)
 	if err != nil {
