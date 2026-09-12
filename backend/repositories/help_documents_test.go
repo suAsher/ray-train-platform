@@ -151,6 +151,20 @@ func TestPublicHelpDocumentsUseSummariesAndKeepCustomPublicDocs(t *testing.T) {
 	if _, err = r.ChangeHelpDocument(ctx, custom.ID, custom.Version, "publish", 0, nil, "admin"); err != nil {
 		t.Fatal(err)
 	}
+	customEnvironment, err := r.CreateHelpDocument(ctx, domain.HelpDocument{ID: "custom-environment", Title: "团队镜像登记补充", Category: "02 准备代码和数据", Markdown: "full custom environment body", SortOrder: 150}, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = r.ChangeHelpDocument(ctx, customEnvironment.ID, customEnvironment.Version, "publish", 0, nil, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	workerConnect, err := r.CreateHelpDocument(ctx, domain.HelpDocument{ID: "worker-connect-and-scheduling-boundary", Title: "团队 Worker 连接补充", Category: "03 提交与运行", Markdown: "full worker connect body", SortOrder: 250}, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = r.ChangeHelpDocument(ctx, workerConnect.ID, workerConnect.Version, "publish", 0, nil, "admin"); err != nil {
+		t.Fatal(err)
+	}
 	override, err := r.CreateHelpDocument(ctx, domain.HelpDocument{ID: "mlflow", Title: "团队 MLflow 补充", Category: "07 团队补充", Markdown: "custom mlflow override", SortOrder: 901}, "admin")
 	if err != nil {
 		t.Fatal(err)
@@ -179,7 +193,7 @@ func TestPublicHelpDocumentsUseSummariesAndKeepCustomPublicDocs(t *testing.T) {
 			t.Fatalf("public help is missing %s: %+v", id, items)
 		}
 	}
-	for _, oldID := range []string{"code", "mlflow-api-with-pat", "admin-node-onboarding", "team-admin-runbook"} {
+	for _, oldID := range []string{"code", "mlflow-api-with-pat", "admin-node-onboarding", "team-admin-runbook", "custom-environment", "worker-connect-and-scheduling-boundary"} {
 		if _, ok := byID[oldID]; ok {
 			t.Fatalf("old seed document %s leaked into public help: %+v", oldID, items)
 		}
@@ -189,6 +203,16 @@ func TestPublicHelpDocumentsUseSummariesAndKeepCustomPublicDocs(t *testing.T) {
 	}
 	if byID["mlflow"].Markdown != "custom mlflow override" {
 		t.Fatalf("custom document did not override generated guide ID: %+v", byID["mlflow"])
+	}
+	for _, marker := range []string{"团队镜像登记补充", "full custom environment body"} {
+		if !strings.Contains(byID["data"].Markdown, marker) {
+			t.Fatalf("legacy custom environment was not folded into data guide; missing %q in %q", marker, byID["data"].Markdown)
+		}
+	}
+	for _, marker := range []string{"团队 Worker 连接补充", "full worker connect body"} {
+		if !strings.Contains(byID["debug"].Markdown, marker) {
+			t.Fatalf("legacy worker connect was not folded into debug guide; missing %q in %q", marker, byID["debug"].Markdown)
+		}
 	}
 	mlflow := byID["mlflow"].Markdown
 	for _, marker := range []string{"custom mlflow override"} {
@@ -207,6 +231,88 @@ func TestPublicHelpDocumentsUseSummariesAndKeepCustomPublicDocs(t *testing.T) {
 	}
 	if adminByID["admin-node-onboarding"].Markdown != "kubectl node admin docs" || adminByID["mlflow-api-with-pat"].Markdown != "old platform run id docs" {
 		t.Fatalf("admin source documents were not preserved: %+v", adminItems)
+	}
+	if adminByID["custom-environment"].Markdown != "full custom environment body" || adminByID["worker-connect-and-scheduling-boundary"].Markdown != "full worker connect body" {
+		t.Fatalf("admin legacy custom source documents were not preserved: %+v", adminItems)
+	}
+	environmentHistory, err := r.HelpDocumentHistory(ctx, "custom-environment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if environmentHistory[0].Markdown != "full custom environment body" || environmentHistory[len(environmentHistory)-1].Markdown != "full custom environment body" {
+		t.Fatalf("custom environment history changed original markdown: %+v", environmentHistory)
+	}
+	workerHistory, err := r.HelpDocumentHistory(ctx, "worker-connect-and-scheduling-boundary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workerHistory[0].Markdown != "full worker connect body" || workerHistory[len(workerHistory)-1].Markdown != "full worker connect body" {
+		t.Fatalf("worker connect history changed original markdown: %+v", workerHistory)
+	}
+}
+
+func TestPublicHelpWithoutPlatformSeedKeepsLegacyCustomDocsInInputOrder(t *testing.T) {
+	items := []domain.HelpDocument{
+		{ID: "worker-connect-and-scheduling-boundary", Title: "Worker", Category: "03 提交与运行", Markdown: "worker original", SortOrder: 250, UpdatedBy: "admin"},
+		{ID: "team-faq", Title: "FAQ", Category: "07 团队补充", Markdown: "faq", SortOrder: 900, UpdatedBy: "admin"},
+		{ID: "custom-environment", Title: "Environment", Category: "02 准备代码和数据", Markdown: "environment original", SortOrder: 150, UpdatedBy: "admin"},
+		{ID: "team-admin-runbook", Title: "Admin", Category: "06 进阶与管理员", Markdown: "admin", SortOrder: 910, UpdatedBy: "admin"},
+	}
+	got := publicHelpDocuments(items)
+	if len(got) != 3 {
+		t.Fatalf("got %d public documents: %+v", len(got), got)
+	}
+	for i, want := range []string{"worker-connect-and-scheduling-boundary", "team-faq", "custom-environment"} {
+		if got[i].ID != want {
+			t.Fatalf("document %d got %s want %s: %+v", i, got[i].ID, want, got)
+		}
+	}
+}
+
+func TestPublicHelpFoldsLegacyIntoExactGuideOverrideOnce(t *testing.T) {
+	items := []domain.HelpDocument{
+		{ID: "quickstart", Title: "Seed", Category: "01 开始使用", Markdown: "seed", Version: 3, PublishedVersion: 3, UpdatedBy: platformSeedActor},
+		{ID: "custom-environment", Title: "Legacy Environment", Category: "02 准备代码和数据", Markdown: "  legacy leading\n\nlegacy trailing  ", Version: 2, PublishedVersion: 2, SortOrder: 150, UpdatedBy: "admin"},
+		{ID: "data", Title: "Data Override", Category: "07 团队补充", Markdown: "data override body", Version: 4, PublishedVersion: 4, SortOrder: 901, UpdatedBy: "admin"},
+	}
+	got := publicHelpDocuments(items)
+	var dataCount int
+	var data domain.HelpDocument
+	for _, item := range got {
+		if item.ID == "custom-environment" {
+			t.Fatalf("legacy custom document leaked as standalone item: %+v", got)
+		}
+		if item.ID == "data" {
+			dataCount++
+			data = item
+		}
+	}
+	if dataCount != 1 {
+		t.Fatalf("data guide count got %d want 1: %+v", dataCount, got)
+	}
+	if !strings.Contains(data.Markdown, "data override body") || !strings.Contains(data.Markdown, "### Legacy Environment") || !strings.Contains(data.Markdown, "  legacy leading\n\nlegacy trailing  ") {
+		t.Fatalf("exact guide override did not retain override and legacy markdown: %q", data.Markdown)
+	}
+}
+
+func TestAppendLegacyPublicSectionsDoesNotMutateInputOrTrimMarkdown(t *testing.T) {
+	sections := []domain.HelpDocument{
+		{ID: "b", Title: "B", Markdown: "  b body\n", SortOrder: 20},
+		{ID: "a", Title: "A", Markdown: "\n a body  ", SortOrder: 10},
+	}
+	got := appendLegacyPublicSections(domain.HelpDocument{ID: "data", Markdown: "base"}, sections)
+	if sections[0].ID != "b" || sections[1].ID != "a" {
+		t.Fatalf("appendLegacyPublicSections mutated input order: %+v", sections)
+	}
+	a := strings.Index(got.Markdown, "### A")
+	b := strings.Index(got.Markdown, "### B")
+	if a < 0 || b < 0 || a > b {
+		t.Fatalf("folded sections were not sorted by document order: %q", got.Markdown)
+	}
+	for _, marker := range []string{"\n a body  ", "  b body\n"} {
+		if !strings.Contains(got.Markdown, marker) {
+			t.Fatalf("folded markdown was trimmed or changed; missing %q in %q", marker, got.Markdown)
+		}
 	}
 }
 
