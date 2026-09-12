@@ -111,6 +111,23 @@ func TestPersonalAccessTokenRejectsWeakPepperUnknownScopeAndExcessExpiry(t *test
 	}
 }
 
+func TestPersonalAccessTokenAllowsExplicitExperimentScopes(t *testing.T) {
+	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
+	issued, err := IssuePersonalAccessToken(PersonalAccessTokenInput{
+		ID:        "pat-experiments",
+		TenantID:  "tenant-a",
+		UserID:    "user-a",
+		Scopes:    []string{PATScopeExperimentsWrite, PATScopeExperimentsRead, PATScopeJobsRead, PATScopeExperimentsRead},
+		ExpiresAt: now.Add(24 * time.Hour),
+	}, testPATPepper(), now)
+	if err != nil {
+		t.Fatalf("issue experiment PAT: %v", err)
+	}
+	if got := strings.Join(issued.Scopes, ","); got != "experiments:read,experiments:write,jobs:read" {
+		t.Fatalf("expected sorted experiment scopes, got %q", got)
+	}
+}
+
 func TestRedactPersonalAccessTokenKeepsOnlyPublicID(t *testing.T) {
 	issued, err := IssuePersonalAccessToken(PersonalAccessTokenInput{ID: "pat-1", TenantID: "t", UserID: "u", Scopes: []string{PATScopeJobsRead}}, testPATPepper(), time.Now().UTC())
 	if err != nil {
