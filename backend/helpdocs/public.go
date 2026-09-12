@@ -196,7 +196,7 @@ const mlflowPublicGuide = `### 页面和记录关系
 
 ### 高级：独立实验和受限集成
 
-独立实验指没有 RayTrain Job 的受限平台记录，适合外部评估程序补充指标。旧 `/api/v1/mlflow` REST 和 `/api/v1/mlflow-tracking` 六方法 SDK 是可选进阶路径，使用平台实验 ID / 平台 Run ID，并受实验 grant、scope 和方法白名单限制。
+独立实验指没有 RayTrain Job 的受限平台记录，适合外部评估程序补充指标。旧 ` + "`/api/v1/mlflow`" + ` REST 和 ` + "`/api/v1/mlflow-tracking`" + ` 六方法 SDK 是可选进阶路径，使用平台实验 ID / 平台 Run ID，并受实验 grant、scope 和方法白名单限制。
 
 Serving、独立评估调度、模型审批发布闭环不要当作已完成能力；注册模型版本也不等于已经部署推理服务。`
 
