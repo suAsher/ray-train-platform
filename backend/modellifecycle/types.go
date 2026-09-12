@@ -44,6 +44,8 @@ type Model struct {
 	Revision    int64     `json:"revision"`
 	CreatedAt   time.Time `json:"createdAt"`
 	UpdatedAt   time.Time `json:"updatedAt"`
+	IdempotencyKey string `json:"-"`
+	RequestSHA256 string `json:"-"`
 }
 
 func (Model) TableName() string { return "model_catalog" }

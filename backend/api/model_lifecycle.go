@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +20,17 @@ import (
 type modelSnapshotService interface {
 	RequestVersion(context.Context, modellifecycle.VersionRequest) (modellifecycle.Version, error)
 	Download(context.Context, modellifecycle.Version, io.Writer) error
+}
+
+var modelRequestKeyPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
+
+func (h *Handler) modelRequestKey(c *gin.Context) (string, bool) {
+	key := c.GetHeader("Idempotency-Key")
+	if !modelRequestKeyPattern.MatchString(key) {
+		h.writeError(c, 400, "MODEL_REQUEST_KEY_REQUIRED", "请提供有效的 Idempotency-Key，同一创建请求重试时保留此键")
+		return "", false
+	}
+	return key, true
 }
 type modelResponse struct {
 	modellifecycle.Model
@@ -173,6 +185,8 @@ func (h *Handler) getModel(c *gin.Context) {
 	h.writeSuccess(c, 200, modelResponse{m, canManageModel(p, m)})
 }
 func (h *Handler) createModel(c *gin.Context) {
+	key, ok := h.modelRequestKey(c)
+	if !ok { return }
 	var input struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
@@ -181,7 +195,7 @@ func (h *Handler) createModel(c *gin.Context) {
 		return
 	}
 	p, _ := auth.PrincipalFromGin(c)
-	m, err := h.models.CreateModel(c.Request.Context(), modellifecycle.Model{Name: strings.TrimSpace(input.Name), Description: strings.TrimSpace(input.Description), OwnerID: p.Subject, OwnerName: p.Username, TenantID: p.TenantID})
+	m, err := h.models.CreateModel(c.Request.Context(), modellifecycle.Model{Name: strings.TrimSpace(input.Name), Description: strings.TrimSpace(input.Description), OwnerID: p.Subject, OwnerName: p.Username, TenantID: p.TenantID, IdempotencyKey: key})
 	if h.modelError(c, err) {
 		return
 	}

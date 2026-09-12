@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS model_catalog (
  owner_id TEXT NOT NULL CHECK (owner_id <> ''),
  owner_name TEXT NOT NULL DEFAULT '',
  tenant_id TEXT NOT NULL CHECK (tenant_id <> ''),
+ idempotency_key TEXT NOT NULL DEFAULT '' CHECK (length(idempotency_key) <= 128),
+ request_sha256 TEXT NOT NULL DEFAULT '' CHECK ((idempotency_key = '' AND request_sha256 = '') OR (idempotency_key <> '' AND request_sha256 ~ '^[0-9a-f]{64}$')),
  archived BOOLEAN NOT NULL DEFAULT FALSE,
  revision BIGINT NOT NULL DEFAULT 1 CHECK (revision >= 1),
  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -17,6 +19,7 @@ CREATE TABLE IF NOT EXISTS model_catalog (
 );
 CREATE INDEX IF NOT EXISTS model_catalog_owner_idx ON model_catalog(owner_id, archived, id);
 CREATE INDEX IF NOT EXISTS model_catalog_list_idx ON model_catalog(archived, id);
+CREATE UNIQUE INDEX IF NOT EXISTS model_catalog_request_idx ON model_catalog(owner_id, idempotency_key) WHERE idempotency_key <> '';
 
 CREATE TABLE IF NOT EXISTS model_versions (
  id TEXT PRIMARY KEY,

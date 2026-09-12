@@ -39,6 +39,8 @@ func (h *Handler) createModelVersion(c *gin.Context) {
 	if !h.decodeModelJSON(c, &input) {
 		return
 	}
+	key, ok := h.modelRequestKey(c)
+	if !ok { return }
 	relative, err := domain.NormalizeStorageRelativePath(input.Path)
 	if err != nil || relative == "" {
 		h.writeError(c, 400, "INVALID_ARTIFACT_PATH", "请选择任务输出中的相对文件路径")
@@ -73,7 +75,7 @@ func (h *Handler) createModelVersion(c *gin.Context) {
 	request := modellifecycle.VersionRequest{
 		ModelID: m.ID, Description: input.Description, CreatorID: p.Subject, CreatorName: p.Username,
 		JobID: job.ID, JobName: job.Spec.Name, FileName: path.Base(relative), SourceRoot: root, RelativePath: relative,
-		IdempotencyKey: c.GetHeader("Idempotency-Key"), RuntimeImage: job.Spec.Image,
+		IdempotencyKey: key, RuntimeImage: job.Spec.Image,
 	}
 	if isModelSourceDigest(job.Spec.Source.ArtifactSHA256, 64) {
 		request.CodeSHA256 = job.Spec.Source.ArtifactSHA256
@@ -179,6 +181,6 @@ func (h *Handler) downloadModelVersion(c *gin.Context) {
 		c.Header("Content-Disposition", "")
 		c.Header("Content-Type", "")
 		c.Header("X-Content-SHA256", "")
-		h.modelError(c, err)
+		h.writeError(c, http.StatusServiceUnavailable, "MODEL_DOWNLOAD_FAILED", "权重副本读取或完整性校验失败，请稍后重试")
 	}
 }

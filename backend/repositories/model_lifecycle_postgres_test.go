@@ -42,6 +42,33 @@ func TestModelLifecyclePostgresConcurrentQuotaClaimCAS(t *testing.T) {
 	a, b := NewModelLifecycleStore(first), NewModelLifecycleStore(second)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	t.Run("model creation retries are atomic", func(t *testing.T) {
+		for _, differentBody := range []bool{false, true} {
+			key := fmt.Sprintf("concurrent-create-%t", differentBody)
+			start := make(chan struct{})
+			type createResult struct { model ml.Model; err error }
+			results := make(chan createResult, 2)
+			for i, store := range []*ModelLifecycleStore{a, b} {
+				go func(i int, store *ModelLifecycleStore) {
+					<-start
+					name := "one model"
+					if differentBody && i == 1 { name = "different model" }
+					m, err := store.CreateModel(ctx, ml.Model{Name: name, Description: "body", OwnerID: "create-owner", TenantID: "team", IdempotencyKey: key})
+					results <- createResult{model: m, err: err}
+				}(i, store)
+			}
+			close(start)
+			first, second := <-results, <-results
+			if !differentBody {
+				if first.err != nil || second.err != nil || first.model.ID != second.model.ID { t.Fatalf("concurrent replay duplicated: %+v %+v", first, second) }
+			} else if !(first.err == nil && errors.Is(second.err, ml.ErrConflict) || second.err == nil && errors.Is(first.err, ml.ErrConflict)) {
+				t.Fatalf("different bodies did not conflict: %+v %+v", first, second)
+			}
+			var count int64
+			if err := a.db.Model(&ml.Model{}).Where("owner_id = ? AND idempotency_key = ?", "create-owner", key).Count(&count).Error; err != nil || count != 1 { t.Fatalf("model row count %d %v", count, err) }
+			if err := a.db.Table("model_audits a").Joins("JOIN model_catalog m ON m.id = a.model_id").Where("m.owner_id = ? AND m.idempotency_key = ?", "create-owner", key).Count(&count).Error; err != nil || count != 1 { t.Fatalf("audit row count %d %v", count, err) }
+		}
+	})
 	m, err := a.CreateModel(ctx, ml.Model{Name: "first", OwnerID: "stable-owner", TenantID: "old-team"})
 	if err != nil {
 		t.Fatal(err)

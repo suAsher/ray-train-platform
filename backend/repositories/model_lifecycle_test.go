@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -26,6 +27,9 @@ func modelTestStore(t *testing.T) *ModelLifecycleStore {
 	sqlDB.SetMaxOpenConns(1)
 	t.Cleanup(func() { sqlDB.Close() })
 	if err := db.AutoMigrate(&ml.Model{}, &ml.Version{}, &modelAudit{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("CREATE UNIQUE INDEX model_catalog_request_idx ON model_catalog(owner_id, idempotency_key) WHERE idempotency_key <> ''").Error; err != nil {
 		t.Fatal(err)
 	}
 	return NewModelLifecycleStore(db)
@@ -139,4 +143,55 @@ func TestModelDescriptionsUseCharacterLimits(t *testing.T) {
 	if _, err := s.UpdateVersion(ctx, m.ID, v.ID, ml.VersionUpdate{Description: tooLong, Revision: v.Revision + 1}, ml.Actor{ID: "owner"}); !errors.Is(err, ml.ErrInvalid) {
 		t.Fatal("4001 character version description accepted")
 	}
+}
+
+func TestCreateModelIdempotencyIsOwnerScopedAndAuditedOnce(t *testing.T) {
+	s := modelTestStore(t)
+	ctx := context.Background()
+	request := ml.Model{Name: "Model", Description: "description", OwnerID: "owner", OwnerName: "Old name", TenantID: "team", IdempotencyKey: "model-request"}
+	first, err := s.CreateModel(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.OwnerName = "New display name"
+	replayed, err := s.CreateModel(ctx, request)
+	if err != nil || replayed.ID != first.ID || replayed.OwnerName != first.OwnerName || len(replayed.RequestSHA256) != 64 {
+		t.Fatalf("lost-response retry duplicated model: %+v %v", replayed, err)
+	}
+	for _, change := range []func(*ml.Model){
+		func(m *ml.Model) { m.Name = "different" },
+		func(m *ml.Model) { m.Name = " Model " },
+		func(m *ml.Model) { m.Description = "different" },
+		func(m *ml.Model) { m.TenantID = "other-team" },
+	} {
+		changed := request
+		change(&changed)
+		if _, err := s.CreateModel(ctx, changed); !errors.Is(err, ml.ErrConflict) {
+			t.Fatalf("request key accepted different body: %v", err)
+		}
+	}
+	var count int64
+	if err := s.db.Model(&modelAudit{}).Where("model_id = ?", first.ID).Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("retries wrote audit rows: %d %v", count, err)
+	}
+	request.OwnerID = "another-owner"
+	other, err := s.CreateModel(ctx, request)
+	if err != nil || other.ID == first.ID {
+		t.Fatalf("key is not owner-scoped: %+v %v", other, err)
+	}
+	request.IdempotencyKey = ""
+	one, err := s.CreateModel(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := s.CreateModel(ctx, request)
+	if err != nil || one.ID == two.ID || one.RequestSHA256 != "" {
+		t.Fatalf("keyless internal creates are not independent: %+v %v", two, err)
+	}
+}
+
+func TestModelCreateIdempotencyFieldsArePrivate(t *testing.T) {
+	encoded, err := json.Marshal(ml.Model{IdempotencyKey: "private-key", RequestSHA256: "private-hash"})
+	if err != nil { t.Fatal(err) }
+	if strings.Contains(string(encoded), "private-") { t.Fatalf("private request identity exposed: %s", encoded) }
 }

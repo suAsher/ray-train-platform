@@ -2,6 +2,8 @@ package repositories
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	ml "ray-train-platform-backend/modellifecycle"
 )
 
@@ -45,9 +48,18 @@ func writeModelAudit(tx *gorm.DB, m, v string, a ml.Actor, action string, detail
 	return tx.Create(&modelAudit{ID: uuid.NewString(), ModelID: m, VersionID: v, ActorID: a.ID, ActorName: a.Name, Action: action, Details: string(raw), CreatedAt: time.Now().UTC()}).Error
 }
 func (s *ModelLifecycleStore) CreateModel(ctx context.Context, m ml.Model) (ml.Model, error) {
+	requestName := m.Name
 	m.Name = strings.TrimSpace(m.Name)
-	if m.Name == "" || utf8.RuneCountInString(m.Name) > 200 || utf8.RuneCountInString(m.Description) > 4000 || m.OwnerID == "" || m.TenantID == "" {
+	if m.Name == "" || utf8.RuneCountInString(m.Name) > 200 || utf8.RuneCountInString(m.Description) > 4000 || m.OwnerID == "" || m.TenantID == "" || len(m.IdempotencyKey) > 128 {
 		return ml.Model{}, ml.ErrInvalid
+	}
+	// Display names are mutable identity metadata and are not part of the request.
+	m.RequestSHA256 = ""
+	if m.IdempotencyKey != "" {
+		body, err := json.Marshal(struct { Name, Description, OwnerID, TenantID string }{requestName, m.Description, m.OwnerID, m.TenantID})
+		if err != nil { return ml.Model{}, err }
+		digest := sha256.Sum256(body)
+		m.RequestSHA256 = hex.EncodeToString(digest[:])
 	}
 	m.ID = uuid.NewString()
 	m.Revision = 1
@@ -55,8 +67,20 @@ func (s *ModelLifecycleStore) CreateModel(ctx context.Context, m ml.Model) (ml.M
 	m.CreatedAt = time.Now().UTC()
 	m.UpdatedAt = m.CreatedAt
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(&m).Error; err != nil {
-			return err
+		insert := tx
+		if m.IdempotencyKey != "" {
+			// The partial unique owner/key index serializes concurrent requests.
+			// DO NOTHING keeps the transaction usable to read the winning row.
+			insert = insert.Clauses(clause.OnConflict{DoNothing: true})
+		}
+		result := insert.Create(&m)
+		if result.Error != nil { return result.Error }
+		if result.RowsAffected == 0 {
+			var previous ml.Model
+			if err := tx.Where("owner_id = ? AND idempotency_key = ?", m.OwnerID, m.IdempotencyKey).First(&previous).Error; err != nil { return modelReadError(err) }
+			if previous.RequestSHA256 != m.RequestSHA256 { return ml.ErrConflict }
+			m = previous
+			return nil
 		}
 		return writeModelAudit(tx, m.ID, "", ml.Actor{ID: m.OwnerID, Name: m.OwnerName}, "model.created", map[string]any{"name": m.Name, "revision": m.Revision})
 	})
