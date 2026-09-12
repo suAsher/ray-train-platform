@@ -29,11 +29,11 @@ func TestMLflowTrackingReservationsAndLeaseCAS(t *testing.T) {
 	run:=tracking.Run{ID:strings.Repeat("b",32),ExperimentID:exp.ID,TenantID:actor.TenantID,UserID:actor.UserID,IdempotencyHash:strings.Repeat("f",64),Name:"one",State:"PENDING",CreatedAt:now,UpdatedAt:now}
 	if _,claimed,err:=store.ReserveRun(ctx,run);err!=nil||!claimed {t.Fatal(err)}
 	if _,err:=store.CompleteRun(ctx,actor,run.ID,strings.Repeat("c",32));err!=nil {t.Fatal(err)}
-	if _,err:=store.ClaimRunLease(ctx,actor,run.ID,"lease-one","",now,now.Add(time.Minute));err!=nil {t.Fatal(err)}
-	if _,err:=store.ClaimRunLease(ctx,actor,run.ID,"lease-two","FINISHED",now,now.Add(time.Minute));!errors.Is(err,tracking.ErrBusy) {t.Fatalf("parallel mutation accepted: %v",err)}
+	if _,err:=store.ClaimRunLease(ctx,actor,run.ID,"lease-one","",now,now.Add(time.Minute),0);err!=nil {t.Fatal(err)}
+	if _,err:=store.ClaimRunLease(ctx,actor,run.ID,"lease-two","FINISHED",now,now.Add(time.Minute),now.UnixMilli());!errors.Is(err,tracking.ErrBusy) {t.Fatalf("parallel mutation accepted: %v",err)}
 	if _,err:=store.ReleaseRunLease(ctx,actor,run.ID,"not-the-lease","",now);!errors.Is(err,tracking.ErrBusy) {t.Fatalf("wrong lease release=%v",err)}
 	if _,err:=store.ReleaseRunLease(ctx,actor,run.ID,"lease-one","",now);err!=nil {t.Fatal(err)}
-	finishing,err:=store.ClaimRunLease(ctx,actor,run.ID,"lease-finish","FINISHED",now,now.Add(time.Minute));if err!=nil||finishing.State!="FINISHING" {t.Fatalf("finish intent not durable: %+v %v",finishing,err)}
+	finishing,err:=store.ClaimRunLease(ctx,actor,run.ID,"lease-finish","FINISHED",now,now.Add(time.Minute),now.UnixMilli());if err!=nil||finishing.State!="FINISHING" {t.Fatalf("finish intent not durable: %+v %v",finishing,err)}
 	if _,err:=store.ReleaseRunLease(ctx,actor,run.ID,"lease-finish","",now);err!=nil {t.Fatal(err)}
-	if _,err:=store.ClaimRunLease(ctx,actor,run.ID,"lease-log","",now,now.Add(time.Minute));!errors.Is(err,tracking.ErrConflict) {t.Fatalf("finishing reopened: %v",err)}
+	if _,err:=store.ClaimRunLease(ctx,actor,run.ID,"lease-log","",now,now.Add(time.Minute),0);!errors.Is(err,tracking.ErrConflict) {t.Fatalf("finishing reopened: %v",err)}
 }

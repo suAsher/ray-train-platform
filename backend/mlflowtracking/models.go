@@ -87,7 +87,7 @@ type Provider interface {
 	FindRun(context.Context,string,string)(string,bool,error)
 	ReadRun(context.Context,string,string,string)(Snapshot,error)
 	LogRun(context.Context,string,string,string,Batch)error
-	FinishRun(context.Context,string,string,string,string)error
+	FinishRun(context.Context,string,string,string,string,int64)error
 }
 
 // Reserve methods commit the durable operation before returning claimed=true.
@@ -101,7 +101,7 @@ type Store interface {
 	CompleteRun(context.Context,Actor,string,string)(Run,error)
 	GetRun(context.Context,Actor,string)(Run,error)
 	ListRuns(context.Context,Actor,string,string,int)([]Run,error)
-	ClaimRunLease(context.Context,Actor,string,string,string,time.Time,time.Time)(Run,error)
+	ClaimRunLease(context.Context,Actor,string,string,string,time.Time,time.Time,int64)(Run,error)
 	ReleaseRunLease(context.Context,Actor,string,string,string,time.Time)(Run,error)
 }
 

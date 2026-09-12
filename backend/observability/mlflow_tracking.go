@@ -201,7 +201,7 @@ func (c *MLflowClient) LogRun(ctx context.Context, upstreamExperimentID, upstrea
 }
 
 // FinishRun only updates a verified external run to a terminal MLflow status.
-func (c *MLflowClient) FinishRun(ctx context.Context, upstreamExperimentID, upstreamRunID, operationID, status string) error {
+func (c *MLflowClient) FinishRun(ctx context.Context, upstreamExperimentID, upstreamRunID, operationID, status string, endTimeMS int64) error {
 	if status != "FINISHED" && status != "FAILED" && status != "KILLED" {
 		return fmt.Errorf("%w: MLflow terminal status is invalid", mlflowtracking.ErrInvalid)
 	}
@@ -219,11 +219,17 @@ func (c *MLflowClient) FinishRun(ctx context.Context, upstreamExperimentID, upst
 	if err != nil {
 		return trackingUnavailable(err)
 	}
+	if endTimeMS < 0 || endTimeMS > 253402300799999 {
+		return fmt.Errorf("%w: MLflow end time is invalid", mlflowtracking.ErrInvalid)
+	}
+	if endTimeMS == 0 {
+		endTimeMS = time.Now().UTC().UnixMilli()
+	}
 	var payload map[string]any
 	_, err = c.doJSON(ctx, http.MethodPost, endpoint, map[string]any{
 		"run_id":   upstreamRunID,
 		"status":   status,
-		"end_time": time.Now().UTC().UnixMilli(),
+		"end_time": endTimeMS,
 	}, &payload)
 	if err != nil {
 		reconciled, readErr := c.trackingRun(ctx, upstreamExperimentID, upstreamRunID, operationID)

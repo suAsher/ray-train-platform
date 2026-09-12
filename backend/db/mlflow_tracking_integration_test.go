@@ -49,7 +49,7 @@ func TestMLflowTrackingMigrationPreservesExistingOwnershipAndSerializesReservati
 	if _,_,err:=store.ReserveRun(context.Background(),run);err!=nil {t.Fatal(err)}
 	if _,err:=store.CompleteRun(context.Background(),actor,run.ID,strings.Repeat("d",32));err!=nil {t.Fatal(err)}
 	leaseErrors:=make(chan error,8);leaseStart:=make(chan struct{})
-	for i:=0;i<8;i++ {wait.Add(1);go func(i int){defer wait.Done();<-leaseStart;_,err:=stores[i].ClaimRunLease(context.Background(),actor,run.ID,fmt.Sprintf("lease-%d",i),"",now,now.Add(time.Minute));leaseErrors<-err}(i)}
+	for i:=0;i<8;i++ {wait.Add(1);go func(i int){defer wait.Done();<-leaseStart;_,err:=stores[i].ClaimRunLease(context.Background(),actor,run.ID,fmt.Sprintf("lease-%d",i),"",now,now.Add(time.Minute),0);leaseErrors<-err}(i)}
 	close(leaseStart);wait.Wait();close(leaseErrors)
 	leases:=0
 	for err:=range leaseErrors {if err==nil {leases++} else if !errors.Is(err,tracking.ErrBusy) {t.Fatalf("unexpected lease race error: %v",err)}}

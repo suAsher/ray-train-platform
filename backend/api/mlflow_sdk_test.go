@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,10 @@ import (
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/mlflowtracking"
 )
+
+func(s *fakeMLflowTrackingService)FinishRunAt(ctx context.Context,actor mlflowtracking.Actor,id,status string,endTimeMS int64)(mlflowtracking.Run,error){
+	run,err:=s.FinishRun(ctx,actor,id,status);run.EndTimeMS=endTimeMS;return run,err
+}
 
 func sdkTestRouter(principal auth.Principal) *gin.Engine {
 	gin.SetMode(gin.TestMode)
@@ -72,6 +77,17 @@ func TestMLflowSDKRejectsInvalidBatchSemantics(t *testing.T) {
 		var req mlflowSDKWriteRequest
 		if err:=json.Unmarshal([]byte(body),&req);err!=nil {t.Fatal(err)}
 		if _,err:=req.logBatch("log-parameter");err==nil {t.Fatalf("bad semantic body accepted %s",body)}
+	}
+}
+
+func TestMLflowSDKGetPreservesVirtualIDAndRejectsTransitionalStatus(t *testing.T) {
+	id:="0123456789abcdef0123456789abcdef"
+	for _,state:=range []string{"RUNNING","FINISHED","FINISHING","PENDING"} {
+		service:=&fakeMLflowTrackingService{detail:mlflowtracking.RunDetail{Run:mlflowtracking.Run{ID:id,UpstreamID:strings.Repeat("f",32),ExperimentID:strings.Repeat("a",32),State:state},Latest:map[string]float64{"loss":0.5},Params:map[string]string{"epochs":"3"}}}
+		w:=httptest.NewRecorder()
+		sdkServiceRouter(trackingPrincipal("experiments:read"),service,newFakeMLflowDashboardStore()).ServeHTTP(w,httptest.NewRequest("GET","/api/v1/mlflow-tracking/api/2.0/mlflow/runs/get?run_id="+id,nil))
+		if state=="FINISHING"||state=="PENDING" {if w.Code!=409 {t.Fatalf("illegal SDK status %s: %s",state,w.Body.String())};continue}
+		if w.Code!=200 || !strings.Contains(w.Body.String(),`"run_id":"`+id+`"`) || strings.Contains(w.Body.String(),strings.Repeat("f",32)) {t.Fatalf("native result mismatch: %s",w.Body.String())}
 	}
 }
 

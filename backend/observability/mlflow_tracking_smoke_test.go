@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -18,6 +19,7 @@ func TestMLflowTrackingProviderMLflow314Smoke(t *testing.T) {
 	if baseURL == "" {
 		t.Skip("set MLFLOW_TRACKING_SMOKE_URL to an isolated MLflow 3.14 service URL to run this write smoke")
 	}
+	validateTrackingSmokeURL(t, baseURL)
 	t.Log("expected isolated service image: harbor.wellspiking.ai/guofeng.su/mlflow:v3.14.0-full@sha256:03c206d175084ee3f654a1353ab62ccd2e59048c54f9488f08cc4d8f5de0037d in namespace mlflow-system")
 
 	operationID := randomTrackingOperationID(t)
@@ -83,10 +85,10 @@ func TestMLflowTrackingProviderMLflow314Smoke(t *testing.T) {
 		t.Fatalf("unexpected running snapshot %#v", beforeFinish)
 	}
 
-	if err := client.FinishRun(ctx, experimentID, runID, operationID, "FINISHED"); err != nil {
+	if err := client.FinishRun(ctx, experimentID, runID, operationID, "FINISHED", time.Now().UTC().UnixMilli()); err != nil {
 		t.Fatalf("finish run: %v", err)
 	}
-	if err := client.FinishRun(ctx, experimentID, runID, operationID, "FINISHED"); err != nil {
+	if err := client.FinishRun(ctx, experimentID, runID, operationID, "FINISHED", time.Now().UTC().UnixMilli()); err != nil {
 		t.Fatalf("repeat finish run should be idempotent: %v", err)
 	}
 	afterFinish, err := client.ReadRun(ctx, experimentID, runID, operationID)
@@ -95,6 +97,19 @@ func TestMLflowTrackingProviderMLflow314Smoke(t *testing.T) {
 	}
 	if afterFinish.Status != "FINISHED" {
 		t.Fatalf("unexpected finished snapshot %#v", afterFinish)
+	}
+}
+
+func validateTrackingSmokeURL(t *testing.T, raw string) {
+	t.Helper()
+	target, err := url.Parse(raw)
+	if err != nil || target.Scheme != "http" || target.User != nil || target.RawQuery != "" || target.Fragment != "" || target.Path != "" && target.Path != "/" {
+		t.Fatal("MLflow tracking smoke URL must be an isolated HTTP origin without credentials, path, query or fragment")
+	}
+	switch target.Hostname() {
+	case "tracking-mlflow", "localhost", "127.0.0.1":
+	default:
+		t.Fatal("MLflow tracking smoke tests are restricted to tracking-mlflow, localhost or 127.0.0.1")
 	}
 }
 

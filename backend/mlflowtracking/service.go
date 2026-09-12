@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -91,7 +92,7 @@ func(s *Service) LogRun(ctx context.Context,actor Actor,id string,batch Batch)er
 	_,experiment,err:=s.runAndExperiment(ctx,actor,id);if err!=nil {return err}
 	leaseID,err:=s.newID();if err!=nil {return ErrUnavailable}
 	now:=s.now().UTC()
-	record,err:=s.store.ClaimRunLease(ctx,actor,id,leaseID,"",now,now.Add(time.Minute));if err!=nil {return err}
+	record,err:=s.store.ClaimRunLease(ctx,actor,id,leaseID,"",now,now.Add(time.Minute),0);if err!=nil {return err}
 	callCtx,cancel:=context.WithTimeout(ctx,20*time.Second)
 	callErr:=s.provider.LogRun(callCtx,experiment.UpstreamID,record.UpstreamID,record.ID,batch);cancel()
 	_,releaseErr:=s.release(ctx,actor,id,leaseID,"")
@@ -101,16 +102,30 @@ func(s *Service) LogRun(ctx context.Context,actor Actor,id string,batch Batch)er
 
 func(s *Service) FinishRun(ctx context.Context,actor Actor,id,status string)(Run,error) {
 	if err:=s.ready(actor);err!=nil {return Run{},err}
-	if !validID(id)||!terminal(status) {return Run{},ErrInvalid}
-	_,experiment,err:=s.runAndExperiment(ctx,actor,id);if err!=nil {return Run{},err}
+	return s.FinishRunAt(ctx,actor,id,status,s.now().UTC().UnixMilli())
+}
+
+// FinishRunAt records the first requested end time as durable intent. A retry
+// may supply a later clock value, but never changes the stored first intent.
+func(s *Service) FinishRunAt(ctx context.Context,actor Actor,id,status string,endTimeMS int64)(Run,error) {
+	if err:=s.ready(actor);err!=nil {return Run{},err}
+	if !validID(id)||!terminal(status)||endTimeMS<0||endTimeMS>253402300799999 {return Run{},ErrInvalid}
+	before,experiment,err:=s.runAndExperiment(ctx,actor,id);if err!=nil {return Run{},err}
+	if endTimeMS<before.StartTimeMS{return Run{},ErrInvalid}
 	leaseID,err:=s.newID();if err!=nil {return Run{},ErrUnavailable};now:=s.now().UTC()
-	record,err:=s.store.ClaimRunLease(ctx,actor,id,leaseID,status,now,now.Add(time.Minute));if err!=nil {return Run{},err}
+	record,err:=s.store.ClaimRunLease(ctx,actor,id,leaseID,status,now,now.Add(time.Minute),endTimeMS);if err!=nil {return Run{},err}
 	if record.State==status {return record,nil}
 	callCtx,cancel:=context.WithTimeout(ctx,20*time.Second)
-	callErr:=s.provider.FinishRun(callCtx,experiment.UpstreamID,record.UpstreamID,record.ID,status);cancel()
+	callErr:=s.provider.FinishRun(callCtx,experiment.UpstreamID,record.UpstreamID,record.ID,status,record.EndTimeMS)
 	finishedStatus:=status;if callErr!=nil {finishedStatus=""}
+	if errors.Is(callErr,ErrConflict){
+		snapshot,readErr:=s.provider.ReadRun(callCtx,experiment.UpstreamID,record.UpstreamID,record.ID)
+		if readErr==nil&&terminal(snapshot.Status){finishedStatus=snapshot.Status}
+	}
+	cancel()
 	updated,releaseErr:=s.release(ctx,actor,id,leaseID,finishedStatus)
 	if releaseErr!=nil {return record,ErrPending}
+	if errors.Is(callErr,ErrConflict)&&finishedStatus!=""{return updated,ErrConflict}
 	if callErr!=nil {return updated,ErrPending}
 	return updated,nil
 }

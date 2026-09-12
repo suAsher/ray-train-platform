@@ -103,6 +103,10 @@ type mlflowSDKWriteRequest struct {
 	EndTime *int64 `json:"end_time,omitempty"`
 }
 
+type mlflowTrackingTimedFinisher interface {
+	FinishRunAt(context.Context, mlflowtracking.Actor, string, string, int64) (mlflowtracking.Run, error)
+}
+
 func decodeMLflowSDKBody(reader io.Reader, target *mlflowSDKWriteRequest) error {
 	body, err := io.ReadAll(io.LimitReader(reader, 256*1024+1))
 	if err != nil || len(body)>256*1024 { return mlflowtracking.ErrInvalid }
@@ -125,7 +129,14 @@ func (h *Handler) writeMLflowSDKRun(c *gin.Context) {
 		if req.Status!="FINISHED" && req.Status!="FAILED" && req.Status!="KILLED" { sdkServiceError(c,mlflowtracking.ErrInvalid); return }
 		if req.Key!="" || len(req.Value)>0 || len(req.Metrics)+len(req.Params)+len(req.Tags)>0 || req.Timestamp!=nil || req.Step!=nil || (req.EndTime!=nil && (*req.EndTime<0 || *req.EndTime>253402300799999)) { sdkServiceError(c,mlflowtracking.ErrInvalid); return }
 		var run mlflowtracking.Run
-		err:=h.sdkAuditWrite(c,func()error { var err error; run,err=h.mlflowTracking.FinishRun(c.Request.Context(),sdkActor(c),req.RunID,req.Status);return err })
+		err:=h.sdkAuditWrite(c,func()error {
+			var err error
+			if req.EndTime!=nil {
+				timed,ok:=h.mlflowTracking.(mlflowTrackingTimedFinisher);if !ok {return mlflowtracking.ErrUnavailable}
+				run,err=timed.FinishRunAt(c.Request.Context(),sdkActor(c),req.RunID,req.Status,*req.EndTime)
+			} else {run,err=h.mlflowTracking.FinishRun(c.Request.Context(),sdkActor(c),req.RunID,req.Status)}
+			return err
+		})
 		if err!=nil { sdkServiceError(c,err);return };c.JSON(200,gin.H{"run_info":sdkRunInfo(run)});return
 	}
 	batch,err:=req.logBatch(operation)

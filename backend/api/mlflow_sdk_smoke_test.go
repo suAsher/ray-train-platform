@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,6 +26,8 @@ func TestMLflowSDK314Integration(t *testing.T) {
 	upstream:=os.Getenv("MLFLOW_TRACKING_SMOKE_URL")
 	python:=os.Getenv("MLFLOW_SDK_SMOKE_PYTHON")
 	if upstream==""||python=="" {t.Skip("isolated MLflow and pinned Python SDK required")}
+	parsed,parseErr:=url.Parse(upstream)
+	if parseErr!=nil || parsed.Scheme!="http" || parsed.User!=nil || parsed.RawQuery!="" || parsed.Fragment!="" || (parsed.Hostname()!="tracking-mlflow" && parsed.Hostname()!="127.0.0.1" && parsed.Hostname()!="localhost") {t.Fatal("SDK smoke requires an explicitly isolated HTTP MLflow URL")}
 	database,err:=gorm.Open(sqlite.Open(filepath.Join(t.TempDir(),"tracking.db")),&gorm.Config{})
 	if err!=nil {t.Fatal(err)}
 	if err=database.AutoMigrate(&repositories.MLflowTrackingExperimentRecord{},&repositories.MLflowTrackingRunRecord{});err!=nil {t.Fatal(err)}

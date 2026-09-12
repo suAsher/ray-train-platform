@@ -21,6 +21,9 @@ type testProvider struct {
 	experiments map[string]string
 	runs map[string]string
 	createErr,finishErr error
+	snapshotStatus string
+	readErr error
+	finishEndTimes []int64
 	beforeLog func()
 }
 
@@ -28,9 +31,9 @@ func (p *testProvider) CreateExperiment(_ context.Context,op string)(string,erro
 func (p *testProvider) FindExperiment(_ context.Context,op string)(string,bool,error) {id,ok:=p.experiments[op];return id,ok,nil}
 func (p *testProvider) CreateRun(_ context.Context,exp,op,name string)(string,error) {p.runCreates++;id:=fmt.Sprintf("%032x",p.runCreates);p.runs[op]=id;return id,p.createErr}
 func (p *testProvider) FindRun(_ context.Context,exp,op string)(string,bool,error) {id,ok:=p.runs[op];return id,ok,nil}
-func (p *testProvider) ReadRun(context.Context,string,string,string)(tracking.Snapshot,error) {return tracking.Snapshot{Status:"RUNNING",Latest:map[string]float64{"loss":0.5},Params:map[string]string{"epochs":"5"}},nil}
+func (p *testProvider) ReadRun(context.Context,string,string,string)(tracking.Snapshot,error) {status:=p.snapshotStatus;if status==""{status="RUNNING"};return tracking.Snapshot{Status:status,Latest:map[string]float64{"loss":0.5},Params:map[string]string{"epochs":"5"}},p.readErr}
 func (p *testProvider) LogRun(context.Context,string,string,string,tracking.Batch)error {p.logs++;if p.beforeLog!=nil {p.beforeLog()};return nil}
-func (p *testProvider) FinishRun(context.Context,string,string,string,string)error {p.finishes++;return p.finishErr}
+func (p *testProvider) FinishRun(_ context.Context,_,_,_,_ string,endTimeMS int64)error {p.finishes++;p.finishEndTimes=append(p.finishEndTimes,endTimeMS);return p.finishErr}
 
 func fixture(t *testing.T)(*tracking.Service,*repositories.MLflowTrackingStore,*testProvider,*time.Time) {
 	t.Helper()
@@ -170,4 +173,43 @@ func TestPendingRunsAndExperimentsRemainVisibleButNotWritable(t *testing.T) {
 	if _,err:=s.GetRun(ctx,owner,run.ID);!errors.Is(err,tracking.ErrPending){t.Fatalf("pending run read=%v",err)}
 	if err:=s.LogRun(ctx,owner,run.ID,tracking.Batch{Tags:[]tracking.Pair{{Key:"external.source",Value:"test"}}});!errors.Is(err,tracking.ErrPending){t.Fatalf("pending run logged=%v",err)}
 	if p.logs!=0{t.Fatal("pending run reached MLflow")}
+}
+
+func TestFinishConflictReconcilesVerifiedTerminalWithoutClaimingRequestedSuccess(t *testing.T) {
+	s,store,p,_:=fixture(t);_,run:=createPair(t,s);ctx:=context.Background()
+	p.finishErr=tracking.ErrConflict;p.snapshotStatus="FAILED"
+	actual,err:=s.FinishRun(ctx,owner,run.ID,"FINISHED")
+	if !errors.Is(err,tracking.ErrConflict)||actual.State!="FAILED"{t.Fatalf("conflict reconciliation=%+v %v",actual,err)}
+	persisted,err:=store.GetRun(ctx,owner,run.ID);if err!=nil||persisted.State!="FAILED"||persisted.FinishStatus!="FAILED"{t.Fatalf("terminal reconciliation not durable: %+v %v",persisted,err)}
+	if err:=s.LogRun(ctx,owner,run.ID,tracking.Batch{Tags:[]tracking.Pair{{Key:"external.source",Value:"test"}}});!errors.Is(err,tracking.ErrConflict){t.Fatalf("reconciled terminal reopened: %v",err)}
+	if _,err:=s.FinishRun(ctx,owner,run.ID,"FAILED");err!=nil||p.finishes!=1{t.Fatalf("actual terminal replay=%v calls=%d",err,p.finishes)}
+}
+
+func TestFinishConflictDoesNotTrustUnverifiedOrRunningSnapshot(t *testing.T) {
+	for _,readErr:=range []error{errors.New("unverified response"),nil}{
+		s,store,p,_:=fixture(t);_,run:=createPair(t,s);ctx:=context.Background()
+		p.finishErr=tracking.ErrConflict;p.readErr=readErr
+		if readErr!=nil{p.snapshotStatus="FAILED"}
+		if _,err:=s.FinishRun(ctx,owner,run.ID,"FINISHED");!errors.Is(err,tracking.ErrPending){t.Fatalf("unresolved conflict=%v",err)}
+		persisted,err:=store.GetRun(ctx,owner,run.ID);if err!=nil||persisted.State!="FINISHING"{t.Fatalf("unverified terminal adopted: %+v %v",persisted,err)}
+	}
+}
+
+func TestExplicitFinishTimeIsPersistedAndRetainedAcrossRetries(t *testing.T) {
+	s,store,p,now:=fixture(t);_,run:=createPair(t,s);ctx:=context.Background();requested:=run.StartTimeMS+5000
+	p.finishErr=errors.New("ambiguous finish")
+	if _,err:=s.FinishRunAt(ctx,owner,run.ID,"FINISHED",requested);!errors.Is(err,tracking.ErrPending){t.Fatalf("first finish=%v",err)}
+	intent,err:=store.GetRun(ctx,owner,run.ID);if err!=nil||intent.EndTimeMS!=requested{t.Fatalf("end time intent=%+v %v",intent,err)}
+	*now=now.Add(time.Hour);p.finishErr=nil
+	finished,err:=s.FinishRunAt(ctx,owner,run.ID,"FINISHED",requested+10000)
+	if err!=nil||finished.EndTimeMS!=requested||finished.FinishedAt==nil||finished.FinishedAt.UnixMilli()!=requested{t.Fatalf("end time changed on retry=%+v %v",finished,err)}
+	if len(p.finishEndTimes)!=2||p.finishEndTimes[0]!=requested||p.finishEndTimes[1]!=requested{t.Fatalf("upstream end times=%v",p.finishEndTimes)}
+}
+
+func TestExplicitFinishTimeRejectsInvalidRangeBeforeUpstream(t *testing.T) {
+	s,_,p,_:=fixture(t);_,run:=createPair(t,s)
+	for _,end:=range []int64{-1,253402300800000,run.StartTimeMS-1}{
+		if _,err:=s.FinishRunAt(context.Background(),owner,run.ID,"FINISHED",end);!errors.Is(err,tracking.ErrInvalid){t.Fatalf("invalid end %d accepted: %v",end,err)}
+	}
+	if p.finishes!=0{t.Fatal("invalid finish reached upstream")}
 }

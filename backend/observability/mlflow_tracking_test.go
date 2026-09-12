@@ -145,13 +145,17 @@ func TestMLflowTrackingLogFinishAndHistoryUseVerifiedRun(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/2.0/mlflow/runs/update":
 			var body struct {
-				RunID  string `json:"run_id"`
-				Status string `json:"status"`
+				RunID   string `json:"run_id"`
+				Status  string `json:"status"`
+				EndTime int64  `json:"end_time"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatal(err)
 			}
 			finishedStatus = body.Status
+			if body.EndTime != 12345 {
+				t.Fatalf("unexpected end_time %d", body.EndTime)
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/2.0/mlflow/metrics/get-history":
 			_ = json.NewEncoder(w).Encode(map[string]any{"metrics": []map[string]any{{"value": 1.5, "timestamp": 11, "step": 1}}})
@@ -173,7 +177,7 @@ func TestMLflowTrackingLogFinishAndHistoryUseVerifiedRun(t *testing.T) {
 	if len(loggedBatch.Metrics) != 1 || loggedBatch.Metrics[0].Key != "acc" {
 		t.Fatalf("unexpected logged batch %#v", loggedBatch)
 	}
-	if err := client.FinishRun(context.Background(), "9", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "fedcba9876543210fedcba9876543210", "FINISHED"); err != nil {
+	if err := client.FinishRun(context.Background(), "9", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "fedcba9876543210fedcba9876543210", "FINISHED", 12345); err != nil {
 		t.Fatal(err)
 	}
 	if finishedStatus != "FINISHED" {
@@ -204,7 +208,7 @@ func TestMLflowTrackingFinishRunAlreadyTerminalIsIdempotent(t *testing.T) {
 	defer server.Close()
 
 	client := &MLflowClient{BaseURL: server.URL, ExperimentPrefix: "raytrain", ProvenanceKey: []byte(strings.Repeat("k", 32)), HTTPClient: server.Client()}
-	if err := client.FinishRun(context.Background(), "9", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "fedcba9876543210fedcba9876543210", "FINISHED"); err != nil {
+	if err := client.FinishRun(context.Background(), "9", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "fedcba9876543210fedcba9876543210", "FINISHED", 12345); err != nil {
 		t.Fatal(err)
 	}
 	if updates != 0 {
@@ -234,7 +238,7 @@ func TestMLflowTrackingFinishRunReconcilesAmbiguousUpdate(t *testing.T) {
 	defer server.Close()
 
 	client := &MLflowClient{BaseURL: server.URL, ExperimentPrefix: "raytrain", ProvenanceKey: []byte(strings.Repeat("k", 32)), HTTPClient: server.Client()}
-	if err := client.FinishRun(context.Background(), "9", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "fedcba9876543210fedcba9876543210", "FINISHED"); err != nil {
+	if err := client.FinishRun(context.Background(), "9", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "fedcba9876543210fedcba9876543210", "FINISHED", 12345); err != nil {
 		t.Fatal(err)
 	}
 	if gets != 2 || updates != 1 {
