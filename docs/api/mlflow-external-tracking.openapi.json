@@ -585,7 +585,7 @@
               "required": ["value", "timestampMs", "step"],
               "properties": {
                 "value": { "type": "number" },
-                "timestampMs": { "type": "integer", "minimum": 1 },
+                "timestampMs": { "type": "integer", "minimum": 0, "maximum": 253402300799999 },
                 "step": { "type": "integer", "minimum": 0 }
               }
             }
