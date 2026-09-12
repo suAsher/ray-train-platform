@@ -198,7 +198,7 @@ const mlflowPublicGuide = `### 页面和记录关系
 
 ### 原生 MLflow SDK
 
-新接入优先使用原生全局共享入口；在「实验中心 → MLflow API」可以查看当前原生能力、Tracking URI 和示例：
+本地电脑、外部服务和独立 Notebook 接入共享 MLflow 时使用下面的原生入口。平台内训练已注入连接时不要覆盖它，接法见[如何向 MLflow 记录训练参数和指标？](#mlflow-framework-metrics)。在「实验中心 → MLflow API」可以查看当前原生能力、Tracking URI 和示例：
 
 ` + "```bash\npip install 'mlflow==3.14.0'\nexport MLFLOW_TRACKING_URI='https://raytrain.wellspiking.ai/api/v1/mlflow-native'\nexport MLFLOW_TRACKING_TOKEN=\"$RAYTRAIN_PAT\"\n```" + `
 
@@ -253,7 +253,7 @@ const mlflowSeedPublicSection = `先区分平台训练任务和 MLflow Run。Job
 | 浏览共享 MLflow 页面 | 打开 MLflow | 通过浏览器会话查看共享实验、Run、Artifact 和 Registry |
 | 下载训练权重和结果 | 任务详情 → 训练产物 | 取回写入 ` + "`PLATFORM_OUTPUT_PATH`" + ` 的文件 |
 
-原生 MLflow 是新的默认对接方式。个人 PAT 需要显式 ` + "`mlflow:full`" + `，旧 token 不会自动升级。该 scope 与共享 MLflow 页面范围一致，包含实验、Run、Metric、Param、Tag、Artifact、删除和 Model Registry 操作。平台训练任务、个人目录、数据空间和调度权限仍按 RayTrain 自身规则控制。
+外部程序默认使用原生 MLflow 入口；平台内训练沿用已注入的连接。外部调用的个人 PAT 需要显式 ` + "`mlflow:full`" + `，旧 token 不会自动升级。该 scope 与共享 MLflow 页面范围一致，包含实验、Run、Metric、Param、Tag、Artifact、删除和 Model Registry 操作。平台训练任务、个人目录、数据空间和调度权限仍按 RayTrain 自身规则控制。
 
 ### 训练代码如何产出指标
 
@@ -263,7 +263,17 @@ const mlflowSeedPublicSection = `先区分平台训练任务和 MLflow Run。Job
 
 注册模型版本不等于已经部署推理服务；独立评估调度和 Serving 不应写成已完成流程。`
 
+const mlflowNativeConnectionGuide = `该地址是外部程序访问共享 MLflow 的入口前缀，当前验证的客户端为 mlflow==3.14.0，范围包括 Tracking、Artifacts 和 Model Registry；其他版本或产品协议需另外验证。
+
+- Python SDK 的 tracking_uri 只填 ` + "`https://raytrain.wellspiking.ai/api/v1/mlflow-native`" + `，可设置 MLFLOW_TRACKING_URI，或调用 ` + "`MlflowClient(tracking_uri=\"https://raytrain.wellspiking.ai/api/v1/mlflow-native\")`" + `。SDK 会自行拼接后续原生 API 路径，不把 /api/2.0/mlflow 加到 tracking_uri。
+- 直接用 HTTP 查询或记录实验时，在前缀后接 /api/2.0/mlflow/...，例如 ` + "`https://raytrain.wellspiking.ai/api/v1/mlflow-native/api/2.0/mlflow/runs/search`" + `。文件操作优先使用 SDK，避免把所有文件协议当作同一种 REST 路径。
+- 两种外部调用都需要有效个人 PAT，且显式包含 mlflow:full。SDK 从 MLFLOW_TRACKING_TOKEN 读取它；HTTP 用 Authorization: Bearer 请求头。由运行环境安全注入令牌，不写进源码、URL 或日志。
+
+平台内训练已注入 MLFLOW_TRACKING_URI 时，不要覆盖为这个外部 PAT 网关，也不需要把个人 PAT 填进训练脚本。沿用运行时和框架适配器的连接，见[如何向 MLflow 记录训练参数和指标？](#mlflow-framework-metrics)。`
+
 const mlflowAPISeedPublicSection = `查询训练实验时，先列出自己能看到的实验，再从搜索结果里选择 Experiment ID 查询 Run。用户只需要 MLflow 自己返回的 Experiment ID / Run ID；Job ID 只用于回到 RayTrain 任务详情查日志、队列、产物和训练状态。
+
+` + mlflowNativeConnectionGuide + `
 
 ### Python：读取实验、Run、指标历史和文件
 
@@ -281,6 +291,8 @@ search 响应里如果有 next_page_token 字段，把它原样放进下一次�
 
 const mlflowExternalSeedPublicSection = `外部训练脚本、评估脚本或 Notebook 想把结果记到 RayTrain 的共享 MLflow 时，直接使用原生 Tracking URI。程序会创建普通 MLflow Experiment 和 Run，不需要先创建平台训练 Job。
 
+` + mlflowNativeConnectionGuide + `
+
 ### Python：创建实验、写参数/指标/文件
 
 ` + "```bash\npip install 'mlflow==3.14.0'\nexport MLFLOW_TRACKING_URI='https://raytrain.wellspiking.ai/api/v1/mlflow-native'\nexport MLFLOW_TRACKING_TOKEN=\"$RAYTRAIN_PAT\"\n```" + `
@@ -288,6 +300,8 @@ const mlflowExternalSeedPublicSection = `外部训练脚本、评估脚本或 No
 ` + "```python\nimport tempfile\nimport uuid\nfrom pathlib import Path\nimport mlflow\nfrom mlflow import MlflowClient\n\nmlflow.set_experiment('program-demo-' + uuid.uuid4().hex)\nwith mlflow.start_run(run_name='first-connection') as run:\n    mlflow.log_param('code_version', 'your-git-commit')\n    mlflow.log_param('dataset_version', 'your-dataset-version')\n    for step, score in enumerate([0.82, 0.87, 0.91], start=1):\n        mlflow.log_metric('validation/accuracy', score, step=step)\n    with tempfile.TemporaryDirectory() as directory:\n        report = Path(directory) / 'report.txt'\n        report.write_text('connection test\\n', encoding='utf-8')\n        mlflow.log_artifact(str(report), artifact_path='reports')\n    run_id = run.info.run_id\n\nclient = MlflowClient()\nprint(client.get_run(run_id).data.metrics)\nprint(client.get_metric_history(run_id, 'validation/accuracy'))\nprint(client.list_artifacts(run_id, 'reports'))\n```" + `
 
 返回的是原生 MLflow Run ID。后续 get_run、get_metric_history、log_metric、log_artifact、delete_run、restore_run 和 Registry 操作都使用这个 ID。
+
+示例中的 code_version、dataset_version 和指标值必须替换为本次运行真实信息；不知道时省略，不能用占位值冒充训练来源。自定义参数或标签只记录你的声明，不会自动建立 RayTrain Job 关联，也不会回填任务或共享模型的数据来源。不要手工伪造 platform.* 来源标签。
 
 ### HTTP：创建、写入和读回
 
@@ -297,7 +311,13 @@ HTTP 适合服务端集成和批量写指标；文件上传建议使用 Python S
 
 先在专用测试实验中联调，不向正在训练的 Run 写演示数据。注册模型版本、上传文件或结束 Run 不代表已经完成评估审批，也不代表已经部署 Serving。`
 
-const mlflowMetricsSeedPublicSection = `适用于在 RayTrain 上运行的训练代码。自己的脚本不创建 RayTrain Job、只想记录实验时，使用本页“在自己的程序中记录实验”的原生 MLflow 示例。
+const mlflowMetricsSeedPublicSection = `适用于在 RayTrain 上运行的训练代码。自己的脚本不创建 RayTrain Job、只想记录实验时，使用[如何用自己的程序向 MLflow 写入数据和文件？](#mlflow-external-tracking)的原生 MLflow 示例。
+
+### 平台内训练使用哪个地址
+
+启用训练 MLflow 接入后，平台向训练环境注入 MLFLOW_TRACKING_URI、实验名、Run 名和可信任务来源。运行时适配器读取这些配置；平台不会注入个人 PAT。不要覆盖已注入的 MLFLOW_TRACKING_URI 为外部 /api/v1/mlflow-native 地址，不要照搬外部示例设置 MLFLOW_TRACKING_TOKEN 或重新选择另一个实验。
+
+普通自定义训练仍需安装兼容客户端并接入已有适配器。发现变量缺失、没有 Run 或框架 Hook 未初始化时，先核对镜像和训练入口；换成外部地址不会自动修复任务关联。
 
 平台提供连接和可信关联信息；训练代码仍需主动创建 Run、记录参数和指标，不会从 stdout 猜测 Loss。
 
@@ -336,4 +356,16 @@ const mlflowMetricsSeedPublicSection = `适用于在 RayTrain 上运行的训练
 
 没有 Run：检查创建逻辑与平台关联。没有曲线：检查 global rank 0、指标键和 step。只有普通日志：补充主动上报。仍有问题时提供 Job ID、Run ID 和指标键，参见[工具排查](#portal-browser-tools-and-queue)。
 
-Artifact、Models 或 Traces 为空不能用来判定训练失败；当前训练接入不等于完整模型注册、审批或服务发布。`
+Artifact、Models 或 Traces 为空不能用来判定训练失败；当前训练接入不等于完整模型注册、审批或服务发布。
+
+### 记录代码、数据版本与训练参数
+
+已接入的适配器会记录可取得的优化器、学习率、epoch、随机种子和分布式规模。固定数据版本存在时，会从真实运行环境带入 dataset_id、dataset_version_id 等参数以及 platform.dataset_version_id 等来源标签。它不会从目录名猜数据版本，也不会保证每种训练入口都自动记录 Git commit。
+
+在已有 Run 中，由 global rank 0 用 ` + "`mlflow.log_params(...)`" + ` 补充实际训练配置；每个 step 用 ` + "`mlflow.log_metric(...)`" + ` 记录 loss、学习率等变化值。确知代码 commit 时，可用 code_commit 参数记录，或使用自定义 research.code_commit 标签；不要覆盖 platform.* 标签。参数和标签只有你明确记录后才存在，不知道的值保持缺失。
+
+要让数据进入可追溯流程，先在[版本化数据集](#datasets)选 READY 版本，并在提交训练时固定该版本和场地范围。任务、MLflow Run 和共享模型是不同记录：训练任务保存实际数据来源，适配器在 Run 中记录可用来源；任务结束后将所选权重[登记为模型版本](#shared-model-registration)，沿用任务已有的数据版本。
+
+历史任务未固定数据版本时，模型显示“未知 / 未登记”；登记权重时可自选可访问的 READY 版本并标为“用户补充”。它不改写历史训练记录；修改 MLflow 参数或标签也不会自动同步到模型版本，不能把用户声明当作已核实的训练数据来源。
+
+模型这里记录的是训练数据来源。用于衡量模型表现的独立评估需要另行固定评估数据和协议；本阶段独立评估调度、审批与 Serving 尚未上线，不能把填写数据版本或记录一次验证 metric 当作已完成这些流程。`
