@@ -748,7 +748,7 @@ func (store *TOSStore) ReadArtifact(ctx context.Context, taskRoot, relativePath 
 		}
 		return ArtifactRead{}, ErrUnavailable
 	}
-	return ArtifactRead{Content: response.Content, SizeBytes: response.SizeBytes, ContentType: strings.TrimSpace(response.ContentType)}, nil
+	return ArtifactRead{Content: response.Content, SizeBytes: response.SizeBytes, ContentType: strings.TrimSpace(response.ContentType), ETag: response.ETag}, nil
 }
 
 func scopedTOSDirectoryPrefix(rootPrefix, relativePath string) (string, error) {

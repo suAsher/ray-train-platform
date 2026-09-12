@@ -24,7 +24,7 @@ func TestModelLifecyclePostgresConcurrentQuotaClaimCAS(t *testing.T) {
  a,b:=NewModelLifecycleStore(first),NewModelLifecycleStore(second);ctx,cancel:=context.WithTimeout(context.Background(),30*time.Second);defer cancel()
  m,err:=a.CreateModel(ctx,ml.Model{Name:"first",OwnerID:"stable-owner",TenantID:"old-team"});if err!=nil{t.Fatal(err)}
  other,err:=a.CreateModel(ctx,ml.Model{Name:"second",OwnerID:"stable-owner",TenantID:"new-team"});if err!=nil{t.Fatal(err)}
- makeRequest:=func(modelID,key string)ml.Version{return ml.Version{ModelID:modelID,CreatorID:"creator",JobID:"job",FileName:"weights",SourceRoot:"/server/private",RelativePath:"weights",IdempotencyKey:key,RequestSHA256:strings.Repeat("a",64),SizeBytes:ml.MaxFileSize}}
+ makeRequest:=func(modelID,key string)ml.Version{return ml.Version{SourceETag:"source-etag",ModelID:modelID,CreatorID:"creator",JobID:"job",FileName:"weights",SourceRoot:"/server/private",RelativePath:"weights",IdempotencyKey:key,RequestSHA256:strings.Repeat("a",64),SizeBytes:ml.MaxFileSize}}
  // 80 GiB reserved across models sharing the same stable owner.
  for i:=0;i<4;i++{if _,err:=a.ReserveVersion(ctx,makeRequest(m.ID,fmt.Sprint(i)));err!=nil{t.Fatal(err)}}
  start:=make(chan struct{});results:=make(chan error,2)

@@ -5,6 +5,7 @@ import (
  "errors"
  "encoding/json"
  "time"
+ "strings"
 
  "github.com/google/uuid"
  "gorm.io/gorm"
@@ -12,7 +13,7 @@ import (
  ml "ray-train-platform-backend/modellifecycle"
 )
 func (s *ModelLifecycleStore) ReserveVersion(ctx context.Context,v ml.Version)(ml.Version,error) {
- if v.SizeBytes<1 || v.SizeBytes>ml.MaxFileSize || v.CreatorID=="" || v.IdempotencyKey=="" || v.RequestSHA256=="" {return ml.Version{},ml.ErrInvalid}
+ if strings.TrimSpace(v.SourceETag)=="" || v.SizeBytes<1 || v.SizeBytes>ml.MaxFileSize || v.CreatorID=="" || v.IdempotencyKey=="" || v.RequestSHA256=="" {return ml.Version{},ml.ErrInvalid}
  var result ml.Version
  err:=s.db.WithContext(ctx).Transaction(func(tx *gorm.DB)error {
   var m ml.Model

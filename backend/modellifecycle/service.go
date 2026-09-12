@@ -29,11 +29,12 @@ func (s *Service) RequestVersion(ctx context.Context,r VersionRequest)(Version,e
  previous,err:=s.repo.FindVersionRequest(ctx,r.ModelID,r.CreatorID,r.IdempotencyKey)
  if err==nil {if previous.RequestSHA256!=fingerprint{return Version{},ErrConflict};return previous,nil}
  if !errors.Is(err,ErrNotFound){return Version{},err}
- source,size,err:=s.source.Read(ctx,r.SourceRoot,r.RelativePath);if err!=nil{return Version{},err}
+ source,size,etag,err:=s.source.Read(ctx,r.SourceRoot,r.RelativePath);if err!=nil{return Version{},err}
  if source==nil{return Version{},ErrUnavailable}
  if err=source.Close();err!=nil{return Version{},ErrInvalid}
  if size<1 || size>MaxFileSize {return Version{},ErrInvalid}
- return s.repo.ReserveVersion(ctx,Version{ID:uuid.NewString(),ModelID:r.ModelID,Description:r.Description,CreatorID:r.CreatorID,CreatorName:r.CreatorName,JobID:r.JobID,JobName:r.JobName,RunID:r.RunID,FileName:r.FileName,SourceRoot:r.SourceRoot,RelativePath:r.RelativePath,CodeSHA256:r.CodeSHA256,CodeCommit:r.CodeCommit,RuntimeImage:r.RuntimeImage,DatasetID:r.DatasetID,DatasetVersionID:r.DatasetVersionID,DatasetName:r.DatasetName,DatasetManifestSHA256:r.DatasetManifestSHA256,DatasetAssociation:r.DatasetAssociation,IdempotencyKey:r.IdempotencyKey,RequestSHA256:fingerprint,SizeBytes:size})
+ if strings.TrimSpace(etag)=="" {return Version{},ErrUnavailable}
+ return s.repo.ReserveVersion(ctx,Version{ID:uuid.NewString(),ModelID:r.ModelID,Description:r.Description,CreatorID:r.CreatorID,CreatorName:r.CreatorName,JobID:r.JobID,JobName:r.JobName,RunID:r.RunID,FileName:r.FileName,SourceRoot:r.SourceRoot,SourceETag:etag,RelativePath:r.RelativePath,CodeSHA256:r.CodeSHA256,CodeCommit:r.CodeCommit,RuntimeImage:r.RuntimeImage,DatasetID:r.DatasetID,DatasetVersionID:r.DatasetVersionID,DatasetName:r.DatasetName,DatasetManifestSHA256:r.DatasetManifestSHA256,DatasetAssociation:r.DatasetAssociation,IdempotencyKey:r.IdempotencyKey,RequestSHA256:fingerprint,SizeBytes:size})
 }
 func validRequest(r VersionRequest)bool {
  if r.ModelID=="" || r.CreatorID=="" || r.JobID=="" || r.SourceRoot=="" || r.FileName=="" || r.FileName!=path.Base(r.FileName) || len(r.FileName)>255 || utf8.RuneCountInString(r.Description)>4000 || len(r.IdempotencyKey)<1 || len(r.IdempotencyKey)>128 {return false}
@@ -71,8 +72,9 @@ func (s *Service) process(ctx context.Context,v Version) {
  if err:=s.repo.FinishVersion(finish,v.ID,v.LeaseID,state,parts,hash,time.Now().UTC());err!=nil {slog.Warn("model snapshot completion rejected","version_id",v.ID,"error",err)}
 }
 func (s *Service) copy(ctx context.Context,v Version)([]Part,string,error) {
- source,size,err:=s.source.Read(ctx,v.SourceRoot,v.RelativePath);if err!=nil{return nil,"",err};if source==nil{return nil,"",ErrUnavailable};defer source.Close()
- if size!=v.SizeBytes || size<1 || size>MaxFileSize {return nil,"",ErrInvalid}
+ source,size,etag,err:=s.source.Read(ctx,v.SourceRoot,v.RelativePath);if err!=nil{return nil,"",err};if source==nil{return nil,"",ErrUnavailable};defer source.Close()
+ if strings.TrimSpace(etag)=="" || strings.TrimSpace(v.SourceETag)=="" {return nil,"",ErrUnavailable}
+ if size!=v.SizeBytes || etag!=v.SourceETag || size<1 || size>MaxFileSize {return nil,"",ErrInvalid}
  whole:=sha256.New();parts:=make([]Part,0,(size+PartSize-1)/PartSize);remaining:=size
  for index:=0;remaining>0;index++ {
   if err:=ctx.Err();err!=nil{return nil,"",err}

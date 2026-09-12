@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS model_versions (
  run_id TEXT NOT NULL DEFAULT '',
  file_name TEXT NOT NULL CHECK (length(file_name) BETWEEN 1 AND 255),
  source_root TEXT NOT NULL CHECK (source_root <> ''),
+ source_etag TEXT NOT NULL CHECK (length(trim(source_etag)) > 0),
  relative_path TEXT NOT NULL CHECK (relative_path <> ''),
  code_sha256 TEXT NOT NULL DEFAULT '' CHECK (code_sha256 = '' OR code_sha256 ~ '^[0-9a-f]{64}$'),
  code_commit TEXT NOT NULL DEFAULT '' CHECK (code_commit = '' OR code_commit ~ '^([0-9a-f]{40}|[0-9a-f]{64})$'),

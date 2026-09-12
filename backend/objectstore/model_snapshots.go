@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"strconv"
+	"strings"
 
 	"ray-train-platform-backend/modellifecycle"
 )
@@ -25,36 +26,42 @@ func (s *TOSStore) ModelSnapshotObjects() modellifecycle.Objects {
 
 // Read preserves the task artifact reader's server-selected root and path
 // boundary. This adapter exposes no operation that can modify a task output.
-func (s *modelSnapshotSource) Read(ctx context.Context, taskRoot, relativePath string) (io.ReadCloser, int64, error) {
+func (s *modelSnapshotSource) Read(ctx context.Context, taskRoot, relativePath string) (io.ReadCloser, int64, string, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, 0, err
+		return nil, 0, "", err
 	}
 	// A snapshot must identify exactly one file; reject normalization aliases
 	// such as encoded separators or trailing directory slashes.
 	if _, err := cleanPublicationObjectKey(relativePath); err != nil {
-		return nil, 0, modellifecycle.ErrInvalid
+		return nil, 0, "", modellifecycle.ErrInvalid
 	}
 	if s == nil || s.store == nil {
-		return nil, 0, modellifecycle.ErrUnavailable
+		return nil, 0, "", modellifecycle.ErrUnavailable
 	}
 	result, err := s.store.ReadArtifact(ctx, taskRoot, relativePath)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrNotFound):
-			return nil, 0, modellifecycle.ErrNotFound
+			return nil, 0, "", modellifecycle.ErrNotFound
 		case errors.Is(err, ErrUnavailable):
-			return nil, 0, modellifecycle.ErrUnavailable
+			return nil, 0, "", modellifecycle.ErrUnavailable
 		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-			return nil, 0, err
+			return nil, 0, "", err
 		default:
-			return nil, 0, modellifecycle.ErrInvalid
+			return nil, 0, "", modellifecycle.ErrInvalid
 		}
 	}
 	if result.SizeBytes < 1 || result.SizeBytes > modellifecycle.MaxFileSize {
 		_ = result.Content.Close()
-		return nil, 0, modellifecycle.ErrInvalid
+		return nil, 0, "", modellifecycle.ErrInvalid
 	}
-	return result.Content, result.SizeBytes, nil
+	if strings.TrimSpace(result.ETag) == "" {
+		_ = result.Content.Close()
+		return nil, 0, "", modellifecycle.ErrUnavailable
+	}
+	// The identity token comes from the GET that opened this exact stream.
+	// A separate HEAD would leave a race between metadata and content reads.
+	return result.Content, result.SizeBytes, result.ETag, nil
 }
 
 func modelSnapshotKey(id string, index int) (string, error) {

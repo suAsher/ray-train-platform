@@ -72,6 +72,7 @@ type Version struct {
  CreatedAt time.Time `json:"createdAt"`
  UpdatedAt time.Time `json:"updatedAt"`
  SourceRoot string `json:"-"`
+ SourceETag string `json:"-" gorm:"column:source_etag"`
  RelativePath string `json:"-"`
  IdempotencyKey string `json:"-"`
  RequestSHA256 string `json:"-"`
@@ -106,7 +107,9 @@ type Repository interface {
  RenewVersion(context.Context,string,string,time.Time,time.Time)error
  FinishVersion(context.Context,string,string,string,[]Part,string,time.Time)error
 }
-type Source interface { Read(context.Context,string,string)(io.ReadCloser,int64,error) }
+// Source returns the identity token from the same GET that opened the body.
+// The ETag is opaque and is never supplied by API clients.
+type Source interface { Read(context.Context,string,string)(io.ReadCloser,int64,string,error) }
 type Objects interface {
  Put(context.Context,string,int,string,[]byte)error
  Get(context.Context,string,int)(io.ReadCloser,int64,error)

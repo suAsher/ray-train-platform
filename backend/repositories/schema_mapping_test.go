@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"gorm.io/gorm/schema"
+ ml "ray-train-platform-backend/modellifecycle"
 )
 
 // The unit tests run against SQLite, which auto-creates whatever columns the
@@ -22,6 +23,7 @@ func TestModelColumnsExistInMigrations(t *testing.T) {
 	tables := loadMigrationTables(t)
 
 	models := []any{
+		&ml.Model{}, &ml.Version{}, &modelAudit{},
 		&JobRecord{}, &OutboxRecord{}, &TenantRecord{}, &UserRecord{},
 		&WorkspaceRecord{}, &IdempotencyRecord{}, &PersonalAccessTokenRecord{},
 		&LocalUserRecord{}, &LocalSessionRecord{}, &AuditLogRecord{}, &MLflowDashboardTicketRecord{}, &PlatformImageRecord{},

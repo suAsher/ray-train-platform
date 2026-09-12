@@ -190,6 +190,7 @@ type ArtifactRead struct {
 	Content     io.ReadCloser
 	SizeBytes   int64
 	ContentType string
+	ETag        string
 }
 
 type ArtifactReader interface {

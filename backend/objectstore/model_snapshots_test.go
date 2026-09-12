@@ -14,6 +14,7 @@ import (
 )
 
 const modelSnapshotTestID = "12345678-1234-4234-8234-123456789abc"
+const modelSnapshotTestETag = "\"model-source-etag-v1\""
 
 func modelSnapshotDigest(data []byte) string {
 	sum := sha256.Sum256(data)
@@ -27,9 +28,9 @@ func TestModelSnapshotsUseSeparateImmutableObjects(t *testing.T) {
 	client := &modelSnapshotClient{objects: map[string][]byte{sourceKey: payload}}
 	store := &TOSStore{client: client, bucket: "private"}
 	ctx := context.Background()
-	source, size, err := store.ModelSnapshotSource().Read(ctx, root, "model.pt")
-	if err != nil || size != int64(len(payload)) {
-		t.Fatalf("read source: size=%d error=%v", size, err)
+	source, size, etag, err := store.ModelSnapshotSource().Read(ctx, root, "model.pt")
+	if err != nil || size != int64(len(payload)) || etag != modelSnapshotTestETag {
+		t.Fatalf("read source: size=%d etag=%q error=%v", size, etag, err)
 	}
 	data, err := io.ReadAll(source)
 	_ = source.Close()
@@ -114,7 +115,7 @@ func TestModelSnapshotUnavailableAndInvalidResponses(t *testing.T) {
 		if _, _, err := store.ModelSnapshotObjects().Get(ctx, modelSnapshotTestID, 0); !errors.Is(err, modellifecycle.ErrUnavailable) {
 			t.Errorf("unavailable get: %v", err)
 		}
-		if _, _, err := store.ModelSnapshotSource().Read(ctx, "runs/job/output", "model.pt"); !errors.Is(err, modellifecycle.ErrUnavailable) {
+		if _, _, _, err := store.ModelSnapshotSource().Read(ctx, "runs/job/output", "model.pt"); !errors.Is(err, modellifecycle.ErrUnavailable) {
 			t.Errorf("unavailable source: %v", err)
 		}
 	}
@@ -143,22 +144,40 @@ func TestModelSnapshotSourcePathAndSizeBoundary(t *testing.T) {
 	client := &modelSnapshotClient{objects: map[string][]byte{}}
 	source := (&TOSStore{client: client}).ModelSnapshotSource()
 	for _, path := range []string{"", "../other/model.pt", "/model.pt", "a/../../other", "a\\model.pt", "%2e%2e/model.pt", "model.pt/", " model.pt", "model\x00.pt"} {
-		if _, _, err := source.Read(context.Background(), "runs/job/output", path); !errors.Is(err, modellifecycle.ErrInvalid) {
+		if _, _, _, err := source.Read(context.Background(), "runs/job/output", path); !errors.Is(err, modellifecycle.ErrInvalid) {
 			t.Errorf("unsafe path %q: %v", path, err)
 		}
 	}
 	if client.readKey != "" {
 		t.Fatal("unsafe source path contacted storage")
 	}
-	if _, _, err := source.Read(context.Background(), "runs/job/output", "missing.pt"); !errors.Is(err, modellifecycle.ErrNotFound) {
+	if _, _, _, err := source.Read(context.Background(), "runs/job/output", "missing.pt"); !errors.Is(err, modellifecycle.ErrNotFound) {
 		t.Fatalf("missing source: %v", err)
 	}
 	for _, size := range []int64{0, modellifecycle.MaxFileSize + 1} {
 		body := &modelSnapshotReadCloser{Reader: strings.NewReader("weights")}
-		client.response = &tosArtifactReadResponse{Content: body, SizeBytes: size}
-		if _, _, err := source.Read(context.Background(), "runs/job/output", "model.pt"); !errors.Is(err, modellifecycle.ErrInvalid) || !body.closed {
+		client.response = &tosArtifactReadResponse{Content: body, SizeBytes: size, ETag: modelSnapshotTestETag}
+		if _, _, _, err := source.Read(context.Background(), "runs/job/output", "model.pt"); !errors.Is(err, modellifecycle.ErrInvalid) || !body.closed {
 			t.Errorf("source size=%d error=%v closed=%v", size, err, body.closed)
 		}
+	}
+}
+
+func TestModelSnapshotSourceRequiresETagFromSameGet(t *testing.T) {
+	for _, etag := range []string{"", " \t ", modelSnapshotTestETag, "\"model-source-etag-v2\""} {
+		body := &modelSnapshotReadCloser{Reader: strings.NewReader("weights")}
+		client := &modelSnapshotClient{response: &tosArtifactReadResponse{Content: body, SizeBytes: 7, ETag: etag}, fakeTOSClient: fakeTOSClient{headErr: errors.New("must not HEAD source")}}
+		stream, size, gotETag, err := (&TOSStore{client: client}).ModelSnapshotSource().Read(context.Background(), "runs/job/output", "model.pt")
+		if strings.TrimSpace(etag) == "" {
+			if !errors.Is(err, modellifecycle.ErrUnavailable) || stream != nil || !body.closed {
+				t.Fatalf("missing etag returned stream=%v error=%v closed=%v", stream, err, body.closed)
+			}
+			continue
+		}
+		if err != nil || size != 7 || gotETag != etag || body.closed {
+			t.Fatalf("GET identity size=%d etag=%q error=%v closed=%v", size, gotETag, err, body.closed)
+		}
+		_ = stream.Close()
 	}
 }
 
@@ -202,7 +221,7 @@ func TestModelSnapshotCanceledCallsDoNotContactStorage(t *testing.T) {
 	payload := []byte("weights")
 	if err := store.ModelSnapshotObjects().Put(ctx, modelSnapshotTestID, 0, modelSnapshotDigest(payload), payload); !errors.Is(err, context.Canceled) { t.Fatalf("put: %v", err) }
 	if _, _, err := store.ModelSnapshotObjects().Get(ctx, modelSnapshotTestID, 0); !errors.Is(err, context.Canceled) { t.Fatalf("get: %v", err) }
-	if _, _, err := store.ModelSnapshotSource().Read(ctx, "runs/job/output", "model.pt"); !errors.Is(err, context.Canceled) { t.Fatalf("source: %v", err) }
+	if _, _, _, err := store.ModelSnapshotSource().Read(ctx, "runs/job/output", "model.pt"); !errors.Is(err, context.Canceled) { t.Fatalf("source: %v", err) }
 	if client.putKey != "" || client.readKey != "" { t.Fatal("canceled request contacted storage") }
 }
 
@@ -248,5 +267,5 @@ func (c *modelSnapshotClient) ReadArtifact(_ context.Context, request tosArtifac
 	if c.response != nil { return *c.response, nil }
 	data, ok := c.objects[request.Key]
 	if !ok { return tosArtifactReadResponse{}, ErrNotFound }
-	return tosArtifactReadResponse{Content: io.NopCloser(bytes.NewReader(data)), SizeBytes: int64(len(data))}, nil
+	return tosArtifactReadResponse{Content: io.NopCloser(bytes.NewReader(data)), SizeBytes: int64(len(data)), ETag: modelSnapshotTestETag}, nil
 }
