@@ -24,6 +24,7 @@ MAX_BATCH_BYTES = 256 * 1024
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 JOB_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 RUN_PATTERN = re.compile(r"[0-9a-f]{32}\Z")
+IDEMPOTENCY_PATTERN = re.compile(r"[A-Za-z0-9._:-]{1,128}\Z")
 WINDOW_NOTICE = (
     "Recent window only, at most 100 runs; this is not a full export. "
     "An absent run does not establish whether it exists or whether you have "
@@ -127,10 +128,15 @@ class RayTrainMLflowClient:
         redacted = value.replace(self._credential, "[REDACTED]")
         return "".join(char for char in redacted if ord(char) >= 32 and ord(char) != 127)[:limit]
 
-    def _request(self, method: str, path: str, body: bytes | None = None):
+    def _request(self, method: str, path: str, body: bytes | None = None, *, idempotency_key: str | None = None):
+        headers = {"Authorization": "Bearer " + self._credential, "Accept": "application/json", "Content-Type": "application/json"}
+        if idempotency_key is not None:
+            if not isinstance(idempotency_key, str) or not IDEMPOTENCY_PATTERN.fullmatch(idempotency_key):
+                raise ValueError("idempotency key must contain 1 to 128 ASCII letters, digits, dots, underscores, colons or hyphens")
+            headers["Idempotency-Key"] = idempotency_key
         request = urllib.request.Request(
             self._base_url + path, data=body, method=method,
-            headers={"Authorization": "Bearer " + self._credential, "Accept": "application/json", "Content-Type": "application/json"},
+            headers=headers,
         )
         try:
             try:

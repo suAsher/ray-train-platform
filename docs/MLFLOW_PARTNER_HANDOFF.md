@@ -1,6 +1,8 @@
 # 给对接方的 MLflow 接入交付单
 
-这份交付单针对当前已上线的 RayTrain REST 接口。它读取实验记录，并向已有 RUNNING Run 写参数、指标和自定义标签；不提供完整官方 MLflow SDK、外部创建 Run、模型文件上传、Registry 写入或启动推理服务。
+先按对接用途选择合同：**已有训练记录**使用下表保留的 Job/Run 接口；**独立外部实验**使用 [外部实验接口](MLFLOW_EXTERNAL_TRACKING_API.md)，通过 REST 创建资源，再用 REST 或受控 MLflow 3.14.0 SDK 子集读写。新增能力的上线状态以发布验证记录为准。两者都不提供完整 SDK、模型文件上传、Registry 写入或启动推理服务。
+
+独立外部实验需要另行提供 `experiments:read` / `experiments:write` PAT、平台 Experiment/Run ID、`https://raytrain.wellspiking.ai/api/v1/mlflow-tracking`（SDK 专用前缀）、指标合同及 [新 OpenAPI](api/mlflow-external-tracking.openapi.json)。SDK 的 `run_id` 是**平台 Run ID**；返回的 `mlflowRunId` 仅用于核对原生 MLflow 记录。外部实验 REST/SDK 只授权当前团队本人资源，原生 MLflow 管理界面仍是既有共享管理入口，并不承诺同等隔离。
 
 ## 交付内容
 

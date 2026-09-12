@@ -1,5 +1,7 @@
 # MLflow 外部对接说明
 
+本文保留**已有训练 Job/Run** 的兼容合同。独立外部实验的创建、分页和受控 SDK 子集请使用 [外部实验接口](MLFLOW_EXTERNAL_TRACKING_API.md)。两种用途的 scope、ID 和路径不同，不要混用；新增能力的上线状态以该文档及发布验证记录为准。
+
 本说明对应已部署后端 `release-20260912-01-3800b753`（Helm revision 212、schema 45）。精确 Run 读取已用线上登录身份验证；读写协议已通过隔离 MLflow 3.14 验证，尚未向生产 Run 写入演示数据。具体证据与未完成项见 [发布验证记录](QUOTA_MLFLOW_VALIDATION_20260912.md)。现有 `/api/v1/experiments` 与 `/api/v1/jobs/{job_id}/experiment` 仍保持兼容。
 
 ## 需要交给对接方什么
@@ -16,7 +18,7 @@
 
 当前 PAT 没有按单个 Job/Run 限权，也不是第三方委托凭据。它允许该用户与团队下按角色及 scope 获准的操作；若对接方只应访问少数指定 Run，或需代写他人的任务，必须先建设资源 grant/集成身份，不能认为仅提供某个 Run ID 就限制了令牌权限。
 
-不要提供集群内 `MLFLOW_TRACKING_URI`、数据库连接、对象存储密钥或 `/mlflow/` 浏览器 Cookie。这些接口是 RayTrain REST 合同，不是官方 SDK 的完整 Tracking Server：不能把平台 URL 配给 `mlflow.set_tracking_uri()` 后假定所有 SDK 功能都可用。
+不要提供集群内 `MLFLOW_TRACKING_URI`、数据库连接、对象存储密钥或 `/mlflow/` 浏览器 Cookie。本文训练接口是 RayTrain REST 合同，不能把平台根地址当作完整 SDK Tracking Server。新版外部实验 SDK 使用独立 `/api/v1/mlflow-tracking` 前缀，仅支持 [明确列出的子集](MLFLOW_EXTERNAL_TRACKING_API.md)，并使用 REST 预创建的**平台 Run ID**。
 
 ## 请求合同
 

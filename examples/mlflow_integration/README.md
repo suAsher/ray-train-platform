@@ -1,5 +1,7 @@
 # RayTrain MLflow REST 客户端
 
+本页 `client.py` 继续服务已有训练 Job/Run。新增独立外部实验请参阅 [外部实验接口与 SDK 子集](../../docs/MLFLOW_EXTERNAL_TRACKING_API.md) 和本目录 `external_tracking.py`；它们使用显式 `experiments:read/write`，不会扩展已有训练令牌。
+
 Python 3.10+，仅依赖标准库。用于已开放的实验列表、指定 Run 读取和 `log-batch` 写入；不是完整 MLflow SDK，也不会创建 Experiment、Run 或训练任务。
 
 完整权限与请求合同见 [MLflow 外部对接说明](../../docs/MLFLOW_INTEGRATION_API.md)。先取得获准的任务 ID、Run ID 和短期 PAT。读取需要 `jobs:read`；写入同时需要 `jobs:read`、`mlflow:write`，且只能写当前团队本人任务的已有 RUNNING Run。其他管理员不能代写。

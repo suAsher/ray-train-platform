@@ -79,6 +79,9 @@ class ExternalTrackingTest(unittest.TestCase):
         for state in ["RUNNING", "", None]:
             with self.assertRaises(ValueError):
                 instance.finish_run(RUN, state)
+        for path in ["@outside.example", "//outside.example/api", "/api/v1/jobs"]:
+            with self.assertRaises(ValueError):
+                instance.request("GET", path)
         self.assertFalse(transport.requests)
 
     def test_exact_platform_identifier_is_used_and_response_verified(self):

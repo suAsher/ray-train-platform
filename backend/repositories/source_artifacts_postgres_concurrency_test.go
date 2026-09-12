@@ -51,9 +51,7 @@ func TestSourceArtifactRepositoryPostgresReopenAndPendingQuotaAreAtomic(t *testi
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
 	reopenPrincipal := auth.Principal{Subject: "reopen-user", TenantID: "atomic-tenant", Username: "reopen-user", Roles: []string{"Engineer"}}
-	if err := first.EnsureIdentity(ctx, reopenPrincipal); err != nil {
-		t.Fatalf("ensure reopen identity: %v", err)
-	}
+	ensurePostgresArtifactPrincipal(t, first, ctx, reopenPrincipal)
 	reopenFixture := mustPostgresArtifact(t, "reopen-fixture", reopenPrincipal, strings.Repeat("a", 64), now.Add(15*time.Minute), now)
 	created, err := first.CreateOrReuseSourceArtifact(ctx, &reopenFixture)
 	if err != nil {
@@ -86,9 +84,7 @@ func TestSourceArtifactRepositoryPostgresReopenAndPendingQuotaAreAtomic(t *testi
 	}
 
 	quotaPrincipal := auth.Principal{Subject: "quota-user", TenantID: "atomic-tenant", Username: "quota-user", Roles: []string{"Engineer"}}
-	if err := first.EnsureIdentity(ctx, quotaPrincipal); err != nil {
-		t.Fatalf("ensure quota identity: %v", err)
-	}
+	ensurePostgresArtifactPrincipal(t, first, ctx, quotaPrincipal)
 	left := mustPostgresArtifact(t, "quota-left", quotaPrincipal, strings.Repeat("b", 64), now.Add(15*time.Minute), now)
 	right := mustPostgresArtifact(t, "quota-right", quotaPrincipal, strings.Repeat("c", 64), now.Add(15*time.Minute), now)
 	limits := SourceArtifactLimits{MaxPending: 1, QuotaBytes: DefaultSourceArtifactQuotaBytes}
@@ -173,9 +169,7 @@ func TestSourceArtifactRepositoryPostgresConcurrentCreateAndReadyRefresh(t *test
 	second := NewGormRepository(secondDB)
 	marker := NewGormRepository(markReadyDB)
 	principal := auth.Principal{Subject: "concurrent-user", TenantID: "concurrent-tenant", Username: "concurrent-user", Roles: []string{"Engineer"}}
-	if err := first.EnsureIdentity(context.Background(), principal); err != nil {
-		t.Fatalf("ensure identity: %v", err)
-	}
+	ensurePostgresArtifactPrincipal(t, first, context.Background(), principal)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -318,6 +312,22 @@ func openArtifactPostgresConnection(t *testing.T, dsn string) *gorm.DB {
 	return database
 }
 
+func ensurePostgresArtifactPrincipal(t *testing.T, repository *GormRepository, ctx context.Context, principal auth.Principal) {
+	t.Helper()
+	if err := repository.EnsureIdentity(ctx, principal); err != nil {
+		t.Fatalf("ensure identity %s/%s: %v", principal.TenantID, principal.Subject, err)
+	}
+	if err := repository.CreateLocalUser(ctx, domain.LocalUser{
+		ID:           principal.Subject,
+		Username:     principal.Username,
+		TenantID:     principal.TenantID,
+		Roles:        principal.Roles,
+		PasswordHash: "!postgres-fixture",
+	}); err != nil {
+		t.Fatalf("create local identity %s/%s: %v", principal.TenantID, principal.Subject, err)
+	}
+}
+
 func mustPostgresArtifact(t *testing.T, id string, principal auth.Principal, digest string, expiresAt, now time.Time) domain.SourceArtifact {
 	t.Helper()
 	artifact, err := domain.NewSourceArtifact(domain.SourceArtifactInput{
@@ -362,9 +372,7 @@ func TestSourceArtifactRepositoryPostgresDistinctReadyReopensHonorPendingQuota(t
 	defer cancel()
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	principal := auth.Principal{Subject: "reopen-quota-user", TenantID: "reopen-quota-tenant", Username: "reopen-quota-user", Roles: []string{"Engineer"}}
-	if err := first.EnsureIdentity(ctx, principal); err != nil {
-		t.Fatalf("ensure identity: %v", err)
-	}
+	ensurePostgresArtifactPrincipal(t, first, ctx, principal)
 
 	ids := make([]string, 0, 2)
 	for index, digest := range []string{strings.Repeat("a", 64), strings.Repeat("b", 64)} {

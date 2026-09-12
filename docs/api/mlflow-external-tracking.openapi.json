@@ -1,0 +1,3340 @@
+{
+  "components": {
+    "parameters": {
+      "Cursor": {
+        "in": "query",
+        "name": "cursor",
+        "required": false,
+        "schema": {
+          "maxLength": 4096,
+          "type": "string"
+        }
+      },
+      "ExperimentID": {
+        "in": "path",
+        "name": "experimentId",
+        "required": true,
+        "schema": {
+          "pattern": "^[0-9a-f]{32}$",
+          "type": "string"
+        }
+      },
+      "IdempotencyKey": {
+        "in": "header",
+        "name": "Idempotency-Key",
+        "required": true,
+        "schema": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[!-~]+$",
+          "type": "string"
+        }
+      },
+      "Limit": {
+        "in": "query",
+        "name": "limit",
+        "required": false,
+        "schema": {
+          "default": 50,
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "RunID": {
+        "in": "path",
+        "name": "runId",
+        "required": true,
+        "schema": {
+          "pattern": "^[0-9a-f]{32}$",
+          "type": "string"
+        }
+      }
+    },
+    "schemas": {
+      "Capabilities": {
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "limits": {
+            "properties": {
+              "maxBatchMetrics": {
+                "const": 100
+              },
+              "maxBatchParams": {
+                "const": 100
+              },
+              "maxBatchTags": {
+                "const": 100
+              },
+              "maxMetricKeys": {
+                "const": 20
+              },
+              "maxMetricPoints": {
+                "const": 500
+              },
+              "maxPageLimit": {
+                "const": 100
+              },
+              "maxRequestBodyBytes": {
+                "const": 262144
+              }
+            },
+            "type": "object"
+          },
+          "read": {
+            "type": "boolean"
+          },
+          "scopes": {
+            "properties": {
+              "read": {
+                "const": "experiments:read"
+              },
+              "write": {
+                "const": "experiments:write"
+              }
+            },
+            "type": "object"
+          },
+          "sdkBasePath": {
+            "type": "string"
+          },
+          "sdkCompatible": {
+            "type": "boolean"
+          },
+          "supports": {
+            "properties": {
+              "artifactManagement": {
+                "const": false
+              },
+              "experimentTracking": {
+                "type": "boolean"
+              },
+              "modelEvaluation": {
+                "const": false
+              },
+              "modelRegistry": {
+                "const": false
+              },
+              "modelServing": {
+                "const": false
+              },
+              "ui": {
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "write": {
+            "type": "boolean"
+          },
+          "sdkProtocol": {
+            "type": "string",
+            "const": "tracking-subset"
+          },
+          "sdkClientVersion": {
+            "type": "string",
+            "const": "3.14.0"
+          },
+          "sdkMethods": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sdkRequiresPrecreatedRun": {
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "available",
+          "read",
+          "write",
+          "sdkCompatible",
+          "scopes",
+          "limits",
+          "supports",
+          "sdkProtocol",
+          "sdkClientVersion",
+          "sdkMethods",
+          "sdkRequiresPrecreatedRun"
+        ],
+        "type": "object"
+      },
+      "Experiment": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "mlflowExperimentId": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "state",
+          "createdAt",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "ExperimentPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "properties": {
+                "createdAt": {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "id": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                },
+                "mlflowExperimentId": {
+                  "pattern": "^[0-9]+$",
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "format": "date-time",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "state",
+                "createdAt",
+                "updatedAt"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "LogBatch": {
+        "additionalProperties": false,
+        "properties": {
+          "metrics": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "key": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "step": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "timestamp": {
+                  "maximum": 253402300799999,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "value": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "key",
+                "value",
+                "timestamp",
+                "step"
+              ],
+              "type": "object"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "params": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "key": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "key",
+                "value"
+              ],
+              "type": "object"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "tags": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "key": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "key",
+                "value"
+              ],
+              "type": "object"
+            },
+            "maxItems": 100,
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "MLflowSDKUpdateResponse": {
+        "properties": {
+          "run_info": {
+            "properties": {
+              "artifact_uri": {
+                "pattern": "^raytrain-disabled:/",
+                "type": "string"
+              },
+              "end_time": {
+                "type": "integer"
+              },
+              "experiment_id": {
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              "lifecycle_stage": {
+                "const": "active"
+              },
+              "run_id": {
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              "run_name": {
+                "type": "string"
+              },
+              "run_uuid": {
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              "start_time": {
+                "type": "integer"
+              },
+              "status": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "run_info"
+        ],
+        "type": "object"
+      },
+      "MLflowSDKWriteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "end_time": {
+            "maximum": 253402300799999,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "key": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "metrics": {
+            "items": {
+              "$ref": "#/components/schemas/Metric"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "params": {
+            "items": {
+              "$ref": "#/components/schemas/Pair"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "run_id": {
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "FINISHED",
+              "FAILED",
+              "KILLED"
+            ]
+          },
+          "step": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tags": {
+            "items": {
+              "$ref": "#/components/schemas/Pair"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "timestamp": {
+            "maximum": 253402300799999,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "value": {},
+          "run_uuid": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$",
+            "description": "MLflow 3.14 SDK legacy alias; when present must equal run_id."
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "type": "object"
+      },
+      "Run": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "endTimeMs": {
+            "type": "integer"
+          },
+          "experimentId": {
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "finishedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "mlflowRunId": {
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "startTimeMs": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "experimentId",
+          "name",
+          "state",
+          "startTimeMs",
+          "createdAt",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "RunDetail": {
+        "properties": {
+          "latest": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "maxProperties": 20,
+            "type": "object"
+          },
+          "params": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "maxProperties": 100,
+            "type": "object"
+          },
+          "run": {
+            "properties": {
+              "createdAt": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "endTimeMs": {
+                "type": "integer"
+              },
+              "experimentId": {
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              "finishedAt": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "id": {
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              "mlflowRunId": {
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "startTimeMs": {
+                "type": "integer"
+              },
+              "state": {
+                "type": "string"
+              },
+              "updatedAt": {
+                "format": "date-time",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "experimentId",
+              "name",
+              "state",
+              "startTimeMs",
+              "createdAt",
+              "updatedAt"
+            ],
+            "type": "object"
+          },
+          "series": {
+            "items": {
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "points": {
+                  "items": {
+                    "properties": {
+                      "step": {
+                        "type": "integer"
+                      },
+                      "timestampMs": {
+                        "type": "integer"
+                      },
+                      "value": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "value",
+                      "timestampMs",
+                      "step"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 500,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "key",
+                "points"
+              ],
+              "type": "object"
+            },
+            "maxItems": 20,
+            "type": "array"
+          }
+        },
+        "required": [
+          "run",
+          "latest",
+          "params",
+          "series"
+        ],
+        "type": "object"
+      },
+      "RunPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "properties": {
+                "createdAt": {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "endTimeMs": {
+                  "type": "integer"
+                },
+                "experimentId": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                },
+                "finishedAt": {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "id": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                },
+                "mlflowRunId": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "startTimeMs": {
+                  "type": "integer"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "format": "date-time",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "experimentId",
+                "name",
+                "state",
+                "startTimeMs",
+                "createdAt",
+                "updatedAt"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "SDKError": {
+        "properties": {
+          "error_code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error_code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "SDKRunResponse": {
+        "properties": {
+          "run": {
+            "properties": {
+              "data": {
+                "properties": {
+                  "metrics": {
+                    "type": "array"
+                  },
+                  "params": {
+                    "type": "array"
+                  },
+                  "tags": {
+                    "maxItems": 0,
+                    "type": "array"
+                  }
+                },
+                "type": "object"
+              },
+              "info": {
+                "properties": {
+                  "artifact_uri": {
+                    "pattern": "^raytrain-disabled:/",
+                    "type": "string"
+                  },
+                  "end_time": {
+                    "type": "integer"
+                  },
+                  "experiment_id": {
+                    "pattern": "^[0-9a-f]{32}$",
+                    "type": "string"
+                  },
+                  "lifecycle_stage": {
+                    "const": "active"
+                  },
+                  "run_id": {
+                    "pattern": "^[0-9a-f]{32}$",
+                    "type": "string"
+                  },
+                  "run_name": {
+                    "type": "string"
+                  },
+                  "run_uuid": {
+                    "pattern": "^[0-9a-f]{32}$",
+                    "type": "string"
+                  },
+                  "start_time": {
+                    "type": "integer"
+                  },
+                  "status": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearerPAT": {
+        "description": "RayTrain PAT. Read requires experiments:read. Writes require experiments:read and experiments:write.",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Code contract for platform-owned external MLflow tracking records. This file does not claim deployment.",
+    "title": "RayTrain MLflow External Tracking API",
+    "version": "2026-09-12"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/mlflow-tracking/api/2.0/mlflow/runs/get": {
+      "get": {
+        "operationId": "mlflowSDKGetRun",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{32}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKRunResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Invalid parameter"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Run not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Invalid state"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Unavailable or uncertain outcome"
+          }
+        },
+        "summary": "MLflow get_run for REST-precreated platform run IDs",
+        "tags": [
+          "MLflow SDK subset"
+        ]
+      }
+    },
+    "/api/v1/mlflow-tracking/api/2.0/mlflow/runs/log-batch": {
+      "post": {
+        "operationId": "mlflowSDKLogBatch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MLflowSDKWriteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Invalid parameter"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Run not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Invalid state"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Unavailable or uncertain outcome"
+          }
+        },
+        "summary": "Limited MLflow SDK log-batch on REST-precreated platform run IDs",
+        "tags": [
+          "MLflow SDK subset"
+        ]
+      }
+    },
+    "/api/v1/mlflow-tracking/api/2.0/mlflow/runs/log-metric": {
+      "post": {
+        "operationId": "mlflowSDKLogMetric",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MLflowSDKWriteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Invalid parameter"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Run not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Invalid state"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Unavailable or uncertain outcome"
+          }
+        },
+        "summary": "Limited MLflow SDK log-metric on REST-precreated platform run IDs",
+        "tags": [
+          "MLflow SDK subset"
+        ]
+      }
+    },
+    "/api/v1/mlflow-tracking/api/2.0/mlflow/runs/log-parameter": {
+      "post": {
+        "operationId": "mlflowSDKLogParameter",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MLflowSDKWriteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Invalid parameter"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Run not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Invalid state"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Unavailable or uncertain outcome"
+          }
+        },
+        "summary": "Limited MLflow SDK log-parameter on REST-precreated platform run IDs",
+        "tags": [
+          "MLflow SDK subset"
+        ]
+      }
+    },
+    "/api/v1/mlflow-tracking/api/2.0/mlflow/runs/set-tag": {
+      "post": {
+        "operationId": "mlflowSDKSetTag",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MLflowSDKWriteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Invalid parameter"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Run not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Invalid state"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Unavailable or uncertain outcome"
+          }
+        },
+        "summary": "Limited MLflow SDK set-tag on REST-precreated platform run IDs",
+        "tags": [
+          "MLflow SDK subset"
+        ]
+      }
+    },
+    "/api/v1/mlflow-tracking/api/2.0/mlflow/runs/update": {
+      "post": {
+        "description": "Finishes a REST-precreated platform run. The SDK end_time field is honored when supplied.",
+        "operationId": "mlflowSDKUpdate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MLflowSDKWriteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MLflowSDKUpdateResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Invalid parameter"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Run not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Invalid state"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SDKError"
+                }
+              }
+            },
+            "description": "Unavailable or uncertain outcome"
+          }
+        },
+        "summary": "Limited MLflow SDK update on REST-precreated platform run IDs",
+        "tags": [
+          "MLflow SDK subset"
+        ]
+      }
+    },
+    "/api/v1/mlflow/capabilities": {
+      "get": {
+        "operationId": "getMLflowExternalTrackingCapabilities",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Capabilities"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Report external tracking capabilities and limits",
+        "tags": [
+          "External Tracking REST"
+        ]
+      }
+    },
+    "/api/v1/mlflow/experiments": {
+      "get": {
+        "operationId": "listMLflowExternalTrackingExperiments",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ExperimentPage"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Conflict, busy or pending"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unavailable or uncertain outcome"
+          }
+        },
+        "summary": "List authorized external experiments",
+        "tags": [
+          "External Tracking REST"
+        ]
+      },
+      "post": {
+        "operationId": "createMLflowExternalTrackingExperiment",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Experiment"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Conflict, busy or pending"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unavailable or uncertain outcome"
+          }
+        },
+        "summary": "Create an external experiment idempotently",
+        "tags": [
+          "External Tracking REST"
+        ]
+      }
+    },
+    "/api/v1/mlflow/experiments/{experimentId}/runs": {
+      "get": {
+        "operationId": "listMLflowExternalTrackingRuns",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ExperimentID"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/RunPage"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Conflict, busy or pending"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unavailable or uncertain outcome"
+          }
+        },
+        "summary": "List authorized runs in an external experiment",
+        "tags": [
+          "External Tracking REST"
+        ]
+      },
+      "post": {
+        "operationId": "createMLflowExternalTrackingRun",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ExperimentID"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Run"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Conflict, busy or pending"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unavailable or uncertain outcome"
+          }
+        },
+        "summary": "Create an external run idempotently",
+        "tags": [
+          "External Tracking REST"
+        ]
+      }
+    },
+    "/api/v1/mlflow/runs/{runId}": {
+      "get": {
+        "operationId": "getMLflowExternalTrackingRun",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RunID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/RunDetail"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Conflict, busy or pending"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unavailable or uncertain outcome"
+          }
+        },
+        "summary": "Get one authorized external run detail",
+        "tags": [
+          "External Tracking REST"
+        ]
+      }
+    },
+    "/api/v1/mlflow/runs/{runId}/finish": {
+      "post": {
+        "operationId": "finishMLflowExternalTrackingRun",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RunID"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "FINISHED",
+                      "FAILED",
+                      "KILLED"
+                    ]
+                  }
+                },
+                "required": [
+                  "status"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Run"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Conflict, busy or pending"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unavailable or uncertain outcome"
+          }
+        },
+        "summary": "Finish an external run",
+        "tags": [
+          "External Tracking REST"
+        ]
+      }
+    },
+    "/api/v1/mlflow/runs/{runId}/log-batch": {
+      "post": {
+        "operationId": "logMLflowExternalTrackingBatch",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RunID"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogBatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "logged": {
+                          "const": true
+                        },
+                        "runId": {
+                          "pattern": "^[0-9a-f]{32}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "runId",
+                        "logged"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Conflict, busy or pending"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error",
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unavailable or uncertain outcome"
+          }
+        },
+        "summary": "Append metrics, params and tags to a running external run",
+        "tags": [
+          "External Tracking REST"
+        ]
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerPAT": []
+    }
+  ],
+  "servers": [
+    {
+      "description": "Use only an approved RayTrain API origin.",
+      "url": "https://raytrain.wellspiking.ai"
+    }
+  ],
+  "tags": [
+    {
+      "name": "External Tracking REST"
+    },
+    {
+      "name": "MLflow SDK subset"
+    }
+  ]
+}

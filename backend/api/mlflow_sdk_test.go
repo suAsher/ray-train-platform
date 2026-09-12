@@ -135,6 +135,28 @@ func TestMLflowSDKGetPreservesVirtualIDAndRejectsTransitionalStatus(t *testing.T
 	}
 }
 
+func TestMLflowSDKRateAndInputLimits(t *testing.T) {
+	service:=&fakeMLflowTrackingService{err:mlflowtracking.ErrBusy}
+	r:=sdkServiceRouter(trackingPrincipal("experiments:read","experiments:write"),service,newFakeMLflowDashboardStore())
+	for _,payload:=range []string{
+		`{"run_id":"0123456789abcdef0123456789abcdef","key":"loss","value":null,"timestamp":1,"step":1}`,
+		`{"run_id":"0123456789abcdef0123456789abcdef","key":"loss","value":1e999,"timestamp":1,"step":1}`,
+		`{"run_id":"0123456789abcdef0123456789abcdef","key":"loss","value":0.5,"timestamp":-1,"step":1}`,
+		`{"run_id":"0123456789abcdef0123456789abcdef","key":"loss","value":0.5,"timestamp":1,"step":-1}`,
+		strings.Repeat(" ",256*1024+1),
+	} {
+		w:=httptest.NewRecorder();r.ServeHTTP(w,httptest.NewRequest("POST","/api/v1/mlflow-tracking/api/2.0/mlflow/runs/log-metric",strings.NewReader(payload)))
+		if w.Code!=400||service.runID!="" {t.Fatalf("bad metric reached service: %d",w.Code)}
+	}
+	limited:=false
+	for i:=0;i<130;i++ {
+		w:=httptest.NewRecorder();r.ServeHTTP(w,httptest.NewRequest("GET","/api/v1/mlflow-tracking/api/2.0/mlflow/runs/get?run_id=0123456789abcdef0123456789abcdef",nil))
+		if w.Code==429 {limited=true;if w.Header().Get("Retry-After")=="" {t.Fatal("rate limit lacks retry guidance")};break}
+		if w.Code!=409 {t.Fatalf("busy status: %d",w.Code)}
+	}
+	if !limited {t.Fatal("SDK read rate not bounded")}
+}
+
 func TestMLflowSDKRequiresExplicitScopesAndPAT(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -181,5 +203,11 @@ func TestMLflowSDKStrictPayloadDecoder(t *testing.T) {
 	var req mlflowSDKWriteRequest
 	if err := decodeMLflowSDKBody(strings.NewReader(`{"run_id":"0123456789abcdef0123456789abcdef","params":[{"key":"epochs","value":"5"}]}`), &req); err != nil {
 		t.Fatal(err)
+	}
+	if err := decodeMLflowSDKBody(strings.NewReader(`{"run_id":"0123456789abcdef0123456789abcdef","run_uuid":"0123456789abcdef0123456789abcdef","key":"epochs","value":"5"}`), &req); err != nil {
+		t.Fatal(err)
+	}
+	if err := decodeMLflowSDKBody(strings.NewReader(`{"run_id":"0123456789abcdef0123456789abcdef","run_uuid":"ffffffffffffffffffffffffffffffff","key":"epochs","value":"5"}`), &req); err == nil {
+		t.Fatal("conflicting SDK run_uuid accepted")
 	}
 }

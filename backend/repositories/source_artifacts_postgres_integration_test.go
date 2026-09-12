@@ -52,9 +52,7 @@ func TestSourceArtifactRepositoryPostgresIntegration(t *testing.T) {
 	}
 	repo := NewGormRepository(admin)
 	principal := auth.Principal{Subject: "pg-user", TenantID: "pg-tenant", Username: "pg-user", Roles: []string{"Engineer"}}
-	if err := repo.EnsureIdentity(context.Background(), principal); err != nil {
-		t.Fatalf("ensure identity: %v", err)
-	}
+	ensurePostgresArtifactPrincipal(t, repo, context.Background(), principal)
 	expires := time.Now().UTC().Truncate(time.Microsecond).Add(15 * time.Minute)
 	artifact, err := domain.NewSourceArtifact(domain.SourceArtifactInput{
 		ID: "pg-artifact", TenantID: principal.TenantID, UserID: principal.Subject,

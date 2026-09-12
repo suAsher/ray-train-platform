@@ -79,7 +79,7 @@ func trackingPrincipal(scopes ...string) auth.Principal {
 	return auth.Principal{Subject: "user-a", Username: "engineer", TenantID: "team-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypePAT, Scopes: scopes}
 }
 
-func trackingRouter(principal auth.Principal, service mlflowTrackingService, audit *fakeMLflowDashboardStore) *gin.Engine {
+func trackingRouter(principal auth.Principal, service mlflowTrackingService, audit MLflowDashboardStore) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	handler := NewHandler(&fakeJobRepository{}, Options{MLflowTracking: service, MLflowDashboardStore: audit})
 	router := gin.New()
@@ -292,6 +292,63 @@ func TestMLflowTrackingRunsLifecycleAndAudit(t *testing.T) {
 	}
 }
 
+func TestMLflowTrackingAuthenticationAndReadScope(t *testing.T) {
+	service := &fakeMLflowTrackingService{}
+	handler := NewHandler(&fakeJobRepository{}, Options{MLflowTracking: service})
+	anonymousRouter := gin.New()
+	handler.RegisterTrainingRoutes(anonymousRouter.Group("/api/v1"))
+	anonymous := trackingRequest(anonymousRouter, http.MethodGet, "/api/v1/mlflow/experiments", "", "")
+	if anonymous.Code != http.StatusUnauthorized || service.limit != 0 {
+		t.Fatalf("anonymous request was not rejected before service use: status=%d limit=%d body=%s", anonymous.Code, service.limit, anonymous.Body.String())
+	}
+
+	noExperimentScope := trackingRequest(trackingRouter(trackingPrincipal(domain.PATScopeJobsRead), service, nil), http.MethodGet, "/api/v1/mlflow/experiments", "", "")
+	if noExperimentScope.Code != http.StatusForbidden || service.limit != 0 {
+		t.Fatalf("request without experiments:read reached service: status=%d limit=%d body=%s", noExperimentScope.Code, service.limit, noExperimentScope.Body.String())
+	}
+}
+
+func TestMLflowTrackingRateLimitStopsReadRequests(t *testing.T) {
+	service := &fakeMLflowTrackingService{}
+	router := trackingRouter(trackingPrincipal(), service, nil)
+	path := "/api/v1/mlflow/runs/22222222222222222222222222222222"
+	for attempt := 0; attempt < 120; attempt++ {
+		response := trackingRequest(router, http.MethodGet, path, "", "")
+		if response.Code != http.StatusOK {
+			t.Fatalf("attempt %d expected 200 before limit, got %d %s", attempt+1, response.Code, response.Body.String())
+		}
+	}
+	limited := trackingRequest(router, http.MethodGet, path, "", "")
+	if limited.Code != http.StatusTooManyRequests || limited.Header().Get("Retry-After") != "60" {
+		t.Fatalf("read rate limit not enforced: status=%d retry=%q body=%s", limited.Code, limited.Header().Get("Retry-After"), limited.Body.String())
+	}
+}
+
+func TestMLflowTrackingServiceErrorsMapToSafeResponses(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		code   string
+	}{
+		{"invalid", mlflowtracking.ErrInvalid, http.StatusBadRequest, "MLFLOW_TRACKING_INVALID_REQUEST"},
+		{"conflict", mlflowtracking.ErrConflict, http.StatusConflict, "MLFLOW_TRACKING_CONFLICT"},
+		{"busy", mlflowtracking.ErrBusy, http.StatusConflict, "MLFLOW_TRACKING_BUSY"},
+		{"pending", mlflowtracking.ErrPending, http.StatusConflict, "MLFLOW_TRACKING_PENDING"},
+		{"unavailable", mlflowtracking.ErrUnavailable, http.StatusServiceUnavailable, "MLFLOW_TRACKING_UNAVAILABLE"},
+		{"generic redacted", errors.New("private upstream token at http://mlflow.internal"), http.StatusBadGateway, "MLFLOW_TRACKING_REQUEST_FAILED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service := &fakeMLflowTrackingService{err: tc.err}
+			response := trackingRequest(trackingRouter(trackingPrincipal(), service, nil), http.MethodGet, "/api/v1/mlflow/runs/22222222222222222222222222222222", "", "")
+			body := response.Body.String()
+			if response.Code != tc.status || !strings.Contains(body, tc.code) || strings.Contains(body, "private upstream") || strings.Contains(body, "mlflow.internal") {
+				t.Fatalf("unsafe or wrong error mapping: status=%d body=%s", response.Code, body)
+			}
+		})
+	}
+}
+
 func TestMLflowTrackingStrictBodiesAndErrors(t *testing.T) {
 	service := &fakeMLflowTrackingService{}
 	router := trackingRouter(trackingPrincipal(domain.PATScopeExperimentsRead, domain.PATScopeExperimentsWrite), service, newFakeMLflowDashboardStore())
@@ -305,12 +362,23 @@ func TestMLflowTrackingStrictBodiesAndErrors(t *testing.T) {
 		{http.MethodPost, "/api/v1/mlflow/experiments", `{"name":""}`, "idem"},
 		{http.MethodPost, "/api/v1/mlflow/experiments/11111111111111111111111111111111/runs", `{"name":"candidate","extra":true}`, "idem"},
 		{http.MethodPost, "/api/v1/mlflow/runs/22222222222222222222222222222222/log-batch", `{"Metrics":[{"key":"external/quality_score","value":1,"timestamp":1,"step":0}]}`, ""},
+		{http.MethodPost, "/api/v1/mlflow/runs/22222222222222222222222222222222/log-batch", `{"metrics":[{"key":"external/quality_score","value":1,"value":2,"timestamp":1,"step":0}]}`, ""},
 		{http.MethodPost, "/api/v1/mlflow/runs/22222222222222222222222222222222/finish", `{"status":"RUNNING"}`, ""},
+		{http.MethodPost, "/api/v1/mlflow/runs/22222222222222222222222222222222/finish", `{"status":"FINISHED"}{}`, ""},
+		{http.MethodPost, "/api/v1/mlflow/experiments", `{"name":"bad\nname"}`, "idem"},
+		{http.MethodPost, "/api/v1/mlflow/experiments", `{"name":"external"}`, strings.Repeat("a", 129)},
+		{http.MethodGet, "/api/v1/mlflow/runs/ABCDEFabcdef0123456789abcdef0123", "", ""},
+		{http.MethodGet, "/api/v1/mlflow/experiments?cursor=bad%0Acursor", "", ""},
 	} {
 		response := trackingRequest(router, request.method, request.path, request.body, request.key)
 		if response.Code != http.StatusBadRequest {
 			t.Fatalf("%s %s expected 400, got %d %s", request.method, request.path, response.Code, response.Body.String())
 		}
+	}
+
+	oversized := trackingRequest(router, http.MethodPost, "/api/v1/mlflow/experiments", `{"name":"`+strings.Repeat("x", 70*1024)+`"}`, "idem")
+	if oversized.Code != http.StatusRequestEntityTooLarge || !strings.Contains(oversized.Body.String(), "MLFLOW_TRACKING_BODY_TOO_LARGE") {
+		t.Fatalf("oversized body was not rejected safely: %d %s", oversized.Code, oversized.Body.String())
 	}
 
 	service.err = mlflowtracking.ErrNotFound
@@ -322,6 +390,17 @@ func TestMLflowTrackingStrictBodiesAndErrors(t *testing.T) {
 	failed := trackingRequest(router, http.MethodGet, "/api/v1/mlflow/runs/22222222222222222222222222222222", "", "")
 	if failed.Code != http.StatusBadGateway || strings.Contains(failed.Body.String(), "s3://") {
 		t.Fatalf("unexpected generic error: %d %s", failed.Code, failed.Body.String())
+	}
+}
+
+func TestMLflowTrackingCompletionAuditFailureReportsUncertainWrite(t *testing.T) {
+	audit := &integrationCompletionFailStore{newFakeMLflowDashboardStore()}
+	service := &fakeMLflowTrackingService{}
+	router := trackingRouter(trackingPrincipal(domain.PATScopeExperimentsRead, domain.PATScopeExperimentsWrite), service, audit)
+	response := trackingRequest(router, http.MethodPost, "/api/v1/mlflow/runs/22222222222222222222222222222222/log-batch", `{"metrics":[{"key":"external/quality_score","value":1,"timestamp":1000,"step":0}]}`, "")
+	body := response.Body.String()
+	if response.Code != http.StatusServiceUnavailable || len(service.loggedBatch.Metrics) != 1 || !strings.Contains(body, "MLFLOW_TRACKING_AUDIT_INCOMPLETE") || !strings.Contains(body, "verify the run before retrying") || strings.Contains(body, "private database") {
+		t.Fatalf("uncertain tracking write was misreported: status=%d batch=%+v body=%s", response.Code, service.loggedBatch, body)
 	}
 }
 

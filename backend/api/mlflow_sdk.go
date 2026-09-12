@@ -124,6 +124,7 @@ func sdkRunInfo(run mlflowtracking.Run) gin.H {
 
 type mlflowSDKWriteRequest struct {
 	RunID     string                          `json:"run_id"`
+	RunUUID   string                          `json:"run_uuid,omitempty"`
 	Metrics   []observability.MLflowLogMetric `json:"metrics,omitempty"`
 	Params    []observability.MLflowKeyValue  `json:"params,omitempty"`
 	Tags      []observability.MLflowKeyValue  `json:"tags,omitempty"`
@@ -153,6 +154,9 @@ func decodeMLflowSDKBody(reader io.Reader, target *mlflowSDKWriteRequest) error 
 		return err
 	}
 	if !mlflowDashboardRunIDPattern.MatchString(target.RunID) {
+		return mlflowtracking.ErrInvalid
+	}
+	if target.RunUUID != "" && target.RunUUID != target.RunID {
 		return mlflowtracking.ErrInvalid
 	}
 	var extra any

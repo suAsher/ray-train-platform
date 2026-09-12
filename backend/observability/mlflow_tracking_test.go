@@ -46,6 +46,79 @@ func TestMLflowTrackingCreateExperimentFindsDeterministicNameBeforeCreate(t *tes
 	}
 }
 
+func TestMLflowTrackingCreateExperimentReusesFoundExperimentWithoutCreate(t *testing.T) {
+	creates := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/2.0/mlflow/experiments/get-by-name":
+			_ = json.NewEncoder(w).Encode(map[string]any{"experiment": map[string]any{"experiment_id": "42"}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/2.0/mlflow/experiments/create":
+			creates++
+			t.Fatalf("found experiment should not be created again")
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	client := &MLflowClient{BaseURL: server.URL, ExperimentPrefix: "raytrain", ProvenanceKey: []byte(strings.Repeat("k", 32)), HTTPClient: server.Client()}
+	upstreamID, err := client.CreateExperiment(context.Background(), "0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if upstreamID != "42" || creates != 0 {
+		t.Fatalf("unexpected reuse id=%q creates=%d", upstreamID, creates)
+	}
+}
+
+func TestMLflowTrackingCreateExperimentReconcilesAfterAmbiguousCreate(t *testing.T) {
+	gets := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/2.0/mlflow/experiments/get-by-name":
+			gets++
+			if gets == 1 {
+				http.NotFound(w, r)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"experiment": map[string]any{"experiment_id": "43"}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/2.0/mlflow/experiments/create":
+			http.Error(w, "ambiguous upstream failure", http.StatusBadGateway)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	client := &MLflowClient{BaseURL: server.URL, ExperimentPrefix: "raytrain", ProvenanceKey: []byte(strings.Repeat("k", 32)), HTTPClient: server.Client()}
+	upstreamID, err := client.CreateExperiment(context.Background(), "0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if upstreamID != "43" || gets != 2 {
+		t.Fatalf("unexpected reconciliation id=%q gets=%d", upstreamID, gets)
+	}
+}
+
+func TestMLflowTrackingCreateExperimentRejectsIncompleteCreateResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/2.0/mlflow/experiments/get-by-name":
+			http.NotFound(w, r)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/2.0/mlflow/experiments/create":
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	client := &MLflowClient{BaseURL: server.URL, ExperimentPrefix: "raytrain", ProvenanceKey: []byte(strings.Repeat("k", 32)), HTTPClient: server.Client()}
+	if _, err := client.CreateExperiment(context.Background(), "0123456789abcdef0123456789abcdef"); !errors.Is(err, mlflowtracking.ErrUnavailable) {
+		t.Fatalf("expected ErrUnavailable for incomplete response, got %v", err)
+	}
+}
+
 func TestMLflowTrackingCreateRunReconcilesByOperationTagBeforeRetryingCreate(t *testing.T) {
 	searches := 0
 	creates := 0
@@ -77,6 +150,67 @@ func TestMLflowTrackingCreateRunReconcilesByOperationTagBeforeRetryingCreate(t *
 	}
 }
 
+func TestMLflowTrackingCreateRunFallsBackWhenCreateResponseOmitsProof(t *testing.T) {
+	searches := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/2.0/mlflow/runs/search":
+			searches++
+			if searches == 1 {
+				_ = json.NewEncoder(w).Encode(map[string]any{"runs": []any{}})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"runs": []any{trackingRunPayload("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "9", "external", "RUNNING", "fedcba9876543210fedcba9876543210", nil, nil)}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/2.0/mlflow/runs/create":
+			_ = json.NewEncoder(w).Encode(map[string]any{"run": map[string]any{"info": map[string]any{"run_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "experiment_id": "9"}}})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	client := &MLflowClient{BaseURL: server.URL, ExperimentPrefix: "raytrain", ProvenanceKey: []byte(strings.Repeat("k", 32)), HTTPClient: server.Client()}
+	upstreamID, err := client.CreateRun(context.Background(), "9", "fedcba9876543210fedcba9876543210", "external")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if upstreamID != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" || searches != 2 {
+		t.Fatalf("unexpected fallback id=%q searches=%d", upstreamID, searches)
+	}
+}
+
+func TestMLflowTrackingFindRunHandlesMissingWrongProofAndDuplicates(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		runs    []any
+		found   bool
+		wantErr error
+	}{
+		{name: "missing", runs: []any{}, found: false},
+		{name: "wrong proof", runs: []any{trackingRunPayload("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "9", "external", "RUNNING", "00000000000000000000000000000000", nil, nil)}, found: false},
+		{name: "duplicate", runs: []any{
+			trackingRunPayload("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "9", "external", "RUNNING", "fedcba9876543210fedcba9876543210", nil, nil),
+			trackingRunPayload("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "9", "external", "RUNNING", "fedcba9876543210fedcba9876543210", nil, nil),
+		}, wantErr: mlflowtracking.ErrConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != "/api/2.0/mlflow/runs/search" {
+					t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"runs": tc.runs})
+			}))
+			defer server.Close()
+
+			client := &MLflowClient{BaseURL: server.URL, ExperimentPrefix: "raytrain", ProvenanceKey: []byte(strings.Repeat("k", 32)), HTTPClient: server.Client()}
+			_, found, err := client.FindRun(context.Background(), "9", "fedcba9876543210fedcba9876543210")
+			if !errors.Is(err, tc.wantErr) || found != tc.found {
+				t.Fatalf("unexpected find result found=%t err=%v", found, err)
+			}
+		})
+	}
+}
+
 func TestMLflowTrackingReadRunRequiresExperimentAndOperationProof(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/2.0/mlflow/runs/get" {
@@ -102,6 +236,25 @@ func TestMLflowTrackingReadRunRequiresExperimentAndOperationProof(t *testing.T) 
 	}
 }
 
+func TestMLflowTrackingReadRunMetricHistoryFailureIsUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/2.0/mlflow/runs/get":
+			_ = json.NewEncoder(w).Encode(map[string]any{"run": trackingRunPayload("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "9", "external", "RUNNING", "fedcba9876543210fedcba9876543210", []map[string]any{{"key": "loss", "value": 1.5}}, nil)})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/2.0/mlflow/metrics/get-history":
+			http.Error(w, "upstream unavailable", http.StatusBadGateway)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	client := &MLflowClient{BaseURL: server.URL, ExperimentPrefix: "raytrain", ProvenanceKey: []byte(strings.Repeat("k", 32)), HTTPClient: server.Client()}
+	if _, err := client.ReadRun(context.Background(), "9", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "fedcba9876543210fedcba9876543210"); !errors.Is(err, mlflowtracking.ErrUnavailable) {
+		t.Fatalf("expected ErrUnavailable for metric history failure, got %v", err)
+	}
+}
+
 func TestMLflowTrackingRejectsInvalidUpstreamIdentifiersBeforeHTTP(t *testing.T) {
 	called := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -120,6 +273,18 @@ func TestMLflowTrackingRejectsInvalidUpstreamIdentifiersBeforeHTTP(t *testing.T)
 	}
 	if called {
 		t.Fatal("invalid identifiers reached upstream HTTP")
+	}
+}
+
+func TestMLflowTrackingRejectsInvalidAdapterConfigBeforeHTTP(t *testing.T) {
+	client := &MLflowClient{BaseURL: "http://127.0.0.1", ExperimentPrefix: "bad/prefix", ProvenanceKey: []byte(strings.Repeat("k", 32))}
+	if _, err := client.CreateExperiment(context.Background(), "0123456789abcdef0123456789abcdef"); !errors.Is(err, mlflowtracking.ErrInvalid) {
+		t.Fatalf("expected ErrInvalid for bad prefix, got %v", err)
+	}
+	client.ExperimentPrefix = "raytrain"
+	client.ProvenanceKey = nil
+	if _, err := client.CreateExperiment(context.Background(), "0123456789abcdef0123456789abcdef"); !errors.Is(err, mlflowtracking.ErrUnavailable) {
+		t.Fatalf("expected ErrUnavailable for missing provenance key, got %v", err)
 	}
 }
 
@@ -192,6 +357,34 @@ func TestMLflowTrackingLogFinishAndHistoryUseVerifiedRun(t *testing.T) {
 	}
 }
 
+func TestMLflowTrackingLogRunRejectsTerminalRunAndInvalidBatch(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		status  string
+		batch   mlflowtracking.Batch
+		wantErr error
+	}{
+		{name: "terminal", status: "FINISHED", batch: mlflowtracking.Batch{Tags: []mlflowtracking.Pair{{Key: "ok", Value: "yes"}}}, wantErr: mlflowtracking.ErrConflict},
+		{name: "invalid batch", status: "RUNNING", batch: mlflowtracking.Batch{}, wantErr: mlflowtracking.ErrInvalid},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/api/2.0/mlflow/runs/get" {
+					t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"run": trackingRunPayload("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "9", "external", tc.status, "fedcba9876543210fedcba9876543210", nil, nil)})
+			}))
+			defer server.Close()
+
+			client := &MLflowClient{BaseURL: server.URL, ExperimentPrefix: "raytrain", ProvenanceKey: []byte(strings.Repeat("k", 32)), HTTPClient: server.Client()}
+			err := client.LogRun(context.Background(), "9", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "fedcba9876543210fedcba9876543210", tc.batch)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("expected %v, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
 func TestMLflowTrackingFinishRunAlreadyTerminalIsIdempotent(t *testing.T) {
 	updates := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -213,6 +406,25 @@ func TestMLflowTrackingFinishRunAlreadyTerminalIsIdempotent(t *testing.T) {
 	}
 	if updates != 0 {
 		t.Fatalf("unexpected update count %d", updates)
+	}
+}
+
+func TestMLflowTrackingFinishRunRejectsInvalidStatusAndEndTime(t *testing.T) {
+	client := &MLflowClient{BaseURL: "http://127.0.0.1", ExperimentPrefix: "raytrain", ProvenanceKey: []byte(strings.Repeat("k", 32))}
+	if err := client.FinishRun(context.Background(), "9", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "fedcba9876543210fedcba9876543210", "RUNNING", 12345); !errors.Is(err, mlflowtracking.ErrInvalid) {
+		t.Fatalf("expected ErrInvalid for non-terminal status, got %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/2.0/mlflow/runs/get" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"run": trackingRunPayload("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "9", "external", "RUNNING", "fedcba9876543210fedcba9876543210", nil, nil)})
+	}))
+	defer server.Close()
+	client.HTTPClient = server.Client()
+	client.BaseURL = server.URL
+	if err := client.FinishRun(context.Background(), "9", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "fedcba9876543210fedcba9876543210", "FINISHED", -1); !errors.Is(err, mlflowtracking.ErrInvalid) {
+		t.Fatalf("expected ErrInvalid for negative end time, got %v", err)
 	}
 }
 
