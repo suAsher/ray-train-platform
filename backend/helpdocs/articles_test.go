@@ -50,6 +50,15 @@ func TestProjectHelpArticleKeepsPublicGuideSupplementSectionsComplete(t *testing
 	targetsBySection := map[string][]string{}
 	for _, target := range PublicGuideSectionTargets() {
 		key := target.GuideID + "/" + target.Heading
+		found := false
+		for _, guide := range PublicGuides() {
+			if guide.ID == target.GuideID && markdownSectionsByHeading(guide.Markdown)[target.Heading] != "" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("supplement target references missing source section %s", key)
+		}
 		targetsBySection[key] = append(targetsBySection[key], target.ArticleID)
 	}
 	for _, guide := range PublicGuides() {

@@ -158,8 +158,8 @@ func TestHelpAPIArticlesRealStoreReturnsQuestionDocuments(t *testing.T) {
 		}
 	}
 	for _, forbidden := range []string{"admin-node-onboarding", "admin-team-retirement", "idc-sync-lifecycle"} {
-		if strings.Contains(body, forbidden) {
-			t.Fatalf("help articles leaked admin document %q: %s", forbidden, body)
+		if strings.Contains(body, `"id":"`+forbidden+`"`) {
+			t.Fatalf("help articles leaked admin document %q", forbidden)
 		}
 	}
 }

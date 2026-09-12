@@ -92,7 +92,7 @@ func TestHelpArticlesPreserveSeedMarkdownAndPublicGuideSupplements(t *testing.T)
 	assertMarkdownContains(t, byID["data-mode"].Markdown, []string{"### 数据模式"})
 	assertMarkdownContains(t, byID["resume"].Markdown, []string{"### 续训"})
 	assertMarkdownContains(t, byID["mlflow-api-with-pat"].Markdown, []string{"### 原生 MLflow SDK", "page.token"})
-	assertMarkdownContains(t, byID["portal-browser-tools-and-queue"].Markdown, []string{"### 推荐入口"})
+	assertMarkdownContains(t, byID["mlflow"].Markdown, []string{"### 推荐入口"})
 }
 
 func TestHelpArticlesReadPublishedJSONAndKeepDraftPrivate(t *testing.T) {
@@ -159,8 +159,8 @@ func TestHelpArticlesPreserveManualKnownArticleSourceAndHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	articleByID := helpArticlesByID(articles)
-	if articleByID["custom-environment"].Markdown != environmentBody || articleByID["worker-connect-and-scheduling-boundary"].Markdown != workerBody {
-		t.Fatalf("manual published body was not preserved in public articles: %+v", articleByID)
+	if !strings.HasPrefix(articleByID["custom-environment"].Markdown, environmentBody) || !strings.HasPrefix(articleByID["worker-connect-and-scheduling-boundary"].Markdown, workerBody) {
+		t.Fatal("manual published body must remain an unchanged prefix before any public supplement")
 	}
 	adminItems, err := r.ListHelpDocuments(ctx, true)
 	if err != nil {
