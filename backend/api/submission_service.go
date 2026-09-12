@@ -136,11 +136,11 @@ type SubmissionService struct {
 }
 
 type SubmissionInput struct {
-	Principal            auth.Principal
-	Spec                 domain.JobSpec
-	Origin               domain.SubmissionOrigin
-	IdempotencyKey       string
-	ExternalSubmissionID string
+	Principal                     auth.Principal
+	Spec                          domain.JobSpec
+	Origin                        domain.SubmissionOrigin
+	IdempotencyKey                string
+	ExternalSubmissionID          string
 	ReservedJobID                 string `json:"-"`
 	ExpectedImageDigest           string `json:"-"`
 	ExpectedDatasetManifestSHA256 string `json:"-"`
@@ -183,8 +183,8 @@ type preparedSubmission struct {
 
 var (
 	evaluationReservedJobID = regexp.MustCompile(`^job-[0-9a-f]{24}$`)
-	evaluationGitCommit    = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	evaluationSHA256       = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	evaluationGitCommit     = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	evaluationSHA256        = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
 func NewSubmissionService(repository JobRepository, options SubmissionServiceOptions) *SubmissionService {

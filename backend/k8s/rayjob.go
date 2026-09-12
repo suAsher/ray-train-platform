@@ -155,7 +155,9 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 		if job.Spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain || job.Spec.EvaluationRuntime == nil {
 			return nil, fmt.Errorf("evaluation requires a managed worker with trusted runtime")
 		}
-		if err := job.Spec.EvaluationRuntime.Validate(); err != nil { return nil, err }
+		if err := job.Spec.EvaluationRuntime.Validate(); err != nil {
+			return nil, err
+		}
 	} else {
 		job.Spec.EvaluationRuntime = nil
 	}

@@ -39,88 +39,88 @@ type globalJobReader interface {
 }
 
 type Handler struct {
-	modelEvaluations ModelEvaluationStore
+	modelEvaluations          ModelEvaluationStore
 	modelEvaluationSubmission ModelEvaluationSubmission
-	models                   modellifecycle.Repository
-	modelSnapshots           modelSnapshotService
-	bootstrapTenant          string
-	helpDocuments            HelpDocumentStore
-	repository               JobRepository
-	logs                     LogProvider
-	metrics                  MetricsProvider
-	experiments              ExperimentProvider
-	mlflowTracking           mlflowTrackingService
-	trackingArtifacts        trackingArtifactService
-	mlflowIntegrations       *MLflowIntegrationHandler
-	mlflowSDKRegistered      bool
-	allowAnonymous           bool
-	imageAllowlist           []string
-	gitAllowlist             []string
-	workspaces               WorkspaceStore
-	kubernetes               *k8s.Client
-	workspaceImage           string
-	rayVersion               string
-	serviceAccount           string
-	imagePullSecrets         []string
-	platformNamespace        string
-	idcClaim                 string
-	idcMountPath             string
-	clusterQueue             string
-	admin                    AdminStore
-	gpuAllocations           GPUAllocationStore
-	quota                    QuotaStore
-	memberships              MembershipStore
-	workspacePepper          []byte
-	trainingNodeSelector     map[string]string
-	workspaceUpstream        func(*domain.DevWorkspace) string
-	dashboardUpstream        func(context.Context, *domain.TrainingJob) (string, error)
-	images                   ImageStore
-	gitCredentials           GitCredentialStore
-	storageAssets            StorageAssetStore
-	datasets                 DatasetCatalogStore
-	datasetPublications      DatasetPublicationManager
-	datasetPurgeObjects      DatasetPurgeObjects
-	datasetInternalPrefix    string
-	datasetVersioningEnabled bool
-	rayDataStreamingEnabled  bool
-	dataSpaces               DataSpaceStore
-	dataSpacesEnabled        bool
-	dataSpacesFSXAttrs       string
-	dataSpacesCapacity       string
-	dataSpacesPublicRoot     string
-	idcDataSpacesEnabled     bool
-	idcDataSpacesCapacity    string
-	idcDataSpaceSources      map[domain.DataSpaceID]k8s.IDCDataMountSource
-	directoryLister          objectstore.DirectoryLister
-	directoryInitializer     objectstore.PersonalDataDirectoryInitializer
-	dataObjectStore          objectstore.DataSpaceStore
-	dataMultipartStore       objectstore.DataSpaceMultipartStore
-	dataSpaceUploads         DataSpaceUploadRepository
-	workspaceSnapshotStore   objectstore.WorkspaceSnapshotStore
-	workspaceSnapshots       WorkspaceSnapshotRepository
-	idcSyncCallbacks         IDCDataSyncCallbackStore
-	idcSyncCallbackKey       []byte
-	idcSyncManager           IDCDataSyncManager
-	artifactLister           objectstore.ArtifactLister
-	artifactReader           objectstore.ArtifactReader
-	gitCredentialTester      GitCredentialTester
-	gitRefResolver           GitRefResolver
-	newID                    func() (string, error)
-	submission               *SubmissionService
-	localCache               LocalCachePolicy
-	runtimePolicy            runtimecatalog.Policy
-	mlflowDashboardEnabled   bool
-	mlflowDashboardStore     MLflowDashboardStore
-	mlflowTrackingURL        string
-	mlflowNativeRegistered   bool
-	mlflowPublicOrigin       string
-	mlflowDashboardPepper    []byte
-	mlflowDashboardTTL       time.Duration
-	mlflowDashboardNow       func() time.Time
-	mlflowDashboardRandom    io.Reader
-	jobWorkerConnector       jobWorkerConnector
-	tenantScheduling         TenantSchedulingStore
-	preemptionEnabled        bool
+	models                    modellifecycle.Repository
+	modelSnapshots            modelSnapshotService
+	bootstrapTenant           string
+	helpDocuments             HelpDocumentStore
+	repository                JobRepository
+	logs                      LogProvider
+	metrics                   MetricsProvider
+	experiments               ExperimentProvider
+	mlflowTracking            mlflowTrackingService
+	trackingArtifacts         trackingArtifactService
+	mlflowIntegrations        *MLflowIntegrationHandler
+	mlflowSDKRegistered       bool
+	allowAnonymous            bool
+	imageAllowlist            []string
+	gitAllowlist              []string
+	workspaces                WorkspaceStore
+	kubernetes                *k8s.Client
+	workspaceImage            string
+	rayVersion                string
+	serviceAccount            string
+	imagePullSecrets          []string
+	platformNamespace         string
+	idcClaim                  string
+	idcMountPath              string
+	clusterQueue              string
+	admin                     AdminStore
+	gpuAllocations            GPUAllocationStore
+	quota                     QuotaStore
+	memberships               MembershipStore
+	workspacePepper           []byte
+	trainingNodeSelector      map[string]string
+	workspaceUpstream         func(*domain.DevWorkspace) string
+	dashboardUpstream         func(context.Context, *domain.TrainingJob) (string, error)
+	images                    ImageStore
+	gitCredentials            GitCredentialStore
+	storageAssets             StorageAssetStore
+	datasets                  DatasetCatalogStore
+	datasetPublications       DatasetPublicationManager
+	datasetPurgeObjects       DatasetPurgeObjects
+	datasetInternalPrefix     string
+	datasetVersioningEnabled  bool
+	rayDataStreamingEnabled   bool
+	dataSpaces                DataSpaceStore
+	dataSpacesEnabled         bool
+	dataSpacesFSXAttrs        string
+	dataSpacesCapacity        string
+	dataSpacesPublicRoot      string
+	idcDataSpacesEnabled      bool
+	idcDataSpacesCapacity     string
+	idcDataSpaceSources       map[domain.DataSpaceID]k8s.IDCDataMountSource
+	directoryLister           objectstore.DirectoryLister
+	directoryInitializer      objectstore.PersonalDataDirectoryInitializer
+	dataObjectStore           objectstore.DataSpaceStore
+	dataMultipartStore        objectstore.DataSpaceMultipartStore
+	dataSpaceUploads          DataSpaceUploadRepository
+	workspaceSnapshotStore    objectstore.WorkspaceSnapshotStore
+	workspaceSnapshots        WorkspaceSnapshotRepository
+	idcSyncCallbacks          IDCDataSyncCallbackStore
+	idcSyncCallbackKey        []byte
+	idcSyncManager            IDCDataSyncManager
+	artifactLister            objectstore.ArtifactLister
+	artifactReader            objectstore.ArtifactReader
+	gitCredentialTester       GitCredentialTester
+	gitRefResolver            GitRefResolver
+	newID                     func() (string, error)
+	submission                *SubmissionService
+	localCache                LocalCachePolicy
+	runtimePolicy             runtimecatalog.Policy
+	mlflowDashboardEnabled    bool
+	mlflowDashboardStore      MLflowDashboardStore
+	mlflowTrackingURL         string
+	mlflowNativeRegistered    bool
+	mlflowPublicOrigin        string
+	mlflowDashboardPepper     []byte
+	mlflowDashboardTTL        time.Duration
+	mlflowDashboardNow        func() time.Time
+	mlflowDashboardRandom     io.Reader
+	jobWorkerConnector        jobWorkerConnector
+	tenantScheduling          TenantSchedulingStore
+	preemptionEnabled         bool
 }
 
 type LogProvider interface {
@@ -141,48 +141,48 @@ type ExperimentProvider interface {
 }
 
 type Options struct {
-	ModelEvaluations ModelEvaluationStore
+	ModelEvaluations          ModelEvaluationStore
 	ModelEvaluationSubmission ModelEvaluationSubmission
-	Models                   modellifecycle.Repository
-	ModelSnapshots           modelSnapshotService
-	BootstrapTenant          string
-	AllowAnonymous           bool
-	Logs                     LogProvider
-	Metrics                  MetricsProvider
-	Experiments              ExperimentProvider
-	MLflowTracking           mlflowTrackingService
-	TrackingArtifacts        trackingArtifactService
-	MLflowIntegrations       *MLflowIntegrationHandler
-	ImageAllowlist           []string
-	GitAllowlist             []string
-	Workspaces               WorkspaceStore
-	Kubernetes               *k8s.Client
-	WorkspaceImage           string
-	RayVersion               string
-	ServiceAccount           string
-	ImagePullSecrets         []string
-	PlatformNamespace        string
-	IDCClaim                 string
-	IDCMountPath             string
-	KueueClusterQueue        string
-	Admin                    AdminStore
-	GPUAllocations           GPUAllocationStore
-	Quota                    QuotaStore
-	Memberships              MembershipStore
-	WorkspacePepper          []byte
-	TrainingNodeSelector     map[string]string
-	Images                   ImageStore
-	GitCredentials           GitCredentialStore
-	StorageAssets            StorageAssetStore
-	Datasets                 DatasetCatalogStore
-	DatasetPublications      DatasetPublicationManager
-	DatasetInternalPrefix    string
-	DatasetVersioningEnabled bool
-	RayDataStreamingEnabled  bool
-	DataSpaces               DataSpaceStore
-	DataSpacesEnabled        bool
-	DataSpacesFSXAttributes  string
-	DataSpacesMountCapacity  string
+	Models                    modellifecycle.Repository
+	ModelSnapshots            modelSnapshotService
+	BootstrapTenant           string
+	AllowAnonymous            bool
+	Logs                      LogProvider
+	Metrics                   MetricsProvider
+	Experiments               ExperimentProvider
+	MLflowTracking            mlflowTrackingService
+	TrackingArtifacts         trackingArtifactService
+	MLflowIntegrations        *MLflowIntegrationHandler
+	ImageAllowlist            []string
+	GitAllowlist              []string
+	Workspaces                WorkspaceStore
+	Kubernetes                *k8s.Client
+	WorkspaceImage            string
+	RayVersion                string
+	ServiceAccount            string
+	ImagePullSecrets          []string
+	PlatformNamespace         string
+	IDCClaim                  string
+	IDCMountPath              string
+	KueueClusterQueue         string
+	Admin                     AdminStore
+	GPUAllocations            GPUAllocationStore
+	Quota                     QuotaStore
+	Memberships               MembershipStore
+	WorkspacePepper           []byte
+	TrainingNodeSelector      map[string]string
+	Images                    ImageStore
+	GitCredentials            GitCredentialStore
+	StorageAssets             StorageAssetStore
+	Datasets                  DatasetCatalogStore
+	DatasetPublications       DatasetPublicationManager
+	DatasetInternalPrefix     string
+	DatasetVersioningEnabled  bool
+	RayDataStreamingEnabled   bool
+	DataSpaces                DataSpaceStore
+	DataSpacesEnabled         bool
+	DataSpacesFSXAttributes   string
+	DataSpacesMountCapacity   string
 	// DataSpacesPublicRoot is deployment-owned and never comes from an HTTP
 	// request. It controls the public dataset root during an explicit data
 	// migration and defaults to ray-train/public/.
@@ -308,7 +308,9 @@ func NewHandler(repository JobRepository, options Options) *Handler {
 	})
 	handler.modelEvaluations = options.ModelEvaluations
 	handler.modelEvaluationSubmission = options.ModelEvaluationSubmission
-	if handler.modelEvaluationSubmission == nil { handler.modelEvaluationSubmission = handler.submission }
+	if handler.modelEvaluationSubmission == nil {
+		handler.modelEvaluationSubmission = handler.submission
+	}
 	handler.models = options.Models
 	handler.modelSnapshots = options.ModelSnapshots
 	return handler

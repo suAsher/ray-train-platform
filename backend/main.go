@@ -437,7 +437,9 @@ func newKubernetesClient(cfg config.Config) (*k8s.Client, error) {
 func newReconcilerWithQuotaSync(repository *repositories.GormRepository, client *k8s.Client, cfg config.Config, options k8s.RenderOptions, evaluations ...*repositories.ModelEvaluationRepository) *k8s.Reconciler {
 	store := k8s.JobStore(repository)
 	var evaluationStore *repositories.ModelEvaluationRepository
-	if len(evaluations) > 0 { evaluationStore = evaluations[0] }
+	if len(evaluations) > 0 {
+		evaluationStore = evaluations[0]
+	}
 	if client != nil {
 		store = &managedCredentialJobStore{GormRepository: repository, kubernetes: client, now: time.Now, evaluations: evaluationStore}
 	}
@@ -448,7 +450,9 @@ func newReconcilerWithQuotaSync(repository *repositories.GormRepository, client 
 			ClusterQueueName: cfg.KueueClusterQueue,
 			Enabled:          cfg.KueueAutoQuota,
 		})
-	if evaluationStore != nil { reconciler.WithEvaluationFinalizer(evaluationStore) }
+	if evaluationStore != nil {
+		reconciler.WithEvaluationFinalizer(evaluationStore)
+	}
 	return reconciler
 }
 
@@ -608,8 +612,8 @@ const managedTrainingEventTokenTTL = 30 * 24 * time.Hour
 // PostgreSQL digest agree. The raw credential never enters a JobRecord.
 type managedCredentialJobStore struct {
 	*repositories.GormRepository
-	kubernetes *k8s.Client
-	now        func() time.Time
+	kubernetes  *k8s.Client
+	now         func() time.Time
 	evaluations *repositories.ModelEvaluationRepository
 }
 

@@ -113,7 +113,9 @@ func (r *Reconciler) renderOptionsForJob(ctx context.Context, job domain.Trainin
 		ManifestSHA256:   job.DatasetProvenance.ManifestSHA256,
 	}
 	if job.SubmissionOrigin == domain.SubmissionOriginEvaluation && job.Spec.EvaluationRuntime != nil {
-		if err := job.Spec.EvaluationRuntime.Validate(); err != nil { return RenderOptions{}, err }
+		if err := job.Spec.EvaluationRuntime.Validate(); err != nil {
+			return RenderOptions{}, err
+		}
 		request.Evaluation = true
 	}
 	mount, err := r.datasetManifests.ResolveDatasetManifestMount(ctx, request)
@@ -494,7 +496,9 @@ func (r *Reconciler) reconcileLoadedJob(ctx context.Context, job *domain.Trainin
 		job, creationLease = current, lease
 	}
 	job, err := r.restoreEvaluationRuntime(ctx, job)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	options, err := r.renderOptionsForJob(ctx, *job)
 	if err != nil {
 		return err

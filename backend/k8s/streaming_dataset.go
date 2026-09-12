@@ -93,8 +93,12 @@ func (mount DatasetManifestMount) validate(provenance domain.DatasetProvenance) 
 func validateJobDatasetMount(job domain.TrainingJob, mount DatasetManifestMount) error {
 	evaluation := job.SubmissionOrigin == domain.SubmissionOriginEvaluation && job.Spec.EvaluationRuntime != nil
 	if evaluation {
-		if err := job.Spec.EvaluationRuntime.Validate(); err != nil { return err }
-		if job.Spec.EvaluationRuntime.DatasetManifestSHA256 != job.DatasetProvenance.ManifestSHA256 { return fmt.Errorf("evaluation dataset digest does not match job provenance") }
+		if err := job.Spec.EvaluationRuntime.Validate(); err != nil {
+			return err
+		}
+		if job.Spec.EvaluationRuntime.DatasetManifestSHA256 != job.DatasetProvenance.ManifestSHA256 {
+			return fmt.Errorf("evaluation dataset digest does not match job provenance")
+		}
 	}
 	return mount.validateForUse(job.DatasetProvenance, evaluation)
 }
