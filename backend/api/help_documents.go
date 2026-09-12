@@ -21,6 +21,10 @@ type HelpDocumentStore interface {
 	HelpDocumentHistory(context.Context, string) ([]domain.HelpDocument, error)
 }
 
+type HelpArticleStore interface {
+	ListHelpArticles(context.Context) ([]domain.HelpArticle, error)
+}
+
 func (h *Handler) helpGuard(admin bool) gin.HandlerFunc {
 	// Per-handler, bounded per-principal limiter; both reads and writes are capped.
 	limiter := newFixedWindowSourceArtifactLimiter(30, 120, 10000, time.Now)
@@ -56,7 +60,9 @@ func (h *Handler) helpGuard(admin bool) gin.HandlerFunc {
 	}
 }
 func (h *Handler) RegisterHelpReadRoutes(group *gin.RouterGroup) {
-	group.Group("", h.helpGuard(false)).GET("/help/documents", func(c *gin.Context) { h.listHelp(c, false) })
+	reader := group.Group("", h.helpGuard(false))
+	reader.GET("/help/documents", func(c *gin.Context) { h.listHelp(c, false) })
+	reader.GET("/help/articles", h.listHelpArticles)
 }
 func (h *Handler) RegisterHelpManagementRoutes(group *gin.RouterGroup) {
 	admin := group.Group("/admin/help/documents", h.helpGuard(true))
@@ -80,6 +86,20 @@ func (h *Handler) helpError(c *gin.Context, err error) {
 }
 func (h *Handler) listHelp(c *gin.Context, admin bool) {
 	items, err := h.helpDocuments.ListHelpDocuments(c.Request.Context(), admin)
+	if err != nil {
+		h.helpError(c, err)
+		return
+	}
+	h.writeSuccess(c, 200, gin.H{"items": items})
+}
+
+func (h *Handler) listHelpArticles(c *gin.Context) {
+	store, ok := h.helpDocuments.(HelpArticleStore)
+	if !ok {
+		h.writeError(c, 503, "HELP_UNAVAILABLE", "文档服务暂不可用")
+		return
+	}
+	items, err := store.ListHelpArticles(c.Request.Context())
 	if err != nil {
 		h.helpError(c, err)
 		return

@@ -129,6 +129,41 @@ func TestHelpAPIPublicRouteReturnsUserGuidesNotAdminSourceDocs(t *testing.T) {
 	}
 }
 
+func TestHelpAPIArticlesRealStoreReturnsQuestionDocuments(t *testing.T) {
+	r, store := helpIntegrationRouterAndStore(t)
+	seed, err := helpdocs.Documents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.SeedHelpDocuments(context.Background(), seed); err != nil {
+		t.Fatal(err)
+	}
+
+	data := helpRequest(t, r, "GET", "help/articles", "", 200)
+	body := string(data)
+	for _, marker := range []string{
+		`"id":"quickstart"`,
+		`"categoryId":"start"`,
+		`"id":"mlflow-api-with-pat"`,
+		`"categoryId":"mlflow"`,
+		`"keywords":[`,
+		`"relatedIds":[`,
+		`"legacyAnchors":[`,
+		`"sectionId":"section-常见错误速查"`,
+		`"topicId":"training-guide"`,
+		`https://raytrain.wellspiking.ai/api/v1/mlflow-native`,
+	} {
+		if !strings.Contains(body, marker) {
+			t.Fatalf("help articles response is missing %q: %s", marker, body)
+		}
+	}
+	for _, forbidden := range []string{"admin-node-onboarding", "admin-team-retirement", "idc-sync-lifecycle"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("help articles leaked admin document %q: %s", forbidden, body)
+		}
+	}
+}
+
 func TestHelpAPIInputBounds(t *testing.T) {
 	r := helpIntegrationRouter(t)
 	base := "admin/help/documents"

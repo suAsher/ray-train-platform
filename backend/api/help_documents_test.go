@@ -39,9 +39,11 @@ func TestHelpReaderRequiresAuthentication(t *testing.T) {
 	h := NewHandler(nil, Options{})
 	r := gin.New()
 	h.RegisterHelpReadRoutes(r.Group("/api/v1"))
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/help/documents", nil))
-	if w.Code != 401 {
-		t.Fatal(w.Code)
+	for _, path := range []string{"/api/v1/help/documents", "/api/v1/help/articles"} {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+		if w.Code != 401 {
+			t.Fatalf("%s got %d want 401", path, w.Code)
+		}
 	}
 }
