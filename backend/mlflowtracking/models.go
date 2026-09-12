@@ -87,12 +87,12 @@ type Snapshot struct {
 	Series                 []MetricSeries
 }
 type RunDetail struct {
-	Run    Run                `json:"run"`
-	Latest map[string]float64 `json:"latest"`
+	Run           Run                    `json:"run"`
+	Latest        map[string]float64     `json:"latest"`
 	LatestMetrics map[string]MetricPoint `json:"latestMetrics"`
-	Params map[string]string  `json:"params"`
-	Tags map[string]string `json:"tags"`
-	Series []MetricSeries     `json:"series"`
+	Params        map[string]string      `json:"params"`
+	Tags          map[string]string      `json:"tags"`
+	Series        []MetricSeries         `json:"series"`
 }
 type ExperimentPage struct {
 	Items      []Experiment `json:"items"`

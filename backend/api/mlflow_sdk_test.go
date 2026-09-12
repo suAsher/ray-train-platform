@@ -143,11 +143,21 @@ func TestMLflowSDKGetPreservesUserTagsAndLatestMetricMetadata(t *testing.T) {
 	}
 	w := httptest.NewRecorder()
 	sdkServiceRouter(trackingPrincipal("experiments:read"), &fakeMLflowTrackingService{detail: detail}, newFakeMLflowDashboardStore()).ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/mlflow-tracking/api/2.0/mlflow/runs/get?run_id="+id, nil))
-	var body struct { Run struct { Data struct {
-		Metrics []struct { Key string; Value float64; Timestamp, Step int64 }
-		Tags []mlflowtracking.Pair
-	} } }
-	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil { t.Fatal(err) }
+	var body struct {
+		Run struct {
+			Data struct {
+				Metrics []struct {
+					Key             string
+					Value           float64
+					Timestamp, Step int64
+				}
+				Tags []mlflowtracking.Pair
+			}
+		}
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
 	if w.Code != 200 || len(body.Run.Data.Metrics) != 1 || body.Run.Data.Metrics[0].Value != 0.25 || body.Run.Data.Metrics[0].Timestamp != 2000 || body.Run.Data.Metrics[0].Step != 7 {
 		t.Fatalf("latest metadata was lost or inferred from history: %s", w.Body.String())
 	}

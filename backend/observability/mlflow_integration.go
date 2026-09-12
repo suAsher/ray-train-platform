@@ -24,10 +24,10 @@ type mlflowIntegrationRun struct {
 	} `json:"info"`
 	Data struct {
 		Metrics []struct {
-			Key   string            `json:"key"`
-			Value mlflowMetricValue `json:"value"`
-			Timestamp *int64 `json:"timestamp"`
-			Step *int64 `json:"step"`
+			Key       string            `json:"key"`
+			Value     mlflowMetricValue `json:"value"`
+			Timestamp *int64            `json:"timestamp"`
+			Step      *int64            `json:"step"`
 		} `json:"metrics"`
 		Params []MLflowKeyValue `json:"params"`
 		Tags   []MLflowKeyValue `json:"tags"`

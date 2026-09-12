@@ -70,12 +70,12 @@ func TestHelpCatalogPreservesPublishedTopicsAndReadingOrder(t *testing.T) {
 		telemetry-boundary`)
 	byID := make(map[string]bool, len(docs))
 	groups := map[string]int{
-		"01 开始使用": 0,
-		"02 准备代码和数据": 0,
-		"03 提交与运行": 0,
+		"01 开始使用":      0,
+		"02 准备代码和数据":   0,
+		"03 提交与运行":     0,
 		"04 结果与MLflow": 0,
-		"05 故障排查": 0,
-		"06 进阶与管理员": 0,
+		"05 故障排查":      0,
+		"06 进阶与管理员":    0,
 	}
 	for _, doc := range docs {
 		byID[doc.ID] = true

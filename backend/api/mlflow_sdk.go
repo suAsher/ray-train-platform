@@ -112,7 +112,9 @@ func (h *Handler) getMLflowSDKRun(c *gin.Context) {
 
 func sdkRunData(detail mlflowtracking.RunDetail) gin.H {
 	metricKeys := make([]string, 0, len(detail.LatestMetrics))
-	for key := range detail.LatestMetrics { metricKeys = append(metricKeys, key) }
+	for key := range detail.LatestMetrics {
+		metricKeys = append(metricKeys, key)
+	}
 	sort.Strings(metricKeys)
 	metrics := make([]gin.H, 0, len(metricKeys))
 	for _, key := range metricKeys {
@@ -126,12 +128,18 @@ func sdkRunData(detail mlflowtracking.RunDetail) gin.H {
 	sort.Slice(params, func(i, j int) bool { return params[i]["key"].(string) < params[j]["key"].(string) })
 	tagKeys := make([]string, 0, len(detail.Tags))
 	for key, value := range detail.Tags {
-		if mlflowtracking.ReadableUserTag(mlflowtracking.Pair{Key: key, Value: value}) { tagKeys = append(tagKeys, key) }
+		if mlflowtracking.ReadableUserTag(mlflowtracking.Pair{Key: key, Value: value}) {
+			tagKeys = append(tagKeys, key)
+		}
 	}
 	sort.Strings(tagKeys)
-	if len(tagKeys) > 100 { tagKeys = tagKeys[:100] }
+	if len(tagKeys) > 100 {
+		tagKeys = tagKeys[:100]
+	}
 	tags := make([]gin.H, 0, len(tagKeys))
-	for _, key := range tagKeys { tags = append(tags, gin.H{"key": key, "value": detail.Tags[key]}) }
+	for _, key := range tagKeys {
+		tags = append(tags, gin.H{"key": key, "value": detail.Tags[key]})
+	}
 	return gin.H{"metrics": metrics, "params": params, "tags": tags}
 }
 

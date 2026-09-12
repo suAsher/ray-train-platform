@@ -252,10 +252,19 @@ func TestSuccessfulReadListsAndIdempotentCreation(t *testing.T) {
 		t.Fatalf("detail=%+v %v", detail, err)
 	}
 	encoded, err := json.Marshal(detail)
-	if err != nil { t.Fatal(err) }
-	var readback struct { LatestMetrics map[string]tracking.MetricPoint; Tags map[string]string }
-	if err := json.Unmarshal(encoded, &readback); err != nil { t.Fatal(err) }
-	if readback.LatestMetrics["loss"].TimestampMS != 2000 || readback.LatestMetrics["loss"].Step != 7 || readback.Tags["review"] != "candidate" { t.Fatalf("service dropped readback fields: %s", encoded) }
+	if err != nil {
+		t.Fatal(err)
+	}
+	var readback struct {
+		LatestMetrics map[string]tracking.MetricPoint
+		Tags          map[string]string
+	}
+	if err := json.Unmarshal(encoded, &readback); err != nil {
+		t.Fatal(err)
+	}
+	if readback.LatestMetrics["loss"].TimestampMS != 2000 || readback.LatestMetrics["loss"].Step != 7 || readback.Tags["review"] != "candidate" {
+		t.Fatalf("service dropped readback fields: %s", encoded)
+	}
 	second, err := s.CreateRun(ctx, owner, exp.ID, "run-key-2", "candidate-two")
 	if err != nil {
 		t.Fatal(err)
@@ -279,13 +288,19 @@ func TestSuccessfulReadListsAndIdempotentCreation(t *testing.T) {
 
 func TestReadableUserTagPolicy(t *testing.T) {
 	for _, key := range []string{"review", "purpose", "dataset.version", "metrics/summary", "train.batch_size"} {
-		if !tracking.ReadableUserTag(tracking.Pair{Key: key, Value: "用户标签"}) { t.Fatalf("user key rejected: %s", key) }
+		if !tracking.ReadableUserTag(tracking.Pair{Key: key, Value: "用户标签"}) {
+			t.Fatalf("user key rejected: %s", key)
+		}
 	}
 	for _, key := range []string{"", "invalid key", "PLATFORM.owner", "mlflow.runName", "owner_id", "provenance", "credential", "credentials.password", "internal.trace", "system.version", "systemtag", "access_token", "refresh-token", "id_token", "api.key", "access_key", "secret.key", "private_key", "custom.token", "secret", "password", "authorization", "nested/provenance"} {
-		if tracking.ReadableUserTag(tracking.Pair{Key: key, Value: "hidden"}) { t.Fatalf("reserved key accepted: %s", key) }
+		if tracking.ReadableUserTag(tracking.Pair{Key: key, Value: "hidden"}) {
+			t.Fatalf("reserved key accepted: %s", key)
+		}
 	}
 	for _, value := range []string{strings.Repeat("x", 5001), string([]byte{0xff})} {
-		if tracking.ReadableUserTag(tracking.Pair{Key: "review", Value: value}) { t.Fatal("invalid user tag value accepted") }
+		if tracking.ReadableUserTag(tracking.Pair{Key: "review", Value: value}) {
+			t.Fatal("invalid user tag value accepted")
+		}
 	}
 }
 

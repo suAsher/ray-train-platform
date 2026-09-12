@@ -334,17 +334,19 @@ func externalOperationProvenance(key []byte, operationID string) string {
 
 func sanitizeTrackingRun(raw mlflowIntegrationRun) mlflowtracking.Snapshot {
 	snapshot := mlflowtracking.Snapshot{
-		Status:      truncate(raw.Info.Status, 32),
-		StartTimeMS: raw.Info.StartTime,
-		EndTimeMS:   raw.Info.EndTime,
-		Latest:      map[string]float64{},
+		Status:        truncate(raw.Info.Status, 32),
+		StartTimeMS:   raw.Info.StartTime,
+		EndTimeMS:     raw.Info.EndTime,
+		Latest:        map[string]float64{},
 		LatestMetrics: map[string]mlflowtracking.MetricPoint{},
-		Params:      map[string]string{},
-		Tags: map[string]string{},
-		Series:      []mlflowtracking.MetricSeries{},
+		Params:        map[string]string{},
+		Tags:          map[string]string{},
+		Series:        []mlflowtracking.MetricSeries{},
 	}
 	for _, metric := range raw.Data.Metrics {
-		if _, exists := snapshot.Latest[metric.Key]; exists { continue }
+		if _, exists := snapshot.Latest[metric.Key]; exists {
+			continue
+		}
 		if len(snapshot.Latest) < maxMLflowMetricKeys && safeMetricKey(metric.Key) && metric.Value.Valid {
 			snapshot.Latest[metric.Key] = metric.Value.Value
 			// MLflow's runs/get selects the latest metric by its own semantics.

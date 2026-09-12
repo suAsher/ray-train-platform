@@ -15,29 +15,43 @@ import (
 
 func TestSanitizeTrackingReadbackKeepsLatestMetadataAndOnlyUserTags(t *testing.T) {
 	var raw mlflowIntegrationRun
-	if err := json.Unmarshal([]byte(`{"data":{"metrics":[{"key":"loss","value":0.25,"timestamp":2000,"step":7}],"tags":[{"key":"review","value":"candidate"},{"key":"platform.operation_id","value":"hidden"},{"key":"mlflow.runName","value":"hidden"},{"key":"provenance","value":"hidden"},{"key":"credential","value":"hidden"},{"key":"internal.trace","value":"hidden"},{"key":"systemtag","value":"hidden"},{"key":"system.version","value":"hidden"},{"key":"access_token","value":"hidden"},{"key":"invalid key","value":"hidden"}]}}`), &raw); err != nil { t.Fatal(err) }
+	if err := json.Unmarshal([]byte(`{"data":{"metrics":[{"key":"loss","value":0.25,"timestamp":2000,"step":7}],"tags":[{"key":"review","value":"candidate"},{"key":"platform.operation_id","value":"hidden"},{"key":"mlflow.runName","value":"hidden"},{"key":"provenance","value":"hidden"},{"key":"credential","value":"hidden"},{"key":"internal.trace","value":"hidden"},{"key":"systemtag","value":"hidden"},{"key":"system.version","value":"hidden"},{"key":"access_token","value":"hidden"},{"key":"invalid key","value":"hidden"}]}}`), &raw); err != nil {
+		t.Fatal(err)
+	}
 	snapshot := sanitizeTrackingRun(raw)
 	encoded, err := json.Marshal(snapshot)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	var readback struct {
 		LatestMetrics map[string]mlflowtracking.MetricPoint
-		Tags map[string]string
+		Tags          map[string]string
 	}
-	if err := json.Unmarshal(encoded, &readback); err != nil { t.Fatal(err) }
+	if err := json.Unmarshal(encoded, &readback); err != nil {
+		t.Fatal(err)
+	}
 	if readback.LatestMetrics["loss"] != (mlflowtracking.MetricPoint{Value: 0.25, TimestampMS: 2000, Step: 7}) {
 		t.Fatalf("latest metadata missing: %s", encoded)
 	}
-	if len(readback.Tags) != 1 || readback.Tags["review"] != "candidate" { t.Fatalf("unsafe or missing tags: %s", encoded) }
+	if len(readback.Tags) != 1 || readback.Tags["review"] != "candidate" {
+		t.Fatalf("unsafe or missing tags: %s", encoded)
+	}
 }
 
 func TestSanitizeTrackingTagsAreBoundedAndDeterministic(t *testing.T) {
 	var raw mlflowIntegrationRun
-	for i := 104; i >= 0; i-- { raw.Data.Tags = append(raw.Data.Tags, MLflowKeyValue{Key: fmt.Sprintf("user.%03d", i), Value: "accepted"}) }
+	for i := 104; i >= 0; i-- {
+		raw.Data.Tags = append(raw.Data.Tags, MLflowKeyValue{Key: fmt.Sprintf("user.%03d", i), Value: "accepted"})
+	}
 	raw.Data.Tags = append(raw.Data.Tags, MLflowKeyValue{Key: "a.too_long", Value: strings.Repeat("x", 5001)}, MLflowKeyValue{Key: "a.invalid_utf8", Value: string([]byte{0xff})})
 	encoded, err := json.Marshal(sanitizeTrackingRun(raw))
-	if err != nil { t.Fatal(err) }
-	var readback struct { Tags map[string]string }
-	if err := json.Unmarshal(encoded, &readback); err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
+	var readback struct{ Tags map[string]string }
+	if err := json.Unmarshal(encoded, &readback); err != nil {
+		t.Fatal(err)
+	}
 	if len(readback.Tags) != 100 || readback.Tags["user.000"] != "accepted" || readback.Tags["user.099"] != "accepted" || readback.Tags["user.100"] != "" {
 		t.Fatalf("readback must select first 100 sorted valid keys: %s", encoded)
 	}
@@ -45,12 +59,16 @@ func TestSanitizeTrackingTagsAreBoundedAndDeterministic(t *testing.T) {
 
 func TestSanitizeTrackingMetadataDoesNotInventMissingOrInvalidValues(t *testing.T) {
 	var raw mlflowIntegrationRun
-	if err := json.Unmarshal([]byte(`{"data":{"metrics":[{"key":"missing","value":0.5},{"key":"negative","value":0.5,"timestamp":-1,"step":1},{"key":"future","value":0.5,"timestamp":253402300800000,"step":1},{"key":"bad-step","value":0.5,"timestamp":1,"step":-1},{"key":"zero","value":0.5,"timestamp":0,"step":0},{"key":"duplicate","value":0.25,"timestamp":2000,"step":7},{"key":"duplicate","value":0.9}]}}`), &raw); err != nil { t.Fatal(err) }
+	if err := json.Unmarshal([]byte(`{"data":{"metrics":[{"key":"missing","value":0.5},{"key":"negative","value":0.5,"timestamp":-1,"step":1},{"key":"future","value":0.5,"timestamp":253402300800000,"step":1},{"key":"bad-step","value":0.5,"timestamp":1,"step":-1},{"key":"zero","value":0.5,"timestamp":0,"step":0},{"key":"duplicate","value":0.25,"timestamp":2000,"step":7},{"key":"duplicate","value":0.9}]}}`), &raw); err != nil {
+		t.Fatal(err)
+	}
 	snapshot := sanitizeTrackingRun(raw)
 	if len(snapshot.LatestMetrics) != 2 || snapshot.LatestMetrics["zero"] != (mlflowtracking.MetricPoint{Value: 0.5}) || snapshot.LatestMetrics["duplicate"] != (mlflowtracking.MetricPoint{Value: 0.25, TimestampMS: 2000, Step: 7}) {
 		t.Fatalf("invalid or fabricated metadata: %+v", snapshot.LatestMetrics)
 	}
-	if len(snapshot.Latest) != 6 || snapshot.Latest["duplicate"] != 0.25 { t.Fatalf("legacy latest changed: %+v", snapshot.Latest) }
+	if len(snapshot.Latest) != 6 || snapshot.Latest["duplicate"] != 0.25 {
+		t.Fatalf("legacy latest changed: %+v", snapshot.Latest)
+	}
 }
 
 func TestMLflowTrackingCreateExperimentFindsDeterministicNameBeforeCreate(t *testing.T) {
