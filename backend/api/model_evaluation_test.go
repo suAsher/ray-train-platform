@@ -218,6 +218,7 @@ func TestModelEvaluationReadAndReportKeepDatasetACL(t *testing.T) {
 		}
 	}
 	s.evaluation.Dataset.Visibility = me.Public
+	s.evaluation.Dataset.TenantID = ""
 	w := evaluationTestRequest(r, "GET", "/api/v1/model-evaluations/evaluation-1/report", "")
 	if w.Code != 409 {
 		t.Fatalf("success without valid report exposed: %d", w.Code)
