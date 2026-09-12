@@ -36,6 +36,7 @@ type TokenClaims struct {
 }
 
 type Principal struct {
+	IntegrationID   string
 	Subject         string
 	Username        string
 	Email           string

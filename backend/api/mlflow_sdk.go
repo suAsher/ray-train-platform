@@ -85,7 +85,7 @@ func sdkServiceError(c *gin.Context, err error) {
 
 func sdkActor(c *gin.Context) mlflowtracking.Actor {
 	p, _ := auth.PrincipalFromGin(c)
-	return mlflowtracking.Actor{TenantID: p.TenantID, UserID: p.Subject}
+	return mlflowtracking.Actor{TenantID: p.TenantID, UserID: p.Subject, IntegrationID: p.IntegrationID}
 }
 
 func (h *Handler) getMLflowSDKRun(c *gin.Context) {

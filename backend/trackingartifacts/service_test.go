@@ -7,6 +7,7 @@ import (
  "encoding/hex"
  "errors"
  "io"
+ "sort"
  "sync"
  "testing"
  "time"
@@ -24,7 +25,7 @@ func (r *memoryRepo) Reserve(_ context.Context, v Record) (Record,error) {
  if size+v.SizeBytes>OwnerBudgetBytes || pending>=MaxPending {return Record{},ErrQuota}; r.records[v.ID]=v; return v,nil
 }
 func (r *memoryRepo) Get(_ context.Context, scope Scope, id string) (Record,error) {r.mu.Lock();defer r.mu.Unlock(); v,ok:=r.records[id];if !ok||v.Scope!=scope{return Record{},ErrNotFound};return v,nil}
-func (r *memoryRepo) List(_ context.Context, scope Scope, cursor string, limit int) ([]Record,error) {r.mu.Lock();defer r.mu.Unlock();result:=[]Record{};for id,v:=range r.records {if v.Scope==scope&&id>cursor {result=append(result,v)}};return result,nil}
+func (r *memoryRepo) List(_ context.Context, scope Scope, cursor string, limit int) ([]Record,error) {r.mu.Lock();defer r.mu.Unlock();result:=[]Record{};for id,v:=range r.records {if v.Scope==scope&&id>cursor {result=append(result,v)}};sort.Slice(result,func(i,j int)bool{return result[i].ID<result[j].ID});if len(result)>limit{result=result[:limit]};return result,nil}
 func (r *memoryRepo) Mutate(_ context.Context, scope Scope,id string, fn func(Record)(Record,error)) (Record,error) {r.mu.Lock();defer r.mu.Unlock();v,ok:=r.records[id];if !ok||v.Scope!=scope{return Record{},ErrNotFound}; next,err:=fn(v);if err!=nil{return Record{},err};r.records[id]=next;return next,nil}
 
 type memoryObjects struct {values map[string][]byte; deleteErr error; reads int; corrupt bool}
@@ -73,4 +74,40 @@ func TestArtifactExpiryAndStreamingMultipart(t *testing.T){
  for i,p:=range [][]byte{data[:PartSizeBytes],data[PartSizeBytes:]}{if _,err:=s.PutPart(ctx,testScope,a.ID,i+1,digest(p),bytes.NewReader(p));err!=nil{t.Fatal(err)}}
  if _,err:=s.Complete(ctx,testScope,a.ID);err!=nil{t.Fatal(err)};o.reads=0;_,body,err:=s.Download(ctx,testScope,a.ID);if err!=nil{t.Fatal(err)};if o.reads>1{t.Fatal("download eagerly opened all parts")};got,err:=io.ReadAll(body);body.Close();if err!=nil||!bytes.Equal(got,data){t.Fatalf("multi download %v",err)}
  b:=initArtifact(t,s,"expiry-key-123456",[]byte("a"));v:=r.records[b.ID];v.ExpiresAt=time.Now().Add(-time.Hour);r.records[b.ID]=v;if _,err:=s.PutPart(ctx,testScope,b.ID,1,digest([]byte("a")),bytes.NewReader([]byte("a")));!errors.Is(err,ErrConflict){t.Fatalf("expired write %v",err)};if _,err:=s.Cancel(ctx,testScope,b.ID);err!=nil{t.Fatal(err)}
+}
+
+func TestArtifactDeclaredBudgetAndIdempotencyConflict(t *testing.T){
+ ctx:=context.Background();r:=newMemoryRepo();s:=New(r,newMemoryObjects());input:=InitInput{Name:"large.bin",SizeBytes:MaxFileBytes,SHA256:digest([]byte("declaration"))}
+ for i:=0;i<5;i++{if _,err:=s.Init(ctx,testScope,"large-"+string(rune('a'+i))+"-12345678",input);err!=nil{t.Fatal(err)}}
+ if _,err:=s.Init(ctx,testScope,"over-budget-123456",input);!errors.Is(err,ErrQuota){t.Fatalf("size quota %v",err)}
+ changed:=input;changed.Name="different.bin";if _,err:=s.Init(ctx,testScope,"large-a-12345678",changed);!errors.Is(err,ErrConflict){t.Fatalf("changed declaration %v",err)}
+ other:=testScope;other.RunID="ffffffffffffffffffffffffffffffff";if _,err:=s.Init(ctx,other,"large-a-12345678",input);!errors.Is(err,ErrConflict){t.Fatalf("key different run %v",err)}
+}
+func TestArtifactGetListAndUnavailableBoundaries(t *testing.T){
+ ctx:=context.Background();s:=New(newMemoryRepo(),newMemoryObjects());a:=initArtifact(t,s,"stable-key-123456",[]byte("a"))
+ page,err:=s.List(ctx,testScope,"",100);if err!=nil||len(page.Items)!=1||page.Items[0].ID!=a.ID{t.Fatalf("list %+v %v",page,err)}
+ for _,limit:=range []int{0,101}{if _,err:=s.List(ctx,testScope,"",limit);!errors.Is(err,ErrInvalid){t.Fatal(err)}}
+ if _,err:=s.List(ctx,testScope,"../../secret",1);!errors.Is(err,ErrInvalid){t.Fatal(err)}
+ if _,err:=s.Get(ctx,testScope,"bad-id");!errors.Is(err,ErrInvalid){t.Fatal(err)}
+ if _,err:=s.Get(ctx,testScope,"ffffffffffffffffffffffffffffffff");!errors.Is(err,ErrNotFound){t.Fatal(err)}
+ if _,_,err:=s.Download(ctx,testScope,a.ID);!errors.Is(err,ErrConflict){t.Fatal(err)}
+ if _,err:=New(nil,nil).Get(ctx,testScope,a.ID);!errors.Is(err,ErrUnavailable){t.Fatal(err)}
+ if _,err:=s.PutPart(ctx,testScope,a.ID,1,digest([]byte("a")),nil);!errors.Is(err,ErrInvalid){t.Fatal(err)}
+ scope:=testScope;scope.OwnerID="bad\nowner";if _,err:=s.Get(ctx,scope,a.ID);!errors.Is(err,ErrInvalid){t.Fatal(err)}
+}
+func TestArtifactDownloadDetectsCorruptionAndClose(t *testing.T){
+ ctx:=context.Background();o:=newMemoryObjects();s:=New(newMemoryRepo(),o);data:=[]byte("abc");a:=initArtifact(t,s,"stable-key-123456",data)
+ if _,err:=s.PutPart(ctx,testScope,a.ID,1,digest(data),bytes.NewReader(data));err!=nil{t.Fatal(err)};if _,err:=s.Complete(ctx,testScope,a.ID);err!=nil{t.Fatal(err)}
+ o.corrupt=true;_,body,err:=s.Download(ctx,testScope,a.ID);if err!=nil{t.Fatal(err)};if _,err:=io.ReadAll(body);!errors.Is(err,ErrUnavailable){t.Fatalf("corrupt read: %v",err)};if err:=body.Close();err!=nil{t.Fatal(err)}
+ o.corrupt=false;_,body,err=s.Download(ctx,testScope,a.ID);if err!=nil{t.Fatal(err)};body.Close();if _,err:=body.Read(make([]byte,1));err!=io.EOF{t.Fatalf("closed read: %v",err)}
+}
+
+func TestArtifactWholeFileDigestAndCursor(t *testing.T){
+ ctx:=context.Background();s:=New(newMemoryRepo(),newMemoryObjects());a:=initArtifact(t,s,"stable-key-123456",[]byte("abc"))
+ if _,err:=s.PutPart(ctx,testScope,a.ID,1,digest([]byte("xyz")),bytes.NewReader([]byte("xyz")));err!=nil{t.Fatal(err)}
+ if _,err:=s.Complete(ctx,testScope,a.ID);!errors.Is(err,ErrConflict){t.Fatalf("whole digest mismatch: %v",err)}
+ initArtifact(t,s,"stable-key-223456",[]byte("abc"));initArtifact(t,s,"stable-key-323456",[]byte("abc"))
+ first,err:=s.List(ctx,testScope,"",2);if err!=nil||len(first.Items)!=2||first.NextCursor==""{t.Fatalf("first page %+v %v",first,err)}
+ second,err:=s.List(ctx,testScope,first.NextCursor,2);if err!=nil||len(second.Items)!=1||second.NextCursor!=""{t.Fatalf("second page %+v %v",second,err)}
+ for _,v:=range first.Items{if v.ID==second.Items[0].ID{t.Fatal("cursor returned duplicate")}}
 }

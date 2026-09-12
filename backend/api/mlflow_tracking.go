@@ -18,6 +18,7 @@ import (
 	"ray-train-platform-backend/mlflowtracking"
 	"ray-train-platform-backend/observability"
 	"ray-train-platform-backend/repositories"
+ "ray-train-platform-backend/trackingartifacts"
 )
 
 const (
@@ -64,6 +65,21 @@ type mlflowTrackingCapabilities struct {
 	Scopes                   mlflowTrackingCapabilityScopes   `json:"scopes"`
 	Limits                   mlflowTrackingCapabilityLimits   `json:"limits"`
 	Supports                 mlflowTrackingCapabilitySupports `json:"supports"`
+ IntegrationsAvailable bool `json:"integrationsAvailable"`
+ Artifacts mlflowArtifactCapabilities `json:"artifacts"`
+}
+
+type mlflowArtifactCapabilities struct {
+ Available bool `json:"available"`
+ Protocol string `json:"protocol"`
+ ReadScope string `json:"readScope"`
+ WriteScope string `json:"writeScope"`
+ PartSizeBytes int64 `json:"partSizeBytes"`
+ MaxFileBytes int64 `json:"maxFileBytes"`
+ OwnerBudgetBytes int64 `json:"ownerBudgetBytes"`
+ MaxPending int `json:"maxPending"`
+ UploadLifetimeHours int `json:"uploadLifetimeHours"`
+ SDKCompatible bool `json:"sdkCompatible"`
 }
 
 type mlflowTrackingCapabilityScopes struct {
@@ -103,6 +119,7 @@ func (h *Handler) registerMLflowTrackingRoutes(group *gin.RouterGroup) {
 	write.POST("/experiments/:experimentId/runs", h.createMLflowTrackingRun)
 	write.POST("/runs/:runId/log-batch", h.logMLflowTrackingBatch)
 	write.POST("/runs/:runId/finish", h.finishMLflowTrackingRun)
+ h.registerMLflowArtifactRoutes(group)
 }
 
 func (h *Handler) mlflowTrackingGuard(limiter SourceArtifactLimiter, write bool) gin.HandlerFunc {
@@ -154,6 +171,8 @@ func (h *Handler) getMLflowTrackingCapabilities(c *gin.Context) {
 		SDKClientVersion:         "3.14.0",
 		SDKMethods:               []string{"get_run", "log_batch", "log_metric", "log_param", "set_tag", "set_terminated"},
 		SDKRequiresPrecreatedRun: true,
+ IntegrationsAvailable: available && h.mlflowIntegrations != nil,
+ Artifacts: mlflowArtifactCapabilities{Available:available && h.trackingArtifacts!=nil,Protocol:"platform-rest-parts-v1",ReadScope:domain.PATScopeArtifactsRead,WriteScope:domain.PATScopeArtifactsWrite,PartSizeBytes:trackingartifacts.PartSizeBytes,MaxFileBytes:trackingartifacts.MaxFileBytes,OwnerBudgetBytes:trackingartifacts.OwnerBudgetBytes,MaxPending:trackingartifacts.MaxPending,UploadLifetimeHours:24},
 		Scopes: mlflowTrackingCapabilityScopes{
 			Read:  domain.PATScopeExperimentsRead,
 			Write: domain.PATScopeExperimentsWrite,
@@ -169,6 +188,7 @@ func (h *Handler) getMLflowTrackingCapabilities(c *gin.Context) {
 		},
 		Supports: mlflowTrackingCapabilitySupports{
 			ExperimentTracking: available,
+ ArtifactManagement: available && h.trackingArtifacts != nil,
 			UI:                 available,
 		},
 	})
@@ -370,7 +390,7 @@ func (h *Handler) mlflowTrackingRead(c *gin.Context) (mlflowTrackingService, mlf
 		h.writeError(c, http.StatusServiceUnavailable, "MLFLOW_TRACKING_UNAVAILABLE", "MLflow tracking is not configured")
 		return nil, mlflowtracking.Actor{}, false
 	}
-	return h.mlflowTracking, mlflowtracking.Actor{TenantID: principal.TenantID, UserID: principal.Subject}, true
+	return h.mlflowTracking, mlflowtracking.Actor{TenantID: principal.TenantID, UserID: principal.Subject, IntegrationID: principal.IntegrationID}, true
 }
 
 func (h *Handler) mlflowTrackingWrite(c *gin.Context) (mlflowTrackingService, mlflowtracking.Actor, bool) {

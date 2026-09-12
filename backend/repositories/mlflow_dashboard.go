@@ -61,6 +61,9 @@ const (
 	MLflowAuditTrackingRunFinish        MLflowAuditAction = "mlflow.tracking.run.finish"
 )
 
+const MLflowAuditTrackingArtifactWrite MLflowAuditAction = "mlflow.tracking.artifact.write"
+const MLflowAuditTrackingArtifactDownload MLflowAuditAction = "mlflow.tracking.artifact.download"
+
 type MLflowAuditEvent struct {
 	Action    MLflowAuditAction
 	Principal auth.Principal
@@ -211,7 +214,7 @@ func isAllowedMLflowAuditAction(action MLflowAuditAction) bool {
 		MLflowAuditTrackingExperimentCreate,
 		MLflowAuditTrackingRunCreate,
 		MLflowAuditTrackingRunLogBatch,
-		MLflowAuditTrackingRunFinish:
+		MLflowAuditTrackingRunFinish, MLflowAuditTrackingArtifactWrite, MLflowAuditTrackingArtifactDownload:
 		return true
 	default:
 		return false

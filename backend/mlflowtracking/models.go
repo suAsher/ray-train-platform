@@ -20,6 +20,9 @@ var (
 type Actor struct {
 	TenantID string
 	UserID   string
+	// IntegrationID is populated only from authenticated machine principals.
+	// The grant adapter clears it before invoking the owner-scoped service.
+	IntegrationID string
 }
 
 type Experiment struct {

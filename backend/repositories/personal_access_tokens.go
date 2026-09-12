@@ -76,7 +76,7 @@ func (r *GormRepository) FindPATByPublicID(ctx context.Context, publicID string)
 	var token PersonalAccessTokenRecord
 	if err := r.db.WithContext(ctx).Where("public_id = ?", publicID).First(&token).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return auth.PATRecord{}, auth.ErrPATNotFound
+			return r.findIntegrationPAT(ctx, publicID)
 		}
 		return auth.PATRecord{}, fmt.Errorf("find personal access token: %w", err)
 	}
@@ -188,6 +188,11 @@ func (r *GormRepository) TouchPATLastUsed(ctx context.Context, publicID string, 
 		Update("last_used_at", usedAt)
 	if result.Error != nil {
 		return fmt.Errorf("touch personal access token last use: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		var count int64
+		if err := r.db.WithContext(ctx).Model(&PersonalAccessTokenRecord{}).Where("public_id = ?", publicID).Count(&count).Error; err != nil { return err }
+		if count == 0 { return r.touchIntegrationPAT(ctx, publicID, usedAt) }
 	}
 	return nil
 }

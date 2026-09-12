@@ -206,6 +206,12 @@ func TestMLflowTrackingCapabilitiesAreTruthfulAndDowngradeable(t *testing.T) {
 	if !sdkReady.SDKCompatible || sdkReady.SDKBasePath != "/api/v1/mlflow-tracking" {
 		t.Fatalf("SDK registration was not reflected in capabilities: %+v", sdkReady)
 	}
+ handler.trackingArtifacts = &artifactServiceFake{}
+ handler.mlflowIntegrations = &MLflowIntegrationHandler{}
+ artifactResponse:=trackingRequest(router,http.MethodGet,"/api/v1/mlflow/capabilities","","")
+ var artifactReady mlflowTrackingCapabilities
+ decodeTrackingData(t,artifactResponse,&artifactReady)
+ if !artifactReady.Supports.ArtifactManagement || !artifactReady.IntegrationsAvailable || !artifactReady.Artifacts.Available || artifactReady.Artifacts.SDKCompatible || artifactReady.Artifacts.PartSizeBytes!=8388608 || artifactReady.Artifacts.MaxFileBytes!=21474836480 || artifactReady.Artifacts.ReadScope!="artifacts:read" {t.Fatalf("REST artifact capability contract: %+v",artifactReady)}
 }
 
 func TestMLflowTrackingListExperimentsUsesActorAndBoundedPagination(t *testing.T) {

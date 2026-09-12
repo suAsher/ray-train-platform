@@ -19,6 +19,8 @@ const (
 	PATScopeExperimentsRead  = "experiments:read"
 	PATScopeExperimentsWrite = "experiments:write"
 	PATScopeMLflowWrite      = "mlflow:write"
+	PATScopeArtifactsRead    = "artifacts:read"
+	PATScopeArtifactsWrite   = "artifacts:write"
 
 	defaultPATLifetime = 90 * 24 * time.Hour
 	maximumPATLifetime = 365 * 24 * time.Hour
@@ -28,7 +30,7 @@ const (
 var allowedPATScopes = map[string]struct{}{
 	PATScopeJobsRead: {}, PATScopeJobsWrite: {}, PATScopeSourcesWrite: {},
 	PATScopeExperimentsRead: {}, PATScopeExperimentsWrite: {},
-	PATScopeMLflowWrite: {},
+	PATScopeMLflowWrite: {}, PATScopeArtifactsRead: {}, PATScopeArtifactsWrite: {},
 }
 
 type PersonalAccessToken struct {
