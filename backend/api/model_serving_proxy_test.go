@@ -16,16 +16,21 @@ import (
 	"time"
 )
 
-func TestServingHealthRequiresExactDeploymentAndDigestAndRejectsRedirect(t *testing.T) {
+func TestServingHealthRequiresReadyProtocolDeploymentAndDigestAndRejectsRedirect(t *testing.T) {
 	d := ms.Deployment{ID: "deployment", ModelSHA256: strings.Repeat("a", 64)}
 	for _, tc := range []struct {
 		name, body string
 		status     int
 		want       bool
 	}{
-		{"ready", `{"deploymentId":"deployment","modelSha256":"` + d.ModelSHA256 + `"}`, 200, true},
-		{"wrong deployment", `{"deploymentId":"another","modelSha256":"` + d.ModelSHA256 + `"}`, 200, false},
-		{"wrong digest", `{"deploymentId":"deployment","modelSha256":"wrong"}`, 200, false},
+		{"ready", `{"ready":true,"protocol":"model-serving-http/v1","deploymentId":"deployment","modelSha256":"` + d.ModelSHA256 + `"}`, 200, true},
+		{"wrong deployment", `{"ready":true,"protocol":"model-serving-http/v1","deploymentId":"another","modelSha256":"` + d.ModelSHA256 + `"}`, 200, false},
+		{"wrong digest", `{"ready":true,"protocol":"model-serving-http/v1","deploymentId":"deployment","modelSha256":"wrong"}`, 200, false},
+		{"not ready", `{"ready":false,"protocol":"model-serving-http/v1","deploymentId":"deployment","modelSha256":"` + d.ModelSHA256 + `"}`, 200, false},
+		{"missing ready", `{"protocol":"model-serving-http/v1","deploymentId":"deployment","modelSha256":"` + d.ModelSHA256 + `"}`, 200, false},
+		{"wrong ready type", `{"ready":"true","protocol":"model-serving-http/v1","deploymentId":"deployment","modelSha256":"` + d.ModelSHA256 + `"}`, 200, false},
+		{"missing protocol", `{"ready":true,"deploymentId":"deployment","modelSha256":"` + d.ModelSHA256 + `"}`, 200, false},
+		{"wrong protocol", `{"ready":true,"protocol":"model-serving-http/v2","deploymentId":"deployment","modelSha256":"` + d.ModelSHA256 + `"}`, 200, false},
 		{"not JSON", `<html>ready</html>`, 200, false},
 		{"too large", strings.Repeat("x", 4097), 200, false},
 		{"unavailable", `{}`, 503, false},
@@ -48,7 +53,7 @@ func TestServingHealthRequiresExactDeploymentAndDigestAndRejectsRedirect(t *test
 	var reached atomic.Int32
 	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reached.Add(1)
-		_ = json.NewEncoder(w).Encode(map[string]string{"deploymentId": d.ID, "modelSha256": d.ModelSHA256})
+		_ = json.NewEncoder(w).Encode(map[string]any{"ready": true, "protocol": ms.Protocol, "deploymentId": d.ID, "modelSha256": d.ModelSHA256})
 	}))
 	defer destination.Close()
 	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, destination.URL, http.StatusFound) }))
@@ -97,7 +102,7 @@ func TestServingInvocationForwardsOnlyJSONWithoutCredentials(t *testing.T) {
 			}
 		}
 		if r.URL.Path == "/healthz" {
-			_ = json.NewEncoder(w).Encode(map[string]string{"deploymentId": "service-1", "modelSha256": strings.Repeat("a", 64)})
+			_ = json.NewEncoder(w).Encode(map[string]any{"ready": true, "protocol": ms.Protocol, "deploymentId": "service-1", "modelSha256": strings.Repeat("a", 64)})
 			return
 		}
 		if r.URL.Path != "/invocations" || r.Method != "POST" || r.Header.Get("Content-Type") != "application/json" {
@@ -137,7 +142,7 @@ func TestServingInvocationRejectsRedirectAndInvalidResponse(t *testing.T) {
 			defer destination.Close()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/healthz" {
-					_ = json.NewEncoder(w).Encode(map[string]string{"deploymentId": "service-1", "modelSha256": strings.Repeat("a", 64)})
+					_ = json.NewEncoder(w).Encode(map[string]any{"ready": true, "protocol": ms.Protocol, "deploymentId": "service-1", "modelSha256": strings.Repeat("a", 64)})
 					return
 				}
 				switch kind {
@@ -192,7 +197,7 @@ func TestServingTargetRejectsStoppedExpiredForeignAndCanceledJobs(t *testing.T) 
 func TestServingInvocationPATRequiresExplicitScope(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/healthz" {
-			_ = json.NewEncoder(w).Encode(map[string]string{"deploymentId": "service-1", "modelSha256": strings.Repeat("a", 64)})
+			_ = json.NewEncoder(w).Encode(map[string]any{"ready": true, "protocol": ms.Protocol, "deploymentId": "service-1", "modelSha256": strings.Repeat("a", 64)})
 			return
 		}
 		_, _ = io.WriteString(w, `{"result":true}`)
@@ -220,6 +225,38 @@ func TestServingInvocationPATRequiresExplicitScope(t *testing.T) {
 			manage := evaluationTestRequest(r, "POST", "/api/v1/model-services", servingWorkflowBody())
 			if manage.Code != 403 {
 				t.Fatalf("PAT gained management %d", manage.Code)
+			}
+		})
+	}
+}
+
+func TestServingInvocationDoesNotReachModelUntilProtocolReady(t *testing.T) {
+	for _, kind := range []string{"not-ready", "wrong-protocol"} {
+		t.Run(kind, func(t *testing.T) {
+			var invocations atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/healthz" {
+					ready := true
+					protocol := ms.Protocol
+					if kind == "not-ready" {
+						ready = false
+					} else {
+						protocol = "unrelated-http/v1"
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"ready": ready, "protocol": protocol, "deploymentId": "service-1", "modelSha256": strings.Repeat("a", 64)})
+					return
+				}
+				invocations.Add(1)
+				_, _ = io.WriteString(w, `{}`)
+			}))
+			defer server.Close()
+			h, _, _ := servingProxyHandler(server.URL)
+			req := httptest.NewRequest("POST", "/api/v1/model-services/service-1/invocations", strings.NewReader(`{}`))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			servingInvocationRouter(h).ServeHTTP(w, req)
+			if w.Code != 409 || invocations.Load() != 0 {
+				t.Fatalf("unready model invoked: status=%d invocations=%d body=%s", w.Code, invocations.Load(), w.Body.String())
 			}
 		})
 	}

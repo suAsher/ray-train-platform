@@ -59,10 +59,12 @@ func checkServingHealth(ctx context.Context, target string, d ms.Deployment) err
 		return ms.ErrNotReady
 	}
 	var health struct {
+		Ready        bool   `json:"ready"`
+		Protocol     string `json:"protocol"`
 		DeploymentID string `json:"deploymentId"`
 		ModelSHA256  string `json:"modelSha256"`
 	}
-	if json.Unmarshal(raw, &health) != nil || health.DeploymentID != d.ID || health.ModelSHA256 != d.ModelSHA256 {
+	if json.Unmarshal(raw, &health) != nil || !health.Ready || health.Protocol != ms.Protocol || health.DeploymentID != d.ID || health.ModelSHA256 != d.ModelSHA256 {
 		return ms.ErrNotReady
 	}
 	return nil
