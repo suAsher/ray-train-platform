@@ -427,7 +427,9 @@ spk-rayjob submit \
 
 ## 8. 2026-09-13 MLflow 重复日志修复
 
-三个运行中任务 `job-fef3923ab2ba41a236aa047d`、`job-b990ef456e9e75e5eb5864bd`、`job-47074168eb5d38432b3fb3d8` 的原始 Worker 日志都包含同一消息的时间戳格式与 `INFO:mmdet3d:` 格式各一行。配置只有一个 TextLoggerHook；实际适配文件和依赖一致。MMCV 的 MlflowLoggerHook 即使 `log_model=False` 仍导入 `mlflow.pytorch`，MLflow 2.17.2 的 Lightning 模块调用 `logging.basicConfig(level=logging.ERROR)`，晚创建的根处理器与 `mmdet3d` 自身处理器同时打印传播记录。应归为平台训练适配兼容问题。
+三个运行中任务 `job-fef3923ab2ba41a236aa047d`、`job-b990ef456e9e75e5eb5864bd`、`job-47074168eb5d38432b3fb3d8` 的原始 Worker 日志都包含同一消息的时间戳格式与 `INFO:mmdet3d:` 格式各一行。配置只有一个 TextLoggerHook；实际适配文件和依赖一致。MMCV 的 MlflowLoggerHook 即使 `log_model=False` 仍导入 `mlflow.pytorch`，MLflow 2.17.2 的 Lightning 模块调用 `logging.basicConfig(level=logging.ERROR)`，晚创建的根处理器与 `mmdet3d` 自身处理器同时打印传播记录。这证明训练侧日志传播重复，但不足以认定是近期平台发布引入。
+
+后续按用户给出的 `job-abe51d106b12e040018ff35d` 对比：旧 LiDAR 与当前 Fusion 使用相同镜像摘要，原始 ZIP 内四个相关源码文件的 SHA-256 一致。旧任务启动阶段也有两行，但第一次 DDP reducer 初始化 `mmcv` logger 时把已有根 StreamHandler 降为 ERROR，Epoch 因而只打印一行；新 Fusion 在加载相机 checkpoint 时先初始化了 `mmcv` logger，随后 MLflow 才添加根处理器，DDP 再取已缓存 logger 时不会重复调整处理器，因此 Epoch 仍有两行。构建机独立进程使用实际 MMCV 日志函数复现旧顺序“启动2/Epoch1”、新顺序“启动2/Epoch2”。结论修正为既有 MLflow/MMCV 日志兼容与初始化顺序问题；没有证据要求用户修改算法代码，也没有证据证明近期后端注入造成。处理位置在源码维护者控制的日志配置层，平台不改写用户上传代码。
 
 修复候选 `a1316a2` 在 rank-zero MLflow 接入前，仅对已有非 NullHandler 的 `mmdet3d` logger 设置 `propagate=False`。不删除根处理器、不修改指标 hook；未启用 Tracking、非零 rank 及仅依赖根处理器的配置保持原行为。附带源码升级工具，保留用户自定义参数、文件权限与换行格式，并拒绝未知布局、符号链接和检测到的并发改动。
 
@@ -438,4 +440,4 @@ spk-rayjob submit \
 - 集成测试先初始化基础 MLflow 客户端，再初始化 MMCV logger，最后构造 hook，专门验证晚加载 `mlflow.pytorch`；首次 MLflow `dictConfig` 关闭既有文件处理器是另一个初始化行为，不用本项测试宣称其已修复。此 CPU 环境也不等同于生产 Python 3.8/CUDA 完整镜像验收。
 - 覆盖率：适配文件 87%，升级工具 89%；完整 Go 回归通过，本轮未配置真实 PostgreSQL 集成库，无数据库变更。
 
-交付方式是更新适配源码并同步四端，无后端/Portal/Helm/训练镜像变更；线上 Helm 保持 226、schema 52。只有更新源码并重新生成 ZIP 或 working-dir 快照的新任务生效，旧快照重试与运行中进程不变。本轮没有修改三个任务、用户源码或私人数据，也没有提交新训练。升级步骤见[第 5.8 节](BEVFUSION_END_TO_END_GUIDE.md#58-接入平台-mlflow-实验中心)。
+适配源码修复当时的交付方式是更新源码并同步四端，无后端/Portal/Helm/训练镜像变更；当时线上 Helm 226、schema 52。只有更新源码并重新生成 ZIP 或 working-dir 快照的新任务生效，旧快照重试与运行中进程不变。本轮没有修改三个任务、用户源码或私人数据，也没有提交新训练。升级步骤见[第 5.8 节](BEVFUSION_END_TO_END_GUIDE.md#58-接入平台-mlflow-实验中心)。后续用户帮助已通过后端 revision 227 发布到平台“使用说明”；该发布仅提供可见的排查与处理指导，不向训练注入补丁，见[帮助发布记录](HELP_CONTENT_COVERAGE_20260912.md#2026-09-13-重复日志用户帮助发布)。
