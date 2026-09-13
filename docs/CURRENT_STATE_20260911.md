@@ -4,6 +4,8 @@
 
 后续变更：2026-09-12 GPU 配额与 MLflow 功能已发布，参见 [发布验证记录](QUOTA_MLFLOW_VALIDATION_20260912.md)。随后实验中心改为“训练记录 / MLflow API”，使用说明调整为六分类、34 篇独立问题文档，旧七主题接口继续兼容；最新版本与证据见 [用户体验修正](HELP_CONTENT_COVERAGE_20260912.md)。随后共享模型目录与权重版本第一阶段已发布：后端 revision 221 / schema 49，Portal 新增“模型”，使用说明共36篇问题；证据与待验收边界见 [共享模型发布验证](MODEL_LIFECYCLE_VALIDATION_20260912.md)。随后独立评估第二阶段代码和页面已发布：后端 revision 222 / schema 50，实验中心新增“评估”，使用说明38篇；生产专用任务源码下载超时，成功报告链路尚未验收，见[第二阶段发布记录](MODEL_EVALUATION_VALIDATION_20260912.md)。以下内容保留为 9 月 11 日历史快照，不作为当前线上版本。
 
+2026-09-13模型审批、Registry 与推理服务已部署：后端业务提交 `0ad8dba`、revision225/schema52；Portal dev `525de83b`、CI33893/revision1052。共享 Registry 复制、权重校验及 Run 跳转已完成生产验收；独立评估成功报告、非自审和实际推理链路仍待验收，见[发布与验收记录](MODEL_RELEASE_SERVING_VALIDATION_20260913.md)。
+
 ## 1. 生产代码基线与文档交付
 
 2026-09-12后续内网评估修复：业务提交 `3fb0b67`、后端revision223/schema50，Portal dev `74f036ae`（CI33883，revision1050）。已支持上传ZIP不可变快照及任务凭据内网下载；隔离测试通过，新的生产协议验收因浏览器工具文件权限卡在上传前，尚无成功报告证据。最新范围与未完成项以[评估发布记录](MODEL_EVALUATION_VALIDATION_20260912.md)开头为准。
