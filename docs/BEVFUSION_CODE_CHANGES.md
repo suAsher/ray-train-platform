@@ -424,3 +424,18 @@ spk-rayjob submit \
 六项矩阵完成后，运行时锁改为原子 hard-link，并增加 PID 复用、旧目录锁、损坏锁和多等待者并发恢复。r8 先通过代表性 `2×8` 回归任务 `job-4c883346704ed25eba1b6e3f`；最终 r9 digest `sha256:cbc23478ca97290428bae1e1a3dba49776fa4e7f4ada851c173223278fd49e47` 再以 `job-56fbc0b27e9a5b5bc4491023` 通过真实 `2×8` 回归。r9 日志含 NCCL 2.10.3、6/6 iteration、checkpoint 与验证；两个 8-GPU Worker 分布在两台节点，个人结果目录生成 `epoch_1.pth`（33,332,845 字节）。
 
 2026-08-22 在 r9 兼容层上加入 Python 3.8 可用的 `mlflow-skinny==2.17.2`，并把 `protobuf` 固定为 `3.20.1`，避免破坏 ONNX 1.12。当前生产 digest 为 `sha256:66b906d062870131121b07e4455783dc5f2913e285b29fdbb2cf1decc100f553`：构建阶段同时导入 MLflow 与 ONNX，随后通过 1-GPU MLflow Tracking 任务和 2×8 BEVFusion smoke；后者包含 NCCL 2.10.3、6/6 iteration 和 33,332,845 字节 checkpoint。
+
+## 8. 2026-09-13 MLflow 重复日志修复
+
+三个运行中任务 `job-fef3923ab2ba41a236aa047d`、`job-b990ef456e9e75e5eb5864bd`、`job-47074168eb5d38432b3fb3d8` 的原始 Worker 日志都包含同一消息的时间戳格式与 `INFO:mmdet3d:` 格式各一行。配置只有一个 TextLoggerHook；实际适配文件和依赖一致。MMCV 的 MlflowLoggerHook 即使 `log_model=False` 仍导入 `mlflow.pytorch`，MLflow 2.17.2 的 Lightning 模块调用 `logging.basicConfig(level=logging.ERROR)`，晚创建的根处理器与 `mmdet3d` 自身处理器同时打印传播记录。应归为平台训练适配兼容问题。
+
+修复候选 `a1316a2` 在 rank-zero MLflow 接入前，仅对已有非 NullHandler 的 `mmdet3d` logger 设置 `propagate=False`。不删除根处理器、不修改指标 hook；未启用 Tracking、非零 rank 及仅依赖根处理器的配置保持原行为。附带源码升级工具，保留用户自定义参数、文件权限与换行格式，并拒绝未知布局、符号链接和检测到的并发改动。
+
+构建机验证（测试补充提交 `60587be`）：
+
+- 标准库回归：修复前重复日志断言失败；修复后 7 项日志测试及 79 项 BEVFusion 适配测试通过。
+- 真实依赖 CPU 集成：Python 3.11、MMCV 1.4.0、MLflow 2.17.2、PyTorch 2.4.1+cpu；断网运行，使用临时本地 MLflow store，无生产令牌、数据或 GPU。旧适配代码同测试稳定失败（两行），修复版通过（一行），实际 MlflowLoggerHook 写入的 loss、学习率及 Run 的 FINISHED 状态读回正确，文件日志与其他库的根日志仍可见。
+- 集成测试先初始化基础 MLflow 客户端，再初始化 MMCV logger，最后构造 hook，专门验证晚加载 `mlflow.pytorch`；首次 MLflow `dictConfig` 关闭既有文件处理器是另一个初始化行为，不用本项测试宣称其已修复。此 CPU 环境也不等同于生产 Python 3.8/CUDA 完整镜像验收。
+- 覆盖率：适配文件 87%，升级工具 89%；完整 Go 回归通过，本轮未配置真实 PostgreSQL 集成库，无数据库变更。
+
+交付方式是更新适配源码并同步四端，无后端/Portal/Helm/训练镜像变更；线上 Helm 保持 226、schema 52。只有更新源码并重新生成 ZIP 或 working-dir 快照的新任务生效，旧快照重试与运行中进程不变。本轮没有修改三个任务、用户源码或私人数据，也没有提交新训练。升级步骤见[第 5.8 节](BEVFUSION_END_TO_END_GUIDE.md#58-接入平台-mlflow-实验中心)。
