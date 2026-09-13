@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import importlib.util
+import io
+import logging
 import os
 from pathlib import Path
 import sys
@@ -48,6 +50,71 @@ class FakeConfig(dict):
 
 
 class PlatformMLflowTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.training_logger = logging.getLogger("mmdet3d")
+        self.root_logger = logging.getLogger()
+        for logger in (self.training_logger, self.root_logger):
+            for attr in ("handlers", "level", "propagate", "disabled"):
+                saved = getattr(logger, attr)
+                self.addCleanup(setattr, logger, attr, saved)
+            logger.handlers = []
+            logger.disabled = False
+        self.training_logger.setLevel(logging.INFO)
+        self.training_logger.propagate = True
+
+    def fake_mlflow(self):
+        client = types.ModuleType("mlflow")
+        for name in ("set_tracking_uri", "set_experiment", "start_run", "log_params"):
+            setattr(client, name, mock.Mock())
+        return client
+
+    def test_late_mlflow_root_handler_does_not_duplicate_console_or_file(self):
+        console, file_log, root_output = io.StringIO(), io.StringIO(), io.StringIO()
+        handlers = [logging.StreamHandler(console), logging.StreamHandler(file_log)]
+        self.training_logger.handlers = handlers
+        client = self.fake_mlflow()
+        config = FakeConfig()
+        with mock.patch.dict(os.environ, self.platform_environment(), clear=True), mock.patch.dict(
+            sys.modules, {"mlflow": client}
+        ):
+            load_module().start_platform_mlflow(config, rank=0, world_size=8)
+        # MlflowLoggerHook imports mlflow.pytorch AFTER start_platform_mlflow.
+        # MLflow 2.17.2's Lightning module configures the root logger here.
+        logging.basicConfig(level=logging.ERROR, stream=root_output)
+        root_handlers = list(self.root_logger.handlers)
+        self.training_logger.info("Epoch [1][50/100] loss: 0.5")
+        logging.getLogger("another-library").error("unrelated error")
+        self.assertEqual(console.getvalue().count("Epoch"), 1)
+        self.assertEqual(file_log.getvalue().count("Epoch"), 1)
+        self.assertNotIn("Epoch", root_output.getvalue())
+        self.assertIn("unrelated error", root_output.getvalue())
+        self.assertEqual(self.training_logger.handlers, handlers)
+        self.assertEqual(self.root_logger.handlers, root_handlers)
+        client.log_params.assert_called_once()
+        self.assertEqual([hook["type"] for hook in config.log_config.hooks],
+                         ["TextLoggerHook", "MlflowLoggerHook"])
+
+    def test_root_only_logging_remains_visible(self):
+        for handlers in ([], [logging.NullHandler()]):
+            with self.subTest(handlers=handlers):
+                self.training_logger.handlers = handlers
+                self.training_logger.propagate = True
+                output = io.StringIO()
+                self.root_logger.handlers = [logging.StreamHandler(output)]
+                with mock.patch.dict(os.environ, self.platform_environment(), clear=True), mock.patch.dict(
+                    sys.modules, {"mlflow": self.fake_mlflow()}
+                ):
+                    load_module().start_platform_mlflow(FakeConfig(), rank=0, world_size=1)
+                self.training_logger.info("visible training message")
+                self.assertIn("visible training message", output.getvalue())
+
+    def test_disabled_tracking_and_nonzero_rank_preserve_logging(self):
+        for environment, rank in (({}, 0), (self.platform_environment(), 1)):
+            with self.subTest(rank=rank), mock.patch.dict(os.environ, environment, clear=True):
+                self.training_logger.handlers = [logging.StreamHandler(io.StringIO())]
+                self.assertIsNone(load_module().start_platform_mlflow(FakeConfig(), rank, 8))
+                self.assertTrue(self.training_logger.propagate)
+
     def platform_environment(self) -> dict[str, str]:
         return {
             "MLFLOW_TRACKING_URI": "http://mlflow-ingest.mlflow-system.svc:5000",
