@@ -9,7 +9,7 @@ import (
 	"ray-train-platform-backend/helpdocs"
 )
 
-func TestHelpArticlesExposeThirtySixQuestionDocumentsFromPublishedSeed(t *testing.T) {
+func TestHelpArticlesExposeFortyThreeQuestionDocumentsFromPublishedSeed(t *testing.T) {
 	r := helpRepo(t)
 	ctx := context.Background()
 	seed, err := helpdocs.Documents()
@@ -24,8 +24,8 @@ func TestHelpArticlesExposeThirtySixQuestionDocumentsFromPublishedSeed(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 38 {
-		t.Fatalf("public articles got %d want 38", len(items))
+	if len(items) != 43 {
+		t.Fatalf("public articles got %d want 43", len(items))
 	}
 	byID := helpArticlesByID(items)
 	for _, source := range seed {
@@ -50,9 +50,58 @@ func TestHelpArticlesExposeThirtySixQuestionDocumentsFromPublishedSeed(t *testin
 	assertArticle(t, byID, "debug", "debug", "如何使用 JupyterLab 和 VS Code？", []string{"JupyterLab", "VS Code"})
 	assertArticle(t, byID, "worker-connect-and-scheduling-boundary", "debug", "如何连接自己的训练 Worker？", []string{"spk-rayjob connect JOB_ID"})
 	assertArticle(t, byID, "shared-model-registration", "debug", "如何把训练权重保存成共享模型版本？", []string{"8 MiB", "20 GiB", "READY", "未知 / 未登记", "用户补充"})
-	assertArticle(t, byID, "shared-model-maintenance", "debug", "模型谁能看，如何维护与归档？", []string{"跨团队", "SuperAdmin", "归档", "Serving 尚未上线"})
+	assertArticle(t, byID, "shared-model-maintenance", "debug", "模型谁能看，如何维护与归档？", []string{"跨团队", "SuperAdmin", "归档", "分别操作"})
+	assertArticle(t, byID, "model-evaluation-start", "debug", "如何用固定数据版本评估一个模型？", []string{"源码 ZIP", "val", "test", "TEAM", "evaluation_sdk.py"})
+	assertArticle(t, byID, "model-evaluation-results", "debug", "评估报告在哪里看，为什么不能比较？", []string{"成功退出", "缺失", "比较", "配置", "审批"})
+	assertArticle(t, byID, "model-registry-link", "mlflow", "共享模型如何关联到 MLflow Model Registry？", []string{"同步到 MLflow Registry", "原权重", "MLflow flavor", "不会自动创建 GPU 服务"})
+	assertArticle(t, byID, "model-release-review", "debug", "模型如何申请审核、正式发布和回滚？", []string{"申请人和模型所有者都不能自审", "TenantAdmin", "理由", "TEAM", "不会自动重启"})
+	assertArticle(t, byID, "model-serving-code", "data", "如何准备离线推理代码和匹配的运行方案？", []string{"源码 ZIP", "serving_sdk.py", "model_adapter.py", "内网", "smoke_adapter.py", "不证明模型精度"})
+	assertArticle(t, byID, "model-serving-use", "debug", "如何启动、调用、停止和切换模型推理服务？", []string{"1 GPU", "1 小时", "7 天", "models:invoke", "credentials: 'same-origin'", "先停后启", "原始 JSON"})
+	assertArticle(t, byID, "model-serving-errors", "troubleshooting", "推理服务排队、未就绪或调用失败怎么办？", []string{"排队", "413", "429", "SHA-256", "健康", "不代表模型精度达标"})
 	assertArticle(t, byID, "mlflow-api-with-pat", "mlflow", "如何调用 MLflow API 查询实验与 Run？", []string{"MLFLOW_TRACKING_URI='https://raytrain.wellspiking.ai/api/v1/mlflow-native'", "next_page_token 字段，把它原样放进下一次请求正文的 page_token", "403 查 PAT 是否包含 mlflow:full"})
 	assertArticle(t, byID, "errors", "troubleshooting", "遇到 401、403、Pending 等错误先检查什么？", []string{"401 / INVALID_AUTHENTICATION", "413"})
+}
+
+func TestHelpArticlesPreservePublishedServingOverrideAndKeepDraftPrivate(t *testing.T) {
+	r := helpRepo(t)
+	ctx := context.Background()
+	seed, err := helpdocs.Documents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.SeedHelpDocuments(ctx, seed); err != nil {
+		t.Fatal(err)
+	}
+	const published = "  团队自定义推理调用约定\n\n保留原样  "
+	doc, err := r.CreateHelpDocument(ctx, domain.HelpDocument{ID: "model-serving-use", Title: "团队推理约定", Category: "调试与训练结果", SortOrder: 395, Markdown: published}, "editor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.ChangeHelpDocument(ctx, doc.ID, doc.Version, "publish", 0, nil, "editor"); err != nil {
+		t.Fatal(err)
+	}
+	doc.Markdown = "尚未发布的新调用约定"
+	if _, err := r.ChangeHelpDocument(ctx, doc.ID, doc.Version+1, "save", 0, &doc, "editor"); err != nil {
+		t.Fatal(err)
+	}
+	items, err := r.ListHelpArticles(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 43 {
+		t.Fatalf("published override duplicated or removed a question: got %d", len(items))
+	}
+	article := helpArticlesByID(items)[doc.ID]
+	if article.Markdown != published || article.UpdatedBy != "editor" {
+		t.Fatalf("published serving content replaced or draft exposed: %+v", article)
+	}
+	history, err := r.HelpDocumentHistory(ctx, doc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 3 || history[0].Markdown != doc.Markdown {
+		t.Fatalf("custom serving history changed after projection: %+v", history)
+	}
 }
 
 func TestHelpArticlesPreserveSeedMarkdownAndPublicGuideSupplements(t *testing.T) {

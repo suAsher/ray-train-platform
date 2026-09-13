@@ -117,10 +117,46 @@ func TestModelServingSubmitFailureReleasesReservation(t *testing.T) {
 	h, s, submit, _ := servingWorkflowHandler()
 	submit.submitErr = errors.New("scheduler rejected submission")
 	w := evaluationTestRequest(servingWorkflowRouter(h, streamingPrincipal()), "POST", "/api/v1/model-services", servingWorkflowBody())
-	if w.Code != 500 || s.reserveCalls != 1 || submit.calls != 1 || s.failCalls != 1 || s.deployment.State != ms.Failed {
+	if w.Code != 500 || submit.preflights != 1 || s.reserveCalls != 1 || submit.calls != 1 || s.markCalls != 0 || s.failCalls != 1 || s.deployment.State != ms.Failed {
 		t.Fatalf("submit failure did not release reservation: code=%d reserve=%d submit=%d fail=%d state=%s body=%s", w.Code, s.reserveCalls, submit.calls, s.failCalls, s.deployment.State, w.Body.String())
 	}
 }
+func TestModelServingPreflightFailureDoesNotReserveOrSubmit(t *testing.T) {
+ h, s, submit, _ := servingWorkflowHandler()
+ submit.preflightErr = errors.New("preflight admission unavailable")
+ w := evaluationTestRequest(servingWorkflowRouter(h, streamingPrincipal()), "POST", "/api/v1/model-services", servingWorkflowBody())
+ if w.Code != 500 || submit.preflights != 1 || s.reserveCalls != 0 || submit.calls != 0 || s.failCalls != 0 || s.deployment.ID != "" {
+  t.Fatalf("preflight failure allocated reservation: code=%d preflight=%d reserve=%d submit=%d fail=%d", w.Code, submit.preflights, s.reserveCalls, submit.calls, s.failCalls)
+ }
+}
+
+type servingLostSubmissionResponse struct {
+ *evaluationSubmissionFake
+ repository *fakeJobRepository
+}
+func (s *servingLostSubmissionResponse) Submit(ctx context.Context, in SubmissionInput) (*domain.TrainingJob, error) {
+ job, err := s.evaluationSubmissionFake.Submit(ctx, in)
+ if err != nil { return job, err }
+ // The job transaction committed, but the API did not receive its response.
+ s.repository.jobs = append(s.repository.jobs, *job)
+ return nil, errors.New("submission response lost after commit")
+}
+func TestModelServingLostSubmitResponseRecoversWithoutReleasingReservation(t *testing.T) {
+ h, s, submit, _ := servingWorkflowHandler()
+ repository := &fakeJobRepository{}
+ h.repository = repository
+ h.modelEvaluationSubmission = &servingLostSubmissionResponse{evaluationSubmissionFake: submit, repository: repository}
+ r := servingWorkflowRouter(h, streamingPrincipal())
+ w := evaluationTestRequest(r, "POST", "/api/v1/model-services", servingWorkflowBody())
+ if w.Code != 202 || submit.preflights != 1 || s.reserveCalls != 1 || submit.calls != 1 || s.markCalls != 1 || s.failCalls != 0 || s.deployment.State != ms.Submitted {
+  t.Fatalf("committed job not recovered safely: code=%d reserve=%d submit=%d mark=%d fail=%d state=%s", w.Code, s.reserveCalls, submit.calls, s.markCalls, s.failCalls, s.deployment.State)
+ }
+ retry := evaluationTestRequest(r, "POST", "/api/v1/model-services", servingWorkflowBody())
+ if retry.Code != 200 || submit.calls != 1 || s.reserveCalls != 1 || len(repository.jobs) != 1 || s.failCalls != 0 {
+  t.Fatalf("recovered retry duplicated job: code=%d jobs=%d submit=%d", retry.Code, len(repository.jobs), submit.calls)
+ }
+}
+
 func TestModelServingRequiresApprovalOwnerOneGPUAndBoundedTTL(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

@@ -28,7 +28,24 @@ func TestModelServingMigrationContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	sql := string(b)
-	for _, fragment := range []string{"CREATE TABLE IF NOT EXISTS model_serving_contracts", "CREATE TABLE IF NOT EXISTS model_serving_deployments", "CREATE TABLE IF NOT EXISTS model_serving_audits", "job_id ~ '^job-[0-9a-f]{24}$'", "model_serving_one_active_idx", "serving contract executable snapshot is immutable", "serving provenance and reserved job identity are immutable", "serving audit history is append only"} {
+	for _, fragment := range []string{
+		"SET LOCAL lock_timeout = '5s';\nSET LOCAL statement_timeout = '60s';",
+		"CREATE TABLE IF NOT EXISTS model_serving_contracts",
+		"CREATE TABLE IF NOT EXISTS model_serving_deployments",
+		"CREATE TABLE IF NOT EXISTS model_serving_audits",
+		"job_id ~ '^job-[0-9a-f]{24}$'",
+		"model_serving_one_active_idx",
+		"to_jsonb(OLD) - ARRAY['active','revision']",
+		"serving contract executable snapshot is immutable",
+		"CREATE TRIGGER model_serving_contracts_immutable BEFORE UPDATE ON model_serving_contracts",
+		"to_jsonb(OLD) - ARRAY['state','error','revision','updated_at']",
+		"serving provenance and reserved job identity are immutable",
+		"terminal serving deployment is immutable",
+		"serving deployment state cannot regress",
+		"CREATE TRIGGER model_serving_deployments_immutable BEFORE UPDATE ON model_serving_deployments",
+		"serving audit history is append only",
+		"CREATE TRIGGER model_serving_audits_append_only BEFORE UPDATE OR DELETE ON model_serving_audits",
+	} {
 		if !strings.Contains(sql, fragment) {
 			t.Errorf("missing %q", fragment)
 		}
