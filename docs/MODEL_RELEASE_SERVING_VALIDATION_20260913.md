@@ -7,10 +7,11 @@
 | 项目 | 已验证事实 |
 |---|---|
 | 后端业务代码 | 镜像发布时本地、GitHub、内部 GitLab、正式构建目录均为 `0ad8dbad268173f2e53855ff3e2b7e655f203299`；本文随后以仅文档提交同步四端，不重建镜像 |
+| 部署配置代码 | `b8567f41763c1f3166edfa9efce8fd025c489446`：仅增加代码快照临时卷；无镜像重建或数据库迁移 |
 | 后端版本 | `release-20260913-02-0ad8dba` |
 | 后端摘要 | `sha256:d45f8caf881f0dff5abeb226aac3f19f4d21e48f982b00ea7c5c5ba1facc52f9` |
 | 源码分发摘要 | `sha256:2623c825f23b810f2e0e3df724a13cdcf5ef9aad6c95af7b1cfafe259c47d348` |
-| Helm / schema | 225 / 52 |
+| Helm / schema | 226 / 52 |
 | Portal dev | `525de83b118270d66392f204662a704c584583b3`；[流水线 33893](https://gitlab.wellspiking.ai/wellspiking/frontend/wellspiking-frontend/-/pipelines/33893) 全部成功 |
 | Portal 部署 | 作业 89862，Helm revision 1052；登录页面加载 `index-DNXMIjj-.js` |
 | 副本 | 两个后端 Pod Ready，重启 0，实际 imageID 与后端候选摘要相同 |
@@ -60,7 +61,21 @@
 
 用户另授权一个临时 local 审核身份、一枚本人 1 天 `models:invoke` PAT、最多顺序三次单 Worker / 1 GPU / 4 CPU / 16 Gi / 1 小时上限的专用推理验收（同时最多一个），结束立即撤销身份和令牌、停止实例、停用方案并归档模型。当前尚未创建这些身份、令牌和实例。
 
-生产独立评估需要用户在浏览器中选择已准备的 `rtp-internal-evaluation-smoke.zip`。浏览器上传工具拒绝读取该本地路径，未绕过限制。推理协议示例包已准备在本机 `/tmp/rtp-serving-protocol-smoke-20260913.zip`，SHA-256 `53e2457455a9ad93e8a91bf0762669b9c1b4d44b93f90cd842dcb577f78672ae`；只验证服务协议，不代表业务模型精度。
+用户已在浏览器手动选择 `rtp-internal-evaluation-smoke.zip`，实际上传和不可变评估方案登记均成功，原文件选择阻塞已解除。推理协议示例包已准备在本机 `/tmp/rtp-serving-protocol-smoke-20260913.zip`，SHA-256 `53e2457455a9ad93e8a91bf0762669b9c1b4d44b93f90cd842dcb577f78672ae`；只验证服务协议，不代表业务模型精度。
+
+## 内网代码快照生产故障与修复
+
+用户手动选包后，实际上传成功（4209 字节 / `4236b519a6044acfdc14fe0fdef54bf898e68e3c164bf4f45eae519531f41e3e`），但创建评估方案返回 503。实机定位为只读根文件系统下 `os.CreateTemp` 默认写 `/tmp` 失败。普通上传使用显式独立目录，所以此前上传与单元测试没有覆盖这项部署缺失。该路径也供推理代码快照使用。
+
+`b8567f4` 为后端增加独立 1Gi `code-snapshot-spool` emptyDir、`TMPDIR=/var/lib/ray-platform/code-snapshots` 和 `fsGroup:65532`，保留只读根、非 root、原 3Gi 上传卷。没有改训练卷、调度、配额、镜像或 schema。新增合同测试在构建机先 RED 后 GREEN；全量 Go 回归通过（本次无数据库变更，未重建 PostgreSQL 测试环境），Helm 使用备份生产 values lint/render 通过，独立审阅无阻断。默认 values 的占位域名导致首次 render 拒绝，不算通过；改用生产 values 后才继续发布。
+
+候选四端同步后，server dry-run 精确为上述 8 行新增配置；revision226 发布成功。两个后端 Ready / 重启0 / 原 imageID，healthz200/schema52。发布前后4个活跃RayJob、4个RayCluster、10个训练Pod的UID/状态/重启数逐项未变。实机临时目录可写，方案成功创建后临时文件数为0。
+
+浏览器使用原幂等请求重试“创建方案”成功，方案 `1c5c2c99e0d4ba4106e36637ac4d89b4` 的代码SHA与上传包一致、Git字段为空、入口为 `python smoke_evaluator.py`。真实 preflight200 固定本人156字节权重、公有数据版本 `version-a26436a221f5f4b851863a3bde884d26` / val / 1620来源样本，未读取样本。浏览器“发起评估”按钮能打开完整表单。
+
+**当前阻塞变为GPU配额**：2026-09-13 12:30前后实时 quota 为 local limit24/used24/available0，页面明确显示可用0卡并禁用提交。没有创建评估任务或推理实例，也未签发临时身份/PAT；没有改动配额或停止他人任务。暂停验收时方案已停用（revision2），本人验收模型重新归档（revision8），源码快照与审计保留。后续至少释放1卡后，在既有授权范围恢复方案和验收模型，继续评估、非自审与推理链路。
+
+新增证据位于构建机受限发布目录：`code-spool-tests.log`、`code-spool-helm.log`、`code-spool-rendered.yaml`、`code-spool-manifest.diff`、`code-spool-deploy.log` 及前后资源快照。
 
 ## 剩余验收
 
