@@ -25,6 +25,12 @@ class RealMLflowLoggingTest(unittest.TestCase):
         from mmcv import Config
         from mmcv.runner.hooks.logger.mlflow import MlflowLoggerHook
         from mmcv.utils import get_logger
+        # Initialize the tracking client's own logging configuration first.
+        # This test isolates the later mlflow.pytorch import performed by MMCV,
+        # rather than MLflow's unrelated first-import dictConfig file closure.
+        import mlflow
+
+        self.assertNotIn("mlflow.pytorch", __import__("sys").modules)
 
         adapter_path = Path(os.environ.get(
             "BEVFUSION_MLFLOW_ADAPTER",
