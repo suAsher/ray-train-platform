@@ -157,7 +157,13 @@ func decodeMLflowDashboardAccessRequest(body io.Reader) (mlflowDashboardAccessRe
 }
 
 func (h *Handler) mlflowDashboardRunRedirect(ctx context.Context, principal auth.Principal, runID string) (string, error) {
-	if h.experiments == nil || !mlflowDashboardRunIDPattern.MatchString(runID) {
+	if !mlflowDashboardRunIDPattern.MatchString(runID) {
+		return "", fmt.Errorf("MLflow run is unavailable")
+	}
+	if fragment, found, err := h.mlflowDashboardRegistryRedirect(ctx, principal, runID); err != nil || found {
+		return fragment, err
+	}
+	if h.experiments == nil {
 		return "", fmt.Errorf("MLflow run is unavailable")
 	}
 	subject := principal.Subject

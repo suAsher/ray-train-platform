@@ -17,6 +17,27 @@ func NewModelRegistryStore(db *gorm.DB) *ModelRegistryStore { return &ModelRegis
 
 var _ mr.Store = (*ModelRegistryStore)(nil)
 
+// A dashboard deep link may target the dedicated Registry copy Run rather than
+// a training Run. Resolve it only from one completed, persisted model snapshot.
+// Archived model versions remain readable in the shared catalog.
+func (s *ModelRegistryStore) GetReadyByRunID(ctx context.Context, runID string) (mr.Record, error) {
+	var records []mr.Record
+	err := s.db.WithContext(ctx).Model(&mr.Record{}).Select("model_registry_links.*").
+		Joins("JOIN model_versions ON model_versions.id = model_registry_links.version_id AND model_versions.state = ?", ml.Ready).
+		Joins("JOIN model_catalog ON model_catalog.id = model_versions.model_id").
+		Where("model_registry_links.run_id = ? AND model_registry_links.state = ?", runID, "READY").Limit(2).Find(&records).Error
+	if err != nil {
+		return mr.Record{}, err
+	}
+	if len(records) == 0 {
+		return mr.Record{State: "NOT_LINKED"}, nil
+	}
+	if len(records) != 1 {
+		return mr.Record{}, mr.ErrConflict
+	}
+	return records[0], nil
+}
+
 func (s *ModelRegistryStore) Get(ctx context.Context, id string) (mr.Record, error) {
 	var r mr.Record
 	err := s.db.WithContext(ctx).Where("version_id = ?", id).First(&r).Error
