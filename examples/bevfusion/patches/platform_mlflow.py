@@ -91,6 +91,13 @@ def start_platform_mlflow(cfg: Any, rank: int, world_size: int) -> Optional[Any]
     if not tracking_uri or rank != 0:
         return None
 
+    # MMCV owns these handlers; MLflow may add a root handler later.
+    import logging
+
+    training_logger = logging.getLogger("mmdet3d")
+    if any(not isinstance(handler, logging.NullHandler) for handler in training_logger.handlers):
+        training_logger.propagate = False
+
     import mlflow
 
     mlflow.set_tracking_uri(tracking_uri)

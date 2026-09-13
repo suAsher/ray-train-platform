@@ -30,7 +30,7 @@ info['cams']['CAM_FRONT_MID']['data_path']
 
 - `mmdet3d/datasets/platform_paths.py` 与 `nuscenes_dataset.py`：重定位数据路径；
 - `tools/westwell_train.py`：DDP local rank、rank-0 输出、对象存储日志兼容与 MLflow 生命周期；
-- `mmdet3d/utils/platform_mlflow.py`：只由全局 rank 0 上报参数和标量指标；
+- `mmdet3d/utils/platform_mlflow.py`：只由全局 rank 0 上报参数和标量指标；有独立日志处理器时关闭向根日志器重复传播，兼容 MLflow 晚加载行为。已有源码包按[接入与升级步骤](BEVFUSION_END_TO_END_GUIDE.md#58-接入平台-mlflow-实验中心)更新后重新打包；
 - `.gitignore`、`.rayignore`：保证必要源码进入 working-dir，同时排除数据和 checkpoint；
 - `tools/platform_data_preflight.py`：提交 16 卡任务前验证索引和原始文件；
 - S1H 配置：移除机器本地 checkpoint，并固定缺失的检测范围。

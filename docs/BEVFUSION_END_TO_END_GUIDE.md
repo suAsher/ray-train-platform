@@ -699,6 +699,25 @@ S1H 全量数值稳定性建议按下面顺序做单变量实验，不要一次�
 
 两个分支都新增 `mmdet3d/utils/platform_mlflow.py`。这段代码只在全局 rank 0 创建 run，参数、loss、学习率和验证指标进入实验中心；checkpoint 仍写 `PLATFORM_OUTPUT_PATH`：
 
+新接入请使用仓库中的[完整适配文件](../examples/bevfusion/patches/platform_mlflow.py)，其中包含当前任务归属、重试和数据版本字段。下面代码用于说明调用结构。
+
+**已接入但出现两行重复日志时**，升级已有适配文件后重新打包提交。MLflow 2.17.2 的 PyTorch 集成可能在 MMCV 初始化之后创建根日志处理器；修复让已有独立处理器的 `mmdet3d` 日志器停止向根传播，保留 MLflow 指标、控制台和已有文件处理器。
+
+在包含最新平台仓库的开发环境中，对准备提交的 BEVFusion checkout 执行：
+
+```bash
+# 替换为两份仓库的实际路径；不对运行中任务目录执行。
+PLATFORM_REPO=/path/to/ray-train-platform
+BEVFUSION_REPO=/path/to/bevfusion
+python3 "$PLATFORM_REPO/examples/bevfusion/patches/upgrade_mlflow_logging.py" \
+  "$BEVFUSION_REPO" --check
+python3 "$PLATFORM_REPO/examples/bevfusion/patches/upgrade_mlflow_logging.py" \
+  "$BEVFUSION_REPO" --apply
+git -C "$BEVFUSION_REPO" diff -- mmdet3d/utils/platform_mlflow.py
+```
+
+升级脚本只插入日志兼容块，保留用户增加的参数记录逻辑；未知结构会拒绝修改。审阅后将改动纳入算法仓库，重新生成源码 ZIP / working-dir 快照再提交。旧 ZIP、重试旧快照及运行中进程仍使用原代码。训练节点无需下载 GitHub 源码或安装依赖，也无需重建训练镜像。
+
 ```python
 """Bridge MMCV scalar logging to the platform-owned MLflow run."""
 
@@ -739,6 +758,13 @@ def start_platform_mlflow(cfg: Any, rank: int, world_size: int) -> Optional[Any]
     tracking_uri = os.environ.get("MLFLOW_TRACKING_URI", "").strip()
     if not tracking_uri or rank != 0:
         return None
+
+    # MMCV owns these handlers; MLflow may add a root handler later.
+    import logging
+
+    training_logger = logging.getLogger("mmdet3d")
+    if any(not isinstance(handler, logging.NullHandler) for handler in training_logger.handlers):
+        training_logger.propagate = False
 
     import mlflow
 
