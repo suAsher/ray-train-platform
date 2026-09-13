@@ -10,7 +10,7 @@ func PublicGuides() []domain.HelpDocument {
 		{ID: "training-guide", Title: "提交训练、分布式、续训与结果", Category: "03 提交与运行", SortOrder: 210, Markdown: trainingPublicGuide},
 		{ID: "debug", Title: "交互式调试与 Worker 连接", Category: "03 提交与运行", SortOrder: 260, Markdown: debugPublicGuide},
 		{ID: "mlflow", Title: "实验与 MLflow 接入", Category: "04 结果与MLflow", SortOrder: 310, Markdown: mlflowPublicGuide + "\n\n" + sharedModelsPublicSection},
-		{ID: "troubleshooting", Title: "常见错误与定位路径", Category: "05 故障排查", SortOrder: 410, Markdown: troubleshootingPublicGuide},
+		{ID: "troubleshooting", Title: "常见错误与定位路径", Category: "05 故障排查", SortOrder: 410, Markdown: troubleshootingPublicGuide + "\n\n" + trainingLoggingSupplement},
 	}
 }
 
@@ -27,7 +27,7 @@ func PublicSectionForSeedDocument(document domain.HelpDocument) domain.HelpDocum
 		document.Markdown = mlflowExternalSeedPublicSection
 	case "mlflow-framework-metrics":
 		document.Title = "让训练指标显示在 MLflow"
-		document.Markdown = mlflowMetricsSeedPublicSection
+		document.Markdown = mlflowMetricsSeedPublicSection + "\n\n### 接入后文本日志重复怎么办？\n\n先区分多个 rank 输出、重复注册 Hook、日志传播和平台采集展示问题。处理步骤、保留 MLflow 指标的方法及验证清单见[训练日志为什么重复两行？](#observability)。不需要重新创建 Run、换地址或个人 PAT，也不要直接关闭 MLflow。"
 	}
 	return document
 }

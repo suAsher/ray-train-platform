@@ -55,7 +55,7 @@ var helpArticleMetaByID = map[string]HelpArticleMeta{
 
 	"debug":                                  {Title: "如何使用 JupyterLab 和 VS Code？", CategoryID: "debug", Category: "调试与训练结果", SortOrder: 310, Summary: "启动交互式调试环境，检查依赖、样本读取和入口脚本。", Keywords: []string{"JupyterLab", "VS Code", "调试", "票据", "配额"}, RelatedIDs: []string{"custom-environment", "worker-connect-and-scheduling-boundary", "portal-browser-tools-and-queue"}, LegacyTopicID: "debug"},
 	"worker-connect-and-scheduling-boundary": {Title: "如何连接自己的训练 Worker？", CategoryID: "debug", Category: "调试与训练结果", SortOrder: 320, Summary: "用 spk-rayjob connect 连接运行中的 Worker，并理解调试与排队边界。", Keywords: []string{"Worker", "connect", "shell", "运行中任务"}, RelatedIDs: []string{"debug", "scheduling-topology", "errors"}, LegacyTopicID: "debug"},
-	"observability":                          {Title: "训练状态、日志和指标在哪里看？", CategoryID: "debug", Category: "调试与训练结果", SortOrder: 330, Summary: "在任务详情查看状态、日志、GPU 曲线、训练指标和 MLflow 入口。", Keywords: []string{"日志", "指标", "状态", "GPU 曲线", "MLflow"}, RelatedIDs: []string{"mlflow", "telemetry-boundary", "artifacts"}, LegacyTopicID: "mlflow"},
+	"observability":                          {Title: "训练状态、日志和指标在哪里看？", CategoryID: "debug", Category: "调试与训练结果", SortOrder: 330, Summary: "查看状态、日志和曲线；排查重复日志，保留 MLflow 指标上报。", Keywords: []string{"日志", "指标", "状态", "GPU 曲线", "MLflow", "重复日志", "两行", "propagate", "MMCV"}, RelatedIDs: []string{"mlflow", "mlflow-framework-metrics", "telemetry-boundary", "artifacts"}, LegacyTopicID: "mlflow"},
 	"artifacts":                              {Title: "如何下载训练结果与模型权重？", CategoryID: "debug", Category: "调试与训练结果", SortOrder: 340, Summary: "从训练结果目录取回模型权重、报告、checkpoint 和日志。", Keywords: []string{"产物", "模型权重", "下载", "checkpoint", "结果目录"}, RelatedIDs: []string{"storage", "resume", "observability", modelRegistrationArticleID, modelMaintenanceArticleID}, LegacyTopicID: "training-guide"},
 	modelRegistrationArticleID:               {Title: "如何把训练权重保存成共享模型版本？", CategoryID: "debug", Category: "调试与训练结果", SortOrder: 350, Summary: "将本人已结束任务中的所选权重保存为共享快照，核对复制状态、SHA-256 和数据来源。", Keywords: []string{"模型", "权重", "版本", "快照", "SHA-256", "数据来源"}, RelatedIDs: []string{"artifacts", modelMaintenanceArticleID, "datasets"}, LegacyTopicID: "mlflow"},
 	modelMaintenanceArticleID:                {Title: "模型谁能看，如何维护与归档？", CategoryID: "debug", Category: "调试与训练结果", SortOrder: 360, Summary: "理解跨团队共享范围、创建者维护权限、归档恢复及不可变的文件与来源。", Keywords: []string{"模型", "共享", "跨团队", "权限", "归档", "恢复"}, RelatedIDs: []string{modelRegistrationArticleID, "artifacts", "mlflow"}, LegacyTopicID: "mlflow"},
@@ -109,6 +109,7 @@ var publicGuideSectionTargets = []publicGuideSectionTarget{
 	{guideID: "troubleshooting", heading: "排障顺序", articleID: "errors"},
 	{guideID: "troubleshooting", heading: "常见现象", articleID: "errors"},
 	{guideID: "troubleshooting", heading: "性能定位", articleID: "diagnose"},
+	{guideID: "troubleshooting", heading: "训练日志为什么重复两行？", articleID: "observability"},
 }
 
 var articlePublicSupplements = buildArticlePublicSupplements()
