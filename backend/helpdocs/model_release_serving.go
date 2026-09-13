@@ -3,20 +3,21 @@ package helpdocs
 import "ray-train-platform-backend/domain"
 
 const (
- modelRegistryArticleID = "model-registry-link"
- modelReleaseArticleID = "model-release-review"
- modelServingCodeArticleID = "model-serving-code"
- modelServingUseArticleID = "model-serving-use"
- modelServingErrorsArticleID = "model-serving-errors"
+	modelRegistryArticleID      = "model-registry-link"
+	modelReleaseArticleID       = "model-release-review"
+	modelServingCodeArticleID   = "model-serving-code"
+	modelServingUseArticleID    = "model-serving-use"
+	modelServingErrorsArticleID = "model-serving-errors"
 )
-func modelReleaseServingDocuments()[]domain.HelpDocument{
- return []domain.HelpDocument{
-  {ID:modelRegistryArticleID,Title:"共享模型如何关联到 MLflow Model Registry？",Category:"MLflow 与 API",SortOrder:450,Markdown:modelRegistryGuide,Version:1,PublishedVersion:1,UpdatedBy:PlatformSeedActor,Action:"summary"},
-  {ID:modelReleaseArticleID,Title:"模型如何申请审核、正式发布和回滚？",Category:"调试与训练结果",SortOrder:390,Markdown:modelReleaseGuide,Version:1,PublishedVersion:1,UpdatedBy:PlatformSeedActor,Action:"summary"},
-  {ID:modelServingCodeArticleID,Title:"如何准备离线推理代码和匹配的运行方案？",Category:"代码、环境与数据",SortOrder:180,Markdown:modelServingCodeGuide,Version:1,PublishedVersion:1,UpdatedBy:PlatformSeedActor,Action:"summary"},
-  {ID:modelServingUseArticleID,Title:"如何启动、调用、停止和切换模型推理服务？",Category:"调试与训练结果",SortOrder:395,Markdown:modelServingUseGuide,Version:1,PublishedVersion:1,UpdatedBy:PlatformSeedActor,Action:"summary"},
-  {ID:modelServingErrorsArticleID,Title:"推理服务排队、未就绪或调用失败怎么办？",Category:"常见故障",SortOrder:550,Markdown:modelServingErrorsGuide,Version:1,PublishedVersion:1,UpdatedBy:PlatformSeedActor,Action:"summary"},
- }
+
+func modelReleaseServingDocuments() []domain.HelpDocument {
+	return []domain.HelpDocument{
+		{ID: modelRegistryArticleID, Title: "共享模型如何关联到 MLflow Model Registry？", Category: "MLflow 与 API", SortOrder: 450, Markdown: modelRegistryGuide, Version: 1, PublishedVersion: 1, UpdatedBy: PlatformSeedActor, Action: "summary"},
+		{ID: modelReleaseArticleID, Title: "模型如何申请审核、正式发布和回滚？", Category: "调试与训练结果", SortOrder: 390, Markdown: modelReleaseGuide, Version: 1, PublishedVersion: 1, UpdatedBy: PlatformSeedActor, Action: "summary"},
+		{ID: modelServingCodeArticleID, Title: "如何准备离线推理代码和匹配的运行方案？", Category: "代码、环境与数据", SortOrder: 180, Markdown: modelServingCodeGuide, Version: 1, PublishedVersion: 1, UpdatedBy: PlatformSeedActor, Action: "summary"},
+		{ID: modelServingUseArticleID, Title: "如何启动、调用、停止和切换模型推理服务？", Category: "调试与训练结果", SortOrder: 395, Markdown: modelServingUseGuide, Version: 1, PublishedVersion: 1, UpdatedBy: PlatformSeedActor, Action: "summary"},
+		{ID: modelServingErrorsArticleID, Title: "推理服务排队、未就绪或调用失败怎么办？", Category: "常见故障", SortOrder: 550, Markdown: modelServingErrorsGuide, Version: 1, PublishedVersion: 1, UpdatedBy: PlatformSeedActor, Action: "summary"},
+	}
 }
 
 const modelRegistryGuide = `共享模型版本和 MLflow Model Registry 是两个不同记录。保存权重后，在「实验中心 → 模型」打开 READY 版本，展开“发布审批与 MLflow 注册表”，点击“同步到 MLflow Registry”将该快照登记到原生 Registry。模型所有者和平台 SuperAdmin 可以执行关联，其他成员可以查看已有结果。
