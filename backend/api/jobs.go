@@ -21,6 +21,9 @@ import (
 	"ray-train-platform-backend/k8s"
 	me "ray-train-platform-backend/modelevaluation"
 	"ray-train-platform-backend/modellifecycle"
+	"ray-train-platform-backend/modelregistry"
+	"ray-train-platform-backend/modelrelease"
+	ms "ray-train-platform-backend/modelserving"
 	"ray-train-platform-backend/objectstore"
 	"ray-train-platform-backend/observability"
 	"ray-train-platform-backend/repositories"
@@ -40,6 +43,12 @@ type globalJobReader interface {
 }
 
 type Handler struct {
+	modelServing              ms.Store
+	modelServingKubernetes    modelServingKubernetes
+	modelReleases             modelrelease.Repository
+	modelRegistry             modelregistry.Provider
+	modelRegistryLinks        modelregistry.Store
+	servingRequests           chan struct{}
 	evaluationCode            me.EvaluationCodeStore
 	evaluationSourceArtifacts SourceArtifactLookup
 	evaluationCodeOperations  chan struct{}
@@ -145,6 +154,10 @@ type ExperimentProvider interface {
 }
 
 type Options struct {
+	ModelServing              ms.Store
+	ModelReleases             modelrelease.Repository
+	ModelRegistry             modelregistry.Provider
+	ModelRegistryLinks        modelregistry.Store
 	EvaluationCode            me.EvaluationCodeStore
 	EvaluationSourceArtifacts SourceArtifactLookup
 	ModelEvaluations          ModelEvaluationStore
@@ -324,6 +337,14 @@ func NewHandler(repository JobRepository, options Options) *Handler {
 		handler.modelEvaluationSubmission = handler.submission
 	}
 	handler.models = options.Models
+	handler.modelServing = options.ModelServing
+	if options.Kubernetes != nil {
+		handler.modelServingKubernetes = options.Kubernetes
+	}
+	handler.modelReleases = options.ModelReleases
+	handler.modelRegistry = options.ModelRegistry
+	handler.modelRegistryLinks = options.ModelRegistryLinks
+	handler.servingRequests = make(chan struct{}, 16)
 	handler.modelSnapshots = options.ModelSnapshots
 	return handler
 }

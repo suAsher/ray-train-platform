@@ -28,11 +28,12 @@ const (
 	SubmissionOriginAPI        SubmissionOrigin = "api"
 	SubmissionOriginRayCLI     SubmissionOrigin = "ray-cli"
 	SubmissionOriginEvaluation SubmissionOrigin = "evaluation"
+	SubmissionOriginServing    SubmissionOrigin = "serving"
 )
 
 func (origin SubmissionOrigin) Validate() error {
 	switch origin {
-	case SubmissionOriginPortal, SubmissionOriginAPI, SubmissionOriginRayCLI, SubmissionOriginEvaluation:
+	case SubmissionOriginPortal, SubmissionOriginAPI, SubmissionOriginRayCLI, SubmissionOriginEvaluation, SubmissionOriginServing:
 		return nil
 	default:
 		return fmt.Errorf("unsupported submission origin %q", origin)
@@ -233,6 +234,7 @@ type JobSpec struct {
 	RayVersion         string                  `json:"rayVersion,omitempty"`
 	Managed            ManagedTrainingPolicy   `json:"managed,omitempty"`
 	EvaluationRuntime  *EvaluationRuntime      `json:"-"`
+	ServingRuntime     *ServingRuntime         `json:"-"`
 	DataMode           DataMode                `json:"dataMode,omitempty"`
 	DatasetRef         DatasetReference        `json:"datasetRef,omitzero"`
 	CachePolicy        DatasetCachePolicy      `json:"cachePolicy,omitempty"`
@@ -689,7 +691,7 @@ func (s JobSpec) Validate() error {
 			return err
 		}
 	}
-	if s.Source.Type == "evaluation-archive" {
+	if s.Source.Type == "evaluation-archive" || s.Source.Type == "serving-archive" {
 		words := append(append([]string(nil), s.Entrypoint.Command...), s.Entrypoint.Args...)
 		if s.TrainingEngine.Resolved() != TrainingEngineRayTrain || len(words) < 2 || words[0] != "python" {
 			return fmt.Errorf("evaluation archive entrypoint must directly use python file.py or python -m module")
@@ -957,8 +959,8 @@ func (s CodeSource) validate() error {
 		if strings.TrimSpace(s.ArtifactID) == "" {
 			return fmt.Errorf("workspace archive source requires artifactId")
 		}
-	case "evaluation-archive":
-		if !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(s.ArtifactID) || !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(s.ArtifactSHA256) || s != (CodeSource{Type: "evaluation-archive", ArtifactID: s.ArtifactID, ArtifactSHA256: s.ArtifactSHA256}) {
+	case "evaluation-archive", "serving-archive":
+		if !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(s.ArtifactID) || !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(s.ArtifactSHA256) || s != (CodeSource{Type: s.Type, ArtifactID: s.ArtifactID, ArtifactSHA256: s.ArtifactSHA256}) {
 			return fmt.Errorf("evaluation archive requires only a frozen code id and SHA-256")
 		}
 	case "artifact":

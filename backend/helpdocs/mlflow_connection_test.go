@@ -51,7 +51,7 @@ func TestMLflowTrainingArticlePreservesInjectedConnectionAndRealProvenance(t *te
 		"不会自动同步",
 		"训练数据来源",
 		"独立评估",
-		"尚未上线",
+		"分别执行",
 		"Job ID 与 MLflow run_id 不要求相等",
 	} {
 		if !strings.Contains(article.Markdown, marker) {

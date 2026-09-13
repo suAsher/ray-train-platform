@@ -271,7 +271,7 @@ const mlflowSeedPublicSection = `先区分平台训练任务和 MLflow Run。Job
 
 只由 global rank 0 写 MLflow。已有框架集成或托管适配器时复用其 Run，不再启动第二条独立 Run。参数、代码版本、数据范围与带 step 的 loss/lr 应一起记录，比较结果时才可追溯。
 
-注册模型版本不等于已经部署推理服务。需要独立评估时，从共享模型版本[发起评估](#model-evaluation-start)，固定数据和方案并等待有效报告；审批与 Serving 尚未上线。`
+注册模型版本不等于已经部署推理服务。需要独立评估时，从共享模型版本[发起评估](#model-evaluation-start)，固定数据和方案并等待有效报告，再按[审批发布](#model-release-review)与[Serving 指南](#model-serving-use)完成后续操作。`
 
 const mlflowNativeConnectionGuide = `该地址是外部程序访问共享 MLflow 的入口前缀，当前验证的客户端为 mlflow==3.14.0，范围包括 Tracking、Artifacts 和 Model Registry；其他版本或产品协议需另外验证。
 
@@ -382,4 +382,4 @@ Artifact、Models 或 Traces 为空不能用来判定训练失败；当前训练
 
 历史任务未固定数据版本时，模型显示“未知 / 未登记”；登记权重时可自选可访问的 READY 版本并标为“用户补充”。它不改写历史训练记录；修改 MLflow 参数或标签也不会自动同步到模型版本，不能把用户声明当作已核实的训练数据来源。
 
-模型这里记录的是训练数据来源。用于衡量模型表现的[独立评估](#model-evaluation-start)需要另行固定评估数据和方案，提交任务并成功生成有效报告。审批与 Serving 尚未上线，不能把填写数据版本或记录一次验证 metric 当作已完成这些流程。`
+模型这里记录的是训练数据来源。用于衡量模型表现的[独立评估](#model-evaluation-start)需要另行固定评估数据和方案，提交任务并成功生成有效报告。后续[审批发布](#model-release-review)和[Serving 服务](#model-serving-use)分别执行，不能把填写数据版本或记录一次验证 metric 当作已完成这些流程。`

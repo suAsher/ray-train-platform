@@ -291,6 +291,19 @@ func (service *SubmissionService) Preflight(ctx context.Context, input Submissio
 }
 
 func validateEvaluationSubmissionInput(input SubmissionInput) error {
+	if input.Origin == domain.SubmissionOriginServing {
+		if !evaluationReservedJobID.MatchString(input.ReservedJobID) || !evaluationIdentifier(input.ExternalSubmissionID) || input.ExpectedDatasetManifestSHA256 != "" {
+			return fmt.Errorf("%w: invalid serving reservation", ErrSubmissionInvalidOrigin)
+		}
+		if _, ok := normalizeEvaluationExpectedDigest(input.ExpectedImageDigest); !ok {
+			return fmt.Errorf("%w: serving image must be fixed", ErrSubmissionInvalidOrigin)
+		}
+		source := input.Spec.Source
+		if source.Type != "serving-archive" || !evaluationSHA256.MatchString(source.ArtifactSHA256) || !evaluationIdentifier(source.ArtifactID) || source.ArtifactID == "" {
+			return fmt.Errorf("%w: serving code must be fixed", ErrSubmissionInvalidOrigin)
+		}
+		return nil
+	}
 	hasEvaluationControls := strings.TrimSpace(input.ReservedJobID) != "" ||
 		strings.TrimSpace(input.ExpectedImageDigest) != "" ||
 		strings.TrimSpace(input.ExpectedDatasetManifestSHA256) != ""
@@ -322,7 +335,7 @@ func validateEvaluationSubmissionInput(input SubmissionInput) error {
 }
 
 func validateEvaluationRuntime(input SubmissionInput, spec domain.JobSpec) error {
-	if input.Origin != domain.SubmissionOriginEvaluation {
+	if input.Origin != domain.SubmissionOriginEvaluation && input.Origin != domain.SubmissionOriginServing {
 		return nil
 	}
 	actual, ok := extractImageSHA256Digest(spec.Image)
@@ -471,7 +484,7 @@ func (service *SubmissionService) Submit(ctx context.Context, input SubmissionIn
 		}
 	}
 	id := strings.TrimSpace(input.ReservedJobID)
-	if input.Origin != domain.SubmissionOriginEvaluation {
+	if input.Origin != domain.SubmissionOriginEvaluation && input.Origin != domain.SubmissionOriginServing {
 		var err error
 		id, err = service.newID()
 		if err != nil {
@@ -952,6 +965,7 @@ func normalizeSubmissionSpec(principal auth.Principal, origin domain.SubmissionO
 	spec.ResolvedDataMounts = domain.ResolvedDataSpaceMounts{}
 	spec.ResolvedDataRoots = domain.ResolvedDataSpaceRoots{}
 	spec.EvaluationRuntime = nil
+	spec.ServingRuntime = nil
 	spec.DatasetRef = domain.DatasetReference{
 		Sites:   spec.DatasetRef.Sites,
 		Dataset: strings.TrimSpace(spec.DatasetRef.Dataset),
@@ -991,7 +1005,8 @@ func normalizeSubmissionSpec(principal auth.Principal, origin domain.SubmissionO
 	}
 	archiveOrigin := origin == domain.SubmissionOriginPortal || origin == domain.SubmissionOriginRayCLI
 	evaluationArchive := spec.Source.Type == "evaluation-archive" && origin == domain.SubmissionOriginEvaluation
-	if spec.Source.Type != "git" && spec.Source.Type != "workspace" && !(spec.Source.Type == "workspace-archive" && archiveOrigin) && !evaluationArchive {
+	servingArchive := spec.Source.Type == "serving-archive" && origin == domain.SubmissionOriginServing
+	if spec.Source.Type != "git" && spec.Source.Type != "workspace" && !(spec.Source.Type == "workspace-archive" && archiveOrigin) && !evaluationArchive && !servingArchive {
 		return domain.JobSpec{}, ErrSubmissionCodeSourceNotAllowed
 	}
 	return spec, nil

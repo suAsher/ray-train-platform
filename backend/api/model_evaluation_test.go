@@ -81,17 +81,27 @@ type evaluationSubmissionFake struct {
 	last              SubmissionInput
 	calls, preflights int
 	err               error
+	preflightErr      error
+	submitErr         error
 }
 
 func (s *evaluationSubmissionFake) Preflight(_ context.Context, in SubmissionInput) (SubmissionPreflightResult, error) {
 	s.last = in
 	s.preflights++
-	return SubmissionPreflightResult{Image: streamingTestImage, TrainingEngine: domain.TrainingEngineRayTrain, RayVersion: domain.RayVersionCanary, RequestedGPUs: in.Spec.Resources.GPUsPerWorker}, s.err
+	err := s.err
+	if s.preflightErr != nil {
+		err = s.preflightErr
+	}
+	return SubmissionPreflightResult{Image: streamingTestImage, TrainingEngine: domain.TrainingEngineRayTrain, RayVersion: domain.RayVersionCanary, RequestedGPUs: in.Spec.Resources.GPUsPerWorker}, err
 }
 func (s *evaluationSubmissionFake) Submit(_ context.Context, in SubmissionInput) (*domain.TrainingJob, error) {
 	s.last = in
 	s.calls++
-	return &domain.TrainingJob{ID: in.ReservedJobID, TenantID: in.Principal.TenantID, UserID: in.Principal.Subject, SubmissionOrigin: in.Origin, ExternalSubmissionID: in.ExternalSubmissionID, Spec: in.Spec}, s.err
+	err := s.err
+	if s.submitErr != nil {
+		err = s.submitErr
+	}
+	return &domain.TrainingJob{ID: in.ReservedJobID, TenantID: in.Principal.TenantID, UserID: in.Principal.Subject, SubmissionOrigin: in.Origin, ExternalSubmissionID: in.ExternalSubmissionID, Spec: in.Spec}, err
 }
 func evaluationTestHandler() (*Handler, *evaluationStoreFake, *evaluationSubmissionFake) {
 	ds, dv := streamingDatasetFixtures()

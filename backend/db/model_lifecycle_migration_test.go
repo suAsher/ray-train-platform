@@ -56,7 +56,7 @@ func TestPostgresModelLifecycleUpgradeFrom48(t *testing.T) {
 	if err := db.Raw("SELECT COUNT(*) FROM users WHERE id = 'user-a1'").Scan(&n).Error; err != nil || n != 1 {
 		t.Fatalf("identity lost %d %v", n, err)
 	}
-	if err := db.Raw("SELECT MAX(version) FROM schema_migrations").Scan(&old).Error; err != nil || old != 50 {
+	if err := db.Raw("SELECT MAX(version) FROM schema_migrations").Scan(&old).Error; err != nil || old != 52 {
 		t.Fatalf("new schema %d %v", old, err)
 	}
 }

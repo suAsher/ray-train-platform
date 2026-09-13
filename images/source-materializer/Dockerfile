@@ -18,5 +18,6 @@ USER 65532:65532
 WORKDIR /workspace
 COPY images/source-materializer/platform-safe-extract.py /usr/local/bin/platform-safe-extract.py
 COPY images/source-materializer/platform-fetch-evaluation-code.py /usr/local/bin/platform-fetch-evaluation-code.py
+COPY images/source-materializer/platform-fetch-serving-code.py /usr/local/bin/platform-fetch-serving-code.py
 COPY examples/dataset-cache/stage_dataset.py /usr/local/bin/platform-stage-dataset.py
 ENTRYPOINT ["/bin/sh"]

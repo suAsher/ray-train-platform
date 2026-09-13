@@ -20,6 +20,7 @@ const (
 	PATScopeExperimentsWrite = "experiments:write"
 	PATScopeMLflowWrite      = "mlflow:write"
 	PATScopeMLflowFull       = "mlflow:full"
+	PATScopeModelsInvoke     = "models:invoke"
 	PATScopeArtifactsRead    = "artifacts:read"
 	PATScopeArtifactsWrite   = "artifacts:write"
 
@@ -32,6 +33,7 @@ var allowedPATScopes = map[string]struct{}{
 	PATScopeJobsRead: {}, PATScopeJobsWrite: {}, PATScopeSourcesWrite: {},
 	PATScopeExperimentsRead: {}, PATScopeExperimentsWrite: {},
 	PATScopeMLflowWrite: {}, PATScopeMLflowFull: {}, PATScopeArtifactsRead: {}, PATScopeArtifactsWrite: {},
+	PATScopeModelsInvoke: {},
 }
 
 type PersonalAccessToken struct {

@@ -499,6 +499,10 @@ func (r *Reconciler) reconcileLoadedJob(ctx context.Context, job *domain.Trainin
 	if err != nil {
 		return err
 	}
+	job, err = r.restoreServingRuntime(ctx, job)
+	if err != nil {
+		return err
+	}
 	options, err := r.renderOptionsForJob(ctx, *job)
 	if err != nil {
 		return err

@@ -11,8 +11,8 @@ func TestEvaluationHelpPreservesQuestionsAndExplainsRealExecution(t *testing.T) 
 		t.Fatal(err)
 	}
 	articles := helpArticleTestByID(ProjectHelpArticles(withPlatformSeedActor(sources)))
-	if len(KnownHelpArticleIDs()) != 38 {
-		t.Fatalf("public question count got %d want 38", len(KnownHelpArticleIDs()))
+	if len(KnownHelpArticleIDs()) != 43 {
+		t.Fatalf("public question count got %d want 43", len(KnownHelpArticleIDs()))
 	}
 	for id, markers := range map[string][]string{
 		"model-evaluation-start":   {"评估方案", "READY", "val", "test", "latest", "配额", "权重", "SHA", "全部场地", "不可变", "TEAM", "普通成员", "源码 ZIP", "64 MiB", "evaluation_sdk.py", "内网", "不需要访问 Git", "代码不打进镜像", "预检不会创建", "确认并创建评估"},

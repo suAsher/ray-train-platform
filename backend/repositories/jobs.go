@@ -170,6 +170,11 @@ func (r *GormRepository) Create(ctx context.Context, job *domain.TrainingJob, id
 		NextAttemptAt: time.Now().UTC(),
 	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if job.SubmissionOrigin == domain.SubmissionOriginServing {
+			if err := lockServingSubmission(tx, job.ExternalSubmissionID); err != nil {
+				return err
+			}
+		}
 		if job.SubmissionOrigin == domain.SubmissionOriginEvaluation {
 			if err := lockEvaluationSubmission(tx, job.ExternalSubmissionID); err != nil {
 				return err
@@ -201,6 +206,11 @@ func (r *GormRepository) Create(ctx context.Context, job *domain.TrainingJob, id
 		}
 		if job.SubmissionOrigin == domain.SubmissionOriginEvaluation {
 			if err := validateEvaluationSubmissionReservation(tx, job); err != nil {
+				return err
+			}
+		}
+		if job.SubmissionOrigin == domain.SubmissionOriginServing {
+			if err := validateServingSubmissionReservation(tx, job); err != nil {
 				return err
 			}
 		}

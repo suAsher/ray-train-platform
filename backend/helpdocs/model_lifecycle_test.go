@@ -40,7 +40,7 @@ func TestModelLifecycleArticlesExposeUserWorkflowWithoutChangingSources(t *testi
 		}
 	}
 	maintenance := articles[modelMaintenanceArticleID].Markdown
-	for _, marker := range []string{"跨团队", "SuperAdmin", "归档", "恢复", "不可变", "原有权限", "Model Registry", "独立评估", "审批", "Serving", "尚未上线"} {
+	for _, marker := range []string{"跨团队", "SuperAdmin", "归档", "恢复", "不可变", "原有权限", "Model Registry", "独立评估", "审批", "Serving", "分别操作"} {
 		if !strings.Contains(maintenance, marker) {
 			t.Errorf("maintenance guidance missing %q", marker)
 		}

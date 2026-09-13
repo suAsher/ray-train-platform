@@ -8,7 +8,7 @@ const modelMaintenanceArticleID = "shared-model-maintenance"
 // Keep the original source catalog intact. Published documents with these IDs
 // take precedence over the built-in guides, including manually edited content.
 func withModelLifecycleDocuments(documents []domain.HelpDocument) []domain.HelpDocument {
-	out := make([]domain.HelpDocument, 0, len(documents)+4)
+	out := make([]domain.HelpDocument, 0, len(documents)+9)
 	out = append(out, documents...)
 	seen := make(map[string]bool, len(documents))
 	for _, document := range documents {
@@ -23,12 +23,12 @@ func withModelLifecycleDocuments(documents []domain.HelpDocument) []domain.HelpD
 }
 
 func modelLifecycleDocuments() []domain.HelpDocument {
-	return []domain.HelpDocument{
+	return append([]domain.HelpDocument{
 		{ID: modelRegistrationArticleID, Title: "如何把训练权重保存成共享模型版本？", Category: "调试与训练结果", SortOrder: 350, Markdown: modelRegistrationGuide, Version: 1, PublishedVersion: 1, UpdatedBy: PlatformSeedActor, Action: "summary"},
 		{ID: modelMaintenanceArticleID, Title: "模型谁能看，如何维护与归档？", Category: "调试与训练结果", SortOrder: 360, Markdown: modelMaintenanceGuide, Version: 1, PublishedVersion: 1, UpdatedBy: PlatformSeedActor, Action: "summary"},
 		{ID: modelEvaluationStartID, Title: "如何用固定数据版本评估一个模型？", Category: "调试与训练结果", SortOrder: 370, Markdown: modelEvaluationStartGuide, Version: 1, PublishedVersion: 1, UpdatedBy: PlatformSeedActor, Action: "summary"},
 		{ID: modelEvaluationResultsID, Title: "评估报告在哪里看，为什么不能比较？", Category: "调试与训练结果", SortOrder: 380, Markdown: modelEvaluationResultsGuide, Version: 1, PublishedVersion: 1, UpdatedBy: PlatformSeedActor, Action: "summary"},
-	}
+	}, modelReleaseServingDocuments()...)
 }
 
 const sharedModelsPublicSection = `### 共享模型入口
@@ -88,6 +88,6 @@ const modelMaintenanceGuide = `「实验中心 → 模型」向平台全部成�
 
 ### 与 MLflow 和后续流程的关系
 
-RayTrain 的共享模型目录不会自动写入 MLflow Model Registry。现有原生 MLflow 页面、SDK 和 Registry 继续按原有方式使用，见[如何调用 MLflow API 查询实验与 Run？](#mlflow-api-with-pat)。
+RayTrain 的共享模型目录不会在保存快照时自动写入 MLflow Model Registry。需要关联时，在 READY 版本操作中主动[关联 MLflow Model Registry](#model-registry-link)，核对返回的注册名称与版本。现有原生 MLflow 页面、SDK 和 Registry 继续按原有方式使用，见[如何调用 MLflow API 查询实验与 Run？](#mlflow-api-with-pat)。
 
-READY 只表示快照可用，不表示评估通过。需要独立评估时见[如何用固定数据版本评估一个模型？](#model-evaluation-start)。审批与 Serving 尚未上线；评估完成也不表示获准发布或推理服务已经部署。`
+READY 只表示快照可用，不表示评估通过。需要独立评估时见[如何用固定数据版本评估一个模型？](#model-evaluation-start)。后续[审批、正式发布与回滚](#model-release-review)和[Serving 推理服务](#model-serving-use)分别操作；评估完成不表示获准发布或推理服务已经部署。`

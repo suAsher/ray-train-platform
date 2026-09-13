@@ -164,6 +164,16 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	} else {
 		job.Spec.EvaluationRuntime = nil
 	}
+	if job.SubmissionOrigin == domain.SubmissionOriginServing {
+		if job.Spec.TrainingEngine.Resolved() != domain.TrainingEngineRayTrain || job.Spec.ServingRuntime == nil || job.Spec.Resources.WorkerReplicas != 1 || job.Spec.Resources.GPUsPerWorker != 1 || job.Spec.Managed.MaxFailures != 0 {
+			return nil, fmt.Errorf("serving requires one managed GPU worker, no automatic retries and trusted runtime")
+		}
+		if err := job.Spec.ServingRuntime.ValidateCodeSource(job.Spec.Source); err != nil {
+			return nil, err
+		}
+	} else {
+		job.Spec.ServingRuntime = nil
+	}
 	if job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain {
 		trainingEventBaseURL, err := validateTrainingEventBaseURL(options.TrainingEventBaseURL)
 		if err != nil {
@@ -177,12 +187,13 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 		options.managedResumePath = resumePath
 	}
 	evaluationArchive := job.SubmissionOrigin == domain.SubmissionOriginEvaluation && job.Spec.Source.Type == "evaluation-archive" && job.Spec.EvaluationRuntime != nil
-	if evaluationArchive {
+	servingArchive := job.SubmissionOrigin == domain.SubmissionOriginServing && job.Spec.Source.Type == "serving-archive" && job.Spec.ServingRuntime != nil
+	if evaluationArchive || servingArchive {
 		if err := validateEvaluationCodeBaseURL(options.TrainingEventBaseURL); err != nil {
 			return nil, err
 		}
 	}
-	if job.Spec.Source.Type != "git" && job.Spec.Source.Type != "workspace" && job.Spec.Source.Type != "workspace-archive" && !evaluationArchive {
+	if job.Spec.Source.Type != "git" && job.Spec.Source.Type != "workspace" && job.Spec.Source.Type != "workspace-archive" && !evaluationArchive && !servingArchive {
 		// Defense in depth for callers that bypass the HTTP submission service.
 		// Ray workloads must not receive object-store credentials just to obtain
 		// their source code.
@@ -376,15 +387,15 @@ func trainingEntrypoint(spec domain.JobSpec) []string {
 		"--checkpoint-keep-latest", strconv.Itoa(spec.Managed.Checkpoint.KeepLatest),
 		"--checkpoint-keep-best", strconv.Itoa(spec.Managed.Checkpoint.KeepBest),
 	}
-	if spec.EvaluationRuntime != nil {
+	if spec.EvaluationRuntime != nil || spec.ServingRuntime != nil {
 		// Keep immutable streaming mounts and authorization on the JobSpec, but
-		// let the evaluator read its selected val/test split. The managed driver
-		// must not initialize a training shard before the evaluation entrypoint.
+		// let the evaluator read its selected val/test split. Serving adapters
+		// likewise receive fixed weights and must not initialize training shards.
 		launcher = append(launcher, "--data-mode", "mount")
 	} else if spec.DataMode != "" {
 		launcher = append(launcher, "--data-mode", string(spec.DataMode))
 	}
-	if spec.EvaluationRuntime == nil && (spec.DataMode == domain.DataModeRayData || spec.DataMode == domain.DataModeRayDataStage) {
+	if spec.EvaluationRuntime == nil && spec.ServingRuntime == nil && (spec.DataMode == domain.DataModeRayData || spec.DataMode == domain.DataModeRayDataStage) {
 		launcher = append(launcher,
 			"--dataset-format", string(spec.Managed.RayData.Format()),
 			"--dataset-uri", spec.Managed.RayData.URI(),
@@ -392,7 +403,7 @@ func trainingEntrypoint(spec domain.JobSpec) []string {
 	}
 	launcher = append(launcher, "--")
 	launcher = append(launcher, command...)
-	if spec.EvaluationRuntime == nil && spec.DataMode == domain.DataModeStreaming && spec.DatasetRef.Sites != "" {
+	if spec.EvaluationRuntime == nil && spec.ServingRuntime == nil && spec.DataMode == domain.DataModeStreaming && spec.DatasetRef.Sites != "" {
 		return append([]string{"python", "-I", "-c", streamingSiteRuntimeGuard}, launcher...)
 	}
 	return launcher
@@ -751,6 +762,7 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, tenantID 
 		volumeMounts, volumes, env = appendTrainingEventCredential(volumeMounts, volumes, env, options)
 		if !head && containerName == "ray-worker" {
 			env = appendEvaluationRuntime(env, jobSpec.EvaluationRuntime, options)
+			env = appendServingRuntime(env, jobSpec.ServingRuntime, options)
 		}
 	}
 	if materializeSource && (source.Type == "workspace" || source.Type == "workspace-archive") {
@@ -759,7 +771,7 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, tenantID 
 			volumes = append(volumes, pvcVolume("workspace-snapshot-source", personal.ClaimName, true))
 		}
 	}
-	if materializeSource && source.Type == "evaluation-archive" {
+	if materializeSource && (source.Type == "evaluation-archive" || source.Type == "serving-archive") {
 		volumes = append(volumes, evaluationSourceCredentialVolume(options.trainingEventJobID))
 	}
 	if mountData && options.LocalCache.runtime {
@@ -822,6 +834,9 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, tenantID 
 		}
 	} else if jobSpec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain && containerName == "ray-worker" {
 		container["ports"] = []any{map[string]any{"name": "metrics", "containerPort": int64(8080), "protocol": "TCP"}}
+		if jobSpec.ServingRuntime != nil {
+			container["ports"] = append(container["ports"].([]any), map[string]any{"name": "model-http", "containerPort": int64(8000), "protocol": "TCP"})
+		}
 	}
 	podSpec := map[string]any{
 		"serviceAccountName":           options.ServiceAccount,
@@ -832,7 +847,7 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, tenantID 
 	}
 	if materializeSource {
 		podSpec["initContainers"] = []any{sourceMaterializer(tenantID, source, jobSpec, options)}
-		if source.Type == "evaluation-archive" {
+		if source.Type == "evaluation-archive" || source.Type == "serving-archive" {
 			podSpec["securityContext"].(map[string]any)["fsGroup"] = int64(1000)
 		}
 	}
@@ -1242,6 +1257,8 @@ func sourceMaterializer(tenantID string, source domain.CodeSource, jobSpec domai
 		command += "python3 /usr/local/bin/platform-safe-extract.py --archive " + shellQuote(archivePath) + " --destination /workspace\n"
 	case "evaluation-archive":
 		command += evaluationCodeMaterializerCommand(jobSpec, options)
+	case "serving-archive":
+		command += servingCodeMaterializerCommand(jobSpec, options)
 	}
 	env := []any{}
 	if source.Type == "git" && options.GitCredentialSecret != "" {
@@ -1255,7 +1272,7 @@ func sourceMaterializer(tenantID string, source domain.CodeSource, jobSpec domai
 		}
 	}
 	volumeMounts := []any{map[string]any{"name": "workspace", "mountPath": "/workspace"}}
-	if source.Type == "evaluation-archive" {
+	if source.Type == "evaluation-archive" || source.Type == "serving-archive" {
 		volumeMounts = append(volumeMounts, map[string]any{"name": "evaluation-source-events", "mountPath": trainingEventTokenMountPath, "readOnly": true})
 	}
 	if source.Type == "workspace" || source.Type == "workspace-archive" {
