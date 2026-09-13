@@ -143,6 +143,7 @@ spec:
       {{- end }}
       securityContext:
         runAsNonRoot: true
+        fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -391,9 +392,13 @@ spec:
               value: "20"
             - name: RAY_API_SPOOL_DIR
               value: "/var/lib/ray-platform/ray-packages"
+            - name: TMPDIR
+              value: "/var/lib/ray-platform/code-snapshots"
           volumeMounts:
             - name: ray-api-spool
               mountPath: /var/lib/ray-platform/ray-packages
+            - name: code-snapshot-spool
+              mountPath: /var/lib/ray-platform/code-snapshots
           readinessProbe:
             httpGet:
               path: /readyz
@@ -413,6 +418,9 @@ spec:
         - name: ray-api-spool
           emptyDir:
             sizeLimit: 3Gi
+        - name: code-snapshot-spool
+          emptyDir:
+            sizeLimit: 1Gi
 ---
 apiVersion: v1
 kind: Service
