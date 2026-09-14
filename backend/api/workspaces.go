@@ -131,7 +131,9 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 		h.writeError(c, http.StatusConflict, "WORKSPACE_CREATE_FAILED", "could not persist workspace")
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
+	// The identity is durable now. Finish creating or recording cleanup intent
+	// even when the browser closes, while retaining a bounded execution budget.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 2*time.Minute)
 	defer cancel()
 	var failure *workspaceOperationError
 	err = lifecycle.WithWorkspaceOperation(ctx, workspace.ID, workspace.TenantID, func(locked *domain.DevWorkspace, setState func(domain.WorkspaceState) error) error {
@@ -159,7 +161,7 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 		return nil
 	})
 	if err != nil {
-		h.writeError(c, http.StatusInternalServerError, "WORKSPACE_STATE_FAILED", "could not finalize workspace launch; refresh its state before retrying")
+		h.recoverWorkspaceLaunch(c, lifecycle, workspace, err)
 		return
 	}
 	if failure != nil {

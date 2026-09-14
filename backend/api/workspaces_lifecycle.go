@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"time"
 
@@ -21,6 +22,20 @@ var _ workspaceLifecycleStore = (*repositories.GormRepository)(nil)
 type workspaceOperationError struct {
 	status        int
 	code, message string
+}
+
+// A rolled-back runtime operation can still have created Kubernetes resources.
+// Keep its durable identity and quota until an explicit stop finishes cleanup.
+func (h *Handler) recoverWorkspaceLaunch(c *gin.Context, store workspaceLifecycleStore, workspace *domain.DevWorkspace, operationErr error) {
+	log.Printf("workspace launch operation failed workspace=%q tenant=%q: %v", workspace.ID, workspace.TenantID, operationErr)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 5*time.Second)
+	defer cancel()
+	if _, err := store.BeginWorkspaceStop(ctx, workspace.ID, workspace.TenantID); err != nil {
+		log.Printf("workspace launch recovery failed workspace=%q tenant=%q: %v", workspace.ID, workspace.TenantID, err)
+		h.writeError(c, http.StatusInternalServerError, "WORKSPACE_RECOVERY_FAILED", "could not finish launching or record cleanup; ask a platform administrator to check this workspace")
+		return
+	}
+	h.writeError(c, http.StatusInternalServerError, "WORKSPACE_STATE_FAILED", "could not finish launching the workspace; retry stopping it to clean up before launching again")
 }
 
 // completeWorkspaceStop is shared by owner and administrator routes after each
