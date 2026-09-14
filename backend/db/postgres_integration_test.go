@@ -709,6 +709,7 @@ func TestPostgresPermanentMLflowPATMigrationUpgradeAndConstraints(t *testing.T) 
 	for _, sql := range []string{
 		`INSERT INTO tenants(id,name,namespace,local_queue) VALUES('permanent-team','Permanent','permanent-team','permanent-team')`,
 		`INSERT INTO users(id,oidc_subject,username,tenant_id) VALUES('permanent-user','permanent-user','permanent-user','permanent-team'),('integration:machine','integration:machine','machine','permanent-team')`,
+		`INSERT INTO local_users(id,username,tenant_id,active_tenant_id,storage_key,password_hash) VALUES('permanent-user','permanent-user','permanent-team','permanent-team','permanent-user','!external-only'),('integration:machine','machine','permanent-team','permanent-team','machine','!external-only')`,
 		`INSERT INTO identity_tenant_ownerships(identity_id,tenant_id) VALUES('permanent-user','permanent-team'),('integration:machine','permanent-team')`,
 		`INSERT INTO personal_access_tokens(id,public_id,user_id,tenant_id,token_digest,scopes,expires_at) VALUES('finite','finite','permanent-user','permanent-team',repeat('f',64),'["jobs:read"]','2027-01-01T00:00:00Z')`,
 	} {
