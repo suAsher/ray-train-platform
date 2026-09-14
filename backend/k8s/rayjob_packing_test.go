@@ -7,9 +7,8 @@ import (
 	"ray-train-platform-backend/domain"
 )
 
-// TAS accounts for other workloads before assigning hosts. Ask Kueue to prefer
-// a hostname-level fit, and do not add a Kubernetes spread rule which can
-// reject the hosts already reserved by TAS.
+// TAS accounts for other workloads before assigning hosts. Do not add a
+// Kubernetes spread rule which can reject the hosts already reserved by TAS.
 func TestRayJobTASPackingDoesNotConflictWithPodPlacement(t *testing.T) {
 	for _, engine := range []domain.TrainingEngine{domain.TrainingEngineRayDDP, domain.TrainingEngineRayTrain} {
 		for _, replicas := range []int{1, 2} {
@@ -39,10 +38,10 @@ func TestRayJobTASPackingDoesNotConflictWithPodPlacement(t *testing.T) {
 					workers, _, _ := nestedSlice(manifest.Object, "spec", "rayClusterSpec", "workerGroupSpecs")
 					worker := workers[0].(map[string]any)
 					annotations, _, _ := nestedMap(worker, "template", "metadata", "annotations")
-					if annotations["kueue.x-k8s.io/podset-preferred-topology"] != "kubernetes.io/hostname" {
-						t.Errorf("worker must select hostname-level TAS packing: %#v", annotations)
+					if annotations["kueue.x-k8s.io/podset-unconstrained-topology"] != "true" {
+						t.Errorf("worker must select TAS least-free-capacity packing: %#v", annotations)
 					}
-					for _, key := range []string{"kueue.x-k8s.io/podset-unconstrained-topology", "kueue.x-k8s.io/podset-required-topology"} {
+					for _, key := range []string{"kueue.x-k8s.io/podset-preferred-topology", "kueue.x-k8s.io/podset-required-topology"} {
 						if _, found := annotations[key]; found {
 							t.Errorf("conflicting topology intent %s", key)
 						}
