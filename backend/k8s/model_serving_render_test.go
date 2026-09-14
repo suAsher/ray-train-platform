@@ -37,6 +37,10 @@ func TestServingRenderMaterializesOnlySubmitterAndInjectsOnlyWorker(t *testing.T
 	}
 	workerTemplate, _, _ := nestedMap(workers[0].(map[string]any), "template")
 	worker, _, _ := nestedMap(workerTemplate, "spec")
+	workerSecurity, _, _ := nestedMap(worker, "securityContext")
+	if workerSecurity["fsGroup"] != int64(1000) {
+		t.Fatal("non-root serving worker cannot read its mounted job credential without a filesystem group")
+	}
 	labels, _, _ := nestedMap(workerTemplate, "metadata", "labels")
 	if labels["platform_job_id"] != job.ID {
 		t.Fatal("Service task selector is absent from actual worker manifest")
