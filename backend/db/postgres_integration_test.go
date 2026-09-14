@@ -26,7 +26,7 @@ func TestPostgresMigrationsIntegration(t *testing.T) {
 	if err := database.Raw("SELECT version FROM schema_migrations ORDER BY version").Scan(&versions).Error; err != nil {
 		t.Fatalf("load migration versions: %v", err)
 	}
-	if want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53}; !reflectIntSlicesEqual(versions, want) {
+	if want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54}; !reflectIntSlicesEqual(versions, want) {
 		t.Fatalf("migration versions = %v, want %v", versions, want)
 	}
 
@@ -701,4 +701,59 @@ func reflectIntSlicesEqual(left, right []int) bool {
 		}
 	}
 	return true
+}
+
+func TestPostgresPermanentMLflowPATMigrationUpgradeAndConstraints(t *testing.T) {
+	database := openPostgresTestSchema(t)
+	applyPostgresMigrationsThrough(t, database, 53)
+	for _, sql := range []string{
+		`INSERT INTO tenants(id,name,namespace,local_queue) VALUES('permanent-team','Permanent','permanent-team','permanent-team')`,
+		`INSERT INTO users(id,oidc_subject,username,tenant_id) VALUES('permanent-user','permanent-user','permanent-user','permanent-team'),('integration:machine','integration:machine','machine','permanent-team')`,
+		`INSERT INTO identity_tenant_ownerships(identity_id,tenant_id) VALUES('permanent-user','permanent-team'),('integration:machine','permanent-team')`,
+		`INSERT INTO personal_access_tokens(id,public_id,user_id,tenant_id,token_digest,scopes,expires_at) VALUES('finite','finite','permanent-user','permanent-team',repeat('f',64),'["jobs:read"]','2027-01-01T00:00:00Z')`,
+	} {
+		if err := database.Exec(sql).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := ApplyMigrations(database); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var expiry time.Time
+	if err := database.Raw(`SELECT expires_at FROM personal_access_tokens WHERE id='finite'`).Scan(&expiry).Error; err != nil || !expiry.Equal(time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("finite expiry changed=%s err=%v", expiry, err)
+	}
+	for i, tc := range []struct {
+		scopes, user string
+		allowed      bool
+	}{
+		{`["mlflow:full"]`, "permanent-user", true},
+		{`["jobs:read"]`, "permanent-user", false},
+		{`["mlflow:full","jobs:read"]`, "permanent-user", false},
+		{`["mlflow:full","mlflow:full"]`, "permanent-user", false},
+		{`[]`, "permanent-user", false},
+		{`["mlflow:full"]`, "integration:machine", false},
+	} {
+		id := fmt.Sprintf("nullable-%d", i)
+		err := database.Exec(`INSERT INTO personal_access_tokens(id,public_id,user_id,tenant_id,token_digest,scopes,expires_at) VALUES(?,?,?,'permanent-team',repeat('f',64),?::jsonb,NULL)`, id, id, tc.user, tc.scopes).Error
+		if (err == nil) != tc.allowed {
+			t.Fatalf("scope=%s user=%s allowed=%t err=%v", tc.scopes, tc.user, tc.allowed, err)
+		}
+	}
+	var expiresAt *time.Time
+	if err := database.Raw(`SELECT expires_at FROM personal_access_tokens WHERE id='nullable-0'`).Row().Scan(&expiresAt); err != nil || expiresAt != nil {
+		t.Fatalf("permanent expiry=%v err=%v", expiresAt, err)
+	}
+	if err := database.Exec(`UPDATE personal_access_tokens SET scopes='["jobs:read"]'::jsonb WHERE id='nullable-0'`).Error; err == nil {
+		t.Fatal("constraint allowed permanent scope widening")
+	}
+	// The preceding application represented expiry with time.Time. Reading SQL
+	// NULL leaves that zero value, so its existing !ExpiresAt.After(now) check
+	// rejects a new permanent token rather than accidentally accepting it.
+	var legacy struct{ ExpiresAt time.Time }
+	if err := database.Raw(`SELECT expires_at FROM personal_access_tokens WHERE id='nullable-0'`).Scan(&legacy).Error; err == nil && legacy.ExpiresAt.After(time.Now()) {
+		t.Fatal("legacy reader accepted null expiry")
+	}
 }

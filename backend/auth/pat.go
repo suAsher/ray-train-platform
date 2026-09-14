@@ -19,7 +19,7 @@ type PATRecord struct {
 	Digest     string `json:"-"`
 	Principal  Principal
 	Scopes     []string
-	ExpiresAt  time.Time
+	ExpiresAt  *time.Time
 	RevokedAt  *time.Time
 	LastUsedAt *time.Time
 }
@@ -82,7 +82,7 @@ func (a *PATAuthenticator) Authenticate(ctx context.Context, rawToken string) (P
 		return PATIdentity{}, ErrInvalidPAT
 	}
 	now := a.now().UTC()
-	if record.RevokedAt != nil || !record.ExpiresAt.After(now) {
+	if record.RevokedAt != nil || (record.ExpiresAt != nil && !record.ExpiresAt.After(now)) {
 		return PATIdentity{}, ErrInvalidPAT
 	}
 	if !domain.VerifyPersonalAccessToken(a.pepper, rawToken, record.Digest) {
@@ -90,6 +90,9 @@ func (a *PATAuthenticator) Authenticate(ctx context.Context, rawToken string) (P
 	}
 	scopes, err := domain.NormalizePATScopes(record.Scopes)
 	if err != nil || record.Principal.Subject == "" || record.Principal.TenantID == "" {
+		return PATIdentity{}, ErrInvalidPAT
+	}
+	if record.ExpiresAt == nil && (record.Principal.IntegrationID != "" || !domain.AllowsNonExpiringPAT(scopes, record.Principal.Subject)) {
 		return PATIdentity{}, ErrInvalidPAT
 	}
 	if err := a.store.TouchPATLastUsed(ctx, publicID, now); err != nil {

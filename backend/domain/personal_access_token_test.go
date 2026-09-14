@@ -140,3 +140,38 @@ func TestRedactPersonalAccessTokenKeepsOnlyPublicID(t *testing.T) {
 		t.Fatalf("malformed token must redact to empty string, got %q", got)
 	}
 }
+
+func TestPersonalAccessTokenNeverExpiresOnlyForExplicitHumanMLflowFull(t *testing.T) {
+	now := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name, user         string
+		scopes             []string
+		never              bool
+		expiry             time.Time
+		allowed, permanent bool
+	}{
+		{"permanent full", "user-a", []string{PATScopeMLflowFull}, true, time.Time{}, true, true},
+		{"default full", "user-a", []string{PATScopeMLflowFull}, false, time.Time{}, true, false},
+		{"default jobs", "user-a", []string{PATScopeJobsRead}, false, time.Time{}, true, false},
+		{"permanent jobs rejected", "user-a", []string{PATScopeJobsRead}, true, time.Time{}, false, false},
+		{"mixed rejected", "user-a", []string{PATScopeMLflowFull, PATScopeJobsRead}, true, time.Time{}, false, false},
+		{"integration rejected", "integration:one", []string{PATScopeMLflowFull}, true, time.Time{}, false, false},
+		{"conflict rejected", "user-a", []string{PATScopeMLflowFull}, true, now.Add(time.Hour), false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			issued, err := IssuePersonalAccessToken(PersonalAccessTokenInput{ID: "pat", TenantID: "team", UserID: tc.user, Scopes: tc.scopes, NeverExpires: tc.never, ExpiresAt: tc.expiry}, testPATPepper(), now)
+			if (err == nil) != tc.allowed {
+				t.Fatalf("allowed=%t error=%v", tc.allowed, err)
+			}
+			if err != nil {
+				return
+			}
+			if (issued.ExpiresAt == nil) != tc.permanent {
+				t.Fatal("wrong expiry mode")
+			}
+			if !tc.permanent && !issued.ExpiresAt.Equal(now.Add(90*24*time.Hour)) {
+				t.Fatal("default finite expiry changed")
+			}
+		})
+	}
+}

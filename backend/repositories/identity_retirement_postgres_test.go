@@ -66,7 +66,8 @@ func TestIdentityWritersWaitForTenantRetirementPostgres(t *testing.T) {
 				case "session":
 					result <- repo.CreateLocalSession(ctx, domain.LocalSession{ID: operation, PublicID: operation, UserID: operation, TenantID: operation}, "digest")
 				case "PAT":
-					result <- repo.CreatePersonalAccessToken(ctx, domain.PersonalAccessToken{ID: operation, PublicID: operation, UserID: operation, TenantID: operation, Scopes: []string{"jobs:read"}}, strings.Repeat("a", 64))
+					expiresAt := time.Now().Add(time.Hour)
+					result <- repo.CreatePersonalAccessToken(ctx, domain.PersonalAccessToken{ID: operation, PublicID: operation, UserID: operation, TenantID: operation, Scopes: []string{"jobs:read"}, ExpiresAt: &expiresAt}, strings.Repeat("a", 64))
 				}
 			}()
 			select {

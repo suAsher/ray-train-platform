@@ -30,7 +30,8 @@ func TestRetiredTenantRejectsIdentityAndCredentials(t *testing.T) {
 			if err := repo.CreateLocalSession(ctx, session, "digest"); err != nil {
 				t.Fatal(err)
 			}
-			token := domain.PersonalAccessToken{ID: "t1", PublicID: "pt1", UserID: "user-a", TenantID: "tenant-a", Scopes: []string{"jobs:read"}, ExpiresAt: time.Now().Add(time.Hour)}
+			expiresAt := time.Now().Add(time.Hour)
+			token := domain.PersonalAccessToken{ID: "t1", PublicID: "pt1", UserID: "user-a", TenantID: "tenant-a", Scopes: []string{"jobs:read"}, ExpiresAt: &expiresAt}
 			if err := repo.CreatePersonalAccessToken(ctx, token, strings.Repeat("a", 64)); err != nil {
 				t.Fatal(err)
 			}

@@ -34,7 +34,8 @@ func TestTenantRetirementPreservesHistoryAndRevokesCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	if err := r.db.Create(&PersonalAccessTokenRecord{ID: "pat", PublicID: "pat", TenantID: "tenant-a", UserID: "user-a", ExpiresAt: now.Add(time.Hour)}).Error; err != nil {
+	expiresAt := now.Add(time.Hour)
+	if err := r.db.Create(&PersonalAccessTokenRecord{ID: "pat", PublicID: "pat", TenantID: "tenant-a", UserID: "user-a", ExpiresAt: &expiresAt}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := r.db.Create(&LocalSessionRecord{ID: "session", PublicID: "session", TenantID: "tenant-a", UserID: "user-a", ExpiresAt: now.Add(time.Hour)}).Error; err != nil {

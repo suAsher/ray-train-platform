@@ -226,3 +226,104 @@ func TestPersonalAccessTokenRepositoryThrottlesLastUsedUpdatesForFiveMinutes(t *
 		t.Fatalf("last_used_at did not update after five minutes: %v", row.LastUsedAt)
 	}
 }
+
+func TestPermanentPersonalAccessTokenRoundTripAndAccountGuards(t *testing.T) {
+	for _, state := range []string{"active", "disabled", "decommissioned", "inactive membership", "retired tenant", "revoked"} {
+		t.Run(state, func(t *testing.T) {
+			repo := patTestRepository(t)
+			if err := repo.db.AutoMigrate(&LocalUserRecord{}, &TenantMembershipRecord{}); err != nil {
+				t.Fatal(err)
+			}
+			ensurePATIdentity(t, repo, "tenant-a", "user-a")
+			if err := repo.CreateLocalUser(context.Background(), domain.LocalUser{ID: "user-a", Username: "user-a", StorageKey: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, PasswordHash: "!external-only", IdentityProvider: domain.IdentityProviderOAuth2Proxy}); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UTC()
+			pepper := []byte("0123456789abcdef0123456789abcdef")
+			issued, err := domain.IssuePersonalAccessToken(domain.PersonalAccessTokenInput{ID: "permanent", TenantID: "tenant-a", UserID: "user-a", Scopes: []string{domain.PATScopeMLflowFull}, NeverExpires: true}, pepper, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = repo.CreatePersonalAccessToken(context.Background(), issued.PersonalAccessToken, issued.Digest); err != nil {
+				t.Fatal(err)
+			}
+			var nullCount int64
+			if err = repo.db.Model(&PersonalAccessTokenRecord{}).Where("id = ? AND expires_at IS NULL", issued.ID).Count(&nullCount).Error; err != nil || nullCount != 1 {
+				t.Fatalf("SQL NULL count=%d err=%v", nullCount, err)
+			}
+			items, err := repo.ListPersonalAccessTokens(context.Background(), "tenant-a", "user-a")
+			if err != nil || len(items) != 1 || items[0].ExpiresAt != nil {
+				t.Fatalf("nullable expiry did not roundtrip: %v", err)
+			}
+			switch state {
+			case "disabled":
+				err = repo.db.Model(&LocalUserRecord{}).Where("id = ?", "user-a").Update("disabled", true).Error
+			case "decommissioned":
+				err = repo.db.Model(&LocalUserRecord{}).Where("id = ?", "user-a").Update("decommissioned_at", now).Error
+			case "inactive membership":
+				err = repo.db.Model(&TenantMembershipRecord{}).Where("identity_id = ?", "user-a").Update("status", domain.MembershipStatusInactive).Error
+			case "retired tenant":
+				err = repo.db.Model(&TenantRecord{}).Where("id = ?", "tenant-a").Update("retired_at", now).Error
+			case "revoked":
+				err = repo.RevokePersonalAccessToken(context.Background(), "tenant-a", "user-a", issued.ID, now)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			authenticator, err := auth.NewPATAuthenticator(repo, pepper, func() time.Time { return now.AddDate(100, 0, 0) })
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = authenticator.Authenticate(context.Background(), issued.Token)
+			if state == "active" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if !errors.Is(err, auth.ErrInvalidPAT) {
+				t.Fatalf("state=%s expected invalid PAT got %v", state, err)
+			}
+		})
+	}
+}
+
+func TestPersonalAccessTokenRepositoryRejectsInvalidPermanentMetadata(t *testing.T) {
+	repo := patTestRepository(t)
+	ensurePATIdentity(t, repo, "tenant-a", "user-a")
+	for _, user := range []string{"user-a", "integration:one"} {
+		for _, scopes := range [][]string{{domain.PATScopeJobsRead}, {domain.PATScopeMLflowFull, domain.PATScopeJobsRead}, {domain.PATScopeMLflowFull}} {
+			if user == "user-a" && len(scopes) == 1 && scopes[0] == domain.PATScopeMLflowFull {
+				continue
+			}
+			err := repo.CreatePersonalAccessToken(context.Background(), domain.PersonalAccessToken{ID: "bad", PublicID: "bad", TenantID: "tenant-a", UserID: user, Scopes: scopes}, strings.Repeat("f", 64))
+			if err == nil {
+				t.Fatalf("invalid permanent metadata accepted user=%s scopes=%v", user, scopes)
+			}
+		}
+	}
+}
+
+func TestFinitePersonalAccessTokenCannotFallBackPastDisabledLocalAccount(t *testing.T) {
+	for _, column := range []string{"disabled", "decommissioned_at"} {
+		t.Run(column, func(t *testing.T) {
+			repo := patTestRepository(t)
+			if err := repo.db.AutoMigrate(&LocalUserRecord{}, &TenantMembershipRecord{}); err != nil {
+				t.Fatal(err)
+			}
+			ensurePATIdentity(t, repo, "tenant-a", "user-a")
+			if err := repo.CreateLocalUser(context.Background(), domain.LocalUser{ID: "user-a", Username: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, PasswordHash: "!external-only"}); err != nil {
+				t.Fatal(err)
+			}
+			issued := issueRepositoryPAT(t, repo, "tenant-a", "user-a", time.Now().UTC())
+			var value any = true
+			if column == "decommissioned_at" {
+				value = time.Now().UTC()
+			}
+			if err := repo.db.Model(&LocalUserRecord{}).Where("id = ?", "user-a").Update(column, value).Error; err != nil {
+				t.Fatal(err)
+			}
+			if _, err := repo.FindPATByPublicID(context.Background(), issued.PublicID); !errors.Is(err, auth.ErrPATNotFound) {
+				t.Fatalf("disabled account fell back to legacy users: %v", err)
+			}
+		})
+	}
+}

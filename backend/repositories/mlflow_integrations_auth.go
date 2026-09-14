@@ -44,7 +44,7 @@ func (r *GormRepository) findIntegrationPAT(ctx context.Context, publicID string
 	if err != nil {
 		return auth.PATRecord{}, auth.ErrPATNotFound
 	}
-	return auth.PATRecord{PublicID: token.PublicID, Digest: token.TokenDigest, Principal: auth.Principal{Subject: "integration:" + identity.ID, Username: identity.Name, TenantID: identity.TenantID, IntegrationID: identity.ID}, Scopes: scopes, ExpiresAt: token.ExpiresAt, RevokedAt: token.RevokedAt, LastUsedAt: token.LastUsedAt}, nil
+	return auth.PATRecord{PublicID: token.PublicID, Digest: token.TokenDigest, Principal: auth.Principal{Subject: "integration:" + identity.ID, Username: identity.Name, TenantID: identity.TenantID, IntegrationID: identity.ID}, Scopes: scopes, ExpiresAt: &token.ExpiresAt, RevokedAt: token.RevokedAt, LastUsedAt: token.LastUsedAt}, nil
 }
 func (r *GormRepository) touchIntegrationPAT(ctx context.Context, publicID string, usedAt time.Time) error {
 	tx := r.db.WithContext(ctx)

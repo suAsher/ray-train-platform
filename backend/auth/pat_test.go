@@ -92,7 +92,7 @@ func TestPATAuthenticatorRejectsWrongExpiredAndRevokedTokens(t *testing.T) {
 		record PATRecord
 	}{
 		{name: "wrong secret", token: wrongToken, record: PATRecord{PublicID: issued.PublicID, Digest: issued.Digest, ExpiresAt: issued.ExpiresAt}},
-		{name: "expired", token: issued.Token, record: PATRecord{PublicID: issued.PublicID, Digest: issued.Digest, ExpiresAt: now}},
+		{name: "expired", token: issued.Token, record: PATRecord{PublicID: issued.PublicID, Digest: issued.Digest, ExpiresAt: &now}},
 		{name: "revoked", token: issued.Token, record: PATRecord{PublicID: issued.PublicID, Digest: issued.Digest, ExpiresAt: issued.ExpiresAt, RevokedAt: &revokedAt}},
 	}
 	for _, tc := range cases {
@@ -176,5 +176,51 @@ func TestPATIdentityHasOnlyAllowedNormalizedScopes(t *testing.T) {
 	identity := PATIdentity{Scopes: []string{domain.PATScopeSourcesWrite, domain.PATScopeJobsRead}}
 	if !identity.HasScope(domain.PATScopeJobsRead) || identity.HasScope("admin:all") {
 		t.Fatalf("unexpected scope evaluation: %+v", identity.Scopes)
+	}
+}
+
+func TestPATAuthenticatorNeverExpiresRetainsScopeAndRevocationGuards(t *testing.T) {
+	now := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
+	issued, err := domain.IssuePersonalAccessToken(domain.PersonalAccessTokenInput{ID: "permanent", TenantID: "tenant-a", UserID: "user-a", Scopes: []string{domain.PATScopeMLflowFull}, NeverExpires: true}, authTestPepper(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	future := now.AddDate(100, 0, 0)
+	for _, tc := range []struct {
+		name                 string
+		scopes               []string
+		revoked              bool
+		subject, integration string
+		allowed              bool
+	}{
+		{"far future full", []string{domain.PATScopeMLflowFull}, false, "user-a", "", true},
+		{"revoked", []string{domain.PATScopeMLflowFull}, true, "user-a", "", false},
+		{"jobs", []string{domain.PATScopeJobsRead}, false, "user-a", "", false},
+		{"mixed", []string{domain.PATScopeMLflowFull, domain.PATScopeJobsRead}, false, "user-a", "", false},
+		{"integration id", []string{domain.PATScopeMLflowFull}, false, "user-a", "one", false},
+		{"integration subject", []string{domain.PATScopeMLflowFull}, false, "integration:one", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			record := validPATRecord(issued)
+			record.Scopes = tc.scopes
+			record.Principal.Subject = tc.subject
+			record.Principal.IntegrationID = tc.integration
+			if tc.revoked {
+				record.RevokedAt = &now
+			}
+			store := &fakePATStore{record: record}
+			authenticator, err := NewPATAuthenticator(store, authTestPepper(), func() time.Time { return future })
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = authenticator.Authenticate(context.Background(), issued.Token)
+			if tc.allowed {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if !errors.Is(err, ErrInvalidPAT) {
+				t.Fatalf("expected invalid PAT, got %v", err)
+			}
+		})
 	}
 }

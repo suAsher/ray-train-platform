@@ -75,7 +75,7 @@ func integrationTokenValue(row MLflowIntegrationTokenRecord, identity MLflowInte
 	if err != nil {
 		return domain.PersonalAccessToken{}, err
 	}
-	return domain.PersonalAccessToken{ID: row.ID, PublicID: row.PublicID, TenantID: identity.TenantID, UserID: "integration:" + identity.ID, Scopes: scopes, ExpiresAt: row.ExpiresAt, LastUsedAt: row.LastUsedAt, RevokedAt: row.RevokedAt, CreatedAt: row.CreatedAt}, nil
+	return domain.PersonalAccessToken{ID: row.ID, PublicID: row.PublicID, TenantID: identity.TenantID, UserID: "integration:" + identity.ID, Scopes: scopes, ExpiresAt: &row.ExpiresAt, LastUsedAt: row.LastUsedAt, RevokedAt: row.RevokedAt, CreatedAt: row.CreatedAt}, nil
 }
 func (s *MLflowIntegrationStore) ListTokens(ctx context.Context, p auth.Principal, id string) ([]domain.PersonalAccessToken, error) {
 	tx := s.db.WithContext(ctx)
@@ -102,7 +102,7 @@ func (s *MLflowIntegrationStore) CreateToken(ctx context.Context, p auth.Princip
 	if err != nil {
 		return err
 	}
-	if !integrations.ValidID(token.ID) || token.TenantID != p.TenantID || token.UserID != "integration:"+id || token.RevokedAt != nil || !token.ExpiresAt.After(time.Now().UTC()) || !token.ExpiresAt.After(token.CreatedAt) || token.ExpiresAt.After(token.CreatedAt.Add(30*24*time.Hour)) {
+	if !integrations.ValidID(token.ID) || token.TenantID != p.TenantID || token.UserID != "integration:"+id || token.RevokedAt != nil || token.ExpiresAt == nil || !token.ExpiresAt.After(time.Now().UTC()) || !token.ExpiresAt.After(token.CreatedAt) || token.ExpiresAt.After(token.CreatedAt.Add(30*24*time.Hour)) {
 		return integrations.ErrInvalid
 	}
 	if _, err := hex.DecodeString(digest); err != nil || len(digest) != 64 || len(token.PublicID) != 16 {

@@ -303,3 +303,13 @@ func TestIntegrationTokenListPreservesActiveCredentialsBeforeRevokedHistory(t *t
 		t.Fatalf("active credential hidden behind history: first=%+v", tokens[0])
 	}
 }
+
+func TestIntegrationTokenStoreRejectsMissingExpiry(t *testing.T) {
+	_, store, principal := integrationFixture(t)
+	identity := createIntegrationFixture(t, store, principal)
+	now := time.Now().UTC()
+	token := domain.PersonalAccessToken{ID: strings.Repeat("b", 32), PublicID: "1234567890123456", UserID: "integration:" + identity.ID, TenantID: principal.TenantID, Scopes: []string{"experiments:read"}, CreatedAt: now}
+	if err := store.CreateToken(context.Background(), principal, identity.ID, token, strings.Repeat("f", 64)); err == nil {
+		t.Fatal("integration token accepted nil expiry")
+	}
+}

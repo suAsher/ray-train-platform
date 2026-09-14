@@ -25,7 +25,7 @@ type PersonalAccessTokenRecord struct {
 	TenantID    string `gorm:"column:tenant_id;index"`
 	TokenDigest string `gorm:"column:token_digest"`
 	ScopesJSON  string `gorm:"column:scopes;type:jsonb"`
-	ExpiresAt   time.Time
+	ExpiresAt   *time.Time
 	LastUsedAt  *time.Time
 	RevokedAt   *time.Time
 	CreatedAt   time.Time
@@ -40,6 +40,9 @@ func (r *GormRepository) CreatePersonalAccessToken(ctx context.Context, token do
 	scopes, err := domain.NormalizePATScopes(token.Scopes)
 	if err != nil {
 		return err
+	}
+	if token.ExpiresAt == nil && !domain.AllowsNonExpiringPAT(scopes, token.UserID) {
+		return fmt.Errorf("non-expiring PAT requires only mlflow:full and a human owner")
 	}
 	scopesJSON, err := json.Marshal(scopes)
 	if err != nil {
@@ -94,11 +97,14 @@ func (r *GormRepository) FindPATByPublicID(ctx context.Context, publicID string)
 		return r.findLegacyPATOwner(ctx, token)
 	}
 	var account LocalUserRecord
-	if err := r.db.WithContext(ctx).Where("id = ? AND disabled = FALSE AND decommissioned_at IS NULL", token.UserID).First(&account).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("id = ?", token.UserID).First(&account).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return r.findLegacyPATOwner(ctx, token)
 		}
 		return auth.PATRecord{}, fmt.Errorf("load personal access token owner: %w", err)
+	}
+	if account.Disabled || account.DecommissionedAt != nil {
+		return auth.PATRecord{}, auth.ErrPATNotFound
 	}
 	var scopes []string
 	if err := json.Unmarshal([]byte(token.ScopesJSON), &scopes); err != nil {

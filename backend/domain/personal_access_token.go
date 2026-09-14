@@ -42,7 +42,7 @@ type PersonalAccessToken struct {
 	TenantID   string     `json:"tenantId"`
 	UserID     string     `json:"userId"`
 	Scopes     []string   `json:"scopes"`
-	ExpiresAt  time.Time  `json:"expiresAt"`
+	ExpiresAt  *time.Time `json:"expiresAt"`
 	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
 	RevokedAt  *time.Time `json:"revokedAt,omitempty"`
 	CreatedAt  time.Time  `json:"createdAt"`
@@ -55,11 +55,12 @@ type IssuedPersonalAccessToken struct {
 }
 
 type PersonalAccessTokenInput struct {
-	ID        string
-	TenantID  string
-	UserID    string
-	Scopes    []string
-	ExpiresAt time.Time
+	ID           string
+	TenantID     string
+	UserID       string
+	Scopes       []string
+	ExpiresAt    time.Time
+	NeverExpires bool
 }
 
 func IssuePersonalAccessToken(input PersonalAccessTokenInput, pepper []byte, now time.Time) (IssuedPersonalAccessToken, error) {
@@ -74,15 +75,23 @@ func IssuePersonalAccessToken(input PersonalAccessTokenInput, pepper []byte, now
 		return IssuedPersonalAccessToken{}, err
 	}
 	now = now.UTC()
-	expiresAt := input.ExpiresAt.UTC()
-	if input.ExpiresAt.IsZero() {
-		expiresAt = now.Add(defaultPATLifetime)
-	}
-	if !expiresAt.After(now) {
-		return IssuedPersonalAccessToken{}, fmt.Errorf("PAT expiry must be in the future")
-	}
-	if expiresAt.After(now.Add(maximumPATLifetime)) {
-		return IssuedPersonalAccessToken{}, fmt.Errorf("PAT expiry cannot exceed 365 days")
+	var expiresAt *time.Time
+	if input.NeverExpires {
+		if !input.ExpiresAt.IsZero() || !AllowsNonExpiringPAT(scopes, input.UserID) {
+			return IssuedPersonalAccessToken{}, fmt.Errorf("non-expiring PAT requires only mlflow:full, a human owner, and no explicit expiry")
+		}
+	} else {
+		finiteExpiry := input.ExpiresAt.UTC()
+		if input.ExpiresAt.IsZero() {
+			finiteExpiry = now.Add(defaultPATLifetime)
+		}
+		if !finiteExpiry.After(now) {
+			return IssuedPersonalAccessToken{}, fmt.Errorf("PAT expiry must be in the future")
+		}
+		if finiteExpiry.After(now.Add(maximumPATLifetime)) {
+			return IssuedPersonalAccessToken{}, fmt.Errorf("PAT expiry cannot exceed 365 days")
+		}
+		expiresAt = &finiteExpiry
 	}
 	publicID, err := randomPATComponent(12)
 	if err != nil {
@@ -186,4 +195,10 @@ func randomPATComponent(size int) (string, error) {
 func validPATComponent(value string, byteLength int) bool {
 	decoded, err := base64.RawURLEncoding.DecodeString(value)
 	return err == nil && len(decoded) == byteLength && base64.RawURLEncoding.EncodeToString(decoded) == value
+}
+
+// AllowsNonExpiringPAT expects normalized scopes. All other PATs must retain
+// a finite expiry, including machine integration credentials.
+func AllowsNonExpiringPAT(scopes []string, userID string) bool {
+	return len(scopes) == 1 && scopes[0] == PATScopeMLflowFull && strings.TrimSpace(userID) != "" && !strings.HasPrefix(strings.TrimSpace(userID), "integration:")
 }

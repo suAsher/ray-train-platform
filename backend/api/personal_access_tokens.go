@@ -45,6 +45,7 @@ type PersonalAccessTokenHandler struct {
 type createPersonalAccessTokenRequest struct {
 	Scopes        []string `json:"scopes"`
 	ExpiresInDays *int     `json:"expiresInDays"`
+	NeverExpires  bool     `json:"neverExpires"`
 }
 
 func NewPersonalAccessTokenHandler(store PersonalAccessTokenStore, options PersonalAccessTokenOptions) (*PersonalAccessTokenHandler, error) {
@@ -85,6 +86,10 @@ func (h *PersonalAccessTokenHandler) create(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if request.NeverExpires && (principal.IntegrationID != "" || !domain.AllowsNonExpiringPAT(request.Scopes, principal.Subject)) {
+		h.writeError(c, http.StatusBadRequest, "INVALID_PAT_EXPIRY", "neverExpires is available only for a human MLflow full access token")
+		return
+	}
 	if err := h.store.EnsureIdentity(c.Request.Context(), principal); err != nil {
 		h.writeError(c, http.StatusInternalServerError, "IDENTITY_PERSIST_FAILED", "could not persist authenticated identity")
 		return
@@ -111,11 +116,17 @@ func (h *PersonalAccessTokenHandler) bindCreateRequest(c *gin.Context) (createPe
 		h.writeError(c, http.StatusBadRequest, "INVALID_PAT_EXPIRY", "expiresInDays is outside the allowed range")
 		return createPersonalAccessTokenRequest{}, false
 	}
+	if request.NeverExpires && request.ExpiresInDays != nil {
+		h.writeError(c, http.StatusBadRequest, "INVALID_PAT_EXPIRY", "neverExpires and expiresInDays cannot be combined")
+		return createPersonalAccessTokenRequest{}, false
+	}
 	if len(request.Scopes) > 0 {
-		if _, err := domain.NormalizePATScopes(request.Scopes); err != nil {
+		normalized, err := domain.NormalizePATScopes(request.Scopes)
+		if err != nil {
 			h.writeError(c, http.StatusBadRequest, "INVALID_PAT_SCOPES", "one or more personal access token scopes are invalid")
 			return createPersonalAccessTokenRequest{}, false
 		}
+		request.Scopes = normalized
 	}
 	return request, true
 }
@@ -134,9 +145,13 @@ func (h *PersonalAccessTokenHandler) issue(principal auth.Principal, request cre
 		scopes = []string{domain.PATScopeJobsRead, domain.PATScopeJobsWrite, domain.PATScopeSourcesWrite}
 	}
 	now := h.now().UTC()
+	expiresAt := time.Time{}
+	if !request.NeverExpires {
+		expiresAt = now.Add(time.Duration(days) * 24 * time.Hour)
+	}
 	return domain.IssuePersonalAccessToken(domain.PersonalAccessTokenInput{
 		ID: id, TenantID: principal.TenantID, UserID: principal.Subject,
-		Scopes: scopes, ExpiresAt: now.Add(time.Duration(days) * 24 * time.Hour),
+		Scopes: scopes, ExpiresAt: expiresAt, NeverExpires: request.NeverExpires,
 	}, h.pepper, now)
 }
 
