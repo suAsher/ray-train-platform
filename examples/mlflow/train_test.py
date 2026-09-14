@@ -26,10 +26,37 @@ class PlatformContractTest(unittest.TestCase):
                 },
             )
 
-    def test_missing_job_identity_fails_fast(self):
-        with mock.patch.dict(os.environ, {}, clear=True):
-            with self.assertRaisesRegex(RuntimeError, "RAYTRAIN_JOB_ID"):
-                train.platform_tags()
+    def test_tags_without_cluster_attempt_keep_injected_identity(self):
+        values = {
+            "RAYTRAIN_JOB_ID": "job-123",
+            "RAYTRAIN_TENANT_ID": "local",
+            "RAYTRAIN_SUBMITTER_USER_ID": "user-456",
+            "RAYTRAIN_MLFLOW_PROVENANCE": "signed-provenance",
+        }
+        expected = {
+            "platform.job_id": "job-123",
+            "platform.tenant_id": "local",
+            "platform.submitter_user_id": "user-456",
+            "platform.provenance": "signed-provenance",
+        }
+        for optional_values in ({}, {"RAYTRAIN_CLUSTER_ATTEMPT": "  "}):
+            with self.subTest(optional_values=optional_values):
+                with mock.patch.dict(os.environ, {**values, **optional_values}, clear=True):
+                    self.assertEqual(train.platform_tags(), expected)
+
+    def test_missing_required_identity_fails_fast(self):
+        values = {
+            "RAYTRAIN_JOB_ID": "job-123",
+            "RAYTRAIN_TENANT_ID": "local",
+            "RAYTRAIN_SUBMITTER_USER_ID": "user-456",
+            "RAYTRAIN_MLFLOW_PROVENANCE": "signed-provenance",
+        }
+        for missing_key in values:
+            with self.subTest(missing_key=missing_key):
+                remaining = {key: value for key, value in values.items() if key != missing_key}
+                with mock.patch.dict(os.environ, remaining, clear=True):
+                    with self.assertRaisesRegex(RuntimeError, missing_key):
+                        train.platform_tags()
 
 
 if __name__ == "__main__":

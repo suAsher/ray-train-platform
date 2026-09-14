@@ -16,13 +16,16 @@ def required_env(name: str) -> str:
 
 
 def platform_tags() -> dict[str, str]:
-    return {
+    tags = {
         "platform.job_id": required_env("RAYTRAIN_JOB_ID"),
         "platform.tenant_id": required_env("RAYTRAIN_TENANT_ID"),
         "platform.submitter_user_id": required_env("RAYTRAIN_SUBMITTER_USER_ID"),
         "platform.provenance": required_env("RAYTRAIN_MLFLOW_PROVENANCE"),
-        "platform.cluster_attempt": required_env("RAYTRAIN_CLUSTER_ATTEMPT"),
     }
+    cluster_attempt = os.environ.get("RAYTRAIN_CLUSTER_ATTEMPT", "").strip()
+    if cluster_attempt:
+        return {**tags, "platform.cluster_attempt": cluster_attempt}
+    return tags
 
 
 def main() -> None:
