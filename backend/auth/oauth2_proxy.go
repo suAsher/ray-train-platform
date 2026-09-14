@@ -105,5 +105,6 @@ func authenticateOAuth2ProxyAccount(c *gin.Context, oidc OIDCIdentityVerifier, a
 		AuthType: AuthTypeOAuth2Proxy,
 	}
 	setPrincipal(c, principal)
+	c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), verifiedOAuth2TokenKey{}, rawToken))
 	c.Next()
 }

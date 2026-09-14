@@ -17,6 +17,7 @@ import (
 	"gorm.io/gorm"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
+	fw "ray-train-platform-backend/functionwarehouse"
 	"ray-train-platform-backend/httpapi"
 	"ray-train-platform-backend/k8s"
 	me "ray-train-platform-backend/modelevaluation"
@@ -43,6 +44,7 @@ type globalJobReader interface {
 }
 
 type Handler struct {
+	functionWarehouses        map[fw.Environment]FunctionWarehouseClient
 	modelServing              ms.Store
 	modelServingKubernetes    modelServingKubernetes
 	modelReleases             modelrelease.Repository
@@ -154,6 +156,7 @@ type ExperimentProvider interface {
 }
 
 type Options struct {
+	FunctionWarehouses        map[fw.Environment]FunctionWarehouseClient
 	ModelServing              ms.Store
 	ModelReleases             modelrelease.Repository
 	ModelRegistry             modelregistry.Provider
@@ -337,6 +340,10 @@ func NewHandler(repository JobRepository, options Options) *Handler {
 		handler.modelEvaluationSubmission = handler.submission
 	}
 	handler.models = options.Models
+	handler.functionWarehouses = make(map[fw.Environment]FunctionWarehouseClient, len(options.FunctionWarehouses))
+	for environment, client := range options.FunctionWarehouses {
+		handler.functionWarehouses[environment] = client
+	}
 	handler.modelServing = options.ModelServing
 	if options.Kubernetes != nil {
 		handler.modelServingKubernetes = options.Kubernetes
