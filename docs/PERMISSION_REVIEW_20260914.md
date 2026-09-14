@@ -1,6 +1,6 @@
 # 权限与团队调度核对
 
-日期：2026-09-14。权限修复已发布，后端接口与临时0卡工作区真实验收通过；Portal dev 目标镜像已上线。浏览器交互验收因自动化工具连续超时未完成。GPU 团队软集中代码已随镜像交付，但开关仍关闭，尚未生效或进行本轮 spk-rayjob 验收。
+日期：2026-09-14。权限修复已发布，后端接口与临时0卡工作区真实验收通过；Portal dev 目标镜像已上线。浏览器交互验收因自动化工具连续超时未完成。用户随后授权启用 GPU 团队软集中，后端与 Kueue 两项开关已开启并持久化；本轮 spk-rayjob 已验证同团队 1+1+2+4 卡集中同节点及容量不足回退，五个任务全部成功，测试资源已回收，现有训练未发生迁移或重启。
 
 ## 三层权限
 
@@ -51,16 +51,38 @@ Portal Java 服务的角色和菜单关联决定入口是否显示，RayTrain `/
 
 初次只读排查时 algorithm 配额8、占用7：三个1卡训练在233，一个4卡训练在229。四个任务均已启用 TAS unconstrained，不能归因为开关关闭。4卡任务于 `2026-09-14T10:57:20Z` 准入，额外请求48 CPU和200Gi内存；缺少该时刻完整资源账本，不能只用当前剩余量倒推其历史落点。
 
-当前 TAS 优化的是共享池任务装箱，不包含“同团队必须集中同节点”的规则，也不会搬迁已运行任务。团队8卡是配额上限，不代表独占一台8卡机器。Kueue确定 topologyAssignment 后，增加 Pod soft affinity 不能可靠改变其节点决定，硬亲和还可能造成准入后 Pending。
+原 TAS 优化的是共享池任务装箱，不包含“同团队必须集中同节点”的规则，也不会搬迁已运行任务。团队8卡是配额上限，不代表独占一台8卡机器。Kueue确定 topologyAssignment 后，仅在 Pod 调度阶段增加 soft affinity 不能可靠改变其节点决定，硬亲和还可能造成准入后 Pending。
 
-用户已选择“团队优先集中：尽量同节点，允许共享空闲卡”，不为团队独占节点，也不迁移运行任务。已交付的可选实现是在新任务 worker 上添加基于同团队现有 GPU worker 所在节点的 preferred node affinity，保留 TAS unconstrained 资源账本和容量不足时的其他节点回退。Kueue v0.19 必须同时启用默认关闭的 alpha gate `TASRespectNodeAffinityPreferred`，才能在准入阶段考虑这种偏好；只改 PodSet preferred topology 注解不具备团队语义。当前后端 `KUEUE_TEAM_NODE_AFFINITY_ENABLED=false`，Kueue gate 也未启用。Kueue 参数补丁通过 server dry-run，仅增加 `--feature-gates=TASRespectNodeAffinityPreferred=true`；正在等待对此实验性调度开关的单独授权。
+用户已选择“团队优先集中：尽量同节点，允许共享空闲卡”，不为团队独占节点，也不迁移运行任务。实现是在新任务 worker 上添加基于同团队现有 GPU worker 所在节点的 preferred node affinity，保留 TAS unconstrained 资源账本和容量不足时的其他节点回退。Kueue v0.19 必须同时启用默认关闭的 alpha gate `TASRespectNodeAffinityPreferred`，才能在准入阶段考虑这种偏好；只改 PodSet preferred topology 注解不具备团队语义。
+
+用户要求“生效测试”后，两项开关已启用：后端 `KUEUE_TEAM_NODE_AFFINITY_ENABLED=true`，Helm `ray-platform` revision 237；Kueue controller 参数含 `--feature-gates=TASRespectNodeAffinityPreferred=true`。两次 server dry-run 分别只改变该参数和后端团队开关，镜像保持原摘要；两套控制面均2副本健康，抢占仍为 Never，队列与配额未改变。
+
+Kueue 开关已保存到其自身 Helm release `kueue` revision 3，使用现有 `kueue-0.19.0.tgz`，`--reuse-values` 的最小覆盖为 `controllerManager.featureGates: [{name: TASRespectNodeAffinityPreferred, enabled: true}]`。此字段是对象数组，不能写成字符串数组，也不能放进 `ray-platform` values 代替 Kueue 配置。持久化 dry-run 与原 Kueue Helm manifest 逐行比较仅新增 gate 参数；证书及其余资源内容一致。持久化后的 Deployment generation 未再次变化，2副本均 Ready。
+
+启用前现场 algorithm 的两个4卡 GPU Worker 已全部位于 `172.28.1.229`，该团队占用8/8卡。另一个节点上的 Head 不占 GPU，不能据此认定 GPU 碎片。验收使用 guofeng.su 的 local 团队、一天有效最小权限临时 PAT 和当前官方下载的 `spk-rayjob release-20260911-11`，没有迁移真实用户或调整团队配额。
+
+| 用例 | Job ID | GPU Worker 实际节点 |
+| --- | --- | --- |
+| 空团队首个1卡任务 | `job-41c7b3909ab31a7a599f675f` | `172.28.1.222` |
+| 后续1卡任务 | `job-56463cbfcc6fefd4aa6bd2a8` | `172.28.1.222` |
+| 后续2卡任务 | `job-fea61f1611d4e0bf01b6be1b` | `172.28.1.222` |
+| 后续4卡任务 | `job-5107d67808e9672f61db683d` | `172.28.1.222` |
+| 上述8卡仍运行时追加1卡 | `job-3e4f2dcb6087ccb3125548aa` | `172.28.1.232` |
+
+后三个集中任务及回退任务的 RayJob worker 均携带 `matchFields: metadata.name In [172.28.1.222]`、weight 100，且保留 unconstrained topology；对应 Workload 的 topologyAssignment 与实际 Worker 落点一致。首任务没有既存团队 GPU Worker，因此没有团队偏好，正常由 TAS 选点。测试不依赖用户增加 queue、节点或亲和参数。已回读9份 rank 产物，world_size 分别为1、1、2、4、1，均完成12步 CUDA 训练，all-reduce 结果正确。CLI connect 进入首任务 Worker 后退出成功，退出后训练仍为 RUNNING。
+
+截至 `2026-09-14T13:53:08Z`，五个任务全部 SUCCEEDED，完整日志均含 `PACK_ACCEPTANCE_SUCCESS`，无测试存活 Pod，local GPU 配额恢复0/24。仅撤销本轮临时 PAT，并验证其 login-check 被拒绝后删除独立凭据文件；原会话未修改。启用前已有的2个训练 RayJob、4个 RayCluster、8个运行 Pod 均保持原 UID；8个 Pod 节点不变、重启数均保持0，两个训练仍 RUNNING。
+
+配置备份、最小覆盖、调度及产物证据、`acceptance-final.json`、`continuity-final.json` 保存在构建机 `/root/raytrain-team-packing-20260914/`。正常 CLI 提交与完整训练日志为 `/root/raytrain-release-474abec-spk-team-*.log`。本轮仅配置启用及文档记录，未重建镜像或修改训练代码的提交接口。
+
+该策略是软偏好：已有任务不迁移，CPU/内存/GPU不足可以跨节点，同团队第一批任务同时提交且尚无绑定 Worker 时也可能分散。本次现场没有构造“另一团队的可行节点更满”的对照实验，不能把同节点结果单独作为团队偏好优先于全局装箱的因果证明；同时保留了开关、模板偏好、准入及实际节点四层证据。
 
 官方依据：[Kueue v0.19 TAS 节点亲和解析与排序](https://github.com/kubernetes-sigs/kueue/blob/v0.19.0/pkg/cache/scheduler/tas_flavor_snapshot.go#L958)、[feature gate 默认值](https://github.com/kubernetes-sigs/kueue/blob/v0.19.0/pkg/features/kube_features.go#L699)。
 
 ## 验证与发布记录
 
 - 后端业务 SHA：`3d8e4973c5ba7a6822be199487969f5caf3b3bc5`；本地、GitHub main、内部 GitLab main、正式构建目录在发布时一致。
-- 后端镜像：`release-20260914-permissions-01`，摘要 `sha256:3958a80be9c7eba1ab367b4e0a67a6d2ae53c790cf486f5bd9512c307e6a54e7`。Helm revision 236；两副本均新摘要且 Ready，healthz 200。
+- 后端镜像：`release-20260914-permissions-01`，摘要 `sha256:3958a80be9c7eba1ab367b4e0a67a6d2ae53c790cf486f5bd9512c307e6a54e7`。权限镜像发布为 Helm revision 236，后续团队集中配置启用为 revision 237；两副本均新摘要且 Ready，healthz 200。
 - Helm server dry-run 只改变后端镜像与新增的默认关闭团队偏好 env；TAS、配额、抢占、存储、运行时资源保持原配置。现有 RayJob/RayCluster/Pod 没有 UID 变化、丢失或重启数增加。
 - Portal dev SHA：`10fb586a68a5a80d798c17ccda63fc23a7c232f4`；完整 Dockerfile.lint、全部合同、build:dev 通过，STOPPING 重试测试旧实现 RED、新实现 GREEN。
 - Portal 实际镜像：`sha256:54330d2594dad7fb3d19c792014110338b8cc511c14a0df709983cab8e3d446a`，rollout 成功且 Pod Ready。私有 GitLab API 无匿名读取权限，部署标记不含 pipeline/job ID，因此未独立确认流水线每个 job 的状态。
@@ -75,4 +97,3 @@ Portal Java 服务的角色和菜单关联决定入口是否显示，RayTrain `/
 ## 尚未完成
 
 1. 浏览器实际页面交互验收：自动化创建页签与状态读取均超时，未以静态构建或 HTTP 200 替代页面验收。需补查团队分配按钮、普通用户菜单、实验详情、编辑器入口和业务错误展示。
-2. GPU 团队软集中启用与 spk-rayjob 真实验收：待实验性 Kueue gate 授权，再覆盖空团队、多单卡、1卡后4卡、并发、容量不足回退和原CLI参数不变。现有任务不迁移；当前不能宣称团队碎片已解决。
