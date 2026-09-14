@@ -49,7 +49,7 @@ func TestHelpArticlesExposeFortyThreeQuestionDocumentsFromPublishedSeed(t *testi
 	assertArticle(t, byID, "submit", "training", "如何提交单卡、单机多卡和多机训练？", []string{"python3 tools/train_managed.py", "--cpu-per-worker 8", "--memory-per-worker 32Gi"})
 	assertArticle(t, byID, "debug", "debug", "如何使用 JupyterLab 和 VS Code？", []string{"JupyterLab", "VS Code"})
 	assertArticle(t, byID, "worker-connect-and-scheduling-boundary", "debug", "如何连接自己的训练 Worker？", []string{"spk-rayjob connect JOB_ID"})
-	assertArticle(t, byID, "shared-model-registration", "debug", "如何把训练权重保存成共享模型版本？", []string{"8 MiB", "20 GiB", "READY", "未知 / 未登记", "用户补充"})
+	assertArticle(t, byID, "shared-model-registration", "debug", "训练权重如何保存为共享模型或同步到功能仓？", []string{"8 MiB", "20 GiB", "READY", "未知 / 未登记", "用户补充"})
 	assertArticle(t, byID, "shared-model-maintenance", "debug", "模型谁能看，如何维护与归档？", []string{"跨团队", "SuperAdmin", "归档", "分别操作"})
 	assertArticle(t, byID, "model-evaluation-start", "debug", "如何用固定数据版本评估一个模型？", []string{"源码 ZIP", "val", "test", "TEAM", "evaluation_sdk.py"})
 	assertArticle(t, byID, "model-evaluation-results", "debug", "评估报告在哪里看，为什么不能比较？", []string{"成功退出", "缺失", "比较", "配置", "审批"})
