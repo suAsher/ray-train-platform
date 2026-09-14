@@ -202,11 +202,8 @@ func (c *MLflowClient) ListTenantExperiments(ctx context.Context, tenantID, subj
 				EndTime   int64  `json:"end_time"`
 			} `json:"info"`
 			Data struct {
-				Metrics []struct {
-					Key   string            `json:"key"`
-					Value mlflowMetricValue `json:"value"`
-				} `json:"metrics"`
-				Tags []struct {
+				Metrics []mlflowMetric `json:"metrics"`
+				Tags    []struct {
 					Key   string `json:"key"`
 					Value string `json:"value"`
 				} `json:"tags"`
@@ -225,12 +222,7 @@ func (c *MLflowClient) ListTenantExperiments(ctx context.Context, tenantID, subj
 			StartTimeMS: raw.Info.StartTime, EndTimeMS: raw.Info.EndTime,
 			Latest: map[string]float64{},
 		}
-		for _, metric := range raw.Data.Metrics {
-			if len(run.Latest) >= maxMLflowMetricKeys || !safeMetricKey(metric.Key) || !metric.Value.Valid {
-				continue
-			}
-			run.Latest[metric.Key] = metric.Value.Value
-		}
+		run.Latest, _ = selectMLflowMetrics(raw.Data.Metrics)
 		provenance := ""
 		for _, tag := range raw.Data.Tags {
 			switch tag.Key {
@@ -411,11 +403,8 @@ func (c *MLflowClient) jobRun(ctx context.Context, experimentID, jobID string) (
 				EndTime   int64  `json:"end_time"`
 			} `json:"info"`
 			Data struct {
-				Metrics []struct {
-					Key   string            `json:"key"`
-					Value mlflowMetricValue `json:"value"`
-				} `json:"metrics"`
-				Params []struct {
+				Metrics []mlflowMetric `json:"metrics"`
+				Params  []struct {
 					Key   string `json:"key"`
 					Value string `json:"value"`
 				} `json:"params"`
@@ -437,14 +426,8 @@ func (c *MLflowClient) jobRun(ctx context.Context, experimentID, jobID string) (
 		StartTimeMS: raw.Info.StartTime, EndTimeMS: raw.Info.EndTime,
 		Latest: map[string]float64{}, Params: map[string]string{},
 	}
-	keys := make([]string, 0, len(raw.Data.Metrics))
-	for _, metric := range raw.Data.Metrics {
-		if !safeMetricKey(metric.Key) || len(keys) >= maxMLflowMetricKeys || !metric.Value.Valid {
-			continue
-		}
-		run.Latest[metric.Key] = metric.Value.Value
-		keys = append(keys, metric.Key)
-	}
+	latest, keys := selectMLflowMetrics(raw.Data.Metrics)
+	run.Latest = latest
 	for _, parameter := range raw.Data.Params {
 		if len(run.Params) >= 100 || !safeMetricKey(parameter.Key) {
 			break

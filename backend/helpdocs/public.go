@@ -364,6 +364,10 @@ const mlflowMetricsSeedPublicSection = `适用于在 RayTrain 上运行的训练
 
 ### 如何确认接入成功
 
+实验中心的列表只摘要展示关键指标，优先显示 Loss、学习率、Epoch、mAP、NDS，并兼容 val/object/map、val/object/nds 等框架命名。显示“已记录其他指标”表示 Run 已有指标但不属于这些摘要类别；点击“MLflow 详情”查看完整指标与历史。不要因此重跑训练。
+
+若原生 MLflow 已有 Run 和指标，但任务详情没有关联 Run，应检查训练入口是否沿用注入的实验名和平台来源标签；Lightning 等框架的 MLflow Logger 不会仅凭连接地址自动建立任务关联。不要重新创建重复 Run，也不要把这种情况当作上报服务中断。
+
 运行 ` + "`spk-rayjob status JOB_ID`" + ` 和 ` + "`spk-rayjob logs -f JOB_ID`" + `，确认已进入训练 step；再到任务详情核对关联的 Job、Run、参数与带 step 的曲线。
 
 **Job ID 与 MLflow run_id 不要求相等。** Run 名称可以包含任务 ID，但名称也不是归属凭据；一次任务可能关联多个 Run，核对时使用页面返回的明确关联。
