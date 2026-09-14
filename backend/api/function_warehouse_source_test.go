@@ -146,3 +146,12 @@ func TestWarehouseSourceCloseReleasesBlockedSnapshotWriter(t *testing.T) {
  if err:=reader.Close();err!=nil{t.Fatal(err)}
  select{case <-snapshots.done:case <-time.After(time.Second):t.Fatal("snapshot writer leaked after upload reader close")}
 }
+func TestWarehouseSourceOpenReadsVerifiedSnapshot(t *testing.T) {
+ source,_,_,models,_,_:=warehouseSourceFixture()
+ file:=ws.File{ModelID:"model-1",VersionID:"version-1",Name:"best.pth",Size:7,SHA256:strings.Repeat("a",64)}
+ models.version=ml.Version{ID:file.VersionID,ModelID:file.ModelID,FileName:file.Name,SizeBytes:file.Size,SHA256:file.SHA256,State:ml.Ready}
+ reader,err:=source.Open(context.Background(),file);if err!=nil{t.Fatal(err)}
+ defer reader.Close()
+ data,err:=io.ReadAll(reader)
+ if err!=nil||string(data)!="weights"{t.Fatalf("snapshot read failed: %q %v",data,err)}
+}

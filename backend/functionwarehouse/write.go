@@ -123,7 +123,7 @@ func mutationError(code, status int, retryAfter string) error {
 	switch code {
 	case 401, 403, 429:
 		return responseError(code, status, retryAfter)
-	case -1, 400, 404, 405, 409, 413, 415, 422:
+	case 400, 404, 405, 409, 413, 415, 422:
 		return &Error{Kind: ErrInvalid, StatusCode: status}
 	default:
 		return &Error{Kind: ErrUnknownOutcome, StatusCode: status}

@@ -65,7 +65,7 @@ func TestCreateVersionUsesConfirmedSourceAndAllowsNewDuplicates(t *testing.T) {
 }
 
 func TestCreateVersionUncertainResultNeverRetries(t *testing.T) {
-	for _, mode := range []string{"500", "redirect", "malformed", "source-mismatch", "file-mismatch"} {
+	for _, mode := range []string{"500", "generic-error", "redirect", "malformed", "source-mismatch", "file-mismatch"} {
 		t.Run(mode, func(t *testing.T) {
 			var writes atomic.Int32
 			client := testClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -73,6 +73,7 @@ func TestCreateVersionUncertainResultNeverRetries(t *testing.T) {
 				writes.Add(1)
 				switch mode {
 				case "500": w.WriteHeader(500)
+				case "generic-error": _, _ = w.Write([]byte(`{"code":-1,"data":null,"msg":"internal post-create error"}`))
 				case "redirect": http.Redirect(w, r, "/other", 302)
 				case "malformed": _, _ = w.Write([]byte("secret-token"))
 				default:
