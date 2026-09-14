@@ -854,7 +854,9 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, tenantID 
 	if preloadInput {
 		podSpec["initContainers"] = []any{datasetCachePreloader(options.SourceMaterializerImage, volumeMounts, options.LocalCache, options.trainingEventJobID)}
 	}
-	if mountData && options.LocalCache.runtime {
+	// Serving has no dataset cache to supply fsGroup, but its non-root Ray
+	// processes still need group access to the mounted job credential.
+	if mountData && (options.LocalCache.runtime || jobSpec.ServingRuntime != nil) {
 		podSpec["securityContext"].(map[string]any)["fsGroup"] = int64(1000)
 	}
 	if pullSecrets := renderImagePullSecrets(options.ImagePullSecrets); len(pullSecrets) > 0 {
