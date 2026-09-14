@@ -1,0 +1,25 @@
+# 待发布配置，不可单独应用。生产切换须先获授权并按
+# docs/OPERATIONS_GUIDE.md 的「6.3 GPU 装箱与 TAS 切换」完成准入暂停、
+# 旧队列排空和审阅。默认 values.yaml 仍保持 topology.enabled=false。
+# 必须同时提供：含装箱修复的 backend 镜像 overlay，以及从 live
+# ClusterQueue 现读生成的 quota overlay，防止 --reuse-values 恢复旧容量。
+# 不包含镜像摘要或容量快照，不能把此文件作为日常发布附加项。
+kueue:
+  enabled: true
+  manageResources: true
+  autoQuota: true
+  clusterQueueName: cluster-gpu-queue
+  resourceFlavorName: gpu-4090-flavor
+  topology:
+    enabled: true
+    name: raytrain-hostname
+    nodeLabel: kubernetes.io/hostname
+    resourceFlavorName: gpu-4090-tas-flavor
+  multiFlavor:
+    enabled: false
+  preemption:
+    enabled: false
+  resourceFlavorNodeLabels:
+    accelerator: nvidia-rtx-4090
+    platform.wellspiking.ai/gpu-pool: production
+    platform.wellspiking.ai/cache-ready: "true"

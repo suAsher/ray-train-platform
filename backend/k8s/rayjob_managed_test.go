@@ -357,7 +357,7 @@ func TestManagedMultiWorkerUsesSoftTopologySpreadUntilTASCutover(t *testing.T) {
 	}
 }
 
-func TestManagedMultiWorkerUsesHardTopologySpreadAfterTASCutover(t *testing.T) {
+func TestManagedMultiWorkerDefersHostPlacementToTASAfterCutover(t *testing.T) {
 	job := managedRenderJob(domain.RayVersionProduction)
 	options := testRenderOptions()
 	options.TopologyAwareScheduling = true
@@ -370,11 +370,7 @@ func TestManagedMultiWorkerUsesHardTopologySpreadAfterTASCutover(t *testing.T) {
 	workers, _, _ := nestedSlice(cluster, "workerGroupSpecs")
 	worker := workers[0].(map[string]any)
 	constraints, found, err := nestedSlice(worker, "template", "spec", "topologySpreadConstraints")
-	if err != nil || !found || len(constraints) != 1 {
-		t.Fatalf("managed TAS job must enforce topology spread: found=%v err=%v constraints=%#v", found, err, constraints)
-	}
-	constraint := constraints[0].(map[string]any)
-	if constraint["whenUnsatisfiable"] != "DoNotSchedule" || constraint["minDomains"] != int64(2) {
-		t.Fatalf("post-cutover topology spread must require separate hosts: %#v", constraint)
+	if err != nil || found {
+		t.Fatalf("managed TAS job must not override Kueue host assignments: found=%v err=%v constraints=%#v", found, err, constraints)
 	}
 }

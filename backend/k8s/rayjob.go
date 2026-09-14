@@ -256,17 +256,18 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	addPodLabels(headPod, job.ID, job.TenantID)
 	addPodLabels(workerPod, job.ID, job.TenantID)
 	if options.TopologyAwareScheduling {
-		addPodAnnotation(workerPod, "kueue.x-k8s.io/podset-preferred-topology", "kubernetes.io/hostname")
+		// Kueue's mixed TAS profile uses LeastFreeCapacity for unconstrained
+		// PodSets, including one-worker jobs. Its shared capacity accounting
+		// fills partially used hosts before opening another GPU node.
+		addPodAnnotation(workerPod, "kueue.x-k8s.io/podset-unconstrained-topology", "true")
 	}
 	managedMultiNode := job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain && workerReplicas > 1
 	legacyRayTrain := job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayDDP && job.Spec.Execution.ResolvedMode() == domain.ExecutionModeRayTrain
-	if managedMultiNode || legacyRayTrain {
-		// Prefer one distributed worker per physical host. Before Kueue TAS is
-		// fully cut over, Kueue only admits aggregate GPU capacity and cannot
-		// guarantee that two hosts are available. Keep the spread soft in that
-		// compatibility mode so an admitted workload cannot deadlock at the Pod
-		// scheduler. Once TAS is enabled, Kueue reserves matching topology first
-		// and the worker spread can safely become a hard multi-node contract.
+	if !options.TopologyAwareScheduling && (managedMultiNode || legacyRayTrain) {
+		// Preserve legacy soft spreading until the coordinated TAS cutover.
+		// With TAS, Kueue assigns hosts before the Pod scheduler runs. A hard
+		// spread rule can reject that assignment (e.g. two 4-GPU workers packed
+		// on one 8-GPU host), so TAS placement must not carry a competing rule.
 		spread := map[string]any{
 			"maxSkew":           int64(1),
 			"topologyKey":       "kubernetes.io/hostname",
@@ -275,10 +276,6 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 				"platform_job_id":  job.ID,
 				"ray.io/node-type": "worker",
 			}},
-		}
-		if options.TopologyAwareScheduling {
-			spread["whenUnsatisfiable"] = "DoNotSchedule"
-			spread["minDomains"] = int64(2)
 		}
 		workerPod["spec"].(map[string]any)["topologySpreadConstraints"] = []any{spread}
 	}
