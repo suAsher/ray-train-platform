@@ -752,8 +752,21 @@ func TestPostgresPermanentMLflowPATMigrationUpgradeAndConstraints(t *testing.T) 
 	// The preceding application represented expiry with time.Time. Reading SQL
 	// NULL leaves that zero value, so its existing !ExpiresAt.After(now) check
 	// rejects a new permanent token rather than accidentally accepting it.
-	var legacy struct{ ExpiresAt time.Time }
-	if err := database.Raw(`SELECT expires_at FROM personal_access_tokens WHERE id='nullable-0'`).Scan(&legacy).Error; err == nil && legacy.ExpiresAt.After(time.Now()) {
-		t.Fatal("legacy reader accepted null expiry")
+	var legacy struct {
+		ID        string
+		ExpiresAt time.Time
+	}
+	if err := database.Table("personal_access_tokens").Where("id = ?", "nullable-0").First(&legacy).Error; err != nil {
+		t.Fatalf("legacy record lookup failed: %v", err)
+	}
+	if !legacy.ExpiresAt.IsZero() {
+		t.Fatalf("legacy reader must reject null expiry, got %s", legacy.ExpiresAt)
+	}
+	var legacyList []struct {
+		ID        string
+		ExpiresAt time.Time
+	}
+	if err := database.Table("personal_access_tokens").Order("id").Find(&legacyList).Error; err != nil || len(legacyList) != 2 {
+		t.Fatalf("legacy token list failed: count=%d err=%v", len(legacyList), err)
 	}
 }
