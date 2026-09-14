@@ -713,16 +713,17 @@ bash ops/gpu/verify-production-pool.sh
 
 ### 6.3 GPU 装箱与 TAS 切换
 
-**状态（2026-09-14）：只读核对完成，生产切换尚未执行，真实装箱验收待完成。**
-本节及 [TAS 最小覆盖文件](../deploy/overlays/gpu-topology-packing.yaml) 是待审阅的切换方案，
-本次按已授权范围发布并使用现有 `spk-rayjob` 入口验收；不停止训练、不暂停用户提交。
+**状态（2026-09-14）：生产 revision 235 已启用 TAS，8个真实提交任务全部成功，包括跨节点10进程训练。**
+本节及 [TAS 最小覆盖文件](../deploy/overlays/gpu-topology-packing.yaml) 记录此次原地切换流程，
+本次按已授权范围发布并使用现有 `spk-rayjob` 入口验收；未停止训练或暂停用户提交。
+版本、测试与实际落点见 [发布验证记录](GPU_PACKING_PAT_VALIDATION_20260914.md)。
 普通后端发版不要附加此覆盖文件。
 本节生产增量发布遵循 [release skill](../.agents/skills/release/SKILL.md) 的最小覆盖流程，
 使用 `--reuse-values` 保留现网配置，不套用完整历史 profile。
 
-本次核对发现 `KUEUE_TOPOLOGY_ENABLED=false`，`gpu-4090-flavor` 没有 `topologyName`，
+发布前核对发现 `KUEUE_TOPOLOGY_ENABLED=false`，`gpu-4090-flavor` 没有 `topologyName`，
 集群没有 Topology 对象。Kueue v0.19.0 已启用 RayJob/RayCluster 集成，控制器配置没有
-覆盖 TAS feature gate；平台仍只进行配额准入，尚未启用节点装箱。四台 8 卡节点的 GPU
+覆盖 TAS feature gate；当时平台只进行配额准入，未启用节点装箱。四台 8 卡节点的 GPU
 请求占用分别为 8、0、1、2：三个单卡训练落在两台节点，空闲 21 卡中只有一台完整空闲节点。
 这是当时快照，发布前必须重新读取；不能以 GPU 利用率代替 Pod 的 GPU 请求来计算空闲卡。
 
@@ -732,6 +733,10 @@ Kueue v0.19 的默认 Mixed profile 对 `podset-unconstrained-topology: "true"`
 拓扑对象、Flavor 关联和 PodSet 注解必须同时生效，详见
 [Kueue v0.19 TAS 官方说明](https://kueue.sigs.k8s.io/v0.19/docs/tasks/run/topology_aware_scheduling/)。
 CPU、内存、节点选择、存储及任务实际拓扑要求仍可能使任务分散，不能承诺所有小任务必在同一节点。
+同一 PodSet 有多个 Worker 时，算法先寻找可容纳整个 PodSet 的单个 hostname；例如剩余
+4、5、8 卡的三节点上，2 Worker × 4 GPU 会同落剩8卡节点，而非拆到两个半空节点。
+多个独立单 Worker 任务才会逐个填充能容纳它们的较紧节点。依据见
+[v0.19 分配源码](https://github.com/kubernetes-sigs/kueue/blob/v0.19.0/pkg/cache/scheduler/tas_flavor_snapshot.go#L1301-L1305)。
 DevWorkspace 当前不走 Kueue，此次不能声称已覆盖调试环境装箱。已有任务不会自动迁移或整理。
 
 #### 切换前只读核对

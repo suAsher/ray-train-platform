@@ -10,6 +10,8 @@ export MLFLOW_TRACKING_TOKEN="$RAYTRAIN_PAT"
 
 `RAYTRAIN_PAT` 是你在「账户与安全」创建的个人 PAT。调用 MLflow 需要显式勾选 `mlflow:full`；旧 PAT 不会自动获得该权限。`mlflow:full` 对应共享 MLflow 的完整读写能力，包含实验、Run、Metric、Param、Tag、Artifact、删除和 Model Registry 操作。平台训练任务、个人目录、调度和受控数据空间仍使用 RayTrain 自身权限。
 
+选择“MLflow 全局读写”用途后，有效期可选 1–365 天或“永不过期”。永久令牌仍可撤销，账号禁用或团队成员关系失效后也不能继续使用。已有令牌不会自动延长；普通训练令牌不提供永久选项。
+
 运行机器需要能访问 `raytrain.wellspiking.ai` 的 HTTPS/443，并验证证书。不要把浏览器 Cookie、数据库、对象存储凭据或集群内地址交给程序。
 
 ## HTTP：列实验、分页和读取 Run
