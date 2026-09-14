@@ -448,21 +448,22 @@ kueue:
   manageResources: false
   # Creating additional ResourceFlavors changes the live ClusterQueue. Keep
   # this off during a rolling backend/UI release and enable it only when no
-  # training workload is admitted, together with the TAS cutover below.
+  # training workload is admitted. This is separate from same-flavor TAS setup.
   multiFlavor:
     enabled: false
-  # TAS is an explicit cutover because adding topologyName to an in-use flavor
-  # changes queue admission semantics. Enable only after the legacy queue has
-  # no admitted workloads. The backend emits the worker PodSet hostname
-  # topology request from this same switch, so a half-enabled configuration
-  # cannot leave newly submitted RayJobs suspended.
+  # TAS requires an explicit reviewed rollout. Kueue v0.19 permits adding
+  # topologyName to a flavor that has none; keep its name and quota unchanged.
+  # Once set, topologyName cannot be changed or removed by rollback.
   topology:
     enabled: false
+    # Optional: omit to inherit enabled. Explicit false stops emitting topology
+    # requests for NEW workers while retaining Topology/ResourceFlavor objects.
+    # This is not a guarantee of legacy scheduling; verify actual admission.
+    # workloadEnabled: false
     name: raytrain-hostname
     nodeLabel: kubernetes.io/hostname
-    # ResourceFlavor.spec becomes immutable after topologyName is set. TAS
-    # therefore uses a new flavor instead of patching gpu-4090-flavor.
-    resourceFlavorName: gpu-4090-tas-flavor
+    # Match the existing single flavor for an in-place initial TAS rollout.
+    resourceFlavorName: gpu-4090-flavor
   # Kueue's nominalQuota is a static field with no capacity discovery. With this
   # on, the controller keeps it equal to the allocatable capacity of the nodes
   # matching training.nodeSelector, so adding a machine only means labelling it.

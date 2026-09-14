@@ -13,6 +13,14 @@ OIDC issuer. Local-only development does not. */}}
 {{- if not (regexMatch `^[^@[:space:]]+@sha256:[0-9a-fA-F]{64}$` .Values.backend.workspaceImage) }}{{- fail "backend.workspaceImage must use @sha256:<64 hex>" }}{{- end }}
 {{- $datasetPublisher := default (dict) .Values.datasetPublisher -}}
 {{- $kueuePreemption := default (dict) .Values.kueue.preemption -}}
+{{- $kueueTopology := default (dict) .Values.kueue.topology -}}
+{{- $kueueTopologyEnabled := default false (get $kueueTopology "enabled") -}}
+{{- $kueueWorkloadTopologyEnabled := $kueueTopologyEnabled -}}
+{{- if hasKey $kueueTopology "workloadEnabled" -}}
+{{- if not (kindIs "bool" (get $kueueTopology "workloadEnabled")) }}{{- fail "kueue.topology.workloadEnabled must be a boolean when specified" }}{{- end }}
+{{- $kueueWorkloadTopologyEnabled = get $kueueTopology "workloadEnabled" -}}
+{{- end -}}
+{{- if and $kueueWorkloadTopologyEnabled (not $kueueTopologyEnabled) }}{{- fail "kueue.topology.workloadEnabled requires kueue.topology.enabled" }}{{- end }}
 {{- if (default false $datasetPublisher.enabled) -}}
 {{- $publisherDigest := default "" $datasetPublisher.image.digest -}}
 {{- if not (regexMatch `^sha256:[0-9a-fA-F]{64}$` $publisherDigest) }}{{- fail "datasetPublisher.image.digest must use sha256:<64 hex> when enabled" }}{{- end }}
@@ -269,7 +277,7 @@ spec:
             - name: KUEUE_AUTO_QUOTA
               value: {{ .Values.kueue.autoQuota | quote }}
             - name: KUEUE_TOPOLOGY_ENABLED
-              value: {{ .Values.kueue.topology.enabled | quote }}
+              value: {{ $kueueWorkloadTopologyEnabled | quote }}
             - name: KUEUE_PREEMPTION_ENABLED
               value: {{ default false (get $kueuePreemption "enabled") | quote }}
             - name: LOCAL_AUTH_ENABLED

@@ -715,7 +715,8 @@ bash ops/gpu/verify-production-pool.sh
 
 **状态（2026-09-14）：只读核对完成，生产切换尚未执行，真实装箱验收待完成。**
 本节及 [TAS 最小覆盖文件](../deploy/overlays/gpu-topology-packing.yaml) 是待审阅的切换方案，
-不代表已获得暂停准入、部署或提交验收任务的授权。普通后端发版不要附加此覆盖文件。
+本次按已授权范围发布并使用现有 `spk-rayjob` 入口验收；不停止训练、不暂停用户提交。
+普通后端发版不要附加此覆盖文件。
 本节生产增量发布遵循 [release skill](../.agents/skills/release/SKILL.md) 的最小覆盖流程，
 使用 `--reuse-values` 保留现网配置，不套用完整历史 profile。
 
@@ -748,7 +749,7 @@ DevWorkspace 当前不走 Kueue，此次不能声称已覆盖调试环境装箱�
 2026-09-14 的 live 配额为 GPU `32`、CPU `709364m`、内存 `2951216230144`，
 但 Helm 保存值仍为 GPU `16`、CPU `354682m`、内存 `1475607134080`。
 `autoQuota` 会动态更新 ClusterQueue，不能依赖它在升级后再次纠正错误，也不能把本段数值硬编码为未来发布值。
-在切换窗口、暂停准入后，重新读取 live 配额生成审阅文件，例如：
+在切换前重新读取 live 配额生成审阅文件，例如：
 
 ```bash
 # 只读集群；仅在构建机的受限发布记录目录写文件。
@@ -770,49 +771,55 @@ jq -e '
 保留 Kubernetes quantity 的单位和精度。资源布局与示例不同则停止，不能挑选一个 Flavor 继续发布。
 发布前再核对容量和节点清单未发生变化，否则重新生成覆盖文件和 diff。
 
-#### 获得维护窗口授权后执行
+#### 原地首次启用
 
-1. 暂停新训练提交，先核对已有 pending RayJobs；如有，应在旧配置与旧准入规则下
-   让它们完成，再将 `cluster-gpu-queue.spec.stopPolicy` 设置为 `Hold`。
-   这是生产写操作，当前未执行。`Hold` 停止新准入、允许已准入任务自然结束；
-   **禁止使用 `HoldAndDrain`**，它会驱逐已准入任务，见
-   [Kueue StopPolicy](https://kueue.sigs.k8s.io/v0.19/docs/concepts/cluster_queue/#stoppolicy)。
-2. 等待旧队列自然排空。必须同时确认 `admittedWorkloads=0`、`reservingWorkloads=0`、
-   没有仍引用旧 Flavor 的有效 admission，且已结束训练的实际 GPU Pod 已退出。
-   再次检查 pending RayJobs：旧 Pod 模板不能因为改开关就视为已升级，且 pending 任务
-   无法在 `Hold` 下获得新准入。如仍有 pending，则保持旧配置、结束本轮切换，
-   获授权后恢复旧准入让它们完成，再重新安排；不能自动删除、重启或改写用户任务。
-   无法达到这些条件就继续等待，不能在四个已准入 Workload 仍活动时直接替换 Flavor。
-3. 保持准入和提交暂停，完成候选测试、版本核对与后端镜像构建。
-   使用 `--reuse-values`，依次附加审阅后的新后端镜像覆盖文件、
-   `deploy/overlays/gpu-topology-packing.yaml`、刚生成的 `live-quota.json`。
-   覆盖文件显式填写 topology 的名称、层级、Flavor 名称，以及 queue/manageResources 等字段，
-   避免旧 release values 缺少新字段。不要附加固定旧镜像摘要的历史 overlay。
-4. 执行 `helm upgrade ... --dry-run=server --hide-secret` 并审阅与 live 对象及原 release manifest 的差异。
-   预期变更为：后端候选镜像和 TAS 开关、新 `raytrain-hostname` Topology、新
-   `gpu-4090-tas-flavor`（引用该 Topology）、ClusterQueue 切到新 Flavor。
-   旧 Flavor 可能由 Helm 移除，所以前述排空不可跳过。配额必须等于刚读取的 live 值；
-   标签、训练池、抢占、节点和存储不变。当前 Chart 不管理 `stopPolicy`，必须证明本次更新
-   保留 live `Hold`，且更新后再次核验；无法证明则停止发布，先补齐准入保护，不能冒险切换。
-5. 审阅通过后才按 release 流程升级。保持 `Hold`，等待所有后端副本运行目标 digest，
-   核验环境 `KUEUE_TOPOLOGY_ENABLED=true`、Topologies/Flavor/CQ 完整关联、配额未回退，
-   `KUEUE_PREEMPTION_ENABLED=false`，所有抢占仍为 Never。
-   旧后端副本全部退出后才恢复新提交，避免新旧副本生成不同模板。
-6. 确认无旧模板 pending 任务后，按授权恢复准入（`stopPolicy=None` 或移除该字段）与提交。
-   只在获准的团队额度内提交有界验收任务；不能用真实用户训练作重启或迁移试验。
+Kueue v0.19 的 CEL 校验允许给**原先没有 `topologyName`** 的 ResourceFlavor 首次增加该字段；
+已有该字段后才禁止修改或移除。之前“必须新建 Flavor 并清空旧队列”的判断不适用于此次原地首次启用，
+依据见 [v0.19 ResourceFlavor 校验源码](https://github.com/kubernetes-sigs/kueue/blob/v0.19.0/apis/kueue/v1beta2/resourceflavor_types.go#L43-L46)。
+本次保留 `gpu-4090-flavor`、ClusterQueue 名称及配额，不建立第二份容量，也不驱逐存量任务。
+TAS 计算可用节点容量时也扣除非 TAS Pod 的实际资源请求，不能把已运行旧任务所占 GPU 当作空闲。
+但允许字段更新并不等于发布已验证无中断，仍须逐项执行以下核验。
 
-#### 验收和回退
+1. 记录 live ResourceFlavor 的 UID、完整 spec 和所有活动训练的 RayJob/RayCluster/Pod UID、
+   节点、重启数及 Workload admission；记录当前四个运行任务、零 pending 的快照时间。
+   检查 `topologyName` 确实缺失。若已有其他值，停止此次首次启用流程，不能覆盖或删除。
+2. 完成候选测试、版本核对与后端镜像构建。使用 `--reuse-values`，依次附加审阅后的
+   新后端镜像覆盖文件、`deploy/overlays/gpu-topology-packing.yaml`、刚生成的 `live-quota.json`。
+   overlay 显式填写 topology 所有字段和 `workloadEnabled=true`，避免历史 values 缺省或残留覆盖。
+   不附加固定旧镜像摘要的历史 overlay。
+3. 先执行 `helm upgrade ... --dry-run=server --hide-secret`，并对 ResourceFlavor 的
+   **现有对象更新**执行 API server dry-run，确认线上 CRD 接受首次增加字段，而非只验证创建。
+   审阅与 live 对象和原 release manifest 的差异：只新增 `raytrain-hostname` Topology、
+   给原 `gpu-4090-flavor` 增加该关联，并更新候选后端镜像/开关；Flavor 不改名，
+   CQ 的 Flavor 引用、配额、标签、训练池、抢占、节点和存储不变。
+   不设置 Hold/HoldAndDrain，不停止训练或暂停用户提交。检查不通过就暂缓发布。
+4. 按 release 流程发布并等待所有后端副本达到目标 digest，核验
+   `KUEUE_TOPOLOGY_ENABLED=true`、Topology/Flavor/CQ 关联、live 配额和全部 Never 抢占策略。
+   再次比较步骤 1 的 UID、节点、重启数和 admission，确认既有任务没有被重建或改写。
+   首次设置 `topologyName` 后有不可逆字段约束，不能依赖 Helm `--atomic` 的自动回滚
+   删除该字段；若升级部分失败，应保留拓扑资源并使用下面的前向修复方式。
+5. 持续记录发布期间新提交与 pending 任务的模板来源。后端滚动期间新旧副本可能生成不同注解，
+   已存在的 pending 模板也不会自动变成新策略；分别观察其准入结果，不隐含修改、删除或重建。
+   所有副本更新后，再用原有提交方式执行获准的有界 `spk-rayjob` 验收。
 
-获准后分别验证多个独立的 1 卡、2/4 卡任务以及多 Worker 任务，记录提交顺序与各节点
-GPU/CPU/内存余量。检查 RayJob 的 worker PodSet 注解、Workload 的
-`status.admission.podSetAssignments[].topologyAssignment` 及实际 Pod 节点三者一致。
-在 CPU、内存、存储和节点约束都满足的条件下，小任务应优先填入已有余量，随后整机任务仍能
-取得完整 8 卡节点；多 Worker 的分布必须符合其明示拓扑约束。缺少 live assignment 或实际
-落点证据只能记录“配置已启用”，不能记录“装箱验收通过”。完成后清理仅本次创建的验收资源。
+#### 验收与停止新请求注解
 
-失败时首先暂停新准入并保留诊断证据。若新 TAS 队列已经准入任务，不能直接执行 Helm rollback
-把新 Flavor 删除或改回旧 Flavor；同样需要自然排空、核对 pending 模板、保存最新 live 配额，
-再按审阅后的反向切换恢复旧配置。回退过程也不得驱逐、删除或重启既有训练。
+通过现有 `spk-rayjob` 入口分别验证多个独立的 1 卡、2/4 卡及多 Worker 任务，用户提交参数不变。
+记录提交顺序及每节点 GPU/CPU/内存余量，核对 RayJob 的 worker PodSet 注解、Workload 的
+`status.admission.podSetAssignments[].topologyAssignment` 和实际 Pod 节点。
+满足资源与存储约束时，应观察小任务优先填已有余量；整机容量是否保留，以实际分配为准。
+缺少 live assignment 和落点证据只能记录“配置已启用”，不能记录“装箱验收通过”。
+完成后清理仅本次创建的验收资源，复验原有运行任务的 UID 和重启数。
+
+`kueue.topology.workloadEnabled` 是可选布尔值：省略时继承 `topology.enabled`；显式 `false`
+只停止后端为**后续新 Worker**添加拓扑请求注解；显式 `true` 而 `topology.enabled=false`
+会被模板拒绝。默认 values 不设置此可选字段，避免打开 TAS 后仍意外关闭新请求。
+
+需要停止发出新注解时，保持 `topology.enabled=true`、同名 Topology 和同名 Flavor，
+仅将 `workloadEnabled=false`，配合已验证兼容的后端镜像作前向更新。不得 Helm rollback 到
+移除 `topologyName` 或删除该 Flavor 的 manifest。已生成的模板和已准入任务保持原样。
+**无注解不等于恢复旧调度语义**：Flavor 仍绑定 TAS，必须用一个获准的新任务实测无注解时的
+准入与落点并记录结果；有 pending 或滚动混合模板时分别跟踪，不能声称已统一回到旧策略。
 
 ## 7. 故障排查总流程
 

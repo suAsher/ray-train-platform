@@ -1,9 +1,14 @@
 package config
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
+	"text/template"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestChartDefinesKueueWorkloadPriorityClasses(t *testing.T) {
@@ -32,8 +37,8 @@ func TestChartDefinesKueueWorkloadPriorityClasses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read backend deployment template: %v", err)
 	}
-	if !strings.Contains(string(deployment), "name: KUEUE_TOPOLOGY_ENABLED\n              value: {{ .Values.kueue.topology.enabled | quote }}") {
-		t.Fatal("backend worker annotations and ResourceFlavor topology must use the same Helm cutover switch")
+	if !strings.Contains(string(deployment), "name: KUEUE_TOPOLOGY_ENABLED\n              value: {{ $kueueWorkloadTopologyEnabled | quote }}") {
+		t.Fatal("backend worker annotations must use the independently controlled topology request switch")
 	}
 	if !strings.Contains(string(deployment), "name: KUEUE_PREEMPTION_ENABLED\n              value: {{ default false (get $kueuePreemption \"enabled\") | quote }}") {
 		t.Fatal("backend submission gate and ClusterQueue preemption must use the same Helm switch")
@@ -69,10 +74,25 @@ func TestChartKeepsTopologyAwareSchedulingBehindExplicitCutover(t *testing.T) {
 		t.Fatalf("read chart values: %v", err)
 	}
 	if !strings.Contains(string(values), "topology:\n    enabled: false") {
-		t.Fatal("TAS must remain disabled until the legacy queue has no admitted workloads")
+		t.Fatal("TAS must remain disabled by default until an explicit reviewed rollout")
 	}
-	if !strings.Contains(string(values), "resourceFlavorName: gpu-4090-tas-flavor") {
-		t.Fatal("TAS cutover must create a new flavor because ResourceFlavor.spec is immutable")
+	var decoded struct {
+		Kueue struct {
+			ResourceFlavorName string `yaml:"resourceFlavorName"`
+			Topology           struct {
+				ResourceFlavorName string `yaml:"resourceFlavorName"`
+				WorkloadEnabled    *bool  `yaml:"workloadEnabled"`
+			} `yaml:"topology"`
+		} `yaml:"kueue"`
+	}
+	if err := yaml.Unmarshal(values, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Kueue.Topology.WorkloadEnabled != nil {
+		t.Fatal("default workloadEnabled must be absent to inherit topology.enabled")
+	}
+	if decoded.Kueue.ResourceFlavorName != "gpu-4090-flavor" || decoded.Kueue.Topology.ResourceFlavorName != decoded.Kueue.ResourceFlavorName {
+		t.Fatal("initial single-flavor TAS rollout must preserve the existing flavor name and quota")
 	}
 	template, err := os.ReadFile("../../helm/ray-train-platform/templates/kueue-resources.yaml")
 	if err != nil {
@@ -83,6 +103,67 @@ func TestChartKeepsTopologyAwareSchedulingBehindExplicitCutover(t *testing.T) {
 		if !strings.Contains(contents, required) {
 			t.Fatalf("TAS template is missing %q", required)
 		}
+	}
+}
+
+func TestChartCanDisableNewTopologyRequestsWithoutRemovingFlavorTopology(t *testing.T) {
+	deployment, err := os.ReadFile("../../helm/ray-train-platform/templates/backend-deployment.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Execute the actual switch block; full-chart Helm rendering is a release gate.
+	contents := string(deployment)
+	start := strings.Index(contents, "{{- $kueueTopology :=")
+	end := strings.Index(contents, "{{- if (default false $datasetPublisher.enabled)")
+	if start < 0 || end <= start {
+		t.Fatal("cannot locate topology switch block")
+	}
+	funcs := template.FuncMap{
+		"dict": func() map[string]any { return map[string]any{} },
+		"default": func(fallback, value any) any {
+			if value == nil || value == false {
+				return fallback
+			}
+			return value
+		},
+		"get":    func(values map[string]any, key string) any { return values[key] },
+		"hasKey": func(values map[string]any, key string) bool { _, ok := values[key]; return ok },
+		"kindIs": func(kind string, value any) bool { _, ok := value.(bool); return kind == "bool" && ok },
+		"fail":   func(message string) (string, error) { return "", fmt.Errorf("%s", message) },
+	}
+	tmpl, err := template.New("topology").Funcs(funcs).Parse(contents[start:end] + "{{ $kueueWorkloadTopologyEnabled }}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name      string
+		topology  map[string]any
+		want      string
+		wantError bool
+	}{
+		{"missing map", nil, "false", false},
+		{"default disabled", map[string]any{"enabled": false}, "false", false},
+		{"inherit enabled", map[string]any{"enabled": true}, "true", false},
+		{"explicit enabled", map[string]any{"enabled": true, "workloadEnabled": true}, "true", false},
+		{"retain resources only", map[string]any{"enabled": true, "workloadEnabled": false}, "false", false},
+		{"both disabled", map[string]any{"enabled": false, "workloadEnabled": false}, "false", false},
+		{"missing topology resources", map[string]any{"enabled": false, "workloadEnabled": true}, "", true},
+		{"reject string false", map[string]any{"enabled": true, "workloadEnabled": "false"}, "", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			err := tmpl.Execute(&output, map[string]any{"Values": map[string]any{"kueue": map[string]any{"topology": tt.topology}}})
+			if (err != nil) != tt.wantError || (!tt.wantError && strings.TrimSpace(output.String()) != tt.want) {
+				t.Fatalf("topology result = %q, %v; want %q, error=%v", output.String(), err, tt.want, tt.wantError)
+			}
+		})
+	}
+	resources, err := os.ReadFile("../../helm/ray-train-platform/templates/kueue-resources.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(resources), "workloadEnabled") {
+		t.Fatal("disabling new topology requests must not remove the Topology or flavor topologyName")
 	}
 }
 
