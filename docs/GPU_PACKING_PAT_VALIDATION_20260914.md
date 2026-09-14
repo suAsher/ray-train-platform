@@ -21,7 +21,7 @@ Portal 新入口 `index-boZxrMH7.js` 引用账户组件 `index-D2xzj4ad.js`，�
 
 同一个 `gpu-4090-flavor` 首次增加 `topologyName=raytrain-hostname`，保留原 ClusterQueue、LocalQueue、资源池及提交方式。`KUEUE_TOPOLOGY_ENABLED=true`，抢占仍关闭，全部抢占策略为 Never。GPU 总配额保持 **32**；CPU `709364m`、内存 `2951216230144` 均按发布前 live 值保留。
 
-新 RayJob Worker 使用 `podset-unconstrained-topology: "true"`，取消与装箱冲突的硬拓扑分散。TAS 按实际 GPU、CPU、内存和存储约束安排节点。现有任务不会自动搬迁，DevWorkspace 不在此训练调度改动范围。
+最初发布的新 RayJob Worker 使用 `podset-unconstrained-topology: "true"`，取消与装箱冲突的硬拓扑分散。随后线上核对发现该注解只能让 Kueue 使用默认拓扑分配，不能稳定表达“优先填充一个 hostname”。后续修复改为 `podset-preferred-topology: kubernetes.io/hostname`，让 Kueue 使用 hostname 级 best-fit。TAS 按实际 GPU、CPU、内存和存储约束安排节点。现有任务不会自动搬迁，DevWorkspace 不在此训练调度改动范围。
 
 首次增加 ResourceFlavor 的 topologyName 已通过实际 API server 更新 dry-run；已有该字段后禁止修改或移除。因此此次首次启用未使用可能尝试移除字段的 Helm 自动回滚；恢复流程见 [运维指南](OPERATIONS_GUIDE.md#63-gpu-装箱与-tas-切换)。只关闭 Worker 注解不能视作完全关闭 TAS。
 

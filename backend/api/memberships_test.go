@@ -166,3 +166,30 @@ func TestTenantAdminCannotReassignUserTeam(t *testing.T) {
 		t.Fatalf("tenant admin reassignment response=%d writes=%+v", response.Code, store.reassigned)
 	}
 }
+
+func TestSuperAdminCanReassignOwnTeamWithoutGrantingGlobalRole(t *testing.T) {
+	for _, test := range []struct {
+		roles  string
+		status int
+	}{
+		{`["Engineer"]`, http.StatusOK},
+		{`["SuperAdmin"]`, http.StatusBadRequest},
+	} {
+		store := &fakeMembershipStore{items: map[string][]domain.TenantMembership{}}
+		handler := NewHandler(&fakeJobRepository{}, Options{Memberships: store})
+		principal := auth.Principal{Subject: "root", TenantID: "local", Roles: []string{domain.RoleSuperAdmin}, AuthType: auth.AuthTypeOAuth2Proxy}
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPut, "/api/v1/users/root/active-membership", bytes.NewBufferString(`{"expectedTenantId":"local","targetTenantId":"devops","roles":`+test.roles+`}`))
+		request.Header.Set("Content-Type", "application/json")
+		membershipRouter(handler, principal).ServeHTTP(response, request)
+		if response.Code != test.status {
+			t.Fatalf("self team assignment: %d %s", response.Code, response.Body.String())
+		}
+		if test.status == http.StatusOK && store.reassigned.identityID != "root" {
+			t.Fatalf("wrong target: %+v", store.reassigned)
+		}
+		if test.status != http.StatusOK && store.reassigned.identityID != "" {
+			t.Fatal("team membership granted global role")
+		}
+	}
+}

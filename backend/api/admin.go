@@ -50,6 +50,7 @@ func (h *Handler) RegisterAdminRoutes(group *gin.RouterGroup) {
 	group.GET("/tenants/:id/retirement-preflight", h.tenantRetirementPreflight)
 	group.POST("/tenants/:id/retire", h.retireTenant)
 	group.GET("/gpu-allocations", h.listGPUAllocations)
+	group.DELETE("/admin/dev-workspaces/:id", h.adminStopWorkspace)
 	group.GET("/tenants", h.listTenants)
 	group.POST("/tenants", h.createTenant)
 	group.PATCH("/tenants/:id", h.renameTenant)

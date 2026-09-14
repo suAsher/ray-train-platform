@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -890,18 +891,63 @@ func (h *Handler) listExperiments(c *gin.Context) {
 	if principal.Allowed(domain.RoleTenantAdmin) {
 		subject = ""
 	}
-	catalog, err := h.experiments.ListTenantExperiments(c.Request.Context(), principal.TenantID, subject, limit)
+	catalog, err := h.experimentCatalogForPrincipal(c.Request.Context(), principal, subject, limit)
 	if err != nil {
 		h.writeError(c, http.StatusBadGateway, "MLFLOW_QUERY_FAILED", "could not query training experiments")
 		return
 	}
+	h.writeSuccess(c, http.StatusOK, catalog)
+}
+
+func (h *Handler) experimentCatalogForPrincipal(ctx context.Context, principal auth.Principal, subject string, limit int) (observability.ExperimentCatalog, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if !principal.HasRole(domain.RoleSuperAdmin) {
+		return h.verifiedTenantExperimentCatalog(ctx, principal.TenantID, subject, limit)
+	}
+	if h.admin == nil {
+		return observability.ExperimentCatalog{}, fmt.Errorf("global tenant lookup is not supported")
+	}
+	// Enumerate database tenants, including retired ones, rather than deriving
+	// tenants from a limited page of jobs or user-controlled MLflow tags.
+	tenants, err := h.admin.ListTenantSummaries(ctx)
+	if err != nil {
+		return observability.ExperimentCatalog{}, err
+	}
+	catalog := observability.ExperimentCatalog{Runs: []observability.ExperimentRunSummary{}}
+	for _, tenant := range tenants {
+		tenantCatalog, err := h.verifiedTenantExperimentCatalog(ctx, tenant.ID, "", limit)
+		if err != nil {
+			return observability.ExperimentCatalog{}, err
+		}
+		catalog.Runs = append(catalog.Runs, tenantCatalog.Runs...)
+	}
+	// Each tenant contributes its latest N candidates; truncating before this
+	// merge could hide the globally newest run in a later tenant.
+	sort.SliceStable(catalog.Runs, func(i, j int) bool {
+		if catalog.Runs[i].StartTimeMS != catalog.Runs[j].StartTimeMS {
+			return catalog.Runs[i].StartTimeMS > catalog.Runs[j].StartTimeMS
+		}
+		return catalog.Runs[i].ID < catalog.Runs[j].ID
+	})
+	if len(catalog.Runs) > limit {
+		catalog.Runs = catalog.Runs[:limit]
+	}
+	return catalog, nil
+}
+
+func (h *Handler) verifiedTenantExperimentCatalog(ctx context.Context, tenantID, subject string, limit int) (observability.ExperimentCatalog, error) {
+	catalog, err := h.experiments.ListTenantExperiments(ctx, tenantID, subject, limit)
+	if err != nil {
+		return observability.ExperimentCatalog{}, err
+	}
 	verified := make([]observability.ExperimentRunSummary, 0, len(catalog.Runs))
 	for _, run := range catalog.Runs {
-		job, err := h.repository.Get(c.Request.Context(), principal.TenantID, run.JobID)
-		if err != nil {
+		job, err := h.repository.Get(ctx, tenantID, run.JobID)
+		if err != nil || job == nil || job.TenantID != tenantID {
 			continue
 		}
-		if subject != "" && job.UserID != principal.Subject {
+		if subject != "" && job.UserID != subject {
 			continue
 		}
 		// The platform database, not a user-controlled MLflow tag, is the
@@ -910,7 +956,7 @@ func (h *Handler) listExperiments(c *gin.Context) {
 		verified = append(verified, run)
 	}
 	catalog.Runs = verified
-	h.writeSuccess(c, http.StatusOK, catalog)
+	return catalog, nil
 }
 
 func (h *Handler) principal(c *gin.Context) (auth.Principal, bool) {

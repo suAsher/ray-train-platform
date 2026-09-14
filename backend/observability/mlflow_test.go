@@ -280,15 +280,20 @@ func TestMLflowClientCatalogFollowsPagesPastUnverifiedRuns(t *testing.T) {
 			_, _ = response.Write([]byte(`{"experiment":{"experiment_id":"7"}}`))
 		case "/api/2.0/mlflow/runs/search":
 			var body map[string]any
-			if err := json.NewDecoder(request.Body).Decode(&body); err != nil { t.Fatal(err) }
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
 			pages++
 			if pages == 1 {
 				_, _ = response.Write([]byte(`{"runs":[{"info":{"run_id":"untrusted"}}],"next_page_token":"second"}`))
 				return
 			}
-			if body["page_token"] != "second" { t.Errorf("missing continuation token: %+v", body) }
+			if body["page_token"] != "second" {
+				t.Errorf("missing continuation token: %+v", body)
+			}
 			_, _ = fmt.Fprintf(response, `{"runs":[{"info":{"run_id":"verified","start_time":1000},"data":{"tags":[{"key":"platform.job_id","value":"job-01"},{"key":"platform.provenance","value":"%s"}]}}]}`, mlflowProvenanceTag(testProvenanceKey, "job-01"))
-		default: http.NotFound(response, request)
+		default:
+			http.NotFound(response, request)
 		}
 	}))
 	defer server.Close()
@@ -296,5 +301,48 @@ func TestMLflowClientCatalogFollowsPagesPastUnverifiedRuns(t *testing.T) {
 	catalog, err := client.ListTenantExperiments(context.Background(), "team-a", "", 1)
 	if err != nil || pages != 2 || len(catalog.Runs) != 1 || catalog.Runs[0].ID != "verified" {
 		t.Fatalf("unverified first page hid a valid run: catalog=%+v pages=%d err=%v", catalog, pages, err)
+	}
+}
+
+func TestMLflowClientCatalogBoundsInvalidPageContinuations(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		repeated  bool
+		wantCalls int
+		wantError string
+	}{
+		{name: "repeated token", repeated: true, wantCalls: 2, wantError: "repeated page token"},
+		{name: "scan budget", wantCalls: 100, wantError: "exceeded 100 pages"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				if request.URL.Path == "/api/2.0/mlflow/experiments/get-by-name" {
+					_, _ = response.Write([]byte(`{"experiment":{"experiment_id":"7"}}`))
+					return
+				}
+				calls++
+				token := fmt.Sprintf("page-%d", calls)
+				if test.repeated {
+					token = "repeated"
+				}
+				_, _ = fmt.Fprintf(response, `{"runs":[],"next_page_token":%q}`, token)
+			}))
+			defer server.Close()
+			client := &MLflowClient{BaseURL: server.URL, ProvenanceKey: testProvenanceKey, HTTPClient: server.Client()}
+			catalog, err := client.ListTenantExperiments(context.Background(), "team-a", "", 1)
+			if err == nil || !strings.Contains(err.Error(), test.wantError) || calls != test.wantCalls || len(catalog.Runs) != 0 {
+				t.Fatalf("unbounded or misleading catalog: calls=%d catalog=%+v err=%v", calls, catalog, err)
+			}
+		})
+	}
+}
+
+func TestMLflowClientCatalogHonorsCanceledContext(t *testing.T) {
+	client := &MLflowClient{BaseURL: "http://127.0.0.1:1", ProvenanceKey: testProvenanceKey}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := client.ListTenantExperiments(ctx, "team-a", "", 1); err == nil || !strings.Contains(err.Error(), "context canceled") {
+		t.Fatalf("canceled request must stop scanning: %v", err)
 	}
 }

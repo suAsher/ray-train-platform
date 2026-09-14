@@ -12,8 +12,8 @@ import (
 
 const administrativeAuditTextLimit = 128
 
-// AdministrativeAuditEvent is intentionally narrow. Only the two supported
-// team-governance actions and their allowlisted metadata can reach audit_logs.
+// AdministrativeAuditEvent is intentionally narrow. Only supported governance
+// actions and their allowlisted metadata can reach audit_logs.
 type AdministrativeAuditEvent struct {
 	Action         string
 	ResourceID     string
@@ -31,6 +31,8 @@ func (r *GormRepository) CreateAdministrativeAuditLog(ctx context.Context, event
 		resourceType = "tenant"
 	case "tenant_membership.reassigned":
 		resourceType = "local_user"
+	case "workspace.stopped":
+		resourceType = "dev_workspace"
 	default:
 		return fmt.Errorf("unsupported administrative audit action")
 	}

@@ -192,60 +192,80 @@ func (c *MLflowClient) ListTenantExperiments(ctx context.Context, tenantID, subj
 	if subject != "" {
 		body["filter"] = "tags.`platform.submitter_user_id` = '" + subject + "'"
 	}
-	var payload struct {
-		Runs []struct {
-			Info struct {
-				ID        string `json:"run_id"`
-				Name      string `json:"run_name"`
-				Status    string `json:"status"`
-				StartTime int64  `json:"start_time"`
-				EndTime   int64  `json:"end_time"`
-			} `json:"info"`
-			Data struct {
-				Metrics []mlflowMetric `json:"metrics"`
-				Tags    []struct {
-					Key   string `json:"key"`
-					Value string `json:"value"`
-				} `json:"tags"`
-			} `json:"data"`
-		} `json:"runs"`
-	}
-	if _, err := c.doJSON(ctx, http.MethodPost, endpoint, body, &payload); err != nil {
-		return ExperimentCatalog{}, err
-	}
-	for _, raw := range payload.Runs {
-		if raw.Info.ID == "" {
-			continue
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	seenTokens := map[string]struct{}{}
+	// Bound scanning through untrusted/unlinked runs. Failure returns no partial
+	// catalog, so callers never mistake an exhausted scan budget for completeness.
+	for page := 0; page < 100; page++ {
+		var payload struct {
+			Runs []struct {
+				Info struct {
+					ID        string `json:"run_id"`
+					Name      string `json:"run_name"`
+					Status    string `json:"status"`
+					StartTime int64  `json:"start_time"`
+					EndTime   int64  `json:"end_time"`
+				} `json:"info"`
+				Data struct {
+					Metrics []mlflowMetric `json:"metrics"`
+					Tags    []struct {
+						Key   string `json:"key"`
+						Value string `json:"value"`
+					} `json:"tags"`
+				} `json:"data"`
+			} `json:"runs"`
+			NextPageToken string `json:"next_page_token"`
 		}
-		run := ExperimentRunSummary{
-			ID: raw.Info.ID, Name: truncate(raw.Info.Name, 256), Status: truncate(raw.Info.Status, 32),
-			StartTimeMS: raw.Info.StartTime, EndTimeMS: raw.Info.EndTime,
-			Latest: map[string]float64{},
+		if _, err := c.doJSON(ctx, http.MethodPost, endpoint, body, &payload); err != nil {
+			return ExperimentCatalog{}, err
 		}
-		run.Latest, _ = selectMLflowMetrics(raw.Data.Metrics)
-		provenance := ""
-		for _, tag := range raw.Data.Tags {
-			switch tag.Key {
-			case "platform.job_id":
-				if safeLabelValue(tag.Value) {
-					run.JobID = tag.Value
+		for _, raw := range payload.Runs {
+			if raw.Info.ID == "" {
+				continue
+			}
+			run := ExperimentRunSummary{
+				ID: raw.Info.ID, Name: truncate(raw.Info.Name, 256), Status: truncate(raw.Info.Status, 32),
+				StartTimeMS: raw.Info.StartTime, EndTimeMS: raw.Info.EndTime,
+				Latest: map[string]float64{},
+			}
+			run.Latest, _ = selectMLflowMetrics(raw.Data.Metrics)
+			provenance := ""
+			for _, tag := range raw.Data.Tags {
+				switch tag.Key {
+				case "platform.job_id":
+					if safeLabelValue(tag.Value) {
+						run.JobID = tag.Value
+					}
+				case "platform.submitter_user_id":
+					if safeLabelValue(tag.Value) {
+						run.SubmitterUserID = tag.Value
+					}
+				case "platform.provenance":
+					provenance = tag.Value
 				}
-			case "platform.submitter_user_id":
-				if safeLabelValue(tag.Value) {
-					run.SubmitterUserID = tag.Value
-				}
-			case "platform.provenance":
-				provenance = tag.Value
+			}
+			// Runs not created by the platform cannot be linked to an authorised
+			// training job and are intentionally hidden from the Portal catalog.
+			if run.JobID == "" || !hmac.Equal([]byte(provenance), []byte(mlflowProvenanceTag(c.ProvenanceKey, run.JobID))) {
+				continue
+			}
+			result.Runs = append(result.Runs, run)
+			if len(result.Runs) == limit {
+				return result, nil
 			}
 		}
-		// Runs not created by the platform cannot be linked to an authorised
-		// training job and are intentionally hidden from the Portal catalog.
-		if run.JobID == "" || !hmac.Equal([]byte(provenance), []byte(mlflowProvenanceTag(c.ProvenanceKey, run.JobID))) {
-			continue
+		pageToken := strings.TrimSpace(payload.NextPageToken)
+		if pageToken == "" {
+			return result, nil
 		}
-		result.Runs = append(result.Runs, run)
+		if _, exists := seenTokens[pageToken]; exists {
+			return ExperimentCatalog{}, fmt.Errorf("MLflow returned a repeated page token")
+		}
+		seenTokens[pageToken] = struct{}{}
+		body["page_token"] = pageToken
 	}
-	return result, nil
+	return ExperimentCatalog{}, fmt.Errorf("MLflow experiment scan exceeded 100 pages")
 }
 
 // FinalizeJobRuns closes every still-running MLflow run that is cryptographically

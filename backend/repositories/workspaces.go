@@ -76,6 +76,34 @@ func (r *GormRepository) GetWorkspace(ctx context.Context, tenantID, userID stri
 	return record.toDomain(), nil
 }
 
+// GetWorkspaceByID applies the administrator's team boundary in the lookup.
+// An empty tenant is reserved for an already-authorized platform administrator;
+// editor access continues to use the separate owner-scoped lookup methods.
+func (r *GormRepository) GetWorkspaceByID(ctx context.Context, id, tenantID string) (*domain.DevWorkspace, error) {
+	query := r.db.WithContext(ctx).Where("id = ?", id)
+	if tenantID != "" {
+		query = query.Where("tenant_id = ?", tenantID)
+	}
+	var record WorkspaceRecord
+	if err := query.First(&record).Error; err != nil {
+		return nil, fmt.Errorf("get workspace by ID: %w", err)
+	}
+	return record.toDomain(), nil
+}
+
+// UpdateWorkspaceStateByID cannot affect a replacement workspace that shares
+// the previous workspace's owner and tenant.
+func (r *GormRepository) UpdateWorkspaceStateByID(ctx context.Context, id string, state domain.WorkspaceState) error {
+	result := r.db.WithContext(ctx).Model(&WorkspaceRecord{}).Where("id = ?", id).Updates(map[string]any{"observed_state": state, "updated_at": time.Now().UTC()})
+	if result.Error != nil {
+		return fmt.Errorf("update workspace state by ID: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("workspace not found")
+	}
+	return nil
+}
+
 // GetWorkspaceByUser looks a workspace up by owner alone. The JupyterLab proxy
 // authorises with a workspace-scoped token that carries the user but not the
 // tenant, and the tenant is implied by the owner.

@@ -256,10 +256,9 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 	addPodLabels(headPod, job.ID, job.TenantID)
 	addPodLabels(workerPod, job.ID, job.TenantID)
 	if options.TopologyAwareScheduling {
-		// Kueue's mixed TAS profile uses LeastFreeCapacity for unconstrained
-		// PodSets, including one-worker jobs. Its shared capacity accounting
-		// fills partially used hosts before opening another GPU node.
-		addPodAnnotation(workerPod, "kueue.x-k8s.io/podset-unconstrained-topology", "true")
+		// Preferred hostname TAS keeps Kueue in charge of admission while asking
+		// it to pack each GPU PodSet into the tightest usable host first.
+		addPodAnnotation(workerPod, "kueue.x-k8s.io/podset-preferred-topology", "kubernetes.io/hostname")
 	}
 	managedMultiNode := job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain && workerReplicas > 1
 	legacyRayTrain := job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayDDP && job.Spec.Execution.ResolvedMode() == domain.ExecutionModeRayTrain

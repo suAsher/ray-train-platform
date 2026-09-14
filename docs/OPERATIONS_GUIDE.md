@@ -728,8 +728,10 @@ bash ops/gpu/verify-production-pool.sh
 这是当时快照，发布前必须重新读取；不能以 GPU 利用率代替 Pod 的 GPU 请求来计算空闲卡。
 
 目标是让无指定节点的单卡及非整机训练优先使用已有余量，保留更多整机容量。
+RayTrain Worker 应使用 `podset-preferred-topology: kubernetes.io/hostname`。
 Kueue v0.19 的默认 Mixed profile 对 `podset-unconstrained-topology: "true"`
-采用 LeastFreeCapacity；它与 `podset-preferred-topology` 使用的 BestFit 不是同一策略。
+采用 LeastFreeCapacity；线上已观察到它会把多个独立小任务分散到不同 hostname，不能用来表达本平台的装箱目标。
+`podset-preferred-topology` 使用 BestFit，更符合优先填充已有余量的目标。
 拓扑对象、Flavor 关联和 PodSet 注解必须同时生效，详见
 [Kueue v0.19 TAS 官方说明](https://kueue.sigs.k8s.io/v0.19/docs/tasks/run/topology_aware_scheduling/)。
 CPU、内存、节点选择、存储及任务实际拓扑要求仍可能使任务分散，不能承诺所有小任务必在同一节点。

@@ -26,9 +26,9 @@ import (
 type administrativeWorkspaceStore struct {
 	fakeWorkspaceStore
 	lookupTenant string
-	lookupCalls int
-	updatedID string
-	updateErr error
+	lookupCalls  int
+	updatedID    string
+	updateErr    error
 }
 
 func (s *administrativeWorkspaceStore) GetWorkspaceByID(_ context.Context, id, tenantID string) (*domain.DevWorkspace, error) {
@@ -50,7 +50,9 @@ func (s *administrativeWorkspaceStore) GetWorkspace(_ context.Context, tenantID,
 }
 
 func (s *administrativeWorkspaceStore) GetWorkspaceByUser(_ context.Context, userID string) (*domain.DevWorkspace, error) {
-	if userID != s.workspace.UserID { return nil, errors.New("workspace not found") }
+	if userID != s.workspace.UserID {
+		return nil, errors.New("workspace not found")
+	}
 	copy := s.workspace
 	return &copy, nil
 }
@@ -79,8 +81,8 @@ func (s *workspaceAdministrativeAuditStore) CreateAdministrativeAuditLog(_ conte
 func TestAdminStopWorkspaceAuthorizationAndCleanup(t *testing.T) {
 	for _, test := range []struct {
 		name, subject, tenant, role string
-		status int
-		lookupTenant string
+		status                      int
+		lookupTenant                string
 	}{
 		{"super admin cross team", "root", "platform", domain.RoleSuperAdmin, http.StatusAccepted, ""},
 		{"team admin own team", "lead", "team-a", domain.RoleTenantAdmin, http.StatusAccepted, "team-a"},
@@ -133,7 +135,9 @@ func administrativeWorkspaceRouter(principal auth.Principal) (*gin.Engine, *admi
 	handler := NewHandler(&fakeJobRepository{}, Options{Workspaces: store, Kubernetes: k8s.NewClientFromInterfaces(dynamic, core), Admin: audit, WorkspacePepper: []byte(strings.Repeat("p", 32))})
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
-		if principal.Subject != "" { c.Set("ray-platform-principal", principal) }
+		if principal.Subject != "" {
+			c.Set("ray-platform-principal", principal)
+		}
 		c.Next()
 	})
 	handler.RegisterAdminRoutes(router.Group("/api/v1"))
@@ -149,9 +153,13 @@ func TestAdminStopWorkspaceFailureDoesNotClaimStopped(t *testing.T) {
 			reactor := func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, errors.New("unavailable") }
 			want := http.StatusBadGateway
 			switch failure {
-			case "cluster": dynamic.PrependReactor("delete", "rayclusters", reactor)
-			case "service": core.PrependReactor("delete", "services", reactor)
-			case "state": store.updateErr = errors.New("unavailable"); want = http.StatusInternalServerError
+			case "cluster":
+				dynamic.PrependReactor("delete", "rayclusters", reactor)
+			case "service":
+				core.PrependReactor("delete", "services", reactor)
+			case "state":
+				store.updateErr = errors.New("unavailable")
+				want = http.StatusInternalServerError
 			}
 			response := httptest.NewRecorder()
 			router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/api/v1/admin/dev-workspaces/ws-target", nil))
@@ -167,19 +175,27 @@ func TestAdminWorkspaceManagementDoesNotGrantEditorAccess(t *testing.T) {
 		router, _, _, dynamic, core := administrativeWorkspaceRouter(auth.Principal{Subject: "admin", TenantID: "team-a", Roles: []string{role}})
 		for _, path := range []string{"/api/v1/dev-workspaces/ws-target/access", "/api/v1/dev-workspaces/ws-target/proxy/", "/api/v1/dev-workspaces/ws-target/vscode/"} {
 			method := http.MethodGet
-			if strings.HasSuffix(path, "/access") { method = http.MethodPost }
+			if strings.HasSuffix(path, "/access") {
+				method = http.MethodPost
+			}
 			response := httptest.NewRecorder()
 			router.ServeHTTP(response, httptest.NewRequest(method, path, nil))
 			if response.Code != http.StatusNotFound {
 				t.Fatalf("%s accessed another user's editor at %s: %d %s", role, path, response.Code, response.Body.String())
 			}
 		}
-		if len(dynamic.Actions()) != 0 || len(core.Actions()) != 0 { t.Fatal("editor request reached Kubernetes") }
+		if len(dynamic.Actions()) != 0 || len(core.Actions()) != 0 {
+			t.Fatal("editor request reached Kubernetes")
+		}
 	}
 }
 
 func TestAdminStopWorkspaceUnauthenticatedAndUnknown(t *testing.T) {
-	for _, test := range []struct { principal auth.Principal; id string; status int }{
+	for _, test := range []struct {
+		principal auth.Principal
+		id        string
+		status    int
+	}{
 		{auth.Principal{}, "ws-target", http.StatusUnauthorized},
 		{auth.Principal{Subject: "root", Roles: []string{domain.RoleSuperAdmin}}, "ws-missing", http.StatusNotFound},
 	} {
@@ -193,7 +209,10 @@ func TestAdminStopWorkspaceUnauthenticatedAndUnknown(t *testing.T) {
 }
 
 func TestWorkspaceSelfStopRemainsOwnerOnly(t *testing.T) {
-	for _, test := range []struct { subject, role string; status int }{
+	for _, test := range []struct {
+		subject, role string
+		status        int
+	}{
 		{"owner", domain.RoleEngineer, http.StatusAccepted},
 		{"admin", domain.RoleSuperAdmin, http.StatusNotFound},
 		{"other", domain.RoleEngineer, http.StatusNotFound},
@@ -201,8 +220,12 @@ func TestWorkspaceSelfStopRemainsOwnerOnly(t *testing.T) {
 		router, store, _, dynamic, core := administrativeWorkspaceRouter(auth.Principal{Subject: test.subject, TenantID: "team-a", Roles: []string{test.role}})
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/api/v1/dev-workspaces/me?userId=owner", nil))
-		if response.Code != test.status || store.lookupCalls != 0 { t.Fatalf("self stop changed ownership: %d %s", response.Code, response.Body.String()) }
-		if test.status != http.StatusAccepted && (len(dynamic.Actions()) != 0 || len(core.Actions()) != 0) { t.Fatal("self stop touched another user's resources") }
+		if response.Code != test.status || store.lookupCalls != 0 {
+			t.Fatalf("self stop changed ownership: %d %s", response.Code, response.Body.String())
+		}
+		if test.status != http.StatusAccepted && (len(dynamic.Actions()) != 0 || len(core.Actions()) != 0) {
+			t.Fatal("self stop touched another user's resources")
+		}
 	}
 }
 
@@ -211,7 +234,45 @@ func TestAdminStopWorkspaceIsIdempotent(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/api/v1/admin/dev-workspaces/ws-target", nil))
-		if response.Code != http.StatusAccepted { t.Fatalf("repeat stop failed: %d %s", response.Code, response.Body.String()) }
+		if response.Code != http.StatusAccepted {
+			t.Fatalf("repeat stop failed: %d %s", response.Code, response.Body.String())
+		}
 		store.workspace.State = domain.WorkspaceStopped
+	}
+}
+
+func TestAdminStopWorkspaceRequiresConfiguredManager(t *testing.T) {
+	for _, options := range []Options{
+		{},
+		{Workspaces: &fakeWorkspaceStore{}, Kubernetes: &k8s.Client{}},
+		{Workspaces: &administrativeWorkspaceStore{}},
+	} {
+		handler := NewHandler(&fakeJobRepository{}, options)
+		response := httptest.NewRecorder()
+		adminRouter(handler, auth.Principal{Subject: "root", Roles: []string{domain.RoleSuperAdmin}}).ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/api/v1/admin/dev-workspaces/ws-target", nil))
+		if response.Code != http.StatusServiceUnavailable {
+			t.Fatalf("missing manager accepted: %d %s", response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestAdminStopWorkspaceRejectsResourcesOwnedByAnotherWorkspace(t *testing.T) {
+	router, store, audit, dynamic, core := administrativeWorkspaceRouter(auth.Principal{Subject: "root", Roles: []string{domain.RoleSuperAdmin}})
+	resource := dynamic.Resource(schema.GroupVersionResource{Group: "ray.io", Version: "v1", Resource: "rayclusters"}).Namespace("tenant-team-a")
+	cluster, err := resource.Get(context.Background(), "dev-target", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster.SetLabels(map[string]string{"ray.io/workspace-id": "ws-replacement"})
+	if _, err := resource.Update(context.Background(), cluster, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/api/v1/admin/dev-workspaces/ws-target", nil))
+	if response.Code != http.StatusBadGateway || store.updatedID != "" || len(audit.events) != 0 || len(core.Actions()) != 0 {
+		t.Fatalf("wrong-owner resources deleted: %d %s", response.Code, response.Body.String())
+	}
+	if _, err := resource.Get(context.Background(), "dev-target", metav1.GetOptions{}); err != nil {
+		t.Fatal("replacement cluster was deleted")
 	}
 }

@@ -125,7 +125,7 @@ func TestRenderRayJobRequestsTopologyPackingOnlyAfterTASCutover(t *testing.T) {
 	worker := workers[0].(map[string]any)
 	metadata := worker["template"].(map[string]any)["metadata"].(map[string]any)
 	annotations, _ := metadata["annotations"].(map[string]any)
-	if annotations["kueue.x-k8s.io/podset-unconstrained-topology"] != "true" {
+	if annotations["kueue.x-k8s.io/podset-preferred-topology"] != "kubernetes.io/hostname" {
 		t.Fatalf("worker must request topology-aware packing after cutover: %#v", annotations)
 	}
 }

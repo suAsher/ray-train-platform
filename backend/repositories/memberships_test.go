@@ -75,3 +75,33 @@ func TestMembershipSwitchAndDisableFailClosed(t *testing.T) {
 		t.Fatalf("inactive membership switch error=%v", err)
 	}
 }
+
+func TestSuperAdminTeamReassignmentPreservesGlobalRoleAndStorage(t *testing.T) {
+	repository := membershipRepository(t)
+	if err := repository.db.Model(&LocalUserRecord{}).Where("id = ?", "user-a").Updates(map[string]any{
+		"roles": `["SuperAdmin"]`, "global_roles": `["SuperAdmin"]`,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.ReassignActiveMembership(context.Background(), "user-a", "team-a", "team-b", []string{domain.RoleEngineer}, true); err != nil {
+		t.Fatal(err)
+	}
+	user, found, err := repository.ResolveOAuth2ProxyAccount(context.Background(), "alice")
+	if err != nil || !found {
+		t.Fatalf("resolve reassigned administrator: found=%t err=%v", found, err)
+	}
+	roles := map[string]bool{}
+	for _, role := range user.Roles {
+		roles[role] = true
+	}
+	if user.TenantID != "team-b" || user.StorageKey != "stable-alice" || !roles[domain.RoleSuperAdmin] || !roles[domain.RoleEngineer] {
+		t.Fatalf("team reassignment changed global authority or storage: %+v", user)
+	}
+	var account LocalUserRecord
+	if err := repository.db.Where("id = ?", "user-a").First(&account).Error; err != nil {
+		t.Fatal(err)
+	}
+	if account.GlobalRolesJSON != `["SuperAdmin"]` {
+		t.Fatalf("global roles changed: %s", account.GlobalRolesJSON)
+	}
+}

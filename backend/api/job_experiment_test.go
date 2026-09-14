@@ -17,13 +17,13 @@ import (
 )
 
 type fakeExperimentProvider struct {
-	tenant  string
-	jobID   string
-	subject string
-	limit   int
-	catalog observability.ExperimentCatalog
+	tenant   string
+	jobID    string
+	subject  string
+	limit    int
+	catalog  observability.ExperimentCatalog
 	catalogs map[string]observability.ExperimentCatalog
-	queried []string
+	queried  []string
 }
 
 func (provider *fakeExperimentProvider) QueryJobExperiment(_ context.Context, tenant, jobID string) (observability.JobExperiment, error) {
@@ -202,9 +202,13 @@ func TestListExperimentsSuperAdminMergesAllTenantsBeforeApplyingLimit(t *testing
 		{ID: "cross-tenant-forged", JobID: "job-104", StartTimeMS: 99999},
 	}}
 	handler := NewHandler(repository, Options{Experiments: provider, Admin: admin})
-	response := requestExperimentCatalog(handler, auth.Principal{Subject: "root", TenantID: "team-000", Roles: []string{domain.RoleSuperAdmin}}, "?limit=2")
-	var payload struct { Data observability.ExperimentCatalog `json:"data"` }
-	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil { t.Fatal(err) }
+	response := requestExperimentCatalog(handler, auth.Principal{Subject: "root", TenantID: "team-000", Roles: []string{domain.RoleSuperAdmin}, AuthType: auth.AuthTypeOAuth2Proxy}, "?limit=2")
+	var payload struct {
+		Data observability.ExperimentCatalog `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
 	if response.Code != http.StatusOK || len(payload.Data.Runs) != 2 || payload.Data.Runs[0].JobID != "job-104" || payload.Data.Runs[1].JobID != "job-103" {
 		t.Fatalf("global catalog must sort all tenants then limit: %d %s", response.Code, response.Body.String())
 	}
@@ -212,7 +216,9 @@ func TestListExperimentsSuperAdminMergesAllTenantsBeforeApplyingLimit(t *testing
 		t.Fatalf("global catalog omitted tenants or changed requested limit: %+v", provider)
 	}
 	for _, run := range payload.Data.Runs {
-		if run.SubmitterUserID != "db-owner" { t.Fatalf("owner must come from database: %+v", run) }
+		if run.SubmitterUserID != "db-owner" {
+			t.Fatalf("owner must come from database: %+v", run)
+		}
 	}
 }
 
@@ -224,7 +230,7 @@ func TestListExperimentsTenantAdminCannotReadOtherTenantCatalog(t *testing.T) {
 	}}
 	repository := &fakeJobRepository{jobs: []domain.TrainingJob{{ID: "job-a", TenantID: "team-a", UserID: "other-member"}, {ID: "job-b", TenantID: "team-b", UserID: "admin-a"}}}
 	handler := NewHandler(repository, Options{Experiments: provider, Admin: &fakeAdminStore{tenants: []repositories.TenantSummary{{ID: "team-a"}, {ID: "team-b"}}}})
-	response := requestExperimentCatalog(handler, auth.Principal{Subject: "admin-a", TenantID: "team-a", Roles: []string{domain.RoleTenantAdmin}}, "?tenantId=team-b&scope=all")
+	response := requestExperimentCatalog(handler, auth.Principal{Subject: "admin-a", TenantID: "team-a", Roles: []string{domain.RoleTenantAdmin}, AuthType: auth.AuthTypeOAuth2Proxy}, "?tenantId=team-b&scope=all")
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "own-team") || strings.Contains(response.Body.String(), "other-team") || len(provider.queried) != 1 || provider.queried[0] != "team-a" {
 		t.Fatalf("tenant admin crossed tenant boundary: %d %s queries=%v", response.Code, response.Body.String(), provider.queried)
 	}
