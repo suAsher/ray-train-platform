@@ -91,3 +91,19 @@ RED 证据包括首次缺少实现、大小写字段曾被错误接受、单字�
 5. 团队专属节点绑定仍待落地；本轮核实 TAS/闲时抢占仍关闭；IDC 同步已启用但连接器和同步记录均为 0。这些不属于本次改动。
 
 所有首次真实写入联调都应使用另外获准的测试 Job/Run，不向现有用户训练灌入演示数据。
+
+
+## 2026-09-14 实验指标摘要兼容修复
+
+以下为本次修复的实际状态；上文 9 月 12 日的未完成项是历史记录，完整模型生命周期进展另见模型发布验收文档。
+
+- 后端业务候选 `d4242d4083750a2e85e342a3ee82a9a9c9d44b34`：按关键指标优先、其余键稳定排序选取最多 20 项；仍最多查询 20 条指标历史、每条 500 点。没有修改 MLflow Run、训练代码、训练镜像、归属校验或数据库 schema（仍为 52）。
+- 后端线上 `release-20260914-02-d4242d4`，Helm revision **230**；实际 digest `sha256:52288f1862275e84ca168b7666b94a3680f95b8591b51f47a185588418636956`。本轮另一次构建索引 `sha256:09eecb5ab231ec427621353d6e074487c008e9eff409fa6cacc85e0da99e1ae9` 与线上共享相同 amd64 manifest `sha256:0e37c876f251070215bef7c272ccce52f46e705c1bfd504c02eec9a1d308260b`，仅 attestation 不同，因此未重复部署。
+- Portal dev `c051c01c587a385642b1f0ebde8b039a7a377f52`；[CI 33917](https://gitlab.wellspiking.ai/wellspiking/frontend/wellspiking-frontend/-/pipelines/33917) lint/build/deploy 全成功。实际 Pod imageID `sha256:889ba429a5f34584dcfc5128c88cd03bd784d1096bce05805a2c39ba4df30b18`，Ready、重启 0；页面资产 `index-OZ38PLr0.js`。
+- 构建机 RED 复现超过 20 项后丢关键指标和顺序不稳定；GREEN 完整 `go test ./...` 通过。帮助说明最初插入旧正文触发保留原文测试，改为追加说明后完整门禁通过，未删除保留原文断言。Portal 完整 Dockerfile.lint 与 11 项浏览器回归通过。
+- 生产浏览器确认 fef3923、47074168、b990ef4 三条训练显示 Loss/学习率/mAP/NDS；Loss 分别 0.0991、0.1306、0.1155。只含数据集统计的旧 Run 显示“已记录其他指标 · 在 MLflow 查看”，不再误报“尚未上报”。
+- 三条任务 experiment API 返回 200，训练 Loss 历史点分别 492、500、156；首条“MLflow 详情”按钮打开正确 experiment 1 / run 708c9c9bc9be41fe9efb5f7cb2b024c6。
+- 平台使用说明 `mlflow-framework-metrics` 已包含“有指标却未显示时如何判断”，保留原训练接入内容。后端两副本 Ready、重启 0、healthz 200；revision 229→230 manifest 仅后端镜像变化，记录的训练 UID/重启数未变。
+- 边界：SPT Run 10d289d44d544e2aa881debd9ce3fde1 已有指标但没有平台关联标签，本次未擅自改写历史 Run。功能仓自动上传仍处于接口合同确认阶段，本次没有向功能仓上传用户权重。
+
+构建机证据目录：`/root/raytrain-release-20260914-metrics`。本地未跟踪的用户验收 ZIP 保留，未提交。
