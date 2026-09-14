@@ -184,3 +184,39 @@ func TestLiveCreateResponseRelativeFilePaths(t *testing.T) {
 		}
 	}
 }
+
+func TestVersionVerificationAllowsWarehouseManagedFileRelocation(t *testing.T) {
+	client, err := NewClient(Development)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := createFixture()
+	file := liveUploadedFixture()
+	req.Paths = []UploadedFile{file}
+	for _, field := range []string{"filePath", "url", "filename", "size", "sha256"} {
+		t.Run(field, func(t *testing.T) {
+			moved := file
+			moved.FilePath = "/.wellspiking/team/model-function-warehouse/model/DEFAULT/weights.safetensors"
+			switch field {
+			case "url":
+				moved.URL += "-different"
+			case "filename":
+				moved.Filename = "different.safetensors"
+			case "size":
+				moved.FileSize++
+			case "sha256":
+				moved.FileSHA256 = strings.Repeat("0", 64)
+			}
+			body := versionWire(req)
+			body["paths"] = []UploadedFile{moved}
+			encoded, _ := json.Marshal(body)
+			var actual Version
+			if err := json.Unmarshal(encoded, &actual); err != nil {
+				t.Fatal(err)
+			}
+			if matched := client.matchesVersion(actual, req); matched != (field == "filePath") {
+				t.Fatalf("managed relocation / immutable %s boundary: matched=%t", field, matched)
+			}
+		})
+	}
+}
