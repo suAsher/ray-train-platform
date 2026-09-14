@@ -271,3 +271,30 @@ func TestMLflowTerminalStatusMapping(t *testing.T) {
 		t.Fatal("running jobs must not be finalized")
 	}
 }
+
+func TestMLflowClientCatalogFollowsPagesPastUnverifiedRuns(t *testing.T) {
+	pages := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/2.0/mlflow/experiments/get-by-name":
+			_, _ = response.Write([]byte(`{"experiment":{"experiment_id":"7"}}`))
+		case "/api/2.0/mlflow/runs/search":
+			var body map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil { t.Fatal(err) }
+			pages++
+			if pages == 1 {
+				_, _ = response.Write([]byte(`{"runs":[{"info":{"run_id":"untrusted"}}],"next_page_token":"second"}`))
+				return
+			}
+			if body["page_token"] != "second" { t.Errorf("missing continuation token: %+v", body) }
+			_, _ = fmt.Fprintf(response, `{"runs":[{"info":{"run_id":"verified","start_time":1000},"data":{"tags":[{"key":"platform.job_id","value":"job-01"},{"key":"platform.provenance","value":"%s"}]}}]}`, mlflowProvenanceTag(testProvenanceKey, "job-01"))
+		default: http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+	client := &MLflowClient{BaseURL: server.URL, ProvenanceKey: testProvenanceKey, HTTPClient: server.Client()}
+	catalog, err := client.ListTenantExperiments(context.Background(), "team-a", "", 1)
+	if err != nil || pages != 2 || len(catalog.Runs) != 1 || catalog.Runs[0].ID != "verified" {
+		t.Fatalf("unverified first page hid a valid run: catalog=%+v pages=%d err=%v", catalog, pages, err)
+	}
+}
