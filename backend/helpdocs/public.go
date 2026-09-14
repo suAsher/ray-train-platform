@@ -364,10 +364,6 @@ const mlflowMetricsSeedPublicSection = `适用于在 RayTrain 上运行的训练
 
 ### 如何确认接入成功
 
-实验中心的列表只摘要展示关键指标，优先显示 Loss、学习率、Epoch、mAP、NDS，并兼容 val/object/map、val/object/nds 等框架命名。显示“已记录其他指标”表示 Run 已有指标但不属于这些摘要类别；点击“MLflow 详情”查看完整指标与历史。不要因此重跑训练。
-
-若原生 MLflow 已有 Run 和指标，但任务详情没有关联 Run，应检查训练入口是否沿用注入的实验名和平台来源标签；Lightning 等框架的 MLflow Logger 不会仅凭连接地址自动建立任务关联。不要重新创建重复 Run，也不要把这种情况当作上报服务中断。
-
 运行 ` + "`spk-rayjob status JOB_ID`" + ` 和 ` + "`spk-rayjob logs -f JOB_ID`" + `，确认已进入训练 step；再到任务详情核对关联的 Job、Run、参数与带 step 的曲线。
 
 **Job ID 与 MLflow run_id 不要求相等。** Run 名称可以包含任务 ID，但名称也不是归属凭据；一次任务可能关联多个 Run，核对时使用页面返回的明确关联。
@@ -386,4 +382,10 @@ Artifact、Models 或 Traces 为空不能用来判定训练失败；当前训练
 
 历史任务未固定数据版本时，模型显示“未知 / 未登记”；登记权重时可自选可访问的 READY 版本并标为“用户补充”。它不改写历史训练记录；修改 MLflow 参数或标签也不会自动同步到模型版本，不能把用户声明当作已核实的训练数据来源。
 
-模型这里记录的是训练数据来源。用于衡量模型表现的[独立评估](#model-evaluation-start)需要另行固定评估数据和方案，提交任务并成功生成有效报告。后续[审批发布](#model-release-review)和[Serving 服务](#model-serving-use)分别执行，不能把填写数据版本或记录一次验证 metric 当作已完成这些流程。`
+模型这里记录的是训练数据来源。用于衡量模型表现的[独立评估](#model-evaluation-start)需要另行固定评估数据和方案，提交任务并成功生成有效报告。后续[审批发布](#model-release-review)和[Serving 服务](#model-serving-use)分别执行，不能把填写数据版本或记录一次验证 metric 当作已完成这些流程。
+
+### 有指标却未显示时如何判断
+
+实验中心的列表只摘要展示关键指标，优先显示 Loss、学习率、Epoch、mAP、NDS，并兼容 val/object/map、val/object/nds 等框架命名。显示“已记录其他指标”表示 Run 已有指标但不属于这些摘要类别；点击“MLflow 详情”查看完整指标与历史。不要因此重跑训练。
+
+若原生 MLflow 已有 Run 和指标，但任务详情没有关联 Run，应检查训练入口是否沿用注入的实验名和平台来源标签；Lightning 等框架的 MLflow Logger 不会仅凭连接地址自动建立任务关联。不要重新创建重复 Run，也不要把这种情况当作上报服务中断。`
