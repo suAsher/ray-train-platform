@@ -17,6 +17,12 @@ func TestRayJobTASPackingDoesNotConflictWithPodPlacement(t *testing.T) {
 					job := validRenderJob()
 					job.Spec.TrainingEngine = engine
 					job.Spec.Execution = domain.ExecutionProfile{Mode: domain.ExecutionModeRayTrain}
+					if replicas == 1 {
+						job.Spec.Execution.Mode = domain.ExecutionModeTorchrun
+						if gpus == 1 {
+							job.Spec.Execution.Mode = domain.ExecutionModeSingleGPU
+						}
+					}
 					job.Spec.Resources.WorkerReplicas = replicas
 					job.Spec.Resources.GPUsPerWorker = gpus
 					if engine == domain.TrainingEngineRayTrain {
