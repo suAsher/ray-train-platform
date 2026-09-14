@@ -10,14 +10,14 @@ import (
 type Environment string
 
 const (
-	Production Environment = "production"
+	Production  Environment = "production"
 	Development Environment = "development"
 )
 
 type Target struct {
 	Environment Environment `json:"environment"`
-	BaseURL string `json:"baseUrl"`
-	GroupID string `json:"groupId"`
+	BaseURL     string      `json:"baseUrl"`
+	GroupID     string      `json:"groupId"`
 }
 
 // Environments returns an independent copy of the fixed, reviewed targets.
@@ -30,7 +30,7 @@ func Environments() []Target {
 }
 
 type PageQuery struct {
-	PageNum int
+	PageNum  int
 	PageSize int
 	Keywords string
 }
@@ -38,54 +38,54 @@ type PageQuery struct {
 // Read models deliberately expose only discovery fields. Upstream paths,
 // descriptions, report JSON, and unverified source metadata are not forwarded.
 type Warehouse struct {
-	ID string `json:"id"`
-	GroupID string `json:"groupId"`
-	Name string `json:"name"`
-	Number string `json:"number,omitempty"`
-	Visibility string `json:"visibility,omitempty"`
+	ID              string   `json:"id"`
+	GroupID         string   `json:"groupId"`
+	Name            string   `json:"name"`
+	Number          string   `json:"number,omitempty"`
+	Visibility      string   `json:"visibility,omitempty"`
 	PermissionCodes []string `json:"permissionCodes"`
 }
 
 type ModelType struct {
-	ID string `json:"id"`
-	Name string `json:"name"`
-	GroupID string `json:"groupId,omitempty"`
+	ID                  string `json:"id"`
+	Name                string `json:"name"`
+	GroupID             string `json:"groupId,omitempty"`
 	FunctionWarehouseID string `json:"functionWarehouseId,omitempty"`
 }
 
 type Version struct {
-	ID string `json:"id"`
-	Version string `json:"version"`
-	Number string `json:"number,omitempty"`
-	ModelTypeID string `json:"modelTypeId"`
-	ModelTypeName string `json:"modelTypeName"`
-	GroupID string `json:"groupId,omitempty"`
+	ID                  string `json:"id"`
+	Version             string `json:"version"`
+	Number              string `json:"number,omitempty"`
+	ModelTypeID         string `json:"modelTypeId"`
+	ModelTypeName       string `json:"modelTypeName"`
+	GroupID             string `json:"groupId,omitempty"`
 	FunctionWarehouseID string `json:"functionWarehouseId,omitempty"`
-	Production *bool `json:"production,omitempty"`
-	JobID string `json:"jobId,omitempty"`
-	RunID string `json:"runId,omitempty"`
-	ExperimentID string `json:"experimentId,omitempty"`
+	Production          *bool  `json:"production,omitempty"`
+	JobID               string `json:"jobId,omitempty"`
+	RunID               string `json:"runId,omitempty"`
+	ExperimentID        string `json:"experimentId,omitempty"`
 	// Files are retained for verification, never returned by discovery JSON.
 	Files []UploadedFile `json:"-"`
 }
 
 type UploadedFile struct {
-	URL string `json:"url"`
-	FilePath string `json:"filePath,omitempty"`
-	Filename string `json:"filename"`
+	URL        string `json:"url"`
+	FilePath   string `json:"filePath,omitempty"`
+	Filename   string `json:"filename"`
 	FileSHA256 string `json:"fileSha256"`
-	FileSize int64 `json:"fileSize"`
+	FileSize   int64  `json:"fileSize"`
 }
 
 type CreateVersionRequest struct {
-	FunctionWarehouseID string `json:"functionWarehouseId"`
-	ModelTypeID string `json:"modelTypeId"`
-	Version string `json:"version"`
-	Description string `json:"description"`
-	Paths []UploadedFile `json:"paths"`
-	JobID string `json:"jobId"`
-	RunID string `json:"runId"`
-	ExperimentID string `json:"experimentId"`
+	FunctionWarehouseID string         `json:"functionWarehouseId"`
+	ModelTypeID         string         `json:"modelTypeId"`
+	Version             string         `json:"version"`
+	Description         string         `json:"description"`
+	Paths               []UploadedFile `json:"paths"`
+	JobID               string         `json:"jobId"`
+	RunID               string         `json:"runId"`
+	ExperimentID        string         `json:"experimentId"`
 }
 
 // The create response serializes paths as JSON text; page responses use an
@@ -127,31 +127,31 @@ func (v *Version) UnmarshalJSON(data []byte) error {
 
 type WarehousePage struct {
 	Records []Warehouse `json:"records"`
-	Total int64 `json:"total"`
-	Current int `json:"current"`
-	Size int `json:"size"`
+	Total   int64       `json:"total"`
+	Current int         `json:"current"`
+	Size    int         `json:"size"`
 }
 
 type VersionPage struct {
 	Records []Version `json:"records"`
-	Total int64 `json:"total"`
-	Current int `json:"current"`
-	Size int `json:"size"`
+	Total   int64     `json:"total"`
+	Current int       `json:"current"`
+	Size    int       `json:"size"`
 }
 
 var (
-	ErrUnauthorized = errors.New("function warehouse authentication required")
-	ErrForbidden = errors.New("function warehouse access denied")
-	ErrRateLimited = errors.New("function warehouse rate limit exceeded")
-	ErrInvalid = errors.New("invalid function warehouse request")
-	ErrUnavailable = errors.New("function warehouse service unavailable")
+	ErrUnauthorized   = errors.New("function warehouse authentication required")
+	ErrForbidden      = errors.New("function warehouse access denied")
+	ErrRateLimited    = errors.New("function warehouse rate limit exceeded")
+	ErrInvalid        = errors.New("invalid function warehouse request")
+	ErrUnavailable    = errors.New("function warehouse service unavailable")
 	ErrUnknownOutcome = errors.New("function warehouse mutation outcome unknown")
 )
 
 // Error contains only safe classifications and a validated retry hint; it never
 // wraps network errors, URLs, upstream messages, response bodies, or tokens.
 type Error struct {
-	Kind error
+	Kind       error
 	StatusCode int
 	RetryAfter string
 }

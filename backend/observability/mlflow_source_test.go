@@ -29,10 +29,10 @@ func TestResolveJobSourceRequiresUniqueVerifiedRun(t *testing.T) {
 	proof := mlflowProvenanceTag(testProvenanceKey, "job-01")
 	valid := jobSourceRun("run-1", "7", "job-01", proof)
 	for _, test := range []struct {
-		name string
-		runs []map[string]any
+		name  string
+		runs  []map[string]any
 		token string
-		want error
+		want  error
 	}{
 		{name: "one", runs: []map[string]any{valid}},
 		{name: "optional experiment omitted", runs: []map[string]any{jobSourceRun("run-1", "", "job-01", proof)}},
@@ -63,8 +63,8 @@ func TestResolveJobSourceRequiresUniqueVerifiedRun(t *testing.T) {
 				case "/api/2.0/mlflow/runs/search":
 					var body struct {
 						Experiments []string `json:"experiment_ids"`
-						Filter string `json:"filter"`
-						MaxResults int `json:"max_results"`
+						Filter      string   `json:"filter"`
+						MaxResults  int      `json:"max_results"`
 					}
 					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 						t.Error(err)
@@ -127,9 +127,9 @@ func TestJobSourceRejectsDuplicateBindingTags(t *testing.T) {
 
 func TestResolveJobSourceRejectsMissingOrMalformedExperiment(t *testing.T) {
 	for _, test := range []struct {
-		name string
+		name   string
 		status int
-		body string
+		body   string
 	}{
 		{"missing", 404, `{}`},
 		{"no id", 200, `{"experiment":{}}`},
@@ -163,7 +163,7 @@ func TestResolveJobSourceRejectsInvalidInputsBeforeHTTP(t *testing.T) {
 	defer server.Close()
 	for _, test := range []struct {
 		name, prefix, tenant, job string
-		key []byte
+		key                       []byte
 	}{
 		{name: "no key", tenant: "tenant-a", job: "job-01"},
 		{name: "short key", tenant: "tenant-a", job: "job-01", key: []byte("short")},

@@ -133,8 +133,8 @@ func TestRejectCrossGroupAndMismatchedWarehouse(t *testing.T) {
 func TestErrorClassificationAndRedaction(t *testing.T) {
 	for _, tc := range []struct {
 		status int
-		body string
-		want error
+		body   string
+		want   error
 	}{
 		{401, `{"msg":"secret-token"}`, ErrUnauthorized},
 		{403, `secret-token`, ErrForbidden},

@@ -13,15 +13,15 @@ import (
 )
 
 const (
-	defaultResponseLimit = 4 << 20
+	defaultResponseLimit  = 4 << 20
 	defaultRequestTimeout = 30 * time.Second
 )
 
 type Client struct {
-	target Target
-	baseURL string
-	http *http.Client
-	requestTimeout time.Duration
+	target           Target
+	baseURL          string
+	http             *http.Client
+	requestTimeout   time.Duration
 	maxResponseBytes int64
 }
 
@@ -31,26 +31,26 @@ func NewClient(environment Environment) (*Client, error) {
 			continue
 		}
 		transport := &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-			DialContext: (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-			ForceAttemptHTTP2: true,
-			MaxIdleConns: 20,
-			MaxIdleConnsPerHost: 8,
-			MaxConnsPerHost: 8,
-			IdleConnTimeout: 90 * time.Second,
-			TLSHandshakeTimeout: 10 * time.Second,
-			ResponseHeaderTimeout: 10 * time.Minute,
+			Proxy:                  http.ProxyFromEnvironment,
+			DialContext:            (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+			ForceAttemptHTTP2:      true,
+			MaxIdleConns:           20,
+			MaxIdleConnsPerHost:    8,
+			MaxConnsPerHost:        8,
+			IdleConnTimeout:        90 * time.Second,
+			TLSHandshakeTimeout:    10 * time.Second,
+			ResponseHeaderTimeout:  10 * time.Minute,
 			MaxResponseHeaderBytes: 32 << 10,
 		}
 		return &Client{
-			target: target,
+			target:  target,
 			baseURL: target.BaseURL,
 			http: &http.Client{
-				Transport: transport,
-				Timeout: defaultRequestTimeout,
+				Transport:     transport,
+				Timeout:       defaultRequestTimeout,
 				CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 			},
-			requestTimeout: defaultRequestTimeout,
+			requestTimeout:   defaultRequestTimeout,
 			maxResponseBytes: defaultResponseLimit,
 		}, nil
 	}
@@ -177,8 +177,8 @@ func (c *Client) pageParams(query PageQuery) (url.Values, error) {
 		query.PageSize = 20
 	}
 	return url.Values{
-		"groupId": {c.target.GroupID},
-		"pageNum": {strconv.Itoa(query.PageNum)},
+		"groupId":  {c.target.GroupID},
+		"pageNum":  {strconv.Itoa(query.PageNum)},
 		"pageSize": {strconv.Itoa(query.PageSize)},
 		"keywords": {query.Keywords},
 	}, nil
@@ -233,7 +233,7 @@ func (c *Client) get(ctx context.Context, token, path string, params url.Values,
 		return &Error{Kind: ErrUnavailable, StatusCode: response.StatusCode}
 	}
 	var envelope struct {
-		Code *int `json:"code"`
+		Code *int            `json:"code"`
 		Data json.RawMessage `json:"data"`
 	}
 	if json.Unmarshal(body, &envelope) != nil || envelope.Code == nil {

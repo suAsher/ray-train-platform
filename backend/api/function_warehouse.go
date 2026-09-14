@@ -24,7 +24,9 @@ func DefaultFunctionWarehouseClients() (map[fw.Environment]FunctionWarehouseClie
 	clients := make(map[fw.Environment]FunctionWarehouseClient)
 	for _, target := range fw.Environments() {
 		client, err := fw.NewClient(target.Environment)
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 		clients[target.Environment] = client
 	}
 	return clients, nil
@@ -52,17 +54,23 @@ func (h *Handler) functionWarehouseToken(c *gin.Context) (string, bool) {
 }
 
 func (h *Handler) functionWarehouseEnvironments(c *gin.Context) {
-	if _, ok := h.functionWarehouseToken(c); !ok { return }
+	if _, ok := h.functionWarehouseToken(c); !ok {
+		return
+	}
 	targets := make([]fw.Target, 0, len(h.functionWarehouses))
 	for _, target := range fw.Environments() {
-		if h.functionWarehouses[target.Environment] != nil { targets = append(targets, target) }
+		if h.functionWarehouses[target.Environment] != nil {
+			targets = append(targets, target)
+		}
 	}
 	h.writeSuccess(c, http.StatusOK, gin.H{"items": targets})
 }
 
 func (h *Handler) functionWarehouseClient(c *gin.Context) (FunctionWarehouseClient, string, bool) {
 	token, ok := h.functionWarehouseToken(c)
-	if !ok { return nil, "", false }
+	if !ok {
+		return nil, "", false
+	}
 	env := fw.Environment(c.Param("environment"))
 	if env != fw.Production && env != fw.Development {
 		h.writeError(c, 400, "WAREHOUSE_ENVIRONMENT_INVALID", "请选择正式或开发环境")
@@ -78,7 +86,9 @@ func (h *Handler) functionWarehouseClient(c *gin.Context) (FunctionWarehouseClie
 
 func (h *Handler) functionWarehouseList(c *gin.Context) {
 	client, token, ok := h.functionWarehouseClient(c)
-	if !ok { return }
+	if !ok {
+		return
+	}
 	page, pageErr := strconv.Atoi(c.DefaultQuery("pageNum", "1"))
 	size, sizeErr := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
 	if pageErr != nil || sizeErr != nil || page < 1 || page > 10000 || size < 1 || size > 100 || len(c.Query("keywords")) > 200 || c.Query("groupId") != "" || c.Query("baseUrl") != "" {
@@ -88,13 +98,17 @@ func (h *Handler) functionWarehouseList(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 	defer cancel()
 	result, err := client.ListWarehouses(ctx, token, fw.PageQuery{PageNum: page, PageSize: size, Keywords: c.Query("keywords")})
-	if h.functionWarehouseError(c, err) { return }
+	if h.functionWarehouseError(c, err) {
+		return
+	}
 	h.writeSuccess(c, http.StatusOK, result)
 }
 
 func (h *Handler) functionWarehouseModelTypes(c *gin.Context) {
 	client, token, ok := h.functionWarehouseClient(c)
-	if !ok { return }
+	if !ok {
+		return
+	}
 	if len(c.Param("warehouseId")) > 128 || c.Param("warehouseId") == "" {
 		h.writeError(c, 400, "WAREHOUSE_ID_INVALID", "功能仓 ID 无效")
 		return
@@ -102,14 +116,20 @@ func (h *Handler) functionWarehouseModelTypes(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 	defer cancel()
 	warehouse, err := client.GetWarehouse(ctx, token, c.Param("warehouseId"))
-	if h.functionWarehouseError(c, err) { return }
+	if h.functionWarehouseError(c, err) {
+		return
+	}
 	items, err := client.ListModelTypes(ctx, token, warehouse.ID)
-	if h.functionWarehouseError(c, err) { return }
+	if h.functionWarehouseError(c, err) {
+		return
+	}
 	h.writeSuccess(c, http.StatusOK, gin.H{"warehouse": warehouse, "items": items})
 }
 
 func (h *Handler) functionWarehouseError(c *gin.Context, err error) bool {
-	if err == nil { return false }
+	if err == nil {
+		return false
+	}
 	switch {
 	case errors.Is(err, fw.ErrUnauthorized):
 		h.writeError(c, 401, "WAREHOUSE_REAUTH_REQUIRED", "功能仓授权已失效，请重新登录授权")
