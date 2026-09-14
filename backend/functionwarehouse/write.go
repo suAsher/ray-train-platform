@@ -122,15 +122,21 @@ func (c *Client) matchesVersion(version Version, expected CreateVersionRequest) 
 	if version.Production == nil || *version.Production || len(version.Files) != len(expected.Paths) {
 		return false
 	}
+	// The warehouse relocates filePath into its managed model directory after
+	// creation. That location is mutable metadata, not the file identity. Keep
+	// checking the returned metadata's safety and every immutable file field.
+	identity := func(file UploadedFile) UploadedFile {
+		return UploadedFile{URL: file.URL, Filename: file.Filename, FileSHA256: file.FileSHA256, FileSize: file.FileSize}
+	}
 	counts := make(map[UploadedFile]int, len(expected.Paths))
 	for _, file := range expected.Paths {
-		counts[file]++
+		counts[identity(file)]++
 	}
 	for _, file := range version.Files {
-		if !validUploadedFile(file) || counts[file] == 0 {
+		if !validUploadedFile(file) || counts[identity(file)] == 0 {
 			return false
 		}
-		counts[file]--
+		counts[identity(file)]--
 	}
 	return true
 }
