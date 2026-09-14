@@ -29,6 +29,7 @@ import (
 	"ray-train-platform-backend/observability"
 	"ray-train-platform-backend/repositories"
 	"ray-train-platform-backend/runtimecatalog"
+	ws "ray-train-platform-backend/warehousesync"
 )
 
 type JobRepository interface {
@@ -44,6 +45,7 @@ type globalJobReader interface {
 }
 
 type Handler struct {
+	warehouseSync             *ws.Service
 	functionWarehouses        map[fw.Environment]FunctionWarehouseClient
 	modelServing              ms.Store
 	modelServingKubernetes    modelServingKubernetes

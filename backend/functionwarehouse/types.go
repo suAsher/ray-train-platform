@@ -2,7 +2,10 @@
 // verified OAuth access token. Tokens are supplied per call and never retained.
 package functionwarehouse
 
-import "errors"
+import (
+	"encoding/json"
+	"errors"
+)
 
 type Environment string
 
@@ -59,6 +62,67 @@ type Version struct {
 	GroupID string `json:"groupId,omitempty"`
 	FunctionWarehouseID string `json:"functionWarehouseId,omitempty"`
 	Production *bool `json:"production,omitempty"`
+	JobID string `json:"jobId,omitempty"`
+	RunID string `json:"runId,omitempty"`
+	ExperimentID string `json:"experimentId,omitempty"`
+	// Files are retained for verification, never returned by discovery JSON.
+	Files []UploadedFile `json:"-"`
+}
+
+type UploadedFile struct {
+	URL string `json:"url"`
+	FilePath string `json:"filePath,omitempty"`
+	Filename string `json:"filename"`
+	FileSHA256 string `json:"fileSha256"`
+	FileSize int64 `json:"fileSize"`
+}
+
+type CreateVersionRequest struct {
+	FunctionWarehouseID string `json:"functionWarehouseId"`
+	ModelTypeID string `json:"modelTypeId"`
+	Version string `json:"version"`
+	Description string `json:"description"`
+	Paths []UploadedFile `json:"paths"`
+	JobID string `json:"jobId"`
+	RunID string `json:"runId"`
+	ExperimentID string `json:"experimentId"`
+}
+
+// The create response serializes paths as JSON text; page responses use an
+// array. Decode only the confirmed file fields, retaining neither arbitrary
+// metadata nor the report's unrelated mlflowRunId/mlflowExperimentId fields.
+func (v *Version) UnmarshalJSON(data []byte) error {
+	type publicVersion Version
+	var wire struct {
+		publicVersion
+		Paths json.RawMessage `json:"paths"`
+		Files json.RawMessage `json:"files"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	raw := wire.Paths
+	if len(raw) == 0 || string(raw) == "null" {
+		raw = wire.Files
+	}
+	var files []UploadedFile
+	if len(raw) > 0 && string(raw) != "null" {
+		if raw[0] == '"' {
+			var encoded string
+			if err := json.Unmarshal(raw, &encoded); err != nil {
+				return err
+			}
+			raw = []byte(encoded)
+		}
+		if len(raw) > 0 {
+			if err := json.Unmarshal(raw, &files); err != nil {
+				return err
+			}
+		}
+	}
+	*v = Version(wire.publicVersion)
+	v.Files = files
+	return nil
 }
 
 type WarehousePage struct {

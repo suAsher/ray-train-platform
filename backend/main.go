@@ -209,6 +209,11 @@ func main() {
 	platformNamespace := runtimeNamespace()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if modelSnapshots != nil {
+		if err := jobHandler.InitializeFunctionWarehouseSync(ctx, repositories.NewWarehouseSyncStore(database), []byte(cfg.PATPepper)); err != nil {
+			log.Fatalf("initialize function warehouse sync: %v", err)
+		}
+	}
 	go jobHandler.RunModelServing(ctx)
 	if modelSnapshots != nil {
 		// Database leases fence each snapshot across backend replicas; this loop

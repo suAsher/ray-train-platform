@@ -39,7 +39,7 @@ func NewClient(environment Environment) (*Client, error) {
 			MaxConnsPerHost: 8,
 			IdleConnTimeout: 90 * time.Second,
 			TLSHandshakeTimeout: 10 * time.Second,
-			ResponseHeaderTimeout: defaultRequestTimeout,
+			ResponseHeaderTimeout: 10 * time.Minute,
 			MaxResponseHeaderBytes: 32 << 10,
 		}
 		return &Client{

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"io"
@@ -256,6 +257,10 @@ func (h *Handler) jobArtifactRoot(c *gin.Context, principal auth.Principal, job 
 }
 
 func (h *Handler) logicalJobArtifactRoot(c *gin.Context, principal auth.Principal, job *domain.TrainingJob) (string, bool) {
+	return h.logicalJobArtifactRootContext(c.Request.Context(), principal, job)
+}
+
+func (h *Handler) logicalJobArtifactRootContext(ctx context.Context, principal auth.Principal, job *domain.TrainingJob) (string, bool) {
 	if job == nil || job.UserID != principal.Subject {
 		return "", false
 	}
@@ -263,7 +268,7 @@ func (h *Handler) logicalJobArtifactRoot(c *gin.Context, principal auth.Principa
 	if output == nil || output.Space != domain.DataSpaceMyRuns || output.BindingSpace != domain.DataSpaceWorkspace || output.ClaimName == "" || output.ReadOnly || output.MountPath != domain.DataMountOutputPath {
 		return "", false
 	}
-	spaces, err := h.personalDataSpacesForPrincipal(c.Request.Context(), principal)
+	spaces, err := h.personalDataSpacesForPrincipal(ctx, principal)
 	if err != nil {
 		return "", false
 	}
@@ -290,6 +295,10 @@ func (h *Handler) logicalJobArtifactRoot(c *gin.Context, principal auth.Principa
 // The prefix is rebuilt from the caller's own spaces rather than from the job
 // record, so a task can only ever resolve to storage its submitter already owns.
 func (h *Handler) personalStorageJobArtifactRoot(c *gin.Context, principal auth.Principal, job *domain.TrainingJob) (string, bool) {
+	return h.personalStorageJobArtifactRootContext(c.Request.Context(), principal, job)
+}
+
+func (h *Handler) personalStorageJobArtifactRootContext(ctx context.Context, principal auth.Principal, job *domain.TrainingJob) (string, bool) {
 	if job == nil || job.UserID != principal.Subject {
 		return "", false
 	}
@@ -297,7 +306,7 @@ func (h *Handler) personalStorageJobArtifactRoot(c *gin.Context, principal auth.
 	if output == nil || output.ReadOnly {
 		return "", false
 	}
-	spaces, err := h.personalDataSpacesForPrincipal(c.Request.Context(), principal)
+	spaces, err := h.personalDataSpacesForPrincipal(ctx, principal)
 	if err != nil {
 		return "", false
 	}

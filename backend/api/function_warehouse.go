@@ -36,6 +36,10 @@ func (h *Handler) RegisterFunctionWarehouseRoutes(group *gin.RouterGroup) {
 	g.GET("/environments", h.functionWarehouseEnvironments)
 	g.GET("/:environment/warehouses", h.functionWarehouseList)
 	g.GET("/:environment/warehouses/:warehouseId/model-types", h.functionWarehouseModelTypes)
+	g.GET("/syncs", h.listWarehouseSyncs)
+	g.POST("/syncs", h.modelGuard(true), h.createWarehouseSync)
+	g.POST("/syncs/:syncId/retry", h.modelGuard(true), h.retryWarehouseSync)
+	g.POST("/syncs/:syncId/cancel", h.modelGuard(true), h.cancelWarehouseSync)
 }
 
 func (h *Handler) functionWarehouseToken(c *gin.Context) (string, bool) {

@@ -88,7 +88,7 @@ func TestPostgresModelReleaseUpgradeFrom50(t *testing.T) {
 	if err := database.Table("model_catalog").Where("id = ? AND owner_id = ? AND tenant_id = ?", "preserved-model", "stable-owner", "old-team").Count(&count).Error; err != nil || count != 1 {
 		t.Fatalf("existing ownership changed %d %v", count, err)
 	}
-	if err := database.Raw("SELECT MAX(version) FROM schema_migrations").Scan(&version).Error; err != nil || version != 52 {
+	if err := database.Raw("SELECT MAX(version) FROM schema_migrations").Scan(&version).Error; err != nil || version != 53 {
 		t.Fatalf("after schema %d %v", version, err)
 	}
 	for _, table := range []string{"model_releases", "model_publications", "model_publication_history", "model_registry_links"} {
