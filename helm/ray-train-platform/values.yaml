@@ -460,6 +460,9 @@ kueue:
     # requests for NEW workers while retaining Topology/ResourceFlavor objects.
     # This is not a guarantee of legacy scheduling; verify actual admission.
     # workloadEnabled: false
+    # Requires Kueue TASRespectNodeAffinityPreferred. When enabled, new worker
+    # PodSets prefer nodes already used by the same team and accelerator class.
+    teamNodeAffinityEnabled: false
     name: raytrain-hostname
     nodeLabel: kubernetes.io/hostname
     # Match the existing single flavor for an in-place initial TAS rollout.

@@ -53,12 +53,22 @@ func TestAdministrativeAuditRejectsUnknownActions(t *testing.T) {
 
 func TestAdministrativeAuditAcceptsWorkspaceStop(t *testing.T) {
 	database, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{})
-	if err != nil { t.Fatal(err) }
-	if err := database.AutoMigrate(&AuditLogRecord{}); err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.AutoMigrate(&AuditLogRecord{}); err != nil {
+		t.Fatal(err)
+	}
 	repository := NewGormRepository(database)
 	event := AdministrativeAuditEvent{Action: "workspace.stopped", ResourceID: "ws-a", TargetTenantID: "team-a", Principal: auth.Principal{Subject: "root", TenantID: "local"}}
-	if err := repository.CreateAdministrativeAuditLog(context.Background(), event); err != nil { t.Fatal(err) }
+	if err := repository.CreateAdministrativeAuditLog(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
 	var record AuditLogRecord
-	if err := database.First(&record).Error; err != nil { t.Fatal(err) }
-	if record.ResourceType != "dev_workspace" || record.ResourceID != "ws-a" || record.UserID != "root" { t.Fatalf("wrong workspace audit: %+v", record) }
+	if err := database.First(&record).Error; err != nil {
+		t.Fatal(err)
+	}
+	if record.ResourceType != "dev_workspace" || record.ResourceID != "ws-a" || record.UserID != "root" {
+		t.Fatalf("wrong workspace audit: %+v", record)
+	}
 }

@@ -40,6 +40,7 @@ type Config struct {
 	TrainingNodeSelector                     map[string]string
 	KueueAutoQuota                           bool
 	KueueTopologyEnabled                     bool
+	KueueTeamNodeAffinityEnabled             bool
 	KueuePreemptionEnabled                   bool
 	MaxWorkerReplicas                        int
 	MaxGPUsPerWorker                         int
@@ -324,6 +325,9 @@ func Load() (Config, error) {
 	// references a Topology. Keeping this deployment flag aligned with the Helm
 	// cutover avoids producing Workloads that no configured flavor can place.
 	if cfg.KueueTopologyEnabled, err = parseBool("KUEUE_TOPOLOGY_ENABLED", false); err != nil {
+		return Config{}, err
+	}
+	if cfg.KueueTeamNodeAffinityEnabled, err = parseBool("KUEUE_TEAM_NODE_AFFINITY_ENABLED", false); err != nil {
 		return Config{}, err
 	}
 	if cfg.KueuePreemptionEnabled, err = parseBool("KUEUE_PREEMPTION_ENABLED", false); err != nil {

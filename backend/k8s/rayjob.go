@@ -24,15 +24,17 @@ const (
 )
 
 type RenderOptions struct {
-	ClusterSpecField        string
-	RayVersion              string
-	TopologyAwareScheduling bool
-	ServiceAccount          string
-	ImagePullSecrets        []string
-	SourceMaterializerImage string
-	IDCExistingClaim        string
-	IDCMountPath            string
-	LocalCache              LocalCacheOptions
+	ClusterSpecField           string
+	RayVersion                 string
+	TopologyAwareScheduling    bool
+	TeamNodeAffinityEnabled    bool
+	TeamNodeAffinityPreference []string
+	ServiceAccount             string
+	ImagePullSecrets           []string
+	SourceMaterializerImage    string
+	IDCExistingClaim           string
+	IDCMountPath               string
+	LocalCache                 LocalCacheOptions
 	// NodeSelector pins Ray Pods to the GPU training pool. It is configuration
 	// so that adding machines or changing GPU model needs no code change.
 	NodeSelector map[string]string
@@ -260,6 +262,9 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 		// PodSets, including one-worker jobs. Its shared capacity accounting
 		// fills partially used hosts before opening another GPU node.
 		addPodAnnotation(workerPod, "kueue.x-k8s.io/podset-unconstrained-topology", "true")
+		if options.TeamNodeAffinityEnabled {
+			addPreferredNodeAffinity(workerPod, options.TeamNodeAffinityPreference)
+		}
 	}
 	managedMultiNode := job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayTrain && workerReplicas > 1
 	legacyRayTrain := job.Spec.TrainingEngine.Resolved() == domain.TrainingEngineRayDDP && job.Spec.Execution.ResolvedMode() == domain.ExecutionModeRayTrain
@@ -1305,6 +1310,51 @@ func sourceMaterializer(tenantID string, source domain.CodeSource, jobSpec domai
 			"capabilities":             map[string]any{"drop": []any{"ALL"}},
 		},
 		"volumeMounts": volumeMounts,
+	}
+}
+
+func addPreferredNodeAffinity(template map[string]any, nodeNames []string) {
+	if len(nodeNames) == 0 {
+		return
+	}
+	spec, _ := template["spec"].(map[string]any)
+	if spec == nil {
+		spec = map[string]any{}
+		template["spec"] = spec
+	}
+	affinity, _ := spec["affinity"].(map[string]any)
+	if affinity == nil {
+		affinity = map[string]any{}
+		spec["affinity"] = affinity
+	}
+	nodeAffinity, _ := affinity["nodeAffinity"].(map[string]any)
+	if nodeAffinity == nil {
+		nodeAffinity = map[string]any{}
+		affinity["nodeAffinity"] = nodeAffinity
+	}
+	preferred, _ := nodeAffinity["preferredDuringSchedulingIgnoredDuringExecution"].([]any)
+	seen := map[string]bool{}
+	for i, nodeName := range nodeNames {
+		nodeName = strings.TrimSpace(nodeName)
+		if nodeName == "" || seen[nodeName] {
+			continue
+		}
+		seen[nodeName] = true
+		weight := int64(100 - i)
+		if weight < 1 {
+			weight = 1
+		}
+		preferred = append(preferred, map[string]any{
+			"weight": weight,
+			"preference": map[string]any{"matchFields": []any{map[string]any{
+				"key":      "metadata.name",
+				"operator": "In",
+				"values":   []any{nodeName},
+			}}},
+		})
+	}
+	if len(preferred) > 0 {
+		nodeAffinity["preferredDuringSchedulingIgnoredDuringExecution"] = preferred
 	}
 }
 

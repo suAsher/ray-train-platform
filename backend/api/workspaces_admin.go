@@ -41,20 +41,7 @@ func (h *Handler) adminStopWorkspace(c *gin.Context) {
 		h.writeError(c, http.StatusNotFound, "WORKSPACE_NOT_FOUND", "debug workspace was not found")
 		return
 	}
-	// Resource identity comes exclusively from the authorized database record.
-	// Kubernetes also checks the workspace ID label before removing resources.
-	if err := h.kubernetes.DeleteRayCluster(c.Request.Context(), workspace.Namespace, workspace.RayClusterName, workspace.ID); err != nil {
-		h.writeError(c, http.StatusBadGateway, "WORKSPACE_STOP_FAILED", "could not stop debug RayCluster")
-		return
-	}
-	if err := h.kubernetes.DeleteWorkspaceService(c.Request.Context(), workspace.Namespace, workspace.RayClusterName, workspace.ID); err != nil {
-		h.writeError(c, http.StatusBadGateway, "WORKSPACE_STOP_FAILED", "could not remove the debug workspace service")
-		return
-	}
-	// Do not update by owner: a concurrent relaunch may have replaced a stopped
-	// record with a different workspace belonging to the same user.
-	if err := store.UpdateWorkspaceStateByID(c.Request.Context(), workspace.ID, domain.WorkspaceStopped); err != nil {
-		h.writeError(c, http.StatusInternalServerError, "WORKSPACE_STATE_FAILED", "could not persist workspace state")
+	if !h.completeWorkspaceStop(c, workspace) {
 		return
 	}
 	h.recordAdministrativeAudit(c, repositories.AdministrativeAuditEvent{

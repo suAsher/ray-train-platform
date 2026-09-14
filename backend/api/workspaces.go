@@ -116,6 +116,11 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 		workspaceName = workspaceName[:63]
 	}
 	namespace := "tenant-" + sanitizeDNS(principal.TenantID)
+	lifecycle, ok := h.workspaces.(workspaceLifecycleStore)
+	if !ok {
+		h.writeError(c, http.StatusServiceUnavailable, "WORKSPACE_UNAVAILABLE", "workspace lifecycle management is not configured")
+		return
+	}
 	workspace := &domain.DevWorkspace{ID: "ws-" + workspaceID, TenantID: principal.TenantID, UserID: principal.Subject, Name: workspaceName, Namespace: namespace, RayClusterName: workspaceName, JupyterURL: "/api/v1/dev-workspaces/ws-" + workspaceID + "/proxy/", SnapshotID: request.SnapshotID, GPUCount: gpuCount, State: domain.WorkspaceSubmitted}
 	if err := h.workspaces.CreateWorkspace(c.Request.Context(), workspace, 3600); err != nil {
 		var quotaErr *repositories.GPUQuotaExceededError
@@ -126,26 +131,39 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 		h.writeError(c, http.StatusConflict, "WORKSPACE_CREATE_FAILED", "could not persist workspace")
 		return
 	}
-	if err := h.ensureTenantNamespaceAndPullSecrets(c.Request.Context(), principal.TenantID, namespace); err != nil {
-		_ = h.workspaces.UpdateWorkspaceState(c.Request.Context(), principal.TenantID, principal.Subject, domain.WorkspaceFailed)
-		h.writeError(c, http.StatusBadGateway, "WORKSPACE_RUNTIME_PREPARE_FAILED", "could not prepare the tenant workspace runtime")
-		return
-	}
-	manifest, err := k8s.RenderDevRayCluster(*workspace, k8s.WorkspaceRenderOptions{NodeSelector: nodeSelector, Image: image, RayVersion: h.rayVersion, ServiceAccount: h.serviceAccount, ImagePullSecrets: h.imagePullSecrets, IDCExistingClaim: h.idcClaim, IDCMountPath: h.idcMountPath, JupyterBasePath: workspace.JupyterURL, DataMounts: dataMounts})
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
+	defer cancel()
+	var failure *workspaceOperationError
+	err = lifecycle.WithWorkspaceOperation(ctx, workspace.ID, workspace.TenantID, func(locked *domain.DevWorkspace, setState func(domain.WorkspaceState) error) error {
+		if locked.State != domain.WorkspaceSubmitted {
+			failure = &workspaceOperationError{http.StatusConflict, "WORKSPACE_LAUNCH_CANCELLED", "workspace launch was canceled; refresh the workspace state"}
+			return nil
+		}
+		fail := func(status int, code, message string, state domain.WorkspaceState) error {
+			failure = &workspaceOperationError{status, code, message}
+			return setState(state)
+		}
+		if err := h.ensureTenantNamespaceAndPullSecrets(ctx, locked.TenantID, locked.Namespace); err != nil {
+			return fail(http.StatusBadGateway, "WORKSPACE_RUNTIME_PREPARE_FAILED", "could not prepare the tenant workspace runtime", domain.WorkspaceFailed)
+		}
+		manifest, err := k8s.RenderDevRayCluster(*locked, k8s.WorkspaceRenderOptions{NodeSelector: nodeSelector, Image: image, RayVersion: h.rayVersion, ServiceAccount: h.serviceAccount, ImagePullSecrets: h.imagePullSecrets, IDCExistingClaim: h.idcClaim, IDCMountPath: h.idcMountPath, JupyterBasePath: locked.JupyterURL, DataMounts: dataMounts})
+		if err != nil {
+			return fail(http.StatusBadRequest, "WORKSPACE_SPEC_INVALID", err.Error(), domain.WorkspaceFailed)
+		}
+		if _, err := h.kubernetes.EnsureRayCluster(ctx, manifest); err != nil {
+			return fail(http.StatusBadGateway, "WORKSPACE_CLUSTER_CREATE_FAILED", "could not create debug RayCluster; stop the workspace to clean up before retrying", domain.WorkspaceStopping)
+		}
+		if err := h.kubernetes.EnsureWorkspaceService(ctx, locked.Namespace, locked.RayClusterName, locked.ID); err != nil {
+			return fail(http.StatusBadGateway, "WORKSPACE_SERVICE_CREATE_FAILED", "could not create debug service; stop the workspace to clean up before retrying", domain.WorkspaceStopping)
+		}
+		return nil
+	})
 	if err != nil {
-		_ = h.workspaces.UpdateWorkspaceState(c.Request.Context(), principal.TenantID, principal.Subject, domain.WorkspaceFailed)
-		h.writeError(c, http.StatusBadRequest, "WORKSPACE_SPEC_INVALID", err.Error())
+		h.writeError(c, http.StatusInternalServerError, "WORKSPACE_STATE_FAILED", "could not finalize workspace launch; refresh its state before retrying")
 		return
 	}
-	if _, err := h.kubernetes.EnsureRayCluster(c.Request.Context(), manifest); err != nil {
-		_ = h.workspaces.UpdateWorkspaceState(c.Request.Context(), principal.TenantID, principal.Subject, domain.WorkspaceFailed)
-		h.writeError(c, http.StatusBadGateway, "WORKSPACE_CLUSTER_CREATE_FAILED", "could not create debug RayCluster")
-		return
-	}
-	if err := h.kubernetes.EnsureWorkspaceService(c.Request.Context(), workspace.Namespace, workspace.RayClusterName, workspace.ID); err != nil {
-		_ = h.kubernetes.DeleteRayCluster(c.Request.Context(), workspace.Namespace, workspace.RayClusterName, workspace.ID)
-		_ = h.workspaces.UpdateWorkspaceState(c.Request.Context(), principal.TenantID, principal.Subject, domain.WorkspaceFailed)
-		h.writeError(c, http.StatusBadGateway, "WORKSPACE_SERVICE_CREATE_FAILED", "could not create debug service")
+	if failure != nil {
+		h.writeError(c, failure.status, failure.code, failure.message)
 		return
 	}
 	h.writeSuccess(c, http.StatusAccepted, workspace)
@@ -269,12 +287,28 @@ func (h *Handler) getWorkspace(c *gin.Context) {
 		h.writeError(c, http.StatusNotFound, "WORKSPACE_NOT_FOUND", "no debug workspace exists")
 		return
 	}
-	if h.kubernetes != nil && workspace.State != domain.WorkspaceStopped {
+	if h.kubernetes != nil && (workspace.State == domain.WorkspaceSubmitted || workspace.State == domain.WorkspaceRunning) {
 		if resource, queryErr := h.kubernetes.GetRayCluster(c.Request.Context(), workspace.Namespace, workspace.RayClusterName); queryErr == nil {
 			state := domain.WorkspaceState(k8s.MapRayClusterState(resource))
 			if state != workspace.State {
-				_ = h.workspaces.UpdateWorkspaceState(c.Request.Context(), principal.TenantID, principal.Subject, state)
-				workspace.State = state
+				if store, ok := h.workspaces.(workspaceLifecycleStore); ok {
+					changed, err := store.ApplyWorkspaceObservation(c.Request.Context(), workspace.ID, workspace.State, state)
+					if err != nil {
+						h.writeError(c, http.StatusInternalServerError, "WORKSPACE_STATE_FAILED", "could not refresh workspace state")
+						return
+					}
+					if changed {
+						copy := *workspace
+						copy.State = state
+						workspace = &copy
+					} else {
+						workspace, err = h.workspaces.GetWorkspace(c.Request.Context(), principal.TenantID, principal.Subject)
+						if err != nil {
+							h.writeError(c, http.StatusNotFound, "WORKSPACE_NOT_FOUND", "debug workspace was not found")
+							return
+						}
+					}
+				}
 			}
 		}
 	}
@@ -296,18 +330,7 @@ func (h *Handler) stopWorkspace(c *gin.Context) {
 		h.writeError(c, http.StatusNotFound, "WORKSPACE_NOT_FOUND", "no debug workspace exists")
 		return
 	}
-	if err := h.kubernetes.DeleteRayCluster(c.Request.Context(), workspace.Namespace, workspace.RayClusterName, workspace.ID); err != nil {
-		h.writeError(c, http.StatusBadGateway, "WORKSPACE_STOP_FAILED", "could not stop debug RayCluster")
-		return
-	}
-	// The editor Service is created alongside the cluster and is not garbage
-	// collected with it, so it has to be removed here or every stop leaks one.
-	if err := h.kubernetes.DeleteWorkspaceService(c.Request.Context(), workspace.Namespace, workspace.RayClusterName, workspace.ID); err != nil {
-		h.writeError(c, http.StatusBadGateway, "WORKSPACE_STOP_FAILED", "could not remove the debug workspace service")
-		return
-	}
-	if err := h.workspaces.UpdateWorkspaceState(c.Request.Context(), principal.TenantID, principal.Subject, domain.WorkspaceStopped); err != nil {
-		h.writeError(c, http.StatusInternalServerError, "WORKSPACE_STATE_FAILED", "could not persist workspace state")
+	if !h.completeWorkspaceStop(c, workspace) {
 		return
 	}
 	h.writeSuccess(c, http.StatusAccepted, map[string]string{"state": string(domain.WorkspaceStopped)})

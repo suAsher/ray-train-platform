@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"ray-train-platform-backend/domain"
 )
 
@@ -42,7 +43,7 @@ func (r *GormRepository) CreateWorkspace(ctx context.Context, workspace *domain.
 	// replacing it would orphan its RayCluster and leak the GPU.
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var existing WorkspaceRecord
-		err := tx.Where("tenant_id = ? AND user_id = ?", workspace.TenantID, workspace.UserID).First(&existing).Error
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND user_id = ?", workspace.TenantID, workspace.UserID).First(&existing).Error
 		switch {
 		case err == nil:
 			state := domain.WorkspaceState(existing.ObservedState)

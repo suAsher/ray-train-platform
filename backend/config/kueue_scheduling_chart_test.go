@@ -43,6 +43,9 @@ func TestChartDefinesKueueWorkloadPriorityClasses(t *testing.T) {
 	if !strings.Contains(string(deployment), "name: KUEUE_PREEMPTION_ENABLED\n              value: {{ default false (get $kueuePreemption \"enabled\") | quote }}") {
 		t.Fatal("backend submission gate and ClusterQueue preemption must use the same Helm switch")
 	}
+	if !strings.Contains(string(deployment), "name: KUEUE_TEAM_NODE_AFFINITY_ENABLED\n              value: {{ $kueueTeamNodeAffinityEnabled | quote }}") {
+		t.Fatal("backend team node affinity gate must use the independently controlled topology switch")
+	}
 	if !strings.Contains(string(deployment), "$kueuePreemption := default (dict) .Values.kueue.preemption") {
 		t.Fatal("backend deployment must default a missing preemption map for --reuse-values upgrades")
 	}
@@ -76,12 +79,16 @@ func TestChartKeepsTopologyAwareSchedulingBehindExplicitCutover(t *testing.T) {
 	if !strings.Contains(string(values), "topology:\n    enabled: false") {
 		t.Fatal("TAS must remain disabled by default until an explicit reviewed rollout")
 	}
+	if !strings.Contains(string(values), "teamNodeAffinityEnabled: false") {
+		t.Fatal("team node affinity must remain disabled until the Kueue preferred-affinity gate is enabled")
+	}
 	var decoded struct {
 		Kueue struct {
 			ResourceFlavorName string `yaml:"resourceFlavorName"`
 			Topology           struct {
-				ResourceFlavorName string `yaml:"resourceFlavorName"`
-				WorkloadEnabled    *bool  `yaml:"workloadEnabled"`
+				ResourceFlavorName      string `yaml:"resourceFlavorName"`
+				WorkloadEnabled         *bool  `yaml:"workloadEnabled"`
+				TeamNodeAffinityEnabled bool   `yaml:"teamNodeAffinityEnabled"`
 			} `yaml:"topology"`
 		} `yaml:"kueue"`
 	}
@@ -90,6 +97,9 @@ func TestChartKeepsTopologyAwareSchedulingBehindExplicitCutover(t *testing.T) {
 	}
 	if decoded.Kueue.Topology.WorkloadEnabled != nil {
 		t.Fatal("default workloadEnabled must be absent to inherit topology.enabled")
+	}
+	if decoded.Kueue.Topology.TeamNodeAffinityEnabled {
+		t.Fatal("default team node affinity must be disabled")
 	}
 	if decoded.Kueue.ResourceFlavorName != "gpu-4090-flavor" || decoded.Kueue.Topology.ResourceFlavorName != decoded.Kueue.ResourceFlavorName {
 		t.Fatal("initial single-flavor TAS rollout must preserve the existing flavor name and quota")
@@ -148,7 +158,10 @@ func TestChartCanDisableNewTopologyRequestsWithoutRemovingFlavorTopology(t *test
 		{"retain resources only", map[string]any{"enabled": true, "workloadEnabled": false}, "false", false},
 		{"both disabled", map[string]any{"enabled": false, "workloadEnabled": false}, "false", false},
 		{"missing topology resources", map[string]any{"enabled": false, "workloadEnabled": true}, "", true},
+		{"team affinity disabled by default", map[string]any{"enabled": true, "workloadEnabled": true}, "true", false},
+		{"team affinity requires workload topology", map[string]any{"enabled": true, "workloadEnabled": false, "teamNodeAffinityEnabled": true}, "", true},
 		{"reject string false", map[string]any{"enabled": true, "workloadEnabled": "false"}, "", true},
+		{"reject string team affinity", map[string]any{"enabled": true, "workloadEnabled": true, "teamNodeAffinityEnabled": "true"}, "", true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var output bytes.Buffer

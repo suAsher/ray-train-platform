@@ -95,7 +95,7 @@ func (r *Reconciler) WithDatasetManifestResolver(resolver DatasetManifestResolve
 func (r *Reconciler) renderOptionsForJob(ctx context.Context, job domain.TrainingJob) (RenderOptions, error) {
 	options := r.renderOptions
 	if job.Spec.DataMode != domain.DataModeStreaming {
-		return options, nil
+		return r.withTeamNodeAffinity(ctx, job, options), nil
 	}
 	if r.datasetManifests == nil {
 		return RenderOptions{}, fmt.Errorf("dataset manifest resolver is not configured")
@@ -126,7 +126,28 @@ func (r *Reconciler) renderOptionsForJob(ctx context.Context, job domain.Trainin
 		return RenderOptions{}, fmt.Errorf("resolve dataset manifest: %w", err)
 	}
 	options.DatasetManifest = &mount
-	return options, nil
+	return r.withTeamNodeAffinity(ctx, job, options), nil
+}
+
+func (r *Reconciler) withTeamNodeAffinity(ctx context.Context, job domain.TrainingJob, options RenderOptions) RenderOptions {
+	options.TeamNodeAffinityPreference = nil
+	if !options.TopologyAwareScheduling || !options.TeamNodeAffinityEnabled || r == nil || r.client == nil {
+		return options
+	}
+	if strings.TrimSpace(job.RayJobUID) != "" || job.Spec.Resources.GPUsPerWorker <= 0 {
+		return options
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	nodes, err := r.client.PreferredTeamWorkerNodes(queryCtx, TeamWorkerNodePreferenceRequest{
+		TenantID: job.TenantID, JobID: job.ID, AcceleratorClass: job.Spec.AcceleratorClass,
+	})
+	if err != nil {
+		log.Printf("team node affinity skipped for job %s: %v", job.ID, err)
+		return options
+	}
+	options.TeamNodeAffinityPreference = nodes
+	return options
 }
 
 // WithRayJobRetention overrides how long a finished run's Kubernetes objects

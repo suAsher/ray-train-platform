@@ -894,6 +894,27 @@ func TestLoadKeepsKueueTopologyDisabledUntilExplicitCutover(t *testing.T) {
 	}
 }
 
+func TestLoadKeepsKueueTeamNodeAffinityDisabledUntilExplicitCutover(t *testing.T) {
+	setValidProductionConfig(t)
+	t.Setenv("KUEUE_TEAM_NODE_AFFINITY_ENABLED", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load default config: %v", err)
+	}
+	if cfg.KueueTeamNodeAffinityEnabled {
+		t.Fatal("team node affinity must remain disabled until TAS preferred affinity is enabled in Kueue")
+	}
+
+	t.Setenv("KUEUE_TEAM_NODE_AFFINITY_ENABLED", "true")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("load team affinity config: %v", err)
+	}
+	if !cfg.KueueTeamNodeAffinityEnabled {
+		t.Fatal("explicit team node affinity switch was ignored")
+	}
+}
+
 func TestLoadKeepsKueuePreemptionDisabledUntilExplicitDrill(t *testing.T) {
 	setValidProductionConfig(t)
 	t.Setenv("KUEUE_PREEMPTION_ENABLED", "")

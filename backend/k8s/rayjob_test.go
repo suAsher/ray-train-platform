@@ -403,3 +403,66 @@ func TestMapRayJobStatusUsesDeploymentStatusAsMessage(t *testing.T) {
 		t.Fatalf("expected deployment status to explain an otherwise empty RayJob status, got %+v", observed)
 	}
 }
+
+func TestRenderRayJobAddsTeamPreferredNodeAffinityOnlyToTASWorkers(t *testing.T) {
+	job := validRenderJob()
+	options := testRenderOptions()
+	options.TopologyAwareScheduling = true
+	options.TeamNodeAffinityEnabled = true
+	options.TeamNodeAffinityPreference = []string{"node-b", "node-a", "node-b", ""}
+	manifest, err := RenderRayJob(job, options)
+	if err != nil {
+		t.Fatalf("render ray job: %v", err)
+	}
+	spec, _, _ := nestedMap(manifest.Object, "spec")
+	cluster, _, _ := nestedMap(spec, "rayClusterSpec")
+	workers, _, _ := nestedSlice(cluster, "workerGroupSpecs")
+	worker := workers[0].(map[string]any)
+	workerMetadata, _, _ := nestedMap(worker, "template", "metadata")
+	annotations, _, _ := nestedMap(workerMetadata, "annotations")
+	if annotations["kueue.x-k8s.io/podset-unconstrained-topology"] != "true" {
+		t.Fatalf("TAS worker must remain unconstrained: %#v", annotations)
+	}
+	workerSpec, _, _ := nestedMap(worker, "template", "spec")
+	preferred, ok, err := nestedSlice(workerSpec, "affinity", "nodeAffinity", "preferredDuringSchedulingIgnoredDuringExecution")
+	if err != nil || !ok || len(preferred) != 2 {
+		t.Fatalf("worker preferred node affinity missing: found=%t len=%d err=%v spec=%#v", ok, len(preferred), err, workerSpec)
+	}
+	first := preferred[0].(map[string]any)
+	if first["weight"] != int64(100) {
+		t.Fatalf("first preferred node weight=%#v", first["weight"])
+	}
+	fields, _, _ := nestedSlice(first, "preference", "matchFields")
+	match := fields[0].(map[string]any)
+	values := match["values"].([]any)
+	if match["key"] != "metadata.name" || match["operator"] != "In" || values[0] != "node-b" {
+		t.Fatalf("preferred node must target spec.nodeName via metadata.name matchFields: %#v", match)
+	}
+	headSpec, _, _ := nestedMap(cluster, "headGroupSpec", "template", "spec")
+	if _, found, _ := nestedMap(headSpec, "affinity"); found {
+		t.Fatalf("head pod must not receive worker team affinity: %#v", headSpec)
+	}
+	submitterSpec, _, _ := nestedMap(spec, "submitterPodTemplate", "spec")
+	if _, found, _ := nestedMap(submitterSpec, "affinity"); found {
+		t.Fatalf("submitter pod must not receive worker team affinity: %#v", submitterSpec)
+	}
+}
+
+func TestRenderRayJobIgnoresStaleTeamNodeAffinityPreferenceWhenGateDisabled(t *testing.T) {
+	job := validRenderJob()
+	options := testRenderOptions()
+	options.TopologyAwareScheduling = true
+	options.TeamNodeAffinityPreference = []string{"stale-node"}
+	manifest, err := RenderRayJob(job, options)
+	if err != nil {
+		t.Fatalf("render ray job: %v", err)
+	}
+	spec, _, _ := nestedMap(manifest.Object, "spec")
+	cluster, _, _ := nestedMap(spec, "rayClusterSpec")
+	workers, _, _ := nestedSlice(cluster, "workerGroupSpecs")
+	worker := workers[0].(map[string]any)
+	workerSpec, _, _ := nestedMap(worker, "template", "spec")
+	if _, found, _ := nestedMap(workerSpec, "affinity"); found {
+		t.Fatalf("disabled team node affinity gate must ignore stale preference: %#v", workerSpec)
+	}
+}

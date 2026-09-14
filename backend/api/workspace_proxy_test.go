@@ -19,8 +19,13 @@ type fakeWorkspaceStore struct {
 	getErr    error
 }
 
-func (s *fakeWorkspaceStore) CreateWorkspace(context.Context, *domain.DevWorkspace, int64) error {
-	return s.createErr
+func (s *fakeWorkspaceStore) CreateWorkspace(_ context.Context, workspace *domain.DevWorkspace, _ int64) error {
+	if s.createErr != nil {
+		return s.createErr
+	}
+	s.workspace = *workspace
+	s.getErr = nil
+	return nil
 }
 func (s *fakeWorkspaceStore) GetWorkspace(context.Context, string, string) (*domain.DevWorkspace, error) {
 	if s.getErr != nil {
@@ -35,6 +40,40 @@ func (s *fakeWorkspaceStore) GetWorkspaceByUser(context.Context, string) (*domai
 }
 func (s *fakeWorkspaceStore) UpdateWorkspaceState(context.Context, string, string, domain.WorkspaceState) error {
 	return nil
+}
+
+func (s *fakeWorkspaceStore) BeginWorkspaceStop(_ context.Context, id, tenantID string) (*domain.DevWorkspace, error) {
+	if id != s.workspace.ID || (tenantID != "" && tenantID != s.workspace.TenantID) {
+		return nil, context.Canceled
+	}
+	if s.workspace.State != domain.WorkspaceStopped {
+		s.workspace.State = domain.WorkspaceStopping
+	}
+	copy := s.workspace
+	return &copy, nil
+}
+
+func (s *fakeWorkspaceStore) WithWorkspaceOperation(ctx context.Context, id, tenantID string, operation func(*domain.DevWorkspace, func(domain.WorkspaceState) error) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if id != s.workspace.ID || (tenantID != "" && tenantID != s.workspace.TenantID) {
+		return context.Canceled
+	}
+	copy := s.workspace
+	if err := operation(&copy, func(state domain.WorkspaceState) error { s.workspace.State = state; return nil }); err != nil {
+		s.workspace = copy
+		return err
+	}
+	return nil
+}
+
+func (s *fakeWorkspaceStore) ApplyWorkspaceObservation(_ context.Context, id string, previous, next domain.WorkspaceState) (bool, error) {
+	if id != s.workspace.ID || s.workspace.State != previous || (previous != domain.WorkspaceSubmitted && previous != domain.WorkspaceRunning) {
+		return false, nil
+	}
+	s.workspace.State = next
+	return true, nil
 }
 
 func workspaceProxyRouter(t *testing.T, authenticated bool) (*gin.Engine, *Handler) {
