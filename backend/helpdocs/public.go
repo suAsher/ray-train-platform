@@ -47,6 +47,10 @@ const quickstartPublicGuide = `### 从哪里开始
 
 ### 安装 CLI
 
+网页入口 spiking.wellspiking.ai（开发环境 spiking-dev.wellspiking.ai）使用 Portal 统一认证。CLI 下载、PAT 登录和升级统一连接 https://raytrain.wellspiking.ai；不要使用网页域名，也不要给 server 追加 /raytrain 或 /api/v1。
+
+--help 来自本机正在执行的 CLI，不随登录 server 改变。网页更新不会升级本机程序；帮助或命令不一致时，先核对实际执行路径与版本。完整升级和排查步骤见[CLI 如何安装、登录和升级？](#cli-onboarding-v2)。
+
 Linux x86_64：
 
 ` + "```bash\n(\n  set -eu\n  spk_tmp=$(mktemp -d)\n  trap 'rm -rf -- \"$spk_tmp\"' EXIT\n  curl -fL 'https://raytrain.wellspiking.ai/downloads/spk-rayjob/spk-rayjob-linux-amd64' -o \"$spk_tmp/spk-rayjob\"\n  curl -fL 'https://raytrain.wellspiking.ai/downloads/spk-rayjob/SHA256SUMS' -o \"$spk_tmp/SHA256SUMS\"\n  spk_want=$(awk '$2 == \"spk-rayjob-linux-amd64\" || $2 == \"*spk-rayjob-linux-amd64\" { print $1 }' \"$spk_tmp/SHA256SUMS\")\n  spk_got=$(sha256sum \"$spk_tmp/spk-rayjob\" | awk '{print $1}')\n  [ \"$spk_want\" = \"$spk_got\" ] || { echo 'SHA256 不一致，停止安装' >&2; exit 1; }\n  mkdir -p \"$HOME/.local/bin\"\n  install -m 0755 \"$spk_tmp/spk-rayjob\" \"$HOME/.local/bin/spk-rayjob\"\n  \"$HOME/.local/bin/spk-rayjob\" version\n)\n```" + `
@@ -63,11 +67,13 @@ Windows x64 PowerShell：
 
 安装命令不会永久修改 shell 配置。继续使用当前终端时，先把安装目录加入本次会话 PATH：
 
-` + "```bash\nexport PATH=\"$HOME/.local/bin:$PATH\"\ncommand -v spk-rayjob\n```" + `
+` + "```bash\ntype -a spk-rayjob\nexport PATH=\"$HOME/.local/bin:$PATH\"\nhash -r\ncommand -v spk-rayjob\nspk-rayjob version\n```" + `
+
+如 type -a 显示同名 alias 或 function，请检查自己的配置；PATH 不会覆盖别名或函数。zsh 也可以执行 rehash 清理命令路径缓存。
 
 Windows 当前 PowerShell 会话：
 
-` + "```powershell\n$env:PATH = \"$env:USERPROFILE\\.spk-rayjob;$env:PATH\"\nspk-rayjob.exe version\n```" + `
+` + "```powershell\n$env:PATH = \"$env:USERPROFILE\\.spk-rayjob;$env:PATH\"\nGet-Command spk-rayjob -All\nspk-rayjob.exe version\n```" + `
 
 在「账户与安全」创建当前团队的个人 PAT。Linux / macOS：
 

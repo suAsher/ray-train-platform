@@ -114,9 +114,6 @@ func TestUpgradeCommandValidationAndCurrentVersion(t *testing.T) {
 		t.Fatal("development executable accepted upgrade")
 	}
 	Version = "release-20260906-02"
-	if err := runUpgrade(context.Background(), []string{"--server", "https://other.example"}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
-		t.Fatal("server override accepted")
-	}
 	config := filepath.Join(t.TempDir(), "config.json")
 	if err := runUpgrade(context.Background(), []string{"--config", config}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
 		t.Fatal("missing config accepted")
@@ -134,6 +131,25 @@ func TestUpgradeCommandValidationAndCurrentVersion(t *testing.T) {
 	if err := runUpgrade(context.Background(), arguments, &stdout, &bytes.Buffer{}); err != nil || !strings.Contains(stdout.String(), "已是最新版本") {
 		t.Fatalf("%v %s", err, stdout.String())
 	}
+	writeConfig(config, configFile{Server: "https://wrong.example", Token: "secret"})
+	stdout.Reset()
+	seenAuthorization := false
+	overrideServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			seenAuthorization = true
+		}
+		json.NewEncoder(w).Encode(releaseFixture())
+	}))
+	defer overrideServer.Close()
+	arguments = []string{"--server", overrideServer.URL, "--config", config, "--ca-file", writeTestCA(t, overrideServer)}
+	if err := runUpgrade(context.Background(), arguments, &stdout, &bytes.Buffer{}); err != nil || !strings.Contains(stdout.String(), "已是最新版本") {
+		t.Fatalf("server override failed: %v %s", err, stdout.String())
+	}
+	if seenAuthorization {
+		t.Fatal("upgrade sent saved credentials with server override")
+	}
+	writeConfig(config, configFile{Server: server.URL, Token: "secret"})
+	arguments = []string{"--config", config, "--ca-file", writeTestCA(t, server)}
 	m.SchemaVersion = 2
 	if err := runUpgrade(context.Background(), arguments, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
 		t.Fatal("invalid schema accepted")

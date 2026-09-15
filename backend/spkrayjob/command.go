@@ -305,7 +305,7 @@ const connectHelpText = `spk-rayjob connect — 进入自己的运行中训练 W
 `
 
 var simpleCommandHelp = map[string]string{
-	"upgrade":          "用法：spk-rayjob upgrade\n校验 SHA256 后升级当前客户端。\n",
+	"upgrade":          "用法：spk-rayjob upgrade [--server URL] [--config FILE] [--ca-file FILE]\n校验 SHA256 后升级当前客户端。--server 可显式指定公共 CLI 地址，不使用网页 Portal 域名。\n",
 	"init":             "用法：spk-rayjob init [--dir DIR] [--name NAME] [--image IMAGE] [--entrypoint COMMAND] [--engine ray-ddp|ray-train] [--workers N] [--gpus-per-worker N]\n在代码目录创建 .spk-rayjob.yaml，不会提交任务。\n",
 	"login-check":      "用法：spk-rayjob login-check\n验证当前配置中的会话或 PAT。\n",
 	"jobs":             "用法：spk-rayjob jobs [--state STATE] [--limit 1..500] [--output text|json]\n列出当前用户在当前团队可见的任务。\n",

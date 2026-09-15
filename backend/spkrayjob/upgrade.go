@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"ray-train-platform-backend/domain"
 )
@@ -26,19 +27,24 @@ func runUpgrade(ctx context.Context, arguments []string, stdout, stderr io.Write
 	set.SetOutput(io.Discard)
 	configPath := set.String("config", "", "saved login configuration")
 	caFile := set.String("ca-file", "", "private CA PEM file")
+	serverOverride := set.String("server", "", "release server URL")
 	if err := set.Parse(arguments); err != nil || set.NArg() != 0 {
-		return errors.New("usage: spk-rayjob upgrade [--config path] [--ca-file path]")
+		return errors.New("usage: spk-rayjob upgrade [--server URL] [--config path] [--ca-file path]")
 	}
 	if _, err := domain.CompareCLIReleaseVersions(Version, Version); err != nil {
 		return errors.New("开发或未知版本不支持自动升级；请手动下载正式版本")
 	}
-	config, err := loadConfig(*configPath)
-	if err != nil {
-		return err
+	serverURL := strings.TrimSpace(*serverOverride)
+	if serverURL == "" {
+		config, err := loadConfig(*configPath)
+		if err != nil {
+			return err
+		}
+		serverURL = config.Server
 	}
-	server, transport, err := openPlatformConnection(config.Server, *caFile, nil)
+	server, transport, err := openPlatformConnection(serverURL, *caFile, nil)
 	if err != nil {
-		return fmt.Errorf("upgrade requires saved HTTPS login configuration: %w", err)
+		return fmt.Errorf("upgrade requires an HTTPS release server: %w", err)
 	}
 	client := &Client{server: server, httpClient: transport}
 	manifest, err := client.releaseManifest(ctx)
