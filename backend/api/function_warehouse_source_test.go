@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path"
 	"strings"
 	"testing"
 	"time"
@@ -239,5 +240,20 @@ func TestWarehouseSourceOpenReadsVerifiedSnapshot(t *testing.T) {
 	data, err := io.ReadAll(reader)
 	if err != nil || string(data) != "weights" {
 		t.Fatalf("snapshot read failed: %q %v", data, err)
+	}
+}
+
+func TestWarehouseSourceSnapshotsMixedFilesUnderSameJobOutput(t *testing.T) {
+	source, op, _, _, _, snapshots := warehouseSourceFixture()
+	op.Paths = []string{"weights/model.pth", "configs/train.yaml", "configs/infer.yml", "model.config", "config.py", "labels.json", "README", "asset.custom"}
+	files, identity, err := source.Prepare(context.Background(), op)
+	if err != nil || len(files) != len(op.Paths) || len(snapshots.requests) != len(op.Paths) {
+		t.Fatalf("mixed snapshots: %v %v", files, err)
+	}
+	for i, relative := range op.Paths {
+		request := snapshots.requests[i]
+		if request.SourceRoot != "ray-train/tenants/local/users/alice/train/run-1" || request.RelativePath != relative || request.FileName != path.Base(relative) || request.JobID != identity.JobID || request.RunID != identity.RunID || files[i].Name != path.Base(relative) {
+			t.Fatalf("wrong file source: %+v", request)
+		}
 	}
 }

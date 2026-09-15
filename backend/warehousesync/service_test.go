@@ -5,6 +5,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path"
+	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -133,12 +136,16 @@ type sourceStub struct {
 	err      error
 	opened   int
 	prepared int
+	files    []File
 }
 
 func (s *sourceStub) Prepare(_ context.Context, op Operation) ([]File, SourceIdentity, error) {
 	s.prepared++
 	if s.err != nil {
 		return nil, SourceIdentity{}, s.err
+	}
+	if s.files != nil {
+		return s.files, SourceIdentity{JobID: op.JobID, RunID: "run", ExperimentID: "42"}, nil
 	}
 	return []File{{ModelID: "model", VersionID: "snapshot", Name: "best.pth", Size: 3, SHA256: strings.Repeat("a", 64)}}, SourceIdentity{JobID: op.JobID, RunID: "run", ExperimentID: "42"}, nil
 }
@@ -154,6 +161,9 @@ type upstreamStub struct {
 	createErr                  error
 	verifyErr                  error
 	beforeCreate               func()
+	expectedNames              map[string]bool
+	uploadedNames              []string
+	createdRequest             fw.CreateVersionRequest
 }
 
 func (u *upstreamStub) GetWarehouse(context.Context, string, string) (fw.Warehouse, error) {
@@ -171,7 +181,12 @@ func (u *upstreamStub) ListModelTypes(context.Context, string, string) ([]fw.Mod
 }
 func (u *upstreamStub) Upload(ctx context.Context, token, name, prefix string, size int64, sha string, open func(context.Context) (io.ReadCloser, error)) (fw.UploadedFile, error) {
 	u.uploads++
-	if name != "best.pth" || !strings.HasPrefix(prefix, "raytrain/") || !strings.HasSuffix(prefix, "/snapshot") {
+	u.uploadedNames = append(u.uploadedNames, name)
+	allowed := name == "best.pth"
+	if u.expectedNames != nil {
+		allowed = u.expectedNames[name]
+	}
+	if !allowed || !strings.HasPrefix(prefix, "raytrain/") || (u.expectedNames == nil && !strings.HasSuffix(prefix, "/snapshot")) {
 		return fw.UploadedFile{}, fw.ErrInvalid
 	}
 	r, err := open(ctx)
@@ -184,8 +199,9 @@ func (u *upstreamStub) Upload(ctx context.Context, token, name, prefix string, s
 	}
 	return fw.UploadedFile{Filename: name, FileSize: size, FileSHA256: sha, URL: "https://example.invalid/test"}, nil
 }
-func (u *upstreamStub) CreateVersion(context.Context, string, fw.CreateVersionRequest) (fw.Version, error) {
+func (u *upstreamStub) CreateVersion(_ context.Context, _ string, request fw.CreateVersionRequest) (fw.Version, error) {
 	u.creates++
+	u.createdRequest = request
 	if u.beforeCreate != nil {
 		u.beforeCreate()
 	}
@@ -323,7 +339,7 @@ func TestReauthenticationAndOwnership(t *testing.T) {
 }
 func TestInvalidPathsAndMissingEditPermissionRejectedBeforeCreate(t *testing.T) {
 	s, m, _, u, a, r := fixture(t)
-	for _, paths := range [][]string{{"../best.pth"}, {"/best.pth"}, {"a/best.pth", "b/best.pth"}, {"weights/code.py"}, {"a//best.pth"}, {"a\\best.pth"}} {
+	for _, paths := range [][]string{{"../best.pth"}, {"/best.pth"}, {"a/best.pth", "b/best.pth"}, {"a//best.pth"}, {"a\\best.pth"}, {"."}, {"configs/"}, {"*.yaml"}, {"config?.yml"}, {"[ab].json"}, {"{a,b}.yaml"}, {"file\tname"}, {"file\x7f"}, {"C:config"}, {""}, {}, {"a", "b", "c", "d", "e", "f", "g", "h", "i"}} {
 		r.Paths = paths
 		if _, err := s.Create(context.Background(), a, r, "secret"); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("accepted invalid paths: %v", paths)
@@ -485,4 +501,35 @@ func TestSafeErrorsAndStoppedWorker(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	s.Run(ctx)
+}
+
+func TestManualAndAutomaticSyncAcceptMixedArtifactTypes(t *testing.T) {
+	for _, automatic := range []bool{false, true} {
+		t.Run(strconv.FormatBool(automatic), func(t *testing.T) {
+			s, m, src, u, actor, request := fixture(t)
+			request.Automatic = automatic
+			request.Paths = []string{"weights/model.pth", "configs/train.yaml", "configs/inference.yml", "labels.json", "pipeline.config", "configuration.py", "说明.txt", "README"}
+			u.expectedNames = make(map[string]bool)
+			names := make([]string, 0, len(request.Paths))
+			for i, relative := range request.Paths {
+				name := path.Base(relative)
+				names = append(names, name)
+				u.expectedNames[name] = true
+				src.files = append(src.files, File{ModelID: "model", VersionID: "snapshot-" + strconv.Itoa(i), Name: name, Size: 3, SHA256: strings.Repeat("a", 64)})
+			}
+			if _, err := s.Create(context.Background(), actor, request, "secret"); err != nil {
+				t.Fatal(err)
+			}
+			op := runOne(t, s, m)
+			if op.State != Succeeded || !reflect.DeepEqual(names, u.uploadedNames) || len(op.Files) != len(names) || u.creates != 1 || u.verifies != 1 {
+				t.Fatalf("mixed files not synchronized: state=%s names=%v", op.State, u.uploadedNames)
+			}
+			if u.createdRequest.JobID != request.JobID || u.createdRequest.RunID != "run" || u.createdRequest.ExperimentID != "42" || len(u.createdRequest.Paths) != len(names) {
+				t.Fatal("mixed files lost shared training identity")
+			}
+			if len(op.Credential) != 0 {
+				t.Fatal("completed sync retained credential")
+			}
+		})
+	}
 }

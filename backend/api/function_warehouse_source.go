@@ -66,7 +66,7 @@ func (s warehouseSyncSource) Prepare(ctx context.Context, op ws.Operation) ([]ws
 		return nil, identity, err
 	}
 	identity = ws.SourceIdentity{JobID: source.JobID, RunID: source.RunID, ExperimentID: source.ExperimentID}
-	model, err := s.h.models.CreateModel(ctx, ml.Model{Name: "训练同步 " + op.JobID, Description: "自动同步功能仓时生成的训练权重副本", OwnerID: op.OwnerID, OwnerName: account.Username, TenantID: op.TenantID, IdempotencyKey: "warehouse-sync:" + op.ID})
+	model, err := s.h.models.CreateModel(ctx, ml.Model{Name: "训练同步 " + op.JobID, Description: "同步功能仓时生成的训练产物副本（模型、配置及配套文件）", OwnerID: op.OwnerID, OwnerName: account.Username, TenantID: op.TenantID, IdempotencyKey: "warehouse-sync:" + op.ID})
 	if err != nil {
 		return nil, identity, err
 	}

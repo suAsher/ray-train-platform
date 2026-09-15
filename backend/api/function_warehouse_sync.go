@@ -61,7 +61,7 @@ func (h *Handler) createWarehouseSync(c *gin.Context) {
 	p, _ := auth.PrincipalFromGin(c)
 	job, err := h.jobForPrincipal(c.Request.Context(), p, input.JobID)
 	if err != nil || job == nil || job.UserID != p.Subject || job.TenantID != p.TenantID {
-		h.writeError(c, 403, "WAREHOUSE_SOURCE_FORBIDDEN", "只能同步本人当前团队训练任务中的权重")
+		h.writeError(c, 403, "WAREHOUSE_SOURCE_FORBIDDEN", "只能同步本人当前团队训练任务中的文件")
 		return
 	}
 	if !input.Automatic {

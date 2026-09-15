@@ -76,31 +76,38 @@ func uploadedFixture(data []byte) UploadedFile {
 }
 
 func TestUploadFileStreamingMultipartAndVerifiedResult(t *testing.T) {
-	data := []byte("model weight content")
-	client := testClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/system/api/file/minio/upload" || r.URL.Query().Get("prefix") != testUploadPrefix || r.Header.Get("Authorization") != "Bearer token" {
-			t.Error("bad upload contract")
-		}
-		reader, err := r.MultipartReader()
-		if err != nil {
-			t.Fatal(err)
-		}
-		part, err := reader.NextPart()
-		if err != nil || part.FormName() != "file" || part.FileName() != "weights.pth" {
-			t.Fatal("missing multipart file")
-		}
-		actual, err := io.ReadAll(part)
-		if err != nil || !bytes.Equal(actual, data) {
-			t.Fatal("incorrect uploaded bytes")
-		}
-		if _, err := reader.NextPart(); err != io.EOF {
-			t.Fatal("multipart was not terminated")
-		}
-		writeEnvelope(w, uploadedFixture(data))
-	})
-	file, err := client.UploadFile(context.Background(), "token", "weights.pth", testUploadPrefix, int64(len(data)), digestOf(data), bytes.NewReader(data))
-	if err != nil || file != uploadedFixture(data) {
-		t.Fatalf("upload=%#v error=%v", file, err)
+	for _, name := range []string{"weights.pth", "train.yaml", "infer.yml", "model.config", "config.py", "metadata.json", "README", "artifact.custom"} {
+		t.Run(name, func(t *testing.T) {
+			data := []byte("opaque artifact content")
+			want := uploadedFixture(data)
+			want.Filename = name
+			want.URL = "https://storage.example/" + name
+			client := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/system/api/file/minio/upload" || r.URL.Query().Get("prefix") != testUploadPrefix || r.Header.Get("Authorization") != "Bearer token" {
+					t.Error("bad upload contract")
+				}
+				reader, err := r.MultipartReader()
+				if err != nil {
+					t.Fatal(err)
+				}
+				part, err := reader.NextPart()
+				if err != nil || part.FormName() != "file" || part.FileName() != name {
+					t.Fatal("missing multipart file")
+				}
+				actual, err := io.ReadAll(part)
+				if err != nil || !bytes.Equal(actual, data) {
+					t.Fatal("incorrect uploaded bytes")
+				}
+				if _, err := reader.NextPart(); err != io.EOF {
+					t.Fatal("multipart was not terminated")
+				}
+				writeEnvelope(w, want)
+			})
+			file, err := client.UploadFile(context.Background(), "token", name, testUploadPrefix, int64(len(data)), digestOf(data), bytes.NewReader(data))
+			if err != nil || file != want {
+				t.Fatalf("upload=%#v error=%v", file, err)
+			}
+		})
 	}
 }
 

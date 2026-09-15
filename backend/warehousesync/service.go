@@ -59,7 +59,7 @@ func validRequest(actor Actor, request Request) bool {
 	}
 	names := make(map[string]bool, len(request.Paths))
 	for _, value := range request.Paths {
-		if value == "" || len(value) > 1024 || !utf8.ValidString(value) || strings.ContainsAny(value, "\\\x00\r\n") || path.IsAbs(value) || path.Clean(value) != value || value == ".." || strings.HasPrefix(value, "../") {
+		if value == "" || len(value) > 1024 || !utf8.ValidString(value) || strings.ContainsAny(value, "\\:*?[]{}") || path.IsAbs(value) || path.Clean(value) != value || value == "." || value == ".." || strings.HasPrefix(value, "../") {
 			return false
 		}
 		name := path.Base(value)
@@ -67,10 +67,12 @@ func validRequest(actor Actor, request Request) bool {
 			return false
 		}
 		names[name] = true
-		switch strings.ToLower(path.Ext(name)) {
-		case ".pth", ".pt", ".ckpt", ".safetensors", ".onnx":
-		default:
-			return false
+		// Copy selected artifacts as opaque bytes; extensions do not establish
+		// whether a file is a weight, configuration, or other model companion.
+		for _, char := range value {
+			if char < 32 || char == 127 {
+				return false
+			}
 		}
 	}
 	return true
@@ -439,13 +441,13 @@ func stateMessage(state string) string {
 	case Queued:
 		return "等待同步"
 	case WaitingSource:
-		return "等待训练完成或权重副本就绪"
+		return "等待训练完成或文件副本就绪"
 	case Uploading:
-		return "正在上传模型文件"
+		return "正在上传所选文件"
 	case Registering:
 		return "正在创建功能仓版本并核对训练来源"
 	case Succeeded:
-		return "模型文件及训练来源已同步并核验"
+		return "文件及训练来源已同步并核验"
 	case WaitingReauth:
 		return "登录授权已失效，请重新登录后重试同步"
 	case Unknown:
