@@ -1,6 +1,9 @@
 package domain
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func specWithResources(workers, gpusPerWorker int) JobSpec {
 	spec := JobSpec{
@@ -29,6 +32,100 @@ func TestDefaultResourceLimitsMatchTheInitialCluster(t *testing.T) {
 	}
 	if err := specWithResources(4, 8).Validate(); err == nil {
 		t.Fatalf("expected the default worker ceiling to reject 4 workers")
+	}
+}
+
+func TestJobSpecShapeDefersCapacityWithoutChangingServerLimits(t *testing.T) {
+	SetResourceLimits(ResourceLimits{})
+	t.Cleanup(func() { SetResourceLimits(ResourceLimits{}) })
+	before := CurrentResourceLimits()
+	for _, shape := range []struct{ workers, gpus int }{{4, 8}, {2, 16}, {999, 1}} {
+		spec := specWithResources(shape.workers, shape.gpus)
+		spec.Execution.Mode = ExecutionModeRayTrain
+		if err := spec.ValidateShape(); err != nil {
+			t.Fatalf("client must defer capacity for %d x %d: %v", shape.workers, shape.gpus, err)
+		}
+		if err := spec.Validate(); err == nil {
+			t.Fatalf("server must retain configured capacity for %d x %d", shape.workers, shape.gpus)
+		}
+	}
+	if got := CurrentResourceLimits(); got != before {
+		t.Fatalf("shape validation changed server limits: got %+v, want %+v", got, before)
+	}
+	SetResourceLimits(ResourceLimits{MaxWorkerReplicas: 4, MaxGPUsPerWorker: 16, MaxTotalGPUs: 32})
+	if err := specWithResources(4, 8).Validate(); err != nil {
+		t.Fatalf("server must accept expanded capacity: %v", err)
+	}
+	if err := specWithResources(2, 16).Validate(); err != nil {
+		t.Fatalf("server must accept larger GPU nodes: %v", err)
+	}
+	if err := specWithResources(3, 16).Validate(); err == nil || !strings.Contains(err.Error(), "total GPUs cannot exceed 32") {
+		t.Fatalf("server must retain independent total-GPU ceiling: %v", err)
+	}
+	if err := UpdateResourceLimitsFromCapacity(0, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := specWithResources(4, 8).ValidateShape(); err != nil {
+		t.Fatalf("offline validation must not depend on an empty server pool: %v", err)
+	}
+	if err := specWithResources(1, 1).Validate(); err == nil {
+		t.Fatal("server must reject GPU jobs when the pool is empty")
+	}
+}
+
+func TestJobSpecShapeRejectsInvalidResourceCounts(t *testing.T) {
+	maxInt := int(^uint(0) >> 1)
+	tests := []struct {
+		name      string
+		workers   int
+		gpus      int
+		wantError string
+	}{
+		{name: "zero workers", workers: 0, gpus: 1, wantError: "workerReplicas must be positive"},
+		{name: "negative workers", workers: -1, gpus: 1, wantError: "workerReplicas must be positive"},
+		{name: "zero GPUs", workers: 1, gpus: 0, wantError: "gpusPerWorker must be positive"},
+		{name: "negative GPUs", workers: 1, gpus: -1, wantError: "gpusPerWorker must be positive"},
+		{name: "GPU multiplication overflow", workers: maxInt, gpus: 2, wantError: "total GPUs exceeds supported integer limits"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := specWithResources(test.workers, test.gpus).ValidateShape()
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("expected %q, got %v", test.wantError, err)
+			}
+		})
+	}
+	if err := specWithResources(maxInt, 1).ValidateShape(); err != nil {
+		t.Fatalf("largest representable GPU count is not an overflow: %v", err)
+	}
+	SetResourceLimits(ResourceLimits{MaxWorkerReplicas: maxInt, MaxGPUsPerWorker: maxInt, MaxTotalGPUs: maxInt})
+	t.Cleanup(func() { SetResourceLimits(ResourceLimits{}) })
+	if err := specWithResources(maxInt, 2).Validate(); err == nil || !strings.Contains(err.Error(), "supported integer limits") {
+		t.Fatalf("server validation must also prevent multiplication overflow: %v", err)
+	}
+}
+
+func TestJobSpecShapePreservesSharedValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		change    func(*JobSpec)
+		wantError string
+	}{
+		{name: "invalid name", change: func(s *JobSpec) { s.Name = "../escape" }, wantError: "name must be a lowercase DNS label"},
+		{name: "unversioned image", change: func(s *JobSpec) { s.Image = "registry.example/train" }, wantError: "image must include"},
+		{name: "missing entrypoint", change: func(s *JobSpec) { s.Entrypoint = Entrypoint{} }, wantError: "entrypoint command is required"},
+		{name: "incompatible execution", change: func(s *JobSpec) { s.Execution.Mode = ExecutionModeSingleGPU }, wantError: "single_gpu requires"},
+		{name: "invalid retry", change: func(s *JobSpec) { s.RetryPolicy.MaxRetries = -1 }, wantError: "maxRetries must be between"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			spec := specWithResources(4, 8)
+			test.change(&spec)
+			err := spec.ValidateShape()
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("expected unchanged shared validation %q, got %v", test.wantError, err)
+			}
+		})
 	}
 }
 

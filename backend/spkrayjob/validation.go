@@ -19,7 +19,8 @@ const (
 
 // validatePreflightJobSpec applies harmless sentinels only for values that the
 // submit workflow intentionally derives later. Every supplied value is left
-// untouched and is therefore checked by the same domain validator as the API.
+// untouched and checked against the same job-shape rules as the API. Capacity
+// and tenant quota remain server decisions and must not use CLI defaults.
 func validatePreflightJobSpec(spec domain.JobSpec) error {
 	return validateLocalJobSpec(spec, localJobSpecDefaults{
 		name: true, image: true, source: true, cacheSize: true,
@@ -71,7 +72,7 @@ func validateLocalJobSpec(spec domain.JobSpec, defaults localJobSpecDefaults) er
 			candidate.RayVersion = domain.RayVersionCanary
 		}
 	}
-	if err := candidate.Validate(); err != nil {
+	if err := candidate.ValidateShape(); err != nil {
 		return err
 	}
 	if candidate.TimeoutSeconds < 0 {
@@ -80,7 +81,7 @@ func validateLocalJobSpec(spec domain.JobSpec, defaults localJobSpecDefaults) er
 	return validateLocalComputeResources(candidate.Resources)
 }
 
-// JobSpec.Validate owns shared job-shape policy. These two values are rendered
+// JobSpec.ValidateShape owns shared job-shape policy. These two values are rendered
 // directly as Kubernetes resource requests but are not yet covered there, so
 // the CLI checks their transport syntax without duplicating cluster limits.
 func validateLocalComputeResources(resources domain.Resources) error {

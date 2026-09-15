@@ -674,6 +674,18 @@ var snapshotID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 var jobID = regexp.MustCompile(`^job-[0-9a-f]{24}$`)
 
 func (s JobSpec) Validate() error {
+	limits := CurrentResourceLimits()
+	return s.validate(&limits)
+}
+
+// ValidateShape checks job semantics without deployment-specific capacity
+// ceilings. Offline clients use it for preflight; the API must use Validate
+// and enforce the submitting tenant's quota before accepting a job.
+func (s JobSpec) ValidateShape() error {
+	return s.validate(nil)
+}
+
+func (s JobSpec) validate(limits *ResourceLimits) error {
 	if s.Name == "" || len(s.Name) > 63 || !dnsLabel.MatchString(s.Name) {
 		return fmt.Errorf("name must be a lowercase DNS label with 1-63 characters")
 	}
@@ -697,14 +709,22 @@ func (s JobSpec) Validate() error {
 			return fmt.Errorf("evaluation archive entrypoint must directly use python file.py or python -m module")
 		}
 	}
-	limits := CurrentResourceLimits()
-	if s.Resources.WorkerReplicas < 1 || s.Resources.WorkerReplicas > limits.MaxWorkerReplicas {
-		return fmt.Errorf("workerReplicas must be between 1 and %d", limits.MaxWorkerReplicas)
+	if s.Resources.WorkerReplicas < 1 || (limits != nil && s.Resources.WorkerReplicas > limits.MaxWorkerReplicas) {
+		if limits != nil {
+			return fmt.Errorf("workerReplicas must be between 1 and %d", limits.MaxWorkerReplicas)
+		}
+		return fmt.Errorf("workerReplicas must be positive")
 	}
-	if s.Resources.GPUsPerWorker < 1 || s.Resources.GPUsPerWorker > limits.MaxGPUsPerWorker {
-		return fmt.Errorf("gpusPerWorker must be between 1 and %d", limits.MaxGPUsPerWorker)
+	if s.Resources.GPUsPerWorker < 1 || (limits != nil && s.Resources.GPUsPerWorker > limits.MaxGPUsPerWorker) {
+		if limits != nil {
+			return fmt.Errorf("gpusPerWorker must be between 1 and %d", limits.MaxGPUsPerWorker)
+		}
+		return fmt.Errorf("gpusPerWorker must be positive")
 	}
-	if s.Resources.WorkerReplicas*s.Resources.GPUsPerWorker > limits.MaxTotalGPUs {
+	if s.Resources.WorkerReplicas > int(^uint(0)>>1)/s.Resources.GPUsPerWorker {
+		return fmt.Errorf("total GPUs exceeds supported integer limits")
+	}
+	if limits != nil && s.Resources.WorkerReplicas*s.Resources.GPUsPerWorker > limits.MaxTotalGPUs {
 		return fmt.Errorf("total GPUs cannot exceed %d", limits.MaxTotalGPUs)
 	}
 	if err := s.Execution.Validate(s.Resources); err != nil {
