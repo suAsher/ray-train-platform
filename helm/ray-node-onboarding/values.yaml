@@ -20,3 +20,8 @@ nfs:
   # Operators provide 1..8 fixed {server, path} entries. All mounts are read-only.
   # Example: [{server: "10.0.0.10", path: "/datasets"}]
   shares: []
+
+# Explicit node-name -> tenant allowlist for a probe's Equal/NoSchedule
+# dedicated-tenant toleration. Empty rejects every dedicated toleration.
+# The controller only generates it from the target Node's actual taint.
+dedicatedNodeTenants: {}

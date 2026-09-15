@@ -10,7 +10,9 @@ import (
 	"github.com/gin-gonic/gin"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic/fake"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	"ray-train-platform-backend/auth"
@@ -198,5 +200,51 @@ func TestLaunchWorkspacePreparesTenantNamespaceAndRegistrySecret(t *testing.T) {
 	}
 	if secret.Type != corev1.SecretTypeDockerConfigJson || len(secret.Data[corev1.DockerConfigJsonKey]) == 0 {
 		t.Fatalf("unexpected tenant registry Secret: %#v", secret)
+	}
+}
+
+func TestLaunchWorkspaceUsesAuthenticatedTenantForDedicatedPlacement(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tenant := range []string{"algorithm", "local"} {
+		dynamic := fake.NewSimpleDynamicClient(runtime.NewScheme())
+		handler := NewHandler(&fakeJobRepository{}, Options{
+			Workspaces:             &fakeWorkspaceStore{getErr: context.Canceled},
+			Kubernetes:             k8s.NewClientFromInterfaces(dynamic, k8sfake.NewSimpleClientset()),
+			WorkspaceImage:         "registry.example/workspace@sha256:" + strings.Repeat("a", 64),
+			TrainingDedicatedNodes: map[string][]string{"algorithm": {"172.28.3.32"}},
+		})
+		handler.newID = func() (string, error) { return "job-dedicated-workspace", nil }
+		router := gin.New()
+		router.Use(func(c *gin.Context) {
+			c.Set("ray-platform-principal", auth.Principal{Subject: "subject-1", TenantID: tenant, Roles: []string{"Engineer"}, AuthType: auth.AuthTypeOIDC})
+			c.Next()
+		})
+		handler.RegisterWorkspaceRoutes(router.Group("/api/v1"))
+		// The request cannot choose another tenant or inject placement fields.
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/dev-workspaces", strings.NewReader(`{"gpuCount":0,"tenantId":"algorithm","nodeSelector":{"kubernetes.io/hostname":"172.28.3.32"}}`))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusAccepted {
+			t.Fatalf("tenant %s: %d %s", tenant, response.Code, response.Body.String())
+		}
+		cluster, err := dynamic.Resource(schema.GroupVersionResource{Group: "ray.io", Version: "v1", Resource: "rayclusters"}).Namespace("tenant-"+tenant).Get(context.Background(), "dev-dedicated-workspace", metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		head, _, _ := unstructured.NestedMap(cluster.Object, "spec", "headGroupSpec", "template", "spec")
+		terms, _, _ := unstructured.NestedSlice(head, "affinity", "nodeAffinity", "requiredDuringSchedulingIgnoredDuringExecution", "nodeSelectorTerms")
+		if len(terms) != 1 {
+			t.Fatalf("missing hard placement: %v", head)
+		}
+		expressions := terms[0].(map[string]any)["matchExpressions"].([]any)
+		operator := expressions[0].(map[string]any)["operator"]
+		want := "NotIn"
+		if tenant == "algorithm" {
+			want = "In"
+		}
+		if operator != want {
+			t.Fatalf("tenant=%s operator=%s want=%s", tenant, operator, want)
+		}
 	}
 }

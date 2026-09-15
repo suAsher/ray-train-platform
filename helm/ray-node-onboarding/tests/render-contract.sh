@@ -37,4 +37,21 @@ for unsafe in 'image=registry.example/controller:latest' 'data1ConfigMap=ray-cac
   fi
 done
 
+cat >"${rendered_dir}/dedicated-values.yaml" <<'YAML'
+dedicatedNodeTenants:
+  172.28.3.32: algorithm
+YAML
+"${helm_bin}" template node-onboarding "${chart_dir}" "${enabled_args[@]}" -f "${rendered_dir}/dedicated-values.yaml" >"${rendered_dir}/dedicated.yaml"
+grep -Fq "t.key == 'platform.wellspiking.ai/dedicated-tenant'" "${rendered_dir}/dedicated.yaml"
+grep -Fq "t.operator == 'Equal' && t.effect == 'NoSchedule'" "${rendered_dir}/dedicated.yaml"
+grep -Fq '\"172.28.3.32\":\"algorithm\"' "${rendered_dir}/dedicated.yaml"
+grep -Fq 't.value == variables.dedicatedNodeTenants[object.metadata.ownerReferences[0].name]' "${rendered_dir}/dedicated.yaml"
+for tenant in '' 'Team_A' '-algorithm'; do
+  printf 'dedicatedNodeTenants:\n  gpu-1: "%s"\n' "${tenant}" >"${rendered_dir}/dedicated-values.yaml"
+  if "${helm_bin}" template node-onboarding "${chart_dir}" "${enabled_args[@]}" -f "${rendered_dir}/dedicated-values.yaml" >"${rendered_dir}/dedicated.yaml" 2>"${rendered_dir}/error"; then
+    echo "unsafe dedicated tenant accepted: ${tenant}" >&2
+    exit 1
+  fi
+done
+
 echo 'node onboarding Helm render contract verified (API server CEL checks still required)'

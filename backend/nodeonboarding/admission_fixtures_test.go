@@ -25,6 +25,7 @@ type admissionFixtureConfig struct {
 	NodeUID  types.UID
 	Hostname string
 	Shares   []nfsShare
+	Taints   []corev1.Taint
 }
 
 func TestAdmissionFixtures(t *testing.T) {
@@ -61,6 +62,7 @@ func TestAdmissionFixtures(t *testing.T) {
 	node.Name = input.NodeName
 	node.UID = input.NodeUID
 	node.Labels["kubernetes.io/hostname"] = input.Hostname
+	node.Spec.Taints = input.Taints
 	sharesJSON, err := json.Marshal(input.Shares)
 	if err != nil {
 		t.Fatal(err)

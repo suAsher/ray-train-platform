@@ -37,7 +37,8 @@ type RenderOptions struct {
 	LocalCache                 LocalCacheOptions
 	// NodeSelector pins Ray Pods to the GPU training pool. It is configuration
 	// so that adding machines or changing GPU model needs no code change.
-	NodeSelector map[string]string
+	NodeSelector   map[string]string
+	DedicatedNodes map[string][]string
 	// GitCredentialSecret names a Secret in the tenant namespace holding
 	// GIT_USERNAME/GIT_TOKEN for a private repository. Empty for public ones.
 	GitCredentialSecret string
@@ -867,6 +868,12 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, tenantID 
 	// Both head and workers stay on the real training pool: a head scheduled
 	// onto a serverless virtual node cannot host the GCS for the workers.
 	podSpec["nodeSelector"] = trainingNodeSelector(options)
+	if affinity := dedicatedNodeAffinity(tenantID, options.DedicatedNodes); affinity != nil {
+		podSpec["affinity"] = affinity
+	}
+	if tolerations := dedicatedNodeTolerations(tenantID, options.DedicatedNodes); len(tolerations) > 0 {
+		podSpec["tolerations"] = tolerations
+	}
 	if podSpec["serviceAccountName"] == "" {
 		delete(podSpec, "serviceAccountName")
 	}

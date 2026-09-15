@@ -119,6 +119,25 @@ def main():
             raise RuntimeError("Fixture namespace must be ray-cache-local")
         create(f"exact {name}", obj)
 
+    dedicated_key = "platform.wellspiking.ai/dedicated-tenant"
+    dedicated = [t for t in probe["spec"].get("tolerations", []) if t.get("key") == dedicated_key]
+    if dedicated:
+        actual_taints = node.get("spec", {}).get("taints", [])
+        if not any(t.get("key") == dedicated_key and t.get("effect") == "NoSchedule"
+                   and t.get("value") == dedicated[0]["value"] for t in actual_taints):
+            raise RuntimeError("Dedicated fixture does not match the Node's actual taint")
+        wrong_value = "other-tenant" if dedicated[0]["value"] != "other-tenant" else "another-tenant"
+        create("dedicated wrong tenant", mutate(probe, ["spec", "tolerations"], [
+            {"key": dedicated_key, "operator": "Equal", "value": wrong_value, "effect": "NoSchedule"}]), "pods")
+        create("prepare cannot tolerate dedicated tenant", mutate(prep, ["spec", "tolerations"], dedicated), "pods")
+    for label, toleration in [
+        ("dedicated wildcard", {"key": dedicated_key, "operator": "Exists", "effect": "NoSchedule"}),
+        ("all taints wildcard", {"operator": "Exists"}),
+        ("foreign NoSchedule", {"key": "unrelated.example/maintenance", "operator": "Equal", "value": "true", "effect": "NoSchedule"}),
+        ("dedicated NoExecute", {"key": dedicated_key, "operator": "Equal", "value": "algorithm", "effect": "NoExecute"}),
+    ]:
+        create(label, mutate(probe, ["spec", "tolerations"], [toleration]), "pods")
+
     pod_mutations = [
         ("mutable image", ["spec", "containers", 0, "image"], "registry.example/unsafe:latest"),
         ("altered command", ["spec", "containers", 0, "command"], ["/bin/sh", "-ec", "true"]),

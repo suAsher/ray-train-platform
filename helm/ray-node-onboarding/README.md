@@ -60,6 +60,20 @@ sets `Never`. This keeps Kubernetes' Priority admission defaults consistent and
 prevents the checks from preempting training. They use the default scheduler and cluster
 DNS, without custom DNS or host aliases.
 
+For a node reserved by the `platform.wellspiking.ai/dedicated-tenant=<tenant>:NoSchedule`
+taint, configure `dedicatedNodeTenants` with its exact Node name and tenant, for
+example `{"172.28.3.32": "algorithm"}`. The controller copies only the target
+Node's actual dedicated `NoSchedule` taint into one `Equal` toleration. Preparation
+keeps its exact `nodeName` and does not need a toleration. The scheduled smoke Pod
+remains constrained to that same Node; it never tolerates unrelated taints,
+`NoExecute`, or all tenants through `Exists`. Admission independently restricts
+the value to the operator's node-to-tenant allowlist, which defaults to empty.
+Repeat server-side policy checks with a dedicated-node fixture before onboarding
+it. Include its actual `Taints` array in the fixture JSON, alongside `NodeName`.
+The contract checks reject wrong tenants and wildcard tolerations. This setting
+does not assign training workloads; platform scheduling and the Node taint must
+be configured separately before enabling the Node's production labels.
+
 To pause, set `activateController: false`; this preserves policies, external
 maps, the NFS configuration and existing cache data. Do not remove ready gating
 or clear newly registered mappings as an incidental rollback. This chart does

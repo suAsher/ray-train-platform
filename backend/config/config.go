@@ -38,6 +38,7 @@ type Config struct {
 	PATEnabled                               bool
 	PATPepper                                string
 	TrainingNodeSelector                     map[string]string
+	TrainingDedicatedNodes                   map[string][]string
 	KueueAutoQuota                           bool
 	KueueTopologyEnabled                     bool
 	KueueTeamNodeAffinityEnabled             bool
@@ -314,6 +315,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.TrainingNodeSelector, err = parseLabelSelector("TRAINING_NODE_SELECTOR"); err != nil {
+		return Config{}, err
+	}
+	if cfg.TrainingDedicatedNodes, err = parseTrainingDedicatedNodes(os.Getenv("TRAINING_DEDICATED_NODES")); err != nil {
 		return Config{}, err
 	}
 	// Kueue cannot discover capacity, so the platform keeps the admission

@@ -330,6 +330,11 @@ albInstance:
 # and raising the Kueue quota below — no image rebuild.
 training:
   nodeSelector: "accelerator=nvidia-rtx-4090"
+  # Exclusive tenant-to-node assignments for new training and workspace resources.
+  # Assigned teams can use only their listed nodes; all other teams exclude them.
+  # Existing running resources are preserved. Empty mapping keeps shared placement.
+  # Example: {algorithm: ["172.28.3.32"]}
+  dedicatedNodes: {}
   # Largest single job the platform accepts. Defaults match a 3 × 8 fleet;
   # raise them when machines are added — values change only, no rebuild.
   maxWorkerReplicas: 3

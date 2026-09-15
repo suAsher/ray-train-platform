@@ -209,6 +209,8 @@ spec:
                   key: PAT_PEPPER
             - name: TRAINING_NODE_SELECTOR
               value: {{ .Values.training.nodeSelector | quote }}
+            - name: TRAINING_DEDICATED_NODES
+              value: {{ default dict .Values.training.dedicatedNodes | toJson | quote }}
             - name: MAX_WORKER_REPLICAS
               value: {{ .Values.training.maxWorkerReplicas | quote }}
             - name: MAX_GPUS_PER_WORKER

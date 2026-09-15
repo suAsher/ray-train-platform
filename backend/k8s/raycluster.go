@@ -16,6 +16,7 @@ import (
 
 type WorkspaceRenderOptions struct {
 	NodeSelector     map[string]string
+	DedicatedNodes   map[string][]string
 	Image            string
 	RayVersion       string
 	ServiceAccount   string
@@ -136,6 +137,15 @@ func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderO
 	worker["template"].(map[string]any)["spec"].(map[string]any)["nodeSelector"] = trainingNodeSelector(RenderOptions{NodeSelector: options.NodeSelector})
 	if options.ServiceAccount == "" {
 		delete(worker["template"].(map[string]any)["spec"].(map[string]any), "serviceAccountName")
+	}
+	for _, group := range []map[string]any{head, worker} {
+		spec := group["template"].(map[string]any)["spec"].(map[string]any)
+		if affinity := dedicatedNodeAffinity(workspace.TenantID, options.DedicatedNodes); affinity != nil {
+			spec["affinity"] = affinity
+		}
+		if tolerations := dedicatedNodeTolerations(workspace.TenantID, options.DedicatedNodes); len(tolerations) > 0 {
+			spec["tolerations"] = tolerations
+		}
 	}
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": RayAPIVersion, "kind": "RayCluster",

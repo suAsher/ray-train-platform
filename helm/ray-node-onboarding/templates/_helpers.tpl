@@ -13,6 +13,12 @@
 {{- range $name := list .Values.data1ConfigMap .Values.data2ConfigMap -}}
 {{- if or (eq $name "ray-cache-local-data1-config") (eq $name "ray-cache-local-data2-config") (eq $name "node-onboarding-nfs") (eq $name "node-onboarding-state") -}}{{- fail "external maps must not be legacy Helm maps, proof store or the NFS configuration" -}}{{- end -}}
 {{- end -}}
+{{- if not (kindIs "map" .Values.dedicatedNodeTenants) -}}{{- fail "dedicatedNodeTenants must be a node-name to tenant map" -}}{{- end -}}
+{{- range $node, $tenant := .Values.dedicatedNodeTenants -}}
+{{- if or (gt (len $node) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $node)) -}}{{- fail "dedicated node names must be DNS subdomains" -}}{{- end -}}
+{{- if not (kindIs "string" $tenant) -}}{{- fail "dedicated tenant must be a string" -}}{{- end -}}
+{{- if or (gt (len $tenant) 63) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $tenant)) -}}{{- fail "dedicated tenant must be a DNS label" -}}{{- end -}}
+{{- end -}}
 {{- if not (kindIs "slice" .Values.nfs.shares) -}}{{- fail "nfs.shares must be a list" -}}{{- end -}}
 {{- if or (lt (len .Values.nfs.shares) 1) (gt (len .Values.nfs.shares) 8) -}}{{- fail "nfs.shares must contain 1..8 fixed read-only sources" -}}{{- end -}}
 {{- range $share := .Values.nfs.shares -}}

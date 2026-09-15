@@ -12,7 +12,21 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
+
+const dedicatedTenantTaintKey = "platform.wellspiking.ai/dedicated-tenant"
+
+// Dedicated tolerations come only from this Node; never tolerate unrelated
+// taints or broaden the scope to Exists or a different effect.
+func dedicatedNodeTolerations(node *corev1.Node) []corev1.Toleration {
+	for _, taint := range node.Spec.Taints {
+		if taint.Key == dedicatedTenantTaintKey && taint.Effect == corev1.TaintEffectNoSchedule && len(validation.IsDNS1123Label(taint.Value)) == 0 {
+			return []corev1.Toleration{{Key: taint.Key, Operator: corev1.TolerationOpEqual, Value: taint.Value, Effect: taint.Effect}}
+		}
+	}
+	return nil
+}
 
 type nfsShare struct {
 	Server string `json:"server"`
@@ -85,6 +99,7 @@ func (c *Controller) probePod(node *corev1.Node, shares []nfsShare) *corev1.Pod 
 	pod.Spec.ServiceAccountName = c.config.ProbeServiceAccount
 	pod.Spec.ActiveDeadlineSeconds = pointer(int64(600))
 	pod.Spec.SecurityContext.RunAsNonRoot = pointer(true)
+	pod.Spec.Tolerations = dedicatedNodeTolerations(node)
 	pod.Spec.NodeSelector = map[string]string{"kubernetes.io/hostname": node.Labels["kubernetes.io/hostname"]}
 	pod.Spec.Affinity = &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchFields: []corev1.NodeSelectorRequirement{{Key: "metadata.name", Operator: corev1.NodeSelectorOpIn, Values: []string{node.Name}}}}}}}}
 	script := "set -eu; umask 077; for d in /cache1 /cache2; do printf '%s' onboarding-probe > \"$d/marker\"; test \"$(cat \"$d/marker\")\" = onboarding-probe; rm \"$d/marker\"; done"
