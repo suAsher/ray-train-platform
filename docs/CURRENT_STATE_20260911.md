@@ -14,6 +14,8 @@
 
 2026-09-14 GPU 装箱和 MLflow 永久令牌已发布：后端构建 `6644567`，Helm **235** / schema **54**；原 GPU Flavor 首次关联 TAS，抢占仍关闭、总 GPU 配额保持32。Portal dev `18aec491` / CI33955 已部署。MLflow 永久 PAT 生产读写与撤销验收通过，8个spk真实任务全部成功，含旧 CLI 三单卡装箱和跨节点10进程训练；线上账户复选框点击未完成，详情见[发布验证记录](GPU_PACKING_PAT_VALIDATION_20260914.md)。
 
+2026-09-15 功能仓同步取消文件扩展名白名单，手动和自动模式均支持模型、config、YAML、JSON、Python、无后缀等任务产物；路径、权限、数量和大小限制保留。后端 `fa3a220` / `release-20260915-02-fa3a220`，Helm **239** / schema **54**（本次无迁移）；Portal dev `7c272efc` / CI33999 全部成功。真实页面将模型、YAML、JSON 同步为一个正式验收仓版本，三个来源 ID 与文件摘要读回一致；验收副本已归档、委托凭据已清除，见[文件同步验收](FUNCTION_WAREHOUSE_INTEGRATION_PLAN_20260914.md#18-模型配置与任意扩展名文件同步2026-09-15)。
+
 ## 1. 生产代码基线与文档交付
 
 2026-09-12后续内网评估修复：业务提交 `3fb0b67`、后端revision223/schema50，Portal dev `74f036ae`（CI33883，revision1050）。已支持上传ZIP不可变快照及任务凭据内网下载；隔离测试通过，新的生产协议验收因浏览器工具文件权限卡在上传前，尚无成功报告证据。最新范围与未完成项以[评估发布记录](MODEL_EVALUATION_VALIDATION_20260912.md)开头为准。
