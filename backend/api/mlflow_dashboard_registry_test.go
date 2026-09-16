@@ -102,26 +102,30 @@ func TestMLflowDashboardRegistryRunRejectsUntrustedRecords(t *testing.T) {
 		})
 	}
 }
-func TestMLflowDashboardMissingRegistryLinkPreservesTrainingOwnership(t *testing.T) {
+func TestMLflowDashboardMissingRegistryLinkPreservesTrainingTeamBoundary(t *testing.T) {
 	runID := "1e0205b5055349029258b16c45f9c1f5"
-	for _, own := range []bool{true, false} {
-		t.Run(map[bool]string{true: "own", false: "other"}[own], func(t *testing.T) {
+	for _, scope := range []string{"own", "peer", "other-team"} {
+		t.Run(scope, func(t *testing.T) {
 			h := newMLflowDashboardTestHandler(newFakeMLflowDashboardStore(), time.Now())
 			h.modelRegistryLinks = &dashboardRegistryLinksFake{record: mr.Record{State: "NOT_LINKED"}}
 			p := streamingPrincipal()
 			owner := p.Subject
-			if !own {
+			if scope != "own" {
 				owner = "another-user"
 			}
-			h.repository = &fakeJobRepository{jobs: []domain.TrainingJob{{ID: "training-job", TenantID: p.TenantID, UserID: owner}}}
+			tenant := p.TenantID
+			if scope == "other-team" {
+				tenant = "unrelated-team"
+			}
+			h.repository = &fakeJobRepository{jobs: []domain.TrainingJob{{ID: "training-job", TenantID: tenant, UserID: owner}}}
 			h.experiments = &fakeExperimentProvider{catalog: observability.ExperimentCatalog{ExperimentID: "7", Runs: []observability.ExperimentRunSummary{{ID: runID, JobID: "training-job"}}}}
 			fragment, err := h.mlflowDashboardRunRedirect(context.Background(), p, runID)
-			if own {
+			if scope != "other-team" {
 				if err != nil || fragment != "#/experiments/7/runs/"+runID {
-					t.Fatalf("own training inaccessible %q %v", fragment, err)
+					t.Fatalf("team training inaccessible %q %v", fragment, err)
 				}
 			} else if err == nil {
-				t.Fatal("registry fallback expanded training ownership")
+				t.Fatal("registry fallback crossed training tenant boundary")
 			}
 		})
 	}

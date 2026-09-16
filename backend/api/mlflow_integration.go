@@ -71,7 +71,7 @@ func (h *Handler) mlflowIntegrationJob(c *gin.Context, write bool) (auth.Princip
 		h.writeError(c, 404, "JOB_NOT_FOUND", "training job was not found")
 		return p, nil, nil, false
 	}
-	if job.UserID != p.Subject && (write || !p.Allowed(domain.RoleTenantAdmin)) {
+	if write && job.UserID != p.Subject {
 		h.writeError(c, 403, "EXPERIMENT_FORBIDDEN", "MLflow access is not allowed for this job")
 		return p, nil, nil, false
 	}

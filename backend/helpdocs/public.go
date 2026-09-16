@@ -42,8 +42,11 @@ const quickstartPublicGuide = `### 从哪里开始
 | 上传、浏览个人/团队/公共数据 | 数据与存储 |
 | 选择固定数据版本和场地 | 版本化数据集 |
 | 打开 JupyterLab / VS Code | 交互式调试 |
-| 查看训练记录和 MLflow | 实验中心 |
+| 查看当前团队训练记录和 MLflow | 实验中心 |
+| 查看物理 GPU 容量、使用率与历史曲线 | GPU 资源池（所有已登录成员可见） |
 | 创建 PAT、管理 Git 凭据 | 账户与安全 |
+
+任务列表默认显示当前团队，可切换“我提交的”。普通成员可以查看同团队其他成员的任务状态、日志、指标和关联 Run；不会看到其他团队的训练任务。取消任务、Worker 连接、续训及功能仓同步仍按各操作的所有者或管理员权限处理。GPU 资源池是独立的只读菜单，物理空闲卡不等于当前团队可申请配额。
 
 ### 安装 CLI
 
@@ -210,6 +213,8 @@ const debugPublicGuide = `### 交互式调试
 
 const mlflowPublicGuide = `### 页面和记录关系
 
+实验中心的训练记录对当前团队成员可见，普通成员可以查看队友任务的关联 Run、指标并打开 MLflow 详情；切换团队后按有效成员身份重新确定范围。任务列表保留“我提交的”筛选。查看队友记录不会获得代写训练指标、取消他人任务或连接其 Worker 的权限。
+
 「实验中心」提供训练记录、模型和 MLflow API。训练记录用于查看 RayTrain Job 与 MLflow Run 的关联；模型用于查看共享模型和权重版本；MLflow API 用于复制原生 Tracking URI、Python 示例和 HTTP 调用方式。需要进入原生页面时点击“打开 MLflow”。
 
 训练任务可以关联一个或多个 MLflow Run；Job ID 不等于 Run ID。页面曲线取决于训练代码是否写入 MLflow metric，日志里有 loss 文本不代表页面一定有曲线。
@@ -266,7 +271,7 @@ const mlflowSeedPublicSection = `先区分平台训练任务和 MLflow Run。Job
 
 | 目的 | 去哪里 | 当前能做什么 |
 | --- | --- | --- |
-| 查看训练任务关联的指标 | 实验中心 → 训练记录；任务详情 | 查询本人有权查看的 RayTrain 任务、日志、指标和关联 Run |
+| 查看训练任务关联的指标 | 实验中心 → 训练记录；任务详情 | 查询当前所在团队的 RayTrain 任务、日志、指标和关联 Run |
 | 用程序读写共享实验 | 实验中心 → MLflow API | 使用 ` + "`https://raytrain.wellspiking.ai/api/v1/mlflow-native`" + ` 和 ` + "`mlflow==3.14.0`" + ` |
 | 浏览共享 MLflow 页面 | 打开 MLflow | 通过浏览器会话查看共享实验、Run、Artifact 和 Registry |
 | 下载训练权重和结果 | 任务详情 → 训练产物 | 取回写入 ` + "`PLATFORM_OUTPUT_PATH`" + ` 的文件 |

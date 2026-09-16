@@ -115,7 +115,7 @@ func TestJobGPUHistoryAuthorizationBoundary(t *testing.T) {
 			principal: auth.Principal{
 				Subject: "engineer-b", TenantID: "team-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal,
 			},
-			want: http.StatusNotFound,
+			want: http.StatusOK, wantCalls: 1,
 		},
 		{
 			name: "same-team TenantAdmin",
@@ -291,11 +291,11 @@ func TestJobGPUHistoryPATScopeAndOwnership(t *testing.T) {
 			want: http.StatusForbidden,
 		},
 		{
-			name: "jobs-read other-user PAT is hidden",
+			name: "jobs-read teammate PAT succeeds",
 			principal: auth.Principal{
 				Subject: "user-b", TenantID: "team-a", AuthType: auth.AuthTypePAT, Scopes: []string{domain.PATScopeJobsRead},
 			},
-			want: http.StatusNotFound,
+			want: http.StatusOK, wantCalls: 1,
 		},
 	}
 

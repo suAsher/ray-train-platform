@@ -266,6 +266,7 @@ type TrainingJob struct {
 	ID                   string            `json:"id"`
 	TenantID             string            `json:"tenantId"`
 	UserID               string            `json:"userId"`
+	Username             string            `json:"username,omitempty"`
 	SourceArtifactID     string            `json:"sourceArtifactId,omitempty"`
 	SubmissionOrigin     SubmissionOrigin  `json:"submissionOrigin"`
 	ExternalSubmissionID string            `json:"externalSubmissionId,omitempty"`

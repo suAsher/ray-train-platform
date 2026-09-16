@@ -81,7 +81,7 @@ func TestTrainingPerformanceAuthorizationBoundary(t *testing.T) {
 		calls     int
 	}{
 		{"owner", auth.Principal{Subject: "owner-a", TenantID: "team-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeOIDC}, 200, 1},
-		{"same team engineer", auth.Principal{Subject: "other", TenantID: "team-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeOIDC}, 404, 0},
+		{"same team engineer", auth.Principal{Subject: "other", TenantID: "team-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeOIDC}, 200, 1},
 		{"team admin", auth.Principal{Subject: "admin", TenantID: "team-a", Roles: []string{domain.RoleTenantAdmin}, AuthType: auth.AuthTypeOIDC}, 200, 1},
 		{"cross tenant", auth.Principal{Subject: "owner-a", TenantID: "team-b", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeOIDC}, 404, 0},
 		{"admin", auth.Principal{Subject: "root", TenantID: "platform", Roles: []string{domain.RoleSuperAdmin}, AuthType: auth.AuthTypeLocal}, 200, 1},

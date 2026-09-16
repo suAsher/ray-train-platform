@@ -19,6 +19,7 @@ type fakeGPUHistoryProvider struct {
 	calls          int
 	inventoryCalls int
 	inventory      observability.GPUInventory
+	history        observability.GPUHistory
 }
 
 func (provider *fakeGPUHistoryProvider) QueryJobMetrics(context.Context, string, time.Duration) (observability.JobMetrics, error) {
@@ -34,7 +35,13 @@ func (provider *fakeGPUHistoryProvider) QueryGPUHistory(_ context.Context, windo
 	provider.calls++
 	provider.window = window
 	provider.node = node
-	return observability.GPUHistory{Window: window, StepSeconds: 30, Devices: []observability.GPUHistoryDevice{}}, nil
+	history := provider.history
+	history.Window = window
+	history.StepSeconds = 30
+	if history.Devices == nil {
+		history.Devices = []observability.GPUHistoryDevice{}
+	}
+	return history, nil
 }
 
 func TestGPUHistoryEndpointUsesAuthenticatedBoundedQuery(t *testing.T) {
@@ -80,23 +87,23 @@ func TestGPUHistoryEndpointRequiresAuthentication(t *testing.T) {
 	}
 }
 
-func TestGPUMetricsEndpointsRequireAdministratorRole(t *testing.T) {
-	provider := &fakeGPUHistoryProvider{}
-	handler := NewHandler(&fakeJobRepository{}, Options{Metrics: provider})
-	principal := auth.Principal{Subject: "engineer", TenantID: "team-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal}
-
-	for _, path := range []string{
-		"/api/v1/cluster/gpu-metrics",
-		"/api/v1/cluster/gpu-metrics/history?window=1h",
-	} {
-		response := httptest.NewRecorder()
-		sessionRouter(handler, &principal).ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
-		if response.Code != http.StatusForbidden {
-			t.Fatalf("engineer accessed %s: code=%d body=%s", path, response.Code, response.Body.String())
-		}
-	}
-	if provider.calls != 0 || provider.inventoryCalls != 0 {
-		t.Fatalf("forbidden requests reached metrics provider: history=%d inventory=%d", provider.calls, provider.inventoryCalls)
+func TestGPUMetricsEndpointsAllowOrdinaryInteractiveMembers(t *testing.T) {
+	for _, authType := range []auth.AuthenticationType{auth.AuthTypeLocal, auth.AuthTypeOIDC, auth.AuthTypeOAuth2Proxy} {
+		t.Run(string(authType), func(t *testing.T) {
+			provider := &fakeGPUHistoryProvider{}
+			handler := NewHandler(&fakeJobRepository{}, Options{Metrics: provider})
+			principal := auth.Principal{Subject: "engineer", TenantID: "team-a", Roles: []string{domain.RoleEngineer}, AuthType: authType}
+			for _, path := range []string{"/api/v1/cluster/gpu-metrics", "/api/v1/cluster/gpu-metrics/history?window=1h"} {
+				response := httptest.NewRecorder()
+				sessionRouter(handler, &principal).ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+				if response.Code != http.StatusOK {
+					t.Fatalf("member cannot read %s: code=%d body=%s", path, response.Code, response.Body.String())
+				}
+			}
+			if provider.calls != 1 || provider.inventoryCalls != 1 {
+				t.Fatalf("unexpected queries: history=%d inventory=%d", provider.calls, provider.inventoryCalls)
+			}
+		})
 	}
 }
 
@@ -161,5 +168,68 @@ func TestGPUHistoryEndpointTrimsValidatedNode(t *testing.T) {
 
 	if response.Code != http.StatusOK || provider.node != "node-a" {
 		t.Fatalf("validated node was not normalized: code=%d node=%q body=%s", response.Code, provider.node, response.Body.String())
+	}
+}
+
+func TestGPUPoolMemberVisibilityRedactsOtherTeamAttribution(t *testing.T) {
+	for _, role := range []string{domain.RoleEngineer, domain.RoleTenantAdmin, domain.RoleSuperAdmin} {
+		t.Run(role, func(t *testing.T) {
+			provider := &fakeGPUHistoryProvider{
+				inventory: observability.GPUInventory{TotalGPUs: 3, Devices: []observability.GPUDevice{
+					{UUID: "own", Namespace: "tenant-team-a", PodName: "own-worker", ContainerName: "ray-worker"},
+					{UUID: "other", Namespace: "tenant-team-b", PodName: "other-worker", ContainerName: "ray-worker"},
+					{UUID: "unknown", PodName: "unattributed-worker", ContainerName: "ray-worker"},
+				}},
+				history: observability.GPUHistory{Devices: []observability.GPUHistoryDevice{
+					{UUID: "own", Namespace: "tenant-team-a", PodName: "own-worker", ContainerName: "ray-worker"},
+					{UUID: "other", Namespace: "tenant-team-b", PodName: "other-worker", ContainerName: "ray-worker"},
+					{UUID: "unknown", PodName: "unattributed-worker", ContainerName: "ray-worker"},
+				}},
+			}
+			handler := NewHandler(&fakeJobRepository{}, Options{Metrics: provider})
+			principal := auth.Principal{Subject: "member", TenantID: "team-a", Roles: []string{role}, AuthType: auth.AuthTypeOAuth2Proxy}
+			for _, path := range []string{"/api/v1/cluster/gpu-metrics", "/api/v1/cluster/gpu-metrics/history?window=1h"} {
+				response := httptest.NewRecorder()
+				sessionRouter(handler, &principal).ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+				var envelope struct {
+					Data struct {
+						Devices []observability.GPUDevice `json:"devices"`
+					} `json:"data"`
+				}
+				if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &envelope) != nil || len(envelope.Data.Devices) != 3 {
+					t.Fatalf("unexpected pool response %s: code=%d body=%s", path, response.Code, response.Body.String())
+				}
+				for index, device := range envelope.Data.Devices {
+					if index == 0 || role == domain.RoleSuperAdmin {
+						if device.PodName == "" {
+							t.Fatalf("permitted attribution removed: %+v", device)
+						}
+					} else if device.Namespace != "" || device.PodName != "" || device.ContainerName != "" {
+						t.Fatalf("foreign or unattributed workload leaked: %+v", device)
+					}
+				}
+			}
+			if provider.inventory.Devices[1].PodName != "other-worker" || provider.history.Devices[1].PodName != "other-worker" {
+				t.Fatal("response redaction mutated provider data")
+			}
+		})
+	}
+}
+
+func TestGPUPoolReadDoesNotGrantAdministrativeOperations(t *testing.T) {
+	handler := NewHandler(&fakeJobRepository{}, Options{})
+	principal := auth.Principal{Subject: "engineer", TenantID: "team-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeOAuth2Proxy}
+	for _, operation := range []struct{ method, path string }{
+		{http.MethodGet, "/api/v1/gpu-allocations"},
+		{http.MethodGet, "/api/v1/users"},
+		{http.MethodPost, "/api/v1/tenants/team-a/quota"},
+		{http.MethodPut, "/api/v1/tenants/team-a/scheduling"},
+		{http.MethodDelete, "/api/v1/admin/dev-workspaces/other-workspace"},
+	} {
+		response := httptest.NewRecorder()
+		adminRouter(handler, principal).ServeHTTP(response, httptest.NewRequest(operation.method, operation.path, nil))
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("pool reader gained %s %s: code=%d body=%s", operation.method, operation.path, response.Code, response.Body.String())
+		}
 	}
 }

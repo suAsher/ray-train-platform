@@ -616,10 +616,8 @@ func (h *Handler) listJobs(c *gin.Context) {
 	filter := domain.JobFilter{TenantID: principal.TenantID, Status: domain.State(c.Query("status")), Keyword: c.Query("keyword"), Limit: limit, Offset: offset}
 	switch c.DefaultQuery("scope", "mine") {
 	case "team":
-		if !principal.HasRole(domain.RoleTenantAdmin) && !principal.HasRole(domain.RoleSuperAdmin) {
-			h.writeError(c, http.StatusForbidden, "TEAM_JOB_LIST_FORBIDDEN", "team training jobs require a tenant administrator role")
-			return
-		}
+		// Every current member can read their team's jobs; tenant selection
+		// below remains authoritative and mutation handlers keep owner checks.
 	case "mine":
 		filter.UserID = principal.Subject
 	default:
@@ -641,6 +639,7 @@ func (h *Handler) listJobs(c *gin.Context) {
 		h.writeError(c, http.StatusInternalServerError, "JOB_LIST_FAILED", "could not list training jobs")
 		return
 	}
+	page.Items = h.jobsWithUsernames(c.Request.Context(), page.Items)
 	h.writeSuccess(c, http.StatusOK, publicTrainingJobPage(page))
 }
 
@@ -659,7 +658,8 @@ func (h *Handler) getJob(c *gin.Context) {
 		h.writeError(c, status, "JOB_NOT_FOUND", "training job was not found")
 		return
 	}
-	h.writeSuccess(c, http.StatusOK, publicTrainingJob(job))
+	display := h.jobsWithUsernames(c.Request.Context(), []domain.TrainingJob{*job})
+	h.writeSuccess(c, http.StatusOK, publicTrainingJob(&display[0]))
 }
 
 func (h *Handler) getJobRuntime(c *gin.Context) {
@@ -828,10 +828,7 @@ func canReadJobGPUHistory(principal auth.Principal, job *domain.TrainingJob) boo
 	if job.TenantID != principal.TenantID {
 		return false
 	}
-	if principal.HasRole(domain.RoleTenantAdmin) {
-		return true
-	}
-	return job.UserID == principal.Subject
+	return true
 }
 
 func (h *Handler) getJobExperiment(c *gin.Context) {
@@ -847,10 +844,6 @@ func (h *Handler) getJobExperiment(c *gin.Context) {
 	job, err := h.jobForPrincipal(c.Request.Context(), principal, c.Param("id"))
 	if err != nil {
 		h.writeError(c, http.StatusNotFound, "JOB_NOT_FOUND", "training job was not found")
-		return
-	}
-	if job.UserID != principal.Subject && !principal.Allowed(domain.RoleTenantAdmin) {
-		h.writeError(c, http.StatusForbidden, "EXPERIMENT_FORBIDDEN", "training experiment is available only to the job owner or a tenant administrator")
 		return
 	}
 	experiment, err := h.experiments.QueryJobExperiment(c.Request.Context(), job.TenantID, job.ID)
@@ -889,16 +882,13 @@ func (h *Handler) listExperiments(c *gin.Context) {
 	if limit > 100 {
 		limit = 100
 	}
-	subject := principal.Subject
-	if principal.Allowed(domain.RoleTenantAdmin) {
-		subject = ""
-	}
-	catalog, err := h.experimentCatalogForPrincipal(c.Request.Context(), principal, subject, limit)
+	// Training records are shared within the authenticated current team.
+	catalog, err := h.experimentCatalogForPrincipal(c.Request.Context(), principal, "", limit)
 	if err != nil {
 		h.writeError(c, http.StatusBadGateway, "MLFLOW_QUERY_FAILED", "could not query training experiments")
 		return
 	}
-	h.writeSuccess(c, http.StatusOK, catalog)
+	h.writeSuccess(c, http.StatusOK, h.experimentsWithUsernames(c.Request.Context(), catalog))
 }
 
 func (h *Handler) experimentCatalogForPrincipal(ctx context.Context, principal auth.Principal, subject string, limit int) (observability.ExperimentCatalog, error) {

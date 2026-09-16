@@ -80,7 +80,7 @@ func TestGetJobExperimentReportsDisabledIntegration(t *testing.T) {
 	}
 }
 
-func TestGetJobExperimentRejectsAnotherEngineerInTheSameTenant(t *testing.T) {
+func TestGetJobExperimentAllowsAnotherEngineerInTheSameTenant(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repository := &fakeJobRepository{jobs: []domain.TrainingJob{{ID: "job-01", TenantID: "team-a", UserID: "user-b"}}}
 	handler := NewHandler(repository, Options{Experiments: &fakeExperimentProvider{}})
@@ -93,12 +93,12 @@ func TestGetJobExperimentRejectsAnotherEngineerInTheSameTenant(t *testing.T) {
 
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/jobs/job-01/experiment", nil))
-	if response.Code != http.StatusForbidden {
-		t.Fatalf("same-tenant cross-owner experiment must be forbidden: %d %s", response.Code, response.Body.String())
+	if response.Code != http.StatusOK {
+		t.Fatalf("same-tenant cross-owner experiment must be visible: %d %s", response.Code, response.Body.String())
 	}
 }
 
-func TestListExperimentsScopesEngineerToAuthenticatedSubject(t *testing.T) {
+func TestListExperimentsScopesEngineerToAuthenticatedTeam(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	provider := &fakeExperimentProvider{catalog: observability.ExperimentCatalog{ExperimentName: "raytrain-team-a"}}
 	handler := NewHandler(&fakeJobRepository{}, Options{Experiments: provider})
@@ -111,7 +111,7 @@ func TestListExperimentsScopesEngineerToAuthenticatedSubject(t *testing.T) {
 
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/experiments?limit=25", nil))
-	if response.Code != http.StatusOK || provider.tenant != "team-a" || provider.subject != "user-a" || provider.limit != 25 {
+	if response.Code != http.StatusOK || provider.tenant != "team-a" || provider.subject != "" || provider.limit != 25 {
 		t.Fatalf("unexpected scoped catalog request: status=%d tenant=%q subject=%q limit=%d body=%s", response.Code, provider.tenant, provider.subject, provider.limit, response.Body.String())
 	}
 }
@@ -151,7 +151,7 @@ func TestListExperimentsReportsDisabledIntegration(t *testing.T) {
 	}
 }
 
-func TestListExperimentsDropsForgedOrCrossOwnerMLflowTags(t *testing.T) {
+func TestListExperimentsVerifiesTeamJobsAndUsesDatabaseOwner(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repository := &fakeJobRepository{jobs: []domain.TrainingJob{
 		{ID: "owned", TenantID: "team-a", UserID: "user-a"},
@@ -175,8 +175,19 @@ func TestListExperimentsDropsForgedOrCrossOwnerMLflowTags(t *testing.T) {
 
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/experiments", nil))
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "run-owned") || strings.Contains(response.Body.String(), "run-forged-owner") || strings.Contains(response.Body.String(), "run-missing-job") {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "run-owned") || !strings.Contains(response.Body.String(), "run-forged-owner") || strings.Contains(response.Body.String(), "run-missing-job") {
 		t.Fatalf("catalog did not fail closed against forged MLflow tags: %d %s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Data observability.ExperimentCatalog `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	for _, run := range payload.Data.Runs {
+		if run.JobID == "other" && run.SubmitterUserID != "user-b" {
+			t.Fatalf("forged owner tag displayed: %+v", run)
+		}
 	}
 }
 

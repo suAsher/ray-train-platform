@@ -59,18 +59,16 @@ var allowedGPUHistoryWindows = map[string]struct{}{
 
 var gpuNodeQueryPattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]+$`)
 
-func (h *Handler) requireGPUAdministrator(c *gin.Context) (auth.Principal, bool) {
+// GPU pool telemetry is read-only for every browser member. Machine tokens do
+// not inherit this access, and administration keeps its separate role checks.
+func (h *Handler) requireGPUPoolReader(c *gin.Context) (auth.Principal, bool) {
 	principal, ok := h.principal(c)
 	if !ok {
 		h.writeError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "authentication is required")
 		return auth.Principal{}, false
 	}
 	if !auth.IsInteractiveAuthType(principal.AuthType) && principal.AuthType != auth.AuthTypeDemo {
-		h.writeError(c, http.StatusForbidden, "INTERACTIVE_SESSION_REQUIRED", "该指标仅供交互式管理员会话访问")
-		return auth.Principal{}, false
-	}
-	if !principal.Allowed(domain.RoleTenantAdmin) {
-		h.writeError(c, http.StatusForbidden, "ADMIN_REQUIRED", "需要团队管理员或平台管理员权限")
+		h.writeError(c, http.StatusForbidden, "INTERACTIVE_SESSION_REQUIRED", "该指标仅供交互式登录会话访问")
 		return auth.Principal{}, false
 	}
 	return principal, true
@@ -82,7 +80,8 @@ func validGPUNodeQuery(nodeName string) bool {
 }
 
 func (h *Handler) clusterGPUHistory(c *gin.Context) {
-	if _, ok := h.requireGPUAdministrator(c); !ok {
+	principal, ok := h.requireGPUPoolReader(c)
+	if !ok {
 		return
 	}
 	window := c.DefaultQuery("window", "1h")
@@ -105,11 +104,11 @@ func (h *Handler) clusterGPUHistory(c *gin.Context) {
 		h.writeError(c, http.StatusBadGateway, "GPU_HISTORY_QUERY_FAILED", "无法读取 GPU 历史指标，请稍后重试")
 		return
 	}
-	h.writeSuccess(c, http.StatusOK, history)
+	h.writeSuccess(c, http.StatusOK, visibleGPUHistory(history, principal))
 }
 
 func (h *Handler) clusterGPUMetrics(c *gin.Context) {
-	principal, ok := h.requireGPUAdministrator(c)
+	principal, ok := h.requireGPUPoolReader(c)
 	if !ok {
 		return
 	}
@@ -135,7 +134,27 @@ func visibleGPUInventory(inventory observability.GPUInventory, principal auth.Pr
 	visible.Devices = append([]observability.GPUDevice(nil), inventory.Devices...)
 	allowedNamespace := "tenant-" + sanitizeDNS(principal.TenantID)
 	for index, device := range visible.Devices {
-		if device.Namespace == "" || device.Namespace == allowedNamespace {
+		if device.Namespace == allowedNamespace {
+			continue
+		}
+		device.Namespace = ""
+		device.PodName = ""
+		device.ContainerName = ""
+		visible.Devices[index] = device
+	}
+	return visible
+}
+
+func visibleGPUHistory(history observability.GPUHistory, principal auth.Principal) observability.GPUHistory {
+	if principal.HasRole(domain.RoleSuperAdmin) {
+		return history
+	}
+	visible := history
+	visible.Devices = make([]observability.GPUHistoryDevice, len(history.Devices))
+	copy(visible.Devices, history.Devices)
+	allowedNamespace := "tenant-" + sanitizeDNS(principal.TenantID)
+	for index, device := range visible.Devices {
+		if device.Namespace == allowedNamespace {
 			continue
 		}
 		device.Namespace = ""

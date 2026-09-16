@@ -81,7 +81,9 @@ func TestMLflowIntegrationAPIAuthorization(t *testing.T) {
 	}{
 		{"read owner", "GET", func(p *auth.Principal) {}, 200},
 		{"read admin", "GET", func(p *auth.Principal) { p.Subject = "admin"; p.Roles = []string{domain.RoleTenantAdmin} }, 200},
-		{"read peer denied", "GET", func(p *auth.Principal) { p.Subject = "peer" }, 403},
+		{"read peer", "GET", func(p *auth.Principal) { p.Subject = "peer" }, 200},
+		{"read other tenant denied", "GET", func(p *auth.Principal) { p.TenantID = "team-b" }, 404},
+		{"write peer denied", "POST", func(p *auth.Principal) { p.Subject = "peer" }, 403},
 		{"read scope denied", "GET", func(p *auth.Principal) { p.Scopes = []string{"mlflow:write"} }, 403},
 		{"write owner", "POST", func(p *auth.Principal) {}, 200},
 		{"write old token denied", "POST", func(p *auth.Principal) { p.Scopes = []string{domain.PATScopeJobsRead, domain.PATScopeJobsWrite} }, 403},

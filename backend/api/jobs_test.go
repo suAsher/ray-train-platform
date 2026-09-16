@@ -272,7 +272,7 @@ func TestListJobsPaginatesAndScopesMineToAuthenticatedUser(t *testing.T) {
 	}
 }
 
-func TestEngineerCannotListTeamJobs(t *testing.T) {
+func TestEngineerCanListTeamJobs(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repository := &fakeJobRepository{jobs: []domain.TrainingJob{
 		{ID: "job-owned", TenantID: "team-a", UserID: "user-a", Spec: domain.JobSpec{Name: "owned"}},
@@ -288,8 +288,8 @@ func TestEngineerCannotListTeamJobs(t *testing.T) {
 
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/jobs?scope=team", nil))
-	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "TEAM_JOB_LIST_FORBIDDEN") {
-		t.Fatalf("engineer must not list team jobs, got %d: %s", response.Code, response.Body.String())
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "job-other") || repository.listFilter.UserID != "" || repository.listFilter.AllTenants {
+		t.Fatalf("engineer must list current team jobs, got %d: %s", response.Code, response.Body.String())
 	}
 }
 
@@ -416,7 +416,7 @@ func TestEngineerCannotSelectAnotherTenantJobList(t *testing.T) {
 	handler.RegisterTrainingRoutes(router.Group("/api/v1"))
 
 	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/jobs?tenantId=team-b", nil))
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/jobs?scope=team&tenantId=team-b", nil))
 
 	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "TENANT_SCOPE_FORBIDDEN") {
 		t.Fatalf("engineer must not select another tenant, got %d: %s", response.Code, response.Body.String())

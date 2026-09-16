@@ -50,14 +50,15 @@ type ExperimentCatalog struct {
 }
 
 type ExperimentRunSummary struct {
-	ID              string             `json:"id"`
-	Name            string             `json:"name"`
-	Status          string             `json:"status"`
-	JobID           string             `json:"jobId"`
-	SubmitterUserID string             `json:"submitterUserId,omitempty"`
-	StartTimeMS     int64              `json:"startTimeMs,omitempty"`
-	EndTimeMS       int64              `json:"endTimeMs,omitempty"`
-	Latest          map[string]float64 `json:"latest"`
+	ID                string             `json:"id"`
+	Name              string             `json:"name"`
+	Status            string             `json:"status"`
+	JobID             string             `json:"jobId"`
+	SubmitterUserID   string             `json:"submitterUserId,omitempty"`
+	SubmitterUsername string             `json:"submitterUsername,omitempty"`
+	StartTimeMS       int64              `json:"startTimeMs,omitempty"`
+	EndTimeMS         int64              `json:"endTimeMs,omitempty"`
+	Latest            map[string]float64 `json:"latest"`
 }
 
 type ExperimentRun struct {

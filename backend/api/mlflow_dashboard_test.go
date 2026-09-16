@@ -304,6 +304,34 @@ func TestMLflowDashboardAccessRejectsRunOutsideCallerCatalog(t *testing.T) {
 	}
 }
 
+func TestMLflowDashboardTeamRunRedirectStillChecksPersistedTenant(t *testing.T) {
+	for _, tenant := range []string{"tenant-a", "tenant-b"} {
+		t.Run(tenant, func(t *testing.T) {
+			store := newFakeMLflowDashboardStore()
+			h := newMLflowDashboardTestHandler(store, time.Now())
+			runID := "1e0205b5055349029258b16c45f9c1f5"
+			h.repository = &fakeJobRepository{jobs: []domain.TrainingJob{{ID: "peer-job", TenantID: tenant, UserID: "peer"}}}
+			provider := &fakeExperimentProvider{catalog: observability.ExperimentCatalog{
+				ExperimentID: "7", Runs: []observability.ExperimentRunSummary{{ID: runID, JobID: "peer-job"}},
+			}}
+			h.experiments = provider
+			p := auth.Principal{Subject: "reader", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal}
+			response := newMLflowResponseRecorder()
+			mlflowAccessRouter(h, &p, false).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/mlflow-dashboard-access", strings.NewReader(`{"runId":"`+runID+`"}`)))
+			want := http.StatusNotFound
+			if tenant == p.TenantID {
+				want = http.StatusOK
+			}
+			if response.Code != want || provider.subject != "" || provider.tenant != p.TenantID {
+				t.Fatalf("team redirect: status=%d provider=%+v", response.Code, provider)
+			}
+			if want != http.StatusOK && len(store.created) != 0 {
+				t.Fatal("cross-tenant run received a ticket")
+			}
+		})
+	}
+}
+
 func TestMLflowDashboardTicketExchangeIsSingleUseAndSetsOneStrictCookie(t *testing.T) {
 	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
 	store := newFakeMLflowDashboardStore()

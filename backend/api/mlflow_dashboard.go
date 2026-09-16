@@ -166,11 +166,7 @@ func (h *Handler) mlflowDashboardRunRedirect(ctx context.Context, principal auth
 	if h.experiments == nil {
 		return "", fmt.Errorf("MLflow run is unavailable")
 	}
-	subject := principal.Subject
-	if principal.Allowed(domain.RoleTenantAdmin) {
-		subject = ""
-	}
-	catalog, err := h.experiments.ListTenantExperiments(ctx, principal.TenantID, subject, 100)
+	catalog, err := h.experiments.ListTenantExperiments(ctx, principal.TenantID, "", 100)
 	if err != nil || catalog.ExperimentID == "" {
 		return "", fmt.Errorf("MLflow run is unavailable")
 	}
@@ -179,7 +175,7 @@ func (h *Handler) mlflowDashboardRunRedirect(ctx context.Context, principal auth
 			continue
 		}
 		job, jobErr := h.repository.Get(ctx, principal.TenantID, run.JobID)
-		if jobErr != nil || (job.UserID != principal.Subject && !principal.Allowed(domain.RoleTenantAdmin)) {
+		if jobErr != nil || job == nil || job.TenantID != principal.TenantID {
 			break
 		}
 		return "#/experiments/" + catalog.ExperimentID + "/runs/" + run.ID, nil
