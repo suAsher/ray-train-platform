@@ -376,3 +376,13 @@ python3 /usr/local/bin/bevfusion-workspace-smoke --gpu
 ```
 
 GPU 模式额外执行 CUDA 张量计算与 MMCV CUDA NMS。完整上线验收还需以 `local` 用户创建环境、打开 JupyterLab 与 VS Code、确认个人存储可写，并停止专建测试环境核对 GPU 释放；只运行版本命令不能替代网页功能验收。
+
+2026-09-16 已推送并登记 `BEVFusion CUDA 11.3 · Jupyter + VS Code`，目录 ID 为 `job-fa71188804b84f1b81f6d985`，仅 `local` 可选，非默认。固定镜像为：
+
+```text
+harbor.wellspiking.ai/guofeng.su/ray-workspace-bevfusion@sha256:5808cc334e4ef5643cb000b3b92c34745efd6a056f326be7a6ada9e8d04a3f57
+```
+
+已验证 258 个 Python 包版本与训练基底一致，非 root CPU smoke、8 个编译扩展导入、VS Code 与 Jupyter 子路径 HTTP、Python kernelspec 和临时文件读写通过。在 `172.28.1.81` 的 RTX 4090 D 上，独立单卡 Pod 的 CUDA 张量计算与 MMCV CUDA NMS 通过；该测试 Pod 已删除。验收命令使用 `python3`，基底没有 `python` 命令。首次拉取约 12.4 GB 镜像耗时 5 分钟，后续同节点可复用缓存。
+
+平台镜像列表 API 已确认返回新记录，原有目录记录未改变。本次浏览器控制持续超时，因此通过运维数据库权限仅新增上述目录记录；没有调整认证或部署前后端、Helm。平台页面点击、个人持久存储及完整工作区启动停止流程仍未完成端到端验收。构建与验收证据保留在构建机 `/root/raytrain-bevfusion-workspace-20260916/`。
