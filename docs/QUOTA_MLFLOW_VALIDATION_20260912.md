@@ -107,3 +107,35 @@ RED 证据包括首次缺少实现、大小写字段曾被错误接受、单字�
 - 边界：SPT Run 10d289d44d544e2aa881debd9ce3fde1 已有指标但没有平台关联标签，本次未擅自改写历史 Run。功能仓自动上传仍处于接口合同确认阶段，本次没有向功能仓上传用户权重。
 
 构建机证据目录：`/root/raytrain-release-20260914-metrics`。本地未跟踪的用户验收 ZIP 保留，未提交。
+
+## 2026-09-16 当前团队训练记录与 GPU 资源池
+
+用户明确范围是普通成员所在的 RayTrain 团队，不是所有团队。平台成员表的当前 tenant 仍是权限依据，不以 Portal 顶部团队名称或 MLflow 可修改标签替代。
+
+### 已上线行为
+
+- 普通成员可选择“当前团队 / 仅我的”任务，Portal 默认团队；实验中心显示当前团队成员的训练 Run、提交人和指标，可打开对应 MLflow 详情。SuperAdmin 保留跨团队能力，页面明确显示“所有团队 / 平台范围”。旧 CLI 未指定 scope 时仍默认个人任务。
+- GPU 资源池保留独立菜单；所有交互登录成员可读实时与历史 GPU 指标。普通成员看不到其他团队及无法确认归属的工作负载标识；没有给 PAT 隐式增加资源池权限，也没有开放资源管理操作。
+- 同团队可读不等于可操作队友任务。取消、Worker/Ray Dashboard、恢复、模型登记和功能仓同步沿用各自所有者/管理员边界；MLflow 指定 Run 写入仍校验所有者。既有共享原生 MLflow、`mlflow:full` 和 Registry 权限未收紧或扩张。
+- 任务及实验展示提交人名称，批量查询仅包含当前返回结果中的用户 ID；缺失时保留稳定 ID。未开放用户目录、迁移历史归属或向旧 Run 补写标签。
+- 平台“使用说明”既有登录权限、任务和实验相关文章已更新，无需用户查看仓库文档。没有增加文档分类或管理员操作手册。
+
+### 版本与证据
+
+| 组件 | 发布事实 |
+| --- | --- |
+| 后端业务提交 | `5633f313507de0f0701ec1b863137ea41cfe0b50` |
+| 后端组合构建 | `8168c7c409dae3b793667ea04455f7c64b048d7d`，保留并行任务的 BEVFusion 调试镜像源码提交；本次仅构建 backend |
+| 后端镜像 | `release-20260916-01-8168c7c`，digest `sha256:9a4138decdcd27f627221d65db0299136053d9c3532385220458f71c2afa9bc5` |
+| 生产状态 | Helm **242**，schema **54**；两副本 Ready、重启 0，`/healthz` 200 |
+| Portal dev | `b3601dcf6662fc5c939a11b2b33cc449b09122cf`；[CI 34082](https://gitlab.wellspiking.ai/wellspiking/frontend/wellspiking-frontend/-/pipelines/34082) 的 lint 90339、docker-dev 90340、helm-deploy-dev 90341 全成功 |
+
+构建机先验证候选，后推送和同步正式目录：权限 RED 测试复现原先的同团队 403/404；完整 Go 回归及权限重点 race 测试在业务候选与组合构建上均通过。Portal 完整 lint、RayTrain 合同测试及开发构建通过；lint 为 0 error，保留既有 warnings。普通成员同团队读取、跨团队拒绝、伪造 Run 归属、旧 PAT 和变更操作权限均有隔离测试。审阅未发现阻塞权限问题。
+
+真实浏览器使用用户指定的 `guofeng.su` SuperAdmin 会话：11 个原有菜单保留，GPU 资源池加载 48 张卡和历史曲线；任务与实验显示 `yihan.she` 提交人。`job-a1937fae0256779603d7b10e` 详情正常，实验行“MLflow 详情”打开 experiment `1` / Run `94c4c9a55f924611af77af99c90790dd`，指标页面正常。已登录 team jobs、experiments、GPU 实时及历史 API 均 200；线上使用说明展示新的团队权限说明。
+
+用户选择“先用当前账号，普通角色用隔离测试验证”。因此普通角色 API/前端合同已验证，但没有真实普通账号的 SSO 动态菜单验收证据，不能用管理员浏览器冒充。后端权限是最终边界；本次未修改 Portal 动态菜单服务配置。
+
+Helm dry-run 仅一处后端镜像变化；发布前后记录的 RayJob、RayCluster、训练 Pod UID、状态与重启数无差异。本次无数据库迁移，未创建验收身份或 PAT、提交训练、修改配额/调度/存储。独立旧前端、CLI 与训练镜像未构建或发布。后续仅验收文档提交，无需再次部署。
+
+受限构建机证据目录：`/root/raytrain-release-20260916-team-read`，包含 RED/GREEN、`full-test.log`、`combined-test.log`、Portal 测试与构建日志、镜像构建、Helm diff、前后资源快照、最终两副本及 schema 核验。用户原有未跟踪 ZIP 保留。
