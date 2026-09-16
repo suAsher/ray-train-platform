@@ -70,7 +70,12 @@ def main():
     editor = subprocess.check_output(
         ["code-server", "--version"], text=True, timeout=30
     ).strip()
-    require(editor.split()[0] == "4.93.1", "unexpected code-server: " + editor)
+    # A first launch can write its default config and announce that on stdout
+    # before the version line. Match the exact version token on its own line.
+    require(
+        any(line.startswith("4.93.1 ") for line in editor.splitlines()),
+        "unexpected code-server: " + editor,
+    )
     require(os.getuid() != 0, "workspace must run as a non-root user")
     require(platform.python_version() == "3.8.10", "unexpected Python version")
     versions = {name: importlib.metadata.version(name) for name in EXPECTED}
