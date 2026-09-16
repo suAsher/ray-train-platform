@@ -353,3 +353,26 @@ spk-rayjob submit \
 - 将兼容镜像升级为在 RTX 4090/CUDA 11.8+ 环境重新编译扩展的生产镜像。
 - 原生 Ray API 协议、执行模式推导和 IDC Ingress 上传大小已修复；日常训练仍推荐使用数据和断点治理更完整的 `spk-rayjob`。
 - 所有上线镜像、代码和 Helm revision 关联到 Git commit/tag，保证可回滚。
+
+## 11. BEVFusion 调试环境镜像
+
+`images/bevfusion-workspace/Dockerfile` 从第 6 节相同的已验收训练摘要派生，新增 code-server 4.93.1，沿用基底的 JupyterLab 3.6.8。保留 Python 3.8.10、PyTorch 1.10.1+cu113、Ray 2.10.0、MMCV 1.4.0、MMDetection 2.20.0 和 MLflow 2.17.2，不执行 pip/apt 升级，也不复制任何用户工作区数据。调试进程仍以 `ray` 用户运行。
+
+该训练基底的 `PYTHONPATH=/opt/bevfusion` 指向不存在的目录。派生镜像改为实际源码与编译扩展所在的 `/home/westwell/bevfusion`，使任意调试目录中的终端和 Notebook 都能导入 `mmdet3d`；不移动源码，也不在测试脚本里临时修改 Python 导入路径。
+
+此目标不包含在 `all` 中。仅在构建机显式构建：
+
+```bash
+BUILD_TARGETS=workspace-bevfusion IMAGE_TAG=<本次版本> \
+  USE_BUILDX=true PUSH_IMAGE=true bash build-image.sh
+```
+
+`BEVFUSION_WORKSPACE_BASE_IMAGE` 单独固定含 MLflow 的训练镜像，不与用于重新构建训练兼容层的 `BEVFUSION_BASE_IMAGE` 混用。发布时将产物 `ray-workspace-bevfusion` 的真实 digest 登记为 `local` 团队可用的工作区镜像；镜像构建成功不代表登记和用户态验收已经完成。现有基础调试镜像与运行中的调试环境保持原样，新建环境时选择 BEVFusion 镜像。
+
+构建机验收分两步：先以只读挂载方式把 `runtime-smoke.py` 放入原训练基底执行，预期失败 `code-server is missing`；再在派生镜像的非 root 默认用户下执行 `python3 /usr/local/bin/bevfusion-workspace-smoke`，验证固定依赖、编译扩展和编辑器命令均可用。该模式不要求 GPU。平台创建临时 GPU 调试环境后，再在该环境执行：
+
+```bash
+python3 /usr/local/bin/bevfusion-workspace-smoke --gpu
+```
+
+GPU 模式额外执行 CUDA 张量计算与 MMCV CUDA NMS。完整上线验收还需以 `local` 用户创建环境、打开 JupyterLab 与 VS Code、确认个人存储可写，并停止专建测试环境核对 GPU 释放；只运行版本命令不能替代网页功能验收。
