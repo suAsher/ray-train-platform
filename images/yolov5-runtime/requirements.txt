@@ -1,0 +1,20 @@
+# Mirrors the official Ultralytics YOLOv5 training requirements with fixed
+# versions that are compatible with the platform torch 2.4.1 / CUDA 12.1 base.
+gitpython==3.1.45
+matplotlib==3.9.2
+numpy==1.26.4
+opencv-python==4.10.0.84
+pillow==10.4.0
+psutil==6.0.0
+PyYAML==6.0.2
+requests==2.32.5
+scipy==1.14.1
+ultralytics-thop==2.1.6
+ultralytics==8.4.132
+tqdm==4.67.1
+pandas==2.2.3
+seaborn==0.13.2
+packaging==24.2
+setuptools==80.9.0
+pycocotools==2.0.8
+filelock==3.19.1
