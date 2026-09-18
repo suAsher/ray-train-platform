@@ -47,7 +47,6 @@ RAY_VERSION_ARG="${RAY_VERSION:-$RAY_PRODUCTION_VERSION}"
 RAY_RUNTIME_VARIANTS=(pytorch-ray-ddp pytorch-ray-train workspace-ray256)
 RAY_CANARY_VERSION="2.58.0"
 RAY_CANARY_FOUNDATION_IMAGE_ARG="${RAY_CANARY_FOUNDATION_IMAGE:-harbor.wellspiking.ai/guofeng.su/ray-train-pytorch-ray-train@sha256:5bfa41f517c911e45e9856690ca66886f0b9c793b32938baa1dc24e697dc5a1d}"
-YOLOV5_BASE_IMAGE_ARG="${YOLOV5_BASE_IMAGE:-harbor.wellspiking.ai/guofeng.su/ray-train-pytorch-ray-train@sha256:5bfa41f517c911e45e9856690ca66886f0b9c793b32938baa1dc24e697dc5a1d}"
 BEVFUSION_BASE_IMAGE_ARG="${BEVFUSION_BASE_IMAGE:-harbor.wellspiking.ai/guofeng.su/bevfusion@sha256:88e9c5045ced1b4b3dc49ddf1f2e22a8c9702574fd8103afcdff83577784a5ee}"
 BEVFUSION_WORKSPACE_BASE_IMAGE_ARG="${BEVFUSION_WORKSPACE_BASE_IMAGE:-harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion@sha256:66b906d062870131121b07e4455783dc5f2913e285b29fdbb2cf1decc100f553}"
 CODE_SERVER_IMAGE_ARG="${CODE_SERVER_IMAGE:-harbor.wellspiking.ai/hub/codercom/code-server:4.93.1}"
@@ -110,7 +109,6 @@ Environment variables:
   WORKSPACE_RAY_BASE_IMAGE=harbor.wellspiking.ai/hub/rayproject/ray:2.35.0-py310-gpu
   RAY_VERSION=2.56.1 (production runtime variants are fixed to this version)
   RAY_CANARY_FOUNDATION_IMAGE=harbor.wellspiking.ai/guofeng.su/ray-train-pytorch-ray-train@sha256:...
-  YOLOV5_BASE_IMAGE=harbor.wellspiking.ai/guofeng.su/ray-train-pytorch-ray-train@sha256:...
   BEVFUSION_BASE_IMAGE=harbor.wellspiking.ai/guofeng.su/bevfusion@sha256:...
   BEVFUSION_WORKSPACE_BASE_IMAGE=harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion@sha256:...
   CODE_SERVER_IMAGE=harbor.wellspiking.ai/hub/codercom/code-server:4.93.1
@@ -134,7 +132,7 @@ Build targets:
   bevfusion-runtime   Existing Python 3.8 BEVFusion compatibility runtime
   bevfusion-ray258-canary  Isolated Ray 2.58 / torch 2.4.1 S1H canary
   raytrain-base       Explicit-only code-free Ray 2.58 training foundation
-  yolov5-runtime      Explicit-only code-free YOLOv5 training runtime
+  yolov5-runtime     Explicit-only YOLOv5 training dependencies (no model source)
   tos-prefix-init     Native TOS SDK utility for controlled training roots
   spk-rayjob          Self-service external submission CLI release image
   all                 All currently buildable platform images (default)
@@ -330,7 +328,6 @@ echo "Workspace base: $WORKSPACE_RAY_BASE_IMAGE_ARG"
 echo "Ray production: $RAY_VERSION_ARG"
 echo "Ray canary:     $RAY_CANARY_VERSION"
 echo "Canary base:    $RAY_CANARY_FOUNDATION_IMAGE_ARG"
-echo "YOLOv5 base:    $YOLOV5_BASE_IMAGE_ARG"
 echo "BEVFusion base: $BEVFUSION_BASE_IMAGE_ARG"
 echo "BEV workspace:  $BEVFUSION_WORKSPACE_BASE_IMAGE_ARG"
 echo "Code server:    $CODE_SERVER_IMAGE_ARG"
@@ -376,7 +373,6 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
       -e "s|^FROM \${BEVFUSION_BASE_IMAGE}|FROM $BEVFUSION_BASE_IMAGE_ARG|" \
       -e "s|^FROM \${BEVFUSION_WORKSPACE_BASE_IMAGE}|FROM $BEVFUSION_WORKSPACE_BASE_IMAGE_ARG|" \
       -e "s|^FROM \${RAY_CANARY_FOUNDATION_IMAGE}|FROM $RAY_CANARY_FOUNDATION_IMAGE_ARG|" \
-      -e "s|^FROM \${YOLOV5_BASE_IMAGE}|FROM $YOLOV5_BASE_IMAGE_ARG|" \
       -e "s|^FROM \${CODE_SERVER_IMAGE}|FROM $CODE_SERVER_IMAGE_ARG|" \
       "$dockerfile_path" >"$tmp_dockerfile"
     dockerfile_path="$tmp_dockerfile"
@@ -400,7 +396,6 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
       --build-arg "RAY_VERSION=${RAY_VERSION_ARG}"
       --build-arg "RAY_CANARY_VERSION=${RAY_CANARY_VERSION}"
       --build-arg "RAY_CANARY_FOUNDATION_IMAGE=$RAY_CANARY_FOUNDATION_IMAGE_ARG"
-      --build-arg "YOLOV5_BASE_IMAGE=$YOLOV5_BASE_IMAGE_ARG"
       --build-arg "BEVFUSION_BASE_IMAGE=$BEVFUSION_BASE_IMAGE_ARG"
       --build-arg "BEVFUSION_WORKSPACE_BASE_IMAGE=$BEVFUSION_WORKSPACE_BASE_IMAGE_ARG"
       --build-arg "CODE_SERVER_IMAGE=$CODE_SERVER_IMAGE_ARG"
@@ -439,7 +434,6 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
       --build-arg "RAY_VERSION=${RAY_VERSION_ARG}"
       --build-arg "RAY_CANARY_VERSION=${RAY_CANARY_VERSION}"
       --build-arg "RAY_CANARY_FOUNDATION_IMAGE=$RAY_CANARY_FOUNDATION_IMAGE_ARG"
-      --build-arg "YOLOV5_BASE_IMAGE=$YOLOV5_BASE_IMAGE_ARG"
       --build-arg "BEVFUSION_BASE_IMAGE=$BEVFUSION_BASE_IMAGE_ARG"
       --build-arg "BEVFUSION_WORKSPACE_BASE_IMAGE=$BEVFUSION_WORKSPACE_BASE_IMAGE_ARG"
       --build-arg "CODE_SERVER_IMAGE=$CODE_SERVER_IMAGE_ARG"
