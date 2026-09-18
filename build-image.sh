@@ -90,7 +90,7 @@ Ray Training Platform image builder
 Environment variables:
   REGISTRY=harbor.wellspiking.ai/guofeng.su
   IMAGE_TAG=test-20260809
-  BUILD_TARGETS=all|backend,frontend,source-materializer,test-training,dataset-publisher,idc-sync,workspace,train-pytorch,pytorch-ray-ddp,pytorch-ray-train,workspace-ray256,workspace-bevfusion,bevfusion-runtime,bevfusion-ray258-canary,raytrain-base,yolov5-runtime,tos-prefix-init,spk-rayjob
+  BUILD_TARGETS=all|backend,frontend,source-materializer,test-training,dataset-publisher,idc-sync,workspace,train-pytorch,pytorch-ray-ddp,pytorch-ray-train,workspace-ray256,workspace-bevfusion,bevfusion-runtime,bevfusion-ray258-canary,raytrain-base,tos-prefix-init,spk-rayjob
   PUSH_IMAGE=false|true
   USE_BUILDX=true|false
   BUILD_PLATFORM=linux/amd64
@@ -132,7 +132,6 @@ Build targets:
   bevfusion-runtime   Existing Python 3.8 BEVFusion compatibility runtime
   bevfusion-ray258-canary  Isolated Ray 2.58 / torch 2.4.1 S1H canary
   raytrain-base       Explicit-only code-free Ray 2.58 training foundation
-  yolov5-runtime     Explicit-only YOLOv5 training dependencies (no model source)
   tos-prefix-init     Native TOS SDK utility for controlled training roots
   spk-rayjob          Self-service external submission CLI release image
   all                 All currently buildable platform images (default)
@@ -194,9 +193,6 @@ target_spec() {
     raytrain-base)
       printf '%s\n' 'images/raytrain-base/Dockerfile|raytrain-base|.|-'
       ;;
-    yolov5-runtime)
-      printf '%s\n' 'images/yolov5-runtime/Dockerfile|ray-train-yolov5|images/yolov5-runtime|-'
-      ;;
     spk-rayjob)
       printf '%s\n' 'backend/Dockerfile.spk-rayjob|spk-rayjob-release|backend|-'
       ;;
@@ -219,7 +215,7 @@ normalize_targets() {
     [ -n "$target" ] || continue
     target_spec "$target" >/dev/null || {
       echo "ERROR: unknown BUILD_TARGETS entry: $target" >&2
-      echo "       valid values: backend, frontend, source-materializer, test-training, dataset-publisher, idc-sync, workspace, train-pytorch, pytorch-ray-ddp, pytorch-ray-train, workspace-ray256, workspace-bevfusion, bevfusion-runtime,bevfusion-ray258-canary, raytrain-base, yolov5-runtime, tos-prefix-init, spk-rayjob, all" >&2
+      echo "       valid values: backend, frontend, source-materializer, test-training, dataset-publisher, idc-sync, workspace, train-pytorch, pytorch-ray-ddp, pytorch-ray-train, workspace-ray256, workspace-bevfusion, bevfusion-runtime,bevfusion-ray258-canary, raytrain-base, tos-prefix-init, spk-rayjob, all" >&2
       exit 1
     }
     printf '%s\n' "$target"
