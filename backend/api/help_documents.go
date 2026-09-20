@@ -94,7 +94,7 @@ func (h *Handler) listHelp(c *gin.Context, admin bool) {
 	if !admin {
 		projected := make([]domain.HelpDocument, len(items))
 		for i, item := range items {
-			projected[i] = helpdocs.ProjectMLflowAccess(item, h.mlflowNativePublicEnabled)
+			projected[i] = helpdocs.ProjectMLflowAccess(item, h.mlflowNativePublicEnabled, h.mlflowDashboardPublicEnabled)
 		}
 		items = projected
 	}
@@ -115,7 +115,7 @@ func (h *Handler) listHelpArticles(c *gin.Context) {
 	projected := make([]domain.HelpArticle, len(items))
 	for i, item := range items {
 		projected[i] = item
-		projected[i].HelpDocument = helpdocs.ProjectMLflowAccess(item.HelpDocument, h.mlflowNativePublicEnabled)
+		projected[i].HelpDocument = helpdocs.ProjectMLflowAccess(item.HelpDocument, h.mlflowNativePublicEnabled, h.mlflowDashboardPublicEnabled)
 	}
 	items = projected
 	h.writeSuccess(c, 200, gin.H{"items": items})

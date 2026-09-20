@@ -387,8 +387,8 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	v1 := protected.Group("/api/v1")
 	jobs.RegisterSessionRoutes(v1)
 	if cfg.MLflowNativePublicEnabled {
-		// Only this native API bypasses API identity middleware. Platform
-		// platform APIs and worker ingestion retain their existing authentication.
+		// Only this native API bypasses API identity middleware. Other platform
+		// APIs and worker ingestion retain their existing authentication.
 		jobs.RegisterMLflowNativeRoutes(router.Group("/api/v1"))
 	} else {
 		jobs.RegisterMLflowNativeRoutes(v1)

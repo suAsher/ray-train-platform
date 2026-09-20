@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net/http"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"ray-train-platform-backend/auth"
+	"ray-train-platform-backend/repositories"
 )
 
 func TestPublicMLflowDashboardAllowsDirectLinksAssetsAndAnonymousOperations(t *testing.T) {
@@ -76,4 +79,18 @@ func TestPublicMLflowDashboardExpiredTicketDoesNotRequireLogin(t *testing.T) {
 	w := httptest.NewRecorder()
 	mlflowProxyRouter(h).ServeHTTP(w, httptest.NewRequest("GET", "/mlflow/?access_token=expired", nil))
 	if w.Code != 302 || w.Header().Get("Location") != "/mlflow/" || w.Header().Get("Set-Cookie") != "" { t.Fatalf("%d %v", w.Code, w.Header()) }
+}
+
+func TestPublicMLflowDashboardKeepsPortalRunNavigationWithoutSession(t *testing.T) {
+	now := time.Now()
+	store := newFakeMLflowDashboardStore()
+	store.accessAllowed = false
+	hash := sha256.Sum256([]byte("navigation-ticket"))
+	runID := "4c184d47979943de9d144ede96c8f59c"
+	store.tickets[hex.EncodeToString(hash[:])] = repositories.MLflowDashboardTicketRecord{RedirectFragment: "#/experiments/6/runs/"+runID, ExpiresAt: now.Add(time.Minute)}
+	h := newMLflowDashboardTestHandler(store, now)
+	h.mlflowDashboardPublicEnabled = true
+	w := httptest.NewRecorder()
+	mlflowProxyRouter(h).ServeHTTP(w, httptest.NewRequest("GET", "/mlflow/?access_token=navigation-ticket", nil))
+	if w.Code != 302 || w.Header().Get("Location") != "/mlflow/#/experiments/6/runs/"+runID || w.Header().Get("Set-Cookie") != "" || len(store.accessPrincipals) != 0 { t.Fatalf("portal navigation: %d %v", w.Code, w.Header()) }
 }

@@ -241,3 +241,21 @@ func TestPublicNativeMLflowAllowsAnonymousAndStaleCredentialsWithoutOpeningPlatf
 		}
 	}
 }
+
+func TestPublicDashboardDoesNotOpenPlatformOrPrivateNativeRoutes(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "public dashboard") }))
+	defer upstream.Close()
+	for _, proxyAuth := range []bool{false, true} {
+		h := api.NewHandler(&mainJobRepository{}, api.Options{MLflowDashboardEnabled: true, MLflowDashboardPublicEnabled: true, MLflowTrackingURL: upstream.URL, MLflowPublicOrigin: "https://raytrain.example.com", MLflowDashboardStore: &nativeMLflowAuditStore{}})
+		r := gin.New()
+		registerAPIRoutesWithLocalAuth(r, h, nil, nil, nil, nil, nil, nil, nil, nil, nil, config.Config{OIDCRequired: true, OAuth2ProxyAuthEnabled: proxyAuth, MLflowDashboardPublicEnabled: true})
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest("GET", "/mlflow/", nil))
+		if w.Code != 200 || w.Body.String() != "public dashboard" { t.Fatalf("direct web: %d %s", w.Code, w.Body.String()) }
+		for _, path := range []string{"/api/v1/me", "/api/v1/jobs", "/api/v1/mlflow/experiments", "/api/v1/mlflow-native/api/2.0/mlflow/runs/get", "/api/v1/data-spaces"} {
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+			if w.Code != 401 { t.Fatalf("opened %s: %d %s", path, w.Code, w.Body.String()) }
+		}
+	}
+}

@@ -1,6 +1,6 @@
 # 调用 RayTrain MLflow API
 
-RayTrain 已开放原生 MLflow Tracking API。你的程序可以直接用 MLflow SDK 或 HTTP 调用共享 MLflow，不需要先创建平台训练任务。Portal 中进入「实验中心」后，用「训练记录」查看 RayTrain Job 关联的 Run，用「MLflow API」复制下面的地址和示例；需要浏览完整页面时点击「打开 MLflow」。
+RayTrain 已开放原生 MLflow Tracking API。你的程序可以直接用 MLflow SDK 或 HTTP 调用共享 MLflow，不需要先创建平台训练任务。Portal 中进入「实验中心」后，用「训练记录」查看 RayTrain Job 关联的 Run，用「MLflow API」复制下面的地址和示例；浏览完整页面可点击「打开 MLflow」，或直接使用下文的网页地址。
 
 ```bash
 pip install 'mlflow==3.14.0'
@@ -13,6 +13,14 @@ unset MLFLOW_TRACKING_TOKEN MLFLOW_TRACKING_USERNAME MLFLOW_TRACKING_PASSWORD
 上述 SDK 的 Tracking URI 只填入口前缀，SDK 会自动拼接 REST 后缀；不要把 `/api/2.0/mlflow` 加到 `MLFLOW_TRACKING_URI`。平台内训练继续沿用注入地址和平台来源，不使用本外部示例，接法见[用户训练指南](MLFLOW_USER_GUIDE.md#2-让训练产生-run-和曲线)。
 
 运行机器需要能访问 `raytrain.wellspiking.ai` 的 HTTPS/443，并验证证书。不要把浏览器 Cookie、数据库、对象存储凭据或集群内地址交给程序。
+
+## 网页访问和分享
+
+开启 `dashboardPublicEnabled` 后，[MLflow 网页](https://raytrain.wellspiking.ai/mlflow/)也无需登录、Cookie 或先从平台跳转。打开目标 Run 后，直接复制并分享浏览器完整地址：`https://raytrain.wellspiking.ai/mlflow/#/experiments/EXPERIMENT_ID/runs/RUN_ID`。使用真实 Experiment ID 和 Run ID；接收者需要能访问该域名。
+
+网页允许读取、创建、修改和删除共享实验、Run、Artifact 和 Registry。原平台打开按钮继续可用，分享时复制跳转完成后不含 `access_token` 的地址。程序始终用上面的 `/api/v1/mlflow-native` 前缀，不把带 `#` 的网页地址设为 Tracking URI。
+
+网页和原生 API 的匿名开关独立；关闭网页匿名访问时仍从已登录的平台打开，不影响原生 API 的配置。平台任务、个人目录、数据空间、调试和调度权限保持原规则。
 
 ## HTTP：列实验、分页和读取 Run
 
@@ -143,7 +151,7 @@ print(local_path)
 
 | 状态 | 先检查什么 |
 | --- | --- |
-| 401 / MLFLOW_DASHBOARD_AUTH_REQUIRED | 是否误用了 `/mlflow/` 网页路径；网页仍须从登录后的平台打开，不能作为原生程序接口 |
+| 401 / MLFLOW_DASHBOARD_AUTH_REQUIRED | 网页匿名模式开启后不应出现；核对域名、入口和当前服务配置。若服务关闭网页匿名模式，从平台打开网页；程序继续使用原生 API 前缀 |
 | 401 / 403（正确原生路径） | 核对当前 MLflow API 页面的免令牌状态、部署配置和网络代理，不要直接判断为令牌过期 |
 | 404 | Experiment ID / Run ID 是否来自当前 Tracking URI 的搜索结果 |
 | 429 | 按 `Retry-After` 等待后重试 |

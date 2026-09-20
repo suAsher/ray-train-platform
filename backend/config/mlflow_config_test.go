@@ -149,3 +149,22 @@ func TestMLflowNativePublicHelmSettingIsExplicitAndDefaultsClosed(t *testing.T) 
 		t.Fatal("native public mode must remain an explicit, default-closed deployment setting")
 	}
 }
+
+func TestMLflowDashboardPublicIsIndependentAndExplicit(t *testing.T) {
+	setValidMLflowDashboardEnvironment(t)
+	t.Setenv("MLFLOW_DASHBOARD_PUBLIC_ENABLED", "false")
+	t.Setenv("MLFLOW_NATIVE_PUBLIC_ENABLED", "true")
+	cfg, err := Load()
+	if err != nil || cfg.MLflowDashboardPublicEnabled { t.Fatalf("native mode must not open web: %v", err) }
+	t.Setenv("MLFLOW_DASHBOARD_PUBLIC_ENABLED", "true")
+	t.Setenv("MLFLOW_NATIVE_PUBLIC_ENABLED", "false")
+	cfg, err = Load()
+	if err != nil || !cfg.MLflowDashboardPublicEnabled || cfg.MLflowNativePublicEnabled { t.Fatalf("independent web mode: %v", err) }
+	t.Setenv("MLFLOW_DASHBOARD_ENABLED", "false")
+	if _, err := Load(); err == nil { t.Fatal("accepted public web without dashboard") }
+	t.Setenv("MLFLOW_DASHBOARD_PUBLIC_ENABLED", "invalid")
+	if _, err := Load(); err == nil { t.Fatal("accepted invalid public web setting") }
+	values, _ := os.ReadFile("../../helm/ray-train-platform/values.yaml")
+	deployment, _ := os.ReadFile("../../helm/ray-train-platform/templates/backend-deployment.yaml")
+	if !strings.Contains(string(values), "dashboardPublicEnabled: false") || !strings.Contains(string(deployment), "name: MLFLOW_DASHBOARD_PUBLIC_ENABLED") || !strings.Contains(string(deployment), "default false $mlflow.dashboardPublicEnabled | quote") { t.Fatal("public web must be explicit in Helm") }
+}

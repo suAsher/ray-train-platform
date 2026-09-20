@@ -67,6 +67,55 @@ type helpArticleListStore struct {
 	articles []domain.HelpArticle
 }
 
+type mlflowHelpAccessStore struct {
+	helpArticleListStore
+	documents []domain.HelpDocument
+}
+
+func (s mlflowHelpAccessStore) ListHelpDocuments(context.Context, bool) ([]domain.HelpDocument, error) {
+	return s.documents, nil
+}
+
+func TestHelpRoutesUseDashboardPublicSettingWithoutChangingAdminSource(t *testing.T) {
+	for _, dashboardPublic := range []bool{false, true} {
+		h := NewHandler(nil, Options{MLflowNativePublicEnabled: true, MLflowDashboardPublicEnabled: dashboardPublic})
+		seed := helpdocs.ProjectHelpArticle(domain.HelpDocument{ID: "mlflow", UpdatedBy: helpdocs.PlatformSeedActor})
+		custom := domain.HelpArticle{HelpDocument: domain.HelpDocument{ID: "mlflow-api-with-pat", UpdatedBy: "human", Markdown: "my original guide"}}
+		h.helpDocuments = mlflowHelpAccessStore{
+			helpArticleListStore: helpArticleListStore{articles: []domain.HelpArticle{seed, custom}},
+			documents:           []domain.HelpDocument{seed.HelpDocument, custom.HelpDocument},
+		}
+		r := gin.New()
+		r.Use(func(c *gin.Context) {
+			c.Set("ray-platform-principal", auth.Principal{Subject: "reader", TenantID: "team", Roles: []string{domain.RoleSuperAdmin}, AuthType: auth.AuthTypeLocal})
+		})
+		h.RegisterHelpReadRoutes(r.Group("/api/v1"))
+		h.RegisterHelpManagementRoutes(r.Group("/api/v1"))
+		for _, path := range []string{"/api/v1/help/articles", "/api/v1/help/documents", "/api/v1/admin/help/documents"} {
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+			if w.Code != 200 {
+				t.Fatalf("%s dashboardPublic=%v: %d %s", path, dashboardPublic, w.Code, w.Body.String())
+			}
+			var response struct {
+				Data struct {
+					Items []domain.HelpDocument `json:"items"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			wantPublic := dashboardPublic && !strings.Contains(path, "/admin/")
+			if len(response.Data.Items) != 2 || strings.Contains(response.Data.Items[0].Markdown, "MLflow 网页已开放匿名访问") != wantPublic || response.Data.Items[1].Markdown != custom.Markdown {
+				t.Fatalf("%s dashboardPublic=%v: incorrect help projection", path, dashboardPublic)
+			}
+			if strings.Contains(path, "/admin/") && response.Data.Items[0].Markdown != seed.Markdown {
+				t.Fatal("admin help source was rewritten")
+			}
+		}
+	}
+}
+
 func (s helpArticleListStore) ListHelpArticles(context.Context) ([]domain.HelpArticle, error) {
 	return s.articles, nil
 }

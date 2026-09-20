@@ -77,7 +77,8 @@ func (h *Handler) RegisterMLflowDashboardAccessRoute(group *gin.RouterGroup) {
 
 func (h *Handler) RegisterMLflowDashboardProxyRoute(group *gin.RouterGroup) {
 	if h.mlflowDashboardEnabled {
-		group.Any("/mlflow/*path", h.proxyMLflowDashboard)
+		limiter := newFixedWindowSourceArtifactLimiter(1200, 1200, 10000, time.Now)
+		group.Any("/mlflow/*path", h.publicMLflowDashboardGuard(limiter), h.proxyMLflowDashboard)
 	}
 }
 
@@ -187,6 +188,10 @@ func (h *Handler) proxyMLflowDashboard(c *gin.Context) {
 	if !isMLflowDashboardMethodAllowed(c.Request.Method) {
 		c.Header("Allow", mlflowDashboardAllow)
 		h.writeError(c, http.StatusMethodNotAllowed, "MLFLOW_DASHBOARD_METHOD_NOT_ALLOWED", "MLflow Dashboard request method is not allowed")
+		return
+	}
+	if h.mlflowDashboardPublicEnabled {
+		h.proxyPublicMLflowDashboard(c)
 		return
 	}
 	if _, present := c.Request.URL.Query()["access_token"]; present {
@@ -359,6 +364,10 @@ func (h *Handler) serveMLflowDashboardProxy(c *gin.Context, target *url.URL) {
 	proxy.Director = func(request *http.Request) {
 		originalDirector(request)
 		request.Host = target.Host
+		if h.mlflowDashboardPublicEnabled {
+			// Public access never delegates browser credentials or claimed identity.
+			request.Header = mlflowNativeHeaders(request.Header)
+		}
 		for _, header := range []string{
 			"Accept-Encoding",
 			"Authorization",

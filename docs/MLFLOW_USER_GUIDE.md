@@ -19,9 +19,13 @@
 2. 在任务详情的“Loss 收敛曲线与指标”查看 MLflow 详情：实验名、Run 名称、Run ID、状态、时间和训练参数；点击“打开该 Run”可直达原生 Run 页面。“打开 MLflow 管理界面”进入完整原生界面。
 3. 平台任务 ID、MLflow `run_id` 和模型版本不是同一 ID：平台任务 ID 用于调度与权限；`run_id` 由 MLflow 创建；模型版本只在显式登记后产生。
 
-Portal 的普通 API 请求经过 `/raytrain`，原生 MLflow 新标签页则使用 `https://raytrain.wellspiking.ai/mlflow/`。不要把该地址改成 Portal 的 `/raytrain/mlflow/`：MLflow 的 Cookie、重定向和静态资源以根路径为契约。访问票据是一次性的，成功换取 HttpOnly Cookie 后地址栏不应继续保留 `access_token`。
+Portal 的普通 API 请求经过 `/raytrain`，原生 MLflow 网页使用 [https://raytrain.wellspiking.ai/mlflow/](https://raytrain.wellspiking.ai/mlflow/)。不要改成 Portal 的 `/raytrain/mlflow/`；页面、重定向和静态资源使用这个独立入口。
 
-原生界面入口是同域 `/mlflow/`，应始终从平台打开。不要把训练容器中的 `MLFLOW_TRACKING_URI` 复制到浏览器、笔记本或外部平台使用，它是集群内受限写入地址。
+开启 `dashboardPublicEnabled` 后，网页无需登录、Cookie 或先从平台跳转。进入目标 Run 后可以直接分享浏览器地址：`https://raytrain.wellspiking.ai/mlflow/#/experiments/EXPERIMENT_ID/runs/RUN_ID`。对方能访问该域名即可打开；原有“打开 MLflow”和“打开该 Run”按钮继续兼容，分享时使用跳转完成后不含 `access_token` 的地址。网页共享全部实验、Run、Artifact 和 Registry，允许读取、创建、修改和删除。
+
+网页与原生程序 API 的匿名开关独立。关闭网页匿名访问时仍需从已登录的平台打开，不改变程序 API 的认证配置。平台任务、个人目录、数据空间、调度和调试工具继续使用原认证。
+
+不要把训练容器中的 `MLFLOW_TRACKING_URI` 复制到浏览器、笔记本或外部平台使用，它是集群内受限写入地址。浏览器 Run 直链也不能作为程序的 Tracking URI。
 
 ## 2. 让训练产生 Run 和曲线
 
@@ -55,7 +59,7 @@ Portal 的普通 API 请求经过 `/raytrain`，原生 MLflow 新标签页则使
 
 当前仅支持以下人工附件工作流：
 
-1. 从平台打开 `/mlflow/`，进入目标 Run。
+1. 打开 [MLflow 网页](https://raytrain.wellspiking.ai/mlflow/)，进入目标 Run；网页匿名模式下可直接访问。
 2. 在原生 MLflow 的 Artifacts 区明确上传小型、允许共享的附件，例如评估报告、可视化图或模型说明。
 3. 不要上传训练数据、密钥、`.env`、完整数据索引，或不应跨团队共享的权重。
 
@@ -96,7 +100,7 @@ MLflow Trace 需要代码或 OpenTelemetry 显式埋点，例如 `@mlflow.trace`
 
 外部程序使用 `https://raytrain.wellspiking.ai/api/v1/mlflow-native` 作为 Tracking URI，完整 SDK / HTTP 示例见 [MLflow API 接入说明](MLFLOW_PARTNER_HANDOFF.md)。开启 `nativePublicEnabled` 后，现有网络可达范围内免令牌开放共享实验、Run、Artifact 和模型注册表的读取、写入及删除。未开启时仍按原 `mlflow:full` PAT 方式调用，以实验中心 MLflow API 页面的实时说明为准。
 
-当前对外的浏览器接口 `POST /api/v1/mlflow-dashboard-access` 只签发一次性原生界面跳转票据，不是第三方数据接口。内部训练网关也不是外部 API。
+浏览器兼容接口 `POST /api/v1/mlflow-dashboard-access` 仍向已登录的平台返回一次性跳转地址，以保留现有“打开该 Run”按钮。网页匿名模式下不依赖该票据授权，直接打开 Run 直链即可；该兼容接口不是第三方数据接口。内部训练网关也不是外部 API。
 
 受保护的平台任务实验接口继续保留，已有客户端无需迁移。外部程序直接创建的 Run 不自动属于某个 RayTrain 任务；训练任务要建立可信关联，仍按第 2 节使用实际注入的来源。模型审批、发布、推理和功能仓同步是平台生命周期功能，与原生 MLflow API 分别操作，参见平台使用说明中的对应问题文档。
 
