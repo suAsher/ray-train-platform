@@ -125,6 +125,8 @@ backend:
     # internal MLflow service has passed its own readiness checks.
     enabled: false
     dashboardEnabled: false
+    # Explicitly allow anonymous MLflow web access and shared mutations.
+    dashboardPublicEnabled: false
     # Opens only the native API to anonymous read/write/delete within existing ingress reachability.
     nativePublicEnabled: false
     publicOrigin: ""

@@ -320,6 +320,8 @@ spec:
               value: {{ default false $mlflow.dashboardEnabled | quote }}
             - name: MLFLOW_NATIVE_PUBLIC_ENABLED
               value: {{ default false $mlflow.nativePublicEnabled | quote }}
+            - name: MLFLOW_DASHBOARD_PUBLIC_ENABLED
+              value: {{ default false $mlflow.dashboardPublicEnabled | quote }}
             - name: MLFLOW_PUBLIC_ORIGIN
               value: {{ default "" $mlflow.publicOrigin | quote }}
             - name: MLFLOW_DASHBOARD_SESSION_HOURS
