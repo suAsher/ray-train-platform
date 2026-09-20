@@ -14,8 +14,12 @@ import (
 func TestPublicMLflowDashboardRealServerSmoke(t *testing.T) {
 	upstream := firstNonEmptyEnv("MLFLOW_NATIVE_SMOKE_UPSTREAM_URL")
 	python := firstNonEmptyEnv("MLFLOW_NATIVE_SMOKE_PYTHON")
-	if upstream == "" || python == "" { t.Skip("isolated MLflow server and Python required") }
-	if upstream != "http://rtp-native-mlflow-test:5000/mlflow" { t.Fatal("only isolated MLflow smoke upstream is allowed") }
+	if upstream == "" || python == "" {
+		t.Skip("isolated MLflow server and Python required")
+	}
+	if upstream != "http://rtp-native-mlflow-test:5000/mlflow" {
+		t.Fatal("only isolated MLflow smoke upstream is allowed")
+	}
 	h := newMLflowDashboardTestHandler(newFakeMLflowDashboardStore(), time.Now())
 	h.mlflowDashboardPublicEnabled = true
 	h.mlflowTrackingURL = upstream
@@ -24,7 +28,9 @@ func TestPublicMLflowDashboardRealServerSmoke(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	output, err := exec.CommandContext(ctx, python, "-c", publicMLflowDashboardSmokePython, server.URL).CombinedOutput()
-	if err != nil { t.Fatalf("public dashboard smoke: %v %s", err, output) }
+	if err != nil {
+		t.Fatalf("public dashboard smoke: %v %s", err, output)
+	}
 	t.Log(strings.TrimSpace(string(output)))
 }
 
