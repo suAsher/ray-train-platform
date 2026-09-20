@@ -5,24 +5,23 @@ RayTrain 已开放原生 MLflow Tracking API。你的程序可以直接用 MLflo
 ```bash
 pip install 'mlflow==3.14.0'
 export MLFLOW_TRACKING_URI='https://raytrain.wellspiking.ai/api/v1/mlflow-native'
-export MLFLOW_TRACKING_TOKEN="$RAYTRAIN_PAT"
+unset MLFLOW_TRACKING_TOKEN MLFLOW_TRACKING_USERNAME MLFLOW_TRACKING_PASSWORD
 ```
 
-`RAYTRAIN_PAT` 是你在「账户与安全」创建的个人 PAT。调用 MLflow 需要显式勾选 `mlflow:full`；旧 PAT 不会自动获得该权限。`mlflow:full` 对应共享 MLflow 的完整读写能力，包含实验、Run、Metric、Param、Tag、Artifact、删除和 Model Registry 操作。平台训练任务、个人目录、调度和受控数据空间仍使用 RayTrain 自身权限。
+本说明对应 `nativePublicEnabled=true` 的免令牌模式。保持现有入口的网络可达范围，调用者无需登录或个人令牌，即可读取、创建、修改和删除全部共享 Experiment、Run、Metric、Param、Tag、Artifact 和 Model Registry。该通道不保证调用者身份归属，也不能按个人令牌撤销访问。平台训练任务、个人目录、调度和受控数据空间仍使用 RayTrain 自身权限。
 
-选择“MLflow 全局读写”用途后，有效期可选 1–365 天或“永不过期”。永久令牌仍可撤销，账号禁用或团队成员关系失效后也不能继续使用。已有令牌不会自动延长；普通训练令牌不提供永久选项。
+上述 SDK 的 Tracking URI 只填入口前缀，SDK 会自动拼接 REST 后缀；不要把 `/api/2.0/mlflow` 加到 `MLFLOW_TRACKING_URI`。平台内训练继续沿用注入地址和平台来源，不使用本外部示例，接法见[用户训练指南](MLFLOW_USER_GUIDE.md#2-让训练产生-run-和曲线)。
 
 运行机器需要能访问 `raytrain.wellspiking.ai` 的 HTTPS/443，并验证证书。不要把浏览器 Cookie、数据库、对象存储凭据或集群内地址交给程序。
 
 ## HTTP：列实验、分页和读取 Run
 
-原生 REST 路径是在 Tracking URI 后接 `/api/2.0/mlflow/...`，认证头为 `Authorization: Bearer <PAT>`。
+原生 REST 路径是在 Tracking URI 后接 `/api/2.0/mlflow/...`，不需要认证请求头。
 
 ```bash
 export MLFLOW_API='https://raytrain.wellspiking.ai/api/v1/mlflow-native/api/2.0/mlflow'
 
 curl -sS --fail-with-body -X POST \
-  -H "Authorization: Bearer ${RAYTRAIN_PAT}" \
   -H 'Content-Type: application/json' \
   -d '{"max_results":100,"view_type":"ACTIVE_ONLY"}' \
   "${MLFLOW_API}/experiments/search"
@@ -32,7 +31,6 @@ curl -sS --fail-with-body -X POST \
 
 ```bash
 curl -sS --fail-with-body -X POST \
-  -H "Authorization: Bearer ${RAYTRAIN_PAT}" \
   -H 'Content-Type: application/json' \
   -d '{"max_results":100,"view_type":"ACTIVE_ONLY","page_token":"REPLACE_NEXT_PAGE_TOKEN"}' \
   "${MLFLOW_API}/experiments/search"
@@ -42,21 +40,17 @@ curl -sS --fail-with-body -X POST \
 
 ```bash
 curl -sS --fail-with-body -X POST \
-  -H "Authorization: Bearer ${RAYTRAIN_PAT}" \
   -H 'Content-Type: application/json' \
   -d '{"experiment_ids":["REPLACE_EXPERIMENT_ID_FROM_SEARCH"],"max_results":100}' \
   "${MLFLOW_API}/runs/search"
 
 curl -sS --fail-with-body \
-  -H "Authorization: Bearer ${RAYTRAIN_PAT}" \
   "${MLFLOW_API}/runs/get?run_id=REPLACE_RUN_ID_FROM_SEARCH"
 
 curl -sS --fail-with-body \
-  -H "Authorization: Bearer ${RAYTRAIN_PAT}" \
   "${MLFLOW_API}/metrics/get-history?run_id=REPLACE_RUN_ID_FROM_SEARCH&metric_key=validation%2Faccuracy"
 
 curl -sS --fail-with-body \
-  -H "Authorization: Bearer ${RAYTRAIN_PAT}" \
   "${MLFLOW_API}/artifacts/list?run_id=REPLACE_RUN_ID_FROM_SEARCH&path=reports"
 ```
 
@@ -149,10 +143,12 @@ print(local_path)
 
 | 状态 | 先检查什么 |
 | --- | --- |
-| 401 | PAT 是否有效、过期或已撤销；环境变量是否传到了当前进程 |
-| 403 | PAT 是否包含 `mlflow:full`；当前账号是否允许访问共享 MLflow |
+| 401 / MLFLOW_DASHBOARD_AUTH_REQUIRED | 是否误用了 `/mlflow/` 网页路径；网页仍须从登录后的平台打开，不能作为原生程序接口 |
+| 401 / 403（正确原生路径） | 核对当前 MLflow API 页面的免令牌状态、部署配置和网络代理，不要直接判断为令牌过期 |
 | 404 | Experiment ID / Run ID 是否来自当前 Tracking URI 的搜索结果 |
 | 429 | 按 `Retry-After` 等待后重试 |
 | 502 / 503 / 超时 | 结果可能已部分生效，先读回确认，再决定是否重试 |
 
-不要在 URL、日志、截图、Issue 或聊天里写入 PAT。需要排查时提供不含凭据的请求时间、接口路径、HTTP 状态、错误响应和相关 Experiment ID / Run ID。
+需要排查时提供不含凭据的请求时间、接口路径、HTTP 状态、错误响应和相关 Experiment ID / Run ID；不要发送 Cookie、密钥或完整环境变量。
+
+若服务关闭免令牌模式，旧认证方式仍要求用户自行创建含 `mlflow:full` 的个人 PAT；以当前「实验中心 → MLflow API」展示的方式为准。

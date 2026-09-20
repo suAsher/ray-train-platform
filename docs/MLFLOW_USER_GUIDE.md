@@ -25,61 +25,27 @@ Portal 的普通 API 请求经过 `/raytrain`，原生 MLflow 新标签页则使
 
 ## 2. 让训练产生 Run 和曲线
 
-自定义代码和任意 `python tools/train.py ...` 入口都需要主动接入。仅选择 `--engine ray-train` 或看见 `MLFLOW_TRACKING_URI` 环境变量，并不会自动创建 Run。
+平台提供连接与可信任务来源；训练代码仍需主动创建或复用 Run、记录参数和指标。仅选择训练引擎、设置 Tracking URI 或打印 loss，都不会自动产生曲线。镜像应预装兼容的 MLflow 客户端；不要在无外网的训练节点临时安装依赖。
 
-镜像需要预装与 Python 兼容的 `mlflow-skinny==3.14.0`（需要使用完整 MLflow Model / Trace SDK 时另行评估 `mlflow` 或 `mlflow-tracing`，不能在每次训练启动时临时安装）。
+用户在 **使用说明 → MLflow 与 API → 如何向 MLflow 记录训练参数和指标？** 阅读完整可复制模块、接通检查和异常处理。该页面嵌入的唯一辅助模块源是 [platform_mlflow.py](../backend/helpdocs/platform_mlflow.py)，可运行检查的源是 [mlflow_training.go](../backend/helpdocs/mlflow_training.go)。这里不再维护第二份容易漂移的代码模板。
 
-下面是普通 PyTorch / DDP 训练的最小安全模板。只允许 global rank 0 写入，避免每张卡各产生一个 Run：
+| 训练入口 | 接法 |
+| --- | --- |
+| 普通 PyTorch、ray-ddp、torchrun | 将 platform_mlflow.py 放在训练入口旁随源码上传；构造 PlatformMLflow(global_rank)，调用 reporter.params、reporter.metrics，训练成功或异常时调用 reporter.finish |
+| 已有框架 MLflow Hook | 复用 Hook 的 Run、指标和生命周期，不额外创建另一条 Run；补充指标前确认 active Run 存在且属于本任务 |
+| 托管 ray-train | 使用配套运行时 Hook；start_managed_mlflow_run / finish_managed_mlflow_run 需要该引擎注入的 RAYTRAIN_CLUSTER_ATTEMPT，不能当作通用 PyTorch 接口 |
 
-```python
-import os
-import mlflow
+普通示例不要求 cluster attempt，只有平台实际注入时才携带。不要为了调用托管函数手工填写该变量。任务、团队、提交者与签名来源也必须读取真实注入值，不能猜造或复制其他任务的标签。
 
+只由 **global rank 0** 连接 MLflow。torchrun 使用全局 RANK；不能用 LOCAL_RANK 代替。其他分布式框架应传入框架的全局 rank，例如已初始化的 torch.distributed.get_rank() 或 ray.train.get_context().get_world_rank()。缺少必要的全局 rank 信息时应检查启动方式，不能在每个节点都猜成 0。
 
-def is_global_rank_zero() -> bool:
-    return int(os.environ.get("RANK", "0")) == 0
+辅助模块通过 MlflowClient 显式指定 run_id，不创建 fluent active Run。使用它时只能调用 reporter.params / reporter.metrics；混用 mlflow.log_param / mlflow.log_metric 可能隐式创建另一条未关联 Run。已有框架 fluent Hook 则按照页面的 active Run 检查后使用其原有 API。
 
+只有本模块创建的 Run 才由它结束。正式分布式训练由框架确认整个训练成功后标记 FINISHED；原训练异常标记 FAILED 并继续抛出，不吞掉异常。MLflow 辅助请求失败不会终止训练，失败期间的指标不补传；强杀进程时无法保证执行结束代码，最终核对平台任务与 Run 的状态。
 
-def platform_tags() -> dict[str, str]:
-    return {
-        "platform.job_id": os.environ["RAYTRAIN_JOB_ID"],
-        "platform.tenant_id": os.environ["RAYTRAIN_TENANT_ID"],
-        "platform.submitter_user_id": os.environ["RAYTRAIN_SUBMITTER_USER_ID"],
-        "platform.provenance": os.environ["RAYTRAIN_MLFLOW_PROVENANCE"],
-        "platform.cluster_attempt": os.environ["RAYTRAIN_CLUSTER_ATTEMPT"],
-    }
+平台内训练沿用已注入 MLFLOW_TRACKING_URI、实验名、Run 名和来源信息，**不需要个人 PAT，也不要覆盖为外部原生 API 地址**。该训练网关接收参数、指标和标签；权重、配置和报告写入 PLATFORM_OUTPUT_PATH，不调用 log_artifact。
 
-
-if is_global_rank_zero():
-    mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
-    mlflow.set_experiment(os.environ["MLFLOW_EXPERIMENT_NAME"])
-    mlflow.start_run(
-        run_name=os.environ["MLFLOW_RUN_NAME"], tags=platform_tags()
-    )
-    mlflow.log_params({"batch_size": batch_size, "learning_rate": learning_rate})
-
-# 在训练循环中；global_step 必须单调递增。
-if is_global_rank_zero():
-    mlflow.log_metrics(
-        {"train/loss": float(loss), "train/lr": float(current_lr)},
-        step=global_step,
-    )
-
-# 验证结束后。
-if is_global_rank_zero():
-    mlflow.log_metrics({"val/mAP": float(map_value), "val/NDS": float(nds_value)}, step=global_step)
-    mlflow.end_run(status="FINISHED")
-```
-
-异常路径应调用 `mlflow.end_run(status="FAILED")`，或让进程以非零退出码结束后由平台终态协调器关闭已经带有可信归属标签的 Run。不要吞掉训练异常，也不要让每个 rank 分别调用 `start_run()`。
-
-MMCV 1.x 的 `MlflowLoggerHook` 会把训练指标写成 `train/loss`、`train/stats/...`，而学习率通常写成 `learning_rate`。平台任务详情与通用 Loss 曲线会识别 `loss` 和 `train/loss`，但不会把 `val/loss` 冒充训练 Loss；验证指标继续使用 `val/...`。使用 MMCV Hook 时先在 global rank 0 创建带上述平台标签的 active Run，再把 `MlflowLoggerHook` 加入 `log_config.hooks`，并设置 `log_model=False`：训练 Pod 当前不能向 MLflow Artifact 仓上传模型。
-
-### Ray Train 代码
-
-Ray Train 不会替用户训练循环记录业务 loss。将 `mlflow.log_metrics()` 放在 `train_loop_per_worker` 内，并通过 `ray.train.get_context().get_world_rank() == 0` 限制写入；同时继续使用 `ray.train.report()` 上报 Ray Train 的 checkpoint / 恢复状态。两者职责不同，缺一不可。
-
-平台提供的 `raytrain_runtime` Hook 只有在项目代码显式导入并配置时才会创建 Run 与转发 `report_metrics()`；它不是对任意训练脚本的隐式注入。项目接入请参考 [Ray Train 托管训练说明](RAY_TRAIN_MANAGED_GUIDE.md)。
+接入后先检查日志中的 MLflow Run ID，再在任务详情核对关联 Run、参数与带 step 的曲线。Job ID 与 Run ID 不要求相等；只有打印日志、只有参数或没有训练 step 时，不会凭空生成 loss 曲线。托管 Ray Train 的 ray.train.report 仍负责其训练结果和恢复协议，与 MLflow 指标上报分别接入，见 [Ray Train 托管训练说明](RAY_TRAIN_MANAGED_GUIDE.md)。
 
 ## 3. 为什么 Artifacts 为空
 
@@ -128,16 +94,11 @@ MLflow Trace 需要代码或 OpenTelemetry 显式埋点，例如 `@mlflow.trace`
 
 ## 7. 与其他平台集成
 
-2026-09-12 已发布“指定 Run 只读 + 本人 RUNNING Run 批量写入”的平台 REST 接口与独立 `mlflow:write` 权限，见 [外部对接说明](MLFLOW_INTEGRATION_API.md)。线上精确读取已验证，写入通过隔离 MLflow 验证，尚未向生产 Run 写入演示数据。这不是完整官方 SDK Tracking URI；完整证据与待验收项见 [发布记录](QUOTA_MLFLOW_VALIDATION_20260912.md)。
+外部程序使用 `https://raytrain.wellspiking.ai/api/v1/mlflow-native` 作为 Tracking URI，完整 SDK / HTTP 示例见 [MLflow API 接入说明](MLFLOW_PARTNER_HANDOFF.md)。开启 `nativePublicEnabled` 后，现有网络可达范围内免令牌开放共享实验、Run、Artifact 和模型注册表的读取、写入及删除。未开启时仍按原 `mlflow:full` PAT 方式调用，以实验中心 MLflow API 页面的实时说明为准。
 
 当前对外的浏览器接口 `POST /api/v1/mlflow-dashboard-access` 只签发一次性原生界面跳转票据，不是第三方数据接口。内部训练网关也不是外部 API。
 
-完整外部实验与模型生命周期集成仍需明确方向：
-
-- **它写入本平台 MLflow**：第一阶段提供本人任务 PAT、任务/Run 绑定、限流和审计；服务账号委托与更广泛的生命周期操作仍待建设，不要给出内部 ClusterIP 地址。
-- **本平台发布到它的模型仓**：对方需提供认证方式、创建版本 / 幂等键、Artifact 上传或受控 URI、状态回调、失败语义和权限模型；平台再做异步、可重试的显式发布。
-
-接口已发布；首次生产读写联调仍需使用获准身份和专门测试 Job/Run。不要共享数据库连接、对象存储凭据或内部服务地址；新接口发布也不会开放完整模型生命周期或官方 SDK 全协议。
+受保护的平台任务实验接口继续保留，已有客户端无需迁移。外部程序直接创建的 Run 不自动属于某个 RayTrain 任务；训练任务要建立可信关联，仍按第 2 节使用实际注入的来源。模型审批、发布、推理和功能仓同步是平台生命周期功能，与原生 MLflow API 分别操作，参见平台使用说明中的对应问题文档。
 
 ## 参考
 
