@@ -35,7 +35,7 @@ func TestPublicMLflowDashboardRealServerSmoke(t *testing.T) {
 }
 
 const publicMLflowDashboardSmokePython = `
-import json, re, sys, time, urllib.request
+import json, re, sys, time, urllib.request, urllib.parse
 base = sys.argv[1]
 def call(path, payload=None, method=None, content_type='application/json'):
     data = payload if isinstance(payload, bytes) else json.dumps(payload).encode() if payload is not None else None
@@ -53,6 +53,7 @@ assert '<html' in html.lower(), html[:200]
 scripts = re.findall(r'<script[^>]+src=["\x27]([^"\x27]+)', html)
 assert scripts, 'MLflow JS assets missing'
 for path in scripts:
+    path = urllib.parse.urljoin('/mlflow/', path)
     assert path.startswith('/mlflow/'), path
     assert len(call(path)) > 100, path
 exp = api('experiments/create', {'name': 'public-web-smoke-' + str(time.time_ns())})['experiment_id']

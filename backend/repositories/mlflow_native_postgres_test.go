@@ -14,6 +14,15 @@ import (
 )
 
 func TestMLflowNativeAnonymousAuditPostgres(t *testing.T) {
+	testMLflowAnonymousAuditPostgres(t, MLflowAuditNativeProxy, "/api/v1/mlflow-native/api/2.0/mlflow/runs/delete")
+}
+
+func TestMLflowDashboardAnonymousAuditPostgres(t *testing.T) {
+	testMLflowAnonymousAuditPostgres(t, MLflowAuditDashboardProxy, "/mlflow/ajax-api/2.0/mlflow/runs/delete")
+}
+
+func testMLflowAnonymousAuditPostgres(t *testing.T, action MLflowAuditAction, path string) {
+	t.Helper()
 	dsn := strings.TrimSpace(os.Getenv("POSTGRES_TEST_DSN"))
 	if dsn == "" {
 		t.Skip("POSTGRES_TEST_DSN is not set")
@@ -37,15 +46,15 @@ func TestMLflowNativeAnonymousAuditPostgres(t *testing.T) {
 	repository := NewGormRepository(database)
 	for _, status := range []int{102, 200} {
 		if err := repository.CreateMLflowAuditLog(context.Background(), MLflowAuditEvent{
-			Action:    MLflowAuditNativeProxy,
+			Action:    action,
 			Principal: auth.Principal{Subject: "mlflow-anonymous", AuthType: auth.AuthTypeAnonymous},
-			Method:    "DELETE", Path: "/api/v1/mlflow-native/api/2.0/mlflow/runs/delete", Status: status,
+			Method:    "DELETE", Path: path, Status: status,
 		}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	var records []AuditLogRecord
-	if err := database.Where("action = ?", string(MLflowAuditNativeProxy)).Find(&records).Error; err != nil {
+	if err := database.Where("action = ?", string(action)).Find(&records).Error; err != nil {
 		t.Fatal(err)
 	}
 	if len(records) != 2 {
@@ -58,6 +67,9 @@ func TestMLflowNativeAnonymousAuditPostgres(t *testing.T) {
 		}
 		if record.TenantID != "" || record.UserID != "mlflow-anonymous" || payload["auth_type"] != "anonymous" {
 			t.Fatalf("unexpected audit identity: %+v", record)
+		}
+		if (payload["status"] == float64(102) && payload["outcome"] != "attempt") || (payload["status"] == float64(200) && payload["outcome"] != "success") {
+			t.Fatalf("incorrect anonymous audit outcome: %+v", payload)
 		}
 	}
 }

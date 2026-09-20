@@ -174,7 +174,7 @@ func (r *GormRepository) CreateMLflowAuditLog(ctx context.Context, event MLflowA
 		durationMilliseconds = 0
 	}
 	outcome := "success"
-	if event.Status == 102 && action != MLflowAuditDashboardProxy {
+	if event.Status == 102 {
 		outcome = "attempt"
 	}
 	if event.Status >= 400 {
