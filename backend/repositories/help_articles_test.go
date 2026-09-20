@@ -123,9 +123,10 @@ func TestHelpArticlesPreserveSeedMarkdownAndPublicGuideSupplements(t *testing.T)
 		"mlflow":                   true,
 		"mlflow-api-with-pat":      true,
 		"mlflow-external-tracking": true,
+		"mlflow-framework-metrics": true,
 	}
 	for _, source := range seed {
-		if publicAdminOnlyHelpIDs[source.ID] || rewrittenMLflowSeed[source.ID] {
+		if publicAdminOnlyHelpIDs[source.ID] {
 			continue
 		}
 		article := byID[source.ID]
@@ -140,8 +141,10 @@ func TestHelpArticlesPreserveSeedMarkdownAndPublicGuideSupplements(t *testing.T)
 			continue
 		}
 		expected := source.Markdown
-		if source.ID == "mlflow-framework-metrics" {
-			expected = markdownAfterFirstParagraph(t, source.Markdown)
+		if rewrittenMLflowSeed[source.ID] {
+			// Platform MLflow tutorials intentionally replace obsolete seed prose;
+			// still require the entire current tutorial, including executable code.
+			expected = helpdocs.PublicSectionForSeedDocument(source).Markdown
 		}
 		if !strings.Contains(article.Markdown, expected) {
 			t.Fatalf("article %s does not preserve source markdown", source.ID)

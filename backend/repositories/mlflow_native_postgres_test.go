@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -51,7 +52,11 @@ func TestMLflowNativeAnonymousAuditPostgres(t *testing.T) {
 		t.Fatalf("anonymous attempt and completion not persisted: %d", len(records))
 	}
 	for _, record := range records {
-		if record.TenantID != "" || record.UserID != "mlflow-anonymous" || !strings.Contains(record.PayloadJSON, `"auth_type":"anonymous"`) {
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(record.PayloadJSON), &payload); err != nil {
+			t.Fatal(err)
+		}
+		if record.TenantID != "" || record.UserID != "mlflow-anonymous" || payload["auth_type"] != "anonymous" {
 			t.Fatalf("unexpected audit identity: %+v", record)
 		}
 	}

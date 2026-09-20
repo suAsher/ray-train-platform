@@ -360,7 +360,10 @@ func TestPublicHelpDocumentsFoldPublishedSeedContentIntoSevenGuides(t *testing.T
 		"REPLACE_EXPERIMENT_ID_FROM_SEARCH",
 		"next_page_token 字段，把它原样放进下一次请求正文的 page_token",
 		"403 查 PAT 是否包含 mlflow:full",
-		"start_managed_mlflow_run(training_parameters, rank=global_rank, world_size=world_size)",
+		"class PlatformMLflow:",
+		"reporter = PlatformMLflow(global_rank=rank)",
+		"普通 ray-ddp / torchrun 不要照搬",
+		"只适用于配套托管 ray-train",
 	})
 	for _, staleMarker := range []string{
 		"MLflow 总览",
@@ -430,6 +433,7 @@ func TestPublicHelpDocumentsPreserveFullSeedMarkdownInFoldedGuides(t *testing.T)
 		"mlflow":                   true,
 		"mlflow-api-with-pat":      true,
 		"mlflow-external-tracking": true,
+		"mlflow-framework-metrics": true,
 	}
 	for _, source := range seed {
 		if publicAdminOnlyHelpIDs[source.ID] {
@@ -443,12 +447,11 @@ func TestPublicHelpDocumentsPreserveFullSeedMarkdownInFoldedGuides(t *testing.T)
 		if !ok {
 			t.Fatalf("public target %s for seed %s is missing", target, source.ID)
 		}
-		if rewrittenMLflowSeed[source.ID] {
-			continue
-		}
 		expected := source.Markdown
-		if source.ID == "mlflow-framework-metrics" {
-			expected = markdownAfterFirstParagraph(t, source.Markdown)
+		if rewrittenMLflowSeed[source.ID] {
+			// Platform MLflow tutorials intentionally replace obsolete seed prose;
+			// still require the entire current tutorial, including executable code.
+			expected = helpdocs.PublicSectionForSeedDocument(source).Markdown
 		}
 		if !strings.Contains(targetGuide.Markdown, expected) {
 			t.Fatalf("public guide %s does not preserve full markdown for seed %s", target, source.ID)
@@ -518,15 +521,6 @@ func assertMarkdownContains(t *testing.T, markdown string, markers []string) {
 			t.Fatalf("markdown missing %q", marker)
 		}
 	}
-}
-
-func markdownAfterFirstParagraph(t *testing.T, markdown string) string {
-	t.Helper()
-	index := strings.Index(markdown, "\n\n")
-	if index < 0 {
-		t.Fatalf("markdown has no paragraph break: %q", markdown)
-	}
-	return markdown[index+2:]
 }
 
 func TestPublicHelpWithoutPlatformSeedKeepsLegacyCustomDocsInInputOrder(t *testing.T) {
