@@ -21,6 +21,12 @@ import (
 // and the isolated rtp-native-mlflow-test container. The upstream allowlist is
 // intentionally narrow so this cannot be pointed at production MLflow.
 func TestNativeMLflowSDK314FullAccessSmoke(t *testing.T) {
+	for _, public := range []bool{false, true} {
+		t.Run(fmt.Sprintf("public=%t", public), func(t *testing.T) { runNativeMLflowSDK314Smoke(t, public) })
+	}
+}
+
+func runNativeMLflowSDK314Smoke(t *testing.T, public bool) {
 	upstream := firstNonEmptyEnv("MLFLOW_NATIVE_SMOKE_UPSTREAM_URL", "MLFLOW_NATIVE_UPSTREAM_URL")
 	python := firstNonEmptyEnv("MLFLOW_NATIVE_SMOKE_PYTHON", "MLFLOW_SDK_SMOKE_PYTHON")
 	if upstream == "" || python == "" {
@@ -40,18 +46,21 @@ func TestNativeMLflowSDK314FullAccessSmoke(t *testing.T) {
 	const token = "native-smoke-token"
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.Use(func(c *gin.Context) {
-		if c.GetHeader("Authorization") != "Bearer "+token {
-			c.AbortWithStatus(http.StatusUnauthorized)
-			return
-		}
-		c.Set("ray-platform-principal", nativeMLflowFullPrincipal())
-		c.Next()
-	})
+	if !public {
+		router.Use(func(c *gin.Context) {
+			if c.GetHeader("Authorization") != "Bearer "+token {
+				c.AbortWithStatus(http.StatusUnauthorized)
+				return
+			}
+			c.Set("ray-platform-principal", nativeMLflowFullPrincipal())
+			c.Next()
+		})
+	}
 	handler := NewHandler(&fakeJobRepository{}, Options{
-		MLflowDashboardEnabled: true,
-		MLflowDashboardStore:   newFakeMLflowDashboardStore(),
-		MLflowTrackingURL:      upstream,
+		MLflowDashboardEnabled:    true,
+		MLflowNativePublicEnabled: public,
+		MLflowDashboardStore:      newFakeMLflowDashboardStore(),
+		MLflowTrackingURL:         upstream,
 	})
 	handler.RegisterMLflowNativeRoutes(router.Group("/api/v1"))
 	server := httptest.NewServer(router)
@@ -60,8 +69,12 @@ func TestNativeMLflowSDK314FullAccessSmoke(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, python, "-c", nativeMLflowSDKSmokePython, server.URL+"/api/v1/mlflow-native", directExperiment, suffix)
+	trackingToken := token
+	if public {
+		trackingToken = ""
+	}
 	cmd.Env = append(os.Environ(),
-		"MLFLOW_TRACKING_TOKEN="+token,
+		"MLFLOW_TRACKING_TOKEN="+trackingToken,
 		"MLFLOW_ENABLE_ASYNC_LOGGING=false",
 		"MLFLOW_HTTP_REQUEST_MAX_RETRIES=0",
 		"MLFLOW_ENABLE_TELEMETRY=false",

@@ -66,6 +66,7 @@ type mlflowTrackingCapabilities struct {
 	Limits                   mlflowTrackingCapabilityLimits   `json:"limits"`
 	Supports                 mlflowTrackingCapabilitySupports `json:"supports"`
 	IntegrationsAvailable    bool                             `json:"integrationsAvailable"`
+	NativeAuthRequired       bool                             `json:"nativeAuthRequired"`
 	NativeAvailable          bool                             `json:"nativeAvailable"`
 	NativeBasePath           string                           `json:"nativeBasePath,omitempty"`
 	NativeClientVersion      string                           `json:"nativeClientVersion"`
@@ -214,6 +215,7 @@ func (h *Handler) getMLflowTrackingCapabilities(c *gin.Context) {
 		SDKMethods:               []string{"get_run", "log_batch", "log_metric", "log_param", "set_tag", "set_terminated"},
 		SDKRequiresPrecreatedRun: true,
 		IntegrationsAvailable:    available && h.mlflowIntegrations != nil,
+		NativeAuthRequired:       !h.mlflowNativePublicEnabled,
 		NativeAvailable:          h.mlflowNativeRegistered,
 		NativeBasePath:           nativeBasePath,
 		NativeClientVersion:      "3.14.0",

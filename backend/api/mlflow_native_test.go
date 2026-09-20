@@ -1,12 +1,15 @@
 package api
 
 import (
+	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"ray-train-platform-backend/auth"
@@ -194,6 +197,75 @@ func TestNativeMLflowRegistrationRejectsAmbiguousUpstreams(t *testing.T) {
 		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/mlflow-native/api/2.0/mlflow/runs/get", nil))
 		if response.Code != http.StatusNotFound {
 			t.Fatalf("upstream %q registered native route with status %d", upstream, response.Code)
+		}
+	}
+}
+
+func TestPublicNativeMLflowRetainsPathMethodAuditAndRateGuards(t *testing.T) {
+	upstreamCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { upstreamCalls++; w.WriteHeader(200) }))
+	defer upstream.Close()
+	store := newFakeMLflowDashboardStore()
+	h := NewHandler(&fakeJobRepository{}, Options{MLflowDashboardEnabled: true, MLflowNativePublicEnabled: true, MLflowDashboardStore: store, MLflowTrackingURL: upstream.URL})
+	r := gin.New()
+	h.RegisterMLflowNativeRoutes(r.Group("/api/v1"))
+	for _, tc := range []struct {
+		method, path string
+		want         int
+	}{
+		{"GET", "/api/2.0/mlflow/../runs/get", 400},
+		{"GET", "/api/2.0/mlflow/runs/get?access_token=secret", 400},
+		{"GET", "/ajax-api/2.0/mlflow/runs/get", 400},
+		{"TRACE", "/api/2.0/mlflow/runs/get", 405},
+	} {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(tc.method, mlflowNativeBasePath+tc.path, nil))
+		if w.Code != tc.want {
+			t.Fatalf("%s: %d %s", tc.path, w.Code, w.Body.String())
+		}
+	}
+	store.auditErr = errors.New("offline audit")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("DELETE", mlflowNativeBasePath+"/api/2.0/mlflow/registered-models/delete?name=test", nil))
+	if w.Code != 503 || upstreamCalls != 0 {
+		t.Fatalf("write proceeded without audit: %d calls=%d", w.Code, upstreamCalls)
+	}
+
+	limited := gin.New()
+	limiter := newFixedWindowSourceArtifactLimiter(1, 1, 10, time.Now)
+	limited.GET("/api/*path", h.mlflowNativeGuard(limiter), func(c *gin.Context) { c.Status(200) })
+	for i, ip := range []string{"198.51.100.1", "198.51.100.2"} {
+		request := httptest.NewRequest("GET", "/api/api/2.0/mlflow/runs/get", nil)
+		request.Header.Set("X-Forwarded-For", ip)
+		request.Header.Set("Authorization", "Bearer "+ip)
+		response := httptest.NewRecorder()
+		limited.ServeHTTP(response, request)
+		want := 200
+		if i == 1 {
+			want = 429
+		}
+		if response.Code != want {
+			t.Fatalf("public rate limit header rotation: %d want %d", response.Code, want)
+		}
+	}
+}
+
+func TestNativeMLflowCapabilitiesDeclareAuthMode(t *testing.T) {
+	for _, public := range []bool{false, true} {
+		h := NewHandler(&fakeJobRepository{}, Options{MLflowDashboardEnabled: true, MLflowNativePublicEnabled: public, MLflowDashboardStore: newFakeMLflowDashboardStore(), MLflowTrackingURL: "http://mlflow:5000/mlflow"})
+		r := gin.New()
+		h.RegisterMLflowNativeRoutes(r.Group("/api/v1"))
+		r.GET("/capabilities", h.getMLflowTrackingCapabilities)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest("GET", "/capabilities", nil))
+		var envelope struct {
+			Data mlflowTrackingCapabilities `json:"data"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		if envelope.Data.NativeAuthRequired != !public || !envelope.Data.NativeAvailable || envelope.Data.NativeBasePath != mlflowNativeBasePath {
+			t.Fatalf("capabilities: %+v", envelope.Data)
 		}
 	}
 }

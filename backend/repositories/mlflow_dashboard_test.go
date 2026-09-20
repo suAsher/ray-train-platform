@@ -408,3 +408,27 @@ func TestMLflowDashboardTicketMigrationHasTableAndExpiryIndexWithoutForeignKeys(
 		t.Fatal("MLflow dashboard tickets must not reference local identity tables")
 	}
 }
+
+func TestMLflowNativeAnonymousAuditDoesNotClaimPersonalOrTenantIdentity(t *testing.T) {
+	repository, _ := mlflowDashboardTestRepositories(t)
+	err := repository.CreateMLflowAuditLog(context.Background(), MLflowAuditEvent{
+		Action:    MLflowAuditNativeProxy,
+		Principal: auth.Principal{Subject: "mlflow-anonymous", AuthType: auth.AuthTypeAnonymous},
+		Method:    "DELETE", Path: "/api/v1/mlflow-native/api/2.0/mlflow/registered-models/delete?name=private",
+		Status: 102, RequestID: "anonymous-test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record AuditLogRecord
+	if err := repository.db.Where("request_id = ?", "anonymous-test").First(&record).Error; err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(record.PayloadJSON), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if record.TenantID != "" || record.UserID != "mlflow-anonymous" || payload["actor_username"] != "" || payload["auth_type"] != "anonymous" || payload["outcome"] != "attempt" || strings.Contains(record.PayloadJSON, "private") {
+		t.Fatalf("anonymous audit identity or metadata mismatch: %+v", record)
+	}
+}

@@ -13,7 +13,9 @@ const (
 	// forwarded by OAuth2 Proxy and independently verified by this backend.
 	AuthTypeOAuth2Proxy AuthenticationType = "oauth2-proxy"
 	AuthTypePAT         AuthenticationType = "pat"
-	AuthTypeDemo        AuthenticationType = "demo"
+	// AuthTypeAnonymous is an audit marker, never an authenticated identity.
+	AuthTypeAnonymous AuthenticationType = "anonymous"
+	AuthTypeDemo      AuthenticationType = "demo"
 )
 
 type RealmAccess struct {

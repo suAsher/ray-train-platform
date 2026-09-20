@@ -195,3 +195,49 @@ func TestNativeMLflowFullScopeIsExplicitAndDoesNotImplyPlatformPermissions(t *te
 		t.Fatalf("native scope escalated platform jobs access: %d", w.Code)
 	}
 }
+
+func TestPublicNativeMLflowAllowsAnonymousAndStaleCredentialsWithoutOpeningPlatformAPI(t *testing.T) {
+	for _, proxyAuth := range []bool{false, true} {
+		for _, bearer := range []string{"", "Bearer expired-pat", "Basic obsolete", "Bearer rpt_ordinary"} {
+			calls := 0
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if r.Header.Get("Authorization") != "" || r.Header.Get("Cookie") != "" || r.Header.Get("X-Auth-Request-Access-Token") != "" {
+					t.Error("public native request leaked credentials")
+				}
+				_, _ = io.WriteString(w, `{"ok":true}`)
+			}))
+			audit := &nativeMLflowAuditStore{}
+			h := api.NewHandler(&mainJobRepository{}, api.Options{MLflowDashboardEnabled: true, MLflowNativePublicEnabled: true, MLflowTrackingURL: upstream.URL, MLflowDashboardStore: audit})
+			r := gin.New()
+			registerAPIRoutesWithLocalAuth(r, h, nil, nil, nil, nil, nil, nil, nil, nil, nil, config.Config{OIDCRequired: true, OAuth2ProxyAuthEnabled: proxyAuth, MLflowNativePublicEnabled: true})
+			for _, method := range []string{"GET", "POST", "PUT", "DELETE"} {
+				req := httptest.NewRequest(method, "/api/v1/mlflow-native/api/2.0/mlflow/runs/delete", strings.NewReader(`{"run_id":"test"}`))
+				req.Header.Set("Authorization", bearer)
+				req.Header.Set("Cookie", "stale=session")
+				req.Header.Set("X-Auth-Request-Access-Token", "stale")
+				w := httptest.NewRecorder()
+				r.ServeHTTP(w, req)
+				if w.Code != http.StatusOK {
+					t.Fatalf("public %s: %d %s", method, w.Code, w.Body.String())
+				}
+			}
+			if calls != 4 {
+				t.Fatalf("calls=%d", calls)
+			}
+			for _, event := range audit.events {
+				if event.Principal.AuthType != auth.AuthTypeAnonymous || event.Principal.Subject != "mlflow-anonymous" || event.Principal.TenantID != "" {
+					t.Fatalf("public audit must not impersonate a user or tenant: %+v", event.Principal)
+				}
+			}
+			for _, path := range []string{"/api/v1/jobs", "/api/v1/me", "/api/v1/mlflow/experiments", "/mlflow/api/2.0/mlflow/runs/get"} {
+				w := httptest.NewRecorder()
+				r.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+				if w.Code != http.StatusUnauthorized {
+					t.Fatalf("opened unrelated %s: %d %s", path, w.Code, w.Body.String())
+				}
+			}
+			upstream.Close()
+		}
+	}
+}

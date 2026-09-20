@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
+	"ray-train-platform-backend/helpdocs"
 	"ray-train-platform-backend/repositories"
 )
 
@@ -90,6 +91,13 @@ func (h *Handler) listHelp(c *gin.Context, admin bool) {
 		h.helpError(c, err)
 		return
 	}
+	if !admin {
+		projected := make([]domain.HelpDocument, len(items))
+		for i, item := range items {
+			projected[i] = helpdocs.ProjectMLflowAccess(item, h.mlflowNativePublicEnabled)
+		}
+		items = projected
+	}
 	h.writeSuccess(c, 200, gin.H{"items": items})
 }
 
@@ -104,6 +112,12 @@ func (h *Handler) listHelpArticles(c *gin.Context) {
 		h.helpError(c, err)
 		return
 	}
+	projected := make([]domain.HelpArticle, len(items))
+	for i, item := range items {
+		projected[i] = item
+		projected[i].HelpDocument = helpdocs.ProjectMLflowAccess(item.HelpDocument, h.mlflowNativePublicEnabled)
+	}
+	items = projected
 	h.writeSuccess(c, 200, gin.H{"items": items})
 }
 

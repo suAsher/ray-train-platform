@@ -26,7 +26,8 @@ var mlflowNativeAPIPath = regexp.MustCompile(`^/api/[1-9][0-9]*\.[0-9]+/(mlflow|
 
 // RegisterMLflowNativeRoutes exposes the shared MLflow server's native API.
 // Unlike the governed tracking subset, it does not filter experiment owners or
-// translate IDs. Only an explicitly issued personal mlflow:full PAT can enter.
+// translate IDs. Public mode is explicitly configured; otherwise a personal
+// mlflow:full PAT is required.
 func (h *Handler) RegisterMLflowNativeRoutes(group *gin.RouterGroup) {
 	target, err := parseMLflowNativeTarget(h.mlflowTrackingURL)
 	if !h.mlflowDashboardEnabled || h.mlflowDashboardStore == nil || err != nil {
@@ -50,12 +51,17 @@ func parseMLflowNativeTarget(raw string) (*url.URL, error) {
 func (h *Handler) mlflowNativeGuard(limiter SourceArtifactLimiter) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		p, ok := auth.PrincipalFromGin(c)
-		if !ok {
+		if h.mlflowNativePublicEnabled {
+			// Deliberately ignore stale credentials on this dedicated public route.
+			// This marker has no tenant, roles or scopes and cannot name a caller.
+			p = auth.Principal{Subject: "mlflow-anonymous", AuthType: auth.AuthTypeAnonymous}
+			c.Set("ray-platform-principal", p)
+		} else if !ok {
 			h.writeError(c, 401, "AUTH_REQUIRED", "authentication is required")
 			c.Abort()
 			return
 		}
-		if p.AuthType != auth.AuthTypePAT || p.IntegrationID != "" || !p.HasScope(domain.PATScopeMLflowFull) {
+		if !h.mlflowNativePublicEnabled && (p.AuthType != auth.AuthTypePAT || p.IntegrationID != "" || !p.HasScope(domain.PATScopeMLflowFull)) {
 			h.writeError(c, 403, "MLFLOW_NATIVE_SCOPE_REQUIRED", "native MLflow access requires a personal token with mlflow:full")
 			c.Abort()
 			return
@@ -71,6 +77,8 @@ func (h *Handler) mlflowNativeGuard(limiter SourceArtifactLimiter) gin.HandlerFu
 			c.Abort()
 			return
 		}
+		// Anonymous callers share one per-process bucket; client-supplied proxy
+		// headers cannot multiply the rate limit or claim a user identity.
 		if allowed, _ := limiter.Allow(p.TenantID+"\x00"+p.Subject, sourceArtifactActionCreate); !allowed {
 			c.Header("Retry-After", "60")
 			h.writeError(c, 429, "RATE_LIMITED", "MLflow request rate limit exceeded")

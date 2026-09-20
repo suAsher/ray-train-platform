@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -111,4 +112,40 @@ func setValidMLflowDashboardEnvironment(t *testing.T) {
 	t.Setenv("MLFLOW_DASHBOARD_ENABLED", "true")
 	t.Setenv("MLFLOW_PUBLIC_ORIGIN", "https://portal.example.com:8443")
 	t.Setenv("MLFLOW_DASHBOARD_SESSION_HOURS", "8")
+}
+
+func TestLoadMLflowNativePublicIsExplicitAndRequiresDashboard(t *testing.T) {
+	setValidMLflowDashboardEnvironment(t)
+	t.Setenv("MLFLOW_NATIVE_PUBLIC_ENABLED", "false")
+	cfg, err := Load()
+	if err != nil || cfg.MLflowNativePublicEnabled {
+		t.Fatalf("public native must be opt-in: %v", err)
+	}
+	t.Setenv("MLFLOW_NATIVE_PUBLIC_ENABLED", "true")
+	cfg, err = Load()
+	if err != nil || !cfg.MLflowNativePublicEnabled {
+		t.Fatalf("public native enable: %v", err)
+	}
+	t.Setenv("MLFLOW_DASHBOARD_ENABLED", "false")
+	if _, err := Load(); err == nil {
+		t.Fatal("public native accepted without its upstream route dependencies")
+	}
+	t.Setenv("MLFLOW_NATIVE_PUBLIC_ENABLED", "invalid")
+	if _, err := Load(); err == nil {
+		t.Fatal("invalid public mode accepted")
+	}
+}
+
+func TestMLflowNativePublicHelmSettingIsExplicitAndDefaultsClosed(t *testing.T) {
+	values, err := os.ReadFile("../../helm/ray-train-platform/values.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment, err := os.ReadFile("../../helm/ray-train-platform/templates/backend-deployment.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(values), "nativePublicEnabled: false") || !strings.Contains(string(deployment), "name: MLFLOW_NATIVE_PUBLIC_ENABLED") || !strings.Contains(string(deployment), "default false $mlflow.nativePublicEnabled | quote") {
+		t.Fatal("native public mode must remain an explicit, default-closed deployment setting")
+	}
 }

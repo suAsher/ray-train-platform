@@ -129,6 +129,7 @@ type Config struct {
 	MLflowTrackingURL                        string
 	MLflowIngestURL                          string
 	MLflowExperimentPrefix                   string
+	MLflowNativePublicEnabled                bool
 	MLflowDashboardEnabled                   bool
 	MLflowPublicOrigin                       string
 	MLflowDashboardSessionHours              int
@@ -360,6 +361,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.MLflowDashboardEnabled, err = parseBool("MLFLOW_DASHBOARD_ENABLED", false); err != nil {
+		return Config{}, err
+	}
+	if cfg.MLflowNativePublicEnabled, err = parseBool("MLFLOW_NATIVE_PUBLIC_ENABLED", false); err != nil {
 		return Config{}, err
 	}
 	if cfg.MLflowDashboardEnabled {
@@ -792,6 +796,9 @@ func validateMLflowConfig(cfg Config) error {
 }
 
 func validateMLflowDashboardConfig(cfg Config) error {
+	if cfg.MLflowNativePublicEnabled && !cfg.MLflowDashboardEnabled {
+		return fmt.Errorf("MLFLOW_NATIVE_PUBLIC_ENABLED requires MLFLOW_DASHBOARD_ENABLED")
+	}
 	if !cfg.MLflowDashboardEnabled {
 		return nil
 	}

@@ -11,9 +11,43 @@ import (
 	"github.com/gin-gonic/gin"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
+	"ray-train-platform-backend/helpdocs"
 )
 
 type helpDocumentOnlyStore struct{}
+
+func TestHelpArticlesUsesConfiguredNativeMLflowAuthentication(t *testing.T) {
+	for _, public := range []bool{false, true} {
+		h := NewHandler(nil, Options{MLflowNativePublicEnabled: public})
+		seed := helpdocs.ProjectHelpArticle(domain.HelpDocument{ID: "mlflow-api-with-pat", UpdatedBy: helpdocs.PlatformSeedActor})
+		custom := domain.HelpArticle{HelpDocument: domain.HelpDocument{ID: "custom", UpdatedBy: "human", Markdown: "my original guide"}}
+		h.helpDocuments = helpArticleListStore{articles: []domain.HelpArticle{seed, custom}}
+		r := gin.New()
+		r.Use(func(c *gin.Context) {
+			c.Set("ray-platform-principal", auth.Principal{Subject: "reader", TenantID: "team", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal})
+		})
+		h.RegisterHelpReadRoutes(r.Group("/api/v1"))
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/help/articles", nil))
+		if w.Code != 200 {
+			t.Fatalf("public=%v: %d %s", public, w.Code, w.Body.String())
+		}
+		var response struct {
+			Data struct {
+				Items []domain.HelpArticle `json:"items"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if len(response.Data.Items) != 2 || strings.Contains(response.Data.Items[0].Markdown, "免令牌") != public || response.Data.Items[1].Markdown != custom.Markdown {
+			t.Fatalf("public=%v: incorrect help projection", public)
+		}
+		if !strings.Contains(seed.Markdown, "mlflow:full") {
+			t.Fatal("projection changed stored source")
+		}
+	}
+}
 
 func (helpDocumentOnlyStore) ListHelpDocuments(context.Context, bool) ([]domain.HelpDocument, error) {
 	return []domain.HelpDocument{}, nil

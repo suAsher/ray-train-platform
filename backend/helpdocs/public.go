@@ -100,13 +100,13 @@ Windows PowerShell：
 
 const accountAPIPublicGuide = `### 身份和令牌
 
-Portal 登录会话用于网页；个人 PAT 用于 CLI、原生 Ray、MLflow SDK 和程序接口。不要把 GitLab token、Portal Cookie、MLflow 页面票据或集群凭据当作平台 PAT。
+Portal 登录会话用于网页；个人 PAT 用于 CLI、原生 Ray 和受保护的平台程序接口；共享 MLflow 原生 API 的当前认证方式见[如何调用 MLflow API 查询实验与 Run？](#mlflow-api-with-pat)。不要把 GitLab token、Portal Cookie、MLflow 页面票据或集群凭据当作平台 PAT。
 
-普通成员可在「账户与安全 → 个人访问令牌 → 创建访问令牌」自行签发，不需要管理员代建。外部 MLflow SDK 选择“MLflow 全局读写”；令牌属于本人并绑定创建时的当前团队，明文仅显示一次。管理员在自己的账号创建的令牌仍属于管理员本人，集成令牌也不能代替 mlflow:full 个人 PAT。
+普通成员可在「账户与安全 → 个人访问令牌 → 创建访问令牌」自行签发，不需要管理员代建。仅当 MLflow API 页面显示需要个人令牌时，外部 MLflow SDK 才选择“MLflow 全局读写”；令牌属于本人并绑定创建时的当前团队，明文仅显示一次。管理员在自己的账号创建的令牌仍属于管理员本人，集成令牌也不能代替 mlflow:full 个人 PAT。
 
 “MLflow 全局读写”可以选择“永不过期”，也可以设置 1–365 天有效期。永不过期仅取消时间限制，撤销令牌、停用账号或失去所属团队的成员资格后仍会失效。其他用途保留原有效期限制，已有令牌不会自动延长。
 
-PAT 绑定当前有效团队和显式 scope。旧 token 不会自动获得新增权限；需要原生 MLflow 全局共享读写时重新签发 ` + "`mlflow:full`" + `。` + "`mlflow:full`" + ` 与 MLflow 网页共享范围一致，包含创建、修改、删除、Artifact 和 Registry 操作；平台训练任务、个人目录和调度仍走各自权限。
+PAT 绑定当前有效团队和显式 scope。旧 token 不会自动获得新增权限；当原生 MLflow 开启令牌认证时，需要全局共享读写才签发 ` + "`mlflow:full`" + `。` + "`mlflow:full`" + ` 与 MLflow 网页共享范围一致，包含创建、修改、删除、Artifact 和 Registry 操作；平台训练任务、个人目录和调度仍走各自权限。
 
 ### 常用地址
 
@@ -121,7 +121,7 @@ PAT 绑定当前有效团队和显式 scope。旧 token 不会自动获得新增
 
 Job ID 标识平台训练任务，MLflow Run ID 标识一次实验记录。一个 Job 可以关联多个 Run，两者不要求相等。原生 MLflow SDK、HTTP API 和页面都使用 MLflow 自己返回的 Experiment ID / Run ID。
 
-接口返回 401 先检查 token 是否过期或撤销；403 先核对 PAT 是否包含 ` + "`mlflow:full`" + `，以及当前团队、角色和数据空间权限。`
+受保护的平台接口返回 401 时检查令牌和登录状态；MLflow 先核对原生 API 地址，网页路径返回 MLFLOW_DASHBOARD_AUTH_REQUIRED 不表示 PAT 过期。需要令牌的 MLflow 接口返回 403 时核对 PAT 是否包含 ` + "`mlflow:full`" + `，以及当前团队、角色和数据空间权限。`
 
 const dataPublicGuide = `### 代码和镜像
 
@@ -213,7 +213,7 @@ const debugPublicGuide = `### 交互式调试
 
 const mlflowPublicGuide = `### 页面和记录关系
 
-实验中心的训练记录对当前团队成员可见，普通成员可以查看队友任务的关联 Run、指标并打开 MLflow 详情；切换团队后按有效成员身份重新确定范围。任务列表保留“我提交的”筛选。查看队友记录不会获得代写训练指标、取消他人任务或连接其 Worker 的权限。
+实验中心的训练记录对当前团队成员可见，普通成员可以查看队友任务的关联 Run、指标并打开 MLflow 详情；切换团队后按有效成员身份重新确定范围。任务列表保留“我提交的”筛选。查看队友任务不会获得取消他人任务或连接其 Worker 的权限；共享 MLflow 原生 API 的访问范围另见下文。
 
 「实验中心」提供训练记录、模型和 MLflow API。训练记录用于查看 RayTrain Job 与 MLflow Run 的关联；模型用于查看共享模型和权重版本；MLflow API 用于复制原生 Tracking URI、Python 示例和 HTTP 调用方式。需要进入原生页面时点击“打开 MLflow”。
 
@@ -257,7 +257,7 @@ const troubleshootingPublicGuide = `### 排障顺序
 | 长期排队 | 团队剩余配额、Worker 数、Kueue 准入原因、节点整体可放置性 |
 | Pod Pending | 事件里的 GPU/CPU/内存不足、taint、PVC 或镜像拉取 |
 | 页面没有 loss 曲线 | 训练代码是否写入 MLflow metric，平台是否绑定到对应 Run |
-| MLflow 直链打不开 | 浏览器票据和 PAT API 是两种通道，重新从任务详情进入 |
+| MLflow 直链打不开 | 浏览器票据和原生程序 API 是两种通道，重新从任务详情进入 |
 
 看到 Pending 不要先重启 Pod。先分清提交前预检拒绝、Kueue Suspended、Pod Pending、镜像拉取、挂载失败，还是训练进程自己的错误。
 
@@ -340,13 +340,13 @@ HTTP 适合服务端集成和批量写指标；文件上传建议使用 Python S
 
 先在专用测试实验中联调，不向正在训练的 Run 写演示数据。注册模型版本、上传文件或结束 Run 不代表已经完成评估审批，也不代表已经部署 Serving。`
 
-const mlflowMetricsSeedPublicSection = `适用于在 RayTrain 上运行的训练代码。自己的脚本不创建 RayTrain Job、只想记录实验时，使用[如何用自己的程序向 MLflow 写入数据和文件？](#mlflow-external-tracking)的原生 MLflow 示例。
+var mlflowMetricsSeedPublicSection = `适用于在 RayTrain 上运行的训练代码。自己的脚本不创建 RayTrain Job、只想记录实验时，使用[如何用自己的程序向 MLflow 写入数据和文件？](#mlflow-external-tracking)的原生 MLflow 示例。
 
 ### 平台内训练使用哪个地址
 
 启用训练 MLflow 接入后，平台向训练环境注入 MLFLOW_TRACKING_URI、实验名、Run 名和可信任务来源。运行时适配器读取这些配置；平台不会注入个人 PAT。不要覆盖已注入的 MLFLOW_TRACKING_URI 为外部 /api/v1/mlflow-native 地址，不要照搬外部示例设置 MLFLOW_TRACKING_TOKEN 或重新选择另一个实验。
 
-普通自定义训练仍需安装兼容客户端并接入已有适配器。发现变量缺失、没有 Run 或框架 Hook 未初始化时，先核对镜像和训练入口；换成外部地址不会自动修复任务关联。
+普通自定义训练需安装兼容客户端，并按下文接入示例创建 Run、记录指标。发现变量缺失、没有 Run 或框架 Hook 未初始化时，先核对镜像和训练入口；换成外部地址不会自动修复任务关联。
 
 平台提供连接和可信关联信息；训练代码仍需主动创建 Run、记录参数和指标，不会从 stdout 猜测 Loss。
 
@@ -371,11 +371,29 @@ const mlflowMetricsSeedPublicSection = `适用于在 RayTrain 上运行的训练
 
 ` + "```python\nimport mlflow\n\n# 嵌入已有训练循环；loss、step 和 global_rank 由训练框架提供。\ndef log_training_metric(loss, step, global_rank):\n    if global_rank != 0:\n        return\n    if mlflow.active_run() is None:\n        print(\"MLflow Run 尚未初始化，请检查平台或框架 Hook\", flush=True)\n        return\n    try:\n        mlflow.log_metric(\"train/loss\", float(loss), step=int(step))\n    except Exception as exc:\n        # 辅助观测故障不应中断 GPU 训练；不输出可能含凭据的完整异常。\n        print(f\"MLflow 指标写入失败：{type(exc).__name__}\", flush=True)\n```" + `
 
-### 新训练入口还没有 Run 时
+### 普通 PyTorch / torchrun / ray-ddp：首次接入
 
-先选兼容的已登记运行时并接入平台训练适配器。平台运行时的 ` + "`start_managed_mlflow_run(training_parameters, rank=global_rank, world_size=world_size)`" + ` 会使用注入的实验、Job/团队/用户及来源信息；结束时用配套 ` + "`finish_managed_mlflow_run(client, owned=owned, status=...)`" + `，只结束本入口创建的 Run。两者位于 ` + "`raytrain_runtime.reporting`" + `，需在镜像内确认该模块和对应版本可用。
+镜像需要安装兼容的 mlflow 客户端；不依赖 raytrain_runtime.reporting。把下面模块完整保存为训练入口同目录的 platform_mlflow.py，并随源码一起上传。它只从平台环境读取 Job、团队、提交者和签名来源，不要求 RAYTRAIN_CLUSTER_ATTEMPT；仅当该值存在时才附加。不要复制、打印或自行填写这些来源值。
 
-普通自定义镜像未安装这个适配器时，仅 ` + "`pip install mlflow`" + ` 或调用无标签的 ` + "`start_run()`" + ` 不会自动建立平台可信关联。应先让管理员或模型维护者按训练入口接入，并用单卡任务验证；不要手工猜造 ` + "`platform.*`" + ` 标签、复制其他任务的来源信息，或将平台来源环境变量打印出来。
+` + "```python\n" + platformMLflowPython + "\n```" + `
+
+在你的训练入口中接入三个位置：初始化后创建 reporter；训练循环中记录指标；训练真正完成或异常退出时结束 Run。下面是可直接运行的 CPU 接通检查，也展示真实训练循环应插入的位置；后续把随机张量和 Linear 替换为自己的模型、数据与优化器。
+
+` + "```python\n" + platformMLflowUsagePython + "\n```" + `
+
+单进程可直接 python train.py。torchrun 会注入全局 RANK 和 WORLD_SIZE；多机不能用 LOCAL_RANK 代替 RANK，否则每台机器都会重复建 Run。非 torchrun 的分布式框架应显式传入框架的全局 rank，例如已经初始化的 torch.distributed.get_rank()，或托管 Ray Train 的 get_context().get_world_rank()。不确定全局 rank 时停止接入检查，不猜成 0。
+
+示例每个进程都可构造 reporter，但只有 global rank 0 连接 MLflow。它使用显式 run_id 写入，不会在初始化失败后用 log_metric 隐式创建孤立 Run。已有同一任务的活动 Run 会复用且不由本模块结束；已有框架 Hook 时应直接使用 Hook，避免重复上报。上报故障只输出一次错误类型，训练继续；默认 HTTP 超时 10 秒、无内部重试，失败后暂停写入 60 秒再尝试（期间指标不补传），用户显式设置的超时优先；如果进程被强杀，代码无法执行结束逻辑，以平台任务状态和后续协调结果为准。
+
+检查脚本中的异常会标记 FAILED 并继续抛出原异常，正常完成才标记 FINISHED。正常结束 rank 0 并不代表所有分布式 rank 都成功；正式分布式入口应在框架确认整个训练成功后结束 Run。这里不提供用单卡检查脚本代替 DDP 模型训练的建议。
+
+### 已有框架 Hook / 托管 Ray Train
+
+已经有 MlflowLoggerHook 或框架 Logger 时，复用它的 Run 和生命周期，按前一节补充指标；不要再加第二套自动 Hook。确认它从实际注入环境携带平台来源，只有 Tracking URI 并不能建立任务关联。
+
+start_managed_mlflow_run 和 finish_managed_mlflow_run 位于 raytrain_runtime.reporting，只适用于配套托管 ray-train 运行时，要求 RAYTRAIN_CLUSTER_ATTEMPT。普通 ray-ddp / torchrun 不要照搬这套托管专用接口，也不要为了调用它手工填充 cluster attempt；使用上面的普通入口示例。
+
+训练接入网关仅接收参数、指标和标签，不支持 log_artifact 文件上传。权重、配置和报告写到 PLATFORM_OUTPUT_PATH；从[训练产物](#artifacts)下载或登记模型。外部原生 API 的 Artifact 能力是另一条接口，不能据此认为训练注入地址也支持。
 
 ### 如何确认接入成功
 
@@ -389,9 +407,9 @@ Artifact、Models 或 Traces 为空不能用来判定训练失败；当前训练
 
 ### 记录代码、数据版本与训练参数
 
-已接入的适配器会记录可取得的优化器、学习率、epoch、随机种子和分布式规模。固定数据版本存在时，会从真实运行环境带入 dataset_id、dataset_version_id 等参数以及 platform.dataset_version_id 等来源标签。它不会从目录名猜数据版本，也不会保证每种训练入口都自动记录 Git commit。
+配套托管适配器可记录其实际取得的优化器、学习率、epoch、随机种子和分布式规模；普通入口示例仅记录你传给 params 的实际配置。固定数据版本存在时，配套适配器可带入 dataset_id、dataset_version_id 等参数以及 platform.dataset_version_id 来源标签；普通示例不承诺自动填充全部来源字段。任何入口都不能从目录名猜数据版本，也不能保证自动取得 Git commit。
 
-在已有 Run 中，由 global rank 0 用 ` + "`mlflow.log_params(...)`" + ` 补充实际训练配置；每个 step 用 ` + "`mlflow.log_metric(...)`" + ` 记录 loss、学习率等变化值。确知代码 commit 时，可用 code_commit 参数记录，或使用自定义 research.code_commit 标签；不要覆盖 platform.* 标签。参数和标签只有你明确记录后才存在，不知道的值保持缺失。
+使用本页 PlatformMLflow 模块时，用 reporter.params(...) 补充实际训练配置，用 reporter.metrics(..., step=...) 记录 loss、学习率等变化值。模块通过 MlflowClient 显式指定 run_id，不创建 fluent active Run，因此不要混用 mlflow.log_params 或 mlflow.log_metric，否则 SDK 可能隐式另建一条未关联 Run。只有已经使用框架 fluent Hook、确认 mlflow.active_run() 存在且属于本任务时，才由 global rank 0 使用 mlflow.log_params / mlflow.log_metric。确知代码 commit 时，可用 code_commit 参数记录，或使用自定义 research.code_commit 标签；不要覆盖 platform.* 标签。参数和标签只有你明确记录后才存在，不知道的值保持缺失。
 
 要让数据进入可追溯流程，先在[版本化数据集](#datasets)选 READY 版本，并在提交训练时固定该版本和场地范围。任务、MLflow Run 和共享模型是不同记录：训练任务保存实际数据来源，适配器在 Run 中记录可用来源；任务结束后将所选权重[登记为模型版本](#shared-model-registration)，沿用任务已有的数据版本。
 

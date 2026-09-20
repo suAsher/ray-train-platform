@@ -125,6 +125,8 @@ backend:
     # internal MLflow service has passed its own readiness checks.
     enabled: false
     dashboardEnabled: false
+    # Opens only the native API to anonymous read/write/delete within existing ingress reachability.
+    nativePublicEnabled: false
     publicOrigin: ""
     dashboardSessionHours: 8
     trackingURL: "http://mlflow.mlflow-system.svc.cluster.local:5000/mlflow"
