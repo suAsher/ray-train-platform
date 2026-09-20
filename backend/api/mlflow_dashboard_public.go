@@ -63,7 +63,7 @@ func (h *Handler) serveAuditedPublicMLflowDashboard(c *gin.Context, target *url.
 	startedAt := time.Now()
 	event := repositories.MLflowAuditEvent{
 		Principal: auth.Principal{Subject: "mlflow-anonymous", AuthType: auth.AuthTypeAnonymous},
-		Method: c.Request.Method, Path: c.Request.URL.Path, RequestID: c.GetHeader("X-Request-ID"),
+		Method:    c.Request.Method, Path: c.Request.URL.Path, RequestID: c.GetHeader("X-Request-ID"),
 	}
 	if isMLflowMutation(c.Request.Method) {
 		event.Status = http.StatusProcessing

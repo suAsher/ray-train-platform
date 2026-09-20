@@ -83,7 +83,7 @@ func TestHelpRoutesUseDashboardPublicSettingWithoutChangingAdminSource(t *testin
 		custom := domain.HelpArticle{HelpDocument: domain.HelpDocument{ID: "mlflow-api-with-pat", UpdatedBy: "human", Markdown: "my original guide"}}
 		h.helpDocuments = mlflowHelpAccessStore{
 			helpArticleListStore: helpArticleListStore{articles: []domain.HelpArticle{seed, custom}},
-			documents:           []domain.HelpDocument{seed.HelpDocument, custom.HelpDocument},
+			documents:            []domain.HelpDocument{seed.HelpDocument, custom.HelpDocument},
 		}
 		r := gin.New()
 		r.Use(func(c *gin.Context) {
