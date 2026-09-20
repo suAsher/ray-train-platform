@@ -161,6 +161,9 @@ func (h *Handler) mlflowDashboardRunRedirect(ctx context.Context, principal auth
 	if !mlflowDashboardRunIDPattern.MatchString(runID) {
 		return "", fmt.Errorf("MLflow run is unavailable")
 	}
+	if h.mlflowDashboardPublicEnabled {
+		return h.sharedMLflowDashboardRunRedirect(ctx, runID)
+	}
 	if fragment, found, err := h.mlflowDashboardRegistryRedirect(ctx, principal, runID); err != nil || found {
 		return fragment, err
 	}
