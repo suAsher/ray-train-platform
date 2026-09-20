@@ -415,11 +415,6 @@ func Load() (Config, error) {
 	}
 	if cfg.DatasetPublisherJobTTLSeconds, err = parseInt("DATASET_PUBLISHER_JOB_TTL_SECONDS", 24*60*60); err != nil {
 		return Config{}, err
-		// Finished RayJobs are released on the same schedule as their logs, so a run
-		// that can still be inspected in the log store still has its cluster objects.
-		if cfg.RayJobRetentionSeconds, err = parseInt("RAYJOB_RETENTION_SECONDS", 30*24*60*60); err != nil {
-			return Config{}, err
-		}
 	}
 	if cfg.DatasetPublisherInitialRetrySeconds, err = parseInt("DATASET_PUBLISHER_INITIAL_RETRY_SECONDS", 1); err != nil {
 		return Config{}, err
