@@ -41,7 +41,7 @@ func (h *Handler) sharedMLflowDashboardRunRedirect(ctx context.Context, runID st
 	var payload struct {
 		Run struct {
 			Info struct {
-				RunID string `json:"run_id"`
+				RunID        string `json:"run_id"`
 				ExperimentID string `json:"experiment_id"`
 			} `json:"info"`
 		} `json:"run"`
