@@ -246,10 +246,14 @@ func rewriteRayDashboardResponse(response *http.Response, basePath string) error
 		return err
 	}
 	_ = response.Body.Close()
-	replacements := []struct{ old, new []byte }{
-		{[]byte(`"/api/`), []byte(`"` + basePath + `api/`)},
-		{[]byte(`'/api/`), []byte(`'` + basePath + `api/`)},
-		{[]byte("`/api/"), []byte("`" + basePath + "api/")},
+	// Ray 2.58 normalizes API URLs by removing a leading slash. Injecting the
+ // full proxy path here would therefore become relative and duplicate the
+ // current Dashboard prefix. Relative API literals also work with older
+ // direct fetch callers, using the document URL as their base.
+ replacements := []struct{ old, new []byte }{
+		{[]byte(`"/api/`), []byte(`"api/`)},
+		{[]byte(`'/api/`), []byte(`'api/`)},
+		{[]byte("`/api/"), []byte("`api/")},
 	}
 	if strings.Contains(contentType, "javascript") {
 		for _, replacement := range replacements {

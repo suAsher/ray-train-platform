@@ -65,7 +65,7 @@ func TestJobDashboardAccessRejectsAnotherUsersJob(t *testing.T) {
 	}
 }
 
-func TestJobDashboardProxyExchangesQueryTokenAndRewritesAbsoluteRayAPIPaths(t *testing.T) {
+func TestJobDashboardProxyExchangesQueryTokenAndRelativizesRayAPIPaths(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/static/main.js" {
@@ -112,7 +112,7 @@ func TestJobDashboardProxyExchangesQueryTokenAndRewritesAbsoluteRayAPIPaths(t *t
 	}
 	defer second.Body.Close()
 	body, _ := io.ReadAll(second.Body)
-	want := `fetch("/api/v1/jobs/job-1/dashboard/api/v0/nodes");fetch("api/jobs")`
+	want := `fetch("api/v0/nodes");fetch("api/jobs")`
 	if string(body) != want {
 		t.Fatalf("unexpected rewritten script %q", string(body))
 	}
