@@ -1,6 +1,8 @@
 package registryauth
 
 import (
+ "archive/tar"
+ "bytes"
  "context"
  "encoding/json"
  "errors"
@@ -53,7 +55,13 @@ func TestPublishTransportDiagnosticsExposeOnlySafeFields(t *testing.T) {
 }
 
 func TestPublishNonEmptyLayoutRetriesInterruptedLayerAndReportsStages(t *testing.T) {
- image,err:=mutate.AppendLayers(empty.Image,static.NewLayer([]byte("non-empty-layer-for-upload-contract"),types.OCIUncompressedLayer)); if err!=nil{t.Fatal(err)}
+ var archive bytes.Buffer
+ writer:=tar.NewWriter(&archive)
+ contents:=[]byte("non-empty-layer-for-upload-contract")
+ if err:=writer.WriteHeader(&tar.Header{Name:"fixture.txt",Mode:0644,Size:int64(len(contents))});err!=nil{t.Fatal(err)}
+ if _,err:=writer.Write(contents);err!=nil{t.Fatal(err)}
+ if err:=writer.Close();err!=nil{t.Fatal(err)}
+ image,err:=mutate.AppendLayers(empty.Image,static.NewLayer(archive.Bytes(),types.OCIUncompressedLayer)); if err!=nil{t.Fatal(err)}
  directory:=t.TempDir(); output,err:=layout.Write(directory,empty.Index);if err!=nil{t.Fatal(err)};if err=output.AppendImage(image);err!=nil{t.Fatal(err)}
  digest,_:=image.Digest()
  handler:=registry.New(registry.Logger(log.New(io.Discard,"",0)))
@@ -63,7 +71,7 @@ func TestPublishNonEmptyLayoutRetriesInterruptedLayerAndReportsStages(t *testing
  ctx:=WithPublishDiagnostics(context.Background(),func(event PublishDiagnostic){if event.Stage!=""{mu.Lock();stages=append(stages,event.Stage);mu.Unlock()}})
  client:=testClient(func(request *http.Request)(*http.Response,error){
   if request.URL.Path=="/service/token"{body,_:=json.Marshal(map[string]string{"token":jwt([]string{"pull","push"},"team/model")});return reply(200,string(body)),nil}
-  if request.Method=="PATCH" && patches.Add(1)==1 {return nil,secretTimeout{}}
+  if request.Method=="PATCH" && patches.Add(1)==1 {if request.Body!=nil{request.Body.Close()};return nil,secretTimeout{}}
   body:=request.Body;if body==nil{body=http.NoBody}
   incoming:=httptest.NewRequestWithContext(request.Context(),request.Method,request.URL.String(),body);incoming.Header=request.Header.Clone();incoming.Host=request.Host;incoming.ContentLength=request.ContentLength;incoming.TransferEncoding=append([]string(nil),request.TransferEncoding...)
   recorder:=httptest.NewRecorder();handler.ServeHTTP(recorder,incoming);response:=recorder.Result();response.Request=request;return response,nil
