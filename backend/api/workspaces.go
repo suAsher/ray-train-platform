@@ -255,8 +255,8 @@ func dataRootSubPath(tenantRoot, logicalRoot string) (string, error) {
 // falling back to the catalogue default and finally to the deployment-wide
 // image so an environment without a catalogue still works.
 func (h *Handler) resolveWorkspaceImage(c *gin.Context, tenantID, requested string) (string, bool) {
- image,ok:=h.resolveWorkspaceRuntime(c,tenantID,requested)
- return image.Reference,ok
+	image, ok := h.resolveWorkspaceRuntime(c, tenantID, requested)
+	return image.Reference, ok
 }
 
 // Keep a catalogue image's runtime version paired with its reference. Only the
@@ -276,9 +276,9 @@ func (h *Handler) resolveWorkspaceRuntime(c *gin.Context, tenantID, requested st
 		}
 	}
 	if requested != "" {
-		return domain.PlatformImage{Reference:requested,RayVersion:h.rayVersion}, true
+		return domain.PlatformImage{Reference: requested, RayVersion: h.rayVersion}, true
 	}
-	return domain.PlatformImage{Reference:h.workspaceImage,RayVersion:h.rayVersion}, true
+	return domain.PlatformImage{Reference: h.workspaceImage, RayVersion: h.rayVersion}, true
 }
 
 func (h *Handler) getWorkspace(c *gin.Context) {

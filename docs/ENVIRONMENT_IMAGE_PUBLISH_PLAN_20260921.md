@@ -89,3 +89,19 @@ Rootless BuildKit 在现有标准安全策略下实测因内核权限限制失�
 - 构建机证据：`/tmp/rtp-env-verify5-evidence-20260921/`、`/tmp/rtp-env-verify5-coverage-20260921.log`、`/tmp/rtp-env-layer-evidence-1763b7c/`、`/tmp/rtp-env-assembler-acceptance-20260921.log`、`/tmp/rtp-portal-env-{lint,dev}-20260921.log`。这些是候选验证，不是生产交付凭据。
 
 源码与日志中的敏感值不得进入本记录。最终发布后在本节补齐最终 SHA、组件 digest、Helm/schema、真实任务及清理证据；不得将候选通过当作上线验收。
+
+### 发布准备补充
+
+用户明确授权 main 同步及 Portal dev 发布后，首轮源码 `b4af7280ea92f1e79cbfa4af5ab6a4e44503ee22` 已四端一致，正式构建目录干净；本机保留用户原有未提交文档。随后核对发现新训练目录应登记实际 Ray 2.58.0、工作区应继承所选目录版本，以及 runtime 安全错误字段为 `code`；这三项在后续兼容修复中补齐，不改变旧 Base 或既有工作区。
+
+三个新增辅助镜像已推送，tag 均为 `release-20260921-01-b4af728`；使用以下单平台 amd64 manifest，避免目录 digest 与实际 Pod ImageID 不一致：
+
+| 组件 | 摘要 |
+| --- | --- |
+| raytrain-environment-workspace | `sha256:60c2e562ab275d543aeaeab11111700dff409573bb9ccd20c259478fa80a4251` |
+| raytrain-environment-prepare | `sha256:03bda62fca3ed15a6df457810f50b70c9050646cc0ff6abc328cb0c76ac721b6` |
+| raytrain-environment-publisher | `sha256:27d5190d1c5dce3ce8d7d9287cb7c28985186c87c4517f545e1e6041d945ebcc` |
+
+新增工作区目录 `job-7620433cd735e483a0c8b412` 已通过 guofeng.su 交互会话登记为 local 可选、非默认；浏览器确认与原调试环境、BEVFusion 并列，原 Base 训练项 `job-f0242b6e029a7068f43765d3` 保持不变。说明中明确标注完整平台/GPU 验收待完成，尚未启动新工作区。
+
+功能开关的 server-side dry-run 仅出现 backend 新增 8 个环境变量及一个受限 Role/RoleBinding；没有其他 Deployment、训练、调度或存储清单差异。配置预览不是启用；生产仍为 Helm 245/schema54，schema54→56 备份授权待收到，未导出生产数据库、未执行迁移或部署。
