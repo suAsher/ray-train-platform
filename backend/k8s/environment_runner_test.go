@@ -306,3 +306,21 @@ func TestEnvironmentFailureClassificationNeverReturnsRawOutput(t *testing.T) {
 		}
 	}
 }
+
+func TestEnvironmentPublisherFailureCodesRemainSafe(t *testing.T) {
+	for _, code := range []string{"REGISTRY_PUBLISH_FAILED", "OCI_ARTIFACT_INVALID", "REGISTRY_TARGET_INVALID"} {
+		err := environmentSafeFailure([]byte(`{"errorCode":"` + code + `","detail":"secret-material"}`))
+		if err == nil || err.Error() != code {
+			t.Fatalf("missing publisher classification %q: %v", code, err)
+		}
+		phase, ok := err.(*environmentbuild.PhaseError)
+		if !ok || phase.UserMessage() == "" || strings.Contains(phase.UserMessage(), "secret-material") {
+			t.Fatal("publisher failure has no safe user message")
+		}
+	}
+	for _, raw := range []string{`{"errorCode":"secret-material"}`, `{"errorCode":"REGISTRY_PUBLISH_FAILED","code":"PACKAGE_MODIFIED"}`, `{"errorCode":"REGISTRY_PUBLISH_FAILED","code":"secret-material"}`} {
+		if err := environmentSafeFailure([]byte(raw)); err != nil {
+			t.Fatalf("untrusted or conflicting classification escaped: %v", err)
+		}
+	}
+}
