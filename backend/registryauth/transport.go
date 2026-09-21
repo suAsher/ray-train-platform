@@ -1,7 +1,11 @@
 package registryauth
 
 import (
-	"net/http"
+	"errors"
+ "io"
+ "net"
+ "net/http"
+ "syscall"
 	"net/url"
 	"path"
 	"strings"
@@ -93,20 +97,65 @@ func validChallenge(value string) bool {
 	return values["realm"] == Origin+"/service/token" && values["service"] == registryService
 }
 
+// Preserve retry semantics without retaining an upstream error which may carry
+// a credential, signed upload query or private address. Only ErrUnavailable is
+// unwrapped; Error never formats the original error.
+type publishNetworkError struct { timeout, temporary bool }
+func (e *publishNetworkError) Error() string { return "Harbor transport request failed" }
+func (e *publishNetworkError) Unwrap() error { return ErrUnavailable }
+func (e *publishNetworkError) Timeout() bool { return e.timeout }
+func (e *publishNetworkError) Temporary() bool { return e.temporary }
+
+func safeNetworkError(err error) *publishNetworkError {
+ safe := &publishNetworkError{}
+ var network net.Error
+ if errors.As(err, &network) {
+  safe.timeout = network.Timeout()
+  safe.temporary = network.Temporary() || safe.timeout
+ }
+ for _, retryable := range []error{io.EOF, io.ErrUnexpectedEOF, syscall.EPIPE, syscall.ECONNRESET, net.ErrClosed} {
+  safe.temporary = safe.temporary || errors.Is(err, retryable)
+ }
+ return safe
+}
+
+func diagnosticMethod(method string) string {
+ switch method {
+ case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions:
+  return method
+ default:
+  return "OTHER"
+ }
+}
+
 func (t *publishTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	if !t.allowed(request.URL) || (request.Host != "" && request.Host != Host) {
-		return nil, ErrUnavailable
+		publishDiagnostic(request.Context(), PublishDiagnostic{Code:"TRANSPORT_TARGET_REJECTED", Method:diagnosticMethod(request.Method)})
+ return nil, ErrUnavailable
 	}
+ publishDiagnostic(request.Context(), PublishDiagnostic{Code:"REQUEST_STARTED", Method:diagnosticMethod(request.Method)})
 	response, err := t.base.RoundTrip(request)
 	if err != nil {
-		return nil, ErrUnavailable
-	}
+  safe := safeNetworkError(err)
+  code := "TRANSPORT_NETWORK_FAILED"
+  if safe.temporary { code = "TRANSPORT_NETWORK_RETRYABLE" }
+  if safe.timeout { code = "TRANSPORT_NETWORK_TIMEOUT" }
+  publishDiagnostic(request.Context(), PublishDiagnostic{Code:code, Method:diagnosticMethod(request.Method), Timeout:safe.timeout})
+  return nil, safe
+ }
+ status := response.StatusCode
+ if status < 100 || status > 599 { status = 0 }
+ publishDiagnostic(request.Context(), PublishDiagnostic{Code:"RESPONSE_RECEIVED", Method:diagnosticMethod(request.Method), Status:status})
 	valid := validChallenge(response.Header.Get("WWW-Authenticate"))
+ rejection := "TRANSPORT_CHALLENGE_REJECTED"
 	if location := response.Header.Get("Location"); location != "" {
 		relative, err := url.Parse(location)
-		valid = valid && err == nil && t.allowed(request.URL.ResolveReference(relative))
+		locationAllowed := err == nil && t.allowed(request.URL.ResolveReference(relative))
+  if valid && !locationAllowed { rejection = "TRANSPORT_LOCATION_REJECTED" }
+  valid = valid && locationAllowed
 	}
 	if !valid {
+ publishDiagnostic(request.Context(), PublishDiagnostic{Code:rejection, Method:diagnosticMethod(request.Method), Status:status})
 		response.Body.Close()
 		return nil, ErrUnavailable
 	}

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"ray-train-platform-backend/registryauth"
+ "github.com/google/go-containerregistry/pkg/logs"
 )
 
 func main() {
@@ -33,7 +34,16 @@ func main() {
 	defer cancel()
 	ctx, deadline := context.WithTimeout(ctx, 45*time.Minute)
 	defer deadline()
-	result, err := run(ctx, request, credentialsDirectory)
+	// The registry library's raw retry/debug logs may contain signed upload
+ // locations. Only the allowlisted diagnostic events below are emitted.
+ logs.Warn.SetOutput(io.Discard)
+ logs.Debug.SetOutput(io.Discard)
+ logs.Progress.SetOutput(io.Discard)
+ diagnostics := json.NewEncoder(os.Stderr)
+ ctx = registryauth.WithPublishDiagnostics(ctx, func(event registryauth.PublishDiagnostic) {
+  _ = diagnostics.Encode(event)
+ })
+ result, err := run(ctx, request, credentialsDirectory)
 	if err != nil {
 		result = registryauth.PublishResult{ErrorCode: errorCode(err)}
 	}

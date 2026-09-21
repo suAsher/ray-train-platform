@@ -33,6 +33,12 @@ func phaseMessage(code string) string {
 		return "镜像已推送，但训练集群暂时无法拉取或完成自检；请联系管理员检查拉取机器人权限和镜像兼容性，再重试验证"
 	case "TEMP_STORAGE_FULL":
 		return "环境构建临时盘空间不足；请减小新增依赖规模或联系管理员调整构建存储限制，再重新保存环境"
+	case "REGISTRY_PUBLISH_FAILED":
+		return "镜像推送未完成；请联系管理员按本次构建记录检查 Harbor 上传连接和服务状态，再重新授权重试。重试将使用已冻结的构建材料"
+	case "OCI_ARTIFACT_INVALID":
+		return "镜像构建材料完整性检查失败，已停止推送；请联系管理员检查本次构建材料，不能跳过校验发布"
+	case "REGISTRY_TARGET_INVALID":
+		return "镜像推送目标格式无效，已停止推送；请检查项目和镜像名称后重新保存环境"
 	default:
 		return ""
 	}

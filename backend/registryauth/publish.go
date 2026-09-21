@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+ "sync"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -29,6 +30,37 @@ type PublishResult struct {
 	ErrorCode   string `json:"errorCode,omitempty"`
 }
 
+// PublishDiagnostic contains only bounded protocol categories. Never add URLs,
+// headers, response bodies or an underlying error's text to this event.
+type PublishDiagnostic struct {
+ Stage string `json:"stage,omitempty"`
+ Code string `json:"code,omitempty"`
+ Method string `json:"method,omitempty"`
+ Status int `json:"status,omitempty"`
+ Timeout bool `json:"timeout,omitempty"`
+}
+
+type publishDiagnosticKey struct{}
+type publishDiagnosticSink struct {
+ mutex sync.Mutex
+ receive func(PublishDiagnostic)
+}
+
+// WithPublishDiagnostics installs a serialized callback for the publisher's
+// allowlisted progress events, including concurrent layer transfer events.
+func WithPublishDiagnostics(ctx context.Context, receive func(PublishDiagnostic)) context.Context {
+ if receive == nil { return ctx }
+ return context.WithValue(ctx, publishDiagnosticKey{}, &publishDiagnosticSink{receive:receive})
+}
+
+func publishDiagnostic(ctx context.Context, event PublishDiagnostic) {
+ sink, _ := ctx.Value(publishDiagnosticKey{}).(*publishDiagnosticSink)
+ if sink == nil { return }
+ sink.mutex.Lock()
+ defer sink.mutex.Unlock()
+ sink.receive(event)
+}
+
 // Publish never executes the image or artifact contents. The controller must
 // mount the dedicated OCI artifact volume read-only after the build has exited.
 func (c *Client) Publish(ctx context.Context, credentials Credentials, request PublishRequest) (PublishResult, error) {
@@ -36,11 +68,13 @@ func (c *Client) Publish(ctx context.Context, credentials Credentials, request P
 	if err != nil || !tagPattern.MatchString(request.Tag) {
 		return PublishResult{}, ErrInvalidTarget
 	}
-	img, err := loadPublishImage(ctx, request.LayoutPath, request.Digest)
+	publishDiagnostic(ctx, PublishDiagnostic{Stage:"LAYOUT_VALIDATING"})
+ img, err := loadPublishImage(ctx, request.LayoutPath, request.Digest)
 	if err != nil {
 		return PublishResult{}, err
 	}
-	token, err := c.pushToken(ctx, credentials, target.Repository)
+	publishDiagnostic(ctx, PublishDiagnostic{Stage:"REGISTRY_AUTH"})
+ token, err := c.pushToken(ctx, credentials, target.Repository)
 	if err != nil {
 		return PublishResult{}, err
 	}
@@ -50,10 +84,12 @@ func (c *Client) Publish(ctx context.Context, credentials Credentials, request P
 	}
 	transport := &publishTransport{base: c.http.Transport, repository: target.Repository}
 	options := []remote.Option{remote.WithContext(ctx), remote.WithAuth(&authn.Bearer{Token: token}), remote.WithTransport(transport), remote.WithJobs(2)}
-	if err := remote.Write(reference, img, options...); err != nil {
+	publishDiagnostic(ctx, PublishDiagnostic{Stage:"REGISTRY_WRITE"})
+ if err := remote.Write(reference, img, options...); err != nil {
 		return PublishResult{}, publishError(err)
 	}
-	descriptor, err := remote.Head(reference, options...)
+	publishDiagnostic(ctx, PublishDiagnostic{Stage:"REGISTRY_VERIFY"})
+ descriptor, err := remote.Head(reference, options...)
 	if err != nil {
 		return PublishResult{}, publishError(err)
 	}
