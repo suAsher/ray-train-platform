@@ -56,3 +56,19 @@ func TestEnvironmentBuildPostgresRegistrationRollsBackAndRetainsPublishedDigest(
  if err=repo.db.Exec("DROP TRIGGER reject_environment_version ON environment_versions").Error;err!=nil{t.Fatal(err)}
  if err=repo.FinalizeEnvironmentBuild(ctx,ready,"finalizer");err!=nil{t.Fatal(err)}
 }
+
+func TestEnvironmentBuildPostgresOrphanMaterialReclaimedWithoutSecretList(t *testing.T){
+ a,_:=evaluationPostgresStores(t,false);repo:=NewGormRepository(a.db);ctx:=context.Background()
+ vault:=&environmentVaultFake{values:map[string][]byte{},failDelete:true}
+ service,err:=eb.NewService(repo,&environmentRunnerFake{},&environmentRegistryFake{},vault,eb.Config{Enabled:true,BaseImage:"harbor.wellspiking.ai/public/base@sha256:"+strings.Repeat("0",64),WorkspaceImage:"harbor.wellspiking.ai/public/debug@sha256:"+strings.Repeat("1",64),EncryptionKey:[]byte(strings.Repeat("k",32))});if err!=nil{t.Fatal(err)}
+ if err=repo.db.Exec("CREATE FUNCTION fail_environment_auth_metadata() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected auth metadata failure'; END; $$").Error;err!=nil{t.Fatal(err)}
+ if err=repo.db.Exec("CREATE TRIGGER fail_environment_auth_metadata BEFORE INSERT ON environment_registry_authorizations FOR EACH ROW EXECUTE FUNCTION fail_environment_auth_metadata()").Error;err!=nil{t.Fatal(err)}
+ if _,err=service.CreateAuthorization(ctx,environmentOwner(),eb.Credentials{Username:"test-user",Secret:"test-only-secret"});err==nil{t.Fatal("injected metadata failure ignored")}
+ var count int64
+ if err=repo.db.Model(&eb.Authorization{}).Count(&count).Error;err!=nil||count!=0{t.Fatal("authorization unexpectedly committed")}
+ if err=repo.db.Model(&eb.CredentialMaterial{}).Count(&count).Error;err!=nil||count!=1||len(vault.values)!=1{t.Fatal("orphan material was not durably indexed before credential write")}
+ if err=repo.db.Model(&eb.CredentialMaterial{}).Where("1 = 1").Update("expires_at",time.Now().UTC().Add(-time.Hour)).Error;err!=nil{t.Fatal(err)}
+ vault.failDelete=false
+ if err=service.Reconcile(ctx);err!=nil{t.Fatal(err)}
+ if err=repo.db.Model(&eb.CredentialMaterial{}).Count(&count).Error;err!=nil||count!=0||len(vault.values)!=0{t.Fatal("orphan material survived cleanup")}
+}

@@ -4,6 +4,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = pathlib.Path(__file__).parent
 sys.path.insert(0, str(HERE.parent / 'environment-workspace'))
@@ -42,6 +43,29 @@ class LayerTest(unittest.TestCase):
             self.assertTrue(target.startswith(('usr/local/', 'opt/raytrain/')))
             for forbidden in ('workspace', 'home/ray', 'editor', 'jupyter', 'code-server', 'credentials'):
                 self.assertNotIn(forbidden, target)
+
+    def test_retry_cleanup_only_removes_owned_artifacts_without_following_links(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            artifacts = root / 'artifacts'
+            artifacts.mkdir()
+            other = root / 'outside'
+            other.mkdir()
+            (other / 'keep').write_text('keep')
+            (artifacts / 'context').symlink_to(other, target_is_directory=True)
+            (artifacts / 'unrelated').write_text('retain')
+            (artifacts / 'layer.tar.partial').write_text('partial')
+            with mock.patch.object(pathlib.Path, 'resolve', return_value=pathlib.Path('/artifacts')):
+                build_layer.clean_operation_artifacts(artifacts)
+            self.assertTrue((other / 'keep').exists())
+            self.assertTrue((artifacts / 'unrelated').exists())
+            self.assertFalse((artifacts / 'context').exists())
+            self.assertFalse((artifacts / 'layer.tar.partial').exists())
+
+    def test_retry_cleanup_rejects_user_workspace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(runtime.CaptureError):
+                build_layer.clean_operation_artifacts(pathlib.Path(directory))
 
     def test_special_file_rejected(self):
         import os

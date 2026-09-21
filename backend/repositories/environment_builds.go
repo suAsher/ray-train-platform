@@ -20,7 +20,7 @@ func(r *GormRepository)SaveEnvironmentAuthorization(ctx context.Context,a eb.Aut
  return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB)error{
   var old eb.Authorization
   err:=tx.Clauses(clause.Locking{Strength:"UPDATE"}).Where("id = ?",a.ID).First(&old).Error
-  if errors.Is(err,gorm.ErrRecordNotFound){return tx.Create(&a).Error};if err!=nil{return err}
+  if errors.Is(err,gorm.ErrRecordNotFound){if a.BuildID!=""{return eb.ErrNotFound};return tx.Create(&a).Error};if err!=nil{return err}
   if old.OwnerID!=a.OwnerID||old.TenantID!=a.TenantID||old.Username!=a.Username||(!old.ExpiresAt.Equal(a.ExpiresAt))||(old.BuildID!=""&&old.BuildID!=a.BuildID)||(old.Target!=""&&old.Target!=a.Target){return eb.ErrConflict}
   return tx.Save(&a).Error
  })
@@ -99,3 +99,14 @@ func(r *GormRepository)CancelEnvironmentBuild(ctx context.Context,o eb.Owner,id 
   b.Status=eb.CancelRequested;b.CleanedAt=nil;b.UpdatedAt=time.Now().UTC();return tx.Save(&b).Error
  });return b,err
 }
+
+func(r *GormRepository)ReserveEnvironmentCredentialMaterial(ctx context.Context,m eb.CredentialMaterial)error{
+ result:=r.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing:true}).Create(&m)
+ if result.Error!=nil{return result.Error}
+ var stored eb.CredentialMaterial
+ if err:=r.db.WithContext(ctx).Where("ref = ?",m.Ref).First(&stored).Error;err!=nil{return err}
+ if stored.AuthorizationID!=m.AuthorizationID||stored.OwnerID!=m.OwnerID||stored.TenantID!=m.TenantID||!stored.ExpiresAt.Equal(m.ExpiresAt){return eb.ErrConflict};return nil
+}
+func(r *GormRepository)EnvironmentCredentialMaterials(ctx context.Context,id string)([]eb.CredentialMaterial,error){items:=[]eb.CredentialMaterial{};err:=r.db.WithContext(ctx).Where("authorization_id = ?",id).Find(&items).Error;return items,err}
+func(r *GormRepository)ExpiredEnvironmentCredentialMaterials(ctx context.Context,now time.Time)([]eb.CredentialMaterial,error){items:=[]eb.CredentialMaterial{};err:=r.db.WithContext(ctx).Where("expires_at <= ?",now).Limit(100).Find(&items).Error;return items,err}
+func(r *GormRepository)DeleteEnvironmentCredentialMaterial(ctx context.Context,ref string)error{return r.db.WithContext(ctx).Where("ref = ?",ref).Delete(&eb.CredentialMaterial{}).Error}

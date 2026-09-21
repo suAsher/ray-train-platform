@@ -70,3 +70,16 @@ CREATE TABLE environment_versions (
  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX environment_versions_visible_idx ON environment_versions(tenant_id,owner_id,visibility);
+
+-- No FK to authorizations: a preallocated ref must survive a failed metadata
+-- transaction and be reclaimed even when no authorization row was created.
+CREATE TABLE environment_credential_materials (
+ ref TEXT PRIMARY KEY,
+ authorization_id TEXT NOT NULL,
+ tenant_id TEXT NOT NULL,
+ owner_id TEXT NOT NULL,
+ expires_at TIMESTAMPTZ NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX environment_credential_materials_expiry_idx ON environment_credential_materials(expires_at);
+CREATE INDEX environment_credential_materials_auth_idx ON environment_credential_materials(authorization_id);

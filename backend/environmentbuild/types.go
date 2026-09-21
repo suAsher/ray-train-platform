@@ -31,7 +31,7 @@ var (
 )
 
 type Owner struct { TenantID string; UserID string }
-type Credentials struct { Username string; Secret string }
+type Credentials struct { Username string `json:"username"`; Secret string `json:"secret"` }
 func(Credentials)String()string{return "[Harbor credentials redacted]"}
 func(Credentials)GoString()string{return "[Harbor credentials redacted]"}
 type Authorization struct {
@@ -46,6 +46,19 @@ type Authorization struct {
  CreatedAt time.Time `json:"createdAt"`
 }
 func (Authorization) TableName() string { return "environment_registry_authorizations" }
+
+// CredentialMaterial is registered before Vault.Put, including refs whose
+// authorization transaction never completes. This permits crash cleanup without
+// Kubernetes Secret list permission.
+type CredentialMaterial struct {
+ Ref string `gorm:"primaryKey"`
+ AuthorizationID string
+ TenantID string
+ OwnerID string
+ ExpiresAt time.Time
+ CreatedAt time.Time
+}
+func(CredentialMaterial)TableName()string{return "environment_credential_materials"}
 
 type Build struct {
  ID string `json:"id" gorm:"primaryKey"`
@@ -77,7 +90,7 @@ type Build struct {
  Attempt int `json:"attempt"`
  LeaseOwner string `json:"-"`
  LeaseUntil *time.Time `json:"-"`
- ArtifactExpiresAt time.Time `json:"-"`
+ ArtifactExpiresAt time.Time `json:"artifactExpiresAt"`
  CleanedAt *time.Time `json:"-"`
  CreatedAt time.Time `json:"createdAt"`
  UpdatedAt time.Time `json:"updatedAt"`
@@ -134,6 +147,10 @@ type Registry interface {
  CheckPush(context.Context, Credentials, string) error
 }
 type Store interface {
+ ReserveEnvironmentCredentialMaterial(context.Context, CredentialMaterial) error
+ EnvironmentCredentialMaterials(context.Context, string) ([]CredentialMaterial,error)
+ ExpiredEnvironmentCredentialMaterials(context.Context,time.Time) ([]CredentialMaterial,error)
+ DeleteEnvironmentCredentialMaterial(context.Context,string) error
  EnvironmentWorkspace(context.Context, Owner, string) (Workspace, error)
  SaveEnvironmentAuthorization(context.Context, Authorization) error
  EnvironmentAuthorization(context.Context, Owner, string) (Authorization, error)

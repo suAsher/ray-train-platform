@@ -78,7 +78,7 @@ func (r *EnvironmentRunner) capture(ctx context.Context,b environmentbuild.Build
 func (r *EnvironmentRunner) execCapture(ctx context.Context,namespace,pod string,stdout io.Writer) error {
  if r.captureExec!=nil {return r.captureExec(ctx,namespace,pod,stdout)}
  if r.client.restConfig==nil {return environmentbuild.ErrUnavailable}
- request:=r.client.kubernetes.CoreV1().RESTClient().Post().Resource("pods").Namespace(namespace).Name(pod).SubResource("exec").VersionedParams(&corev1.PodExecOptions{Container:"ray-worker",Command:[]string{"/usr/local/bin/raytrain-environment","capture"},Stdout:true,Stderr:true},scheme.ParameterCodec)
+ request:=r.client.kubernetes.CoreV1().RESTClient().Post().Resource("pods").Namespace(namespace).Name(pod).SubResource("exec").VersionedParams(&corev1.PodExecOptions{Container:"ray-worker",Command:[]string{"/usr/bin/timeout","--signal=TERM","--kill-after=5s","290s","/usr/local/bin/raytrain-environment","capture"},Stdout:true,Stderr:true},scheme.ParameterCodec)
  executor,err:=remotecommand.NewSPDYExecutor(r.client.restConfig,"POST",request.URL());if err!=nil {return err}
  return executor.StreamWithContext(ctx,remotecommand.StreamOptions{Stdout:stdout,Stderr:io.Discard})
 }

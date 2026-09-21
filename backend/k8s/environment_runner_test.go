@@ -22,7 +22,7 @@ func environmentTestRunner() *EnvironmentRunner {
  return NewEnvironmentRunner(NewClientFromInterfaces(nil,fake.NewSimpleClientset()),EnvironmentRunnerConfig{Namespace:"platform",BaseImage:image,WorkspaceImage:image,PrepareImage:image,PublisherImage:image,StorageClass:"ebs-ssd",PullSecretName:"pull-robot",ImagePullSecrets:[]string{"pull-robot"},WheelIndexURL:"https://packages.internal/simple",JobTimeout:time.Hour})
 }
 func environmentTestBuild(r *EnvironmentRunner) environmentbuild.Build {
- return environmentbuild.Build{ID:"build-one",TenantID:"tenant-a",OwnerID:"alice",BaseImage:r.config.BaseImage,WorkspaceImage:r.config.WorkspaceImage,Project:"public",Repository:"environment",Tag:"build-one",ArtifactDigest:"sha256:"+strings.Repeat("b",64),ImageDigest:"sha256:"+strings.Repeat("b",64),SnapshotJSON:`{"schemaVersion":1}`,Attempt:1}
+ return environmentbuild.Build{ID:"build-one",TenantID:"tenant-a",OwnerID:"alice",BaseImage:r.config.BaseImage,WorkspaceImage:r.config.WorkspaceImage,Project:"public",Repository:"environment",Tag:"build-one",ArtifactDigest:"sha256:"+strings.Repeat("b",64),ImageDigest:"sha256:"+strings.Repeat("b",64),SnapshotJSON:`{"schemaVersion":1}`,ChecksJSON:`{"layerDigest":"sha256:`+strings.Repeat("b",64)+`"}`,Attempt:1}
 }
 func TestEnvironmentJobsIsolateCredentialsAndResources(t *testing.T) {
  r:=environmentTestRunner();b:=environmentTestBuild(r)
@@ -105,4 +105,17 @@ func TestEnvironmentPublisherAuthFailureRemainsRetriable(t *testing.T) {
  pod.Labels["batch.kubernetes.io/job-name"]=job.Name;pod.OwnerReferences=[]metav1.OwnerReference{{Kind:"Job",UID:job.UID,Controller:&yes}}
  r.client=NewClientFromInterfaces(nil,fake.NewSimpleClientset(pod))
  if _,err:=r.observeJob(context.Background(),b,job);err!=environmentbuild.ErrAuthorization {t.Fatalf("expected authorization retry, got %v",err)}
+}
+
+func TestEnvironmentStepCreatesOneIdempotentJobAndDedicatedVolume(t *testing.T) {
+ r:=environmentTestRunner();b:=environmentTestBuild(r);b.Status=environmentbuild.Building;ctx:=context.Background()
+ for i:=0;i<2;i++ {result,err:=r.Step(ctx,b,nil);if err!=nil || result.Done {t.Fatalf("step %+v %v",result,err)}}
+ jobs,err:=r.client.kubernetes.BatchV1().Jobs(r.config.Namespace).List(ctx,metav1.ListOptions{});if err!=nil || len(jobs.Items)!=1 {t.Fatalf("jobs %v %v",jobs,err)}
+ volumes,err:=r.client.kubernetes.CoreV1().PersistentVolumeClaims(r.config.Namespace).List(ctx,metav1.ListOptions{});if err!=nil || len(volumes.Items)!=1 {t.Fatalf("volumes %v %v",volumes,err)}
+ if volumes.Items[0].Spec.StorageClassName==nil || *volumes.Items[0].Spec.StorageClassName!="ebs-ssd" {t.Fatal("incorrect artifact storage class")}
+ secrets,err:=r.client.kubernetes.CoreV1().Secrets(r.config.Namespace).List(ctx,metav1.ListOptions{});if err!=nil || len(secrets.Items)!=0 {t.Fatal("builder credential was created")}
+ if err:=r.Cleanup(ctx,b,true);err!=nil {t.Fatal(err)}
+ volumes,err=r.client.kubernetes.CoreV1().PersistentVolumeClaims(r.config.Namespace).List(ctx,metav1.ListOptions{});if err!=nil || len(volumes.Items)!=1 {t.Fatal("retry artifact was not retained")}
+ if err:=r.Cleanup(ctx,b,false);err!=nil {t.Fatal(err)}
+ volumes,err=r.client.kubernetes.CoreV1().PersistentVolumeClaims(r.config.Namespace).List(ctx,metav1.ListOptions{});if err!=nil || len(volumes.Items)!=0 {t.Fatal("terminal artifact was not deleted")}
 }

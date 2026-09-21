@@ -2,9 +2,12 @@ package k8s
 
 import (
  "context"
+ "crypto/sha256"
+ "encoding/hex"
  "encoding/json"
  "fmt"
  "io"
+ "maps"
  "strconv"
  "time"
  batchv1 "k8s.io/api/batch/v1"
@@ -32,6 +35,8 @@ type EnvironmentRunner struct {
 }
 var _ environmentbuild.Runner = (*EnvironmentRunner)(nil)
 func NewEnvironmentRunner(client *Client,cfg EnvironmentRunnerConfig) *EnvironmentRunner {
+ cfg.ImagePullSecrets=append([]string(nil),cfg.ImagePullSecrets...)
+ cfg.NodeSelector=maps.Clone(cfg.NodeSelector)
  if cfg.StorageClass=="" {cfg.StorageClass="ebs-ssd"};if cfg.StorageGiB==0 {cfg.StorageGiB=60}
  if cfg.JobTimeout==0 {cfg.JobTimeout=30*time.Minute}
  return &EnvironmentRunner{client:client,config:cfg}
@@ -100,9 +105,14 @@ func (r *EnvironmentRunner) observeJob(ctx context.Context,b environmentbuild.Bu
    if b.Status==environmentbuild.VerifyingPull {return environmentbuild.StepResult{Done:true,ChecksJSON:`{"pullVerified":true,"cpuImportCheck":true,"gpuValidation":"not_run"}`},nil}
    message:=status.State.Terminated.Message
    if len(message)>4096 {return environmentbuild.StepResult{},fmt.Errorf("environment result exceeds limit")}
-   var result struct {ArtifactDigest string `json:"artifactDigest"`;LayerSHA256 string `json:"layerSha256"`;ImageDigest string `json:"imageDigest"`;Digest string `json:"digest"`}
+   var result struct {ArtifactDigest string `json:"artifactDigest"`;LayerSHA256 string `json:"layerSha256"`;CaptureSHA256 string `json:"captureSha256"`;Checks map[string]any `json:"checks"`;ImageDigest string `json:"imageDigest"`;Digest string `json:"digest"`}
    if json.Unmarshal([]byte(message),&result)!=nil {return environmentbuild.StepResult{},fmt.Errorf("environment Job returned invalid result")}
-   if b.Status==environmentbuild.Building && environmentDigestPattern.MatchString(result.LayerSHA256) {return environmentbuild.StepResult{Done:true,ArtifactDigest:result.LayerSHA256},nil}
+   if b.Status==environmentbuild.Building && environmentDigestPattern.MatchString(result.LayerSHA256) {
+    expected:=sha256.Sum256([]byte(b.SnapshotJSON))
+    if result.CaptureSHA256!=hex.EncodeToString(expected[:]) {return environmentbuild.StepResult{},fmt.Errorf("environment build capture provenance mismatch")}
+    for _,check:=range []string{"wheelHashesVerified","rebuiltFilesVerified","pipCheck","platformCPU"} {if result.Checks[check]!=true {return environmentbuild.StepResult{},fmt.Errorf("environment build validation incomplete")}}
+    return environmentbuild.StepResult{Done:true,ArtifactDigest:result.LayerSHA256,ChecksJSON:`{"layerDigest":"`+result.LayerSHA256+`"}`},nil
+   }
    if b.Status==environmentbuild.Validating && environmentDigestPattern.MatchString(result.ArtifactDigest) {return environmentbuild.StepResult{Done:true,ArtifactDigest:result.ArtifactDigest,ChecksJSON:`{"ociBuilt":true,"dependencyCheck":true,"cpuImportCheck":true,"gpuValidation":"not_run"}`},nil}
    if b.Status==environmentbuild.Pushing {digest:=result.ImageDigest;if digest=="" {digest=result.Digest};if environmentDigestPattern.MatchString(digest) && digest==b.ArtifactDigest {return environmentbuild.StepResult{Done:true,ImageDigest:digest},nil}}
    return environmentbuild.StepResult{},fmt.Errorf("environment Job did not return the expected image digest")

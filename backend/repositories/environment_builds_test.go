@@ -2,6 +2,7 @@ package repositories
 
 import (
  "context"
+ "bytes"
  "errors"
  "strings"
  "testing"
@@ -10,10 +11,10 @@ import (
  eb "ray-train-platform-backend/environmentbuild"
 )
 
-type environmentVaultFake struct{values map[string][]byte}
-func(v *environmentVaultFake)Put(_ context.Context,key string,value []byte,_ time.Time)error{v.values[key]=append([]byte(nil),value...);return nil}
+type environmentVaultFake struct{values map[string][]byte;failDelete bool}
+func(v *environmentVaultFake)Put(_ context.Context,key string,value []byte,_ time.Time)error{if old,ok:=v.values[key];ok&&!bytes.Equal(old,value){return errors.New("immutable credential")};v.values[key]=append([]byte(nil),value...);return nil}
 func(v *environmentVaultFake)Get(_ context.Context,key string)([]byte,error){b,ok:=v.values[key];if !ok{return nil,eb.ErrNotFound};return append([]byte(nil),b...),nil}
-func(v *environmentVaultFake)Delete(_ context.Context,key string)error{delete(v.values,key);return nil}
+func(v *environmentVaultFake)Delete(_ context.Context,key string)error{if v.failDelete{return errors.New("credential store temporarily unavailable")};delete(v.values,key);return nil}
 type environmentRegistryFake struct{denied bool}
 func(*environmentRegistryFake)Authenticate(context.Context,eb.Credentials)error{return nil}
 func(*environmentRegistryFake)Projects(context.Context,eb.Credentials,int)([]eb.Project,error){return []eb.Project{{Name:"public",CanPush:true}},nil}
@@ -24,12 +25,12 @@ func(r *environmentRunnerFake)Step(_ context.Context,b eb.Build,c *eb.Credential
  r.phases=append(r.phases,b.Status)
  if (b.Status==eb.Pushing)!=(c!=nil){return eb.StepResult{},errors.New("credentials crossed execution boundary")}
  if b.Status==r.fail{return eb.StepResult{},errors.New("internal runner failure with sensitive detail")}
- return eb.StepResult{Done:true,SnapshotJSON:`{"schemaVersion":1}`,ArtifactDigest:"sha256:"+strings.Repeat("2",64),ImageDigest:"sha256:"+strings.Repeat("3",64),ChecksJSON:`{"cpu":true}`},nil
+ return eb.StepResult{Done:true,SnapshotJSON:`{"schemaVersion":1}`,ArtifactDigest:"sha256:"+strings.Repeat("2",64),ImageDigest:"sha256:"+strings.Repeat("3",64),ChecksJSON:`{"cpu":true,"layerDigest":"sha256:`+strings.Repeat("4",64)+`"}`},nil
 }
 func(r *environmentRunnerFake)Cleanup(context.Context,eb.Build,bool)error{r.cleanup++;return nil}
 func environmentTestService(t *testing.T)(*GormRepository,*eb.Service,*environmentRunnerFake,*environmentVaultFake){
  t.Helper();repo:=testRepository(t)
- if err:=repo.db.AutoMigrate(&WorkspaceRecord{},&eb.Authorization{},&eb.Build{},&eb.Version{},&PlatformImageRecord{});err!=nil{t.Fatal(err)}
+ if err:=repo.db.AutoMigrate(&WorkspaceRecord{},&eb.Authorization{},&eb.CredentialMaterial{},&eb.Build{},&eb.Version{},&PlatformImageRecord{});err!=nil{t.Fatal(err)}
  // AutoMigrate cannot infer the explicit composite idempotency constraint.
  if err:=repo.db.Exec("CREATE UNIQUE INDEX env_test_idempotency ON environment_builds(tenant_id,owner_id,idempotency_key)").Error;err!=nil{t.Fatal(err)}
  if err:=repo.db.Create(&WorkspaceRecord{ID:"workspace-a",TenantID:"team-a",UserID:"user-a",Namespace:"tenant-a",RayClusterName:"workspace-cluster",ObservedState:"RUNNING"}).Error;err!=nil{t.Fatal(err)}
@@ -87,4 +88,15 @@ func TestEnvironmentBuildCancellationWinsStaleSaveAndClaimRecoversLease(t *testi
  got,err:=s.Get(ctx,environmentOwner(),b.ID);if err!=nil||got.Status!=eb.CancelRequested{t.Fatal("stale save lost cancellation")}
  if err=s.Reconcile(ctx);err!=nil{t.Fatal(err)}
  got,_=s.Get(ctx,environmentOwner(),b.ID);if got.Status!=eb.Canceled{t.Fatal("cancel did not complete")}
+}
+
+type environmentCreateFailureStore struct{eb.Store;fail bool}
+func(s *environmentCreateFailureStore)CreateEnvironmentBuild(ctx context.Context,b eb.Build)(eb.Build,error){if s.fail{s.fail=false;return eb.Build{},eb.ErrUnavailable};return s.Store.CreateEnvironmentBuild(ctx,b)}
+func TestEnvironmentBuildCreateRecoversBoundImmutableCredentialAfterDBFailure(t *testing.T){
+ repo,_,runner,vault:=environmentTestService(t)
+ store:=&environmentCreateFailureStore{Store:repo,fail:true}
+ s,err:=eb.NewService(store,runner,&environmentRegistryFake{},vault,eb.Config{Enabled:true,BaseImage:"harbor.wellspiking.ai/public/base@sha256:"+strings.Repeat("0",64),WorkspaceImage:"harbor.wellspiking.ai/public/debug@sha256:"+strings.Repeat("1",64),EncryptionKey:[]byte(strings.Repeat("k",32))});if err!=nil{t.Fatal(err)}
+ ctx:=context.Background();a:=createEnvironmentAuthorization(t,s)
+ if _,err=s.Create(ctx,environmentOwner(),"workspace-a",environmentRequest(a.ID));err==nil{t.Fatal("injected create failure ignored")}
+ if _,err=s.Create(ctx,environmentOwner(),"workspace-a",environmentRequest(a.ID));err!=nil{t.Fatalf("immutable credential retry did not recover: %v",err)}
 }

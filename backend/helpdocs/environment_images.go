@@ -7,10 +7,10 @@ const environmentImageGuide = `### 先判断改的是代码还是环境
 ### 调通后如何保存训练环境
 
 1. 在「交互式调试」选择支持保存环境的 Base 调试镜像，创建自己的工作区。已有其他类型的工作区不会自动转换。
-2. 打开 VS Code 终端或对应的 Jupyter 内核，确认 Python 路径为 /opt/raytrain/environment/bin/python。在这个受管环境中安装并测试需要的依赖，使用 python -m pip，避免调用其他环境的 pip。
+2. 打开 VS Code 终端或对应的 Jupyter 内核，确认 Python 路径为 /opt/raytrain/environment/bin/python。在这个受管环境中安装并测试需要的依赖，使用 python -m pip，避免调用其他环境的 pip。新增 Base 调试镜像已配置火山内网源 https://mirrors.ivolces.com/pypi/simple/，例如 python -m pip install requests；原有环境不自动更改配置。
 3. 在工作区仍运行时点击「保存训练环境」。填写名称，选择仅本人或当前团队可用。此范围控制平台镜像目录与训练提交权限；Harbor 仓库自身的可见范围由 Harbor 项目权限决定。
 4. 填写自己的 Harbor 用户名和 CLI Secret，选择有写权限的项目及仓库名。公司 Harbor 使用单点登录，CLI Secret 在 Harbor 个人资料中取得；不是平台 PAT，也不是公司登录密码。不要把凭据写入代码、终端命令或截图。
-5. 确认目标后开始构建。平台自动记录依赖，使用集群 CPU 与临时磁盘重建环境、校验文件，再用你的凭据推送到所选 Harbor 仓库。标签由平台生成，每次保存产生一个新版本。
+5. 确认目标后开始构建。排队和捕获期间请勿继续安装或修改依赖，平台以实际捕获时的依赖为准。平台使用集群 CPU 与临时磁盘重建环境、校验文件，再用你的凭据推送到所选 Harbor 仓库。标签由平台生成，每次保存产生一个新版本。
 6. 等待状态变为 READY，点击「使用此环境创建训练任务」。页面带入固定摘要镜像，继续选择训练源码、数据和资源后提交。READY 表示镜像构建与拉取检查通过，仍需用自己的小规模训练验证业务代码与 GPU 兼容性。
 
 ### 哪些内容会保存

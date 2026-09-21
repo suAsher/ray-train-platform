@@ -5,10 +5,14 @@ import (
  "crypto/sha256"
  "encoding/hex"
  "encoding/json"
+ "log/slog"
  "errors"
  "regexp"
  "strings"
  "time"
+ "unicode"
+ "unicode/utf8"
+ "ray-train-platform-backend/registryauth"
 )
 
 type Service struct { store Store; runner Runner; registry Registry; vault Vault; config Config; now func()time.Time; controllerID string }
@@ -31,32 +35,33 @@ type CreateRequest struct {
  Visibility string `json:"visibility"`
  IdempotencyKey string `json:"idempotencyKey"`
 }
-var targetPart=regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*$`)
 var requestKey=regexp.MustCompile(`^[A-Za-z0-9_-]{8,128}$`)
 var digestPattern=regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-func validTarget(project,repository string)bool{
- if len(project)>128 || len(repository)>200 || !targetPart.MatchString(project){return false}
- for _,part:=range strings.Split(repository,"/"){if !targetPart.MatchString(part){return false}}
- return true
+func validTarget(project,repository string)bool{_,err:=registryauth.ValidateTarget(project,repository);return err==nil}
+func validText(value string,limit int,multiline bool)bool{
+ if !utf8.ValidString(value)||len(value)>limit{return false}
+ for _,r:=range value{if unicode.IsControl(r)&&!(multiline&&(r=='\n'||r=='\r'||r=='\t')){return false}};return true
 }
 func(s *Service)Create(ctx context.Context, owner Owner, workspaceID string, req CreateRequest)(Build,error){
  if !s.Enabled(){return Build{},ErrUnavailable}
- if owner.UserID==""||owner.TenantID==""||!validTarget(req.Project,req.Repository)||strings.TrimSpace(req.Name)==""||len(req.Name)>128||len(req.Description)>2000||!requestKey.MatchString(req.IdempotencyKey){return Build{},ErrInvalid}
+ if owner.UserID==""||owner.TenantID==""||!validTarget(req.Project,req.Repository)||strings.TrimSpace(req.Name)==""||!validText(req.Name,128,false)||!validText(req.Description,2000,true)||!requestKey.MatchString(req.IdempotencyKey){return Build{},ErrInvalid}
  if req.Visibility==""{req.Visibility="personal"};if req.Visibility!="personal"&&req.Visibility!="team"{return Build{},ErrInvalid}
- // Return existing operation before requiring a still-live authorization.
- builds,err:=s.store.ListEnvironmentBuilds(ctx,owner);if err!=nil{return Build{},err}
- for _,b:=range builds{if b.IdempotencyKey==req.IdempotencyKey{if b.WorkspaceID!=workspaceID||b.Project!=req.Project||b.Repository!=req.Repository||b.Name!=req.Name||b.Description!=req.Description||b.Visibility!=req.Visibility{return Build{},ErrConflict};return b,nil}}
+ // A deterministic opaque ID makes idempotency independent of list pagination.
+ sum:=sha256.Sum256([]byte(owner.TenantID+"\x00"+owner.UserID+"\x00"+req.IdempotencyKey));id:="env-"+hex.EncodeToString(sum[:16])
+ existing,err:=s.store.EnvironmentBuild(ctx,owner,id)
+ if err==nil{if existing.WorkspaceID!=workspaceID||existing.Project!=req.Project||existing.Repository!=req.Repository||existing.Name!=req.Name||existing.Description!=req.Description||existing.Visibility!=req.Visibility{return Build{},ErrConflict};return existing,nil}
+ if !errors.Is(err,ErrNotFound){return Build{},err}
  ws,err:=s.store.EnvironmentWorkspace(ctx,owner,workspaceID);if err!=nil{return Build{},err}
  if ws.State!="RUNNING"&&ws.State!="READY"{return Build{},ErrConflict}
  snapshot,err:=s.runner.InspectWorkspace(ctx,ws);if err!=nil{return Build{},ErrConflict}
  if snapshot.UID==""||snapshot.Image!=s.config.WorkspaceImage{return Build{},ErrConflict}
- sum:=sha256.Sum256([]byte(owner.TenantID+"\x00"+owner.UserID+"\x00"+req.IdempotencyKey));id:="env-"+hex.EncodeToString(sum[:16])
+
  now:=s.now()
  b:=Build{ID:id,TenantID:owner.TenantID,OwnerID:owner.UserID,WorkspaceID:workspaceID,Namespace:ws.Namespace,WorkspaceResourceName:ws.ResourceName,WorkspaceUID:snapshot.UID,BaseImage:s.config.BaseImage,WorkspaceImage:s.config.WorkspaceImage,Name:req.Name,Description:req.Description,Visibility:req.Visibility,Project:req.Project,Repository:req.Repository,Tag:id,Status:Queued,AuthID:req.AuthorizationID,IdempotencyKey:req.IdempotencyKey,Attempt:1,ArtifactExpiresAt:now.Add(24*time.Hour),CreatedAt:now,UpdatedAt:now}
  // Reserve the authorization before queueing; no job can see unbound material.
  if _,err=s.bindAuthorization(ctx,owner,req.AuthorizationID,b);err!=nil{return Build{},err}
  created,err:=s.store.CreateEnvironmentBuild(ctx,b)
- if err!=nil || created.AuthID!=b.AuthID{_=s.cleanupAuthorization(ctx,b)}
+ if err==nil && created.AuthID!=b.AuthID{_=s.cleanupAuthorization(ctx,b)}
  return created,err
 }
 func(s *Service)Get(ctx context.Context,o Owner,id string)(Build,error){return s.store.EnvironmentBuild(ctx,o,id)}
@@ -73,7 +78,7 @@ func(s *Service)Retry(ctx context.Context,o Owner,id,authorizationID string)(Bui
 func(s *Service)Cancel(ctx context.Context,o Owner,id string)(Build,error){return s.store.CancelEnvironmentBuild(ctx,o,id)}
 func(s *Service)Run(ctx context.Context){
  ticker:=time.NewTicker(5*time.Second);defer ticker.Stop()
- for{_ = s.Reconcile(ctx);select{case<-ctx.Done():return;case<-ticker.C:}}
+ for{if err:=s.Reconcile(ctx);err!=nil&&ctx.Err()==nil{slog.Warn("environment build reconciliation deferred; pending operation remains durable")};select{case<-ctx.Done():return;case<-ticker.C:}}
 }
 func(s *Service)Reconcile(ctx context.Context)error{
  if !s.Enabled(){return nil}
@@ -113,7 +118,7 @@ func(s *Service)reconcileBuild(ctx context.Context,b Build)error{
  case Capturing:
   if len(result.SnapshotJSON)==0||len(result.SnapshotJSON)>1024*1024{return s.fail(ctx,b,Failed,"依赖捕获结果不完整")};b.SnapshotJSON=result.SnapshotJSON;b.Status=Building
  case Building:
-  b.Status=Validating
+  var layer struct{Digest string `json:"layerDigest"`};if json.Unmarshal([]byte(result.ChecksJSON),&layer)!=nil||!digestPattern.MatchString(layer.Digest){return s.fail(ctx,b,Failed,"环境层摘要缺失")};b.ChecksJSON=result.ChecksJSON;b.Status=Validating
  case Validating:
   if !digestPattern.MatchString(result.ArtifactDigest){return s.fail(ctx,b,Failed,"构建产物摘要无效")};b.ArtifactDigest=result.ArtifactDigest;b.ChecksJSON=result.ChecksJSON;b.Status=Pushing
  case Pushing:

@@ -2,6 +2,8 @@ package k8s
 
 import (
  "fmt"
+ "encoding/json"
+ "maps"
  "strings"
  batchv1 "k8s.io/api/batch/v1"
  corev1 "k8s.io/api/core/v1"
@@ -15,7 +17,7 @@ func (r *EnvironmentRunner) renderJob(b environmentbuild.Build) (*batchv1.Job,er
  zero:=int32(0);one:=int32(1);seconds:=int64(r.config.JobTimeout.Seconds());uid:=int64(1000);no:=false;yes:=true;mode:=int32(0440)
  security:=&corev1.SecurityContext{RunAsNonRoot:&yes,RunAsUser:&uid,RunAsGroup:&uid,AllowPrivilegeEscalation:&no,Capabilities:&corev1.Capabilities{Drop:[]corev1.Capability{"ALL"}},SeccompProfile:&corev1.SeccompProfile{Type:corev1.SeccompProfileTypeRuntimeDefault}}
  container:=corev1.Container{Name:"environment",ImagePullPolicy:corev1.PullAlways,SecurityContext:security,TerminationMessagePath:"/dev/termination-log",TerminationMessagePolicy:corev1.TerminationMessageReadFile,Resources:corev1.ResourceRequirements{Requests:corev1.ResourceList{corev1.ResourceCPU:resource.MustParse("1"),corev1.ResourceMemory:resource.MustParse("2Gi")},Limits:corev1.ResourceList{corev1.ResourceCPU:resource.MustParse("4"),corev1.ResourceMemory:resource.MustParse("8Gi")}}}
- pod:=corev1.PodSpec{RestartPolicy:corev1.RestartPolicyNever,AutomountServiceAccountToken:&no,SecurityContext:&corev1.PodSecurityContext{RunAsNonRoot:&yes,RunAsUser:&uid,RunAsGroup:&uid,FSGroup:&uid,SeccompProfile:&corev1.SeccompProfile{Type:corev1.SeccompProfileTypeRuntimeDefault}},NodeSelector:r.config.NodeSelector,EnableServiceLinks:&no}
+ pod:=corev1.PodSpec{RestartPolicy:corev1.RestartPolicyNever,AutomountServiceAccountToken:&no,SecurityContext:&corev1.PodSecurityContext{RunAsNonRoot:&yes,RunAsUser:&uid,RunAsGroup:&uid,FSGroup:&uid,SeccompProfile:&corev1.SeccompProfile{Type:corev1.SeccompProfileTypeRuntimeDefault}},NodeSelector:maps.Clone(r.config.NodeSelector),EnableServiceLinks:&no}
  for _,name:=range r.config.ImagePullSecrets {if !isDNSSubdomain(name) {return nil,environmentbuild.ErrInvalid};pod.ImagePullSecrets=append(pod.ImagePullSecrets,corev1.LocalObjectReference{Name:name})}
  if b.Status!=environmentbuild.VerifyingPull {
   pod.Volumes=append(pod.Volumes,corev1.Volume{Name:"artifacts",VolumeSource:corev1.VolumeSource{PersistentVolumeClaim:&corev1.PersistentVolumeClaimVolumeSource{ClaimName:environmentResourceName("oci",b.ID)}}})
@@ -29,10 +31,12 @@ func (r *EnvironmentRunner) renderJob(b environmentbuild.Build) (*batchv1.Job,er
   pod.Volumes=append(pod.Volumes,corev1.Volume{Name:"snapshot",VolumeSource:corev1.VolumeSource{ConfigMap:&corev1.ConfigMapVolumeSource{LocalObjectReference:corev1.LocalObjectReference{Name:environmentResourceName("snapshot",b.ID)},DefaultMode:&mode}}})
   container.VolumeMounts=append(container.VolumeMounts,corev1.VolumeMount{Name:"snapshot",MountPath:"/snapshot",ReadOnly:true})
  case environmentbuild.Validating:
+  var provenance struct {LayerDigest string `json:"layerDigest"`}
+  if json.Unmarshal([]byte(b.ChecksJSON),&provenance)!=nil || !environmentDigestPattern.MatchString(provenance.LayerDigest) {return nil,fmt.Errorf("environment layer provenance is unavailable")}
   if !isDNSSubdomain(r.config.PullSecretName) {return nil,fmt.Errorf("environment assembler pull authorization is not configured")}
   container.Image=r.config.PublisherImage
   container.Command=[]string{"/usr/local/bin/raytrain-environment-assembler"}
-  container.Args=[]string{"--base",r.config.BaseImage,"--layer","/artifacts/layer.tar","--layout","/artifacts/oci","--pull-config","/pull/.dockerconfigjson","--result","/dev/termination-log"}
+  container.Args=[]string{"--base",r.config.BaseImage,"--layer","/artifacts/layer.tar","--layer-digest",provenance.LayerDigest,"--layout","/artifacts/oci","--pull-config","/pull/.dockerconfigjson","--result","/dev/termination-log"}
   pod.Volumes=append(pod.Volumes,corev1.Volume{Name:"base-pull",VolumeSource:corev1.VolumeSource{Secret:&corev1.SecretVolumeSource{SecretName:r.config.PullSecretName,DefaultMode:&mode,Items:[]corev1.KeyToPath{{Key:corev1.DockerConfigJsonKey,Path:corev1.DockerConfigJsonKey}}}}})
   container.VolumeMounts=append(container.VolumeMounts,corev1.VolumeMount{Name:"base-pull",MountPath:"/pull",ReadOnly:true})
  case environmentbuild.Pushing:

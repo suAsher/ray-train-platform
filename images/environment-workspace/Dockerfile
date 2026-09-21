@@ -2,8 +2,9 @@
 ARG CODE_SERVER_IMAGE=harbor.wellspiking.ai/hub/codercom/code-server:4.93.1
 FROM ${CODE_SERVER_IMAGE} AS code-server
 FROM harbor.wellspiking.ai/guofeng.su/raytrain-base@sha256:3ec73cf863847a42bcac035309259ad9d08fd74561384cc8476020c62264d6e2
-ARG PIP_INDEX_URL
+ARG PIP_INDEX_URL=https://mirrors.ivolces.com/pypi/simple/
 USER root
+COPY images/environment-workspace/pip.conf /etc/pip.conf
 # Editor server dependencies never enter the training interpreter.
 RUN test -n "${PIP_INDEX_URL}" \
  && python3 -m venv --copies --system-site-packages /opt/raytrain/environment \

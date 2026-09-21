@@ -17,6 +17,8 @@ python -m pip check
 
 安装完成后先调试，再使用平台“保存为训练环境”。保存期间不要同时安装/卸载包；如果捕获检测到变化会失败并要求重试。依赖目前保留在本次调试 Pod 的可写层，**停止/重建调试环境前应保存版本**，工作区文件快照不包含此 venv。
 
+新调试镜像的 `/etc/pip.conf` 和默认安装源使用 `https://mirrors.ivolces.com/pypi/simple/`。这只作用于本次新增镜像，不修改原 Base、现有调试环境或节点宿主机的 pip、APT、Docker 配置。离线 wheel 可以用于调试安装，但保存时仍需从固定源取得内容一致的 wheel；私有或仅本地存在的 wheel 材料上传尚未包含在本版能力中。
+
 ## 捕获与重建合同
 
 `/usr/local/bin/raytrain-environment capture` 输出不超过 1 MiB 的 schema 1 JSON。字段为 `schemaVersion`、`baseImage`、`pythonVersion`、`packages`、`checks`；新增包条目只有规范名称、固定版本和实际安装文件内容指纹 `filesHash`。不输出用户文件、源码、环境变量或凭据。

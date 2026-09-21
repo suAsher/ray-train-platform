@@ -46,7 +46,7 @@ func (v *EnvironmentVault) Put(ctx context.Context,id string,ciphertext []byte,e
  return nil
 }
 func (v *EnvironmentVault) Get(ctx context.Context,id string) ([]byte,error) {
- if v.client==nil || v.client.kubernetes==nil || id=="" {return nil,environmentbuild.ErrInvalid}
+ if v.client==nil || v.client.kubernetes==nil || !isDNSLabel(v.namespace) || id=="" {return nil,environmentbuild.ErrInvalid}
  secret,err:=v.client.kubernetes.CoreV1().Secrets(v.namespace).Get(ctx,environmentResourceName("auth",id),metav1.GetOptions{})
  if apierrors.IsNotFound(err) {return nil,environmentbuild.ErrNotFound};if err!=nil {return nil,err}
  if !environmentOwned(secret,id) || secret.Type!=corev1.SecretTypeOpaque || secret.Immutable==nil || !*secret.Immutable {return nil,fmt.Errorf("refusing to read unmanaged environment authorization")}
@@ -56,7 +56,7 @@ func (v *EnvironmentVault) Get(ctx context.Context,id string) ([]byte,error) {
  return append([]byte(nil),secret.Data["ciphertext"]...),nil
 }
 func (v *EnvironmentVault) Delete(ctx context.Context,id string) error {
- if v.client==nil || v.client.kubernetes==nil || id=="" {return environmentbuild.ErrInvalid}
+ if v.client==nil || v.client.kubernetes==nil || !isDNSLabel(v.namespace) || id=="" {return environmentbuild.ErrInvalid}
  secrets:=v.client.kubernetes.CoreV1().Secrets(v.namespace)
  secret,err:=secrets.Get(ctx,environmentResourceName("auth",id),metav1.GetOptions{})
  if apierrors.IsNotFound(err) {return nil};if err!=nil {return err}

@@ -12,7 +12,7 @@ import (
 // Cleanup first stops only this operation's Jobs and waits until all their Pods
 // disappear. Credentials and the artifact volume remain until execution stops.
 func (r *EnvironmentRunner) Cleanup(ctx context.Context,b environmentbuild.Build,retainArtifact bool) error {
- if r.client==nil || r.client.kubernetes==nil || b.ID=="" {return environmentbuild.ErrInvalid}
+ if r.client==nil || r.client.kubernetes==nil || !isDNSLabel(r.config.Namespace) || b.ID=="" || b.TenantID=="" || b.OwnerID=="" {return environmentbuild.ErrInvalid}
  selector:=labels.Set{environmentManagedLabel:environmentHash(b.ID)}.AsSelector().String()
  options:=metav1.ListOptions{LabelSelector:selector}
  jobs,err:=r.client.kubernetes.BatchV1().Jobs(r.config.Namespace).List(ctx,options);if err!=nil {return err}

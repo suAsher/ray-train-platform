@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 from pathlib import Path, PurePosixPath
 import subprocess
 import sys
@@ -94,14 +95,26 @@ def export_layer(destination, context):
     return 'sha256:' + digest.hexdigest()
 
 
+def clean_operation_artifacts(artifacts):
+    # The runner assigns this dedicated per-operation PVC and stops any prior
+    # Job before retry. Never accept a workspace path or follow directory links.
+    if artifacts.is_symlink() or artifacts.resolve() != Path('/artifacts') or not artifacts.is_dir():
+        raise CaptureError('Build artifacts must use the assigned /artifacts operation volume')
+    for name in ('context', 'layer.tar.partial', 'layer.tar', 'build-result.json'):
+        path = artifacts / name
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
+        elif path.exists():
+            raise CaptureError('Previous operation materials contain an unsupported special file')
+
+
 def build(manifest_path, artifacts, index):
     manifest = read_manifest(manifest_path)
     if Path(sys.prefix) != ENVIRONMENT:
         raise CaptureError('Builder must use the fixed managed Python environment')
-    if artifacts.is_symlink() or not artifacts.is_dir():
-        raise CaptureError('Build artifacts must use the assigned operation volume')
-    if (artifacts / 'layer.tar').exists() or (artifacts / 'context').exists():
-        raise CaptureError('This build operation already has materials; resume its recorded stage')
+    clean_operation_artifacts(artifacts)
     context = artifacts / 'context'
     materials = prepare(manifest_path, context, index)
     environment = pip_environment()
