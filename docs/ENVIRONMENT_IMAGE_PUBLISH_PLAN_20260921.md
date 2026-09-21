@@ -77,14 +77,15 @@ Rootless BuildKit 在现有标准安全策略下实测因内核权限限制失�
 
 - 基线四端源码：`7288e52650bad1adfd90493ae255784deb2a534d`；本轮尚未推送 main。
 - 当前生产仍为 backend `release-20260920-03-7288e52`、Helm 245、schema 54。
-- 后端候选 `ad4a7f3` 完整 Go vet/Go 回归及真实隔离 PostgreSQL 通过；覆盖率核查指出异常流程缺口，正在补测。
-- 运行时候选 `1763b7c` 27 项 Python 测试、两个 Dockerfile 构建、断网 capture/verify、编辑器及 CPU Ray Actor 通过。完整 wheel 重建仍在验证。
+- 后端候选 `b5c98c9` 与构建机实际格式化测试树逐字一致；完整 Go vet/Go 回归及真实隔离 PostgreSQL 通过。补齐授权失效、清理重试和 OCI 组装等用例后，跨包聚合语句覆盖率为 83.29%（environmentbuild 84.67%、registryauth 82.03%）。
+- 运行时候选 `1763b7c` 27 项 Python 测试、两个 Dockerfile 构建、断网 capture/verify、编辑器及 CPU Ray Actor 通过。实际 22 包捕获→火山源下载→哈希锁定离线重建→内容/CPU 重验→导出层通过；可信 OCI assembler 从真实固定 Base 组装通过，未发布用户镜像。
+- 验收层 98,058,240 字节，SHA256 `1fec9533197864926fe9ad3c4c29dc3a13f5fa1c9bf229bed7622b5f8209b5b8`；OCI 摘要 `sha256:4adf14ab2b86ee96637c158aae40bf0e9436895c3cba62cf531d7512f5a94791`。CPU 检查不能代替 GPU 验收。
 - 固定 Base 的 Conda 元数据存在未打包条目；将“缺失状态”纳入不可变基底指纹，新增 wheel 仍严格拒绝缺文件。
 - 火山索引在集群 Pod 可达。jupyter_server 2.17.0 的镜像文件与索引/官方哈希不一致，保持拒绝；固定 2.14.2 已核对哈希和 ZIP 并构建通过。
-- Portal 候选 `74f47703864382c6b55cc5918f636050c33ec0a2` 完整 lint、合同和 dev build 通过，尚未推送 dev。
+- Portal 候选 `4894636bc2c1cb7e09e8413c831f929bd352e0d9` 已非破坏性合并同事最新 dev `ff6a99eb`，精确归档、完整 lint、合同和 dev build 再次通过，尚未推送 dev。
 - 平台使用说明的“自定义环境”文章已加入操作、CLI Secret、失败重试和边界，随后端发布生效；未上线前用户还看不到新内容。
 - 完整真实闭环、用户凭据推送、机器人拉取、目录使用、单卡训练和 UI 验收仍待完成。验收目标为用户授权的 `guofeng.su` 身份、`public` 项目专用仓库。
 - schema 54→56 备份脚本已准备；生产备份需本次明确授权。上线前审查完整 Helm server-side diff，并记录存量任务 UID/重启数连续性。
+- 构建机证据：`/tmp/rtp-env-verify5-evidence-20260921/`、`/tmp/rtp-env-verify5-coverage-20260921.log`、`/tmp/rtp-env-layer-evidence-1763b7c/`、`/tmp/rtp-env-assembler-acceptance-20260921.log`、`/tmp/rtp-portal-env-{lint,dev}-20260921.log`。这些是候选验证，不是生产交付凭据。
 
 源码与日志中的敏感值不得进入本记录。最终发布后在本节补齐最终 SHA、组件 digest、Helm/schema、真实任务及清理证据；不得将候选通过当作上线验收。
-
