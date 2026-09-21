@@ -7,6 +7,7 @@ import (
  "net/http"
  "net/http/cookiejar"
  "net/http/httptest"
+ "net/url"
  "strings"
  "testing"
  "time"
@@ -79,4 +80,21 @@ func TestJobDashboardPortalTokenCannotAccessAnotherJob(t *testing.T) {
  if err!=nil {t.Fatal(err)}
  w:=httptest.NewRecorder(); router.ServeHTTP(w,httptest.NewRequest(http.MethodGet,"/api/v1/jobs/job-2/dashboard/?portal=1&tenant=tenant-a&subject=user-1&access_token="+token,nil))
  if w.Code!=401 {t.Fatalf("cross-job token accepted: %d",w.Code)}
+}
+
+func TestJobDashboardRewritesHTMLAndRedirectsWithoutChangingRelativeAssets(t *testing.T) {
+ for _, prefix:=range []string{"", "/raytrain"} {
+  base:=prefix+jobDashboardBasePath("job-1")
+  target,_:=url.Parse("http://head.invalid")
+  request:=httptest.NewRequest(http.MethodGet,"http://head.invalid/",nil)
+  response:=&http.Response{Header:http.Header{"Content-Type":[]string{"text/html"}},Body:io.NopCloser(strings.NewReader(`<script src="/static/main.js"></script><link href="./favicon.ico"><link href="//cdn.invalid/x"><a href="/">home</a>`)),Request:request}
+  if err:=rewriteRayDashboardResponse(response,base);err!=nil {t.Fatal(err)}
+  body,_:=io.ReadAll(response.Body)
+  if !strings.Contains(string(body),`src="`+base+`static/main.js"`) || !strings.Contains(string(body),`href="./favicon.ico"`) || !strings.Contains(string(body),`href="//cdn.invalid/x"`) || !strings.Contains(string(body),`href="`+base+`"`) {t.Fatalf("HTML rewrite: %s",body)}
+  response.Header.Set("Location","/static/main.js?x=1")
+  if err:=rewriteRayDashboardLocation(response,target,base);err!=nil {t.Fatal(err)}
+  if response.Header.Get("Location")!=base+"static/main.js?x=1" {t.Fatal("redirect lost proxy prefix")}
+  response.Header.Set("Location","https://evil.invalid/")
+  if err:=rewriteRayDashboardLocation(response,target,base);err==nil {t.Fatal("accepted external redirect")}
+ }
 }
