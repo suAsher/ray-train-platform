@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
- "regexp"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -21,7 +21,7 @@ const (
 	jobDashboardSessionCookie = "ray_job_dashboard"
 	jobDashboardTenantCookie  = "ray_job_dashboard_tenant"
 	jobDashboardSubjectCookie = "ray_job_dashboard_subject"
- jobDashboardPortalCookie = "ray_job_dashboard_portal"
+	jobDashboardPortalCookie  = "ray_job_dashboard_portal"
 )
 
 // RegisterJobDashboardProxyRoute mounts the browser navigation route outside
@@ -32,8 +32,11 @@ func (h *Handler) RegisterJobDashboardProxyRoute(group *gin.RouterGroup) {
 }
 
 func (h *Handler) issueJobDashboardAccess(c *gin.Context) {
- portal, valid := jobDashboardPortalHint(c)
- if !valid { h.writeError(c,400,"INVALID_DASHBOARD_VIEW","invalid dashboard view"); return }
+	portal, valid := jobDashboardPortalHint(c)
+	if !valid {
+		h.writeError(c, 400, "INVALID_DASHBOARD_VIEW", "invalid dashboard view")
+		return
+	}
 	principal, ok := h.principal(c)
 	if !ok {
 		h.writeError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "authentication is required")
@@ -56,7 +59,7 @@ func (h *Handler) issueJobDashboardAccess(c *gin.Context) {
 		h.writeError(c, http.StatusConflict, "DASHBOARD_UNAVAILABLE", "Ray Dashboard is available only while the RayCluster head service is running")
 		return
 	}
-	if len(h.workspacePepper) == 0 {
+	if len(h.workspacePepper) < 32 {
 		h.writeError(c, http.StatusServiceUnavailable, "DASHBOARD_ACCESS_UNAVAILABLE", "Dashboard access signing is not configured")
 		return
 	}
@@ -67,7 +70,9 @@ func (h *Handler) issueJobDashboardAccess(c *gin.Context) {
 	}
 	base := jobDashboardPublicBasePath(job.ID, portal)
 	query := url.Values{"access_token": {token}, "tenant": {job.TenantID}, "subject": {principal.Subject}}
- if portal { query.Set("portal","1") }
+	if portal {
+		query.Set("portal", "1")
+	}
 	c.Header("Cache-Control", "no-store")
 	h.writeSuccess(c, http.StatusOK, map[string]string{"url": base + "?" + query.Encode()})
 }
@@ -109,7 +114,7 @@ func (h *Handler) proxyJobDashboard(c *gin.Context) {
 		return
 	}
 	portalCookie, _ := c.Request.Cookie(jobDashboardPortalCookie)
- basePath := jobDashboardPublicBasePath(job.ID, portalCookie != nil && portalCookie.Value == "1")
+	basePath := jobDashboardPublicBasePath(job.ID, portalCookie != nil && portalCookie.Value == "1")
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	originalDirector := proxy.Director
 	proxy.Director = func(request *http.Request) {
@@ -125,11 +130,13 @@ func (h *Handler) proxyJobDashboard(c *gin.Context) {
 	}
 	proxy.ModifyResponse = func(response *http.Response) error {
 		response.Header.Del("Set-Cookie")
- response.Header.Set("Cache-Control", "no-store")
- response.Header.Set("X-Frame-Options", "DENY")
+		response.Header.Set("Cache-Control", "no-store")
+		response.Header.Set("X-Frame-Options", "DENY")
 		response.Header.Set("Referrer-Policy", "no-referrer")
-		if err := rewriteRayDashboardLocation(response, target, basePath); err != nil { return err }
- return rewriteRayDashboardResponse(response, basePath)
+		if err := rewriteRayDashboardLocation(response, target, basePath); err != nil {
+			return err
+		}
+		return rewriteRayDashboardResponse(response, basePath)
 	}
 	proxy.ErrorHandler = func(_ http.ResponseWriter, _ *http.Request, proxyErr error) {
 		_ = c.Error(proxyErr)
@@ -139,15 +146,18 @@ func (h *Handler) proxyJobDashboard(c *gin.Context) {
 }
 
 func (h *Handler) exchangeJobDashboardAccess(c *gin.Context) {
- portal, valid := jobDashboardPortalHint(c)
- if !valid { h.writeError(c,400,"INVALID_DASHBOARD_VIEW","invalid dashboard view"); return }
- c.Header("Cache-Control","no-store")
- c.Header("Referrer-Policy","no-referrer")
+	portal, valid := jobDashboardPortalHint(c)
+	if !valid {
+		h.writeError(c, 400, "INVALID_DASHBOARD_VIEW", "invalid dashboard view")
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.Header("Referrer-Policy", "no-referrer")
 	tenantID := strings.TrimSpace(c.Query("tenant"))
 	subject := strings.TrimSpace(c.Query("subject"))
 	jobID := c.Param("id")
 	token := c.Query("access_token")
-	if len(h.workspacePepper) == 0 || domain.VerifyJobDashboardAccessToken(token, tenantID, jobID, subject, h.workspacePepper, time.Now()) != nil {
+	if len(h.workspacePepper) < 32 || domain.VerifyJobDashboardAccessToken(token, tenantID, jobID, subject, h.workspacePepper, time.Now()) != nil {
 		h.writeError(c, http.StatusUnauthorized, "DASHBOARD_TOKEN_INVALID", "Ray Dashboard access link is invalid or expired")
 		return
 	}
@@ -170,7 +180,7 @@ func (h *Handler) exchangeJobDashboardAccess(c *gin.Context) {
 		jobDashboardSessionCookie: session,
 		jobDashboardTenantCookie:  tenantID,
 		jobDashboardSubjectCookie: subject,
- jobDashboardPortalCookie: map[bool]string{true:"1", false:"0"}[portal],
+		jobDashboardPortalCookie:  map[bool]string{true: "1", false: "0"}[portal],
 	} {
 		http.SetCookie(c.Writer, &http.Cookie{
 			Name: name, Value: value, Path: path, MaxAge: int(domain.JobDashboardSessionTTL.Seconds()),
@@ -181,9 +191,11 @@ func (h *Handler) exchangeJobDashboardAccess(c *gin.Context) {
 	cleanQuery.Del("access_token")
 	cleanQuery.Del("tenant")
 	cleanQuery.Del("subject")
- cleanQuery.Del("portal")
+	cleanQuery.Del("portal")
 	location := c.Request.URL.Path
- if portal { location = "/raytrain" + location }
+	if portal {
+		location = "/raytrain" + location
+	}
 	if encoded := cleanQuery.Encode(); encoded != "" {
 		location += "?" + encoded
 	}
@@ -191,6 +203,7 @@ func (h *Handler) exchangeJobDashboardAccess(c *gin.Context) {
 }
 
 func (h *Handler) jobDashboardSession(c *gin.Context) (string, string, bool) {
+ if len(h.workspacePepper) < 32 { return "", "", false }
 	session, sessionErr := c.Request.Cookie(jobDashboardSessionCookie)
 	tenant, tenantErr := c.Request.Cookie(jobDashboardTenantCookie)
 	subject, subjectErr := c.Request.Cookie(jobDashboardSubjectCookie)
@@ -236,14 +249,17 @@ func rewriteRayDashboardResponse(response *http.Response, basePath string) error
 		{[]byte(`'/api/`), []byte(`'` + basePath + `api/`)},
 		{[]byte("`/api/"), []byte("`" + basePath + "api/")},
 	}
-	for _, replacement := range replacements {
-		body = bytes.ReplaceAll(body, replacement.old, replacement.new)
-	}
- if strings.Contains(contentType,"text/html") {
-  body = rayDashboardHTMLRootPath.ReplaceAllFunc(body,func(match []byte) []byte {
-   i:=bytes.IndexByte(match,'/'); return append(append(append([]byte(nil), match[:i]...), []byte(basePath)...),match[i+1:]...)
-  })
+	if strings.Contains(contentType, "javascript") {
+ for _, replacement := range replacements {
+  body = bytes.ReplaceAll(body, replacement.old, replacement.new)
  }
+ }
+	if strings.Contains(contentType, "text/html") {
+		body = rayDashboardHTMLRootPath.ReplaceAllFunc(body, func(match []byte) []byte {
+			i := bytes.IndexByte(match, '/')
+			return append(append(append([]byte(nil), match[:i]...), []byte(basePath)...), match[i+1:]...)
+		})
+	}
 	response.Body = io.NopCloser(bytes.NewReader(body))
 	response.ContentLength = int64(len(body))
 	response.Header.Set("Content-Length", strconv.Itoa(len(body)))
@@ -252,29 +268,43 @@ func rewriteRayDashboardResponse(response *http.Response, basePath string) error
 
 // The public view hint selects one fixed deployment prefix, never a caller URL.
 func jobDashboardPortalHint(c *gin.Context) (bool, bool) {
- values, present := c.Request.URL.Query()["portal"]
- if !present {return false,true}
- return true,len(values)==1 && values[0]=="1"
+	values, present := c.Request.URL.Query()["portal"]
+	if !present {
+		return false, true
+	}
+	return true, len(values) == 1 && values[0] == "1"
 }
 func jobDashboardPublicBasePath(id string, portal bool) string {
- if portal {return "/raytrain"+jobDashboardBasePath(id)}
- return jobDashboardBasePath(id)
+	if portal {
+		return "/raytrain" + jobDashboardBasePath(id)
+	}
+	return jobDashboardBasePath(id)
 }
 func jobDashboardUpstreamHeaders(original http.Header) http.Header {
- clean:=make(http.Header)
- for _, key:=range []string{"Accept","Accept-Language","Range","If-Range","If-Match","If-None-Match","If-Modified-Since","If-Unmodified-Since","User-Agent"} {
-  if values:=original.Values(key); len(values)>0 {clean[key]=append([]string(nil),values...)}
- }
- return clean
+	clean := make(http.Header)
+	for _, key := range []string{"Accept", "Accept-Language", "Range", "If-Range", "If-Match", "If-None-Match", "If-Modified-Since", "If-Unmodified-Since", "User-Agent"} {
+		if values := original.Values(key); len(values) > 0 {
+			clean[key] = append([]string(nil), values...)
+		}
+	}
+	return clean
 }
+
 var rayDashboardHTMLRootPath = regexp.MustCompile(`(?i)(?:src|href)=["']/[^/]`)
+
 func rewriteRayDashboardLocation(response *http.Response, target *url.URL, base string) error {
- raw:=response.Header.Get("Location")
- if raw=="" {return nil}
- location,err:=url.Parse(raw)
- if err!=nil || location.User!=nil {return fmt.Errorf("invalid dashboard redirect")}
- resolved:=response.Request.URL.ResolveReference(location)
- if resolved.Scheme!=target.Scheme || resolved.Host!=target.Host {return fmt.Errorf("external dashboard redirect is forbidden")}
- response.Header.Set("Location",(&url.URL{Path:base+strings.TrimLeft(resolved.Path,"/"),RawQuery:resolved.RawQuery,Fragment:resolved.Fragment}).String())
- return nil
+	raw := response.Header.Get("Location")
+	if raw == "" {
+		return nil
+	}
+	location, err := url.Parse(raw)
+	if err != nil || location.User != nil {
+		return fmt.Errorf("invalid dashboard redirect")
+	}
+	resolved := response.Request.URL.ResolveReference(location)
+	if resolved.Scheme != target.Scheme || resolved.Host != target.Host {
+		return fmt.Errorf("external dashboard redirect is forbidden")
+	}
+	response.Header.Set("Location", (&url.URL{Path: base + strings.TrimLeft(resolved.Path, "/"), RawQuery: resolved.RawQuery, Fragment: resolved.Fragment}).String())
+	return nil
 }
