@@ -91,15 +91,17 @@ def main():
         finally:
             if client:
                 client.stop_channels()
-            if kernel_id and process.poll() is None:
-                request(base, '/api/kernels/' + kernel_id, 'DELETE')
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=15)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=5)
+            try:
+                if kernel_id and process.poll() is None:
+                    request(base, '/api/kernels/' + kernel_id, 'DELETE')
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=15)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=5)
 
 
 if __name__ == '__main__':

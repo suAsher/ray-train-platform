@@ -15,6 +15,7 @@ COPY --from=code-server /usr/bin/code-server /usr/bin/code-server
 COPY images/environment-workspace/environment_runtime.py /usr/local/lib/raytrain-environment/environment_runtime.py
 COPY images/environment-workspace/raytrain-environment /usr/local/bin/raytrain-environment
 COPY images/environment-workspace/runtime_smoke.py /usr/local/bin/raytrain-environment-selfcheck
+COPY images/environment-workspace/jupyter_smoke.py /usr/local/lib/raytrain-environment/jupyter_smoke.py
 COPY images/environment-workspace/ray /opt/raytrain/environment-wrappers/ray
 COPY images/environment-workspace/torchrun /opt/raytrain/environment-wrappers/torchrun
 COPY images/environment-workspace/jupyter /opt/raytrain/environment-wrappers/jupyter
@@ -35,7 +36,10 @@ RUN chmod 0755 /usr/local/bin/raytrain-environment /usr/local/bin/raytrain-envir
  && python -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" --constraint /opt/raytrain/environment-constraints.txt ipykernel==6.29.5 \
  && python -m pip check \
  && chown -R ray:users /opt/raytrain/environment \
- && install -d -o ray -g users /workspace /home/ray/.config /home/ray/.local/share/code-server/User \
+ && install -d -m 0755 -o ray -g users /workspace /home/ray/.config \
+      /home/ray/.local /home/ray/.local/share /home/ray/.local/share/jupyter \
+      /home/ray/.local/share/code-server /home/ray/.local/share/code-server/User \
+ && install -d -m 0700 -o ray -g users /home/ray/.local/share/jupyter/runtime \
  && mkdir -p /usr/local/share/jupyter/kernels/python3 /usr/local/share/jupyter/kernels/raytrain-environment \
  && printf '%s\n' '{"argv":["/opt/raytrain/environment/bin/python","-m","ipykernel_launcher","-f","{connection_file}"],"display_name":"RayTrain Environment","language":"python"}' > /usr/local/share/jupyter/kernels/raytrain-environment/kernel.json \
  && cp /usr/local/share/jupyter/kernels/raytrain-environment/kernel.json /usr/local/share/jupyter/kernels/python3/kernel.json \
@@ -46,4 +50,6 @@ RUN chmod 0755 /usr/local/bin/raytrain-environment /usr/local/bin/raytrain-envir
 USER ray
 WORKDIR /workspace
 EXPOSE 8888 8443
-RUN raytrain-environment-selfcheck
+RUN raytrain-environment-selfcheck \
+ && python /usr/local/lib/raytrain-environment/jupyter_smoke.py \
+ && rm -f /home/ray/.local/share/jupyter/runtime/jupyter_cookie_secret
