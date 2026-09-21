@@ -277,14 +277,14 @@ func environmentSafeFailure(data []byte) error {
 		return nil
 	}
 	var failure struct {
-		ErrorCode string `json:"errorCode"`
+		Code string `json:"code"`
 	}
 	if json.Unmarshal(data, &failure) != nil {
 		return nil
 	}
-	switch failure.ErrorCode {
+	switch failure.Code {
 	case "UNSUPPORTED_WORKSPACE", "ENVIRONMENT_CHANGED", "WHEEL_UNAVAILABLE", "PACKAGE_MODIFIED", "BUILD_TIMEOUT", "PULL_FAILED", "TEMP_STORAGE_FULL":
-		return &environmentbuild.PhaseError{Code: failure.ErrorCode}
+		return &environmentbuild.PhaseError{Code: failure.Code}
 	default:
 		return nil
 	}

@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"ray-train-platform-backend/domain"
 	eb "ray-train-platform-backend/environmentbuild"
+	"ray-train-platform-backend/runtimecatalog"
 )
 
 type environmentVaultFake struct {
@@ -146,6 +148,7 @@ func TestEnvironmentBuildFullLifecycleOwnsCredentialsAndPublishesAtomicVersion(t
 	if images[0].IsDefault || images[0].Reference != result.ImageReference || images[0].OwnerUserID != "user-a" {
 		t.Fatalf("invalid catalog: %+v", images[0])
 	}
+	assertEnvironmentImageTrainingRuntime(t, images[0])
 	others, err := repo.ListImagesForUser(ctx, "team-a", "other", "training")
 	if err != nil || len(others) != 0 {
 		t.Fatalf("private image leaked: %+v %v", others, err)
@@ -155,6 +158,38 @@ func TestEnvironmentBuildFullLifecycleOwnsCredentialsAndPublishesAtomicVersion(t
 		t.Fatal("version missing")
 	}
 }
+
+func assertEnvironmentImageTrainingRuntime(t *testing.T, image domain.PlatformImage) {
+	t.Helper()
+	// The managed environment builder and its paired debug Base are fixed to
+	// Ray 2.58.0. Registration must preserve that trusted runtime identity.
+	if image.RayVersion != "2.58.0" {
+		t.Fatalf("published environment lost its Base Ray version: %q", image.RayVersion)
+	}
+	policy := runtimecatalog.NewPolicy(true, true, nil, nil).EffectiveForTenant(image.TenantID)
+	for _, engine := range []domain.TrainingEngine{domain.TrainingEngineRayDDP, domain.TrainingEngineRayTrain} {
+		runtime, err := runtimecatalog.Resolve(image, engine, policy)
+		if err != nil {
+			t.Fatalf("published environment cannot resolve %s submission: %v", engine, err)
+		}
+		spec := testJob().Spec
+		spec.Image, spec.TrainingEngine, spec.RayVersion = runtime.ImageDigest, runtime.Engine, runtime.RayVersion
+		if engine == domain.TrainingEngineRayTrain {
+			spec.DataMode = domain.DataModeStreaming
+			spec.DatasetRef = domain.DatasetReference{Dataset: "labeled-full", Version: "v1"}
+			spec.CachePolicy = domain.DatasetCachePolicyAuto
+		}
+		if err := spec.Validate(); err != nil {
+			t.Fatalf("published environment fails %s training/streaming contract: %v", engine, err)
+		}
+	}
+	// Correct metadata must not bypass the deployment's canary rollout policy.
+	denied := runtimecatalog.NewPolicy(true, false, nil, nil).EffectiveForTenant(image.TenantID)
+	if _, err := runtimecatalog.Resolve(image, domain.TrainingEngineRayTrain, denied); err == nil {
+		t.Fatal("published environment bypassed the Ray 2.58 rollout gate")
+	}
+}
+
 func TestEnvironmentBuildOwnerBoundaryAndIdempotencyConflict(t *testing.T) {
 	_, s, _, _ := environmentTestService(t)
 	ctx := context.Background()

@@ -295,12 +295,12 @@ func TestEnvironmentCleanupKeepsCapacityWhileVolumeIsTerminating(t *testing.T) {
 
 func TestEnvironmentFailureClassificationNeverReturnsRawOutput(t *testing.T) {
 	for _, code := range []string{"UNSUPPORTED_WORKSPACE", "ENVIRONMENT_CHANGED", "WHEEL_UNAVAILABLE", "PACKAGE_MODIFIED", "BUILD_TIMEOUT", "PULL_FAILED", "TEMP_STORAGE_FULL"} {
-		err := environmentSafeFailure([]byte(`{"errorCode":"` + code + `","detail":"secret-material"}`))
+		err := environmentSafeFailure([]byte(`{"code":"` + code + `","detail":"secret-material"}`))
 		if err == nil || err.Error() != code {
 			t.Fatalf("missing safe code %q: %v", code, err)
 		}
 	}
-	for _, raw := range []string{`secret-material`, `{"errorCode":"secret-material"}`, `{"error":"secret-material"}`, strings.Repeat("x", 4097)} {
+	for _, raw := range []string{`secret-material`, `{"code":"secret-material"}`, `{"error":"secret-material"}`, strings.Repeat("x", 4097)} {
 		if err := environmentSafeFailure([]byte(raw)); err != nil {
 			t.Fatalf("untrusted output escaped: %v", err)
 		}

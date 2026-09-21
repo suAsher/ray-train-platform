@@ -117,6 +117,11 @@ func TestEnvironmentBuildPostgresRegistrationRollsBackAndRetainsPublishedDigest(
 	if err = repo.FinalizeEnvironmentBuild(ctx, ready, "finalizer"); err != nil {
 		t.Fatal(err)
 	}
+	image, err := repo.ImageByReferenceForUser(ctx, owner.TenantID, owner.UserID, "training", ready.ImageReference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertEnvironmentImageTrainingRuntime(t, image)
 }
 
 func TestEnvironmentBuildPostgresOrphanMaterialReclaimedWithoutSecretList(t *testing.T) {

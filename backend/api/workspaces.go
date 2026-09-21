@@ -72,11 +72,11 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 			return
 		}
 	}
-	image, ok := h.resolveWorkspaceImage(c, principal.TenantID, domain.NormalizeImageReference(request.Image))
+	image, ok := h.resolveWorkspaceRuntime(c, principal.TenantID, domain.NormalizeImageReference(request.Image))
 	if !ok {
 		return
 	}
-	if err := domain.ValidateRuntimeImage(image); err != nil {
+	if err := domain.ValidateRuntimeImage(image.Reference); err != nil {
 		h.writeError(c, http.StatusBadRequest, "WORKSPACE_IMAGE_REQUIRED", err.Error())
 		return
 	}
@@ -148,7 +148,7 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 		if err := h.ensureTenantNamespaceAndPullSecrets(ctx, locked.TenantID, locked.Namespace); err != nil {
 			return fail(http.StatusBadGateway, "WORKSPACE_RUNTIME_PREPARE_FAILED", "could not prepare the tenant workspace runtime", domain.WorkspaceFailed)
 		}
-		manifest, err := k8s.RenderDevRayCluster(*locked, k8s.WorkspaceRenderOptions{NodeSelector: nodeSelector, DedicatedNodes: h.trainingDedicatedNodes, Image: image, RayVersion: h.rayVersion, ServiceAccount: h.serviceAccount, ImagePullSecrets: h.imagePullSecrets, IDCExistingClaim: h.idcClaim, IDCMountPath: h.idcMountPath, JupyterBasePath: locked.JupyterURL, DataMounts: dataMounts})
+		manifest, err := k8s.RenderDevRayCluster(*locked, k8s.WorkspaceRenderOptions{NodeSelector: nodeSelector, DedicatedNodes: h.trainingDedicatedNodes, Image: image.Reference, RayVersion: image.RayVersion, ServiceAccount: h.serviceAccount, ImagePullSecrets: h.imagePullSecrets, IDCExistingClaim: h.idcClaim, IDCMountPath: h.idcMountPath, JupyterBasePath: locked.JupyterURL, DataMounts: dataMounts})
 		if err != nil {
 			return fail(http.StatusBadRequest, "WORKSPACE_SPEC_INVALID", err.Error(), domain.WorkspaceFailed)
 		}
@@ -255,23 +255,30 @@ func dataRootSubPath(tenantRoot, logicalRoot string) (string, error) {
 // falling back to the catalogue default and finally to the deployment-wide
 // image so an environment without a catalogue still works.
 func (h *Handler) resolveWorkspaceImage(c *gin.Context, tenantID, requested string) (string, bool) {
+ image,ok:=h.resolveWorkspaceRuntime(c,tenantID,requested)
+ return image.Reference,ok
+}
+
+// Keep a catalogue image's runtime version paired with its reference. Only the
+// deployment fallback inherits the deployment-wide Ray version.
+func (h *Handler) resolveWorkspaceRuntime(c *gin.Context, tenantID, requested string) (domain.PlatformImage, bool) {
 	if h.images != nil {
 		if requested != "" {
 			image, err := visibleImageByReference(c.Request.Context(), h.images, tenantID, actorPrincipal(c).Subject, domain.ImageKindWorkspace, requested)
 			if err != nil {
 				h.writeError(c, http.StatusBadRequest, "IMAGE_NOT_ALLOWED", "the requested workspace image is not in the catalog")
-				return "", false
+				return domain.PlatformImage{}, false
 			}
-			return image.Reference, true
+			return image, true
 		}
 		if image, err := h.images.DefaultImage(c.Request.Context(), tenantID, domain.ImageKindWorkspace); err == nil && image.VisibleTo(tenantID, "") {
-			return image.Reference, true
+			return image, true
 		}
 	}
 	if requested != "" {
-		return requested, true
+		return domain.PlatformImage{Reference:requested,RayVersion:h.rayVersion}, true
 	}
-	return h.workspaceImage, true
+	return domain.PlatformImage{Reference:h.workspaceImage,RayVersion:h.rayVersion}, true
 }
 
 func (h *Handler) getWorkspace(c *gin.Context) {
