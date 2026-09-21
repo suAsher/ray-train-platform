@@ -54,7 +54,14 @@ func TestPublishSealedLayoutEndToEndWithInMemoryRegistry(t *testing.T) {
   if request.URL.Path=="/service/token" {body,_:=json.Marshal(map[string]string{"token":jwt([]string{"pull","push"},"team/model")});return reply(200,string(body)),nil}
   if username,_,ok:=request.BasicAuth();ok || username!="" {t.Fatal("personal credentials reached registry upload")}
   requests.Add(1)
-  recorder:=httptest.NewRecorder();handler.ServeHTTP(recorder,request)
+  body:=request.Body
+  if body==nil {body=http.NoBody}
+  serverRequest:=httptest.NewRequestWithContext(request.Context(),request.Method,request.URL.String(),body)
+  serverRequest.Header=request.Header.Clone()
+  serverRequest.Host=request.Host
+  serverRequest.ContentLength=request.ContentLength
+  serverRequest.TransferEncoding=append([]string(nil),request.TransferEncoding...)
+  recorder:=httptest.NewRecorder();handler.ServeHTTP(recorder,serverRequest)
   response:=recorder.Result();response.Request=request
   return response,nil
  })
