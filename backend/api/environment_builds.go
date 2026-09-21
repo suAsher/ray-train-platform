@@ -123,8 +123,8 @@ func (h environmentBuildHandler) result(c *gin.Context, value any, err error) {
 		h.failure(c, 409, "ENVIRONMENT_BUILD_CAPACITY", "环境构建暂存空间名额已满：每人最多 3 项、平台最多 8 项。请等待完成，或取消不再需要的构建以释放暂存空间")
 	case errors.Is(err, eb.ErrConflict):
 		h.failure(c, 409, "ENVIRONMENT_BUILD_CONFLICT", "当前状态不支持此操作；请刷新，确认来源为本人运行中的配套 Base 调试环境")
-	case errors.Is(err,registryauth.ErrProjectsUnavailable):
-		h.failure(c,503,"REGISTRY_PROJECTS_UNAVAILABLE","Harbor 项目列表暂不可用，可手动输入已有项目并验证目标仓库写权限；无需因此更换凭据")
+	case errors.Is(err, registryauth.ErrProjectsUnavailable):
+		h.failure(c, 503, "REGISTRY_PROJECTS_UNAVAILABLE", "Harbor 项目列表暂不可用，可手动输入已有项目并验证目标仓库写权限；无需因此更换凭据")
 	case errors.Is(err, eb.ErrAuthorization):
 		h.failure(c, 403, "REGISTRY_AUTHORIZATION_REQUIRED", "Harbor 凭据失效或没有目标仓库写权限，请使用用户名和 CLI Secret 重新授权")
 	default:

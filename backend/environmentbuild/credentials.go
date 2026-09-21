@@ -159,8 +159,10 @@ func (s *Service) CheckTarget(ctx context.Context, owner Owner, id, project, rep
 	return nil
 }
 
-func registryAuthorizationError(err error)error{
-	if errors.Is(err,ErrAuthorization) || errors.Is(err,registryauth.ErrCredentials) || errors.Is(err,registryauth.ErrForbidden){return ErrAuthorization}
+func registryAuthorizationError(err error) error {
+	if errors.Is(err, ErrAuthorization) || errors.Is(err, registryauth.ErrCredentials) || errors.Is(err, registryauth.ErrForbidden) {
+		return ErrAuthorization
+	}
 	return ErrUnavailable
 }
 func (s *Service) RevokeAuthorization(ctx context.Context, owner Owner, id string) error {
@@ -190,7 +192,7 @@ func (s *Service) bindAuthorization(ctx context.Context, owner Owner, id string,
 		return Authorization{}, err
 	}
 	if err = s.registry.CheckPush(ctx, c, b.Project+"/"+b.Repository); err != nil {
-		return Authorization{}, ErrAuthorization
+		return Authorization{}, registryAuthorizationError(err)
 	}
 	// Use a separate material reference so a DB failure never invalidates the
 	// existing unbound authorization. Store CAS prevents cross-build reuse.

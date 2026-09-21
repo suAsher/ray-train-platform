@@ -29,14 +29,14 @@ func jwt(actions []string, repository string) string {
 
 func TestAuthenticateOnlyTrustedOriginAndIdentity(t *testing.T) {
 	c := testClient(func(r *http.Request) (*http.Response, error) {
-		if r.URL.Scheme != "https" || r.URL.Host != Host || r.URL.Path != "/service/token" || r.URL.Query().Has("scope") || r.URL.Query().Get("account")!=credentials.Username || r.URL.Query().Get("service")!=registryService {
+		if r.URL.Scheme != "https" || r.URL.Host != Host || r.URL.Path != "/service/token" || r.URL.Query().Has("scope") || r.URL.Query().Get("account") != credentials.Username || r.URL.Query().Get("service") != registryService {
 			t.Fatalf("unexpected destination %s", r.URL)
 		}
 		u, p, ok := r.BasicAuth()
 		if !ok || u != credentials.Username || p != credentials.Secret {
 			t.Fatal("missing credentials")
 		}
-		return reply(200, identityTokenBody(credentials.Username,nil)), nil
+		return reply(200, identityTokenBody(credentials.Username, nil)), nil
 	})
 	got, err := c.Authenticate(context.Background(), credentials)
 	if err != nil || got.Username != credentials.Username {
@@ -121,7 +121,7 @@ func TestOpaqueSecretIsNotRewritten(t *testing.T) {
 		if got != secret.Secret {
 			t.Fatal("opaque secret changed")
 		}
-		return reply(200, identityTokenBody(secret.Username,nil)), nil
+		return reply(200, identityTokenBody(secret.Username, nil)), nil
 	})
 	if _, err := c.Authenticate(context.Background(), secret); err != nil {
 		t.Fatal(err)

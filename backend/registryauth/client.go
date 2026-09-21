@@ -23,12 +23,12 @@ const registryService = "harbor-registry"
 const maxResponseBytes = 2 << 20
 
 var (
-	ErrCredentials   = errors.New("Harbor credentials are invalid or expired")
-	ErrForbidden     = errors.New("Harbor does not grant push access to this repository")
-	ErrUnavailable   = errors.New("Harbor request failed; retry or check registry availability")
-	ErrInvalidTarget = errors.New("invalid Harbor project or repository")
+	ErrCredentials         = errors.New("Harbor credentials are invalid or expired")
+	ErrForbidden           = errors.New("Harbor does not grant push access to this repository")
+	ErrUnavailable         = errors.New("Harbor request failed; retry or check registry availability")
+	ErrInvalidTarget       = errors.New("invalid Harbor project or repository")
 	ErrProjectsUnavailable = errors.New("Harbor project list is unavailable; enter the project and verify repository push access")
-	componentPattern = regexp.MustCompile(`^[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*$`)
+	componentPattern       = regexp.MustCompile(`^[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*$`)
 )
 
 type Credentials struct {
@@ -130,18 +130,21 @@ func (c *Client) get(ctx context.Context, credentials Credentials, path string, 
 
 func (c *Client) Authenticate(ctx context.Context, credentials Credentials) (Identity, error) {
 	var response struct {
-		Token string `json:"token"`
+		Token       string `json:"token"`
 		AccessToken string `json:"access_token"`
 	}
 	// Harbor OIDC CLI Secrets authenticate registry operations, but need not
 	// authenticate the management API. Ask the trusted issuer for identity only;
 	// repository permissions are checked separately against the frozen target.
-	_, err := c.get(ctx, credentials, "/service/token", url.Values{"service":{registryService},"account":{credentials.Username}}, &response)
+	_, err := c.get(ctx, credentials, "/service/token", url.Values{"service": {registryService}, "account": {credentials.Username}}, &response)
 	if err != nil {
 		return Identity{}, err
 	}
-	token:=response.Token;if token==""{token=response.AccessToken}
-	if !hasRegistryIdentity(token,credentials.Username,time.Now()) {
+	token := response.Token
+	if token == "" {
+		token = response.AccessToken
+	}
+	if !hasRegistryIdentity(token, credentials.Username, time.Now()) {
 		return Identity{}, ErrCredentials
 	}
 	return Identity{Username: credentials.Username}, nil
@@ -150,16 +153,28 @@ func (c *Client) Authenticate(ctx context.Context, credentials Credentials) (Ide
 // This accepts only a token returned directly by the fixed TLS-verified Harbor
 // issuer above, never an API caller's bearer token. Registry upload requests
 // still undergo independent signature and repository-scope verification.
-func hasRegistryIdentity(token,username string,now time.Time)bool{
-	parts:=strings.Split(token,".");if len(parts)!=3 || parts[2]==""{return false}
-	payload,err:=base64.RawURLEncoding.DecodeString(parts[1]);if err!=nil{return false}
-	var claims struct{
-		Issuer string `json:"iss"`;Subject string `json:"sub"`;Audience string `json:"aud"`
-		Expires int64 `json:"exp"`;IssuedAt int64 `json:"iat"`;NotBefore int64 `json:"nbf"`
-		Access []json.RawMessage `json:"access"`
+func hasRegistryIdentity(token, username string, now time.Time) bool {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 || parts[2] == "" {
+		return false
 	}
-	if json.Unmarshal(payload,&claims)!=nil{return false}
-	return username!="" && claims.Issuer=="harbor-token-issuer" && claims.Subject==username && claims.Audience==registryService && claims.Expires>now.Unix() && claims.IssuedAt>0 && claims.NotBefore>0 && claims.IssuedAt<=now.Add(30*time.Second).Unix() && claims.NotBefore<=now.Add(30*time.Second).Unix() && claims.Expires>claims.IssuedAt && claims.Expires>claims.NotBefore && len(claims.Access)==0
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return false
+	}
+	var claims struct {
+		Issuer    string            `json:"iss"`
+		Subject   string            `json:"sub"`
+		Audience  string            `json:"aud"`
+		Expires   int64             `json:"exp"`
+		IssuedAt  int64             `json:"iat"`
+		NotBefore int64             `json:"nbf"`
+		Access    []json.RawMessage `json:"access"`
+	}
+	if json.Unmarshal(payload, &claims) != nil {
+		return false
+	}
+	return username != "" && claims.Issuer == "harbor-token-issuer" && claims.Subject == username && claims.Audience == registryService && claims.Expires > now.Unix() && claims.IssuedAt > 0 && claims.NotBefore > 0 && claims.IssuedAt <= now.Add(30*time.Second).Unix() && claims.NotBefore <= now.Add(30*time.Second).Unix() && claims.Expires > claims.IssuedAt && claims.Expires > claims.NotBefore && len(claims.Access) == 0
 }
 
 // Projects returns candidate destinations, not authorization for a particular
@@ -175,7 +190,9 @@ func (c *Client) Projects(ctx context.Context, credentials Credentials, page, pa
 	}
 	headers, err := c.get(ctx, credentials, "/api/v2.0/projects", url.Values{"page": {strconv.Itoa(page)}, "page_size": {strconv.Itoa(pageSize)}, "with_detail": {"true"}}, &projects)
 	if err != nil {
-		if errors.Is(err,ErrCredentials) || errors.Is(err,ErrForbidden){return ProjectPage{},ErrProjectsUnavailable}
+		if errors.Is(err, ErrCredentials) || errors.Is(err, ErrForbidden) {
+			return ProjectPage{}, ErrProjectsUnavailable
+		}
 		return ProjectPage{}, err
 	}
 	if len(projects) > pageSize {
