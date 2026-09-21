@@ -67,6 +67,17 @@ class LayerTest(unittest.TestCase):
             with self.assertRaises(runtime.CaptureError):
                 build_layer.clean_operation_artifacts(pathlib.Path(directory))
 
+    def test_failed_build_writes_safe_termination_code(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = pathlib.Path(directory) / 'termination'
+            args = ['build', '--manifest', '/snapshot/capture.json', '--artifacts', '/artifacts',
+                    '--index-url', 'https://mirror/simple', '--result', str(result)]
+            with mock.patch.object(sys, 'argv', args), mock.patch.object(build_layer, 'build', side_effect=runtime.CaptureError('sensitive detail', 'PACKAGE_MODIFIED')):
+                with self.assertRaises(SystemExit) as stopped:
+                    build_layer.main()
+            self.assertEqual(stopped.exception.code, 1)
+            self.assertEqual(result.read_text(), '{"code":"PACKAGE_MODIFIED"}')
+
     def test_special_file_rejected(self):
         import os
         with tempfile.TemporaryDirectory() as directory:

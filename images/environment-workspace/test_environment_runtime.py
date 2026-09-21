@@ -5,6 +5,7 @@ import json
 import pathlib
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 
 HERE = pathlib.Path(__file__).parent
@@ -20,6 +21,61 @@ class RuntimeContractTest(unittest.TestCase):
                     {'name': 'demo-package', 'version': '1.2.3', 'filesHash': 'a' * 64}],
                 'checks': {'baseUnchanged': True, 'managedOnly': True,
                            'installedFilesVerified': True, 'stableCapture': True}}
+
+    def test_error_categories_never_include_exception_message(self):
+        import errno
+        import subprocess
+        cases = [
+            (runtime.CaptureError('https://user:secret@private', 'WHEEL_UNAVAILABLE'), 'WHEEL_UNAVAILABLE'),
+            (runtime.CaptureError('private detail', 'PACKAGE_MODIFIED'), 'PACKAGE_MODIFIED'),
+            (OSError(errno.ENOSPC, 'secret path'), 'TEMP_STORAGE_FULL'),
+            (subprocess.TimeoutExpired('secret command', 1), 'BUILD_TIMEOUT'),
+            (ValueError('secret value'), 'BUILD_FAILED'),
+        ]
+        for error, code in cases:
+            self.assertEqual(runtime.safe_error(error), {'code': code})
+
+    def test_python_binary_must_match_base_and_bootstrap_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            base = root / 'base-python'
+            base.write_bytes(b'known-base-python')
+            env = root / 'environment'
+            (env / 'bin').mkdir(parents=True)
+            (env / 'pyvenv.cfg').write_text('include-system-site-packages = true')
+            for name in ('python', 'python3', 'python3.10'):
+                (env / 'bin' / name).write_bytes(base.read_bytes())
+            with mock.patch.object(runtime, 'ENVIRONMENT', env), mock.patch.object(runtime, 'BASE_PYTHON', base):
+                expected = runtime.bootstrap_inventory()
+                runtime.verify_bootstrap(expected)
+                (env / 'bin' / 'python3').write_bytes(b'replaced-python')
+                with self.assertRaises(runtime.CaptureError) as caught:
+                    runtime.verify_bootstrap(expected)
+                self.assertEqual(caught.exception.code, 'PACKAGE_MODIFIED')
+
+    def test_reserved_entrypoints_rejected_before_install(self):
+        for name in ('python', 'python3', 'python3.11', 'ray', 'torchrun', 'raytrain-environment', 'pip3'):
+            with self.assertRaises(runtime.CaptureError):
+                runtime.reject_reserved_entrypoints('[console_scripts]\n' + name + ' = example:main\n')
+        runtime.reject_reserved_entrypoints('[console_scripts]\nexample-cli = example:main\n')
+
+    def test_untracked_file_outside_site_packages_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env = pathlib.Path(directory)
+            site = env / 'lib' / f'python{runtime.sys.version_info.major}.{runtime.sys.version_info.minor}' / 'site-packages'
+            site.mkdir(parents=True)
+            (env / 'personal-training-source.py').write_text('private code')
+            with mock.patch.object(runtime, 'ENVIRONMENT', env):
+                with self.assertRaises(runtime.CaptureError):
+                    runtime.verify_managed_tree([])
+
+    def test_kernel_share_data_uses_portable_fingerprint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / 'kernel.whl'
+            with zipfile.ZipFile(path, 'w') as wheel:
+                wheel.writestr('kernel-1.data/data/share/jupyter/kernels/python3/kernel.json', '{}')
+            expected = runtime.content_hash([('.data/share/jupyter/kernels/python3/kernel.json', hashlib.sha256(b'{}').hexdigest())])
+            self.assertEqual(runtime.wheel_fingerprint(path), expected)
 
     def test_manifest_rejects_base_override_and_duplicate(self):
         value = self.manifest()

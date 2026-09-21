@@ -11,19 +11,26 @@ import (
 // EnvironmentBuildConfig controls only newly requested environment builds.
 // It never replaces the existing training or workspace defaults.
 type EnvironmentBuildConfig struct {
-	Enabled bool
+	Enabled                                                 bool
 	BaseImage, WorkspaceImage, PrepareImage, PublisherImage string
-	StorageClass, WheelIndexURL string
-	EncryptionKey []byte
-	NodeSelector map[string]string
+	StorageClass, WheelIndexURL                             string
+	EncryptionKey                                           []byte
+	NodeSelector                                            map[string]string
 }
 
 func loadEnvironmentBuildConfig() (EnvironmentBuildConfig, error) {
 	enabled, err := parseBool("ENVIRONMENT_BUILDS_ENABLED", false)
-	if err != nil { return EnvironmentBuildConfig{}, err }
+	if err != nil {
+		return EnvironmentBuildConfig{}, err
+	}
 	cfg := EnvironmentBuildConfig{Enabled: enabled}
-	if !enabled { return cfg, nil }
-	images := []struct { key string; target *string }{
+	if !enabled {
+		return cfg, nil
+	}
+	images := []struct {
+		key    string
+		target *string
+	}{
 		{"ENVIRONMENT_BASE_IMAGE", &cfg.BaseImage},
 		{"ENVIRONMENT_WORKSPACE_IMAGE", &cfg.WorkspaceImage},
 		{"ENVIRONMENT_PREPARE_IMAGE", &cfg.PrepareImage},
@@ -36,7 +43,9 @@ func loadEnvironmentBuildConfig() (EnvironmentBuildConfig, error) {
 		}
 	}
 	cfg.EncryptionKey, err = base64.StdEncoding.DecodeString(os.Getenv("ENVIRONMENT_AUTH_KEY"))
-	if err != nil || len(cfg.EncryptionKey) != 32 { return EnvironmentBuildConfig{}, fmt.Errorf("ENVIRONMENT_AUTH_KEY must encode a separate 32-byte key") }
+	if err != nil || len(cfg.EncryptionKey) != 32 {
+		return EnvironmentBuildConfig{}, fmt.Errorf("ENVIRONMENT_AUTH_KEY must encode a separate 32-byte key")
+	}
 	cfg.StorageClass = envOr("ENVIRONMENT_STORAGE_CLASS", "ebs-ssd")
 	cfg.WheelIndexURL = strings.TrimSpace(os.Getenv("ENVIRONMENT_WHEEL_INDEX_URL"))
 	index, err := url.Parse(cfg.WheelIndexURL)

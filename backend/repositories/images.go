@@ -17,10 +17,10 @@ var ErrImageNotFound = errors.New("image not found")
 type PlatformImageRecord struct {
 	ID                   string  `gorm:"primaryKey"`
 	TenantID             *string `gorm:"column:tenant_id;index"`
-	OwnerUserID string `gorm:"column:owner_user_id;not null;default:''"`
- Visibility string `gorm:"column:visibility;not null;default:''"`
- EnvironmentVersionID string `gorm:"column:environment_version_id;not null;default:''"`
- Name                 string
+	OwnerUserID          string  `gorm:"column:owner_user_id;not null;default:''"`
+	Visibility           string  `gorm:"column:visibility;not null;default:''"`
+	EnvironmentVersionID string  `gorm:"column:environment_version_id;not null;default:''"`
+	Name                 string
 	Reference            string
 	Kind                 string `gorm:"index"`
 	Description          string
@@ -52,7 +52,7 @@ func (r *GormRepository) CreateImage(ctx context.Context, image domain.PlatformI
 	}
 	record := PlatformImageRecord{
 		OwnerUserID: image.OwnerUserID, Visibility: image.Visibility, EnvironmentVersionID: image.EnvironmentVersionID,
- ID: image.ID, TenantID: optionalID(image.TenantID), Name: image.Name,
+		ID: image.ID, TenantID: optionalID(image.TenantID), Name: image.Name,
 		Reference: image.Reference, Kind: image.Kind, Description: image.Description,
 		Framework: image.Framework, IsDefault: image.IsDefault, CreatedBy: image.CreatedBy,
 		RayVersion: image.RayVersion, SupportedEnginesJSON: string(supportedEnginesJSON),
@@ -90,13 +90,13 @@ func clearDefaultImage(tx *gorm.DB, kind, tenantID string) error {
 // ListImages returns team/global images for ownerless internal consumers.
 // Personal images require ListImagesForUser and never become implicit defaults.
 func (r *GormRepository) ListImages(ctx context.Context, tenantID, kind string) ([]domain.PlatformImage, error) {
- return r.ListImagesForUser(ctx, tenantID, "", kind)
+	return r.ListImagesForUser(ctx, tenantID, "", kind)
 }
 
 func (r *GormRepository) ListImagesForUser(ctx context.Context, tenantID, userID, kind string) ([]domain.PlatformImage, error) {
 	query := r.db.WithContext(ctx).Model(&PlatformImageRecord{}).
 		Where("tenant_id IS NULL OR tenant_id = ?", tenantID).
- Where("visibility IN (?, ?) OR (visibility = ? AND owner_user_id = ? AND tenant_id = ? AND owner_user_id <> '')", "", domain.ImageVisibilityTeam, domain.ImageVisibilityPersonal, userID, tenantID)
+		Where("visibility IN (?, ?) OR (visibility = ? AND owner_user_id = ? AND tenant_id = ? AND owner_user_id <> '')", "", domain.ImageVisibilityTeam, domain.ImageVisibilityPersonal, userID, tenantID)
 	if kind != "" {
 		query = query.Where("kind = ?", kind)
 	}
@@ -241,7 +241,7 @@ func platformImageFromRecord(record PlatformImageRecord) (domain.PlatformImage, 
 	}
 	image := domain.PlatformImage{
 		OwnerUserID: record.OwnerUserID, Visibility: record.Visibility, EnvironmentVersionID: record.EnvironmentVersionID,
- ID: record.ID, TenantID: valueOrEmpty(record.TenantID), Name: record.Name,
+		ID: record.ID, TenantID: valueOrEmpty(record.TenantID), Name: record.Name,
 		Reference: record.Reference, Kind: record.Kind, Description: record.Description,
 		Framework: record.Framework, IsDefault: record.IsDefault, CreatedBy: record.CreatedBy,
 		Environment: environment,
@@ -274,8 +274,14 @@ func (r *GormRepository) DeleteImage(ctx context.Context, tenantID, id string, s
 // ImageByReferenceForUser admits an owned environment only for its current
 // tenant and owner, even when the caller holds administrator roles.
 func (r *GormRepository) ImageByReferenceForUser(ctx context.Context, tenantID, userID, kind, reference string) (domain.PlatformImage, error) {
- images, err := r.ListImagesForUser(ctx, tenantID, userID, kind)
- if err != nil { return domain.PlatformImage{}, err }
- for _, image := range images { if image.Reference == reference { return image, nil } }
- return domain.PlatformImage{}, ErrImageNotFound
+	images, err := r.ListImagesForUser(ctx, tenantID, userID, kind)
+	if err != nil {
+		return domain.PlatformImage{}, err
+	}
+	for _, image := range images {
+		if image.Reference == reference {
+			return image, nil
+		}
+	}
+	return domain.PlatformImage{}, ErrImageNotFound
 }

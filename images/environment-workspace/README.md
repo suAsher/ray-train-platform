@@ -23,7 +23,9 @@ python -m pip check
 
 `/usr/local/bin/raytrain-environment capture` 输出不超过 1 MiB 的 schema 1 JSON。字段为 `schemaVersion`、`baseImage`、`pythonVersion`、`packages`、`checks`；新增包条目只有规范名称、固定版本和实际安装文件内容指纹 `filesHash`。不输出用户文件、源码、环境变量或凭据。
 
-基础包实际文件与构建时基线比较；新增包校验 RECORD、拒绝直接来源、软链接和未登记文件。捕获前后再次比对避免安装过程中的不一致。对有解释器路径差异的生成脚本校验安装记录，但不加入可移植 wheel 指纹；忽略 RECORD/INSTALLER/REQUESTED、bytecode 等安装生成项。第一版不支持 wheel 的非库 `.data` 内容，明确失败而非静默遗漏。
+基础包实际文件与构建时基线比较；新增包校验 RECORD、拒绝直接来源、软链接和未登记文件。捕获前后再次比对避免安装过程中的不一致。解释器、venv 配置与启动脚本使用构建时由 root 固定的哈希校验，包不能替换 Python、Ray、torchrun 或平台命令。对有解释器路径差异的其他生成脚本校验安装记录，但不加入可移植 wheel 指纹；忽略 RECORD/INSTALLER/REQUESTED、bytecode 等安装生成项。wheel 的 `.data` 只支持 Python 库与环境内 `share/` 资料（例如 IPykernel kernelspec），外部路径、headers 和自带 scripts 明确拒绝。
+
+捕获失败 stderr、构建失败终止消息只包含固定 `code`，不拼接底层异常、源地址或凭据。UI 依据代码提示依赖发生变化、wheel 不可用、文件被修改、超时或临时空间不足。
 
 集群构建 Pod 在固定 base 的 Python/ABI 下从管理员配置的 HTTPS 包源下载 wheel。源与版本不能直接保证文件一致，因此必须比对 wheel 库文件指纹与捕获值，然后锁定 wheel SHA-256。构建 Pod 在同路径 venv 离线安装并验证，再只导出受管依赖层。独立可信 OCI 组装程序把这一层附加到原固定 base，不执行用户 Dockerfile，不启动嵌套容器。镜像不包含 VS Code、独立 Jupyter 服务环境或用户源码。调试预置的 IPykernel 和新增依赖也进入捕获清单，确保 Notebook 与训练解释器相同。
 

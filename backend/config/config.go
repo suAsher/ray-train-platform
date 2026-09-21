@@ -23,7 +23,7 @@ var (
 )
 
 type Config struct {
-	EnvironmentBuild EnvironmentBuildConfig
+	EnvironmentBuild                         EnvironmentBuildConfig
 	SPKRayjobMinimumVersion                  string
 	AppEnv                                   string
 	HTTPAddr                                 string

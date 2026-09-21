@@ -9,7 +9,7 @@ COPY images/environment-workspace/pip.conf /etc/pip.conf
 RUN test -n "${PIP_INDEX_URL}" \
  && python3 -m venv --copies --system-site-packages /opt/raytrain/environment \
  && python3 -m venv --copies /opt/raytrain/editor \
- && /opt/raytrain/editor/bin/python -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" jupyterlab==4.2.5 ipykernel==6.29.5
+ && /opt/raytrain/editor/bin/python -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" jupyterlab==4.2.5 jupyter_server==2.14.2 ipykernel==6.29.5
 COPY --from=code-server /usr/lib/code-server /usr/lib/code-server
 COPY --from=code-server /usr/bin/code-server /usr/bin/code-server
 COPY images/environment-workspace/environment_runtime.py /usr/local/lib/raytrain-environment/environment_runtime.py

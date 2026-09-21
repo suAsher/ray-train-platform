@@ -142,8 +142,8 @@ type SubmissionInput struct {
 	IdempotencyKey                string
 	ExternalSubmissionID          string
 	ReservedJobID                 string `json:"-"`
-	SharedImagesOnly              bool `json:"-"`
- ExpectedImageDigest           string `json:"-"`
+	SharedImagesOnly              bool   `json:"-"`
+	ExpectedImageDigest           string `json:"-"`
 	ExpectedDatasetManifestSHA256 string `json:"-"`
 }
 
@@ -1193,6 +1193,8 @@ func (service *SubmissionService) resolveStorageSelection(ctx context.Context, p
 // Shared evaluation and serving contracts must not capture an administrator's
 // personal environment and subsequently lend it to another user.
 func imageUserID(input SubmissionInput) string {
- if input.SharedImagesOnly || input.Origin == domain.SubmissionOriginEvaluation || input.Origin == domain.SubmissionOriginServing { return "" }
- return input.Principal.Subject
+	if input.SharedImagesOnly || input.Origin == domain.SubmissionOriginEvaluation || input.Origin == domain.SubmissionOriginServing {
+		return ""
+	}
+	return input.Principal.Subject
 }

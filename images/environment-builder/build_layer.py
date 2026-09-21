@@ -12,7 +12,7 @@ import subprocess
 import sys
 import tarfile
 
-from environment_runtime import BASELINE, ENVIRONMENT, CaptureError, read_manifest
+from environment_runtime import BASELINE, ENVIRONMENT, CaptureError, read_manifest, safe_error, verify_bootstrap
 from prepare import prepare, pip_environment
 
 MAX_LAYER_BYTES = 8 * 1024 * 1024 * 1024
@@ -127,9 +127,13 @@ def build(manifest_path, artifacts, index):
         ['/usr/local/bin/raytrain-selfcheck'],
         [sys.executable, '-I', '-c', 'import ray, torch, ray.train, raytrain_runtime.managed_driver'],
     ]
+    bootstrap = json.loads(BASELINE.read_text(encoding='utf-8'))['bootstrap']
+    verify_bootstrap(bootstrap)
     for command in commands:
+        verify_bootstrap(bootstrap)
         result = subprocess.run(command, env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL, timeout=600, check=False)
+        verify_bootstrap(bootstrap)
         if result.returncode:
             raise CaptureError('Offline dependency or platform compatibility validation failed; inspect the added dependencies')
     temporary = artifacts / 'layer.tar.partial'
@@ -156,14 +160,19 @@ def main():
     parser.add_argument('--index-url', required=True)
     parser.add_argument('--result', default='/dev/termination-log')
     args = parser.parse_args()
-    result = json.dumps(build(args.manifest, Path(args.artifacts), args.index_url), separators=(',', ':'))
-    Path(args.result).write_text(result, encoding='utf-8')
+    try:
+        result = json.dumps(build(args.manifest, Path(args.artifacts), args.index_url), separators=(',', ':'))
+        Path(args.result).write_text(result, encoding='utf-8')
+    except Exception as error:
+        result = json.dumps(safe_error(error), separators=(',', ':'))
+        try:
+            Path(args.result).write_text(result, encoding='utf-8')
+        except OSError:
+            pass
+        print(result, file=sys.stderr)
+        raise SystemExit(1)
     print(result)
 
 
 if __name__ == '__main__':
-    try:
-        main()
-    except (CaptureError, OSError, ValueError, subprocess.SubprocessError, tarfile.TarError) as error:
-        print(json.dumps({'error': str(error) if isinstance(error, CaptureError) else 'Environment layer build failed; retry with a fresh build operation'}), file=sys.stderr)
-        raise SystemExit(1)
+    main()

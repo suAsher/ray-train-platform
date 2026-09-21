@@ -210,8 +210,12 @@ func main() {
 	platformNamespace := runtimeNamespace()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	environmentService, err := newEnvironmentBuildService(repository, kubeClient, cfg)
-	if err != nil { log.Fatalf("initialize environment publication: %v", err) }
-	if environmentService != nil && cfg.EnvironmentBuild.Enabled { go environmentService.Run(ctx) }
+	if err != nil {
+		log.Fatalf("initialize environment publication: %v", err)
+	}
+	if environmentService != nil && cfg.EnvironmentBuild.Enabled {
+		go environmentService.Run(ctx)
+	}
 	defer stop()
 	if modelSnapshots != nil {
 		if err := jobHandler.InitializeFunctionWarehouseSync(ctx, repositories.NewWarehouseSyncStore(database), []byte(cfg.PATPepper)); err != nil {
@@ -418,7 +422,9 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 
 	interactive := v1.Group("")
 	interactive.Use(auth.RequireInteractiveSession(cfg.DemoMode))
-	if len(environmentServices) > 0 && environmentServices[0] != nil { api.RegisterEnvironmentBuildRoutes(interactive, environmentServices[0]) }
+	if len(environmentServices) > 0 && environmentServices[0] != nil {
+		api.RegisterEnvironmentBuildRoutes(interactive, environmentServices[0])
+	}
 	jobs.RegisterMLflowDashboardAccessRoute(interactive)
 	if locals != nil {
 		if cfg.LocalAuthEnabled {

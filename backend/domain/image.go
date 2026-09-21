@@ -7,21 +7,21 @@ import (
 )
 
 const (
-	ImageKindTraining  = "training"
-	ImageKindWorkspace = "workspace"
- ImageVisibilityPersonal = "personal"
- ImageVisibilityTeam = "team"
+	ImageKindTraining       = "training"
+	ImageKindWorkspace      = "workspace"
+	ImageVisibilityPersonal = "personal"
+	ImageVisibilityTeam     = "team"
 )
 
 // PlatformImage is a catalogued runtime, either administrator-published or an
 // owner-scoped environment build. Selection always checks its visibility.
 type PlatformImage struct {
-	ID string `json:"id"`
-	OwnerUserID string `json:"ownerUserId,omitempty"`
- Visibility string `json:"visibility,omitempty"`
- EnvironmentVersionID string `json:"environmentVersionId,omitempty"`
- // Empty tenant means global access only for legacy administrator entries.
- TenantID         string           `json:"tenantId,omitempty"`
+	ID                   string `json:"id"`
+	OwnerUserID          string `json:"ownerUserId,omitempty"`
+	Visibility           string `json:"visibility,omitempty"`
+	EnvironmentVersionID string `json:"environmentVersionId,omitempty"`
+	// Empty tenant means global access only for legacy administrator entries.
+	TenantID         string           `json:"tenantId,omitempty"`
 	Name             string           `json:"name"`
 	Reference        string           `json:"reference"`
 	Kind             string           `json:"kind"`
@@ -61,23 +61,31 @@ func ValidateImageKind(kind string) error {
 // VisibleTo deliberately has no role override: administrative membership is
 // not permission to run another user's personal environment.
 func (i PlatformImage) VisibleTo(tenantID, userID string) bool {
- if i.Visibility == ImageVisibilityPersonal {
-  return tenantID != "" && tenantID == i.TenantID && userID != "" && userID == i.OwnerUserID
- }
- if i.Visibility != "" && i.Visibility != ImageVisibilityTeam { return false }
- return i.TenantID == "" || i.TenantID == tenantID
+	if i.Visibility == ImageVisibilityPersonal {
+		return tenantID != "" && tenantID == i.TenantID && userID != "" && userID == i.OwnerUserID
+	}
+	if i.Visibility != "" && i.Visibility != ImageVisibilityTeam {
+		return false
+	}
+	return i.TenantID == "" || i.TenantID == tenantID
 }
 
 func (i PlatformImage) Validate() error {
- switch i.Visibility {
- case "":
-  if i.OwnerUserID != "" || i.EnvironmentVersionID != "" { return fmt.Errorf("owned images require explicit visibility") }
- case ImageVisibilityPersonal, ImageVisibilityTeam:
-  if strings.TrimSpace(i.OwnerUserID) == "" || strings.TrimSpace(i.TenantID) == "" { return fmt.Errorf("owned images require an owner and tenant") }
-  if i.Visibility == ImageVisibilityPersonal && i.IsDefault { return fmt.Errorf("personal images cannot be defaults") }
- default:
-  return fmt.Errorf("image visibility must be personal or team")
- }
+	switch i.Visibility {
+	case "":
+		if i.OwnerUserID != "" || i.EnvironmentVersionID != "" {
+			return fmt.Errorf("owned images require explicit visibility")
+		}
+	case ImageVisibilityPersonal, ImageVisibilityTeam:
+		if strings.TrimSpace(i.OwnerUserID) == "" || strings.TrimSpace(i.TenantID) == "" {
+			return fmt.Errorf("owned images require an owner and tenant")
+		}
+		if i.Visibility == ImageVisibilityPersonal && i.IsDefault {
+			return fmt.Errorf("personal images cannot be defaults")
+		}
+	default:
+		return fmt.Errorf("image visibility must be personal or team")
+	}
 
 	if err := i.Environment.Validate(); err != nil {
 		return err

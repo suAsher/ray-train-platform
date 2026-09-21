@@ -138,9 +138,13 @@ func (h *Handler) listImages(c *gin.Context) {
 			return
 		}
 		images, err = store.ListAllImages(c.Request.Context(), kind)
-  sharedImages := make([]domain.PlatformImage, 0, len(images))
-  for _, image := range images { if image.Visibility != domain.ImageVisibilityPersonal { sharedImages = append(sharedImages, image) } }
-  images = sharedImages
+		sharedImages := make([]domain.PlatformImage, 0, len(images))
+		for _, image := range images {
+			if image.Visibility != domain.ImageVisibilityPersonal {
+				sharedImages = append(sharedImages, image)
+			}
+		}
+		images = sharedImages
 	} else {
 		images, err = visibleImages(c.Request.Context(), h.images, principal.TenantID, principal.Subject, kind)
 	}

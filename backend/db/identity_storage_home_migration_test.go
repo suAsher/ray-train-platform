@@ -33,4 +33,3 @@ func TestIdentityStorageHomeMigrationPreservesHistoryWithoutGrantingMembership(t
 		t.Fatal("historical ownership migration must not delete user data")
 	}
 }
-

@@ -16,7 +16,7 @@ import subprocess
 import sys
 from urllib.parse import urlsplit
 
-from environment_runtime import BASE_IMAGE, CaptureError, read_manifest, wheel_fingerprint
+from environment_runtime import BASE_IMAGE, CaptureError, read_manifest, wheel_fingerprint, safe_error
 
 MAX_CONTEXT_BYTES = 4 * 1024 * 1024 * 1024
 RUNTIME_ROOT = Path('/usr/local/lib/raytrain-environment')
@@ -45,13 +45,13 @@ def download_wheels(manifest, context, index):
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300, check=False)
         downloaded = set(wheelhouse.iterdir()) - before
         if result.returncode or len(downloaded) != 1:
-            raise CaptureError('Matching wheel is unavailable from the configured mirror: ' + requirement)
+            raise CaptureError('Matching wheel is unavailable from the configured mirror: ' + requirement, 'WHEEL_UNAVAILABLE')
         wheel = downloaded.pop()
         total += wheel.stat().st_size
         if wheel.suffix != '.whl' or total > MAX_CONTEXT_BYTES:
             raise CaptureError('Wheel materials exceed the supported format or 4 GiB size limit')
         if wheel_fingerprint(wheel) != package['filesHash']:
-            raise CaptureError('Mirror wheel differs from the installed dependency: ' + requirement + '; reinstall from the configured mirror')
+            raise CaptureError('Mirror wheel differs from the installed dependency: ' + requirement + '; reinstall from the configured mirror', 'PACKAGE_MODIFIED')
         digest = hashlib.sha256()
         with wheel.open('rb') as stream:
             for chunk in iter(lambda: stream.read(1024 * 1024), b''):
@@ -97,6 +97,6 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except (CaptureError, OSError, ValueError, subprocess.SubprocessError) as error:
-        print(json.dumps({'error': str(error) if isinstance(error, CaptureError) else 'Environment material preparation failed; retry after checking the configured mirror'}), file=sys.stderr)
+    except Exception as error:
+        print(json.dumps(safe_error(error)), file=sys.stderr)
         raise SystemExit(1)

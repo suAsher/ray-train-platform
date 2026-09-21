@@ -230,40 +230,61 @@ func TestPersonalAccessTokenAPIHidesInternalStoreErrors(t *testing.T) {
 }
 
 func TestPersonalAccessTokenNeverExpiresRequiresExplicitMLflowFullSelection(t *testing.T) {
- now := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
- for _, tc := range []struct{name, body string; status int; permanent bool}{
-  {"explicit full", `{"scopes":["mlflow:full"],"neverExpires":true}`, 201, true},
-  {"normalized full", `{"scopes":[" mlflow:full ","mlflow:full"],"neverExpires":true}`, 201, true},
-  {"default stays finite", `{}`, 201, false},
-  {"full defaults finite", `{"scopes":["mlflow:full"]}`, 201, false},
-  {"false stays finite", `{"scopes":["mlflow:full"],"neverExpires":false}`, 201, false},
-  {"conflicting expiry", `{"scopes":["mlflow:full"],"neverExpires":true,"expiresInDays":365}`, 400, false},
-  {"default scopes forbidden", `{"neverExpires":true}`, 400, false},
-  {"job scopes forbidden", `{"scopes":["jobs:read"],"neverExpires":true}`, 400, false},
-  {"mixed scopes forbidden", `{"scopes":["mlflow:full","jobs:read"],"neverExpires":true}`, 400, false},
- } {
-  t.Run(tc.name, func(t *testing.T) {
-   store := &fakePATManagementStore{}
-   principal := oidcPATPrincipal()
-   response := performPATRequest(newPATAPIRouter(t, store, &principal, false, now), http.MethodPost, "/api/v1/personal-access-tokens", tc.body)
-   if response.Code != tc.status { t.Fatalf("status=%d want=%d body=%s", response.Code, tc.status, response.Body.String()) }
-   if tc.status != 201 { if len(store.created) != 0 || len(store.ensured) != 0 { t.Fatal("invalid request reached persistence") }; return }
-   var envelope struct { Data map[string]json.RawMessage `json:"data"` }
-   if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil { t.Fatal(err) }
-   expiry, exists := envelope.Data["expiresAt"]
-   if !exists || (string(expiry) == "null") != tc.permanent { t.Fatalf("unexpected expiresAt=%s permanent=%t", expiry, tc.permanent) }
-   store.items = append(store.items, store.created...)
-   listed := performPATRequest(newPATAPIRouter(t, store, &principal, false, now), http.MethodGet, "/api/v1/personal-access-tokens", "")
-   if tc.permanent && !strings.Contains(listed.Body.String(), `"expiresAt":null`) { t.Fatalf("list lost permanent expiry: %s", listed.Body.String()) }
-  })
- }
+	now := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name, body string
+		status     int
+		permanent  bool
+	}{
+		{"explicit full", `{"scopes":["mlflow:full"],"neverExpires":true}`, 201, true},
+		{"normalized full", `{"scopes":[" mlflow:full ","mlflow:full"],"neverExpires":true}`, 201, true},
+		{"default stays finite", `{}`, 201, false},
+		{"full defaults finite", `{"scopes":["mlflow:full"]}`, 201, false},
+		{"false stays finite", `{"scopes":["mlflow:full"],"neverExpires":false}`, 201, false},
+		{"conflicting expiry", `{"scopes":["mlflow:full"],"neverExpires":true,"expiresInDays":365}`, 400, false},
+		{"default scopes forbidden", `{"neverExpires":true}`, 400, false},
+		{"job scopes forbidden", `{"scopes":["jobs:read"],"neverExpires":true}`, 400, false},
+		{"mixed scopes forbidden", `{"scopes":["mlflow:full","jobs:read"],"neverExpires":true}`, 400, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakePATManagementStore{}
+			principal := oidcPATPrincipal()
+			response := performPATRequest(newPATAPIRouter(t, store, &principal, false, now), http.MethodPost, "/api/v1/personal-access-tokens", tc.body)
+			if response.Code != tc.status {
+				t.Fatalf("status=%d want=%d body=%s", response.Code, tc.status, response.Body.String())
+			}
+			if tc.status != 201 {
+				if len(store.created) != 0 || len(store.ensured) != 0 {
+					t.Fatal("invalid request reached persistence")
+				}
+				return
+			}
+			var envelope struct {
+				Data map[string]json.RawMessage `json:"data"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+				t.Fatal(err)
+			}
+			expiry, exists := envelope.Data["expiresAt"]
+			if !exists || (string(expiry) == "null") != tc.permanent {
+				t.Fatalf("unexpected expiresAt=%s permanent=%t", expiry, tc.permanent)
+			}
+			store.items = append(store.items, store.created...)
+			listed := performPATRequest(newPATAPIRouter(t, store, &principal, false, now), http.MethodGet, "/api/v1/personal-access-tokens", "")
+			if tc.permanent && !strings.Contains(listed.Body.String(), `"expiresAt":null`) {
+				t.Fatalf("list lost permanent expiry: %s", listed.Body.String())
+			}
+		})
+	}
 }
 
 func TestPersonalAccessTokenNeverExpiresRejectsIntegrationIdentity(t *testing.T) {
- store := &fakePATManagementStore{}
- principal := oidcPATPrincipal()
- principal.Subject = "integration:integration-1"
- principal.IntegrationID = "integration-1"
- response := performPATRequest(newPATAPIRouter(t, store, &principal, false, time.Now()), http.MethodPost, "/api/v1/personal-access-tokens", `{"scopes":["mlflow:full"],"neverExpires":true}`)
- if response.Code != http.StatusBadRequest || len(store.created) != 0 { t.Fatalf("integration permanent PAT status=%d", response.Code) }
+	store := &fakePATManagementStore{}
+	principal := oidcPATPrincipal()
+	principal.Subject = "integration:integration-1"
+	principal.IntegrationID = "integration-1"
+	response := performPATRequest(newPATAPIRouter(t, store, &principal, false, time.Now()), http.MethodPost, "/api/v1/personal-access-tokens", `{"scopes":["mlflow:full"],"neverExpires":true}`)
+	if response.Code != http.StatusBadRequest || len(store.created) != 0 {
+		t.Fatalf("integration permanent PAT status=%d", response.Code)
+	}
 }
