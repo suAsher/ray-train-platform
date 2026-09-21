@@ -277,7 +277,7 @@ func environmentSafeFailure(data []byte) error {
 		return nil
 	}
 	var failure struct {
-		Code string `json:"code"`
+		Code      string `json:"code"`
 		ErrorCode string `json:"errorCode"`
 	}
 	if json.Unmarshal(data, &failure) != nil {
