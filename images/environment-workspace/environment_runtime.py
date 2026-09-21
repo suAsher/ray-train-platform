@@ -141,6 +141,12 @@ def distribution_fingerprint(distribution, *, managed):
             outside = False  # Portable wheel data, e.g. ipykernel kernelspec.
         if outside and not resolved.is_relative_to(prefix / 'bin'):
             raise CaptureError('Package installs files outside its Python environment; not supported by wheel capture')
+        if not managed and not path.exists() and not path.is_symlink():
+            # Fixed Conda base metadata includes build-only source/license files
+            # that are absent in the shipped image. Record absence, never ignore
+            # it: creating such a file later changes the immutable-base digest.
+            entries.append((name, 'missing-in-fixed-base'))
+            continue
         value = checked_file_hash(path, item.hash.mode if managed and item.hash else '', item.hash.value if managed and item.hash else '')
         if not outside:
             entries.append((name, value))

@@ -77,6 +77,19 @@ class RuntimeContractTest(unittest.TestCase):
             expected = runtime.content_hash([('.data/share/jupyter/kernels/python3/kernel.json', hashlib.sha256(b'{}').hexdigest())])
             self.assertEqual(runtime.wheel_fingerprint(path), expected)
 
+    def test_fixed_conda_base_missing_sources_are_fingerprinted_not_ignored(self):
+        import types
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            distribution = types.SimpleNamespace(
+                files=[runtime.metadata.PackagePath('missing-build-source.py')],
+                locate_file=lambda name: root / str(name), read_text=lambda name: None)
+            absent = runtime.distribution_fingerprint(distribution, managed=False)
+            with self.assertRaises(runtime.CaptureError):
+                runtime.distribution_fingerprint(distribution, managed=True)
+            (root / 'missing-build-source.py').write_text('new content')
+            self.assertNotEqual(absent, runtime.distribution_fingerprint(distribution, managed=False))
+
     def test_manifest_rejects_base_override_and_duplicate(self):
         value = self.manifest()
         runtime.validate_manifest(value)
