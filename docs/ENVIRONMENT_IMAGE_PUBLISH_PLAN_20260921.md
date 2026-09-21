@@ -73,7 +73,7 @@ Rootless BuildKit 在现有标准安全策略下实测因内核权限限制失�
 
 请求限时、体积与字段校验、owner/团队鉴权和速率限制均在后端。API/UI 显示脱敏阶段和固定错误，不开放任意原始 Pod 日志。
 
-## 发布与验收状态
+## 发布与验收状态（发布前快照）
 
 - 基线四端源码：`7288e52650bad1adfd90493ae255784deb2a534d`；本轮尚未推送 main。
 - 当前生产仍为 backend `release-20260920-03-7288e52`、Helm 245、schema 54。
@@ -115,3 +115,55 @@ Portal `a6f1c6f` 流水线 34430 成功并核对线上镜像；后续工作区�
 本人专用工作区 `ws-4c25a0e33634e952fc39afb3` 实际 Ray 2.58.0，Worker 节点 `172.28.1.229`，4090 D 小张量 CUDA 检查通过；内网安装 `pyfiglet==1.0.2` 和 pip check 通过，VS Code 页面成功。尝试升级 Base 固定的 boltons 被约束拒绝，未修改原包。Jupyter 暴露新增镜像默认用户目录权限缺陷，已增加真实非 root 默认目录 HTTP、创建 kernel 及执行受管 Python 回归；不是修改用户目录绕过。用户明确批准停止并重建此验收工作区，旧 RayCluster/Pod 已回收，个人文件未删除。
 
 Harbor 认证实测发现：有效 CLI Secret 在管理接口 `/api/v2.0/users/current` 返回 401，在 Registry `/service/token` 返回正确身份及专用目标 push grant；错误密码返回 401。修复改走固定 TLS 发行方的无 scope 身份令牌，独立验证目标写权限，项目管理接口不可用允许手输目标；网络不可用与凭据拒绝分别处理。终态凭据仍按原策略清理，未为重试延长保留期限。Jupyter 和 Harbor 补充修复需统一候选回归、同步、构建和真实闭环验收后再记录完成，不能以首次部署代替最终验收。
+
+### 2026-09-21 19:20 更新：调试验收通过，推送闭环仍在验收
+
+后端四端源码已核对为 `a6fa0da2ebd4fcdc09ca1a37ab5110299d05f596`。生产 Helm 249/schema56；后端 tag `release-20260921-04-a6fa0da`，amd64 digest `sha256:1939df56c68f309425651b43b797bb98c3428f7b2ac1889e6e11098273edc0bb`，2/2 Ready。发布仅改变后端镜像和后续 publisher Job 镜像；本轮前后 547 个 RayJob/RayCluster/训练 Pod 的 UID、容器状态和重启计数均未变化。
+
+Portal dev `f1b3478a1238b38a6b1ae472e888f4779e0c5028` 的流水线 34436 成功，并核对 dev Deployment 实际镜像。未发布 master。本轮推送诊断修复不涉及前端。
+
+- Jupyter 修复镜像 amd64 `sha256:1bd5d23d93d42cf230190b5b1959a2f3b57fddfe41cc0e94593e0e665b590747`；新目录 `job-87626bd437a0934ec35d72ca` 暂为 local 可选、非默认。用户明确批准后，仅移除已替代旧目录 `job-7620433cd735e483a0c8b412`；不删除 Harbor 镜像、原 Base 或用户文件。
+- 重建本人工作区 `ws-dfaba1add7107f1532957c4e`，Worker 节点 `172.28.1.229`，实际镜像匹配。浏览器 Jupyter 与 VS Code 成功；Jupyter Console 实际输出受管前缀 `/opt/raytrain/environment`、`pyfiglet=1.0.2`、`cuda=True`。通过火山内网源安装新增依赖，pip check 成功。
+- 构建 `env-2cb0f51640fbe56417ecc86c8b9d95e4` 的账号验证与 `public/raytrain-env-acceptance-20260921` push grant 验证通过。23 包捕获、wheel 哈希、离线重建文件、CPU 校验及 OCI 组装通过；新增依赖层 104,601,600 字节，SHA256 `c8dde6619fab9e2b20b7d7a4b0e049d4c4e20fb9e32bf018149bd52ef7916a9f`。
+- 该构建实际在集群节点 `172.28.1.233` 运行：0 GPU、请求 1 CPU/2Gi、上限 4 CPU/8Gi、非特权、无宿主机挂载。用户环境构建不在运维构建机运行。
+- 第一次 PUSHING 失败，尚无成功发布或新镜像训练证据。原 publisher 错误被折叠成通用提示，失败 Job 已按策略清理，历史日志已轮转，不能据此断言 Harbor 权限或上传超时是根因。失败后临时凭据对象已清理，冻结 OCI 材料保留供重试。
+- 修复了安全错误码映射、临时网络错误重试性质，并增加只包含固定阶段、方法、HTTP 状态和超时分类的诊断。原始错误、URL、上传查询参数和凭据不进入诊断。未放宽 Harbor origin/目标限制，未凭猜测延长超时。publisher 新 amd64 digest `sha256:72ee87c10eb997b7723a138c906c237612628ce5115b1f9b5dec15c007a2e474`。
+- 新增非空合法 tar layer 的上传中断与重试测试，构建机 RED→GREEN、完整 Go/go vet/真实无网络 PostgreSQL 通过，独立安全审阅无 P1/P2。证据 `/tmp/rtp-env-publish-final-verify-20260921.log`；发布备份和运行快照位于 `/root/raytrain-release-20260921-environment-images/publish-fix/`。
+
+待完成：页面重新授权后复用冻结材料重试，取得真实推送、机器人拉取、目录登记、使用新镜像单卡训练及验收资源收尾证据。此状态仍不能称完整闭环已完成。私有/仅本地 wheel 托管、任意 rootfs commit 和基础核心包升级不属于已实现能力。
+
+### 2026-09-21 20:40 更新：大层上传确认超时修复上线
+
+第二次重试在镜像层 PATCH 上传后失败，白名单诊断明确为 `TRANSPORT_NETWORK_TIMEOUT`。Harbor Ingress 同一验收目标的请求返回 499，upstream 等待分别为 15.000、15.008、15.023、15.088 秒；与推送错误复用元数据查询 transport 的 15 秒 `ResponseHeaderTimeout` 一致。Harbor Ingress 的连接/读/写超时为 36000 秒且不限请求体，因此本轮修复位于平台 publisher，不修改 Harbor、用户依赖或权限。
+
+`bc21abe6ce2cd5658150a0f3f0fd221509d77184` 已在本地/GitHub/内部 GitLab/正式构建目录一致。仅在 `Publish` 内克隆 transport，将镜像上传确认等待改为 5 分钟；身份/权限请求仍为 15 秒 header、20 秒整体，Kubernetes Job 总时限仍为 30 分钟。非空合法 tar 层的延迟确认测试有效 RED→GREEN，构建机完整 Go、go vet、真实无网络 PostgreSQL 通过，独立审阅无阻塞问题。证据 `/tmp/rtp-env-timeout-final-verify-20260921.log`。
+
+仅构建 `environment-publisher`，tag `release-20260921-05-bc21abe`，amd64 digest `sha256:df81ab374250fe2b81848ac000e2704c69b7376d07a1127af4ba9e5974003098`。严格 server-side dry-run 仅 `ENVIRONMENT_PUBLISHER_IMAGE` 变化；Helm 250 已部署，后端业务镜像和 Portal 不重建。发布记录在构建机 `/root/raytrain-release-20260921-environment-images/timeout-fix/`。
+
+第二次失败的临时凭据已自动清理；第三次重试等待用户在 Chrome 表单重新授权。冻结 OCI 材料继续保留，未改为延长凭据保留以规避输入。真实推送、新镜像 GPU 训练与验收工作区收尾尚未完成，不能报告端到端成功。
+
+### 2026-09-21 21:50 更新：真实推送与机器人拉取通过
+
+第三次重试成功：publisher Pod `rt-env-job-6b50ec61c7e53921a5ee44f88272224d-4pdg7` 在节点 `172.28.1.229` 使用修复后的 `df81ab3…` 镜像，Harbor 层 PATCH 返回 202、提交 PUT 返回 201，最终 `REGISTRY_VERIFY` 成功、退出 0。随后拉取校验 Pod `rt-env-job-df6cc12ef0412003edbf0e1c312e39e3-q6h65` 退出 0。构建变为 READY，`pullVerified=true`、`cpuImportCheck=true`，镜像为 `harbor.wellspiking.ai/public/raytrain-env-acceptance-20260921@sha256:163def0835a422a3ff116844e9529c1a1afc18836677e8def347aa35791fbbb6`。目录 `image-env-2cb0f51640fbe56417ecc86c8b9d95e4` 为本人可见，固定 Ray 2.58.0。
+
+浏览器“用于训练”按钮确实带入该镜像摘要。训练提交发现独立前端兼容缺陷：真实已上传 ZIP 的 HEAD 返回 200 和 `raypkg-` 代码包 ID，但 Portal 提交校验只接受旧 `artifact-` 前缀，尚未向后端提交训练。正在 dev 修复并重走 UI；不把镜像 READY 当作 GPU 训练通过。
+
+只读数据库确认本构建 `cleaned_at` 已设置，发布授权与凭据材料剩余均为 0；按构建 label 查 Job/Pod/PVC/Secret 均无残留。平台清理的是本次凭据副本，未撤销 Harbor 账号自身的 CLI Secret。原 Base 和原默认工作区目录仍存在且未变。白名单日志监视进程已停止。
+
+### 2026-09-21 22:32 最终验收：页面提交与 GPU 训练通过
+
+Portal dev 修复 `551fbbb2a0d9a14a6b0aa4d2dd3ea353ba257fd9` 保留同事最新 `f499b4fb`，兼容旧 `artifact-` 及服务端真实 `raypkg-<64位小写SHA256>`，仍拒绝路径、URL和畸形标识。确认区显示实际上传包；自助镜像说明区别于管理员声明，不补造缺失版本。构建机真实 ID RED→GREEN、完整 Dockerfile.lint/dev build、独立审阅通过；GitLab 流水线 34454 的 lint/docker-dev/helm-deploy-dev 均成功，dev Deployment 实际镜像与候选 SHA 一致，未发布 master。
+
+从真实浏览器“用于训练”带入镜像，选择已上传不可变代码包后成功提交 `job-6990bebd198ea62e9dc71a01`。资源为 1 Worker/1 GPU/4 CPU/16Gi、3600 秒上限、不自动重试、不读取业务数据。源 ZIP SHA256 `330dc6466aa9a7acc6317be82c309fc6f2e625a9e5be40a08147269dabb30658`，平台返回的 artifact ID 与提交记录一致。
+
+任务 22:27:27 提交、22:28:12 成功，平台计时 44 秒。Head 在 `172.28.1.118`，GPU Worker 在 `172.28.1.222`；两者实际 imageID 均为 `163def0835a422a3ff116844e9529c1a1afc18836677e8def347aa35791fbbb6`，重启 0。训练日志及页面预览报告确认：受管 Python `/opt/raytrain/environment`、Ray 2.58.0、Torch 2.4.1+cu121、pyfiglet 1.0.2、RTX 4090 D、8 个优化步骤、loss 有限。
+
+产物页实际显示 `environment-acceptance.json`（220 字节）、`environment-acceptance.pt`（2760 字节）及平台拓扑文件。权重经平台下载接口读回 200，SHA256 `fa70709a22b99fbd90f73ec2b348fa636dde93ac833a7d39b616c90644c2c3b8`。首次打开时列表缓存只显示占位文件，刷新后产物齐全；报告预览内容与日志一致。
+
+收尾：本人验收工作区 `ws-dfaba1add7107f1532957c4e` 已通过页面停止，RayCluster/Pod 不存在；本次训练 RayCluster/Worker 已自动回收，历史任务记录与产物保留。构建的 Job/Pod/PVC/Secret 和平台凭据材料均清理，监视脚本停止。新版 Base 调试目录 `job-87626bd437a0934ec35d72ca` 验收后设为全平台共享、非默认；原 Base 训练项与旧默认调试项未变。测试环境版本保留本人可见，不把验收依赖镜像设成团队默认。
+
+最终可执行状态：Helm 250/schema56；backend 仍 `release-20260921-04-a6fa0da`/`1939df56…`，publisher 为 `release-20260921-05-bc21abe`/`df81ab37…`，prepare 与 workspace 摘要见前文。此次前端独立发布 dev。后端四端代码运行候选为 `bc21abe6ce2cd5658150a0f3f0fd221509d77184`，本节后续文档提交不要求重建镜像。发布前后 776 个存量训练相关资源 UID/状态/重启计数未变化。
+
+最终证据位于构建机 `/root/raytrain-release-20260921-environment-images/final-evidence/`，含完整后端回归、镜像构建、Portal lint/dev/RED、凭据清理和训练节点/镜像记录。已清理本轮四个干净后端隔离测试工作树及 Portal 精确候选目录/归档，保留备份、共享缓存、其他任务文件与本地开发目录。
+
+本次已完成的是受管 Base 中新增可重建 wheel 依赖的环境保存闭环。任意容器 rootfs commit、系统包或基础 Ray/Torch/CUDA 替换、仅离线私有 wheel 的托管输入仍未实现；不把本次单卡随机张量成功当成任意业务模型、多卡或恢复验收。用户说明入口为 `/raytrain/rayTrain/help#article/custom-environment`，已包含操作步骤、个人 Harbor CLI Secret、重试及保存范围，保留原手动镜像构建指南。
