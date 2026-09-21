@@ -167,3 +167,33 @@ Portal dev 修复 `551fbbb2a0d9a14a6b0aa4d2dd3ea353ba257fd9` 保留同事最新 
 最终证据位于构建机 `/root/raytrain-release-20260921-environment-images/final-evidence/`，含完整后端回归、镜像构建、Portal lint/dev/RED、凭据清理和训练节点/镜像记录。已清理本轮四个干净后端隔离测试工作树及 Portal 精确候选目录/归档，保留备份、共享缓存、其他任务文件与本地开发目录。
 
 本次已完成的是受管 Base 中新增可重建 wheel 依赖的环境保存闭环。任意容器 rootfs commit、系统包或基础 Ray/Torch/CUDA 替换、仅离线私有 wheel 的托管输入仍未实现；不把本次单卡随机张量成功当成任意业务模型、多卡或恢复验收。用户说明入口为 `/raytrain/rayTrain/help#article/custom-environment`，已包含操作步骤、个人 Harbor CLI Secret、重试及保存范围，保留原手动镜像构建指南。
+
+### 2026-09-21 补充验收：保存镜像的提交入口与 Dashboard
+
+推送目标没有固定到 public 或 guofeng.su：自动保存入口只固定公司 Harbor host，project/repository 来自用户表单，并针对精确 repository scope 验证用户自己的 push grant。平台的 personal/team 可见范围独立于 Harbor 项目的权限。构建机真实 PostgreSQL 回归覆盖本人、同团队成员、跨团队与管理员无个人镜像绕过；本轮浏览器使用 guofeng.su，普通角色边界由隔离测试验证，没有借用其他用户会话。
+
+同一保存镜像 `163def0835a422a3ff116844e9529c1a1afc18836677e8def347aa35791fbbb6` 的生产提交证据：
+
+| 入口 | 平台任务 ID | 结果 |
+| --- | --- | --- |
+| 浏览器 ZIP | `job-6990bebd198ea62e9dc71a01` | SUCCEEDED；8 步随机张量训练与产物读回 |
+| spk-rayjob 本地 --dir | `job-87c6cb7436be4fab7ac399a8` | SUCCEEDED；1 GPU/4 CPU/16Gi |
+| 原生 Ray CLI --working-dir | `job-e53f2c3d7180efc714fe8888` | SUCCEEDED；外部 ID `environment-native-acceptance-20260921` |
+| 浏览器 Git 固定 commit | `job-5fef1ccbbbbce65060c7af9f` | SUCCEEDED；源码 `90ba739`，执行 MLflow 示例 30 步，Run `b0426ce4ca4b4fb584b98edaf148ecee` |
+| 浏览器文件夹上传 → 子目录快照 | `job-3924da04f582a23a85bfcb3f` | SUCCEEDED；快照 `snapshot-caa1725325d65974224a2326`，仅两份验收源码，含 0 字节 `__init__.py` |
+
+目录上传通过已上线页面的真实 file-input change handler 发起，文件来自本次专用验收脚本；浏览器工具的本机文件选择器受路径配置限制，未把它宣称为 OS 文件选择对话框验收。实际上传、目录浏览、创建快照、三步提交表单和 GPU 训练均已完成。原生 Ray 2.35 CLI 在构建机全局 Click 8.4.2 下启动失败，本轮使用独立目录 Click 8.1.8 验证，没有改动全局 Python。原生 Ray 自定义输出路径保留原合同，不声称等同平台自动产物根。
+
+Portal dev `752e45b1676bd0e67d31c615b6bc4ee3e40fe91b`、流水线 34457 成功，实际 Deployment 镜像核对一致；未发布 master。修复内容包括 Dashboard access 的 portal=1、Git ref 解析异步结果防串、CLI 参考完整资源参数及本地源码提示、普通文件/目录的 0 字节源码误拦截。ZIP 非空检查及后端路径/权限边界保留。构建机真实 RED/GREEN、完整 Dockerfile.lint/dev 和独立审阅通过。
+
+平台使用说明 custom-environment 已保留原手动构建正文、补齐动态 Harbor 目标/个人与团队范围/三种浏览器来源/CLI 令牌与提交/运行期 Dashboard，并发布 version 7。浏览器验证 `#article/custom-environment` 内容可见，不只改仓库文档。
+
+Dashboard 首轮后端 `0533f59` 发布到 Helm251，2/2 Ready，amd64 `d61d5ebaa4095ce759b2b29ef77ae930d83f7469b7a9eb8af387c18ff214e616`。完整 Go/vet/真实 PostgreSQL 通过。最小 dry-run 仅后端镜像变化；788 个发布前资源中只有本次已成功 Git 验收的 RayCluster/Head/Worker 正常回收，其他785个 UID/状态/重启数不变。浏览器 Portal 与原域名入口都打开，Overview/Jobs/节点/API/实时日志可见，短期票据已从地址栏清除；仍发现 Ray2.58 health/auth helper 对完整代理前缀重复拼接，二次修复验收后补记，不能把这次首页成功当作所有内部请求通过。
+
+本次 CLI 专用 1 天 jobs:read/jobs:write/sources:write PAT 已撤销，独立客户端配置及一次性传输私钥已删除；验收日志归档后清理独立客户端依赖目录。所有任务仅用随机张量，无业务数据、没有改动原 Base、团队配额或现有用户训练。
+
+二次修复 `f9292c6025e00d0fd25855e21631492e2ac25970` 读取真实 Ray 2.58 JS 确认根因：Ray helper 会去掉 API 地址的首斜杠，故将平台完整代理地址变成相对路径再次拼接。JS API 字面量改为相对 `api/...`，HTML/Cookie/重定向仍保留正确公共前缀。新旧直接 fetch 与 Ray helper 两种调用、Portal 与原域名双入口 RED/GREEN 回归，以及完整 Go/vet/真实 PostgreSQL 均通过。只构建后端，最终 tag `release-20260921-07-f9292c6`、amd64 `sha256:892d7f968604bcd6ffe1a4b6163855e2013acbf258e601fb8c0556852d9555b5`，Helm252/schema56，2/2 Ready。Portal仍752e45b1，publisher/prepare/workspace/CLI均未重建。发布前794个存量资源 UID/状态/重启计数均无变化。
+
+最终专用任务 `job-da938314eda624593d293cdc` 使用已验收双文件快照与同一保存镜像。Portal真实Dashboard按钮和原域名入口均成功；票据query清除，Overview、Jobs详情、节点/GPU状态与包含8步训练结果的实时日志可见；authentication_mode/profiling_enabled/API jobs均200，不再出现重复前缀。Grafana/Prometheus健康请求返回Ray上游500，因为该临时RayCluster没有配置这两个服务；platform_events为Ray自身404。没有隐藏这些响应或擅自配置监控，不能把本次路由验收当成Grafana时序图启用。
+
+最后任务于 2026-09-21 23:30:41 自然 SUCCEEDED，未靠人工终止制造成功。用户说明保留版本7；以上工程证据更新属于文档同步，不要求再构建前后端。
