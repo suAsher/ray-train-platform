@@ -86,7 +86,7 @@ func evaluationPostgresStores(t *testing.T, upgrade bool) (*ModelEvaluationRepos
 		}
 	}
 	var maxVersion int
-	if err := a.Raw("SELECT MAX(version) FROM schema_migrations").Scan(&maxVersion).Error; err != nil || maxVersion != 54 {
+	if err := a.Raw("SELECT MAX(version) FROM schema_migrations").Scan(&maxVersion).Error; err != nil || maxVersion != 56 {
 		t.Fatalf("schema version=%d error=%v", maxVersion, err)
 	}
 	if upgrade {

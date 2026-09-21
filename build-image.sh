@@ -122,6 +122,9 @@ Build targets:
   source-materializer Git and governed-workspace code materializer image
   test-training       Single-GPU smoke Ray image
   dataset-publisher   CPU-only immutable Parquet dataset publisher
+  environment-publisher Trusted OCI assembler and personal Harbor publisher
+  environment-workspace Optional Base-derived debug image (existing Base unchanged)
+  environment-prepare Dependency-only builder runtime for cluster Jobs
   idc-sync            CPU-only one-way IDC to TOS incremental sync worker
   workspace           Existing Ray 2.35 interactive workspace (rollback)
   train-pytorch       Existing Ray 2.35 PyTorch runtime (rollback)
@@ -157,6 +160,15 @@ target_spec() {
       ;;
     dataset-publisher)
       printf '%s\n' 'images/dataset-publisher/Dockerfile|ray-dataset-publisher|images/dataset-publisher|-'
+      ;;
+    environment-publisher)
+      printf '%s\n' 'backend/Dockerfile.environment-publisher|raytrain-environment-publisher|backend|-'
+      ;;
+    environment-workspace)
+      printf '%s\n' 'images/environment-workspace/Dockerfile|raytrain-environment-workspace|.|-'
+      ;;
+    environment-prepare)
+      printf '%s\n' 'images/environment-builder/Dockerfile|raytrain-environment-prepare|.|-'
       ;;
     idc-sync)
       printf '%s\n' 'images/idc-sync/Dockerfile|ray-idc-sync|images/idc-sync|-'
@@ -399,6 +411,10 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
       --build-arg "SPK_RAYJOB_MINIMUM_VERSION=$SPK_RAYJOB_MINIMUM_VERSION_ARG"
       --build-arg "SPK_RAYJOB_RELEASE_NOTES=$SPK_RAYJOB_RELEASE_NOTES_ARG"
     )
+    if [ "$target" = "environment-workspace" ]; then
+      : "${PIP_INDEX_URL:?Set the package index for the platform debug image build}"
+      build_cmd+=(--build-arg "PIP_INDEX_URL=$PIP_INDEX_URL")
+    fi
     [ "$docker_target" = "-" ] || build_cmd+=(--target "$docker_target")
     is_true "$NO_CACHE" && build_cmd+=(--no-cache)
     is_true "$PULL_BASE_IMAGES" && build_cmd+=(--pull)

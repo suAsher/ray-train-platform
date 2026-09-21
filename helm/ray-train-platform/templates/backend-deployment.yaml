@@ -368,6 +368,28 @@ spec:
               value: {{ join "," .Values.backend.gitAllowlist | quote }}
             - name: WORKSPACE_IMAGE
               value: {{ required "backend.workspaceImage is required" .Values.backend.workspaceImage | quote }}
+            {{- $environmentBuilds := .Values.backend.environmentBuilds | default dict }}
+            {{- if $environmentBuilds.enabled }}
+            - name: ENVIRONMENT_BUILDS_ENABLED
+              value: "true"
+            - name: ENVIRONMENT_BASE_IMAGE
+              value: {{ required "environmentBuilds.baseImage is required" $environmentBuilds.baseImage | quote }}
+            - name: ENVIRONMENT_WORKSPACE_IMAGE
+              value: {{ required "environmentBuilds.workspaceImage is required" $environmentBuilds.workspaceImage | quote }}
+            - name: ENVIRONMENT_PREPARE_IMAGE
+              value: {{ required "environmentBuilds.prepareImage is required" $environmentBuilds.prepareImage | quote }}
+            - name: ENVIRONMENT_PUBLISHER_IMAGE
+              value: {{ required "environmentBuilds.publisherImage is required" $environmentBuilds.publisherImage | quote }}
+            - name: ENVIRONMENT_WHEEL_INDEX_URL
+              value: {{ required "environmentBuilds.wheelIndexURL is required" $environmentBuilds.wheelIndexURL | quote }}
+            - name: ENVIRONMENT_STORAGE_CLASS
+              value: {{ $environmentBuilds.storageClass | default "ebs-ssd" | quote }}
+            - name: ENVIRONMENT_AUTH_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "environmentBuilds.authKeySecretName is required" $environmentBuilds.authKeySecretName }}
+                  key: key
+            {{- end }}
             - name: SOURCE_MATERIALIZER_IMAGE
               value: {{ required "backend.sourceMaterializerImage is required" .Values.backend.sourceMaterializerImage | quote }}
             - name: SOURCE_ARTIFACTS_ENABLED

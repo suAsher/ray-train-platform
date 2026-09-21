@@ -6,6 +6,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.14.1
 	github.com/gin-contrib/cors v1.7.0
 	github.com/gin-gonic/gin v1.9.1
+	github.com/google/go-containerregistry v0.22.1
 	github.com/volcengine/ve-tos-golang-sdk/v2 v2.9.8
 	golang.org/x/crypto v0.54.0
 	golang.org/x/net v0.56.0

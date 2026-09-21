@@ -146,6 +146,16 @@ backend:
   gitAllowlist:
     - git.example.com
   workspaceImage: "REPLACE_WITH_IMMUTABLE_WORKSPACE_IMAGE"
+  # Optional self-service environment publication; never changes workspace/base defaults.
+  environmentBuilds:
+    enabled: false
+    baseImage: ""
+    workspaceImage: ""
+    prepareImage: ""
+    publisherImage: ""
+    wheelIndexURL: ""
+    storageClass: ebs-ssd
+    authKeySecretName: ""
   sourceMaterializerImage: "REPLACE_WITH_IMMUTABLE_SOURCE_MATERIALIZER_IMAGE"
   rayVersion: "2.35.0"
   rayJobClusterSpecField: rayClusterSpec

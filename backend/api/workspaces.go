@@ -257,14 +257,14 @@ func dataRootSubPath(tenantRoot, logicalRoot string) (string, error) {
 func (h *Handler) resolveWorkspaceImage(c *gin.Context, tenantID, requested string) (string, bool) {
 	if h.images != nil {
 		if requested != "" {
-			image, err := h.images.ImageByReference(c.Request.Context(), tenantID, domain.ImageKindWorkspace, requested)
+			image, err := visibleImageByReference(c.Request.Context(), h.images, tenantID, actorPrincipal(c).Subject, domain.ImageKindWorkspace, requested)
 			if err != nil {
 				h.writeError(c, http.StatusBadRequest, "IMAGE_NOT_ALLOWED", "the requested workspace image is not in the catalog")
 				return "", false
 			}
 			return image.Reference, true
 		}
-		if image, err := h.images.DefaultImage(c.Request.Context(), tenantID, domain.ImageKindWorkspace); err == nil {
+		if image, err := h.images.DefaultImage(c.Request.Context(), tenantID, domain.ImageKindWorkspace); err == nil && image.VisibleTo(tenantID, "") {
 			return image.Reference, true
 		}
 	}

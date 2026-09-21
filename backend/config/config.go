@@ -23,6 +23,7 @@ var (
 )
 
 type Config struct {
+	EnvironmentBuild EnvironmentBuildConfig
 	SPKRayjobMinimumVersion                  string
 	AppEnv                                   string
 	HTTPAddr                                 string
@@ -534,6 +535,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if err := validateIDCSyncConfig(cfg); err != nil {
+		return Config{}, err
+	}
+	if cfg.EnvironmentBuild, err = loadEnvironmentBuildConfig(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil

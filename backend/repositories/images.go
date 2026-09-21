@@ -17,7 +17,10 @@ var ErrImageNotFound = errors.New("image not found")
 type PlatformImageRecord struct {
 	ID                   string  `gorm:"primaryKey"`
 	TenantID             *string `gorm:"column:tenant_id;index"`
-	Name                 string
+	OwnerUserID string `gorm:"column:owner_user_id;not null;default:''"`
+ Visibility string `gorm:"column:visibility;not null;default:''"`
+ EnvironmentVersionID string `gorm:"column:environment_version_id;not null;default:''"`
+ Name                 string
 	Reference            string
 	Kind                 string `gorm:"index"`
 	Description          string
@@ -48,7 +51,8 @@ func (r *GormRepository) CreateImage(ctx context.Context, image domain.PlatformI
 		return fmt.Errorf("encode image environment: %w", err)
 	}
 	record := PlatformImageRecord{
-		ID: image.ID, TenantID: optionalID(image.TenantID), Name: image.Name,
+		OwnerUserID: image.OwnerUserID, Visibility: image.Visibility, EnvironmentVersionID: image.EnvironmentVersionID,
+ ID: image.ID, TenantID: optionalID(image.TenantID), Name: image.Name,
 		Reference: image.Reference, Kind: image.Kind, Description: image.Description,
 		Framework: image.Framework, IsDefault: image.IsDefault, CreatedBy: image.CreatedBy,
 		RayVersion: image.RayVersion, SupportedEnginesJSON: string(supportedEnginesJSON),
@@ -83,10 +87,16 @@ func clearDefaultImage(tx *gorm.DB, kind, tenantID string) error {
 	return nil
 }
 
-// ListImages returns the images a tenant may use: its own plus the shared ones.
+// ListImages returns team/global images for ownerless internal consumers.
+// Personal images require ListImagesForUser and never become implicit defaults.
 func (r *GormRepository) ListImages(ctx context.Context, tenantID, kind string) ([]domain.PlatformImage, error) {
+ return r.ListImagesForUser(ctx, tenantID, "", kind)
+}
+
+func (r *GormRepository) ListImagesForUser(ctx context.Context, tenantID, userID, kind string) ([]domain.PlatformImage, error) {
 	query := r.db.WithContext(ctx).Model(&PlatformImageRecord{}).
-		Where("tenant_id IS NULL OR tenant_id = ?", tenantID)
+		Where("tenant_id IS NULL OR tenant_id = ?", tenantID).
+ Where("visibility IN (?, ?) OR (visibility = ? AND owner_user_id = ? AND tenant_id = ? AND owner_user_id <> '')", "", domain.ImageVisibilityTeam, domain.ImageVisibilityPersonal, userID, tenantID)
 	if kind != "" {
 		query = query.Where("kind = ?", kind)
 	}
@@ -116,9 +126,9 @@ func (r *GormRepository) ListImages(ctx context.Context, tenantID, kind string) 
 
 // ListAllImages is deliberately separate from ListImages: only the
 // SuperAdmin management endpoint calls it, while submission/runtime lookups
-// remain tenant-confined.
+// remain tenant-confined. Personal images are excluded even from this listing.
 func (r *GormRepository) ListAllImages(ctx context.Context, kind string) ([]domain.PlatformImage, error) {
-	query := r.db.WithContext(ctx).Model(&PlatformImageRecord{})
+	query := r.db.WithContext(ctx).Model(&PlatformImageRecord{}).Where("visibility IN (?, ?)", "", domain.ImageVisibilityTeam)
 	if kind != "" {
 		query = query.Where("kind = ?", kind)
 	}
@@ -177,7 +187,7 @@ func (r *GormRepository) SetImageShared(ctx context.Context, _ string, id string
 	var updated PlatformImageRecord
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var record PlatformImageRecord
-		err := tx.Where("id = ?", id).First(&record).Error
+		err := tx.Where("id = ? AND visibility = ?", id, "").First(&record).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrImageNotFound
 		}
@@ -230,7 +240,8 @@ func platformImageFromRecord(record PlatformImageRecord) (domain.PlatformImage, 
 		return domain.PlatformImage{}, fmt.Errorf("decode supported engines: %w", err)
 	}
 	image := domain.PlatformImage{
-		ID: record.ID, TenantID: valueOrEmpty(record.TenantID), Name: record.Name,
+		OwnerUserID: record.OwnerUserID, Visibility: record.Visibility, EnvironmentVersionID: record.EnvironmentVersionID,
+ ID: record.ID, TenantID: valueOrEmpty(record.TenantID), Name: record.Name,
 		Reference: record.Reference, Kind: record.Kind, Description: record.Description,
 		Framework: record.Framework, IsDefault: record.IsDefault, CreatedBy: record.CreatedBy,
 		Environment: environment,
@@ -244,7 +255,7 @@ func platformImageFromRecord(record PlatformImageRecord) (domain.PlatformImage, 
 }
 
 func (r *GormRepository) DeleteImage(ctx context.Context, tenantID, id string, superAdmin bool) error {
-	query := r.db.WithContext(ctx).Where("id = ?", id)
+	query := r.db.WithContext(ctx).Where("id = ? AND visibility <> ?", id, domain.ImageVisibilityPersonal)
 	if !superAdmin {
 		// A tenant administrator may only remove their own tenant's images,
 		// never the shared catalogue.
@@ -258,4 +269,13 @@ func (r *GormRepository) DeleteImage(ctx context.Context, tenantID, id string, s
 		return ErrImageNotFound
 	}
 	return nil
+}
+
+// ImageByReferenceForUser admits an owned environment only for its current
+// tenant and owner, even when the caller holds administrator roles.
+func (r *GormRepository) ImageByReferenceForUser(ctx context.Context, tenantID, userID, kind, reference string) (domain.PlatformImage, error) {
+ images, err := r.ListImagesForUser(ctx, tenantID, userID, kind)
+ if err != nil { return domain.PlatformImage{}, err }
+ for _, image := range images { if image.Reference == reference { return image, nil } }
+ return domain.PlatformImage{}, ErrImageNotFound
 }

@@ -22,6 +22,7 @@ import (
 	"ray-train-platform-backend/datasetpublisher"
 	"ray-train-platform-backend/db"
 	"ray-train-platform-backend/domain"
+	"ray-train-platform-backend/environmentbuild"
 	"ray-train-platform-backend/helpdocs"
 	"ray-train-platform-backend/httpapi"
 	"ray-train-platform-backend/idcsync"
@@ -208,6 +209,9 @@ func main() {
 	}
 	platformNamespace := runtimeNamespace()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	environmentService, err := newEnvironmentBuildService(repository, kubeClient, cfg)
+	if err != nil { log.Fatalf("initialize environment publication: %v", err) }
+	if environmentService != nil && cfg.EnvironmentBuild.Enabled { go environmentService.Run(ctx) }
 	defer stop()
 	if modelSnapshots != nil {
 		if err := jobHandler.InitializeFunctionWarehouseSync(ctx, repositories.NewWarehouseSyncStore(database), []byte(cfg.PATPepper)); err != nil {
@@ -265,7 +269,7 @@ func main() {
 	}
 	router.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 	router.GET("/readyz", readinessHandler(database, kubeClient, cfg.AppEnv == "production"))
-	registerAPIRoutesWithLocalAuth(router, jobHandler, patHandler, sourceArtifactHandler, localAuthHandler, repository, validator, patAuthenticator, localSessionAuthenticator, kubeClient, rayHandler, cfg)
+	registerAPIRoutesWithLocalAuth(router, jobHandler, patHandler, sourceArtifactHandler, localAuthHandler, repository, validator, patAuthenticator, localSessionAuthenticator, kubeClient, rayHandler, cfg, environmentService)
 
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: router}
 	go func() {
@@ -347,7 +351,7 @@ func registerAPIRoutesWithRay(router *gin.Engine, jobs *api.Handler, pats *api.P
 	registerAPIRoutesWithLocalAuth(router, jobs, pats, artifacts, nil, nil, oidc, pat, nil, kubeClient, rays, cfg)
 }
 
-func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats *api.PersonalAccessTokenHandler, artifacts *api.SourceArtifactHandler, locals *api.LocalAuthHandler, oauthAccounts auth.OAuth2ProxyAccountResolver, oidc auth.OIDCVerifier, pat auth.PATVerifier, localSessions auth.LocalSessionVerifier, kubeClient *k8s.Client, rays *rayapi.Handler, cfg config.Config) {
+func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats *api.PersonalAccessTokenHandler, artifacts *api.SourceArtifactHandler, locals *api.LocalAuthHandler, oauthAccounts auth.OAuth2ProxyAccountResolver, oidc auth.OIDCVerifier, pat auth.PATVerifier, localSessions auth.LocalSessionVerifier, kubeClient *k8s.Client, rays *rayapi.Handler, cfg config.Config, environmentServices ...*environmentbuild.Service) {
 	// Sign-in must be reachable before the caller holds a credential, so it is
 	// mounted outside the authenticating group.
 	if locals != nil && cfg.LocalAuthEnabled {
@@ -414,6 +418,7 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 
 	interactive := v1.Group("")
 	interactive.Use(auth.RequireInteractiveSession(cfg.DemoMode))
+	if len(environmentServices) > 0 && environmentServices[0] != nil { api.RegisterEnvironmentBuildRoutes(interactive, environmentServices[0]) }
 	jobs.RegisterMLflowDashboardAccessRoute(interactive)
 	if locals != nil {
 		if cfg.LocalAuthEnabled {

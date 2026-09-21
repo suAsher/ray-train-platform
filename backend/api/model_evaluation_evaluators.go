@@ -63,7 +63,7 @@ func (h *Handler) createModelEvaluator(c *gin.Context) {
 	// Catalogue and JobSpec validation is read-only. Uploaded source uses the
 	// existing interactive archive origin; generic API permissions stay narrow.
 	spec := domain.JobSpec{Name: "evaluator-validation", Image: input.ImageReference, Source: source, Entrypoint: domain.Entrypoint{Command: append([]string{}, input.EntryPoint...)}, TrainingEngine: domain.TrainingEngineRayTrain, RayVersion: domain.RayVersionCanary, Resources: evaluationDefaultResources()}
-	result, err := h.modelEvaluationSubmission.Preflight(c.Request.Context(), SubmissionInput{Principal: p, Spec: spec, Origin: origin})
+	result, err := h.modelEvaluationSubmission.Preflight(c.Request.Context(), SubmissionInput{SharedImagesOnly: true, Principal: p, Spec: spec, Origin: origin})
 	if err != nil {
 		h.writeSubmissionError(c, p, err)
 		return

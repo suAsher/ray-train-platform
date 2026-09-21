@@ -1,0 +1,19 @@
+ARG GO_BUILDER_IMAGE=swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/golang:1.25-alpine@sha256:a9316ea600fe38d4527999823d67764dbd5b5ce4b4a0895266faf0134aa28264
+ARG ALPINE_RUNTIME_IMAGE=swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/alpine:3.20
+FROM ${GO_BUILDER_IMAGE} AS builder
+ARG GOPROXY=https://mirrors.tencent.com/go/
+ENV GOPROXY=${GOPROXY} GOTOOLCHAIN=local
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY registryauth ./registryauth
+COPY cmd/environment-publisher ./cmd/environment-publisher
+COPY cmd/environment-assembler ./cmd/environment-assembler
+RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/raytrain-environment-publisher ./cmd/environment-publisher \
+ && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/raytrain-environment-assembler ./cmd/environment-assembler
+FROM ${ALPINE_RUNTIME_IMAGE}
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=builder /out/ /usr/local/bin/
+USER 1000:100
+WORKDIR /tmp
+ENTRYPOINT ["/usr/local/bin/raytrain-environment-publisher"]

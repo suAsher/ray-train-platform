@@ -60,7 +60,7 @@ func (h *Handler) createModelServingContract(c *gin.Context) {
 		return
 	}
 	spec := domain.JobSpec{Name: "serving-contract-validation", Image: input.ImageReference, Source: domain.CodeSource{Type: "workspace-archive", ArtifactID: artifact.ID}, Entrypoint: domain.Entrypoint{Command: append([]string{}, input.EntryPoint...)}, TrainingEngine: domain.TrainingEngineRayTrain, RayVersion: domain.RayVersionCanary, Resources: evaluationDefaultResources()}
-	result, err := h.modelEvaluationSubmission.Preflight(c.Request.Context(), SubmissionInput{Principal: p, Spec: spec, Origin: domain.SubmissionOriginPortal})
+	result, err := h.modelEvaluationSubmission.Preflight(c.Request.Context(), SubmissionInput{SharedImagesOnly: true, Principal: p, Spec: spec, Origin: domain.SubmissionOriginPortal})
 	if err != nil {
 		h.writeSubmissionError(c, p, err)
 		return

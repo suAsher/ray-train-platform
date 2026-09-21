@@ -1,0 +1,3 @@
+#!/bin/sh
+# A fixed interpreter avoids user PATH resolving capture to a different venv.
+exec /opt/raytrain/environment/bin/python -I /usr/local/lib/raytrain-environment/environment_runtime.py "$@"
