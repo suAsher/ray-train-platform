@@ -105,3 +105,13 @@ Rootless BuildKit 在现有标准安全策略下实测因内核权限限制失�
 新增工作区目录 `job-7620433cd735e483a0c8b412` 已通过 guofeng.su 交互会话登记为 local 可选、非默认；浏览器确认与原调试环境、BEVFusion 并列，原 Base 训练项 `job-f0242b6e029a7068f43765d3` 保持不变。说明中明确标注完整平台/GPU 验收待完成，尚未启动新工作区。
 
 功能开关的 server-side dry-run 仅出现 backend 新增 8 个环境变量及一个受限 Role/RoleBinding；没有其他 Deployment、训练、调度或存储清单差异。配置预览不是启用；生产仍为 Helm 245/schema54，schema54→56 备份授权待收到，未导出生产数据库、未执行迁移或部署。
+
+### 首次生产验收与兼容修复
+
+随后用户指示继续，已完成生产库受限备份及无网络恢复验证。备份位于构建机 `/root/raytrain-release-20260921-environment-images`（目录 700、dump 600）；临时恢复容器已删除。先发布后端并保持功能关闭，再启用配置，生产到达 Helm 247/schema56，后端源码 `a7c4a5f`、amd64 digest `sha256:4cd991647b4cc591afd6823eae8cce7033d8a5e8b0dc503f3c32cf59648296bc`。首轮滚动前后 535 个 RayJob/RayCluster/训练 Pod 的 UID、容器状态与重启计数无变化。
+
+Portal `a6f1c6f` 流水线 34430 成功并核对线上镜像；后续工作区展示修复 `54cb30d5` 流水线 34432 成功。保留同事 dev 更新。用户说明原 `custom-environment` 存在人工版本，内置 seed 按设计未覆盖；已通过版本化管理 API 保留原正文、前置保存指南并发布 version 5，浏览器地址 `/raytrain/rayTrain/help#article/custom-environment` 验证新指南和原手动构建说明均可见。
+
+本人专用工作区 `ws-4c25a0e33634e952fc39afb3` 实际 Ray 2.58.0，Worker 节点 `172.28.1.229`，4090 D 小张量 CUDA 检查通过；内网安装 `pyfiglet==1.0.2` 和 pip check 通过，VS Code 页面成功。尝试升级 Base 固定的 boltons 被约束拒绝，未修改原包。Jupyter 暴露新增镜像默认用户目录权限缺陷，已增加真实非 root 默认目录 HTTP、创建 kernel 及执行受管 Python 回归；不是修改用户目录绕过。用户明确批准停止并重建此验收工作区，旧 RayCluster/Pod 已回收，个人文件未删除。
+
+Harbor 认证实测发现：有效 CLI Secret 在管理接口 `/api/v2.0/users/current` 返回 401，在 Registry `/service/token` 返回正确身份及专用目标 push grant；错误密码返回 401。修复改走固定 TLS 发行方的无 scope 身份令牌，独立验证目标写权限，项目管理接口不可用允许手输目标；网络不可用与凭据拒绝分别处理。终态凭据仍按原策略清理，未为重试延长保留期限。Jupyter 和 Harbor 补充修复需统一候选回归、同步、构建和真实闭环验收后再记录完成，不能以首次部署代替最终验收。

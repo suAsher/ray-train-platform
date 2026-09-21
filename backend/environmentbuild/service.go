@@ -251,10 +251,10 @@ func (s *Service) reconcileBuild(ctx context.Context, b Build) error {
 			return s.fail(ctx, b, AwaitingAuth, "发布授权已过期，请重新授权")
 		}
 		if err = s.registry.CheckPush(ctx, c, b.Project+"/"+b.Repository); err != nil {
-			if errors.Is(registryAuthorizationError(err),ErrAuthorization){
+			if errors.Is(registryAuthorizationError(err), ErrAuthorization) {
 				return s.fail(ctx, b, AwaitingAuth, "没有目标仓库推送权限，请检查 Harbor 授权")
 			}
-			return s.fail(ctx,b,Failed,"Harbor 暂时不可达，本次推送尚未启动；凭据将按结束策略清理。网络恢复后重新授权重试，可复用保留的构建产物")
+			return s.fail(ctx, b, Failed, "Harbor 暂时不可达，本次推送尚未启动；凭据将按结束策略清理。网络恢复后重新授权重试，可复用保留的构建产物")
 		}
 		credentials = &c
 	}
