@@ -42,6 +42,9 @@ func TestPublishSeparatesUploadConfirmationFromIdentityTimeout(t *testing.T) {
  base:=server.Client().Transport.(*http.Transport).Clone()
  // Route only this in-process TLS fixture; production origin validation still
  // sees the frozen Harbor host, and production TLS settings are unchanged.
+ base.TLSClientConfig=base.TLSClientConfig.Clone()
+ base.TLSClientConfig.ServerName="127.0.0.1"
+ base.TLSClientConfig.InsecureSkipVerify=false
  base.Proxy=nil
  base.DialContext=func(ctx context.Context,network,address string)(net.Conn,error){return (&net.Dialer{}).DialContext(ctx,network,server.Listener.Addr().String())}
  base.ResponseHeaderTimeout=50*time.Millisecond
@@ -50,7 +53,7 @@ func TestPublishSeparatesUploadConfirmationFromIdentityTimeout(t *testing.T) {
  ctx,cancel:=context.WithTimeout(context.Background(),4*time.Second)
  defer cancel()
  result,err:=client.Publish(ctx,credentials,PublishRequest{LayoutPath:directory,Digest:digest,Project:"team",Repository:"model",Tag:"delayed"})
- if err!=nil || result.ImageDigest!=digest {t.Fatalf("delayed registry confirmation failed: %+v %v",result,err)}
+ if err!=nil || result.ImageDigest!=digest {t.Fatalf("delayed registry confirmation failed: %+v %v layerPatches=%d",result,err,layerPatches.Load())}
  if layerPatches.Load()<1 {t.Fatal("non-empty layer PATCH was not exercised")}
  if base.ResponseHeaderTimeout!=50*time.Millisecond || client.http.Timeout!=20*time.Second {t.Fatal("publishing changed identity-query timeout")}
 }
