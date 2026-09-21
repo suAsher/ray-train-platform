@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sync"
- "time"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -88,17 +88,17 @@ func (c *Client) Publish(ctx context.Context, credentials Credentials, request P
 		return PublishResult{}, ErrInvalidTarget
 	}
 	// Identity and permission requests keep their short query timeouts. The
- // registry can need longer to acknowledge a buffered multi-GiB layer after
- // its body has been sent. Clone rather than mutating the shared query client;
- // the caller context and Kubernetes Job deadline still bound the whole push.
- baseTransport := c.http.Transport
- if base, ok := baseTransport.(*http.Transport); ok {
-  upload := base.Clone()
-  upload.ResponseHeaderTimeout = 5 * time.Minute
-  defer upload.CloseIdleConnections()
-  baseTransport = upload
- }
- transport := &publishTransport{base: baseTransport, repository: target.Repository}
+	// registry can need longer to acknowledge a buffered multi-GiB layer after
+	// its body has been sent. Clone rather than mutating the shared query client;
+	// the caller context and Kubernetes Job deadline still bound the whole push.
+	baseTransport := c.http.Transport
+	if base, ok := baseTransport.(*http.Transport); ok {
+		upload := base.Clone()
+		upload.ResponseHeaderTimeout = 5 * time.Minute
+		defer upload.CloseIdleConnections()
+		baseTransport = upload
+	}
+	transport := &publishTransport{base: baseTransport, repository: target.Repository}
 	options := []remote.Option{remote.WithContext(ctx), remote.WithAuth(&authn.Bearer{Token: token}), remote.WithTransport(transport), remote.WithJobs(2)}
 	publishDiagnostic(ctx, PublishDiagnostic{Stage: "REGISTRY_WRITE"})
 	if err := remote.Write(reference, img, options...); err != nil {
