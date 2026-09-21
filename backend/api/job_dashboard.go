@@ -203,7 +203,9 @@ func (h *Handler) exchangeJobDashboardAccess(c *gin.Context) {
 }
 
 func (h *Handler) jobDashboardSession(c *gin.Context) (string, string, bool) {
- if len(h.workspacePepper) < 32 { return "", "", false }
+	if len(h.workspacePepper) < 32 {
+		return "", "", false
+	}
 	session, sessionErr := c.Request.Cookie(jobDashboardSessionCookie)
 	tenant, tenantErr := c.Request.Cookie(jobDashboardTenantCookie)
 	subject, subjectErr := c.Request.Cookie(jobDashboardSubjectCookie)
@@ -250,10 +252,10 @@ func rewriteRayDashboardResponse(response *http.Response, basePath string) error
 		{[]byte("`/api/"), []byte("`" + basePath + "api/")},
 	}
 	if strings.Contains(contentType, "javascript") {
- for _, replacement := range replacements {
-  body = bytes.ReplaceAll(body, replacement.old, replacement.new)
- }
- }
+		for _, replacement := range replacements {
+			body = bytes.ReplaceAll(body, replacement.old, replacement.new)
+		}
+	}
 	if strings.Contains(contentType, "text/html") {
 		body = rayDashboardHTMLRootPath.ReplaceAllFunc(body, func(match []byte) []byte {
 			i := bytes.IndexByte(match, '/')

@@ -2,16 +2,16 @@ package api
 
 import (
 	"context"
- "crypto/hmac"
- "crypto/sha256"
- "encoding/hex"
- "strconv"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -153,18 +153,22 @@ func TestJobDashboardRewritesHTMLAndRedirectsWithoutChangingRelativeAssets(t *te
 }
 
 func TestJobDashboardRejectsCookieSignedWithUnconfiguredKey(t *testing.T) {
- for _, key:=range [][]byte{nil, []byte("short")} {
-  h,_:=dashboardTestHandler(t,"http://dashboard.invalid")
-  h.workspacePepper=key
-  router:=gin.New(); h.RegisterJobDashboardProxyRoute(router.Group("/api/v1"))
-  expiry:=strconv.FormatInt(time.Now().Add(time.Hour).Unix(),10)
-  mac:=hmac.New(sha256.New,key)
-  _,_=mac.Write([]byte("job-dashboard-access\x00tenant-a\x00job-1\x00user-1\x00"+expiry))
-  request:=httptest.NewRequest(http.MethodGet,"/api/v1/jobs/job-1/dashboard/",nil)
-  for name,value:=range map[string]string{jobDashboardSessionCookie:expiry+"."+hex.EncodeToString(mac.Sum(nil)),jobDashboardTenantCookie:"tenant-a",jobDashboardSubjectCookie:"user-1",jobDashboardPortalCookie:"1"} {
-   request.AddCookie(&http.Cookie{Name:name,Value:value})
-  }
-  response:=httptest.NewRecorder();router.ServeHTTP(response,request)
-  if response.Code!=http.StatusUnauthorized {t.Fatalf("weak-key proxy accepted: %d",response.Code)}
- }
+	for _, key := range [][]byte{nil, []byte("short")} {
+		h, _ := dashboardTestHandler(t, "http://dashboard.invalid")
+		h.workspacePepper = key
+		router := gin.New()
+		h.RegisterJobDashboardProxyRoute(router.Group("/api/v1"))
+		expiry := strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10)
+		mac := hmac.New(sha256.New, key)
+		_, _ = mac.Write([]byte("job-dashboard-access\x00tenant-a\x00job-1\x00user-1\x00" + expiry))
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/jobs/job-1/dashboard/", nil)
+		for name, value := range map[string]string{jobDashboardSessionCookie: expiry + "." + hex.EncodeToString(mac.Sum(nil)), jobDashboardTenantCookie: "tenant-a", jobDashboardSubjectCookie: "user-1", jobDashboardPortalCookie: "1"} {
+			request.AddCookie(&http.Cookie{Name: name, Value: value})
+		}
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("weak-key proxy accepted: %d", response.Code)
+		}
+	}
 }
