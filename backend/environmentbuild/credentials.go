@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"ray-train-platform-backend/registryauth"
 )
 
 func randomID(prefix string) (string, error) {
@@ -98,7 +100,7 @@ func (s *Service) CreateAuthorization(ctx context.Context, owner Owner, credenti
 		return Authorization{}, ErrInvalid
 	}
 	if err := s.registry.Authenticate(ctx, credentials); err != nil {
-		return Authorization{}, ErrAuthorization
+		return Authorization{}, registryAuthorizationError(err)
 	}
 	id, err := randomID("env-auth-")
 	if err != nil {
@@ -152,9 +154,14 @@ func (s *Service) CheckTarget(ctx context.Context, owner Owner, id, project, rep
 		return err
 	}
 	if err = s.registry.CheckPush(ctx, c, project+"/"+repository); err != nil {
-		return ErrAuthorization
+		return registryAuthorizationError(err)
 	}
 	return nil
+}
+
+func registryAuthorizationError(err error)error{
+	if errors.Is(err,ErrAuthorization) || errors.Is(err,registryauth.ErrCredentials) || errors.Is(err,registryauth.ErrForbidden){return ErrAuthorization}
+	return ErrUnavailable
 }
 func (s *Service) RevokeAuthorization(ctx context.Context, owner Owner, id string) error {
 	a, err := s.store.EnvironmentAuthorization(ctx, owner, id)

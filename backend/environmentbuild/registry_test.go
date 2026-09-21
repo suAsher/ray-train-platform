@@ -46,6 +46,13 @@ func TestHarborRegistryAdapterPreservesIdentityPaginationAndExactRepositoryGrant
 			}
 			json.NewEncoder(w).Encode([]map[string]any{{"name": "team", "project_id": 7, "current_user_role_id": 2}})
 		case "/service/token":
+			if !r.URL.Query().Has("scope") {
+				if r.URL.Query().Get("account")!=credentials.Username || r.URL.Query().Get("service")!="harbor-registry" {t.Error("identity request changed")}
+				now:=time.Now().Unix()
+				payload,_:=json.Marshal(map[string]any{"iss":"harbor-token-issuer","sub":credentials.Username,"aud":"harbor-registry","exp":now+3600,"nbf":now,"iat":now,"access":nil})
+				json.NewEncoder(w).Encode(map[string]string{"token":"e30."+base64.RawURLEncoding.EncodeToString(payload)+".fixture-signature"})
+				return
+			}
 			if r.URL.Query().Get("scope") != "repository:team/nested/model:pull,push" {
 				t.Error("repository scope changed")
 			}
@@ -94,8 +101,8 @@ func TestHarborRegistryAdapterPreservesIdentityPaginationAndExactRepositoryGrant
 		t.Fatal("missing project accepted")
 	}
 	deniedProjects.Store(true)
-	if _, err = adapter.Projects(ctx, credentials, 2); !errors.Is(err, registryauth.ErrForbidden) {
-		t.Fatal("project denial was hidden")
+	if _, err = adapter.Projects(ctx, credentials, 2); !errors.Is(err, registryauth.ErrProjectsUnavailable) {
+		t.Fatal("project API denial was misclassified as a credential failure")
 	}
 	for _, formatted := range []string{credentials.String(), credentials.GoString()} {
 		if strings.Contains(formatted, credentials.Secret) {
