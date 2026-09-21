@@ -90,13 +90,40 @@ func TestEnvironmentBuildCancellationWinsStaleSaveAndClaimRecoversLease(t *testi
  got,_=s.Get(ctx,environmentOwner(),b.ID);if got.Status!=eb.Canceled{t.Fatal("cancel did not complete")}
 }
 
-type environmentCreateFailureStore struct{eb.Store;fail bool}
-func(s *environmentCreateFailureStore)CreateEnvironmentBuild(ctx context.Context,b eb.Build)(eb.Build,error){if s.fail{s.fail=false;return eb.Build{},eb.ErrUnavailable};return s.Store.CreateEnvironmentBuild(ctx,b)}
+type environmentCreateFailureStore struct{eb.Store;fail bool;commitBeforeError bool;unknownAfterError bool;lookupUnknown bool}
+func(s *environmentCreateFailureStore)CreateEnvironmentBuild(ctx context.Context,b eb.Build)(eb.Build,error){
+ if s.fail{s.fail=false;s.lookupUnknown=s.unknownAfterError;if s.commitBeforeError{if _,err:=s.Store.CreateEnvironmentBuild(ctx,b);err!=nil{return eb.Build{},err}};return eb.Build{},eb.ErrUnavailable};return s.Store.CreateEnvironmentBuild(ctx,b)
+}
+func(s *environmentCreateFailureStore)EnvironmentBuild(ctx context.Context,o eb.Owner,id string)(eb.Build,error){if s.lookupUnknown{s.lookupUnknown=false;return eb.Build{},eb.ErrUnavailable};return s.Store.EnvironmentBuild(ctx,o,id)}
 func TestEnvironmentBuildCreateRecoversBoundImmutableCredentialAfterDBFailure(t *testing.T){
  repo,_,runner,vault:=environmentTestService(t)
- store:=&environmentCreateFailureStore{Store:repo,fail:true}
+ store:=&environmentCreateFailureStore{Store:repo,fail:true,unknownAfterError:true}
  s,err:=eb.NewService(store,runner,&environmentRegistryFake{},vault,eb.Config{Enabled:true,BaseImage:"harbor.wellspiking.ai/public/base@sha256:"+strings.Repeat("0",64),WorkspaceImage:"harbor.wellspiking.ai/public/debug@sha256:"+strings.Repeat("1",64),EncryptionKey:[]byte(strings.Repeat("k",32))});if err!=nil{t.Fatal(err)}
  ctx:=context.Background();a:=createEnvironmentAuthorization(t,s)
  if _,err=s.Create(ctx,environmentOwner(),"workspace-a",environmentRequest(a.ID));err==nil{t.Fatal("injected create failure ignored")}
  if _,err=s.Create(ctx,environmentOwner(),"workspace-a",environmentRequest(a.ID));err!=nil{t.Fatalf("immutable credential retry did not recover: %v",err)}
+}
+
+func TestEnvironmentBuildArtifactCapacityReleasedOnlyAfterActualCleanup(t *testing.T){
+ repo,s,_,_:=environmentTestService(t);ctx:=context.Background();a:=createEnvironmentAuthorization(t,s)
+ first,err:=s.Create(ctx,environmentOwner(),"workspace-a",environmentRequest(a.ID));if err!=nil{t.Fatal(err)}
+ for _,id:=range []string{"env-two","env-three"}{b:=first;b.ID=id;b.Tag=id;b.IdempotencyKey=id;if _,err=repo.CreateEnvironmentBuild(ctx,b);err!=nil{t.Fatal(err)}}
+ fourth:=first;fourth.ID="env-four";fourth.Tag=fourth.ID;fourth.IdempotencyKey=fourth.ID
+ if _,err=repo.CreateEnvironmentBuild(ctx,fourth);err!=eb.ErrCapacity{t.Fatalf("unbounded pending disk: %v",err)}
+ now:=time.Now().UTC();past:=now.Add(-2*time.Hour);expired:=now.Add(-time.Hour)
+ if err=repo.db.Model(&eb.Build{}).Where("owner_id = ?",first.OwnerID).Updates(map[string]any{"status":eb.Failed,"cleaned_at":past,"artifact_expires_at":expired}).Error;err!=nil{t.Fatal(err)}
+ if _,err=repo.CreateEnvironmentBuild(ctx,fourth);err!=eb.ErrCapacity{t.Fatal("expiry alone freed still-present PVC capacity")}
+ if err=repo.db.Model(&eb.Build{}).Where("owner_id = ?",first.OwnerID).Update("cleaned_at",now).Error;err!=nil{t.Fatal(err)}
+ if _,err=repo.CreateEnvironmentBuild(ctx,fourth);err!=nil{t.Fatalf("cleaned historical rows counted against disk budget: %v",err)}
+}
+
+func TestEnvironmentBuildCreateFailureCleanupDistinguishesCommittedOperation(t *testing.T){
+ for _,committed:=range []bool{false,true}{name:="definitely absent";if committed{name="commit result ambiguous"};t.Run(name,func(t *testing.T){
+ repo,_,runner,vault:=environmentTestService(t);store:=&environmentCreateFailureStore{Store:repo,fail:true,commitBeforeError:committed}
+ service,err:=eb.NewService(store,runner,&environmentRegistryFake{},vault,eb.Config{Enabled:true,BaseImage:"harbor.wellspiking.ai/public/base@sha256:"+strings.Repeat("0",64),WorkspaceImage:"harbor.wellspiking.ai/public/debug@sha256:"+strings.Repeat("1",64),EncryptionKey:[]byte(strings.Repeat("k",32))});if err!=nil{t.Fatal(err)}
+ ctx:=context.Background();a:=createEnvironmentAuthorization(t,service)
+ if _,err=service.Create(ctx,environmentOwner(),"workspace-a",environmentRequest(a.ID));err==nil{t.Fatal("injected error ignored")}
+ _,err=repo.EnvironmentAuthorization(ctx,environmentOwner(),a.ID)
+ if committed{if err!=nil||len(vault.values)!=1{t.Fatal("committed operation lost its credential")};if _,err=service.Create(ctx,environmentOwner(),"workspace-a",environmentRequest(a.ID));err!=nil{t.Fatal(err)}}else{if !errors.Is(err,eb.ErrNotFound)||len(vault.values)!=0{t.Fatal("definite create failure leaked bound credentials")}}
+ })}
 }

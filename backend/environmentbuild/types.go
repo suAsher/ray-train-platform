@@ -27,6 +27,8 @@ var (
  ErrInvalid = errors.New("invalid environment publication request")
  ErrConflict = errors.New("environment operation conflicts with its current state")
  ErrAuthorization = errors.New("Harbor authorization expired or denied; authorize again")
+ ErrCredentialCapacity = errors.New("temporary Harbor authorization capacity reached")
+ ErrCapacity = errors.New("temporary environment artifact capacity reached")
  ErrUnavailable = errors.New("environment publication is unavailable")
 )
 

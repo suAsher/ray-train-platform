@@ -37,6 +37,11 @@ func (r *EnvironmentRunner) Cleanup(ctx context.Context,b environmentbuild.Build
  for i:=range maps.Items {cm:=&maps.Items[i];if !r.owned(cm,b) {return fmt.Errorf("refusing unmanaged environment snapshot")};if err:=r.client.kubernetes.CoreV1().ConfigMaps(r.config.Namespace).Delete(ctx,cm.Name,environmentDeleteOptions(cm));err!=nil && !apierrors.IsNotFound(err) {return err}}
  if retainArtifact {return nil}
  pvcs,err:=r.client.kubernetes.CoreV1().PersistentVolumeClaims(r.config.Namespace).List(ctx,options);if err!=nil {return err}
- for i:=range pvcs.Items {pvc:=&pvcs.Items[i];if !r.owned(pvc,b) {return fmt.Errorf("refusing unmanaged environment artifact")};if err:=r.client.kubernetes.CoreV1().PersistentVolumeClaims(r.config.Namespace).Delete(ctx,pvc.Name,environmentDeleteOptions(pvc));err!=nil && !apierrors.IsNotFound(err) {return err}}
+ for i:=range pvcs.Items {
+  pvc:=&pvcs.Items[i];if !r.owned(pvc,b) {return fmt.Errorf("refusing unmanaged environment artifact")}
+  claims:=r.client.kubernetes.CoreV1().PersistentVolumeClaims(r.config.Namespace)
+  if err:=claims.Delete(ctx,pvc.Name,environmentDeleteOptions(pvc));err!=nil && !apierrors.IsNotFound(err) {return err}
+  if _,err:=claims.Get(ctx,pvc.Name,metav1.GetOptions{});!apierrors.IsNotFound(err) {if err!=nil {return err};return fmt.Errorf("environment artifact volume is still stopping")}
+ }
  return nil
 }

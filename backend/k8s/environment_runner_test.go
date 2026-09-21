@@ -2,6 +2,10 @@ package k8s
 
 import (
  "context"
+ "errors"
+ "os"
+ "os/exec"
+ "path/filepath"
  "strings"
  "testing"
  "time"
@@ -14,6 +18,7 @@ import (
  "k8s.io/apimachinery/pkg/types"
  dynamicfake "k8s.io/client-go/dynamic/fake"
  "k8s.io/client-go/kubernetes/fake"
+ k8stesting "k8s.io/client-go/testing"
  "ray-train-platform-backend/environmentbuild"
 )
 
@@ -88,7 +93,7 @@ func TestEnvironmentWorkspaceRequiresManagedClusterAndActualPinnedImage(t *testi
  workspace.TenantID="other-tenant";if _,err:=r.InspectWorkspace(ctx,workspace);err==nil {t.Fatal("accepted another tenant cluster")}
  workspace.TenantID="tenant-a";pod.Spec.Containers[0].Image="harbor.wellspiking.ai/platform/image:latest"
  if _,err:=r.client.kubernetes.CoreV1().Pods(workspace.Namespace).Update(ctx,pod,metav1.UpdateOptions{});err!=nil {t.Fatal(err)}
- if _,err:=r.InspectWorkspace(ctx,workspace);err==nil {t.Fatal("accepted unsupported actual image")}
+ if _,err:=r.InspectWorkspace(ctx,workspace);err==nil {t.Fatal("accepted unsupported actual image")} else {var phase *environmentbuild.PhaseError;if !errors.As(err,&phase) || phase.Code!="UNSUPPORTED_WORKSPACE" {t.Fatalf("unsupported workspace error was not classified: %v",err)}}
 }
 
 func TestEnvironmentCaptureBoundsOutput(t *testing.T) {
@@ -118,4 +123,42 @@ func TestEnvironmentStepCreatesOneIdempotentJobAndDedicatedVolume(t *testing.T) 
  volumes,err=r.client.kubernetes.CoreV1().PersistentVolumeClaims(r.config.Namespace).List(ctx,metav1.ListOptions{});if err!=nil || len(volumes.Items)!=1 {t.Fatal("retry artifact was not retained")}
  if err:=r.Cleanup(ctx,b,false);err!=nil {t.Fatal(err)}
  volumes,err=r.client.kubernetes.CoreV1().PersistentVolumeClaims(r.config.Namespace).List(ctx,metav1.ListOptions{});if err!=nil || len(volumes.Items)!=0 {t.Fatal("terminal artifact was not deleted")}
+}
+
+func TestEnvironmentPullVerifyCannotUseShadowedConsoleScripts(t *testing.T) {
+ r:=environmentTestRunner();b:=environmentTestBuild(r);b.Status=environmentbuild.VerifyingPull
+ job,err:=r.renderJob(b);if err!=nil {t.Fatal(err)}
+ container:=job.Spec.Template.Spec.Containers[0]
+ root:=t.TempDir();trusted:=filepath.Join(root,"trusted");hostile:=filepath.Join(root,"venv","bin")
+ for _,dir:=range []string{trusted,hostile} {if err:=os.MkdirAll(dir,0700);err!=nil {t.Fatal(err)}}
+ for _,name:=range []string{"raytrain-environment","raytrain-selfcheck"} {
+  if err:=os.WriteFile(filepath.Join(trusted,name),[]byte("#!/bin/sh\necho trusted-"+name+"\n"),0700);err!=nil {t.Fatal(err)}
+  if err:=os.WriteFile(filepath.Join(hostile,name),[]byte("#!/bin/sh\necho shadowed-"+name+"\n"),0700);err!=nil {t.Fatal(err)}
+ }
+ // Substitute only the absolute trusted fixture prefix; a bare console-script
+ // command from the renderer would still resolve into the malicious venv.
+ script:=strings.ReplaceAll(container.Args[0],"/usr/local/bin/",trusted+"/")
+ command:=exec.Command(container.Command[0],container.Command[1],script)
+ command.Env=[]string{"PATH="+hostile+":/usr/bin:/bin"}
+ output,err:=command.CombinedOutput();if err!=nil {t.Fatalf("verification command: %v %s",err,output)}
+ if string(output)!="trusted-raytrain-environment\ntrusted-raytrain-selfcheck\n" {t.Fatalf("PATH redirected a validator: %s",output)}
+}
+
+func TestEnvironmentCleanupKeepsCapacityWhileVolumeIsTerminating(t *testing.T) {
+ r:=environmentTestRunner();b:=environmentTestBuild(r);ctx:=context.Background()
+ pvc:=&corev1.PersistentVolumeClaim{ObjectMeta:r.metadata(environmentResourceName("oci",b.ID),b)}
+ client:=fake.NewSimpleClientset(pvc)
+ client.PrependReactor("delete","persistentvolumeclaims",func(k8stesting.Action)(bool,runtime.Object,error){return true,nil,nil})
+ r.client=NewClientFromInterfaces(nil,client)
+ if err:=r.Cleanup(ctx,b,false);err==nil {t.Fatal("cleanup released capacity before the PVC disappeared")}
+}
+
+func TestEnvironmentFailureClassificationNeverReturnsRawOutput(t *testing.T) {
+ for _,code:=range []string{"UNSUPPORTED_WORKSPACE","ENVIRONMENT_CHANGED","WHEEL_UNAVAILABLE","PACKAGE_MODIFIED","BUILD_TIMEOUT","PULL_FAILED","TEMP_STORAGE_FULL"} {
+  err:=environmentSafeFailure([]byte(`{"errorCode":"`+code+`","detail":"secret-material"}`))
+  if err==nil || err.Error()!=code {t.Fatalf("missing safe code %q: %v",code,err)}
+ }
+ for _,raw:=range []string{`secret-material`,`{"errorCode":"secret-material"}`,`{"error":"secret-material"}`,strings.Repeat("x",4097)} {
+  if err:=environmentSafeFailure([]byte(raw));err!=nil {t.Fatalf("untrusted output escaped: %v",err)}
+ }
 }

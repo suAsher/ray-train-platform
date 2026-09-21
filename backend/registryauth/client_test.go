@@ -79,3 +79,14 @@ func TestTokenWithoutVerifiableGrantFailsClosed(t *testing.T) {
   if _,err:=c.CheckPush(context.Background(),credentials,"team","model");!errors.Is(err,ErrForbidden){t.Fatalf("missing grant accepted: %v",err)}
  }
 }
+
+func TestPushGrantRequiresCurrentHarborAudience(t *testing.T){
+ for _,tc:=range []struct{audience string;expires int64}{
+  {"other-registry",time.Now().Add(time.Hour).Unix()},
+  {"harbor-registry",time.Now().Add(-time.Hour).Unix()},
+ }{
+  body,_:=json.Marshal(map[string]any{"access":[]any{map[string]any{"type":"repository","name":"team/model","actions":[]string{"push"}}},"aud":tc.audience,"exp":tc.expires})
+  token:="e30."+base64.RawURLEncoding.EncodeToString(body)+".signature"
+  if hasPushGrant(token,"team/model",time.Now()){t.Fatal("wrong audience or expired grant accepted")}
+ }
+}

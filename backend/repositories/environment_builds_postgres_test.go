@@ -72,3 +72,34 @@ func TestEnvironmentBuildPostgresOrphanMaterialReclaimedWithoutSecretList(t *tes
  if err=service.Reconcile(ctx);err!=nil{t.Fatal(err)}
  if err=repo.db.Model(&eb.CredentialMaterial{}).Count(&count).Error;err!=nil||count!=0||len(vault.values)!=0{t.Fatal("orphan material survived cleanup")}
 }
+
+func TestEnvironmentBuildPostgresConcurrentArtifactCapacity(t *testing.T){
+ for _,scope:=range []string{"owner","global"}{t.Run(scope,func(t *testing.T){
+ a,b:=evaluationPostgresStores(t,false);repos:=[]*GormRepository{NewGormRepository(a.db),NewGormRepository(b.db)}
+ now:=time.Now().UTC();ctx:=context.Background();total,limit:=5,3;if scope=="global"{total,limit=10,8}
+ outcomes:=make(chan error,total);start:=make(chan struct{})
+ for i:=0;i<total;i++{go func(i int){<-start;owner:="same-owner";if scope=="global"{owner=fmt.Sprintf("owner-%d",i)}
+ id:=fmt.Sprintf("env-capacity-%d",i)
+ operation:=eb.Build{ID:id,TenantID:"team",OwnerID:owner,WorkspaceID:"ws",Namespace:"tenant-team",WorkspaceResourceName:"ws",WorkspaceUID:"uid",BaseImage:"base",WorkspaceImage:"debug",Name:"Environment",Visibility:"personal",Project:"public",Repository:"env",Tag:id,Status:eb.Queued,IdempotencyKey:id,Attempt:1,ArtifactExpiresAt:now.Add(time.Hour),CreatedAt:now,UpdatedAt:now}
+ _,err:=repos[i%2].CreateEnvironmentBuild(ctx,operation);outcomes<-err
+ }(i)};close(start)
+ successes:=0;for i:=0;i<total;i++{err:=<-outcomes;if err==nil{successes++}else if err!=eb.ErrCapacity{t.Fatal(err)}}
+ if successes!=limit{t.Fatalf("capacity oversubscribed: got %d want %d",successes,limit)}
+ })}
+}
+
+func TestEnvironmentBuildPostgresConcurrentCredentialReservations(t *testing.T){
+ for _,scope:=range []string{"owner","global"}{t.Run(scope,func(t *testing.T){
+ a,b:=evaluationPostgresStores(t,false);repos:=[]*GormRepository{NewGormRepository(a.db),NewGormRepository(b.db)}
+ ctx:=context.Background();now:=time.Now().UTC().Truncate(time.Microsecond);total,limit:=7,5;if scope=="global"{total,limit=52,50}
+ results:=make(chan error,total);start:=make(chan struct{})
+ for i:=0;i<total;i++{go func(i int){<-start;owner:="same-owner";if scope=="global"{owner=fmt.Sprintf("owner-%d",i)}
+ id:=fmt.Sprintf("auth-capacity-%d",i)
+ // Expired-but-not-cleaned allocations must still occupy a slot.
+ material:=eb.CredentialMaterial{Ref:id,AuthorizationID:id,TenantID:"team",OwnerID:owner,ExpiresAt:now.Add(-time.Hour),CreatedAt:now.Add(-2*time.Hour)}
+ results<-repos[i%2].ReserveEnvironmentCredentialMaterial(ctx,material)
+ }(i)};close(start)
+ successes:=0;for i:=0;i<total;i++{err:=<-results;if err==nil{successes++}else if err!=eb.ErrCredentialCapacity{t.Fatal(err)}}
+ if successes!=limit{t.Fatalf("credential capacity oversubscribed: got %d want %d",successes,limit)}
+ })}
+}

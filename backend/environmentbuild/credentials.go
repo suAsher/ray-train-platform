@@ -7,6 +7,7 @@ import (
  "crypto/rand"
  "encoding/hex"
  "encoding/json"
+ "errors"
  "fmt"
  "strings"
  "time"
@@ -59,7 +60,7 @@ func (s *Service) CreateAuthorization(ctx context.Context, owner Owner, credenti
  now := s.now().UTC().Truncate(time.Microsecond)
  a := Authorization{ID:id,TenantID:owner.TenantID,OwnerID:owner.UserID,Username:credentials.Username,SecretRef:id,ExpiresAt:now.Add(s.config.AuthorizationTTL).Truncate(time.Microsecond),CreatedAt:now}
  sealed, err := s.encrypt(a,credentials); if err != nil { return Authorization{}, err }
- if err=s.putCredentialMaterial(ctx,a,sealed); err != nil { return Authorization{}, ErrUnavailable }
+ if err=s.putCredentialMaterial(ctx,a,sealed); err != nil { if errors.Is(err,ErrCredentialCapacity){return Authorization{},err};return Authorization{}, ErrUnavailable }
  if err=s.store.SaveEnvironmentAuthorization(ctx,a); err != nil { _=s.deleteCredentialMaterial(ctx,a.SecretRef); return Authorization{}, err }
  return a,nil
 }
@@ -94,7 +95,7 @@ func (s *Service) bindAuthorization(ctx context.Context, owner Owner, id string,
  bound:=a;bound.BuildID=b.ID;bound.Target=b.Project+"/"+b.Repository
  bound.SecretRef=a.ID+"-"+b.ID
  sealed,err:=s.encrypt(bound,c);if err!=nil{return Authorization{},err}
- if err=s.putCredentialMaterial(ctx,bound,sealed);err!=nil{return Authorization{},ErrUnavailable}
+ if err=s.putCredentialMaterial(ctx,bound,sealed);err!=nil{if errors.Is(err,ErrCredentialCapacity){return Authorization{},err};return Authorization{},ErrUnavailable}
  if err=s.store.SaveEnvironmentAuthorization(ctx,bound);err!=nil{return Authorization{},err}
  if a.SecretRef!=bound.SecretRef{_=s.deleteCredentialMaterial(ctx,a.SecretRef)}
  return bound,nil

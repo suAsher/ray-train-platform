@@ -53,7 +53,7 @@ func(s *Service)Create(ctx context.Context, owner Owner, workspaceID string, req
  if !errors.Is(err,ErrNotFound){return Build{},err}
  ws,err:=s.store.EnvironmentWorkspace(ctx,owner,workspaceID);if err!=nil{return Build{},err}
  if ws.State!="RUNNING"&&ws.State!="READY"{return Build{},ErrConflict}
- snapshot,err:=s.runner.InspectWorkspace(ctx,ws);if err!=nil{return Build{},ErrConflict}
+ snapshot,err:=s.runner.InspectWorkspace(ctx,ws);if err!=nil{var phase *PhaseError;if errors.As(err,&phase)&&phase.UserMessage()!=""{return Build{},phase};return Build{},ErrConflict}
  if snapshot.UID==""||snapshot.Image!=s.config.WorkspaceImage{return Build{},ErrConflict}
 
  now:=s.now()
@@ -61,7 +61,12 @@ func(s *Service)Create(ctx context.Context, owner Owner, workspaceID string, req
  // Reserve the authorization before queueing; no job can see unbound material.
  if _,err=s.bindAuthorization(ctx,owner,req.AuthorizationID,b);err!=nil{return Build{},err}
  created,err:=s.store.CreateEnvironmentBuild(ctx,b)
- if err==nil && created.AuthID!=b.AuthID{_=s.cleanupAuthorization(ctx,b)}
+ if err!=nil{
+  // Commit errors can be ambiguous. Only a successful durable absence check
+  // permits immediate revocation; never invalidate a committed operation.
+  _,lookupErr:=s.store.EnvironmentBuild(ctx,owner,b.ID)
+  if errors.Is(lookupErr,ErrNotFound){_=s.cleanupAuthorization(ctx,b)}
+ }else if created.AuthID!=b.AuthID{_=s.cleanupAuthorization(ctx,b)}
  return created,err
 }
 func(s *Service)Get(ctx context.Context,o Owner,id string)(Build,error){return s.store.EnvironmentBuild(ctx,o,id)}
@@ -92,10 +97,10 @@ func(s *Service)Reconcile(ctx context.Context)error{
 func(s *Service)reconcileBuild(ctx context.Context,b Build)error{
  if b.Status==CancelRequested || b.Terminal(){
   retain:=(b.Status==Failed||b.Status==AwaitingAuth)&&s.now().Before(b.ArtifactExpiresAt)
-  if err:=s.runner.Cleanup(ctx,b,retain);err!=nil{return err}
-  if err:=s.cleanupAuthorization(ctx,b);err!=nil{return err}
+  if err:=s.runner.Cleanup(ctx,b,retain);err!=nil{_ = s.store.SaveEnvironmentBuild(ctx,b,s.controllerID);return err}
+  if err:=s.cleanupAuthorization(ctx,b);err!=nil{_ = s.store.SaveEnvironmentBuild(ctx,b,s.controllerID);return err}
   now:=s.now();b.CleanedAt=&now
-  if b.Status==CancelRequested{b.Status=Canceled;b.Message="已取消；已推送到 Harbor 的镜像仍保留"}
+  if b.Status==CancelRequested{b.Status=Canceled;b.Message="已取消";if b.ImageDigest!=""{b.Message+="；已推送到 Harbor 的镜像仍保留"}}
   return s.store.SaveEnvironmentBuild(ctx,b,s.controllerID)
  }
  if !s.now().Before(b.ArtifactExpiresAt){return s.fail(ctx,b,Failed,"构建已超时，请重新创建环境版本")}
@@ -110,7 +115,12 @@ func(s *Service)reconcileBuild(ctx context.Context,b Build)error{
   credentials=&c
  }
  result,err:=s.runner.Step(ctx,b,credentials)
- if err!=nil{if errors.Is(err,ErrAuthorization){return s.fail(ctx,b,AwaitingAuth,"Harbor 拒绝发布，请重新授权后重试")};return s.fail(ctx,b,Failed,"此阶段执行失败，请检查环境依赖和平台构建状态后重试")}
+ if err!=nil{
+  if errors.Is(err,ErrAuthorization){return s.fail(ctx,b,AwaitingAuth,"Harbor 拒绝发布，请重新授权后重试")}
+  var phase *PhaseError
+  if errors.As(err,&phase)&&phase!=nil{if message:=phaseMessage(phase.Code);message!=""{return s.fail(ctx,b,Failed,message)}}
+  return s.fail(ctx,b,Failed,"此阶段执行失败，请检查环境依赖和平台构建状态后重试")
+ }
  // Runner messages are trusted safe summaries, never command output or logs.
  if len(result.Message)>1000{result.Message="阶段执行中"};b.Message=result.Message
  if !result.Done{return s.store.SaveEnvironmentBuild(ctx,b,s.controllerID)}

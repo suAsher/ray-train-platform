@@ -4,9 +4,12 @@ SET LOCAL statement_timeout = '60s';
 -- Empty visibility preserves every existing tenant/global catalogue entry.
 -- CreatedBy is attribution only and is never converted into an ACL owner.
 ALTER TABLE platform_images
-  ADD COLUMN owner_user_id TEXT NOT NULL DEFAULT '',
-  ADD COLUMN visibility TEXT NOT NULL DEFAULT '',
-  ADD COLUMN environment_version_id TEXT NOT NULL DEFAULT '',
+  ADD COLUMN owner_user_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE platform_images
+  ADD COLUMN visibility TEXT NOT NULL DEFAULT '';
+ALTER TABLE platform_images
+  ADD COLUMN environment_version_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE platform_images
   ADD CONSTRAINT platform_images_owner_visibility_check CHECK (
     (visibility = '' AND owner_user_id = '' AND environment_version_id = '') OR
     (visibility IN ('personal', 'team') AND length(trim(owner_user_id)) > 0 AND tenant_id IS NOT NULL AND

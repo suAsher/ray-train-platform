@@ -57,8 +57,11 @@ func(h environmentBuildHandler)success(c *gin.Context,data any){c.JSON(200,httpa
 func(h environmentBuildHandler)failure(c *gin.Context,status int,code,message string){c.JSON(status,httpapi.Failure[any](httpapi.RequestID(c.GetHeader("X-Request-ID")),code,message))}
 func(h environmentBuildHandler)result(c *gin.Context,value any,err error){
  if err==nil{h.success(c,value);return}
+ var phase *eb.PhaseError;if errors.As(err,&phase)&&phase.UserMessage()!=""{h.failure(c,409,"ENVIRONMENT_BUILD_PRECHECK",phase.UserMessage());return}
  switch{case errors.Is(err,eb.ErrNotFound):h.failure(c,404,"ENVIRONMENT_NOT_FOUND","记录不存在或不属于当前用户")
  case errors.Is(err,eb.ErrInvalid):h.failure(c,400,"ENVIRONMENT_BUILD_INVALID","请检查仓库、名称、可见范围和操作标识")
+ case errors.Is(err,eb.ErrCredentialCapacity):h.failure(c,409,"REGISTRY_AUTHORIZATION_CAPACITY","临时 Harbor 授权名额已满：每人最多 5 项、平台最多 50 项。请撤销不再使用的授权，或等待当前发布完成后重试")
+ case errors.Is(err,eb.ErrCapacity):h.failure(c,409,"ENVIRONMENT_BUILD_CAPACITY","环境构建暂存空间名额已满：每人最多 3 项、平台最多 8 项。请等待完成，或取消不再需要的构建以释放暂存空间")
  case errors.Is(err,eb.ErrConflict):h.failure(c,409,"ENVIRONMENT_BUILD_CONFLICT","当前状态不支持此操作；请刷新，确认来源为本人运行中的配套 Base 调试环境")
  case errors.Is(err,eb.ErrAuthorization):h.failure(c,403,"REGISTRY_AUTHORIZATION_REQUIRED","Harbor 凭据失效或没有目标仓库写权限，请使用用户名和 CLI Secret 重新授权")
  default:h.failure(c,503,"ENVIRONMENT_BUILD_UNAVAILABLE","环境服务暂不可用，请稍后重试")}

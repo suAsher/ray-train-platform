@@ -53,3 +53,14 @@ func TestSharedRuntimeContractsNeverInheritOwnerImage(t *testing.T) {
  } {if got:=imageUserID(input);got!="" {t.Fatalf("shared contract inherited owner %q",got)}}
  if got:=imageUserID(SubmissionInput{Principal:p,Origin:domain.SubmissionOriginPortal});got!="owner" {t.Fatalf("ordinary training lost owner: %q",got)}
 }
+
+func TestLegacyAdapterFilteredPrivateCatalogDoesNotEnableFallback(t *testing.T) {
+ image := catalogImage("registry.example/private:one")
+ image.IsDefault = false
+ image.TenantID, image.OwnerUserID, image.Visibility = "team-a", "owner", domain.ImageVisibilityPersonal
+ store := &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{image}}}
+ service := NewSubmissionService(&submissionServiceRepository{}, SubmissionServiceOptions{Images: store, ImageAllowlist: []string{image.Reference}})
+ _, err := service.resolveRuntime(context.Background(), "team-a", "other", domain.JobSpec{Image: image.Reference})
+ if !errors.Is(err, ErrSubmissionImageNotAllowed) { t.Fatalf("private image admitted through fallback: %v", err) }
+ if store.listCalls != 1 { t.Fatalf("catalog must be resolved from one snapshot, got %d queries", store.listCalls) }
+}

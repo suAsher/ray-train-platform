@@ -3,6 +3,7 @@ package registryauth
 import (
  "net/http"
  "net/url"
+ "path"
  "strings"
 )
 
@@ -13,9 +14,9 @@ type publishTransport struct { base http.RoundTripper; repository string }
 
 func (t *publishTransport) allowed(u *url.URL) bool {
  if u==nil || u.Scheme!="https" || u.Host!=Host || u.User!=nil || u.Fragment!="" || u.RawPath!="" {return false}
- if strings.Contains(u.Path,"/../") || strings.Contains(u.Path,"/./") {return false}
+ if path.Clean(u.Path)!=strings.TrimSuffix(u.Path,"/") {return false}
  if u.Path=="/service/token" {
-  q:=u.Query();if q.Get("service")!=registryService {return false}
+  q:=u.Query();if len(q["service"])!=1 || q.Get("service")!=registryService {return false}
   for _,scope:=range q["scope"] {if scope!="repository:"+t.repository+":pull,push" && scope!="repository:"+t.repository+":push,pull" && scope!="repository:"+t.repository+":pull" {return false}}
   return true
  }
@@ -44,7 +45,7 @@ func validChallenge(value string) bool {
 }
 
 func (t *publishTransport) RoundTrip(request *http.Request) (*http.Response,error) {
- if !t.allowed(request.URL){return nil,ErrUnavailable}
+ if !t.allowed(request.URL) || (request.Host!="" && request.Host!=Host){return nil,ErrUnavailable}
  response,err:=t.base.RoundTrip(request);if err!=nil{return nil,ErrUnavailable}
  valid:=validChallenge(response.Header.Get("WWW-Authenticate"))
  if location:=response.Header.Get("Location");location!="" {

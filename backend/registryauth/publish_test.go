@@ -10,6 +10,7 @@ import (
  "net/http/httptest"
  "os"
  "path/filepath"
+ "sync/atomic"
  "testing"
 
  "github.com/google/go-containerregistry/pkg/v1/empty"
@@ -48,13 +49,15 @@ func TestPublishRejectsInvalidTagBeforeReadingCredentials(t *testing.T) {
 func TestPublishSealedLayoutEndToEndWithInMemoryRegistry(t *testing.T) {
  directory,digest:=testLayout(t)
  handler:=registry.New(registry.Logger(log.New(io.Discard,"",0)))
- requests:=0
+ var requests atomic.Int64
  client:=testClient(func(request *http.Request)(*http.Response,error){
   if request.URL.Path=="/service/token" {body,_:=json.Marshal(map[string]string{"token":jwt([]string{"pull","push"},"team/model")});return reply(200,string(body)),nil}
   if username,_,ok:=request.BasicAuth();ok || username!="" {t.Fatal("personal credentials reached registry upload")}
-  requests++
-  recorder:=httptest.NewRecorder();handler.ServeHTTP(recorder,request);return recorder.Result(),nil
+  requests.Add(1)
+  recorder:=httptest.NewRecorder();handler.ServeHTTP(recorder,request)
+  response:=recorder.Result();response.Request=request
+  return response,nil
  })
  result,err:=client.Publish(context.Background(),credentials,PublishRequest{LayoutPath:directory,Digest:digest,Project:"team",Repository:"model",Tag:"v1"})
- if err!=nil || result.ImageDigest!=digest || requests<3 {t.Fatalf("result=%+v err=%v requests=%d",result,err,requests)}
+ if err!=nil || result.ImageDigest!=digest || requests.Load()<3 {t.Fatalf("result=%+v err=%v requests=%d",result,err,requests.Load())}
 }

@@ -241,7 +241,7 @@ func cloneLocalCachePolicy(policy LocalCachePolicy) LocalCachePolicy {
 func (service *SubmissionService) resolveRuntime(ctx context.Context, tenantID, userID string, spec domain.JobSpec) (domain.JobSpec, error) {
 	reference := strings.TrimSpace(spec.Image)
 	if service.images != nil {
-		catalog, err := visibleImages(ctx, service.images, tenantID, userID, domain.ImageKindTraining)
+		catalog, authoritative, err := visibleImageCatalog(ctx, service.images, tenantID, userID, domain.ImageKindTraining)
 		if err != nil {
 			return domain.JobSpec{}, ErrSubmissionImageNotAllowed
 		}
@@ -259,13 +259,9 @@ func (service *SubmissionService) resolveRuntime(ctx context.Context, tenantID, 
 			spec.RayVersion = snapshot.RayVersion
 			return spec, nil
 		}
-		if _, ownerAware := service.images.(ownerImageStore); ownerAware || len(catalog) > 0 {
+		if authoritative {
 			return domain.JobSpec{}, ErrSubmissionImageNotAllowed
 		}
-        // Legacy adapters may retain the empty-catalog fallback, but filtering
-        // a nonempty private catalog must never enable that fallback.
-        unfiltered, listErr := service.images.ListImages(ctx, tenantID, domain.ImageKindTraining)
-        if listErr != nil || len(unfiltered) > 0 { return domain.JobSpec{}, ErrSubmissionImageNotAllowed }
 	}
 	if !matchesAllowlist(reference, service.imageAllowlist) || spec.TrainingEngine.Resolved() != domain.TrainingEngineRayDDP {
 		return domain.JobSpec{}, ErrSubmissionImageNotAllowed

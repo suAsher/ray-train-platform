@@ -29,12 +29,21 @@ func(r *GormRepository)EnvironmentAuthorization(ctx context.Context,o eb.Owner,i
 func(r *GormRepository)DeleteEnvironmentAuthorization(ctx context.Context,id string)error{return r.db.WithContext(ctx).Where("id = ?",id).Delete(&eb.Authorization{}).Error}
 func(r *GormRepository)ExpiredEnvironmentAuthorizations(ctx context.Context,now time.Time)([]eb.Authorization,error){items:=[]eb.Authorization{};err:=r.db.WithContext(ctx).Where("expires_at <= ?",now).Limit(100).Find(&items).Error;return items,err}
 func(r *GormRepository)CreateEnvironmentBuild(ctx context.Context,b eb.Build)(eb.Build,error){
- err:=r.db.WithContext(ctx).Clauses(clause.OnConflict{Columns:[]clause.Column{{Name:"tenant_id"},{Name:"owner_id"},{Name:"idempotency_key"}},DoNothing:true}).Create(&b).Error
- if err!=nil{return eb.Build{},err}
  var found eb.Build
- err=r.db.WithContext(ctx).Where("tenant_id = ? AND owner_id = ? AND idempotency_key = ?",b.TenantID,b.OwnerID,b.IdempotencyKey).First(&found).Error
- if err==nil&&(found.WorkspaceID!=b.WorkspaceID||found.Project!=b.Project||found.Repository!=b.Repository||found.Name!=b.Name||found.Description!=b.Description||found.Visibility!=b.Visibility){return eb.Build{},eb.ErrConflict}
- return found,err
+ err:=r.db.WithContext(ctx).Transaction(func(tx *gorm.DB)error{
+  if tx.Dialector.Name()=="postgres"{if err:=tx.Exec("SELECT pg_advisory_xact_lock(?)",int64(2026092155)).Error;err!=nil{return err}}
+  err:=tx.Where("tenant_id = ? AND owner_id = ? AND idempotency_key = ?",b.TenantID,b.OwnerID,b.IdempotencyKey).First(&found).Error
+  if err==nil{if found.WorkspaceID!=b.WorkspaceID||found.Project!=b.Project||found.Repository!=b.Repository||found.Name!=b.Name||found.Description!=b.Description||found.Visibility!=b.Visibility{return eb.ErrConflict};return nil}
+  if !errors.Is(err,gorm.ErrRecordNotFound){return err}
+  // Reserve disk budget even for QUEUED operations. Retriable failed OCI
+  // volumes count until their TTL cleanup; historical completed rows do not.
+  occupied:=func()*gorm.DB{return tx.Model(&eb.Build{}).Where("(cleaned_at IS NULL OR (status IN ? AND (artifact_expires_at > ? OR cleaned_at < artifact_expires_at)))",[]string{eb.Failed,eb.AwaitingAuth},time.Now().UTC())}
+  var global,user int64
+  if err=occupied().Count(&global).Error;err!=nil{return err}
+  if err=occupied().Where("owner_id = ?",b.OwnerID).Count(&user).Error;err!=nil{return err}
+  if global>=8||user>=3{return eb.ErrCapacity}
+  if err=tx.Create(&b).Error;err!=nil{return err};found=b;return nil
+ });return found,err
 }
 func(r *GormRepository)EnvironmentBuild(ctx context.Context,o eb.Owner,id string)(eb.Build,error){var b eb.Build;err:=r.db.WithContext(ctx).Where("id = ? AND tenant_id = ? AND owner_id = ?",id,o.TenantID,o.UserID).First(&b).Error;return b,environmentError(err)}
 func(r *GormRepository)ListEnvironmentBuilds(ctx context.Context,o eb.Owner)([]eb.Build,error){items:=[]eb.Build{};err:=r.db.WithContext(ctx).Where("tenant_id = ? AND owner_id = ?",o.TenantID,o.UserID).Order("created_at DESC").Limit(200).Find(&items).Error;return items,err}
@@ -101,11 +110,25 @@ func(r *GormRepository)CancelEnvironmentBuild(ctx context.Context,o eb.Owner,id 
 }
 
 func(r *GormRepository)ReserveEnvironmentCredentialMaterial(ctx context.Context,m eb.CredentialMaterial)error{
- result:=r.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing:true}).Create(&m)
- if result.Error!=nil{return result.Error}
- var stored eb.CredentialMaterial
- if err:=r.db.WithContext(ctx).Where("ref = ?",m.Ref).First(&stored).Error;err!=nil{return err}
- if stored.AuthorizationID!=m.AuthorizationID||stored.OwnerID!=m.OwnerID||stored.TenantID!=m.TenantID||!stored.ExpiresAt.Equal(m.ExpiresAt){return eb.ErrConflict};return nil
+ return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB)error{
+  if tx.Dialector.Name()=="postgres"{if err:=tx.Exec("SELECT pg_advisory_xact_lock(?)",int64(2026092156)).Error;err!=nil{return err}}
+  // Count authorizations and preallocated refs as one identity. Expired refs
+  // still occupy capacity until their actual Secret cleanup completes.
+  const reserved="(SELECT authorization_id AS id, owner_id FROM environment_credential_materials UNION SELECT id, owner_id FROM environment_registry_authorizations) AS credential_reservations"
+  var existing int64
+  if err:=tx.Table(reserved).Where("id = ? AND owner_id = ?",m.AuthorizationID,m.OwnerID).Count(&existing).Error;err!=nil{return err}
+  if existing==0{
+   var global,user int64
+   if err:=tx.Table(reserved).Count(&global).Error;err!=nil{return err}
+   if err:=tx.Table(reserved).Where("owner_id = ?",m.OwnerID).Count(&user).Error;err!=nil{return err}
+   if global>=50||user>=5{return eb.ErrCredentialCapacity}
+  }
+  result:=tx.Clauses(clause.OnConflict{DoNothing:true}).Create(&m)
+  if result.Error!=nil{return result.Error}
+  var stored eb.CredentialMaterial
+  if err:=tx.Where("ref = ?",m.Ref).First(&stored).Error;err!=nil{return err}
+  if stored.AuthorizationID!=m.AuthorizationID||stored.OwnerID!=m.OwnerID||stored.TenantID!=m.TenantID||!stored.ExpiresAt.Equal(m.ExpiresAt){return eb.ErrConflict};return nil
+ })
 }
 func(r *GormRepository)EnvironmentCredentialMaterials(ctx context.Context,id string)([]eb.CredentialMaterial,error){items:=[]eb.CredentialMaterial{};err:=r.db.WithContext(ctx).Where("authorization_id = ?",id).Find(&items).Error;return items,err}
 func(r *GormRepository)ExpiredEnvironmentCredentialMaterials(ctx context.Context,now time.Time)([]eb.CredentialMaterial,error){items:=[]eb.CredentialMaterial{};err:=r.db.WithContext(ctx).Where("expires_at <= ?",now).Limit(100).Find(&items).Error;return items,err}

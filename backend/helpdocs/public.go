@@ -17,7 +17,7 @@ func PublicGuides() []domain.HelpDocument {
 func PublicSectionForSeedDocument(document domain.HelpDocument) domain.HelpDocument {
 	switch document.ID {
 	case "custom-environment":
-		document.Markdown = environmentImageGuide
+		document.Markdown = environmentImageGuide + "\n\n" + document.Markdown
 	case "mlflow":
 		document.Title = "查看训练实验与结果"
 		document.Markdown = mlflowSeedPublicSection

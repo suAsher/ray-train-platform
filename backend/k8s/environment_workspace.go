@@ -4,6 +4,7 @@ import (
  "bytes"
  "context"
  "encoding/json"
+ "errors"
  "fmt"
  "io"
  "regexp"
@@ -44,7 +45,7 @@ func (r *EnvironmentRunner) workspacePod(ctx context.Context,w environmentbuild.
   if !owned {continue}
   for _,container:=range pod.Spec.Containers {
    if container.Name!="ray-worker" {continue}
-   if container.Image!=r.config.WorkspaceImage {return nil,fmt.Errorf("workspace does not use the supported pinned environment image")}
+   if container.Image!=r.config.WorkspaceImage {return nil,&environmentbuild.PhaseError{Code:"UNSUPPORTED_WORKSPACE"}}
    ready:=false
    for _,status:=range pod.Status.ContainerStatuses {if status.Name==container.Name && status.Ready && strings.HasSuffix(status.ImageID,"@"+strings.Split(r.config.WorkspaceImage,"@")[1]) {ready=true}}
    if !ready {return nil,fmt.Errorf("workspace image has not been verified by the container runtime")}
@@ -62,23 +63,29 @@ func (b *environmentBoundedBuffer) Write(data []byte) (int,error) {
 func (r *EnvironmentRunner) capture(ctx context.Context,b environmentbuild.Build) (environmentbuild.StepResult,error) {
  workspace:=environmentbuild.Workspace{ID:b.WorkspaceID,TenantID:b.TenantID,OwnerID:b.OwnerID,Namespace:b.Namespace,ResourceName:b.WorkspaceResourceName}
  pod,err:=r.workspacePod(ctx,workspace);if err!=nil {return environmentbuild.StepResult{},err}
- if string(pod.UID)!=b.WorkspaceUID || b.WorkspaceImage!=r.config.WorkspaceImage {return environmentbuild.StepResult{},fmt.Errorf("workspace changed after environment request")}
+ if string(pod.UID)!=b.WorkspaceUID || b.WorkspaceImage!=r.config.WorkspaceImage {return environmentbuild.StepResult{},&environmentbuild.PhaseError{Code:"ENVIRONMENT_CHANGED"}}
  captureCtx,cancel:=context.WithTimeout(ctx,5*time.Minute);defer cancel()
  output:=&environmentBoundedBuffer{limit:1024*1024}
- if err:=r.execCapture(captureCtx,pod.Namespace,pod.Name,output);err!=nil {return environmentbuild.StepResult{},fmt.Errorf("environment capture failed; restore supported packages and retry")}
+ diagnostic:=&environmentBoundedBuffer{limit:4096}
+ if err:=r.execCapture(captureCtx,pod.Namespace,pod.Name,output,diagnostic);err!=nil {
+  var exit interface {ExitStatus() int}
+  if errors.Is(err,context.DeadlineExceeded) || (errors.As(err,&exit) && (exit.ExitStatus()==124 || exit.ExitStatus()==137)) {return environmentbuild.StepResult{},&environmentbuild.PhaseError{Code:"BUILD_TIMEOUT"}}
+  if safe:=environmentSafeFailure(diagnostic.Bytes());safe!=nil {return environmentbuild.StepResult{},safe}
+  return environmentbuild.StepResult{},fmt.Errorf("environment capture failed")
+ }
  // Capture is untrusted workspace output. The trusted prepare container repeats
  // full schema/provenance validation before downloading or running anything.
  var envelope struct { SchemaVersion int `json:"schemaVersion"`;BaseImage string `json:"baseImage"`;Checks map[string]bool `json:"checks"` }
- if err:=json.Unmarshal(output.Bytes(),&envelope);err!=nil || envelope.SchemaVersion!=1 || envelope.BaseImage!=b.BaseImage {return environmentbuild.StepResult{},fmt.Errorf("invalid environment capture manifest")}
- for _,key:=range []string{"baseUnchanged","managedOnly","installedFilesVerified","stableCapture"} {if !envelope.Checks[key] {return environmentbuild.StepResult{},fmt.Errorf("environment capture integrity validation failed")}}
+ if err:=json.Unmarshal(output.Bytes(),&envelope);err!=nil || envelope.SchemaVersion!=1 || envelope.BaseImage!=b.BaseImage {return environmentbuild.StepResult{},&environmentbuild.PhaseError{Code:"ENVIRONMENT_CHANGED"}}
+ for _,key:=range []string{"baseUnchanged","managedOnly","installedFilesVerified","stableCapture"} {if !envelope.Checks[key] {return environmentbuild.StepResult{},&environmentbuild.PhaseError{Code:"PACKAGE_MODIFIED"}}}
  after,err:=r.workspacePod(ctx,workspace);if err!=nil {return environmentbuild.StepResult{},err}
- if after.UID!=pod.UID {return environmentbuild.StepResult{},fmt.Errorf("workspace was replaced during capture")}
+ if after.UID!=pod.UID {return environmentbuild.StepResult{},&environmentbuild.PhaseError{Code:"ENVIRONMENT_CHANGED"}}
  return environmentbuild.StepResult{Done:true,SnapshotJSON:output.String()},nil
 }
-func (r *EnvironmentRunner) execCapture(ctx context.Context,namespace,pod string,stdout io.Writer) error {
- if r.captureExec!=nil {return r.captureExec(ctx,namespace,pod,stdout)}
+func (r *EnvironmentRunner) execCapture(ctx context.Context,namespace,pod string,stdout,stderr io.Writer) error {
+ if r.captureExec!=nil {return r.captureExec(ctx,namespace,pod,stdout,stderr)}
  if r.client.restConfig==nil {return environmentbuild.ErrUnavailable}
  request:=r.client.kubernetes.CoreV1().RESTClient().Post().Resource("pods").Namespace(namespace).Name(pod).SubResource("exec").VersionedParams(&corev1.PodExecOptions{Container:"ray-worker",Command:[]string{"/usr/bin/timeout","--signal=TERM","--kill-after=5s","290s","/usr/local/bin/raytrain-environment","capture"},Stdout:true,Stderr:true},scheme.ParameterCodec)
  executor,err:=remotecommand.NewSPDYExecutor(r.client.restConfig,"POST",request.URL());if err!=nil {return err}
- return executor.StreamWithContext(ctx,remotecommand.StreamOptions{Stdout:stdout,Stderr:io.Discard})
+ return executor.StreamWithContext(ctx,remotecommand.StreamOptions{Stdout:stdout,Stderr:stderr})
 }

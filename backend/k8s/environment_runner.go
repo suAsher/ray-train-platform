@@ -31,7 +31,7 @@ type EnvironmentRunnerConfig struct {
 type EnvironmentRunner struct {
  client *Client
  config EnvironmentRunnerConfig
- captureExec func(context.Context,string,string,io.Writer) error
+ captureExec func(context.Context,string,string,io.Writer,io.Writer) error
 }
 var _ environmentbuild.Runner = (*EnvironmentRunner)(nil)
 func NewEnvironmentRunner(client *Client,cfg EnvironmentRunnerConfig) *EnvironmentRunner {
@@ -86,8 +86,10 @@ func (r *EnvironmentRunner) ensurePublishSecret(ctx context.Context,b environmen
 }
 func (r *EnvironmentRunner) observeJob(ctx context.Context,b environmentbuild.Build,job *batchv1.Job) (environmentbuild.StepResult,error) {
  failed:=false
- for _,condition:=range job.Status.Conditions {if condition.Type==batchv1.JobFailed && condition.Status==corev1.ConditionTrue {failed=true}}
- if failed && b.Status!=environmentbuild.Pushing {return environmentbuild.StepResult{},fmt.Errorf("environment %s Job failed",b.Status)}
+ for _,condition:=range job.Status.Conditions {if condition.Type==batchv1.JobFailed && condition.Status==corev1.ConditionTrue {
+  failed=true
+  if condition.Reason=="DeadlineExceeded" {code:="BUILD_TIMEOUT";if b.Status==environmentbuild.VerifyingPull {code="PULL_FAILED"};return environmentbuild.StepResult{},&environmentbuild.PhaseError{Code:code}}
+ }}
  if job.Status.Succeeded<1 && !failed {return environmentbuild.StepResult{},nil}
  pods,err:=r.client.kubernetes.CoreV1().Pods(r.config.Namespace).List(ctx,metav1.ListOptions{LabelSelector:labels.Set{"batch.kubernetes.io/job-name":job.Name}.AsSelector().String()});if err!=nil {return environmentbuild.StepResult{},err}
  for _,pod:=range pods.Items {
@@ -98,8 +100,10 @@ func (r *EnvironmentRunner) observeJob(ctx context.Context,b environmentbuild.Bu
    if status.Name!="environment" || status.State.Terminated==nil {continue}
    if failed {
     var failure struct {ErrorCode string `json:"errorCode"`}
-    if len(status.State.Terminated.Message)<=4096 && json.Unmarshal([]byte(status.State.Terminated.Message),&failure)==nil && (failure.ErrorCode=="REGISTRY_AUTH_REQUIRED" || failure.ErrorCode=="REGISTRY_PUSH_DENIED") {return environmentbuild.StepResult{},environmentbuild.ErrAuthorization}
-    return environmentbuild.StepResult{},fmt.Errorf("environment publishing Job failed")
+    if b.Status==environmentbuild.Pushing && len(status.State.Terminated.Message)<=4096 && json.Unmarshal([]byte(status.State.Terminated.Message),&failure)==nil && (failure.ErrorCode=="REGISTRY_AUTH_REQUIRED" || failure.ErrorCode=="REGISTRY_PUSH_DENIED") {return environmentbuild.StepResult{},environmentbuild.ErrAuthorization}
+    if safe:=environmentSafeFailure([]byte(status.State.Terminated.Message));safe!=nil {return environmentbuild.StepResult{},safe}
+    if b.Status==environmentbuild.VerifyingPull {return environmentbuild.StepResult{},&environmentbuild.PhaseError{Code:"PULL_FAILED"}}
+    return environmentbuild.StepResult{},fmt.Errorf("environment Job failed")
    }
    if status.State.Terminated.ExitCode!=0 {continue}
    if b.Status==environmentbuild.VerifyingPull {return environmentbuild.StepResult{Done:true,ChecksJSON:`{"pullVerified":true,"cpuImportCheck":true,"gpuValidation":"not_run"}`},nil}
@@ -119,4 +123,17 @@ func (r *EnvironmentRunner) observeJob(ctx context.Context,b environmentbuild.Bu
   }
  }
  return environmentbuild.StepResult{},fmt.Errorf("environment Job result is unavailable")
+}
+
+// Only these structured codes cross the command-output boundary. Unstructured
+// stderr, Kubernetes messages, URLs and unknown codes are never surfaced.
+func environmentSafeFailure(data []byte) error {
+ if len(data)>4096 {return nil}
+ var failure struct {ErrorCode string `json:"errorCode"`}
+ if json.Unmarshal(data,&failure)!=nil {return nil}
+ switch failure.ErrorCode {
+ case "UNSUPPORTED_WORKSPACE","ENVIRONMENT_CHANGED","WHEEL_UNAVAILABLE","PACKAGE_MODIFIED","BUILD_TIMEOUT","PULL_FAILED","TEMP_STORAGE_FULL":
+  return &environmentbuild.PhaseError{Code:failure.ErrorCode}
+ default:return nil
+ }
 }

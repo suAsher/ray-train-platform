@@ -22,3 +22,11 @@ func TestEnvironmentPublicationRejectsUnsafeTargetsAndCredentials(t *testing.T){
  for _,target:=range [][2]string{{"public","../other"},{"public","repo:tag"},{"https://evil","repo"},{"public","repo@sha256:bad"},{"public",""}}{if validTarget(target[0],target[1]){t.Fatal("unsafe target accepted")}}
  for _,c:=range []Credentials{{Username:"user",Secret:"secret\n"},{Username:"user",Secret:""},{Username:" user",Secret:"secret"}}{if validCredential(c){t.Fatal("unsafe credentials accepted")}}
 }
+
+func TestPhaseErrorOnlyAllowsSafeClassification(t *testing.T){
+ for _,code:=range []string{"UNSUPPORTED_WORKSPACE","ENVIRONMENT_CHANGED","WHEEL_UNAVAILABLE","PACKAGE_MODIFIED","BUILD_TIMEOUT","PULL_FAILED","TEMP_STORAGE_FULL"}{
+  if phaseMessage(code)==""||(&PhaseError{Code:code}).Error()!=code{t.Fatalf("missing safe classification %s",code)}
+ }
+ secret:="http://user:test-secret@unexpected.invalid/registry"
+ if phaseMessage(secret)!=""||strings.Contains((&PhaseError{Code:secret}).Error(),"test-secret"){t.Fatal("unknown diagnostic exposed")}
+}

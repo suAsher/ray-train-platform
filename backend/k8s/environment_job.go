@@ -50,7 +50,7 @@ func (r *EnvironmentRunner) renderJob(b environmentbuild.Build) (*batchv1.Job,er
   if !environmentDigestPattern.MatchString(b.ImageDigest) {return nil,environmentbuild.ErrInvalid}
   container.Image=environmentbuild.RegistryHost+"/"+b.Project+"/"+b.Repository+"@"+b.ImageDigest
   container.Command=[]string{"/bin/sh","-c"}
-  container.Args=[]string{"raytrain-environment verify --manifest /opt/raytrain/environment-materials/capture.json && raytrain-selfcheck"}
+  container.Args=[]string{"/usr/local/bin/raytrain-environment verify --manifest /opt/raytrain/environment-materials/capture.json && /usr/local/bin/raytrain-selfcheck"}
   container.Env=[]corev1.EnvVar{{Name:"NVIDIA_VISIBLE_DEVICES",Value:"void"},{Name:"CUDA_VISIBLE_DEVICES",Value:""}}
  default:return nil,environmentbuild.ErrInvalid
  }
