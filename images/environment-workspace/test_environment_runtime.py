@@ -81,8 +81,10 @@ class RuntimeContractTest(unittest.TestCase):
         import types
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
+            package_path = runtime.metadata.PackagePath('missing-build-source.py')
+            package_path.hash = None
             distribution = types.SimpleNamespace(
-                files=[runtime.metadata.PackagePath('missing-build-source.py')],
+                files=[package_path],
                 locate_file=lambda name: root / str(name), read_text=lambda name: None)
             absent = runtime.distribution_fingerprint(distribution, managed=False)
             with self.assertRaises(runtime.CaptureError):
