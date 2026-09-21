@@ -11,7 +11,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
- "regexp"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -175,22 +175,30 @@ func TestJobDashboardRejectsCookieSignedWithUnconfiguredKey(t *testing.T) {
 }
 
 func TestRay258APIHelperResolvesExactlyOneDashboardPrefix(t *testing.T) {
- // Ray 2.58 main.2dfa88bd.js module 816 exports S(e), which removes one
- // leading slash before axios GET/HEAD. Health/authentication calls use
- // absolute /api/... literals, while jobs and nodes already use relative URLs.
- script := `const S=e=>e.startsWith("/")?e.slice(1):e;const get=e=>axios.get(S(e));get("/api/authentication_mode");get("/api/grafana_health");get("/api/prometheus_health");get("api/jobs");fetch("/api/v0/nodes");`
- for _, base:=range []string{jobDashboardBasePath("job-1"),"/raytrain"+jobDashboardBasePath("job-1")} {
-  response:=&http.Response{Header:http.Header{"Content-Type":[]string{"application/javascript"}},Body:io.NopCloser(strings.NewReader(script))}
-  if err:=rewriteRayDashboardResponse(response,base);err!=nil {t.Fatal(err)}
-  body,_:=io.ReadAll(response.Body)
-  calls:=regexp.MustCompile(`(?:get|fetch)\("([^"]+)"\)`).FindAllStringSubmatch(string(body),-1)
-  if len(calls)!=5 {t.Fatalf("missing API calls: %s",body)}
-  page,_:=url.Parse("https://portal.invalid"+base+"#/overview")
-  for i, endpoint:=range []string{"api/authentication_mode","api/grafana_health","api/prometheus_health","api/jobs","api/v0/nodes"} {
-   requestURL:=calls[i][1]
-   if i<4 {requestURL=strings.TrimPrefix(requestURL,"/")}
-   reference,_:=url.Parse(requestURL)
-   if got:=page.ResolveReference(reference).Path; got!=base+endpoint {t.Fatalf("Ray helper produced duplicate/escaped path: %s; want %s",got,base+endpoint)}
-  }
- }
+	// Ray 2.58 main.2dfa88bd.js module 816 exports S(e), which removes one
+	// leading slash before axios GET/HEAD. Health/authentication calls use
+	// absolute /api/... literals, while jobs and nodes already use relative URLs.
+	script := `const S=e=>e.startsWith("/")?e.slice(1):e;const get=e=>axios.get(S(e));get("/api/authentication_mode");get("/api/grafana_health");get("/api/prometheus_health");get("api/jobs");fetch("/api/v0/nodes");`
+	for _, base := range []string{jobDashboardBasePath("job-1"), "/raytrain" + jobDashboardBasePath("job-1")} {
+		response := &http.Response{Header: http.Header{"Content-Type": []string{"application/javascript"}}, Body: io.NopCloser(strings.NewReader(script))}
+		if err := rewriteRayDashboardResponse(response, base); err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(response.Body)
+		calls := regexp.MustCompile(`(?:get|fetch)\("([^"]+)"\)`).FindAllStringSubmatch(string(body), -1)
+		if len(calls) != 5 {
+			t.Fatalf("missing API calls: %s", body)
+		}
+		page, _ := url.Parse("https://portal.invalid" + base + "#/overview")
+		for i, endpoint := range []string{"api/authentication_mode", "api/grafana_health", "api/prometheus_health", "api/jobs", "api/v0/nodes"} {
+			requestURL := calls[i][1]
+			if i < 4 {
+				requestURL = strings.TrimPrefix(requestURL, "/")
+			}
+			reference, _ := url.Parse(requestURL)
+			if got := page.ResolveReference(reference).Path; got != base+endpoint {
+				t.Fatalf("Ray helper produced duplicate/escaped path: %s; want %s", got, base+endpoint)
+			}
+		}
+	}
 }
