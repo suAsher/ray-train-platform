@@ -218,8 +218,9 @@ MLflow label 应通过 MLflow 发布清单/Helm 值落入 Pod template，不建�
 1. VKE 控制台中 vpc-cni/Cello 组件是否暴露“NetworkPolicy / Cilium policy enforcement / 策略执行模式”开关；字段名、可选值和是否支持按 namespace/节点池灰度，需要管理员在当前租户控制台确认。
 2. 若走 OpenAPI/CLI，具体接口名、参数名、addon values schema、是否触发 `cello` DaemonSet 滚动重启，需要管理员从 VKE 当前版本页面或工单确认。
 3. `CILIUM_ENABLE_POLICY` 目标值应优先选择 `default`；若 VKE 只支持 `always`，需要额外为 kube-system health、DNS、apiserver、NodeLocal/控制面流量补规则后再评审。
-4. 变更是否会重启所有 `cello` Pod。火山引擎文档对 vpc-cni 组件配置说明走控制台组件管理，且部分网络组件配置会自动/手动滚动重启 Cello；应安排低峰窗口。
-5. 记录方式：管理员在变更单中填写实际入口、字段名、旧值、新值、是否触发 addon rollout、控制台任务 ID 或 OpenAPI request ID、开始/结束时间；没有这些记录不得继续到 assistant 启用。
+4. 若供应商确认变更会中断现有 Pod 网络，或不能证明训练连接可保持，只能在受影响节点没有训练时执行；不能用用户运行中的任务试错。
+5. 变更是否会重启所有 `cello` Pod。火山引擎文档对 vpc-cni 组件配置说明走控制台组件管理，且部分网络组件配置会自动/手动滚动重启 Cello；应安排低峰窗口。
+6. 记录方式：管理员在变更单中填写实际入口、字段名、旧值、新值、是否触发 addon rollout、控制台任务 ID 或 OpenAPI request ID、开始/结束时间；没有这些记录不得继续到 assistant 启用。
 
 ### 1. 变更前备份
 
@@ -361,7 +362,7 @@ Assistant 负向验收：
 
 ### 6. assistant 启用顺序
 
-只有网络验收通过后才恢复 idle controller：
+只有网络验收通过、下述 DB demand 待启动任务保护已实现并验证后才恢复 idle controller。当前 DB demand 尚未实现，因此即使网络窗口完成也不能直接跳过该闸门：
 
 1. 确认 controller/reaper 镜像仍是已验证 digest，config `Enabled=false` 时 inspect 正常。
 2. scale reaper 到 1，确认不会误删非当前 UID service。

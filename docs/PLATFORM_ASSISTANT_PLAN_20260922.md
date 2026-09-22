@@ -1,6 +1,6 @@
 # RayTrain 页面助手与多模型路由
 
-更新日期：2026-09-22 16:55 CST。用户选择先上线文档检索版，生产后端已发布为 **Helm 253**，schema 保持 **56**；两副本为源码 `d04026c` 对应镜像 `b4a9bbb4…`，Ready、零重启。模型配置为 `providers: []`，GPU 与外部 API 均未启用。业务代码四端同步至 `4a270926`；本文后续仅记录验证结果，不触发镜像重建。真实 GPU 问答、Go Router、Head-only Service 和让卡后的 CUDA 运算已通过；完整测试 RayJob 和网络隔离未通过，Chrome 发布后控件验收因工具连接失效仍待完成。
+更新日期：2026-09-22。助手质量与管理员可见性后端已发布为 **Helm 254**，schema 保持 **56**；源码 `9fcbc2384845ff6938f0129c4b87fc35e52148b5`，镜像 `sha256:3cda7396cb34a8c47fac3919efe131727f616081909b9449e0a34bb2dd7be07d`，2 副本 Ready、零重启。发布前后 6 个训练 Pod 的 UID、节点、重启数和 Ready 均无回退。模型配置仍为 `providers: []`，GPU 与外部 API 均未在共享生产启用。完整网络隔离、训练让卡与本轮真实页面验收仍须分别记录，不以代码或构建通过代替。
 
 ## 本轮修正与网络变更窗口
 
@@ -8,15 +8,27 @@
 
 用户已经确认可安排集群网络变更窗口，要求先提供实施与回滚步骤。具体清单见 [idle GPU 网络变更实施与回滚](PLATFORM_ASSISTANT_NETWORK_CHANGE_20260922.md)。这项确认不表示 CNI 已修改或 GPU 已开启；仍须由具有 VKE 权限的管理员核对受支持开关与维护窗口，完成 MLflow/现有训练流量保护、策略正反例及让卡验收后再启用共享推理。个人 DeepSeek Key 仍仅用于临时验证，不能自动成为所有用户共享的生产 API 配置。
 
-下面各节保留上一轮发布和验收的时间点记录；本轮候选、测试和发布版本在完成后另行核对更新，不把已有证据套用于新代码。
+本轮后端证据位于构建机 `/root/raytrain-assistant-validation-20260922`：`quality-final-validated-sha.txt`、`quality-final-backend-tests.jsonl`、`quality-final-vet.log`、`quality-final-race.log`、`release-quality/`。完整 Go 回归 4,396 项通过，34 包通过；真实 PostgreSQL 已配置并通过，外部 MLflow/Ray 专项服务器测试仍按既有条件跳过，不计为本轮现场验收。检索覆盖 43 个已发布问题标题和 12 类自然问法，补齐完整命令章节同分选择与任务失败说明日志授权测试。
+
+真实 DeepSeek 临时测试使用公开/合成证据，经 Go Router 验证相对路径、GPU 配额、Job/Run ID、缺少报错、CUDA OOM 与日志注入五项。第一轮存在过度含糊，第二轮有不必要的资源计算错误，均保留原始记录；最终 `public-quality-deepseek-v3.jsonl` 五项人工核对通过。这仅证明该有限样本集，不承诺任意问题正确，也未把个人测试 Key 配置到共享平台。
+
+新控制器状态接口镜像已构建：`harbor.wellspiking.ai/guofeng.su/raytrain-assistant-idle-controller@sha256:669fd32267ca7773973245e2bca164f1abb9eb408789996c0b83e13bec51d10f`，证据 `quality-controller-build.log`、`quality-controller-image.txt`。尚未替换现有零副本 Deployment；网络窗口时需使用已验证版本并检查后续变更，不能直接照旧摘要启动。下方早期 GPU 记录保留其对应版本和时间点。
+
+### 本轮 Portal dev 发布
+
+本次 Portal 候选 `c0ad297fe9ec2ab662e23a1fdfd2bbac32b6224d` 已推 dev，构建机 `Dockerfile.lint`、dev build、9 项 mock 浏览器回归通过。真实帮助引用采用 `#article/cli-onboarding-v2` 等后端合法单段 ID；错误的 `#article/job/list` 测试样例已修正并保持拒绝，不能因假样例放宽实现。证据为 `portal-c0ad297fe9ec-lint.log`、`portal-c0ad297fe9ec-dev-build.log`、`portal-c0ad297fe9ec-mock-e2e-9case.log`。
+
+Portal dev 实际 Deployment 为 test-dev 集群 `yuanzhu-he/yuanzhu-he-wellspiking-frontend-master-auto-deploy`（名称含 master，但实际为 dev 发布目标）；已更新至本次 c0ad297f 镜像，Pod Ready、零重启，imageID `sha256:1063599816fef6183150264d8c77095675e3af6698c1162f8e72782cb7b66294`。线上入口 HTTP 200，入口资源 `index-BFIStTvx.js` 引用 `FloatingAssistant-BVyshD3k.js`，实际资源包含新版机器人文案、折叠来源和“文档参考 · 当前未使用模型回答”。这证明代码已部署，不代替交互登录后的按钮验收。
+
+随后远端 dev 出现其他维护者的 `0b5d430a81608387ef6cd9f8eb0651efeb744c7f`，只涉及审批模块且包含本次助手候选；未覆盖该更新，未推 Portal master。本次流水线页面的最终状态未通过工具独立读取，实际镜像与 Deployment 已核验。Chrome 工具目前窗口标题与 AX 树不一致、截图不可用，发布后真实提问、引用点击、管理员状态卡片仍待浏览器恢复后补验。
 
 ## 一、设计与边界
 
 ### 页面与数据范围
 
 - RayTrain 页面悬浮入口可拖拽、键盘移动、关闭和恢复，不新增菜单。用户说明补在现有「各个菜单分别能做什么？」文章内。
-- 回答基于已发布使用说明；任务详情可明确附带该任务，复用现有团队和角色权限。配额和 MLflow 专门工具尚未实现，文档解释不能替代实时查询。
-- 日志默认不读取。每次提问单独勾选后，最多取 30 行、每行 240 字、总节选 2000 字；常见凭据模式脱敏不是完整 DLP。
+- 回答基于已发布使用说明；任务详情可明确附带该任务，复用现有团队和角色权限。按问题需要查询当前团队 GPU 配额、任务资源提交配置、逻辑路径和已授权任务的 MLflow Run 关联；不读取 MLflow 参数、标签、产物或源码。
+- 日志默认不读取；可能夹带 Ray 日志尾部的自由文本 StatusMessage 同样需要本次日志授权。每次提问单独勾选后，最多取 30 行、每行 240 字、总节选 2000 字；常见凭据模式脱敏不是完整 DLP。
 - 每次独立提问，不发送之前对话，不在服务端保存聊天内容。切换身份、团队或任务时清空或确认上下文；取消后丢弃迟到响应。
 - 回答为纯文本，显示来源、文档版本、查询时间、实际模式和降级提示；可点击链接由服务端生成并经前端校验。
 - 助手只读：不能提交、停止或修改训练，不能执行命令、查看个人源码或索引用户文件。流式输出、多轮记忆、写操作工具和跨副本月预算不在本次实现内。
@@ -168,9 +180,9 @@ NetworkPolicy 清单仍保留默认拒绝和端口最小化设计：Ray 通信�
 ## 四、待完成与放行顺序
 
 1. **补齐真实页面验收。** 恢复 Chrome 自动化连接后，在真实交互会话验证文档提问、来源链接、浮窗移动/关闭/恢复、无匹配结果、只读任务上下文和权限拒绝。当前发布模式仅检索，不能宣传为已提供大模型生成回答。
-2. **独立审阅集群隔离变更，尚不执行。** 先与 VKE 管理方确认托管 Cello/vpc-cni 的 NetworkPolicy 开关及回滚方式，不直接修改 CNI DaemonSet 或宿主机防火墙。现有 5 条 MLflow 策略目前也未执行，全局开启会同时激活，需逐条核对 backend、训练 ingest、MLflow、PostgreSQL、DNS 和存储流向。完整审阅计划在 `network-policy-remediation-plan.md`。
+2. **独立审阅集群隔离变更，尚不执行。** 先与 VKE 管理方确认托管 Cello/vpc-cni 的 NetworkPolicy 开关及回滚方式，不直接修改 CNI DaemonSet 或宿主机防火墙。现有 5 条 MLflow 策略目前也未执行，全局开启会同时激活，需逐条核对 backend、训练 ingest、MLflow、PostgreSQL、DNS 和存储流向。完整实施与回滚计划见 [网络变更清单](PLATFORM_ASSISTANT_NETWORK_CHANGE_20260922.md)。
 3. **先修助手身份标签，再安排受控网络窗口。** 当前 Cilium 只将筛选后的标签计入安全身份，Head/Worker 的 `assistant-role` 不参与身份计算。优先仅给助手模板使用现有受支持的 `cilium-policy-role` 等标签，区分 Head、Worker、Controller、Reaper，并同步精确策略；先证明身份不同，不扩大整个集群的标签集合、不修改现有训练 Pod。托管开关的实际支持和滚动影响需管理方确认。
-4. **隔离与回滚验证后才重开 GPU。** 覆盖同节点/跨节点正反访问：后端仅到 Head 8000、operator 到 8265、Ray 内部和 gate/DNS/API 白名单；无关 Pod 和后端访问管理端口须被拒绝。同时检查新建及已建立的 MLflow/训练连接。异常按已审阅的 VKE 配置回滚；不能保证已中断连接自动恢复。GPU 仍保持关闭，不以特权 iptables 或仅加代理替代隔离。
+4. **隔离、DB 待启动 GPU 需求保护与回滚验证后才重开 GPU。** DB demand 保护尚待实现，详见网络清单，不可跳过该闸门。 覆盖同节点/跨节点正反访问：后端仅到 Head 8000、operator 到 8265、Ray 内部和 gate/DNS/API 白名单；无关 Pod 和后端访问管理端口须被拒绝。同时检查新建及已建立的 MLflow/训练连接。异常按已审阅的 VKE 配置回滚；不能保证已中断连接自动恢复。GPU 仍保持关闭，不以特权 iptables 或仅加代理替代隔离。
 5. **完整训练及干扰补验。** 修正专用 RayJob 的 dashboard 端口和 entrypoint 引用形式，重新取得 SUCCEEDED；补在途推理/加载中撤流、多节点训练需求、节点异常和固定业务负载性能对比。已有 1 秒关门、15 秒删除服务只是本次观察，不是全场景 SLA。
 
 **本次收尾已完成：** controller、reaper 均为 0 副本；专用 namespace 内 Pod/RayJob/RayCluster/RayService/Workload 数量全部为 0，`requests.nvidia.com/gpu` 已用 0。公开模型缓存和受限证据保留，未移动或删除用户文件，未更改配额或 CNI。
