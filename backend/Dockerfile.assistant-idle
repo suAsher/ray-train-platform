@@ -1,0 +1,20 @@
+ARG ASSISTANT_CONTROLLER_RUNTIME_IMAGE
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/golang:1.25-alpine@sha256:a9316ea600fe38d4527999823d67764dbd5b5ce4b4a0895266faf0134aa28264 AS builder
+ENV PATH=/usr/local/go/bin:$PATH
+WORKDIR /src
+RUN alpine_version=$(cut -d. -f1-2 /etc/alpine-release) \
+  && printf "%s/v%s/main\n%s/v%s/community\n" https://mirrors.aliyun.com/alpine "$alpine_version" https://mirrors.aliyun.com/alpine "$alpine_version" >/etc/apk/repositories \
+  && apk add --no-cache git ca-certificates build-base
+COPY backend/go.mod backend/go.sum ./backend/
+WORKDIR /src/backend
+RUN GOPROXY=https://mirrors.tencent.com/go/ go mod download
+WORKDIR /src
+COPY backend ./backend
+WORKDIR /src/backend
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOPROXY=https://mirrors.tencent.com/go/ \
+  go build -trimpath -ldflags='-s -w' -o /out/assistant-inference-controller ./cmd/assistant-inference-controller
+
+FROM ${ASSISTANT_CONTROLLER_RUNTIME_IMAGE}
+COPY --from=builder /out/assistant-inference-controller /assistant-inference-controller
+USER 65532:65532
+ENTRYPOINT ["/assistant-inference-controller"]

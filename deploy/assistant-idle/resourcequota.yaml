@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: assistant-idle-single-gpu-cap
+  namespace: PLACEHOLDER_ASSISTANT_NAMESPACE
+spec:
+  hard:
+    requests.nvidia.com/gpu: "1"

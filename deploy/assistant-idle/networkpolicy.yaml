@@ -1,0 +1,167 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: assistant-idle-default-deny
+  namespace: PLACEHOLDER_ASSISTANT_NAMESPACE
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: assistant-idle-ray-internal
+  namespace: PLACEHOLDER_ASSISTANT_NAMESPACE
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: assistant-idle
+      app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: assistant-idle
+              app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
+      ports:
+        - { protocol: TCP, port: 6379 }
+        - { protocol: TCP, port: 8000 }
+        - { protocol: TCP, port: 8076 }
+        - { protocol: TCP, port: 8077 }
+        - { protocol: TCP, port: 8265 }
+        - { protocol: TCP, port: 10001 }
+        - { protocol: TCP, port: 10002, endPort: 10032 }
+        - { protocol: TCP, port: 52365 }
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: assistant-idle
+              app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
+      ports:
+        - { protocol: TCP, port: 6379 }
+        - { protocol: TCP, port: 8000 }
+        - { protocol: TCP, port: 8076 }
+        - { protocol: TCP, port: 8077 }
+        - { protocol: TCP, port: 8265 }
+        - { protocol: TCP, port: 10001 }
+        - { protocol: TCP, port: 10002, endPort: 10032 }
+        - { protocol: TCP, port: 52365 }
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: assistant-idle-controller
+              app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
+      ports:
+        - { protocol: TCP, port: 8080 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: assistant-idle-controller-gate
+  namespace: PLACEHOLDER_ASSISTANT_NAMESPACE
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: assistant-idle-controller
+      app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: assistant-idle
+              app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
+      ports:
+        - { protocol: TCP, port: 8080 }
+  egress:
+    - to:
+        - ipBlock:
+            cidr: PLACEHOLDER_KUBERNETES_API_SERVER_CIDR
+      ports:
+        - { protocol: TCP, port: 443 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: assistant-idle-reaper-apiserver
+  namespace: PLACEHOLDER_ASSISTANT_NAMESPACE
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: assistant-idle-reaper
+      app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: PLACEHOLDER_KUBERNETES_API_SERVER_CIDR
+      ports:
+        - { protocol: TCP, port: 443 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: assistant-idle-kuberay-dashboard-only
+  namespace: PLACEHOLDER_ASSISTANT_NAMESPACE
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: assistant-idle
+      app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
+      raytrain.wellspiking.ai/assistant-role: head
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: PLACEHOLDER_KUBERAY_OPERATOR_NAMESPACE
+      ports:
+        - { protocol: TCP, port: 8265 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: assistant-idle-backend-to-serve-only
+  namespace: PLACEHOLDER_ASSISTANT_NAMESPACE
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: assistant-idle
+      app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
+      raytrain.wellspiking.ai/assistant-role: head
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: PLACEHOLDER_RAYTRAIN_BACKEND_NAMESPACE
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: api-gateway
+      ports:
+        - { protocol: TCP, port: 8000 }

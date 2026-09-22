@@ -1,0 +1,6 @@
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: WorkloadPriorityClass
+metadata:
+  name: assistant-idle-low
+value: -2000
+description: Low-priority RayTrain assistant inference; Kueue never preempts training for this class.

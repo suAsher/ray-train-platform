@@ -29,3 +29,24 @@ func TestReaperKeepsFreshLeaseAndReclaimsAfterExpiry(t *testing.T){
  if err:=reap(context.Background(),typed,backend,cfg,now.Add(31*time.Second));err!=nil{t.Fatal(err)}
  if _,err:=dyn.Resource(gvr).Namespace(ns).Get(context.Background(),name,metav1.GetOptions{});err==nil{t.Fatal("failed to delete expired service")}
 }
+func TestReaperBoundsLifetimeAndNeverDeletesForeignService(t *testing.T){
+ now:=time.Now().UTC().Truncate(time.Second);ns:="raytrain-assistant-test";name:="assistant-idle"
+ for _,tc:=range []struct{name string;age time.Duration;missingLease,foreign,wantDelete,wantError bool}{
+  {"maximum lifetime",time.Hour+16*time.Second,false,false,true,false},
+  {"missing lease",time.Minute,true,false,true,false},
+  {"foreign service",time.Hour+16*time.Second,true,true,false,true},
+ }{t.Run(tc.name,func(t *testing.T){
+  instance:=name;if tc.foreign{instance="someone-else"}
+  service:=&unstructured.Unstructured{Object:map[string]any{"apiVersion":"ray.io/v1","kind":"RayService","metadata":map[string]any{"name":name,"namespace":ns,"uid":"owned","creationTimestamp":now.Add(-tc.age).Format(time.RFC3339),"labels":map[string]any{"app.kubernetes.io/instance":instance,"app.kubernetes.io/component":"assistant-idle"}}}}
+  dyn:=dfake.NewSimpleDynamicClient(runtime.NewScheme(),service);typed:=kfake.NewSimpleClientset()
+  if !tc.missingLease{
+   holder:="controller";duration:=int32(30);renewed:=metav1.NewMicroTime(now)
+   _,err:=typed.CoordinationV1().Leases(ns).Create(context.Background(),&coordv1.Lease{ObjectMeta:metav1.ObjectMeta{Name:name,Namespace:ns},Spec:coordv1.LeaseSpec{HolderIdentity:&holder,LeaseDurationSeconds:&duration,RenewTime:&renewed}},metav1.CreateOptions{});if err!=nil{t.Fatal(err)}
+  }
+  backend:=assistantidle.NewKubeBackend(assistantidle.KubeAdapterConfig{Dynamic:dyn,Kubernetes:typed,Name:name,Namespace:ns,InstanceID:name})
+  cfg:=assistantidle.RuntimeConfig{LeaseName:name,Render:assistantidle.RenderConfig{Name:name,Namespace:ns}}
+  err:=reap(context.Background(),typed,backend,cfg,now);if (err!=nil)!=tc.wantError{t.Fatal(err)}
+  _,err=dyn.Resource(schema.GroupVersionResource{Group:"ray.io",Version:"v1",Resource:"rayservices"}).Namespace(ns).Get(context.Background(),name,metav1.GetOptions{})
+  if (err!=nil)!=tc.wantDelete{t.Fatalf("deleted=%t want=%t",err!=nil,tc.wantDelete)}
+ })}
+}

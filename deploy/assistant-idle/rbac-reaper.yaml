@@ -1,0 +1,28 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: assistant-idle-reaper
+  namespace: PLACEHOLDER_ASSISTANT_NAMESPACE
+rules:
+  - apiGroups: ["ray.io"]
+    resources: ["rayservices"]
+    resourceNames: ["PLACEHOLDER_RAYSERVICE_NAME"]
+    verbs: ["get", "delete"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    resourceNames: ["PLACEHOLDER_LEASE_NAME"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: assistant-idle-reaper
+  namespace: PLACEHOLDER_ASSISTANT_NAMESPACE
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: assistant-idle-reaper
+subjects:
+  - kind: ServiceAccount
+    name: assistant-idle-reaper
+    namespace: PLACEHOLDER_ASSISTANT_NAMESPACE

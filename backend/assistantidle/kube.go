@@ -325,7 +325,7 @@ func (b *KubeBackend) observeRayClusters(ctx context.Context, serviceExists bool
 	}
 	for i := range list.Items {
 		item := &list.Items[i]
-		if b.ownedObject(item, serviceUID) {
+		if item.GetNamespace() == b.namespace || b.ownedObject(item, serviceUID) {
 			return true, nil
 		}
 	}
@@ -362,7 +362,7 @@ func (b *KubeBackend) observeNodesAndPods(ctx context.Context, serviceExists boo
 		if owned {
 			ownedRemaining = true
 		}
-		if !owned && pod.Status.Phase == corev1.PodPending {
+		if !owned && podDemandPending(pod) {
 			demand = true
 		}
 		if pod.Spec.NodeName == "" {
@@ -506,6 +506,10 @@ func ownerKey(namespace, name, uid string) string {
 func stringValue(obj map[string]any, fields ...string) string {
 	value, _, _ := unstructured.NestedString(obj, fields...)
 	return value
+}
+
+func podDemandPending(pod corev1.Pod) bool {
+	return pod.Spec.NodeName == "" || pod.Status.Phase == "" || pod.Status.Phase == corev1.PodPending || pod.Status.Phase == corev1.PodUnknown
 }
 
 func terminalPod(pod corev1.Pod) bool {

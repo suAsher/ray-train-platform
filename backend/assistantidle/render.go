@@ -90,7 +90,7 @@ func RenderRayService(cfg RenderConfig) (*unstructured.Unstructured, error) {
 					"serviceType":    "ClusterIP",
 					"rayStartParams": headRayStartParams(),
 					"template": map[string]any{
-						"metadata": map[string]any{"labels": stringMapAny(labels)},
+						"metadata": map[string]any{"labels": stringMapAny(podLabels(labels, "head"))},
 						"spec":     podSpec(cfg, false),
 					},
 				},
@@ -102,7 +102,7 @@ func RenderRayService(cfg RenderConfig) (*unstructured.Unstructured, error) {
 						"maxReplicas":    int64(1),
 						"rayStartParams": workerRayStartParams(),
 						"template": map[string]any{
-							"metadata": map[string]any{"labels": stringMapAny(labels)},
+							"metadata": map[string]any{"labels": stringMapAny(podLabels(labels, "worker"))},
 							"spec":     podSpec(cfg, true),
 						},
 					},
@@ -343,6 +343,15 @@ func serveConfig(cfg RenderConfig) string {
 		"      num_gpus: 1",
 		"      num_cpus: 4",
 	}, "\n") + "\n"
+}
+
+func podLabels(base map[string]string, role string) map[string]string {
+	labels := make(map[string]string, len(base)+1)
+	for key, value := range base {
+		labels[key] = value
+	}
+	labels["raytrain.wellspiking.ai/assistant-role"] = role
+	return labels
 }
 
 func stringMapAny(values map[string]string) map[string]any {

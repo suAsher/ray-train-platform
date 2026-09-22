@@ -1,0 +1,8 @@
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: assistant-idle-low
+value: -2000
+globalDefault: false
+preemptionPolicy: Never
+description: Low-priority RayTrain assistant inference; never preempts training.

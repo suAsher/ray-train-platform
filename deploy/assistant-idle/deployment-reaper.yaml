@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: assistant-idle-reaper
+  namespace: PLACEHOLDER_ASSISTANT_NAMESPACE
+  labels:
+    app.kubernetes.io/name: assistant-idle-reaper
+    app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: assistant-idle-reaper
+      app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: assistant-idle-reaper
+        app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
+    spec:
+      serviceAccountName: assistant-idle-reaper
+      automountServiceAccountToken: true
+      containers:
+        - name: reaper
+          image: PLACEHOLDER_CONTROLLER_IMAGE@sha256:PLACEHOLDER_64_HEX_DIGEST
+          args: ["--config=/etc/assistant-idle/config.json", "--mode=reaper", "--listen=:8080"]
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: config
+              mountPath: /etc/assistant-idle
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: config
+          configMap:
+            name: assistant-idle-config

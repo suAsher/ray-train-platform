@@ -89,6 +89,21 @@ func TestObserveCountsEligibleIdleGPUAfterLabelsTaintsAndPodRequests(t *testing.
 	}
 }
 
+func TestObserveExcludesDedicatedTenantNodesEvenWhenAllowlisted(t *testing.T) {
+	adapter := testAdapter(crdWithSuspend(),
+		readyNode("node-a", map[string]string{"accelerator": "nvidia-rtx-4090", "platform.wellspiking.ai/dedicated-tenant": "tenant-a"}, 8),
+		readyNode("node-b", map[string]string{"accelerator": "nvidia-rtx-4090"}, 1),
+	)
+
+	snapshot, err := adapter.Observe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Observation.EligibleIdleGPU != 1 {
+		t.Fatalf("eligible idle GPU slot=%d, want only the shared node to count", snapshot.Observation.EligibleIdleGPU)
+	}
+}
+
 func TestObserveClampsLargeIdleGPUFleetToSingleSlot(t *testing.T) {
 	adapter := testAdapter(crdWithSuspend(), readyNode("node-a", map[string]string{"accelerator": "nvidia-rtx-4090"}, 24))
 
@@ -152,8 +167,8 @@ func TestPodGPUAccountingUsesLimitFallbackAndRestartableInitAsApp(t *testing.T) 
 	pod.Spec.Containers[0].Resources.Limits = corev1.ResourceList{corev1.ResourceName("nvidia.com/gpu"): *resource.NewQuantity(1, resource.DecimalSI)}
 	restart := corev1.ContainerRestartPolicyAlways
 	pod.Spec.InitContainers = []corev1.Container{
-		{Name: "regular-init", Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceName("nvidia.com/gpu"): *resource.NewQuantity(2, resource.DecimalSI)}}},
 		{Name: "sidecar-init", RestartPolicy: &restart, Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceName("nvidia.com/gpu"): *resource.NewQuantity(1, resource.DecimalSI)}}},
+		{Name: "regular-init", Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceName("nvidia.com/gpu"): *resource.NewQuantity(2, resource.DecimalSI)}}},
 	}
 	adapter := testAdapter(crdWithSuspend(), readyNode("node-a", map[string]string{"accelerator": "nvidia-rtx-4090"}, 3), pod)
 
@@ -246,8 +261,23 @@ func TestRayServiceOwnershipRequiresComponentLabel(t *testing.T) {
 	}
 }
 
-func TestResidualOwnerRefWithoutUIDOrControllerIsNotAdopted(t *testing.T) {
+func TestDedicatedNamespaceRayClusterWithoutLabelsBlocksRecreate(t *testing.T) {
 	cluster := ownedRayCluster("cluster-uid", "assistant-uid")
+	cluster.SetLabels(map[string]string{})
+	adapter := testAdapter(crdWithSuspend(), cluster)
+
+	snapshot, err := adapter.Observe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.Observation.OwnedChildrenRemaining {
+		t.Fatalf("unlabelled RayCluster in assistant namespace did not block recreate: %+v", snapshot)
+	}
+}
+
+func TestCrossNamespaceWeakRayClusterOwnerRefIsNotAdopted(t *testing.T) {
+	cluster := ownedRayCluster("cluster-uid", "assistant-uid")
+	cluster.SetNamespace("tenant-a")
 	cluster.SetLabels(map[string]string{})
 	cluster.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "ray.io/v1", Kind: "RayService", Name: "raytrain-assistant"}})
 	adapter := testAdapter(crdWithSuspend(), cluster)
@@ -257,7 +287,7 @@ func TestResidualOwnerRefWithoutUIDOrControllerIsNotAdopted(t *testing.T) {
 		t.Fatal(err)
 	}
 	if snapshot.Observation.OwnedChildrenRemaining {
-		t.Fatalf("weak ownerRef was adopted: %+v", snapshot)
+		t.Fatalf("cross-namespace weak ownerRef was adopted: %+v", snapshot)
 	}
 }
 

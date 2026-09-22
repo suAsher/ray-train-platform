@@ -1,0 +1,23 @@
+{
+  "enabled": false,
+  "instanceID": "PLACEHOLDER_RAYSERVICE_NAME",
+  "leaseName": "PLACEHOLDER_LEASE_NAME",
+  "render": {
+    "Name": "PLACEHOLDER_RAYSERVICE_NAME",
+    "Namespace": "PLACEHOLDER_ASSISTANT_NAMESPACE",
+    "QueueName": "assistant-idle-localqueue",
+    "ServeImage": "PLACEHOLDER_ASSISTANT_SERVE_IMAGE@sha256:PLACEHOLDER_64_HEX_DIGEST",
+    "ModelPVC": "PLACEHOLDER_MODEL_CACHE_PVC",
+    "GateURL": "http://assistant-idle-controller.PLACEHOLDER_ASSISTANT_NAMESPACE.svc.cluster.local:8080/gate",
+    "AllowedWorkerNodes": ["PLACEHOLDER_GPU_NODE_NAME"],
+    "RequiredNodeLabels": {
+      "platform.wellspiking.ai/gpu-pool": "production",
+      "platform.wellspiking.ai/cache-ready": "true",
+      "accelerator": "nvidia-rtx-4090"
+    },
+    "ToleratedTaintKeys": ["nvidia.com/gpu"],
+    "PriorityClassName": "assistant-idle-low",
+    "WorkloadPriorityClassName": "assistant-idle-low",
+    "ModelPath": "/models/Qwen3-8B-AWQ"
+  }
+}

@@ -80,12 +80,20 @@ func TestRenderRayServiceUsesKueueSuspendedSingleGPUShape(t *testing.T) {
 	if rayVersion, _, _ := unstructured.NestedString(obj.Object, "spec", "rayClusterConfig", "rayVersion"); rayVersion != "2.58.0" {
 		t.Fatalf("rayVersion=%q, want 2.58.0", rayVersion)
 	}
+	headLabels := asMap(t, at(t, obj.Object, "spec", "rayClusterConfig", "headGroupSpec", "template", "metadata", "labels"))
+	if fmt.Sprint(headLabels["raytrain.wellspiking.ai/assistant-role"]) != "head" {
+		t.Fatalf("head role label missing: %v", headLabels)
+	}
 
 	workerGroups := asSlice(t, at(t, obj.Object, "spec", "rayClusterConfig", "workerGroupSpecs"))
 	if len(workerGroups) != 1 {
 		t.Fatalf("expected exactly one worker group: len=%d", len(workerGroups))
 	}
 	worker := asMap(t, workerGroups[0])
+	workerLabels := asMap(t, at(t, worker, "template", "metadata", "labels"))
+	if fmt.Sprint(workerLabels["raytrain.wellspiking.ai/assistant-role"]) != "worker" {
+		t.Fatalf("worker role label missing: %v", workerLabels)
+	}
 	if worker["minReplicas"] != int64(1) || worker["maxReplicas"] != int64(1) || worker["replicas"] != int64(1) {
 		t.Fatalf("worker group must be fixed at exactly one replica: %#v", worker)
 	}
