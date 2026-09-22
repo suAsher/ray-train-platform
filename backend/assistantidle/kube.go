@@ -12,6 +12,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
@@ -59,6 +60,17 @@ type KubeBackend struct {
 	nodeAllowlist     map[string]bool
 	requiredLabels    map[string]string
 	toleratedTaintKey map[string]bool
+}
+
+type candidateNode struct {
+	name   string
+	labels map[string]string
+}
+
+type rayJobObservation struct {
+	queued   bool
+	ready    bool
+	terminal bool
 }
 
 type KubeAdapter = KubeBackend
@@ -123,19 +135,24 @@ func (b *KubeBackend) Observe(ctx context.Context) (Snapshot, error) {
 		snapshot.Observation.ServiceReady = conditionTrue(service.Object, "Ready")
 	}
 
-	rayJobDemand, readyRayJobs, err := b.observeRayJobs(ctx)
+	candidateNodes, err := b.observeCandidateNodes(ctx)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	workloadDemand, ownedWorkloadRemaining, admitted, podsReady, err := b.observeWorkloads(ctx, serviceUID, readyRayJobs)
+	rayJobs, err := b.observeRayJobs(ctx)
 	if err != nil {
 		return Snapshot{}, err
 	}
+	workloadDemand, ownedWorkloadRemaining, admitted, podsReady, excludedRayJobs, err := b.observeWorkloads(ctx, serviceUID, rayJobs, candidateNodes)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	rayJobDemand := rayJobsDemand(rayJobs, excludedRayJobs)
 	clusterRemaining, err := b.observeRayClusters(ctx, serviceExists, serviceUID)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	idleGPU, podDemand, ownedPodRemaining, err := b.observeNodesAndPods(ctx, serviceExists)
+	idleGPU, podDemand, ownedPodRemaining, err := b.observeNodesAndPods(ctx, serviceExists, candidateNodes)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -255,11 +272,12 @@ func (b *KubeBackend) ownedRayService(ctx context.Context) (*unstructured.Unstru
 	return resource, true, nil
 }
 
-func (b *KubeBackend) observeWorkloads(ctx context.Context, serviceUID string, readyRayJobs map[string]bool) (demand, ownedRemaining, admitted, podsReady bool, err error) {
+func (b *KubeBackend) observeWorkloads(ctx context.Context, serviceUID string, rayJobs map[string]rayJobObservation, candidateNodes []candidateNode) (demand, ownedRemaining, admitted, podsReady bool, excludedRayJobs map[string]bool, err error) {
 	list, err := b.dynamic.Resource(workloadGVR).Namespace(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return false, false, false, false, err
+		return false, false, false, false, nil, err
 	}
+	excludedRayJobs = map[string]bool{}
 	podsReady = true
 	for i := range list.Items {
 		item := &list.Items[i]
@@ -281,35 +299,52 @@ func (b *KubeBackend) observeWorkloads(ctx context.Context, serviceUID string, r
 			demand = true
 			continue
 		}
-		if !conditionTrue(item.Object, "PodsReady") && !workloadHasReadyRayJob(item, readyRayJobs) {
-			demand = true
-		}
-	}
-	return demand, ownedRemaining, admitted, podsReady, nil
-}
-
-func (b *KubeBackend) observeRayJobs(ctx context.Context) (bool, map[string]bool, error) {
-	list, err := b.dynamic.Resource(rayJobGVR).Namespace(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
-	if apierrors.IsNotFound(err) {
-		return false, nil, nil
-	}
-	if err != nil {
-		return false, nil, err
-	}
-	ready := map[string]bool{}
-	demand := false
-	for i := range list.Items {
-		item := &list.Items[i]
-		if b.ownedObject(item, "") || rayJobTerminal(item.Object) {
+		ownerKeys := workloadRayJobOwnerKeys(item, rayJobs)
+		if len(ownerKeys) > 0 && workloadGPUHardExcludesCandidates(item.Object, candidateNodes) {
+			for _, key := range ownerKeys {
+				excludedRayJobs[key] = true
+			}
 			continue
 		}
-		isReady := rayJobRunningReady(item.Object)
-		ready[ownerKey(item.GetNamespace(), item.GetName(), string(item.GetUID()))] = isReady
-		if item.GetLabels()["kueue.x-k8s.io/queue-name"] != "" && !isReady {
+		if !conditionTrue(item.Object, "PodsReady") && !workloadHasReadyRayJob(item, rayJobs) {
 			demand = true
 		}
 	}
-	return demand, ready, nil
+	return demand, ownedRemaining, admitted, podsReady, excludedRayJobs, nil
+}
+
+func (b *KubeBackend) observeRayJobs(ctx context.Context) (map[string]rayJobObservation, error) {
+	list, err := b.dynamic.Resource(rayJobGVR).Namespace(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+	if apierrors.IsNotFound(err) {
+		return map[string]rayJobObservation{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	jobs := map[string]rayJobObservation{}
+	for i := range list.Items {
+		item := &list.Items[i]
+		if b.ownedObject(item, "") {
+			continue
+		}
+		terminal := rayJobTerminal(item.Object)
+		ready := !terminal && rayJobRunningReady(item.Object)
+		jobs[ownerKey(item.GetNamespace(), item.GetName(), string(item.GetUID()))] = rayJobObservation{
+			queued:   item.GetLabels()["kueue.x-k8s.io/queue-name"] != "",
+			ready:    ready,
+			terminal: terminal,
+		}
+	}
+	return jobs, nil
+}
+
+func rayJobsDemand(jobs map[string]rayJobObservation, excluded map[string]bool) bool {
+	for key, job := range jobs {
+		if job.queued && !job.terminal && !job.ready && !excluded[key] {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *KubeBackend) observeRayClusters(ctx context.Context, serviceExists bool, serviceUID string) (bool, error) {
@@ -332,7 +367,22 @@ func (b *KubeBackend) observeRayClusters(ctx context.Context, serviceExists bool
 	return false, nil
 }
 
-func (b *KubeBackend) observeNodesAndPods(ctx context.Context, serviceExists bool) (int, bool, bool, error) {
+func (b *KubeBackend) observeCandidateNodes(ctx context.Context) ([]candidateNode, error) {
+	nodes, err := b.kubernetes.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	candidates := make([]candidateNode, 0, len(nodes.Items))
+	for _, node := range nodes.Items {
+		if !b.nodeEligible(node) {
+			continue
+		}
+		candidates = append(candidates, candidateNode{name: node.Name, labels: copyStringMap(node.Labels)})
+	}
+	return candidates, nil
+}
+
+func (b *KubeBackend) observeNodesAndPods(ctx context.Context, serviceExists bool, candidateNodes []candidateNode) (int, bool, bool, error) {
 	nodes, err := b.kubernetes.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return 0, false, false, err
@@ -362,7 +412,7 @@ func (b *KubeBackend) observeNodesAndPods(ctx context.Context, serviceExists boo
 		if owned {
 			ownedRemaining = true
 		}
-		if !owned && podDemandPending(pod) {
+		if !owned && podDemandPending(pod) && !rayOwnedPodHardExcludesCandidates(pod, candidateNodes) {
 			demand = true
 		}
 		if pod.Spec.NodeName == "" {
@@ -474,9 +524,17 @@ func workloadAdmitted(obj map[string]any) bool {
 }
 
 func rayJobTerminal(obj map[string]any) bool {
-	status := strings.ToUpper(strings.TrimSpace(stringValue(obj, "status", "jobStatus")))
+	jobStatus := strings.ToUpper(strings.TrimSpace(stringValue(obj, "status", "jobStatus")))
+	if terminalStatus(jobStatus) {
+		return true
+	}
+	deploymentStatus := strings.ToUpper(strings.TrimSpace(stringValue(obj, "status", "jobDeploymentStatus")))
+	return jobStatus == "" && terminalStatus(deploymentStatus)
+}
+
+func terminalStatus(status string) bool {
 	switch status {
-	case "SUCCEEDED", "SUCCESS", "COMPLETED", "FAILED", "ERROR", "STOPPED", "CANCELED", "CANCELLED":
+	case "SUCCEEDED", "SUCCESS", "COMPLETED", "COMPLETE", "FAILED", "ERROR", "STOPPED", "CANCELED", "CANCELLED":
 		return true
 	default:
 		return false
@@ -489,13 +547,27 @@ func rayJobRunningReady(obj map[string]any) bool {
 	return jobStatus == "RUNNING" && deploymentStatus == "RUNNING"
 }
 
-func workloadHasReadyRayJob(workload *unstructured.Unstructured, readyRayJobs map[string]bool) bool {
+func workloadHasReadyRayJob(workload *unstructured.Unstructured, rayJobs map[string]rayJobObservation) bool {
 	for _, owner := range workload.GetOwnerReferences() {
-		if owner.APIVersion == "ray.io/v1" && owner.Kind == "RayJob" && owner.UID != "" && owner.Controller != nil && *owner.Controller && readyRayJobs[ownerKey(workload.GetNamespace(), owner.Name, string(owner.UID))] {
+		if owner.APIVersion == "ray.io/v1" && owner.Kind == "RayJob" && owner.UID != "" && owner.Controller != nil && *owner.Controller && rayJobs[ownerKey(workload.GetNamespace(), owner.Name, string(owner.UID))].ready {
 			return true
 		}
 	}
 	return false
+}
+
+func workloadRayJobOwnerKeys(workload *unstructured.Unstructured, rayJobs map[string]rayJobObservation) []string {
+	keys := []string{}
+	for _, owner := range workload.GetOwnerReferences() {
+		if owner.APIVersion != "ray.io/v1" || owner.Kind != "RayJob" || owner.UID == "" || owner.Controller == nil || !*owner.Controller {
+			continue
+		}
+		key := ownerKey(workload.GetNamespace(), owner.Name, string(owner.UID))
+		if _, ok := rayJobs[key]; ok {
+			keys = append(keys, key)
+		}
+	}
+	return keys
 }
 
 func ownerKey(namespace, name, uid string) string {
@@ -568,6 +640,131 @@ func hasUntoleratedTaint(node corev1.Node, tolerated map[string]bool) bool {
 			if !tolerated[taint.Key] {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func workloadGPUHardExcludesCandidates(obj map[string]any, candidates []candidateNode) bool {
+	if len(candidates) == 0 {
+		return false
+	}
+	podSets, _, _ := unstructured.NestedSlice(obj, "spec", "podSets")
+	var gpuPodSets int
+	for _, item := range podSets {
+		podSet, ok := item.(map[string]any)
+		if !ok {
+			return false
+		}
+		template, ok, _ := unstructured.NestedMap(podSet, "template", "spec")
+		if !ok {
+			continue
+		}
+		var spec corev1.PodSpec
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(template, &spec); err != nil {
+			return false
+		}
+		if podGPURequests(corev1.Pod{Spec: spec}) == 0 {
+			continue
+		}
+		gpuPodSets++
+		if !podSpecHardExcludesCandidates(spec, candidates) {
+			return false
+		}
+	}
+	return gpuPodSets > 0
+}
+
+func rayOwnedPodHardExcludesCandidates(pod corev1.Pod, candidates []candidateNode) bool {
+	if len(candidates) == 0 || podGPURequests(pod) == 0 || !rayOwnedPod(pod) {
+		return false
+	}
+	return podSpecHardExcludesCandidates(pod.Spec, candidates)
+}
+
+func rayOwnedPod(pod corev1.Pod) bool {
+	for _, owner := range pod.OwnerReferences {
+		if owner.APIVersion == "ray.io/v1" && owner.Kind == "RayCluster" && owner.UID != "" && owner.Controller != nil && *owner.Controller {
+			return true
+		}
+	}
+	return false
+}
+
+func podSpecHardExcludesCandidates(spec corev1.PodSpec, candidates []candidateNode) bool {
+	for _, candidate := range candidates {
+		if podSpecMatchesCandidate(spec, candidate) {
+			return false
+		}
+	}
+	return true
+}
+
+func podSpecMatchesCandidate(spec corev1.PodSpec, candidate candidateNode) bool {
+	for key, value := range spec.NodeSelector {
+		if candidate.labels[key] != value {
+			return false
+		}
+	}
+	if spec.Affinity == nil || spec.Affinity.NodeAffinity == nil || spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		return true
+	}
+	terms := spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	if len(terms) == 0 {
+		return true
+	}
+	for _, term := range terms {
+		if nodeSelectorTermMatches(term, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func nodeSelectorTermMatches(term corev1.NodeSelectorTerm, candidate candidateNode) bool {
+	for _, expr := range term.MatchExpressions {
+		if !nodeSelectorRequirementMatches(expr, candidate, false) {
+			return false
+		}
+	}
+	for _, expr := range term.MatchFields {
+		if !nodeSelectorRequirementMatches(expr, candidate, true) {
+			return false
+		}
+	}
+	return true
+}
+
+func nodeSelectorRequirementMatches(expr corev1.NodeSelectorRequirement, candidate candidateNode, field bool) bool {
+	actual := ""
+	exists := false
+	if field {
+		if expr.Key != "metadata.name" {
+			return true
+		}
+		actual = candidate.name
+		exists = true
+	} else {
+		actual, exists = candidate.labels[expr.Key]
+	}
+	switch expr.Operator {
+	case corev1.NodeSelectorOpIn:
+		return exists && containsString(expr.Values, actual)
+	case corev1.NodeSelectorOpNotIn:
+		return !exists || !containsString(expr.Values, actual)
+	case corev1.NodeSelectorOpExists:
+		return exists
+	case corev1.NodeSelectorOpDoesNotExist:
+		return !exists
+	default:
+		return true
+	}
+}
+
+func containsString(values []string, value string) bool {
+	for _, item := range values {
+		if item == value {
+			return true
 		}
 	}
 	return false

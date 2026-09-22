@@ -222,6 +222,219 @@ func TestWorkloadAdmissionRequiresAdmittedConditionAndRayJobReadinessCanStandInF
 	}
 }
 
+func TestAdmittedDedicatedRayWorkloadDoesNotBlockAssistantCandidates(t *testing.T) {
+	job := rayJob("tenant-algorithm", "job-dedicated", "uid-dedicated", "", "Initializing", false)
+	wl := workload("job-dedicated", "uid-workload", "cluster-gpu", false, false)
+	wl.SetNamespace("tenant-algorithm")
+	controller := true
+	wl.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "ray.io/v1", Kind: "RayJob", Name: "job-dedicated", UID: "uid-dedicated", Controller: &controller}})
+	markCondition(wl, "Admitted", "True")
+	setWorkloadGPUPodSetNodeName(wl, "172.28.3.32")
+	adapter := testAdapter(crdWithSuspend(), readyNode("172.28.3.229", map[string]string{"accelerator": "nvidia-rtx-4090"}, 8), job, wl)
+
+	snapshot, err := adapter.Observe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Observation.TrainingDemand {
+		t.Fatalf("admitted Ray workload hard-pinned away from assistant candidate blocked idle: %+v", snapshot)
+	}
+	if snapshot.Observation.EligibleIdleGPU != 1 {
+		t.Fatalf("eligible idle slot=%d, want 1", snapshot.Observation.EligibleIdleGPU)
+	}
+}
+
+func TestDedicatedRayWorkloadStillBlocksWhenUnadmittedOrNotHardExcluded(t *testing.T) {
+	job := rayJob("tenant-algorithm", "job-dedicated", "uid-dedicated", "", "Initializing", false)
+	unadmitted := workload("job-dedicated", "uid-workload", "cluster-gpu", false, false)
+	unadmitted.SetNamespace("tenant-algorithm")
+	controller := true
+	unadmitted.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "ray.io/v1", Kind: "RayJob", Name: "job-dedicated", UID: "uid-dedicated", Controller: &controller}})
+	setWorkloadGPUPodSetNodeName(unadmitted, "172.28.3.32")
+	adapter := testAdapter(crdWithSuspend(), readyNode("172.28.3.229", map[string]string{"accelerator": "nvidia-rtx-4090"}, 8), job, unadmitted)
+
+	snapshot, err := adapter.Observe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.Observation.TrainingDemand {
+		t.Fatalf("unadmitted hard-pinned workload was not fail-closed demand: %+v", snapshot)
+	}
+
+	admittedNoConstraint := workload("job-dedicated", "uid-workload", "cluster-gpu", false, false)
+	admittedNoConstraint.SetNamespace("tenant-algorithm")
+	admittedNoConstraint.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "ray.io/v1", Kind: "RayJob", Name: "job-dedicated", UID: "uid-dedicated", Controller: &controller}})
+	markCondition(admittedNoConstraint, "Admitted", "True")
+	setWorkloadGPUPodSet(admittedNoConstraint, map[string]any{})
+	adapter = testAdapter(crdWithSuspend(), readyNode("172.28.3.229", map[string]string{"accelerator": "nvidia-rtx-4090"}, 8), job, admittedNoConstraint)
+
+	snapshot, err = adapter.Observe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.Observation.TrainingDemand {
+		t.Fatalf("admitted workload without hard exclusion was not fail-closed demand: %+v", snapshot)
+	}
+}
+
+func TestAdmittedHardPinnedWorkloadNeedsExistingRayJobOwner(t *testing.T) {
+	wl := workload("job-dedicated", "uid-workload", "cluster-gpu", false, false)
+	wl.SetNamespace("tenant-algorithm")
+	controller := true
+	wl.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "ray.io/v1", Kind: "RayJob", Name: "job-dedicated", UID: "uid-dedicated", Controller: &controller}})
+	markCondition(wl, "Admitted", "True")
+	setWorkloadGPUPodSetNodeName(wl, "172.28.3.32")
+	adapter := testAdapter(crdWithSuspend(), readyNode("172.28.3.229", map[string]string{"accelerator": "nvidia-rtx-4090"}, 8), wl)
+
+	snapshot, err := adapter.Observe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.Observation.TrainingDemand {
+		t.Fatalf("hard-pinned admitted Workload without current RayJob UID evidence was ignored: %+v", snapshot)
+	}
+}
+
+func TestMalformedWorkloadPodSetConversionFailsClosed(t *testing.T) {
+	job := rayJob("tenant-algorithm", "job-dedicated", "uid-dedicated", "", "Initializing", false)
+	wl := workload("job-dedicated", "uid-workload", "cluster-gpu", false, false)
+	wl.SetNamespace("tenant-algorithm")
+	controller := true
+	wl.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "ray.io/v1", Kind: "RayJob", Name: "job-dedicated", UID: "uid-dedicated", Controller: &controller}})
+	markCondition(wl, "Admitted", "True")
+	_ = unstructured.SetNestedSlice(wl.Object, []any{map[string]any{
+		"name":     "worker",
+		"template": map[string]any{"spec": map[string]any{"containers": "not-a-list"}},
+	}}, "spec", "podSets")
+	adapter := testAdapter(crdWithSuspend(), readyNode("172.28.3.229", map[string]string{"accelerator": "nvidia-rtx-4090"}, 8), job, wl)
+
+	snapshot, err := adapter.Observe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.Observation.TrainingDemand {
+		t.Fatalf("malformed Workload podSet conversion did not fail closed: %+v", snapshot)
+	}
+}
+
+func TestWorkloadNodeAffinityUsesActualHostnameLabelNotNodeName(t *testing.T) {
+	job := rayJob("tenant-algorithm", "job-dedicated", "uid-dedicated", "", "Initializing", false)
+	wl := workload("job-dedicated", "uid-workload", "cluster-gpu", false, false)
+	wl.SetNamespace("tenant-algorithm")
+	controller := true
+	wl.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "ray.io/v1", Kind: "RayJob", Name: "job-dedicated", UID: "uid-dedicated", Controller: &controller}})
+	markCondition(wl, "Admitted", "True")
+	setWorkloadGPUPodSetNodeName(wl, "node-name")
+	node := readyNode("node-name", map[string]string{"accelerator": "nvidia-rtx-4090", "kubernetes.io/hostname": "actual-hostname"}, 8)
+	adapter := testAdapter(crdWithSuspend(), node, job, wl)
+
+	snapshot, err := adapter.Observe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Observation.TrainingDemand {
+		t.Fatalf("hostname matchExpression used node name instead of actual label: %+v", snapshot)
+	}
+
+	setWorkloadGPUPodSetNodeField(wl, "node-name")
+	adapter = testAdapter(crdWithSuspend(), node, job, wl)
+	snapshot, err = adapter.Observe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.Observation.TrainingDemand {
+		t.Fatalf("metadata.name matchField did not use node name: %+v", snapshot)
+	}
+}
+
+func TestRayOwnedPendingPodHardPinnedAwayFromCandidatesDoesNotBlock(t *testing.T) {
+	pod := gpuPod("tenant-algorithm", "job-dedicated-worker", "", 1, false)
+	pod.Status.Phase = corev1.PodPending
+	pod.SetOwnerReferences([]metav1.OwnerReference{rayClusterOwner("job-dedicated-raycluster", "uid-cluster")})
+	pod.Spec.NodeSelector = map[string]string{"kubernetes.io/hostname": "172.28.3.32"}
+	adapter := testAdapter(crdWithSuspend(), readyNode("172.28.3.229", map[string]string{"accelerator": "nvidia-rtx-4090"}, 8), pod)
+
+	snapshot, err := adapter.Observe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Observation.TrainingDemand {
+		t.Fatalf("Ray-owned pending pod hard-pinned away from assistant candidate blocked idle: %+v", snapshot)
+	}
+}
+
+func TestRayClusterLabelAloneDoesNotProvePendingPodOwnership(t *testing.T) {
+	pod := gpuPod("tenant-algorithm", "label-only-worker", "", 1, false)
+	pod.Status.Phase = corev1.PodPending
+	pod.Labels["ray.io/cluster"] = "job-dedicated-raycluster"
+	pod.Spec.NodeSelector = map[string]string{"kubernetes.io/hostname": "172.28.3.32"}
+	adapter := testAdapter(crdWithSuspend(), readyNode("172.28.3.229", map[string]string{"accelerator": "nvidia-rtx-4090"}, 8), pod)
+
+	snapshot, err := adapter.Observe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.Observation.TrainingDemand {
+		t.Fatalf("ray.io/cluster label alone incorrectly suppressed pending pod demand: %+v", snapshot)
+	}
+}
+
+func TestNonRayPendingPodHardPinnedAwayStillBlocks(t *testing.T) {
+	pod := gpuPod("tenant-algorithm", "manual-pending", "", 1, false)
+	pod.Status.Phase = corev1.PodPending
+	pod.Spec.NodeSelector = map[string]string{"kubernetes.io/hostname": "172.28.3.32"}
+	adapter := testAdapter(crdWithSuspend(), readyNode("172.28.3.229", map[string]string{"accelerator": "nvidia-rtx-4090"}, 8), pod)
+
+	snapshot, err := adapter.Observe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.Observation.TrainingDemand {
+		t.Fatalf("non-Ray pending pod was ignored by namespace/selector alone: %+v", snapshot)
+	}
+}
+
+func TestNodeSelectorRequirementUsesLabelExistenceNotNonEmptyValue(t *testing.T) {
+	candidate := candidateNode{name: "node-a", labels: map[string]string{"empty-label": ""}}
+	if !nodeSelectorRequirementMatches(corev1.NodeSelectorRequirement{Key: "empty-label", Operator: corev1.NodeSelectorOpExists}, candidate, false) {
+		t.Fatal("Exists should match a present label with an empty value")
+	}
+	if nodeSelectorRequirementMatches(corev1.NodeSelectorRequirement{Key: "empty-label", Operator: corev1.NodeSelectorOpDoesNotExist}, candidate, false) {
+		t.Fatal("DoesNotExist should not match a present label with an empty value")
+	}
+	if !nodeSelectorRequirementMatches(corev1.NodeSelectorRequirement{Key: "metadata.name", Operator: corev1.NodeSelectorOpExists}, candidate, true) {
+		t.Fatal("metadata.name matchField should always exist")
+	}
+	if nodeSelectorRequirementMatches(corev1.NodeSelectorRequirement{Key: "metadata.name", Operator: corev1.NodeSelectorOpDoesNotExist}, candidate, true) {
+		t.Fatal("metadata.name matchField should not satisfy DoesNotExist")
+	}
+}
+
+func TestNodeSelectorRequirementInRequiresExistingLabelValue(t *testing.T) {
+	candidate := candidateNode{name: "node-a", labels: map[string]string{"empty-label": ""}}
+	if !nodeSelectorRequirementMatches(corev1.NodeSelectorRequirement{Key: "empty-label", Operator: corev1.NodeSelectorOpIn, Values: []string{""}}, candidate, false) {
+		t.Fatal("In should match a present empty label value")
+	}
+	if nodeSelectorRequirementMatches(corev1.NodeSelectorRequirement{Key: "missing-label", Operator: corev1.NodeSelectorOpIn, Values: []string{""}}, candidate, false) {
+		t.Fatal("In should not match a missing label even when values contains empty string")
+	}
+	if !nodeSelectorRequirementMatches(corev1.NodeSelectorRequirement{Key: "missing-label", Operator: corev1.NodeSelectorOpNotIn, Values: []string{""}}, candidate, false) {
+		t.Fatal("NotIn should match a missing label")
+	}
+}
+
+func TestRayJobTerminalUsesJobDeploymentStatusWhenJobStatusIsMissing(t *testing.T) {
+	adapter := testAdapter(crdWithSuspend(), rayJob("tenant-a", "old-failed", "uid-failed", "", "Failed", false))
+
+	snapshot, err := adapter.Observe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Observation.TrainingDemand {
+		t.Fatalf("terminal RayJob with only jobDeploymentStatus=Failed blocked idle: %+v", snapshot)
+	}
+}
+
 func TestResidualOwnedRayClusterBlocksRecreateAfterRayServiceDisappears(t *testing.T) {
 	adapter := testAdapter(crdWithSuspend(), ownedRayCluster("cluster-uid", "assistant-uid"))
 
@@ -509,6 +722,57 @@ func workload(name, uid, admission string, podsReady, owned bool) *unstructured.
 	return w
 }
 
+func setWorkloadGPUPodSetNodeName(w *unstructured.Unstructured, nodeName string) {
+	setWorkloadGPUPodSet(w, map[string]any{
+		"nodeSelector": map[string]any{"kubernetes.io/hostname": nodeName},
+		"affinity": map[string]any{
+			"nodeAffinity": map[string]any{
+				"requiredDuringSchedulingIgnoredDuringExecution": map[string]any{
+					"nodeSelectorTerms": []any{map[string]any{
+						"matchExpressions": []any{map[string]any{
+							"key":      "kubernetes.io/hostname",
+							"operator": "In",
+							"values":   []any{nodeName},
+						}},
+					}},
+				},
+			},
+		},
+	})
+}
+
+func setWorkloadGPUPodSetNodeField(w *unstructured.Unstructured, nodeName string) {
+	setWorkloadGPUPodSet(w, map[string]any{
+		"affinity": map[string]any{
+			"nodeAffinity": map[string]any{
+				"requiredDuringSchedulingIgnoredDuringExecution": map[string]any{
+					"nodeSelectorTerms": []any{map[string]any{
+						"matchFields": []any{map[string]any{
+							"key":      "metadata.name",
+							"operator": "In",
+							"values":   []any{nodeName},
+						}},
+					}},
+				},
+			},
+		},
+	})
+}
+
+func setWorkloadGPUPodSet(w *unstructured.Unstructured, podSpec map[string]any) {
+	if podSpec == nil {
+		podSpec = map[string]any{}
+	}
+	podSpec["containers"] = []any{map[string]any{
+		"name":      "worker",
+		"resources": map[string]any{"requests": map[string]any{"nvidia.com/gpu": "1"}},
+	}}
+	_ = unstructured.SetNestedSlice(w.Object, []any{map[string]any{
+		"name":     "worker",
+		"template": map[string]any{"spec": podSpec},
+	}}, "spec", "podSets")
+}
+
 func markCondition(obj *unstructured.Unstructured, conditionType, status string) {
 	conditions, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
 	conditions = append(conditions, map[string]any{"type": conditionType, "status": status})
@@ -559,6 +823,11 @@ func ownedRayCluster(uid, ownerUID string) *unstructured.Unstructured {
 			}},
 		},
 	}}
+}
+
+func rayClusterOwner(name, uid string) metav1.OwnerReference {
+	controller := true
+	return metav1.OwnerReference{APIVersion: "ray.io/v1", Kind: "RayCluster", Name: name, UID: types.UID(uid), Controller: &controller}
 }
 
 func readyNode(name string, labels map[string]string, gpus int64) *corev1.Node {

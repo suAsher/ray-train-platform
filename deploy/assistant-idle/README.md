@@ -16,6 +16,8 @@ Safety defaults:
 - The generated RayService uses a ClusterIP head service. Ray dashboard/Serve REST stays enabled and binds 0.0.0.0 inside the cluster because KubeRay and Serve need it, but NetworkPolicy keeps it internal-only and there is no NodePort, LoadBalancer, or Ingress exposure. The backend may reach only the head Serve port 8000; KubeRay may reach only dashboard port 8265; Ray pods may talk only to fixed internal Ray ports and the controller gate.
 - Replace `PLACEHOLDER_KUBERAY_OPERATOR_NAMESPACE` with the namespace that runs the KubeRay operator. The dashboard policy intentionally also pins that peer to the operator pod labels `app.kubernetes.io/name=kuberay-operator`, `app.kubernetes.io/component=kuberay-operator`, and `app.kubernetes.io/instance=kuberay`; do not split the namespaceSelector and podSelector into separate peers, because that would broaden access.
 - Replace `PLACEHOLDER_KUBERNETES_API_SERVER_CIDR` with the actual API server endpoint range for your CNI before applying the egress policy. The placeholder is intentionally invalid.
+- Check both the Kubernetes Service address and its EndpointSlices: some CNIs enforce policy after DNAT, where the destination can be port 6443 instead of 443. In that case add only the observed endpoint `/32` addresses and their actual port to the controller/reaper egress rules; do not broaden egress to an entire node subnet.
+- The controller's 1 GiB memory limit and Go 700 MiB soft limit allow initial observation of a cluster with hundreds of historical RayJobs. The independent reaper keeps its smaller resource budget. Validate memory and observation latency with the real resource inventory before enabling GPU inference.
 
 Controller arguments expected by the runtime command:
 

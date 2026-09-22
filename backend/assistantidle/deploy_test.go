@@ -66,9 +66,15 @@ func TestAssistantIdleDeployReferenceMatchesRendererContract(t *testing.T) {
 
 	for _, name := range []string{"deployment-controller.yaml", "deployment-reaper.yaml"} {
 		body := files[name]
-		for _, key := range []string{"strategy:\n    type: Recreate", "resources:", "cpu: 50m", "memory: 64Mi", "cpu: 500m", "memory: 256Mi"} {
+		for _, key := range []string{"strategy:\n    type: Recreate", "resources:"} {
 			mustContain(t, body, key)
 		}
+	}
+	for _, key := range []string{"cpu: 100m", "memory: 128Mi", "cpu: \"2\"", "memory: 1Gi", "name: GOMEMLIMIT", "value: 700MiB"} {
+		mustContain(t, files["deployment-controller.yaml"], key)
+	}
+	for _, key := range []string{"cpu: 50m", "memory: 64Mi", "cpu: 500m", "memory: 256Mi"} {
+		mustContain(t, files["deployment-reaper.yaml"], key)
 	}
 
 	rbac := files["rbac-controller.yaml"]

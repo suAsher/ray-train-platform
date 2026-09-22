@@ -71,17 +71,26 @@ func run() error {
 	backend := assistantidle.NewKubeBackend(assistantidle.KubeAdapterConfig{Dynamic: dyn, Kubernetes: typed, Namespace: cfg.Render.Namespace, Name: cfg.Render.Name, InstanceID: cfg.InstanceID, Render: cfg.Render, NodeAllowlist: cfg.Render.AllowedWorkerNodes, RequiredLabels: cfg.Render.RequiredNodeLabels, ToleratedTaintKey: cfg.Render.ToleratedTaintKeys})
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
+	if *mode == "reaper" {
+		return runReaper(ctx, typed, backend, cfg)
+	}
+	observations, err := newObservationCache(rc, dyn, typed)
+	if err != nil {
+		return err
+	}
+	go observations.Run(ctx)
+	backend = assistantidle.NewKubeBackend(assistantidle.KubeAdapterConfig{Dynamic: observations.Dynamic(), Kubernetes: observations.Kubernetes(), Namespace: cfg.Render.Namespace, Name: cfg.Render.Name, InstanceID: cfg.InstanceID, Render: cfg.Render, NodeAllowlist: cfg.Render.AllowedWorkerNodes, RequiredLabels: cfg.Render.RequiredNodeLabels, ToleratedTaintKey: cfg.Render.ToleratedTaintKeys})
 	if *mode == "inspect" {
-		attempt, cancel := context.WithTimeout(ctx, 15*time.Second)
+		attempt, cancel := context.WithTimeout(ctx, 45*time.Second)
 		defer cancel()
+		if err := observations.WaitForSync(attempt); err != nil {
+			return err
+		}
 		snapshot, err := backend.Observe(attempt)
 		if err != nil {
 			return err
 		}
 		return json.NewEncoder(os.Stdout).Encode(snapshot)
-	}
-	if *mode == "reaper" {
-		return runReaper(ctx, typed, backend, cfg)
 	}
 	gate := assistantidle.NewGate(uuid.NewString(), time.Now)
 	mux := http.NewServeMux()
@@ -96,6 +105,14 @@ func run() error {
 	lock := &resourcelock.LeaseLock{LeaseMeta: metav1.ObjectMeta{Name: cfg.LeaseName, Namespace: cfg.Render.Namespace}, Client: typed.CoordinationV1(), LockConfig: resourcelock.ResourceLockConfig{Identity: uuid.NewString()}}
 	elector, err := leaderelection.NewLeaderElector(leaderelection.LeaderElectionConfig{Lock: lock, LeaseDuration: 30 * time.Second, RenewDeadline: 10 * time.Second, RetryPeriod: 2 * time.Second, ReleaseOnCancel: false, Callbacks: leaderelection.LeaderCallbacks{
 		OnStartedLeading: func(leaderCtx context.Context) {
+			initialSync, cancelSync := context.WithTimeout(leaderCtx, 35*time.Second)
+			err := observations.WaitForSync(initialSync)
+			cancelSync()
+			if err != nil {
+				gate.Close()
+				stop()
+				return
+			}
 			var previous assistantidle.State
 			controller.Run(leaderCtx, func(d assistantidle.Decision, err error) {
 				// Provider messages, user logs and prompts never enter this component.
@@ -123,6 +140,23 @@ func run() error {
 	}
 	return nil
 }
+
+func newObservationCache(config *rest.Config, actionDynamic dynamic.Interface, actionKubernetes kubernetes.Interface) (*assistantidle.ObservationCache, error) {
+	// Controller actions and Lease operations retain their short timeout. The
+	// cache bounds List itself and needs a streaming client for long-lived Watch.
+	watchConfig := rest.CopyConfig(config)
+	watchConfig.Timeout = 0
+	typed, err := kubernetes.NewForConfig(watchConfig)
+	if err != nil {
+		return nil, err
+	}
+	dyn, err := dynamic.NewForConfig(watchConfig)
+	if err != nil {
+		return nil, err
+	}
+	return assistantidle.NewObservationCacheWithWatchClients(actionDynamic, actionKubernetes, dyn, typed), nil
+}
+
 func runReaper(ctx context.Context, client kubernetes.Interface, backend *assistantidle.KubeBackend, cfg assistantidle.RuntimeConfig) error {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()

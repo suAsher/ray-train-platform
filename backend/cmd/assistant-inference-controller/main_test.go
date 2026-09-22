@@ -2,6 +2,10 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,10 +14,84 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	dfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes"
 	kfake "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	"ray-train-platform-backend/assistantidle"
 )
+
+func TestObservationClientsAllowInitialListBeyondControllerStepBudget(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/configmaps/action-probe") {
+			<-r.Context().Done()
+			return
+		}
+		if r.URL.Query().Get("watch") == "true" {
+			if r.URL.Query().Get("resourceVersion") != "10" {
+				t.Error("watch did not resume list resourceVersion")
+			}
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+			return
+		}
+		version, kind := "v1", "NodeList"
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/pods"):
+			time.Sleep(2200 * time.Millisecond)
+			kind = "PodList"
+		case strings.HasSuffix(r.URL.Path, "/rayjobs"):
+			version, kind = "ray.io/v1", "RayJobList"
+		case strings.HasSuffix(r.URL.Path, "/rayclusters"):
+			version, kind = "ray.io/v1", "RayClusterList"
+		case strings.HasSuffix(r.URL.Path, "/workloads"):
+			version, kind = "kueue.x-k8s.io/v1beta1", "WorkloadList"
+		}
+		fmt.Fprintf(w, `{"apiVersion":%q,"kind":%q,"metadata":{"resourceVersion":"10"},"items":[]}`, version, kind)
+	}))
+	defer server.Close()
+	rc := &rest.Config{Host: server.URL, Timeout: 2 * time.Second}
+	actionDynamic, err := dynamic.NewForConfig(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actionKubernetes, err := kubernetes.NewForConfig(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache, err := newObservationCache(rc, actionDynamic, actionKubernetes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rc.Timeout != 2*time.Second {
+		t.Fatal("watch setup changed original action timeout")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go cache.Run(ctx)
+	wait, stop := context.WithTimeout(ctx, 5*time.Second)
+	defer stop()
+	if err := cache.WaitForSync(wait); err != nil {
+		t.Fatal(err)
+	}
+	attempt, stopAttempt := context.WithTimeout(ctx, 20*time.Millisecond)
+	defer stopAttempt()
+	if _, err := cache.Kubernetes().CoreV1().Pods("").List(attempt, metav1.ListOptions{}); err != nil {
+		t.Fatal("cached observe retained slow list", err)
+	}
+	actionCtx, stopAction := context.WithTimeout(ctx, 5*time.Second)
+	defer stopAction()
+	started := time.Now()
+	if _, err := cache.Kubernetes().CoreV1().ConfigMaps("assistant").Get(actionCtx, "action-probe", metav1.GetOptions{}); err == nil {
+		t.Fatal("unresponsive uncached action succeeded")
+	}
+	if time.Since(started) > 3*time.Second {
+		t.Fatal("uncached action lost original 2s HTTP timeout")
+	}
+}
 
 func TestReaperKeepsFreshLeaseAndReclaimsAfterExpiry(t *testing.T) {
 	now := time.Now().UTC()
