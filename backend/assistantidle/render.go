@@ -46,6 +46,7 @@ type RenderConfig struct {
 	ImagePullSecrets          []string
 	GateURL                   string
 	AllowedWorkerNodes        []string
+	AllowedHeadNodes          []string
 	RequiredNodeLabels        map[string]string
 	ToleratedTaintKeys        []string
 	InstanceID                string
@@ -138,6 +139,9 @@ func (cfg RenderConfig) withDefaults() RenderConfig {
 	if cfg.ServeImportPath == "" {
 		cfg.ServeImportPath = defaultServeImportPath
 	}
+	if len(cfg.AllowedHeadNodes) == 0 {
+		cfg.AllowedHeadNodes = append([]string(nil), cfg.AllowedWorkerNodes...)
+	}
 	if len(cfg.ToleratedTaintKeys) == 0 {
 		cfg.ToleratedTaintKeys = []string{defaultGPUDeviceTaintKey}
 	}
@@ -165,15 +169,11 @@ func validateRenderConfig(cfg RenderConfig) error {
 		}
 		seenPullSecrets[name] = true
 	}
-	if len(cfg.AllowedWorkerNodes) == 0 || len(cfg.AllowedWorkerNodes) > 32 {
-		return errors.New("assistant idle render requires an explicit bounded worker node allowlist")
+	if err := validateNodeList(cfg.AllowedWorkerNodes, "worker"); err != nil {
+		return err
 	}
-	seenNodes := map[string]bool{}
-	for _, node := range cfg.AllowedWorkerNodes {
-		if !safeName(node) || seenNodes[node] {
-			return errors.New("assistant idle worker node allowlist is invalid")
-		}
-		seenNodes[node] = true
+	if err := validateNodeList(cfg.AllowedHeadNodes, "head"); err != nil {
+		return err
 	}
 	if len(cfg.RequiredNodeLabels) == 0 || len(cfg.RequiredNodeLabels) > 16 {
 		return errors.New("assistant idle render requires bounded node labels")
@@ -268,8 +268,10 @@ func podSpec(cfg RenderConfig, worker bool) map[string]any {
 	}
 	if worker {
 		spec["affinity"] = workerAffinity(cfg)
-		spec["tolerations"] = workerTolerations(cfg)
+	} else {
+		spec["affinity"] = headAffinity(cfg)
 	}
+	spec["tolerations"] = gpuTolerations(cfg)
 	return spec
 }
 
@@ -318,9 +320,17 @@ func serveEnv(cfg RenderConfig) []any {
 	}
 }
 
+func headAffinity(cfg RenderConfig) map[string]any {
+	return nodeAffinity(cfg, cfg.AllowedHeadNodes)
+}
+
 func workerAffinity(cfg RenderConfig) map[string]any {
+	return nodeAffinity(cfg, cfg.AllowedWorkerNodes)
+}
+
+func nodeAffinity(cfg RenderConfig, allowedNodes []string) map[string]any {
 	expressions := []any{
-		map[string]any{"key": "kubernetes.io/hostname", "operator": "In", "values": stringSlice(cfg.AllowedWorkerNodes)},
+		map[string]any{"key": "kubernetes.io/hostname", "operator": "In", "values": stringSlice(allowedNodes)},
 		map[string]any{"key": dedicatedTenantKey, "operator": "DoesNotExist"},
 	}
 	keys := make([]string, 0, len(cfg.RequiredNodeLabels))
@@ -362,7 +372,7 @@ func commonRayStartParams() map[string]any {
 	}
 }
 
-func workerTolerations(cfg RenderConfig) []any {
+func gpuTolerations(cfg RenderConfig) []any {
 	keys := append([]string(nil), cfg.ToleratedTaintKeys...)
 	sort.Strings(keys)
 	out := make([]any, 0, len(keys))
@@ -421,6 +431,20 @@ func stringSlice(values []string) []any {
 		out = append(out, value)
 	}
 	return out
+}
+
+func validateNodeList(nodes []string, role string) error {
+	if len(nodes) == 0 || len(nodes) > 32 {
+		return errors.New("assistant idle render requires an explicit bounded " + role + " node allowlist")
+	}
+	seenNodes := map[string]bool{}
+	for _, node := range nodes {
+		if !safeName(node) || seenNodes[node] {
+			return errors.New("assistant idle " + role + " node allowlist is invalid")
+		}
+		seenNodes[node] = true
+	}
+	return nil
 }
 
 func safeName(value string) bool {

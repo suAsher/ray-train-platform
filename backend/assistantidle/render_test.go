@@ -40,12 +40,22 @@ func renderForTest(t *testing.T, cfg RenderConfig) *unstructured.Unstructured {
 func TestRenderRayServiceValidatesImmutableInputs(t *testing.T) {
 	base := validRenderConfig()
 	for name, mutate := range map[string]func(*RenderConfig){
-		"missing digest":             func(c *RenderConfig) { c.ServeImage = "harbor.wellspiking.ai/assistant/assistant-serve:latest" },
-		"missing model pvc":          func(c *RenderConfig) { c.ModelPVC = "" },
-		"unsafe pull secret":         func(c *RenderConfig) { c.ImagePullSecrets = []string{"harbor/registry"} },
-		"duplicate pull secret":      func(c *RenderConfig) { c.ImagePullSecrets = []string{"harbor-registry", "harbor-registry"} },
-		"missing queue":              func(c *RenderConfig) { c.QueueName = "" },
-		"missing allowed nodes":      func(c *RenderConfig) { c.AllowedWorkerNodes = nil },
+		"missing digest":        func(c *RenderConfig) { c.ServeImage = "harbor.wellspiking.ai/assistant/assistant-serve:latest" },
+		"missing model pvc":     func(c *RenderConfig) { c.ModelPVC = "" },
+		"unsafe pull secret":    func(c *RenderConfig) { c.ImagePullSecrets = []string{"harbor/registry"} },
+		"duplicate pull secret": func(c *RenderConfig) { c.ImagePullSecrets = []string{"harbor-registry", "harbor-registry"} },
+		"missing queue":         func(c *RenderConfig) { c.QueueName = "" },
+		"missing allowed nodes": func(c *RenderConfig) { c.AllowedWorkerNodes = nil },
+		"unsafe head nodes":     func(c *RenderConfig) { c.AllowedHeadNodes = []string{"head/node"} },
+		"duplicate head nodes": func(c *RenderConfig) {
+			c.AllowedHeadNodes = []string{"head-node-a", "head-node-a"}
+		},
+		"too many head nodes": func(c *RenderConfig) {
+			c.AllowedHeadNodes = make([]string, 33)
+			for i := range c.AllowedHeadNodes {
+				c.AllowedHeadNodes[i] = fmt.Sprintf("head-node-%d", i)
+			}
+		},
 		"unsafe namespace":           func(c *RenderConfig) { c.Namespace = "raytrain_assistant" },
 		"dedicated taint toleration": func(c *RenderConfig) { c.ToleratedTaintKeys = []string{"platform.wellspiking.ai/dedicated-tenant"} },
 		"dedicated label selector": func(c *RenderConfig) {
@@ -182,32 +192,71 @@ func TestRenderRayServiceBoundsHeadMemoryAndBothObjectStores(t *testing.T) {
 	}
 }
 
-func TestRenderRayServiceKeepsHeadCPUOnlyAndWorkerPinnedToAllowedNodes(t *testing.T) {
-	obj := renderForTest(t, validRenderConfig())
+func TestRenderRayServiceKeepsHeadCPUOnlyAndPinsHeadAwayFromDedicatedNodes(t *testing.T) {
+	cfg := validRenderConfig()
+	cfg.AllowedHeadNodes = []string{"shared-node-a"}
+	obj := renderForTest(t, cfg)
 	headResources := asMap(t, at(t, obj.Object, "spec", "rayClusterConfig", "headGroupSpec", "template", "spec", "containers", 0, "resources"))
 	headRequests := stringMap(t, headResources["requests"])
 	if _, hasGPU := headRequests["nvidia.com/gpu"]; hasGPU {
-		t.Fatalf("head group must be CPU-only: %v", headRequests)
+		t.Fatalf("head group requests must be CPU-only: %v", headRequests)
+	}
+	headLimits := stringMap(t, headResources["limits"])
+	if _, hasGPU := headLimits["nvidia.com/gpu"]; hasGPU {
+		t.Fatalf("head group limits must be CPU-only: %v", headLimits)
 	}
 	if headRequests["cpu"] == "" || headRequests["memory"] == "" {
 		t.Fatalf("head group must still request CPU and memory: %v", headRequests)
 	}
-
-	terms := asSlice(t, at(t, obj.Object, "spec", "rayClusterConfig", "workerGroupSpecs", 0, "template", "spec", "affinity", "nodeAffinity", "requiredDuringSchedulingIgnoredDuringExecution", "nodeSelectorTerms"))
-	if len(terms) != 1 {
-		t.Fatalf("worker must have a single explicit node affinity term: len=%d", len(terms))
+	headTolerations := compact(at(t, obj.Object, "spec", "rayClusterConfig", "headGroupSpec", "template", "spec", "tolerations"))
+	for _, want := range []string{"nvidia.com/gpu", "NoSchedule"} {
+		if !strings.Contains(headTolerations, want) {
+			t.Fatalf("head tolerations must retain GPU NoSchedule reachability, missing %q in %s", want, headTolerations)
+		}
 	}
-	expressions := asSlice(t, at(t, asMap(t, terms[0]), "matchExpressions"))
-	joined := compact(expressions)
+
+	terms := asSlice(t, at(t, obj.Object, "spec", "rayClusterConfig", "headGroupSpec", "template", "spec", "affinity", "nodeAffinity", "requiredDuringSchedulingIgnoredDuringExecution", "nodeSelectorTerms"))
+	if len(terms) != 1 {
+		t.Fatalf("head must have a single explicit node affinity term: len=%d", len(terms))
+	}
+	joined := compact(asSlice(t, at(t, asMap(t, terms[0]), "matchExpressions")))
 	for _, want := range []string{
-		"kubernetes.io/hostname", "gpu-node-a", "gpu-node-b",
+		"kubernetes.io/hostname", "shared-node-a",
 		"platform.wellspiking.ai/gpu-pool", "production",
 		"platform.wellspiking.ai/cache-ready", "true",
 		"accelerator", "nvidia-rtx-4090",
 		"platform.wellspiking.ai/dedicated-tenant", "DoesNotExist",
 	} {
 		if !strings.Contains(joined, want) {
-			t.Fatalf("worker affinity missing %q in %s", want, joined)
+			t.Fatalf("head affinity missing %q in %s", want, joined)
+		}
+	}
+}
+
+func TestRenderRayServiceDefaultsHeadNodesToWorkerNodesAndPinsWorkerToAllowedNodes(t *testing.T) {
+	obj := renderForTest(t, validRenderConfig())
+	for _, tc := range []struct {
+		name string
+		path []any
+	}{
+		{"head", []any{"spec", "rayClusterConfig", "headGroupSpec", "template", "spec", "affinity", "nodeAffinity", "requiredDuringSchedulingIgnoredDuringExecution", "nodeSelectorTerms"}},
+		{"worker", []any{"spec", "rayClusterConfig", "workerGroupSpecs", 0, "template", "spec", "affinity", "nodeAffinity", "requiredDuringSchedulingIgnoredDuringExecution", "nodeSelectorTerms"}},
+	} {
+		terms := asSlice(t, at(t, obj.Object, tc.path...))
+		if len(terms) != 1 {
+			t.Fatalf("%s must have a single explicit node affinity term: len=%d", tc.name, len(terms))
+		}
+		joined := compact(asSlice(t, at(t, asMap(t, terms[0]), "matchExpressions")))
+		for _, want := range []string{
+			"kubernetes.io/hostname", "gpu-node-a", "gpu-node-b",
+			"platform.wellspiking.ai/gpu-pool", "production",
+			"platform.wellspiking.ai/cache-ready", "true",
+			"accelerator", "nvidia-rtx-4090",
+			"platform.wellspiking.ai/dedicated-tenant", "DoesNotExist",
+		} {
+			if !strings.Contains(joined, want) {
+				t.Fatalf("%s affinity missing %q in %s", tc.name, want, joined)
+			}
 		}
 	}
 }

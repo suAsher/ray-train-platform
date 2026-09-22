@@ -11,6 +11,7 @@
     "ImagePullSecrets": ["harbor-registry"],
     "GateURL": "http://assistant-idle-controller.PLACEHOLDER_ASSISTANT_NAMESPACE.svc.cluster.local:8080/gate",
     "AllowedWorkerNodes": ["PLACEHOLDER_GPU_NODE_NAME"],
+    "AllowedHeadNodes": ["PLACEHOLDER_HEAD_OR_GPU_NODE_NAME"],
     "RequiredNodeLabels": {
       "platform.wellspiking.ai/gpu-pool": "production",
       "platform.wellspiking.ai/cache-ready": "true",
