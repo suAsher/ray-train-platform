@@ -64,6 +64,11 @@ RUN dpkg --remove cuda-compat-12-9 \
  && test ! -e /usr/local/cuda-12.9/compat/libcuda.so.1 \
  && python3 -m pip check
 
+# Qwen3 AWQ kernels were accepted on the R550 native host driver using CUDA
+# 12.x minor compatibility. Keep the device admission check enabled; this
+# bounded driver range does not claim acceptance of untested driver branches.
+ENV NVIDIA_REQUIRE_CUDA="cuda>=12.4,driver>=550.127.05,driver<551"
+
 USER 1000:1000
 WORKDIR /opt/assistant
 # Exercise imports with the runtime identity as well as the build identity.

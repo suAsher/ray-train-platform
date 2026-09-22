@@ -34,7 +34,11 @@
 
 新版本的 OpenTelemetry 约束可以与 Ray2.58 正常求交。构建约束保留底座的 vLLM/torch/CUDA 二进制组合，HTTP 等 Python 依赖使用已知修复版本下界；不使用 `--no-deps` 绕过冲突，不隐藏系统包或移除元数据。底座自身 `pip check` 发现 NCCL2.30.7 与 torch2.13 声明的2.29.7不符，正常 resolver 必须修正后才能进入下一步。所有依赖仍需重新扫描；可解析与可导入不等于安全或 GPU 验收通过。
 
-现网4090D驱动为550.127.05。NVIDIA说明CUDA12.x存在minor compatibility，但PTX JIT或新驱动功能可能失败，因此选择官方cu129变体实测，不使用默认CUDA13镜像、不启用面向部分专业卡的forward compatibility、不升级训练节点驱动。实际模型加载、内核执行与并发测试通过前，本地模式保持关闭。
+现网4090D节点存在550.127.05与550.144.03驱动。NVIDIA说明CUDA12.x存在minor compatibility，但PTX JIT或新驱动功能可能失败，因此选择官方cu129变体实测，不使用默认CUDA13镜像、不启用面向部分专业卡的forward compatibility、不升级训练节点驱动。
+
+2026-09-22已在172.28.1.229的RTX4090D、550.144.03原生驱动上通过CUDA矩阵运算、Qwen3-8B-AWQ完整加载及两请求并发。冷加载115.32秒，17 token短问答单请求0.3201秒、双请求0.3286秒；这是引擎验收，不代表完整页面、RayService或训练回收验收，也不是业务吞吐基准。其他节点未据此自动放行。
+
+镜像底座附带的`cuda-compat-12-9`会被该集群的NVIDIA hook写入动态库缓存，导致GeForce加载不支持的575版forward driver并报804。构建仅移除该可选兼容包，让进程使用宿主550驱动；保留CUDA12.9运行库和设备启动校验，`NVIDIA_REQUIRE_CUDA`限定`cuda>=12.4,driver>=550.127.05,driver<551`。不得设置`NVIDIA_DISABLE_REQUIRE`或修改宿主驱动绕过验收。完整接流与回收验收通过前，本地模式保持关闭。
 
 构建机已发现的内部镜像候选（仍需版本实测）：
 
