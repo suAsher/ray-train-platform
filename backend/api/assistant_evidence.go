@@ -17,7 +17,7 @@ import (
 
 var (
 	assistantAuthorization = regexp.MustCompile(`(?im)(authorization["']?\s*[:=]\s*["']?)[^\r\n]+`)
-	assistantCredential    = regexp.MustCompile(`(?i)([a-z0-9_]*(?:token|password|passwd|secret|api[_-]?key|access[_-]?key)[a-z0-9_]*["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s"'\x60,;}]+)`)
+	assistantCredential    = regexp.MustCompile(`(?is)([a-z0-9_]*(?:token|password|passwd|secret|api[_-]?key|access[_-]?key)[a-z0-9_]*["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*(?:"|\\?\z)|'(?:\\.|[^'\\])*(?:'|\\?\z)|[^\s"'\x60,;}]+)`)
 	assistantBearer        = regexp.MustCompile(`(?i)\bBearer\s+[a-z0-9._~+/=-]+`)
 	assistantBareKey       = regexp.MustCompile(`\bsk-[a-zA-Z0-9_-]{8,}\b`)
 	assistantJWT           = regexp.MustCompile(`\beyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+`)
@@ -27,6 +27,8 @@ var (
 )
 
 // Common credential patterns only: this is not an exhaustive DLP filter.
+// A quoted credential may be truncated by logging. Without a closing quote,
+// consume through EOF, including newlines and a final incomplete escape.
 func assistantRedact(text string) string {
 	text = assistantAuthorization.ReplaceAllString(text, "${1}[已脱敏]")
 	text = assistantCredential.ReplaceAllString(text, "${1}[已脱敏]")

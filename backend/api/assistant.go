@@ -315,12 +315,17 @@ func (h *Handler) auditAssistantQuery(c *gin.Context, mode string, includesLogs 
 // alone cannot interrupt net/http's blocked request-body read.
 func (h *Handler) assistantDeadline() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if c.Request.Method != http.MethodPost { c.Next(); return }
+		if c.Request.Method != http.MethodPost {
+			c.Next()
+			return
+		}
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 35*time.Second)
 		defer cancel()
 		c.Request = c.Request.WithContext(ctx)
-		bodyDeadline := time.Now().Add(5*time.Second)
-		if deadline, ok := ctx.Deadline(); ok && deadline.Before(bodyDeadline) { bodyDeadline = deadline }
+		bodyDeadline := time.Now().Add(5 * time.Second)
+		if deadline, ok := ctx.Deadline(); ok && deadline.Before(bodyDeadline) {
+			bodyDeadline = deadline
+		}
 		if err := http.NewResponseController(c.Writer).SetReadDeadline(bodyDeadline); err != nil {
 			// Avoid HTTP/1 keep-alive draining an unread body on an unsupported transport.
 			c.Header("Connection", "close")
