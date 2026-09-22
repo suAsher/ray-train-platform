@@ -145,10 +145,24 @@ DISABLED → WAITING_FOR_IDLE → STARTING → READY → DRAINING → STOPPED
 
 流式输出、多轮记忆、跨副本月预算、写操作工具不在当前实现；不要让用户误以为助手能自动改任务或精确显示公司剩余额度。
 
+最终复扫 `runtime-audited-audit.json` 仍报2条（Accelerate、setuptools），4项不覆盖；httplib2实际Python版本0.32.0不再命中。原始退出码为1，不将适用性判断写成扫描通过。最终Runtime源码858e54a的27单测、真实ASGI、引擎参数及完整模型目录检查均通过；这仍不代表GPU或完整镜像安全验收。
+
 ## 版本与现场状态
 
 代码候选 `858e54abb1d98b41e3782909c2a1744c63b77368`；Go代码与通过完整PG回归的a589c3f相同，之后仅修改独立Python运行时/测试和文档。最终本地Docker候选摘要（尚未推Harbor）：Serve `sha256:bb4c2c583401ecac110158d4c7331dd8ce38520d04f89a2be25b7d9b03704b1f`，Controller `sha256:033ec8b544850da469a11d59047bf726eec57d81a8ca0fb95bca8189e3007a04`。这不是线上镜像摘要；推仓后需重新取registry权威digest。完整模型目录在最终非root/只读/断网容器通过检查，2个safetensors分片的903个索引tensor均存在，仅验证header，不代表已执行GPU计算。
 
 本轮后端main四端重新核对仍为 `5eb7b629215b38fc6dc83f4f00a5429fdad12c48`；Portal远端dev为 `de2d5ecf08fa18524417ae6b1deb458b19afa54a`，候选 `922de11218c0b764a825ca2cf05804659bc9b691`。生产Helm252，后端镜像摘要 `892d7f968604bcd6ffe1a4b6163855e2013acbf258e601fb8c0556852d9555b5`；无RayService。此次未推送、未部署、未创建GPU Pod或修改生产资源；隔离工作树与最终镜像/模型缓存保留供后续验收。临时PostgreSQL和网络已清理。
+
+本轮3个被替代的干净构建工作树、4个旧候选镜像标签和传输bundle已清理。最终构建工作树 `/tmp/rtp-assistant-audit-final`、2个最终镜像、公开模型缓存及全部证据保留。未删除之前存在的其他容器或未知文件。
+
+## 下一次放行的明确范围
+
+当前只完成隔离候选，尚未执行本次main推送、Portal发布或集群资源创建。下一步建议确认以下范围后按依赖顺序执行；远端或代码变化时重新验证，失败不扩大范围：
+
+- 将已验证后端候选同步本地main、GitHub、内部GitLab和正式构建目录；Portal只发布dev。后端只构建backend，另推送已验证的助手Serve/Controller独立镜像到既有平台Harbor项目，不重建训练Base、CLI或旧前端。
+- 在独立验收namespace准备专用模型PVC（优先现有NVMe local storage class，约16Gi，仅公开权重）、引用既有只拉取凭据、独立ServiceAccount/RBAC/NetworkPolicy/低优先级及LocalQueue。原ClusterQueue、团队配额及原训练调度设置不变。
+- 同时最多1张空闲4090D，Worker1GPU/4CPU/16Gi，加必要CPU Head与控制器；单次验收上限1小时。先满足连续空闲和无训练待准入条件，只用公开帮助文本，不上传用户日志到外部模型、不创建个人PAT。
+- 验证加载、问答、取消、专用需求到达时撤流及资源回收、控制器故障回收；异常仅停止本次实例。结束后关闭本次GPU服务/控制器并核对GPU及Kueue预留释放，保留公开缓存与证据。
+- 页面助手与GPU独立放行。后端部署前审阅server-side dry-run并核对存量训练UID/重启数；无专用模型Key时可先用文档模式。临时个人DeepSeekKey不配置为共享生产后端，未通过驱动/回收验收不常驻启用GPU模式。
 
 参考：[Kueue0.19实际源码](https://github.com/kubernetes-sigs/kueue/blob/v0.19.0/pkg/controller/jobs/rayservice/rayservice_controller.go)、[KubeRay1.6.2结构](https://github.com/ray-project/kuberay/blob/v1.6.2/ray-operator/apis/ray/v1/rayservice_types.go)、[Anthropic Messages](https://platform.claude.com/docs/en/api/messages/create)、[Anthropic错误](https://platform.claude.com/docs/en/api/errors)、[vLLM0.29发行](https://github.com/vllm-project/vllm/releases/tag/v0.29.0)、[CUDA兼容边界](https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html)、[Qwen官方镜像](https://modelscope.cn/models/Qwen/Qwen3-8B-AWQ)、[LiteLLM预算](https://docs.litellm.ai/docs/proxy/virtual_keys)。
