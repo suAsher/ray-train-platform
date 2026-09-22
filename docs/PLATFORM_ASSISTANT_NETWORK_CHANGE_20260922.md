@@ -1,6 +1,8 @@
 # 平台助手 idle GPU 网络隔离变更计划（2026-09-22）
 
-本文是 `PLATFORM_ASSISTANT_PLAN_20260922.md` 的网络隔离实施附件。目标是在不修改用户训练任务、不读写 Secret、不绕过平台鉴权的前提下，让 `raytrain-assistant-canary` 中的 RayService idle 推理满足可验证的工作负载网络隔离。当前结论是：在 Cello/Cilium `CILIUM_ENABLE_POLICY=never` 下不能上线启用 idle GPU；必须先通过 VKE 托管的 vpc-cni/Cello 配置启用策略执行，并完成负向连通性验收。
+本文保留为 `PLATFORM_ASSISTANT_PLAN_20260922.md` 的历史网络隔离备选附件。本轮最新决策是不修改 CNI，不再把下面的 VKE/Cello 网络窗口作为启用助手的前置条件；新的闲时推理方向改为独立 single-GPU vLLM Pod，经 HTTPS 8443、Bearer 和 TLS 暴露给后端，不开放 Ray 控制端口。
+
+现网状态是生产 Helm 255 已关闭 `assistant.enabled=false`；后端仍为旧 `9fcbc` 镜像，schema 56 不变，新候选未部署。发布前后 8 个训练 Pod 无变化。下文 CNI 事实、矩阵和回滚步骤仅用于解释为什么 RayService 方案不能直接上线，以及未来若重新选择 RayService/NetworkPolicy 路线时怎样审阅，不代表当前实施计划。
 
 ## 已核对的现网事实
 

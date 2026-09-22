@@ -10,9 +10,10 @@ WORKDIR /src/backend
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOPROXY=https://mirrors.tencent.com/go/ \
   go build -trimpath -ldflags='-s -w' -o /out/assistant-inference-controller ./cmd/assistant-inference-controller
 
-# Static control-plane process; its only trust root is the mounted Kubernetes CA.
-# No model dependencies, shell, package manager or public-network client is needed.
+# Static control-plane process. The Kubernetes client uses its mounted CA;
+# the fixed HTTPS training-demand endpoint uses the public certificate bundle.
 FROM scratch
 COPY --from=builder /out/assistant-inference-controller /assistant-inference-controller
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 USER 65532:65532
 ENTRYPOINT ["/assistant-inference-controller"]

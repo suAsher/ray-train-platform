@@ -1,18 +1,20 @@
 # RayTrain 页面助手与多模型路由
 
-更新日期：2026-09-22。助手质量与管理员可见性后端已发布为 **Helm 254**，schema 保持 **56**；源码 `9fcbc2384845ff6938f0129c4b87fc35e52148b5`，镜像 `sha256:3cda7396cb34a8c47fac3919efe131727f616081909b9449e0a34bb2dd7be07d`，2 副本 Ready、零重启。发布前后 6 个训练 Pod 的 UID、节点、重启数和 Ready 均无回退。模型配置仍为 `providers: []`，GPU 与外部 API 均未在共享生产启用。完整网络隔离、训练让卡与本轮真实页面验收仍须分别记录，不以代码或构建通过代替。
+更新日期：2026-09-22。最新生产状态是 **Helm 255 已关闭 `assistant.enabled=false`**；后端仍为旧 `9fcbc` 镜像，schema 56 不变，新助手候选未部署。发布前后 8 个训练 Pod 无变化。模型配置仍无共享可用后端，API/LiteLLM 等没有共享额度，个人 key 只能用于临时测试。完整模型回答、让卡和浏览器质量验收仍在进行，不能称为已上线完成。
 
-## 本轮修正与网络变更窗口
+## 本轮修正与当前决策
 
 用户反馈：文档检索答非所问、提示过多，闲时推理运行情况不可见。本轮修正检索相关性和完整步骤，增加按问题查询的授权任务/配额事实；模型回答必须直接给出与证据相符的操作，缺少事实时追问，不把片段匹配称为诊断。用户侧使用动态悬浮机器人，来源与模式设置折叠；超级管理员通过「平台管理 → 助手与闲时推理」进入 GPU 占用明细中的实际运行状态卡片。
 
-用户已经确认可安排集群网络变更窗口，要求先提供实施与回滚步骤。具体清单见 [idle GPU 网络变更实施与回滚](PLATFORM_ASSISTANT_NETWORK_CHANGE_20260922.md)。这项确认不表示 CNI 已修改或 GPU 已开启；仍须由具有 VKE 权限的管理员核对受支持开关与维护窗口，完成 MLflow/现有训练流量保护、策略正反例及让卡验收后再启用共享推理。个人 DeepSeek Key 仍仅用于临时验证，不能自动成为所有用户共享的生产 API 配置。
+用户已选择不修改 CNI。旧 RayService/NetworkPolicy 窗口保留为历史备选附件，不再作为启用前置；新的闲时推理方向是独立 single-GPU vLLM Pod，经 HTTPS 8443、Bearer 与 TLS 暴露给后端，不开放 Ray 控制端口。Kueue Pod integration 已只读确认，训练数据库里尚未变成 Pod 的 pending 需求也要触发让卡。
+
+模型配置未准备好或验收未通过时 capabilities 返回 `Enabled=false`、`Modes=[]`，Portal 不显示助手入口；已配置后本地模式临时不可用时 `query` 返回 503，而不是伪装成模型回答。模型失败不自动退成文档答案；“仅文档”仍是显式源查询，没命中文档时由模型澄清缺少信息。公开前必须先确认 `previewSubjects` 验收名单，再完成真实模型回答、让卡和浏览器交互质量验收。
 
 本轮后端证据位于构建机 `/root/raytrain-assistant-validation-20260922`：`quality-final-validated-sha.txt`、`quality-final-backend-tests.jsonl`、`quality-final-vet.log`、`quality-final-race.log`、`release-quality/`。完整 Go 回归 4,396 项通过，34 包通过；真实 PostgreSQL 已配置并通过，外部 MLflow/Ray 专项服务器测试仍按既有条件跳过，不计为本轮现场验收。检索覆盖 43 个已发布问题标题和 12 类自然问法，补齐完整命令章节同分选择与任务失败说明日志授权测试。
 
 真实 DeepSeek 临时测试使用公开/合成证据，经 Go Router 验证相对路径、GPU 配额、Job/Run ID、缺少报错、CUDA OOM 与日志注入五项。第一轮存在过度含糊，第二轮有不必要的资源计算错误，均保留原始记录；最终 `public-quality-deepseek-v3.jsonl` 五项人工核对通过。这仅证明该有限样本集，不承诺任意问题正确，也未把个人测试 Key 配置到共享平台。
 
-新控制器状态接口镜像已构建：`harbor.wellspiking.ai/guofeng.su/raytrain-assistant-idle-controller@sha256:669fd32267ca7773973245e2bca164f1abb9eb408789996c0b83e13bec51d10f`，证据 `quality-controller-build.log`、`quality-controller-image.txt`。尚未替换现有零副本 Deployment；网络窗口时需使用已验证版本并检查后续变更，不能直接照旧摘要启动。下方早期 GPU 记录保留其对应版本和时间点。
+新候选代码已有部分 Go/真实 PostgreSQL 证据，但完整验证仍在进行，不能写成已完成发布。下方早期 RayService/GPU 记录保留其对应版本和时间点，用于追溯，不代表当前选型或生产运行状态。
 
 ### 本轮 Portal dev 发布
 
@@ -30,7 +32,7 @@ Portal dev 实际 Deployment 为 test-dev 集群 `yuanzhu-he/yuanzhu-he-wellspik
 - 回答基于已发布使用说明；任务详情可明确附带该任务，复用现有团队和角色权限。按问题需要查询当前团队 GPU 配额、任务资源提交配置、逻辑路径和已授权任务的 MLflow Run 关联；不读取 MLflow 参数、标签、产物或源码。
 - 日志默认不读取；可能夹带 Ray 日志尾部的自由文本 StatusMessage 同样需要本次日志授权。每次提问单独勾选后，最多取 30 行、每行 240 字、总节选 2000 字；常见凭据模式脱敏不是完整 DLP。
 - 每次独立提问，不发送之前对话，不在服务端保存聊天内容。切换身份、团队或任务时清空或确认上下文；取消后丢弃迟到响应。
-- 回答为纯文本，显示来源、文档版本、查询时间、实际模式和降级提示；可点击链接由服务端生成并经前端校验。
+- 回答为纯文本，显示来源、文档版本、查询时间、实际模式和不可用提示；可点击链接由服务端生成并经前端校验。
 - 助手只读：不能提交、停止或修改训练，不能执行命令、查看个人源码或索引用户文件。流式输出、多轮记忆、写操作工具和跨副本月预算不在本次实现内。
 
 ### 接口与模型路由
@@ -41,16 +43,16 @@ Portal dev 实际 Deployment 为 test-dev 集群 `yuanzhu-he/yuanzhu-he-wellspik
 
 | 模式 | 行为 |
 | --- | --- |
-| auto | 按配置优先尝试 API 或本地，再尝试另一类，最终退到文档检索 |
-| api | 只尝试配置的 API 模型，失败退文档 |
-| local | 只尝试配置的本地服务，失败退文档；不自动申请 GPU |
+| auto | 按配置优先尝试 API 或本地，再尝试另一类；模型失败返回不可用，不自动退成文档答案 |
+| api | 只尝试配置的 API 模型；无共享额度、认证失败或服务不可用时返回不可用 |
+| local | 只尝试配置的本地服务；平台按训练优先借空闲卡，训练有需求时暂停，临时不可用时返回不可用 |
 | docs | 不调用模型，只返回匹配说明和授权任务信息 |
 
 地址与模型由管理员配置，用户不能指定 URL 或工具。外部地址要求 HTTPS；集群内 `.svc.cluster.local` 本地服务可用 HTTP。禁止重定向和继承环境代理。请求体读取上限 5 秒，每次模型尝试最多 12 秒，总请求预算 35 秒；响应上限 128 KiB，输出上限 1500 token。
 
 区分额度耗尽、认证失败、普通 429 和服务不可用。每后端失败后 5 分钟的进程内冷却只用于抑制重试，**不是月预算账本**。真正额度硬限制交给供应商或 LiteLLM；没有权威预算接口就不显示剩余额度。`auto` 中所有目标必须事先获准接收同一范围的数据。
 
-页面开关 `ASSISTANT_ENABLED` 默认 false：query 路由不注册，capabilities 返回关闭状态，Portal 隐藏组件。启用后每进程最多 8 并发、每用户 2 并发、每用户每分钟 8 问。审计复用 `audit_logs`，只记录身份、请求 ID、模式和日志同意，不记录问题与内容；审计失败退文档。没有模型时可配置 `enabled: true`、`providers: []` 使用检索模式。
+页面开关 `ASSISTANT_ENABLED` 默认 false：query 路由不注册或返回 503，capabilities 返回关闭状态，Portal 隐藏组件。启用后每进程最多 8 并发、每用户 2 并发、每用户每分钟 8 问。审计复用 `audit_logs`，只记录身份、请求 ID、模式和日志同意，不记录问题与内容；审计失败返回不可用。没有配置模型能力或验收未通过时返回 `Enabled=false`、`Modes=[]` 并隐藏入口；模型已配置后可显式选择仅文档模式。
 
 ### 后续接入配置示例（当前未启用）
 
@@ -73,31 +75,33 @@ assistant:
       model: <该账户实际可用的模型ID>
       existingSecret: raytrain-assistant-anthropic
       secretKey: api-key
-    - id: idle-serve
+    - id: idle-vllm
       kind: local
-      baseURL: http://assistant-idle-inference.raytrain-assistant-canary.svc.cluster.local:8000/v1
+      baseURL: https://assistant-idle-inference.raytrain-assistant-canary.svc.cluster.local:8443/v1
       model: Qwen3-8B-AWQ
       thinkingDisabled: true
 ```
 
-只引用受限 Secret，不把密钥写进 values、代码、镜像或文档。上例不会创建 Secret、RayService 或 GPU，也不构成开放模型调用的授权；当前实际配置仍为 `providers: []`。个人 DeepSeek key 仅获准临时测试，不用于共享生产后端。早期 `be9e28b` 文档记载一次公开问题 HTTP 200、21 token，但当前会话未持有其原始请求日志或凭据引用；不能替代生产 Router 联调。LiteLLM 无可用额度，Anthropic 尚无真实凭据，均仅协议合同验证。
+只引用受限 Secret，不把密钥写进 values、代码、镜像或文档。上例不会创建 Secret、single-GPU vLLM Pod 或 GPU，也不构成开放模型调用的授权；当前实际配置仍无共享可用模型。个人 DeepSeek key 仅获准临时测试，不用于共享生产后端。早期 `be9e28b` 文档记载一次公开问题 HTTP 200、21 token，但当前会话未持有其原始请求日志或凭据引用；不能替代生产 Router 联调。LiteLLM 无可用额度，Anthropic 尚无真实凭据，均仅协议合同验证。
 
 ### 闲时 GPU 策略
 
-采用独立 RayService/RayCluster。Ray Serve 负责推理；确定性控制器负责空闲准入和回收，LLM 没有调度权限。页面与闲时控制器 `config.enabled` 分别开关，默认均关闭；独立资源没有并入生产 Helm 默认安装。
+当前目标采用独立 single-GPU vLLM Pod，不再使用 RayService/RayCluster 作为上线前置。后端只通过 HTTPS 8443、Bearer 与 TLS 调用推理入口，不开放 Ray dashboard、GCS、Serve 或其他控制端口；确定性控制器负责空闲准入和回收，LLM 没有调度权限。页面与闲时控制器 `config.enabled` 分别开关，默认均关闭；独立资源没有并入生产 Helm 默认安装。
 
 ```text
 DISABLED → WAITING_FOR_IDLE → STARTING → READY → DRAINING → STOPPED
                            ↘ ERROR       ↘ ERROR
 ```
 
-- 以 Kubernetes 已存在的 GPU 需求、实际 Pod 分配和 Kueue 预留判断空闲，不能只看 GPU 利用率。平台数据库中尚未创建 RayJob 的排队意图不在观察范围内。
+- 以 Kubernetes 已存在的 GPU 需求、实际 Pod 分配、Kueue 预留和平台数据库 pending 训练需求判断空闲，不能只看 GPU 利用率。
 - 首版同时最多一个单卡副本，只借空闲整卡，不与训练共卡，不用 MPS/time-slicing，不重复登记物理容量，不修改训练之间的 Never 抢占策略。
 - 出现相关训练需求后：摘流、有限排空或取消请求、删除自有服务、等待 Worker 和 Kueue 预留释放。Actor 缩至 0 不等于释放 GPU；不允许未经预算的双集群 GPU 滚动升级。
 - 连续空闲 10 分钟才启动，启动超时 10 分钟，最长寿命 1 小时，排空 15 秒、Pod 终止 15 秒。首版显式启用后只预热一个副本，尚未实现按聊天需求自动启停。
 - 只操作本次专用资源，不取消用户训练，不改训练镜像、用户源码、存储归属或团队配额。共享节点仍可能产生 CPU、网络、存储和功耗竞争，不能承诺训练零等待或零性能影响。
 
 ## 二、当前实现与现场状态
+
+本节保留本轮代码与现场证据。涉及 RayService/RayCluster、Head/Worker、NetworkPolicy 的段落是历史候选路径，用于解释已验证内容和被放弃原因；当前上线方向以独立 single-GPU vLLM Pod 为准。
 
 ### 控制面与资源控制器
 
@@ -118,7 +122,7 @@ Worker 为 1 GPU/4 CPU/16 GiB；Head 为 CPU 容器，请求 500m/4 GiB、上限
 
 KubeRay 1.6.2 会把 RayService 自带的 Serve service selector 固定为 `ray.io/cluster=<cluster>` 和 `ray.io/serve=true`，且会忽略用户自定义 selector。现场确认 HeadOnly 下 worker 也可能带 `ray.io/serve=true` 并进入 ready endpoints，但 worker 没有 8000 proxy。因此 `4a270926` 追加独立 `assistant-idle-inference` ClusterIP Service，只按 `app.kubernetes.io/instance`、`app.kubernetes.io/component=assistant-idle`、`raytrain.wellspiking.ai/assistant-role=head` 选择 Head，后端入口不得指向 KubeRay-owned Serve service。
 
-NetworkPolicy 清单仍保留默认拒绝和端口最小化设计：Ray 通信限专用 namespace，后端只访问 head 8000；KubeRay 访问 8265 的同一个 peer 必须同时匹配 operator namespace 和 Pod 标签。真实现场 NetworkPolicy 当前未通过：`network-policy-audit.json`、`network-policy-audit.md` 显示 Cello/Cilium `PolicyEnforcement=never`，Head/Worker 共享 `securityidentity=1228`，所以策略不产生预期隔离。不能使用节点 local 规则、临时 iptables 或手工拦截作为放行依据；整改计划见 `network-policy-remediation-plan.md`。
+历史 RayService 方案的 NetworkPolicy 清单保留默认拒绝和端口最小化设计：Ray 通信限专用 namespace，后端只访问 head 8000；KubeRay 访问 8265 的同一个 peer 必须同时匹配 operator namespace 和 Pod 标签。真实现场 NetworkPolicy 当前未通过：`network-policy-audit.json`、`network-policy-audit.md` 显示 Cello/Cilium `PolicyEnforcement=never`，Head/Worker 共享 `securityidentity=1228`，所以策略不产生预期隔离。不能使用节点 local 规则、临时 iptables 或手工拦截作为放行依据；整改计划只作为历史备选，不再是本轮启用前置。
 
 专用验收 namespace `raytrain-assistant-canary` 已准备公开模型缓存并启用 controller/reaper。首轮 Head 在 4 GiB 上限下多次 OOMKilled；KubeRay 默认 Worker readiness 依赖镜像没有的 wget，并检查 HeadOnly 模式下不存在的 Worker Serve proxy。修复后第三轮 RayService 在现场 UTC `08:01:53` 创建，`08:03:47` Ready，Head/Worker 均 0 restart。缓存卷的节点/zone 约束必须与允许节点一致，不假定所有节点都有权重。
 
@@ -136,14 +140,13 @@ NetworkPolicy 清单仍保留默认拒绝和端口最小化设计：Ray 通信�
 
 | 项目 | 当前状态 |
 | --- | --- |
-| 后端源码 main | 本地 main、GitHub、内部 GitLab、正式构建目录已同步到 `4a270926c4b3c26568c6490de309bba43a0d5a98` |
-| 生产后端镜像 | Helm **253**；`release-20260922-01-d04026c`，摘要 `sha256:b4a9bbb43d612546f11f6be35c810de5f5444cfe5e917d2af38fb56fcf7780d1`；两副本 Ready/0 restart，`healthz=200`；schema 56 |
-| Serve 镜像 | 源码 `5431fe1`；Harbor 摘要 `sha256:4bf3b53bed22ea0219eb0f33c483d729d740f5d18573ea0caeb15f83094b7ce3` |
-| Controller 镜像 | 源码 `d04026c`，摘要 `sha256:be02ac1b95a997f7609e52fe7444ca1a67c358bcae78c5e6f8442201882e83ad`；controller/reaper 均已缩至 0 |
+| 后端源码候选 | 新候选尚未部署；已有部分 Go/真实 PostgreSQL 证据，完整验证仍在进行 |
+| 生产后端镜像 | Helm **255** 已关闭 `assistant.enabled=false`；生产仍为旧 `9fcbc` 镜像；schema 56 不变 |
+| Serve/Controller 镜像 | 历史 RayService 候选证据保留，当前不作为上线选型；controller/reaper 均已缩至 0 |
 | Portal dev | 实际 dev 为 `67bcfa`，他人后续改动未触碰 assistant；`34488`、`34503` 通过。另有人合入 master `dbfba3bb`（CI `34505`），本次只推 dev，不改 master |
-| RayService 现场 | 第三轮 `08:01:53` 创建、`08:03:47` Ready，Head/Worker 0 restart；真实 HTTP、Go Router、Head-only Service 均通过 |
+| 历史 RayService 现场 | 第三轮 `08:01:53` 创建、`08:03:47` Ready，Head/Worker 0 restart；真实 HTTP、Go Router、Head-only Service 均通过，但不代表当前 single-GPU vLLM Pod 已验收 |
 
-生产发布证据：`/root/raytrain-release-20260922-assistant/docs-only-final-preflight/`。`safe-summary.json` 证明 dry-run 仅改变后端镜像和 3 个助手变量；`post-release-summary.json`、`post-release-training-comparison.json`、`post-release-backend-metadata.json`、`post-release-log-scan.json`、`post-release-schema.json` 分别保存最终核验。4 个活跃 RayJob、3 个 RayCluster、8 个训练 Pod 的 UID、状态、Ready 和重启数均与发布前一致；5919 行后端日志未匹配 panic/fatal/迁移错误，不等同于完整性能无影响证明。
+最新生产核验结论是 Helm 255 关闭助手，生产后端仍为旧镜像，schema 56 不变；8 个训练 Pod 前后无变化。早期发布证据保留在 `/root/raytrain-release-20260922-assistant/docs-only-final-preflight/`，用于追溯当时的 dry-run、训练 Pod 对比、日志扫描和 schema 记录，不等同于当前新候选已经部署。
 
 使用说明已随后端在「开始使用与账号 → 各个菜单分别能做什么？ → 页面助手怎么用？」发布。Chrome 发布前可正常读取 Portal 使用说明；发布后浏览器连接超时、原生 AX 停留在旧菜单且截图不可用，用户重新打开后仍未恢复。没有提取浏览器凭据或伪造 SSO；因此当前不能称真实登录提问、引用跳转、拖动、取消已完成线上验收。
 
@@ -159,7 +162,7 @@ NetworkPolicy 清单仍保留默认拒绝和端口最小化设计：Ray 通信�
 | 真实 GPU 引擎 | 172.28.1.229 的 RTX4090D、550.144.03 原生驱动通过 CUDA 矩阵运算、完整 Qwen3-8B-AWQ 加载和单、双请求；冷加载 115.32 秒，17 token 短问答单请求 0.3201 秒、双请求 0.3286 秒 | 不是业务吞吐基准；不据此放行其他节点或所有驱动组合 |
 | RayService HTTP 与 Router | `real-rayservice-http-acceptance.json`、`real-router-rayservice-acceptance.json` 均 PASS，覆盖真实 HTTP、8K 裁剪、2 并发、取消后槽恢复和 Go Router；Head-only Service sole-head 已验 | HTTP/Router 通过不代表 NetworkPolicy 已隔离；KubeRay-owned Serve service 不能作为 backend URL |
 | 训练让卡 | `training-reclaim-r2/` 的创建、gate、删除时间和 `reclaimed-ray-task-cuda.log` 分别记录：测试训练 `08:29:13` 创建、`08:29:14` gate closed、`08:29:28` RayService/RayCluster/Workload 删除；约 `08:31` worker 获得 GPU，Ray remote CUDA 在 RTX4090D 上完成，`sum=1032636.75` PASS | 完整 RayJob 最终 FAIL，原因是临时测试 manifest 缺 dashboard port 且 heredoc 与 KubeRay entrypoint 拼接不兼容；不能称 RayJob SUCCEEDED。该失败不否定 GPU 释放和 CUDA 执行证据 |
-| NetworkPolicy | `network-policy-audit.json`、`network-policy-audit.md`、`network-policy-remediation-plan.md` 已记录失败原因和整改计划 | Cello/Cilium 当前 `PolicyEnforcement=never` 且 Head/Worker 同 security identity，NetworkPolicy 不放行。禁止使用 local 节点规则绕过；整改前只能声明 Service 路由正确，不能声明 CNI 隔离正确 |
+| NetworkPolicy | `network-policy-audit.json`、`network-policy-audit.md`、`network-policy-remediation-plan.md` 已记录失败原因和整改计划 | 这是 RayService 历史备选证据。当前用户选择不改 CNI，因此不再把网络窗口当作本轮启用前置 |
 | 公开模型 | 10 个文件与 Qwen 官方 ModelScope API 的文件 revision/SHA256 一致；非 root、只读、断网检查通过；两份 safetensors 的 903 个索引 tensor 均存在 | ModelScope 文件 revision 不冒称 HuggingFace 同一 commit；仍需保留集群缓存校验与具体挂载证据 |
 | 独立复审 | `5431fe1` 相对 `be9e28b` 的缓存、硬节点排除与 native driver 约束未发现新增可证实 P1/P2 训练破坏、鉴权绕过或泄密阻断 | 代码审阅不替代现场故障注入、CNI 策略整改和回收测试 |
 
@@ -179,11 +182,11 @@ NetworkPolicy 清单仍保留默认拒绝和端口最小化设计：Ray 通信�
 
 ## 四、待完成与放行顺序
 
-1. **补齐真实页面验收。** 恢复 Chrome 自动化连接后，在真实交互会话验证文档提问、来源链接、浮窗移动/关闭/恢复、无匹配结果、只读任务上下文和权限拒绝。当前发布模式仅检索，不能宣传为已提供大模型生成回答。
-2. **独立审阅集群隔离变更，尚不执行。** 先与 VKE 管理方确认托管 Cello/vpc-cni 的 NetworkPolicy 开关及回滚方式，不直接修改 CNI DaemonSet 或宿主机防火墙。现有 5 条 MLflow 策略目前也未执行，全局开启会同时激活，需逐条核对 backend、训练 ingest、MLflow、PostgreSQL、DNS 和存储流向。完整实施与回滚计划见 [网络变更清单](PLATFORM_ASSISTANT_NETWORK_CHANGE_20260922.md)。
-3. **先修助手身份标签，再安排受控网络窗口。** 当前 Cilium 只将筛选后的标签计入安全身份，Head/Worker 的 `assistant-role` 不参与身份计算。优先仅给助手模板使用现有受支持的 `cilium-policy-role` 等标签，区分 Head、Worker、Controller、Reaper，并同步精确策略；先证明身份不同，不扩大整个集群的标签集合、不修改现有训练 Pod。托管开关的实际支持和滚动影响需管理方确认。
-4. **隔离、DB 待启动 GPU 需求保护与回滚验证后才重开 GPU。** DB demand 保护尚待实现，详见网络清单，不可跳过该闸门。 覆盖同节点/跨节点正反访问：后端仅到 Head 8000、operator 到 8265、Ray 内部和 gate/DNS/API 白名单；无关 Pod 和后端访问管理端口须被拒绝。同时检查新建及已建立的 MLflow/训练连接。异常按已审阅的 VKE 配置回滚；不能保证已中断连接自动恢复。GPU 仍保持关闭，不以特权 iptables 或仅加代理替代隔离。
-5. **完整训练及干扰补验。** 修正专用 RayJob 的 dashboard 端口和 entrypoint 引用形式，重新取得 SUCCEEDED；补在途推理/加载中撤流、多节点训练需求、节点异常和固定业务负载性能对比。已有 1 秒关门、15 秒删除服务只是本次观察，不是全场景 SLA。
+1. **先确认 `previewSubjects` 验收名单。** 公开前先由管理员确认允许覆盖的问题、任务场景和权限边界，再按名单验收。
+2. **补齐模型能力与不可用路径。** 没有配置模型时隐藏模型能力，`query` 返回 503；模型失败不自动退成文档伪回答，“仅文档”仍显示显式来源。
+3. **验收独立 single-GPU vLLM Pod。** 使用 HTTPS 8443、Bearer 和 TLS，验证真实模型回答、取消/超时、并发上限、日志授权和无 Ray 控制端口暴露。
+4. **验收训练让卡。** Kueue Pod integration 已只读确认；还要覆盖训练数据库 pending 需求、加载中/推理中撤流、多节点训练需求、节点异常和固定业务负载性能对比。已有关门和删除服务观察不是全场景 SLA。
+5. **补齐真实浏览器质量验收。** 在真实交互会话验证文档提问、来源链接、浮窗移动/关闭/恢复、无匹配结果、只读任务上下文和权限拒绝；全部通过前不能宣传为已提供共享大模型助手。
 
 **本次收尾已完成：** controller、reaper 均为 0 副本；专用 namespace 内 Pod/RayJob/RayCluster/RayService/Workload 数量全部为 0，`requests.nvidia.com/gpu` 已用 0。公开模型缓存和受限证据保留，未移动或删除用户文件，未更改配额或 CNI。
 
