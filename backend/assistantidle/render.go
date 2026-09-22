@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	defaultRayVersion           = "2.43.0"
+	defaultRayVersion           = "2.58.0"
 	defaultPriorityClassName    = "assistant-idle-low"
 	defaultModelMountPath       = "/models"
 	defaultModelPath            = "/models/Qwen3-8B-AWQ"

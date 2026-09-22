@@ -1,16 +1,17 @@
-# Ray is installed with the explicitly selected RAY_VERSION build argument.
-# vLLM, torch, CUDA and transformers come from the verified base image together.
+# Ray and vLLM are explicit resolver roots in Dockerfile. Native CUDA packages
+# are constrained to the immutable base's versions; Python dependencies still
+# participate in normal resolution and the final environment must pass pip check.
 httpx==0.28.1
-# vLLM 0.8.5 requires the 1.26 OpenTelemetry family. Ray 2.43's Serve
-# extra accepts it; newer Ray extras requiring >=1.30 cannot share this image.
-opentelemetry-api==1.26.0
-opentelemetry-sdk==1.26.0
-opentelemetry-exporter-otlp==1.26.0
-# Upgrade the complete HTTP stack together: instrumentator 7 rejects
-# Starlette 1, while 8 supports it. Keep these changes in resolver scope.
-fastapi==0.133.0
-starlette==1.0.1
-prometheus-fastapi-instrumentator==8.0.0
-# The Ubuntu base exposes PyGObject's metadata but lacks its cairo dependency.
-# Supply the dependency normally; do not remove system packages or metadata.
-pycairo==1.27.0
+# The cu129 base installs NCCL 2.30.7, but its torch 2.13.0+cu129 wheel
+# requires exactly 2.29.7. Repair that measured base inconsistency normally.
+nvidia-nccl-cu12==2.29.7
+# Intersection of vLLM 0.29 common requirements and Ray 2.58 Serve requirements.
+# Do not restore the old image's 1.26 pins or downgrade patched base packages.
+opentelemetry-api>=1.30.0,<2
+opentelemetry-sdk>=1.30.0,<2
+opentelemetry-exporter-otlp>=1.30.0,<2
+fastapi>=0.133.0,<0.137.0
+# Patched minimums from the candidate audit, above upstream's functional floor.
+starlette>=1.3.1,<2
+prometheus-fastapi-instrumentator>=8.0.0,<9
+aiohttp>=3.14.3,<4

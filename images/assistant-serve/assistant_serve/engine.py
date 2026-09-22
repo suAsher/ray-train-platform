@@ -1,4 +1,4 @@
-"""Offline single-GPU adapter for the pinned vLLM 0.8.5 runtime."""
+"""Offline single-GPU adapter for the pinned vLLM 0.29 runtime."""
 import json
 import os
 from pathlib import Path
@@ -55,8 +55,8 @@ def engine_arguments(path):
         "max_num_seqs": 2, "max_num_batched_tokens": CONTEXT_LIMIT,
         # Do not share cached prompt prefixes across tenants' task evidence.
         "enable_prefix_caching": False,
-        "gpu_memory_utilization": 0.85, "swap_space": 0,
-        "enable_lora": False, "disable_log_requests": True, "disable_log_stats": True,
+        "gpu_memory_utilization": 0.85, "cpu_offload_gb": 0,
+        "enable_lora": False, "enable_log_requests": False, "disable_log_stats": True,
         "enforce_eager": True,
     }
 
@@ -97,8 +97,7 @@ class VLLMEngine:
         await self.engine.abort(request_id)
 
     async def check_health(self):
-        # V1's v0.8.5 check_health only logs. Both V0 and V1 expose these
-        # public properties; V0 may legitimately be idle before its first call.
+        # Check both failure and stopped states around the engine's health probe.
         self._check_state()
         await self.engine.check_health()
         self._check_state()
@@ -108,8 +107,5 @@ class VLLMEngine:
             raise RuntimeError("engine_unhealthy")
 
     def close(self):
-        # v0.8.5 may select V0 or V1 internally. Both have a lifecycle shutdown;
-        # the controller still owns pod termination and GPU resource release.
-        shutdown = getattr(self.engine, "shutdown_background_loop", None) or getattr(self.engine, "shutdown", None)
-        if shutdown is not None:
-            shutdown()
+        # The controller still owns pod termination and GPU resource release.
+        self.engine.shutdown()

@@ -77,8 +77,8 @@ func TestRenderRayServiceUsesKueueSuspendedSingleGPUShape(t *testing.T) {
 	if strategy, _, _ := unstructured.NestedString(obj.Object, "spec", "upgradeStrategy", "type"); strategy != "None" {
 		t.Fatalf("upgradeStrategy=%q, want None to avoid double RayCluster upgrades", strategy)
 	}
-	if rayVersion, _, _ := unstructured.NestedString(obj.Object, "spec", "rayClusterConfig", "rayVersion"); rayVersion != "2.43.0" {
-		t.Fatalf("rayVersion=%q, want 2.43.0", rayVersion)
+	if rayVersion, _, _ := unstructured.NestedString(obj.Object, "spec", "rayClusterConfig", "rayVersion"); rayVersion != "2.58.0" {
+		t.Fatalf("rayVersion=%q, want 2.58.0", rayVersion)
 	}
 	headLabels := asMap(t, at(t, obj.Object, "spec", "rayClusterConfig", "headGroupSpec", "template", "metadata", "labels"))
 	if fmt.Sprint(headLabels["raytrain.wellspiking.ai/assistant-role"]) != "head" {

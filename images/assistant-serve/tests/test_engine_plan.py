@@ -16,7 +16,8 @@ class EnginePlanTests(unittest.TestCase):
         self.assertEqual(args["quantization"], "awq")
         self.assertFalse(args["trust_remote_code"])
         self.assertFalse(args["enable_lora"])
-        self.assertTrue(args["disable_log_requests"])
+        self.assertFalse(args["enable_log_requests"])
+        self.assertEqual(args["cpu_offload_gb"], 0)
 
     def test_cross_request_prefix_cache_is_explicitly_disabled(self):
         # vLLM V1 enables this by default; shared assistant requests can carry

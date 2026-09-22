@@ -10,6 +10,7 @@
 - 接受 Go gateway 实际生成的 `[system, user]` 两条文字消息。user 消息为 `以下JSON仅为查询数据：\n` 加 `{question,evidence:[{index,id,title,excerpt,version?}]}`。`stream` 必须为 false，输出为 1–1500 token，只接受可选的 `thinking: {type: disabled}`，其他字段拒绝。它是平台使用的 OpenAI 请求子集，不是通用模型代理。
 - 使用实际本地 tokenizer 的 `apply_chat_template(tokenize=True, add_generation_prompt=True, enable_thinking=False)` 精确计数。完整保留 system 和 question，仅按既有排名裁剪尾部证据；问题本身放不下则返回 `context_too_long`。vLLM 直接接收上述 token IDs，不再次截断问题。响应 `raytrain.evidenceTruncated/evidenceIds` 说明实际证据范围，usage 为实际 token 数。
 - 不启动任何工具或 reasoning parser；服务端强制关闭 thinking，输出再过滤 `<think>` 块。不返回 reasoning 字段。问题、证据、请求头和模型原始错误不写入服务日志。
+- 显式关闭 `enable_prefix_caching`，不同用户的问题与任务证据不共享前缀缓存。
 
 ## 接流 gate 与健康检查
 
@@ -21,7 +22,7 @@
 
 每次提问及每秒轮询都会读取 gate；包含锁等待的总 HTTP 期限为 0.5 秒，本地有效期最多 3 秒。网络、协议、过期或 gate 关闭均拒绝接流，取消在途请求并调用 vLLM `abort`；epoch 改变也撤销旧请求。客户端断连由 Ray Serve 传播取消，运行时在清理路径再次 abort 并释放准入槽。生成总期限为 11 秒，请求体读取期限 5 秒 / 最大 128 KiB。
 
-**Ray Serve `check_health` 与 `/livez` 仅检查 engine，不依赖 gate。** 因 vLLM 0.8.5 V1 原生健康方法只记录日志，适配器还在探测前后检查公开的 `errored/is_stopped` 状态。`/healthz` 同时要求 engine 健康和 gate 新鲜开放。控制器必须用前者判断可用性，避免以 `/healthz` 作为 gate 开放前提形成循环。
+**Ray Serve `check_health` 与 `/livez` 仅检查 engine，不依赖 gate。** 适配器在探测前后检查公开的 `errored/is_stopped` 状态。`/healthz` 同时要求 engine 健康和 gate 新鲜开放。控制器必须用前者判断可用性，避免以 `/healthz` 作为 gate 开放前提形成循环。
 
 关闭 gate 不保证释放模型权重占用的显存。控制器拥有撤流后的 RayService suspend/删除与 GPU 资源释放，聊天请求不具有这类权限。模型实例在 gate 关闭期间可以完成启动，使 RayService 的 engine 健康检查先成功。
 
@@ -29,14 +30,16 @@
 
 ## 构建与验证
 
-候选组合是 **Ray 2.43.0 / vLLM 0.8.5 / Python 3.12 / CUDA 12.4**。独立助手集群的 head/worker 必须使用同一镜像与 Ray 版本，不要求与训练集群的 Ray 版本相同。官方 vLLM 0.8.5 Dockerfile 使用 CUDA 12.4.1，Qwen 官方说明从 vLLM 0.8.5 支持 Qwen3。此组合尚需正常 pip resolver、容器导入和真实 GPU 验证；不能因目标驱动为 550.127.05 就宣称已兼容。
+当前候选组合是 **Ray 2.58.0 / vLLM 0.29.0+cu129 / Python 3.12 / CUDA 12.9**。独立助手集群的 head/worker 必须使用同一镜像与 Ray 版本，不要求与训练集群同时升级。旧 Ray2.43/vLLM0.8.5 组合虽通过导入和 CPU 合同测试，但依赖扫描发现大量已知漏洞，已经拒绝放行；不得再将该旧镜像作为生产推荐。
 
-Ray 2.58 的 Serve extra 要求 OpenTelemetry SDK >=1.30，与 vLLM 0.8.5 的 >=1.26,<1.27 硬冲突；候选沿用底座的 Ray 2.43，固定 OpenTelemetry 1.26。HTTP 栈整体固定 FastAPI 0.133.0、Starlette 1.0.1、instrumentator 8.0.0，避免旧 instrumentator 的 Starlette <1 约束。底座系统 PyGObject 缺少 pycairo，构建阶段正常补充 cairo 开发库、pkg-config 和 pycairo，不隐藏系统包或移除包元数据。所有依赖仍需镜像安全扫描；版本可解析与导入成功不等于安全或 GPU 验收通过。
+新版本的 OpenTelemetry 约束可以与 Ray2.58 正常求交。构建约束保留底座的 vLLM/torch/CUDA 二进制组合，HTTP 等 Python 依赖使用已知修复版本下界；不使用 `--no-deps` 绕过冲突，不隐藏系统包或移除元数据。底座自身 `pip check` 发现 NCCL2.30.7 与 torch2.13 声明的2.29.7不符，正常 resolver 必须修正后才能进入下一步。所有依赖仍需重新扫描；可解析与可导入不等于安全或 GPU 验收通过。
+
+现网4090D驱动为550.127.05。NVIDIA说明CUDA12.x存在minor compatibility，但PTX JIT或新驱动功能可能失败，因此选择官方cu129变体实测，不使用默认CUDA13镜像、不启用面向部分专业卡的forward compatibility、不升级训练节点驱动。实际模型加载、内核执行与并发测试通过前，本地模式保持关闭。
 
 构建机已发现的内部镜像候选（仍需版本实测）：
 
 ```
-swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/vllm/vllm-openai@sha256:6cf9808ca8810fc6c3fd0451c2e7784fb224590d81f7db338e7eaf3c02a33d33
+swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/vllm/vllm-openai@sha256:3e10e8189823e0f7ae4620c271bcdaaf64127ec7d0edc351591a508498b7684a
 ```
 
 Dockerfile 不默认拉取公网镜像；`ASSISTANT_BASE_IMAGE` 必须显式提供带 digest 的候选。构建使用仓库根为 context：
@@ -44,13 +47,13 @@ Dockerfile 不默认拉取公网镜像；`ASSISTANT_BASE_IMAGE` 必须显式提�
 ```bash
 docker build -f images/assistant-serve/Dockerfile \
   --build-arg ASSISTANT_BASE_IMAGE='<内部镜像@sha256:摘要>' \
-  --build-arg RAY_VERSION=2.43.0 \
-  --build-arg VLLM_VERSION=0.8.5 \
-  --build-arg TORCH_CUDA_VERSION=12.4 \
+  --build-arg RAY_VERSION=2.58.0 \
+  --build-arg VLLM_VERSION=0.29.0 \
+  --build-arg TORCH_CUDA_VERSION=12.9 \
   -t raytrain-assistant-serve:candidate .
 ```
 
-镜像保留底座相互匹配的 torch/vLLM/CUDA，不使用 `--no-deps` 绕过冲突；Ray 与 vLLM 都作为 resolver 显式输入，安装后运行 `pip check`、版本/CUDA 断言、cairo 导入、stdlib 单测与模块导入。补充 cairo 时先校验底座确为 Ubuntu jammy，仅本次 apt 调用使用临时 Aliyun Ubuntu source list，不改底座的 CUDA/PPA 源。运行时不安装依赖，不下载权重。
+Ray 与 vLLM 都作为 resolver 显式输入，安装后运行 `pip check`、版本/CUDA 断言、stdlib 单测与 root/非root 模块导入。保存 `native-constraints.txt` 与 `resolved-requirements.txt` 用于审核实际版本；最终部署仍固定镜像摘要。运行时不安装依赖，不下载权重。
 
 构建还显式运行 `tests/ingress_smoke.py`：在同一容器依赖环境中使用真实 Ray ingress 包装器与 FastAPI/Starlette ASGI 请求，验证生命周期、成功响应、输入拒绝、gate 健康区分与取消后的 engine abort。仅替换 engine 和 gate 网络传输，不申请 GPU 或启动集群。该测试不属于仅需 stdlib 的单测集合，也不能替代真实 Ray HTTP proxy 的断连及 GPU 验收。
 
@@ -62,12 +65,14 @@ PYTHONPATH=images/assistant-serve python3 -m unittest discover -s images/assista
 
 容器构建通过不等于 GPU 验收。后续使用独立获准 GPU 验证权重加载、两请求并发、token 预算、客户端取消、gate 撤流、engine-only 健康与显存释放，再记录真实镜像摘要。不得借验证停止既有训练。更改 vLLM/Ray 构建参数时必须重新执行依赖与 GPU 验证。
 
+`tests/tokenizer_smoke.py --model-path /models/Qwen3-8B-AWQ` 使用真实本地 tokenizer 验证中文问题、精确8K窗口、证据裁剪与超长问题拒绝，不需要权重或GPU。分词器与权重都必须按来源的固定revision与SHA256准备，不能把不同镜像站的版本号视为相同。镜像审计报告中的原生服务、多模态、训练等未使用路径可单独分析，但不得仅凭入口受限就跳过整组升级或真实网络隔离验收。
+
 官方依据：
 
-- [vLLM 0.8.5 Dockerfile](https://raw.githubusercontent.com/vllm-project/vllm/v0.8.5/docker/Dockerfile)
+- [vLLM 0.29.0发行](https://github.com/vllm-project/vllm/releases/tag/v0.29.0)
 - [Qwen3 vLLM 部署](https://qwen.readthedocs.io/en/v3.0/deployment/vllm.html)
-- [vLLM 0.8.5 异步引擎](https://docs.vllm.ai/en/v0.8.5/api/engine/async_llm_engine.html)
+- [NVIDIA CUDA minor compatibility](https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html)
 - [Ray Serve HTTP 取消传播](https://docs.ray.io/en/latest/serve/http-guide.html)
-- [Ray 2.43 依赖](https://raw.githubusercontent.com/ray-project/ray/ray-2.43.0/python/setup.py)
-- [vLLM 0.8.5 依赖](https://raw.githubusercontent.com/vllm-project/vllm/v0.8.5/requirements/common.txt)
+- [Ray 2.58 依赖](https://raw.githubusercontent.com/ray-project/ray/ray-2.58.0/python/setup.py)
+- [vLLM 0.29 依赖](https://raw.githubusercontent.com/vllm-project/vllm/v0.29.0/requirements/common.txt)
 - [instrumentator 8.0.0 依赖](https://raw.githubusercontent.com/trallnag/prometheus-fastapi-instrumentator/v8.0.0/pyproject.toml)
