@@ -27,10 +27,50 @@ var (
 // consume through EOF, including newlines and a final incomplete escape.
 func assistantRedact(text string) string {
 	text = assistantAuthorization.ReplaceAllString(text, "${1}[已脱敏]")
-	text = assistantCredential.ReplaceAllString(text, "${1}[已脱敏]")
+	text = assistantRedactCredentials(text)
 	text = assistantBearer.ReplaceAllString(text, "Bearer [已脱敏]")
 	text = assistantBareKey.ReplaceAllString(text, "[已脱敏]")
 	return assistantJWT.ReplaceAllString(text, "[已脱敏]")
+}
+
+func assistantRedactCredentials(text string) string {
+	var result strings.Builder
+	end := 0
+	for _, match := range assistantCredential.FindAllStringSubmatchIndex(text, -1) {
+		result.WriteString(text[end:match[0]])
+		prefix, value := text[match[2]:match[3]], text[match[3]:match[1]]
+		if assistantPaginationCode(text[:match[0]], prefix, value) {
+			result.WriteString(text[match[0]:match[1]])
+		} else {
+			result.WriteString(prefix)
+			result.WriteString("[已脱敏]")
+		}
+		end = match[1]
+	}
+	result.WriteString(text[end:])
+	return result.String()
+}
+
+// Pagination variable references are code, not authentication material. Keep
+// only known nonliteral expressions; quoted or arbitrary values under these
+// same names still pass through credential redaction.
+func assistantPaginationCode(before, prefix, value string) bool {
+	assignment := strings.TrimSpace(prefix)
+	name := strings.TrimSpace(strings.TrimRight(assignment, "=:"))
+	switch name {
+	case "page_token", "run_token", "experiment_token":
+	default:
+		return false
+	}
+	if strings.HasSuffix(assignment, ":") {
+		line := before[strings.LastIndex(before, "\n")+1:]
+		return strings.TrimSpace(line) == "if not" && value == "break"
+	}
+	switch strings.TrimRight(value, ")]") {
+	case "None", "page_token", "run_token", "experiment_token", "page.token", "runs.token", "experiments.token":
+		return true
+	}
+	return false
 }
 
 // Links in source text and generated prose cannot become navigation targets.

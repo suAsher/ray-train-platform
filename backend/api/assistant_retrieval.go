@@ -325,6 +325,12 @@ func assistantBoundSection(text string) string {
 func assistantNaturalIntent(question string) ([]string, string) {
 	has := func(terms ...string) bool { return assistantHasAny(question, terms...) }
 	switch {
+	case has("代码", "源码") && has("本地", "本机", "cli", "命令行") && has("提交", "上传", "跑起来", "训练"):
+		return []string{"code"}, question + " CLI 本地源码 提交"
+	case has("输入", "数据", "个人文件", "my-files", "input-path") && has("路径", "目录") && has("填", "相对", "绝对", "提交"):
+		return []string{"storage"}, question + " 输入数据 相对路径"
+	case has("mlflow") && has("pytorch", "torchrun", "ray-ddp", "训练") && has("接入", "记录", "上报", "没有 Run", "没有run") && !has("hook", "mmcv", "已有 Run", "已有run"):
+		return []string{"mlflow-framework-metrics"}, question + " 普通 PyTorch 首次接入"
 	case has("代码", "源码") && has("提交", "上传", "开始跑", "本地电脑"):
 		return []string{"code"}, question + " ZIP working_dir 代码"
 	case has("调试") && has("保存", "环境", "固化"):

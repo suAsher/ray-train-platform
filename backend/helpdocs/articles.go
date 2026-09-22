@@ -93,6 +93,8 @@ var publicGuideSectionTargets = []publicGuideSectionTarget{
 	{guideID: "account-api", heading: "常用地址", articleID: "access"},
 	{guideID: "account-api", heading: "ID 边界", articleID: "mlflow"},
 	{guideID: "data", heading: "代码和镜像", articleID: "code"},
+	{guideID: "data", heading: "本地源码通过 CLI 提交训练", articleID: "code"},
+	{guideID: "data", heading: "输入数据相对路径怎么填", articleID: "storage"},
 	{guideID: "data", heading: "数据空间", articleID: "storage"},
 	{guideID: "data", heading: "数据模式", articleID: "data-mode"},
 	{guideID: "data", heading: "版本和场地", articleID: "datasets"},

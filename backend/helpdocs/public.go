@@ -152,7 +152,9 @@ const dataPublicGuide = `### 代码和镜像
 
 代码可以来自受控源码包、允许的 Git 来源或原生 Ray ` + "`runtime_env.working_dir`" + `。平台会把分支解析成固定 Commit，校验 ZIP 的 SHA-256 和大小，并把代码只读物化到训练工作区。
 
-训练镜像负责依赖环境，不适合每次业务代码变化都重建。没有合适环境时，基于平台基础镜像派生，确认 CUDA、Python、Ray、PyTorch 和业务依赖匹配，再由管理员登记为团队可用镜像。
+训练镜像负责依赖环境，不适合每次业务代码变化都重建。需要新增可保存的 Python 依赖时，在支持保存环境的 Base 调试工作区安装并验证，再点击「保存当前调试环境」，用自己的 Harbor 凭据推送到有写权限的项目，选择仅本人或当前团队可用；READY 后用固定摘要提交。系统库、CUDA 或不支持保存的依赖仍需单独构建并由管理员登记。完整范围见[自己的训练镜像](#custom-environment)。
+
+` + localSourceCLIGuide + "\n\n" + relativeInputPathGuide + `
 
 ### 数据空间
 
@@ -398,13 +400,21 @@ var mlflowMetricsSeedPublicSection = `适用于在 RayTrain 上运行的训练�
 
 ### 普通 PyTorch / torchrun / ray-ddp：首次接入
 
-镜像需要安装兼容的 mlflow 客户端；不依赖 raytrain_runtime.reporting。把下面模块完整保存为训练入口同目录的 platform_mlflow.py，并随源码一起上传。它只从平台环境读取 Job、团队、提交者和签名来源，不要求 RAYTRAIN_CLUSTER_ATTEMPT；仅当该值存在时才附加。不要复制、打印或自行填写这些来源值。
+镜像需有 PyTorch 和兼容的 mlflow。**先打开本条引用，完整复制「平台连接模块」为训练入口同目录的 platform_mlflow.py，并随源码一起上传；下面代码依赖该模块，不能只复制这一段。** 不覆盖平台注入的连接，不另填个人 PAT。
+
+保存下列 CPU 接通检查为 train.py，先在平台单进程任务运行 python3 train.py。它展示创建 reporter、记录参数/逐步 loss、按真实结果结束 Run 三个位置；随后换成自己的模型和数据。
+
+` + "```python\n" + platformMLflowUsagePython + "\n```" + `
+
+只有 global rank 0 上报。已有框架 Hook 时复用其 Run，不再创建第二套；正式分布式训练须由框架确认所有 rank 成功后再结束 Run。
+
+### 平台连接模块
+
+把下面模块完整保存为 platform_mlflow.py。它只从平台环境读取 Job、团队、提交者和签名来源，不依赖 raytrain_runtime.reporting，也不要求 RAYTRAIN_CLUSTER_ATTEMPT；仅当该值存在时才附加。不要复制、打印或自行填写这些来源值。
 
 ` + "```python\n" + platformMLflowPython + "\n```" + `
 
-在你的训练入口中接入三个位置：初始化后创建 reporter；训练循环中记录指标；训练真正完成或异常退出时结束 Run。下面是可直接运行的 CPU 接通检查，也展示真实训练循环应插入的位置；后续把随机张量和 Linear 替换为自己的模型、数据与优化器。
-
-` + "```python\n" + platformMLflowUsagePython + "\n```" + `
+### Run 生命周期和分布式接入边界
 
 单进程可直接 python train.py。torchrun 会注入全局 RANK 和 WORLD_SIZE；多机不能用 LOCAL_RANK 代替 RANK，否则每台机器都会重复建 Run。非 torchrun 的分布式框架应显式传入框架的全局 rank，例如已经初始化的 torch.distributed.get_rank()，或托管 Ray Train 的 get_context().get_world_rank()。不确定全局 rank 时停止接入检查，不猜成 0。
 
