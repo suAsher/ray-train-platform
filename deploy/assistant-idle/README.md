@@ -2,6 +2,8 @@
 
 This directory is a standalone reference for the idle-GPU assistant inference controller. It is not included by the production Helm chart and must not be applied as-is.
 
+**Production prerequisite:** NetworkPolicy objects are not proof of enforcement. The current VKE cluster was verified with `CILIUM_ENABLE_POLICY=never`; keep shared idle inference disabled until the managed network change and positive/negative connectivity checks pass. See [the implementation and rollback runbook](../../docs/PLATFORM_ASSISTANT_NETWORK_CHANGE_20260922.md).
+
 Safety defaults:
 
 - Replace every `PLACEHOLDER_*` value before rendering or applying.
@@ -14,7 +16,7 @@ Safety defaults:
 - The controller and reaper run as separate ServiceAccounts. The controller owns only the fixed assistant RayService and a fixed Lease in its namespace. The reaper can only read the fixed Lease and get/delete the fixed RayService.
 - The Serve worker mounts only the model PVC read-only at `/models`; the Ray head does not mount the model PVC, avoiding RWO multi-node conflicts. Neither pod mounts user or personal storage or a ServiceAccount token.
 - Worker scheduling is restricted to an explicit node allowlist plus `platform.wellspiking.ai/gpu-pool=production`, `platform.wellspiking.ai/cache-ready=true`, and `accelerator=nvidia-rtx-4090`. The renderer rejects the dedicated tenant taint key `platform.wellspiking.ai/dedicated-tenant` as a tolerated taint and also requires that label to be absent.
-- The generated RayService uses a ClusterIP head service. Ray dashboard/Serve REST stays enabled and binds 0.0.0.0 inside the cluster because KubeRay and Serve need it, but NetworkPolicy keeps it internal-only and there is no NodePort, LoadBalancer, or Ingress exposure. The backend may reach only the head Serve port 8000; KubeRay may reach only dashboard port 8265; Ray pods may talk only to fixed internal Ray ports and the controller gate.
+- The generated RayService uses a ClusterIP head service. Ray dashboard/Serve REST stays enabled and binds 0.0.0.0 inside the cluster because KubeRay and Serve need it, and enforced, verified NetworkPolicy must keep it internal-only and there is no NodePort, LoadBalancer, or Ingress exposure. The backend may reach the head Serve port 8000 and controller read-only status port 8080; KubeRay may reach only dashboard port 8265; Ray pods may talk only to fixed internal Ray ports and the controller gate.
 - Point the backend inference URL at the static `assistant-idle-inference` ClusterIP service, which selects `app.kubernetes.io/instance=PLACEHOLDER_INSTANCE_ID`, `app.kubernetes.io/component=assistant-idle`, and `raytrain.wellspiking.ai/assistant-role=head` on port 8000. Do not use the KubeRay-owned RayService Serve service for backend traffic: in KubeRay 1.6.2 its selector is based on `ray.io/serve=true`, and with Serve `HeadOnly` workers can still appear as ready endpoints without an HTTP proxy on port 8000.
 - Replace `PLACEHOLDER_KUBERAY_OPERATOR_NAMESPACE` with the namespace that runs the KubeRay operator. The dashboard policy intentionally also pins that peer to the operator pod labels `app.kubernetes.io/name=kuberay-operator`, `app.kubernetes.io/component=kuberay-operator`, and `app.kubernetes.io/instance=kuberay`; do not split the namespaceSelector and podSelector into separate peers, because that would broaden access.
 - Replace `PLACEHOLDER_KUBERNETES_API_SERVER_CIDR` with the actual API server endpoint range for your CNI before applying the egress policy. The placeholder is intentionally invalid.
@@ -26,3 +28,5 @@ Controller arguments expected by the runtime command:
 ```text
 --config=/etc/assistant-idle/config.json --mode=controller|reaper --listen=:8080
 ```
+
+Administrator visibility is independent of the user-facing assistant switch. Set Helm `assistant.idleNamespace` to the dedicated namespace to enable `GET /api/v1/assistant/admin/status` for interactive SuperAdmin sessions. The chart grants only namespaced ConfigMap/RayService reads for this observer. The API shows provider cooldown, controller decisions, Pod GPU requests and actual readiness; it never returns provider URLs, credentials, user prompts or configuration contents. `observationAvailable` means a valid observation, while `inferenceReady` means the service and admission gate are ready. Stopped controller replicas are shown as stopped even if the saved configuration permits inference.

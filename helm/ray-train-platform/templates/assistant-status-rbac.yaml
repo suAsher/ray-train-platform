@@ -1,0 +1,42 @@
+{{- $assistant := .Values.assistant | default dict -}}
+{{- if and (hasKey $assistant "idleNamespace") (not (kindIs "string" $assistant.idleNamespace)) }}{{- fail "assistant.idleNamespace must be a string" }}{{- end }}
+{{- $idleNamespace := default "" $assistant.idleNamespace -}}
+{{- if $idleNamespace }}
+{{- if or (gt (len $idleNamespace) 63) (not (regexMatch "^raytrain-assistant-[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $idleNamespace)) }}
+{{- fail "assistant.idleNamespace must be a dedicated raytrain-assistant-* namespace" }}
+{{- end }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "ray-train-platform.fullname" . }}-assistant-status
+  namespace: {{ $idleNamespace }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+rules:
+  # Only the ConfigMap referenced by the fixed controller Deployment is read.
+  # Its generated hash changes with each dedicated controller configuration.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get"]
+  - apiGroups: ["ray.io"]
+    resources: ["rayservices"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "ray-train-platform.fullname" . }}-assistant-status
+  namespace: {{ $idleNamespace }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+subjects:
+  - kind: ServiceAccount
+    name: ray-train-platform-sa
+    namespace: {{ .Values.namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "ray-train-platform.fullname" . }}-assistant-status
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

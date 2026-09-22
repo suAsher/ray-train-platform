@@ -23,6 +23,7 @@ var (
 )
 
 type Config struct {
+	AssistantIdleNamespace                   string
 	Assistant                                AssistantConfig
 	EnvironmentBuild                         EnvironmentBuildConfig
 	SPKRayjobMinimumVersion                  string
@@ -542,6 +543,10 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.Assistant, err = loadAssistantConfig(); err != nil {
+		return Config{}, err
+	}
+	cfg.AssistantIdleNamespace = strings.TrimSpace(os.Getenv("ASSISTANT_IDLE_NAMESPACE"))
+	if err := ValidateAssistantIdleNamespace(cfg.AssistantIdleNamespace); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil

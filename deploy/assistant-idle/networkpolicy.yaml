@@ -88,6 +88,16 @@ spec:
               app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
       ports:
         - { protocol: TCP, port: 8080 }
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: PLACEHOLDER_RAYTRAIN_BACKEND_NAMESPACE
+          podSelector:
+            matchLabels:
+              app: ray-train-backend
+              app.kubernetes.io/component: api
+      ports:
+        - { protocol: TCP, port: 8080 }
   egress:
     - to:
         - ipBlock:

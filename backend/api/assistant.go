@@ -179,17 +179,15 @@ func (h *Handler) assistantQuery(c *gin.Context) {
 		Mode: "docs", Reason: "docs_requested", ObservedAt: time.Now().UTC(),
 		Citations: []assistant.Evidence{}, Warnings: []string{},
 	}
-	if req.JobID != "" {
-		if !h.assistantJobEvidence(c, req.JobID, req.IncludeLogs, &response) {
-			return
-		}
+	if !h.assistantFacts(c, req.Question, req.JobID, req.IncludeLogs, &response) {
+		return
 	}
 	docs, available := h.assistantDocuments(ctx, assistantRedact(req.Question))
 	response.Citations = append(response.Citations, docs...)
 	if !available {
 		response.Warnings = append(response.Warnings, "帮助文档暂不可用；当前回答只包含可获取的授权信息。")
 	}
-	response.Answer = assistantDocsAnswer(response.Citations)
+	response.Answer = assistantDocsAnswer(response.Citations, req.Question)
 	if len(response.Citations) == 0 {
 		response.Reason = "no_evidence"
 	} else if req.Mode != "docs" {
@@ -199,7 +197,7 @@ func (h *Handler) assistantQuery(c *gin.Context) {
 			response.Warnings = append(response.Warnings, "审计服务暂不可用，未调用模型；已展示只读检索结果。")
 		} else if h.assistant != nil {
 			result, err := h.assistant.Answer(ctx, req.Mode, assistant.Input{Question: assistantRedact(req.Question), Evidence: response.Citations})
-			answer := assistantPlainText(result.Answer, 8000)
+			answer := assistantGroundedText(result.Answer, 8000, response.Citations)
 			if err == nil && answer != "" && (result.Mode == "api" || result.Mode == "local") {
 				response.Answer, response.Mode = answer, result.Mode
 				response.Reason = assistantResultReason(result.Reason, "grounded_response")

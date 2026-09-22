@@ -93,8 +93,10 @@ func run() error {
 		return json.NewEncoder(os.Stdout).Encode(snapshot)
 	}
 	gate := assistantidle.NewGate(uuid.NewString(), time.Now)
+	status := assistantidle.NewStatusReporter(cfg.Enabled, gate, time.Now)
 	mux := http.NewServeMux()
 	mux.Handle("/gate", gate)
+	mux.Handle("/status", status)
 	mux.HandleFunc("/livez", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	server := &http.Server{Addr: *listen, Handler: mux, ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second, IdleTimeout: 10 * time.Second, MaxHeaderBytes: 4096}
 	serverErrors := make(chan error, 1)
@@ -110,11 +112,13 @@ func run() error {
 			cancelSync()
 			if err != nil {
 				gate.Close()
+				status.Record(assistantidle.Decision{State: assistantidle.StateUnknown}, err)
 				stop()
 				return
 			}
 			var previous assistantidle.State
 			controller.Run(leaderCtx, func(d assistantidle.Decision, err error) {
+				status.Record(d, err)
 				// Provider messages, user logs and prompts never enter this component.
 				if d.State != previous || err != nil {
 					log.Printf("state=%s action=%s observation_or_action_failed=%t", d.State, d.Action, err != nil)

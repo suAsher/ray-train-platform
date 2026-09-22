@@ -54,6 +54,8 @@ rayTrain:
 # existingSecret, secretKey, thinkingDisabled}; never place credential values here.
 assistant:
   enabled: false
+  # Observation only; does not create or enable an inference cluster.
+  idleNamespace: ""
   localFirst: false
   providers: []
 

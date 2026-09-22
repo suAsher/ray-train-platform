@@ -29,6 +29,8 @@ func TestAssistantHelpAppearsInExistingMenuArticle(t *testing.T) {
 		"并不能保证识别全部敏感信息", "| 自动 |", "| API |", "| 本地 |", "| 仅文档 |",
 		"降级为文档检索结果", "不调用模型", "不表示自建 GPU 服务已经启用",
 		"不承诺剩余额度或平台月预算硬限制", "不能提交、修改、停止或重启任务",
+		"状态原因", "提交的资源配置", "逻辑输入输出路径", "MLflow Run", "当前登录团队", "不会读取您的源码",
+		"完整错误信息", "操作系统", "文档标题", "实际回答模式",
 	} {
 		if !strings.Contains(menu.Markdown, marker) {
 			t.Errorf("published menu article missing assistant boundary %q", marker)

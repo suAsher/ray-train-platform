@@ -367,7 +367,7 @@ func TestAssistantPublishedEvidenceIsBoundedAndHasFixedLinks(t *testing.T) {
 		t.Fatalf("unexpected evidence count: %d", len(items))
 	}
 	for _, item := range items {
-		if len([]rune(item.Excerpt)) > 600 || item.URL != "/raytrain/rayTrain/help#article/"+item.ID || strings.Contains(item.Title, "evil.invalid") || item.ID == "e" {
+		if len([]rune(item.Excerpt)) > assistantExcerptLimit || item.URL != "/raytrain/rayTrain/help#article/"+item.ID || strings.Contains(item.Title, "evil.invalid") || item.ID == "e" {
 			t.Fatal("evidence was not safely bounded/ranked")
 		}
 	}

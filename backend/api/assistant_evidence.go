@@ -1,18 +1,14 @@
 package api
 
 import (
-	"context"
 	"fmt"
 	"regexp"
-	"sort"
 	"strings"
-	"unicode"
 
 	"github.com/gin-gonic/gin"
 	"ray-train-platform-backend/assistant"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
-	"ray-train-platform-backend/helpdocs"
 )
 
 var (
@@ -55,7 +51,7 @@ func assistantTruncate(text string, limit int) string {
 	return string(runes[:limit]) + "…"
 }
 
-func (h *Handler) assistantJobEvidence(c *gin.Context, id string, includeLogs bool, response *assistantQueryResponse) bool {
+func (h *Handler) assistantJobEvidence(c *gin.Context, id string, includeLogs bool, response *assistantQueryResponse, questions ...string) bool {
 	if h.repository == nil {
 		h.writeError(c, 503, "JOBS_UNAVAILABLE", "任务查询暂不可用")
 		return false
@@ -77,7 +73,13 @@ func (h *Handler) assistantJobEvidence(c *gin.Context, id string, includeLogs bo
 	}
 	title := "任务状态"
 	response.Context = &assistantJobContext{JobID: id, Status: status}
-	excerpt := "当前平台任务状态：" + status + "。这只是观察到的状态，不能单独证明故障原因。"
+	excerpt := "当前平台任务状态：" + status + "（查询时的观察快照）。"
+	if len(questions) > 0 {
+		excerpt += h.assistantTaskDetails(c.Request.Context(), *job, questions[0], includeLogs, response)
+	}
+	if job.LastObservedAt != nil {
+		excerpt += "\n任务状态最后观察时间：" + job.LastObservedAt.UTC().Format("2006-01-02T15:04:05Z")
+	}
 	if includeLogs && h.logs != nil {
 		request, err := NormalizeJobLogPageRequest("30", "backward", "", "")
 		if err == nil {
@@ -107,123 +109,20 @@ func (h *Handler) assistantJobEvidence(c *gin.Context, id string, includeLogs bo
 	return true
 }
 
-func (h *Handler) assistantDocuments(ctx context.Context, question string) ([]assistant.Evidence, bool) {
-	store, ok := h.helpDocuments.(HelpArticleStore)
-	if !ok {
-		return nil, false
-	}
-	articles, err := store.ListHelpArticles(ctx)
-	if err != nil {
-		return nil, false
-	}
-	tokens := assistantTerms(question)
-	type candidate struct {
-		evidence assistant.Evidence
-		score    int
-	}
-	matches := make([]candidate, 0, 4)
-	for _, article := range articles {
-		if !domain.ValidHelpID(article.ID) {
-			continue
-		}
-		// This store exposes the published projection, never draft/history reads.
-		doc := helpdocs.ProjectMLflowAccess(article.HelpDocument, h.mlflowNativePublicEnabled, h.mlflowDashboardPublicEnabled)
-		body := assistantPlainText(doc.Markdown, 64000)
-		title := assistantPlainText(doc.Title, 200)
-		metadata := strings.ToLower(title + " " + article.Summary + " " + strings.Join(article.Keywords, " "))
-		score := assistantMatchScore(metadata, tokens)*3 + assistantMatchScore(strings.ToLower(body), tokens)
-		if score == 0 {
-			continue
-		}
-		version := doc.PublishedVersion
-		if version == 0 {
-			version = doc.Version
-		}
-		matches = append(matches, candidate{score: score, evidence: assistant.Evidence{
-			ID: doc.ID, Title: title, URL: "/raytrain/rayTrain/help#article/" + doc.ID,
-			Excerpt: assistantBestExcerpt(body, tokens), Version: version,
-		}})
-	}
-	sort.SliceStable(matches, func(i, j int) bool {
-		if matches[i].score != matches[j].score {
-			return matches[i].score > matches[j].score
-		}
-		return matches[i].evidence.ID < matches[j].evidence.ID
-	})
-	if len(matches) > 4 {
-		matches = matches[:4]
-	}
-	result := make([]assistant.Evidence, 0, len(matches))
-	for _, match := range matches {
-		result = append(result, match.evidence)
-	}
-	return result, true
-}
-
-func assistantTerms(question string) []string {
-	words := strings.FieldsFunc(strings.ToLower(question), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' && r != '-' })
-	seen := make(map[string]bool)
-	var result []string
-	add := func(term string) {
-		if len([]rune(term)) < 2 || seen[term] {
-			return
-		}
-		seen[term] = true
-		result = append(result, term)
-	}
-	for _, word := range words {
-		add(word)
-		runes := []rune(word)
-		for i := 1; i < len(runes); i++ {
-			if unicode.Is(unicode.Han, runes[i-1]) && unicode.Is(unicode.Han, runes[i]) {
-				add(string(runes[i-1 : i+1]))
-			}
-		}
-	}
-	if len(result) > 128 {
-		result = result[:128]
-	}
-	return result
-}
-
-func assistantMatchScore(text string, terms []string) int {
-	score := 0
-	for _, term := range terms {
-		if strings.Contains(text, term) {
-			score++
-		}
-	}
-	return score
-}
-
-func assistantBestExcerpt(body string, terms []string) string {
-	best, score := "", -1
-	for _, paragraph := range strings.Split(body, "\n\n") {
-		// Long paragraphs are broken into bounded, overlapping source windows.
-		runes := []rune(strings.TrimSpace(paragraph))
-		for start := 0; start < len(runes); start += 480 {
-			end := start + 600
-			if end > len(runes) {
-				end = len(runes)
-			}
-			piece := string(runes[start:end])
-			current := assistantMatchScore(strings.ToLower(piece), terms)
-			if current > score {
-				best, score = piece, current
-			}
-		}
-	}
-	return best
-}
-
-func assistantDocsAnswer(evidence []assistant.Evidence) string {
+func assistantDocsAnswer(evidence []assistant.Evidence, questions ...string) string {
 	if len(evidence) == 0 {
-		return "没有找到与问题匹配的已发布文档或可用任务信息，因此目前没有足够依据回答。请补充具体功能、错误现象，或显式选择您有权查看的任务后再问。"
+		if len(questions) > 0 && assistantModelBudgetQuestion(questions[0]) {
+			return "没有找到当前模型额度的实时依据。团队 GPU 配额不能回答模型 API 余额；请说明使用的是哪个已配置模型服务，并让管理员核对该服务的额度或错误提示。不要提供 API Key。"
+		}
+		if len(questions) > 0 && assistantHasAny(questions[0], "失败", "报错", "原因", "状态") {
+			return "没有找到足够相关的依据。请显式选择要排查的任务，并提供具体错误信息；日志需要为本次问题单独勾选同意。不要发送令牌或密码。"
+		}
+		return "没有找到足够相关的已发布说明。您要操作哪项平台功能，当前位于哪个页面或正在执行哪条命令？请补充这两项信息后再问。"
 	}
-	parts := []string{"以下是检索到的原始依据（文档检索结果，未由模型生成诊断）："}
+	parts := []string{"根据本次检索到的说明和授权信息："}
 	for i, item := range evidence {
 		parts = append(parts, fmt.Sprintf("%d. %s\n%s", i+1, item.Title, item.Excerpt))
 	}
-	parts = append(parts, "建议核对顺序：先确认上述条目是否对应当前问题，再打开所附引用查看完整上下文；若仍无法解释现象，请补充具体报错和发生步骤。摘录以外的信息尚未验证。")
+	parts = append(parts, "以上为只读检索结果；命令由您核对后执行，助手没有执行任何操作。")
 	return strings.Join(parts, "\n\n")
 }

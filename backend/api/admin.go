@@ -47,6 +47,7 @@ func (h *Handler) recordAdministrativeAudit(c *gin.Context, event repositories.A
 }
 
 func (h *Handler) RegisterAdminRoutes(group *gin.RouterGroup) {
+	group.GET("/assistant/admin/status", func(c *gin.Context) { c.Header("Cache-Control", "no-store") }, auth.RequireInteractiveSession(false), h.assistantAdminStatus)
 	group.GET("/tenants/:id/retirement-preflight", h.tenantRetirementPreflight)
 	group.POST("/tenants/:id/retire", h.retireTenant)
 	group.GET("/gpu-allocations", h.listGPUAllocations)

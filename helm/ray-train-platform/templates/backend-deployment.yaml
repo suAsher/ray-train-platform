@@ -13,6 +13,9 @@ OIDC issuer. Local-only development does not. */}}
 {{- if not (regexMatch `^[^@[:space:]]+@sha256:[0-9a-fA-F]{64}$` .Values.backend.workspaceImage) }}{{- fail "backend.workspaceImage must use @sha256:<64 hex>" }}{{- end }}
 {{- $datasetPublisher := default (dict) .Values.datasetPublisher -}}
 {{- $assistant := default (dict) .Values.assistant -}}
+{{- if and (hasKey $assistant "idleNamespace") (not (kindIs "string" $assistant.idleNamespace)) }}{{- fail "assistant.idleNamespace must be a string" }}{{- end }}
+{{- $assistantIdleNamespace := default "" $assistant.idleNamespace -}}
+{{- if and $assistantIdleNamespace (or (gt (len $assistantIdleNamespace) 63) (not (regexMatch `^raytrain-assistant-[a-z0-9]([-a-z0-9]*[a-z0-9])?$` $assistantIdleNamespace))) }}{{- fail "assistant.idleNamespace must be a dedicated raytrain-assistant-* namespace" }}{{- end }}
 {{- if and (hasKey $assistant "enabled") (not (kindIs "bool" $assistant.enabled)) }}{{- fail "assistant.enabled must be boolean" }}{{- end }}
 {{- $kueuePreemption := default (dict) .Values.kueue.preemption -}}
 {{- $kueueTopology := default (dict) .Values.kueue.topology -}}
@@ -177,6 +180,10 @@ spec:
                 name: {{ include "ray-train-platform.datasetPublisher.resourceName" (list . "") }}
           {{- end }}
           env:
+            {{- if $assistantIdleNamespace }}
+            - name: ASSISTANT_IDLE_NAMESPACE
+              value: {{ $assistantIdleNamespace | quote }}
+            {{- end }}
             {{- if (default false $assistant.enabled) }}
             {{- include "ray-train-platform.assistantEnv" . | nindent 12 }}
             {{- end }}

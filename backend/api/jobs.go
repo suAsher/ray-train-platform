@@ -47,6 +47,10 @@ type globalJobReader interface {
 }
 
 type Handler struct {
+	assistantIdleNamespace       string
+	assistantStatusSource        AssistantStatusSource
+	assistantStatusHTTP          *http.Client
+	assistantStatusSlots         chan struct{}
 	assistant                    assistant.Engine
 	warehouseSync                *ws.Service
 	functionWarehouses           map[fw.Environment]FunctionWarehouseClient
@@ -164,6 +168,8 @@ type ExperimentProvider interface {
 }
 
 type Options struct {
+	AssistantIdleNamespace    string
+	AssistantStatusSource     AssistantStatusSource
 	Assistant                 assistant.Engine
 	FunctionWarehouses        map[fw.Environment]FunctionWarehouseClient
 	ModelServing              ms.Store
@@ -270,6 +276,13 @@ func NewHandler(repository JobRepository, options Options) *Handler {
 	handler.bootstrapTenant = strings.TrimSpace(options.BootstrapTenant)
 	handler.helpDocuments, _ = repository.(HelpDocumentStore)
 	handler.assistant = options.Assistant
+	handler.assistantIdleNamespace = options.AssistantIdleNamespace
+	handler.assistantStatusSource = options.AssistantStatusSource
+	if handler.assistantStatusSource == nil && handler.kubernetes != nil {
+		handler.assistantStatusSource = handler.kubernetes
+	}
+	handler.assistantStatusHTTP = newAssistantStatusHTTPClient()
+	handler.assistantStatusSlots = make(chan struct{}, 2)
 	if handler.dataSpaceUploads == nil {
 		handler.dataSpaceUploads, _ = repository.(DataSpaceUploadRepository)
 	}
