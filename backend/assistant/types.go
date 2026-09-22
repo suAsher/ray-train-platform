@@ -19,7 +19,7 @@ type Input struct {
 
 type Result struct {
 	Answer, Mode, Reason string
-	BackendID           string
+	BackendID            string
 }
 
 type ProviderStatus struct {

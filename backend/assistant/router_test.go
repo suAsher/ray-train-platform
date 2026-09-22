@@ -10,10 +10,10 @@ import (
 )
 
 type fakeProvider struct {
-	calls int
+	calls  int
 	answer string
-	err error
-	run func(context.Context) error
+	err    error
+	run    func(context.Context) error
 }
 
 func (p *fakeProvider) complete(ctx context.Context, _ Input) (string, error) {
@@ -35,8 +35,8 @@ func testRouter(providers ...*fakeProvider) *Router {
 
 func TestRoutingModesAndFallback(t *testing.T) {
 	for _, tc := range []struct {
-		mode string
-		want string
+		mode  string
+		want  string
 		calls [3]int
 	}{
 		{"docs", "docs", [3]int{0, 0, 0}},

@@ -74,8 +74,8 @@ func TestTransportNeverUsesEnvironmentProxy(t *testing.T) {
 func TestBudgetAndRateLimitAreDifferent(t *testing.T) {
 	for _, tc := range []struct {
 		status int
-		body string
-		want error
+		body   string
+		want   error
 	}{
 		{429, `{"error":{"code":"rate_limit_exceeded"}}`, errRateLimited},
 		{400, `{"error":{"type":"budget_exceeded"}}`, errBudget},
@@ -114,9 +114,9 @@ func TestHTTPProviderRejectsRedirectWithoutForwardingKey(t *testing.T) {
 
 func TestHTTPProviderRejectsUnsafeResponsesWithoutDisclosure(t *testing.T) {
 	for _, tc := range []struct {
-		name string
+		name   string
 		status int
-		body string
+		body   string
 	}{
 		{"oversize", 200, strings.Repeat("x", maxPayloadBytes+1)},
 		{"non-json", 200, "upstream secret"},
