@@ -24,7 +24,7 @@ func TestAssistantSourceMarkupPreservesCodeOperatorsAndPlaceholders(t *testing.T
 	want := "说明 入口\n\n" + code
 	for name, transform := range map[string]func(string) string{
 		"published": func(s string) string { return assistantPublishedText(s, 8000) },
-		"model": func(s string) string { return assistantGroundedText(s, 8000, []assistant.Evidence{}) },
+		"model":     func(s string) string { return assistantGroundedText(s, 8000, []assistant.Evidence{}) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := transform(input); got != want {

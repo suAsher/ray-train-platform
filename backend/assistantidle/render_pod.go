@@ -58,6 +58,12 @@ func RenderPod(cfg RenderConfig) (*unstructured.Unstructured, error) {
 	spec["volumes"] = volumes
 	spec["securityContext"].(map[string]any)["fsGroup"] = int64(1000)
 	env := container["env"].([]any)
+	// This is a fixed single-GPU process tree: internal vLLM transports must
+	// remain loopback even if an optional IPC path starts using TCP.
+	env = append(env,
+		map[string]any{"name": "VLLM_HOST_IP", "value": "127.0.0.1"},
+		map[string]any{"name": "VLLM_LOOPBACK_IP", "value": "127.0.0.1"},
+	)
 	for _, v := range []struct{ name, path string }{
 		{"ASSISTANT_TLS_CERT_FILE", "/run/assistant/tls/tls.crt"}, {"ASSISTANT_TLS_KEY_FILE", "/run/assistant/tls/tls.key"},
 		{"ASSISTANT_AUTH_TOKEN_FILE", "/run/assistant/auth/token"}, {"ASSISTANT_GATE_CA_FILE", "/run/assistant/gate-ca/ca.crt"},

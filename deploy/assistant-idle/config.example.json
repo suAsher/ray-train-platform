@@ -7,7 +7,7 @@
   "render": {
     "Name": "PLACEHOLDER_RAYSERVICE_NAME",
     "Namespace": "PLACEHOLDER_ASSISTANT_NAMESPACE",
-    "QueueName": "assistant-idle-localqueue",
+    "QueueName": "assistant-idle-private-lq",
     "ServeImage": "PLACEHOLDER_ASSISTANT_SERVE_IMAGE@sha256:PLACEHOLDER_64_HEX_DIGEST",
     "TLSSecretName": "assistant-inference-tls",
     "AuthSecretName": "assistant-inference-auth",

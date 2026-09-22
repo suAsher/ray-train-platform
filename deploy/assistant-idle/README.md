@@ -15,7 +15,7 @@ The existing List+Watch observation cache covers RayJobs, RayClusters, Workloads
 ## Required prepared resources
 
 - A dedicated `raytrain-assistant-` namespace. The ResourceQuota caps this namespace at one requested GPU; it does not change the local team's quota.
-- An existing LocalQueue pointing to `cluster-gpu-queue`; do not modify existing training queues, priorities, preemption, jobs, storage or CNI.
+- A dedicated `assistant-idle-private-cq` and new `assistant-idle-private-lq`, restricted to the dedicated namespace, reusing `gpu-4090-flavor`. The ledger caps CPU at 4, memory at 16Gi, GPU at 1 and Cello-injected `vke.volcengine.com/eni-ip` at 1. No cohort or preemption is enabled. Do not modify the old LocalQueue binding, shared `cluster-gpu-queue`, training quotas, Kueue global resource exclusions, jobs, storage or CNI.
 - An existing image pull Secret. `ImagePullSecrets: ["harbor-registry"]` configures inference; controller/reaper `imagePullSecrets` references `PLACEHOLDER_IMAGE_PULL_SECRET_NAME`. No manifest exports, copies or creates Harbor credentials.
 - `ModelPVC`, mounted read-only at `/models`. An `ebs-ssd` RWO PVC can constrain scheduling by zone and node affinity. Prepare the pinned image/model on the allowed worker nodes and retain the 10-minute startup budget.
 - Worker node allowlist and existing production GPU/cache-ready/4090 labels. Dedicated tenant nodes and their taints are excluded. No hostPath, host network, privileged container, user storage, or ServiceAccount token is mounted into inference.
@@ -36,3 +36,17 @@ The controller's read permissions observe existing workloads. Write permissions 
 Run controller `--mode=inspect` with the prepared config and credentials; it is read-only. Check the demand endpoint and TLS trust, then use only a separately authorized dedicated acceptance run to prove scheduling-gate removal and exact Workload Pod ownership/admission. Verify backend-to-inference TLS/auth, direct unauthenticated rejection, HTTPS gate access, demand-triggered draining/reclaim, lease-expiry reaping, and GPU release. Never restart or cancel a user's training for acceptance. Keep the assistant disabled if any required observation or admission evidence is missing.
 
 Controller command: `--config=/etc/assistant-idle/config.json --mode=controller --listen=:8443`. Reaper command: `--config=/etc/assistant-idle/config.json --mode=reaper`.
+
+## Independent queue accounting and rollout boundary
+
+The dedicated CQ is an additional one-GPU admission ledger, not a reservation or a physical capacity guarantee. It neither deducts one GPU from the shared training CQ nor borrows its quota. Kubernetes still schedules against actual node resources. With separate ledgers, simultaneous admissions can briefly exceed physical availability by one GPU; training may wait for the assistant to release that GPU. Training priority here is enforced by the controller's fresh platform-wide demand checks, gate revocation and deletion of its own low-priority Pod, with the existing reaper/deadline as fallback; there is no cross-CQ Kueue preemption guarantee. Real training-demand reclamation must be revalidated before enabling user traffic.
+
+Keep `enabled=false` while reviewing the rendered change. Create only the new CQ/LQ and update the assistant's explicit QueueName; do not patch the old LocalQueue's immutable `clusterQueue` reference. A still-pending old assistant Pod/Workload must be allowed to finish cleanup before re-enabling the controller with the new queue. Existing shared CQ/flavor specifications and training quota records must remain byte-for-byte unchanged. Review server-side dry-run and capture the new Workload owner UID, Admitted condition, ENI/GPU assignment, actual Pod resources and removal of the Kueue scheduling gate. If admission fails, keep traffic closed; do not delete ENI requests or remove scheduling gates manually.
+
+Rollback closes the controller gate and lets its owned Pod be removed, then returns to the previous disabled configuration. Only remove this newly created CQ/LQ after its own Workloads are gone; do not delete shared resources.
+
+Reference: [Kueue ClusterQueue resource quotas and flavors](https://kueue.sigs.k8s.io/docs/concepts/cluster_queue/), [Cohort sharing](https://kueue.sigs.k8s.io/docs/concepts/cohort/).
+
+The fixed single-GPU vLLM `mp` executor uses a file rendezvous and local IPC in the inspected pinned NVIDIA image. The Pod also pins `VLLM_HOST_IP` and `VLLM_LOOPBACK_IP` to `127.0.0.1` for internal transports. Do not replace the already-tested executor or infer that this source review proves the real process listener set: inspect the admitted Pod's actual TCP/TCP6 listeners before serving users.
+
+All namespaced manifests and the generated ConfigMap specify the dedicated namespace explicitly. Do not reintroduce a global Kustomize `namespace` transformer: it can incorrectly put a namespace on cluster-scoped Kueue custom resources. After substituting placeholders, confirm ClusterQueue/WorkloadPriorityClass remain cluster-scoped and the CQ namespace selector still matches only the intended namespace.

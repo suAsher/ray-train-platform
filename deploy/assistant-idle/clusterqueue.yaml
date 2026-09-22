@@ -1,0 +1,29 @@
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: assistant-idle-private-cq
+spec:
+  # An independent one-Pod ledger, not a reservation of a physical GPU.
+  # No cohort: never borrow or reclaim the training queues' quota.
+  namespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: PLACEHOLDER_ASSISTANT_NAMESPACE
+  queueingStrategy: StrictFIFO
+  preemption:
+    withinClusterQueue: Never
+    reclaimWithinCohort: Never
+    borrowWithinCohort:
+      policy: Never
+  resourceGroups:
+    - coveredResources: [cpu, memory, nvidia.com/gpu, vke.volcengine.com/eni-ip]
+      flavors:
+        - name: gpu-4090-flavor
+          resources:
+            - name: cpu
+              nominalQuota: "4"
+            - name: memory
+              nominalQuota: 16Gi
+            - name: nvidia.com/gpu
+              nominalQuota: "1"
+            - name: vke.volcengine.com/eni-ip
+              nominalQuota: "1"

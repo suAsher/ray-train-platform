@@ -118,3 +118,28 @@ func TestPodMissingAuthoritativeDemandFailsClosed(t *testing.T) {
 		t.Fatal("DB pending training was ignored")
 	}
 }
+
+func TestPrivatePodPinsInternalVLLMListenersToLoopback(t *testing.T) {
+	cfg := podRenderConfig()
+	pod, err := RenderPod(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	containers, _, _ := unstructured.NestedSlice(pod.Object, "spec", "containers")
+	env := containers[0].(map[string]any)["env"].([]any)
+	for _, name := range []string{"VLLM_HOST_IP", "VLLM_LOOPBACK_IP"} {
+		count := 0
+		for _, entry := range env {
+			value := entry.(map[string]any)
+			if value["name"] == name {
+				count++
+				if value["value"] != "127.0.0.1" {
+					t.Fatalf("%s must bind loopback", name)
+				}
+			}
+		}
+		if count != 1 {
+			t.Fatalf("%s must be explicit and unique", name)
+		}
+	}
+}

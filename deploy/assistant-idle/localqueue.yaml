@@ -1,9 +1,8 @@
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: LocalQueue
 metadata:
-  name: assistant-idle-localqueue
+  # New name: do not mutate the existing LocalQueue's immutable CQ binding.
+  name: assistant-idle-private-lq
   namespace: PLACEHOLDER_ASSISTANT_NAMESPACE
 spec:
-  # Reference an existing ClusterQueue. Do not create, patch, or reconfigure the
-  # production training ClusterQueue from this standalone assistant manifest.
-  clusterQueue: cluster-gpu-queue
+  clusterQueue: assistant-idle-private-cq

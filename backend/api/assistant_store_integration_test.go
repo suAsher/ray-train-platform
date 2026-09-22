@@ -166,7 +166,7 @@ func TestAssistantPublishedStorePostgresActionableInstructions(t *testing.T) {
 	h := NewHandler(store, Options{Assistant: engine, MLflowNativePublicEnabled: true, MLflowDashboardPublicEnabled: true})
 	for _, tc := range []struct {
 		name, question string
-		markers []string
+		markers        []string
 	}{
 		{"local-cli", "代码在我本地电脑上，想用 CLI 提交训练，怎么操作？", []string{"spk-rayjob login", "spk-rayjob login-check", "--dir .", "--entrypoint", "spk-rayjob status JOB_ID", "spk-rayjob logs -f JOB_ID"}},
 		{"local-cli-synonym", "本机源码用命令行怎么上传并跑起来？", []string{"--dir .", "--entrypoint", "spk-rayjob status JOB_ID"}},
@@ -178,7 +178,9 @@ func TestAssistantPublishedStorePostgresActionableInstructions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			body, _ := json.Marshal(assistantQueryRequest{Question: tc.question, Mode: "auto"})
 			w := assistantRequest(assistantTestRouter(h, assistantTestPrincipal()), string(body))
-			var response struct { Data assistantQueryResponse `json:"data"` }
+			var response struct {
+				Data assistantQueryResponse `json:"data"`
+			}
 			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &response) != nil || len(response.Data.Citations) == 0 {
 				t.Fatalf("query failed: %d %s", w.Code, w.Body.String())
 			}
@@ -200,7 +202,9 @@ func TestAssistantPublishedStorePostgresActionableInstructions(t *testing.T) {
 func TestAssistantPublishedStorePostgresDoesNotDenySavedUserImages(t *testing.T) {
 	_, store := assistantPostgresStore(t)
 	articles, err := store.ListHelpArticles(context.Background())
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, article := range articles {
 		if strings.Contains(article.Markdown, "用户不能自行登记镜像") {
 			t.Errorf("published article %s still denies the saved-environment capability", article.ID)

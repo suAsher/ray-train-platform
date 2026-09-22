@@ -1,8 +1,12 @@
 package assistantidle
 
 import (
+	"fmt"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sigs.k8s.io/yaml"
 	"strings"
 	"testing"
 )
@@ -31,12 +35,12 @@ func TestAssistantIdleDeployReferenceMatchesRendererContract(t *testing.T) {
 	mustContain(t, files["namespace.yaml"], "app.kubernetes.io/part-of: ray-train-platform")
 	mustContain(t, files["resourcequota.yaml"], "requests.nvidia.com/gpu: \"1\"")
 	mustNotContain(t, files["resourcequota.yaml"], "limits.nvidia.com/gpu")
-	mustContain(t, files["localqueue.yaml"], "clusterQueue: cluster-gpu-queue")
+	mustContain(t, files["localqueue.yaml"], "clusterQueue: assistant-idle-private-cq")
 	mustContain(t, files["workloadpriorityclass.yaml"], "kind: WorkloadPriorityClass")
 	mustContain(t, files["workloadpriorityclass.yaml"], "value: -2000")
 
 	for _, key := range []string{
-		"\"QueueName\": \"assistant-idle-localqueue\"",
+		"\"QueueName\": \"assistant-idle-private-lq\"",
 		"\"platform.wellspiking.ai/gpu-pool\": \"production\"",
 		"\"platform.wellspiking.ai/cache-ready\": \"true\"",
 		"\"accelerator\": \"nvidia-rtx-4090\"",
@@ -97,4 +101,102 @@ func mustNotContain(t *testing.T, haystack, needle string) {
 	if strings.Contains(haystack, needle) {
 		t.Fatalf("unexpected %q in:\n%s", needle, haystack)
 	}
+}
+
+func TestAssistantPrivateQueueAccountsForInjectedENIWithoutSharedQuota(t *testing.T) {
+	root := filepath.Join("..", "..", "deploy", "assistant-idle")
+	read := func(name string) map[string]any {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var value map[string]any
+		if err = yaml.Unmarshal(data, &value); err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	cq := read("clusterqueue.yaml")
+	if cq["kind"] != "ClusterQueue" || cq["metadata"].(map[string]any)["name"] != "assistant-idle-private-cq" {
+		t.Fatal("unexpected cluster queue identity")
+	}
+	spec := cq["spec"].(map[string]any)
+	wantSelector := map[string]any{"matchLabels": map[string]any{"kubernetes.io/metadata.name": "PLACEHOLDER_ASSISTANT_NAMESPACE"}}
+	if !reflect.DeepEqual(spec["namespaceSelector"], wantSelector) {
+		t.Fatal("queue must select only dedicated namespace")
+	}
+	if value, ok := spec["cohort"]; ok && value != "" {
+		t.Fatal("must not borrow from training cohort")
+	}
+	wantPreemption := map[string]any{"withinClusterQueue": "Never", "reclaimWithinCohort": "Never", "borrowWithinCohort": map[string]any{"policy": "Never"}}
+	if !reflect.DeepEqual(spec["preemption"], wantPreemption) {
+		t.Fatal("preemption must remain disabled")
+	}
+	groups := spec["resourceGroups"].([]any)
+	if len(groups) != 1 {
+		t.Fatal("one resource group required")
+	}
+	group := groups[0].(map[string]any)
+	want := map[string]string{"cpu": "4", "memory": "16Gi", "nvidia.com/gpu": "1", "vke.volcengine.com/eni-ip": "1"}
+	covered := group["coveredResources"].([]any)
+	if len(covered) != len(want) {
+		t.Fatal("resource coverage mismatch")
+	}
+	for _, name := range covered {
+		if _, ok := want[fmt.Sprint(name)]; !ok {
+			t.Fatal("unexpected resource")
+		}
+	}
+	flavors := group["flavors"].([]any)
+	if len(flavors) != 1 {
+		t.Fatal("one existing flavor required")
+	}
+	flavor := flavors[0].(map[string]any)
+	if flavor["name"] != "gpu-4090-flavor" {
+		t.Fatal("existing flavor must be reused")
+	}
+	resources := flavor["resources"].([]any)
+	if len(resources) != len(want) {
+		t.Fatal("quota count mismatch")
+	}
+	seen := map[string]bool{}
+	for _, item := range resources {
+		r := item.(map[string]any)
+		name := fmt.Sprint(r["name"])
+		expected, ok := want[name]
+		if !ok || seen[name] {
+			t.Fatal("unexpected or duplicate quota")
+		}
+		seen[name] = true
+		actual, err := resource.ParseQuantity(fmt.Sprint(r["nominalQuota"]))
+		if err != nil || actual.Cmp(resource.MustParse(expected)) != 0 {
+			t.Fatalf("wrong quota for %s", name)
+		}
+		if len(r) != 2 {
+			t.Fatal("no borrowing/lending overrides allowed")
+		}
+	}
+	lq := read("localqueue.yaml")
+	if lq["metadata"].(map[string]any)["name"] != "assistant-idle-private-lq" || lq["spec"].(map[string]any)["clusterQueue"] != "assistant-idle-private-cq" {
+		t.Fatal("must create new LocalQueue, not mutate old immutable binding")
+	}
+	kustomization, err := os.ReadFile(filepath.Join(root, "kustomization.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, string(kustomization), "- clusterqueue.yaml")
+	mustNotContain(t, string(kustomization), "cluster-gpu-queue")
+	var kust map[string]any
+	if err := yaml.Unmarshal(kustomization, &kust); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := kust["namespace"]; ok {
+		t.Fatal("global namespace transformer must not scope ClusterQueue")
+	}
+	generators := kust["configMapGenerator"].([]any)
+	if generators[0].(map[string]any)["namespace"] != "PLACEHOLDER_ASSISTANT_NAMESPACE" {
+		t.Fatal("generated ConfigMap must remain namespaced")
+	}
+
 }
