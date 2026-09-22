@@ -35,9 +35,20 @@ class LocalGate(Gate):
 
 class IngressSmoke(unittest.IsolatedAsyncioTestCase):
     async def test_real_ingress_routes_lifecycle_and_cancellation(self):
-        with patch.object(service, "VLLMEngine", LocalEngine), patch.object(service, "HTTPGate", LocalGate):
-            replica = service.AssistantDeployment.func_or_class()
+        wrapped = service.AssistantDeployment.func_or_class
+        # Ray cloudpickles the user class and its globals. Patching the source
+        # module misses that copy; inject only into the actual user constructor
+        # behind the real ingress wrapper, without replacing its ASGI behavior.
+        user_class = next(cls for cls in wrapped.__mro__[1:]
+                          if cls.__name__ == "AssistantDeployment" and "__init__" in cls.__dict__)
+        constructor_globals = user_class.__dict__["__init__"].__globals__
+        self.assertIn("VLLMEngine", constructor_globals)
+        self.assertIn("HTTPGate", constructor_globals)
+        with patch.dict(constructor_globals, {"VLLMEngine": LocalEngine, "HTTPGate": LocalGate}):
+            replica = wrapped()
         self.assertTrue(hasattr(replica, "runtime"), "Ray ingress must initialize the runtime synchronously")
+        self.assertIsInstance(replica.runtime.engine, LocalEngine)
+        self.assertIsInstance(replica.runtime.gate, LocalGate)
         await replica._run_asgi_lifespan_startup()
         try:
             transport = httpx.ASGITransport(app=replica)
