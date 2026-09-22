@@ -4,6 +4,7 @@ Run explicitly after stdlib unit tests. It uses no cluster, GPU or socket;
 only the vLLM engine and controller transport are replaced with test doubles.
 """
 import asyncio
+import inspect
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -45,8 +46,13 @@ class IngressSmoke(unittest.IsolatedAsyncioTestCase):
         self.assertIn("VLLMEngine", constructor_globals)
         self.assertIn("HTTPGate", constructor_globals)
         with patch.dict(constructor_globals, {"VLLMEngine": LocalEngine, "HTTPGate": LocalGate}):
-            replica = wrapped()
-        self.assertTrue(hasattr(replica, "runtime"), "Ray ingress must initialize the runtime synchronously")
+            # Match Ray's replica initialization: its ingress wrapper may have
+            # an async constructor, which Python's ordinary class call cannot await.
+            replica = wrapped.__new__(wrapped)
+            initialized = replica.__init__()
+            if inspect.isawaitable(initialized):
+                await initialized
+        self.assertTrue(hasattr(replica, "runtime"), "Ray ingress must initialize the runtime")
         self.assertIsInstance(replica.runtime.engine, LocalEngine)
         self.assertIsInstance(replica.runtime.gate, LocalGate)
         await replica._run_asgi_lifespan_startup()
