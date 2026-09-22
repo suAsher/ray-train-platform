@@ -52,6 +52,7 @@ func NewHTTPDemandObserver(tokenFile, caFile string) (*HTTPDemandObserver, error
 		tlsConfig.RootCAs = roots
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
 	transport.TLSClientConfig = tlsConfig
 	return &HTTPDemandObserver{client: &http.Client{Transport: transport, Timeout: 1500 * time.Millisecond, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, token: token, url: demandURL, now: time.Now}, nil
 }

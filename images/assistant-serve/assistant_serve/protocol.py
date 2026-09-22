@@ -124,24 +124,11 @@ def prepare_request(body, tokenizer):
     tokens = encode(sources)
     truncated = len(tokens) > budget
     while len(tokens) > budget and sources:
-        prefix = sources[:-1]
-        prefix_tokens = encode(prefix)
-        if len(prefix_tokens) > budget:
-            sources, tokens = prefix, prefix_tokens
-            continue
-        item = sources[-1]
-        low, high = 0, len(item["excerpt"])
-        best_sources, best_tokens = prefix, prefix_tokens
-        while low <= high:
-            middle = (low + high) // 2
-            candidate = prefix + [{**item, "excerpt": item["excerpt"][:middle] + "…"}]
-            candidate_tokens = encode(candidate)
-            if len(candidate_tokens) <= budget:
-                best_sources, best_tokens = candidate, candidate_tokens
-                low = middle + 1
-            else:
-                high = middle - 1
-        sources, tokens = best_sources, best_tokens
+        # Evidence is atomic: truncating an excerpt can remove a shell guard,
+        # argument, closing quote, or code fence and change its meaning. Drop
+        # the lowest-ranked complete source; never cut question/system text.
+        sources = sources[:-1]
+        tokens = encode(sources)
     # Re-render the actual selected source set. This is also the only token
     # sequence sent to vLLM; engine-side re-tokenization cannot drop the question.
     tokens = encode(sources)

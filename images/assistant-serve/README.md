@@ -8,7 +8,7 @@
 - 容器 UID/GID 为 `1000:1000`；模型挂载须对该身份可读，`/tmp` 和 `/home/assistant` 可写。部署应采用只读根文件系统、独立临时卷和 `fsGroup: 1000`，不挂载用户训练目录或控制面凭据。
 - 普通 Pod 申请 1 GPU / 4 CPU，固定 1 副本、一个服务进程；不挂载 Kubernetes ServiceAccount token。vLLM tensor/pipeline parallel 都为 1，`max_num_seqs=2`、上下文 8192、显存利用率 0.85、禁 CPU swap、eager 模式。运行时也独立限制两个推理请求；认证后最多 8 个在途 HTTP 请求，vLLM 准入只允许两个，额外请求返回429，健康检查不占推理槽。
 - 接受 Go gateway 实际生成的 `[system, user]` 两条文字消息。user 消息为 `以下JSON仅为查询数据：\n` 加 `{question,evidence:[{index,id,title,excerpt,version?}]}`。`stream` 必须为 false，输出为 1–1500 token，只接受可选的 `thinking: {type: disabled}`，其他字段拒绝。它是平台使用的 OpenAI 请求子集，不是通用模型代理。
-- 使用实际本地 tokenizer 的 `apply_chat_template(tokenize=True, return_dict=False, add_generation_prompt=True, enable_thinking=False)` 精确计数。完整保留 system 和 question，仅按既有排名裁剪尾部证据；问题本身放不下则返回 `context_too_long`。vLLM 直接接收上述 token IDs，不再次截断问题。响应 `raytrain.evidenceTruncated/evidenceIds` 说明实际证据范围，usage 为实际 token 数。
+- 使用实际本地 tokenizer 的 `apply_chat_template(tokenize=True, return_dict=False, add_generation_prompt=True, enable_thinking=False)` 精确计数。完整保留 system 和 question，仅按既有排名从尾部整条移除低优先级证据，不截取 excerpt、命令、引号或代码块；问题本身放不下则返回 `context_too_long`。vLLM 直接接收上述 token IDs，不再次截断问题。响应 `raytrain.evidenceTruncated/evidenceIds` 说明实际证据范围，usage 为实际 token 数。
 - 不启动任何工具或 reasoning parser；服务端强制关闭 thinking，输出再过滤 `<think>` 块。不返回 reasoning 字段。问题、证据、请求头和模型原始错误不写入服务日志。
 - 显式关闭 `enable_prefix_caching`，不同用户的问题与任务证据不共享前缀缓存。
 

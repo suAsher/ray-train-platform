@@ -32,6 +32,30 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(set(prepared.evidence_ids).issubset({"doc:0", "doc:1", "doc:2"}))
         self.assertEqual(evidence[0]["excerpt"], "内容" * 1600)
 
+    def test_context_pressure_drops_whole_sources_never_partial_commands(self):
+        command = "先核对目标文件，然后完整执行：\n```bash\nspk-rayjob submit --entrypoint 'python train.py' \\\n  --name '" + "x" * 10000 + "' --workers 1 --gpus-per-worker 1\n```\n完成后核对任务状态。"
+        for keep_first in (False, True):
+            with self.subTest(keep_first=keep_first):
+                evidence = []
+                if keep_first:
+                    evidence.append({"index": 1, "id": "high-priority", "title": "前提", "excerpt": "核对当前团队和配额。"})
+                evidence.append({"index": len(evidence) + 1, "id": "long-command", "title": "完整命令", "excerpt": command})
+                # A later small source must not displace a higher-ranked source.
+                evidence.append({"index": len(evidence) + 1, "id": "low-priority", "title": "补充", "excerpt": "低优先级说明"})
+                original = json.dumps(evidence, ensure_ascii=False)
+                tokenizer = Tokenizer()
+                question = "如何提交训练？不要省略参数。"
+                prepared = prepare_request(request(question, evidence), tokenizer)
+                envelope = json.loads(tokenizer.messages[1]["content"][len(ENVELOPE_PREFIX):])
+                expected = evidence[:1] if keep_first else []
+                self.assertEqual(envelope["evidence"], expected)
+                self.assertEqual(prepared.evidence_ids, tuple(item["id"] for item in expected))
+                self.assertTrue(prepared.evidence_truncated)
+                self.assertEqual(envelope["question"], question)
+                self.assertEqual(tokenizer.messages[0]["content"], "只读助手，只根据证据回答。")
+                self.assertLessEqual(len(prepared.token_ids) + prepared.max_tokens, 8192)
+                self.assertEqual(json.dumps(evidence, ensure_ascii=False), original)
+
     def test_oversized_question_is_rejected_instead_of_truncated(self):
         with self.assertRaises(ServiceError) as raised:
             prepare_request(request("问" * 4000), Tokenizer(multiplier=3))

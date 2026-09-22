@@ -151,13 +151,10 @@ func assistantDeploymentsReady(deployments []k8s.AssistantDeploymentStatus) bool
 }
 func (h *Handler) readAssistantControllerStatus(ctx context.Context, namespace string) (assistantidle.ControllerStatus, string) {
 	empty := assistantidle.ControllerStatus{State: assistantidle.StateUnknown, Reason: "awaiting_observation"}
-	if h.assistantStatusHTTP == nil || namespace == "" || config.ValidateAssistantIdleNamespace(namespace) != nil {
+	if h.assistantStatusHTTP == nil || h.assistantControllerCAFile == "" || namespace == "" || config.ValidateAssistantIdleNamespace(namespace) != nil {
 		return empty, "controller_unavailable"
 	}
-	target := "http://assistant-idle-controller." + namespace + ".svc.cluster.local:8080/status"
-	if h.assistantControllerCAFile != "" {
-		target = "https://assistant-idle-controller." + namespace + ".svc.cluster.local:8443/status"
-	}
+	target := "https://assistant-idle-controller." + namespace + ".svc.cluster.local:8443/status"
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return empty, "controller_unavailable"

@@ -126,9 +126,9 @@ func TestAssistantAdminControllerBoundsAndFreshness(t *testing.T) {
 			if tc.raw != "" {
 				raw = []byte(tc.raw)
 			}
-			h := NewHandler(&fakeJobRepository{}, Options{})
+			h := NewHandler(&fakeJobRepository{}, Options{AssistantControllerCAFile: "/test/status-ca.crt"})
 			h.assistantStatusHTTP = &http.Client{Transport: assistantStatusRoundTrip(func(r *http.Request) (*http.Response, error) {
-				if r.URL.String() != "http://assistant-idle-controller.raytrain-assistant-test.svc.cluster.local:8080/status" || r.Method != "GET" || r.Header.Get("Authorization") != "" {
+				if r.URL.String() != "https://assistant-idle-controller.raytrain-assistant-test.svc.cluster.local:8443/status" || r.Method != "GET" || r.Header.Get("Authorization") != "" {
 					t.Fatal("unsafe status request")
 				}
 				return &http.Response{StatusCode: tc.code, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(string(raw)))}, nil
@@ -148,7 +148,7 @@ func TestAssistantAdminControllerHTTPRejectsProxyRedirectAndCancellation(t *test
 	if err := client.CheckRedirect(&http.Request{}, nil); err != http.ErrUseLastResponse {
 		t.Fatal("redirect enabled")
 	}
-	h := NewHandler(&fakeJobRepository{}, Options{})
+	h := NewHandler(&fakeJobRepository{}, Options{AssistantControllerCAFile: "/test/status-ca.crt"})
 	h.assistantStatusHTTP = &http.Client{Transport: assistantStatusRoundTrip(func(r *http.Request) (*http.Response, error) { <-r.Context().Done(); return nil, r.Context().Err() })}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -207,7 +207,7 @@ func TestAssistantAdminReadinessRequiresEveryFreshSignal(t *testing.T) {
 			}
 			status := assistantidle.ControllerStatus{Enabled: tc.enabled, State: assistantidle.StateReady, Reason: "service_ready", ObservedAt: &now, Gate: assistantidle.GateStatus{Allow: tc.gate, Epoch: "epoch", ValidUntil: now.Add(3 * time.Second)}}
 			raw, _ := json.Marshal(status)
-			h := NewHandler(&fakeJobRepository{}, Options{AssistantIdleNamespace: ns, AssistantStatusSource: assistantStatusSourceFunc(func(ctx context.Context, n string) (k8s.AssistantIdleStatus, error) {
+			h := NewHandler(&fakeJobRepository{}, Options{AssistantIdleNamespace: ns, AssistantControllerCAFile: "/test/status-ca.crt", AssistantStatusSource: assistantStatusSourceFunc(func(ctx context.Context, n string) (k8s.AssistantIdleStatus, error) {
 				if n != ns {
 					t.Fatal("wrong namespace")
 				}

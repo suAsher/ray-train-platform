@@ -2,6 +2,8 @@ package assistantidle
 
 import (
 	"context"
+	"crypto/tls"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -55,5 +57,32 @@ func TestHTTPDemandObserverRequiresFreshValidAuthenticatedTLSObservation(t *test
 				t.Fatalf("pending=%t err=%v", got, err)
 			}
 		})
+	}
+}
+
+func TestHTTPDemandObserverDisablesEnvironmentProxyButKeepsTLSAndRedirectPolicy(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+	token := strings.Repeat("b", 64)
+	file := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(file, []byte(token), 0600); err != nil {
+		t.Fatal(err)
+	}
+	observer, err := NewHTTPDemandObserver(file, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, ok := observer.client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("unexpected transport type %T", observer.client.Transport)
+	}
+	if transport.Proxy != nil {
+		t.Fatal("assistant demand observer must not inherit environment proxy settings")
+	}
+	if transport.TLSClientConfig == nil || transport.TLSClientConfig.MinVersion != tls.VersionTLS12 {
+		t.Fatalf("assistant demand observer lost TLS policy: %+v", transport.TLSClientConfig)
+	}
+	request := httptest.NewRequest(http.MethodGet, "https://raytrain.wellspiking.ai/redirect", nil)
+	if err := observer.client.CheckRedirect(request, []*http.Request{request}); !errors.Is(err, http.ErrUseLastResponse) {
+		t.Fatalf("assistant demand observer redirect policy changed: %v", err)
 	}
 }

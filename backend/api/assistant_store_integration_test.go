@@ -149,6 +149,13 @@ func TestAssistantPublishedStorePostgresCommonUserQuestions(t *testing.T) {
 			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &response) != nil || len(response.Data.Citations) == 0 || response.Data.Citations[0].ID != tc.first || response.Data.Mode != "local" {
 				t.Fatalf("common user question did not reach the model with relevant evidence: %d %s", w.Code, w.Body.String())
 			}
+			if tc.first == "quickstart" {
+				for _, instruction := range []string{"python3 train.py", "ray-ddp", "空间与相对目录"} {
+					if !strings.Contains(response.Data.Citations[0].Excerpt, instruction) {
+						t.Errorf("first-job excerpt omitted actionable instruction %q: %s", instruction, response.Data.Citations[0].Excerpt)
+					}
+				}
+			}
 		})
 	}
 }

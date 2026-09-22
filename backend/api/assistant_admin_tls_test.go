@@ -67,3 +67,13 @@ func TestAssistantAdminStatusUsesFixedHTTPSPathWhenCAConfigured(t *testing.T) {
 		t.Fatal("failed status observation opened gate")
 	}
 }
+
+func TestAssistantAdminStatusMissingCARejectsLegacyHTTPFallback(t *testing.T) {
+    h := NewHandler(&fakeJobRepository{}, Options{})
+    h.assistantStatusHTTP = &http.Client{Transport:assistantStatusRoundTrip(func(*http.Request) (*http.Response,error) {
+        t.Fatal("missing CA must not contact any legacy endpoint")
+        return nil, nil
+    })}
+    got, reason := h.readAssistantControllerStatus(context.Background(), "raytrain-assistant-test")
+    if reason != "controller_unavailable" || got.Gate.Allow { t.Fatal("missing CA allowed status observation") }
+}
