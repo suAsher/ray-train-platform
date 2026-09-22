@@ -7,7 +7,7 @@ import (
 )
 
 func TestRuntimeConfigRejectsUnsafeOrUnknownConfiguration(t *testing.T) {
-	cfg := RuntimeConfig{InstanceID: "assistant-idle", LeaseName: "assistant-idle", Render: RenderConfig{Name: "assistant-idle", Namespace: "raytrain-assistant-idle", QueueName: "assistant-idle", ServeImage: "harbor.wellspiking.ai/public/assistant@sha256:" + strings.Repeat("a", 64), ModelPVC: "assistant-model", GateURL: "http://assistant-gate.raytrain-assistant-idle.svc.cluster.local:8080/gate", AllowedWorkerNodes: []string{"shared-gpu"}, RequiredNodeLabels: map[string]string{"accelerator": "nvidia-rtx-4090"}}}
+	cfg := RuntimeConfig{InstanceID: "assistant-idle", LeaseName: "assistant-idle", Render: RenderConfig{Name: "assistant-idle", Namespace: "raytrain-assistant-idle", QueueName: "assistant-idle", ServeImage: "harbor.wellspiking.ai/public/assistant@sha256:" + strings.Repeat("a", 64), ModelPVC: "assistant-model", ImagePullSecrets: []string{"harbor-registry"}, GateURL: "http://assistant-gate.raytrain-assistant-idle.svc.cluster.local:8080/gate", AllowedWorkerNodes: []string{"shared-gpu"}, RequiredNodeLabels: map[string]string{"accelerator": "nvidia-rtx-4090"}}}
 	data, _ := json.Marshal(cfg)
 	if _, err := ParseRuntimeConfig(strings.NewReader(string(data))); err != nil {
 		t.Fatal(err)

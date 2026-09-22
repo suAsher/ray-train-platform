@@ -91,3 +91,30 @@ func hasPinnedKubeRayOperatorPeer(policy networkPolicyContract) bool {
 	}
 	return false
 }
+
+func TestAssistantIdleDeployReferencesPreparedImagePullSecretsAndModelPVC(t *testing.T) {
+	root := filepath.Join("..", "..", "deploy", "assistant-idle")
+	files := map[string]string{}
+	for _, name := range []string{"config.example.json", "deployment-controller.yaml", "deployment-reaper.yaml", "README.md"} {
+		body, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		files[name] = string(body)
+	}
+
+	mustContain(t, files["config.example.json"], `"ImagePullSecrets": ["harbor-registry"]`)
+	for _, name := range []string{"deployment-controller.yaml", "deployment-reaper.yaml"} {
+		mustContain(t, files[name], "imagePullSecrets:")
+		mustContain(t, files[name], "name: PLACEHOLDER_IMAGE_PULL_SECRET_NAME")
+	}
+
+	readme := files["README.md"]
+	mustContain(t, readme, "harbor-registry")
+	mustContain(t, readme, "ImagePullSecrets")
+	mustContain(t, readme, "imagePullSecrets")
+	mustContain(t, readme, "ModelPVC")
+	mustContain(t, readme, "ebs-ssd")
+	mustContain(t, readme, "RWO")
+	mustContain(t, readme, "node affinity")
+}

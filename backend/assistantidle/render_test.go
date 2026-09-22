@@ -15,6 +15,7 @@ func validRenderConfig() RenderConfig {
 		QueueName:          "assistant-idle-localqueue",
 		ServeImage:         "harbor.wellspiking.ai/assistant/assistant-serve@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		ModelPVC:           "qwen3-8b-awq-cache",
+		ImagePullSecrets:   []string{"harbor-registry"},
 		GateURL:            "http://assistant-idle-controller.raytrain-assistant-system.svc.cluster.local:8080/gate",
 		AllowedWorkerNodes: []string{"gpu-node-a", "gpu-node-b"},
 		InstanceID:         "assistant-idle-acceptance",
@@ -41,6 +42,8 @@ func TestRenderRayServiceValidatesImmutableInputs(t *testing.T) {
 	for name, mutate := range map[string]func(*RenderConfig){
 		"missing digest":             func(c *RenderConfig) { c.ServeImage = "harbor.wellspiking.ai/assistant/assistant-serve:latest" },
 		"missing model pvc":          func(c *RenderConfig) { c.ModelPVC = "" },
+		"unsafe pull secret":         func(c *RenderConfig) { c.ImagePullSecrets = []string{"harbor/registry"} },
+		"duplicate pull secret":      func(c *RenderConfig) { c.ImagePullSecrets = []string{"harbor-registry", "harbor-registry"} },
 		"missing queue":              func(c *RenderConfig) { c.QueueName = "" },
 		"missing allowed nodes":      func(c *RenderConfig) { c.AllowedWorkerNodes = nil },
 		"unsafe namespace":           func(c *RenderConfig) { c.Namespace = "raytrain_assistant" },
@@ -110,6 +113,17 @@ func TestRenderRayServiceUsesKueueSuspendedSingleGPUShape(t *testing.T) {
 	limits := stringMap(t, resources["limits"])
 	if limits["nvidia.com/gpu"] != "1" || limits["memory"] != "16Gi" {
 		t.Fatalf("worker resource limits are not bounded: %v", limits)
+	}
+}
+
+func TestRenderRayServicePropagatesImagePullSecretsToHeadAndWorker(t *testing.T) {
+	obj := renderForTest(t, validRenderConfig())
+	headSecrets := asSlice(t, at(t, obj.Object, "spec", "rayClusterConfig", "headGroupSpec", "template", "spec", "imagePullSecrets"))
+	workerSecrets := asSlice(t, at(t, obj.Object, "spec", "rayClusterConfig", "workerGroupSpecs", 0, "template", "spec", "imagePullSecrets"))
+	for name, secrets := range map[string][]any{"head": headSecrets, "worker": workerSecrets} {
+		if len(secrets) != 1 || fmt.Sprint(asMap(t, secrets[0])["name"]) != "harbor-registry" {
+			t.Fatalf("%s imagePullSecrets=%#v, want harbor-registry", name, secrets)
+		}
 	}
 }
 
