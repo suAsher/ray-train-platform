@@ -16,10 +16,16 @@ RUN ASSISTANT_BASE_REF="${ASSISTANT_BASE_IMAGE}" python3 -c 'import os, re; asse
  && VLLM_EXPECTED="${VLLM_VERSION}" CUDA_EXPECTED="${TORCH_CUDA_VERSION}" \
     python3 -c 'import importlib.metadata as m, os, torch; from packaging.version import Version; assert Version(m.version("vllm")).public == os.environ["VLLM_EXPECTED"]; assert torch.version.cuda == os.environ["CUDA_EXPECTED"]' \
  && python3 -c 'import importlib.metadata as m; native={"vllm", "torch", "torchaudio", "torchvision", "torchcodec", "torch-c-dlpack-ext", "triton", "tilelang", "apache-tvm-ffi", "quack-kernels", "humming-kernels", "pynvvideocodec", "deep-ep", "nccl4py"}; names={d.metadata["Name"].lower().replace("_", "-"):d.version for d in m.distributions()}; pins=sorted(name+"=="+version for name,version in names.items() if name != "nvidia-nccl-cu12" and (name in native or name.startswith(("nvidia-", "flashinfer-", "cuda-", "nixl", "tokenspeed-", "cupy-")))); print("\n".join(pins))' > /opt/assistant/native-constraints.txt \
+ && python3 -c 'import sysconfig; assert sysconfig.get_path("purelib") == "/usr/local/lib/python3.12/dist-packages"' \
+ && python3 -m pip install --ignore-installed --only-binary=:all: --no-cache-dir \
+      --index-url "${PIP_INDEX_URL}" -c /opt/assistant/native-constraints.txt \
+      --report /opt/assistant/httplib2-install.json "httplib2==0.32.0" \
+ && dpkg -V python3-httplib2 \
  && python3 -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
       -c /opt/assistant/native-constraints.txt \
       "ray[serve]==${RAY_VERSION}" "vllm==${VLLM_VERSION}" -r /opt/assistant/requirements.txt \
  && python3 -m pip check \
+ && python3 -c 'import httplib2, importlib.metadata as m; from pathlib import Path; assert httplib2.__version__ == m.version("httplib2") == "0.32.0"; assert Path(httplib2.__file__).is_relative_to("/usr/local/lib/python3.12/dist-packages")' \
  && RAY_EXPECTED="${RAY_VERSION}" VLLM_EXPECTED="${VLLM_VERSION}" CUDA_EXPECTED="${TORCH_CUDA_VERSION}" \
     python3 -c 'import importlib.metadata as m, os, torch; from packaging.version import Version; assert m.version("ray") == os.environ["RAY_EXPECTED"]; assert Version(m.version("ray")) >= Version("2.56.0"); assert Version(m.version("vllm")).public == os.environ["VLLM_EXPECTED"]; assert torch.version.cuda == os.environ["CUDA_EXPECTED"]' \
  && python3 -m pip freeze --all > /opt/assistant/resolved-requirements.txt \
@@ -51,7 +57,7 @@ RUN python3 -m unittest discover -s /opt/assistant/tests -v \
 USER 1000:1000
 WORKDIR /opt/assistant
 # Exercise imports with the runtime identity as well as the build identity.
-RUN python3 -c 'import assistant_serve.app; from vllm import AsyncLLMEngine; from vllm.engine.arg_utils import AsyncEngineArgs'
+RUN python3 -c 'import assistant_serve.app; from vllm import AsyncLLMEngine; from vllm.engine.arg_utils import AsyncEngineArgs; import httplib2; from pathlib import Path; assert httplib2.__version__ == "0.32.0"; assert Path(httplib2.__file__).is_relative_to("/usr/local/lib/python3.12/dist-packages")'
 EXPOSE 8000
 ENTRYPOINT []
 CMD ["python3", "-m", "assistant_serve.app"]

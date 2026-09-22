@@ -15,7 +15,7 @@ def model_directory(value, root=Path("/models")):
         if not path.is_dir() or not path.is_relative_to(root.resolve()) or path == root.resolve():
             raise ValueError()
         config_path = path / "config.json"
-        if not config_path.resolve(strict=True).is_relative_to(path) or config_path.stat().st_size > 1024 * 1024:
+        if not config_path.is_file() or not config_path.resolve(strict=True).is_relative_to(path) or config_path.stat().st_size > 1024 * 1024:
             raise ValueError()
         config = json.loads(config_path.read_text())
         quantization = config.get("quantization_config", {})
@@ -29,7 +29,7 @@ def model_directory(value, root=Path("/models")):
             raise ValueError()
         index = path / "model.safetensors.index.json"
         if index.exists():
-            if not index.resolve(strict=True).is_relative_to(path) or index.stat().st_size > 4 * 1024 * 1024:
+            if not index.is_file() or not index.resolve(strict=True).is_relative_to(path) or index.stat().st_size > 4 * 1024 * 1024:
                 raise ValueError()
             weight_map = json.loads(index.read_text()).get("weight_map")
             if not isinstance(weight_map, dict) or not weight_map:

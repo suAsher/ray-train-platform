@@ -3,11 +3,38 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from assistant_serve.engine import engine_arguments, model_directory
 
 
 class EnginePlanTests(unittest.TestCase):
+    def test_metadata_must_be_a_regular_file_before_reading(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model = root / "Qwen3-8B-AWQ"
+            model.mkdir()
+            config = {"model_type": "qwen3", "architectures": ["Qwen3ForCausalLM"],
+                      "quantization_config": {"quant_method": "awq", "bits": 4}}
+            for name in ("tokenizer.json", "tokenizer_config.json", "model.safetensors"):
+                (model / name).write_text("{}")
+            original_read = Path.read_text
+            for name in ("config.json", "model.safetensors.index.json"):
+                (model / "config.json").write_text(json.dumps(config))
+                metadata = model / name
+                metadata.unlink(missing_ok=True)
+                os.mkfifo(metadata)
+
+                def read_checked(path, *args, **kwargs):
+                    if path == metadata:
+                        raise AssertionError("nonregular metadata must not be opened")
+                    return original_read(path, *args, **kwargs)
+
+                with patch.object(Path, "read_text", autospec=True, side_effect=read_checked):
+                    with self.assertRaises(ValueError):
+                        model_directory(str(model), root)
+                metadata.unlink()
+
     def test_single_gpu_and_bounded_engine_configuration(self):
         args = engine_arguments("/models/Qwen3-8B-AWQ")
         self.assertEqual(args["tensor_parallel_size"], 1)
