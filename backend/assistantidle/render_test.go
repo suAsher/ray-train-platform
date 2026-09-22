@@ -127,6 +127,61 @@ func TestRenderRayServicePropagatesImagePullSecretsToHeadAndWorker(t *testing.T)
 	}
 }
 
+func TestRenderRayServiceUsesAgentHTTPProbesIndependentOfServeGate(t *testing.T) {
+	obj := renderForTest(t, validRenderConfig())
+	head := asMap(t, at(t, obj.Object, "spec", "rayClusterConfig", "headGroupSpec", "template", "spec", "containers", 0))
+	worker := asMap(t, at(t, obj.Object, "spec", "rayClusterConfig", "workerGroupSpecs", 0, "template", "spec", "containers", 0))
+	for _, tc := range []struct {
+		name      string
+		container map[string]any
+		probe     string
+		path      string
+	}{
+		{"head readiness", head, "readinessProbe", "/api/healthz"},
+		{"worker readiness", worker, "readinessProbe", "/api/local_raylet_healthz"},
+		{"head liveness", head, "livenessProbe", "/api/healthz"},
+		{"worker liveness", worker, "livenessProbe", "/api/healthz"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			probe := asMap(t, tc.container[tc.probe])
+			if _, ok := probe["exec"]; ok {
+				t.Fatal("probe must not depend on shell tools such as wget")
+			}
+			httpGet := asMap(t, probe["httpGet"])
+			if httpGet["path"] != tc.path || httpGet["port"] != int64(52365) {
+				t.Fatalf("probe must use the Ray agent, not Serve/gate: %#v", httpGet)
+			}
+			if host, ok := httpGet["host"]; ok && host != "" {
+				t.Fatalf("kubelet HTTP probe must address Pod IP, not host %v", host)
+			}
+		})
+	}
+	if config := fmt.Sprint(at(t, obj.Object, "spec", "serveConfigV2")); !strings.Contains(config, "proxy_location: HeadOnly") {
+		t.Fatal("worker probe fix must retain head-only Serve proxy")
+	}
+}
+
+func TestRenderRayServiceBoundsHeadMemoryAndBothObjectStores(t *testing.T) {
+	obj := renderForTest(t, validRenderConfig())
+	headResources := asMap(t, at(t, obj.Object, "spec", "rayClusterConfig", "headGroupSpec", "template", "spec", "containers", 0, "resources"))
+	requests, limits := stringMap(t, headResources["requests"]), stringMap(t, headResources["limits"])
+	if requests["memory"] != "4Gi" || limits["memory"] != "8Gi" || requests["cpu"] != "500m" || limits["cpu"] != "2" {
+		t.Errorf("head needs 4Gi request/8Gi limit with unchanged CPU: requests=%v limits=%v", requests, limits)
+	}
+	for _, tc := range []struct {
+		name   string
+		params map[string]any
+		bytes  string
+	}{
+		{"head", asMap(t, at(t, obj.Object, "spec", "rayClusterConfig", "headGroupSpec", "rayStartParams")), "268435456"},
+		{"worker", asMap(t, at(t, obj.Object, "spec", "rayClusterConfig", "workerGroupSpecs", 0, "rayStartParams")), "536870912"},
+	} {
+		if tc.params["object-store-memory"] != tc.bytes {
+			t.Errorf("%s object-store-memory=%#v, want explicit byte string %s", tc.name, tc.params["object-store-memory"], tc.bytes)
+		}
+	}
+}
+
 func TestRenderRayServiceKeepsHeadCPUOnlyAndWorkerPinnedToAllowedNodes(t *testing.T) {
 	obj := renderForTest(t, validRenderConfig())
 	headResources := asMap(t, at(t, obj.Object, "spec", "rayClusterConfig", "headGroupSpec", "template", "spec", "containers", 0, "resources"))

@@ -230,6 +230,10 @@ func podSpec(cfg RenderConfig, worker bool) map[string]any {
 			"persistentVolumeClaim": map[string]any{"claimName": cfg.ModelPVC, "readOnly": true},
 		})
 	}
+	readinessPath := "/api/healthz"
+	if worker {
+		readinessPath = "/api/local_raylet_healthz"
+	}
 	container := map[string]any{
 		"name":            "assistant-serve",
 		"image":           cfg.ServeImage,
@@ -244,7 +248,9 @@ func podSpec(cfg RenderConfig, worker bool) map[string]any {
 			"runAsGroup":               int64(1000),
 			"capabilities":             map[string]any{"drop": []any{"ALL"}},
 		},
-		"resources": resources(worker),
+		"resources":      resources(worker),
+		"readinessProbe": rayHealthProbe(readinessPath, false),
+		"livenessProbe":  rayHealthProbe("/api/healthz", true),
 	}
 	spec := map[string]any{
 		"automountServiceAccountToken":  false,
@@ -267,6 +273,24 @@ func podSpec(cfg RenderConfig, worker bool) map[string]any {
 	return spec
 }
 
+func rayHealthProbe(path string, liveness bool) map[string]any {
+	// Kubelet calls the agent directly: no wget dependency or worker Serve proxy.
+	// Serve readiness remains a RayService condition and never depends on gate.
+	probe := map[string]any{
+		"httpGet":             map[string]any{"path": path, "port": int64(52365)},
+		"initialDelaySeconds": int64(10),
+		"periodSeconds":       int64(5),
+		"timeoutSeconds":      int64(2),
+		"failureThreshold":    int64(3),
+	}
+	if liveness {
+		probe["initialDelaySeconds"] = int64(60)
+		probe["periodSeconds"] = int64(10)
+		probe["failureThreshold"] = int64(6)
+	}
+	return probe
+}
+
 func resources(worker bool) map[string]any {
 	if worker {
 		return map[string]any{
@@ -275,8 +299,8 @@ func resources(worker bool) map[string]any {
 		}
 	}
 	return map[string]any{
-		"requests": map[string]any{"cpu": "500m", "memory": "2Gi"},
-		"limits":   map[string]any{"cpu": "2", "memory": "4Gi"},
+		"requests": map[string]any{"cpu": "500m", "memory": "4Gi"},
+		"limits":   map[string]any{"cpu": "2", "memory": "8Gi"},
 	}
 }
 
@@ -315,12 +339,14 @@ func headRayStartParams() map[string]any {
 	params["dashboard-host"] = "0.0.0.0"
 	params["include-dashboard"] = "true"
 	params["num-cpus"] = "0"
+	params["object-store-memory"] = "268435456"
 	return params
 }
 
 func workerRayStartParams() map[string]any {
 	params := commonRayStartParams()
 	params["num-gpus"] = "1"
+	params["object-store-memory"] = "536870912"
 	return params
 }
 
