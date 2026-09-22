@@ -126,3 +126,10 @@ Anthropic原生接入使用/v1/messages、anthropic-version=2023-06-01及独立x
 
 
 最新准入核对补充：kueue-manager-config的integrations.frameworks已经包含ray.io/rayjob、ray.io/rayservice和ray.io/raycluster；因此不是“集群未安装原生集成”，而是平台尚无助手服务的完整资源生命周期/主动回收实现。部署前按安装版本验证原生工作负载与资源预留的准确关系，优先让推理原生进入既有Kueue资源账本，并由专用控制器主动撤销自身推理，保持训练之间Never语义不变。拒绝采用手工把训练ClusterQueue nominalQuota减1再加1的方案：这会与现有容量同步竞争，也违反不擅自调整配额的边界。GPU总量与原local团队配额均不因助手改写。
+
+
+8K是输入与输出合计token窗口，不是8000汉字。实际Serve包装层必须按该模型tokenizer计数，预留最多1500输出token，超出时优先裁剪低相关文档及日志节选并向用户标注；不能只靠字符长度估算，也不能静默丢掉用户问题。若仍不能容纳，应明确拒绝该模型请求并走已批准的备用路径。首轮需测试长中文问题与日志，避免“显存够但上下文超限”。本地Worker的初始CPU/内存预算为8 CPU/32Gi（待完整资源渲染与准入验证），仅共享训练池，排除团队专属节点；Head与缓存/网络开销也必须记账。
+
+Anthropic候选验证：db567f3加构建机gofmt差异通过go vet、完整go test -p 1 -count=1 ./...（真实隔离PostgreSQL）、assistant及API助手race；模块覆盖率95.9%。原生协议RED在仅OpenAI实现上确认；GREEN覆盖认证头隔离、请求格式、默认协议兼容、text-only响应、预算/普通400区分、混协议降级、重定向不转发凭据。Helm关闭时与原基线manifest相同，开启Anthropic时仅助手环境配置和Secret引用变化。独立审查无P1/P2。证据：/root/raytrain-assistant-validation-20260922/anthropic-red.log、backend-tests-anthropic.log、helm-anthropic-verify.log。
+
+本轮只新增后端原生协议适配、配置和设计，Portal组件未改，无需重跑未受影响的前端构建。本轮未推送/部署、未创建RayService、未下载权重、未占GPU；临时PostgreSQL与测试网络已由脚本清理。后续仍需真实Claude凭据联调、本地模型质量/内存/吞吐验收及完整Kueue主动回收验证，不能把协议合同通过报告成这些项目完成。

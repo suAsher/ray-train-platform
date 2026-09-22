@@ -53,11 +53,15 @@ func TestAssistantRejectsEmbeddedSecretsAndUnrelatedEnv(t *testing.T) {
 }
 
 func TestAssistantNativeAnthropicConfiguration(t *testing.T) {
- t.Setenv("ASSISTANT_ENABLED", "true")
- t.Setenv("ASSISTANT_LOCAL_FIRST", "false")
- t.Setenv("ASSISTANT_PROVIDER_CLAUDE_KEY", "synthetic-claude-key")
- t.Setenv("ASSISTANT_PROVIDERS", `[{"id":"claude","kind":"api","protocol":"anthropic","baseURL":"https://api.anthropic.com","model":"configured-claude-model","keyEnv":"ASSISTANT_PROVIDER_CLAUDE_KEY"}]`)
- got, err := loadAssistantConfig()
- if err != nil { t.Fatal(err) }
- if len(got.Routing.Providers) != 1 || got.Routing.Providers[0].Protocol != "anthropic" { t.Fatal("native protocol not preserved") }
+	t.Setenv("ASSISTANT_ENABLED", "true")
+	t.Setenv("ASSISTANT_LOCAL_FIRST", "false")
+	t.Setenv("ASSISTANT_PROVIDER_CLAUDE_KEY", "synthetic-claude-key")
+	t.Setenv("ASSISTANT_PROVIDERS", `[{"id":"claude","kind":"api","protocol":"anthropic","baseURL":"https://api.anthropic.com","model":"configured-claude-model","keyEnv":"ASSISTANT_PROVIDER_CLAUDE_KEY"}]`)
+	got, err := loadAssistantConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Routing.Providers) != 1 || got.Routing.Providers[0].Protocol != "anthropic" {
+		t.Fatal("native protocol not preserved")
+	}
 }

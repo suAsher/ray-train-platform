@@ -52,13 +52,13 @@ func TestAnthropicNativeRequestAndTextOnlyResponse(t *testing.T) {
 			t.Error("Anthropic authentication/version contract violated")
 		}
 		var body struct {
-			Model string `json:"model"`
-			System string `json:"system"`
-			Messages []struct { Role, Content string } `json:"messages"`
-			MaxTokens int `json:"max_tokens"`
-			Stream bool `json:"stream"`
-			Thinking json.RawMessage `json:"thinking"`
-			Tools json.RawMessage `json:"tools"`
+			Model     string                           `json:"model"`
+			System    string                           `json:"system"`
+			Messages  []struct{ Role, Content string } `json:"messages"`
+			MaxTokens int                              `json:"max_tokens"`
+			Stream    bool                             `json:"stream"`
+			Thinking  json.RawMessage                  `json:"thinking"`
+			Tools     json.RawMessage                  `json:"tools"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error("invalid request", err)
@@ -79,7 +79,7 @@ func TestAnthropicNativeRequestAndTextOnlyResponse(t *testing.T) {
 }
 
 func TestProtocolEndpointsAndValidation(t *testing.T) {
-	for _, tc := range []struct { protocol, baseURL, want string }{
+	for _, tc := range []struct{ protocol, baseURL, want string }{
 		{"", "https://example.com", "https://example.com/v1/chat/completions"},
 		{"openai", "https://example.com/v1/", "https://example.com/v1/chat/completions"},
 		{"anthropic", "https://example.com", "https://example.com/v1/messages"},
@@ -128,7 +128,10 @@ func TestProtocolMetadataDefaultsToOpenAI(t *testing.T) {
 }
 
 func TestAnthropicRejectsUnusableResponseWithoutDisclosure(t *testing.T) {
-	for _, tc := range []struct { name, body string; valid bool }{
+	for _, tc := range []struct {
+		name, body string
+		valid      bool
+	}{
 		{"no-usage-needed", `{"type":"message","role":"assistant","content":[{"type":"text","text":"answer"}]}`, true},
 		{"thinking-only", `{"type":"message","role":"assistant","content":[{"type":"thinking","thinking":"private","text":"private"}]}`, false},
 		{"tool-only", `{"type":"message","role":"assistant","content":[{"type":"tool_use","text":"private","name":"shell"}]}`, false},
@@ -136,7 +139,7 @@ func TestAnthropicRejectsUnusableResponseWithoutDisclosure(t *testing.T) {
 		{"openai-envelope", `{"choices":[{"message":{"content":"wrong protocol"}}]}`, false},
 		{"non-json", `private upstream error`, false},
 		{"key-echo", `{"type":"message","role":"assistant","content":[{"type":"text","text":"test-vendor-key"}]}`, false},
-		{"long-text", `{"type":"message","role":"assistant","content":[{"type":"text","text":"`+strings.Repeat("字", 12001)+`"}]}`, false},
+		{"long-text", `{"type":"message","role":"assistant","content":[{"type":"text","text":"` + strings.Repeat("字", 12001) + `"}]}`, false},
 		{"oversize", strings.Repeat("x", maxPayloadBytes+1), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -144,7 +147,9 @@ func TestAnthropicRejectsUnusableResponseWithoutDisclosure(t *testing.T) {
 			defer s.Close()
 			answer, err := protocolHTTPProvider(t, s, "anthropic").complete(context.Background(), Input{})
 			if tc.valid {
-				if err != nil || answer != "answer" { t.Fatal(answer, err) }
+				if err != nil || answer != "answer" {
+					t.Fatal(answer, err)
+				}
 			} else if answer != "" || !errors.Is(err, errUnavailable) {
 				t.Fatal("unsafe or unusable native response was not rejected")
 			}
@@ -158,12 +163,16 @@ func TestMixedProtocolFallbackPreservesAuthenticationIsolation(t *testing.T) {
 		switch r.URL.Path {
 		case "/anthropic/v1/messages":
 			anthropicCalls.Add(1)
-			if r.Header.Get("x-api-key") != "test-vendor-key" || r.Header.Get("Authorization") != "" { t.Error("native credential mixed") }
+			if r.Header.Get("x-api-key") != "test-vendor-key" || r.Header.Get("Authorization") != "" {
+				t.Error("native credential mixed")
+			}
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"type":"error","error":{"type":"authentication_error","message":"test-vendor-key private"}}`))
 		case "/openai/v1/chat/completions":
 			openaiCalls.Add(1)
-			if r.Header.Get("Authorization") != "Bearer sibling-key" || r.Header.Get("x-api-key") != "" || r.Header.Get("anthropic-version") != "" { t.Error("OpenAI credential mixed") }
+			if r.Header.Get("Authorization") != "Bearer sibling-key" || r.Header.Get("x-api-key") != "" || r.Header.Get("anthropic-version") != "" {
+				t.Error("OpenAI credential mixed")
+			}
 			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"fallback answer"}}]}`))
 		default:
 			t.Error("unexpected endpoint", r.URL.Path)
@@ -175,15 +184,21 @@ func TestMixedProtocolFallbackPreservesAuthenticationIsolation(t *testing.T) {
 	a.BaseURL = s.URL + "/anthropic/v1"
 	b.ID, b.APIKey, b.BaseURL = "sibling", "sibling-key", s.URL+"/openai/v1"
 	r, err := NewRouter(Config{Providers: []ProviderConfig{a, b}})
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, backend := range r.backends {
 		backend.provider.(*httpProvider).client.Transport.(*http.Transport).TLSClientConfig = s.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
 	}
 	for i := 0; i < 2; i++ {
 		got, err := r.Answer(context.Background(), "api", Input{})
-		if err != nil || got.Answer != "fallback answer" || got.BackendID != "sibling" || got.Reason != "fallback_authentication_error" { t.Fatal(got, err) }
+		if err != nil || got.Answer != "fallback answer" || got.BackendID != "sibling" || got.Reason != "fallback_authentication_error" {
+			t.Fatal(got, err)
+		}
 	}
-	if anthropicCalls.Load() != 1 || openaiCalls.Load() != 2 { t.Fatal("mixed-protocol cooldown failed") }
+	if anthropicCalls.Load() != 1 || openaiCalls.Load() != 2 {
+		t.Fatal("mixed-protocol cooldown failed")
+	}
 }
 
 func TestAnthropicRedirectCannotForwardAPIKey(t *testing.T) {
@@ -201,7 +216,10 @@ func TestAnthropicRedirectCannotForwardAPIKey(t *testing.T) {
 }
 
 func TestAnthropicSpendLimitErrorsAreNotOrdinaryBadRequests(t *testing.T) {
-	for _, tc := range []struct { body string; want error }{
+	for _, tc := range []struct {
+		body string
+		want error
+	}{
 		{`{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}`, errBudget},
 		{`{"type":"error","error":{"type":"invalid_request_error","message":"You have reached your monthly spend limit."}}`, errBudget},
 		{`{"type":"error","error":{"type":"invalid_request_error","message":"Your workspace spend limit has been exceeded."}}`, errBudget},

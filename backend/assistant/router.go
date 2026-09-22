@@ -21,7 +21,7 @@ type provider interface {
 
 type backend struct {
 	id, kind, model, protocol string
-	provider        provider
+	provider                  provider
 }
 
 type Router struct {

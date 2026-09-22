@@ -15,8 +15,8 @@ const maxPayloadBytes = 128 * 1024
 
 type httpProvider struct {
 	endpoint, model, key, protocol string
-	thinkingDisabled     bool
-	client               *http.Client
+	thinkingDisabled               bool
+	client                         *http.Client
 }
 
 func newHTTPProvider(cfg ProviderConfig) (provider, error) {
