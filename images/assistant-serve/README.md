@@ -8,7 +8,7 @@
 - 容器 UID/GID 为 `1000:1000`；模型挂载须对该身份可读，`/tmp` 和 `/home/assistant` 可写。部署应采用只读根文件系统、独立临时卷和 `fsGroup: 1000`，不挂载用户训练目录或控制面凭据。
 - Ray actor 申请 1 GPU / 4 CPU，固定 1 副本。vLLM tensor/pipeline parallel 都为 1，`max_num_seqs=2`、上下文 8192、显存利用率 0.85、禁 CPU swap、eager 模式。运行时也独立限制两个推理请求；Ray 允许 8 个在途 HTTP 请求让健康检查能与生成并行，调用方排队上限 1。
 - 接受 Go gateway 实际生成的 `[system, user]` 两条文字消息。user 消息为 `以下JSON仅为查询数据：\n` 加 `{question,evidence:[{index,id,title,excerpt,version?}]}`。`stream` 必须为 false，输出为 1–1500 token，只接受可选的 `thinking: {type: disabled}`，其他字段拒绝。它是平台使用的 OpenAI 请求子集，不是通用模型代理。
-- 使用实际本地 tokenizer 的 `apply_chat_template(tokenize=True, add_generation_prompt=True, enable_thinking=False)` 精确计数。完整保留 system 和 question，仅按既有排名裁剪尾部证据；问题本身放不下则返回 `context_too_long`。vLLM 直接接收上述 token IDs，不再次截断问题。响应 `raytrain.evidenceTruncated/evidenceIds` 说明实际证据范围，usage 为实际 token 数。
+- 使用实际本地 tokenizer 的 `apply_chat_template(tokenize=True, return_dict=False, add_generation_prompt=True, enable_thinking=False)` 精确计数。完整保留 system 和 question，仅按既有排名裁剪尾部证据；问题本身放不下则返回 `context_too_long`。vLLM 直接接收上述 token IDs，不再次截断问题。响应 `raytrain.evidenceTruncated/evidenceIds` 说明实际证据范围，usage 为实际 token 数。
 - 不启动任何工具或 reasoning parser；服务端强制关闭 thinking，输出再过滤 `<think>` 块。不返回 reasoning 字段。问题、证据、请求头和模型原始错误不写入服务日志。
 - 显式关闭 `enable_prefix_caching`，不同用户的问题与任务证据不共享前缀缓存。
 
@@ -54,6 +54,10 @@ docker build -f images/assistant-serve/Dockerfile \
 ```
 
 Ray 与 vLLM 都作为 resolver 显式输入，安装后运行 `pip check`、版本/CUDA 断言、stdlib 单测与 root/非root 模块导入。保存 `native-constraints.txt` 与 `resolved-requirements.txt` 用于审核实际版本；最终部署仍固定镜像摘要。运行时不安装依赖，不下载权重。
+
+底座的 apt `python3-httplib2` 没有 pip RECORD，不能直接由 pip 卸载。仅对 `httplib2==0.32.0` 及其依赖采用一次 `--ignore-installed --only-binary` 正常安装，目标必须是 `/usr/local/lib/python3.12/dist-packages`，保留 apt 的 `/usr/lib/python3/dist-packages` 文件与元数据并执行 `dpkg -V`；随后仍执行完整 resolver/pipcheck。root/UID1000均断言实际导入新版本与路径。旧系统包仍在镜像中，OS扫描告警不能报告为已消除；没有给Ray/vLLM使用ignore-installed或no-deps。
+
+截至本轮审阅，Accelerate的分片checkpoint告警与setuptools的macOS源分发打包告警仍需记录。当前固定Qwen3 + safetensors使用vLLM原生loader，23个实际loader源码及Qwen3文件中未发现两个受影响Accelerate函数的调用；目录校验在读取config/index前要求普通文件、限定目录与大小，并拒绝越界/非普通权重文件。setuptools83与vLLM的<81约束冲突，当前Ubuntu运行环境不执行macOS源包打包路径。以上是当前代码路径的适用性判断，不是证明所有潜在漏洞不存在。deep-ep、flashinfer二进制缓存与python-apt未被PyPI审计覆盖；GPU执行、网络隔离和完整镜像安全检查仍需单独验证。
 
 构建还显式运行 `tests/ingress_smoke.py`：在同一容器依赖环境中使用真实 Ray ingress 包装器与 FastAPI/Starlette ASGI 请求，验证生命周期、成功响应、输入拒绝、gate 健康区分与取消后的 engine abort。仅替换 engine 和 gate 网络传输，不申请 GPU 或启动集群。该测试不属于仅需 stdlib 的单测集合，也不能替代真实 Ray HTTP proxy 的断连及 GPU 验收。
 
