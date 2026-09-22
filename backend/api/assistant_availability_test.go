@@ -76,3 +76,12 @@ func TestAssistantPreviewUsesExactSubjectBeforeReadingEvidence(t *testing.T) {
 		if allowed && (w.Code != 200 || e.calls != 1) || !allowed && (w.Code != 403 || e.calls != 0 || strings.Contains(w.Body.String(), "preview-subject")) { t.Fatalf("preview gate failed: %d %s", w.Code, w.Body.String()) }
 	}
 }
+
+func TestAssistantStartIntentDoesNotMisclassifyFailureAsFirstJob(t *testing.T) {
+	for _, question := range []string{"任务为什么提交失败", "训练无法启动", "任务启动卡住了"} {
+		ids, _ := assistantNaturalIntent(question)
+		for _, id := range ids {
+			if id == "quickstart" { t.Fatalf("failure incorrectly routed to first-job guide: %s", question) }
+		}
+	}
+}

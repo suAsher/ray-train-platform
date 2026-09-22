@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"time"
 
@@ -39,8 +40,11 @@ var assistantStatusEpoch = regexp.MustCompile(`^[A-Za-z0-9-]{0,64}$`)
 func newAssistantStatusHTTPClient(caFiles ...string) *http.Client {
 	transport := &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 500 * time.Millisecond}).DialContext, ResponseHeaderTimeout: 500 * time.Millisecond, MaxResponseHeaderBytes: 4096, MaxIdleConns: 2, MaxConnsPerHost: 2, IdleConnTimeout: 30 * time.Second}
 	if len(caFiles) > 0 && caFiles[0] != "" {
+		path := caFiles[0]
+		if !filepath.IsAbs(path) || filepath.Clean(path) != path { return nil }
+		info, err := os.Stat(path); if err != nil || !info.Mode().IsRegular() || info.Size() > 1024*1024 { return nil }
 		file, err := os.Open(caFiles[0]); if err != nil { return nil }; defer file.Close()
-		info, err := file.Stat(); if err != nil || !info.Mode().IsRegular() || info.Size() > 1024*1024 { return nil }
+		info, err = file.Stat(); if err != nil || !info.Mode().IsRegular() || info.Size() > 1024*1024 { return nil }
 		pem, err := io.ReadAll(io.LimitReader(file, 1024*1024+1)); if err != nil || len(pem) > 1024*1024 { return nil }
 		pool := x509.NewCertPool(); if !pool.AppendCertsFromPEM(pem) { return nil }
 		transport.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}

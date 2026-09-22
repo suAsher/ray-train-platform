@@ -53,7 +53,7 @@ func (r *GormRepository) AggregateAssistantDemand(ctx context.Context) (Assistan
 	var records []assistantDemandJobRow
 	if err := r.db.WithContext(ctx).
 		Model(&JobRecord{}).
-		Select("id", "spec_json").
+		Select("id, spec_json").
 		Where("desired_state = ? AND observed_state IN ? AND archived_at IS NULL", string(domain.DesiredActive), assistantDemandJobStates).
 		Limit(assistantDemandRecordLimit + 1).
 		Find(&records).Error; err != nil {

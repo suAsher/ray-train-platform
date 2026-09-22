@@ -37,9 +37,10 @@ func TestAssistantStatusControllerNetworkPolicyContract(t *testing.T) {
 	if end := strings.Index(s, "\n---"); end >= 0 {
 		s = s[:end]
 	}
-	for _, want := range []string{"namespaceSelector:", "kubernetes.io/metadata.name: PLACEHOLDER_RAYTRAIN_BACKEND_NAMESPACE", "app: ray-train-backend", "app.kubernetes.io/component: api", "port: 8080"} {
+	for _, want := range []string{"namespaceSelector:", "kubernetes.io/metadata.name: PLACEHOLDER_RAYTRAIN_BACKEND_NAMESPACE", "app: ray-train-backend", "app.kubernetes.io/component: api", "port: 8443"} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("missing scoped status path %q", want)
 		}
 	}
+	if strings.Contains(s, "port: 8080") { t.Fatal("controller must not expose the old cleartext gate") }
 }

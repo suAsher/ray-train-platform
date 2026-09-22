@@ -345,6 +345,10 @@ func assistantNaturalIntent(question string) ([]string, string) {
 		return []string{"unified-login-and-roles", "quickstart"}, question + " 团队 权限"
 	case has("训练", "任务") && has("继续", "没跑完", "恢复", "续训", "中断"):
 		return []string{"resume"}, question + " 续训 checkpoint"
+	case has("训练", "任务") && has("提交", "开始", "启动", "跑起来", "怎么跑", "如何跑") && !has("失败", "报错", "无法", "不能", "错误", "卡住", "很慢"):
+		// The common short question has no technology keyword. Route its clear
+		// goal to the published first-job guide after more specific intents.
+		return []string{"quickstart"}, question
 	}
 	return nil, question
 }

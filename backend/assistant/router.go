@@ -73,7 +73,6 @@ func (r *Router) Capabilities() Capabilities {
 		Providers: statuses, Backends: backends,
 		Limitations: []string{
 			"只读助手，不执行命令或修改训练任务",
-			"自建推理仅连接已配置服务，不自动占用 GPU",
 			"支持 OpenAI 兼容 Chat Completions 与 Anthropic 原生 Messages 接口",
 			"预算由模型网关执行；失败后的五分钟冷却不代表真实月额度",
 			"当前回答基于本次提问与引用证据，不保存服务端聊天历史",
