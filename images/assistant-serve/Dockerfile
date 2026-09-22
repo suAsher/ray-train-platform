@@ -54,6 +54,16 @@ RUN python3 -m unittest discover -s /opt/assistant/tests -v \
  && python3 /opt/assistant/tests/engine_api_smoke.py \
  && python3 -c 'import assistant_serve.app; from vllm import AsyncLLMEngine; from vllm.engine.arg_utils import AsyncEngineArgs'
 
+# The cluster's NVIDIA hook can register the image's forward-compat libcuda in
+# ld.so.cache even when vLLM's opt-in is disabled. GeForce must use the mounted
+# host driver; merely setting VLLM_ENABLE_CUDA_COMPATIBILITY=0 is insufficient.
+# Remove only that optional package, without changing the CUDA runtime stack.
+RUN dpkg --remove cuda-compat-12-9 \
+ && ldconfig \
+ && test ! -e /usr/local/cuda/compat/libcuda.so.1 \
+ && test ! -e /usr/local/cuda-12.9/compat/libcuda.so.1 \
+ && python3 -m pip check
+
 USER 1000:1000
 WORKDIR /opt/assistant
 # Exercise imports with the runtime identity as well as the build identity.
