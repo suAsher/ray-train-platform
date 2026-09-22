@@ -26,6 +26,12 @@ func ValidateConfig(cfg Config) error {
 		if p.Kind != "api" && p.Kind != "local" {
 			return errors.New("assistant provider kind must be api or local")
 		}
+		if protocol := effectiveProtocol(p.Protocol); protocol != "openai" && protocol != "anthropic" {
+			return errors.New("assistant provider protocol must be openai or anthropic")
+		}
+		if p.Protocol == "anthropic" && p.ThinkingDisabled {
+			return errors.New("assistant thinkingDisabled is only supported by compatible OpenAI endpoints")
+		}
 		if strings.TrimSpace(p.Model) == "" || len(p.Model) > 200 || containsControl(p.Model) {
 			return errors.New("assistant provider requires a valid model")
 		}
@@ -40,6 +46,13 @@ func ValidateConfig(cfg Config) error {
 		}
 	}
 	return nil
+}
+
+func effectiveProtocol(protocol string) string {
+	if protocol == "" {
+		return "openai"
+	}
+	return protocol
 }
 
 func containsControl(value string) bool {
@@ -64,6 +77,10 @@ func providerEndpoint(cfg ProviderConfig) (string, error) {
 	if prefix == "" {
 		prefix = "/v1"
 	}
-	u.Path = prefix + "/chat/completions"
+	if effectiveProtocol(cfg.Protocol) == "anthropic" {
+		u.Path = prefix + "/messages"
+	} else {
+		u.Path = prefix + "/chat/completions"
+	}
 	return u.String(), nil
 }

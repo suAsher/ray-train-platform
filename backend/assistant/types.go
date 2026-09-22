@@ -29,6 +29,7 @@ type ProviderStatus struct {
 type BackendStatus struct {
 	ID         string `json:"id"`
 	Kind       string `json:"kind"`
+	Protocol   string `json:"protocol"`
 	Model      string `json:"model"`
 	Configured bool   `json:"configured"`
 }
@@ -48,12 +49,13 @@ type Engine interface {
 	Capabilities() Capabilities
 }
 
-// ProviderConfig describes a server-controlled OpenAI-compatible Chat
-// Completions endpoint. Kind is a routing category, not a wire protocol.
-// Native Anthropic and Gemini protocols require separate future adapters.
+// ProviderConfig describes a server-controlled model endpoint. Kind is a
+// routing category; Protocol selects OpenAI Chat Completions (the default) or
+// native Anthropic Messages. Other native protocols require future adapters.
 type ProviderConfig struct {
 	ID               string `json:"id"`
 	Kind             string `json:"kind"`
+	Protocol         string `json:"protocol,omitempty"`
 	BaseURL          string `json:"baseUrl"`
 	Model            string `json:"model"`
 	APIKey           string `json:"-"`

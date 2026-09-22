@@ -14,7 +14,7 @@ import (
 const maxPayloadBytes = 128 * 1024
 
 type httpProvider struct {
-	endpoint, model, key string
+	endpoint, model, key, protocol string
 	thinkingDisabled     bool
 	client               *http.Client
 }
@@ -34,7 +34,7 @@ func newHTTPProvider(cfg ProviderConfig) (provider, error) {
 	transport.ResponseHeaderTimeout = 12 * time.Second
 	transport.MaxConnsPerHost = 4
 	return &httpProvider{
-		endpoint: endpoint, model: cfg.Model, key: cfg.APIKey, thinkingDisabled: cfg.ThinkingDisabled,
+		endpoint: endpoint, model: cfg.Model, key: cfg.APIKey, protocol: effectiveProtocol(cfg.Protocol), thinkingDisabled: cfg.ThinkingDisabled,
 		client: &http.Client{
 			Transport: transport, Timeout: 12 * time.Second,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
@@ -72,7 +72,12 @@ func (p *httpProvider) complete(ctx context.Context, input Input) (string, error
 		return "", errUnavailable
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if p.key != "" {
+	if p.protocol == "anthropic" {
+		req.Header.Set("anthropic-version", "2023-06-01")
+		if p.key != "" {
+			req.Header.Set("x-api-key", p.key)
+		}
+	} else if p.key != "" {
 		req.Header.Set("Authorization", "Bearer "+p.key)
 	}
 	response, err := p.client.Do(req)
@@ -94,6 +99,9 @@ func (p *httpProvider) complete(ctx context.Context, input Input) (string, error
 }
 
 func (p *httpProvider) requestBody(input Input) ([]byte, error) {
+	if p.protocol == "anthropic" {
+		return anthropicRequestBody(p.model, input)
+	}
 	body := struct {
 		Model     string              `json:"model"`
 		Messages  []map[string]string `json:"messages"`
@@ -112,6 +120,13 @@ func (p *httpProvider) requestBody(input Input) ([]byte, error) {
 }
 
 func (p *httpProvider) parseAnswer(body []byte) (string, error) {
+	if p.protocol == "anthropic" {
+		answer, err := anthropicAnswer(body)
+		if err != nil {
+			return "", err
+		}
+		return p.validateAnswer(answer)
+	}
 	var result struct {
 		Choices []struct {
 			Message struct {
@@ -122,7 +137,11 @@ func (p *httpProvider) parseAnswer(body []byte) (string, error) {
 	if json.Unmarshal(body, &result) != nil || len(result.Choices) == 0 {
 		return "", errUnavailable
 	}
-	answer := strings.TrimSpace(result.Choices[0].Message.Content)
+	return p.validateAnswer(result.Choices[0].Message.Content)
+}
+
+func (p *httpProvider) validateAnswer(text string) (string, error) {
+	answer := strings.TrimSpace(text)
 	if answer == "" || len([]rune(answer)) > 12000 || p.key != "" && strings.Contains(answer, p.key) {
 		return "", errUnavailable
 	}
@@ -171,8 +190,21 @@ func classifyError(status int, body []byte) error {
 		strings.Contains(message, "budget has been exceeded") || strings.Contains(message, "crossed spend") {
 		return errBudget
 	}
+	if (status == http.StatusBadRequest || status == http.StatusTooManyRequests) && explicitSpendLimit(message) {
+		return errBudget
+	}
 	if status == http.StatusTooManyRequests {
 		return errRateLimited
 	}
 	return errUnavailable
+}
+
+// Native Anthropic can use HTTP 400 for spend exhaustion. Require explicit
+// wording; a generic invalid_request_error is not evidence of budget exhaustion.
+func explicitSpendLimit(message string) bool {
+	credit := strings.Contains(message, "credit balance") &&
+		(strings.Contains(message, "too low") || strings.Contains(message, "insufficient"))
+	spend := strings.Contains(message, "spend limit") &&
+		(strings.Contains(message, "reached") || strings.Contains(message, "exceeded"))
+	return credit || spend
 }

@@ -19,6 +19,7 @@ type AssistantConfig struct {
 type assistantProviderSettings struct {
 	ID               string `json:"id"`
 	Kind             string `json:"kind"`
+	Protocol         string `json:"protocol"`
 	BaseURL          string `json:"baseURL"`
 	Model            string `json:"model"`
 	KeyEnv           string `json:"keyEnv"`
@@ -67,7 +68,7 @@ func loadAssistantConfig() (AssistantConfig, error) {
 				return AssistantConfig{}, fmt.Errorf("assistant referenced credential is missing")
 			}
 		}
-		cfg.Routing.Providers = append(cfg.Routing.Providers, assistant.ProviderConfig{ID: entry.ID, Kind: entry.Kind, BaseURL: entry.BaseURL, Model: entry.Model, APIKey: key, ThinkingDisabled: entry.ThinkingDisabled})
+		cfg.Routing.Providers = append(cfg.Routing.Providers, assistant.ProviderConfig{ID: entry.ID, Kind: entry.Kind, Protocol: entry.Protocol, BaseURL: entry.BaseURL, Model: entry.Model, APIKey: key, ThinkingDisabled: entry.ThinkingDisabled})
 	}
 	if err := assistant.ValidateConfig(cfg.Routing); err != nil {
 		return AssistantConfig{}, fmt.Errorf("invalid assistant provider configuration: %w", err)

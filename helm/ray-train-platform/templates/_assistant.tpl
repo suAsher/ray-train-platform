@@ -10,7 +10,10 @@
 {{- if hasKey $seen $provider.id }}{{- fail "assistant provider ids must be unique" }}{{- end -}}
 {{- $_ := set $seen $provider.id true -}}
 {{- if not (has $provider.kind (list "api" "local")) }}{{- fail "assistant provider kind must be api or local" }}{{- end -}}
-{{- $item := dict "id" $provider.id "kind" $provider.kind "baseURL" (required "assistant provider baseURL required" $provider.baseURL) "model" (required "assistant provider model required" $provider.model) "thinkingDisabled" (default false $provider.thinkingDisabled) -}}
+{{- $protocol := default "openai" $provider.protocol -}}
+{{- if not (has $protocol (list "openai" "anthropic")) }}{{- fail "assistant protocol must be openai or anthropic" }}{{- end -}}
+{{- if and (eq $protocol "anthropic") (default false $provider.thinkingDisabled) }}{{- fail "anthropic provider does not support thinkingDisabled" }}{{- end -}}
+{{- $item := dict "id" $provider.id "kind" $provider.kind "protocol" $protocol "baseURL" (required "assistant provider baseURL required" $provider.baseURL) "model" (required "assistant provider model required" $provider.model) "thinkingDisabled" (default false $provider.thinkingDisabled) -}}
 {{- if or (eq $provider.kind "api") $provider.existingSecret -}}
 {{- $_ := required "assistant provider existingSecret required" $provider.existingSecret -}}
 {{- $_ := required "assistant provider secretKey required" $provider.secretKey -}}

@@ -20,7 +20,7 @@ type provider interface {
 }
 
 type backend struct {
-	id, kind, model string
+	id, kind, model, protocol string
 	provider        provider
 }
 
@@ -42,7 +42,7 @@ func NewRouter(cfg Config) (*Router, error) {
 		if err != nil {
 			return nil, err
 		}
-		r.backends = append(r.backends, backend{id: c.ID, kind: c.Kind, model: c.Model, provider: p})
+		r.backends = append(r.backends, backend{id: c.ID, kind: c.Kind, model: c.Model, protocol: effectiveProtocol(c.Protocol), provider: p})
 	}
 	return r, nil
 }
@@ -53,7 +53,7 @@ func (r *Router) Capabilities() Capabilities {
 	for _, b := range r.backends {
 		configured := b.provider != nil
 		statuses[b.kind] = ProviderStatus{Configured: statuses[b.kind].Configured || configured}
-		backends = append(backends, BackendStatus{ID: b.id, Kind: b.kind, Model: b.model, Configured: configured})
+		backends = append(backends, BackendStatus{ID: b.id, Kind: b.kind, Model: b.model, Protocol: effectiveProtocol(b.protocol), Configured: configured})
 	}
 	return Capabilities{
 		Enabled: true, ReadOnly: true, Modes: []string{"auto", "api", "local", "docs"}, DefaultMode: "auto",
@@ -61,7 +61,7 @@ func (r *Router) Capabilities() Capabilities {
 		Limitations: []string{
 			"只读助手，不执行命令或修改训练任务",
 			"自建推理仅连接已配置服务，不自动占用 GPU",
-			"仅支持 OpenAI 兼容 Chat Completions 接口",
+			"支持 OpenAI 兼容 Chat Completions 与 Anthropic 原生 Messages 接口",
 			"预算由模型网关执行；失败后的五分钟冷却不代表真实月额度",
 			"当前回答基于本次提问与引用证据，不保存服务端聊天历史",
 		},

@@ -18,7 +18,7 @@
 
 提问仅接受 question、mode、jobId、includeLogs；拒绝重复/未知JSON字段，限制16KiB和4000字。沿用平台会话权限，不向浏览器下发供应商Key。现有任务、CLI、MLflow接口保持原有行为。
 
-首版采用 OpenAI-compatible Chat Completions 协议。最多配置4个固定后端，每个有独立ID、模型、地址、Secret和API/本地类型。LiteLLM、兼容云API、兼容自建Ray Serve可共用适配器；供应商原生非兼容协议需要新增适配器，不能声称通用支持所有协议。
+现支持 OpenAI-compatible Chat Completions 与 Anthropic 原生 Messages 两种协议。最多配置4个固定后端，每个有独立ID、模型、地址、Secret和API/本地类型。LiteLLM、兼容云API、兼容自建Ray Serve可共用适配器；protocol默认openai保持旧配置兼容，anthropic使用独立Messages编码与认证头。其他供应商原生协议需要新增适配器，不能声称通用支持所有协议。
 
 | 模式 | 行为 |
 | --- | --- |
@@ -48,9 +48,17 @@ assistant:
   providers:
     - id: company
       kind: api
+      protocol: openai
       baseURL: https://litellm.westwell-lab.com/v1
       model: <管理员确认的模型名>
       existingSecret: raytrain-assistant-company
+      secretKey: api-key
+    - id: claude
+      kind: api
+      protocol: anthropic
+      baseURL: https://api.anthropic.com
+      model: <该账户实际可用的Claude模型ID>
+      existingSecret: raytrain-assistant-anthropic
       secretKey: api-key
     - id: idle-serve
       kind: local
@@ -100,3 +108,21 @@ DISABLED → WAITING_FOR_IDLE → STARTING → READY → DRAINING → STOPPED
 - 测试环境差异：PostgreSQL测试串行执行避免跨包共享迁移锁互相干扰；最终工具镜像sha256:b048b8f45eff4125e54b738117b0e1c54b30eaa133e566fd8d55777ebe4f41bf与规定Go基础镜像层完全一致，仅附加bash/git/gcc/jq。Portal的Docker Hub syntax下载不可达，临时验证Dockerfile仅去掉首行syntax指令，其余三阶段步骤原样执行；仓库Dockerfile未改动。
 
 官方参考：[KubeRay与Kueue](https://docs.ray.io/en/latest/cluster/kubernetes/k8s-ecosystem/kueue.html)、[Serve伸缩](https://docs.ray.io/en/latest/serve/autoscaling-guide.html)、[LiteLLM虚拟Key](https://docs.litellm.ai/docs/proxy/virtual_keys)、[Kubernetes抢占](https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/)。
+
+
+## 4090D 本地推理决策与 Anthropic 补充（2026-09-22）
+
+用户授权继续推进并由平台决定首轮模型规模。只读DCGM核对7个GPU节点均为NVIDIA GeForce RTX 4090 D，每卡FB_FREE+FB_USED约24209–24210MiB；这是显存总量，不是可申请余量。现有队列没有cohort、三个抢占策略均Never，无RayService。
+
+首候选固定为官方 Qwen/Qwen3-8B-AWQ（4-bit、Apache-2.0），独立RayService内单卡vLLM，最多1个GPU Worker/模型副本，张量并行1，max_model_len=8192、max_num_seqs=2、GPU内存利用上限初值0.8，关闭thinking并仅返回最终回答。权重须固定revision和摘要、从内网只读缓存获取；环境镜像单独固定摘要，不改变训练Base。
+
+8B 4-bit的纯权重量级约4GB，实际还包含未量化参数、量化元数据、KV cache、activation与运行时，因此不能把4GB当运行显存。24GB适合作为该规模、有限上下文/并发的验证目标；容量是工程估算，不是已测吞吐或质量承诺。14B可以后续作质量对照；首轮不采用32B/70B、多卡张量并行或把所有闲卡常驻占满。Anthropic云模型不能下载成4090本地权重；二者通过统一助手接口各自路由。
+
+优先级决策：训练优先；共享池先以“额外准入等待不超过60秒”为验收目标，不当作保证或对现有队列的变更授权。未通过回收验收前GPU模式保持关闭，超限后停用闲时推理并保留API/文档模式；绝不通过取消真实训练来腾卡。模型质量测试先用无业务敏感信息的平台公开帮助问题，覆盖正确引用、无证据拒答和提示注入；不能以回答一次OK替代此测试。
+
+Anthropic原生接入使用/v1/messages、anthropic-version=2023-06-01及独立x-api-key，不发送OpenAI Bearer或重复系统消息。只解析text block，不执行tool_use、不返回thinking；401、明确额度错误、429与529分别按既有认证/额度/限流/不可用语义降级。没有Anthropic专用Key，原生接口目前以合同测试验证，不能报告真实Claude调用通过。
+
+参考：[Anthropic Messages](https://platform.claude.com/docs/en/api/messages/create)、[API错误](https://platform.claude.com/docs/en/api/errors)、[Qwen3-8B-AWQ官方模型卡](https://huggingface.co/Qwen/Qwen3-8B-AWQ)、[vLLM量化兼容表](https://docs.vllm.ai/en/stable/features/quantization/)。
+
+
+最新准入核对补充：kueue-manager-config的integrations.frameworks已经包含ray.io/rayjob、ray.io/rayservice和ray.io/raycluster；因此不是“集群未安装原生集成”，而是平台尚无助手服务的完整资源生命周期/主动回收实现。部署前按安装版本验证原生工作负载与资源预留的准确关系，优先让推理原生进入既有Kueue资源账本，并由专用控制器主动撤销自身推理，保持训练之间Never语义不变。拒绝采用手工把训练ClusterQueue nominalQuota减1再加1的方案：这会与现有容量同步竞争，也违反不擅自调整配额的边界。GPU总量与原local团队配额均不因助手改写。
