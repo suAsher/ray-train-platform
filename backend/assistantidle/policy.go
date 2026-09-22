@@ -146,7 +146,7 @@ func classify(cfg Config, obs Observation) State {
 	if obs.ServiceDeleting || obs.OwnedChildrenRemaining {
 		return StateDeleting
 	}
-	if obs.TrainingDemand {
+	if obs.TrainingDemand || obs.OtherPending {
 		return StateTrainingDemand
 	}
 	if obs.ServiceExists {

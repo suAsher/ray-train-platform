@@ -76,3 +76,10 @@ func TestOtherPendingReclaimsExistingService(t *testing.T){
  d:=Decide(cfg,Observation{Enabled:true,Fresh:true,ServiceExists:true,ServiceReady:true,Admitted:true,OtherPending:true})
  if d.Action!=ActionDrain{t.Fatalf("got %s",d.Action)}
 }
+func (b *fakeBackend) OwnService(context.Context)(string,time.Time,error){return b.snapshot.UID,b.snapshot.CreatedAt,nil}
+func TestObservationFailureOnRestartStillReclaimsOwnedService(t *testing.T){
+ now:=time.Unix(1000,0);b:=&fakeBackend{snapshot:Snapshot{UID:"old-own"},err:context.DeadlineExceeded}
+ c,g:=newTestController(b,&now);ctx,cancel:=context.WithCancel(context.Background());cancel()
+ _,err:=c.Step(ctx)
+ if err==nil || g.Snapshot().Allow || len(b.deletes)!=1{t.Fatal("restart failed to reclaim own service after observation failure")}
+}
