@@ -35,6 +35,8 @@ spec:
         - { protocol: TCP, port: 10001 }
         - { protocol: TCP, port: 10002, endPort: 10032 }
         - { protocol: TCP, port: 52365 }
+        - { protocol: TCP, port: 52366 }
+        - { protocol: TCP, port: 52367 }
   egress:
     - to:
         - podSelector:
@@ -50,6 +52,8 @@ spec:
         - { protocol: TCP, port: 10001 }
         - { protocol: TCP, port: 10002, endPort: 10032 }
         - { protocol: TCP, port: 52365 }
+        - { protocol: TCP, port: 52366 }
+        - { protocol: TCP, port: 52367 }
     - to:
         - podSelector:
             matchLabels:
@@ -162,6 +166,7 @@ spec:
               kubernetes.io/metadata.name: PLACEHOLDER_RAYTRAIN_BACKEND_NAMESPACE
           podSelector:
             matchLabels:
-              app.kubernetes.io/component: api-gateway
+              app: ray-train-backend
+              app.kubernetes.io/component: api
       ports:
         - { protocol: TCP, port: 8000 }

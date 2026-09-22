@@ -532,7 +532,7 @@ func rayJob(namespace, name, uid, jobStatus, deploymentStatus string, owned bool
 		},
 		"status": map[string]any{
 			"jobStatus":        jobStatus,
-			"deploymentStatus": deploymentStatus,
+			"jobDeploymentStatus": deploymentStatus,
 		},
 	}}
 }
@@ -596,4 +596,12 @@ func gpuPod(namespace, name, node string, gpus int64, owned bool) *corev1.Pod {
 		},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
+}
+
+func TestRunningDemandUsesActualKubeRayJobStatusFields(t *testing.T){
+ obj:=map[string]any{"status":map[string]any{"jobStatus":"RUNNING","jobDeploymentStatus":"Running","rayClusterStatus":map[string]any{"readyWorkerReplicas":int64(1)}}}
+ if !rayJobRunningReady(obj){t.Fatal("real KubeRay status was not recognized")}
+ // Neither a legacy-looking key nor a partial worker count proves readiness.
+ obj=map[string]any{"status":map[string]any{"jobStatus":"RUNNING","deploymentStatus":"Running","readyPods":int64(1)}}
+ if rayJobRunningReady(obj){t.Fatal("unverified status opened idle admission")}
 }

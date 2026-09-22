@@ -62,8 +62,8 @@ assistant:
       secretKey: api-key
     - id: idle-serve
       kind: local
-      baseURL: http://assistant-serve-svc.ray-train-platform.svc.cluster.local:8000/v1
-      model: <已验收的自建模型名>
+      baseURL: http://assistant-idle-serve-svc.raytrain-assistant-idle.svc.cluster.local:8000/v1
+      model: Qwen3-8B-AWQ
 ```
 
 这仅展示配置形态，RayService与Secret并未因此创建。凭据只引用既有Secret；不要写在values、代码、镜像或文档。没有模型时可使用 enabled:true、providers:[] 的检索模式。DeepSeek可作为独立临时测试配置，扩展字段thinkingDisabled仅给明确支持该扩展的后端启用。
@@ -85,8 +85,8 @@ DISABLED → WAITING_FOR_IDLE → STARTING → READY → DRAINING → STOPPED
 - 训练出现需求：摘除推理路由→有限排空/取消聊天→停止自有Worker Pod→确认GPU分配及Kueue预留释放→训练准入。控制器失联或状态不明时停止新增推理，租约失败需按设计收尾。
 - Serve Actor缩至0不等于Worker Pod退出，更不等于Kueue预留释放。须防止RayService/Autoscaler在让卡期间重建Worker。
 - 更新RayService可能创建双集群；首版禁止未经预算的双份GPU滚动升级。
-- 模型权重走内部受控缓存；按GPU显存、架构、许可证和中文问答质量选择固定权重摘要与镜像。当前未选定或下载生产模型。
-- 按实际请求扩容，不因卡空闲就全部占满。建议先连续空闲10分钟才启动，摘流至多15秒排空、Pod终止30秒；这些是待验证参数，不是训练准入延时SLA。
+- 模型权重走内部受控缓存；按GPU显存、架构、许可证和中文问答质量选择固定权重摘要与镜像。已选择下文候选模型，但尚未下载或验收生产权重。
+- 首版显式启用后只预热一个副本，不因卡空闲就全部占满；按需求自动启停尚未实现。先连续空闲10分钟才启动，摘流至多15秒排空、Pod终止15秒；这些是待验证参数，不是训练准入延时SLA。
 
 严格“训练零新增等待、零性能影响”需要独立硬件/API/检索。共享池必须接受并实测回收时间，不能承诺绝对零影响。
 
@@ -114,7 +114,7 @@ DISABLED → WAITING_FOR_IDLE → STARTING → READY → DRAINING → STOPPED
 
 用户授权继续推进并由平台决定首轮模型规模。只读DCGM核对7个GPU节点均为NVIDIA GeForce RTX 4090 D，每卡FB_FREE+FB_USED约24209–24210MiB；这是显存总量，不是可申请余量。现有队列没有cohort、三个抢占策略均Never，无RayService。
 
-首候选固定为官方 Qwen/Qwen3-8B-AWQ（4-bit、Apache-2.0），独立RayService内单卡vLLM，最多1个GPU Worker/模型副本，张量并行1，max_model_len=8192、max_num_seqs=2、GPU内存利用上限初值0.8，关闭thinking并仅返回最终回答。权重须固定revision和摘要、从内网只读缓存获取；环境镜像单独固定摘要，不改变训练Base。
+首候选固定为官方 Qwen/Qwen3-8B-AWQ（4-bit、Apache-2.0），独立RayService内单卡vLLM，最多1个GPU Worker/模型副本，张量并行1，max_model_len=8192、max_num_seqs=2、GPU内存利用上限初值0.85，关闭thinking并仅返回最终回答。权重须固定revision和摘要、从内网只读缓存获取；环境镜像单独固定摘要，不改变训练Base。
 
 8B 4-bit的纯权重量级约4GB，实际还包含未量化参数、量化元数据、KV cache、activation与运行时，因此不能把4GB当运行显存。24GB适合作为该规模、有限上下文/并发的验证目标；容量是工程估算，不是已测吞吐或质量承诺。14B可以后续作质量对照；首轮不采用32B/70B、多卡张量并行或把所有闲卡常驻占满。Anthropic云模型不能下载成4090本地权重；二者通过统一助手接口各自路由。
 
@@ -128,8 +128,32 @@ Anthropic原生接入使用/v1/messages、anthropic-version=2023-06-01及独立x
 最新准入核对补充：kueue-manager-config的integrations.frameworks已经包含ray.io/rayjob、ray.io/rayservice和ray.io/raycluster；因此不是“集群未安装原生集成”，而是平台尚无助手服务的完整资源生命周期/主动回收实现。部署前按安装版本验证原生工作负载与资源预留的准确关系，优先让推理原生进入既有Kueue资源账本，并由专用控制器主动撤销自身推理，保持训练之间Never语义不变。拒绝采用手工把训练ClusterQueue nominalQuota减1再加1的方案：这会与现有容量同步竞争，也违反不擅自调整配额的边界。GPU总量与原local团队配额均不因助手改写。
 
 
-8K是输入与输出合计token窗口，不是8000汉字。实际Serve包装层必须按该模型tokenizer计数，预留最多1500输出token，超出时优先裁剪低相关文档及日志节选并向用户标注；不能只靠字符长度估算，也不能静默丢掉用户问题。若仍不能容纳，应明确拒绝该模型请求并走已批准的备用路径。首轮需测试长中文问题与日志，避免“显存够但上下文超限”。本地Worker的初始CPU/内存预算为8 CPU/32Gi（待完整资源渲染与准入验证），仅共享训练池，排除团队专属节点；Head与缓存/网络开销也必须记账。
+8K是输入与输出合计token窗口，不是8000汉字。实际Serve包装层必须按该模型tokenizer计数，预留最多1500输出token，超出时优先裁剪低相关文档及日志节选并向用户标注；不能只靠字符长度估算，也不能静默丢掉用户问题。若仍不能容纳，应明确拒绝该模型请求并走已批准的备用路径。首轮需测试长中文问题与日志，避免“显存够但上下文超限”。本地Worker的初始CPU/内存预算为4 CPU/16Gi（待完整资源渲染与准入验证），仅共享训练池，排除团队专属节点；Head与缓存/网络开销也必须记账。
 
 Anthropic候选验证：db567f3加构建机gofmt差异通过go vet、完整go test -p 1 -count=1 ./...（真实隔离PostgreSQL）、assistant及API助手race；模块覆盖率95.9%。原生协议RED在仅OpenAI实现上确认；GREEN覆盖认证头隔离、请求格式、默认协议兼容、text-only响应、预算/普通400区分、混协议降级、重定向不转发凭据。Helm关闭时与原基线manifest相同，开启Anthropic时仅助手环境配置和Secret引用变化。独立审查无P1/P2。证据：/root/raytrain-assistant-validation-20260922/anthropic-red.log、backend-tests-anthropic.log、helm-anthropic-verify.log。
 
 本轮只新增后端原生协议适配、配置和设计，Portal组件未改，无需重跑未受影响的前端构建。本轮未推送/部署、未创建RayService、未下载权重、未占GPU；临时PostgreSQL与测试网络已由脚本清理。后续仍需真实Claude凭据联调、本地模型质量/内存/吞吐验收及完整Kueue主动回收验证，不能把协议合同通过报告成这些项目完成。
+
+
+## 闲时推理实现与兼容验证（2026-09-22 续）
+
+新增 `backend/assistantidle`、独立 `cmd/assistant-inference-controller`、`images/assistant-serve` 和独立 `deploy/assistant-idle` 参考清单。后两组件没有并入生产 Helm 默认资源；未创建生产 RayService、队列或 GPU Pod。两个开关分离：页面助手 `ASSISTANT_ENABLED` 与闲时控制器 `config.enabled` 均默认关闭。
+
+实际 Kueue v0.19 源码管理 RayService 顶层工作负载，但暂停字段是 **`spec.rayClusterConfig.suspend`**，不是文档写的 `spec.suspend`。构建机只读确认安装 CRD 中该字段为 boolean，RayService integration 已配置；不得因为顶层字段不存在就升级 CRD。控制器只创建 suspended RayService，由 Kueue 准入，不主动解除暂停，不写 ClusterQueue 或团队配额。
+
+实现边界：
+
+- 按真实 Pod GPU requests/limits、普通 init 与 restartable sidecar 并行峰值计算单卡 slot；GPU Pending/Unknown/未绑定 Pod、未准入或未就绪 Kueue Workload、过渡态 RayJob 触发让卡。已正常运行的训练不阻止其他卡的空闲推理。真实 RayJob 字段为 `status.jobDeploymentStatus`。
+- 同一专属 namespace 单个固定 RayService，instance/component+UID 删除保护；删除期间等待 RayCluster、GPU Pod、Workload 消失才重新计空闲窗口。专属 namespace 自限 requests.nvidia.com/gpu=1，防止临时双集群占两卡；不修改 local 的24卡或其他团队配额。
+- 连续空闲10分钟启动，启动超时10分钟、最长生命周期1小时；gate 每3秒过期，撤流后15秒删除自有服务，独立 reaper 在 leader Lease 过期或超时后兜底。Kubernetes API 不可用或垃圾回收延迟时无法保证60秒释放；60秒仍是待实测目标。
+- 只观察已经进入 Kubernetes 的资源，不能看到平台数据库里尚未创建 RayJob 的排队意图。这个边界须通过真实单卡/多机训练到达验收，不能称为零等待保证。
+- 镜像仅含助手服务代码，不改训练镜像。模型只读固定 `/models/Qwen3-8B-AWQ`；无个人存储、无挂载凭据、无在线模型下载、无外部工具。最多2并发、8K输入输出合计、1500输出上限、11秒请求预算；精确tokenizer裁剪证据，保留问题，不显示thinking。
+- Ray Serve ingress/health 与 gate 分离，避免“必须Ready才开gate、必须gate开才Ready”的循环。网络策略仅允许平台后端访问head的8000，KubeRay访问8265，其他Ray通信限专属namespace，模型无公网出口。
+
+硬件只读证据：4090D监控Pod报告 driver **550.127.05**。内部镜像代理的 vLLM0.8.5/CUDA12.4候选为 `swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/vllm/vllm-openai@sha256:6cf9808ca8810fc6c3fd0451c2e7784fb224590d81f7db338e7eaf3c02a33d33`。首次真实构建证实 Ray2.58 的依赖与该底座不兼容，pip check拦截；当前助手独立集群改用底座同代 **Ray2.43.0**，不改原训练Ray2.58。正在验证修复后的完整镜像，不能以基础镜像存在代替实际构建/GPU验收。
+
+模型候选元数据已核对官方提交记录与镜像API：Qwen/Qwen3-8B-AWQ revision `4da05a8edb55c6046cce958586c33b61da07bb79`（尚未下载权重）。部署前仍需文件SHA校验与内部只读缓存，以及模型许可证/质量、显存峰值、吞吐、训练到达回收及故障回收验收。
+
+构建机阶段性证据：`idle-red.log`（控制器缺失实现）、`runtime-red.log`（协议/生命周期stub）、`runtime-health-red.log`（V1空健康探针）、`runtime-ingress-red.log`（Ray2.43异步构造未执行）均确认RED。10fd0e7候选通过go vet、完整Go真实PostgreSQL回归及idle/controller race，assistantidle覆盖率80.7%；22条Python3.11断网单测通过。后续新增部署合同、真实字段修复、Ray2.43适配仍须重测；所有证据在构建机 `/root/raytrain-assistant-validation-20260922`。
+
+参考：[Kueue0.19 RayService实际源码](https://github.com/kubernetes-sigs/kueue/blob/v0.19.0/pkg/controller/jobs/rayservice/rayservice_controller.go)、[KubeRay1.6.2 RayService结构](https://github.com/ray-project/kuberay/blob/v1.6.2/ray-operator/apis/ray/v1/rayservice_types.go)、[Qwen官方提交记录](https://huggingface.co/Qwen/Qwen3-8B-AWQ/commits/main)。

@@ -485,9 +485,8 @@ func rayJobTerminal(obj map[string]any) bool {
 
 func rayJobRunningReady(obj map[string]any) bool {
 	jobStatus := strings.ToUpper(strings.TrimSpace(stringValue(obj, "status", "jobStatus")))
-	deploymentStatus := strings.ToUpper(strings.TrimSpace(stringValue(obj, "status", "deploymentStatus")))
-	readyPods, _, _ := unstructured.NestedInt64(obj, "status", "readyPods")
-	return jobStatus == "RUNNING" && (deploymentStatus == "RUNNING" || readyPods > 0)
+	deploymentStatus := strings.ToUpper(strings.TrimSpace(stringValue(obj, "status", "jobDeploymentStatus")))
+	return jobStatus == "RUNNING" && deploymentStatus == "RUNNING"
 }
 
 func workloadHasReadyRayJob(workload *unstructured.Unstructured, readyRayJobs map[string]bool) bool {

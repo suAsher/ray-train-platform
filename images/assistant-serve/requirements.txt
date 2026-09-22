@@ -1,3 +1,16 @@
 # Ray is installed with the explicitly selected RAY_VERSION build argument.
 # vLLM, torch, CUDA and transformers come from the verified base image together.
 httpx==0.28.1
+# vLLM 0.8.5 requires the 1.26 OpenTelemetry family. Ray 2.43's Serve
+# extra accepts it; newer Ray extras requiring >=1.30 cannot share this image.
+opentelemetry-api==1.26.0
+opentelemetry-sdk==1.26.0
+opentelemetry-exporter-otlp==1.26.0
+# Upgrade the complete HTTP stack together: instrumentator 7 rejects
+# Starlette 1, while 8 supports it. Keep these changes in resolver scope.
+fastapi==0.133.0
+starlette==1.0.1
+prometheus-fastapi-instrumentator==8.0.0
+# The Ubuntu base exposes PyGObject's metadata but lacks its cairo dependency.
+# Supply the dependency normally; do not remove system packages or metadata.
+pycairo==1.27.0

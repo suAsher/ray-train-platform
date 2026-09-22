@@ -28,7 +28,9 @@ app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 )
 @serve.ingress(app)
 class AssistantDeployment:
-    async def __init__(self):
+    def __init__(self):
+        # Ray 2.43 ingress calls this constructor synchronously. Replica
+        # initialization runs in its event loop, where start creates the poller.
         gate = HTTPGate(os.environ.get("ASSISTANT_GATE_URL", ""))
         engine = VLLMEngine(os.environ.get("ASSISTANT_MODEL_PATH", "/models/Qwen3-8B-AWQ"))
         self.runtime = AssistantRuntime(engine, engine.tokenizer, gate)

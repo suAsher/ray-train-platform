@@ -77,12 +77,17 @@ func TestRenderRayServiceUsesKueueSuspendedSingleGPUShape(t *testing.T) {
 	if strategy, _, _ := unstructured.NestedString(obj.Object, "spec", "upgradeStrategy", "type"); strategy != "None" {
 		t.Fatalf("upgradeStrategy=%q, want None to avoid double RayCluster upgrades", strategy)
 	}
-	if rayVersion, _, _ := unstructured.NestedString(obj.Object, "spec", "rayClusterConfig", "rayVersion"); rayVersion != "2.58.0" {
-		t.Fatalf("rayVersion=%q, want 2.58.0", rayVersion)
+	if rayVersion, _, _ := unstructured.NestedString(obj.Object, "spec", "rayClusterConfig", "rayVersion"); rayVersion != "2.43.0" {
+		t.Fatalf("rayVersion=%q, want 2.43.0", rayVersion)
 	}
 	headLabels := asMap(t, at(t, obj.Object, "spec", "rayClusterConfig", "headGroupSpec", "template", "metadata", "labels"))
 	if fmt.Sprint(headLabels["raytrain.wellspiking.ai/assistant-role"]) != "head" {
 		t.Fatalf("head role label missing: %v", headLabels)
+	}
+
+	serveConfig := fmt.Sprint(at(t, obj.Object, "spec", "serveConfigV2"))
+	if !strings.Contains(serveConfig, "proxy_location: HeadOnly") {
+		t.Fatalf("Serve proxy must stay on head only, not EveryNode: %s", serveConfig)
 	}
 
 	workerGroups := asSlice(t, at(t, obj.Object, "spec", "rayClusterConfig", "workerGroupSpecs"))
@@ -151,7 +156,7 @@ func TestRenderRayServiceMountsOnlyWorkerReadOnlyModelCacheAndOfflineEnvironment
 	}
 	for _, mustContain := range []string{
 		"qwen3-8b-awq-cache", "persistentVolumeClaim", "/models", "readOnly:true",
-		"HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_HOME", "ASSISTANT_MODEL_PATH", "/models/Qwen3-8B-AWQ", "ASSISTANT_GATE_URL",
+		"HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HOME", "/home/assistant", "HF_HOME", "/tmp/huggingface", "XDG_CACHE_HOME", "/tmp/.cache", "VLLM_CACHE_ROOT", "/tmp/vllm-cache", "ASSISTANT_MODEL_PATH", "/models/Qwen3-8B-AWQ", "ASSISTANT_GATE_URL",
 		"http://assistant-idle-controller.raytrain-assistant-system.svc.cluster.local:8080/gate",
 	} {
 		if !strings.Contains(encoded, mustContain) {
@@ -171,9 +176,9 @@ func TestRenderRayServiceHardensPodsWithoutServiceAccountTokensOrPreemption(t *t
 	for _, mustContain := range []string{
 		"automountServiceAccountToken:false", "preemptionPolicy:Never", "priorityClassName:assistant-idle-low",
 		"terminationGracePeriodSeconds:15", "hostIPC:false", "runAsUser:1000", "readOnlyRootFilesystem:true",
-		"emptyDir", "dev-shm", "sizeLimit:8Gi", "/tmp",
+		"emptyDir", "dev-shm", "sizeLimit:8Gi", "/tmp", "/home/assistant",
 		"serviceType:ClusterIP", "dashboard-host", "0.0.0.0", "include-dashboard", "true",
-		"object-manager-port", "8076", "min-worker-port", "10002", "max-worker-port", "10032",
+		"object-manager-port", "8076", "dashboard-agent-grpc-port", "52366", "runtime-env-agent-port", "52367", "min-worker-port", "10002", "max-worker-port", "10032",
 		"tolerations", "nvidia.com/gpu", "NoSchedule",
 	} {
 		if !strings.Contains(encoded, mustContain) {

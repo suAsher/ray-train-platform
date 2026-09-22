@@ -95,7 +95,15 @@ class VLLMEngine:
         await self.engine.abort(request_id)
 
     async def check_health(self):
+        # V1's v0.8.5 check_health only logs. Both V0 and V1 expose these
+        # public properties; V0 may legitimately be idle before its first call.
+        self._check_state()
         await self.engine.check_health()
+        self._check_state()
+
+    def _check_state(self):
+        if self.engine.errored or self.engine.is_stopped:
+            raise RuntimeError("engine_unhealthy")
 
     def close(self):
         # v0.8.5 may select V0 or V1 internally. Both have a lifecycle shutdown;

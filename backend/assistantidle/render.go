@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	defaultRayVersion           = "2.58.0"
+	defaultRayVersion           = "2.43.0"
 	defaultPriorityClassName    = "assistant-idle-low"
 	defaultModelMountPath       = "/models"
 	defaultModelPath            = "/models/Qwen3-8B-AWQ"
@@ -25,6 +25,8 @@ const (
 	rayObjectManagerPort        = "8076"
 	rayNodeManagerPort          = "8077"
 	rayDashboardAgentListenPort = "52365"
+	rayDashboardAgentGRPCPort   = "52366"
+	rayRuntimeEnvAgentPort      = "52367"
 	rayMinWorkerPort            = "10002"
 	rayMaxWorkerPort            = "10032"
 )
@@ -203,10 +205,12 @@ func podSpec(cfg RenderConfig, worker bool) map[string]any {
 	volumeMounts := []any{
 		map[string]any{"name": "tmp", "mountPath": "/tmp"},
 		map[string]any{"name": "dev-shm", "mountPath": "/dev/shm"},
+		map[string]any{"name": "home", "mountPath": "/home/assistant"},
 	}
 	volumes := []any{
 		map[string]any{"name": "tmp", "emptyDir": map[string]any{}},
 		map[string]any{"name": "dev-shm", "emptyDir": map[string]any{"medium": "Memory", "sizeLimit": "8Gi"}},
+		map[string]any{"name": "home", "emptyDir": map[string]any{}},
 	}
 	if worker {
 		volumeMounts = append(volumeMounts, map[string]any{"name": "model-cache", "mountPath": cfg.ModelMountPath, "readOnly": true})
@@ -266,7 +270,10 @@ func serveEnv(cfg RenderConfig) []any {
 	return []any{
 		map[string]any{"name": "HF_HUB_OFFLINE", "value": "1"},
 		map[string]any{"name": "TRANSFORMERS_OFFLINE", "value": "1"},
-		map[string]any{"name": "HF_HOME", "value": cfg.ModelMountPath},
+		map[string]any{"name": "HOME", "value": "/home/assistant"},
+		map[string]any{"name": "HF_HOME", "value": "/tmp/huggingface"},
+		map[string]any{"name": "XDG_CACHE_HOME", "value": "/tmp/.cache"},
+		map[string]any{"name": "VLLM_CACHE_ROOT", "value": "/tmp/vllm-cache"},
 		map[string]any{"name": "VLLM_NO_USAGE_STATS", "value": "1"},
 		map[string]any{"name": "ASSISTANT_GATE_URL", "value": cfg.GateURL},
 		map[string]any{"name": "ASSISTANT_MODEL_PATH", "value": cfg.ModelPath},
@@ -308,6 +315,8 @@ func commonRayStartParams() map[string]any {
 		"object-manager-port":         rayObjectManagerPort,
 		"node-manager-port":           rayNodeManagerPort,
 		"dashboard-agent-listen-port": rayDashboardAgentListenPort,
+		"dashboard-agent-grpc-port":   rayDashboardAgentGRPCPort,
+		"runtime-env-agent-port":      rayRuntimeEnvAgentPort,
 		"min-worker-port":             rayMinWorkerPort,
 		"max-worker-port":             rayMaxWorkerPort,
 	}
@@ -325,6 +334,7 @@ func workerTolerations(cfg RenderConfig) []any {
 
 func serveConfig(cfg RenderConfig) string {
 	return strings.Join([]string{
+		"proxy_location: HeadOnly",
 		"applications:",
 		"- name: raytrain-assistant",
 		"  route_prefix: /",
@@ -333,7 +343,10 @@ func serveConfig(cfg RenderConfig) string {
 		"    env_vars:",
 		"      HF_HUB_OFFLINE: \"1\"",
 		"      TRANSFORMERS_OFFLINE: \"1\"",
-		"      HF_HOME: \"" + cfg.ModelMountPath + "\"",
+		"      HOME: \"/home/assistant\"",
+		"      HF_HOME: \"/tmp/huggingface\"",
+		"      XDG_CACHE_HOME: \"/tmp/.cache\"",
+		"      VLLM_CACHE_ROOT: \"/tmp/vllm-cache\"",
 		"      ASSISTANT_MODEL_PATH: \"" + cfg.ModelPath + "\"",
 		"      ASSISTANT_GATE_URL: \"" + cfg.GateURL + "\"",
 		"  deployments:",
