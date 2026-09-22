@@ -26,6 +26,23 @@ type networkPolicyPeer struct {
 	PodSelector       *labelSelector `yaml:"podSelector"`
 }
 
+type serviceContract struct {
+	Kind     string `yaml:"kind"`
+	Metadata struct {
+		Name string `yaml:"name"`
+	} `yaml:"metadata"`
+	Spec struct {
+		Type     string            `yaml:"type"`
+		Selector map[string]string `yaml:"selector"`
+		Ports    []struct {
+			Name       string `yaml:"name"`
+			Port       int    `yaml:"port"`
+			TargetPort any    `yaml:"targetPort"`
+			NodePort   int    `yaml:"nodePort"`
+		} `yaml:"ports"`
+	} `yaml:"spec"`
+}
+
 type labelSelector struct {
 	MatchLabels map[string]string `yaml:"matchLabels"`
 }
@@ -50,6 +67,81 @@ func TestAssistantIdleKubeRayDashboardPolicyPinsOperatorPods(t *testing.T) {
 	mustContain(t, string(readme), "app.kubernetes.io/name=kuberay-operator")
 	mustContain(t, string(readme), "app.kubernetes.io/component=kuberay-operator")
 	mustContain(t, string(readme), "app.kubernetes.io/instance=kuberay")
+}
+
+func TestAssistantIdleInferenceServiceRoutesOnlyHeadServePort(t *testing.T) {
+	root := filepath.Join("..", "..", "deploy", "assistant-idle")
+	serviceBody, err := os.ReadFile(filepath.Join(root, "service.yaml"))
+	if err != nil {
+		t.Fatalf("read service.yaml: %v", err)
+	}
+	readme, err := os.ReadFile(filepath.Join(root, "README.md"))
+	if err != nil {
+		t.Fatalf("read README.md: %v", err)
+	}
+
+	service := serviceNamed(t, string(serviceBody), "assistant-idle-inference")
+	if service.Spec.Type != "ClusterIP" {
+		t.Fatalf("inference service must be ClusterIP, got %q", service.Spec.Type)
+	}
+	if len(service.Spec.Ports) != 1 {
+		t.Fatalf("inference service must expose only one port, got %#v", service.Spec.Ports)
+	}
+	port := service.Spec.Ports[0]
+	if port.Port != 8000 || intValue(port.TargetPort) != 8000 || port.NodePort != 0 {
+		t.Fatalf("inference service must route only ClusterIP port 8000 to head port 8000 without NodePort: %#v", port)
+	}
+	for key, want := range map[string]string{
+		"app.kubernetes.io/instance":             "PLACEHOLDER_INSTANCE_ID",
+		"app.kubernetes.io/component":            "assistant-idle",
+		"raytrain.wellspiking.ai/assistant-role": "head",
+	} {
+		if service.Spec.Selector[key] != want {
+			t.Fatalf("inference service selector[%s]=%q, want %q in %#v", key, service.Spec.Selector[key], want, service.Spec.Selector)
+		}
+	}
+	for _, forbidden := range []string{"ray.io/serve", "ray.io/cluster"} {
+		if _, found := service.Spec.Selector[forbidden]; found {
+			t.Fatalf("inference service must not depend on KubeRay serve selector %s: %#v", forbidden, service.Spec.Selector)
+		}
+	}
+
+	readmeBody := string(readme)
+	mustContain(t, readmeBody, "assistant-idle-inference")
+	mustContain(t, readmeBody, "ray.io/serve=true")
+	mustContain(t, readmeBody, "HeadOnly")
+}
+
+func intValue(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	default:
+		return 0
+	}
+}
+
+func serviceNamed(t *testing.T, body, name string) serviceContract {
+	t.Helper()
+	for _, document := range strings.Split(body, "---") {
+		document = strings.TrimSpace(document)
+		if document == "" {
+			continue
+		}
+		var service serviceContract
+		if err := yaml.Unmarshal([]byte(document), &service); err != nil {
+			t.Fatalf("parse Service document: %v\n%s", err, document)
+		}
+		if service.Kind == "Service" && service.Metadata.Name == name {
+			return service
+		}
+	}
+	t.Fatalf("missing Service named %s in:\n%s", name, body)
+	return serviceContract{}
 }
 
 func networkPolicyNamed(t *testing.T, body, name string) networkPolicyContract {

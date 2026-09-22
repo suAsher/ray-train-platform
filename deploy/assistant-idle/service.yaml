@@ -15,3 +15,24 @@ spec:
     - name: http
       port: 8080
       targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: assistant-idle-inference
+  namespace: PLACEHOLDER_ASSISTANT_NAMESPACE
+  labels:
+    app.kubernetes.io/name: assistant-idle-inference
+    app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
+    app.kubernetes.io/component: assistant-idle
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
+    app.kubernetes.io/component: assistant-idle
+    raytrain.wellspiking.ai/assistant-role: head
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8000
+      targetPort: 8000
