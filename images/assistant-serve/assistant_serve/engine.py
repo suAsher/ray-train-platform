@@ -53,6 +53,8 @@ def engine_arguments(path):
         "tensor_parallel_size": 1, "pipeline_parallel_size": 1,
         "distributed_executor_backend": "mp", "max_model_len": CONTEXT_LIMIT,
         "max_num_seqs": 2, "max_num_batched_tokens": CONTEXT_LIMIT,
+        # Do not share cached prompt prefixes across tenants' task evidence.
+        "enable_prefix_caching": False,
         "gpu_memory_utilization": 0.85, "swap_space": 0,
         "enable_lora": False, "disable_log_requests": True, "disable_log_stats": True,
         "enforce_eager": True,

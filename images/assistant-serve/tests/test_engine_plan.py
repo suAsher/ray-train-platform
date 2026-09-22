@@ -18,6 +18,11 @@ class EnginePlanTests(unittest.TestCase):
         self.assertFalse(args["enable_lora"])
         self.assertTrue(args["disable_log_requests"])
 
+    def test_cross_request_prefix_cache_is_explicitly_disabled(self):
+        # vLLM V1 enables this by default; shared assistant requests can carry
+        # different tenants' authorized task evidence.
+        self.assertIs(engine_arguments("/models/Qwen3-8B-AWQ").get("enable_prefix_caching"), False)
+
     def test_local_model_must_be_complete_and_cannot_escape_mount(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "models"
