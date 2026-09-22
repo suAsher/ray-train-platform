@@ -31,9 +31,59 @@ func assistantSourceText(text string, limit int, allowed func(string) bool) stri
 		return "[地址已省略]"
 	})
 	text = assistantRedact(text)
-	text = assistantMarkdownLink.ReplaceAllString(text, "$1")
-	text = assistantHTML.ReplaceAllString(text, "")
+	text = assistantSourceMarkup(text)
 	return assistantTruncate(strings.TrimSpace(text), limit)
+}
+
+// Markdown syntax inside fenced/inline code is literal. Stripping it as HTML
+// or a link can turn comparisons, placeholders and Python calls into invalid
+// code. Credential and URL filtering runs on all text before this step.
+func assistantSourceMarkup(text string) string {
+	lines := strings.Split(text, "\n")
+	fence := ""
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			marker := trimmed[:3]
+			if fence == "" {
+				fence = marker
+			} else if fence == marker {
+				fence = ""
+			}
+			continue
+		}
+		if fence == "" {
+			lines[i] = assistantInlineSourceMarkup(line)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func assistantInlineSourceMarkup(line string) string {
+	strip := func(text string) string {
+		return assistantHTML.ReplaceAllString(assistantMarkdownLink.ReplaceAllString(text, "$1"), "")
+	}
+	var result strings.Builder
+	for {
+		start := strings.IndexByte(line, '`')
+		if start < 0 {
+			result.WriteString(strip(line))
+			return result.String()
+		}
+		width := 1
+		for start+width < len(line) && line[start+width] == '`' {
+			width++
+		}
+		end := strings.Index(line[start+width:], strings.Repeat("`", width))
+		if end < 0 {
+			result.WriteString(strip(line))
+			return result.String()
+		}
+		end += start + 2*width
+		result.WriteString(strip(line[:start]))
+		result.WriteString(line[start:end])
+		line = line[end:]
+	}
 }
 
 func assistantPublishedText(text string, limit int) string {

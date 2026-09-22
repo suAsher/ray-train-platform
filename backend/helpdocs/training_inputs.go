@@ -4,8 +4,13 @@ const localSourceCLIGuide = `### 本地源码通过 CLI 提交训练
 
 先按「CLI 如何安装、登录和升级？」安装 spk-rayjob。在「账户与安全」创建当前团队的 PAT，包含 jobs:read、jobs:write、sources:write。以下为 Linux / macOS 终端步骤；不要把 PAT 写进命令。
 
+先单独执行下面的登录命令；按“个人访问令牌”提示输入 PAT 并回车，终端不回显。看到登录成功后，再执行检查和镜像查询，不要把后续命令粘贴到令牌提示里。
+
 ~~~bash
 spk-rayjob login --server https://raytrain.wellspiking.ai --token-stdin
+~~~
+
+~~~bash
 spk-rayjob login-check
 spk-rayjob images
 ~~~
