@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -41,6 +42,18 @@ class EnginePlanTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 model_directory(str(model), root)
             (model / "model.safetensors.index.json").unlink()
+            index = model / "model.safetensors.index.json"
+            for shard in ("../outside.safetensors", "/tmp/outside.safetensors"):
+                index.write_text(json.dumps({"weight_map": {"layer": shard}}))
+                with self.assertRaises(ValueError):
+                    model_directory(str(model), root)
+            fifo = model / "blocked.safetensors"
+            os.mkfifo(fifo)
+            index.write_text(json.dumps({"weight_map": {"layer": fifo.name}}))
+            with self.assertRaises(ValueError):
+                model_directory(str(model), root)
+            fifo.unlink()
+            index.unlink()
             (model / "tokenizer.json").unlink()
             outside = Path(directory) / "outside.json"
             outside.write_text("{}")
