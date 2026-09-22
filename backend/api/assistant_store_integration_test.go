@@ -168,9 +168,12 @@ func TestAssistantPublishedStorePostgresActionableInstructions(t *testing.T) {
 		name, question string
 		markers []string
 	}{
-		{"local-cli", "代码在我本地电脑上，想用 CLI 提交训练，怎么操作？", []string{"spk-rayjob login", "spk-rayjob whoami", "--dir .", "--entrypoint", "spk-rayjob status JOB_ID", "spk-rayjob logs -f JOB_ID"}},
-		{"relative-input", "用 my-files 提交数据时 input-path 应该填相对路径还是 /mnt/storage/me/...？", []string{"--input-space my-files", "--input-path", "相对路径", "PLATFORM_INPUT_PATH", "/mnt/storage/me/"}},
+		{"local-cli", "代码在我本地电脑上，想用 CLI 提交训练，怎么操作？", []string{"spk-rayjob login", "spk-rayjob login-check", "--dir .", "--entrypoint", "spk-rayjob status JOB_ID", "spk-rayjob logs -f JOB_ID"}},
+		{"local-cli-synonym", "本机源码用命令行怎么上传并跑起来？", []string{"--dir .", "--entrypoint", "spk-rayjob status JOB_ID"}},
+		{"relative-input", "用 my-files 提交数据时 input-path 应该填相对路径还是 /mnt/storage/me/...？", []string{"--input-space my-files", "--input-path", "相对路径", "PLATFORM_DATASET_PATH", "/mnt/storage/me/"}},
+		{"relative-input-synonym", "个人文件的数据目录提交时怎么填，能用绝对路径吗？", []string{"--input-space my-files", "相对路径", "PLATFORM_DATASET_PATH"}},
 		{"mlflow-pytorch", "我的普通 PyTorch 训练怎么接入 MLflow，记录参数和每一步的 loss？", []string{"platform_mlflow.py", "from platform_mlflow import PlatformMLflow", "reporter.params(", "reporter.metrics(", "step=step", `reporter.finish("FAILED")`, `reporter.finish("FINISHED")`}},
+		{"mlflow-pytorch-synonym", "torchrun 脚本还没有 Run，如何上报参数和训练指标到 mlflow？", []string{"platform_mlflow.py", "from platform_mlflow import PlatformMLflow", "reporter.metrics(", `reporter.finish("FINISHED")`}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			body, _ := json.Marshal(assistantQueryRequest{Question: tc.question, Mode: "auto"})
