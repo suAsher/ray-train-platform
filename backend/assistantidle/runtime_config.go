@@ -10,6 +10,9 @@ import (
 // RuntimeConfig is mounted from an administrator-owned ConfigMap, never a user request.
 // Operational time bounds stay fixed until new acceptance evidence justifies changing them.
 type RuntimeConfig struct {
+	RuntimeType string       `json:"runtimeType"`
+	DemandTokenFile string   `json:"demandTokenFile"`
+	DemandCAFile string      `json:"demandCAFile"`
 	Enabled    bool         `json:"enabled"`
 	InstanceID string       `json:"instanceID"`
 	LeaseName  string       `json:"leaseName"`
@@ -27,6 +30,11 @@ func ParseRuntimeConfig(r io.Reader) (RuntimeConfig, error) {
 		return cfg, errors.New("expected one configuration object")
 	}
 	cfg.Render = cfg.Render.withDefaults()
+	if cfg.RuntimeType != "pod" && cfg.RuntimeType != "rayservice" {
+		return cfg, errors.New("runtimeType must explicitly select pod or rayservice")
+	}
+	cfg.Render.RuntimeType = cfg.RuntimeType
+	if cfg.DemandTokenFile == "" { cfg.DemandTokenFile = "/run/assistant/demand/token" }
 	if len(cfg.InstanceID) > 63 || !dnsLabelPattern.MatchString(cfg.InstanceID) || cfg.InstanceID != cfg.Render.Name {
 		return cfg, errors.New("instanceID must equal the fixed service name")
 	}
@@ -36,7 +44,7 @@ func ParseRuntimeConfig(r io.Reader) (RuntimeConfig, error) {
 	if !strings.HasPrefix(cfg.Render.Namespace, "raytrain-assistant-") {
 		return cfg, errors.New("a dedicated raytrain-assistant- namespace is required")
 	}
-	if _, err := RenderRayService(cfg.Render); err != nil {
+	if _, err := renderRuntime(cfg.Render); err != nil {
 		return cfg, err
 	}
 	return cfg, nil

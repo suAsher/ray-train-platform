@@ -56,6 +56,7 @@ func TestPodAdmissionRequiresMatchingWorkloadUIDAndRemovedGate(t *testing.T) {
    markCondition(w,"Admitted","True")
    adapter := testAdapter(pod,w)
    adapter.render = cfg
+   adapter.demand = staticDemand(false)
    snapshot, err := adapter.Observe(context.Background()); if err != nil { t.Fatal(err) }
    if got := snapshot.Observation.Admitted && snapshot.Observation.ServiceReady; got != tc.want { t.Fatalf("ready=%t snapshot=%+v",got,snapshot) }
    if err := adapter.Delete(context.Background(), "wrong-uid"); err == nil { t.Fatal("deleted stale UID") }
@@ -64,3 +65,13 @@ func TestPodAdmissionRequiresMatchingWorkloadUIDAndRemovedGate(t *testing.T) {
  }
 }
 
+type staticDemand bool
+func (d staticDemand) Pending(context.Context)(bool,error) { return bool(d),nil }
+
+func TestPodMissingAuthoritativeDemandFailsClosed(t *testing.T) {
+ adapter:=testAdapter(); adapter.render=podRenderConfig()
+ if _,err:=adapter.Observe(context.Background()); err==nil { t.Fatal("missing DB observer was treated as idle") }
+ adapter.demand=staticDemand(true)
+ snapshot,err:=adapter.Observe(context.Background()); if err!=nil {t.Fatal(err)}
+ if !snapshot.Observation.TrainingDemand {t.Fatal("DB pending training was ignored")}
+}

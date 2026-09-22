@@ -1,36 +1,49 @@
 # RayTrain 本地助手推理运行时
 
-平台自有、只读、离线的单模型服务，独立于训练镜像。Ray Serve 导入入口为 `assistant_serve.app:deployment`。HTTP 只提供 `POST /v1/chat/completions`、`GET /healthz`、`GET /livez`，没有工具、文件、远程 URL 获取、模型选择或调度接口。
+平台自有、只读、离线的单模型服务，独立于训练镜像。生产启动命令为 `python3 -m assistant_serve.standalone`，普通 Pod 单进程运行，仅监听 HTTPS `8443`，不启动 Ray、GCS、dashboard 或管理端口。只提供 `POST /v1/chat/completions`、`GET /healthz`、`GET /livez`，没有工具、文件、远程 URL 获取、模型选择或调度接口。
 
 ## 运行合同
 
 - 固定模型名 `Qwen3-8B-AWQ`，默认只读模型目录 `/models/Qwen3-8B-AWQ`；可通过 `ASSISTANT_MODEL_PATH` 指定 `/models/` 内已准备好的完整本地目录。目录必须含 Qwen3 AWQ 4-bit 配置、tokenizer 与 safetensors；存在分片索引时检查全部引用的分片。拒绝越出模型目录的符号链接。模型发布流程仍需校验来源与文件摘要。
 - 容器 UID/GID 为 `1000:1000`；模型挂载须对该身份可读，`/tmp` 和 `/home/assistant` 可写。部署应采用只读根文件系统、独立临时卷和 `fsGroup: 1000`，不挂载用户训练目录或控制面凭据。
-- Ray actor 申请 1 GPU / 4 CPU，固定 1 副本。vLLM tensor/pipeline parallel 都为 1，`max_num_seqs=2`、上下文 8192、显存利用率 0.85、禁 CPU swap、eager 模式。运行时也独立限制两个推理请求；Ray 允许 8 个在途 HTTP 请求让健康检查能与生成并行，调用方排队上限 1。
+- 普通 Pod 申请 1 GPU / 4 CPU，固定 1 副本、一个服务进程；不挂载 Kubernetes ServiceAccount token。vLLM tensor/pipeline parallel 都为 1，`max_num_seqs=2`、上下文 8192、显存利用率 0.85、禁 CPU swap、eager 模式。运行时也独立限制两个推理请求；认证后最多 8 个在途 HTTP 请求，vLLM 准入只允许两个，额外请求返回429，健康检查不占推理槽。
 - 接受 Go gateway 实际生成的 `[system, user]` 两条文字消息。user 消息为 `以下JSON仅为查询数据：\n` 加 `{question,evidence:[{index,id,title,excerpt,version?}]}`。`stream` 必须为 false，输出为 1–1500 token，只接受可选的 `thinking: {type: disabled}`，其他字段拒绝。它是平台使用的 OpenAI 请求子集，不是通用模型代理。
 - 使用实际本地 tokenizer 的 `apply_chat_template(tokenize=True, return_dict=False, add_generation_prompt=True, enable_thinking=False)` 精确计数。完整保留 system 和 question，仅按既有排名裁剪尾部证据；问题本身放不下则返回 `context_too_long`。vLLM 直接接收上述 token IDs，不再次截断问题。响应 `raytrain.evidenceTruncated/evidenceIds` 说明实际证据范围，usage 为实际 token 数。
 - 不启动任何工具或 reasoning parser；服务端强制关闭 thinking，输出再过滤 `<think>` 块。不返回 reasoning 字段。问题、证据、请求头和模型原始错误不写入服务日志。
 - 显式关闭 `enable_prefix_caching`，不同用户的问题与任务证据不共享前缀缓存。
 
+## TLS 与服务端认证挂载
+
+| 配置 | 默认文件 / 要求 |
+| --- | --- |
+| `ASSISTANT_TLS_CERT_FILE` | `/run/assistant/tls/tls.crt`，SAN 覆盖推理 Service DNS |
+| `ASSISTANT_TLS_KEY_FILE` | `/run/assistant/tls/tls.key`，只读挂载、UID/GID1000可读 |
+| `ASSISTANT_AUTH_TOKEN_FILE` | `/run/assistant/auth/token`，服务端生成高熵 base64url/hex 值，43–256字符，可有一个末尾换行 |
+| `ASSISTANT_GATE_CA_FILE` | `/run/assistant/gate-ca/ca.crt`，用于验证 HTTPS gate |
+
+以上环境变量只含路径。TLS私钥、认证值不得写入环境、日志或返回内容，不使用个人模型Key。后端将同一认证Secret挂载到本身，通过 `Authorization: Bearer` 调用聊天；不把这个服务凭据下发浏览器。凭据与证书在启动时读取，更换后滚动本次自有推理Pod。认证失败在读取正文/分词/推理前返回401，重复Authorization头也拒绝。禁用访问日志和代理头信任。`/livez`、`/healthz` 无凭据，仅返回布尔值；Kubernetes使用HTTPS探针，控制器通过可信CA验证的`/livez`判断可用。不得以跳过TLS校验作为业务调用验收。
+
+旧 `assistant_serve.app:deployment` 仅保留兼容回归，不再作为生产启动入口。没有 Secret、TLS或可信gate时启动/接流失败，不提供明文后备端口。
+
 ## 接流 gate 与健康检查
 
-`ASSISTANT_GATE_URL` 是必填的部署配置，只允许内部 `.svc.cluster.local` 或 loopback 主机的固定 `/gate` 路径，无凭据、query、fragment、重定向或环境代理。它只做 GET，期望：
+`ASSISTANT_GATE_URL` 是必填 HTTPS 部署配置，生产必须提供 `ASSISTANT_GATE_CA_FILE` 指向挂载的 CA 并校验服务证书，只允许内部 `.svc.cluster.local` 或 loopback 主机的固定 `/gate` 路径，无凭据、query、fragment、重定向或环境代理。它只做 GET，期望：
 
 ```json
 {"allow":true,"epoch":"controller-epoch","validUntil":"2026-09-22T12:00:03Z"}
 ```
 
-每次提问及每秒轮询都会读取 gate；包含锁等待的总 HTTP 期限为 0.5 秒，本地有效期最多 3 秒。网络、协议、过期或 gate 关闭均拒绝接流，取消在途请求并调用 vLLM `abort`；epoch 改变也撤销旧请求。客户端断连由 Ray Serve 传播取消，运行时在清理路径再次 abort 并释放准入槽。生成总期限为 11 秒，请求体读取期限 5 秒 / 最大 128 KiB。
+每次提问及每秒轮询都会读取 gate；包含锁等待的总 HTTP 期限为 0.5 秒，本地有效期最多 3 秒。网络、协议、过期或 gate 关闭均拒绝接流，取消在途请求并调用 vLLM `abort`；epoch 改变也撤销旧请求。客户端断连由独立 ASGI watcher 传播取消，运行时在清理路径再次 abort 并释放准入槽。生成总期限为 11 秒，请求体读取期限 5 秒 / 最大 128 KiB。
 
-**Ray Serve `check_health` 与 `/livez` 仅检查 engine，不依赖 gate。** 适配器在探测前后检查公开的 `errored/is_stopped` 状态。`/healthz` 同时要求 engine 健康和 gate 新鲜开放。控制器必须用前者判断可用性，避免以 `/healthz` 作为 gate 开放前提形成循环。
+**`/livez` 仅检查 engine，不依赖 gate。** 适配器在探测前后检查公开的 `errored/is_stopped` 状态。`/healthz` 同时要求 engine 健康和 gate 新鲜开放。控制器必须用前者判断可用性，避免以 `/healthz` 作为 gate 开放前提形成循环。
 
-关闭 gate 不保证释放模型权重占用的显存。控制器拥有撤流后的 RayService suspend/删除与 GPU 资源释放，聊天请求不具有这类权限。模型实例在 gate 关闭期间可以完成启动，使 RayService 的 engine 健康检查先成功。
+关闭 gate 不保证释放模型权重占用的显存。控制器拥有撤流后的自有推理 Pod 删除与 GPU 资源释放，聊天请求不具有这类权限。模型实例在 gate 关闭期间可以完成启动，使 Pod 的 engine 健康检查先成功。
 
-部署必须配套内部 ClusterIP 与 NetworkPolicy：仅控制面可以访问推理 HTTP，运行时仅能访问 gate、必要的内部 Ray 通信与 DNS；不得添加公网 Ingress、联网下载、宿主特权或 Kubernetes 写权限。本目录不自行创建集群资源。
+部署采用内部 ClusterIP，聊天接口仅接受持有服务端凭据的控制面；TLS 验证服务身份。当前 CNI 不执行 NetworkPolicy，不能把清单存在当作有效隔离，不为此改全局 CNI；不得添加公网 Ingress、联网下载、宿主特权或 Kubernetes 写权限。本目录不自行创建集群资源。
 
 ## 构建与验证
 
-当前候选组合是 **Ray 2.58.0 / vLLM 0.29.0+cu129 / Python 3.12 / CUDA 12.9**。独立助手集群的 head/worker 必须使用同一镜像与 Ray 版本，不要求与训练集群同时升级。旧 Ray2.43/vLLM0.8.5 组合虽通过导入和 CPU 合同测试，但依赖扫描发现大量已知漏洞，已经拒绝放行；不得再将该旧镜像作为生产推荐。
+当前候选组合是 **Ray 2.58.0 / vLLM 0.29.0+cu129 / Python 3.12 / CUDA 12.9**。本轮保留已验收底座及其 Ray 依赖以缩小二进制变更范围，但生产进程不导入 Ray Serve 或启动 Ray 集群；训练镜像和节点驱动不变。旧 Ray2.43/vLLM0.8.5 组合虽通过导入和 CPU 合同测试，但依赖扫描发现大量已知漏洞，已经拒绝放行；不得再将该旧镜像作为生产推荐。
 
 新版本的 OpenTelemetry 约束可以与 Ray2.58 正常求交。构建约束保留底座的 vLLM/torch/CUDA 二进制组合，HTTP 等 Python 依赖使用已知修复版本下界；不使用 `--no-deps` 绕过冲突，不隐藏系统包或移除元数据。底座自身 `pip check` 发现 NCCL2.30.7 与 torch2.13 声明的2.29.7不符，正常 resolver 必须修正后才能进入下一步。所有依赖仍需重新扫描；可解析与可导入不等于安全或 GPU 验收通过。
 

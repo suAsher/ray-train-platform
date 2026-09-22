@@ -52,7 +52,7 @@ ENV PYTHONPATH=/opt/assistant \
 RUN python3 -m unittest discover -s /opt/assistant/tests -v \
  && python3 /opt/assistant/tests/ingress_smoke.py -v \
  && python3 /opt/assistant/tests/engine_api_smoke.py \
- && python3 -c 'import assistant_serve.app; from vllm import AsyncLLMEngine; from vllm.engine.arg_utils import AsyncEngineArgs'
+ && python3 -c 'import assistant_serve.app, assistant_serve.standalone; from vllm import AsyncLLMEngine; from vllm.engine.arg_utils import AsyncEngineArgs'
 
 # The cluster's NVIDIA hook can register the image's forward-compat libcuda in
 # ld.so.cache even when vLLM's opt-in is disabled. GeForce must use the mounted
@@ -72,7 +72,7 @@ ENV NVIDIA_REQUIRE_CUDA="cuda>=12.4,driver>=550.127.05,driver<551"
 USER 1000:1000
 WORKDIR /opt/assistant
 # Exercise imports with the runtime identity as well as the build identity.
-RUN python3 -c 'import assistant_serve.app; from vllm import AsyncLLMEngine; from vllm.engine.arg_utils import AsyncEngineArgs; import httplib2; from pathlib import Path; assert httplib2.__version__ == "0.32.0"; assert Path(httplib2.__file__).is_relative_to("/usr/local/lib/python3.12/dist-packages")'
-EXPOSE 8000
+RUN python3 -c 'import assistant_serve.app, assistant_serve.standalone; from vllm import AsyncLLMEngine; from vllm.engine.arg_utils import AsyncEngineArgs; import httplib2; from pathlib import Path; assert httplib2.__version__ == "0.32.0"; assert Path(httplib2.__file__).is_relative_to("/usr/local/lib/python3.12/dist-packages")'
+EXPOSE 8443
 ENTRYPOINT []
-CMD ["python3", "-m", "assistant_serve.app"]
+CMD ["python3", "-m", "assistant_serve.standalone"]

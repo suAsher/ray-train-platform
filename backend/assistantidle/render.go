@@ -38,6 +38,10 @@ var (
 )
 
 type RenderConfig struct {
+	RuntimeType               string
+	TLSSecretName             string
+	AuthSecretName            string
+	GateCASecretName          string
 	Name                      string
 	Namespace                 string
 	QueueName                 string
@@ -203,7 +207,9 @@ func validateRenderConfig(cfg RenderConfig) error {
 		return errors.New("assistant idle serve import path is invalid")
 	}
 	u, err := url.Parse(cfg.GateURL)
-	if err != nil || u.Scheme != "http" || u.Host == "" || strings.Contains(cfg.GateURL, "@") || u.RawQuery != "" || u.Fragment != "" || containsControl(cfg.GateURL) {
+	scheme := "http"
+	if cfg.RuntimeType == "pod" { scheme = "https" }
+	if err != nil || u.Scheme != scheme || u.Host == "" || strings.Contains(cfg.GateURL, "@") || u.RawQuery != "" || u.Fragment != "" || containsControl(cfg.GateURL) {
 		return errors.New("assistant idle gate URL must be a fixed in-cluster HTTP URL without credentials, query, or fragment")
 	}
 	if strings.Contains(cfg.GateURL, "PLACEHOLDER") || strings.Contains(cfg.GateURL, "<") || strings.Contains(cfg.GateURL, ">") {

@@ -23,7 +23,9 @@ var (
 )
 
 type Config struct {
+	AssistantControllerCAFile string
 	AssistantIdleNamespace                   string
+	AssistantIdleDemandAuthKey               string
 	Assistant                                AssistantConfig
 	EnvironmentBuild                         EnvironmentBuildConfig
 	SPKRayjobMinimumVersion                  string
@@ -546,8 +548,13 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg.AssistantIdleNamespace = strings.TrimSpace(os.Getenv("ASSISTANT_IDLE_NAMESPACE"))
+	cfg.AssistantControllerCAFile = strings.TrimSpace(os.Getenv("ASSISTANT_CONTROLLER_CA_FILE"))
 	if err := ValidateAssistantIdleNamespace(cfg.AssistantIdleNamespace); err != nil {
 		return Config{}, err
+	}
+	cfg.AssistantIdleDemandAuthKey = os.Getenv("ASSISTANT_IDLE_DEMAND_AUTH_KEY")
+	if cfg.AssistantIdleDemandAuthKey != "" && len([]byte(cfg.AssistantIdleDemandAuthKey)) < 32 {
+		return Config{}, fmt.Errorf("ASSISTANT_IDLE_DEMAND_AUTH_KEY must contain at least 32 bytes when set")
 	}
 	return cfg, nil
 }

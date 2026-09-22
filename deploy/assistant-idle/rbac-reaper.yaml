@@ -4,8 +4,8 @@ metadata:
   name: assistant-idle-reaper
   namespace: PLACEHOLDER_ASSISTANT_NAMESPACE
 rules:
-  - apiGroups: ["ray.io"]
-    resources: ["rayservices"]
+  - apiGroups: [""]
+    resources: ["pods"]
     resourceNames: ["PLACEHOLDER_RAYSERVICE_NAME"]
     verbs: ["get", "delete"]
   - apiGroups: ["coordination.k8s.io"]

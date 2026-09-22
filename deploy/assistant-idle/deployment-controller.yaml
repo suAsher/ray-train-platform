@@ -24,16 +24,20 @@ spec:
         - name: PLACEHOLDER_IMAGE_PULL_SECRET_NAME
       serviceAccountName: assistant-idle-controller
       automountServiceAccountToken: true
+      securityContext:
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: controller
           image: PLACEHOLDER_CONTROLLER_IMAGE@sha256:PLACEHOLDER_64_HEX_DIGEST
-          args: ["--config=/etc/assistant-idle/config.json", "--mode=controller", "--listen=:8080"]
+          args: ["--config=/etc/assistant-idle/config.json", "--mode=controller", "--listen=:8443"]
           env:
             - name: GOMEMLIMIT
               value: 700MiB
           ports:
-            - name: http
-              containerPort: 8080
+            - name: https
+              containerPort: 8443
           resources:
             requests:
               cpu: 100m
@@ -45,6 +49,12 @@ spec:
             - name: config
               mountPath: /etc/assistant-idle
               readOnly: true
+            - name: tls
+              mountPath: /run/assistant/tls
+              readOnly: true
+            - name: demand
+              mountPath: /run/assistant/demand
+              readOnly: true
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -55,3 +65,11 @@ spec:
         - name: config
           configMap:
             name: assistant-idle-config
+        - name: tls
+          secret:
+            secretName: PLACEHOLDER_CONTROLLER_TLS_SECRET_NAME
+            defaultMode: 0440
+        - name: demand
+          secret:
+            secretName: PLACEHOLDER_DEMAND_AUTH_SECRET_NAME
+            defaultMode: 0440

@@ -117,15 +117,23 @@ func (h *Handler) assistantBusy(c *gin.Context) {
 }
 
 func (h *Handler) assistantCapabilities(c *gin.Context) {
-	if h.assistant != nil {
+	if h.assistant != nil && h.assistantPreviewAllowed(c) {
 		h.writeSuccess(c, 200, h.assistant.Capabilities())
 		return
 	}
 	h.writeSuccess(c, 200, assistant.Capabilities{
-		Enabled: true, ReadOnly: true, Modes: []string{"docs"}, DefaultMode: "docs",
+		Enabled: false, ReadOnly: true, Modes: []string{}, Backends: []assistant.BackendStatus{},
 		Providers:   map[string]assistant.ProviderStatus{"api": {Configured: false}, "local": {Configured: false}},
-		Limitations: []string{"仅依据已发布文档和显式选中的授权任务回答；不执行修改", "不保留服务端对话历史", "常见凭据模式脱敏并非完整的敏感信息检测"},
+		Limitations: []string{"助手模型尚未配置"},
 	})
+}
+
+func (h *Handler) assistantPreviewAllowed(c *gin.Context) bool {
+	if len(h.assistantPreviewSubjects) == 0 {
+		return true
+	}
+	p, ok := auth.PrincipalFromGin(c)
+	return ok && h.assistantPreviewSubjects[p.Subject]
 }
 
 func (h *Handler) bindAssistant(c *gin.Context) (assistantQueryRequest, bool) {
@@ -173,6 +181,14 @@ func (h *Handler) assistantQuery(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if !h.assistantPreviewAllowed(c) {
+		h.writeError(c, 403, "ASSISTANT_UNAVAILABLE", "助手暂未开放，请使用平台使用说明。")
+		return
+	}
+	if h.assistant == nil || !h.assistant.Capabilities().Enabled {
+		h.writeError(c, 503, "ASSISTANT_NOT_CONFIGURED", "助手暂未开放，请使用平台使用说明。")
+		return
+	}
 	audited := h.auditAssistantQuery(c, req.Mode, req.IncludeLogs)
 	ctx := c.Request.Context()
 	response := assistantQueryResponse{
@@ -185,29 +201,29 @@ func (h *Handler) assistantQuery(c *gin.Context) {
 	docs, available := h.assistantDocuments(ctx, assistantRedact(req.Question))
 	response.Citations = append(response.Citations, docs...)
 	if !available {
-		response.Warnings = append(response.Warnings, "帮助文档暂不可用；当前回答只包含可获取的授权信息。")
+		h.writeError(c, 503, "ASSISTANT_KNOWLEDGE_UNAVAILABLE", "助手暂时无法读取使用说明，请稍后重试。")
+		return
 	}
-	response.Answer = assistantDocsAnswer(response.Citations, req.Question)
-	if len(response.Citations) == 0 {
-		response.Reason = "no_evidence"
-	} else if req.Mode != "docs" {
-		response.Reason = "provider_unavailable"
-		if h.assistant != nil && !audited {
-			response.Reason = "audit_unavailable"
-			response.Warnings = append(response.Warnings, "审计服务暂不可用，未调用模型；已展示只读检索结果。")
-		} else if h.assistant != nil {
-			result, err := h.assistant.Answer(ctx, req.Mode, assistant.Input{Question: assistantRedact(req.Question), Evidence: response.Citations})
-			answer := assistantGroundedText(result.Answer, 8000, response.Citations)
-			if err == nil && answer != "" && (result.Mode == "api" || result.Mode == "local") {
-				response.Answer, response.Mode = answer, result.Mode
-				response.Reason = assistantResultReason(result.Reason, "grounded_response")
-			} else {
-				response.Reason = assistantResultReason(result.Reason, "provider_unavailable")
-				response.Warnings = append(response.Warnings, "模型未能提供回答，已展示文档检索结果。")
-			}
-		} else {
-			response.Warnings = append(response.Warnings, "模型尚未配置，已展示文档检索结果。")
+	if req.Mode == "docs" {
+		response.Answer = assistantDocsAnswer(response.Citations, req.Question)
+		if len(response.Citations) == 0 {
+			response.Reason = "no_evidence"
 		}
+	} else {
+		if !audited {
+			h.writeError(c, 503, "ASSISTANT_AUDIT_UNAVAILABLE", "助手暂不可用，请稍后重试。")
+			return
+		}
+		// A genuine no-match is still useful input: the model can ask a precise
+		// clarifying question. A failed knowledge store is handled above instead.
+		result, err := h.assistant.Answer(ctx, req.Mode, assistant.Input{Question: assistantRedact(req.Question), Evidence: response.Citations})
+		answer := assistantGroundedText(result.Answer, 8000, response.Citations)
+		if err != nil || answer == "" || (result.Mode != "api" && result.Mode != "local") {
+			h.writeError(c, 503, "ASSISTANT_MODEL_UNAVAILABLE", "模型暂时无法回答，请稍后重试，或打开使用说明查看操作步骤。")
+			return
+		}
+		response.Answer, response.Mode = answer, result.Mode
+		response.Reason = assistantResultReason(result.Reason, "grounded_response")
 	}
 	h.writeSuccess(c, 200, response)
 }

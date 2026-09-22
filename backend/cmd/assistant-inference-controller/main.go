@@ -32,7 +32,7 @@ func main() {
 func run() error {
 	configPath := flag.String("config", "/etc/assistant-idle/config.json", "administrator-owned configuration")
 	mode := flag.String("mode", "inspect", "inspect (read-only), controller, or reaper")
-	listen := flag.String("listen", ":8080", "internal gate listen address")
+	listen := flag.String("listen", ":8443", "internal HTTPS gate listen address")
 	kubeconfig := flag.String("kubeconfig", "", "only supported by read-only inspect mode")
 	flag.Parse()
 	if *mode != "inspect" && *mode != "controller" && *mode != "reaper" {
@@ -50,6 +50,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if cfg.RuntimeType != "pod" { return errors.New("this controller command requires explicit runtimeType pod") }
 	var rc *rest.Config
 	if *kubeconfig != "" {
 		rc, err = clientcmd.BuildConfigFromFlags("", *kubeconfig)
@@ -74,12 +75,17 @@ func run() error {
 	if *mode == "reaper" {
 		return runReaper(ctx, typed, backend, cfg)
 	}
+	var demand assistantidle.DemandObserver
+	if cfg.RuntimeType == "pod" {
+		demand,err=assistantidle.NewHTTPDemandObserver(cfg.DemandTokenFile,cfg.DemandCAFile)
+		if err!=nil { return err }
+	}
 	observations, err := newObservationCache(rc, dyn, typed)
 	if err != nil {
 		return err
 	}
 	go observations.Run(ctx)
-	backend = assistantidle.NewKubeBackend(assistantidle.KubeAdapterConfig{Dynamic: observations.Dynamic(), Kubernetes: observations.Kubernetes(), Namespace: cfg.Render.Namespace, Name: cfg.Render.Name, InstanceID: cfg.InstanceID, Render: cfg.Render, NodeAllowlist: cfg.Render.AllowedWorkerNodes, RequiredLabels: cfg.Render.RequiredNodeLabels, ToleratedTaintKey: cfg.Render.ToleratedTaintKeys})
+	backend = assistantidle.NewKubeBackend(assistantidle.KubeAdapterConfig{Demand:demand, Dynamic: observations.Dynamic(), Kubernetes: observations.Kubernetes(), Namespace: cfg.Render.Namespace, Name: cfg.Render.Name, InstanceID: cfg.InstanceID, Render: cfg.Render, NodeAllowlist: cfg.Render.AllowedWorkerNodes, RequiredLabels: cfg.Render.RequiredNodeLabels, ToleratedTaintKey: cfg.Render.ToleratedTaintKeys})
 	if *mode == "inspect" {
 		attempt, cancel := context.WithTimeout(ctx, 45*time.Second)
 		defer cancel()
@@ -100,7 +106,7 @@ func run() error {
 	mux.HandleFunc("/livez", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	server := &http.Server{Addr: *listen, Handler: mux, ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second, IdleTimeout: 10 * time.Second, MaxHeaderBytes: 4096}
 	serverErrors := make(chan error, 1)
-	go func() { serverErrors <- server.ListenAndServe(); stop() }()
+	go func() { serverErrors <- server.ListenAndServeTLS("/run/assistant/tls/tls.crt", "/run/assistant/tls/tls.key"); stop() }()
 	policy := assistantidle.DefaultConfig()
 	policy.Enabled = cfg.Enabled
 	controller := assistantidle.NewController(policy, backend, gate, time.Now)

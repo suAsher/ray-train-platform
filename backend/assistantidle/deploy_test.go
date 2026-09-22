@@ -50,19 +50,17 @@ func TestAssistantIdleDeployReferenceMatchesRendererContract(t *testing.T) {
 	np := files["networkpolicy.yaml"]
 	for _, key := range []string{
 		"assistant-idle-default-deny",
-		"assistant-idle-ray-internal",
+		"assistant-idle-runtime-egress",
 		"assistant-idle-controller-gate",
-		"raytrain.wellspiking.ai/assistant-role: head",
+		"raytrain.wellspiking.ai/assistant-role: inference",
 		"app: ray-train-backend",
 		"app.kubernetes.io/component: api",
-		"port: 52366",
-		"port: 52367",
-		"port: 8000",
-		"port: 8265",
+		"port: 8443",
 	} {
 		mustContain(t, np, key)
 	}
 	mustNotContain(t, np, "api-gateway")
+	for _, port := range []string{"port: 6379", "port: 8265", "port: 8000", "port: 8080", "port: 52365"} { mustNotContain(t,np,port) }
 
 	for _, name := range []string{"deployment-controller.yaml", "deployment-reaper.yaml"} {
 		body := files[name]
@@ -81,7 +79,7 @@ func TestAssistantIdleDeployReferenceMatchesRendererContract(t *testing.T) {
 	mustContain(t, rbac, "resources: [\"nodes\", \"pods\"]")
 	mustContain(t, rbac, "resources: [\"rayjobs\", \"rayclusters\"]")
 	mustContain(t, rbac, "resources: [\"workloads\"]")
-	mustContain(t, rbac, "resourceNames: [\"rayservices.ray.io\"]")
+	mustContain(t, rbac, "resources: [\"pods\"]")
 	mustNotContain(t, rbac, "\"patch\", \"update\", \"delete\"]")
 }
 

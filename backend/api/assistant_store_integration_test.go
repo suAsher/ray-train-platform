@@ -112,3 +112,27 @@ func TestAssistantPublishedStorePostgresExcludesDraftAndUnpublished(t *testing.T
 	if _, err := store.ChangeHelpDocument(ctx, doc.ID, 3, "unpublish", 0, nil, "human"); err != nil { t.Fatal(err) }
 	if evidence, available := h.assistantDocuments(ctx, doc.Title); !available || len(evidence) != 0 { t.Fatalf("unpublished document exposed: %+v", evidence) }
 }
+
+func TestAssistantPublishedStorePostgresCommonUserQuestions(t *testing.T) {
+	_, store := assistantPostgresStore(t)
+	engine := &assistantTestEngine{result: assistant.Result{Answer: "根据已发布说明回答。", Mode: "local", Reason: "selected"}}
+	h := NewHandler(store, Options{Assistant: engine})
+	for _, tc := range []struct { question, first string }{
+		{"如何提交训练任务？", "quickstart"},
+		{"怎么提交任务", "quickstart"},
+		{"第一次用平台，怎么开始训练？", "quickstart"},
+		{"我的代码在本地电脑，如何提交训练？", "code"},
+		{"CLI 安装后怎样登录？", "cli-onboarding-v2"},
+		{"日志里有 loss 但页面没有曲线，怎么办？", "telemetry-boundary"},
+		{"调试环境安装的依赖如何保存？", "custom-environment"},
+	} {
+		t.Run(tc.question, func(t *testing.T) {
+			body, _ := json.Marshal(assistantQueryRequest{Question: tc.question, Mode:"auto"})
+			w := assistantRequest(assistantTestRouter(h, assistantTestPrincipal()), string(body))
+			var response struct { Data assistantQueryResponse `json:"data"` }
+			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &response) != nil || len(response.Data.Citations) == 0 || response.Data.Citations[0].ID != tc.first || response.Data.Mode != "local" {
+				t.Fatalf("common user question did not reach the model with relevant evidence: %d %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}

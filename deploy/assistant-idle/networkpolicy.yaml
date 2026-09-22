@@ -12,55 +12,22 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: assistant-idle-ray-internal
+  name: assistant-idle-runtime-egress
   namespace: PLACEHOLDER_ASSISTANT_NAMESPACE
 spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/component: assistant-idle
       app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
-  policyTypes: ["Ingress", "Egress"]
-  ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/component: assistant-idle
-              app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
-      ports:
-        - { protocol: TCP, port: 6379 }
-        - { protocol: TCP, port: 8000 }
-        - { protocol: TCP, port: 8076 }
-        - { protocol: TCP, port: 8077 }
-        - { protocol: TCP, port: 8265 }
-        - { protocol: TCP, port: 10001 }
-        - { protocol: TCP, port: 10002, endPort: 10032 }
-        - { protocol: TCP, port: 52365 }
-        - { protocol: TCP, port: 52366 }
-        - { protocol: TCP, port: 52367 }
+  policyTypes: ["Egress"]
   egress:
-    - to:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/component: assistant-idle
-              app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
-      ports:
-        - { protocol: TCP, port: 6379 }
-        - { protocol: TCP, port: 8000 }
-        - { protocol: TCP, port: 8076 }
-        - { protocol: TCP, port: 8077 }
-        - { protocol: TCP, port: 8265 }
-        - { protocol: TCP, port: 10001 }
-        - { protocol: TCP, port: 10002, endPort: 10032 }
-        - { protocol: TCP, port: 52365 }
-        - { protocol: TCP, port: 52366 }
-        - { protocol: TCP, port: 52367 }
     - to:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: assistant-idle-controller
               app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
       ports:
-        - { protocol: TCP, port: 8080 }
+        - { protocol: TCP, port: 8443 }
     - to:
         - namespaceSelector:
             matchLabels:
@@ -87,7 +54,7 @@ spec:
               app.kubernetes.io/component: assistant-idle
               app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
       ports:
-        - { protocol: TCP, port: 8080 }
+        - { protocol: TCP, port: 8443 }
     - from:
         - namespaceSelector:
             matchLabels:
@@ -97,8 +64,13 @@ spec:
               app: ray-train-backend
               app.kubernetes.io/component: api
       ports:
-        - { protocol: TCP, port: 8080 }
+        - { protocol: TCP, port: 8443 }
   egress:
+    - to:
+        - ipBlock:
+            cidr: PLACEHOLDER_RAYTRAIN_BACKEND_HTTPS_CIDR
+      ports:
+        - { protocol: TCP, port: 443 }
     - to:
         - ipBlock:
             cidr: PLACEHOLDER_KUBERNETES_API_SERVER_CIDR
@@ -140,31 +112,6 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: assistant-idle-kuberay-dashboard-only
-  namespace: PLACEHOLDER_ASSISTANT_NAMESPACE
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/component: assistant-idle
-      app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
-      raytrain.wellspiking.ai/assistant-role: head
-  policyTypes: ["Ingress"]
-  ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: PLACEHOLDER_KUBERAY_OPERATOR_NAMESPACE
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: kuberay-operator
-              app.kubernetes.io/component: kuberay-operator
-              app.kubernetes.io/instance: kuberay
-      ports:
-        - { protocol: TCP, port: 8265 }
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
   name: assistant-idle-backend-to-serve-only
   namespace: PLACEHOLDER_ASSISTANT_NAMESPACE
 spec:
@@ -172,7 +119,7 @@ spec:
     matchLabels:
       app.kubernetes.io/component: assistant-idle
       app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
-      raytrain.wellspiking.ai/assistant-role: head
+      raytrain.wellspiking.ai/assistant-role: inference
   policyTypes: ["Ingress"]
   ingress:
     - from:
@@ -184,4 +131,4 @@ spec:
               app: ray-train-backend
               app.kubernetes.io/component: api
       ports:
-        - { protocol: TCP, port: 8000 }
+        - { protocol: TCP, port: 8443 }

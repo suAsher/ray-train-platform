@@ -44,6 +44,9 @@ func ValidateConfig(cfg Config) error {
 		if _, err := providerEndpoint(p); err != nil {
 			return err
 		}
+		if p.CAFile != "" && (p.Kind != "local" || !strings.HasPrefix(p.BaseURL, "https://") || !validProviderFilePath(p.CAFile)) {
+			return errors.New("assistant custom CA requires a local HTTPS provider and an absolute canonical file path")
+		}
 	}
 	return nil
 }

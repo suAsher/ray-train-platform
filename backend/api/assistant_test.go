@@ -57,7 +57,7 @@ func assistantRequest(r http.Handler, body string) *httptest.ResponseRecorder {
 }
 
 func assistantTestHandler() *Handler {
-	h := NewHandler(&assistantTestAuditStore{fakeJobRepository: &fakeJobRepository{}}, Options{})
+	h := NewHandler(&assistantTestAuditStore{fakeJobRepository: &fakeJobRepository{}}, Options{Assistant: &assistantTestEngine{result: assistant.Result{Mode: "local", Answer: "根据本次证据回答。", Reason: "selected"}}})
 	h.helpDocuments = helpArticleListStore{articles: []domain.HelpArticle{{HelpDocument: domain.HelpDocument{
 		ID: "logs", Title: "训练日志排查", Markdown: "打开任务详情的日志页。先检查最早的异常，再检查资源配置。", Version: 3, PublishedVersion: 3,
 	}, Keywords: []string{"日志", "异常"}}}}
@@ -131,11 +131,11 @@ func TestAssistantDocsAnswerAndSafeCitation(t *testing.T) {
 	}
 }
 
-func TestAssistantNoEvidenceDoesNotInvokeModel(t *testing.T) {
+func TestAssistantExplicitDocsWithNoEvidenceDoesNotInvokeModel(t *testing.T) {
 	h := assistantTestHandler()
 	e := &assistantTestEngine{}
 	h.assistant = e
-	w := assistantRequest(assistantTestRouter(h, assistantTestPrincipal()), `{"question":"zzzyyyxxx"}`)
+	w := assistantRequest(assistantTestRouter(h, assistantTestPrincipal()), `{"question":"zzzyyyxxx","mode":"docs"}`)
 	if w.Code != 200 || e.calls != 0 || !strings.Contains(w.Body.String(), "没有找到") {
 		t.Fatalf("%d %s calls=%d", w.Code, w.Body.String(), e.calls)
 	}
@@ -146,7 +146,7 @@ func TestAssistantFallbackAndRedaction(t *testing.T) {
 	e := &assistantTestEngine{err: errors.New("upstream private detail")}
 	h.assistant = e
 	w := assistantRequest(assistantTestRouter(h, assistantTestPrincipal()), `{"question":"日志 password=super-secret Authorization: Bearer hidden-token","mode":"api"}`)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), "provider_unavailable") || strings.Contains(w.Body.String(), "upstream private") {
+	if w.Code != 503 || !strings.Contains(w.Body.String(), "ASSISTANT_MODEL_UNAVAILABLE") || strings.Contains(w.Body.String(), "upstream private") {
 		t.Fatalf("%d %s", w.Code, w.Body.String())
 	}
 	if strings.Contains(e.input.Question, "super-secret") || strings.Contains(e.input.Question, "hidden-token") {
@@ -222,7 +222,7 @@ type assistantBlockingEngine struct {
 }
 
 func (e *assistantBlockingEngine) Capabilities() assistant.Capabilities {
-	return assistant.Capabilities{}
+	return assistant.Capabilities{Enabled: true}
 }
 func (e *assistantBlockingEngine) Answer(ctx context.Context, _ string, _ assistant.Input) (assistant.Result, error) {
 	e.entered <- struct{}{}
@@ -288,7 +288,7 @@ func TestAssistantAuditFailurePreventsModelDisclosure(t *testing.T) {
 			h.repository.(*assistantTestAuditStore).err = errors.New("audit unavailable")
 		}
 		w := assistantRequest(assistantTestRouter(h, assistantTestPrincipal()), `{"question":"日志"}`)
-		if w.Code != 200 || e.calls != 0 || !strings.Contains(w.Body.String(), "audit_unavailable") || !strings.Contains(w.Body.String(), "先检查最早的异常") {
+		if w.Code != 503 || e.calls != 0 || !strings.Contains(w.Body.String(), "ASSISTANT_AUDIT_UNAVAILABLE") || strings.Contains(w.Body.String(), "先检查最早的异常") {
 			t.Fatalf("audit failure did not fail closed: status=%d calls=%d", w.Code, e.calls)
 		}
 	}

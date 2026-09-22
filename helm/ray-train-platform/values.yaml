@@ -54,8 +54,14 @@ rayTrain:
 # existingSecret, secretKey, thinkingDisabled}; never place credential values here.
 assistant:
   enabled: false
+  # Exact authenticated subjects for private acceptance; empty after acceptance.
+  previewSubjects: []
   # Observation only; does not create or enable an inference cluster.
   idleNamespace: ""
+  controllerCAExistingSecret: ""
+  controllerCASecretKey: ca.crt
+  idleDemandExistingSecret: ""
+  idleDemandSecretKey: auth-key
   localFirst: false
   providers: []
 

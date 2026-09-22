@@ -26,6 +26,7 @@ var (
 
 var (
 	crdGVR        = schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}
+	podGVR = schema.GroupVersionResource{Version: "v1", Resource: "pods"}
 	rayServiceGVR = schema.GroupVersionResource{Group: "ray.io", Version: "v1", Resource: "rayservices"}
 	rayJobGVR     = schema.GroupVersionResource{Group: "ray.io", Version: "v1", Resource: "rayjobs"}
 	rayClusterGVR = schema.GroupVersionResource{Group: "ray.io", Version: "v1", Resource: "rayclusters"}
@@ -39,6 +40,7 @@ const (
 )
 
 type KubeAdapterConfig struct {
+	Demand DemandObserver
 	Dynamic           dynamic.Interface
 	Kubernetes        kubernetes.Interface
 	Namespace         string
@@ -51,6 +53,7 @@ type KubeAdapterConfig struct {
 }
 
 type KubeBackend struct {
+	demand DemandObserver
 	dynamic           dynamic.Interface
 	kubernetes        kubernetes.Interface
 	namespace         string
@@ -97,6 +100,7 @@ func NewKubeBackend(config KubeAdapterConfig) *KubeBackend {
 		labels[strings.TrimSpace(key)] = strings.TrimSpace(value)
 	}
 	return &KubeBackend{
+		demand: config.Demand,
 		dynamic:           config.Dynamic,
 		kubernetes:        config.Kubernetes,
 		namespace:         strings.TrimSpace(config.Namespace),
@@ -117,11 +121,18 @@ func (b *KubeBackend) Observe(ctx context.Context) (Snapshot, error) {
 	if err := b.validate(); err != nil {
 		return Snapshot{}, err
 	}
-	if err := b.requireRayServiceSuspend(ctx); err != nil {
+	if err := b.requireRuntimeAdmission(ctx); err != nil {
 		return Snapshot{}, err
 	}
 	snapshot := Snapshot{Observation: Observation{Fresh: true, Enabled: true}}
-	service, serviceExists, err := b.ownedRayService(ctx)
+	var pendingDemand bool
+	if b.render.RuntimeType == "pod" {
+		if b.demand == nil { return Snapshot{},errors.New("authoritative training demand observer is required") }
+		var err error
+		pendingDemand,err = b.demand.Pending(ctx)
+		if err != nil { return Snapshot{},err }
+	}
+	service, serviceExists, err := b.ownedRuntime(ctx)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -133,6 +144,10 @@ func (b *KubeBackend) Observe(ctx context.Context) (Snapshot, error) {
 		snapshot.Observation.ServiceExists = true
 		snapshot.Observation.ServiceDeleting = service.GetDeletionTimestamp() != nil
 		snapshot.Observation.ServiceReady = conditionTrue(service.Object, "Ready")
+		if b.render.RuntimeType == "pod" {
+			gates, _, _ := unstructured.NestedSlice(service.Object, "spec", "schedulingGates")
+			snapshot.Observation.ServiceReady = snapshot.Observation.ServiceReady && len(gates) == 0 && service.GetLabels()["kueue.x-k8s.io/managed"] == "true"
+		}
 	}
 
 	candidateNodes, err := b.observeCandidateNodes(ctx)
@@ -156,7 +171,7 @@ func (b *KubeBackend) Observe(ctx context.Context) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	snapshot.Observation.TrainingDemand = workloadDemand || rayJobDemand || podDemand
+	snapshot.Observation.TrainingDemand = pendingDemand || workloadDemand || rayJobDemand || podDemand
 	snapshot.Observation.OtherPending = workloadDemand || rayJobDemand || podDemand
 	snapshot.Observation.EligibleIdleGPU = idleGPU
 	snapshot.Observation.Admitted = serviceExists && admitted
@@ -171,7 +186,7 @@ func (b *KubeBackend) Create(ctx context.Context) error {
 	if err := b.validate(); err != nil {
 		return err
 	}
-	if err := b.requireRayServiceSuspend(ctx); err != nil {
+	if err := b.requireRuntimeAdmission(ctx); err != nil {
 		return err
 	}
 	render := b.render
@@ -184,16 +199,16 @@ func (b *KubeBackend) Create(ctx context.Context) error {
 	if len(render.RequiredNodeLabels) == 0 {
 		render.RequiredNodeLabels = copyStringMap(b.requiredLabels)
 	}
-	resource, err := RenderRayService(render)
+	resource, err := renderRuntime(render)
 	if err != nil {
 		return err
 	}
 	if resource.GetNamespace() != b.namespace || resource.GetName() != b.name || !b.ownedLabels(resource.GetLabels()) {
 		return ErrForeign
 	}
-	_, err = b.dynamic.Resource(rayServiceGVR).Namespace(b.namespace).Create(ctx, resource, metav1.CreateOptions{})
+	_, err = b.dynamic.Resource(b.runtimeGVR()).Namespace(b.namespace).Create(ctx, resource, metav1.CreateOptions{})
 	if apierrors.IsAlreadyExists(err) {
-		_, _, getErr := b.ownedRayService(ctx)
+		_, _, getErr := b.ownedRuntime(ctx)
 		return getErr
 	}
 	return err
@@ -203,7 +218,7 @@ func (b *KubeBackend) OwnService(ctx context.Context) (string, time.Time, error)
 	if err := b.validate(); err != nil {
 		return "", time.Time{}, err
 	}
-	resource, exists, err := b.ownedRayService(ctx)
+	resource, exists, err := b.ownedRuntime(ctx)
 	if err != nil || !exists {
 		return "", time.Time{}, err
 	}
@@ -214,16 +229,16 @@ func (b *KubeBackend) Delete(ctx context.Context, uid string) error {
 	if err := b.validate(); err != nil {
 		return err
 	}
-	resource, exists, err := b.ownedRayService(ctx)
+	resource, exists, err := b.ownedRuntime(ctx)
 	if err != nil || !exists {
 		return err
 	}
 	if uid == "" || string(resource.GetUID()) != uid {
-		return apierrors.NewConflict(schema.GroupResource{Group: "ray.io", Resource: "rayservices"}, b.name, fmt.Errorf("stale RayService UID"))
+		return apierrors.NewConflict(b.runtimeGVR().GroupResource(), b.name, fmt.Errorf("stale RayService UID"))
 	}
 	expected := types.UID(uid)
 	propagation := metav1.DeletePropagationForeground
-	return b.dynamic.Resource(rayServiceGVR).Namespace(b.namespace).Delete(ctx, b.name, metav1.DeleteOptions{
+	return b.dynamic.Resource(b.runtimeGVR()).Namespace(b.namespace).Delete(ctx, b.name, metav1.DeleteOptions{
 		PropagationPolicy: &propagation,
 		Preconditions:     &metav1.Preconditions{UID: &expected},
 	})
@@ -237,6 +252,23 @@ func (b *KubeBackend) validate() error {
 		return fmt.Errorf("assistant idle namespace, name, and instance ID are required")
 	}
 	return nil
+}
+
+func (b *KubeBackend) runtimeGVR() schema.GroupVersionResource {
+	if b.render.RuntimeType == "pod" { return podGVR }
+	return rayServiceGVR
+}
+func (b *KubeBackend) runtimeKind() string {
+	if b.render.RuntimeType == "pod" { return "Pod" }
+	return "RayService"
+}
+func (b *KubeBackend) runtimeAPIVersion() string {
+	if b.render.RuntimeType == "pod" { return "v1" }
+	return "ray.io/v1"
+}
+func (b *KubeBackend) requireRuntimeAdmission(ctx context.Context) error {
+	if b.render.RuntimeType == "pod" { return nil } // Explicit scheduling gate stays closed if Pod integration is unavailable.
+	return b.requireRayServiceSuspend(ctx)
 }
 
 func (b *KubeBackend) requireRayServiceSuspend(ctx context.Context) error {
@@ -258,8 +290,8 @@ func (b *KubeBackend) requireRayServiceSuspend(ctx context.Context) error {
 	return ErrUnsupported
 }
 
-func (b *KubeBackend) ownedRayService(ctx context.Context) (*unstructured.Unstructured, bool, error) {
-	resource, err := b.dynamic.Resource(rayServiceGVR).Namespace(b.namespace).Get(ctx, b.name, metav1.GetOptions{})
+func (b *KubeBackend) ownedRuntime(ctx context.Context) (*unstructured.Unstructured, bool, error) {
+	resource, err := b.dynamic.Resource(b.runtimeGVR()).Namespace(b.namespace).Get(ctx, b.name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return nil, false, nil
 	}
@@ -267,7 +299,7 @@ func (b *KubeBackend) ownedRayService(ctx context.Context) (*unstructured.Unstru
 		return nil, false, err
 	}
 	if !b.ownedLabels(resource.GetLabels()) {
-		return nil, true, apierrors.NewForbidden(schema.GroupResource{Group: "ray.io", Resource: "rayservices"}, b.name, ErrForeign)
+		return nil, true, apierrors.NewForbidden(b.runtimeGVR().GroupResource(), b.name, ErrForeign)
 	}
 	return resource, true, nil
 }
@@ -287,7 +319,7 @@ func (b *KubeBackend) observeWorkloads(ctx context.Context, serviceUID string, r
 		owned := b.ownedObject(item, serviceUID)
 		if owned {
 			ownedRemaining = true
-			if serviceUID != "" && b.ownedByRayServiceUID(item, serviceUID) && workloadAdmitted(item.Object) {
+			if serviceUID != "" && b.ownedByRuntimeUID(item, serviceUID) && workloadAdmitted(item.Object) {
 				admitted = true
 				if status, found := conditionStatus(item.Object, "PodsReady"); found && status != "True" {
 					podsReady = false
@@ -458,15 +490,22 @@ func (b *KubeBackend) ownedObject(obj metav1.Object, serviceUID string) bool {
 	if b.ownedLabels(obj.GetLabels()) {
 		return true
 	}
-	return b.ownedByRayServiceUID(obj, serviceUID)
+	// An old Pod-owned Workload must finish before a replacement starts. This
+	// recognizes only an orphan in our dedicated namespace, never admits it.
+	if b.render.RuntimeType == "pod" && serviceUID == "" {
+		for _, owner := range obj.GetOwnerReferences() {
+			if owner.APIVersion == "v1" && owner.Kind == "Pod" && owner.Name == b.name && owner.UID != "" && owner.Controller != nil && *owner.Controller { return true }
+		}
+	}
+	return b.ownedByRuntimeUID(obj, serviceUID)
 }
 
-func (b *KubeBackend) ownedByRayServiceUID(obj metav1.Object, serviceUID string) bool {
+func (b *KubeBackend) ownedByRuntimeUID(obj metav1.Object, serviceUID string) bool {
 	if serviceUID == "" {
 		return false
 	}
 	for _, owner := range obj.GetOwnerReferences() {
-		if owner.APIVersion == "ray.io/v1" && owner.Kind == "RayService" && owner.Name == b.name && string(owner.UID) == serviceUID && owner.UID != "" && owner.Controller != nil && *owner.Controller {
+		if owner.APIVersion == b.runtimeAPIVersion() && owner.Kind == b.runtimeKind() && owner.Name == b.name && string(owner.UID) == serviceUID && owner.UID != "" && owner.Controller != nil && *owner.Controller {
 			return true
 		}
 	}

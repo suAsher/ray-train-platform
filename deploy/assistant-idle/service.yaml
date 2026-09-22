@@ -12,9 +12,9 @@ spec:
     app.kubernetes.io/name: assistant-idle-controller
     app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
   ports:
-    - name: http
-      port: 8080
-      targetPort: http
+    - name: https
+      port: 8443
+      targetPort: https
 ---
 apiVersion: v1
 kind: Service
@@ -30,9 +30,9 @@ spec:
   selector:
     app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
     app.kubernetes.io/component: assistant-idle
-    raytrain.wellspiking.ai/assistant-role: head
+    raytrain.wellspiking.ai/assistant-role: inference
   ports:
-    - name: http
+    - name: https
       protocol: TCP
-      port: 8000
-      targetPort: 8000
+      port: 8443
+      targetPort: 8443

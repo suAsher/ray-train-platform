@@ -47,11 +47,15 @@ type globalJobReader interface {
 }
 
 type Handler struct {
+	assistantControllerCAFile string
 	assistantIdleNamespace       string
+	assistantDemand              AssistantDemandStore
+	assistantDemandAuthKey       []byte
 	assistantStatusSource        AssistantStatusSource
 	assistantStatusHTTP          *http.Client
 	assistantStatusSlots         chan struct{}
 	assistant                    assistant.Engine
+	assistantPreviewSubjects     map[string]bool
 	warehouseSync                *ws.Service
 	functionWarehouses           map[fw.Environment]FunctionWarehouseClient
 	modelServing                 ms.Store
@@ -168,9 +172,13 @@ type ExperimentProvider interface {
 }
 
 type Options struct {
+	AssistantControllerCAFile string
 	AssistantIdleNamespace    string
+	AssistantDemand           AssistantDemandStore
+	AssistantDemandAuthKey    []byte
 	AssistantStatusSource     AssistantStatusSource
 	Assistant                 assistant.Engine
+	AssistantPreviewSubjects  []string
 	FunctionWarehouses        map[fw.Environment]FunctionWarehouseClient
 	ModelServing              ms.Store
 	ModelReleases             modelrelease.Repository
@@ -276,12 +284,19 @@ func NewHandler(repository JobRepository, options Options) *Handler {
 	handler.bootstrapTenant = strings.TrimSpace(options.BootstrapTenant)
 	handler.helpDocuments, _ = repository.(HelpDocumentStore)
 	handler.assistant = options.Assistant
+	handler.assistantPreviewSubjects = make(map[string]bool, len(options.AssistantPreviewSubjects))
+	for _, subject := range options.AssistantPreviewSubjects {
+		handler.assistantPreviewSubjects[subject] = true
+	}
 	handler.assistantIdleNamespace = options.AssistantIdleNamespace
+	handler.assistantDemand = options.AssistantDemand
+	handler.assistantDemandAuthKey = append([]byte(nil), options.AssistantDemandAuthKey...)
 	handler.assistantStatusSource = options.AssistantStatusSource
 	if handler.assistantStatusSource == nil && handler.kubernetes != nil {
 		handler.assistantStatusSource = handler.kubernetes
 	}
-	handler.assistantStatusHTTP = newAssistantStatusHTTPClient()
+	handler.assistantControllerCAFile = options.AssistantControllerCAFile
+	handler.assistantStatusHTTP = newAssistantStatusHTTPClient(options.AssistantControllerCAFile)
 	handler.assistantStatusSlots = make(chan struct{}, 2)
 	if handler.dataSpaceUploads == nil {
 		handler.dataSpaceUploads, _ = repository.(DataSpaceUploadRepository)

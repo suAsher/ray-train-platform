@@ -55,8 +55,21 @@ func (r *Router) Capabilities() Capabilities {
 		statuses[b.kind] = ProviderStatus{Configured: statuses[b.kind].Configured || configured}
 		backends = append(backends, BackendStatus{ID: b.id, Kind: b.kind, Model: b.model, Protocol: effectiveProtocol(b.protocol), Configured: configured})
 	}
+	modes := []string{}
+	defaultMode := ""
+	enabled := statuses["api"].Configured || statuses["local"].Configured
+	if enabled {
+		modes = append(modes, "auto")
+		for _, kind := range []string{"api", "local"} {
+			if statuses[kind].Configured {
+				modes = append(modes, kind)
+			}
+		}
+		modes = append(modes, "docs")
+		defaultMode = "auto"
+	}
 	return Capabilities{
-		Enabled: true, ReadOnly: true, Modes: []string{"auto", "api", "local", "docs"}, DefaultMode: "auto",
+		Enabled: enabled, ReadOnly: true, Modes: modes, DefaultMode: defaultMode,
 		Providers: statuses, Backends: backends,
 		Limitations: []string{
 			"只读助手，不执行命令或修改训练任务",

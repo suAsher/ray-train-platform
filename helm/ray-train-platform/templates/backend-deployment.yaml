@@ -180,6 +180,17 @@ spec:
                 name: {{ include "ray-train-platform.datasetPublisher.resourceName" (list . "") }}
           {{- end }}
           env:
+            {{- if $assistant.controllerCAExistingSecret }}
+            - name: ASSISTANT_CONTROLLER_CA_FILE
+              value: /var/run/secrets/raytrain-assistant-controller/ca.crt
+            {{- end }}
+            {{- if $assistant.idleDemandExistingSecret }}
+            - name: ASSISTANT_IDLE_DEMAND_AUTH_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $assistant.idleDemandExistingSecret | quote }}
+                  key: {{ required "assistant idleDemandSecretKey required" $assistant.idleDemandSecretKey | quote }}
+            {{- end }}
             {{- if $assistantIdleNamespace }}
             - name: ASSISTANT_IDLE_NAMESPACE
               value: {{ $assistantIdleNamespace | quote }}
@@ -448,6 +459,20 @@ spec:
             - name: TMPDIR
               value: "/var/lib/ray-platform/code-snapshots"
           volumeMounts:
+            {{- if $assistant.controllerCAExistingSecret }}
+            - name: assistant-controller-ca
+              mountPath: /var/run/secrets/raytrain-assistant-controller
+              readOnly: true
+            {{- end }}
+            {{- if (default false $assistant.enabled) }}
+            {{- range $provider := $assistant.providers }}
+            {{- if (default false $provider.useSecretFiles) }}
+            - name: assistant-provider-{{ $provider.id }}
+              mountPath: /var/run/secrets/raytrain-assistant/{{ $provider.id }}
+              readOnly: true
+            {{- end }}
+            {{- end }}
+            {{- end }}
             - name: ray-api-spool
               mountPath: /var/lib/ray-platform/ray-packages
             - name: code-snapshot-spool
@@ -468,6 +493,29 @@ spec:
           resources:
             {{- toYaml .Values.backend.resources | nindent 12 }}
       volumes:
+        {{- if $assistant.controllerCAExistingSecret }}
+        - name: assistant-controller-ca
+          secret:
+            secretName: {{ $assistant.controllerCAExistingSecret | quote }}
+            items:
+              - key: {{ required "assistant controllerCASecretKey required" $assistant.controllerCASecretKey | quote }}
+                path: ca.crt
+        {{- end }}
+        {{- if (default false $assistant.enabled) }}
+        {{- range $provider := $assistant.providers }}
+        {{- if (default false $provider.useSecretFiles) }}
+        - name: assistant-provider-{{ $provider.id }}
+          secret:
+            secretName: {{ required "assistant file provider existingSecret required" $provider.existingSecret | quote }}
+            defaultMode: 0440
+            items:
+              - key: {{ $provider.secretKey | quote }}
+                path: token
+              - key: {{ $provider.caSecretKey | quote }}
+                path: ca.crt
+        {{- end }}
+        {{- end }}
+        {{- end }}
         - name: ray-api-spool
           emptyDir:
             sizeLimit: 3Gi

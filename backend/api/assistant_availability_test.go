@@ -58,3 +58,21 @@ func TestAssistantNoSearchMatchStillAllowsModelClarification(t *testing.T) {
 	w := assistantRequest(assistantTestRouter(h, assistantTestPrincipal()), `{"question":"我接下来怎么办"}`)
 	if w.Code != 200 || e.calls != 1 || len(e.input.Evidence) != 0 || !strings.Contains(w.Body.String(), "请说明") || strings.Contains(w.Body.String(), "没有找到足够") { t.Fatalf("model clarification was skipped: %d %s", w.Code, w.Body.String()) }
 }
+
+func TestAssistantPreviewUsesExactSubjectBeforeReadingEvidence(t *testing.T) {
+	for _, allowed := range []bool{false, true} {
+		e := &assistantTestEngine{result:assistant.Result{Mode:"local", Answer:"answer", Reason:"selected"}}
+		h := NewHandler(&assistantTestAuditStore{fakeJobRepository:&fakeJobRepository{}}, Options{Assistant:e, AssistantPreviewSubjects:[]string{"preview-subject"}})
+		h.helpDocuments = assistantTestHandler().helpDocuments
+		p := assistantTestPrincipal()
+		p.Username = "preview-subject" // A username alone must not grant preview access.
+		if allowed { p.Subject = "preview-subject" }
+		r := assistantTestRouter(h, p)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/assistant/capabilities", nil))
+		var response struct { Data assistant.Capabilities `json:"data"` }
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &response) != nil || response.Data.Enabled != allowed { t.Fatalf("incorrect preview capabilities: %s", w.Body.String()) }
+		w = assistantRequest(r, `{"question":"日志怎么看"}`)
+		if allowed && (w.Code != 200 || e.calls != 1) || !allowed && (w.Code != 403 || e.calls != 0 || strings.Contains(w.Body.String(), "preview-subject")) { t.Fatalf("preview gate failed: %d %s", w.Code, w.Body.String()) }
+	}
+}

@@ -43,6 +43,8 @@ type AssistantRayServiceStatus struct {
 	Status    string `json:"status"`
 }
 type AssistantIdleStatus struct {
+	RuntimeType          string                         `json:"runtimeType"`
+	InferencePod         AssistantRayServiceStatus      `json:"inferencePod"`
 	Configured           bool                           `json:"configured"`
 	Namespace            string                         `json:"namespace,omitempty"`
 	Enabled              *bool                          `json:"enabled"`
@@ -110,6 +112,7 @@ func (c *Client) ObserveAssistantStatus(ctx context.Context, namespace string) (
 		return status, errAssistantStatus
 	}
 	var cfg struct {
+		RuntimeType string `json:"runtimeType"`
 		Enabled *bool `json:"enabled"`
 		Render  struct {
 			Name       string
@@ -127,6 +130,12 @@ func (c *Client) ObserveAssistantStatus(ctx context.Context, namespace string) (
 		return status, errAssistantStatus
 	}
 	status.Enabled = cfg.Enabled
+	if cfg.RuntimeType == "pod" {
+		status.RuntimeType = "pod"
+		status.InferencePod, err = c.assistantInferencePodStatus(ctx, namespace, cfg.Render.Name, cfg.Render.InstanceID)
+		if err != nil { return status, errAssistantStatus }
+	} else if cfg.RuntimeType == "" || cfg.RuntimeType == "rayservice" {
+	status.RuntimeType = "rayservice"
 	status.RayService.Name = cfg.Render.Name
 	service, err := c.dynamic.Resource(assistantRayServiceGVR).Namespace(namespace).Get(ctx, cfg.Render.Name, metav1.GetOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
@@ -154,6 +163,7 @@ func (c *Client) ObserveAssistantStatus(ctx context.Context, namespace string) (
 			status.RayService.Status = "Deleting"
 		}
 	}
+	} else { return status, errAssistantStatus }
 	pods, err := c.kubernetes.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/instance=" + cfg.Render.InstanceID, Limit: 33})
 	if err != nil || pods.Continue != "" || len(pods.Items) > 32 {
 		return status, errAssistantStatus
@@ -202,6 +212,28 @@ func assistantPodRole(pod corev1.Pod) string {
 		return "head"
 	case "worker":
 		return "worker"
+	case "inference":
+		return "inference"
 	}
 	return ""
+}
+
+func (c *Client) assistantInferencePodStatus(ctx context.Context, namespace, name, instance string) (AssistantRayServiceStatus, error) {
+	result := AssistantRayServiceStatus{Name: name, Status: "Absent"}
+	pod, err := c.kubernetes.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) { return result, nil }
+	if err != nil { return result, errAssistantStatus }
+	if pod.Labels["app.kubernetes.io/instance"] != instance || assistantPodRole(*pod) != "inference" { return result, errAssistantStatus }
+	result.Present = true
+	result.Suspended = len(pod.Spec.SchedulingGates) != 0
+	switch pod.Status.Phase {
+	case corev1.PodPending, corev1.PodRunning, corev1.PodSucceeded, corev1.PodFailed:
+		result.Status = string(pod.Status.Phase)
+	default: result.Status = "Unknown"
+	}
+	for _, condition := range pod.Status.Conditions {
+		if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue && pod.Status.Phase == corev1.PodRunning && !result.Suspended && assistantidle.PodGPURequested(*pod) == 1 { result.Ready = true }
+	}
+	if pod.DeletionTimestamp != nil { result.Ready = false; result.Status = "Deleting" }
+	return result, nil
 }

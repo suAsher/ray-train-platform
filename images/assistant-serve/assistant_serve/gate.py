@@ -1,6 +1,7 @@
 """A fail-closed reader of the controller's fixed, read-only HTTP gate."""
 import asyncio
 import re
+import ssl
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -64,12 +65,23 @@ def validate_gate_url(url):
 
 
 class HTTPGate:
-    def __init__(self, url):
+    def __init__(self, url, ca_file=None, require_tls=False):
         import httpx
         self.url = validate_gate_url(url)
+        if require_tls and (not url.startswith("https://") or not ca_file):
+            raise ValueError("private gate requires HTTPS and mounted CA")
+        verify = True
+        if ca_file is not None:
+            from .standalone import bounded_file
+            try:
+                ca = bounded_file(ca_file, 128 * 1024).decode("ascii")
+                verify = ssl.create_default_context(cadata=ca)
+                verify.minimum_version = ssl.TLSVersion.TLSv1_2
+            except (OSError, ValueError, UnicodeError, ssl.SSLError):
+                raise ValueError("invalid gate CA file") from None
         self.state = GateState()
         self.lock = asyncio.Lock()
-        self.client = httpx.AsyncClient(timeout=0.5, follow_redirects=False, trust_env=False,
+        self.client = httpx.AsyncClient(timeout=0.5, follow_redirects=False, trust_env=False, verify=verify,
                                         limits=httpx.Limits(max_connections=1, max_keepalive_connections=1))
 
     @property

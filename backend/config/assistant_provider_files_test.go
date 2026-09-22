@@ -38,3 +38,16 @@ func TestAssistantProviderRejectsUnsafeSecretReferences(t *testing.T) {
 		if _, err := loadAssistantConfig(); err == nil || strings.Contains(err.Error(), "/missing/") || strings.Contains(err.Error(), "synthetic-test-key") { t.Fatalf("unsafe configuration accepted or disclosed: %v", err) }
 	}
 }
+
+func TestAssistantPreviewSubjectConfiguration(t *testing.T) {
+	t.Setenv("ASSISTANT_ENABLED", "true")
+	t.Setenv("ASSISTANT_PROVIDERS", "[]")
+	t.Setenv("ASSISTANT_LOCAL_FIRST", "false")
+	t.Setenv("ASSISTANT_PREVIEW_SUBJECTS", `["stable-subject","another-subject"]`)
+	got, err := loadAssistantConfig()
+	if err != nil || len(got.PreviewSubjects) != 2 || got.PreviewSubjects[0] != "stable-subject" { t.Fatalf("preview list not loaded: %v", err) }
+	for _, raw := range []string{`null`, `{}`, `[""]`, `[" leading"]`, `["bad\nsubject"]`, `[1]`, `[] {}`} {
+		t.Setenv("ASSISTANT_PREVIEW_SUBJECTS", raw)
+		if _, err := loadAssistantConfig(); err == nil { t.Fatalf("invalid preview configuration accepted: %s", raw) }
+	}
+}

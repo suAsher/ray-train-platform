@@ -168,6 +168,10 @@ func main() {
 	jobOptions := api.Options{BootstrapTenant: cfg.BootstrapAdminTenant, AllowAnonymous: cfg.DemoMode, Logs: logs, Metrics: metrics, Experiments: experiments, ImageAllowlist: cfg.RayImageAllowlist, GitAllowlist: cfg.GitAllowlist, Workspaces: repository, Kubernetes: kubeClient, WorkspaceImage: cfg.WorkspaceImage, RayVersion: cfg.RayVersion, ServiceAccount: cfg.RayJobServiceAccount, ImagePullSecrets: cfg.ImagePullSecrets, PlatformNamespace: runtimeNamespace(), IDCClaim: cfg.IDCExistingClaim, IDCMountPath: cfg.IDCMountPath, KueueClusterQueue: cfg.KueueClusterQueue, Admin: repository, GPUAllocations: repository, Quota: repository, Memberships: repository, WorkspacePepper: []byte(cfg.PATPepper), TrainingNodeSelector: cfg.TrainingNodeSelector, TrainingDedicatedNodes: cfg.TrainingDedicatedNodes, Images: repository, GitCredentials: repository, StorageAssets: repository, Datasets: repository, DatasetPublications: datasetPublicationManager, DatasetInternalPrefix: cfg.DatasetInternalPrefix, DatasetVersioningEnabled: cfg.DatasetVersioningEnabled, RayDataStreamingEnabled: cfg.RayDataStreamingEnabled, DataSpaces: repository, DataSpacesEnabled: cfg.DataSpacesEnabled, DataSpacesFSXAttributes: cfg.DataSpacesFSXAttributes, DataSpacesMountCapacity: cfg.DataSpacesMountCapacity, DataSpacesPublicRoot: cfg.DataSpacesPublicRoot, IDCDataSpacesEnabled: cfg.IDCDataSpacesEnabled, IDCDataSpacesMountCapacity: cfg.IDCDataSpacesMountCapacity, IDCDataSpaceSources: idcDataSpaceSources(cfg), DirectoryLister: directoryLister, DirectoryInitializer: directoryInitializer, DataObjectStore: dataObjectStore, WorkspaceSnapshotStore: workspaceSnapshotStore, WorkspaceSnapshots: repository, IDCDataSyncCallbacks: idcSyncCallbacks, IDCDataSyncCallbackKey: idcSyncCallbackKey, IDCDataSyncManager: idcSyncManager, ArtifactLister: artifactLister, ArtifactReader: artifactReader, LocalCache: api.LocalCachePolicy{Enabled: cfg.LocalCacheEnabled, AllowedSizes: cfg.LocalCacheAllowedSizes, DefaultSize: cfg.LocalCacheSize, MaxSize: cfg.LocalCacheMaxSize, MountPath: cfg.LocalCacheMountPathData1, MountPaths: []string{cfg.LocalCacheMountPathData1, cfg.LocalCacheMountPathData2}}, RuntimePolicy: runtimecatalog.NewPolicy(cfg.RayTrainManagedEnabled, cfg.RayTrainCanaryEnabled, cfg.RayTrainManagedTenants, cfg.RayTrainCanaryTenants), TenantScheduling: repository, PreemptionEnabled: cfg.KueuePreemptionEnabled, MLflowDashboardEnabled: cfg.MLflowDashboardEnabled, MLflowDashboardPublicEnabled: cfg.MLflowDashboardPublicEnabled, MLflowNativePublicEnabled: cfg.MLflowNativePublicEnabled, MLflowDashboardStore: repository, MLflowTrackingURL: cfg.MLflowTrackingURL, MLflowPublicOrigin: cfg.MLflowPublicOrigin, MLflowDashboardPepper: []byte(cfg.PATPepper), MLflowDashboardSessionTTL: time.Duration(cfg.MLflowDashboardSessionHours) * time.Hour}
 	jobOptions.Models = modelStore
 	jobOptions.AssistantIdleNamespace = cfg.AssistantIdleNamespace
+	jobOptions.AssistantControllerCAFile = cfg.AssistantControllerCAFile
+	jobOptions.AssistantPreviewSubjects = cfg.Assistant.PreviewSubjects
+	jobOptions.AssistantDemand = repository
+	jobOptions.AssistantDemandAuthKey = []byte(cfg.AssistantIdleDemandAuthKey)
 	if cfg.Assistant.Enabled {
 		jobOptions.Assistant, err = assistant.NewRouter(cfg.Assistant.Routing)
 		if err != nil {
@@ -387,6 +391,7 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	jobs.RegisterModelEvaluationInternalRoutes(router.Group("/api/v1/internal"))
 	jobs.RegisterModelServingInternalRoutes(router.Group("/api/v1/internal"))
 	jobs.RegisterIDCSyncInternalRoutes(router.Group("/api/v1/internal"))
+	jobs.RegisterAssistantDemandInternalRoutes(router.Group("/api/v1/internal"))
 
 	protected := router.Group("")
 	if cfg.OAuth2ProxyAuthEnabled {

@@ -47,29 +47,18 @@ type labelSelector struct {
 	MatchLabels map[string]string `yaml:"matchLabels"`
 }
 
-func TestAssistantIdleKubeRayDashboardPolicyPinsOperatorPods(t *testing.T) {
-	root := filepath.Join("..", "..", "deploy", "assistant-idle")
-	networkPolicy, err := os.ReadFile(filepath.Join(root, "networkpolicy.yaml"))
-	if err != nil {
-		t.Fatalf("read networkpolicy.yaml: %v", err)
-	}
-	readme, err := os.ReadFile(filepath.Join(root, "README.md"))
-	if err != nil {
-		t.Fatalf("read README.md: %v", err)
-	}
+func TestAssistantIdleNetworkDoesNotExposeRayControlPorts(t *testing.T) {
+ body,err:=os.ReadFile(filepath.Join("..","..","deploy","assistant-idle","networkpolicy.yaml"))
+ if err!=nil {t.Fatal(err)}
+ for _, forbidden:=range []string{"kuberay-dashboard","port: 8265","port: 6379","port: 10001","port: 8000"} { mustNotContain(t,string(body),forbidden) }
+ policy:=networkPolicyNamed(t,string(body),"assistant-idle-backend-to-serve-only")
+ if len(policy.Spec.Ingress)!=1 || len(policy.Spec.Ingress[0].From)!=1 { t.Fatal("inference ingress must have one pinned backend peer") }
+ peer:=policy.Spec.Ingress[0].From[0]
+ if peer.NamespaceSelector==nil || peer.PodSelector==nil || peer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"]!="PLACEHOLDER_RAYTRAIN_BACKEND_NAMESPACE" || peer.PodSelector.MatchLabels["app"]!="ray-train-backend" || peer.PodSelector.MatchLabels["app.kubernetes.io/component"]!="api" { t.Fatal("inference backend peer widened") }
 
-	policy := networkPolicyNamed(t, string(networkPolicy), "assistant-idle-kuberay-dashboard-only")
-	if !hasPinnedKubeRayOperatorPeer(policy) {
-		t.Fatalf("KubeRay dashboard policy must restrict one peer by both namespace and operator pod labels: %#v", policy.Spec.Ingress)
-	}
-
-	mustContain(t, string(readme), "PLACEHOLDER_KUBERAY_OPERATOR_NAMESPACE")
-	mustContain(t, string(readme), "app.kubernetes.io/name=kuberay-operator")
-	mustContain(t, string(readme), "app.kubernetes.io/component=kuberay-operator")
-	mustContain(t, string(readme), "app.kubernetes.io/instance=kuberay")
 }
 
-func TestAssistantIdleInferenceServiceRoutesOnlyHeadServePort(t *testing.T) {
+func TestAssistantIdleInferenceServiceRoutesOnlyTLSInferencePort(t *testing.T) {
 	root := filepath.Join("..", "..", "deploy", "assistant-idle")
 	serviceBody, err := os.ReadFile(filepath.Join(root, "service.yaml"))
 	if err != nil {
@@ -88,13 +77,13 @@ func TestAssistantIdleInferenceServiceRoutesOnlyHeadServePort(t *testing.T) {
 		t.Fatalf("inference service must expose only one port, got %#v", service.Spec.Ports)
 	}
 	port := service.Spec.Ports[0]
-	if port.Port != 8000 || intValue(port.TargetPort) != 8000 || port.NodePort != 0 {
-		t.Fatalf("inference service must route only ClusterIP port 8000 to head port 8000 without NodePort: %#v", port)
+	if port.Port != 8443 || intValue(port.TargetPort) != 8443 || port.NodePort != 0 {
+		t.Fatalf("inference service must route only ClusterIP port 8443 to inference port 8443 without NodePort: %#v", port)
 	}
 	for key, want := range map[string]string{
 		"app.kubernetes.io/instance":             "PLACEHOLDER_INSTANCE_ID",
 		"app.kubernetes.io/component":            "assistant-idle",
-		"raytrain.wellspiking.ai/assistant-role": "head",
+		"raytrain.wellspiking.ai/assistant-role": "inference",
 	} {
 		if service.Spec.Selector[key] != want {
 			t.Fatalf("inference service selector[%s]=%q, want %q in %#v", key, service.Spec.Selector[key], want, service.Spec.Selector)
@@ -108,8 +97,8 @@ func TestAssistantIdleInferenceServiceRoutesOnlyHeadServePort(t *testing.T) {
 
 	readmeBody := string(readme)
 	mustContain(t, readmeBody, "assistant-idle-inference")
-	mustContain(t, readmeBody, "ray.io/serve=true")
-	mustContain(t, readmeBody, "HeadOnly")
+	mustContain(t, readmeBody, "runtimeType: \"pod\"")
+	mustContain(t, readmeBody, "TLS")
 }
 
 func intValue(value any) int {
@@ -161,27 +150,6 @@ func networkPolicyNamed(t *testing.T, body, name string) networkPolicyContract {
 	}
 	t.Fatalf("missing NetworkPolicy named %s in:\n%s", name, body)
 	return networkPolicyContract{}
-}
-
-func hasPinnedKubeRayOperatorPeer(policy networkPolicyContract) bool {
-	if len(policy.Spec.Ingress) != 1 || len(policy.Spec.Ingress[0].From) != 1 {
-		return false
-	}
-	for _, ingress := range policy.Spec.Ingress {
-		for _, peer := range ingress.From {
-			if peer.NamespaceSelector == nil || peer.PodSelector == nil {
-				continue
-			}
-			if peer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] != "PLACEHOLDER_KUBERAY_OPERATOR_NAMESPACE" {
-				continue
-			}
-			labels := peer.PodSelector.MatchLabels
-			if labels["app.kubernetes.io/name"] == "kuberay-operator" && labels["app.kubernetes.io/component"] == "kuberay-operator" && labels["app.kubernetes.io/instance"] == "kuberay" {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func TestAssistantIdleDeployReferencesPreparedImagePullSecretsAndModelPVC(t *testing.T) {

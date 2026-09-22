@@ -59,6 +59,7 @@ type ProviderConfig struct {
 	BaseURL          string `json:"baseUrl"`
 	Model            string `json:"model"`
 	APIKey           string `json:"-"`
+	CAFile           string `json:"-"`
 	ThinkingDisabled bool   `json:"thinkingDisabled,omitempty"`
 }
 

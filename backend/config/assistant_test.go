@@ -65,3 +65,29 @@ func TestAssistantNativeAnthropicConfiguration(t *testing.T) {
 		t.Fatal("native protocol not preserved")
 	}
 }
+
+func TestAssistantIdleDemandAuthKeyIsOptionalButStrongWhenSet(t *testing.T) {
+	t.Setenv("PAT_ENABLED", "false")
+	t.Setenv("ASSISTANT_IDLE_DEMAND_AUTH_KEY", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("empty assistant demand key should keep route disabled: %v", err)
+	}
+	if cfg.AssistantIdleDemandAuthKey != "" {
+		t.Fatal("empty assistant demand key was not preserved as disabled")
+	}
+
+	t.Setenv("ASSISTANT_IDLE_DEMAND_AUTH_KEY", "short")
+	if _, err := Load(); err == nil {
+		t.Fatal("short assistant demand key was accepted")
+	}
+
+	t.Setenv("ASSISTANT_IDLE_DEMAND_AUTH_KEY", "0123456789abcdef0123456789abcdef")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("strong assistant demand key was rejected: %v", err)
+	}
+	if cfg.AssistantIdleDemandAuthKey == "" {
+		t.Fatal("strong assistant demand key was not loaded")
+	}
+}
