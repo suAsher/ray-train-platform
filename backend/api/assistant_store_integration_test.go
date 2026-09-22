@@ -159,3 +159,48 @@ func TestAssistantPublishedStorePostgresCommonUserQuestions(t *testing.T) {
 		})
 	}
 }
+
+func TestAssistantPublishedStorePostgresActionableInstructions(t *testing.T) {
+	_, store := assistantPostgresStore(t)
+	engine := &assistantTestEngine{result: assistant.Result{Answer: "根据已发布说明回答。", Mode: "local", Reason: "selected"}}
+	h := NewHandler(store, Options{Assistant: engine, MLflowNativePublicEnabled: true, MLflowDashboardPublicEnabled: true})
+	for _, tc := range []struct {
+		name, question string
+		markers []string
+	}{
+		{"local-cli", "代码在我本地电脑上，想用 CLI 提交训练，怎么操作？", []string{"spk-rayjob login", "spk-rayjob whoami", "--dir .", "--entrypoint", "spk-rayjob status JOB_ID", "spk-rayjob logs -f JOB_ID"}},
+		{"relative-input", "用 my-files 提交数据时 input-path 应该填相对路径还是 /mnt/storage/me/...？", []string{"--input-space my-files", "--input-path", "相对路径", "PLATFORM_INPUT_PATH", "/mnt/storage/me/"}},
+		{"mlflow-pytorch", "我的普通 PyTorch 训练怎么接入 MLflow，记录参数和每一步的 loss？", []string{"platform_mlflow.py", "from platform_mlflow import PlatformMLflow", "reporter.params(", "reporter.metrics(", "step=step", `reporter.finish("FAILED")`, `reporter.finish("FINISHED")`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, _ := json.Marshal(assistantQueryRequest{Question: tc.question, Mode: "auto"})
+			w := assistantRequest(assistantTestRouter(h, assistantTestPrincipal()), string(body))
+			var response struct { Data assistantQueryResponse `json:"data"` }
+			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &response) != nil || len(response.Data.Citations) == 0 {
+				t.Fatalf("query failed: %d %s", w.Code, w.Body.String())
+			}
+			// The most relevant citation must be usable without combining an
+			// unrelated external API recipe into a platform training recipe.
+			excerpt := response.Data.Citations[0].Excerpt
+			for _, marker := range tc.markers {
+				if !strings.Contains(excerpt, marker) {
+					t.Errorf("missing %q from first evidence:\n%s", marker, excerpt)
+				}
+			}
+			if strings.Count(excerpt, "```")%2 != 0 || strings.Contains(excerpt, "[已脱敏]") {
+				t.Errorf("published instruction code was damaged:\n%s", excerpt)
+			}
+		})
+	}
+}
+
+func TestAssistantPublishedStorePostgresDoesNotDenySavedUserImages(t *testing.T) {
+	_, store := assistantPostgresStore(t)
+	articles, err := store.ListHelpArticles(context.Background())
+	if err != nil { t.Fatal(err) }
+	for _, article := range articles {
+		if strings.Contains(article.Markdown, "用户不能自行登记镜像") {
+			t.Errorf("published article %s still denies the saved-environment capability", article.ID)
+		}
+	}
+}
