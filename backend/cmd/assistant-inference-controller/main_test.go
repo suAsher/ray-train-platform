@@ -165,14 +165,20 @@ func TestReaperBoundsLifetimeAndNeverDeletesForeignService(t *testing.T) {
 }
 
 func TestReaperPlainPodUsesExactUIDAndExpiredLease(t *testing.T) {
-	now:=time.Now().UTC()
-	ns,name:="raytrain-assistant-test","assistant-idle"
-	pod:=&unstructured.Unstructured{Object:map[string]any{"apiVersion":"v1","kind":"Pod","metadata":map[string]any{"name":name,"namespace":ns,"uid":"pod-owned","creationTimestamp":now.Add(-time.Minute).Format(time.RFC3339),"labels":map[string]any{"app.kubernetes.io/instance":name,"app.kubernetes.io/component":"assistant-idle"}}}}
-	dyn:=dfake.NewSimpleDynamicClient(runtime.NewScheme(),pod)
-	typed:=kfake.NewSimpleClientset()
-	cfg:=assistantidle.RuntimeConfig{RuntimeType:"pod",LeaseName:name,Render:assistantidle.RenderConfig{RuntimeType:"pod",Name:name,Namespace:ns}}
-	backend:=assistantidle.NewKubeBackend(assistantidle.KubeAdapterConfig{Dynamic:dyn,Kubernetes:typed,Name:name,Namespace:ns,InstanceID:name,Render:cfg.Render})
-	if err:=backend.Delete(context.Background(),"different-uid");err==nil {t.Fatal("stale UID delete accepted")}
-	if err:=reap(context.Background(),typed,backend,cfg,now);err!=nil {t.Fatal(err)}
-	if _,err:=dyn.Resource(schema.GroupVersionResource{Version:"v1",Resource:"pods"}).Namespace(ns).Get(context.Background(),name,metav1.GetOptions{});err==nil {t.Fatal("expired pod not reclaimed")}
+	now := time.Now().UTC()
+	ns, name := "raytrain-assistant-test", "assistant-idle"
+	pod := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": map[string]any{"name": name, "namespace": ns, "uid": "pod-owned", "creationTimestamp": now.Add(-time.Minute).Format(time.RFC3339), "labels": map[string]any{"app.kubernetes.io/instance": name, "app.kubernetes.io/component": "assistant-idle"}}}}
+	dyn := dfake.NewSimpleDynamicClient(runtime.NewScheme(), pod)
+	typed := kfake.NewSimpleClientset()
+	cfg := assistantidle.RuntimeConfig{RuntimeType: "pod", LeaseName: name, Render: assistantidle.RenderConfig{RuntimeType: "pod", Name: name, Namespace: ns}}
+	backend := assistantidle.NewKubeBackend(assistantidle.KubeAdapterConfig{Dynamic: dyn, Kubernetes: typed, Name: name, Namespace: ns, InstanceID: name, Render: cfg.Render})
+	if err := backend.Delete(context.Background(), "different-uid"); err == nil {
+		t.Fatal("stale UID delete accepted")
+	}
+	if err := reap(context.Background(), typed, backend, cfg, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dyn.Resource(schema.GroupVersionResource{Version: "v1", Resource: "pods"}).Namespace(ns).Get(context.Background(), name, metav1.GetOptions{}); err == nil {
+		t.Fatal("expired pod not reclaimed")
+	}
 }

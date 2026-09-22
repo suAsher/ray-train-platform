@@ -26,7 +26,7 @@ var (
 
 var (
 	crdGVR        = schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}
-	podGVR = schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+	podGVR        = schema.GroupVersionResource{Version: "v1", Resource: "pods"}
 	rayServiceGVR = schema.GroupVersionResource{Group: "ray.io", Version: "v1", Resource: "rayservices"}
 	rayJobGVR     = schema.GroupVersionResource{Group: "ray.io", Version: "v1", Resource: "rayjobs"}
 	rayClusterGVR = schema.GroupVersionResource{Group: "ray.io", Version: "v1", Resource: "rayclusters"}
@@ -40,7 +40,7 @@ const (
 )
 
 type KubeAdapterConfig struct {
-	Demand DemandObserver
+	Demand            DemandObserver
 	Dynamic           dynamic.Interface
 	Kubernetes        kubernetes.Interface
 	Namespace         string
@@ -53,7 +53,7 @@ type KubeAdapterConfig struct {
 }
 
 type KubeBackend struct {
-	demand DemandObserver
+	demand            DemandObserver
 	dynamic           dynamic.Interface
 	kubernetes        kubernetes.Interface
 	namespace         string
@@ -100,7 +100,7 @@ func NewKubeBackend(config KubeAdapterConfig) *KubeBackend {
 		labels[strings.TrimSpace(key)] = strings.TrimSpace(value)
 	}
 	return &KubeBackend{
-		demand: config.Demand,
+		demand:            config.Demand,
 		dynamic:           config.Dynamic,
 		kubernetes:        config.Kubernetes,
 		namespace:         strings.TrimSpace(config.Namespace),
@@ -127,10 +127,14 @@ func (b *KubeBackend) Observe(ctx context.Context) (Snapshot, error) {
 	snapshot := Snapshot{Observation: Observation{Fresh: true, Enabled: true}}
 	var pendingDemand bool
 	if b.render.RuntimeType == "pod" {
-		if b.demand == nil { return Snapshot{},errors.New("authoritative training demand observer is required") }
+		if b.demand == nil {
+			return Snapshot{}, errors.New("authoritative training demand observer is required")
+		}
 		var err error
-		pendingDemand,err = b.demand.Pending(ctx)
-		if err != nil { return Snapshot{},err }
+		pendingDemand, err = b.demand.Pending(ctx)
+		if err != nil {
+			return Snapshot{}, err
+		}
 	}
 	service, serviceExists, err := b.ownedRuntime(ctx)
 	if err != nil {
@@ -255,19 +259,27 @@ func (b *KubeBackend) validate() error {
 }
 
 func (b *KubeBackend) runtimeGVR() schema.GroupVersionResource {
-	if b.render.RuntimeType == "pod" { return podGVR }
+	if b.render.RuntimeType == "pod" {
+		return podGVR
+	}
 	return rayServiceGVR
 }
 func (b *KubeBackend) runtimeKind() string {
-	if b.render.RuntimeType == "pod" { return "Pod" }
+	if b.render.RuntimeType == "pod" {
+		return "Pod"
+	}
 	return "RayService"
 }
 func (b *KubeBackend) runtimeAPIVersion() string {
-	if b.render.RuntimeType == "pod" { return "v1" }
+	if b.render.RuntimeType == "pod" {
+		return "v1"
+	}
 	return "ray.io/v1"
 }
 func (b *KubeBackend) requireRuntimeAdmission(ctx context.Context) error {
-	if b.render.RuntimeType == "pod" { return nil } // Explicit scheduling gate stays closed if Pod integration is unavailable.
+	if b.render.RuntimeType == "pod" {
+		return nil
+	} // Explicit scheduling gate stays closed if Pod integration is unavailable.
 	return b.requireRayServiceSuspend(ctx)
 }
 
@@ -494,7 +506,9 @@ func (b *KubeBackend) ownedObject(obj metav1.Object, serviceUID string) bool {
 	// recognizes only an orphan in our dedicated namespace, never admits it.
 	if b.render.RuntimeType == "pod" && serviceUID == "" {
 		for _, owner := range obj.GetOwnerReferences() {
-			if owner.APIVersion == "v1" && owner.Kind == "Pod" && owner.Name == b.name && owner.UID != "" && owner.Controller != nil && *owner.Controller { return true }
+			if owner.APIVersion == "v1" && owner.Kind == "Pod" && owner.Name == b.name && owner.UID != "" && owner.Controller != nil && *owner.Controller {
+				return true
+			}
 		}
 	}
 	return b.ownedByRuntimeUID(obj, serviceUID)

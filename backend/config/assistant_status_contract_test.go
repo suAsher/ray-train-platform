@@ -42,5 +42,7 @@ func TestAssistantStatusControllerNetworkPolicyContract(t *testing.T) {
 			t.Fatalf("missing scoped status path %q", want)
 		}
 	}
-	if strings.Contains(s, "port: 8080") { t.Fatal("controller must not expose the old cleartext gate") }
+	if strings.Contains(s, "port: 8080") {
+		t.Fatal("controller must not expose the old cleartext gate")
+	}
 }

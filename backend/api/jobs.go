@@ -47,7 +47,7 @@ type globalJobReader interface {
 }
 
 type Handler struct {
-	assistantControllerCAFile string
+	assistantControllerCAFile    string
 	assistantIdleNamespace       string
 	assistantDemand              AssistantDemandStore
 	assistantDemandAuthKey       []byte

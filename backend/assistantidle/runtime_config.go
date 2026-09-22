@@ -10,13 +10,13 @@ import (
 // RuntimeConfig is mounted from an administrator-owned ConfigMap, never a user request.
 // Operational time bounds stay fixed until new acceptance evidence justifies changing them.
 type RuntimeConfig struct {
-	RuntimeType string       `json:"runtimeType"`
-	DemandTokenFile string   `json:"demandTokenFile"`
-	DemandCAFile string      `json:"demandCAFile"`
-	Enabled    bool         `json:"enabled"`
-	InstanceID string       `json:"instanceID"`
-	LeaseName  string       `json:"leaseName"`
-	Render     RenderConfig `json:"render"`
+	RuntimeType     string       `json:"runtimeType"`
+	DemandTokenFile string       `json:"demandTokenFile"`
+	DemandCAFile    string       `json:"demandCAFile"`
+	Enabled         bool         `json:"enabled"`
+	InstanceID      string       `json:"instanceID"`
+	LeaseName       string       `json:"leaseName"`
+	Render          RenderConfig `json:"render"`
 }
 
 func ParseRuntimeConfig(r io.Reader) (RuntimeConfig, error) {
@@ -34,7 +34,9 @@ func ParseRuntimeConfig(r io.Reader) (RuntimeConfig, error) {
 		return cfg, errors.New("runtimeType must explicitly select pod or rayservice")
 	}
 	cfg.Render.RuntimeType = cfg.RuntimeType
-	if cfg.DemandTokenFile == "" { cfg.DemandTokenFile = "/run/assistant/demand/token" }
+	if cfg.DemandTokenFile == "" {
+		cfg.DemandTokenFile = "/run/assistant/demand/token"
+	}
 	if len(cfg.InstanceID) > 63 || !dnsLabelPattern.MatchString(cfg.InstanceID) || cfg.InstanceID != cfg.Render.Name {
 		return cfg, errors.New("instanceID must equal the fixed service name")
 	}

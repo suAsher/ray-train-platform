@@ -23,7 +23,7 @@ var (
 )
 
 type Config struct {
-	AssistantControllerCAFile string
+	AssistantControllerCAFile                string
 	AssistantIdleNamespace                   string
 	AssistantIdleDemandAuthKey               string
 	Assistant                                AssistantConfig

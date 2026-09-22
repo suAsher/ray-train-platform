@@ -81,7 +81,9 @@ func TestAssistantPublishedStorePostgresHTTPAssembly(t *testing.T) {
 			body, _ := json.Marshal(assistantQueryRequest{Question: article.Title, Mode: "auto"})
 			before := engine.calls
 			w := assistantRequest(assistantTestRouter(h, assistantTestPrincipal()), string(body))
-			var response struct { Data assistantQueryResponse `json:"data"` }
+			var response struct {
+				Data assistantQueryResponse `json:"data"`
+			}
 			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &response) != nil {
 				t.Fatalf("HTTP response: %d %s", w.Code, w.Body.String())
 			}
@@ -99,25 +101,37 @@ func TestAssistantPublishedStorePostgresExcludesDraftAndUnpublished(t *testing.T
 	_, store := assistantPostgresStore(t)
 	ctx := context.Background()
 	doc := domain.HelpDocument{ID: "assistant-private-draft", Title: "量子猫训练说明", Category: "团队说明", Markdown: "private-draft-marker"}
-	if _, err := store.CreateHelpDocument(ctx, doc, "human"); err != nil { t.Fatal(err) }
+	if _, err := store.CreateHelpDocument(ctx, doc, "human"); err != nil {
+		t.Fatal(err)
+	}
 	h := NewHandler(store, Options{Assistant: &assistantTestEngine{}})
 	if evidence, available := h.assistantDocuments(ctx, doc.Title); !available || len(evidence) != 0 {
 		t.Fatalf("draft exposed: %+v available=%t", evidence, available)
 	}
-	if _, err := store.ChangeHelpDocument(ctx, doc.ID, 1, "publish", 0, nil, "human"); err != nil { t.Fatal(err) }
+	if _, err := store.ChangeHelpDocument(ctx, doc.ID, 1, "publish", 0, nil, "human"); err != nil {
+		t.Fatal(err)
+	}
 	doc.Markdown = "new-secret-draft-marker"
-	if _, err := store.ChangeHelpDocument(ctx, doc.ID, 2, "save", 0, &doc, "human"); err != nil { t.Fatal(err) }
+	if _, err := store.ChangeHelpDocument(ctx, doc.ID, 2, "save", 0, &doc, "human"); err != nil {
+		t.Fatal(err)
+	}
 	evidence, available := h.assistantDocuments(ctx, doc.Title)
-	if !available || len(evidence) != 1 || evidence[0].Version != 2 || strings.Contains(evidence[0].Excerpt, "new-secret") { t.Fatalf("published snapshot incorrect: %+v", evidence) }
-	if _, err := store.ChangeHelpDocument(ctx, doc.ID, 3, "unpublish", 0, nil, "human"); err != nil { t.Fatal(err) }
-	if evidence, available := h.assistantDocuments(ctx, doc.Title); !available || len(evidence) != 0 { t.Fatalf("unpublished document exposed: %+v", evidence) }
+	if !available || len(evidence) != 1 || evidence[0].Version != 2 || strings.Contains(evidence[0].Excerpt, "new-secret") {
+		t.Fatalf("published snapshot incorrect: %+v", evidence)
+	}
+	if _, err := store.ChangeHelpDocument(ctx, doc.ID, 3, "unpublish", 0, nil, "human"); err != nil {
+		t.Fatal(err)
+	}
+	if evidence, available := h.assistantDocuments(ctx, doc.Title); !available || len(evidence) != 0 {
+		t.Fatalf("unpublished document exposed: %+v", evidence)
+	}
 }
 
 func TestAssistantPublishedStorePostgresCommonUserQuestions(t *testing.T) {
 	_, store := assistantPostgresStore(t)
 	engine := &assistantTestEngine{result: assistant.Result{Answer: "根据已发布说明回答。", Mode: "local", Reason: "selected"}}
 	h := NewHandler(store, Options{Assistant: engine})
-	for _, tc := range []struct { question, first string }{
+	for _, tc := range []struct{ question, first string }{
 		{"如何提交训练任务？", "quickstart"},
 		{"怎么提交任务", "quickstart"},
 		{"第一次用平台，怎么开始训练？", "quickstart"},
@@ -127,9 +141,11 @@ func TestAssistantPublishedStorePostgresCommonUserQuestions(t *testing.T) {
 		{"调试环境安装的依赖如何保存？", "custom-environment"},
 	} {
 		t.Run(tc.question, func(t *testing.T) {
-			body, _ := json.Marshal(assistantQueryRequest{Question: tc.question, Mode:"auto"})
+			body, _ := json.Marshal(assistantQueryRequest{Question: tc.question, Mode: "auto"})
 			w := assistantRequest(assistantTestRouter(h, assistantTestPrincipal()), string(body))
-			var response struct { Data assistantQueryResponse `json:"data"` }
+			var response struct {
+				Data assistantQueryResponse `json:"data"`
+			}
 			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &response) != nil || len(response.Data.Citations) == 0 || response.Data.Citations[0].ID != tc.first || response.Data.Mode != "local" {
 				t.Fatalf("common user question did not reach the model with relevant evidence: %d %s", w.Code, w.Body.String())
 			}

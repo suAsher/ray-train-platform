@@ -60,7 +60,9 @@ func TestAssistantIdleDeployReferenceMatchesRendererContract(t *testing.T) {
 		mustContain(t, np, key)
 	}
 	mustNotContain(t, np, "api-gateway")
-	for _, port := range []string{"port: 6379", "port: 8265", "port: 8000", "port: 8080", "port: 52365"} { mustNotContain(t,np,port) }
+	for _, port := range []string{"port: 6379", "port: 8265", "port: 8000", "port: 8080", "port: 52365"} {
+		mustNotContain(t, np, port)
+	}
 
 	for _, name := range []string{"deployment-controller.yaml", "deployment-reaper.yaml"} {
 		body := files[name]

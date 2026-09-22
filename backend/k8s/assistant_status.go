@@ -113,8 +113,8 @@ func (c *Client) ObserveAssistantStatus(ctx context.Context, namespace string) (
 	}
 	var cfg struct {
 		RuntimeType string `json:"runtimeType"`
-		Enabled *bool `json:"enabled"`
-		Render  struct {
+		Enabled     *bool  `json:"enabled"`
+		Render      struct {
 			Name       string
 			Namespace  string
 			InstanceID string
@@ -133,37 +133,41 @@ func (c *Client) ObserveAssistantStatus(ctx context.Context, namespace string) (
 	if cfg.RuntimeType == "pod" {
 		status.RuntimeType = "pod"
 		status.InferencePod, err = c.assistantInferencePodStatus(ctx, namespace, cfg.Render.Name, cfg.Render.InstanceID)
-		if err != nil { return status, errAssistantStatus }
-	} else if cfg.RuntimeType == "" || cfg.RuntimeType == "rayservice" {
-	status.RuntimeType = "rayservice"
-	status.RayService.Name = cfg.Render.Name
-	service, err := c.dynamic.Resource(assistantRayServiceGVR).Namespace(namespace).Get(ctx, cfg.Render.Name, metav1.GetOptions{})
-	if err != nil && !apierrors.IsNotFound(err) {
-		return status, errAssistantStatus
-	}
-	if err == nil {
-		status.RayService.Present = true
-		status.RayService.Suspended, _, _ = unstructured.NestedBool(service.Object, "spec", "rayClusterConfig", "suspend")
-		value, _, _ := unstructured.NestedString(service.Object, "status", "serviceStatus")
-		switch value {
-		case "Running", "Restarting", "WaitForServeDeploymentReady", "WaitForServeDeploymentHealthy", "Failed", "Suspended", "Pending":
-			status.RayService.Status = value
+		if err != nil {
+			return status, errAssistantStatus
 		}
-		conditions, _, _ := unstructured.NestedSlice(service.Object, "status", "conditions")
-		for _, v := range conditions {
-			if condition, ok := v.(map[string]any); ok && condition["type"] == "Ready" && condition["status"] == "True" {
-				status.RayService.Ready = true
+	} else if cfg.RuntimeType == "" || cfg.RuntimeType == "rayservice" {
+		status.RuntimeType = "rayservice"
+		status.RayService.Name = cfg.Render.Name
+		service, err := c.dynamic.Resource(assistantRayServiceGVR).Namespace(namespace).Get(ctx, cfg.Render.Name, metav1.GetOptions{})
+		if err != nil && !apierrors.IsNotFound(err) {
+			return status, errAssistantStatus
+		}
+		if err == nil {
+			status.RayService.Present = true
+			status.RayService.Suspended, _, _ = unstructured.NestedBool(service.Object, "spec", "rayClusterConfig", "suspend")
+			value, _, _ := unstructured.NestedString(service.Object, "status", "serviceStatus")
+			switch value {
+			case "Running", "Restarting", "WaitForServeDeploymentReady", "WaitForServeDeploymentHealthy", "Failed", "Suspended", "Pending":
+				status.RayService.Status = value
+			}
+			conditions, _, _ := unstructured.NestedSlice(service.Object, "status", "conditions")
+			for _, v := range conditions {
+				if condition, ok := v.(map[string]any); ok && condition["type"] == "Ready" && condition["status"] == "True" {
+					status.RayService.Ready = true
+				}
+			}
+			if status.RayService.Suspended {
+				status.RayService.Ready = false
+			}
+			if service.GetDeletionTimestamp() != nil {
+				status.RayService.Ready = false
+				status.RayService.Status = "Deleting"
 			}
 		}
-		if status.RayService.Suspended {
-			status.RayService.Ready = false
-		}
-		if service.GetDeletionTimestamp() != nil {
-			status.RayService.Ready = false
-			status.RayService.Status = "Deleting"
-		}
+	} else {
+		return status, errAssistantStatus
 	}
-	} else { return status, errAssistantStatus }
 	pods, err := c.kubernetes.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/instance=" + cfg.Render.InstanceID, Limit: 33})
 	if err != nil || pods.Continue != "" || len(pods.Items) > 32 {
 		return status, errAssistantStatus
@@ -221,19 +225,31 @@ func assistantPodRole(pod corev1.Pod) string {
 func (c *Client) assistantInferencePodStatus(ctx context.Context, namespace, name, instance string) (AssistantRayServiceStatus, error) {
 	result := AssistantRayServiceStatus{Name: name, Status: "Absent"}
 	pod, err := c.kubernetes.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) { return result, nil }
-	if err != nil { return result, errAssistantStatus }
-	if pod.Labels["app.kubernetes.io/instance"] != instance || assistantPodRole(*pod) != "inference" { return result, errAssistantStatus }
+	if apierrors.IsNotFound(err) {
+		return result, nil
+	}
+	if err != nil {
+		return result, errAssistantStatus
+	}
+	if pod.Labels["app.kubernetes.io/instance"] != instance || assistantPodRole(*pod) != "inference" {
+		return result, errAssistantStatus
+	}
 	result.Present = true
 	result.Suspended = len(pod.Spec.SchedulingGates) != 0
 	switch pod.Status.Phase {
 	case corev1.PodPending, corev1.PodRunning, corev1.PodSucceeded, corev1.PodFailed:
 		result.Status = string(pod.Status.Phase)
-	default: result.Status = "Unknown"
+	default:
+		result.Status = "Unknown"
 	}
 	for _, condition := range pod.Status.Conditions {
-		if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue && pod.Status.Phase == corev1.PodRunning && !result.Suspended && assistantidle.PodGPURequested(*pod) == 1 { result.Ready = true }
+		if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue && pod.Status.Phase == corev1.PodRunning && !result.Suspended && assistantidle.PodGPURequested(*pod) == 1 {
+			result.Ready = true
+		}
 	}
-	if pod.DeletionTimestamp != nil { result.Ready = false; result.Status = "Deleting" }
+	if pod.DeletionTimestamp != nil {
+		result.Ready = false
+		result.Status = "Deleting"
+	}
 	return result, nil
 }

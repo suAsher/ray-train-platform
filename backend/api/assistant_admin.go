@@ -41,12 +41,30 @@ func newAssistantStatusHTTPClient(caFiles ...string) *http.Client {
 	transport := &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 500 * time.Millisecond}).DialContext, ResponseHeaderTimeout: 500 * time.Millisecond, MaxResponseHeaderBytes: 4096, MaxIdleConns: 2, MaxConnsPerHost: 2, IdleConnTimeout: 30 * time.Second}
 	if len(caFiles) > 0 && caFiles[0] != "" {
 		path := caFiles[0]
-		if !filepath.IsAbs(path) || filepath.Clean(path) != path { return nil }
-		info, err := os.Stat(path); if err != nil || !info.Mode().IsRegular() || info.Size() > 1024*1024 { return nil }
-		file, err := os.Open(caFiles[0]); if err != nil { return nil }; defer file.Close()
-		info, err = file.Stat(); if err != nil || !info.Mode().IsRegular() || info.Size() > 1024*1024 { return nil }
-		pem, err := io.ReadAll(io.LimitReader(file, 1024*1024+1)); if err != nil || len(pem) > 1024*1024 { return nil }
-		pool := x509.NewCertPool(); if !pool.AppendCertsFromPEM(pem) { return nil }
+		if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+			return nil
+		}
+		info, err := os.Stat(path)
+		if err != nil || !info.Mode().IsRegular() || info.Size() > 1024*1024 {
+			return nil
+		}
+		file, err := os.Open(caFiles[0])
+		if err != nil {
+			return nil
+		}
+		defer file.Close()
+		info, err = file.Stat()
+		if err != nil || !info.Mode().IsRegular() || info.Size() > 1024*1024 {
+			return nil
+		}
+		pem, err := io.ReadAll(io.LimitReader(file, 1024*1024+1))
+		if err != nil || len(pem) > 1024*1024 {
+			return nil
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil
+		}
 		transport.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
 	}
 	return &http.Client{Timeout: time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: transport}
@@ -94,7 +112,9 @@ func (h *Handler) assistantAdminStatus(c *gin.Context) {
 			response.Idle.Reason = reason
 			response.Idle.ObservationAvailable = reason == "observed" || reason == "disabled" || reason == "controller_stopped"
 			workload := idle.RayService
-			if idle.RuntimeType == "pod" { workload = idle.InferencePod }
+			if idle.RuntimeType == "pod" {
+				workload = idle.InferencePod
+			}
 			if status.State == assistantidle.StateReady && (idle.Enabled == nil || !*idle.Enabled || !workload.Ready || workload.Suspended || !assistantDeploymentsReady(idle.Deployments)) {
 				response.Idle.Controller.State = assistantidle.StateUnknown
 				response.Idle.Controller.Reason = "readiness_unconfirmed"
@@ -134,8 +154,10 @@ func (h *Handler) readAssistantControllerStatus(ctx context.Context, namespace s
 	if h.assistantStatusHTTP == nil || namespace == "" || config.ValidateAssistantIdleNamespace(namespace) != nil {
 		return empty, "controller_unavailable"
 	}
-	target := "http://assistant-idle-controller."+namespace+".svc.cluster.local:8080/status"
-	if h.assistantControllerCAFile != "" { target = "https://assistant-idle-controller."+namespace+".svc.cluster.local:8443/status" }
+	target := "http://assistant-idle-controller." + namespace + ".svc.cluster.local:8080/status"
+	if h.assistantControllerCAFile != "" {
+		target = "https://assistant-idle-controller." + namespace + ".svc.cluster.local:8443/status"
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return empty, "controller_unavailable"

@@ -208,7 +208,9 @@ func validateRenderConfig(cfg RenderConfig) error {
 	}
 	u, err := url.Parse(cfg.GateURL)
 	scheme := "http"
-	if cfg.RuntimeType == "pod" { scheme = "https" }
+	if cfg.RuntimeType == "pod" {
+		scheme = "https"
+	}
 	if err != nil || u.Scheme != scheme || u.Host == "" || strings.Contains(cfg.GateURL, "@") || u.RawQuery != "" || u.Fragment != "" || containsControl(cfg.GateURL) {
 		return errors.New("assistant idle gate URL must be a fixed in-cluster HTTP URL without credentials, query, or fragment")
 	}

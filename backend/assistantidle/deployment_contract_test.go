@@ -48,13 +48,21 @@ type labelSelector struct {
 }
 
 func TestAssistantIdleNetworkDoesNotExposeRayControlPorts(t *testing.T) {
- body,err:=os.ReadFile(filepath.Join("..","..","deploy","assistant-idle","networkpolicy.yaml"))
- if err!=nil {t.Fatal(err)}
- for _, forbidden:=range []string{"kuberay-dashboard","port: 8265","port: 6379","port: 10001","port: 8000"} { mustNotContain(t,string(body),forbidden) }
- policy:=networkPolicyNamed(t,string(body),"assistant-idle-backend-to-serve-only")
- if len(policy.Spec.Ingress)!=1 || len(policy.Spec.Ingress[0].From)!=1 { t.Fatal("inference ingress must have one pinned backend peer") }
- peer:=policy.Spec.Ingress[0].From[0]
- if peer.NamespaceSelector==nil || peer.PodSelector==nil || peer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"]!="PLACEHOLDER_RAYTRAIN_BACKEND_NAMESPACE" || peer.PodSelector.MatchLabels["app"]!="ray-train-backend" || peer.PodSelector.MatchLabels["app.kubernetes.io/component"]!="api" { t.Fatal("inference backend peer widened") }
+	body, err := os.ReadFile(filepath.Join("..", "..", "deploy", "assistant-idle", "networkpolicy.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"kuberay-dashboard", "port: 8265", "port: 6379", "port: 10001", "port: 8000"} {
+		mustNotContain(t, string(body), forbidden)
+	}
+	policy := networkPolicyNamed(t, string(body), "assistant-idle-backend-to-serve-only")
+	if len(policy.Spec.Ingress) != 1 || len(policy.Spec.Ingress[0].From) != 1 {
+		t.Fatal("inference ingress must have one pinned backend peer")
+	}
+	peer := policy.Spec.Ingress[0].From[0]
+	if peer.NamespaceSelector == nil || peer.PodSelector == nil || peer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] != "PLACEHOLDER_RAYTRAIN_BACKEND_NAMESPACE" || peer.PodSelector.MatchLabels["app"] != "ray-train-backend" || peer.PodSelector.MatchLabels["app.kubernetes.io/component"] != "api" {
+		t.Fatal("inference backend peer widened")
+	}
 
 }
 
