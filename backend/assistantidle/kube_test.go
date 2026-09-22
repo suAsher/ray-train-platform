@@ -2,7 +2,10 @@ package assistantidle
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -14,9 +17,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
-	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/rest"
 )
 
 func TestObserveFailsClosedWhenRayServiceRayClusterConfigSuspendIsUnsupported(t *testing.T) {
@@ -151,14 +155,28 @@ func TestPodGPUAccountingUsesLimitFallbackAndRestartableInitAsApp(t *testing.T) 
 		{Name: "regular-init", Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceName("nvidia.com/gpu"): *resource.NewQuantity(2, resource.DecimalSI)}}},
 		{Name: "sidecar-init", RestartPolicy: &restart, Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceName("nvidia.com/gpu"): *resource.NewQuantity(1, resource.DecimalSI)}}},
 	}
-	adapter := testAdapter(crdWithSuspend(), readyNode("node-a", map[string]string{"accelerator": "nvidia-rtx-4090"}, 4), pod)
+	adapter := testAdapter(crdWithSuspend(), readyNode("node-a", map[string]string{"accelerator": "nvidia-rtx-4090"}, 3), pod)
 
 	snapshot, err := adapter.Observe(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Observation.EligibleIdleGPU != 1 {
-		t.Fatalf("idle slot=%d, want 1 after accounting limit fallback and restartable init", snapshot.Observation.EligibleIdleGPU)
+	if snapshot.Observation.EligibleIdleGPU != 0 {
+		t.Fatalf("idle slot=%d, want 0 after accounting sidecar+init peak", snapshot.Observation.EligibleIdleGPU)
+	}
+}
+
+func TestBoundPendingExternalGPUPodIsDemand(t *testing.T) {
+	pod := gpuPod("tenant-a", "bound-pending", "node-a", 1, false)
+	pod.Status.Phase = corev1.PodPending
+	adapter := testAdapter(crdWithSuspend(), readyNode("node-a", map[string]string{"accelerator": "nvidia-rtx-4090"}, 2), pod)
+
+	snapshot, err := adapter.Observe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.Observation.TrainingDemand {
+		t.Fatalf("bound pending GPU pod was not demand: %+v", snapshot)
 	}
 }
 
@@ -201,35 +219,111 @@ func TestResidualOwnedRayClusterBlocksRecreateAfterRayServiceDisappears(t *testi
 	}
 }
 
+func TestDeletingOwnedRayClusterStillBlocksRecreate(t *testing.T) {
+	cluster := ownedRayCluster("cluster-uid", "assistant-uid")
+	cluster.SetDeletionTimestamp(&metav1.Time{})
+	adapter := testAdapter(crdWithSuspend(), cluster)
+
+	snapshot, err := adapter.Observe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.Observation.OwnedChildrenRemaining {
+		t.Fatalf("deleting RayCluster did not block recreate: %+v", snapshot)
+	}
+}
+
+func TestRayServiceOwnershipRequiresComponentLabel(t *testing.T) {
+	service := ownedRayService("assistant-uid", false, false)
+	labels := service.GetLabels()
+	delete(labels, "app.kubernetes.io/component")
+	service.SetLabels(labels)
+	adapter := testAdapter(crdWithSuspend(), service)
+
+	_, err := adapter.Observe(context.Background())
+	if !apierrors.IsForbidden(err) {
+		t.Fatalf("got %v, want forbidden", err)
+	}
+}
+
+func TestResidualOwnerRefWithoutUIDOrControllerIsNotAdopted(t *testing.T) {
+	cluster := ownedRayCluster("cluster-uid", "assistant-uid")
+	cluster.SetLabels(map[string]string{})
+	cluster.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "ray.io/v1", Kind: "RayService", Name: "raytrain-assistant"}})
+	adapter := testAdapter(crdWithSuspend(), cluster)
+
+	snapshot, err := adapter.Observe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Observation.OwnedChildrenRemaining {
+		t.Fatalf("weak ownerRef was adopted: %+v", snapshot)
+	}
+}
+
 func TestDeleteRayServiceRequiresOwnedInstanceAndUsesForegroundUIDPrecondition(t *testing.T) {
-	adapter := testAdapter(crdWithSuspend(), ownedRayService("assistant-uid", false, false))
+	adapter, deleted := restDeleteAdapter(t, ownedRayService("assistant-uid", false, false))
 
 	if err := adapter.Delete(context.Background(), "wrong"); err == nil {
 		t.Fatal("delete with stale UID was accepted")
+	}
+	if *deleted {
+		t.Fatal("stale UID attempted delete")
 	}
 
 	if err := adapter.Delete(context.Background(), "assistant-uid"); err != nil {
 		t.Fatal(err)
 	}
-	deletes := adapter.dynamic.(*dynamicfake.FakeDynamicClient).Actions()
-	var found bool
-	for _, action := range deletes {
-		deleteAction, ok := action.(k8stesting.DeleteActionImpl)
-		if !ok || deleteAction.GetResource().Resource != "rayservices" {
-			continue
-		}
-		found = true
-		options := deleteAction.GetDeleteOptions()
-		if options.Preconditions == nil || options.Preconditions.UID == nil || string(*options.Preconditions.UID) != "assistant-uid" {
-			t.Fatalf("delete missed UID precondition: %+v", options)
-		}
-		if options.PropagationPolicy == nil || *options.PropagationPolicy != metav1.DeletePropagationForeground {
-			t.Fatalf("delete missed foreground propagation: %+v", options)
-		}
+	if !*deleted {
+		t.Fatal("RayService delete request was not sent")
 	}
-	if !found {
-		t.Fatal("RayService delete action was not recorded")
+}
+
+func restDeleteAdapter(t *testing.T, service *unstructured.Unstructured) (*KubeAdapter, *bool) {
+	t.Helper()
+	resourcePath := "/apis/ray.io/v1/namespaces/assistant-system/rayservices/raytrain-assistant"
+	deleted := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != resourcePath {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			if err := json.NewEncoder(w).Encode(service.Object); err != nil {
+				t.Fatalf("encode service: %v", err)
+			}
+		case http.MethodDelete:
+			var options metav1.DeleteOptions
+			if err := json.NewDecoder(r.Body).Decode(&options); err != nil {
+				t.Fatalf("decode delete options: %v", err)
+			}
+			if options.Preconditions == nil || options.Preconditions.UID == nil || string(*options.Preconditions.UID) != "assistant-uid" {
+				t.Fatalf("delete missed UID precondition: %+v", options)
+			}
+			if options.PropagationPolicy == nil || *options.PropagationPolicy != metav1.DeletePropagationForeground {
+				t.Fatalf("delete missed foreground propagation: %+v", options)
+			}
+			deleted = true
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"apiVersion":"v1","kind":"Status","status":"Success"}`))
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	t.Cleanup(server.Close)
+	dynamicClient, err := dynamic.NewForConfig(&rest.Config{Host: server.URL})
+	if err != nil {
+		t.Fatal(err)
 	}
+	return NewKubeAdapter(KubeAdapterConfig{
+		Dynamic:    dynamicClient,
+		Kubernetes: k8sfake.NewSimpleClientset(),
+		Namespace:  "assistant-system",
+		Name:       "raytrain-assistant",
+		InstanceID: "assistant-instance",
+	}), &deleted
 }
 
 func TestDeleteRayServiceRefusesForeignInstance(t *testing.T) {
@@ -245,7 +339,7 @@ func TestDeleteRayServiceRefusesForeignInstance(t *testing.T) {
 }
 
 func TestOwnServiceReadsOnlyFixedOwnedRayServiceWithoutCapabilityGate(t *testing.T) {
-	created := metav1.NewTime(time.Now().Add(-time.Minute))
+	created := metav1.NewTime(time.Now().Add(-time.Minute).Truncate(time.Second))
 	service := ownedRayService("assistant-uid", false, false)
 	service.SetCreationTimestamp(created)
 	adapter := testAdapter(crdWithoutSuspend(), service)
@@ -457,6 +551,7 @@ func gpuPod(namespace, name, node string, gpus int64, owned bool) *corev1.Pod {
 	labels := map[string]string{}
 	if owned {
 		labels["app.kubernetes.io/instance"] = "assistant-instance"
+		labels["app.kubernetes.io/component"] = "assistant-idle"
 	}
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Labels: labels, UID: types.UID(name + "-uid")},

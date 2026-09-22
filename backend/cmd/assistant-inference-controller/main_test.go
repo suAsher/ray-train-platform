@@ -16,7 +16,7 @@ import (
 )
 func TestReaperKeepsFreshLeaseAndReclaimsAfterExpiry(t *testing.T){
  now:=time.Now().UTC();ns:="raytrain-assistant-test";name:="assistant-idle"
- service:=&unstructured.Unstructured{Object:map[string]any{"apiVersion":"ray.io/v1","kind":"RayService","metadata":map[string]any{"name":name,"namespace":ns,"uid":"owned","creationTimestamp":now.Add(-time.Minute).Format(time.RFC3339),"labels":map[string]any{"app.kubernetes.io/instance":name}}}}
+ service:=&unstructured.Unstructured{Object:map[string]any{"apiVersion":"ray.io/v1","kind":"RayService","metadata":map[string]any{"name":name,"namespace":ns,"uid":"owned","creationTimestamp":now.Add(-time.Minute).Format(time.RFC3339),"labels":map[string]any{"app.kubernetes.io/instance":name,"app.kubernetes.io/component":"assistant-idle"}}}}
  dyn:=dfake.NewSimpleDynamicClient(runtime.NewScheme(),service)
  holder:="controller";duration:=int32(30);renewed:=metav1.NewMicroTime(now)
  lease:=&coordv1.Lease{ObjectMeta:metav1.ObjectMeta{Name:name,Namespace:ns},Spec:coordv1.LeaseSpec{HolderIdentity:&holder,LeaseDurationSeconds:&duration,RenewTime:&renewed}}

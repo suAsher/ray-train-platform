@@ -20,7 +20,9 @@ func validRenderConfig() RenderConfig {
 		InstanceID:         "assistant-idle-acceptance",
 		ToleratedTaintKeys: []string{"nvidia.com/gpu"},
 		RequiredNodeLabels: map[string]string{
-			"raytrain.wellspiking.ai/gpu-pool": "shared",
+			"platform.wellspiking.ai/gpu-pool":    "production",
+			"platform.wellspiking.ai/cache-ready": "true",
+			"accelerator":                         "nvidia-rtx-4090",
 		},
 	}
 }
@@ -37,11 +39,16 @@ func renderForTest(t *testing.T, cfg RenderConfig) *unstructured.Unstructured {
 func TestRenderRayServiceValidatesImmutableInputs(t *testing.T) {
 	base := validRenderConfig()
 	for name, mutate := range map[string]func(*RenderConfig){
-		"missing digest":        func(c *RenderConfig) { c.ServeImage = "harbor.wellspiking.ai/assistant/assistant-serve:latest" },
-		"missing model pvc":     func(c *RenderConfig) { c.ModelPVC = "" },
-		"missing queue":         func(c *RenderConfig) { c.QueueName = "" },
-		"missing allowed nodes": func(c *RenderConfig) { c.AllowedWorkerNodes = nil },
-		"unsafe namespace":      func(c *RenderConfig) { c.Namespace = "raytrain_assistant" },
+		"missing digest":             func(c *RenderConfig) { c.ServeImage = "harbor.wellspiking.ai/assistant/assistant-serve:latest" },
+		"missing model pvc":          func(c *RenderConfig) { c.ModelPVC = "" },
+		"missing queue":              func(c *RenderConfig) { c.QueueName = "" },
+		"missing allowed nodes":      func(c *RenderConfig) { c.AllowedWorkerNodes = nil },
+		"unsafe namespace":           func(c *RenderConfig) { c.Namespace = "raytrain_assistant" },
+		"dedicated taint toleration": func(c *RenderConfig) { c.ToleratedTaintKeys = []string{"platform.wellspiking.ai/dedicated-tenant"} },
+		"dedicated label selector": func(c *RenderConfig) {
+			c.RequiredNodeLabels = map[string]string{"platform.wellspiking.ai/dedicated-tenant": "tenant-a"}
+		},
+		"model path outside model mount": func(c *RenderConfig) { c.ModelPath = "/tmp/model" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := base
@@ -58,14 +65,17 @@ func TestRenderRayServiceUsesKueueSuspendedSingleGPUShape(t *testing.T) {
 	if obj.GetAPIVersion() != "ray.io/v1" || obj.GetKind() != "RayService" {
 		t.Fatalf("unexpected GVK %s %s", obj.GetAPIVersion(), obj.GetKind())
 	}
-	if obj.GetNamespace() != "raytrain-assistant-system" || obj.GetLabels()["kueue.x-k8s.io/queue-name"] != "assistant-idle-localqueue" || obj.GetLabels()["app.kubernetes.io/instance"] != "assistant-idle-acceptance" {
-		t.Fatalf("missing dedicated namespace, instance, or Kueue queue label: ns=%s labels=%v", obj.GetNamespace(), obj.GetLabels())
+	if obj.GetNamespace() != "raytrain-assistant-system" || obj.GetLabels()["kueue.x-k8s.io/queue-name"] != "assistant-idle-localqueue" || obj.GetLabels()["kueue.x-k8s.io/priority-class"] != "assistant-idle-low" || obj.GetLabels()["app.kubernetes.io/instance"] != "assistant-idle-acceptance" || obj.GetLabels()["app.kubernetes.io/component"] != "assistant-idle" {
+		t.Fatalf("missing dedicated namespace, instance, component, or Kueue queue label: ns=%s labels=%v", obj.GetNamespace(), obj.GetLabels())
 	}
 	if _, found, _ := unstructured.NestedBool(obj.Object, "spec", "suspend"); found {
 		t.Fatal("RayService must not render top-level spec.suspend; Kueue v0.19 reads rayClusterConfig.suspend")
 	}
 	if suspended, _, _ := unstructured.NestedBool(obj.Object, "spec", "rayClusterConfig", "suspend"); !suspended {
 		t.Fatal("RayService must render spec.rayClusterConfig.suspend for Kueue v0.19 gating")
+	}
+	if strategy, _, _ := unstructured.NestedString(obj.Object, "spec", "upgradeStrategy", "type"); strategy != "None" {
+		t.Fatalf("upgradeStrategy=%q, want None to avoid double RayCluster upgrades", strategy)
 	}
 	if rayVersion, _, _ := unstructured.NestedString(obj.Object, "spec", "rayClusterConfig", "rayVersion"); rayVersion != "2.58.0" {
 		t.Fatalf("rayVersion=%q, want 2.58.0", rayVersion)
@@ -109,8 +119,10 @@ func TestRenderRayServiceKeepsHeadCPUOnlyAndWorkerPinnedToAllowedNodes(t *testin
 	joined := compact(expressions)
 	for _, want := range []string{
 		"kubernetes.io/hostname", "gpu-node-a", "gpu-node-b",
-		"raytrain.wellspiking.ai/gpu-pool", "shared",
-		"raytrain.wellspiking.ai/dedicated", "NotIn", "algorithm",
+		"platform.wellspiking.ai/gpu-pool", "production",
+		"platform.wellspiking.ai/cache-ready", "true",
+		"accelerator", "nvidia-rtx-4090",
+		"platform.wellspiking.ai/dedicated-tenant", "DoesNotExist",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("worker affinity missing %q in %s", want, joined)
@@ -118,12 +130,20 @@ func TestRenderRayServiceKeepsHeadCPUOnlyAndWorkerPinnedToAllowedNodes(t *testin
 	}
 }
 
-func TestRenderRayServiceMountsOnlyReadOnlyModelCacheAndOfflineEnvironment(t *testing.T) {
+func TestRenderRayServiceMountsOnlyWorkerReadOnlyModelCacheAndOfflineEnvironment(t *testing.T) {
 	obj := renderForTest(t, validRenderConfig())
 	encoded := compact(obj.Object)
+	headEncoded := compact(at(t, obj.Object, "spec", "rayClusterConfig", "headGroupSpec", "template", "spec"))
+	if strings.Contains(headEncoded, "model-cache") || strings.Contains(headEncoded, "persistentVolumeClaim") {
+		t.Fatalf("head pod must not mount the model PVC, to avoid RWO multi-node conflicts: %s", headEncoded)
+	}
+	workerEncoded := compact(at(t, obj.Object, "spec", "rayClusterConfig", "workerGroupSpecs", 0, "template", "spec"))
+	if !strings.Contains(workerEncoded, "model-cache") || !strings.Contains(workerEncoded, "persistentVolumeClaim") {
+		t.Fatalf("worker pod must mount the model PVC read-only: %s", workerEncoded)
+	}
 	for _, mustContain := range []string{
 		"qwen3-8b-awq-cache", "persistentVolumeClaim", "/models", "readOnly:true",
-		"HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_HOME", "ASSISTANT_GATE_URL",
+		"HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_HOME", "ASSISTANT_MODEL_PATH", "/models/Qwen3-8B-AWQ", "ASSISTANT_GATE_URL",
 		"http://assistant-idle-controller.raytrain-assistant-system.svc.cluster.local:8080/gate",
 	} {
 		if !strings.Contains(encoded, mustContain) {
@@ -142,7 +162,11 @@ func TestRenderRayServiceHardensPodsWithoutServiceAccountTokensOrPreemption(t *t
 	encoded := compact(obj.Object)
 	for _, mustContain := range []string{
 		"automountServiceAccountToken:false", "preemptionPolicy:Never", "priorityClassName:assistant-idle-low",
-		"serviceType:ClusterIP", "dashboard-host", "0.0.0.0", "include-dashboard", "true", "tolerations", "nvidia.com/gpu", "NoSchedule",
+		"terminationGracePeriodSeconds:15", "hostIPC:false", "runAsUser:1000", "readOnlyRootFilesystem:true",
+		"emptyDir", "dev-shm", "sizeLimit:8Gi", "/tmp",
+		"serviceType:ClusterIP", "dashboard-host", "0.0.0.0", "include-dashboard", "true",
+		"object-manager-port", "8076", "min-worker-port", "10002", "max-worker-port", "10032",
+		"tolerations", "nvidia.com/gpu", "NoSchedule",
 	} {
 		if !strings.Contains(encoded, mustContain) {
 			t.Fatalf("rendered RayService missing hardening marker %q in %s", mustContain, encoded)

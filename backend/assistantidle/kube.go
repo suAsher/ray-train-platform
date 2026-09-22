@@ -171,7 +171,7 @@ func (b *KubeBackend) Create(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if resource.GetNamespace() != b.namespace || resource.GetName() != b.name || resource.GetLabels()[instanceLabel] != b.instanceID {
+	if resource.GetNamespace() != b.namespace || resource.GetName() != b.name || !b.ownedLabels(resource.GetLabels()) {
 		return ErrForeign
 	}
 	_, err = b.dynamic.Resource(rayServiceGVR).Namespace(b.namespace).Create(ctx, resource, metav1.CreateOptions{})
@@ -249,7 +249,7 @@ func (b *KubeBackend) ownedRayService(ctx context.Context) (*unstructured.Unstru
 	if err != nil {
 		return nil, false, err
 	}
-	if resource.GetLabels()[instanceLabel] != b.instanceID {
+	if !b.ownedLabels(resource.GetLabels()) {
 		return nil, true, apierrors.NewForbidden(schema.GroupResource{Group: "ray.io", Resource: "rayservices"}, b.name, ErrForeign)
 	}
 	return resource, true, nil
@@ -325,7 +325,7 @@ func (b *KubeBackend) observeRayClusters(ctx context.Context, serviceExists bool
 	}
 	for i := range list.Items {
 		item := &list.Items[i]
-		if b.ownedObject(item, serviceUID) && item.GetDeletionTimestamp() == nil {
+		if b.ownedObject(item, serviceUID) {
 			return true, nil
 		}
 	}
@@ -362,10 +362,10 @@ func (b *KubeBackend) observeNodesAndPods(ctx context.Context, serviceExists boo
 		if owned {
 			ownedRemaining = true
 		}
+		if !owned && pod.Status.Phase == corev1.PodPending {
+			demand = true
+		}
 		if pod.Spec.NodeName == "" {
-			if !owned {
-				demand = true
-			}
 			continue
 		}
 		used[pod.Spec.NodeName] += gpus
@@ -390,7 +390,7 @@ func (b *KubeBackend) nodeEligible(node corev1.Node) bool {
 	if len(b.nodeAllowlist) > 0 && !b.nodeAllowlist[node.Name] {
 		return false
 	}
-	if node.Spec.Unschedulable || !nodeReady(node) || hasUntoleratedTaint(node, b.toleratedTaintKey) {
+	if node.Spec.Unschedulable || !nodeReady(node) || hasUntoleratedTaint(node, b.toleratedTaintKey) || node.Labels[dedicatedTenantKey] != "" {
 		return false
 	}
 	for key, value := range b.requiredLabels {
@@ -412,8 +412,11 @@ func (b *KubeBackend) ownedObject(obj metav1.Object, serviceUID string) bool {
 }
 
 func (b *KubeBackend) ownedByRayServiceUID(obj metav1.Object, serviceUID string) bool {
+	if serviceUID == "" {
+		return false
+	}
 	for _, owner := range obj.GetOwnerReferences() {
-		if owner.Kind == "RayService" && owner.Name == b.name && (serviceUID == "" || string(owner.UID) == serviceUID) {
+		if owner.APIVersion == "ray.io/v1" && owner.Kind == "RayService" && owner.Name == b.name && string(owner.UID) == serviceUID && owner.UID != "" && owner.Controller != nil && *owner.Controller {
 			return true
 		}
 	}
@@ -421,18 +424,7 @@ func (b *KubeBackend) ownedByRayServiceUID(obj metav1.Object, serviceUID string)
 }
 
 func (b *KubeBackend) ownedPod(pod corev1.Pod) bool {
-	if pod.Namespace != b.namespace {
-		return false
-	}
-	if b.ownedLabels(pod.Labels) {
-		return true
-	}
-	for _, owner := range pod.OwnerReferences {
-		if owner.Kind == "RayService" && owner.Name == b.name {
-			return true
-		}
-	}
-	return false
+	return pod.Namespace == b.namespace && b.ownedLabels(pod.Labels)
 }
 
 func (b *KubeBackend) ownedLabels(labels map[string]string) bool {
@@ -500,7 +492,7 @@ func rayJobRunningReady(obj map[string]any) bool {
 
 func workloadHasReadyRayJob(workload *unstructured.Unstructured, readyRayJobs map[string]bool) bool {
 	for _, owner := range workload.GetOwnerReferences() {
-		if owner.Kind == "RayJob" && readyRayJobs[ownerKey(workload.GetNamespace(), owner.Name, string(owner.UID))] {
+		if owner.APIVersion == "ray.io/v1" && owner.Kind == "RayJob" && owner.UID != "" && owner.Controller != nil && *owner.Controller && readyRayJobs[ownerKey(workload.GetNamespace(), owner.Name, string(owner.UID))] {
 			return true
 		}
 	}
@@ -521,25 +513,26 @@ func terminalPod(pod corev1.Pod) bool {
 }
 
 func podGPURequests(pod corev1.Pod) int64 {
-	var initMax int64
-	var app int64
+	var sidecars int64
+	var initPeak int64
 	for _, container := range pod.Spec.InitContainers {
 		gpus := containerGPU(container)
 		if container.RestartPolicy != nil && *container.RestartPolicy == corev1.ContainerRestartPolicyAlways {
-			app += gpus
+			sidecars += gpus
 			continue
 		}
-		if gpus > initMax {
-			initMax = gpus
+		if peak := sidecars + gpus; peak > initPeak {
+			initPeak = peak
 		}
 	}
+	steady := sidecars
 	for _, container := range pod.Spec.Containers {
-		app += containerGPU(container)
+		steady += containerGPU(container)
 	}
-	if app > initMax {
-		return app
+	if steady > initPeak {
+		return steady
 	}
-	return initMax
+	return initPeak
 }
 
 func containerGPU(container corev1.Container) int64 {

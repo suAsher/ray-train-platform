@@ -1,0 +1,3 @@
+# Ray is installed with the explicitly selected RAY_VERSION build argument.
+# vLLM, torch, CUDA and transformers come from the verified base image together.
+httpx==0.28.1

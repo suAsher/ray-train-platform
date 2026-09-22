@@ -83,3 +83,15 @@ func TestObservationFailureOnRestartStillReclaimsOwnedService(t *testing.T){
  _,err:=c.Step(ctx)
  if err==nil || g.Snapshot().Allow || len(b.deletes)!=1{t.Fatal("restart failed to reclaim own service after observation failure")}
 }
+
+type budgetBackend struct{ fakeBackend; observeCancel context.CancelFunc; deletedWithLiveBudget bool }
+func (b *budgetBackend) Observe(ctx context.Context)(Snapshot,error){b.observeCancel();return b.snapshot,nil}
+func (b *budgetBackend) Delete(ctx context.Context,uid string)error{b.deletedWithLiveBudget=ctx.Err()==nil;return nil}
+func TestDeleteAfterSuccessfulObservationHasIndependentTimeBudget(t *testing.T){
+ now:=time.Unix(1000,0);ctx,cancel:=context.WithCancel(context.Background())
+ b:=&budgetBackend{fakeBackend:fakeBackend{snapshot:Snapshot{UID:"own",CreatedAt:now,Observation:Observation{Fresh:false,Enabled:true,ServiceExists:true}}},observeCancel:cancel}
+ cfg:=DefaultConfig();cfg.Enabled=true
+ c:=NewController(cfg,b,NewGate("test",func()time.Time{return now}),func()time.Time{return now})
+ _,err:=c.Step(ctx)
+ if err!=nil || !b.deletedWithLiveBudget{t.Fatal("cleanup reused exhausted observation budget")}
+}
