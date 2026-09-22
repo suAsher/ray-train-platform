@@ -110,7 +110,8 @@ def prepare_request(body, tokenizer):
     def encode(sources):
         envelope = json.dumps({"question": question, "evidence": sources}, ensure_ascii=False, separators=(",", ":"))
         messages = [{"role": "system", "content": system}, {"role": "user", "content": ENVELOPE_PREFIX + envelope}]
-        tokens = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True, enable_thinking=False)
+        tokens = tokenizer.apply_chat_template(messages, tokenize=True, return_dict=False,
+                                               add_generation_prompt=True, enable_thinking=False)
         if not isinstance(tokens, list) or any(type(token) is not int for token in tokens):
             raise ServiceError(503, "tokenizer_unavailable")
         return tuple(tokens)

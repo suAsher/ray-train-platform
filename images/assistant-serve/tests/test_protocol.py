@@ -13,7 +13,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(prepared.question, "解释任务状态")
         self.assertFalse(prepared.evidence_truncated)
         self.assertLessEqual(len(prepared.token_ids) + prepared.max_tokens, 8192)
-        self.assertEqual(tokenizer.kwargs, {"tokenize": True, "add_generation_prompt": True, "enable_thinking": False})
+        self.assertEqual(tokenizer.kwargs, {"tokenize": True, "return_dict": False,
+                                          "add_generation_prompt": True, "enable_thinking": False})
         envelope = json.loads(tokenizer.messages[1]["content"][len(ENVELOPE_PREFIX):])
         self.assertEqual(envelope["question"], prepared.question)
 

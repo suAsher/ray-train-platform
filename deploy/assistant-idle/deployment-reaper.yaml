@@ -20,6 +20,8 @@ spec:
         app.kubernetes.io/name: assistant-idle-reaper
         app.kubernetes.io/instance: PLACEHOLDER_INSTANCE_ID
     spec:
+      imagePullSecrets:
+        - name: PLACEHOLDER_IMAGE_PULL_SECRET_NAME
       serviceAccountName: assistant-idle-reaper
       automountServiceAccountToken: true
       containers:

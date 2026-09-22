@@ -5,6 +5,8 @@ This directory is a standalone reference for the idle-GPU assistant inference co
 Safety defaults:
 
 - Replace every `PLACEHOLDER_*` value before rendering or applying.
+- Create or copy the image pull Secret in the assistant namespace before applying these manifests. The reference config uses `ImagePullSecrets: ["harbor-registry"]` for Ray head/worker pods, and controller/reaper Deployments reference `imagePullSecrets` with `PLACEHOLDER_IMAGE_PULL_SECRET_NAME`. These manifests only reference an existing namespace Secret; they do not read, create, copy, or grant Harbor credentials.
+- Prepare `ModelPVC` separately before enabling the controller. If the PVC uses `ebs-ssd` with RWO semantics, its zone and node affinity can constrain which GPU node may mount it; do not assume every allowed GPU node has the same model cache.
 - Use a dedicated namespace for assistant inference resources. The included `ResourceQuota` caps that namespace at one requested GPU; this is a self-safety cap for the assistant namespace, not a change to any existing team quota.
 - Keep the RayService suspended until the controller has verified idle capacity and the live CRD accepts the suspended RayService contract. The rendered RayService also sets `upgradeStrategy.type: None`, so recreate/upgrade waits for the old RayCluster and GPU to release instead of running two clusters.
 - Do not change training ClusterQueues, RayJobs, RayClusters, tenant namespaces, quotas, or existing workloads. The included LocalQueue only references the existing `cluster-gpu-queue`.

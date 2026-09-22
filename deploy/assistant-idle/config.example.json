@@ -8,6 +8,7 @@
     "QueueName": "assistant-idle-localqueue",
     "ServeImage": "PLACEHOLDER_ASSISTANT_SERVE_IMAGE@sha256:PLACEHOLDER_64_HEX_DIGEST",
     "ModelPVC": "PLACEHOLDER_MODEL_CACHE_PVC",
+    "ImagePullSecrets": ["harbor-registry"],
     "GateURL": "http://assistant-idle-controller.PLACEHOLDER_ASSISTANT_NAMESPACE.svc.cluster.local:8080/gate",
     "AllowedWorkerNodes": ["PLACEHOLDER_GPU_NODE_NAME"],
     "RequiredNodeLabels": {

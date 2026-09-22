@@ -43,6 +43,7 @@ type RenderConfig struct {
 	QueueName                 string
 	ServeImage                string
 	ModelPVC                  string
+	ImagePullSecrets          []string
 	GateURL                   string
 	AllowedWorkerNodes        []string
 	RequiredNodeLabels        map[string]string
@@ -154,6 +155,16 @@ func validateRenderConfig(cfg RenderConfig) error {
 	if !imageDigestPattern.MatchString(cfg.ServeImage) {
 		return errors.New("assistant idle serve image must be pinned by sha256 digest")
 	}
+	if len(cfg.ImagePullSecrets) > 8 {
+		return errors.New("assistant idle image pull secret list is too large")
+	}
+	seenPullSecrets := map[string]bool{}
+	for _, name := range cfg.ImagePullSecrets {
+		if !dnsLabelPattern.MatchString(name) || len(name) > 63 || seenPullSecrets[name] {
+			return errors.New("assistant idle image pull secret name is invalid")
+		}
+		seenPullSecrets[name] = true
+	}
 	if len(cfg.AllowedWorkerNodes) == 0 || len(cfg.AllowedWorkerNodes) > 32 {
 		return errors.New("assistant idle render requires an explicit bounded worker node allowlist")
 	}
@@ -245,6 +256,9 @@ func podSpec(cfg RenderConfig, worker bool) map[string]any {
 		"securityContext":               map[string]any{"seccompProfile": map[string]any{"type": "RuntimeDefault"}},
 		"containers":                    []any{container},
 		"volumes":                       volumes,
+	}
+	if len(cfg.ImagePullSecrets) > 0 {
+		spec["imagePullSecrets"] = imagePullSecrets(cfg.ImagePullSecrets)
 	}
 	if worker {
 		spec["affinity"] = workerAffinity(cfg)
@@ -393,4 +407,12 @@ func safeLabelValue(value string) bool {
 
 func containsControl(value string) bool {
 	return strings.IndexFunc(value, unicode.IsControl) >= 0
+}
+
+func imagePullSecrets(names []string) []any {
+	out := make([]any, 0, len(names))
+	for _, name := range names {
+		out = append(out, map[string]any{"name": name})
+	}
+	return out
 }
