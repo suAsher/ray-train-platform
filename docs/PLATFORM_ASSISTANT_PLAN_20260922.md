@@ -88,11 +88,15 @@ DISABLED → WAITING_FOR_IDLE → STARTING → READY → DRAINING → STOPPED
 
 基线：后端四端5eb7b629215b38fc6dc83f4f00a5429fdad12c48；Portal dev 752e45b1676bd0e67d31c615b6bc4ee3e40fe91b。隔离工作树在 /tmp/rtp-assistant-backend-20260922 与 /tmp/rtp-assistant-portal-20260922，未推送或部署。
 
-- Router新增测试已在实现前确认RED；后续GREEN、全量回归和浏览器验收证据见本轮交付记录。
+- Router新增测试已在实现前确认RED；安全边界新增测试也确认修复前失败。后端代码候选43e062b在构建机通过gofmt、go vet ./...、go test -p 1 -count=1 -timeout=20m ./...（真实隔离PostgreSQL）、assistant与API助手相关race测试；assistant模块覆盖率95.1%。
+- Portal完整lint/合同、dev三阶段构建通过；真实Chromium使用当前组件和模拟API通过6项交互测试（开关、回答/引用、逐次日志同意、取消迟到响应、拖拽、切换任务）。这是隔离浏览器验收，不是生产登录验收。
+- Portal检测到dev并行更新de2d5ecf（数据集列表可读性），已无冲突合入候选922de112，整合后完整lint、合同与dev构建再次通过。
 - Helm测试：默认关闭时渲染清单与基线完全一致；开启测试后只有后端assistant环境变量和Secret引用变化。
 - 真实DeepSeek最小连通性：models HTTP200且指定模型可用；一次不含业务数据的问答HTTP200/OK，总21token。仅证明外部接口可调用，不代表页面端到端或生产凭据已配置。
 - LiteLLM模型列表无Key为401；暂无专用有预算Key，不能声称公司接口联调完成。
 - GPU推理部署、资源回收、真实业务问答质量、流式输出、多轮记忆、跨副本预算状态与写操作均未包含在首版交付。
-- 生产后端、Portal、数据库schema、配额、调度和运行中训练本轮未改动。后续发布需重新核对四端及最小差异。
+- 生产后端、Portal、数据库schema、配额、调度和运行中训练本轮未改动。后端四端收尾复核仍为5eb7b629；Portal远端dev为他人新增的de2d5ecf。本次未推送。后续发布需重新核对四端及最小差异。
+- 构建机证据目录：/root/raytrain-assistant-validation-20260922（backend-tests-verified.log、security-red.log、security-truncated-red.log、helm-verify.log、portal-integrated-lint.log、portal-integrated-dev.log）。浏览器harness：/tmp/rtp-assistant-browser-harness-20260922/env_publish_review_final_20260922110836。
+- 测试环境差异：PostgreSQL测试串行执行避免跨包共享迁移锁互相干扰；最终工具镜像sha256:b048b8f45eff4125e54b738117b0e1c54b30eaa133e566fd8d55777ebe4f41bf与规定Go基础镜像层完全一致，仅附加bash/git/gcc/jq。Portal的Docker Hub syntax下载不可达，临时验证Dockerfile仅去掉首行syntax指令，其余三阶段步骤原样执行；仓库Dockerfile未改动。
 
 官方参考：[KubeRay与Kueue](https://docs.ray.io/en/latest/cluster/kubernetes/k8s-ecosystem/kueue.html)、[Serve伸缩](https://docs.ray.io/en/latest/serve/autoscaling-guide.html)、[LiteLLM虚拟Key](https://docs.litellm.ai/docs/proxy/virtual_keys)、[Kubernetes抢占](https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/)。
