@@ -49,6 +49,14 @@ rayTrain:
       rayVersion: "2.58.0"
       supportedEngines: ["ray-train"]
 
+# Optional read-only page assistant. No inference Pods or scheduling changes.
+# Providers are ordered {id, kind: api|local, baseURL, model,
+# existingSecret, secretKey, thinkingDisabled}; never place credential values here.
+assistant:
+  enabled: false
+  localFirst: false
+  providers: []
+
 backend:
   replicaCount: 2
   # Optional scheduling boundary for control-plane Pods. Production profiles

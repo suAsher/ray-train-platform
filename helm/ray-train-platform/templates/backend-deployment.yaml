@@ -12,6 +12,8 @@ OIDC issuer. Local-only development does not. */}}
 {{- if not (regexMatch `^[^@[:space:]]+@sha256:[0-9a-fA-F]{64}$` .Values.backend.sourceMaterializerImage) }}{{- fail "backend.sourceMaterializerImage must use @sha256:<64 hex>" }}{{- end }}
 {{- if not (regexMatch `^[^@[:space:]]+@sha256:[0-9a-fA-F]{64}$` .Values.backend.workspaceImage) }}{{- fail "backend.workspaceImage must use @sha256:<64 hex>" }}{{- end }}
 {{- $datasetPublisher := default (dict) .Values.datasetPublisher -}}
+{{- $assistant := default (dict) .Values.assistant -}}
+{{- if and (hasKey $assistant "enabled") (not (kindIs "bool" $assistant.enabled)) }}{{- fail "assistant.enabled must be boolean" }}{{- end }}
 {{- $kueuePreemption := default (dict) .Values.kueue.preemption -}}
 {{- $kueueTopology := default (dict) .Values.kueue.topology -}}
 {{- $kueueTopologyEnabled := default false (get $kueueTopology "enabled") -}}
@@ -175,6 +177,9 @@ spec:
                 name: {{ include "ray-train-platform.datasetPublisher.resourceName" (list . "") }}
           {{- end }}
           env:
+            {{- if (default false $assistant.enabled) }}
+            {{- include "ray-train-platform.assistantEnv" . | nindent 12 }}
+            {{- end }}
             - name: APP_ENV
               value: {{ .Values.backend.appEnv | quote }}
             - name: HTTP_ADDR

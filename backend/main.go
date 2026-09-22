@@ -17,6 +17,7 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"ray-train-platform-backend/api"
+	"ray-train-platform-backend/assistant"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/config"
 	"ray-train-platform-backend/datasetpublisher"
@@ -166,6 +167,12 @@ func main() {
 	workspaceSnapshotStore, _ := directoryLister.(objectstore.WorkspaceSnapshotStore)
 	jobOptions := api.Options{BootstrapTenant: cfg.BootstrapAdminTenant, AllowAnonymous: cfg.DemoMode, Logs: logs, Metrics: metrics, Experiments: experiments, ImageAllowlist: cfg.RayImageAllowlist, GitAllowlist: cfg.GitAllowlist, Workspaces: repository, Kubernetes: kubeClient, WorkspaceImage: cfg.WorkspaceImage, RayVersion: cfg.RayVersion, ServiceAccount: cfg.RayJobServiceAccount, ImagePullSecrets: cfg.ImagePullSecrets, PlatformNamespace: runtimeNamespace(), IDCClaim: cfg.IDCExistingClaim, IDCMountPath: cfg.IDCMountPath, KueueClusterQueue: cfg.KueueClusterQueue, Admin: repository, GPUAllocations: repository, Quota: repository, Memberships: repository, WorkspacePepper: []byte(cfg.PATPepper), TrainingNodeSelector: cfg.TrainingNodeSelector, TrainingDedicatedNodes: cfg.TrainingDedicatedNodes, Images: repository, GitCredentials: repository, StorageAssets: repository, Datasets: repository, DatasetPublications: datasetPublicationManager, DatasetInternalPrefix: cfg.DatasetInternalPrefix, DatasetVersioningEnabled: cfg.DatasetVersioningEnabled, RayDataStreamingEnabled: cfg.RayDataStreamingEnabled, DataSpaces: repository, DataSpacesEnabled: cfg.DataSpacesEnabled, DataSpacesFSXAttributes: cfg.DataSpacesFSXAttributes, DataSpacesMountCapacity: cfg.DataSpacesMountCapacity, DataSpacesPublicRoot: cfg.DataSpacesPublicRoot, IDCDataSpacesEnabled: cfg.IDCDataSpacesEnabled, IDCDataSpacesMountCapacity: cfg.IDCDataSpacesMountCapacity, IDCDataSpaceSources: idcDataSpaceSources(cfg), DirectoryLister: directoryLister, DirectoryInitializer: directoryInitializer, DataObjectStore: dataObjectStore, WorkspaceSnapshotStore: workspaceSnapshotStore, WorkspaceSnapshots: repository, IDCDataSyncCallbacks: idcSyncCallbacks, IDCDataSyncCallbackKey: idcSyncCallbackKey, IDCDataSyncManager: idcSyncManager, ArtifactLister: artifactLister, ArtifactReader: artifactReader, LocalCache: api.LocalCachePolicy{Enabled: cfg.LocalCacheEnabled, AllowedSizes: cfg.LocalCacheAllowedSizes, DefaultSize: cfg.LocalCacheSize, MaxSize: cfg.LocalCacheMaxSize, MountPath: cfg.LocalCacheMountPathData1, MountPaths: []string{cfg.LocalCacheMountPathData1, cfg.LocalCacheMountPathData2}}, RuntimePolicy: runtimecatalog.NewPolicy(cfg.RayTrainManagedEnabled, cfg.RayTrainCanaryEnabled, cfg.RayTrainManagedTenants, cfg.RayTrainCanaryTenants), TenantScheduling: repository, PreemptionEnabled: cfg.KueuePreemptionEnabled, MLflowDashboardEnabled: cfg.MLflowDashboardEnabled, MLflowDashboardPublicEnabled: cfg.MLflowDashboardPublicEnabled, MLflowNativePublicEnabled: cfg.MLflowNativePublicEnabled, MLflowDashboardStore: repository, MLflowTrackingURL: cfg.MLflowTrackingURL, MLflowPublicOrigin: cfg.MLflowPublicOrigin, MLflowDashboardPepper: []byte(cfg.PATPepper), MLflowDashboardSessionTTL: time.Duration(cfg.MLflowDashboardSessionHours) * time.Hour}
 	jobOptions.Models = modelStore
+	if cfg.Assistant.Enabled {
+		jobOptions.Assistant, err = assistant.NewRouter(cfg.Assistant.Routing)
+		if err != nil {
+			log.Fatalf("initialize assistant provider routing: %v", err)
+		}
+	}
 	jobOptions.FunctionWarehouses, err = api.DefaultFunctionWarehouseClients()
 	if err != nil {
 		log.Fatalf("initialize function warehouse clients: %v", err)
@@ -407,6 +414,14 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	jobs.RegisterCheckpointRoutes(v1)
 	jobs.RegisterImageReadRoutes(v1)
 	jobs.RegisterHelpReadRoutes(v1)
+	if cfg.Assistant.Enabled {
+		jobs.RegisterAssistantRoutes(v1)
+	} else {
+		v1.GET("/assistant/capabilities", auth.RequireInteractiveSession(false), func(c *gin.Context) {
+			c.Header("Cache-Control", "no-store")
+			c.JSON(http.StatusOK, gin.H{"success": true, "data": assistant.Capabilities{Enabled: false, ReadOnly: true, Modes: []string{}, Providers: map[string]assistant.ProviderStatus{}}})
+		})
+	}
 	jobs.RegisterModelReadRoutes(v1)
 	jobs.RegisterModelEvaluationReadRoutes(v1)
 	jobs.RegisterModelServingReadRoutes(v1)

@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+	"ray-train-platform-backend/assistant"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
 	fw "ray-train-platform-backend/functionwarehouse"
@@ -46,6 +47,7 @@ type globalJobReader interface {
 }
 
 type Handler struct {
+	assistant                    assistant.Engine
 	warehouseSync                *ws.Service
 	functionWarehouses           map[fw.Environment]FunctionWarehouseClient
 	modelServing                 ms.Store
@@ -162,6 +164,7 @@ type ExperimentProvider interface {
 }
 
 type Options struct {
+	Assistant                 assistant.Engine
 	FunctionWarehouses        map[fw.Environment]FunctionWarehouseClient
 	ModelServing              ms.Store
 	ModelReleases             modelrelease.Repository
@@ -266,6 +269,7 @@ func NewHandler(repository JobRepository, options Options) *Handler {
 	handler.dataMultipartStore, _ = options.DataObjectStore.(objectstore.DataSpaceMultipartStore)
 	handler.bootstrapTenant = strings.TrimSpace(options.BootstrapTenant)
 	handler.helpDocuments, _ = repository.(HelpDocumentStore)
+	handler.assistant = options.Assistant
 	if handler.dataSpaceUploads == nil {
 		handler.dataSpaceUploads, _ = repository.(DataSpaceUploadRepository)
 	}

@@ -23,6 +23,7 @@ var (
 )
 
 type Config struct {
+	Assistant                                AssistantConfig
 	EnvironmentBuild                         EnvironmentBuildConfig
 	SPKRayjobMinimumVersion                  string
 	AppEnv                                   string
@@ -538,6 +539,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.EnvironmentBuild, err = loadEnvironmentBuildConfig(); err != nil {
+		return Config{}, err
+	}
+	if cfg.Assistant, err = loadAssistantConfig(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
