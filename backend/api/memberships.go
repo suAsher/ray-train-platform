@@ -150,13 +150,15 @@ func (h *Handler) putUserMembership(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// Team membership changes can grant or remove administrator authority.
+	// Keep them separate from a team admin's ordinary member management.
+	if !principal.HasRole(domain.RoleSuperAdmin) {
+		h.writeError(c, http.StatusForbidden, "FORBIDDEN", "super administrator role is required to change team memberships or roles")
+		return
+	}
 	var request putMembershipRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
 		h.writeError(c, http.StatusBadRequest, "INVALID_JSON", "request body is invalid")
-		return
-	}
-	if !principal.HasRole(domain.RoleSuperAdmin) && request.TenantID != principal.TenantID {
-		h.writeError(c, http.StatusForbidden, "FORBIDDEN", "tenant administrators may only manage their active team")
 		return
 	}
 	for _, role := range request.Roles {
@@ -178,11 +180,11 @@ func (h *Handler) updateUserMembershipStatus(c *gin.Context) {
 	if !ok {
 		return
 	}
-	tenantID := strings.TrimSpace(c.Param("tenant"))
-	if !principal.HasRole(domain.RoleSuperAdmin) && tenantID != principal.TenantID {
-		h.writeError(c, http.StatusForbidden, "FORBIDDEN", "tenant administrators may only manage their active team")
+	if !principal.HasRole(domain.RoleSuperAdmin) {
+		h.writeError(c, http.StatusForbidden, "FORBIDDEN", "super administrator role is required to change team memberships or roles")
 		return
 	}
+	tenantID := strings.TrimSpace(c.Param("tenant"))
 	var request membershipStatusRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
 		h.writeError(c, http.StatusBadRequest, "INVALID_JSON", "request body is invalid")
