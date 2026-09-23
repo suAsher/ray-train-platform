@@ -18,6 +18,9 @@ func PublicSectionForSeedDocument(document domain.HelpDocument) domain.HelpDocum
 	switch document.ID {
 	case "quota", "unified-login-and-roles":
 		document.Markdown += "\n\n### 谁可以查看全平台 GPU 占用？\n\n所有团队管理员和超级管理员都可在「GPU 占用明细」查看各团队的训练任务、调试环境、提交人、状态和申请卡数，不需要加入其他团队。排队记录的申请卡数不等于物理 GPU 已分配数。\n\n此入口只扩大占用信息的可见范围，不授予其他团队任务详情、日志、文件、终端或停止任务权限；「平台管理」仍按当前团队和原有角色权限操作。普通成员可在「GPU 资源池」查看整体物理资源，不能查看全平台占用明细。\n\n刚被设为团队管理员时，刷新页面以重新读取当前角色；仍有权限报错时，重新登录并向平台管理员提供页面地址、当前团队、报错时间和 request_id，无需反复加入团队。"
+		if document.ID == "unified-login-and-roles" {
+			document.Markdown += "\n\n### 团队管理员能管理哪些成员？\n\n团队管理员可查看本团队成员，并对当前属于本团队的普通成员（Engineer）启用、停用、退役账号，以及在容量功能启用时配置个人存储容量。不能通过这些操作管理自己、其他管理员或其他团队成员；退役账号保留数据，有活跃任务时会拒绝。\n\n添加、恢复、停用团队成员关系，调整团队角色（包括任免团队管理员），以及迁移成员当前团队，统一由超级管理员在「平台管理 → 用户与权限」操作。团队管理员不再显示「团队」操作入口；使用旧页面或直接调用接口也不会获得这些权限。用户仍可在已有有效成员关系之间切换当前团队，不会因此新增权限。\n\nGPU 配额与卡型调整、创建或退役团队、全平台共享资源及使用说明发布仍由超级管理员负责。全平台 GPU 占用的只读权限不受这项收紧影响。"
+		}
 	case "custom-environment":
 		document.Markdown = environmentImageGuide + "\n\n" + document.Markdown
 	case "mlflow":
