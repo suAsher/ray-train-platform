@@ -51,6 +51,7 @@ func TestGPUAllocationsExplicitScope(t *testing.T) {
 		{"engineer cannot request global read", domain.RoleEngineer, "?scope=all", http.StatusForbidden, false},
 		{"role missing", "", "?scope=all", http.StatusForbidden, false},
 		{"unknown scope", domain.RoleTenantAdmin, "?scope=other", http.StatusBadRequest, false},
+		{"empty scope", domain.RoleTenantAdmin, "?scope=", http.StatusBadRequest, false},
 		{"duplicate scope", domain.RoleTenantAdmin, "?scope=team&scope=all", http.StatusBadRequest, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -16,6 +16,8 @@ func PublicGuides() []domain.HelpDocument {
 
 func PublicSectionForSeedDocument(document domain.HelpDocument) domain.HelpDocument {
 	switch document.ID {
+	case "quota", "unified-login-and-roles":
+		document.Markdown += "\n\n### 谁可以查看全平台 GPU 占用？\n\n所有团队管理员和超级管理员都可在「GPU 占用明细」查看各团队的训练任务、调试环境、提交人、状态和申请卡数，不需要加入其他团队。排队记录的申请卡数不等于物理 GPU 已分配数。\n\n此入口只扩大占用信息的可见范围，不授予其他团队任务详情、日志、文件、终端或停止任务权限；「平台管理」仍按当前团队和原有角色权限操作。普通成员可在「GPU 资源池」查看整体物理资源，不能查看全平台占用明细。\n\n刚被设为团队管理员时，刷新页面以重新读取当前角色；仍有权限报错时，重新登录并向平台管理员提供页面地址、当前团队、报错时间和 request_id，无需反复加入团队。"
 	case "custom-environment":
 		document.Markdown = environmentImageGuide + "\n\n" + document.Markdown
 	case "mlflow":

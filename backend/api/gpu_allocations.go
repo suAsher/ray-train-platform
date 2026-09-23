@@ -17,11 +17,20 @@ func (h *Handler) listGPUAllocations(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// Keep existing callers team-scoped; the occupancy page explicitly requests
+	// the global read-only projection. This does not grant job/workspace access.
+	allTenants := principal.HasRole(domain.RoleSuperAdmin)
+	if scopes, exists := c.Request.URL.Query()["scope"]; exists {
+		if len(scopes) != 1 || (scopes[0] != "all" && scopes[0] != "team") {
+			h.writeError(c, http.StatusBadRequest, "INVALID_GPU_ALLOCATION_SCOPE", "scope must be all or team")
+			return
+		}
+		allTenants = scopes[0] == "all"
+	}
 	if h.gpuAllocations == nil {
 		h.writeError(c, http.StatusServiceUnavailable, "GPU_ALLOCATIONS_UNAVAILABLE", "GPU allocation data is not configured")
 		return
 	}
-	allTenants := principal.HasRole(domain.RoleSuperAdmin)
 	tenantID := principal.TenantID
 	if allTenants {
 		tenantID = ""
