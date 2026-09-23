@@ -26,10 +26,55 @@ func (store *fakeGPUAllocationStore) ListGPUAllocations(_ context.Context, tenan
 }
 
 func getGPUAllocations(handler *Handler, principal auth.Principal) *httptest.ResponseRecorder {
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/gpu-allocations", nil)
+	return getGPUAllocationsWithQuery(handler, principal, "")
+}
+
+func getGPUAllocationsWithQuery(handler *Handler, principal auth.Principal, query string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/gpu-allocations"+query, nil)
 	response := httptest.NewRecorder()
 	adminRouter(handler, principal).ServeHTTP(response, request)
 	return response
+}
+
+func TestGPUAllocationsExplicitScope(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		role       string
+		query      string
+		status     int
+		allTenants bool
+	}{
+		{"team admin global read", domain.RoleTenantAdmin, "?scope=all", http.StatusOK, true},
+		{"team admin own team", domain.RoleTenantAdmin, "?scope=team", http.StatusOK, false},
+		{"super admin global read", domain.RoleSuperAdmin, "?scope=all", http.StatusOK, true},
+		{"super admin own team", domain.RoleSuperAdmin, "?scope=team", http.StatusOK, false},
+		{"engineer cannot request global read", domain.RoleEngineer, "?scope=all", http.StatusForbidden, false},
+		{"role missing", "", "?scope=all", http.StatusForbidden, false},
+		{"unknown scope", domain.RoleTenantAdmin, "?scope=other", http.StatusBadRequest, false},
+		{"duplicate scope", domain.RoleTenantAdmin, "?scope=team&scope=all", http.StatusBadRequest, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeGPUAllocationStore{items: []domain.GPUAllocation{{ID: "foreign-job", TenantID: "team-b"}}}
+			handler := NewHandler(&fakeJobRepository{}, Options{GPUAllocations: store})
+			response := getGPUAllocationsWithQuery(handler, auth.Principal{Subject: "lead", TenantID: "team-a", Roles: []string{tc.role}}, tc.query)
+			if response.Code != tc.status {
+				t.Fatalf("expected %d, got %d: %s", tc.status, response.Code, response.Body.String())
+			}
+			if tc.status != http.StatusOK {
+				if store.calls != 0 {
+					t.Fatal("rejected request reached allocation store")
+				}
+				return
+			}
+			wantTenant := "team-a"
+			if tc.allTenants {
+				wantTenant = ""
+			}
+			if store.calls != 1 || store.allTenants != tc.allTenants || store.tenantID != wantTenant {
+				t.Fatalf("incorrect scope: calls=%d tenant=%q all=%v", store.calls, store.tenantID, store.allTenants)
+			}
+		})
+	}
 }
 
 func TestGPUAllocationsLetsSuperAdminSeeAllTenants(t *testing.T) {
