@@ -25,6 +25,8 @@ type fakeMembershipStore struct {
 	}
 	audits      []repositories.AdministrativeAuditEvent
 	reassignErr error
+	putCalls    int
+	statusCalls int
 }
 
 func (store *fakeMembershipStore) CreateAdministrativeAuditLog(_ context.Context, event repositories.AdministrativeAuditEvent) error {
@@ -36,6 +38,7 @@ func (store *fakeMembershipStore) ListTenantMemberships(_ context.Context, ident
 	return append([]domain.TenantMembership(nil), store.items[identityID]...), nil
 }
 func (store *fakeMembershipStore) PutTenantMembership(_ context.Context, membership domain.TenantMembership) error {
+	store.putCalls++
 	store.items[membership.IdentityID] = append(store.items[membership.IdentityID], membership)
 	return nil
 }
@@ -44,6 +47,7 @@ func (store *fakeMembershipStore) SetActiveTenant(_ context.Context, _, tenantID
 	return nil
 }
 func (store *fakeMembershipStore) SetTenantMembershipStatus(_ context.Context, _, _ string, _ domain.MembershipStatus) error {
+	store.statusCalls++
 	return nil
 }
 func (store *fakeMembershipStore) ReassignActiveMembership(_ context.Context, identityID, expectedTenantID, targetTenantID string, roles []string, deactivateOthers bool) error {
@@ -117,8 +121,53 @@ func TestTenantAdminCannotGrantSuperAdminInOwnTeam(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPut, "/api/v1/users/user-b/memberships", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(response, request)
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d %s", response.Code, response.Body.String())
+	if response.Code != http.StatusForbidden || store.putCalls != 0 {
+		t.Fatalf("expected 403 without mutation, got %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestMembershipWritesRequireSuperAdmin(t *testing.T) {
+	for _, role := range []string{domain.RoleEngineer, domain.RoleTenantAdmin, domain.RoleSuperAdmin} {
+		for _, target := range []string{"lead", "engineer", "other-admin", "other-team-user", "root"} {
+			for _, operation := range []struct {
+				name, method, suffix, body string
+			}{
+				{"add engineer", http.MethodPut, "/memberships", `{"tenantId":"team-a","roles":["Engineer"]}`},
+				{"promote admin", http.MethodPut, "/memberships", `{"tenantId":"team-a","roles":["TenantAdmin"]}`},
+				{"disable membership", http.MethodPatch, "/memberships/team-a", `{"status":"INACTIVE"}`},
+				{"restore membership", http.MethodPatch, "/memberships/team-a", `{"status":"ACTIVE"}`},
+			} {
+				t.Run(role+"/"+target+"/"+operation.name, func(t *testing.T) {
+					store := &fakeMembershipStore{items: map[string][]domain.TenantMembership{}}
+					handler := NewHandler(&fakeJobRepository{}, Options{Memberships: store})
+					principal := auth.Principal{Subject: "lead", TenantID: "team-a", Roles: []string{role}, AuthType: auth.AuthTypeOAuth2Proxy}
+					request := httptest.NewRequest(operation.method, "/api/v1/users/"+target+operation.suffix, bytes.NewBufferString(operation.body))
+					request.Header.Set("Content-Type", "application/json")
+					response := httptest.NewRecorder()
+					membershipRouter(handler, principal).ServeHTTP(response, request)
+					wantStatus, wantWrites := http.StatusForbidden, 0
+					if role == domain.RoleSuperAdmin {
+						wantStatus, wantWrites = http.StatusOK, 1
+					}
+					if response.Code != wantStatus || store.putCalls+store.statusCalls != wantWrites {
+						t.Fatalf("status=%d writes=%d body=%s", response.Code, store.putCalls+store.statusCalls, response.Body.String())
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestSuperAdminMembershipCannotGrantGlobalRole(t *testing.T) {
+	store := &fakeMembershipStore{items: map[string][]domain.TenantMembership{}}
+	handler := NewHandler(&fakeJobRepository{}, Options{Memberships: store})
+	principal := auth.Principal{Subject: "root", TenantID: "local", Roles: []string{domain.RoleSuperAdmin}}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/users/user-b/memberships", bytes.NewBufferString(`{"tenantId":"team-a","roles":["SuperAdmin"]}`))
+	request.Header.Set("Content-Type", "application/json")
+	membershipRouter(handler, principal).ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || store.putCalls != 0 {
+		t.Fatalf("global role grant: status=%d writes=%d", response.Code, store.putCalls)
 	}
 }
 
