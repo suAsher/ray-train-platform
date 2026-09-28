@@ -39,6 +39,11 @@
 - `/root/raytrain-base-debug-git-fastforward-20260928.jsonl`
 - `/root/rtp-fsx-compatible-tests-20260928.jsonl`
 - `/root/rtp-workspace-fsx-red-20260928.log`
+- `/root/rtp-workspace-fsx-wait-red-20260928.log`
+- `/root/rtp-workspace-fsx-full-20260928.log`
+- `/root/rtp-workspace-fsx-verification-20260928/coverage-functions.txt`
+- `/root/rtp-workspace-fsx-adapter-integration-20260928.log`
+- `/root/rtp-fsx-compatible-final-20260928.json`
 
 ## 能力边界与发布
 
@@ -46,6 +51,8 @@
 
 官方资料：[FSX 兼容优先模式](https://www.volcengine.com/docs/6349/2363634?lang=zh)、[FSX 客户端与版本说明](https://www.volcengine.com/docs/6349/1404012?lang=en)。
 
-本轮尚待：构建机完整回归与安全审阅、授权范围内同步及最小后端发布、真实新建工作区/重建/代码快照验收、更新线上使用说明。无 schema 迁移，不需要重建训练镜像或 Portal。
+构建机已通过完整 Go 回归、go vet、格式检查及真实隔离 PostgreSQL 验证；新增生产函数覆盖率为 86.4%–100%，全项目既有覆盖率为 74.2%。审阅提出的真实 Kubernetes API 默认化缺项已补齐：服务端 dry-run、实际静态 PV/PVC 创建/Bound/二次 Ensure 复用全部通过，测试对象已按 UID 清理。
+
+本记录是发布前证据。下一步为授权范围内同步及最小后端发布、真实新建工作区/重建/代码快照验收与线上使用说明更新。无 schema 迁移，不需要重建训练镜像或 Portal。
 
 回滚关闭新开关仅影响后续创建；已运行的兼容挂载不会自动变更。不要自动重启用户工作区，或删除静态 PV/PVC 所指向的数据。
