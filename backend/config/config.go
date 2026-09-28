@@ -53,6 +53,7 @@ type Config struct {
 	MaxTotalGPUs                             int
 	LocalCacheEnabled                        bool
 	DataSpacesEnabled                        bool
+	WorkspaceFSXCompatibleEnabled            bool
 	DataSpacesFSXAttributes                  string
 	DataSpacesMountCapacity                  string
 	DataSpacesPublicRoot                     string
@@ -381,6 +382,9 @@ func Load() (Config, error) {
 		}
 	}
 	if cfg.DataSpacesEnabled, err = parseBool("DATA_SPACES_ENABLED", false); err != nil {
+		return Config{}, err
+	}
+	if cfg.WorkspaceFSXCompatibleEnabled, err = parseBool("WORKSPACE_FSX_COMPATIBLE_ENABLED", false); err != nil {
 		return Config{}, err
 	}
 	if cfg.TOSObjectSetQuotasEnabled, err = parseBool("TOS_OBJECT_SET_QUOTAS_ENABLED", false); err != nil {
@@ -860,6 +864,9 @@ func validateInternalServiceURL(name, value string) error {
 }
 
 func validateDataSpaceConfig(cfg Config) error {
+	if cfg.WorkspaceFSXCompatibleEnabled && !cfg.DataSpacesEnabled {
+		return fmt.Errorf("WORKSPACE_FSX_COMPATIBLE_ENABLED requires DATA_SPACES_ENABLED")
+	}
 	if !cfg.DataSpacesEnabled {
 		return nil
 	}

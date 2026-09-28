@@ -398,6 +398,10 @@ training:
 # reports success. This never injects TOS credentials into Ray Pods.
 dataSpaces:
   enabled: false
+  # New debug workspaces can use an independent static FSX mount profile for
+  # Git and POSIX write compatibility. Reuses the stable TOS workspace prefix;
+  # does not provision a cloud disk or change existing workspace mounts.
+  workspaceCompatibleEnabled: false
   # Capacity is Kubernetes accounting for the RWX static PV, not a hard TOS
   # quota. The CSI component's IRSA role is the only credential used.
   mountCapacity: 1Ti

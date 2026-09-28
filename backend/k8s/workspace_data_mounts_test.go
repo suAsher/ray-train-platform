@@ -184,6 +184,10 @@ func TestEnsureWorkspaceMountResourcesRefusesConflictingContracts(t *testing.T) 
 		"stale claim UID":    func(pv *corev1.PersistentVolume, pvc *corev1.PersistentVolumeClaim) { pv.Spec.ClaimRef.UID = "old"; pvc.UID = "new" },
 		"wrong volume":       func(_ *corev1.PersistentVolume, pvc *corev1.PersistentVolumeClaim) { pvc.Spec.VolumeName = "tenant-root" },
 		"wrong access mode":  func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) { pv.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce} },
+		"deleting PV":        func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) { now := metav1.Now(); pv.DeletionTimestamp = &now },
+		"deleting PVC":       func(_ *corev1.PersistentVolume, pvc *corev1.PersistentVolumeClaim) { now := metav1.Now(); pvc.DeletionTimestamp = &now },
+		"block PV":           func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) { mode := corev1.PersistentVolumeBlock; pv.Spec.VolumeMode = &mode },
+		"block PVC":          func(_ *corev1.PersistentVolume, pvc *corev1.PersistentVolumeClaim) { mode := corev1.PersistentVolumeBlock; pvc.Spec.VolumeMode = &mode },
 		"secret reference": func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) {
 			pv.Spec.CSI.NodePublishSecretRef = &corev1.SecretReference{Name: "secret", Namespace: "tenant-tenant-a"}
 		},
@@ -207,6 +211,14 @@ func TestEnsureWorkspaceMountResourcesRefusesConflictingContracts(t *testing.T) 
 				}
 			}
 		})
+	}
+}
+
+func TestEnsureWorkspaceMountResourcesRequiresInitializedClient(t *testing.T) {
+	for _, client := range []*Client{nil, NewClientFromInterfaces(nil, nil)} {
+		if claim, ready, err := client.EnsureWorkspaceMountResources(context.Background(), workspacePersonalBinding(), "tenant-tenant-a", "1Ti"); err == nil || ready || claim != "" {
+			t.Fatalf("uninitialized client accepted workspace mount: claim=%q ready=%t err=%v", claim, ready, err)
+		}
 	}
 }
 

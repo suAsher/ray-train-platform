@@ -17,6 +17,7 @@ import (
 // concern and user workloads must never need those implementation details.
 type DataMountPlan struct {
 	Personal       *DataMountRoot
+	Workspace      *DataMountRoot
 	Team           *DataMountRoot
 	Public         *DataMountRoot
 	IDCOriginal    *DataMountRoot
@@ -236,6 +237,14 @@ func (plan DataMountPlan) Validate() error {
 			return err
 		}
 	}
+	if plan.Workspace != nil {
+		if plan.Personal == nil {
+			return fmt.Errorf("workspace data mount requires a personal root")
+		}
+		if err := plan.Workspace.validate("workspace", false); err != nil {
+			return err
+		}
+	}
 	for _, root := range []struct {
 		name string
 		root *DataMountRoot
@@ -278,7 +287,9 @@ func (root DataMountRoot) validate(name string, readOnly bool) error {
 }
 
 func appendDataMountPlan(volumeMounts, volumes []any, plan DataMountPlan) ([]any, []any) {
-	if plan.Personal != nil {
+	if plan.Workspace != nil {
+		volumeMounts, volumes = appendWorkspaceDataMounts(volumeMounts, volumes, plan)
+	} else if plan.Personal != nil {
 		if plan.Personal.SubPath == "" {
 			// Legacy per-personal-root claims keep their historical render shape so
 			// previously persisted jobs and their manifest tests remain compatible.

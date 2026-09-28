@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -99,6 +100,59 @@ func TestWorkspaceFSXCompatibleDisabledKeepsLegacyPlan(t *testing.T) {
 	}
 }
 
+func TestWorkspaceFSXCompatibleWaitsForInitialBinding(t *testing.T) {
+	bindings := workspaceCompatibleBindings(t, "team-a", "team-a")
+	pv, pvc, err := k8s.BuildWorkspaceMountResources(bindings[1], "tenant-team-a", "1Ti")
+	if err != nil {
+		t.Fatal(err)
+	}
+	core := k8sfake.NewSimpleClientset(pv, pvc)
+	reads := 0
+	core.PrependReactor("get", "persistentvolumeclaims", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		reads++
+		claim := pvc.DeepCopy()
+		if reads > 1 {
+			claim.Status.Phase = corev1.ClaimBound
+		}
+		return true, claim, nil
+	})
+	handler := NewHandler(&fakeJobRepository{}, Options{
+		DataSpaces: &fakeDataSpaceStore{bindings: bindings}, DataSpacesEnabled: true,
+		WorkspaceFSXCompatibleEnabled: true, DataSpacesMountCapacity: "1Ti", Kubernetes: k8s.NewClientFromInterfaces(nil, core),
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	plan, err := handler.resolveWorkspaceDataMountPlan(ctx, auth.Principal{Subject: "subject-1", TenantID: "team-a"})
+	if err != nil || plan.Workspace == nil || reads != 2 {
+		t.Fatalf("a newly bound claim must become usable within the launch request: reads=%d plan=%#v err=%v", reads, plan, err)
+	}
+}
+
+func TestWorkspaceFSXCompatibleStopsPollingWhenRequestIsCanceled(t *testing.T) {
+	bindings := workspaceCompatibleBindings(t, "team-a", "team-a")
+	pv, pvc, err := k8s.BuildWorkspaceMountResources(bindings[1], "tenant-team-a", "1Ti")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	core := k8sfake.NewSimpleClientset(pv, pvc)
+	reads := 0
+	core.PrependReactor("get", "persistentvolumeclaims", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		reads++
+		cancel()
+		return true, pvc.DeepCopy(), nil
+	})
+	handler := NewHandler(&fakeJobRepository{}, Options{
+		DataSpaces: &fakeDataSpaceStore{bindings: bindings}, DataSpacesEnabled: true,
+		WorkspaceFSXCompatibleEnabled: true, DataSpacesMountCapacity: "1Ti", Kubernetes: k8s.NewClientFromInterfaces(nil, core),
+	})
+	_, err = handler.resolveWorkspaceDataMountPlan(ctx, auth.Principal{Subject: "subject-1", TenantID: "team-a"})
+	if !errors.Is(err, context.Canceled) || reads != 1 {
+		t.Fatalf("cancelled launch must stop after the in-flight read: reads=%d err=%v", reads, err)
+	}
+}
+
 // Deliberately return unfiltered storage rows to verify the API boundary does
 // not trust the repository to enforce ownership or binding readiness.
 type workspaceUnfilteredBindings struct {
@@ -160,12 +214,21 @@ func TestWorkspaceFSXCompatibleLaunchWaitsForStorageBeforeCreatingCompute(t *tes
 				DirectoryInitializer: &fakePersonalDataDirectoryInitializer{},
 				WorkspaceImage: "registry.example/workspace@sha256:" + strings.Repeat("a", 64),
 			})
-			response := launchWorkspaceCompatibleRequest(handler)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+			defer cancel()
+			response := launchWorkspaceCompatibleRequestWithContext(ctx, handler)
 			if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "DATA_SPACE_MOUNT_NOT_READY") {
 				t.Fatalf("storage %s must return a retryable readiness response: %d %s", scenario, response.Code, response.Body.String())
 			}
 			if workspaces.workspace.ID != "" || len(dynamic.Actions()) != 0 {
 				t.Fatal("unready workspace storage must not persist a workspace or create compute")
+			}
+			wantRetryAfter := ""
+			if scenario == "pending" {
+				wantRetryAfter = "2"
+			}
+			if response.Header().Get("Retry-After") != wantRetryAfter {
+				t.Fatalf("only a still-binding compatible claim should advertise a short retry: %v", response.Header())
 			}
 		})
 	}
@@ -185,10 +248,40 @@ func TestWorkspaceFSXCompatibleLeavesExistingWorkspaceUntouched(t *testing.T) {
 	}
 }
 
+func TestWorkspaceFSXCompatibleDoesNotProvisionOnDataSpaceList(t *testing.T) {
+	core := k8sfake.NewSimpleClientset()
+	handler := NewHandler(&fakeJobRepository{}, Options{
+		Kubernetes: k8s.NewClientFromInterfaces(nil, core),
+		DataSpaces: &fakeDataSpaceStore{bindings: workspaceCompatibleBindings(t, "team-a", "team-a")},
+		DataSpacesEnabled: true, WorkspaceFSXCompatibleEnabled: true,
+		DataSpacesFSXAttributes: workspaceCompatibleFSXAttributes, DataSpacesMountCapacity: "1Ti",
+		DirectoryInitializer: &fakePersonalDataDirectoryInitializer{},
+	})
+	router := dataSpaceRouter(handler, auth.Principal{Subject: "subject-1", TenantID: "team-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeOIDC})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/data-spaces", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("ordinary data-space listing failed: %d %s", response.Code, response.Body.String())
+	}
+	volumes, err := core.CoreV1().PersistentVolumes().List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, volume := range volumes.Items {
+		if volume.Spec.CSI != nil && strings.HasSuffix(volume.Spec.CSI.VolumeAttributes["path"], "/workspace") {
+			t.Fatal("ordinary data-space listing must not provision a compatible workspace mount")
+		}
+	}
+}
+
 func launchWorkspaceCompatibleRequest(handler *Handler) *httptest.ResponseRecorder {
+	return launchWorkspaceCompatibleRequestWithContext(context.Background(), handler)
+}
+
+func launchWorkspaceCompatibleRequestWithContext(ctx context.Context, handler *Handler) *httptest.ResponseRecorder {
 	router := dataSpaceRouter(handler, auth.Principal{Subject: "subject-1", TenantID: "team-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeOIDC})
 	handler.RegisterWorkspaceRoutes(router.Group("/api/v1"))
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/dev-workspaces", strings.NewReader(`{"gpuCount":0}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/dev-workspaces", strings.NewReader(`{"gpuCount":0}`)).WithContext(ctx)
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)

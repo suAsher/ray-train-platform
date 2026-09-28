@@ -261,6 +261,8 @@ spec:
             # but Ray workloads are not changed by a compatibility upgrade.
             - name: DATA_SPACES_ENABLED
               value: {{ default false $dataSpaces.enabled | quote }}
+            - name: WORKSPACE_FSX_COMPATIBLE_ENABLED
+              value: {{ default false $dataSpaces.workspaceCompatibleEnabled | quote }}
             - name: DATA_SPACES_MOUNT_CAPACITY
               value: {{ default "" $dataSpaces.mountCapacity | quote }}
             - name: DATA_SPACES_FSX_VOLUME_ATTRIBUTES_JSON

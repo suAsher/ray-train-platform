@@ -227,7 +227,38 @@ func (h *Handler) resolveWorkspaceDataMountPlan(ctx context.Context, principal a
 	if h.idcDataSpacesEnabled && (plan.IDCOriginal == nil || plan.IDCWellspiking == nil || plan.IDCShared == nil || plan.IDCSPKHybrid == nil || plan.IDCSPKSSD == nil) {
 		return k8s.DataMountPlan{}, ErrSubmissionDataMountNotReady
 	}
+	if h.workspaceFSXCompatibleEnabled {
+		workspace, err := h.resolveWorkspaceCompatibleMount(ctx, principal, ready[domain.DataSpaceWorkspace])
+		if err != nil {
+			return k8s.DataMountPlan{}, err
+		}
+		plan.Workspace = workspace
+		if err := plan.Validate(); err != nil {
+			return k8s.DataMountPlan{}, ErrSubmissionDataMountNotReady
+		}
+	}
 	return plan, nil
+}
+
+// This adapter is used only by new workspace launches. The authenticated
+// personal binding retains its storage home across team changes; ordinary
+// data-space listing and training submission never provision this profile.
+func (h *Handler) resolveWorkspaceCompatibleMount(ctx context.Context, principal auth.Principal, personal domain.DataMountBinding) (*k8s.DataMountRoot, error) {
+	if h.kubernetes == nil || personal.Scope != domain.DataMountScopePersonal || personal.SpaceID != domain.DataSpaceWorkspace ||
+		personal.Status != domain.DataMountBindingReady || personal.ReadOnly || !bindingVisibleToPrincipal(personal, principal) {
+		return nil, ErrSubmissionDataMountNotReady
+	}
+	if err := personal.Validate(); err != nil {
+		return nil, ErrSubmissionDataMountNotReady
+	}
+	claim, ready, err := h.kubernetes.EnsureWorkspaceMountResources(ctx, personal, "tenant-"+sanitizeDNS(principal.TenantID), h.dataSpacesCapacity)
+	if err != nil {
+		return nil, fmt.Errorf("%w: ensure workspace storage: %v", ErrSubmissionDataMountNotReady, err)
+	}
+	if !ready || strings.TrimSpace(claim) == "" {
+		return nil, ErrSubmissionDataMountNotReady
+	}
+	return &k8s.DataMountRoot{ClaimName: claim}, nil
 }
 
 func isTOSWorkloadSpace(space domain.DataSpaceID) bool {
