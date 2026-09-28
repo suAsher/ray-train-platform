@@ -19,7 +19,7 @@ func workspacePersonalBinding() domain.DataMountBinding {
 		Scope: domain.DataMountScopePersonal, SpaceID: domain.DataSpaceWorkspace, ClaimName: "personal-current",
 		Driver: domain.FSXCSIDriver, RootPrefix: "ray-train/tenants/original-team/users/user.a/",
 		VolumeAttributesJSON: `{"type":"TOS","bucket":"shanghai-data-transfer","server":"tos-cn-shanghai.ivolces.com","region":"cn-shanghai","path":"/ray-train/tenants/original-team/users/user.a"}`,
-		Status: domain.DataMountBindingReady,
+		Status:               domain.DataMountBindingReady,
 	}
 }
 
@@ -114,13 +114,15 @@ func TestBuildWorkspaceMountResourcesRejectsInvalidOriginalBinding(t *testing.T)
 			b.RootPrefix += "workspace/"
 			b.VolumeAttributesJSON = strings.ReplaceAll(b.VolumeAttributesJSON, "users/user.a", "users/user.a/workspace")
 		},
-		"mismatched attributes": func(b *domain.DataMountBinding) { b.VolumeAttributesJSON = strings.ReplaceAll(b.VolumeAttributesJSON, "user.a", "other") },
-		"readonly personal":    func(b *domain.DataMountBinding) { b.ReadOnly = true },
-		"failed binding":       func(b *domain.DataMountBinding) { b.Status = domain.DataMountBindingFailed },
-		"non-personal scope":   func(b *domain.DataMountBinding) { b.Scope = domain.DataMountScopeTenant },
-		"wrong space":          func(b *domain.DataMountBinding) { b.SpaceID = domain.DataSpacePublic },
-		"wrong driver":         func(b *domain.DataMountBinding) { b.Driver = "disk.csi.volcengine.com" },
-		"long-lived secret":    func(b *domain.DataMountBinding) { b.SecretName = "secret" },
+		"mismatched attributes": func(b *domain.DataMountBinding) {
+			b.VolumeAttributesJSON = strings.ReplaceAll(b.VolumeAttributesJSON, "user.a", "other")
+		},
+		"readonly personal":  func(b *domain.DataMountBinding) { b.ReadOnly = true },
+		"failed binding":     func(b *domain.DataMountBinding) { b.Status = domain.DataMountBindingFailed },
+		"non-personal scope": func(b *domain.DataMountBinding) { b.Scope = domain.DataMountScopeTenant },
+		"wrong space":        func(b *domain.DataMountBinding) { b.SpaceID = domain.DataSpacePublic },
+		"wrong driver":       func(b *domain.DataMountBinding) { b.Driver = "disk.csi.volcengine.com" },
+		"long-lived secret":  func(b *domain.DataMountBinding) { b.SecretName = "secret" },
 		"attribute secret": func(b *domain.DataMountBinding) {
 			b.VolumeAttributesJSON = strings.Replace(b.VolumeAttributesJSON, `"type":"TOS"`, `"type":"TOS","secretName":"secret"`, 1)
 		},
@@ -170,24 +172,58 @@ func TestEnsureWorkspaceMountResourcesIsIdempotentAndWaitsForBinding(t *testing.
 
 func TestEnsureWorkspaceMountResourcesRefusesConflictingContracts(t *testing.T) {
 	for name, change := range map[string]func(*corev1.PersistentVolume, *corev1.PersistentVolumeClaim){
-		"foreign PV":         func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) { pv.Labels = nil },
-		"foreign PVC":        func(_ *corev1.PersistentVolume, pvc *corev1.PersistentVolumeClaim) { pvc.Labels = nil },
-		"wrong handle":       func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) { pv.Spec.CSI.VolumeHandle = "tenant-root" },
-		"delete reclaim":     func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) { pv.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete },
-		"wrong mount mode":   func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) { pv.Spec.MountOptions = governedFSXMountOptions(false) },
-		"wrong PV capacity":  func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) { pv.Spec.Capacity[corev1.ResourceStorage] = resource.MustParse("2Ti") },
-		"wrong PVC capacity": func(_ *corev1.PersistentVolume, pvc *corev1.PersistentVolumeClaim) { pvc.Spec.Resources.Requests[corev1.ResourceStorage] = resource.MustParse("2Ti") },
-		"dynamic PV class":   func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) { pv.Spec.StorageClassName = "disk" },
-		"dynamic PVC class":  func(_ *corev1.PersistentVolume, pvc *corev1.PersistentVolumeClaim) { value := "disk"; pvc.Spec.StorageClassName = &value },
-		"wrong namespace":    func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) { pv.Spec.ClaimRef.Namespace = "other" },
-		"wrong claim":        func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) { pv.Spec.ClaimRef.Name = "other" },
-		"stale claim UID":    func(pv *corev1.PersistentVolume, pvc *corev1.PersistentVolumeClaim) { pv.Spec.ClaimRef.UID = "old"; pvc.UID = "new" },
-		"wrong volume":       func(_ *corev1.PersistentVolume, pvc *corev1.PersistentVolumeClaim) { pvc.Spec.VolumeName = "tenant-root" },
-		"wrong access mode":  func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) { pv.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce} },
-		"deleting PV":        func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) { now := metav1.Now(); pv.DeletionTimestamp = &now },
-		"deleting PVC":       func(_ *corev1.PersistentVolume, pvc *corev1.PersistentVolumeClaim) { now := metav1.Now(); pvc.DeletionTimestamp = &now },
-		"block PV":           func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) { mode := corev1.PersistentVolumeBlock; pv.Spec.VolumeMode = &mode },
-		"block PVC":          func(_ *corev1.PersistentVolume, pvc *corev1.PersistentVolumeClaim) { mode := corev1.PersistentVolumeBlock; pvc.Spec.VolumeMode = &mode },
+		"foreign PV":  func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) { pv.Labels = nil },
+		"foreign PVC": func(_ *corev1.PersistentVolume, pvc *corev1.PersistentVolumeClaim) { pvc.Labels = nil },
+		"wrong handle": func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) {
+			pv.Spec.CSI.VolumeHandle = "tenant-root"
+		},
+		"delete reclaim": func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) {
+			pv.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
+		},
+		"wrong mount mode": func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) {
+			pv.Spec.MountOptions = governedFSXMountOptions(false)
+		},
+		"wrong PV capacity": func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) {
+			pv.Spec.Capacity[corev1.ResourceStorage] = resource.MustParse("2Ti")
+		},
+		"wrong PVC capacity": func(_ *corev1.PersistentVolume, pvc *corev1.PersistentVolumeClaim) {
+			pvc.Spec.Resources.Requests[corev1.ResourceStorage] = resource.MustParse("2Ti")
+		},
+		"dynamic PV class": func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) { pv.Spec.StorageClassName = "disk" },
+		"dynamic PVC class": func(_ *corev1.PersistentVolume, pvc *corev1.PersistentVolumeClaim) {
+			value := "disk"
+			pvc.Spec.StorageClassName = &value
+		},
+		"wrong namespace": func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) {
+			pv.Spec.ClaimRef.Namespace = "other"
+		},
+		"wrong claim": func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) { pv.Spec.ClaimRef.Name = "other" },
+		"stale claim UID": func(pv *corev1.PersistentVolume, pvc *corev1.PersistentVolumeClaim) {
+			pv.Spec.ClaimRef.UID = "old"
+			pvc.UID = "new"
+		},
+		"wrong volume": func(_ *corev1.PersistentVolume, pvc *corev1.PersistentVolumeClaim) {
+			pvc.Spec.VolumeName = "tenant-root"
+		},
+		"wrong access mode": func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) {
+			pv.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
+		},
+		"deleting PV": func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) {
+			now := metav1.Now()
+			pv.DeletionTimestamp = &now
+		},
+		"deleting PVC": func(_ *corev1.PersistentVolume, pvc *corev1.PersistentVolumeClaim) {
+			now := metav1.Now()
+			pvc.DeletionTimestamp = &now
+		},
+		"block PV": func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) {
+			mode := corev1.PersistentVolumeBlock
+			pv.Spec.VolumeMode = &mode
+		},
+		"block PVC": func(_ *corev1.PersistentVolume, pvc *corev1.PersistentVolumeClaim) {
+			mode := corev1.PersistentVolumeBlock
+			pvc.Spec.VolumeMode = &mode
+		},
 		"secret reference": func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) {
 			pv.Spec.CSI.NodePublishSecretRef = &corev1.SecretReference{Name: "secret", Namespace: "tenant-tenant-a"}
 		},

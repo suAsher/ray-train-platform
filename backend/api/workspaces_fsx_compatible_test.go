@@ -65,7 +65,7 @@ func TestWorkspaceFSXCompatibleUsesDedicatedClaimAndPreservesStorageHome(t *test
 			if plan.Workspace == nil || plan.Workspace.ClaimName == "" || plan.Workspace.ClaimName == plan.Personal.ClaimName || plan.Workspace.SubPath != "" || plan.Workspace.ReadOnly {
 				t.Fatalf("workspace must have its own writable claim mounted directly: %#v", plan)
 			}
-			claim, err := core.CoreV1().PersistentVolumeClaims("tenant-" + tenant).Get(context.Background(), plan.Workspace.ClaimName, metav1.GetOptions{})
+			claim, err := core.CoreV1().PersistentVolumeClaims("tenant-"+tenant).Get(context.Background(), plan.Workspace.ClaimName, metav1.GetOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -91,7 +91,7 @@ func TestWorkspaceFSXCompatibleUsesDedicatedClaimAndPreservesStorageHome(t *test
 func TestWorkspaceFSXCompatibleDisabledKeepsLegacyPlan(t *testing.T) {
 	core := k8sfake.NewSimpleClientset()
 	handler := NewHandler(&fakeJobRepository{}, Options{
-		DataSpaces: &fakeDataSpaceStore{bindings: workspaceCompatibleBindings(t, "team-a", "team-a")},
+		DataSpaces:        &fakeDataSpaceStore{bindings: workspaceCompatibleBindings(t, "team-a", "team-a")},
 		DataSpacesEnabled: true, Kubernetes: k8s.NewClientFromInterfaces(nil, core),
 	})
 	plan, err := handler.resolveWorkspaceDataMountPlan(context.Background(), auth.Principal{Subject: "subject-1", TenantID: "team-a"})
@@ -179,7 +179,7 @@ func TestWorkspaceFSXCompatibleRejectsUnreadyOrUnauthorizedPersonalBinding(t *te
 			}
 			core := k8sfake.NewSimpleClientset()
 			handler := NewHandler(&fakeJobRepository{}, Options{
-				DataSpaces: workspaceUnfilteredBindings{&fakeDataSpaceStore{bindings: bindings}},
+				DataSpaces:        workspaceUnfilteredBindings{&fakeDataSpaceStore{bindings: bindings}},
 				DataSpacesEnabled: true, WorkspaceFSXCompatibleEnabled: true, DataSpacesMountCapacity: "1Ti",
 				Kubernetes: k8s.NewClientFromInterfaces(nil, core),
 			})
@@ -208,11 +208,11 @@ func TestWorkspaceFSXCompatibleLaunchWaitsForStorageBeforeCreatingCompute(t *tes
 			workspaces := &fakeWorkspaceStore{getErr: context.Canceled}
 			handler := NewHandler(&fakeJobRepository{}, Options{
 				Workspaces: workspaces, Kubernetes: k8s.NewClientFromInterfaces(dynamic, core),
-				DataSpaces: &fakeDataSpaceStore{bindings: workspaceCompatibleBindings(t, "team-a", "team-a")},
+				DataSpaces:        &fakeDataSpaceStore{bindings: workspaceCompatibleBindings(t, "team-a", "team-a")},
 				DataSpacesEnabled: true, WorkspaceFSXCompatibleEnabled: true,
 				DataSpacesFSXAttributes: workspaceCompatibleFSXAttributes, DataSpacesMountCapacity: "1Ti",
 				DirectoryInitializer: &fakePersonalDataDirectoryInitializer{},
-				WorkspaceImage: "registry.example/workspace@sha256:" + strings.Repeat("a", 64),
+				WorkspaceImage:       "registry.example/workspace@sha256:" + strings.Repeat("a", 64),
 			})
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 			defer cancel()
@@ -251,8 +251,8 @@ func TestWorkspaceFSXCompatibleLeavesExistingWorkspaceUntouched(t *testing.T) {
 func TestWorkspaceFSXCompatibleDoesNotProvisionOnDataSpaceList(t *testing.T) {
 	core := k8sfake.NewSimpleClientset()
 	handler := NewHandler(&fakeJobRepository{}, Options{
-		Kubernetes: k8s.NewClientFromInterfaces(nil, core),
-		DataSpaces: &fakeDataSpaceStore{bindings: workspaceCompatibleBindings(t, "team-a", "team-a")},
+		Kubernetes:        k8s.NewClientFromInterfaces(nil, core),
+		DataSpaces:        &fakeDataSpaceStore{bindings: workspaceCompatibleBindings(t, "team-a", "team-a")},
 		DataSpacesEnabled: true, WorkspaceFSXCompatibleEnabled: true,
 		DataSpacesFSXAttributes: workspaceCompatibleFSXAttributes, DataSpacesMountCapacity: "1Ti",
 		DirectoryInitializer: &fakePersonalDataDirectoryInitializer{},

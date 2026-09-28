@@ -32,6 +32,8 @@ type launchWorkspaceRequest struct {
 	GPUCount   *int   `json:"gpuCount"`
 }
 
+var errWorkspaceCompatibleMountPending = fmt.Errorf("%w: compatible workspace storage is still binding", ErrSubmissionDataMountNotReady)
+
 func (h *Handler) launchWorkspace(c *gin.Context) {
 	principal, ok := h.principal(c)
 	if !ok {
@@ -85,6 +87,9 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 		switch {
 		case errors.Is(err, ErrSubmissionDataSpacesUnavailable):
 			h.writeError(c, http.StatusServiceUnavailable, "DATA_SPACES_UNAVAILABLE", "data spaces are not configured")
+		case errors.Is(err, errWorkspaceCompatibleMountPending):
+			c.Header("Retry-After", "2")
+			h.writeError(c, http.StatusConflict, "DATA_SPACE_MOUNT_NOT_READY", "your workspace storage is still being prepared; retry starting the workspace in a few seconds")
 		default:
 			h.writeError(c, http.StatusConflict, "DATA_SPACE_MOUNT_NOT_READY", "your personal data space is still being prepared; try again after storage setup is complete")
 		}
@@ -251,14 +256,40 @@ func (h *Handler) resolveWorkspaceCompatibleMount(ctx context.Context, principal
 	if err := personal.Validate(); err != nil {
 		return nil, ErrSubmissionDataMountNotReady
 	}
-	claim, ready, err := h.kubernetes.EnsureWorkspaceMountResources(ctx, personal, "tenant-"+sanitizeDNS(principal.TenantID), h.dataSpacesCapacity)
-	if err != nil {
-		return nil, fmt.Errorf("%w: ensure workspace storage: %v", ErrSubmissionDataMountNotReady, err)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, workspaceCompatibleMountWaitError(err)
+		}
+		claim, ready, err := h.kubernetes.EnsureWorkspaceMountResources(ctx, personal, "tenant-"+sanitizeDNS(principal.TenantID), h.dataSpacesCapacity)
+		if ctx.Err() != nil {
+			return nil, workspaceCompatibleMountWaitError(ctx.Err())
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%w: ensure workspace storage: %w", ErrSubmissionDataMountNotReady, err)
+		}
+		if ready {
+			if strings.TrimSpace(claim) == "" {
+				return nil, ErrSubmissionDataMountNotReady
+			}
+			return &k8s.DataMountRoot{ClaimName: claim}, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, workspaceCompatibleMountWaitError(ctx.Err())
+		case <-ticker.C:
+		}
 	}
-	if !ready || strings.TrimSpace(claim) == "" {
-		return nil, ErrSubmissionDataMountNotReady
+}
+
+func workspaceCompatibleMountWaitError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%w: %w", errWorkspaceCompatibleMountPending, err)
 	}
-	return &k8s.DataMountRoot{ClaimName: claim}, nil
+	return fmt.Errorf("%w: %w", ErrSubmissionDataMountNotReady, err)
 }
 
 func isTOSWorkloadSpace(space domain.DataSpaceID) bool {
