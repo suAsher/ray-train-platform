@@ -2,7 +2,6 @@ package observability
 
 import (
 	"sort"
-	"strings"
 	"time"
 )
 
@@ -60,13 +59,15 @@ func AnalyzeDiagnosis(base JobDiagnosis, candidates, completions, followups []Lo
 	result.Followups = make([]DiagnosisEvidence, 0)
 	result.CompletionEvidence = make([]DiagnosisEvidence, 0)
 	result.Notes = []string{
-		"First recognized error in retained logs is evidence, not a proven root cause; logging may be delayed, caught exceptions may be benign, and earlier logs may be absent.",
-		"This is a filtered, bounded sample; no recognized failure does not establish success. Job state remains authoritative.",
+		"这是保留日志中最早识别到的错误，不是已证明的根因；日志可能延迟、已捕获异常可能无害，也可能缺少更早日志。",
+		"当前结果来自有条数与时间范围限制的筛选日志；未识别到错误不代表成功，请以平台任务状态为准。",
 	}
 	result.Coverage.Filtered, result.Coverage.Partial = true, true
 	result.Coverage.CandidateLimit = DiagnosisCandidateLimit
-	result.StatusReason, _ = RedactDiagnosisText(base.StatusReason)
-	result.StatusMessage, _ = RedactDiagnosisText(base.StatusMessage)
+	var reasonTruncated, messageTruncated bool
+	result.StatusReason, reasonTruncated = RedactDiagnosisText(base.StatusReason)
+	result.StatusMessage, messageTruncated = RedactDiagnosisText(base.StatusMessage)
+	result.Coverage.Truncated = result.Coverage.Truncated || reasonTruncated || messageTruncated
 	ordered := orderedDiagnosisLines(candidates)
 	if len(ordered) >= DiagnosisCandidateLimit { result.Coverage.Truncated = true }
 	if len(ordered) > DiagnosisCandidateLimit { ordered = ordered[:DiagnosisCandidateLimit] }
@@ -120,34 +121,34 @@ func addDiagnosisEvidence(result JobDiagnosis, completions, followups []LogLine)
 
 func classifyDiagnosis(result JobDiagnosis) JobDiagnosis {
 	result.Classification, result.FailurePhase = "no_failure_evidence", "unknown"
-	result.Summary = "No recognized failure in this filtered retained-log sample; this does not establish success."
+	result.Summary = "当前筛选的保留日志中未识别到错误；这不能证明任务成功。"
 	if result.Coverage.LogUnavailable {
 		result.Classification = "unavailable"
-		result.Summary = "Retained log evidence is unavailable; use the authoritative job state and retry diagnosis later."
+		result.Summary = "日志证据暂不可用，请以平台任务状态为准，稍后重试诊断。"
 		return result
 	}
-	if len(result.CompletionEvidence) > 0 { result.Notes = append(result.Notes, "Completion and checkpoint text is unverified log evidence; it does not verify a usable artifact or successful process exit.") }
+	if len(result.CompletionEvidence) > 0 { result.Notes = append(result.Notes, "完成或 Checkpoint 文字仅为未经验证的日志证据，不能证明产物可用或进程成功退出。") }
 	if result.FirstFailure == nil { return result }
-	result.Summary = "First recognized error in retained logs; not a proven root cause."
+	result.Summary = "以下为保留日志中最早识别到的错误线索，尚未证明它是根因。"
 	switch result.FirstFailure.Kind {
 	case "numerical_error", "python_exception", "out_of_memory":
 		result.Classification, result.FailurePhase = "application_failure", "application"
-		result.Notes = append(result.Notes, "Application phase is inferred from the error text; it may be loading or preprocessing rather than training computation.")
+		result.Notes = append(result.Notes, "应用阶段由错误文字推断，可能发生在加载或预处理阶段，不一定在训练计算期间。")
 	case "communication_error":
 		result.Classification = "communication_failure"
-		result.Notes = append(result.Notes, "Communication errors can be downstream symptoms; no earlier recognized concrete error was found in this sample.")
+		result.Notes = append(result.Notes, "通信错误可能为后续现象；当前样本未发现更早的具体错误。")
 	case "fatal_signal":
 		result.Classification = "runtime_failure"
 		for _, completion := range result.CompletionEvidence {
 			if completion.Kind == "completion" && completion.Timestamp.Before(result.FirstFailure.Timestamp) {
 				result.Classification, result.FailurePhase = "possible_runtime_teardown", "launcher"
-				result.Summary = "First recognized error in retained logs follows completion text: possible runtime teardown failure, not a proven root cause or successful training."
-				result.Notes = append(result.Notes, "Launcher/teardown phase is inferred from ordering only; completion text is unverified and may come from another worker.")
+				result.Summary = "完成文字之后出现最早识别的错误，可能发生在运行时退出清理阶段；尚未证明根因或训练成功。"
+				result.Notes = append(result.Notes, "退出清理阶段仅根据时间顺序推断；完成文字未经验证，且可能来自其他 Worker。")
 				break
 			}
 		}
 	}
-	if len(result.Followups) > 0 { result.Notes = append(result.Notes, "Later communication/fatal messages are follow-up evidence; temporal ordering does not prove causality.") }
+	if len(result.Followups) > 0 { result.Notes = append(result.Notes, "后续通信或致命错误仅为后续线索，时间先后不证明因果关系。") }
 	return result
 }
 
@@ -162,12 +163,15 @@ func WithDiagnosisContext(result JobDiagnosis, lines []LogLine) JobDiagnosis {
 	if result.FirstFailure == nil { return result }
 	first := *result.FirstFailure
 	context := make([]LogLine, 0, DiagnosisContextLimit)
+	seen := map[string]bool{first.Timestamp.String() + first.Line: true}
 	if len(lines) >= DiagnosisContextLimit { result.Coverage.Truncated = true }
 	for _, line := range orderedDiagnosisLines(lines) {
 		if len(context) >= DiagnosisContextLimit-1 { break }
-		if line.Timestamp.Equal(first.Timestamp) && strings.TrimSpace(line.Line) == first.Line { continue }
 		clean, truncated := RedactDiagnosisLogLine(line)
 		result.Coverage.Truncated = result.Coverage.Truncated || truncated
+		key := clean.Timestamp.String() + clean.Line
+		if seen[key] { continue }
+		seen[key] = true
 		context = append(context, clean)
 	}
 	context = append(context, LogLine{Timestamp: first.Timestamp, Line: first.Line, Stream: first.Stream})

@@ -105,7 +105,16 @@ func completeWords(ctx context.Context, words []string, getenv func(string) stri
 	}
 	command, arguments := words[0], words[1:]
 	if command == "help" {
-		return completeWords(ctx, arguments, getenv)
+		if len(arguments) == 1 {
+			return completionCommandNames(arguments[0])
+		}
+		if len(arguments) == 2 {
+			subcommand := map[string]string{"dataset": "versions", "source-artifact": "resolve"}[arguments[0]]
+			if subcommand != "" {
+				return completionChoices([]string{subcommand}, arguments[1], "")
+			}
+		}
+		return nil
 	}
 	if command == "completion" && len(arguments) == 1 && !strings.HasPrefix(arguments[0], "-") {
 		return completionChoices([]string{"bash", "zsh"}, arguments[0], "")

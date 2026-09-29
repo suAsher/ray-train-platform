@@ -33,7 +33,7 @@ func TestDiagnoseUsesSharedAPIForJSONAndTextWithoutStatusOrLogsCalls(t *testing.
 				var data map[string]any
 				if err := json.Unmarshal(stdout.Bytes(), &data); err != nil || data["observedState"] != "RUNNING" || data["classification"] != "application_failure" { t.Fatalf("invalid shared JSON: %s (%v)", stdout.String(), err) }
 			} else {
-				for _, marker := range []string{"RUNNING", "loss=nan", "NCCL watchdog timeout", "not a proven root cause"} { if !strings.Contains(stdout.String(), marker) { t.Fatalf("text lacks %q: %s", marker, stdout.String()) } }
+				for _, marker := range []string{"RUNNING", "loss=nan", "NCCL watchdog timeout", "not a proven root cause", "partial=true", "truncated=false", "logUnavailable=false", "contextUnavailable=false"} { if !strings.Contains(stdout.String(), marker) { t.Fatalf("text lacks %q: %s", marker, stdout.String()) } }
 			}
 		})
 	}

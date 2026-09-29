@@ -191,3 +191,32 @@ func TestJobDiagnosisAuthorizationPrecedesProviderAccess(t *testing.T) {
 		})
 	}
 }
+
+type diagnosisSupplementTestProvider struct {
+	diagnosisTestProvider
+	completionEnd time.Time
+	followupStart time.Time
+	completionError error
+	followupError error
+}
+
+func (p *diagnosisSupplementTestProvider) QueryJobDiagnosisCompletions(_ context.Context, _ string, limit int, start, end time.Time) ([]observability.LogLine, error) {
+	p.completionEnd = end
+	if limit > 20 { panic("unbounded completions") }
+	return []observability.LogLine{{Timestamp: start.Add(time.Second), Line: "Saving checkpoint to epoch_1.pth"}}, p.completionError
+}
+
+func (p *diagnosisSupplementTestProvider) QueryJobDiagnosisFollowups(_ context.Context, _ string, limit int, start, end time.Time) ([]observability.LogLine, error) {
+	p.followupStart = start
+	if limit > 12 { panic("unbounded followups") }
+	return []observability.LogLine{{Timestamp: start.Add(25*time.Hour), Line: "NCCL watchdog timeout"}}, p.followupError
+}
+
+func TestJobDiagnosisKeepsDayLaterFollowupOutsideFirstCandidateBudget(t *testing.T) {
+	job := diagnosisTestJob()
+	job.CreatedAt = job.CreatedAt.Add(-72*time.Hour)
+	provider := &diagnosisSupplementTestProvider{}
+	for index := 0; index < 200; index++ { provider.candidates = append(provider.candidates, observability.LogLine{Timestamp: job.CreatedAt.Add(time.Duration(index)*time.Second), Line: "KeyError: Qtractor"}) }
+	data, _ := readDiagnosisTestResponse(t, &fakeJobRepository{jobs: []domain.TrainingJob{job}}, provider)
+	if data.FirstFailure == nil || len(data.Followups) != 1 || !data.Coverage.Truncated || !provider.completionEnd.Equal(data.FirstFailure.Timestamp) || !provider.followupStart.Equal(data.FirstFailure.Timestamp) { t.Fatalf("followup lost/budget wrong: %+v", data) }
+}

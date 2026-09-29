@@ -58,6 +58,8 @@ func (h *Handler) getJobDiagnosis(c *gin.Context) {
 
 func (h *Handler) queryDiagnosisSupplement(ctx context.Context, diagnosis observability.JobDiagnosis) (observability.JobDiagnosis, []observability.LogLine, []observability.LogLine) {
 	var completions, followups []observability.LogLine
+	diagnosis.Coverage.CompletionUnavailable = true
+	diagnosis.Coverage.FollowupsUnavailable = diagnosis.FirstFailure != nil
 	start, end := diagnosis.Coverage.WindowStart, diagnosis.Coverage.WindowEnd
 	completionEnd := end
 	if diagnosis.FirstFailure != nil { completionEnd = diagnosis.FirstFailure.Timestamp }

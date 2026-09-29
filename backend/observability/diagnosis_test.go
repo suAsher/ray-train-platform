@@ -13,6 +13,7 @@ func TestDiagnosisFiltersAndKindsRecognizeConcreteIncidentEvidence(t *testing.T)
 	for _, test := range []struct{ line, kind string }{
 		{"AssertionError: Translation may not be NaN!", "numerical_error"},
 		{"KeyError: Qtractor", "python_exception"},
+		{"\x1b[31mKeyError: Qtractor\x1b[0m", "python_exception"},
 		{"torch.OutOfMemoryError: CUDA out of memory", "out_of_memory"},
 		{"cls_score contains NaN", "numerical_error"},
 		{"Fatal Python error: Segmentation fault", "fatal_signal"},
@@ -36,9 +37,9 @@ func TestDiagnosisPreservesFailedStateAndDoesNotInferTeardownFromCheckpointAlone
 }
 
 func TestDiagnosisRedactsSecretsAndBoundsWorstCaseJSON(t *testing.T) {
-	secret := `KeyError: {"password":"fixture-password", "api_key":"fixture-api"} Authorization: Bearer fixture-bearer https://x/y?X-Tos-Signature=fixture-signature`
+	secret := `KeyError: {"password":"fixture-password", "api_key":"fixture-api"} Authorization: Bearer fixture-bearer https://x/y?X-Tos-Signature=fixture-signature Authorization: Basic dXNlcjpwYXNz https://fixture-user:fixture-password@host/path`
 	redacted, _ := RedactDiagnosisText(secret)
-	for _, value := range []string{"fixture-password", "fixture-api", "fixture-bearer", "fixture-signature"} { if strings.Contains(redacted, value) { t.Fatalf("secret leak: %s", redacted) } }
+	for _, value := range []string{"fixture-password", "fixture-api", "fixture-bearer", "fixture-signature", "dXNlcjpwYXNz", "fixture-user"} { if strings.Contains(redacted, value) { t.Fatalf("secret leak: %s", redacted) } }
 	start := time.Date(2026, 9, 29, 1, 0, 0, 0, time.UTC)
 	labels := make(map[string]string)
 	for _, key := range []string{"pod", "container", "stream", "namespace", "node", "platform_job_id"} { labels[key] = strings.Repeat("<", 1000) }
@@ -54,4 +55,21 @@ func TestDiagnosisRedactsSecretsAndBoundsWorstCaseJSON(t *testing.T) {
 	result = WithDiagnosisContext(result, context)
 	encoded, err := json.Marshal(map[string]any{"success": true, "data": result})
 	if err != nil || len(encoded) >= 1<<20 { t.Fatalf("generic API limit exceeded: %d (%v)", len(encoded), err) }
+}
+
+func TestDiagnosisChineseCompletionBeforeFatalMatchesIncidentWithoutChangingFailedState(t *testing.T) {
+	completed := time.Date(2026, 9, 29, 12, 20, 52, 0, time.UTC)
+	filter := regexp.MustCompile(diagnosisCompletionFilter)
+	var completions []LogLine
+	for _, text := range []string{"训练进程正常结束", "训练完成，找到目标 checkpoint", "Fusion训练完成", "全流程完成"} {
+		if !filter.MatchString(text) || diagnosisKind(text) != "completion" { t.Fatalf("actual completion evidence missed: %s", text) }
+		completions = append(completions, LogLine{Timestamp: completed, Line: text})
+	}
+	for _, text := range []string{"预处理完成", "数据加载完成", "第一个 epoch 完成", "准备训练完成标志"} {
+		if filter.MatchString(text) || diagnosisKind(text) != "" { t.Fatalf("routine progress promoted to completion: %s", text) }
+	}
+	fatal := []LogLine{{Timestamp: completed.Add(4*time.Second), Line: "Fatal Python error: Segmentation fault"}}
+	result := AnalyzeDiagnosis(JobDiagnosis{JobID: "job-303f-fixture", ObservedState: "FAILED", StatusReason: "JobFailed", StatusMessage: "exited with code 139"}, fatal, completions, nil)
+	if result.ObservedState != "FAILED" || result.Classification != "possible_runtime_teardown" || result.FailurePhase != "launcher" || len(result.CompletionEvidence) != 4 || result.FirstFailure == nil || result.FirstFailure.Kind != "fatal_signal" { t.Fatalf("incorrect incident diagnosis: %+v", result) }
+	if !strings.Contains(result.Summary, "可能") || !strings.Contains(result.Summary, "根因") || !strings.Contains(strings.Join(result.Notes, " "), "未经验证") { t.Fatalf("uncertainty must remain explicit: %+v", result) }
 }

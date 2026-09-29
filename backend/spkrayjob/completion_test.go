@@ -84,6 +84,7 @@ func TestCompletionDoesNotSuggestCredentialsOrFlagsAfterPositionals(t *testing.T
 		{"logs", "job-123456789012345678901234", ""},
 		{"submit", "--entrypoint", ""}, {"unknown", ""},
 		{"", ""}, {"status", "--unknown", "job-"},
+		{"help", "status", ""},
 	} {
 		if got := completionQuery(t, func(string) string { return "credential-value" }, words...); got != "" {
 			t.Errorf("completion %q must be empty, got %q", words, got)
