@@ -6,10 +6,10 @@ import (
 )
 
 const (
-	DiagnosisCandidateLimit = 200
-	DiagnosisCompletionLimit = 20
-	DiagnosisFollowupLimit = 12
-	DiagnosisContextLimit = 24
+	DiagnosisCandidateLimit          = 200
+	DiagnosisCompletionLimit         = 20
+	DiagnosisFollowupLimit           = 12
+	DiagnosisContextLimit            = 24
 	diagnosisExplicitCompletionLimit = 4
 	diagnosisCheckpointEvidenceLimit = DiagnosisCompletionLimit - diagnosisExplicitCompletionLimit
 )
@@ -17,40 +17,40 @@ const (
 // JobDiagnosis is shared by Portal and CLI. It describes a bounded sample of
 // retained log evidence, never a transition in the authoritative job state.
 type JobDiagnosis struct {
-	JobID string `json:"jobId"`
-	ObservedState string `json:"observedState"`
-	StatusReason string `json:"statusReason"`
-	StatusMessage string `json:"statusMessage"`
-	Classification string `json:"classification"`
-	FailurePhase string `json:"failurePhase"`
-	Summary string `json:"summary"`
-	FirstFailure *DiagnosisEvidence `json:"firstFailure"`
-	Followups []DiagnosisEvidence `json:"followups"`
+	JobID              string              `json:"jobId"`
+	ObservedState      string              `json:"observedState"`
+	StatusReason       string              `json:"statusReason"`
+	StatusMessage      string              `json:"statusMessage"`
+	Classification     string              `json:"classification"`
+	FailurePhase       string              `json:"failurePhase"`
+	Summary            string              `json:"summary"`
+	FirstFailure       *DiagnosisEvidence  `json:"firstFailure"`
+	Followups          []DiagnosisEvidence `json:"followups"`
 	CompletionEvidence []DiagnosisEvidence `json:"completionEvidence"`
-	Coverage DiagnosisCoverage `json:"coverage"`
-	Notes []string `json:"notes"`
+	Coverage           DiagnosisCoverage   `json:"coverage"`
+	Notes              []string            `json:"notes"`
 }
 
 type DiagnosisEvidence struct {
-	Timestamp time.Time `json:"timestamp"`
-	Line string `json:"line"`
-	Stream map[string]string `json:"stream,omitempty"`
-	Kind string `json:"kind"`
-	Context []LogLine `json:"context,omitempty"`
+	Timestamp time.Time         `json:"timestamp"`
+	Line      string            `json:"line"`
+	Stream    map[string]string `json:"stream,omitempty"`
+	Kind      string            `json:"kind"`
+	Context   []LogLine         `json:"context,omitempty"`
 }
 
 type DiagnosisCoverage struct {
-	WindowStart time.Time `json:"windowStart"`
-	WindowEnd time.Time `json:"windowEnd"`
-	Filtered bool `json:"filtered"`
-	Partial bool `json:"partial"`
-	Truncated bool `json:"truncated"`
-	LogUnavailable bool `json:"logUnavailable"`
-	ContextUnavailable bool `json:"contextUnavailable"`
-	CompletionUnavailable bool `json:"completionUnavailable"`
-	FollowupsUnavailable bool `json:"followupsUnavailable"`
-	CandidateLines int `json:"candidateLines"`
-	CandidateLimit int `json:"candidateLimit"`
+	WindowStart           time.Time `json:"windowStart"`
+	WindowEnd             time.Time `json:"windowEnd"`
+	Filtered              bool      `json:"filtered"`
+	Partial               bool      `json:"partial"`
+	Truncated             bool      `json:"truncated"`
+	LogUnavailable        bool      `json:"logUnavailable"`
+	ContextUnavailable    bool      `json:"contextUnavailable"`
+	CompletionUnavailable bool      `json:"completionUnavailable"`
+	FollowupsUnavailable  bool      `json:"followupsUnavailable"`
+	CandidateLines        int       `json:"candidateLines"`
+	CandidateLimit        int       `json:"candidateLimit"`
 }
 
 // AnalyzeDiagnosis never changes its input lines/maps. Sorting and redaction
@@ -71,12 +71,19 @@ func AnalyzeDiagnosis(base JobDiagnosis, candidates, completions, followups []Lo
 	result.StatusMessage, messageTruncated = RedactDiagnosisText(base.StatusMessage)
 	result.Coverage.Truncated = result.Coverage.Truncated || reasonTruncated || messageTruncated
 	ordered := orderedDiagnosisLines(candidates)
-	if len(ordered) >= DiagnosisCandidateLimit { result.Coverage.Truncated = true }
-	if len(ordered) > DiagnosisCandidateLimit { ordered = ordered[:DiagnosisCandidateLimit] }
+	if len(ordered) >= DiagnosisCandidateLimit {
+		result.Coverage.Truncated = true
+	}
+	if len(ordered) > DiagnosisCandidateLimit {
+		ordered = ordered[:DiagnosisCandidateLimit]
+	}
 	result.Coverage.CandidateLines = len(ordered)
 	for _, line := range ordered {
 		kind := diagnosisKind(line.Line)
-		if kind == "completion" || kind == "checkpoint" { completions = append(append([]LogLine(nil), completions...), line); continue }
+		if kind == "completion" || kind == "checkpoint" {
+			completions = append(append([]LogLine(nil), completions...), line)
+			continue
+		}
 		if kind != "" && result.FirstFailure == nil {
 			evidence, truncated := diagnosisEvidence(line, kind)
 			result.Coverage.Truncated = result.Coverage.Truncated || truncated
@@ -98,27 +105,54 @@ func addDiagnosisEvidence(result JobDiagnosis, completions, followups []LogLine)
 	completionCount, checkpointCount := 0, 0
 	for _, line := range orderedDiagnosisLines(completions) {
 		kind := diagnosisKind(line.Line)
-		if kind != "completion" && kind != "checkpoint" { continue }
-		if kind == "completion" { completionCount++ } else { checkpointCount++ }
-		if len(result.CompletionEvidence) >= DiagnosisCompletionLimit { result.Coverage.Truncated = true; break }
+		if kind != "completion" && kind != "checkpoint" {
+			continue
+		}
+		if kind == "completion" {
+			completionCount++
+		} else {
+			checkpointCount++
+		}
+		if len(result.CompletionEvidence) >= DiagnosisCompletionLimit {
+			result.Coverage.Truncated = true
+			break
+		}
 		evidence, truncated := diagnosisEvidence(line, kind)
 		result.Coverage.Truncated = result.Coverage.Truncated || truncated
 		key := evidence.Timestamp.String() + evidence.Line
-		if !seen[key] { result.CompletionEvidence = append(result.CompletionEvidence, evidence); seen[key] = true }
+		if !seen[key] {
+			result.CompletionEvidence = append(result.CompletionEvidence, evidence)
+			seen[key] = true
+		}
 	}
-	if len(completions) >= DiagnosisCompletionLimit { result.Coverage.Truncated = true }
-	if completionCount >= diagnosisExplicitCompletionLimit || checkpointCount >= diagnosisCheckpointEvidenceLimit { result.Coverage.Truncated = true }
-	if result.FirstFailure == nil { return result }
+	if len(completions) >= DiagnosisCompletionLimit {
+		result.Coverage.Truncated = true
+	}
+	if completionCount >= diagnosisExplicitCompletionLimit || checkpointCount >= diagnosisCheckpointEvidenceLimit {
+		result.Coverage.Truncated = true
+	}
+	if result.FirstFailure == nil {
+		return result
+	}
 	for _, line := range orderedDiagnosisLines(followups) {
 		kind := diagnosisKind(line.Line)
-		if kind != "communication_error" && kind != "fatal_signal" { continue }
-		if !line.Timestamp.After(result.FirstFailure.Timestamp) { continue }
+		if kind != "communication_error" && kind != "fatal_signal" {
+			continue
+		}
+		if !line.Timestamp.After(result.FirstFailure.Timestamp) {
+			continue
+		}
 		evidence, truncated := diagnosisEvidence(line, kind)
 		result.Coverage.Truncated = result.Coverage.Truncated || truncated
 		key := evidence.Timestamp.String() + evidence.Line
-		if seen[key] { continue }
+		if seen[key] {
+			continue
+		}
 		seen[key] = true
-		if len(result.Followups) >= DiagnosisFollowupLimit { result.Coverage.Truncated = true; break }
+		if len(result.Followups) >= DiagnosisFollowupLimit {
+			result.Coverage.Truncated = true
+			break
+		}
 		result.Followups = append(result.Followups, evidence)
 	}
 	return result
@@ -132,8 +166,12 @@ func classifyDiagnosis(result JobDiagnosis) JobDiagnosis {
 		result.Summary = "日志证据暂不可用，请以平台任务状态为准，稍后重试诊断。"
 		return result
 	}
-	if len(result.CompletionEvidence) > 0 { result.Notes = append(result.Notes, "完成或 Checkpoint 文字仅为未经验证的日志证据，不能证明产物可用或进程成功退出。") }
-	if result.FirstFailure == nil { return result }
+	if len(result.CompletionEvidence) > 0 {
+		result.Notes = append(result.Notes, "完成或 Checkpoint 文字仅为未经验证的日志证据，不能证明产物可用或进程成功退出。")
+	}
+	if result.FirstFailure == nil {
+		return result
+	}
 	result.Summary = "以下为保留日志中最早识别到的错误线索，尚未证明它是根因。"
 	switch result.FirstFailure.Kind {
 	case "numerical_error", "python_exception", "out_of_memory":
@@ -153,7 +191,9 @@ func classifyDiagnosis(result JobDiagnosis) JobDiagnosis {
 			}
 		}
 	}
-	if len(result.Followups) > 0 { result.Notes = append(result.Notes, "后续通信或致命错误仅为后续线索，时间先后不证明因果关系。") }
+	if len(result.Followups) > 0 {
+		result.Notes = append(result.Notes, "后续通信或致命错误仅为后续线索，时间先后不证明因果关系。")
+	}
 	return result
 }
 
@@ -165,17 +205,25 @@ func diagnosisEvidence(line LogLine, kind string) (DiagnosisEvidence, bool) {
 // WithDiagnosisContext attaches at most 24 redacted context lines, including
 // the first failure itself even when other workers flood the same timestamp.
 func WithDiagnosisContext(result JobDiagnosis, lines []LogLine) JobDiagnosis {
-	if result.FirstFailure == nil { return result }
+	if result.FirstFailure == nil {
+		return result
+	}
 	first := *result.FirstFailure
 	context := make([]LogLine, 0, DiagnosisContextLimit)
 	seen := map[string]bool{first.Timestamp.String() + first.Line: true}
-	if len(lines) >= DiagnosisContextLimit { result.Coverage.Truncated = true }
+	if len(lines) >= DiagnosisContextLimit {
+		result.Coverage.Truncated = true
+	}
 	for _, line := range orderedDiagnosisLines(lines) {
-		if len(context) >= DiagnosisContextLimit-1 { break }
+		if len(context) >= DiagnosisContextLimit-1 {
+			break
+		}
 		clean, truncated := RedactDiagnosisLogLine(line)
 		result.Coverage.Truncated = result.Coverage.Truncated || truncated
 		key := clean.Timestamp.String() + clean.Line
-		if seen[key] { continue }
+		if seen[key] {
+			continue
+		}
 		seen[key] = true
 		context = append(context, clean)
 	}

@@ -68,14 +68,14 @@ var completionCommands = map[string]string{
 
 var completionEnums = map[string]string{
 	"output": "text json", "engine": "ray-ddp ray-train",
-	"data-mode": "mount cache ray-data-stage ray-data streaming",
+	"data-mode":   "mount cache ray-data-stage ray-data streaming",
 	"accelerator": "rtx4090 a100 a800 h20", "priority": "production normal opportunistic",
 	"dataset-cache-policy": "off auto bounded", "dataset-version": "latest",
 	"execution-mode": "auto single_gpu torchrun ray_train", "cache-mode": "off runtime",
 	"cache-preload": "input", "ray-data-format": "parquet images",
-	"input-space": "my-storage my-files my-runs team-shared public idc-original idc-wellspiking idc-shared idc-spk-hybrid idc-spk-ssd",
+	"input-space":      "my-storage my-files my-runs team-shared public idc-original idc-wellspiking idc-shared idc-spk-hybrid idc-spk-ssd",
 	"checkpoint-space": "my-storage my-files my-runs team-shared public idc-original idc-wellspiking idc-shared idc-spk-hybrid idc-spk-ssd",
-	"state": "SUBMITTED VALIDATING QUEUED ADMITTED PROVISIONING RUNNING RECOVERING SUCCEEDED FAILED CANCELING CANCELED TIMED_OUT UNKNOWN DELETING",
+	"state":            "SUBMITTED VALIDATING QUEUED ADMITTED PROVISIONING RUNNING RECOVERING SUCCEEDED FAILED CANCELING CANCELED TIMED_OUT UNKNOWN DELETING",
 }
 
 // This private protocol contains literal tab-separated values, never shell code.

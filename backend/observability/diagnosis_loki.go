@@ -14,15 +14,21 @@ func (c *LokiClient) QueryJobDiagnosisCandidates(ctx context.Context, jobID stri
 func (c *LokiClient) QueryJobDiagnosisCompletions(ctx context.Context, jobID string, limit int, start, end time.Time) ([]LogLine, error) {
 	limit = boundedDiagnosisLimit(limit, DiagnosisCompletionLimit)
 	completionLimit := limit
-	if completionLimit > diagnosisExplicitCompletionLimit { completionLimit = diagnosisExplicitCompletionLimit }
+	if completionLimit > diagnosisExplicitCompletionLimit {
+		completionLimit = diagnosisExplicitCompletionLimit
+	}
 	// Sharded checkpoint writes can flood the tail after training completes.
 	// Reserve an independent budget for explicit completion text so artifact
 	// chatter cannot erase the evidence preceding a later launcher failure.
 	completions, err := c.queryJobLogs(ctx, jobID, completionLimit, start, end, LogDirectionBackward, diagnosisCompletionFilter, nil, diagnosisLokiResponseBytes)
 	checkpointLimit := limit - completionLimit
-	if err != nil || checkpointLimit == 0 { return completions, err }
+	if err != nil || checkpointLimit == 0 {
+		return completions, err
+	}
 	checkpoints, err := c.queryJobLogs(ctx, jobID, checkpointLimit, start, end, LogDirectionBackward, diagnosisCheckpointFilter, nil, diagnosisLokiResponseBytes)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	return orderedDiagnosisLines(append(append([]LogLine(nil), completions...), checkpoints...)), nil
 }
 
@@ -37,6 +43,8 @@ func (c *LokiClient) QueryJobDiagnosisContext(ctx context.Context, jobID string,
 }
 
 func boundedDiagnosisLimit(limit, maximum int) int {
-	if limit < 1 || limit > maximum { return maximum }
+	if limit < 1 || limit > maximum {
+		return maximum
+	}
 	return limit
 }

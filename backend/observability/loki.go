@@ -75,10 +75,14 @@ func (c *LokiClient) queryJobLogs(ctx context.Context, jobID string, limit int, 
 	query := endpoint.Query()
 	selector := `{platform_job_id="` + jobID + `"`
 	for _, key := range []string{"pod", "container", "stream", "namespace"} {
-		if value := labels[key]; value != "" { selector += "," + key + "=" + strconv.Quote(value) }
+		if value := labels[key]; value != "" {
+			selector += "," + key + "=" + strconv.Quote(value)
+		}
 	}
 	selector += "}"
-	if filter != "" { selector += " |~ " + strconv.Quote(filter) }
+	if filter != "" {
+		selector += " |~ " + strconv.Quote(filter)
+	}
 	query.Set("query", selector)
 	query.Set("limit", strconv.Itoa(limit))
 	query.Set("direction", string(direction))
@@ -104,10 +108,18 @@ func (c *LokiClient) queryJobLogs(ctx context.Context, jobID string, limit int, 
 	var payload lokiResponse
 	if responseLimit > 0 {
 		contents, readErr := io.ReadAll(io.LimitReader(response.Body, responseLimit+1))
-		if readErr != nil { return nil, fmt.Errorf("read Loki response: %w", readErr) }
-		if int64(len(contents)) > responseLimit { return nil, fmt.Errorf("Loki diagnosis response exceeds size limit") }
-		if err := json.Unmarshal(contents, &payload); err != nil { return nil, fmt.Errorf("decode Loki response: %w", err) }
-		if payload.Status != "success" { return nil, fmt.Errorf("Loki query did not succeed") }
+		if readErr != nil {
+			return nil, fmt.Errorf("read Loki response: %w", readErr)
+		}
+		if int64(len(contents)) > responseLimit {
+			return nil, fmt.Errorf("Loki diagnosis response exceeds size limit")
+		}
+		if err := json.Unmarshal(contents, &payload); err != nil {
+			return nil, fmt.Errorf("decode Loki response: %w", err)
+		}
+		if payload.Status != "success" {
+			return nil, fmt.Errorf("Loki query did not succeed")
+		}
 	} else if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 		return nil, fmt.Errorf("decode Loki response: %w", err)
 	}
