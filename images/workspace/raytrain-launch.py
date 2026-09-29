@@ -203,15 +203,20 @@ def supervisor_main() -> int:
             raise OSError(ctypes.get_errno(), "cannot establish process supervision")
     if os.getppid() != config["parentPID"]:
         cancelled = signal.SIGTERM
+    pathlib.Path(config["statusPath"] + ".ready").touch()
     process = None
     returncode = 128 + cancelled if cancelled else 127
     cleaned = True
     try:
         if not cancelled:
             process = subprocess.Popen(config["command"], start_new_session=True, text=True)
+            runtime_event("start", nodeRank=config["nodeRank"], pid=process.pid, role="command")
             while process.poll() is None and not cancelled:
                 time.sleep(0.02)
             returncode = process.poll()
+            if returncode is not None:
+                runtime_event("exit", nodeRank=config["nodeRank"], pid=process.pid,
+                              returncode=returncode, role="command")
     except OSError as error:
         runtime_event("launch_error", nodeRank=config["nodeRank"], errorType=type(error).__name__)
     finally:
@@ -253,7 +258,7 @@ class ProcessTree:
             self.process.stdin.close()
         except BrokenPipeError:
             pass  # poll records the failed supervisor's exit without exposing argv.
-        runtime_event("start", nodeRank=self.node_rank, pid=self.process.pid)
+        runtime_event("start", nodeRank=self.node_rank, pid=self.process.pid, role="supervisor")
         return {"pid": self.process.pid, "nodeRank": self.node_rank, "host": socket.gethostname()}
 
     def poll(self) -> int | None:
@@ -279,6 +284,14 @@ class ProcessTree:
         if self.process is None or self.poll() is not None:
             return self.returncode
         runtime_event("cleanup_start", nodeRank=self.node_rank, reason=reason)
+        # An immediate cancellation can race Python's startup. Wait briefly for
+        # handlers/subreaping before TERM; user code only starts after this marker.
+        ready = pathlib.Path(self.directory.name) / "result.json.ready"
+        deadline = time.monotonic() + 1
+        while not ready.exists() and self.process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        if self.poll() is not None:
+            return self.returncode
         try:
             self.process.send_signal(signal.SIGTERM)
             self.process.wait(timeout=self.term_grace + self.kill_grace + 2)
@@ -289,6 +302,7 @@ class ProcessTree:
             try:
                 self.process.wait(timeout=1)
             except subprocess.TimeoutExpired:
+                self.cleanup_complete = False
                 runtime_event("cleanup", nodeRank=self.node_rank, complete=False)
                 return None
         return self.poll()
@@ -331,7 +345,9 @@ def stop_launchers(ray: Any, launchers: list[Any], reason: str) -> bool:
             break
         for ref in ready:
             try:
-                if ray.get(ref) is None:
+                result = ray.get(ref)
+                if result is None or (isinstance(result, dict) and not result.get("cleanupComplete")):
+                    runtime_event("cleanup", complete=False, reason="worker_incomplete")
                     complete = False
             except Exception as error:
                 runtime_event("cleanup", complete=False, errorType=type(error).__name__)
@@ -347,19 +363,26 @@ def stop_launchers(ray: Any, launchers: list[Any], reason: str) -> bool:
     return complete and not pending
 
 
-def monitor_launchers(ray: Any, launchers: list[Any]) -> int:
-    pending = {launcher.poll.remote(): index for index, launcher in enumerate(launchers)}
+def monitor_launchers(ray: Any, launchers: list[Any], starts: list[Any]) -> tuple[int, list[Any], list[Any]]:
+    pending = {ref: ("start", index) for index, ref in enumerate(starts)}
+    nodes, codes = {}, {}
     while pending:
         ready, _ = ray.wait(list(pending), num_returns=1, timeout=POLL_INTERVAL)
         for ref in ready:
-            index = pending.pop(ref)
-            code = ray.get(ref)
-            if code is None:
+            kind, index = pending.pop(ref)
+            result = ray.get(ref)
+            if kind == "start":
+                nodes = {**nodes, index: result}
+                pending[launchers[index].poll.remote()] = ("poll", index)
+            elif result is None:
                 time.sleep(POLL_INTERVAL)
-                pending[launchers[index].poll.remote()] = index
-            elif code != 0:
-                return int(code)
-    return 0
+                pending[launchers[index].poll.remote()] = ("poll", index)
+            else:
+                codes = {**codes, index: int(result)}
+                if result != 0:
+                    return int(result), [nodes[index] for index in sorted(nodes)], [
+                        codes.get(index) for index in range(len(launchers))]
+    return 0, [nodes[index] for index in sorted(nodes)], [codes.get(index) for index in range(len(launchers))]
 
 
 def run_launchers(parsed: argparse.Namespace, distributed: bool) -> int:
@@ -380,10 +403,11 @@ def run_launchers(parsed: argparse.Namespace, distributed: bool) -> int:
         def poll(self) -> int | None:
             return self.tree.poll()
 
-        def stop(self, reason: str) -> int | None:
-            return self.tree.stop(reason)
+        def stop(self, reason: str) -> dict[str, Any]:
+            return {"returncode": self.tree.stop(reason), "cleanupComplete": self.tree.cleanup_complete}
 
     group, launchers, nodes = None, [], []
+    master, master_port, return_codes = None, None, [None] * parsed.workers
     returncode = 1
     with cancellation_signals():
         try:
@@ -408,10 +432,7 @@ def run_launchers(parsed: argparse.Namespace, distributed: bool) -> int:
                         f"--master_port={master_port}",
                     ], parsed.command)
                 starts.append(launcher.start.remote(command))
-            while starts:
-                ready, starts = ray.wait(starts, num_returns=1)
-                nodes.extend(ray.get(ref) for ref in ready)
-            returncode = monitor_launchers(ray, launchers)
+            returncode, nodes, return_codes = monitor_launchers(ray, launchers, starts)
         except DriverCancelled as error:
             returncode = error.returncode
         except KeyboardInterrupt:
@@ -429,12 +450,17 @@ def run_launchers(parsed: argparse.Namespace, distributed: bool) -> int:
                 try:
                     remove_placement_group(group)
                 except Exception as error:
+                    complete = False
                     runtime_event("cleanup", complete=False, errorType=type(error).__name__)
                     if returncode == 0:
                         returncode = 1
             try:
                 plan = {key: value for key, value in execution_plan(parsed).items() if key != "command"}
-                write_topology({**plan, "nodes": nodes, "returncode": returncode})
+                topology = {**plan, "nodes": nodes, "returncode": returncode,
+                            "returnCodes": return_codes, "cleanupComplete": complete}
+                if distributed and master is not None:
+                    topology = {**topology, "master": {"address": master["ip"], "port": master_port}}
+                write_topology(topology)
             except Exception as error:
                 runtime_event("topology_error", errorType=type(error).__name__)
     return returncode
