@@ -77,9 +77,8 @@ func (h *Handler) queryDiagnosisSupplement(ctx context.Context, diagnosis observ
 		var err error
 		completions, err = provider.QueryJobDiagnosisCompletions(ctx, diagnosis.JobID, observability.DiagnosisCompletionLimit, start, completionEnd)
 		diagnosis.Coverage.CompletionUnavailable = err != nil
-		if err != nil {
-			completions = nil
-		}
+		// A later checkpoint query may fail after explicit completion evidence
+		// was read successfully. Retain those rows and disclose partial coverage.
 	}
 	if diagnosis.FirstFailure != nil {
 		if provider, ok := h.logs.(diagnosisFollowupProvider); ok {

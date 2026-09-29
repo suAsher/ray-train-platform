@@ -27,7 +27,9 @@ func (c *LokiClient) QueryJobDiagnosisCompletions(ctx context.Context, jobID str
 	}
 	checkpoints, err := c.queryJobLogs(ctx, jobID, checkpointLimit, start, end, LogDirectionBackward, diagnosisCheckpointFilter, nil, diagnosisLokiResponseBytes)
 	if err != nil {
-		return nil, err
+		// Keep evidence from the successful query while reporting that the
+		// remaining completion/checkpoint sample is unavailable.
+		return completions, err
 	}
 	return orderedDiagnosisLines(append(append([]LogLine(nil), completions...), checkpoints...)), nil
 }
