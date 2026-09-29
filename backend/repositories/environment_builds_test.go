@@ -42,11 +42,11 @@ func (v *environmentVaultFake) Delete(_ context.Context, key string) error {
 
 type environmentRegistryFake struct{ denied bool }
 
-func (*environmentRegistryFake) Authenticate(context.Context, eb.Credentials) error { return nil }
-func (*environmentRegistryFake) Projects(context.Context, eb.Credentials, int) ([]eb.Project, error) {
+func (*environmentRegistryFake) Authenticate(context.Context, string, eb.Credentials) error { return nil }
+func (*environmentRegistryFake) Projects(context.Context, string, eb.Credentials, int) ([]eb.Project, error) {
 	return []eb.Project{{Name: "public", CanPush: true}}, nil
 }
-func (r *environmentRegistryFake) CheckPush(context.Context, eb.Credentials, string) error {
+func (r *environmentRegistryFake) CheckPush(context.Context, string, eb.Credentials, string) error {
 	if r.denied {
 		return eb.ErrAuthorization
 	}
