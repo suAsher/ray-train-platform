@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -69,6 +71,7 @@ type diagnosisTestPayload struct {
 		Truncated          bool `json:"truncated"`
 		LogUnavailable     bool `json:"logUnavailable"`
 		ContextUnavailable bool `json:"contextUnavailable"`
+		CompletionUnavailable bool `json:"completionUnavailable"`
 	} `json:"coverage"`
 }
 
@@ -274,5 +277,43 @@ func TestJobDiagnosisKeepsDayLaterFollowupOutsideFirstCandidateBudget(t *testing
 	data, _ := readDiagnosisTestResponse(t, &fakeJobRepository{jobs: []domain.TrainingJob{job}}, provider)
 	if data.FirstFailure == nil || len(data.Followups) != 1 || !data.Coverage.Truncated || !provider.completionEnd.Equal(data.FirstFailure.Timestamp) || !provider.followupStart.Equal(data.FirstFailure.Timestamp) {
 		t.Fatalf("followup lost/budget wrong: %+v", data)
+	}
+}
+
+type diagnosisPartialRoundTrip func(*http.Request) (*http.Response, error)
+
+func (f diagnosisPartialRoundTrip) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func TestJobDiagnosisKeepsPartialCompletionWhenLokiCheckpointQueryFails(t *testing.T) {
+	job := diagnosisTestJob()
+	job.ObservedState = domain.StateFailed
+	checkpointCalls := 0
+	provider := &observability.LokiClient{BaseURL: "http://loki", HTTPClient: &http.Client{Transport: diagnosisPartialRoundTrip(func(request *http.Request) (*http.Response, error) {
+		query := request.URL.Query().Get("query")
+		if strings.Contains(query, "saving checkpoint") {
+			checkpointCalls++
+			return &http.Response{StatusCode: http.StatusInternalServerError, Body: io.NopCloser(strings.NewReader("private checkpoint failure")), Header: make(http.Header), Request: request}, nil
+		}
+		values := make([][]string, 0)
+		if strings.Contains(query, "[A-Za-z]+Error:") {
+			values = append(values, []string{strconv.FormatInt(job.CreatedAt.Add(4*time.Second).UnixNano(), 10), "Fatal Python error: Segmentation fault"})
+		} else if strings.Contains(query, "training (completed|finished)") {
+			values = append(values, []string{strconv.FormatInt(job.CreatedAt.UnixNano(), 10), "全流程完成"})
+		}
+		body, err := json.Marshal(map[string]any{"status": "success", "data": map[string]any{"result": []any{map[string]any{"stream": map[string]string{"pod": "worker-1"}, "values": values}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(body))), Header: make(http.Header), Request: request}, nil
+	})}}
+	repository := &fakeJobRepository{jobs: []domain.TrainingJob{job}}
+	data, response := readDiagnosisTestResponse(t, repository, provider)
+	if checkpointCalls != 1 || data.Classification != "possible_runtime_teardown" || data.ObservedState != "FAILED" || !data.Coverage.CompletionUnavailable || !data.Coverage.Partial || len(data.CompletionEvidence) != 1 {
+		t.Fatalf("partial completion evidence was discarded or presented as complete: %+v", data)
+	}
+	if !reflect.DeepEqual(repository.jobs[0], job) || strings.Contains(response.Body.String(), "private checkpoint") {
+		t.Fatal("diagnosis changed job state or exposed provider error details")
 	}
 }

@@ -142,6 +142,29 @@ func TestDiagnosisLokiCompletionSurvivesCheckpointShardNoise(t *testing.T) {
 	}
 }
 
+func TestDiagnosisLokiPreservesCompletionWhenCheckpointQueryFails(t *testing.T) {
+	start := time.Date(2026, 9, 29, 12, 20, 52, 0, time.UTC)
+	calls := 0
+	client := &LokiClient{BaseURL: "http://loki", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			if request.URL.Query().Get("limit") != "4" || strings.Contains(request.URL.Query().Get("query"), "saving checkpoint") {
+				t.Fatal("first query must reserve the explicit completion budget")
+			}
+			body := `{"status":"success","data":{"result":[{"stream":{"pod":"worker-1"},"values":[["` + strconv.FormatInt(start.UnixNano(), 10) + `","Training completed"]]}]}}`
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: request}, nil
+		}
+		if calls != 2 || request.URL.Query().Get("limit") != "16" || !strings.Contains(request.URL.Query().Get("query"), "saving checkpoint") {
+			t.Fatal("second query must use the remaining checkpoint budget")
+		}
+		return &http.Response{StatusCode: http.StatusInternalServerError, Body: io.NopCloser(strings.NewReader("private checkpoint service failure")), Header: make(http.Header), Request: request}, nil
+	})}}
+	evidence, err := client.QueryJobDiagnosisCompletions(context.Background(), "job-1", 20, start, start.Add(4*time.Second))
+	if err == nil || calls != 2 || len(evidence) != 1 || evidence[0].Line != "Training completed" {
+		t.Fatalf("successful completion evidence lost after checkpoint error: evidence=%+v calls=%d error=%v", evidence, calls, err)
+	}
+}
+
 func TestDiagnosisLokiContextQuotesExactStreamAndRespectsDeadline(t *testing.T) {
 	start := time.Date(2026, 9, 29, 1, 0, 0, 0, time.UTC)
 	pod := `worker"} |~ "injected`
