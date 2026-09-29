@@ -9,7 +9,8 @@ import (
 // recognized error text becomes evidence. Routine checkpoints have a separate
 // budget so they cannot hide an early failure from the forward query.
 const diagnosisFailureFilter = `(?i)([A-Za-z]+Error:|[A-Za-z]+Exception:|loss[ :=]+[+-]?(nan|inf)|contains (nan|inf)|not be NaN|non[- ]finite|out of memory|NCCL.*(error|fail|timeout|timed out|watchdog|closed|abort)|(?:watchdog|ALLREDUCE).*(timeout|timed out)|connection (closed|reset) by peer|fatal python error|segmentation fault|SIGSEGV|SIGABRT|core dumped)`
-const diagnosisCompletionFilter = `(?i)(training (completed|finished)|training loop completed|all epochs completed|saving checkpoint|checkpoint saved|saved checkpoint|训练进程正常结束|训练完成，找到目标 checkpoint|Fusion训练完成|全流程完成)`
+const diagnosisCompletionFilter = `(?i)(training (completed|finished)|training loop completed|all epochs completed|训练进程正常结束|训练完成，找到目标 checkpoint|Fusion训练完成|全流程完成)`
+const diagnosisCheckpointFilter = `(?i)(saving checkpoint|checkpoint saved|saved checkpoint)`
 const diagnosisFollowupFilter = `(?i)(NCCL.*(error|fail|timeout|timed out|watchdog|closed|abort)|(?:watchdog|ALLREDUCE).*(timeout|timed out)|connection (closed|reset) by peer|fatal python error|segmentation fault|SIGSEGV|SIGABRT|core dumped)`
 
 var (

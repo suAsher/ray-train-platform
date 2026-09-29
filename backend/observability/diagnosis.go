@@ -10,6 +10,8 @@ const (
 	DiagnosisCompletionLimit = 20
 	DiagnosisFollowupLimit = 12
 	DiagnosisContextLimit = 24
+	diagnosisExplicitCompletionLimit = 4
+	diagnosisCheckpointEvidenceLimit = DiagnosisCompletionLimit - diagnosisExplicitCompletionLimit
 )
 
 // JobDiagnosis is shared by Portal and CLI. It describes a bounded sample of
@@ -93,9 +95,11 @@ func orderedDiagnosisLines(lines []LogLine) []LogLine {
 
 func addDiagnosisEvidence(result JobDiagnosis, completions, followups []LogLine) JobDiagnosis {
 	seen := make(map[string]bool)
+	completionCount, checkpointCount := 0, 0
 	for _, line := range orderedDiagnosisLines(completions) {
 		kind := diagnosisKind(line.Line)
 		if kind != "completion" && kind != "checkpoint" { continue }
+		if kind == "completion" { completionCount++ } else { checkpointCount++ }
 		if len(result.CompletionEvidence) >= DiagnosisCompletionLimit { result.Coverage.Truncated = true; break }
 		evidence, truncated := diagnosisEvidence(line, kind)
 		result.Coverage.Truncated = result.Coverage.Truncated || truncated
@@ -103,6 +107,7 @@ func addDiagnosisEvidence(result JobDiagnosis, completions, followups []LogLine)
 		if !seen[key] { result.CompletionEvidence = append(result.CompletionEvidence, evidence); seen[key] = true }
 	}
 	if len(completions) >= DiagnosisCompletionLimit { result.Coverage.Truncated = true }
+	if completionCount >= diagnosisExplicitCompletionLimit || checkpointCount >= diagnosisCheckpointEvidenceLimit { result.Coverage.Truncated = true }
 	if result.FirstFailure == nil { return result }
 	for _, line := range orderedDiagnosisLines(followups) {
 		kind := diagnosisKind(line.Line)

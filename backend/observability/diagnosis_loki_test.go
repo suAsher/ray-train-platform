@@ -84,6 +84,7 @@ func TestDiagnosisLokiCompletionSurvivesCheckpointShardNoise(t *testing.T) {
 				if totalBudget > budget || len(evidence) > budget { t.Fatalf("budget exceeded: queries=%d evidence=%d want<=%d", totalBudget, len(evidence), budget) }
 				diagnosis := AnalyzeDiagnosis(JobDiagnosis{ObservedState: "FAILED"}, []LogLine{{Timestamp: end, Line: "Fatal Python error: Segmentation fault"}}, evidence, nil)
 				if diagnosis.Classification != "possible_runtime_teardown" || diagnosis.ObservedState != "FAILED" { t.Fatalf("checkpoint noise hid completion: classification=%s evidence=%+v", diagnosis.Classification, evidence) }
+				if budget == 20 && !diagnosis.Coverage.Truncated { t.Fatal("exhausted checkpoint sub-budget must remain explicit") }
 			})
 		}
 	}
