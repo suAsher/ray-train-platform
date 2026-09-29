@@ -38,12 +38,17 @@ func RunWithInput(ctx context.Context, arguments []string, stdin io.Reader, stdo
 	if stdin == nil {
 		stdin = os.Stdin
 	}
+	if arguments[0] == "__complete" {
+		return runCompletionQuery(ctx, arguments[1:], stdout, getenv)
+	}
 	if topic, requested := requestedHelpTopic(arguments); requested {
 		return runCommandHelp(topic, stdout)
 	}
 	switch arguments[0] {
 	case "version":
 		return runVersion(arguments[1:], stdout)
+	case "completion":
+		return runCompletion(arguments[1:], stdout)
 	case "upgrade":
 		return runUpgrade(ctx, arguments[1:], stdout, stderr)
 	case "help", "-h", "--help":
@@ -70,6 +75,8 @@ func RunWithInput(ctx context.Context, arguments []string, stdin io.Reader, stdo
 		return runDataset(ctx, arguments[1:], stdout, stderr, getenv)
 	case "status":
 		return runStatus(ctx, arguments[1:], stdout, stderr, getenv)
+	case "diagnose":
+		return runDiagnose(ctx, arguments[1:], stdout, stderr, getenv)
 	case "logs":
 		return runLogs(ctx, arguments[1:], stdout, stderr, getenv)
 	case "connect":
@@ -168,6 +175,7 @@ const helpText = `spk-rayjob — 分布式训练任务命令行客户端
 任务观察与操作：
   spk-rayjob jobs --state RUNNING
   spk-rayjob status <JOB ID>
+  spk-rayjob diagnose <JOB ID>                       查询有界日志诊断线索
   spk-rayjob logs -f <JOB ID>                         实时跟随日志
   spk-rayjob logs --limit 0 <JOB ID> > job.log        日志完整导出
   spk-rayjob connect <JOB ID>                         连接运行中的第 1 个 Worker
@@ -198,7 +206,9 @@ const helpText = `spk-rayjob — 分布式训练任务命令行客户端
 
 常用命令：
   login, login-check, upgrade, init, submit, jobs, images, datasets,
-  dataset versions, status, logs, connect, cancel, version
+  dataset versions, status, diagnose, logs, connect, cancel, version, completion
+
+Shell 补全：spk-rayjob completion --help（Bash / Zsh；仅输出脚本，不修改配置）。
 
 运行 spk-rayjob submit --help 查看全部提交参数和组合示例；其他命令也支持 --help。
 `
@@ -305,6 +315,7 @@ const connectHelpText = `spk-rayjob connect — 进入自己的运行中训练 W
 `
 
 var simpleCommandHelp = map[string]string{
+	"completion":       completionHelpText,
 	"upgrade":          "用法：spk-rayjob upgrade [--server URL] [--config FILE] [--ca-file FILE]\n校验 SHA256 后升级当前客户端。--server 可显式指定公共 CLI 地址，不使用网页 Portal 域名。\n",
 	"init":             "用法：spk-rayjob init [--dir DIR] [--name NAME] [--image IMAGE] [--entrypoint COMMAND] [--engine ray-ddp|ray-train] [--workers N] [--gpus-per-worker N]\n在代码目录创建 .spk-rayjob.yaml，不会提交任务。\n",
 	"login-check":      "用法：spk-rayjob login-check\n验证当前配置中的会话或 PAT。\n",
@@ -313,6 +324,7 @@ var simpleCommandHelp = map[string]string{
 	"datasets":         "用法：spk-rayjob datasets [--output text|json]\n列出当前用户可用的数据集。\n",
 	"dataset versions": "用法：spk-rayjob dataset versions [--output text|json] <数据集 ID 或 slug>\n列出可训练的不可变数据版本。\n",
 	"status":           "用法：spk-rayjob status [--output text|json] <JOB ID>\n查看任务状态、规模、镜像与结果目录；flags 必须放在 JOB ID 前。\n",
+	"diagnose":         "用法：spk-rayjob diagnose [--server URL] [--config FILE] [--ca-file FILE] [--output text|json] <JOB ID>\n查询与 Portal 相同的有界日志诊断；最早识别的错误不等于已证明根因，不改变任务状态。flags 必须放在 JOB ID 前。\n",
 	"cancel":           "用法：spk-rayjob cancel [--output text|json] <JOB ID>\n请求停止自己的任务；停止是异步操作。\n",
 	"version":          "用法：spk-rayjob version\n显示客户端发布版本。\n",
 	"package":          "用法：spk-rayjob package [--dir DIR] [--output FILE]\n仅为高级自动化生成源码包，不提交任务。\n",

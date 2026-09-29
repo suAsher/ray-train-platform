@@ -11,12 +11,16 @@ variables from the platform renderer.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import ctypes
 import json
 import os
 import pathlib
+import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Any
 
@@ -101,92 +105,373 @@ def write_topology(payload: dict[str, Any]) -> None:
     )
 
 
-def run_single_or_torchrun(parsed: argparse.Namespace) -> int:
-    import ray
-
-    command = execution_plan(parsed)["command"]
-
-    @ray.remote(num_gpus=parsed.gpus_per_worker)
-    def run_on_gpu(argv: list[str]) -> dict[str, Any]:
-        completed = subprocess.run(argv, check=False)
-        return {
-            "returncode": completed.returncode,
-            "host": socket.gethostname(),
-            "nodeIP": ray.util.get_node_ip_address(),
-            "visibleDevices": os.environ.get("CUDA_VISIBLE_DEVICES", ""),
-        }
-
-    ray.init(address=os.environ.get("RAY_ADDRESS", "auto"))
-    result = ray.get(run_on_gpu.remote(command))
-    write_topology({**execution_plan(parsed), "nodes": [result]})
-    return int(result["returncode"])
+POLL_INTERVAL = 0.1
+TERM_GRACE = 5.0
+KILL_GRACE = 2.0
 
 
-def run_distributed(parsed: argparse.Namespace) -> int:
+def runtime_event(event: str, **fields: Any) -> None:
+    # Callers supply only lifecycle metadata, never argv, environment, or raw
+    # exception messages (which can contain user command arguments).
+    print("[raytrain-runtime] " + json.dumps({"event": event, **fields}, sort_keys=True), flush=True)
+
+
+def process_identity(pid: int) -> tuple[str, int, int, str] | None:
+    try:
+        fields = pathlib.Path("/proc", str(pid), "stat").read_text().rsplit(")", 1)[1].split()
+        return fields[19], int(fields[1]), int(fields[2]), fields[0]
+    except (FileNotFoundError, ProcessLookupError, PermissionError):
+        return None
+
+
+def descendants(parent: int) -> dict[int, tuple[str, int, int, str]]:
+    snapshot = {}
+    for path in pathlib.Path("/proc").iterdir():
+        if path.name.isdigit():
+            current = process_identity(int(path.name))
+            if current is not None:
+                snapshot[int(path.name)] = current
+    owned = {}
+    frontier = {parent}
+    while frontier:
+        children = {pid: identity for pid, identity in snapshot.items()
+                    if identity[1] in frontier and pid not in owned}
+        owned = {**owned, **children}
+        frontier = set(children)
+    return owned
+
+
+def signal_owned(owned: dict[int, tuple[str, int, int, str]], signum: int) -> None:
+    for pid, identity in owned.items():
+        current = process_identity(pid)
+        if current is None or current[0] != identity[0] or current[3] == "Z":
+            continue
+        try:
+            # A descendant's independent session (e.g. torchrun elastic) is
+            # still owned. Verify each PID's birth before signalling it; never
+            # signal the Ray worker's process group or all processes in a Pod.
+            os.kill(pid, signum)
+        except ProcessLookupError:
+            pass
+
+
+def reap_adopted(owned: dict[int, tuple[str, int, int, str]], root_pid: int) -> None:
+    for pid in owned:
+        if pid != root_pid:
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except (ChildProcessError, ProcessLookupError):
+                pass
+
+
+def clean_descendants(process: subprocess.Popen[str], term_grace: float, kill_grace: float) -> bool:
+    # Only the dedicated supervisor enables subreaping. Orphaned children,
+    # including new sessions, reparent here rather than to the shared Ray actor.
+    for signum, grace in ((signal.SIGTERM, term_grace), (signal.SIGKILL, kill_grace)):
+        deadline = time.monotonic() + grace
+        while True:
+            process.poll()  # Preserve/reap the root's real return code first.
+            owned = descendants(os.getpid())
+            signal_owned(owned, signum)
+            reap_adopted(owned, process.pid)
+            if not any(identity[3] != "Z" for identity in owned.values()):
+                return True
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.02)
+    process.poll()
+    owned = descendants(os.getpid())
+    reap_adopted(owned, process.pid)
+    return not any(identity[3] != "Z" for identity in owned.values())
+
+
+def supervisor_main() -> int:
+    config = json.load(sys.stdin)
+    cancelled = 0
+
+    def cancel(signum: int, _frame: Any) -> None:
+        nonlocal cancelled
+        cancelled = cancelled or signum
+
+    signal.signal(signal.SIGTERM, cancel)
+    signal.signal(signal.SIGINT, cancel)
+    libc = ctypes.CDLL(None, use_errno=True)
+    # PR_SET_CHILD_SUBREAPER and PR_SET_PDEATHSIG are Linux-only. Fail closed
+    # before starting user code when supervision cannot be established.
+    for option, value in ((36, 1), (1, signal.SIGTERM)):
+        if libc.prctl(option, value, 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), "cannot establish process supervision")
+    if os.getppid() != config["parentPID"]:
+        cancelled = signal.SIGTERM
+    pathlib.Path(config["statusPath"] + ".ready").touch()
+    process = None
+    returncode = 128 + cancelled if cancelled else 127
+    cleaned = True
+    try:
+        if not cancelled:
+            process = subprocess.Popen(config["command"], start_new_session=True, text=True)
+            runtime_event("start", nodeRank=config["nodeRank"], pid=process.pid, role="command")
+            while process.poll() is None and not cancelled:
+                time.sleep(0.02)
+            returncode = process.poll()
+            if returncode is not None:
+                runtime_event("exit", nodeRank=config["nodeRank"], pid=process.pid,
+                              returncode=returncode, role="command")
+    except OSError as error:
+        runtime_event("launch_error", nodeRank=config["nodeRank"], errorType=type(error).__name__)
+    finally:
+        if process is not None:
+            cleaned = clean_descendants(process, config["termGrace"], config["killGrace"])
+            if returncode is None:
+                returncode = process.poll()
+        if returncode is None or (returncode == 0 and not cleaned):
+            returncode = 1
+        destination = pathlib.Path(config["statusPath"])
+        destination.write_text(json.dumps({"returncode": returncode, "cleanupComplete": cleaned}))
+    return 0
+
+
+class ProcessTree:
+    """One owned Linux process tree, isolated from the shared Ray worker."""
+
+    def __init__(self, node_rank: int, term_grace: float = TERM_GRACE,
+                 kill_grace: float = KILL_GRACE) -> None:
+        self.node_rank, self.term_grace, self.kill_grace = node_rank, term_grace, kill_grace
+        self.process: subprocess.Popen[str] | None = None
+        self.directory: tempfile.TemporaryDirectory[str] | None = None
+        self.returncode: int | None = None
+        self.cleanup_complete = True
+
+    def start(self, argv: list[str]) -> dict[str, Any]:
+        if self.process is not None:
+            raise RuntimeError("process already started")
+        self.directory = tempfile.TemporaryDirectory(prefix="raytrain-supervisor-")
+        self.process = subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), "--raytrain-supervisor"],
+            stdin=subprocess.PIPE, start_new_session=True, text=True,
+        )
+        config = {"command": argv, "parentPID": os.getpid(), "nodeRank": self.node_rank,
+                  "termGrace": self.term_grace, "killGrace": self.kill_grace,
+                  "statusPath": str(pathlib.Path(self.directory.name) / "result.json")}
+        try:
+            self.process.stdin.write(json.dumps(config))
+            self.process.stdin.close()
+        except BrokenPipeError:
+            pass  # poll records the failed supervisor's exit without exposing argv.
+        runtime_event("start", nodeRank=self.node_rank, pid=self.process.pid, role="supervisor")
+        return {"pid": self.process.pid, "nodeRank": self.node_rank, "host": socket.gethostname()}
+
+    def poll(self) -> int | None:
+        if self.returncode is not None or self.process is None:
+            return self.returncode
+        status = self.process.poll()
+        if status is None:
+            return None
+        self.returncode = status if status != 0 else 1
+        self.cleanup_complete = False
+        try:
+            result = json.loads((pathlib.Path(self.directory.name) / "result.json").read_text())
+            self.returncode = int(result["returncode"])
+            self.cleanup_complete = result["cleanupComplete"] is True
+        except (OSError, ValueError, KeyError, TypeError):
+            pass  # A lost supervisor is a failed, incomplete cleanup, never success.
+        runtime_event("exit", nodeRank=self.node_rank, pid=self.process.pid, returncode=self.returncode)
+        runtime_event("cleanup", nodeRank=self.node_rank, complete=self.cleanup_complete)
+        self.directory.cleanup()
+        return self.returncode
+
+    def stop(self, reason: str) -> int | None:
+        if self.process is None or self.poll() is not None:
+            return self.returncode
+        runtime_event("cleanup_start", nodeRank=self.node_rank, reason=reason)
+        # An immediate cancellation can race Python's startup. Wait briefly for
+        # handlers/subreaping before TERM; user code only starts after this marker.
+        ready = pathlib.Path(self.directory.name) / "result.json.ready"
+        deadline = time.monotonic() + 1
+        while not ready.exists() and self.process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        if self.poll() is not None:
+            return self.returncode
+        try:
+            self.process.send_signal(signal.SIGTERM)
+            self.process.wait(timeout=self.term_grace + self.kill_grace + 2)
+        except subprocess.TimeoutExpired:
+            # This only kills our isolated supervisor. A supervisor stuck in
+            # kernel I/O or killed with SIGKILL cannot guarantee tree cleanup.
+            self.process.kill()
+            try:
+                self.process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                self.cleanup_complete = False
+                runtime_event("cleanup", nodeRank=self.node_rank, complete=False)
+                return None
+        return self.poll()
+
+
+class DriverCancelled(BaseException):
+    def __init__(self, signum: int) -> None:
+        self.returncode = 128 + signum
+
+
+@contextlib.contextmanager
+def cancellation_signals():
+    def cancel(signum: int, _frame: Any) -> None:
+        raise DriverCancelled(signum)
+
+    previous = {signum: signal.signal(signum, cancel) for signum in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        yield
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+
+def stop_launchers(ray: Any, launchers: list[Any], reason: str) -> bool:
+    pending = []
+    complete = True
+    for launcher in launchers:
+        try:
+            pending.append(launcher.stop.remote(reason))
+        except Exception as error:
+            runtime_event("cleanup", complete=False, errorType=type(error).__name__)
+            complete = False
+    deadline = time.monotonic() + TERM_GRACE + KILL_GRACE + 5
+    while pending and time.monotonic() < deadline:
+        try:
+            ready, pending = ray.wait(pending, num_returns=1, timeout=max(0, deadline - time.monotonic()))
+        except Exception as error:
+            runtime_event("cleanup", complete=False, errorType=type(error).__name__)
+            complete = False
+            break
+        for ref in ready:
+            try:
+                result = ray.get(ref)
+                if result is None or (isinstance(result, dict) and not result.get("cleanupComplete")):
+                    runtime_event("cleanup", complete=False, reason="worker_incomplete")
+                    complete = False
+            except Exception as error:
+                runtime_event("cleanup", complete=False, errorType=type(error).__name__)
+                complete = False
+    if pending:
+        runtime_event("cleanup", complete=False, reason="actor_timeout")
+    for launcher in launchers:
+        try:
+            ray.kill(launcher, no_restart=True)
+        except Exception as error:
+            runtime_event("cleanup", complete=False, errorType=type(error).__name__)
+            complete = False
+    return complete and not pending
+
+
+def monitor_launchers(ray: Any, launchers: list[Any], starts: list[Any]) -> tuple[int, list[Any], list[Any]]:
+    pending = {ref: ("start", index) for index, ref in enumerate(starts)}
+    nodes, codes = {}, {}
+    while pending:
+        ready, _ = ray.wait(list(pending), num_returns=1, timeout=POLL_INTERVAL)
+        for ref in ready:
+            kind, index = pending.pop(ref)
+            result = ray.get(ref)
+            if kind == "start":
+                nodes = {**nodes, index: result}
+                pending[launchers[index].poll.remote()] = ("poll", index)
+            elif result is None:
+                time.sleep(POLL_INTERVAL)
+                pending[launchers[index].poll.remote()] = ("poll", index)
+            else:
+                codes = {**codes, index: int(result)}
+                if result != 0:
+                    return int(result), [nodes[index] for index in sorted(nodes)], [
+                        codes.get(index) for index in range(len(launchers))]
+    return 0, [nodes[index] for index in sorted(nodes)], [codes.get(index) for index in range(len(launchers))]
+
+
+def run_launchers(parsed: argparse.Namespace, distributed: bool) -> int:
     import ray
     from ray.util.placement_group import placement_group, remove_placement_group
 
-    @ray.remote
+    @ray.remote(num_cpus=1)
     class NodeLauncher:
-        def __init__(self) -> None:
-            self.process: subprocess.Popen[str] | None = None
-            self.ip = ray.util.get_node_ip_address()
+        def __init__(self, node_rank: int) -> None:
+            self.tree = ProcessTree(node_rank)
 
         def endpoint(self) -> dict[str, str]:
-            return {"host": socket.gethostname(), "ip": self.ip}
+            return {"host": socket.gethostname(), "ip": ray.util.get_node_ip_address()}
 
-        def start(self, argv: list[str], node_rank: int, master_addr: str, master_port: int) -> dict[str, Any]:
-            env = dict(os.environ)
-            torchrun = torchrun_command(
-                [
-                    f"--nnodes={parsed.workers}",
-                    f"--nproc_per_node={parsed.gpus_per_worker}",
-                    f"--node_rank={node_rank}",
-                    f"--master_addr={master_addr}",
-                    f"--master_port={master_port}",
-                ],
-                argv,
-            )
-            self.process = subprocess.Popen(torchrun, env=env, text=True)
-            return {"host": socket.gethostname(), "ip": self.ip, "nodeRank": node_rank, "pid": self.process.pid}
+        def start(self, argv: list[str]) -> dict[str, Any]:
+            return {**self.tree.start(argv), "ip": ray.util.get_node_ip_address()}
 
-        def wait(self) -> int:
-            if self.process is None:
-                return 1
-            return self.process.wait()
+        def poll(self) -> int | None:
+            return self.tree.poll()
 
-    ray.init(address=os.environ.get("RAY_ADDRESS", "auto"))
-    group = placement_group(execution_plan(parsed)["placementBundles"], strategy="STRICT_SPREAD")
-    try:
-        ray.get(group.ready())
-        launchers = [
-            NodeLauncher.options(
-                num_gpus=parsed.gpus_per_worker,
-                placement_group=group,
-                placement_group_bundle_index=index,
-            ).remote()
-            for index in range(parsed.workers)
-        ]
-        master = ray.get(launchers[0].endpoint.remote())
-        # The port is private to the worker Pod network. A randomized high port
-        # avoids sharing a well-known rendezvous port with another RayJob.
-        master_port = 20000 + (os.getpid() % 20000)
-        starts = [
-            launchers[index].start.remote(parsed.command, index, master["ip"], master_port)
-            for index in range(parsed.workers)
-        ]
-        nodes = ray.get(starts)
-        time.sleep(1)
-        return_codes = ray.get([launcher.wait.remote() for launcher in launchers])
-        write_topology({
-            **execution_plan(parsed),
-            "master": {"address": master["ip"], "port": master_port},
-            "nodes": nodes,
-            "returnCodes": return_codes,
-        })
-        return 0 if all(code == 0 for code in return_codes) else 1
-    finally:
-        remove_placement_group(group)
+        def stop(self, reason: str) -> dict[str, Any]:
+            return {"returncode": self.tree.stop(reason), "cleanupComplete": self.tree.cleanup_complete}
+
+    group, launchers, nodes = None, [], []
+    master, master_port, return_codes = None, None, [None] * parsed.workers
+    returncode = 1
+    with cancellation_signals():
+        try:
+            ray.init(address=os.environ.get("RAY_ADDRESS", "auto"))
+            if distributed:
+                group = placement_group(execution_plan(parsed)["placementBundles"], strategy="STRICT_SPREAD")
+                ray.get(group.ready())
+            for index in range(parsed.workers):
+                options = {"num_gpus": parsed.gpus_per_worker}
+                if group is not None:
+                    options = {**options, "placement_group": group, "placement_group_bundle_index": index}
+                launchers.append(NodeLauncher.options(**options).remote(index))
+            master = ray.get(launchers[0].endpoint.remote())
+            master_port = 20000 + (os.getpid() % 20000)
+            starts = []
+            for index, launcher in enumerate(launchers):
+                command = execution_plan(parsed)["command"]
+                if distributed:
+                    command = torchrun_command([
+                        f"--nnodes={parsed.workers}", f"--nproc_per_node={parsed.gpus_per_worker}",
+                        f"--node_rank={index}", f"--master_addr={master['ip']}",
+                        f"--master_port={master_port}",
+                    ], parsed.command)
+                starts.append(launcher.start.remote(command))
+            returncode, nodes, return_codes = monitor_launchers(ray, launchers, starts)
+        except DriverCancelled as error:
+            returncode = error.returncode
+        except KeyboardInterrupt:
+            returncode = 130
+        except Exception as error:
+            runtime_event("driver_error", errorType=type(error).__name__)
+        finally:
+            # Repeated cancellation must not interrupt the bounded cleanup.
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+            complete = stop_launchers(ray, launchers, "completed" if returncode == 0 else "failed_or_cancelled")
+            if returncode == 0 and not complete:
+                returncode = 1
+            if group is not None:
+                try:
+                    remove_placement_group(group)
+                except Exception as error:
+                    complete = False
+                    runtime_event("cleanup", complete=False, errorType=type(error).__name__)
+                    if returncode == 0:
+                        returncode = 1
+            try:
+                plan = {key: value for key, value in execution_plan(parsed).items() if key != "command"}
+                topology = {**plan, "nodes": nodes, "returncode": returncode,
+                            "returnCodes": return_codes, "cleanupComplete": complete}
+                if distributed and master is not None:
+                    topology = {**topology, "master": {"address": master["ip"], "port": master_port}}
+                write_topology(topology)
+            except Exception as error:
+                runtime_event("topology_error", errorType=type(error).__name__)
+    return returncode
+
+
+def run_single_or_torchrun(parsed: argparse.Namespace) -> int:
+    return run_launchers(parsed, distributed=False)
+
+
+def run_distributed(parsed: argparse.Namespace) -> int:
+    return run_launchers(parsed, distributed=True)
 
 
 def main() -> int:
@@ -201,4 +486,11 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    if sys.argv[1:] == ["--raytrain-supervisor"]:
+        try:
+            raise SystemExit(supervisor_main())
+        except Exception as error:
+            runtime_event("supervisor_error", errorType=type(error).__name__)
+            raise SystemExit(1)
+    code = main()
+    raise SystemExit(128 - code if code < 0 else code)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -48,6 +49,10 @@ func (c *LokiClient) QueryJobLogsInRange(ctx context.Context, jobID string, limi
 // Results are always returned in chronological order so Portal and CLI
 // rendering do not depend on Loki's wire direction.
 func (c *LokiClient) QueryJobLogsPage(ctx context.Context, jobID string, limit int, start, end time.Time, direction LogDirection) ([]LogLine, error) {
+	return c.queryJobLogs(ctx, jobID, limit, start, end, direction, "", nil, 0)
+}
+
+func (c *LokiClient) queryJobLogs(ctx context.Context, jobID string, limit int, start, end time.Time, direction LogDirection, filter string, labels map[string]string, responseLimit int64) ([]LogLine, error) {
 	if c == nil || strings.TrimSpace(c.BaseURL) == "" {
 		return nil, fmt.Errorf("Loki URL is not configured")
 	}
@@ -68,7 +73,17 @@ func (c *LokiClient) QueryJobLogsPage(ctx context.Context, jobID string, limit i
 		return nil, fmt.Errorf("parse Loki URL: %w", err)
 	}
 	query := endpoint.Query()
-	query.Set("query", `{platform_job_id="`+jobID+`"}`)
+	selector := `{platform_job_id="` + jobID + `"`
+	for _, key := range []string{"pod", "container", "stream", "namespace"} {
+		if value := labels[key]; value != "" {
+			selector += "," + key + "=" + strconv.Quote(value)
+		}
+	}
+	selector += "}"
+	if filter != "" {
+		selector += " |~ " + strconv.Quote(filter)
+	}
+	query.Set("query", selector)
 	query.Set("limit", strconv.Itoa(limit))
 	query.Set("direction", string(direction))
 	query.Set("start", start.UTC().Format(time.RFC3339Nano))
@@ -91,7 +106,21 @@ func (c *LokiClient) QueryJobLogsPage(ctx context.Context, jobID string, limit i
 		return nil, fmt.Errorf("Loki returned HTTP %d", response.StatusCode)
 	}
 	var payload lokiResponse
-	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+	if responseLimit > 0 {
+		contents, readErr := io.ReadAll(io.LimitReader(response.Body, responseLimit+1))
+		if readErr != nil {
+			return nil, fmt.Errorf("read Loki response: %w", readErr)
+		}
+		if int64(len(contents)) > responseLimit {
+			return nil, fmt.Errorf("Loki diagnosis response exceeds size limit")
+		}
+		if err := json.Unmarshal(contents, &payload); err != nil {
+			return nil, fmt.Errorf("decode Loki response: %w", err)
+		}
+		if payload.Status != "success" {
+			return nil, fmt.Errorf("Loki query did not succeed")
+		}
+	} else if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 		return nil, fmt.Errorf("decode Loki response: %w", err)
 	}
 	lines := make([]LogLine, 0)
