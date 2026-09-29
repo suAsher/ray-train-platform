@@ -1,6 +1,25 @@
 # 调试环境保存为训练镜像
 
-## 2026-09-29 双 Harbor 扩展（开发中，未发布）
+## 2026-09-29 双 Harbor 扩展（已上线，Qomolo 推送闭环待权限）
+
+后端运行源码 `5c5a6146e92a561ba53dc3e61f382b9ffcff7940`，已保留并行训练诊断 `69e6934`；Portal dev `f9ee85aed7a50d73037a2784ebf28f7e9d50f7b4`，保留原 dev `7bad1290`。仅重建 backend 与 environment-publisher，tag 为 `release-20260929-multi-harbor-5c5a614`；Base、Prepare、工作区、CLI 镜像未变。
+
+| 组件 | 本次 amd64 摘要 |
+| --- | --- |
+| backend | `sha256:2bea84a7d9b76de6169ba76059598be98cc1596830e72e4feabdefd0a90b82cd` |
+| environment-publisher | `sha256:96f7781643ebbf68c398a4c85f6ba5494d458c1e76b99ed33bc5448c1d08e6ce` |
+
+schema 56 的受限备份与无网络 PostgreSQL 恢复通过，临时恢复容器已删除。最终候选完整 Go、go vet、真实 PostgreSQL 迁移/持久化、格式检查与独立审阅通过；帮助模块覆盖率 95.4%。合并后的 CLI 回归要求 zsh，第一次旧 builder 缺少 zsh，换用已有 `rtp-diagnostics-go:20260929` 并显式对齐缓存目录后全量通过，未跳过 CLI 测试。
+
+Helm 263 先更新后端/推送镜像并保持仅 Wellspiking；所有旧副本退出后，Helm 264 只启用双仓库白名单。当前 schema 57，后端 2/2 Ready、实际 imageID 一致、重启 0，healthz 200。两次 server-side dry-run 仅出现预期镜像和白名单差异；发布前后 999 个租户 RayJob/RayCluster/Pod 的 UID、状态和重启数完全一致。
+
+Portal GitLab 流水线 34722 的 lint、docker-dev、helm-deploy-dev 全部通过（CI 记录 infer release revision 1142）。本机现有 kubeconfig 未能取得该 dev Deployment，因此未将 CI 状态冒充直接 Pod imageID 验收。实际浏览器已核对新能力接口返回两个仓库及凭据类型，并验证已有 READY 版本的“用于训练”正确带入固定镜像摘要。未发布 Portal master。
+
+真实文档管理已将 `custom-environment` 从 v14 保存为草稿 v15、发布 v16；读回下载与审阅稿一致（仅末尾换行由平台去除），浏览器用户入口验证通过。内容区分当前目录与实际 Python 安装位置、受管依赖与自建 Conda/venv、镜像与持久存储，保留原手工 Docker 示例并补齐双 Harbor、浏览器与 CLI 流程。正文 SHA256（平台保存后）为 `ebd3e511d59ed0ea2817fdaea37b1ee51c62f00ab35312a6c3043feb6c2a50fe`。入口：`/raytrain/rayTrain/help#custom-environment`。
+
+**未完成的真实验收边界**：Qomolo 用户名/密码登录和项目查询通过，本轮 public 精确 repository push 检查仍被拒绝；此前检查 38 个可见项目均无 push。尚无可写验收项目，因此未实际推送 Qomolo 镜像或提交使用该镜像的训练。Qomolo 私有项目还需独立只读拉取机器人；未把用户写权限密码做成长期 imagePullSecret。本次没有新建 GPU 任务、工作区或长期凭据。
+
+发布备份、镜像构建、两阶段覆盖/diff/升级和资源连续性证据：构建机 `/root/raytrain-release-20260929-multi-harbor/`；最终候选验证：`/root/raytrain-multi-harbor-verification-20260929/5c5a6146e92a/`、`/tmp/rtp-multi-harbor-full-5c5a614-final.log`。后续仅记录这些证据的文档提交不要求重建镜像。
 
 用户在保存环境表单选择仓库；项目和镜像名称仍由用户指定，不绑定个人项目：
 
