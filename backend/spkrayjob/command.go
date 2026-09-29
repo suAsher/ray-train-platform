@@ -38,12 +38,17 @@ func RunWithInput(ctx context.Context, arguments []string, stdin io.Reader, stdo
 	if stdin == nil {
 		stdin = os.Stdin
 	}
+	if arguments[0] == "__complete" {
+		return runCompletionQuery(ctx, arguments[1:], stdout, getenv)
+	}
 	if topic, requested := requestedHelpTopic(arguments); requested {
 		return runCommandHelp(topic, stdout)
 	}
 	switch arguments[0] {
 	case "version":
 		return runVersion(arguments[1:], stdout)
+	case "completion":
+		return runCompletion(arguments[1:], stdout)
 	case "upgrade":
 		return runUpgrade(ctx, arguments[1:], stdout, stderr)
 	case "help", "-h", "--help":
@@ -198,7 +203,9 @@ const helpText = `spk-rayjob — 分布式训练任务命令行客户端
 
 常用命令：
   login, login-check, upgrade, init, submit, jobs, images, datasets,
-  dataset versions, status, logs, connect, cancel, version
+  dataset versions, status, logs, connect, cancel, version, completion
+
+Shell 补全：spk-rayjob completion --help（Bash / Zsh；仅输出脚本，不修改配置）。
 
 运行 spk-rayjob submit --help 查看全部提交参数和组合示例；其他命令也支持 --help。
 `
@@ -305,6 +312,7 @@ const connectHelpText = `spk-rayjob connect — 进入自己的运行中训练 W
 `
 
 var simpleCommandHelp = map[string]string{
+	"completion":       completionHelpText,
 	"upgrade":          "用法：spk-rayjob upgrade [--server URL] [--config FILE] [--ca-file FILE]\n校验 SHA256 后升级当前客户端。--server 可显式指定公共 CLI 地址，不使用网页 Portal 域名。\n",
 	"init":             "用法：spk-rayjob init [--dir DIR] [--name NAME] [--image IMAGE] [--entrypoint COMMAND] [--engine ray-ddp|ray-train] [--workers N] [--gpus-per-worker N]\n在代码目录创建 .spk-rayjob.yaml，不会提交任务。\n",
 	"login-check":      "用法：spk-rayjob login-check\n验证当前配置中的会话或 PAT。\n",

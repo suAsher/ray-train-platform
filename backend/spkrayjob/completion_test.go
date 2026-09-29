@@ -54,10 +54,12 @@ func TestCompletionStaticOffline(t *testing.T) {
 		{[]string{"submit", "--priority", ""}, []string{"production", "normal", "opportunistic"}},
 		{[]string{"submit", "--data-mode", ""}, []string{"mount", "cache", "ray-data-stage", "ray-data", "streaming"}},
 		{[]string{"submit", "--dataset-cache-policy", ""}, []string{"off", "auto", "bounded"}},
+		{[]string{"submit", "--input-space", "my-"}, []string{"my-storage", "my-files", "my-runs"}},
 		{[]string{"jobs", "--state", "RUN"}, []string{"RUNNING"}},
 		{[]string{"status", "--output", ""}, []string{"text", "json"}},
 		{[]string{"connect", "job-123456789012345678901234", "--wo"}, []string{"--worker"}},
 		{[]string{"diagnose", "--out"}, []string{"--output"}},
+		{[]string{"diagnose", "--help"}, []string{"--help"}},
 	}
 	for _, tc := range cases {
 		t.Run(strings.Join(tc.words, "_"), func(t *testing.T) {
@@ -81,6 +83,7 @@ func TestCompletionDoesNotSuggestCredentialsOrFlagsAfterPositionals(t *testing.T
 		{"status", "job-123456789012345678901234", "--"},
 		{"logs", "job-123456789012345678901234", ""},
 		{"submit", "--entrypoint", ""}, {"unknown", ""},
+		{"", ""}, {"status", "--unknown", "job-"},
 	} {
 		if got := completionQuery(t, func(string) string { return "credential-value" }, words...); got != "" {
 			t.Errorf("completion %q must be empty, got %q", words, got)
@@ -120,7 +123,7 @@ func TestCompletionJobsUseAuthenticatedVisibleListAndSanitizeDescriptions(t *tes
 			t.Error("completion must use the user's configured authentication")
 		}
 		writeClientSuccess(t, writer, http.StatusOK, map[string]any{"items": []any{
-			map[string]any{"id": jobID, "observedState": "RUNNING", "spec": map[string]any{"name": "training\tname\n\x1b[31m $(touch marker)"}},
+			map[string]any{"id": jobID, "observedState": "RUNNING", "spec": map[string]any{"name": "training\tname\n\x1b[31m $(touch marker) completion-test-secret"}},
 			map[string]any{"id": "$(touch marker)", "observedState": "RUNNING"},
 		}})
 	}))
@@ -288,6 +291,18 @@ func TestCompletionShellAdaptersPreserveLiteralCandidates(t *testing.T) {
 			}
 			if _, err := os.Stat(filepath.Join(root, "INJECTED")); !os.IsNotExist(err) {
 				t.Fatal("completion executed a candidate as shell code")
+			}
+			enumSuffix := "\nCOMP_WORDS=(spk-rayjob submit --engine = ray-); COMP_CWORD=4\n_spk_rayjob\nprintf '%s\\n' \"${COMPREPLY[@]}\"\n"
+			expected := "ray-ddp\nray-train\n"
+			if shell == "zsh" {
+				enumSuffix = "\nwords=(spk-rayjob submit --engine=ray-); CURRENT=3\n_spk_rayjob\n"
+				expected = "--engine=ray-ddp\n--engine=ray-train\n"
+			}
+			command = exec.Command(shell, "-f", "-c", preamble+script.String()+enumSuffix)
+			command.Dir = root
+			command.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			if output, err := command.CombinedOutput(); err != nil || string(output) != expected {
+				t.Fatalf("%s equals completion failed: %v %q", shell, err, output)
 			}
 		})
 	}
