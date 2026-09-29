@@ -42,7 +42,9 @@ func (v *environmentVaultFake) Delete(_ context.Context, key string) error {
 
 type environmentRegistryFake struct{ denied bool }
 
-func (*environmentRegistryFake) Authenticate(context.Context, string, eb.Credentials) error { return nil }
+func (*environmentRegistryFake) Authenticate(context.Context, string, eb.Credentials) error {
+	return nil
+}
 func (*environmentRegistryFake) Projects(context.Context, string, eb.Credentials, int) ([]eb.Project, error) {
 	return []eb.Project{{Name: "public", CanPush: true}}, nil
 }

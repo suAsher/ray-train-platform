@@ -102,7 +102,10 @@ func TestSelectedRegistryRejectsCrossHarborQueryRedirectAndSanitizesErrors(t *te
 		for _, operation := range []func(*Client) error{
 			func(c *Client) error { _, err := c.Authenticate(context.Background(), credentials); return err },
 			func(c *Client) error { _, err := c.Projects(context.Background(), credentials, 1, 10); return err },
-			func(c *Client) error { _, err := c.CheckPush(context.Background(), credentials, "team", "model"); return err },
+			func(c *Client) error {
+				_, err := c.CheckPush(context.Background(), credentials, "team", "model")
+				return err
+			},
 		} {
 			for _, networkFailure := range []bool{false, true} {
 				calls := 0

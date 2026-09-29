@@ -13,7 +13,7 @@ func TestPostgresEnvironmentRegistryHostMigrationUpgradeAndLegacyWrites(t *testi
 	before := map[string]string{}
 	for _, table := range []string{"environment_registry_authorizations", "environment_builds"} {
 		var row string
-		if err := database.Raw("SELECT to_jsonb(record)::text FROM " + table + " AS record WHERE id = ?", "before-upgrade").Scan(&row).Error; err != nil {
+		if err := database.Raw("SELECT to_jsonb(record)::text FROM "+table+" AS record WHERE id = ?", "before-upgrade").Scan(&row).Error; err != nil {
 			t.Fatalf("read legacy %s: %v", table, err)
 		}
 		before[table] = row
@@ -26,7 +26,7 @@ func TestPostgresEnvironmentRegistryHostMigrationUpgradeAndLegacyWrites(t *testi
 	assertEnvironmentRegistryHostColumns(t, database)
 	for table, row := range before {
 		var unchanged bool
-		if err := database.Raw("SELECT (to_jsonb(record) - 'registry_host') = ?::jsonb FROM " + table + " AS record WHERE id = ?", row, "before-upgrade").Scan(&unchanged).Error; err != nil || !unchanged {
+		if err := database.Raw("SELECT (to_jsonb(record) - 'registry_host') = ?::jsonb FROM "+table+" AS record WHERE id = ?", row, "before-upgrade").Scan(&unchanged).Error; err != nil || !unchanged {
 			t.Fatalf("migration changed existing %s metadata: unchanged=%t error=%v", table, unchanged, err)
 		}
 	}
@@ -53,7 +53,7 @@ func TestPostgresEnvironmentRegistryHostMigrationUpgradeAndLegacyWrites(t *testi
 	}
 	for _, table := range []string{"environment_registry_authorizations", "environment_builds"} {
 		var host string
-		if err := database.Raw("SELECT registry_host FROM " + table + " WHERE id = ?", "legacy-after-upgrade").Scan(&host).Error; err != nil || host != "harbor.qomolo.com" {
+		if err := database.Raw("SELECT registry_host FROM "+table+" WHERE id = ?", "legacy-after-upgrade").Scan(&host).Error; err != nil || host != "harbor.qomolo.com" {
 			t.Fatalf("legacy update lost host on %s: host=%q error=%v", table, host, err)
 		}
 	}

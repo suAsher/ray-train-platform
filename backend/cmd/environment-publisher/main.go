@@ -20,7 +20,7 @@ import (
 )
 
 type publisherOptions struct {
-	request registryauth.PublishRequest
+	request                                        registryauth.PublishRequest
 	credentialsDirectory, resultPath, registryHost string
 }
 

@@ -151,7 +151,7 @@ func assertEnvironmentFinalizedImageHostPersistence(t *testing.T, repo *GormRepo
 	t.Helper()
 	ctx := context.Background()
 	b := registryPersistenceBuild("harbor.qomolo.com")
-	b.Status, b.ImageDigest = eb.VerifyingPull, "sha256:" + strings.Repeat("3", 64)
+	b.Status, b.ImageDigest = eb.VerifyingPull, "sha256:"+strings.Repeat("3", 64)
 	b.ImageReference = b.Host() + "/public/environment@" + b.ImageDigest
 	if _, err := repo.CreateEnvironmentBuild(ctx, b); err != nil {
 		t.Fatal(err)

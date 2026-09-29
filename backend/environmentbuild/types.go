@@ -46,16 +46,16 @@ func (Credentials) String() string   { return "[Harbor credentials redacted]" }
 func (Credentials) GoString() string { return "[Harbor credentials redacted]" }
 
 type Authorization struct {
-	ID        string    `json:"id" gorm:"primaryKey"`
-	RegistryHost string `json:"registryHost" gorm:"not null;default:harbor.wellspiking.ai"`
-	TenantID  string    `json:"-"`
-	OwnerID   string    `json:"-"`
-	Username  string    `json:"username"`
-	SecretRef string    `json:"-"`
-	BuildID   string    `json:"-"`
-	Target    string    `json:"-"`
-	ExpiresAt time.Time `json:"expiresAt"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID           string    `json:"id" gorm:"primaryKey"`
+	RegistryHost string    `json:"registryHost" gorm:"not null;default:harbor.wellspiking.ai"`
+	TenantID     string    `json:"-"`
+	OwnerID      string    `json:"-"`
+	Username     string    `json:"username"`
+	SecretRef    string    `json:"-"`
+	BuildID      string    `json:"-"`
+	Target       string    `json:"-"`
+	ExpiresAt    time.Time `json:"expiresAt"`
+	CreatedAt    time.Time `json:"createdAt"`
 }
 
 func (Authorization) TableName() string { return "environment_registry_authorizations" }

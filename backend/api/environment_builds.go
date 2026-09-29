@@ -134,8 +134,8 @@ func (h environmentBuildHandler) result(c *gin.Context, value any, err error) {
 func (h environmentBuildHandler) createAuthorization(c *gin.Context) {
 	var request struct {
 		RegistryHost string `json:"registryHost"`
-		Username string `json:"username"`
-		Secret   string `json:"secret"`
+		Username     string `json:"username"`
+		Secret       string `json:"secret"`
 	}
 	if !h.bind(c, &request) {
 		return
