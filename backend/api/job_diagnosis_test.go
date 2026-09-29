@@ -66,11 +66,11 @@ type diagnosisTestPayload struct {
 	Followups          []diagnosisTestEvidence `json:"followups"`
 	CompletionEvidence []diagnosisTestEvidence `json:"completionEvidence"`
 	Coverage           struct {
-		Filtered           bool `json:"filtered"`
-		Partial            bool `json:"partial"`
-		Truncated          bool `json:"truncated"`
-		LogUnavailable     bool `json:"logUnavailable"`
-		ContextUnavailable bool `json:"contextUnavailable"`
+		Filtered              bool `json:"filtered"`
+		Partial               bool `json:"partial"`
+		Truncated             bool `json:"truncated"`
+		LogUnavailable        bool `json:"logUnavailable"`
+		ContextUnavailable    bool `json:"contextUnavailable"`
 		CompletionUnavailable bool `json:"completionUnavailable"`
 	} `json:"coverage"`
 }
