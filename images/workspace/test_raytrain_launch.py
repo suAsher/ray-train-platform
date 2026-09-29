@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import ctypes
 import importlib.util
 import io
 import json
@@ -183,6 +184,84 @@ class ProcessTreeTests(unittest.TestCase):
         process.stop('cancelled_before_start')
         process.stop('repeated')
 
+    def test_subreaper_is_enabled_only_in_the_separate_supervisor(self):
+        libc = ctypes.CDLL(None, use_errno=True)
+        before, after = ctypes.c_int(), ctypes.c_int()
+        self.assertEqual(libc.prctl(37, ctypes.byref(before), 0, 0, 0), 0)
+        process = self.process()
+        metadata = process.start([sys.executable, '-c', 'import time; time.sleep(30)'])
+        self.assertNotEqual(metadata['pid'], os.getpid())
+        self.assertEqual(libc.prctl(37, ctypes.byref(after), 0, 0, 0), 0)
+        self.assertEqual(before.value, after.value)
+        process.stop('test_finished')
+
+    def test_parent_exit_cleans_orphan_forked_during_term_cleanup(self):
+        late_script = self.path / 'late_orphan.py'
+        late_script.write_text('''
+import json, os, pathlib, signal, subprocess, sys, time
+directory, role = pathlib.Path(sys.argv[1]), sys.argv[2]
+if role == 'root':
+    subprocess.Popen([sys.executable, __file__, str(directory), 'child'], start_new_session=True)
+    while not (directory / 'release-root').exists():
+        time.sleep(0.01)
+    sys.exit(29)
+elif role == 'child':
+    def fork_on_term(*args):
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        child = subprocess.Popen([sys.executable, __file__, str(directory), 'late'], start_new_session=True)
+        (directory / 'late.json').write_text(json.dumps({'pid': child.pid}))
+    signal.signal(signal.SIGTERM, fork_on_term)
+    (directory / 'child.json').write_text(json.dumps({'pid': os.getpid()}))
+else:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+while True:
+    time.sleep(0.01)
+''')
+        process = self.process()
+        process.start([sys.executable, str(late_script), str(self.path), 'root'])
+        until(lambda: (self.path / 'child.json').exists())
+        pid = json.loads((self.path / 'child.json').read_text())['pid']
+        self.identities[pid] = identity(pid)[0]
+        (self.path / 'release-root').touch()
+        self.assertEqual(self.finished(process), 29)
+        late_pid = json.loads((self.path / 'late.json').read_text())['pid']
+        if identity(late_pid) is not None:
+            self.identities[late_pid] = identity(late_pid)[0]
+        self.assertFalse(running(late_pid))
+        self.assert_tree_gone()
+
+    def test_owner_sigterm_cleans_detached_tree_and_closes_real_stdout_pipe(self):
+        owner_code = '''
+import importlib.util, json, pathlib, sys, time
+spec = importlib.util.spec_from_file_location('launcher', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+process = module.ProcessTree(node_rank=0, term_grace=0.1, kill_grace=0.5)
+metadata = process.start([sys.executable, sys.argv[2], sys.argv[3], 'root', 'yes', 'yes', '0'])
+pathlib.Path(sys.argv[3], 'supervisor.json').write_text(json.dumps(metadata))
+while process.poll() is None:
+    time.sleep(0.01)
+'''
+        owner = subprocess.Popen([sys.executable, '-c', owner_code, str(SOURCE),
+                                  str(self.script), str(self.path)],
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            until(lambda: all((self.path / (role + '.json')).exists()
+                              for role in ('root', 'child', 'grandchild', 'supervisor')))
+            for role in ('root', 'child', 'grandchild', 'supervisor'):
+                pid = json.loads((self.path / (role + '.json')).read_text())['pid']
+                self.identities[pid] = identity(pid)[0]
+            owner.terminate()
+            # communicate only finishes once every inherited stdout FD closes.
+            owner.communicate(timeout=5)
+            self.assertEqual(owner.returncode, -signal.SIGTERM)
+            self.assert_tree_gone()
+        finally:
+            if owner.poll() is None:
+                owner.kill()
+                owner.wait(timeout=3)
+            owner.stdout.close()
+
 
 class Ref:
     def __init__(self, value=None, error=None, kind='', rank=-1, ready=0):
@@ -207,7 +286,8 @@ class Actor:
         self.ray.started.append(self.rank)
         error = RuntimeError('synthetic startup failure') if self.rank == self.ray.start_failure else None
         return Ref({'host': 'synthetic', 'ip': '127.0.0.1', 'nodeRank': self.rank,
-                    'pid': 123 + self.rank}, error, 'start', self.rank)
+                    'pid': 123 + self.rank}, error, 'start', self.rank,
+                   ready=float('inf') if self.rank == self.ray.stalled_start else 0)
 
     def poll_process(self):
         if self.ray.cancel and not self.ray.cancelled:
@@ -226,12 +306,13 @@ class Actor:
 
 class FakeRay(types.ModuleType):
     """Deterministic scheduling only; real cleanup is tested with subprocesses above."""
-    def __init__(self, codes, start_failure=None, cancel=False, order=None):
+    def __init__(self, codes, start_failure=None, cancel=False, order=None, stalled_start=None):
         super().__init__('ray')
         self.codes = [list(values) for values in codes]
         self.poll_counts = [0 for _ in codes]
         self.order = order or list(range(len(codes)))
         self.start_failure, self.cancel, self.cancelled = start_failure, cancel, False
+        self.stalled_start = stalled_start
         self.started, self.stopped, self.actors, self.removed = [], [], [], []
         self.util = types.ModuleType('ray.util')
         self.util.get_node_ip_address = lambda: '127.0.0.1'
@@ -274,6 +355,8 @@ class FakeRay(types.ModuleType):
 
     def wait(self, refs, num_returns=1, timeout=None, **kwargs):
         ready = sorted(refs, key=lambda ref: ref.ready)[:num_returns]
+        if ready and ready[0].ready == float('inf'):
+            raise AssertionError('startup barrier masked an already running worker failure')
         return ready, [ref for ref in refs if ref not in ready]
 
     def kill(self, actor, **kwargs):
@@ -320,6 +403,12 @@ class OrchestrationTests(unittest.TestCase):
 
     def test_single_worker_preserves_failure_code(self):
         self.assertEqual(self.run_with(FakeRay([[37]]), 'single_gpu'), 37)
+
+    def test_running_failure_is_observed_while_another_start_is_pending(self):
+        self.assertEqual(self.run_with(FakeRay([[41], [None]], stalled_start=1)), 41)
+
+    def test_signal_exit_is_preserved_after_sibling_cleanup(self):
+        self.assertEqual(self.run_with(FakeRay([[-signal.SIGTERM], [None]])), -signal.SIGTERM)
 
 
 if __name__ == '__main__':
