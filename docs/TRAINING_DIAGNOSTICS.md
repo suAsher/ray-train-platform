@@ -50,3 +50,30 @@ source <(spk-rayjob completion zsh)
 ## 交付验证
 
 候选测试在构建机隔离工作区执行，包括共享 API 授权、日志筛选/脱敏/边界、CLI 文本与 JSON、实际 Bash/Zsh 适配、合成 Linux 进程树与 Ray 编排。Portal 使用自己的 `dev` 候选与质量门禁。测试结果、源码 SHA 和尚未完成的生产验收在当次交付记录中分别记录。
+
+
+### 2026-09-29 候选交付记录
+
+- 后端、CLI、运行时最终受测代码：`a75483df1882fa8241ec7663850587867fda7f12`，分支 `codex/training-diagnostics`。之后的交付记录提交只改文档。
+- Portal 最终受测代码：`7bad129025b9f57050cab8d14d94286ce4161833`，同名候选分支，基于当时远端 `dev` 的 `2410eea74c0c895f1aa9c43bd73ed9890b761cc7`。
+- 后端候选目录：`/Users/ashersu/.codex/worktrees/training-diagnostics/ray-train-platform`。
+- Portal 候选目录：`/Users/ashersu/Desktop/西井/wellspiking-frontend-diagnostics-20260929`。原 Portal checkout 保留。
+- 未推送任何分支、未发布业务镜像、未部署、未重新登记调试镜像。原后端 checkout 与正式构建目录仍为 `4a80b6ce5871a643b3123d26ca4bc670ba813d5b`；原 checkout 的未提交交接文档及 `output/environment-acceptance-20260921/source.zip` 保留。
+
+构建机证据目录为 `/tmp/rtp-diagnostics-evidence-20260929`。以下均为本次隔离测试结果，不是线上检查：
+
+| 检查 | 结果与证据 |
+| --- | --- |
+| Go 格式与静态检查 | 最终代码 `gofmt` 检查、`go vet ./...` 通过；`final-go-postgres-a75483d.log` |
+| Go 完整回归 | 临时 PostgreSQL 16 实例下 `go test -p 1 -timeout=20m -count=1 -coverprofile=/coverage/go.out ./...` 通过；`final-go-postgres-serial-a75483d.log` |
+| 新增 Go 模块覆盖率 | 458/529 条语句，86.6%；全仓存量加新增合计 74.5%，未达到全仓 80% 目标，不将新增覆盖率当成全仓覆盖率 |
+| Python 进程与调度合同 | 20 项测试通过；`runtime-green2.log`；受测运行时代码与最终候选相同 |
+| 真实 Ray 单 Worker | 专用 CPU 容器中保留原退出码 23；`ray-cpu-integration.log` |
+| 真实 Ray 多 Worker | 单容器内 head 加两个逻辑 Ray 节点，使用 CPU 和逻辑 GPU 资源；一个 torchrun Worker 失败后约 8.87 秒返回失败码 1，忽略 TERM 的另一 Worker 被清理；`ray-distributed-integration.log` |
+| Portal 门禁 | 最终 Portal 的 `docker/Dockerfile.lint` 全部既有门禁及新增诊断合同通过，包含 Vue SSR 转义、请求过期结果和错误处理检查；`portal-7bad1290-lint.log` |
+| Portal 构建 | `pnpm build` 通过；`portal-7bad1290-build.log`。仍有模块类型与 CSS 压缩警告，未作为新诊断功能的修复范围 |
+| 独立审阅 | 修复大量 checkpoint 输出挤掉完成证据、部分查询失败丢弃已取得证据两项问题；修复前测试失败，修复后回归通过，复审无剩余具体问题 |
+
+首轮带覆盖率的并行全套测试遇到已有 `TestPostgresAdvisoryLockMutualExclusionAndRelease` 失败：多个测试包使用同一临时数据库，迁移共用数据库级 advisory lock，互斥测试首次 try-lock 会受其他包迁移影响。保持业务代码和该测试不变，改用 `-p 1` 隔离跨包竞争后全套通过；原失败日志保留。临时 PostgreSQL 容器与网络已清理。
+
+本次未做真实多物理节点 GPU 训练、生产登录浏览器验收或历史用户任务重跑。隔离 Ray 集成只能证明该测试条件下的退出码与清理行为，不能当作生产 GPU 验收。后续如发布，应分别更新后端与 `spk-rayjob` 下载服务、Portal，以及需要此次 launcher 修复的运行时镜像，并单独记录发布摘要与真实验收；发布前需再次核对远端基线。
