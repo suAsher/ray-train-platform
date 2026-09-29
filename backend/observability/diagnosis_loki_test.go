@@ -2,8 +2,10 @@ package observability
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -30,15 +32,61 @@ func TestDiagnosisLokiCandidatesAreFilteredForwardBoundedAndInjectionSafe(t *tes
 
 func TestDiagnosisLokiCompletionEvidenceUsesSeparateBackwardBudget(t *testing.T) {
 	start := time.Date(2026, 9, 29, 1, 0, 0, 0, time.UTC)
+	totalBudget := 0
 	client := &LokiClient{BaseURL: "http://loki", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		query := request.URL.Query()
-		if query.Get("direction") != "backward" || query.Get("limit") != "20" || !strings.Contains(strings.ToLower(query.Get("query")), "checkpoint") { t.Fatalf("completion query: %s", request.URL.String()) }
+		limit, err := strconv.Atoi(query.Get("limit"))
+		if err != nil || limit <= 0 || query.Get("direction") != "backward" { t.Fatalf("completion query: %s", request.URL.String()) }
+		totalBudget += limit
 		if query.Get("end") != start.Add(time.Hour).Format(time.RFC3339Nano) { t.Fatal("completion queried beyond failure") }
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"status":"success","data":{"result":[]}}`)), Header: make(http.Header), Request: request}, nil
 	})}}
 	provider, ok := any(client).(interface { QueryJobDiagnosisCompletions(context.Context, string, int, time.Time, time.Time) ([]LogLine, error) })
 	if !ok { t.Fatal("Loki client lacks separate completion evidence query") }
 	if _, err := provider.QueryJobDiagnosisCompletions(context.Background(), "job-1", 20, start, start.Add(time.Hour)); err != nil { t.Fatal(err) }
+	if totalBudget > 20 { t.Fatalf("completion and checkpoint budget exceeded: %d", totalBudget) }
+}
+
+func TestDiagnosisLokiCompletionSurvivesCheckpointShardNoise(t *testing.T) {
+	for _, completion := range []string{"Training completed", "全流程完成"} {
+		for _, budget := range []int{20, 5, 1} {
+			t.Run(completion+"/"+strconv.Itoa(budget), func(t *testing.T) {
+				start := time.Date(2026, 9, 29, 12, 20, 0, 0, time.UTC)
+				retained := []LogLine{{Timestamp: start, Line: completion}}
+				for index := 1; index <= 32; index++ {
+					retained = append(retained, LogLine{Timestamp: start.Add(time.Duration(index)*time.Second), Line: "Saving checkpoint shard " + strconv.Itoa(index)})
+				}
+				end := start.Add(40*time.Second)
+				totalBudget := 0
+				client := &LokiClient{BaseURL: "http://loki", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+					query := request.URL.Query()
+					if query.Get("direction") != "backward" || query.Get("end") != end.Format(time.RFC3339Nano) { t.Fatalf("unexpected evidence window/direction: %s", request.URL.String()) }
+					limit, err := strconv.Atoi(query.Get("limit"))
+					if err != nil || limit < 1 { t.Fatalf("invalid budget: %s", query.Get("limit")) }
+					totalBudget += limit
+					parts := strings.SplitN(query.Get("query"), " |~ ", 2)
+					if len(parts) != 2 { t.Fatal("evidence query must remain filtered") }
+					pattern, err := strconv.Unquote(parts[1])
+					if err != nil { t.Fatal(err) }
+					filter, err := regexp.Compile(pattern)
+					if err != nil { t.Fatal(err) }
+					values := make([][]string, 0, limit)
+					// Simulate Loki's actual filter-before-limit/backward behavior.
+					for index := len(retained)-1; index >= 0 && len(values) < limit; index-- {
+						if filter.MatchString(retained[index].Line) { values = append(values, []string{strconv.FormatInt(retained[index].Timestamp.UnixNano(), 10), retained[index].Line}) }
+					}
+					body, err := json.Marshal(map[string]any{"status": "success", "data": map[string]any{"result": []any{map[string]any{"stream": map[string]string{"pod": "worker-1"}, "values": values}}}})
+					if err != nil { t.Fatal(err) }
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(body))), Header: make(http.Header), Request: request}, nil
+				})}}
+				evidence, err := client.QueryJobDiagnosisCompletions(context.Background(), "job-1", budget, start, end)
+				if err != nil { t.Fatal(err) }
+				if totalBudget > budget || len(evidence) > budget { t.Fatalf("budget exceeded: queries=%d evidence=%d want<=%d", totalBudget, len(evidence), budget) }
+				diagnosis := AnalyzeDiagnosis(JobDiagnosis{ObservedState: "FAILED"}, []LogLine{{Timestamp: end, Line: "Fatal Python error: Segmentation fault"}}, evidence, nil)
+				if diagnosis.Classification != "possible_runtime_teardown" || diagnosis.ObservedState != "FAILED" { t.Fatalf("checkpoint noise hid completion: classification=%s evidence=%+v", diagnosis.Classification, evidence) }
+			})
+		}
+	}
 }
 
 func TestDiagnosisLokiContextQuotesExactStreamAndRespectsDeadline(t *testing.T) {
