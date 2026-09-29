@@ -429,13 +429,14 @@ func completionDescription(value string) string {
 
 const bashCompletionScript = `# spk-rayjob completion; Bash 3.2 or newer. No persistent cache.
 _spk_rayjob() {
-    local value description word previous trim i last
+    local value description word previous trim join_next i last
     local -a arguments
     arguments=()
     COMPREPLY=()
     trim=''
-    # Bash may split --flag=value at '=' in COMP_WORDS. Join only those
-    # boundaries; every other argument (including spaces) stays literal.
+    join_next=''
+    # Bash splits '=' and ':' (including HTTPS URLs) in COMP_WORDS.
+    # Rejoin these boundaries without parsing or evaluating shell text.
     for ((i=1; i<=COMP_CWORD; i++)); do
         word="${COMP_WORDS[i]}"
         last=$((${#arguments[@]} - 1))
@@ -443,9 +444,14 @@ _spk_rayjob() {
         if ((last >= 0)); then previous="${arguments[last]}"; fi
         if [[ "$word" == '=' && "$previous" == -* && "$previous" != *=* ]]; then
             arguments[last]="$previous="
-        elif [[ "$previous" == -*= ]]; then
+            join_next=1
+        elif [[ "$word" == ':' && $last -ge 0 ]]; then
+            arguments[last]="$previous:"
+            join_next=1
+        elif [[ -n "$join_next" || "$previous" == -*= ]]; then
             arguments[last]="$previous$word"
             if ((i == COMP_CWORD)); then trim="$previous"; fi
+            join_next=''
         else
             arguments+=("$word")
         fi

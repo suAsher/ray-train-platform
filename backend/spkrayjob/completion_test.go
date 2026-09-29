@@ -254,6 +254,15 @@ func completionShellQuote(value string) string {
 
 func TestCompletionShellAdaptersPreserveLiteralCandidates(t *testing.T) {
 	root := t.TempDir()
+	const visibleJob = "job-abcdef123456abcdef123456"
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/v1/jobs" || request.Header.Get("Authorization") != "Bearer shell-test-token" {
+			t.Errorf("shell completion used unexpected authentication or path: %s", request.URL.Path)
+		}
+		writeClientSuccess(t, writer, http.StatusOK, map[string]any{"items": []any{map[string]any{"id": visibleJob}}})
+	}))
+	defer server.Close()
+	ca := writeTestCA(t, server)
 	bin := filepath.Join(root, "bin with spaces")
 	if err := os.Mkdir(bin, 0o700); err != nil {
 		t.Fatal(err)
@@ -303,6 +312,20 @@ func TestCompletionShellAdaptersPreserveLiteralCandidates(t *testing.T) {
 			command.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 			if output, err := command.CombinedOutput(); err != nil || string(output) != expected {
 				t.Fatalf("%s equals completion failed: %v %q", shell, err, output)
+			}
+			urlWords := strings.Split(server.URL, ":")
+			for index, word := range urlWords {
+				urlWords[index] = completionShellQuote(word)
+			}
+			jobSuffix := "\nCOMP_WORDS=(spk-rayjob status --server " + strings.Join(urlWords, " : ") + " --ca-file " + completionShellQuote(ca) + " job-); COMP_CWORD=$((${#COMP_WORDS[@]} - 1))\n_spk_rayjob\nprintf '%s\\n' \"${COMPREPLY[@]}\"\n"
+			if shell == "zsh" {
+				jobSuffix = "\nwords=(spk-rayjob status --server " + completionShellQuote(server.URL) + " --ca-file " + completionShellQuote(ca) + " job-); CURRENT=${#words[@]}\n_spk_rayjob\n"
+			}
+			command = exec.Command(shell, "-f", "-c", preamble+script.String()+jobSuffix)
+			command.Dir = root
+			command.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "SPK_RAYJOB_TOKEN=shell-test-token")
+			if output, err := command.CombinedOutput(); err != nil || string(output) != visibleJob+"\n" {
+				t.Fatalf("%s explicit server completion failed: %v %q", shell, err, output)
 			}
 		})
 	}
