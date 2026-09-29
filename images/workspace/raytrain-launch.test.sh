@@ -26,3 +26,4 @@ assert plan["placementBundles"] == [{"CPU": 1, "GPU": 8}, {"CPU": 1, "GPU": 8}],
 PY
 
 echo 'raytrain launcher contract: ok'
+python3 "$root/test_raytrain_launch.py"
