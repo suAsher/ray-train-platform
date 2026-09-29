@@ -1,5 +1,29 @@
 # 调试环境保存为训练镜像
 
+## 2026-09-29 双 Harbor 扩展（开发中，未发布）
+
+用户在保存环境表单选择仓库；项目和镜像名称仍由用户指定，不绑定个人项目：
+
+| 目标仓库 | 用户推送凭据 | 平台训练拉取 |
+| --- | --- | --- |
+| harbor.wellspiking.ai | 用户名 + CLI Secret | 现有平台只读机器人 |
+| harbor.qomolo.com | 用户名 + 密码 | 公开镜像可匿名拉取；私有项目须配置有对应权限的只读机器人 |
+
+切换仓库撤销表单上一份临时授权，并清除项目、目标校验及密码；重试固定原仓库、项目、镜像名和构建材料。平台目录的个人/团队可见性不改变 Harbor 项目本身的可见性。READY 仍要求实际拉取检查通过，不能只凭推送成功登记可用镜像。
+
+实现约定：
+
+- `ENVIRONMENT_REGISTRY_HOSTS` 由运维配置已支持的精确主机白名单，默认仅 Wellspiking；不接受用户提供任意 URL、端口或认证服务器。
+- capabilities 保留旧 `registryHost` 字段并增加 `registries`。新授权和创建构建请求可带 `registryHost`；省略时兼容旧客户端，使用 Wellspiking。
+- schema 57 给授权和构建记录添加 `registry_host`，旧记录默认 Wellspiking。凭据加密绑定仓库，旧 Wellspiking AAD 保持一致；授权绑定、幂等比较、控制器执行及重试均校验仓库。
+- publisher 只访问选中的 TLS origin；token realm、上传地址、重定向和 repository scope 继续受限。用户推送凭据不变成长期 imagePullSecret，不进入依赖构建层、工作区或训练容器。
+- Base、调试环境、Prepare 和 publisher 辅助镜像仍来自既有 Wellspiking 固定摘要。源镜像拉取与目标推送分离，无需为接入第二个仓库重建训练 Base 或复制所有辅助镜像。
+- Qomolo 私有拉取使用平台配置的独立只读 imagePullSecret，并走现有跨 namespace 分发机制。缺少该授权的镜像不能通过拉取验证；不能用用户推送密码代替。
+
+发布顺序必须防止旧控制器领取新仓库构建：先保持仅 Wellspiking，发布经过验证的新 backend 与 publisher，确认旧副本退出，再启用双仓库列表并发布 Portal dev。部署前备份 schema 56 并验证恢复，迁移在隔离 PostgreSQL 验证新装、重复执行及旧数据升级。回滚到不识别仓库字段的版本前，必须关闭环境构建、停止领取并完成或取消新仓库操作；不能在 Qomolo 操作活动时直接回滚旧控制器。迁移不逆向删除已有记录。
+
+本轮权限预检：构建机上的 guofeng.su Qomolo 登录成功；对可见的 38 个项目逐个检查指定 repository 的 registry token，仅返回 pull，未发现 push。脱敏证据为构建机 `/root/raytrain-qomolo-auth/permission-check-20260929.json`。实际 Qomolo 推送、拉取及新镜像训练尚待一个可写验收项目；登录成功不作为这些步骤的验收证据。
+
 日期：2026-09-21。**候选已实现并通过部分验证，尚未上线；完整集群发布和 GPU 训练验收待完成。**
 
 ## 用户操作

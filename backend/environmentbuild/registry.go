@@ -6,15 +6,34 @@ import (
 	"strings"
 )
 
-// HarborRegistry translates the fixed-origin Harbor client's verified grants.
+// HarborRegistry translates the selected trusted Harbor client's verified grants.
 type HarborRegistry struct{ Client *registryauth.Client }
 
-func (h HarborRegistry) Authenticate(ctx context.Context, c Credentials) error {
-	_, err := h.Client.Authenticate(ctx, registryauth.Credentials{Username: c.Username, Secret: c.Secret})
+func (h HarborRegistry) clientForHost(host string) (*registryauth.Client, error) {
+	resolved, err := registryauth.NormalizeHost(host)
+	if err != nil {
+		return nil, ErrInvalid
+	}
+	if h.Client != nil && h.Client.Host() == resolved {
+		return h.Client, nil
+	}
+	return registryauth.NewClientForHost(resolved)
+}
+
+func (h HarborRegistry) Authenticate(ctx context.Context, host string, c Credentials) error {
+	client, err := h.clientForHost(host)
+	if err != nil {
+		return err
+	}
+	_, err = client.Authenticate(ctx, registryauth.Credentials{Username: c.Username, Secret: c.Secret})
 	return err
 }
-func (h HarborRegistry) Projects(ctx context.Context, c Credentials, page int) ([]Project, error) {
-	result, err := h.Client.Projects(ctx, registryauth.Credentials{Username: c.Username, Secret: c.Secret}, page, 50)
+func (h HarborRegistry) Projects(ctx context.Context, host string, c Credentials, page int) ([]Project, error) {
+	client, err := h.clientForHost(host)
+	if err != nil {
+		return nil, err
+	}
+	result, err := client.Projects(ctx, registryauth.Credentials{Username: c.Username, Secret: c.Secret}, page, 50)
 	if err != nil {
 		return nil, err
 	}
@@ -24,11 +43,15 @@ func (h HarborRegistry) Projects(ctx context.Context, c Credentials, page int) (
 	}
 	return items, nil
 }
-func (h HarborRegistry) CheckPush(ctx context.Context, c Credentials, target string) error {
+func (h HarborRegistry) CheckPush(ctx context.Context, host string, c Credentials, target string) error {
 	project, repository, ok := strings.Cut(target, "/")
 	if !ok {
 		return ErrInvalid
 	}
-	_, err := h.Client.CheckPush(ctx, registryauth.Credentials{Username: c.Username, Secret: c.Secret}, project, repository)
+	client, err := h.clientForHost(host)
+	if err != nil {
+		return err
+	}
+	_, err = client.CheckPush(ctx, registryauth.Credentials{Username: c.Username, Secret: c.Secret}, project, repository)
 	return err
 }

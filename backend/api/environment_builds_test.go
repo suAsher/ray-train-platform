@@ -21,7 +21,7 @@ type environmentAPIRegistry struct {
 	calls int
 }
 
-func (r *environmentAPIRegistry) Authenticate(context.Context, eb.Credentials) error {
+func (r *environmentAPIRegistry) Authenticate(context.Context, string, eb.Credentials) error {
 	r.calls++
 	return eb.ErrAuthorization
 }

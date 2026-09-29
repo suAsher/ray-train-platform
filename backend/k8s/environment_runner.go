@@ -15,9 +15,12 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"maps"
 	"ray-train-platform-backend/environmentbuild"
+	"ray-train-platform-backend/registryauth"
 	"strconv"
 	"time"
 )
+
+const environmentRegistryHostAnnotation = "platform.wellspiking.ai/environment-registry-host"
 
 type EnvironmentRunnerConfig struct {
 	Namespace                                               string
@@ -51,7 +54,10 @@ func NewEnvironmentRunner(client *Client, cfg EnvironmentRunnerConfig) *Environm
 	return &EnvironmentRunner{client: client, config: cfg}
 }
 func (r *EnvironmentRunner) Step(ctx context.Context, b environmentbuild.Build, credentials *environmentbuild.Credentials) (environmentbuild.StepResult, error) {
-	if r.client == nil || r.client.kubernetes == nil || !isDNSLabel(r.config.Namespace) || b.ID == "" || b.TenantID == "" || b.OwnerID == "" || b.Attempt < 0 || b.BaseImage != r.config.BaseImage {
+	if r.client == nil || r.client.kubernetes == nil || !isDNSLabel(r.config.Namespace) || b.ID == "" || b.TenantID == "" || b.OwnerID == "" || b.Attempt < 0 || b.BaseImage != r.config.BaseImage || !environmentPinnedImage(r.config.BaseImage) {
+		return environmentbuild.StepResult{}, environmentbuild.ErrInvalid
+	}
+	if _, err := registryauth.NormalizeHost(b.RegistryHost); err != nil {
 		return environmentbuild.StepResult{}, environmentbuild.ErrInvalid
 	}
 	if b.Status == environmentbuild.Capturing {
@@ -59,6 +65,10 @@ func (r *EnvironmentRunner) Step(ctx context.Context, b environmentbuild.Build, 
 	}
 	if b.Status != environmentbuild.Building && b.Status != environmentbuild.Validating && b.Status != environmentbuild.Pushing && b.Status != environmentbuild.VerifyingPull {
 		return environmentbuild.StepResult{}, environmentbuild.ErrInvalid
+	}
+	desired, err := r.renderJob(b)
+	if err != nil {
+		return environmentbuild.StepResult{}, err
 	}
 	if b.Status == environmentbuild.Building {
 		if err := r.ensureArtifacts(ctx, b); err != nil {
@@ -72,10 +82,6 @@ func (r *EnvironmentRunner) Step(ctx context.Context, b environmentbuild.Build, 
 		if err := r.ensurePublishSecret(ctx, b, *credentials); err != nil {
 			return environmentbuild.StepResult{}, err
 		}
-	}
-	desired, err := r.renderJob(b)
-	if err != nil {
-		return environmentbuild.StepResult{}, err
 	}
 	jobs := r.client.kubernetes.BatchV1().Jobs(r.config.Namespace)
 	job, err := jobs.Get(ctx, desired.Name, metav1.GetOptions{})
@@ -96,10 +102,12 @@ func (r *EnvironmentRunner) Step(ctx context.Context, b environmentbuild.Build, 
 func (r *EnvironmentRunner) metadata(name string, b environmentbuild.Build) metav1.ObjectMeta {
 	ls := environmentLabels(b.ID)
 	ls[environmentOwnerLabel] = environmentHash(b.TenantID + "\x00" + b.OwnerID)
-	return metav1.ObjectMeta{Name: name, Namespace: r.config.Namespace, Labels: ls, Annotations: map[string]string{environmentIdentityAnnotation: b.ID}}
+	return metav1.ObjectMeta{Name: name, Namespace: r.config.Namespace, Labels: ls, Annotations: map[string]string{environmentIdentityAnnotation: b.ID, environmentRegistryHostAnnotation: b.Host()}}
 }
 func (r *EnvironmentRunner) owned(meta metav1.Object, b environmentbuild.Build) bool {
-	return environmentOwned(meta, b.ID) && meta.GetLabels()[environmentOwnerLabel] == environmentHash(b.TenantID+"\x00"+b.OwnerID)
+	// Old resources had no registry annotation and belonged to Wellspiking.
+	host, err := registryauth.NormalizeHost(meta.GetAnnotations()[environmentRegistryHostAnnotation])
+	return err == nil && host == b.Host() && environmentOwned(meta, b.ID) && meta.GetLabels()[environmentOwnerLabel] == environmentHash(b.TenantID+"\x00"+b.OwnerID)
 }
 func environmentJobName(b environmentbuild.Build) string {
 	return environmentResourceName("job", b.ID+"/"+b.Status+"/"+strconv.Itoa(b.Attempt))

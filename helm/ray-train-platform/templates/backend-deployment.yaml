@@ -397,6 +397,8 @@ spec:
             {{- if $environmentBuilds.enabled }}
             - name: ENVIRONMENT_BUILDS_ENABLED
               value: "true"
+            - name: ENVIRONMENT_REGISTRY_HOSTS
+              value: {{ join "," ($environmentBuilds.registryHosts | default (list "harbor.wellspiking.ai")) | quote }}
             - name: ENVIRONMENT_BASE_IMAGE
               value: {{ required "environmentBuilds.baseImage is required" $environmentBuilds.baseImage | quote }}
             - name: ENVIRONMENT_WORKSPACE_IMAGE

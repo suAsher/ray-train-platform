@@ -126,20 +126,21 @@ func (h environmentBuildHandler) result(c *gin.Context, value any, err error) {
 	case errors.Is(err, registryauth.ErrProjectsUnavailable):
 		h.failure(c, 503, "REGISTRY_PROJECTS_UNAVAILABLE", "Harbor 项目列表暂不可用，可手动输入已有项目并验证目标仓库写权限；无需因此更换凭据")
 	case errors.Is(err, eb.ErrAuthorization):
-		h.failure(c, 403, "REGISTRY_AUTHORIZATION_REQUIRED", "Harbor 凭据失效或没有目标仓库写权限，请使用用户名和 CLI Secret 重新授权")
+		h.failure(c, 403, "REGISTRY_AUTHORIZATION_REQUIRED", "Harbor 凭据失效或没有目标仓库写权限，请按所选仓库要求使用用户名和 CLI Secret 或密码重新授权")
 	default:
 		h.failure(c, 503, "ENVIRONMENT_BUILD_UNAVAILABLE", "环境服务暂不可用，请稍后重试")
 	}
 }
 func (h environmentBuildHandler) createAuthorization(c *gin.Context) {
 	var request struct {
+		RegistryHost string `json:"registryHost"`
 		Username string `json:"username"`
 		Secret   string `json:"secret"`
 	}
 	if !h.bind(c, &request) {
 		return
 	}
-	a, err := h.service.CreateAuthorization(c.Request.Context(), environmentOwner(c), eb.Credentials{Username: request.Username, Secret: request.Secret})
+	a, err := h.service.CreateAuthorizationForRegistry(c.Request.Context(), environmentOwner(c), request.RegistryHost, eb.Credentials{Username: request.Username, Secret: request.Secret})
 	request.Secret = ""
 	h.result(c, a, err)
 }

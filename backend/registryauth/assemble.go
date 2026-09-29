@@ -177,6 +177,11 @@ func pullAuthenticator(filename string) (authn.Authenticator, error) {
 }
 
 func (c *Client) Assemble(ctx context.Context, request AssembleRequest) (AssembleResult, error) {
+	// Assembly has an independent source contract: platform pull credentials and
+	// immutable base images remain confined to Wellspiking.
+	if c.Host() != Host {
+		return AssembleResult{}, ErrInvalidTarget
+	}
 	reference, err := name.NewDigest(request.Base, name.StrictValidation)
 	if err != nil || reference.RegistryStr() != Host || !digestPattern.MatchString(reference.DigestStr()) {
 		return AssembleResult{}, ErrInvalidTarget
@@ -199,7 +204,7 @@ func (c *Client) Assemble(ctx context.Context, request AssembleRequest) (Assembl
 	if err != nil {
 		return AssembleResult{}, err
 	}
-	base, err := remote.Image(reference, remote.WithContext(ctx), remote.WithAuth(auth), remote.WithPlatform(v1.Platform{OS: "linux", Architecture: "amd64"}), remote.WithTransport(&publishTransport{base: c.http.Transport, repository: repository}))
+	base, err := remote.Image(reference, remote.WithContext(ctx), remote.WithAuth(auth), remote.WithPlatform(v1.Platform{OS: "linux", Architecture: "amd64"}), remote.WithTransport(&publishTransport{base: c.http.Transport, host: Host, repository: repository}))
 	if err != nil {
 		return AssembleResult{}, publishError(err)
 	}

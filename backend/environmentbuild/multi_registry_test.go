@@ -195,6 +195,20 @@ func TestRetryRejectsCrossRegistryAuthorizationBeforeAndAfterPush(t *testing.T) 
 	}
 }
 
+func TestPublishedQomoloRetryKeepsHostWithoutLiveAuthorization(t *testing.T) {
+	for _, authID := range []string{"", "auth"} {
+		s, store, registry, _ := multiRegistryFixture(t)
+		now := s.now()
+		store.build.Status = Failed
+		store.build.RegistryHost = qomoloTestHost
+		store.build.ImageDigest = "sha256:"+strings.Repeat("3", 64)
+		store.build.CleanedAt = &now
+		store.authorizationError = ErrNotFound
+		b, err := s.Retry(context.Background(), Owner{TenantID: "team", UserID: "owner"}, store.build.ID, authID)
+		if err != nil || !store.retried || b.Host() != qomoloTestHost || len(registry.hosts) != 0 { t.Fatalf("verification retry changed registry or required credentials: %+v %v", b, err) }
+	}
+}
+
 func TestPushReconcileKeepsRegistryBindingAndImageReference(t *testing.T) {
 	for _, mismatch := range []bool{false, true} {
 		s, store, registry, runner := multiRegistryFixture(t)

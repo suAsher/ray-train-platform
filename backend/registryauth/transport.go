@@ -16,11 +16,23 @@ import (
 // cross-registry layer mounting or externally advertised token realm is allowed.
 type publishTransport struct {
 	base       http.RoundTripper
+	host       string
 	repository string
 }
 
+func (t *publishTransport) registryHost() string {
+	if t.host == "" {
+		return Host
+	}
+	return t.host
+}
+
+func (t *publishTransport) allowedScope(scope string) bool {
+	return scope == "repository:"+t.repository+":pull,push" || scope == "repository:"+t.repository+":push,pull" || scope == "repository:"+t.repository+":pull"
+}
+
 func (t *publishTransport) allowed(u *url.URL) bool {
-	if u == nil || u.Scheme != "https" || u.Host != Host || u.User != nil || u.Fragment != "" || u.RawPath != "" {
+	if u == nil || u.Scheme != "https" || u.Host != t.registryHost() || u.User != nil || u.Fragment != "" || u.RawPath != "" {
 		return false
 	}
 	if path.Clean(u.Path) != strings.TrimSuffix(u.Path, "/") {
@@ -32,7 +44,7 @@ func (t *publishTransport) allowed(u *url.URL) bool {
 			return false
 		}
 		for _, scope := range q["scope"] {
-			if scope != "repository:"+t.repository+":pull,push" && scope != "repository:"+t.repository+":push,pull" && scope != "repository:"+t.repository+":pull" {
+			if !t.allowedScope(scope) {
 				return false
 			}
 		}
@@ -52,7 +64,7 @@ func (t *publishTransport) allowed(u *url.URL) bool {
 	return u.Query().Get("from") == "" && u.Query().Get("mount") == ""
 }
 
-func validChallenge(value string) bool {
+func (t *publishTransport) validChallenge(value string) bool {
 	if value == "" {
 		return true
 	}
@@ -94,7 +106,10 @@ func validChallenge(value string) bool {
 			}
 		}
 	}
-	return values["realm"] == Origin+"/service/token" && values["service"] == registryService
+	if scope, exists := values["scope"]; exists && !t.allowedScope(scope) {
+		return false
+	}
+	return values["realm"] == "https://"+t.registryHost()+"/service/token" && values["service"] == registryService
 }
 
 // Preserve retry semantics without retaining an upstream error which may carry
@@ -130,7 +145,7 @@ func diagnosticMethod(method string) string {
 }
 
 func (t *publishTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	if !t.allowed(request.URL) || (request.Host != "" && request.Host != Host) {
+	if !t.allowed(request.URL) || (request.Host != "" && request.Host != t.registryHost()) {
 		publishDiagnostic(request.Context(), PublishDiagnostic{Code: "TRANSPORT_TARGET_REJECTED", Method: diagnosticMethod(request.Method)})
 		return nil, ErrUnavailable
 	}
@@ -153,7 +168,7 @@ func (t *publishTransport) RoundTrip(request *http.Request) (*http.Response, err
 		status = 0
 	}
 	publishDiagnostic(request.Context(), PublishDiagnostic{Code: "RESPONSE_RECEIVED", Method: diagnosticMethod(request.Method), Status: status})
-	valid := validChallenge(response.Header.Get("WWW-Authenticate"))
+	valid := t.validChallenge(response.Header.Get("WWW-Authenticate"))
 	rejection := "TRANSPORT_CHALLENGE_REJECTED"
 	if location := response.Header.Get("Location"); location != "" {
 		relative, err := url.Parse(location)

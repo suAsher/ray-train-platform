@@ -9,10 +9,17 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"maps"
 	"ray-train-platform-backend/environmentbuild"
-	"strings"
+	"ray-train-platform-backend/registryauth"
 )
 
 func (r *EnvironmentRunner) renderJob(b environmentbuild.Build) (*batchv1.Job, error) {
+	host, err := registryauth.NormalizeHost(b.RegistryHost)
+	if err != nil {
+		return nil, environmentbuild.ErrInvalid
+	}
+	if _, err := registryauth.ValidateTarget(b.Project, b.Repository); err != nil {
+		return nil, environmentbuild.ErrInvalid
+	}
 	if r.config.JobTimeout.Seconds() < 60 || r.config.JobTimeout.Seconds() > 7200 {
 		return nil, environmentbuild.ErrInvalid
 	}
@@ -25,6 +32,7 @@ func (r *EnvironmentRunner) renderJob(b environmentbuild.Build) (*batchv1.Job, e
 	mode := int32(0440)
 	security := &corev1.SecurityContext{RunAsNonRoot: &yes, RunAsUser: &uid, RunAsGroup: &uid, AllowPrivilegeEscalation: &no, Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}, SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}}
 	container := corev1.Container{Name: "environment", ImagePullPolicy: corev1.PullAlways, SecurityContext: security, TerminationMessagePath: "/dev/termination-log", TerminationMessagePolicy: corev1.TerminationMessageReadFile, Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("2Gi")}, Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")}}}
+	executionHost := environmentbuild.RegistryHost
 	pod := corev1.PodSpec{RestartPolicy: corev1.RestartPolicyNever, AutomountServiceAccountToken: &no, SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: &yes, RunAsUser: &uid, RunAsGroup: &uid, FSGroup: &uid, SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}}, NodeSelector: maps.Clone(r.config.NodeSelector), EnableServiceLinks: &no}
 	for _, name := range r.config.ImagePullSecrets {
 		if !isDNSSubdomain(name) {
@@ -64,21 +72,22 @@ func (r *EnvironmentRunner) renderJob(b environmentbuild.Build) (*batchv1.Job, e
 		}
 		container.Image = r.config.PublisherImage
 		container.Command = []string{"/usr/local/bin/raytrain-environment-publisher"}
-		container.Args = []string{"--layout", "/artifacts/oci", "--digest", b.ArtifactDigest, "--project", b.Project, "--repository", b.Repository, "--tag", b.Tag, "--credentials-dir", "/registry-credentials", "--result", "/dev/termination-log"}
+		container.Args = []string{"--layout", "/artifacts/oci", "--digest", b.ArtifactDigest, "--registry-host", host, "--project", b.Project, "--repository", b.Repository, "--tag", b.Tag, "--credentials-dir", "/registry-credentials", "--result", "/dev/termination-log"}
 		pod.Volumes = append(pod.Volumes, corev1.Volume{Name: "registry-credentials", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: environmentPublishSecretName(b), DefaultMode: &mode}}})
 		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{Name: "registry-credentials", MountPath: "/registry-credentials", ReadOnly: true})
 	case environmentbuild.VerifyingPull:
 		if !environmentDigestPattern.MatchString(b.ImageDigest) {
 			return nil, environmentbuild.ErrInvalid
 		}
-		container.Image = environmentbuild.RegistryHost + "/" + b.Project + "/" + b.Repository + "@" + b.ImageDigest
+		executionHost = host
+		container.Image = host + "/" + b.Project + "/" + b.Repository + "@" + b.ImageDigest
 		container.Command = []string{"/bin/sh", "-c"}
 		container.Args = []string{"/usr/local/bin/raytrain-environment verify --manifest /opt/raytrain/environment-materials/capture.json && /usr/local/bin/raytrain-selfcheck"}
 		container.Env = []corev1.EnvVar{{Name: "NVIDIA_VISIBLE_DEVICES", Value: "void"}, {Name: "CUDA_VISIBLE_DEVICES", Value: ""}}
 	default:
 		return nil, environmentbuild.ErrInvalid
 	}
-	if !environmentPinnedImage(container.Image) || strings.ContainsAny(container.Image, "\r\n\t ") {
+	if !environmentPinnedRegistryImage(container.Image, executionHost) {
 		return nil, fmt.Errorf("environment execution requires pinned Harbor images")
 	}
 	pod.Containers = []corev1.Container{container}

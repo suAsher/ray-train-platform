@@ -19,9 +19,13 @@ func (r *GormRepository) FinalizeEnvironmentBuild(ctx context.Context, b eb.Buil
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", b.ID).First(&current).Error; err != nil {
 			return environmentError(err)
 		}
-		if current.LeaseOwner != leaseOwner || current.Status != eb.VerifyingPull {
+		if current.LeaseOwner != leaseOwner || current.Status != eb.VerifyingPull || current.Host() != b.Host() {
 			return eb.ErrConflict
 		}
+		if b.ImageReference != current.Host()+"/"+current.Project+"/"+current.Repository+"@"+b.ImageDigest {
+			return eb.ErrConflict
+		}
+		b.RegistryHost = current.Host()
 		// The trusted builder and paired Base runtime are fixed to Ray 2.58.0;
 		// never derive runtime identity from the user's captured package manifest.
 		image := domain.PlatformImage{ID: b.ImageID, TenantID: b.TenantID, OwnerUserID: b.OwnerID, Visibility: b.Visibility, EnvironmentVersionID: b.ID, Name: b.Name, Description: b.Description, Reference: b.ImageReference, Kind: domain.ImageKindTraining, RayVersion: domain.RayVersionCanary, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayDDP, domain.TrainingEngineRayTrain}, CreatedBy: b.OwnerID}

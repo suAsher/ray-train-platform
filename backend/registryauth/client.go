@@ -19,6 +19,7 @@ import (
 
 const Origin = "https://harbor.wellspiking.ai"
 const Host = "harbor.wellspiking.ai"
+const QomoloHost = "harbor.qomolo.com"
 const registryService = "harbor-registry"
 const maxResponseBytes = 2 << 20
 
@@ -56,12 +57,47 @@ type ProjectPage struct {
 type Target struct {
 	Repository string `json:"repository"`
 }
-type Client struct{ http *http.Client }
+type Client struct {
+	http *http.Client
+	host string
+}
 
 func NewClient() *Client {
+	client, _ := NewClientForHost(Host)
+	return client
+}
+
+// NormalizeHost accepts only canonical, configured registry hosts. An omitted
+// host preserves the historical Wellspiking destination; URLs are not hosts.
+func NormalizeHost(host string) (string, error) {
+	switch host {
+	case "", Host:
+		return Host, nil
+	case QomoloHost:
+		return QomoloHost, nil
+	default:
+		return "", ErrInvalidTarget
+	}
+}
+
+// NewClientForHost freezes the only HTTPS origin to which credentials and
+// publication requests may be sent. It never discovers another token issuer.
+func NewClientForHost(host string) (*Client, error) {
+	host, err := NormalizeHost(host)
+	if err != nil {
+		return nil, err
+	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.ResponseHeaderTimeout = 15 * time.Second
-	return &Client{http: &http.Client{Transport: transport, Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	return &Client{host: host, http: &http.Client{Transport: transport, Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+}
+
+// Host identifies the frozen registry without exposing any credential state.
+func (c *Client) Host() string {
+	if c.host == "" {
+		return Host
+	}
+	return c.host
 }
 
 func validCredentials(c Credentials) bool {
@@ -94,7 +130,7 @@ func (c *Client) get(ctx context.Context, credentials Credentials, path string, 
 	if !validCredentials(credentials) {
 		return nil, ErrCredentials
 	}
-	target := Origin + path
+	target := "https://" + c.Host() + path
 	if len(query) > 0 {
 		target += "?" + query.Encode()
 	}
@@ -133,9 +169,9 @@ func (c *Client) Authenticate(ctx context.Context, credentials Credentials) (Ide
 		Token       string `json:"token"`
 		AccessToken string `json:"access_token"`
 	}
-	// Harbor OIDC CLI Secrets authenticate registry operations, but need not
-	// authenticate the management API. Ask the trusted issuer for identity only;
-	// repository permissions are checked separately against the frozen target.
+	// Harbor OIDC CLI Secrets and LDAP passwords authenticate registry operations,
+	// but need not authenticate the management API. Ask the selected trusted issuer
+	// for identity only; repository permissions are checked against the frozen target.
 	_, err := c.get(ctx, credentials, "/service/token", url.Values{"service": {registryService}, "account": {credentials.Username}}, &response)
 	if err != nil {
 		return Identity{}, err
@@ -150,7 +186,7 @@ func (c *Client) Authenticate(ctx context.Context, credentials Credentials) (Ide
 	return Identity{Username: credentials.Username}, nil
 }
 
-// This accepts only a token returned directly by the fixed TLS-verified Harbor
+// This accepts only a token returned directly by the selected TLS-verified Harbor
 // issuer above, never an API caller's bearer token. Registry upload requests
 // still undergo independent signature and repository-scope verification.
 func hasRegistryIdentity(token, username string, now time.Time) bool {
@@ -243,7 +279,7 @@ func (c *Client) pushToken(ctx context.Context, credentials Credentials, reposit
 	return token, nil
 }
 
-// The token is obtained directly from the fixed TLS-verified Harbor issuer;
+// The token is obtained directly from the selected TLS-verified Harbor issuer;
 // never call this on a token supplied by an API caller. Examining its claims
 // checks whether Harbor granted the requested scope (HTTP 200 alone does not).
 // The registry independently verifies the signature on every publish request.

@@ -83,7 +83,7 @@ func (c *Client) Publish(ctx context.Context, credentials Credentials, request P
 	if err != nil {
 		return PublishResult{}, err
 	}
-	reference, err := name.NewTag(Host+"/"+target.Repository+":"+request.Tag, name.StrictValidation)
+	reference, err := name.NewTag(c.Host()+"/"+target.Repository+":"+request.Tag, name.StrictValidation)
 	if err != nil {
 		return PublishResult{}, ErrInvalidTarget
 	}
@@ -98,7 +98,7 @@ func (c *Client) Publish(ctx context.Context, credentials Credentials, request P
 		defer upload.CloseIdleConnections()
 		baseTransport = upload
 	}
-	transport := &publishTransport{base: baseTransport, repository: target.Repository}
+	transport := &publishTransport{base: baseTransport, host: c.Host(), repository: target.Repository}
 	options := []remote.Option{remote.WithContext(ctx), remote.WithAuth(&authn.Bearer{Token: token}), remote.WithTransport(transport), remote.WithJobs(2)}
 	publishDiagnostic(ctx, PublishDiagnostic{Stage: "REGISTRY_WRITE"})
 	if err := remote.Write(reference, img, options...); err != nil {

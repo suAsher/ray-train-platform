@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"ray-train-platform-backend/registryauth"
 	"strings"
 )
 
@@ -14,6 +15,7 @@ type EnvironmentBuildConfig struct {
 	Enabled                                                 bool
 	BaseImage, WorkspaceImage, PrepareImage, PublisherImage string
 	StorageClass, WheelIndexURL                             string
+	RegistryHosts                                           []string
 	EncryptionKey                                           []byte
 	NodeSelector                                            map[string]string
 }
@@ -26,6 +28,10 @@ func loadEnvironmentBuildConfig() (EnvironmentBuildConfig, error) {
 	cfg := EnvironmentBuildConfig{Enabled: enabled}
 	if !enabled {
 		return cfg, nil
+	}
+	cfg.RegistryHosts, err = environmentRegistryHosts(os.Getenv("ENVIRONMENT_REGISTRY_HOSTS"))
+	if err != nil {
+		return EnvironmentBuildConfig{}, err
 	}
 	images := []struct {
 		key    string
@@ -54,4 +60,24 @@ func loadEnvironmentBuildConfig() (EnvironmentBuildConfig, error) {
 	}
 	cfg.NodeSelector = map[string]string{"platform.wellspiking.ai/gpu-pool": "production"}
 	return cfg, nil
+}
+
+func environmentRegistryHosts(value string) ([]string, error) {
+	if strings.TrimSpace(value) == "" {
+		return []string{registryauth.Host}, nil
+	}
+	var hosts []string
+	seen := make(map[string]bool)
+	for _, raw := range strings.Split(value, ",") {
+		host := strings.TrimSpace(raw)
+		normalized, err := registryauth.NormalizeHost(host)
+		if host == "" || err != nil {
+			return nil, fmt.Errorf("ENVIRONMENT_REGISTRY_HOSTS must contain only supported Harbor hosts")
+		}
+		if !seen[normalized] {
+			hosts = append(hosts, normalized)
+			seen[normalized] = true
+		}
+	}
+	return hosts, nil
 }

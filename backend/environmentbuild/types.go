@@ -47,6 +47,7 @@ func (Credentials) GoString() string { return "[Harbor credentials redacted]" }
 
 type Authorization struct {
 	ID        string    `json:"id" gorm:"primaryKey"`
+	RegistryHost string `json:"registryHost" gorm:"not null;default:harbor.wellspiking.ai"`
 	TenantID  string    `json:"-"`
 	OwnerID   string    `json:"-"`
 	Username  string    `json:"username"`
@@ -58,6 +59,12 @@ type Authorization struct {
 }
 
 func (Authorization) TableName() string { return "environment_registry_authorizations" }
+func (a Authorization) Host() string {
+	if a.RegistryHost == "" {
+		return RegistryHost
+	}
+	return a.RegistryHost
+}
 
 // CredentialMaterial is registered before Vault.Put, including refs whose
 // authorization transaction never completes. This permits crash cleanup without
@@ -75,6 +82,7 @@ func (CredentialMaterial) TableName() string { return "environment_credential_ma
 
 type Build struct {
 	ID                    string     `json:"id" gorm:"primaryKey"`
+	RegistryHost          string     `json:"registryHost" gorm:"not null;default:harbor.wellspiking.ai"`
 	TenantID              string     `json:"-"`
 	OwnerID               string     `json:"-"`
 	WorkspaceID           string     `json:"workspaceId"`
@@ -110,8 +118,14 @@ type Build struct {
 }
 
 func (Build) TableName() string { return "environment_builds" }
+func (b Build) Host() string {
+	if b.RegistryHost == "" {
+		return RegistryHost
+	}
+	return b.RegistryHost
+}
 func (b Build) Target() string {
-	return RegistryHost + "/" + b.Project + "/" + b.Repository + ":" + b.Tag
+	return b.Host() + "/" + b.Project + "/" + b.Repository + ":" + b.Tag
 }
 func (b Build) Terminal() bool {
 	return b.Status == Ready || b.Status == Canceled || b.Status == Failed || b.Status == AwaitingAuth
@@ -167,9 +181,9 @@ type Project struct {
 	CanPush   bool   `json:"canPush"`
 }
 type Registry interface {
-	Authenticate(context.Context, Credentials) error
-	Projects(context.Context, Credentials, int) ([]Project, error)
-	CheckPush(context.Context, Credentials, string) error
+	Authenticate(context.Context, string, Credentials) error
+	Projects(context.Context, string, Credentials, int) ([]Project, error)
+	CheckPush(context.Context, string, Credentials, string) error
 }
 type Store interface {
 	ReserveEnvironmentCredentialMaterial(context.Context, CredentialMaterial) error
@@ -193,6 +207,7 @@ type Store interface {
 }
 type Config struct {
 	Enabled           bool
+	RegistryHosts     []string
 	BaseImage         string
 	WorkspaceImage    string
 	EncryptionKey     []byte

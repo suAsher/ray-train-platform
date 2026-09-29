@@ -24,6 +24,7 @@ func environmentError(err error) error {
 	return err
 }
 func (r *GormRepository) SaveEnvironmentAuthorization(ctx context.Context, a eb.Authorization) error {
+	a.RegistryHost = a.Host()
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var old eb.Authorization
 		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", a.ID).First(&old).Error
@@ -36,7 +37,7 @@ func (r *GormRepository) SaveEnvironmentAuthorization(ctx context.Context, a eb.
 		if err != nil {
 			return err
 		}
-		if old.OwnerID != a.OwnerID || old.TenantID != a.TenantID || old.Username != a.Username || (!old.ExpiresAt.Equal(a.ExpiresAt)) || (old.BuildID != "" && old.BuildID != a.BuildID) || (old.Target != "" && old.Target != a.Target) {
+		if old.Host() != a.Host() || old.OwnerID != a.OwnerID || old.TenantID != a.TenantID || old.Username != a.Username || (!old.ExpiresAt.Equal(a.ExpiresAt)) || (old.BuildID != "" && old.BuildID != a.BuildID) || (old.Target != "" && old.Target != a.Target) {
 			return eb.ErrConflict
 		}
 		return tx.Save(&a).Error
@@ -56,6 +57,7 @@ func (r *GormRepository) ExpiredEnvironmentAuthorizations(ctx context.Context, n
 	return items, err
 }
 func (r *GormRepository) CreateEnvironmentBuild(ctx context.Context, b eb.Build) (eb.Build, error) {
+	b.RegistryHost = b.Host()
 	var found eb.Build
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if tx.Dialector.Name() == "postgres" {
@@ -65,7 +67,7 @@ func (r *GormRepository) CreateEnvironmentBuild(ctx context.Context, b eb.Build)
 		}
 		err := tx.Where("tenant_id = ? AND owner_id = ? AND idempotency_key = ?", b.TenantID, b.OwnerID, b.IdempotencyKey).First(&found).Error
 		if err == nil {
-			if found.WorkspaceID != b.WorkspaceID || found.Project != b.Project || found.Repository != b.Repository || found.Name != b.Name || found.Description != b.Description || found.Visibility != b.Visibility {
+			if found.Host() != b.Host() || found.WorkspaceID != b.WorkspaceID || found.Project != b.Project || found.Repository != b.Repository || found.Name != b.Name || found.Description != b.Description || found.Visibility != b.Visibility {
 				return eb.ErrConflict
 			}
 			return nil
@@ -171,9 +173,10 @@ func (r *GormRepository) SaveEnvironmentBuild(ctx context.Context, b eb.Build, l
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", b.ID).First(&current).Error; err != nil {
 			return environmentError(err)
 		}
-		if current.LeaseOwner != leaseOwner {
+		if current.LeaseOwner != leaseOwner || current.Host() != b.Host() {
 			return eb.ErrConflict
 		}
+		b.RegistryHost = current.Host()
 		// Cancellation wins over stale phase advancement, while retaining evidence
 		// of a push that actually completed before the cancellation was observed.
 		if current.Status == eb.CancelRequested && b.Status != eb.Canceled {
@@ -210,6 +213,7 @@ func (r *GormRepository) RetryEnvironmentBuild(ctx context.Context, o eb.Owner, 
 		b.Status = eb.Queued
 		b.ResumeStatus = resume
 		b.AuthID = authID
+		b.RegistryHost = b.Host()
 		b.Attempt++
 		b.CleanedAt = nil
 		b.Message = "等待重试"

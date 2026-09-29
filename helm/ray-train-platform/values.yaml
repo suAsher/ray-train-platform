@@ -165,6 +165,10 @@ backend:
   # Optional self-service environment publication; never changes workspace/base defaults.
   environmentBuilds:
     enabled: false
+    # Enable another destination only after the backend and publisher rollout.
+    # Source runtime images and the first global imagePullSecret stay Wellspiking.
+    registryHosts:
+      - harbor.wellspiking.ai
     baseImage: ""
     workspaceImage: ""
     prepareImage: ""

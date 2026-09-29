@@ -25,7 +25,8 @@ func TestPublishTransportRejectsHostOverride(t *testing.T) {
 }
 
 func TestChallengeAllowsQuotedScopeCommaButNotAlternateRealm(t *testing.T) {
-	if !validChallenge(`Bearer realm="https://harbor.wellspiking.ai/service/token",service="harbor-registry",scope="repository:team/model:pull,push"`) {
+	guard := &publishTransport{repository: "team/model"}
+	if !guard.validChallenge(`Bearer realm="https://harbor.wellspiking.ai/service/token",service="harbor-registry",scope="repository:team/model:pull,push"`) {
 		t.Fatal("legitimate scoped challenge rejected")
 	}
 	for _, challenge := range []string{
@@ -33,7 +34,7 @@ func TestChallengeAllowsQuotedScopeCommaButNotAlternateRealm(t *testing.T) {
 		`Bearer realm="https://harbor.wellspiking.ai/service/token?redirect=evil",service="harbor-registry"`,
 		`Bearer realm="https://harbor.wellspiking.ai/service/token",service="harbor-registry",service="evil"`,
 	} {
-		if validChallenge(challenge) {
+		if guard.validChallenge(challenge) {
 			t.Fatalf("unsafe challenge accepted: %s", challenge)
 		}
 	}

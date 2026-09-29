@@ -15,10 +15,10 @@ type authenticationFailureRegistry struct {
 	failure error
 }
 
-func (r authenticationFailureRegistry) Authenticate(context.Context, Credentials) error {
+func (r authenticationFailureRegistry) Authenticate(context.Context, string, Credentials) error {
 	return r.failure
 }
-func (r authenticationFailureRegistry) CheckPush(context.Context, Credentials, string) error {
+func (r authenticationFailureRegistry) CheckPush(context.Context, string, Credentials, string) error {
 	return r.failure
 }
 

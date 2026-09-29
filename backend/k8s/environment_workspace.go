@@ -13,6 +13,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/remotecommand"
 	"ray-train-platform-backend/environmentbuild"
+	"ray-train-platform-backend/registryauth"
 	"regexp"
 	"strings"
 	"time"
@@ -21,8 +22,16 @@ import (
 var environmentDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 func environmentPinnedImage(image string) bool {
+	return environmentPinnedRegistryImage(image, environmentbuild.RegistryHost)
+}
+
+func environmentPinnedRegistryImage(image, host string) bool {
+	normalized, err := registryauth.NormalizeHost(host)
+	if err != nil || host != normalized || strings.ContainsAny(image, "\r\n\t ") {
+		return false
+	}
 	parts := strings.Split(image, "@")
-	return len(parts) == 2 && strings.HasPrefix(parts[0], environmentbuild.RegistryHost+"/") && environmentDigestPattern.MatchString(parts[1])
+	return len(parts) == 2 && strings.HasPrefix(parts[0], host+"/") && environmentDigestPattern.MatchString(parts[1])
 }
 
 // The database lookup preceding this method establishes the authenticated owner.

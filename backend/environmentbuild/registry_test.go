@@ -85,25 +85,25 @@ func TestHarborRegistryAdapterPreservesIdentityPaginationAndExactRepositoryGrant
 	defer transport.CloseIdleConnections()
 	adapter := HarborRegistry{Client: client}
 	ctx := context.Background()
-	if err := adapter.Authenticate(ctx, credentials); err != nil {
+	if err := adapter.Authenticate(ctx, RegistryHost, credentials); err != nil {
 		t.Fatal(err)
 	}
-	projects, err := adapter.Projects(ctx, credentials, 2)
+	projects, err := adapter.Projects(ctx, RegistryHost, credentials, 2)
 	if err != nil || len(projects) != 1 || projects[0].Name != "team" || projects[0].ProjectID != 7 || !projects[0].CanPush {
 		t.Fatalf("project adapter mismatch: %+v %v", projects, err)
 	}
-	if err = adapter.CheckPush(ctx, credentials, "team/nested/model"); err != nil {
+	if err = adapter.CheckPush(ctx, RegistryHost, credentials, "team/nested/model"); err != nil {
 		t.Fatal(err)
 	}
 	allowPush.Store(false)
-	if err = adapter.CheckPush(ctx, credentials, "team/nested/model"); !errors.Is(err, registryauth.ErrForbidden) {
+	if err = adapter.CheckPush(ctx, RegistryHost, credentials, "team/nested/model"); !errors.Is(err, registryauth.ErrForbidden) {
 		t.Fatal("pull-only grant accepted by adapter")
 	}
-	if err = adapter.CheckPush(ctx, credentials, "missing-project"); !errors.Is(err, ErrInvalid) {
+	if err = adapter.CheckPush(ctx, RegistryHost, credentials, "missing-project"); !errors.Is(err, ErrInvalid) {
 		t.Fatal("missing project accepted")
 	}
 	deniedProjects.Store(true)
-	if _, err = adapter.Projects(ctx, credentials, 2); !errors.Is(err, registryauth.ErrProjectsUnavailable) {
+	if _, err = adapter.Projects(ctx, RegistryHost, credentials, 2); !errors.Is(err, registryauth.ErrProjectsUnavailable) {
 		t.Fatal("project API denial was misclassified as a credential failure")
 	}
 	for _, formatted := range []string{credentials.String(), credentials.GoString()} {

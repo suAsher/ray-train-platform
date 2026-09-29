@@ -93,13 +93,13 @@ type lifecycleRegistry struct {
 	deny bool
 }
 
-func (r *lifecycleRegistry) CheckPush(context.Context, Credentials, string) error {
+func (r *lifecycleRegistry) CheckPush(context.Context, string, Credentials, string) error {
 	if r.deny {
 		return ErrAuthorization
 	}
 	return nil
 }
-func (r *lifecycleRegistry) Projects(context.Context, Credentials, int) ([]Project, error) {
+func (r *lifecycleRegistry) Projects(context.Context, string, Credentials, int) ([]Project, error) {
 	return []Project{{Name: "project", ProjectID: 4, CanPush: true}}, nil
 }
 

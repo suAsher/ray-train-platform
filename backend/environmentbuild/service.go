@@ -26,6 +26,11 @@ type Service struct {
 }
 
 func NewService(store Store, runner Runner, registry Registry, vault Vault, config Config) (*Service, error) {
+	hosts, err := normalizedRegistryHosts(config.RegistryHosts)
+	if err != nil {
+		return nil, err
+	}
+	config.RegistryHosts = hosts
 	if config.Enabled && (store == nil || runner == nil || registry == nil || vault == nil || len(config.EncryptionKey) != 32 || !strings.Contains(config.BaseImage, "@sha256:") || !strings.Contains(config.WorkspaceImage, "@sha256:")) {
 		return nil, ErrInvalid
 	}
@@ -50,11 +55,12 @@ func (s *Service) Capabilities() map[string]any {
 	if s == nil {
 		return map[string]any{"enabled": false}
 	}
-	return map[string]any{"enabled": s.Enabled(), "registryHost": RegistryHost, "baseImage": s.config.BaseImage, "workspaceImage": s.config.WorkspaceImage, "supportedCaptureVersion": 1}
+	return map[string]any{"enabled": s.Enabled(), "registryHost": RegistryHost, "registries": s.registryCapabilities(), "baseImage": s.config.BaseImage, "workspaceImage": s.config.WorkspaceImage, "supportedCaptureVersion": 1}
 }
 
 type CreateRequest struct {
 	AuthorizationID string `json:"authorizationId"`
+	RegistryHost    string `json:"registryHost"`
 	Project         string `json:"project"`
 	Repository      string `json:"repository"`
 	Name            string `json:"name"`
@@ -88,6 +94,10 @@ func (s *Service) Create(ctx context.Context, owner Owner, workspaceID string, r
 	if owner.UserID == "" || owner.TenantID == "" || !validTarget(req.Project, req.Repository) || strings.TrimSpace(req.Name) == "" || !validText(req.Name, 128, false) || !validText(req.Description, 2000, true) || !requestKey.MatchString(req.IdempotencyKey) {
 		return Build{}, ErrInvalid
 	}
+	host, err := s.registryHost(req.RegistryHost)
+	if err != nil {
+		return Build{}, err
+	}
 	if req.Visibility == "" {
 		req.Visibility = "personal"
 	}
@@ -99,7 +109,7 @@ func (s *Service) Create(ctx context.Context, owner Owner, workspaceID string, r
 	id := "env-" + hex.EncodeToString(sum[:16])
 	existing, err := s.store.EnvironmentBuild(ctx, owner, id)
 	if err == nil {
-		if existing.WorkspaceID != workspaceID || existing.Project != req.Project || existing.Repository != req.Repository || existing.Name != req.Name || existing.Description != req.Description || existing.Visibility != req.Visibility {
+		if existing.Host() != host || existing.WorkspaceID != workspaceID || existing.Project != req.Project || existing.Repository != req.Repository || existing.Name != req.Name || existing.Description != req.Description || existing.Visibility != req.Visibility {
 			return Build{}, ErrConflict
 		}
 		return existing, nil
@@ -127,7 +137,7 @@ func (s *Service) Create(ctx context.Context, owner Owner, workspaceID string, r
 	}
 
 	now := s.now()
-	b := Build{ID: id, TenantID: owner.TenantID, OwnerID: owner.UserID, WorkspaceID: workspaceID, Namespace: ws.Namespace, WorkspaceResourceName: ws.ResourceName, WorkspaceUID: snapshot.UID, BaseImage: s.config.BaseImage, WorkspaceImage: s.config.WorkspaceImage, Name: req.Name, Description: req.Description, Visibility: req.Visibility, Project: req.Project, Repository: req.Repository, Tag: id, Status: Queued, AuthID: req.AuthorizationID, IdempotencyKey: req.IdempotencyKey, Attempt: 1, ArtifactExpiresAt: now.Add(24 * time.Hour), CreatedAt: now, UpdatedAt: now}
+	b := Build{ID: id, RegistryHost: host, TenantID: owner.TenantID, OwnerID: owner.UserID, WorkspaceID: workspaceID, Namespace: ws.Namespace, WorkspaceResourceName: ws.ResourceName, WorkspaceUID: snapshot.UID, BaseImage: s.config.BaseImage, WorkspaceImage: s.config.WorkspaceImage, Name: req.Name, Description: req.Description, Visibility: req.Visibility, Project: req.Project, Repository: req.Repository, Tag: id, Status: Queued, AuthID: req.AuthorizationID, IdempotencyKey: req.IdempotencyKey, Attempt: 1, ArtifactExpiresAt: now.Add(24 * time.Hour), CreatedAt: now, UpdatedAt: now}
 	// Reserve the authorization before queueing; no job can see unbound material.
 	if _, err = s.bindAuthorization(ctx, owner, req.AuthorizationID, b); err != nil {
 		return Build{}, err
@@ -165,12 +175,26 @@ func (s *Service) Retry(ctx context.Context, o Owner, id, authorizationID string
 	if b.Attempt >= 5 || !s.now().Before(b.ArtifactExpiresAt) {
 		return Build{}, ErrConflict
 	}
+	if _, err = s.registryHost(b.Host()); err != nil {
+		return Build{}, err
+	}
 	if authorizationID == "" {
 		authorizationID = b.AuthID
 	}
 	if b.ImageDigest == "" {
 		if _, err = s.bindAuthorization(ctx, o, authorizationID, b); err != nil {
 			return Build{}, err
+		}
+	} else if authorizationID != b.AuthID {
+		// Verification needs no live push credential. Preserve retries using the
+		// original (possibly cleaned) authorization, but reject a replacement
+		// from another registry or operation even after an image was pushed.
+		a, lookupErr := s.store.EnvironmentAuthorization(ctx, o, authorizationID)
+		if lookupErr != nil {
+			return Build{}, lookupErr
+		}
+		if a.Host() != b.Host() || (a.BuildID != "" && a.BuildID != b.ID) || (a.Target != "" && a.Target != b.Project+"/"+b.Repository) {
+			return Build{}, ErrConflict
 		}
 	}
 	return s.store.RetryEnvironmentBuild(ctx, o, id, authorizationID, s.now())
@@ -233,6 +257,9 @@ func (s *Service) reconcileBuild(ctx context.Context, b Build) error {
 	if !s.now().Before(b.ArtifactExpiresAt) {
 		return s.fail(ctx, b, Failed, "构建已超时，请重新创建环境版本")
 	}
+	if _, err := s.registryHost(b.Host()); err != nil {
+		return s.fail(ctx, b, Failed, "目标 Harbor 未启用或无效，请联系平台管理员")
+	}
 	if b.Status == Queued {
 		b.Status = Capturing
 		return s.store.SaveEnvironmentBuild(ctx, b, s.controllerID)
@@ -243,14 +270,14 @@ func (s *Service) reconcileBuild(ctx context.Context, b Build) error {
 		if err != nil {
 			return s.fail(ctx, b, AwaitingAuth, "发布授权已失效，请重新授权后重试")
 		}
-		if a.BuildID != b.ID || a.Target != b.Project+"/"+b.Repository {
+		if a.Host() != b.Host() || a.BuildID != b.ID || a.Target != b.Project+"/"+b.Repository {
 			return s.fail(ctx, b, AwaitingAuth, "发布授权与目标不匹配")
 		}
 		c, err := s.credentials(ctx, a)
 		if err != nil {
 			return s.fail(ctx, b, AwaitingAuth, "发布授权已过期，请重新授权")
 		}
-		if err = s.registry.CheckPush(ctx, c, b.Project+"/"+b.Repository); err != nil {
+		if err = s.registry.CheckPush(ctx, b.Host(), c, b.Project+"/"+b.Repository); err != nil {
 			if errors.Is(registryAuthorizationError(err), ErrAuthorization) {
 				return s.fail(ctx, b, AwaitingAuth, "没有目标仓库推送权限，请检查 Harbor 授权")
 			}
@@ -307,7 +334,7 @@ func (s *Service) reconcileBuild(ctx context.Context, b Build) error {
 			return s.fail(ctx, b, Failed, "推送结果摘要无效")
 		}
 		b.ImageDigest = result.ImageDigest
-		b.ImageReference = RegistryHost + "/" + b.Project + "/" + b.Repository + "@" + result.ImageDigest
+		b.ImageReference = b.Host() + "/" + b.Project + "/" + b.Repository + "@" + result.ImageDigest
 		b.Status = VerifyingPull
 	case VerifyingPull:
 		b.ChecksJSON = mergeChecks(b.ChecksJSON, result.ChecksJSON)

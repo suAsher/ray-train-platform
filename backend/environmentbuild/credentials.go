@@ -26,7 +26,7 @@ func randomID(prefix string) (string, error) {
 func authorizationAAD(a Authorization) []byte {
 	// JSON prevents ambiguous concatenation; every authorization belongs to one
 	// owner and, after reservation, exactly one build and repository.
-	b, _ := json.Marshal([]string{"raytrain/environment-publish/v1", RegistryHost, a.ID, a.TenantID, a.OwnerID, a.Username, a.BuildID, a.Target, a.ExpiresAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")})
+	b, _ := json.Marshal([]string{"raytrain/environment-publish/v1", a.Host(), a.ID, a.TenantID, a.OwnerID, a.Username, a.BuildID, a.Target, a.ExpiresAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")})
 	return b
 }
 func (s *Service) encrypt(a Authorization, credentials Credentials) ([]byte, error) {
@@ -50,6 +50,9 @@ func (s *Service) encrypt(a Authorization, credentials Credentials) ([]byte, err
 	return gcm.Seal(nonce, nonce, plain, authorizationAAD(a)), nil
 }
 func (s *Service) credentials(ctx context.Context, a Authorization) (Credentials, error) {
+	if _, err := s.registryHost(a.Host()); err != nil {
+		return Credentials{}, ErrAuthorization
+	}
 	if !s.now().Before(a.ExpiresAt) {
 		return Credentials{}, ErrAuthorization
 	}
@@ -93,13 +96,20 @@ func validCredential(c Credentials) bool {
 	return true
 }
 func (s *Service) CreateAuthorization(ctx context.Context, owner Owner, credentials Credentials) (Authorization, error) {
+	return s.CreateAuthorizationForRegistry(ctx, owner, RegistryHost, credentials)
+}
+func (s *Service) CreateAuthorizationForRegistry(ctx context.Context, owner Owner, requestedHost string, credentials Credentials) (Authorization, error) {
 	if !s.Enabled() {
 		return Authorization{}, ErrUnavailable
 	}
 	if owner.UserID == "" || owner.TenantID == "" || !validCredential(credentials) {
 		return Authorization{}, ErrInvalid
 	}
-	if err := s.registry.Authenticate(ctx, credentials); err != nil {
+	host, err := s.registryHost(requestedHost)
+	if err != nil {
+		return Authorization{}, err
+	}
+	if err := s.registry.Authenticate(ctx, host, credentials); err != nil {
 		return Authorization{}, registryAuthorizationError(err)
 	}
 	id, err := randomID("env-auth-")
@@ -107,7 +117,7 @@ func (s *Service) CreateAuthorization(ctx context.Context, owner Owner, credenti
 		return Authorization{}, err
 	}
 	now := s.now().UTC().Truncate(time.Microsecond)
-	a := Authorization{ID: id, TenantID: owner.TenantID, OwnerID: owner.UserID, Username: credentials.Username, SecretRef: id, ExpiresAt: now.Add(s.config.AuthorizationTTL).Truncate(time.Microsecond), CreatedAt: now}
+	a := Authorization{ID: id, RegistryHost: host, TenantID: owner.TenantID, OwnerID: owner.UserID, Username: credentials.Username, SecretRef: id, ExpiresAt: now.Add(s.config.AuthorizationTTL).Truncate(time.Microsecond), CreatedAt: now}
 	sealed, err := s.encrypt(a, credentials)
 	if err != nil {
 		return Authorization{}, err
@@ -136,7 +146,7 @@ func (s *Service) Projects(ctx context.Context, owner Owner, id string, page int
 	if page < 1 || page > 1000 {
 		return nil, ErrInvalid
 	}
-	return s.registry.Projects(ctx, c, page)
+	return s.registry.Projects(ctx, a.Host(), c, page)
 }
 func (s *Service) CheckTarget(ctx context.Context, owner Owner, id, project, repository string) error {
 	if !validTarget(project, repository) {
@@ -153,7 +163,7 @@ func (s *Service) CheckTarget(ctx context.Context, owner Owner, id, project, rep
 	if err != nil {
 		return err
 	}
-	if err = s.registry.CheckPush(ctx, c, project+"/"+repository); err != nil {
+	if err = s.registry.CheckPush(ctx, a.Host(), c, project+"/"+repository); err != nil {
 		return registryAuthorizationError(err)
 	}
 	return nil
@@ -177,11 +187,14 @@ func (s *Service) RevokeAuthorization(ctx context.Context, owner Owner, id strin
 	return s.store.DeleteEnvironmentAuthorization(ctx, id)
 }
 func (s *Service) bindAuthorization(ctx context.Context, owner Owner, id string, b Build) (Authorization, error) {
+	if _, err := s.registryHost(b.Host()); err != nil {
+		return Authorization{}, err
+	}
 	a, err := s.store.EnvironmentAuthorization(ctx, owner, id)
 	if err != nil {
 		return Authorization{}, err
 	}
-	if a.BuildID != "" && a.BuildID != b.ID {
+	if a.Host() != b.Host() || (a.BuildID != "" && a.BuildID != b.ID) || (a.Target != "" && a.Target != b.Project+"/"+b.Repository) {
 		return Authorization{}, ErrConflict
 	}
 	if a.ExpiresAt.Sub(s.now()) < time.Minute {
@@ -191,12 +204,13 @@ func (s *Service) bindAuthorization(ctx context.Context, owner Owner, id string,
 	if err != nil {
 		return Authorization{}, err
 	}
-	if err = s.registry.CheckPush(ctx, c, b.Project+"/"+b.Repository); err != nil {
+	if err = s.registry.CheckPush(ctx, b.Host(), c, b.Project+"/"+b.Repository); err != nil {
 		return Authorization{}, registryAuthorizationError(err)
 	}
 	// Use a separate material reference so a DB failure never invalidates the
 	// existing unbound authorization. Store CAS prevents cross-build reuse.
 	bound := a
+	bound.RegistryHost = b.Host()
 	bound.BuildID = b.ID
 	bound.Target = b.Project + "/" + b.Repository
 	bound.SecretRef = a.ID + "-" + b.ID
