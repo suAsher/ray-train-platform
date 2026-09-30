@@ -60,7 +60,7 @@ func TestEnvironmentImageGuideSeparatesImageCaptureFromStoragePersistence(t *tes
 		{"普通 home（通常为 /home/ray）中的代码、配置和文件", "不进入", "临时"},
 		{"/workspace 中的项目和文件", "不进入", "持久"},
 		{"/mnt/storage/me 中的数据、权重和结果", "不进入", "持久"},
-		{"APT/系统软件与容器其他目录", "不进入", "不保证保留"},
+		{"APT/系统软件与容器其他目录", "不进入", "重建后不会保留"},
 	} {
 		found := false
 		for _, line := range strings.Split(article.Markdown, "\n") {
@@ -76,6 +76,51 @@ func TestEnvironmentImageGuideSeparatesImageCaptureFromStoragePersistence(t *tes
 		if !found {
 			t.Errorf("missing storage boundary for %s", row.location)
 		}
+	}
+}
+
+func TestDebugGuidesExplainTemporarySudoSystemPackages(t *testing.T) {
+	documents, err := Documents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	guides := map[string]string{
+		"saved environment": ProjectHelpArticle(domain.HelpDocument{ID: "custom-environment", UpdatedBy: PlatformSeedActor}).Markdown,
+	}
+	for _, document := range documents {
+		if document.ID == "debug" {
+			guides["debug seed"] = document.Markdown
+			document.UpdatedBy = PlatformSeedActor
+			guides["debug article"] = ProjectHelpArticle(document).Markdown
+		}
+	}
+	for _, guide := range PublicGuides() {
+		if guide.ID == "debug" {
+			guides["public debug"] = guide.Markdown
+		}
+	}
+	if len(guides) != 4 {
+		t.Fatalf("missing debug help entry: got %d", len(guides))
+	}
+	for name, markdown := range guides {
+		t.Run(name, func(t *testing.T) {
+			for _, required := range []string{
+				"升级后", "新建", "sudo apt-get update && sudo apt-get install",
+				"旧镜像", "sudo: command not found",
+				"系统包不会进入保存的训练环境", "重建后不会保留",
+				"/workspace", "个人持久", "root 所有者",
+				"/opt/raytrain/environment/bin/python",
+			} {
+				if !strings.Contains(markdown, required) {
+					t.Errorf("missing system package boundary %q", required)
+				}
+			}
+			for _, forbidden := range []string{"apt install 不可用", "apt 不可用", "整个容器都会保存", "系统包会随保存的训练环境一起保留"} {
+				if strings.Contains(markdown, forbidden) {
+					t.Errorf("stale or misleading system package guidance %q", forbidden)
+				}
+			}
+		})
 	}
 }
 
