@@ -1,6 +1,6 @@
 # 管理员数据同步
 
-状态：开发候选，尚未发布。本文区分已实现的操作合同与仍需通过的验收，不代表线上已启用。
+状态（2026-10-01）：实现、构建机回归及个人空间真实 TOS 验收已通过，尚未发布或启用。集群执行和登录后的线上页面验收仍待发布后完成。
 
 ## 使用范围
 
@@ -57,18 +57,36 @@ Worker 使用独立 ServiceAccount，不挂 Kubernetes API token；只读 NFS、
 - TOS SDK 固定为 `tos==2.9.3`。新对象支持条件分片完成；已有对象大于 5 GiB 时，当前 SDK 无法提供本功能要求的条件分片覆盖保证，预检会拒绝，不能静默改为无条件覆盖。
 - IDC 扫描目前保守读取并计算文件校验值，增量零写入不代表零源端读取。内容校验模式需要读取对象内容，会增加耗时和流量。
 - 清单当前保存在内存及检查点 JSON 中。默认 Worker 内存上限 2 GiB；尚未以原 135,151 文件、约 270 GB 数据集做本功能规模验收，不能据小样本声称该规模已经验证。
-- 写入结果不明时会保留锁并等待运维核对；静态凭据模式不会因超时自动转移写入权。不要通过删除 Pod、修改数据库状态或重复提交来绕过该限制。
+- 写入结果不明时会保留锁并等待运维核对；静态凭据模式不会因超时自动转移写入权。不要通过删除 Pod、修改数据库状态或重复提交来绕过该限制。只读预检的回执无法恢复时可结束并释放锁；传输阶段没有排空回执时继续保留锁。
+- 检查点有效期控制是否允许恢复，不代表已经实现磁盘和 Kubernetes 历史对象的自动清理。保留执行器与回执证据，运维清理前先核对活动运行及锁。
 
 ## 本次验收与证据
 
-验收仅使用 guofeng.su 个人空间中的新 UUID 子目录，界面路径形如：
+2026-10-01 验证的业务源码为后端 `18b7fe3c37a28e8f64370c5a0d60c081b99a75e7`、新 Portal `2e8d9b46b488063382d61605ddabe560b82ba4d3`。Portal 已合并当时远端 `dev f9ee85aed7a50d73037a2784ebf28f7e9d50f7b4`；发布前须重新核对远端。后续仅文档更新不改变这些测试对应的业务源码。
+
+| 验证 | 结果 | 证据范围 |
+| --- | --- | --- |
+| Go 格式、go vet、完整回归 | 通过；同步核心包覆盖率 80.4% | 构建机完整候选；`-p 1` 防止测试包争用迁移锁 |
+| PostgreSQL | 通过 | 隔离真实 PostgreSQL；全新、重复、旧版本升级和并发事务，未将 SQLite 或 skipped 用例计为通过 |
+| Worker | 79 项独立测试通过；启用分支统计的覆盖率 89% | 主机隔离环境及最终非 root、只读根目录镜像内运行 |
+| 新 Portal | Node 15/15、浏览器 5/5、标准 lint/build 通过 | 浏览器使用隔离模拟 API；development/staging 的含凭据配置未传输，测试使用公开地址占位配置 |
+| 镜像与 Helm | 后端、Worker 验证镜像构建通过；Chart lint/渲染通过 | 未推 Harbor，未应用到集群 |
+| 真实 TOS | 9/9 通过，清理错误 0 | guofeng.su 已存在的稳定个人 storage home 下新 UUID 子目录 |
+
+真实验收使用的用户路径：
 
 ```text
-/mnt/storage/me/files/storage-sync-acceptance-<UUID>/
+/mnt/storage/me/files/storage-sync-acceptance-7bc583a7a72b4e0684209b3d3ca28170/
 ```
 
-具体子目录必须由实际执行结果记录，不能预先声称已生成。测试覆盖 IDC 小样本上传、TOS 复制、超过 1000 个对象的分页、全量与零变化增量、保留目标 JSON、源/目标并发变更、分片暂停恢复及取消。只清理本次创建的对象与分片；不触碰已有个人文件或用户训练任务。
+在该临时子目录中验证了 1005 对象分页、全量、零变化增量、保留目标 JSON、IDC 本地样本上传及内容回读、同大小且回拨 mtime 的变化、源/目标并发修改保护、6 MiB 分片暂停续传、仅中止本次分片的取消以及条件分片完成。测试完成后已清理本次对象和分片；独立分页复核确认该 UUID 前缀对象数和未完成分片数均为 0。临时凭据文件及其空目录已删除，既有 Kubernetes Secret 未改。未修改既有个人文件或训练任务。
 
-截至候选 `e19aae30`：前一候选的 63 项 Worker 回归和真实 PostgreSQL 仓储测试已通过；新增的身份一致性、内容校验、长扫描、检查点和权限回归尚待构建机执行。完整 Go/vet、覆盖率门禁、新 Portal lint/build/浏览器回归、镜像构建及真实个人空间验收仍未完成。未发布、未启用。
+IDC 用例使用构建机临时文件系统样本；尚未证明训练集群 CPU 节点的 NFS 挂载和 Worker 回调链路可用。上述真实 TOS 验收不等于新 Portal → 线上 API → Kubernetes Job 的完整验收；定时规则已通过代码测试，尚未在线触发。正式发布后仍需在同一用户的新测试目录完成这些验证。
 
-已有隔离测试证据位于构建机 `/tmp/raytrain-storage-sync-evidence-20261001/`。源码上传正等待用户补充目的地授权；任何未运行或被拦截的步骤均不得计为验收通过。
+构建机证据目录：
+
+- `/tmp/raytrain-storage-sync-evidence-20261001/`：`go-candidate11-full.log`、`go-candidate11.cover`、`python-candidate11.log`、`python-candidate11-coverage.log`、`python-image-candidate11.log`、`backend-image-candidate11.log`、`real-acceptance-candidate11.log`。
+- `/tmp/raytrain-storage-sync-portal-verify-a5e3c596/`：`unit-green.log`、`lint-build.log`、`production-build.log`。
+- `/tmp/raytrain-storage-sync-portal-verify-2e8d9b46/`：`e2e.log`、`e2e-lint.log`。`a5e3c596 → 2e8d9b46` 仅改测试定位器，产品源码相同。
+
+用户已授权源码发送至既有构建机的隔离目录并执行测试、构建和个人目录验收。该授权已落实；目前没有推送、生产数据库迁移、部署或功能启用记录。

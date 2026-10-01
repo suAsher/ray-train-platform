@@ -49,12 +49,12 @@ Worker manifest contains resolved mappings and fingerprints in a private checkpo
 
 **Owner:** backend-core worker. **Files:** `backend/storagesync/*.go`, `backend/repositories/storage_sync*.go`, `backend/db/migrations/0058_storage_sync.up.sql`, migration version assertions in `backend/db/postgres*_test.go`.
 
-- [ ] Write domain/manager tests for path traversal, overlapping mapped prefixes, fixed run revisions, preview expiry, stable schedule slots, pause/resume transitions and stale attempt callbacks.
-- [ ] Write PostgreSQL tests for concurrent run creation, active-plan occupancy, hierarchical source read/target write locks, monotonic progress, and transaction rollback after conflict. Use a disposable PostgreSQL database; SQLite does not satisfy this gate.
-- [ ] Send tests-only snapshot to builder and record expected missing-feature failures before implementation.
-- [ ] Implement focused models and validation, repository with explicit transactions/CAS, manager and schedule controller. All source/target paths come from resolved immutable snapshots. Never release locks on heartbeat expiry alone.
-- [ ] Publish exact exported types/interfaces and HTTP/worker JSON contract to the API, runtime and UI owners before dependent implementation.
-- [ ] Run scoped Go and PostgreSQL tests; confirm added-module coverage >=80%; root performs spec then code review.
+- [x] Write domain/manager tests for path traversal, overlapping mapped prefixes, fixed run revisions, preview expiry, stable schedule slots, pause/resume transitions and stale attempt callbacks.
+- [x] Write PostgreSQL tests for concurrent run creation, active-plan occupancy, hierarchical source read/target write locks, monotonic progress, and transaction rollback after conflict. Use a disposable PostgreSQL database; SQLite does not satisfy this gate.
+- [x] Send tests-only snapshot to builder and record expected missing-feature failures before implementation.
+- [x] Implement focused models and validation, repository with explicit transactions/CAS, manager and schedule controller. All source/target paths come from resolved immutable snapshots. Never release locks on heartbeat expiry alone.
+- [x] Publish exact exported types/interfaces and HTTP/worker JSON contract to the API, runtime and UI owners before dependent implementation.
+- [x] Run scoped Go and PostgreSQL tests; confirm added-module coverage >=80%; root performs spec then code review.
 
 ```go
 // Required observable behavior; exact fixture helpers belong in this task.
@@ -68,13 +68,13 @@ Worker manifest contains resolved mappings and fingerprints in a private checkpo
 
 **Owner:** worker-engine implementer. **Files:** `images/storage-sync/Dockerfile`, `images/storage-sync/requirements.txt`, `images/storage-sync/storage_sync/*.py`, `images/storage-sync/tests/*.py`.
 
-- [ ] Add tests for JSON/manifest mapping, source mutation, target-only JSON preservation, progress de-duplication, empty files, >1000 keys, and simulated interruption/resume.
-- [ ] Execute RED tests in builder Python container before adding implementation.
-- [ ] Pin SDK after official API verification. Implement separate readonly scan/preview, conditional transfer, verification and browse actions; use structured SDK progress/checkpoints rather than parsing tosutil terminal output.
-- [ ] Preserve only this run's checkpoint/multipart ownership; pause retains resumable state, cancel never deletes completed destination objects. Revalidate source identity and target versions on resume.
-- [ ] Test metadata-based increment and full-content verification separately, including same-size/backdated source changes and multipart ETag handling. Conditional destination semantics must be tested on both single-object and multipart completion paths; unavailable guarantees fail closed.
-- [ ] Add transport tests for run/attempt token, heartbeats, monotonic counters, reconnect/failure result delivery and no secret output.
-- [ ] Builder tests and image build; spec then code review.
+- [x] Add tests for JSON/manifest mapping, source mutation, target-only JSON preservation, progress de-duplication, empty files, >1000 keys, and simulated interruption/resume.
+- [x] Execute RED tests in builder Python container before adding implementation.
+- [x] Pin SDK after official API verification. Implement separate readonly scan/preview, conditional transfer, verification and browse actions; use structured SDK progress/checkpoints rather than parsing tosutil terminal output.
+- [x] Preserve only this run's checkpoint/multipart ownership; pause retains resumable state, cancel never deletes completed destination objects. Revalidate source identity and target versions on resume.
+- [x] Test metadata-based increment and full-content verification separately, including same-size/backdated source changes and multipart ETag handling. Conditional destination semantics must be tested on both single-object and multipart completion paths; unavailable guarantees fail closed.
+- [x] Add transport tests for run/attempt token, heartbeats, monotonic counters, reconnect/failure result delivery and no secret output.
+- [x] Builder tests and image build; spec then code review.
 
 ```python
 def test_target_only_json_survives_increment(sync_fixture):
@@ -89,56 +89,57 @@ def test_target_only_json_survives_increment(sync_fixture):
 
 **Owner:** runtime worker. **Files:** `backend/k8s/storage_sync*.go`, `backend/config/storage_sync*.go`, `helm/ray-train-platform/templates/storage-sync*.yaml`, relevant values/backend env templates, `build-image.sh` storage-sync target.
 
-- [ ] Tests first: readonly NFS/rootfs, CPU limits and no GPU, explicit CPU selector, automountServiceAccountToken=false, persistent checkpoint volume, attempt-specific deterministic names and owner validation.
-- [ ] Verify RED on builder before renderer implementation.
-- [ ] Implement create/observe/stop with UID ownership, graceful drain and worker termination evidence. A deleted API Pod or unknown node cannot be interpreted as a fenced old process. Backoff must not silently start competing attempts.
-- [ ] Add disabled-by-default feature config and distinct scan/transfer credential capabilities; fail closed when required config is missing. Keep current idcSync settings and pipeline intact.
-- [ ] Add scoped RBAC, service account, work PVC options, workload resource/bandwidth limits, explicit `storage-sync` build target. Helm upgrade remains reuse-values plus minimal new settings.
-- [ ] Builder Go config/renderer tests and Helm rendering; root reviews full generated diff before any deployment.
+- [x] Tests first: readonly NFS/rootfs, CPU limits and no GPU, explicit CPU selector, automountServiceAccountToken=false, persistent checkpoint volume, attempt-specific deterministic names and owner validation.
+- [x] Verify RED on builder before renderer implementation.
+- [x] Implement create/observe/stop with UID ownership, graceful drain and worker termination evidence. A deleted API Pod or unknown node cannot be interpreted as a fenced old process. Backoff must not silently start competing attempts.
+- [x] Add disabled-by-default feature config and distinct scan/transfer credential capabilities; fail closed when required config is missing. Keep current idcSync settings and pipeline intact.
+- [x] Add scoped RBAC, service account, work PVC options, workload resource/bandwidth limits, explicit `storage-sync` build target. Helm upgrade remains reuse-values plus minimal new settings.
+- [x] Builder Go config/renderer tests and Helm rendering; root reviews full generated diff before any deployment.
 
 ## Task 4: API authorization, storage resolution and application wiring
 
 **Owner:** root. **Files:** `backend/api/storage_sync*.go`, `backend/objectstore/storage_sync*.go` if needed, minimal `backend/api/jobs.go` and `backend/main.go` wiring, `backend/storage_sync_runtime.go`.
 
-- [ ] Write API tests for unauthenticated, PAT, Engineer, TenantAdmin denial across catalog/browse/preview/plans/runs/control/files; only a current interactive SuperAdmin succeeds.
-- [ ] Add resolver fixtures: local actor targeting yolo resolves only yolo shared root; omitted team/other personal owner cannot fallback; migrated actor uses stable own storage home.
-- [ ] Builder RED, then implement validated request DTOs, bounded pagination, idempotency/revision checks and sanitized public responses.
-- [ ] Implement worker callbacks/readonly planning access with attempt-scoped authorization. Bind every storage operation to the work snapshot and enforce read/write phase gates.
-- [ ] Integrate controller under its own Lease and current identity authorization callback. Disabling a creator halts future schedule admission and triggers controlled stop of active work.
-- [ ] Complete frontend-facing contract and test API callbacks, stale attempts and credentials without exposing secret content.
+- [x] Write API tests for unauthenticated, PAT, Engineer, TenantAdmin denial across catalog/browse/preview/plans/runs/control/files; only a current interactive SuperAdmin succeeds.
+- [x] Add resolver fixtures: local actor targeting yolo resolves only yolo shared root; omitted team/other personal owner cannot fallback; migrated actor uses stable own storage home.
+- [x] Builder RED, then implement validated request DTOs, bounded pagination, idempotency/revision checks and sanitized public responses.
+- [x] Implement worker callbacks/readonly planning access with attempt-scoped authorization. Bind every storage operation to the work snapshot and enforce read/write phase gates.
+- [x] Integrate controller under its own Lease and current identity authorization callback. Disabling a creator halts future schedule admission and triggers controlled stop of active work.
+- [x] Complete frontend-facing contract and test API callbacks, stale attempts and credentials without exposing secret content.
 
 ## Task 5: new Portal user flow
 
 **Owner:** Portal worker. **Files in verified new Portal checkout:** `src/views/rayTrain/api/storageSync.js`, `components/admin/StorageSyncPanel.vue`, smaller storage-sync subcomponents/helpers, `QuotaManage/index.vue`, relevant contract tests.
 
-- [ ] Write tests for API method/path serialization, SuperAdmin visibility, mapping layout, preview acknowledgment, empty/unknown progress and stale heartbeats.
-- [ ] Builder RED before implementation.
-- [ ] Build source/destination selection and readonly browser/path input, per-mapping final user path preview, plan editor and schedule settings, run list/details and pause/resume/cancel/retry.
-- [ ] Keep existing IDCDataSyncPanel dataset-publication functionality. Read roles from RayTrain session; never rely on Portal menu presence for authorization.
-- [ ] Explain full/incremental, target extras retention and partial-copy cancellation in ordinary product language. Do not expose credentials, bucket internals or Kubernetes options.
-- [ ] Verify contract tests, Dockerfile.lint and build on builder; no local pnpm install/build.
+- [x] Write tests for API method/path serialization, SuperAdmin visibility, mapping layout, preview acknowledgment, empty/unknown progress and stale heartbeats.
+- [x] Builder RED before implementation.
+- [x] Build source/destination selection and readonly browser/path input, per-mapping final user path preview, plan editor and schedule settings, run list/details and pause/resume/cancel/retry.
+- [x] Keep existing IDCDataSyncPanel dataset-publication functionality. Read roles from RayTrain session; never rely on Portal menu presence for authorization.
+- [x] Explain full/incremental, target extras retention and partial-copy cancellation in ordinary product language. Do not expose credentials, bucket internals or Kubernetes options.
+- [x] Verify contract tests, Dockerfile.lint and build on builder; no local pnpm install/build.
 
 ## Task 6: integrated validation and delivery
 
 **Owner:** root with separate spec and quality/security reviewers. **Files:** `docs/STORAGE_SYNC_RUNBOOK.md`, dated validation evidence and handoff links; only after verified implementation.
 
-- [ ] Capture committed candidate bundles and test logs from isolated builder worktree. Run gofmt check, go vet, full Go suite, real PostgreSQL migrations fresh/repeat/upgrade, Python suite and Portal gates. Resolve failures before publication.
-- [ ] Verify current guofeng.su session/identity/storage-home via normal authority; never impersonate a principal or read credentials into conversation. Use a new personal `files/storage-sync-acceptance-20261001-<suffix>/` subtree and record exact user-visible path.
+- [x] Capture committed candidate bundles and test logs from isolated builder worktree. Run gofmt check, go vet, full Go suite, real PostgreSQL migrations fresh/repeat/upgrade, Python suite and Portal gates. Resolve failures before publication.
+- [x] Verify current guofeng.su session/identity/storage-home via normal authority; never impersonate a principal or read credentials into conversation. Use a new personal `files/storage-sync-acceptance-20261001-<suffix>/` subtree and record exact user-visible path.
 - [ ] Execute small IDC→personal TOS copy, TOS→TOS copy in own subtree, full/incremental/zero-change, changed same-size file, target-only JSON retention, pause/resume, cancellation and schedule scenarios. Source IDC is read only; choose a small existing non-sensitive input or explicitly scoped fixture, not the prior 270GB tree.
-- [ ] Compare bytes/checksum for copied samples, progress counts and final receipts; keep test history and only clean objects explicitly created by this acceptance after results are retained.
+- [x] Compare bytes/checksum for copied samples, progress counts and final receipts; keep test history and only clean objects explicitly created by this acceptance after results are retained.
 - [ ] If deployment is part of the final validation path, first produce tested candidate, schema backup, image digests and server-side Helm diff; follow current authorization and any exact auto-review requirement. New Portal dev publication follows its CI/CD, not backend Helm.
-- [ ] Update design with verified SDK/credential behavior, runbook, actual acceptance outcome and source/component versions. No skipped tests or mock-only evidence may be described as production acceptance.
+- [x] Update design with verified SDK/credential behavior, runbook, actual acceptance outcome and source/component versions. No skipped tests or mock-only evidence may be described as production acceptance.
 
 ## Builder command contract
 
 ### 2026-10-01 validation checkpoint (not a release record)
 
-- Backend candidate 4 `16f6b9f7`: Python 63 tests passed. Scoped Go/config/runtime/objectstore/core and real PostgreSQL repository/db tests passed except the newly added expected RED API personal-record isolation case; that API fix is in candidate 5. Core coverage was 68.1%, below the release target.
-- Latest local backend candidate is `e19aae30b206c708c8cba6b1bdd2fa77be50fb21`; its bundle is `/private/tmp/rtp-storage-sync-candidate5.bundle`. Pending targeted RED cases cover canonical TOS identity, content verification despite matching CRC, FIFO, long-preview leases, fresh paused-checkpoint retention, transactional personal ownership, readonly Job deadlines and the global bandwidth minimum.
-- Latest observed Portal candidate is `c43f46a3` in `/private/tmp/raytrain-storage-sync-portal-20261001`. Full lint/build/browser checks and current remote `dev` comparison remain pending; SSH to the GitLab endpoint timed out. Do not claim remote baseline parity.
-- Automatic approval review rejected the candidate 5 backend/Worker upload, as it previously rejected the full Portal archive. A combined explicit source-destination authorization question is pending for `root@14.103.49.106` and `/tmp/raytrain-storage-sync-*`. Do not retry through another agent or transfer mechanism until the user answers.
-- guofeng.su's stable personal storage root was checked read-only against current user and binding records. Real acceptance has not started. Use a fresh UUID child below that user's `files/`, never a username-derived or other user's root.
-- No feature has been pushed, deployed or enabled, and no existing training/storage object was changed. Runbook draft: `docs/STORAGE_SYNC_RUNBOOK.md`.
+- Backend business candidate `18b7fe3c37a28e8f64370c5a0d60c081b99a75e7`: formatting, go vet, full Go suite and isolated real PostgreSQL fresh/repeat/upgrade/concurrency tests passed. Core coverage 80.4%. Full test command uses `-p 1` to serialize packages that share migration advisory locks.
+- Python: 79 distinct tests passed on host and in the final non-root readonly image; coverage with branch measurement 89%. Actual TOS SDK acceptance passed all nine cases, cleanupErrors=0. Test sources for IDC were local filesystem fixtures, not a live cluster NFS mount.
+- Portal candidate `2e8d9b46b488063382d61605ddabe560b82ba4d3` has merged remote `dev f9ee85ae`. Contract tests 15/15, isolated browser tests 5/5, canonical Dockerfile lint/build passed. It differs from built `a5e3c596` only by a test locator. Confidential development/staging environment files were excluded from upload.
+- User explicitly authorized the combined backend/Worker/Portal source destination and execution request by replying “允许”. Earlier upload approval blocks were resolved; no pending source-export authorization remains.
+- Verified stable personal storage home belongs to guofeng.su. Real acceptance used `/mnt/storage/me/files/storage-sync-acceptance-7bc583a7a72b4e0684209b3d3ca28170/`; only synthetic objects/uploads within that UUID subtree were created and cleaned. Existing user files and training were untouched.
+- Backend/Worker validation images built, Helm disabled/enabled variants lint/render passed, final targeted recovery review found no remaining blocker. Exact versions/evidence and known limits are in `docs/STORAGE_SYNC_RUNBOOK.md`.
+- Remaining integrated acceptance: actual CPU-node NFS mount, deployed API/controller/Job/callback chain, live interactive Portal and scheduled invocation. No source push, Harbor push, production migration, deployment or enablement has occurred. Prepare reviewed release values, database backup and server-side diff before publishing under current authorization.
 
 Run commands only inside `/tmp/raytrain-storage-sync-verify-20261001-*` detached worktrees, with the repository mounted read-only for tests and project-pinned Go builder/PATH/GOPROXY from release skill:
 
