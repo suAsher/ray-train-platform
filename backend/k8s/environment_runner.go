@@ -27,7 +27,7 @@ type EnvironmentRunnerConfig struct {
 	BaseImage, WorkspaceImage, PrepareImage, PublisherImage string
 	StorageClass, WheelIndexURL, PullSecretName             string
 	StorageGiB                                              int
-	ImagePullSecrets                                        []string
+	ImagePullSecrets, CompatibleWorkspaceImages             []string
 	NodeSelector                                            map[string]string
 	JobTimeout                                              time.Duration
 }
@@ -41,6 +41,7 @@ var _ environmentbuild.Runner = (*EnvironmentRunner)(nil)
 
 func NewEnvironmentRunner(client *Client, cfg EnvironmentRunnerConfig) *EnvironmentRunner {
 	cfg.ImagePullSecrets = append([]string(nil), cfg.ImagePullSecrets...)
+	cfg.CompatibleWorkspaceImages = append([]string(nil), cfg.CompatibleWorkspaceImages...)
 	cfg.NodeSelector = maps.Clone(cfg.NodeSelector)
 	if cfg.StorageClass == "" {
 		cfg.StorageClass = "ebs-ssd"

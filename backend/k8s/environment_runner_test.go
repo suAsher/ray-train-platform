@@ -2,8 +2,8 @@ package k8s
 
 import (
 	"context"
-	"io"
 	"errors"
+	"io"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,7 +17,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"ray-train-platform-backend/environmentbuild"
 	"strings"
 	"testing"
@@ -129,19 +128,6 @@ func TestEnvironmentJobResultRequiresMatchingOwnerAndDigest(t *testing.T) {
 	}
 }
 
-
-func environmentSetCompatibleWorkspaceImages(t *testing.T, r *EnvironmentRunner, images ...string) {
-	t.Helper()
-	field := reflect.ValueOf(&r.config).Elem().FieldByName("CompatibleWorkspaceImages")
-	if !field.IsValid() {
-		t.Fatal("EnvironmentRunnerConfig must expose CompatibleWorkspaceImages")
-	}
-	if !field.CanSet() || field.Kind() != reflect.Slice || field.Type().Elem().Kind() != reflect.String {
-		t.Fatal("CompatibleWorkspaceImages must be a settable []string on EnvironmentRunnerConfig")
-	}
-	field.Set(reflect.ValueOf(append([]string(nil), images...)))
-}
-
 func environmentCompatibleWorkspaceImage() string {
 	return "harbor.wellspiking.ai/platform/old-workspace@sha256:" + strings.Repeat("c", 64)
 }
@@ -202,7 +188,7 @@ func TestEnvironmentWorkspaceRequiresManagedClusterAndActualPinnedImage(t *testi
 func TestEnvironmentWorkspaceAllowsConfiguredCompatiblePinnedImages(t *testing.T) {
 	r := environmentTestRunner()
 	compatible := environmentCompatibleWorkspaceImage()
-	environmentSetCompatibleWorkspaceImages(t, r, compatible)
+	r.config.CompatibleWorkspaceImages = []string{compatible}
 	workspace := environmentbuild.Workspace{ID: "workspace-a", TenantID: "tenant-a", OwnerID: "alice", Namespace: "tenant-a", ResourceName: "workspace-a"}
 	cluster, pod := environmentWorkspaceFixture(r, workspace, compatible, compatible)
 	environmentInstallWorkspaceFixture(r, workspace, pod, cluster)
@@ -221,7 +207,7 @@ func TestEnvironmentWorkspaceAllowsConfiguredCompatiblePinnedImages(t *testing.T
 
 func TestEnvironmentWorkspaceRejectsImagesOutsidePrimaryAndCompatibleAllowlist(t *testing.T) {
 	r := environmentTestRunner()
-	environmentSetCompatibleWorkspaceImages(t, r, environmentCompatibleWorkspaceImage())
+	r.config.CompatibleWorkspaceImages = []string{environmentCompatibleWorkspaceImage()}
 	workspace := environmentbuild.Workspace{ID: "workspace-a", TenantID: "tenant-a", OwnerID: "alice", Namespace: "tenant-a", ResourceName: "workspace-a"}
 	other := "harbor.wellspiking.ai/platform/other-workspace@sha256:" + strings.Repeat("d", 64)
 	cluster, pod := environmentWorkspaceFixture(r, workspace, other, other)
@@ -239,7 +225,7 @@ func TestEnvironmentWorkspaceRejectsImagesOutsidePrimaryAndCompatibleAllowlist(t
 func TestEnvironmentCaptureBindsToActualWorkspaceImageAndUID(t *testing.T) {
 	r := environmentTestRunner()
 	compatible := environmentCompatibleWorkspaceImage()
-	environmentSetCompatibleWorkspaceImages(t, r, compatible)
+	r.config.CompatibleWorkspaceImages = []string{compatible}
 	workspace := environmentbuild.Workspace{ID: "workspace-a", TenantID: "tenant-a", OwnerID: "alice", Namespace: "tenant-a", ResourceName: "workspace-a"}
 	cluster, pod := environmentWorkspaceFixture(r, workspace, compatible, compatible)
 	environmentInstallWorkspaceFixture(r, workspace, pod, cluster)

@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -13,7 +12,7 @@ func TestEnvironmentBuildCompatibleWorkspaceImagesNormalizeExplicitAllowlist(t *
 	older := "harbor.wellspiking.ai/public/workspace@sha256:" + strings.Repeat("c", 64)
 	for _, test := range []struct {
 		name, raw string
-		want []string
+		want      []string
 	}{
 		{name: "empty defaults", raw: ""},
 		{name: "explicit old image", raw: legacy, want: []string{legacy}},
@@ -26,16 +25,8 @@ func TestEnvironmentBuildCompatibleWorkspaceImagesNormalizeExplicitAllowlist(t *
 			if err != nil {
 				t.Fatal(err)
 			}
-			raw, err := json.Marshal(cfg)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var got struct { CompatibleWorkspaceImages []string }
-			if err := json.Unmarshal(raw, &got); err != nil {
-				t.Fatal(err)
-			}
-			if !reflect.DeepEqual(got.CompatibleWorkspaceImages, test.want) || cfg.WorkspaceImage != primary {
-				t.Fatalf("compatible images=%v want=%v, primary=%s", got.CompatibleWorkspaceImages, test.want, cfg.WorkspaceImage)
+			if !reflect.DeepEqual(cfg.CompatibleWorkspaceImages, test.want) || cfg.WorkspaceImage != primary {
+				t.Fatalf("compatible images=%v want=%v, primary=%s", cfg.CompatibleWorkspaceImages, test.want, cfg.WorkspaceImage)
 			}
 		})
 	}

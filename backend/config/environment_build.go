@@ -14,6 +14,7 @@ import (
 type EnvironmentBuildConfig struct {
 	Enabled                                                 bool
 	BaseImage, WorkspaceImage, PrepareImage, PublisherImage string
+	CompatibleWorkspaceImages                               []string
 	StorageClass, WheelIndexURL                             string
 	RegistryHosts                                           []string
 	EncryptionKey                                           []byte
@@ -46,6 +47,19 @@ func loadEnvironmentBuildConfig() (EnvironmentBuildConfig, error) {
 		*item.target = strings.TrimSpace(os.Getenv(item.key))
 		if !pinnedImagePattern.MatchString(*item.target) || !strings.HasPrefix(*item.target, "harbor.wellspiking.ai/") {
 			return EnvironmentBuildConfig{}, fmt.Errorf("%s must be a pinned Harbor image", item.key)
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("ENVIRONMENT_COMPATIBLE_WORKSPACE_IMAGES")); raw != "" {
+		seen := map[string]bool{cfg.WorkspaceImage: true}
+		for _, entry := range strings.Split(raw, ",") {
+			image := strings.TrimSpace(entry)
+			if !pinnedImagePattern.MatchString(image) || !strings.HasPrefix(image, "harbor.wellspiking.ai/") {
+				return EnvironmentBuildConfig{}, fmt.Errorf("ENVIRONMENT_COMPATIBLE_WORKSPACE_IMAGES must contain only pinned Harbor images")
+			}
+			if !seen[image] {
+				cfg.CompatibleWorkspaceImages = append(cfg.CompatibleWorkspaceImages, image)
+				seen[image] = true
+			}
 		}
 	}
 	cfg.EncryptionKey, err = base64.StdEncoding.DecodeString(os.Getenv("ENVIRONMENT_AUTH_KEY"))

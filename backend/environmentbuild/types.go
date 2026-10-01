@@ -206,12 +206,13 @@ type Store interface {
 	FinalizeEnvironmentBuild(context.Context, Build, string) error
 }
 type Config struct {
-	Enabled           bool
-	RegistryHosts     []string
-	BaseImage         string
-	WorkspaceImage    string
-	EncryptionKey     []byte
-	GlobalConcurrency int
-	UserConcurrency   int
-	AuthorizationTTL  time.Duration
+	Enabled                   bool
+	RegistryHosts             []string
+	BaseImage                 string
+	WorkspaceImage            string
+	CompatibleWorkspaceImages []string
+	EncryptionKey             []byte
+	GlobalConcurrency         int
+	UserConcurrency           int
+	AuthorizationTTL          time.Duration
 }

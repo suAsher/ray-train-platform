@@ -2,40 +2,26 @@ package environmentbuild
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
 	"testing"
 )
 
-// JSON keeps the RED tests compilable before the new configuration field is
-// introduced, exercising missing behavior instead of a missing symbol.
-func compatibleWorkspaceConfig(t *testing.T, cfg Config, images []string) Config {
-	t.Helper()
-	raw, err := json.Marshal(map[string]any{"CompatibleWorkspaceImages": images})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		t.Fatal(err)
-	}
-	return cfg
-}
-
 func TestCreateAcceptsOnlyExplicitCompatibleWorkspaceImagesAndSnapshotsActualImage(t *testing.T) {
 	legacy := RegistryHost + "/public/debug@sha256:" + strings.Repeat("3", 64)
 	for _, name := range []string{"primary", "compatible", "implicit legacy", "unknown digest", "mutable tag", "foreign registry"} {
 		t.Run(name, func(t *testing.T) {
 			base, store, _, runner := multiRegistryFixture(t)
-			cfg := compatibleWorkspaceConfig(t, base.config, []string{legacy})
+			cfg := base.config
+			cfg.CompatibleWorkspaceImages = []string{legacy}
 			runner.image = cfg.WorkspaceImage
 			allowed := name == "primary" || name == "compatible"
 			switch name {
 			case "compatible":
 				runner.image = legacy
 			case "implicit legacy":
-				cfg = compatibleWorkspaceConfig(t, base.config, nil)
+				cfg.CompatibleWorkspaceImages = nil
 				runner.image = legacy
 			case "unknown digest":
 				runner.image = RegistryHost + "/public/debug@sha256:" + strings.Repeat("4", 64)
@@ -74,7 +60,8 @@ func TestCreateAcceptsOnlyExplicitCompatibleWorkspaceImagesAndSnapshotsActualIma
 func TestCompatibleWorkspaceServiceConfigRejectsUnpinnedOrForeignSources(t *testing.T) {
 	base, _, _, _ := multiRegistryFixture(t)
 	for _, image := range []string{"", " ", RegistryHost + "/public/debug:latest", RegistryHost + "/public/debug@sha256:short", "harbor.qomolo.com/public/debug@sha256:" + strings.Repeat("3", 64), "evil.invalid/debug@sha256:" + strings.Repeat("3", 64)} {
-		cfg := compatibleWorkspaceConfig(t, base.config, []string{image})
+		cfg := base.config
+		cfg.CompatibleWorkspaceImages = []string{image}
 		if _, err := NewService(base.store, base.runner, base.registry, base.vault, cfg); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("service accepted untrusted compatibility source %q: %v", image, err)
 		}
@@ -84,18 +71,17 @@ func TestCompatibleWorkspaceServiceConfigRejectsUnpinnedOrForeignSources(t *test
 func TestCompatibleWorkspaceServiceConfigDeduplicatesAndCopiesCallerSlice(t *testing.T) {
 	base, _, _, _ := multiRegistryFixture(t)
 	legacy := RegistryHost + "/public/debug@sha256:" + strings.Repeat("3", 64)
-	cfg := compatibleWorkspaceConfig(t, base.config, []string{legacy, base.config.WorkspaceImage, legacy})
+	cfg := base.config
+	cfg.CompatibleWorkspaceImages = []string{legacy, base.config.WorkspaceImage, legacy}
 	s, err := NewService(base.store, base.runner, base.registry, base.vault, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	callerField := reflect.ValueOf(cfg).FieldByName("CompatibleWorkspaceImages")
-	serviceField := reflect.ValueOf(s.config).FieldByName("CompatibleWorkspaceImages")
-	if !callerField.IsValid() || !serviceField.IsValid() || !reflect.DeepEqual(serviceField.Interface(), []string{legacy}) {
+	if !reflect.DeepEqual(s.config.CompatibleWorkspaceImages, []string{legacy}) {
 		t.Fatal("service must keep a normalized compatibility allowlist separate from the primary")
 	}
-	callerField.Index(0).SetString("evil.invalid/changed:latest")
-	if !reflect.DeepEqual(serviceField.Interface(), []string{legacy}) {
+	cfg.CompatibleWorkspaceImages[0] = "evil.invalid/changed:latest"
+	if !reflect.DeepEqual(s.config.CompatibleWorkspaceImages, []string{legacy}) {
 		t.Fatal("caller mutation changed the service image allowlist")
 	}
 }

@@ -31,6 +31,11 @@ func NewService(store Store, runner Runner, registry Registry, vault Vault, conf
 		return nil, err
 	}
 	config.RegistryHosts = hosts
+	compatibleImages, err := normalizeCompatibleWorkspaceImages(config.WorkspaceImage, config.CompatibleWorkspaceImages)
+	if err != nil {
+		return nil, err
+	}
+	config.CompatibleWorkspaceImages = compatibleImages
 	if config.Enabled && (store == nil || runner == nil || registry == nil || vault == nil || len(config.EncryptionKey) != 32 || !strings.Contains(config.BaseImage, "@sha256:") || !strings.Contains(config.WorkspaceImage, "@sha256:")) {
 		return nil, ErrInvalid
 	}
@@ -71,6 +76,35 @@ type CreateRequest struct {
 
 var requestKey = regexp.MustCompile(`^[A-Za-z0-9_-]{8,128}$`)
 var digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+var compatibleWorkspaceSourcePattern = regexp.MustCompile(`^[^@\s]+@sha256:[0-9a-fA-F]{64}$`)
+
+func normalizeCompatibleWorkspaceImages(primary string, images []string) ([]string, error) {
+	var normalized []string
+	seen := map[string]bool{primary: true}
+	for _, raw := range images {
+		image := strings.TrimSpace(raw)
+		if !compatibleWorkspaceSourcePattern.MatchString(image) || !strings.HasPrefix(image, RegistryHost+"/") {
+			return nil, ErrInvalid
+		}
+		if !seen[image] {
+			normalized = append(normalized, image)
+			seen[image] = true
+		}
+	}
+	return normalized, nil
+}
+
+func (s *Service) acceptsWorkspaceImage(image string) bool {
+	if image == s.config.WorkspaceImage {
+		return true
+	}
+	for _, compatible := range s.config.CompatibleWorkspaceImages {
+		if image == compatible {
+			return true
+		}
+	}
+	return false
+}
 
 func validTarget(project, repository string) bool {
 	_, err := registryauth.ValidateTarget(project, repository)
@@ -132,12 +166,12 @@ func (s *Service) Create(ctx context.Context, owner Owner, workspaceID string, r
 		}
 		return Build{}, ErrConflict
 	}
-	if snapshot.UID == "" || snapshot.Image != s.config.WorkspaceImage {
+	if snapshot.UID == "" || !s.acceptsWorkspaceImage(snapshot.Image) {
 		return Build{}, ErrConflict
 	}
 
 	now := s.now()
-	b := Build{ID: id, RegistryHost: host, TenantID: owner.TenantID, OwnerID: owner.UserID, WorkspaceID: workspaceID, Namespace: ws.Namespace, WorkspaceResourceName: ws.ResourceName, WorkspaceUID: snapshot.UID, BaseImage: s.config.BaseImage, WorkspaceImage: s.config.WorkspaceImage, Name: req.Name, Description: req.Description, Visibility: req.Visibility, Project: req.Project, Repository: req.Repository, Tag: id, Status: Queued, AuthID: req.AuthorizationID, IdempotencyKey: req.IdempotencyKey, Attempt: 1, ArtifactExpiresAt: now.Add(24 * time.Hour), CreatedAt: now, UpdatedAt: now}
+	b := Build{ID: id, RegistryHost: host, TenantID: owner.TenantID, OwnerID: owner.UserID, WorkspaceID: workspaceID, Namespace: ws.Namespace, WorkspaceResourceName: ws.ResourceName, WorkspaceUID: snapshot.UID, BaseImage: s.config.BaseImage, WorkspaceImage: snapshot.Image, Name: req.Name, Description: req.Description, Visibility: req.Visibility, Project: req.Project, Repository: req.Repository, Tag: id, Status: Queued, AuthID: req.AuthorizationID, IdempotencyKey: req.IdempotencyKey, Attempt: 1, ArtifactExpiresAt: now.Add(24 * time.Hour), CreatedAt: now, UpdatedAt: now}
 	// Reserve the authorization before queueing; no job can see unbound material.
 	if _, err = s.bindAuthorization(ctx, owner, req.AuthorizationID, b); err != nil {
 		return Build{}, err

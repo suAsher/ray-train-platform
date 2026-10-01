@@ -403,6 +403,8 @@ spec:
               value: {{ required "environmentBuilds.baseImage is required" $environmentBuilds.baseImage | quote }}
             - name: ENVIRONMENT_WORKSPACE_IMAGE
               value: {{ required "environmentBuilds.workspaceImage is required" $environmentBuilds.workspaceImage | quote }}
+            - name: ENVIRONMENT_COMPATIBLE_WORKSPACE_IMAGES
+              value: {{ join "," ($environmentBuilds.compatibleWorkspaceImages | default (list)) | quote }}
             - name: ENVIRONMENT_PREPARE_IMAGE
               value: {{ required "environmentBuilds.prepareImage is required" $environmentBuilds.prepareImage | quote }}
             - name: ENVIRONMENT_PUBLISHER_IMAGE

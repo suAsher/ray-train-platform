@@ -48,6 +48,8 @@ sudo apt-get update && sudo apt-get install --no-install-recommends PACKAGE_NAME
 
 ## 构建与验证
 
+升级调试镜像时，同步更新镜像目录项与 `backend.environmentBuilds.workspaceImage`。将仍在使用、且基于同一训练 Base 和捕获协议的旧调试镜像固定摘要加入 `backend.environmentBuilds.compatibleWorkspaceImages`；它只允许明确列出的旧版本继续保存依赖，不改变默认镜像，不信任任意登记镜像或可变标签。后端仍检查实际容器镜像摘要、工作区归属与 Pod UID。现有工作区不会自动重建，因此也不会自动获得新 Pod 的 sudo 权限。
+
 新增 workspace Dockerfile 和 builder Dockerfile 都使用仓库根作为上下文。构建、测试仍遵守 release skill，在构建机验证平台运行时代码；用户点击保存后的依赖构建、OCI 组装、publish 操作由集群临时 Job 承载。
 
 ```bash

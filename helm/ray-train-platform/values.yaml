@@ -171,6 +171,9 @@ backend:
       - harbor.wellspiking.ai
     baseImage: ""
     workspaceImage: ""
+    # Explicit previous debug digests using this same base/capture contract.
+    # Keep during upgrades so existing workspaces can still save dependencies.
+    compatibleWorkspaceImages: []
     prepareImage: ""
     publisherImage: ""
     wheelIndexURL: ""

@@ -22,14 +22,16 @@ func newEnvironmentBuildService(repository *repositories.GormRepository, client 
 	// platform-managed pull secrets may authorize verification of target images.
 	runner := k8s.NewEnvironmentRunner(client, k8s.EnvironmentRunnerConfig{
 		Namespace: runtimeNamespace(), BaseImage: settings.BaseImage, WorkspaceImage: settings.WorkspaceImage,
-		PrepareImage: settings.PrepareImage, PublisherImage: settings.PublisherImage,
+		CompatibleWorkspaceImages: settings.CompatibleWorkspaceImages,
+		PrepareImage:              settings.PrepareImage, PublisherImage: settings.PublisherImage,
 		StorageClass: settings.StorageClass, StorageGiB: 60, WheelIndexURL: settings.WheelIndexURL,
 		ImagePullSecrets: cfg.ImagePullSecrets, PullSecretName: cfg.ImagePullSecrets[0], NodeSelector: settings.NodeSelector,
 		JobTimeout: 30 * time.Minute,
 	})
 	return environmentbuild.NewService(repository, runner, environmentbuild.HarborRegistry{Client: registryauth.NewClient()}, k8s.NewEnvironmentVault(client, runtimeNamespace()), environmentbuild.Config{
 		Enabled: true, BaseImage: settings.BaseImage, WorkspaceImage: settings.WorkspaceImage,
-		RegistryHosts: settings.RegistryHosts,
-		EncryptionKey: settings.EncryptionKey, GlobalConcurrency: 2, UserConcurrency: 1, AuthorizationTTL: 24 * time.Hour,
+		CompatibleWorkspaceImages: settings.CompatibleWorkspaceImages,
+		RegistryHosts:             settings.RegistryHosts,
+		EncryptionKey:             settings.EncryptionKey, GlobalConcurrency: 2, UserConcurrency: 1, AuthorizationTTL: 24 * time.Hour,
 	})
 }

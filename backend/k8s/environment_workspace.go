@@ -34,6 +34,43 @@ func environmentPinnedRegistryImage(image, host string) bool {
 	return len(parts) == 2 && strings.HasPrefix(parts[0], host+"/") && environmentDigestPattern.MatchString(parts[1])
 }
 
+func environmentImageDigest(image string) string {
+	parts := strings.Split(image, "@")
+	if len(parts) != 2 {
+		return ""
+	}
+	return parts[1]
+}
+
+func environmentRuntimeImageVerified(imageID, image string) bool {
+	digest := environmentImageDigest(image)
+	return digest != "" && strings.HasSuffix(imageID, "@"+digest)
+}
+
+func (r *EnvironmentRunner) workspaceImageAllowed(image string) bool {
+	if !environmentPinnedImage(image) {
+		return false
+	}
+	if image == r.config.WorkspaceImage {
+		return true
+	}
+	for _, compatible := range r.config.CompatibleWorkspaceImages {
+		if image == compatible {
+			return true
+		}
+	}
+	return false
+}
+
+func environmentWorkspacePodImage(pod *corev1.Pod) string {
+	for _, container := range pod.Spec.Containers {
+		if container.Name == "ray-worker" {
+			return container.Image
+		}
+	}
+	return ""
+}
+
 // The database lookup preceding this method establishes the authenticated owner.
 // KubeRay labels and owner UID then prove that this is that managed workspace.
 func (r *EnvironmentRunner) InspectWorkspace(ctx context.Context, w environmentbuild.Workspace) (environmentbuild.WorkspaceSnapshot, error) {
@@ -41,7 +78,7 @@ func (r *EnvironmentRunner) InspectWorkspace(ctx context.Context, w environmentb
 	if err != nil {
 		return environmentbuild.WorkspaceSnapshot{}, err
 	}
-	return environmentbuild.WorkspaceSnapshot{UID: string(pod.UID), Image: r.config.WorkspaceImage}, nil
+	return environmentbuild.WorkspaceSnapshot{UID: string(pod.UID), Image: environmentWorkspacePodImage(pod)}, nil
 }
 func (r *EnvironmentRunner) workspacePod(ctx context.Context, w environmentbuild.Workspace) (*corev1.Pod, error) {
 	if r.client == nil || r.client.dynamic == nil || r.client.kubernetes == nil || w.ID == "" || w.OwnerID == "" || w.TenantID == "" || !isDNSLabel(w.Namespace) || !isDNSLabel(w.ResourceName) || !environmentPinnedImage(r.config.WorkspaceImage) {
@@ -79,12 +116,12 @@ func (r *EnvironmentRunner) workspacePod(ctx context.Context, w environmentbuild
 			if container.Name != "ray-worker" {
 				continue
 			}
-			if container.Image != r.config.WorkspaceImage {
+			if !r.workspaceImageAllowed(container.Image) {
 				return nil, &environmentbuild.PhaseError{Code: "UNSUPPORTED_WORKSPACE"}
 			}
 			ready := false
 			for _, status := range pod.Status.ContainerStatuses {
-				if status.Name == container.Name && status.Ready && strings.HasSuffix(status.ImageID, "@"+strings.Split(r.config.WorkspaceImage, "@")[1]) {
+				if status.Name == container.Name && status.Ready && environmentRuntimeImageVerified(status.ImageID, container.Image) {
 					ready = true
 				}
 			}
@@ -120,7 +157,7 @@ func (r *EnvironmentRunner) capture(ctx context.Context, b environmentbuild.Buil
 	if err != nil {
 		return environmentbuild.StepResult{}, err
 	}
-	if string(pod.UID) != b.WorkspaceUID || b.WorkspaceImage != r.config.WorkspaceImage {
+	if string(pod.UID) != b.WorkspaceUID || b.WorkspaceImage != environmentWorkspacePodImage(pod) {
 		return environmentbuild.StepResult{}, &environmentbuild.PhaseError{Code: "ENVIRONMENT_CHANGED"}
 	}
 	captureCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
@@ -156,7 +193,7 @@ func (r *EnvironmentRunner) capture(ctx context.Context, b environmentbuild.Buil
 	if err != nil {
 		return environmentbuild.StepResult{}, err
 	}
-	if after.UID != pod.UID {
+	if after.UID != pod.UID || environmentWorkspacePodImage(after) != b.WorkspaceImage {
 		return environmentbuild.StepResult{}, &environmentbuild.PhaseError{Code: "ENVIRONMENT_CHANGED"}
 	}
 	return environmentbuild.StepResult{Done: true, SnapshotJSON: output.String()}, nil
