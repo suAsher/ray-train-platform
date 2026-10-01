@@ -11,6 +11,9 @@ class TOSStore:
     def __init__(self, client, bandwidth=0):
         self.client = client
         self.bandwidth = bandwidth
+        if bandwidth and bandwidth < 102400:
+            raise SyncError('INVALID_BANDWIDTH_LIMIT')
+        self.copy_traffic_limit = min(bandwidth, 100 * 1024 * 1024) * 8 if bandwidth else None
         self.uncertain_write = False
         self.limiter = None
         if bandwidth:
@@ -88,7 +91,8 @@ class TOSStore:
         self._call('copy_object', bucket, key, source_bucket, source.key,
                    src_version_id=source.version_id or None, copy_source_if_match=source.etag or None,
                    acl=ACLType.ACL_Private, metadata_directive=MetadataDirectiveType.Metadata_Directive_Replace,
-                   meta={}, **self._metadata(source), **self._guard(expected), write=True)
+                   meta={}, traffic_limit=self.copy_traffic_limit,
+                   **self._metadata(source), **self._guard(expected), write=True)
         return self.head(bucket, key)
 
     def create_upload(self, bucket, key, expected, metadata):
@@ -126,7 +130,7 @@ class TOSStore:
         result = self._call('upload_part_copy', bucket, key, upload_id, number, source_bucket, source.key,
                             src_version_id=source.version_id or None, copy_source_if_match=source.etag or None,
                             copy_source_range_start=offset, copy_source_range_end=offset + size - 1,
-                            traffic_limit=self.bandwidth * 8 if self.bandwidth else None, write=True)
+                            traffic_limit=self.copy_traffic_limit, write=True)
         return {'etag': result.etag, 'size': size}
 
     def complete_upload(self, bucket, key, upload_id, parts, expected):

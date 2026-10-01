@@ -24,6 +24,8 @@ func TestConfigPathsAndPolicies(t *testing.T) {
 	c := testConfig(); c.Concurrency = 65; if c.Validate() == nil { t.Fatal("unbounded concurrency accepted") }
 	c = testConfig(); c.ConflictPolicy = "DELETE"; if c.Validate() == nil { t.Fatal("destructive policy accepted") }
 	c = testConfig(); c.Schedule.Timezone = "UTC"; if c.Validate() == nil { t.Fatal("unsupported timezone accepted") }
+	c = testConfig(); c.BandwidthBytesPerSecond = 102399; if c.Validate() == nil { t.Fatal("bandwidth below TOS server-copy minimum accepted") }
+	c.BandwidthBytesPerSecond=102400; if err:=c.Validate();err!=nil{t.Fatalf("SDK minimum bandwidth rejected: %v",err)}
 }
 
 func TestPrefixLocksAndLayouts(t *testing.T) {

@@ -28,7 +28,7 @@ func (c Config) Validate() error {
 	if c.Mode!="FULL" && c.Mode!="INCREMENTAL" { return fmt.Errorf("%w: unsupported mode",ErrInvalid) }
 	if c.ConflictPolicy!="UPDATE" && c.ConflictPolicy!="FAIL" { return fmt.Errorf("%w: unsupported conflict policy",ErrInvalid) }
 	if c.Verification!="METADATA" && c.Verification!="CONTENT" { return fmt.Errorf("%w: unsupported verification",ErrInvalid) }
-	if c.Concurrency<1 || c.Concurrency>64 || c.BandwidthBytesPerSecond<0 || c.BandwidthBytesPerSecond>100_000_000_000 { return fmt.Errorf("%w: invalid resource limit",ErrInvalid) }
+	if c.Concurrency<1 || c.Concurrency>64 || c.BandwidthBytesPerSecond<0 || c.BandwidthBytesPerSecond>100_000_000_000 || (c.BandwidthBytesPerSecond>0 && c.BandwidthBytesPerSecond<102400) { return fmt.Errorf("%w: invalid resource limit",ErrInvalid) }
 	if len(c.Mappings)<1 || len(c.Mappings)>32 { return fmt.Errorf("%w: require 1 to 32 mappings",ErrInvalid) }
 	for _,m:=range c.Mappings {
 		if err:=m.Source.Validate();err!=nil{return err};if err:=m.Destination.Validate();err!=nil{return err}
