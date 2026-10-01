@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"io"
 	"errors"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -16,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"ray-train-platform-backend/environmentbuild"
 	"strings"
 	"testing"
@@ -126,17 +128,44 @@ func TestEnvironmentJobResultRequiresMatchingOwnerAndDigest(t *testing.T) {
 		t.Fatal("accepted another owner's result")
 	}
 }
-func TestEnvironmentWorkspaceRequiresManagedClusterAndActualPinnedImage(t *testing.T) {
-	r := environmentTestRunner()
+
+
+func environmentSetCompatibleWorkspaceImages(t *testing.T, r *EnvironmentRunner, images ...string) {
+	t.Helper()
+	field := reflect.ValueOf(&r.config).Elem().FieldByName("CompatibleWorkspaceImages")
+	if !field.IsValid() {
+		t.Fatal("EnvironmentRunnerConfig must expose CompatibleWorkspaceImages")
+	}
+	if !field.CanSet() || field.Kind() != reflect.Slice || field.Type().Elem().Kind() != reflect.String {
+		t.Fatal("CompatibleWorkspaceImages must be a settable []string on EnvironmentRunnerConfig")
+	}
+	field.Set(reflect.ValueOf(append([]string(nil), images...)))
+}
+
+func environmentCompatibleWorkspaceImage() string {
+	return "harbor.wellspiking.ai/platform/old-workspace@sha256:" + strings.Repeat("c", 64)
+}
+
+func environmentWorkspaceFixture(r *EnvironmentRunner, workspace environmentbuild.Workspace, image string, imageID string) (*unstructured.Unstructured, *corev1.Pod) {
 	yes := true
-	ctx := context.Background()
-	workspace := environmentbuild.Workspace{ID: "workspace-a", TenantID: "tenant-a", OwnerID: "alice", Namespace: "tenant-a", ResourceName: "workspace-a"}
 	cluster := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "ray.io/v1", "kind": "RayCluster", "metadata": map[string]interface{}{"name": workspace.ResourceName, "namespace": workspace.Namespace, "uid": "cluster-uid", "labels": map[string]interface{}{"app.kubernetes.io/managed-by": "ray-train-platform", "ray.io/workspace-id": workspace.ID, "ray.io/tenant-id": workspace.TenantID, "ray.io/dev-workspace": "true"}}}}
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: workspace.Namespace, UID: types.UID("pod-uid"), Labels: map[string]string{"ray.io/cluster": workspace.ResourceName, "ray.io/node-type": "worker"}, OwnerReferences: []metav1.OwnerReference{{Name: workspace.ResourceName, Kind: "RayCluster", UID: types.UID("cluster-uid"), Controller: &yes}}}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "ray-worker", Image: r.config.WorkspaceImage}}}, Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Name: "ray-worker", Ready: true, ImageID: r.config.WorkspaceImage}}}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: workspace.Namespace, UID: types.UID("pod-uid"), Labels: map[string]string{"ray.io/cluster": workspace.ResourceName, "ray.io/node-type": "worker"}, OwnerReferences: []metav1.OwnerReference{{Name: workspace.ResourceName, Kind: "RayCluster", UID: types.UID("cluster-uid"), Controller: &yes}}}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "ray-worker", Image: image}}}, Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Name: "ray-worker", Ready: true, ImageID: imageID}}}}
+	return cluster, pod
+}
+
+func environmentInstallWorkspaceFixture(r *EnvironmentRunner, workspace environmentbuild.Workspace, pod *corev1.Pod, cluster *unstructured.Unstructured) {
 	dynamic := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{rayClusterGVR: "RayClusterList"}, cluster)
 	r.client = NewClientFromInterfaces(dynamic, fake.NewSimpleClientset(pod))
+}
+
+func TestEnvironmentWorkspaceRequiresManagedClusterAndActualPinnedImage(t *testing.T) {
+	r := environmentTestRunner()
+	ctx := context.Background()
+	workspace := environmentbuild.Workspace{ID: "workspace-a", TenantID: "tenant-a", OwnerID: "alice", Namespace: "tenant-a", ResourceName: "workspace-a"}
+	cluster, pod := environmentWorkspaceFixture(r, workspace, r.config.WorkspaceImage, r.config.WorkspaceImage)
+	environmentInstallWorkspaceFixture(r, workspace, pod, cluster)
 	result, err := r.InspectWorkspace(ctx, workspace)
-	if err != nil || result.UID != "pod-uid" {
+	if err != nil || result.UID != "pod-uid" || result.Image != r.config.WorkspaceImage {
 		t.Fatalf("inspect %+v %v", result, err)
 	}
 	// An index pin cannot silently authorize a different platform-manifest digest.
@@ -167,6 +196,76 @@ func TestEnvironmentWorkspaceRequiresManagedClusterAndActualPinnedImage(t *testi
 		if !errors.As(err, &phase) || phase.Code != "UNSUPPORTED_WORKSPACE" {
 			t.Fatalf("unsupported workspace error was not classified: %v", err)
 		}
+	}
+}
+
+func TestEnvironmentWorkspaceAllowsConfiguredCompatiblePinnedImages(t *testing.T) {
+	r := environmentTestRunner()
+	compatible := environmentCompatibleWorkspaceImage()
+	environmentSetCompatibleWorkspaceImages(t, r, compatible)
+	workspace := environmentbuild.Workspace{ID: "workspace-a", TenantID: "tenant-a", OwnerID: "alice", Namespace: "tenant-a", ResourceName: "workspace-a"}
+	cluster, pod := environmentWorkspaceFixture(r, workspace, compatible, compatible)
+	environmentInstallWorkspaceFixture(r, workspace, pod, cluster)
+	result, err := r.InspectWorkspace(context.Background(), workspace)
+	if err != nil || result.UID != "pod-uid" || result.Image != compatible {
+		t.Fatalf("compatible inspect returned %+v, %v", result, err)
+	}
+	pod.Status.ContainerStatuses[0].ImageID = r.config.WorkspaceImage
+	if _, err := r.client.kubernetes.CoreV1().Pods(workspace.Namespace).UpdateStatus(context.Background(), pod, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.InspectWorkspace(context.Background(), workspace); err == nil {
+		t.Fatal("accepted runtime digest for the primary image while the actual container used a compatible image")
+	}
+}
+
+func TestEnvironmentWorkspaceRejectsImagesOutsidePrimaryAndCompatibleAllowlist(t *testing.T) {
+	r := environmentTestRunner()
+	environmentSetCompatibleWorkspaceImages(t, r, environmentCompatibleWorkspaceImage())
+	workspace := environmentbuild.Workspace{ID: "workspace-a", TenantID: "tenant-a", OwnerID: "alice", Namespace: "tenant-a", ResourceName: "workspace-a"}
+	other := "harbor.wellspiking.ai/platform/other-workspace@sha256:" + strings.Repeat("d", 64)
+	cluster, pod := environmentWorkspaceFixture(r, workspace, other, other)
+	environmentInstallWorkspaceFixture(r, workspace, pod, cluster)
+	if _, err := r.InspectWorkspace(context.Background(), workspace); err == nil {
+		t.Fatal("accepted a workspace image outside the configured primary and compatible allowlist")
+	} else {
+		var phase *environmentbuild.PhaseError
+		if !errors.As(err, &phase) || phase.Code != "UNSUPPORTED_WORKSPACE" {
+			t.Fatalf("unsupported workspace error was not classified: %v", err)
+		}
+	}
+}
+
+func TestEnvironmentCaptureBindsToActualWorkspaceImageAndUID(t *testing.T) {
+	r := environmentTestRunner()
+	compatible := environmentCompatibleWorkspaceImage()
+	environmentSetCompatibleWorkspaceImages(t, r, compatible)
+	workspace := environmentbuild.Workspace{ID: "workspace-a", TenantID: "tenant-a", OwnerID: "alice", Namespace: "tenant-a", ResourceName: "workspace-a"}
+	cluster, pod := environmentWorkspaceFixture(r, workspace, compatible, compatible)
+	environmentInstallWorkspaceFixture(r, workspace, pod, cluster)
+	b := environmentTestBuild(r)
+	b.Status = environmentbuild.Capturing
+	b.WorkspaceID, b.TenantID, b.OwnerID, b.Namespace, b.WorkspaceResourceName = workspace.ID, workspace.TenantID, workspace.OwnerID, workspace.Namespace, workspace.ResourceName
+	b.WorkspaceUID, b.WorkspaceImage = "pod-uid", compatible
+	r.captureExec = func(_ context.Context, namespace, podName string, stdout, stderr io.Writer) error {
+		if namespace != workspace.Namespace || podName != pod.Name {
+			t.Fatalf("capture exec targeted %s/%s", namespace, podName)
+		}
+		_, _ = stdout.Write([]byte(`{"schemaVersion":1,"baseImage":"` + b.BaseImage + `","checks":{"baseUnchanged":true,"managedOnly":true,"installedFilesVerified":true,"stableCapture":true}}`))
+		return nil
+	}
+	result, err := r.Step(context.Background(), b, nil)
+	if err != nil || !result.Done {
+		t.Fatalf("compatible capture returned %+v, %v", result, err)
+	}
+	b.WorkspaceImage = r.config.WorkspaceImage
+	if _, err := r.Step(context.Background(), b, nil); err == nil {
+		t.Fatal("capture accepted a stale primary snapshot image for an old compatible workspace pod")
+	}
+	b.WorkspaceImage = compatible
+	b.WorkspaceUID = "another-pod"
+	if _, err := r.Step(context.Background(), b, nil); err == nil {
+		t.Fatal("capture accepted a stale workspace UID")
 	}
 }
 
