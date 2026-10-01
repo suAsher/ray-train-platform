@@ -473,6 +473,45 @@ idcSync:
   # Required before IDC sync can be enabled.
   workClaimName: ""
 
+# Independent administrator copy workflow; leaves legacy IDC ingestion intact.
+# Enable only after validating CPU-node routing, NFS access and a Bound work PVC.
+# Static credentials never permit takeover from an unconfirmed old writer.
+storageSync:
+  enabled: false
+  image:
+    repository: ray-storage-sync
+    tag: "REPLACE_WITH_IMMUTABLE_TAG"
+    digest: ""
+  bucket: ""
+  region: ""
+  endpoint: ""
+  credentialMode: static-secret
+  # Existing administrator-created Secret; key config is a tosutil config.
+  # Read-only browse/preview workers never receive this Secret.
+  credentialSecret: ""
+  serviceAccountName: ray-storage-sync
+  callbackBaseURL: "http://ray-train-backend:8080"
+  nodeSelector: {}
+  workClaimName: ""
+  workVolume:
+    create: false
+    storageClassName: ""
+    accessModes: [ReadWriteOnce]
+    size: 20Gi
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+      ephemeral-storage: 256Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+      ephemeral-storage: 1Gi
+  maxActiveRuns: 1
+  maxFileConcurrency: 4
+  maxPartConcurrency: 2
+  maxBandwidthBytesPerSecond: 104857600
+
 kueue:
   enabled: false
   # These are Kueue WorkloadPriorityClasses (not Kubernetes PriorityClasses).

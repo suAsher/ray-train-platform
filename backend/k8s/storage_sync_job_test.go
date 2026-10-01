@@ -26,6 +26,7 @@ func storageSyncRuntimeConfig() config.StorageSyncConfig {
 		CPURequest: "500m", CPULimit: "2", MemoryRequest: "512Mi", MemoryLimit: "2Gi",
 		EphemeralStorageRequest: "256Mi", EphemeralStorageLimit: "1Gi",
 		MaxActiveRuns: 1, MaxFileConcurrency: 4, MaxPartConcurrency: 2,
+		MaxBandwidthBytesPerSecond: 104857600, CallbackBaseURL: "http://ray-train-backend:8080",
 	}
 }
 
@@ -80,6 +81,17 @@ func TestStorageSyncTransferCredentialsAndDeterministicAttempt(t *testing.T) {
 	if first.Spec.TTLSecondsAfterFinished != nil { t.Fatal("automatic Job cleanup would erase stop evidence") }
 }
 
+func TestStorageSyncWorkerPinsProcessIdentityAndWaitsForTermination(t *testing.T) {
+	job, _, err := renderStorageSyncJob(storageSyncRuntimeConfig(), storageSyncRuntimeSpec("TRANSFER"))
+	if err != nil { t.Fatal(err) }
+	if job.Spec.PodReplacementPolicy == nil || *job.Spec.PodReplacementPolicy != batchv1.Failed { t.Fatal("Job may replace a worker before termination") }
+	found := false
+	for _, variable := range job.Spec.Template.Spec.Containers[0].Env {
+		if variable.Name == "STORAGE_SYNC_POD_UID" && variable.ValueFrom != nil && variable.ValueFrom.FieldRef != nil && variable.ValueFrom.FieldRef.FieldPath == "metadata.uid" { found = true }
+	}
+	if !found { t.Fatal("worker lacks immutable process identity for the attempt claim") }
+}
+
 func TestStorageSyncRendererRejectsUnsafeSpec(t *testing.T) {
 	for _, change := range []func(*config.StorageSyncConfig, *storagesync.WorkSpec){
 		func(c *config.StorageSyncConfig, s *storagesync.WorkSpec) { c.NodeSelector = nil },
@@ -100,6 +112,33 @@ func TestStorageSyncPendingPVCDoesNotCreateWorker(t *testing.T) {
 	client := NewStorageSyncClient(kube, cfg)
 	if _, err := client.Ensure(context.Background(), storageSyncRuntimeSpec("PREVIEW")); err == nil { t.Fatal("Pending PVC accepted") }
 	for _, action := range kube.Actions() { if action.GetVerb() == "create" { t.Fatal("worker resources created despite unavailable checkpoint storage") } }
+}
+
+func TestStorageSyncEnsureAdoptsExistingMatchingAttemptAndRejectsCollision(t *testing.T) {
+	cfg, spec := storageSyncRuntimeConfig(), storageSyncRuntimeSpec("PREVIEW")
+	job, _, err := renderStorageSyncJob(cfg, spec)
+	if err != nil { t.Fatal(err) }
+	job.UID = "created-before-response-was-lost"
+	kube := fake.NewSimpleClientset(job)
+	client := NewStorageSyncClient(kube, cfg)
+	observation, err := client.Ensure(context.Background(), spec)
+	if err != nil || observation.JobUID != string(job.UID) { t.Fatalf("lost creation response not reconciled: %#v %v", observation, err) }
+	for _, action := range kube.Actions() { if action.GetVerb() == "create" { t.Fatal("created duplicate resources for existing attempt") } }
+	job.Labels[storageSyncRunLabel] = "another-run"
+	if _, err := kube.BatchV1().Jobs(cfg.Namespace).Update(context.Background(), job, metav1.UpdateOptions{}); err != nil { t.Fatal(err) }
+	if _, err := client.Ensure(context.Background(), spec); err == nil { t.Fatal("foreign deterministic Job adopted") }
+}
+
+func TestStorageSyncEnsureCreatesExactlyOneWorkerAndProtectedRequest(t *testing.T) {
+	cfg, spec := storageSyncRuntimeConfig(), storageSyncRuntimeSpec("PREVIEW")
+	kube := fake.NewSimpleClientset(&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: cfg.WorkClaimName, Namespace: cfg.Namespace}, Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound}})
+	client := NewStorageSyncClient(kube, cfg)
+	if _, err := client.Ensure(context.Background(), spec); err != nil { t.Fatal(err) }
+	if _, err := client.Ensure(context.Background(), spec); err != nil { t.Fatal(err) }
+	jobs, err := kube.BatchV1().Jobs(cfg.Namespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil || len(jobs.Items) != 1 { t.Fatalf("unexpected jobs: %#v %v", jobs, err) }
+	secrets, err := kube.CoreV1().Secrets(cfg.Namespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil || len(secrets.Items) != 1 || secrets.Items[0].Immutable == nil || !*secrets.Items[0].Immutable { t.Fatal("request must be immutable and unique") }
 }
 
 func TestStorageSyncMissingOrUnknownWorkerIsNotStopProof(t *testing.T) {
@@ -128,7 +167,7 @@ func TestStorageSyncTerminalPodDoesNotInventRequestDrainProof(t *testing.T) {
 	if err != nil || !observation.Terminated || observation.RequestsDrained { t.Fatalf("invalid stop evidence: %#v %v", observation, err) }
 }
 
-func TestStorageSyncStopUsesUIDPreconditionWithoutDeletingJobEvidence(t *testing.T) {
+func TestStorageSyncStopPreservesWorkerEvidenceAndUsesUIDPrecondition(t *testing.T) {
 	cfg, spec := storageSyncRuntimeConfig(), storageSyncRuntimeSpec("TRANSFER")
 	job, _, err := renderStorageSyncJob(cfg, spec)
 	if err != nil { t.Fatal(err) }
@@ -137,13 +176,13 @@ func TestStorageSyncStopUsesUIDPreconditionWithoutDeletingJobEvidence(t *testing
 	kube := fake.NewSimpleClientset(job, pod)
 	client := NewStorageSyncClient(kube, cfg)
 	if err := client.Stop(context.Background(), spec.RunID, spec.Attempt); err != nil { t.Fatal(err) }
-	deleted := false
+	patched := false
 	for _, action := range kube.Actions() {
-		if action.GetVerb() != "delete" { continue }
-		if action.GetResource().Resource == "jobs" { t.Fatal("stop deleted Job evidence") }
-		deleteAction := action.(ktesting.DeleteAction)
-		if deleteAction.GetDeleteOptions().Preconditions == nil || *deleteAction.GetDeleteOptions().Preconditions.UID != pod.UID { t.Fatal("stop lacks UID guard") }
-		deleted = true
+		if action.GetVerb() == "delete" { t.Fatal("stop deleted worker termination evidence") }
+		if action.GetVerb() != "patch" { continue }
+		patchAction := action.(ktesting.PatchAction)
+		if patchAction.GetPatchType() != types.JSONPatchType || !strings.Contains(string(patchAction.GetPatch()), `"/metadata/uid"`) || !strings.Contains(string(patchAction.GetPatch()), `"job-uid"`) { t.Fatal("stop lacks UID guard") }
+		patched = true
 	}
-	if !deleted { t.Fatal("running worker was not asked to terminate") }
+	if !patched { t.Fatal("stop request was not recorded") }
 }

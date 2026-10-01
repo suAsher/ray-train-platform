@@ -28,6 +28,7 @@ type Config struct {
 	AssistantIdleDemandAuthKey               string
 	Assistant                                AssistantConfig
 	EnvironmentBuild                         EnvironmentBuildConfig
+	StorageSync                              StorageSyncConfig
 	SPKRayjobMinimumVersion                  string
 	AppEnv                                   string
 	HTTPAddr                                 string
@@ -546,6 +547,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.EnvironmentBuild, err = loadEnvironmentBuildConfig(); err != nil {
+		return Config{}, err
+	}
+	if cfg.StorageSync, err = loadStorageSyncConfig(); err != nil {
 		return Config{}, err
 	}
 	if cfg.Assistant, err = loadAssistantConfig(); err != nil {

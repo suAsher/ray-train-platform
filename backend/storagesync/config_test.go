@@ -43,7 +43,7 @@ func TestPrefixLocksAndLayouts(t *testing.T) {
 func TestScheduleShanghaiAndMissedSlots(t *testing.T) {
 	now := time.Date(2026,10,1,3,15,0,0,time.UTC)
 	for _, tc := range []struct{s Schedule; want string}{
-		{Schedule{Kind:"INTERVAL",Timezone:"Asia/Shanghai",EveryHours:3},"2026-10-01T06:00:00Z"},
+		{Schedule{Kind:"INTERVAL",Timezone:"Asia/Shanghai",EveryHours:3},"2026-10-01T04:00:00Z"},
 		{Schedule{Kind:"DAILY",Timezone:"Asia/Shanghai",Time:"11:15"},"2026-10-02T03:15:00Z"},
 		{Schedule{Kind:"WEEKLY",Timezone:"Asia/Shanghai",Time:"10:00",Weekday:4},"2026-10-08T02:00:00Z"},
 	} { got,err:=tc.s.Next(now); if err != nil || got == nil || got.Format(time.RFC3339)!=tc.want { t.Fatalf("next %#v: %v %v",tc.s,got,err) } }

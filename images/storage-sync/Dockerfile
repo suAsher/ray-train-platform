@@ -1,0 +1,13 @@
+ARG PYTHON_BASE_IMAGE=python:3.11-slim-bookworm
+FROM ${PYTHON_BASE_IMAGE}
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app HOME=/work
+WORKDIR /app
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt \
+ && groupadd --gid 65532 raytrain \
+ && useradd --uid 65532 --gid 65532 --no-create-home --home-dir /work --shell /usr/sbin/nologin raytrain \
+ && mkdir -p /work /data/source \
+ && chown 65532:65532 /work
+COPY storage_sync /app/storage_sync
+USER 65532:65532
+ENTRYPOINT ["python3", "-m", "storage_sync.worker"]
