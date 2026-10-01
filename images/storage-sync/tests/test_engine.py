@@ -275,3 +275,28 @@ class TransferTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ContentVerificationTests(unittest.TestCase):
+    class SameCRCStore(MemoryStore):
+        def head(self, bucket, key):
+            value = super().head(bucket, key)
+            return replace(value, sha256='', crc64='7') if value else None
+
+    def test_content_mode_compares_bytes_even_when_service_metadata_crc_matches(self):
+        store = self.SameCRCStore({('src', 'data/a'): b'a', ('dst', 'out/a'): b'b'})
+        entries = scan_tos(store, 'src', 'data', True, 'CONTENT')
+        plan = make_plan(entries, store, 'dst', 'out', verification='CONTENT')
+        self.assertEqual(plan.pending_bytes, 1)
+        self.assertEqual(plan.reused_files, 0)
+
+    def test_content_verification_rejects_corrupt_transfer_with_equal_crc(self):
+        class CorruptCopy(self.SameCRCStore):
+            def copy(self, source_bucket, source, bucket, key, expected):
+                self.objects[bucket, key] = b'b'
+                return self.head(bucket, key)
+        with tempfile.TemporaryDirectory() as directory:
+            store = CorruptCopy({('src', 'data/a'): b'a'})
+            plan = make_plan(scan_tos(store, 'src', 'data', True, 'CONTENT'), store, 'dst', 'out', verification='CONTENT')
+            with self.assertRaisesRegex(SyncError, 'CHECKSUM_MISMATCH'):
+                execute(plan, store, store, Path(directory), 'run', 'config')

@@ -45,6 +45,7 @@ func(h *StorageSyncHandler) claim(c *gin.Context){
 	spec,ok:=h.authorizeWorker(c);if !ok{return}
 	var req struct{RunID string `json:"runId"`;Attempt int `json:"attempt"`;Generation int64 `json:"generation"`;WorkerID string `json:"workerId"`};if !h.decode(c,&req){return}
 	if req.RunID!=spec.RunID||req.Attempt!=spec.Attempt||req.Generation!=spec.Generation{h.fail(c,ss.ErrStaleAttempt);return}
+	if !h.workerAuthority(c,spec){return}
 	err:=h.manager.Claim(c.Request.Context(),spec.RunID,spec.Attempt,spec.Generation,req.WorkerID);h.send(c,200,gin.H{"claimed":err==nil},err)
 }
 func(h *StorageSyncHandler) report(c *gin.Context){
@@ -76,6 +77,7 @@ func storageSyncMetadataAllowed(spec ss.WorkSpec,req storageSyncMetadataRequest)
 func(h *StorageSyncHandler) readMetadata(c *gin.Context){
 	spec,ok:=h.authorizeWorker(c);if !ok{return};var req storageSyncMetadataRequest;if !h.decode(c,&req){return}
 	if !h.claimedWorker(c,spec,req.WorkerID){return};if !storageSyncMetadataAllowed(spec,req){h.fail(c,ss.ErrForbidden);return}
+	if !h.workerAuthority(c,spec){return}
 	if h.metadata==nil{h.fail(c,errStorageSyncUnavailable);return}
 	ctx,cancel:=context.WithTimeout(c.Request.Context(),25*time.Second);defer cancel()
 	switch req.Operation {
@@ -93,6 +95,7 @@ func(h *StorageSyncHandler) readMetadata(c *gin.Context){
 	}
 }
 func(h *StorageSyncHandler) files(c *gin.Context){
+	if !h.checkRun(c,c.Param("id")){return}
 	limit:=100;var err error;if raw:=c.Query("limit");raw!=""{limit,err=strconv.Atoi(raw);if err!=nil{h.fail(c,ss.ErrInvalid);return}}
 	result,err:=h.manager.ListRunFiles(c.Request.Context(),c.Param("id"),c.Query("cursor"),limit);h.send(c,200,result,err)
 }

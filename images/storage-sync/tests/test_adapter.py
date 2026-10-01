@@ -149,9 +149,27 @@ class AdapterPaginationTests(unittest.TestCase):
             from_config(config)
         self.assertEqual(calls[0][1]['max_retry_count'], 0)
         self.assertTrue(calls[0][1]['enable_crc'])
+        self.assertEqual(calls[0][1]['high_latency_log_threshold'], 0)
 
     def test_incomplete_configuration_has_sanitized_error(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(sys.modules, {'tos': SimpleNamespace()}):
             config = Path(directory) / 'config'; config.write_text('accessKeyID=private-example\n')
             with self.assertRaisesRegex(SyncError, '^TOS_CONFIGURATION_INCOMPLETE$'):
                 from_config(config)
+
+from datetime import datetime, timezone
+from storage_sync.transport import object_from_wire
+
+
+class CrossAdapterIdentityTests(unittest.TestCase):
+    def test_gateway_and_sdk_metadata_share_canonical_identity(self):
+        sdk = TOSStore._info('key', SimpleNamespace(content_length=3, etag='opaque-5', version_id='v1',
+                             hash_crc64_ecma=123, last_modified=datetime(2026, 10, 1, tzinfo=timezone.utc),
+                             content_type='application/octet-stream', content_encoding='gzip', content_disposition='attachment; filename=a+b%20.json',
+                             content_language='zh', cache_control='no-cache'))
+        wire = object_from_wire({'key': 'key', 'size': 3, 'etag': 'opaque-5', 'versionId': 'v1', 'crc64': '123',
+                                'lastModified': '2026-10-01T00:00:00Z', 'contentType': 'application/octet-stream',
+                                'contentEncoding': 'gzip', 'contentDisposition': 'attachment; filename=a+b%20.json', 'contentLanguage': 'zh',
+                                'cacheControl': 'no-cache'})
+        self.assertEqual(sdk.fingerprint, wire.fingerprint)
+        self.assertEqual(sdk.last_modified, '2026-10-01T00:00:00.000Z')

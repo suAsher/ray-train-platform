@@ -50,6 +50,7 @@ func TestStorageSyncConfigValidatesResourceAndConcurrencyLimits(t *testing.T) {
 		{"STORAGE_SYNC_MAX_ACTIVE_RUNS", "0"},
 		{"STORAGE_SYNC_MAX_FILE_CONCURRENCY", "129"},
 		{"STORAGE_SYNC_MAX_PART_CONCURRENCY", "65"},
+		{"STORAGE_SYNC_MAX_BANDWIDTH_BYTES_PER_SECOND", "102399"},
 		{"STORAGE_SYNC_NODE_SELECTOR_JSON", `{"invalid key":"cpu"}`},
 		{"STORAGE_SYNC_ENDPOINT", "https://name:password@example.org"},
 		{"STORAGE_SYNC_CREDENTIAL_MODE", "automatic"},
@@ -62,6 +63,13 @@ func TestStorageSyncConfigValidatesResourceAndConcurrencyLimits(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStorageSyncBandwidthCeilingAcceptsSDKMinimum(t *testing.T) {
+	storageSyncTestEnvironment(t)
+	t.Setenv("STORAGE_SYNC_MAX_BANDWIDTH_BYTES_PER_SECOND", "102400")
+	cfg, err := loadStorageSyncConfig()
+	if err != nil || cfg.MaxBandwidthBytesPerSecond != 102400 { t.Fatalf("valid SDK minimum rejected: %#v %v", cfg, err) }
 }
 
 func TestStorageSyncConfigurationHasConservativeDefaults(t *testing.T) {

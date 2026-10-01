@@ -40,7 +40,7 @@ class Acceptance:
 
     def plan(self, source, target, mode='INCREMENTAL', baseline=None):
         entries = scan_tos(self.store, self.bucket, self.root + '/' + source, True, 'CONTENT')
-        plan = make_plan(entries, self.store, self.bucket, self.root + '/' + target, mode=mode, baseline=baseline)
+        plan = make_plan(entries, self.store, self.bucket, self.root + '/' + target, mode=mode, baseline=baseline, verification='CONTENT')
         self.keys.update(item.target_key for item in plan.entries)
         return plan
 
@@ -89,7 +89,7 @@ class Acceptance:
         source = work / 'idc'; source.mkdir()
         (source / '数据 %.bin').write_bytes(b'idc-file')
         target = self.root + '/idc-target'
-        plan = make_plan(scan_idc(source, '', 'CONTENT'), self.store, self.bucket, target)
+        plan = make_plan(scan_idc(source, '', 'CONTENT'), self.store, self.bucket, target, verification='CONTENT')
         self.keys.update(item.target_key for item in plan.entries)
         result = execute(plan, self.store, self.store, work / 'idc-state', 'idc', plan.digest)
         assert result['verifiedFiles'] == 1

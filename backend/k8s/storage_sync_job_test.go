@@ -92,6 +92,24 @@ func TestStorageSyncWorkerPinsProcessIdentityAndWaitsForTermination(t *testing.T
 	if !found { t.Fatal("worker lacks immutable process identity for the attempt claim") }
 }
 
+func TestStorageSyncReadOnlyJobsHaveAbsoluteDeadlines(t *testing.T) {
+	for _, tc := range []struct{ phase string; seconds int64 }{
+		{"BROWSE", 300}, {"RECOVER", 300}, {"PREVIEW", 86400}, {"REVALIDATE", 86400}, {"TRANSFER", 0},
+	} {
+		t.Run(tc.phase,func(t *testing.T){
+			job, _, err := renderStorageSyncJob(storageSyncRuntimeConfig(), storageSyncRuntimeSpec(tc.phase))
+			if err != nil { t.Fatal(err) }
+			if tc.seconds == 0 {
+				if job.Spec.ActiveDeadlineSeconds != nil { t.Fatal("long transfers must not be killed by a planning deadline") }
+				return
+			}
+			if job.Spec.ActiveDeadlineSeconds == nil || *job.Spec.ActiveDeadlineSeconds != tc.seconds {
+				t.Fatalf("%s must have an absolute %d-second Job deadline", tc.phase, tc.seconds)
+			}
+		})
+	}
+}
+
 func TestStorageSyncReceiptRecoveryHasSeparateIdentityAndReadOnlyWorkspace(t *testing.T) {
 	cfg, spec := storageSyncRuntimeConfig(), storageSyncRuntimeSpec("RECOVER")
 	spec.SubjectKind = "preview"

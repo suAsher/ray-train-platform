@@ -13,7 +13,11 @@ class StopRequested(SyncError):
 
 
 def canonical_digest(value):
-    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    digest = hashlib.sha256()
+    encoder = json.JSONEncoder(ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    for piece in encoder.iterencode(value):
+        digest.update(piece.encode())
+    return digest.hexdigest()
 
 
 def safe_relative(value, allow_empty=False):

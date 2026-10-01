@@ -84,23 +84,24 @@ func(h *StorageSyncHandler) decode(c *gin.Context,out any)bool{
 }
 func(h *StorageSyncHandler) send(c *gin.Context,status int,result any,err error){if err!=nil{h.fail(c,err);return};h.response.writeSuccess(c,status,result)}
 func(h *StorageSyncHandler) spaces(c *gin.Context){items,err:=h.resolver.Spaces(c.Request.Context(),c.GetString("storageSyncActor"));h.send(c,200,gin.H{"items":items},err)}
-func(h *StorageSyncHandler) plans(c *gin.Context){items,err:=h.manager.ListPlans(c.Request.Context());if err!=nil{h.fail(c,err);return};page,start,end,ok:=syncPage(c,len(items));if !ok{h.fail(c,ss.ErrInvalid);return};page["items"]=items[start:end];h.send(c,200,page,nil)}
+func(h *StorageSyncHandler) plans(c *gin.Context){all,err:=h.manager.ListPlans(c.Request.Context());if err!=nil{h.fail(c,err);return};items:=make([]ss.Plan,0,len(all));for _,item:=range all{if syncCanReadPlan(c.GetString("storageSyncActor"),item){items=append(items,item)}};page,start,end,ok:=syncPage(c,len(items));if !ok{h.fail(c,ss.ErrInvalid);return};page["items"]=items[start:end];h.send(c,200,page,nil)}
 func(h *StorageSyncHandler) createPlan(c *gin.Context){
 	var req struct{Name string `json:"name"`;Config ss.Config `json:"config"`};if !h.decode(c,&req){return}
 	result,err:=h.manager.CreatePlan(c.Request.Context(),c.GetString("storageSyncActor"),req.Name,req.Config);h.send(c,201,result,err)
 }
 func(h *StorageSyncHandler) updatePlan(c *gin.Context){
+	if !h.checkPlan(c,c.Param("id")){return}
 	var req struct{Revision int64 `json:"revision"`;Name string `json:"name"`;Enabled *bool `json:"enabled"`;Config ss.Config `json:"config"`};if !h.decode(c,&req){return};if req.Enabled==nil{h.fail(c,ss.ErrInvalid);return}
 	result,err:=h.manager.UpdatePlan(c.Request.Context(),c.GetString("storageSyncActor"),c.Param("id"),req.Revision,req.Name,*req.Enabled,req.Config);h.send(c,200,result,err)
 }
-func(h *StorageSyncHandler) createPreview(c *gin.Context){var req struct{PlanID string `json:"planId"`;ConfigRevision int64 `json:"configRevision"`};if !h.decode(c,&req){return};result,err:=h.manager.CreatePreview(c.Request.Context(),c.GetString("storageSyncActor"),req.PlanID,req.ConfigRevision);h.send(c,202,result,err)}
-func(h *StorageSyncHandler) preview(c *gin.Context){result,err:=h.manager.GetPreview(c.Request.Context(),c.Param("id"));if err==nil&&result.Kind!="PREVIEW"{err=ss.ErrNotFound};h.send(c,200,result,err)}
-func(h *StorageSyncHandler) start(c *gin.Context){var req ss.StartRequest;if !h.decode(c,&req){return};req.IdempotencyKey=c.GetHeader("Idempotency-Key");result,err:=h.manager.Start(c.Request.Context(),c.GetString("storageSyncActor"),c.Param("id"),req);h.send(c,202,result,err)}
-func(h *StorageSyncHandler) runs(c *gin.Context){items,err:=h.manager.ListRuns(c.Request.Context(),c.Query("planId"));if err!=nil{h.fail(c,err);return};page,start,end,ok:=syncPage(c,len(items));if !ok{h.fail(c,ss.ErrInvalid);return};page["items"]=items[start:end];h.send(c,200,page,nil)}
-func(h *StorageSyncHandler) run(c *gin.Context){result,err:=h.manager.GetRun(c.Request.Context(),c.Param("id"));h.send(c,200,result,err)}
-func(h *StorageSyncHandler) control(action string)gin.HandlerFunc{return func(c *gin.Context){var req struct{};if !h.decode(c,&req){return};result,err:=h.manager.Control(c.Request.Context(),c.GetString("storageSyncActor"),c.Param("id"),action);h.send(c,202,result,err)}}
+func(h *StorageSyncHandler) createPreview(c *gin.Context){var req struct{PlanID string `json:"planId"`;ConfigRevision int64 `json:"configRevision"`};if !h.decode(c,&req)||!h.checkPlan(c,req.PlanID){return};result,err:=h.manager.CreatePreview(c.Request.Context(),c.GetString("storageSyncActor"),req.PlanID,req.ConfigRevision);h.send(c,202,result,err)}
+func(h *StorageSyncHandler) preview(c *gin.Context){result,err:=h.manager.GetPreview(c.Request.Context(),c.Param("id"));if err==nil&&(result.Kind!="PREVIEW"||result.Actor!=c.GetString("storageSyncActor")){err=ss.ErrNotFound};h.send(c,200,result,err)}
+func(h *StorageSyncHandler) start(c *gin.Context){if !h.checkPlan(c,c.Param("id")){return};var req ss.StartRequest;if !h.decode(c,&req){return};req.IdempotencyKey=c.GetHeader("Idempotency-Key");result,err:=h.manager.Start(c.Request.Context(),c.GetString("storageSyncActor"),c.Param("id"),req);h.send(c,202,result,err)}
+func(h *StorageSyncHandler) runs(c *gin.Context){if id:=c.Query("planId");id!=""&&!h.checkPlan(c,id){return};all,err:=h.manager.ListRuns(c.Request.Context(),c.Query("planId"));if err!=nil{h.fail(c,err);return};items:=make([]ss.Run,0,len(all));for _,item:=range all{if syncCanReadRun(c.GetString("storageSyncActor"),item){items=append(items,item)}};page,start,end,ok:=syncPage(c,len(items));if !ok{h.fail(c,ss.ErrInvalid);return};page["items"]=items[start:end];h.send(c,200,page,nil)}
+func(h *StorageSyncHandler) run(c *gin.Context){if !h.checkRun(c,c.Param("id")){return};result,err:=h.manager.GetRun(c.Request.Context(),c.Param("id"));h.send(c,200,result,err)}
+func(h *StorageSyncHandler) control(action string)gin.HandlerFunc{return func(c *gin.Context){if !h.checkRun(c,c.Param("id")){return};var req struct{};if !h.decode(c,&req){return};result,err:=h.manager.Control(c.Request.Context(),c.GetString("storageSyncActor"),c.Param("id"),action);h.send(c,202,result,err)}}
 func(h *StorageSyncHandler) browse(c *gin.Context){var req struct{Location ss.Location `json:"location"`;Cursor string `json:"cursor"`;Limit int `json:"limit"`};if !h.decode(c,&req){return};result,err:=h.manager.CreateBrowse(c.Request.Context(),c.GetString("storageSyncActor"),req.Location,req.Cursor,req.Limit);h.send(c,202,result,err)}
-func(h *StorageSyncHandler) browseResult(c *gin.Context){result,err:=h.manager.GetPreview(c.Request.Context(),c.Param("id"));if err==nil&&result.Kind!="BROWSE"{err=ss.ErrNotFound};h.send(c,200,result,err)}
+func(h *StorageSyncHandler) browseResult(c *gin.Context){result,err:=h.manager.GetPreview(c.Request.Context(),c.Param("id"));if err==nil&&(result.Kind!="BROWSE"||result.Actor!=c.GetString("storageSyncActor")){err=ss.ErrNotFound};h.send(c,200,result,err)}
 func syncPage(c *gin.Context,total int)(gin.H,int,int,bool){
 	limit:=100;var err error;if raw:=c.Query("limit");raw!=""{limit,err=strconv.Atoi(raw);if err!=nil||limit<1||limit>500{return nil,0,0,false}}
 	start:=0;if raw:=c.Query("cursor");raw!=""{start,err=strconv.Atoi(raw);if err!=nil||start<0||start>total{return nil,0,0,false}}

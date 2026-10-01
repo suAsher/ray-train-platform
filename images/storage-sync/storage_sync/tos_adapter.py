@@ -201,5 +201,6 @@ def from_config(path, endpoint='', region='', bandwidth=0):
     if not all((access, secret, endpoint, region)):
         raise SyncError('TOS_CONFIGURATION_INCOMPLETE')
     client = tos.TosClientV2(access, secret, endpoint, region, security_token=values.get('securitytoken') or None,
-                             max_retry_count=0, max_connections=4, enable_crc=True, connection_time=10, socket_timeout=60)
+                             max_retry_count=0, max_connections=4, enable_crc=True, connection_time=10, socket_timeout=60,
+                             high_latency_log_threshold=0)
     return TOSStore(client, bandwidth)
