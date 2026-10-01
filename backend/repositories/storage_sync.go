@@ -21,7 +21,7 @@ func NewStorageSyncRepository(database *gorm.DB) *StorageSyncRepository {
 }
 
 type storageSyncTx struct {
-	db *gorm.DB
+	db           *gorm.DB
 	pendingLocks []storageSyncPathLockRecord
 }
 

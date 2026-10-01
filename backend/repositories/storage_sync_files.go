@@ -79,7 +79,7 @@ func (tx *storageSyncTx) PutFileResults(runID string, attempt int, generation in
 	}
 	result := tx.db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "run_id"}, {Name: "mapping_index"}, {Name: "path_key"}},
 		DoUpdates: clause.AssignmentColumns([]string{"attempt", "generation", "state", "size_bytes", "error_code"}),
-		Where: clause.Where{Exprs: []clause.Expression{clause.Expr{SQL: "storage_sync_files.relative_path = excluded.relative_path"}}}}).Create(&rows)
+		Where:     clause.Where{Exprs: []clause.Expression{clause.Expr{SQL: "storage_sync_files.relative_path = excluded.relative_path"}}}}).Create(&rows)
 	if result.Error != nil {
 		return storageSyncError(result.Error)
 	}

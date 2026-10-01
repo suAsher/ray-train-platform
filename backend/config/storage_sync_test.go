@@ -17,17 +17,17 @@ func TestStorageSyncDisabledByDefault(t *testing.T) {
 func storageSyncTestEnvironment(t *testing.T) {
 	t.Helper()
 	for key, value := range map[string]string{
-		"STORAGE_SYNC_ENABLED": "true",
-		"STORAGE_SYNC_IMAGE": "registry.example/storage-sync@sha256:" + strings.Repeat("a", 64),
-		"STORAGE_SYNC_NAMESPACE": "ray-train-platform",
-		"STORAGE_SYNC_BUCKET": "storage-bucket",
-		"STORAGE_SYNC_REGION": "cn-shanghai",
-		"STORAGE_SYNC_ENDPOINT": "https://tos-cn-shanghai.volces.com",
-		"STORAGE_SYNC_CREDENTIAL_SECRET": "storage-sync-config",
-		"STORAGE_SYNC_SERVICE_ACCOUNT": "storage-sync-worker",
-		"STORAGE_SYNC_WORK_CLAIM_NAME": "storage-sync-work",
+		"STORAGE_SYNC_ENABLED":            "true",
+		"STORAGE_SYNC_IMAGE":              "registry.example/storage-sync@sha256:" + strings.Repeat("a", 64),
+		"STORAGE_SYNC_NAMESPACE":          "ray-train-platform",
+		"STORAGE_SYNC_BUCKET":             "storage-bucket",
+		"STORAGE_SYNC_REGION":             "cn-shanghai",
+		"STORAGE_SYNC_ENDPOINT":           "https://tos-cn-shanghai.volces.com",
+		"STORAGE_SYNC_CREDENTIAL_SECRET":  "storage-sync-config",
+		"STORAGE_SYNC_SERVICE_ACCOUNT":    "storage-sync-worker",
+		"STORAGE_SYNC_WORK_CLAIM_NAME":    "storage-sync-work",
 		"STORAGE_SYNC_NODE_SELECTOR_JSON": `{"raytrain.wellspiking.ai/storage-sync":"true"}`,
-		"STORAGE_SYNC_CALLBACK_BASE_URL": "http://ray-train-backend:8080",
+		"STORAGE_SYNC_CALLBACK_BASE_URL":  "http://ray-train-backend:8080",
 	} {
 		t.Setenv(key, value)
 	}
@@ -69,7 +69,9 @@ func TestStorageSyncBandwidthCeilingAcceptsSDKMinimum(t *testing.T) {
 	storageSyncTestEnvironment(t)
 	t.Setenv("STORAGE_SYNC_MAX_BANDWIDTH_BYTES_PER_SECOND", "102400")
 	cfg, err := loadStorageSyncConfig()
-	if err != nil || cfg.MaxBandwidthBytesPerSecond != 102400 { t.Fatalf("valid SDK minimum rejected: %#v %v", cfg, err) }
+	if err != nil || cfg.MaxBandwidthBytesPerSecond != 102400 {
+		t.Fatalf("valid SDK minimum rejected: %#v %v", cfg, err)
+	}
 }
 
 func TestStorageSyncConfigurationHasConservativeDefaults(t *testing.T) {
@@ -88,10 +90,10 @@ func TestStorageSyncConfigurationHasConservativeDefaults(t *testing.T) {
 
 func TestStorageSyncChartAndBuildContract(t *testing.T) {
 	for filename, required := range map[string][]string{
-		"../../helm/ray-train-platform/templates/storage-sync.yaml": {"automountServiceAccountToken: false", "kind: Role", "persistentvolumeclaims", "jobs", "pods"},
+		"../../helm/ray-train-platform/templates/storage-sync.yaml":       {"automountServiceAccountToken: false", "kind: Role", "persistentvolumeclaims", "jobs", "pods"},
 		"../../helm/ray-train-platform/templates/backend-deployment.yaml": {"STORAGE_SYNC_ENABLED", "STORAGE_SYNC_NODE_SELECTOR_JSON", "STORAGE_SYNC_WORK_CLAIM_NAME", "STORAGE_SYNC_MAX_ACTIVE_RUNS"},
-		"../../helm/ray-train-platform/values.yaml": {"storageSync:", "credentialMode: static-secret"},
-		"../../build-image.sh": {"storage-sync)", "images/storage-sync/Dockerfile|ray-storage-sync|images/storage-sync|-"},
+		"../../helm/ray-train-platform/values.yaml":                       {"storageSync:", "credentialMode: static-secret"},
+		"../../build-image.sh":                                            {"storage-sync)", "images/storage-sync/Dockerfile|ray-storage-sync|images/storage-sync|-"},
 	} {
 		content, err := os.ReadFile(filename)
 		if err != nil {
