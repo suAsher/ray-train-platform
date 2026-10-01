@@ -24,7 +24,7 @@ The runtime pins `tos==2.9.3`. `put_object` and `copy_object` have target `if_ma
 
 Updating an existing object larger than 5 GiB is rejected during read-only preflight (`UNSUPPORTED_CONDITIONAL_MULTIPART_UPDATE`). The SDK's high-level `upload_file` and `resumable_copy_object` are deliberately unused because their completion path omits the required destination guards. Existing objects up to 5 GiB use guarded single PUT/copy, with no multipart resume for that individual request. Official limits: [CopyObject](https://docs.volcengine.com/docs/TorchObjectStorage/copyobject?lang=en) and [object upload overview](https://docs.volcengine.com/docs/TorchObjectStorage/OverviewofObjectUploadNodejsSDK?lang=zh).
 
-Bandwidth is zero (unlimited) or at least 100 KiB/s. The SDK's service-side copy range is 100 KiB/s through 100 MiB/s; larger requested upper bounds use the stricter 100 MiB/s service cap. IDC upload/read uses the SDK token-bucket limiter. Server-side copy progress records logical bytes separately from IDC network bytes.
+Plan bandwidth is zero (inherit the platform ceiling) or at least 100 KiB/s. Only when both plan and platform values are zero is there no configured limit. The SDK's service-side copy range is 100 KiB/s through 100 MiB/s; larger requested upper bounds use the stricter 100 MiB/s service cap. IDC upload/read uses the SDK token-bucket limiter. Server-side copy progress records logical bytes separately from IDC network bytes.
 
 ## Builder verification
 

@@ -77,6 +77,50 @@ func TestScheduleOwnerRevocationFreezesFutureRuns(t *testing.T){
 	if err:=m.Reconcile(context.Background());err!=nil{t.Fatal(err)};if r.plans[p.ID].Enabled||r.plans[p.ID].NextRunAt!=nil||len(r.runs)!=0{t.Fatal("revoked owner schedule was not frozen")}
 }
 
+func TestRunningWriterRevocationStillAcceptsDrainReceipt(t *testing.T) {
+	m, repo, jobs, resolver, run := startedRun(t)
+	ctx := context.Background()
+	run.Phase = "TRANSFER"
+	repo.runs[run.ID] = run
+	resolver.denied = true
+
+	if err := m.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	stopping := repo.runs[run.ID]
+	if stopping.State != "PAUSING" || jobs.stops == 0 || len(repo.locks[run.ID]) == 0 {
+		t.Fatal("authorization revocation did not request a stop while retaining writer locks")
+	}
+	if _, err := m.GetWorkSpec(ctx, run.ID, run.Attempt, run.Generation); !errors.Is(err, ErrStaleAttempt) {
+		t.Fatalf("revoked stopping writer retained a metadata read grant: %v", err)
+	}
+	if _, err := m.GetReportSpec(ctx, run.ID, run.Attempt, run.Generation); err != nil {
+		t.Fatalf("revocation prevented the existing worker's final receipt: %v", err)
+	}
+	if err := m.Report(ctx, Report{
+		WorkerID: "pod-one", RunID: run.ID, Attempt: run.Attempt,
+		Generation: run.Generation, Sequence: 1, Phase: "TRANSFER",
+		State: "PAUSED", RequestsDrained: true,
+	}); err != nil {
+		t.Fatalf("claimed worker's authenticated drain receipt was rejected after revocation: %v", err)
+	}
+	if repo.runs[run.ID].State != "PAUSING" || len(repo.locks[run.ID]) == 0 {
+		t.Fatal("drain receipt alone released the still-running writer")
+	}
+
+	jobs.observation = Observation{Exists: true, Terminated: true, JobUID: run.JobUID}
+	if err := m.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	paused := repo.runs[run.ID]
+	if paused.State != "PAUSED" || !paused.StopVerified || !paused.RequestsDrained || len(repo.locks[run.ID]) != 0 {
+		t.Fatal("verified termination and drain did not finish the revoked writer's pause")
+	}
+	if paused.FinishedAt != nil {
+		t.Fatal("paused run lost its same-plan reservation")
+	}
+}
+
 func TestBrowseAsyncBoundedAndSnapshotHidden(t *testing.T){
 	m,r,j,_,_:=fixture(t);p,err:=m.CreateBrowse(context.Background(),"admin",Location{SpaceID:"idc",RelativePath:"images"},"",2);if err!=nil{t.Fatal(err)}
 	if err=m.Reconcile(context.Background());err!=nil{t.Fatal(err)};if len(j.specs)!=1||j.specs[0].Phase!="BROWSE"{t.Fatal("browse not dispatched separately")}

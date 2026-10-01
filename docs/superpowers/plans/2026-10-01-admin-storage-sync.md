@@ -131,6 +131,15 @@ def test_target_only_json_survives_increment(sync_fixture):
 
 ## Builder command contract
 
+### 2026-10-01 validation checkpoint (not a release record)
+
+- Backend candidate 4 `16f6b9f7`: Python 63 tests passed. Scoped Go/config/runtime/objectstore/core and real PostgreSQL repository/db tests passed except the newly added expected RED API personal-record isolation case; that API fix is in candidate 5. Core coverage was 68.1%, below the release target.
+- Latest local backend candidate is `e19aae30b206c708c8cba6b1bdd2fa77be50fb21`; its bundle is `/private/tmp/rtp-storage-sync-candidate5.bundle`. Pending targeted RED cases cover canonical TOS identity, content verification despite matching CRC, FIFO, long-preview leases, fresh paused-checkpoint retention, transactional personal ownership, readonly Job deadlines and the global bandwidth minimum.
+- Latest observed Portal candidate is `c43f46a3` in `/private/tmp/raytrain-storage-sync-portal-20261001`. Full lint/build/browser checks and current remote `dev` comparison remain pending; SSH to the GitLab endpoint timed out. Do not claim remote baseline parity.
+- Automatic approval review rejected the candidate 5 backend/Worker upload, as it previously rejected the full Portal archive. A combined explicit source-destination authorization question is pending for `root@14.103.49.106` and `/tmp/raytrain-storage-sync-*`. Do not retry through another agent or transfer mechanism until the user answers.
+- guofeng.su's stable personal storage root was checked read-only against current user and binding records. Real acceptance has not started. Use a fresh UUID child below that user's `files/`, never a username-derived or other user's root.
+- No feature has been pushed, deployed or enabled, and no existing training/storage object was changed. Runbook draft: `docs/STORAGE_SYNC_RUNBOOK.md`.
+
 Run commands only inside `/tmp/raytrain-storage-sync-verify-20261001-*` detached worktrees, with the repository mounted read-only for tests and project-pinned Go builder/PATH/GOPROXY from release skill:
 
 ```sh
