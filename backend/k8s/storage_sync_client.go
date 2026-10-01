@@ -151,8 +151,12 @@ func (c *StorageSyncClient) RecoverReceipt(ctx context.Context, spec storagesync
 	recovery := spec
 	recovery.Phase = "RECOVER"
 	recovered, err := c.Ensure(ctx, recovery)
-	if err != nil { return err }
-	if recovered.Exists && recovered.JobUID != "" && recovered.Terminated { return storagesync.ErrReceiptRecoveryFailed }
+	if err != nil {
+		return err
+	}
+	if recovered.Exists && recovered.JobUID != "" && recovered.Terminated {
+		return storagesync.ErrReceiptRecoveryFailed
+	}
 	return nil
 }
 

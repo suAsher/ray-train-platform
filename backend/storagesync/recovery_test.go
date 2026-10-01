@@ -10,7 +10,7 @@ import (
 type recoveringJobs struct {
 	*fakeJobs
 	recoverySpecs []WorkSpec
-	recoveryErr error
+	recoveryErr   error
 }
 
 func (j *recoveringJobs) RecoverReceipt(_ context.Context, spec WorkSpec) error {
@@ -57,10 +57,16 @@ func TestStandalonePreviewFailsWhenReceiptCannotBeRecovered(t *testing.T) {
 	m, repo, jobs, _, _ := fixture(t)
 	ctx := context.Background()
 	plan, err := m.CreatePlan(ctx, "admin", "copy", testConfig())
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	preview, err := m.CreatePreview(ctx, "admin", plan.ID, plan.Revision)
-	if err != nil { t.Fatal(err) }
-	if err = m.Reconcile(ctx); err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = m.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
 	m.jobs = &recoveringJobs{fakeJobs: jobs, recoveryErr: ErrReceiptRecoveryFailed}
 	jobs.observation = Observation{Exists: true, Terminated: true, JobUID: "job-1"}
 	if err = m.Reconcile(ctx); !errors.Is(err, ErrReceiptRecoveryFailed) {

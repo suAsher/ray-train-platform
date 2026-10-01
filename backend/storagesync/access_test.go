@@ -90,15 +90,15 @@ func TestPreviewReadGrantLifetimeAndFinalReplay(t *testing.T) {
 
 func TestPreviewReadGrantEndsAtReceiptAndAbsoluteDeadline(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		kind string
+		name    string
+		kind    string
 		receipt string
 		elapsed time.Duration
 	}{
 		{name: "successful receipt", kind: "PREVIEW", receipt: "SUCCEEDED"},
 		{name: "failed receipt", kind: "PREVIEW", receipt: "FAILED"},
-		{name: "preview absolute deadline", kind: "PREVIEW", elapsed: 24*time.Hour},
-		{name: "browse absolute deadline", kind: "BROWSE", elapsed: 5*time.Minute},
+		{name: "preview absolute deadline", kind: "PREVIEW", elapsed: 24 * time.Hour},
+		{name: "browse absolute deadline", kind: "BROWSE", elapsed: 5 * time.Minute},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, repo, _, _, now := fixture(t)
@@ -106,15 +106,21 @@ func TestPreviewReadGrantEndsAtReceiptAndAbsoluteDeadline(t *testing.T) {
 			var preview Preview
 			var err error
 			if tc.kind == "BROWSE" {
-				preview, err = m.CreateBrowse(ctx, "admin", Location{SpaceID:"idc"}, "", 10)
+				preview, err = m.CreateBrowse(ctx, "admin", Location{SpaceID: "idc"}, "", 10)
 			} else {
 				var plan Plan
 				plan, err = m.CreatePlan(ctx, "admin", "copy", testConfig())
-				if err != nil { t.Fatal(err) }
+				if err != nil {
+					t.Fatal(err)
+				}
 				preview, err = m.CreatePreview(ctx, "admin", plan.ID, plan.Revision)
 			}
-			if err != nil { t.Fatal(err) }
-			if err = m.Reconcile(ctx); err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = m.Reconcile(ctx); err != nil {
+				t.Fatal(err)
+			}
 			preview = repo.previews[preview.ID]
 			preview.ReceiptState = tc.receipt
 			current := now.Add(tc.elapsed)

@@ -9,13 +9,13 @@ import (
 )
 
 var (
-	ErrNotFound       = errors.New("storage sync not found")
-	ErrConflict       = errors.New("storage sync conflict")
-	ErrLocked         = errors.New("storage path is locked by another run")
-	ErrForbidden      = errors.New("storage sync authorization revoked")
-	ErrStaleAttempt   = errors.New("stale storage sync attempt")
-	ErrPreviewInvalid = errors.New("preview expired or changed; preview again")
-	ErrInvalid        = errors.New("invalid storage sync request")
+	ErrNotFound              = errors.New("storage sync not found")
+	ErrConflict              = errors.New("storage sync conflict")
+	ErrLocked                = errors.New("storage path is locked by another run")
+	ErrForbidden             = errors.New("storage sync authorization revoked")
+	ErrStaleAttempt          = errors.New("stale storage sync attempt")
+	ErrPreviewInvalid        = errors.New("preview expired or changed; preview again")
+	ErrInvalid               = errors.New("invalid storage sync request")
 	ErrReceiptRecoveryFailed = errors.New("storage sync final receipt cannot be recovered")
 )
 
