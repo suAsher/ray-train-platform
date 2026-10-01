@@ -197,13 +197,13 @@ def from_config(path, endpoint='', region='', bandwidth=0):
         name, separator, value = line.partition('=')
         if separator:
             values[name.strip().lower()] = value.strip()
-    access = values.get('accesskeyid', '')
-    secret = values.get('secretaccesskey', '')
+    access = values.get('accesskeyid') or values.get('ak', '')
+    secret = values.get('secretaccesskey') or values.get('sk', '')
     endpoint = endpoint or values.get('endpoint', '')
     region = region or values.get('region', '')
     if not all((access, secret, endpoint, region)):
         raise SyncError('TOS_CONFIGURATION_INCOMPLETE')
-    client = tos.TosClientV2(access, secret, endpoint, region, security_token=values.get('securitytoken') or None,
+    client = tos.TosClientV2(access, secret, endpoint, region, security_token=values.get('securitytoken') or values.get('token') or None,
                              max_retry_count=0, max_connections=4, enable_crc=True, connection_time=10, socket_timeout=60,
                              high_latency_log_threshold=0)
     return TOSStore(client, bandwidth)

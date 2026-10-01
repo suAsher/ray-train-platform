@@ -331,7 +331,7 @@ func (m *Manager) GetWorkSpec(ctx context.Context, id string, attempt int, gener
 	if err != nil {
 		return WorkSpec{}, err
 	}
-	if p.Attempt != attempt || p.Generation != generation || p.State != "RUNNING" || !p.ExpiresAt.After(m.now()) {
+	if p.Attempt != attempt || p.Generation != generation || p.State != "RUNNING" || p.ReceiptState != "" || !p.ExpiresAt.After(m.now()) || !previewScanDeadline(p).After(m.now()) {
 		return WorkSpec{}, ErrStaleAttempt
 	}
 	return m.previewSpec(p), nil

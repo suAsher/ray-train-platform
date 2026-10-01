@@ -158,6 +158,32 @@ class AdapterPaginationTests(unittest.TestCase):
             with self.assertRaisesRegex(SyncError, '^TOS_CONFIGURATION_INCOMPLETE$'):
                 from_config(config)
 
+    def test_current_tosutil_short_keys_and_optional_token(self):
+        for token in ('', 'temporary-session-token'):
+            with self.subTest(has_token=bool(token)):
+                calls = []
+                fake_tos = SimpleNamespace(TosClientV2=lambda *args, **kwargs: calls.append((args, kwargs)) or FakeClient())
+                with tempfile.TemporaryDirectory() as directory, patch.dict(sys.modules, {'tos': fake_tos}):
+                    config = Path(directory) / 'config'
+                    config.write_text('[default]\nak=example-ak\nsk=example-sk\n'
+                                      'endpoint=https://tos.example\nregion=test-region\ntoken=' + token + '\n')
+                    from_config(config)
+                self.assertEqual(calls[0][0], ('example-ak', 'example-sk', 'https://tos.example', 'test-region'))
+                self.assertEqual(calls[0][1]['security_token'], token or None)
+                self.assertEqual(calls[0][1]['max_retry_count'], 0)
+
+    def test_long_credential_keys_preserve_precedence_and_endpoint_override(self):
+        calls = []
+        fake_tos = SimpleNamespace(TosClientV2=lambda *args, **kwargs: calls.append((args, kwargs)) or FakeClient())
+        with tempfile.TemporaryDirectory() as directory, patch.dict(sys.modules, {'tos': fake_tos}):
+            config = Path(directory) / 'config'
+            config.write_text('accessKeyID=long-ak\nsecretAccessKey=long-sk\nsecurityToken=long-token\n'
+                              'ak=short-ak\nsk=short-sk\ntoken=short-token\n'
+                              'endpoint=https://old.example\nregion=old-region\n')
+            from_config(config, 'https://override.example', 'override-region')
+        self.assertEqual(calls[0][0], ('long-ak', 'long-sk', 'https://override.example', 'override-region'))
+        self.assertEqual(calls[0][1]['security_token'], 'long-token')
+
 from datetime import datetime, timezone
 from storage_sync.transport import object_from_wire
 

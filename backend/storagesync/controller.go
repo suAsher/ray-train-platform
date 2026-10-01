@@ -214,6 +214,10 @@ func (m *Manager) reconcilePreview(ctx context.Context, id string) error {
 				if recovery, ok := m.jobs.(ReceiptRecoverer); ok {
 					externalErr = recovery.RecoverReceipt(ctx, m.previewSpec(p))
 					p.FailureReason = "RECEIPT_RECOVERY_PENDING"
+					if errors.Is(externalErr, ErrReceiptRecoveryFailed) {
+						p.State = "FAILED"
+						p.FailureReason = "RECEIPT_UNRECOVERABLE"
+					}
 					p.UpdatedAt = m.now()
 					return tx.PutPreview(p)
 				}
@@ -339,6 +343,13 @@ func (m *Manager) reconcileRun(ctx context.Context, id string) error {
 				externalErr = recovery.RecoverReceipt(ctx, m.runSpec(r))
 				r.FailureReason = "RECEIPT_RECOVERY_PENDING"
 				r.UpdatedAt = m.now()
+				if errors.Is(externalErr, ErrReceiptRecoveryFailed) {
+					if r.Phase == "PREVIEW" {
+						r.FailureReason = "RECEIPT_UNRECOVERABLE"
+						return m.completeStopped(tx, r)
+					}
+					r.FailureReason = "RECEIPT_UNRECOVERABLE_DRAIN_UNCONFIRMED"
+				}
 				return tx.PutRun(r)
 			}
 		}

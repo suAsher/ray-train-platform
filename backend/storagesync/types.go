@@ -16,6 +16,7 @@ var (
 	ErrStaleAttempt   = errors.New("stale storage sync attempt")
 	ErrPreviewInvalid = errors.New("preview expired or changed; preview again")
 	ErrInvalid        = errors.New("invalid storage sync request")
+	ErrReceiptRecoveryFailed = errors.New("storage sync final receipt cannot be recovered")
 )
 
 type Location struct {
@@ -217,6 +218,8 @@ type JobClient interface {
 
 // ReceiptRecoverer replays an existing durable final receipt with a read-only
 // helper Job; it must not run a new writer or manufacture termination evidence.
+// ErrReceiptRecoveryFailed means the verified terminal helper could not replay
+// the receipt. It is never evidence that the original writer drained requests.
 type ReceiptRecoverer interface {
 	RecoverReceipt(context.Context, WorkSpec) error
 }

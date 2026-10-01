@@ -131,6 +131,8 @@ func (c *StorageSyncClient) Observe(ctx context.Context, runID string, attempt i
 // RecoverReceipt starts a separate read-only reader only after observing the
 // original attempt's owned containers terminate. It cannot overwrite the
 // checkpoint, obtain write credentials, or replace the original stop evidence.
+// The caller invokes it only while the original receipt is missing; a terminal
+// receipt helper is a recovery failure, never evidence that writes drained.
 func (c *StorageSyncClient) RecoverReceipt(ctx context.Context, spec storagesync.WorkSpec) error {
 	if err := c.ready(); err != nil {
 		return err
@@ -148,8 +150,10 @@ func (c *StorageSyncClient) RecoverReceipt(ctx context.Context, spec storagesync
 	}
 	recovery := spec
 	recovery.Phase = "RECOVER"
-	_, err = c.Ensure(ctx, recovery)
-	return err
+	recovered, err := c.Ensure(ctx, recovery)
+	if err != nil { return err }
+	if recovered.Exists && recovered.JobUID != "" && recovered.Terminated { return storagesync.ErrReceiptRecoveryFailed }
+	return nil
 }
 
 func (c *StorageSyncClient) observeJob(ctx context.Context, job *batchv1.Job) (storagesync.Observation, error) {
