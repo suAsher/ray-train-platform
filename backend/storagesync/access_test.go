@@ -88,6 +88,50 @@ func TestPreviewReadGrantLifetimeAndFinalReplay(t *testing.T) {
 	}
 }
 
+func TestPreviewReadGrantEndsAtReceiptAndAbsoluteDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		kind string
+		receipt string
+		elapsed time.Duration
+	}{
+		{name: "successful receipt", kind: "PREVIEW", receipt: "SUCCEEDED"},
+		{name: "failed receipt", kind: "PREVIEW", receipt: "FAILED"},
+		{name: "preview absolute deadline", kind: "PREVIEW", elapsed: 24*time.Hour},
+		{name: "browse absolute deadline", kind: "BROWSE", elapsed: 5*time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, repo, _, _, now := fixture(t)
+			ctx := context.Background()
+			var preview Preview
+			var err error
+			if tc.kind == "BROWSE" {
+				preview, err = m.CreateBrowse(ctx, "admin", Location{SpaceID:"idc"}, "", 10)
+			} else {
+				var plan Plan
+				plan, err = m.CreatePlan(ctx, "admin", "copy", testConfig())
+				if err != nil { t.Fatal(err) }
+				preview, err = m.CreatePreview(ctx, "admin", plan.ID, plan.Revision)
+			}
+			if err != nil { t.Fatal(err) }
+			if err = m.Reconcile(ctx); err != nil { t.Fatal(err) }
+			preview = repo.previews[preview.ID]
+			preview.ReceiptState = tc.receipt
+			current := now.Add(tc.elapsed)
+			m.options.Now = func() time.Time { return current }
+			// A result acceptance TTL must never extend the reader's grant.
+			preview.ExpiresAt = current.Add(time.Hour)
+			repo.previews[preview.ID] = preview
+			if _, err = m.GetWorkSpec(ctx, preview.ID, preview.Attempt, preview.Generation); !errors.Is(err, ErrStaleAttempt) {
+				t.Fatalf("finished or over-deadline preview retained metadata access: %v", err)
+			}
+			if _, err = m.GetReportSpec(ctx, preview.ID, preview.Attempt, preview.Generation); err != nil {
+				t.Fatalf("final receipt replay grant was lost: %v", err)
+			}
+		})
+	}
+}
+
 func TestMalformedWorkerReportsCannotChangeRun(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -250,6 +251,33 @@ func TestStorageSyncReceiptRecoveryRequiresOriginalTerminationProof(t *testing.T
 				t.Fatal("receipt recovery deleted original stop evidence")
 			}
 		}
+	}
+}
+
+func TestStorageSyncTerminatedReceiptHelperReportsUnrecoverableReceipt(t *testing.T) {
+	for _, phase := range []corev1.PodPhase{corev1.PodSucceeded, corev1.PodFailed, corev1.PodRunning} {
+		t.Run(string(phase),func(t *testing.T){
+			cfg, spec := storageSyncRuntimeConfig(), storageSyncRuntimeSpec("TRANSFER")
+			original, _, err := renderStorageSyncJob(cfg,spec)
+			if err!=nil { t.Fatal(err) }
+			original.UID="original-job"
+			recoverySpec:=spec;recoverySpec.Phase="RECOVER"
+			recovery, _, err:=renderStorageSyncJob(cfg,recoverySpec)
+			if err!=nil { t.Fatal(err) }
+			recovery.UID="receipt-job"
+			podFor:=func(job *batchv1.Job, podPhase corev1.PodPhase)*corev1.Pod{
+				pod:=&corev1.Pod{ObjectMeta:metav1.ObjectMeta{Name:job.Name+"-worker",Namespace:cfg.Namespace,Labels:job.Labels,OwnerReferences:[]metav1.OwnerReference{{Kind:"Job",UID:job.UID,Controller:pointerTo(true)}}},Status:corev1.PodStatus{Phase:podPhase}}
+				if podPhase!=corev1.PodRunning{pod.Status.ContainerStatuses=[]corev1.ContainerStatus{{Name:storageSyncContainer,State:corev1.ContainerState{Terminated:&corev1.ContainerStateTerminated{ExitCode:0}}}}}
+				return pod
+			}
+			client:=NewStorageSyncClient(fake.NewSimpleClientset(original,recovery,podFor(original,corev1.PodSucceeded),podFor(recovery,phase)),cfg)
+			err=client.RecoverReceipt(context.Background(),spec)
+			if phase==corev1.PodRunning {
+				if err!=nil {t.Fatalf("active receipt helper should remain retryable: %v",err)}
+				return
+			}
+			if !errors.Is(err,storagesync.ErrReceiptRecoveryFailed){t.Fatalf("terminated receipt helper must report unrecoverable receipt: %v",err)}
+		})
 	}
 }
 

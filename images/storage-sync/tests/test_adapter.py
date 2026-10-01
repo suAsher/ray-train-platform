@@ -176,7 +176,9 @@ class CrossAdapterIdentityTests(unittest.TestCase):
         self.assertEqual(sdk.last_modified, '2026-10-01T00:00:00.000Z')
 
 
-class AdditionalGuardTests(GuardTests):
+class AdditionalGuardTests(unittest.TestCase):
+    setUp = GuardTests.setUp
+
     def test_source_read_uses_both_version_and_etag(self):
         self.store.read('src', self.source)
         self.assertEqual(self.client.calls[0][0], 'get_object')
