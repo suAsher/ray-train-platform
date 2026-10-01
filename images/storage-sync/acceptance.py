@@ -108,6 +108,21 @@ class Acceptance:
             assert str(error) == 'OBJECT_CONDITION_FAILED'
         assert self.store.head(self.bucket, target).fingerprint == current.fingerprint
         self.results.append({'case': 'conditional_copy_race', 'passed': True})
+        source_plan = self.plan('race-source', 'source-race-target')
+        original_copy = self.store.copy
+        def replace_source_before_copy(*args, **kwargs):
+            self.seed('race-source/a', b'replaced-source')
+            return original_copy(*args, **kwargs)
+        self.store.copy = replace_source_before_copy
+        try:
+            execute(source_plan, self.store, self.store, work / 'source-race', 'source-race', source_plan.digest)
+            raise AssertionError('source condition unexpectedly succeeded')
+        except SyncError as error:
+            assert str(error) == 'OBJECT_CONDITION_FAILED'
+        finally:
+            self.store.copy = original_copy
+        assert self.store.head(self.bucket, self.root + '/source-race-target/a') is None
+        self.results.append({'case': 'conditional_source_copy_race', 'passed': True})
 
     def _multipart(self, work):
         self.seed('multipart-source/a', b'm' * (6 * 1024 * 1024))
@@ -130,6 +145,28 @@ class Acceptance:
         result = execute(plan, self.store, self.store, work / 'multipart', 'multipart', plan.digest, part_size=5 * 1024 * 1024)
         assert result['verifiedFiles'] == 1
         self.results.append({'case': 'multipart_pause_resume_reuses_remote_parts', 'passed': True})
+        completed = self.store.head(self.bucket, self.root + '/multipart-target/a')
+        foreign_key = self.root + '/foreign-upload'
+        foreign_upload = self.store.create_upload(self.bucket, foreign_key, None, {})
+        cancelled = self.plan('multipart-source', 'cancel-target')
+        def cancel_after_part(*args, **kwargs):
+            result = original_part(*args, **kwargs)
+            state['control'] = 'CANCEL'
+            return result
+        state['control'] = ''
+        self.store.copy_part = cancel_after_part
+        try:
+            execute(cancelled, self.store, self.store, work / 'cancel', 'cancel', cancelled.digest,
+                    part_size=5 * 1024 * 1024, control=lambda: state['control'])
+            raise AssertionError('cancel not observed')
+        except StopRequested:
+            pass
+        finally:
+            self.store.copy_part = original_part
+        assert self.store.head(self.bucket, self.root + '/cancel-target/a') is None
+        assert self.store.head(self.bucket, self.root + '/multipart-target/a').fingerprint == completed.fingerprint
+        assert self.store.list_parts(self.bucket, foreign_key, foreign_upload) == {}
+        self.results.append({'case': 'cancel_only_owned_partial_preserves_completed_and_foreign', 'passed': True})
         raced = self.plan('multipart-source', 'multipart-race-target')
         complete = self.store.complete_upload
         def change_before_complete(bucket, key, upload, parts, expected):
