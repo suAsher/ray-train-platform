@@ -237,7 +237,7 @@ func main() {
 	defer stop()
 	if storageSyncManager != nil {
 		go func() {
-			if err := kubeClient.RunAsLeader(ctx, platformNamespace, "ray-train-platform-storage-sync", storageSyncManager.Run); err != nil && ctx.Err() == nil {
+			if err := kubeClient.RunAsLeader(ctx, platformNamespace, "ray-train-platform-storage-sync", func(leaderContext context.Context) error { storageSyncManager.Run(leaderContext); return nil }); err != nil && ctx.Err() == nil {
 				log.Printf("storage sync controller stopped: %v", err)
 			}
 		}()

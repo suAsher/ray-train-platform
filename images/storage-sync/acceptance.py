@@ -1,0 +1,174 @@
+"""Builder-only real TOS acceptance in a newly generated, caller-approved subtree.
+
+Example: PYTHONPATH=images/storage-sync python3 images/storage-sync/acceptance.py
+  --config /restricted/tosutil-config --bucket <approved> --prefix <own-test-root>
+Never prints credentials, SDK exception text, or signed URLs.
+"""
+import argparse
+import io
+import json
+from pathlib import Path
+import tempfile
+import uuid
+
+from storage_sync.engine import execute, make_plan, scan_tos
+from storage_sync.filesystem import scan_idc
+from storage_sync.model import SyncError, StopRequested, plan_from_dict, safe_relative
+from storage_sync.checkpoint import load_json
+from storage_sync.tos_adapter import from_config
+
+
+class Acceptance:
+    def __init__(self, store, bucket, prefix):
+        self.store, self.bucket = store, bucket
+        self.root = safe_relative(prefix) + '/storage-sync-acceptance-' + uuid.uuid4().hex
+        self.keys = set()
+        self.uploads = set()
+        self.results = []
+        create = store.create_upload
+        def track(bucket, key, expected, metadata):
+            upload = create(bucket, key, expected, metadata)
+            self.uploads.add((bucket, key, upload))
+            return upload
+        store.create_upload = track
+
+    def seed(self, key, data):
+        full = self.root + '/' + key
+        self.keys.add(full)
+        self.store.put(self.bucket, full, io.BytesIO(data), self.store.head(self.bucket, full))
+        return full
+
+    def plan(self, source, target, mode='INCREMENTAL', baseline=None):
+        entries = scan_tos(self.store, self.bucket, self.root + '/' + source, True, 'CONTENT')
+        plan = make_plan(entries, self.store, self.bucket, self.root + '/' + target, mode=mode, baseline=baseline)
+        self.keys.update(item.target_key for item in plan.entries)
+        return plan
+
+    def assert_case(self, name, function):
+        function()
+        self.results.append({'case': name, 'passed': True})
+
+    def cleanup(self):
+        errors = 0
+        for bucket, key, upload in self.uploads:
+            try:
+                self.store.abort_upload(bucket, key, upload)
+            except SyncError:
+                errors += 1
+        for key in self.keys:
+            try:
+                self.store.client.delete_object(self.bucket, key)
+            except Exception:
+                errors += 1
+        return errors
+
+    def run(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            for index in range(1005):
+                self.seed(f'source/中文 %/{index:04d}', f'entry-{index}'.encode())
+            extra = self.seed('target/maps/cnwxijk.json', b'{"preserve":true}')
+            original = self.store.head(self.bucket, extra)
+            plan = self.plan('source', 'target', mode='FULL')
+            assert len(plan.entries) == 1005
+            execute(plan, self.store, self.store, work / 'full', 'accept-full', plan.digest)
+            assert self.store.head(self.bucket, extra).fingerprint == original.fingerprint
+            self.results.append({'case': 'pagination_1005_and_full_preserves_target_only_map_json', 'passed': True})
+            baseline_plan = plan_from_dict(load_json(work / 'full' / 'baseline.json'))
+            baseline = {item.target_key: item for item in baseline_plan.entries}
+            incremental = self.plan('source', 'target', baseline=baseline)
+            assert incremental.pending_bytes == 0 and incremental.reused_files == 1005
+            execute(incremental, self.store, self.store, work / 'incremental', 'accept-incremental', incremental.digest)
+            assert self.store.head(self.bucket, extra).fingerprint == original.fingerprint
+            self.results.append({'case': 'zero_change_and_incremental_preserves_target_only_map_json', 'passed': True})
+            self._idc(work)
+            self._copy_race(work)
+            self._multipart(work)
+
+    def _idc(self, work):
+        source = work / 'idc'; source.mkdir()
+        (source / '数据 %.bin').write_bytes(b'idc-file')
+        target = self.root + '/idc-target'
+        plan = make_plan(scan_idc(source, '', 'CONTENT'), self.store, self.bucket, target)
+        self.keys.update(item.target_key for item in plan.entries)
+        result = execute(plan, self.store, self.store, work / 'idc-state', 'idc', plan.digest)
+        assert result['verifiedFiles'] == 1
+        self.results.append({'case': 'idc_guarded_put_and_content_readback', 'passed': True})
+
+    def _copy_race(self, work):
+        self.seed('race-source/a', b'new-value')
+        target = self.seed('race-target/a', b'old-value')
+        plan = self.plan('race-source', 'race-target')
+        self.seed('race-target/a', b'external-write')
+        current = self.store.head(self.bucket, target)
+        try:
+            execute(plan, self.store, self.store, work / 'copy-race', 'copy-race', plan.digest)
+            raise AssertionError('conditional copy unexpectedly succeeded')
+        except SyncError as error:
+            assert str(error) == 'OBJECT_CONDITION_FAILED'
+        assert self.store.head(self.bucket, target).fingerprint == current.fingerprint
+        self.results.append({'case': 'conditional_copy_race', 'passed': True})
+
+    def _multipart(self, work):
+        self.seed('multipart-source/a', b'm' * (6 * 1024 * 1024))
+        plan = self.plan('multipart-source', 'multipart-target')
+        original_part = self.store.copy_part
+        state = {'control': ''}
+        def pause_after_part(*args, **kwargs):
+            result = original_part(*args, **kwargs)
+            state['control'] = 'PAUSE'
+            return result
+        self.store.copy_part = pause_after_part
+        try:
+            execute(plan, self.store, self.store, work / 'multipart', 'multipart', plan.digest,
+                    part_size=5 * 1024 * 1024, control=lambda: state['control'])
+            raise AssertionError('pause not observed')
+        except StopRequested:
+            pass
+        finally:
+            self.store.copy_part = original_part
+        result = execute(plan, self.store, self.store, work / 'multipart', 'multipart', plan.digest, part_size=5 * 1024 * 1024)
+        assert result['verifiedFiles'] == 1
+        self.results.append({'case': 'multipart_pause_resume_reuses_remote_parts', 'passed': True})
+        raced = self.plan('multipart-source', 'multipart-race-target')
+        complete = self.store.complete_upload
+        def change_before_complete(bucket, key, upload, parts, expected):
+            self.seed('multipart-race-target/a', b'concurrent-target')
+            return complete(bucket, key, upload, parts, expected)
+        self.store.complete_upload = change_before_complete
+        try:
+            execute(raced, self.store, self.store, work / 'multipart-race', 'multipart-race', raced.digest, part_size=5 * 1024 * 1024)
+            raise AssertionError('multipart overwrite race unexpectedly succeeded')
+        except SyncError as error:
+            assert str(error) == 'OBJECT_CONDITION_FAILED'
+        finally:
+            self.store.complete_upload = complete
+        with self.store.read(self.bucket, self.store.head(self.bucket, self.root + '/multipart-race-target/a')) as stream:
+            assert stream.read() == b'concurrent-target'
+        self.results.append({'case': 'conditional_multipart_completion_race', 'passed': True})
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', required=True)
+    parser.add_argument('--bucket', required=True)
+    parser.add_argument('--prefix', required=True)
+    parser.add_argument('--endpoint', default='')
+    parser.add_argument('--region', default='')
+    args = parser.parse_args()
+    test = Acceptance(from_config(args.config, args.endpoint, args.region), args.bucket, args.prefix)
+    status = 0
+    try:
+        test.run()
+    except Exception as error:
+        status = 1
+        code = str(error) if isinstance(error, SyncError) else type(error).__name__
+        test.results.append({'case': 'acceptance', 'passed': False, 'errorCode': code})
+    finally:
+        cleanup_errors = test.cleanup()
+        print(json.dumps({'results': test.results, 'cleanupErrors': cleanup_errors}, ensure_ascii=False))
+    return status or bool(cleanup_errors)
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

@@ -92,7 +92,7 @@ func resolutionDigest(mappings []ResolvedMapping)string { b,_:=json.Marshal(mapp
 func (p Progress) Validate()error {
 	for _,n:=range []int64{p.DiscoveredFiles,p.SourceFiles,p.SourceBytes,p.TransferFiles,p.TransferBytes,p.ReusedFiles,p.ReusedBytes,p.CompletedFiles,p.CompletedBytes,p.VerifiedFiles,p.VerifiedBytes,p.FailedFiles,p.TargetExtraFiles,p.InFlightBytes,p.NetworkBytes}{if n<0{return fmt.Errorf("%w: negative progress",ErrInvalid)}}
 	if p.CompletedFiles>p.TransferFiles||p.CompletedBytes>p.TransferBytes||p.VerifiedFiles>p.SourceFiles||p.VerifiedBytes>p.SourceBytes{return fmt.Errorf("%w: progress exceeds frozen totals",ErrInvalid)}
-	if p.ScanComplete && (p.TransferFiles>p.SourceFiles||p.ReusedFiles>p.SourceFiles-p.TransferFiles||p.TransferBytes>p.SourceBytes||p.ReusedBytes>p.SourceBytes-p.TransferBytes){return fmt.Errorf("%w: invalid manifest totals",ErrInvalid)}
+	if p.ScanComplete && (p.TransferFiles>p.SourceFiles||p.ReusedFiles!=p.SourceFiles-p.TransferFiles||p.TransferBytes>p.SourceBytes||p.ReusedBytes!=p.SourceBytes-p.TransferBytes){return fmt.Errorf("%w: invalid manifest totals",ErrInvalid)}
 	return nil
 }
 func (p Progress) Complete()bool {return p.Validate()==nil&&p.ScanComplete&&p.FailedFiles==0&&p.CompletedFiles==p.TransferFiles&&p.CompletedBytes==p.TransferBytes&&p.VerifiedFiles==p.SourceFiles&&p.VerifiedBytes==p.SourceBytes}

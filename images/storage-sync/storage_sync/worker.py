@@ -11,7 +11,7 @@ from .engine import execute, make_plan, scan_tos, validate_plan_capabilities
 from .filesystem import scan_idc
 from .model import SyncError, StopRequested, canonical_digest, plan_from_dict, safe_relative
 from .tos_adapter import TOSStore, from_config
-from .transport import ReadGateway, Reporter
+from .transport import ReadGateway, Reporter, _json_request
 
 
 def _source_root(source):
@@ -27,15 +27,19 @@ def _scan(spec, reader, reporter):
         if reporter.control():
             raise StopRequested(reporter.control())
         verification = spec['config'].get('verification', 'METADATA')
+        def discovered_file(count, size):
+            reporter.update(progress={'discoveredFiles': discovered + count, 'scanComplete': False})
+            if reporter.control():
+                raise StopRequested(reporter.control())
         if source['kind'] == 'IDC':
-            entries = scan_idc(_source_root(source), source.get('relativePath', ''), verification)
+            entries = scan_idc(_source_root(source), source.get('relativePath', ''), verification, discovered=discovered_file)
             name = source.get('relativePath', '').rstrip('/').rsplit('/', 1)[-1]
             # A single selected file already carries its basename.
             is_directory = not (len(entries) == 1 and entries[0].local_path == source.get('relativePath', '').rstrip('/'))
         else:
             key = source.get('prefix', '').rstrip('/')
             is_directory = reader.head(source['bucket'], key) is None if key else True
-            entries = scan_tos(reader, source['bucket'], key, is_directory, verification)
+            entries = scan_tos(reader, source['bucket'], key, is_directory, verification, discovered=discovered_file)
             name = key.rsplit('/', 1)[-1]
         discovered += len(entries)
         reporter.update(progress={'discoveredFiles': discovered, 'scanComplete': False})
@@ -152,8 +156,29 @@ def _transfer(spec, reporter, work_dir, config_path):
                     'digest': spec['manifestDigest'], 'count': fixed['sourceFiles']})
 
 
+def _recover(spec, token, work_dir):
+    expected = Path(spec.get('checkpointRef', ''))
+    run_id = spec['runId']
+    allowed = (Path('/work') / run_id, Path('/work/previews') / run_id)
+    if expected not in allowed or work_dir != expected or '/' in run_id or not run_id.startswith(('ssr-', 'ssv-')):
+        raise SyncError('INVALID_RECOVERY_REFERENCE')
+    receipt = load_json(work_dir / 'result.json')
+    if (not isinstance(receipt, dict) or any(receipt.get(field) != spec[field] for field in ('runId', 'attempt', 'generation'))
+            or receipt.get('state') not in ('SUCCEEDED', 'FAILED', 'PAUSED', 'CANCELLED')
+            or not receipt.get('workerId') or type(receipt.get('sequence')) is not int or receipt['sequence'] < 1
+            or type(receipt.get('requestsDrained')) is not bool):
+        raise SyncError('RECOVERY_RECEIPT_INVALID')
+    _json_request(spec['callbackUrl'], token, receipt)
+
+
 def run(spec, token, work_dir, config_path=None, reporter_factory=Reporter):
     work_dir = Path(work_dir)
+    if spec.get('phase') == 'RECOVER':
+        try:
+            _recover(spec, token, work_dir)
+            return 0
+        except (SyncError, KeyError):
+            return 2
     reporter = reporter_factory(spec, token, work_dir)
     reporter.writer = None
     # Duplicate Pods must not create even checkpoint files or read write credentials.

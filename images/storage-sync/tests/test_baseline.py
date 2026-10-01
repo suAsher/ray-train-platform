@@ -1,4 +1,5 @@
 """Regression for service metadata without a user-controlled SHA256 field."""
+from dataclasses import replace
 import hashlib
 import io
 from pathlib import Path
@@ -48,6 +49,26 @@ class MetadataOnlyStore:
 
 
 class BaselineTests(unittest.TestCase):
+    def test_reused_idc_source_requires_content_guard_when_stat_snapshot_matches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'source'
+            source.mkdir()
+            target = source / 'a'
+            target.write_bytes(b'original')
+            store = MetadataOnlyStore({('dst', 'out/a'): b'original'})
+            plan = make_plan(scan_idc(source, 'a', 'CONTENT'), store, 'dst', 'out')
+            self.assertEqual(plan.entries[0].action, 'REUSE')
+            target.write_bytes(b'modified')
+            current = target.stat()
+            # Emulate stat attributes that cannot distinguish these byte changes.
+            # The manifest still carries the original content proof.
+            entry = replace(plan.entries[0].source, mtime_ns=current.st_mtime_ns,
+                            ctime_ns=current.st_ctime_ns)
+            plan = replace(plan, entries=(replace(plan.entries[0], source=entry),))
+            with self.assertRaisesRegex(SyncError, 'SOURCE_CHANGED'):
+                execute(plan, store, store, root / 'work', 'run', 'config')
+
     def test_verified_idc_baseline_reuses_head_without_sha_and_detects_target_change(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

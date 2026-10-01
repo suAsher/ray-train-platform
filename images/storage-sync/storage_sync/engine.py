@@ -237,6 +237,9 @@ def execute(plan, reader, writer, work_dir, run_id, config_digest, part_size=64 
             raise SyncError('CHECKPOINT_MISMATCH')
         _check_control(control, writer, plan.bucket, item, path, checkpoint)
         verify_source(source, reader)
+        if source.kind == 'IDC' and (checkpoint.get('completed') or item.action == 'REUSE'):
+            with open_verified(source):
+                pass
         if checkpoint.get('completed'):
             current = reader.head(plan.bucket, item.target_key)
             if current is None or current.etag != checkpoint['target']['etag']:

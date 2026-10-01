@@ -151,7 +151,7 @@ class SDKReadStream:
         self.result = result
 
     def read(self, size=-1):
-        return self.result.read(size)
+        return self.result.read(None if size is None or size < 0 else size)
 
     def __enter__(self):
         return self
@@ -171,7 +171,7 @@ class LimitedStream:
         self.stream, self.remaining = stream, size
 
     def read(self, size=-1):
-        count = self.remaining if size < 0 else min(size, self.remaining)
+        count = self.remaining if size is None or size < 0 else min(size, self.remaining)
         value = self.stream.read(count)
         self.remaining -= len(value)
         return value

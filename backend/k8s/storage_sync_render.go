@@ -39,10 +39,13 @@ func renderStorageSyncJob(cfg config.StorageSyncConfig, spec storagesync.WorkSpe
 		return nil, nil, fmt.Errorf("storage sync attempt configuration is incomplete")
 	}
 	switch spec.Phase {
-	case "BROWSE", "PREVIEW", "REVALIDATE", "TRANSFER":
+	case "BROWSE", "PREVIEW", "REVALIDATE", "TRANSFER", "RECOVER":
 	default: return nil, nil, fmt.Errorf("unsupported storage sync worker phase")
 	}
 	name := storageSyncJobName(spec.RunID, spec.Attempt)
+	if spec.Phase == "RECOVER" { name += "-receipt" }
+	workDir, err := storageSyncWorkDir(spec)
+	if err != nil { return nil, nil, err }
 	labels := map[string]string{storageSyncRunLabel: spec.RunID, storageSyncAttemptLabel: strconv.Itoa(spec.Attempt), storageSyncPhaseLabel: spec.Phase, "app.kubernetes.io/name": storageSyncContainer, "app.kubernetes.io/managed-by": "ray-train-platform"}
 	requestSpec := spec
 	requestSpec.CallbackToken = ""
@@ -53,7 +56,7 @@ func renderStorageSyncJob(cfg config.StorageSyncConfig, spec storagesync.WorkSpe
 	request := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: cfg.Namespace, Labels: labels, Annotations: annotations}, Type: corev1.SecretTypeOpaque, Immutable: pointerTo(true), Data: map[string][]byte{"request.json": payload, "token": []byte(spec.CallbackToken)}}
 	volumes, mounts, err := storageSyncVolumes(cfg, spec, name)
 	if err != nil { return nil, nil, err }
-	args := []string{"--request", "/config/request.json", "--work-dir", "/work/" + spec.RunID, "--callback-token-file", "/var/run/storage-sync/token"}
+	args := []string{"--request", "/config/request.json", "--work-dir", workDir, "--callback-token-file", "/var/run/storage-sync/token"}
 	if spec.Phase == "TRANSFER" { args = append(args, "--tos-config", "/var/run/raytrain/tosutil/config") }
 	nodeSelector := make(map[string]string, len(cfg.NodeSelector))
 	for key, value := range cfg.NodeSelector { nodeSelector[key] = value }
@@ -87,14 +90,25 @@ func renderStorageSyncJob(cfg config.StorageSyncConfig, spec storagesync.WorkSpe
 	return job, request, nil
 }
 
+func storageSyncWorkDir(spec storagesync.WorkSpec) (string, error) {
+	expected := "/work/" + spec.RunID
+	if spec.SubjectKind == "preview" { expected = "/work/previews/" + spec.RunID }
+	if spec.CheckpointRef != "" && spec.CheckpointRef != expected {
+		return "", fmt.Errorf("storage sync checkpoint directory does not belong to its subject")
+	}
+	return expected, nil
+}
+
 func storageSyncVolumes(cfg config.StorageSyncConfig, spec storagesync.WorkSpec, name string) ([]corev1.Volume, []corev1.VolumeMount, error) {
+	readOnlyWork := spec.Phase == "RECOVER"
 	volumes := []corev1.Volume{
 		{Name: "request", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: name, DefaultMode: pointerTo(int32(0440)), Items: []corev1.KeyToPath{{Key: "request.json", Path: "request.json"}}}}},
 		{Name: "callback-token", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: name, DefaultMode: pointerTo(int32(0440)), Items: []corev1.KeyToPath{{Key: "token", Path: "token"}}}}},
-		{Name: "work", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: cfg.WorkClaimName}}},
+		{Name: "work", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: cfg.WorkClaimName, ReadOnly: readOnlyWork}}},
 		{Name: "temporary", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: pointerTo(resource.MustParse(cfg.EphemeralStorageLimit))}}},
 	}
-	mounts := []corev1.VolumeMount{{Name: "request", MountPath: "/config", ReadOnly: true}, {Name: "callback-token", MountPath: "/var/run/storage-sync", ReadOnly: true}, {Name: "work", MountPath: "/work"}, {Name: "temporary", MountPath: "/tmp"}}
+	mounts := []corev1.VolumeMount{{Name: "request", MountPath: "/config", ReadOnly: true}, {Name: "callback-token", MountPath: "/var/run/storage-sync", ReadOnly: true}, {Name: "work", MountPath: "/work", ReadOnly: readOnlyWork}, {Name: "temporary", MountPath: "/tmp"}}
+	if readOnlyWork { return volumes, mounts, nil }
 	seen := map[string]string{}
 	for _, mapping := range spec.Mappings {
 		source := mapping.Source

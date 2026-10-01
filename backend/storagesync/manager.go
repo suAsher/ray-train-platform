@@ -78,6 +78,7 @@ func(m *Manager)CreateBrowse(ctx context.Context,actor string,location Location,
 	if limit==0{limit=100};if limit<1||limit>1000||len(cursor)>2048{return Preview{},ErrInvalid}
 	resolved,err:=m.resolver.Resolve(ctx,actor,location);if err!=nil{return Preview{},err};now:=m.now()
 	p:=Preview{ID:"ssv-"+uuid.NewString(),Kind:"BROWSE",Actor:actor,Location:location,Cursor:cursor,Limit:limit,Resolved:[]ResolvedMapping{{Source:resolved}},State:"QUEUED",Attempt:1,Generation:1,CreatedAt:now,UpdatedAt:now,ExpiresAt:now.Add(m.options.PreviewTTL)}
+	p.ResolutionDigest=resolutionDigest(p.Resolved)
 	err=m.repo.Transact(ctx,func(tx Tx)error{if err:=m.previewCapacity(tx,actor);err!=nil{return err};return tx.PutPreview(p)});return p,err
 }
 func(m *Manager)Start(ctx context.Context,actor,planID string,request StartRequest)(Run,error){
@@ -100,7 +101,7 @@ func(m *Manager)GetRun(ctx context.Context,id string)(Run,error){return m.repo.G
 func(m *Manager)ListRuns(ctx context.Context,planID string)([]Run,error){return m.repo.ListRuns(ctx,planID)}
 func(m *Manager)GetPreview(ctx context.Context,id string)(Preview,error){return m.repo.GetPreview(ctx,id)}
 func(m *Manager)GetWorkSpec(ctx context.Context,id string,attempt int,generation int64)(WorkSpec,error){
-	run,err:=m.repo.GetRun(ctx,id);if err==nil{if run.Attempt!=attempt||run.Generation!=generation||!run.Active()||run.State=="PAUSED"{return WorkSpec{},ErrStaleAttempt};return m.runSpec(run),nil};if !errors.Is(err,ErrNotFound){return WorkSpec{},err}
+	run,err:=m.repo.GetRun(ctx,id);if err==nil{if run.Attempt!=attempt||run.Generation!=generation||!run.Active()||run.State!="RUNNING"{return WorkSpec{},ErrStaleAttempt};return m.runSpec(run),nil};if !errors.Is(err,ErrNotFound){return WorkSpec{},err}
 	p,err:=m.repo.GetPreview(ctx,id);if err!=nil{return WorkSpec{},err};if p.Attempt!=attempt||p.Generation!=generation||p.State!="RUNNING"||!p.ExpiresAt.After(m.now()){return WorkSpec{},ErrStaleAttempt};return m.previewSpec(p),nil
 }
 // GetReportSpec permits an exact replay of a final receipt after its run has

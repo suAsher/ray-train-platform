@@ -31,7 +31,8 @@ func(h *StorageSyncHandler) authorizeWorker(c *gin.Context)(ss.WorkSpec,bool){
 	if (kind!="run"&&kind!="preview")||id==""||e1!=nil||e2!=nil||attempt<1||generation<1||len(provided)!=len(want)||!hmac.Equal([]byte(provided),[]byte(want)){
 		h.response.writeError(c,401,"STORAGE_SYNC_WORKER_UNAUTHORIZED","worker credential rejected");return ss.WorkSpec{},false
 	}
-	spec,err:=h.manager.GetWorkSpec(c.Request.Context(),id,attempt,generation)
+	var spec ss.WorkSpec;var err error
+	if strings.HasSuffix(c.FullPath(),"/report"){spec,err=h.manager.GetReportSpec(c.Request.Context(),id,attempt,generation)}else{spec,err=h.manager.GetWorkSpec(c.Request.Context(),id,attempt,generation)}
 	if err!=nil{h.fail(c,err);return ss.WorkSpec{},false};if spec.SubjectKind!=kind{h.fail(c,ss.ErrStaleAttempt);return ss.WorkSpec{},false}
 	c.Header("Cache-Control","no-store");return spec,true
 }

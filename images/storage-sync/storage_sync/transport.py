@@ -36,7 +36,7 @@ class ReadGateway:
         self.url, self.reporter = url, reporter
 
     def request(self, operation, **values):
-        return _json_request(self.url, self.reporter.token, {'operation': operation, **values})
+        return _json_request(self.url, self.reporter.token, {'operation': operation, 'workerId': self.reporter.worker_id, **values})
 
     def head(self, bucket, key):
         return object_from_wire(self.request('head', bucket=bucket, key=key))

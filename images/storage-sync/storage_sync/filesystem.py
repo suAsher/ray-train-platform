@@ -102,7 +102,7 @@ def _file_entry(descriptor, metadata, root, local_path, relative):
                        inode=metadata.st_ino, device=metadata.st_dev)
 
 
-def _walk(descriptor, metadata, root, local_path, relative):
+def _walk(descriptor, metadata, root, local_path, relative, on_file):
     entries = []
     with os.scandir(descriptor) as listing:
         names = sorted(item.name for item in listing)
@@ -112,28 +112,42 @@ def _walk(descriptor, metadata, root, local_path, relative):
         child_path = f'{local_path}/{name}' if local_path else name
         child_relative = f'{relative}/{name}' if relative else name
         try:
+            entry = None
             if stat.S_ISDIR(child_metadata.st_mode):
-                entries.extend(_walk(child, child_metadata, root, child_path, child_relative))
+                entries.extend(_walk(child, child_metadata, root, child_path, child_relative, on_file))
             else:
-                entries.append(_file_entry(child, child_metadata, root, child_path, child_relative))
+                entry = _file_entry(child, child_metadata, root, child_path, child_relative)
+                entries.append(entry)
             _unchanged(child_metadata, os.stat(name, dir_fd=descriptor, follow_symlinks=False))
+            if entry is not None:
+                on_file(entry)
         finally:
             os.close(child)
     _unchanged(metadata, os.fstat(descriptor))
     return entries
 
 
-def scan_idc(root: Path, relative_path: str, verification: str) -> list[SourceEntry]:
+def scan_idc(root: Path, relative_path: str, verification: str, discovered=None) -> list[SourceEntry]:
     """Scan files under a selection; file selections retain their basename."""
     relative_path = safe_relative(relative_path, allow_empty=True)
     if verification not in ('CONTENT', 'METADATA'):
         raise SyncError('INVALID_VERIFICATION')
     root = Path(os.path.abspath(root))
+    totals = (0, 0)
+
+    def on_file(entry):
+        nonlocal totals
+        totals = (totals[0] + 1, totals[1] + entry.size)
+        if discovered is not None:
+            discovered(*totals)
+
     with _node(root, relative_path) as (descriptor, metadata):
         if stat.S_ISDIR(metadata.st_mode):
-            return _walk(descriptor, metadata, root, relative_path, '')
-        return [_file_entry(descriptor, metadata, root, relative_path,
-                            relative_path.rsplit('/', 1)[-1])]
+            return _walk(descriptor, metadata, root, relative_path, '', on_file)
+        entry = _file_entry(descriptor, metadata, root, relative_path,
+                            relative_path.rsplit('/', 1)[-1])
+        on_file(entry)
+        return [entry]
 
 
 def _entry_matches(entry, metadata):

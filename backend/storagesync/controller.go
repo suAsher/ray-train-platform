@@ -42,17 +42,23 @@ func(m *Manager)reconcilePreview(ctx context.Context,id string)error{
 	err:=m.repo.Transact(ctx,func(tx Tx)error{
 		p,err:=tx.GetPreview(id);if err!=nil{return err};if p.State!="RUNNING"{return nil}
 		if !p.ExpiresAt.After(m.now()){p.State="FAILED";p.FailureReason="PREVIEW_EXPIRED";p.UpdatedAt=m.now();return tx.PutPreview(p)}
-		if err=m.authorize(ctx,p.Actor);err!=nil{p.State="FAILED";p.FailureReason="AUTHORIZATION_REVOKED";return tx.PutPreview(p)}
+		resolved,resolveErr:=m.previewResolution(ctx,p)
+		if resolveErr!=nil||resolutionDigest(resolved)!=p.ResolutionDigest{p.State="FAILED";p.FailureReason="PREVIEW_RESOLUTION_CHANGED";if p.JobUID!=""{externalErr=m.jobs.Stop(ctx,p.ID,p.Attempt)};return tx.PutPreview(p)}
 		var observed Observation
 		if p.JobUID==""{observed,externalErr=m.jobs.Ensure(ctx,m.previewSpec(p))}else{observed,externalErr=m.jobs.Observe(ctx,p.ID,p.Attempt)}
 		if externalErr!=nil{p.FailureReason="EXECUTOR_OBSERVATION_UNAVAILABLE";return tx.PutPreview(p)}
 		if p.JobUID==""&&observed.Exists&&observed.JobUID!=""{p.JobUID=observed.JobUID}
 		if observed.JobUID!=""&&p.JobUID!=observed.JobUID{p.FailureReason="EXECUTOR_UID_CHANGED";return tx.PutPreview(p)}
 		if observed.Terminated&&observed.Exists&&p.JobUID!=""&&p.JobUID==observed.JobUID{
+			if p.ReceiptState==""{if recovery,ok:=m.jobs.(ReceiptRecoverer);ok{externalErr=recovery.RecoverReceipt(ctx,m.previewSpec(p));p.FailureReason="RECEIPT_RECOVERY_PENDING";p.UpdatedAt=m.now();return tx.PutPreview(p)}}
 			if p.ReceiptState=="SUCCEEDED"{p.State="SUCCEEDED"}else{p.State="FAILED";if p.FailureReason==""{p.FailureReason="PREVIEW_RECEIPT_MISSING"}}
 		}
 		p.UpdatedAt=m.now();return tx.PutPreview(p)
 	});return errors.Join(err,externalErr)
+}
+func(m *Manager)previewResolution(ctx context.Context,p Preview)([]ResolvedMapping,error){
+	if p.Kind!="BROWSE"{return m.resolve(ctx,p.Actor,p.Config)}
+	if err:=m.authorize(ctx,p.Actor);err!=nil{return nil,err};source,err:=m.resolver.Resolve(ctx,p.Actor,p.Location);if err!=nil{return nil,err};return []ResolvedMapping{{Source:source}},nil
 }
 func(m *Manager)claimQueued(ctx context.Context,id string)error{return m.repo.Transact(ctx,func(tx Tx)error{
 	r,err:=tx.GetRun(id);if err!=nil{return err};if r.State!="QUEUED"{return nil};runs,err:=tx.ListRuns("");if err!=nil{return err};active:=0;for _,other:=range runs{if other.ID!=id&&other.Active()&&other.State!="PAUSED"&&other.State!="QUEUED"{active++}};if active>=m.options.MaxActiveRuns{return nil}
@@ -72,7 +78,9 @@ func(m *Manager)reconcileRun(ctx context.Context,id string)error{
 		if r.JobUID==""&&observed.Exists&&observed.JobUID!=""{r.JobUID=observed.JobUID}
 		if observed.JobUID!=""&&r.JobUID!=observed.JobUID{r.FailureReason="EXECUTOR_UID_CHANGED";return tx.PutRun(r)}
 		if r.State=="PAUSING"||r.State=="CANCELLING"{if stopErr:=m.jobs.Stop(ctx,r.ID,r.Attempt);stopErr!=nil{externalErr=stopErr;r.FailureReason="EXECUTOR_STOP_UNCONFIRMED"}}
-		stopped:=observed.Exists&&observed.Terminated&&r.JobUID!=""&&r.JobUID==observed.JobUID&&(r.Phase=="PREVIEW"||r.RequestsDrained)
+		terminated:=observed.Exists&&observed.Terminated&&r.JobUID!=""&&r.JobUID==observed.JobUID
+		if terminated&&r.ReceiptState==""{if recovery,ok:=m.jobs.(ReceiptRecoverer);ok{externalErr=recovery.RecoverReceipt(ctx,m.runSpec(r));r.FailureReason="RECEIPT_RECOVERY_PENDING";r.UpdatedAt=m.now();return tx.PutRun(r)}}
+		stopped:=terminated&&(r.Phase=="PREVIEW"||r.RequestsDrained)
 		if stopped{return m.completeStopped(tx,r)}
 		if !observed.Exists||observed.Terminated {r.FailureReason="WAITING_FOR_EXECUTOR_STOP_AND_REQUEST_DRAIN"}else if r.HeartbeatAt!=nil&&m.now().Sub(*r.HeartbeatAt)>30*time.Second{r.FailureReason="PROGRESS_STALE"}
 		r.UpdatedAt=m.now();return tx.PutRun(r)

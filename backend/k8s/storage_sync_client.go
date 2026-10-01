@@ -49,7 +49,11 @@ func (c *StorageSyncClient) Ensure(ctx context.Context, spec storagesync.WorkSpe
 	if !apierrors.IsNotFound(err) { return storagesync.Observation{}, fmt.Errorf("get storage sync worker: %w", err) }
 	claim, err := c.kubernetes.CoreV1().PersistentVolumeClaims(c.config.Namespace).Get(ctx, c.config.WorkClaimName, metav1.GetOptions{})
 	if err != nil { return storagesync.Observation{}, fmt.Errorf("storage sync checkpoint storage is unavailable: %w", err) }
-	if claim.DeletionTimestamp != nil || claim.Status.Phase != corev1.ClaimBound { return storagesync.Observation{}, fmt.Errorf("storage sync checkpoint storage is not bound") }
+	// A read-only planning Job may be the first consumer of a WFFC claim. Its
+	// process cannot start until Kubernetes binds and mounts that claim. Writing
+	// transfers and receipt recovery require an already-bound checkpoint volume.
+	canBind := claim.Status.Phase == corev1.ClaimPending && (spec.Phase == "BROWSE" || spec.Phase == "PREVIEW" || spec.Phase == "REVALIDATE")
+	if claim.DeletionTimestamp != nil || (claim.Status.Phase != corev1.ClaimBound && !canBind) { return storagesync.Observation{}, fmt.Errorf("storage sync checkpoint storage is unavailable for this phase") }
 	if err := c.ensureRequest(ctx, request); err != nil { return storagesync.Observation{}, err }
 	created, createErr := jobs.Create(ctx, desired, metav1.CreateOptions{})
 	if createErr != nil {
@@ -90,6 +94,22 @@ func (c *StorageSyncClient) Observe(ctx context.Context, runID string, attempt i
 	if apierrors.IsNotFound(err) { return storagesync.Observation{}, nil }
 	if err != nil { return storagesync.Observation{}, err }
 	return c.observeJob(ctx, job)
+}
+
+// RecoverReceipt starts a separate read-only reader only after observing the
+// original attempt's owned containers terminate. It cannot overwrite the
+// checkpoint, obtain write credentials, or replace the original stop evidence.
+func (c *StorageSyncClient) RecoverReceipt(ctx context.Context, spec storagesync.WorkSpec) error {
+	if err := c.ready(); err != nil { return err }
+	job, err := c.getAttempt(ctx, spec.RunID, spec.Attempt)
+	if err != nil { return fmt.Errorf("cannot verify original storage sync attempt for receipt recovery: %w", err) }
+	observed, err := c.observeJob(ctx, job)
+	if err != nil { return err }
+	if observed.JobUID == "" || !observed.Terminated { return fmt.Errorf("storage sync original executor termination is not confirmed") }
+	recovery := spec
+	recovery.Phase = "RECOVER"
+	_, err = c.Ensure(ctx, recovery)
+	return err
 }
 
 func (c *StorageSyncClient) observeJob(ctx context.Context, job *batchv1.Job) (storagesync.Observation, error) {
