@@ -35,6 +35,7 @@ type Report struct {
 	SourceFingerprint string `json:"sourceFingerprint"`
 	TargetFingerprint string `json:"targetFingerprint"`
 	Progress Progress `json:"progress"`
+	MappingProgress []MappingProgress `json:"mappingProgress,omitempty"`
 	Files WorkerFileReference `json:"files"`
 	FailureReason string `json:"failureReason"`
 	RequestsDrained bool `json:"requestsDrained"`

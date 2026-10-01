@@ -1,5 +1,6 @@
 """Authenticated control-plane transport, independent of writable credentials."""
 import json
+import os
 import threading
 import urllib.error
 import urllib.request
@@ -66,6 +67,14 @@ class Reporter:
         self.thread = None
         self.failure = None
         self.pending_files = []
+        self.worker_id = os.environ.get('STORAGE_SYNC_POD_UID', '')
+
+    def claim(self):
+        if not self.worker_id or not self.spec['callbackUrl'].endswith('/report'):
+            raise SyncError('WORKER_CLAIM_UNAVAILABLE')
+        self.request(self.spec['callbackUrl'][:-len('/report')] + '/claim', self.token,
+                     {'runId': self.spec['runId'], 'attempt': self.spec['attempt'],
+                      'generation': self.spec['generation'], 'workerId': self.worker_id})
 
     def control(self):
         return self.command
@@ -85,7 +94,7 @@ class Reporter:
             self.sequence += 1
             value = {**self.payload, 'runId': self.spec['runId'], 'attempt': self.spec['attempt'],
                      'generation': self.spec['generation'], 'sequence': self.sequence,
-                     'fileResults': self.pending_files[:1000]}
+                     'fileResults': self.pending_files[:1000], 'workerId': self.worker_id}
             if self.spec.get('previewId'):
                 value['previewId'] = self.spec['previewId']
             save_json(self.work_dir / ('result.json' if final else 'heartbeat.json'), value)

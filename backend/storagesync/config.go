@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	_ "time/tzdata"
 )
 
 var ambiguousPath = regexp.MustCompile(`(?i)%(?:2e|2f|5c|00|25)`)

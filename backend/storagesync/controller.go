@@ -85,6 +85,8 @@ func(m *Manager)completeStopped(tx Tx,r Run)error{
 	case "CANCELLING":r.State="CANCELLED"
 	default:
 		if r.Phase=="PREVIEW"&&r.ReceiptState=="SUCCEEDED"{
+			if err:=tx.PutRun(r);err!=nil{return err}
+			if err:=tx.ReleaseLocks(r.ID);err!=nil{return err}
 			r.Attempt++;r.Generation++;r.Sequence=0;r.JobUID="";r.WorkerID="";r.LastReportDigest="";r.RequestsDrained=false;r.StopVerified=false;r.ReceiptState="";r.Phase="TRANSFER";r.State="QUEUED";r.FailureReason=""
 			if err:=tx.AcquireLocks(r.ID,r.Attempt,LocksFor(r.Resolved));err!=nil{return err};return tx.PutRun(r)
 		}

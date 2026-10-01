@@ -1,5 +1,6 @@
 """Transport-independent scan, planning, verification, and serial transfer."""
 from dataclasses import asdict, replace
+from contextlib import ExitStack
 import hashlib
 import math
 from pathlib import Path
@@ -124,7 +125,7 @@ def verify_object(source, reader, bucket, target):
 
 def verify_source(source, reader):
     if source.kind == 'IDC':
-        with open_verified(source):
+        with open_verified(source, verify_content=False):
             return
     current = reader.head(source.bucket, source.key)
     if current is None or current.etag != source.etag or (source.version_id and current.version_id != source.version_id):
@@ -161,24 +162,26 @@ def _multipart(item, reader, writer, bucket, path, checkpoint, part_size, contro
         save_json(path, checkpoint)
         return _multipart(item, reader, writer, bucket, path, checkpoint, part_size, control, part_done)
     parts = dict(checkpoint.get('parts', {}))
-    for index in range(math.ceil(source.size / part_size)):
-        _check_control(control, writer, bucket, item, path, checkpoint)
-        number, offset = index + 1, index * part_size
-        length = min(part_size, source.size - offset)
-        known = parts.get(str(number))
-        if known and remote.get(number) == known and known['size'] == length:
-            continue
-        verify_source(source, reader)
-        if source.kind == 'TOS':
-            part = writer.copy_part(source.bucket, source.object_info(), bucket, item.target_key, upload_id, number, offset, length)
-        else:
-            with open_verified(source) as stream:
+    with ExitStack() as opened:
+        stream = opened.enter_context(open_verified(source)) if source.kind == 'IDC' else None
+        for index in range(math.ceil(source.size / part_size)):
+            _check_control(control, writer, bucket, item, path, checkpoint)
+            number, offset = index + 1, index * part_size
+            length = min(part_size, source.size - offset)
+            known = parts.get(str(number))
+            if known and remote.get(number) == known and known['size'] == length:
+                part_done(length, False)
+                continue
+            verify_source(source, reader)
+            if source.kind == 'TOS':
+                part = writer.copy_part(source.bucket, source.object_info(), bucket, item.target_key, upload_id, number, offset, length)
+            else:
                 stream.seek(offset)
                 part = writer.upload_part(bucket, item.target_key, upload_id, number, stream, length)
-        parts = {**parts, str(number): part}
-        checkpoint = {**checkpoint, 'parts': parts}
-        save_json(path, checkpoint)
-        part_done(length)
+            parts = {**parts, str(number): part}
+            checkpoint = {**checkpoint, 'parts': parts}
+            save_json(path, checkpoint)
+            part_done(length, source.kind == 'IDC')
     _check_control(control, writer, bucket, item, path, checkpoint)
     verify_source(source, reader)
     result = writer.complete_upload(bucket, item.target_key, upload_id, {int(k): v for k, v in parts.items()}, item.target)
@@ -198,11 +201,12 @@ def _transfer(item, reader, writer, bucket, path, checkpoint, part_size, control
     else:
         with open_verified(source) as stream:
             result = writer.put(bucket, item.target_key, stream, item.target, source.sha256)
+        part_done(source.size, True)
     return result, checkpoint
 
 
 def execute(plan, reader, writer, work_dir, run_id, config_digest, part_size=64 * 1024 * 1024,
-            control=lambda: '', report=lambda value: None):
+            control=lambda: '', report=lambda value: None, file_result=lambda value: None):
     validate_plan_capabilities(plan, writer)
     work_dir = Path(work_dir)
     totals = {'sourceFiles': len(plan.entries), 'sourceBytes': sum(item.source.size for item in plan.entries),
@@ -216,8 +220,9 @@ def execute(plan, reader, writer, work_dir, run_id, config_digest, part_size=64 
         nonlocal totals
         totals = {**totals, **changes, 'sequence': totals['sequence'] + 1}
         report(dict(totals))
-    def part_done(length):
-        emit(networkBytes=totals['networkBytes'] + length)
+    def part_done(length, network=True):
+        emit(networkBytes=totals['networkBytes'] + (length if network else 0),
+             inFlightBytes=totals['inFlightBytes'] + length)
     emit()
     completed = []
     for item in plan.entries:
@@ -243,16 +248,24 @@ def execute(plan, reader, writer, work_dir, run_id, config_digest, part_size=64 
             result = verify_object(source, reader, plan.bucket, current)
         else:
             save_json(path, checkpoint)
-            result, checkpoint = _transfer(item, reader, writer, plan.bucket, path, checkpoint, part_size, control, part_done)
-            verify_source(source, reader)
-            emit(phase='VERIFYING')
-            result = verify_object(source, reader, plan.bucket, result)
+            try:
+                result, checkpoint = _transfer(item, reader, writer, plan.bucket, path, checkpoint, part_size, control, part_done)
+                verify_source(source, reader)
+                emit(phase='VERIFYING')
+                result = verify_object(source, reader, plan.bucket, result)
+            except StopRequested:
+                raise
+            except SyncError as error:
+                file_result({'relativePath': source.relative_path, 'state': 'FAILED', 'sizeBytes': source.size, 'errorCode': str(error)})
+                emit(failedFiles=totals['failedFiles'] + 1)
+                raise
         save_json(path, {**checkpoint, 'completed': True, 'target': asdict(result)})
         completed.append(replace(item, target=result))
+        file_result({'relativePath': source.relative_path, 'state': 'REUSED' if item.action == 'REUSE' else 'VERIFIED', 'sizeBytes': source.size})
         emit(completedFiles=totals['completedFiles'] + (item.action == 'COPY'),
              completedBytes=totals['completedBytes'] + (source.size if item.action == 'COPY' else 0),
              verifiedFiles=totals['verifiedFiles'] + 1, verifiedBytes=totals['verifiedBytes'] + source.size,
-             phase='TRANSFERRING')
+             phase='TRANSFERRING', inFlightBytes=0)
         _check_control(control, writer, plan.bucket, item, path, {**checkpoint, 'completed': True})
     save_json(work_dir / 'baseline.json', asdict(replace(plan, entries=tuple(completed))))
     emit(status='SUCCEEDED', phase='VERIFYING')

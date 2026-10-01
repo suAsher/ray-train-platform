@@ -210,6 +210,12 @@ func main() {
 		}
 	}
 	jobHandler := api.NewHandler(repository, jobOptions)
+	storageSyncMetadata, _ := directoryLister.(api.StorageSyncMetadataStore)
+	storageSyncManager, storageSyncHandler, err := newStorageSyncComponents(database, repository, kubeClient, cfg, storageSyncMetadata)
+	if err != nil {
+		log.Fatalf("initialize storage sync: %v", err)
+	}
+	jobHandler.ConfigureStorageSync(storageSyncHandler)
 	jobHandler.ConfigureDatasetPurge(newDatasetPurgeObjects(cfg, directoryLister, kubeClient))
 	rayHandler, err := newRayAPIHandler(repository, jobHandler.SubmissionService(), logs, cfg)
 	if err != nil {
@@ -229,6 +235,13 @@ func main() {
 		go environmentService.Run(ctx)
 	}
 	defer stop()
+	if storageSyncManager != nil {
+		go func() {
+			if err := kubeClient.RunAsLeader(ctx, platformNamespace, "ray-train-platform-storage-sync", storageSyncManager.Run); err != nil && ctx.Err() == nil {
+				log.Printf("storage sync controller stopped: %v", err)
+			}
+		}()
+	}
 	if modelSnapshots != nil {
 		if err := jobHandler.InitializeFunctionWarehouseSync(ctx, repositories.NewWarehouseSyncStore(database), []byte(cfg.PATPepper)); err != nil {
 			log.Fatalf("initialize function warehouse sync: %v", err)
@@ -391,6 +404,7 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	jobs.RegisterModelEvaluationInternalRoutes(router.Group("/api/v1/internal"))
 	jobs.RegisterModelServingInternalRoutes(router.Group("/api/v1/internal"))
 	jobs.RegisterIDCSyncInternalRoutes(router.Group("/api/v1/internal"))
+	jobs.RegisterStorageSyncInternalRoutes(router.Group("/api/v1/internal"))
 	jobs.RegisterAssistantDemandInternalRoutes(router.Group("/api/v1/internal"))
 
 	protected := router.Group("")
@@ -461,6 +475,7 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	jobs.RegisterWorkspaceRoutes(oidcOnly)
 	jobs.RegisterAdminRoutes(oidcOnly)
 	jobs.RegisterIDCSyncManagementRoutes(oidcOnly)
+	jobs.RegisterStorageSyncManagementRoutes(oidcOnly)
 	jobs.RegisterImageManagementRoutes(interactive)
 	jobs.RegisterHelpManagementRoutes(interactive)
 	jobs.RegisterModelManagementRoutes(interactive)

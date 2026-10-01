@@ -95,6 +95,10 @@ type Progress struct {
 	NetworkBytes int64 `json:"networkBytes"`
 	ScanComplete bool `json:"scanComplete"`
 }
+type MappingProgress struct {
+	MappingIndex int `json:"mappingIndex"`
+	Progress Progress `json:"progress"`
+}
 type FileReference struct {
 	Path string `json:"-"`
 	Digest string `json:"digest"`
@@ -111,6 +115,7 @@ type FileResult struct {
 	MappingIndex int `json:"mappingIndex"`
 	RelativePath string `json:"relativePath"`
 	State string `json:"state"`
+	Stage string `json:"stage,omitempty"`
 	SizeBytes int64 `json:"sizeBytes"`
 	ErrorCode string `json:"errorCode,omitempty"`
 }
@@ -136,6 +141,7 @@ type Preview struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	ExpiresAt time.Time `json:"expiresAt"`
 	Progress Progress `json:"progress"`
+	MappingProgress []MappingProgress `json:"mappingProgress,omitempty"`
 	Files FileReference `json:"files"`
 	FailureReason string `json:"failureReason,omitempty"`
 	Attempt int `json:"-"`
@@ -166,6 +172,7 @@ type Run struct {
 	PreviewID string `json:"previewId,omitempty"`
 	State string `json:"state"`
 	Phase string `json:"phase"`
+	Stage string `json:"stage,omitempty"`
 	Trigger string `json:"trigger"`
 	Attempt int `json:"attempt"`
 	Generation int64 `json:"-"`
@@ -176,6 +183,7 @@ type Run struct {
 	SourceFingerprint string `json:"-"`
 	TargetFingerprint string `json:"-"`
 	Progress Progress `json:"progress"`
+	MappingProgress []MappingProgress `json:"mappingProgress,omitempty"`
 	Files FileReference `json:"files"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
@@ -205,6 +213,11 @@ type JobClient interface {
 	Ensure(context.Context, WorkSpec) (Observation,error)
 	Observe(context.Context, string, int) (Observation,error)
 	Stop(context.Context, string, int) error
+}
+// ReceiptRecoverer replays an existing durable final receipt with a read-only
+// helper Job; it must not run a new writer or manufacture termination evidence.
+type ReceiptRecoverer interface {
+	RecoverReceipt(context.Context,WorkSpec) error
 }
 type Observation struct {
 	Exists bool

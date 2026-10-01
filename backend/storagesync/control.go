@@ -8,6 +8,7 @@ import (
 
 func(m *Manager)Control(ctx context.Context,actor,id,action string)(Run,error){
 	if err:=m.authorize(ctx,actor);err!=nil{return Run{},err};var result Run
+	action=strings.ToLower(action)
 	err:=m.repo.Transact(ctx,func(tx Tx)error{
 		run,err:=tx.GetRun(id);if err!=nil{return err};updated:=run;updated.UpdatedAt=m.now()
 		switch strings.ToLower(action) {

@@ -70,7 +70,7 @@ func storageSyncPostgresStores(t *testing.T, upgrade bool) (*StorageSyncReposito
 				t.Fatalf("historical migration %d: %v", version, err)
 			}
 		}
-		if err := a.Exec("CREATE TABLE storage_sync_upgrade_fixture (id TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO storage_sync_upgrade_fixture VALUES ('kept', 'unchanged')").Error; err != nil {
+		if err := a.Exec("INSERT INTO model_catalog(id, name, owner_id, tenant_id) VALUES ('storage-sync-kept-model', 'unchanged', 'stable-owner', 'existing-team')").Error; err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -81,7 +81,7 @@ func storageSyncPostgresStores(t *testing.T, upgrade bool) (*StorageSyncReposito
 	}
 	if upgrade {
 		var value string
-		if err := a.Raw("SELECT value FROM storage_sync_upgrade_fixture WHERE id = 'kept'").Scan(&value).Error; err != nil || value != "unchanged" {
+		if err := a.Raw("SELECT name FROM model_catalog WHERE id = 'storage-sync-kept-model' AND owner_id = 'stable-owner' AND tenant_id = 'existing-team'").Scan(&value).Error; err != nil || value != "unchanged" {
 			t.Fatalf("upgrade changed existing data: %q %v", value, err)
 		}
 	}
@@ -95,7 +95,7 @@ func storageSyncPlan(id string) ss.Plan {
 
 func storageSyncRun(id, planID string) ss.Run {
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	return ss.Run{ID: id, PlanID: planID, ConfigRevision: 1, RequestedBy: "admin", IdempotencyKey: "request-" + id, State: "QUEUED", Trigger: "MANUAL", Attempt: 1, Generation: 1, Sequence: 0, Resolved: []ss.ResolvedMapping{{}}, CreatedAt: now, UpdatedAt: now}
+	return ss.Run{ID: id, PlanID: planID, ConfigRevision: 1, RequestedBy: "admin", IdempotencyKey: "request-" + id, State: "QUEUED", Trigger: "MANUAL", Attempt: 1, Generation: 1, Sequence: 0, Resolved: []ss.ResolvedMapping{{Source: ss.ResolvedLocation{Kind: "TOS", StorageID: "source", Bucket: "source-bucket", Prefix: "root/source"}}}, ResolutionDigest: "resolution", SourceFingerprint: "source", TargetFingerprint: "target", CreatedAt: now, UpdatedAt: now}
 }
 
 func storageSyncSeed(t *testing.T, store *StorageSyncRepository, id string) ss.Run {
@@ -116,8 +116,12 @@ func TestStorageSyncPostgresUpgradeSnapshotsAndRollback(t *testing.T) {
 	store, reader := storageSyncPostgresStores(t, true)
 	ctx := context.Background()
 	run := storageSyncSeed(t, store, "roundtrip")
-	preview := ss.Preview{ID: "preview", PlanID: run.PlanID, Actor: "admin", ConfigRevision: 1, State: "SUCCEEDED", Resolved: []ss.ResolvedMapping{{}}, CreatedAt: run.CreatedAt, ExpiresAt: run.CreatedAt.Add(time.Hour)}
-	run.Resolved = []ss.ResolvedMapping{{}}
+	preview := ss.Preview{ID: "preview", PlanID: run.PlanID, Actor: "admin", ConfigRevision: 1, State: "SUCCEEDED", Resolved: run.Resolved, ResolutionDigest: "resolution", SourceFingerprint: "source", TargetFingerprint: "target", Attempt: 1, Generation: 2, Sequence: 3, JobUID: "preview-job", ReceiptState: "SUCCEEDED", RequestsDrained: true, Cursor: "opaque-cursor", Files: ss.FileReference{Path: "previews/preview/files.json", Digest: "file-digest", Count: 1}, CreatedAt: run.CreatedAt, ExpiresAt: run.CreatedAt.Add(time.Hour)}
+	run.JobUID, run.ReceiptState = "run-job", "SUCCEEDED"
+	run.WorkerID, run.BaselineRef, run.LastReportDigest, run.AuthorizedBy = "worker", "baseline", "receipt-digest", "taking-admin"
+	preview.WorkerID, preview.BaselineRef, preview.LastReportDigest = "preview-worker", "preview-baseline", "preview-receipt"
+	run.RequestsDrained, run.StopVerified = true, true
+	run.Files = ss.FileReference{Path: "runs/roundtrip/files.json", Digest: "run-file-digest", Count: 1}
 	if err := store.Transact(ctx, func(tx ss.Tx) error {
 		if err := tx.PutPreview(preview); err != nil {
 			return err
@@ -130,9 +134,27 @@ func TestStorageSyncPostgresUpgradeSnapshotsAndRollback(t *testing.T) {
 	if err != nil || len(gotPreview.Resolved) != 1 || !gotPreview.ExpiresAt.Equal(preview.ExpiresAt) {
 		t.Fatalf("preview snapshot lost server resolution: %+v %v", gotPreview, err)
 	}
+	if gotPreview.JobUID != preview.JobUID || gotPreview.Generation != 2 || gotPreview.Sequence != 3 || gotPreview.Attempt != 1 || !gotPreview.RequestsDrained || gotPreview.Cursor != preview.Cursor || gotPreview.Files.Path != preview.Files.Path || gotPreview.ReceiptState != preview.ReceiptState || gotPreview.ResolutionDigest != "resolution" || gotPreview.SourceFingerprint != "source" || gotPreview.TargetFingerprint != "target" {
+		t.Fatalf("preview internal evidence lost: %+v", gotPreview)
+	}
+	if gotPreview.WorkerID != preview.WorkerID || gotPreview.BaselineRef != preview.BaselineRef || gotPreview.LastReportDigest != preview.LastReportDigest {
+		t.Fatalf("preview claim/replay identity lost: %+v", gotPreview)
+	}
 	gotRun, err := reader.GetRun(ctx, run.ID)
 	if err != nil || len(gotRun.Resolved) != 1 {
 		t.Fatalf("run snapshot lost server resolution: %+v %v", gotRun, err)
+	}
+	if gotRun.JobUID != run.JobUID || !gotRun.RequestsDrained || !gotRun.StopVerified || gotRun.Generation != run.Generation || gotRun.IdempotencyKey != run.IdempotencyKey || gotRun.Files.Path != run.Files.Path || gotRun.ReceiptState != run.ReceiptState || gotRun.ResolutionDigest != "resolution" || gotRun.SourceFingerprint != "source" || gotRun.TargetFingerprint != "target" || gotRun.Resolved[0].Source.Bucket != "source-bucket" {
+		t.Fatalf("run internal evidence lost: %+v", gotRun)
+	}
+	if gotRun.WorkerID != run.WorkerID || gotRun.BaselineRef != run.BaselineRef || gotRun.LastReportDigest != run.LastReportDigest || gotRun.AuthorizedBy != run.AuthorizedBy {
+		t.Fatalf("run claim/replay identity lost: %+v", gotRun)
+	}
+	if err := store.db.Exec(`UPDATE storage_sync_runs SET snapshot_json = jsonb_set(snapshot_json, '{private,workerID}', '"other-worker"') WHERE id = ?`, run.ID).Error; err == nil {
+		t.Fatal("database accepted a second worker claim for the same run attempt")
+	}
+	if err := store.db.Exec(`UPDATE storage_sync_previews SET snapshot_json = jsonb_set(snapshot_json, '{private,workerID}', '"other-worker"') WHERE id = ?`, preview.ID).Error; err == nil {
+		t.Fatal("database accepted a second worker claim for the same preview attempt")
 	}
 	if err := store.Transact(ctx, func(tx ss.Tx) error {
 		if err := tx.PutPlan(storageSyncPlan("rollback")); err != nil {
@@ -299,6 +321,14 @@ func TestStorageSyncPostgresHierarchicalReadWriteLocks(t *testing.T) {
 	if err := acquire(store, left, lock("x/", "WRITE"), lock("a/", "WRITE")); !errors.Is(err, ss.ErrLocked) {
 		t.Fatalf("atomic multi-lock acquisition returned %v", err)
 	}
+	if err := store.Transact(ctx, func(tx ss.Tx) error {
+		if err := tx.AcquireLocks(left.ID, left.Attempt, []ss.PathLock{lock("x/", "WRITE"), lock("a/", "WRITE")}); !errors.Is(err, ss.ErrLocked) {
+			return fmt.Errorf("handled lock conflict returned %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	var partial int64
 	if err := store.db.Table("storage_sync_path_locks").Where("run_id = ?", left.ID).Count(&partial).Error; err != nil || partial != 0 {
 		t.Fatalf("failed acquisition retained %d locks: %v", partial, err)
@@ -351,5 +381,95 @@ func TestStorageSyncPostgresConcurrentIdempotentTrigger(t *testing.T) {
 	runs, err := first.ListRuns(ctx, plan.ID)
 	if err != nil || len(runs) != 1 {
 		t.Fatalf("trigger persisted %d runs: %v", len(runs), err)
+	}
+}
+
+func TestStorageSyncPostgresFileResultsArePagedAndFenced(t *testing.T) {
+	store, reader := storageSyncPostgresStores(t, false)
+	ctx := context.Background()
+	run := storageSyncSeed(t, store, "files")
+	files := []ss.FileResult{
+		{MappingIndex: 1, RelativePath: "a.bin", State: "VERIFIED", SizeBytes: 8},
+		{MappingIndex: 0, RelativePath: "b.bin", State: "REUSED", SizeBytes: 4},
+		{MappingIndex: 0, RelativePath: "a.bin", State: "FAILED", ErrorCode: "SOURCE_CHANGED"},
+	}
+	if err := store.Transact(ctx, func(tx ss.Tx) error {
+		return tx.PutFileResults(run.ID, run.Attempt, run.Generation, files)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := reader.ListRunFiles(ctx, run.ID, "", 2)
+	if err != nil || len(page.Items) != 2 || page.Items[0].MappingIndex != 0 || page.Items[1].MappingIndex != 0 || page.Items[0].RelativePath == page.Items[1].RelativePath || page.NextCursor == "" {
+		t.Fatalf("first file page %+v %v", page, err)
+	}
+	last, err := reader.ListRunFiles(ctx, run.ID, page.NextCursor, 2)
+	if err != nil || len(last.Items) != 1 || last.Items[0].MappingIndex != 1 || last.NextCursor != "" {
+		t.Fatalf("second file page %+v %v", last, err)
+	}
+	if err := reader.Transact(ctx, func(tx ss.Tx) error {
+		return tx.PutFileResults(run.ID, run.Attempt, run.Generation+1, files)
+	}); !errors.Is(err, ss.ErrConflict) {
+		t.Fatalf("wrong generation indexed files: %v", err)
+	}
+	if _, err := reader.ListRunFiles(ctx, run.ID, "invalid", 2); !errors.Is(err, ss.ErrInvalid) {
+		t.Fatalf("invalid file cursor accepted: %v", err)
+	}
+	longPath := strings.Repeat("long-directory/", 200) + "file.bin"
+	if err := store.Transact(ctx, func(tx ss.Tx) error {
+		return tx.PutFileResults(run.ID, run.Attempt, run.Generation, []ss.FileResult{{MappingIndex: 2, RelativePath: longPath, State: "VERIFIED"}})
+	}); err != nil {
+		t.Fatalf("long relative path exceeded database index limits: %v", err)
+	}
+	all, err := reader.ListRunFiles(ctx, run.ID, "", 100)
+	if err != nil || len(all.Items) != 4 || all.Items[3].RelativePath != longPath {
+		t.Fatalf("long path roundtrip lost: %+v %v", all, err)
+	}
+	if err := reader.Transact(ctx, func(tx ss.Tx) error {
+		return tx.PutFileResults(run.ID, run.Attempt, run.Generation, []ss.FileResult{{RelativePath: "../escape", State: "VERIFIED"}})
+	}); !errors.Is(err, ss.ErrInvalid) {
+		t.Fatalf("invalid file result accepted: %v", err)
+	}
+}
+
+func TestStorageSyncPostgresStagedLocksAndVerifiedRetry(t *testing.T) {
+	store, reader := storageSyncPostgresStores(t, false)
+	ctx := context.Background()
+	plan := storageSyncPlan("reserve-first")
+	run := storageSyncRun("reserve-run", plan.ID)
+	locks := []ss.PathLock{{StorageID: "root", Region: "region", Bucket: "bucket", Prefix: "a", Mode: "WRITE"}}
+	if err := store.Transact(ctx, func(tx ss.Tx) error {
+		if err := tx.PutPlan(plan); err != nil {
+			return err
+		}
+		if err := tx.AcquireLocks(run.ID, run.Attempt, locks); err != nil {
+			return err
+		}
+		return tx.PutRun(run)
+	}); err != nil {
+		t.Fatalf("lock-before-run reservation failed: %v", err)
+	}
+	finished := time.Now().UTC()
+	run.State, run.StopVerified, run.FinishedAt = "FAILED", true, &finished
+	if err := store.Transact(ctx, func(tx ss.Tx) error {
+		if err := tx.ReleaseLocks(run.ID); err != nil {
+			return err
+		}
+		return tx.PutRun(run)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	run.Attempt, run.Generation = 2, 2
+	run.State, run.StopVerified, run.FinishedAt = "QUEUED", false, nil
+	if err := reader.Transact(ctx, func(tx ss.Tx) error {
+		if err := tx.AcquireLocks(run.ID, run.Attempt, locks); err != nil {
+			return err
+		}
+		return tx.PutRun(run)
+	}); err != nil {
+		t.Fatalf("verified failed run could not retry: %v", err)
+	}
+	var attempt int
+	if err := store.db.Table("storage_sync_path_locks").Select("attempt").Where("run_id = ?", run.ID).Scan(&attempt).Error; err != nil || attempt != 2 {
+		t.Fatalf("lock attempt %d %v", attempt, err)
 	}
 }

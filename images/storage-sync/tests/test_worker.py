@@ -43,3 +43,98 @@ class StartupTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+from dataclasses import asdict
+from test_engine import MemoryStore
+from storage_sync.checkpoint import load_json, save_json
+from storage_sync.engine import make_plan, scan_tos
+from storage_sync.worker import _preview, _transfer, manifest_summary
+
+
+class RecordingReporter:
+    def __init__(self):
+        self.values = {}
+        self.events = []
+        self.files = []
+        self.command = ''
+        self.writer = None
+    def update(self, **fields):
+        self.values = {**self.values, **fields}
+        self.events.append(self.values)
+    def control(self):
+        return self.command
+    def add_file(self, value):
+        self.files.append(value)
+
+
+def work_spec(mappings=None):
+    return {'runId': 'r', 'attempt': 1, 'generation': 1, 'phase': 'PREVIEW',
+            'config': {'mode': 'INCREMENTAL', 'verification': 'CONTENT', 'conflictPolicy': 'UPDATE'},
+            'mappings': mappings or [{'source': {'kind': 'TOS', 'bucket': 'src', 'prefix': 'data'},
+                                     'destination': {'bucket': 'dst', 'prefix': 'out/data'}, 'layout': 'DIRECTORY'}]}
+
+
+class WorkerFlowTests(unittest.TestCase):
+    def test_resolved_directory_prefix_is_not_appended_twice(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = MemoryStore({('src', 'data/a'): b'a'})
+            reporter = RecordingReporter()
+            _preview(work_spec(), store, reporter, Path(directory))
+            manifest = load_json(Path(directory) / 'manifest.json')
+            self.assertEqual(manifest['plans'][0]['entries'][0]['target_key'], 'out/data/a')
+            self.assertEqual(reporter.values['mappingProgress'][0]['progress']['sourceFiles'], 1)
+
+    def test_resolved_file_prefix_is_exact_key(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = MemoryStore({('src', 'data/a'): b'a'})
+            spec = work_spec([{'source': {'kind': 'TOS', 'bucket': 'src', 'prefix': 'data/a'},
+                              'destination': {'bucket': 'dst', 'prefix': 'out/a'}, 'layout': 'DIRECTORY'}])
+            reporter = RecordingReporter()
+            _preview(spec, store, reporter, Path(directory))
+            manifest = load_json(Path(directory) / 'manifest.json')
+            self.assertEqual(manifest['plans'][0]['entries'][0]['target_key'], 'out/a')
+
+    def test_preview_expired_or_target_changed_before_start_has_no_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = MemoryStore({('src', 'data/a'): b'a'})
+            reporter = RecordingReporter()
+            spec = work_spec()
+            _preview(spec, store, reporter, Path(directory))
+            accepted = {key: reporter.values[key] for key in ('manifestDigest', 'sourceFingerprint', 'targetFingerprint')}
+            store.objects['dst', 'out/data/a'] = b'changed'
+            with self.assertRaisesRegex(SyncError, 'PREVIEW_SNAPSHOT_CHANGED'):
+                _preview({**spec, **accepted}, store, RecordingReporter(), Path(directory))
+            self.assertEqual(store.writes, [])
+
+    def test_scheduled_preflight_conflict_has_no_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = MemoryStore({('src', 'data/a'): b'a', ('dst', 'out/data/a'): b'other'})
+            spec = work_spec()
+            spec = {**spec, 'config': {**spec['config'], 'conflictPolicy': 'FAIL'}}
+            with self.assertRaisesRegex(SyncError, 'TARGET_CONFLICT'):
+                _preview(spec, store, RecordingReporter(), Path(directory))
+            self.assertEqual(store.writes, [])
+
+    def test_multimapping_totals_frozen_and_file_results_delivered(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = MemoryStore({('src', 'one/a'): b'a', ('src', 'two/b'): b'bb'})
+            plans = [make_plan(scan_tos(store, 'src', source, True, 'CONTENT'), store, 'dst', target)
+                     for source, target in (('one', 'out/one'), ('two', 'out/two'))]
+            manifest, summary = manifest_summary(plans)
+            save_json(Path(directory) / 'manifest.json', manifest)
+            spec = {**work_spec(), **summary, 'phase': 'TRANSFER'}
+            reporter = RecordingReporter()
+            with patch('storage_sync.worker.from_config', return_value=store):
+                _transfer(spec, reporter, Path(directory), '/unused')
+            self.assertTrue(all(event['progress']['sourceFiles'] == 2 for event in reporter.events if 'progress' in event))
+            self.assertTrue(all(event['progress']['transferBytes'] == 3 for event in reporter.events if 'progress' in event))
+            self.assertEqual(reporter.values['progress']['verifiedFiles'], 2)
+            self.assertEqual(len(reporter.files), 2)
+            self.assertEqual([item['progress']['verifiedFiles'] for item in reporter.values['mappingProgress']], [1, 1])
+
+    def test_transfer_manifest_tamper_before_credentials(self):
+        with tempfile.TemporaryDirectory() as directory:
+            save_json(Path(directory) / 'manifest.json', {'plans': []})
+            with patch('storage_sync.worker.from_config') as writer, self.assertRaisesRegex(SyncError, 'MANIFEST_MISMATCH'):
+                _transfer({**work_spec(), 'manifestDigest': 'wrong'}, RecordingReporter(), Path(directory), '/unused')
+            writer.assert_not_called()

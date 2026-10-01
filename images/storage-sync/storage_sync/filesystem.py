@@ -143,17 +143,39 @@ def _entry_matches(entry, metadata):
         raise SyncError('SOURCE_CHANGED')
 
 
+def _verify_content(entry, descriptor):
+    # Some mounted filesystems preserve coarse timestamps across rewrites.
+    # pread leaves the caller's stream offset unchanged, including after seeks.
+    _entry_matches(entry, os.fstat(descriptor))
+    digest = hashlib.sha256()
+    offset = 0
+    while True:
+        block = os.pread(descriptor, _HASH_CHUNK, offset)
+        if not block:
+            break
+        digest.update(block)
+        offset += len(block)
+    _entry_matches(entry, os.fstat(descriptor))
+    if offset != entry.size or digest.hexdigest() != entry.sha256:
+        raise SyncError('SOURCE_CHANGED')
+
+
 @contextmanager
-def open_verified(entry: SourceEntry):
-    """Open an unchanged scanned file and verify it again when its reader exits."""
+def open_verified(entry: SourceEntry, verify_content: bool = True):
+    """Verify a file around use; metadata-only mode is for transfer prechecks."""
     if entry.kind != 'IDC' or not entry.local_root:
         raise SyncError('INVALID_SOURCE')
     path = safe_relative(entry.local_path)
     with _node(Path(entry.local_root), path) as (descriptor, metadata):
         _entry_matches(entry, metadata)
+        if verify_content:
+            _verify_content(entry, descriptor)
         with os.fdopen(os.dup(descriptor), 'rb') as stream:
             yield stream
-            _entry_matches(entry, os.fstat(descriptor))
+            if verify_content:
+                _verify_content(entry, descriptor)
+            else:
+                _entry_matches(entry, os.fstat(descriptor))
 
 
 def _cursor_after(token, binding):

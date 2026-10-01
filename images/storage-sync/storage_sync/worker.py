@@ -73,6 +73,15 @@ def manifest_summary(plans):
                       'targetFingerprint': canonical_digest([plan.target_fingerprint for plan in plans])}
 
 
+def plan_progress(plan):
+    return {'discoveredFiles': len(plan.entries), 'sourceFiles': len(plan.entries),
+            'sourceBytes': sum(item.source.size for item in plan.entries),
+            'transferFiles': len(plan.entries) - plan.reused_files, 'transferBytes': plan.pending_bytes,
+            'reusedFiles': plan.reused_files,
+            'reusedBytes': sum(item.source.size for item in plan.entries if item.action == 'REUSE'),
+            'targetExtraFiles': plan.extra_files, 'scanComplete': True}
+
+
 def _preview(spec, reader, reporter, work_dir):
     plans = _scan(spec, reader, reporter)
     manifest, summary = manifest_summary(plans)
@@ -89,6 +98,7 @@ def _preview(spec, reader, reporter, work_dir):
                 'targetExtraFiles': sum(plan.extra_files for plan in plans), 'scanComplete': True}
     progress['discoveredFiles'] = progress['sourceFiles']
     reporter.update(**summary, progress=progress,
+                    mappingProgress=[{'mappingIndex': index, 'progress': plan_progress(plan)} for index, plan in enumerate(plans)],
                     files={'path': str(work_dir / 'manifest.json'), 'digest': summary['manifestDigest'], 'count': progress['sourceFiles']})
 
 
@@ -115,28 +125,41 @@ def _transfer(spec, reporter, work_dir, config_path):
     bandwidth = min(cap, requested) if cap and requested else cap or requested
     store = from_config(config_path, os.environ.get('STORAGE_SYNC_TOS_ENDPOINT', ''), os.environ.get('STORAGE_SYNC_TOS_REGION', ''), bandwidth)
     reporter.writer = store
+    fixed = {'sourceFiles': sum(len(plan.entries) for plan in plans),
+             'sourceBytes': sum(item.source.size for plan in plans for item in plan.entries),
+             'transferFiles': sum(len(plan.entries) - plan.reused_files for plan in plans),
+             'transferBytes': sum(plan.pending_bytes for plan in plans),
+             'reusedFiles': sum(plan.reused_files for plan in plans),
+             'reusedBytes': sum(item.source.size for plan in plans for item in plan.entries if item.action == 'REUSE'),
+             'targetExtraFiles': sum(plan.extra_files for plan in plans)}
     aggregate = {}
-    fields = ('sourceFiles', 'sourceBytes', 'transferFiles', 'transferBytes', 'reusedFiles', 'reusedBytes',
-              'completedFiles', 'completedBytes', 'verifiedFiles', 'verifiedBytes', 'failedFiles', 'targetExtraFiles', 'networkBytes')
+    mapping_progress = [{'mappingIndex': index, 'progress': plan_progress(plan)} for index, plan in enumerate(plans)]
+    fields = ('completedFiles', 'completedBytes', 'verifiedFiles', 'verifiedBytes', 'failedFiles', 'networkBytes')
     for index, plan in enumerate(plans):
         prior = dict(aggregate)
         def progress(value):
-            nonlocal aggregate
+            nonlocal aggregate, mapping_progress
             aggregate = {field: prior.get(field, 0) + value.get(field, 0) for field in fields}
-            reporter.update(phase=value['phase'], progress={**aggregate, 'scanComplete': True, 'inFlightBytes': value.get('inFlightBytes', 0)})
+            mapping_progress = [({'mappingIndex': index, 'progress': {**plan_progress(plan), **{field: value.get(field, 0) for field in fields}, 'inFlightBytes': value.get('inFlightBytes', 0)}}
+                                 if item['mappingIndex'] == index else item) for item in mapping_progress]
+            reporter.update(phase=value['phase'], progress={**fixed, **aggregate, 'scanComplete': True, 'inFlightBytes': value.get('inFlightBytes', 0)},
+                            mappingProgress=mapping_progress)
         execute(plan, store, store, work_dir / ('mapping-' + str(index)), spec['runId'], spec['manifestDigest'],
-                control=reporter.control, report=progress)
-        for item in plan.entries:
-            reporter.add_file({'mappingIndex': index, 'relativePath': item.source.relative_path,
-                               'state': 'REUSED' if item.action == 'REUSE' else 'VERIFIED', 'sizeBytes': item.source.size})
+                control=reporter.control, report=progress,
+                file_result=lambda value: reporter.add_file({'mappingIndex': index, **value}))
     reporter.update(manifestDigest=spec['manifestDigest'], files={'path': str(work_dir / 'manifest.json'),
-                    'digest': spec['manifestDigest'], 'count': aggregate.get('sourceFiles', 0)})
+                    'digest': spec['manifestDigest'], 'count': fixed['sourceFiles']})
 
 
 def run(spec, token, work_dir, config_path=None, reporter_factory=Reporter):
     work_dir = Path(work_dir)
     reporter = reporter_factory(spec, token, work_dir)
     reporter.writer = None
+    # Duplicate Pods must not create even checkpoint files or read write credentials.
+    try:
+        reporter.claim()
+    except SyncError:
+        return 2
     old_handlers = {}
     def stop_handler(*_):
         reporter.command = reporter.command or 'PAUSE'

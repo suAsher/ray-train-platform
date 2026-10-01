@@ -47,6 +47,7 @@ type globalJobReader interface {
 }
 
 type Handler struct {
+	storageSync *StorageSyncHandler
 	assistantControllerCAFile     string
 	assistantIdleNamespace        string
 	assistantDemand               AssistantDemandStore

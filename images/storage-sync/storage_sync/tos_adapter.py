@@ -157,8 +157,13 @@ class SDKReadStream:
         return self
 
     def __exit__(self, *_):
-        # GetObjectOutput owns the requests response; close its stream promptly.
-        self.result.close()
+        # SDK 2.9.3 has no GetObjectOutput.close; unwrap its CRC/rate adapters.
+        stream = self.result.content
+        while hasattr(stream, 'data'):
+            stream = stream.data
+        response = getattr(stream, 'resp', None)
+        if response is not None:
+            response.close()
 
 
 class LimitedStream:

@@ -61,6 +61,7 @@ func renderStorageSyncJob(cfg config.StorageSyncConfig, spec storagesync.WorkSpe
 	container := corev1.Container{
 		Name: storageSyncContainer, Image: cfg.Image, ImagePullPolicy: corev1.PullIfNotPresent, Args: args,
 		Env: []corev1.EnvVar{
+			{Name: "STORAGE_SYNC_POD_UID", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.uid"}}},
 			{Name: "STORAGE_SYNC_TOS_ENDPOINT", Value: cfg.Endpoint}, {Name: "STORAGE_SYNC_TOS_REGION", Value: cfg.Region},
 			{Name: "STORAGE_SYNC_MAX_FILE_CONCURRENCY", Value: strconv.Itoa(cfg.MaxFileConcurrency)},
 			{Name: "STORAGE_SYNC_MAX_PART_CONCURRENCY", Value: strconv.Itoa(cfg.MaxPartConcurrency)},
@@ -75,6 +76,7 @@ func renderStorageSyncJob(cfg config.StorageSyncConfig, spec storagesync.WorkSpe
 	}
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: cfg.Namespace, Labels: labels, Annotations: annotations}, Spec: batchv1.JobSpec{
 		BackoffLimit: pointerTo(int32(0)), Parallelism: pointerTo(int32(1)), Completions: pointerTo(int32(1)),
+		PodReplacementPolicy: pointerTo(batchv1.Failed),
 		Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}, Spec: corev1.PodSpec{
 			RestartPolicy: corev1.RestartPolicyNever, AutomountServiceAccountToken: pointerTo(false), ServiceAccountName: cfg.ServiceAccountName,
 			NodeSelector: nodeSelector, TerminationGracePeriodSeconds: pointerTo(int64(120)),
