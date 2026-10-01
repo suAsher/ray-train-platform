@@ -1,7 +1,8 @@
 """Pinned TOS SDK adapter; no high-level resumable APIs with missing guards."""
 import io
+from dataclasses import replace
 from pathlib import Path
-from .model import ObjectInfo, SyncError
+from .model import ObjectInfo, SyncError, canonical_timestamp
 
 
 class TOSStore:
@@ -44,7 +45,7 @@ class TOSStore:
         crc = getattr(output, 'hash_crc64_ecma', None)
         modified = getattr(output, 'last_modified', '')
         return ObjectInfo(key=key, size=int(getattr(output, 'content_length', getattr(output, 'size', 0)) or 0),
-                          crc64=str(crc) if crc is not None else '', last_modified=str(modified or ''), **values)
+                          crc64=str(crc) if crc is not None else '', last_modified=canonical_timestamp(modified), **values)
 
     def head(self, bucket, key):
         try:
@@ -57,7 +58,9 @@ class TOSStore:
     def list_page(self, bucket, prefix, token='', limit=1000):
         result = self._call('list_objects_type2', bucket, prefix=prefix, continuation_token=token or None,
                             max_keys=min(limit, 1000), list_only_once=True)
-        entries = [self._info(obj.key, obj) for obj in result.contents]
+        # Listing CRC presence is not portable across the Go/Python SDKs.
+        # Source scans always HEAD each object before trusting its checksum.
+        entries = [replace(self._info(obj.key, obj), crc64='') for obj in result.contents]
         following = result.next_continuation_token if result.is_truncated else ''
         if result.is_truncated and not following:
             raise SyncError('LIST_PAGINATION_STALLED')

@@ -42,7 +42,7 @@ func(m *Manager)Report(ctx context.Context,report Report)error{
 		if run.Phase=="PREVIEW"&&report.Phase!="PREVIEW"&&report.Phase!="SCANNING"&&report.Phase!="PLANNING"{return ErrInvalid};if run.Phase=="TRANSFER"&&report.Phase!="TRANSFER"&&report.Phase!="TRANSFERRING"&&report.Phase!="VERIFYING"&&report.Phase!="PLANNING"{return ErrInvalid}
 		for _,item:=range report.FileResults{if item.MappingIndex>=len(run.Config.Mappings){return ErrInvalid}}
 		for _,item:=range report.MappingProgress{if item.MappingIndex>=len(run.Config.Mappings){return ErrInvalid}}
-		updated:=run;now:=m.now();updated.Sequence=report.Sequence;updated.LastReportDigest=digest;updated.Progress=report.Progress;updated.HeartbeatAt=&now;updated.UpdatedAt=now
+		updated:=run;now:=m.now();updated.Sequence=report.Sequence;updated.LastReportDigest=digest;updated.Progress=report.Progress;updated.HeartbeatAt=&now;updated.UpdatedAt=now;updated.RecoverableUntil=now.Add(m.options.CheckpointRetention)
 		updated.MappingProgress=append([]MappingProgress(nil),report.MappingProgress...);updated.Stage=report.Phase
 		updated.Files=FileReference{Path:report.Files.Path,Digest:report.Files.Digest,Count:report.Files.Count};updated.FailureReason=safeFailure(report.FailureReason)
 		if terminalReceipt(report.State){
@@ -57,11 +57,16 @@ func(m *Manager)Report(ctx context.Context,report Report)error{
 func(m *Manager)reportPreview(tx Tx,report Report)error{
 	p,err:=tx.GetPreview(report.RunID);if err!=nil{return err};if p.Attempt!=report.Attempt||p.Generation!=report.Generation{return ErrStaleAttempt}
 	if report.Sequence<p.Sequence{return nil};digest:=reportDigest(report);if report.Sequence==p.Sequence{if digest!=p.LastReportDigest{return ErrConflict};return nil}
-	if p.State!="RUNNING"||p.ReceiptState!=""||!p.ExpiresAt.After(m.now())||p.WorkerID==""||report.WorkerID!=p.WorkerID{return ErrStaleAttempt};if report.Phase!=p.Kind&&(p.Kind!="PREVIEW"||(report.Phase!="SCANNING"&&report.Phase!="PLANNING")){return ErrInvalid}
+	cleanup:=terminalReceipt(report.State)&&report.State!="SUCCEEDED"
+	if p.ReceiptState!=""||p.WorkerID==""||report.WorkerID!=p.WorkerID{return ErrStaleAttempt}
+	if p.State!="RUNNING"&&!(p.State=="FAILED"&&cleanup){return ErrStaleAttempt}
+	if (!p.ExpiresAt.After(m.now())||!previewScanDeadline(p).After(m.now()))&&!cleanup{return ErrStaleAttempt}
+	if report.Phase!=p.Kind&&(p.Kind!="PREVIEW"||(report.Phase!="SCANNING"&&report.Phase!="PLANNING")){return ErrInvalid}
 	if len(report.BrowseEntries)>p.Limit&&p.Kind=="BROWSE"{return ErrInvalid}
 	for _,item:=range report.MappingProgress{if item.MappingIndex>=len(p.Config.Mappings){return ErrInvalid}}
 	for _,entry:=range report.BrowseEntries{kind:=strings.ToUpper(entry.Kind);if ValidateRelativePath(entry.RelativePath)!=nil||entry.Name==""||strings.ContainsAny(entry.Name,"/\\\x00")||(kind!="DIRECTORY"&&kind!="FILE")||entry.SizeBytes<0{return ErrInvalid}}
 	updated:=p;updated.Sequence=report.Sequence;updated.LastReportDigest=digest;updated.Progress=report.Progress;updated.UpdatedAt=m.now();updated.FailureReason=safeFailure(report.FailureReason)
+	if p.State=="FAILED"{updated.FailureReason=p.FailureReason}else if report.State=="SUCCEEDED"{updated.ExpiresAt=m.now().Add(m.options.PreviewTTL)}else if report.State=="RUNNING"{updated.ExpiresAt=m.previewLease(p)}
 	updated.MappingProgress=append([]MappingProgress(nil),report.MappingProgress...);updated.Stage=report.Phase
 	if terminalReceipt(report.State){if report.State=="SUCCEEDED"&&p.Kind=="PREVIEW"&&(report.ManifestDigest==""||report.SourceFingerprint==""||report.TargetFingerprint==""||!report.Progress.ScanComplete){return ErrInvalid};updated.ReceiptState=report.State;updated.RequestsDrained=report.RequestsDrained;updated.ManifestDigest=report.ManifestDigest;updated.SourceFingerprint=report.SourceFingerprint;updated.TargetFingerprint=report.TargetFingerprint;updated.Files=FileReference{Path:report.Files.Path,Digest:report.Files.Digest,Count:report.Files.Count};updated.BrowseEntries=append([]BrowseEntry(nil),report.BrowseEntries...);updated.NextCursor=report.NextCursor}
 	for i,entry:=range updated.BrowseEntries{normalized:=entry;normalized.Kind=strings.ToUpper(entry.Kind);updated.BrowseEntries[i]=normalized};return tx.PutPreview(updated)

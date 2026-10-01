@@ -55,7 +55,7 @@ func(m *Manager)UpdatePlan(ctx context.Context,actor,id string,revision int64,na
 	if err:=m.authorize(ctx,actor);err!=nil{return Plan{},err};if err:=c.Validate();err!=nil{return Plan{},err}
 	name=strings.TrimSpace(name);if name==""||utf8.RuneCountInString(name)>160{return Plan{},ErrInvalid};if _,err:=m.resolve(ctx,actor,c);err!=nil{return Plan{},err}
 	var result Plan;err:=m.repo.Transact(ctx,func(tx Tx)error{
-		old,err:=tx.GetPlan(id);if err!=nil{return err};if old.Revision!=revision{return ErrConflict}
+		old,err:=tx.GetPlan(id);if err!=nil{return err};if !canAccessPlan(actor,old){return ErrNotFound};if old.Revision!=revision{return ErrConflict}
 		updated:=old;updated.Name=name;updated.Enabled=enabled;updated.Config=copyConfig(c);updated.Revision++;updated.UpdatedAt=m.now();updated.Owner=actor;updated.FailureReason=""
 		updated.NextRunAt,err=c.Schedule.Next(m.now());if err!=nil{return err};if !enabled{updated.NextRunAt=nil};if err=tx.PutPlan(updated);err!=nil{return err};result=updated;return nil
 	});return result,err
@@ -63,10 +63,10 @@ func(m *Manager)UpdatePlan(ctx context.Context,actor,id string,revision int64,na
 func(m *Manager)CreatePreview(ctx context.Context,actor,planID string,revision int64)(Preview,error){
 	if err:=m.authorize(ctx,actor);err!=nil{return Preview{},err};var result Preview
 	err:=m.repo.Transact(ctx,func(tx Tx)error{
-		plan,err:=tx.GetPlan(planID);if err!=nil{return err};if plan.Revision!=revision{return ErrConflict}
+		plan,err:=tx.GetPlan(planID);if err!=nil{return err};if !canAccessPlan(actor,plan){return ErrNotFound};if plan.Revision!=revision{return ErrConflict}
 		if err=m.previewCapacity(tx,actor);err!=nil{return err};resolved,err:=m.resolve(ctx,actor,plan.Config);if err!=nil{return err}
 		now:=m.now();result=Preview{ID:"ssv-"+uuid.NewString(),Kind:"PREVIEW",PlanID:planID,Actor:actor,ConfigRevision:revision,Config:copyConfig(plan.Config),Resolved:resolved,ResolutionDigest:resolutionDigest(resolved),State:"QUEUED",Attempt:1,Generation:1,CreatedAt:now,UpdatedAt:now,ExpiresAt:now.Add(m.options.PreviewTTL)}
-		result.BaselineRef,err=baselineRef(tx,planID,revision);if err!=nil{return err};return tx.PutPreview(result)
+		result.ExpiresAt=m.previewLease(result);result.BaselineRef,err=baselineRef(tx,planID,revision);if err!=nil{return err};return tx.PutPreview(result)
 	});return result,err
 }
 func(m *Manager)previewCapacity(tx Tx,actor string)error{
@@ -79,13 +79,13 @@ func(m *Manager)CreateBrowse(ctx context.Context,actor string,location Location,
 	if limit==0{limit=100};if limit<1||limit>1000||len(cursor)>2048{return Preview{},ErrInvalid}
 	resolved,err:=m.resolver.Resolve(ctx,actor,location);if err!=nil{return Preview{},err};now:=m.now()
 	p:=Preview{ID:"ssv-"+uuid.NewString(),Kind:"BROWSE",Actor:actor,Location:location,Cursor:cursor,Limit:limit,Resolved:[]ResolvedMapping{{Source:resolved}},State:"QUEUED",Attempt:1,Generation:1,CreatedAt:now,UpdatedAt:now,ExpiresAt:now.Add(m.options.PreviewTTL)}
-	p.ResolutionDigest=resolutionDigest(p.Resolved)
+	p.ResolutionDigest=resolutionDigest(p.Resolved);p.ExpiresAt=m.previewLease(p)
 	err=m.repo.Transact(ctx,func(tx Tx)error{if err:=m.previewCapacity(tx,actor);err!=nil{return err};return tx.PutPreview(p)});return p,err
 }
 func(m *Manager)Start(ctx context.Context,actor,planID string,request StartRequest)(Run,error){
 	if err:=m.authorize(ctx,actor);err!=nil{return Run{},err};if len(request.IdempotencyKey)<1||len(request.IdempotencyKey)>128||strings.ContainsAny(request.IdempotencyKey,"\x00\r\n")||request.PreviewID==""||request.ManifestDigest==""{return Run{},ErrInvalid}
 	var result Run;err:=m.repo.Transact(ctx,func(tx Tx)error{
-		plan,err:=tx.GetPlan(planID);if err!=nil{return err};runs,err:=tx.ListRuns(planID);if err!=nil{return err}
+		plan,err:=tx.GetPlan(planID);if err!=nil{return err};if !canAccessPlan(actor,plan){return ErrNotFound};runs,err:=tx.ListRuns(planID);if err!=nil{return err}
 		for _,run:=range runs{if run.RequestedBy==actor&&run.IdempotencyKey==request.IdempotencyKey{if run.PreviewID!=request.PreviewID||run.ConfigRevision!=request.ConfigRevision||run.ManifestDigest!=request.ManifestDigest{return ErrConflict};result=run;return nil}}
 		if plan.Revision!=request.ConfigRevision{return ErrPreviewInvalid};for _,run:=range runs{if run.Active(){return ErrConflict}}
 		preview,err:=tx.GetPreview(request.PreviewID);if err!=nil{return err}

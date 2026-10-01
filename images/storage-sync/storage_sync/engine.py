@@ -90,7 +90,12 @@ def make_plan(entries, reader, bucket, prefix, mode='INCREMENTAL', baseline=None
                      and target is not None and previous.target is not None
                      and previous.target.fingerprint == target.fingerprint
                      and (not source.sha256 or source.sha256 == previous.source.sha256))
-        if unchanged and previous.target.sha256:
+        if target and verification == 'CONTENT':
+            with reader.read(bucket, target) as stream:
+                target = replace(target, sha256=hash_stream(stream))
+            # Actual bytes decide content-mode reuse, even when metadata matches.
+            unchanged = False
+        elif unchanged and previous.target.sha256:
             target = replace(target, sha256=previous.target.sha256)
         elif target and source.sha256 and not target.sha256 and not (source.crc64 and target.crc64):
             # Establish a trusted baseline for IDC files against existing TOS objects.
@@ -113,10 +118,10 @@ def validate_plan_capabilities(plan, writer):
                 raise SyncError('UNSUPPORTED_CONDITIONAL_MULTIPART_UPDATE')
 
 
-def verify_object(source, reader, bucket, target):
+def verify_object(source, reader, bucket, target, verification='METADATA'):
     if target is None or source.size != target.size:
         raise SyncError('CHECKSUM_MISMATCH')
-    if same_content(source, target):
+    if verification != 'CONTENT' and same_content(source, target):
         return target
     if not source.sha256:
         raise SyncError('CHECKSUM_UNAVAILABLE')
@@ -244,21 +249,21 @@ def execute(plan, reader, writer, work_dir, run_id, config_digest, part_size=64 
             current = reader.head(plan.bucket, item.target_key)
             if current is None or current.etag != checkpoint['target']['etag']:
                 raise SyncError('TARGET_CHANGED')
-            result = verify_object(source, reader, plan.bucket, current)
+            result = verify_object(source, reader, plan.bucket, current, plan.verification)
         elif item.action == 'REUSE':
             current = reader.head(plan.bucket, item.target_key)
             if current is None or current.etag != item.target.etag:
                 raise SyncError('TARGET_CHANGED')
             if current.fingerprint == item.target.fingerprint and item.target.sha256:
                 current = replace(current, sha256=item.target.sha256)
-            result = verify_object(source, reader, plan.bucket, current)
+            result = verify_object(source, reader, plan.bucket, current, plan.verification)
         else:
             save_json(path, checkpoint)
             try:
                 result, checkpoint = _transfer(item, reader, writer, plan.bucket, path, checkpoint, part_size, control, part_done)
                 verify_source(source, reader)
                 emit(phase='VERIFYING')
-                result = verify_object(source, reader, plan.bucket, result)
+                result = verify_object(source, reader, plan.bucket, result, plan.verification)
             except StopRequested:
                 raise
             except SyncError as error:

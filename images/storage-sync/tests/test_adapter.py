@@ -117,10 +117,11 @@ from storage_sync.tos_adapter import from_config
 class AdapterPaginationTests(unittest.TestCase):
     def test_list_requests_exactly_one_page(self):
         client = FakeClient()
-        client.list_objects_type2 = lambda *args, **kwargs: SimpleNamespace(contents=[SimpleNamespace(key='x/a', size=3, etag='e')],
+        client.list_objects_type2 = lambda *args, **kwargs: SimpleNamespace(contents=[SimpleNamespace(key='x/a', size=3, etag='e', hash_crc64_ecma=123)],
                                                                           is_truncated=True, next_continuation_token='next')
         values, cursor = TOSStore(client).list_page('bucket', 'x/')
         self.assertEqual(values[0].key, 'x/a')
+        self.assertEqual(values[0].crc64, '')
         self.assertEqual(cursor, 'next')
 
     def test_parts_paginate_and_missing_upload_is_identified(self):
@@ -173,3 +174,37 @@ class CrossAdapterIdentityTests(unittest.TestCase):
                                 'cacheControl': 'no-cache'})
         self.assertEqual(sdk.fingerprint, wire.fingerprint)
         self.assertEqual(sdk.last_modified, '2026-10-01T00:00:00.000Z')
+
+
+class AdditionalGuardTests(GuardTests):
+    def test_source_read_uses_both_version_and_etag(self):
+        self.store.read('src', self.source)
+        self.assertEqual(self.client.calls[0][0], 'get_object')
+        self.assertEqual(self.client.calls[0][2]['if_match'], 'source-etag')
+        self.assertEqual(self.client.calls[0][2]['version_id'], 'v1')
+
+    def test_create_upload_refuses_existing_target_and_sets_private_policy(self):
+        with self.assertRaisesRegex(SyncError, 'UNSUPPORTED_CONDITIONAL_MULTIPART_UPDATE'):
+            self.store.create_upload('b', 'key', ObjectInfo('key', 3, etag='old'), {})
+        self.assertEqual(self.client.calls, [])
+        self.store.create_upload('b', 'key', None, {'source': self.source})
+        self.assertTrue(self.client.calls[0][2]['forbid_overwrite'])
+        self.assertEqual(self.client.calls[0][2]['acl'], 'private')
+
+    def test_missing_destination_etag_fails_before_write(self):
+        with self.assertRaisesRegex(SyncError, 'TARGET_GUARD_UNAVAILABLE'):
+            self.store.put('b', 'key', io.BytesIO(b'abc'), ObjectInfo('key', 3))
+        self.assertEqual(self.client.calls, [])
+
+    def test_abort_owned_upload_is_idempotent(self):
+        self.store.abort_upload('b', 'key', 'own-upload')
+        self.assertEqual(self.client.calls[0][0], 'abort_multipart_upload')
+        error = RuntimeError('private'); error.status_code = 404
+        self.client.failure = error
+        self.store.abort_upload('b', 'key', 'own-upload')
+
+    def test_symlink_objects_and_invalid_bandwidth_fail_closed(self):
+        with self.assertRaisesRegex(SyncError, 'UNSUPPORTED_OBJECT_TYPE'):
+            self.store._info('key', SimpleNamespace(object_type='Symlink'))
+        with self.assertRaisesRegex(SyncError, 'INVALID_BANDWIDTH_LIMIT'):
+            TOSStore(self.client, bandwidth=1)

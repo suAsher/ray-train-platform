@@ -80,6 +80,7 @@ func renderStorageSyncJob(cfg config.StorageSyncConfig, spec storagesync.WorkSpe
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: cfg.Namespace, Labels: labels, Annotations: annotations}, Spec: batchv1.JobSpec{
 		BackoffLimit: pointerTo(int32(0)), Parallelism: pointerTo(int32(1)), Completions: pointerTo(int32(1)),
 		PodReplacementPolicy: pointerTo(batchv1.Failed),
+		ActiveDeadlineSeconds: storageSyncDeadline(spec.Phase),
 		Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}, Spec: corev1.PodSpec{
 			RestartPolicy: corev1.RestartPolicyNever, AutomountServiceAccountToken: pointerTo(false), ServiceAccountName: cfg.ServiceAccountName,
 			NodeSelector: nodeSelector, TerminationGracePeriodSeconds: pointerTo(int64(120)),
@@ -88,6 +89,17 @@ func renderStorageSyncJob(cfg config.StorageSyncConfig, spec storagesync.WorkSpe
 		}},
 	}}
 	return job, request, nil
+}
+
+func storageSyncDeadline(phase string) *int64 {
+	switch phase {
+	case "BROWSE", "RECOVER":
+		return pointerTo(int64(300))
+	case "PREVIEW", "REVALIDATE":
+		return pointerTo(int64(86400))
+	default:
+		return nil
+	}
 }
 
 func storageSyncWorkDir(spec storagesync.WorkSpec) (string, error) {

@@ -170,3 +170,91 @@ class RecoveryTests(unittest.TestCase):
                   patch('storage_sync.worker._json_request', create=True) as request):
                 self.assertEqual(run(spec, 'fresh', Path(path)), 2)
                 request.assert_not_called()
+
+
+class WorkerLifecycleTests(unittest.TestCase):
+    def transfer(self, store, directory, response=None):
+        plan = make_plan(scan_tos(store, 'src', 'data', True, 'CONTENT'), store, 'dst', 'out', verification='CONTENT')
+        manifest, summary = manifest_summary([plan])
+        save_json(Path(directory) / 'manifest.json', manifest)
+        spec = {**work_spec(), **summary, 'phase': 'TRANSFER', 'callbackUrl': 'http://backend/report'}
+        calls = []
+        def send(url, token, payload):
+            calls.append(payload)
+            return response(url, payload) if response else {}
+        factory = lambda request, token, work: Reporter(request, token, work, request=send)
+        with patch.dict(os.environ, {'STORAGE_SYNC_POD_UID': 'claimed-pod'}), patch('storage_sync.worker.from_config', return_value=store):
+            code = run(spec, 'token', Path(directory), '/unused', reporter_factory=factory)
+        return code, calls, load_json(Path(directory) / 'result.json')
+
+    def test_success_requires_verified_terminal_receipt_and_claim(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = MemoryStore({('src', 'data/a'): b'a'}); store.uncertain_write = False
+            code, calls, receipt = self.transfer(store, directory)
+            self.assertEqual(code, 0)
+            self.assertEqual(calls[0]['workerId'], 'claimed-pod')
+            self.assertNotIn('sequence', calls[0])
+            self.assertEqual(receipt['state'], 'SUCCEEDED')
+            self.assertEqual(receipt['progress']['verifiedFiles'], 1)
+            self.assertTrue(receipt['requestsDrained'])
+
+    def test_pause_response_before_transfer_preserves_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = MemoryStore({('src', 'data/a'): b'a'}); store.uncertain_write = False
+            code, calls, receipt = self.transfer(store, directory, lambda url, payload: {'control': 'PAUSE'} if url.endswith('/report') else {})
+            self.assertEqual(code, 2)
+            self.assertEqual(receipt['state'], 'PAUSED')
+            self.assertTrue(receipt['requestsDrained'])
+            self.assertEqual(store.writes, [])
+
+    def test_unknown_write_outcome_keeps_drain_false(self):
+        class Uncertain(MemoryStore):
+            def copy(self, *args, **kwargs):
+                self.uncertain_write = True
+                raise SyncError('UNKNOWN_WRITE_OUTCOME')
+        with tempfile.TemporaryDirectory() as directory:
+            store = Uncertain({('src', 'data/a'): b'a'}); store.uncertain_write = False
+            code, calls, receipt = self.transfer(store, directory)
+            self.assertEqual(code, 2)
+            self.assertEqual(receipt['state'], 'FAILED')
+            self.assertEqual(receipt['failureReason'], 'UNKNOWN_WRITE_OUTCOME')
+            self.assertFalse(receipt['requestsDrained'])
+
+    def test_lost_final_callback_leaves_durable_receipt_and_nonzero_exit(self):
+        def response(url, payload):
+            if payload.get('state') == 'SUCCEEDED':
+                raise SyncError('CONTROL_PLANE_UNAVAILABLE')
+            return {}
+        with tempfile.TemporaryDirectory() as directory:
+            store = MemoryStore({('src', 'data/a'): b'a'}); store.uncertain_write = False
+            code, calls, receipt = self.transfer(store, directory, response)
+            self.assertEqual(code, 2)
+            self.assertEqual(receipt['state'], 'SUCCEEDED')
+            self.assertTrue(receipt['requestsDrained'])
+            self.assertEqual(receipt['workerId'], 'claimed-pod')
+
+    def test_browse_readonly_phase_never_initializes_writer(self):
+        spec = {**work_spec(), 'phase': 'BROWSE', 'callbackUrl': 'http://backend/report', 'metadataUrl': 'http://backend/metadata', 'limit': 2}
+        gateway = type('Gateway', (), {'request': lambda self, *args, **kwargs: {'entries': [{'name': 'a', 'relativePath': 'a', 'kind': 'FILE', 'sizeBytes': 1}], 'nextToken': 'next'}})()
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'STORAGE_SYNC_POD_UID': 'pod'}):
+            factory = lambda request, token, work: Reporter(request, token, work, request=lambda *args: {})
+            with patch('storage_sync.worker.ReadGateway', return_value=gateway), patch('storage_sync.worker.from_config') as writer:
+                self.assertEqual(run(spec, 'token', Path(directory), reporter_factory=factory), 0)
+            writer.assert_not_called()
+            receipt = load_json(Path(directory) / 'result.json')
+            self.assertEqual(receipt['nextCursor'], 'next')
+            self.assertEqual(len(receipt['browseEntries']), 1)
+
+    def test_readonly_preview_persists_manifest_and_verified_fingerprints(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'STORAGE_SYNC_POD_UID': 'pod'}):
+            store = MemoryStore({('src', 'data/a'): b'a'})
+            spec = {**work_spec(), 'callbackUrl': 'http://backend/report', 'metadataUrl': 'http://backend/metadata'}
+            factory = lambda request, token, work: Reporter(request, token, work, request=lambda *args: {})
+            with patch('storage_sync.worker.ReadGateway', return_value=store), patch('storage_sync.worker.from_config') as writer:
+                self.assertEqual(run(spec, 'token', Path(directory), reporter_factory=factory), 0)
+            writer.assert_not_called()
+            receipt = load_json(Path(directory) / 'result.json')
+            self.assertTrue(receipt['manifestDigest'])
+            self.assertTrue(receipt['sourceFingerprint'])
+            self.assertTrue(receipt['targetFingerprint'])
+            self.assertTrue((Path(directory) / 'manifest.json').exists())

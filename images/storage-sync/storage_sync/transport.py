@@ -5,7 +5,7 @@ import threading
 import urllib.error
 import urllib.request
 from .checkpoint import save_json
-from .model import ObjectInfo, SyncError
+from .model import ObjectInfo, SyncError, canonical_timestamp
 
 
 def _json_request(url, token, payload, timeout=30):
@@ -28,6 +28,8 @@ def object_from_wire(value):
                'contentEncoding': 'content_encoding', 'contentDisposition': 'content_disposition',
                'contentLanguage': 'content_language', 'cacheControl': 'cache_control'}
     fields = {aliases.get(key, key): val for key, val in value.items()}
+    fields['last_modified'] = canonical_timestamp(fields.get('last_modified'))
+    fields['crc64'] = str(fields['crc64']) if fields.get('crc64') is not None else ''
     return ObjectInfo(**{key: val for key, val in fields.items() if key in ObjectInfo.__dataclass_fields__})
 
 

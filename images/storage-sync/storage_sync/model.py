@@ -1,5 +1,6 @@
 """Immutable manifest types. ETags are identity guards, never content hashes."""
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 import hashlib
 import json
 
@@ -18,6 +19,18 @@ def canonical_digest(value):
     for piece in encoder.iterencode(value):
         digest.update(piece.encode())
     return digest.hexdigest()
+
+
+def canonical_timestamp(value):
+    if value is None or value == '':
+        return ''
+    try:
+        parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+        if parsed.tzinfo is None:
+            raise ValueError()
+        return parsed.astimezone(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+    except (TypeError, ValueError):
+        raise SyncError('INVALID_OBJECT_METADATA') from None
 
 
 def safe_relative(value, allow_empty=False):

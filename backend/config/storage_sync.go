@@ -53,8 +53,8 @@ func loadStorageSyncConfig() (StorageSyncConfig, error) {
 		*field.target = value
 	}
 	cfg.MaxBandwidthBytesPerSecond, err = strconv.ParseInt(envOr("STORAGE_SYNC_MAX_BANDWIDTH_BYTES_PER_SECOND", "104857600"), 10, 64)
-	if err != nil || cfg.MaxBandwidthBytesPerSecond < 1 || cfg.MaxBandwidthBytesPerSecond > 10737418240 {
-		return StorageSyncConfig{}, fmt.Errorf("STORAGE_SYNC_MAX_BANDWIDTH_BYTES_PER_SECOND must be between 1 and 10737418240")
+	if err != nil || cfg.MaxBandwidthBytesPerSecond < 102400 || cfg.MaxBandwidthBytesPerSecond > 10737418240 {
+		return StorageSyncConfig{}, fmt.Errorf("STORAGE_SYNC_MAX_BANDWIDTH_BYTES_PER_SECOND must be between 102400 and 10737418240")
 	}
 	if err := ValidateStorageSyncConfig(cfg); err != nil { return StorageSyncConfig{}, err }
 	return cfg, nil
@@ -68,7 +68,7 @@ func ValidateStorageSyncConfig(cfg StorageSyncConfig) error {
 		if !isDNSSubdomain(value) { return fmt.Errorf("storage sync namespace, Secret, ServiceAccount and work PVC must be valid names") }
 	}
 	if cfg.CredentialMode != "static-secret" { return fmt.Errorf("STORAGE_SYNC_CREDENTIAL_MODE must be static-secret; automatic writer failover is unavailable") }
-	if cfg.MaxActiveRuns < 1 || cfg.MaxActiveRuns > 16 || cfg.MaxFileConcurrency < 1 || cfg.MaxFileConcurrency > 128 || cfg.MaxPartConcurrency < 1 || cfg.MaxPartConcurrency > 64 || cfg.MaxBandwidthBytesPerSecond < 1 || cfg.MaxBandwidthBytesPerSecond > 10737418240 {
+	if cfg.MaxActiveRuns < 1 || cfg.MaxActiveRuns > 16 || cfg.MaxFileConcurrency < 1 || cfg.MaxFileConcurrency > 128 || cfg.MaxPartConcurrency < 1 || cfg.MaxPartConcurrency > 64 || cfg.MaxBandwidthBytesPerSecond < 102400 || cfg.MaxBandwidthBytesPerSecond > 10737418240 {
 		return fmt.Errorf("storage sync concurrency and bandwidth ceilings are invalid")
 	}
 	if len(cfg.NodeSelector) == 0 { return fmt.Errorf("STORAGE_SYNC_NODE_SELECTOR_JSON must explicitly select verified CPU nodes") }

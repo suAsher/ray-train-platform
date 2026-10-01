@@ -10,11 +10,11 @@ func(m *Manager)Control(ctx context.Context,actor,id,action string)(Run,error){
 	if err:=m.authorize(ctx,actor);err!=nil{return Run{},err};var result Run
 	action=strings.ToLower(action)
 	err:=m.repo.Transact(ctx,func(tx Tx)error{
-		run,err:=tx.GetRun(id);if err!=nil{return err};updated:=run;updated.UpdatedAt=m.now()
+		run,err:=tx.GetRun(id);if err!=nil{return err};if !canAccessRun(actor,run){return ErrNotFound};updated:=run;updated.UpdatedAt=m.now()
 		switch strings.ToLower(action) {
 		case "pause":
 			if run.State=="PAUSED"||run.State=="PAUSING"{result=run;return nil};if !run.Active()||run.State=="CANCELLING"{return ErrConflict}
-			if run.State=="QUEUED"{updated.State="PAUSED";updated.StopVerified=true;if err=tx.ReleaseLocks(id);err!=nil{return err}}else{updated.State="PAUSING"}
+			if run.State=="QUEUED"{updated.State="PAUSED";updated.StopVerified=true;updated.RecoverableUntil=m.now().Add(m.options.CheckpointRetention);if err=tx.ReleaseLocks(id);err!=nil{return err}}else{updated.State="PAUSING"}
 		case "cancel":
 			if run.State=="CANCELLED"||run.State=="CANCELLING"{result=run;return nil};if !run.Active(){return ErrConflict}
 			if run.State=="QUEUED"||run.State=="PAUSED"{updated.State="CANCELLED";updated.StopVerified=true;now:=m.now();updated.FinishedAt=&now;if err=tx.ReleaseLocks(id);err!=nil{return err}}else{updated.State="CANCELLING"}

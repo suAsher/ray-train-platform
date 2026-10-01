@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 )
 
@@ -18,6 +19,7 @@ func(m *Manager)Reconcile(ctx context.Context)error{
 	var previews []Preview;err:=m.repo.Transact(ctx,func(tx Tx)error{var err error;previews,err=tx.ListPreviews();return err});if err!=nil{return errors.Join(append(failures,err)...)}
 	for _,p:=range previews{if p.State=="QUEUED"||p.State=="RUNNING"{if err:=m.reconcilePreview(ctx,p.ID);err!=nil{failures=append(failures,err)}}}
 	runs,err:=m.repo.ListRuns(ctx,"");if err!=nil{return errors.Join(append(failures,err)...)}
+	runs=append([]Run(nil),runs...);sort.SliceStable(runs,func(i,j int)bool{if runs[i].CreatedAt.Equal(runs[j].CreatedAt){return runs[i].ID<runs[j].ID};return runs[i].CreatedAt.Before(runs[j].CreatedAt)})
 	for _,r:=range runs{if r.Active()&&r.State!="PAUSED"{if err:=m.reconcileRun(ctx,r.ID);err!=nil{failures=append(failures,err)}}}
 	return errors.Join(failures...)
 }
@@ -41,7 +43,7 @@ func(m *Manager)reconcilePreview(ctx context.Context,id string)error{
 	var externalErr error
 	err:=m.repo.Transact(ctx,func(tx Tx)error{
 		p,err:=tx.GetPreview(id);if err!=nil{return err};if p.State!="RUNNING"{return nil}
-		if !p.ExpiresAt.After(m.now()){p.State="FAILED";p.FailureReason="PREVIEW_EXPIRED";p.UpdatedAt=m.now();return tx.PutPreview(p)}
+		if !p.ExpiresAt.After(m.now()){p.State="FAILED";p.FailureReason="PREVIEW_EXPIRED";p.UpdatedAt=m.now();if p.JobUID!=""{externalErr=m.jobs.Stop(ctx,p.ID,p.Attempt)};return tx.PutPreview(p)}
 		resolved,resolveErr:=m.previewResolution(ctx,p)
 		if resolveErr!=nil||resolutionDigest(resolved)!=p.ResolutionDigest{p.State="FAILED";p.FailureReason="PREVIEW_RESOLUTION_CHANGED";if p.JobUID!=""{externalErr=m.jobs.Stop(ctx,p.ID,p.Attempt)};return tx.PutPreview(p)}
 		var observed Observation
@@ -51,7 +53,7 @@ func(m *Manager)reconcilePreview(ctx context.Context,id string)error{
 		if observed.JobUID!=""&&p.JobUID!=observed.JobUID{p.FailureReason="EXECUTOR_UID_CHANGED";return tx.PutPreview(p)}
 		if observed.Terminated&&observed.Exists&&p.JobUID!=""&&p.JobUID==observed.JobUID{
 			if p.ReceiptState==""{if recovery,ok:=m.jobs.(ReceiptRecoverer);ok{externalErr=recovery.RecoverReceipt(ctx,m.previewSpec(p));p.FailureReason="RECEIPT_RECOVERY_PENDING";p.UpdatedAt=m.now();return tx.PutPreview(p)}}
-			if p.ReceiptState=="SUCCEEDED"{p.State="SUCCEEDED"}else{p.State="FAILED";if p.FailureReason==""{p.FailureReason="PREVIEW_RECEIPT_MISSING"}}
+			if p.ReceiptState=="SUCCEEDED"{p.State="SUCCEEDED";p.ExpiresAt=m.now().Add(m.options.PreviewTTL)}else{p.State="FAILED";if p.FailureReason==""{p.FailureReason="PREVIEW_RECEIPT_MISSING"}}
 		}
 		p.UpdatedAt=m.now();return tx.PutPreview(p)
 	});return errors.Join(err,externalErr)
@@ -62,7 +64,7 @@ func(m *Manager)previewResolution(ctx context.Context,p Preview)([]ResolvedMappi
 }
 func(m *Manager)claimQueued(ctx context.Context,id string)error{return m.repo.Transact(ctx,func(tx Tx)error{
 	r,err:=tx.GetRun(id);if err!=nil{return err};if r.State!="QUEUED"{return nil};runs,err:=tx.ListRuns("");if err!=nil{return err};active:=0;for _,other:=range runs{if other.ID!=id&&other.Active()&&other.State!="PAUSED"&&other.State!="QUEUED"{active++}};if active>=m.options.MaxActiveRuns{return nil}
-	resolved,err:=m.resolve(ctx,runActor(r),r.Config);if err!=nil||resolutionDigest(resolved)!=r.ResolutionDigest{r.State="PAUSED";r.StopVerified=true;r.FailureReason="RESOLUTION_OR_AUTHORIZATION_CHANGED";if err=tx.ReleaseLocks(r.ID);err!=nil{return err};return tx.PutRun(r)}
+	resolved,err:=m.resolve(ctx,runActor(r),r.Config);if err!=nil||resolutionDigest(resolved)!=r.ResolutionDigest{r.State="PAUSED";r.StopVerified=true;r.RecoverableUntil=m.now().Add(m.options.CheckpointRetention);r.FailureReason="RESOLUTION_OR_AUTHORIZATION_CHANGED";if err=tx.ReleaseLocks(r.ID);err!=nil{return err};return tx.PutRun(r)}
 	r.State="RUNNING";now:=m.now();r.UpdatedAt=now;if r.StartedAt==nil{r.StartedAt=&now};return tx.PutRun(r)
 })}
 func(m *Manager)reconcileRun(ctx context.Context,id string)error{
@@ -87,7 +89,7 @@ func(m *Manager)reconcileRun(ctx context.Context,id string)error{
 	});return errors.Join(err,externalErr)
 }
 func(m *Manager)completeStopped(tx Tx,r Run)error{
-	r.StopVerified=true;r.UpdatedAt=m.now()
+	r.StopVerified=true;r.UpdatedAt=m.now();r.RecoverableUntil=m.now().Add(m.options.CheckpointRetention)
 	switch r.State {
 	case "PAUSING":r.State="PAUSED";if err:=tx.ReleaseLocks(r.ID);err!=nil{return err};return tx.PutRun(r)
 	case "CANCELLING":r.State="CANCELLED"

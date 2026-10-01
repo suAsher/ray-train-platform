@@ -40,9 +40,9 @@ class TransportTests(unittest.TestCase):
             self.assertTrue(load_json(Path(directory) / 'result.json')['requestsDrained'])
 
     def test_wire_camelcase_metadata(self):
-        obj = object_from_wire({'key': '中文 %/file', 'size': 3, 'versionId': 'v1', 'crc64': '99', 'lastModified': 'now'})
+        obj = object_from_wire({'key': '中文 %/file', 'size': 3, 'versionId': 'v1', 'crc64': '99', 'lastModified': '2026-10-01T00:00:00Z'})
         self.assertEqual(obj.version_id, 'v1')
-        self.assertEqual(obj.last_modified, 'now')
+        self.assertEqual(obj.last_modified, '2026-10-01T00:00:00.000Z')
         self.assertEqual(obj.key, '中文 %/file')
 
 
