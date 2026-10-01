@@ -3,6 +3,7 @@ package storagesync
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -16,6 +17,13 @@ func TestPlanStartsDisabledAndRevisionIsOptimistic(t *testing.T){
 	c.Mappings[0].Source.RelativePath="mutated";if r.plans[p.ID].Config.Mappings[0].Source.RelativePath=="mutated"{t.Fatal("plan retained mutable input")}
 	changed,err:=m.UpdatePlan(context.Background(),"other-admin",p.ID,p.Revision,"enabled",true,testConfig());if err!=nil{t.Fatal(err)};if changed.Revision!=2||changed.Owner!="other-admin"||changed.CreatedBy!="admin"{t.Fatal("revision/takeover audit incorrect")}
 	if _,err=m.UpdatePlan(context.Background(),"admin",p.ID,p.Revision,"stale",false,testConfig());!errors.Is(err,ErrConflict){t.Fatalf("stale revision accepted: %v",err)}
+}
+
+func TestPlanNameLengthCountsUnicodeCharacters(t *testing.T){
+	m,_,_,_,_:=fixture(t)
+	plan,err:=m.CreatePlan(context.Background(),"admin",strings.Repeat("同",160),testConfig());if err!=nil{t.Fatalf("160 Chinese characters rejected: %v",err)}
+	if _,err=m.UpdatePlan(context.Background(),"admin",plan.ID,plan.Revision,strings.Repeat("名",160),false,testConfig());err!=nil{t.Fatalf("unicode update rejected: %v",err)}
+	if _,err=m.CreatePlan(context.Background(),"admin",strings.Repeat("同",161),testConfig());!errors.Is(err,ErrInvalid){t.Fatalf("161 characters accepted: %v",err)}
 }
 
 func TestPreflightBarrierAndVerifiedSuccess(t *testing.T){

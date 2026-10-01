@@ -7,6 +7,7 @@ import (
 	"path"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -45,14 +46,14 @@ func(m *Manager)resolve(ctx context.Context,actor string,c Config)([]ResolvedMap
 }
 func(m *Manager)CreatePlan(ctx context.Context,actor,name string,c Config)(Plan,error){
 	if err:=m.authorize(ctx,actor);err!=nil{return Plan{},err};if err:=c.Validate();err!=nil{return Plan{},err}
-	name=strings.TrimSpace(name);if name==""||len(name)>160{return Plan{},fmt.Errorf("%w: name must have 1 to 160 characters",ErrInvalid)}
+	name=strings.TrimSpace(name);if name==""||utf8.RuneCountInString(name)>160{return Plan{},fmt.Errorf("%w: name must have 1 to 160 characters",ErrInvalid)}
 	if _,err:=m.resolve(ctx,actor,c);err!=nil{return Plan{},err};now:=m.now()
 	p:=Plan{ID:"ssp-"+uuid.NewString(),Name:name,CreatedBy:actor,Revision:1,Enabled:false,Config:copyConfig(c),CreatedAt:now,UpdatedAt:now}
 	err:=m.repo.Transact(ctx,func(tx Tx)error{return tx.PutPlan(p)});return p,err
 }
 func(m *Manager)UpdatePlan(ctx context.Context,actor,id string,revision int64,name string,enabled bool,c Config)(Plan,error){
 	if err:=m.authorize(ctx,actor);err!=nil{return Plan{},err};if err:=c.Validate();err!=nil{return Plan{},err}
-	name=strings.TrimSpace(name);if name==""||len(name)>160{return Plan{},ErrInvalid};if _,err:=m.resolve(ctx,actor,c);err!=nil{return Plan{},err}
+	name=strings.TrimSpace(name);if name==""||utf8.RuneCountInString(name)>160{return Plan{},ErrInvalid};if _,err:=m.resolve(ctx,actor,c);err!=nil{return Plan{},err}
 	var result Plan;err:=m.repo.Transact(ctx,func(tx Tx)error{
 		old,err:=tx.GetPlan(id);if err!=nil{return err};if old.Revision!=revision{return ErrConflict}
 		updated:=old;updated.Name=name;updated.Enabled=enabled;updated.Config=copyConfig(c);updated.Revision++;updated.UpdatedAt=m.now();updated.Owner=actor;updated.FailureReason=""
