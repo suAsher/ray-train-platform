@@ -18,7 +18,17 @@ def _source_root(source):
     return Path('/data/source') / safe_relative(source['spaceId'])
 
 
+def effective_bandwidth(spec):
+    cap = int(os.environ.get('STORAGE_SYNC_MAX_BANDWIDTH_BYTES_PER_SECOND', '0'))
+    requested = int(spec.get('config', {}).get('bandwidthBytesPerSecond', 0))
+    value = min(cap, requested) if cap and requested else cap or requested
+    if value < 0 or (value and value < 102400):
+        raise SyncError('INVALID_BANDWIDTH_LIMIT')
+    return value
+
+
 def _scan(spec, reader, reporter):
+    effective_bandwidth(spec)
     plans = []
     identities = set()
     discovered = 0
@@ -125,9 +135,7 @@ def _transfer(spec, reporter, work_dir, config_path):
     if not manifest or canonical_digest(manifest) != spec.get('manifestDigest'):
         raise SyncError('MANIFEST_MISMATCH')
     plans = [plan_from_dict(item) for item in manifest['plans']]
-    cap = int(os.environ.get('STORAGE_SYNC_MAX_BANDWIDTH_BYTES_PER_SECOND', '0'))
-    requested = int(spec['config'].get('bandwidthBytesPerSecond', 0))
-    bandwidth = min(cap, requested) if cap and requested else cap or requested
+    bandwidth = effective_bandwidth(spec)
     store = from_config(config_path, os.environ.get('STORAGE_SYNC_TOS_ENDPOINT', ''), os.environ.get('STORAGE_SYNC_TOS_REGION', ''), bandwidth)
     reporter.writer = store
     fixed = {'sourceFiles': sum(len(plan.entries) for plan in plans),
