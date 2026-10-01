@@ -30,7 +30,7 @@ func TestRenderDevRayClusterPermitsSudoOnlyOnInteractiveWorker(t *testing.T) {
 			if !reflect.DeepEqual(capabilities["drop"], []any{"ALL"}) {
 				t.Fatalf("worker must start from an empty capability set: %#v", capabilities)
 			}
-			want := map[string]bool{"SETUID": true, "SETGID": true, "CHOWN": true, "DAC_OVERRIDE": true, "FOWNER": true, "FSETID": true, "SYS_CHROOT": true, "AUDIT_WRITE": true}
+			want := map[string]bool{"SETUID": true, "SETGID": true, "CHOWN": true, "DAC_OVERRIDE": true, "FOWNER": true, "FSETID": true, "AUDIT_WRITE": true}
 			added, ok := capabilities["add"].([]any)
 			if !ok || len(added) != len(want) {
 				t.Fatalf("worker must add only the reviewed sudo/apt capability set: %#v", capabilities)
@@ -59,9 +59,9 @@ func TestRenderDevRayClusterSudoKeepsPodAndStorageIsolation(t *testing.T) {
 			manifest, err := RenderDevRayCluster(workspace, WorkspaceRenderOptions{
 				Image: "registry.example/dev@sha256:" + strings.Repeat("a", 64), ServiceAccount: serviceAccount,
 				DataMounts: DataMountPlan{
-					Personal: &DataMountRoot{ClaimName: "data-user-a"},
-					Team: &DataMountRoot{ClaimName: "data-team-a", ReadOnly: true},
-					Public: &DataMountRoot{ClaimName: "data-public", ReadOnly: true},
+					Personal:    &DataMountRoot{ClaimName: "data-user-a"},
+					Team:        &DataMountRoot{ClaimName: "data-team-a", ReadOnly: true},
+					Public:      &DataMountRoot{ClaimName: "data-public", ReadOnly: true},
 					IDCOriginal: &DataMountRoot{ClaimName: "idc-original-ro", ReadOnly: true},
 				},
 			})

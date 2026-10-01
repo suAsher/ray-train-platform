@@ -3,6 +3,8 @@
 # Feed this script on stdin; do not mount a workspace, home, socket or credentials.
 # Example (run on the builder, with a candidate image already available):
 # docker run --rm -i --network bridge --cpus 2 --memory 4g --pids-limit 256 \
+#   --cap-drop ALL --cap-add SETUID --cap-add SETGID --cap-add CHOWN \
+#   --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add FSETID --cap-add AUDIT_WRITE \
 #   -e RAYTRAIN_SUDO_SMOKE=1 --entrypoint /bin/bash "$candidate_image" \
 #   -s -- hello < images/environment-workspace/sudo_smoke.sh
 # Do not add --user=root, --privileged, or --security-opt=no-new-privileges.

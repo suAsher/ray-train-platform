@@ -76,10 +76,12 @@ func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderO
 	headContainerSecurity := map[string]any{"allowPrivilegeEscalation": false, "capabilities": map[string]any{"drop": []any{"ALL"}}}
 	workerContainerSecurity := map[string]any{
 		"allowPrivilegeEscalation": true,
-		"privileged": false,
+		"privileged":               false,
 		"capabilities": map[string]any{
 			"drop": []any{"ALL"},
-			"add": []any{"SETUID", "SETGID", "CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "SYS_CHROOT", "AUDIT_WRITE"},
+			// AUDIT_WRITE lets sudo record its normal audit event without an
+			// "unable to send audit message: Operation not permitted" warning.
+			"add": []any{"SETUID", "SETGID", "CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "AUDIT_WRITE"},
 		},
 	}
 	// Editors start in the persistent personal workspace as soon as it is
