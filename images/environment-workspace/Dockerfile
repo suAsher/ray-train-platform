@@ -3,6 +3,7 @@ ARG CODE_SERVER_IMAGE=harbor.wellspiking.ai/hub/codercom/code-server:4.93.1
 FROM ${CODE_SERVER_IMAGE} AS code-server
 FROM harbor.wellspiking.ai/guofeng.su/raytrain-base@sha256:3ec73cf863847a42bcac035309259ad9d08fd74561384cc8476020c62264d6e2
 ARG PIP_INDEX_URL=https://mirrors.ivolces.com/pypi/simple/
+ARG APT_MIRROR=http://repo.wellspiking.ai/repository/ubuntu-jammy
 USER root
 COPY images/environment-workspace/pip.conf /etc/pip.conf
 # Editor server dependencies never enter the training interpreter.
@@ -47,9 +48,25 @@ RUN chmod 0755 /usr/local/bin/raytrain-environment /usr/local/bin/raytrain-envir
  && printf '\n. /opt/raytrain/environment-shell.sh\n' >> /home/ray/.profile \
  && printf '%s\n' '{"python.defaultInterpreterPath":"/opt/raytrain/environment/bin/python"}' > /home/ray/.local/share/code-server/User/settings.json \
  && chown ray:users /home/ray/.local/share/code-server/User/settings.json
+# System tools are intentionally part of the debug image only. User APT changes
+# remain in the disposable container layer, outside Python environment capture.
+RUN printf '%s\n' \
+      "deb ${APT_MIRROR} jammy main restricted universe multiverse" \
+      "deb ${APT_MIRROR} jammy-updates main restricted universe multiverse" \
+      "deb ${APT_MIRROR} jammy-security main restricted universe multiverse" \
+      "deb ${APT_MIRROR} jammy-backports main restricted universe multiverse" \
+      > /etc/apt/sources.list \
+ && apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      sudo vim ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && printf '%s\n' 'ray ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/raytrain-debug \
+ && chmod 0440 /etc/sudoers.d/raytrain-debug \
+ && visudo -cf /etc/sudoers.d/raytrain-debug
 USER ray
 WORKDIR /workspace
 EXPOSE 8888 8443
-RUN raytrain-environment-selfcheck \
+RUN command -v vim && vim --version >/dev/null \
+ && raytrain-environment-selfcheck \
  && python /usr/local/lib/raytrain-environment/jupyter_smoke.py \
  && rm -f /home/ray/.local/share/jupyter/runtime/jupyter_cookie_secret

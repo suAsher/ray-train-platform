@@ -69,11 +69,19 @@ func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderO
 	volumesForPlan := volumes
 	headMounts, volumesForPlan = appendDataMountPlan(headMounts, volumesForPlan, options.DataMounts)
 	workerMounts, _ = appendDataMountPlan(workerMounts, volumes, options.DataMounts)
-	// The Ray images execute as uid 1000. fsGroup makes PVC-backed workspace
-	// subPaths writable to that non-root user while keeping the Pod otherwise
-	// restricted; it also makes fresh emptyDir files usable from Jupyter/VS Code.
+	// The Ray images start as uid 1000. fsGroup keeps PVC-backed workspace
+	// subPaths and emptyDir files writable to that default user. Only the
+	// interactive worker permits explicit sudo inside its container.
 	securityContext := map[string]any{"seccompProfile": map[string]any{"type": "RuntimeDefault"}, "fsGroup": int64(1000), "fsGroupChangePolicy": "OnRootMismatch"}
-	containerSecurity := map[string]any{"allowPrivilegeEscalation": false, "capabilities": map[string]any{"drop": []any{"ALL"}}}
+	headContainerSecurity := map[string]any{"allowPrivilegeEscalation": false, "capabilities": map[string]any{"drop": []any{"ALL"}}}
+	workerContainerSecurity := map[string]any{
+		"allowPrivilegeEscalation": true,
+		"privileged": false,
+		"capabilities": map[string]any{
+			"drop": []any{"ALL"},
+			"add": []any{"SETUID", "SETGID", "CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "SYS_CHROOT", "AUDIT_WRITE"},
+		},
+	}
 	// Editors start in the persistent personal workspace as soon as it is
 	// mounted. Without a personal mount, retain the image user's home as a
 	// clearly temporary fallback instead of pretending /workspace is durable.
@@ -88,7 +96,7 @@ func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderO
 		"rayStartParams": map[string]any{"dashboard-host": "0.0.0.0", "num-gpus": "0"},
 		"template": map[string]any{"spec": map[string]any{
 			"serviceAccountName":           options.ServiceAccount,
-			"automountServiceAccountToken": options.ServiceAccount != "",
+			"automountServiceAccountToken": false,
 			"securityContext":              securityContext,
 			"containers": []any{map[string]any{
 				"name": "ray-head", "image": options.Image, "imagePullPolicy": domain.RuntimeImagePullPolicy(options.Image),
@@ -98,7 +106,7 @@ func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderO
 					map[string]any{"name": "dashboard", "containerPort": int64(8265)},
 				},
 				"resources":    map[string]any{"requests": map[string]any{"cpu": "4", "memory": "16Gi"}, "limits": map[string]any{"cpu": "8", "memory": "32Gi"}},
-				"volumeMounts": headMounts, "securityContext": containerSecurity,
+				"volumeMounts": headMounts, "securityContext": headContainerSecurity,
 			}},
 			"volumes": volumesForPlan,
 		}},
@@ -115,7 +123,7 @@ func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderO
 		"rayStartParams": map[string]any{"num-gpus": strconv.Itoa(workspace.GPUCount)},
 		"template": map[string]any{"spec": map[string]any{
 			"serviceAccountName":           options.ServiceAccount,
-			"automountServiceAccountToken": options.ServiceAccount != "",
+			"automountServiceAccountToken": false,
 			"securityContext":              securityContext,
 			"containers": []any{map[string]any{
 				"name": "ray-worker", "image": options.Image, "imagePullPolicy": domain.RuntimeImagePullPolicy(options.Image),
@@ -126,7 +134,7 @@ func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderO
 				"lifecycle":    map[string]any{"postStart": map[string]any{"exec": map[string]any{"command": []any{"/bin/sh", "-c", interactiveTools}}}},
 				"resources":    workspaceWorkerResources(workspace.GPUCount),
 				"env":          workspaceWorkerEnvironment(workspace.GPUCount),
-				"volumeMounts": workerMounts, "securityContext": containerSecurity,
+				"volumeMounts": workerMounts, "securityContext": workerContainerSecurity,
 			}},
 			"volumes": volumesForPlan,
 		}},

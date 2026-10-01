@@ -1,5 +1,22 @@
 package helpdocs
 
+const debugSystemPackagesGuide = `#### 临时安装系统包（sudo / apt）
+
+平台升级后，使用已更新调试镜像新建的调试环境允许通过 sudo 安装系统包，默认终端仍以普通用户运行。已有调试实例不会自动获得这项能力。在调试终端执行：
+
+~~~bash
+# 将 PACKAGE_NAME 替换为所需的系统包名
+sudo apt-get update && sudo apt-get install --no-install-recommends PACKAGE_NAME
+~~~
+
+旧镜像可能没有 sudo；如果出现 sudo: command not found，先保存所需文件和受管 Python 依赖版本，再自行新建使用已更新镜像的调试环境；不希望重建时可请管理员准备所需镜像。
+
+系统包不会进入保存的训练环境；它们只在当前调试容器内临时可用，重建后不会保留，需要重新安装。保存训练环境仍只从固定 Base 和受管 Python 依赖重建，不是整个容器的快照。正式训练需要这些系统包时，应将它们写入专用训练镜像的 Dockerfile 并按固定摘要登记。
+
+/workspace 和 /mnt/storage/me 中的个人文件仍由个人持久存储保留。写代码、解压和管理这些文件时使用普通用户，避免用 sudo 在个人持久目录中创建 root 所有者的文件，否则普通用户可能无法继续编辑。
+
+Python 依赖仍使用 /opt/raytrain/environment/bin/python，通过 python -m pip 安装并按保存训练环境流程验证、保存；不要用 sudo pip 改写系统 Python 或绕过受管环境。`
+
 const environmentImageGuide = `### 在 ~/ 执行安装，能保存吗？
 
 **当前目录不决定安装位置，实际使用的 Python 和安装方式才决定。** 在 ~/、/workspace 或其他目录执行 python -m pip，只要使用 /opt/raytrain/environment/bin/python、没有改用其他安装目录，并且依赖满足下面的 wheel 条件，就可以保存。反过来，在 ~/venv、~/conda 或 ~/.local 里自行安装的环境不会因此进入训练镜像。
@@ -36,6 +53,8 @@ python -m pip check
 
 安装完成后，用同一 Python 验证 import、读取一个小样本并运行项目的最小训练。记录所用源码版本；确认依赖可用后再保存。
 
+` + debugSystemPackagesGuide + `
+
 ### 3. 保存到自己有写权限的 Harbor 项目
 
 1. 保持工作区运行，点击「保存当前调试环境」，填写环境名称和说明，选择「仅本人」或「当前团队」可用。此范围控制平台镜像目录与训练提交权限；Harbor 仓库自身的可见范围由 Harbor 项目权限决定。
@@ -69,7 +88,7 @@ READY 表示镜像构建与拉取检查通过，不包含业务模型或 GPU 兼
 | 普通 home（通常为 /home/ray）中的代码、配置和文件 | 不进入 | 临时目录，可能丢失；需要保留的项目放到 /workspace |
 | /workspace 中的项目和文件 | 不进入；训练源码需另建代码快照、上传 ZIP 或固定 Git commit | 由个人持久存储保留，和环境镜像版本分别管理 |
 | /mnt/storage/me 中的数据、权重和结果 | 不进入；训练时通过数据与输出路径使用 | 由个人持久存储保留，和环境镜像版本分别管理 |
-| APT/系统软件与容器其他目录 | 不进入；此入口不捕获系统层改动 | 不保证保留；需要写入专用镜像的 Dockerfile 并重新构建 |
+| APT/系统软件与容器其他目录 | 不进入；此入口不捕获系统层改动 | 系统包重建后不会保留，需重新安装；训练需要时写入专用镜像的 Dockerfile 并重新构建 |
 
 如果你使用 ~/anaconda3/bin/python，或在 ~/anaconda3/envs/ 下新建 Conda 环境，后续安装不属于可保存的受管环境。原 Base 自带的 /home/ray/anaconda3 由基础镜像提供，不能通过自动保存来替换它；上表的“不进入”指你后来新增或修改的内容。
 

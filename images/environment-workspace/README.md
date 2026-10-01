@@ -19,11 +19,26 @@ python -m pip check
 
 新调试镜像的 `/etc/pip.conf` 和默认安装源使用 `https://mirrors.ivolces.com/pypi/simple/`。这只作用于本次新增镜像，不修改原 Base、现有调试环境或节点宿主机的 pip、APT、Docker 配置。离线 wheel 可以用于调试安装，但保存时仍需从固定源取得内容一致的 wheel；私有或仅本地存在的 wheel 材料上传尚未包含在本版能力中。
 
+## 临时安装系统包（sudo / apt）
+
+平台升级后，使用已更新调试镜像新建的调试环境支持 sudo 和 apt；终端默认仍以普通用户运行，已有调试实例不会自动获得这项能力。在调试终端执行：
+
+```bash
+# 将 PACKAGE_NAME 替换为所需的系统包名
+sudo apt-get update && sudo apt-get install --no-install-recommends PACKAGE_NAME
+```
+
+旧镜像可能没有 sudo。如果出现 `sudo: command not found`，先保存所需文件和受管 Python 依赖版本，再自行新建使用已更新镜像的调试环境；不希望重建时可请管理员准备所需镜像。
+
+**系统包不会进入保存的训练环境，重建后不会保留。** apt 安装只修改当前调试容器的系统层；重新创建容器后需要重新安装。保存功能仍从固定 Base 和受管 Python 依赖重建训练镜像，不生成整个容器或整个 home 的快照。正式训练依赖这些系统包时，应通过专用训练镜像的 Dockerfile 固定它们并按摘要登记。
+
+`/workspace` 和 `/mnt/storage/me` 的个人文件仍由个人持久存储保留。用普通用户写代码、解压和管理项目文件，避免使用 sudo 在这些目录中产生 root 所有者的文件，影响后续编辑。Python 依赖继续使用 `/opt/raytrain/environment/bin/python` 与 `python -m pip`，按原流程验证并保存；不要用 `sudo pip` 改写系统 Python 或绕过受管环境。
+
 ## 捕获与重建合同
 
 `/usr/local/bin/raytrain-environment capture` 输出不超过 1 MiB 的 schema 1 JSON。字段为 `schemaVersion`、`baseImage`、`pythonVersion`、`packages`、`checks`；新增包条目只有规范名称、固定版本和实际安装文件内容指纹 `filesHash`。不输出用户文件、源码、环境变量或凭据。
 
-基础包实际文件与构建时基线比较；新增包校验 RECORD、拒绝直接来源、软链接和未登记文件。捕获前后再次比对避免安装过程中的不一致。解释器、venv 配置与启动脚本使用构建时由 root 固定的哈希校验，包不能替换 Python、Ray、torchrun 或平台命令。对有解释器路径差异的其他生成脚本校验安装记录，但不加入可移植 wheel 指纹；忽略 RECORD/INSTALLER/REQUESTED、bytecode 等安装生成项。wheel 的 `.data` 只支持 Python 库与环境内 `share/` 资料（例如 IPykernel kernelspec），外部路径、headers 和自带 scripts 明确拒绝。
+基础包实际文件与构建时基线比较；新增包校验 RECORD、拒绝直接来源、软链接和未登记文件。捕获前后再次比对避免安装过程中的不一致。解释器、venv 配置与启动脚本按构建时记录的哈希校验；替换 Python、Ray、torchrun 或平台命令不属于支持的保存方式。允许 sudo 不扩大捕获范围，也不保证捕获能识别系统层的所有修改。对有解释器路径差异的其他生成脚本校验安装记录，但不加入可移植 wheel 指纹；忽略 RECORD/INSTALLER/REQUESTED、bytecode 等安装生成项。wheel 的 `.data` 只支持 Python 库与环境内 `share/` 资料（例如 IPykernel kernelspec），外部路径、headers 和自带 scripts 明确拒绝。
 
 捕获失败 stderr、构建失败终止消息只包含固定 `code`，不拼接底层异常、源地址或凭据。UI 依据代码提示依赖发生变化、wheel 不可用、文件被修改、超时或临时空间不足。
 

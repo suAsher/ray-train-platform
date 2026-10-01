@@ -235,6 +235,8 @@ const debugPublicGuide = `### 交互式调试
 
 「交互式调试」提供 JupyterLab / VS Code，通过平台短期票据和 HttpOnly Cookie 访问，不暴露 kubeconfig、节点 SSH 或公共 shell。它适合检查依赖、样本读取、入口脚本和挂载路径。调试环境会占用团队配额，长时间不用请关闭。
 
+` + debugSystemPackagesGuide + `
+
 ### 连接运行中的 Worker
 
 ` + "```bash\nspk-rayjob connect JOB_ID\nspk-rayjob connect JOB_ID --worker 0\n```" + `
