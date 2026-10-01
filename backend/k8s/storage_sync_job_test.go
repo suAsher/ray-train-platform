@@ -92,6 +92,58 @@ func TestStorageSyncWorkerPinsProcessIdentityAndWaitsForTermination(t *testing.T
 	if !found { t.Fatal("worker lacks immutable process identity for the attempt claim") }
 }
 
+func TestStorageSyncReceiptRecoveryHasSeparateIdentityAndReadOnlyWorkspace(t *testing.T) {
+	cfg, spec := storageSyncRuntimeConfig(), storageSyncRuntimeSpec("RECOVER")
+	spec.SubjectKind = "preview"
+	spec.CheckpointRef = "/work/previews/" + spec.RunID
+	job, request, err := renderStorageSyncJob(cfg, spec)
+	if err != nil { t.Fatal(err) }
+	if job.Name != storageSyncJobName(spec.RunID, spec.Attempt) + "-receipt" || request.Name != job.Name { t.Fatal("receipt recovery collides with original attempt") }
+	for _, volume := range job.Spec.Template.Spec.Volumes {
+		if volume.NFS != nil || (volume.Secret != nil && volume.Secret.SecretName == cfg.CredentialSecret) { t.Fatal("receipt recovery received source or write access") }
+		if volume.PersistentVolumeClaim != nil && !volume.PersistentVolumeClaim.ReadOnly { t.Fatal("recovery checkpoint claim is writable") }
+	}
+	for _, mount := range job.Spec.Template.Spec.Containers[0].VolumeMounts {
+		if mount.Name == "work" && !mount.ReadOnly { t.Fatal("recovery checkpoint mount is writable") }
+	}
+	args := job.Spec.Template.Spec.Containers[0].Args
+	found := false
+	for i, arg := range args { if arg == "--work-dir" && i+1<len(args) && args[i+1]==spec.CheckpointRef { found=true } }
+	if !found { t.Fatal("recovery does not use the original governed checkpoint directory") }
+}
+
+func TestStorageSyncCheckpointDirectoryIsBoundToSubject(t *testing.T) {
+	for _, checkpoint := range []string{"/work/another-run", "/work/run-123/../another-run", "/tmp/result", "/work/"} {
+		spec := storageSyncRuntimeSpec("PREVIEW")
+		spec.CheckpointRef = checkpoint
+		if _, _, err := renderStorageSyncJob(storageSyncRuntimeConfig(), spec); err == nil { t.Fatalf("accepted checkpoint directory %q", checkpoint) }
+	}
+}
+
+func TestStorageSyncReceiptRecoveryRequiresOriginalTerminationProof(t *testing.T) {
+	for _, terminated := range []bool{false, true} {
+		cfg, spec := storageSyncRuntimeConfig(), storageSyncRuntimeSpec("TRANSFER")
+		job, _, err := renderStorageSyncJob(cfg, spec)
+		if err != nil { t.Fatal(err) }
+		job.UID = "original-job"
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name:"original-worker", Namespace:cfg.Namespace, Labels:job.Labels, OwnerReferences:[]metav1.OwnerReference{{Kind:"Job",UID:job.UID,Controller:pointerTo(true)}}},Status:corev1.PodStatus{Phase:corev1.PodRunning}}
+		if terminated { pod.Status.Phase=corev1.PodSucceeded;pod.Status.ContainerStatuses=[]corev1.ContainerStatus{{Name:storageSyncContainer,State:corev1.ContainerState{Terminated:&corev1.ContainerStateTerminated{ExitCode:0}}}} }
+		claim := &corev1.PersistentVolumeClaim{ObjectMeta:metav1.ObjectMeta{Name:cfg.WorkClaimName,Namespace:cfg.Namespace},Status:corev1.PersistentVolumeClaimStatus{Phase:corev1.ClaimBound}}
+		kube := fake.NewSimpleClientset(job,pod,claim)
+		client := NewStorageSyncClient(kube,cfg)
+		recoverer, ok := any(client).(interface{RecoverReceipt(context.Context,storagesync.WorkSpec)error})
+		if !ok { t.Fatal("runtime does not support read-only receipt recovery") }
+		err = recoverer.RecoverReceipt(context.Background(),spec)
+		if !terminated && err==nil { t.Fatal("unconfirmed writer allowed receipt recovery") }
+		if terminated && err!=nil { t.Fatal(err) }
+		jobs, err := kube.BatchV1().Jobs(cfg.Namespace).List(context.Background(),metav1.ListOptions{})
+		if err!=nil { t.Fatal(err) }
+		expected:=1;if terminated{expected=2}
+		if len(jobs.Items)!=expected { t.Fatalf("unexpected worker count %d",len(jobs.Items)) }
+		for _, action:=range kube.Actions(){if action.GetVerb()=="delete"{t.Fatal("receipt recovery deleted original stop evidence")}}
+	}
+}
+
 func TestStorageSyncRendererRejectsUnsafeSpec(t *testing.T) {
 	for _, change := range []func(*config.StorageSyncConfig, *storagesync.WorkSpec){
 		func(c *config.StorageSyncConfig, s *storagesync.WorkSpec) { c.NodeSelector = nil },
@@ -106,12 +158,38 @@ func TestStorageSyncRendererRejectsUnsafeSpec(t *testing.T) {
 	}
 }
 
-func TestStorageSyncPendingPVCDoesNotCreateWorker(t *testing.T) {
+func TestStorageSyncPendingPVCDoesNotCreateWritableWorker(t *testing.T) {
 	cfg := storageSyncRuntimeConfig()
 	kube := fake.NewSimpleClientset(&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: cfg.WorkClaimName, Namespace: cfg.Namespace}, Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending}})
 	client := NewStorageSyncClient(kube, cfg)
-	if _, err := client.Ensure(context.Background(), storageSyncRuntimeSpec("PREVIEW")); err == nil { t.Fatal("Pending PVC accepted") }
+	if _, err := client.Ensure(context.Background(), storageSyncRuntimeSpec("TRANSFER")); err == nil { t.Fatal("Pending PVC accepted for transfer") }
 	for _, action := range kube.Actions() { if action.GetVerb() == "create" { t.Fatal("worker resources created despite unavailable checkpoint storage") } }
+}
+
+func TestStorageSyncReadOnlyPreviewCanBindPendingWorkPVC(t *testing.T) {
+	for _, phase := range []string{"BROWSE", "PREVIEW", "REVALIDATE"} {
+		cfg := storageSyncRuntimeConfig()
+		kube := fake.NewSimpleClientset(&corev1.PersistentVolumeClaim{ObjectMeta:metav1.ObjectMeta{Name:cfg.WorkClaimName,Namespace:cfg.Namespace},Spec:corev1.PersistentVolumeClaimSpec{StorageClassName:pointerTo("ebs-ssd")},Status:corev1.PersistentVolumeClaimStatus{Phase:corev1.ClaimPending}})
+		client := NewStorageSyncClient(kube,cfg)
+		if _,err:=client.Ensure(context.Background(),storageSyncRuntimeSpec(phase));err!=nil{t.Fatalf("read-only %s cannot become first PVC consumer: %v",phase,err)}
+		jobs,err:=kube.BatchV1().Jobs(cfg.Namespace).List(context.Background(),metav1.ListOptions{})
+		if err!=nil||len(jobs.Items)!=1{t.Fatal("read-only provisioning consumer was not created")}
+		for _,volume:=range jobs.Items[0].Spec.Template.Spec.Volumes{if volume.Secret!=nil&&volume.Secret.SecretName==cfg.CredentialSecret{t.Fatal("PVC-binding phase received write credentials")}}
+	}
+}
+
+func TestStorageSyncUnavailableWorkPVCNeverCreatesAnyWorker(t *testing.T) {
+	for _, state:=range []string{"lost","deleting","missing"}{
+		cfg:=storageSyncRuntimeConfig()
+		claim:=&corev1.PersistentVolumeClaim{ObjectMeta:metav1.ObjectMeta{Name:cfg.WorkClaimName,Namespace:cfg.Namespace},Status:corev1.PersistentVolumeClaimStatus{Phase:corev1.ClaimBound}}
+		if state=="lost"{claim.Status.Phase=corev1.ClaimLost}
+		if state=="deleting"{now:=metav1.Now();claim.DeletionTimestamp=&now}
+		kube:=fake.NewSimpleClientset()
+		if state!="missing"{if _,err:=kube.CoreV1().PersistentVolumeClaims(cfg.Namespace).Create(context.Background(),claim,metav1.CreateOptions{});err!=nil{t.Fatal(err)};kube.ClearActions()}
+		client:=NewStorageSyncClient(kube,cfg)
+		if _,err:=client.Ensure(context.Background(),storageSyncRuntimeSpec("PREVIEW"));err==nil{t.Fatalf("unavailable PVC %s accepted",state)}
+		for _,action:=range kube.Actions(){if action.GetVerb()=="create"{t.Fatal("worker created without usable checkpoint claim")}}
+	}
 }
 
 func TestStorageSyncEnsureAdoptsExistingMatchingAttemptAndRejectsCollision(t *testing.T) {

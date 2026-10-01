@@ -138,3 +138,35 @@ class WorkerFlowTests(unittest.TestCase):
             with patch('storage_sync.worker.from_config') as writer, self.assertRaisesRegex(SyncError, 'MANIFEST_MISMATCH'):
                 _transfer({**work_spec(), 'manifestDigest': 'wrong'}, RecordingReporter(), Path(directory), '/unused')
             writer.assert_not_called()
+
+
+class RecoveryTests(unittest.TestCase):
+    def spec(self):
+        return {'runId': 'ssr-12345678-1234-1234-1234-123456789012', 'attempt': 2, 'generation': 4,
+                'phase': 'RECOVER', 'callbackUrl': 'http://backend/report',
+                'checkpointRef': '/work/ssr-12345678-1234-1234-1234-123456789012'}
+
+    def test_recovery_replays_exact_original_receipt_without_claim_or_writer(self):
+        spec = self.spec()
+        receipt = {'runId': spec['runId'], 'attempt': 2, 'generation': 4, 'sequence': 19,
+                   'workerId': 'original-pod', 'state': 'FAILED', 'phase': 'VERIFYING', 'requestsDrained': False,
+                   'failureReason': 'UNKNOWN_WRITE_OUTCOME'}
+        with (patch('storage_sync.worker.load_json', return_value=receipt), patch('storage_sync.worker._json_request', create=True) as request,
+              patch('storage_sync.worker.Reporter') as reporter, patch('storage_sync.worker.from_config') as writer):
+            code = run(spec, 'fresh-scoped-token', Path(spec['checkpointRef']))
+        self.assertEqual(code, 0)
+        self.assertEqual(request.call_args.args[2], receipt)
+        reporter.assert_not_called()
+        writer.assert_not_called()
+
+    def test_recovery_rejects_wrong_attempt_or_nonterminal_or_wrong_path(self):
+        spec = self.spec()
+        base = {'runId': spec['runId'], 'attempt': 2, 'generation': 4, 'sequence': 19,
+                'workerId': 'original', 'state': 'SUCCEEDED', 'requestsDrained': True}
+        cases = [({**base, 'attempt': 1}, spec['checkpointRef']),
+                 ({**base, 'state': 'RUNNING'}, spec['checkpointRef']), (base, '/work/other')]
+        for receipt, path in cases:
+            with (self.subTest(path=path, receipt=receipt), patch('storage_sync.worker.load_json', return_value=receipt),
+                  patch('storage_sync.worker._json_request', create=True) as request):
+                self.assertEqual(run(spec, 'fresh', Path(path)), 2)
+                request.assert_not_called()

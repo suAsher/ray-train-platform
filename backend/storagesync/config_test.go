@@ -57,6 +57,7 @@ func TestProgressNoOverflowAndVerifiedSuccess(t *testing.T) {
 	p.CompletedBytes=11; if p.Validate()==nil {t.Fatal("progress exceeded 100%")}
 	p=Progress{ScanComplete:true};if !p.Complete(){t.Fatal("empty manifest did not complete")}
 	p=Progress{SourceFiles:1,VerifiedFiles:1};if p.Complete(){t.Fatal("unfrozen scan completed")}
+	p=Progress{ScanComplete:true,SourceFiles:1,SourceBytes:10,VerifiedFiles:1,VerifiedBytes:10};if p.Complete(){t.Fatal("source without transfer or reuse assignment completed")}
 }
 
 func TestPublicSnapshotsDoNotExposePhysicalStorage(t *testing.T) {

@@ -108,3 +108,50 @@ class GuardTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+import tempfile
+from pathlib import Path
+from storage_sync.tos_adapter import from_config
+
+
+class AdapterPaginationTests(unittest.TestCase):
+    def test_list_requests_exactly_one_page(self):
+        client = FakeClient()
+        client.list_objects_type2 = lambda *args, **kwargs: SimpleNamespace(contents=[SimpleNamespace(key='x/a', size=3, etag='e')],
+                                                                          is_truncated=True, next_continuation_token='next')
+        values, cursor = TOSStore(client).list_page('bucket', 'x/')
+        self.assertEqual(values[0].key, 'x/a')
+        self.assertEqual(cursor, 'next')
+
+    def test_parts_paginate_and_missing_upload_is_identified(self):
+        calls = []
+        def listed(*args, **kwargs):
+            calls.append(kwargs['part_number_marker'])
+            number = 1 if kwargs['part_number_marker'] is None else 2
+            return SimpleNamespace(parts=[SimpleNamespace(part_number=number, etag=f'e{number}', size=10)],
+                                   is_truncated=number == 1, next_part_number_marker=1)
+        client = FakeClient()
+        client.list_parts = listed
+        self.assertEqual(len(TOSStore(client).list_parts('b', 'k', 'u')), 2)
+        self.assertEqual(calls, [None, 1])
+        error = RuntimeError('private SDK details'); error.status_code = 404
+        client = FakeClient(); client.failure = error
+        with self.assertRaisesRegex(SyncError, 'MULTIPART_NOT_FOUND'):
+            TOSStore(client).list_parts('b', 'k', 'u')
+        self.assertIsNone(TOSStore(client).head('b', 'missing'))
+
+    def test_tosutil_configuration_uses_zero_automatic_retries(self):
+        calls = []
+        fake_tos = SimpleNamespace(TosClientV2=lambda *args, **kwargs: calls.append((args, kwargs)) or FakeClient())
+        with tempfile.TemporaryDirectory() as directory, patch.dict(sys.modules, {'tos': fake_tos}):
+            config = Path(directory) / 'config'
+            config.write_text('accessKeyID=test-key\nsecretAccessKey=test-secret\nendpoint=https://tos.example\nregion=test-region\n')
+            from_config(config)
+        self.assertEqual(calls[0][1]['max_retry_count'], 0)
+        self.assertTrue(calls[0][1]['enable_crc'])
+
+    def test_incomplete_configuration_has_sanitized_error(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(sys.modules, {'tos': SimpleNamespace()}):
+            config = Path(directory) / 'config'; config.write_text('accessKeyID=private-example\n')
+            with self.assertRaisesRegex(SyncError, '^TOS_CONFIGURATION_INCOMPLETE$'):
+                from_config(config)

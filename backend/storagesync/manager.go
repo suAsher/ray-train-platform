@@ -103,6 +103,12 @@ func(m *Manager)GetWorkSpec(ctx context.Context,id string,attempt int,generation
 	run,err:=m.repo.GetRun(ctx,id);if err==nil{if run.Attempt!=attempt||run.Generation!=generation||!run.Active()||run.State=="PAUSED"{return WorkSpec{},ErrStaleAttempt};return m.runSpec(run),nil};if !errors.Is(err,ErrNotFound){return WorkSpec{},err}
 	p,err:=m.repo.GetPreview(ctx,id);if err!=nil{return WorkSpec{},err};if p.Attempt!=attempt||p.Generation!=generation||p.State!="RUNNING"||!p.ExpiresAt.After(m.now()){return WorkSpec{},ErrStaleAttempt};return m.previewSpec(p),nil
 }
+// GetReportSpec permits an exact replay of a final receipt after its run has
+// finished. It must never authorize a metadata read or a new worker claim.
+func(m *Manager)GetReportSpec(ctx context.Context,id string,attempt int,generation int64)(WorkSpec,error){
+	r,err:=m.repo.GetRun(ctx,id);if err==nil{if r.Attempt!=attempt||r.Generation!=generation{return WorkSpec{},ErrStaleAttempt};return m.runSpec(r),nil};if !errors.Is(err,ErrNotFound){return WorkSpec{},err}
+	p,err:=m.repo.GetPreview(ctx,id);if err!=nil{return WorkSpec{},err};if p.Attempt!=attempt||p.Generation!=generation{return WorkSpec{},ErrStaleAttempt};return m.previewSpec(p),nil
+}
 func(m *Manager)ControlForRun(ctx context.Context,id string)(string,error){r,err:=m.repo.GetRun(ctx,id);if err!=nil{return "",err};switch r.State{case "PAUSING":return "PAUSE",nil;case "CANCELLING":return "CANCEL",nil};return "",nil}
 func(m *Manager)runSpec(r Run)WorkSpec{return WorkSpec{SubjectKind:"run",RunID:r.ID,PreviewID:r.PreviewID,Attempt:r.Attempt,Generation:r.Generation,Phase:r.Phase,Config:r.Config,Mappings:r.Resolved,ManifestDigest:r.ManifestDigest,SourceFingerprint:r.SourceFingerprint,TargetFingerprint:r.TargetFingerprint,BaselineRef:r.BaselineRef,CheckpointRef:"/work/"+r.ID,CallbackURL:m.options.CallbackURL,MetadataURL:m.options.MetadataURL}}
 func(m *Manager)previewSpec(p Preview)WorkSpec{return WorkSpec{SubjectKind:"preview",RunID:p.ID,PreviewID:p.ID,Attempt:p.Attempt,Generation:p.Generation,Phase:p.Kind,Config:p.Config,Mappings:p.Resolved,BaselineRef:p.BaselineRef,CheckpointRef:"/work/previews/"+p.ID,CallbackURL:m.options.CallbackURL,MetadataURL:m.options.MetadataURL,Cursor:p.Cursor,Limit:p.Limit}}

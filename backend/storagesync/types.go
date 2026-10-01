@@ -115,7 +115,6 @@ type FileResult struct {
 	MappingIndex int `json:"mappingIndex"`
 	RelativePath string `json:"relativePath"`
 	State string `json:"state"`
-	Stage string `json:"stage,omitempty"`
 	SizeBytes int64 `json:"sizeBytes"`
 	ErrorCode string `json:"errorCode,omitempty"`
 }
@@ -134,6 +133,7 @@ type Preview struct {
 	ResolutionDigest string `json:"-"`
 	BaselineRef string `json:"-"`
 	State string `json:"state"`
+	Stage string `json:"stage,omitempty"`
 	ManifestDigest string `json:"manifestDigest"`
 	SourceFingerprint string `json:"-"`
 	TargetFingerprint string `json:"-"`

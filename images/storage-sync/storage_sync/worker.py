@@ -54,7 +54,8 @@ def _scan(spec, reader, reporter):
                          baseline=baseline,
                          policy=spec['config'].get('conflictPolicy', 'UPDATE'),
                          layout='CONTENTS',  # Controller already resolved layout into final destination prefix.
-                         source_name=name, verification=verification)
+                         source_name=name, verification=verification,
+                         target_is_file=not is_directory and mapping.get('layout', 'DIRECTORY') == 'DIRECTORY')
         # SDK capabilities are statically known; planning never initializes credentials.
         validate_plan_capabilities(plan, TOSStore)
         for item in plan.entries:

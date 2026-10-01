@@ -5,10 +5,37 @@ import unittest
 from pathlib import Path
 
 from storage_sync.filesystem import browse_idc, open_verified, scan_idc
-from storage_sync.model import SyncError
+from storage_sync.model import StopRequested, SyncError
 
 
 class FilesystemSafetyTests(unittest.TestCase):
+    def test_discovery_reports_cumulative_counts_across_directories(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'a').write_bytes(b'a')
+            (root / 'nested').mkdir()
+            (root / 'nested' / 'b').write_bytes(b'bb')
+            (root / 'nested' / 'c').write_bytes(b'ccc')
+            reports = []
+            entries = scan_idc(root, '', 'METADATA', discovered=lambda count, size: reports.append((count, size)))
+            self.assertEqual(len(entries), 3)
+            self.assertEqual(reports, [(1, 1), (2, 3), (3, 6)])
+
+    def test_discovery_callback_can_stop_scan_immediately(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'a').write_bytes(b'a')
+            (root / 'z').symlink_to('/etc/passwd')
+            reports = []
+
+            def pause(count, size):
+                reports.append((count, size))
+                raise StopRequested('PAUSE')
+
+            with self.assertRaisesRegex(StopRequested, 'PAUSE'):
+                scan_idc(root, '', 'CONTENT', discovered=pause)
+            self.assertEqual(reports, [(1, 1)])
+
     def test_file_basename_and_selected_directory_contents(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

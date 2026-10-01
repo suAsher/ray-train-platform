@@ -71,14 +71,16 @@ def same_content(source, target):
 
 
 def make_plan(entries, reader, bucket, prefix, mode='INCREMENTAL', baseline=None,
-              policy='UPDATE', layout='CONTENTS', source_name='', verification='METADATA'):
+              policy='UPDATE', layout='CONTENTS', source_name='', verification='METADATA', target_is_file=False):
     prefix = safe_relative(prefix, allow_empty=True)
     if layout in ('KEEP_DIRECTORY', 'DIRECTORY'):
         prefix = '/'.join(filter(None, (prefix, safe_relative(source_name))))
     selected = []
     target_keys = set()
+    if target_is_file and len(entries) != 1:
+        raise SyncError('INVALID_FILE_MAPPING')
     for source in entries:
-        key = '/'.join(filter(None, (prefix, safe_relative(source.relative_path))))
+        key = prefix if target_is_file else '/'.join(filter(None, (prefix, safe_relative(source.relative_path))))
         if key in target_keys:
             raise SyncError('DUPLICATE_TARGET')
         target_keys.add(key)
@@ -99,7 +101,8 @@ def make_plan(entries, reader, bucket, prefix, mode='INCREMENTAL', baseline=None
             raise SyncError('TARGET_CONFLICT')
         action = 'REUSE' if mode == 'INCREMENTAL' and (unchanged or equal) else 'COPY'
         selected.append(PlanEntry(source, key, target, action))
-    extras = [asdict(obj) for obj in list_objects(reader, bucket, prefix + '/' if prefix else '') if obj.key not in target_keys]
+    extras = [] if target_is_file else [asdict(obj) for obj in list_objects(reader, bucket, prefix + '/' if prefix else '')
+                                      if obj.key not in target_keys and not (obj.key.endswith('/') and obj.size == 0)]
     return Plan(tuple(selected), bucket, len(extras), canonical_digest(extras), verification)
 
 
