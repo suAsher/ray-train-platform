@@ -1,6 +1,6 @@
 # 管理员数据同步
 
-状态（2026-10-02）：已发布并启用，Helm revision 267；新 Portal、线上 API、CPU Worker 与 guofeng.su 个人空间的实际同步验收通过。发布后存量训练资源核验通过。经用户明确授权，14 个测试对象已清理，独立分页复核对象和未完成分片均为 0；10 月 1 日的 Harbor 阻塞记录仅为历史。
+状态（2026-10-02）：已发布并启用，最新 Helm revision 269。同步执行器已切换到 `ray-train-sync`，补齐有停止证据的 Job/Pod/请求 Secret 自动回收；guofeng.su 个人空间已验证回收后分片续传、增量和取消。首次发布的 revision 267 与 14 个测试对象清理记录保留在下方历史章节；最新验收的 7 个对象也已清理，未完成分片为 0。
 
 ## 使用范围
 
@@ -82,7 +82,50 @@ Worker 使用独立 ServiceAccount，不挂 Kubernetes API token；只读 NFS、
 - 写入结果不明时会保留锁并等待运维核对；静态凭据模式不会因超时自动转移写入权。不要通过删除 Pod、修改数据库状态或重复提交来绕过该限制。只读预检的回执无法恢复时可结束并释放锁；传输阶段没有排空回执时继续保留锁。
 - 检查点有效期控制是否允许恢复，不代表检查点文件会自动从磁盘删除。Job/Pod/请求 Secret 的自动回收遵循上面的停止证据和 TTL 门禁；PVC 检查点和数据库审计记录继续保留。
 
-## 2026-10-02 发布与线上验收
+## 2026-10-02 执行隔离与回收上线
+
+业务源码为 `f3b367e2344028aa443fddd81279dd23293c2e77`。构建机格式、`go vet`、完整 Go 回归和真实 PostgreSQL 验证通过；同步核心包覆盖率 81.1%，新增业务回收文件 86.7%、Kubernetes 回收文件 85.2%。最终非 root、只读 Worker 镜像内 96 项测试通过；实际 Helm 渲染合同通过；检查点迁移脚本的 27 项隔离测试通过。完整回归曾发现测试 builder 缺少既有 CLI 用例需要的 zsh，补齐测试镜像依赖后完整回归通过，没有跳过该用例。
+
+| 组件 | 发布结果 |
+| --- | --- |
+| 后端 | `ray-train-backend@sha256:d706342f7465388314a8278f65ffd9f1eaaaced4494ea7fb0c929a2c8726e220`，2/2 Ready |
+| Worker | `ray-storage-sync@sha256:0225628d545d7787cd16b22c0b1e3286a66779ff23931f0a3699c2ea9abc2cf3` |
+| Helm | 268 临时关闭同步准入；269 启用新 namespace、镜像、跨 namespace 回调和回收配置 |
+| 回收 | 正常成功、暂停、取消 3600 秒；真实失败 86400 秒；旧 namespace 为显式 GC allowlist |
+| 新检查点 PVC | `ray-train-sync/ray-storage-sync-work`，20Gi `ebs-ssd` RWO；UID `ab1cb9dc-f9b0-4c72-91ce-7a7c6c6ac351` |
+| 保留旧 PVC | `ray-train-platform/ray-storage-sync-work`；UID `a7d199cb-3389-40a5-b67d-2394fdc9df90` |
+
+新 Portal 和 CLI 没有变更。后端、Worker 镜像前缀仍为 `harbor.wellspiking.ai/guofeng.su/`。本次不新增数据库迁移，schema 仍为 58。
+
+迁移前确认所有后端副本禁用同步，活动/暂停运行、活动预检、路径锁均为 0，所有原执行 Pod 已真正终止。检查点共 97 文件、152 条文件/目录记录、111,500 字节；源端、受限备份和新卷逐项 SHA256 一致，清单摘要 `6823cf33afa3eae2613d97c490ae1c8b5a900a7278b9ed330955720fecd2f44e`。旧卷保留，两个迁移辅助 Pod 已按 UID 清理。完整 Helm values 导出曾被自动审批拒绝，因此采用最小脱敏快照和内存中的完整 manifest 对比，原配置仍在集群的 Helm revision 中；未将完整 values 或秘密写入构建机证据目录。
+
+### guofeng.su 实际验收
+
+测试用户路径为 `/mnt/storage/me/files/storage-sync-lifecycle-194a755053a8404382a26b294f13e3d2/`，所有写入仅在这个新建目录。
+
+| 验收 | 结果 |
+| --- | --- |
+| 新 namespace 与回调 | BROWSE、PREVIEW、TRANSFER 全部在 `ray-train-sync`；仍使用 CPU 节点 `172.28.2.65`、无 GPU、非 root、只读根文件系统、无 ServiceAccount token |
+| IDC → TOS / 增量 | `ssr-f557b8a6-59c8-4d05-8fb5-d22c90c477cc` 复制并验证 2 字节文件；`ssr-452bccf8-a047-4f9f-be27-dec098822636` 同计划重跑传输 0 字节、复用并验证 1 文件 |
+| 真实回收后续传 | `ssr-583da214-a6c6-4401-a962-7f404c65368a` 在 attempt 2 暂停，远端第一片 64 MiB 与 PVC 检查点一致，排空/停止证据入库，Pod 正常退出。先观察控制器自动设置 TTL=3600 和 Secret ownerRef，再仅将该测试 Job 的 TTL 改成 1 秒；实际 Job、Pod、Secret 均被 Kubernetes 回收。随后同一运行 attempt 3 续传成功 |
+| 内容回读 | 65 MiB 源/目标 SHA256 均为 `ca5239937bca47ea8b6780e1fb671e45731772a9e915ad16371cde002d2c893e`；小文件也逐一匹配 |
+| 取消正常结束 | `ssr-f23173bb-81a4-48e6-9373-a910516a2ae0` 在真实分片传输中取消，API/数据库为 CANCELLED，Pod Succeeded/退出码 0，自动 TTL=3600；未完成分片为 0，已完成小文件和目标额外文件保留 |
+| 页面与审计 | 新 Portal 实际打开回收后的运行详情，显示已完成、65 MiB / 2 文件、执行次数 3及已验证文件结果；数据库 attempt 1/2/3 的回执和停止证据均保留 |
+
+2026-10-02 06:07 UTC 复核：旧 namespace 原有 36 个 Job 已自动减少到 1 个真实失败 Job，TTL=86400；它将按原失败时间到期回收，没有为了清空列表缩短失败证据保留期。新 namespace 剩余 14 个本次终态执行 Job 均为 TTL=3600，按结束时间自动回收。每个阶段依然使用短期 Job，平台服务与执行资源已分开：
+
+```bash
+kubectl -n ray-train-sync get jobs,pods
+kubectl -n ray-train-platform get pods
+```
+
+3 个验收计划均未启用定时，4 个运行最终为 3 SUCCEEDED、1 CANCELLED；活动运行、预检和路径锁为 0。7 个自建对象共 136,314,913 字节已按精确前缀/白名单清理，独立客户端复核对象和未完成分片均为 0。临时检查 Pod 已按 UID 删除。保留计划、运行、检查点、增量基线和旧卷；不把 Job TTL 当成检查点磁盘自动清理。
+
+发布后的 05:50 UTC 独立审计未发现存量训练 UID、状态或重启变化；最终 06:07 UTC 审计发现 `tenant-local/job-3d5d0340b13f1009e809d942` 已由 RUNNING 变为 FAILED，因此不能声称整个验收期间所有训练状态不变。只读追查确认该任务在 05:58:13 UTC 因 `ValueError: cls_score contains NaN!`、`ChildFailedError` 和训练退出码 1 达到脚本重试上限，RayJob reason 为 AppFailed。Submitter UID 和重启数未变，容器正常退出；RayCluster 在 06:08:15 UTC 由原控制器按失败生命周期清理。未发现同步 TTL/Secret 回收影响训练资源的证据；同步回收范围仅为明确配置的两个同步/平台 namespace。另观察到两条历史训练的 `managed_attempt_resources` retiring 状态约束告警，非本次同步回收路径，保留为独立待排查项。
+
+证据在构建机 `/tmp/raytrain-storage-sync-lifecycle-20261002/`：`go-focused3.log`、`go-vet3.log`、`go-full4.log`、`worker-final-image.log`、`cutover-test/fixture-results.log`、`cutover-readiness.json`、`source-checkpoint-backup.tar`、`*-dryrun-sanitized.json`、`acceptance-paused-proof.json`、`acceptance-paused-parts.json`、`acceptance-ttl-deleted.json`、`acceptance-resumed-content.json`、`acceptance-cancel-proof.json`、`acceptance-cleanup.json`、`acceptance-inspector-cleaned.json`、`final-independent-audit.json`。训练失败归因在其子目录 `failure-job-3d5d0340b13f1009e809d942-20261002T060939Z/causal-summary.txt`。本机 API 汇总为 `/private/tmp/rtp-sync-lifecycle-live-api-20261002.json`。
+
+## 2026-10-02 首次发布与线上验收（revision 267）
 
 Harbor 恢复后，已完成固定摘要镜像推送与拉取、生产数据库备份及实际恢复验证、0058 迁移、后端与 Worker 发布，以及新 Portal `dev` 推送后的 CI/CD 部署。没有修改 Ceph 配置，也没有为验收停止用户训练。
 

@@ -22,7 +22,7 @@
 - 构建机格式检查、go vet、完整 Go 回归、真实 PostgreSQL 的 attempt 证据读取与幂等回收测试；Worker 回归和非 root 只读容器验证。
 - Helm 单 namespace/独立 namespace 合同测试、最小权限及完整 server-side dry-run 差异审阅。
 - guofeng.su 个人空间新临时前缀验证实际复制、增量、暂停续传、取消、独立 namespace、清理后的页面历史与检查点可用性。
-- 通过缩短的专用测试保留期验证真实 TTL 回收，生产保留期恢复为 1 小时/24 小时；不缩短未知业务任务的保留期。
+- 只将本次已验证暂停并自动取得 3600 秒 TTL 的专用测试 Job 缩短到 1 秒，验证真实 TTL 回收；全局保留期始终为 1 小时/24 小时，不缩短其他任务保留期。
 - 发布前后核对存量训练 RayJob/RayCluster/Pod UID、节点、重启和状态，清理仅限本次验收资源。
 
-当前状态：实施中，尚未测试或发布。
+当前状态：已完成实现、完整回归、真实 PostgreSQL 验证与发布（业务源码 f3b367e，Helm 269）。新 namespace 为 ray-train-sync，97 个检查点文件逐项校验后迁移，旧卷保留。guofeng.su 已验证 IDC/TOS 复制、增量、实际 TTL 删除后分片续传、取消正常退出与页面历史保留。本次 7 个测试对象及全部辅助 Pod 已清理。完整证据、版本和保留边界见 docs/STORAGE_SYNC_RUNBOOK.md 的“执行隔离与回收上线”。
