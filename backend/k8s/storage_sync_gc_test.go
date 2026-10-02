@@ -30,7 +30,7 @@ func storageSyncGCFixture(t *testing.T) (*batchv1.Job, *corev1.Secret, *corev1.P
 		Name: "gc-worker", Namespace: job.Namespace, Labels: job.Labels,
 		OwnerReferences: []metav1.OwnerReference{{APIVersion: "batch/v1", Kind: "Job", Name: job.Name, UID: job.UID, Controller: pointerTo(true)}},
 	}, Spec: job.Spec.Template.Spec, Status: corev1.PodStatus{
-		Phase: corev1.PodSucceeded,
+		Phase:             corev1.PodSucceeded,
 		ContainerStatuses: []corev1.ContainerStatus{{Name: storageSyncContainer, State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0}}}},
 	}}
 	request := storagesync.ExecutorGCRequest{Executor: storagesync.ExecutorIdentity{
@@ -64,7 +64,10 @@ func TestStorageSyncExecutorGCAttachesSecretBeforeJobTTLWithCAS(t *testing.T) {
 			continue
 		}
 		patched = append(patched, action.GetResource().Resource)
-		var operations []struct { Op string `json:"op"`; Path string `json:"path"` }
+		var operations []struct {
+			Op   string `json:"op"`
+			Path string `json:"path"`
+		}
 		if err := json.Unmarshal(action.(ktesting.PatchAction).GetPatch(), &operations); err != nil {
 			t.Fatal(err)
 		}
@@ -82,28 +85,64 @@ func TestStorageSyncExecutorGCAttachesSecretBeforeJobTTLWithCAS(t *testing.T) {
 
 func TestStorageSyncExecutorGCRejectsUnprovenIdentityOrTermination(t *testing.T) {
 	for _, tc := range []struct {
-		name string
+		name   string
 		mutate func(*batchv1.Job, *corev1.Secret, *corev1.Pod, *storagesync.ExecutorGCRequest)
 	}{
-		{"active-job", func(j *batchv1.Job, _ *corev1.Secret, _ *corev1.Pod, _ *storagesync.ExecutorGCRequest) { j.Status.Conditions = nil }},
-		{"running-pod", func(_ *batchv1.Job, _ *corev1.Secret, p *corev1.Pod, _ *storagesync.ExecutorGCRequest) { p.Status.Phase = corev1.PodRunning }},
-		{"no-owned-pod", func(_ *batchv1.Job, _ *corev1.Secret, p *corev1.Pod, _ *storagesync.ExecutorGCRequest) { p.OwnerReferences = nil }},
-		{"incomplete-container-state", func(_ *batchv1.Job, _ *corev1.Secret, p *corev1.Pod, _ *storagesync.ExecutorGCRequest) { p.Status.ContainerStatuses = nil }},
-		{"init-container-without-exit", func(_ *batchv1.Job, _ *corev1.Secret, p *corev1.Pod, _ *storagesync.ExecutorGCRequest) { p.Spec.InitContainers = []corev1.Container{{Name: "init"}} }},
-		{"ephemeral-container-without-exit", func(_ *batchv1.Job, _ *corev1.Secret, p *corev1.Pod, _ *storagesync.ExecutorGCRequest) { p.Spec.EphemeralContainers = []corev1.EphemeralContainer{{EphemeralContainerCommon: corev1.EphemeralContainerCommon{Name: "debug"}}} }},
-		{"mutable-request", func(_ *batchv1.Job, s *corev1.Secret, _ *corev1.Pod, _ *storagesync.ExecutorGCRequest) { s.Immutable = pointerTo(false) }},
+		{"active-job", func(j *batchv1.Job, _ *corev1.Secret, _ *corev1.Pod, _ *storagesync.ExecutorGCRequest) {
+			j.Status.Conditions = nil
+		}},
+		{"running-pod", func(_ *batchv1.Job, _ *corev1.Secret, p *corev1.Pod, _ *storagesync.ExecutorGCRequest) {
+			p.Status.Phase = corev1.PodRunning
+		}},
+		{"no-owned-pod", func(_ *batchv1.Job, _ *corev1.Secret, p *corev1.Pod, _ *storagesync.ExecutorGCRequest) {
+			p.OwnerReferences = nil
+		}},
+		{"incomplete-container-state", func(_ *batchv1.Job, _ *corev1.Secret, p *corev1.Pod, _ *storagesync.ExecutorGCRequest) {
+			p.Status.ContainerStatuses = nil
+		}},
+		{"init-container-without-exit", func(_ *batchv1.Job, _ *corev1.Secret, p *corev1.Pod, _ *storagesync.ExecutorGCRequest) {
+			p.Spec.InitContainers = []corev1.Container{{Name: "init"}}
+		}},
+		{"ephemeral-container-without-exit", func(_ *batchv1.Job, _ *corev1.Secret, p *corev1.Pod, _ *storagesync.ExecutorGCRequest) {
+			p.Spec.EphemeralContainers = []corev1.EphemeralContainer{{EphemeralContainerCommon: corev1.EphemeralContainerCommon{Name: "debug"}}}
+		}},
+		{"mutable-request", func(_ *batchv1.Job, s *corev1.Secret, _ *corev1.Pod, _ *storagesync.ExecutorGCRequest) {
+			s.Immutable = pointerTo(false)
+		}},
 		{"request-without-uid", func(_ *batchv1.Job, s *corev1.Secret, _ *corev1.Pod, _ *storagesync.ExecutorGCRequest) { s.UID = "" }},
-		{"request-digest-changed", func(_ *batchv1.Job, s *corev1.Secret, _ *corev1.Pod, _ *storagesync.ExecutorGCRequest) { s.Data["request.json"] = []byte(`{"subjectKind":"run","runId":"run-123","attempt":1,"generation":2,"phase":"TRANSFER"}`) }},
-		{"wrong-owner", func(_ *batchv1.Job, s *corev1.Secret, _ *corev1.Pod, _ *storagesync.ExecutorGCRequest) { s.OwnerReferences = []metav1.OwnerReference{{APIVersion: "batch/v1", Kind: "Job", Name: "other-job", UID: "other-job"}} }},
-		{"wrong-request-label", func(_ *batchv1.Job, s *corev1.Secret, _ *corev1.Pod, _ *storagesync.ExecutorGCRequest) { s.Labels = map[string]string{storageSyncRunLabel: "someone-else"} }},
-		{"wrong-job-uid", func(_ *batchv1.Job, _ *corev1.Secret, _ *corev1.Pod, r *storagesync.ExecutorGCRequest) { r.Executor.JobUID = "replacement-job" }},
-		{"wrong-generation", func(_ *batchv1.Job, _ *corev1.Secret, _ *corev1.Pod, r *storagesync.ExecutorGCRequest) { r.Executor.Generation++ }},
-		{"wrong-subject", func(_ *batchv1.Job, _ *corev1.Secret, _ *corev1.Pod, r *storagesync.ExecutorGCRequest) { r.Executor.SubjectKind = "preview" }},
-		{"wrong-phase", func(_ *batchv1.Job, _ *corev1.Secret, _ *corev1.Pod, r *storagesync.ExecutorGCRequest) { r.Executor.Phase = "PREVIEW" }},
-		{"outside-namespace-allowlist", func(_ *batchv1.Job, _ *corev1.Secret, _ *corev1.Pod, r *storagesync.ExecutorGCRequest) { r.Executor.Namespace = "tenant-user" }},
-		{"job-without-resource-version", func(j *batchv1.Job, _ *corev1.Secret, _ *corev1.Pod, _ *storagesync.ExecutorGCRequest) { j.ResourceVersion = "" }},
-		{"nonterminal-state", func(_ *batchv1.Job, _ *corev1.Secret, _ *corev1.Pod, r *storagesync.ExecutorGCRequest) { r.State = "RUNNING" }},
-		{"zero-ttl", func(_ *batchv1.Job, _ *corev1.Secret, _ *corev1.Pod, r *storagesync.ExecutorGCRequest) { r.TTLSeconds = 0 }},
+		{"request-digest-changed", func(_ *batchv1.Job, s *corev1.Secret, _ *corev1.Pod, _ *storagesync.ExecutorGCRequest) {
+			s.Data["request.json"] = []byte(`{"subjectKind":"run","runId":"run-123","attempt":1,"generation":2,"phase":"TRANSFER"}`)
+		}},
+		{"wrong-owner", func(_ *batchv1.Job, s *corev1.Secret, _ *corev1.Pod, _ *storagesync.ExecutorGCRequest) {
+			s.OwnerReferences = []metav1.OwnerReference{{APIVersion: "batch/v1", Kind: "Job", Name: "other-job", UID: "other-job"}}
+		}},
+		{"wrong-request-label", func(_ *batchv1.Job, s *corev1.Secret, _ *corev1.Pod, _ *storagesync.ExecutorGCRequest) {
+			s.Labels = map[string]string{storageSyncRunLabel: "someone-else"}
+		}},
+		{"wrong-job-uid", func(_ *batchv1.Job, _ *corev1.Secret, _ *corev1.Pod, r *storagesync.ExecutorGCRequest) {
+			r.Executor.JobUID = "replacement-job"
+		}},
+		{"wrong-generation", func(_ *batchv1.Job, _ *corev1.Secret, _ *corev1.Pod, r *storagesync.ExecutorGCRequest) {
+			r.Executor.Generation++
+		}},
+		{"wrong-subject", func(_ *batchv1.Job, _ *corev1.Secret, _ *corev1.Pod, r *storagesync.ExecutorGCRequest) {
+			r.Executor.SubjectKind = "preview"
+		}},
+		{"wrong-phase", func(_ *batchv1.Job, _ *corev1.Secret, _ *corev1.Pod, r *storagesync.ExecutorGCRequest) {
+			r.Executor.Phase = "PREVIEW"
+		}},
+		{"outside-namespace-allowlist", func(_ *batchv1.Job, _ *corev1.Secret, _ *corev1.Pod, r *storagesync.ExecutorGCRequest) {
+			r.Executor.Namespace = "tenant-user"
+		}},
+		{"job-without-resource-version", func(j *batchv1.Job, _ *corev1.Secret, _ *corev1.Pod, _ *storagesync.ExecutorGCRequest) {
+			j.ResourceVersion = ""
+		}},
+		{"nonterminal-state", func(_ *batchv1.Job, _ *corev1.Secret, _ *corev1.Pod, r *storagesync.ExecutorGCRequest) {
+			r.State = "RUNNING"
+		}},
+		{"zero-ttl", func(_ *batchv1.Job, _ *corev1.Secret, _ *corev1.Pod, r *storagesync.ExecutorGCRequest) {
+			r.TTLSeconds = 0
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			job, secret, pod, request := storageSyncGCFixture(t)
@@ -193,7 +232,9 @@ func TestStorageSyncExecutorGCRecoveryRequiresImmutableParentBinding(t *testing.
 			spec := storageSyncRuntimeSpec("RECOVER")
 			spec.SubjectKind, spec.RecoveryJobUID = "run", parent
 			recoveryJob, recoverySecret, err := renderStorageSyncJob(storageSyncRuntimeConfig(), spec)
-			if err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatal(err)
+			}
 			recoveryJob.UID, recoveryJob.ResourceVersion, recoveryJob.Status = job.UID, job.ResourceVersion, job.Status
 			recoverySecret.UID, recoverySecret.ResourceVersion = secret.UID, secret.ResourceVersion
 			pod.Labels, pod.OwnerReferences[0].Name = recoveryJob.Labels, recoveryJob.Name
@@ -201,14 +242,24 @@ func TestStorageSyncExecutorGCRecoveryRequiresImmutableParentBinding(t *testing.
 			kube := fake.NewSimpleClientset(recoveryJob, recoverySecret, pod)
 			client := NewStorageSyncClient(kube, storageSyncRuntimeConfig())
 			executors, err := client.ListExecutors(context.Background())
-			if err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatal(err)
+			}
 			if parent == "" {
-				if len(executors) != 0 { t.Fatal("legacy unbound receipt reader was offered for GC") }
-				if err := client.ScheduleExecutorGC(context.Background(), request); err == nil { t.Fatal("unbound receipt reader accepted for GC") }
+				if len(executors) != 0 {
+					t.Fatal("legacy unbound receipt reader was offered for GC")
+				}
+				if err := client.ScheduleExecutorGC(context.Background(), request); err == nil {
+					t.Fatal("unbound receipt reader accepted for GC")
+				}
 				return
 			}
-			if len(executors) != 1 || executors[0].ParentJobUID != parent { t.Fatal("receipt parent identity lost") }
-			if err := client.ScheduleExecutorGC(context.Background(), request); err != nil { t.Fatal(err) }
+			if len(executors) != 1 || executors[0].ParentJobUID != parent {
+				t.Fatal("receipt parent identity lost")
+			}
+			if err := client.ScheduleExecutorGC(context.Background(), request); err != nil {
+				t.Fatal(err)
+			}
 		})
 	}
 }
@@ -222,14 +273,24 @@ func TestStorageSyncReceiptRecoveryReusesOnlyExactImmutableLegacyRequest(t *test
 			legacy := spec
 			legacy.Phase = "RECOVER"
 			recoveryJob, recoverySecret, err := renderStorageSyncJob(storageSyncRuntimeConfig(), legacy)
-			if err != nil { t.Fatal(err) }
-			if tampered { recoverySecret.Data["request.json"] = []byte(`{"phase":"RECOVER"}`) }
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tampered {
+				recoverySecret.Data["request.json"] = []byte(`{"phase":"RECOVER"}`)
+			}
 			kube := fake.NewSimpleClientset(job, pod, recoveryJob, recoverySecret)
 			err = NewStorageSyncClient(kube, storageSyncRuntimeConfig()).RecoverReceipt(context.Background(), spec)
-			if tampered && err == nil { t.Fatal("tampered legacy recovery request was trusted") }
-			if !tampered && err != nil { t.Fatalf("existing receipt recovery broken after upgrade: %v", err) }
+			if tampered && err == nil {
+				t.Fatal("tampered legacy recovery request was trusted")
+			}
+			if !tampered && err != nil {
+				t.Fatalf("existing receipt recovery broken after upgrade: %v", err)
+			}
 			for _, action := range kube.Actions() {
-				if action.GetVerb() == "create" || action.GetVerb() == "patch" || action.GetVerb() == "delete" { t.Fatal("legacy recovery reuse changed its existing execution") }
+				if action.GetVerb() == "create" || action.GetVerb() == "patch" || action.GetVerb() == "delete" {
+					t.Fatal("legacy recovery reuse changed its existing execution")
+				}
 			}
 		})
 	}
@@ -241,14 +302,22 @@ func TestStorageSyncExecutorGCPagesDiscoveryAndPodTerminationProof(t *testing.T)
 	jobPages, podPages := 0, 0
 	kube.PrependReactor("list", "jobs", func(action ktesting.Action) (bool, runtime.Object, error) {
 		jobPages++
-		if jobPages == 1 { return true, &batchv1.JobList{ListMeta: metav1.ListMeta{Continue: "next-job-page"}}, nil }
-		if action.(ktesting.ListActionImpl).GetListOptions().Continue != "next-job-page" { t.Fatal("Job continuation token lost") }
+		if jobPages == 1 {
+			return true, &batchv1.JobList{ListMeta: metav1.ListMeta{Continue: "next-job-page"}}, nil
+		}
+		if action.(ktesting.ListActionImpl).GetListOptions().Continue != "next-job-page" {
+			t.Fatal("Job continuation token lost")
+		}
 		return true, &batchv1.JobList{Items: []batchv1.Job{*job}}, nil
 	})
 	kube.PrependReactor("list", "pods", func(action ktesting.Action) (bool, runtime.Object, error) {
 		podPages++
-		if podPages == 1 { return true, &corev1.PodList{ListMeta: metav1.ListMeta{Continue: "next-pod-page"}}, nil }
-		if action.(ktesting.ListActionImpl).GetListOptions().Continue != "next-pod-page" { t.Fatal("Pod continuation token lost") }
+		if podPages == 1 {
+			return true, &corev1.PodList{ListMeta: metav1.ListMeta{Continue: "next-pod-page"}}, nil
+		}
+		if action.(ktesting.ListActionImpl).GetListOptions().Continue != "next-pod-page" {
+			t.Fatal("Pod continuation token lost")
+		}
 		return true, &corev1.PodList{Items: []corev1.Pod{*pod}}, nil
 	})
 	executors, err := NewStorageSyncClient(kube, storageSyncRuntimeConfig()).ListExecutors(context.Background())

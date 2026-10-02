@@ -13,16 +13,16 @@ import (
 )
 
 type Options struct {
-	Now                 func() time.Time
-	PreviewTTL          time.Duration
-	CheckpointRetention time.Duration
-	ReconcileInterval   time.Duration
-	MaxActiveRuns       int
-	MaxPendingPreviews  int
-	CallbackURL         string
-	MetadataURL         string
+	Now                   func() time.Time
+	PreviewTTL            time.Duration
+	CheckpointRetention   time.Duration
+	ReconcileInterval     time.Duration
+	MaxActiveRuns         int
+	MaxPendingPreviews    int
+	CallbackURL           string
+	MetadataURL           string
 	GCSucceededTTLSeconds int32
-	GCFailedTTLSeconds int32
+	GCFailedTTLSeconds    int32
 }
 type Manager struct {
 	repo     Repository
