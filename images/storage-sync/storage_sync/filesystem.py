@@ -26,6 +26,13 @@ def _metadata(value):
     return (*_identity(value), value.st_size, value.st_mtime_ns, value.st_ctime_ns)
 
 
+def _portable_metadata(value):
+    # st_dev belongs to a local mount; separate worker Pods can mount the same
+    # export with different device numbers. Local descriptor guards keep it.
+    return (value.st_ino, stat.S_IFMT(value.st_mode), value.st_size,
+            value.st_mtime_ns, value.st_ctime_ns)
+
+
 def _supported(value):
     if not (stat.S_ISREG(value.st_mode) or stat.S_ISDIR(value.st_mode)):
         raise SyncError('UNSUPPORTED_SOURCE_TYPE')
@@ -99,7 +106,7 @@ def _file_entry(descriptor, metadata, root, local_path, relative):
                        sha256=digest.hexdigest(), last_modified=_timestamp(metadata),
                        local_root=str(root), local_path=local_path,
                        mtime_ns=metadata.st_mtime_ns, ctime_ns=metadata.st_ctime_ns,
-                       inode=metadata.st_ino, device=metadata.st_dev)
+                       inode=metadata.st_ino, device=0)
 
 
 def _walk(descriptor, metadata, root, local_path, relative, on_file):
@@ -151,9 +158,9 @@ def scan_idc(root: Path, relative_path: str, verification: str, discovered=None)
 
 
 def _entry_matches(entry, metadata):
-    expected = (entry.device, entry.inode, stat.S_IFREG, entry.size,
+    expected = (entry.inode, stat.S_IFREG, entry.size,
                 entry.mtime_ns, entry.ctime_ns)
-    if expected != _metadata(metadata):
+    if expected != _portable_metadata(metadata):
         raise SyncError('SOURCE_CHANGED')
 
 
@@ -239,7 +246,7 @@ def browse_idc(root: Path, path: str, token: str = '', limit: int = 500):
     with _node(root, path) as (descriptor, metadata):
         if not stat.S_ISDIR(metadata.st_mode):
             raise SyncError('NOT_A_DIRECTORY')
-        binding = canonical_digest({'root': str(root), 'path': path, 'stat': _metadata(metadata)})
+        binding = canonical_digest({'root': str(root), 'path': path, 'stat': _portable_metadata(metadata)})
         after = _cursor_after(token, binding)
         names = heapq.nsmallest(limit + 1, _browse_names(descriptor, after))
         entries = [_browse_entry(descriptor, path, name) for name in names[:limit]]

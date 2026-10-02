@@ -10,7 +10,7 @@ import unittest
 
 from storage_sync.filesystem import browse_idc, open_verified, scan_idc
 from storage_sync.checkpoint import load_json, save_json
-from storage_sync.model import Plan, PlanEntry, SyncError, canonical_digest, plan_from_dict
+from storage_sync.model import Plan, PlanEntry, SourceEntry, SyncError, canonical_digest, plan_from_dict
 from storage_sync.worker import _preview, _transfer, manifest_summary
 from test_engine import MemoryStore
 from test_worker import RecordingReporter
@@ -44,6 +44,16 @@ def plan_for(source):
 
 
 class CrossMountIdentityTests(unittest.TestCase):
+    def test_tos_plan_identity_matches_existing_serialization(self):
+        source = SourceEntry('file', 'TOS', bucket='source', key='data/file', size=7,
+                             etag='opaque-etag', sha256='verified-sha256')
+        plan = plan_for(source)
+        expected_source = {key: value for key, value in asdict(source).items()
+                           if key not in ('sha256', 'crc64')}
+        self.assertEqual(source.fingerprint, canonical_digest(expected_source))
+        self.assertEqual(plan.digest, canonical_digest(asdict(plan)))
+        self.assertEqual(plan.source_fingerprint, canonical_digest([asdict(source)]))
+
     def test_preview_file_can_be_read_from_another_worker_mount(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -83,7 +83,7 @@ class SourceEntry:
     mtime_ns: int = 0
     ctime_ns: int = 0
     inode: int = 0
-    device: int = 0
+    device: int = 0  # Legacy manifest field; new IDC snapshots use zero across mounts.
     content_type: str = ''
     content_encoding: str = ''
     content_disposition: str = ''
@@ -92,10 +92,15 @@ class SourceEntry:
 
     @property
     def fingerprint(self):
-        data = asdict(self)
-        data.pop('sha256')
-        data.pop('crc64')
+        data = {key: value for key, value in self.portable_snapshot().items()
+                if key not in ('sha256', 'crc64')}
         return canonical_digest(data)
+
+    def portable_snapshot(self):
+        data = asdict(self)
+        # Preserve the field when parsing old manifests; their raw digest and
+        # checkpoint binding must remain valid. Portable identities ignore its value.
+        return {**data, 'device': 0} if self.kind == 'IDC' else data
 
     def object_info(self):
         return ObjectInfo(**{key: getattr(self, key) for key in ObjectInfo.__dataclass_fields__})
@@ -127,11 +132,14 @@ class Plan:
 
     @property
     def digest(self):
-        return canonical_digest(asdict(self))
+        data = asdict(self)
+        entries = [{**item, 'source': entry.source.portable_snapshot()}
+                   for item, entry in zip(data['entries'], self.entries)]
+        return canonical_digest({**data, 'entries': entries})
 
     @property
     def source_fingerprint(self):
-        return canonical_digest([asdict(entry.source) for entry in self.entries])
+        return canonical_digest([entry.source.portable_snapshot() for entry in self.entries])
 
     @property
     def target_fingerprint(self):
