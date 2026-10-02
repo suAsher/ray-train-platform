@@ -47,7 +47,7 @@ if __name__ == '__main__':
 from dataclasses import asdict
 from test_engine import MemoryStore
 from storage_sync.checkpoint import load_json, save_json
-from storage_sync.engine import make_plan, scan_tos
+from storage_sync.engine import execute, make_plan, scan_tos
 from storage_sync.worker import _preview, _transfer, manifest_summary
 
 
@@ -202,10 +202,92 @@ class WorkerLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             store = MemoryStore({('src', 'data/a'): b'a'}); store.uncertain_write = False
             code, calls, receipt = self.transfer(store, directory, lambda url, payload: {'control': 'PAUSE'} if url.endswith('/report') else {})
-            self.assertEqual(code, 2)
+            self.assertEqual(code, 0)
             self.assertEqual(receipt['state'], 'PAUSED')
             self.assertTrue(receipt['requestsDrained'])
             self.assertEqual(store.writes, [])
+
+    def test_cancel_response_before_transfer_is_acknowledged_without_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = MemoryStore({('src', 'data/a'): b'a'}); store.uncertain_write = False
+            def response(url, payload):
+                if payload.get('state') == 'CANCELLED':
+                    self.assertEqual(load_json(Path(directory) / 'result.json'), payload)
+                    self.assertTrue(payload['requestsDrained'])
+                return {'control': 'CANCEL'} if url.endswith('/report') else {}
+            code, calls, receipt = self.transfer(store, directory, response)
+            self.assertEqual(code, 0)
+            self.assertEqual(receipt['state'], 'CANCELLED')
+            self.assertEqual(calls[-1], receipt)
+            self.assertEqual(store.writes, [])
+
+    def test_multipart_control_exits_normally_only_after_checkpoint_or_abort(self):
+        for command, state in (('PAUSE', 'PAUSED'), ('CANCEL', 'CANCELLED')):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as directory:
+                store = MemoryStore({('src', 'data/a'): b'12345678'}); store.uncertain_write = False
+                def stop_after_first_part(*args, **kwargs):
+                    previous_control = kwargs['control']
+                    control = lambda: command if any(upload['parts'] for upload in store.uploads.values()) else previous_control()
+                    return execute(*args, **{**kwargs, 'part_size': 4, 'control': control})
+                def response(url, payload):
+                    if payload.get('state') == state:
+                        self.assertEqual(load_json(Path(directory) / 'result.json'), payload)
+                        self.assertTrue(payload['requestsDrained'])
+                        checkpoints = list((Path(directory) / 'mapping-0' / 'objects').glob('*.json'))
+                        self.assertEqual(len(checkpoints), 1)
+                        checkpoint = load_json(checkpoints[0])
+                        if command == 'PAUSE':
+                            self.assertEqual(set(checkpoint['parts']), {'1'})
+                            self.assertEqual(len(store.uploads), 1)
+                            self.assertEqual(store.aborted, [])
+                        else:
+                            self.assertTrue(checkpoint['cancelled'])
+                            self.assertEqual(checkpoint['uploadId'], '')
+                            self.assertEqual(store.uploads, {})
+                            self.assertEqual(len(store.aborted), 1)
+                    return {}
+                with patch('storage_sync.worker.execute', side_effect=stop_after_first_part):
+                    code, calls, receipt = self.transfer(store, directory, response)
+                self.assertEqual(code, 0)
+                self.assertEqual(receipt['state'], state)
+                self.assertEqual(calls[-1], receipt)
+                self.assertEqual(store.writes, [])
+
+    def test_controlled_stop_with_uncertain_write_keeps_nonzero_exit(self):
+        for command, state in (('PAUSE', 'PAUSED'), ('CANCEL', 'CANCELLED')):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as directory:
+                store = MemoryStore({('src', 'data/a'): b'a'}); store.uncertain_write = True
+                code, calls, receipt = self.transfer(store, directory, lambda url, payload: {'control': command} if url.endswith('/report') else {})
+                self.assertEqual(code, 2)
+                self.assertEqual(receipt['state'], state)
+                self.assertFalse(receipt['requestsDrained'])
+
+    def test_controlled_stop_requires_acknowledged_final_receipt(self):
+        for command, state in (('PAUSE', 'PAUSED'), ('CANCEL', 'CANCELLED')):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as directory:
+                def response(url, payload):
+                    if payload.get('state') == state:
+                        raise SyncError('CONTROL_PLANE_UNAVAILABLE')
+                    return {'control': command} if url.endswith('/report') else {}
+                store = MemoryStore({('src', 'data/a'): b'a'}); store.uncertain_write = False
+                code, calls, receipt = self.transfer(store, directory, response)
+                self.assertEqual(code, 2)
+                self.assertEqual(receipt['state'], state)
+                self.assertTrue(receipt['requestsDrained'])
+
+    def test_controlled_stop_cannot_succeed_if_final_receipt_is_not_durable(self):
+        for command in ('PAUSE', 'CANCEL'):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as directory:
+                def persist(path, value):
+                    if Path(path).name == 'result.json':
+                        raise OSError('checkpoint disk unavailable')
+                    save_json(path, value)
+                store = MemoryStore({('src', 'data/a'): b'a'}); store.uncertain_write = False
+                with patch('storage_sync.transport.save_json', side_effect=persist):
+                    code, calls, receipt = self.transfer(store, directory, lambda url, payload: {'control': command} if url.endswith('/report') else {})
+                self.assertEqual(code, 2)
+                self.assertIsNone(receipt)
+                self.assertNotIn(calls[-1].get('state'), ('PAUSED', 'CANCELLED'))
 
     def test_unknown_write_outcome_keeps_drain_false(self):
         class Uncertain(MemoryStore):
