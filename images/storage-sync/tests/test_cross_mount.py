@@ -197,12 +197,13 @@ class CrossMountWorkerTests(unittest.TestCase):
             legacy = replace(source, device=os.stat(root / 'file').st_dev + 9)
             manifest = {'plans': [asdict(plan_for(legacy))]}
             save_json(work / 'manifest.json', manifest)
+            original_bytes = (work / 'manifest.json').read_bytes()
             original_digest = canonical_digest(manifest)
             spec = {'runId': 'run', 'config': {}, 'manifestDigest': original_digest}
             store, reporter = MemoryStore(), RecordingReporter()
             with patch('storage_sync.worker.from_config', return_value=store):
                 _transfer(spec, reporter, work, '/unused-test-config')
             self.assertEqual(store.objects['destination', 'out/file'], b'payload')
-            self.assertEqual(load_json(work / 'manifest.json'), manifest)
+            self.assertEqual((work / 'manifest.json').read_bytes(), original_bytes)
             self.assertEqual(reporter.values['manifestDigest'], original_digest)
             self.assertEqual(load_json(work / 'mapping-0' / 'baseline.json')['entries'][0]['source']['device'], legacy.device)
