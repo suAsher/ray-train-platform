@@ -160,7 +160,11 @@ class CrossMountIdentityTests(unittest.TestCase):
             (root / 'b').write_bytes(b'b')
             with remounted_device(9):
                 _, token = browse_idc(root, '', limit=1)
+            before = root.stat()
             (root / 'c').write_bytes(b'c')
+            # Do not depend on this filesystem advancing directory timestamps
+            # between two writes within the same clock tick.
+            os.utime(root, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
             with self.assertRaisesRegex(SyncError, 'INVALID_CURSOR'):
                 browse_idc(root, '', token=token, limit=1)
 
