@@ -50,6 +50,20 @@
 
 Worker 使用独立 ServiceAccount，不挂 Kubernetes API token；只读 NFS、只读根文件系统、无 GPU 请求。控制器通过独立 Lease 协调，PostgreSQL 持久化计划、执行状态和路径锁。
 
+### 执行 namespace 与回收
+
+执行 namespace 可用 `storageSync.namespace` 指定，空值兼容平台 namespace。独立部署时，Worker ServiceAccount、Role、请求 Secret 和检查点 PVC 位于执行 namespace；后端仍在平台 namespace，回调使用 `http://ray-train-backend.<平台namespace>.svc.cluster.local:8080`。已有安装若显式配置了短回调地址，迁移时必须同步更新。
+
+控制器只扫描执行 namespace 和显式配置的 `storageSync.gcNamespaces`。它先核对 Job/请求 Secret 的身份、实际所有容器终止状态和数据库中对应 attempt 的停止证据；传输还必须有请求排空回执。满足条件后，才为 Job 设置 Kubernetes TTL，并将本次不可变请求 Secret 绑定到该 Job。未知归属、缺失证据或仍活动的执行器不会自动回收。
+
+正常成功、暂停、取消默认保留 3600 秒，真实失败默认 86400 秒，分别由 `gcSucceededTTLSeconds`、`gcFailedTTLSeconds` 配置。TTL 从 Kubernetes Job 结束时间计算；旧 Job 超过保留期后，一旦核验并设置 TTL，可能立即被回收。数据库计划、运行历史、文件结果、检查点和增量基线不随 Job 删除。Pod 日志随回收消失，需要长期保留原始日志时，应在保留期内接入日志归档。
+
+正常暂停、取消在持久回执保存且停止回调确认后以退出码 0 结束，因此 Pod 可显示 `Completed`，业务页面仍显示「已暂停」或「已取消」。不能只凭 Pod 的 Completed 判定复制成功；停止协议或真实传输失败仍返回非零。
+
+独立 namespace 用于区分平台服务与短期执行资源，不改变可信后端已有的集群级权限，也不是新的凭据或网络隔离边界。检查点文件的磁盘生命周期与 Job TTL 是两件事，本次不删除 PVC 内容。
+
+迁移现有安装时，先关闭同步准入并等所有后端副本生效，确认没有活动或暂停运行、预检、路径锁以及任何仍挂载检查点卷的写入 Pod，再复制检查点到新 namespace 的独立 PVC并逐文件校验。保留旧卷和受限备份，核对 Secret、RBAC、回调、镜像后才重新启用。新卷发生写入后不能直接 Helm 回滚到旧卷；须再次停止准入并核对、迁移新检查点，防止使用过期状态续传。
+
 数据库迁移为 `0058_storage_sync`。发布前必须有可恢复数据库备份，完整 Go 回归及真实 PostgreSQL 的全新、重复、升级验证。Helm 回滚不会撤销已经提交的数据库迁移。
 
 ## 上线顺序与回退
@@ -66,7 +80,7 @@ Worker 使用独立 ServiceAccount，不挂 Kubernetes API token；只读 NFS、
 - IDC 扫描目前保守读取并计算文件校验值，增量零写入不代表零源端读取。内容校验模式需要读取对象内容，会增加耗时和流量。
 - 清单当前保存在内存及检查点 JSON 中。默认 Worker 内存上限 2 GiB；尚未以原 135,151 文件、约 270 GB 数据集做本功能规模验收，不能据小样本声称该规模已经验证。
 - 写入结果不明时会保留锁并等待运维核对；静态凭据模式不会因超时自动转移写入权。不要通过删除 Pod、修改数据库状态或重复提交来绕过该限制。只读预检的回执无法恢复时可结束并释放锁；传输阶段没有排空回执时继续保留锁。
-- 检查点有效期控制是否允许恢复，不代表已经实现磁盘和 Kubernetes 历史对象的自动清理。保留执行器与回执证据，运维清理前先核对活动运行及锁。
+- 检查点有效期控制是否允许恢复，不代表检查点文件会自动从磁盘删除。Job/Pod/请求 Secret 的自动回收遵循上面的停止证据和 TTL 门禁；PVC 检查点和数据库审计记录继续保留。
 
 ## 2026-10-02 发布与线上验收
 

@@ -308,7 +308,7 @@ func TestStorageSyncLegacyReceiptHelperRejectsMissingRequestSecret(t *testing.T)
 	}
 	recovery.UID = "receipt-job"
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "original-worker", Namespace: cfg.Namespace, Labels: original.Labels, OwnerReferences: []metav1.OwnerReference{{Kind: "Job", UID: original.UID, Controller: pointerTo(true)}}}, Status: corev1.PodStatus{
-		Phase: corev1.PodSucceeded,
+		Phase:             corev1.PodSucceeded,
 		ContainerStatuses: []corev1.ContainerStatus{{Name: storageSyncContainer, State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0}}}},
 	}}
 	kube := fake.NewSimpleClientset(original, recovery, pod)
