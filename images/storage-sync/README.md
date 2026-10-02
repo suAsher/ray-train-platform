@@ -15,6 +15,7 @@ Every execution first claims its attempt using the downward-API Pod UID. A dupli
 - No path deletes a completed destination object. Target-only files remain unchanged. Cancelling aborts only upload IDs recorded in this run's checkpoint; pausing keeps them.
 - Checkpoints and manifests are fsynced before atomic rename. Multipart checkpoints bind source, target, run, configuration, and part size; resume re-lists every remote part before reuse.
 - Callback counters are cumulative and sequence-numbered. Source and transfer totals stay fixed across mappings. Receipts are durable before callback. A successful Pod exit alone is not a completion receipt.
+- A safely drained, durably recorded and acknowledged `PAUSED` or `CANCELLED` receipt is a normal Worker exit (`0`), so Kubernetes shows `Completed`; the platform keeps the actual paused/cancelled state. Failure, uncertain writes, receipt-persistence failure and missing final callback acknowledgement still exit nonzero. Receiving a stop command alone never proves completion.
 - The per-file scan callback updates discovered counts before the full manifest exists. Mapping progress and completed file results are reported independently of overall totals.
 - Static-credential writer errors with unknown server outcome permanently set `requestsDrained=false` for that attempt. The controller must retain the lock until its isolation/drain requirements are satisfied. No SDK automatic write retry is enabled.
 

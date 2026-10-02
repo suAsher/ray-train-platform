@@ -223,12 +223,14 @@ def run(spec, token, work_dir, config_path=None, reporter_factory=Reporter):
         drained = not (reporter.writer and reporter.writer.uncertain_write)
         try:
             reporter.finish(state=state, failureReason=reason, requestsDrained=drained)
-        except SyncError:
-            # The final receipt was fsynced before callback; absence of ACK is not success.
+        except (SyncError, OSError):
+            # Both durable receipt persistence and callback ACK are required.
             state = 'FAILED'
         for signum, handler in old_handlers.items():
             signal.signal(signum, handler)
-    return 0 if state == 'SUCCEEDED' else 2
+    # Process completion includes a safely acknowledged pause/cancel. The
+    # controller still derives the business state from the authenticated receipt.
+    return 0 if drained and state in ('SUCCEEDED', 'PAUSED', 'CANCELLED') else 2
 
 
 def main():
