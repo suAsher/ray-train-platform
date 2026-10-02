@@ -266,7 +266,7 @@ func TestStorageSyncTerminatedReceiptHelperReportsUnrecoverableReceipt(t *testin
 			original.UID = "original-job"
 			recoverySpec := spec
 			recoverySpec.Phase = "RECOVER"
-			recovery, _, err := renderStorageSyncJob(cfg, recoverySpec)
+			recovery, recoveryRequest, err := renderStorageSyncJob(cfg, recoverySpec)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -278,7 +278,7 @@ func TestStorageSyncTerminatedReceiptHelperReportsUnrecoverableReceipt(t *testin
 				}
 				return pod
 			}
-			client := NewStorageSyncClient(fake.NewSimpleClientset(original, recovery, podFor(original, corev1.PodSucceeded), podFor(recovery, phase)), cfg)
+			client := NewStorageSyncClient(fake.NewSimpleClientset(original, recovery, recoveryRequest, podFor(original, corev1.PodSucceeded), podFor(recovery, phase)), cfg)
 			err = client.RecoverReceipt(context.Background(), spec)
 			if phase == corev1.PodRunning {
 				if err != nil {
@@ -290,6 +290,36 @@ func TestStorageSyncTerminatedReceiptHelperReportsUnrecoverableReceipt(t *testin
 				t.Fatalf("terminated receipt helper must report unrecoverable receipt: %v", err)
 			}
 		})
+	}
+}
+
+func TestStorageSyncLegacyReceiptHelperRejectsMissingRequestSecret(t *testing.T) {
+	cfg, spec := storageSyncRuntimeConfig(), storageSyncRuntimeSpec("TRANSFER")
+	original, _, err := renderStorageSyncJob(cfg, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original.UID = "original-job"
+	recoverySpec := spec
+	recoverySpec.Phase = "RECOVER"
+	recovery, _, err := renderStorageSyncJob(cfg, recoverySpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery.UID = "receipt-job"
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "original-worker", Namespace: cfg.Namespace, Labels: original.Labels, OwnerReferences: []metav1.OwnerReference{{Kind: "Job", UID: original.UID, Controller: pointerTo(true)}}}, Status: corev1.PodStatus{
+		Phase: corev1.PodSucceeded,
+		ContainerStatuses: []corev1.ContainerStatus{{Name: storageSyncContainer, State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0}}}},
+	}}
+	kube := fake.NewSimpleClientset(original, recovery, pod)
+	err = NewStorageSyncClient(kube, cfg).RecoverReceipt(context.Background(), spec)
+	if err == nil || errors.Is(err, storagesync.ErrReceiptRecoveryFailed) {
+		t.Fatalf("missing request must reject recovery identity, not establish a receipt outcome: %v", err)
+	}
+	for _, action := range kube.Actions() {
+		if action.GetVerb() == "create" || action.GetVerb() == "update" || action.GetVerb() == "patch" || action.GetVerb() == "delete" {
+			t.Fatalf("missing request unexpectedly mutated resources: %s", action.GetVerb())
+		}
 	}
 }
 

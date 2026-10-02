@@ -35,6 +35,12 @@ unchanged. The backend arms Job TTL only after verifying durable result evidence
 and executor termination; TTL is not added when a Job is created. Platform audit
 records, paused/resumable checkpoints and incremental baselines are retained.
 
+The backend remains a trusted control-plane component with the existing
+cluster-wide Secret permissions. The additional Roles contain only the operations
+needed by this feature; effective permissions also include those existing grants.
+The dedicated namespace separates executor resources and their lifecycle, and
+does not establish a new credential or network isolation boundary from the backend.
+
 Changing the namespace is a storage migration, not a live rescheduling operation:
 stop new storage sync admission, confirm there are no active, paused or reusable
 preview executions, and copy/checksum the old checkpoint PVC to a provisioned new
