@@ -23,6 +23,8 @@ type StorageSyncConfig struct {
 	EphemeralStorageRequest, EphemeralStorageLimit                      string
 	MaxActiveRuns, MaxFileConcurrency, MaxPartConcurrency               int
 	MaxBandwidthBytesPerSecond                                          int64
+	GCNamespaces                                                        []string
+	GCSucceededTTLSeconds, GCFailedTTLSeconds                           int32
 }
 
 func loadStorageSyncConfig() (StorageSyncConfig, error) {
@@ -71,10 +73,47 @@ func loadStorageSyncConfig() (StorageSyncConfig, error) {
 	if err != nil || cfg.MaxBandwidthBytesPerSecond < 102400 || cfg.MaxBandwidthBytesPerSecond > 10737418240 {
 		return StorageSyncConfig{}, fmt.Errorf("STORAGE_SYNC_MAX_BANDWIDTH_BYTES_PER_SECOND must be between 102400 and 10737418240")
 	}
+	cfg.GCNamespaces, err = storageSyncGCNamespaces(cfg.Namespace, envOr("STORAGE_SYNC_GC_NAMESPACES_JSON", "[]"))
+	if err != nil {
+		return StorageSyncConfig{}, err
+	}
+	for _, field := range []struct {
+		key      string
+		fallback int32
+		target   *int32
+	}{
+		{"GC_SUCCEEDED_TTL_SECONDS", 3600, &cfg.GCSucceededTTLSeconds},
+		{"GC_FAILED_TTL_SECONDS", 86400, &cfg.GCFailedTTLSeconds},
+	} {
+		value, err := strconv.ParseInt(envOr("STORAGE_SYNC_"+field.key, strconv.FormatInt(int64(field.fallback), 10)), 10, 32)
+		if err != nil || value < 1 || value > 604800 {
+			return StorageSyncConfig{}, fmt.Errorf("STORAGE_SYNC_%s must be between 1 and 604800", field.key)
+		}
+		*field.target = int32(value)
+	}
 	if err := ValidateStorageSyncConfig(cfg); err != nil {
 		return StorageSyncConfig{}, err
 	}
 	return cfg, nil
+}
+
+func storageSyncGCNamespaces(namespace, raw string) ([]string, error) {
+	var additional []string
+	if err := json.Unmarshal([]byte(raw), &additional); err != nil || additional == nil {
+		return nil, fmt.Errorf("STORAGE_SYNC_GC_NAMESPACES_JSON must be an array of namespace names")
+	}
+	result := make([]string, 0, len(additional)+1)
+	seen := make(map[string]bool, len(additional)+1)
+	for _, value := range append([]string{namespace}, additional...) {
+		if len(k8svalidation.IsDNS1123Label(value)) != 0 {
+			return nil, fmt.Errorf("storage sync execution and garbage collection namespaces must be valid namespace names")
+		}
+		if !seen[value] {
+			result = append(result, value)
+			seen[value] = true
+		}
+	}
+	return result, nil
 }
 
 func ValidateStorageSyncConfig(cfg StorageSyncConfig) error {
@@ -87,9 +126,20 @@ func ValidateStorageSyncConfig(cfg StorageSyncConfig) error {
 	if !validDatasetPublisherBucket(cfg.Bucket) || cfg.Region == "" {
 		return fmt.Errorf("STORAGE_SYNC_BUCKET and STORAGE_SYNC_REGION are required")
 	}
-	for _, value := range []string{cfg.Namespace, cfg.CredentialSecret, cfg.ServiceAccountName, cfg.WorkClaimName} {
+	if len(k8svalidation.IsDNS1123Label(cfg.Namespace)) != 0 {
+		return fmt.Errorf("STORAGE_SYNC_NAMESPACE must be a valid namespace name")
+	}
+	for _, value := range cfg.GCNamespaces {
+		if len(k8svalidation.IsDNS1123Label(value)) != 0 {
+			return fmt.Errorf("STORAGE_SYNC_GC_NAMESPACES_JSON contains an invalid namespace name")
+		}
+	}
+	if cfg.GCSucceededTTLSeconds < 1 || cfg.GCSucceededTTLSeconds > 604800 || cfg.GCFailedTTLSeconds < 1 || cfg.GCFailedTTLSeconds > 604800 {
+		return fmt.Errorf("storage sync garbage collection retention must be between 1 and 604800 seconds")
+	}
+	for _, value := range []string{cfg.CredentialSecret, cfg.ServiceAccountName, cfg.WorkClaimName} {
 		if !isDNSSubdomain(value) {
-			return fmt.Errorf("storage sync namespace, Secret, ServiceAccount and work PVC must be valid names")
+			return fmt.Errorf("storage sync Secret, ServiceAccount and work PVC must be valid names")
 		}
 	}
 	if cfg.CredentialMode != "static-secret" {

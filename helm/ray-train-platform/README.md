@@ -1,4 +1,47 @@
 
+### Storage sync executor namespace and retention
+
+Administrator storage sync workers can run outside the platform service namespace:
+
+```yaml
+storageSync:
+  namespace: ray-train-sync
+  createNamespace: true
+  gcNamespaces: [ray-train-platform]
+  gcSucceededTTLSeconds: 3600
+  gcFailedTTLSeconds: 86400
+  callbackBaseURL: ""
+```
+
+An empty `namespace` retains the existing platform namespace. An empty callback
+uses `http://ray-train-backend.<platform-namespace>.svc.cluster.local:8080` so it
+also works across namespaces. When using `--reuse-values`, explicitly replace an
+old short callback such as `http://ray-train-backend:8080` with an empty value or
+the full service URL.
+
+The worker ServiceAccount, work PVC and executor Role/RoleBinding use the execution
+namespace; the binding still names the backend ServiceAccount in the platform
+namespace. The worker does not mount a Kubernetes API token. The operator must
+pre-provision the configured TOS credential Secret and image pull Secrets in the
+execution namespace. The chart never reads or copies those credentials. A chart-
+created execution Namespace and work PVC both have `helm.sh/resource-policy: keep`.
+
+`gcNamespaces` is an operator allowlist for historical executors. The current
+execution namespace is always included, duplicates are removed, and additional
+namespaces receive only Job get/list/patch, Pod get/list and Secret get/patch
+permissions through this chart's GC Role. No Job create or delete permission is
+added for historical namespaces. Existing platform ClusterRole permissions are
+unchanged. The backend arms Job TTL only after verifying durable result evidence
+and executor termination; TTL is not added when a Job is created. Platform audit
+records, paused/resumable checkpoints and incremental baselines are retained.
+
+Changing the namespace is a storage migration, not a live rescheduling operation:
+stop new storage sync admission, confirm there are no active, paused or reusable
+preview executions, and copy/checksum the old checkpoint PVC to a provisioned new
+PVC before enabling workers in the new namespace. Retain the original PVC and add
+the old namespace to `gcNamespaces` while its executors are reclaimed. A Helm
+rollback alone does not merge checkpoint data written after the namespace cutover.
+
 ### Dedicated training nodes
 
 `training.dedicatedNodes` maps tenant IDs to node hostname labels, for example:

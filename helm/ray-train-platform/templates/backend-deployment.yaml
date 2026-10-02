@@ -59,6 +59,9 @@ OIDC issuer. Local-only development does not. */}}
 {{- $idcDataSpaces := default (dict) .Values.idcDataSpaces }}
 {{- $idcSync := default (dict) .Values.idcSync }}
 {{- $storageSync := default (dict) .Values.storageSync }}
+{{- $storageSyncPlatformNamespace := default .Release.Namespace .Values.namespace }}
+{{- $storageSyncNamespace := default $storageSyncPlatformNamespace $storageSync.namespace }}
+{{- $storageSyncGCNamespaces := uniq (concat (list $storageSyncNamespace) (default (list) $storageSync.gcNamespaces)) }}
 {{- $storageSyncResources := default (dict) $storageSync.resources }}
 {{- $storageSyncRequests := default (dict) $storageSyncResources.requests }}
 {{- $storageSyncLimits := default (dict) $storageSyncResources.limits }}
@@ -311,7 +314,7 @@ spec:
             - name: STORAGE_SYNC_ENABLED
               value: {{ default false $storageSync.enabled | quote }}
             - name: STORAGE_SYNC_NAMESPACE
-              value: {{ .Values.namespace | quote }}
+              value: {{ $storageSyncNamespace | quote }}
             - name: STORAGE_SYNC_IMAGE
               {{- if (default false $storageSync.enabled) }}
               value: {{ include "ray-train-platform.image" (list . (default (dict) $storageSync.image)) | quote }}
@@ -333,7 +336,7 @@ spec:
             - name: STORAGE_SYNC_WORK_CLAIM_NAME
               value: {{ default "" $storageSync.workClaimName | quote }}
             - name: STORAGE_SYNC_CALLBACK_BASE_URL
-              value: {{ default "http://ray-train-backend:8080" $storageSync.callbackBaseURL | quote }}
+              value: {{ default (printf "http://ray-train-backend.%s.svc.cluster.local:8080" $storageSyncPlatformNamespace) $storageSync.callbackBaseURL | quote }}
             - name: STORAGE_SYNC_NODE_SELECTOR_JSON
               value: {{ toJson (default (dict) $storageSync.nodeSelector) | quote }}
             - name: STORAGE_SYNC_CPU_REQUEST
@@ -356,6 +359,12 @@ spec:
               value: {{ default 2 $storageSync.maxPartConcurrency | int64 | quote }}
             - name: STORAGE_SYNC_MAX_BANDWIDTH_BYTES_PER_SECOND
               value: {{ default 104857600 $storageSync.maxBandwidthBytesPerSecond | int64 | quote }}
+            - name: STORAGE_SYNC_GC_NAMESPACES_JSON
+              value: {{ toJson $storageSyncGCNamespaces | quote }}
+            - name: STORAGE_SYNC_GC_SUCCEEDED_TTL_SECONDS
+              value: {{ default 3600 $storageSync.gcSucceededTTLSeconds | int64 | quote }}
+            - name: STORAGE_SYNC_GC_FAILED_TTL_SECONDS
+              value: {{ default 86400 $storageSync.gcFailedTTLSeconds | int64 | quote }}
             - name: KUEUE_AUTO_QUOTA
               value: {{ .Values.kueue.autoQuota | quote }}
             - name: KUEUE_TOPOLOGY_ENABLED

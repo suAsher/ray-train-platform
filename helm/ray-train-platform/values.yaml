@@ -478,6 +478,17 @@ idcSync:
 # Static credentials never permit takeover from an unconfirmed old writer.
 storageSync:
   enabled: false
+  # Empty preserves the platform namespace for existing installations.
+  # Prefer a dedicated namespace for new installations; migrate checkpoint PVC
+  # contents before changing this on an existing installation.
+  namespace: ""
+  createNamespace: false
+  # Extra operator-approved namespaces containing old executors. The execution
+  # namespace is always included. Old namespaces receive GC-only Job RBAC.
+  gcNamespaces: []
+  # Retention is armed only after durable receipts and confirmed termination.
+  gcSucceededTTLSeconds: 3600
+  gcFailedTTLSeconds: 86400
   image:
     repository: ray-storage-sync
     tag: "REPLACE_WITH_IMMUTABLE_TAG"
@@ -486,11 +497,14 @@ storageSync:
   region: ""
   endpoint: ""
   credentialMode: static-secret
-  # Existing administrator-created Secret; key config is a tosutil config.
+  # Existing administrator-created Secret in storageSync.namespace; key config
+  # is a tosutil config. Global imagePullSecrets must also exist in that namespace.
+  # This chart never copies credential or registry Secrets across namespaces.
   # Read-only browse/preview workers never receive this Secret.
   credentialSecret: ""
   serviceAccountName: ray-storage-sync
-  callbackBaseURL: "http://ray-train-backend:8080"
+  # Empty uses the backend Service FQDN in the platform namespace.
+  callbackBaseURL: ""
   nodeSelector: {}
   workClaimName: ""
   workVolume:

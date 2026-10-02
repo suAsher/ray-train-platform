@@ -1,17 +1,44 @@
 {{- $sync := default (dict) .Values.storageSync }}
 {{- if (default false $sync.enabled) }}
+{{- $root := . }}
+{{- $platformNamespace := default .Release.Namespace .Values.namespace }}
+{{- $namespace := default $platformNamespace $sync.namespace }}
+{{- if or (not (kindIs "string" $namespace)) (gt (len $namespace) 63) (not (regexMatch `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$` $namespace)) }}{{- fail "storageSync.namespace must be a valid Kubernetes namespace name" }}{{- end }}
+{{- if and (hasKey $sync "createNamespace") (not (kindIs "bool" $sync.createNamespace)) }}{{- fail "storageSync.createNamespace must be boolean" }}{{- end }}
+{{- if and (hasKey $sync "gcNamespaces") (not (kindIs "slice" $sync.gcNamespaces)) }}{{- fail "storageSync.gcNamespaces must be an array of namespace names" }}{{- end }}
+{{- $gcNamespaces := uniq (concat (list $namespace) (default (list) $sync.gcNamespaces)) }}
+{{- range $gcNamespace := $gcNamespaces }}
+{{- if or (not (kindIs "string" $gcNamespace)) (gt (len $gcNamespace) 63) (not (regexMatch `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$` $gcNamespace)) }}{{- fail "storageSync.gcNamespaces must contain valid Kubernetes namespace names" }}{{- end }}
+{{- end }}
+{{- range $field, $fallback := dict "gcSucceededTTLSeconds" 3600 "gcFailedTTLSeconds" 86400 }}
+{{- $ttl := $fallback }}
+{{- if hasKey $sync $field }}{{- $ttl = get $sync $field }}{{- end }}
+{{- if or (not (regexMatch `^[1-9][0-9]*$` (toString $ttl))) (gt (int64 $ttl) 604800) }}{{- fail (printf "storageSync.%s must be an integer between 1 and 604800" $field) }}{{- end }}
+{{- end }}
 {{- $image := default (dict) $sync.image }}
 {{- if not (regexMatch `^sha256:[0-9a-fA-F]{64}$` (default "" $image.digest)) }}{{- fail "storageSync.image.digest must use sha256:<64 hex> when enabled" }}{{- end }}
-{{- range $field := list "bucket" "region" "endpoint" "credentialSecret" "serviceAccountName" "workClaimName" "callbackBaseURL" }}
+{{- range $field := list "bucket" "region" "endpoint" "credentialSecret" "serviceAccountName" "workClaimName" }}
 {{- if not (get $sync $field) }}{{- fail (printf "storageSync.%s is required when enabled" $field) }}{{- end }}
 {{- end }}
 {{- if ne (default "static-secret" $sync.credentialMode) "static-secret" }}{{- fail "storageSync supports static-secret credentials only; unconfirmed writers cannot fail over" }}{{- end }}
 {{- if not (default (dict) $sync.nodeSelector) }}{{- fail "storageSync.nodeSelector must explicitly select verified CPU nodes" }}{{- end }}
+{{- if and (default false $sync.createNamespace) (ne $namespace $platformNamespace) }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $namespace }}
+  labels:
+    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: storage-sync
+  annotations:
+    helm.sh/resource-policy: keep
+---
+{{- end }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: {{ $sync.serviceAccountName }}
-  namespace: {{ .Values.namespace }}
+  namespace: {{ $namespace }}
 automountServiceAccountToken: false
 {{- with .Values.global.imagePullSecrets }}
 imagePullSecrets:
@@ -22,11 +49,11 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: {{ .Release.Name }}-storage-sync-controller
-  namespace: {{ .Values.namespace }}
+  namespace: {{ $namespace }}
 rules:
   - apiGroups: ["batch"]
     resources: ["jobs"]
-    verbs: ["get", "create", "patch"]
+    verbs: ["get", "list", "create", "patch"]
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list"]
@@ -36,21 +63,55 @@ rules:
     verbs: ["get"]
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "create"]
+    verbs: ["get", "create", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: {{ .Release.Name }}-storage-sync-controller
-  namespace: {{ .Values.namespace }}
+  namespace: {{ $namespace }}
 subjects:
   - kind: ServiceAccount
     name: ray-train-platform-sa
-    namespace: {{ .Values.namespace }}
+    namespace: {{ $platformNamespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: {{ .Release.Name }}-storage-sync-controller
+{{- range $gcNamespace := $gcNamespaces }}
+{{- if ne $gcNamespace $namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $root.Release.Name }}-storage-sync-gc
+  namespace: {{ $gcNamespace }}
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "patch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $root.Release.Name }}-storage-sync-gc
+  namespace: {{ $gcNamespace }}
+subjects:
+  - kind: ServiceAccount
+    name: ray-train-platform-sa
+    namespace: {{ $platformNamespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $root.Release.Name }}-storage-sync-gc
+{{- end }}
+{{- end }}
 {{- $workVolume := default (dict) $sync.workVolume }}
 {{- if (default false $workVolume.create) }}
 ---
@@ -58,7 +119,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: {{ $sync.workClaimName }}
-  namespace: {{ .Values.namespace }}
+  namespace: {{ $namespace }}
   annotations:
     helm.sh/resource-policy: keep
 spec:
