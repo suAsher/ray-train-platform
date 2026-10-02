@@ -153,6 +153,7 @@ type Preview struct {
 	ReceiptState      string            `json:"-"`
 	LastReportDigest  string            `json:"-"`
 	RequestsDrained   bool              `json:"-"`
+	StopVerified      bool              `json:"-"`
 	Location          Location          `json:"location"`
 	Cursor            string            `json:"-"`
 	Limit             int               `json:"limit,omitempty"`

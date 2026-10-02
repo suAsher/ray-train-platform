@@ -14,6 +14,7 @@ import (
 type StorageSyncRepository struct{ db *gorm.DB }
 
 var _ ss.Repository = (*StorageSyncRepository)(nil)
+var _ ss.AttemptReader = (*StorageSyncRepository)(nil)
 var _ ss.Tx = (*storageSyncTx)(nil)
 
 func NewStorageSyncRepository(database *gorm.DB) *StorageSyncRepository {
@@ -60,6 +61,20 @@ func (r *StorageSyncRepository) ListRuns(ctx context.Context, planID string) ([]
 
 func (r *StorageSyncRepository) GetRun(ctx context.Context, id string) (ss.Run, error) {
 	return storageSyncReadRun(r.db.WithContext(ctx), id)
+}
+
+func (r *StorageSyncRepository) GetAttempt(ctx context.Context, id string, attempt int) (ss.Run, error) {
+	if id == "" || attempt < 1 { return ss.Run{}, ss.ErrInvalid }
+	var row storageSyncAttemptRecord
+	if err := r.db.WithContext(ctx).Where("run_id = ? AND attempt = ?", id, attempt).First(&row).Error; err != nil {
+		return ss.Run{}, storageSyncError(err)
+	}
+	run, err := storageSyncDecodeRun(row.SnapshotJSON)
+	if err != nil { return ss.Run{}, err }
+	if run.ID != id || run.Attempt != attempt || run.Generation != row.Generation {
+		return ss.Run{}, ss.ErrConflict
+	}
+	return run,nil
 }
 
 func (r *StorageSyncRepository) GetPreview(ctx context.Context, id string) (ss.Preview, error) {

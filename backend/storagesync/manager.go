@@ -21,6 +21,8 @@ type Options struct {
 	MaxPendingPreviews  int
 	CallbackURL         string
 	MetadataURL         string
+	GCSucceededTTLSeconds int32
+	GCFailedTTLSeconds int32
 }
 type Manager struct {
 	repo     Repository
@@ -47,6 +49,12 @@ func NewManager(repo Repository, jobs JobClient, resolver Resolver, options Opti
 	}
 	if options.MaxPendingPreviews < 1 {
 		options.MaxPendingPreviews = 8
+	}
+	if options.GCSucceededTTLSeconds <= 0 {
+		options.GCSucceededTTLSeconds = 3600
+	}
+	if options.GCFailedTTLSeconds <= 0 {
+		options.GCFailedTTLSeconds = 86400
 	}
 	return &Manager{repo: repo, jobs: jobs, resolver: resolver, options: options}
 }

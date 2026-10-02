@@ -5,6 +5,7 @@ import (
     "errors"
     "fmt"
     "testing"
+    "time"
 )
 
 type gcRepository struct {
@@ -125,4 +126,47 @@ func TestExecutorGCRecoveryHelperRequiresOriginalAttemptProof(t *testing.T) {
     m,_,j,old,e:=gcFixture();e.Phase="RECOVER";e.JobUID="helper";e.ParentJobUID=old.JobUID;j.executors=[]ExecutorIdentity{e}
     if err:=m.collectExecutors(context.Background());err!=nil {t.Fatal(err)}
     if len(j.scheduled)!=1 {t.Fatal("bound terminal helper was not collected")}
+}
+
+func TestExecutorGCHistoricalPreflightRetainsSuccessfulOutcome(t *testing.T) {
+    m,r,j,old,e:=gcFixture()
+    old.Phase="PREVIEW";old.State="RUNNING";old.ReceiptState="SUCCEEDED";old.RequestsDrained=false
+    e.Phase="PREVIEW";r.attempts["run-old/1"]=old;j.executors=[]ExecutorIdentity{e}
+    if err:=m.collectExecutors(context.Background());err!=nil{t.Fatal(err)}
+    if len(j.scheduled)!=1||j.scheduled[0].State!="SUCCEEDED"||j.scheduled[0].TTLSeconds!=3600 {t.Fatalf("preflight outcome=%+v",j.scheduled)}
+}
+
+func TestExecutorGCLegacyPreviewRequiresIndependentTerminalIdentity(t *testing.T) {
+    for _,tc:=range []struct{name string; change func(*Preview,*ExecutorIdentity); eligible bool}{
+        {"read-only failure without receipt",func(p *Preview,e *ExecutorIdentity){p.State="FAILED";p.ReceiptState=""},true},
+        {"receipt recovery active",func(p *Preview,e *ExecutorIdentity){p.State="RUNNING";p.FailureReason="RECEIPT_RECOVERY_PENDING"},false},
+        {"success receipt absent",func(p *Preview,e *ExecutorIdentity){p.ReceiptState=""},false},
+        {"job still running",func(p *Preview,e *ExecutorIdentity){e.Terminated=false},false},
+        {"changed uid",func(p *Preview,e *ExecutorIdentity){e.JobUID="replacement"},false},
+        {"helper cannot prove original stop",func(p *Preview,e *ExecutorIdentity){e.Phase="RECOVER";e.ParentJobUID=p.JobUID;e.JobUID="helper"},false},
+    }{t.Run(tc.name,func(t *testing.T){
+        m,r,j,_,e:=gcFixture();e.SubjectKind="preview";e.Phase="PREVIEW"
+        p:=Preview{ID:e.RunID,Kind:"PREVIEW",State:"SUCCEEDED",Attempt:e.Attempt,Generation:e.Generation,JobUID:e.JobUID,ReceiptState:"SUCCEEDED"}
+        tc.change(&p,&e);r.previews[p.ID]=p;j.executors=[]ExecutorIdentity{e}
+        if err:=m.collectExecutors(context.Background());err!=nil{t.Fatal(err)}
+        if (len(j.scheduled)==1)!=tc.eligible||r.previews[p.ID].StopVerified!=tc.eligible{t.Fatalf("eligible=%t collected=%+v proof=%t",tc.eligible,j.scheduled,r.previews[p.ID].StopVerified)}
+    })}
+}
+
+func TestExecutorGCPausedRunResumesAfterOldExecutorWasCollected(t *testing.T) {
+    m,memory,jobs,_,run:=startedRun(t)
+    run.State="PAUSED";run.StopVerified=true;run.RequestsDrained=true;run.ReceiptState="PAUSED"
+    run.RecoverableUntil=m.now().Add(time.Hour)
+    memory.runs[run.ID]=run
+    repo:=&gcRepository{memoryRepo:memory,attempts:map[string]Run{fmt.Sprintf("%s/%d",run.ID,run.Attempt):run}}
+    collector:=&gcJobs{fakeJobs:*jobs,executors:[]ExecutorIdentity{{Namespace:"legacy",Name:"old",RunID:run.ID,SubjectKind:"run",Attempt:run.Attempt,Generation:run.Generation,Phase:run.Phase,JobUID:run.JobUID,Terminated:true}}}
+    m.repo,m.jobs=repo,collector
+    if err:=m.collectExecutors(context.Background());err!=nil{t.Fatal(err)}
+    if len(collector.scheduled)!=1{t.Fatal("old paused executor was not scheduled")}
+    collector.executors=nil // The TTL controller removed the old Job and Pod.
+    resumed,err:=m.Control(context.Background(),"admin",run.ID,"resume")
+    if err!=nil||resumed.Attempt!=run.Attempt+1||resumed.State!="QUEUED"||resumed.JobUID!=""{t.Fatalf("resume after collection: %+v %v",resumed,err)}
+    collector.observation=Observation{Exists:true,JobUID:"new-executor",Running:true}
+    if err=m.Reconcile(context.Background());err!=nil{t.Fatal(err)}
+    if memory.runs[run.ID].JobUID!="new-executor"||len(collector.specs)==0||collector.specs[len(collector.specs)-1].Attempt!=resumed.Attempt{t.Fatal("resume recreated the collected attempt")}
 }

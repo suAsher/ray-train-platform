@@ -150,6 +150,11 @@ func (c *StorageSyncClient) RecoverReceipt(ctx context.Context, spec storagesync
 	}
 	recovery := spec
 	recovery.Phase = "RECOVER"
+	recovery.RecoveryJobUID = observed.JobUID
+	recovery, err = c.storageSyncCompatibleRecovery(ctx, recovery)
+	if err != nil {
+		return err
+	}
 	recovered, err := c.Ensure(ctx, recovery)
 	if err != nil {
 		return err
@@ -158,6 +163,42 @@ func (c *StorageSyncClient) RecoverReceipt(ctx context.Context, spec storagesync
 		return storagesync.ErrReceiptRecoveryFailed
 	}
 	return nil
+}
+
+// Older receipt readers predate the parent-Job binding. They may finish their
+// existing authenticated recovery but remain ineligible for executor GC. Reuse
+// requires both the exact legacy Job spec and its immutable request payload.
+func (c *StorageSyncClient) storageSyncCompatibleRecovery(ctx context.Context, spec storagesync.WorkSpec) (storagesync.WorkSpec, error) {
+	name := storageSyncJobName(spec.RunID, spec.Attempt) + "-receipt"
+	existing, err := c.kubernetes.BatchV1().Jobs(c.config.Namespace).Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return spec, nil
+	}
+	if err != nil {
+		return spec, fmt.Errorf("verify existing storage sync receipt reader: %w", err)
+	}
+	legacy := spec
+	legacy.RecoveryJobUID = ""
+	job, request, err := renderStorageSyncJob(c.config, legacy)
+	if err != nil {
+		return spec, err
+	}
+	if verifyStorageSyncJob(existing, job) != nil {
+		return spec, nil
+	}
+	actual, err := c.kubernetes.CoreV1().Secrets(c.config.Namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return spec, fmt.Errorf("verify legacy storage sync receipt request: %w", err)
+	}
+	if actual.Immutable == nil || !*actual.Immutable || !bytes.Equal(actual.Data["request.json"], request.Data["request.json"]) || len(actual.Data["token"]) == 0 || actual.Annotations[storageSyncSpecAnnotation] != request.Annotations[storageSyncSpecAnnotation] {
+		return spec, fmt.Errorf("legacy storage sync receipt request identity is not verified")
+	}
+	for _, key := range []string{storageSyncRunLabel, storageSyncAttemptLabel, storageSyncPhaseLabel, "app.kubernetes.io/name", "app.kubernetes.io/managed-by"} {
+		if actual.Labels[key] != request.Labels[key] || existing.Labels[key] != job.Labels[key] {
+			return spec, fmt.Errorf("legacy storage sync receipt reader ownership is not verified")
+		}
+	}
+	return legacy, nil
 }
 
 func (c *StorageSyncClient) observeJob(ctx context.Context, job *batchv1.Job) (storagesync.Observation, error) {

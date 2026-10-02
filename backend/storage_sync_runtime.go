@@ -36,6 +36,18 @@ func (j authenticatedStorageSyncJobs) Observe(ctx context.Context, id string, at
 func (j authenticatedStorageSyncJobs) Stop(ctx context.Context, id string, attempt int) error {
 	return j.base.Stop(ctx, id, attempt)
 }
+
+func (j authenticatedStorageSyncJobs) ListExecutors(ctx context.Context) ([]ss.ExecutorIdentity,error) {
+	collector, ok := j.base.(ss.ExecutorGarbageCollector)
+	if !ok { return nil,nil }
+	return collector.ListExecutors(ctx)
+}
+
+func (j authenticatedStorageSyncJobs) ScheduleExecutorGC(ctx context.Context, request ss.ExecutorGCRequest) error {
+	collector, ok := j.base.(ss.ExecutorGarbageCollector)
+	if !ok { return fmt.Errorf("storage sync executor collection unavailable") }
+	return collector.ScheduleExecutorGC(ctx,request)
+}
 func (j authenticatedStorageSyncJobs) RecoverReceipt(ctx context.Context, spec ss.WorkSpec) error {
 	client, ok := j.base.(interface {
 		RecoverReceipt(context.Context, ss.WorkSpec) error
@@ -65,6 +77,6 @@ func newStorageSyncComponents(database *gorm.DB, repo *repositories.GormReposito
 	resolver := api.NewAdminStorageResolver(repo, api.AdminStorageResolverOptions{Bucket: cfg.TOSBucket, Region: cfg.TOSRegion, PublicRoot: cfg.DataSpacesPublicRoot, IDCSources: sources})
 	key := []byte(cfg.PATPepper)
 	jobs := authenticatedStorageSyncJobs{base: kube.StorageSyncRuntime(cfg.StorageSync), key: key, origin: cfg.StorageSync.CallbackBaseURL}
-	manager := ss.NewManager(repositories.NewStorageSyncRepository(database), jobs, resolver, ss.Options{MaxActiveRuns: cfg.StorageSync.MaxActiveRuns})
+	manager := ss.NewManager(repositories.NewStorageSyncRepository(database), jobs, resolver, ss.Options{MaxActiveRuns: cfg.StorageSync.MaxActiveRuns, GCSucceededTTLSeconds:cfg.StorageSync.GCSucceededTTLSeconds, GCFailedTTLSeconds:cfg.StorageSync.GCFailedTTLSeconds})
 	return manager, api.NewStorageSyncHandler(manager, resolver, metadata, key), nil
 }

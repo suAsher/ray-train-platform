@@ -141,7 +141,7 @@ func storageSyncEncodePreview(preview ss.Preview) (string, error) {
 	private := storageSyncPrivateSnapshot{Resolved: preview.Resolved, ResolutionDigest: preview.ResolutionDigest,
 		SourceFingerprint: preview.SourceFingerprint, TargetFingerprint: preview.TargetFingerprint,
 		Attempt: preview.Attempt, Generation: preview.Generation, Sequence: preview.Sequence, JobUID: preview.JobUID,
-		ReceiptState: preview.ReceiptState, RequestsDrained: preview.RequestsDrained,
+		ReceiptState: preview.ReceiptState, RequestsDrained: preview.RequestsDrained, StopVerified: preview.StopVerified,
 		FilesPath: preview.Files.Path, Cursor: preview.Cursor, LastReportDigest: preview.LastReportDigest,
 		WorkerID: preview.WorkerID, BaselineRef: preview.BaselineRef}
 	return storageSyncJSON(storageSyncPreviewSnapshot{Public: preview, Private: private})
@@ -157,7 +157,7 @@ func storageSyncDecodePreview(raw string) (ss.Preview, error) {
 	preview.SourceFingerprint, preview.TargetFingerprint = private.SourceFingerprint, private.TargetFingerprint
 	preview.Attempt, preview.Generation, preview.Sequence = private.Attempt, private.Generation, private.Sequence
 	preview.JobUID, preview.ReceiptState = private.JobUID, private.ReceiptState
-	preview.RequestsDrained = private.RequestsDrained
+	preview.RequestsDrained, preview.StopVerified = private.RequestsDrained, private.StopVerified
 	preview.Files.Path, preview.Cursor = private.FilesPath, private.Cursor
 	preview.LastReportDigest = private.LastReportDigest
 	preview.WorkerID, preview.BaselineRef = private.WorkerID, private.BaselineRef

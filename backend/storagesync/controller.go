@@ -64,6 +64,9 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			}
 		}
 	}
+	if err := m.collectExecutors(ctx); err != nil {
+		failures = append(failures, err)
+	}
 	return errors.Join(failures...)
 }
 func (m *Manager) schedule(ctx context.Context) error {
@@ -210,6 +213,7 @@ func (m *Manager) reconcilePreview(ctx context.Context, id string) error {
 			return tx.PutPreview(p)
 		}
 		if observed.Terminated && observed.Exists && p.JobUID != "" && p.JobUID == observed.JobUID {
+			p.StopVerified = true
 			if p.ReceiptState == "" {
 				if recovery, ok := m.jobs.(ReceiptRecoverer); ok {
 					externalErr = recovery.RecoverReceipt(ctx, m.previewSpec(p))

@@ -27,6 +27,7 @@ func storageSyncRuntimeConfig() config.StorageSyncConfig {
 		CPURequest:   "500m", CPULimit: "2", MemoryRequest: "512Mi", MemoryLimit: "2Gi",
 		EphemeralStorageRequest: "256Mi", EphemeralStorageLimit: "1Gi",
 		MaxActiveRuns: 1, MaxFileConcurrency: 4, MaxPartConcurrency: 2,
+		GCSucceededTTLSeconds: 3600, GCFailedTTLSeconds: 86400,
 		MaxBandwidthBytesPerSecond: 104857600, CallbackBaseURL: "http://ray-train-backend:8080",
 	}
 }

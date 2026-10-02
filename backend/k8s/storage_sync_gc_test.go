@@ -185,3 +185,74 @@ func TestStorageSyncExecutorGCListUsesOnlyManagedNamespacesAndValidRequests(t *t
 		t.Fatalf("namespaces were not deduplicated: %d", lists)
 	}
 }
+
+func TestStorageSyncExecutorGCRecoveryRequiresImmutableParentBinding(t *testing.T) {
+	for _, parent := range []string{"", "original-job"} {
+		t.Run("parent-"+parent, func(t *testing.T) {
+			job, secret, pod, request := storageSyncGCFixture(t)
+			spec := storageSyncRuntimeSpec("RECOVER")
+			spec.SubjectKind, spec.RecoveryJobUID = "run", parent
+			recoveryJob, recoverySecret, err := renderStorageSyncJob(storageSyncRuntimeConfig(), spec)
+			if err != nil { t.Fatal(err) }
+			recoveryJob.UID, recoveryJob.ResourceVersion, recoveryJob.Status = job.UID, job.ResourceVersion, job.Status
+			recoverySecret.UID, recoverySecret.ResourceVersion = secret.UID, secret.ResourceVersion
+			pod.Labels, pod.OwnerReferences[0].Name = recoveryJob.Labels, recoveryJob.Name
+			request.Executor.Name, request.Executor.Phase, request.Executor.ParentJobUID = recoveryJob.Name, "RECOVER", parent
+			kube := fake.NewSimpleClientset(recoveryJob, recoverySecret, pod)
+			client := NewStorageSyncClient(kube, storageSyncRuntimeConfig())
+			executors, err := client.ListExecutors(context.Background())
+			if err != nil { t.Fatal(err) }
+			if parent == "" {
+				if len(executors) != 0 { t.Fatal("legacy unbound receipt reader was offered for GC") }
+				if err := client.ScheduleExecutorGC(context.Background(), request); err == nil { t.Fatal("unbound receipt reader accepted for GC") }
+				return
+			}
+			if len(executors) != 1 || executors[0].ParentJobUID != parent { t.Fatal("receipt parent identity lost") }
+			if err := client.ScheduleExecutorGC(context.Background(), request); err != nil { t.Fatal(err) }
+		})
+	}
+}
+
+func TestStorageSyncReceiptRecoveryReusesOnlyExactImmutableLegacyRequest(t *testing.T) {
+	for _, tampered := range []bool{false, true} {
+		t.Run(fmt.Sprintf("tampered-%t", tampered), func(t *testing.T) {
+			job, _, pod, _ := storageSyncGCFixture(t)
+			spec := storageSyncRuntimeSpec("TRANSFER")
+			spec.SubjectKind = "run"
+			legacy := spec
+			legacy.Phase = "RECOVER"
+			recoveryJob, recoverySecret, err := renderStorageSyncJob(storageSyncRuntimeConfig(), legacy)
+			if err != nil { t.Fatal(err) }
+			if tampered { recoverySecret.Data["request.json"] = []byte(`{"phase":"RECOVER"}`) }
+			kube := fake.NewSimpleClientset(job, pod, recoveryJob, recoverySecret)
+			err = NewStorageSyncClient(kube, storageSyncRuntimeConfig()).RecoverReceipt(context.Background(), spec)
+			if tampered && err == nil { t.Fatal("tampered legacy recovery request was trusted") }
+			if !tampered && err != nil { t.Fatalf("existing receipt recovery broken after upgrade: %v", err) }
+			for _, action := range kube.Actions() {
+				if action.GetVerb() == "create" || action.GetVerb() == "patch" || action.GetVerb() == "delete" { t.Fatal("legacy recovery reuse changed its existing execution") }
+			}
+		})
+	}
+}
+
+func TestStorageSyncExecutorGCPagesDiscoveryAndPodTerminationProof(t *testing.T) {
+	job, secret, pod, _ := storageSyncGCFixture(t)
+	kube := fake.NewSimpleClientset(secret)
+	jobPages, podPages := 0, 0
+	kube.PrependReactor("list", "jobs", func(action ktesting.Action) (bool, runtime.Object, error) {
+		jobPages++
+		if jobPages == 1 { return true, &batchv1.JobList{ListMeta: metav1.ListMeta{Continue: "next-job-page"}}, nil }
+		if action.(ktesting.ListActionImpl).GetListOptions().Continue != "next-job-page" { t.Fatal("Job continuation token lost") }
+		return true, &batchv1.JobList{Items: []batchv1.Job{*job}}, nil
+	})
+	kube.PrependReactor("list", "pods", func(action ktesting.Action) (bool, runtime.Object, error) {
+		podPages++
+		if podPages == 1 { return true, &corev1.PodList{ListMeta: metav1.ListMeta{Continue: "next-pod-page"}}, nil }
+		if action.(ktesting.ListActionImpl).GetListOptions().Continue != "next-pod-page" { t.Fatal("Pod continuation token lost") }
+		return true, &corev1.PodList{Items: []corev1.Pod{*pod}}, nil
+	})
+	executors, err := NewStorageSyncClient(kube, storageSyncRuntimeConfig()).ListExecutors(context.Background())
+	if err != nil || len(executors) != 1 || !executors[0].Terminated || jobPages != 2 || podPages != 2 {
+		t.Fatalf("incomplete paginated discovery: %+v, %v, %d/%d", executors, err, jobPages, podPages)
+	}
+}

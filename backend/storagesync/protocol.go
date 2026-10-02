@@ -9,6 +9,7 @@ type WorkSpec struct {
 	Attempt           int               `json:"attempt"`
 	Generation        int64             `json:"generation"`
 	Phase             string            `json:"phase"`
+	RecoveryJobUID    string            `json:"recoveryJobUID,omitempty"`
 	Config            Config            `json:"config"`
 	Mappings          []ResolvedMapping `json:"mappings"`
 	ManifestDigest    string            `json:"manifestDigest"`
