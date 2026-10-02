@@ -1,6 +1,6 @@
 # 管理员数据同步
 
-状态（2026-10-01）：实现、构建机回归及个人空间真实 TOS 验收已通过，尚未发布或启用。集群执行和登录后的线上页面验收仍待发布后完成。
+状态（2026-10-02）：已发布并启用，Helm revision 267；新 Portal、线上 API、CPU Worker 与 guofeng.su 个人空间的实际同步验收通过。发布后存量训练资源核验通过。经用户明确授权，14 个测试对象已清理，独立分页复核对象和未完成分片均为 0；10 月 1 日的 Harbor 阻塞记录仅为历史。
 
 ## 使用范围
 
@@ -68,7 +68,78 @@ Worker 使用独立 ServiceAccount，不挂 Kubernetes API token；只读 NFS、
 - 写入结果不明时会保留锁并等待运维核对；静态凭据模式不会因超时自动转移写入权。不要通过删除 Pod、修改数据库状态或重复提交来绕过该限制。只读预检的回执无法恢复时可结束并释放锁；传输阶段没有排空回执时继续保留锁。
 - 检查点有效期控制是否允许恢复，不代表已经实现磁盘和 Kubernetes 历史对象的自动清理。保留执行器与回执证据，运维清理前先核对活动运行及锁。
 
-## 本次验收与证据
+## 2026-10-02 发布与线上验收
+
+Harbor 恢复后，已完成固定摘要镜像推送与拉取、生产数据库备份及实际恢复验证、0058 迁移、后端与 Worker 发布，以及新 Portal `dev` 推送后的 CI/CD 部署。没有修改 Ceph 配置，也没有为验收停止用户训练。
+
+### 版本与运行配置
+
+| 组件 | 已核验版本 / 状态 |
+| --- | --- |
+| Helm | `ray-platform` / `ray-train-platform`，revision `267`，`deployed`；266 首次启用，267 仅更新 Worker 配置中的镜像摘要 |
+| 后端 | 源码 `6148663fbe6757c7fc082b6eae5cf44b40d22be4`；`ray-train-backend@sha256:26dfcaa7df6dbac35892aaf36ba52ac4ec2f652e1c676ede1491725f18d7ca2c`；2/2 Ready、重启 0 |
+| Worker | 源码 `211441689f679db3eb514957b681d7e6ac011821`；`ray-storage-sync@sha256:7c4846e25fac0ba9a68cbe72d97e661f98baaae41c93aa7f30887a5223416210` |
+| 新 Portal | `dev` 提交 `2e8d9b46b488063382d61605ddabe560b82ba4d3`；镜像 `sha256:a2c23b48444f130369c8f46280bd98bad758d54f36e82c7b2432718f8f0fbf33`；实际 Deployment 1/1 Ready |
+| 数据库 | schema `58`、58 条迁移记录 |
+| 执行节点与检查点 | CPU 节点 `172.28.2.65`；`ray-storage-sync-work` PVC，20Gi、`ebs-ssd`、RWO，已 Bound |
+
+镜像均在既有 Harbor，后端和 Worker 仓库前缀为 `harbor.wellspiking.ai/guofeng.su/`。源码提交、组件镜像摘要与 Helm revision 分别记录；Worker 修复没有重新构建后端镜像。Portal 私有 CI job 状态未直接读取，发布结果由候选 SHA 镜像、目标 Deployment 与 Pod `imageID` 一致及登录页面实际验收确认。
+
+生产平台并发活动运行上限为 1，带宽上限 100 MiB/s，文件/分片并发配置上限分别为 4/2；当前实现仍串行处理文件和分片，不将配置上限当作实测并行能力。Worker 实际在 CPU 节点运行，无 GPU 请求；用户 65532、只读根文件系统、只读 NFS、禁用 ServiceAccount token 自动挂载。预检不挂 TOS 写入凭据，传输阶段使用既有 Secret 引用。
+
+### 备份与发布影响
+
+本次使用新备份 `/root/raytrain-release-backups/storage-sync-6148663-20261002T031122Z/raytrain.dump`，3,043,378 字节，SHA256 `c0709c0d1c81b283534e2703ce47089a55ec7c227ad2cfc70166f59c3528c3b9`。备份前后生产库均为 schema 57、57 条迁移、73 张表；在无网络、无暴露端口的临时 PostgreSQL 容器中实际恢复，`pg_dump`、`pg_restore` 均返回 0，恢复库元数据匹配，验证容器已删除。备份保留在构建机管理员受限目录；其内容不进仓库。
+
+首次发布的完整脱敏 server-side dry-run 只包含后端镜像、22 个同步配置环境变量及新 ServiceAccount、Role、RoleBinding、20Gi PVC；未移除或变更训练资源。最终独立审计对比发布前基线中的 4 个 RayJob、4 个 RayCluster、9 个训练/调试 Pod：UID、状态、节点和容器重启数均无变化。后端两副本无 panic、fatal 或迁移错误，`/healthz` 返回 200。该对比证明本次发布未重建这些存量资源，不将资源总数相同代替逐项核对。
+
+### 实际链路与修复
+
+本次验收仅写入 guofeng.su 已有稳定个人空间的新 UUID 子目录：
+
+```text
+/mnt/storage/me/files/storage-sync-live-eda59440e95044bf9a62ffeb591a2855/
+```
+
+首次 IDC 实际运行发现 `SOURCE_CHANGED`：同一个只读 NFS 文件跨预检与传输 Pod 挂载时，只有本地设备号 `st_dev` 不同，inode、大小、纳秒时间戳与 SHA256 全部相同。修复将跨 Pod 快照和游标中的身份比较改为可移植元数据，同时保留单次打开文件描述符的本地设备校验、内容哈希及旧清单/检查点兼容；没有绕过源变化校验。修复前回归复现失败，修复后 Worker 91/91 测试通过，启用分支统计的覆盖率 89%，非 root、只读根目录镜像内同样 91/91 通过。
+
+| 线上验收 | 实测结果 |
+| --- | --- |
+| IDC → TOS | CPU Pod 只读访问真实 NFS 的 `visibility.json`，复制 1 文件 / 2 字节，内容校验通过；修复后再次增量传输 0 文件 / 0 字节，复用并校验该文件 |
+| TOS → TOS、多映射与增量 | 首次复制 2 文件 / 16 字节；相同计划版本零变化重跑传输 0 文件 / 0 字节；修改其中一个同大小 8 字节源文件后，仅复制该文件，另一文件复用；目标额外 JSON 保留 |
+| 真实分片暂停 / 续传 | 65 MiB 文件采用生产 64 MiB 分片配置；暂停后远端第一片 64 MiB 与持久化检查点一致，完成对象尚不存在；旧 Pod 退出后新 attempt / Pod 继续，最终 65 MiB 源与目标 SHA256 一致，原未完成上传消失 |
+| 取消 | 分别核验“请求到达时已复制完”的取消与正在分片的取消；后者保留已完成的 8 字节文件，未完成大文件不存在，未完成分片数为 0；不删除已经完成的数据 |
+| 自然定时触发 | `Asia/Shanghai` 的 DAILY 规则按真实时钟产生一条 `SCHEDULED` 运行并成功；随后停用计划，`nextRunAt=null` |
+| 新 Portal 实际操作 | 登录 guofeng.su，经“平台管理 → 数据同步”完成新建、源目录浏览、保存、预检、开始、完成进度和文件校验结果查看；未用模拟 API 代替该操作链 |
+| 既有 Portal 页面 | 任务列表、任务详情、使用说明、实验中心及 MLflow 详情回归通过；不存在的任务详情显示后端具体错误 `training job was not found`，未退化为无信息的通用错误 |
+| 认证边界 | 未认证管理接口返回 401 `AUTH_REQUIRED`；真实 PAT 身份已确认后返回 403 `INTERACTIVE_LOGIN_REQUIRED`；当前有效超级管理员交互会话访问成功 |
+| 停止证据 | 按运行与 attempt 核对 `requestsDrained`、`stopVerified` 和实际 Job/Pod UID 终止状态，未将页面百分比或暂停/取消请求响应当作停止完成 |
+
+暂停续传、取消和内容回读通过独立 TOS 查询与 Worker/数据库证据核验。最终共有 11 条运行记录：8 条成功、2 条按验收要求取消、1 条修复前的 IDC 失败。首次失败记录保留，修复后两次成功运行分别为 `ssr-d95d2c8e-23c9-44da-a49a-392334d8148d`、`ssr-b25bbb0e-9e48-4f43-82d1-c81ea78b02f0`；没有删除失败记录来形成“全部首次成功”的假象。
+
+验收范围仍有边界：原 135,151 文件、约 270 GB 数据集尚未通过平台功能做规模验证；10 月 1 日的全量模式与分页验证属于真实 TOS SDK 验收，不能自动等同于该规模的线上验证。此次未更改 workspace runtime，guofeng.su 的既有调试环境已停止，因此只查看调试环境页面，未为此新建工作区验证 Jupyter/VS Code 一次性票据。
+
+### 清理状态与证据索引
+
+7 个验收计划均已停用且 `nextRunAt=null`，保留为审计记录。所有活动运行、预检、目录浏览和路径锁的最终清理前检查为 0；测试文件仅位于上述 UUID 前缀。本次只读诊断 Pod 和数据库恢复验证容器均已删除。
+
+**测试数据已清理：**首次删除申请被自动审批拒绝且未执行；用户随后明确批准仅删除此 UUID 前缀的 14 个验收对象（204,472,412 字节，约 195 MiB）。2026-10-02 04:15 UTC 执行前重新核对对象数量、桶版本状态、无活动运行和路径锁，清理返回 0。04:16:28 UTC 使用独立新客户端分页复核：对象数 0、未完成分片数 0；7 个禁用计划和 11 条运行记录保留，活动运行、启用计划、路径锁均为 0。没有删除原有用户数据或数据库审计记录。
+
+构建机 `/tmp/raytrain-storage-sync-evidence-20261002/` 保留：
+
+- `backup-actual-restore-summary.json`、`release-normalized.sanitized.diff`、`release-dryrun-summary.json`：备份实际恢复与首次发布差异。
+- `idc-device-red.log`、`idc-device-green3.log`、`idc-device-green3-coverage.log`、`idc-device-green3-nonroot.log`：跨挂载修复的先失败、后通过测试和覆盖率。
+- `engine-idc-diagnostic-result.json`、`engine-fixed-idc-diagnostic-result.json`、各 `engine-ssr-*-observations.jsonl`：首次 IDC 故障实证、修复后证据及运行/Pod 生命周期。
+- `engine-paused-remote-parts.json`、`engine-resumed-content-verification.json`、`engine-cancel-abort-content.json`、`engine-cancel-after-complete-content.json`、`engine-scheduled-plan.json`：实际控制、内容回读与定时结果。
+- `release-auth-boundary.json`、`release267-final-independent-audit.json`：认证边界、最终镜像/schema/健康及存量资源逐项比对。
+- `engine-live-acceptance-summary.json`：最终 11 条运行的状态、停止证据与 Worker 安全配置聚合，包含修复前失败及修复后成功记录。
+- `engine-owned-prefix-cleanup.log`、`engine-cleanup-independent-verification.json`、`engine-cleanup-approval-status.json`：严格前缀清理、独立分页复核，以及首次拒绝、补充授权和完成记录。
+
+本机 `/private/tmp/raytrain-storage-sync-live-api-20261002.json` 保存实际 API 汇总和 UI 操作链；`/private/tmp/raytrain-storage-sync-portal-published-20261002.md` 保存 Portal 提交、实际镜像与 rollout 证据。这些文件是当次受限运维证据，长期维护入口为本 runbook；不将凭据、完整 Secret 或数据库备份提交到仓库。
+
+## 2026-10-01 构建机验收与证据（历史）
+
+以下为正式上线前的验证记录；其中“尚未上线”“待实际 Worker 验收”等状态已由上面的 10 月 2 日记录更新，保留原记录用于区分验证阶段。
 
 2026-10-01 验证的业务源码为后端 `18b7fe3c37a28e8f64370c5a0d60c081b99a75e7`、新 Portal `2e8d9b46b488063382d61605ddabe560b82ba4d3`。Portal 已合并当时远端 `dev f9ee85aed7a50d73037a2784ebf28f7e9d50f7b4`；发布前须重新核对远端。后续仅文档更新不改变这些测试对应的业务源码。
 
@@ -97,4 +168,17 @@ IDC 用例使用构建机临时文件系统样本；尚未证明训练集群 CPU
 - `/tmp/raytrain-storage-sync-portal-verify-a5e3c596/`：`unit-green.log`、`lint-build.log`、`production-build.log`。
 - `/tmp/raytrain-storage-sync-portal-verify-2e8d9b46/`：`e2e.log`、`e2e-lint.log`。`a5e3c596 → 2e8d9b46` 仅改测试定位器，产品源码相同。
 
-用户已授权源码发送至既有构建机的隔离目录并执行测试、构建和个人目录验收。该授权已落实；目前没有推送、生产数据库迁移、部署或功能启用记录。
+用户已先后明确授权源码上传与隔离验收，以及正式源码/镜像发布、数据库备份和迁移、CPU Worker、20Gi 检查点盘、新 Portal dev CI/CD 和个人目录线上验收。正式发布授权持续有效，不需要因仓库恢复而重复询问。
+
+## 2026-10-01 正式发布进展（历史，阻塞已解除）
+
+- 后端源码 `6148663fbe6757c7fc082b6eae5cf44b40d22be4` 已同步到本地 main、GitHub main、内部 GitLab main 及正式构建目录；业务代码仍是已验证的 `18b7fe3`，之后仅改文档。原本地工作区的并行改动均保留；正式构建目录干净。
+- Portal 候选仍为 `2e8d9b46`，未推送；线上 dev 仍为 `f9ee85ae`。补充的标准 `Dockerfile.dev` staging 编译和 nginx 打包通过，日志为 `/tmp/raytrain-storage-sync-portal-verify-2e8d9b46/dev-build-harbor-frontend.log`。
+- 脱敏 server-side Helm dry-run 通过：只改后端镜像与 22 个同步配置环境变量，新增 ServiceAccount、Role、RoleBinding、20Gi PVC，无训练资源变更。Chart 没有 Secret 对象或动态凭据生成，既有 Secret 引用和输入未改；未导出完整 Secret 渲染。
+- 生产数据库备份为构建机 `/root/raytrain-release-backups/storage-sync-6148663-20261001T090131Z/raytrain.dump`，自定义格式，3,037,660 字节；SHA256 `a4f05d6a56c41f08014725b90bd379812b1a5bb5eae3a12bd750e1a44980023d`。已在无网络、无端口的临时 PostgreSQL 16 容器实际恢复：版本 57、57 条迁移、73 张表，恢复返回 0；验证容器已删除。生产数据库仍为 57，尚未执行 0058。
+- CPU 节点 `172.28.2.65` 已补齐 `nfs-common=1:2.6.1-1ubuntu1.2` 及 libnfsidmap1/rpcbind/keyutils，未升级其他包或重启节点、kubelet、containerd；临时安装策略文件已移除。只读主机挂载协商 NFSv3 成功，回调健康 200、未认证 TOS HTTPS 403，临时挂载清理完成。
+- 可用于后续实际 Worker 验收的 IDC 源为 `spk-hybrid:extract/0c9b53cd344943298edc75c81a47651b/nusc/v1.0-mini/visibility.json`，2 字节，SHA256 `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945`。该证明来自主机只读探测，Pod 内非 root 读取仍需实际 Worker 验收。
+- 镜像正式推送两次均遇 Harbor 502。健康接口 HTTP 200 的正文为 unhealthy；不能将 HTTP 状态码当作仓库已恢复。common 集群 `harbor` 命名空间的唯一 registry Pod 没有就绪端点，进程为 `D / wait_on_page_bit`，本地 HTTP 也超时；`/storage` 对应 ext4 `/dev/rbd1`，使用 Ceph RBD。具体 Ceph/OSD 或节点根因尚未证明，未执行重启、强制卸载、Pod 删除或存储修复。
+- 线上后端仍为 Helm revision 265、两副本健康，镜像摘要 `sha256:222268eeeb4a060979e7a6491f36e1f0301854e91c4bb28c870cbe81f38f47c8`。未启用数据同步、未创建检查点 PVC、未改运行中的用户训练。所有本次只读探测 Pod、主机临时挂载及恢复验证容器均已清理。
+
+当时记录的恢复后顺序：确认 Harbor 健康正文及实际推拉恢复 → 在干净正式目录仅构建/推送 backend,storage-sync → 记录权威 registry 摘要 → 重新核对活跃训练 UID 与完整脱敏 dry-run → 发布后端并确认全部副本更新 → 推 Portal dev 并验证实际镜像 → 在 guofeng.su 新个人子目录验证预检、实际 Job/回调、复制、进度、控制和定时。此顺序已于 10 月 2 日执行，结果以上方新记录为准。
