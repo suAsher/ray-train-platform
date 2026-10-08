@@ -21,6 +21,7 @@ spec:
         runAsNonRoot: true
         runAsUser: 26
         runAsGroup: 26
+        fsGroup: 26
         seccompProfile: {type: RuntimeDefault}
       affinity:
         nodeAffinity:
@@ -42,7 +43,9 @@ spec:
             - {name: PGHOST, value: n9e-postgres-rw.observability-alerting.svc}
             - {name: PGDATABASE, value: n9e}
             - {name: PGSSLMODE, value: verify-full}
-            - {name: PGSSLROOTCERT, value: /etc/n9e-ca/ca.crt}
+            - {name: PGSSLROOTCERT, value: /etc/n9e-pg-mtls/ca.crt}
+            - {name: PGSSLCERT, value: /etc/n9e-pg-mtls/tls.crt}
+            - {name: PGSSLKEY, value: /etc/n9e-pg-mtls/tls.key}
             - name: PGUSER
               valueFrom:
                 secretKeyRef: {name: n9e-db-app, key: username}
@@ -61,11 +64,17 @@ spec:
             limits: {cpu: 500m, memory: 256Mi}
           volumeMounts:
             - {name: seed, mountPath: /seed, readOnly: true}
-            - {name: pg-ca, mountPath: /etc/n9e-ca, readOnly: true}
+            - {name: pg-mtls, mountPath: /etc/n9e-pg-mtls, readOnly: true}
       volumes:
         - name: seed
           configMap: {name: n9e-postgres-seed-v911}
-        - name: pg-ca
-          secret:
-            secretName: n9e-postgres-ca
-            items: [{key: ca.crt, path: ca.crt}]
+        - name: pg-mtls
+          projected:
+            defaultMode: 0440
+            sources:
+              - secret:
+                  name: n9e-postgres-ca
+                  items: [{key: ca.crt, path: ca.crt}]
+              - secret:
+                  name: obs-mtls-n9e-postgres-bootstrap
+                  items: [{key: tls.crt, path: tls.crt}, {key: tls.key, path: tls.key}]

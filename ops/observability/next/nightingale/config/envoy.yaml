@@ -1,0 +1,138 @@
+static_resources:
+  listeners:
+    - name: n9e-inbound
+      address:
+        socket_address: {address: 0.0.0.0, port_value: 17443}
+      filter_chains:
+        - transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              require_client_certificate: true
+              common_tls_context:
+                tls_params: {tls_minimum_protocol_version: TLSv1_3}
+                tls_certificates:
+                  - certificate_chain: {filename: /etc/obs-mtls/tls.crt}
+                    private_key: {filename: /etc/obs-mtls/tls.key}
+                validation_context:
+                  trusted_ca: {filename: /etc/obs-mtls/ca.crt}
+          filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: n9e_inbound
+                normalize_path: true
+                merge_slashes: true
+                path_with_escaped_slashes_action: REJECT_REQUEST
+                request_headers_timeout: 10s
+                stream_idle_timeout: 60s
+                route_config:
+                  name: n9e_inbound
+                  virtual_hosts:
+                    - name: n9e
+                      domains: ["*"]
+                      routes:
+                        - match: {path: /metrics}
+                          route: {cluster: n9e-local, timeout: 30s}
+                          typed_per_filter_config:
+                            envoy.filters.http.rbac:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBACPerRoute
+                              rbac:
+                                rules:
+                                  action: ALLOW
+                                  policies:
+                                    monitor:
+                                      permissions:
+                                        - header: {name: ":method", string_match: {exact: GET}}
+                                      principals:
+                                        - authenticated:
+                                            principal_name: {exact: "spiffe://observability.raytrain.local/observability-metrics/vmagent"}
+                        - match: {prefix: /}
+                          route: {cluster: n9e-local, timeout: 60s}
+                          typed_per_filter_config:
+                            envoy.filters.http.rbac:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBACPerRoute
+                              rbac:
+                                rules:
+                                  action: ALLOW
+                                  policies:
+                                    ui_gateway:
+                                      permissions: [{any: true}]
+                                      principals:
+                                        - authenticated:
+                                            principal_name: {exact: "spiffe://observability.raytrain.local/observability-alerting/n9e-ui-gateway"}
+                http_filters:
+                  - name: envoy.filters.http.rbac
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBAC
+                      rules: {action: ALLOW, policies: {}}
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+    - name: n9e-vm-read-outbound
+      address:
+        socket_address: {address: 127.0.0.1, port_value: 18427}
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: n9e_vm_read
+                normalize_path: true
+                path_with_escaped_slashes_action: REJECT_REQUEST
+                route_config:
+                  name: n9e_vm_read
+                  virtual_hosts:
+                    - name: vmauth
+                      domains: ["*"]
+                      routes:
+                        - match:
+                            safe_regex: {regex: "/api/v1/(query|query_range|labels|label/[^/]+/values|series|metadata)"}
+                            headers:
+                              - name: ":method"
+                                string_match: {safe_regex: {regex: "GET|POST"}}
+                          route: {cluster: vmauth-read, timeout: 60s}
+                        - match: {prefix: /}
+                          direct_response: {status: 403}
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+  clusters:
+    - name: n9e-local
+      type: STATIC
+      connect_timeout: 2s
+      load_assignment:
+        cluster_name: n9e-local
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: {address: 127.0.0.1, port_value: 17000}
+    - name: vmauth-read
+      type: STRICT_DNS
+      connect_timeout: 5s
+      load_assignment:
+        cluster_name: vmauth-read
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: vmauth-raytrain-next.observability-metrics.svc
+                      port_value: 8427
+      transport_socket:
+        name: envoy.transport_sockets.tls
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+          sni: vmauth.observability-metrics.svc
+          common_tls_context:
+            tls_params: {tls_minimum_protocol_version: TLSv1_3}
+            tls_certificates:
+              - certificate_chain: {filename: /etc/obs-mtls/tls.crt}
+                private_key: {filename: /etc/obs-mtls/tls.key}
+            validation_context:
+              trusted_ca: {filename: /etc/obs-mtls/ca.crt}
+              match_typed_subject_alt_names:
+                - san_type: URI
+                  matcher: {exact: "spiffe://observability.raytrain.local/observability-metrics/vmauth"}

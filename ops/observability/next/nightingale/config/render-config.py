@@ -27,7 +27,8 @@ dsn = (
     "host=n9e-postgres-rw.observability-alerting.svc port=5432 "
     "user=n9e dbname=n9e password="
     + password
-    + " sslmode=verify-full sslrootcert=/etc/n9e-ca/ca.crt connect_timeout=5"
+    + " sslmode=verify-full sslrootcert=/etc/n9e-pg-mtls/ca.crt"
+    + " sslcert=/etc/n9e-pg-mtls/tls.crt sslkey=/etc/n9e-pg-mtls/tls.key connect_timeout=5"
 )
 values = {
     "DB_DSN": dsn,

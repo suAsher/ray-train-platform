@@ -16,7 +16,7 @@ metadata:
 spec:
   type: ClusterIP
   selector: {app.kubernetes.io/name: nightingale}
-  ports: [{name: http, port: 17000, targetPort: http}]
+  ports: [{name: https, port: 17443, targetPort: mtls}]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -88,7 +88,6 @@ spec:
           command: [/app/n9e]
           args: [-configs, /run/n9e/etc]
           workingDir: /app
-          ports: [{name: http, containerPort: 17000}]
           resources:
             requests: {cpu: 500m, memory: 1Gi, ephemeral-storage: 256Mi}
             limits: {cpu: "2", memory: 2Gi, ephemeral-storage: 2Gi}
@@ -97,21 +96,43 @@ spec:
             allowPrivilegeEscalation: false
             capabilities: {drop: [ALL]}
           startupProbe:
-            tcpSocket: {port: http}
+            exec:
+              command: [python3, -c, "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:17000/ping', timeout=2); assert r.status == 200 and r.read() == b'pong'"]
             periodSeconds: 5
             failureThreshold: 60
           readinessProbe:
-            tcpSocket: {port: http}
+            exec:
+              command: [python3, -c, "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:17000/ping', timeout=2); assert r.status == 200 and r.read() == b'pong'"]
             periodSeconds: 10
           livenessProbe:
-            tcpSocket: {port: http}
+            exec:
+              command: [python3, -c, "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:17000/ping', timeout=2); assert r.status == 200 and r.read() == b'pong'"]
             periodSeconds: 20
             failureThreshold: 3
           volumeMounts:
             - {name: config-runtime, mountPath: /run/n9e, readOnly: true}
-            - {name: pg-ca, mountPath: /etc/n9e-ca, readOnly: true}
+            - {name: pg-mtls, mountPath: /etc/n9e-pg-mtls, readOnly: true}
+            - {name: redis-mtls, mountPath: /etc/n9e-redis-mtls, readOnly: true}
             - {name: logs, mountPath: /var/log/n9e}
             - {name: tmp, mountPath: /tmp}
+        - name: envoy
+          image: harbor.wellspiking.ai/hub/envoyproxy/envoy:v1.39.3@sha256:dd85940439de19a0b6ae8419610363ea0ad351d9a994ea007161c206ec1e1865
+          command: [/usr/local/bin/envoy]
+          args: [-c, /etc/envoy/envoy.yaml, --concurrency, "1", --disable-hot-restart, --log-level, warning]
+          ports: [{name: mtls, containerPort: 17443}]
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 300m, memory: 128Mi}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          readinessProbe:
+            tcpSocket: {port: mtls}
+            periodSeconds: 10
+          volumeMounts:
+            - {name: config-template, mountPath: /etc/envoy, readOnly: true}
+            - {name: mesh-mtls, mountPath: /etc/obs-mtls, readOnly: true}
       volumes:
         - name: config-template
           configMap: {name: n9e-config-v911}
@@ -125,10 +146,20 @@ spec:
           secret:
             secretName: n9e-redis-auth
             defaultMode: 0440
-        - name: pg-ca
-          secret:
-            secretName: n9e-postgres-ca
-            items: [{key: ca.crt, path: ca.crt}]
+        - name: pg-mtls
+          projected:
+            defaultMode: 0440
+            sources:
+              - secret:
+                  name: n9e-postgres-ca
+                  items: [{key: ca.crt, path: ca.crt}]
+              - secret:
+                  name: obs-mtls-n9e-postgres-client
+                  items: [{key: tls.crt, path: tls.crt}, {key: tls.key, path: tls.key}]
+        - name: redis-mtls
+          secret: {secretName: obs-mtls-nightingale-redis, defaultMode: 0440}
+        - name: mesh-mtls
+          secret: {secretName: obs-mtls-nightingale, defaultMode: 0440}
         - name: logs
           emptyDir: {sizeLimit: 1Gi}
         - name: tmp

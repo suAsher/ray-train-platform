@@ -13,6 +13,10 @@ auth: true
 existingSecret: n9e-redis-auth
 authKey: auth
 redis:
+  port: 0
+  tlsPort: 6379
+  tlsReplication: true
+  authClients: "yes"
   masterGroupName: n9e
   config:
     min-replicas-to-write: 1
@@ -29,6 +33,12 @@ redis:
     requests: {cpu: 250m, memory: 512Mi}
     limits: {cpu: "1", memory: 1Gi}
 sentinel:
+  port: 0
+  tlsPort: 26379
+  tlsReplication: true
+  authClients: "yes"
+  resolveHostnames: true
+  announceHostnames: true
   auth: true
   existingSecret: n9e-redis-auth
   authKey: sentinel-password
@@ -73,6 +83,11 @@ haproxy:
   enabled: false
 exporter:
   enabled: false
+tls:
+  secretName: obs-mtls-redis-ha-peer
+  certFile: tls.crt
+  keyFile: tls.key
+  caCertFile: ca.crt
 # The chart does not expose test Pod priority/affinity. Do not run helm test;
 # use --skip-tests when rendering the deployment review (see README).
 configmapTest:

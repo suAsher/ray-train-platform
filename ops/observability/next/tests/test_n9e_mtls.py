@@ -5,6 +5,7 @@ and the CNPG Go regression suite remain separate mandatory acceptance gates.
 """
 
 from contextlib import redirect_stderr, redirect_stdout
+import copy
 import io
 import json
 import os
@@ -274,6 +275,66 @@ class NightingaleMTLSContractTests(unittest.TestCase):
         self.required("cnpg-hardening/tests/metrics_tls_test.go")
         self.required("cnpg-hardening/tests/status_auth_test.go")
         self.required("cnpg-hardening/tests/webhook_source_test.go")
+
+    def operator_fixture(self):
+        image = "harbor.wellspiking.ai/guofeng.su/cnpg-observability:test@sha256:" + "a" * 64
+        manager = {
+            "name": "manager", "image": image,
+            "args": ["controller", "--metrics-bind-address=127.0.0.1:8080"],
+            "env": [{"name": "OPERATOR_IMAGE_NAME", "value": image},
+                    {"name": "OBS_WEBHOOK_API_SERVER_IPS", "value": "172.28.2.64,172.28.5.50"}],
+        }
+        return {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {
+            "name": "n9e-cnpg", "namespace": ALERTING}, "spec": {
+                "selector": {"matchLabels": {"app.kubernetes.io/instance": "n9e-cnpg"}},
+                "template": {"spec": {"containers": [manager], "volumes": []}}}}
+
+    def test_operator_renderer_rejects_unhardened_or_mismatched_images(self):
+        module = runpy.run_path(str(ROOT / "scope-cnpg-webhooks.py"))
+        valid = self.operator_fixture()
+        for change in ("upstream", "injection", "metrics", "namespace", "webhook"):
+            item = copy.deepcopy(valid)
+            manager = item["spec"]["template"]["spec"]["containers"][0]
+            if change == "upstream":
+                manager["image"] = "ghcr.io/cloudnative-pg/cloudnative-pg:1.30.1"
+            elif change == "injection":
+                manager["env"][0]["value"] = "different-image"
+            elif change == "metrics":
+                manager["args"].append("--metrics-bind-address=:8080")
+            elif change == "namespace":
+                item["metadata"]["namespace"] = "default"
+            else:
+                manager["env"][1]["value"] = "0.0.0.0/0"
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                module["secure_operator"](item)
+        secured = module["secure_operator"](valid)
+        self.assertEqual(valid, self.operator_fixture(), "renderer mutated its input")
+        containers = secured["spec"]["template"]["spec"]["containers"]
+        self.assertEqual(["manager", "envoy"], [item["name"] for item in containers])
+        self.assertEqual(ENVOY_IMAGE, containers[1]["image"])
+
+    def test_operator_metrics_proxy_only_allows_authenticated_get_metrics(self):
+        config = yaml.safe_load((ROOT / "config/cnpg-envoy.yaml").read_text())
+        listener = config["static_resources"]["listeners"][0]
+        tls = listener["filter_chains"][0]["transport_socket"]["typed_config"]
+        self.assertIs(tls["require_client_certificate"], True)
+        rules = [item for item in nodes(listener)
+                 if isinstance(item, dict) and item.get("@type", "").endswith(".RBAC")][0]["rules"]
+        self.assertEqual("ALLOW", rules["action"])
+        self.assertIn({"principal_name": {"exact": IDENTITY + "observability-metrics/vmagent"}}, list(nodes(rules)))
+        self.assertIn({"url_path": {"path": {"exact": "/metrics"}}}, list(nodes(rules)))
+        self.assertIn({"header": {"name": ":method", "string_match": {"exact": "GET"}}}, list(nodes(rules)))
+
+    def test_nightingale_outbound_uses_exact_peer_identity_and_is_loopback_only(self):
+        config = yaml.safe_load((ROOT / "config/envoy.yaml").read_text())["static_resources"]
+        listener = next(item for item in config["listeners"] if item["name"] == "n9e-vm-read-outbound")
+        self.assertEqual("127.0.0.1", listener["address"]["socket_address"]["address"])
+        cluster = next(item for item in config["clusters"] if item["name"] == "vmauth-read")
+        tls = cluster["transport_socket"]["typed_config"]["common_tls_context"]
+        self.assertEqual([{"san_type": "URI", "matcher": {
+            "exact": IDENTITY + "observability-metrics/vmauth"}}],
+            tls["validation_context"]["match_typed_subject_alt_names"])
+        self.assertTrue(tls["tls_certificates"])
 
 
 if __name__ == "__main__":

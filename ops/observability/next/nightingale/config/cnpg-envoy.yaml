@@ -1,0 +1,70 @@
+static_resources:
+  listeners:
+    - name: cnpg-operator-metrics
+      address:
+        socket_address: {address: 0.0.0.0, port_value: 18443}
+      filter_chains:
+        - transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              require_client_certificate: true
+              common_tls_context:
+                tls_params: {tls_minimum_protocol_version: TLSv1_3}
+                tls_certificates:
+                  - certificate_chain: {filename: /etc/obs-mtls/tls.crt}
+                    private_key: {filename: /etc/obs-mtls/tls.key}
+                validation_context:
+                  trusted_ca: {filename: /etc/obs-mtls/ca.crt}
+          filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: cnpg_metrics
+                normalize_path: true
+                merge_slashes: true
+                path_with_escaped_slashes_action: REJECT_REQUEST
+                request_headers_timeout: 10s
+                stream_idle_timeout: 30s
+                route_config:
+                  name: cnpg_metrics
+                  virtual_hosts:
+                    - name: metrics
+                      domains: ["*"]
+                      routes:
+                        - match:
+                            path: /metrics
+                            headers: [{name: ":method", string_match: {exact: GET}}]
+                          route: {cluster: cnpg-local, timeout: 30s}
+                        - match: {prefix: /}
+                          direct_response: {status: 403}
+                http_filters:
+                  - name: envoy.filters.http.rbac
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBAC
+                      rules:
+                        action: ALLOW
+                        policies:
+                          monitoring:
+                            permissions:
+                              - and_rules:
+                                  rules:
+                                    - url_path: {path: {exact: /metrics}}
+                                    - header: {name: ":method", string_match: {exact: GET}}
+                            principals:
+                              - authenticated:
+                                  principal_name: {exact: "spiffe://observability.raytrain.local/observability-metrics/vmagent"}
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+  clusters:
+    - name: cnpg-local
+      type: STATIC
+      connect_timeout: 2s
+      load_assignment:
+        cluster_name: cnpg-local
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: {address: 127.0.0.1, port_value: 8080}

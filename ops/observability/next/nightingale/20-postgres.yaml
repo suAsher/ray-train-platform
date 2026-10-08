@@ -11,6 +11,19 @@ spec:
   enableSuperuserAccess: false
   priorityClassName: raytrain-observability-additive
   primaryUpdateStrategy: supervised
+  certificates:
+    clientCASecret: obs-mtls-postgres-client-ca
+    replicationTLSSecret: obs-mtls-n9e-postgres-replication
+  env:
+    - name: OBS_METRICS_CLIENT_CA_FILE
+      value: /projected/obs-metrics/ca.crt
+    - name: OBS_METRICS_ALLOWED_CLIENT_URIS
+      value: spiffe://observability.raytrain.local/observability-metrics/vmagent
+  projectedVolumeTemplate:
+    sources:
+      - secret:
+          name: obs-mtls-cnpg-metrics-ca
+          items: [{key: ca.crt, path: obs-metrics/ca.crt}]
   bootstrap:
     initdb:
       database: n9e
@@ -21,6 +34,10 @@ spec:
       localeCType: C
       localeCollate: C
   postgresql:
+    pg_hba:
+      - hostnossl all all all reject
+      - hostssl n9e n9e all scram-sha-256 clientcert=verify-full
+      - hostssl all all all reject
     parameters:
       max_connections: "100"
       shared_buffers: 256MB
@@ -55,3 +72,5 @@ spec:
     tolerations: []
   monitoring:
     enablePodMonitor: false
+    tls:
+      enabled: true

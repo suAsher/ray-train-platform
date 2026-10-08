@@ -5,7 +5,7 @@ Dir = "/var/log/n9e"
 Level = "INFO"
 Output = "stdout"
 [HTTP]
-Host = "0.0.0.0"
+Host = "127.0.0.1"
 Port = 17000
 PrintAccessLog = false
 PProf = false
@@ -41,6 +41,13 @@ MaxLifetime = 600
 MaxOpenConns = 20
 MaxIdleConns = 5
 [Redis]
+UseTLS = true
+TLSCA = "/etc/n9e-redis-mtls/ca.crt"
+TLSCert = "/etc/n9e-redis-mtls/tls.crt"
+TLSKey = "/etc/n9e-redis-mtls/tls.key"
+InsecureSkipVerify = false
+ServerName = ""
+TLSMinVersion = "1.3"
 RedisType = "sentinel"
 Address = "n9e-redis-announce-0.observability-alerting.svc:26379,n9e-redis-announce-1.observability-alerting.svc:26379,n9e-redis-announce-2.observability-alerting.svc:26379"
 Password = @@REDIS_PASSWORD@@
