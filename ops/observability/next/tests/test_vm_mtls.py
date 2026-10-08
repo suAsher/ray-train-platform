@@ -209,7 +209,7 @@ class VMMTLSContracts(unittest.TestCase):
         for role in ("vmagent", "vmauth", "vmalert", "alertmanager"):
             spec = self.spec(role)
             args = spec.get("configReloaderExtraArgs", {})
-            self.assertEqual("127.0.0.1:8435", args.get("httpListenAddr"))
+            self.assertEqual("127.0.0.1:8435", args.get("http.listenAddr"))
             self.assertTrue(args.get("reload-url", "").startswith("http://127.0.0.1:"))
             reloader = next((item for item in spec.get("containers", []) if item["name"] == "config-reloader"), {})
             self.assertTrue(reloader.get("readinessProbe"), "default PodIP:8435 probe is invalid after loopback bind")
