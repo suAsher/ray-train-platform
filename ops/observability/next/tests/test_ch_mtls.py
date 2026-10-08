@@ -66,6 +66,14 @@ def pod_template(cr):
 
 
 class ClickHouseMTLSTests(unittest.TestCase):
+    def test_altinity_owns_the_single_disruption_budget_per_cluster(self):
+        # The pinned operator generates maxUnavailable:1 for each CH/CHK
+        # cluster. Handwritten overlapping PDBs cause eviction ambiguity.
+        for name in ("clickhouse", "keeper"):
+            with self.subTest(component=name):
+                self.assertFalse(any(doc and doc.get("kind") == "PodDisruptionBudget"
+                                     for doc in documents(CH / (name + ".yaml"))))
+
     def test_operator_namespace_watch_is_one_literal_not_a_regexp(self):
         values = yaml.safe_load((CH / "operator-values.yaml").read_text())
         # Altinity 0.27.4 GetInformerNamespace/GetCacheNamespaces fall back

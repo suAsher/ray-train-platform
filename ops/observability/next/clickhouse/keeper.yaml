@@ -147,13 +147,3 @@ spec:
           accessModes: [ReadWriteOnce]
           resources:
             requests: {storage: 20Gi}
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: observability-keeper
-  namespace: observability-analytics
-spec:
-  minAvailable: 2
-  selector:
-    matchLabels: {observability.raytrain.io/component: keeper}

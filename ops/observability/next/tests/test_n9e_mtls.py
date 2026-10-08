@@ -330,6 +330,8 @@ class NightingaleMTLSContractTests(unittest.TestCase):
 
     def test_postgres_requires_client_certificates_and_closes_password_fallback(self):
         spec = documents("20-postgres.yaml")[0]["spec"]
+        self.assertNotIn("tolerations", spec["affinity"],
+                         "CNPG 1.30.1 empty slice differs from serialized nil and triggers endless rollout")
         self.assertIs(spec["enableSuperuserAccess"], False)
         self.assertEqual(3, spec["instances"])
         certificates = spec.get("certificates", {})
@@ -554,6 +556,28 @@ class NightingaleLiveProbeTests(unittest.TestCase):
         for bad in ({"dat": [7]}, {"status": "success", "data": {"resultType": "vector", "result": []}},
                     {"status": "success", "data": {"resultType": "vector", "result": [{"value": [1, "0"]}]}}):
             self.assertFalse(module["is_vector_one"](200, bad))
+
+    def test_live_negative_network_checks_require_specific_auth_alert_or_refusal(self):
+        module = self.module()
+        probe_type = module["Probe"]
+        # Patch the actual function globals, because run_path returns a copy.
+        globals_ = probe_type.boundaries.__globals__
+        ssl_error = module["ssl"].SSLError(1, "unrelated TLS error")
+        ssl_error.reason = "WRONG_VERSION_NUMBER"
+        with mock.patch.dict(globals_, request=mock.Mock(side_effect=ssl_error)):
+            with self.assertRaises(module["ProbeFailure"]):
+                probe_type().boundaries("172.28.1.10", "pod_0")
+        required = module["ssl"].SSLError(1, "certificate required")
+        required.reason = "TLSV13_ALERT_CERTIFICATE_REQUIRED"
+        for error, accepted in ((TimeoutError(), False), (ConnectionRefusedError(), True)):
+            calls = mock.Mock(side_effect=[required, (403, None), (403, None),
+                                           (200, None), (403, None), (403, None)])
+            with mock.patch.dict(globals_, request=calls), mock.patch("socket.create_connection", side_effect=error):
+                if accepted:
+                    probe_type().boundaries("172.28.1.10", "pod_0")
+                else:
+                    with self.assertRaises(TimeoutError):
+                        probe_type().boundaries("172.28.1.10", "pod_0")
 
 
 if __name__ == "__main__":
