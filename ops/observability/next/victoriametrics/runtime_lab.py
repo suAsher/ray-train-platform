@@ -206,7 +206,8 @@ class DockerLab:
                                    yaml.safe_dump(config_data), group_read=True)
         identity = self.materials[role]
         container = self.peer(pod, suffix + "-proxy", self.envoy,
-                              ["-c", "/config/envoy.yaml", "--concurrency", "1", "--disable-hot-restart", "--log-level", "warning"],
+                              ["-c", "/config/envoy.yaml", "--concurrency", "1", "--disable-hot-restart", "--log-level", "warning",
+                               "--component-log-level", "connection:debug"],
                               [(config_path, "/config/envoy.yaml", "ro"), (identity, "/etc/obs-mtls", "ro"),
                                (admin_dir, "/diagnostics", "rw")], entrypoint="/usr/local/bin/envoy")
         self.admin_paths[container] = admin_dir / "admin.sock"
@@ -267,7 +268,7 @@ class DockerLab:
             container = json.loads(inspected.stdout)[0]
             if container["Config"]["Labels"].get("raytrain.mtls-lab") != self.prefix:
                 continue
-            log = command(["docker", "logs", "--tail", "12", name], check=False)
+            log = command(["docker", "logs", "--tail", "40", name], check=False)
             tail = log.stdout + log.stderr
             for value in self.redactions:
                 tail = tail.replace(value, "[REDACTED]")

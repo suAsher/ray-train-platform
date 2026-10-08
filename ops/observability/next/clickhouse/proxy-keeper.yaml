@@ -357,6 +357,7 @@
           "name": "envoy.transport_sockets.tls",
           "typed_config": {
             "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext",
+            "max_session_keys": 0,
             "sni": "keeper-observability.observability-analytics.svc.cluster.local",
             "common_tls_context": {
               "tls_params": {
@@ -417,6 +418,7 @@
           "name": "envoy.transport_sockets.tls",
           "typed_config": {
             "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext",
+            "max_session_keys": 0,
             "sni": "keeper-observability.observability-analytics.svc.cluster.local",
             "common_tls_context": {
               "tls_params": {

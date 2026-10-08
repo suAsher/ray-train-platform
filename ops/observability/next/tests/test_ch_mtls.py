@@ -87,6 +87,14 @@ class ClickHouseMTLSTests(unittest.TestCase):
                          identities(public[2281]))
         self.assertEqual({role("metrics", "vmagent")}, identities(public[7000]))
         self.assertNotIn(role("analytics", "clickhouse"), identities(public[9234]))
+        # NuRaft's strict native TLS context has no initialized session-ID
+        # context. Use a fresh authenticated TLS handshake on each local hop.
+        for cluster in proxy("keeper")["static_resources"]["clusters"]:
+            if cluster["name"] in ("native-client", "native-raft"):
+                tls = cluster["transport_socket"]["typed_config"]
+                self.assertEqual(0, tls["max_session_keys"])
+                self.assertTrue(tls["common_tls_context"]["tls_certificates"])
+                self.assertTrue(tls["common_tls_context"]["validation_context"]["trusted_ca"])
 
     def test_same_ca_wildcards_and_missing_client_cert_are_rejected(self):
         listener = public_listeners(proxy("keeper"))[9234]

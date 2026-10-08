@@ -253,10 +253,17 @@ def verify(rt, upstream):
     master = rt.master(redis[1], REDIS_HOSTS[1])
     login(rt, client, redis[1], master, admin_password, "before_failover")
     old_index = REDIS_HOSTS.index(master)
-    rt.docker("stop", "--time", "2", redis[old_index])
-    survivor = next(index for index in range(3) if index != old_index)
+    addresses = rt.resolved_addresses(client, master)
+    rt.check("master_service_dns_resolves_before_fault", bool(addresses))
+    rt.pause_member(redis[old_index])
+    rt.check("master_service_dns_survives_fault", rt.resolved_addresses(client, master) == addresses)
+    survivors = [index for index in range(3) if index != old_index]
+    survivor = survivors[0]
     rt.wait("sentinel_promoted_new_dns_master", lambda: rt.master(redis[survivor], REDIS_HOSTS[survivor]) != master, seconds=120)
     new_master = rt.master(redis[survivor], REDIS_HOSTS[survivor])
+    rt.wait("surviving_sentinels_agree_on_new_master", lambda: all(
+        rt.master(redis[index], REDIS_HOSTS[index]) == new_master for index in survivors))
+    rt.wait("promoted_member_is_actually_master", lambda: "role:master" in rt.redis(redis[survivor], new_master, "INFO", "replication"))
     rt.wait("new_master_has_replica", lambda: "connected_slaves:1" in rt.redis(redis[survivor], new_master, "INFO", "replication"))
     login(rt, client, redis[survivor], new_master, admin_password, "after_failover")
     rt.check_runtime_bounds()
@@ -272,6 +279,7 @@ def main():
         raise KeyboardInterrupt("isolated acceptance interrupted")
     signal.signal(signal.SIGTERM, interrupted)
     result = {"run": rt.run, "scope": "disposable Docker only; single PG, three Redis/Sentinel pairs; no PostgreSQL HA claim",
+              "redis_fault": "pause master Redis/Sentinel pair; retain and verify per-member Service-like DNS; no forced failover",
               "captcha": "normal API challenge and verification, disposable Redis white-box answer oracle",
               "postgres_server_ca": "temporary CNPG-server CA analogue, separate from postgres-client CA; live CNPG issuance not tested"}
     try:

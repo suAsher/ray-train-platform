@@ -147,6 +147,24 @@ class Runtime:
             raise RuntimeError("Sentinel returned an unexpected master identity")
         return values[0]
 
+    def resolved_addresses(self, client, host):
+        script = "import json,socket,sys; print(json.dumps(sorted({item[4][0] for item in socket.getaddrinfo(sys.argv[1], None, type=socket.SOCK_STREAM)})))"
+        reply = self.docker("exec", client, "python3", "-c", script, host, timeout=15)
+        return json.loads(reply.stdout)
+
+    def pause_member(self, container):
+        # Keep the network alias: the chart's per-member ClusterIP Service DNS
+        # survives Pod/node failure. docker stop instead removes that DNS entry
+        # and tests an unrelated DNS outage (blocking Sentinel until TILT).
+        if container not in self.created:
+            raise RuntimeError("refusing to pause a container outside this run")
+        before = json.loads(self.docker("inspect", container).stdout)[0]
+        if before["Config"].get("Labels", {}).get("obs.n9e.test") != self.run:
+            raise RuntimeError("refusing to pause a container with a different owner")
+        self.docker("pause", container)
+        after = json.loads(self.docker("inspect", container).stdout)[0]
+        self.check("faulted_master_pair_is_paused", after["State"].get("Paused") is True)
+
     def probe(self, container, payload):
         script = r'''
 import json, socket, ssl, sys, urllib.error, urllib.request

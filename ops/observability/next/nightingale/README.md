@@ -141,7 +141,9 @@ python3 "$obs_candidate/verify-runtime.py" \
 
 输出路径必须不存在。脚本使用唯一 `obs-n9e-test-*` 容器/网络名称和 owner label、内部网络、零宿主端口、每容器最多 1 CPU/1Gi、临时数据与随机凭据。退出时仅清理自己的容器/网络/私有目录，保留脱敏 `result.json` 与日志，清理失败也判失败。
 
-覆盖：实际候选配置 renderer、两个 Envoy 配置、N9E native Pod-IP 旁路拒绝、无证书/错误角色/错误方法拒绝、三 Redis+三 Sentinel 原生 mTLS、证书后仍需 AUTH、DNS 主发现、停止本次主节点后的真实切换、切换前后 N9E 正常验证码登录/profile、真实 PG clientcert+SCRAM、无证书/错 CN 拒绝、seed 防重复、迁移和随机 root 哈希。验证码先取真实图片，在本次新 Redis 中只读该题答案作为自动化白盒 oracle，错答案先拒绝，再新题正确答案通过；不关闭验证码、不改数据或声称视觉 UI E2E。
+覆盖：实际候选配置 renderer、两个 Envoy 配置、N9E native Pod-IP 旁路拒绝、无证书/错误角色/错误方法拒绝、三 Redis+三 Sentinel 原生 mTLS、证书后仍需 AUTH、DNS 主发现、冻结本次主节点 Redis/Sentinel 进程后的自动切换、两个幸存 Sentinel 的新主一致性及实际主从角色、切换前后 N9E 正常验证码登录/profile、真实 PG clientcert+SCRAM、无证书/错 CN 拒绝、seed 防重复、迁移和随机 root 哈希。验证码先取真实图片，在本次新 Redis 中只读该题答案作为自动化白盒 oracle，错答案先拒绝，再新题正确答案通过；不关闭验证码、不改数据或声称视觉 UI E2E。
+
+故障注入使用本次主成员容器的 `docker pause`，不手动发起 Sentinel failover。锁版 chart 的三个 announce Service 是独立 ClusterIP，设置 `publishNotReadyAddresses: true`；Pod 不可用时其 DNS 仍存在。因此脚本在冻结前后核验同一 DNS 地址，避免 `docker stop` 删除 Docker alias 后额外引入 DNS 故障。DNS 延迟会使 Sentinel 进入 TILT，集群 DNS 的可用性仍是线上 HA 前提；此脚本不声称覆盖 DNS 故障。三个 Sentinel 的 password-only `requirepass` 来自同一 Secret，Redis 会将它用于 Sentinel 之间认证，`sentinel auth-pass n9e` 则是访问 Redis 数据节点的独立密码。[Redis 官方 Sentinel 说明](https://redis.io/docs/latest/operate/oss_and_stack/management/sentinel/)
 
 PG 使用新单实例和临时 CNPG-server CA 类比，服务端 CA 与 postgres-client CA 分离；客户端仍按真实 hostname/verify-full 校验，不能用自己的 client CA 代替 server CA。该脚本不证明 CNPG 真实签发、8000/9187/9443 补丁行为或三副本 PG HA；这些由独立 Go 协议回归与新 VKE 组件验收完成。
 

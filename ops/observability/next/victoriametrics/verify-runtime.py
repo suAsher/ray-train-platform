@@ -123,6 +123,11 @@ def vm_cluster(lab):
     # Verify each inbound TLS hop explicitly before the full end-to-end write.
     for index, storage in enumerate(stores):
         authenticated_hop(lab, storage, "vmstorage", 8482, f"hop-storage-{index}-mtls-metrics")
+        for port, role in ((8400, "vminsert"), (8401, "vmselect")):
+            status, _ = tls_handshake(lab, storage, port, role, "vmstorage." + NS + ".svc", "vmauth")
+            if status != 200:
+                raise LabError("Authorized storage RPC TLS handshake failed")
+            lab.results.append({"check": f"hop-storage-{index}-rpc-{port}-authorized-tls", "result": "pass"})
     for role, port in (("vminsert", 8480), ("vmselect", 8481)):
         authenticated_hop(lab, components[role], role, port, f"hop-{role}-mtls-metrics")
     payload = remote_write_sample()

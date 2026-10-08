@@ -14,6 +14,7 @@ import re
 import runpy
 import shutil
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -105,6 +106,29 @@ class NightingaleMTLSContractTests(unittest.TestCase):
         self.assertEqual("n9e-redis-auth", values["sentinel"]["existingSecret"])
         self.assertFalse(values.get("redisPassword"))
         self.assertFalse(values["sentinel"].get("password"))
+
+    def test_runtime_failure_injection_preserves_dns_and_checks_owner(self):
+        runtime_type = runpy.run_path(str(ROOT / "runtime_helpers.py"))["Runtime"]
+        runtime = object.__new__(runtime_type)
+        runtime.run, runtime.created, runtime.checks = "owned-run", ["owned-member"], {}
+        owned = {"Config": {"Labels": {"obs.n9e.test": "owned-run"}}, "State": {"Paused": False}}
+        paused = {**owned, "State": {"Paused": True}}
+        runtime.docker = mock.Mock(side_effect=[SimpleNamespace(stdout=json.dumps([owned])),
+                                                SimpleNamespace(stdout="owned-member"),
+                                                SimpleNamespace(stdout=json.dumps([paused]))])
+        runtime.pause_member("owned-member")
+        self.assertEqual([mock.call("inspect", "owned-member"), mock.call("pause", "owned-member"),
+                          mock.call("inspect", "owned-member")], runtime.docker.call_args_list)
+        self.assertTrue(runtime.checks["faulted_master_pair_is_paused"])
+        runtime.docker.reset_mock()
+        with self.assertRaisesRegex(RuntimeError, "outside this run"):
+            runtime.pause_member("other-member")
+        runtime.docker.assert_not_called()
+        foreign = {**owned, "Config": {"Labels": {"obs.n9e.test": "other-run"}}}
+        runtime.docker.side_effect = [SimpleNamespace(stdout=json.dumps([foreign]))]
+        with self.assertRaisesRegex(RuntimeError, "different owner"):
+            runtime.pause_member("owned-member")
+        self.assertEqual([mock.call("inspect", "owned-member")], runtime.docker.call_args_list)
 
     def test_nightingale_native_http_cannot_be_reached_by_pod_ip(self):
         http = section(self.template(), "HTTP")

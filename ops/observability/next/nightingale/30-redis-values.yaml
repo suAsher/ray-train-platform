@@ -42,6 +42,8 @@ sentinel:
   auth: true
   existingSecret: n9e-redis-auth
   authKey: sentinel-password
+  # Password-only Sentinel uses this same requirepass for peer authentication.
+  # sentinel-user/sentinel-pass applies to a separately configured ACL user.
   quorum: 2
   config:
     down-after-milliseconds: 10000

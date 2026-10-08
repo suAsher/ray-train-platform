@@ -102,7 +102,7 @@ NetworkPolicy 保留为将来网络策略生效时的附加限制，当前不能
 
 VMAuth v1.153.0 将每个 `bearer_token` 同时登记为 Bearer 和 Basic（令牌作用户名、空密码）两种认证键；启动日志按键数计数。因此这里2个VMUser可能显示 `loaded information about 4 users`，不能仅凭该日志推断配置重复。运行验收会检查两份唯一用户/Secret映射，以及read token不能write、write token不能query。
 
-隔离 Docker 验收额外给 Envoy 添加一个私有目录内的 Unix admin socket，仅为失败报告读取数值统计（TLS、DNS、连接与RBAC计数）；不监听TCP，不读取config dump，不记录HTTP访问日志。生产ConfigMap没有这项诊断入口。真实网关完整写查前还会使用授权的vmauth角色证书分别检查insert/select入口，缩小后端失败定位范围。
+隔离 Docker 验收额外给 Envoy 添加一个私有目录内的 Unix admin socket，仅为失败报告读取数值统计（TLS、DNS、连接与RBAC计数）；不监听TCP，不读取config dump，不记录HTTP访问日志。实验容器仅将`connection`日志器设为debug，以保留TLS失败原因；不启用HTTP/header日志。生产ConfigMap没有这项诊断入口。真实网关完整写查前还会以正确角色检查storage RPC TLS，并使用授权的vmauth角色证书分别检查insert/select入口，缩小后端失败定位范围。
 
 ## 回退与保留
 
