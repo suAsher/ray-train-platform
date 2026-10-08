@@ -13,7 +13,7 @@ import uuid
 
 N9E = "harbor.wellspiking.ai/hub/flashcatcloud/nightingale:9.1.1@sha256:81b9aa562549b5ee9d36283a11a14bf257e62fa71eb181277ae4841f7c80e2f9"
 PG = "ghcr.io/cloudnative-pg/postgresql:17.11-202608170816-standard-trixie@sha256:6b7e6a1267254902840efa9936bbeb0a398a79b5b9cb2e82218e4a92b602e97c"
-REDIS = "public.ecr.aws/docker/library/redis:8.8.0-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005"
+REDIS = "harbor.wellspiking.ai/hub/library/redis:8.8.0-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005"
 ENVOY = "harbor.wellspiking.ai/hub/envoyproxy/envoy:v1.39.3@sha256:dd85940439de19a0b6ae8419610363ea0ad351d9a994ea007161c206ec1e1865"
 NS = "observability-alerting"
 PGHOST = "n9e-postgres-rw." + NS + ".svc"
@@ -32,7 +32,10 @@ def command(args, *, data=None, check=True, timeout=120):
 
 
 class Runtime:
-    def __init__(self, output):
+    def __init__(self, output, n9e_image_id=None):
+        if n9e_image_id is not None and not re.fullmatch(r"sha256:[0-9a-f]{64}", n9e_image_id):
+            raise ValueError("N9E test override must be an exact local image ID")
+        self.n9e_image = n9e_image_id or N9E
         self.output = Path(output).resolve()
         if os.geteuid() != 0:
             raise RuntimeError("run only as root on the authorized isolated builder")
@@ -71,7 +74,7 @@ class Runtime:
         return command(["docker", *args], **kwargs)
 
     def initialize(self):
-        for image in (N9E, PG, REDIS, ENVOY):
+        for image in (self.n9e_image, PG, REDIS, ENVOY):
             self.docker("image", "inspect", image)
         self.docker("network", "create", "--internal", "--label", "obs.n9e.test=" + self.run, self.network)
 

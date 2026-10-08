@@ -8,6 +8,6 @@ images:
   cloudnative-pg-upstream-base: ghcr.io/cloudnative-pg/cloudnative-pg:1.30.1@sha256:923c267ec29636db3bee20f993d0ec4973fa22998e1adad37da79e4d32b5bc07
   envoy: harbor.wellspiking.ai/hub/envoyproxy/envoy:v1.39.3@sha256:dd85940439de19a0b6ae8419610363ea0ad351d9a994ea007161c206ec1e1865
   postgres: ghcr.io/cloudnative-pg/postgresql:17.11-202608170816-standard-trixie@sha256:6b7e6a1267254902840efa9936bbeb0a398a79b5b9cb2e82218e4a92b602e97c
-  redis: public.ecr.aws/docker/library/redis:8.8.0-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005
+  redis: harbor.wellspiking.ai/hub/library/redis:8.8.0-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005
 nightingaleBinaryVersion: v9.1.1-4e056150142b2e1ed6966c9317a9e08442c399f7
 nightingaleAMD64Manifest: sha256:7579b4ad7314c7724bcf276afb1d236ae3e54ba63b73dc9a96ecf2ca4190a707
