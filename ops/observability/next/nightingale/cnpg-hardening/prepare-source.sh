@@ -21,5 +21,6 @@ printf '%s  %s\n' c4ebb2fc69572825fb67bff43fbff32cb00791f4e3bbd1ae02835cb25fbc2b
 mkdir -p -- "$destination"
 tar -xzf "$archive" --strip-components=1 -C "$destination"
 if [[ "$mode" == patched ]]; then
-  patch --batch --fuzz=0 -d "$destination" -p1 < "$hardening_dir/patches/0001-observability-auth.patch"
+  git -C "$destination" apply --check "$hardening_dir/patches/0001-observability-auth.patch"
+  git -C "$destination" apply "$hardening_dir/patches/0001-observability-auth.patch"
 fi

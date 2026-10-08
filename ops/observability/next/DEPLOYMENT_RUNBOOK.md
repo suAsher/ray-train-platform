@@ -172,7 +172,16 @@ harbor.wellspiking.ai/hub/victoriametrics/operator:v0.75.0@sha256:0f6b319db05d27
 - ClickHouse 可增加 TLS、独立副本传输凭据；Keeper 需要分别保护客户端和 Raft。仅 `secure=true` 不等于验证客户端身份；客户端与 Raft 共用信任配置也不能自动区分两类角色。当前清单仍依赖 NetworkPolicy 限制这些入口。[ClickHouse Keeper](https://clickhouse.com/docs/guides/oss/deployment-and-scaling/keeper)、[Altinity 0.27.4 安全配置](https://github.com/Altinity/clickhouse-operator/blob/release-0.27.4/docs/security_hardening.md)
 - 保持 CNI 不变的备选设计是：原匿名端口关闭或仅监听回环，跨 Pod 通信通过双向 mTLS 代理，按证书身份放行各端口；HTTP 管理、metrics、health 同样需要逐项处理。只删 Service、使用 ClusterIP 或不配 Ingress，都不能阻止 Pod IP 绕过。
 
-用户已选择该代理方案，正在设计实现；它涉及新增组件和证书运维，须先形成清单并验证无凭据/错误身份拒绝、合法链路、故障恢复和无回环绕过。当前已部署资源尚不具备这套代理能力，CNI 保持原状，数据面仍在门禁前。
+用户已选择该代理方案，候选已进入构建机实际协议验收。具体为 [mTLS 设计](../../../docs/superpowers/specs/2026-10-08-observability-mtls-design.md) 和 [实施计划](../../../docs/superpowers/plans/2026-10-08-observability-mtls.md)。当前已部署资源尚不具备这套代理能力，CNI 保持原状，数据面仍在门禁前。
+
+2026-10-08 mTLS 验证进展（不是部署完成记录）：
+
+- `52bf45a`：共用凭据、作用域、VM、CH、OTel 共 85 项测试通过；使用固定 Envoy 1.39.3 镜像校验 8 份 VM 代理配置均通过。未测得覆盖率。
+- `eb77ce1`：开始三 storage/三 AM、三 Keeper/双 CH/OTel 的独立 Docker 协议测试。VM 首次写入返回 502；Keeper Raft 没有形成 quorum，定位到 ClickHouse 26.8 只读取全局 Raft `secure`，而 Operator 的逐 peer 字段不足以开启它。修复与重测中，不能按静态 PASS 宣称链路可用。
+- `f7812ee`：N9E 配置与三 Redis/Sentinel 运行脚本进入候选。PG 无客户端证书拒绝通过；错误客户端身份的断言尚未通过，测试资源已清理。16 项配置合同仍有 2 失败、1 错误，与未完成的 CNPG 加固镜像/锁文件有关，尚未通过全组门禁。
+- CNPG 1.30.1 内部状态、实例 metrics 和 admission webhook 的保护另有最小源码补丁；必须验证其正常管理与恢复路径。它是需要自建镜像的具体例外，不能用重推未修改镜像代替安全补丁。
+
+所有上述运行测试只在构建机内部 Docker 网络进行，无宿主端口、无 GPU、无生产凭据，使用独立临时 CA 和假数据。真实 VKE 生成资源、镜像拉取、HA 与旧系统基线仍待后续逐组验收。
 
 ## 8. 后续部署流程（当前门禁未解除，不执行）
 
@@ -216,9 +225,9 @@ kubectl kustomize "$obs_candidate/ops/observability/next/otel" > otel-rendered.y
 
 ### 8.3 凭据与应用顺序
 
-网络门禁和审批范围确认后，按组件 README 执行，不对本目录 `kubectl apply -R`。
+新增 mTLS 身份及协议门禁通过后，按组件 README 执行，不对本目录 `kubectl apply -R`。
 
-1. 复核基础对象与新的网络策略，只选中新 namespace Pod；用专用 Pod 验证真实执行效果。
+1. 复核基础对象和新资源所有权。NetworkPolicy 仍不执行；以专用客户端验证 mTLS 身份、路径和原生端口拒绝，不能伪称网络隔离已启用。
 2. 本环境 15 个新 Secret 已创建，继续时只核对名称/键及证书有效期，不重跑创建。新环境才使用 `bootstrap_credentials.py --create`；已存在任一目标则停止，不自动覆盖。随机值经 stdin 传递；不打印或归档完整 Secret；CNPG 的 CA 由 CNPG 自己管理。
 3. VM：确认 Operator 及最小 RBAC，再创建 VMCluster、VMAuth/User、VMAgent、VMAlert/AM/selfscrape。检查生成 Pod、卷和 token 路径，禁止后端绕过认证。
 4. CH：安装只 watch 新 namespace 的 Operator → Keeper 3/3 → CH 2/2 → 仅一次 schema bootstrap Job。两副本分别验 DDL/MV/授权/复制，不能只看 Job 成功。
@@ -276,5 +285,6 @@ kubectl kustomize "$obs_candidate/ops/observability/next/otel" > otel-rendered.y
 | continue-20261008/ | Operator 升级前备份、server dry-run、完整差异审阅及升级日志；文件仅管理员可读 |
 | continue-20261008/final-live-recheck.json | 16:27新快照：hub Operator revision 2、最小Role、Secret名称/键、原系统基线对照；无Secret值 |
 | runtime-n9e-20261008/ | 构建机内部Docker网络的PG/Redis/夜莺真实运行验证；只用临时假凭据，不连接VKE库 |
+| mtls-validation/ | 各明确 SHA 的 mTLS RED/GREEN、真实 Envoy 配置校验及隔离协议结果；失败日志不代表已部署 |
 
 目录中的早期失败日志保留为排障记录，不能用某一次 PASS 覆盖不同 SHA/配置的未验结果。恢复建设时重新核对现场，更新本记录中的实际版本、审批范围、执行时间与验收结论，不把这次快照当作长期事实。

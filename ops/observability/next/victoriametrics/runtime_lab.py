@@ -39,6 +39,51 @@ def eventually(operation, timeout=90):
     raise LabError(f"Protocol condition did not become ready ({last or 'condition false'})")
 
 
+def await_http_status(operation, expected, label, timeout=90):
+    """Bound startup races without hiding authorization or certificate defects."""
+    deadline = time.monotonic() + timeout
+    attempts, transients, last = 0, set(), "no response"
+    while time.monotonic() < deadline:
+        attempts += 1
+        try:
+            status, _ = operation()
+        except ssl.SSLError as error:
+            raise LabError(f"{label}: TLS verification failed ({type(error).__name__})") from None
+        except (ConnectionError, TimeoutError, http.client.HTTPException) as error:
+            last = type(error).__name__
+        else:
+            last = f"HTTP {status}"
+            if status == expected:
+                return {"attempts": attempts, "http_status": status, "transient_statuses": sorted(transients)}
+            if status not in (502, 503, 504):
+                raise LabError(f"{label}: unexpected HTTP {status}")
+            transients.add(status)
+        time.sleep(2)
+    raise LabError(f"{label}: readiness deadline exceeded ({last}; attempts={attempts})")
+
+
+def auth_users(objects, tokens):
+    """Model exactly the two rendered VMUsers without inventing extra grants."""
+    users = [item for item in objects if item.get("kind") == "VMUser"]
+    names = [item["metadata"]["name"] for item in users]
+    if len(names) != 2 or set(names) != {"self-read", "self-write"}:
+        raise LabError("Auth fixture requires exactly two distinct rendered VMUsers")
+    if set(tokens) != set(names) or len(set(tokens.values())) != 2 or not all(tokens.values()):
+        raise LabError("Auth fixture requires two distinct nonempty tokens")
+    result = []
+    for item in users:
+        name, spec = item["metadata"]["name"], item["spec"]
+        if spec.get("tokenRef") != {"name": "vm-" + name, "key": "token"}:
+            raise LabError("Auth fixture Secret reference differs from candidate")
+        targets = spec.get("targetRefs", [])
+        if len(targets) != 1 or not targets[0].get("paths") or not targets[0].get("static", {}).get("url"):
+            raise LabError("Auth fixture cannot represent candidate targetRefs")
+        target = targets[0]
+        result.append({"bearer_token": tokens[name], "url_map": [{
+            "src_paths": list(target["paths"]), "url_prefix": target["static"]["url"]}]})
+    return result
+
+
 def private_file(path, text, group_read=False):
     path = Path(path)
     path.parent.mkdir(mode=0o750, parents=True, exist_ok=True)

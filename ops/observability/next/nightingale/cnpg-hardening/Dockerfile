@@ -7,7 +7,8 @@ COPY --from=cnpg-upstream cloudnative-pg.tar.gz /tmp/cloudnative-pg.tar.gz
 COPY patches/0001-observability-auth.patch /tmp/observability-auth.patch
 RUN printf '%s  %s\n' c4ebb2fc69572825fb67bff43fbff32cb00791f4e3bbd1ae02835cb25fbc2be0 /tmp/cloudnative-pg.tar.gz | sha256sum -c - \
     && tar -xzf /tmp/cloudnative-pg.tar.gz --strip-components=1 -C /src \
-    && patch --batch --fuzz=0 -p1 < /tmp/observability-auth.patch
+    && git apply --check /tmp/observability-auth.patch \
+    && git apply /tmp/observability-auth.patch
 # Both bundled architectures must be patched: upstream bootstrap/update can
 # select an architecture-specific manager from /operator.
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \

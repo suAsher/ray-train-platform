@@ -92,13 +92,15 @@ NetworkPolicy 保留为将来网络策略生效时的附加限制，当前不能
 1. 保存当前活跃 RayJob/RayCluster/Pod UID、重启数、状态，旧观测 release 的 revision、镜像和配置 hash；只读记录节点资源、EBS attach 数、集群与 namespace 配额。
 2. 核对本 chart 的 namespace guard、Operator/CRD 包、镜像摘要。构建机执行 Helm lint/template，并验证所有渲染对象：不得含旧资源、Ingress、hostPath、hostNetwork、GPU request、额外容忍、真实通知或旧抓取目标。
    在构建机运行 `python3 validate_component_contract.py operator-rendered.yaml metrics-rendered.yaml`；除正常输入通过，还需用临时变体确认 converter 开启、namespace 扩大、匿名路由或真实通知会失败。临时变体不应用到集群。
-3. 运行 `python3 -m unittest discover -s ../tests -p test_vm_mtls.py -v`、全部Envoy配置的锁定镜像`--mode validate`、CRD schema。执行 `python3 verify-runtime.py --execute --output /root/<独立证据目录>/vm-runtime.json`；脚本只创建带随机专用标签的Docker内部网络/容器，无hostport，证书调用共用`issue_material`临时签发，不创建K8s Secret。覆盖3storage实际远写/查询、原生端口拒绝、错误角色/CA/过期证书、代理失败关闭/证书轮换，以及3AM gossip/silence同步/重启/无UDP。脚本仅清理本次标签对象和临时证书，报告不包含token/私钥；这仍不替代Operator生成Pod及完整Agent/Alert链验证。
+3. 运行 `python3 -m unittest discover -s ../tests -p 'test_vm_*.py' -v`、全部Envoy配置的锁定镜像`--mode validate`、CRD schema。执行 `python3 verify-runtime.py --execute --output /root/<独立证据目录>/vm-runtime.json`；脚本只创建带随机专用标签的Docker内部网络/容器，无hostport，证书调用共用`issue_material`临时签发，不创建K8s Secret。先单独验证storage/insert/select/auth的授权metrics，再以90秒期限完成实际远写；只重试启动期间的连接错误与502/503/504，认证4xx与TLS验证错误立即失败。报告保留各跳检查、尝试次数和状态码，不保存响应正文或令牌。覆盖3storage实际远写/查询、原生端口拒绝、错误角色/CA/过期证书、代理失败关闭/证书轮换，以及3AM gossip/silence同步/重启/无UDP。脚本仅清理本次标签对象和临时证书；这仍不替代Operator生成Pod及完整Agent/Alert链验证。
 4. 对新资源执行server dry-run；完整diff只含受审阅新增对象。先创建身份Secret和Operator代理ConfigMap，再升级新Operator，检查Ready后应用CR；两个既有token不重建。核对生成Pod的完整argv、loopback监听、Secret权限、Service named port、每个探针、镜像、RBAC、优先级、PVC/PV Retain。
 5. 启动后预期自监控有 8 个组件类、共 17 个 Pod 目标；两个 Agent 各抓同组目标。Targets 中不应出现旧 monitoring/loki/tenant namespace 或训练 Pod。检查生成配置与实际 targets 两层。
 6. 用专用客户端验证：无证书/错CA/错角色拒绝；正确客户端身份下无token或错误token返回401；read token可query但不能write/delete/admin/跨租户；write token仅能write。新夜莺reader只查tenant1001。对Service和每个Pod IP扫描全部已知端口，原生回环端口拒绝，公开最小health之外没有匿名接口。
 7. 查询 `raytrain_observability_canary{purpose="deployment-canary"}`；两个 VMAlert 正常求值且写入标签一致，AM 三实例 gossip 健康并可看到 canary。AM 配置仅 `blackhole-canary`，不配置外部 webhook。
 8. 确认队列目录位于每副本 PVC；只对新组件做短时恢复测试时记录积压/发送/去重，不删除有积压 PVC。不能把两个 Agent 的 queue 当成副本互备。
 9. 再次对比旧训练 UID/重启/状态、旧观测配置 hash 和节点压力，符合才报告“新增旁路组件已部署验收”。此时不等于旧指标/日志已迁入，也不等于正式告警切换完成。
+
+VMAuth v1.153.0 将每个 `bearer_token` 同时登记为 Bearer 和 Basic（令牌作用户名、空密码）两种认证键；启动日志按键数计数。因此这里2个VMUser可能显示 `loaded information about 4 users`，不能仅凭该日志推断配置重复。运行验收会检查两份唯一用户/Secret映射，以及read token不能write、write token不能query。
 
 ## 回退与保留
 

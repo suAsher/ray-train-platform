@@ -26,7 +26,7 @@ import traceback
 
 import yaml
 
-from runtime_lab import DockerLab, LabError, command, eventually, private_file
+from runtime_lab import DockerLab, LabError, auth_users, await_http_status, command, eventually, private_file
 
 
 VM_ROOT = Path(__file__).resolve().parent
@@ -94,6 +94,14 @@ def plain_request(pod, port, path="/metrics"):
         connection.close()
 
 
+def authenticated_hop(lab, pod, role, port, name):
+    result = await_http_status(
+        lambda: lab.request(pod, port, "/metrics", role="vmagent", server=role),
+        200, name,
+    )
+    lab.results.append({"check": name, "result": "pass", **result})
+
+
 def vm_cluster(lab):
     cluster = next(item["spec"] for item in lab.objects if item["kind"] == "VMCluster")
     stores = []
@@ -111,15 +119,15 @@ def vm_cluster(lab):
         pod = lab.native(key, lab.image(key), flags(args), [f"{role}-raytrain-next.{NS}.svc"])
         lab.proxy(role, pod, key)
         components[role] = pod
+    # Native health checks do not establish peer DNS, TLS or RBAC readiness.
+    # Verify each inbound TLS hop explicitly before the full end-to-end write.
+    for index, storage in enumerate(stores):
+        authenticated_hop(lab, storage, "vmstorage", 8482, f"hop-storage-{index}-mtls-metrics")
+    for role, port in (("vminsert", 8480), ("vmselect", 8481)):
+        authenticated_hop(lab, components[role], role, port, f"hop-{role}-mtls-metrics")
     tokens = {name: secrets.token_urlsafe(32) for name in ("self-read", "self-write")}
     lab.redactions.extend(tokens.values())
-    users = []
-    for item in lab.objects:
-        if item["kind"] != "VMUser":
-            continue
-        target = item["spec"]["targetRefs"][0]
-        users.append({"bearer_token": tokens[item["metadata"]["name"]],
-                      "url_map": [{"src_paths": target["paths"], "url_prefix": target["static"]["url"]}]})
+    users = auth_users(lab.objects, tokens)
     auth_file = private_file(lab.directory / "auth-config" / "auth.yaml", yaml.safe_dump({"users": users}), True)
     auth_spec = next(item["spec"] for item in lab.objects if item["kind"] == "VMAuth")
     pod = lab.native("auth", lab.image("auth"), flags({**auth_spec["extraArgs"], "auth.config": "/config/auth.yaml"}),
@@ -127,11 +135,17 @@ def vm_cluster(lab):
     proxy = lab.proxy("vmauth", pod, "auth")
     start_reloader(lab, pod, "auth", auth_file, 8428)
     eventually(lambda: plain_request(pod, 18081, "/healthz")[0] == 200)
+    authenticated_hop(lab, pod, "vmauth", 8428, "hop-auth-mtls-internal-metrics")
     headers = {"Authorization": "Bearer " + tokens["self-write"], "Content-Type": "application/x-protobuf",
                "Content-Encoding": "snappy", "X-Prometheus-Remote-Write-Version": "0.1.0"}
-    status, _ = lab.request(pod, 8427, "/api/v1/write", "canary", method="POST", body=remote_write_sample(), headers=headers)
-    if status != 204:
-        raise LabError(f"Synthetic remote-write failed, HTTP {status}")
+    # A success here also establishes insert -> storage RPC; retry only transient
+    # startup transport/5xx, never rejected identity/token or an invalid payload.
+    payload = remote_write_sample()
+    written = await_http_status(
+        lambda: lab.request(pod, 8427, "/api/v1/write", "canary", method="POST", body=payload, headers=headers),
+        204, "hop-auth-insert-storage-write",
+    )
+    lab.results.append({"check": "hop-auth-insert-storage-write", "result": "pass", **written})
     read_headers = {"Authorization": "Bearer " + tokens["self-read"]}
 
     def query():
@@ -144,6 +158,10 @@ def vm_cluster(lab):
     lab.denied("auth-bad-token", lambda: lab.request(pod, 8427, "/api/v1/query?query=up", headers={"Authorization": "Bearer invalid"}))
     lab.denied("auth-wrong-role", lambda: lab.request(pod, 8427, "/api/v1/query?query=up", role="vmstorage", headers=read_headers))
     lab.denied("auth-write-role-cannot-query", lambda: lab.request(pod, 8427, "/api/v1/query?query=up", role="vmagent", headers=read_headers))
+    lab.denied("auth-read-token-cannot-write", lambda: lab.request(pod, 8427, "/api/v1/write", "canary", method="POST", body=payload,
+               headers={**headers, "Authorization": "Bearer " + tokens["self-read"]}))
+    lab.denied("auth-write-token-cannot-query", lambda: lab.request(pod, 8427, "/api/v1/query?query=up", "canary", headers={
+               "Authorization": "Bearer " + tokens["self-write"]}))
     lab.denied("auth-plaintext", lambda: plain_request(pod, 8427))
     lab.denied("auth-wrong-server-dns", lambda: lab.request(pod, 8427, "/api/v1/query?query=up", server="vmstorage", headers=read_headers))
     lab.issue("canary", alternate=True)
