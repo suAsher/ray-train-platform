@@ -90,9 +90,10 @@ class Runtime:
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
             try:
-                if predicate():
+                result = predicate()
+                if result:
                     self.checks[name] = True
-                    return
+                    return result
             except (RuntimeError, ValueError, KeyError, json.JSONDecodeError):
                 pass
             time.sleep(1)
@@ -232,7 +233,12 @@ except (OSError, ValueError, urllib.error.URLError):
 
     def redact(self, text):
         for value in sorted(filter(None, self.secret_values), key=len, reverse=True):
-            text = text.replace(value, "<redacted>")
+            if len(value) < 12:
+                # Short maths-captcha answers must not replace digits inside
+                # timestamps, ports, IDs or addresses in the diagnostic logs.
+                text = re.sub(r"(?<![A-Za-z0-9])" + re.escape(value) + r"(?![A-Za-z0-9])", "<redacted>", text)
+            else:
+                text = text.replace(value, "<redacted>")
         return re.sub(r"-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----",
                       "<redacted-private-key>", text, flags=re.S)
 

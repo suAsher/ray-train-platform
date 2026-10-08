@@ -10,6 +10,7 @@ is not CNPG PostgreSQL HA or Kubernetes admission acceptance.
 import argparse
 import json
 from pathlib import Path
+import re
 import shutil
 import signal
 
@@ -208,17 +209,46 @@ def check_boundaries(rt, client):
         rt.check(f"redis_{port}_certificate_still_needs_auth", reply["status"] == 200 and "NOAUTH" in reply["data"])
 
 
+def ready_captcha(rt, client, redis, redis_host, label):
+    """Wait for N9E's own Redis client to recover, proving a new-master write.
+
+    A Sentinel election does not imply the application has reconnected yet.
+    Never count a timeout, error response, empty challenge or missing key as ready.
+    """
+    state = {"status": None, "stage": "not-requested"}
+
+    def attempt():
+        reply = rt.probe(client, http_payload(path="/api/n9e/auth/captcha", body={}))
+        state.update(status=reply.get("status"), stage="http-response")
+        payload = reply.get("data")
+        challenge = payload.get("dat") if isinstance(payload, dict) else None
+        if (reply.get("status") != 200 or not isinstance(challenge, dict)
+                or not isinstance(challenge.get("captchaid"), str) or not challenge["captchaid"]
+                or not str(challenge.get("imgdata", "")).startswith("data:image/png;base64,")):
+            return False
+        rt.secret_values.append(challenge["captchaid"])
+        expected = rt.redis(redis, redis_host, "GET", challenge["captchaid"])
+        state["stage"] = "new-master-captcha-key"
+        if not re.fullmatch(r"-?\d+", expected):
+            return False
+        rt.secret_values.append(expected)
+        return challenge, expected
+
+    try:
+        return rt.wait(label + "_captcha_redis_roundtrip_ready", attempt, seconds=90)
+    except RuntimeError as error:
+        raise RuntimeError(f"{label} captcha recovery failed; last HTTP status={state['status']}, stage={state['stage']}") from error
+
+
 def login(rt, client, redis, redis_host, password, label):
     shown = rt.probe(client, http_payload(path="/api/n9e/auth/ifshowcaptcha"))
     rt.check(label + "_captcha_enabled", shown["status"] == 200 and shown["data"]["dat"]["show"] is True)
     for correct in (False, True):
-        challenge = rt.probe(client, http_payload(path="/api/n9e/auth/captcha", body={}))["data"]["dat"]
+        challenge, expected = ready_captcha(rt, client, redis, redis_host, label)
         rt.check(label + "_real_captcha_image", challenge["imgdata"].startswith("data:image/png;base64,"))
         # White-box oracle in this fresh disposable Redis only. Never disables or
         # alters captcha auth: a wrong answer must fail, a new correct one passes.
-        expected = rt.redis(redis, redis_host, "GET", challenge["captchaid"])
         rt.check(label + "_captcha_stored_in_test_redis", bool(expected))
-        rt.secret_values.extend([challenge["captchaid"], expected])
         body = {"username": "root", "password": password, "captchaid": challenge["captchaid"],
                 "verifyvalue": expected if correct else "not-the-generated-answer"}
         reply = rt.probe(client, http_payload(path="/api/n9e/auth/login", body=body))

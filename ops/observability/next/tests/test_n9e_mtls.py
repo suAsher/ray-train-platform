@@ -163,6 +163,13 @@ class NightingaleMTLSContractTests(unittest.TestCase):
             with self.subTest(change=change):
                 self.assertFalse(runtime.sentinel_topology_ready("client", hosts[2], hosts[0]))
 
+    def test_runtime_redacts_short_captcha_answers_without_destroying_ports_or_dates(self):
+        runtime_type = runpy.run_path(str(ROOT / "runtime_helpers.py"))["Runtime"]
+        runtime = object.__new__(runtime_type)
+        runtime.secret_values = ["26", "test-only-long-credential"]
+        original = "2026-10-08 port=26379 answer=26 credential=test-only-long-credential"
+        self.assertEqual("2026-10-08 port=26379 answer=<redacted> credential=<redacted>", runtime.redact(original))
+
     def test_nightingale_redis_validates_server_and_presents_client_certificate(self):
         redis = section(self.template(), "Redis")
         self.assertEqual("sentinel", redis.get("RedisType"))
