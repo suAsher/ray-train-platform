@@ -54,7 +54,8 @@ def start_postgres(rt, ids, upstream, db_password, admin_password):
     command(["python3", SOURCE / "prepare-seed.py", upstream, seed_path])
     seed_path.chmod(0o444)
     hba = "local all all trust\nhostnossl all all all reject\n"
-    hba += "hostssl n9e n9e all scram-sha-256 clientcert=verify-full\nhostssl all all all reject\n"
+    hba += "hostssl n9e n9e all scram-sha-256 clientcert=verify-full\n"
+    hba += "hostssl postgres n9e all scram-sha-256 clientcert=verify-full\nhostssl all all all reject\n"
     rt.write("pg_hba.conf", hba, uid=26)
     startup = "initdb -D /data --encoding=UTF8 --username=postgres --auth-local=trust --auth-host=scram-sha-256 --pwfile=/pgpass >/tmp/initdb.log; "
     startup += "cp /config/pg_hba.conf /data/pg_hba.conf; "
@@ -97,6 +98,15 @@ def start_postgres(rt, ids, upstream, db_password, admin_password):
     rt.check("fresh_seed_clientcert_passed", True)
     repeat = rt.docker(*seed_args, check=False)
     rt.check("reseed_rejected", repeat.returncode != 0 and "refusing to reseed" in repeat.stderr)
+    preflight = rt.docker("exec", "--env-file", rt.private / "bootstrap.env", pg,
+        "psql", "-X", "--dbname", "postgres", "-tAc", "SELECT count(*) FROM pg_database WHERE datname='n9e'")
+    rt.check("maintenance_database_clientcert_preflight", preflight.stdout.strip() == "1")
+    denied = rt.docker("exec", "--env-file", rt.private / "pg-nocert.env", pg,
+        "psql", "-X", "--dbname", "postgres", "-tAc", "SELECT 1", check=False)
+    rt.check("maintenance_database_no_certificate_denied", denied.returncode != 0 and "valid client certificate" in denied.stderr)
+    unrelated = rt.docker("exec", "--env-file", rt.private / "bootstrap.env", pg,
+        "psql", "-X", "--dbname", "template1", "-tAc", "SELECT 1", check=False)
+    rt.check("unrelated_database_hba_rejected", unrelated.returncode != 0 and "pg_hba.conf rejects connection" in unrelated.stderr)
     return pg
 
 
@@ -227,6 +237,8 @@ def verify(rt, upstream):
     db_password, admin_password = rt.password(), rt.password(24)
     redis_password, sentinel_password = rt.password(), rt.password()
     pg = start_postgres(rt, ids, upstream, db_password, admin_password)
+    rt.check("n9e_has_no_superuser_or_createdb", pg_query(rt, pg,
+        "SELECT rolsuper OR rolcreatedb FROM pg_roles WHERE rolname='n9e'") == "f")
     rt.check("root_seed_random24", pg_query(rt, pg, "SELECT password FROM users WHERE username='root'") == admin_password)
     count_before = int(pg_query(rt, pg, "SELECT count(*) FROM pg_tables WHERE schemaname='public'"))
     redis = start_redis(rt, ids, redis_password, sentinel_password)

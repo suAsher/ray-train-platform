@@ -5,15 +5,20 @@ three-storage / three-Alertmanager live negative tests. HELM may select the
 builder's installed Helm binary. No cluster or registry is contacted.
 """
 
+from copy import deepcopy
 import os
 from pathlib import Path
 import subprocess
+import sys
 import unittest
 
 import yaml
 
 
 VM_ROOT = Path(__file__).resolve().parents[1] / "victoriametrics"
+sys.path.insert(0, str(VM_ROOT))
+from validate_component_contract import validate_scraper_rbac  # noqa: E402
+
 NS = "observability-metrics"
 IDENTITY = "spiffe://observability.raytrain.local/"
 ENVOY_DIGEST = "sha256:dd85940439de19a0b6ae8419610363ea0ad351d9a994ea007161c206ec1e1865"
@@ -217,6 +222,34 @@ class VMMTLSContracts(unittest.TestCase):
             self.assertTrue(args.get("reload-url", "").startswith("http://127.0.0.1:"))
             reloader = next((item for item in spec.get("containers", []) if item["name"] == "config-reloader"), {})
             self.assertTrue(reloader.get("readinessProbe"), "default PodIP:8435 probe is invalid after loopback bind")
+
+    def test_scraper_can_read_only_its_generated_config_secret(self):
+        validate_scraper_rbac(self.objects)
+        role = self.one("Role", "vm-self-scraper")
+        rules = [item for item in role["rules"] if "secrets" in item["resources"]]
+        self.assertEqual(1, len(rules))
+        self.assertEqual(["vmagent-raytrain-next"], rules[0]["resourceNames"])
+        self.assertFalse(any("configmaps" in item["resources"] for item in role["rules"]))
+        self.assertEqual("vm-self-scraper", self.spec("vmagent")["serviceAccountName"])
+
+    def test_scraper_rbac_rejects_unscoped_secrets_or_extra_bindings(self):
+        broad = deepcopy(self.objects)
+        role = next(item for item in broad if item.get("kind") == "Role" and item["metadata"]["name"] == "vm-self-scraper")
+        secret_rule = next(item for item in role["rules"] if "secrets" in item["resources"])
+        secret_rule.pop("resourceNames")
+        with self.assertRaisesRegex(ValueError, "scraper RBAC"):
+            validate_scraper_rbac(broad)
+        for replacement in (["obs-mtls-admin"], ["vmagent-raytrain-next", "obs-mtls-vmauth"]):
+            broadened = deepcopy(self.objects)
+            role = next(item for item in broadened if item.get("kind") == "Role" and item["metadata"]["name"] == "vm-self-scraper")
+            next(item for item in role["rules"] if "secrets" in item["resources"])["resourceNames"] = replacement
+            with self.assertRaisesRegex(ValueError, "scraper RBAC"):
+                validate_scraper_rbac(broadened)
+        binding = deepcopy(self.one("RoleBinding", "vm-self-scraper"))
+        binding["metadata"]["name"] = "unapproved-extra-grant"
+        binding["roleRef"] = {"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": "cluster-admin"}
+        with self.assertRaisesRegex(ValueError, "scraper RBAC"):
+            validate_scraper_rbac([*self.objects, binding])
 
     def test_self_scrapes_use_per_role_https_identity_without_expanding_selectors(self):
         scrapes = [item["spec"] for item in self.objects if item["kind"] == "VMServiceScrape"]

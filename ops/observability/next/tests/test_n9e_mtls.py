@@ -243,6 +243,8 @@ class NightingaleMTLSContractTests(unittest.TestCase):
         rules = spec["postgresql"].get("pg_hba", [])
         self.assertIn("hostnossl all all all reject", rules)
         self.assertIn("hostssl n9e n9e all scram-sha-256 clientcert=verify-full", rules)
+        self.assertIn("hostssl postgres n9e all scram-sha-256 clientcert=verify-full", rules)
+        self.assertFalse(any(rule.startswith("hostssl all n9e ") for rule in rules))
         self.assertIn("hostssl all all all reject", rules)
 
     def test_cnpg_instance_metrics_enforces_the_monitoring_identity(self):

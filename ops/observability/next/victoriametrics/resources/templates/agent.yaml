@@ -18,9 +18,11 @@ rules:
   - apiGroups: [discovery.k8s.io]
     resources: [endpointslices]
     verbs: [get, list, watch]
-  # The config-reloader reads only this new namespace's generated configuration.
+  # v0.75.0 config-reloader watches this exact generated Secret with a name
+  # selector. TLS/token source Secrets are mounted by kubelet, not read by SA.
   - apiGroups: [""]
-    resources: [configmaps, secrets]
+    resources: [secrets]
+    resourceNames: [{{ printf "vmagent-%s" .Values.name | quote }}]
     verbs: [get, list, watch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -53,6 +55,7 @@ spec:
   resources: {{ toJson .Values.agent.resources }}
   configReloaderImage: {{ .Values.images.configReloader | quote }}
   configReloaderResources: {{ toJson .Values.configReloaderResources }}
+  # Explicit SA also prevents Operator's default SA/RBAC auto-generation.
   serviceAccountName: vm-self-scraper
   statefulMode: true
   statefulStorage:

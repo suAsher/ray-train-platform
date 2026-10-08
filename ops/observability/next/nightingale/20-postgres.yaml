@@ -37,6 +37,8 @@ spec:
     pg_hba:
       - hostnossl all all all reject
       - hostssl n9e n9e all scram-sha-256 clientcert=verify-full
+      # N9E 9.1.1 checks pg_database through dbname=postgres before opening n9e.
+      - hostssl postgres n9e all scram-sha-256 clientcert=verify-full
       - hostssl all all all reject
     parameters:
       max_connections: "100"

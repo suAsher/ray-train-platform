@@ -68,7 +68,7 @@ VMStorage RF=2 与采集 HA 去重不同。首期所有采集和规则周期统�
 - CRD 作为 Helm plain CRD 首次创建；cleanup/upgrade hook 关闭。CRD 是集群级对象，namespace 限制不能让 CRD 变成 namespace 级。
 - 现场应确认没有既有 VM CRD/Operator；若发现同名，停止自动接管，先检查版本和 owner。不得为了 Helm 安装强行重标记、覆盖或删除既有 CRD。
 - VMAuth/Agent/Alert 均 `selectAllByDefault: false`，只选本 namespace 的明确标签。Agent `ignoreNamespaceSelectors: true`，不会因某个新增 scrape CR 改写 namespace selector 而扩大抓取范围。
-- 显式 VMAgent ServiceAccount 只有该新 namespace 的 discovery/config 只读 Role。安装后还要核对 Operator 生成的 Role/RoleBinding，没有意外增加集群范围的采集权限。
+- 显式 VMAgent ServiceAccount `vm-self-scraper` 只有本 namespace 的 pods/services/endpoints/endpointslices discovery，以及 `resourceNames: [vmagent-raytrain-next]` 限定的配置 Secret 读取。没有未限定的 Secrets 或 ConfigMaps API 权限；源 TLS/写令牌由 kubelet 挂载。v0.75.0 的 `IsOwnsServiceAccount()` 在显式 SA 时返回 false，跳过自动 SA/RBAC 生成。安装后仍必须核对所有 RoleBinding/ClusterRoleBinding 和 `kubectl auth can-i` 的有效结果：读取自身配置 yes；未限定 list secrets、读取 `obs-mtls-admin`/`obs-mtls-vmauth`/`obs-mtls-vmstorage`/`obs-mtls-alertmanager-gossip` 都为 no。不能只检查这一份 Role。
 
 ## 网络
 
@@ -102,6 +102,8 @@ NetworkPolicy 保留为将来网络策略生效时的附加限制，当前不能
 
 VMAuth v1.153.0 将每个 `bearer_token` 同时登记为 Bearer 和 Basic（令牌作用户名、空密码）两种认证键；启动日志按键数计数。因此这里2个VMUser可能显示 `loaded information about 4 users`，不能仅凭该日志推断配置重复。运行验收会检查两份唯一用户/Secret映射，以及read token不能write、write token不能query。
 
+隔离 Docker 验收额外给 Envoy 添加一个私有目录内的 Unix admin socket，仅为失败报告读取数值统计（TLS、DNS、连接与RBAC计数）；不监听TCP，不读取config dump，不记录HTTP访问日志。生产ConfigMap没有这项诊断入口。真实网关完整写查前还会使用授权的vmauth角色证书分别检查insert/select入口，缩小后端失败定位范围。
+
 ## 回退与保留
 
 若新增资源影响节点压力，先在确认的新增 release 范围内停采/缩容；旧平台仍按原链路工作。不要删除 namespace、CRD、PVC、PV 或两个 token Secret来“回退”。CR 可能有 finalizer；任何清理都先盘点 ownerReferences 和 Retain PV。纯新增阶段没有业务 DB 迁移，也无需迁移旧 Prom/Loki 历史；但部署前配置与运行基线仍必须保留。
@@ -113,5 +115,6 @@ VMAuth v1.153.0 将每个 `bearer_token` 同时登记为 Bearer 和 Basic（令�
 - [v1.153.0 发布说明与受影响构建范围](https://github.com/VictoriaMetrics/VictoriaMetrics/releases/tag/v1.153.0)
 - [锁定版 VMCluster 类型](https://github.com/VictoriaMetrics/operator/blob/v0.75.0/api/operator/v1beta1/vmcluster_types.go)
 - [锁定版 VMAgent 队列实现](https://github.com/VictoriaMetrics/operator/blob/v0.75.0/internal/controller/operator/factory/vmagent/vmagent.go)
+- [锁定版 VMAgent 精确 Secret RBAC](https://github.com/VictoriaMetrics/operator/blob/v0.75.0/internal/controller/operator/factory/vmagent/rbac.go)
 - [锁定版 VMUser Secret 引用与路径路由](https://github.com/VictoriaMetrics/operator/blob/v0.75.0/api/operator/v1beta1/vmuser_types.go)
 - [VMCluster replication and data safety](https://docs.victoriametrics.com/victoriametrics/cluster-victoriametrics/#replication-and-data-safety)

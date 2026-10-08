@@ -125,6 +125,21 @@ def vm_cluster(lab):
         authenticated_hop(lab, storage, "vmstorage", 8482, f"hop-storage-{index}-mtls-metrics")
     for role, port in (("vminsert", 8480), ("vmselect", 8481)):
         authenticated_hop(lab, components[role], role, port, f"hop-{role}-mtls-metrics")
+    payload = remote_write_sample()
+    write_headers = {"Content-Type": "application/x-protobuf", "Content-Encoding": "snappy",
+                     "X-Prometheus-Remote-Write-Version": "0.1.0"}
+    direct_write = await_http_status(
+        lambda: lab.request(components["vminsert"], 8480, "/insert/1001/prometheus/api/v1/write",
+                            role="vmauth", server="vminsert", method="POST", body=payload, headers=write_headers),
+        204, "hop-authorized-gateway-identity-to-insert",
+    )
+    lab.results.append({"check": "hop-authorized-gateway-identity-to-insert", "result": "pass", **direct_write})
+    direct_read = await_http_status(
+        lambda: lab.request(components["vmselect"], 8481, "/select/1001/prometheus/api/v1/query?query=raytrain_mtls_canary",
+                            role="vmauth", server="vmselect"),
+        200, "hop-authorized-gateway-identity-to-select",
+    )
+    lab.results.append({"check": "hop-authorized-gateway-identity-to-select", "result": "pass", **direct_read})
     tokens = {name: secrets.token_urlsafe(32) for name in ("self-read", "self-write")}
     lab.redactions.extend(tokens.values())
     users = auth_users(lab.objects, tokens)
@@ -136,11 +151,9 @@ def vm_cluster(lab):
     start_reloader(lab, pod, "auth", auth_file, 8428)
     eventually(lambda: plain_request(pod, 18081, "/healthz")[0] == 200)
     authenticated_hop(lab, pod, "vmauth", 8428, "hop-auth-mtls-internal-metrics")
-    headers = {"Authorization": "Bearer " + tokens["self-write"], "Content-Type": "application/x-protobuf",
-               "Content-Encoding": "snappy", "X-Prometheus-Remote-Write-Version": "0.1.0"}
+    headers = {**write_headers, "Authorization": "Bearer " + tokens["self-write"]}
     # A success here also establishes insert -> storage RPC; retry only transient
     # startup transport/5xx, never rejected identity/token or an invalid payload.
-    payload = remote_write_sample()
     written = await_http_status(
         lambda: lab.request(pod, 8427, "/api/v1/write", "canary", method="POST", body=payload, headers=headers),
         204, "hop-auth-insert-storage-write",

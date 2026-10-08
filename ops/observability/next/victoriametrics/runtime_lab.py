@@ -4,6 +4,7 @@ import http.client
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import socket
 import ssl
@@ -108,6 +109,17 @@ class TLSConnection(http.client.HTTPSConnection):
         )
 
 
+class UnixHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, path):
+        super().__init__("localhost", timeout=3)
+        self.path = str(path)
+
+    def connect(self):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(self.timeout)
+        self.sock.connect(self.path)
+
+
 class DockerLab:
     def __init__(self, directory, vm_root, credentials):
         self.directory = Path(directory)
@@ -119,6 +131,7 @@ class DockerLab:
         self.materials = {}
         self.redactions = []
         self.results = []
+        self.admin_paths = {}
         self.images = yaml.safe_load((self.vm_root / "resources-hub-values.yaml").read_text())["images"]
         self.envoy = yaml.safe_load((self.vm_root / "resources/values.yaml").read_text())["mtls"]["image"]
         self.plan = json.loads((self.vm_root / "mtls-identities.json").read_text())
@@ -181,13 +194,23 @@ class DockerLab:
     def proxy(self, role, pod, suffix):
         config = next(item["data"]["envoy.yaml"] for item in self.objects
                       if item["kind"] == "ConfigMap" and item["metadata"]["name"] == f"raytrain-next-{role}-mtls")
+        # Lab-only admin on a private filesystem Unix socket, never a TCP port.
+        # Keep production ConfigMaps unchanged; collect numeric stats only, not
+        # config dumps, request headers or HTTP access logs.
+        admin_dir = self.directory / "diagnostics" / suffix
+        admin_dir.mkdir(mode=0o700, parents=True)
+        os.chown(admin_dir, 65534, 65534)
+        config_data = yaml.safe_load(config.replace("__POD_IP__", pod["ip"]))
+        config_data["admin"] = {"address": {"pipe": {"path": "/diagnostics/admin.sock", "mode": 0o600}}}
         config_path = private_file(self.directory / "configs" / (suffix + ".yaml"),
-                                   config.replace("__POD_IP__", pod["ip"]), group_read=True)
+                                   yaml.safe_dump(config_data), group_read=True)
         identity = self.materials[role]
-        return self.peer(pod, suffix + "-proxy", self.envoy,
-                         ["-c", "/config/envoy.yaml", "--concurrency", "1", "--disable-hot-restart", "--log-level", "warning"],
-                         [(config_path, "/config/envoy.yaml", "ro"), (identity, "/etc/obs-mtls", "ro")],
-                         entrypoint="/usr/local/bin/envoy")
+        container = self.peer(pod, suffix + "-proxy", self.envoy,
+                              ["-c", "/config/envoy.yaml", "--concurrency", "1", "--disable-hot-restart", "--log-level", "warning"],
+                              [(config_path, "/config/envoy.yaml", "ro"), (identity, "/etc/obs-mtls", "ro"),
+                               (admin_dir, "/diagnostics", "rw")], entrypoint="/usr/local/bin/envoy")
+        self.admin_paths[container] = admin_dir / "admin.sock"
+        return container
 
     def request(self, pod, port, path, role="admin", server="vmauth", method="GET", body=None, headers=None):
         context = ssl.create_default_context(cafile=str(self.materials["vmauth"] / "ca.crt"))
@@ -248,6 +271,26 @@ class DockerLab:
             tail = log.stdout + log.stderr
             for value in self.redactions:
                 tail = tail.replace(value, "[REDACTED]")
-            result.append({"container": name, "status": container["State"]["Status"],
-                           "exit_code": container["State"]["ExitCode"], "tail": tail[-4096:]})
+            item = {"container": name, "status": container["State"]["Status"],
+                    "exit_code": container["State"]["ExitCode"], "tail": tail[-4096:]}
+            if name in self.admin_paths:
+                item["proxy_counters"] = self.proxy_counters(self.admin_paths[name])
+            result.append(item)
         return result
+
+    @staticmethod
+    def proxy_counters(path):
+        connection = UnixHTTPConnection(path)
+        try:
+            connection.request("GET", "/stats?format=json")
+            response = connection.getresponse()
+            if response.status != 200:
+                return {"diagnostic_error": "stats-unavailable"}
+            stats = json.loads(response.read(4 * 1024 * 1024)).get("stats", [])
+            pattern = re.compile(r"(ssl\.|upstream_cx|membership_|update_(attempt|success|failure)|rbac\.(allowed|denied))")
+            return {item["name"]: item["value"] for item in stats
+                    if pattern.search(item.get("name", "")) and isinstance(item.get("value"), (int, float))}
+        except (OSError, ValueError, http.client.HTTPException) as error:
+            return {"diagnostic_error": type(error).__name__}
+        finally:
+            connection.close()

@@ -21,10 +21,10 @@ func TestObservabilityStatusRetriesTransientAuthWithoutDowngrade(t *testing.T) {
 	serverIdentity := authority.Issue(t, "status", []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, nil, false)
 	operator := authority.Issue(t, "operator", []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, nil, false)
 	for _, test := range []struct {
-		name       string
-		firstCode  int
-		wantCalls  int32
-		wantError  bool
+		name      string
+		firstCode int
+		wantCalls int32
+		wantError bool
 	}{
 		{name: "unregistered-fingerprint-recovers", firstCode: 503, wantCalls: 2},
 		{name: "unauthorized-is-permanent", firstCode: 401, wantCalls: 1, wantError: true},

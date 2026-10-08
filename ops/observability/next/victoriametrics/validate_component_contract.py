@@ -60,7 +60,43 @@ def validate_operator(objects):
     require("VTAgent" in disabled, "VTAgent global watch must remain disabled")
 
 
+def validate_scraper_rbac(objects):
+    agent = one(objects, "VMAgent")
+    spec, service_account = agent["spec"], "vm-self-scraper"
+    require(spec.get("serviceAccountName") == service_account and not spec.get("useLegacyNaming"),
+            "scraper RBAC requires explicit managed SA and default config naming")
+    roles = [item for item in objects if item.get("kind") == "Role"
+             and item["metadata"].get("namespace") == NAMESPACE
+             and item["metadata"]["name"] == service_account]
+    require(len(roles) == 1, "scraper RBAC needs exactly one namespaced Role")
+    expected = [
+        {"apiGroups": [""], "resources": ["pods", "services", "endpoints"], "verbs": ["get", "list", "watch"]},
+        {"apiGroups": ["discovery.k8s.io"], "resources": ["endpointslices"], "verbs": ["get", "list", "watch"]},
+        {"apiGroups": [""], "resources": ["secrets"], "verbs": ["get", "list", "watch"],
+         "resourceNames": ["vmagent-" + agent["metadata"]["name"]]},
+    ]
+    require(roles[0].get("rules") == expected, "scraper RBAC expanded beyond discovery and own config Secret")
+    bindings = []
+    groups = {"system:serviceaccounts", "system:serviceaccounts:" + NAMESPACE, "system:authenticated"}
+    for item in objects:
+        if item.get("kind") not in ("RoleBinding", "ClusterRoleBinding"):
+            continue
+        for subject in item.get("subjects", []):
+            direct = subject.get("kind") == "ServiceAccount" and subject.get("name") == service_account \
+                and subject.get("namespace", item["metadata"].get("namespace")) == NAMESPACE
+            group = subject.get("kind") == "Group" and subject.get("name") in groups
+            if direct or group:
+                bindings.append(item)
+                break
+    require(len(bindings) == 1, "scraper RBAC has missing or additional bindings")
+    binding = bindings[0]
+    require(binding["kind"] == "RoleBinding" and binding["metadata"].get("namespace") == NAMESPACE
+            and binding["roleRef"] == {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": service_account},
+            "scraper RBAC binding must reference only the narrow namespaced Role")
+
+
 def validate_agent(objects):
+    validate_scraper_rbac(objects)
     spec = one(objects, "VMAgent")["spec"]
     require(spec.get("selectAllByDefault") is False, "agent selects objects by default")
     require(spec.get("ignoreNamespaceSelectors") is True, "scrape namespace not enforced")

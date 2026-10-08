@@ -50,6 +50,8 @@ Nightingale 该版文件加载不进行环境变量插值，因此 `config/rende
 
 数据库 DSN 必须采用该版支持的 `host=… user=n9e dbname=n9e password=…` 形式，不使用 PostgreSQL URI：上游预检自行按空格解析 `dbname`，URI 会被错误解析并可能把密码带入错误日志。配置渲染器限定随机数据库凭据字符集并保持固定用户名，发布前用假凭据验证失败日志不含密码。[上游数据库预检](https://github.com/ccfos/nightingale/blob/v9.1.1/pkg/ormx/ormx.go)
 
+该版启动预检会临时用 `dbname=postgres` 查询 `pg_database`，即使 `n9e` 库已经存在也必须连接。因此 HBA 为同一 `n9e` 身份额外开放专用数据库实例的 `postgres` 维护库，仍强制 clientcert verify-full + SCRAM；不开放所有数据库、不赋予 SUPERUSER/CREATEDB。隔离验收同时检查此预检成功、无证书失败、`template1` 被拒绝。
+
 ## 安装顺序与构建机门禁
 
 所有命令在已审阅候选的构建机隔离目录执行。先记录现有活跃训练 UID/节点/重启数和原观测 release 状态；不要对本目录 `kubectl apply -R`，其中 values、patch、bootstrap 并非可同时应用。

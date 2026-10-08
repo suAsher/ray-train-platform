@@ -355,8 +355,8 @@ new file mode 100644
 +	options.WebhookMux = outer
 +	return &WebhookServer{
 +		DefaultServer: webhook.NewServer(options).(*webhook.DefaultServer),
-+		registration: webhook.NewServer(webhook.Options{WebhookMux: routes}),
-+		mux:          routes,
++		registration:  webhook.NewServer(webhook.Options{WebhookMux: routes}),
++		mux:           routes,
 +	}, nil
 +}
 +

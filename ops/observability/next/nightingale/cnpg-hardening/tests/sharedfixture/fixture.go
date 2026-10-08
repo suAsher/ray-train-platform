@@ -215,5 +215,5 @@ func (c peerConnection) RemoteAddr() net.Addr { return c.peer }
 
 type peerAddress string
 
-func (peerAddress) Network() string { return "tcp" }
+func (peerAddress) Network() string  { return "tcp" }
 func (a peerAddress) String() string { return string(a) }
