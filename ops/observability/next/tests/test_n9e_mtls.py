@@ -170,6 +170,43 @@ class NightingaleMTLSContractTests(unittest.TestCase):
         original = "2026-10-08 port=26379 answer=26 credential=test-only-long-credential"
         self.assertEqual("2026-10-08 port=26379 answer=<redacted> credential=<redacted>", runtime.redact(original))
 
+    def test_runtime_frontend_requires_original_homepage_and_referenced_javascript(self):
+        module = runpy.run_path(str(ROOT / "frontend_probe.py"))
+        lock = json.loads((ROOT / "n9e-hardening/upstream-lock.json").read_text())
+        javascript = lock["frontend_javascript"]
+        homepage = {"status": 200, "content_type": "text/html",
+                    "sha256": lock["frontend_index_html_sha256"], "bytes": 200,
+                    "body": '<html><script type="module" src="' + javascript["path"] + '"></script></html>'}
+        script = {"status": 200, "content_type": "text/javascript",
+                  "sha256": javascript["sha256"], "bytes": javascript["bytes"]}
+        fetch = mock.Mock(side_effect=[homepage, script])
+        result = module["verify_frontend"](fetch, lock)
+        self.assertTrue(all(result["checks"].values()))
+        self.assertEqual(["/", javascript["path"]], [call.args[0] for call in fetch.call_args_list])
+        self.assertEqual(javascript["sha256"], result["javascript"]["sha256"])
+        cases = [
+            ({**homepage, "status": 302}, script),
+            ({**homepage, "sha256": "0" * 64}, script),
+            ({**homepage, "body": '<script src="https://external.invalid/file.js"></script>'}, script),
+            (homepage, {**script, "status": 404}),
+            (homepage, {**script, "content_type": "text/html"}),
+            (homepage, {**script, "bytes": 0}),
+            (homepage, {**script, "sha256": "0" * 64}),
+        ]
+        for page, asset in cases:
+            with self.subTest(page=page["status"], script=asset["status"], mime=asset["content_type"]):
+                with self.assertRaises(ValueError):
+                    module["verify_frontend"](mock.Mock(side_effect=[page, asset]), lock)
+
+    def test_runtime_frontend_refuses_foreign_or_ambiguous_asset_paths(self):
+        module = runpy.run_path(str(ROOT / "frontend_probe.py"))
+        for path in ("https://external.invalid/a.js", "//external.invalid/a.js",
+                     "/../a.js", "/a.js?x=1", "/a.js#x", "/%2e%2e/a.js", "/a\\b.js"):
+            with self.subTest(path=path):
+                with self.assertRaises(ValueError):
+                    module["local_script_path"](path)
+        self.assertEqual("/assets/index.js", module["local_script_path"]("/assets/index.js"))
+
     def test_nightingale_redis_validates_server_and_presents_client_certificate(self):
         redis = section(self.template(), "Redis")
         self.assertEqual("sentinel", redis.get("RedisType"))

@@ -15,7 +15,7 @@ import shutil
 import signal
 
 from runtime_helpers import (
-    ENVOY, N9E, N9EHOST, NS, PG, PGHOST, REDIS, REDIS_HOSTS, URI_ROOT, Runtime, command,
+    ENVOY, N9EHOST, NS, PG, PGHOST, REDIS, REDIS_HOSTS, URI_ROOT, Runtime, command,
 )
 
 SOURCE = Path(__file__).resolve().parent
@@ -159,12 +159,12 @@ def start_n9e(rt, ids, db_password, redis_password, sentinel_password):
     rt.write("db/password", db_password)
     rt.write("redis/auth", redis_password)
     rt.write("redis/sentinel-password", sentinel_password)
-    render = rt.start("render", N9E, ["python3", "/config/render-config.py"], network="none", extras=[
+    render = rt.start("render", rt.n9e_image, ["python3", "/config/render-config.py"], network="none", extras=[
         "-e", "POD_IP=192.0.2.20", "-v", f"{SOURCE / 'config'}:/config:ro",
         "-v", f"{rt.private / 'db'}:/secrets/db:ro", "-v", f"{rt.private / 'redis'}:/secrets/redis:ro",
         "-v", f"{rt.private / 'runtime'}:/run/n9e"], memory="128m")
     rt.check("real_config_renderer", rt.docker("wait", render).stdout.strip() == "0")
-    n9e = rt.start("n9e", N9E, ["/app/n9e", "-configs", "/run/n9e/etc"], memory="1g", cpu="1", extras=[
+    n9e = rt.start("n9e", rt.n9e_image, ["/app/n9e", "-configs", "/run/n9e/etc"], memory="1g", cpu="1", extras=[
         "--network-alias", N9EHOST, "-v", f"{rt.private / 'runtime'}:/run/n9e:ro",
         "-v", f"{ids['pg-app']}:/etc/n9e-pg-mtls:ro", "-v", f"{ids['redis-client']}:/etc/n9e-redis-mtls:ro",
         "--tmpfs", "/var/log/n9e:rw,size=64m,uid=10001,gid=10001", "--tmpfs", "/tmp:rw,size=64m,uid=10001,gid=10001"])
@@ -177,7 +177,7 @@ def start_n9e(rt, ids, db_password, redis_password, sentinel_password):
     extras = []
     for name in ("ui", "monitor", "wrong", "redis-client"):
         extras += ["-v", f"{ids[name]}:/certs/{name}:ro"]
-    client = rt.start("client", N9E, ["python3", "-c", "import time; time.sleep(600)"], extras=extras, memory="128m")
+    client = rt.start("client", rt.n9e_image, ["python3", "-c", "import time; time.sleep(600)"], extras=extras, memory="128m")
     return n9e, client
 
 
@@ -209,6 +209,19 @@ def check_boundaries(rt, client):
         rt.check(f"redis_{port}_certificate_still_needs_auth", reply["status"] == 200 and "NOAUTH" in reply["data"])
 
 
+def check_frontend(rt, client):
+    lock = json.loads((SOURCE / "n9e-hardening/upstream-lock.json").read_text())
+    payload = {"origin": f"https://{N9EHOST}:17443", "ca": "/certs/ui/ca.crt",
+               "cert": "/certs/ui/tls.crt", "key": "/certs/ui/tls.key", "lock": lock}
+    reply = rt.docker("exec", "-i", client, "python3", "-c",
+                      (SOURCE / "frontend_probe.py").read_text(), data=json.dumps(payload), check=False)
+    rt.check("original_frontend_content_loaded_over_mtls", reply.returncode == 0)
+    evidence = json.loads(reply.stdout)
+    for name, passed in evidence["checks"].items():
+        rt.check(name, passed is True)
+    (rt.output / "frontend.json").write_text(json.dumps(evidence, indent=2) + "\n")
+
+
 def ready_captcha(rt, client, redis, redis_host, label):
     """Wait for N9E's own Redis client to recover, proving a new-master write.
 
@@ -221,6 +234,8 @@ def ready_captcha(rt, client, redis, redis_host, label):
         reply = rt.probe(client, http_payload(path="/api/n9e/auth/captcha", body={}))
         state.update(status=reply.get("status"), stage="http-response")
         payload = reply.get("data")
+        state["response_type"] = type(payload).__name__
+        state["application_error"] = rt.redact(str(payload.get("err", "")))[:500] if isinstance(payload, dict) else ""
         challenge = payload.get("dat") if isinstance(payload, dict) else None
         if (reply.get("status") != 200 or not isinstance(challenge, dict)
                 or not isinstance(challenge.get("captchaid"), str) or not challenge["captchaid"]
@@ -237,7 +252,8 @@ def ready_captcha(rt, client, redis, redis_host, label):
     try:
         return rt.wait(label + "_captcha_redis_roundtrip_ready", attempt, seconds=90)
     except RuntimeError as error:
-        raise RuntimeError(f"{label} captcha recovery failed; last HTTP status={state['status']}, stage={state['stage']}") from error
+        (rt.output / (label + "-captcha-error.json")).write_text(json.dumps(state, indent=2) + "\n")
+        raise RuntimeError(f"{label} captcha recovery failed; last HTTP status={state['status']}, stage={state['stage']}, application_error={state.get('application_error', '')}") from error
 
 
 def login(rt, client, redis, redis_host, password, label):
@@ -280,6 +296,7 @@ def verify(rt, upstream):
     redis = start_redis(rt, ids, redis_password, sentinel_password)
     _, client = start_n9e(rt, ids, db_password, redis_password, sentinel_password)
     check_boundaries(rt, client)
+    check_frontend(rt, client)
     rt.check("real_migrations_created_tables", int(pg_query(rt, pg, "SELECT count(*) FROM pg_tables WHERE schemaname='public'")) > count_before)
     stored = pg_query(rt, pg, "SELECT password FROM users WHERE username='root'")
     rt.secret_values.append(stored)
@@ -313,12 +330,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path, help="new private builder evidence directory")
     parser.add_argument("--upstream-sql", required=True, type=Path, help="fixed official SQL verified by prepare-seed.py")
+    parser.add_argument("--n9e-image-id", help="exact local sha256 image ID for the reviewed derived N9E build; never pulled")
     args = parser.parse_args()
-    rt = Runtime(args.output)
+    rt = Runtime(args.output, args.n9e_image_id)
     def interrupted(signum, frame):
         raise KeyboardInterrupt("isolated acceptance interrupted")
     signal.signal(signal.SIGTERM, interrupted)
-    result = {"run": rt.run, "scope": "disposable Docker only; single PG, three Redis/Sentinel pairs; no PostgreSQL HA claim",
+    result = {"run": rt.run, "n9e_image": rt.n9e_image, "scope": "disposable Docker only; single PG, three Redis/Sentinel pairs; no PostgreSQL HA claim",
               "redis_fault": "pause master Redis/Sentinel pair; retain and verify per-member Service-like DNS; no forced failover",
               "captcha": "normal API challenge and verification, disposable Redis white-box answer oracle",
               "postgres_server_ca": "temporary CNPG-server CA analogue, separate from postgres-client CA; live CNPG issuance not tested"}
