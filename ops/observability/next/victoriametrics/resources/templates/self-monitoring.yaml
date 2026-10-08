@@ -1,0 +1,53 @@
+{{- $targets := list
+  (dict "component" "vmstorage" "port" 8482)
+  (dict "component" "vmselect" "port" 8481)
+  (dict "component" "vminsert" "port" 8480)
+  (dict "component" "vmagent" "port" 8429)
+  (dict "component" "vmauth" "port" 8428)
+  (dict "component" "vmalert" "port" 8880)
+  (dict "component" "vmalertmanager" "port" 9093)
+  (dict "component" "vm-operator" "port" 8080)
+-}}
+{{- range $targets }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: self-{{ .component }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    observability.raytrain.io/self-metrics: "true"
+    observability.raytrain.io/component: {{ .component }}
+spec:
+  type: ClusterIP
+  selector:
+    observability.raytrain.io/component: {{ .component }}
+  ports:
+    - name: http-metrics
+      port: {{ .port }}
+      targetPort: {{ .port }}
+{{- end }}
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: metrics-self-only
+  namespace: {{ .Release.Namespace }}
+  labels:
+    observability.raytrain.io/scrape: metrics-self
+    {{- include "metrics.labels" . | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames: [{{ .Release.Namespace }}]
+  selector:
+    matchLabels:
+      observability.raytrain.io/self-metrics: "true"
+  endpoints:
+    - port: http-metrics
+      path: /metrics
+      interval: {{ .Values.scrapeInterval }}
+      scrapeTimeout: 10s
+      honorLabels: false
+      relabelConfigs:
+        - sourceLabels: [__meta_kubernetes_service_label_observability_raytrain_io_component]
+          targetLabel: component

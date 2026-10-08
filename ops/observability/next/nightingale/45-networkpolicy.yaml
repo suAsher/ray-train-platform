@@ -1,0 +1,173 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nightingale-isolated
+  namespace: observability-alerting
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: nightingale}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: nightingale}
+        - podSelector:
+            matchLabels: {observability.raytrain.io/nightingale-client: "true"}
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: observability-metrics}
+      ports: [{port: 17000, protocol: TCP}]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
+    - to:
+        - podSelector:
+            matchLabels: {cnpg.io/cluster: n9e-postgres}
+      ports: [{port: 5432, protocol: TCP}]
+    - to:
+        - podSelector:
+            matchLabels: {release: n9e-redis}
+      ports: [{port: 6379, protocol: TCP}, {port: 26379, protocol: TCP}]
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: nightingale}
+      ports: [{port: 17000, protocol: TCP}]
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: observability-metrics}
+      ports: [{port: 8427, protocol: TCP}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: n9e-postgres-isolated
+  namespace: observability-alerting
+spec:
+  podSelector:
+    matchLabels: {cnpg.io/cluster: n9e-postgres}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {cnpg.io/cluster: n9e-postgres}
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: nightingale}
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: n9e-bootstrap}
+      ports: [{port: 5432, protocol: TCP}]
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/instance: n9e-cnpg}
+      ports: [{port: 8000, protocol: TCP}]
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: observability-metrics}
+      ports: [{port: 9187, protocol: TCP}]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
+    - to:
+        - podSelector:
+            matchLabels: {cnpg.io/cluster: n9e-postgres}
+      ports: [{port: 5432, protocol: TCP}, {port: 8000, protocol: TCP}]
+    - to: [{ipBlock: {cidr: 10.0.96.1/32}}]
+      ports: [{port: 443, protocol: TCP}]
+    - to:
+        - ipBlock: {cidr: 172.28.2.64/32}
+        - ipBlock: {cidr: 172.28.5.50/32}
+      ports: [{port: 6443, protocol: TCP}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: n9e-redis-isolated
+  namespace: observability-alerting
+spec:
+  podSelector:
+    matchLabels: {release: n9e-redis}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {release: n9e-redis}
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: nightingale}
+        - podSelector:
+            matchLabels: {observability.raytrain.io/nightingale-client: "true"}
+      ports: [{port: 6379, protocol: TCP}, {port: 26379, protocol: TCP}]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
+    - to:
+        - podSelector:
+            matchLabels: {release: n9e-redis}
+      ports: [{port: 6379, protocol: TCP}, {port: 26379, protocol: TCP}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: n9e-cnpg-isolated
+  namespace: observability-alerting
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/instance: n9e-cnpg}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - ipBlock: {cidr: 172.28.2.64/32}
+        - ipBlock: {cidr: 172.28.5.50/32}
+      ports: [{port: 9443, protocol: TCP}]
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: observability-metrics}
+      ports: [{port: 8080, protocol: TCP}]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
+    - to:
+        - podSelector:
+            matchLabels: {cnpg.io/cluster: n9e-postgres}
+      ports: [{port: 8000, protocol: TCP}]
+    - to: [{ipBlock: {cidr: 10.0.96.1/32}}]
+      ports: [{port: 443, protocol: TCP}]
+    - to:
+        - ipBlock: {cidr: 172.28.2.64/32}
+        - ipBlock: {cidr: 172.28.5.50/32}
+      ports: [{port: 6443, protocol: TCP}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: n9e-bootstrap-isolated
+  namespace: observability-alerting
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: n9e-bootstrap}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
+    - to:
+        - podSelector:
+            matchLabels: {cnpg.io/cluster: n9e-postgres}
+      ports: [{port: 5432, protocol: TCP}]

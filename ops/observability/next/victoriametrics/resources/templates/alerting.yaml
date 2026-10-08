@@ -1,0 +1,116 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMAlertmanager
+metadata:
+  name: {{ .Values.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    observability.raytrain.io/notifier: canary-only
+    {{- include "metrics.labels" . | nindent 4 }}
+spec:
+  {{- include "metrics.common" (dict "root" . "component" "vmalertmanager") | nindent 2 }}
+  replicaCount: {{ .Values.alertmanager.replicas }}
+  image: {{ toJson .Values.images.alertmanager }}
+  imagePullSecrets: {{ toJson .Values.imagePullSecrets }}
+  resources: {{ toJson .Values.alertmanager.resources }}
+  configReloaderImage: {{ .Values.images.configReloader | quote }}
+  configReloaderResources: {{ toJson .Values.configReloaderResources }}
+  selectAllByDefault: false
+  configRawYaml: |
+    global:
+      resolve_timeout: 5m
+    route:
+      receiver: blackhole-canary
+      group_by: [alertname, cluster, telemetry_stage]
+      group_wait: 10s
+      group_interval: 30s
+      repeat_interval: 24h
+    receivers:
+      - name: blackhole-canary
+  retention: 120h
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  storage:
+    volumeClaimTemplate:
+      spec:
+        storageClassName: {{ .Values.storageClassName | quote }}
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ .Values.alertmanager.size }}
+  podDisruptionBudget:
+    maxUnavailable: 1
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMAlert
+metadata:
+  name: {{ .Values.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "metrics.labels" . | nindent 4 }}
+spec:
+  {{- include "metrics.common" (dict "root" . "component" "vmalert") | nindent 2 }}
+  replicaCount: {{ .Values.alert.replicas }}
+  image: {{ toJson .Values.images.alert }}
+  imagePullSecrets: {{ toJson .Values.imagePullSecrets }}
+  resources: {{ toJson .Values.alert.resources }}
+  configReloaderImage: {{ .Values.images.configReloader | quote }}
+  configReloaderResources: {{ toJson .Values.configReloaderResources }}
+  evaluationInterval: {{ .Values.scrapeInterval }}
+  selectAllByDefault: false
+  ruleSelector:
+    matchLabels:
+      observability.raytrain.io/rules: canary-only
+  externalLabels:
+    cluster: {{ .Values.clusterLabel | quote }}
+    telemetry_stage: additive
+  datasource:
+    url: {{ printf "http://vmauth-%s.%s.svc:8427" .Values.name .Release.Namespace | quote }}
+    bearerTokenSecret:
+      name: {{ .Values.secrets.read }}
+      key: {{ .Values.secrets.tokenKey }}
+  remoteRead:
+    url: {{ printf "http://vmauth-%s.%s.svc:8427" .Values.name .Release.Namespace | quote }}
+    bearerTokenSecret:
+      name: {{ .Values.secrets.read }}
+      key: {{ .Values.secrets.tokenKey }}
+  remoteWrite:
+    url: {{ printf "http://vmauth-%s.%s.svc:8427" .Values.name .Release.Namespace | quote }}
+    bearerTokenSecret:
+      name: {{ .Values.secrets.write }}
+      key: {{ .Values.secrets.tokenKey }}
+  notifiers:
+    - selector:
+        namespaceSelector:
+          matchNames: [{{ .Release.Namespace }}]
+        labelSelector:
+          matchLabels:
+            observability.raytrain.io/notifier: canary-only
+  podDisruptionBudget:
+    maxUnavailable: 1
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: additive-canary
+  namespace: {{ .Release.Namespace }}
+  labels:
+    observability.raytrain.io/rules: canary-only
+    {{- include "metrics.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: additive-pipeline-canary
+      interval: {{ .Values.scrapeInterval }}
+      rules:
+        - record: raytrain_observability_canary
+          expr: vector(1)
+          labels:
+            purpose: deployment-canary
+        - alert: AdditiveObservabilityCanary
+          expr: vector(1)
+          for: 1m
+          labels:
+            severity: none
+            purpose: deployment-canary
+          annotations:
+            summary: "New observability pipeline canary; no external notification"

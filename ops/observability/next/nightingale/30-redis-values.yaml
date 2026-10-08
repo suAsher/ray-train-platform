@@ -1,0 +1,75 @@
+# Chart: dandydev/redis-ha 4.39.0. Three Redis+Sentinel Pods.
+fullnameOverride: n9e-redis
+replicas: 3
+image:
+  repository: public.ecr.aws/docker/library/redis
+  tag: 8.8.0-alpine
+  pullPolicy: IfNotPresent
+priorityClassName: raytrain-observability-additive
+labels:
+  app.kubernetes.io/part-of: n9e
+  observability.raytrain.io/stage: additive
+auth: true
+existingSecret: n9e-redis-auth
+authKey: auth
+redis:
+  masterGroupName: n9e
+  config:
+    min-replicas-to-write: 1
+    min-replicas-max-lag: 5
+    maxmemory: 384mb
+    maxmemory-policy: noeviction
+    appendonly: "yes"
+    appendfsync: everysec
+    save: "900 1"
+    repl-diskless-sync: "yes"
+    rdbcompression: "yes"
+    rdbchecksum: "yes"
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "1", memory: 1Gi}
+sentinel:
+  auth: true
+  existingSecret: n9e-redis-auth
+  authKey: sentinel-password
+  quorum: 2
+  config:
+    down-after-milliseconds: 10000
+    failover-timeout: 180000
+    parallel-syncs: 1
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 250m, memory: 256Mi}
+splitBrainDetection:
+  resources:
+    requests: {cpu: 20m, memory: 32Mi}
+    limits: {cpu: 100m, memory: 64Mi}
+init:
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 250m, memory: 128Mi}
+persistentVolume:
+  enabled: true
+  storageClass: ebs-ssd-observability-retain
+  size: 20Gi
+hardAntiAffinity: true
+additionalAffinities:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: NotIn
+              values: [172.28.1.222, 172.28.3.32]
+tolerations: []
+podDisruptionBudget:
+  minAvailable: 2
+serviceAccount:
+  create: true
+  automountToken: false
+sysctlImage:
+  enabled: false
+haproxy:
+  enabled: false
+exporter:
+  enabled: false

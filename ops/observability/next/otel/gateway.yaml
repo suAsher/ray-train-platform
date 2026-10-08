@@ -1,0 +1,134 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-gateway-headless
+  namespace: observability-otel
+spec:
+  clusterIP: None
+  selector: {observability.raytrain.io/component: otel-gateway}
+  ports:
+    - {name: grpc, port: 4317, targetPort: grpc}
+    - {name: http, port: 4318, targetPort: http}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-gateway
+  namespace: observability-otel
+  labels: {observability.raytrain.io/component: otel-gateway}
+spec:
+  type: ClusterIP
+  selector: {observability.raytrain.io/component: otel-gateway}
+  ports:
+    - {name: grpc, port: 4317, targetPort: grpc}
+    - {name: http, port: 4318, targetPort: http}
+    - {name: metrics, port: 8888, targetPort: metrics}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: otel-gateway
+  namespace: observability-otel
+spec:
+  serviceName: otel-gateway-headless
+  replicas: 2
+  podManagementPolicy: Parallel
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels: {observability.raytrain.io/component: otel-gateway}
+  template:
+    metadata:
+      labels: {observability.raytrain.io/component: otel-gateway}
+    spec:
+      priorityClassName: raytrain-observability-additive
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 90
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: {observability.raytrain.io/component: otel-gateway}
+              topologyKey: kubernetes.io/hostname
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: [172.28.1.222]
+      containers:
+        - name: collector
+          image: otel/opentelemetry-collector-contrib:0.162.0
+          imagePullPolicy: IfNotPresent
+          args: [--config=/etc/otelcol/config/collector.yaml]
+          env:
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: otel-clickhouse-auth, key: password}
+            - {name: GOMEMLIMIT, value: 768MiB}
+          ports:
+            - {name: grpc, containerPort: 4317}
+            - {name: http, containerPort: 4318}
+            - {name: health, containerPort: 13133}
+            - {name: metrics, containerPort: 8888}
+          startupProbe:
+            httpGet: {path: /, port: health}
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            httpGet: {path: /, port: health}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /, port: health}
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: config, mountPath: /etc/otelcol/config, readOnly: true}
+            - {name: queue, mountPath: /var/lib/otelcol}
+            - {name: receiver-tls, mountPath: /etc/otelcol/tls, readOnly: true}
+            - {name: clickhouse-ca, mountPath: /etc/otelcol/clickhouse-ca, readOnly: true}
+      volumes:
+        - name: config
+          configMap: {name: otel-gateway-config}
+        - name: receiver-tls
+          secret:
+            secretName: otel-canary-server-tls
+            defaultMode: 0440
+        - name: clickhouse-ca
+          secret:
+            secretName: clickhouse-server-ca
+            defaultMode: 0440
+  volumeClaimTemplates:
+    - metadata:
+        name: queue
+      spec:
+        storageClassName: ebs-ssd-observability-retain
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests: {storage: 20Gi}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: otel-gateway
+  namespace: observability-otel
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {observability.raytrain.io/component: otel-gateway}

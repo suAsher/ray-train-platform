@@ -1,0 +1,57 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: observability-clickhouse-schema-v1
+  namespace: observability-analytics
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        observability.raytrain.io/component: clickhouse-bootstrap
+    spec:
+      priorityClassName: raytrain-observability-additive
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: schema
+          image: clickhouse/clickhouse-server:26.8.20.9
+          imagePullPolicy: IfNotPresent
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              # Never print credentials or pass them as CLI arguments.
+              attempt=0
+              until clickhouse-client --host clickhouse-observability --user schema_admin --query 'SELECT 1' >/dev/null 2>&1; do
+                attempt=$((attempt + 1))
+                test "$attempt" -lt 120
+                sleep 5
+              done
+              clickhouse-client --host clickhouse-observability --user schema_admin --multiquery < /schema/schema.sql
+              echo 'Additive canary schema initialized on telemetry cluster.'
+          env:
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: clickhouse-bootstrap-auth, key: password}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: schema, mountPath: /schema, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: schema
+          configMap: {name: observability-clickhouse-schema}
+        - name: tmp
+          emptyDir: {sizeLimit: 32Mi}

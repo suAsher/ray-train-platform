@@ -1,0 +1,145 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nightingale
+  namespace: observability-alerting
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nightingale
+  namespace: observability-alerting
+  labels:
+    app.kubernetes.io/name: nightingale
+    observability.raytrain.io/stage: additive
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: nightingale}
+  ports: [{name: http, port: 17000, targetPort: http}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nightingale
+  namespace: observability-alerting
+spec:
+  # First bootstrap must complete on one instance; apply 50-ha-patch.yaml afterwards.
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  selector:
+    matchLabels: {app.kubernetes.io/name: nightingale}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nightingale
+        app.kubernetes.io/part-of: n9e
+        observability.raytrain.io/stage: additive
+        observability.raytrain.io/metrics-client: "true"
+    spec:
+      serviceAccountName: nightingale
+      automountServiceAccountToken: false
+      priorityClassName: raytrain-observability-additive
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: [172.28.1.222, 172.28.3.32]
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: {app.kubernetes.io/name: nightingale}
+              topologyKey: kubernetes.io/hostname
+      initContainers:
+        - name: render-config
+          image: flashcatcloud/nightingale:9.1.1
+          command: [python3, /config/render-config.py]
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef: {fieldPath: status.podIP}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: config-template, mountPath: /config, readOnly: true}
+            - {name: config-runtime, mountPath: /run/n9e}
+            - {name: db-auth, mountPath: /secrets/db, readOnly: true}
+            - {name: redis-auth, mountPath: /secrets/redis, readOnly: true}
+      containers:
+        - name: nightingale
+          image: flashcatcloud/nightingale:9.1.1
+          command: [/app/n9e]
+          args: [-configs, /run/n9e/etc]
+          workingDir: /app
+          ports: [{name: http, containerPort: 17000}]
+          resources:
+            requests: {cpu: 500m, memory: 1Gi, ephemeral-storage: 256Mi}
+            limits: {cpu: "2", memory: 2Gi, ephemeral-storage: 2Gi}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          startupProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 20
+            failureThreshold: 3
+          volumeMounts:
+            - {name: config-runtime, mountPath: /run/n9e, readOnly: true}
+            - {name: pg-ca, mountPath: /etc/n9e-ca, readOnly: true}
+            - {name: logs, mountPath: /var/log/n9e}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: config-template
+          configMap: {name: n9e-config-v911}
+        - name: config-runtime
+          emptyDir: {medium: Memory, sizeLimit: 16Mi}
+        - name: db-auth
+          secret:
+            secretName: n9e-db-app
+            defaultMode: 0440
+        - name: redis-auth
+          secret:
+            secretName: n9e-redis-auth
+            defaultMode: 0440
+        - name: pg-ca
+          secret:
+            secretName: n9e-postgres-ca
+            items: [{key: ca.crt, path: ca.crt}]
+        - name: logs
+          emptyDir: {sizeLimit: 1Gi}
+        - name: tmp
+          emptyDir: {sizeLimit: 128Mi}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nightingale
+  namespace: observability-alerting
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: nightingale}

@@ -1,0 +1,65 @@
+# Altinity chart altinity-clickhouse-operator 0.27.4 only.
+# Render and inspect on the existing builder before installation.
+fullnameOverride: observability-clickhouse-operator
+namespaceOverride: observability-analytics
+watchNamespaces:
+  - "^observability-analytics$"
+rbac:
+  create: true
+  namespaceScoped: true
+crdHook:
+  enabled: false
+secret:
+  create: false
+operator:
+  image:
+    repository: altinity/clickhouse-operator
+    tag: "0.27.4"
+  priorityClassName: raytrain-observability-additive
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities: {drop: [ALL]}
+metrics:
+  enabled: false
+podLabels:
+  observability.raytrain.io/component: clickhouse-operator
+podAnnotations: {}
+serviceMonitor:
+  enabled: false
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile: {type: RuntimeDefault}
+nodeSelector: {}
+tolerations: []
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: NotIn
+              values: [172.28.1.222]
+configs:
+  files:
+    config.yaml:
+      clickhouse:
+        access:
+          secret:
+            namespace: observability-analytics
+            name: clickhouse-operator-auth
+  # Do not install the default 30-day system log overrides.
+  configdFiles:
+    01-clickhouse-02-logger.xml: |
+      <clickhouse><logger><level>warning</level><console>1</console><log remove="1"/><errorlog remove="1"/></logger></clickhouse>
+    01-clickhouse-03-query_log.xml: |
+      <clickhouse><query_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></query_log><query_thread_log remove="1"/></clickhouse>
+    01-clickhouse-04-part_log.xml: |
+      <clickhouse><part_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></part_log></clickhouse>
+    01-clickhouse-05-trace_log.xml: |
+      <clickhouse><trace_log remove="1"/></clickhouse>

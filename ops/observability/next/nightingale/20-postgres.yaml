@@ -1,0 +1,57 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: n9e-postgres
+  namespace: observability-alerting
+  labels:
+    observability.raytrain.io/stage: additive
+spec:
+  instances: 3
+  imageName: ghcr.io/cloudnative-pg/postgresql:17.11-202608170816-standard-trixie@sha256:6b7e6a1267254902840efa9936bbeb0a398a79b5b9cb2e82218e4a92b602e97c
+  enableSuperuserAccess: false
+  priorityClassName: raytrain-observability-additive
+  primaryUpdateStrategy: supervised
+  bootstrap:
+    initdb:
+      database: n9e
+      owner: n9e
+      secret:
+        name: n9e-db-app
+      encoding: UTF8
+      localeCType: C
+      localeCollate: C
+  postgresql:
+    parameters:
+      max_connections: "100"
+      shared_buffers: 256MB
+      log_statement: none
+      log_min_error_statement: panic
+    synchronous:
+      method: any
+      number: 1
+      dataDurability: required
+      failoverQuorum: true
+  storage:
+    storageClass: ebs-ssd-observability-retain
+    size: 20Gi
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  affinity:
+    enablePodAntiAffinity: true
+    podAntiAffinityType: required
+    topologyKey: kubernetes.io/hostname
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: NotIn
+                values: [172.28.1.222, 172.28.3.32]
+    tolerations: []
+  monitoring:
+    enablePodMonitor: false

@@ -1,0 +1,67 @@
+[Global]
+RunMode = "release"
+[Log]
+Dir = "/var/log/n9e"
+Level = "INFO"
+Output = "stdout"
+[HTTP]
+Host = "0.0.0.0"
+Port = 17000
+PrintAccessLog = false
+PProf = false
+ExposeMetrics = true
+ShutdownTimeout = 30
+MaxContentLength = 8388608
+ReadTimeout = 20
+WriteTimeout = 40
+IdleTimeout = 120
+[HTTP.ShowCaptcha]
+Enable = true
+[HTTP.APIForAgent]
+Enable = false
+[HTTP.APIForService]
+Enable = false
+[HTTP.JWTAuth]
+AccessExpired = 60
+RefreshExpired = 1440
+RedisKeyPrefix = "/jwt/"
+[HTTP.ProxyAuth]
+Enable = false
+[HTTP.TokenAuth]
+Enable = true
+[HTTP.A2A]
+Disable = true
+DisableMCP = true
+MCPEnableWriteTools = false
+[DB]
+DBType = "postgres"
+DSN = @@DB_DSN@@
+Debug = false
+MaxLifetime = 600
+MaxOpenConns = 20
+MaxIdleConns = 5
+[Redis]
+RedisType = "sentinel"
+Address = "n9e-redis-announce-0.observability-alerting.svc:26379,n9e-redis-announce-1.observability-alerting.svc:26379,n9e-redis-announce-2.observability-alerting.svc:26379"
+Password = @@REDIS_PASSWORD@@
+SentinelPassword = @@SENTINEL_PASSWORD@@
+MasterName = "n9e"
+DB = 0
+[Alert.Heartbeat]
+IP = @@POD_IP@@
+Interval = 1000
+EngineName = "vke-additive-canary"
+[Alert.EvalLog]
+Disable = true
+[Center]
+MetricsYamlFile = "/run/n9e/etc/metrics.yaml"
+CleanAlertHisEventDay = 30
+[Center.AnonymousAccess]
+PromQuerier = false
+AlertDetail = false
+[EmbeddedTSDB]
+Enable = false
+[Pushgw]
+LabelRewrite = false
+[Ibex]
+Enable = false

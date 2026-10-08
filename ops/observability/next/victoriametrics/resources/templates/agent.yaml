@@ -1,0 +1,94 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vm-self-scraper
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "metrics.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: vm-self-scraper
+  namespace: {{ .Release.Namespace }}
+rules:
+  - apiGroups: [""]
+    resources: [pods, services, endpoints]
+    verbs: [get, list, watch]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [get, list, watch]
+  # The config-reloader reads only this new namespace's generated configuration.
+  - apiGroups: [""]
+    resources: [configmaps, secrets]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vm-self-scraper
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: vm-self-scraper
+subjects:
+  - kind: ServiceAccount
+    name: vm-self-scraper
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMAgent
+metadata:
+  name: {{ .Values.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "metrics.labels" . | nindent 4 }}
+spec:
+  {{- include "metrics.common" (dict "root" . "component" "vmagent") | nindent 2 }}
+  replicaCount: {{ .Values.agent.replicas }}
+  image: {{ toJson .Values.images.agent }}
+  imagePullSecrets: {{ toJson .Values.imagePullSecrets }}
+  resources: {{ toJson .Values.agent.resources }}
+  configReloaderImage: {{ .Values.images.configReloader | quote }}
+  configReloaderResources: {{ toJson .Values.configReloaderResources }}
+  serviceAccountName: vm-self-scraper
+  statefulMode: true
+  statefulStorage:
+    volumeClaimTemplate:
+      spec:
+        storageClassName: {{ .Values.storageClassName | quote }}
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ .Values.agent.size }}
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  podDisruptionBudget:
+    maxUnavailable: 1
+  scrapeInterval: {{ .Values.scrapeInterval }}
+  scrapeTimeout: 10s
+  selectAllByDefault: false
+  ignoreNamespaceSelectors: true
+  serviceScrapeSelector:
+    matchLabels:
+      observability.raytrain.io/scrape: metrics-self
+  # No namespace selector: discover these explicitly labelled CRs here only.
+  # All other scrape selectors intentionally remain nil (select nothing).
+  externalLabelName: ""
+  externalLabels:
+    cluster: {{ .Values.clusterLabel | quote }}
+    telemetry_stage: additive
+  remoteWrite:
+    - url: {{ printf "http://vmauth-%s.%s.svc:8427/api/v1/write" .Values.name .Release.Namespace | quote }}
+      bearerTokenSecret:
+        name: {{ .Values.secrets.write }}
+        key: {{ .Values.secrets.tokenKey }}
+  remoteWriteSettings:
+    # This is the StatefulMode persistent queue mount supplied by Operator.
+    tmpDataPath: /vmagent_pq/vmagent-remotewrite-data
+    maxDiskUsagePerURL: {{ .Values.agent.queueLimit | quote }}
+  extraArgs:
+    memory.allowedPercent: "60"
+    remoteWrite.forcePromProto: "true"

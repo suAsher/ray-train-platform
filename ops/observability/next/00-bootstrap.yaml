@@ -1,0 +1,121 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability-metrics
+  labels:
+    app.kubernetes.io/part-of: raytrain-observability-additive
+    observability.wellspiking.ai/phase: additive
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability-analytics
+  labels:
+    app.kubernetes.io/part-of: raytrain-observability-additive
+    observability.wellspiking.ai/phase: additive
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability-otel
+  labels:
+    app.kubernetes.io/part-of: raytrain-observability-additive
+    observability.wellspiking.ai/phase: additive
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability-alerting
+  labels:
+    app.kubernetes.io/part-of: raytrain-observability-additive
+    observability.wellspiking.ai/phase: additive
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: raytrain-observability-additive
+  labels:
+    app.kubernetes.io/part-of: raytrain-observability-additive
+value: -1000
+globalDefault: false
+preemptionPolicy: Never
+description: Additive observability workloads cannot preempt existing workloads.
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ebs-ssd-observability-retain
+  labels:
+    app.kubernetes.io/part-of: raytrain-observability-additive
+provisioner: ebs.csi.volcengine.com
+parameters:
+  ChargeType: PostPaid
+  projectName: default
+  type: ESSD_PL0
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: additive-budget
+  namespace: observability-metrics
+spec:
+  hard:
+    requests.cpu: '20'
+    requests.memory: 64Gi
+    limits.cpu: '40'
+    limits.memory: 128Gi
+    requests.storage: 400Gi
+    persistentvolumeclaims: '20'
+    pods: '50'
+    requests.nvidia.com/gpu: '0'
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: additive-budget
+  namespace: observability-analytics
+spec:
+  hard:
+    requests.cpu: '12'
+    requests.memory: 40Gi
+    limits.cpu: '24'
+    limits.memory: 80Gi
+    requests.storage: 300Gi
+    persistentvolumeclaims: '12'
+    pods: '30'
+    requests.nvidia.com/gpu: '0'
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: additive-budget
+  namespace: observability-otel
+spec:
+  hard:
+    requests.cpu: '4'
+    requests.memory: 8Gi
+    limits.cpu: '8'
+    limits.memory: 16Gi
+    requests.storage: 60Gi
+    persistentvolumeclaims: '4'
+    pods: '15'
+    requests.nvidia.com/gpu: '0'
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: additive-budget
+  namespace: observability-alerting
+spec:
+  hard:
+    requests.cpu: '12'
+    requests.memory: 32Gi
+    limits.cpu: '24'
+    limits.memory: 64Gi
+    requests.storage: 200Gi
+    persistentvolumeclaims: '12'
+    pods: '35'
+    requests.nvidia.com/gpu: '0'

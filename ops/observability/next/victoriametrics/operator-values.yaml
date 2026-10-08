@@ -1,0 +1,58 @@
+# Standalone chart victoria-metrics-operator 0.68.1 / app v0.75.0.
+# Install only in observability-metrics. Do not use the k8s-stack chart.
+fullnameOverride: raytrain-vm-operator
+replicaCount: 1
+image:
+  repository: victoriametrics/operator
+  tag: v0.75.0
+watchNamespaces:
+  - observability-metrics
+operator:
+  disable_prometheus_converter: true
+  enable_converter_ownership: false
+  gateway_support: false
+  vpa_support: false
+rbac:
+  create: true
+  aggregatedClusterRoles:
+    enabled: false
+crds:
+  enabled: true
+  plain: true
+  cleanup:
+    enabled: false
+  upgrade:
+    enabled: false
+admissionWebhooks:
+  enabled: false
+serviceMonitor:
+  enabled: false
+service:
+  type: ClusterIP
+priorityClassName: raytrain-observability-additive
+nodeSelector: {}
+tolerations: []
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: NotIn
+              values: [172.28.1.222]
+podLabels:
+  observability.raytrain.io/component: vm-operator
+resources:
+  requests:
+    cpu: 100m
+    memory: 192Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+env:
+  - name: VM_METRICS_VERSION
+    value: v1.152.0
+  - name: VM_DISABLESELFSERVICESCRAPECREATION
+    value: "true"
+  - name: VM_ENABLESTRICTSECURITY
+    value: "true"

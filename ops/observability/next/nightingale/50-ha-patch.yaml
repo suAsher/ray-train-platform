@@ -1,0 +1,4 @@
+# Strategic merge patch, not a standalone apply manifest.
+# kubectl -n observability-alerting patch deployment nightingale --type=strategic --patch-file 50-ha-patch.yaml
+spec:
+  replicas: 2

@@ -1,0 +1,90 @@
+apiVersion: clickhouse-keeper.altinity.com/v1
+kind: ClickHouseKeeperInstallation
+metadata:
+  name: observability
+  namespace: observability-analytics
+spec:
+  defaults:
+    storageManagement:
+      provisioner: Operator
+      reclaimPolicy: Retain
+    templates:
+      podTemplate: keeper
+      dataVolumeClaimTemplate: keeper-data
+  configuration:
+    clusters:
+      - name: keeper
+        layout:
+          replicasCount: 3
+    settings:
+      logger/level: warning
+      logger/console: "true"
+      listen_host: "0.0.0.0"
+      keeper_server/four_letter_word_white_list: "ruok,stat,mntr,conf"
+      keeper_server/coordination_settings/raft_logs_level: warning
+      prometheus/endpoint: /metrics
+      prometheus/port: "7000"
+      prometheus/metrics: "true"
+      prometheus/events: "true"
+      prometheus/asynchronous_metrics: "true"
+  templates:
+    podTemplates:
+      - name: keeper
+        metadata:
+          labels:
+            observability.raytrain.io/component: keeper
+        spec:
+          priorityClassName: raytrain-observability-additive
+          automountServiceAccountToken: false
+          terminationGracePeriodSeconds: 60
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 101
+            runAsGroup: 101
+            fsGroup: 101
+            fsGroupChangePolicy: OnRootMismatch
+            seccompProfile: {type: RuntimeDefault}
+          affinity:
+            podAntiAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchLabels: {observability.raytrain.io/component: keeper}
+                  topologyKey: kubernetes.io/hostname
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: kubernetes.io/hostname
+                        operator: NotIn
+                        values: [172.28.1.222]
+          containers:
+            - name: clickhouse-keeper
+              image: clickhouse/clickhouse-keeper:26.8.20.9
+              imagePullPolicy: IfNotPresent
+              resources:
+                requests: {cpu: 250m, memory: 512Mi}
+                limits: {cpu: 500m, memory: 1Gi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: {drop: [ALL]}
+              ports:
+                - {name: prometheus, containerPort: 7000}
+    volumeClaimTemplates:
+      - name: keeper-data
+        provisioner: Operator
+        reclaimPolicy: Retain
+        spec:
+          storageClassName: ebs-ssd-observability-retain
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests: {storage: 20Gi}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: observability-keeper
+  namespace: observability-analytics
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: {observability.raytrain.io/component: keeper}

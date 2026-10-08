@@ -1,0 +1,22 @@
+# Resolved from official sources on 2026-10-08. This file contains no credentials.
+# Before deployment the coordinator records chart SHA256 and image digests.
+operatorChart:
+  repository: https://victoriametrics.github.io/helm-charts/
+  name: victoria-metrics-operator
+  version: 0.68.1
+  appVersion: v0.75.0
+  minimumKubernetesVersion: 1.25.0
+images:
+  operator: victoriametrics/operator:v0.75.0
+  configReloader: victoriametrics/operator:config-reloader-v0.75.0
+  vmstorage: victoriametrics/vmstorage:v1.152.0-cluster
+  vmselect: victoriametrics/vmselect:v1.152.0-cluster
+  vminsert: victoriametrics/vminsert:v1.152.0-cluster
+  vmagent: victoriametrics/vmagent:v1.152.0
+  vmauth: victoriametrics/vmauth:v1.152.0
+  vmalert: victoriametrics/vmalert:v1.152.0
+  alertmanager: prom/alertmanager:v0.34.1
+source:
+  chart: https://github.com/VictoriaMetrics/helm-charts/blob/victoria-metrics-operator-0.68.1/charts/victoria-metrics-operator/Chart.yaml
+  defaults: https://github.com/VictoriaMetrics/operator/blob/v0.75.0/internal/config/config.go
+  api: https://github.com/VictoriaMetrics/operator/tree/v0.75.0/api/operator/v1beta1

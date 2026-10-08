@@ -1,0 +1,253 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: metrics-default-deny
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: metrics-dns
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: metrics-api-readers
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: observability.raytrain.io/component
+        operator: In
+        values: [vm-operator, vmagent, vmauth, vmalert, vmalertmanager]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        {{- range .Values.networkPolicy.apiServerCIDRs }}
+        - ipBlock: {cidr: {{ . | quote }}}
+        {{- end }}
+      ports:
+        {{- range .Values.networkPolicy.apiServerPorts }}
+        - {protocol: TCP, port: {{ . }}}
+        {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: metrics-operator-reconcile
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      observability.raytrain.io/component: vm-operator
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchExpressions:
+              - key: observability.raytrain.io/component
+                operator: Exists
+      ports:
+        - {protocol: TCP, port: 8427}
+        - {protocol: TCP, port: 8428}
+        - {protocol: TCP, port: 8429}
+        - {protocol: TCP, port: 8435}
+        - {protocol: TCP, port: 8480}
+        - {protocol: TCP, port: 8481}
+        - {protocol: TCP, port: 8482}
+        - {protocol: TCP, port: 8880}
+        - {protocol: TCP, port: 9093}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: metrics-self-scrape-egress
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      observability.raytrain.io/component: vmagent
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchExpressions:
+              - key: observability.raytrain.io/component
+                operator: Exists
+      ports:
+        - {protocol: TCP, port: 8080}
+        - {protocol: TCP, port: 8428}
+        - {protocol: TCP, port: 8429}
+        - {protocol: TCP, port: 8480}
+        - {protocol: TCP, port: 8481}
+        - {protocol: TCP, port: 8482}
+        - {protocol: TCP, port: 8880}
+        - {protocol: TCP, port: 9093}
+{{- $targets := list
+  (dict "component" "vmstorage" "port" 8482)
+  (dict "component" "vmselect" "port" 8481)
+  (dict "component" "vminsert" "port" 8480)
+  (dict "component" "vmagent" "port" 8429)
+  (dict "component" "vmauth" "port" 8428)
+  (dict "component" "vmalert" "port" 8880)
+  (dict "component" "vmalertmanager" "port" 9093)
+  (dict "component" "vm-operator" "port" 8080)
+}}
+{{- range $targets }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: self-{{ .component }}-ingress
+  namespace: {{ $.Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      observability.raytrain.io/component: {{ .component }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: observability.raytrain.io/component
+                operator: In
+                values: [vmagent, vm-operator]
+      ports:
+        - {protocol: TCP, port: {{ .port }}}
+        - {protocol: TCP, port: 8435}
+{{- end }}
+{{- $links := list
+  (dict "source" "vmagent" "target" "vmauth" "port" 8427)
+  (dict "source" "vmalert" "target" "vmauth" "port" 8427)
+  (dict "source" "vmauth" "target" "vminsert" "port" 8480)
+  (dict "source" "vmauth" "target" "vmselect" "port" 8481)
+  (dict "source" "vminsert" "target" "vmstorage" "port" 8400)
+  (dict "source" "vmselect" "target" "vmstorage" "port" 8401)
+  (dict "source" "vmalert" "target" "vmalertmanager" "port" 9093)
+}}
+{{- range $links }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .source }}-to-{{ .target }}-egress
+  namespace: {{ $.Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      observability.raytrain.io/component: {{ .source }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              observability.raytrain.io/component: {{ .target }}
+      ports:
+        - {protocol: TCP, port: {{ .port }}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .source }}-to-{{ .target }}-ingress
+  namespace: {{ $.Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      observability.raytrain.io/component: {{ .target }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              observability.raytrain.io/component: {{ .source }}
+      ports:
+        - {protocol: TCP, port: {{ .port }}}
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: metrics-auth-clients
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      observability.raytrain.io/component: vmauth
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              observability.raytrain.io/metrics-client: "true"
+        {{- range .Values.networkPolicy.readClientNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+          podSelector:
+            matchLabels:
+              observability.raytrain.io/metrics-client: "true"
+        {{- end }}
+      ports:
+        - {protocol: TCP, port: 8427}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: metrics-canary-client-egress
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      observability.raytrain.io/metrics-client: "true"
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              observability.raytrain.io/component: vmauth
+      ports:
+        - {protocol: TCP, port: 8427}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: metrics-am-gossip
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      observability.raytrain.io/component: vmalertmanager
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              observability.raytrain.io/component: vmalertmanager
+      ports:
+        - {protocol: TCP, port: 9094}
+        - {protocol: UDP, port: 9094}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              observability.raytrain.io/component: vmalertmanager
+      ports:
+        - {protocol: TCP, port: 9094}
+        - {protocol: UDP, port: 9094}
+{{- end }}

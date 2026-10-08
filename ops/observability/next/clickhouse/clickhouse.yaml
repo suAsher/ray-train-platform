@@ -1,0 +1,174 @@
+apiVersion: clickhouse.altinity.com/v1
+kind: ClickHouseInstallation
+metadata:
+  name: observability
+  namespace: observability-analytics
+spec:
+  defaults:
+    storageManagement:
+      provisioner: Operator
+      reclaimPolicy: Retain
+    templates:
+      podTemplate: clickhouse
+      dataVolumeClaimTemplate: clickhouse-data
+      serviceTemplate: internal
+  configuration:
+    zookeeper:
+      keeper:
+        name: observability
+        serviceType: replicas
+      session_timeout_ms: 30000
+      operation_timeout_ms: 10000
+    clusters:
+      - name: telemetry
+        secret:
+          auto: "true"
+        layout:
+          shardsCount: 1
+          replicasCount: 2
+    users:
+      default/password_sha256_hex:
+        valueFrom:
+          secretKeyRef: {name: clickhouse-auth, key: default-password-sha256}
+      schema_admin/password_sha256_hex:
+        valueFrom:
+          secretKeyRef: {name: clickhouse-auth, key: admin-password-sha256}
+      schema_admin/networks/ip: ["0.0.0.0/0"]
+      schema_admin/grants/query:
+        - "GRANT ALL ON *.* WITH GRANT OPTION"
+      otel_ingest/password_sha256_hex:
+        valueFrom:
+          secretKeyRef: {name: clickhouse-auth, key: ingest-password-sha256}
+      otel_ingest/networks/ip: ["0.0.0.0/0"]
+      otel_ingest/profile: ingest
+      otel_ingest/grants/query:
+        - "GRANT INSERT, SHOW COLUMNS ON observability_canary.otel_logs"
+        - "GRANT INSERT, SHOW COLUMNS ON observability_canary.otel_traces"
+      observability_query/password_sha256_hex:
+        valueFrom:
+          secretKeyRef: {name: clickhouse-auth, key: query-password-sha256}
+      observability_query/networks/ip: ["0.0.0.0/0"]
+      observability_query/profile: readonly
+      observability_query/grants/query:
+        - "GRANT SELECT ON observability_canary.*"
+    profiles:
+      default/max_threads: 2
+      default/max_memory_usage: 2147483648
+      ingest/max_threads: 2
+      ingest/max_memory_usage: 1073741824
+      ingest/async_insert: 1
+      ingest/wait_for_async_insert: 1
+      ingest/async_insert_busy_timeout_ms: 1000
+      readonly/readonly: 1
+      readonly/max_threads: 2
+      readonly/max_memory_usage: 1073741824
+      readonly/max_execution_time: 30
+    settings:
+      max_server_memory_usage: 6442450944
+      max_concurrent_queries: 20
+      max_thread_pool_size: 128
+      background_pool_size: 4
+      background_merges_mutations_concurrency_ratio: 2
+      merge_tree/number_of_free_entries_in_pool_to_execute_mutation: 4
+      merge_tree/number_of_free_entries_in_pool_to_lower_max_size_of_merge: 4
+      merge_tree/number_of_free_entries_in_pool_to_execute_optimize_entire_partition: 4
+      background_schedule_pool_size: 4
+      background_fetches_pool_size: 2
+      background_move_pool_size: 2
+      mark_cache_size: 268435456
+      uncompressed_cache_size: 67108864
+      prometheus/endpoint: /metrics
+      prometheus/port: 9363
+      prometheus/metrics: true
+      prometheus/events: true
+      prometheus/asynchronous_metrics: true
+    files:
+      config.d/native-tls.xml: |
+        <clickhouse>
+          <tcp_port_secure>9440</tcp_port_secure>
+          <openSSL><server>
+            <certificateFile>/etc/clickhouse-tls/tls.crt</certificateFile>
+            <privateKeyFile>/etc/clickhouse-tls/tls.key</privateKeyFile>
+            <verificationMode>none</verificationMode>
+            <cacheSessions>true</cacheSessions>
+            <disableProtocols>sslv2,sslv3,tlsv1,tlsv1_1</disableProtocols>
+          </server></openSSL>
+        </clickhouse>
+  templates:
+    serviceTemplates:
+      - name: internal
+        generateName: clickhouse-{chi}
+        spec:
+          type: ClusterIP
+          ports:
+            - {name: http, port: 8123, targetPort: 8123}
+            - {name: tcp, port: 9000, targetPort: 9000}
+            - {name: tcp-secure, port: 9440, targetPort: 9440}
+    podTemplates:
+      - name: clickhouse
+        metadata:
+          labels:
+            observability.raytrain.io/component: clickhouse
+        spec:
+          priorityClassName: raytrain-observability-additive
+          automountServiceAccountToken: false
+          terminationGracePeriodSeconds: 90
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 101
+            runAsGroup: 101
+            fsGroup: 101
+            fsGroupChangePolicy: OnRootMismatch
+            seccompProfile: {type: RuntimeDefault}
+          affinity:
+            podAntiAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchLabels: {observability.raytrain.io/component: clickhouse}
+                  topologyKey: kubernetes.io/hostname
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: kubernetes.io/hostname
+                        operator: NotIn
+                        values: [172.28.1.222]
+          containers:
+            - name: clickhouse
+              image: clickhouse/clickhouse-server:26.8.20.9
+              imagePullPolicy: IfNotPresent
+              resources:
+                requests: {cpu: "1", memory: 4Gi}
+                limits: {cpu: "2", memory: 8Gi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: {drop: [ALL]}
+              ports:
+                - {name: prometheus, containerPort: 9363}
+                - {name: tcp-secure, containerPort: 9440}
+              volumeMounts:
+                - {name: server-tls, mountPath: /etc/clickhouse-tls, readOnly: true}
+          volumes:
+            - name: server-tls
+              secret:
+                secretName: clickhouse-server-tls
+                defaultMode: 0440
+    volumeClaimTemplates:
+      - name: clickhouse-data
+        provisioner: Operator
+        reclaimPolicy: Retain
+        spec:
+          storageClassName: ebs-ssd-observability-retain
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests: {storage: 100Gi}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: observability-clickhouse
+  namespace: observability-analytics
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {observability.raytrain.io/component: clickhouse}

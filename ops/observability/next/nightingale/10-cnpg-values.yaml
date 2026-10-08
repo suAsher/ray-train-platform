@@ -1,0 +1,41 @@
+# Chart: cloudnative-pg/cloudnative-pg 0.29.1; operator: 1.30.1.
+# Install only after checking no conflicting CNPG installation/CRD ownership.
+fullnameOverride: n9e-cnpg
+replicaCount: 2
+image:
+  repository: ghcr.io/cloudnative-pg/cloudnative-pg
+  tag: 1.30.1
+config:
+  clusterWide: false
+  name: n9e-cnpg-config
+  data:
+    WATCH_NAMESPACE: observability-alerting
+rbac:
+  aggregateClusterRoles: false
+monitoring:
+  podMonitorEnabled: false
+  grafanaDashboard:
+    create: false
+priorityClassName: raytrain-observability-additive
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: NotIn
+              values: [172.28.1.222, 172.28.3.32]
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/instance: n9e-cnpg
+        topologyKey: kubernetes.io/hostname
+tolerations: []
