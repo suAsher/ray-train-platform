@@ -11,7 +11,7 @@ import subprocess
 import time
 import uuid
 
-N9E = "harbor.wellspiking.ai/hub/flashcatcloud/nightingale:9.1.1@sha256:81b9aa562549b5ee9d36283a11a14bf257e62fa71eb181277ae4841f7c80e2f9"
+N9E = "harbor.wellspiking.ai/guofeng.su/nightingale-observability:9.1.1-sentinel-01abc76@sha256:2e544213530f914b961e05d9fbab2ddcbbb995402379496a34815f0d61da6315"
 PG = "harbor.wellspiking.ai/guofeng.su/postgresql-observability:17.11-202608170816-source-6b7e6a12@sha256:6b7e6a1267254902840efa9936bbeb0a398a79b5b9cb2e82218e4a92b602e97c"
 REDIS = "harbor.wellspiking.ai/hub/library/redis:8.8.0-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005"
 ENVOY = "harbor.wellspiking.ai/hub/envoyproxy/envoy:v1.39.3@sha256:dd85940439de19a0b6ae8419610363ea0ad351d9a994ea007161c206ec1e1865"

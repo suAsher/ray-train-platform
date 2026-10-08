@@ -36,7 +36,8 @@
 {{- $_ := set $cluster "transport_socket" (include "metrics.mtls.tls" (dict "identities" (list .peer) "server" false) | fromJson) -}}
 {{- end -}}
 {{- if .health -}}
-{{- $_ := set $cluster "health_checks" (list (dict "timeout" "1s" "interval" "5s" "unhealthy_threshold" 2 "healthy_threshold" 1 "http_health_check" (dict "path" .health))) -}}
+{{/* Health-only clusters never receive routed traffic; Envoy otherwise uses its 60s no-traffic default. */}}
+{{- $_ := set $cluster "health_checks" (list (dict "timeout" "1s" "interval" "5s" "no_traffic_interval" "5s" "unhealthy_threshold" 2 "healthy_threshold" 1 "http_health_check" (dict "path" .health))) -}}
 {{- end -}}
 {{- toJson $cluster -}}
 {{- end -}}

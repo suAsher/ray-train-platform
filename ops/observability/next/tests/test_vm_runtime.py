@@ -140,5 +140,72 @@ class VMRuntimeOperatorHealthContracts(unittest.TestCase):
                 self.assertEqual("failed", report["status"])
 
 
+class VMRuntimePausedHealthContracts(unittest.TestCase):
+    def verifier(self):
+        spec = importlib.util.spec_from_file_location("vm_pause_health", VM_ROOT / "verify-runtime.py")
+        verifier = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(verifier)
+        return verifier
+
+    def fixture(self):
+        lab = unittest.mock.Mock()
+        lab.prefix = "rt-vm-mtls-fixture"
+        app = lab.prefix + "-storage-0-app"
+        lab.containers = [app]
+        lab.results = []
+        inspected = unittest.mock.Mock(stdout='[{"Config":{"Labels":{"raytrain.mtls-lab":"rt-vm-mtls-fixture"}}}]')
+        return lab, {"app": app, "ip": "172.19.0.2"}, inspected
+
+    def test_health_pause_requires_bounded_failure_then_recovery(self):
+        verifier = self.verifier()
+        lab, pod, inspected = self.fixture()
+        observed = [200, 200, 503, 503, 200, 200]
+        with patch.object(verifier, "command", return_value=inspected) as command_mock:
+            with patch.object(verifier, "plain_request", side_effect=[(status, b"") for status in observed]):
+                with patch.object(verifier, "eventually", side_effect=lambda operation, timeout: operation()) as wait:
+                    verifier.paused_storage_health(lab, pod)
+        self.assertEqual([20, 20, 20], [call.kwargs["timeout"] for call in wait.call_args_list])
+        command_mock.assert_any_call(["docker", "pause", pod["app"]])
+        command_mock.assert_any_call(["docker", "unpause", pod["app"]])
+        self.assertEqual("storage-pause-health-fails-within-20s-and-recovers", lab.results[0]["check"])
+
+    def test_failed_probe_always_unpauses_without_claiming_success(self):
+        verifier = self.verifier()
+        lab, pod, inspected = self.fixture()
+        with patch.object(verifier, "command", return_value=inspected) as command_mock:
+            with patch.object(verifier, "eventually", side_effect=[True, LabError("health deadline")]):
+                with self.assertRaisesRegex(LabError, "health deadline"):
+                    verifier.paused_storage_health(lab, pod)
+        self.assertEqual(["docker", "unpause", pod["app"]], command_mock.call_args.args[0])
+        self.assertEqual([], lab.results)
+
+    def test_slow_observed_failure_does_not_pass_deadline(self):
+        verifier = self.verifier()
+        lab, pod, inspected = self.fixture()
+        with patch.object(verifier, "command", return_value=inspected) as command_mock:
+            with patch.object(verifier, "eventually", return_value=True):
+                with patch.object(verifier.time, "monotonic", side_effect=[0, 21]):
+                    with self.assertRaisesRegex(LabError, "within 20 seconds"):
+                        verifier.paused_storage_health(lab, pod)
+        self.assertEqual(["docker", "unpause", pod["app"]], command_mock.call_args.args[0])
+        self.assertEqual([], lab.results)
+
+    def test_pause_rejects_proxy_unknown_or_foreign_container(self):
+        verifier = self.verifier()
+        for target in ("rt-vm-mtls-fixture-storage-0-proxy", "foreign-storage-0-app"):
+            lab, pod, inspected = self.fixture()
+            with self.subTest(target=target), patch.object(verifier, "command") as command_mock:
+                with self.assertRaises(LabError):
+                    verifier.paused_storage_health(lab, {**pod, "app": target})
+                command_mock.assert_not_called()
+        lab, pod, inspected = self.fixture()
+        inspected.stdout = '[{"Config":{"Labels":{"raytrain.mtls-lab":"foreign"}}}]'
+        with patch.object(verifier, "command", return_value=inspected) as command_mock:
+            with self.assertRaises(LabError):
+                verifier.paused_storage_health(lab, pod)
+        self.assertEqual(1, command_mock.call_count)
+        self.assertEqual("inspect", command_mock.call_args.args[0][1])
+
+
 if __name__ == "__main__":
     unittest.main()

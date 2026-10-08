@@ -3,7 +3,7 @@ charts:
   cloudnative-pg: "0.29.1"
   redis-ha: "4.39.0"
 images:
-  nightingale: harbor.wellspiking.ai/hub/flashcatcloud/nightingale:9.1.1@sha256:81b9aa562549b5ee9d36283a11a14bf257e62fa71eb181277ae4841f7c80e2f9
+  nightingale: harbor.wellspiking.ai/guofeng.su/nightingale-observability:9.1.1-sentinel-01abc76@sha256:2e544213530f914b961e05d9fbab2ddcbbb995402379496a34815f0d61da6315
   # Base only, not deployable for the new security contract. See cnpg-hardening/.
   cloudnative-pg-upstream-base: ghcr.io/cloudnative-pg/cloudnative-pg:1.30.1@sha256:923c267ec29636db3bee20f993d0ec4973fa22998e1adad37da79e4d32b5bc07
   envoy: harbor.wellspiking.ai/hub/envoyproxy/envoy:v1.39.3@sha256:dd85940439de19a0b6ae8419610363ea0ad351d9a994ea007161c206ec1e1865

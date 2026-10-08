@@ -102,6 +102,35 @@ def authenticated_hop(lab, pod, role, port, name):
     lab.results.append({"check": name, "result": "pass", **result})
 
 
+def paused_storage_health(lab, pod):
+    """Exercise a no-traffic health cluster; never pause proxies or other labs."""
+    app = pod["app"]
+    allowed = {f"{lab.prefix}-storage-{index}-app" for index in range(3)}
+    if app not in lab.containers or app not in allowed:
+        raise LabError("Health pause target is not this lab's storage app")
+    inspected = json.loads(command(["docker", "inspect", app]).stdout)
+    if len(inspected) != 1 or inspected[0]["Config"]["Labels"].get("raytrain.mtls-lab") != lab.prefix:
+        raise LabError("Health pause target ownership label mismatch")
+
+    def statuses():
+        return tuple(plain_request(pod, 18081, path)[0] for path in ("/healthz", "/app-healthz"))
+
+    eventually(lambda: statuses() == (200, 200), timeout=20)
+    started = time.monotonic()
+    try:
+        command(["docker", "pause", app])
+        # Timeouts, resets, 200, or any other status cannot satisfy this gate.
+        eventually(lambda: statuses() == (503, 503), timeout=20)
+        failure_seconds = round(time.monotonic() - started, 3)
+        if failure_seconds > 20:
+            raise LabError("Paused storage health did not fail within 20 seconds")
+    finally:
+        command(["docker", "unpause", app])
+    eventually(lambda: statuses() == (200, 200), timeout=20)
+    lab.results.append({"check": "storage-pause-health-fails-within-20s-and-recovers",
+                        "result": "pass", "failure_seconds": failure_seconds})
+
+
 def vm_cluster(lab):
     cluster = next(item["spec"] for item in lab.objects if item["kind"] == "VMCluster")
     stores = []
@@ -211,6 +240,8 @@ def vm_cluster(lab):
     eventually(lambda: plain_request(stores[1], 18081, "/healthz")[0] == 200)
     eventually(query)
     lab.results.append({"check": "proxy-fail-closed-certificate-rotation-storage-restart", "result": "pass"})
+    paused_storage_health(lab, stores[0])
+    eventually(query)
 
 
 def tls_handshake(lab, pod, port, role, server_name, ca_role):
