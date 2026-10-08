@@ -66,6 +66,15 @@ def pod_template(cr):
 
 
 class ClickHouseMTLSTests(unittest.TestCase):
+    def test_operator_namespace_watch_is_one_literal_not_a_regexp(self):
+        values = yaml.safe_load((CH / "operator-values.yaml").read_text())
+        # Altinity 0.27.4 GetInformerNamespace/GetCacheNamespaces fall back
+        # to cluster-wide LISTs for regexp patterns, even anchored ones.
+        self.assertEqual(["observability-analytics"], values["watchNamespaces"])
+        self.assertTrue(values["rbac"]["namespaceScoped"])
+        for key in ("prometheus.io/scrape", "clickhouse-operator-metrics/scrape"):
+            self.assertEqual("false", values["podAnnotations"][key])
+
     def test_health_only_clusters_probe_even_without_routed_traffic(self):
         for name in ("clickhouse", "keeper", "operator"):
             for cluster in proxy(name)["static_resources"]["clusters"]:

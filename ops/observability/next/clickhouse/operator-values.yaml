@@ -3,7 +3,9 @@
 fullnameOverride: observability-clickhouse-operator
 namespaceOverride: observability-analytics
 watchNamespaces:
-  - "^observability-analytics$"
+  # A literal is required for namespace-scoped informers. Even an anchored
+  # regexp makes Altinity 0.27.4 LIST cluster-wide, then filter in-process.
+  - observability-analytics
 rbac:
   create: true
   namespaceScoped: true
@@ -26,7 +28,11 @@ metrics:
   enabled: false
 podLabels:
   observability.raytrain.io/component: clickhouse-operator
-podAnnotations: {}
+podAnnotations:
+  # Empty maps do not erase Helm's default annotations. Only the new mTLS
+  # vmagent target should collect this operator's authenticated metrics port.
+  prometheus.io/scrape: "false"
+  clickhouse-operator-metrics/scrape: "false"
 serviceMonitor:
   enabled: false
 podSecurityContext:

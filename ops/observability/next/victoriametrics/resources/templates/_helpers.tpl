@@ -47,6 +47,8 @@ affinity:
 podMetadata:
   labels:
     observability.raytrain.io/component: {{ .component }}
+  annotations:
+    observability.raytrain.io/envoy-config-sha256: {{ printf "%s\n" (include "metrics.mtls.config" (dict "root" .root "role" .component) | fromJson | toYaml) | sha256sum | quote }}
 disableSelfServiceScrape: true
 useStrictSecurity: true
 enableServiceLinks: false

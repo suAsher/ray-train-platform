@@ -23,7 +23,7 @@ The chart installs **no CRD hook**. Review and install only these pinned-version
 - `clickhouseoperatorconfigurations.clickhouse.altinity.com`
 - `clickhousekeeperinstallations.clickhouse-keeper.altinity.com`
 
-They are available in `deploy/helm/clickhouse-operator/crds/` of the locked release. Never apply from `master`, overwrite an existing different CRD, or remove a CRD during rollback. The controller's chart RBAC is namespace scoped and its watch expression is anchored to `observability-analytics`. Rendered RBAC and runtime permission errors must be checked; a namespaced Role cannot grant access to cluster-scoped PVs. Do not remedy errors with blanket cluster-admin. If direct PV reads are required, review an explicit minimal read-only grant separately; existing PVs must never be patched/deleted by this controller.
+They are available in `deploy/helm/clickhouse-operator/crds/` of the locked release. Never apply from `master`, overwrite an existing different CRD, or remove a CRD during rollback. The controller's chart RBAC is namespace scoped and its watch list contains only the literal `observability-analytics`. Altinity 0.27.4 falls back to cluster-wide informer/cache LISTs when given regex patterns, even an anchored single-namespace expression; the first stopped-resource deployment caught and rejected that case. Rendered RBAC and runtime permission errors must be checked; a namespaced Role cannot grant access to cluster-scoped PVs. Do not remedy errors with blanket cluster-admin. If direct PV reads are required, review an explicit minimal read-only grant separately; existing PVs must never be patched/deleted by this controller.
 
 ## Credential contract
 
