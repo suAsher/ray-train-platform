@@ -1,14 +1,15 @@
 """Builder-only contracts for actual gRPC Export and durable queue recovery."""
 
 import importlib.util
-import json
 from pathlib import Path
 import struct
 import unittest
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "otel" / "verify_protocol_recovery.py"
-HEADERS = b"HTTP/2 200\r\ncontent-type: application/grpc\r\n\r\ngrpc-status: 0\r\n"
+# curl --dump-header stores initial headers and subsequent HTTP/2 trailers;
+# --output stores the binary DATA separately. Trailers have no HTTP status line.
+HEADERS = b"HTTP/2 200\r\ncontent-type: application/grpc\r\n\r\ngrpc-status: 0\r\ngrpc-message: \r\n"
 RECORD = {"run_id": "a" * 32, "sequence": "0", "trace_id": "1" * 32,
           "span_id": "2" * 16, "timestamp_ns": 1780000000000000000}
 
@@ -95,6 +96,7 @@ class ProtocolRecoveryTests(unittest.TestCase):
 
     def test_grpc_handshake_or_http_success_alone_cannot_pass(self):
         cases = [(HEADERS.replace(b"grpc-status: 0\r\n", b""), b"\0" * 5),
+                 (b"HTTP/2 200\r\ncontent-type: application/grpc\r\ngrpc-status: 0\r\n\r\n", b"\0" * 5),
                  (HEADERS.replace(b"grpc-status: 0", b"grpc-status: 7"), b"\0" * 5),
                  (HEADERS.replace(b"HTTP/2", b"HTTP/1.1"), b"\0" * 5),
                  (HEADERS.replace(b"application/grpc", b"application/json"), b"\0" * 5),
@@ -117,12 +119,18 @@ class ProtocolRecoveryTests(unittest.TestCase):
                    'otelcol_exporter_queue_size{exporter="clickhouse/canary",data_type="logs"} 42\n'
                    'otelcol_exporter_queue_size{data_type="traces",exporter="clickhouse/canary"} 17\n')
         self.assertEqual({"logs": 42, "traces": 17}, self.module.queue_sizes(metrics))
+        self.assertEqual({"logs": 42, "traces": 17},
+                         self.module.queue_sizes(metrics.replace(" 42", " 4.2e1").replace(" 17", " 17.0")))
         self.assertEqual({"logs": 0, "traces": 0},
                          self.module.queue_sizes(metrics.replace(" 42", " 0").replace(" 17", " 0")))
+        # Locked v0.162.0 also labels in-flight requests by exporter + data_type.
+        name = "otelcol_exporter_in_flight_requests"
+        self.assertEqual({"logs": 42, "traces": 17},
+                         self.module.queue_sizes(metrics.replace("otelcol_exporter_queue_size", name), name))
 
     def test_absent_or_invalid_queue_metric_is_not_empty_queue(self):
         row = 'otelcol_exporter_queue_size{exporter="clickhouse/canary",data_type="logs"} '
-        for metrics in ("", row + "0", row + "NaN", row + "-1", row + "0\n" + row + "0"):
+        for metrics in ("", row + "0", row + "NaN", row + "Inf", row + "-1", row + "0\n" + row + "0"):
             with self.subTest(metrics=metrics):
                 with self.assertRaises(AssertionError):
                     self.module.queue_sizes(metrics)
