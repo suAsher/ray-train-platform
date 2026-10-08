@@ -629,7 +629,10 @@ class LiveDependencyProbeTests(unittest.TestCase):
             self.assertEqual("pg-client", ca_role)
             self.assertEqual("n9e-postgres-rw.observability-alerting.svc", server_name)
             if port == 8000:
-                return (200, b"OK") if path == "/readyz" else (401, b"unauthorized\n")
+                if path == "/readyz":
+                    return 200, b"OK"
+                return ((401, b"client certificate required\n") if client_role is None else
+                        (503, b"operator certificate not recognized\n"))
             self.assertEqual((9187, "/metrics"), (port, path))
             if client_role == "monitor":
                 return 200, b"# TYPE go_goroutines gauge\ngo_goroutines 3\n"
@@ -652,6 +655,16 @@ class LiveDependencyProbeTests(unittest.TestCase):
         with mock.patch.dict(globals_, https_request=mock.Mock(return_value=(200, b"OK"))):
             with self.assertRaises(module["ProbeFailure"]):
                 probe_type().pg_instance("172.28.1.10", "pg_0")
+        for bad in ((503, b"unavailable\n"), (503, b"operator certificate not registered\n"),
+                    (200, b"operator certificate not recognized\n"),
+                    (401, b"client certificate required\n")):
+            def wrong_certificate_response(ip, port, path, **kwargs):
+                if port == 8000 and path == "/pg/status" and kwargs.get("client_role") == "ui":
+                    return bad
+                return request(ip, port, path, **kwargs)
+            with mock.patch.dict(globals_, https_request=mock.Mock(side_effect=wrong_certificate_response)):
+                with self.assertRaises(module["ProbeFailure"]):
+                    probe_type().pg_instance("172.28.1.10", "pg_0")
 
     def test_dependency_report_never_prints_exception_payload_or_credentials(self):
         module = self.module()
