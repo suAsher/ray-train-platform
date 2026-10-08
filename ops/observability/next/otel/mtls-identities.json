@@ -4,8 +4,6 @@
     "role": "otel-gateway",
     "trust_domain": "mesh",
     "dns_names": [
-      "otel-gateway",
-      "otel-gateway.observability-otel",
       "otel-gateway.observability-otel.svc",
       "otel-gateway.observability-otel.svc.cluster.local",
       "otel-gateway-headless.observability-otel.svc",
@@ -21,7 +19,7 @@
     "namespace": "observability-otel",
     "role": "canary",
     "trust_domain": "mesh",
-    "dns_names": ["otel-canary.observability-otel.svc"],
-    "usages": ["serverAuth", "clientAuth"]
+    "dns_names": [],
+    "usages": ["clientAuth"]
   }
 ]

@@ -84,6 +84,18 @@ No `OPTIMIZE FINAL`, wide scans, failure injection against existing components o
 
 Certificate files are mounted as a whole Secret volume. Static Envoy TLS configuration does not automatically reload rotated files: use controlled rollouts of only these new components (Keeper one at a time, CH one at a time) after an overlap trust-bundle validation. Never roll old components or remove their existing credentials as part of this phase.
 
+## Isolated builder runtime gate
+
+After bundling the candidate to the approved Linux builder, run as root:
+
+```sh
+python3 ops/observability/next/clickhouse/verify-runtime.py --output /root/<new-private-validation-directory>
+```
+
+This requires the already inspected pinned images locally, Docker, OpenSSL and PyYAML. It creates an internal Docker network, publishes no host port, and mounts only disposable local storage and each role's leaf certificate directory. Signing keys are never mounted into containers. Native processes and Envoy use UID 10001, dropped capabilities, read-only roots and bounded CPU/memory. Three Keeper processes and two CH servers exercise candidate XML/proxy configuration, schema DDL, native bypass rejection, same-CA wrong-role rejection, SQL least privileges, one OTel log and one trace, cross-replica data/MV checks and OTel status transitions. It never reads production credentials or invokes Kubernetes.
+
+Cleanup removes only its uniquely named containers/network, signing material and fake data; a redacted `result.json` and private diagnostics remain. Failure is failure, not a skipped success. This Docker test builds the native topology from candidate settings and does not reproduce operator reconciliation: independently inspect actual generated ConfigMaps/Services/probes, both replicas' macros and final socket binds before Kubernetes acceptance. Queue crash/restart recovery and a complete gRPC Export RPC remain separate gates; the test states these omissions explicitly.
+
 ## Recovery boundary
 
 Stop new ingress or scale only these new canary receivers down after draining. Keep PVCs, CRDs and schema unless separately authorized to delete this phase's test data. A CH node loss can lose not-yet-replicated acknowledged data: `wait_for_async_insert=1` confirms local flush, not quorum replication. Current initial design accepts that telemetry RPO; the old training and log systems remain the authority. Do not claim exactly-once delivery or zero RPO from two replicas.

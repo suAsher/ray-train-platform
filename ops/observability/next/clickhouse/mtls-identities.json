@@ -4,24 +4,14 @@
     "role": "clickhouse",
     "trust_domain": "mesh",
     "dns_names": [
-      "clickhouse-observability",
-      "clickhouse-observability.observability-analytics",
       "clickhouse-observability.observability-analytics.svc",
       "clickhouse-observability.observability-analytics.svc.cluster.local",
-      "chi-observability-telemetry-0-0",
-      "chi-observability-telemetry-0-0.observability-analytics",
       "chi-observability-telemetry-0-0.observability-analytics.svc",
       "chi-observability-telemetry-0-0.observability-analytics.svc.cluster.local",
-      "obs-ch-r0-mtls",
-      "obs-ch-r0-mtls.observability-analytics",
       "obs-ch-r0-mtls.observability-analytics.svc",
       "obs-ch-r0-mtls.observability-analytics.svc.cluster.local",
-      "chi-observability-telemetry-0-1",
-      "chi-observability-telemetry-0-1.observability-analytics",
       "chi-observability-telemetry-0-1.observability-analytics.svc",
       "chi-observability-telemetry-0-1.observability-analytics.svc.cluster.local",
-      "obs-ch-r1-mtls",
-      "obs-ch-r1-mtls.observability-analytics",
       "obs-ch-r1-mtls.observability-analytics.svc",
       "obs-ch-r1-mtls.observability-analytics.svc.cluster.local"
     ],
@@ -35,32 +25,18 @@
     "role": "keeper",
     "trust_domain": "mesh",
     "dns_names": [
-      "keeper-observability",
-      "keeper-observability.observability-analytics",
       "keeper-observability.observability-analytics.svc",
       "keeper-observability.observability-analytics.svc.cluster.local",
-      "chk-observability-keeper-0-0",
-      "chk-observability-keeper-0-0.observability-analytics",
       "chk-observability-keeper-0-0.observability-analytics.svc",
       "chk-observability-keeper-0-0.observability-analytics.svc.cluster.local",
-      "chk-observability-keeper-0-0-client",
-      "chk-observability-keeper-0-0-client.observability-analytics",
       "chk-observability-keeper-0-0-client.observability-analytics.svc",
       "chk-observability-keeper-0-0-client.observability-analytics.svc.cluster.local",
-      "chk-observability-keeper-0-1",
-      "chk-observability-keeper-0-1.observability-analytics",
       "chk-observability-keeper-0-1.observability-analytics.svc",
       "chk-observability-keeper-0-1.observability-analytics.svc.cluster.local",
-      "chk-observability-keeper-0-1-client",
-      "chk-observability-keeper-0-1-client.observability-analytics",
       "chk-observability-keeper-0-1-client.observability-analytics.svc",
       "chk-observability-keeper-0-1-client.observability-analytics.svc.cluster.local",
-      "chk-observability-keeper-0-2",
-      "chk-observability-keeper-0-2.observability-analytics",
       "chk-observability-keeper-0-2.observability-analytics.svc",
       "chk-observability-keeper-0-2.observability-analytics.svc.cluster.local",
-      "chk-observability-keeper-0-2-client",
-      "chk-observability-keeper-0-2-client.observability-analytics",
       "chk-observability-keeper-0-2-client.observability-analytics.svc",
       "chk-observability-keeper-0-2-client.observability-analytics.svc.cluster.local"
     ],
@@ -74,8 +50,6 @@
     "role": "ch-operator",
     "trust_domain": "mesh",
     "dns_names": [
-      "observability-clickhouse-operator",
-      "observability-clickhouse-operator.observability-analytics",
       "observability-clickhouse-operator.observability-analytics.svc",
       "observability-clickhouse-operator.observability-analytics.svc.cluster.local"
     ],
@@ -88,14 +62,8 @@
     "namespace": "observability-analytics",
     "role": "schema-admin",
     "trust_domain": "mesh",
-    "dns_names": [
-      "observability-schema-admin",
-      "observability-schema-admin.observability-analytics",
-      "observability-schema-admin.observability-analytics.svc",
-      "observability-schema-admin.observability-analytics.svc.cluster.local"
-    ],
+    "dns_names": [],
     "usages": [
-      "serverAuth",
       "clientAuth"
     ]
   },
@@ -103,14 +71,8 @@
     "namespace": "observability-analytics",
     "role": "query-admin",
     "trust_domain": "mesh",
-    "dns_names": [
-      "observability-query-admin",
-      "observability-query-admin.observability-analytics",
-      "observability-query-admin.observability-analytics.svc",
-      "observability-query-admin.observability-analytics.svc.cluster.local"
-    ],
+    "dns_names": [],
     "usages": [
-      "serverAuth",
       "clientAuth"
     ]
   }
