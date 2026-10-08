@@ -235,6 +235,15 @@ class VMMTLSContracts(unittest.TestCase):
             reloader = next((item for item in spec.get("containers", []) if item["name"] == "config-reloader"), {})
             self.assertTrue(reloader.get("readinessProbe"), "default PodIP:8435 probe is invalid after loopback bind")
 
+    def test_reloader_partial_container_preserves_explicit_resource_budget(self):
+        for role in ("vmagent", "vmauth", "vmalert", "alertmanager"):
+            with self.subTest(role=role):
+                spec = self.spec(role)
+                reloader = next(item for item in spec["containers"] if item["name"] == "config-reloader")
+                self.assertEqual(spec["configReloaderResources"], reloader.get("resources"))
+                for bound in ("requests", "limits"):
+                    self.assertTrue(all(key in reloader["resources"][bound] for key in ("cpu", "memory")))
+
     def test_scraper_can_read_only_its_generated_config_secret(self):
         validate_scraper_rbac(self.objects)
         role = self.one("Role", "vm-self-scraper")
@@ -336,6 +345,16 @@ class VMMTLSContracts(unittest.TestCase):
         self.assertTrue(args.get("metrics-bind-address", "").startswith("127.0.0.1:"))
         self.assertTrue(args.get("health-probe-bind-address", "").startswith("127.0.0.1:"))
         self.assertEqual(1, len([item for item in self.operator.get("extraContainers", []) if item["name"] == "mtls-proxy"]))
+
+    def test_operator_probe_keeps_upstream_health_path_and_no_leader_dependency(self):
+        # v0.75.0 internal/manager/manager.go registers /health as a no-op;
+        # /ready waits for cache sync. Keep chart 0.68.1's /health probe contract
+        # during rolling upgrades; /readyz is not registered by this release.
+        health = next(cluster for cluster in self.config("operator")["static_resources"]["clusters"]
+                      if cluster["name"] == "local_health")
+        self.assertEqual("/health", health["health_checks"][0]["http_health_check"]["path"])
+        endpoint = health["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]["address"]["socket_address"]
+        self.assertEqual({"address": "127.0.0.1", "port_value": 8081}, endpoint)
 
 
 if __name__ == "__main__":

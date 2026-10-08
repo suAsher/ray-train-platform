@@ -248,7 +248,8 @@ def alertmanagers(lab):
     aliases = [f"vmalertmanager-raytrain-next-{i}.vmalertmanager-raytrain-next.{NS}.svc" for i in range(3)]
     for index in range(3):
         args = ["--config.file=/config/alertmanager.yaml", "--storage.path=/data", "--web.listen-address=127.0.0.1:9093",
-                "--cluster.listen-address=:9094", "--cluster.tls-config=/config/gossip.yaml", "--cluster.settle-timeout=15s",
+                # AM's TLS transport requires a parseable IP, unlike net.Listen.
+                "--cluster.listen-address=0.0.0.0:9094", "--cluster.tls-config=/config/gossip.yaml", "--cluster.settle-timeout=15s",
                 *["--cluster.peer=" + alias + ":9094" for ordinal, alias in enumerate(aliases) if ordinal != index]]
         pod = lab.native(f"am-{index}", lab.image("alertmanager"), args, [aliases[index]],
                          [(config, "/config/alertmanager.yaml", "ro"), (tls, "/config/gossip.yaml", "ro"),

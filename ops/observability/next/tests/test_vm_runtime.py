@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import importlib.util
+import ipaddress
 from pathlib import Path
 import ssl
 import sys
@@ -91,6 +92,52 @@ class VMRuntimeCertificateContracts(unittest.TestCase):
             sans = command(["openssl", "x509", "-in", str(expired / "tls.crt"), "-ext", "subjectAltName", "-noout"]).stdout
             self.assertIn("URI:spiffe://observability.raytrain.local/observability-metrics/canary", sans)
             self.assertEqual(expired, lab.materials["expired-canary"])
+
+
+class VMRuntimeAlertmanagerContracts(unittest.TestCase):
+    def test_native_tls_gossip_binds_a_valid_ip_with_peer_discovery(self):
+        spec = importlib.util.spec_from_file_location("vm_runtime_verifier", VM_ROOT / "verify-runtime.py")
+        verifier = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(verifier)
+        lab = unittest.mock.Mock()
+        lab.directory = Path("/unused-private-lab")
+        lab.materials = {"alertmanager-gossip": Path("/unused-private-identity")}
+        lab.native.side_effect = LabError("stop before any container creation")
+        with patch.object(verifier, "private_file"), patch.object(verifier, "writable_data"):
+            with self.assertRaisesRegex(LabError, "stop before any container creation"):
+                verifier.alertmanagers(lab)
+        flags = lab.native.call_args.args[2]
+        listen = next(flag.split("=", 1)[1] for flag in flags if flag.startswith("--cluster.listen-address="))
+        address, port = listen.rsplit(":", 1)
+        self.assertEqual("0.0.0.0", str(ipaddress.ip_address(address)))
+        self.assertEqual("9094", port)
+        self.assertIn("--cluster.tls-config=/config/gossip.yaml", flags)
+        peers = [flag for flag in flags if flag.startswith("--cluster.peer=")]
+        self.assertEqual(2, len(peers))
+        self.assertTrue(all("vmalertmanager-raytrain-next-0." not in peer for peer in peers))
+
+
+class VMRuntimeOperatorHealthContracts(unittest.TestCase):
+    def verifier(self):
+        spec = importlib.util.spec_from_file_location("vm_operator_health", VM_ROOT / "verify-operator-health.py")
+        verifier = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(verifier)
+        return verifier
+
+    def test_cache_not_ready_does_not_replace_upstream_process_health(self):
+        verifier = self.verifier()
+        with patch.object(verifier, "get_status", side_effect=[200, 404, 200, 200, 404, 500]):
+            report = verifier.inspect_health(28081, 28082)
+        self.assertEqual("passed", report["status"])
+        self.assertEqual(500, report["observed"]["native:/ready"])
+
+    def test_real_native_or_proxy_health_failure_is_not_accepted(self):
+        verifier = self.verifier()
+        for native, proxy in ((500, 200), (200, 503)):
+            with self.subTest(native=native, proxy=proxy):
+                with patch.object(verifier, "get_status", side_effect=[native, 404, proxy, 200, 404, 200]):
+                    report = verifier.inspect_health(28081, 28082)
+                self.assertEqual("failed", report["status"])
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ import yaml
 
 from runtime_support import (RuntimeCheckError, Sandbox, data_dir, load_module,
                              port_closed, run, wait, write)
+from runtime_diagnostics import capture_client_timeout, private_output, protocol_hops
 
 
 HERE = Path(__file__).resolve().parent
@@ -154,14 +155,15 @@ def sql_client(sandbox, query, replica=0, role="query-admin", check=True):
                "--receive_timeout", "90", "--send_timeout", "15",
                "--distributed_ddl_task_timeout", "60", "--multiquery", "--query", query]
     environment = {**os.environ, "CLICKHOUSE_PASSWORD": sandbox.passwords[username]}
-    result = run(command, check=False, env=environment)
+    try:
+        result = run(command, check=False, env=environment)
+    except subprocess.TimeoutExpired as exc:
+        private_output(sandbox, client_name, exc.stdout, exc.stderr)
+        capture_client_timeout(sandbox, client_name)
+        raise RuntimeCheckError(f"SQL client timeout for role {role} replica {replica}; private state captured") from None
     # --rm removes completed client containers before Docker log collection.
     # Preserve bounded private client output so SQL failures are actionable.
-    diagnostics = sandbox.work / "private-diagnostics"
-    diagnostics.mkdir(mode=0o700, exist_ok=True)
-    output = diagnostics / (client_name + "-result.log")
-    output.write_text((result.stdout + result.stderr)[-65536:])
-    output.chmod(0o600)
+    private_output(sandbox, client_name, result.stdout, result.stderr)
     if check and result.returncode:
         raise RuntimeCheckError(f"SQL client for role {role} on replica {replica} exited {result.returncode}")
     return result.stdout.strip() if check else result
@@ -267,6 +269,8 @@ def verify(sandbox):
     evidence = assert_boundaries(sandbox)
     if sandbox.phase == "keeper":
         return {**evidence, "remaining": "ClickHouse/schema/OTel not exercised by keeper-only phase"}
+    for replica, native in enumerate(sandbox.native_ch):
+        protocol_hops(sandbox, native, f"chi-observability-telemetry-0-{replica}.{NS}")
     sandbox.stage = "native_sql_preflight"
     for replica in range(2):
         if sql_client(sandbox, "SELECT 1", replica, "schema-admin") != "1":
@@ -333,6 +337,7 @@ def main():
         raise
     finally:
         evidence["tls_results"] = sandbox.tls_results
+        evidence["protocol_hops"] = sandbox.hop_results
         sandbox.cleanup()
         (args.output / "result.json").write_text(json.dumps(evidence, indent=2) + "\n")
     print(json.dumps(evidence))

@@ -75,6 +75,8 @@ containers:
   - {{- include "metrics.mtls.sidecar" . | nindent 4 }}
   {{- if .reloader }}
   - name: config-reloader
+    # Preserve the same budget when Operator merges this named override.
+    resources: {{ toJson .root.Values.configReloaderResources }}
     readinessProbe:
       {{- include "metrics.mtls.probe" . | nindent 6 }}
     livenessProbe:

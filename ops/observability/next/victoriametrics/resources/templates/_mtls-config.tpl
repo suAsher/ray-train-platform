@@ -13,7 +13,10 @@
 {{- $healthPath := "/health" -}}
 {{- if eq $role "vmauth" -}}{{- $healthPort = 8428 -}}{{- end -}}
 {{- if eq $role "alertmanager" -}}{{- $healthPath = "/-/ready" -}}{{- end -}}
-{{- if eq $role "operator" -}}{{- $healthPort = 8081 -}}{{- $healthPath = "/readyz" -}}{{- end -}}
+{{/* Operator v0.75.0 registers /health, matching chart 0.68.1 readiness/liveness.
+     Its separate /ready waits for cache sync; do not add that dependency to a
+     rolling replacement while the preceding leader remains healthy. */}}
+{{- if eq $role "operator" -}}{{- $healthPort = 8081 -}}{{- end -}}
 {{- $clusters = append $clusters (include "metrics.mtls.cluster" (dict "name" "local_health" "host" "127.0.0.1" "port" $healthPort "health" $healthPath) | fromJson) -}}
 {{- $healthClusters := list "local_health" -}}
 {{- if has $role (list "vmauth" "vmagent" "vmalert" "alertmanager") -}}

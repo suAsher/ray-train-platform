@@ -81,6 +81,7 @@ class Sandbox:
         self.env_values = {}
         self.stage = "initialized"
         self.tls_results = []
+        self.hop_results = []
 
     def setup(self):
         run(["docker", "network", "create", "--internal", "--label",
