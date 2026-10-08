@@ -6,10 +6,13 @@ builder's installed Helm binary. No cluster or registry is contacted.
 """
 
 from copy import deepcopy
+import hashlib
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 
 import yaml
@@ -38,10 +41,10 @@ def walk(value):
             yield from walk(child)
 
 
-def render(*extra):
+def render(*extra, chart=None):
     result = subprocess.run(
         [os.environ.get("HELM", "helm"), "template", "raytrain-next",
-         str(VM_ROOT / "resources"), "--namespace", NS, *extra],
+         str(chart or VM_ROOT / "resources"), "--namespace", NS, *extra],
         text=True, capture_output=True, check=False, timeout=60,
     )
     if result.returncode:
@@ -70,6 +73,55 @@ class VMMTLSContracts(unittest.TestCase):
     def config(self, role):
         cm = self.one("ConfigMap", f"raytrain-next-{role}-mtls")
         return yaml.safe_load(cm["data"]["envoy.yaml"])
+
+    def assert_config_revisions(self, objects):
+        cluster = next(item["spec"] for item in objects if item["kind"] == "VMCluster")
+        revisions = {}
+        for role in ROLES:
+            if role == "operator":
+                continue  # The separate Operator release has its own rollout value.
+            spec = cluster[role] if role in cluster else next(
+                item["spec"] for item in objects if item["kind"] == {
+                    "vmauth": "VMAuth", "vmagent": "VMAgent", "vmalert": "VMAlert",
+                    "alertmanager": "VMAlertmanager"}[role])
+            config = next(item["data"]["envoy.yaml"] for item in objects
+                          if item["kind"] == "ConfigMap"
+                          and item["metadata"]["name"] == f"raytrain-next-{role}-mtls")
+            actual = spec.get("podMetadata", {}).get("annotations", {}).get(
+                "observability.raytrain.io/envoy-config-sha256")
+            with self.subTest(role=role):
+                self.assertEqual(hashlib.sha256(config.encode()).hexdigest(), actual)
+            revisions[role] = actual
+        return revisions
+
+    def test_each_component_pod_annotation_matches_exact_envoy_config_bytes(self):
+        self.assert_config_revisions(self.objects)
+
+    def test_unchanged_config_revisions_are_stable_across_renders(self):
+        self.assertEqual(self.assert_config_revisions(self.objects), self.assert_config_revisions(render()))
+
+    def test_health_interval_change_updates_every_component_revision(self):
+        with tempfile.TemporaryDirectory(prefix="vm-health-revision-") as directory:
+            chart = Path(directory) / "resources"
+            shutil.copytree(VM_ROOT / "resources", chart)
+            helper = chart / "templates/_mtls-envoy.tpl"
+            before = helper.read_text()
+            self.assertEqual(1, before.count('"no_traffic_interval" "5s"'))
+            helper.write_text(before.replace('"no_traffic_interval" "5s"', '"no_traffic_interval" "7s"'))
+            changed = self.assert_config_revisions(render(chart=chart))
+        original = self.assert_config_revisions(self.objects)
+        for role in original:
+            with self.subTest(role=role):
+                self.assertNotEqual(original[role], changed[role])
+
+    def test_role_specific_config_only_updates_its_own_pod_revision(self):
+        original = self.assert_config_revisions(self.objects)
+        changed = self.assert_config_revisions(render(
+            "--set-string", "mtls.readRoleURI=spiffe://observability.raytrain.local/observability-alerting/nightingale-test"))
+        self.assertNotEqual(original["vmauth"], changed["vmauth"])
+        for role in set(original) - {"vmauth"}:
+            with self.subTest(role=role):
+                self.assertEqual(original[role], changed[role])
 
     def listeners(self, role):
         return self.config(role)["static_resources"]["listeners"]
