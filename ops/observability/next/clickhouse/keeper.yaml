@@ -35,6 +35,9 @@ spec:
         <clickhouse>
           <listen_host replace="replace">127.0.0.1</listen_host>
           <interserver_listen_host replace="replace">127.0.0.1</interserver_listen_host>
+          <!-- 26.8 reads this global flag, not Altinity's per-server secure tag.
+               Merge only the flag and retain all generated Raft member DNS/IDs. -->
+          <keeper_server><raft_configuration><secure>true</secure></raft_configuration></keeper_server>
           <openSSL replace="replace">
             <server>
               <certificateFile>/etc/obs-mtls/tls.crt</certificateFile><privateKeyFile>/etc/obs-mtls/tls.key</privateKeyFile>

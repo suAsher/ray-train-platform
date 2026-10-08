@@ -150,6 +150,12 @@ class ClickHouseMTLSTests(unittest.TestCase):
         self.assertEqual("yes", cluster["secure"])
         self.assertEqual("no", cluster["insecure"])
         self.assertNotIn("raft_configuration", keeper["spec"]["configuration"]["settings"])
+        # CH 26.8 reads a cluster-wide flag. Altinity's generated per-server
+        # <secure> is insufficient, so the final overlay must add this flag.
+        xml = ET.fromstring(keeper["spec"]["configuration"]["files"]["zz-mtls.xml"])
+        raft = xml.find("keeper_server/raft_configuration")
+        self.assertEqual("true", raft.findtext("secure"))
+        self.assertFalse(raft.findall("server"), "operator retains ownership of member DNS/IDs")
 
     def test_proxies_have_no_wildcard_bind_or_public_admin(self):
         for name in ("clickhouse", "keeper", "operator"):

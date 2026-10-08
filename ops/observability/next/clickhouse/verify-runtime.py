@@ -15,6 +15,7 @@ from pathlib import Path
 import secrets
 import subprocess
 import sys
+import traceback
 import xml.etree.ElementTree as ET
 
 import yaml
@@ -67,7 +68,9 @@ def keeper_config(index, candidate):
               "keeper_server/coordination_settings/heart_beat_interval_ms": 500}
     for path, value in values.items():
         config_value(root, path, value)
-    raft = ET.SubElement(root.find("keeper_server"), "raft_configuration")
+    raft = root.find("keeper_server/raft_configuration")
+    if raft is None or raft.findtext("secure") != "true":
+        raise RuntimeCheckError("Keeper global Raft TLS flag missing from candidate")
     for peer in range(3):
         server = ET.SubElement(raft, "server")
         for key, value in {"id": peer + 1, "hostname": f"chk-observability-keeper-0-{peer}.{NS}",
@@ -154,6 +157,7 @@ def sql_client(sandbox, query, replica=0, role="query-admin", check=True):
 
 
 def create_cluster(sandbox):
+    sandbox.stage = "create_keeper_topology"
     ch, keeper = load_cr("clickhouse"), load_cr("keeper")
     sandbox.images = {"clickhouse": image(ch, "clickhouse"), "keeper": image(keeper, "clickhouse-keeper"),
                       "envoy": image(ch, "envoy")}
@@ -177,7 +181,9 @@ def create_cluster(sandbox):
         sandbox.native_keeper.append(native)
         proxy(sandbox, "keeper", native, f"keeper-{index}")
     for native in sandbox.native_keeper:
+        sandbox.stage = "keeper_quorum_and_readiness"
         wait("Keeper quorum and local HTTP control", lambda n=native: sandbox.health(sandbox.ip(n))[0] == 200, 150)
+    sandbox.stage = "create_clickhouse_topology"
     sandbox.native_ch = []
     cluster_secret = secrets.token_hex(24)
     replica_password = secrets.token_hex(24)
@@ -202,6 +208,7 @@ def create_cluster(sandbox):
         sandbox.native_ch.append(native)
         proxy(sandbox, "clickhouse", native, f"ch-{index}")
     for native in sandbox.native_ch:
+        sandbox.stage = "clickhouse_readiness"
         wait("ClickHouse local readiness", lambda n=native: sandbox.health(sandbox.ip(n))[0] == 200, 150)
 
 
@@ -232,14 +239,18 @@ def assert_boundaries(sandbox):
 
 
 def verify(sandbox):
+    sandbox.stage = "issue_synthetic_certificates"
     plans = json.loads((HERE / "mtls-identities.json").read_text())
     plans += json.loads((ROOT / "otel" / "mtls-identities.json").read_text())
     plans.append({"namespace": "observability-metrics", "role": "vmagent", "trust_domain": "mesh",
                   "dns_names": [], "usages": ["clientAuth"]})
     sandbox.issue(ROOT, plans)
     create_cluster(sandbox)
+    sandbox.stage = "tls_and_native_bypass_matrix"
     evidence = assert_boundaries(sandbox)
+    sandbox.stage = "bootstrap_schema"
     sql_client(sandbox, (HERE / "schema.sql").read_text(), role="schema-admin")
+    sandbox.stage = "schema_and_sql_grants"
     for replica in range(2):
         result = sql_client(sandbox, "SELECT count() FROM system.replicas WHERE database='observability_canary' AND is_readonly=0 AND is_session_expired=0", replica, "schema-admin")
         if result != "3":
@@ -256,6 +267,7 @@ def verify(sandbox):
         raise RuntimeCheckError("Query identity unexpectedly obtained INSERT")
     evidence["schema_two_replicas_and_sql_roles"] = "passed"
     otel = load_module("obs_runtime_otel", ROOT / "otel" / "verify_runtime.py")
+    sandbox.stage = "otel_low_volume_acceptance"
     context = {"work": sandbox.work, "network": sandbox.network, "images": sandbox.images,
                "leaf_dirs": sandbox.leaves, "run": run, "start": sandbox.start,
                "wait": wait, "ip": sandbox.ip, "request": sandbox.request,
@@ -278,9 +290,18 @@ def main():
     sandbox = Sandbox(args.output)
     evidence = {"status": "failed", "scope": "disposable Docker network; not Kubernetes generated-resource acceptance"}
     try:
+        sandbox.stage = "create_isolated_network"
         sandbox.setup()
         evidence.update(verify(sandbox))
         evidence["status"] = "passed"
+    except BaseException as exc:
+        # Stack locations only: no locals, source lines, argv, TLS or SQL data.
+        evidence["failure"] = {
+            "stage": sandbox.stage, "type": type(exc).__name__,
+            "reason": str(exc) if isinstance(exc, RuntimeCheckError) else "see private diagnostics",
+            "frames": [{"file": Path(frame.filename).name, "line": frame.lineno, "function": frame.name}
+                       for frame in traceback.extract_tb(exc.__traceback__)]}
+        raise
     finally:
         sandbox.cleanup()
         (args.output / "result.json").write_text(json.dumps(evidence, indent=2) + "\n")

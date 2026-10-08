@@ -78,9 +78,20 @@ def start_postgres(rt, ids, upstream, db_password, admin_password):
     rt.write("pg-nocert.env", base, uid=0)
     rt.write("pg-wrongcert.env", base + "PGSSLCERT=/wrong-client/tls.crt\nPGSSLKEY=/wrong-client/tls.key\n", uid=0)
     for name, reason in (("pg-nocert.env", "valid client certificate"),
-                         ("pg-wrongcert.env", "certificate authentication failed")):
+                         ("pg-wrongcert.env", 'password authentication failed for user "n9e"')):
         denied = rt.docker("exec", "--env-file", rt.private / name, pg, "psql", "-X", "-tAc", "SELECT 1", check=False)
-        rt.check(name + "_rejected", denied.returncode != 0 and reason in denied.stderr)
+        rejected = denied.returncode != 0 and reason in denied.stderr
+        if name == "pg-wrongcert.env":
+            # PG17 deliberately reports the selected SCRAM method to clients.
+            # Prove that the certificate CN guard caused this rejection using
+            # this fresh test server's exact diagnostic, not any connection error.
+            server_log = rt.docker("logs", pg)
+            diagnostic = server_log.stdout + server_log.stderr
+            rejected = rejected and (
+                'certificate validation (clientcert=verify-full) failed for user "n9e": CN mismatch' in diagnostic
+                and 'provided user name (n9e) and authenticated user name (wrong-user) do not match' in diagnostic
+            )
+        rt.check(name + "_rejected", rejected)
     seed_args = ["exec", "--env-file", rt.private / "bootstrap.env", pg, "psql", "-X", "--quiet", "--set", "ON_ERROR_STOP=1", "--single-transaction", "--file", "/seed.sql"]
     rt.docker(*seed_args)
     rt.check("fresh_seed_clientcert_passed", True)

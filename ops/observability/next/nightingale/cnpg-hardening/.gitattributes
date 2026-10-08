@@ -1,0 +1,3 @@
+# Unified-diff context contains a space prefix before Go tabs and empty lines.
+# Check the applied Go source with gofmt on the builder instead.
+patches/*.patch -whitespace

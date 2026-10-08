@@ -135,7 +135,9 @@ class NightingaleMTLSContractTests(unittest.TestCase):
 
     def render_with_fake_credentials(self, base):
         """Exercise the real renderer using a virtualized filesystem, not a cluster."""
-        real_path, real_copy = Path, shutil.copyfile
+        # Keep the concrete class: patching pathlib.Path also changes the global
+        # Path name consulted by its __new__ on Python 3.10.
+        real_path, real_copy = type(base), shutil.copyfile
         destinations = {
             "/run/n9e": base / "runtime",
             "/app/etc": base / "image-etc",

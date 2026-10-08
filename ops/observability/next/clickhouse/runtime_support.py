@@ -79,6 +79,7 @@ class Sandbox:
         self.containers = []
         self.leaves = {}
         self.env_values = {}
+        self.stage = "initialized"
 
     def setup(self):
         run(["docker", "network", "create", "--internal", "--label",
@@ -169,8 +170,10 @@ class Sandbox:
         diagnostics.mkdir(mode=0o700, exist_ok=True)
         for container in reversed(self.containers):
             # Local test logs are private evidence; never display secret-bearing diagnostics.
-            logs = run(["docker", "logs", "--tail", "100", container], check=False)
-            write(diagnostics / (container + ".log"), logs.stdout + logs.stderr)
+            logs = run(["docker", "logs", "--tail", "1000", container], check=False)
+            log_path = diagnostics / (container + ".log")
+            log_path.write_text(logs.stdout + logs.stderr)
+            log_path.chmod(0o600)
             run(["docker", "rm", "-f", container], check=False)
         run(["docker", "network", "rm", self.network], check=False)
         # Disposable leaf keys and synthetic data are ours; no production storage is mounted.

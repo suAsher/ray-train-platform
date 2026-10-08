@@ -1,6 +1,6 @@
 # CNPG 1.30.1 专用认证适配设计
 
-状态：TESTS_READY；只完成设计和 Python 安全合同，尚未实现补丁、构建镜像或修改集群。原候选 `b9dd3b5` 保留。源码、补丁及基础镜像都必须固定摘要；后续锁定文件不得使用未核验的示例 SHA。
+状态：IMPLEMENTED_UNVERIFIED；已交付锁定官方源码的补丁、Dockerfile 与 Go 协议回归，等待隔离 builder 的源码级 RED/GREEN 和真实新库验收。尚未构建或推送派生镜像，未修改集群。原候选 `b9dd3b5` 保留。源码、补丁及基础镜像均由 `upstream-lock.json` 固定；不使用未核验的示例 SHA。
 
 ## 范围与交付
 
