@@ -160,6 +160,28 @@ class DockerLab:
         self.materials[name] = target
         return target
 
+    def issue_expired_canary(self):
+        """Sign via CSR: OpenSSL 3.0 rejects re-signing a non-self-signed leaf."""
+        source = self.materials["canary"]
+        target = self.directory / "identities" / "expired-canary"
+        for name in ("tls.key", "ca.crt"):
+            private_file(target / name, (source / name).read_text(), True)
+        csr, cert = target / "tls.csr", target / "tls.crt"
+        command(["openssl", "x509", "-x509toreq", "-in", str(source / "tls.crt"),
+                 "-signkey", str(target / "tls.key"), "-copy_extensions", "copy", "-out", str(csr)])
+        command(["openssl", "x509", "-req", "-in", str(csr), "-copy_extensions", "copy",
+                 "-CA", str(self.directory / "pki/mesh.crt"), "-CAkey", str(self.directory / "pki/mesh.key"),
+                 "-set_serial", "0x" + secrets.token_hex(12), "-days", "-1", "-out", str(cert)])
+        csr.chmod(0o600)
+        cert.chmod(0o600)
+        verify = ["openssl", "verify", "-CAfile", str(target / "ca.crt"), "-purpose", "sslclient"]
+        command([*verify, "-no_check_time", str(cert)])
+        expired = command([*verify, str(cert)], check=False)
+        if expired.returncode == 0 or "error 10 " not in expired.stderr:
+            raise LabError("Expired fixture did not fail specifically for certificate expiry")
+        self.materials["expired-canary"] = target
+        return target
+
     def native(self, name, image, args, aliases=(), mounts=(), memory="512m"):
         # A POSIX shell builtin blocks on open stdin as a tiny namespace holder.
         # Restarting an app therefore models a K8s container restart correctly:

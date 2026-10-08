@@ -184,13 +184,7 @@ def vm_cluster(lab):
     lab.denied("auth-wrong-server-dns", lambda: lab.request(pod, 8427, "/api/v1/query?query=up", server="vmstorage", headers=read_headers))
     lab.issue("canary", alternate=True)
     lab.denied("auth-wrong-ca", lambda: lab.request(pod, 8427, "/api/v1/query?query=up", role="foreign-canary", headers=read_headers))
-    expired = lab.directory / "identities" / "expired-canary"
-    for name in ("tls.key", "ca.crt"):
-        private_file(expired / name, (lab.materials["canary"] / name).read_text(), True)
-    command(["openssl", "x509", "-in", str(lab.materials["canary"] / "tls.crt"),
-             "-CA", str(lab.directory / "pki/mesh.crt"), "-CAkey", str(lab.directory / "pki/mesh.key"),
-             "-set_serial", "0x" + secrets.token_hex(12), "-days", "-1", "-out", str(expired / "tls.crt")])
-    lab.materials["expired-canary"] = expired
+    lab.issue_expired_canary()
     lab.denied("auth-expired-cert", lambda: lab.request(pod, 8427, "/api/v1/query?query=up", role="expired-canary", headers=read_headers))
     for storage in stores:
         lab.closed(storage, [28400, 28401, 8435])

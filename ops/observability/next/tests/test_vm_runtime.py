@@ -1,16 +1,18 @@
 """Pure fixture/readiness contracts; execution belongs on the Linux builder."""
 
 from copy import deepcopy
+import importlib.util
 from pathlib import Path
 import ssl
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
 
 VM_ROOT = Path(__file__).resolve().parents[1] / "victoriametrics"
 sys.path.insert(0, str(VM_ROOT))
-from runtime_lab import LabError, auth_users, await_http_status  # noqa: E402
+from runtime_lab import DockerLab, LabError, auth_users, await_http_status, command  # noqa: E402
 
 
 def fixture_users():
@@ -72,6 +74,23 @@ class VMRuntimeReadinessContracts(unittest.TestCase):
     def test_certificate_verification_failure_is_not_hidden_by_retry(self):
         with self.assertRaisesRegex(LabError, "TLS verification"):
             self.run_statuses([ssl.SSLCertVerificationError("untrusted fixture certificate")])
+
+
+class VMRuntimeCertificateContracts(unittest.TestCase):
+    def test_expired_fixture_preserves_identity_key_and_trusted_signature(self):
+        spec = importlib.util.spec_from_file_location("vm_runtime_credentials", VM_ROOT.parent / "mtls/credentials.py")
+        credentials = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(credentials)
+        with tempfile.TemporaryDirectory(prefix="vm-expiry-test-") as temporary:
+            lab = DockerLab(temporary, VM_ROOT, credentials)
+            lab.issue("canary")
+            expired = lab.issue_expired_canary()
+            public_key = command(["openssl", "pkey", "-in", str(expired / "tls.key"), "-pubout"]).stdout
+            certificate_key = command(["openssl", "x509", "-in", str(expired / "tls.crt"), "-pubkey", "-noout"]).stdout
+            self.assertEqual(public_key, certificate_key)
+            sans = command(["openssl", "x509", "-in", str(expired / "tls.crt"), "-ext", "subjectAltName", "-noout"]).stdout
+            self.assertIn("URI:spiffe://observability.raytrain.local/observability-metrics/canary", sans)
+            self.assertEqual(expired, lab.materials["expired-canary"])
 
 
 if __name__ == "__main__":
