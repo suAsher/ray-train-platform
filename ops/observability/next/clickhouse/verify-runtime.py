@@ -168,6 +168,7 @@ def create_cluster(sandbox):
     sandbox.passwords = {user: secrets.token_urlsafe(24) for user in
                          ("default", "schema_admin", "observability_query", "otel_ingest", "clickhouse_operator")}
     sandbox.native_keeper = []
+    sandbox.native_ch = []
     for index in range(3):
         config = write(sandbox.work / "configs" / f"keeper-{index}.xml", keeper_config(index, keeper))
         data = data_dir(sandbox.work / "data" / f"keeper-{index}")
@@ -183,8 +184,9 @@ def create_cluster(sandbox):
     for native in sandbox.native_keeper:
         sandbox.stage = "keeper_quorum_and_readiness"
         wait("Keeper quorum and local HTTP control", lambda n=native: sandbox.health(sandbox.ip(n))[0] == 200, 150)
+    if sandbox.phase == "keeper":
+        return
     sandbox.stage = "create_clickhouse_topology"
-    sandbox.native_ch = []
     cluster_secret = secrets.token_hex(24)
     replica_password = secrets.token_hex(24)
     for index in range(2):
@@ -219,7 +221,9 @@ def assert_boundaries(sandbox):
         server = f"chk-observability-keeper-0-{index}.{NS}"
         assert all(port_closed(address, port) for port in (2181, 9182)), "Keeper native bypass"
         for port, role in ((2281, "clickhouse"), (9234, "keeper"), (7000, "vmagent")):
-            assert sandbox.tls_accepts(address, server, port, role), "valid Keeper role rejected"
+            sandbox.stage = f"keeper_{index}_port_{port}_valid_role_{role}"
+            if not sandbox.tls_accepts(address, server, port, role):
+                raise RuntimeCheckError(f"Keeper {index} port {port} rejected authorized role {role}")
             assert not sandbox.tls_accepts(address, server, port, None), "Keeper accepted no certificate"
         assert not sandbox.tls_accepts(address, server, 9234, "clickhouse"), "CH may access Raft"
         assert not sandbox.tls_accepts(address, server, 2281, "canary"), "canary may access Keeper"
@@ -228,7 +232,9 @@ def assert_boundaries(sandbox):
         server = f"chi-observability-telemetry-0-{index}.{NS}"
         assert all(port_closed(address, port) for port in (8123, 9000, 9009)), "CH native bypass"
         for port, role in ((8443, "ch-operator"), (9440, "query-admin"), (9010, "clickhouse"), (9363, "vmagent")):
-            assert sandbox.tls_accepts(address, server, port, role), "valid CH role rejected"
+            sandbox.stage = f"clickhouse_{index}_port_{port}_valid_role_{role}"
+            if not sandbox.tls_accepts(address, server, port, role):
+                raise RuntimeCheckError(f"ClickHouse {index} port {port} rejected authorized role {role}")
             assert not sandbox.tls_accepts(address, server, port, None), "CH accepted no certificate"
         assert not sandbox.tls_accepts(address, server, 9010, "query-admin"), "query may replicate"
         assert not sandbox.tls_accepts(address, server, 8443, "otel-gateway"), "ingester may access admin HTTP"
@@ -248,6 +254,8 @@ def verify(sandbox):
     create_cluster(sandbox)
     sandbox.stage = "tls_and_native_bypass_matrix"
     evidence = assert_boundaries(sandbox)
+    if sandbox.phase == "keeper":
+        return {**evidence, "remaining": "ClickHouse/schema/OTel not exercised by keeper-only phase"}
     sandbox.stage = "bootstrap_schema"
     sql_client(sandbox, (HERE / "schema.sql").read_text(), role="schema-admin")
     sandbox.stage = "schema_and_sql_grants"
@@ -280,6 +288,7 @@ def verify(sandbox):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--phase", choices=("full", "keeper"), default="full")
     args = parser.parse_args()
     if os.geteuid() != 0 or sys.platform != "linux":
         raise RuntimeCheckError("Run only on the approved Linux Docker builder as root")
@@ -288,7 +297,9 @@ def main():
     os.umask(0o077)
     args.output.mkdir(mode=0o700, parents=True)
     sandbox = Sandbox(args.output)
-    evidence = {"status": "failed", "scope": "disposable Docker network; not Kubernetes generated-resource acceptance"}
+    sandbox.phase = args.phase
+    evidence = {"status": "failed", "phase": args.phase,
+                "scope": "disposable Docker network; not Kubernetes generated-resource acceptance"}
     try:
         sandbox.stage = "create_isolated_network"
         sandbox.setup()
@@ -303,6 +314,7 @@ def main():
                        for frame in traceback.extract_tb(exc.__traceback__)]}
         raise
     finally:
+        evidence["tls_results"] = sandbox.tls_results
         sandbox.cleanup()
         (args.output / "result.json").write_text(json.dumps(evidence, indent=2) + "\n")
     print(json.dumps(evidence))

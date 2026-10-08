@@ -80,6 +80,7 @@ class Sandbox:
         self.leaves = {}
         self.env_values = {}
         self.stage = "initialized"
+        self.tls_results = []
 
     def setup(self):
         run(["docker", "network", "create", "--internal", "--label",
@@ -149,12 +150,25 @@ class Sandbox:
             connection.close()
 
     def tls_accepts(self, address, server_name, port, role):
+        record = {"server_name": server_name, "port": port, "role": role,
+                  "protocol_attempt": "TLSv1.2"}
         try:
             with socket.create_connection((address, port), timeout=3) as sock:
-                with self.context(role, tls12=True).wrap_socket(sock, server_hostname=server_name):
+                with self.context(role, tls12=True).wrap_socket(sock, server_hostname=server_name) as stream:
+                    record.update({"accepted": True, "protocol": stream.version()})
+                    self.tls_results.append(record)
                     return True
-        except (ssl.SSLError, ConnectionError, OSError):
+        except ssl.SSLError as exc:
+            record.update({"accepted": False, "type": type(exc).__name__,
+                           "library": getattr(exc, "library", None),
+                           "reason": getattr(exc, "reason", None),
+                           "verify_code": getattr(exc, "verify_code", None)})
+            self.tls_results.append(record)
             return False
+        except (ConnectionError, OSError) as exc:
+            record.update({"accepted": False, "type": type(exc).__name__, "errno": exc.errno})
+            self.tls_results.append(record)
+            raise RuntimeCheckError("TLS matrix transport unavailable; not evidence of certificate rejection") from None
 
     def health(self, address, path="/readyz"):
         connection = http.client.HTTPConnection(address, 18080, timeout=3)
