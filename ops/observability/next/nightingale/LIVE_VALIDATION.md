@@ -15,12 +15,14 @@
 | 检查 | 必须满足 |
 | --- | --- |
 | 镜像与身份 | CNPG operator image 与 `OPERATOR_IMAGE_NAME` 同一审阅摘要；PG/Redis/N9E 与本轮锁版一致；只登记公开证书指纹/有效期，不输出 Secret |
-| PG | `n9e-postgres` 三实例 Ready、不同 hostname、当前主与目标主相同；主库 `pg_stat_replication` 精确两条 `streaming`，至少一条 `sync`；两个备库 `pg_is_in_recovery()` 为真 |
+| PG | `n9e-postgres` Cluster Ready、三实例 Ready、不同 hostname、当前主与目标主相同；主库 `pg_stat_replication` 精确两条 `streaming`。本候选实际采用 `synchronous_standby_names=ANY 1 (...)`，因此两副本 `sync_state=quorum` 是正确结果，并须核实 flush/replay 追平；不能机械要求字面 `sync`。两个备库 `pg_is_in_recovery()` 为真 |
 | Redis | 三 Pod Ready、不同 hostname；三个 Sentinel `CKQUORUM n9e` 成功，均发现同一主和精确两个健康副本；副本连到当前主且没有进行中的全量同步 |
 | 存储/预算 | PG/Redis 独立 Retain PVC 均 Bound，未绑定现有平台盘；低优先级、不抢占、不请求 GPU、无额外 toleration |
 | 控制器 | 仅 watch 新 namespace；两固定 webhook 的 RBAC resourceNames/namespaceSelector/Namespaced scope 正确；新 CR server-side dry-run 实际经过 admission |
 
-PG 备库仍在拉镜像、join 失败、同步备库不齐时，不进行切主，也不把“主库可连”当作三副本通过。先恢复依赖到上述门槛。
+PG 备库仍在拉镜像、join 失败、同步备库不齐时，不进行切主，也不把“主库可连”当作三副本通过。先恢复依赖到上述门槛。`primaryUpdateStrategy=supervised` 下因镜像源更新出现 `Waiting for user action` 时，先完成受控 switchover，使 Cluster Ready，再启动夜莺初始化。
+
+CNPG 1.30.1 候选须省略空的 `affinity.tolerations`，不要写 `[]`：PodSpec 注解序列化会省略空数组，比较函数却以 `reflect.DeepEqual` 区分 nil 与空切片，导致不断滚动最后副本。也不要删除初始化中的 replica Join Job 来重试拉取；保留 PVC 时它不会自动重建。若已经发生，应核对 Cluster/PVC UID，并用同锁版源码的 `specs.JoinReplicaInstance` 生成准确恢复 Job、完成服务端 dry-run 后再创建，不能手动把 PVC 标成 ready。
 
 ## 阶段二：初始安装与权限检查
 

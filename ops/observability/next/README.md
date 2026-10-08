@@ -4,7 +4,7 @@
 
 本目录只部署四个独立命名空间中的新组件。旧 Prometheus、Alloy、Loki、平台后端、训练任务和历史数据继续使用原链路。当前阶段只允许新组件自监控和合成 canary；清单存在或 Pod Ready 不代表业务接入、权限和高可用验收完成。
 
-2026-10-08 16:27 现场：新 VM Operator 已直接使用 hub 固定摘要，Helm revision 2、1/1 Ready，禁用 VTAgent 并收紧集群只读权限；15 个新组件 Secret 已创建。与初始基线相比，184 个原 Pod 的 UID/节点/状态/重启数、22 个原控制器和 51 个 ConfigMap 摘要均未变化。新数据面与 PVC 尚未创建；网络门禁和实际操作详见上述部署记录。
+2026-10-08 后续检查点：VM 组件 release revision 3、Operator revision 5，17 个组件 Pod 就绪，现场功能与身份边界复验通过。ClickHouse 两副本、Keeper 三副本、OTel 双副本、PostgreSQL 三副本、Redis/Sentinel 三副本及夜莺双副本均已启动。CH/OTel 已通过现场身份拒绝和合成日志/trace 双副本查询；另在隔离 Docker 中通过真实 gRPC Export 和 Collector SIGKILL 后的持久队列恢复。夜莺完整应用验收 44 项、依赖端口 46 项、PostgreSQL SQL 认证 27 项均通过，CNPG webhook 来源限制及真实 API Server admission 单独验证通过。完整合同测试为 174 项通过。全部 21 个新 PVC 已 Bound，合计 670Gi。当前不接业务数据或真实通知；各项环境、证据和后续交接门禁以部署记录为准。
 
 | 命名空间 | 组件 | 初始持久卷申请量 |
 | --- | --- | --- |
