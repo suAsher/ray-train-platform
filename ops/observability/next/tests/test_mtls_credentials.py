@@ -98,6 +98,31 @@ class IdentityContract(unittest.TestCase):
         self.assertNotIn("PRIVATE-test", " ".join(args[0]))
         self.assertIn("PRIVATE-test", kwargs["input"])
 
+    def test_creation_rejects_forged_resource_and_wrong_owner(self):
+        good = mtls.make_secret(entry(), {"tls.crt": "x", "tls.key": "z", "ca.crt": "y"})
+        for change in ("kind", "owner", "ca-key"):
+            bad = copy.deepcopy(good)
+            if change == "kind":
+                bad["kind"] = "ConfigMap"
+            elif change == "owner":
+                bad["metadata"]["labels"] = {}
+            else:
+                bad["stringData"]["ca.key"] = "never-publish-a-ca-key"
+            with self.subTest(change=change), patch.object(mtls.subprocess, "run") as mocked:
+                with self.assertRaises(mtls.CredentialError):
+                    mtls.create_secrets([bad])
+                mocked.assert_not_called()
+
+    def test_public_ca_projections_contain_no_private_material(self):
+        for name, domain in (("obs-mtls-cnpg-metrics-ca", "mesh"),
+                             ("obs-mtls-postgres-client-ca", "postgres-client")):
+            secret = mtls.public_ca_secret(name, domain, "public-only-certificate")
+            self.assertEqual("observability-alerting", secret["metadata"]["namespace"])
+            self.assertEqual({"ca.crt": "public-only-certificate"}, secret["stringData"])
+            self.assertEqual("Opaque", secret["type"])
+        with self.assertRaises(mtls.CredentialError):
+            mtls.public_ca_secret("obs-mtls-cnpg-metrics-ca", "redis", "wrong-domain")
+
 
 class RealCertificateContract(unittest.TestCase):
     def test_exact_uri_private_permissions_and_reusable_ca(self):
