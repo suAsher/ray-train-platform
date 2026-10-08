@@ -2,6 +2,7 @@
 
 from collections import Counter
 import importlib.util
+import json
 from pathlib import Path
 import socket
 import ssl
@@ -69,6 +70,17 @@ class DenialContracts(unittest.TestCase):
 
 
 class TokenContracts(unittest.TestCase):
+    def test_client_server_names_match_the_signed_identity_manifest(self):
+        manifest = json.loads((MODULE_PATH.parent / "mtls-identities.json").read_text())
+        by_role = {item["role"]: item for item in manifest}
+        for role in probe.FULL_COUNTS:
+            with self.subTest(role=role), patch.object(probe.ssl, "create_default_context"):
+                with patch.object(probe, "TLSConnection") as connection:
+                    response = connection.return_value.getresponse.return_value
+                    response.status, response.read.return_value = 200, b""
+                    probe.request({"ip": "172.28.20.1", "role": role}, probe.METRICS[role], "/metrics", "vmagent", True)
+                self.assertIn(connection.call_args.args[3], by_role[role]["dns_names"])
+
     def test_token_validation_never_echoes_material(self):
         with tempfile.TemporaryDirectory(prefix="vm-live-token-") as temporary:
             path = Path(temporary) / "token"
@@ -85,6 +97,15 @@ class TokenContracts(unittest.TestCase):
                     # /metrics must be 404, even though every mocked path is 200.
                     probe.run_operator(selected, [])
         self.assertTrue(request.called)
+
+    def test_full_mode_operator_health_checks_only_the_operator_pod(self):
+        selected = probe.validate_inventory(inventory(), "full")
+        operator = next(pod for pod in selected["pods"] if pod["role"] == "operator")
+        with patch.object(probe, "request", side_effect=[(200, b""), (200, b""), (404, b"")]) as request:
+            with patch.object(probe, "probe_pod"), patch.object(probe, "probe_gateway"), patch.object(probe, "probe_alertmanagers"):
+                probe.run_full(selected, [])
+        self.assertEqual(3, request.call_count)
+        self.assertTrue(all(call.args[0] == operator for call in request.call_args_list))
 
 
 if __name__ == "__main__":

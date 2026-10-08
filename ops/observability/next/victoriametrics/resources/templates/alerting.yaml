@@ -8,6 +8,8 @@ metadata:
     {{- include "metrics.labels" . | nindent 4 }}
 spec:
   {{- include "metrics.common" (dict "root" . "component" "vmalertmanager") | nindent 2 }}
+  # Explicit SA prevents Operator's namespace-wide Secret reader generation.
+  serviceAccountName: vm-am-reloader
   replicaCount: {{ .Values.alertmanager.replicas }}
   image: {{ toJson .Values.images.alertmanager }}
   imagePullSecrets: {{ toJson .Values.imagePullSecrets }}

@@ -69,6 +69,8 @@ VMStorage RF=2 与采集 HA 去重不同。首期所有采集和规则周期统�
 - 现场应确认没有既有 VM CRD/Operator；若发现同名，停止自动接管，先检查版本和 owner。不得为了 Helm 安装强行重标记、覆盖或删除既有 CRD。
 - VMAuth/Agent/Alert 均 `selectAllByDefault: false`，只选本 namespace 的明确标签。Agent `ignoreNamespaceSelectors: true`，不会因某个新增 scrape CR 改写 namespace selector 而扩大抓取范围。
 - 显式 VMAgent ServiceAccount `vm-self-scraper` 只有本 namespace 的 pods/services/endpoints/endpointslices discovery，以及 `resourceNames: [vmagent-raytrain-next]` 限定的配置 Secret 读取。没有未限定的 Secrets 或 ConfigMaps API 权限；源 TLS/写令牌由 kubelet 挂载。v0.75.0 的 `IsOwnsServiceAccount()` 在显式 SA 时返回 false，跳过自动 SA/RBAC 生成。安装后仍必须核对所有 RoleBinding/ClusterRoleBinding 和 `kubectl auth can-i` 的有效结果：读取自身配置 yes；未限定 list secrets、读取 `obs-mtls-admin`/`obs-mtls-vmauth`/`obs-mtls-vmstorage`/`obs-mtls-alertmanager-gossip` 都为 no。不能只检查这一份 Role。
+- VMAuth 使用显式 SA `vm-auth-reloader`，只读 `vmauth-config-raytrain-next`；Alertmanager 使用 `vm-am-reloader`，只读 `vmalertmanager-raytrain-next-config`。两份 Role 都只授予该 `resourceNames` 的 get/list/watch。官方 v0.75.0 重载器通过精确名称 Get 初始化，List/Watch 带 `metadata.name` fieldSelector，不需要本 namespace 的全部 Secret。TLS/source token 由 kubelet 挂载。
+- 从本次早期候选升级时，先创建新的两套 SA/Role/RoleBinding，再更新 VMAuth/VMAlertmanager CR，等待相应所有 Pod 切换新 SA 且 Ready。核对旧对象确为本次 Operator 生成后，只清理 `observability-metrics` 中同名的旧 Role/RoleBinding `vmauth-raytrain-next` 和 `vmalertmanager-raytrain-next`；这些旧绑定没有 `resourceNames`。不删除任何 Secret、PVC 或训练资源。新 SA 自身配置 get/带名称选择器的 list/watch 应成功，未限定 list 及其他角色 Secret get 必须拒绝；集群通用 discovery 权限不等于 Secret 授权。
 
 ## 网络
 

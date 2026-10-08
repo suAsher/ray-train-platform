@@ -142,6 +142,8 @@ def check(results, name, operation):
 
 def run_operator(inventory, results):
     for pod in inventory["pods"]:
+        if pod["role"] != "operator":
+            continue
         for path, expected in (("/healthz", 200), ("/app-healthz", 200), ("/metrics", 404)):
             check(results, pod["name"] + ":health:" + path,
                   lambda: expect_status(lambda: request(pod, 18081, path), expected))

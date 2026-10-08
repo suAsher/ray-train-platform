@@ -286,6 +286,11 @@ class VMMTLSContracts(unittest.TestCase):
             binding["roleRef"] = {"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": "cluster-admin"}
             with self.assertRaisesRegex(ValueError, "reloader RBAC"):
                 validator([*self.objects, binding])
+            for subject in ({"kind": "User", "name": f"system:serviceaccount:{NS}:{account}"},
+                            {"kind": "Group", "name": "system:serviceaccounts:" + NS}):
+                extra = {**binding, "subjects": [subject]}
+                with self.assertRaisesRegex(ValueError, "reloader RBAC"):
+                    validator([*self.objects, extra])
 
     def test_scraper_rbac_rejects_unscoped_secrets_or_extra_bindings(self):
         broad = deepcopy(self.objects)

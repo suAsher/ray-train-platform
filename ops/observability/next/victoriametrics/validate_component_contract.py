@@ -122,6 +122,50 @@ def validate_agent(objects):
             "agent credential must be approved write Secret reference")
 
 
+def validate_reloader_rbac(objects):
+    pairs = (("VMAuth", "vm-auth-reloader", "vmauth-config-", ""),
+             ("VMAlertmanager", "vm-am-reloader", "vmalertmanager-", "-config"))
+    for kind, account, prefix, suffix in pairs:
+        cr = one(objects, kind)
+        spec = cr["spec"]
+        require(spec.get("serviceAccountName") == account and not spec.get("useLegacyNaming"),
+                "reloader RBAC requires explicit SA and default naming")
+        require(not any(spec.get(key) for key in ("secretRef", "localPath", "configSecret")),
+                "reloader RBAC requires the generated config Secret")
+        expected = [{"apiGroups": [""], "resources": ["secrets"], "verbs": ["get", "list", "watch"],
+                     "resourceNames": [prefix + cr["metadata"]["name"] + suffix]}]
+        roles = [item for item in objects if item.get("kind") == "Role"
+                 and item["metadata"].get("namespace") == NAMESPACE and item["metadata"]["name"] == account]
+        require(len(roles) == 1 and roles[0].get("rules") == expected,
+                "reloader RBAC expanded beyond own config Secret")
+        accounts = [item for item in objects if item.get("kind") == "ServiceAccount"
+                    and item["metadata"].get("namespace") == NAMESPACE and item["metadata"]["name"] == account]
+        require(len(accounts) == 1, "reloader RBAC requires exactly one explicit ServiceAccount")
+        bindings = reloader_bindings(objects, account)
+        require(len(bindings) == 1, "reloader RBAC has missing or additional bindings")
+        binding = bindings[0]
+        require(binding["kind"] == "RoleBinding" and binding["metadata"].get("namespace") == NAMESPACE
+                and binding["roleRef"] == {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": account},
+                "reloader RBAC must reference only its narrow namespaced Role")
+
+
+def reloader_bindings(objects, account):
+    bindings = []
+    groups = {"system:serviceaccounts", "system:serviceaccounts:" + NAMESPACE, "system:authenticated"}
+    for item in objects:
+        if item.get("kind") not in ("RoleBinding", "ClusterRoleBinding"):
+            continue
+        for subject in item.get("subjects", []):
+            direct = subject.get("kind") == "ServiceAccount" and subject.get("name") == account \
+                and subject.get("namespace", item["metadata"].get("namespace")) == NAMESPACE
+            user = subject.get("kind") == "User" and subject.get("name") == f"system:serviceaccount:{NAMESPACE}:{account}"
+            group = subject.get("kind") == "Group" and subject.get("name") in groups
+            if direct or user or group:
+                bindings.append(item)
+                break
+    return bindings
+
+
 def validate_auth(objects):
     spec = one(objects, "VMAuth")["spec"]
     require(spec.get("selectAllByDefault") is False, "auth selects users by default")
@@ -196,6 +240,7 @@ def main(paths):
                             "unapproved cluster-wide resource discovery")
     validate_operator(objects)
     validate_agent(objects)
+    validate_reloader_rbac(objects)
     validate_auth(objects)
     validate_rules(objects)
     print("VM first-stage component boundaries: PASS (rendered YAML only; live verification still required)")
