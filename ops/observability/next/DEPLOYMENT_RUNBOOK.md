@@ -130,6 +130,7 @@ Chart 版本、controller 版本、业务组件版本、镜像 index/平台 mani
 | 后续候选验证 | 修复 null 可选字段误报、增加安全凭据工具；bb9f2ac 隔离候选 36 项测试通过（含真实 OpenSSL，kubectl 全部 mock）；仅执行 Secret --plan |
 | 镜像策略确认后 | VM1.153.0 新候选改为直接使用 hub 固定摘要；Operator 候选同0.75.0改hub、禁VTAgent、收紧集群只读权限；离线专项验证通过，未应用到集群 |
 | 文档收尾 | 新增两项 scope 回归后共38项测试通过；明确 CNPG ClusterImageCatalog CRD 例外与 Redis test hook 边界。15:56只读快照仍仅一个Operator Pod，无新PVC和VM数据面 |
+| 最终候选归档 | `b9dd3b5` 的38项测试、全组件Helm/Kustomize重渲染、VM专项合同和综合scope结构合同均通过（0 errors）；仅离线验证，仍保留live ownership/生成资源与网络门禁 |
 | 用户确认后 | 网络能力未开通过，先保持现状；数据组件部署停止在门禁前，继续文档和离线候选验证 |
 
 只读子任务越界写入属于本次协作失误，已明确记录，不能将它包装成正常审批/验收流程。未发现它修改旧 Prometheus/Alloy/Loki 或停止用户任务；现场基线复核支持这一结论。
@@ -212,8 +213,8 @@ kubectl kustomize "$obs_candidate/ops/observability/next/otel" > otel-rendered.y
 
 | 检查 | 当前证据 | 剩余 |
 | --- | --- | --- |
-| 安全合同/凭据工具 | bb9f2ac 的36项测试通过；最后两项scope回归后共38项通过；真实OpenSSL、mock kubectl | 最终镜像候选全量重渲染；未测得覆盖率，不宣称80% |
-| Helm / CRD | 初始版本 lint/template/schema 通过 | 最终 server dry-run 与生成资源检查；静态 schema 不等于 CEL/运行通过 |
+| 安全合同/凭据工具 | 最终 b9dd3b5 的38项测试及综合scope结构合同通过；真实OpenSSL、mock kubectl | live权限/所有权检查；未测得覆盖率，不宣称80% |
+| Helm / CRD | 初始版本lint/schema通过，最终 b9dd3b5 全组件重新渲染通过 | 最终 server dry-run 与生成资源检查；静态 schema 不等于 CEL/运行通过 |
 | 镜像 | 固定版本/摘要、N9E binary、OTel validate；VM1.153 Helm/schema/反例/参数/rule检查和固定AM配置检查通过 | 数据组件节点真实拉取与imageID |
 | 旧系统保护 | 15:31 基线对照无变化 | 任何后续部署后都重新对照 |
 | 网络隔离 | 已确认 12/12 为 never | 实际 allow/deny 测试，当前不通过 |
@@ -242,6 +243,8 @@ kubectl kustomize "$obs_candidate/ops/observability/next/otel" > otel-rendered.y
 | candidate/ | 6827d038 初始隔离候选；不代表最终可部署 |
 | prerequisites-bb9f2ac/ | 36项测试对应的明确候选 |
 | prerequisites-bb9f2ac-test.log | 更新后合同/凭据测试结果 |
+| reviewed-b9dd3b5/ | 最终代码/清单候选，后续文档状态补充不改变该验证快照 |
+| reviewed-validation/summary.json | 最终38项测试、各组件重渲染、VM合同与scope合同结果，全0退出码 |
 | validation-vm/ | VM render、schema、正负合同、摘要与离线校验 |
 | validation-vm/v1.153.0/validation-summary.json | 直接hub、VM1.153、禁VTAgent与收紧Role的新候选验证 |
 | validation-ch/ | CH/OTel render、schema、scope、OTel validate |
