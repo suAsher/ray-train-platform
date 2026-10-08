@@ -2,7 +2,7 @@
 
 此目录只拥有 `observability-alerting` 中的新夜莺及专用依赖。现有平台 PostgreSQL、Prometheus、Alertmanager、Grafana、Loki、Alloy、训练任务及入口均不修改。当前是待构建机验证的候选，文件存在不代表部署或验收完成。
 
-2026-10-08 用户选择先保留当前 CNI，新数据面部署暂停；此目录继续保留候选与离线验证证据，没有部署夜莺或其数据库。
+2026-10-08 用户选择保留当前 CNI，并进一步选择为新增组件改造 mTLS 代理；没有部署夜莺或其数据库到 VKE。原候选 `b9dd3b5` 已在构建机内部 Docker 网络通过真实初始化与登录验证：PG UTF8/TLS verify-full、首次 seed 与重复 seed 拒绝、47→57 表迁移、随机 root 密码哈希、保持验证码启用的取题→答题→登录→认证 profile。单 PG、单 Redis 和单 Sentinel 的三 DNS 别名仅验证客户端配置与初始化，不能作为三副本 HA 或 VKE 验收。临时容器、网络、假凭据与数据已清理；证据为构建机 `runtime-n9e-20261008/{result.json,final-evidence-checks.json,evidence.md}`。
 
 新组件可以使用 CPU 或 GPU 节点的 CPU/内存；不请求 GPU，不添加通用 toleration，不驱逐训练。统一使用 `raytrain-observability-additive`（负优先级、`preemptionPolicy: Never`）；显式排除当前高内存 `172.28.1.222` 和 algorithm 专属 `172.28.3.32`。其余节点由调度器选择，多个副本必须分散到不同 hostname。资源不足时保留 Pending，不降低训练保障。
 

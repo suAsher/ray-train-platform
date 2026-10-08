@@ -4,6 +4,8 @@
 
 本目录只部署四个独立命名空间中的新组件。旧 Prometheus、Alloy、Loki、平台后端、训练任务和历史数据继续使用原链路。当前阶段只允许新组件自监控和合成 canary；清单存在或 Pod Ready 不代表业务接入、权限和高可用验收完成。
 
+2026-10-08 16:27 现场：新 VM Operator 已直接使用 hub 固定摘要，Helm revision 2、1/1 Ready，禁用 VTAgent 并收紧集群只读权限；15 个新组件 Secret 已创建。与初始基线相比，184 个原 Pod 的 UID/节点/状态/重启数、22 个原控制器和 51 个 ConfigMap 摘要均未变化。新数据面与 PVC 尚未创建；网络门禁和实际操作详见上述部署记录。
+
 | 命名空间 | 组件 | 初始持久卷申请量 |
 | --- | --- | --- |
 | observability-metrics | VM Operator、VMCluster、VMAgent、VMAuth、VMAlert、Alertmanager | 250Gi |

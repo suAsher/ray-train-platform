@@ -21,9 +21,9 @@ v1.153.0 包含 native import 的 zstd 内存限制修复；官方同时记录 p
 
 ## 当前候选与运行边界
 
-截至 2026-10-08，本目录新版本仍是待部署候选。现场只有新增基础对象和 Operator，VMCluster/Agent/Auth/Alert/AM 数据面未创建。Operator 实际仍使用已有私有 Harbor v0.75.0 摘要；候选改为 hub 的相同摘要，并新增 VTAgent 禁用参数和收紧 ClusterRole，这些本地改动不能当成已生效。
+截至 2026-10-08 16:27，现场只有新增基础对象、凭据和 Operator，VMCluster/Agent/Auth/Alert/AM 数据面未创建。新 Operator 已升级到 Helm revision 2，直接使用 hub 的 v0.75.0 固定摘要、禁用 VTAgent，并应用收紧的 ClusterRole；实际 1/1 Ready、重启 0，节点 `172.28.1.150`。两个 VM token Secret 已创建，不应覆盖重建。完整证据见 [部署记录](../DEPLOYMENT_RUNBOOK.md)。
 
-现场 CNI 的 NetworkPolicy enforcement 尚未开启。用户要求先保留现状，因此**不启动数据面、不执行 Helm 升级、不扩权绕过网络边界**。网络能力完成独立评审并实际验收后，重新对比源码、渲染与现网差异，再执行下面的部署顺序。不能仅凭 NetworkPolicy YAML 已存在就报告网络隔离有效。
+现场 CNI 的 NetworkPolicy enforcement 尚未开启。用户要求先保留现状，因此**不启动依赖隔离的数据面、不扩权绕过网络边界**；新增 Operator 本身的已审阅升级与凭据准备已单独完成。网络能力完成独立评审并实际验收后，重新对比源码、渲染与现网差异，再执行下面的数据面部署顺序。不能仅凭 NetworkPolicy YAML 已存在就报告网络隔离有效。
 
 ## 预置对象与身份
 

@@ -1,0 +1,189 @@
+"""CH/Keeper release gates. Run on the builder; no Kubernetes mutations."""
+
+import copy
+import importlib.util
+from pathlib import Path
+import unittest
+import xml.etree.ElementTree as ET
+
+import yaml
+
+
+ROOT = Path(__file__).resolve().parents[1]
+CH = ROOT / "clickhouse"
+TRUST = "spiffe://observability.raytrain.local/"
+ENVOY = ("harbor.wellspiking.ai/hub/envoyproxy/envoy:v1.39.3@sha256:"
+         "dd85940439de19a0b6ae8419610363ea0ad351d9a994ea007161c206ec1e1865")
+
+
+def documents(path):
+    return list(yaml.safe_load_all(path.read_text()))
+
+
+def installation(path):
+    return documents(path)[0]
+
+
+def proxy(name):
+    return yaml.safe_load((CH / ("proxy-" + name + ".yaml")).read_text())
+
+
+def public_listeners(config):
+    return {item["address"]["socket_address"]["port_value"]: item
+            for item in config["static_resources"]["listeners"]
+            if item["address"]["socket_address"]["address"] == "__POD_IP__"}
+
+
+def identities(listener):
+    """A trusted CA alone is deliberately insufficient for this release gate."""
+    chains = listener["filter_chains"]
+    if len(chains) != 1:
+        raise AssertionError("one explicit authenticated filter chain required")
+    tls = chains[0]["transport_socket"]["typed_config"]
+    if tls.get("require_client_certificate") is not True:
+        raise AssertionError("client certificate must be required")
+    context = tls["common_tls_context"]["validation_context"]
+    if context.get("trust_chain_verification", "VERIFY_TRUST_CHAIN") != "VERIFY_TRUST_CHAIN":
+        raise AssertionError("certificate chain verification is required")
+    if not context.get("trusted_ca", {}).get("filename"):
+        raise AssertionError("explicit trust bundle required")
+    result = set()
+    for match in context.get("match_typed_subject_alt_names", []):
+        if match.get("san_type") != "URI" or set(match["matcher"]) != {"exact"}:
+            raise AssertionError("only exact URI identities are allowed")
+        result.add(match["matcher"]["exact"])
+    if not result:
+        raise AssertionError("CA membership is not role authorization")
+    return result
+
+
+def role(namespace, name):
+    return TRUST + "observability-" + namespace + "/" + name
+
+
+def pod_template(cr):
+    return cr["spec"]["templates"]["podTemplates"][0]["spec"]
+
+
+class ClickHouseMTLSTests(unittest.TestCase):
+    def test_native_listeners_are_replaced_with_loopback_not_just_hidden_services(self):
+        for name in ("clickhouse", "keeper"):
+            with self.subTest(component=name):
+                cr = installation(CH / (name + ".yaml"))
+                files = cr["spec"]["configuration"]["files"]
+                xml = ET.fromstring(files["config.d/zz-mtls.xml"] if name == "clickhouse"
+                                    else files["zz-mtls.xml"])
+                for field in ("listen_host", "interserver_listen_host"):
+                    values = xml.findall(field)
+                    self.assertEqual(1, len(values), field)
+                    self.assertEqual("127.0.0.1", values[0].text)
+                    self.assertIn(values[0].get("replace"), ("replace", "1"))
+
+    def test_keeper_raft_and_client_have_distinct_identity_allowlists(self):
+        public = public_listeners(proxy("keeper"))
+        self.assertEqual({2281, 9234, 7000, 18080}, set(public))
+        self.assertEqual({role("analytics", "keeper")}, identities(public[9234]))
+        self.assertEqual({role("analytics", "clickhouse"), role("analytics", "ch-operator")},
+                         identities(public[2281]))
+        self.assertEqual({role("metrics", "vmagent")}, identities(public[7000]))
+        self.assertNotIn(role("analytics", "clickhouse"), identities(public[9234]))
+
+    def test_same_ca_wildcards_and_missing_client_cert_are_rejected(self):
+        listener = public_listeners(proxy("keeper"))[9234]
+        for change in ("no-cert", "no-role", "wildcard", "untrusted-chain"):
+            bad = copy.deepcopy(listener)
+            tls = bad["filter_chains"][0]["transport_socket"]["typed_config"]
+            validation = tls["common_tls_context"]["validation_context"]
+            if change == "no-cert":
+                tls["require_client_certificate"] = False
+            elif change == "no-role":
+                validation["match_typed_subject_alt_names"] = []
+            elif change == "wildcard":
+                validation["match_typed_subject_alt_names"][0]["matcher"] = {"prefix": TRUST}
+            else:
+                validation["trust_chain_verification"] = "ACCEPT_UNTRUSTED"
+            with self.subTest(change=change), self.assertRaises(AssertionError):
+                identities(bad)
+
+    def test_sql_admin_replication_and_metrics_are_separate_channels(self):
+        public = public_listeners(proxy("clickhouse"))
+        self.assertEqual({8443, 9440, 9010, 9363, 18080}, set(public))
+        self.assertEqual({role("analytics", "ch-operator"), role("analytics", "schema-admin")},
+                         identities(public[8443]))
+        self.assertEqual({role("analytics", "clickhouse")}, identities(public[9010]))
+        self.assertEqual({role("metrics", "vmagent")}, identities(public[9363]))
+        self.assertEqual({role("otel", "otel-gateway"), role("analytics", "clickhouse"),
+                          role("analytics", "schema-admin"), role("analytics", "query-admin")},
+                         identities(public[9440]))
+
+    def test_sql_application_permissions_remain_minimal(self):
+        users = installation(CH / "clickhouse.yaml")["spec"]["configuration"]["users"]
+        self.assertEqual({"GRANT INSERT, SHOW COLUMNS ON observability_canary.otel_logs",
+                          "GRANT INSERT, SHOW COLUMNS ON observability_canary.otel_traces"},
+                         set(users["otel_ingest/grants/query"]))
+        self.assertEqual(["GRANT SELECT ON observability_canary.*"],
+                         users["observability_query/grants/query"])
+        self.assertIn("secretKeyRef", users["schema_admin/password_sha256_hex"]["valueFrom"])
+
+    def test_coordination_outbound_is_fixed_loopback_and_raft_dns_is_preserved(self):
+        cr = installation(CH / "clickhouse.yaml")
+        zk = cr["spec"]["configuration"]["zookeeper"]
+        self.assertNotIn("keeper", zk)
+        self.assertEqual([("127.0.0.1", port) for port in (12181, 12182, 12183)],
+                         [(node["host"], node["port"]) for node in zk["nodes"]])
+        for component in ("clickhouse", "operator"):
+            config = proxy(component)
+            listeners = config["static_resources"]["listeners"]
+            egress = [item for item in listeners
+                      if item["address"]["socket_address"]["port_value"] in (12181, 12182, 12183)]
+            self.assertEqual(3, len(egress))
+            self.assertTrue(all(item["address"]["socket_address"]["address"] == "127.0.0.1"
+                                for item in egress))
+        keeper = installation(CH / "keeper.yaml")
+        cluster = keeper["spec"]["configuration"]["clusters"][0]
+        self.assertEqual("yes", cluster["secure"])
+        self.assertEqual("no", cluster["insecure"])
+        self.assertNotIn("raft_configuration", keeper["spec"]["configuration"]["settings"])
+
+    def test_proxies_have_no_wildcard_bind_or_public_admin(self):
+        for name in ("clickhouse", "keeper", "operator"):
+            config = proxy(name)
+            if "admin" in config:
+                self.assertEqual("127.0.0.1", config["admin"]["address"]["socket_address"]["address"])
+            for item in config["static_resources"]["listeners"]:
+                address = item["address"]["socket_address"]["address"]
+                self.assertIn(address, ("__POD_IP__", "127.0.0.1", "127.0.0.2", "127.0.0.3"))
+
+    def test_ch_and_keeper_probes_do_not_require_unauthenticated_pod_ip_ports(self):
+        for name in ("clickhouse", "keeper"):
+            pod = pod_template(installation(CH / (name + ".yaml")))
+            app = next(c for c in pod["containers"] if c["name"] in ("clickhouse", "clickhouse-keeper"))
+            for field in ("startupProbe", "readinessProbe", "livenessProbe"):
+                probe = app[field]
+                self.assertIn("exec", probe, name + "/" + field)
+                command = " ".join(probe["exec"]["command"])
+                self.assertTrue("127.0.0.1" in command or "pgrep" in command)
+            sidecar = next(c for c in pod["containers"] if c["name"] == "envoy")
+            self.assertEqual(ENVOY, sidecar["image"])
+            self.assertTrue(sidecar["securityContext"]["readOnlyRootFilesystem"])
+            self.assertFalse(sidecar["securityContext"]["allowPrivilegeEscalation"])
+            self.assertEqual(["ALL"], sidecar["securityContext"]["capabilities"]["drop"])
+
+    def test_operator_routes_reject_expansion_without_alias_and_egress(self):
+        path = CH / "validate_mtls.py"
+        self.assertTrue(path.is_file(), "operator route validator must gate publication")
+        spec = importlib.util.spec_from_file_location("validate_ch_mtls", path)
+        contract = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(contract)
+        chi = installation(CH / "clickhouse.yaml")
+        routes = yaml.safe_load((CH / "operator-routes.yaml").read_text())
+        self.assertEqual([], contract.validate_operator_routes(chi, routes, proxy("operator")))
+        expanded = copy.deepcopy(chi)
+        expanded["spec"]["configuration"]["clusters"][0]["layout"]["replicasCount"] = 3
+        errors = contract.validate_operator_routes(expanded, routes, proxy("operator"))
+        self.assertTrue(errors, "a third replica must not silently bypass the local proxy")
+        self.assertTrue(any("route" in error.lower() for error in errors))
+
+
+if __name__ == "__main__":
+    unittest.main()

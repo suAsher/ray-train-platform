@@ -1,6 +1,6 @@
 # 训练平台 VKE 可观测性架构：VM Operator、夜莺、OTel 与 ClickHouse
 
-日期：2026-10-08。状态：架构及候选清单已形成；仅新增 namespace/PC/SC/quota 与 VM Operator 已创建，数据组件尚未部署。现有采集、告警和训练资源保持原状。实际操作、版本、证据与后续流程见 [部署操作记录](../../../ops/observability/next/DEPLOYMENT_RUNBOOK.md)。
+日期：2026-10-08。状态：架构及候选清单已形成；新增 namespace/PC/SC/quota、15 个组件 Secret 与 VM Operator 已创建，数据组件尚未部署到 VKE。16:27 复核 Operator 使用 hub 固定摘要、revision 2、1/1 Ready；原 Pod/控制器/ConfigMap 基线未变。现有采集、告警和训练资源保持原状。实际操作、版本、证据与后续流程见 [部署操作记录](../../../ops/observability/next/DEPLOYMENT_RUNBOOK.md)。
 
 本稿按最新要求采用 **VictoriaMetrics Operator 管理的 VMCluster 全组件架构**。日志保留 Alloy/Loki 的现有查询能力，增加 ClickHouse 分析；OpenTelemetry traces 也写入 ClickHouse。此版本替代前稿的双 VMsingle 和 Tempo 选型。
 
