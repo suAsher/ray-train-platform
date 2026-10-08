@@ -66,6 +66,22 @@ def pod_template(cr):
 
 
 class ClickHouseMTLSTests(unittest.TestCase):
+    def test_trial_thread_budget_leaves_capacity_for_queries(self):
+        settings = installation(CH / "clickhouse.yaml")["spec"]["configuration"]["settings"]
+        # These pools otherwise default to 16 each. Their persistent workers
+        # exhausted the global 128 slots before the first canary SELECT.
+        for name in ("background_buffer_flush_schedule_pool_size",
+                     "background_message_broker_schedule_pool_size",
+                     "background_distributed_schedule_pool_size",
+                     "background_streaming_schedule_pool_size",
+                     "background_common_pool_size", "async_insert_threads"):
+            with self.subTest(pool=name):
+                self.assertGreaterEqual(settings[name], 1)
+                self.assertLessEqual(settings[name], 2)
+        self.assertEqual(128, settings["max_thread_pool_size"])
+        self.assertEqual(settings["max_thread_pool_size"], settings["thread_pool_queue_size"])
+        self.assertLess(settings["max_thread_pool_free_size"], settings["max_thread_pool_size"])
+
     def test_native_listeners_are_replaced_with_loopback_not_just_hidden_services(self):
         for name in ("clickhouse", "keeper"):
             with self.subTest(component=name):

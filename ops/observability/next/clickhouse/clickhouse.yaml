@@ -72,6 +72,18 @@ spec:
       max_server_memory_usage: 6442450944
       max_concurrent_queries: 20
       max_thread_pool_size: 128
+      max_thread_pool_free_size: 32
+      thread_pool_queue_size: 128
+      # Explicit small background pools: the 26.8 defaults otherwise consume
+      # all 128 global workers before the first query can execute.
+      background_buffer_flush_schedule_pool_size: 2
+      background_message_broker_schedule_pool_size: 2
+      background_distributed_schedule_pool_size: 2
+      background_streaming_schedule_pool_size: 2
+      background_common_pool_size: 2
+      async_insert_threads: 2
+      tables_loader_foreground_pool_size: 1
+      tables_loader_background_pool_size: 1
       background_pool_size: 4
       background_merges_mutations_concurrency_ratio: 2
       merge_tree/number_of_free_entries_in_pool_to_execute_mutation: 4
