@@ -196,6 +196,20 @@ class VMMTLSContracts(unittest.TestCase):
                     self.assertNotIn("route", node, "public health proxies a backend endpoint")
                     self.assertNotIn("body", node, "public health discloses a response body")
 
+    def test_health_only_clusters_keep_five_second_checks_without_routed_traffic(self):
+        for role in ROLES:
+            checked = 0
+            for cluster in self.config(role)["static_resources"]["clusters"]:
+                for health in cluster.get("health_checks", []):
+                    with self.subTest(role=role, cluster=cluster["name"]):
+                        checked += 1
+                        self.assertEqual("5s", health.get("interval"))
+                        self.assertEqual("5s", health.get("no_traffic_interval"))
+                        self.assertIn(health.get("no_traffic_healthy_interval"), (None, "5s"))
+                        self.assertEqual(2, health["unhealthy_threshold"])
+                        self.assertEqual(1, health["healthy_threshold"])
+            self.assertGreaterEqual(checked, 1)
+
     def test_envoy_admin_is_not_pod_reachable(self):
         for role in ROLES:
             admin = self.config(role).get("admin", {})

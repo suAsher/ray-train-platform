@@ -7,7 +7,7 @@ metadata:
     observability.raytrain.io/stage: additive
 spec:
   instances: 3
-  imageName: ghcr.io/cloudnative-pg/postgresql:17.11-202608170816-standard-trixie@sha256:6b7e6a1267254902840efa9936bbeb0a398a79b5b9cb2e82218e4a92b602e97c
+  imageName: harbor.wellspiking.ai/guofeng.su/postgresql-observability:17.11-202608170816-source-6b7e6a12@sha256:6b7e6a1267254902840efa9936bbeb0a398a79b5b9cb2e82218e4a92b602e97c
   enableSuperuserAccess: false
   priorityClassName: raytrain-observability-additive
   primaryUpdateStrategy: supervised

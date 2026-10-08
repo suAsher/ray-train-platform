@@ -12,6 +12,16 @@ ROOT = Path(__file__).resolve().parents[1] / "otel"
 
 
 class OTelMTLSTests(unittest.TestCase):
+    def test_health_only_cluster_does_not_use_envoy_sixty_second_idle_default(self):
+        config = yaml.safe_load((ROOT / "proxy-otel.yaml").read_text())
+        cluster = next(c for c in config["static_resources"]["clusters"]
+                       if c["name"] == "collector_health")
+        health = cluster["health_checks"][0]
+        self.assertEqual("5s", health["interval"])
+        self.assertEqual("5s", health["no_traffic_interval"])
+        self.assertEqual("1s", health["timeout"])
+        self.assertEqual(2, health["unhealthy_threshold"])
+
     def collector(self):
         return yaml.safe_load((ROOT / "collector.yaml").read_text())
 

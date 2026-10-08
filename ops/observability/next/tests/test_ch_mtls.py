@@ -66,6 +66,14 @@ def pod_template(cr):
 
 
 class ClickHouseMTLSTests(unittest.TestCase):
+    def test_health_only_clusters_probe_even_without_routed_traffic(self):
+        for name in ("clickhouse", "keeper", "operator"):
+            for cluster in proxy(name)["static_resources"]["clusters"]:
+                for health in cluster.get("health_checks", []):
+                    with self.subTest(component=name, cluster=cluster["name"]):
+                        self.assertEqual("5s", health["interval"])
+                        self.assertEqual("5s", health["no_traffic_interval"])
+
     def test_https_replication_advertises_each_existing_certificate_name(self):
         chi = installation(CH / "clickhouse.yaml")
         replicas = chi["spec"]["configuration"]["clusters"][0]["layout"]["replicas"]
