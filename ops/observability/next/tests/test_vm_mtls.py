@@ -17,6 +17,7 @@ import yaml
 
 VM_ROOT = Path(__file__).resolve().parents[1] / "victoriametrics"
 sys.path.insert(0, str(VM_ROOT))
+import validate_component_contract as component_contract  # noqa: E402
 from validate_component_contract import validate_scraper_rbac  # noqa: E402
 
 NS = "observability-metrics"
@@ -252,6 +253,39 @@ class VMMTLSContracts(unittest.TestCase):
         self.assertEqual(["vmagent-raytrain-next"], rules[0]["resourceNames"])
         self.assertFalse(any("configmaps" in item["resources"] for item in role["rules"]))
         self.assertEqual("vm-self-scraper", self.spec("vmagent")["serviceAccountName"])
+
+    def test_auth_and_am_use_explicit_sa_and_exact_config_secret_rbac(self):
+        for role, account, secret in (("vmauth", "vm-auth-reloader", "vmauth-config-raytrain-next"),
+                                      ("alertmanager", "vm-am-reloader", "vmalertmanager-raytrain-next-config")):
+            with self.subTest(role=role):
+                self.assertEqual(account, self.spec(role).get("serviceAccountName"))
+                self.one("ServiceAccount", account)
+                self.assertEqual([{"apiGroups": [""], "resources": ["secrets"],
+                                   "resourceNames": [secret], "verbs": ["get", "list", "watch"]}],
+                                 self.one("Role", account)["rules"])
+                binding = self.one("RoleBinding", account)
+                self.assertEqual({"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": account}, binding["roleRef"])
+                self.assertEqual([{"kind": "ServiceAccount", "name": account, "namespace": NS}], binding["subjects"])
+
+    def test_reloader_rbac_contract_rejects_wildcards_other_keys_and_extra_bindings(self):
+        validator = getattr(component_contract, "validate_reloader_rbac", None)
+        self.assertTrue(callable(validator), "reloader RBAC validator is missing")
+        validator(self.objects)
+        for account in ("vm-auth-reloader", "vm-am-reloader"):
+            for names in (None, ["obs-mtls-admin"], ["*"]):
+                objects = deepcopy(self.objects)
+                rule = next(item for item in objects if item.get("kind") == "Role" and item["metadata"]["name"] == account)["rules"][0]
+                if names is None:
+                    rule.pop("resourceNames")
+                else:
+                    rule["resourceNames"] = names
+                with self.subTest(account=account, names=names), self.assertRaisesRegex(ValueError, "reloader RBAC"):
+                    validator(objects)
+            binding = deepcopy(self.one("RoleBinding", account))
+            binding["metadata"]["name"] = "unapproved-extra-role"
+            binding["roleRef"] = {"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": "cluster-admin"}
+            with self.assertRaisesRegex(ValueError, "reloader RBAC"):
+                validator([*self.objects, binding])
 
     def test_scraper_rbac_rejects_unscoped_secrets_or_extra_bindings(self):
         broad = deepcopy(self.objects)
