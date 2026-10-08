@@ -10,7 +10,7 @@ static_resources:
               "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
               require_client_certificate: true
               common_tls_context:
-                tls_params: {tls_minimum_protocol_version: TLSv1_3}
+                tls_params: {tls_minimum_protocol_version: TLSv1_3, tls_maximum_protocol_version: TLSv1_3}
                 tls_certificates:
                   - certificate_chain: {filename: /etc/obs-mtls/tls.crt}
                     private_key: {filename: /etc/obs-mtls/tls.key}
@@ -127,7 +127,7 @@ static_resources:
           "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
           sni: vmauth.observability-metrics.svc
           common_tls_context:
-            tls_params: {tls_minimum_protocol_version: TLSv1_3}
+            tls_params: {tls_minimum_protocol_version: TLSv1_3, tls_maximum_protocol_version: TLSv1_3}
             tls_certificates:
               - certificate_chain: {filename: /etc/obs-mtls/tls.crt}
                 private_key: {filename: /etc/obs-mtls/tls.key}

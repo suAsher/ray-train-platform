@@ -155,6 +155,18 @@ class VMMTLSContracts(unittest.TestCase):
                     for context in self.server_tls(role, socket["port_value"]):
                         self.exact_sans(context)
 
+    def test_tls13_has_explicit_compatible_minimum_and_maximum(self):
+        # Envoy's upstream maximum defaults to TLS1.2 even though downstream's
+        # defaults to TLS1.3. Merely setting minimum=TLS1.3 validates statically
+        # but fails at handshake with NO_SUPPORTED_VERSIONS_ENABLED.
+        for role in ROLES:
+            contexts = [node["common_tls_context"] for node in walk(self.config(role))
+                        if isinstance(node, dict) and "common_tls_context" in node]
+            self.assertTrue(contexts)
+            for context in contexts:
+                self.assertEqual({"tls_minimum_protocol_version": "TLSv1_3",
+                                  "tls_maximum_protocol_version": "TLSv1_3"}, context["tls_params"])
+
     def test_http_role_gate_is_not_only_a_shared_ca_check(self):
         for role, port in HTTP_PORTS.items():
             listener = self.listener(role, port)

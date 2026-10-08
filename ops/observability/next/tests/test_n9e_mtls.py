@@ -136,6 +136,33 @@ class NightingaleMTLSContractTests(unittest.TestCase):
         self.assertEqual(17000, http.get("Port"))
         self.assertIs(http.get("PProf"), False)
 
+    def test_runtime_waits_for_complete_healthy_sentinel_replica_discovery(self):
+        module = runpy.run_path(str(ROOT / "runtime_helpers.py"))
+        runtime = object.__new__(module["Runtime"])
+        hosts = module["REDIS_HOSTS"]
+        peers = [{"ip": host, "flags": "slave", "master-link-status": "ok",
+                  "role-reported": "slave", "master-host": hosts[0]} for host in hosts[1:]]
+        runtime.master = mock.Mock(return_value=hosts[0])
+        # Redis CLI RESP2 JSON is a list of alternating key/value arrays.
+        runtime.redis = mock.Mock(return_value=json.dumps([
+            [value for pair in peer.items() for value in pair] for peer in peers]))
+        self.assertTrue(runtime.sentinel_topology_ready("client", hosts[2], hosts[0]))
+        for change in ("missing", "duplicate", "down", "wrong_master", "replication_down"):
+            invalid = copy.deepcopy(peers)
+            if change == "missing":
+                invalid.pop()
+            elif change == "duplicate":
+                invalid[1] = copy.deepcopy(invalid[0])
+            elif change == "down":
+                invalid[1]["flags"] = "slave,disconnected"
+            elif change == "wrong_master":
+                invalid[1]["master-host"] = hosts[1]
+            else:
+                invalid[1]["master-link-status"] = "err"
+            runtime.redis.return_value = json.dumps(invalid)
+            with self.subTest(change=change):
+                self.assertFalse(runtime.sentinel_topology_ready("client", hosts[2], hosts[0]))
+
     def test_nightingale_redis_validates_server_and_presents_client_certificate(self):
         redis = section(self.template(), "Redis")
         self.assertEqual("sentinel", redis.get("RedisType"))
@@ -341,6 +368,59 @@ class NightingaleMTLSContractTests(unittest.TestCase):
         self.assertEqual(["manager", "envoy"], [item["name"] for item in containers])
         self.assertEqual(ENVOY_IMAGE, containers[1]["image"])
 
+    def operator_rbac_fixture(self):
+        return {"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRole",
+                "metadata": {"name": "n9e-cnpg"}, "rules": [
+                    {"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "list", "watch"]},
+                    {"apiGroups": ["admissionregistration.k8s.io"], "resources": [
+                        "mutatingwebhookconfigurations", "validatingwebhookconfigurations"], "verbs": ["get", "patch"]},
+                    {"apiGroups": ["postgresql.cnpg.io"], "resources": ["clusterimagecatalogs"], "verbs": ["get", "list", "watch"]},
+                ]}
+
+    def operator_documents_fixture(self):
+        hooks = [{"apiVersion": "admissionregistration.k8s.io/v1", "kind": kind,
+                  "metadata": {"name": f"cnpg-{mode}-webhook-configuration"}, "webhooks": [{
+                      "name": "test.postgresql.cnpg.io", "clientConfig": {"service": {"namespace": ALERTING}},
+                      "rules": [{"apiGroups": ["postgresql.cnpg.io"], "resources": ["clusters"]}],
+                  }]} for kind, mode in (("MutatingWebhookConfiguration", "mutating"),
+                                        ("ValidatingWebhookConfiguration", "validating"))]
+        return [self.operator_fixture(), self.operator_rbac_fixture(), *hooks]
+
+    def test_transformed_operator_rbac_only_patches_its_exact_webhooks(self):
+        module = runpy.run_path(str(ROOT / "scope-cnpg-webhooks.py"))
+        inputs = self.operator_documents_fixture()
+        result = module["transform"](inputs)
+        role = next(item for item in result if item["kind"] == "ClusterRole")
+        webhooks = [rule for rule in role["rules"] if rule["apiGroups"] == ["admissionregistration.k8s.io"]]
+        expected = [{"apiGroups": ["admissionregistration.k8s.io"], "resources": [mode + "webhookconfigurations"],
+                     "verbs": ["get", "patch"], "resourceNames": ["cnpg-" + mode + "-webhook-configuration"]}
+                    for mode in ("mutating", "validating")]
+        self.assertEqual(expected, webhooks)
+        self.assertEqual(4, len(role["rules"]))
+        self.assertEqual(self.operator_rbac_fixture()["rules"][0], role["rules"][0])
+        self.assertEqual(self.operator_rbac_fixture()["rules"][2], role["rules"][-1])
+        self.assertEqual(self.operator_documents_fixture(), inputs, "renderer mutated its input RBAC")
+
+    def test_operator_rbac_renderer_rejects_unexpected_chart_shapes(self):
+        module = runpy.run_path(str(ROOT / "scope-cnpg-webhooks.py"))
+        for change in ("role_name", "wildcard", "extra_resource", "missing_rule", "foreign_names", "foreign_webhook"):
+            inputs = self.operator_documents_fixture()
+            role = inputs[1]
+            if change == "role_name":
+                role["metadata"]["name"] = "other-cnpg"
+            elif change == "wildcard":
+                role["rules"][1]["verbs"].append("*")
+            elif change == "extra_resource":
+                role["rules"][1]["resources"].append("secrets")
+            elif change == "missing_rule":
+                role["rules"].pop()
+            elif change == "foreign_names":
+                role["rules"][1]["resourceNames"] = ["old-production-webhook"]
+            else:
+                inputs[2]["metadata"]["name"] = "old-production-webhook"
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                module["transform"](inputs)
+
     def test_operator_metrics_proxy_only_allows_authenticated_get_metrics(self):
         config = yaml.safe_load((ROOT / "config/cnpg-envoy.yaml").read_text())
         listener = config["static_resources"]["listeners"][0]
@@ -359,6 +439,8 @@ class NightingaleMTLSContractTests(unittest.TestCase):
         self.assertEqual("127.0.0.1", listener["address"]["socket_address"]["address"])
         cluster = next(item for item in config["clusters"] if item["name"] == "vmauth-read")
         tls = cluster["transport_socket"]["typed_config"]["common_tls_context"]
+        self.assertEqual({"tls_minimum_protocol_version": "TLSv1_3",
+                          "tls_maximum_protocol_version": "TLSv1_3"}, tls["tls_params"])
         self.assertEqual([{"san_type": "URI", "matcher": {
             "exact": IDENTITY + "observability-metrics/vmauth"}}],
             tls["validation_context"]["match_typed_subject_alt_names"])

@@ -132,10 +132,10 @@ class Runtime:
             item.chmod(0o400)
         return path
 
-    def redis(self, container, host, *args, sentinel=False, check=True):
+    def redis(self, container, host, *args, sentinel=False, check=True, json_output=False):
         key = "sentinel.env" if sentinel else "redis.env"
         return self.docker("exec", "--env-file", self.private / key, container,
-                           "redis-cli", "--raw", "--tls", "--cacert", "/tls/ca.crt",
+                           "redis-cli", "--json" if json_output else "--raw", "--tls", "--cacert", "/tls/ca.crt",
                            "--cert", "/tls/tls.crt", "--key", "/tls/tls.key",
                            "--sni", host, "-h", host, "-p", "26379" if sentinel else "6379",
                            *args, check=check).stdout.strip()
@@ -151,6 +151,28 @@ class Runtime:
         script = "import json,socket,sys; print(json.dumps(sorted({item[4][0] for item in socket.getaddrinfo(sys.argv[1], None, type=socket.SOCK_STREAM)})))"
         reply = self.docker("exec", client, "python3", "-c", script, host, timeout=15)
         return json.loads(reply.stdout)
+
+    def replica_ready(self, client, replica, master):
+        reply = self.redis(client, replica, "INFO", "replication")
+        fields = dict(line.split(":", 1) for line in reply.splitlines()
+                      if line and not line.startswith("#") and ":" in line)
+        return all(fields.get(key) == value for key, value in {
+            "role": "slave", "master_host": master, "master_link_status": "up",
+            "master_sync_in_progress": "0",
+        }.items())
+
+    def sentinel_topology_ready(self, client, host, master):
+        reply = self.redis(client, host, "SENTINEL", "REPLICAS", "n9e", sentinel=True, json_output=True)
+        rows = json.loads(reply)
+        peers = [dict(zip(row[::2], row[1::2])) if isinstance(row, list) else row for row in rows]
+        if len(peers) != 2 or {peer.get("ip") for peer in peers} != set(REDIS_HOSTS) - {master}:
+            return False
+        return self.master(client, host) == master and all(
+            not ({"s_down", "o_down", "disconnected"} & set(peer.get("flags", "").split(",")))
+            and peer.get("master-link-status") == "ok"
+            and peer.get("role-reported") == "slave"
+            and peer.get("master-host") == master
+            for peer in peers)
 
     def pause_member(self, container):
         # Keep the network alias: the chart's per-member ClusterIP Service DNS

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Scope fixed CNPG webhooks and protect the fixed operator's metrics listener.
 
-This renderer fails until a derived digest is built and reviewed. It only changes
-the expected new operator Deployment and appends its own ConfigMap/Service.
+This renderer fails until a derived digest is built and reviewed. It scopes the
+fixed operator's webhook RBAC, protects metrics, and appends its ConfigMap/Service.
 """
 
 from pathlib import Path
@@ -17,9 +17,21 @@ DERIVED_IMAGE = re.compile(
     r"^harbor\.wellspiking\.ai/guofeng\.su/cnpg-observability:"
     r"[a-zA-Z0-9_.-]+@sha256:[0-9a-f]{64}$"
 )
+WEBHOOK_NAMES = {
+    "MutatingWebhookConfiguration": "cnpg-mutating-webhook-configuration",
+    "ValidatingWebhookConfiguration": "cnpg-validating-webhook-configuration",
+}
+UPSTREAM_CLUSTER_RULES = [
+    {"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "list", "watch"]},
+    {"apiGroups": ["admissionregistration.k8s.io"],
+     "resources": ["mutatingwebhookconfigurations", "validatingwebhookconfigurations"], "verbs": ["get", "patch"]},
+    {"apiGroups": ["postgresql.cnpg.io"], "resources": ["clusterimagecatalogs"], "verbs": ["get", "list", "watch"]},
+]
 
 
 def scope_webhook(document):
+    if document.get("metadata", {}).get("name") != WEBHOOK_NAMES.get(document.get("kind")):
+        raise ValueError("unexpected CNPG webhook configuration name")
     hooks = []
     for hook in document.get("webhooks", []):
         if hook.get("clientConfig", {}).get("service", {}).get("namespace") != NAMESPACE:
@@ -30,6 +42,19 @@ def scope_webhook(document):
             "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": NAMESPACE}},
         })
     return {**document, "webhooks": hooks}
+
+
+def scope_operator_role(document):
+    metadata = document.get("metadata", {})
+    if (document.get("kind") != "ClusterRole" or metadata.get("name") != "n9e-cnpg"
+            or metadata.get("namespace") or document.get("aggregationRule")
+            or document.get("rules") != UPSTREAM_CLUSTER_RULES):
+        raise ValueError("unexpected fixed-chart CNPG operator ClusterRole shape")
+    scoped = [{"apiGroups": ["admissionregistration.k8s.io"],
+               "resources": [mode + "webhookconfigurations"], "verbs": ["get", "patch"],
+               "resourceNames": ["cnpg-" + mode + "-webhook-configuration"]}
+              for mode in ("mutating", "validating")]
+    return {**document, "rules": [document["rules"][0], *scoped, document["rules"][2]]}
 
 
 def secure_operator(document):
@@ -60,21 +85,28 @@ def secure_operator(document):
 
 
 def transform(documents):
-    output, webhook_count, deployment_count, selector = [], 0, 0, None
+    output, webhook_names, role_count, deployment_count, selector = [], set(), 0, 0, None
     for document in documents:
         if document is None:
             continue
         kind, metadata = document.get("kind"), document.get("metadata", {})
         if kind in ("MutatingWebhookConfiguration", "ValidatingWebhookConfiguration"):
             document = scope_webhook(document)
-            webhook_count += 1
+            if metadata.get("name") in webhook_names:
+                raise ValueError("duplicate CNPG webhook configuration")
+            webhook_names.add(metadata.get("name"))
+        elif kind == "ClusterRole" and (metadata.get("name") == "n9e-cnpg" or any(
+                group in ("admissionregistration.k8s.io", "*")
+                for rule in document.get("rules", []) for group in rule.get("apiGroups", []))):
+            document = scope_operator_role(document)
+            role_count += 1
         elif kind == "Deployment" and metadata.get("name") == "n9e-cnpg":
             document = secure_operator(document)
             selector = document["spec"]["selector"]["matchLabels"]
             deployment_count += 1
         output.append(document)
-    if webhook_count != 2 or deployment_count != 1:
-        raise ValueError("expected two CNPG webhook configurations and one operator")
+    if webhook_names != set(WEBHOOK_NAMES.values()) or role_count != 1 or deployment_count != 1:
+        raise ValueError("expected exact CNPG webhook pair, one operator ClusterRole and one Deployment")
     extra_names = {(doc.get("kind"), doc.get("metadata", {}).get("name")) for doc in output}
     if ("ConfigMap", "n9e-cnpg-mtls") in extra_names or ("Service", "n9e-cnpg-metrics") in extra_names:
         raise ValueError("CNPG mTLS resource name collision")

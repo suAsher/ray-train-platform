@@ -142,6 +142,12 @@ def start_redis(rt, ids, redis_password, sentinel_password):
         rt.wait(f"redis_{index}_mtls_auth_ping", lambda index=index, host=host: rt.redis(containers[index], host, "PING") == "PONG")
         rt.wait(f"sentinel_{index}_quorum", lambda index=index, host=host: rt.redis(containers[index], host, "SENTINEL", "CKQUORUM", "n9e", sentinel=True).startswith("OK"))
     rt.wait("redis_three_members_replicating", lambda: "connected_slaves:2" in rt.redis(containers[0], REDIS_HOSTS[0], "INFO", "replication"))
+    # Redis replication and Sentinel voting do not imply that Sentinel has read
+    # the complete replica list from its periodic master INFO yet. A failover
+    # before discovery can leave an unknown healthy replica on the old master.
+    for index, host in enumerate(REDIS_HOSTS):
+        rt.wait(f"sentinel_{index}_complete_replica_topology", lambda index=index, host=host:
+                rt.sentinel_topology_ready(containers[index], host, REDIS_HOSTS[0]))
     return containers
 
 
@@ -265,7 +271,11 @@ def verify(rt, upstream):
         rt.master(redis[index], REDIS_HOSTS[index]) == new_master for index in survivors))
     rt.wait("promoted_member_is_actually_master", lambda: "role:master" in rt.redis(redis[survivor], new_master, "INFO", "replication"))
     rt.wait("new_master_has_replica", lambda: "connected_slaves:1" in rt.redis(redis[survivor], new_master, "INFO", "replication"))
+    replica = next(REDIS_HOSTS[index] for index in survivors if REDIS_HOSTS[index] != new_master)
+    rt.wait("remaining_replica_synced_to_new_dns_master", lambda: rt.replica_ready(redis[survivor], replica, new_master))
     login(rt, client, redis[survivor], new_master, admin_password, "after_failover")
+    old_state = json.loads(rt.docker("inspect", redis[old_index]).stdout)[0]["State"]
+    rt.check("old_master_pair_remained_paused_during_recovery", old_state.get("Paused") is True)
     rt.check_runtime_bounds()
 
 
@@ -296,7 +306,9 @@ def main():
         result["checks"] = rt.checks
         if not result["cleanup_confirmed"] or not rt.checks or not all(rt.checks.values()):
             result["status"] = "failed"
-        text = rt.redact(json.dumps(result, indent=2)) + "\n"
+        # Values here are fixed metadata/boolean checks; error was redacted above.
+        # A one-digit captcha answer must not rewrite check names or JSON fields.
+        text = json.dumps(result, indent=2) + "\n"
         (rt.output / "result.json").write_text(text)
         print(text, end="")
     return 0 if result["status"] == "passed" else 1

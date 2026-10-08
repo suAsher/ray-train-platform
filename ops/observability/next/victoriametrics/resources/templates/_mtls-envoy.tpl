@@ -9,7 +9,7 @@
 {{- $sans = append $sans (dict "san_type" "URI" "matcher" (dict "exact" .)) -}}
 {{- end -}}
 {{- $common := dict
-  "tls_params" (dict "tls_minimum_protocol_version" "TLSv1_3")
+  "tls_params" (dict "tls_minimum_protocol_version" "TLSv1_3" "tls_maximum_protocol_version" "TLSv1_3")
   "tls_certificates" (list (dict "certificate_chain" (dict "filename" "/etc/obs-mtls/tls.crt") "private_key" (dict "filename" "/etc/obs-mtls/tls.key")))
   "validation_context" (dict "trusted_ca" (dict "filename" "/etc/obs-mtls/ca.crt") "match_typed_subject_alt_names" $sans) -}}
 {{- $context := dict "common_tls_context" $common -}}

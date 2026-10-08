@@ -76,6 +76,8 @@ NetworkPolicy 保留为将来网络策略生效时的附加限制，当前不能
 
 原生 HTTP 都绑定 `127.0.0.1`，Envoy 只绑定 Downward API 注入的 Pod IPv4。Envoy HTTP 路由按客户端精确 URI、方法和路径授权；没有 access log、匿名业务路径或外部 admin listener。VMAuth 8427 同时保留 Bearer 校验，8428 只向 vmagent 身份开放 GET `/metrics`。其他组件的自监控也仅允许这个路径。
 
+Envoy上下游均显式设置TLS最小/最大版本为TLS1.3；上游客户端的默认最大版本是TLS1.2，不能只设置minimum。仅靠`--mode validate`无法发现这类运行时握手错误，必须保留实际Envoy→Envoy写查验收。
+
 - storage 原生 RPC 改为回环28400/28401；外部8400仅接纳vminsert，8401仅接纳vmselect。insert/select 的 `storageNode` 被完整覆盖为三个独立回环代理，分别经 mTLS 到三个明确 ordinal，不能把三条路由合并成一个负载均衡 Service。
 - VMAuth 通过本地18480/18481代理访问insert/select。TLS服务端校验使用精确角色URI；Agent/Alert的原生TLS客户端使用专用CA与精确DNS SAN，代理校验其客户端URI。
 - AM HTTP仍由代理保护；9094采用原生TLS/TCP和独立AM gossip CA。只有AM peer身份由该CA签发，不能让主mesh CA的证书获得gossip权限。必须在实际进程中证明没有UDP9094监听。
@@ -116,5 +118,6 @@ VMAuth v1.153.0 将每个 `bearer_token` 同时登记为 Bearer 和 Basic（令�
 - [锁定版 VMCluster 类型](https://github.com/VictoriaMetrics/operator/blob/v0.75.0/api/operator/v1beta1/vmcluster_types.go)
 - [锁定版 VMAgent 队列实现](https://github.com/VictoriaMetrics/operator/blob/v0.75.0/internal/controller/operator/factory/vmagent/vmagent.go)
 - [锁定版 VMAgent 精确 Secret RBAC](https://github.com/VictoriaMetrics/operator/blob/v0.75.0/internal/controller/operator/factory/vmagent/rbac.go)
+- [Envoy TLS协议上下限与客户端默认值](https://www.envoyproxy.io/docs/envoy/latest/api-v3/extensions/transport_sockets/tls/v3/common.proto.html)
 - [锁定版 VMUser Secret 引用与路径路由](https://github.com/VictoriaMetrics/operator/blob/v0.75.0/api/operator/v1beta1/vmuser_types.go)
 - [VMCluster replication and data safety](https://docs.victoriametrics.com/victoriametrics/cluster-victoriametrics/#replication-and-data-safety)
