@@ -46,6 +46,7 @@ metadata:
     {{- include "metrics.labels" . | nindent 4 }}
 spec:
   {{- include "metrics.common" (dict "root" . "component" "vmagent") | nindent 2 }}
+  {{- include "metrics.mtls.pod" (dict "root" . "role" "vmagent" "port" 8429 "reloader" true) | nindent 2 }}
   replicaCount: {{ .Values.agent.replicas }}
   image: {{ toJson .Values.images.agent }}
   imagePullSecrets: {{ toJson .Values.imagePullSecrets }}
@@ -81,7 +82,9 @@ spec:
     cluster: {{ .Values.clusterLabel | quote }}
     telemetry_stage: additive
   remoteWrite:
-    - url: {{ printf "http://vmauth-%s.%s.svc:8427/api/v1/write" .Values.name .Release.Namespace | quote }}
+    - url: {{ printf "https://vmauth-%s.%s.svc:8427/api/v1/write" .Values.name .Release.Namespace | quote }}
+      tlsConfig:
+        {{- include "metrics.mtls.client" (dict "role" "vmagent" "peer" "vmauth" "namespace" .Release.Namespace) | nindent 8 }}
       bearerTokenSecret:
         name: {{ .Values.secrets.write }}
         key: {{ .Values.secrets.tokenKey }}
@@ -90,5 +93,6 @@ spec:
     tmpDataPath: /vmagent_pq/vmagent-remotewrite-data
     maxDiskUsagePerURL: {{ .Values.agent.queueLimit | quote }}
   extraArgs:
+    httpListenAddr: "127.0.0.1:8429"
     memory.allowedPercent: "60"
     remoteWrite.forcePromProto: "true"

@@ -1,0 +1,13 @@
+[
+  {"namespace":"observability-metrics","role":"vmstorage","trust_domain":"mesh","dns_names":["vmstorage.observability-metrics.svc"],"usages":["serverAuth","clientAuth"]},
+  {"namespace":"observability-metrics","role":"vminsert","trust_domain":"mesh","dns_names":["vminsert.observability-metrics.svc"],"usages":["serverAuth","clientAuth"]},
+  {"namespace":"observability-metrics","role":"vmselect","trust_domain":"mesh","dns_names":["vmselect.observability-metrics.svc"],"usages":["serverAuth","clientAuth"]},
+  {"namespace":"observability-metrics","role":"vmauth","trust_domain":"mesh","dns_names":["vmauth.observability-metrics.svc"],"usages":["serverAuth","clientAuth"]},
+  {"namespace":"observability-metrics","role":"vmagent","trust_domain":"mesh","dns_names":["vmagent.observability-metrics.svc"],"usages":["serverAuth","clientAuth"]},
+  {"namespace":"observability-metrics","role":"vmalert","trust_domain":"mesh","dns_names":["vmalert.observability-metrics.svc"],"usages":["serverAuth","clientAuth"]},
+  {"namespace":"observability-metrics","role":"alertmanager","trust_domain":"mesh","dns_names":["alertmanager.observability-metrics.svc"],"usages":["serverAuth","clientAuth"]},
+  {"namespace":"observability-metrics","role":"operator","trust_domain":"mesh","dns_names":["operator.observability-metrics.svc"],"usages":["serverAuth","clientAuth"]},
+  {"namespace":"observability-metrics","role":"alertmanager-gossip","trust_domain":"am-gossip","dns_names":["alertmanager.observability-metrics.svc"],"usages":["serverAuth","clientAuth"]},
+  {"namespace":"observability-metrics","role":"canary","trust_domain":"mesh","dns_names":[],"usages":["clientAuth"]},
+  {"namespace":"observability-metrics","role":"admin","trust_domain":"mesh","dns_names":[],"usages":["clientAuth"]}
+]

@@ -12,6 +12,9 @@ watchNamespaces:
 extraArgs:
   # v0.75.0 VTAgent adds a cluster-wide watch. This phase uses OTel for traces.
   controller.disableReconcileFor: VTAgent
+  metrics-bind-address: "127.0.0.1:8080"
+  health-probe-bind-address: "127.0.0.1:8081"
+  pprof-addr: "127.0.0.1:6060"
 operator:
   disable_prometheus_converter: true
   enable_converter_ownership: false
@@ -35,6 +38,11 @@ serviceMonitor:
 service:
   type: ClusterIP
 priorityClassName: raytrain-observability-additive
+podSecurityContext:
+  enabled: true
+  fsGroup: 65534
+  runAsNonRoot: true
+  runAsUser: 1000
 nodeSelector: {}
 tolerations: []
 affinity:
@@ -61,3 +69,67 @@ env:
     value: "true"
   - name: VM_ENABLESTRICTSECURITY
     value: "true"
+# Apply the operator ConfigMap/identity Secret before this candidate upgrade.
+# The original operator continues unchanged until the coordinated release.
+extraVolumes:
+  - name: mtls-identity
+    secret: {secretName: obs-mtls-operator, defaultMode: 0440}
+  - name: mtls-config
+    configMap: {name: raytrain-next-operator-mtls}
+  - name: mtls-runtime
+    emptyDir: {medium: Memory, sizeLimit: 8Mi}
+extraContainers:
+  - name: mtls-proxy
+    image: harbor.wellspiking.ai/hub/envoyproxy/envoy:v1.39.3@sha256:dd85940439de19a0b6ae8419610363ea0ad351d9a994ea007161c206ec1e1865
+    imagePullPolicy: IfNotPresent
+    command: [/bin/sh, -ec]
+    args:
+      - |
+        case "$POD_IP" in *[!0-9.]*|'') exit 1;; esac
+        sed "s/__POD_IP__/$POD_IP/g" /etc/envoy-source/envoy.yaml > /var/run/envoy/envoy.yaml
+        exec /usr/local/bin/envoy -c /var/run/envoy/envoy.yaml --concurrency 1 --disable-hot-restart --log-level warning
+    env:
+      - name: POD_IP
+        valueFrom: {fieldRef: {fieldPath: status.podIP}}
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      runAsNonRoot: true
+      runAsUser: 65534
+      runAsGroup: 65534
+      capabilities: {drop: [ALL]}
+      seccompProfile: {type: RuntimeDefault}
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: 300m, memory: 128Mi}
+    volumeMounts:
+      - {name: mtls-identity, mountPath: /etc/obs-mtls, readOnly: true}
+      - {name: mtls-config, mountPath: /etc/envoy-source, readOnly: true}
+      - {name: mtls-runtime, mountPath: /var/run/envoy}
+    readinessProbe:
+      httpGet: {path: /healthz, port: 18081}
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 6
+    startupProbe:
+      httpGet: {path: /livez, port: 18081}
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 60
+    livenessProbe:
+      httpGet: {path: /livez, port: 18081}
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 3
+probe:
+  readiness:
+    httpGet: {path: /healthz, port: 18081}
+  liveness:
+    tcpSocket: null
+    httpGet: {path: /app-healthz, port: 18081}
+    failureThreshold: 12
+  startup:
+    httpGet: {path: /healthz, port: 18081}
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 60

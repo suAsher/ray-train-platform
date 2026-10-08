@@ -7,6 +7,7 @@ metadata:
     {{- include "metrics.labels" . | nindent 4 }}
 spec:
   {{- include "metrics.common" (dict "root" . "component" "vmauth") | nindent 2 }}
+  {{- include "metrics.mtls.pod" (dict "root" . "role" "vmauth" "port" 8428 "reloader" true) | nindent 2 }}
   replicaCount: {{ .Values.auth.replicas }}
   image: {{ toJson .Values.images.auth }}
   imagePullSecrets: {{ toJson .Values.imagePullSecrets }}
@@ -23,6 +24,8 @@ spec:
   podDisruptionBudget:
     maxUnavailable: 1
   extraArgs:
+    httpListenAddr: "127.0.0.1:8427"
+    httpInternalListenAddr: "127.0.0.1:8428"
     maxConcurrentRequests: "16"
 ---
 apiVersion: operator.victoriametrics.com/v1beta1
@@ -40,7 +43,7 @@ spec:
   disable_secret_creation: true
   targetRefs:
     - static:
-        url: {{ printf "http://vminsert-%s.%s.svc:8480/insert/%s/prometheus" .Values.name .Release.Namespace (toString .Values.tenantID) | quote }}
+        url: {{ printf "http://127.0.0.1:18480/insert/%s/prometheus" (toString .Values.tenantID) | quote }}
       paths:
         - /api/v1/write
 ---
@@ -59,7 +62,7 @@ spec:
   disable_secret_creation: true
   targetRefs:
     - static:
-        url: {{ printf "http://vmselect-%s.%s.svc:8481/select/%s/prometheus" .Values.name .Release.Namespace (toString .Values.tenantID) | quote }}
+        url: {{ printf "http://127.0.0.1:18481/select/%s/prometheus" (toString .Values.tenantID) | quote }}
       paths:
         - /api/v1/query
         - /api/v1/query_range

@@ -19,6 +19,7 @@ spec:
         runAsNonRoot: true
         runAsUser: 101
         runAsGroup: 101
+        fsGroup: 101
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: schema
@@ -29,12 +30,12 @@ spec:
             - |
               # Never print credentials or pass them as CLI arguments.
               attempt=0
-              until clickhouse-client --host clickhouse-observability --user schema_admin --query 'SELECT 1' >/dev/null 2>&1; do
+              until clickhouse-client --config-file /client/schema-client.xml --query 'SELECT 1' >/dev/null 2>&1; do
                 attempt=$((attempt + 1))
                 test "$attempt" -lt 120
                 sleep 5
               done
-              clickhouse-client --host clickhouse-observability --user schema_admin --multiquery < /schema/schema.sql
+              clickhouse-client --config-file /client/schema-client.xml --multiquery < /schema/schema.sql
               echo 'Additive canary schema initialized on telemetry cluster.'
           env:
             - name: CLICKHOUSE_PASSWORD
@@ -50,8 +51,14 @@ spec:
           volumeMounts:
             - {name: schema, mountPath: /schema, readOnly: true}
             - {name: tmp, mountPath: /tmp}
+            - {name: client, mountPath: /client, readOnly: true}
+            - {name: mesh-tls, mountPath: /etc/obs-mtls, readOnly: true}
       volumes:
         - name: schema
           configMap: {name: observability-clickhouse-schema}
         - name: tmp
           emptyDir: {sizeLimit: 32Mi}
+        - name: client
+          configMap: {name: observability-schema-client}
+        - name: mesh-tls
+          secret: {secretName: obs-mtls-schema-admin, defaultMode: 0440}

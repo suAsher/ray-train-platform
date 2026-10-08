@@ -50,11 +50,21 @@ configs:
     config.yaml:
       clickhouse:
         access:
+          # Operator HTTP client has no mTLS certificate hook. Only its Pod's
+          # fixed hostAliases + Envoy egress may use this loopback HTTP port.
+          scheme: http
+          port: 8123
           secret:
             namespace: observability-analytics
             name: clickhouse-operator-auth
+        security:
+          ipc:
+            mode: Secure
+            bindHost: 127.0.0.1
   # Do not install the default 30-day system log overrides.
   configdFiles:
+    01-clickhouse-01-listen.xml: |
+      <clickhouse><listen_host replace="replace">127.0.0.1</listen_host><listen_try>0</listen_try></clickhouse>
     01-clickhouse-02-logger.xml: |
       <clickhouse><logger><level>warning</level><console>1</console><log remove="1"/><errorlog remove="1"/></logger></clickhouse>
     01-clickhouse-03-query_log.xml: |

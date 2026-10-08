@@ -8,7 +8,6 @@ Existing Secret names are never overwritten. Partial creation requires review.
 import argparse
 import copy
 import fcntl
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -27,6 +26,9 @@ LEAF_DAYS = 90
 CA_DAYS = 1095
 LABEL = "observability.raytrain.io/credential-owner"
 FIELDS = frozenset(("namespace", "role", "trust_domain", "dns_names", "usages", "common_name"))
+PUBLIC_CA_NAMES = {"obs-mtls-cnpg-metrics-ca": "mesh",
+                   "obs-mtls-postgres-client-ca": "postgres-client"}
+KUBE_CONTEXT = "cd9q3b7rf9aidnnbd0je0@81533555-kd9q3q0frjmp21sk5lklg"
 
 
 class CredentialError(Exception):
@@ -181,7 +183,7 @@ def make_secret(item, material):
 
 def check_absent(namespace, name):
     try:
-        result = subprocess.run(["kubectl", "--request-timeout=20s", "-n", namespace,
+        result = subprocess.run(["kubectl", "--context", KUBE_CONTEXT, "--request-timeout=20s", "-n", namespace,
             "get", "secret", name, "--ignore-not-found", "-o", "name"], capture_output=True,
             text=True, timeout=30, check=False)
     except (OSError, subprocess.TimeoutExpired):
@@ -196,19 +198,56 @@ def preflight_absent(plan):
 
 
 def create_secrets(bundle):
+    if not isinstance(bundle, list) or not 1 <= len(bundle) <= 83:
+        raise CredentialError("Invalid Secret bundle size")
+    seen = set()
     for secret in bundle:
         meta = secret.get("metadata", {})
         name = meta.get("name", "")
-        if meta.get("namespace") not in NAMESPACES or not (name.startswith("obs-mtls-") or name == "obs-clickhouse-interserver-auth"):
-            raise CredentialError("Secret is outside the new mTLS scope")
+        namespace = meta.get("namespace")
+        labels = meta.get("labels", {})
+        data = secret.get("stringData", {})
+        key = (namespace, name)
+        if namespace not in NAMESPACES or key in seen or labels.get(LABEL) != "mtls":
+            raise CredentialError("Secret identity/owner is outside the new mTLS scope")
+        seen.add(key)
+        if secret.get("kind") != "Secret" or secret.get("apiVersion") != "v1" or "data" in secret:
+            raise CredentialError("Only v1 Secret stringData is accepted")
+        if not all(isinstance(v, str) and v for v in data.values()):
+            raise CredentialError("Empty or invalid Secret material")
+        if name in PUBLIC_CA_NAMES:
+            if (namespace != "observability-alerting" or secret.get("type") != "Opaque" or
+                    set(data) != {"ca.crt"} or labels.get("observability.raytrain.io/trust-domain") != PUBLIC_CA_NAMES[name]):
+                raise CredentialError("Public CA projection violates its fixed contract")
+        elif name == "obs-clickhouse-interserver-auth":
+            if (namespace != "observability-analytics" or secret.get("type") != "Opaque" or
+                    set(data) != {"username", "password"} or data["username"] != "replica"):
+                raise CredentialError("Interserver Secret violates its fixed contract")
+        else:
+            match = re.fullmatch(r"obs-mtls-([a-z][a-z0-9-]{0,48})", name)
+            expected_uri = f"{URI_ROOT}/{namespace}/{match[1]}" if match else None
+            if (not match or secret.get("type") != "kubernetes.io/tls" or
+                    set(data) != {"tls.crt", "tls.key", "ca.crt"} or
+                    labels.get("observability.raytrain.io/trust-domain") not in TRUST_DOMAINS or
+                    meta.get("annotations", {}).get("observability.raytrain.io/identity") != expected_uri):
+                raise CredentialError("Leaf Secret violates its fixed identity/material contract")
     try:
-        result = subprocess.run(["kubectl", "--request-timeout=20s", "create", "-f", "-", "-o", "name"],
+        result = subprocess.run(["kubectl", "--context", KUBE_CONTEXT, "--request-timeout=20s", "create", "-f", "-", "-o", "name"],
             input=json.dumps({"apiVersion": "v1", "kind": "List", "items": bundle}),
             capture_output=True, text=True, timeout=60, check=False)
     except (OSError, subprocess.TimeoutExpired):
         raise CredentialError("Creation may be partial; inspect names only before retrying") from None
     if result.returncode:
         raise CredentialError("Creation may be partial; diagnostics withheld; do not overwrite or delete")
+
+
+def public_ca_secret(name, domain, certificate):
+    if PUBLIC_CA_NAMES.get(name) != domain or not isinstance(certificate, str) or not certificate:
+        raise CredentialError("Unknown or invalid public CA projection")
+    return {"apiVersion": "v1", "kind": "Secret", "type": "Opaque", "metadata": {
+        "namespace": "observability-alerting", "name": name, "labels": {
+            LABEL: "mtls", "app.kubernetes.io/part-of": "raytrain-observability-additive",
+            "observability.raytrain.io/trust-domain": domain}}, "stringData": {"ca.crt": certificate}}
 
 
 def interserver_secret():
@@ -224,6 +263,7 @@ def main(argv=None):
     parser.add_argument("--create", action="store_true")
     parser.add_argument("--pki-dir", type=Path)
     parser.add_argument("--include-clickhouse-interserver", action="store_true")
+    parser.add_argument("--include-n9e-ca-projections", action="store_true")
     args = parser.parse_args(argv)
     try:
         plan = validate_plan([entry for path in args.manifests for entry in json.loads(Path(path).read_text())])
@@ -232,15 +272,28 @@ def main(argv=None):
                 print(f"{item['namespace']}/obs-mtls-{item['role']} ca={item['trust_domain']} identity={identity(item)}")
             if args.include_clickhouse_interserver:
                 print("observability-analytics/obs-clickhouse-interserver-auth keys=username,password")
+            if args.include_n9e_ca_projections:
+                for name in PUBLIC_CA_NAMES:
+                    print(f"observability-alerting/{name} keys=ca.crt (public CA only)")
             return 0
         if args.pki_dir is None:
             raise CredentialError("--create requires the approved private --pki-dir")
         preflight_absent(plan)
         if args.include_clickhouse_interserver:
             check_absent("observability-analytics", "obs-clickhouse-interserver-auth")
+        if args.include_n9e_ca_projections:
+            if not {"mesh", "postgres-client"} <= {item["trust_domain"] for item in plan}:
+                raise CredentialError("N9E CA projections require both domains in the same reviewed plan")
+            for name in PUBLIC_CA_NAMES:
+                check_absent("observability-alerting", name)
         bundle = [make_secret(item, issue_material(item, args.pki_dir)) for item in plan]
         if args.include_clickhouse_interserver:
             bundle.append(interserver_secret())
+        if args.include_n9e_ca_projections:
+            for name, domain in PUBLIC_CA_NAMES.items():
+                certificate = next(secret["stringData"]["ca.crt"] for secret in bundle
+                    if secret["metadata"]["labels"].get("observability.raytrain.io/trust-domain") == domain)
+                bundle.append(public_ca_secret(name, domain, certificate))
         create_secrets(bundle)
         print(f"Created {len(bundle)} new Secrets; values withheld; CA keys retained only in private builder PKI")
         return 0

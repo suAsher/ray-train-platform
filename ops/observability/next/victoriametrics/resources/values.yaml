@@ -72,6 +72,14 @@ alertmanager:
 configReloaderResources:
   requests: {cpu: 20m, memory: 32Mi}
   limits: {cpu: 100m, memory: 128Mi}
+mtls:
+  # Security is mandatory for this chart; there is no plaintext mode.
+  image: harbor.wellspiking.ai/hub/envoyproxy/envoy:v1.39.3@sha256:dd85940439de19a0b6ae8419610363ea0ad351d9a994ea007161c206ec1e1865
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 300m, memory: 128Mi}
+  # Extra namespaces are never inferred from a Kubernetes label or an HTTP header.
+  readRoleURI: spiffe://observability.raytrain.local/observability-alerting/nightingale
 networkPolicy:
   enabled: true
   apiServerCIDRs: [10.0.96.1/32, 172.28.2.64/32, 172.28.5.50/32]

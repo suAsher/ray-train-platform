@@ -13,6 +13,7 @@ spec:
   imagePullSecrets: {{ toJson .Values.imagePullSecrets }}
   vmstorage:
     {{- include "metrics.common" (dict "root" . "component" "vmstorage") | nindent 4 }}
+    {{- include "metrics.mtls.pod" (dict "root" . "role" "vmstorage" "port" 8482) | nindent 4 }}
     replicaCount: {{ .Values.storage.replicas }}
     image: {{ toJson .Values.images.storage }}
     resources: {{ toJson .Values.storage.resources }}
@@ -31,11 +32,15 @@ spec:
     podDisruptionBudget:
       maxUnavailable: 1
     extraArgs:
+      httpListenAddr: "127.0.0.1:8482"
+      vminsertAddr: "127.0.0.1:28400"
+      vmselectAddr: "127.0.0.1:28401"
       dedup.minScrapeInterval: {{ .Values.dedupInterval | quote }}
       memory.allowedPercent: "60"
       storage.minFreeDiskSpaceBytes: 5GiB
   vmselect:
     {{- include "metrics.common" (dict "root" . "component" "vmselect") | nindent 4 }}
+    {{- include "metrics.mtls.pod" (dict "root" . "role" "vmselect" "port" 8481) | nindent 4 }}
     replicaCount: {{ .Values.select.replicas }}
     image: {{ toJson .Values.images.select }}
     resources: {{ toJson .Values.select.resources }}
@@ -46,6 +51,10 @@ spec:
     podDisruptionBudget:
       maxUnavailable: 1
     extraArgs:
+      httpListenAddr: "127.0.0.1:8481"
+      storageNode: {{ include "metrics.mtls.storageNodes" (dict "root" . "base" 19400) | quote }}
+      # Optional cross-select cache invalidation is not exposed in this phase.
+      selectNode: ""
       dedup.minScrapeInterval: {{ .Values.dedupInterval | quote }}
       search.denyPartialResponse: "true"
       memory.allowedPercent: "60"
@@ -53,10 +62,13 @@ spec:
       search.maxQueryDuration: 30s
   vminsert:
     {{- include "metrics.common" (dict "root" . "component" "vminsert") | nindent 4 }}
+    {{- include "metrics.mtls.pod" (dict "root" . "role" "vminsert" "port" 8480) | nindent 4 }}
     replicaCount: {{ .Values.insert.replicas }}
     image: {{ toJson .Values.images.insert }}
     resources: {{ toJson .Values.insert.resources }}
     podDisruptionBudget:
       maxUnavailable: 1
     extraArgs:
+      httpListenAddr: "127.0.0.1:8480"
+      storageNode: {{ include "metrics.mtls.storageNodes" (dict "root" . "base" 18400) | quote }}
       memory.allowedPercent: "60"

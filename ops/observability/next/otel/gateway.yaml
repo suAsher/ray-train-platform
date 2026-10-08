@@ -75,20 +75,15 @@ spec:
               valueFrom:
                 secretKeyRef: {name: otel-clickhouse-auth, key: password}
             - {name: GOMEMLIMIT, value: 768MiB}
-          ports:
-            - {name: grpc, containerPort: 4317}
-            - {name: http, containerPort: 4318}
-            - {name: health, containerPort: 13133}
-            - {name: metrics, containerPort: 8888}
           startupProbe:
-            httpGet: {path: /, port: health}
+            httpGet: {path: /readyz, port: 18080}
             periodSeconds: 5
             failureThreshold: 24
           readinessProbe:
-            httpGet: {path: /, port: health}
+            httpGet: {path: /readyz, port: 18080}
             periodSeconds: 10
           livenessProbe:
-            httpGet: {path: /, port: health}
+            httpGet: {path: /livez, port: 18080}
             periodSeconds: 20
             failureThreshold: 3
           resources:
@@ -101,18 +96,60 @@ spec:
           volumeMounts:
             - {name: config, mountPath: /etc/otelcol/config, readOnly: true}
             - {name: queue, mountPath: /var/lib/otelcol}
-            - {name: receiver-tls, mountPath: /etc/otelcol/tls, readOnly: true}
-            - {name: clickhouse-ca, mountPath: /etc/otelcol/clickhouse-ca, readOnly: true}
+            - {name: mtls, mountPath: /etc/obs-mtls, readOnly: true}
+        - name: envoy
+          image: harbor.wellspiking.ai/hub/envoyproxy/envoy:v1.39.3@sha256:dd85940439de19a0b6ae8419610363ea0ad351d9a994ea007161c206ec1e1865
+          imagePullPolicy: IfNotPresent
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              umask 077
+              sed "s/__POD_IP__/${POD_IP:?}/g" /etc/envoy-template/proxy-otel.yaml > /var/run/envoy/envoy.yaml
+              exec envoy -c /var/run/envoy/envoy.yaml --concurrency 1 --disable-hot-restart
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef: {fieldPath: status.podIP}
+          ports:
+            - {name: grpc, containerPort: 4317}
+            - {name: http, containerPort: 4318}
+            - {name: metrics, containerPort: 8888}
+            - {name: health, containerPort: 18080}
+          startupProbe:
+            tcpSocket: {port: health}
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            httpGet: {path: /readyz, port: health}
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: {port: health}
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 250m, memory: 256Mi}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: envoy-config, mountPath: /etc/envoy-template, readOnly: true}
+            - {name: envoy-run, mountPath: /var/run/envoy}
+            - {name: mtls, mountPath: /etc/obs-mtls, readOnly: true}
       volumes:
         - name: config
           configMap: {name: otel-gateway-config}
-        - name: receiver-tls
+        - name: envoy-config
+          configMap: {name: otel-gateway-proxy}
+        - name: envoy-run
+          emptyDir: {medium: Memory, sizeLimit: 16Mi}
+        - name: mtls
           secret:
-            secretName: otel-canary-server-tls
-            defaultMode: 0440
-        - name: clickhouse-ca
-          secret:
-            secretName: clickhouse-server-ca
+            secretName: obs-mtls-otel-gateway
             defaultMode: 0440
   volumeClaimTemplates:
     - metadata:

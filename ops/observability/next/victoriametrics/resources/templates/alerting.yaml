@@ -14,6 +14,36 @@ spec:
   resources: {{ toJson .Values.alertmanager.resources }}
   configReloaderImage: {{ .Values.images.configReloader | quote }}
   configReloaderResources: {{ toJson .Values.configReloaderResources }}
+  port: "9093"
+  listenLocal: true
+  extraArgs:
+    web.listen-address: "127.0.0.1:9093"
+  {{- include "metrics.mtls.pod" (dict "root" . "role" "alertmanager" "port" 9093 "reloader" true) | nindent 2 }}
+  gossipConfig:
+    tls_server_config:
+      cert_secret_ref:
+        name: obs-mtls-alertmanager-gossip
+        key: tls.crt
+      key_secret_ref:
+        name: obs-mtls-alertmanager-gossip
+        key: tls.key
+      client_ca_secret_ref:
+        name: obs-mtls-alertmanager-gossip
+        key: ca.crt
+      client_auth_type: RequireAndVerifyClientCert
+      min_version: TLS13
+    tls_client_config:
+      ca_secret_ref:
+        name: obs-mtls-alertmanager-gossip
+        key: ca.crt
+      cert_secret_ref:
+        name: obs-mtls-alertmanager-gossip
+        key: tls.crt
+      key_secret_ref:
+        name: obs-mtls-alertmanager-gossip
+        key: tls.key
+      server_name: {{ printf "alertmanager.%s.svc" .Release.Namespace | quote }}
+      insecure_skip_verify: false
   selectAllByDefault: false
   configRawYaml: |
     global:
@@ -56,6 +86,10 @@ spec:
   resources: {{ toJson .Values.alert.resources }}
   configReloaderImage: {{ .Values.images.configReloader | quote }}
   configReloaderResources: {{ toJson .Values.configReloaderResources }}
+  port: "8880"
+  extraArgs:
+    httpListenAddr: "127.0.0.1:8880"
+  {{- include "metrics.mtls.pod" (dict "root" . "role" "vmalert" "port" 8880 "reloader" true) | nindent 2 }}
   evaluationInterval: {{ .Values.scrapeInterval }}
   selectAllByDefault: false
   ruleSelector:
@@ -65,27 +99,32 @@ spec:
     cluster: {{ .Values.clusterLabel | quote }}
     telemetry_stage: additive
   datasource:
-    url: {{ printf "http://vmauth-%s.%s.svc:8427" .Values.name .Release.Namespace | quote }}
+    url: {{ printf "https://vmauth-%s.%s.svc:8427" .Values.name .Release.Namespace | quote }}
+    tlsConfig:
+      {{- include "metrics.mtls.client" (dict "role" "vmalert" "peer" "vmauth" "namespace" .Release.Namespace) | nindent 6 }}
     bearerTokenSecret:
       name: {{ .Values.secrets.read }}
       key: {{ .Values.secrets.tokenKey }}
   remoteRead:
-    url: {{ printf "http://vmauth-%s.%s.svc:8427" .Values.name .Release.Namespace | quote }}
+    url: {{ printf "https://vmauth-%s.%s.svc:8427" .Values.name .Release.Namespace | quote }}
+    tlsConfig:
+      {{- include "metrics.mtls.client" (dict "role" "vmalert" "peer" "vmauth" "namespace" .Release.Namespace) | nindent 6 }}
     bearerTokenSecret:
       name: {{ .Values.secrets.read }}
       key: {{ .Values.secrets.tokenKey }}
   remoteWrite:
-    url: {{ printf "http://vmauth-%s.%s.svc:8427" .Values.name .Release.Namespace | quote }}
+    url: {{ printf "https://vmauth-%s.%s.svc:8427" .Values.name .Release.Namespace | quote }}
+    tlsConfig:
+      {{- include "metrics.mtls.client" (dict "role" "vmalert" "peer" "vmauth" "namespace" .Release.Namespace) | nindent 6 }}
     bearerTokenSecret:
       name: {{ .Values.secrets.write }}
       key: {{ .Values.secrets.tokenKey }}
   notifiers:
-    - selector:
-        namespaceSelector:
-          matchNames: [{{ .Release.Namespace }}]
-        labelSelector:
-          matchLabels:
-            observability.raytrain.io/notifier: canary-only
+    {{- range $ordinal := until (int .Values.alertmanager.replicas) }}
+    - url: {{ printf "https://vmalertmanager-%s-%d.vmalertmanager-%s.%s.svc:9093" $.Values.name $ordinal $.Values.name $.Release.Namespace | quote }}
+      tlsConfig:
+        {{- include "metrics.mtls.client" (dict "role" "vmalert" "peer" "alertmanager" "namespace" $.Release.Namespace) | nindent 8 }}
+    {{- end }}
   podDisruptionBudget:
     maxUnavailable: 1
 ---

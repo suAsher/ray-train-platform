@@ -80,7 +80,7 @@ def validate_agent(objects):
     remote = spec.get("remoteWrite", [])
     require(len(remote) == 1, "unapproved extra remote write destination")
     require(remote[0].get("url") ==
-            f"http://vmauth-raytrain-next.{NAMESPACE}.svc:8427/api/v1/write",
+            f"https://vmauth-raytrain-next.{NAMESPACE}.svc:8427/api/v1/write",
             "agent must write through authenticated gateway")
     require(remote[0].get("bearerTokenSecret") == {"name": "vm-self-write", "key": "token"},
             "agent credential must be approved write Secret reference")
@@ -107,9 +107,9 @@ def validate_auth(objects):
         refs = user.get("targetRefs", [])
         require(len(refs) == 1, "unapproved extra route")
         read = name == "self-read"
-        component, port, action = ("vmselect", 8481, "select") if read else ("vminsert", 8480, "insert")
+        port, action = (18481, "select") if read else (18480, "insert")
         require(refs[0].get("static", {}).get("url") ==
-                f"http://{component}-raytrain-next.{NAMESPACE}.svc:{port}/{action}/1001/prometheus",
+                f"http://127.0.0.1:{port}/{action}/1001/prometheus",
                 "auth tenant/backend route changed")
         require(set(refs[0].get("paths", [])) == (read_paths if read else {"/api/v1/write"}),
                 "auth endpoint scope expanded")

@@ -5,9 +5,18 @@ resources:
   - keeper.yaml
   - clickhouse.yaml
   - network-policy.yaml
+  - operator-egress-services.yaml
 # Run bootstrap-job.yaml only after Keeper and both CH replicas are Ready.
 configMapGenerator:
   - name: observability-clickhouse-schema
     files: [schema.sql]
+  - name: observability-proxy-clickhouse
+    files: [proxy-clickhouse.yaml]
+  - name: observability-proxy-keeper
+    files: [proxy-keeper.yaml]
+  - name: observability-proxy-operator
+    files: [proxy-operator.yaml]
+  - name: observability-schema-client
+    files: [schema-client.xml]
 generatorOptions:
   disableNameSuffixHash: true

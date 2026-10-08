@@ -124,6 +124,12 @@ class ClickHouseMTLSTests(unittest.TestCase):
         self.assertEqual(["GRANT SELECT ON observability_canary.*"],
                          users["observability_query/grants/query"])
         self.assertIn("secretKeyRef", users["schema_admin/password_sha256_hex"]["valueFrom"])
+        files = installation(CH / "clickhouse.yaml")["spec"]["configuration"]["files"]
+        override = ET.fromstring(files["users.d/zz-mtls-operator.xml"])
+        operator = override.find("users/clickhouse_operator")
+        self.assertEqual(["networks"], [child.tag for child in operator])
+        self.assertEqual("127.0.0.1", operator.find("networks/ip").text)
+        self.assertEqual("replace", operator.find("networks").get("replace"))
 
     def test_coordination_outbound_is_fixed_loopback_and_raft_dns_is_preserved(self):
         cr = installation(CH / "clickhouse.yaml")

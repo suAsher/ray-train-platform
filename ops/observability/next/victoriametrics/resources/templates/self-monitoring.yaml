@@ -1,12 +1,12 @@
 {{- $targets := list
-  (dict "component" "vmstorage" "port" 8482)
-  (dict "component" "vmselect" "port" 8481)
-  (dict "component" "vminsert" "port" 8480)
-  (dict "component" "vmagent" "port" 8429)
-  (dict "component" "vmauth" "port" 8428)
-  (dict "component" "vmalert" "port" 8880)
-  (dict "component" "vmalertmanager" "port" 9093)
-  (dict "component" "vm-operator" "port" 8080)
+  (dict "component" "vmstorage" "role" "vmstorage" "port" 8482)
+  (dict "component" "vmselect" "role" "vmselect" "port" 8481)
+  (dict "component" "vminsert" "role" "vminsert" "port" 8480)
+  (dict "component" "vmagent" "role" "vmagent" "port" 8429)
+  (dict "component" "vmauth" "role" "vmauth" "port" 8428)
+  (dict "component" "vmalert" "role" "vmalert" "port" 8880)
+  (dict "component" "vmalertmanager" "role" "alertmanager" "port" 9093)
+  (dict "component" "vm-operator" "role" "operator" "port" 8080)
 -}}
 {{- range $targets }}
 ---
@@ -26,28 +26,32 @@ spec:
     - name: http-metrics
       port: {{ .port }}
       targetPort: {{ .port }}
-{{- end }}
 ---
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMServiceScrape
 metadata:
-  name: metrics-self-only
-  namespace: {{ .Release.Namespace }}
+  name: {{ printf "metrics-self-%s" .component }}
+  namespace: {{ $.Release.Namespace }}
   labels:
     observability.raytrain.io/scrape: metrics-self
-    {{- include "metrics.labels" . | nindent 4 }}
+    {{- include "metrics.labels" $ | nindent 4 }}
 spec:
   namespaceSelector:
-    matchNames: [{{ .Release.Namespace }}]
+    matchNames: [{{ $.Release.Namespace }}]
   selector:
     matchLabels:
       observability.raytrain.io/self-metrics: "true"
+      observability.raytrain.io/component: {{ .component }}
   endpoints:
     - port: http-metrics
       path: /metrics
-      interval: {{ .Values.scrapeInterval }}
+      scheme: https
+      tlsConfig:
+        {{- include "metrics.mtls.client" (dict "role" "vmagent" "peer" .role "namespace" $.Release.Namespace) | nindent 8 }}
+      interval: {{ $.Values.scrapeInterval }}
       scrapeTimeout: 10s
       honorLabels: false
       relabelConfigs:
         - sourceLabels: [__meta_kubernetes_service_label_observability_raytrain_io_component]
           targetLabel: component
+{{- end }}

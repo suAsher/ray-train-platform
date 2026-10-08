@@ -10,24 +10,52 @@ spec:
       reclaimPolicy: Retain
     templates:
       podTemplate: keeper
+      hostTemplate: keeper-ports
       dataVolumeClaimTemplate: keeper-data
   configuration:
     clusters:
       - name: keeper
+        secure: "yes"
+        insecure: "no"
         layout:
           replicasCount: 3
     settings:
       logger/level: warning
       logger/console: "true"
-      listen_host: "0.0.0.0"
-      keeper_server/four_letter_word_white_list: "ruok,stat,mntr,conf"
+      listen_host: "127.0.0.1"
+      keeper_server/four_letter_word_white_list: "ruok"
       keeper_server/coordination_settings/raft_logs_level: warning
       prometheus/endpoint: /metrics
       prometheus/port: "7000"
       prometheus/metrics: "true"
       prometheus/events: "true"
       prometheus/asynchronous_metrics: "true"
+    files:
+      zz-mtls.xml: |
+        <clickhouse>
+          <listen_host replace="replace">127.0.0.1</listen_host>
+          <interserver_listen_host replace="replace">127.0.0.1</interserver_listen_host>
+          <openSSL replace="replace">
+            <server>
+              <certificateFile>/etc/obs-mtls/tls.crt</certificateFile><privateKeyFile>/etc/obs-mtls/tls.key</privateKeyFile>
+              <caConfig>/etc/obs-mtls/ca.crt</caConfig><loadDefaultCAFile>false</loadDefaultCAFile>
+              <verificationMode>strict</verificationMode><disableProtocols>sslv2,sslv3,tlsv1,tlsv1_1</disableProtocols>
+            </server>
+            <client>
+              <certificateFile>/etc/obs-mtls/tls.crt</certificateFile><privateKeyFile>/etc/obs-mtls/tls.key</privateKeyFile>
+              <caConfig>/etc/obs-mtls/ca.crt</caConfig><loadDefaultCAFile>false</loadDefaultCAFile>
+              <verificationMode>strict</verificationMode><extendedVerification>true</extendedVerification>
+              <invalidCertificateHandler><name>RejectCertificateHandler</name></invalidCertificateHandler>
+              <disableProtocols>sslv2,sslv3,tlsv1,tlsv1_1</disableProtocols>
+            </client>
+          </openSSL>
+        </clickhouse>
   templates:
+    hostTemplates:
+      - name: keeper-ports
+        spec:
+          zkPortSecure: 2281
+          raftPort: 9234
     podTemplates:
       - name: keeper
         metadata:
@@ -61,6 +89,18 @@ spec:
             - name: clickhouse-keeper
               image: harbor.wellspiking.ai/hub/clickhouse/clickhouse-keeper:26.8.20.9@sha256:1d22967f12b0652a2bd22c338338e465c2bf8ef60691b74395fcd0b2e1f53c6f
               imagePullPolicy: IfNotPresent
+              startupProbe:
+                exec: {command: [/bin/sh, -ec, "pgrep -f 'clickhouse-keeper' >/dev/null"]}
+                periodSeconds: 5
+                failureThreshold: 60
+              readinessProbe:
+                exec: {command: [/bin/bash, -ec, "exec 3<>/dev/tcp/127.0.0.1/9182; printf 'GET /ready HTTP/1.0\r\n\r\n' >&3; head -1 <&3 | grep -q '200' "]}
+                periodSeconds: 10
+              livenessProbe:
+                exec: {command: [/bin/sh, -ec, "pgrep -f 'clickhouse-keeper' >/dev/null"]}
+                periodSeconds: 20
+              volumeMounts:
+                - {name: mesh-tls, mountPath: /etc/obs-mtls, readOnly: true}
               resources:
                 requests: {cpu: 250m, memory: 512Mi}
                 limits: {cpu: 500m, memory: 1Gi}
@@ -69,6 +109,32 @@ spec:
                 capabilities: {drop: [ALL]}
               ports:
                 - {name: prometheus, containerPort: 7000}
+            - name: envoy
+              image: harbor.wellspiking.ai/hub/envoyproxy/envoy:v1.39.3@sha256:dd85940439de19a0b6ae8419610363ea0ad351d9a994ea007161c206ec1e1865
+              command: [/bin/sh, -ec]
+              args: ['sed "s/__POD_IP__/$POD_IP/g" /etc/envoy-source/proxy-keeper.yaml > /var/run/envoy/config.yaml; exec envoy -c /var/run/envoy/config.yaml --concurrency 1 --disable-hot-restart']
+              env:
+                - name: POD_IP
+                  valueFrom: {fieldRef: {fieldPath: status.podIP}}
+              resources:
+                requests: {cpu: 100m, memory: 128Mi}
+                limits: {cpu: 250m, memory: 256Mi}
+              securityContext:
+                readOnlyRootFilesystem: true
+                allowPrivilegeEscalation: false
+                capabilities: {drop: [ALL]}
+              readinessProbe: {httpGet: {path: /readyz, port: 18080}, periodSeconds: 5}
+              volumeMounts:
+                - {name: proxy-config, mountPath: /etc/envoy-source, readOnly: true}
+                - {name: proxy-runtime, mountPath: /var/run/envoy}
+                - {name: mesh-tls, mountPath: /etc/obs-mtls, readOnly: true}
+          volumes:
+            - name: mesh-tls
+              secret: {secretName: obs-mtls-keeper, defaultMode: 0440}
+            - name: proxy-config
+              configMap: {name: observability-proxy-keeper}
+            - name: proxy-runtime
+              emptyDir: {sizeLimit: 16Mi}
     volumeClaimTemplates:
       - name: keeper-data
         provisioner: Operator

@@ -168,10 +168,11 @@ class VMMTLSContracts(unittest.TestCase):
             listener = self.listener(role, 18081)
             filters = [node for node in walk(listener) if isinstance(node, dict)
                        and node.get("name") == "envoy.filters.http.health_check"]
-            self.assertEqual(1, len(filters), f"{role} public health must not unconditionally return 200")
-            health = filters[0]["typed_config"]
-            self.assertIs(health["pass_through_mode"], False)
-            self.assertTrue(health.get("cluster_min_healthy_percentages"))
+            self.assertGreaterEqual(len(filters), 2, f"{role} readiness and app health need backend checks")
+            for item in filters:
+                health = item["typed_config"]
+                self.assertIs(health["pass_through_mode"], False)
+                self.assertTrue(health.get("cluster_min_healthy_percentages"))
             for node in walk(listener):
                 if isinstance(node, dict):
                     self.assertNotIn("route", node, "public health proxies a backend endpoint")
@@ -200,9 +201,12 @@ class VMMTLSContracts(unittest.TestCase):
             for bound in ("requests", "limits"):
                 self.assertTrue(all(key in sidecar["resources"][bound] for key in ("cpu", "memory")))
             self.assertIn("--concurrency 1", " ".join(sidecar["args"]))
+            self.assertEqual("/livez", sidecar["livenessProbe"]["httpGet"]["path"])
             volumes = {item["name"]: item for item in spec["volumes"]}
             identity_volumes = [item for item in volumes.values() if item.get("secret", {}).get("secretName") == f"obs-mtls-{role}"]
             self.assertEqual(1, len(identity_volumes))
+            self.assertEqual(0o440, identity_volumes[0]["secret"]["defaultMode"])
+            self.assertEqual(65534, spec["securityContext"]["fsGroup"])
             self.assertFalse(any("hostPath" in item for item in volumes.values()))
 
     def test_reloader_http_is_loopback_and_reload_url_stays_inside_pod(self):
@@ -265,6 +269,13 @@ class VMMTLSContracts(unittest.TestCase):
         self.assertEqual(f"alertmanager.{NS}.svc", client.get("server_name"))
         self.assertIs(client.get("insecure_skip_verify"), False)
         self.assertEqual(3, am["replicaCount"])
+
+    def test_local_only_am_preserves_service_named_target_port(self):
+        am = self.spec("alertmanager")
+        self.assertIs(am.get("listenLocal"), True)
+        ports = [port for container in am.get("containers", []) for port in container.get("ports", [])]
+        self.assertIn({"name": "web", "containerPort": 9093, "protocol": "TCP"}, ports,
+                      "Operator removes AM web containerPort in listenLocal mode")
 
     def test_notifier_is_authenticated_https(self):
         notifiers = self.spec("vmalert")["notifiers"]

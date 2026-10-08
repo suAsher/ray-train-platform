@@ -1,0 +1,13 @@
+{{- range $role := list "vmstorage" "vminsert" "vmselect" "vmauth" "vmagent" "vmalert" "alertmanager" "operator" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-%s-mtls" $.Values.name $role }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "metrics.labels" $ | nindent 4 }}
+data:
+  envoy.yaml: |
+    {{- include "metrics.mtls.config" (dict "root" $ "role" $role) | fromJson | toYaml | nindent 4 }}
+{{- end }}

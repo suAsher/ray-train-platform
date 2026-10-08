@@ -1,0 +1,799 @@
+{
+  "static_resources": {
+    "listeners": [
+      {
+        "name": "sql-http",
+        "address": {
+          "socket_address": {
+            "address": "__POD_IP__",
+            "port_value": 8443
+          }
+        },
+        "filter_chains": [
+          {
+            "transport_socket": {
+              "name": "envoy.transport_sockets.tls",
+              "typed_config": {
+                "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext",
+                "require_client_certificate": true,
+                "common_tls_context": {
+                  "tls_params": {"tls_minimum_protocol_version": "TLSv1_2"},
+                  "tls_certificates": [
+                    {
+                      "certificate_chain": {"filename": "/etc/obs-mtls/tls.crt"},
+                      "private_key": {"filename": "/etc/obs-mtls/tls.key"}
+                    }
+                  ],
+                  "validation_context": {
+                    "trusted_ca": {"filename": "/etc/obs-mtls/ca.crt"},
+                    "match_typed_subject_alt_names": [
+                      {
+                        "san_type": "URI",
+                        "matcher": {"exact": "spiffe://observability.raytrain.local/observability-analytics/ch-operator"}
+                      },
+                      {
+                        "san_type": "URI",
+                        "matcher": {
+                          "exact": "spiffe://observability.raytrain.local/observability-analytics/schema-admin"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "filters": [
+              {
+                "name": "envoy.filters.network.tcp_proxy",
+                "typed_config": {
+                  "@type": "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy",
+                  "stat_prefix": "sql-http",
+                  "cluster": "native-http",
+                  "idle_timeout": "0s"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "sql-native",
+        "address": {
+          "socket_address": {
+            "address": "__POD_IP__",
+            "port_value": 9440
+          }
+        },
+        "filter_chains": [
+          {
+            "transport_socket": {
+              "name": "envoy.transport_sockets.tls",
+              "typed_config": {
+                "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext",
+                "require_client_certificate": true,
+                "common_tls_context": {
+                  "tls_params": {
+                    "tls_minimum_protocol_version": "TLSv1_2"
+                  },
+                  "tls_certificates": [
+                    {
+                      "certificate_chain": {
+                        "filename": "/etc/obs-mtls/tls.crt"
+                      },
+                      "private_key": {
+                        "filename": "/etc/obs-mtls/tls.key"
+                      }
+                    }
+                  ],
+                  "validation_context": {
+                    "trusted_ca": {
+                      "filename": "/etc/obs-mtls/ca.crt"
+                    },
+                    "match_typed_subject_alt_names": [
+                      {
+                        "san_type": "URI",
+                        "matcher": {
+                          "exact": "spiffe://observability.raytrain.local/observability-otel/otel-gateway"
+                        }
+                      },
+                      {
+                        "san_type": "URI",
+                        "matcher": {
+                          "exact": "spiffe://observability.raytrain.local/observability-analytics/clickhouse"
+                        }
+                      },
+                      {
+                        "san_type": "URI",
+                        "matcher": {
+                          "exact": "spiffe://observability.raytrain.local/observability-analytics/schema-admin"
+                        }
+                      },
+                      {
+                        "san_type": "URI",
+                        "matcher": {
+                          "exact": "spiffe://observability.raytrain.local/observability-analytics/query-admin"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "filters": [
+              {
+                "name": "envoy.filters.network.tcp_proxy",
+                "typed_config": {
+                  "@type": "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy",
+                  "stat_prefix": "sql-native",
+                  "cluster": "native-tcp",
+                  "idle_timeout": "0s"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "replication",
+        "address": {
+          "socket_address": {
+            "address": "__POD_IP__",
+            "port_value": 9010
+          }
+        },
+        "filter_chains": [
+          {
+            "transport_socket": {
+              "name": "envoy.transport_sockets.tls",
+              "typed_config": {
+                "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext",
+                "require_client_certificate": true,
+                "common_tls_context": {
+                  "tls_params": {
+                    "tls_minimum_protocol_version": "TLSv1_2"
+                  },
+                  "tls_certificates": [
+                    {
+                      "certificate_chain": {
+                        "filename": "/etc/obs-mtls/tls.crt"
+                      },
+                      "private_key": {
+                        "filename": "/etc/obs-mtls/tls.key"
+                      }
+                    }
+                  ],
+                  "validation_context": {
+                    "trusted_ca": {
+                      "filename": "/etc/obs-mtls/ca.crt"
+                    },
+                    "match_typed_subject_alt_names": [
+                      {
+                        "san_type": "URI",
+                        "matcher": {
+                          "exact": "spiffe://observability.raytrain.local/observability-analytics/clickhouse"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "filters": [
+              {
+                "name": "envoy.filters.network.tcp_proxy",
+                "typed_config": {
+                  "@type": "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy",
+                  "stat_prefix": "replication",
+                  "cluster": "native-replication",
+                  "idle_timeout": "0s"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "metrics",
+        "address": {
+          "socket_address": {
+            "address": "__POD_IP__",
+            "port_value": 9363
+          }
+        },
+        "filter_chains": [
+          {
+            "transport_socket": {
+              "name": "envoy.transport_sockets.tls",
+              "typed_config": {
+                "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext",
+                "require_client_certificate": true,
+                "common_tls_context": {
+                  "tls_params": {
+                    "tls_minimum_protocol_version": "TLSv1_2"
+                  },
+                  "tls_certificates": [
+                    {
+                      "certificate_chain": {
+                        "filename": "/etc/obs-mtls/tls.crt"
+                      },
+                      "private_key": {
+                        "filename": "/etc/obs-mtls/tls.key"
+                      }
+                    }
+                  ],
+                  "validation_context": {
+                    "trusted_ca": {
+                      "filename": "/etc/obs-mtls/ca.crt"
+                    },
+                    "match_typed_subject_alt_names": [
+                      {
+                        "san_type": "URI",
+                        "matcher": {
+                          "exact": "spiffe://observability.raytrain.local/observability-metrics/vmagent"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "filters": [
+              {
+                "name": "envoy.filters.network.http_connection_manager",
+                "typed_config": {
+                  "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
+                  "stat_prefix": "metrics",
+                  "codec_type": "AUTO",
+                  "route_config": {
+                    "name": "metrics",
+                    "virtual_hosts": [
+                      {
+                        "name": "metrics",
+                        "domains": [
+                          "*"
+                        ],
+                        "routes": [
+                          {
+                            "match": {
+                              "path": "/metrics",
+                              "headers": [
+                                {
+                                  "name": ":method",
+                                  "string_match": {
+                                    "exact": "GET"
+                                  }
+                                }
+                              ]
+                            },
+                            "route": {
+                              "cluster": "native-metrics",
+                              "timeout": "10s"
+                            }
+                          },
+                          {
+                            "match": {
+                              "prefix": "/"
+                            },
+                            "direct_response": {
+                              "status": 404
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "http_filters": [
+                    {
+                      "name": "envoy.filters.http.router",
+                      "typed_config": {
+                        "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "health",
+        "address": {
+          "socket_address": {
+            "address": "__POD_IP__",
+            "port_value": 18080
+          }
+        },
+        "filter_chains": [
+          {
+            "filters": [
+              {
+                "name": "envoy.filters.network.http_connection_manager",
+                "typed_config": {
+                  "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
+                  "stat_prefix": "health",
+                  "codec_type": "AUTO",
+                  "route_config": {
+                    "name": "health",
+                    "virtual_hosts": [
+                      {
+                        "name": "health",
+                        "domains": [
+                          "*"
+                        ],
+                        "routes": [
+                          {
+                            "match": {
+                              "safe_regex": {
+                                "regex": "^/(readyz|livez)$"
+                              },
+                              "headers": [
+                                {
+                                  "name": ":method",
+                                  "string_match": {
+                                    "exact": "GET"
+                                  }
+                                }
+                              ]
+                            },
+                            "direct_response": {
+                              "status": 200
+                            }
+                          },
+                          {
+                            "match": {
+                              "prefix": "/"
+                            },
+                            "direct_response": {
+                              "status": 404
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "http_filters": [
+                    {
+                      "name": "envoy.filters.http.health_check",
+                      "typed_config": {
+                        "@type": "type.googleapis.com/envoy.extensions.filters.http.health_check.v3.HealthCheck",
+                        "pass_through_mode": false,
+                        "headers": [
+                          {
+                            "name": ":path",
+                            "string_match": {
+                              "safe_regex": {
+                                "regex": "^/(readyz|livez)$"
+                              }
+                            }
+                          },
+                          {
+                            "name": ":method",
+                            "string_match": {
+                              "exact": "GET"
+                            }
+                          }
+                        ],
+                        "cluster_min_healthy_percentages": {
+                          "native-http": {
+                            "value": 100
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "envoy.filters.http.router",
+                      "typed_config": {
+                        "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "keeper-egress-0",
+        "address": {
+          "socket_address": {
+            "address": "127.0.0.1",
+            "port_value": 12181
+          }
+        },
+        "filter_chains": [
+          {
+            "filters": [
+              {
+                "name": "envoy.filters.network.tcp_proxy",
+                "typed_config": {
+                  "@type": "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy",
+                  "stat_prefix": "keeper-egress-0",
+                  "cluster": "keeper-0",
+                  "idle_timeout": "0s"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "keeper-egress-1",
+        "address": {
+          "socket_address": {
+            "address": "127.0.0.1",
+            "port_value": 12182
+          }
+        },
+        "filter_chains": [
+          {
+            "filters": [
+              {
+                "name": "envoy.filters.network.tcp_proxy",
+                "typed_config": {
+                  "@type": "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy",
+                  "stat_prefix": "keeper-egress-1",
+                  "cluster": "keeper-1",
+                  "idle_timeout": "0s"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "keeper-egress-2",
+        "address": {
+          "socket_address": {
+            "address": "127.0.0.1",
+            "port_value": 12183
+          }
+        },
+        "filter_chains": [
+          {
+            "filters": [
+              {
+                "name": "envoy.filters.network.tcp_proxy",
+                "typed_config": {
+                  "@type": "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy",
+                  "stat_prefix": "keeper-egress-2",
+                  "cluster": "keeper-2",
+                  "idle_timeout": "0s"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "clusters": [
+      {
+        "name": "native-http",
+        "type": "STATIC",
+        "connect_timeout": "5s",
+        "dns_lookup_family": "V4_ONLY",
+        "load_assignment": {
+          "cluster_name": "native-http",
+          "endpoints": [
+            {
+              "lb_endpoints": [
+                {
+                  "endpoint": {
+                    "address": {
+                      "socket_address": {
+                        "address": "127.0.0.1",
+                        "port_value": 8123
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "health_checks": [
+          {
+            "timeout": "1s",
+            "interval": "5s",
+            "unhealthy_threshold": 2,
+            "healthy_threshold": 1,
+            "http_health_check": {
+              "path": "/ping"
+            }
+          }
+        ]
+      },
+      {
+        "name": "native-tcp",
+        "type": "STATIC",
+        "connect_timeout": "5s",
+        "dns_lookup_family": "V4_ONLY",
+        "load_assignment": {
+          "cluster_name": "native-tcp",
+          "endpoints": [
+            {
+              "lb_endpoints": [
+                {
+                  "endpoint": {
+                    "address": {
+                      "socket_address": {
+                        "address": "127.0.0.1",
+                        "port_value": 9000
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "native-replication",
+        "type": "STATIC",
+        "connect_timeout": "5s",
+        "dns_lookup_family": "V4_ONLY",
+        "load_assignment": {
+          "cluster_name": "native-replication",
+          "endpoints": [
+            {
+              "lb_endpoints": [
+                {
+                  "endpoint": {
+                    "address": {
+                      "socket_address": {
+                        "address": "127.0.0.1",
+                        "port_value": 9010
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "transport_socket": {
+          "name": "envoy.transport_sockets.tls",
+          "typed_config": {
+            "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext",
+            "sni": "clickhouse-observability.observability-analytics.svc.cluster.local",
+            "common_tls_context": {
+              "tls_params": {
+                "tls_minimum_protocol_version": "TLSv1_2"
+              },
+              "tls_certificates": [
+                {
+                  "certificate_chain": {
+                    "filename": "/etc/obs-mtls/tls.crt"
+                  },
+                  "private_key": {
+                    "filename": "/etc/obs-mtls/tls.key"
+                  }
+                }
+              ],
+              "validation_context": {
+                "trusted_ca": {
+                  "filename": "/etc/obs-mtls/ca.crt"
+                },
+                "match_typed_subject_alt_names": [
+                  {
+                    "san_type": "URI",
+                    "matcher": {
+                      "exact": "spiffe://observability.raytrain.local/observability-analytics/clickhouse"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "native-metrics",
+        "type": "STATIC",
+        "connect_timeout": "5s",
+        "dns_lookup_family": "V4_ONLY",
+        "load_assignment": {
+          "cluster_name": "native-metrics",
+          "endpoints": [
+            {
+              "lb_endpoints": [
+                {
+                  "endpoint": {
+                    "address": {
+                      "socket_address": {
+                        "address": "127.0.0.1",
+                        "port_value": 9363
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "keeper-0",
+        "type": "STRICT_DNS",
+        "connect_timeout": "5s",
+        "dns_lookup_family": "V4_ONLY",
+        "load_assignment": {
+          "cluster_name": "keeper-0",
+          "endpoints": [
+            {
+              "lb_endpoints": [
+                {
+                  "endpoint": {
+                    "address": {
+                      "socket_address": {
+                        "address": "chk-observability-keeper-0-0-client.observability-analytics.svc.cluster.local",
+                        "port_value": 2281
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "transport_socket": {
+          "name": "envoy.transport_sockets.tls",
+          "typed_config": {
+            "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext",
+            "sni": "chk-observability-keeper-0-0-client.observability-analytics.svc.cluster.local",
+            "common_tls_context": {
+              "tls_params": {
+                "tls_minimum_protocol_version": "TLSv1_2"
+              },
+              "tls_certificates": [
+                {
+                  "certificate_chain": {
+                    "filename": "/etc/obs-mtls/tls.crt"
+                  },
+                  "private_key": {
+                    "filename": "/etc/obs-mtls/tls.key"
+                  }
+                }
+              ],
+              "validation_context": {
+                "trusted_ca": {
+                  "filename": "/etc/obs-mtls/ca.crt"
+                },
+                "match_typed_subject_alt_names": [
+                  {
+                    "san_type": "URI",
+                    "matcher": {
+                      "exact": "spiffe://observability.raytrain.local/observability-analytics/keeper"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "keeper-1",
+        "type": "STRICT_DNS",
+        "connect_timeout": "5s",
+        "dns_lookup_family": "V4_ONLY",
+        "load_assignment": {
+          "cluster_name": "keeper-1",
+          "endpoints": [
+            {
+              "lb_endpoints": [
+                {
+                  "endpoint": {
+                    "address": {
+                      "socket_address": {
+                        "address": "chk-observability-keeper-0-1-client.observability-analytics.svc.cluster.local",
+                        "port_value": 2281
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "transport_socket": {
+          "name": "envoy.transport_sockets.tls",
+          "typed_config": {
+            "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext",
+            "sni": "chk-observability-keeper-0-1-client.observability-analytics.svc.cluster.local",
+            "common_tls_context": {
+              "tls_params": {
+                "tls_minimum_protocol_version": "TLSv1_2"
+              },
+              "tls_certificates": [
+                {
+                  "certificate_chain": {
+                    "filename": "/etc/obs-mtls/tls.crt"
+                  },
+                  "private_key": {
+                    "filename": "/etc/obs-mtls/tls.key"
+                  }
+                }
+              ],
+              "validation_context": {
+                "trusted_ca": {
+                  "filename": "/etc/obs-mtls/ca.crt"
+                },
+                "match_typed_subject_alt_names": [
+                  {
+                    "san_type": "URI",
+                    "matcher": {
+                      "exact": "spiffe://observability.raytrain.local/observability-analytics/keeper"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "keeper-2",
+        "type": "STRICT_DNS",
+        "connect_timeout": "5s",
+        "dns_lookup_family": "V4_ONLY",
+        "load_assignment": {
+          "cluster_name": "keeper-2",
+          "endpoints": [
+            {
+              "lb_endpoints": [
+                {
+                  "endpoint": {
+                    "address": {
+                      "socket_address": {
+                        "address": "chk-observability-keeper-0-2-client.observability-analytics.svc.cluster.local",
+                        "port_value": 2281
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "transport_socket": {
+          "name": "envoy.transport_sockets.tls",
+          "typed_config": {
+            "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext",
+            "sni": "chk-observability-keeper-0-2-client.observability-analytics.svc.cluster.local",
+            "common_tls_context": {
+              "tls_params": {
+                "tls_minimum_protocol_version": "TLSv1_2"
+              },
+              "tls_certificates": [
+                {
+                  "certificate_chain": {
+                    "filename": "/etc/obs-mtls/tls.crt"
+                  },
+                  "private_key": {
+                    "filename": "/etc/obs-mtls/tls.key"
+                  }
+                }
+              ],
+              "validation_context": {
+                "trusted_ca": {
+                  "filename": "/etc/obs-mtls/ca.crt"
+                },
+                "match_typed_subject_alt_names": [
+                  {
+                    "san_type": "URI",
+                    "matcher": {
+                      "exact": "spiffe://observability.raytrain.local/observability-analytics/keeper"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}

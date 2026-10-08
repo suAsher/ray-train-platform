@@ -1,0 +1,12 @@
+<config>
+  <host>clickhouse-observability.observability-analytics.svc.cluster.local</host>
+  <port>9440</port><secure>true</secure><user>schema_admin</user>
+  <openSSL><client>
+    <certificateFile>/etc/obs-mtls/tls.crt</certificateFile>
+    <privateKeyFile>/etc/obs-mtls/tls.key</privateKeyFile>
+    <caConfig>/etc/obs-mtls/ca.crt</caConfig><loadDefaultCAFile>false</loadDefaultCAFile>
+    <verificationMode>strict</verificationMode><extendedVerification>true</extendedVerification>
+    <invalidCertificateHandler><name>RejectCertificateHandler</name></invalidCertificateHandler>
+    <disableProtocols>sslv2,sslv3,tlsv1,tlsv1_1</disableProtocols>
+  </client></openSSL>
+</config>
