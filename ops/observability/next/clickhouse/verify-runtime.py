@@ -84,6 +84,7 @@ def ch_configs(index, candidate, passwords):
     config = candidate["spec"]["configuration"]
     root = ET.fromstring(config["files"]["config.d/zz-mtls.xml"])
     values = dict(config["settings"])
+    values.update(config["clusters"][0]["layout"]["replicas"][index]["settings"])
     values.update({"max_server_memory_usage": 1610612736, "logger/level": "warning",
                    "logger/console": True, "interserver_http_host": f"chi-observability-telemetry-0-{index}.{NS}"})
     for key, value in values.items():

@@ -31,6 +31,15 @@ spec:
         layout:
           shardsCount: 1
           replicasCount: 2
+          # Altinity 0.27.4 generates interserver_http_host only. HTTPS uses
+          # its own advertised host and otherwise falls back to the Pod name.
+          replicas:
+            - name: "0"
+              settings:
+                interserver_https_host: chi-observability-telemetry-0-0.observability-analytics.svc.cluster.local
+            - name: "1"
+              settings:
+                interserver_https_host: chi-observability-telemetry-0-1.observability-analytics.svc.cluster.local
     users:
       default/password_sha256_hex:
         valueFrom:

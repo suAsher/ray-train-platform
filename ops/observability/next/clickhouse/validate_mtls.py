@@ -37,7 +37,13 @@ def validate_operator_routes(chi, routes, proxy_config):
                     clusters[0]["name"], layout.get("shardsCount"), layout.get("replicasCount"))
         if len(clusters) != 1 or expected != (NAMESPACE, "observability", "telemetry", 1, 2):
             errors.append("route contract supports only observability/telemetry/1 shard/2 replicas")
-        if set(layout) != {"shardsCount", "replicasCount"}:
+        expected_replicas = [
+            {"name": str(index), "settings": {"interserver_https_host":
+             f"chi-observability-telemetry-0-{index}.{NAMESPACE}.svc.cluster.local"}}
+            for index in range(2)
+        ]
+        if (set(layout) != {"shardsCount", "replicasCount", "replicas"}
+                or layout.get("replicas") != expected_replicas):
             errors.append("route contract rejects custom layout host names")
         if (routes.get("namespace"), routes.get("chi"), routes.get("cluster"), routes.get("shards")) != expected[:4]:
             errors.append("route metadata differs from CHI")

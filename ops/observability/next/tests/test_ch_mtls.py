@@ -66,6 +66,16 @@ def pod_template(cr):
 
 
 class ClickHouseMTLSTests(unittest.TestCase):
+    def test_https_replication_advertises_each_existing_certificate_name(self):
+        chi = installation(CH / "clickhouse.yaml")
+        replicas = chi["spec"]["configuration"]["clusters"][0]["layout"]["replicas"]
+        self.assertEqual(["0", "1"], [entry["name"] for entry in replicas])
+        for index, entry in enumerate(replicas):
+            self.assertEqual(
+                {"interserver_https_host":
+                 f"chi-observability-telemetry-0-{index}.observability-analytics.svc.cluster.local"},
+                entry["settings"])
+
     def test_readonly_sql_probe_does_not_try_to_change_session_settings(self):
         spec = importlib.util.spec_from_file_location("ch_runtime_support", CH / "runtime_support.py")
         runtime = importlib.util.module_from_spec(spec)
@@ -234,6 +244,15 @@ class ClickHouseMTLSTests(unittest.TestCase):
         errors = contract.validate_operator_routes(expanded, routes, proxy("operator"))
         self.assertTrue(errors, "a third replica must not silently bypass the local proxy")
         self.assertTrue(any("route" in error.lower() for error in errors))
+        # HTTPS replication uses a separate setting from the HTTP name that
+        # Altinity generates. Renaming, omitting or swapping it must fail closed.
+        for field, value in (("name", "unreviewed"),
+                             ("settings", {}),
+                             ("settings", {"interserver_https_host": "container-hostname"})):
+            wrong = copy.deepcopy(chi)
+            wrong["spec"]["configuration"]["clusters"][0]["layout"]["replicas"][0][field] = value
+            with self.subTest(field=field, value=value):
+                self.assertTrue(contract.validate_operator_routes(wrong, routes, proxy("operator")))
 
 
 if __name__ == "__main__":
