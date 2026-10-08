@@ -162,9 +162,14 @@ class DependencyProbe:
             return https_request(ip, port, path, ca_role="pg-client", client_role=role, server_name=PG_HOST)
 
         self.check(label + "_minimal_ready", request(8000, "/readyz") == (200, b"OK"))
-        for role, suffix in ((None, "no_certificate"), ("ui", "wrong_identity")):
+        # The locked CNPG guard uses 503 for a presented but unrecognized
+        # Operator public key. Require its exact refusal body; neither a
+        # generic 503 nor an uninitialized fingerprint counts as auth proof.
+        rejections = ((None, "no_certificate", (401, b"client certificate required\n")),
+                      ("ui", "wrong_identity", (503, b"operator certificate not recognized\n")))
+        for role, suffix, expected in rejections:
             self.stage = label + "_status_" + suffix + "_unauthorized"
-            self.check(self.stage, request(8000, "/pg/status", role)[0] == 401)
+            self.check(self.stage, request(8000, "/pg/status", role) == expected)
         self.stage = label + "_metrics_monitor"
         self.check(self.stage, has_metrics(*request(9187, "/metrics", "monitor")))
         self.tls_rejected(label + "_metrics_no_certificate", lambda: request(9187, "/metrics"), no_certificate=True)
