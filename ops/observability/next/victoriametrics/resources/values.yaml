@@ -10,12 +10,12 @@ dedupInterval: 30s
 retentionPeriod: 30d
 imagePullSecrets: []
 images:
-  storage: {repository: victoriametrics/vmstorage, tag: v1.152.0-cluster}
-  select: {repository: victoriametrics/vmselect, tag: v1.152.0-cluster}
-  insert: {repository: victoriametrics/vminsert, tag: v1.152.0-cluster}
-  agent: {repository: victoriametrics/vmagent, tag: v1.152.0}
-  auth: {repository: victoriametrics/vmauth, tag: v1.152.0}
-  alert: {repository: victoriametrics/vmalert, tag: v1.152.0}
+  storage: {repository: victoriametrics/vmstorage, tag: v1.153.0-cluster}
+  select: {repository: victoriametrics/vmselect, tag: v1.153.0-cluster}
+  insert: {repository: victoriametrics/vminsert, tag: v1.153.0-cluster}
+  agent: {repository: victoriametrics/vmagent, tag: v1.153.0}
+  auth: {repository: victoriametrics/vmauth, tag: v1.153.0}
+  alert: {repository: victoriametrics/vmalert, tag: v1.153.0}
   alertmanager: {repository: prom/alertmanager, tag: v0.34.1}
   configReloader: victoriametrics/operator:config-reloader-v0.75.0
 # Digest-pinned mirror overrides are recorded by the deployment coordinator.

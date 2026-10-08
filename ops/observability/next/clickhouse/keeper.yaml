@@ -59,7 +59,7 @@ spec:
                         values: [172.28.1.222]
           containers:
             - name: clickhouse-keeper
-              image: clickhouse/clickhouse-keeper:26.8.20.9
+              image: harbor.wellspiking.ai/hub/clickhouse/clickhouse-keeper:26.8.20.9@sha256:1d22967f12b0652a2bd22c338338e465c2bf8ef60691b74395fcd0b2e1f53c6f
               imagePullPolicy: IfNotPresent
               resources:
                 requests: {cpu: 250m, memory: 512Mi}

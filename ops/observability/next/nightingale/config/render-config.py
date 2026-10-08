@@ -3,8 +3,8 @@
 import json
 import os
 import pathlib
+import re
 import shutil
-import urllib.parse
 
 
 def secret_value(directory, name):
@@ -19,13 +19,15 @@ target.mkdir(mode=0o750, parents=True, exist_ok=True)
 shutil.copyfile("/app/etc/metrics.yaml", target / "metrics.yaml")
 username = secret_value("/secrets/db", "username")
 password = secret_value("/secrets/db", "password")
+# v9.1.1 inspects dbname with a space split before opening PostgreSQL.
+# A URI is misparsed and can expose its password in a connection error.
+if username != "n9e" or not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", password):
+    raise SystemExit("database Secret does not match the fixed n9e credential contract")
 dsn = (
-    "postgresql://"
-    + urllib.parse.quote(username, safe="")
-    + ":"
-    + urllib.parse.quote(password, safe="")
-    + "@n9e-postgres-rw.observability-alerting.svc:5432/n9e"
-    + "?sslmode=verify-full&sslrootcert=/etc/n9e-ca/ca.crt"
+    "host=n9e-postgres-rw.observability-alerting.svc port=5432 "
+    "user=n9e dbname=n9e password="
+    + password
+    + " sslmode=verify-full sslrootcert=/etc/n9e-ca/ca.crt connect_timeout=5"
 )
 values = {
     "DB_DSN": dsn,

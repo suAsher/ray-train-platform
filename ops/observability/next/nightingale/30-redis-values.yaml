@@ -3,7 +3,7 @@ fullnameOverride: n9e-redis
 replicas: 3
 image:
   repository: public.ecr.aws/docker/library/redis
-  tag: 8.8.0-alpine
+  tag: "8.8.0-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005"
   pullPolicy: IfNotPresent
 priorityClassName: raytrain-observability-additive
 labels:
@@ -73,3 +73,9 @@ haproxy:
   enabled: false
 exporter:
   enabled: false
+# The chart does not expose test Pod priority/affinity. Do not run helm test;
+# use --skip-tests when rendering the deployment review (see README).
+configmapTest:
+  resources:
+    requests: {cpu: 100m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 128Mi}

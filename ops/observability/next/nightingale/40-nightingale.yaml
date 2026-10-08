@@ -64,7 +64,7 @@ spec:
               topologyKey: kubernetes.io/hostname
       initContainers:
         - name: render-config
-          image: flashcatcloud/nightingale:9.1.1
+          image: harbor.wellspiking.ai/hub/flashcatcloud/nightingale:9.1.1@sha256:81b9aa562549b5ee9d36283a11a14bf257e62fa71eb181277ae4841f7c80e2f9
           command: [python3, /config/render-config.py]
           env:
             - name: POD_IP
@@ -84,7 +84,7 @@ spec:
             - {name: redis-auth, mountPath: /secrets/redis, readOnly: true}
       containers:
         - name: nightingale
-          image: flashcatcloud/nightingale:9.1.1
+          image: harbor.wellspiking.ai/hub/flashcatcloud/nightingale:9.1.1@sha256:81b9aa562549b5ee9d36283a11a14bf257e62fa71eb181277ae4841f7c80e2f9
           command: [/app/n9e]
           args: [-configs, /run/n9e/etc]
           workingDir: /app

@@ -2,21 +2,29 @@
 
 此目录只拥有 `observability-alerting` 中的新夜莺及专用依赖。现有平台 PostgreSQL、Prometheus、Alertmanager、Grafana、Loki、Alloy、训练任务及入口均不修改。当前是待构建机验证的候选，文件存在不代表部署或验收完成。
 
+2026-10-08 用户选择先保留当前 CNI，新数据面部署暂停；此目录继续保留候选与离线验证证据，没有部署夜莺或其数据库。
+
 新组件可以使用 CPU 或 GPU 节点的 CPU/内存；不请求 GPU，不添加通用 toleration，不驱逐训练。统一使用 `raytrain-observability-additive`（负优先级、`preemptionPolicy: Never`）；显式排除当前高内存 `172.28.1.222` 和 algorithm 专属 `172.28.3.32`。其余节点由调度器选择，多个副本必须分散到不同 hostname。资源不足时保留 Pending，不降低训练保障。
 
 ## 固定候选与前提
 
 | 组件 | 候选 | 作用与约束 |
 | --- | --- | --- |
-| Nightingale | `flashcatcloud/nightingale:9.1.1`，上线前记录摘要 | 2 个 center/alert 实例，共用专用 PG/Redis；关闭 EmbeddedTSDB、Ibex、匿名查询、Agent 写入口、A2A/MCP |
+| Nightingale | `9.1.1`，既有 Harbor `hub` 代理，已固定摘要 | 2 个 center/alert 实例，共用专用 PG/Redis；关闭 EmbeddedTSDB、Ibex、匿名查询、Agent 写入口、A2A/MCP |
 | CloudNativePG | chart `0.29.1`，operator `1.30.1` | 2 个控制器、仅 watch 本 namespace；新 CRD/webhook 属集群范围，先检查名称/所有权冲突 |
 | PostgreSQL | `17.11-202608170816-standard-trixie`，清单已固定官方摘要 | 新 `n9e-postgres`，1 主 2 备；一份同步备库确认，另一份备用；不借用平台库 |
-| Redis/Sentinel | DandyDeveloper `redis-ha` chart `4.39.0`，Redis `8.8.0-alpine`，上线前记录摘要 | 3 个 Redis+Sentinel Pod，1 主 2 备、Sentinel quorum=2、AOF；无 HAProxy |
+| Redis/Sentinel | DandyDeveloper `redis-ha` chart `4.39.0`，Redis `8.8.0-alpine`，已固定摘要 | 3 个 Redis+Sentinel Pod，1 主 2 备、Sentinel quorum=2、AOF；无 HAProxy |
 | 存储 | `ebs-ssd-observability-retain` | 由父层创建，Retain、WFFC、可扩容；PG/Redis 各 3×20Gi |
 
 CNPG 1.30 系列官方支持 Kubernetes 1.36。Redis chart 使用稳定的 Kubernetes API，但这不等于本次 VKE/CSI 已验收；必须完成 Helm 渲染、server-side dry-run、Secret/TLS、Sentinel 故障恢复和数据库初始化验证。不可用旧 EOL 版本、单副本或现有数据库悄悄替代。
 
 参考固定版本：[Nightingale 发布](https://github.com/ccfos/nightingale/releases/tag/v9.1.1)、[官方镜像构建](https://github.com/ccfos/nightingale/blob/v9.1.1/.goreleaser.yaml)、[CNPG 支持矩阵](https://cloudnative-pg.io/docs/1.30/supported_releases/)、[CNPG chart](https://github.com/cloudnative-pg/charts/tree/cloudnative-pg-v0.29.1/charts/cloudnative-pg)、[Redis chart](https://github.com/DandyDeveloper/charts/tree/redis-ha-4.39.0/charts/redis-ha)。
+
+所有运行时镜像完整摘要见 `versions.yaml`，清单已引用固定摘要。构建机直连 Docker Hub 超时，因此夜莺使用既有 Harbor hub 代理；代理多架构 index 的 amd64 子摘要与既有华为代理一致，真实镜像 `n9e -version` 为 `v9.1.1-4e056150142b2e1ed6966c9317a9e08442c399f7`。部署前仍需验证节点访问这些注册表的权限；需要 pull Secret 时由父层安全配置，不能输出 Docker 认证配置。
+
+范围检查对 CNPG 的 cluster-scoped API 定义仅允许固定三元组：`CustomResourceDefinition/clusterimagecatalogs.postgresql.cnpg.io`、`spec.group=postgresql.cnpg.io`、`spec.scope=Cluster`。这只是官方完整 CRD 集中的类型定义，不允许创建 `ClusterImageCatalog` 实例，本候选 PG 只用固定 `imageName`。`clusterWide=false` 约束业务资源控制范围，但固定 chart 的 ClusterRole 仍包含 catalog 的 `get/list/watch`，不能宣称从不读取全局 catalog；此只读权限以及 CRD/ClusterRole 所有权必须由安全审阅明确接纳。不要为通过通用“仅namespaced API”检查而删掉官方 CRD、隐去 RBAC 或谎报作用域。
+
+Redis chart 的可选 `n9e-redis-configmap-test` Helm test Pod 没有关闭开关/优先级配置，且不属于运行时健康验收。审阅与直接应用的渲染入口必须用 `helm template --skip-tests`，避免额外 ShellCheck Pod 混入部署清单。普通 Helm install/upgrade 不运行 test hook；本候选不执行 `helm test`，相关脚本检查在构建机做。values 为其补有基础 resources，但不能因此宣称 test Pod 已满足非抢占/节点隔离合同；若以后要运行，先改造单独测试 Job 并固定镜像、PC、affinity。Helm 不把 test hook 交给 post-renderer，不能靠它删除 hook，也不能把 `configmapTest.enabled=false` 当有效开关。`scope-redis.py` 只为同 namespace Redis RoleBinding 的 ServiceAccount 显式补齐 namespace；Kubernetes 原本允许此处省略，不代表跨 namespace 绑定。
 
 ## Secret 契约
 
@@ -24,7 +32,7 @@ CNPG 1.30 系列官方支持 Kubernetes 1.36。Redis chart 使用稳定的 Kuber
 
 | Secret | 键 | 使用者 |
 | --- | --- | --- |
-| `n9e-db-app`，`kubernetes.io/basic-auth` | `username` 固定 `n9e`；`password` 随机至少 32 字符 | CNPG initdb、seed Job、夜莺配置渲染器 |
+| `n9e-db-app`，`kubernetes.io/basic-auth` | `username` 固定 `n9e`；`password` 随机 32–128 字符，仅字母、数字、下划线、连字符 | CNPG initdb、seed Job、夜莺配置渲染器 |
 | `n9e-redis-auth` | `auth`、`sentinel-password` 各独立随机 | Redis chart、夜莺配置渲染器 |
 | `n9e-bootstrap-admin` | `password` 恰好 24 个随机字母数字字符 | 一次性 seed Job；仅创建新夜莺的 `root`，与平台用户无关 |
 | `n9e-postgres-ca` | `ca.crt`，由 CNPG 生成 | PostgreSQL `verify-full` 客户端校验 |
@@ -34,13 +42,15 @@ CNPG 1.30 系列官方支持 Kubernetes 1.36。Redis chart 使用稳定的 Kuber
 
 Nightingale 该版文件加载不进行环境变量插值，因此 `config/render-config.py` 在 init container 中读 Secret，编码为 TOML 后写入内存 `emptyDir`。主容器不挂 DB/Redis 原始 Secret，仅只读挂载生成配置；Pod/exec 权限仍需限制。配置变更需受控更新新组件 Pod。
 
+数据库 DSN 必须采用该版支持的 `host=… user=n9e dbname=n9e password=…` 形式，不使用 PostgreSQL URI：上游预检自行按空格解析 `dbname`，URI 会被错误解析并可能把密码带入错误日志。配置渲染器限定随机数据库凭据字符集并保持固定用户名，发布前用假凭据验证失败日志不含密码。[上游数据库预检](https://github.com/ccfos/nightingale/blob/v9.1.1/pkg/ormx/ormx.go)
+
 ## 安装顺序与构建机门禁
 
 所有命令在已审阅候选的构建机隔离目录执行。先记录现有活跃训练 UID/节点/重启数和原观测 release 状态；不要对本目录 `kubectl apply -R`，其中 values、patch、bootstrap 并非可同时应用。
 
 1. 父层建立 namespace、低优先级 PriorityClass、独立 Retain StorageClass 和 Secret；检查至少 3 个可调度节点、EBS 数量及资源余量。确认 hostname 标签确实为清单中的 IP。
 2. 先只读检查 `*.postgresql.cnpg.io` CRD、CNPG webhook 固定名称和现有 CNPG release/CR。已有资源时暂停本次新安装、核对所有权，不能接管或重写。
-3. 构建机拉取固定 chart 和镜像，记录 archive checksum、manifest digest；审阅渲染结果后执行 server-side dry-run。使用 `scope-cnpg-webhooks.py` 为所有 webhook 加本 namespace selector 和 `scope: Namespaced`。每次安装/升级都使用相同 post-renderer。`clusterWide: false` 只约束控制器 watch，不能代替 webhook 限定。
+3. 构建机拉取固定 chart 和镜像，记录 archive checksum、manifest digest；审阅渲染结果后执行 server-side dry-run。CNPG 使用 `scope-cnpg-webhooks.py` 为所有 webhook 加本 namespace selector 和 `scope: Namespaced`；Redis 渲染加 `--skip-tests`，并用 `scope-redis.py` 显式化 subject namespace。每次安装/升级都使用各自相同的 post-renderer；不要调用 Redis `helm test`。`clusterWide: false` 只约束控制器业务资源 watch，不能代替 webhook 限定。
 4. 应用 `45-networkpolicy.yaml`，部署 CNPG/Redis，再应用 `20-postgres.yaml`。等待新 PG 3/3、Redis 3/3 和 3 个 Sentinel 健康。验证 CNPG CA 与 `n9e-postgres-rw.observability-alerting.svc` 匹配。
 5. 从固定源码准备 seed ConfigMap，创建 `n9e-config-v911`，仅执行一次 `35-bootstrap.yaml`。数据库已有 `users` 表时 Job 拒绝重置；DDL 和随机 root 种子在同一事务中完成。
 6. 应用 `40-nightingale.yaml`，先启动 1 个实例，等待 schema 迁移结束，确认不存在迁移错误、root 密码已哈希、登录及 Redis/JWT 正常。上游部分迁移失败只记日志，TCP Ready 不能代替 SQL/登录验证。
@@ -58,8 +68,9 @@ helm template n9e-cnpg cloudnative-pg \
 
 helm template n9e-redis redis-ha \
   --repo https://dandydeveloper.github.io/charts --version 4.39.0 \
-  --namespace observability-alerting --kube-version 1.36.1 \
-  -f "$obs_candidate/30-redis-values.yaml" > redis-rendered.yaml
+  --namespace observability-alerting --kube-version 1.36.1 --skip-tests \
+  -f "$obs_candidate/30-redis-values.yaml" \
+  --post-renderer "$obs_candidate/scope-redis.py" > redis-rendered.yaml
 ```
 
 正式 Helm install/upgrade 同样固定 release 名（`n9e-cnpg`、`n9e-redis`）、版本、values、post-renderer，并先保留和审阅 dry-run。上述模板命令不能替代 CRD 处理及 live dry-run；不要对未知 CRD 使用 `--take-ownership`。

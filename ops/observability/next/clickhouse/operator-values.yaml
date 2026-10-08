@@ -13,8 +13,8 @@ secret:
   create: false
 operator:
   image:
-    repository: altinity/clickhouse-operator
-    tag: "0.27.4"
+    repository: harbor.wellspiking.ai/hub/altinity/clickhouse-operator
+    tag: "0.27.4@sha256:c60c872fedd85017f843167dfdd2b900bb06b668a3deaf02b21782e59af859e3"
   priorityClassName: raytrain-observability-additive
   resources:
     requests: {cpu: 100m, memory: 256Mi}

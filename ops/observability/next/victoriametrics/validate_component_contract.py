@@ -44,13 +44,20 @@ def validate_operator(objects):
         for container in deployment["spec"]["template"]["spec"]["containers"]:
             env = {item["name"]: item.get("value") for item in container.get("env", [])}
             if "WATCH_NAMESPACE" in env:
-                matches.append(env)
+                matches.append((env, container.get("args", [])))
     require(len(matches) == 1, "expected one namespaced operator deployment")
-    env = matches[0]
+    env, args = matches[0]
     require(env["WATCH_NAMESPACE"] == NAMESPACE, "operator namespace watch expanded")
     require(all(env.get(key) == "false" for key in CONVERTERS), "converter enabled/missing")
     require(env.get("VM_ENABLEDPROMETHEUSCONVERTEROWNERREFERENCES") != "true",
             "converter ownership must remain disabled")
+    disabled = {
+        kind
+        for argument in args
+        if argument.startswith("--controller.disableReconcileFor=")
+        for kind in argument.split("=", 1)[1].split(",")
+    }
+    require("VTAgent" in disabled, "VTAgent global watch must remain disabled")
 
 
 def validate_agent(objects):
@@ -141,6 +148,16 @@ def main(paths):
             labels = item.get("metadata", {}).get("labels", {})
             require(not any(key.startswith("rbac.authorization.k8s.io/aggregate-to-") for key in labels),
                     "operator aggregates privileges into existing user roles")
+            if labels.get("observability.raytrain.io/rbac-scope") == "cluster-read":
+                allowed = {"": {"nodes", "namespaces"}, "storage.k8s.io": {"storageclasses"},
+                           "apiextensions.k8s.io": {"customresourcedefinitions"}}
+                for rule in item.get("rules", []):
+                    require(not rule.get("nonResourceURLs"), "unapproved cluster-wide metrics access")
+                    require(set(rule.get("verbs", [])) <= {"get", "list", "watch"},
+                            "cluster role must remain read-only")
+                    require(all(set(rule.get("resources", [])) <= allowed.get(group, set())
+                                for group in rule.get("apiGroups", [])),
+                            "unapproved cluster-wide resource discovery")
     validate_operator(objects)
     validate_agent(objects)
     validate_auth(objects)

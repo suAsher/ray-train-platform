@@ -1,0 +1,31 @@
+# Optional deployment overlay for the existing Harbor Docker Hub proxy.
+# Inspected on the authorized builder on 2026-10-08; these are linux/amd64
+# child-manifest digests, not the multi-architecture index digests.
+# No image push is required. The coordinator provisions this Secret securely.
+# The official Docker Hub registry was unreachable during this inspection;
+# preserve the proxy manifest evidence and verify provenance before upgrades.
+imagePullSecrets:
+  - name: harbor-registry
+images:
+  storage:
+    repository: harbor.wellspiking.ai/hub/victoriametrics/vmstorage
+    tag: v1.153.0-cluster@sha256:94b80699d50d81bfa7e71b1917540b58207d0000fa78727f52038592ed3c4913
+  select:
+    repository: harbor.wellspiking.ai/hub/victoriametrics/vmselect
+    tag: v1.153.0-cluster@sha256:66808d677ef16231269a56a30faaf4ee6bc0750dcb5cc1767c43926156d7dec7
+  insert:
+    repository: harbor.wellspiking.ai/hub/victoriametrics/vminsert
+    tag: v1.153.0-cluster@sha256:443928a540fcc6f6bc8a4b78b418a04bf8c0c48e6ced141a743d7c7ed2cf3d7a
+  agent:
+    repository: harbor.wellspiking.ai/hub/victoriametrics/vmagent
+    tag: v1.153.0@sha256:7f79b9062035fe13493c536a9ef7facc4091acf386d8869a6e27cdaf3de693bf
+  auth:
+    repository: harbor.wellspiking.ai/hub/victoriametrics/vmauth
+    tag: v1.153.0@sha256:5afdae47139aadec787d6d754bf10690b5f1f6f05c289ed16902429762302f95
+  alert:
+    repository: harbor.wellspiking.ai/hub/victoriametrics/vmalert
+    tag: v1.153.0@sha256:856ba8d1a04ba3d121ada91660c4b2553606ec685cafd26079af595de7175f08
+  alertmanager:
+    repository: harbor.wellspiking.ai/hub/prom/alertmanager
+    tag: v0.34.1@sha256:84967b9b7ba45e38a9278d3e594305f43d4993c310df3905b51138b816c365f3
+  configReloader: harbor.wellspiking.ai/hub/victoriametrics/operator:config-reloader-v0.75.0@sha256:8958c824f71674e6a2b4497b8d37f007561893e4ab55ac7f7ec77fe0b87aa331

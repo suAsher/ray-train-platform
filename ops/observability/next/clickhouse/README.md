@@ -12,7 +12,7 @@ This installs a fresh, internal-only observability database in `observability-an
 | ClickHouse server / Keeper | `26.8.20.9` LTS | [release](https://github.com/ClickHouse/ClickHouse/releases/tag/v26.8.20.9-lts) |
 | Exporter schema | Collector Contrib `0.162.0` | [templates](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/v0.162.0/exporter/clickhouseexporter/internal/sqltemplates) |
 
-The builder must resolve approved pull locations and immutable image digests before applying. Candidate tags are exact versions, not proof of a successful pull or a tested combination.
+Image references now use the existing `harbor.wellspiking.ai/hub` proxy with immutable manifest digests, inspected on the builder on 2026-10-08. The OTel digest also matched the official GHCR manifest, and its offline configuration validation passed. Namespace pull authorization, generated resources and the runtime combination still require deployment acceptance; a valid manifest is not a successful cluster rollout.
 
 ## Cluster-scoped footprint
 

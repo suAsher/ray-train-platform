@@ -242,7 +242,10 @@ def check_rbac(document, where, report):
         if reference.get("name") == "cluster-admin":
             report.error(where, "cluster-admin binding is forbidden")
         for subject in document.get("subjects", []):
-            if subject.get("kind") != "ServiceAccount" or subject.get("namespace") not in NAMESPACES:
+            namespace = subject.get("namespace")
+            if kind == "RoleBinding" and "namespace" not in subject:
+                namespace = document.get("metadata", {}).get("namespace")
+            if subject.get("kind") != "ServiceAccount" or namespace not in NAMESPACES:
                 report.error(where, "RBAC subject must be a ServiceAccount in an additive namespace")
     else:
         for rule in document.get("rules", []):
@@ -291,8 +294,14 @@ def check_cluster_resource(document, where, allowlist, report):
         if kind == "CustomResourceDefinition":
             spec = document.get("spec", {})
             group, plural = spec.get("group"), spec.get("names", {}).get("plural")
-            if group not in CRD_GROUPS or name != f"{plural}.{group}" or spec.get("scope") != "Namespaced":
-                report.error(where, "CRD group/name/scope must match an approved namespaced Operator API")
+            if name == "clusterimagecatalogs.postgresql.cnpg.io":
+                valid = (group == "postgresql.cnpg.io" and plural == "clusterimagecatalogs" and
+                         spec.get("names", {}).get("kind") == "ClusterImageCatalog" and spec.get("scope") == "Cluster")
+                report.pending.append(f"{where}: live review of this explicit catalog exception must confirm CNPG controller watch and webhook namespace/rule scope are not broadened")
+            else:
+                valid = group in CRD_GROUPS and name == f"{plural}.{group}" and spec.get("scope") == "Namespaced"
+            if not valid:
+                report.error(where, "CRD group/name/kind/scope must match the approved Operator API or exact CNPG ClusterImageCatalog exception")
             if spec.get("conversion", {}).get("strategy") == "Webhook":
                 report.error(where, "CRD conversion webhooks require separate review")
         elif kind.endswith("WebhookConfiguration"):

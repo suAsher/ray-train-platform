@@ -1,5 +1,7 @@
 # VKE 新可观测性体系：增量建设
 
+入口：[架构、部署流程与实际操作记录](DEPLOYMENT_RUNBOOK.md) · [详细架构设计](../../../docs/superpowers/specs/2026-10-08-vke-observability-platform-design.md)
+
 本目录只部署四个独立命名空间中的新组件。旧 Prometheus、Alloy、Loki、平台后端、训练任务和历史数据继续使用原链路。当前阶段只允许新组件自监控和合成 canary；清单存在或 Pod Ready 不代表业务接入、权限和高可用验收完成。
 
 | 命名空间 | 组件 | 初始持久卷申请量 |

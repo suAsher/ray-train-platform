@@ -228,6 +228,39 @@ class ScopeTests(unittest.TestCase):
         self.assert_rejected(doc, "allowlist")
         self.assert_rejected(doc, "subject", ["ClusterRoleBinding/new-operator"])
 
+    def test_only_namespaced_role_binding_can_default_subject_namespace(self):
+        doc = {"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "RoleBinding",
+               "metadata": {"name": "redis", "namespace": "observability-alerting"},
+               "roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "redis"},
+               "subjects": [{"kind": "ServiceAccount", "name": "redis"}]}
+        self.assertEqual([], self.errors(doc))
+        doc["subjects"][0]["namespace"] = "monitoring"
+        self.assert_rejected(doc, "subject")
+        doc["subjects"][0].pop("namespace")
+        doc["kind"] = "ClusterRoleBinding"
+        doc["metadata"].pop("namespace")
+        doc["roleRef"]["kind"] = "ClusterRole"
+        self.assert_rejected(doc, "subject", ["ClusterRoleBinding/redis"])
+
+    def test_cluster_image_catalog_is_the_only_precise_cluster_crd_exception(self):
+        doc = {"apiVersion": "apiextensions.k8s.io/v1", "kind": "CustomResourceDefinition",
+               "metadata": {"name": "clusterimagecatalogs.postgresql.cnpg.io"}, "spec": {
+                   "group": "postgresql.cnpg.io", "scope": "Cluster",
+                   "names": {"plural": "clusterimagecatalogs", "kind": "ClusterImageCatalog"}}}
+        allowed = ["CustomResourceDefinition/clusterimagecatalogs.postgresql.cnpg.io"]
+        self.assert_rejected(doc, "allowlist")
+        report = scope.validate_documents([doc], allowed)
+        self.assertEqual([], report.errors)
+        self.assertTrue(any("watch" in item and "webhook" in item for item in report.pending))
+        for field, value in (("group", "operator.victoriametrics.com"), ("scope", "Namespaced"),
+                             ("names", {"plural": "clusterimagecatalogs", "kind": "Cluster"})):
+            bad = copy.deepcopy(doc)
+            bad["spec"][field] = value
+            self.assert_rejected(bad, "CRD group", allowed)
+        doc["metadata"]["name"] = "clusters.postgresql.cnpg.io"
+        doc["spec"]["names"] = {"plural": "clusters", "kind": "Cluster"}
+        self.assert_rejected(doc, "CRD group", ["CustomResourceDefinition/clusters.postgresql.cnpg.io"])
+
     def test_isolated_cnpg_webhook_only(self):
         doc = webhook()
         allowed = ["ValidatingWebhookConfiguration/n9e-cnpg"]

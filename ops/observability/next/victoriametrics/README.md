@@ -7,10 +7,23 @@
 ## 版本与文件
 
 - `operator-values.yaml`：官方 standalone chart `victoria-metrics-operator` **0.68.1**，operator **v0.75.0**。
+- `operator-cluster-read.yaml`：补齐 standalone chart 在单 namespace watch 模式下仍生成的同名 ClusterRoleBinding，且只授予集群只读发现权限。
 - `resources/`：无外部依赖的小型 Helm chart，生成显式 VM CR、命名空间内 RBAC、内部 Service 和 NetworkPolicy。
-- `versions.yaml`：官方版本来源。VM 使用 operator v0.75.0 默认匹配的 **v1.152.0**；集群镜像使用 `-cluster` 后缀。Alertmanager **v0.34.1**，config-reloader **config-reloader-v0.75.0**。
+- `versions.yaml`：官方版本来源。VM 候选使用 **v1.153.0**；集群镜像使用 `-cluster` 后缀。Alertmanager **v0.34.1**，config-reloader **config-reloader-v0.75.0**。Operator 保持 **v0.75.0**，VM 镜像在 CR 中显式指定，不能把 Operator 默认值当成实际运行版本。
+- `resources-hub-values.yaml`：现有 Harbor Docker Hub 代理的固定 amd64 摘要覆盖，可用 `-f` 叠加在 `resources/` chart。只引用 `harbor-registry` 拉取 Secret，不包含凭据。构建机已能拉取这些镜像并执行帮助/配置检查；Docker Hub 直连当时超时，因此代理可达不能等同于完成独立上游摘要比对。
+- `validate_component_contract.py`：构建机对两个 Helm 渲染文件验证 converter/watchNamespace、self-only 采集、Secret/路由权限、canary/黑洞通知边界；不访问 Kubernetes，不代替 CRD schema 或实际 Pod 验证。
 
 安装前在构建机下载锁定 chart，记录包 SHA256，核对其 `Chart.yaml`、依赖及镜像。镜像拉取验证后记录 digest，并通过独立受审阅的 values 覆盖为现有镜像镜像源的摘要引用；不把未核对的 `latest` 带入发布。API 以锁定版源码和 CRD schema 为准，文档主分支只是辅助。
+
+Operator 候选也直接引用 Harbor `hub` 代理的固定 amd64 摘要，不需要再次推送相同镜像。发布协调者负责核对实际镜像、拉取 Secret 的来源和本次受审阅快照，任何新覆盖均重新渲染验证。
+
+v1.153.0 包含 native import 的 zstd 内存限制修复；官方同时记录 pure-Go 构建的数据块解压回归。本候选锁定官方 **linux/amd64 CGO** 镜像，官方发布说明明确此架构不受该回归影响，不能将相同版本直接用于 `-pure` 或其他受影响架构。首期不开启新增 OIDC、storage 直接写入 API 或其他可选能力；验证仍以实际参数、规则和生成配置为准。
+
+## 当前候选与运行边界
+
+截至 2026-10-08，本目录新版本仍是待部署候选。现场只有新增基础对象和 Operator，VMCluster/Agent/Auth/Alert/AM 数据面未创建。Operator 实际仍使用已有私有 Harbor v0.75.0 摘要；候选改为 hub 的相同摘要，并新增 VTAgent 禁用参数和收紧 ClusterRole，这些本地改动不能当成已生效。
+
+现场 CNI 的 NetworkPolicy enforcement 尚未开启。用户要求先保留现状，因此**不启动数据面、不执行 Helm 升级、不扩权绕过网络边界**。网络能力完成独立评审并实际验收后，重新对比源码、渲染与现网差异，再执行下面的部署顺序。不能仅凭 NetworkPolicy YAML 已存在就报告网络隔离有效。
 
 ## 预置对象与身份
 
@@ -48,7 +61,8 @@ VMStorage RF=2 与采集 HA 去重不同。首期所有采集和规则周期统�
 
 ## Operator 与 CRD 边界
 
-- converter 关闭，`watchNamespaces` 仅 `observability-metrics`，聚合 ClusterRoles 关闭。
+- converter 关闭，`watchNamespaces` 仅 `observability-metrics`，聚合 ClusterRoles 关闭。官方 chart 在这种模式下仍渲染一个同名 ClusterRoleBinding；本目录用 `operator-cluster-read.yaml` 补充节点/namespace 元数据、StorageClass 和 CRD 只读权限，没有集群写权限、节点指标接口或集群范围 EndpointSlice 读取。EndpointSlice 发现由本 namespace 的 Role 授权；安装后须核对实际日志和授权，不能将此静态清单当成运行兼容性证明。
+- `extraArgs.controller.disableReconcileFor: VTAgent` 显式禁用本阶段不用的 VTAgent controller。v0.75.0 的该 controller 存在全局监听路径，不能仅靠 `WATCH_NAMESPACE` 推断所有 controller 都局限于 namespace；合同同时检查关闭参数，不能为消除权限报错而扩大 ClusterRole。
 - admission webhook 关闭，避免新增全局 admission 依赖。Operator 仍检查 CR 语义，发布前必须做 CRD schema 和 server-side dry-run；以后启用 webhook 单独评审。
 - CRD 作为 Helm plain CRD 首次创建；cleanup/upgrade hook 关闭。CRD 是集群级对象，namespace 限制不能让 CRD 变成 namespace 级。
 - 现场应确认没有既有 VM CRD/Operator；若发现同名，停止自动接管，先检查版本和 owner。不得为了 Helm 安装强行重标记、覆盖或删除既有 CRD。
@@ -69,6 +83,7 @@ vmauth 外部代理端口 8427 与内部 health/metrics 8428 分开。新客户�
 
 1. 保存当前活跃 RayJob/RayCluster/Pod UID、重启数、状态，旧观测 release 的 revision、镜像和配置 hash；只读记录节点资源、EBS attach 数、集群与 namespace 配额。
 2. 核对本 chart 的 namespace guard、Operator/CRD 包、镜像摘要。构建机执行 Helm lint/template，并验证所有渲染对象：不得含旧资源、Ingress、hostPath、hostNetwork、GPU request、额外容忍、真实通知或旧抓取目标。
+   在构建机运行 `python3 validate_component_contract.py operator-rendered.yaml metrics-rendered.yaml`；除正常输入通过，还需用临时变体确认 converter 开启、namespace 扩大、匿名路由或真实通知会失败。临时变体不应用到集群。
 3. 为 Operator 运行 server dry-run；完整 diff 只含新增本 namespace 对象及新 VM CRD/RBAC。先安装 Operator/CRD，等待 Established/Ready，再对 CR chart 做 server-side dry-run，审阅 schema/default/pruning 结果。
 4. 先创建两个 token Secret，再装显式 CR。核对 operator watch/converter 参数、VMUser 应用状态、RBAC、实际生成 Pod 镜像/资源/优先级、PVC 的 SC/PV Retain 与 StatefulSet Retain 策略。
 5. 启动后预期自监控有 8 个组件类、共 17 个 Pod 目标；两个 Agent 各抓同组目标。Targets 中不应出现旧 monitoring/loki/tenant namespace 或训练 Pod。检查生成配置与实际 targets 两层。
@@ -85,6 +100,7 @@ vmauth 外部代理端口 8427 与内部 health/metrics 8428 分开。新客户�
 
 - [standalone Operator chart](https://docs.victoriametrics.com/helm/victoria-metrics-operator/)
 - [v0.75.0 默认版本与参数](https://github.com/VictoriaMetrics/operator/blob/v0.75.0/internal/config/config.go)
+- [v1.153.0 发布说明与受影响构建范围](https://github.com/VictoriaMetrics/VictoriaMetrics/releases/tag/v1.153.0)
 - [锁定版 VMCluster 类型](https://github.com/VictoriaMetrics/operator/blob/v0.75.0/api/operator/v1beta1/vmcluster_types.go)
 - [锁定版 VMAgent 队列实现](https://github.com/VictoriaMetrics/operator/blob/v0.75.0/internal/controller/operator/factory/vmagent/vmagent.go)
 - [锁定版 VMUser Secret 引用与路径路由](https://github.com/VictoriaMetrics/operator/blob/v0.75.0/api/operator/v1beta1/vmuser_types.go)
