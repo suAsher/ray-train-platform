@@ -101,18 +101,42 @@ def request(target, port, path, identity=None, tls=False, method="GET", body=Non
         headers = {**headers, "Content-Type": "application/x-protobuf", "Content-Encoding": "snappy",
                    "X-Prometheus-Remote-Write-Version": "0.1.0"}
     try:
-        connection.request(method, path, body=body, headers=headers)
+        try:
+            connection.request(method, path, body=body, headers=headers)
+        except BrokenPipeError:
+            if tls:
+                read_tls_rejection(connection)
+            raise
         response = connection.getresponse()
         return response.status, response.read(1048576)
     finally:
         connection.close()
 
 
-def expect_denied(operation):
+def read_tls_rejection(connection):
+    # TLS1.3 can finish the client's handshake before the server checks its
+    # client certificate. A following send may EPIPE while the encrypted alert
+    # is waiting to be read. EOF or timeout alone does not prove authorization.
+    if connection.sock is None:
+        raise ProbeError("no TLS alert available after broken pipe")
+    connection.sock.recv(1)
+    raise ProbeError("connection closed without an explicit TLS rejection")
+
+
+def expect_denied(operation, plaintext=False):
     try:
         status, _ = operation()
-    except (ssl.SSLError, ConnectionResetError, http.client.RemoteDisconnected):
-        return "denied"
+    except ssl.SSLError as error:
+        reason = getattr(error, "reason", "")
+        if reason in {"TLSV13_ALERT_CERTIFICATE_REQUIRED", "SSLV3_ALERT_BAD_CERTIFICATE",
+                      "SSLV3_ALERT_UNSUPPORTED_CERTIFICATE", "SSLV3_ALERT_CERTIFICATE_UNKNOWN",
+                      "TLSV1_ALERT_UNKNOWN_CA", "TLSV1_ALERT_ACCESS_DENIED", "SSLV3_ALERT_HANDSHAKE_FAILURE"}:
+            return "denied"
+        raise ProbeError("unclassified TLS failure") from None
+    except (ConnectionResetError, http.client.RemoteDisconnected):
+        if plaintext:
+            return "denied"
+        raise
     if status not in (400, 401, 403, 404, 405, 426):
         raise ProbeError("negative request was not explicitly denied")
     return "denied"
@@ -169,7 +193,7 @@ def probe_pod(pod, results):
     for native_port in NATIVE[pod["role"]]:
         check(results, f"{prefix}:native-closed:{native_port}", lambda: closed(pod, native_port))
     check(results, prefix + ":denied:plaintext", lambda: expect_denied(
-        lambda: request(pod, port, "/metrics")))
+        lambda: request(pod, port, "/metrics"), plaintext=True))
     if pod["role"] == "vmstorage":
         for rpc_port in (8400, 8401):
             for identity in (None, "vmagent"):

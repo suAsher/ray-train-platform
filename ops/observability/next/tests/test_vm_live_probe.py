@@ -56,10 +56,18 @@ class InventoryContracts(unittest.TestCase):
 
 
 class DenialContracts(unittest.TestCase):
+    @staticmethod
+    def certificate_alert():
+        error = ssl.SSLError("private error")
+        error.reason = "TLSV13_ALERT_CERTIFICATE_REQUIRED"
+        return error
+
     def test_only_explicit_denials_or_tls_rejection_count(self):
         for status in (401, 403, 404, 405):
             self.assertEqual("denied", probe.expect_denied(lambda: (status, b"private body")))
-        self.assertEqual("denied", probe.expect_denied(lambda: (_ for _ in ()).throw(ssl.SSLError("private error"))))
+        self.assertEqual("denied", probe.expect_denied(lambda: (_ for _ in ()).throw(self.certificate_alert())))
+        with self.assertRaises(probe.ProbeError):
+            probe.expect_denied(lambda: (_ for _ in ()).throw(ssl.SSLError("unclassified TLS error")))
         for status in (200, 204, 500, 502, 503):
             with self.subTest(status=status), self.assertRaises(probe.ProbeError):
                 probe.expect_denied(lambda: (status, b"private body"))
@@ -67,6 +75,36 @@ class DenialContracts(unittest.TestCase):
     def test_network_timeout_does_not_prove_authorization(self):
         with self.assertRaises(socket.timeout):
             probe.expect_denied(lambda: (_ for _ in ()).throw(socket.timeout("private address")))
+
+    def test_broken_pipe_requires_a_received_certificate_alert(self):
+        connection = unittest.mock.Mock()
+        connection.sock.recv.side_effect = self.certificate_alert()
+        with self.assertRaises(ssl.SSLError) as caught:
+            probe.read_tls_rejection(connection)
+        self.assertEqual("TLSV13_ALERT_CERTIFICATE_REQUIRED", caught.exception.reason)
+        for read_result in (b"", b"unexpected data"):
+            connection.sock.recv.side_effect = None
+            connection.sock.recv.return_value = read_result
+            with self.subTest(read_result=read_result), self.assertRaises(probe.ProbeError):
+                probe.read_tls_rejection(connection)
+        connection.sock.recv.side_effect = socket.timeout()
+        with self.assertRaises(socket.timeout):
+            probe.read_tls_rejection(connection)
+
+    def test_generic_connection_reset_is_not_a_certificate_rejection(self):
+        with self.assertRaises(ConnectionResetError):
+            probe.expect_denied(lambda: (_ for _ in ()).throw(ConnectionResetError()))
+
+    def test_tls_request_recovers_the_server_alert_after_send_broken_pipe(self):
+        with patch.object(probe.ssl, "create_default_context"), patch.object(probe, "TLSConnection") as factory:
+            connection = factory.return_value
+            connection.request.side_effect = BrokenPipeError()
+            connection.sock.recv.side_effect = self.certificate_alert()
+            result = probe.expect_denied(lambda: probe.request(
+                {"ip": "172.28.20.1", "role": "operator"}, 8080, "/metrics", tls=True))
+        self.assertEqual("denied", result)
+        connection.sock.recv.assert_called_once_with(1)
+        connection.close.assert_called_once()
 
 
 class TokenContracts(unittest.TestCase):
