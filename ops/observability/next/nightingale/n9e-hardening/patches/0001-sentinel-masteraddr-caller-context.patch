@@ -1,0 +1,30 @@
+diff --git a/sentinel.go b/sentinel.go
+--- a/sentinel.go
++++ b/sentinel.go
+@@ -496,7 +496,7 @@ func (c *sentinelFailover) MasterAddr(ctx context.Context) (string, error) {
+ 	if sentinel != nil {
+ 		addr, err := c.getMasterAddr(ctx, sentinel)
+ 		if err != nil {
+-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
++			if err := ctx.Err(); err != nil {
+ 				return "", err
+ 			}
+ 			// Continue on other errors
+@@ -514,7 +514,7 @@ func (c *sentinelFailover) MasterAddr(ctx context.Context) (string, error) {
+ 		addr, err := c.getMasterAddr(ctx, c.sentinel)
+ 		if err != nil {
+ 			_ = c.closeSentinel()
+-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
++			if err := ctx.Err(); err != nil {
+ 				return "", err
+ 			}
+ 			// Continue on other errors
+@@ -531,7 +531,7 @@ func (c *sentinelFailover) MasterAddr(ctx context.Context) (string, error) {
+ 		masterAddr, err := sentinel.GetMasterAddrByName(ctx, c.opt.MasterName).Result()
+ 		if err != nil {
+ 			_ = sentinel.Close()
+-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
++			if err := ctx.Err(); err != nil {
+ 				return "", err
+ 			}
+ 			internal.Logger.Printf(ctx, "sentinel: GetMasterAddrByName master=%q failed: %s",

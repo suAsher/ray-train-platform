@@ -391,7 +391,14 @@ class NightingaleMTLSContractTests(unittest.TestCase):
                       "rules": [{"apiGroups": ["postgresql.cnpg.io"], "resources": ["clusters"]}],
                   }]} for kind, mode in (("MutatingWebhookConfiguration", "mutating"),
                                         ("ValidatingWebhookConfiguration", "validating"))]
-        return [self.operator_fixture(), self.operator_rbac_fixture(), *hooks]
+        resources = ["backups", "clusters", "clusters/status", "databaseroles", "databases", "failoverquorums",
+                     "poolers", "publications", "scheduledbackups", "imagecatalogs", "clusterimagecatalogs", "subscriptions"]
+        auxiliary = [{"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRole",
+                      "metadata": {"name": "n9e-cnpg-" + name}, "rules": [{
+                          "apiGroups": ["postgresql.cnpg.io"], "resources": resources, "verbs": verbs,
+                      }]} for name, verbs in (("view", ["get", "list", "watch"]),
+                                              ("edit", ["create", "delete", "deletecollection", "patch", "update"]))]
+        return [self.operator_fixture(), self.operator_rbac_fixture(), *hooks, *auxiliary]
 
     def test_transformed_operator_rbac_only_patches_its_exact_webhooks(self):
         module = runpy.run_path(str(ROOT / "scope-cnpg-webhooks.py"))
@@ -410,7 +417,8 @@ class NightingaleMTLSContractTests(unittest.TestCase):
 
     def test_operator_rbac_renderer_rejects_unexpected_chart_shapes(self):
         module = runpy.run_path(str(ROOT / "scope-cnpg-webhooks.py"))
-        for change in ("role_name", "wildcard", "extra_resource", "missing_rule", "foreign_names", "foreign_webhook"):
+        for change in ("role_name", "wildcard", "extra_resource", "missing_rule", "foreign_names", "foreign_webhook",
+                       "unknown_non_webhook_role", "auxiliary_role_changed", "aggregation"):
             inputs = self.operator_documents_fixture()
             role = inputs[1]
             if change == "role_name":
@@ -423,8 +431,14 @@ class NightingaleMTLSContractTests(unittest.TestCase):
                 role["rules"].pop()
             elif change == "foreign_names":
                 role["rules"][1]["resourceNames"] = ["old-production-webhook"]
-            else:
+            elif change == "foreign_webhook":
                 inputs[2]["metadata"]["name"] = "old-production-webhook"
+            elif change in ("unknown_non_webhook_role", "auxiliary_role_changed"):
+                inputs.append({"kind": "ClusterRole", "metadata": {
+                    "name": "unknown-role" if change == "unknown_non_webhook_role" else "n9e-cnpg-view"},
+                    "rules": [{"apiGroups": [""], "resources": ["secrets"], "verbs": ["get"]}]})
+            else:
+                role["aggregationRule"] = {"clusterRoleSelectors": [{"matchLabels": {"custom-role": "true"}}]}
             with self.subTest(change=change), self.assertRaises(ValueError):
                 module["transform"](inputs)
 

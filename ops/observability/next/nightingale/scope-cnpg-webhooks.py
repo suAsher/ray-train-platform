@@ -27,6 +27,9 @@ UPSTREAM_CLUSTER_RULES = [
      "resources": ["mutatingwebhookconfigurations", "validatingwebhookconfigurations"], "verbs": ["get", "patch"]},
     {"apiGroups": ["postgresql.cnpg.io"], "resources": ["clusterimagecatalogs"], "verbs": ["get", "list", "watch"]},
 ]
+AUXILIARY_RESOURCES = ["backups", "clusters", "clusters/status", "databaseroles", "databases",
+                       "failoverquorums", "poolers", "publications", "scheduledbackups",
+                       "imagecatalogs", "clusterimagecatalogs", "subscriptions"]
 
 
 def scope_webhook(document):
@@ -55,6 +58,22 @@ def scope_operator_role(document):
                "resourceNames": ["cnpg-" + mode + "-webhook-configuration"]}
               for mode in ("mutating", "validating")]
     return {**document, "rules": [document["rules"][0], *scoped, document["rules"][2]]}
+
+
+def validate_auxiliary_role(document):
+    # Fixed chart emits these inert, unbound helpers even with aggregation off.
+    # Reject unrelated ClusterRoles rather than silently forwarding new powers.
+    metadata = document.get("metadata", {})
+    name = metadata.get("name")
+    verbs = {"n9e-cnpg-view": ["get", "list", "watch"],
+             "n9e-cnpg-edit": ["create", "delete", "deletecollection", "patch", "update"]}
+    expected = [{"apiGroups": ["postgresql.cnpg.io"], "resources": AUXILIARY_RESOURCES,
+                 "verbs": verbs.get(name)}]
+    if (name not in verbs or metadata.get("namespace") or document.get("aggregationRule")
+            or any(label.startswith("rbac.authorization.k8s.io/aggregate-to-") for label in metadata.get("labels", {}))
+            or document.get("rules") != expected):
+        raise ValueError("unexpected fixed-chart CNPG auxiliary ClusterRole shape")
+    return document
 
 
 def secure_operator(document):
@@ -95,11 +114,12 @@ def transform(documents):
             if metadata.get("name") in webhook_names:
                 raise ValueError("duplicate CNPG webhook configuration")
             webhook_names.add(metadata.get("name"))
-        elif kind == "ClusterRole" and (metadata.get("name") == "n9e-cnpg" or any(
-                group in ("admissionregistration.k8s.io", "*")
-                for rule in document.get("rules", []) for group in rule.get("apiGroups", []))):
-            document = scope_operator_role(document)
-            role_count += 1
+        elif kind == "ClusterRole":
+            if metadata.get("name") == "n9e-cnpg":
+                document = scope_operator_role(document)
+                role_count += 1
+            else:
+                document = validate_auxiliary_role(document)
         elif kind == "Deployment" and metadata.get("name") == "n9e-cnpg":
             document = secure_operator(document)
             selector = document["spec"]["selector"]["matchLabels"]
