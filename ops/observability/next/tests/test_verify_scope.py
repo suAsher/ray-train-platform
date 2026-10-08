@@ -73,6 +73,15 @@ class ScopeTests(unittest.TestCase):
             "name": "PASSWORD", "valueFrom": {"secretKeyRef": {"name": "runtime-auth", "key": "password"}}}]
         self.assertEqual([], self.errors(doc))
 
+    def test_optional_pod_lists_rendered_as_null_are_empty(self):
+        doc = workload()
+        pod = doc["spec"]["template"]["spec"]
+        for field in ("volumes", "initContainers", "ephemeralContainers", "tolerations", "topologySpreadConstraints"):
+            pod[field] = None
+        pod["containers"][0]["env"] = None
+        pod["containers"][0]["ports"] = None
+        self.assertEqual([], self.errors(doc))
+
     def test_old_or_implicit_namespace_is_rejected(self):
         for namespace in ("monitoring", "loki", "ray-train-platform", None):
             with self.subTest(namespace=namespace):

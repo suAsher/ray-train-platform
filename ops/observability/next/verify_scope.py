@@ -124,7 +124,7 @@ def check_scheduling(spec, where, report):
                     key == "nvidia.com/gpu.present" and
                     (operator == "DoesNotExist" or (operator == "In" and "false" in values))):
                 report.error(where, "CPU-only required node affinity is forbidden")
-    for toleration in spec.get("tolerations", []):
+    for toleration in spec.get("tolerations") or []:
         key = toleration.get("key", "")
         operator = toleration.get("operator", "Equal")
         effect = toleration.get("effect", "")
@@ -166,7 +166,7 @@ def check_anti_affinity(spec, labels, replicas, persistent, where, report):
     hard = any(valid(term) for term in anti.get("requiredDuringSchedulingIgnoredDuringExecution", []))
     soft = any(valid(term.get("podAffinityTerm", {})) and term.get("weight", 0) > 0
                for term in anti.get("preferredDuringSchedulingIgnoredDuringExecution", []))
-    for spread in spec.get("topologySpreadConstraints", []):
+    for spread in spec.get("topologySpreadConstraints") or []:
         if spread.get("topologyKey") != "kubernetes.io/hostname" or not selector_matches(spread.get("labelSelector"), labels):
             continue
         if spread.get("whenUnsatisfiable") == "DoNotSchedule" and spread.get("maxSkew") == 1 and spread.get("minDomains", 0) >= replicas:
@@ -188,9 +188,9 @@ def check_container(container, where, report):
         report.error(where, "allowPrivilegeEscalation is forbidden")
     if security.get("capabilities", {}).get("add"):
         report.error(where, "additional Linux capabilities need a separate review")
-    if any(port.get("hostPort", 0) for port in container.get("ports", [])):
+    if any(port.get("hostPort", 0) for port in container.get("ports") or []):
         report.error(where, "hostPort is forbidden")
-    for env in container.get("env", []):
+    for env in container.get("env") or []:
         if re.search(r"(?:PASSWORD|TOKEN|SECRET|PRIVATE_KEY|ACCESS_KEY)$", env.get("name", ""), re.I) and env.get("value"):
             report.error(where, "sensitive environment variables must reference a runtime Secret")
 
@@ -200,7 +200,7 @@ def check_pod(spec, labels, replicas, persistent, where, report):
     for flag in ("hostNetwork", "hostPID", "hostIPC"):
         if spec.get(flag):
             report.error(where, f"{flag} is forbidden")
-    for volume in spec.get("volumes", []):
+    for volume in spec.get("volumes") or []:
         if "hostPath" in volume:
             report.error(where, "hostPath is forbidden")
         if "persistentVolumeClaim" in volume:
@@ -210,7 +210,7 @@ def check_pod(spec, labels, replicas, persistent, where, report):
     if not spec.get("containers"):
         report.error(where, "Pod template must contain a container")
     for field in ("containers", "initContainers", "ephemeralContainers"):
-        for index, container in enumerate(spec.get(field, [])):
+        for index, container in enumerate(spec.get(field) or []):
             check_container(container, f"{where}/{field}[{index}]", report)
     check_anti_affinity(spec, labels, replicas, persistent, where, report)
 
@@ -316,9 +316,9 @@ def check_vm_component(spec, where, report):
     labels = (spec.get("podMetadata") or {}).get("labels", {})
     check_anti_affinity(spec, labels, spec.get("replicaCount", 1), persistent, where, report)
     for field in ("containers", "initContainers"):
-        for index, container in enumerate(spec.get(field, [])):
+        for index, container in enumerate(spec.get(field) or []):
             check_container(container, f"{where}/{field}[{index}]", report)
-    for volume in spec.get("volumes", []):
+    for volume in spec.get("volumes") or []:
         if "hostPath" in volume:
             report.error(where, "hostPath is forbidden")
     for flag in ("hostNetwork", "hostPID", "hostIPC"):
