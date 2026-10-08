@@ -505,5 +505,56 @@ class NightingaleMTLSContractTests(unittest.TestCase):
         self.assertTrue(tls["tls_certificates"])
 
 
+class NightingaleLiveProbeTests(unittest.TestCase):
+    def module(self):
+        return runpy.run_path(str(ROOT / "live_probe.py"))
+
+    def test_live_targets_are_exactly_two_private_pods_and_optional_positive_datasource(self):
+        validate = self.module()["validate_targets"]
+        good = {"pod_ips": ["172.28.1.10", "172.28.1.11"], "datasource_id": 7}
+        self.assertEqual(good, validate(good))
+        for ips in (["172.28.1.10"] * 2, ["127.0.0.1", "172.28.1.11"],
+                    ["example.org", "172.28.1.11"], ["8.8.8.8", "172.28.1.11"]):
+            with self.subTest(ips=ips), self.assertRaises(ValueError):
+                validate({"pod_ips": ips})
+        for value in (0, -1, "7", True):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                validate({"pod_ips": good["pod_ips"], "datasource_id": value})
+
+    def test_live_resp_parser_is_bounded_and_rejects_errors(self):
+        module = self.module()
+        read = module["read_resp"]
+        self.assertEqual(["master", "6379"], read(io.BytesIO(b"*2\r\n$6\r\nmaster\r\n$4\r\n6379\r\n")))
+        self.assertIsNone(read(io.BytesIO(b"$-1\r\n")))
+        for wire in (b"-NOAUTH example\r\n", b"$1048577\r\n", b"*1001\r\n", b"$2\r\na\r\n", b"?\r\n"):
+            with self.subTest(wire=wire), self.assertRaises(module["ProbeFailure"]):
+                read(io.BytesIO(wire))
+
+    def test_live_endpoint_verifies_service_dns_while_connecting_specific_pod(self):
+        module = self.module()
+        context = mock.Mock()
+        wrapped = mock.Mock()
+        context.wrap_socket.return_value = wrapped
+        with mock.patch("socket.create_connection") as connect:
+            endpoint = module["PodHTTPS"]("172.28.1.10", context)
+            endpoint.connect()
+        connect.assert_called_once_with(("172.28.1.10", 17443), 8)
+        context.wrap_socket.assert_called_once_with(connect.return_value,
+            server_hostname="nightingale.observability-alerting.svc")
+        self.assertIs(wrapped, endpoint.sock)
+
+    def test_live_profile_requires_real_root_envelope_and_vm_requires_vector_one(self):
+        module = self.module()
+        self.assertTrue(module["is_root"](200, {"dat": {"username": "root"}, "err": ""}))
+        for status, body in ((200, {"dat": None}), (500, {"dat": {"username": "root"}}),
+                             (200, {"dat": {"username": "root"}, "err": "backend failure"})):
+            self.assertFalse(module["is_root"](status, body))
+        good = {"status": "success", "data": {"resultType": "vector", "result": [{"value": [1, "1"]}]}}
+        self.assertTrue(module["is_vector_one"](200, good))
+        for bad in ({"dat": [7]}, {"status": "success", "data": {"resultType": "vector", "result": []}},
+                    {"status": "success", "data": {"resultType": "vector", "result": [{"value": [1, "0"]}]}}):
+            self.assertFalse(module["is_vector_one"](200, bad))
+
+
 if __name__ == "__main__":
     unittest.main()
