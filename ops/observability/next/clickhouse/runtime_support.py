@@ -17,6 +17,16 @@ class RuntimeCheckError(Exception):
     """A deliberately redacted test failure."""
 
 
+def sql_timeout_args(role):
+    # The native CLI also sends receive/send timeouts as query settings.
+    # readonly=1 must keep rejecting setting changes: test real SELECT/INSERT
+    # permissions without triggering an unrelated setting denial first.
+    if role != "schema-admin":
+        return []
+    return ["--connect_timeout", "10", "--receive_timeout", "90",
+            "--send_timeout", "15", "--distributed_ddl_task_timeout", "60"]
+
+
 def load_module(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)

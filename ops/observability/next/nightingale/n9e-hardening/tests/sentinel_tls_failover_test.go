@@ -143,12 +143,12 @@ func n9eFailover(t *testing.T, clientTLS *tls.Config, cached bool, addresses ...
 	opt := &FailoverOptions{
 		MasterName:    "n9e-regression",
 		SentinelAddrs: append([]string(nil), addresses...),
-		TLSConfig:    clientTLS,
-		DialTimeout:  200 * time.Millisecond,
-		ReadTimeout:  time.Second,
-		WriteTimeout: time.Second,
-		MaxRetries:   -1,
-		PoolSize:     4,
+		TLSConfig:     clientTLS,
+		DialTimeout:   200 * time.Millisecond,
+		ReadTimeout:   time.Second,
+		WriteTimeout:  time.Second,
+		MaxRetries:    -1,
+		PoolSize:      4,
 	}
 	failover := &sentinelFailover{opt: opt, sentinelAddrs: append([]string(nil), addresses...)}
 	if cached {

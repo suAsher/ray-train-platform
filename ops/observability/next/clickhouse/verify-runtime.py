@@ -21,7 +21,7 @@ import xml.etree.ElementTree as ET
 import yaml
 
 from runtime_support import (RuntimeCheckError, Sandbox, data_dir, load_module,
-                             port_closed, run, wait, write)
+                             port_closed, run, sql_timeout_args, wait, write)
 from runtime_diagnostics import capture_client_timeout, private_output, protocol_hops
 
 
@@ -151,9 +151,8 @@ def sql_client(sandbox, query, replica=0, role="query-admin", check=True):
                "--mount", f"type=bind,src={path},dst=/client.xml,readonly",
                "--mount", f"type=bind,src={sandbox.leaves[role]},dst=/etc/obs-mtls,readonly",
                "--entrypoint", "clickhouse-client", sandbox.images["clickhouse"],
-               "--config-file", "/client.xml", "--connect_timeout", "10",
-               "--receive_timeout", "90", "--send_timeout", "15",
-               "--distributed_ddl_task_timeout", "60", "--multiquery", "--query", query]
+               "--config-file", "/client.xml", *sql_timeout_args(role),
+               "--multiquery", "--query", query]
     environment = {**os.environ, "CLICKHOUSE_PASSWORD": sandbox.passwords[username]}
     try:
         result = run(command, check=False, env=environment)

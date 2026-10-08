@@ -66,6 +66,14 @@ def pod_template(cr):
 
 
 class ClickHouseMTLSTests(unittest.TestCase):
+    def test_readonly_sql_probe_does_not_try_to_change_session_settings(self):
+        spec = importlib.util.spec_from_file_location("ch_runtime_support", CH / "runtime_support.py")
+        runtime = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runtime)
+        self.assertEqual([], runtime.sql_timeout_args("query-admin"))
+        self.assertEqual([], runtime.sql_timeout_args("otel-gateway"))
+        self.assertIn("--distributed_ddl_task_timeout", runtime.sql_timeout_args("schema-admin"))
+
     def test_trial_thread_budget_leaves_capacity_for_queries(self):
         settings = installation(CH / "clickhouse.yaml")["spec"]["configuration"]["settings"]
         # These pools otherwise default to 16 each. Their persistent workers
