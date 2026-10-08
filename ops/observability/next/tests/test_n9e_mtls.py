@@ -580,5 +580,94 @@ class NightingaleLiveProbeTests(unittest.TestCase):
                         probe_type().boundaries("172.28.1.10", "pod_0")
 
 
+class LiveDependencyProbeTests(unittest.TestCase):
+    def module(self):
+        path = ROOT / "live_dependencies.py"
+        self.assertTrue(path.is_file(), "live dependency protocol probe is not implemented")
+        return runpy.run_path(str(path))
+
+    def targets(self):
+        return {"pg_pod_ips": ["172.28.1.10", "172.28.1.11", "172.28.1.12"],
+                "operator_pod_ips": ["172.28.2.10", "172.28.2.11"]}
+
+    def test_dependency_targets_require_exact_reviewed_pod_sets(self):
+        validate = self.module()["validate_targets"]
+        self.assertEqual(self.targets(), validate(self.targets()))
+        bad = [dict(self.targets(), other="unreviewed"),
+               dict(self.targets(), pg_pod_ips=["172.28.1.10"] * 3),
+               dict(self.targets(), operator_pod_ips=["172.28.2.10"]),
+               dict(self.targets(), operator_pod_ips=["172.28.1.10", "172.28.2.11"]),
+               dict(self.targets(), operator_pod_ips=["127.0.0.1", "172.28.2.11"]),
+               dict(self.targets(), operator_pod_ips=["8.8.8.8", "172.28.2.11"])]
+        for value in bad:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                validate(value)
+
+    def test_dependency_tls_rejection_requires_explicit_peer_authentication_alert(self):
+        module = self.module()
+        classify = module["is_authentication_alert"]
+        for reason in ("TLSV13_ALERT_CERTIFICATE_REQUIRED", "TLSV1_ALERT_UNKNOWN_CA",
+                       "SSLV3_ALERT_BAD_CERTIFICATE", "TLSV1_ALERT_INTERNAL_ERROR"):
+            error = module["ssl"].SSLError(1, "sensitive peer details")
+            error.reason = reason
+            self.assertTrue(classify(error))
+            self.assertEqual(reason == "TLSV13_ALERT_CERTIFICATE_REQUIRED",
+                             classify(error, no_certificate=True))
+        error = module["ssl"].SSLError(1, "not an authentication alert")
+        error.reason = "WRONG_VERSION_NUMBER"
+        for error in (error, TimeoutError(), ConnectionResetError(), BrokenPipeError()):
+            self.assertFalse(classify(error))
+            self.assertFalse(classify(error, no_certificate=True))
+
+    def test_dependency_pg_requires_minimal_health_http_status_guard_and_metrics_mtls(self):
+        module = self.module()
+        probe_type = module["DependencyProbe"]
+        globals_ = probe_type.pg_instance.__globals__
+
+        def request(ip, port, path, *, ca_role, client_role=None, server_name):
+            self.assertEqual("172.28.1.10", ip)
+            self.assertEqual("pg-client", ca_role)
+            self.assertEqual("n9e-postgres-rw.observability-alerting.svc", server_name)
+            if port == 8000:
+                return (200, b"OK") if path == "/readyz" else (401, b"unauthorized\n")
+            self.assertEqual((9187, "/metrics"), (port, path))
+            if client_role == "monitor":
+                return 200, b"# TYPE go_goroutines gauge\ngo_goroutines 3\n"
+            error = module["ssl"].SSLError(1, "peer rejected client identity")
+            error.reason = ("TLSV13_ALERT_CERTIFICATE_REQUIRED" if client_role is None
+                            else "TLSV1_ALERT_INTERNAL_ERROR")
+            raise error
+
+        with mock.patch.dict(globals_, https_request=mock.Mock(side_effect=request)):
+            probe = probe_type()
+            probe.pg_instance("172.28.1.10", "pg_0")
+            self.assertTrue(probe.checks)
+            self.assertTrue(all(probe.checks.values()))
+        for bad in ((200, b'{"status":"ready","data":"private"}'), (503, b"OK")):
+            def wrong_health(ip, port, path, **kwargs):
+                return bad if path == "/readyz" else request(ip, port, path, **kwargs)
+            with mock.patch.dict(globals_, https_request=mock.Mock(side_effect=wrong_health)):
+                with self.assertRaises(module["ProbeFailure"]):
+                    probe_type().pg_instance("172.28.1.10", "pg_0")
+        with mock.patch.dict(globals_, https_request=mock.Mock(return_value=(200, b"OK"))):
+            with self.assertRaises(module["ProbeFailure"]):
+                probe_type().pg_instance("172.28.1.10", "pg_0")
+
+    def test_dependency_report_never_prints_exception_payload_or_credentials(self):
+        module = self.module()
+        output = io.StringIO()
+        sensitive = "fixture-password-private-key-jwt-captcha-answer"
+        with mock.patch.object(module["Path"], "read_text", return_value=json.dumps(self.targets())), \
+                mock.patch.object(module["DependencyProbe"], "run", side_effect=RuntimeError(sensitive)), \
+                redirect_stdout(output):
+            code = module["main"](["--targets", "/targets.json"])
+        result = json.loads(output.getvalue())
+        self.assertEqual(1, code)
+        self.assertEqual("failed", result["status"])
+        self.assertEqual("RuntimeError", result["error_type"])
+        self.assertNotIn(sensitive, output.getvalue())
+        self.assertTrue(all(type(value) is bool for value in result["checks"].values()))
+
+
 if __name__ == "__main__":
     unittest.main()
