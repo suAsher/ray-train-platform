@@ -100,7 +100,9 @@ spec:
           <listen_host replace="replace">127.0.0.1</listen_host>
           <interserver_listen_host replace="replace">127.0.0.1</interserver_listen_host>
           <http_port replace="replace">8123</http_port><tcp_port replace="replace">9000</tcp_port>
-          <tcp_port_secure remove="1"/><https_port remove="1"/>
+          <!-- DDLTask uses tcp_port_secure to recognize this replica's :9440
+               remote_servers address. This listener remains loopback only. -->
+          <tcp_port_secure replace="replace">9440</tcp_port_secure><https_port remove="1"/>
           <interserver_http_port remove="1"/><interserver_https_port>9010</interserver_https_port>
           <interserver_http_credentials replace="replace">
             <user from_env="INTERSERVER_USER"/><password from_env="INTERSERVER_PASSWORD"/>

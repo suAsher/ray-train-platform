@@ -150,9 +150,20 @@ def sql_client(sandbox, query, replica=0, role="query-admin", check=True):
                "--mount", f"type=bind,src={path},dst=/client.xml,readonly",
                "--mount", f"type=bind,src={sandbox.leaves[role]},dst=/etc/obs-mtls,readonly",
                "--entrypoint", "clickhouse-client", sandbox.images["clickhouse"],
-               "--config-file", "/client.xml", "--multiquery", "--query", query]
+               "--config-file", "/client.xml", "--connect_timeout", "10",
+               "--receive_timeout", "90", "--send_timeout", "15",
+               "--distributed_ddl_task_timeout", "60", "--multiquery", "--query", query]
     environment = {**os.environ, "CLICKHOUSE_PASSWORD": sandbox.passwords[username]}
-    result = run(command, check=check, env=environment)
+    result = run(command, check=False, env=environment)
+    # --rm removes completed client containers before Docker log collection.
+    # Preserve bounded private client output so SQL failures are actionable.
+    diagnostics = sandbox.work / "private-diagnostics"
+    diagnostics.mkdir(mode=0o700, exist_ok=True)
+    output = diagnostics / (client_name + "-result.log")
+    output.write_text((result.stdout + result.stderr)[-65536:])
+    output.chmod(0o600)
+    if check and result.returncode:
+        raise RuntimeCheckError(f"SQL client for role {role} on replica {replica} exited {result.returncode}")
     return result.stdout.strip() if check else result
 
 
@@ -256,6 +267,13 @@ def verify(sandbox):
     evidence = assert_boundaries(sandbox)
     if sandbox.phase == "keeper":
         return {**evidence, "remaining": "ClickHouse/schema/OTel not exercised by keeper-only phase"}
+    sandbox.stage = "native_sql_preflight"
+    for replica in range(2):
+        if sql_client(sandbox, "SELECT 1", replica, "schema-admin") != "1":
+            raise RuntimeCheckError("Native SQL preflight failed")
+        cluster = sql_client(sandbox, "SELECT count() FROM system.clusters WHERE cluster='telemetry' AND is_local=1 AND port=9440", replica, "schema-admin")
+        if cluster != "1":
+            raise RuntimeCheckError("DDL preflight: replica does not recognize its advertised secure port")
     sandbox.stage = "bootstrap_schema"
     sql_client(sandbox, (HERE / "schema.sql").read_text(), role="schema-admin")
     sandbox.stage = "schema_and_sql_grants"

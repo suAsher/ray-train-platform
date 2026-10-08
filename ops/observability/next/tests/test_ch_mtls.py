@@ -138,6 +138,13 @@ class ClickHouseMTLSTests(unittest.TestCase):
         self.assertEqual(["networks"], [child.tag for child in operator])
         self.assertEqual("127.0.0.1", operator.find("networks/ip").text)
         self.assertEqual("replace", operator.find("networks").get("replace"))
+        config = ET.fromstring(files["config.d/zz-mtls.xml"])
+        # ON CLUSTER identifies the current host by a configured native port;
+        # deleting :9440 while advertising secure replicas strands DDL tasks.
+        self.assertEqual("9440", config.findtext("tcp_port_secure"))
+        self.assertIsNone(config.find("tcp_port_secure").get("remove"))
+        self.assertEqual("127.0.0.1", config.findtext("listen_host"))
+        self.assertEqual("strict", config.findtext("openSSL/server/verificationMode"))
 
     def test_coordination_outbound_is_fixed_loopback_and_raft_dns_is_preserved(self):
         cr = installation(CH / "clickhouse.yaml")
