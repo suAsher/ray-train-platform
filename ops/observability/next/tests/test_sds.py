@@ -195,13 +195,38 @@ class FilesystemSDSTests(unittest.TestCase):
                 sds.transform_bootstrap(bootstrap(), sds_directory=directory)
 
 
-class SDSRuntimeRejectionTests(unittest.TestCase):
+class SDSRuntimeContracts(unittest.TestCase):
     def runtime(self):
         sys.path.insert(0, str(ROOT / "mtls"))
         spec = importlib.util.spec_from_file_location("sds_runtime_fixture", ROOT / "mtls/verify_sds_runtime.py")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
+
+    def test_stats_ignore_histogram_envelopes_and_keep_numeric_sds_counters(self):
+        runtime = self.runtime()
+        result = runtime.select_counters({"stats": [
+            {"histograms": {"supported_quantiles": [0, 0.5, 1]}},
+            {"name": "sds.leaf.key_rotation_failed", "value": 1},
+            {"name": "listener.server.ssl_context_update_by_sds", "value": 2},
+            {"name": "unrelated.counter", "value": 99},
+        ]})
+        self.assertEqual({"sds.leaf.key_rotation_failed": 1, "listener.server.ssl_context_update_by_sds": 2}, result)
+        self.assertEqual(1, runtime.rotation_failure_count(result))
+
+    def test_required_rotation_failure_counter_cannot_be_missing_or_non_numeric(self):
+        runtime = self.runtime()
+        with self.assertRaisesRegex(runtime.LabError, "unavailable"):
+            runtime.rotation_failure_count({"listener.server.ssl_context_update_by_sds": 2})
+        with self.assertRaisesRegex(runtime.LabError, "numeric"):
+            runtime.select_counters({"stats": [{"name": "sds.leaf.key_rotation_failed", "value": "1"}]})
+        self.assertEqual(0, runtime.rotation_failure_count({"sds.leaf.key_rotation_failed": 0}))
+
+    def test_invalid_public_stats_envelope_is_rejected(self):
+        runtime = self.runtime()
+        for payload in ([], {}, {"stats": "bad"}):
+            with self.subTest(payload=type(payload).__name__), self.assertRaises(runtime.LabError):
+                runtime.select_counters(payload)
 
     def test_tls13_alert_is_read_before_any_http_write(self):
         runtime = self.runtime()

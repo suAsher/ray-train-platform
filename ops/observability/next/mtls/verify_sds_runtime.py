@@ -224,6 +224,32 @@ def proxy_serial(address):
         client.close()
 
 
+
+def select_counters(payload):
+    if not isinstance(payload, dict) or not isinstance(payload.get("stats"), list):
+        raise LabError("Invalid public Envoy stats envelope")
+    selected = {}
+    for item in payload["stats"]:
+        # /stats JSON also contains histogram envelopes without name/value.
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+            continue
+        name = item["name"]
+        if not any(term in name for term in ("key_rotation_failed", "ssl_context_update_by_sds")):
+            continue
+        value = item.get("value")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise LabError("Expected SDS counter is missing a numeric value")
+        selected[name] = value
+    return selected
+
+
+def rotation_failure_count(values):
+    failures = [value for name, value in values.items() if name.endswith(".key_rotation_failed")]
+    if not failures:
+        raise LabError("Expected SDS key_rotation_failed counters are unavailable")
+    return sum(failures)
+
+
 def counters(path):
     client = http.client.HTTPConnection("localhost", timeout=3)
     client.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -234,8 +260,7 @@ def counters(path):
         response = client.getresponse()
         if response.status != 200:
             raise LabError("Lab admin counters unavailable")
-        return {item["name"]: item["value"] for item in json.loads(response.read())["stats"]
-                if any(term in item["name"] for term in ("key_rotation_failed", "ssl_context_update_by_sds"))}
+        return select_counters(json.loads(response.read()))
     finally:
         client.close()
 
@@ -341,7 +366,7 @@ def run(root, report):
                                      **rejected(address, ca, leaves[role] if role else None)})
         report["stage"] = "invalid-pair-last-good-identity"
         project(root / "server", "invalid", leaves["server3"], leaves["server1"])
-        eventually(lambda: sum(value for name, value in counters(diagnostics / "admin.sock").items() if "key_rotation_failed" in name) > 0)
+        eventually(lambda: rotation_failure_count(counters(diagnostics / "admin.sock")) > 0)
         if serial_at(address, ca, leaves["client2"]) != 1002:
             raise LabError("Invalid key pair displaced the last valid TLS identity")
         report["stage"] = "recover-valid-pair"
@@ -383,6 +408,8 @@ def main():
         report["status"] = "passed"
     except Exception as error:
         report["error_type"] = type(error).__name__
+        if isinstance(error, KeyError) and error.args and error.args[0] in {"name", "value", "stats", "State", "Pid", "Config", "Labels", "NetworkSettings", "Networks", "IPAddress", "RestartCount"}:
+            report["error_field"] = error.args[0]
         report["error"] = str(error) if isinstance(error, LabError) else "Private runtime diagnostics withheld"
     with output.open("x") as stream:
         json.dump(report, stream, indent=2)
