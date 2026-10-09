@@ -50,7 +50,7 @@ affinity:
         - matchExpressions:
             - key: kubernetes.io/hostname
               operator: NotIn
-              values: [172.28.1.222]
+              values: [172.28.1.222, 172.28.3.32]
 configs:
   files:
     config.yaml:

@@ -38,8 +38,23 @@ membership and confirm that the new certificate is used. A Ready Pod alone is
 not a cryptographic proof. The automated controller records a completed orderly
 restart; it does not claim to perform protocol-level native certificate probing.
 
-Only leaf renewal is automatic. A CA hash change on a previously recorded Pod
-fails closed: CA replacement requires a separate overlapping-trust migration.
+Only leaf renewal is automatic. The policy pins the SHA-256 of each approved
+public `ca.crt` (base64-decoded PEM bytes with trailing ASCII whitespace stripped).
+The repository template intentionally contains unfilled pins: deployment must
+fill them from previously approved public CA material. Missing, unfilled or
+mismatched pins stop before eviction, including first bootstrap and the case where
+all Pod annotations disappeared. Do not learn the trust pin from whatever Secret
+happens to be present on a scheduled run. CA replacement requires a separate
+overlapping-trust migration.
+Alertmanager is a special consumer: VMOperator copies gossip TLS material into
+`vmalertmanager-victoriametrics-cluster-config`. The controller reads only this
+additional named Secret, compares its public certificate and CA with the source
+Secret, checks that `gossip_config.yaml` references those exact generated files,
+and verifies that the native Alertmanager container mounts and uses that config.
+It accepts the operator's documented trailing-whitespace normalization. A stale
+copy, alternate config path or merely mounting the original source Secret cannot
+satisfy the gate. The generated Secret's private-key value is not inspected.
+
 The controller never reads a signing-key Secret. Kubernetes GET of a leaf Secret
 necessarily returns its private-key field, but the script does not inspect,
 hash, persist or print that field; API error bodies are also suppressed. RBAC

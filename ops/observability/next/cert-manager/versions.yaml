@@ -5,14 +5,24 @@ cert-manager:
   appVersion: v1.21.2
   controllerImage: quay.io/jetstack/cert-manager-controller:v1.21.2
   controllerImageDigest: sha256:70f532fd9cfde0b09d55687200942399d89838bc2d5d5b45152eb799a15912b8
+  controllerMirrorRepository: harbor.wellspiking.ai/guofeng.su/cert-manager-controller
+  controllerMirrorTag: v1.21.2-source-70f532fd
   webhookImage: quay.io/jetstack/cert-manager-webhook:v1.21.2
   webhookImageDigest: sha256:a60e2dac46dbb8a7f3df95c54ce941012f54c2fe022f0ee55aaa1ab40ed957ae
+  webhookMirrorRepository: harbor.wellspiking.ai/guofeng.su/cert-manager-webhook
+  webhookMirrorTag: v1.21.2-source-a60e2dac
   cainjectorImage: quay.io/jetstack/cert-manager-cainjector:v1.21.2
   cainjectorImageDigest: sha256:c85268c64f2e0e76684bf5fe8906caff34b82523561c6affe0fae3546bd87562
+  cainjectorMirrorRepository: harbor.wellspiking.ai/guofeng.su/cert-manager-cainjector
+  cainjectorMirrorTag: v1.21.2-source-c85268c6
   startupapicheckImage: quay.io/jetstack/cert-manager-startupapicheck:v1.21.2
   startupapicheckImageDigest: sha256:46e75b6866359ffb5d82624f41e3ed1c70b2994982702ced547ce5edb418a8f5
+  startupapicheckMirrorRepository: harbor.wellspiking.ai/guofeng.su/cert-manager-startupapicheck
+  startupapicheckMirrorTag: v1.21.2-source-46e75b68
   acmesolverImage: quay.io/jetstack/cert-manager-acmesolver:v1.21.2
   acmesolverImageDigest: sha256:699b40d622211ab7accad8a21b04c5fbaa1841ef7a12621e8de492dbe27b2503
+  acmesolverMirrorRepository: harbor.wellspiking.ai/guofeng.su/cert-manager-acmesolver
+  acmesolverMirrorTag: v1.21.2-source-699b40d6
 approver-policy:
   chartRepository: https://charts.jetstack.io
   chartName: cert-manager-approver-policy
@@ -20,3 +30,5 @@ approver-policy:
   appVersion: v0.28.0
   image: quay.io/jetstack/cert-manager-approver-policy:v0.28.0
   imageDigest: sha256:1a955b0a5c41d319fd56b5f85aaff6f2eaba01d70f3b1adf001eac4d7b1d49e5
+  mirrorRepository: harbor.wellspiking.ai/guofeng.su/approver-policy
+  mirrorTag: v0.28.0-source-1a955b0a

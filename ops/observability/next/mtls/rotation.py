@@ -33,6 +33,15 @@ ALLOWED = {
     "alertmanager": ("victoriametrics", ("obs-mtls-alertmanager-gossip",),
                      (("StatefulSet", "vmalertmanager-victoriametrics-cluster", 3),)),
 }
+AM_SOURCE = "obs-mtls-alertmanager-gossip"
+AM_ASSETS = {AM_SOURCE: {
+    "secret": "vmalertmanager-victoriametrics-cluster-config",
+    "certificate_key": "victoriametrics_obs-mtls-alertmanager-gossip_tls.crt",
+    "ca_key": "victoriametrics_obs-mtls-alertmanager-gossip_ca.crt",
+    "key_key": "victoriametrics_obs-mtls-alertmanager-gossip_tls.key",
+    "config_key": "gossip_config.yaml", "mount_path": "/etc/alertmanager/tls_assets",
+    "container": "alertmanager",
+}}
 PLURALS = {"StatefulSet": "statefulsets", "Deployment": "deployments", "ReplicaSet": "replicasets"}
 
 
@@ -70,9 +79,11 @@ def validate_policy(policy):
     if [g.get("name") for g in policy["groups"]] != list(ALLOWED):
         raise RotationError("Policy group order or scope changed")
     for group in policy["groups"]:
-        if set(group) != {"name", "namespace", "controllers", "replicas", "selector", "secrets", "pdb"}:
+        if set(group) != {"name", "namespace", "controllers", "replicas", "selector", "secrets", "pdb", "expected_ca_sha256", "generated_assets"}:
             raise RotationError("Unexpected rotation policy fields")
         namespace, secrets, controllers = ALLOWED[group["name"]]
+        ca_pins(group)
+        asset_mappings(group)
         actual = tuple((c.get("kind"), c.get("name"), c.get("replicas")) for c in group["controllers"])
         if (group["namespace"] != namespace or tuple(group["secrets"]) != secrets or actual != controllers
                 or group["replicas"] != sum(c[2] for c in controllers)):
@@ -199,7 +210,82 @@ class Lease:
         self._write(lease)
 
 
+def ca_pins(group):
+    pins = group.get("expected_ca_sha256", {})
+    if not isinstance(pins, dict) or set(pins) != set(group["secrets"]) or any(
+            not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value) for value in pins.values()):
+        raise RotationError("Approved public CA pins missing or unfilled")
+    return pins
+
+
+def asset_mappings(group):
+    assets = group.get("generated_assets", {})
+    if assets != (AM_ASSETS if group["name"] == "alertmanager" else {}):
+        raise RotationError("Unexpected generated certificate asset mapping")
+    return assets
+
+
+def public_bytes(secret, key):
+    try:
+        data = base64.b64decode(secret["data"][key], validate=True)
+        if not data or len(data) > 1024 * 1024:
+            raise ValueError()
+        # VMOperator v0.75 LoadKeyFromSecret trims trailing whitespace before copy.
+        return data.rstrip()
+    except (KeyError, ValueError):
+        raise RotationError("Invalid public certificate/config material") from None
+
+
+def validate_gossip_config(secret, mapping):
+    # VMOperator emits this shallow YAML. Reject alternate syntax/duplicates rather
+    # than approximating a YAML parser that might accept a different consumer path.
+    try:
+        text = public_bytes(secret, mapping["config_key"]).decode("utf-8")
+    except UnicodeDecodeError:
+        raise RotationError("Invalid generated gossip configuration") from None
+    sections, section = {}, None
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        header = re.fullmatch(r"(tls_server_config|tls_client_config):", line)
+        scalar = re.fullmatch(r"  ([a-z_]+): ([^\n]+)", line)
+        if header and header[1] not in sections:
+            section = header[1]
+            sections[section] = {}
+        elif scalar and section and scalar[1] not in sections[section]:
+            value = scalar[2]
+            if len(value) > 1 and value[0] == value[-1] and value[0] in ("'", '"'):
+                value = value[1:-1]
+            sections[section][scalar[1]] = value
+        else:
+            raise RotationError("Unsupported generated gossip configuration syntax")
+    path = mapping["mount_path"] + "/"
+    expected = {
+        "tls_server_config": {"cert_file": path + mapping["certificate_key"],
+            "key_file": path + mapping["key_key"], "client_ca_file": path + mapping["ca_key"],
+            "client_auth_type": "RequireAndVerifyClientCert"},
+        "tls_client_config": {"cert_file": path + mapping["certificate_key"],
+            "key_file": path + mapping["key_key"], "ca_file": path + mapping["ca_key"]},
+    }
+    if (sections.get("tls_client_config", {}).get("insecure_skip_verify", "false") != "false"
+            or set(sections) != set(expected)) or any(
+            sections[section].get(key) != value for section, fields in expected.items() for key, value in fields.items()):
+        raise RotationError("Generated gossip config does not consume the approved TLS assets")
+
+
+def generated_asset_uid(api, group, mapping, leaf, ca):
+    secret = api.get(core_path(group["namespace"], "secrets", mapping["secret"]))
+    meta = secret["metadata"]
+    if meta.get("name") != mapping["secret"] or meta.get("namespace") != group["namespace"]:
+        raise RotationError("Unexpected generated certificate Secret scope")
+    if public_bytes(secret, mapping["certificate_key"]) != leaf or public_bytes(secret, mapping["ca_key"]) != ca:
+        raise RotationError("Operator generated public certificate assets are not synchronized")
+    validate_gossip_config(secret, mapping)
+    return meta["uid"]
+
+
 def certificate_state(api, group):
+    pins, assets = ca_pins(group), asset_mappings(group)
     leaves, roots, identities = [], [], []
     for name in group["secrets"]:
         secret = api.get(core_path(group["namespace"], "secrets", name))
@@ -208,17 +294,37 @@ def certificate_state(api, group):
                 or meta.get("annotations", {}).get("cert-manager.io/certificate-name") != name):
             raise RotationError("Unexpected certificate Secret owner/scope")
         identities.append(meta["uid"])
-        for key, target in (("tls.crt", leaves), ("ca.crt", roots)):
-            try:
-                data = base64.b64decode(secret["data"][key], validate=True)
-                if not data or len(data) > 1024 * 1024:
-                    raise ValueError()
-            except (KeyError, ValueError):
-                raise RotationError("Invalid public certificate material") from None
-            target.append(name + ":" + hashlib.sha256(data).hexdigest())
+        leaf, ca = public_bytes(secret, "tls.crt"), public_bytes(secret, "ca.crt")
+        ca_hash = hashlib.sha256(ca).hexdigest()
+        if ca_hash != pins[name]:
+            raise RotationError("Public CA pin mismatch; separate trust migration required")
+        leaves.append(name + ":" + hashlib.sha256(leaf).hexdigest())
+        roots.append(name + ":" + ca_hash)
+        if name in assets:
+            identities.append(generated_asset_uid(api, group, assets[name], leaf, ca))
     leaf = hashlib.sha256("\n".join(leaves).encode()).hexdigest()
     trust = hashlib.sha256("\n".join(roots).encode()).hexdigest()
     return {"annotation": leaf + ":" + trust, "trust": trust, "uids": tuple(identities)}
+
+
+def generated_mounts(pod, group):
+    for mapping in asset_mappings(group).values():
+        volumes = [v for v in pod["spec"].get("volumes", [])
+                   if v.get("secret", {}).get("secretName") == mapping["secret"]]
+        containers = [c for c in pod["spec"]["containers"] if c["name"] == mapping["container"]]
+        if len(volumes) != 1 or len(containers) != 1:
+            raise RotationError("Generated TLS assets are not mounted by the native consumer")
+        volume, container = volumes[0], containers[0]
+        keys = [mapping[k] for k in ("certificate_key", "ca_key", "key_key", "config_key")]
+        items = volume["secret"].get("items")
+        if items is not None and not set(keys) <= {i["key"] for i in items if i.get("key") == i.get("path")}:
+            raise RotationError("Generated TLS asset projection omits or renames required files")
+        mounts = [m for m in container.get("volumeMounts", [])
+                  if m.get("name") == volume["name"] and m.get("mountPath") == mapping["mount_path"]
+                  and not m.get("subPath") and not m.get("subPathExpr")]
+        expected_arg = "--cluster.tls-config=" + mapping["mount_path"] + "/" + mapping["config_key"]
+        if len(mounts) != 1 or expected_arg not in container.get("args", []):
+            raise RotationError("Native consumer does not use the approved generated gossip config")
 
 
 def controller_owner(item):
@@ -285,8 +391,11 @@ class Rotator:
                 for source in volume.get("projected", {}).get("sources", []):
                     if source.get("secret"):
                         mounted.add(source["secret"]["name"])
-            if not set(group["secrets"]) <= mounted:
+            assets = asset_mappings(group)
+            required = {assets[name]["secret"] if name in assets else name for name in group["secrets"]}
+            if not required <= mounted:
                 raise RotationError("Pod does not mount expected certificate Secrets")
+            generated_mounts(pod, group)
             owner = controller_owner(pod)
             parent = None
             if owner["kind"] == "ReplicaSet":
@@ -416,6 +525,9 @@ def main():
         api = Kubernetes()
         lease = Lease(api, os.environ.get("POD_UID", "") + "-" + uuid.uuid4().hex)
         lease.acquire()
+        # Check all approved trust roots and generated assets before any group is disrupted.
+        for group in policy["groups"]:
+            certificate_state(api, group)
         runner = Rotator(api, lease)
         for group in policy["groups"]:
             runner.rotate_group(group)

@@ -1,5 +1,16 @@
 # 新增 VictoriaMetrics 集群：第一阶段
 
+## 2026-10-09 正式名称候选与安装前置检查
+
+当前候选 namespace 为 `victoriametrics`，Operator release 为 `victoriametrics-operator`，资源 release / VM CR 名为 `victoriametrics-cluster`。本文其余带 2026-10-08 时点的名称和结果保留为历史记录；不表示新位置已部署。当前所有新工作负载显式排除高内存节点 `172.28.1.222` 和 algorithm 专属节点 `172.28.3.32`，包含 ClickHouse 临时 schema Job；仍使用 GPU 配额 0 和不可抢占 PriorityClass。
+
+新 Operator release **复用现有 CRD，不创建、升级、删除或接管 CRD**。[官方 chart 0.68.1 的 values](https://github.com/VictoriaMetrics/helm-charts/blob/victoria-metrics-operator-0.68.1/charts/victoria-metrics-operator/values.yaml) 明确 `crds.enabled: false` 必须同时搭配 `crds.plain: false` 才能关闭全部 CRD 创建；[Chart.yaml](https://github.com/VictoriaMetrics/helm-charts/blob/victoria-metrics-operator-0.68.1/charts/victoria-metrics-operator/Chart.yaml) 的 plain CRD 子 chart 仅受 `crds.plain` 控制。当前候选已将两者设为 false，cleanup / upgrade hook 继续关闭。
+
+在构建机执行新 release 安装前，必须只读核对锁定 chart 提供的完整 CRD 集合在目标集群存在、`Established=True`，并逐项比较版本和 schema 兼容性；同时保留当前 owner / Helm 注解，不覆盖。随后渲染 Operator 候选，确认无 `CustomResourceDefinition` 或 CRD 修改 hook，再对 VM CR 做 server-side dry-run。缺少 CRD 或 schema 不兼容时停止安装，不能把 Pod Pending / controller 报错当作可忽略结果。
+
+全新集群的 bootstrap 是独立流程：先审阅并安装与 Operator 锁定版本匹配的完整 CRD、等待 Established 并验证 schema，再使用本目录的“不管理 CRD”Operator values。不能直接运行本候选而默默跳过 CRD；也不能为了方便将已存在 CRD 的 ownership 改到新 release。历史“首次创建 plain CRD”的步骤不用于此次现有集群的新 namespace 安装。
+
+
 本目录只拥有 `observability-metrics` 内的新观测资源。现有 Prometheus、Alloy、Loki、Grafana、exporter、训练任务和节点配置均不在这个 release 内。首期仅抓本目录新增组件的自监控指标；不读取旧 TSDB、不向旧 Prometheus 增加 remote_write、不导入历史数据、不安装重复 exporter、不接管 PrometheusRule。
 
 这保证部署差异可限制在新增对象，但共享节点 CPU、内存、网络、API Server 与 EBS 仍有开销，不能据此宣称绝对零影响。上线前后须对比训练 Pod UID、重启数、状态和节点资源压力；资源不足时让新增 Pod Pending，不抢占现有训练。

@@ -26,7 +26,7 @@ secrets:
 scheduling:
   nodeSelector: {}
   tolerations: []
-  excludedHostnames: [172.28.1.222]
+  excludedHostnames: [172.28.1.222, 172.28.3.32]
   # Do not pin observability to CPU nodes. GPU nodes are eligible as long as
   # they have spare CPU/memory and do not require dedicated training tolerations.
   preferredHostnames: []

@@ -25,8 +25,10 @@ rbac:
   aggregatedClusterRoles:
     enabled: false
 crds:
-  enabled: true
-  plain: true
+  # Reuse the existing locked CRDs without adopting them into this new release.
+  # Chart 0.68.1 needs BOTH false: plain=true enables the plain CRD subchart.
+  enabled: false
+  plain: false
   cleanup:
     enabled: false
   upgrade:
@@ -52,7 +54,7 @@ affinity:
         - matchExpressions:
             - key: kubernetes.io/hostname
               operator: NotIn
-              values: [172.28.1.222]
+              values: [172.28.1.222, 172.28.3.32]
 podLabels:
   observability.raytrain.io/component: vm-operator
 resources:

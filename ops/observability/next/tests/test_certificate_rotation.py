@@ -48,7 +48,8 @@ def pod(name, owner, annotation=None):
 def group():
     return {"name": "keeper", "namespace": "clickhouse", "replicas": 3,
             "selector": {"component": "keeper"}, "pdb": "keeper-pdb",
-            "secrets": ["obs-mtls-keeper"], "controllers": [
+            "secrets": ["obs-mtls-keeper"], "expected_ca_sha256": {"obs-mtls-keeper": hashlib.sha256(b"root-v1").hexdigest()},
+            "generated_assets": {}, "controllers": [
                 {"kind": "StatefulSet", "name": "keeper-" + str(i), "replicas": 1}
                 for i in range(3)]}
 
@@ -236,6 +237,12 @@ class RotationSafetyTests(unittest.TestCase):
 
     def test_policy_disallows_training_namespaces_or_pg_controllers(self):
         policy = json.loads((ROOT / "mtls/rotation-policy.json").read_text())
+        unfilled = copy.deepcopy(policy)
+        unfilled["groups"][0]["expected_ca_sha256"] = {unfilled["groups"][0]["secrets"][0]: "__UNFILLED__"}
+        with self.assertRaisesRegex(rotation.RotationError, "CA"):
+            rotation.validate_policy(unfilled)
+        for configured in policy["groups"]:
+            configured["expected_ca_sha256"] = {name: hashlib.sha256(b"root-v1").hexdigest() for name in configured["secrets"]}
         rotation.validate_policy(policy)
         for change in (lambda p: p["groups"][0].update(namespace="tenant-local"),
                        lambda p: p["groups"][0]["controllers"][0].update(name="nightingale-postgres-1")):
@@ -449,22 +456,105 @@ class RenewalTrustRegressionTests(unittest.TestCase):
                 self.assertEqual([], api.events)
 
     def test_stale_generated_alertmanager_public_assets_block_rotation_state(self):
-        source_name = "obs-mtls-alertmanager-gossip"
-        generated_name = "vmalertmanager-victoriametrics-cluster-config"
-        api = FakeAPI()
-        source = secret(name=source_name)
-        source["metadata"]["namespace"] = "victoriametrics"
-        generated = {"metadata": {"namespace": "victoriametrics", "name": generated_name, "uid": "generated"},
-                     "data": {"copied-cert": base64.b64encode(b"old-leaf").decode(),
-                              "copied-ca": source["data"]["ca.crt"]}}
-        api.secrets = {source_name: source, generated_name: generated}
-        configured = {"namespace": "victoriametrics", "secrets": [source_name],
-            "expected_ca_sha256": {source_name: hashlib.sha256(b"root-v1").hexdigest()},
-            "generated_assets": {source_name: {"secret": generated_name,
-                "certificate_key": "copied-cert", "ca_key": "copied-ca"}}}
-        with self.assertRaisesRegex(rotation.RotationError, "generated"):
+        api, configured = alertmanager_fixture()
+        mapping = rotation.AM_ASSETS[rotation.AM_SOURCE]
+        api.secrets[mapping["secret"]]["data"][mapping["certificate_key"]] = base64.b64encode(b"old-leaf").decode()
+        with self.assertRaisesRegex(rotation.RotationError, "generated.*not synchronized"):
             rotation.certificate_state(api, configured)
         self.assertEqual([], api.events)
+
+
+def alertmanager_fixture():
+    source_name = rotation.AM_SOURCE
+    mapping = rotation.AM_ASSETS[source_name]
+    source = secret(name=source_name, leaf=b"leaf-v1\n", ca=b"root-v1\n")
+    source["metadata"]["namespace"] = "victoriametrics"
+    api = FakeAPI()
+    path = mapping["mount_path"] + "/"
+    gossip = "\n".join([
+        "tls_server_config:", "  cert_file: " + path + mapping["certificate_key"],
+        "  key_file: " + path + mapping["key_key"], "  client_ca_file: " + path + mapping["ca_key"],
+        "  client_auth_type: RequireAndVerifyClientCert", "  min_version: TLS13",
+        "tls_client_config:", "  cert_file: " + path + mapping["certificate_key"],
+        "  key_file: " + path + mapping["key_key"], "  ca_file: " + path + mapping["ca_key"],
+        "  server_name: alertmanager.victoriametrics.svc", "",
+    ])
+    generated = {"metadata": {"namespace": "victoriametrics", "name": mapping["secret"], "uid": "generated"},
+        "data": {mapping["certificate_key"]: base64.b64encode(b"leaf-v1").decode(),
+                 mapping["ca_key"]: base64.b64encode(b"root-v1").decode(),
+                 mapping["key_key"]: "PRIVATE-DO-NOT-READ",
+                 mapping["config_key"]: base64.b64encode(gossip.encode()).decode()}}
+    api.secrets = {source_name: source, mapping["secret"]: generated}
+    configured = {"name": "alertmanager", "namespace": "victoriametrics", "secrets": [source_name],
+        "expected_ca_sha256": {source_name: hashlib.sha256(b"root-v1").hexdigest()},
+        "generated_assets": copy.deepcopy(rotation.AM_ASSETS)}
+    return api, configured
+
+
+class GeneratedAssetConsumptionTests(unittest.TestCase):
+    def native_pod(self):
+        mapping = rotation.AM_ASSETS[rotation.AM_SOURCE]
+        return {"spec": {"containers": [{"name": "alertmanager", "args": [
+            "--cluster.tls-config=" + mapping["mount_path"] + "/" + mapping["config_key"]],
+            "volumeMounts": [{"name": "tls-assets", "mountPath": mapping["mount_path"]}]}],
+            "volumes": [{"name": "tls-assets", "secret": {"secretName": mapping["secret"]}}]}}
+
+    def test_matching_public_copies_accept_operator_tail_trim_and_omit_private_key(self):
+        api, configured = alertmanager_fixture()
+        state = rotation.certificate_state(api, configured)
+        self.assertEqual(2, len(state["uids"]))
+        self.assertNotIn("PRIVATE", json.dumps(state))
+        rotation.generated_mounts(self.native_pod(), configured)
+
+    def test_copied_ca_mismatch_is_rejected(self):
+        api, configured = alertmanager_fixture()
+        mapping = rotation.AM_ASSETS[rotation.AM_SOURCE]
+        api.secrets[mapping["secret"]]["data"][mapping["ca_key"]] = base64.b64encode(b"other-ca").decode()
+        with self.assertRaisesRegex(rotation.RotationError, "generated"):
+            rotation.certificate_state(api, configured)
+
+    def test_unused_equal_assets_do_not_mask_wrong_gossip_paths(self):
+        api, configured = alertmanager_fixture()
+        mapping = rotation.AM_ASSETS[rotation.AM_SOURCE]
+        data = api.secrets[mapping["secret"]]["data"]
+        gossip = base64.b64decode(data[mapping["config_key"]]).replace(mapping["certificate_key"].encode(), b"wrong-old-cert")
+        data[mapping["config_key"]] = base64.b64encode(gossip).decode()
+        with self.assertRaisesRegex(rotation.RotationError, "consume"):
+            rotation.certificate_state(api, configured)
+
+    def test_insecure_generated_gossip_is_rejected(self):
+        api, configured = alertmanager_fixture()
+        mapping = rotation.AM_ASSETS[rotation.AM_SOURCE]
+        data = api.secrets[mapping["secret"]]["data"]
+        gossip = base64.b64decode(data[mapping["config_key"]]) + b"  insecure_skip_verify: true\n"
+        data[mapping["config_key"]] = base64.b64encode(gossip).decode()
+        with self.assertRaisesRegex(rotation.RotationError, "consume"):
+            rotation.certificate_state(api, configured)
+
+    def test_virtual_source_mount_does_not_bypass_native_consumer_binding(self):
+        _, configured = alertmanager_fixture()
+        pod = self.native_pod()
+        pod["spec"]["volumes"][0]["secret"]["secretName"] = rotation.AM_SOURCE
+        with self.assertRaisesRegex(rotation.RotationError, "mounted"):
+            rotation.generated_mounts(pod, configured)
+
+    def test_generated_mount_without_actual_gossip_argument_is_rejected(self):
+        _, configured = alertmanager_fixture()
+        pod = self.native_pod()
+        pod["spec"]["containers"][0]["args"] = []
+        with self.assertRaisesRegex(rotation.RotationError, "does not use"):
+            rotation.generated_mounts(pod, configured)
+
+    def test_subpath_or_incomplete_projection_is_rejected(self):
+        _, configured = alertmanager_fixture()
+        for change in (
+            lambda p: p["spec"]["containers"][0]["volumeMounts"][0].update(subPath="tls"),
+            lambda p: p["spec"]["volumes"][0]["secret"].update(items=[{"key": "wrong", "path": "wrong"}]),
+        ):
+            pod = self.native_pod()
+            change(pod)
+            with self.assertRaises(rotation.RotationError):
+                rotation.generated_mounts(pod, configured)
 
 
 if __name__ == "__main__":

@@ -2,41 +2,147 @@
   "version": 1,
   "groups": [
     {
-      "name": "keeper", "namespace": "clickhouse", "replicas": 3,
-      "selector": {"observability.raytrain.io/component": "keeper"},
-      "pdb": "chk-clickhouse-keeper", "secrets": ["obs-mtls-keeper"],
+      "name": "keeper",
+      "namespace": "clickhouse",
+      "replicas": 3,
+      "selector": {
+        "observability.raytrain.io/component": "keeper"
+      },
+      "pdb": "chk-clickhouse-keeper",
+      "secrets": [
+        "obs-mtls-keeper"
+      ],
       "controllers": [
-        {"kind": "StatefulSet", "name": "chk-clickhouse-keeper-0-0", "replicas": 1},
-        {"kind": "StatefulSet", "name": "chk-clickhouse-keeper-0-1", "replicas": 1},
-        {"kind": "StatefulSet", "name": "chk-clickhouse-keeper-0-2", "replicas": 1}
-      ]
+        {
+          "kind": "StatefulSet",
+          "name": "chk-clickhouse-keeper-0-0",
+          "replicas": 1
+        },
+        {
+          "kind": "StatefulSet",
+          "name": "chk-clickhouse-keeper-0-1",
+          "replicas": 1
+        },
+        {
+          "kind": "StatefulSet",
+          "name": "chk-clickhouse-keeper-0-2",
+          "replicas": 1
+        }
+      ],
+      "expected_ca_sha256": {
+        "obs-mtls-keeper": "__PIN_APPROVED_PUBLIC_CA_SHA256__"
+      },
+      "generated_assets": {}
     },
     {
-      "name": "clickhouse", "namespace": "clickhouse", "replicas": 2,
-      "selector": {"observability.raytrain.io/component": "clickhouse"},
-      "pdb": "chi-clickhouse-telemetry", "secrets": ["obs-mtls-clickhouse"],
+      "name": "clickhouse",
+      "namespace": "clickhouse",
+      "replicas": 2,
+      "selector": {
+        "observability.raytrain.io/component": "clickhouse"
+      },
+      "pdb": "chi-clickhouse-telemetry",
+      "secrets": [
+        "obs-mtls-clickhouse"
+      ],
       "controllers": [
-        {"kind": "StatefulSet", "name": "chi-clickhouse-telemetry-0-0", "replicas": 1},
-        {"kind": "StatefulSet", "name": "chi-clickhouse-telemetry-0-1", "replicas": 1}
-      ]
+        {
+          "kind": "StatefulSet",
+          "name": "chi-clickhouse-telemetry-0-0",
+          "replicas": 1
+        },
+        {
+          "kind": "StatefulSet",
+          "name": "chi-clickhouse-telemetry-0-1",
+          "replicas": 1
+        }
+      ],
+      "expected_ca_sha256": {
+        "obs-mtls-clickhouse": "__PIN_APPROVED_PUBLIC_CA_SHA256__"
+      },
+      "generated_assets": {}
     },
     {
-      "name": "redis", "namespace": "nightingale", "replicas": 3,
-      "selector": {"app": "redis-ha", "release": "nightingale-redis"},
-      "pdb": "nightingale-redis-pdb", "secrets": ["obs-mtls-redis-ha-peer"],
-      "controllers": [{"kind": "StatefulSet", "name": "nightingale-redis-server", "replicas": 3}]
+      "name": "redis",
+      "namespace": "nightingale",
+      "replicas": 3,
+      "selector": {
+        "app": "redis-ha",
+        "release": "nightingale-redis"
+      },
+      "pdb": "nightingale-redis-pdb",
+      "secrets": [
+        "obs-mtls-redis-ha-peer"
+      ],
+      "controllers": [
+        {
+          "kind": "StatefulSet",
+          "name": "nightingale-redis-server",
+          "replicas": 3
+        }
+      ],
+      "expected_ca_sha256": {
+        "obs-mtls-redis-ha-peer": "__PIN_APPROVED_PUBLIC_CA_SHA256__"
+      },
+      "generated_assets": {}
     },
     {
-      "name": "nightingale", "namespace": "nightingale", "replicas": 2,
-      "selector": {"app.kubernetes.io/name": "nightingale"},
-      "pdb": "nightingale", "secrets": ["obs-mtls-n9e-postgres-client", "obs-mtls-nightingale-redis"],
-      "controllers": [{"kind": "Deployment", "name": "nightingale", "replicas": 2}]
+      "name": "nightingale",
+      "namespace": "nightingale",
+      "replicas": 2,
+      "selector": {
+        "app.kubernetes.io/name": "nightingale"
+      },
+      "pdb": "nightingale",
+      "secrets": [
+        "obs-mtls-n9e-postgres-client",
+        "obs-mtls-nightingale-redis"
+      ],
+      "controllers": [
+        {
+          "kind": "Deployment",
+          "name": "nightingale",
+          "replicas": 2
+        }
+      ],
+      "expected_ca_sha256": {
+        "obs-mtls-n9e-postgres-client": "__PIN_APPROVED_PUBLIC_CA_SHA256__",
+        "obs-mtls-nightingale-redis": "__PIN_APPROVED_PUBLIC_CA_SHA256__"
+      },
+      "generated_assets": {}
     },
     {
-      "name": "alertmanager", "namespace": "victoriametrics", "replicas": 3,
-      "selector": {"observability.raytrain.io/component": "vmalertmanager"},
-      "pdb": "vmalertmanager-victoriametrics-cluster", "secrets": ["obs-mtls-alertmanager-gossip"],
-      "controllers": [{"kind": "StatefulSet", "name": "vmalertmanager-victoriametrics-cluster", "replicas": 3}]
+      "name": "alertmanager",
+      "namespace": "victoriametrics",
+      "replicas": 3,
+      "selector": {
+        "observability.raytrain.io/component": "vmalertmanager"
+      },
+      "pdb": "vmalertmanager-victoriametrics-cluster",
+      "secrets": [
+        "obs-mtls-alertmanager-gossip"
+      ],
+      "controllers": [
+        {
+          "kind": "StatefulSet",
+          "name": "vmalertmanager-victoriametrics-cluster",
+          "replicas": 3
+        }
+      ],
+      "expected_ca_sha256": {
+        "obs-mtls-alertmanager-gossip": "__PIN_APPROVED_PUBLIC_CA_SHA256__"
+      },
+      "generated_assets": {
+        "obs-mtls-alertmanager-gossip": {
+          "secret": "vmalertmanager-victoriametrics-cluster-config",
+          "certificate_key": "victoriametrics_obs-mtls-alertmanager-gossip_tls.crt",
+          "ca_key": "victoriametrics_obs-mtls-alertmanager-gossip_ca.crt",
+          "key_key": "victoriametrics_obs-mtls-alertmanager-gossip_tls.key",
+          "config_key": "gossip_config.yaml",
+          "mount_path": "/etc/alertmanager/tls_assets",
+          "container": "alertmanager"
+        }
+      }
     }
   ]
 }

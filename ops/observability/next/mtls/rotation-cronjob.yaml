@@ -116,7 +116,7 @@ metadata:
 rules:
   - apiGroups: ['']
     resources: [secrets]
-    resourceNames: [obs-mtls-alertmanager-gossip]
+    resourceNames: [obs-mtls-alertmanager-gossip, vmalertmanager-victoriametrics-cluster-config]
     verbs: [get]
   - apiGroups: [apps]
     resources: [statefulsets]

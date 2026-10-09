@@ -1,0 +1,4 @@
+image:
+  repository: harbor.wellspiking.ai/guofeng.su/approver-policy
+  tag: v0.28.0-source-1a955b0a
+  digest: sha256:1a955b0a5c41d319fd56b5f85aaff6f2eaba01d70f3b1adf001eac4d7b1d49e5
