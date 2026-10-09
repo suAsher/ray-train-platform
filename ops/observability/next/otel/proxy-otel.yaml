@@ -21,7 +21,7 @@ static_resources:
                   trusted_ca: {filename: /etc/obs-mtls/ca.crt}
                   match_typed_subject_alt_names:
                     - san_type: URI
-                      matcher: {exact: "spiffe://observability.raytrain.local/observability-otel/canary"}
+                      matcher: {exact: "spiffe://observability.raytrain.local/opentelemetry/canary"}
           filters:
             - name: envoy.filters.network.tcp_proxy
               typed_config:
@@ -48,7 +48,7 @@ static_resources:
                   trusted_ca: {filename: /etc/obs-mtls/ca.crt}
                   match_typed_subject_alt_names:
                     - san_type: URI
-                      matcher: {exact: "spiffe://observability.raytrain.local/observability-otel/canary"}
+                      matcher: {exact: "spiffe://observability.raytrain.local/opentelemetry/canary"}
           filters:
             - name: envoy.filters.network.http_connection_manager
               typed_config:
@@ -95,7 +95,7 @@ static_resources:
                   trusted_ca: {filename: /etc/obs-mtls/ca.crt}
                   match_typed_subject_alt_names:
                     - san_type: URI
-                      matcher: {exact: "spiffe://observability.raytrain.local/observability-metrics/vmagent"}
+                      matcher: {exact: "spiffe://observability.raytrain.local/victoriametrics/vmagent"}
           filters:
             - name: envoy.filters.network.http_connection_manager
               typed_config:

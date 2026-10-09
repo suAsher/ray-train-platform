@@ -19,8 +19,8 @@ import ssl
 import time
 
 
-HOST = "nightingale.observability-alerting.svc"
-REDIS_HOSTS = tuple(f"n9e-redis-announce-{i}.observability-alerting.svc" for i in range(3))
+HOST = "nightingale.nightingale.svc"
+REDIS_HOSTS = tuple(f"nightingale-redis-announce-{i}.nightingale.svc" for i in range(3))
 MAXIMUM = 1024 * 1024
 
 

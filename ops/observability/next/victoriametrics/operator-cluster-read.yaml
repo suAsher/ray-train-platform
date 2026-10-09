@@ -2,7 +2,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: raytrain-vm-operator
+  name: victoriametrics-operator
   labels:
     app.kubernetes.io/part-of: raytrain-observability-additive
     app.kubernetes.io/name: victoria-metrics-operator

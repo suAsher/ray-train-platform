@@ -9,7 +9,7 @@ on a partial failure stop and review names; do not delete or rerun blindly.
 
 Two temporary CA keys are destroyed with their restricted temporary directory.
 Certificates expire after 90 days; later rotation is a separate reviewed task.
-CNPG owns n9e-postgres-ca, which this tool must never create.
+CNPG owns nightingale-postgres-ca, which this tool must never create.
 """
 
 import argparse
@@ -24,18 +24,18 @@ import sys
 import tempfile
 
 
-NAMESPACES = frozenset({"observability-metrics", "observability-analytics",
-                        "observability-otel", "observability-alerting"})
+NAMESPACES = frozenset({"victoriametrics", "clickhouse",
+                        "opentelemetry", "nightingale"})
 ALPHABET = string.ascii_letters + string.digits
 CERTIFICATE_DAYS = 90
-CLICKHOUSE_SANS = tuple("clickhouse-observability" + suffix for suffix in (
-    "", ".observability-analytics", ".observability-analytics.svc",
-    ".observability-analytics.svc.cluster.local"))
+CLICKHOUSE_SANS = tuple("clickhouse-clickhouse" + suffix for suffix in (
+    "", ".clickhouse", ".clickhouse.svc",
+    ".clickhouse.svc.cluster.local"))
 OTEL_SERVER_SANS = tuple(name + suffix for name in (
     "otel-gateway", "otel-gateway-headless", "otel-gateway-0.otel-gateway-headless",
     "otel-gateway-1.otel-gateway-headless") for suffix in (
-        "", ".observability-otel", ".observability-otel.svc",
-        ".observability-otel.svc.cluster.local"))
+        "", ".opentelemetry", ".opentelemetry.svc",
+        ".opentelemetry.svc.cluster.local"))
 
 
 class BootstrapError(Exception):
@@ -44,24 +44,24 @@ class BootstrapError(Exception):
 
 def secret_plan():
     rows = (
-        ("metrics", "vm-self-write", ("token",)),
-        ("metrics", "vm-self-read", ("token",)),
-        ("analytics", "clickhouse-operator-auth", ("username", "password")),
-        ("analytics", "clickhouse-auth", ("default-password-sha256", "admin-password-sha256",
+        ("victoriametrics", "vm-self-write", ("token",)),
+        ("victoriametrics", "vm-self-read", ("token",)),
+        ("clickhouse", "clickhouse-operator-auth", ("username", "password")),
+        ("clickhouse", "clickhouse-auth", ("default-password-sha256", "admin-password-sha256",
                                            "ingest-password-sha256", "query-password-sha256")),
-        ("analytics", "clickhouse-bootstrap-auth", ("password",)),
-        ("analytics", "clickhouse-query-auth", ("password",)),
-        ("analytics", "clickhouse-server-tls", ("tls.crt", "tls.key", "ca.crt")),
-        ("otel", "otel-clickhouse-auth", ("password",)),
-        ("otel", "clickhouse-server-ca", ("ca.crt",)),
-        ("otel", "otel-canary-server-tls", ("tls.crt", "tls.key", "ca.crt")),
-        ("otel", "otel-canary-client-tls", ("tls.crt", "tls.key", "ca.crt")),
-        ("alerting", "n9e-db-app", ("username", "password")),
-        ("alerting", "n9e-redis-auth", ("auth", "sentinel-password")),
-        ("alerting", "n9e-bootstrap-admin", ("password",)),
-        ("alerting", "n9e-vm-read", ("token",)),
+        ("clickhouse", "clickhouse-bootstrap-auth", ("password",)),
+        ("clickhouse", "clickhouse-query-auth", ("password",)),
+        ("clickhouse", "clickhouse-server-tls", ("tls.crt", "tls.key", "ca.crt")),
+        ("opentelemetry", "otel-clickhouse-auth", ("password",)),
+        ("opentelemetry", "clickhouse-server-ca", ("ca.crt",)),
+        ("opentelemetry", "otel-canary-server-tls", ("tls.crt", "tls.key", "ca.crt")),
+        ("opentelemetry", "otel-canary-client-tls", ("tls.crt", "tls.key", "ca.crt")),
+        ("nightingale", "n9e-db-app", ("username", "password")),
+        ("nightingale", "nightingale-redis-auth", ("auth", "sentinel-password")),
+        ("nightingale", "n9e-bootstrap-admin", ("password",)),
+        ("nightingale", "n9e-vm-read", ("token",)),
     )
-    return [{"namespace": "observability-" + ns, "name": name, "keys": keys}
+    return [{"namespace": ns, "name": name, "keys": keys}
             for ns, name, keys in rows]
 
 
@@ -149,7 +149,7 @@ def generate_tls():
 
 
 def make_secret(namespace, name, data, secret_type="Opaque"):
-    if namespace not in NAMESPACES or name == "n9e-postgres-ca":
+    if namespace not in NAMESPACES or name == "nightingale-postgres-ca":
         raise BootstrapError("Secret target is outside the fixed bootstrap scope")
     return {"apiVersion": "v1", "kind": "Secret", "metadata": {
         "namespace": namespace, "name": name, "labels": {
@@ -175,7 +175,7 @@ def build_secrets():
         "otel-canary-server-tls": tls["otel_server"],
         "otel-canary-client-tls": tls["otel_client"],
         "n9e-db-app": {"username": "n9e", "password": random_value()},
-        "n9e-redis-auth": {"auth": random_value(), "sentinel-password": random_value()},
+        "nightingale-redis-auth": {"auth": random_value(), "sentinel-password": random_value()},
         "n9e-bootstrap-admin": {"password": random_value(24)},
         "n9e-vm-read": {"token": read_token},
     }

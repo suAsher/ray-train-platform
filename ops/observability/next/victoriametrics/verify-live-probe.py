@@ -2,7 +2,7 @@
 """Stdlib-only probe for coordinator-created, bounded in-cluster test Pods.
 
 Read stdin JSON: {"pods":[{"name":"...","role":"...","ip":"..."}],
-"services":{"vmauth":"vmauth-raytrain-next.observability-metrics.svc"}}.
+"services":{"vmauth":"vmauth-victoriametrics-cluster.victoriametrics.svc"}}.
 Default --mode operator checks only public health and reads no credentials.
 Full mode needs /certs/{vmagent,canary,admin}/{ca.crt,tls.crt,tls.key} and
 /tokens/{read,write}/token. These are leaf keys, never signing CA private keys.
@@ -27,7 +27,7 @@ import time
 from urllib.parse import urlencode
 
 
-NS = "observability-metrics"
+NS = "victoriametrics"
 FULL_COUNTS = {"operator": 1, "vmstorage": 3, "vminsert": 2, "vmselect": 2,
                "vmauth": 2, "vmagent": 2, "vmalert": 2, "alertmanager": 3}
 METRICS = {"operator": 8080, "vmstorage": 8482, "vminsert": 8480, "vmselect": 8481,
@@ -67,7 +67,7 @@ def validate_inventory(value, mode):
         return {"pods": pods, "services": {}}
     if mode != "full" or Counter(pod["role"] for pod in pods) != Counter(FULL_COUNTS):
         raise ProbeError("full replica inventory required")
-    expected = {"vmauth": f"vmauth-raytrain-next.{NS}.svc"}
+    expected = {"vmauth": f"vmauth-victoriametrics-cluster.{NS}.svc"}
     if value.get("services") != expected:
         raise ProbeError("exact new VMAuth service required")
     return {"pods": pods, "services": expected}

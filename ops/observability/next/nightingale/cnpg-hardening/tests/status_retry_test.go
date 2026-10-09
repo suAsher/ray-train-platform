@@ -63,7 +63,7 @@ func TestObservabilityStatusRetriesTransientAuthWithoutDowngrade(t *testing.T) {
 			t.Cleanup(transport.CloseIdleConnections)
 			instanceClient := instanceClientImpl{Client: client}
 			result := instanceClient.getReplicaStatusFromPodViaHTTP(context.Background(), corev1.Pod{
-				ObjectMeta: metav1.ObjectMeta{Name: "n9e-postgres-1"},
+				ObjectMeta: metav1.ObjectMeta{Name: "nightingale-postgres-1"},
 				Spec: corev1.PodSpec{Containers: []corev1.Container{{
 					Name: "postgres", Command: []string{"/controller/manager", "--status-port-tls"},
 				}}},

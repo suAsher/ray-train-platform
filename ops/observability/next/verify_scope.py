@@ -18,8 +18,8 @@ import sys
 import yaml
 
 
-NAMESPACES = frozenset({"observability-metrics", "observability-analytics",
-                        "observability-otel", "observability-alerting"})
+NAMESPACES = frozenset({"victoriametrics", "clickhouse",
+                        "opentelemetry", "nightingale"})
 PRIORITY_CLASS = "raytrain-observability-additive"
 STORAGE_CLASS = "ebs-ssd-observability-retain"
 DEDICATED_TAINT = "platform.wellspiking.ai/dedicated-tenant"
@@ -259,12 +259,12 @@ def check_webhook(document, where, report):
     if not hooks:
         report.error(where, "webhook list must not be empty")
     for hook in hooks:
-        expected = {"matchLabels": {"kubernetes.io/metadata.name": "observability-alerting"}}
+        expected = {"matchLabels": {"kubernetes.io/metadata.name": "nightingale"}}
         if hook.get("namespaceSelector") != expected:
-            report.error(where, "webhook namespaceSelector must exactly isolate observability-alerting")
+            report.error(where, "webhook namespaceSelector must exactly isolate nightingale")
         client = hook.get("clientConfig", {})
-        if client.get("url") or client.get("service", {}).get("namespace") != "observability-alerting":
-            report.error(where, "webhook service must be in observability-alerting")
+        if client.get("url") or client.get("service", {}).get("namespace") != "nightingale":
+            report.error(where, "webhook service must be in nightingale")
         if not hook.get("rules"):
             report.error(where, "webhook requires explicit CNPG rules")
         for rule in hook.get("rules", []):

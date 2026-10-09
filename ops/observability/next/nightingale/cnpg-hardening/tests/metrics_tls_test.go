@@ -51,9 +51,9 @@ func TestObservabilityMetricsTLSProtocol(t *testing.T) {
 		{name: "no-certificate"},
 		{name: "wrong-ca", authority: otherCA, uris: []string{observabilitytest.MetricsURI}, usage: x509.ExtKeyUsageClientAuth},
 		{name: "wrong-namespace", authority: clientCA, uris: []string{"spiffe://observability.raytrain.local/other/vmagent"}, usage: x509.ExtKeyUsageClientAuth},
-		{name: "wrong-role", authority: clientCA, uris: []string{"spiffe://observability.raytrain.local/observability-metrics/operator"}, usage: x509.ExtKeyUsageClientAuth},
+		{name: "wrong-role", authority: clientCA, uris: []string{"spiffe://observability.raytrain.local/victoriametrics/operator"}, usage: x509.ExtKeyUsageClientAuth},
 		{name: "uri-suffix", authority: clientCA, uris: []string{observabilitytest.MetricsURI + "/extra"}, usage: x509.ExtKeyUsageClientAuth},
-		{name: "multiple-uri-roles", authority: clientCA, uris: []string{observabilitytest.MetricsURI, "spiffe://observability.raytrain.local/observability-metrics/operator"}, usage: x509.ExtKeyUsageClientAuth},
+		{name: "multiple-uri-roles", authority: clientCA, uris: []string{observabilitytest.MetricsURI, "spiffe://observability.raytrain.local/victoriametrics/operator"}, usage: x509.ExtKeyUsageClientAuth},
 		{name: "no-uri", authority: clientCA, usage: x509.ExtKeyUsageClientAuth},
 		{name: "expired", authority: clientCA, uris: []string{observabilitytest.MetricsURI}, usage: x509.ExtKeyUsageClientAuth, expired: true},
 		{name: "server-only-usage", authority: clientCA, uris: []string{observabilitytest.MetricsURI}, usage: x509.ExtKeyUsageServerAuth},
@@ -96,7 +96,7 @@ func TestObservabilityMetricsRejectsInvalidConfiguration(t *testing.T) {
 		{name: "ca-file-corrupt-prefix", tls: true, ca: corruptPrefixPath, uris: observabilitytest.MetricsURI},
 		{name: "identity-unconfigured", tls: true, ca: caPath},
 		{name: "identity-whitespace", tls: true, ca: caPath, uris: " "},
-		{name: "identity-wildcard", tls: true, ca: caPath, uris: "spiffe://observability.raytrain.local/observability-metrics/*"},
+		{name: "identity-wildcard", tls: true, ca: caPath, uris: "spiffe://observability.raytrain.local/victoriametrics/*"},
 		{name: "identity-malformed", tls: true, ca: caPath, uris: "vmagent"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

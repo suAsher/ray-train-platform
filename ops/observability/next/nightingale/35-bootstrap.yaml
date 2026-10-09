@@ -3,7 +3,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: n9e-bootstrap-v911
-  namespace: observability-alerting
+  namespace: nightingale
 spec:
   backoffLimit: 0
   activeDeadlineSeconds: 300
@@ -40,7 +40,7 @@ spec:
               test "${#N9E_ADMIN_PASSWORD}" -eq 24
               exec psql -X --quiet --set ON_ERROR_STOP=1 --single-transaction --file /seed/seed.sql
           env:
-            - {name: PGHOST, value: n9e-postgres-rw.observability-alerting.svc}
+            - {name: PGHOST, value: nightingale-postgres-rw.nightingale.svc}
             - {name: PGDATABASE, value: n9e}
             - {name: PGSSLMODE, value: verify-full}
             - {name: PGSSLROOTCERT, value: /etc/n9e-pg-mtls/ca.crt}
@@ -67,13 +67,13 @@ spec:
             - {name: pg-mtls, mountPath: /etc/n9e-pg-mtls, readOnly: true}
       volumes:
         - name: seed
-          configMap: {name: n9e-postgres-seed-v911}
+          configMap: {name: nightingale-postgres-seed-v911}
         - name: pg-mtls
           projected:
             defaultMode: 0440
             sources:
               - secret:
-                  name: n9e-postgres-ca
+                  name: nightingale-postgres-ca
                   items: [{key: ca.crt, path: ca.crt}]
               - secret:
                   name: obs-mtls-n9e-postgres-bootstrap

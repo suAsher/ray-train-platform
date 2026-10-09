@@ -250,7 +250,7 @@ new file mode 100644
 +	"strings"
 +)
 +
-+const metricsClientURI = "spiffe://observability.raytrain.local/observability-metrics/vmagent"
++const metricsClientURI = "spiffe://observability.raytrain.local/victoriametrics/vmagent"
 +
 +// NewMetricsTLSConfig preserves the instance's server certificate callback and
 +// requires the single reviewed scraping identity. Trust is loaded at startup:

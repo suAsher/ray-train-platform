@@ -34,8 +34,8 @@ import yaml
 
 
 HERE = Path(__file__).resolve().parent
-SERVER_NAME = "otel-gateway.observability-otel.svc.cluster.local"
-CH_SERVER = "clickhouse-observability.observability-analytics.svc.cluster.local"
+SERVER_NAME = "otel-gateway.opentelemetry.svc.cluster.local"
+CH_SERVER = "clickhouse-clickhouse.clickhouse.svc.cluster.local"
 NETWORK_ERRORS = (OSError, http.client.HTTPException, urllib.error.URLError)
 
 

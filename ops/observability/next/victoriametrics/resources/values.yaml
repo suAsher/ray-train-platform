@@ -1,5 +1,5 @@
-name: raytrain-next
-expectedNamespace: observability-metrics
+name: victoriametrics-cluster
+expectedNamespace: victoriametrics
 storageClassName: ebs-ssd-observability-retain
 priorityClassName: raytrain-observability-additive
 clusterLabel: raytrain-vke
@@ -79,11 +79,11 @@ mtls:
     requests: {cpu: 50m, memory: 64Mi}
     limits: {cpu: 300m, memory: 128Mi}
   # Extra namespaces are never inferred from a Kubernetes label or an HTTP header.
-  readRoleURI: spiffe://observability.raytrain.local/observability-alerting/nightingale
+  readRoleURI: spiffe://observability.raytrain.local/nightingale/nightingale
 networkPolicy:
   enabled: true
   apiServerCIDRs: [10.0.96.1/32, 172.28.2.64/32, 172.28.5.50/32]
   apiServerPorts: [443, 6443]
   # Same-namespace canary Pod label: observability.raytrain.io/metrics-client=true.
   # The same label is required in this newly created alerting namespace.
-  readClientNamespaces: [observability-alerting]
+  readClientNamespaces: [nightingale]

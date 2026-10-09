@@ -37,15 +37,15 @@ class CredentialTests(unittest.TestCase):
             self.assertEqual(0, credentials.main([]))
         run.assert_not_called()
         generate.assert_not_called()
-        self.assertIn("observability-metrics/vm-self-read", output.getvalue())
+        self.assertIn("victoriametrics/vm-self-read", output.getvalue())
         self.assertNotIn("PRIVATE", output.getvalue())
 
     def test_plan_contains_only_the_fifteen_new_secrets(self):
         plan = credentials.secret_plan()
         self.assertEqual(15, len(plan))
-        self.assertEqual({"observability-metrics", "observability-analytics", "observability-otel", "observability-alerting"},
+        self.assertEqual({"victoriametrics", "clickhouse", "opentelemetry", "nightingale"},
                          {entry["namespace"] for entry in plan})
-        self.assertNotIn("n9e-postgres-ca", {entry["name"] for entry in plan})
+        self.assertNotIn("nightingale-postgres-ca", {entry["name"] for entry in plan})
         self.assertEqual(len(plan), len({(entry["namespace"], entry["name"]) for entry in plan}))
 
     def test_existing_secret_stops_before_generation_or_writes(self):
@@ -108,7 +108,7 @@ class CredentialTests(unittest.TestCase):
     def test_linked_values_match_and_root_password_is_compatible(self):
         bundle = {(secret["metadata"]["namespace"], secret["metadata"]["name"]): secret for secret in self.bundle()}
         def data(namespace, name):
-            return bundle[("observability-" + namespace, name)]["stringData"]
+            return bundle[({"metrics": "victoriametrics", "analytics": "clickhouse", "otel": "opentelemetry", "alerting": "nightingale"}[namespace], name)]["stringData"]
         read = data("metrics", "vm-self-read")["token"]
         self.assertEqual(read, data("alerting", "n9e-vm-read")["token"])
         self.assertNotEqual(read, data("metrics", "vm-self-write")["token"])
@@ -121,10 +121,10 @@ class CredentialTests(unittest.TestCase):
             self.assertEqual(hashlib.sha256(plaintext.encode()).hexdigest(), hashes[role + "-password-sha256"])
         root_password = data("alerting", "n9e-bootstrap-admin")["password"]
         self.assertRegex(root_password, r"^[A-Za-z0-9]{24}$")
-        self.assertNotEqual(data("alerting", "n9e-redis-auth")["auth"],
-                            data("alerting", "n9e-redis-auth")["sentinel-password"])
+        self.assertNotEqual(data("alerting", "nightingale-redis-auth")["auth"],
+                            data("alerting", "nightingale-redis-auth")["sentinel-password"])
         self.assertEqual("n9e", data("alerting", "n9e-db-app")["username"])
-        self.assertEqual("kubernetes.io/basic-auth", bundle[("observability-alerting", "n9e-db-app")]["type"])
+        self.assertEqual("kubernetes.io/basic-auth", bundle[("nightingale", "n9e-db-app")]["type"])
 
     def test_ca_private_keys_never_enter_a_secret_and_trust_matches(self):
         bundle = self.bundle()
@@ -140,11 +140,11 @@ class CredentialTests(unittest.TestCase):
     def test_sans_include_services_and_both_gateway_replicas(self):
         sans = credentials.OTEL_SERVER_SANS
         for name in ("otel-gateway", "otel-gateway-headless"):
-            self.assertIn(name + ".observability-otel.svc", sans)
-            self.assertIn(name + ".observability-otel.svc.cluster.local", sans)
+            self.assertIn(name + ".opentelemetry.svc", sans)
+            self.assertIn(name + ".opentelemetry.svc.cluster.local", sans)
         for replica in (0, 1):
-            self.assertIn(f"otel-gateway-{replica}.otel-gateway-headless.observability-otel.svc.cluster.local", sans)
-        self.assertIn("clickhouse-observability.observability-analytics.svc.cluster.local", credentials.CLICKHOUSE_SANS)
+            self.assertIn(f"otel-gateway-{replica}.otel-gateway-headless.opentelemetry.svc.cluster.local", sans)
+        self.assertIn("clickhouse-clickhouse.clickhouse.svc.cluster.local", credentials.CLICKHOUSE_SANS)
 
     def test_openssl_failure_is_redacted(self):
         with patch.object(credentials.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "PRIVATE", "PRIVATE")):
@@ -178,7 +178,7 @@ class CredentialTests(unittest.TestCase):
             self.assertIn(purpose, result.stdout)
             self.assertIn("CA:FALSE", result.stdout)
             if name == "otel_server":
-                self.assertIn("otel-gateway-1.otel-gateway-headless.observability-otel.svc.cluster.local", result.stdout)
+                self.assertIn("otel-gateway-1.otel-gateway-headless.opentelemetry.svc.cluster.local", result.stdout)
             if name == "otel_client":
                 self.assertNotIn("TLS Web Server Authentication", result.stdout)
 

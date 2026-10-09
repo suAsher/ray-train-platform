@@ -90,7 +90,7 @@ class VMRuntimeCertificateContracts(unittest.TestCase):
             certificate_key = command(["openssl", "x509", "-in", str(expired / "tls.crt"), "-pubkey", "-noout"]).stdout
             self.assertEqual(public_key, certificate_key)
             sans = command(["openssl", "x509", "-in", str(expired / "tls.crt"), "-ext", "subjectAltName", "-noout"]).stdout
-            self.assertIn("URI:spiffe://observability.raytrain.local/observability-metrics/canary", sans)
+            self.assertIn("URI:spiffe://observability.raytrain.local/victoriametrics/canary", sans)
             self.assertEqual(expired, lab.materials["expired-canary"])
 
 
@@ -114,7 +114,7 @@ class VMRuntimeAlertmanagerContracts(unittest.TestCase):
         self.assertIn("--cluster.tls-config=/config/gossip.yaml", flags)
         peers = [flag for flag in flags if flag.startswith("--cluster.peer=")]
         self.assertEqual(2, len(peers))
-        self.assertTrue(all("vmalertmanager-raytrain-next-0." not in peer for peer in peers))
+        self.assertTrue(all("vmalertmanager-victoriametrics-cluster-0." not in peer for peer in peers))
 
 
 class VMRuntimeOperatorHealthContracts(unittest.TestCase):

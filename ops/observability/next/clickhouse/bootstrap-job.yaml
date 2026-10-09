@@ -1,8 +1,8 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: observability-clickhouse-schema-v1
-  namespace: observability-analytics
+  name: clickhouse-schema-v1
+  namespace: clickhouse
 spec:
   backoffLimit: 2
   activeDeadlineSeconds: 900
@@ -55,10 +55,10 @@ spec:
             - {name: mesh-tls, mountPath: /etc/obs-mtls, readOnly: true}
       volumes:
         - name: schema
-          configMap: {name: observability-clickhouse-schema}
+          configMap: {name: clickhouse-schema}
         - name: tmp
           emptyDir: {sizeLimit: 32Mi}
         - name: client
-          configMap: {name: observability-schema-client}
+          configMap: {name: clickhouse-schema-client}
         - name: mesh-tls
           secret: {secretName: obs-mtls-schema-admin, defaultMode: 0440}

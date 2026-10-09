@@ -144,8 +144,8 @@ class DockerLab:
         command(["docker", "network", "create", "--internal", "--label", "raytrain.mtls-lab=" + self.prefix, self.network])
         for item in self.plan:
             self.issue(item["role"])
-        rendered = command(["helm", "template", "raytrain-next", str(self.vm_root / "resources"),
-                            "--namespace", "observability-metrics"]).stdout
+        rendered = command(["helm", "template", "victoriametrics-cluster", str(self.vm_root / "resources"),
+                            "--namespace", "victoriametrics"]).stdout
         self.objects = [item for item in yaml.safe_load_all(rendered) if item]
 
     def issue(self, role, alternate=False):
@@ -215,7 +215,7 @@ class DockerLab:
 
     def proxy(self, role, pod, suffix):
         config = next(item["data"]["envoy.yaml"] for item in self.objects
-                      if item["kind"] == "ConfigMap" and item["metadata"]["name"] == f"raytrain-next-{role}-mtls")
+                      if item["kind"] == "ConfigMap" and item["metadata"]["name"] == f"victoriametrics-cluster-{role}-mtls")
         # Lab-only admin on a private filesystem Unix socket, never a TCP port.
         # Keep production ConfigMaps unchanged; collect numeric stats only, not
         # config dumps, request headers or HTTP access logs.
@@ -240,7 +240,7 @@ class DockerLab:
         if role:
             material = self.materials[role]
             context.load_cert_chain(material / "tls.crt", material / "tls.key")
-        connection = TLSConnection(pod["ip"], port, server + ".observability-metrics.svc", context)
+        connection = TLSConnection(pod["ip"], port, server + ".victoriametrics.svc", context)
         try:
             connection.request(method, path, body=body, headers=headers or {})
             response = connection.getresponse()

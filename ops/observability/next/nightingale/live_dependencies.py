@@ -17,9 +17,9 @@ import socket
 import ssl
 
 
-PG_HOST = "n9e-postgres-rw.observability-alerting.svc"
-OPERATOR_HOST = "n9e-cnpg-metrics.observability-alerting.svc"
-REDIS_HOSTS = tuple(f"n9e-redis-announce-{i}.observability-alerting.svc" for i in range(3))
+PG_HOST = "nightingale-postgres-rw.nightingale.svc"
+OPERATOR_HOST = "cloudnative-pg-operator-metrics.nightingale.svc"
+REDIS_HOSTS = tuple(f"nightingale-redis-announce-{i}.nightingale.svc" for i in range(3))
 TIMEOUT = 8
 MAXIMUM = 1024 * 1024
 AUTH_ALERTS = frozenset(("TLSV13_ALERT_CERTIFICATE_REQUIRED", "TLSV1_ALERT_UNKNOWN_CA",

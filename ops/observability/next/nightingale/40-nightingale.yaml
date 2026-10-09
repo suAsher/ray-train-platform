@@ -2,14 +2,14 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: nightingale
-  namespace: observability-alerting
+  namespace: nightingale
 automountServiceAccountToken: false
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: nightingale
-  namespace: observability-alerting
+  namespace: nightingale
   labels:
     app.kubernetes.io/name: nightingale
     observability.raytrain.io/stage: additive
@@ -22,7 +22,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: nightingale
-  namespace: observability-alerting
+  namespace: nightingale
 spec:
   # First bootstrap must complete on one instance; apply 50-ha-patch.yaml afterwards.
   replicas: 1
@@ -144,14 +144,14 @@ spec:
             defaultMode: 0440
         - name: redis-auth
           secret:
-            secretName: n9e-redis-auth
+            secretName: nightingale-redis-auth
             defaultMode: 0440
         - name: pg-mtls
           projected:
             defaultMode: 0440
             sources:
               - secret:
-                  name: n9e-postgres-ca
+                  name: nightingale-postgres-ca
                   items: [{key: ca.crt, path: ca.crt}]
               - secret:
                   name: obs-mtls-n9e-postgres-client
@@ -169,7 +169,7 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: nightingale
-  namespace: observability-alerting
+  namespace: nightingale
 spec:
   minAvailable: 1
   selector:

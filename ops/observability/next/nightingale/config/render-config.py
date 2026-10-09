@@ -24,7 +24,7 @@ password = secret_value("/secrets/db", "password")
 if username != "n9e" or not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", password):
     raise SystemExit("database Secret does not match the fixed n9e credential contract")
 dsn = (
-    "host=n9e-postgres-rw.observability-alerting.svc port=5432 "
+    "host=nightingale-postgres-rw.nightingale.svc port=5432 "
     "user=n9e dbname=n9e password="
     + password
     + " sslmode=verify-full sslrootcert=/etc/n9e-pg-mtls/ca.crt"

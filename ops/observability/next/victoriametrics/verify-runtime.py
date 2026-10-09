@@ -30,7 +30,7 @@ from runtime_lab import DockerLab, LabError, auth_users, await_http_status, comm
 
 
 VM_ROOT = Path(__file__).resolve().parent
-NS = "observability-metrics"
+NS = "victoriametrics"
 
 
 def load_credentials():
@@ -137,7 +137,7 @@ def vm_cluster(lab):
     for index in range(3):
         args = {**cluster["vmstorage"]["extraArgs"], "storage.minFreeDiskSpaceBytes": "100MiB",
                 "storageDataPath": "/data", "retentionPeriod": "1d"}
-        alias = f"vmstorage-raytrain-next-{index}.vmstorage-raytrain-next.{NS}.svc"
+        alias = f"vmstorage-victoriametrics-cluster-{index}.vmstorage-victoriametrics-cluster.{NS}.svc"
         pod = lab.native(f"storage-{index}", lab.image("storage"), flags(args), [alias],
                          [(writable_data(lab, f"storage-{index}"), "/data", "rw")])
         lab.proxy("vmstorage", pod, f"storage-{index}")
@@ -145,7 +145,7 @@ def vm_cluster(lab):
     components = {}
     for role, key in (("vminsert", "insert"), ("vmselect", "select")):
         args = {**cluster[role]["extraArgs"], "replicationFactor": "2"}
-        pod = lab.native(key, lab.image(key), flags(args), [f"{role}-raytrain-next.{NS}.svc"])
+        pod = lab.native(key, lab.image(key), flags(args), [f"{role}-victoriametrics-cluster.{NS}.svc"])
         lab.proxy(role, pod, key)
         components[role] = pod
     # Native health checks do not establish peer DNS, TLS or RBAC readiness.
@@ -180,7 +180,7 @@ def vm_cluster(lab):
     auth_file = private_file(lab.directory / "auth-config" / "auth.yaml", yaml.safe_dump({"users": users}), True)
     auth_spec = next(item["spec"] for item in lab.objects if item["kind"] == "VMAuth")
     pod = lab.native("auth", lab.image("auth"), flags({**auth_spec["extraArgs"], "auth.config": "/config/auth.yaml"}),
-                     [f"vmauth-raytrain-next.{NS}.svc"], [(auth_file, "/config/auth.yaml", "ro")])
+                     [f"vmauth-victoriametrics-cluster.{NS}.svc"], [(auth_file, "/config/auth.yaml", "ro")])
     proxy = lab.proxy("vmauth", pod, "auth")
     start_reloader(lab, pod, "auth", auth_file, 8428)
     eventually(lambda: plain_request(pod, 18081, "/healthz")[0] == 200)
@@ -262,7 +262,7 @@ def tls_handshake(lab, pod, port, role, server_name, ca_role):
             return 200, data
 
 
-def gossip_handshake(lab, pod, role, server_name="alertmanager.observability-metrics.svc"):
+def gossip_handshake(lab, pod, role, server_name="alertmanager.victoriametrics.svc"):
     return tls_handshake(lab, pod, 9094, role, server_name, "alertmanager-gossip")
 
 
@@ -276,7 +276,7 @@ def alertmanagers(lab):
                               "client_ca_file": "/gossip/ca.crt", "client_auth_type": "RequireAndVerifyClientCert", "min_version": "TLS13"},
         "tls_client_config": {"ca_file": "/gossip/ca.crt", "cert_file": "/gossip/tls.crt", "key_file": "/gossip/tls.key",
                               "server_name": f"alertmanager.{NS}.svc", "insecure_skip_verify": False}}), True)
-    aliases = [f"vmalertmanager-raytrain-next-{i}.vmalertmanager-raytrain-next.{NS}.svc" for i in range(3)]
+    aliases = [f"vmalertmanager-victoriametrics-cluster-{i}.vmalertmanager-victoriametrics-cluster.{NS}.svc" for i in range(3)]
     for index in range(3):
         args = ["--config.file=/config/alertmanager.yaml", "--storage.path=/data", "--web.listen-address=127.0.0.1:9093",
                 # AM's TLS transport requires a parseable IP, unlike net.Listen.

@@ -3,13 +3,13 @@
   "kind": "Service",
   "metadata": {
     "name": "obs-ch-r0-mtls",
-    "namespace": "observability-analytics"
+    "namespace": "clickhouse"
   },
   "spec": {
     "type": "ClusterIP",
     "publishNotReadyAddresses": true,
     "selector": {
-      "statefulset.kubernetes.io/pod-name": "chi-observability-telemetry-0-0-0"
+      "statefulset.kubernetes.io/pod-name": "chi-clickhouse-telemetry-0-0-0"
     },
     "ports": [
       {
@@ -26,13 +26,13 @@
   "kind": "Service",
   "metadata": {
     "name": "obs-ch-r1-mtls",
-    "namespace": "observability-analytics"
+    "namespace": "clickhouse"
   },
   "spec": {
     "type": "ClusterIP",
     "publishNotReadyAddresses": true,
     "selector": {
-      "statefulset.kubernetes.io/pod-name": "chi-observability-telemetry-0-1-0"
+      "statefulset.kubernetes.io/pod-name": "chi-clickhouse-telemetry-0-1-0"
     },
     "ports": [
       {

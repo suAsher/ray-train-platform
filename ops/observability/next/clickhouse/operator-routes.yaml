@@ -1,34 +1,34 @@
 {
-  "namespace": "observability-analytics",
-  "chi": "observability",
+  "namespace": "clickhouse",
+  "chi": "clickhouse",
   "cluster": "telemetry",
   "shards": 1,
   "replicas": [
     {
       "index": 0,
-      "host": "chi-observability-telemetry-0-0",
-      "pod": "chi-observability-telemetry-0-0-0",
+      "host": "chi-clickhouse-telemetry-0-0",
+      "pod": "chi-clickhouse-telemetry-0-0-0",
       "loopback": "127.0.0.2",
       "service": "obs-ch-r0-mtls",
       "hostnames": [
-        "chi-observability-telemetry-0-0",
-        "chi-observability-telemetry-0-0.observability-analytics",
-        "chi-observability-telemetry-0-0.observability-analytics.svc",
-        "chi-observability-telemetry-0-0.observability-analytics.svc.cluster.local"
+        "chi-clickhouse-telemetry-0-0",
+        "chi-clickhouse-telemetry-0-0.clickhouse",
+        "chi-clickhouse-telemetry-0-0.clickhouse.svc",
+        "chi-clickhouse-telemetry-0-0.clickhouse.svc.cluster.local"
       ],
       "cluster": "ch-replica-0"
     },
     {
       "index": 1,
-      "host": "chi-observability-telemetry-0-1",
-      "pod": "chi-observability-telemetry-0-1-0",
+      "host": "chi-clickhouse-telemetry-0-1",
+      "pod": "chi-clickhouse-telemetry-0-1-0",
       "loopback": "127.0.0.3",
       "service": "obs-ch-r1-mtls",
       "hostnames": [
-        "chi-observability-telemetry-0-1",
-        "chi-observability-telemetry-0-1.observability-analytics",
-        "chi-observability-telemetry-0-1.observability-analytics.svc",
-        "chi-observability-telemetry-0-1.observability-analytics.svc.cluster.local"
+        "chi-clickhouse-telemetry-0-1",
+        "chi-clickhouse-telemetry-0-1.clickhouse",
+        "chi-clickhouse-telemetry-0-1.clickhouse.svc",
+        "chi-clickhouse-telemetry-0-1.clickhouse.svc.cluster.local"
       ],
       "cluster": "ch-replica-1"
     }

@@ -13,8 +13,8 @@ import yaml
 from validate_mtls import load_contract
 
 
-NAME = "observability-clickhouse-operator"
-NAMESPACE = "observability-analytics"
+NAME = "clickhouse-operator"
+NAMESPACE = "clickhouse"
 ENVOY = ("harbor.wellspiking.ai/hub/envoyproxy/envoy:v1.39.3@sha256:"
          "dd85940439de19a0b6ae8419610363ea0ad351d9a994ea007161c206ec1e1865")
 
@@ -55,7 +55,7 @@ def render(documents, routes):
         raise ValueError("unexpected operator entrypoint")
     new_volumes = [
         {"name": "mesh-tls", "secret": {"secretName": "obs-mtls-ch-operator", "defaultMode": 0o440}},
-        {"name": "proxy-config", "configMap": {"name": "observability-proxy-operator"}},
+        {"name": "proxy-config", "configMap": {"name": "clickhouse-proxy-operator"}},
         {"name": "proxy-runtime", "emptyDir": {"sizeLimit": "16Mi"}}]
     if {v["name"] for v in new_volumes}.intersection(v["name"] for v in pod.get("volumes", [])):
         raise ValueError("operator proxy volume names conflict")

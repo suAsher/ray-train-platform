@@ -1,13 +1,13 @@
 [
-  {"namespace":"observability-metrics","role":"vmstorage","trust_domain":"mesh","dns_names":["vmstorage.observability-metrics.svc"],"usages":["serverAuth","clientAuth"]},
-  {"namespace":"observability-metrics","role":"vminsert","trust_domain":"mesh","dns_names":["vminsert.observability-metrics.svc"],"usages":["serverAuth","clientAuth"]},
-  {"namespace":"observability-metrics","role":"vmselect","trust_domain":"mesh","dns_names":["vmselect.observability-metrics.svc"],"usages":["serverAuth","clientAuth"]},
-  {"namespace":"observability-metrics","role":"vmauth","trust_domain":"mesh","dns_names":["vmauth.observability-metrics.svc"],"usages":["serverAuth","clientAuth"]},
-  {"namespace":"observability-metrics","role":"vmagent","trust_domain":"mesh","dns_names":["vmagent.observability-metrics.svc"],"usages":["serverAuth","clientAuth"]},
-  {"namespace":"observability-metrics","role":"vmalert","trust_domain":"mesh","dns_names":["vmalert.observability-metrics.svc"],"usages":["serverAuth","clientAuth"]},
-  {"namespace":"observability-metrics","role":"alertmanager","trust_domain":"mesh","dns_names":["alertmanager.observability-metrics.svc"],"usages":["serverAuth","clientAuth"]},
-  {"namespace":"observability-metrics","role":"operator","trust_domain":"mesh","dns_names":["operator.observability-metrics.svc"],"usages":["serverAuth","clientAuth"]},
-  {"namespace":"observability-metrics","role":"alertmanager-gossip","trust_domain":"am-gossip","dns_names":["alertmanager.observability-metrics.svc"],"usages":["serverAuth","clientAuth"]},
-  {"namespace":"observability-metrics","role":"canary","trust_domain":"mesh","dns_names":[],"usages":["clientAuth"]},
-  {"namespace":"observability-metrics","role":"admin","trust_domain":"mesh","dns_names":[],"usages":["clientAuth"]}
+  {"namespace":"victoriametrics","role":"vmstorage","trust_domain":"mesh","dns_names":["vmstorage.victoriametrics.svc"],"usages":["serverAuth","clientAuth"]},
+  {"namespace":"victoriametrics","role":"vminsert","trust_domain":"mesh","dns_names":["vminsert.victoriametrics.svc"],"usages":["serverAuth","clientAuth"]},
+  {"namespace":"victoriametrics","role":"vmselect","trust_domain":"mesh","dns_names":["vmselect.victoriametrics.svc"],"usages":["serverAuth","clientAuth"]},
+  {"namespace":"victoriametrics","role":"vmauth","trust_domain":"mesh","dns_names":["vmauth.victoriametrics.svc"],"usages":["serverAuth","clientAuth"]},
+  {"namespace":"victoriametrics","role":"vmagent","trust_domain":"mesh","dns_names":["vmagent.victoriametrics.svc"],"usages":["serverAuth","clientAuth"]},
+  {"namespace":"victoriametrics","role":"vmalert","trust_domain":"mesh","dns_names":["vmalert.victoriametrics.svc"],"usages":["serverAuth","clientAuth"]},
+  {"namespace":"victoriametrics","role":"alertmanager","trust_domain":"mesh","dns_names":["alertmanager.victoriametrics.svc"],"usages":["serverAuth","clientAuth"]},
+  {"namespace":"victoriametrics","role":"operator","trust_domain":"mesh","dns_names":["operator.victoriametrics.svc"],"usages":["serverAuth","clientAuth"]},
+  {"namespace":"victoriametrics","role":"alertmanager-gossip","trust_domain":"am-gossip","dns_names":["alertmanager.victoriametrics.svc"],"usages":["serverAuth","clientAuth"]},
+  {"namespace":"victoriametrics","role":"canary","trust_domain":"mesh","dns_names":[],"usages":["clientAuth"]},
+  {"namespace":"victoriametrics","role":"admin","trust_domain":"mesh","dns_names":[],"usages":["clientAuth"]}
 ]

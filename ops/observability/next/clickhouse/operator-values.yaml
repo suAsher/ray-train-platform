@@ -1,11 +1,11 @@
 # Altinity chart altinity-clickhouse-operator 0.27.4 only.
 # Render and inspect on the existing builder before installation.
-fullnameOverride: observability-clickhouse-operator
-namespaceOverride: observability-analytics
+fullnameOverride: clickhouse-operator
+namespaceOverride: clickhouse
 watchNamespaces:
   # A literal is required for namespace-scoped informers. Even an anchored
   # regexp makes Altinity 0.27.4 LIST cluster-wide, then filter in-process.
-  - observability-analytics
+  - clickhouse
 rbac:
   create: true
   namespaceScoped: true
@@ -61,7 +61,7 @@ configs:
           scheme: http
           port: 8123
           secret:
-            namespace: observability-analytics
+            namespace: clickhouse
             name: clickhouse-operator-auth
         security:
           ipc:

@@ -31,13 +31,13 @@ def certificates(rt):
         "pg-app": rt.leaf("pg-app", pg_client_ca, cn="n9e"),
         "pg-bootstrap": rt.leaf("pg-bootstrap", pg_client_ca, cn="n9e", uid=26),
         "pg-wrong": rt.leaf("pg-wrong", pg_client_ca, cn="wrong-user", uid=26),
-        "redis-peer": rt.leaf("redis-peer", redis_ca, dns=REDIS_HOSTS + [f"n9e-redis.{NS}.svc"], usages="serverAuth,clientAuth"),
+        "redis-peer": rt.leaf("redis-peer", redis_ca, dns=REDIS_HOSTS + [f"nightingale-redis.{NS}.svc"], usages="serverAuth,clientAuth"),
         "redis-client": rt.leaf("redis-client", redis_ca),
         "n9e": rt.leaf("n9e", mesh, dns=[N9EHOST], usages="serverAuth,clientAuth", uri=URI_ROOT + NS + "/nightingale"),
         "ui": rt.leaf("ui", mesh, uri=URI_ROOT + NS + "/n9e-ui-gateway"),
-        "monitor": rt.leaf("monitor", mesh, uri=URI_ROOT + "observability-metrics/vmagent"),
+        "monitor": rt.leaf("monitor", mesh, uri=URI_ROOT + "victoriametrics/vmagent"),
         "wrong": rt.leaf("wrong", mesh, uri=URI_ROOT + NS + "/unauthorized-test"),
-        "cnpg": rt.leaf("cnpg", mesh, dns=[f"n9e-cnpg-metrics.{NS}.svc"], usages="serverAuth", uri=URI_ROOT + NS + "/cnpg-operator"),
+        "cnpg": rt.leaf("cnpg", mesh, dns=[f"cloudnative-pg-operator-metrics.{NS}.svc"], usages="serverAuth", uri=URI_ROOT + NS + "/cnpg-operator"),
     }
     # PostgreSQL clients verify its SERVER CA, not their own issuing client CA.
     for name in ("pg-app", "pg-bootstrap", "pg-wrong"):

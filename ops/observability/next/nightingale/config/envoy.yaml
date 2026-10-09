@@ -46,7 +46,7 @@ static_resources:
                                         - header: {name: ":method", string_match: {exact: GET}}
                                       principals:
                                         - authenticated:
-                                            principal_name: {exact: "spiffe://observability.raytrain.local/observability-metrics/vmagent"}
+                                            principal_name: {exact: "spiffe://observability.raytrain.local/victoriametrics/vmagent"}
                         - match: {prefix: /}
                           route: {cluster: n9e-local, timeout: 60s}
                           typed_per_filter_config:
@@ -60,7 +60,7 @@ static_resources:
                                       permissions: [{any: true}]
                                       principals:
                                         - authenticated:
-                                            principal_name: {exact: "spiffe://observability.raytrain.local/observability-alerting/n9e-ui-gateway"}
+                                            principal_name: {exact: "spiffe://observability.raytrain.local/nightingale/n9e-ui-gateway"}
                 http_filters:
                   - name: envoy.filters.http.rbac
                     typed_config:
@@ -119,13 +119,13 @@ static_resources:
               - endpoint:
                   address:
                     socket_address:
-                      address: vmauth-raytrain-next.observability-metrics.svc
+                      address: vmauth-victoriametrics-cluster.victoriametrics.svc
                       port_value: 8427
       transport_socket:
         name: envoy.transport_sockets.tls
         typed_config:
           "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
-          sni: vmauth.observability-metrics.svc
+          sni: vmauth.victoriametrics.svc
           common_tls_context:
             tls_params: {tls_minimum_protocol_version: TLSv1_3, tls_maximum_protocol_version: TLSv1_3}
             tls_certificates:
@@ -135,4 +135,4 @@ static_resources:
               trusted_ca: {filename: /etc/obs-mtls/ca.crt}
               match_typed_subject_alt_names:
                 - san_type: URI
-                  matcher: {exact: "spiffe://observability.raytrain.local/observability-metrics/vmauth"}
+                  matcher: {exact: "spiffe://observability.raytrain.local/victoriametrics/vmauth"}

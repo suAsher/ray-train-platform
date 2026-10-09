@@ -18,8 +18,7 @@ import subprocess
 import sys
 import tempfile
 
-NAMESPACES = frozenset("observability-" + name for name in
-                       ("metrics", "analytics", "otel", "alerting"))
+NAMESPACES = frozenset(("victoriametrics", "clickhouse", "opentelemetry", "nightingale"))
 TRUST_DOMAINS = frozenset(("mesh", "am-gossip", "redis", "postgres-client"))
 URI_ROOT = "spiffe://observability.raytrain.local"
 LEAF_DAYS = 90
@@ -51,11 +50,11 @@ def validate_plan(entries):
         domain = item.get("trust_domain")
         if domain not in TRUST_DOMAINS:
             raise CredentialError("Unknown signing trust domain")
-        if domain == "am-gossip" and (ns != "observability-metrics" or role != "alertmanager-gossip"):
+        if domain == "am-gossip" and (ns != "victoriametrics" or role != "alertmanager-gossip"):
             raise CredentialError("Alertmanager peer CA may only issue its dedicated peer identity")
-        if domain == "redis" and (ns != "observability-alerting" or role not in ("redis-ha-peer", "nightingale-redis")):
+        if domain == "redis" and (ns != "nightingale" or role not in ("redis-ha-peer", "nightingale-redis")):
             raise CredentialError("Redis CA may only issue Redis peers and its Nightingale client")
-        if domain == "postgres-client" and (ns != "observability-alerting" or role not in
+        if domain == "postgres-client" and (ns != "nightingale" or role not in
                 ("n9e-postgres-client", "n9e-postgres-bootstrap", "n9e-postgres-replication")):
             raise CredentialError("PostgreSQL client CA identity is outside its dedicated scope")
         cn = item.get("common_name", role)
@@ -216,11 +215,11 @@ def create_secrets(bundle):
         if not all(isinstance(v, str) and v for v in data.values()):
             raise CredentialError("Empty or invalid Secret material")
         if name in PUBLIC_CA_NAMES:
-            if (namespace != "observability-alerting" or secret.get("type") != "Opaque" or
+            if (namespace != "nightingale" or secret.get("type") != "Opaque" or
                     set(data) != {"ca.crt"} or labels.get("observability.raytrain.io/trust-domain") != PUBLIC_CA_NAMES[name]):
                 raise CredentialError("Public CA projection violates its fixed contract")
         elif name == "obs-clickhouse-interserver-auth":
-            if (namespace != "observability-analytics" or secret.get("type") != "Opaque" or
+            if (namespace != "clickhouse" or secret.get("type") != "Opaque" or
                     set(data) != {"username", "password"} or data["username"] != "replica"):
                 raise CredentialError("Interserver Secret violates its fixed contract")
         else:
@@ -245,14 +244,14 @@ def public_ca_secret(name, domain, certificate):
     if PUBLIC_CA_NAMES.get(name) != domain or not isinstance(certificate, str) or not certificate:
         raise CredentialError("Unknown or invalid public CA projection")
     return {"apiVersion": "v1", "kind": "Secret", "type": "Opaque", "metadata": {
-        "namespace": "observability-alerting", "name": name, "labels": {
+        "namespace": "nightingale", "name": name, "labels": {
             LABEL: "mtls", "app.kubernetes.io/part-of": "raytrain-observability-additive",
             "observability.raytrain.io/trust-domain": domain}}, "stringData": {"ca.crt": certificate}}
 
 
 def interserver_secret():
     return {"apiVersion": "v1", "kind": "Secret", "type": "Opaque", "metadata": {
-        "namespace": "observability-analytics", "name": "obs-clickhouse-interserver-auth",
+        "namespace": "clickhouse", "name": "obs-clickhouse-interserver-auth",
         "labels": {LABEL: "mtls", "app.kubernetes.io/part-of": "raytrain-observability-additive"}},
         "stringData": {"username": "replica", "password": "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(48))}}
 
@@ -271,21 +270,21 @@ def main(argv=None):
             for item in plan:
                 print(f"{item['namespace']}/obs-mtls-{item['role']} ca={item['trust_domain']} identity={identity(item)}")
             if args.include_clickhouse_interserver:
-                print("observability-analytics/obs-clickhouse-interserver-auth keys=username,password")
+                print("clickhouse/obs-clickhouse-interserver-auth keys=username,password")
             if args.include_n9e_ca_projections:
                 for name in PUBLIC_CA_NAMES:
-                    print(f"observability-alerting/{name} keys=ca.crt (public CA only)")
+                    print(f"nightingale/{name} keys=ca.crt (public CA only)")
             return 0
         if args.pki_dir is None:
             raise CredentialError("--create requires the approved private --pki-dir")
         preflight_absent(plan)
         if args.include_clickhouse_interserver:
-            check_absent("observability-analytics", "obs-clickhouse-interserver-auth")
+            check_absent("clickhouse", "obs-clickhouse-interserver-auth")
         if args.include_n9e_ca_projections:
             if not {"mesh", "postgres-client"} <= {item["trust_domain"] for item in plan}:
                 raise CredentialError("N9E CA projections require both domains in the same reviewed plan")
             for name in PUBLIC_CA_NAMES:
-                check_absent("observability-alerting", name)
+                check_absent("nightingale", name)
         bundle = [make_secret(item, issue_material(item, args.pki_dir)) for item in plan]
         if args.include_clickhouse_interserver:
             bundle.append(interserver_secret())

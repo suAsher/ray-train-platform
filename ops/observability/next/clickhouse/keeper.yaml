@@ -1,8 +1,8 @@
 apiVersion: clickhouse-keeper.altinity.com/v1
 kind: ClickHouseKeeperInstallation
 metadata:
-  name: observability
-  namespace: observability-analytics
+  name: clickhouse
+  namespace: clickhouse
 spec:
   defaults:
     storageManagement:
@@ -135,7 +135,7 @@ spec:
             - name: mesh-tls
               secret: {secretName: obs-mtls-keeper, defaultMode: 0440}
             - name: proxy-config
-              configMap: {name: observability-proxy-keeper}
+              configMap: {name: clickhouse-proxy-keeper}
             - name: proxy-runtime
               emptyDir: {sizeLimit: 16Mi}
     volumeClaimTemplates:

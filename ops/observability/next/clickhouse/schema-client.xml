@@ -1,5 +1,5 @@
 <config>
-  <host>clickhouse-observability.observability-analytics.svc.cluster.local</host>
+  <host>clickhouse-clickhouse.clickhouse.svc.cluster.local</host>
   <port>9440</port><secure>true</secure><user>schema_admin</user>
   <openSSL><client>
     <certificateFile>/etc/obs-mtls/tls.crt</certificateFile>

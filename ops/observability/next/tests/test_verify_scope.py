@@ -28,7 +28,7 @@ def pod_spec():
 
 def workload(kind="Deployment", replicas=1):
     return {"apiVersion": "apps/v1", "kind": kind,
-            "metadata": {"name": "canary", "namespace": "observability-otel"},
+            "metadata": {"name": "canary", "namespace": "opentelemetry"},
             "spec": {"replicas": replicas,
                      "template": {"metadata": {"labels": {"app": "canary"}},
                                   "spec": pod_spec()}}}
@@ -49,12 +49,12 @@ def claim(size="20Gi"):
 
 def webhook():
     return {"apiVersion": "admissionregistration.k8s.io/v1",
-            "kind": "ValidatingWebhookConfiguration", "metadata": {"name": "n9e-cnpg"},
+            "kind": "ValidatingWebhookConfiguration", "metadata": {"name": "cloudnative-pg-operator"},
             "webhooks": [{"name": "vcluster.postgresql.cnpg.io",
                           "namespaceSelector": {"matchLabels": {
-                              "kubernetes.io/metadata.name": "observability-alerting"}},
-                          "clientConfig": {"service": {"name": "n9e-cnpg-webhook-service",
-                                                       "namespace": "observability-alerting"}},
+                              "kubernetes.io/metadata.name": "nightingale"}},
+                          "clientConfig": {"service": {"name": "cloudnative-pg-operator-webhook-service",
+                                                       "namespace": "nightingale"}},
                           "rules": [{"apiGroups": ["postgresql.cnpg.io"],
                                      "apiVersions": ["v1"], "operations": ["CREATE", "UPDATE"],
                                      "resources": ["clusters"], "scope": "Namespaced"}]}]}
@@ -148,7 +148,7 @@ class ScopeTests(unittest.TestCase):
     def test_public_services_and_ingress_rejected(self):
         for service_type in ("LoadBalancer", "NodePort", "ExternalName"):
             doc = {"apiVersion": "v1", "kind": "Service", "metadata": {
-                "name": "app", "namespace": "observability-otel"}, "spec": {"type": service_type}}
+                "name": "app", "namespace": "opentelemetry"}, "spec": {"type": service_type}}
             self.assert_rejected(doc, "ClusterIP")
         doc["kind"] = "Ingress"
         self.assert_rejected(doc, "Ingress")
@@ -156,7 +156,7 @@ class ScopeTests(unittest.TestCase):
     def test_secret_data_rejected_without_disclosing_payload(self):
         for field in ("data", "stringData"):
             doc = {"apiVersion": "v1", "kind": "Secret", "metadata": {
-                "name": "runtime-only", "namespace": "observability-otel"}, field: {"password": "DO-NOT-ECHO"}}
+                "name": "runtime-only", "namespace": "opentelemetry"}, field: {"password": "DO-NOT-ECHO"}}
             errors = self.errors(doc)
             self.assertTrue(errors)
             self.assertNotIn("DO-NOT-ECHO", repr(errors))
@@ -204,7 +204,7 @@ class ScopeTests(unittest.TestCase):
 
     def test_cron_job_template_is_checked(self):
         doc = {"apiVersion": "batch/v1", "kind": "CronJob", "metadata": {
-            "name": "canary", "namespace": "observability-otel"}, "spec": {"jobTemplate": {
+            "name": "canary", "namespace": "opentelemetry"}, "spec": {"jobTemplate": {
                 "spec": {"template": {"spec": pod_spec()}}}}}
         doc["spec"]["jobTemplate"]["spec"]["template"]["spec"]["hostNetwork"] = True
         self.assert_rejected(doc, "hostNetwork")
@@ -230,7 +230,7 @@ class ScopeTests(unittest.TestCase):
 
     def test_only_namespaced_role_binding_can_default_subject_namespace(self):
         doc = {"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "RoleBinding",
-               "metadata": {"name": "redis", "namespace": "observability-alerting"},
+               "metadata": {"name": "redis", "namespace": "nightingale"},
                "roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "redis"},
                "subjects": [{"kind": "ServiceAccount", "name": "redis"}]}
         self.assertEqual([], self.errors(doc))
@@ -263,7 +263,7 @@ class ScopeTests(unittest.TestCase):
 
     def test_isolated_cnpg_webhook_only(self):
         doc = webhook()
-        allowed = ["ValidatingWebhookConfiguration/n9e-cnpg"]
+        allowed = ["ValidatingWebhookConfiguration/cloudnative-pg-operator"]
         self.assertEqual([], self.errors(doc, allowed))
         for mutation in ("namespace", "group", "scope", "service"):
             bad = copy.deepcopy(doc)
@@ -280,14 +280,14 @@ class ScopeTests(unittest.TestCase):
 
     def test_unknown_cr_is_not_claimed_as_complete_validation(self):
         doc = {"apiVersion": "example.invalid/v1", "kind": "FutureWorkload", "metadata": {
-            "name": "future", "namespace": "observability-otel"}, "spec": {}}
+            "name": "future", "namespace": "opentelemetry"}, "spec": {}}
         report = scope.validate_documents([doc])
         self.assertTrue(any("live" in item for item in report.pending))
 
     def test_vm_cluster_components_and_cnpg_storage_are_checked(self):
         component = {"priorityClassName": scope.PRIORITY_CLASS, "resources": resources(), "replicaCount": 1}
         doc = {"apiVersion": "operator.victoriametrics.com/v1beta1", "kind": "VMCluster",
-               "metadata": {"name": "canary", "namespace": "observability-metrics"},
+               "metadata": {"name": "canary", "namespace": "victoriametrics"},
                "spec": {part: copy.deepcopy(component) for part in ("vmselect", "vminsert", "vmstorage")}}
         doc["spec"]["vmstorage"]["storage"] = {"volumeClaimTemplate": claim("10Gi")}
         self.assert_rejected(doc, "20Gi")
@@ -297,7 +297,7 @@ class ScopeTests(unittest.TestCase):
 
     def test_cnpg_cluster_and_clickhouse_embedded_templates_are_checked(self):
         doc = {"apiVersion": "postgresql.cnpg.io/v1", "kind": "Cluster", "metadata": {
-            "name": "postgres", "namespace": "observability-alerting"}, "spec": {
+            "name": "postgres", "namespace": "nightingale"}, "spec": {
                 "priorityClassName": scope.PRIORITY_CLASS, "resources": resources(),
                 "instances": 3, "storage": {"storageClass": scope.STORAGE_CLASS, "size": "20Gi"},
                 "affinity": {"enablePodAntiAffinity": True, "podAntiAffinityType": "required",
@@ -306,7 +306,7 @@ class ScopeTests(unittest.TestCase):
         doc["spec"]["storage"]["size"] = "10Gi"
         self.assert_rejected(doc, "20Gi")
         doc = {"apiVersion": "clickhouse.altinity.com/v1", "kind": "ClickHouseInstallation",
-               "metadata": {"name": "logs", "namespace": "observability-analytics"}, "spec": {
+               "metadata": {"name": "logs", "namespace": "clickhouse"}, "spec": {
                    "templates": {"podTemplates": [{"name": "server", "spec": pod_spec()}],
                                  "serviceTemplates": [{"name": "external", "spec": {"type": "LoadBalancer"}}]}}}
         self.assert_rejected(doc, "ClusterIP")

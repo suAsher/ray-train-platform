@@ -29,7 +29,7 @@ import uuid
 
 
 HERE = Path(__file__).resolve().parent
-SERVER_NAME = "otel-gateway.observability-otel.svc.cluster.local"
+SERVER_NAME = "otel-gateway.opentelemetry.svc.cluster.local"
 METHODS = {
     "logs": "/opentelemetry.proto.collector.logs.v1.LogsService/Export",
     "traces": "/opentelemetry.proto.collector.trace.v1.TraceService/Export",

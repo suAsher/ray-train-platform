@@ -58,7 +58,9 @@ def identities(listener):
 
 
 def role(namespace, name):
-    return TRUST + "observability-" + namespace + "/" + name
+    component_names = {"analytics": "clickhouse", "metrics": "victoriametrics",
+                       "otel": "opentelemetry", "alerting": "nightingale"}
+    return TRUST + component_names[namespace] + "/" + name
 
 
 def pod_template(cr):
@@ -78,7 +80,7 @@ class ClickHouseMTLSTests(unittest.TestCase):
         values = yaml.safe_load((CH / "operator-values.yaml").read_text())
         # Altinity 0.27.4 GetInformerNamespace/GetCacheNamespaces fall back
         # to cluster-wide LISTs for regexp patterns, even anchored ones.
-        self.assertEqual(["observability-analytics"], values["watchNamespaces"])
+        self.assertEqual(["clickhouse"], values["watchNamespaces"])
         self.assertTrue(values["rbac"]["namespaceScoped"])
         for key in ("prometheus.io/scrape", "clickhouse-operator-metrics/scrape"):
             self.assertEqual("false", values["podAnnotations"][key])
@@ -98,7 +100,7 @@ class ClickHouseMTLSTests(unittest.TestCase):
         for index, entry in enumerate(replicas):
             self.assertEqual(
                 {"interserver_https_host":
-                 f"chi-observability-telemetry-0-{index}.observability-analytics.svc.cluster.local"},
+                 f"chi-clickhouse-telemetry-0-{index}.clickhouse.svc.cluster.local"},
                 entry["settings"])
 
     def test_readonly_sql_probe_does_not_try_to_change_session_settings(self):

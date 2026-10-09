@@ -5,7 +5,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: clickhouse-ingress
-  namespace: observability-analytics
+  namespace: clickhouse
 spec:
   podSelector:
     matchLabels: {observability.raytrain.io/component: clickhouse}
@@ -29,7 +29,7 @@ spec:
         - {protocol: TCP, port: 9000}
     - from:
         - namespaceSelector:
-            matchLabels: {kubernetes.io/metadata.name: observability-otel}
+            matchLabels: {kubernetes.io/metadata.name: opentelemetry}
           podSelector:
             matchLabels: {observability.raytrain.io/component: otel-gateway}
         - podSelector:
@@ -38,7 +38,7 @@ spec:
         - {protocol: TCP, port: 9440}
     - from:
         - namespaceSelector:
-            matchLabels: {kubernetes.io/metadata.name: observability-metrics}
+            matchLabels: {kubernetes.io/metadata.name: victoriametrics}
       ports:
         - {protocol: TCP, port: 9363}
   egress:
@@ -64,7 +64,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: keeper-ingress
-  namespace: observability-analytics
+  namespace: clickhouse
 spec:
   podSelector:
     matchLabels: {observability.raytrain.io/component: keeper}
@@ -85,7 +85,7 @@ spec:
         - {protocol: TCP, port: 2181}
     - from:
         - namespaceSelector:
-            matchLabels: {kubernetes.io/metadata.name: observability-metrics}
+            matchLabels: {kubernetes.io/metadata.name: victoriametrics}
       ports:
         - {protocol: TCP, port: 7000}
   egress:
@@ -106,7 +106,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: clickhouse-operator
-  namespace: observability-analytics
+  namespace: clickhouse
 spec:
   podSelector:
     matchLabels: {observability.raytrain.io/component: clickhouse-operator}
@@ -114,7 +114,7 @@ spec:
   ingress:
     - from:
         - namespaceSelector:
-            matchLabels: {kubernetes.io/metadata.name: observability-metrics}
+            matchLabels: {kubernetes.io/metadata.name: victoriametrics}
       ports:
         - {protocol: TCP, port: 9999}
   egress:

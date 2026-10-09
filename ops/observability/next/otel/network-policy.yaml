@@ -4,7 +4,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: otel-gateway
-  namespace: observability-otel
+  namespace: opentelemetry
 spec:
   podSelector:
     matchLabels: {observability.raytrain.io/component: otel-gateway}
@@ -18,7 +18,7 @@ spec:
         - {protocol: TCP, port: 4318}
     - from:
         - namespaceSelector:
-            matchLabels: {kubernetes.io/metadata.name: observability-metrics}
+            matchLabels: {kubernetes.io/metadata.name: victoriametrics}
       ports:
         - {protocol: TCP, port: 8888}
   egress:
@@ -30,7 +30,7 @@ spec:
         - {protocol: TCP, port: 53}
     - to:
         - namespaceSelector:
-            matchLabels: {kubernetes.io/metadata.name: observability-analytics}
+            matchLabels: {kubernetes.io/metadata.name: clickhouse}
           podSelector:
             matchLabels: {observability.raytrain.io/component: clickhouse}
       ports:

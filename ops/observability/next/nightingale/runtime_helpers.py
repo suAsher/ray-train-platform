@@ -15,10 +15,10 @@ N9E = "harbor.wellspiking.ai/guofeng.su/nightingale-observability:9.1.1-sentinel
 PG = "harbor.wellspiking.ai/guofeng.su/postgresql-observability:17.11-202608170816-source-6b7e6a12@sha256:6b7e6a1267254902840efa9936bbeb0a398a79b5b9cb2e82218e4a92b602e97c"
 REDIS = "harbor.wellspiking.ai/hub/library/redis:8.8.0-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005"
 ENVOY = "harbor.wellspiking.ai/hub/envoyproxy/envoy:v1.39.3@sha256:dd85940439de19a0b6ae8419610363ea0ad351d9a994ea007161c206ec1e1865"
-NS = "observability-alerting"
-PGHOST = "n9e-postgres-rw." + NS + ".svc"
+NS = "nightingale"
+PGHOST = "nightingale-postgres-rw." + NS + ".svc"
 N9EHOST = "nightingale." + NS + ".svc"
-REDIS_HOSTS = [f"n9e-redis-announce-{index}.{NS}.svc" for index in range(3)]
+REDIS_HOSTS = [f"nightingale-redis-announce-{index}.{NS}.svc" for index in range(3)]
 URI_ROOT = "spiffe://observability.raytrain.local/"
 
 

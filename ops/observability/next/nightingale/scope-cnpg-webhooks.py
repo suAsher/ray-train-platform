@@ -11,7 +11,7 @@ import sys
 
 import yaml
 
-NAMESPACE = "observability-alerting"
+NAMESPACE = "nightingale"
 CONFIG = Path(__file__).resolve().parent / "config"
 DERIVED_IMAGE = re.compile(
     r"^harbor\.wellspiking\.ai/guofeng\.su/cnpg-observability:"
@@ -49,7 +49,7 @@ def scope_webhook(document):
 
 def scope_operator_role(document):
     metadata = document.get("metadata", {})
-    if (document.get("kind") != "ClusterRole" or metadata.get("name") != "n9e-cnpg"
+    if (document.get("kind") != "ClusterRole" or metadata.get("name") != "cloudnative-pg-operator"
             or metadata.get("namespace") or document.get("aggregationRule")
             or document.get("rules") != UPSTREAM_CLUSTER_RULES):
         raise ValueError("unexpected fixed-chart CNPG operator ClusterRole shape")
@@ -65,8 +65,8 @@ def validate_auxiliary_role(document):
     # Reject unrelated ClusterRoles rather than silently forwarding new powers.
     metadata = document.get("metadata", {})
     name = metadata.get("name")
-    verbs = {"n9e-cnpg-view": ["get", "list", "watch"],
-             "n9e-cnpg-edit": ["create", "delete", "deletecollection", "patch", "update"]}
+    verbs = {"cloudnative-pg-operator-view": ["get", "list", "watch"],
+             "cloudnative-pg-operator-edit": ["create", "delete", "deletecollection", "patch", "update"]}
     expected = [{"apiGroups": ["postgresql.cnpg.io"], "resources": AUXILIARY_RESOURCES,
                  "verbs": verbs.get(name)}]
     if (name not in verbs or metadata.get("namespace") or document.get("aggregationRule")
@@ -115,12 +115,12 @@ def transform(documents):
                 raise ValueError("duplicate CNPG webhook configuration")
             webhook_names.add(metadata.get("name"))
         elif kind == "ClusterRole":
-            if metadata.get("name") == "n9e-cnpg":
+            if metadata.get("name") == "cloudnative-pg-operator":
                 document = scope_operator_role(document)
                 role_count += 1
             else:
                 document = validate_auxiliary_role(document)
-        elif kind == "Deployment" and metadata.get("name") == "n9e-cnpg":
+        elif kind == "Deployment" and metadata.get("name") == "cloudnative-pg-operator":
             document = secure_operator(document)
             selector = document["spec"]["selector"]["matchLabels"]
             deployment_count += 1
@@ -128,14 +128,14 @@ def transform(documents):
     if webhook_names != set(WEBHOOK_NAMES.values()) or role_count != 1 or deployment_count != 1:
         raise ValueError("expected exact CNPG webhook pair, one operator ClusterRole and one Deployment")
     extra_names = {(doc.get("kind"), doc.get("metadata", {}).get("name")) for doc in output}
-    if ("ConfigMap", "n9e-cnpg-mtls") in extra_names or ("Service", "n9e-cnpg-metrics") in extra_names:
+    if ("ConfigMap", "cloudnative-pg-operator-mtls") in extra_names or ("Service", "cloudnative-pg-operator-metrics") in extra_names:
         raise ValueError("CNPG mTLS resource name collision")
     output.extend([
         {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {
-            "name": "n9e-cnpg-mtls", "namespace": NAMESPACE},
+            "name": "cloudnative-pg-operator-mtls", "namespace": NAMESPACE},
          "data": {"envoy.yaml": (CONFIG / "cnpg-envoy.yaml").read_text()}},
         {"apiVersion": "v1", "kind": "Service", "metadata": {
-            "name": "n9e-cnpg-metrics", "namespace": NAMESPACE},
+            "name": "cloudnative-pg-operator-metrics", "namespace": NAMESPACE},
          "spec": {"type": "ClusterIP", "selector": selector,
                   "ports": [{"name": "https-metrics", "port": 18443, "targetPort": "mtls-metrics"}]}},
     ])

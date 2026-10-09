@@ -1,5 +1,5 @@
 apiVersion: v2
-name: raytrain-observability-metrics
+name: victoriametrics-cluster
 description: Additive VictoriaMetrics CRs; self monitoring only, no existing Prometheus changes
 type: application
 version: 0.1.0

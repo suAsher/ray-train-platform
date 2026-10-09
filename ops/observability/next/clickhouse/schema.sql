@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS observability_canary.otel_logs ON CLUSTER telemetry
     INDEX idx_trace_id TraceId TYPE bloom_filter(0.001) GRANULARITY 1,
     INDEX idx_body lower(Body) TYPE tokenbf_v1(32768, 3, 0) GRANULARITY 8
 )
-ENGINE = ReplicatedMergeTree('/clickhouse/observability-analytics/{installation}/{cluster}/tables/{shard}/observability_canary/otel_logs', '{replica}')
+ENGINE = ReplicatedMergeTree('/clickhouse/clickhouse/{installation}/{cluster}/tables/{shard}/observability_canary/otel_logs', '{replica}')
 PARTITION BY toDate(Timestamp)
 ORDER BY (toStartOfFiveMinutes(Timestamp), ServiceName, Timestamp)
 TTL toDateTime(Timestamp) + INTERVAL 7 DAY DELETE
@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS observability_canary.otel_traces ON CLUSTER telemetry
     INDEX idx_trace_id TraceId TYPE bloom_filter(0.001) GRANULARITY 1,
     INDEX idx_duration Duration TYPE minmax GRANULARITY 1
 )
-ENGINE = ReplicatedMergeTree('/clickhouse/observability-analytics/{installation}/{cluster}/tables/{shard}/observability_canary/otel_traces', '{replica}')
+ENGINE = ReplicatedMergeTree('/clickhouse/clickhouse/{installation}/{cluster}/tables/{shard}/observability_canary/otel_traces', '{replica}')
 PARTITION BY toDate(Timestamp)
 ORDER BY (ServiceName, SpanName, toDateTime(Timestamp))
 TTL toDateTime(Timestamp) + INTERVAL 7 DAY DELETE
@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS observability_canary.otel_traces_trace_id_ts ON CLUST
     End DateTime CODEC(Delta, ZSTD(1)),
     INDEX idx_trace_id TraceId TYPE bloom_filter(0.01) GRANULARITY 1
 )
-ENGINE = ReplicatedMergeTree('/clickhouse/observability-analytics/{installation}/{cluster}/tables/{shard}/observability_canary/otel_traces_trace_id_ts', '{replica}')
+ENGINE = ReplicatedMergeTree('/clickhouse/clickhouse/{installation}/{cluster}/tables/{shard}/observability_canary/otel_traces_trace_id_ts', '{replica}')
 PARTITION BY toDate(Start)
 ORDER BY (TraceId, Start)
 TTL Start + INTERVAL 7 DAY DELETE

@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: observability-metrics
+  name: victoriametrics
   labels:
     app.kubernetes.io/part-of: raytrain-observability-additive
     observability.wellspiking.ai/phase: additive
@@ -9,7 +9,7 @@ metadata:
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: observability-analytics
+  name: clickhouse
   labels:
     app.kubernetes.io/part-of: raytrain-observability-additive
     observability.wellspiking.ai/phase: additive
@@ -17,7 +17,7 @@ metadata:
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: observability-otel
+  name: opentelemetry
   labels:
     app.kubernetes.io/part-of: raytrain-observability-additive
     observability.wellspiking.ai/phase: additive
@@ -25,7 +25,7 @@ metadata:
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: observability-alerting
+  name: nightingale
   labels:
     app.kubernetes.io/part-of: raytrain-observability-additive
     observability.wellspiking.ai/phase: additive
@@ -60,7 +60,7 @@ apiVersion: v1
 kind: ResourceQuota
 metadata:
   name: additive-budget
-  namespace: observability-metrics
+  namespace: victoriametrics
 spec:
   hard:
     requests.cpu: '20'
@@ -76,7 +76,7 @@ apiVersion: v1
 kind: ResourceQuota
 metadata:
   name: additive-budget
-  namespace: observability-analytics
+  namespace: clickhouse
 spec:
   hard:
     requests.cpu: '12'
@@ -92,7 +92,7 @@ apiVersion: v1
 kind: ResourceQuota
 metadata:
   name: additive-budget
-  namespace: observability-otel
+  namespace: opentelemetry
 spec:
   hard:
     requests.cpu: '4'
@@ -108,7 +108,7 @@ apiVersion: v1
 kind: ResourceQuota
 metadata:
   name: additive-budget
-  namespace: observability-alerting
+  namespace: nightingale
 spec:
   hard:
     requests.cpu: '12'

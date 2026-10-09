@@ -47,13 +47,13 @@ processors:
   resource/canary:
     attributes:
       - {key: service.name, value: observability-canary, action: upsert}
-      - {key: service.namespace, value: observability-otel, action: upsert}
+      - {key: service.namespace, value: opentelemetry, action: upsert}
       - {key: k8s.cluster.name, value: raytrain-vke, action: upsert}
       - {key: deployment.environment.name, value: observability-canary, action: upsert}
       - {key: raytrain.telemetry.source, value: synthetic-canary, action: upsert}
 exporters:
   clickhouse/canary:
-    endpoint: tcp://clickhouse-observability.observability-analytics.svc.cluster.local:9440
+    endpoint: tcp://clickhouse-clickhouse.clickhouse.svc.cluster.local:9440
     username: otel_ingest
     password: ${env:CLICKHOUSE_PASSWORD}
     database: observability_canary
@@ -68,7 +68,7 @@ exporters:
       ca_file: /etc/obs-mtls/ca.crt
       cert_file: /etc/obs-mtls/tls.crt
       key_file: /etc/obs-mtls/tls.key
-      server_name_override: clickhouse-observability.observability-analytics.svc.cluster.local
+      server_name_override: clickhouse-clickhouse.clickhouse.svc.cluster.local
       min_version: "1.2"
     timeout: 15s
     retry_on_failure:

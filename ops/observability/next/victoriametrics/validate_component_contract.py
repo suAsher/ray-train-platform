@@ -11,7 +11,7 @@ from pathlib import Path
 import yaml
 
 
-NAMESPACE = "observability-metrics"
+NAMESPACE = "victoriametrics"
 DENIED_KINDS = {
     "Prometheus", "PrometheusRule", "ServiceMonitor", "PodMonitor", "Ingress",
     "ValidatingWebhookConfiguration", "MutatingWebhookConfiguration",
@@ -116,7 +116,7 @@ def validate_agent(objects):
     remote = spec.get("remoteWrite", [])
     require(len(remote) == 1, "unapproved extra remote write destination")
     require(remote[0].get("url") ==
-            f"https://vmauth-raytrain-next.{NAMESPACE}.svc:8427/api/v1/write",
+            f"https://vmauth-victoriametrics-cluster.{NAMESPACE}.svc:8427/api/v1/write",
             "agent must write through authenticated gateway")
     require(remote[0].get("bearerTokenSecret") == {"name": "vm-self-write", "key": "token"},
             "agent credential must be approved write Secret reference")

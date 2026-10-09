@@ -23,7 +23,7 @@ import (
 	"time"
 )
 
-const MetricsURI = "spiffe://observability.raytrain.local/observability-metrics/vmagent"
+const MetricsURI = "spiffe://observability.raytrain.local/victoriametrics/vmagent"
 
 type Authority struct {
 	Certificate *x509.Certificate

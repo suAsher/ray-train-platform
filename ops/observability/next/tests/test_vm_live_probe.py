@@ -21,7 +21,7 @@ def inventory():
     roles = [role for role, count in probe.FULL_COUNTS.items() for _ in range(count)]
     return {"pods": [{"name": f"pod-{i}", "role": role, "ip": f"172.28.20.{i + 1}"}
                      for i, role in enumerate(roles)],
-            "services": {"vmauth": "vmauth-raytrain-next.observability-metrics.svc"}}
+            "services": {"vmauth": "vmauth-victoriametrics-cluster.victoriametrics.svc"}}
 
 
 class InventoryContracts(unittest.TestCase):

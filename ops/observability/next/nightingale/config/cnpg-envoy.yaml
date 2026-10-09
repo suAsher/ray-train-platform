@@ -53,7 +53,7 @@ static_resources:
                                     - header: {name: ":method", string_match: {exact: GET}}
                             principals:
                               - authenticated:
-                                  principal_name: {exact: "spiffe://observability.raytrain.local/observability-metrics/vmagent"}
+                                  principal_name: {exact: "spiffe://observability.raytrain.local/victoriametrics/vmagent"}
                   - name: envoy.filters.http.router
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router

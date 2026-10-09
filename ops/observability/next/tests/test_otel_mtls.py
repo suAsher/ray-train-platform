@@ -57,7 +57,7 @@ class OTelMTLSTests(unittest.TestCase):
         self.assertEqual("/etc/obs-mtls/ca.crt", tls["ca_file"])
         self.assertFalse(tls.get("insecure", False))
         self.assertFalse(tls.get("insecure_skip_verify", False))
-        self.assertEqual("clickhouse-observability.observability-analytics.svc.cluster.local",
+        self.assertEqual("clickhouse-clickhouse.clickhouse.svc.cluster.local",
                          tls["server_name_override"])
 
     def test_persistent_ack_and_canary_data_scope_are_unchanged(self):

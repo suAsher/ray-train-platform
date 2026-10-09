@@ -1,10 +1,10 @@
 [
-  {"namespace":"observability-alerting","role":"nightingale","trust_domain":"mesh","dns_names":["nightingale.observability-alerting.svc","nightingale.observability-alerting.svc.cluster.local"],"usages":["serverAuth","clientAuth"]},
-  {"namespace":"observability-alerting","role":"n9e-ui-gateway","trust_domain":"mesh","dns_names":[],"usages":["clientAuth"]},
-  {"namespace":"observability-alerting","role":"cnpg-operator","trust_domain":"mesh","dns_names":["n9e-cnpg-metrics.observability-alerting.svc","n9e-cnpg-metrics.observability-alerting.svc.cluster.local"],"usages":["serverAuth"]},
-  {"namespace":"observability-alerting","role":"redis-ha-peer","trust_domain":"redis","dns_names":["n9e-redis.observability-alerting.svc","n9e-redis.observability-alerting.svc.cluster.local","n9e-redis-announce-0.observability-alerting.svc","n9e-redis-announce-0.observability-alerting.svc.cluster.local","n9e-redis-announce-1.observability-alerting.svc","n9e-redis-announce-1.observability-alerting.svc.cluster.local","n9e-redis-announce-2.observability-alerting.svc","n9e-redis-announce-2.observability-alerting.svc.cluster.local"],"usages":["serverAuth","clientAuth"]},
-  {"namespace":"observability-alerting","role":"nightingale-redis","trust_domain":"redis","dns_names":[],"usages":["clientAuth"]},
-  {"namespace":"observability-alerting","role":"n9e-postgres-client","trust_domain":"postgres-client","dns_names":[],"usages":["clientAuth"],"common_name":"n9e"},
-  {"namespace":"observability-alerting","role":"n9e-postgres-bootstrap","trust_domain":"postgres-client","dns_names":[],"usages":["clientAuth"],"common_name":"n9e"},
-  {"namespace":"observability-alerting","role":"n9e-postgres-replication","trust_domain":"postgres-client","dns_names":[],"usages":["clientAuth"],"common_name":"streaming_replica"}
+  {"namespace":"nightingale","role":"nightingale","trust_domain":"mesh","dns_names":["nightingale.nightingale.svc","nightingale.nightingale.svc.cluster.local"],"usages":["serverAuth","clientAuth"]},
+  {"namespace":"nightingale","role":"n9e-ui-gateway","trust_domain":"mesh","dns_names":[],"usages":["clientAuth"]},
+  {"namespace":"nightingale","role":"cnpg-operator","trust_domain":"mesh","dns_names":["cloudnative-pg-operator-metrics.nightingale.svc","cloudnative-pg-operator-metrics.nightingale.svc.cluster.local"],"usages":["serverAuth"]},
+  {"namespace":"nightingale","role":"redis-ha-peer","trust_domain":"redis","dns_names":["nightingale-redis.nightingale.svc","nightingale-redis.nightingale.svc.cluster.local","nightingale-redis-announce-0.nightingale.svc","nightingale-redis-announce-0.nightingale.svc.cluster.local","nightingale-redis-announce-1.nightingale.svc","nightingale-redis-announce-1.nightingale.svc.cluster.local","nightingale-redis-announce-2.nightingale.svc","nightingale-redis-announce-2.nightingale.svc.cluster.local"],"usages":["serverAuth","clientAuth"]},
+  {"namespace":"nightingale","role":"nightingale-redis","trust_domain":"redis","dns_names":[],"usages":["clientAuth"]},
+  {"namespace":"nightingale","role":"n9e-postgres-client","trust_domain":"postgres-client","dns_names":[],"usages":["clientAuth"],"common_name":"n9e"},
+  {"namespace":"nightingale","role":"n9e-postgres-bootstrap","trust_domain":"postgres-client","dns_names":[],"usages":["clientAuth"],"common_name":"n9e"},
+  {"namespace":"nightingale","role":"n9e-postgres-replication","trust_domain":"postgres-client","dns_names":[],"usages":["clientAuth"],"common_name":"streaming_replica"}
 ]

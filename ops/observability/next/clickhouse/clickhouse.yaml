@@ -1,8 +1,8 @@
 apiVersion: clickhouse.altinity.com/v1
 kind: ClickHouseInstallation
 metadata:
-  name: observability
-  namespace: observability-analytics
+  name: clickhouse
+  namespace: clickhouse
 spec:
   defaults:
     storageManagement:
@@ -36,10 +36,10 @@ spec:
           replicas:
             - name: "0"
               settings:
-                interserver_https_host: chi-observability-telemetry-0-0.observability-analytics.svc.cluster.local
+                interserver_https_host: chi-clickhouse-telemetry-0-0.clickhouse.svc.cluster.local
             - name: "1"
               settings:
-                interserver_https_host: chi-observability-telemetry-0-1.observability-analytics.svc.cluster.local
+                interserver_https_host: chi-clickhouse-telemetry-0-1.clickhouse.svc.cluster.local
     users:
       default/password_sha256_hex:
         valueFrom:
@@ -242,7 +242,7 @@ spec:
                 secretName: obs-mtls-clickhouse
                 defaultMode: 0440
             - name: proxy-config
-              configMap: {name: observability-proxy-clickhouse}
+              configMap: {name: clickhouse-proxy-clickhouse}
             - name: proxy-runtime
               emptyDir: {sizeLimit: 16Mi}
     volumeClaimTemplates:

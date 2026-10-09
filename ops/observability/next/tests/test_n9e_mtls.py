@@ -22,7 +22,7 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1] / "nightingale"
-ALERTING = "observability-alerting"
+ALERTING = "nightingale"
 IDENTITY = "spiffe://observability.raytrain.local/"
 ENVOY_IMAGE = (
     "harbor.wellspiking.ai/hub/envoyproxy/envoy:v1.39.3@sha256:"
@@ -101,9 +101,9 @@ class NightingaleMTLSContractTests(unittest.TestCase):
         self.assertEqual(("tls.crt", "tls.key", "ca.crt"),
                          tuple(tls.get(key) for key in ("certFile", "keyFile", "caCertFile")))
         self.assertIs(values["auth"], True)
-        self.assertEqual("n9e-redis-auth", values["existingSecret"])
+        self.assertEqual("nightingale-redis-auth", values["existingSecret"])
         self.assertIs(values["sentinel"]["auth"], True)
-        self.assertEqual("n9e-redis-auth", values["sentinel"]["existingSecret"])
+        self.assertEqual("nightingale-redis-auth", values["sentinel"]["existingSecret"])
         self.assertFalse(values.get("redisPassword"))
         self.assertFalse(values["sentinel"].get("password"))
 
@@ -217,7 +217,7 @@ class NightingaleMTLSContractTests(unittest.TestCase):
         for key, basename in (("TLSCA", "ca.crt"), ("TLSCert", "tls.crt"), ("TLSKey", "tls.key")):
             self.assertEqual(f"/etc/n9e-redis-mtls/{basename}", redis.get(key))
         self.assertEqual(3, len(redis["Address"].split(",")))
-        self.assertTrue(all(address.endswith(".observability-alerting.svc:26379")
+        self.assertTrue(all(address.endswith(".nightingale.svc:26379")
                             for address in redis["Address"].split(",")))
 
     def test_authentication_is_not_disabled_to_make_the_proxy_work(self):
@@ -315,8 +315,8 @@ class NightingaleMTLSContractTests(unittest.TestCase):
         routes = manager["route_config"]["virtual_hosts"][0]["routes"]
         metrics = next(item for item in routes if item.get("match", {}).get("path") == "/metrics")
         ui = next(item for item in routes if item.get("match", {}).get("prefix") == "/")
-        for route, role in ((metrics, "observability-metrics/vmagent"),
-                            (ui, "observability-alerting/n9e-ui-gateway")):
+        for route, role in ((metrics, "victoriametrics/vmagent"),
+                            (ui, "nightingale/n9e-ui-gateway")):
             policy = route["typed_per_filter_config"]["envoy.filters.http.rbac"]["rbac"]["rules"]
             self.assertEqual("ALLOW", policy["action"])
             principals = [item["principal_name"]["exact"] for item in nodes(policy)
@@ -349,7 +349,7 @@ class NightingaleMTLSContractTests(unittest.TestCase):
         self.assertIs(spec["monitoring"].get("tls", {}).get("enabled"), True)
         env = {item["name"]: item.get("value") for item in spec.get("env", [])}
         self.assertEqual("/projected/obs-metrics/ca.crt", env.get("OBS_METRICS_CLIENT_CA_FILE"))
-        self.assertEqual(IDENTITY + "observability-metrics/vmagent",
+        self.assertEqual(IDENTITY + "victoriametrics/vmagent",
                          env.get("OBS_METRICS_ALLOWED_CLIENT_URIS"))
         projection = spec.get("projectedVolumeTemplate", {})
         secrets = [item["secret"] for item in projection.get("sources", []) if "secret" in item]
@@ -386,8 +386,8 @@ class NightingaleMTLSContractTests(unittest.TestCase):
                     {"name": "OBS_WEBHOOK_API_SERVER_IPS", "value": "172.28.2.64,172.28.5.50"}],
         }
         return {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {
-            "name": "n9e-cnpg", "namespace": ALERTING}, "spec": {
-                "selector": {"matchLabels": {"app.kubernetes.io/instance": "n9e-cnpg"}},
+            "name": "cloudnative-pg-operator", "namespace": ALERTING}, "spec": {
+                "selector": {"matchLabels": {"app.kubernetes.io/instance": "cloudnative-pg-operator"}},
                 "template": {"spec": {"containers": [manager], "volumes": []}}}}
 
     def test_operator_renderer_rejects_unhardened_or_mismatched_images(self):
@@ -416,7 +416,7 @@ class NightingaleMTLSContractTests(unittest.TestCase):
 
     def operator_rbac_fixture(self):
         return {"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRole",
-                "metadata": {"name": "n9e-cnpg"}, "rules": [
+                "metadata": {"name": "cloudnative-pg-operator"}, "rules": [
                     {"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "list", "watch"]},
                     {"apiGroups": ["admissionregistration.k8s.io"], "resources": [
                         "mutatingwebhookconfigurations", "validatingwebhookconfigurations"], "verbs": ["get", "patch"]},
@@ -433,7 +433,7 @@ class NightingaleMTLSContractTests(unittest.TestCase):
         resources = ["backups", "clusters", "clusters/status", "databaseroles", "databases", "failoverquorums",
                      "poolers", "publications", "scheduledbackups", "imagecatalogs", "clusterimagecatalogs", "subscriptions"]
         auxiliary = [{"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRole",
-                      "metadata": {"name": "n9e-cnpg-" + name}, "rules": [{
+                      "metadata": {"name": "cloudnative-pg-operator-" + name}, "rules": [{
                           "apiGroups": ["postgresql.cnpg.io"], "resources": resources, "verbs": verbs,
                       }]} for name, verbs in (("view", ["get", "list", "watch"]),
                                               ("edit", ["create", "delete", "deletecollection", "patch", "update"]))]
@@ -474,7 +474,7 @@ class NightingaleMTLSContractTests(unittest.TestCase):
                 inputs[2]["metadata"]["name"] = "old-production-webhook"
             elif change in ("unknown_non_webhook_role", "auxiliary_role_changed"):
                 inputs.append({"kind": "ClusterRole", "metadata": {
-                    "name": "unknown-role" if change == "unknown_non_webhook_role" else "n9e-cnpg-view"},
+                    "name": "unknown-role" if change == "unknown_non_webhook_role" else "cloudnative-pg-operator-view"},
                     "rules": [{"apiGroups": [""], "resources": ["secrets"], "verbs": ["get"]}]})
             else:
                 role["aggregationRule"] = {"clusterRoleSelectors": [{"matchLabels": {"custom-role": "true"}}]}
@@ -489,7 +489,7 @@ class NightingaleMTLSContractTests(unittest.TestCase):
         rules = [item for item in nodes(listener)
                  if isinstance(item, dict) and item.get("@type", "").endswith(".RBAC")][0]["rules"]
         self.assertEqual("ALLOW", rules["action"])
-        self.assertIn({"principal_name": {"exact": IDENTITY + "observability-metrics/vmagent"}}, list(nodes(rules)))
+        self.assertIn({"principal_name": {"exact": IDENTITY + "victoriametrics/vmagent"}}, list(nodes(rules)))
         self.assertIn({"url_path": {"path": {"exact": "/metrics"}}}, list(nodes(rules)))
         self.assertIn({"header": {"name": ":method", "string_match": {"exact": "GET"}}}, list(nodes(rules)))
 
@@ -502,7 +502,7 @@ class NightingaleMTLSContractTests(unittest.TestCase):
         self.assertEqual({"tls_minimum_protocol_version": "TLSv1_3",
                           "tls_maximum_protocol_version": "TLSv1_3"}, tls["tls_params"])
         self.assertEqual([{"san_type": "URI", "matcher": {
-            "exact": IDENTITY + "observability-metrics/vmauth"}}],
+            "exact": IDENTITY + "victoriametrics/vmauth"}}],
             tls["validation_context"]["match_typed_subject_alt_names"])
         self.assertTrue(tls["tls_certificates"])
 
@@ -542,7 +542,7 @@ class NightingaleLiveProbeTests(unittest.TestCase):
             endpoint.connect()
         connect.assert_called_once_with(("172.28.1.10", 17443), 8)
         context.wrap_socket.assert_called_once_with(connect.return_value,
-            server_hostname="nightingale.observability-alerting.svc")
+            server_hostname="nightingale.nightingale.svc")
         self.assertIs(wrapped, endpoint.sock)
 
     def test_live_profile_requires_real_root_envelope_and_vm_requires_vector_one(self):
@@ -627,7 +627,7 @@ class LiveDependencyProbeTests(unittest.TestCase):
         def request(ip, port, path, *, ca_role, client_role=None, server_name):
             self.assertEqual("172.28.1.10", ip)
             self.assertEqual("pg-client", ca_role)
-            self.assertEqual("n9e-postgres-rw.observability-alerting.svc", server_name)
+            self.assertEqual("nightingale-postgres-rw.nightingale.svc", server_name)
             if port == 8000:
                 if path == "/readyz":
                     return 200, b"OK"

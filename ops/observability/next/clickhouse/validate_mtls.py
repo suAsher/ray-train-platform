@@ -12,7 +12,7 @@ import yaml
 
 
 HERE = Path(__file__).resolve().parent
-NAMESPACE = "observability-analytics"
+NAMESPACE = "clickhouse"
 
 
 def hostnames(name):
@@ -35,11 +35,11 @@ def validate_operator_routes(chi, routes, proxy_config):
         layout = clusters[0]["layout"]
         expected = (chi["metadata"]["namespace"], chi["metadata"]["name"],
                     clusters[0]["name"], layout.get("shardsCount"), layout.get("replicasCount"))
-        if len(clusters) != 1 or expected != (NAMESPACE, "observability", "telemetry", 1, 2):
-            errors.append("route contract supports only observability/telemetry/1 shard/2 replicas")
+        if len(clusters) != 1 or expected != (NAMESPACE, "clickhouse", "telemetry", 1, 2):
+            errors.append("route contract supports only clickhouse/telemetry/1 shard/2 replicas")
         expected_replicas = [
             {"name": str(index), "settings": {"interserver_https_host":
-             f"chi-observability-telemetry-0-{index}.{NAMESPACE}.svc.cluster.local"}}
+             f"chi-clickhouse-telemetry-0-{index}.{NAMESPACE}.svc.cluster.local"}}
             for index in range(2)
         ]
         if (set(layout) != {"shardsCount", "replicasCount", "replicas"}
@@ -69,7 +69,7 @@ def validate_operator_routes(chi, routes, proxy_config):
 
 def _validate_route(index, route, listeners, upstreams):
     errors = []
-    host = f"chi-observability-telemetry-0-{index}"
+    host = f"chi-clickhouse-telemetry-0-{index}"
     service = f"obs-ch-r{index}-mtls"
     expected = {"index": index, "host": host, "pod": f"{host}-0",
                 "loopback": f"127.0.0.{index + 2}", "service": service,

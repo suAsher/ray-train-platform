@@ -25,4 +25,4 @@ volumes:
   - name: obs-mtls-identity
     secret: {secretName: obs-mtls-cnpg-operator, defaultMode: 0440}
   - name: obs-mtls-config
-    configMap: {name: n9e-cnpg-mtls}
+    configMap: {name: cloudnative-pg-operator-mtls}

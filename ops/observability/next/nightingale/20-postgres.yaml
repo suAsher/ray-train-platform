@@ -1,8 +1,8 @@
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
-  name: n9e-postgres
-  namespace: observability-alerting
+  name: nightingale-postgres
+  namespace: nightingale
   labels:
     observability.raytrain.io/stage: additive
 spec:
@@ -18,7 +18,7 @@ spec:
     - name: OBS_METRICS_CLIENT_CA_FILE
       value: /projected/obs-metrics/ca.crt
     - name: OBS_METRICS_ALLOWED_CLIENT_URIS
-      value: spiffe://observability.raytrain.local/observability-metrics/vmagent
+      value: spiffe://observability.raytrain.local/victoriametrics/vmagent
   projectedVolumeTemplate:
     sources:
       - secret:

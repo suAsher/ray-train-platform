@@ -23,7 +23,7 @@ sys.path.insert(0, str(VM_ROOT))
 import validate_component_contract as component_contract  # noqa: E402
 from validate_component_contract import validate_scraper_rbac  # noqa: E402
 
-NS = "observability-metrics"
+NS = "victoriametrics"
 IDENTITY = "spiffe://observability.raytrain.local/"
 ENVOY_DIGEST = "sha256:dd85940439de19a0b6ae8419610363ea0ad351d9a994ea007161c206ec1e1865"
 ROLES = ("vmstorage", "vmselect", "vminsert", "vmauth", "vmagent", "vmalert", "alertmanager", "operator")
@@ -43,7 +43,7 @@ def walk(value):
 
 def render(*extra, chart=None):
     result = subprocess.run(
-        [os.environ.get("HELM", "helm"), "template", "raytrain-next",
+        [os.environ.get("HELM", "helm"), "template", "victoriametrics-cluster",
          str(chart or VM_ROOT / "resources"), "--namespace", NS, *extra],
         text=True, capture_output=True, check=False, timeout=60,
     )
@@ -71,7 +71,7 @@ class VMMTLSContracts(unittest.TestCase):
                          "alertmanager": "VMAlertmanager"}[role])["spec"]
 
     def config(self, role):
-        cm = self.one("ConfigMap", f"raytrain-next-{role}-mtls")
+        cm = self.one("ConfigMap", f"victoriametrics-cluster-{role}-mtls")
         return yaml.safe_load(cm["data"]["envoy.yaml"])
 
     def assert_config_revisions(self, objects):
@@ -86,7 +86,7 @@ class VMMTLSContracts(unittest.TestCase):
                     "alertmanager": "VMAlertmanager"}[role])
             config = next(item["data"]["envoy.yaml"] for item in objects
                           if item["kind"] == "ConfigMap"
-                          and item["metadata"]["name"] == f"raytrain-next-{role}-mtls")
+                          and item["metadata"]["name"] == f"victoriametrics-cluster-{role}-mtls")
             actual = spec.get("podMetadata", {}).get("annotations", {}).get(
                 "observability.raytrain.io/envoy-config-sha256")
             with self.subTest(role=role):
@@ -117,7 +117,7 @@ class VMMTLSContracts(unittest.TestCase):
     def test_role_specific_config_only_updates_its_own_pod_revision(self):
         original = self.assert_config_revisions(self.objects)
         changed = self.assert_config_revisions(render(
-            "--set-string", "mtls.readRoleURI=spiffe://observability.raytrain.local/observability-alerting/nightingale-test"))
+            "--set-string", "mtls.readRoleURI=spiffe://observability.raytrain.local/nightingale/nightingale-test"))
         self.assertNotEqual(original["vmauth"], changed["vmauth"])
         for role in set(original) - {"vmauth"}:
             with self.subTest(role=role):
@@ -184,7 +184,7 @@ class VMMTLSContracts(unittest.TestCase):
                     self.assertEqual({f"{IDENTITY}{NS}/vmstorage"}, self.exact_sans(tls))
                     endpoint = cluster["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]["address"]["socket_address"]
                     destinations.add((endpoint["address"], endpoint["port_value"]))
-                self.assertEqual({(f"vmstorage-raytrain-next-{i}.vmstorage-raytrain-next.{NS}.svc", remote)
+                self.assertEqual({(f"vmstorage-victoriametrics-cluster-{i}.vmstorage-victoriametrics-cluster.{NS}.svc", remote)
                                   for i in range(3)}, destinations)
 
     def test_storage_replica_override_rebuilds_routes_without_plaintext_fallback(self):
@@ -316,13 +316,13 @@ class VMMTLSContracts(unittest.TestCase):
         role = self.one("Role", "vm-self-scraper")
         rules = [item for item in role["rules"] if "secrets" in item["resources"]]
         self.assertEqual(1, len(rules))
-        self.assertEqual(["vmagent-raytrain-next"], rules[0]["resourceNames"])
+        self.assertEqual(["vmagent-victoriametrics-cluster"], rules[0]["resourceNames"])
         self.assertFalse(any("configmaps" in item["resources"] for item in role["rules"]))
         self.assertEqual("vm-self-scraper", self.spec("vmagent")["serviceAccountName"])
 
     def test_auth_and_am_use_explicit_sa_and_exact_config_secret_rbac(self):
-        for role, account, secret in (("vmauth", "vm-auth-reloader", "vmauth-config-raytrain-next"),
-                                      ("alertmanager", "vm-am-reloader", "vmalertmanager-raytrain-next-config")):
+        for role, account, secret in (("vmauth", "vm-auth-reloader", "vmauth-config-victoriametrics-cluster"),
+                                      ("alertmanager", "vm-am-reloader", "vmalertmanager-victoriametrics-cluster-config")):
             with self.subTest(role=role):
                 self.assertEqual(account, self.spec(role).get("serviceAccountName"))
                 self.one("ServiceAccount", account)
@@ -365,7 +365,7 @@ class VMMTLSContracts(unittest.TestCase):
         secret_rule.pop("resourceNames")
         with self.assertRaisesRegex(ValueError, "scraper RBAC"):
             validate_scraper_rbac(broad)
-        for replacement in (["obs-mtls-admin"], ["vmagent-raytrain-next", "obs-mtls-vmauth"]):
+        for replacement in (["obs-mtls-admin"], ["vmagent-victoriametrics-cluster", "obs-mtls-vmauth"]):
             broadened = deepcopy(self.objects)
             role = next(item for item in broadened if item.get("kind") == "Role" and item["metadata"]["name"] == "vm-self-scraper")
             next(item for item in role["rules"] if "secrets" in item["resources"])["resourceNames"] = replacement

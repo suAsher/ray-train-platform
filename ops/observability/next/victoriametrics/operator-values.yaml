@@ -1,6 +1,6 @@
 # Standalone chart victoria-metrics-operator 0.68.1 / app v0.75.0.
-# Install only in observability-metrics. Do not use the k8s-stack chart.
-fullnameOverride: raytrain-vm-operator
+# Install only in victoriametrics. Do not use the k8s-stack chart.
+fullnameOverride: victoriametrics-operator
 replicaCount: 1
 image:
   repository: harbor.wellspiking.ai/hub/victoriametrics/operator
@@ -8,7 +8,7 @@ image:
 imagePullSecrets:
   - name: harbor-registry
 watchNamespaces:
-  - observability-metrics
+  - victoriametrics
 extraArgs:
   # v0.75.0 VTAgent adds a cluster-wide watch. This phase uses OTel for traces.
   controller.disableReconcileFor: VTAgent
@@ -75,7 +75,7 @@ extraVolumes:
   - name: mtls-identity
     secret: {secretName: obs-mtls-operator, defaultMode: 0440}
   - name: mtls-config
-    configMap: {name: raytrain-next-operator-mtls}
+    configMap: {name: victoriametrics-cluster-operator-mtls}
   - name: mtls-runtime
     emptyDir: {medium: Memory, sizeLimit: 8Mi}
 extraContainers:

@@ -38,13 +38,13 @@
                       {
                         "san_type": "URI",
                         "matcher": {
-                          "exact": "spiffe://observability.raytrain.local/observability-analytics/clickhouse"
+                          "exact": "spiffe://observability.raytrain.local/clickhouse/clickhouse"
                         }
                       },
                       {
                         "san_type": "URI",
                         "matcher": {
-                          "exact": "spiffe://observability.raytrain.local/observability-analytics/ch-operator"
+                          "exact": "spiffe://observability.raytrain.local/clickhouse/ch-operator"
                         }
                       }
                     ]
@@ -103,7 +103,7 @@
                       {
                         "san_type": "URI",
                         "matcher": {
-                          "exact": "spiffe://observability.raytrain.local/observability-analytics/keeper"
+                          "exact": "spiffe://observability.raytrain.local/clickhouse/keeper"
                         }
                       }
                     ]
@@ -162,7 +162,7 @@
                       {
                         "san_type": "URI",
                         "matcher": {
-                          "exact": "spiffe://observability.raytrain.local/observability-metrics/vmagent"
+                          "exact": "spiffe://observability.raytrain.local/victoriametrics/vmagent"
                         }
                       }
                     ]
@@ -358,7 +358,7 @@
           "typed_config": {
             "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext",
             "max_session_keys": 0,
-            "sni": "keeper-observability.observability-analytics.svc.cluster.local",
+            "sni": "keeper-clickhouse.clickhouse.svc.cluster.local",
             "common_tls_context": {
               "tls_params": {
                 "tls_minimum_protocol_version": "TLSv1_2"
@@ -381,7 +381,7 @@
                   {
                     "san_type": "URI",
                     "matcher": {
-                      "exact": "spiffe://observability.raytrain.local/observability-analytics/keeper"
+                      "exact": "spiffe://observability.raytrain.local/clickhouse/keeper"
                     }
                   }
                 ]
@@ -419,7 +419,7 @@
           "typed_config": {
             "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext",
             "max_session_keys": 0,
-            "sni": "keeper-observability.observability-analytics.svc.cluster.local",
+            "sni": "keeper-clickhouse.clickhouse.svc.cluster.local",
             "common_tls_context": {
               "tls_params": {
                 "tls_minimum_protocol_version": "TLSv1_2"
@@ -442,7 +442,7 @@
                   {
                     "san_type": "URI",
                     "matcher": {
-                      "exact": "spiffe://observability.raytrain.local/observability-analytics/keeper"
+                      "exact": "spiffe://observability.raytrain.local/clickhouse/keeper"
                     }
                   }
                 ]

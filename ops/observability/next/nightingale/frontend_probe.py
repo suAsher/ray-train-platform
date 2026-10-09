@@ -67,7 +67,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 def fetcher(payload):
     origin = urllib.parse.urlsplit(payload["origin"])
     require(origin.scheme == "https" and origin.hostname ==
-            "nightingale.observability-alerting.svc" and origin.port == 17443
+            "nightingale.nightingale.svc" and origin.port == 17443
             and origin.path in ("", "/") and not origin.username and not origin.password
             and not origin.query and not origin.fragment, "unexpected isolated frontend origin")
     context = ssl.create_default_context(cafile=payload["ca"])

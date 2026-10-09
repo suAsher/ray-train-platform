@@ -1,5 +1,5 @@
 # Chart: dandydev/redis-ha 4.39.0. Three Redis+Sentinel Pods.
-fullnameOverride: n9e-redis
+fullnameOverride: nightingale-redis
 replicas: 3
 image:
   repository: harbor.wellspiking.ai/hub/library/redis
@@ -10,7 +10,7 @@ labels:
   app.kubernetes.io/part-of: n9e
   observability.raytrain.io/stage: additive
 auth: true
-existingSecret: n9e-redis-auth
+existingSecret: nightingale-redis-auth
 authKey: auth
 redis:
   port: 0
@@ -40,7 +40,7 @@ sentinel:
   resolveHostnames: true
   announceHostnames: true
   auth: true
-  existingSecret: n9e-redis-auth
+  existingSecret: nightingale-redis-auth
   authKey: sentinel-password
   # Password-only Sentinel uses this same requirepass for peer authentication.
   # sentinel-user/sentinel-pass applies to a separately configured ACL user.

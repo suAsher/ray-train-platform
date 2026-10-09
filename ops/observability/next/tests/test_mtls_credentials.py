@@ -16,8 +16,8 @@ SPEC.loader.exec_module(mtls)
 
 
 def entry(**overrides):
-    return dict(namespace="observability-metrics", role="vmstorage",
-                trust_domain="mesh", dns_names=["vmstorage.observability-metrics.svc"],
+    return dict(namespace="victoriametrics", role="vmstorage",
+                trust_domain="mesh", dns_names=["vmstorage.victoriametrics.svc"],
                 usages=["serverAuth", "clientAuth"], **overrides)
 
 
@@ -41,7 +41,7 @@ class IdentityContract(unittest.TestCase):
             mtls.validate_plan([item, other])
 
     def test_rejects_wildcard_and_external_dns(self):
-        for host in ("*.observability-metrics.svc", "example.com", "127.0.0.1", "a\nDNS:evil.svc"):
+        for host in ("*.victoriametrics.svc", "example.com", "127.0.0.1", "a\nDNS:evil.svc"):
             with self.subTest(host=host):
                 item = entry(); item["dns_names"] = [host]
                 with self.assertRaises(mtls.CredentialError):
@@ -53,7 +53,7 @@ class IdentityContract(unittest.TestCase):
             mtls.validate_plan([item])
 
     def test_client_only_identity_allows_no_dns_and_fixed_database_cn(self):
-        item = entry(); item.update(role="n9e-postgres-client", namespace="observability-alerting",
+        item = entry(); item.update(role="n9e-postgres-client", namespace="nightingale",
                                    trust_domain="postgres-client", common_name="n9e",
                                    dns_names=[], usages=["clientAuth"])
         self.assertEqual(mtls.validate_plan([item])[0]["common_name"], "n9e")
@@ -70,7 +70,7 @@ class IdentityContract(unittest.TestCase):
         data = {"tls.crt": "public-cert", "tls.key": "private-test-key", "ca.crt": "public-ca"}
         result = mtls.make_secret(entry(), data)
         self.assertEqual(result["metadata"]["name"], "obs-mtls-vmstorage")
-        self.assertEqual(result["metadata"]["namespace"], "observability-metrics")
+        self.assertEqual(result["metadata"]["namespace"], "victoriametrics")
         self.assertEqual(set(result["stringData"]), {"tls.crt", "tls.key", "ca.crt"})
         self.assertEqual(result["metadata"]["labels"]["observability.raytrain.io/credential-owner"], "mtls")
         self.assertNotIn("ca.key", json.dumps(result))
@@ -117,7 +117,7 @@ class IdentityContract(unittest.TestCase):
         for name, domain in (("obs-mtls-cnpg-metrics-ca", "mesh"),
                              ("obs-mtls-postgres-client-ca", "postgres-client")):
             secret = mtls.public_ca_secret(name, domain, "public-only-certificate")
-            self.assertEqual("observability-alerting", secret["metadata"]["namespace"])
+            self.assertEqual("nightingale", secret["metadata"]["namespace"])
             self.assertEqual({"ca.crt": "public-only-certificate"}, secret["stringData"])
             self.assertEqual("Opaque", secret["type"])
         with self.assertRaises(mtls.CredentialError):
@@ -134,8 +134,8 @@ class RealCertificateContract(unittest.TestCase):
             self.assertNotEqual(first["tls.key"], second["tls.key"])
             cert = Path(directory) / "leaf.crt"; cert.write_text(first["tls.crt"])
             output = subprocess.check_output(["openssl", "x509", "-in", str(cert), "-noout", "-text"], text=True)
-            self.assertIn("URI:spiffe://observability.raytrain.local/observability-metrics/vmstorage", output)
-            self.assertIn("DNS:vmstorage.observability-metrics.svc", output)
+            self.assertIn("URI:spiffe://observability.raytrain.local/victoriametrics/vmstorage", output)
+            self.assertIn("DNS:vmstorage.victoriametrics.svc", output)
             keys = list(pki.rglob("*.key"))
             self.assertEqual(len(keys), 1)
             self.assertEqual(keys[0].stat().st_mode & 0o777, 0o600)

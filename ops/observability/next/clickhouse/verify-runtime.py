@@ -27,7 +27,7 @@ from runtime_diagnostics import capture_client_timeout, private_output, protocol
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
-NS = "observability-analytics.svc.cluster.local"
+NS = "clickhouse.svc.cluster.local"
 UID = 10001
 
 
@@ -74,7 +74,7 @@ def keeper_config(index, candidate):
         raise RuntimeCheckError("Keeper global Raft TLS flag missing from candidate")
     for peer in range(3):
         server = ET.SubElement(raft, "server")
-        for key, value in {"id": peer + 1, "hostname": f"chk-observability-keeper-0-{peer}.{NS}",
+        for key, value in {"id": peer + 1, "hostname": f"chk-clickhouse-keeper-0-{peer}.{NS}",
                            "port": 9234, "secure": 1}.items():
             config_value(server, key, value)
     return xml_text(root)
@@ -86,13 +86,13 @@ def ch_configs(index, candidate, passwords):
     values = dict(config["settings"])
     values.update(config["clusters"][0]["layout"]["replicas"][index]["settings"])
     values.update({"max_server_memory_usage": 1610612736, "logger/level": "warning",
-                   "logger/console": True, "interserver_http_host": f"chi-observability-telemetry-0-{index}.{NS}"})
+                   "logger/console": True, "interserver_http_host": f"chi-clickhouse-telemetry-0-{index}.{NS}"})
     for key, value in values.items():
         config_value(root, key, value)
     logger = root.find("logger")
     ET.SubElement(logger, "log", {"remove": "1"})
     ET.SubElement(logger, "errorlog", {"remove": "1"})
-    for key, value in {"installation": "observability", "cluster": "telemetry",
+    for key, value in {"installation": "clickhouse", "cluster": "telemetry",
                        "shard": "0", "replica": str(index)}.items():
         config_value(root, "macros/" + key, value)
     zoo = ET.SubElement(root, "zookeeper")
@@ -107,7 +107,7 @@ def ch_configs(index, candidate, passwords):
     config_value(shard, "internal_replication", True)
     for peer in range(2):
         replica = ET.SubElement(shard, "replica")
-        config_value(replica, "host", f"chi-observability-telemetry-0-{peer}.{NS}")
+        config_value(replica, "host", f"chi-clickhouse-telemetry-0-{peer}.{NS}")
         config_value(replica, "port", 9440)
         config_value(replica, "secure", 1)
     users_root = ET.Element("clickhouse")
@@ -139,7 +139,7 @@ def sql_client(sandbox, query, replica=0, role="query-admin", check=True):
     users = {"schema-admin": "schema_admin", "query-admin": "observability_query", "otel-gateway": "otel_ingest"}
     username = users[role]
     root = ET.fromstring((HERE / "schema-client.xml").read_text())
-    root.find("host").text = f"chi-observability-telemetry-0-{replica}.{NS}"
+    root.find("host").text = f"chi-clickhouse-telemetry-0-{replica}.{NS}"
     root.find("user").text = username
     path = write(sandbox.work / "client-configs" / f"{role}-{replica}.xml", xml_text(root))
     client_name = sandbox.prefix + "-sql-" + secrets.token_hex(4)
@@ -185,7 +185,7 @@ def create_cluster(sandbox):
     for index in range(3):
         config = write(sandbox.work / "configs" / f"keeper-{index}.xml", keeper_config(index, keeper))
         data = data_dir(sandbox.work / "data" / f"keeper-{index}")
-        host = f"chk-observability-keeper-0-{index}"
+        host = f"chk-clickhouse-keeper-0-{index}"
         native = sandbox.start(f"keeper-{index}", sandbox.images["keeper"],
                                ["--config-file=/runtime/keeper.xml"],
                                [(config, "/runtime/keeper.xml", False), (data, "/var/lib/clickhouse-keeper", True),
@@ -209,9 +209,9 @@ def create_cluster(sandbox):
         write(config_dir / "zz-mtls.xml", config)
         write(users_dir / "zz-users.xml", users)
         data = data_dir(sandbox.work / "data" / f"ch-{index}")
-        aliases = [f"chi-observability-telemetry-0-{index}.{NS}", f"obs-ch-r{index}-mtls.{NS}"]
+        aliases = [f"chi-clickhouse-telemetry-0-{index}.{NS}", f"obs-ch-r{index}-mtls.{NS}"]
         if index == 0:
-            aliases.append(f"clickhouse-observability.{NS}")
+            aliases.append(f"clickhouse-clickhouse.{NS}")
         native = sandbox.start(f"ch-{index}", sandbox.images["clickhouse"],
                                ["--config-file=/etc/clickhouse-server/config.xml"],
                                [(config_dir, "/etc/clickhouse-server/config.d", False),
@@ -231,7 +231,7 @@ def assert_boundaries(sandbox):
     evidence = {}
     for index, native in enumerate(sandbox.native_keeper):
         address = sandbox.ip(native)
-        server = f"chk-observability-keeper-0-{index}.{NS}"
+        server = f"chk-clickhouse-keeper-0-{index}.{NS}"
         assert all(port_closed(address, port) for port in (2181, 9182)), "Keeper native bypass"
         for port, role in ((2281, "clickhouse"), (9234, "keeper"), (7000, "vmagent")):
             sandbox.stage = f"keeper_{index}_port_{port}_valid_role_{role}"
@@ -242,7 +242,7 @@ def assert_boundaries(sandbox):
         assert not sandbox.tls_accepts(address, server, 2281, "canary"), "canary may access Keeper"
     for index, native in enumerate(sandbox.native_ch):
         address = sandbox.ip(native)
-        server = f"chi-observability-telemetry-0-{index}.{NS}"
+        server = f"chi-clickhouse-telemetry-0-{index}.{NS}"
         assert all(port_closed(address, port) for port in (8123, 9000, 9009)), "CH native bypass"
         for port, role in ((8443, "ch-operator"), (9440, "query-admin"), (9010, "clickhouse"), (9363, "vmagent")):
             sandbox.stage = f"clickhouse_{index}_port_{port}_valid_role_{role}"
@@ -261,7 +261,7 @@ def verify(sandbox):
     sandbox.stage = "issue_synthetic_certificates"
     plans = json.loads((HERE / "mtls-identities.json").read_text())
     plans += json.loads((ROOT / "otel" / "mtls-identities.json").read_text())
-    plans.append({"namespace": "observability-metrics", "role": "vmagent", "trust_domain": "mesh",
+    plans.append({"namespace": "victoriametrics", "role": "vmagent", "trust_domain": "mesh",
                   "dns_names": [], "usages": ["clientAuth"]})
     sandbox.issue(ROOT, plans)
     create_cluster(sandbox)
@@ -270,7 +270,7 @@ def verify(sandbox):
     if sandbox.phase == "keeper":
         return {**evidence, "remaining": "ClickHouse/schema/OTel not exercised by keeper-only phase"}
     for replica, native in enumerate(sandbox.native_ch):
-        protocol_hops(sandbox, native, f"chi-observability-telemetry-0-{replica}.{NS}")
+        protocol_hops(sandbox, native, f"chi-clickhouse-telemetry-0-{replica}.{NS}")
     sandbox.stage = "native_sql_preflight"
     for replica in range(2):
         if sql_client(sandbox, "SELECT 1", replica, "schema-admin") != "1":

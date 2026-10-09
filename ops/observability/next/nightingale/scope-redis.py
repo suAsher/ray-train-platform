@@ -12,18 +12,18 @@ for document in documents:
     if document is None:
         continue
     metadata = document.get("metadata", {})
-    if metadata.get("namespace") != "observability-alerting":
+    if metadata.get("namespace") != "nightingale":
         raise SystemExit("unexpected Redis object namespace")
-    if document.get("kind") == "RoleBinding" and metadata.get("name") == "n9e-redis":
+    if document.get("kind") == "RoleBinding" and metadata.get("name") == "nightingale-redis":
         subjects = []
         for subject in document.get("subjects", []):
             if (
                 subject.get("kind") != "ServiceAccount"
-                or subject.get("name") != "n9e-redis"
-                or subject.get("namespace", "observability-alerting") != "observability-alerting"
+                or subject.get("name") != "nightingale-redis"
+                or subject.get("namespace", "nightingale") != "nightingale"
             ):
                 raise SystemExit("unexpected Redis RoleBinding subject")
-            subjects.append({**subject, "namespace": "observability-alerting"})
+            subjects.append({**subject, "namespace": "nightingale"})
         if len(subjects) != 1:
             raise SystemExit("expected one Redis ServiceAccount binding")
         document = {**document, "subjects": subjects}

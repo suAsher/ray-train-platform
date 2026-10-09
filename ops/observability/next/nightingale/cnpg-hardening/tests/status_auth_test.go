@@ -151,7 +151,7 @@ func TestObservabilityAnonymousHealthIsMinimal(t *testing.T) {
 
 func observabilityStatusInstance(t *testing.T, identity observabilitytest.Identity, fingerprint string) *postgres.Instance {
 	t.Helper()
-	instance := postgres.NewInstance().WithNamespace("observability-alerting").WithClusterName("n9e-postgres").WithPodName("n9e-postgres-1")
+	instance := postgres.NewInstance().WithNamespace("nightingale").WithClusterName("nightingale-postgres").WithPodName("nightingale-postgres-1")
 	instance.StatusPortTLS = true
 	instance.SetServerCertificate(&identity.TLS)
 	instance.SetCluster(&apiv1.Cluster{Status: apiv1.ClusterStatus{OperatorCertificateFingerprint: fingerprint}})
