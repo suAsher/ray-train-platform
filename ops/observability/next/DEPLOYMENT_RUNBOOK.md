@@ -1,6 +1,14 @@
 # 训练平台 VKE 可观测性：架构、部署流程与操作记录
 
-更新日期：2026-10-08，时间均为北京时间，另有标注除外。
+更新日期：2026-10-09，时间均为北京时间，另有标注除外。
+
+**当前检查点（2026-10-09）：正常命名空间的新增体系已经部署，并完成 VM、N9E 与 CH/OTel 基础线上验收、真实证书续期和受控轮换验证。** 当前名称是 `cert-manager`、`victoriametrics`、`clickhouse`、`opentelemetry`、`nightingale`。六类原生叶证书续签、13 Pod 逐副本轮换及随后无变更复验通过；持续轮转 CronJob 保持 suspended，待失败通知闭环。受控演练不等于周期性证书消费已经启用。
+
+旧 `observability-*` 组件、PVC 与恢复材料保留回退，原训练平台、Prometheus、Alloy、Loki 业务链路未迁移；SSO、业务采集、正式告警接收尚未接入。新位置的实际部署归属、镜像、续期与证据见[10 月 9 日部署记录](#2026-10-09-正式命名部署与验收记录)。
+
+新套件稳态为 **43 Pod、21 PVC、申请 670Gi**；旧套件 **35 Pod、670Gi** 仍保留回退，因此当前两套并行合计申请 **1340Gi**。这是已申请容量，不是实际数据使用量；并行保留的云盘继续产生费用，后续扩容另增成本。
+
+**下方第 1–11 节保留 2026-10-08 的历史执行记录。** 其中旧 namespace、Helm revision、174 项测试、35 Pod/670Gi 等数字只代表旧新增体系的对应时点；历史命令不能直接当作新命名空间升级指令，历史通过结果不能替代 10 月 9 日现场验收。
 
 **最终检查点（2026-10-08）：新增观测组件部署与本轮基础 canary 验收完成，临时资源清理和最终旧系统对照完成。** 35 个常驻 Pod 全部 Running/Ready、重启 0；21 个 PVC 全部 Bound，真实 PV 均为 Retain，合计 670Gi；12 节点 Ready 且 Memory/Disk/PIDPressure 均 False。VM revision 3/Operator 5，182 live、33 RBAC、89 Docker PASS。CH/OTel 8 Pod Ready，严格 TLS 60 PASS、13 个 Pod IP 原生端口 ConnectionRefused、无 IPv6；双 gateway 合成 log/span 在双 CH 精确复制。OTel gRPC Export/SIGKILL/file_storage 恢复另在 Docker 通过，不是线上故障注入。PG 提升实例 2 收敛、双 quorum 流追平；N9E 两 Pod 完整应用 44、PG 5432 27、依赖 46、webhook 6，共 123 项明确现场检查及另 1 次真实 admission 均 PASS。业务采集、迁移与持续运维交接仍有后续门禁。
 
@@ -389,9 +397,9 @@ kubectl kustomize "$obs_candidate/ops/observability/next/otel" > otel-rendered.y
 持久 mTLS 签发目录另为 `/root/raytrain-observability-pki-20261008`。它包含恢复所需的敏感 CA 材料，不能作为普通日志归档、提交 Git 或复制到 Pod；本手册只保留目录元数据与 Secret 名称/键的核验结论。
 
 
-## 2026-10-09 正式命名迁移候选
+## 2026-10-09 正式命名部署与验收记录
 
-本节描述新的声明式输入和迁移边界，**不是部署完成回执**。前面的 2026-10-08 资源名、镜像摘要和现场结果是历史证据，保留原样；不能用旧位置的通过结果替代新位置验收。
+本节记录已部署的新命名空间及本轮独立验收。前面的 2026-10-08 资源名、镜像摘要和现场结果保留为历史证据；新位置已重新验收，没有沿用旧位置 PASS 作为上线结论。构建机证据根目录为 `/root/raytrain-observability-certmanager-20261009T014000Z`。原生组件受控轮转另行验证，持续轮转 CronJob 保持 suspended；下面明确列出已完成和待完成的边界。
 
 | 组件 | 原 namespace | 新 namespace | 新主要资源名 |
 | --- | --- | --- | --- |
@@ -404,7 +412,7 @@ Kubernetes namespace 只能使用小写 DNS 名称。`n9e-cnpg` 原来指的是 
 
 声明式输入同步更新了 namespace、Service DNS、SPIFFE URI、Operator watch 范围、代理路由、固定 hostAliases、配置引用与验证夹具。ClickHouse Operator 按 CR 名生成 `chi-clickhouse-telemetry-0-{0,1}` 和 `chk-clickhouse-keeper-0-{0,1,2}`；默认服务名为 `clickhouse-clickhouse` / `keeper-clickhouse`。ClickHouse `observability_canary` 数据库和查询用户保留。Keeper 中的复制表路径属于新位置，不能将旧卷直接改 claimRef 后当作已完成迁移。
 
-CloudNativePG 派生镜像中的监控客户端精确 URI 也必须改为 `spiffe://observability.raytrain.local/victoriametrics/vmagent`。因此本次需要重新验证和构建这个专用镜像；只改 YAML 并复用旧镜像摘要不能正常完成新 namespace 的授权。
+CloudNativePG 派生镜像中的监控客户端精确 URI 已改为 `spiffe://observability.raytrain.local/victoriametrics/vmagent`，并重新验证、构建和部署专用镜像。新引用为 `harbor.wellspiking.ai/guofeng.su/cnpg-observability:1.30.1-mtls-names-3ca43d7@sha256:71e30bd615ad4811099d6141c787c172f3e4f16f9ab0bf673146bd1d1e020c6f`；只改 YAML 并复用旧镜像摘要不能完成新 namespace 的授权。
 
 ### CNPG 命名空间级 Operator 共存
 
@@ -414,6 +422,90 @@ CloudNativePG 派生镜像中的监控客户端精确 URI 也必须改为 `spiff
 
 [chart 0.29.1 的 CRD 模板](https://github.com/cloudnative-pg/charts/blob/cloudnative-pg-v0.29.1/charts/cloudnative-pg/templates/crds/crds.yaml) 位于 `templates/` 且由 `crds.create` 控制，仅设置 Helm `--skip-crds` 不足。新 values 明确 `crds.create: false`，后处理器遇到任何 CRD 会拒绝。现有 CRD 的 Helm ownership 和 schema 均保持原状；部署前单独只读核对锁定版本 schema 兼容性。CRD 是共享集群基础资源，后续旧 release 退场时也不得删除。
 
-迁移顺序仍为备份旧新增 PostgreSQL 数据与恢复元数据、验证恢复，再在新 namespace 安装新 Operator 与新 PG 集群。两套 Operator 只 watch 各自 namespace，分别维护自己的 webhook 与 CA bundle；用真实 API Server dry-run 分别验证旧/新 namespace admission，再检查旧 Operator 与 PG 持续 Ready。随后迁移/恢复应用数据并验收，旧 Operator、PG 与 PVC 留作回滚，完成迁移前不退场。新部署失败时只停止/回退本次新 release，不必夺回旧 webhook ownership。
+新 Operator 与新 PG 集群本轮已独立部署。旧夜莺数据库备份在构建机无网络、无宿主端口的临时 PG 17 容器中验证恢复后，已恢复到确认为空的新数据库，57 张应用表核对通过；旧数据库保持原状。两套 Operator 只 watch 各自 namespace，分别维护自己的 webhook 与 CA bundle；真实 API Server dry-run 分别验证了旧/新 namespace admission。旧 Operator、PG 与 PVC 留作回退，后续数据变更和退场另行处理。新部署失败时只停止/回退本次新 release，不必夺回旧 webhook ownership。
 
-其它组件可以在新 namespace 独立部署并验收，旧新增组件的数据与 PVC 只在已验证恢复方案和明确清理范围后处理。任何迁移都不能改名覆盖旧 Secret、抢占 PVC、修改训练任务或将历史测试结果记成新部署的结果。
+其它组件的新 namespace 独立部署与基础验收也已完成，旧新增组件的数据与 PVC 仍只在已验证恢复方案和明确清理范围后处理。任何迁移都不能改名覆盖旧 Secret、抢占 PVC、修改训练任务或将历史测试结果记成新部署的结果。
+
+
+### 当前组件由谁部署、由谁持续协调
+
+以下是 10 月 9 日只读核对的 Helm release 状态；全部为 `deployed`。Helm revision 是本 release 的历史次数，不等于源码 SHA、应用版本或 imageID。
+
+| namespace | 安装入口与当前 revision | 持续管理边界 |
+| --- | --- | --- |
+| `cert-manager` | Helm `cert-manager` v1.21.2 / revision 2；`cert-manager-approver-policy` v0.28.0 / revision 1 | cert-manager 协调 Certificate/Secret；approver-policy 审核精确身份，Issuer/Certificate/Policy/RBAC 来自本仓库受审渲染 |
+| `victoriametrics` | Helm `victoriametrics-operator` chart 0.68.1 / revision 1；本地 chart `victoriametrics-cluster` 0.1.0 / revision 1 | Operator v0.75.0 协调 VMCluster、VMAgent、VMAuth、VMAlert、Alertmanager 等 CR；VM 应用 v1.153.0 |
+| `clickhouse` | Helm `clickhouse-operator` chart 0.27.4 / revision 1 | Kustomize 提交 CHI/CHK、代理配置与 Service；Altinity Operator 创建 CH 两副本、Keeper 三副本及其状态资源。schema Job 单独提交并已完成 |
+| `opentelemetry` | Kustomize；没有 OTel Helm release | 本仓库 StatefulSet/ConfigMap/Service 管理两个 Gateway 及持久队列，不由 OTel Operator 创建 |
+| `nightingale` | Helm `cloudnative-pg-operator` chart 0.29.1 / revision 1；`nightingale-redis` chart 4.39.0 / revision 1 | CNPG 协调 `nightingale-postgres` Cluster；Redis/Sentinel 由 chart 管理。夜莺双副本、配置与 bootstrap/HA 清单由本仓库渲染后提交，并不是另一个夜莺 Helm release |
+
+Operator 的 Helm 安装不等于它管理的数据集群已初始化；schema/bootstrap、数据库就绪和端到端写查都另行验证。已有 CRD 保留原 ownership，新 release 不 `--take-ownership`，不删除或重建共享 CRD。
+
+当前部署顺序和完整渲染命令见[本轮迁移操作手册](../../../docs/superpowers/plans/2026-10-09-observability-migration-runbook.md)。复用时必须选择已验证 SHA 的构建机隔离候选，不能直接递归 apply 本目录。核心顺序为：
+
+1. 只读核对旧系统、CRD schema/ownership、现有资源名和备份恢复边界；固定 chart 包与镜像 digest。
+2. 创建新基础对象、cert-manager/approver-policy，受控导入 CA，生成 Issuer、身份策略与 Certificate；非 PKI 凭据仅按明确映射通过内存/stdin 创建，不把旧叶证书复制冒充 cert-manager 管理。
+3. 对最终 Helm/Kustomize 结果做作用域检查、完整 diff 和 server-side dry-run；安装仍使用同一 values 与 post-renderer，不能把 Helm 渲染结果另行 apply。
+4. VM 先提交资源 chart 以提供 Operator 所需代理配置，再安装 Operator；CH 先提交 CHI/CHK/配置再安装 Operator，等待 Keeper 3/CH 2 就绪及 schema Job 完成；OTel 随后接入新 CH；CNPG、PG、Redis 依赖就绪后完成夜莺 bootstrap 和双副本部署。
+5. 在新地址执行下面的独立验收、真实续期和旧系统对照，保留旧 `observability-*` 资源回退。旧数据/业务迁移与最终退场没有在本轮自动执行。
+
+SDS 必须位于每条代理渲染链末端：CH 的 `operator-post-render.py`、CNPG 的 `scope-cnpg-webhooks.py` 先注入代理，再由 `mtls/sds_post_render.py` 处理；VM Helm、CH/OTel Kustomize 和夜莺配置清单也经过 SDS。Redis 使用原生 TLS，只经过自己的作用域处理器。不能仅保留 SDS 而丢掉专用作用域/认证 post-renderer。证书 SDS 文件随同一 ConfigMap 挂载，叶密钥仍只从 Secret 读取；没有新增 SDS 服务。
+
+### cert-manager、续期和权限为何仍必要
+
+本轮只读快照显示 **27/27 个正常 Certificate Ready**：`victoriametrics` 11、`clickhouse` 5、`opentelemetry` 2、`nightingale` 9。CA 私钥仅位于 `cert-manager` namespace；工作负载得到本角色叶证书及公开信任材料。默认自动批准器关闭，approver-policy 按 namespace、issuer、URI/DNS SAN、EKU、有效期与密钥形状约束申请。证书签发拒绝矩阵和当前运行脚本见 [cert-manager 说明](cert-manager/README.md)，独立记录结果，不能用 Certificate Ready 替代负向策略验收。
+
+当前 CNI 仍为不执行 NetworkPolicy 的既定状态，因此组件权限不能省略：Kubernetes RBAC 约束 Operator 和轮转控制器的可操作对象；mTLS 约束跨 Pod 服务身份；HTTP 路由/RBAC、VM 读写身份、SQL 只读/写入角色、Redis AUTH 各自保留。没有因为采用 Helm 或内部 Service 而开放匿名数据面。此边界不等于网络层不可达或抗流量洪泛。
+
+cert-manager 更新 Secret 不自动证明每个进程已消费新证书。目前实际完成两类现场续期：
+
+| 消费端 | 实际结果 | 不扩大为 |
+| --- | --- | --- |
+| PostgreSQL 服务端 | 三实例均在 PostgreSQL TLS 握手中返回新的相同 serial，协商 TLSv1.3；Pod UID 未变，重启 0，两条复制流仍 `streaming:quorum` | 不代表整个 PG 客户端/Operator 身份、CA 根轮换和所有 HA 场景都已验证 |
+| VMStorage Envoy | 三副本均在实际握手返回新 serial，协商 TLSv1.3；Pod UID 未变，重启 0 | 不代表所有使用原生 TLS 的组件都会自动热加载 |
+
+Envoy 采用 filesystem SDS 监视 Kubernetes Secret 投射目录的原子更新；纯转换保留原有 TLS 参数、SAN、require_client_certificate 和 HTTP RBAC，新增必要的本地 node 标识。隔离真实 Envoy v1.39.3 验证共 10 项通过，包含上下游新 serial、原连接保持、错误身份拒绝、坏证书/密钥保留上一有效身份并在修正后恢复。CA 根轮换需要独立双信任过渡，本次没有把静态 CA 文件读取泛化为自动根轮换。
+
+**原生组件持续自动轮转尚未启用，CronJob 保持 `suspend: true`。** 本轮已按 [原生轮转说明](mtls/ROTATION.md) 对 Keeper、CH、Redis/Sentinel、N9E、Alertmanager 完成六类叶证书同 CA 强制续签、13 Pod 受控轮换和随后 no-op；19 个原生服务端 TLS 端点均观测到新 serial，PG 也观测到两个新 N9E 实例的真实新客户端 serial。复制与成员状态通过，无变更复验中 13 Pod UID/annotation 不变、重启 0。AM 服务端在 Pod 替换前已观测到热加载；没有将服务端观测泛化为全部客户端热加载。失败通知闭环尚未接通，不据此解除周期任务暂停。cert-manager 自动签发/续期、Envoy SDS、PG 热加载与这个定时轮转开关是不同能力。新 Alertmanager 仍为 `blackhole-canary`，没有实际告警接收通道。
+
+### 本轮镜像来源
+
+标准镜像继续优先使用 Harbor `hub` 代理缓存的官方发行内容并固定 digest；不要求所有镜像先拉到构建机再推 `guofeng.su`。VM、Envoy、CH/Keeper、OTel、Redis 按各 values/versions 中锁定路径使用。`guofeng.su` 有两类明确用途：
+
+- **源码派生镜像**：CNPG 的认证/新 namespace 身份补丁和夜莺 Redis 客户端兼容补丁，需要构建和独立验证。当前 CNPG 新摘要见上文；夜莺仍使用 `9.1.1-sentinel-01abc76@sha256:2e544213530f914b961e05d9fbab2ddcbbb995402379496a34815f0d61da6315`。
+- **内容不变的可达性镜像**：PostgreSQL 与此次 Jetstack 镜像因原注册表/blob 访问问题做同源复制。cert-manager 的 controller/webhook/cainjector/startupapicheck/acmesolver 保留官方多架构 index digest；approver-policy 固定官方 index 中的 linux/amd64 子 manifest `sha256:e6547e9ff58c3fcb1bc70ef9f42dfe9297de385cfd22aa1d6754f06cb50d7cc9`。父 index 和子 manifest 不同属于层级不同，不能称为改过镜像内容。
+
+Jetstack chart/应用固定为 cert-manager v1.21.2、approver-policy v0.28.0。来源、完整 digest 和 Harbor override 见 [cert-manager 版本锁](cert-manager/versions.yaml) 与 [镜像说明](cert-manager/README.md)。固定版本和摘要用于可复现，不等于承诺永远最新或已做完供应链安全扫描。本轮没有修改 Harbor/Ceph 策略，也没有重构建训练平台后端或 Portal。
+
+### 新位置独立验收与证据
+
+下表路径均相对本节的 10 月 9 日构建机证据根目录。不同环境和检查类别不相加为整体覆盖率。
+
+| 检查 | 已确认结果 | 证据 |
+| --- | --- | --- |
+| 源码与真实渲染 | 候选 `4768871` 全量 **286 unit PASS**；**7 条真实 Helm/Kustomize 渲染链 PASS**，14 个代理 ConfigMap 转换幂等，非叶证书 TLS/SAN/RBAC 保持，非代理对象不变；修复真实 chart 的可选 `data: null`/`initContainers: null` 兼容性 | `sds-render-green-4768871-full-unit.log`、`sds-chain-green-4768871/result.json` |
+| SDS 真实进程 | 10 项通过；双向证书轮换、明确身份拒绝、原连接、坏 pair 恢复与隔离资源清理 | `sds-runtime-v5.json` |
+| 新 VM | **182 项现场 PASS**；新 namespace 的认证写入、查询、自监控和身份边界 | `new-vm-live/result.json` |
+| 新夜莺应用 | **44 项现场 PASS**，not_tested 为空；双 Pod 登录/跨 Pod JWT、原 HTML/JS、VM `vector(1)`、Redis/Sentinel 实际状态 | `new-n9e-live/app-result.json` |
+| 新夜莺依赖 | **46 项现场 PASS**；CNPG/PG 管理与指标身份、Redis/Sentinel TLS 后仍须 AUTH、明确证书拒绝。报告仍列 PG 5432 独立 probe、Operator 9443 admission 独立 probe、Redis 明文无明确认证响应 3 项 not_tested，不以旧 namespace 的 27/6 项覆盖本轮范围 | `new-n9e-live/dependencies-result.json` |
+| 新 CH/OTel 端到端 | 两个 Gateway 各写 1 log/1 span；每个 CH 物理副本均精确 **2 logs、2 traces、2 trace lookup**，稳定复查一致；run/trace/span ID、服务字段及属性白名单精确一致；两个 Gateway 的 logs/traces queue 和 in-flight 实际 gauge 齐全且全部 0；**20 次明确 TLS alert 拒绝、17 个原生端口 ECONNREFUSED** | `new-ch-otel-live/result.json`、`inventory.json`、`created-resource-uids.json` |
+| PostgreSQL 实际续期 | 三实例已提供新证书，无 Pod 替换或重启，复制保持 | `pg-renewal-result.json` |
+| VMStorage 实际续期 | 三副本 SDS 已提供新证书，无 Pod 替换或重启 | `envoy-renewal-result.json` |
+| 证书负例工具回归 | 候选 `741b7f2` 全量 **296 unit PASS**；创建超时后按本轮身份恢复 UID 的遗漏先由 `98caed2` 有效 RED 复现，再修复通过 | `negative-timeout-valid-red.log`、`negative-timeout-green-unit.log` |
+| 签发负例 | 错误 URI、错误 DNS 均 Denied；错误 namespace 在控制器健康且无匹配策略时持续 45 秒不获批准；均未生成目标 Secret，临时 Certificate、owned request/key Secret 清理完成 | `certificate-negative-live.log` |
+| 原生轮换与 no-op | 六叶 revision 2、13 新 UID、19 原生 TLS 服务端新 serial、实际 PG 客户端 serial、复制/quorum 通过；后续无变更任务 13 UID 不变 | `rotation-deployment/native-acceptance-result.json`、`rotation-deployment/noop-result.json` |
+| 轮换后功能复验 | VM 182、N9E 应用 44/依赖 46 再次通过；CH 原合成数据双副本精确读回，OTel 队列 0，没有重复写入合成日志/span | `new-vm-live/post-result.json`、`new-n9e-live/post-app-result.json`、`new-n9e-live/post-dependencies-result.json`、`new-ch-otel-live/post-result.jsonl` |
+
+CH/OTel `result.json` 保存逐项 JSONL，**最后一行**为 `status=passed`、`stage=completed` 的整体结果。run ID 为 `chotel-12ba0563e19947a3b30aee8aa29164b8`。查询用 `observability_query` 只读数据库账号，HTTPS transport 使用仅本次挂载的 schema-admin 叶证书；没有取得 SQL 管理员密码、改 proxy 或增加 SQL grants。TLS 负测拒绝 generic EOF/reset/timeout；原生端口必须明确 ConnectionRefused。该探针最低协议为 TLS1.2，没有单独记录全部连接协商版本，因此不能把这 20 项写成“全矩阵强制 TLS1.3”；表中 PG/VMStorage 的 TLSv1.3 则有实际握手证据。
+
+本轮 15 个临时 Pod/ConfigMap/复制叶 Secret/验收 Job 已按创建 UID 和当前 resourceVersion 清理，并逐项确认 absent，回执为 `acceptance-cleanup-result.json`。三项证书负例由验收工具独立清理。正式 schema Job 已完成并保留其 86400 秒 TTL；既有 canary/source Secret 与业务资源不在清理范围。合成记录遵循现有 7 天 TTL，不 truncate 共享表。
+
+最终库存 `final-inventory-20261009.json`（04:11:27 UTC）确认：43 个常驻 Pod 全部 Running/Ready、重启总数 0，21 个 PVC 全部 Bound、真实 PV 全 Retain，共 670Gi；12 节点 Ready、无 Memory/Disk/PIDPressure。15 个清理目标、临时探针和负例证书均 absent，原生轮转 Cron 仍暂停。63 个旧控制器 UID/spec、216 个旧非训练 Pod 的 UID/就绪/重启状态及 114 个旧 PVC 均与基线一致；原平台 `/healthz` 在开启 TLS 校验时返回 200。
+
+训练区有两项删除和一项新增失败任务，有限审计记录不足以将删除归因为自然完成；不写成所有训练对象完全未变。新增失败任务已进入训练程序，实际报错为 `AttributeError: 'dict' object has no attribute 'custom_keys'`，随后 torchrun 退出；保留证据未见 OOM、抢占、调度或证书/webhook 拒绝。相关只读摘要为 `failed-job-676a0183-readonly.json`，没有修改用户任务。
+
+### 仍未交接的业务范围
+
+旧 `observability-*` 的数据、PVC、Secret、Operator 及共享 CRD 保留回退；原 Prometheus/Alertmanager、Alloy/Loki、Grafana、Portal/训练后端和用户任务维持既有入口。本轮新增部署和 canary 不等于现网采集接管或业务数据迁移。
+
+后续仍须分别验收：SSO 与人员授权入口、真实业务指标/日志/trace 接入、规则 firing→resolved 和实际告警接收、完整备份恢复及历史迁移、适用组件故障恢复、原生证书自动轮转的最终启用与持续监控。旧组件退场另需明确范围和可恢复证据。共享节点仍有 CPU/内存/磁盘/网络消耗；“不改业务提交方式、不停止用户任务”不能扩大为性能绝对零影响。

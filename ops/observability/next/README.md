@@ -2,9 +2,13 @@
 
 入口：[架构、部署流程与实际操作记录](DEPLOYMENT_RUNBOOK.md) · [详细架构设计](../../../docs/superpowers/specs/2026-10-08-vke-observability-platform-design.md)
 
-**2026-10-09 命名改造候选：** 当前清单已采用 `victoriametrics`、`clickhouse`、`opentelemetry`、`nightingale`。下方 2026-10-08 表格及验收数字保留为历史记录，不表示新命名空间已经上线。旧文档命令不能直接用于新位置；正式名称、迁移限制及 CNPG webhook 交接见 [本次命名迁移说明](DEPLOYMENT_RUNBOOK.md#2026-10-09-正式命名迁移候选)。证书改为 cert-manager 管理的实际部署与续期验收另行记录。
+**2026-10-09 当前状态：** `victoriametrics`、`clickhouse`、`opentelemetry`、`nightingale` 已部署，`cert-manager` 管理新身份叶证书。VM 182 项、夜莺应用 44 项/依赖 46 项及 CH/OTel 双副本精确读回通过，轮换后复验再次通过。PostgreSQL 和 VMStorage 实际续期没有替换 Pod；另外六类叶证书真实续签、13 Pod 受控轮换和随后无变更复验通过，三类签发负例通过并清理。最终候选 `741b7f2` 296 项单元测试通过；运行配置 `4768871` 的 7 条真实渲染链通过。原生组件持续轮转 CronJob 保持 suspended，待失败通知闭环；新 Alertmanager 仍为 blackhole-canary。15 个临时验收对象已按 UID 清理。
 
-本目录只部署四个独立命名空间中的新组件。旧 Prometheus、Alloy、Loki、平台后端、训练任务和历史数据继续使用原链路。当前阶段只允许新组件自监控和合成 canary；清单存在或 Pod Ready 不代表业务接入、权限和高可用验收完成。
+旧 `observability-*` 与数据卷保留回退，原业务链路未迁移，SSO、业务采集和正式告警接收未接入。部署归属、镜像来源、证据及未验范围见[10 月 9 日部署记录](DEPLOYMENT_RUNBOOK.md#2026-10-09-正式命名部署与验收记录)。下面的 10 月 8 日表格、容量与数字是历史记录，旧命令不能直接用于新位置。
+
+新套件稳态为 43 Pod、21 PVC、申请 670Gi；旧套件 35 Pod、670Gi 保留回退，两套并行合计申请 **1340Gi**，并行云盘及后续扩容会产生实际费用。
+
+本目录部署四个产品命名空间的新组件，以及独立 `cert-manager` 控制层。旧 Prometheus、Alloy、Loki、平台后端、训练任务和历史数据继续使用原链路。当前阶段只允许新组件自监控和合成 canary；清单存在或 Pod Ready 不代表业务接入、权限和高可用验收完成。
 
 2026-10-08 后续检查点：VM 组件 release revision 3、Operator revision 5，17 个组件 Pod 就绪，现场功能与身份边界复验通过。ClickHouse 两副本、Keeper 三副本、OTel 双副本、PostgreSQL 三副本、Redis/Sentinel 三副本及夜莺双副本均已启动。CH/OTel 已通过现场身份拒绝和合成日志/trace 双副本查询；另在隔离 Docker 中通过真实 gRPC Export 和 Collector SIGKILL 后的持久队列恢复。夜莺完整应用验收 44 项、依赖端口 46 项、PostgreSQL SQL 认证 27 项均通过，CNPG webhook 来源限制及真实 API Server admission 单独验证通过。完整合同测试为 174 项通过。全部 21 个新 PVC 已 Bound，合计 670Gi。当前不接业务数据或真实通知；各项环境、证据和后续交接门禁以部署记录为准。
 
@@ -34,7 +38,7 @@
 2. 固定 chart 校验和、镜像摘要；运行 Helm lint/render、CRD schema、scope 合同及组件专属验证。测试仅在既有构建机执行。
 3. 审阅新增集群级 CRD/RBAC/webhook。CNPG webhook 必须同时限制 namespace selector 和 Namespaced scope；VM 的 Prometheus converter 关闭。
 4. 创建新 namespace、非抢占 PriorityClass、Retain StorageClass、配额和网络策略。
-5. `bootstrap_credentials.py --plan` 只显示 Secret 名称与键；只有 `--create` 创建新凭据。已存在任何目标 Secret 时拒绝自动覆盖。生成值不进入命令行、仓库或证据输出。CNPG 自己管理 PostgreSQL CA。
+5. 新位置叶证书由 cert-manager 签发，PostgreSQL 也引用受管服务端证书和明确 CA。非 PKI 凭据按受审映射经内存/stdin 创建；`bootstrap_credentials.py` 和旧 `mtls/credentials.py` 的创建路径属于历史一次性流程，不覆盖重跑。值不进入命令行、仓库或证据输出。
 6. 按各组件 README 的次序部署。数据库初始化、复制、mTLS 身份与路径拒绝、原生端口不可绕过、持久队列和合成告警都要验收。当前 CNI 不执行 NetworkPolicy，不能把策略清单当作隔离证据。
 7. 对照原系统基线，再记录实际 imageID、PVC、节点、可用副本及尚未通过的项目。
 
@@ -46,7 +50,7 @@
 
 ## 发布证据
 
-本次构建机证据根目录：`/root/raytrain-observability-additive-20261008T065709Z`。只存版本、校验结果和非敏感摘要，不存完整 Secret 或包含凭据的配置。
+10 月 9 日证据根目录：`/root/raytrain-observability-certmanager-20261009T014000Z`；10 月 8 日历史根目录：`/root/raytrain-observability-additive-20261008T065709Z`。可共享的报告只含版本、校验结果和非敏感摘要。恢复用的数据库与配置私有备份另按 0700 目录/0600 文件保护，可能包含凭据，不能将证据根目录整体上传、粘贴或纳入 Git。
 
 2026-10-08 的部署协调中，原只读审阅子任务误执行了新 namespace/PC/SC/quota、VM Operator 安装及镜像推送，已停止该子任务的写操作并逐项审计。07:31Z 的基线复核中，旧控制器/ConfigMap 摘要及旧 Pod UID/重启数未发生变化。该快照不是最终验收结论；后续以最新现场记录为准。
 
