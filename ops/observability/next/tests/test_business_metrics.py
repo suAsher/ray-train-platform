@@ -1,9 +1,14 @@
 """Render first-wave scrape boundaries on the builder; never contacts a cluster."""
 
 import os
+from copy import deepcopy
+from contextlib import redirect_stdout
+import io
 from pathlib import Path
 import re
 import subprocess
+import sys
+import tempfile
 import unittest
 
 import yaml
@@ -12,6 +17,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 CHART = ROOT / "business-metrics"
 VM_CHART = ROOT / "victoriametrics/resources"
+sys.path.insert(0, str(ROOT / "victoriametrics"))
+import validate_component_contract as component_contract  # noqa: E402
 WAVE = "business-wave1"
 TARGETS = {
     "alloy": ("monitoring", "alloy", "http-metrics", 12345, "alloy", "alloy"),
@@ -257,6 +264,107 @@ class VMAgentBusinessScrapeContracts(unittest.TestCase):
         self.assertEqual(2, spec["replicaCount"])
         self.assertEqual("30s", spec["scrapeInterval"])
         self.assertNotIn("shardCount", spec)
+
+
+class BusinessComponentBoundaryContracts(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.business = render()
+        cls.enabled_vm = render(VM_CHART, "victoriametrics", "--set", "businessScrape.enabled=true")
+        cls.default_vm = render(VM_CHART)
+        cls.operator = [{"apiVersion": "apps/v1", "kind": "Deployment",
+                         "metadata": {"name": "operator-fixture", "namespace": "victoriametrics"},
+                         "spec": {"template": {"spec": {"containers": [{
+                             "name": "operator", "args": ["--controller.disableReconcileFor=VTAgent"],
+                             "env": [{"name": "WATCH_NAMESPACE", "value": "victoriametrics"}]
+                             + [{"name": key, "value": "false"} for key in component_contract.CONVERTERS],
+                         }]}}}}]
+
+    def validator(self):
+        validator = getattr(component_contract, "validate_business_wave1", None)
+        self.assertTrue(callable(validator), "explicit business-wave1 boundary validator is required")
+        return validator
+
+    def test_default_mode_still_refuses_cross_namespace_discovery(self):
+        with self.assertRaisesRegex(ValueError, "scraper RBAC"):
+            component_contract.validate_scraper_rbac(self.enabled_vm + self.business)
+        with self.assertRaises(ValueError):
+            component_contract.validate_agent(self.enabled_vm)
+        component_contract.validate_agent(self.default_vm)
+
+    def test_explicit_business_mode_allows_only_reviewed_targets_and_discovery(self):
+        self.validator()(self.business)
+        component_contract.validate_agent(self.enabled_vm + self.business, business_wave1=True)
+
+    def test_business_mode_rejects_secret_write_or_extra_subject_grants(self):
+        for change in ("secret", "write", "subject", "extra-namespace", "alias"):
+            objects = deepcopy(self.business)
+            role = only(objects, "Role")[0]
+            binding = only(objects, "RoleBinding")[0]
+            if change == "secret":
+                role["rules"][0]["resources"].append("secrets")
+            elif change == "write":
+                role["rules"][0]["verbs"].append("create")
+            elif change == "subject":
+                binding["subjects"].append({"kind": "Group", "name": "system:authenticated"})
+            elif change == "extra-namespace":
+                extra = deepcopy(binding)
+                extra["metadata"]["namespace"] = "tenant-local"
+                objects.append(extra)
+            else:
+                binding["subjects"] = [{"kind": "User", "name": "system:serviceaccount:victoriametrics:vm-self-scraper"}]
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.validator()(objects)
+
+    def test_business_rbac_rejects_hidden_cluster_grants_even_in_explicit_mode(self):
+        extra = {"kind": "ClusterRoleBinding", "metadata": {"name": "unapproved"},
+                 "subjects": [{"kind": "User", "name": "system:serviceaccount:victoriametrics:vm-self-scraper"}],
+                 "roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": "cluster-admin"}}
+        with self.assertRaisesRegex(ValueError, "scraper RBAC"):
+            component_contract.validate_scraper_rbac(self.enabled_vm + self.business + [extra], business_wave1=True)
+
+    def test_business_scrape_rejects_broadened_namespace_service_port_or_metrics(self):
+        for change in ("namespace", "service", "port", "second-endpoint", "metric-wildcard", "other-cr"):
+            objects = deepcopy(self.business)
+            scrape = only(objects, "VMServiceScrape")[0]
+            endpoint = scrape["spec"]["endpoints"][0]
+            if change == "namespace":
+                scrape["spec"]["namespaceSelector"] = {"any": True}
+            elif change == "service":
+                endpoint["relabelConfigs"][0]["regex"] = ".*"
+            elif change == "port":
+                endpoint["port"] = "admin"
+            elif change == "second-endpoint":
+                scrape["spec"]["endpoints"].append(deepcopy(endpoint))
+            elif change == "metric-wildcard":
+                endpoint["metricRelabelConfigs"][0]["regex"] = ".*"
+            else:
+                objects.append({"kind": "VMPodScrape", "metadata": {"name": "all-pods", "namespace": "victoriametrics"}})
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.validator()(objects)
+
+    def test_business_mode_never_exempts_operator_auth_or_notification_rules(self):
+        with tempfile.TemporaryDirectory(prefix="business-boundary-") as directory:
+            paths = [str(Path(directory) / name) for name in ("operator.yaml", "vm.yaml", "business.yaml")]
+            for path, objects in zip(paths, (self.operator, self.enabled_vm, self.business)):
+                Path(path).write_text(yaml.safe_dump_all(objects))
+            with redirect_stdout(io.StringIO()):
+                component_contract.main(["--business-wave1", *paths])
+            # Omission of the explicit mode never implicitly grants new scope.
+            with self.assertRaises(ValueError):
+                component_contract.main(paths)
+            for change in ("operator", "auth", "notifications"):
+                operator, vm = deepcopy(self.operator), deepcopy(self.enabled_vm)
+                if change == "operator":
+                    operator[0]["spec"]["template"]["spec"]["containers"][0]["env"][0]["value"] = ""
+                elif change == "auth":
+                    only(vm, "VMAuth")[0]["spec"]["selectAllByDefault"] = True
+                else:
+                    only(vm, "VMAlertmanager")[0]["spec"]["configRawYaml"] = "receivers: [{name: production}]"
+                Path(paths[0]).write_text(yaml.safe_dump_all(operator))
+                Path(paths[1]).write_text(yaml.safe_dump_all(vm))
+                with self.subTest(change=change), self.assertRaises(ValueError):
+                    component_contract.main(["--business-wave1", *paths])
 
 
 if __name__ == "__main__":
