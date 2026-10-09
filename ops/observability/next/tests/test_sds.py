@@ -87,7 +87,7 @@ class FilesystemSDSTests(unittest.TestCase):
             common = context["common_tls_context"]
             self.assertNotIn("tls_certificates", common)
             self.assertEqual([{"name": secret["name"], "sds_config": {
-                "path_config_source": {"path": "/etc/envoy-sds/" + filename},
+                "path_config_source": {"path": "/etc/envoy-sds/" + filename, "watched_directory": {"path": "/etc/envoy-sds"}},
                 "resource_api_version": "V3",
             }}], common["tls_certificate_sds_secret_configs"])
 

@@ -68,7 +68,7 @@ class ComponentNameContracts(unittest.TestCase):
         self.assertEqual("n9e", postgres["spec"]["bootstrap"]["initdb"]["database"])
         self.assertEqual("n9e", postgres["spec"]["bootstrap"]["initdb"]["owner"])
 
-    def test_cnpg_fixed_webhooks_reject_old_namespace_instead_of_hijacking_it(self):
+    def test_cnpg_webhooks_reject_old_namespace_and_suffix_new_resources(self):
         renderer = runpy.run_path(str(ROOT / "nightingale/scope-cnpg-webhooks.py"))
         name = renderer["WEBHOOK_NAMES"]["ValidatingWebhookConfiguration"]
         document = {"kind": "ValidatingWebhookConfiguration", "metadata": {"name": name},
@@ -81,8 +81,9 @@ class ComponentNameContracts(unittest.TestCase):
         document["webhooks"][0]["clientConfig"]["service"]["namespace"] = "observability-alerting"
         with self.assertRaisesRegex(ValueError, "namespace"):
             renderer["scope_webhook"](document)
-        # The CNPG binary owns these global names. A namespace rename must not
-        # invent parallel webhook names or silently take another Helm release.
+        # Keep strict upstream input names, then apply the official runtime's
+        # namespace suffix so the new Helm release cannot take the old webhook.
+        self.assertEqual(name + "-nightingale", result["metadata"]["name"])
         self.assertEqual({"cnpg-mutating-webhook-configuration", "cnpg-validating-webhook-configuration"},
                          set(renderer["WEBHOOK_NAMES"].values()))
 

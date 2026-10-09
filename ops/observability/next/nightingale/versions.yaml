@@ -3,6 +3,8 @@ charts:
   cloudnative-pg: "0.29.1"
   redis-ha: "4.39.0"
 images:
+  # New namespace identity candidate, built and registry digest verified 2026-10-09.
+  cloudnative-pg: harbor.wellspiking.ai/guofeng.su/cnpg-observability:1.30.1-mtls-names-3ca43d7@sha256:71e30bd615ad4811099d6141c787c172f3e4f16f9ab0bf673146bd1d1e020c6f
   nightingale: harbor.wellspiking.ai/guofeng.su/nightingale-observability:9.1.1-sentinel-01abc76@sha256:2e544213530f914b961e05d9fbab2ddcbbb995402379496a34815f0d61da6315
   # Base only, not deployable for the new security contract. See cnpg-hardening/.
   cloudnative-pg-upstream-base: ghcr.io/cloudnative-pg/cloudnative-pg:1.30.1@sha256:923c267ec29636db3bee20f993d0ec4973fa22998e1adad37da79e4d32b5bc07

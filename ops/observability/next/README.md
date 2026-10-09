@@ -2,6 +2,8 @@
 
 入口：[架构、部署流程与实际操作记录](DEPLOYMENT_RUNBOOK.md) · [详细架构设计](../../../docs/superpowers/specs/2026-10-08-vke-observability-platform-design.md)
 
+**2026-10-09 命名改造候选：** 当前清单已采用 `victoriametrics`、`clickhouse`、`opentelemetry`、`nightingale`。下方 2026-10-08 表格及验收数字保留为历史记录，不表示新命名空间已经上线。旧文档命令不能直接用于新位置；正式名称、迁移限制及 CNPG webhook 交接见 [本次命名迁移说明](DEPLOYMENT_RUNBOOK.md#2026-10-09-正式命名迁移候选)。证书改为 cert-manager 管理的实际部署与续期验收另行记录。
+
 本目录只部署四个独立命名空间中的新组件。旧 Prometheus、Alloy、Loki、平台后端、训练任务和历史数据继续使用原链路。当前阶段只允许新组件自监控和合成 canary；清单存在或 Pod Ready 不代表业务接入、权限和高可用验收完成。
 
 2026-10-08 后续检查点：VM 组件 release revision 3、Operator revision 5，17 个组件 Pod 就绪，现场功能与身份边界复验通过。ClickHouse 两副本、Keeper 三副本、OTel 双副本、PostgreSQL 三副本、Redis/Sentinel 三副本及夜莺双副本均已启动。CH/OTel 已通过现场身份拒绝和合成日志/trace 双副本查询；另在隔离 Docker 中通过真实 gRPC Export 和 Collector SIGKILL 后的持久队列恢复。夜莺完整应用验收 44 项、依赖端口 46 项、PostgreSQL SQL 认证 27 项均通过，CNPG webhook 来源限制及真实 API Server admission 单独验证通过。完整合同测试为 174 项通过。全部 21 个新 PVC 已 Bound，合计 670Gi。当前不接业务数据或真实通知；各项环境、证据和后续交接门禁以部署记录为准。

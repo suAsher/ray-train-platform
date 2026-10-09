@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Scope fixed CNPG webhooks and protect the fixed operator's metrics listener.
+"""Scope CNPG admission to its namespace and protect operator metrics.
 
 This renderer fails until a derived digest is built and reviewed. It scopes the
-fixed operator's webhook RBAC, protects metrics, and appends its ConfigMap/Service.
+operator's webhook RBAC, protects metrics, and appends its ConfigMap/Service.
+The locked chart emits unsuffixed names; the official runtime suffix feature and
+this renderer must agree. Existing CRDs never become owned by this new release.
 """
 
 from pathlib import Path
@@ -44,7 +46,8 @@ def scope_webhook(document):
             "rules": [{**rule, "scope": "Namespaced"} for rule in hook.get("rules", [])],
             "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": NAMESPACE}},
         })
-    return {**document, "webhooks": hooks}
+    metadata = {**document["metadata"], "name": document["metadata"]["name"] + "-" + NAMESPACE}
+    return {**document, "metadata": metadata, "webhooks": hooks}
 
 
 def scope_operator_role(document):
@@ -55,7 +58,7 @@ def scope_operator_role(document):
         raise ValueError("unexpected fixed-chart CNPG operator ClusterRole shape")
     scoped = [{"apiGroups": ["admissionregistration.k8s.io"],
                "resources": [mode + "webhookconfigurations"], "verbs": ["get", "patch"],
-               "resourceNames": ["cnpg-" + mode + "-webhook-configuration"]}
+               "resourceNames": ["cnpg-" + mode + "-webhook-configuration-" + NAMESPACE]}
               for mode in ("mutating", "validating")]
     return {**document, "rules": [document["rules"][0], *scoped, document["rules"][2]]}
 
@@ -85,7 +88,21 @@ def secure_operator(document):
     manager = spec["containers"][0]
     if not DERIVED_IMAGE.fullmatch(manager["image"]):
         raise ValueError("build and pin the reviewed CNPG hardening image first")
-    env = {item["name"]: item.get("value") for item in manager.get("env", [])}
+    entries = manager.get("env", [])
+    env_items = {item["name"]: item for item in entries}
+    if len(env_items) != len(entries):
+        raise ValueError("duplicate CNPG operator environment variable")
+    if env_items.get("ENABLE_WEBHOOK_NAMESPACE_SUFFIX") != {
+            "name": "ENABLE_WEBHOOK_NAMESPACE_SUFFIX", "value": "true"}:
+        raise ValueError("CNPG webhook namespace suffix must be explicitly true")
+    namespace_env = env_items.get("OPERATOR_NAMESPACE", {})
+    field_ref = namespace_env.get("valueFrom", {}).get("fieldRef", {})
+    expected_namespace = {"name": "OPERATOR_NAMESPACE", "valueFrom": {"fieldRef": field_ref}}
+    if (namespace_env != expected_namespace
+            or field_ref not in ({"fieldPath": "metadata.namespace"},
+                                 {"apiVersion": "v1", "fieldPath": "metadata.namespace"})):
+        raise ValueError("CNPG operator namespace must use the namespace downward API")
+    env = {name: item.get("value") for name, item in env_items.items()}
     if env.get("OPERATOR_IMAGE_NAME") != manager["image"]:
         raise ValueError("CNPG instance-manager injection image differs from operator")
     if env.get("OBS_WEBHOOK_API_SERVER_IPS") != "172.28.2.64,172.28.5.50":
@@ -109,6 +126,8 @@ def transform(documents):
         if document is None:
             continue
         kind, metadata = document.get("kind"), document.get("metadata", {})
+        if kind == "CustomResourceDefinition":
+            raise ValueError("existing CNPG CRDs must remain separately owned; set crds.create=false")
         if kind in ("MutatingWebhookConfiguration", "ValidatingWebhookConfiguration"):
             document = scope_webhook(document)
             if metadata.get("name") in webhook_names:

@@ -387,3 +387,33 @@ kubectl kustomize "$obs_candidate/ops/observability/next/otel" > otel-rendered.y
 目录中的早期失败日志保留为排障记录，不能用某一次 PASS 覆盖不同 SHA/配置的未验结果。恢复建设时重新核对现场，更新本记录中的实际版本、审批范围、执行时间与验收结论，不把这次快照当作长期事实。
 
 持久 mTLS 签发目录另为 `/root/raytrain-observability-pki-20261008`。它包含恢复所需的敏感 CA 材料，不能作为普通日志归档、提交 Git 或复制到 Pod；本手册只保留目录元数据与 Secret 名称/键的核验结论。
+
+
+## 2026-10-09 正式命名迁移候选
+
+本节描述新的声明式输入和迁移边界，**不是部署完成回执**。前面的 2026-10-08 资源名、镜像摘要和现场结果是历史证据，保留原样；不能用旧位置的通过结果替代新位置验收。
+
+| 组件 | 原 namespace | 新 namespace | 新主要资源名 |
+| --- | --- | --- | --- |
+| VictoriaMetrics | `observability-metrics` | `victoriametrics` | Operator `victoriametrics-operator`；VM CR/资源 Helm release `victoriametrics-cluster` |
+| ClickHouse / Keeper | `observability-analytics` | `clickhouse` | Operator `clickhouse-operator`；CHI 和 CHK 各自名为 `clickhouse` |
+| OpenTelemetry | `observability-otel` | `opentelemetry` | `otel-gateway` |
+| Nightingale | `observability-alerting` | `nightingale` | 应用 `nightingale`；PG `nightingale-postgres`；Redis `nightingale-redis`；Operator `cloudnative-pg-operator` |
+
+Kubernetes namespace 只能使用小写 DNS 名称。`n9e-cnpg` 原来指的是 Nightingale 专用的 CloudNativePG Operator，不是夜莺应用，也不是数据库实例。应用数据库与 SQL owner 继续叫 `n9e`，mTLS role 和 Secret 中的兼容身份保持原名，避免把基础设施命名调整变成应用数据迁移。
+
+声明式输入同步更新了 namespace、Service DNS、SPIFFE URI、Operator watch 范围、代理路由、固定 hostAliases、配置引用与验证夹具。ClickHouse Operator 按 CR 名生成 `chi-clickhouse-telemetry-0-{0,1}` 和 `chk-clickhouse-keeper-0-{0,1,2}`；默认服务名为 `clickhouse-clickhouse` / `keeper-clickhouse`。ClickHouse `observability_canary` 数据库和查询用户保留。Keeper 中的复制表路径属于新位置，不能将旧卷直接改 claimRef 后当作已完成迁移。
+
+CloudNativePG 派生镜像中的监控客户端精确 URI 也必须改为 `spiffe://observability.raytrain.local/victoriametrics/vmagent`。因此本次需要重新验证和构建这个专用镜像；只改 YAML 并复用旧镜像摘要不能正常完成新 namespace 的授权。
+
+### CNPG 命名空间级 Operator 共存
+
+[锁定 CNPG 1.30.1 源码](https://github.com/cloudnative-pg/cloudnative-pg/blob/2a35abb4628f209d149825ef3c38011e0701ff2f/internal/configuration/configuration.go) 提供官方 `ENABLE_WEBHOOK_NAMESPACE_SUFFIX=true`，使两个 admission 配置名附加 Operator namespace。新 values 通过 `additionalEnv` 显式启用；后处理器只接受 chart 原始固定输入名，并输出 `cnpg-mutating-webhook-configuration-nightingale` / `cnpg-validating-webhook-configuration-nightingale`。原 `n9e-cnpg` release 的两个无后缀 webhook 不修改，因此无需为迁移先停止旧新增 Operator。
+
+后处理器同时要求 `OPERATOR_NAMESPACE` 来自 `metadata.namespace` downward API、后缀开关严格为 `true`、环境变量无重复；新 webhook Service 和 namespace selector 只指向 `nightingale`，rules scope 为 `Namespaced`。ClusterRole 仅可 `get/patch` 两个新后缀名称，没有旧 webhook 的 patch 权限。Service `cnpg-webhook-service`、webhook Secret 和选主 Lease 都已是 namespace 级资源，保持官方默认名字。
+
+[chart 0.29.1 的 CRD 模板](https://github.com/cloudnative-pg/charts/blob/cloudnative-pg-v0.29.1/charts/cloudnative-pg/templates/crds/crds.yaml) 位于 `templates/` 且由 `crds.create` 控制，仅设置 Helm `--skip-crds` 不足。新 values 明确 `crds.create: false`，后处理器遇到任何 CRD 会拒绝。现有 CRD 的 Helm ownership 和 schema 均保持原状；部署前单独只读核对锁定版本 schema 兼容性。CRD 是共享集群基础资源，后续旧 release 退场时也不得删除。
+
+迁移顺序仍为备份旧新增 PostgreSQL 数据与恢复元数据、验证恢复，再在新 namespace 安装新 Operator 与新 PG 集群。两套 Operator 只 watch 各自 namespace，分别维护自己的 webhook 与 CA bundle；用真实 API Server dry-run 分别验证旧/新 namespace admission，再检查旧 Operator 与 PG 持续 Ready。随后迁移/恢复应用数据并验收，旧 Operator、PG 与 PVC 留作回滚，完成迁移前不退场。新部署失败时只停止/回退本次新 release，不必夺回旧 webhook ownership。
+
+其它组件可以在新 namespace 独立部署并验收，旧新增组件的数据与 PVC 只在已验证恢复方案和明确清理范围后处理。任何迁移都不能改名覆盖旧 Secret、抢占 PVC、修改训练任务或将历史测试结果记成新部署的结果。

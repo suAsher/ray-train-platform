@@ -1,15 +1,21 @@
 # Chart: cloudnative-pg/cloudnative-pg 0.29.1; operator: 1.30.1.
-# Install only after checking no conflicting CNPG installation/CRD ownership.
+# A second namespace-scoped operator shares the existing, separately owned CRDs.
+# The official runtime suffix keeps its admission webhooks disjoint from the old release.
 fullnameOverride: cloudnative-pg-operator
 replicaCount: 2
+crds:
+  create: false
 image:
   repository: harbor.wellspiking.ai/guofeng.su/cnpg-observability
-  # Source candidate c741e72; protocol/upstream tests and build verified on builder.
+  # Source candidate 3ca43d7: exact victoriametrics/vmagent identity.
+  # Builder-tested linux/amd64 image; registry digest verified after push.
   # This fixed linux/amd64 manifest contains both injected manager architectures.
-  tag: "1.30.1-mtls-c741e72@sha256:53be5d2201b1502aae329b3f64f4b342c897772fb88edde2838e7f7750bc8875"
+  tag: "1.30.1-mtls-names-3ca43d7@sha256:71e30bd615ad4811099d6141c787c172f3e4f16f9ab0bf673146bd1d1e020c6f"
 additionalArgs:
   - --metrics-bind-address=127.0.0.1:8080
 additionalEnv:
+  - name: ENABLE_WEBHOOK_NAMESPACE_SUFFIX
+    value: "true"
   - name: OBS_WEBHOOK_API_SERVER_IPS
     value: 172.28.2.64,172.28.5.50
 podSecurityContext:

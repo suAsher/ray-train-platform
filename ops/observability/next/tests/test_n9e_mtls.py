@@ -383,7 +383,10 @@ class NightingaleMTLSContractTests(unittest.TestCase):
             "name": "manager", "image": image,
             "args": ["controller", "--metrics-bind-address=127.0.0.1:8080"],
             "env": [{"name": "OPERATOR_IMAGE_NAME", "value": image},
-                    {"name": "OBS_WEBHOOK_API_SERVER_IPS", "value": "172.28.2.64,172.28.5.50"}],
+                    {"name": "OBS_WEBHOOK_API_SERVER_IPS", "value": "172.28.2.64,172.28.5.50"},
+                    {"name": "ENABLE_WEBHOOK_NAMESPACE_SUFFIX", "value": "true"},
+                    {"name": "OPERATOR_NAMESPACE", "valueFrom": {"fieldRef": {
+                        "fieldPath": "metadata.namespace"}}}],
         }
         return {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {
             "name": "cloudnative-pg-operator", "namespace": ALERTING}, "spec": {
@@ -446,7 +449,7 @@ class NightingaleMTLSContractTests(unittest.TestCase):
         role = next(item for item in result if item["kind"] == "ClusterRole")
         webhooks = [rule for rule in role["rules"] if rule["apiGroups"] == ["admissionregistration.k8s.io"]]
         expected = [{"apiGroups": ["admissionregistration.k8s.io"], "resources": [mode + "webhookconfigurations"],
-                     "verbs": ["get", "patch"], "resourceNames": ["cnpg-" + mode + "-webhook-configuration"]}
+                     "verbs": ["get", "patch"], "resourceNames": ["cnpg-" + mode + "-webhook-configuration-nightingale"]}
                     for mode in ("mutating", "validating")]
         self.assertEqual(expected, webhooks)
         self.assertEqual(4, len(role["rules"]))
