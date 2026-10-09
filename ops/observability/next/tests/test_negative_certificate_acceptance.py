@@ -1,4 +1,5 @@
 import importlib.util
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -172,6 +173,78 @@ class NegativeCertificateAcceptanceTests(unittest.TestCase):
 
         self.assertEqual(created.uid, "cert-uid")
         self.assertIn(["create", "-o", "json", "-f", "-"], calls)
+
+    def test_create_timeout_recovers_matching_owned_certificate(self):
+        module = self.module
+        case = next(item for item in module.cases() if item.name == "wrong-uri")
+        doc = module.manifest(case, "abc123")
+        original_kubectl = module.kubectl
+        original_get_obj = module.get_obj
+        original_secret_meta = module.secret_meta_by_name
+
+        def matching_get_obj(_bin, _context, resource, _namespace, _name, _timeout):
+            if resource != "certificates.cert-manager.io":
+                return None
+            return {
+                "metadata": {
+                    "name": doc["metadata"]["name"],
+                    "namespace": case.namespace,
+                    "uid": "recovered-uid",
+                    "labels": {"raytrain.wellspiking.ai/run-id": "abc123"},
+                    "annotations": {"raytrain.wellspiking.ai/negative-case": "wrong-uri"},
+                },
+                "spec": doc["spec"],
+            }
+
+        try:
+            module.kubectl = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                subprocess.TimeoutExpired("kubectl", 30)
+            )
+            module.get_obj = matching_get_obj
+            module.secret_meta_by_name = lambda *_args, **_kwargs: None
+            created = module.create_case("kubectl", "ctx", case, "abc123", 30)
+        finally:
+            module.kubectl = original_kubectl
+            module.get_obj = original_get_obj
+            module.secret_meta_by_name = original_secret_meta
+
+        self.assertEqual(created.uid, "recovered-uid")
+
+    def test_create_timeout_rejects_different_run_certificate(self):
+        module = self.module
+        case = next(item for item in module.cases() if item.name == "wrong-uri")
+        doc = module.manifest(case, "abc123")
+        original_kubectl = module.kubectl
+        original_get_obj = module.get_obj
+        original_secret_meta = module.secret_meta_by_name
+
+        def different_get_obj(_bin, _context, resource, _namespace, _name, _timeout):
+            if resource != "certificates.cert-manager.io":
+                return None
+            cert = {
+                "metadata": {
+                    "name": doc["metadata"]["name"],
+                    "namespace": case.namespace,
+                    "uid": "other-uid",
+                    "labels": {"raytrain.wellspiking.ai/run-id": "other"},
+                    "annotations": {"raytrain.wellspiking.ai/negative-case": "wrong-uri"},
+                },
+                "spec": doc["spec"],
+            }
+            return cert
+
+        try:
+            module.kubectl = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                subprocess.TimeoutExpired("kubectl", 30)
+            )
+            module.get_obj = different_get_obj
+            module.secret_meta_by_name = lambda *_args, **_kwargs: None
+            with self.assertRaises(subprocess.TimeoutExpired):
+                module.create_case("kubectl", "ctx", case, "abc123", 30)
+        finally:
+            module.kubectl = original_kubectl
+            module.get_obj = original_get_obj
+            module.secret_meta_by_name = original_secret_meta
 
 
 if __name__ == "__main__":
