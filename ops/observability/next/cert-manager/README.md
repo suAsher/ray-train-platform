@@ -87,3 +87,41 @@ for CNPG reconciliation:
 
 Other consumers still need component-specific reload or rolling restart
 validation before the old one-shot certificate flow is retired.
+
+## Negative policy acceptance
+
+After ClusterIssuers, CertificateRequestPolicies, policy-use RBAC, and all
+normal leaf Certificates are Ready, run the negative acceptance helper in
+read-only mode first:
+
+`python3 negative_certificate_acceptance.py`
+
+The helper checks the expected kube context, verifies that
+`obs-mtls-postgres-server`, `obs-mtls-nightingale-n9e-postgres-server`, and the
+normal Nightingale PostgreSQL server Certificate are Ready, then prints the
+three temporary negative cases.
+
+Only root should run the write path:
+
+`python3 negative_certificate_acceptance.py --execute`
+
+The write path creates temporary `Certificate` objects so cert-manager creates
+the corresponding `CertificateRequest` objects through the same controller path
+as production issuance. It verifies:
+
+- wrong URI is Denied and no Secret is created;
+- wrong DNS name is Denied and no Secret is created;
+- wrong namespace uses `victoriametrics`, confirms no matching
+  postgres-server policy, stays `pending_no_matching_policy` for at least 45
+  seconds, and creates no Secret.
+
+Cleanup is limited to the current run's temporary Certificates, their owned
+CertificateRequests, and the exact temporary Secret names. The helper does not
+print private keys or Secret data.
+
+Approver-policy only approves or denies requests that are selected by an
+applicable `CertificateRequestPolicy`. A wrong-namespace request that matches no
+policy may remain neither Approved nor Denied. The helper treats that fail-closed
+state as the expected wrong-namespace result and still requires the controller to
+create a CertificateRequest, cert-manager deployments to be Available, no
+matching postgres-server policy for `victoriametrics`, and no Secret.
