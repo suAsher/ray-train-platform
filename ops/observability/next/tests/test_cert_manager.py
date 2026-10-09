@@ -56,12 +56,12 @@ def postgres_server_identity():
         "role": "n9e-postgres-server",
         "trust_domain": "postgres-server",
         "dns_names": [
-            "n9e-postgres-rw.nightingale.svc",
-            "n9e-postgres-rw.nightingale.svc.cluster.local",
-            "n9e-postgres-ro.nightingale.svc",
-            "n9e-postgres-ro.nightingale.svc.cluster.local",
-            "n9e-postgres-r.nightingale.svc",
-            "n9e-postgres-r.nightingale.svc.cluster.local",
+            "nightingale-postgres-rw.nightingale.svc",
+            "nightingale-postgres-rw.nightingale.svc.cluster.local",
+            "nightingale-postgres-ro.nightingale.svc",
+            "nightingale-postgres-ro.nightingale.svc.cluster.local",
+            "nightingale-postgres-r.nightingale.svc",
+            "nightingale-postgres-r.nightingale.svc.cluster.local",
         ],
         "usages": ["server auth"],
         "uri": f"{URI_ROOT}/nightingale/n9e-postgres-server",
@@ -71,7 +71,7 @@ def postgres_server_identity():
 
 def expected_entry(item):
     old_ns = item["namespace"]
-    new_ns = NAMESPACE_MAP[old_ns]
+    new_ns = NAMESPACE_MAP.get(old_ns, old_ns)
     return {
         **item,
         "namespace": new_ns,
@@ -117,6 +117,55 @@ class CertManagerRenderTests(unittest.TestCase):
         values = yaml.safe_load((CERT_MANAGER / "cert-manager-values.yaml").read_text())
         args = values.get("extraArgs", [])
         self.assertIn("--controllers=*,-certificaterequests-approver", args)
+
+        approver_values = yaml.safe_load((CERT_MANAGER / "approver-policy-values.yaml").read_text())
+        self.assertEqual([
+            "clusterissuers.cert-manager.io/obs-mtls-am-gossip",
+            "clusterissuers.cert-manager.io/obs-mtls-mesh",
+            "clusterissuers.cert-manager.io/obs-mtls-postgres-client",
+            "clusterissuers.cert-manager.io/obs-mtls-postgres-server",
+            "clusterissuers.cert-manager.io/obs-mtls-redis",
+        ], approver_values["app"]["approveSignerNames"])
+
+    def test_helm_values_have_production_scheduling_and_resource_bounds(self):
+        cm = yaml.safe_load((CERT_MANAGER / "cert-manager-values.yaml").read_text())
+        approver = yaml.safe_load((CERT_MANAGER / "approver-policy-values.yaml").read_text())
+        for label, values in (("controller", cm), ("webhook", cm["webhook"]),
+                              ("cainjector", cm["cainjector"]), ("approver", approver)):
+            with self.subTest(component=label):
+                self.assertEqual(2, values["replicaCount"])
+                priority = values.get("priorityClassName", cm.get("global", {}).get("priorityClassName"))
+                self.assertEqual("raytrain-observability-additive", priority)
+                self.assertTrue(values["podDisruptionBudget"]["enabled"])
+                self.assertEqual(1, values["podDisruptionBudget"]["minAvailable"])
+                self.assertIn("requests", values["resources"])
+                self.assertIn("limits", values["resources"])
+                affinity = yaml.safe_dump(values["affinity"])
+                self.assertIn("172.28.1.222", affinity)
+                self.assertIn("172.28.3.32", affinity)
+                self.assertIn("podAntiAffinity", affinity)
+
+    def test_rendered_cert_manager_namespace_is_restricted_and_gpu_free(self):
+        namespace = next(item for item in self.documents
+                         if key(item) == ("Namespace", None, "cert-manager"))
+        labels = namespace["metadata"]["labels"]
+        self.assertEqual("restricted", labels["pod-security.kubernetes.io/enforce"])
+        quota = next(item for item in self.documents
+                     if key(item) == ("ResourceQuota", "cert-manager", "cert-manager-budget"))
+        self.assertEqual("0", quota["spec"]["hard"]["requests.nvidia.com/gpu"])
+        self.assertGreaterEqual(int(quota["spec"]["hard"]["limits.cpu"]), 16)
+        self.assertGreaterEqual(int(quota["spec"]["hard"]["pods"]), 30)
+
+    def test_render_parts_keep_partial_resources_out_of_default_plan(self):
+        default_plan = self.renderer.render_part(ROOT, "plan")
+        self.assertFalse(any(item.get("kind") == "Secret" for item in default_plan))
+        self.assertFalse(any(item.get("kind") == "Cluster" and
+                             item.get("apiVersion") == "postgresql.cnpg.io/v1"
+                             for item in default_plan))
+        self.assertTrue(any(item.get("kind") == "Secret" for item in
+                            self.renderer.render_part(ROOT, "public-ca-plan")))
+        self.assertEqual([("Cluster", "nightingale", "nightingale-postgres")],
+                         [key(item) for item in self.renderer.render_part(ROOT, "postgres-patch")])
 
     def test_only_new_product_namespaces_are_rendered(self):
         namespaces = {item["namespace"] for item in self.expected}
@@ -167,11 +216,16 @@ class CertManagerRenderTests(unittest.TestCase):
         }
         cert = certificates[("nightingale", "obs-mtls-n9e-postgres-server")]
         self.assertEqual("obs-mtls-n9e-postgres-server", cert["spec"]["secretName"])
+        self.assertEqual("true", cert["spec"]["secretTemplate"]["labels"]["cnpg.io/reload"])
+        replica = certificates[("nightingale", "obs-mtls-n9e-postgres-replication")]
+        self.assertEqual("true", replica["spec"]["secretTemplate"]["labels"]["cnpg.io/reload"])
         self.assertEqual({"name": "obs-mtls-postgres-server", "kind": "ClusterIssuer",
                           "group": "cert-manager.io"}, cert["spec"]["issuerRef"])
         patch = self.renderer.render_cnpg_certificate_patch()
         self.assertEqual("obs-mtls-n9e-postgres-server", patch["spec"]["certificates"]["serverTLSSecret"])
         self.assertEqual("obs-mtls-ca-postgres-server-public", patch["spec"]["certificates"]["serverCASecret"])
+        shells = self.renderer.render_part(ROOT, "public-ca-plan")
+        self.assertTrue(all(item["metadata"]["labels"]["cnpg.io/reload"] == "true" for item in shells))
 
     def test_certificate_request_policies_match_certificate_contracts_exactly(self):
         policies = {
@@ -191,7 +245,8 @@ class CertManagerRenderTests(unittest.TestCase):
                 self.assertEqual([item["uri"]], allowed["uris"]["values"])
                 self.assertEqual(item["dns_names"], allowed.get("dnsNames", {}).get("values", []))
                 self.assertEqual(sorted(item["usages"]), sorted(allowed["usages"]))
-                self.assertEqual({"max": "2160h"}, allowed["duration"])
+                self.assertEqual({"minDuration": "2160h", "maxDuration": "2160h",
+                                  "privateKey": {"algorithm": "RSA", "minSize": 2048}}, spec["constraints"])
                 constraints = yaml.safe_dump(allowed)
                 self.assertNotIn("*", constraints)
                 self.assertNotIn("observability-", constraints)
@@ -205,7 +260,7 @@ class CertManagerRenderTests(unittest.TestCase):
                 subjects = binding["subjects"]
                 self.assertEqual([{"kind": "ServiceAccount", "name": "cert-manager",
                                   "namespace": "cert-manager"}], subjects)
-                self.assertEqual("cert-manager.io", binding["roleRef"]["apiGroup"])
+                self.assertEqual("rbac.authorization.k8s.io", binding["roleRef"]["apiGroup"])
                 self.assertEqual("ClusterRole", binding["roleRef"]["kind"])
                 self.assertTrue(binding["roleRef"]["name"].startswith("obs-mtls-policy-use-"))
 
@@ -250,9 +305,16 @@ class CertManagerCAImportTests(unittest.TestCase):
     def test_import_command_checks_absence_before_stdin_create(self):
         command = self.importer.kubectl_create_command("cert-manager", "obs-mtls-ca-mesh")
         self.assertIn("get", command["preflight"])
+        self.assertIn("cd9q3b7rf9aidnnbd0je0@81533555-kd9q3q0frjmp21sk5lklg", command["preflight"])
         self.assertIn("--ignore-not-found", command["preflight"])
         self.assertIn("create", command["create"])
         self.assertEqual("-", command["create"][-1])
+
+    def test_postgres_server_ca_generator_refuses_partial_state(self):
+        self.assertTrue(hasattr(self.importer, "ensure_postgres_server_ca"))
+        self.assertTrue(hasattr(self.importer, "validate_ca_pair"))
+        self.assertEqual("postgres-server", self.importer.plan_imports(
+            Path("/root/raytrain-observability-pki-20261008"))[-1]["trust_domain"])
 
 
 if __name__ == "__main__":

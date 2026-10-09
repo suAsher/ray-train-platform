@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import secrets
 import shutil
 import socket
@@ -43,15 +44,20 @@ def command(argv, check=True):
 
 def eventually(operation, timeout=30):
     deadline = time.monotonic() + timeout
+    last = "condition false"
     while time.monotonic() < deadline:
         try:
             value = operation()
             if value:
                 return value
-        except (OSError, http.client.HTTPException):
-            pass
+        except (OSError, http.client.HTTPException) as error:
+            last = type(error).__name__
+            if isinstance(error, ssl.SSLError):
+                last += ": " + str(error.reason)
+            elif isinstance(error, OSError):
+                last += ": errno=" + str(error.errno)
         time.sleep(0.25)
-    raise LabError("Bounded runtime condition did not pass")
+    raise LabError("Bounded runtime condition did not pass (" + last + ")")
 
 
 def readable_directory(path):
@@ -234,9 +240,29 @@ def cleanup(container, network, owner):
             raise LabError("Lab resource still exists after cleanup")
 
 
+
+def capture_diagnostics(container, owner, root):
+    """Only this fixture's runtime logs; strip generated private key material."""
+    result = command(["docker", "inspect", container], check=False)
+    if result.returncode:
+        return {"container_exists": False}
+    item = json.loads(result.stdout)[0]
+    if item["Config"]["Labels"].get(LABEL) != owner:
+        raise LabError("Diagnostics ownership mismatch")
+    logs = command(["docker", "logs", "--tail", "60", container], check=False)
+    content = logs.stdout + logs.stderr
+    for key in (root / "pki").rglob("*.key"):
+        content = content.replace(key.read_text(), "[REDACTED PRIVATE KEY]")
+    content = re.sub(r"-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----",
+                     "[REDACTED PRIVATE KEY]", content, flags=re.DOTALL)
+    return {"running": item["State"]["Running"], "exit_code": item["State"]["ExitCode"],
+            "restart_count": item["RestartCount"], "log_tail": content[-12000:]}
+
+
 def run(root, report):
     owner = "rt-sds-" + secrets.token_hex(6)
     network, container = owner + "-net", owner + "-envoy"
+    report["stage"] = "fixture-certificates"
     root.chmod(0o700)
     pki = root / "pki"
     pki.mkdir(mode=0o700)
@@ -257,6 +283,7 @@ def run(root, report):
         readable_file(config / filename, json.dumps(content))
     old = None
     try:
+        report["stage"] = "start-envoy"
         command(["docker", "network", "create", "--internal", "--label", LABEL + "=" + owner, network])
         argv = ["docker", "run", "-d", "--name", container, "--network", network, "--label", LABEL + "=" + owner,
                 "--cpus", "0.3", "--memory", "128m", "--pids-limit", "64", "--read-only", "--user", "65534:65534",
@@ -268,6 +295,7 @@ def run(root, report):
         before = json.loads(command(["docker", "inspect", container]).stdout)[0]
         address = before["NetworkSettings"]["Networks"][network]["IPAddress"]
         ca = pki / "ca.crt"
+        report["stage"] = "initial-tls13-handshake"
         eventually(lambda: serial_at(address, ca, leaves["client1"]) == 1001)
         old = connection(address, ca, leaves["client1"])
         old.connect()
@@ -278,6 +306,7 @@ def run(root, report):
         for role in ("wrong-role", None):
             report["checks"].append({"check": "initial-reject-" + (role or "anonymous"),
                                      **rejected(address, ca, leaves[role] if role else None)})
+        report["stage"] = "downstream-secret-rotation"
         project(root / "server", "v2", leaves["server2"])
         eventually(lambda: serial_at(address, ca, leaves["client1"]) == 1002)
         if get(old)[0] != 200 or old.sock is not old_socket or int(old.sock.getpeercert()["serialNumber"], 16) != 1001:
@@ -286,17 +315,21 @@ def run(root, report):
         if get(old, "/forbidden")[0] != 403:
             raise LabError("HTTP path RBAC changed during rotation")
         report["checks"].append({"check": "http-rbac-retained", "http_status": 403})
+        report["stage"] = "initial-upstream-client-handshake"
         eventually(lambda: proxy_serial(address) == 2001)
+        report["stage"] = "upstream-secret-rotation"
         project(root / "client", "v2", leaves["client2"])
         eventually(lambda: proxy_serial(address) == 2002)
         report["checks"].append({"check": "upstream-renewed-without-restart", "old_serial": 2001, "new_serial": 2002})
         for role in ("wrong-role", None):
             report["checks"].append({"check": "renewed-reject-" + (role or "anonymous"),
                                      **rejected(address, ca, leaves[role] if role else None)})
+        report["stage"] = "invalid-pair-last-good-identity"
         project(root / "server", "invalid", leaves["server3"], leaves["server1"])
         eventually(lambda: sum(value for name, value in counters(diagnostics / "admin.sock").items() if "key_rotation_failed" in name) > 0)
         if serial_at(address, ca, leaves["client2"]) != 1002:
             raise LabError("Invalid key pair displaced the last valid TLS identity")
+        report["stage"] = "recover-valid-pair"
         project(root / "server", "v3", leaves["server3"])
         eventually(lambda: serial_at(address, ca, leaves["client2"]) == 1003)
         report["checks"].append({"check": "invalid-pair-retains-last-good-then-recovers", "last_good_serial": 1002, "recovered_serial": 1003})
@@ -305,6 +338,10 @@ def run(root, report):
             raise LabError("Proxy restarted during filesystem reload acceptance")
         report["checks"].append({"check": "envoy-process-not-restarted", "restart_count": 0})
         report["counters"] = counters(diagnostics / "admin.sock")
+        report["stage"] = "acceptance-passed"
+    except Exception:
+        report["envoy_diagnostics"] = capture_diagnostics(container, owner, root)
+        raise
     finally:
         if old:
             old.close()

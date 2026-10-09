@@ -183,8 +183,8 @@ spec:
                         values: [172.28.1.222, 172.28.3.32]
           containers:
             - name: rotate
-              # Pin the verified Python image before unsuspending; placeholder prevents accidental use.
-              image: harbor.wellspiking.ai/hub/library/python:__PIN_VERIFIED_DIGEST__
+              # Reuse the verified Python runtime; command runs only this script, not the N9E application.
+              image: harbor.wellspiking.ai/guofeng.su/nightingale-observability:9.1.1-sentinel-01abc76@sha256:2e544213530f914b961e05d9fbab2ddcbbb995402379496a34815f0d61da6315
               command: [python3, -B, /config/rotation.py]
               env:
                 - name: POD_UID

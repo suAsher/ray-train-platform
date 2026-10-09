@@ -1,0 +1,49 @@
+crds:
+  enabled: true
+
+app:
+  approveSignerNames:
+    - clusterissuers.cert-manager.io/obs-mtls-am-gossip
+    - clusterissuers.cert-manager.io/obs-mtls-mesh
+    - clusterissuers.cert-manager.io/obs-mtls-postgres-client
+    - clusterissuers.cert-manager.io/obs-mtls-postgres-server
+    - clusterissuers.cert-manager.io/obs-mtls-redis
+
+commonLabels:
+  app.kubernetes.io/part-of: raytrain-observability-cert-manager
+
+priorityClassName: raytrain-observability-additive
+replicaCount: 2
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+resources:
+  requests: {cpu: 100m, memory: 256Mi}
+  limits: {cpu: "1", memory: 512Mi}
+securityContext:
+  runAsNonRoot: true
+  seccompProfile: {type: RuntimeDefault}
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: {drop: [ALL]}
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: NotIn
+              values: [172.28.1.222, 172.28.3.32]
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: cert-manager-approver-policy
+
+image:
+  tag: v0.28.0
+  digest: sha256:1a955b0a5c41d319fd56b5f85aaff6f2eaba01d70f3b1adf001eac4d7b1d49e5

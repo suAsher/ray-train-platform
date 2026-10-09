@@ -5,6 +5,8 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
+from unittest import mock
+import urllib.error
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("certificate_rotation", ROOT / "mtls/rotation.py")
@@ -35,7 +37,8 @@ def pod(name, owner, annotation=None):
             "labels": {"component": "keeper", "instance": owner}, "annotations": annotations,
             "ownerReferences": [{"apiVersion": "apps/v1", "kind": "StatefulSet", "name": owner,
                                   "uid": owner + "-uid", "controller": True}]},
-            "spec": {"containers": [{"name": "native"}], "hostNetwork": False},
+            "spec": {"containers": [{"name": "native"}], "hostNetwork": False,
+                     "volumes": [{"name": "leaf", "secret": {"secretName": "obs-mtls-keeper"}}]},
             "status": {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}],
                        "containerStatuses": [{"name": "native", "ready": True,
                                               "state": {"running": {}}}]}}
@@ -54,7 +57,7 @@ class FakeAPI:
         self.controllers = {"keeper-" + str(i): controller("keeper-" + str(i)) for i in range(3)}
         self.pods = [pod("keeper-" + str(i) + "-0", "keeper-" + str(i)) for i in range(3)]
         self.secrets = {"obs-mtls-keeper": secret()}
-        self.pdb = {"metadata": {"generation": 1}, "spec": {"selector": {"matchLabels": {"component": "keeper"}}},
+        self.pdb = {"metadata": {"generation": 1, "namespace": "clickhouse", "name": "keeper-pdb"}, "spec": {"selector": {"matchLabels": {"component": "keeper"}}},
                     "status": {"observedGeneration": 1, "expectedPods": 3,
                                "currentHealthy": 3, "disruptionsAllowed": 1}}
         self.events = []
@@ -256,6 +259,181 @@ class RotationSafetyTests(unittest.TestCase):
                     self.assertTrue(rule["resourceNames"])
                 if "pods" in rule["resources"]:
                     self.assertNotIn("delete", rule["verbs"])
+
+
+class LeaseAPI:
+    def __init__(self):
+        self.lease = {"metadata": {"namespace": "cert-manager", "name": "native-certificate-rotation",
+                      "uid": "fixed-lock", "resourceVersion": "1"}, "spec": {"leaseDurationSeconds": 120}}
+        self.writes = 0
+        self.conflict = False
+
+    def get(self, path):
+        return copy.deepcopy(self.lease)
+
+    def request(self, method, path, body):
+        if self.conflict:
+            raise rotation.APIError(409)
+        assert method == "PUT"
+        assert body["metadata"]["resourceVersion"] == self.lease["metadata"]["resourceVersion"]
+        self.writes += 1
+        self.lease = copy.deepcopy(body)
+        self.lease["metadata"]["resourceVersion"] = str(self.writes + 1)
+        return copy.deepcopy(self.lease)
+
+
+class LeaseSafetyTests(unittest.TestCase):
+    def setUp(self):
+        self.api = LeaseAPI()
+        self.now = "2026-10-09T01:00:00Z"
+        self.lease = rotation.Lease(self.api, "job-one", utc=lambda: self.now)
+
+    def test_acquire_and_renew_use_resource_version_compare_and_swap(self):
+        self.lease.acquire()
+        self.lease.renew()
+        self.assertEqual(2, self.api.writes)
+        self.assertEqual("job-one", self.api.lease["spec"]["holderIdentity"])
+
+    def test_active_other_holder_is_not_stolen(self):
+        self.api.lease["spec"].update(holderIdentity="other", renewTime=self.now)
+        with self.assertRaisesRegex(rotation.RotationError, "active holder"):
+            self.lease.acquire()
+        self.assertEqual(0, self.api.writes)
+
+    def test_expired_other_holder_can_be_replaced_with_cas(self):
+        self.api.lease["spec"].update(holderIdentity="other", renewTime="2026-10-09T00:00:00Z")
+        self.lease.acquire()
+        self.assertEqual("job-one", self.api.lease["spec"]["holderIdentity"])
+
+    def test_expired_own_holder_must_not_resume_mutation(self):
+        self.lease.acquire()
+        self.now = "2026-10-09T01:02:01Z"
+        with self.assertRaisesRegex(rotation.RotationError, "expired"):
+            self.lease.renew()
+        self.assertEqual(1, self.api.writes)
+
+    def test_recreated_or_stolen_lease_stops_holder(self):
+        self.lease.acquire()
+        for field, value in (("uid", "replacement"),):
+            self.api.lease["metadata"][field] = value
+            with self.assertRaisesRegex(rotation.RotationError, "lost"):
+                self.lease.renew()
+        self.api.lease["metadata"]["uid"] = "fixed-lock"
+        self.api.lease["spec"]["holderIdentity"] = "other"
+        with self.assertRaisesRegex(rotation.RotationError, "lost"):
+            self.lease.renew()
+
+    def test_cas_conflict_stops_without_retrying_a_write(self):
+        self.api.conflict = True
+        with self.assertRaises(rotation.APIError):
+            self.lease.acquire()
+        self.assertEqual(0, self.api.writes)
+
+
+class KubernetesTransportTests(unittest.TestCase):
+    def client(self):
+        with mock.patch.dict(rotation.os.environ, {"KUBERNETES_SERVICE_HOST": "10.0.0.1"}, clear=True), \
+                mock.patch.object(rotation.ssl, "create_default_context") as context, \
+                mock.patch.object(rotation.urllib.request, "build_opener") as builder:
+            api = rotation.Kubernetes()
+            context.assert_called_once_with(cafile="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
+            self.assertEqual("https://10.0.0.1:443", api.base)
+            self.assertIsInstance(builder.call_args.args[0], rotation.NoRedirect)
+        api.token = mock.Mock()
+        api.token.read_text.return_value = "PRIVATE-TOKEN"
+        return api
+
+    def test_validated_tls_and_rotating_token_are_used(self):
+        api = self.client()
+        api.opener.open.return_value.__enter__.return_value.read.return_value = b'{"items":[]}'
+        self.assertEqual([], api.list_pods("clickhouse", {"app": "keeper"}))
+        request = api.opener.open.call_args.args[0]
+        self.assertEqual("Bearer PRIVATE-TOKEN", request.get_header("Authorization"))
+        self.assertIn("labelSelector=app%3Dkeeper", request.full_url)
+        self.assertEqual(15, api.opener.open.call_args.kwargs["timeout"])
+
+    def test_api_error_body_is_not_exposed(self):
+        api = self.client()
+        api.opener.open.side_effect = urllib.error.HTTPError("url", 403, "PRIVATE-SECRET", {}, None)
+        with self.assertRaises(rotation.APIError) as caught:
+            api.get("/api/v1/namespaces/clickhouse/secrets/leaf")
+        self.assertNotIn("PRIVATE", str(caught.exception))
+
+    def test_transport_error_is_redacted(self):
+        api = self.client()
+        api.opener.open.side_effect = urllib.error.URLError("PRIVATE-TOKEN")
+        with self.assertRaisesRegex(rotation.RotationError, "transport") as caught:
+            api.get("/api/v1/namespaces/clickhouse/pods")
+        self.assertNotIn("PRIVATE", str(caught.exception))
+
+    def test_delete_and_redirect_are_forbidden(self):
+        api = self.client()
+        with self.assertRaises(rotation.RotationError):
+            api.request("DELETE", "/api/v1/namespaces/clickhouse/pods/keeper")
+        self.assertIsNone(rotation.NoRedirect().redirect_request(None, None, 302, "", {}, "http://untrusted"))
+        api.opener.open.assert_not_called()
+
+    def test_response_size_and_pagination_fail_closed(self):
+        api = self.client()
+        api.opener.open.return_value.__enter__.return_value.read.return_value = b"x" * (4 * 1024 * 1024 + 1)
+        with self.assertRaises(rotation.RotationError):
+            api.get("/api/v1/namespaces/clickhouse/pods")
+        api.opener.open.return_value.__enter__.return_value.read.return_value = b'{"metadata":{"continue":"next"},"items":[]}'
+        with self.assertRaises(rotation.RotationError):
+            api.list_pods("clickhouse")
+
+
+class AdditionalRotationSafetyTests(unittest.TestCase):
+    setUp = RotationSafetyTests.setUp
+    def test_real_leaf_change_rotates_all_three_and_records_only_public_hash(self):
+        self.runner.rotate_group(group())
+        self.api.secrets["obs-mtls-keeper"] = secret(leaf=b"renewed-leaf")
+        self.runner.rotate_group(group())
+        self.assertEqual(6, self.api.counter)
+        self.assertNotIn("DO-NOT-READ", json.dumps(self.api.events))
+
+    def test_missing_secret_mount_is_refused(self):
+        self.api.pods[0]["spec"]["volumes"] = []
+        with self.assertRaisesRegex(rotation.RotationError, "mount"):
+            self.runner.rotate_group(group())
+        self.assertEqual(0, self.api.counter)
+
+    def test_host_network_is_refused(self):
+        self.api.pods[0]["spec"]["hostNetwork"] = True
+        with self.assertRaises(rotation.RotationError):
+            self.runner.rotate_group(group())
+        self.assertEqual(0, self.api.counter)
+
+    def test_overall_deadline_stops_before_mutation(self):
+        self.runner.deadline = 0
+        with self.assertRaisesRegex(rotation.RotationError, "Overall"):
+            self.runner.rotate_group(group())
+        self.assertEqual(0, self.api.counter)
+
+    def test_stable_secret_wait_renews_lease(self):
+        self.runner.settle = 11
+        self.runner.rotate_group(group())
+        self.assertGreaterEqual(self.now, 11)
+        self.assertGreater(self.lease.calls, 10)
+
+    def test_controller_generation_change_is_refused(self):
+        _, baseline = self.runner.snapshot(group())
+        self.api.controllers["keeper-0"]["metadata"]["generation"] += 1
+        with self.assertRaisesRegex(rotation.RotationError, "Controller changed"):
+            self.runner.snapshot(group(), baseline)
+
+    def test_pdb_does_not_cover_unrelated_pods(self):
+        unrelated = pod("other", "other")
+        unrelated["metadata"]["labels"] = {"component": "keeper"}
+        self.api.pods.append(unrelated)
+        with self.assertRaises(rotation.RotationError):
+            self.runner.check_pdb(group(), self.api.pods[:3])
+
+    def test_secret_without_cert_manager_identity_is_refused(self):
+        self.api.secrets["obs-mtls-keeper"]["metadata"]["annotations"] = {}
+        with self.assertRaisesRegex(rotation.RotationError, "Secret owner"):
+            self.runner.rotate_group(group())
+        self.assertEqual(0, self.api.counter)
 
 
 if __name__ == "__main__":
