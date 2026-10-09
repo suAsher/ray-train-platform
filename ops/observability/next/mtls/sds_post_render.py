@@ -35,6 +35,22 @@ class RenderError(ValueError):
     """Never includes manifest bodies or credential values."""
 
 
+def optional_mapping(value, field):
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise RenderError("Invalid optional mapping: " + field)
+    return value
+
+
+def optional_list(value, field):
+    if value is None:
+        return []
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise RenderError("Invalid optional object list: " + field)
+    return value
+
+
 def pod_specs(value):
     """Find standard and Operator CR PodSpecs without assuming CRD nesting."""
     if isinstance(value, dict):
@@ -115,7 +131,7 @@ def restore_bootstrap(value, data, directory):
 
 def transform_configmap(document, mapping, namespace):
     key, directory = mapping
-    data = document.get("data", {})
+    data = optional_mapping(document.get("data"), "ConfigMap.data")
     if key not in data or not isinstance(data[key], str):
         raise RenderError("Known Envoy ConfigMap is missing its bootstrap key")
     bootstrap = restore_bootstrap(decode(data[key]), data, directory)
@@ -128,7 +144,7 @@ def transform_configmap(document, mapping, namespace):
         raise RenderError("Known Envoy ConfigMap has no file-backed leaf identity")
     extras = {}
     for filename, response in files.items():
-        if filename in document.get("binaryData", {}):
+        if filename in optional_mapping(document.get("binaryData"), "ConfigMap.binaryData"):
             raise RenderError("SDS ConfigMap binaryData key collision")
         if filename in data:
             try:
@@ -171,14 +187,14 @@ def validate_identity(volume):
 
 
 def validate_envoy(container, volumes, namespace):
-    mounts = container.get("volumeMounts", [])
+    mounts = optional_list(container.get("volumeMounts"), "container.volumeMounts")
     names = [item.get("name") for item in mounts]
     if len(set(names)) != len(names):
         raise RenderError("Duplicate Envoy volume mount")
     found_config, found_identity = False, False
     for mount in mounts:
         volume = volumes.get(mount.get("name"), {})
-        config_name = volume.get("configMap", {}).get("name")
+        config_name = optional_mapping(volume.get("configMap"), "volume.configMap").get("name")
         config_key = (namespace, config_name)
         is_config = config_name is not None
         is_identity = mount.get("mountPath") == IDENTITY_DIRECTORY
@@ -200,12 +216,12 @@ def validate_envoy(container, volumes, namespace):
 
 
 def transform_pod_spec(specification, namespace, generated):
-    volumes = specification.get("volumes", [])
+    volumes = optional_list(specification.get("volumes"), "pod.volumes")
     named = {volume.get("name"): volume for volume in volumes}
     if len(named) != len(volumes):
         raise RenderError("Duplicate Pod volume name")
     for volume in volumes:
-        source = volume.get("configMap", {})
+        source = optional_mapping(volume.get("configMap"), "volume.configMap")
         key = (namespace, source.get("name"))
         if key not in MAPPINGS or "items" not in source:
             continue
@@ -217,7 +233,8 @@ def transform_pod_spec(specification, namespace, generated):
             raise RenderError("ConfigMap items omit Envoy bootstrap")
         present = {item["key"] for item in source["items"]}
         source["items"] = [*source["items"], *({"key": name, "path": name} for name in generated[key] if name not in present)]
-    for container in [*specification.get("containers", []), *specification.get("initContainers", [])]:
+    for container in [*optional_list(specification.get("containers"), "pod.containers"),
+                      *optional_list(specification.get("initContainers"), "pod.initContainers")]:
         if container.get("name") in ("envoy", "mtls-proxy") or "envoyproxy/envoy:" in container.get("image", ""):
             validate_envoy(container, named, namespace)
 
@@ -243,7 +260,7 @@ def transform_documents(documents, namespace=None):
                     raise RenderError("Duplicate known Envoy ConfigMap")
                 document, generated[key] = transform_configmap(document, MAPPINGS[key], scope)
             elif scope in NAMESPACES and any(isinstance(text, str) and ("tls_certificates" in text or "tls_certificate_sds_secret_configs" in text)
-                                            for text in document.get("data", {}).values()):
+                                            for text in optional_mapping(document.get("data"), "ConfigMap.data").values()):
                 raise RenderError("unrecognized TLS ConfigMap in product namespace")
         output.append(document)
     for document in output:

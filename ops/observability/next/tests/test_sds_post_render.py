@@ -49,6 +49,33 @@ def sds_keys(configmap):
 
 
 class SDSPostRenderTests(unittest.TestCase):
+    def test_helm_empty_configmap_and_null_init_containers_are_preserved(self):
+        empty = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"namespace": "clickhouse", "name": "clickhouse-operator-empty"}, "data": None}
+        workload = pod("clickhouse", "clickhouse-proxy-operator", "/etc/envoy-source")
+        spec(workload)["initContainers"] = None
+        source = [empty, workload]
+        self.assertEqual(source, renderer.transform_documents(source, namespace="clickhouse"))
+
+    def test_known_configmap_null_data_still_fails_closed(self):
+        source = config()
+        source["data"] = None
+        with self.assertRaisesRegex(renderer.RenderError, "bootstrap"):
+            renderer.transform_documents([source])
+
+    def test_malformed_optional_collection_is_not_treated_as_empty(self):
+        workload = pod()
+        spec(workload)["initContainers"] = "not-a-list"
+        with self.assertRaises(renderer.RenderError):
+            renderer.transform_documents([workload])
+        source = {"kind": "ConfigMap", "metadata": {"namespace": "clickhouse", "name": "other"}, "data": []}
+        with self.assertRaises(renderer.RenderError):
+            renderer.transform_documents([source])
+
+    def test_non_envoy_pod_may_have_null_optional_volumes(self):
+        source = {"kind": "Pod", "metadata": {"namespace": "nightingale", "name": "fixture"},
+                  "spec": {"containers": [{"name": "app", "image": "app:fixture"}], "volumes": None, "initContainers": None}}
+        self.assertEqual([source], renderer.transform_documents([source]))
+
     def test_all_known_product_configmaps_have_correct_stable_mount(self):
         expected = {("victoriametrics", "victoriametrics-cluster-" + role + "-mtls"): ("envoy.yaml", "/etc/envoy-source")
                     for role in ("vmstorage", "vminsert", "vmselect", "vmauth", "vmagent", "vmalert", "alertmanager", "operator")}
