@@ -34,6 +34,11 @@
 python3 -m unittest discover -s ops/observability/next/tests -p 'test_business_metrics.py' -v
 helm template business-metrics-wave1 ops/observability/next/business-metrics \
   --namespace victoriametrics > "$evidence_dir/business-metrics.yaml"
+# operator/VM renders must be the reviewed pinned candidate. For the VM render,
+# explicitly set businessScrape.enabled=true; do not apply that entire stack.
+python3 ops/observability/next/victoriametrics/validate_component_contract.py \
+  --business-wave1 "$evidence_dir/operator-rendered.yaml" \
+  "$evidence_dir/metrics-rendered.yaml" "$evidence_dir/business-metrics.yaml"
 kubectl --context="$vke_context" apply --server-side --dry-run=server \
   -f "$evidence_dir/business-metrics.yaml"
 kubectl --context="$vke_context" diff --server-side \
@@ -41,6 +46,8 @@ kubectl --context="$vke_context" diff --server-side \
 ```
 
 先保存现有 VMAgent、原 Prometheus 选择器、受保护工作负载 UID/规格及旧监控基线。确认渲染只含审阅过的监控/RBAC/NetworkPolicy/看板 ConfigMap，当前 Prometheus 的 ServiceMonitor selector 能选择这两个新对象，且原 operator 的 Prometheus 转换器禁用，才应用候选。不要用本轮业务 chart 替换整个 VM release，也不要重建原日志工作负载。
+
+组件门禁默认仍只接受两份自监控清单并拒绝跨 namespace 扩展。只有显式 `--business-wave1` 才接受第三份独立业务 chart 渲染，检查精确对象集合、三个 discovery Role、五个服务目标与候选白名单；Operator、VMAuth、canary/黑洞通知的原门禁仍全部执行，不以新模式跳过旧安全边界。
 
 业务 chart 单独部署还不启用新 VM 采集。VM resources chart 的 `businessScrape.enabled` 默认 `false`，继续保持自监控。首波启用仅变更已有 VMAgent 的以下字段（先审阅 server-side dry-run），不重新应用完整历史 stack 清单：
 

@@ -353,14 +353,22 @@ class BusinessComponentBoundaryContracts(unittest.TestCase):
             # Omission of the explicit mode never implicitly grants new scope.
             with self.assertRaises(ValueError):
                 component_contract.main(paths)
-            for change in ("operator", "auth", "notifications"):
+            for change in ("operator", "auth", "notifications", "extra-scrape", "self-label", "self-namespace"):
                 operator, vm = deepcopy(self.operator), deepcopy(self.enabled_vm)
                 if change == "operator":
                     operator[0]["spec"]["template"]["spec"]["containers"][0]["env"][0]["value"] = ""
                 elif change == "auth":
                     only(vm, "VMAuth")[0]["spec"]["selectAllByDefault"] = True
-                else:
+                elif change == "notifications":
                     only(vm, "VMAlertmanager")[0]["spec"]["configRawYaml"] = "receivers: [{name: production}]"
+                elif change == "extra-scrape":
+                    extra = deepcopy(only(self.business, "VMServiceScrape")[0])
+                    extra["metadata"]["name"] = "business-wave1-unapproved-sixth"
+                    vm.append(extra)
+                elif change == "self-label":
+                    only(vm, "VMServiceScrape")[0]["metadata"]["labels"]["observability.raytrain.io/scrape"] = "business-wave1"
+                else:
+                    only(vm, "VMServiceScrape")[0]["spec"]["namespaceSelector"] = {"any": True}
                 Path(paths[0]).write_text(yaml.safe_dump_all(operator))
                 Path(paths[1]).write_text(yaml.safe_dump_all(vm))
                 with self.subTest(change=change), self.assertRaises(ValueError):
