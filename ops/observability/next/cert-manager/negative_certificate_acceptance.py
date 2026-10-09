@@ -274,7 +274,7 @@ def create_case(kubectl_bin: str, context: str, case: Case, run_id: str, timeout
         raise SystemExit(f"Secret {case.namespace}/{secret} already exists")
     try:
         cert = json.loads(kubectl(kubectl_bin, context, ["create", "-o", "json", "-f", "-"], stdin=json.dumps(doc), timeout=timeout).stdout)
-    except (KubeError, json.JSONDecodeError):
+    except (KubeError, json.JSONDecodeError, subprocess.TimeoutExpired):
         cert = get_obj(kubectl_bin, context, "certificates.cert-manager.io", case.namespace, name, timeout)
         if not cert or not certificate_identity_matches(cert, doc, case, run_id):
             raise
