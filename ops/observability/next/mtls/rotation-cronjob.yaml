@@ -1,0 +1,203 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: native-certificate-rotation
+  namespace: cert-manager
+automountServiceAccountToken: true
+---
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: native-certificate-rotation
+  namespace: cert-manager
+spec:
+  leaseDurationSeconds: 120
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: native-certificate-rotation
+  namespace: cert-manager
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    resourceNames: [native-certificate-rotation]
+    verbs: [get, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: native-certificate-rotation
+  namespace: cert-manager
+subjects:
+  - {kind: ServiceAccount, name: native-certificate-rotation, namespace: cert-manager}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: native-certificate-rotation}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: native-certificate-rotation
+  namespace: clickhouse
+rules:
+  - apiGroups: ['']
+    resources: [secrets]
+    resourceNames: [obs-mtls-keeper, obs-mtls-clickhouse]
+    verbs: [get]
+  - apiGroups: [apps]
+    resources: [statefulsets]
+    resourceNames: [chk-clickhouse-keeper-0-0, chk-clickhouse-keeper-0-1, chk-clickhouse-keeper-0-2, chi-clickhouse-telemetry-0-0, chi-clickhouse-telemetry-0-1]
+    verbs: [get]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    resourceNames: [chk-clickhouse-keeper, chi-clickhouse-telemetry]
+    verbs: [get]
+  - apiGroups: ['']
+    resources: [pods]
+    verbs: [get, list, patch]
+  - apiGroups: ['']
+    resources: [pods/eviction]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: native-certificate-rotation
+  namespace: clickhouse
+subjects:
+  - {kind: ServiceAccount, name: native-certificate-rotation, namespace: cert-manager}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: native-certificate-rotation}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: native-certificate-rotation
+  namespace: nightingale
+rules:
+  - apiGroups: ['']
+    resources: [secrets]
+    resourceNames: [obs-mtls-redis-ha-peer, obs-mtls-n9e-postgres-client, obs-mtls-nightingale-redis]
+    verbs: [get]
+  - apiGroups: [apps]
+    resources: [statefulsets]
+    resourceNames: [nightingale-redis-server]
+    verbs: [get]
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [nightingale]
+    verbs: [get]
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    resourceNames: [nightingale-redis-pdb, nightingale]
+    verbs: [get]
+  - apiGroups: ['']
+    resources: [pods]
+    verbs: [get, list, patch]
+  - apiGroups: ['']
+    resources: [pods/eviction]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: native-certificate-rotation
+  namespace: nightingale
+subjects:
+  - {kind: ServiceAccount, name: native-certificate-rotation, namespace: cert-manager}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: native-certificate-rotation}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: native-certificate-rotation
+  namespace: victoriametrics
+rules:
+  - apiGroups: ['']
+    resources: [secrets]
+    resourceNames: [obs-mtls-alertmanager-gossip]
+    verbs: [get]
+  - apiGroups: [apps]
+    resources: [statefulsets]
+    resourceNames: [vmalertmanager-victoriametrics-cluster]
+    verbs: [get]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    resourceNames: [vmalertmanager-victoriametrics-cluster]
+    verbs: [get]
+  - apiGroups: ['']
+    resources: [pods]
+    verbs: [get, list, patch]
+  - apiGroups: ['']
+    resources: [pods/eviction]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: native-certificate-rotation
+  namespace: victoriametrics
+subjects:
+  - {kind: ServiceAccount, name: native-certificate-rotation, namespace: cert-manager}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: native-certificate-rotation}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: native-certificate-rotation
+  namespace: cert-manager
+spec:
+  schedule: '*/15 * * * *'
+  suspend: true
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 6600
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels: {app.kubernetes.io/name: native-certificate-rotation}
+        spec:
+          serviceAccountName: native-certificate-rotation
+          automountServiceAccountToken: true
+          priorityClassName: raytrain-observability-additive
+          restartPolicy: Never
+          terminationGracePeriodSeconds: 30
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            seccompProfile: {type: RuntimeDefault}
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: kubernetes.io/hostname
+                        operator: NotIn
+                        values: [172.28.1.222, 172.28.3.32]
+          containers:
+            - name: rotate
+              # Pin the verified Python image before unsuspending; placeholder prevents accidental use.
+              image: harbor.wellspiking.ai/hub/library/python:__PIN_VERIFIED_DIGEST__
+              command: [python3, -B, /config/rotation.py]
+              env:
+                - name: POD_UID
+                  valueFrom: {fieldRef: {fieldPath: metadata.uid}}
+              resources:
+                requests: {cpu: 50m, memory: 64Mi}
+                limits: {cpu: 250m, memory: 128Mi}
+              securityContext:
+                readOnlyRootFilesystem: true
+                allowPrivilegeEscalation: false
+                capabilities: {drop: [ALL]}
+              volumeMounts:
+                - {name: config, mountPath: /config, readOnly: true}
+          volumes:
+            - name: config
+              configMap: {name: native-certificate-rotation, defaultMode: 0444}
