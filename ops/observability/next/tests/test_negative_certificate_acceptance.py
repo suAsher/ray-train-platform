@@ -181,9 +181,14 @@ class NegativeCertificateAcceptanceTests(unittest.TestCase):
         original_kubectl = module.kubectl
         original_get_obj = module.get_obj
         original_secret_meta = module.secret_meta_by_name
+        get_calls = []
+        create_calls = []
 
         def matching_get_obj(_bin, _context, resource, _namespace, _name, _timeout):
             if resource != "certificates.cert-manager.io":
+                return None
+            get_calls.append(resource)
+            if len(get_calls) == 1:
                 return None
             return {
                 "metadata": {
@@ -197,9 +202,11 @@ class NegativeCertificateAcceptanceTests(unittest.TestCase):
             }
 
         try:
-            module.kubectl = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-                subprocess.TimeoutExpired("kubectl", 30)
-            )
+            def timeout_kubectl(_bin, _context, args, **_kwargs):
+                create_calls.append(args)
+                raise subprocess.TimeoutExpired("kubectl", 30)
+
+            module.kubectl = timeout_kubectl
             module.get_obj = matching_get_obj
             module.secret_meta_by_name = lambda *_args, **_kwargs: None
             created = module.create_case("kubectl", "ctx", case, "abc123", 30)
@@ -209,6 +216,8 @@ class NegativeCertificateAcceptanceTests(unittest.TestCase):
             module.secret_meta_by_name = original_secret_meta
 
         self.assertEqual(created.uid, "recovered-uid")
+        self.assertEqual(get_calls, ["certificates.cert-manager.io", "certificates.cert-manager.io"])
+        self.assertIn(["create", "-o", "json", "-f", "-"], create_calls)
 
     def test_create_timeout_rejects_different_run_certificate(self):
         module = self.module
@@ -217,9 +226,14 @@ class NegativeCertificateAcceptanceTests(unittest.TestCase):
         original_kubectl = module.kubectl
         original_get_obj = module.get_obj
         original_secret_meta = module.secret_meta_by_name
+        get_calls = []
+        create_calls = []
 
         def different_get_obj(_bin, _context, resource, _namespace, _name, _timeout):
             if resource != "certificates.cert-manager.io":
+                return None
+            get_calls.append(resource)
+            if len(get_calls) == 1:
                 return None
             cert = {
                 "metadata": {
@@ -234,9 +248,11 @@ class NegativeCertificateAcceptanceTests(unittest.TestCase):
             return cert
 
         try:
-            module.kubectl = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-                subprocess.TimeoutExpired("kubectl", 30)
-            )
+            def timeout_kubectl(_bin, _context, args, **_kwargs):
+                create_calls.append(args)
+                raise subprocess.TimeoutExpired("kubectl", 30)
+
+            module.kubectl = timeout_kubectl
             module.get_obj = different_get_obj
             module.secret_meta_by_name = lambda *_args, **_kwargs: None
             with self.assertRaises(subprocess.TimeoutExpired):
@@ -245,6 +261,9 @@ class NegativeCertificateAcceptanceTests(unittest.TestCase):
             module.kubectl = original_kubectl
             module.get_obj = original_get_obj
             module.secret_meta_by_name = original_secret_meta
+
+        self.assertEqual(get_calls, ["certificates.cert-manager.io", "certificates.cert-manager.io"])
+        self.assertIn(["create", "-o", "json", "-f", "-"], create_calls)
 
 
 if __name__ == "__main__":
