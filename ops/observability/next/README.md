@@ -2,6 +2,8 @@
 
 入口：[架构、部署流程与实际操作记录](DEPLOYMENT_RUNBOOK.md) · [详细架构设计](../../../docs/superpowers/specs/2026-10-08-vke-observability-platform-design.md)
 
+下一阶段：[保留 Alloy/Loki 的扩展架构与容量方案](../../../docs/superpowers/specs/2026-10-09-observability-expansion-design.md)。用户已明确现有 Alloy/Loki 长期保留；该增量设计区分日志、指标和追踪三条链路，扩容按实测瓶颈推进，尚未改变线上采集和副本配置。
+
 **2026-10-09 当前状态：** `victoriametrics`、`clickhouse`、`opentelemetry`、`nightingale` 已部署，`cert-manager` 管理新身份叶证书。VM 182 项、夜莺应用 44 项/依赖 46 项及 CH/OTel 双副本精确读回通过，轮换后复验再次通过。PostgreSQL 和 VMStorage 实际续期没有替换 Pod；另外六类叶证书真实续签、13 Pod 受控轮换和随后无变更复验通过，三类签发负例通过并清理。最终候选 `741b7f2` 296 项单元测试通过；运行配置 `4768871` 的 7 条真实渲染链通过。原生组件持续轮转 CronJob 保持 suspended，待失败通知闭环；新 Alertmanager 仍为 blackhole-canary。15 个临时验收对象已按 UID 清理。
 
 旧四个 `observability-*` 命名空间及其专属资源已于 10 月 9 日按用户授权退场，21 块旧 EBS 云盘已由实际 CSI 驱动确认删除。旧 PG 的已验证备份和私有配置清单保留，旧 VM/ClickHouse 合成历史未做数据归档，不能再依赖旧卷回退。原业务链路未迁移，SSO、业务采集和正式告警接收未接入。部署归属、镜像来源、证据及未验范围见[10 月 9 日部署记录](DEPLOYMENT_RUNBOOK.md#2026-10-09-正式命名部署与验收记录)及[旧环境退场记录](DEPLOYMENT_RUNBOOK.md#2026-10-09-旧命名空间退场与云盘释放)。下面的 10 月 8 日表格、容量与数字是历史记录，旧命令不能直接用于新位置。
