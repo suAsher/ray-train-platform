@@ -35,7 +35,7 @@ Redis chart 的可选 `n9e-redis-configmap-test` Helm test Pod 没有关闭开�
 | `n9e-db-app`，`kubernetes.io/basic-auth` | `username` 固定 `n9e`；`password` 随机 32–128 字符，仅字母、数字、下划线、连字符 | CNPG initdb、seed Job、夜莺配置渲染器 |
 | `n9e-redis-auth` | `auth`、`sentinel-password` 各独立随机 | Redis chart、夜莺配置渲染器 |
 | `n9e-bootstrap-admin` | `password` 恰好 24 个随机字母数字字符 | 一次性 seed Job；仅创建新夜莺的 `root`，与平台用户无关 |
-| `n9e-postgres-ca` | `ca.crt`，由 CNPG 生成 | PostgreSQL `verify-full` 客户端校验 |
+| `obs-mtls-ca-postgres-server-public` | 只含公开 `ca.crt`，来自 cert-manager 的 PostgreSQL server CA | PostgreSQL `verify-full` 客户端校验 |
 | `n9e-vm-read` | `token`，镜像新 metrics namespace 的 `vm-self-read` | 后续受控创建只读数据源，不能写 VM |
 | `obs-mtls-nightingale` / `obs-mtls-cnpg-operator` | `tls.crt`、`tls.key`、`ca.crt` | mesh CA 签发，分别用于 N9E 入/出代理和 CNPG 指标代理 |
 | `obs-mtls-n9e-ui-gateway` | 同上，仅 clientAuth | 受控管理员客户端；不授予训练用户或普通 Pod |
@@ -43,6 +43,8 @@ Redis chart 的可选 `n9e-redis-configmap-test` Helm test Pod 没有关闭开�
 | `obs-mtls-n9e-postgres-client` / `obs-mtls-n9e-postgres-bootstrap` | 同上，独立 PostgreSQL client CA，CN=`n9e` | 分离常驻应用与一次性初始化证书 |
 | `obs-mtls-n9e-postgres-replication` | 同上，CN=`streaming_replica` | 仅新 PG 复制身份 |
 | `obs-mtls-postgres-client-ca` / `obs-mtls-cnpg-metrics-ca` | 只含公开 `ca.crt` | 分别验证 PG 原生客户端、9187 的 mesh 监控客户端；绝不向 Pod 发 CA 私钥 |
+
+PostgreSQL 服务端证书改由 cert-manager 管理：`20-postgres.yaml` 显式引用 `obs-mtls-n9e-postgres-server` 和 `obs-mtls-ca-postgres-server-public`。这些 Secret 需要 `cnpg.io/reload` 标签配合 CNPG reload；应用侧只挂公开 CA 与各自客户端证书，不挂 server CA 私钥。
 
 24 字符是当前上游 `InitRoot` 的兼容约束：它将长度大于 31 的值视作已哈希，不能直接放 64 字符随机明文。初始化前已有随机密码，首次单实例启动将它哈希；不使用上游默认密码。首次成功后不重跑 seed，不用修改此 Secret 来“重置”既有账号。[初始化实现](https://github.com/ccfos/nightingale/blob/v9.1.1/models/user.go)
 

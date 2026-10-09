@@ -12,6 +12,8 @@ spec:
   priorityClassName: raytrain-observability-additive
   primaryUpdateStrategy: supervised
   certificates:
+    serverTLSSecret: obs-mtls-n9e-postgres-server
+    serverCASecret: obs-mtls-ca-postgres-server-public
     clientCASecret: obs-mtls-postgres-client-ca
     replicationTLSSecret: obs-mtls-n9e-postgres-replication
   env:

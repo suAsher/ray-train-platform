@@ -73,7 +73,7 @@ spec:
             defaultMode: 0440
             sources:
               - secret:
-                  name: nightingale-postgres-ca
+                  name: obs-mtls-ca-postgres-server-public
                   items: [{key: ca.crt, path: ca.crt}]
               - secret:
                   name: obs-mtls-n9e-postgres-bootstrap
