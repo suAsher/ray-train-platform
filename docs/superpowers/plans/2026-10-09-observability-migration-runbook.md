@@ -2,7 +2,7 @@
 
 Date: 2026-10-09.
 
-Execution status: the normal product namespaces are deployed and have passed the new-location protocol checks. The final runtime candidate is `4768871`; the negative-certificate acceptance helper is `741b7f2` (296 unit tests passed on the builder). Controlled renewal of six native roles, serial replacement of 13 Pods, and a second no-op run passed. The periodic rotation CronJob remains suspended while the new stack has no real failure-notification receiver. See the current [deployment record](../../../ops/observability/next/DEPLOYMENT_RUNBOOK.md) for final inventory and evidence. The old additive workloads and all 21 old PVCs remain intact; old retirement has not run.
+Execution status: the normal product namespaces are deployed and have passed the new-location protocol checks. The final runtime candidate is `4768871`; the negative-certificate acceptance helper is `741b7f2` (296 unit tests passed on the builder). Controlled renewal of six native roles, serial replacement of 13 Pods, and a second no-op run passed. The periodic rotation CronJob remains suspended while the new stack has no real failure-notification receiver. See the current [deployment record](../../../ops/observability/next/DEPLOYMENT_RUNBOOK.md) for final inventory and evidence. Following explicit user authorization, the four old additive namespaces, exclusive resources and all 21 old EBS volumes were retired on October 9. The actual CSI driver confirmed deletion of each volume, totaling 670Gi; corresponding PVC/PV/VolumeAttachment objects are absent. The 41 shared CRDs, StorageClass and PriorityClass remain in use and were preserved. Private configuration backups and the verified PostgreSQL dump remain; old VM/ClickHouse canary history was not data-archived and cannot be recovered from deleted volumes. The sections below preserve the original migration plan and pre-retirement baseline; see the retirement record for the final actions and evidence.
 
 This note is a minimal executable design for renaming the additive observability stack from the first `observability-*` namespaces to normal component namespaces while preserving the current self/canary state. It is intentionally scoped to the new observability stack. It does not change the old Prometheus, Alloy, Loki, Portal, RayTrain backend, or any training workload.
 
@@ -38,7 +38,7 @@ The same baseline shows 21 PVCs in the old namespaces:
 | `observability-otel` | 2: two OTel queue volumes |
 | `observability-alerting` | 6: three Redis volumes, three PostgreSQL volumes |
 
-The old namespaces are still only self-monitoring and synthetic canary scope. Business metrics, real application logs/traces, real notification channels, SSO, and historical migration have not been handed over to this stack. That makes a green deployment into new namespaces safer than rebinding existing PVs.
+At that baseline, the old namespaces were only self-monitoring and synthetic canary scope. Business metrics, real application logs/traces, real notification channels, SSO, and historical migration had not been handed over to this stack. That made a green deployment into new namespaces safer than rebinding existing PVs.
 
 ## Target names
 
@@ -57,13 +57,13 @@ Do not use uppercase namespace spelling. Avoid names such as `n9e-cnpg` for rele
 
 Do not rename namespaces in place. Kubernetes does not support namespace rename, and the existing PVC claim identity includes namespace/name. Do not make PV rebinding the normal path.
 
-Use this rule for the first migration:
+The original migration rule was as follows. Only the PostgreSQL backup/restore was executed for historical data; the canary exports proposed in steps 2–3 were not performed. Current canary checks wrote and verified independent synthetic records in the new stack.
 
 1. Deploy the renamed stack into new namespaces with the same component versions and fixed image digests.
 2. Back up the old PostgreSQL configuration database and export the current canary datasets.
 3. Restore only the required Nightingale configuration and canary history into the new stack.
-4. After a separate retirement review, scale down the old additive stack and keep its Retain PVs for a time-boxed recovery window. This step has not been executed; both stacks currently remain running.
-5. Delete old PVC/PV/cloud disks only after the window and after the new stack has passed the same live checks.
+4. The original plan proposed a separate retirement review followed by a retention window. The user subsequently authorized immediate cleanup and cloud-volume release after review, superseding that window. The old resources and volumes have now been deleted; the production monitoring stack was outside this retirement scope.
+5. Delete old PVC/PV/cloud disks only within the reviewed and explicitly authorized scope after new-stack checks; the actual immediate retirement and per-volume deletion evidence are recorded in the deployment runbook.
 
 PV rebinding is an emergency recovery path only. It needs a separate review because StatefulSet-generated PVC names, PV `claimRef`, CNPG metadata, ClickHouse/Keeper generated host names, certificate DNS SANs, and Helm ownership labels all depend on the old namespace and object names.
 
@@ -158,6 +158,8 @@ Run all commands from the approved builder and record output paths in a new priv
    - Verify old RayTrain platform health and active RayJob/RayCluster UIDs are unchanged.
 
 ## Cutover and cleanup window
+
+Historical proposal: the user superseded the 24-hour / 7-day retention windows below with explicit immediate retirement and disk-release authorization. Actual cleanup stopped owning CRs before their Operators, changed only the 21 identified Bound PVs to Delete, waited for CSI deletion protection, and verified per-volume driver success. Do not execute the old scale/retention sequence against the current product namespaces. See the [completed retirement record](../../../ops/observability/next/DEPLOYMENT_RUNBOOK.md#2026-10-09-旧命名空间退场与云盘释放).
 
 Because no business traffic is attached yet, the first cutover can be configuration-only:
 

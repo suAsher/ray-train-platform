@@ -4,9 +4,9 @@
 
 **当前检查点（2026-10-09）：正常命名空间的新增体系已经部署，并完成 VM、N9E 与 CH/OTel 基础线上验收、真实证书续期和受控轮换验证。** 当前名称是 `cert-manager`、`victoriametrics`、`clickhouse`、`opentelemetry`、`nightingale`。六类原生叶证书续签、13 Pod 逐副本轮换及随后无变更复验通过；持续轮转 CronJob 保持 suspended，待失败通知闭环。受控演练不等于周期性证书消费已经启用。
 
-旧 `observability-*` 组件、PVC 与恢复材料保留回退，原训练平台、Prometheus、Alloy、Loki 业务链路未迁移；SSO、业务采集、正式告警接收尚未接入。新位置的实际部署归属、镜像、续期与证据见[10 月 9 日部署记录](#2026-10-09-正式命名部署与验收记录)。
+旧四个 `observability-*` 命名空间、专属组件及 21 块 EBS 云盘已按用户明确授权清理，实际 CSI 驱动逐盘确认底层删除成功；PG 已验证备份和私有配置清单保留，旧 VM/ClickHouse 合成历史未归档，不能再依赖旧卷回退。原训练平台、Prometheus、Alloy、Loki 业务链路未迁移；SSO、业务采集、正式告警接收尚未接入。新位置的实际部署归属、镜像、续期与证据见[10 月 9 日部署记录](#2026-10-09-正式命名部署与验收记录)，本次清理见[旧环境退场记录](#2026-10-09-旧命名空间退场与云盘释放)。
 
-新套件稳态为 **43 Pod、21 PVC、申请 670Gi**；旧套件 **35 Pod、670Gi** 仍保留回退，因此当前两套并行合计申请 **1340Gi**。这是已申请容量，不是实际数据使用量；并行保留的云盘继续产生费用，后续扩容另增成本。
+新套件稳态为 **43 Pod、21 PVC、申请 670Gi**；旧套件的 **35 个常驻 Pod、21 块云盘/670Gi** 已清理。两套并行时的 1340Gi 已降至新套件的 670Gi。这是已申请容量，不是实际数据使用量，不包含原监控和训练业务存储；后续扩容另增成本。
 
 **下方第 1–11 节保留 2026-10-08 的历史执行记录。** 其中旧 namespace、Helm revision、174 项测试、35 Pod/670Gi 等数字只代表旧新增体系的对应时点；历史命令不能直接当作新命名空间升级指令，历史通过结果不能替代 10 月 9 日现场验收。
 
@@ -399,7 +399,7 @@ kubectl kustomize "$obs_candidate/ops/observability/next/otel" > otel-rendered.y
 
 ## 2026-10-09 正式命名部署与验收记录
 
-本节记录已部署的新命名空间及本轮独立验收。前面的 2026-10-08 资源名、镜像摘要和现场结果保留为历史证据；新位置已重新验收，没有沿用旧位置 PASS 作为上线结论。构建机证据根目录为 `/root/raytrain-observability-certmanager-20261009T014000Z`。原生组件受控轮转另行验证，持续轮转 CronJob 保持 suspended；下面明确列出已完成和待完成的边界。
+本节记录退场前的新命名空间部署及独立验收；其中旧资源“保留回退”的描述属于当时状态，已被下方[旧环境退场记录](#2026-10-09-旧命名空间退场与云盘释放)替代。前面的 2026-10-08 资源名、镜像摘要和现场结果保留为历史证据；新位置已重新验收，没有沿用旧位置 PASS 作为上线结论。构建机证据根目录为 `/root/raytrain-observability-certmanager-20261009T014000Z`。原生组件受控轮转另行验证，持续轮转 CronJob 保持 suspended；下面明确列出已完成和待完成的边界。
 
 | 组件 | 原 namespace | 新 namespace | 新主要资源名 |
 | --- | --- | --- | --- |
@@ -506,6 +506,44 @@ CH/OTel `result.json` 保存逐项 JSONL，**最后一行**为 `status=passed`�
 
 ### 仍未交接的业务范围
 
-旧 `observability-*` 的数据、PVC、Secret、Operator 及共享 CRD 保留回退；原 Prometheus/Alertmanager、Alloy/Loki、Grafana、Portal/训练后端和用户任务维持既有入口。本轮新增部署和 canary 不等于现网采集接管或业务数据迁移。
+部署验收时旧 `observability-*` 仍保留；随后经用户授权已执行下节记录的退场，专属资源与旧云盘均已删除，41 个共享 CRD 保留。原 Prometheus/Alertmanager、Alloy/Loki、Grafana、Portal/训练后端和用户任务维持既有入口。本轮新增部署和 canary 不等于现网采集接管或业务数据迁移。
 
-后续仍须分别验收：SSO 与人员授权入口、真实业务指标/日志/trace 接入、规则 firing→resolved 和实际告警接收、完整备份恢复及历史迁移、适用组件故障恢复、原生证书自动轮转的最终启用与持续监控。旧组件退场另需明确范围和可恢复证据。共享节点仍有 CPU/内存/磁盘/网络消耗；“不改业务提交方式、不停止用户任务”不能扩大为性能绝对零影响。
+后续仍须分别验收：SSO 与人员授权入口、真实业务指标/日志/trace 接入、规则 firing→resolved 和实际告警接收、完整备份恢复及历史迁移、适用组件故障恢复、原生证书自动轮转的最终启用与持续监控。原业务监控链路的退场不属于本次旧新增体系清理。共享节点仍有 CPU/内存/磁盘/网络消耗；“不改业务提交方式、不停止用户任务”不能扩大为性能绝对零影响。
+
+## 2026-10-09 旧命名空间退场与云盘释放
+
+用户明确授权“清理吧，相关云盘也释放”。清理范围仅为 `observability-metrics`、`observability-analytics`、`observability-otel`、`observability-alerting` 四个旧新增命名空间及其专属资源，不包括原 `monitoring`/Alloy/Loki 或训练平台。执行窗口为 04:41–04:50 UTC，证据目录是构建机 `/root/raytrain-observability-retire-20261009T043000Z`（私有目录，不能整体上传或提交 Git）。
+
+### 存储清单与恢复边界
+
+| 旧命名空间 | 已释放 EBS 数量 | 申请容量 |
+| --- | ---: | ---: |
+| `observability-metrics` | 8 | 250Gi |
+| `observability-analytics` | 5 | 260Gi |
+| `observability-otel` | 2 | 40Gi |
+| `observability-alerting` | 6 | 120Gi |
+| 合计 | **21** | **670Gi** |
+
+删除前保存 namespace/PVC/PV UID、claimRef、CSI volumeHandle、VolumeAttachment、Helm 存储 manifest 及共享对象基线。旧 PG dump 已在隔离容器验证恢复，并恢复到新 PG，57 张应用表核对通过；备份位于前述 cert-manager 部署证据根目录的 `backup/nightingale.dump`。旧 VM/ClickHouse 数据没有做独立历史归档，这一点在清理授权前已说明；配置清单不是数据库备份。用户此次授权立即释放旧盘，取代原计划的 24 小时并行和 7 天留盘窗口。
+
+### 实际执行顺序
+
+1. 逐 UID/resourceVersion、claimRef 和精确 volumeHandle 核对 21 个旧 Bound PV，只把这些 PV 的回收策略从 `Retain` 改为 `Delete`，等待 **21/21** 都出现 `external-provisioner.volume.kubernetes.io/finalizer`；不修改 StorageClass、新 PV 或保护锁。
+2. 删除旧 VMAgent/VMAlert owning CR、旧 Nightingale Deployment 和旧 OTel StatefulSet，确认写入 Pod 退出；VMUser 先于 VMAuth 删除，旧 Operator 保持运行到数据 CR finalizer 全部完成。
+3. 删除旧 VM 数据 CR；旧 ClickHouse CR 和实际 Pod 全部消失后再删 Keeper；删除旧 PG Cluster、Redis StatefulSet。PG 的三个 PVC 由 Cluster owner GC 自动删除，其余 18 个 PVC 在确认无 Pod 引用后逐 UID 删除。
+4. 等 CSI 正常卸载和删除底层 EBS，不手动删 PV 或移除 finalizer。实际 `ebsplugin:v1.5.0` 对每个精确卷都有 `WaitVolumeBeStatus(expected deleted)`、`Successful delete volume` 与 DeleteVolume 完成日志；21 个 PVC、PV、VolumeAttachment 均 absent。验收是 **实际 CSI 驱动确认底层删除成功**，没有另行调用云 API/控制台查询。
+5. 卸载旧 `raytrain-next`、`n9e-redis`、`raytrain-vm-operator`、`n9e-cnpg` 四个 Helm release。CNPG 存储 manifest 中的 11 个共享 CRD 均有 `helm.sh/resource-policy: keep`；每次卸载后核对全部 41 个共享 CRD 的 UID/schema 不变。
+6. 核对并清理 4 个旧 ClusterRole、2 个 ClusterRoleBinding、2 个旧 CNPG WebhookConfiguration：其中 7 个由 Helm 删除，手工管理的 `raytrain-vm-operator` ClusterRole 在确认无 binding 后按 UID/resourceVersion 单独删除。最后按原 namespace UID 删除四个旧 namespace；ClickHouse Operator 正常退出后，四个 namespace 全部 absent。
+
+没有强制删除 Pod、强拆卷挂载或移除 finalizer。CSI 早期出现的“仍 attached”删除重试随后正常成功，未据此绕过保护。仅本次只读日志采集器已停止，证据冻结为 0600 文件并记录 SHA256。
+
+### 保留资源与证据
+
+- 新 `cert-manager`、`victoriametrics`、`clickhouse`、`opentelemetry`、`nightingale` 全部保留；新卷继续 `Retain`。
+- **41 个共享 CRD**（VM 26、CH/Keeper 4、CNPG 11）、`ebs-ssd-observability-retain` StorageClass、`raytrain-observability-additive` PriorityClass 均保留。名称中带有旧前缀不代表闲置，新套件仍在使用；不能按名称前缀批量删除。
+- CNPG CRD 的旧 Helm ownership 注解仍保留，但旧 release 已卸载；本次没有转移 ownership。后续 CRD 生命周期升级需单独评估，不能让新 chart 自动重建或抢占共享 CRD。
+- 核心回执：`retirement-plan.json`、`volume-policy-patches.json`、`volumes-delete-protected.json`、`deletion-receipts.jsonl`、`helm-uninstall-receipts.json`、`csi-deletion-verification.json`、`csi-delete-evidence.jsonl`、`csi-evidence-index.json`、`csi-collector-stopped.json`、`retirement-final.json`。基线与退场后比较使用 `readonly-baseline.json` / `readonly-final.json`，不与上一轮部署快照混算。
+
+04:52:04 UTC 最终只读对比通过：排除已授权退场的四个旧 namespace 后，67 个控制器、731 个 Pod、804 个 RayJob/RayCluster、115 个 PVC 和 112 个共享对象的记录均与 04:38 基线一致，非预期差异为 0。新 43 个常驻 Pod 全 Ready、重启 0、GPU 申请 0，21 个新 PVC 均 Bound/Retain、共 670Gi；41 个目标共享 CRD 的 UID/schema 保持一致。12 个节点 Ready 且无压力，原平台在启用 TLS 校验时 `/healthz` 返回 200。原生证书轮转 Cron 继续暂停，未在清理中启用。
+
+退场后补充只读功能检查见 `final-readonly-assessment.md`：27 张新 Certificate 全 Ready；新 PG 三实例正常，primary 有两条 `streaming/quorum` 复制流、replay lag 为 0；两个夜莺应用的本地 `/ping` 均返回 `pong`；VMSelect 本地查询和 VMSelect/VMStorage/VMAuth 指标读取成功；现有 OTel gateway 0 的 logs/traces 导出队列均为 0。ClickHouse 两副本和三 Keeper Ready、Keeper 指标可读；无密码的 SQL 客户端被 `AUTHENTICATION_FAILED` 拒绝，本次没有提取 Secret 或重新执行带凭据的 `system.replicas` 查询，因此不把 Ready 状态计作本次 SQL 复验。只读端口转发已停止，没有新增测试 Pod 或修改运行配置。
