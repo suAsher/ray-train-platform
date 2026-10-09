@@ -6,13 +6,27 @@ observability stack. It is not an online status record.
 ## Image source and mirror overlays
 
 `versions.yaml` records the official Jetstack chart versions and source image
-digests. `harbor-values.yaml` and `approver-policy-harbor-values.yaml` only
-override image repository and tag so the VKE cluster can pull from Harbor when
+digests. `harbor-values.yaml` and `approver-policy-harbor-values.yaml` override
+image repository, tag, and digest so the VKE cluster can pull from Harbor when
 `quay.io`/`cdn01.quay.io` times out.
 
-The digest fields remain the official source digests. Before deployment, verify
-that each Harbor mirror resolves to the same digest as the source image. If a
-mirror digest differs, stop before Helm install or upgrade.
+For cert-manager controller, webhook, cainjector, startupapicheck, and
+acmesolver, the Harbor overlays keep the official multi-arch source index
+digest. Before deployment, verify that each Harbor mirror resolves to the same
+index digest as the source image.
+
+For approver-policy, the Harbor overlay intentionally pins only the official
+`linux/amd64` child image because copying the full multi-arch index timed out.
+Before deployment, verify both conditions:
+
+- the child digest
+  `sha256:e6547e9ff58c3fcb1bc70ef9f42dfe9297de385cfd22aa1d6754f06cb50d7cc9`
+  is a member of the official source index
+  `sha256:1a955b0a5c41d319fd56b5f85aaff6f2eaba01d70f3b1adf001eac4d7b1d49e5`;
+- `harbor.wellspiking.ai/guofeng.su/cert-manager-approver-policy:v0.28.0-amd64-e6547e9f`
+  resolves to that same `linux/amd64` child digest.
+
+If any mirror digest differs, stop before Helm install or upgrade.
 
 ## Staged deployment procedure
 

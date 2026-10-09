@@ -30,5 +30,7 @@ approver-policy:
   appVersion: v0.28.0
   image: quay.io/jetstack/cert-manager-approver-policy:v0.28.0
   imageDigest: sha256:1a955b0a5c41d319fd56b5f85aaff6f2eaba01d70f3b1adf001eac4d7b1d49e5
-  mirrorRepository: harbor.wellspiking.ai/guofeng.su/approver-policy
-  mirrorTag: v0.28.0-source-1a955b0a
+  mirrorRepository: harbor.wellspiking.ai/guofeng.su/cert-manager-approver-policy
+  mirrorTag: v0.28.0-amd64-e6547e9f
+  mirrorPlatform: linux/amd64
+  mirrorSourceChildDigest: sha256:e6547e9ff58c3fcb1bc70ef9f42dfe9297de385cfd22aa1d6754f06cb50d7cc9
