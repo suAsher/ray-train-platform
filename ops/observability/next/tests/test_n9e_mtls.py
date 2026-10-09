@@ -220,6 +220,29 @@ class NightingaleMTLSContractTests(unittest.TestCase):
         self.assertTrue(all(address.endswith(".nightingale.svc:26379")
                             for address in redis["Address"].split(",")))
 
+    def test_cnpg_uses_cert_manager_managed_server_certificate(self):
+        cluster = named_document("20-postgres.yaml", "Cluster")
+        certs = cluster["spec"]["certificates"]
+        self.assertEqual("obs-mtls-n9e-postgres-server", certs["serverTLSSecret"])
+        self.assertEqual("obs-mtls-ca-postgres-server-public", certs["serverCASecret"])
+        self.assertEqual("obs-mtls-postgres-client-ca", certs["clientCASecret"])
+        self.assertEqual("obs-mtls-n9e-postgres-replication", certs["replicationTLSSecret"])
+
+    def test_nightingale_pg_clients_use_cert_manager_server_ca_projection(self):
+        for filename, kind in (("35-bootstrap.yaml", "Job"), ("40-nightingale.yaml", "Deployment")):
+            with self.subTest(filename=filename):
+                document = named_document(filename, kind)
+                dumped = yaml.safe_dump(document)
+                self.assertNotIn("nightingale-postgres-ca", dumped)
+                pg_volumes = [item for item in nodes(document)
+                              if isinstance(item, dict) and item.get("name") == "pg-mtls" and "projected" in item]
+                self.assertEqual(1, len(pg_volumes))
+                sources = pg_volumes[0]["projected"]["sources"]
+                ca_sources = [source["secret"] for source in sources
+                              if source.get("secret", {}).get("name") == "obs-mtls-ca-postgres-server-public"]
+                self.assertEqual(1, len(ca_sources))
+                self.assertEqual([{"key": "ca.crt", "path": "ca.crt"}], ca_sources[0]["items"])
+
     def test_authentication_is_not_disabled_to_make_the_proxy_work(self):
         text = self.template()
         self.assertIs(section(text, "HTTP.ShowCaptcha").get("Enable"), True)
