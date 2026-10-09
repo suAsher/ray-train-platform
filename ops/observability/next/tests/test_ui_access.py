@@ -177,6 +177,23 @@ class UIAccessContracts(unittest.TestCase):
         address = grafana["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]["address"]["socket_address"]
         self.assertEqual({"address": "grafana-ui-backend.monitoring.svc", "port_value": 80}, address)
 
+    def test_secure_cookie_filter_preserves_separate_values_and_existing_attributes(self):
+        for listener in self.envoy["static_resources"]["listeners"]:
+            filters = listener["filter_chains"][0]["filters"][0]["typed_config"]["http_filters"]
+            self.assertEqual(["envoy.filters.http.lua", "envoy.filters.http.router"],
+                             [item["name"] for item in filters])
+            self.assertEqual({"filename": "/etc/ui-config/secure-cookies.lua"},
+                             filters[0]["typed_config"]["default_source_code"])
+        source = self.config["secure-cookies.lua"]
+        self.assertIn('headers:getNumValues("set-cookie")', source)
+        self.assertIn('headers:getAtIndex("set-cookie", index)', source)
+        self.assertNotIn('headers:get("set-cookie")', source)
+        self.assertIn('cookie .. "; Secure"', source)
+        self.assertIn('string.lower(cookie .. ";")', source)
+        self.assertIn('";%s*secure%s*;"', source)
+        self.assertIn('headers:add("set-cookie", cookie)', source)
+        self.assertNotIn("envoy_on_request", source)
+
     def test_runtime_has_no_api_permissions_no_gpu_and_bounded_resources(self):
         deployment = objects(self.docs, "Deployment")[0]
         self.assertEqual(2, deployment["spec"]["replicas"])
