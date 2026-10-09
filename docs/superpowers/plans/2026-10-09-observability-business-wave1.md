@@ -20,45 +20,51 @@
 
 ## 1. 架构图与当前状态
 
-- [ ] `docs/architecture/raytrain-observability-vke-20261009.svg`：可编辑、浅色展示图；三条信号泳道、治理、组件副本、云存储边界。
-- [ ] 同名 HTML：缩放与查看；PNG：在构建机渲染后视觉检查。
-- [ ] 明确区分基础设施已部署、业务指标本轮接入、生产 OTel/SSO/通知待接入；链接到操作记录。
+- [x] `docs/architecture/raytrain-observability-vke-20261009.svg`：可编辑、浅色展示图；三条信号泳道、治理、组件副本、云存储边界。
+- [x] 同名 HTML：缩放与查看；PNG：在构建机渲染后视觉检查。
+- [x] 明确区分基础设施已部署、业务指标本轮接入、生产 OTel/SSO/通知待接入；链接到操作记录。
 
 ## 2. 首批采集合同（测试先行）
 
 文件：`ops/observability/next/business-metrics/`，`victoriametrics/resources/templates/agent.yaml`、`resources/values.yaml`，`tests/test_business_metrics.py`。
 
-- [ ] 在构建机先运行新测试，确认缺实现而失败；再实现并复测。
-- [ ] 五个精确 Service：`kube-system/dcgm-exporter`、`monitoring/alloy`、`loki/loki-cpu`、`monitoring/prometheus-kube-state-metrics`、`monitoring/prometheus-prometheus-node-exporter`。
-- [ ] VMServiceScrape 位于 `victoriametrics`；label `observability.raytrain.io/scrape=business-wave1`，service 名 keep，端口精确，防止 headless 重复。
-- [ ] 发现权限只授予 `kube-system`、`monitoring`、`loki` 的 pods/services/endpoints/endpointslices 的 get/list/watch，不读取 Secret、不用 ClusterRole。
-- [ ] VMAgent 业务开关默认 false；打开时仅扩大为两个明确 scrape label，并允许 CR 的显式 namespaceSelector；其他 scrape 类型不变。
-- [ ] Alloy/Loki ServiceMonitor 只新增这两组；metric allowlist、标签丢弃与稳定 `telemetry_scope/component` 供查询验收。
+- [x] 在构建机先运行新测试，确认缺实现而失败；再实现并复测。
+- [x] 五个精确 Service：`kube-system/dcgm-exporter`、`monitoring/alloy`、`loki/loki-cpu`、`monitoring/prometheus-kube-state-metrics`、`monitoring/prometheus-prometheus-node-exporter`。
+- [x] VMServiceScrape 位于 `victoriametrics`；label `observability.raytrain.io/scrape=business-wave1`，service 名 keep，端口精确，防止 headless 重复。
+- [x] 发现权限只授予 `kube-system`、`monitoring`、`loki` 的 pods/services/endpoints/endpointslices 的 get/list/watch，不读取 Secret、不用 ClusterRole。
+- [x] VMAgent 业务开关默认 false；打开时仅扩大为两个明确 scrape label，并允许 CR 的显式 namespaceSelector；其他 scrape 类型不变。
+- [x] Alloy/Loki ServiceMonitor 只新增这两组；metric allowlist、标签丢弃与稳定 `telemetry_scope/component` 供查询验收。
 
 ## 3. 看板与夜莺使用交接
 
 文件：`business-metrics/dashboard.yaml`、`tests/test_business_dashboard.py`。
 
-- [ ] 新 dashboard UID，不覆盖现有 GPU 看板，数据源仅引用 `prometheus`，不写凭据。
-- [ ] 展示日志目标 UP、近期发送/拒收/重试、Loki 请求错误与延迟、GPU 使用、节点状态、后端工作负载状态；计数器用 rate/increase，不把历史丢弃总量当当前故障。
-- [ ] 对无指标/无请求明确 N/A，不用无条件补零遮蔽缺采；不把多副本重复样本宣称为唯一样本。
-- [ ] 夜莺使用现有 VM 只读数据源检索同批真实指标；告警渠道与接收人由用户 UI 配置，本轮不发送真实通知、不解除证书轮转 Cron 的通知门禁。
+- [x] 新 dashboard UID，不覆盖现有 GPU 看板，数据源仅引用 `prometheus`，不写凭据。
+- [x] 展示日志目标 UP、近期发送/拒收/重试、Loki 请求错误与延迟、GPU 使用、节点状态、后端工作负载状态；计数器用 rate/increase，不把历史丢弃总量当当前故障。
+- [x] 对无指标/无请求明确 N/A，不用无条件补零遮蔽缺采；不把多副本重复样本宣称为唯一样本。
+- [x] 双夜莺通过自身内部只读代理与现有数据源身份查询 GPU72/节点12成功；浏览器入口/原生登录/通知仍为后续交付，本轮不解除证书轮转 Cron 的通知门禁。
 
 ## 4. 离线与部署门禁
 
-- [ ] 仅选择上述文件/文档提交候选，经 Git bundle 导入构建机 detached worktree；正式构建目录保持不变。
-- [ ] `python3 -m unittest discover -s "$candidate/ops/observability/next/tests" -v`；Helm lint/render；检查渲染对象范围、CRD schema、selector、RBAC、无新增工作负载/PVC/Secret。
-- [ ] 独立评审 spec + 安全/正确性；记录测试、候选 SHA 与渲染摘要。
-- [ ] 保存 live VMAgent 与现有对象清单；server-side dry-run，审阅完整差异。
-- [ ] 先添加 Role/RoleBinding 与监控对象，再精确更新 VMAgent 两项配置；不重装整套观测服务。部署后的声明式配置与渲染选项写入记录，避免未来覆盖。
-- [ ] 加载 dashboard；不重启 Grafana/Alloy/Loki/原 Prometheus。
+- [x] 仅选择上述文件/文档提交候选，经 Git bundle 导入构建机 detached worktree；正式构建目录保持不变。
+- [x] `python3 -m unittest discover -s "$candidate/ops/observability/next/tests" -v`；Helm lint/render；检查渲染对象范围、CRD schema、selector、RBAC、无新增工作负载/PVC/Secret。
+- [x] 独立评审 spec + 安全/正确性；记录测试、候选 SHA 与渲染摘要。
+- [x] 保存 live VMAgent 与现有对象清单；server-side dry-run，审阅完整差异。
+- [x] 先添加 Role/RoleBinding 与监控对象，再精确更新 VMAgent 两项配置；不重装整套观测服务。部署后的声明式配置与渲染选项写入记录，避免未来覆盖。
+- [x] 加载 dashboard；不重启 Grafana/Alloy/Loki/原 Prometheus。
 
 ## 5. 线上验收与回退
 
-- [ ] 原 Prometheus 新目标精确为 Alloy 2、Loki 3，旧 target 继续 UP；新 VMAgent 五组目标按 endpoint 数量核对、连续抓取成功。
-- [ ] 经 VMAuth 现有受权只读身份查询，比较 GPU 设备数、每节点设备数、序列新鲜度；真实业务指标到达，不以 synthetic `vector(1)` 代替。
-- [ ] 验证 VM 队列/丢弃、Alloy/Loki 当前拒收与端到端日志健康；对照受保护对象 UID/spec/restarts、节点压力、后端 healthz。
-- [ ] Grafana sidecar 已加载新看板，查询实际有数据；记录未有流量的面板。
-- [ ] 验收临时资源仅清理本轮对象，不触碰用户任务/数据。文档记载真实完成项与剩余后续门禁。
+- [x] 原 Prometheus 新目标精确为 Alloy 2、Loki 3，旧 target 继续 UP；新 VMAgent 五组目标按 endpoint 数量核对、连续抓取成功。
+- [x] 经 VMAuth 现有受权只读身份查询，比较 GPU 设备数、每节点设备数、序列新鲜度；真实业务指标到达，不以 synthetic `vector(1)` 代替。
+- [x] 检查 VM 队列/丢弃、Alloy/Loki 当前拒收与平台健康；发现持续的既有旧日志回读拒收并记录，不宣称日志零丢弃。完成受保护对象 UID/spec/restarts 与后端 healthz 对照。
+- [x] Grafana sidecar 已加载新看板，查询实际有数据；记录未有流量的面板。
+- [x] 验收临时资源仅清理本轮对象，不触碰用户任务/数据。文档记载真实完成项与剩余后续门禁。
 
 回退只移除本轮两个 ServiceMonitor、五个 VMServiceScrape、看板与专属 Role/RoleBinding/NetworkPolicy，并恢复 VMAgent 原 `metrics-self` selector、`ignoreNamespaceSelectors=true`；先停采再收权限。保留 VM 已采历史，不删除 PVC、namespace 或底层数据。不以 Helm 整栈回滚覆盖别的并行变更。
+
+## 本轮完成记录
+
+最终源码 `a88f4d0`：319 tests PASS，默认与业务模式组合校验 PASS；15个新增声明对象已创建，VMAgent仅两项配置更新。27目标UP、72GPU/12节点/后端2Pod读回通过；原Prom双实例89/89UP，看板22查询成功。2473存量对象仅预期VMAgent变化1项；并发新增yolo用户调试环境已单独归因，未触碰。临时验收Pod按UID清理。
+
+架构图与操作记录已补齐；下一批应用埋点、夜莺浏览器入口/通知、Grafana VM/CH独立身份与旧流回读治理见部署记录及业务接入合同，未冒充本轮已经完成。

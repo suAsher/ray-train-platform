@@ -2,17 +2,23 @@
 
 入口：[架构、部署流程与实际操作记录](DEPLOYMENT_RUNBOOK.md) · [详细架构设计](../../../docs/superpowers/specs/2026-10-08-vke-observability-platform-design.md)
 
-下一阶段：[保留 Alloy/Loki 的扩展架构与容量方案](../../../docs/superpowers/specs/2026-10-09-observability-expansion-design.md)。用户已明确现有 Alloy/Loki 长期保留；该增量设计区分日志、指标和追踪三条链路，扩容按实测瓶颈推进，尚未改变线上采集和副本配置。
+展示与接入：[高清架构图](../../../docs/architecture/raytrain-observability-vke-20261009.png) · [可编辑 SVG](../../../docs/architecture/raytrain-observability-vke-20261009.svg) · [缩放展示页](../../../docs/architecture/raytrain-observability-vke-20261009.html) · [首波实施计划](../../../docs/superpowers/plans/2026-10-09-observability-business-wave1.md) · [应用指标与 Trace 接入合同](../../../docs/superpowers/specs/2026-10-09-platform-telemetry-integration.md)
+
+2026-10-09 后续决定：夜莺统一负责正式告警，用户后续在 UI 配置通知渠道。VMAlert 优先 recording rules，新增 Alertmanager 保留未接正式通知。夜莺当前只有受控内部入口，面向用户浏览器的访问入口仍需交付；基础设施部署不等于 SSO、业务埋点或通知已经接通。
+
+扩展依据：[保留 Alloy/Loki 的架构与容量方案](../../../docs/superpowers/specs/2026-10-09-observability-expansion-design.md)。用户已明确现有 Alloy/Loki 长期保留；指标、日志与追踪分开建设，扩容按实测瓶颈推进。
+
+**首波真实指标已经接入：** 最终候选 `a88f4d0` 319项测试通过，新增15个监控/看板声明、VMAgent两项采集配置；27个端点全部UP、VM中72GPU/12节点/后端2Pod数据核对通过，双夜莺内部只读代理也查询真实GPU指标成功。原Prom双实例89/89UP，Grafana新增“RayTrain · 日志链路与 GPU 业务”看板，22查询通过，两实例文件哈希一致。没有增加常驻Pod/PVC或升级业务应用。2473存量保护对象仅预期VMAgent变化1项。详见[实际部署与验收](DEPLOYMENT_RUNBOOK.md#2026-10-09-首波业务指标与日志自监控接入)。新自监控已揭示持续的旧日志回读拒收，不能将采集上线等同于日志零丢弃。
 
 **2026-10-09 当前状态：** `victoriametrics`、`clickhouse`、`opentelemetry`、`nightingale` 已部署，`cert-manager` 管理新身份叶证书。VM 182 项、夜莺应用 44 项/依赖 46 项及 CH/OTel 双副本精确读回通过，轮换后复验再次通过。PostgreSQL 和 VMStorage 实际续期没有替换 Pod；另外六类叶证书真实续签、13 Pod 受控轮换和随后无变更复验通过，三类签发负例通过并清理。最终候选 `741b7f2` 296 项单元测试通过；运行配置 `4768871` 的 7 条真实渲染链通过。原生组件持续轮转 CronJob 保持 suspended，待失败通知闭环；新 Alertmanager 仍为 blackhole-canary。15 个临时验收对象已按 UID 清理。
 
-旧四个 `observability-*` 命名空间及其专属资源已于 10 月 9 日按用户授权退场，21 块旧 EBS 云盘已由实际 CSI 驱动确认删除。旧 PG 的已验证备份和私有配置清单保留，旧 VM/ClickHouse 合成历史未做数据归档，不能再依赖旧卷回退。原业务链路未迁移，SSO、业务采集和正式告警接收未接入。部署归属、镜像来源、证据及未验范围见[10 月 9 日部署记录](DEPLOYMENT_RUNBOOK.md#2026-10-09-正式命名部署与验收记录)及[旧环境退场记录](DEPLOYMENT_RUNBOOK.md#2026-10-09-旧命名空间退场与云盘释放)。下面的 10 月 8 日表格、容量与数字是历史记录，旧命令不能直接用于新位置。
+旧四个 `observability-*` 命名空间及其专属资源已于 10 月 9 日按用户授权退场，21 块旧 EBS 云盘已由实际 CSI 驱动确认删除。旧 PG 的已验证备份和私有配置清单保留，旧 VM/ClickHouse 合成历史未做数据归档，不能再依赖旧卷回退。原业务链路未迁移；首波exporter旁路已接入，SSO、应用埋点和正式告警接收仍待接入。部署归属、镜像来源、证据及未验范围见[10 月 9 日部署记录](DEPLOYMENT_RUNBOOK.md#2026-10-09-正式命名部署与验收记录)及[旧环境退场记录](DEPLOYMENT_RUNBOOK.md#2026-10-09-旧命名空间退场与云盘释放)。下面的 10 月 8 日表格、容量与数字是历史记录，旧命令不能直接用于新位置。
 
 新套件稳态为 43 Pod、21 PVC、申请 **670Gi**。旧套件的 35 个常驻 Pod 和 21 块云盘已清理，释放 **670Gi**；两套并行时的 1340Gi 已降至新套件的 670Gi。这是云盘申请容量，不是实际数据使用量，也不包含原监控和训练业务的存储。
 
-本目录部署四个产品命名空间的新组件，以及独立 `cert-manager` 控制层。旧 Prometheus、Alloy、Loki、平台后端、训练任务和历史数据继续使用原链路。当前阶段只允许新组件自监控和合成 canary；清单存在或 Pod Ready 不代表业务接入、权限和高可用验收完成。
+本目录部署四个产品命名空间的新组件，以及独立 `cert-manager` 控制层。旧 Prometheus、Alloy、Loki、平台后端、训练任务和历史数据继续使用原链路。最初阶段限自监控和合成 canary，现按显式 `business-wave1` 范围接入五组真实目标；这不代表全业务接入或完整故障恢复验收。
 
-2026-10-08 后续检查点：VM 组件 release revision 3、Operator revision 5，17 个组件 Pod 就绪，现场功能与身份边界复验通过。ClickHouse 两副本、Keeper 三副本、OTel 双副本、PostgreSQL 三副本、Redis/Sentinel 三副本及夜莺双副本均已启动。CH/OTel 已通过现场身份拒绝和合成日志/trace 双副本查询；另在隔离 Docker 中通过真实 gRPC Export 和 Collector SIGKILL 后的持久队列恢复。夜莺完整应用验收 44 项、依赖端口 46 项、PostgreSQL SQL 认证 27 项均通过，CNPG webhook 来源限制及真实 API Server admission 单独验证通过。完整合同测试为 174 项通过。全部 21 个新 PVC 已 Bound，合计 670Gi。当前不接业务数据或真实通知；各项环境、证据和后续交接门禁以部署记录为准。
+2026-10-08 后续检查点：VM 组件 release revision 3、Operator revision 5，17 个组件 Pod 就绪，现场功能与身份边界复验通过。ClickHouse 两副本、Keeper 三副本、OTel 双副本、PostgreSQL 三副本、Redis/Sentinel 三副本及夜莺双副本均已启动。CH/OTel 已通过现场身份拒绝和合成日志/trace 双副本查询；另在隔离 Docker 中通过真实 gRPC Export 和 Collector SIGKILL 后的持久队列恢复。夜莺完整应用验收 44 项、依赖端口 46 项、PostgreSQL SQL 认证 27 项均通过，CNPG webhook 来源限制及真实 API Server admission 单独验证通过。完整合同测试为 174 项通过。全部 21 个新 PVC 已 Bound，合计 670Gi。该2026-10-08检查点当时尚未接业务数据或真实通知；各项环境、证据和后续交接门禁以部署记录为准。
 
 | 命名空间 | 组件 | 初始持久卷申请量 |
 | --- | --- | --- |

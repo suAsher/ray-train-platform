@@ -1,0 +1,269 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2880" height="2320" viewBox="0 0 2880 2320" role="img" aria-labelledby="title desc">
+<title id="title">RayTrain 训练平台 VKE 可观测性扩展架构</title>
+<desc id="desc">保留现有 Alloy、Loki、Prometheus 和 Grafana，扩展 VictoriaMetrics 集群、夜莺、OpenTelemetry 与 ClickHouse。首波真实指标已接入：DCGM、Node、KSM、Alloy、Loki 五组共二十七目标正常，首批 Grafana 看板使用原 Prometheus 数据源。实线表示已运行或已验证的链路，虚线表示后续接入。Kueue、Ray 深层业务指标、应用 SDK、正式 ClickHouse 管线与通知仍待完善。平台成员与任务授权保持不变。</desc>
+<defs>
+  <linearGradient id="page" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#F5F8FC"/><stop offset="1" stop-color="#EEF3FA"/></linearGradient>
+  <linearGradient id="head" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#152F51"/><stop offset="1" stop-color="#244D74"/></linearGradient>
+  <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="5" stdDeviation="9" flood-color="#345177" flood-opacity=".07"/></filter>
+  <marker id="a2563EB" markerWidth="9" markerHeight="9" refX="7.8" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L9 4.5L0 9Z" fill="#2563EB"/></marker>
+<marker id="a078679" markerWidth="9" markerHeight="9" refX="7.8" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L9 4.5L0 9Z" fill="#078679"/></marker>
+<marker id="a8B5CF6" markerWidth="9" markerHeight="9" refX="7.8" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L9 4.5L0 9Z" fill="#8B5CF6"/></marker>
+<marker id="a64748B" markerWidth="9" markerHeight="9" refX="7.8" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L9 4.5L0 9Z" fill="#64748B"/></marker>
+  <style>
+    svg{fill:#243B55}
+    text{font-family:"Noto Sans CJK SC","Microsoft YaHei","PingFang SC",sans-serif}
+    .title{font-size:44px;font-weight:750;letter-spacing:1px}
+    .subtitle{font-size:25px;fill:#BFD2E7}
+    .eyebrow{font-size:20px;font-weight:700;letter-spacing:2px}
+    .section{font-size:27px;font-weight:700}
+    .cardTitle{font-size:25px;font-weight:700}
+    .body{font-size:22px;fill:#52657A}
+    .small{font-size:21px;font-weight:500}
+    .pill{font-size:19px;font-weight:650}
+    .caption{font-size:22px;fill:#65758B}
+    .strong{font-size:24px;font-weight:700}
+  </style>
+</defs>
+<rect x="0" y="0" width="2880" height="2320" rx="0" fill="url(#page)" stroke="none" />
+<rect x="0" y="0" width="2880" height="166" rx="0" fill="url(#head)" stroke="none" />
+<text x="84" y="60" class="eyebrow" fill="#A5C4E8" >RAYTRAIN  /  OBSERVABILITY</text>
+<text x="84" y="122" class="title" fill="#FFFFFF" >训练平台 VKE 可观测性扩展架构</text>
+<text x="2790" y="69" class="subtitle" text-anchor="end">目标架构 × 当前落地状态</text>
+<text x="2790" y="116" class="subtitle" text-anchor="end">2026.10.09  ·  仅覆盖训练平台 VKE</text>
+<text x="88" y="218" class="small" >信号</text>
+<path d="M180 210h58" fill="none" stroke="#2563EB" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="254" y="218" class="small" fill="#2563EB" >指标</text>
+<path d="M350 210h58" fill="none" stroke="#078679" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="424" y="218" class="small" fill="#078679" >日志</text>
+<path d="M520 210h58" fill="none" stroke="#8B5CF6" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="594" y="218" class="small" fill="#8B5CF6" >Trace</text>
+<path d="M770 210h68" fill="none" stroke="#64748B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#a64748B)"/>
+<text x="855" y="218" class="small" >已运行 / 基础验收链路</text>
+<path d="M1210 210h68" fill="none" stroke="#64748B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="10 9" marker-end="url(#a64748B)"/>
+<text x="1295" y="218" class="small" >分阶段接入 / 待验证</text>
+<rect x="1705" y="191" width="160" height="32" rx="16" fill="#E6F5F0" stroke="none" />
+<text x="1785" y="214" class="pill" fill="#1E6F55" text-anchor="middle">原有业务在线</text>
+<rect x="1885" y="191" width="165" height="32" rx="16" fill="#EDF1FF" stroke="none" />
+<text x="1967.5" y="214" class="pill" fill="#4257A7" text-anchor="middle">新增基础已部署</text>
+<rect x="2070" y="191" width="155" height="32" rx="16" fill="#FFF4DE" stroke="none" />
+<text x="2147.5" y="214" class="pill" fill="#9D6510" text-anchor="middle">待业务接入</text>
+<text x="2788" y="218" class="small" text-anchor="end">箭头表示数据流；查询链路可双向请求 / 返回</text>
+<rect x="56" y="262" width="2768" height="1748" rx="24" fill="#FFFFFF" stroke="#CCD9E7" filter="url(#shadow)"/>
+<text x="88" y="301" class="section" fill="#233F60" >VKE 训练集群</text>
+<text x="2790" y="301" class="small" fill="#62778D" text-anchor="end">保留用户提交方式、平台授权与 Loki 查询合同</text>
+<rect x="96" y="328" width="828" height="116" rx="18" fill="#F9FCFB" stroke="#D8E1EC" />
+<rect x="96" y="344" width="5" height="84" rx="2" fill="#078679"/>
+<text x="120" y="370" class="cardTitle" >训练用户  ·  Portal / spk-rayjob</text>
+<text x="120" y="406" class="body" >现有入口 → RayTrain 后端鉴权 → 实时日志 / 历史日志</text>
+<rect x="741" y="342" width="161" height="32" rx="16" fill="#E6F5F0" stroke="none" />
+<text x="821.5" y="365" class="pill" fill="#1E6F55" text-anchor="middle">原有业务在线</text>
+<rect x="952" y="328" width="830" height="116" rx="18" fill="#FAFBFE" stroke="#D8E1EC" />
+<rect x="952" y="344" width="5" height="84" rx="2" fill="#2563EB"/>
+<text x="976" y="370" class="cardTitle" >运维入口  ·  现有 Grafana</text>
+<text x="976" y="406" class="body" >首批看板使用原 Prom；VM / CH 独立只读入口后续接入</text>
+<rect x="1593" y="342" width="165" height="32" rx="16" fill="#E6F5F0" stroke="none" />
+<text x="1675.5" y="365" class="pill" fill="#1E6F55" text-anchor="middle">首批看板已上线</text>
+<rect x="1810" y="328" width="974" height="116" rx="18" fill="#FCFAFF" stroke="#D8E1EC" />
+<rect x="1810" y="344" width="5" height="84" rx="2" fill="#8B5CF6"/>
+<text x="1834" y="370" class="cardTitle" >告警入口  ·  夜莺统一生产告警与通知</text>
+<text x="1834" y="406" class="body" >用户通过 UI 配置渠道；SSO / 角色映射待接，AM 不接正式通知</text>
+<rect x="2603" y="342" width="157" height="32" rx="16" fill="#FFF4DE" stroke="none" />
+<text x="2681.5" y="365" class="pill" fill="#9D6510" text-anchor="middle">通知待配置</text>
+<text x="110" y="492" class="eyebrow" fill="#657C94" >01  数据源</text>
+<text x="610" y="492" class="eyebrow" fill="#657C94" >02  采集与缓冲</text>
+<text x="1120" y="492" class="eyebrow" fill="#657C94" >03  存储、复制与受控查询</text>
+<text x="2220" y="492" class="eyebrow" fill="#657C94" >04  分析与告警</text>
+<rect x="82" y="520" width="2718" height="485" rx="20" fill="#F3F7FF" stroke="#D9E5FA" />
+<text x="108" y="562" class="section" fill="#2563EB" >M   指标链路</text>
+<text x="1080" y="562" class="small" fill="#506F9F" >5 组 27 目标 UP：DCGM 9 / Node 12 / KSM 1 / Alloy 2 / Loki 3</text>
+<rect x="2558" y="535" width="216" height="32" rx="16" fill="#E6F5F0" stroke="none" />
+<text x="2666" y="558" class="pill" fill="#1E6F55" text-anchor="middle">首波真实指标已接入</text>
+<rect x="106" y="596" width="420" height="342" rx="18" fill="#fff" stroke="#D8E1EC" />
+<rect x="106" y="612" width="5" height="310" rx="2" fill="#2563EB"/>
+<text x="130" y="638" class="cardTitle" >基础设施与训练指标</text>
+<text x="130" y="674" class="body" >已接：DCGM / Node / KSM</text>
+<text x="130" y="706" class="body" >已接：Alloy / Loki 自监控</text>
+<text x="130" y="738" class="body" >覆盖：72 GPU / 12 节点</text>
+<text x="130" y="770" class="small" fill="#657C94" >后续：Kueue / Ray / 业务指标</text>
+<rect x="128" y="811" width="376" height="103" rx="12" fill="#EDF3FE" stroke="#CFDDF4" />
+<text x="147" y="844" class="small" fill="#365982" >原 Prometheus / Alertmanager</text>
+<text x="147" y="876" class="small" >现有业务规则 + 关键应急监控</text>
+<rect x="600" y="638" width="445" height="170" rx="18" fill="#fff" stroke="#D8E1EC" />
+<rect x="600" y="654" width="5" height="138" rx="2" fill="#2563EB"/>
+<text x="624" y="680" class="cardTitle" >VMAgent ×2</text>
+<text x="624" y="716" class="body" >HA 抓取 · 标签治理 · 远写</text>
+<text x="624" y="748" class="body" >持久发送队列 / EBS</text>
+<text x="624" y="780" class="body" >HA 去重与采集范围单独验收</text>
+<rect x="624" y="864" width="397" height="32" rx="16" fill="#EDF1FF" stroke="none" />
+<text x="822.5" y="887" class="pill" fill="#4257A7" text-anchor="middle">新增组件自监控 / canary 已运行</text>
+<path d="M526 708H600" fill="none" stroke="#2563EB" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#a2563EB)"/>
+<path d="M526 770H600" fill="none" stroke="#2563EB" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="10 9" marker-end="url(#a2563EB)"/>
+<path d="M822 864V817" fill="none" stroke="#2563EB" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#a2563EB)"/>
+<text x="575" y="942" class="small" fill="#5C7292" >不与 Alloy 共用指标采集负载</text>
+<rect x="1110" y="596" width="1000" height="342" rx="18" fill="#FFFFFF" stroke="#C9D9F4" />
+<text x="1136" y="634" class="small" fill="#4167A3" >VictoriaMetrics Operator 管理全套 VM 组件</text>
+<rect x="1140" y="662" width="172" height="110" rx="18" fill="#fff" stroke="#D8E1EC" />
+<rect x="1140" y="678" width="5" height="78" rx="2" fill="#2563EB"/>
+<text x="1164" y="704" class="cardTitle" >VMAuth ×2</text>
+<text x="1164" y="740" class="body" >写入口</text>
+<rect x="1352" y="662" width="188" height="110" rx="18" fill="#fff" stroke="#D8E1EC" />
+<rect x="1352" y="678" width="5" height="78" rx="2" fill="#2563EB"/>
+<text x="1376" y="704" class="cardTitle" >VMInsert ×2</text>
+<text x="1376" y="740" class="body" >分片 / 复制写入</text>
+<rect x="1580" y="662" width="245" height="110" rx="18" fill="#fff" stroke="#D8E1EC" />
+<rect x="1580" y="678" width="5" height="78" rx="2" fill="#2563EB"/>
+<text x="1604" y="704" class="cardTitle" >VMStorage ×3</text>
+<text x="1604" y="740" class="body" >RF2 · EBS 50Gi ×3</text>
+<rect x="1865" y="662" width="214" height="110" rx="18" fill="#fff" stroke="#D8E1EC" />
+<rect x="1865" y="678" width="5" height="78" rx="2" fill="#2563EB"/>
+<text x="1889" y="704" class="cardTitle" >VMSelect ×2</text>
+<text x="1889" y="740" class="body" >查询汇聚</text>
+<rect x="1690" y="817" width="390" height="91" rx="18" fill="#fff" stroke="#D8E1EC" />
+<rect x="1690" y="833" width="5" height="59" rx="2" fill="#2563EB"/>
+<text x="1714" y="859" class="cardTitle" >VMAuth ×2 · 读入口</text>
+<text x="1714" y="895" class="body" >与写入口共用 HA，身份 / 路径分离</text>
+<path d="M1045 714H1140" fill="none" stroke="#2563EB" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#a2563EB)"/>
+<path d="M1312 714H1352" fill="none" stroke="#2563EB" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#a2563EB)"/>
+<path d="M1540 714H1580" fill="none" stroke="#2563EB" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#a2563EB)"/>
+<path d="M1825 714H1865" fill="none" stroke="#2563EB" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#a2563EB)"/>
+<path d="M1972 772V817" fill="none" stroke="#2563EB" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#a2563EB)"/>
+<text x="1140" y="841" class="small" fill="#526F9E" >VMCluster = insert + storage + select</text>
+<text x="1140" y="876" class="small" fill="#647C9B" >Operator 管理生命周期，不转发数据</text>
+<text x="1140" y="973" class="small" fill="#5F7698" >RF2 是存储复制；不代替备份、采集去重或跨可用区容灾</text>
+<rect x="2210" y="596" width="562" height="342" rx="18" fill="#FFFFFF" stroke="#C9D9F4" />
+<text x="2235" y="634" class="small" fill="#4167A3" >生产告警统一由夜莺负责</text>
+<rect x="2234" y="662" width="232" height="111" rx="18" fill="#fff" stroke="#D8E1EC" />
+<rect x="2234" y="678" width="5" height="79" rx="2" fill="#2563EB"/>
+<text x="2258" y="704" class="cardTitle" >VMAlert ×2</text>
+<text x="2258" y="740" class="body" >优先 recording rules</text>
+<rect x="2504" y="662" width="244" height="111" rx="18" fill="#fff" stroke="#D8E1EC" />
+<rect x="2504" y="678" width="5" height="79" rx="2" fill="#2563EB"/>
+<text x="2528" y="704" class="cardTitle" >Alertmanager ×3</text>
+<text x="2528" y="740" class="body" >保留，未接正式通知</text>
+<path d="M2466 715H2504" fill="none" stroke="#2563EB" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#a2563EB)"/>
+<rect x="2234" y="804" width="514" height="111" rx="18" fill="#fff" stroke="#D8E1EC" />
+<rect x="2234" y="820" width="5" height="79" rx="2" fill="#2563EB"/>
+<text x="2258" y="846" class="cardTitle" >夜莺 Nightingale ×2</text>
+<text x="2258" y="882" class="body" >GPU / 排队 / 任务 / 同步 / 平台 SLO</text>
+<text x="2258" y="914" class="body" >依赖：PostgreSQL ×3 + Redis/Sentinel ×3</text>
+<path d="M2080 864H2160V716H2234" fill="none" stroke="#2563EB" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#a2563EB)"/>
+<path d="M2160 864H2234" fill="none" stroke="#2563EB" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#a2563EB)"/>
+<text x="2225" y="973" class="small" fill="#5F7698" >夜莺渠道由用户在 UI 配置；正式通知尚未接通</text>
+<rect x="82" y="1034" width="2718" height="304" rx="20" fill="#F0FAF7" stroke="#CAE6DE" />
+<text x="108" y="1075" class="section" fill="#078679" >L   平台实时日志  ·  长期保留</text>
+<rect x="2610" y="1049" width="164" height="32" rx="16" fill="#E6F5F0" stroke="none" />
+<text x="2692" y="1072" class="pill" fill="#1E6F55" text-anchor="middle">原有业务在线</text>
+<rect x="106" y="1120" width="420" height="153" rx="18" fill="#fff" stroke="#D8E1EC" />
+<rect x="106" y="1136" width="5" height="121" rx="2" fill="#078679"/>
+<text x="130" y="1162" class="cardTitle" >容器 stdout / stderr</text>
+<text x="130" y="1198" class="body" >训练任务 / 调试 / 平台 / 组件</text>
+<text x="130" y="1230" class="body" >沿用 namespace / tenant / job 标签</text>
+<rect x="600" y="1120" width="445" height="153" rx="18" fill="#fff" stroke="#D8E1EC" />
+<rect x="600" y="1136" width="5" height="121" rx="2" fill="#078679"/>
+<text x="624" y="1162" class="cardTitle" >Alloy ×2 · API 分片采集</text>
+<text x="624" y="1198" class="body" >现有 StatefulSet；无需每节点部署</text>
+<text x="624" y="1230" class="body" >先补资源保障、自监控及恢复验收</text>
+<path d="M526 1197H600" fill="none" stroke="#078679" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#a078679)"/>
+<path d="M1045 1197H1110" fill="none" stroke="#078679" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#a078679)"/>
+<rect x="1110" y="1110" width="1000" height="180" rx="18" fill="#FFFFFF" stroke="#BBDDCF" />
+<rect x="1130" y="1129" width="470" height="139" rx="18" fill="#fff" stroke="#D8E1EC" />
+<rect x="1130" y="1145" width="5" height="107" rx="2" fill="#078679"/>
+<text x="1154" y="1171" class="cardTitle" >Loki ×3 · 单体 HA / RF3</text>
+<text x="1154" y="1207" class="body" >平台 LogQL 查询入口继续保留</text>
+<text x="1154" y="1239" class="body" >按写入、查询与拒收指标独立定容</text>
+<rect x="1630" y="1129" width="456" height="139" rx="18" fill="#fff" stroke="#D8E1EC" />
+<rect x="1630" y="1145" width="5" height="107" rx="2" fill="#078679"/>
+<text x="1654" y="1171" class="cardTitle" >工作盘 EBS · 50Gi ×3</text>
+<text x="1654" y="1207" class="body" >WAL / 索引 / 临时工作目录</text>
+<text x="1654" y="1239" class="body" >L1 → TOS：长期 chunks / index</text>
+<rect x="2210" y="1120" width="562" height="153" rx="18" fill="#fff" stroke="#D8E1EC" />
+<rect x="2210" y="1136" width="5" height="121" rx="2" fill="#078679"/>
+<text x="2234" y="1162" class="cardTitle" >RayTrain 后端 → Loki</text>
+<text x="2234" y="1198" class="body" >按真实成员 / 团队 / 任务归属授权</text>
+<text x="2234" y="1230" class="body" >Portal / CLI 日志行为保持兼容</text>
+<path d="M2110 1197H2210" fill="none" stroke="#078679" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#a078679)"/>
+<text x="1127" y="1321" class="small" fill="#438274" >Grafana 保留 Loki 数据源；不通过 ClickHouse 替代平台实时日志</text>
+<text x="106" y="1317" class="small" fill="#438274" >长期保留的业务链路</text>
+<rect x="82" y="1370" width="2718" height="338" rx="20" fill="#F8F4FE" stroke="#E1D6F5" />
+<text x="108" y="1411" class="section" fill="#8B5CF6" >T   应用追踪 + 精选分析日志</text>
+<rect x="2610" y="1385" width="164" height="32" rx="16" fill="#FFF4DE" stroke="none" />
+<text x="2692" y="1408" class="pill" fill="#9D6510" text-anchor="middle">真实业务待接</text>
+<rect x="106" y="1450" width="420" height="187" rx="18" fill="#fff" stroke="#D8E1EC" />
+<rect x="106" y="1466" width="5" height="155" rx="2" fill="#8B5CF6"/>
+<text x="130" y="1492" class="cardTitle" >平台后端 / 同步 Worker</text>
+<text x="130" y="1528" class="body" >异步 OTel SDK：spans / 事件</text>
+<text x="130" y="1560" class="body" >可信 job / service / trace_id</text>
+<text x="130" y="1592" class="body" >SDK 尚未实现；独立发布后接入</text>
+<rect x="130" y="1652" width="374" height="32" rx="16" fill="#EDF1FF" stroke="none" />
+<text x="317" y="1675" class="pill" fill="#4257A7" text-anchor="middle">合成 canary 使用独立测试身份</text>
+<rect x="600" y="1450" width="445" height="187" rx="18" fill="#fff" stroke="#D8E1EC" />
+<rect x="600" y="1466" width="5" height="155" rx="2" fill="#8B5CF6"/>
+<text x="624" y="1492" class="cardTitle" >OTel Gateway ×2</text>
+<text x="624" y="1528" class="body" >认证 / 字段治理 / batch / retry</text>
+<text x="624" y="1560" class="body" >持久队列 EBS 20Gi ×2</text>
+<text x="624" y="1592" class="body" >logs / traces 分队列、分别定容</text>
+<path d="M526 1547H600" fill="none" stroke="#8B5CF6" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="10 9" marker-end="url(#a8B5CF6)"/>
+<path d="M1035 1273V1440H1035V1450" fill="none" stroke="#078679" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="10 9" marker-end="url(#a078679)"/>
+<rect x="675" y="1350" width="360" height="34" rx="9" fill="#fff" stroke="#078679" />
+<text x="855" y="1375" class="small" fill="#078679" text-anchor="middle">白名单日志分支：隔离验收后再接</text>
+<path d="M1045 1517H1110" fill="none" stroke="#8B5CF6" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#a8B5CF6)"/>
+<path d="M1045 1570H1110" fill="none" stroke="#078679" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#a078679)"/>
+<rect x="1110" y="1450" width="1000" height="187" rx="18" fill="#FFFFFF" stroke="#D8C7EF" />
+<rect x="1132" y="1470" width="498" height="145" rx="18" fill="#fff" stroke="#D8E1EC" />
+<rect x="1132" y="1486" width="5" height="113" rx="2" fill="#8B5CF6"/>
+<text x="1156" y="1512" class="cardTitle" >ClickHouse · 1 shard ×2 replicas</text>
+<text x="1156" y="1548" class="body" >分析日志 / traces / lookup</text>
+<text x="1156" y="1580" class="body" >EBS 100Gi ×2 · 表 / 保留期单独管理</text>
+<rect x="1660" y="1470" width="428" height="145" rx="18" fill="#fff" stroke="#D8E1EC" />
+<rect x="1660" y="1486" width="5" height="113" rx="2" fill="#8B5CF6"/>
+<text x="1684" y="1512" class="cardTitle" >ClickHouse Keeper ×3</text>
+<text x="1684" y="1548" class="body" >复制协调 / 元数据</text>
+<text x="1684" y="1580" class="body" >EBS 20Gi ×3</text>
+<rect x="2210" y="1450" width="562" height="187" rx="18" fill="#fff" stroke="#D8E1EC" />
+<rect x="2210" y="1466" width="5" height="155" rx="2" fill="#8B5CF6"/>
+<text x="2234" y="1492" class="cardTitle" >Grafana / 受限分析入口</text>
+<text x="2234" y="1528" class="body" >按 job / service / 时间关联</text>
+<text x="2234" y="1560" class="body" >trace_id 仅作事件字段，不做指标标签</text>
+<text x="2234" y="1592" class="body" >SQL 只读身份 + 查询范围控制</text>
+<path d="M2110 1547H2210" fill="none" stroke="#8B5CF6" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="10 9" marker-end="url(#a8B5CF6)"/>
+<text x="1117" y="1677" class="small" fill="#7E66A1" >OTel → CH 实线当前为 canary；生产 pipeline、表、身份和查询数据源仍待接入</text>
+<rect x="82" y="1740" width="2718" height="238" rx="20" fill="#F7F9FC" stroke="#D8E1EC" />
+<text x="108" y="1781" class="section" fill="#4D647C" >共同运维底座</text>
+<text x="2790" y="1781" class="small" fill="#62758B" text-anchor="end">新增体系：43 Pod · 21 PVC · 670Gi 初始申请容量（不含原监控 / 训练）</text>
+<rect x="106" y="1803" width="634" height="150" rx="18" fill="#fff" stroke="#D8E1EC" />
+<rect x="106" y="1819" width="5" height="118" rx="2" fill="#64748B"/>
+<text x="130" y="1845" class="cardTitle" >Operator / 声明式交付</text>
+<text x="130" y="1881" class="body" >VM Operator · Altinity · CloudNativePG</text>
+<text x="130" y="1913" class="body" >Helm / 清单 / 固定镜像 digest / 变更验收</text>
+<rect x="768" y="1803" width="644" height="150" rx="18" fill="#fff" stroke="#D8E1EC" />
+<rect x="768" y="1819" width="5" height="118" rx="2" fill="#64748B"/>
+<text x="792" y="1845" class="cardTitle" >cert-manager / mTLS / RBAC</text>
+<text x="792" y="1881" class="body" >签发续期已运行；服务身份与原生端口受控</text>
+<text x="792" y="1913" class="body" >原生组件轮转 Cron 待正式失败通知后启用</text>
+<rect x="1440" y="1803" width="618" height="150" rx="18" fill="#fff" stroke="#D8E1EC" />
+<rect x="1440" y="1819" width="5" height="118" rx="2" fill="#64748B"/>
+<text x="1464" y="1845" class="cardTitle" >资源与可用性</text>
+<text x="1464" y="1881" class="body" >GPU 请求为 0；低优先级、不抢占训练</text>
+<text x="1464" y="1913" class="body" >副本按节点分散；CPU / 内存 / 网络共享</text>
+<rect x="2086" y="1803" width="686" height="150" rx="18" fill="#fff" stroke="#D8E1EC" />
+<rect x="2086" y="1819" width="5" height="118" rx="2" fill="#64748B"/>
+<text x="2110" y="1845" class="cardTitle" >可恢复性与访问治理</text>
+<text x="2110" y="1881" class="body" >VM / CH / PG / 配置 / 证书材料独立备份</text>
+<text x="2110" y="1913" class="body" >最小权限 + 恢复演练；SSO 不替代 API 授权</text>
+<text x="90" y="2052" class="eyebrow" fill="#627990" >VKE 外部已有云依赖  ·  TOS 上海地域对象存储</text>
+<rect x="82" y="2073" width="1320" height="167" rx="18" fill="#F1F8F5" stroke="#B9D8CD" />
+<rect x="108" y="2095" width="52" height="34" rx="9" fill="#fff" stroke="#078679" />
+<text x="134" y="2120" class="small" fill="#078679" text-anchor="middle">L1</text>
+<text x="180" y="2121" class="cardTitle" fill="#2E6F60" >Loki 长期日志对象</text>
+<text x="108" y="2165" class="body" >现有 TOS 桶 · 上海内网 endpoint · 当前保留 30 天</text>
+<text x="108" y="2203" class="small" fill="#4A7D6D" >EBS 工作盘与 TOS 历史容量分别观察；平台历史查询持续可用</text>
+<rect x="1430" y="2073" width="1370" height="167" rx="18" fill="#F7F8FC" stroke="#D1DCEA" />
+<rect x="2618" y="2095" width="154" height="32" rx="16" fill="#FFF4DE" stroke="none" />
+<text x="2695" y="2118" class="pill" fill="#9D6510" text-anchor="middle">待完善 / 演练</text>
+<text x="1456" y="2121" class="cardTitle" >独立备份前缀与恢复材料</text>
+<text x="1456" y="2165" class="body" >目标：VM / ClickHouse / PostgreSQL + 声明配置 + 身份恢复材料</text>
+<text x="1456" y="2203" class="small" fill="#62738B" >PG 已做备份恢复验证；定时备份、保留策略及 RPO / RTO 逐项落地</text>
+<text x="88" y="2284" class="caption" >容量按代表性高峰与 N−1 余量验证；增加新组件不等于所有信号都经过 Alloy。</text>
+<text x="2790" y="2284" class="caption" text-anchor="end">来源：部署记录 + 扩展设计  ·  状态为 2026-10-09 检查点</text>
+</svg>

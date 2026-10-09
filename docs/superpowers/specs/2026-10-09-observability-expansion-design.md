@@ -1,12 +1,12 @@
 # VKE 可观测性扩展：保留 Alloy/Loki，分开扩展指标、分析日志与追踪
 
-日期：2026-10-09。状态：设计与只读容量核对；本轮未修改线上采集、资源配额或副本数。用户已明确：平台依赖 Loki + Alloy，二者长期保留并完善，不作为新体系建成后的退场对象。
+日期：2026-10-09。最初检查点为设计与只读容量核对；用户随后授权推进，首波27个真实指标端点、Grafana看板与日志自监控已上线，未改变Alloy/Loki副本或日志采集配置。实际验收及揭示的持续旧日志拒收见[首波部署记录](../../../ops/observability/next/DEPLOYMENT_RUNBOOK.md#2026-10-09-首波业务指标与日志自监控接入)。用户已明确：平台依赖 Loki + Alloy，二者长期保留并完善，不作为新体系建成后的退场对象。
 
 本文件补充 [总体架构设计](2026-10-08-vke-observability-platform-design.md) 与 [当前部署记录](../../../ops/observability/next/DEPLOYMENT_RUNBOOK.md)。范围仍为训练平台 VKE，不扩展 common/IDC，也不改变用户提交任务的方式。已删除的四个 `observability-*` namespace 是重复建设阶段的旧新增组件，与原 `monitoring`/`loki` 链路不同。
 
 ## 1. 当前事实与容量判断
 
-本轮只读核对的现状：
+下文容量表与60秒样本为接入前的只读快照，保留原观察窗口；不能将其短窗口“无新增丢弃”泛化为后续持续正常：
 
 | 组件 | 当前配置 | 本次瞬时资源观测 | 判断边界 |
 | --- | --- | --- | --- |
@@ -122,7 +122,7 @@ OTel logs/traces 配独立 exporter 队列、重试和配额；同进程的两�
 ## 6. 指标、告警、入口和权限
 
 - VMAgent 主采集复用已有 exporter；两副本同目标 HA 抓取与容量分片是不同设计。HA 标签、去重周期、VMSelect/VMStorage 配置按真实 15s/30s/60s 抓取测试，RF2 存储复制不能代替采集去重。[VMAgent HA](https://docs.victoriametrics.com/operator/resources/vmagent/)
-- VMAlert 执行基础设施/recording 规则，夜莺负责 GPU、排队、任务阶段、同步和平台 SLO；Prometheus 保留应急规则。每组只有一个正式通知所有者，缺数据不能误判为恢复。
+- 根据 10 月 9 日用户确认，夜莺统一负责正式告警、事件与通知，通知渠道和接收人由用户后续在 UI 配置。VMAlert 优先执行 recording rules；新增 Alertmanager 暂不连接正式通知。原 Prometheus 已有规则在迁移对照期间保留，逐组交接后避免重复通知，缺数据不能误判为恢复。
 - Grafana 复用现有实例，通过 VM/Loki/ClickHouse 数据源联查。按 cluster/service/job/time、可信 trace_id 关联，不将 trace_id、request_id 变成高基数指标或 Loki 索引标签；保留平台既有 job/tenant 标签兼容。
 - Portal/CLI 继续经 RayTrain 后端按真实成员、团队和任务归属授权查询。运维 Grafana 数据源用受限只读身份；普通用户不能通过共享 SQL 账号、变量或文件夹获得全库查询。
 - 新内部链路沿用已验证的 mTLS、RBAC 和 cert-manager。原 Loki 内部入口的访问保护需单独兼容性核对，不能仅开启 `auth_enabled` 改变历史 tenant 语义；不因入口看板有 SSO 就认定所有原生端口已隔离。

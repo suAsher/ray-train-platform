@@ -2,9 +2,13 @@
 
 更新日期：2026-10-09，时间均为北京时间，另有标注除外。
 
+**最新推进：首波真实业务指标已上线。** 五组 27 个目标全部 UP，VM 中核对到 72 张 GPU、12 个节点和 2 个后端 Pod；原 Prometheus 的两个实例均 89/89 UP，新 Grafana 看板 22 个表达式查询成功。319 项回归、默认与业务模式边界校验及服务端 dry-run 通过。详见文末[首波业务接入记录](#2026-10-09-首波业务指标与日志自监控接入)。这不代表 SDK、正式 Trace/分析日志、外部夜莺入口和真实通知已经交付。
+
+展示资料：[高清架构图](../../../docs/architecture/raytrain-observability-vke-20261009.png) · [可编辑 SVG](../../../docs/architecture/raytrain-observability-vke-20261009.svg) · [缩放展示页](../../../docs/architecture/raytrain-observability-vke-20261009.html) · [下一批应用接入合同](../../../docs/superpowers/specs/2026-10-09-platform-telemetry-integration.md)。正式告警按用户确认统一由夜莺负责，通知渠道由用户后续 UI 配置。
+
 **当前检查点（2026-10-09）：正常命名空间的新增体系已经部署，并完成 VM、N9E 与 CH/OTel 基础线上验收、真实证书续期和受控轮换验证。** 当前名称是 `cert-manager`、`victoriametrics`、`clickhouse`、`opentelemetry`、`nightingale`。六类原生叶证书续签、13 Pod 逐副本轮换及随后无变更复验通过；持续轮转 CronJob 保持 suspended，待失败通知闭环。受控演练不等于周期性证书消费已经启用。
 
-旧四个 `observability-*` 命名空间、专属组件及 21 块 EBS 云盘已按用户明确授权清理，实际 CSI 驱动逐盘确认底层删除成功；PG 已验证备份和私有配置清单保留，旧 VM/ClickHouse 合成历史未归档，不能再依赖旧卷回退。原训练平台、Prometheus、Alloy、Loki 业务链路未迁移；SSO、业务采集、正式告警接收尚未接入。新位置的实际部署归属、镜像、续期与证据见[10 月 9 日部署记录](#2026-10-09-正式命名部署与验收记录)，本次清理见[旧环境退场记录](#2026-10-09-旧命名空间退场与云盘释放)。
+旧四个 `observability-*` 命名空间、专属组件及 21 块 EBS 云盘已按用户明确授权清理，实际 CSI 驱动逐盘确认底层删除成功；PG 已验证备份和私有配置清单保留，旧 VM/ClickHouse 合成历史未归档，不能再依赖旧卷回退。原训练平台、Prometheus、Alloy、Loki 业务链路未迁移；首波 exporter 已在后续旁路接入，SSO、应用埋点、正式告警接收尚未接入。新位置的实际部署归属、镜像、续期与证据见[10 月 9 日部署记录](#2026-10-09-正式命名部署与验收记录)，本次清理见[旧环境退场记录](#2026-10-09-旧命名空间退场与云盘释放)。
 
 新套件稳态为 **43 Pod、21 PVC、申请 670Gi**；旧套件的 **35 个常驻 Pod、21 块云盘/670Gi** 已清理。两套并行时的 1340Gi 已降至新套件的 670Gi。这是已申请容量，不是实际数据使用量，不包含原监控和训练业务存储；后续扩容另增成本。
 
@@ -547,3 +551,52 @@ CH/OTel `result.json` 保存逐项 JSONL，**最后一行**为 `status=passed`�
 04:52:04 UTC 最终只读对比通过：排除已授权退场的四个旧 namespace 后，67 个控制器、731 个 Pod、804 个 RayJob/RayCluster、115 个 PVC 和 112 个共享对象的记录均与 04:38 基线一致，非预期差异为 0。新 43 个常驻 Pod 全 Ready、重启 0、GPU 申请 0，21 个新 PVC 均 Bound/Retain、共 670Gi；41 个目标共享 CRD 的 UID/schema 保持一致。12 个节点 Ready 且无压力，原平台在启用 TLS 校验时 `/healthz` 返回 200。原生证书轮转 Cron 继续暂停，未在清理中启用。
 
 退场后补充只读功能检查见 `final-readonly-assessment.md`：27 张新 Certificate 全 Ready；新 PG 三实例正常，primary 有两条 `streaming/quorum` 复制流、replay lag 为 0；两个夜莺应用的本地 `/ping` 均返回 `pong`；VMSelect 本地查询和 VMSelect/VMStorage/VMAuth 指标读取成功；现有 OTel gateway 0 的 logs/traces 导出队列均为 0。ClickHouse 两副本和三 Keeper Ready、Keeper 指标可读；无密码的 SQL 客户端被 `AUTHENTICATION_FAILED` 拒绝，本次没有提取 Secret 或重新执行带凭据的 `system.replicas` 查询，因此不把 Ready 状态计作本次 SQL 复验。只读端口转发已停止，没有新增测试 Pod 或修改运行配置。
+
+## 2026-10-09 首波业务指标与日志自监控接入
+
+### 实际变更与版本
+
+用户要求完善展示架构、继续建设并接入业务，同时确认夜莺统一正式告警，通知渠道由其后续在 UI 配置。本轮先复用已有 exporter，不改变训练提交、日志查询、调度或业务数据路径。
+
+候选 `966eeb0` 增加首批采集与看板；`a88f4d0` 补齐显式业务模式的安全校验器，是最终验证源码。测试先行候选 `e357225`、`8946794` 均在构建机隔离工作树复现失败后实现；最终 **319 tests PASS**，原自监控模式与 `--business-wave1` 组合校验均 PASS，真实 Helm/SDS 渲染及 server-side dry-run 通过。新增目标名称全部确认不存在，部署清单在最终校验修复前后字节一致。
+
+本轮通过 Helm 模板渲染后 `kubectl create` 新增 **15 个声明对象**：5 个 VMServiceScrape、2 个 ServiceMonitor、3 个 Role、3 个 RoleBinding、1 个 NetworkPolicy、1 个 Grafana ConfigMap。未创建新 Helm release，未升级整套 VM release。随后以 UID 和原字段值为前置条件的 JSON Patch，只更新 VMAgent `ignoreNamespaceSelectors` 和 `serviceScrapeSelector`。没有新增常驻工作负载、PVC 或业务凭据，也没有构建/发布后端、Worker 或 Portal 镜像。
+
+| 目标 | namespace / Service | VM 实际端点 | 原 Prometheus |
+| --- | --- | ---: | --- |
+| Alloy | monitoring / alloy | 2 | 新增2 |
+| Loki | loki / loki-cpu | 3 | 新增3 |
+| GPU/DCGM | kube-system / dcgm-exporter | 9（72 GPU） | 保留原抓取 |
+| Kubernetes 状态 | monitoring / prometheus-kube-state-metrics | 1 | 保留原抓取 |
+| 节点 | monitoring / prometheus-prometheus-node-exporter | 12 | 保留原抓取 |
+
+VMAgent 两副本 HA 完整抓取，30s 采样与去重，未启用分片。选择器仅接受 `metrics-self` 与 `business-wave1`，监控 CR 仍仅位于 `victoriametrics`；发现权限只增至表中三个源 namespace 的 Pod/Service/Endpoint/EndpointSlice 元数据。原 Prometheus 和新 VM 暂时并行，增加抓取请求；metric allowlist 只降低写入序列，不减少 exporter 的响应字节。NetworkPolicy 仍只是声明，CNI 未改。
+
+KSM/DCGM 的目标自身标签改存 `exporter_namespace/exporter_pod/exporter_node`，保留原始业务 `namespace/pod/container`；旧 Prom 的 DCGM 对应字段是 `exported_*`，对照时必须映射。上线前原始27端点的白名单标签裁剪冲突为0；保留 HTTP method、Loki policy/retention、设备及错误码等天然区别维度。日后 exporter 版本或允许指标变更需重做碰撞检查。
+
+**声明式维护注意：** 现网 VMAgent 已启用业务采集，源码默认值为关闭以保护全新安装。下一次 VM Helm 更新必须显式保留 `businessScrape.enabled=true`，并使用 `validate_component_contract.py --business-wave1 <operator-render> <vm-render> <business-render>`；不能直接用默认值覆盖生产。新增对象由本轮声明式清单管理，不能假定存在同名 Helm release。
+
+### 真实数据、看板与运行保护验收
+
+- VMAuth 受控只读入口跨多个采集周期验收：五组共27目标全部UP、72个不同 Hostname/UUID GPU、每个GPU节点8卡；12节点Ready、后端2 Pod Ready。两次GPU序列最大年龄约25s/29s，VM发送队列及近期远写丢弃为0。
+- 两个夜莺 Pod 分别通过自身 localhost18427只读代理、服务 mTLS 与现有只读数据源令牌，查询实际GPU72、节点12成功。令牌仅内存/stdin使用，未显示、落盘或置于argv；未创建数据源或告警、未绕过用户登录。这验证夜莺服务→VM真实数据路径，**不代替浏览器入口/原生登录/通知交付**。
+- 两个原Prometheus均89/89目标UP，新目标严格Alloy2+Loki3；没有headless重复。Grafana看板 **“RayTrain · 日志链路与 GPU 业务”**，UID `raytrain-observability-wave1`，22个表达式全部查询成功。两Grafana sidecar文件SHA与线上CM一致，均已加载该UID。无请求副本的Loki写入p95为NaN/N/A，不补零伪装请求正常。
+- 本轮低负载快照：VMAgent约7/8m CPU、170/143Mi内存。只是上线时点，不代替代表性高峰与N−1验证。平台`/healthz`返回200。
+- 2473个存量保护对象中，只有预期VMAgent spec变化1项，其余2472无变化；非预期存量差异0，存量训练生命周期差异0。并发出现一个yolo用户调试RayCluster及head/worker，06:00:36/37 UTC创建且正常Ready/0重启；它们是用户新工作区，未作为验收资源处理。比较脚本因这三个新增对象标记review-required，已逐项人工归因，未用通用namespace豁免。
+- 唯一本轮临时只读Pod `business-wave1-readonly` 仅挂既有canary叶身份与只读令牌，无API令牌/GPU/宿主权限/持久盘。首次查询遇瞬时DNS解析失败，复核DNS后两次真实数据验收成功；失败记录保留。验收后按创建UID清理并确认absent。新增体系常驻Pod/PVC数量未因本轮增加。
+
+### 自监控暴露的既有问题
+
+**接入验收通过不等于日志零丢弃。** 本轮原始counter前后约23分钟：Alloy `ingester_error` 丢弃增加1838+1236，Loki `greater_than_max_sample_age` 拒收增加129，近期仍发生。两端口径不同，不能把差值当作额外唯一丢失条数。
+
+看板CM创建于05:56:13 UTC。在90分钟错误样本中，Alloy0的155次对应错误有144次早于部署，Alloy1的111次有101次早于部署。被拒收源包括CSI/device-plugin、node-exporter、Prom reloader与长期调试工作区，日志时间来自8月/9月，超过现有7天接收窗口；部分流约每60分钟再次出现相同旧时间戳，支持旧流回读/重连恢复问题，应列为下一项日志可靠性治理。
+
+超长行原始counter为2→2，本轮增量0，没有新超长拒收证据。新接入序列首个窗口的 `increase` 表象不能取代原始counter差量与事件时间；本轮不把它计作新增长行错误。未放宽Loki历史/行长接收限制，未改Alloy发现范围、尾读或WAL。后续须验证Completed/长驻Pod、断连/重启与最后一段日志完整性，再决定过滤、位点和持久队列方案，不能为了压平告警丢掉有效任务日志。
+
+### 后续业务交付与证据
+
+下一步：先交付夜莺正式浏览器访问入口及通知配置指引；为Grafana→VM/CH接独立只读身份；治理Alloy旧流回读与资源保障。随后按[业务接入合同](../../../docs/superpowers/specs/2026-10-09-platform-telemetry-integration.md)发布后端HTTP/控制器指标、Worker阶段数据和异步Trace，建立正式OTel/CH pipeline。当前后端`/metrics`仍404，未将其伪装成已接业务端点。用户任务提交方式继续保持兼容。
+
+本轮构建机私有证据：`/root/raytrain-observability-business-wave1-20261009T061500Z`，以文件内UTC时间为准。主要文件：`final-tests.log`、`combined-validator.log`、`default-validator.log`、`business-create.log`、`vmagent-before.json`/`vmagent-after.json`、`vm-real-metrics-check-{1,2,3}.json`、`nightingale-vm-read-business.json`、`prometheus-live-targets-acceptance.json`、`dashboard-query-acceptance.json`、`grafana-sidecar-file-acceptance.json`、`protected-comparison-final.json`、`concurrent-new-workspace-readonly.json`、`old-log-replay-metadata.json`、`long-line-rejection-metadata.json`、`readonly-probe-cleanup.json`。原始错误分析仅提取stream/时间等必要元数据，不共享用户日志正文。
+
+回退按[首波采集说明](business-metrics/README.md)：先恢复VMAgent两字段停止新VM采集，再精确移除本轮新增对象；原Prometheus保留已有目标，VM已采历史自然过期，不删除任何namespace/PVC/训练资源。
