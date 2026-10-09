@@ -104,7 +104,9 @@ class BusinessMetricsRenderContracts(unittest.TestCase):
     def test_metrics_and_labels_are_allowlisted_without_losing_identity(self):
         examples = {
             "alloy": ["loki_write_sent_entries_total", "loki_write_dropped_entries_total",
-                      "loki_write_batch_retries_total", "process_resident_memory_bytes"],
+                      "loki_write_batch_retries_total", "process_resident_memory_bytes",
+                      "cluster_ready_for_traffic", "cluster_node_peers",
+                      "loki_write_entry_propagation_latency_seconds_bucket"],
             "loki": ["loki_distributor_lines_received_total", "loki_discarded_samples_total",
                      "loki_ingester_flush_queue_length", "loki_request_duration_seconds_bucket"],
             "dcgm": ["DCGM_FI_DEV_GPU_UTIL", "DCGM_FI_DEV_FB_USED", "DCGM_FI_DEV_FB_FREE"],
@@ -127,6 +129,62 @@ class BusinessMetricsRenderContracts(unittest.TestCase):
                 self.assertIsNotNone(re.fullmatch(labels[0]["regex"], label), f"{component}: {label}")
             for label in ("token", "email", "username", "trace_id", "request_id", "authorization"):
                 self.assertIsNone(re.fullmatch(labels[0]["regex"], label), f"{component}: {label}")
+
+    def test_business_source_labels_do_not_collide_with_discovery_labels(self):
+        for component in ("dcgm", "kube-state-metrics"):
+            endpoint = self.targets()[component]["spec"]["endpoints"][0]
+            rules = endpoint["relabelConfigs"]
+            # Prometheus target namespace/pod are exporter coordinates, while
+            # KSM/DCGM sample labels describe the observed training workload.
+            labels = {"namespace": "monitoring", "pod": "exporter-0", "container": "exporter",
+                      "node": "target-node", "service": "exporter", "endpoint": "metrics",
+                      "__meta_kubernetes_namespace": "monitoring",
+                      "__meta_kubernetes_pod_name": "exporter-0",
+                      "__meta_kubernetes_pod_node_name": "target-node"}
+            for rule in rules:
+                if rule.get("action", "replace") == "replace" and rule.get("sourceLabels"):
+                    value = ";".join(labels.get(key, "") for key in rule["sourceLabels"])
+                    labels[rule["targetLabel"]] = value
+                if rule.get("action") == "labeldrop":
+                    labels = {key: value for key, value in labels.items()
+                              if not re.fullmatch(rule["regex"], key)}
+            for key in ("namespace", "pod", "container", "node"):
+                self.assertNotIn(key, labels, f"{component}: target {key} would overwrite source")
+            self.assertEqual("monitoring", labels["exporter_namespace"])
+            self.assertEqual("exporter-0", labels["exporter_pod"])
+            self.assertEqual("target-node", labels["exporter_node"])
+            allowed = next(rule["regex"] for rule in endpoint["metricRelabelConfigs"]
+                           if rule["action"] == "labelkeep")
+            for key in ("namespace", "pod", "container", "node", "exporter_namespace", "exporter_pod"):
+                self.assertIsNotNone(re.fullmatch(allowed, key), f"{component}: required {key} lost")
+        expected = {
+            "dcgm": ["Hostname", "UUID", "modelName", "gpu", "exported_namespace", "exported_pod", "err_code"],
+            "node-exporter": ["cpu", "mode", "device", "device_error", "mountpoint", "fstype"],
+            "kube-state-metrics": ["resource", "unit", "phase", "condition", "status", "reason",
+                                   "pod_cidr", "priority_class"],
+            "alloy": ["pod", "le", "state", "component_id", "host", "tenant", "component_path", "cluster_name"],
+            "loki": ["pod", "le", "route", "status_code", "reason", "tenant", "format", "policy",
+                     "retention_hours", "is_internal_stream", "method", "ws", "type"],
+        }
+        for component, required_labels in expected.items():
+            rules = self.targets()[component]["spec"]["endpoints"][0]["metricRelabelConfigs"]
+            allowed = next(rule["regex"] for rule in rules if rule["action"] == "labelkeep")
+            for key in required_labels:
+                self.assertIsNotNone(re.fullmatch(allowed, key), f"{component}: {key}")
+
+    def test_dcgm_distinct_error_codes_survive_without_unbounded_error_messages(self):
+        rules = self.targets()["dcgm"]["spec"]["endpoints"][0]["metricRelabelConfigs"]
+        allowed = next(rule["regex"] for rule in rules if rule["action"] == "labelkeep")
+        source = [
+            {"__name__": "DCGM_FI_DEV_XID_ERRORS", "UUID": "GPU-fixture", "err_code": "31", "err_msg": "text-a"},
+            {"__name__": "DCGM_FI_DEV_XID_ERRORS", "UUID": "GPU-fixture", "err_code": "43", "err_msg": "text-b"},
+        ]
+        series = [tuple(sorted((key, value) for key, value in sample.items()
+                               if re.fullmatch(allowed, key))) for sample in source]
+        self.assertEqual(2, len(set(series)))
+        self.assertIsNone(re.fullmatch(allowed, "err_msg"))
+        # Actual source versions also need the pre-release raw endpoint collision
+        # gate: a fixture cannot prove err_code -> err_msg remains 1:1 in future.
 
     def test_cross_namespace_discovery_has_no_secret_or_write_permissions(self):
         roles = only(self.objects, "Role")
@@ -168,7 +226,8 @@ class BusinessMetricsRenderContracts(unittest.TestCase):
         self.assertEqual({(target[0], target[3]) for target in TARGETS.values()}, actual)
 
     def test_chart_rejects_wrong_namespace_and_non_30_second_interval(self):
-        for namespace, args in (("default", []), ("victoriametrics", ["--set", "scrapeInterval=15s"])):
+        for namespace, args in (("default", []), ("victoriametrics", ["--set", "scrapeInterval=15s"]),
+                                ("victoriametrics", ["--set", "prometheusNamespace=default"])):
             with self.subTest(namespace=namespace, args=args):
                 self.assertNotEqual(0, render(CHART, namespace, *args, success=False).returncode)
 

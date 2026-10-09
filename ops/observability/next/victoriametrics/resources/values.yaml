@@ -5,8 +5,10 @@ priorityClassName: raytrain-observability-additive
 clusterLabel: raytrain-vke
 tenantID: "1001"
 scrapeInterval: 30s
-# First stage has only 30-second self targets. Reassess before other targets join.
+# Self targets and the opt-in business-wave1 targets share this 30-second cadence.
 dedupInterval: 30s
+businessScrape:
+  enabled: false
 retentionPeriod: 30d
 imagePullSecrets: []
 images:

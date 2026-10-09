@@ -27,6 +27,10 @@ class BusinessDashboardContracts(unittest.TestCase):
         self.assertEqual("ConfigMap", self.config["kind"])
         self.assertEqual("monitoring", self.config["metadata"]["namespace"])
         self.assertEqual("1", self.config["metadata"]["labels"]["grafana_dashboard"])
+        self.assertEqual("raytrain-observability-next",
+                         self.config["metadata"]["labels"]["app.kubernetes.io/part-of"])
+        self.assertEqual("business-wave1",
+                         self.config["metadata"]["labels"]["observability.raytrain.io/wave"])
         self.assertEqual("raytrain-observability-wave1", self.dashboard["uid"])
         self.assertNotEqual("gpu-training-dashboard", self.config["metadata"]["name"])
         self.assertEqual(1, len(self.config["data"]))

@@ -74,10 +74,21 @@ spec:
   scrapeInterval: {{ .Values.scrapeInterval }}
   scrapeTimeout: 10s
   selectAllByDefault: false
+  {{- if .Values.businessScrape.enabled }}
+  # Cross-namespace targets are explicit in the five business-wave1 CRs; the
+  # VMAgent SA only receives discovery Roles in their three source namespaces.
+  ignoreNamespaceSelectors: false
+  serviceScrapeSelector:
+    matchExpressions:
+      - key: observability.raytrain.io/scrape
+        operator: In
+        values: [metrics-self, business-wave1]
+  {{- else }}
   ignoreNamespaceSelectors: true
   serviceScrapeSelector:
     matchLabels:
       observability.raytrain.io/scrape: metrics-self
+  {{- end }}
   # No namespace selector: discover these explicitly labelled CRs here only.
   # All other scrape selectors intentionally remain nil (select nothing).
   externalLabelName: ""

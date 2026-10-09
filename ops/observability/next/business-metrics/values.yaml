@@ -1,0 +1,92 @@
+expectedNamespace: victoriametrics
+scrapeInterval: 30s
+scrapeTimeout: 10s
+prometheusNamespace: monitoring
+scraperServiceAccount: vm-self-scraper
+# This chart creates no workloads, credentials, data volumes or notification rules.
+networkPolicy:
+  enabled: true
+# Dashboard provisioning is owned separately; the existing Grafana sidecar reads it.
+dashboard:
+  enabled: true
+
+# These are the five reviewed, existing Services. Namespace discovery is granted
+# only in these three namespaces. Service-name keep rules exclude headless copies.
+targets:
+  - component: alloy
+    namespace: monitoring
+    service: alloy
+    portName: http-metrics
+    port: 12345
+    serviceLabels:
+      app.kubernetes.io/name: alloy
+      app.kubernetes.io/instance: alloy
+    podLabels:
+      app.kubernetes.io/name: alloy
+      app.kubernetes.io/instance: alloy
+    prometheusMonitor: true
+    preserveWorkloadLabels: false
+    metrics: 'process_(cpu_seconds_total|resident_memory_bytes|open_fds|max_fds)|go_(goroutines|memstats_alloc_bytes|memstats_heap_inuse_bytes)|cluster_(ready_for_traffic|node_peers)|loki_write_(sent_entries_total|sent_bytes_total|dropped_entries_total|dropped_bytes_total|batch_retries_total|entry_propagation_latency_seconds(_bucket|_count|_sum)?|request_duration_seconds(_bucket|_count|_sum)?)|loki_source_kubernetes_.*'
+    labels: '__name__|job|instance|cluster|component|telemetry_scope|namespace|pod|container|node|service|endpoint|exporter_namespace|exporter_pod|exporter_node|component_id|component_path|cluster_name|host|tenant|reason|le|route|status_code|state'
+  - component: loki
+    namespace: loki
+    service: loki-cpu
+    portName: http-metrics
+    port: 3100
+    serviceLabels:
+      app.kubernetes.io/name: loki-cpu
+      app.kubernetes.io/instance: loki-cpu
+      app.kubernetes.io/component: single-binary
+    podLabels:
+      app.kubernetes.io/name: loki-cpu
+      app.kubernetes.io/instance: loki-cpu
+      app.kubernetes.io/component: single-binary
+    prometheusMonitor: true
+    preserveWorkloadLabels: false
+    metrics: 'process_(cpu_seconds_total|resident_memory_bytes|open_fds|max_fds)|go_(goroutines|memstats_alloc_bytes|memstats_heap_inuse_bytes)|loki_distributor_(lines_received_total|bytes_received_total)|loki_discarded_(samples_total|bytes_total)|loki_request_duration_seconds(_bucket|_count|_sum)?|loki_ingester_(flush_queue_length|chunks_flush_failures_total|wal_.*)'
+    labels: '__name__|job|instance|cluster|component|telemetry_scope|namespace|pod|container|node|service|endpoint|exporter_namespace|exporter_pod|exporter_node|reason|le|route|status_code|tenant|operation|format|policy|retention_hours|is_internal_stream|method|ws|type'
+  - component: dcgm
+    namespace: kube-system
+    service: dcgm-exporter
+    portName: metrics
+    port: 9400
+    serviceLabels:
+      app.kubernetes.io/name: dcgm-exporter
+      app.kubernetes.io/instance: nvidia-device-plugin
+    podLabels:
+      app.kubernetes.io/name: dcgm-exporter
+      app.kubernetes.io/instance: nvidia-device-plugin
+    prometheusMonitor: false
+    preserveWorkloadLabels: true
+    metrics: 'DCGM_FI_DEV_(GPU_UTIL|MEM_COPY_UTIL|FB_USED|FB_FREE|GPU_TEMP|POWER_USAGE|TOTAL_ENERGY_CONSUMPTION|XID_ERRORS|SM_CLOCK|MEM_CLOCK|PCIE_TX_THROUGHPUT|PCIE_RX_THROUGHPUT)'
+    labels: '__name__|job|instance|cluster|component|telemetry_scope|namespace|pod|container|node|exporter_namespace|exporter_pod|exporter_node|exported_namespace|exported_pod|exported_container|Hostname|UUID|modelName|gpu|device|pci_bus_id|DCGM_FI_DRIVER_VERSION|GPU_I_ID|GPU_I_PROFILE|err_code'
+  - component: kube-state-metrics
+    namespace: monitoring
+    service: prometheus-kube-state-metrics
+    portName: http
+    port: 8080
+    serviceLabels:
+      app.kubernetes.io/name: kube-state-metrics
+      app.kubernetes.io/instance: prometheus
+    podLabels:
+      app.kubernetes.io/name: kube-state-metrics
+      app.kubernetes.io/instance: prometheus
+    prometheusMonitor: false
+    preserveWorkloadLabels: true
+    metrics: 'kube_pod_(info|status_phase|status_ready|container_resource_requests|container_resource_limits|container_status_restarts_total|container_status_waiting_reason|container_status_terminated_reason)|kube_node_(info|status_allocatable|status_capacity|status_condition|spec_unschedulable)'
+    labels: '__name__|job|instance|cluster|component|telemetry_scope|namespace|pod|container|node|exporter_namespace|exporter_pod|exporter_node|resource|unit|phase|condition|status|reason|uid|host_ip|pod_ip|created_by_kind|created_by_name|host_network|kernel_version|os_image|container_runtime_version|kubelet_version|kubeproxy_version|provider_id|system_uuid|internal_ip|pod_cidr|priority_class'
+  - component: node-exporter
+    namespace: monitoring
+    service: prometheus-prometheus-node-exporter
+    portName: http-metrics
+    port: 9100
+    serviceLabels:
+      app.kubernetes.io/name: prometheus-node-exporter
+      app.kubernetes.io/instance: prometheus
+    podLabels:
+      app.kubernetes.io/name: prometheus-node-exporter
+      app.kubernetes.io/instance: prometheus
+    prometheusMonitor: false
+    preserveWorkloadLabels: false
+    metrics: 'node_cpu_seconds_total|node_load(1|5|15)|node_memory_(MemTotal_bytes|MemAvailable_bytes|SwapTotal_bytes|SwapFree_bytes)|node_filesystem_(size_bytes|avail_bytes|readonly|device_error)|node_network_(receive_bytes_total|transmit_bytes_total|receive_drop_total|transmit_drop_total|receive_errs_total|transmit_errs_total)|node_disk_(read_bytes_total|written_bytes_total|io_time_seconds_total)|node_uname_info|node_boot_time_seconds'
+    labels: '__name__|job|instance|cluster|component|telemetry_scope|namespace|pod|container|node|service|endpoint|exporter_namespace|exporter_pod|exporter_node|cpu|mode|device|device_error|mountpoint|fstype|nodename|sysname|release|machine|domainname|version'

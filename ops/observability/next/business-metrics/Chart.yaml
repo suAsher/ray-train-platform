@@ -1,0 +1,6 @@
+apiVersion: v2
+name: raytrain-business-metrics
+description: Additive first-wave metrics for existing VKE exporters and log collectors
+type: application
+version: 0.1.0
+appVersion: "business-wave1"
