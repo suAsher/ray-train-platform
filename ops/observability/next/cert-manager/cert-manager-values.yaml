@@ -5,6 +5,8 @@ global:
   commonLabels:
     app.kubernetes.io/part-of: raytrain-observability-cert-manager
   priorityClassName: raytrain-observability-additive
+  leaderElection:
+    namespace: cert-manager
 
 extraArgs:
   - --controllers=*,-certificaterequests-approver
@@ -120,6 +122,14 @@ startupapicheck:
   resources:
     requests: {cpu: 50m, memory: 128Mi}
     limits: {cpu: 250m, memory: 256Mi}
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: NotIn
+                values: [172.28.1.222, 172.28.3.32]
   securityContext:
     runAsNonRoot: true
     seccompProfile: {type: RuntimeDefault}

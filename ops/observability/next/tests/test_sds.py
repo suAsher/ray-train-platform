@@ -43,7 +43,7 @@ def bootstrap():
     outbound.pop("require_client_certificate")
     outbound.pop("disable_stateless_session_resumption")
     outbound["sni"] = "vmauth.victoriametrics.svc"
-    return {"static_resources": {
+    return {"node": {"id": "fixture-proxy", "cluster": "fixture-cluster", "metadata": {"keep": "yes"}}, "static_resources": {
         "listeners": [{"filter_chains": [{
             "transport_socket": {"name": "envoy.transport_sockets.tls", "typed_config": inbound},
             "filters": [{"name": "envoy.filters.http.rbac", "typed_config": {
@@ -64,6 +64,33 @@ def contexts(document):
 
 
 class FilesystemSDSTests(unittest.TestCase):
+    def test_missing_node_gets_explicit_local_filesystem_identity(self):
+        source = bootstrap()
+        source.pop("node")
+        converted, _ = sds.transform_bootstrap(source)
+        self.assertEqual({"id": "filesystem-sds-local", "cluster": "filesystem-sds"}, converted["node"])
+        self.assertNotIn("node", source)
+
+    def test_postrenderer_can_supply_component_names_without_remote_authority(self):
+        source = bootstrap()
+        source.pop("node")
+        converted, _ = sds.transform_bootstrap(source, node_id="nightingale.n9e-config-v911", node_cluster="nightingale")
+        self.assertEqual({"id": "nightingale.n9e-config-v911", "cluster": "nightingale"}, converted["node"])
+        self.assertNotIn("dynamic_resources", converted)
+
+    def test_explicit_malformed_sds_node_is_rejected(self):
+        for node in (None, {}, {"id": "fixture"}, {"id": "", "cluster": "fixture"},
+                     {"id": "fixture", "cluster": "bad\ncluster"}):
+            source = bootstrap()
+            source["node"] = node
+            with self.subTest(node=type(node).__name__), self.assertRaisesRegex(sds.SDSError, "node"):
+                sds.transform_bootstrap(source)
+
+    def test_valid_existing_node_metadata_is_preserved(self):
+        source = bootstrap()
+        converted, _ = sds.transform_bootstrap(source, node_id="unused", node_cluster="unused")
+        self.assertEqual(source["node"], converted["node"])
+
     def test_input_is_unchanged_and_output_has_no_shared_objects(self):
         source = bootstrap()
         before = deepcopy(source)

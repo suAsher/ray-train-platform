@@ -2,6 +2,8 @@
 
 `transform_bootstrap(bootstrap, sds_directory="/etc/envoy-sds")` 返回独立的 bootstrap 和 `{filename: DiscoveryResponse}`。调用方将生成的 JSON 文件加入现有 Envoy ConfigMap，并将 `sds_directory` 指向这个 ConfigMap 的目录挂载位置。此函数不读取文件、不签发证书、不修改 Kubernetes，也不需要 SDS 守护进程。
 
+Envoy 的本地文件 SDS 也要求 `node.id` 和 `node.cluster`。转换器在缺少 `node` 时填入明确的本地默认值；发布后处理器用命名空间和 ConfigMap 名填入组件名称。已有完整 `node` 原样保留，已有但不完整或非法的节点字段会失败。这些字段仅供本地 SDS 标识，不参与证书角色鉴权，也不连接远程控制面。
+
 证书 Secret 必须以整个目录挂载，不能用 `subPath` 单文件挂载。`tls.crt` 和 `tls.key` 必须直接位于同一目录，例如 `/etc/obs-mtls/`。文件 SDS 在该目录监听 kubelet 对 `..data` 的原子替换，成对验证证书和私钥；SDS 配置自身也监听 ConfigMap 的父目录。相同叶证书配置会复用一个稳定文件名。
 
 转换仅替换叶证书来源，保留原配置中的 TLS 最低/最高版本、SAN 校验、客户端证书要求、SNI、HTTP RBAC 等。`validation_context` 和根 CA 信任包继续保持原样：本实现不宣称自动完成根 CA 轮换。根 CA 更换需另行执行信任包重叠发布和验证。

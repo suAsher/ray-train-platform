@@ -58,13 +58,17 @@ def dynamic_leaf(leaf):
     return {**deepcopy(leaf), "watched_directory": watch}
 
 
-def transform_bootstrap(bootstrap, sds_directory="/etc/envoy-sds"):
+def transform_bootstrap(bootstrap, sds_directory="/etc/envoy-sds",
+                        node_id="filesystem-sds-local", node_cluster="filesystem-sds"):
     """Return (independent bootstrap, {ConfigMap filename: SDS response dict}).
 
     TLS protocol floors, SAN matchers, client-certificate requirements, HTTP
     RBAC and all non-leaf configuration are copied unchanged. Duplicate leaf
     configurations share one content-addressed SDS resource across listeners
     and upstream clusters. Invalid/ambiguous source configurations fail closed.
+    Envoy requires node.id and node.cluster even for local filesystem SDS.
+    Missing node gets the explicit local defaults; an existing node must be
+    complete and is preserved. This metadata is not an authorization identity.
     """
     directory = absolute_path(sds_directory)
     if not isinstance(bootstrap, dict) or not isinstance(bootstrap.get("static_resources"), dict):
@@ -104,4 +108,20 @@ def transform_bootstrap(bootstrap, sds_directory="/etc/envoy-sds"):
             return [walk(item) for item in value]
         return deepcopy(value)
 
-    return walk(bootstrap), files
+    converted = walk(bootstrap)
+    if files or uses_sds(converted):
+        node = converted.get("node", {"id": node_id, "cluster": node_cluster})
+        if not isinstance(node, dict) or any(
+                not isinstance(node.get(key), str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:/~@-]{0,255}", node[key])
+                for key in ("id", "cluster")):
+            raise SDSError("Filesystem SDS requires valid node id and cluster")
+        converted = {**converted, "node": deepcopy(node)}
+    return converted, files
+
+
+def uses_sds(value):
+    if isinstance(value, dict):
+        return bool(value.get("tls_certificate_sds_secret_configs")) or any(uses_sds(item) for item in value.values())
+    if isinstance(value, list):
+        return any(uses_sds(item) for item in value)
+    return False

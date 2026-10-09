@@ -136,7 +136,8 @@ def fixture_bootstrap():
     upstream = {"@type": TYPE + "extensions.transport_sockets.tls.v3.UpstreamTlsContext", "sni": DNS,
                 "common_tls_context": common_tls("/client", "DNS", DNS)}
     address = lambda port: {"socket_address": {"address": "0.0.0.0", "port_value": port}}
-    return {"admin": {"address": {"pipe": {"path": "/diagnostics/admin.sock", "mode": 0o600}}}, "static_resources": {
+    return {"node": {"id": "sds-runtime-envoy", "cluster": "sds-runtime-lab"},
+            "admin": {"address": {"pipe": {"path": "/diagnostics/admin.sock", "mode": 0o600}}}, "static_resources": {
         "listeners": [
             {"name": "server", "address": address(18443), "filter_chains": [{
                 "transport_socket": {"name": "envoy.transport_sockets.tls", "typed_config": downstream},

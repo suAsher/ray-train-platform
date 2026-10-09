@@ -117,6 +117,10 @@ class CertManagerRenderTests(unittest.TestCase):
         values = yaml.safe_load((CERT_MANAGER / "cert-manager-values.yaml").read_text())
         args = values.get("extraArgs", [])
         self.assertIn("--controllers=*,-certificaterequests-approver", args)
+        self.assertEqual("cert-manager", values["global"]["leaderElection"]["namespace"])
+        startup_affinity = yaml.safe_dump(values["startupapicheck"]["affinity"])
+        self.assertIn("172.28.1.222", startup_affinity)
+        self.assertIn("172.28.3.32", startup_affinity)
 
         approver_values = yaml.safe_load((CERT_MANAGER / "approver-policy-values.yaml").read_text())
         self.assertEqual([
@@ -182,11 +186,18 @@ class CertManagerRenderTests(unittest.TestCase):
             self.assertEqual(f"obs-mtls-ca-{domain}", spec["ca"]["secretName"])
             self.assertNotIn("namespace", spec["ca"])
 
-        for document in self.documents:
-            if document.get("kind") == "Secret":
+        public_names = {"obs-mtls-cnpg-metrics-ca", "obs-mtls-postgres-client-ca",
+                        "obs-mtls-ca-postgres-server-public"}
+        for document in by_kind(self.documents, "Secret"):
+            name = document["metadata"]["name"]
+            if name in public_names:
+                self.assertEqual("nightingale", document["metadata"]["namespace"])
+                self.assertEqual("Opaque", document["type"])
+            else:
                 self.assertEqual("cert-manager", document["metadata"].get("namespace"))
                 self.assertNotIn("data", document)
                 self.assertNotIn("stringData", document)
+            self.assertNotIn("tls.key", document)
 
     def test_each_identity_gets_one_exact_certificate_without_dns_cartesian_product(self):
         certificates = {
