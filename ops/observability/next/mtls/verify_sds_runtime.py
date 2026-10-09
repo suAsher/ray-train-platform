@@ -189,11 +189,25 @@ def serial_at(address, ca, material):
 def rejected(address, ca, material):
     client = connection(address, ca, material)
     try:
-        get(client)
+        client.connect()
+        # TLS 1.3 can complete the client-side handshake before the server's
+        # client-certificate alert arrives. Consume that alert before sending
+        # HTTP; a write after peer close can obscure it behind a generic EOF.
+        try:
+            received = client.sock.recv(1)
+        except socket.timeout:
+            # A timeout is never a successful negative check. If the peer is
+            # waiting for HTTP, an actual request must still produce an alert.
+            get(client)
+        else:
+            if not received:
+                raise LabError("Peer closed without an explicit TLS alert")
+            raise LabError("Peer sent application data to a rejected identity")
     except ssl.SSLError as error:
         if "ALERT" in (error.reason or ""):
             return {"tls_alert": error.reason}
-        raise LabError("Rejection was not an explicit TLS alert") from None
+        raise LabError("Rejection was not an explicit TLS alert (reason=" + str(error.reason)
+                       + ", errno=" + str(error.errno) + ", detail=" + str(error) + ")") from None
     finally:
         client.close()
     raise LabError("Wrong or missing client identity was accepted")

@@ -2,6 +2,7 @@
 import base64
 import copy
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import unittest
@@ -434,6 +435,36 @@ class AdditionalRotationSafetyTests(unittest.TestCase):
         with self.assertRaisesRegex(rotation.RotationError, "Secret owner"):
             self.runner.rotate_group(group())
         self.assertEqual(0, self.api.counter)
+
+
+class RenewalTrustRegressionTests(unittest.TestCase):
+    def test_unknown_bootstrap_ca_and_missing_pins_block_all_eviction(self):
+        for expected in ({}, {"obs-mtls-keeper": hashlib.sha256(b"known-root").hexdigest()}):
+            with self.subTest(pins=bool(expected)):
+                api, lease = FakeAPI(), FakeLease()
+                configured = {**group(), "expected_ca_sha256": expected}
+                runner = rotation.Rotator(api, lease, settle=0)
+                with self.assertRaisesRegex(rotation.RotationError, "CA"):
+                    runner.rotate_group(configured)
+                self.assertEqual([], api.events)
+
+    def test_stale_generated_alertmanager_public_assets_block_rotation_state(self):
+        source_name = "obs-mtls-alertmanager-gossip"
+        generated_name = "vmalertmanager-victoriametrics-cluster-config"
+        api = FakeAPI()
+        source = secret(name=source_name)
+        source["metadata"]["namespace"] = "victoriametrics"
+        generated = {"metadata": {"namespace": "victoriametrics", "name": generated_name, "uid": "generated"},
+                     "data": {"copied-cert": base64.b64encode(b"old-leaf").decode(),
+                              "copied-ca": source["data"]["ca.crt"]}}
+        api.secrets = {source_name: source, generated_name: generated}
+        configured = {"namespace": "victoriametrics", "secrets": [source_name],
+            "expected_ca_sha256": {source_name: hashlib.sha256(b"root-v1").hexdigest()},
+            "generated_assets": {source_name: {"secret": generated_name,
+                "certificate_key": "copied-cert", "ca_key": "copied-ca"}}}
+        with self.assertRaisesRegex(rotation.RotationError, "generated"):
+            rotation.certificate_state(api, configured)
+        self.assertEqual([], api.events)
 
 
 if __name__ == "__main__":

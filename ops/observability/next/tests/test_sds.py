@@ -4,7 +4,11 @@ from copy import deepcopy
 import importlib.util
 import json
 from pathlib import Path
+import socket
+import ssl
+import sys
 import unittest
+from unittest.mock import Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -189,6 +193,46 @@ class FilesystemSDSTests(unittest.TestCase):
         for directory in ("relative", "/", "/etc/../sds", "/etc/sds/", "/etc/sds\nsecret"):
             with self.subTest(directory=directory), self.assertRaises(sds.SDSError):
                 sds.transform_bootstrap(bootstrap(), sds_directory=directory)
+
+
+class SDSRuntimeRejectionTests(unittest.TestCase):
+    def runtime(self):
+        sys.path.insert(0, str(ROOT / "mtls"))
+        spec = importlib.util.spec_from_file_location("sds_runtime_fixture", ROOT / "mtls/verify_sds_runtime.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_tls13_alert_is_read_before_any_http_write(self):
+        runtime = self.runtime()
+        client = Mock()
+        alert = ssl.SSLError(ssl.SSL_ERROR_SSL, "synthetic TLS alert")
+        alert.reason = "TLSV13_ALERT_CERTIFICATE_REQUIRED"
+        client.sock.recv.side_effect = alert
+        with patch.object(runtime, "connection", return_value=client), patch.object(runtime, "get") as request:
+            result = runtime.rejected("fixture", Path("/unused/ca.crt"), None)
+        self.assertEqual({"tls_alert": alert.reason}, result)
+        client.connect.assert_called_once_with()
+        client.sock.recv.assert_called_once_with(1)
+        request.assert_not_called()
+        client.close.assert_called_once_with()
+
+    def test_plain_eof_does_not_count_as_rejection(self):
+        runtime = self.runtime()
+        client = Mock()
+        client.sock.recv.return_value = b""
+        with patch.object(runtime, "connection", return_value=client):
+            with self.assertRaisesRegex(runtime.LabError, "without an explicit TLS alert"):
+                runtime.rejected("fixture", Path("/unused/ca.crt"), None)
+
+    def test_timeout_then_success_is_never_a_negative_pass(self):
+        runtime = self.runtime()
+        client = Mock()
+        client.sock.recv.side_effect = socket.timeout()
+        with patch.object(runtime, "connection", return_value=client), patch.object(runtime, "get", return_value=(200, None, b"ok")) as request:
+            with self.assertRaisesRegex(runtime.LabError, "accepted"):
+                runtime.rejected("fixture", Path("/unused/ca.crt"), None)
+        request.assert_called_once_with(client)
 
 
 if __name__ == "__main__":
