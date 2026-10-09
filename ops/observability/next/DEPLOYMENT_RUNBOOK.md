@@ -600,3 +600,52 @@ KSM/DCGM 的目标自身标签改存 `exporter_namespace/exporter_pod/exporter_n
 本轮构建机私有证据：`/root/raytrain-observability-business-wave1-20261009T061500Z`，以文件内UTC时间为准。主要文件：`final-tests.log`、`combined-validator.log`、`default-validator.log`、`business-create.log`、`vmagent-before.json`/`vmagent-after.json`、`vm-real-metrics-check-{1,2,3}.json`、`nightingale-vm-read-business.json`、`prometheus-live-targets-acceptance.json`、`dashboard-query-acceptance.json`、`grafana-sidecar-file-acceptance.json`、`protected-comparison-final.json`、`concurrent-new-workspace-readonly.json`、`old-log-replay-metadata.json`、`long-line-rejection-metadata.json`、`readonly-probe-cleanup.json`。原始错误分析仅提取stream/时间等必要元数据，不共享用户日志正文。
 
 回退按[首波采集说明](business-metrics/README.md)：先恢复VMAgent两字段停止新VM采集，再精确移除本轮新增对象；原Prometheus保留已有目标，VM已采历史自然过期，不删除任何namespace/PVC/训练资源。
+
+## 2026-10-09 临时管理 UI、部署源与资源交付
+
+用户要求补齐 Chart/values、架构、配置维护与资源说明，并临时开放 NodePort，明确通过公司内网/VPN访问节点 IP。比较现有火山 ALB、APIG、APISIX 后，用户再次选择“先完成临时 NodePort：使用轻量代理，后续评估与 ALB 整合”。当前操作手册见 [OPERATIONS.md](OPERATIONS.md)，入口配置与具体命令见 [ui-access/README.md](ui-access/README.md)。
+
+### 入口不是重复建设整套网关
+
+现有 ALB `internal-alb` 为 `172.28.6.171:80`，`raytrain-prod-alb` 为 `172.28.6.180:80/443`；没有现成的 APISIX/NGINX Ingress/Gateway API。APIG controller 已安装但 APIGInstance 为空。托管 ALB controller 的版本未从云 API 核验，不能拿 APIG `v0.4.0` 替代它。
+
+临时新增的是同一个 Envoy 反向代理的两个副本，给两个 UI 提供 HTTPS，并使用既有专用客户端身份连接夜莺的 mTLS Service。它不参与训练、采集或数据写入。ALB 文档的前端双向认证不能证明其支持夜莺要求的上游客户端证书；统一入口后续若能承担此职责，可以直连夜莺并撤掉专用代理，无须永久叠加。
+
+### 实际发布
+
+- 测试候选 `8a13a50` 在 builder 隔离 worktree 因尚无 Chart 预期失败；最终实现 `12a986668489a7a3176ad3f47f71f6b4e7ecd400` 的 **331 项合同测试通过**。
+- 自有 Chart `ops/observability/next/ui-access`；Helm release **`observability-ui` / namespace `nightingale` / revision 1**，2026-10-09 **16:41:49 北京时间**开始安装，状态 deployed。
+- 新增11个声明对象：Deployment、ServiceAccount、ConfigMap、PDB各1，Service3，Certificate、CertificateRequestPolicy、专用 ClusterRole/Binding各1。未修改原产品 release、训练工作负载、CNI 或云安全组。
+- `observability-ui` 两个 Pod 分别位于物理节点 `172.28.1.229`、`172.28.1.232`，均 Ready、0 restart。合计 requests `100m CPU / 128Mi`，limits `600m CPU / 256Mi`，无 GPU、无 PVC；没有新构建镜像。
+- 入口为 `nightingale/nightingale-ui` 31700 和 `nightingale/grafana-ui` 31701。Grafana 使用新增 `monitoring/grafana-ui-backend` 粘性 Service；原 `prometheus-grafana` Service 和两个 SQLite/emptyDir Pod 未修改。
+- 新浏览器 Certificate `obs-ui-browser-server` Ready，仅 serverAuth，精确两个 IP SAN，90天/提前30天续期；内部既有 `obs-mtls-n9e-ui-gateway` client Certificate只被引用，不属于此 release。
+
+| UI | 主入口 | 备用入口 |
+|---|---|---|
+| 夜莺 | `https://172.28.2.65:31700/` | `https://172.28.1.232:31700/` |
+| Grafana | `https://172.28.2.65:31701/` | `https://172.28.1.232:31701/` |
+
+公开 CA 已通过受控通道交付，SHA-256 指纹为 `B6:7E:42:A1:4C:11:12:4E:B1:D9:EF:68:6F:9E:27:CB:62:8D:0D:0D:2E:90:50:09:3E:EA:9D:2B:BB:E6:05:6C`，CN `raytrain-observability-mesh`，有效至2029-10-07。先按入口 README 信任公开 CA，再输入账号；不向浏览器分发客户端私钥。本机已用该 CA 直接访问夜莺得到 HTTPS200 / TLS verify0；没有自动修改本机证书信任库。
+
+### 实际验证与限制
+
+固定 Envoy v1.39.3 实际配置加载通过；无生产凭据的内部 Docker 夹具验证双端口 TLS、错误 CA、错误夜莺服务器身份、多条 Cookie/Expires 保留与 Secure、认证头保留、伪造身份头删除、metrics归一化路径拒绝。临时容器、网络、测试私钥全部清理。夹具早期权限、临时服务变量及测试 CA KeyUsage 缺失已定位修正，未放宽候选验证，失败记录保留。
+
+11对象 server-side dry-run 全通过。安装后的**33项现场检查全通过**：两个节点四个地址严格证书校验；夜莺原版 HTML/JavaScript、验证码开启、未登录及伪造身份拒绝；Grafana真实原生管理员登录、Origin、Secure Cookie、已配置看板、72 GPU查询和 WebSocket101。Grafana验收只登录/读取后登出，没有改用户或配置。首次脚本错误地按 `dat:true` 判断验证码，依据既有API合同改为 `dat.show:true` 复验通过；两个报告都保留。
+
+本轮没有完成夜莺新 NodePort 的人工验证码登录和通知渠道配置，不将登录页验收称作该流程完整E2E；既有夜莺内部 VM 查询先前已验证。正式通知仍由用户配置。Grafana配置的provisioning目前只有Prometheus和Alertmanager，Loki/VM/ClickHouse数据源尚待接入；平台原Loki日志查询链路继续保留。Grafana独立SQLite+emptyDir的问题也没有被入口粘连修复，长期配置应以Git/provisioning为准。
+
+安装前后 **2536 个存量对象 UID、spec和已记录容器状态完全一致**。另外并发新增用户 yolo 训练 `job-5ed51b9f0f48e762df91683c` 和 `ray-train-sync` 同步执行，本发布没有创建、修改或清理它们；没有临时验收 Pod 残留。
+
+### 最终资源快照和证据
+
+2026-10-09 16:43:36 北京时间：七namespace共 **72 Running/Ready Pod**，其中新体系45、原monitoring+loki27；requests **17.24 CPU / 38.41Gi**，实际采样 **1.189 CPU / 17.31Gi**。新体系自身 requests **12.34 CPU / 27.16Gi**，实际 **0.505 CPU / 9.78Gi**。两个新网关实际约 **1m CPU / 37.26Mi**。
+
+总计29PVC/1070Gi不变，其中新体系21/670Gi，原体系8/400Gi，包含旧Loki的150Gi保留卷；活跃使用26PVC/920Gi。原监控27个应用容器未设limits，因此有限limits之和不代表全局硬上限。这些数值不包含TOS对象占用和kube-system共享DCGM，瞬时用量不是峰值容量承诺。
+
+- 发布/测试：`/root/raytrain-observability-ui-20261009T081922Z`，包括`green-tests.log`、`helm-lint-nightingale.log`、`ui-rendered.yaml`、`server-dry-run.log`、`helm-install.log`、`live-ui-acceptance-v2.json`、`protected-comparison.json`。
+- Envoy夹具：上述目录的 `runtime-ui/ui-runtime-4f6c0ab24055/result.json`。
+- 最终资源：`/root/raytrain-observability-final-resources-20261009T084336Z/summary.json`及逐Pod/PVC元数据。
+- 部署源：本地 managed worktree `codex/observability-additive`；构建机 `.../green-candidate` 为 `12a9866` detached候选。本轮未推两个远端main，未快进正式后端构建目录，不能宣称四端源码一致。
+
+后续Ingress和最小回退命令见UI README。关闭入口优先将该release的`service.type`改为ClusterIP；撤除临时代理也只能处理本release拥有的对象，不能删除原夜莺客户端身份、数据库、PVC或namespace。

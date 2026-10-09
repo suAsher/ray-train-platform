@@ -40,6 +40,21 @@ openssl x509 -in observability-ui-ca.crt -noout -subject -issuer -dates -fingerp
 
 CLI 检查可使用 `curl --cacert observability-ui-ca.crt https://172.28.2.65:31700/`，不要使用 `-k` 作为成功证据。账号沿用原系统账号，网关不创建账号、不代用户登录、不关闭验证码；管理员凭据仅通过既有受控方式交付。
 
+授权管理员可在构建机的私人终端读取初始登录信息，不将终端结果发入对话或文档：
+
+```bash
+# 夜莺初始用户名 root；如果已在 UI 修改密码，以修改后的密码为准。
+kubectl --context="$VKE_CONTEXT" -n nightingale get secret n9e-bootstrap-admin \
+  -o jsonpath='{.data.password}' | base64 -d
+# Grafana 用户名、密码分别读取；这不是平台统一认证账号。
+kubectl --context="$VKE_CONTEXT" -n monitoring get secret grafana-admin \
+  -o jsonpath='{.data.admin-user}' | base64 -d
+kubectl --context="$VKE_CONTEXT" -n monitoring get secret grafana-admin \
+  -o jsonpath='{.data.admin-password}' | base64 -d
+```
+
+修改初始化 Secret 不会重置已存在的夜莺用户；不要为重置密码重跑 bootstrap。需要长期保存的夜莺配置位于专用 PostgreSQL，Grafana 则有下文所述的原有 SQLite 持久化限制。
+
 ## 文件与配置维护
 
 | 文件 | 管理内容 |
@@ -104,6 +119,8 @@ Certificate 的两份叶证书 Secret 均整目录只读挂载，Envoy filesyste
 2. Ingress 浏览器端使用正常受信域名证书（由 cert-manager 管理），后端继续指向同一 `nightingale-ui:443` / `grafana-ui:443` gateway Service。Ingress 到 gateway 的 HTTPS 校验需要一张包含 Service DNS 的独立、严格受限 server Certificate 及信任 CA；当前证书只有节点 IP SAN，不能直接用 Service DNS 验证，也不能用关闭验证代替迁移。
 3. 完成 Ingress 正向/负向认证与证书测试后，用最小覆盖 `service.type: ClusterIP` 升级本 chart。模板会移除两个 NodePort 字段和 `externalTrafficPolicy`；确认节点上旧端口不可达后关闭对应安全组规则。
 4. 保留原应用登录和夜莺上游 mTLS。如果后续采用统一认证，由独立变更定义账号/角色映射，不能靠注入代理身份头跳过原认证。
+
+上面是保留专用代理的迁移路径。另一条路径是由统一 Ingress/API 网关直接承担上游 mTLS，验证同样的客户端身份、CA、服务器身份、转发头和原生登录后直接接夜莺；Grafana 可使用普通受控上游。此时可撤掉这两个临时代理，不需要永久在统一网关后再叠一层。现有火山 ALB 的前端双向认证配置不能作为已经支持上游客户端证书的证据，整合前需核实。
 
 入口回滚使用 `helm rollback observability-ui <已验收revision> -n nightingale --kube-context "$VKE_CONTEXT" --wait`。只需暂停外部入口时优先改为 ClusterIP。完整移除此 release 不应删除既有夜莺/Grafana、原 client Certificate、数据库或存储；删除 Helm 所属新对象前核对所有权，证书 Secret 的保留/回收依 cert-manager owner-reference 配置单独确认，不盲删同 namespace 资源。
 

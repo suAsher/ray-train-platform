@@ -1,10 +1,14 @@
 # VKE 新可观测性体系：增量建设
 
-入口：[架构、部署流程与实际操作记录](DEPLOYMENT_RUNBOOK.md) · [详细架构设计](../../../docs/superpowers/specs/2026-10-08-vke-observability-platform-design.md)
+入口：[部署文件、配置 UI 与日常运维手册](OPERATIONS.md) · [架构、部署流程与实际操作记录](DEPLOYMENT_RUNBOOK.md) · [详细架构设计](../../../docs/superpowers/specs/2026-10-08-vke-observability-platform-design.md)
+
+**日常维护先读 `OPERATIONS.md`。** 它集中列出实际 Helm release、Chart/values/Kustomize/清单位置、配置保存边界、升级与回滚顺序，以及本轮临时 NodePort 和资源盘点的发布记录。当前并非所有组件都有 Helm release；各产品 README 中仍有早期 namespace 与 bootstrap 示例，不能直接递归 apply 或照抄历史安装命令。生产 VM 已通过定向 patch 启用首波业务指标，下次 VM Helm 升级须显式保留 `businessScrape.enabled=true`；原 Grafana 双副本的 UI 配置持久化也需按运维手册处理。
 
 展示与接入：[高清架构图](../../../docs/architecture/raytrain-observability-vke-20261009.png) · [可编辑 SVG](../../../docs/architecture/raytrain-observability-vke-20261009.svg) · [缩放展示页](../../../docs/architecture/raytrain-observability-vke-20261009.html) · [首波实施计划](../../../docs/superpowers/plans/2026-10-09-observability-business-wave1.md) · [应用指标与 Trace 接入合同](../../../docs/superpowers/specs/2026-10-09-platform-telemetry-integration.md)
 
-2026-10-09 后续决定：夜莺统一负责正式告警，用户后续在 UI 配置通知渠道。VMAlert 优先 recording rules，新增 Alertmanager 保留未接正式通知。夜莺当前只有受控内部入口，面向用户浏览器的访问入口仍需交付；基础设施部署不等于 SSO、业务埋点或通知已经接通。
+**2026-10-09 临时 UI 已上线：** 独立 Helm release `nightingale/observability-ui` revision 1（源码 `12a9866`）新增 2 个轻量代理、无 PVC。夜莺 `https://172.28.2.65:31700/`、Grafana `https://172.28.2.65:31701/`，备用节点为 `172.28.1.232` 同端口；先按 [UI 说明](ui-access/README.md)信任公开 CA，使用公司内网 / VPN 访问。33 项现场检查通过，Grafana真实登录 / 看板 / GPU72 / WebSocket通过；夜莺页面、验证码和认证拒绝通过，新 NodePort 的真实验证码登录本轮未执行。2536 个存量保护对象无差异。具体入口、维护、资源和原 ALB 关系见 [OPERATIONS.md](OPERATIONS.md)。
+
+2026-10-09 后续决定：夜莺统一负责正式告警，用户后续在 UI 配置通知渠道。VMAlert 优先 recording rules，新增 Alertmanager 保留未接正式通知。临时浏览器入口保持原应用登录，未接 Portal SSO；基础设施部署不等于业务埋点或通知已经接通。Grafana 当前可重复恢复的 provisioning 仅有 Prometheus / Alertmanager，Loki Explore、VM、ClickHouse 数据源仍待接入，平台原 Loki 日志链路保持。
 
 扩展依据：[保留 Alloy/Loki 的架构与容量方案](../../../docs/superpowers/specs/2026-10-09-observability-expansion-design.md)。用户已明确现有 Alloy/Loki 长期保留；指标、日志与追踪分开建设，扩容按实测瓶颈推进。
 
@@ -14,7 +18,7 @@
 
 旧四个 `observability-*` 命名空间及其专属资源已于 10 月 9 日按用户授权退场，21 块旧 EBS 云盘已由实际 CSI 驱动确认删除。旧 PG 的已验证备份和私有配置清单保留，旧 VM/ClickHouse 合成历史未做数据归档，不能再依赖旧卷回退。原业务链路未迁移；首波exporter旁路已接入，SSO、应用埋点和正式告警接收仍待接入。部署归属、镜像来源、证据及未验范围见[10 月 9 日部署记录](DEPLOYMENT_RUNBOOK.md#2026-10-09-正式命名部署与验收记录)及[旧环境退场记录](DEPLOYMENT_RUNBOOK.md#2026-10-09-旧命名空间退场与云盘释放)。下面的 10 月 8 日表格、容量与数字是历史记录，旧命令不能直接用于新位置。
 
-新套件稳态为 43 Pod、21 PVC、申请 **670Gi**。旧套件的 35 个常驻 Pod 和 21 块云盘已清理，释放 **670Gi**；两套并行时的 1340Gi 已降至新套件的 670Gi。这是云盘申请容量，不是实际数据使用量，也不包含原监控和训练业务的存储。
+**2026-10-09 16:43:36 北京时间资源快照：** 新套件含 UI 代理共 **45 Pod、21 PVC / 670Gi**；加上原 `monitoring` / `loki` 后，七个观测 namespace 共 **72 Pod、29 PVC / 1070Gi**，其中 150Gi 是旧 Loki 保留卷。requests 合计 **17.24 CPU / 38.41Gi**，实际采样 **1.189 CPU / 17.31Gi**，GPU requests 为 0；未设置 limits 的原容器使有限 limits 之和不能当作全局硬上限。这里不含 `kube-system` DCGM、其他系统或 TOS 对象容量，详见运维手册口径。旧新增套件的 35 个常驻 Pod 和 21 块云盘此前已清理并释放 670Gi，不与本次保留的原业务监控混淆。
 
 本目录部署四个产品命名空间的新组件，以及独立 `cert-manager` 控制层。旧 Prometheus、Alloy、Loki、平台后端、训练任务和历史数据继续使用原链路。最初阶段限自监控和合成 canary，现按显式 `business-wave1` 范围接入五组真实目标；这不代表全业务接入或完整故障恢复验收。
 
