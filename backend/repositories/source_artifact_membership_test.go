@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	databasepkg "ray-train-platform-backend/db"
 	"ray-train-platform-backend/auth"
+	databasepkg "ray-train-platform-backend/db"
 	"ray-train-platform-backend/domain"
 )
 
@@ -148,4 +148,3 @@ func performSourceMembershipOperation(repo *GormRepository, operation string, in
 		return repo.CreateOrReuseSourceArtifact(context.Background(), &input)
 	}
 }
-
