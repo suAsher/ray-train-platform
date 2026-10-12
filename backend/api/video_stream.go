@@ -182,7 +182,7 @@ func videoRange(req *http.Request, info objectstore.MediaInfo) (int64, int64, bo
 	}
 	if ir := req.Header.Get("If-Range"); ir != "" && ir != info.ETag {
 		date, err := http.ParseTime(ir)
-		if err != nil || info.LastModified.IsZero() || info.LastModified.Truncate(time.Second).After(date) {
+		if err != nil || info.LastModified.IsZero() || !info.LastModified.Truncate(time.Second).Equal(date) {
 			return 0, info.SizeBytes - 1, false, true
 		}
 	}

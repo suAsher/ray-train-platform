@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/gin-gonic/gin"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -311,7 +312,7 @@ func TestVideoRangeValidatorDatesAndBoundaries(t *testing.T) {
 		r, ir       string
 		size        int64
 		partial, ok bool
-	}{{"bytes=-999", "", 10, true, true}, {"bytes=0-0", "", 10, true, true}, {"bytes=-", "", 10, false, false}, {"bytes=0-1", "", 0, false, false}, {"bytes=", "", 10, false, false}, {"bytes=0-1", modified.Format("Mon, 02 Jan 2006 15:04:05 GMT"), 10, true, true}, {"bytes=0-1", modified.Add(-time.Hour).Format("Mon, 02 Jan 2006 15:04:05 GMT"), 10, false, true}, {"bytes=0-1", "W/\"v1\"", 10, false, true}} {
+	}{{"bytes=-999", "", 10, true, true}, {"bytes=0-0", "", 10, true, true}, {"bytes=-", "", 10, false, false}, {"bytes=0-1", "", 0, false, false}, {"bytes=", "", 10, false, false}, {"bytes=0-1", modified.Format("Mon, 02 Jan 2006 15:04:05 GMT"), 10, true, true}, {"bytes=0-1", modified.Add(-time.Hour).Format("Mon, 02 Jan 2006 15:04:05 GMT"), 10, false, true}, {"bytes=0-1", modified.Add(time.Hour).Format("Mon, 02 Jan 2006 15:04:05 GMT"), 10, false, true}, {"bytes=0-1", "W/\"v1\"", 10, false, true}} {
 		r := httptest.NewRequest("GET", "/", nil)
 		r.Header.Set("Range", tc.r)
 		r.Header.Set("If-Range", tc.ir)
@@ -333,5 +334,22 @@ func TestVideoRangeValidatorDatesAndBoundaries(t *testing.T) {
 	}
 	if videoContentType("A.WEBM") != "video/webm" {
 		t.Fatal("uppercase extension rejected")
+	}
+}
+
+func TestVideoIfRangeDateRequiresExactMatch(t *testing.T) {
+	modified := time.Date(2026, 10, 12, 1, 0, 0, 0, time.UTC)
+	for _, value := range []string{
+		modified.Add(time.Hour).Format(http.TimeFormat),
+		modified.Add(-time.Hour).Format(http.TimeFormat),
+		"not a valid HTTP date",
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("Range", "bytes=2-5")
+		req.Header.Set("If-Range", value)
+		start, end, partial, ok := videoRange(req, objectstore.MediaInfo{SizeBytes: 10, ETag: "\"v1\"", LastModified: modified})
+		if !ok || partial || start != 0 || end != 9 {
+			t.Fatalf("If-Range %q must ignore Range: start=%d end=%d partial=%v ok=%v", value, start, end, partial, ok)
+		}
 	}
 }
