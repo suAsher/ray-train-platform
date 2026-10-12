@@ -82,6 +82,7 @@ func TestSourceArtifactLegacyOwnerWithoutPlatformAccount(t *testing.T) {
 				}
 			}
 			ensureArtifactIdentity(t, repo, "team-a", "user-a")
+			ensureArtifactIdentity(t, repo, "team-b", "other-user")
 			input := sourceMembershipArtifact(t, "legacy-owner", "team-a", false)
 			if _, err := repo.CreateOrReuseSourceArtifact(context.Background(), &input); err != nil {
 				t.Fatal(err)
@@ -91,5 +92,39 @@ func TestSourceArtifactLegacyOwnerWithoutPlatformAccount(t *testing.T) {
 				t.Fatalf("legacy owner crossed team boundary: %v", err)
 			}
 		})
+	}
+}
+
+func TestSourceArtifactAccountBeforeMembershipSchema(t *testing.T) {
+	repo := artifactTestRepository(t)
+	if err := repo.db.AutoMigrate(&LocalUserRecord{}); err != nil {
+		t.Fatal(err)
+	}
+	ensureArtifactIdentity(t, repo, "team-a", "user-a")
+	ensureArtifactIdentity(t, repo, "team-b", "other-user")
+	if err := repo.db.Create(&LocalUserRecord{ID: "user-a", Username: "alice", TenantID: "team-a"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	input := sourceMembershipArtifact(t, "pre-membership-owner", "team-a", false)
+	if _, err := repo.CreateOrReuseSourceArtifact(context.Background(), &input); err != nil {
+		t.Fatalf("pre-membership account rejected its own team: %v", err)
+	}
+	foreign := sourceMembershipArtifact(t, "pre-membership-foreign", "team-b", false)
+	if _, err := repo.CreateOrReuseSourceArtifact(context.Background(), &foreign); !errors.Is(err, ErrSourceArtifactNotFound) {
+		t.Fatalf("pre-membership account crossed team boundary: %v", err)
+	}
+}
+
+func TestSourceArtifactMembershipRequiresQuotaOwner(t *testing.T) {
+	repo := identityMembershipRepository(t)
+	if err := repo.db.AutoMigrate(&SourceArtifactRecord{}, &SourceArtifactRequestRecord{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.db.Where("id = ?", "user-a").Delete(&UserRecord{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	input := sourceMembershipArtifact(t, "missing-quota-owner", "team-a", false)
+	if _, err := repo.CreateOrReuseSourceArtifact(context.Background(), &input); !errors.Is(err, ErrSourceArtifactNotFound) {
+		t.Fatalf("membership without a quota owner admitted an upload: %v", err)
 	}
 }
