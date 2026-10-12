@@ -53,19 +53,12 @@ func (r *GormRepository) CreateOrReuseSourceArtifactWithLimits(ctx context.Conte
 	incoming := sourceArtifactRecordFromDomain(*artifact)
 	var result *domain.SourceArtifact
 	err = r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var owner UserRecord
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Select("id").Where("id = ? AND tenant_id = ?", artifact.UserID, artifact.TenantID).
-			First(&owner).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return ErrSourceArtifactNotFound
-		}
-		if err != nil {
-			return fmt.Errorf("lock source artifact owner: %w", err)
+		if err := lockSourceArtifactOwner(tx, artifact.TenantID, artifact.UserID); err != nil {
+			return err
 		}
 
 		var existing SourceArtifactRecord
-		err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("tenant_id = ? AND user_id = ? AND storage_root = ? AND sha256 = ? AND size_bytes = ? AND object_key = ?",
 				artifact.TenantID, artifact.UserID, artifact.StorageRoot, artifact.SHA256, artifact.SizeBytes, legacyObjectKey).
 			Where("NOT EXISTS (SELECT 1 FROM source_artifact_requests WHERE source_artifact_requests.artifact_id = source_artifacts.id AND source_artifact_requests.tenant_id = source_artifacts.tenant_id AND source_artifact_requests.user_id = source_artifacts.user_id)").
