@@ -41,6 +41,8 @@ The gateway continues to use its own `obs-mtls-otel-gateway` client certificate 
 
 ## Release sequence and rollback
 
+The [rollout procedure](ROLLOUT.md) contains reproducible SDS rendering, the server-side dry-run gate, the guarded operator rollout and rollback boundaries.
+
 After the release owner's authorization, provision the referenced credentials, apply the reviewed ClickHouse user/remote-cluster and proxy configuration, and roll the two CH replicas one at a time. The new remote password environment variable and static Envoy identity allowlist require a controlled Pod rollout; user XML hot reload alone is insufficient. Verify existing replication/canary continuity before proceeding. Run the separate bootstrap Job only after both replicas are Ready; it requires the existing schema-admin client ConfigMap and certificate. The production bootstrap has its own Job and ConfigMap names.
 
 Apply the gateway's reviewed configuration and rollout with retained queue PVCs; do not delete pending queues. Then enable the backend emitter and Grafana datasource. Monitor queue failures, dropped records, export failures, insertion latency and replication lag. Rollback disables backend export first; keep production tables, queue PVCs and SQL secrets while draining. Do not delete historical storage or roll back database schemas through Helm.
