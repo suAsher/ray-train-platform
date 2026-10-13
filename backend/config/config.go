@@ -29,6 +29,7 @@ type Config struct {
 	Assistant                                AssistantConfig
 	EnvironmentBuild                         EnvironmentBuildConfig
 	StorageSync                              StorageSyncConfig
+	Telemetry                                TelemetryConfig
 	SPKRayjobMinimumVersion                  string
 	AppEnv                                   string
 	HTTPAddr                                 string
@@ -291,6 +292,9 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("DATABASE_URL is required when MIGRATIONS_ONLY is true")
 		}
 		return cfg, nil
+	}
+	if cfg.Telemetry, err = LoadTelemetry(); err != nil {
+		return Config{}, err
 	}
 	if cfg.OIDCRequired, err = parseBool("OIDC_REQUIRED", cfg.AppEnv == "production"); err != nil {
 		return Config{}, err

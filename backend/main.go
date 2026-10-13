@@ -36,6 +36,7 @@ import (
 	"ray-train-platform-backend/repositories"
 	"ray-train-platform-backend/runtimecatalog"
 	"ray-train-platform-backend/trackingartifacts"
+	"ray-train-platform-backend/telemetry"
 )
 
 func main() {
@@ -285,14 +286,23 @@ func main() {
 		}()
 	}
 
+	platformTelemetry, err := telemetry.New(cfg.Telemetry)
+	if err != nil {
+		log.Fatalf("initialize platform telemetry: %v", err)
+	}
+	if err := platformTelemetry.Start(); err != nil {
+		log.Fatalf("start platform telemetry: %v", err)
+	}
+	defer func() { _ = platformTelemetry.Shutdown(context.Background()) }()
 	router := gin.New()
-	router.Use(querySafeGINLogger(), querySafeGINRecovery(), requestIDMiddleware())
+	// Telemetry wraps recovery so recovered panics are recorded with the final 5xx status.
+	router.Use(platformTelemetry.Middleware(), querySafeGINLogger(), querySafeGINRecovery(), requestIDMiddleware())
 	if len(cfg.CORSOrigins) > 0 {
 		router.Use(cors.New(cors.Config{
 			AllowOrigins:     cfg.CORSOrigins,
 			AllowMethods:     []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions},
 			AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "Idempotency-Key", "X-Request-ID", "X-Part-SHA256"},
-			ExposeHeaders:    []string{"X-Request-ID"},
+			ExposeHeaders:    []string{"X-Request-ID", "X-Trace-ID"},
 			AllowCredentials: true,
 		}))
 	}
@@ -301,7 +311,9 @@ func main() {
 	registerAPIRoutesWithLocalAuth(router, jobHandler, patHandler, sourceArtifactHandler, localAuthHandler, repository, validator, patAuthenticator, localSessionAuthenticator, kubeClient, rayHandler, cfg, environmentService)
 
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: router}
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
 		shutdownContext, cancel := context.WithTimeout(context.Background(), shutdownTimeout())
 		defer cancel()
@@ -311,6 +323,8 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("server failed: %v", err)
 	}
+	// Finish active HTTP handlers before the deferred telemetry flush.
+	<-shutdownDone
 }
 
 func idcDataSpaceSources(cfg config.Config) map[domain.DataSpaceID]k8s.IDCDataMountSource {
