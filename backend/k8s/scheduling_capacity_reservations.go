@@ -47,7 +47,9 @@ func (c *Client) subtractCapacityReservations(ctx context.Context, request Sched
 				}
 				if err := subtractCapacityAssignment(workload, assignment, pods, indices, hostnames, nodes); err != nil {
 					outside, flavorErr := c.capacityAssignmentOutsidePool(ctx, assignment, request.AcceleratorClass)
-					if flavorErr == nil && outside { continue }
+					if flavorErr == nil && outside {
+						continue
+					}
 					return err
 				}
 			}
@@ -78,18 +80,28 @@ func capacityWorkloadFinished(workload unstructured.Unstructured) bool {
 }
 
 func capacityWorkloadJobID(workload unstructured.Unstructured) string {
-	if stable := workload.GetLabels()["platform_job_id"]; stable != "" { return stable }
+	if stable := workload.GetLabels()["platform_job_id"]; stable != "" {
+		return stable
+	}
 	podSets, _, _ := unstructured.NestedSlice(workload.Object, "spec", "podSets")
 	stable := ""
 	for _, value := range podSets {
 		podSet, ok := value.(map[string]any)
-		if !ok { continue }
+		if !ok {
+			continue
+		}
 		identity, _, _ := unstructured.NestedString(podSet, "template", "metadata", "labels", "platform_job_id")
-		if identity == "" { continue }
-		if stable != "" && stable != identity { return "" }
+		if identity == "" {
+			continue
+		}
+		if stable != "" && stable != identity {
+			return ""
+		}
 		stable = identity
 	}
-	if stable != "" { return stable }
+	if stable != "" {
+		return stable
+	}
 	for _, owner := range workload.GetOwnerReferences() {
 		if owner.Kind == "RayJob" {
 			return owner.Name
@@ -218,10 +230,12 @@ func capacityTopologyCounts(topology map[string]any) (map[string]int64, error) {
 			}
 			hostname, ok := values[hostIndex].(string)
 			count, valid := capacityInteger(domain["count"])
-		if !ok || hostname == "" || len(hostname)>253 || !valid || count <= 0 || count>100000 {
+			if !ok || hostname == "" || len(hostname) > 253 || !valid || count <= 0 || count > 100000 {
 				return nil, fmt.Errorf("invalid topology count")
 			}
-			if result[hostname]>100000-count { return nil,fmt.Errorf("invalid aggregate topology count") }
+			if result[hostname] > 100000-count {
+				return nil, fmt.Errorf("invalid aggregate topology count")
+			}
 			result[hostname] += count
 		}
 		return result, nil
@@ -250,13 +264,21 @@ func capacityTopologyCounts(topology map[string]any) (map[string]int64, error) {
 			return nil, fmt.Errorf("invalid slice hostname")
 		}
 		hostnames, err := capacitySliceHostnames(level, int(domainCount))
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 		encodedCounts, valid := slice["podCounts"].(map[string]any)
-		if !valid { return nil, fmt.Errorf("missing slice pod counts") }
+		if !valid {
+			return nil, fmt.Errorf("missing slice pod counts")
+		}
 		counts, err := capacitySlicePodCounts(encodedCounts, int(domainCount))
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 		for index, hostname := range hostnames {
-			if result[hostname] > 100000-counts[index] { return nil, fmt.Errorf("invalid aggregate topology count") }
+			if result[hostname] > 100000-counts[index] {
+				return nil, fmt.Errorf("invalid aggregate topology count")
+			}
 			result[hostname] += counts[index]
 		}
 	}

@@ -64,7 +64,7 @@ func TestDiagnoseRendersSharedSchedulingCapacity(t *testing.T) {
 }
 
 func TestDiagnoseExplainsSchedulingReasonCodesInChinese(t *testing.T) {
-	for _, test := range []struct { reason, explanation string }{
+	for _, test := range []struct{ reason, explanation string }{
 		{"insufficient_gpus", "资源池当前空闲 GPU 不足"},
 		{"gpu_fragmentation", "空闲 GPU 分散"},
 		{"insufficient_cpu_or_memory", "符合 GPU 条件的节点 CPU 或内存不足"},
@@ -75,9 +75,13 @@ func TestDiagnoseExplainsSchedulingReasonCodesInChinese(t *testing.T) {
 		t.Run(test.reason, func(t *testing.T) {
 			capacity := &domain.SchedulingCapacity{Available: true, Fit: domain.SchedulingCapacityFit{Reason: test.reason}}
 			var output bytes.Buffer
-			if err := renderSchedulingCapacity(&output, capacity); err != nil { t.Fatal(err) }
+			if err := renderSchedulingCapacity(&output, capacity); err != nil {
+				t.Fatal(err)
+			}
 			for _, marker := range []string{test.reason, test.explanation, "不保证排队顺序或准入"} {
-				if !strings.Contains(output.String(), marker) { t.Fatalf("output lacks %q: %s", marker, output.String()) }
+				if !strings.Contains(output.String(), marker) {
+					t.Fatalf("output lacks %q: %s", marker, output.String())
+				}
 			}
 		})
 	}

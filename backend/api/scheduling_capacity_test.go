@@ -46,7 +46,7 @@ func TestSchedulingCapacityPATUsesOwnPoolAndRedactsNodeDetails(t *testing.T) {
 		client := k8s.NewClientFromInterfaces(dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WorkloadList"}), fake.NewSimpleClientset(node))
 		quota := &fakePlatformQuotaStore{quota: domain.TenantQuota{TenantID: "team-a", GPULimit: 24, GPUAvailable: 24}}
 		h := NewHandler(&fakeJobRepository{}, Options{Kubernetes: client, Quota: quota, TenantScheduling: fakePlatformSchedulingStore{accelerator: domain.AcceleratorA100}})
-		p := auth.Principal{Subject: "member", TenantID: "team-a", AuthType: auth.AuthTypePAT, Roles: []string{domain.RoleEngineer}}
+		p := auth.Principal{Subject: "member", TenantID: "team-a", AuthType: auth.AuthTypePAT, Roles: []string{domain.RoleEngineer}, Scopes: []string{domain.PATScopeJobsRead}}
 		if admin {
 			p.Roles = []string{domain.RoleSuperAdmin}
 		}

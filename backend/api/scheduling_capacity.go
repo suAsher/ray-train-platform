@@ -86,7 +86,7 @@ func parseSchedulingCapacityShape(c *gin.Context) (domain.Resources, error) {
 		shape.MemoryPerWorker = values[0]
 	}
 	memory, err := resource.ParseQuantity(shape.MemoryPerWorker)
-	if err != nil || len(shape.MemoryPerWorker)>64 || memory.Sign() <= 0 || memory.Cmp(resource.MustParse("1Pi")) > 0 {
+	if err != nil || len(shape.MemoryPerWorker) > 64 || memory.Sign() <= 0 || memory.Cmp(resource.MustParse("1Pi")) > 0 {
 		return shape, fmt.Errorf("memory out of range")
 	}
 	return shape, nil

@@ -41,7 +41,7 @@ func (c *Client) SchedulingCapacity(ctx context.Context, request SchedulingCapac
 		return unknown(fmt.Errorf("invalid accelerator pool"))
 	}
 	memory, err := resource.ParseQuantity(request.Resources.MemoryPerWorker)
-	if err != nil || memory.Sign() <= 0 || memory.Cmp(resource.MustParse("1Pi")) > 0 || len(request.Resources.MemoryPerWorker)>64 ||
+	if err != nil || memory.Sign() <= 0 || memory.Cmp(resource.MustParse("1Pi")) > 0 || len(request.Resources.MemoryPerWorker) > 64 ||
 		request.Resources.WorkerReplicas <= 0 || request.Resources.WorkerReplicas > 4096 || request.Resources.GPUsPerWorker < 0 || request.Resources.GPUsPerWorker > 4096 || request.Resources.CPUPerWorker <= 0 || request.Resources.CPUPerWorker > 1_000_000 {
 		return unknown(fmt.Errorf("invalid capacity worker shape"))
 	}
