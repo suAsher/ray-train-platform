@@ -78,3 +78,26 @@ python3 ops/observability/next/grafana/verify_runtime.py \
 ```
 
 It uses the same PostgreSQL 17.11 image, an internal Docker network, short-lived test-only certificates and credentials, and automatically removes its own containers/network/data. It checks TLS/SCRAM, negative authentication, plugin signature, provisioning, cross-replica persistence, loss of one Grafana replica and Envoy configuration. It does not replace real cluster CNPG failover or browser/CH/VM acceptance. The ClickHouse account retains `readonly=1`; only `max_execution_time` may change within 1–30 seconds, matching `queryTimeout=30`, as required by the [official plugin client](https://grafana.com/docs/plugins/grafana-clickhouse-datasource/latest/configure/). SQL grants remain the authorization boundary.
+
+## Dedicated CA bootstrap and recovery checks
+
+These are maintenance steps for the authorized publisher on the builder, not automatic deployment hooks. Use a newly created root-only directory, retain its path in the private release record, and do not print, commit or copy its keys into the repository. Create two independent CA keypairs with `umask 077`; for each `client` and `server`, use a distinct descriptive CN and CA extensions (`basicConstraints=critical,CA:TRUE` and `keyUsage=critical,keyCertSign,cRLSign`). For example, with `CA_WORK` set to that restricted directory:
+
+```bash
+umask 077
+for role in client server; do
+  openssl req -x509 -newkey rsa:4096 -nodes -days 3650 \
+    -subj "/CN=RayTrain dedicated Grafana PostgreSQL ${role} CA" \
+    -addext 'basicConstraints=critical,CA:TRUE' \
+    -addext 'keyUsage=critical,keyCertSign,cRLSign' \
+    -keyout "$CA_WORK/$role.key" -out "$CA_WORK/$role.crt"
+done
+```
+
+Import each pair exactly once as a Kubernetes TLS Secret named `cert-manager/obs-mtls-ca-grafana-postgres-client` or `cert-manager/obs-mtls-ca-grafana-postgres-server`. Before creation, verify the name is absent; do not overwrite an existing CA during routine rollout. Pass certificate/key files directly to `kubectl create secret tls ... --cert=... --key=...`; do not use `kubectl get secret -o yaml` to move CA keys. Record only the public SHA-256 certificate fingerprints and validity dates. The `ClusterIssuer` declarations emitted by `--part certificates` refer to these exact Secret names.
+
+Create `grafana/obs-mtls-postgres-client-ca` from the **client certificate file only**, and `grafana/obs-mtls-ca-postgres-server-public` from the **server certificate file only**, each with key `ca.crt`. The separate `grafana/obs-mtls-cnpg-metrics-ca` contains only the existing mesh CA public certificate. Label each `cnpg.io/reload=true`. Never reuse the dedicated PG client root as the mesh root or vice versa. Wait for both Issuers and all six Grafana Certificates to become Ready; compare the replication certificate issuer and the PostgreSQL `clientCASecret` fingerprint before database initialization.
+
+The inherited Nightingale probe scripts hardcode its namespace and must not be pointed at this database without adaptation. The safe reusable portions are their certificate-rejection test cases and the CNPG API/status assertions. On the dedicated Grafana deployment, record the three instance names, primary, ready state, timeline/LSN, synchronous standby and the two Grafana Pod UIDs before a planned switchover. Select an existing healthy Grafana standby, use the installed CNPG plugin's `kubectl cnpg promote` for **grafana-postgres in namespace grafana only**, then verify one writable primary, both standbys rejoin, and a dashboard created before promotion remains readable from each Grafana replica. Do not change Nightingale's operator, database, or active training workloads for this check.
+
+For database backup/restore, first identify the dedicated Grafana primary and a root-only backup destination, then use `pg_dump --format=custom` for database `grafana` through an authorized database identity. A dump contains authentication and encrypted datasource state and must remain private with mode 0600. Restore with `pg_restore --exit-on-error` into a separate disposable PostgreSQL instance/database; connect a disposable Grafana using the same externally maintained `secret-key` and validate the saved dashboard and datasource decryption. Never restore over the live database as an acceptance test. Retain the tested backup, CA custody and secret-key recovery instructions under the deployment's private recovery policy. CNPG failover, tested logical restore and future WAL/PITR backups are distinct evidence; the disposable local lab currently covers PostgreSQL TLS and Grafana replica loss, not a three-instance CNPG failover or live database backup.
