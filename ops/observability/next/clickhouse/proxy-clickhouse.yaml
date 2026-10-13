@@ -17,19 +17,29 @@
                 "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext",
                 "require_client_certificate": true,
                 "common_tls_context": {
-                  "tls_params": {"tls_minimum_protocol_version": "TLSv1_2"},
+                  "tls_params": {
+                    "tls_minimum_protocol_version": "TLSv1_2"
+                  },
                   "tls_certificates": [
                     {
-                      "certificate_chain": {"filename": "/etc/obs-mtls/tls.crt"},
-                      "private_key": {"filename": "/etc/obs-mtls/tls.key"}
+                      "certificate_chain": {
+                        "filename": "/etc/obs-mtls/tls.crt"
+                      },
+                      "private_key": {
+                        "filename": "/etc/obs-mtls/tls.key"
+                      }
                     }
                   ],
                   "validation_context": {
-                    "trusted_ca": {"filename": "/etc/obs-mtls/ca.crt"},
+                    "trusted_ca": {
+                      "filename": "/etc/obs-mtls/ca.crt"
+                    },
                     "match_typed_subject_alt_names": [
                       {
                         "san_type": "URI",
-                        "matcher": {"exact": "spiffe://observability.raytrain.local/clickhouse/ch-operator"}
+                        "matcher": {
+                          "exact": "spiffe://observability.raytrain.local/clickhouse/ch-operator"
+                        }
                       },
                       {
                         "san_type": "URI",
@@ -112,6 +122,12 @@
                         "san_type": "URI",
                         "matcher": {
                           "exact": "spiffe://observability.raytrain.local/clickhouse/query-admin"
+                        }
+                      },
+                      {
+                        "san_type": "URI",
+                        "matcher": {
+                          "exact": "spiffe://observability.raytrain.local/grafana/grafana-query"
                         }
                       }
                     ]

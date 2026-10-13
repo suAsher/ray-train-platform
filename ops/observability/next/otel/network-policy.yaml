@@ -11,6 +11,13 @@ spec:
   policyTypes: [Ingress, Egress]
   ingress:
     - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: ray-train-platform}
+          podSelector:
+            matchLabels: {app: ray-train-backend}
+      ports:
+        - {protocol: TCP, port: 14318}
+    - from:
         - podSelector:
             matchLabels: {observability.raytrain.io/component: otel-canary}
       ports:

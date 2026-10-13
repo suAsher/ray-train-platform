@@ -65,6 +65,32 @@ spec:
       observability_query/profile: readonly
       observability_query/grants/query:
         - "GRANT SELECT ON observability_canary.*"
+      platform_otel_ingest/password_sha256_hex:
+        valueFrom:
+          secretKeyRef: {name: clickhouse-auth, key: platform-ingest-password-sha256}
+      platform_otel_ingest/networks/ip: ["127.0.0.1"]
+      platform_otel_ingest/profile: ingest
+      platform_otel_ingest/grants/query:
+        - "GRANT INSERT, SHOW COLUMNS ON raytrain_observability.otel_logs"
+        - "GRANT INSERT, SHOW COLUMNS ON raytrain_observability.otel_traces"
+      grafana_platform_query/password_sha256_hex:
+        valueFrom:
+          secretKeyRef: {name: clickhouse-auth, key: platform-query-password-sha256}
+      grafana_platform_query/networks/ip: ["127.0.0.1"]
+      grafana_platform_query/profile: readonly
+      grafana_platform_query/grants/query:
+        - "GRANT SELECT ON raytrain_observability.otel_logs_all"
+        - "GRANT SELECT ON raytrain_observability.otel_traces_all"
+        - "GRANT SELECT ON raytrain_observability.otel_traces_trace_id_ts_all"
+      platform_distributed_reader/password_sha256_hex:
+        valueFrom:
+          secretKeyRef: {name: clickhouse-auth, key: platform-distributed-password-sha256}
+      platform_distributed_reader/networks/ip: ["127.0.0.1"]
+      platform_distributed_reader/profile: readonly
+      platform_distributed_reader/grants/query:
+        - "GRANT SELECT ON raytrain_observability.otel_logs"
+        - "GRANT SELECT ON raytrain_observability.otel_traces"
+        - "GRANT SELECT ON raytrain_observability.otel_traces_trace_id_ts"
     profiles:
       default/max_threads: 2
       default/max_memory_usage: 2147483648
@@ -109,6 +135,25 @@ spec:
       prometheus/events: true
       prometheus/asynchronous_metrics: true
     files:
+      # Explicit internal reader: no cluster secret, which would propagate the
+      # original Grafana user and require granting it SELECT on local tables.
+      config.d/zz-platform-query.xml: |
+        <clickhouse><remote_servers><telemetry_platform_query>
+          <shard><internal_replication>true</internal_replication>
+            <replica>
+              <host>chi-clickhouse-telemetry-0-0.clickhouse.svc.cluster.local</host>
+              <port>9440</port><secure>1</secure>
+              <user>platform_distributed_reader</user>
+              <password from_env="PLATFORM_DISTRIBUTED_PASSWORD"/>
+            </replica>
+            <replica>
+              <host>chi-clickhouse-telemetry-0-1.clickhouse.svc.cluster.local</host>
+              <port>9440</port><secure>1</secure>
+              <user>platform_distributed_reader</user>
+              <password from_env="PLATFORM_DISTRIBUTED_PASSWORD"/>
+            </replica>
+          </shard>
+        </telemetry_platform_query></remote_servers></clickhouse>
       # Envoy terminates the authenticated operator connection inside this Pod.
       # Keep the operator-generated password/grants; its original Pod-IP ACL
       # would reject the authenticated connection's loopback source address.
@@ -189,6 +234,9 @@ spec:
               image: harbor.wellspiking.ai/hub/clickhouse/clickhouse-server:26.8.20.9@sha256:9b61e3c635c04ad5bb521eb4f6e61ce7585b5580814e51c25bb9e8292ce43364
               imagePullPolicy: IfNotPresent
               env:
+                - name: PLATFORM_DISTRIBUTED_PASSWORD
+                  valueFrom:
+                    secretKeyRef: {name: clickhouse-platform-distributed-auth, key: password}
                 - name: INTERSERVER_USER
                   valueFrom:
                     secretKeyRef: {name: obs-clickhouse-interserver-auth, key: username}

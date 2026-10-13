@@ -9,6 +9,7 @@ spec:
   ports:
     - {name: grpc, port: 4317, targetPort: grpc}
     - {name: http, port: 4318, targetPort: http}
+    - {name: platform-http, port: 14318, targetPort: platform-http}
 ---
 apiVersion: v1
 kind: Service
@@ -22,6 +23,7 @@ spec:
   ports:
     - {name: grpc, port: 4317, targetPort: grpc}
     - {name: http, port: 4318, targetPort: http}
+    - {name: platform-http, port: 14318, targetPort: platform-http}
     - {name: metrics, port: 8888, targetPort: metrics}
 ---
 apiVersion: apps/v1
@@ -74,6 +76,9 @@ spec:
             - name: CLICKHOUSE_PASSWORD
               valueFrom:
                 secretKeyRef: {name: otel-clickhouse-auth, key: password}
+            - name: PLATFORM_CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: otel-platform-clickhouse-auth, key: password}
             - {name: GOMEMLIMIT, value: 768MiB}
           startupProbe:
             httpGet: {path: /readyz, port: 18080}
@@ -113,6 +118,7 @@ spec:
           ports:
             - {name: grpc, containerPort: 4317}
             - {name: http, containerPort: 4318}
+            - {name: platform-http, containerPort: 14318}
             - {name: metrics, containerPort: 8888}
             - {name: health, containerPort: 18080}
           startupProbe:

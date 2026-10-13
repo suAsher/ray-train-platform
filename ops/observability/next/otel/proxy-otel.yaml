@@ -76,6 +76,59 @@ static_resources:
                   - name: envoy.filters.http.router
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+    - name: platform_otlp_http
+      address:
+        socket_address: {address: __POD_IP__, port_value: 14318}
+      filter_chains:
+        - transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              require_client_certificate: true
+              common_tls_context:
+                tls_params: {tls_minimum_protocol_version: TLSv1_2}
+                alpn_protocols: [h2, http/1.1]
+                tls_certificates:
+                  - certificate_chain: {filename: /etc/obs-mtls/tls.crt}
+                    private_key: {filename: /etc/obs-mtls/tls.key}
+                validation_context:
+                  trusted_ca: {filename: /etc/obs-mtls/ca.crt}
+                  match_typed_subject_alt_names:
+                    - san_type: URI
+                      matcher: {exact: "spiffe://observability.raytrain.local/ray-train-platform/backend-telemetry"}
+          filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: platform_otlp_http
+                codec_type: AUTO
+                stream_idle_timeout: 60s
+                route_config:
+                  name: platform_otlp_http
+                  virtual_hosts:
+                    - name: platform_signals
+                      domains: ["*"]
+                      routes:
+                        - match:
+                            path: /v1/logs
+                            headers: [{name: ":method", string_match: {exact: POST}}]
+                          route: {cluster: platform_collector_http, timeout: 30s}
+                        - match:
+                            path: /v1/traces
+                            headers: [{name: ":method", string_match: {exact: POST}}]
+                          route: {cluster: platform_collector_http, timeout: 30s}
+                        - match: {prefix: /}
+                          direct_response: {status: 404}
+                request_timeout: 30s
+                max_request_headers_kb: 16
+                http_filters:
+                  - name: envoy.filters.http.buffer
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.buffer.v3.Buffer
+                      max_request_bytes: 1048576
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
     - name: collector_metrics
       address:
         socket_address: {address: __POD_IP__, port_value: 8888}
@@ -206,3 +259,13 @@ static_resources:
               - endpoint:
                   address:
                     socket_address: {address: 127.0.0.1, port_value: 13133}
+    - name: platform_collector_http
+      connect_timeout: 2s
+      type: STATIC
+      load_assignment:
+        cluster_name: platform_collector_http
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: {address: 127.0.0.1, port_value: 14318}
