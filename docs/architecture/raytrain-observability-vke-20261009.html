@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>RayTrain · VKE 可观测性架构</title>
+<title>RayTrain · VKE 可观测性架构 · 截至 2026-10-13</title>
 <style>
 :root{color-scheme:light;--ink:#243b55;--muted:#60748b;--line:#d9e3ee;--blue:#2563eb}
 *{box-sizing:border-box}
@@ -36,7 +36,7 @@ footer a{color:#345d8f}
 </head>
 <body>
 <header>
-  <div><h1>RayTrain · VKE 可观测性扩展架构</h1><p>首波真实指标与看板已接入；保留平台日志，逐步扩展分析与追踪 · 2026-10-09</p></div>
+  <div><h1>RayTrain · VKE 可观测性扩展架构</h1><p>独立 Grafana HA、正式 OTel / ClickHouse 管线已部署；HTTP 业务接入与新 Grafana 入口均已验收 · 截至 2026-10-13</p></div>
   <a href="../../ops/observability/next/DEPLOYMENT_RUNBOOK.md">部署与验收记录 ↗</a>
 </header>
 <nav class="toolbar" aria-label="架构图查看工具">
@@ -50,15 +50,15 @@ footer a{color:#345d8f}
 </nav>
 <main>
   <div class="viewer" id="viewer" tabindex="0" aria-label="可滚动缩放的架构图">
-    <div class="canvas" id="canvas"><img src="raytrain-observability-vke-20261009.svg" width="2880" height="2320" alt="RayTrain 可观测性架构：DCGM、Node、KSM、Alloy、Loki 五组二十七个指标目标已由 VMAgent 接入 VMCluster；现有 Grafana 首批看板使用原 Prometheus。绿色日志保留 Alloy 到 Loki 和 TOS。Kueue 与 Ray 更细业务指标、应用 SDK、正式 ClickHouse 管线和通知仍待接入。"></div>
+    <div class="canvas" id="canvas"><img src="raytrain-observability-vke-20261009.svg" width="2880" height="2320" alt="RayTrain VKE 可观测性：独立 Grafana 两副本共享专用 PostgreSQL 三副本，CNPG Operator 两副本管理。HTTP 指标通过 mTLS 9091、VMAgent 写入 VMCluster 1001；HTTP spans 和请求事件经 OTLP 14318、OTel 持久队列进入 ClickHouse 一分片两副本和三 Keeper。原 Alloy、Loki 日志链与旧 Grafana 回退保留。HTTP 业务接入与 Grafana 临时 NodePort 已验收；异步训练链路和夜莺正式通知尚未接入。"></div>
   </div>
   <section class="notes" aria-label="讲解要点">
-    <article class="note"><h2><i class="legend"></i>指标：首波真实目标已接入</h2><p>DCGM / Node / KSM / Alloy / Loki 共 5 组 27 目标 UP，读回 72 GPU、12 节点。现有 Grafana 首批看板用原 Prom 数据源，22 项查询通过；原 Prom 89/89 目标正常。Kueue / Ray 深层指标和应用指标后续完善。</p></article>
-    <article class="note"><h2><i class="legend"></i>日志：原有用户体验持续保留</h2><p>Alloy 与 Loki 是长期业务链路。先补自监控、资源保障、端到端 canary 和恢复验收，再依据瓶颈扩容；不因引入新组件默认扩成 DaemonSet。</p></article>
-    <article class="note"><h2><i class="legend"></i>追踪、分析与统一告警：继续推进</h2><p>后端 / Worker SDK 尚未实现，正式 OTel / ClickHouse 管线、外部夜莺 UI 与 SSO 仍待接入。生产告警统一由夜莺处理，用户后续在 UI 配置渠道；VMAlert 优先 recording，AM 不接正式通知。</p></article>
+    <article class="note"><h2><i class="legend"></i>指标：VMCluster + 独立 Grafana HA</h2><p>VMAgent 双副本抓取基础设施、组件及后端 HTTP 指标，业务数据写入 VMCluster tenant 1001。独立 Grafana 两副本共享 PostgreSQL 三副本，由专用 CNPG Operator 双副本管理；已接通 VM、原 Prometheus、Loki、ClickHouse 四个数据源。旧 Grafana 与自建看板保留，临时 HTTPS 31701 已切换到新 Grafana 并完成验收；旧账号与自建配置未自动迁移。</p></article>
+    <article class="note"><h2><i class="legend"></i>日志：原有用户体验持续保留</h2><p>Alloy 两副本通过 Kubernetes API 分片采集，Loki 三副本与上海 TOS 保存平台日志。新增指标由 VMAgent 采集；HTTP 请求事件由后端直接发往 OTel。扩展体系不会把全部新信号压到 Alloy，也不会用 ClickHouse 替换训练日志查询。</p></article>
+    <article class="note"><h2><i class="legend"></i>HTTP 追踪、分析与统一告警</h2><p>后端通过 mTLS OTLP HTTP 14318 导出请求 spans / events；OTel 双副本使用持久队列，ClickHouse 为 1 shard × 2 replicas、3 Keeper，logs 保留 7 天、traces / lookup 30 天。HTTP 接入已验收；仅覆盖 HTTP 边界，异步 Worker / 全任务追踪尚未接入。夜莺 HTTPS 31700 可配置告警，通知渠道由用户在 UI 配置。</p></article>
   </section>
 </main>
-<footer>以 <a href="../../ops/observability/next/DEPLOYMENT_RUNBOOK.md">部署记录</a> 与 <a href="../superpowers/specs/2026-10-09-observability-expansion-design.md">扩展设计</a> 为状态依据；本图表示目标职责与分阶段落地，不代表所有业务已接入。</footer>
+<footer>以 <a href="../../ops/observability/next/DEPLOYMENT_RUNBOOK.md">部署记录</a> 与 <a href="../superpowers/specs/2026-10-09-observability-expansion-design.md">扩展设计</a> 为状态依据；本图截至 2026-10-13。HA 不代替备份，定时归档 / PITR 和完整训练链路追踪仍需独立实施。</footer>
 <script>
 (()=>{"use strict";const viewer=document.getElementById("viewer"),canvas=document.getElementById("canvas"),out=document.getElementById("scale");let zoom=1,auto=true;function set(value){zoom=Math.max(.2,Math.min(1.75,value));canvas.style.width=(2880*zoom)+"px";out.textContent=Math.round(zoom*100)+"%";}function fit(){auto=true;set((viewer.clientWidth-48)/2880);}document.getElementById("fit").addEventListener("click",fit);document.getElementById("actual").addEventListener("click",()=>{auto=false;set(1);});document.getElementById("minus").addEventListener("click",()=>{auto=false;set(zoom-.1);});document.getElementById("plus").addEventListener("click",()=>{auto=false;set(zoom+.1);});document.getElementById("print").addEventListener("click",()=>window.print());window.addEventListener("resize",()=>{if(auto)fit();});fit();})();
 </script>
