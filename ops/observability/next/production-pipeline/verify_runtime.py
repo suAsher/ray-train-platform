@@ -92,6 +92,11 @@ def verify(sandbox, context, sql):
     time.sleep(2)
     for table in ('otel_logs_all', 'otel_traces_all'):
         assert sql(sandbox, 'SELECT count() FROM ' + db + table, role='grafana-query') == '1'
-    return {'mtls_method_path_body_limits': 'passed', 'sensitive_field_erasure': 'passed',
+    # Exercise actual TTL/merge work with the existing small server pools.
+    for table in ('otel_logs', 'otel_traces'):
+        sql(sandbox, 'INSERT INTO ' + db + table + " (Timestamp,TraceId) VALUES(now64(9)-INTERVAL 35 DAY,'expired-synthetic')", role='schema-admin')
+        sql(sandbox, 'OPTIMIZE TABLE ' + db + table + ' FINAL', role='schema-admin')
+        assert sql(sandbox, 'SELECT count() FROM ' + db + table + " WHERE TraceId='expired-synthetic'", role='schema-admin') == '0'
+    return {'ttl_and_merge_small_pool': 'passed', 'mtls_method_path_body_limits' : 'passed', 'sensitive_field_erasure': 'passed',
             'two_replica_production_ingest': 'passed', 'distributed_read_without_base_grant': 'passed',
             'unexpected_log_body_and_route_rejected': 'passed', 'grafana_write_base_system_denied': 'passed'}

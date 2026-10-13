@@ -310,6 +310,7 @@ def _start_collector(sandbox, otel):
                            [(base / "collector.yaml", "/etc/otelcol/config/collector.yaml", False),
                             (queue, "/var/lib/otelcol", True), (leaf, "/etc/obs-mtls", False)],
                            env={"CLICKHOUSE_PASSWORD": sandbox.passwords["otel_ingest"],
+                                "PLATFORM_CLICKHOUSE_PASSWORD": sandbox.passwords["platform_otel_ingest"],
                                 "GOMEMLIMIT": "768MiB"}, network_mode="container:" + anchor,
                            memory="1g", cpus="1")
     proxy_path = base / "proxy-otel.yaml"
