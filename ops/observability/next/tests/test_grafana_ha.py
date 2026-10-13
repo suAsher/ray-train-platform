@@ -142,6 +142,38 @@ class GrafanaHATests(unittest.TestCase):
         after = next(d for d in changed if d['kind'] == 'Deployment')['spec']['template']['metadata']['annotations']
         self.assertNotEqual(before, after)
 
+    def test_all_three_metrics_targets_are_selected_with_verified_tls(self):
+        scrapes = [doc for doc in self.docs if doc['kind'] == 'VMServiceScrape']
+        self.assertEqual(3, len(scrapes))
+        names = {doc['metadata']['name'] for doc in scrapes}
+        self.assertEqual({'business-wave1-grafana', 'business-wave1-grafana-postgres',
+                          'business-wave1-grafana-cnpg-operator'}, names)
+        for doc in scrapes:
+            self.assertEqual('victoriametrics', doc['metadata']['namespace'])
+            self.assertEqual('business-wave1', doc['metadata']['labels']['observability.raytrain.io/scrape'])
+            self.assertEqual(['grafana'], doc['spec']['namespaceSelector']['matchNames'])
+            endpoint = doc['spec']['endpoints'][0]
+            self.assertEqual('https', endpoint['scheme'])
+            self.assertEqual('/metrics', endpoint['path'])
+            tls = endpoint['tlsConfig']
+            self.assertFalse(tls['insecureSkipVerify'])
+            self.assertEqual({'secret': {'name': 'obs-mtls-vmagent', 'key': 'tls.crt'}}, tls['cert'])
+            self.assertEqual({'name': 'obs-mtls-vmagent', 'key': 'tls.key'}, tls['keySecret'])
+            if doc['metadata']['name'].endswith('postgres'):
+                self.assertEqual('obs-mtls-grafana-postgres-server-ca', tls['ca']['secret']['name'])
+                self.assertEqual('grafana-postgres-rw.grafana.svc', tls['serverName'])
+            else:
+                self.assertEqual('obs-mtls-vmagent', tls['ca']['secret']['name'])
+
+    def test_metrics_discovery_is_namespaced_read_only_without_secret_access(self):
+        role = self.resource('Role', 'grafana-vm-discovery')
+        self.assertEqual('grafana', role['metadata']['namespace'])
+        for rule in role['rules']:
+            self.assertEqual(['get', 'list', 'watch'], rule['verbs'])
+            self.assertNotIn('secrets', rule['resources'])
+        binding = self.resource('RoleBinding', 'grafana-vm-discovery')
+        self.assertEqual([{'kind': 'ServiceAccount', 'name': 'vm-self-scraper', 'namespace': 'victoriametrics'}], binding['subjects'])
+
 
 if __name__ == '__main__':
     unittest.main()
