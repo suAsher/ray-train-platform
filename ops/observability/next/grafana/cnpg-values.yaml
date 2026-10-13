@@ -1,0 +1,64 @@
+# Chart: cloudnative-pg/cloudnative-pg 0.29.1; operator: 1.30.1.
+# Render in namespace grafana through scope_cnpg.py on every install/upgrade.
+# CRDs are shared and separately owned; cluster RBAC gains a -grafana suffix.
+fullnameOverride: cloudnative-pg-operator
+replicaCount: 2
+crds:
+  create: false
+image:
+  repository: harbor.wellspiking.ai/guofeng.su/cnpg-observability
+  # Reuse the builder-tested image with exact victoriametrics/vmagent identity.
+  tag: "1.30.1-mtls-names-3ca43d7@sha256:71e30bd615ad4811099d6141c787c172f3e4f16f9ab0bf673146bd1d1e020c6f"
+additionalArgs:
+  - --metrics-bind-address=127.0.0.1:8080
+additionalEnv:
+  - name: ENABLE_WEBHOOK_NAMESPACE_SUFFIX
+    value: "true"
+  - name: OBS_WEBHOOK_API_SERVER_IPS
+    value: 172.28.2.64,172.28.5.50
+podSecurityContext:
+  runAsNonRoot: true
+  fsGroup: 10001
+  seccompProfile: {type: RuntimeDefault}
+config:
+  clusterWide: false
+  name: cloudnative-pg-operator-config
+  data:
+    WATCH_NAMESPACE: grafana
+service:
+  name: cnpg-webhook-service
+  type: ClusterIP
+  port: 443
+serviceAccount:
+  create: true
+  name: cloudnative-pg-operator
+rbac:
+  create: true
+  aggregateClusterRoles: false
+monitoring:
+  podMonitorEnabled: false
+  grafanaDashboard:
+    create: false
+priorityClassName: raytrain-observability-additive
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: NotIn
+              values: [172.28.1.222, 172.28.3.32]
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: cloudnative-pg
+        topologyKey: kubernetes.io/hostname
+tolerations: []

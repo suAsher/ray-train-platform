@@ -23,6 +23,7 @@ class GrafanaHATests(unittest.TestCase):
     def setUpClass(cls):
         cls.renderer = module('render')
         cls.values = yaml.safe_load((ROOT / 'values.yaml').read_text())
+        cls.values = {**cls.values, 'image': 'harbor.wellspiking.ai/guofeng.su/grafana-observability:13.1.1-clickhouse-4.22.1-test@sha256:' + 'a' * 64}
         cls.docs = cls.renderer.render(cls.values)
 
     def resource(self, kind, name):
