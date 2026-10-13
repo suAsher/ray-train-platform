@@ -24,7 +24,7 @@ The authenticated backend must supply registered route templates; the gateway ca
 
 The existing `telemetry` cluster secret propagates the initiating SQL user to replicas. Reusing that cluster for Grafana would require granting Grafana the local tables too. The separate `telemetry_platform_query` cluster instead authenticates remote reads with `platform_distributed_reader` using a Secret available only to ClickHouse. It has **no cluster secret**. The existing cluster secret remains unchanged for replication and ON CLUSTER DDL. Both internal reads and Grafana use mTLS native port 9440; the Grafana URI is not authorized for admin HTTP port 8443. Grafana cannot perform INSERT, DDL, arbitrary remote table functions or SELECT on local tables or sensitive system tables.
 
-The query account has `readonly=1`, two threads, 1 GiB query memory and 30-second query timeout. Grafana configuration must not send unsupported setting changes. Datasource configuration and fixed table names avoid requiring broad introspection grants. Grafana folders are not tenant authorization: this datasource is for platform operators only.
+The query account has `readonly=1`, two threads, 1 GiB query memory and 30-second query timeout. The official Grafana driver sets `max_execution_time` on every query, so only this setting is `changeable_in_readonly`, bounded to 1–30 seconds. All other setting changes remain forbidden. Datasource configuration and fixed table names avoid requiring broad introspection grants. Grafana folders are not tenant authorization: this datasource is for platform operators only.
 
 ## Required Secret references
 

@@ -77,7 +77,7 @@ spec:
         valueFrom:
           secretKeyRef: {name: clickhouse-auth, key: platform-query-password-sha256}
       grafana_platform_query/networks/ip: ["127.0.0.1"]
-      grafana_platform_query/profile: readonly
+      grafana_platform_query/profile: grafana_query
       grafana_platform_query/grants/query:
         - "GRANT SELECT ON raytrain_observability.otel_logs_all"
         - "GRANT SELECT ON raytrain_observability.otel_traces_all"
@@ -102,8 +102,17 @@ spec:
       readonly/readonly: 1
       readonly/max_threads: 2
       readonly/max_memory_usage: 1073741824
-      readonly/max_execution_time: 30
+      readonly/max_execution_time: 30      grafana_query/readonly: 1
+      grafana_query/max_threads: 2
+      grafana_query/max_memory_usage: 1073741824
+      grafana_query/max_execution_time: 30
+      # Official Grafana client sets this on every request. No other setting
+      # may change, and the requested timeout must remain between 1 and 30 s.
+      grafana_query/constraints/max_execution_time/min: 1
+      grafana_query/constraints/max_execution_time/max: 30
+      grafana_query/constraints/max_execution_time/changeable_in_readonly: true
     settings:
+      access_control_improvements/settings_constraints_replace_previous: true
       access_control_improvements/select_from_system_db_requires_grant: true
       access_control_improvements/select_from_information_schema_requires_grant: true
       max_server_memory_usage: 6442450944

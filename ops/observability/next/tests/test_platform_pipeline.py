@@ -84,6 +84,10 @@ class PlatformPipelineTests(unittest.TestCase):
         self.assertEqual(['GRANT SELECT ON raytrain_observability.' + x for x in
                           ('otel_logs_all', 'otel_traces_all', 'otel_traces_trace_id_ts_all')],
                          users['grafana_platform_query/grants/query'])
+        self.assertEqual('grafana_query', users['grafana_platform_query/profile'])
+        self.assertEqual(1, chi['profiles']['grafana_query/readonly'])
+        self.assertEqual(30, chi['profiles']['grafana_query/constraints/max_execution_time/max'])
+        self.assertTrue(chi['profiles']['grafana_query/constraints/max_execution_time/changeable_in_readonly'])
         cluster = ET.fromstring(chi['files']['config.d/zz-platform-query.xml']).find('remote_servers/telemetry_platform_query')
         self.assertIsNone(cluster.find('secret'))
         for replica in cluster.findall('shard/replica'):

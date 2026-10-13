@@ -74,7 +74,10 @@ def verify(sandbox, context, sql):
         for table in ('otel_logs', 'otel_traces', 'otel_traces_trace_id_ts'):
             wait('replicated production row', lambda r=replica, t=table:
                  sql(sandbox, 'SELECT count() FROM ' + db + t, replica=r, role='schema-admin') == '1', 60)
-    denied = ['SELECT * FROM ' + db + 'otel_logs', 'SELECT * FROM ' + db + 'otel_traces',
+    assert sql(sandbox, 'SET max_execution_time=30; SELECT 1', role='grafana-query') == '1'
+    denied = ['SET max_execution_time=31', 'SET readonly=0',
+              "SELECT count() FROM cluster('telemetry_platform_query',raytrain_observability,otel_logs)",
+              'SELECT * FROM '  + db + 'otel_logs', 'SELECT * FROM ' + db + 'otel_traces',
               'SELECT * FROM ' + db + 'otel_traces_trace_id_ts', 'SELECT * FROM system.users',
               'SELECT * FROM system.clusters', 'SELECT * FROM system.query_log',
               'INSERT INTO ' + db + "otel_logs_all (Timestamp,Body) VALUES(now64(9),'forbidden')"]
@@ -97,6 +100,8 @@ def verify(sandbox, context, sql):
         sql(sandbox, 'INSERT INTO ' + db + table + " (Timestamp,TraceId) VALUES(now64(9)-INTERVAL 35 DAY,'expired-synthetic')", role='schema-admin')
         sql(sandbox, 'OPTIMIZE TABLE ' + db + table + ' FINAL', role='schema-admin')
         assert sql(sandbox, 'SELECT count() FROM ' + db + table + " WHERE TraceId='expired-synthetic'", role='schema-admin') == '0'
-    return {'ttl_and_merge_small_pool': 'passed', 'mtls_method_path_body_limits' : 'passed', 'sensitive_field_erasure': 'passed',
+    sql(sandbox, 'OPTIMIZE TABLE ' + db + 'otel_traces_trace_id_ts FINAL', role='schema-admin')
+    assert sql(sandbox, 'SELECT count() FROM ' + db + "otel_traces_trace_id_ts WHERE TraceId='expired-synthetic'", role='schema-admin') == '0'
+    return {'ttl_and_merge_small_pool' : 'passed', 'mtls_method_path_body_limits' : 'passed', 'sensitive_field_erasure': 'passed',
             'two_replica_production_ingest': 'passed', 'distributed_read_without_base_grant': 'passed',
             'unexpected_log_body_and_route_rejected': 'passed', 'grafana_write_base_system_denied': 'passed'}
