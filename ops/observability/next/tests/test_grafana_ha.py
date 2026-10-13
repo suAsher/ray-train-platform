@@ -104,6 +104,15 @@ class GrafanaHATests(unittest.TestCase):
         self.assertIn('/etc/query-identity/tls.key', str(sds))
         self.assertIn('watched_directory', str(sds))
 
+    def test_upstream_tls_has_a_valid_explicit_tls13_range(self):
+        proxy = yaml.safe_load(self.resource('ConfigMap', 'grafana-envoy')['data']['envoy.yaml'])
+        upstreams = [cluster for cluster in proxy['static_resources']['clusters'] if 'transport_socket' in cluster]
+        self.assertEqual(2, len(upstreams))
+        for cluster in upstreams:
+            context = cluster['transport_socket']['typed_config']['common_tls_context']
+            self.assertEqual({'tls_minimum_protocol_version': 'TLSv1_3',
+                              'tls_maximum_protocol_version': 'TLSv1_3'}, context['tls_params'])
+
     def test_remote_datasource_dns_uses_cluster_ipv4_family(self):
         proxy = yaml.safe_load(self.resource('ConfigMap', 'grafana-envoy')['data']['envoy.yaml'])
         remote = [cluster for cluster in proxy['static_resources']['clusters'] if cluster['type'] == 'STRICT_DNS']
