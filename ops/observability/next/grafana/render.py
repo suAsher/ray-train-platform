@@ -11,6 +11,7 @@ import yaml
 from common import ROOT, resource
 import certificates
 import network
+import monitoring
 import provisioning
 import proxy
 import workloads
@@ -63,7 +64,7 @@ def render(values):
                 'checksum/grafana-config': checksum}}}
             doc = {**doc, 'spec': {**doc['spec'], 'template': template}}
         applications.append(doc)
-    return [*bootstrap(), *certificates.render(), *configs, *applications, *network.render()]
+    return [*bootstrap(), *certificates.render(), *configs, *applications, *network.render(), *monitoring.render()]
 
 
 def main():
