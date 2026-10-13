@@ -289,5 +289,36 @@ class GrafanaLiveGuardTests(unittest.TestCase):
             self.live.promotion_patch(cluster, 'nightingale-postgres-2', '2026-10-13T00:00:00Z')
 
 
+class GrafanaRestoreGuardTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.restore = module('verify_restore')
+
+    def test_private_backup_destination_cannot_escape_root(self):
+        for path in ('/tmp/not-private', '/root/../tmp/escape'):
+            with self.assertRaises(self.restore.VerificationError):
+                self.restore.private_directory(Path(path))
+
+    def test_unified_inventory_requires_production_dashboard_and_four_sources(self):
+        valid = {'dashboards': 1, 'production_overview': 1, 'datasources': 4, 'native_admin': 1}
+        self.assertTrue(self.restore.inventory_valid(valid))
+        for field in valid:
+            self.assertFalse(self.restore.inventory_valid({**valid, field: 0}))
+
+    def test_restore_reads_actual_new_credential_contract_and_rejects_public_file(self):
+        import json
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory) / 'synthetic.json'
+            file.write_text(json.dumps({'admin': 'synthetic-admin', 'encryption': 'synthetic-key',
+                                        'database': 'synthetic-database', 'vm': 'must-not-be-returned'}))
+            file.chmod(0o600)
+            self.assertEqual({'admin': 'synthetic-admin', 'encryption': 'synthetic-key', 'db': 'synthetic-database'},
+                             self.restore.load_credentials(file))
+            file.chmod(0o644)
+            with self.assertRaises(self.restore.VerificationError):
+                self.restore.load_credentials(file)
+
+
 if __name__ == '__main__':
     unittest.main()
