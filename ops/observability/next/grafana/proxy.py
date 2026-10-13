@@ -6,7 +6,7 @@ TYPE = 'type.googleapis.com/envoy.'
 
 
 def tls(directory, upstream=None):
-    common = {'tls_params': {'tls_minimum_protocol_version': 'TLSv1_3'},
+    common = {'tls_params': {'tls_minimum_protocol_version': 'TLSv1_3', 'tls_maximum_protocol_version': 'TLSv1_3'},
               'tls_certificates': [{'certificate_chain': {'filename': directory + '/tls.crt'},
                                     'private_key': {'filename': directory + '/tls.key'}}],
               'validation_context': {'trusted_ca': {'filename': directory + '/ca.crt'}}}
