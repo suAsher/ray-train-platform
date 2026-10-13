@@ -36,6 +36,8 @@ spec:
           replicas:
             - name: "0"
               settings:
+      access_control_improvements/select_from_system_db_requires_grant: true
+      access_control_improvements/select_from_information_schema_requires_grant: true
                 interserver_https_host: chi-clickhouse-telemetry-0-0.clickhouse.svc.cluster.local
             - name: "1"
               settings:
