@@ -2,6 +2,8 @@
 """Render the isolated Grafana deployment; never reads a Secret or talks to Kubernetes."""
 import argparse
 from copy import deepcopy
+import hashlib
+import json
 import re
 import sys
 from urllib.parse import urlsplit
@@ -38,17 +40,30 @@ def validate(values):
             raise ValueError('unsafe external Secret reference')
 
 
-def render(values):
-    validate(values)
-    values = deepcopy(values)
+def bootstrap():
     namespace = resource('Namespace', 'grafana', namespaced=False)
     namespace['metadata']['labels'] = {**namespace['metadata']['labels'],
         'pod-security.kubernetes.io/enforce': 'restricted'}
     quota = resource('ResourceQuota', 'grafana-budget', {'spec': {'hard': {
         'requests.cpu': '4', 'requests.memory': '8Gi', 'limits.cpu': '16', 'limits.memory': '16Gi',
         'requests.storage': '60Gi', 'persistentvolumeclaims': '3', 'pods': '12', 'requests.nvidia.com/gpu': '0'}}})
-    return [namespace, quota, *certificates.render(), *provisioning.render(values), proxy.render(),
-            *workloads.render(values), *network.render()]
+    return [namespace, quota]
+
+
+def render(values):
+    validate(values)
+    values = deepcopy(values)
+    configs = [*provisioning.render(values), proxy.render()]
+    checksum = hashlib.sha256(json.dumps(configs, sort_keys=True).encode()).hexdigest()
+    applications = []
+    for doc in workloads.render(values):
+        if doc['kind'] == 'Deployment':
+            template = doc['spec']['template']
+            template = {**template, 'metadata': {**template['metadata'], 'annotations': {
+                'checksum/grafana-config': checksum}}}
+            doc = {**doc, 'spec': {**doc['spec'], 'template': template}}
+        applications.append(doc)
+    return [*bootstrap(), *certificates.render(), *configs, *applications, *network.render()]
 
 
 def main():
@@ -63,11 +78,11 @@ def main():
         docs = certificates.render()
     elif args.part == 'bootstrap':
         # Bootstrap is independent of the application image, but remains exactly scoped.
-        docs = [resource('Namespace', 'grafana', namespaced=False)]
+        docs = bootstrap()
     else:
         docs = render(values)
         if args.part == 'application':
-            excluded = {'Certificate', 'CertificateRequestPolicy', 'ClusterRole', 'ClusterRoleBinding', 'Namespace'}
+            excluded = {'Certificate', 'CertificateRequestPolicy', 'ClusterIssuer', 'ClusterRole', 'ClusterRoleBinding', 'Namespace'}
             docs = [doc for doc in docs if doc['kind'] not in excluded]
     yaml.safe_dump_all(docs, sys.stdout, sort_keys=False)
 

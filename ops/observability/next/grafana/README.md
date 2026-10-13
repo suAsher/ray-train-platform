@@ -69,3 +69,12 @@ Deployment order: bootstrap namespace; external Secrets and CA imports; certific
 - Provisioned production dashboard uses backend service `ray-train-backend`, the production Distributed tables, VM metrics and GPU utilization; no synthetic canary datasource is presented as business telemetry.
 
 Require builder contract checks, Envoy config validation, signed-plugin startup verification, real PostgreSQL TLS/SCRAM success, bad cert/password/plaintext rejection, HA Pod/failover checks, native admin browser login, datasource health/query success, WebSocket/Origin checks and a saved-dashboard reload across replicas before switching the existing gateway. Do not stop training or reuse production identities for test traffic. Keep old Grafana intact for the gateway rollback; do not delete retained PostgreSQL PVC/PV on rollback. Files in this directory alone do not establish production deployment or acceptance.
+
+The PostgreSQL/HA/signature lab is reproducible entirely on the builder:
+
+```bash
+python3 ops/observability/next/grafana/verify_runtime.py \
+  --image grafana-observability:13.1.1-clickhouse-4.22.1-candidate
+```
+
+It uses the same PostgreSQL 17.11 image, an internal Docker network, short-lived test-only certificates and credentials, and automatically removes its own containers/network/data. It checks TLS/SCRAM, negative authentication, plugin signature, provisioning, cross-replica persistence, loss of one Grafana replica and Envoy configuration. It does not replace real cluster CNPG failover or browser/CH/VM acceptance. The ClickHouse account retains `readonly=1`; only `max_execution_time` may change within 1–30 seconds, matching `queryTimeout=30`, as required by the [official plugin client](https://grafana.com/docs/plugins/grafana-clickhouse-datasource/latest/configure/). SQL grants remain the authorization boundary.

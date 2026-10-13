@@ -49,11 +49,11 @@ def dashboard():
         {'id': 2, 'title': 'GPU utilization', 'type': 'timeseries', 'datasource': {'type': 'prometheus', 'uid': 'victoriametrics'},
          'targets': [{'refId': 'A', 'expr': 'avg by (Hostname) (DCGM_FI_DEV_GPU_UTIL)'}], 'gridPos': {'x': 12, 'y': 0, 'w': 12, 'h': 8}},
         {'id': 3, 'title': 'Platform HTTP request logs', 'type': 'logs', 'datasource': {'type': 'grafana-clickhouse-datasource', 'uid': 'clickhouse-platform'},
-         'targets': [{'refId': 'A', 'queryType': 'sql', 'editorType': 'sql', 'format': 1,
+         'targets': [{'refId': 'A', 'queryType': 'logs', 'editorType': 'sql', 'format': 2,
                       'rawSql': "SELECT Timestamp AS timestamp, Body AS body, SeverityText AS level, TraceId AS traceID FROM raytrain_observability.otel_logs_all WHERE $__timeFilter(Timestamp) AND ServiceName = 'ray-train-backend' ORDER BY Timestamp DESC LIMIT 500"}],
          'gridPos': {'x': 0, 'y': 8, 'w': 24, 'h': 10}},
         {'id': 4, 'title': 'Platform request traces', 'type': 'table', 'datasource': {'type': 'grafana-clickhouse-datasource', 'uid': 'clickhouse-platform'},
-         'targets': [{'refId': 'A', 'queryType': 'sql', 'editorType': 'sql', 'format': 1,
+         'targets': [{'refId': 'A', 'queryType': 'table', 'editorType': 'sql', 'format': 1,
                       'rawSql': "SELECT Timestamp, TraceId, SpanName, Duration / 1000000 AS duration_ms, StatusCode FROM raytrain_observability.otel_traces_all WHERE $__timeFilter(Timestamp) AND ServiceName = 'ray-train-backend' ORDER BY Timestamp DESC LIMIT 200"}],
          'gridPos': {'x': 0, 'y': 18, 'w': 24, 'h': 10}},
     ]

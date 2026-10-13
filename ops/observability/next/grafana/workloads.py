@@ -84,7 +84,9 @@ def postgres(values):
         'affinity': {'enablePodAntiAffinity': True, 'podAntiAffinityType': 'required',
                      'topologyKey': 'kubernetes.io/hostname', 'nodeAffinity': affinity()['nodeAffinity']},
         'monitoring': {'enablePodMonitor': False, 'tls': {'enabled': True}}}
-    return resource('Cluster', 'grafana-postgres', {'spec': spec}, 'postgresql.cnpg.io/v1')
+    document = resource('Cluster', 'grafana-postgres', {'spec': spec}, 'postgresql.cnpg.io/v1')
+    return {**document, 'metadata': {**document['metadata'], 'labels': {
+        **document['metadata']['labels'], 'app.kubernetes.io/name': 'grafana-postgres'}}}
 
 
 def render(values):
