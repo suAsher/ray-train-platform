@@ -35,8 +35,8 @@ import (
 	"ray-train-platform-backend/rayapi"
 	"ray-train-platform-backend/repositories"
 	"ray-train-platform-backend/runtimecatalog"
-	"ray-train-platform-backend/trackingartifacts"
 	"ray-train-platform-backend/telemetry"
+	"ray-train-platform-backend/trackingartifacts"
 )
 
 func main() {
