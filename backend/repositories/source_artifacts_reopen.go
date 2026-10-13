@@ -21,13 +21,8 @@ func (r *GormRepository) ReopenSourceArtifactUploadWithLimits(ctx context.Contex
 	}
 	var result *domain.SourceArtifact
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var owner UserRecord
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Select("id").Where("id = ? AND tenant_id = ?", userID, tenantID).
-			First(&owner).Error; errors.Is(err, gorm.ErrRecordNotFound) {
-			return ErrSourceArtifactNotFound
-		} else if err != nil {
-			return fmt.Errorf("lock source artifact owner for reopen: %w", err)
+		if err := lockSourceArtifactOwner(tx, tenantID, userID); err != nil {
+			return err
 		}
 
 		var record SourceArtifactRecord

@@ -16,9 +16,10 @@ import (
 	"ray-train-platform-backend/domain"
 )
 
-func TestPreferredTeamWorkerNodesOrdersSameTeamAcceleratorByAllocatedGPU(t *testing.T) {
+func TestPreferredTeamWorkerNodesFiltersFinishedAndUnavailableNodes(t *testing.T) {
 	deleting := metav1.Now()
-	client := &Client{kubernetes: fake.NewSimpleClientset(
+	client := &Client{dynamic: compactPlacementDynamic(), kubernetes: fake.NewSimpleClientset(
+		compactPlacementNode("node-a"), compactPlacementNode("node-b"),
 		teamWorkerPod("same-small", "tenant-a", "job-small", "node-a", domain.AcceleratorRTX4090, corev1.PodRunning, 1),
 		teamWorkerPod("same-large", "tenant-a", "job-large", "node-b", domain.AcceleratorRTX4090, corev1.PodRunning, 4),
 		teamWorkerPod("same-large-2", "tenant-a", "job-large-2", "node-b", domain.AcceleratorRTX4090, corev1.PodPending, 2),

@@ -42,6 +42,7 @@ func (h *Handler) getJobDiagnosis(c *gin.Context) {
 		JobID: job.ID, ObservedState: string(job.ObservedState), StatusReason: job.StatusReason, StatusMessage: job.StatusMessage,
 		Coverage: observability.DiagnosisCoverage{WindowStart: start, WindowEnd: end},
 	}
+	base.SchedulingCapacity = h.jobSchedulingCapacity(c.Request.Context(), *job)
 	// No full-log fallback: unsupported providers must remain explicit and cheap.
 	provider, available := h.logs.(diagnosisLogProvider)
 	if !available {

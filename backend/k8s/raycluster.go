@@ -15,16 +15,17 @@ import (
 )
 
 type WorkspaceRenderOptions struct {
-	NodeSelector     map[string]string
-	DedicatedNodes   map[string][]string
-	Image            string
-	RayVersion       string
-	ServiceAccount   string
-	ImagePullSecrets []string
-	IDCExistingClaim string
-	IDCMountPath     string
-	JupyterBasePath  string
-	DataMounts       DataMountPlan
+	WorkerNodeAffinityPreference []string
+	NodeSelector                 map[string]string
+	DedicatedNodes               map[string][]string
+	Image                        string
+	RayVersion                   string
+	ServiceAccount               string
+	ImagePullSecrets             []string
+	IDCExistingClaim             string
+	IDCMountPath                 string
+	JupyterBasePath              string
+	DataMounts                   DataMountPlan
 }
 
 func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderOptions) (*unstructured.Unstructured, error) {
@@ -156,6 +157,9 @@ func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderO
 		if tolerations := dedicatedNodeTolerations(workspace.TenantID, options.DedicatedNodes); len(tolerations) > 0 {
 			spec["tolerations"] = tolerations
 		}
+	}
+	if workspace.GPUCount > 0 {
+		addPreferredNodeAffinity(worker["template"].(map[string]any), options.WorkerNodeAffinityPreference)
 	}
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": RayAPIVersion, "kind": "RayCluster",

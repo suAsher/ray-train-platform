@@ -153,7 +153,8 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 		if err := h.ensureTenantNamespaceAndPullSecrets(ctx, locked.TenantID, locked.Namespace); err != nil {
 			return fail(http.StatusBadGateway, "WORKSPACE_RUNTIME_PREPARE_FAILED", "could not prepare the tenant workspace runtime", domain.WorkspaceFailed)
 		}
-		manifest, err := k8s.RenderDevRayCluster(*locked, k8s.WorkspaceRenderOptions{NodeSelector: nodeSelector, DedicatedNodes: h.trainingDedicatedNodes, Image: image.Reference, RayVersion: image.RayVersion, ServiceAccount: h.serviceAccount, ImagePullSecrets: h.imagePullSecrets, IDCExistingClaim: h.idcClaim, IDCMountPath: h.idcMountPath, JupyterBasePath: locked.JupyterURL, DataMounts: dataMounts})
+		workerNodePreference := h.workspaceWorkerNodePreference(ctx, *locked, accelerator, nodeSelector)
+		manifest, err := k8s.RenderDevRayCluster(*locked, k8s.WorkspaceRenderOptions{WorkerNodeAffinityPreference: workerNodePreference, NodeSelector: nodeSelector, DedicatedNodes: h.trainingDedicatedNodes, Image: image.Reference, RayVersion: image.RayVersion, ServiceAccount: h.serviceAccount, ImagePullSecrets: h.imagePullSecrets, IDCExistingClaim: h.idcClaim, IDCMountPath: h.idcMountPath, JupyterBasePath: locked.JupyterURL, DataMounts: dataMounts})
 		if err != nil {
 			return fail(http.StatusBadRequest, "WORKSPACE_SPEC_INVALID", err.Error(), domain.WorkspaceFailed)
 		}

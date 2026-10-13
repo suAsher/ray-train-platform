@@ -29,19 +29,12 @@ func (r *GormRepository) CreateSourceArtifactForRequestWithLimits(ctx context.Co
 	incoming := sourceArtifactRecordFromDomain(*artifact)
 	var result *domain.SourceArtifact
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var owner UserRecord
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Select("id").Where("id = ? AND tenant_id = ?", artifact.UserID, artifact.TenantID).
-			First(&owner).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return ErrSourceArtifactNotFound
-		}
-		if err != nil {
-			return fmt.Errorf("lock source artifact owner: %w", err)
+		if err := lockSourceArtifactOwner(tx, artifact.TenantID, artifact.UserID); err != nil {
+			return err
 		}
 
 		var request SourceArtifactRequestRecord
-		err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("tenant_id = ? AND user_id = ? AND client_request_id = ?", artifact.TenantID, artifact.UserID, clientRequestID).
 			First(&request).Error
 		if err == nil {

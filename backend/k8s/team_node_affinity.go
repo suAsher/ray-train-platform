@@ -6,16 +6,19 @@ import (
 	"sort"
 	"strings"
 
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"ray-train-platform-backend/domain"
 )
 
+// TeamWorkerNodePreferenceRequest describes the complete worker shape. The
+// resulting order is a soft scheduling hint; dedicated-node policies remain
+// required constraints in the rendered Pod template.
 type TeamWorkerNodePreferenceRequest struct {
 	TenantID         string
 	JobID            string
 	AcceleratorClass domain.AcceleratorClass
+	NodeSelector     map[string]string
+	DedicatedNodes   map[string][]string
+	Resources        domain.Resources
 }
 
 func (c *Client) PreferredTeamWorkerNodes(ctx context.Context, request TeamWorkerNodePreferenceRequest) ([]string, error) {
@@ -26,54 +29,55 @@ func (c *Client) PreferredTeamWorkerNodes(ctx context.Context, request TeamWorke
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant id is required")
 	}
-	selector := labels.SelectorFromSet(labels.Set{
-		"platform_tenant_id": tenantID,
-		"ray.io/node-type":   "worker",
-	}).String()
-	pods, err := c.kubernetes.CoreV1().Pods("").List(ctx, metav1.ListOptions{LabelSelector: selector})
-	if err != nil {
-		return nil, fmt.Errorf("list tenant worker pods: %w", err)
+	resources := request.Resources
+	// Preserve callers that predate shape-aware placement. Production callers
+	// supply explicit resources matching their worker template.
+	if resources.WorkerReplicas == 0 {
+		resources.WorkerReplicas = 1
 	}
-	acceleratorLabel := request.AcceleratorClass.Resolved().NodeLabelValue()
-	currentJobID := strings.TrimSpace(request.JobID)
-	allocatedByNode := map[string]int64{}
-	for _, pod := range pods.Items {
-		if pod.DeletionTimestamp != nil || pod.Spec.NodeName == "" || pod.Labels[platformJobIDLabel] == currentJobID {
-			continue
-		}
-		switch pod.Status.Phase {
-		case corev1.PodSucceeded, corev1.PodFailed:
-			continue
-		}
-		if strings.TrimSpace(pod.Spec.NodeSelector["accelerator"]) != acceleratorLabel {
-			continue
-		}
-		requestedGPU := podGPURequests(pod)
-		if requestedGPU <= 0 {
-			continue
-		}
-		allocatedByNode[pod.Spec.NodeName] += requestedGPU
+	if resources.GPUsPerWorker == 0 {
+		resources.GPUsPerWorker = 1
 	}
-	nodes := make([]string, 0, len(allocatedByNode))
-	for node := range allocatedByNode {
-		nodes = append(nodes, node)
+	if resources.CPUPerWorker == 0 {
+		resources.CPUPerWorker = 4
 	}
-	sort.Slice(nodes, func(i, j int) bool {
-		left, right := allocatedByNode[nodes[i]], allocatedByNode[nodes[j]]
-		if left != right {
-			return left > right
-		}
-		return nodes[i] < nodes[j]
+	if strings.TrimSpace(resources.MemoryPerWorker) == "" {
+		resources.MemoryPerWorker = "16Gi"
+	}
+	capacity, err := c.SchedulingCapacity(ctx, SchedulingCapacityRequest{
+		TenantID: tenantID, AcceleratorClass: request.AcceleratorClass,
+		NodeSelector: request.NodeSelector, DedicatedNodes: request.DedicatedNodes,
+		Resources: resources, ExcludeJobID: strings.TrimSpace(request.JobID),
 	})
-	return nodes, nil
-}
-
-func podGPURequests(pod corev1.Pod) int64 {
-	var requested int64
-	for _, container := range pod.Spec.Containers {
-		if quantity, found := container.Resources.Requests[corev1.ResourceName("nvidia.com/gpu")]; found {
-			requested += quantity.Value()
+	if err != nil {
+		return nil, fmt.Errorf("read compact placement capacity: %w", err)
+	}
+	if !capacity.Available {
+		return nil, fmt.Errorf("compact placement capacity is unavailable")
+	}
+	candidates := make([]domain.SchedulingCapacityNode, 0, len(capacity.Nodes))
+	for _, node := range capacity.Nodes {
+		if node.WorkerSlots > 0 {
+			candidates = append(candidates, node)
 		}
 	}
-	return requested
+	sort.Slice(candidates, func(i, j int) bool {
+		left, right := candidates[i], candidates[j]
+		leftOccupied, rightOccupied := left.AllocatedGPUs+left.ReservedGPUs > 0, right.AllocatedGPUs+right.ReservedGPUs > 0
+		if leftOccupied != rightOccupied {
+			return leftOccupied
+		}
+		if left.FreeGPUs != right.FreeGPUs {
+			return left.FreeGPUs < right.FreeGPUs
+		}
+		if left.TeamGPUs != right.TeamGPUs {
+			return left.TeamGPUs > right.TeamGPUs
+		}
+		return left.Name < right.Name
+	})
+	nodes := make([]string, 0, len(candidates))
+	for _, node := range candidates {
+		nodes = append(nodes, node.Name)
+	}
+	return nodes, nil
 }

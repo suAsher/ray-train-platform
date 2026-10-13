@@ -16,6 +16,7 @@ func (h *Handler) registerTrainingRoutes(group *gin.RouterGroup) {
 	read.GET("/jobs/:id/runtime", h.getJobRuntime)
 	read.GET("/jobs/:id/logs", h.getJobLogs)
 	read.GET("/jobs/:id/diagnosis", h.getJobDiagnosis)
+	read.GET("/jobs/:id/scheduling-capacity", h.getJobSchedulingCapacity)
 	read.GET("/jobs/:id/metrics", h.getJobMetrics)
 	read.GET("/jobs/:id/gpu-metrics", h.getJobGPUHistory)
 	read.GET("/jobs/:id/training-performance", h.getJobTrainingPerformance)
@@ -25,6 +26,8 @@ func (h *Handler) registerTrainingRoutes(group *gin.RouterGroup) {
 	read.GET("/jobs/:id/artifacts", h.listJobArtifacts)
 	read.GET("/jobs/:id/artifacts/preview", h.previewJobArtifact)
 	read.GET("/jobs/:id/artifacts/download", h.downloadJobArtifact)
+	read.GET("/jobs/:id/artifacts/video", h.videoJobArtifact)
+	read.HEAD("/jobs/:id/artifacts/video", h.videoJobArtifact)
 
 	write := group.Group("")
 	write.Use(auth.RequireScopes(domain.PATScopeJobsWrite))

@@ -3,6 +3,8 @@ package observability
 import (
 	"sort"
 	"time"
+
+	"ray-train-platform-backend/domain"
 )
 
 const (
@@ -17,18 +19,19 @@ const (
 // JobDiagnosis is shared by Portal and CLI. It describes a bounded sample of
 // retained log evidence, never a transition in the authoritative job state.
 type JobDiagnosis struct {
-	JobID              string              `json:"jobId"`
-	ObservedState      string              `json:"observedState"`
-	StatusReason       string              `json:"statusReason"`
-	StatusMessage      string              `json:"statusMessage"`
-	Classification     string              `json:"classification"`
-	FailurePhase       string              `json:"failurePhase"`
-	Summary            string              `json:"summary"`
-	FirstFailure       *DiagnosisEvidence  `json:"firstFailure"`
-	Followups          []DiagnosisEvidence `json:"followups"`
-	CompletionEvidence []DiagnosisEvidence `json:"completionEvidence"`
-	Coverage           DiagnosisCoverage   `json:"coverage"`
-	Notes              []string            `json:"notes"`
+	SchedulingCapacity *domain.SchedulingCapacity `json:"schedulingCapacity,omitempty"`
+	JobID              string                     `json:"jobId"`
+	ObservedState      string                     `json:"observedState"`
+	StatusReason       string                     `json:"statusReason"`
+	StatusMessage      string                     `json:"statusMessage"`
+	Classification     string                     `json:"classification"`
+	FailurePhase       string                     `json:"failurePhase"`
+	Summary            string                     `json:"summary"`
+	FirstFailure       *DiagnosisEvidence         `json:"firstFailure"`
+	Followups          []DiagnosisEvidence        `json:"followups"`
+	CompletionEvidence []DiagnosisEvidence        `json:"completionEvidence"`
+	Coverage           DiagnosisCoverage          `json:"coverage"`
+	Notes              []string                   `json:"notes"`
 }
 
 type DiagnosisEvidence struct {
