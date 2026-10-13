@@ -19,7 +19,7 @@ def render(values):
                          'prometheusVersion': '3.5.0', 'httpHeaderName1': 'Authorization'},
                secureJsonData={'httpHeaderValue1': 'Bearer $GRAFANA_VM_TOKEN'}),
         source('loki', 'Loki', 'loki', url=values['lokiURL'], jsonData={'maxLines': 1000}),
-        source('clickhouse-platform', 'ClickHouse platform logs and traces', 'grafana-clickhouse-datasource',
+        source('clickhouse-platform', 'ClickHouse platform logs and traces', 'grafana-clickhouse-datasource', version=2,
                jsonData={'host': '127.0.0.1', 'port': 19000, 'protocol': 'native', 'secure': False,
                          'username': 'grafana_platform_query', 'defaultDatabase': 'raytrain_observability',
                          'dialTimeout': 10, 'queryTimeout': 25, 'validateSql': True,
