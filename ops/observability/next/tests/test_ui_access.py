@@ -194,6 +194,32 @@ class UIAccessContracts(unittest.TestCase):
         self.assertIn('headers:add("set-cookie", cookie)', source)
         self.assertNotIn("envoy_on_request", source)
 
+    def test_independent_grafana_uses_exact_mtls_without_changing_legacy_fallback(self):
+        docs = render("--set", "grafana.independent=true")
+        config = objects(docs, "ConfigMap")[0]["data"]
+        envoy = yaml.safe_load(config["envoy.yaml"])
+        upstream = next(item for item in envoy["static_resources"]["clusters"]
+                        if item["name"] == "grafana")
+        address = upstream["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]["address"]["socket_address"]
+        self.assertEqual({"address": "grafana.grafana.svc", "port_value": 8443}, address)
+        context = upstream["transport_socket"]["typed_config"]["common_tls_context"]
+        self.assertEqual("TLSv1_3", context["tls_params"]["tls_minimum_protocol_version"])
+        self.assertEqual("n9e-client", context["tls_certificate_sds_secret_configs"][0]["name"])
+        self.assertEqual("grafana-validation", context["validation_context_sds_secret_config"]["name"])
+        validation = yaml.safe_load(config["grafana-validation-sds.yaml"])["resources"][0]["validation_context"]
+        self.assertEqual("/etc/ui-client/ca.crt", validation["trusted_ca"]["filename"])
+        self.assertEqual([{"san_type": "URI", "matcher": {
+            "exact": "spiffe://observability.raytrain.local/grafana/grafana-server"}}],
+            validation["match_typed_subject_alt_names"])
+        # Keep the original Service available for an immediate values-only rollback.
+        self.assertEqual(1, len([item for item in objects(docs, "Service")
+                                if item["metadata"]["name"] == "grafana-ui-backend"]))
+
+    def test_independent_grafana_flag_rejects_truthy_string(self):
+        result = render("--set-string", "grafana.independent=false", success=False)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("grafana.independent must be boolean", result.stderr)
+
     def test_runtime_has_no_api_permissions_no_gpu_and_bounded_resources(self):
         deployment = objects(self.docs, "Deployment")[0]
         self.assertEqual(2, deployment["spec"]["replicas"])
