@@ -12,34 +12,34 @@ import (
 )
 
 func (c *Client) subtractCapacityReservations(ctx context.Context, request SchedulingCapacityRequest, pods []corev1.Pod, workloads []unstructured.Unstructured, indices map[string]int, hostnames map[string]string, nodes []domain.SchedulingCapacityNode) error {
-		for _, workload := range workloads {
-			if capacityWorkloadFinished(workload) {
-				continue
+	for _, workload := range workloads {
+		if capacityWorkloadFinished(workload) {
+			continue
+		}
+		if request.ExcludeJobID != "" && capacityWorkloadJobID(workload) == request.ExcludeJobID {
+			continue
+		}
+		assignments, found, err := unstructured.NestedSlice(workload.Object, "status", "admission", "podSetAssignments")
+		if err != nil {
+			return fmt.Errorf("invalid admission assignments")
+		}
+		if !found {
+			continue
+		}
+		for _, value := range assignments {
+			assignment, ok := value.(map[string]any)
+			if !ok {
+				return fmt.Errorf("invalid admission assignment")
 			}
-			if request.ExcludeJobID != "" && capacityWorkloadJobID(workload) == request.ExcludeJobID {
-				continue
-			}
-			assignments, found, err := unstructured.NestedSlice(workload.Object, "status", "admission", "podSetAssignments")
-			if err != nil {
-				return fmt.Errorf("invalid admission assignments")
-			}
-			if !found {
-				continue
-			}
-			for _, value := range assignments {
-				assignment, ok := value.(map[string]any)
-				if !ok {
-					return fmt.Errorf("invalid admission assignment")
+			if err := subtractCapacityAssignment(workload, assignment, pods, indices, hostnames, nodes); err != nil {
+				outside, flavorErr := c.capacityAssignmentOutsidePool(ctx, assignment, request.AcceleratorClass)
+				if flavorErr == nil && outside {
+					continue
 				}
-				if err := subtractCapacityAssignment(workload, assignment, pods, indices, hostnames, nodes); err != nil {
-					outside, flavorErr := c.capacityAssignmentOutsidePool(ctx, assignment, request.AcceleratorClass)
-					if flavorErr == nil && outside {
-						continue
-					}
-					return err
-				}
+				return err
 			}
 		}
+	}
 	return nil
 }
 

@@ -31,11 +31,11 @@ var (
 )
 
 type Client struct {
-	dynamic    dynamic.Interface
-	kubernetes kubernetes.Interface
-	discovery  discovery.DiscoveryInterface
-	restConfig *rest.Config
-	kueueGVR   schema.GroupVersionResource
+	dynamic       dynamic.Interface
+	kubernetes    kubernetes.Interface
+	discovery     discovery.DiscoveryInterface
+	restConfig    *rest.Config
+	kueueGVR      schema.GroupVersionResource
 	capacityCache schedulingCapacityCache
 }
 
