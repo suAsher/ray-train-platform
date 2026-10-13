@@ -1,6 +1,8 @@
 """Private synthetic acceptance; called only by the existing isolated CH harness."""
 import copy
 import json
+import http.client
+import socket
 import time
 from pathlib import Path
 
@@ -38,6 +40,36 @@ def payloads():
     logs = {'resourceLogs': [{'resource': resource, 'schemaUrl': 'sensitive-synthetic-marker',
             'scopeLogs': [{'scope': scope, 'schemaUrl': 'sensitive-synthetic-marker', 'logRecords': [log]}]}]}
     return traces, logs
+
+
+def verify_http_protobuf(sandbox, address, sql):
+    """Exercise the backend's actual OTLP HTTP binary wire protocol."""
+    codec = load_module('obs_platform_proto', ROOT / 'otel' / 'verify_protocol_recovery.py')
+    field, integer, fixed = codec._bytes, codec._int, codec._fixed64
+    trace, span, now = bytes.fromhex('112233445566778899aabbccddeeff00'), bytes.fromhex('123456789abcdef0'), time.time_ns()
+    attr = lambda key, value: field(1, key) + field(2, integer(3, value) if isinstance(value, int) else field(1, value))
+    attrs = [attr('http.request.method', 'GET'), attr('http.route', '/api/v1/jobs/:id'), attr('http.response.status_code', 200)]
+    resource = field(1, field(1, attr('service.name', 'ray-train-backend')))
+    for signal in ('logs', 'traces'):
+        if signal == 'logs':
+            record = fixed(1, now) + integer(2, 9) + field(5, field(1, 'http.request.completed')) + field(9, trace) + field(10, span)
+            record += b''.join(field(6, value) for value in attrs + [attr('duration_ms', 1)])
+        else:
+            record = field(1, trace) + field(2, span) + field(5, 'GET /api/v1/jobs/:id') + integer(6, 2) + fixed(7, now) + fixed(8, now + 1000000)
+            record += b''.join(field(9, value) for value in attrs)
+        body = field(1, resource + field(2, field(2, record)))
+        context = sandbox.context('backend-telemetry')
+        connection = http.client.HTTPSConnection(SERVER, 14318, context=context, timeout=5)
+        connection.sock = context.wrap_socket(socket.create_connection((address, 14318), 5), server_hostname=SERVER)
+        try:
+            connection.request('POST', '/v1/' + signal, body=body, headers={'Content-Type': 'application/x-protobuf'})
+            response = connection.getresponse()
+            assert response.status == 200 and response.read(4096) == b'', 'binary OTLP rejected'
+        finally:
+            connection.close()
+    for table in ('otel_logs_all', 'otel_traces_all', 'otel_traces_trace_id_ts_all'):
+        wait('protobuf production row in ' + table, lambda t=table:
+             sql(sandbox, 'SELECT count() FROM raytrain_observability.' + t, role='grafana-query') == '2', 60)
 
 
 def verify(sandbox, context, sql):
@@ -102,6 +134,7 @@ def verify(sandbox, context, sql):
         assert sql(sandbox, 'SELECT count() FROM ' + db + table + " WHERE TraceId='expired-synthetic'", role='schema-admin') == '0'
     sql(sandbox, 'OPTIMIZE TABLE ' + db + 'otel_traces_trace_id_ts FINAL', role='schema-admin')
     assert sql(sandbox, 'SELECT count() FROM ' + db + "otel_traces_trace_id_ts WHERE TraceId='expired-synthetic'", role='schema-admin') == '0'
-    return {'ttl_and_merge_small_pool' : 'passed', 'mtls_method_path_body_limits' : 'passed', 'sensitive_field_erasure': 'passed',
+    verify_http_protobuf(sandbox, address, sql)
+    return {'otlp_http_protobuf': 'passed', 'ttl_and_merge_small_pool' : 'passed', 'mtls_method_path_body_limits' : 'passed', 'sensitive_field_erasure': 'passed',
             'two_replica_production_ingest': 'passed', 'distributed_read_without_base_grant': 'passed',
             'unexpected_log_body_and_route_rejected': 'passed', 'grafana_write_base_system_denied': 'passed'}
