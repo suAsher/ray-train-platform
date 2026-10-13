@@ -23,7 +23,7 @@ def command(args, data=None, check=True):
     completed = subprocess.run(args, input=data, text=True, capture_output=True)
     if check and completed.returncode:
         # Never include argv or container output: these can contain synthetic credentials.
-        raise RuntimeError('lab command failed: ' + args[0])
+        raise RuntimeError('lab command failed: ' + args[0] + ' error=' + completed.stderr[:1000])
     return completed
 
 
@@ -160,11 +160,11 @@ def start_grafana(directory, network, container, image, password, admin, encrypt
         '--tmpfs', '/tmp:uid=472,gid=0', '--tmpfs', '/var/lib/grafana:uid=472,gid=0']
     for key, value in environment.items():
         command_args += ['-e', key + '=' + value]
-    for source, target in (('config', '/etc/grafana'), ('datasources', '/etc/grafana/provisioning/datasources'),
+    for source, target in (('config', '/etc/grafana-config'), ('datasources', '/etc/grafana/provisioning/datasources'),
         ('providers', '/etc/grafana/provisioning/dashboards'), ('dashboards', '/etc/grafana/dashboards'),
         ('client', '/etc/postgres-client'), ('client', '/etc/postgres-ca')):
         command_args += ['-v', str(directory / source) + ':' + target + ':ro']
-    command([*command_args, image, '--config=/etc/grafana/grafana.ini'])
+    command([*command_args, image, '--config=/etc/grafana-config/grafana.ini'])
 
 
 def validate_pg_rejections(container, password):

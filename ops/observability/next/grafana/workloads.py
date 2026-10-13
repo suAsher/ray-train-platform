@@ -29,7 +29,7 @@ def deployment(values):
         {'name': 'datasources', 'configMap': {'name': 'grafana-provisioning', 'items': [{'key': 'datasources.yaml', 'path': 'datasources.yaml'}]}},
         {'name': 'providers', 'configMap': {'name': 'grafana-provisioning', 'items': [{'key': 'dashboards.yaml', 'path': 'dashboards.yaml'}]}},
         volume('dashboards', config='grafana-dashboards'), volume('envoy', config='grafana-envoy')]
-    grafana_mounts = [mount('config', '/etc/grafana'), mount('datasources', '/etc/grafana/provisioning/datasources'),
+    grafana_mounts = [mount('config', '/etc/grafana-config'), mount('datasources', '/etc/grafana/provisioning/datasources'),
         mount('providers', '/etc/grafana/provisioning/dashboards'), mount('dashboards', '/etc/grafana/dashboards'),
         mount('postgres-client', '/etc/postgres-client'), mount('postgres-ca', '/etc/postgres-ca'),
         mount('data', '/var/lib/grafana', False), mount('tmp', '/tmp', False)]
@@ -38,7 +38,7 @@ def deployment(values):
         'affinity': affinity(), 'tolerations': [], 'terminationGracePeriodSeconds': 60,
         'containers': [
             {'name': 'grafana', 'image': values['image'], 'imagePullPolicy': 'IfNotPresent',
-             'args': ['--config=/etc/grafana/grafana.ini'], 'env': env,
+             'args': ['--config=/etc/grafana-config/grafana.ini'], 'env': env,
              'resources': resources('200m', '512Mi'), 'securityContext': security(),
              'readinessProbe': probe, 'livenessProbe': {**probe, 'failureThreshold': 6},
              'startupProbe': {**probe, 'failureThreshold': 60}, 'volumeMounts': grafana_mounts},
