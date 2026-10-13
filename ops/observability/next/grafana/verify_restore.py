@@ -113,7 +113,6 @@ def restore(args):
             'backup_path': str(backup), 'mode': '0600', 'bytes': backup.stat().st_size,
             'sha256': digest.hexdigest(), 'restored_inventory': restored, 'restore_network': 'none',
             'scope': 'new Grafana database only; logical restore, not PITR or credential decryption validation'}
-        (directory / ('grafana-' + suffix + '-verification.json')).write_text(json.dumps(result, indent=2) + '\n')
     finally:
         partial.unlink(missing_ok=True)
         if attempted:
@@ -125,6 +124,7 @@ def restore(args):
                 command(['docker', 'rm', '-f', container])
             else:
                 require(b'No such' in inspected.stderr, 'could not confirm restore container cleanup')
+    (directory / ('grafana-' + suffix + '-verification.json')).write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps(result, sort_keys=True))
 
 

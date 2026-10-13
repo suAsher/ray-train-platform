@@ -14,7 +14,6 @@ import os
 from pathlib import Path
 import re
 import selectors
-import shutil
 import signal
 import stat
 import subprocess
@@ -161,8 +160,10 @@ def promotion_patch(cluster, target, timestamp):
     """
     primary = validate_cluster(cluster)
     require(POD_NAME.fullmatch(target) and target != primary, 'invalid promotion target')
-    conditions = [{**condition, 'status': 'False', 'reason': 'ClusterIsNotReady',
-                   'message': 'Cluster Is Not Ready', 'lastTransitionTime': timestamp}
+    transition_time = timestamp.split('.')[0] + 'Z' if '.' in timestamp else timestamp
+    conditions = [{**{key: value for key, value in condition.items() if key != 'observedGeneration'},
+                   'status': 'False', 'reason': 'ClusterIsNotReady',
+                   'message': 'Cluster Is Not Ready', 'lastTransitionTime': transition_time}
                   if condition.get('type') == 'Ready' else dict(condition)
                   for condition in cluster['status']['conditions']]
     tests = [('metadata/uid', cluster['metadata']['uid']),
@@ -427,19 +428,13 @@ def switch(kube, args, baseline, persistence, clients):
     require(current_target['metadata']['uid'] == target_pod['metadata']['uid'], 'target Pod UID changed')
     validate_pg_pod(cluster, current_target)
     before_timeline = states[primary]['timeline']
-    if shutil.which('kubectl-cnpg'):
-        version = run(['kubectl', 'cnpg', 'version'])
-        require(re.search(r'\b1\.30\.1\b', version), 'installed CNPG plugin must be v1.30.1')
-        method = 'cnpg-v1.30.1-promote'
-        command = ['kubectl', 'cnpg', 'promote', CLUSTER, args.target,
-                   '--namespace', NAMESPACE, '--context', kube.context]
-        data = None
-    else:
-        method = 'cnpg-v1.30.1-status-protocol'
-        timestamp = datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
-        command = kube.base + ['patch', CLUSTER_RESOURCE, CLUSTER, '--subresource=status',
-                              '--type=json', '--patch-file=/dev/stdin', '-o', 'name']
-        data = json.dumps(promotion_patch(cluster, args.target, timestamp))
+    # The upstream plugin re-reads by name and cannot bind the caller's expected UID.
+    # Always use its verified status protocol with atomic UID/resourceVersion tests.
+    method = 'cnpg-v1.30.1-guarded-status-protocol'
+    timestamp = datetime.now(timezone.utc).isoformat(timespec='microseconds').replace('+00:00', 'Z')
+    command = kube.base + ['patch', CLUSTER_RESOURCE, CLUSTER, '--subresource=status',
+                          '--type=json', '--patch-file=/dev/stdin', '-o', 'name']
+    data = json.dumps(promotion_patch(cluster, args.target, timestamp))
     report('planned_switchover_request', cluster_uid=uid, old_primary=primary,
            target=args.target, barrier=barrier, method=method)
     started = time.monotonic()

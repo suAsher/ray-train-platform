@@ -22,6 +22,7 @@ def tls(directory, upstream=None):
 
 def cluster(name, address, port, identity=None):
     return {'name': name, 'type': 'STATIC' if address == '127.0.0.1' else 'STRICT_DNS',
+            **({'dns_lookup_family': 'V4_ONLY', 'respect_dns_ttl': True} if address != '127.0.0.1' else {}),
             'connect_timeout': '5s', 'load_assignment': {'cluster_name': name,
                 'endpoints': [{'lb_endpoints': [{'endpoint': {'address': {'socket_address': {
                     'address': address, 'port_value': port}}}}]}]},
