@@ -22,7 +22,7 @@ import (
 
 type Service struct {
 	traceQueue *boundedQueue[sdktrace.ReadOnlySpan]
-	logQueue *boundedQueue[sdklog.Record]
+	logQueue   *boundedQueue[sdklog.Record]
 	cfg        config.TelemetryConfig
 	metrics    *metrics
 	metricsTLS *tls.Config
@@ -59,7 +59,7 @@ func newService(traces sdktrace.SpanExporter, logs sdklog.Exporter, queueSize in
 	res := resource.NewSchemaless(attribute.String("service.name", "ray-train-backend"))
 	traceQueue := newQueue(queueSize, "traces", traces.ExportSpans, traces.Shutdown, m)
 	logQueue := newQueue(queueSize, "logs", logs.Export, logs.Shutdown, m)
-	return &Service{traceQueue:traceQueue,logQueue:logQueue,metrics: m, traces: sdktrace.NewTracerProvider(sdktrace.WithResource(res), sdktrace.WithSampler(sdktrace.AlwaysSample()), sdktrace.WithSpanProcessor(&spanProcessor{traceQueue})), logs: sdklog.NewLoggerProvider(sdklog.WithResource(res), sdklog.WithProcessor(&logProcessor{logQueue}))}
+	return &Service{traceQueue: traceQueue, logQueue: logQueue, metrics: m, traces: sdktrace.NewTracerProvider(sdktrace.WithResource(res), sdktrace.WithSampler(sdktrace.AlwaysSample()), sdktrace.WithSpanProcessor(&spanProcessor{traceQueue})), logs: sdklog.NewLoggerProvider(sdklog.WithResource(res), sdklog.WithProcessor(&logProcessor{logQueue}))}
 }
 
 // Start binds only the separate, mutually authenticated metrics listener. An
@@ -97,7 +97,10 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	defer cancel()
 	// SDK trace shutdown may skip processors when ctx has already expired.
 	// Always close admission and cancel both workers, including that path.
-	if s.traceQueue != nil { defer s.traceQueue.abort(); defer s.logQueue.abort() }
+	if s.traceQueue != nil {
+		defer s.traceQueue.abort()
+		defer s.logQueue.abort()
+	}
 	var errs []error
 	if s.server != nil {
 		errs = append(errs, s.server.Shutdown(ctx))

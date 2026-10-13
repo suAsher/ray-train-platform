@@ -197,9 +197,87 @@ func TestNewFailsClosedBeforeListening(t *testing.T) {
 }
 
 func TestSeparateMetricsListenerLifecycle(t *testing.T) {
- cfg,ca:=tlsFixture(t);cfg.MetricsAddr="127.0.0.1:9091";s,err:=New(cfg);if err!=nil{t.Fatal(err)};defer s.Shutdown(t.Context())
- if err:=s.Start();err!=nil{t.Fatal(err)}
- client:=testClient(t,ca,scraperIdentity);resp,err:=client.Get("https://127.0.0.1:9091/metrics");if err!=nil{t.Fatal(err)};resp.Body.Close();if resp.StatusCode!=200{t.Fatalf("metrics status %d",resp.StatusCode)}
- second,err:=New(cfg);if err!=nil{t.Fatal(err)};defer second.Shutdown(t.Context());if err:=second.Start();err==nil{t.Fatal("accepted occupied dedicated port")}
- if err:=s.Shutdown(t.Context());err!=nil{t.Fatal(err)}
+	cfg, ca := tlsFixture(t)
+	cfg.MetricsAddr = "127.0.0.1:9091"
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Shutdown(t.Context())
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	client := testClient(t, ca, scraperIdentity)
+	resp, err := client.Get("https://127.0.0.1:9091/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("metrics status %d", resp.StatusCode)
+	}
+	second, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Shutdown(t.Context())
+	if err := second.Start(); err == nil {
+		t.Fatal("accepted occupied dedicated port")
+	}
+	if err := s.Shutdown(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMetricsRejectsUntrustedClientEvenWithApprovedURI(t *testing.T) {
+	cfg, ca := tlsFixture(t)
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Shutdown(t.Context())
+	server := httptest.NewUnstartedServer(s.metricsHandler())
+	server.TLS = s.metricsTLS
+	server.StartTLS()
+	defer server.Close()
+	client := testClient(t, makeCA(t), scraperIdentity)
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(ca.pem)
+	client.Transport.(*http.Transport).TLSClientConfig.RootCAs = roots
+	if resp, err := client.Get(server.URL + "/metrics"); err == nil {
+		resp.Body.Close()
+		t.Fatal("accepted client signed by untrusted CA")
+	}
+	client.Transport.(*http.Transport).TLSClientConfig.Certificates = nil
+	if resp, err := client.Get(server.URL + "/metrics"); err == nil {
+		resp.Body.Close()
+		t.Fatal("accepted unauthenticated metrics request")
+	}
+}
+func TestServerTrustAndIdentityRotateTogether(t *testing.T) {
+	cfg, ca := tlsFixture(t)
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Shutdown(t.Context())
+	server := httptest.NewUnstartedServer(s.metricsHandler())
+	server.TLS = s.metricsTLS
+	server.StartTLS()
+	defer server.Close()
+	next := makeCA(t)
+	cert, key := issue(t, next, []string{metricsDNS, metricsDNS + ".cluster.local"}, backendIdentity)
+	writePair(t, cfg.MetricsCertFile, cfg.MetricsKeyFile, cert, key)
+	if err := os.WriteFile(cfg.CAFile, next.pem, 0600); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := testClient(t, next, scraperIdentity).Get(server.URL + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp, err := testClient(t, ca, scraperIdentity).Get(server.URL + "/metrics"); err == nil {
+		resp.Body.Close()
+		t.Fatal("accepted revoked old root")
+	}
 }

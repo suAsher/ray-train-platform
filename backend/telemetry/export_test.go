@@ -124,7 +124,9 @@ func TestOTLPClientReloadAndStrictServerDNS(t *testing.T) {
 	var serial string
 	var serialMu sync.Mutex
 	server := gateway(t, ca, "otel-gateway.opentelemetry.svc", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serialMu.Lock(); serial = r.TLS.PeerCertificates[0].SerialNumber.String(); serialMu.Unlock()
+		serialMu.Lock()
+		serial = r.TLS.PeerCertificates[0].SerialNumber.String()
+		serialMu.Unlock()
 		w.WriteHeader(200)
 	}))
 	client := &http.Client{Transport: gatewayTransport(cfg, server), Timeout: time.Second}
@@ -139,13 +141,18 @@ func TestOTLPClientReloadAndStrictServerDNS(t *testing.T) {
 	if err := send(); err != nil {
 		t.Fatal(err)
 	}
-	serialMu.Lock(); first := serial; serialMu.Unlock()
+	serialMu.Lock()
+	first := serial
+	serialMu.Unlock()
 	cert, key := issue(t, ca, []string{metricsDNS, metricsDNS + ".cluster.local"}, backendIdentity)
 	writePair(t, cfg.OTLPCertFile, cfg.OTLPKeyFile, cert, key)
 	if err := send(); err != nil {
 		t.Fatal(err)
 	}
-	serialMu.Lock(); same := serial == first; serialMu.Unlock(); if same {
+	serialMu.Lock()
+	same := serial == first
+	serialMu.Unlock()
+	if same {
 		t.Fatal("client certificate did not rotate")
 	}
 	cert, key = issue(t, ca, nil, scraperIdentity)

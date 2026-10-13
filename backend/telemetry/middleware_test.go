@@ -186,13 +186,33 @@ func TestShutdownIsBounded(t *testing.T) {
 }
 
 func TestShutdownWithCanceledContextStopsBothWorkers(t *testing.T) {
- s:=newService(&captureSpans{},&captureLogs{},2)
- ctx,cancel:=context.WithCancel(context.Background());cancel();_ = s.Shutdown(ctx)
- for _,done:=range []<-chan struct{}{s.traceQueue.done,s.logQueue.done}{select{case <-done:case <-time.After(time.Second):t.Fatal("SDK skipped queue shutdown after canceled context")}}
+	s := newService(&captureSpans{}, &captureLogs{}, 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = s.Shutdown(ctx)
+	for _, done := range []<-chan struct{}{s.traceQueue.done, s.logQueue.done} {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("SDK skipped queue shutdown after canceled context")
+		}
+	}
 }
 func TestConcurrentRequestsDuringShutdown(t *testing.T) {
- s:=newService(&captureSpans{},&captureLogs{},16);router:=gin.New();router.Use(s.Middleware());router.GET("/ok",func(c *gin.Context){c.Status(200)})
- var wg sync.WaitGroup
- for n:=0;n<4;n++{wg.Add(1);go func(){defer wg.Done();for i:=0;i<100;i++{router.ServeHTTP(httptest.NewRecorder(),httptest.NewRequest("GET","/ok",nil))}}()}
- _ = s.Shutdown(t.Context());wg.Wait()
+	s := newService(&captureSpans{}, &captureLogs{}, 16)
+	router := gin.New()
+	router.Use(s.Middleware())
+	router.GET("/ok", func(c *gin.Context) { c.Status(200) })
+	var wg sync.WaitGroup
+	for n := 0; n < 4; n++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 100; i++ {
+				router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/ok", nil))
+			}
+		}()
+	}
+	_ = s.Shutdown(t.Context())
+	wg.Wait()
 }

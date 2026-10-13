@@ -64,30 +64,39 @@ func (q *boundedQueue[T]) exportBatch(batch []T) {
 	}
 }
 func (q *boundedQueue[T]) drain() {
-	for len(q.items) > 0 {
+	// Snapshot admission so a continuous request stream cannot starve flush or
+	// stop handling. This worker is the only consumer of items.
+	remaining := len(q.items)
+	for remaining > 0 {
 		if q.ctx.Err() != nil {
 			q.dropPending()
 			return
 		}
-		batch := make([]T, 0, 128)
-		for len(batch) < 128 {
-			select {
-			case item := <-q.items:
-				batch = append(batch, item)
-			default:
-				q.exportBatch(batch)
-				goto next
-			}
+		count := min(remaining, 128)
+		batch := make([]T, 0, count)
+		for range count {
+			batch = append(batch, <-q.items)
 		}
 		q.exportBatch(batch)
-	next:
+		remaining -= count
 	}
 }
+
 // Remove records before accounting so cancellation and stop cannot count the
 // same pending records twice when both become ready in the worker select.
 func (q *boundedQueue[T]) dropPending() {
- count:=0
- for { select { case <-q.items: count++; default: if count>0 { q.drop("shutdown",count) }; return } }
+	count := 0
+	for {
+		select {
+		case <-q.items:
+			count++
+		default:
+			if count > 0 {
+				q.drop("shutdown", count)
+			}
+			return
+		}
+	}
 }
 func (q *boundedQueue[T]) run() {
 	defer close(q.done)
@@ -128,10 +137,13 @@ func (q *boundedQueue[T]) ForceFlush(ctx context.Context) error {
 	}
 }
 func (q *boundedQueue[T]) abort() {
- q.mu.Lock()
- if !q.closed { q.closed=true; close(q.stop) }
- q.mu.Unlock()
- q.cancel()
+	q.mu.Lock()
+	if !q.closed {
+		q.closed = true
+		close(q.stop)
+	}
+	q.mu.Unlock()
+	q.cancel()
 }
 func (q *boundedQueue[T]) Shutdown(ctx context.Context) error {
 	q.mu.Lock()
