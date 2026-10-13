@@ -1,5 +1,5 @@
 """Explicit Grafana issuance policies; existing global PKI rendering is untouched."""
-from common import ROOT, URI, load_module
+from common import ROOT, URI, load_module, resource
 
 
 def identities():
@@ -19,10 +19,28 @@ def identities():
              'secret': 'obs-mtls-' + role} for role, domain, cn, dns, usages in entries]
 
 
+def approver_signer_rbac():
+    """Permit the existing approver to approve only these two dedicated issuers."""
+    name = 'grafana-postgres-approver-signers'
+    role = resource('ClusterRole', name, {'rules': [{
+        'apiGroups': ['cert-manager.io'], 'resources': ['signers'], 'verbs': ['approve'],
+        'resourceNames': [
+            'clusterissuers.cert-manager.io/obs-mtls-grafana-postgres-client',
+            'clusterissuers.cert-manager.io/obs-mtls-grafana-postgres-server'],
+    }]}, 'rbac.authorization.k8s.io/v1', namespaced=False)
+    binding = resource('ClusterRoleBinding', name, {
+        'roleRef': {'apiGroup': 'rbac.authorization.k8s.io', 'kind': 'ClusterRole', 'name': name},
+        'subjects': [{'kind': 'ServiceAccount', 'name': 'cert-manager-approver-policy',
+                      'namespace': 'cert-manager'}],
+    }, 'rbac.authorization.k8s.io/v1', namespaced=False)
+    return [role, binding]
+
+
 def render():
     # Reuse the exact policy encoding/constraints, without broadening the global namespace allowlist.
     pki = load_module('grafana_existing_pki', ROOT.parent / 'cert-manager' / 'render.py')
-    docs = [pki.cluster_issuer(domain) for domain in ('grafana-postgres-client', 'grafana-postgres-server')]
+    docs = [*[pki.cluster_issuer(domain) for domain in ('grafana-postgres-client', 'grafana-postgres-server')],
+            *approver_signer_rbac()]
     for item in identities():
         certificate = pki.certificate(item)
         if item['role'].startswith('grafana-postgres-'):
