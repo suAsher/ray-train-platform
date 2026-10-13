@@ -126,6 +126,22 @@ class GrafanaHATests(unittest.TestCase):
             self.assertIn(name, text)
         self.assertNotIn('canary', text.lower())
 
+    def test_dedicated_postgres_issuers_do_not_trust_nightingale_replication_ca(self):
+        issuers = {doc['metadata']['name']: doc for doc in self.docs if doc['kind'] == 'ClusterIssuer'}
+        self.assertEqual({'obs-mtls-grafana-postgres-client', 'obs-mtls-grafana-postgres-server'}, set(issuers))
+        for name, issuer in issuers.items():
+            self.assertEqual(name.replace('obs-mtls-', 'obs-mtls-ca-', 1), issuer['spec']['ca']['secretName'])
+        replication = self.resource('Certificate', 'obs-mtls-grafana-postgres-replication')
+        self.assertEqual('obs-mtls-grafana-postgres-client', replication['spec']['issuerRef']['name'])
+
+    def test_unbuilt_image_fails_closed_and_config_changes_roll_deployment(self):
+        with self.assertRaises(ValueError):
+            self.renderer.render(yaml.safe_load((ROOT / 'values.yaml').read_text()))
+        before = self.resource('Deployment', 'grafana')['spec']['template']['metadata']['annotations']
+        changed = self.renderer.render({**self.values, 'rootURL': 'https://172.28.1.232:31701/'})
+        after = next(d for d in changed if d['kind'] == 'Deployment')['spec']['template']['metadata']['annotations']
+        self.assertNotEqual(before, after)
+
 
 if __name__ == '__main__':
     unittest.main()
