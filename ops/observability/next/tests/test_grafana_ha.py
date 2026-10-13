@@ -134,6 +134,27 @@ class GrafanaHATests(unittest.TestCase):
         replication = self.resource('Certificate', 'obs-mtls-grafana-postgres-replication')
         self.assertEqual('obs-mtls-grafana-postgres-client', replication['spec']['issuerRef']['name'])
 
+    def test_approver_can_approve_only_the_two_dedicated_postgres_signers(self):
+        name = 'grafana-postgres-approver-signers'
+        role = self.resource('ClusterRole', name)
+        self.assertNotIn('namespace', role['metadata'])
+        self.assertEqual([{
+            'apiGroups': ['cert-manager.io'], 'resources': ['signers'],
+            'verbs': ['approve'], 'resourceNames': [
+                'clusterissuers.cert-manager.io/obs-mtls-grafana-postgres-client',
+                'clusterissuers.cert-manager.io/obs-mtls-grafana-postgres-server'],
+        }], role['rules'])
+        binding = self.resource('ClusterRoleBinding', name)
+        self.assertNotIn('namespace', binding['metadata'])
+        self.assertEqual({'apiGroup': 'rbac.authorization.k8s.io', 'kind': 'ClusterRole', 'name': name}, binding['roleRef'])
+        self.assertEqual([{'kind': 'ServiceAccount', 'name': 'cert-manager-approver-policy',
+                          'namespace': 'cert-manager'}], binding['subjects'])
+        certificate_docs = module('certificates').render()
+        self.assertEqual(role, next(doc for doc in certificate_docs if doc['kind'] == 'ClusterRole'
+                                  and doc['metadata']['name'] == name))
+        self.assertFalse(any(doc['metadata']['name'] == 'cert-manager-approver-policy'
+                             for doc in certificate_docs if doc['kind'] in ('ClusterRole', 'ClusterRoleBinding')))
+
     def test_unbuilt_image_fails_closed_and_config_changes_roll_deployment(self):
         with self.assertRaises(ValueError):
             self.renderer.render(yaml.safe_load((ROOT / 'values.yaml').read_text()))
