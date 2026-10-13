@@ -64,7 +64,12 @@ def verify_http_protobuf(sandbox, address, sql):
         try:
             connection.request('POST', '/v1/' + signal, body=body, headers={'Content-Type': 'application/x-protobuf'})
             response = connection.getresponse()
-            assert response.status == 200 and response.read(4096) == b'', 'binary OTLP rejected'
+            response_body = response.read(4096)
+            assert response.status == 200, 'binary OTLP HTTP status rejected'
+            fields = codec._fields(response_body)
+            assert not fields or (set(fields) == {1} and fields[1][0] == 2), 'unexpected binary OTLP response'
+            partial = codec._fields(fields[1][1]) if fields else {}
+            assert not (set(partial) - {1, 2}) and partial.get(1, (0, 0)) == (0, 0) and partial.get(2, (2, b'')) == (2, b''), 'binary OTLP partial failure'
         finally:
             connection.close()
     for table in ('otel_logs_all', 'otel_traces_all', 'otel_traces_trace_id_ts_all'):
