@@ -13,6 +13,7 @@ import (
 const (
 	scraperIdentity = "spiffe://observability.raytrain.local/victoriametrics/vmagent"
 	backendIdentity = "spiffe://observability.raytrain.local/ray-train-platform/backend-telemetry"
+	otelIdentity    = "spiffe://observability.raytrain.local/opentelemetry/otel-gateway"
 	metricsDNS      = "backend-metrics.ray-train-platform.svc"
 )
 

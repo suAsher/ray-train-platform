@@ -22,9 +22,9 @@ import (
 	"ray-train-platform-backend/config"
 )
 
-func gateway(t *testing.T, ca testCA, dns string, handler http.Handler) *httptest.Server {
+func gateway(t *testing.T, ca testCA, dns, identity string, handler http.Handler) *httptest.Server {
 	t.Helper()
-	cert, key := issue(t, ca, []string{dns}, "")
+	cert, key := issue(t, ca, []string{dns}, identity)
 	pair, err := tls.X509KeyPair(cert, key)
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +53,7 @@ func TestRealOTLPProtobufUsesMTLSAndWhitelist(t *testing.T) {
 	var mu sync.Mutex
 	var paths []string
 	var traceID, logID []byte
-	server := gateway(t, ca, "otel-gateway.opentelemetry.svc", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := gateway(t, ca, "otel-gateway.opentelemetry.svc", otelIdentity, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Error(err)
@@ -123,7 +123,7 @@ func TestOTLPClientReloadAndStrictServerDNS(t *testing.T) {
 	cfg, ca := tlsFixture(t)
 	var serial string
 	var serialMu sync.Mutex
-	server := gateway(t, ca, "otel-gateway.opentelemetry.svc", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := gateway(t, ca, "otel-gateway.opentelemetry.svc", otelIdentity, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		serialMu.Lock()
 		serial = r.TLS.PeerCertificates[0].SerialNumber.String()
 		serialMu.Unlock()
@@ -162,7 +162,12 @@ func TestOTLPClientReloadAndStrictServerDNS(t *testing.T) {
 	}
 	cert, key = issue(t, ca, nil, backendIdentity)
 	writePair(t, cfg.OTLPCertFile, cfg.OTLPKeyFile, cert, key)
-	wrongDNS := gateway(t, ca, "wrong.example", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
+	wrongURI := gateway(t, ca, "otel-gateway.opentelemetry.svc", "spiffe://observability.raytrain.local/opentelemetry/canary", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
+	client.Transport = gatewayTransport(cfg, wrongURI)
+	if err := send(); err == nil {
+		t.Fatal("accepted wrong OTLP server URI")
+	}
+	wrongDNS := gateway(t, ca, "wrong.example", otelIdentity, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
 	client.Transport = gatewayTransport(cfg, wrongDNS)
 	if err := send(); err == nil {
 		t.Fatal("accepted wrong OTLP server DNS")

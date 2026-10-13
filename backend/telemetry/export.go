@@ -34,7 +34,12 @@ func (t *rotatingTransport) RoundTrip(request *http.Request) (*http.Response, er
 	if err != nil {
 		return nil, err
 	}
-	transport := &http.Transport{Proxy: nil, DialContext: t.dialContext, DisableKeepAlives: true, ForceAttemptHTTP2: false, TLSHandshakeTimeout: exportTimeout, ResponseHeaderTimeout: exportTimeout, MaxResponseHeaderBytes: 16 << 10, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, Certificates: []tls.Certificate{pair}, ServerName: endpoint.Hostname()}}
+	transport := &http.Transport{Proxy: nil, DialContext: t.dialContext, DisableKeepAlives: true, ForceAttemptHTTP2: false, TLSHandshakeTimeout: exportTimeout, ResponseHeaderTimeout: exportTimeout, MaxResponseHeaderBytes: 16 << 10, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, Certificates: []tls.Certificate{pair}, ServerName: endpoint.Hostname(), VerifyConnection: func(state tls.ConnectionState) error {
+		if len(state.PeerCertificates) == 0 || !hasIdentity(state.PeerCertificates[0], otelIdentity) {
+			return errors.New("unapproved telemetry gateway identity")
+		}
+		return nil
+	}}}
 	defer transport.CloseIdleConnections()
 	clone := request.Clone(request.Context())
 	clone.Header = make(http.Header)
