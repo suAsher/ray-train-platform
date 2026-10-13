@@ -104,6 +104,14 @@ class GrafanaHATests(unittest.TestCase):
         self.assertIn('/etc/query-identity/tls.key', str(sds))
         self.assertIn('watched_directory', str(sds))
 
+    def test_remote_datasource_dns_uses_cluster_ipv4_family(self):
+        proxy = yaml.safe_load(self.resource('ConfigMap', 'grafana-envoy')['data']['envoy.yaml'])
+        remote = [cluster for cluster in proxy['static_resources']['clusters'] if cluster['type'] == 'STRICT_DNS']
+        self.assertEqual({'vmauth-read', 'clickhouse-query'}, {cluster['name'] for cluster in remote})
+        for cluster in remote:
+            self.assertEqual('V4_ONLY', cluster['dns_lookup_family'])
+            self.assertTrue(cluster['respect_dns_ttl'])
+
     def test_certificates_are_scoped_and_postgres_common_name_is_exact(self):
         certs = {d['metadata']['name']: d for d in self.docs if d['kind'] == 'Certificate'}
         self.assertEqual('grafana', certs['obs-mtls-grafana-postgres-client']['spec']['commonName'])
