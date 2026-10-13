@@ -98,8 +98,8 @@ processors:
           - set(name, Concat([attributes["http.request.method"], attributes["http.route"]], " "))
           - set(status.message, "")
           - set(trace_state, "")
-          - set(events, [])
-          - set(links, [])
+          - set(events, nil)
+          - set(links, nil)
     log_statements:
       - context: log
         statements:

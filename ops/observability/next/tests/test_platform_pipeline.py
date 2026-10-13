@@ -59,7 +59,7 @@ class PlatformPipelineTests(unittest.TestCase):
             self.assertIn('keep_keys(instrumentation_scope.attributes, [])', text)
             self.assertIn('set(instrumentation_scope.name, "")', text)
             self.assertIn('set(instrumentation_scope.version, "")', text)
-        for stmt in ('set(events, [])', 'set(links, [])', 'set(status.message, "")', 'set(trace_state, "")'):
+        for stmt in ('set(events, nil)', 'set(links, nil)', 'set(status.message, "")', 'set(trace_state, "")'):
             self.assertIn(stmt, span)
         filters = doc['processors']['filter/platform']
         self.assertEqual('propagate', filters['error_mode'])
