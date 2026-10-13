@@ -115,3 +115,26 @@ The renderer also owns three new `VMServiceScrape` objects and one narrowly scop
 Before applying the scrapes, create `victoriametrics/obs-mtls-grafana-postgres-server-ca` from the **dedicated server CA certificate only**, key `ca.crt`. This is a public trust-bundle copy, never the CA private key. CNPG's native metrics server uses its configured PostgreSQL server certificate; its patched client verifier independently trusts `obs-mtls-cnpg-metrics-ca` (mesh) and accepts only the VMagent URI. This asymmetric server/client CA combination matches the verified Nightingale implementation and requires no extra PostgreSQL database client permission. The PG scrape Service selects all three instance Pods, including standbys. After rollout, require `up == 1` for both Grafana Pods, both CNPG operators and all three PostgreSQL instances; a healthy Service alone is insufficient.
 
 The certificates phase also creates the independent `grafana-postgres-approver-signers` ClusterRole/Binding. It grants the existing `cert-manager/cert-manager-approver-policy` service account only `approve` on `cert-manager.io/signers` with the two exact names `clusterissuers.cert-manager.io/obs-mtls-grafana-postgres-client` and `clusterissuers.cert-manager.io/obs-mtls-grafana-postgres-server`. It does not alter the existing approver chart role or grant wildcard, Secret, issuer-write or policy-write permissions. The CertificateRequestPolicy still controls the allowed namespace, URI, common name, usages and duration; signer permission is a separate webhook prerequisite. After applying, inspect the actual CertificateRequest `status.conditions` for `Approved=True`, then each Certificate for `Ready=True`; an `Approved` event alone does not prove the webhook accepted the status update.
+
+## Live HA and logical recovery tools
+
+Run the committed tools only on the authorized builder. `verify_live.py` defaults to read-only and checks the exact Grafana namespace, PostgreSQL ownership, three ready instances on distinct nodes, one writable primary, two streaming quorum standbys, the RW Service, and both Grafana API replicas. The API probes use Pod loopback port-forwards and do not establish browser gateway mTLS coverage.
+
+```bash
+python3 ops/observability/next/grafana/verify_live.py \
+  --credentials "$NEW_CREDENTIALS_FILE" --expected-cluster-uid "$GRAFANA_PG_UID"
+# Explicitly authorized planned switch; choose a currently healthy owned standby.
+python3 ops/observability/next/grafana/verify_live.py \
+  --credentials "$NEW_CREDENTIALS_FILE" --expected-cluster-uid "$GRAFANA_PG_UID" \
+  --switchover --target grafana-postgres-2
+python3 ops/observability/next/grafana/verify_restore.py \
+  --create-backup --credentials "$NEW_CREDENTIALS_FILE" \
+  --expected-cluster-uid "$GRAFANA_PG_UID" --image "$GRAFANA_IMAGE" \
+  --output "$PRIVATE_RECOVERY_DIRECTORY"
+```
+
+The switch tool creates only its marked acceptance dashboard, proves acknowledged writes on both replicas, verifies a replayed WAL barrier, and applies the CNPG v1.30.1 status protocol with atomic UID/resourceVersion/current-primary checks. It waits for all three instances to recover and both Grafana replicas to read and update the same dashboard, then removes only that run's dashboard. It does not delete a Pod, modify a Cluster spec, or test an unplanned failure.
+
+The restore tool dumps the entire **new** `grafana` database, including Grafana 13 unified `resource` tables; the legacy `dashboard` table alone is not authoritative. A 0600 custom-format dump and verification metadata remain beneath the specified root-only `/root` directory. The tool restores to a disposable PostgreSQL container using `--network none`, starts an isolated Grafana in that same loopback-only network namespace, and compares the unified/legacy dashboard APIs, four datasource definitions, plugin signature and native administrator. It supplies no dashboard JSON or datasource provisioning that could recreate missing records. An empty same-name dashboard provider prevents orphan cleanup. A local fake VM endpoint verifies that the externally maintained encryption key can decrypt the restored Authorization header; no restored query reaches a production datasource. Credentials stay in stdin/memory. Cleanup checks run-specific container labels, and success is recorded only after cleanup. This proves logical recovery; it is not a WAL/PITR or off-site backup implementation.
+
+For later datasource edits, advance the changed datasource's provisioning `version` and verify the actual API value on both replicas. Grafana may skip a lower declaration version even when the updated ConfigMap is mounted. Native database migration locking stays enabled with a 120-second wait so two fresh replicas do not immediately fail competing for the migration lock. Envoy client TLS explicitly fixes **both** minimum and maximum to TLS 1.3: Envoy 1.39.3 defaults the upstream maximum to TLS 1.2. Remote DNS uses the cluster's IPv4 address family. Keep these bounds in contract tests and verify real datasource queries in addition to health checks.
