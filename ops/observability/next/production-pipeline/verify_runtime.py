@@ -1,0 +1,97 @@
+"""Private synthetic acceptance; called only by the existing isolated CH harness."""
+import copy
+import json
+import time
+from pathlib import Path
+
+from runtime_support import load_module, wait
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+SERVER = 'otel-gateway.opentelemetry.svc.cluster.local'
+
+
+def attributes(values):
+    return [{'key': key, 'value': {'intValue' if isinstance(value, int) else 'stringValue': value}}
+            for key, value in values.items()]
+
+
+def payloads():
+    now = time.time_ns()
+    attrs = attributes({'http.request.method': 'GET', 'http.route': '/api/v1/jobs/:id',
+                        'http.response.status_code': 200, 'authorization': 'sensitive-synthetic-marker',
+                        'url.query': 'sensitive-synthetic-marker'})
+    span = {'traceId': '00112233445566778899aabbccddeeff', 'spanId': '0123456789abcdef',
+            'name': 'sensitive-synthetic-marker', 'kind': 2, 'startTimeUnixNano': str(now),
+            'endTimeUnixNano': str(now + 1000000), 'attributes': attrs,
+            'traceState': 'synthetic=sensitive-synthetic-marker',
+            'status': {'code': 0, 'message': 'sensitive-synthetic-marker'},
+            'events': [{'timeUnixNano': str(now), 'name': 'sensitive-synthetic-marker', 'attributes': attrs}],
+            'links': [{'traceId': 'ffeeddccbbaa99887766554433221100', 'spanId': 'fedcba9876543210', 'attributes': attrs}]}
+    log = {'traceId': span['traceId'], 'spanId': span['spanId'], 'timeUnixNano': str(now),
+           'body': {'stringValue': 'http.request.completed'}, 'severityText': 'sensitive-synthetic-marker',
+           'eventName': 'sensitive-synthetic-marker', 'attributes': attrs + attributes({'duration_ms': 1})}
+    resource = {'attributes': attributes({'service.name': 'ray-train-backend', 'token': 'sensitive-synthetic-marker'})}
+    scope = {'name': 'sensitive-synthetic-marker', 'version': 'sensitive-synthetic-marker', 'attributes': attrs}
+    traces = {'resourceSpans': [{'resource': resource, 'schemaUrl': 'sensitive-synthetic-marker',
+              'scopeSpans': [{'scope': scope, 'schemaUrl': 'sensitive-synthetic-marker', 'spans': [span]}]}]}
+    logs = {'resourceLogs': [{'resource': resource, 'schemaUrl': 'sensitive-synthetic-marker',
+            'scopeLogs': [{'scope': scope, 'schemaUrl': 'sensitive-synthetic-marker', 'logRecords': [log]}]}]}
+    return traces, logs
+
+
+def verify(sandbox, context, sql):
+    otel = load_module('obs_platform_otel', ROOT / 'otel' / 'verify_runtime.py')
+    base, queue = otel._prepare(context)
+    native, proxy, address = otel._start(context, base, queue)
+    wait('production Collector readiness', lambda: otel._healthy(address), 90)
+    for role in (None, 'canary', 'vmagent', 'grafana-query', 'query-admin'):
+        assert not sandbox.tls_accepts(address, SERVER, 14318, role), 'wrong-role OTLP accepted'
+    assert sandbox.tls_accepts(address, SERVER, 14318, 'backend-telemetry')
+    assert not sandbox.tls_accepts(address, SERVER, 4318, 'backend-telemetry')
+    ch_address = sandbox.ip(sandbox.native_ch[0])
+    ch_server = 'clickhouse-clickhouse.clickhouse.svc.cluster.local'
+    assert sandbox.tls_accepts(ch_address, ch_server, 9440, 'grafana-query')
+    assert not sandbox.tls_accepts(ch_address, ch_server, 8443, 'grafana-query')
+    for path in ('/', '/metrics', '/v1/metrics', '/v1/traces'):
+        assert sandbox.request(address, SERVER, 14318, path, 'backend-telemetry')[0] == 404
+    assert sandbox.request(address, SERVER, 14318, '/v1/logs', 'backend-telemetry', b'x' * 1048577)[0] == 413
+    traces, logs = payloads()
+    for signal, payload in (('traces', traces), ('logs', logs)):
+        assert sandbox.request(address, SERVER, 14318, '/v1/' + signal, 'backend-telemetry', json.dumps(payload).encode())[0] == 200
+    db = 'raytrain_observability.'
+    for table in ('otel_logs_all', 'otel_traces_all', 'otel_traces_trace_id_ts_all'):
+        wait('production insert and distributed read ' + table,
+             lambda t=table: sql(sandbox, 'SELECT count() FROM ' + db + t, role='grafana-query') == '1', 60)
+        result = sql(sandbox, 'SELECT * FROM ' + db + table + ' FORMAT JSONEachRow', role='grafana-query')
+        assert 'sensitive-synthetic-marker' not in result, 'sensitive free text survived'
+        if table != 'otel_traces_trace_id_ts_all':
+            record = json.loads(result)
+            assert record['ServiceName'] == 'ray-train-backend'
+            assert record['ResourceAttributes']['raytrain.telemetry.source'] == 'production'
+            assert len(record['ResourceAttributes']) == 5
+    for replica in range(2):
+        for table in ('otel_logs', 'otel_traces', 'otel_traces_trace_id_ts'):
+            wait('replicated production row', lambda r=replica, t=table:
+                 sql(sandbox, 'SELECT count() FROM ' + db + t, replica=r, role='schema-admin') == '1', 60)
+    denied = ['SELECT * FROM ' + db + 'otel_logs', 'SELECT * FROM ' + db + 'otel_traces',
+              'SELECT * FROM ' + db + 'otel_traces_trace_id_ts', 'SELECT * FROM system.users',
+              'SELECT * FROM system.clusters', 'SELECT * FROM system.query_log',
+              'INSERT INTO ' + db + "otel_logs_all (Timestamp,Body) VALUES(now64(9),'forbidden')"]
+    for query in denied:
+        assert sql(sandbox, query, role='grafana-query', check=False).returncode != 0, 'Grafana query privilege exceeded'
+    assert sql(sandbox, 'SELECT * FROM ' + db + 'otel_logs', role='platform-ingest', check=False).returncode != 0
+    assert sql(sandbox, 'INSERT INTO observability_canary.otel_logs (Timestamp) VALUES(now64(9))', role='platform-ingest', check=False).returncode != 0
+    # Wrong Body and malformed bounded attributes must never enter storage.
+    bad = copy.deepcopy(logs)
+    bad['resourceLogs'][0]['scopeLogs'][0]['logRecords'][0]['body'] = {'stringValue': 'sensitive-synthetic-marker'}
+    assert sandbox.request(address, SERVER, 14318, '/v1/logs', 'backend-telemetry', json.dumps(bad).encode())[0] == 200
+    bad = copy.deepcopy(traces)
+    bad['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['attributes'] = attributes({'http.request.method': 'GET', 'http.route': '/bad?token=secret', 'http.response.status_code': 200})
+    assert sandbox.request(address, SERVER, 14318, '/v1/traces', 'backend-telemetry', json.dumps(bad).encode())[0] == 200
+    time.sleep(2)
+    for table in ('otel_logs_all', 'otel_traces_all'):
+        assert sql(sandbox, 'SELECT count() FROM ' + db + table, role='grafana-query') == '1'
+    return {'mtls_method_path_body_limits': 'passed', 'sensitive_field_erasure': 'passed',
+            'two_replica_production_ingest': 'passed', 'distributed_read_without_base_grant': 'passed',
+            'unexpected_log_body_and_route_rejected': 'passed', 'grafana_write_base_system_denied': 'passed'}

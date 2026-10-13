@@ -122,6 +122,8 @@ def ch_configs(index, candidate, passwords):
             config_value(record, "grants/query", grant)
     for key, value in config["profiles"].items():
         config_value(users_root, "profiles/" + key, value)
+    query_cluster = ET.fromstring(config["files"]["config.d/zz-platform-query.xml"])
+    root.find("remote_servers").append(query_cluster.find("remote_servers/telemetry_platform_query"))
     return xml_text(root), xml_text(users_root)
 
 
@@ -136,7 +138,8 @@ def proxy(sandbox, role, native, name):
 
 
 def sql_client(sandbox, query, replica=0, role="query-admin", check=True):
-    users = {"schema-admin": "schema_admin", "query-admin": "observability_query", "otel-gateway": "otel_ingest"}
+    users = {"schema-admin": "schema_admin", "query-admin": "observability_query", "otel-gateway": "otel_ingest", "grafana-query": "grafana_platform_query",
+             "platform-ingest": "platform_otel_ingest"}
     username = users[role]
     root = ET.fromstring((HERE / "schema-client.xml").read_text())
     root.find("host").text = f"chi-clickhouse-telemetry-0-{replica}.{NS}"
@@ -150,7 +153,7 @@ def sql_client(sandbox, query, replica=0, role="query-admin", check=True):
                "--cpus", "0.25", "--memory", "256m", "--pids-limit", "64",
                "--tmpfs", "/tmp:rw,size=16m,uid=10001,gid=10001", "--env", "CLICKHOUSE_PASSWORD",
                "--mount", f"type=bind,src={path},dst=/client.xml,readonly",
-               "--mount", f"type=bind,src={sandbox.leaves[role]},dst=/etc/obs-mtls,readonly",
+               "--mount", f"type=bind,src={sandbox.leaves["otel-gateway" if role == "platform-ingest" else role]},dst=/etc/obs-mtls,readonly",
                "--entrypoint", "clickhouse-client", sandbox.images["clickhouse"],
                "--config-file", "/client.xml", *sql_timeout_args(role),
                "--multiquery", "--query", query]
@@ -179,7 +182,8 @@ def create_cluster(sandbox):
     sandbox.images["otel"] = next(c["image"] for c in sts["spec"]["template"]["spec"]["containers"]
                                   if c["name"] == "collector")
     sandbox.passwords = {user: secrets.token_urlsafe(24) for user in
-                         ("default", "schema_admin", "observability_query", "otel_ingest", "clickhouse_operator")}
+                         ("default", "schema_admin", "observability_query", "otel_ingest", "clickhouse_operator", "platform_otel_ingest",
+                          "grafana_platform_query", "platform_distributed_reader")}
     sandbox.native_keeper = []
     sandbox.native_ch = []
     for index in range(3):
@@ -219,7 +223,8 @@ def create_cluster(sandbox):
                                 (data, "/var/lib/clickhouse", True), (sandbox.leaves["clickhouse"], "/etc/obs-mtls", False)],
                                aliases=aliases, entrypoint="/usr/bin/clickhouse-server", memory="2g", cpus="1",
                                env={"INTERSERVER_USER": "replica", "INTERSERVER_PASSWORD": replica_password,
-                                    "CLICKHOUSE_INTERNODE_CLUSTER_SECRET": cluster_secret})
+                                    "CLICKHOUSE_INTERNODE_CLUSTER_SECRET": cluster_secret,
+                                    "PLATFORM_DISTRIBUTED_PASSWORD": sandbox.passwords["platform_distributed_reader"]})
         sandbox.native_ch.append(native)
         proxy(sandbox, "clickhouse", native, f"ch-{index}")
     for native in sandbox.native_ch:
@@ -261,6 +266,8 @@ def verify(sandbox):
     sandbox.stage = "issue_synthetic_certificates"
     plans = json.loads((HERE / "mtls-identities.json").read_text())
     plans += json.loads((ROOT / "otel" / "mtls-identities.json").read_text())
+    plans.extend([{"namespace": "grafana", "role": "grafana-query", "trust_domain": "mesh", "dns_names": [], "usages": ["clientAuth"]},
+                  {"namespace": "ray-train-platform", "role": "backend-telemetry", "trust_domain": "mesh", "dns_names": [], "usages": ["clientAuth"]}])
     plans.append({"namespace": "victoriametrics", "role": "vmagent", "trust_domain": "mesh",
                   "dns_names": [], "usages": ["clientAuth"]})
     sandbox.issue(ROOT, plans)
@@ -280,6 +287,7 @@ def verify(sandbox):
             raise RuntimeCheckError("DDL preflight: replica does not recognize its advertised secure port")
     sandbox.stage = "bootstrap_schema"
     sql_client(sandbox, (HERE / "schema.sql").read_text(), role="schema-admin")
+    sql_client(sandbox, (ROOT / "production-pipeline" / "schema.sql").read_text(), role="schema-admin")
     sandbox.stage = "schema_and_sql_grants"
     for replica in range(2):
         result = sql_client(sandbox, "SELECT count() FROM system.replicas WHERE database='observability_canary' AND is_readonly=0 AND is_session_expired=0", replica, "schema-admin")
@@ -302,15 +310,20 @@ def verify(sandbox):
                "leaf_dirs": sandbox.leaves, "run": run, "start": sandbox.start,
                "wait": wait, "ip": sandbox.ip, "request": sandbox.request,
                "port_closed": port_closed, "ingest_password": sandbox.passwords["otel_ingest"],
+               "platform_password": sandbox.passwords["platform_otel_ingest"],
                "sql": lambda query, replica=0, role="query-admin": sql_client(sandbox, query, replica, role)}
-    evidence["otel"] = otel.verify_otel(context)
+    if sandbox.phase == "full":
+        evidence["otel"] = otel.verify_otel(context)
+    platform = load_module("obs_platform_runtime", ROOT / "production-pipeline" / "verify_runtime.py")
+    sandbox.stage = "production_platform_pipeline"
+    evidence["platform"] = platform.verify(sandbox, context, sql_client)
     return evidence
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--phase", choices=("full", "keeper"), default="full")
+    parser.add_argument("--phase", choices=("full", "keeper", "platform"), default="full")
     args = parser.parse_args()
     if os.geteuid() != 0 or sys.platform != "linux":
         raise RuntimeCheckError("Run only on the approved Linux Docker builder as root")

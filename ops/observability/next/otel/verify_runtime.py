@@ -69,7 +69,8 @@ def _start(ctx, base, queue):
         [(base / "collector.yaml", "/etc/otelcol/config/collector.yaml", False),
          (queue, "/var/lib/otelcol", True), (leaf, "/etc/obs-mtls", False)],
         aliases=(SERVER_NAME,),
-        env={"CLICKHOUSE_PASSWORD": ctx["ingest_password"], "GOMEMLIMIT": "768MiB"},
+        env={"CLICKHOUSE_PASSWORD": ctx["ingest_password"],
+             "PLATFORM_CLICKHOUSE_PASSWORD": ctx["platform_password"], "GOMEMLIMIT": "768MiB"},
         memory="1g", cpus="1")
     address = ctx["ip"](native)
     proxy_text = (HERE / "proxy-otel.yaml").read_text().replace("__POD_IP__", address)
