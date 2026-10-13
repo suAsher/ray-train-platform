@@ -2,37 +2,31 @@
 
 本目录是独立 Helm chart，release `observability-ui`、namespace `nightingale`。它只新增入口，不升级或重启原 Grafana、夜莺、Alloy、Loki、训练任务。当前是否已安装、实际 revision 和验收结果以 [部署记录](../DEPLOYMENT_RUNBOOK.md) 为准。
 
-## 2026-10-13 独立 Grafana 切换进展
+## 当前入口：独立 Grafana
 
-独立 `grafana` namespace 的 2 个 Grafana 和专用 3 实例 PostgreSQL 已部署，数据库共享与受控主备切换已开始验收。**本检查点 `observability-ui` 仍为 revision 1，31701 继续指向旧 Grafana；新入口尚未切换。** 完整数据源与隔离恢复通过后，发布负责人用最小覆盖 `grafana.independent: true` 更新此 release，保留两个现有代理和所有 NodePort，不新增一组入口 Pod。
+2026-10-13 **12:04:38 北京时间**，`nightingale/observability-ui` **revision 2** 已启用 `grafana.independent=true`，31701 指向独立 `grafana` namespace 的两副本 Grafana 和专用三实例 PostgreSQL。沿用两个现有代理和所有 NodePort，没有新建一组入口 Pod。
 
-启用后的上游为 `https://grafana.grafana.svc:8443`，呈现既有网关叶证书并核验 `spiffe://observability.raytrain.local/grafana/grafana-server`。新 Grafana 使用 **`grafana/grafana-admin`** 的独立初始账号，不自动迁移旧 `monitoring/grafana-admin`、SQLite 用户或 UI 手工配置；公开浏览器入口仍要求 Grafana 原生登录。PG、备份与配置维护见 [独立 Grafana 说明](../grafana/README.md)。只有记录真实入口登录、VM/Loki/CH 查询和 WebSocket 后，才将入口切换列为完成。
+两个节点的 TLS、原生登录 / Secure HttpOnly cookie、4 类数据源、生产看板、VM 与 ClickHouse 真实查询、正常 Origin WebSocket 101、错误 Origin 403、未认证/伪造身份 401 和 `/metrics` 404 均通过；31700 夜莺登录入口仍返回 200，未配置正式通知。完整证据为构建机 `ui-cutover-acceptance.json`，见[部署记录](../DEPLOYMENT_RUNBOOK.md#2026-10-13-后端-http-遥测与独立-grafana-ha)。
 
-```yaml
-# 仅在新 Grafana 完整验收后使用；先 --reuse-values 做 server-side dry-run 和完整 diff。
-grafana:
-  independent: true
-```
-
-定向回退使用同一 release 的最小覆盖 `grafana.independent: false`，将入口切回保留的 `monitoring/grafana-ui-backend`。回退不会迁移新 PG 数据到旧 SQLite，也不删除新数据库、证书或 PVC。下面旧 HTTP / SQLite 说明特指默认 `independent=false` 分支；不要将它用于新独立 Grafana。
+新 Grafana 使用 **`grafana/grafana-admin`** 的独立原生账号，**没有自动迁入旧 SQLite 的账号、手工看板或 UI 配置**。旧实例原样保留，专门的回退说明在下文。新数据库共享、主备切换与无网络环境的备份恢复已通过；长期备份 / WAL 归档仍是独立运维事项。
 
 ## 入口和边界
 
 | 用途 | 主地址 | 备用地址 | 原应用认证 |
 | --- | --- | --- | --- |
 | 夜莺：数据源、告警规则、联系人和通知渠道 | `https://172.28.2.65:31700/` | `https://172.28.1.232:31700/` | 夜莺原有账号、验证码与权限 |
-| Grafana：看板、Explore、数据源 | `https://172.28.2.65:31701/` | `https://172.28.1.232:31701/` | Grafana 原有账号与权限 |
+| Grafana：看板、Explore、数据源 | `https://172.28.2.65:31701/` | `https://172.28.1.232:31701/` | **独立 Grafana 原生账号**，不是平台 SSO 或旧 SQLite 账号 |
 
 两个地址均要求公司内网/VPN 可路由到该节点，首次使用前先完成下节的 CA 信任。使用固定主地址登录；换 IP 后浏览器 cookie 不会自动共享。
 
 ```text
 浏览器 ──HTTPS:31700──> UI Envoy ×2 ──mTLS:17443──> 夜莺 ×2 ──只读 VM 查询
-浏览器 ──HTTPS:31701──> 同一 UI Envoy ──HTTP:80──> Grafana 原有 Pod
+浏览器 ──HTTPS:31701──> 同一 UI Envoy ──mTLS:8443──> 独立 Grafana ×2 ──TLS──> 专用 PostgreSQL ×3
 ```
 
 Gateway 使用原应用登录，保留 Authorization、Cookie、Origin；清除外部伪造的认证代理身份头，只设置 HTTPS 协议头。支持 Grafana Live WebSocket。响应中的每条 `Set-Cookie` 独立保留原属性并补 `Secure`，不会按逗号拆分 `Expires`。不记录请求访问日志、URL 或 token。不提供管理端口，阻止 `/metrics` 及其子路径从浏览器入口透传。
 
-Grafana 的现有集群内上游仍是 HTTP，不能称为全链路 TLS。原 Grafana 两副本各自使用 emptyDir 内 SQLite，并无共享、持久化数据库。本 chart 新增 `monitoring/grafana-ui-backend` 的 ClientIP 粘性 Service，两个 NodePort 也开启 ClientIP 粘性，减少同一浏览器在副本间切换；网关重启、故障转移、源地址变化或粘性超时仍可能重新登录。这不是 Grafana 数据持久化或真正的应用层 HA。UI 新建账号/看板/数据源存在丢失风险；需要长期保留的配置继续以仓库 provisioning 为准，共享数据库迁移需另行备份与验证。
+Grafana 上游为 `https://grafana.grafana.svc:8443`，网关呈现现有 `obs-mtls-n9e-ui-gateway` 叶证书并核验 `spiffe://observability.raytrain.local/grafana/grafana-server`。Grafana 共享数据库与稳定加密密钥，不依靠 ClientIP 粘连保存配置。原 Prometheus/Loki 数据源保留原 HTTP 访问边界；不要把 UI 上游 mTLS 说成所有老链路均已改为 TLS。
 
 NodePort 的 `externalTrafficPolicy: Cluster` 使无网关 Pod 的节点也能转发，可能发生 SNAT。两个 IP SAN 只用于证书验证，**不是入口防火墙**；NodePort 可能在所有节点接口上开放。当前 VKE NetworkPolicy 执行关闭，chart 不把它当作访问限制。应在云安全组/路由中把相应端口的可达范围限定为公司内网/VPN，不开放公网；本 chart 不修改 CNI 或安全组。
 
@@ -52,7 +46,7 @@ openssl x509 -in observability-ui-ca.crt -noout -subject -issuer -dates -fingerp
 
 通过已有受信渠道向运维用户交付 `observability-ui-ca.crt` 并核对 SHA-256 指纹；在公司策略允许的浏览器/操作系统证书管理界面导入受信 CA，然后验证页面证书的 SAN 与访问 IP、有效期均匹配。不要绕过证书警告后输入密码，也不要复制 `tls.key`、CA 私钥或整份 Secret。导入此 CA 意味着信任该 CA 签发的证书，宜由公司统一证书管理工具分发并管理撤销。
 
-CLI 检查可使用 `curl --cacert observability-ui-ca.crt https://172.28.2.65:31700/`，不要使用 `-k` 作为成功证据。账号沿用原系统账号，网关不创建账号、不代用户登录、不关闭验证码；管理员凭据仅通过既有受控方式交付。
+CLI 检查可使用 `curl --cacert observability-ui-ca.crt https://172.28.2.65:31700/`，不要使用 `-k` 作为成功证据。夜莺账号保持原样；Grafana 使用本轮独立实例的账号。网关不代用户登录、不关闭验证码；管理员凭据仅通过既有受控方式交付。
 
 授权管理员可在构建机的私人终端读取初始登录信息，不将终端结果发入对话或文档：
 
@@ -60,16 +54,16 @@ CLI 检查可使用 `curl --cacert observability-ui-ca.crt https://172.28.2.65:3
 # 夜莺初始用户名 root；如果已在 UI 修改密码，以修改后的密码为准。
 kubectl --context="$VKE_CONTEXT" -n nightingale get secret n9e-bootstrap-admin \
   -o jsonpath='{.data.password}' | base64 -d
-# 切换前旧 Grafana 的用户名、密码；这不是平台统一认证账号。
-kubectl --context="$VKE_CONTEXT" -n monitoring get secret grafana-admin \
+# 当前独立 Grafana 用户名、密码；这不是平台统一认证账号。
+kubectl --context="$VKE_CONTEXT" -n grafana get secret grafana-admin \
   -o jsonpath='{.data.admin-user}' | base64 -d
-kubectl --context="$VKE_CONTEXT" -n monitoring get secret grafana-admin \
+kubectl --context="$VKE_CONTEXT" -n grafana get secret grafana-admin \
   -o jsonpath='{.data.admin-password}' | base64 -d
 ```
 
-切换到独立实例后，以上 Grafana 命令中的 namespace 应改为 **`grafana`**，Secret 名仍为 `grafana-admin`。只读取 `admin-user` / `admin-password`，不要输出其 `secret-key`。首次登录后当前密码以 Grafana 数据库为准。
+以上命令面向当前新实例。只读取 `admin-user` / `admin-password`，不要输出其 `secret-key`；不向对话、截图或工单粘贴密码。首次登录后当前密码以 Grafana 数据库为准，初始化 Secret 不是密码变更的实时副本。
 
-修改初始化 Secret 不会重置已存在的夜莺用户；不要为重置密码重跑 bootstrap。需要长期保存的夜莺配置位于专用 PostgreSQL，Grafana 则有下文所述的原有 SQLite 持久化限制。
+修改初始化 Secret 不会重置已存在的夜莺用户；不要为重置密码重跑 bootstrap。需要长期保存的夜莺配置位于专用 PostgreSQL，当前 Grafana 配置位于专用 PostgreSQL，维护与备份见 [grafana/README.md](../grafana/README.md)。
 
 ## 文件与配置维护
 
@@ -85,7 +79,7 @@ kubectl --context="$VKE_CONTEXT" -n monitoring get secret grafana-admin \
 
 新增 2 个 Pod，合计 requests **0.1 CPU / 128 MiB**，limits **0.6 CPU / 256 MiB**，不申请 GPU、不新增 PVC。滚动发布最多额外 1 个临时 Pod。使用原 `raytrain-observability-additive` 低优先级、不抢占现有任务；排除 `172.28.1.222` 与 algorithm 的 `172.28.3.32`，无额外 GPU/专属节点 toleration。
 
-依赖：现有 `nightingale`、`monitoring` namespace，cert-manager/approver-policy、`obs-mtls-mesh` ClusterIssuer、Ready 的 `obs-mtls-n9e-ui-gateway` client Certificate，以及两套现有服务。chart 不拥有或重建这个 client Certificate、不挂载 VM token、CA 私钥或 ServiceAccount token。
+依赖：现有 `nightingale`、`monitoring`、`grafana` namespace，cert-manager/approver-policy、`obs-mtls-mesh` ClusterIssuer、Ready 的 `obs-mtls-n9e-ui-gateway` client Certificate，以及两套现有服务。chart 不拥有或重建这个 client Certificate、不挂载 VM token、CA 私钥或 ServiceAccount token。
 
 ### 安装或升级
 
@@ -128,6 +122,19 @@ kubectl --context="$VKE_CONTEXT" -n nightingale top pod -l app.kubernetes.io/nam
 Certificate 的两份叶证书 Secret 均整目录只读挂载，Envoy filesystem SDS 监视 kubelet 原子投射更新；不用 `subPath`，不用为了正常续期重启原应用。改变 bootstrap/路由配置会通过 ConfigMap checksum 滚动更新网关。信任根改变仍是独立审阅的 CA 轮换工程，需要双根过渡、客户端信任更新与负向身份测试；支持 SDS 更新不等于可以随意替换根 CA。
 
 改节点地址时，在 values 的 `certificate.ipAddresses` 中同步更新精确列表，检查实际节点、路由与安全组后经渲染/策略/证书验证发布。证书 SAN 列表变更会触发 cert-manager 更新；待新证书生效后再使用新 IP。切换到仅 ClusterIP 不涉及修改训练或原应用。
+
+### 回退到保留的旧 Grafana
+
+新旧账号、UI 配置和数据库分别保留，回退不等于迁移。先保存受限的当前 release 配置并审阅 server-side dry-run，最小覆盖如下：
+
+```yaml
+grafana:
+  independent: false
+```
+
+这将 31701 定向回 `monitoring/grafana-ui-backend:80`，上游为旧集群内 HTTP，旧登录凭据引用 **`monitoring/grafana-admin`**。旧两副本各自 SQLite + emptyDir，ClientIP 粘连不是持久化或共享 HA；仅 UI 保存的旧配置仍受其原有丢失风险影响。回退不把新 PG 用户或看板复制进 SQLite，**不删除新 Grafana、PG、Certificate、PVC 或 PV**。
+
+恢复新入口时设 `grafana.independent: true`，继续保留其原生登录与 mTLS。Chart 默认 false 是保护新安装的安全默认值；当前生产 release 实际为 true，后续更新必须保留这个运行配置。
 
 ### 后续改 Ingress
 

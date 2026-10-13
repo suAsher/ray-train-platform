@@ -653,7 +653,7 @@ KSM/DCGM 的目标自身标签改存 `exporter_namespace/exporter_pod/exporter_n
 
 ## 2026-10-13 后端 HTTP 遥测与独立 Grafana HA
 
-用户选择“独立 Grafana + 专用高可用 PostgreSQL”，并继续授权可观测性增量建设。范围仍为训练平台 VKE，CNI enforcement 保持关闭；不停止用户训练，不改变提交命令，不替换 Alloy/Loki，不发送正式告警。本节是阶段事实记录，入口和最终恢复结果尚在验收，不能把实现、部署与验收混写。
+用户选择“独立 Grafana + 专用高可用 PostgreSQL”，并继续授权可观测性增量建设。范围仍为训练平台 VKE，CNI enforcement 保持关闭；不停止用户训练，不改变提交命令，不替换 Alloy/Loki，不发送正式告警。本节记录本轮最终部署与验收；新增体系完成本轮范围，长期备份、全任务追踪与正式通知仍单独列项。
 
 ### 源码、门禁和版本
 
@@ -670,7 +670,7 @@ KSM/DCGM 的目标自身标签改存 `exporter_namespace/exporter_pod/exporter_n
 | `victoriametrics/victoriametrics-cluster` | 2 | 2026-10-13 11:18:58 | 保留业务抓取，增加精确 Grafana 查询身份 |
 | `victoriametrics/platform-telemetry` | 1 | 2026-10-13 11:33:16 | 后端 Certificate/Policy、私有指标 Service、发现 RBAC 与 VMServiceScrape |
 | `ray-train-platform/ray-platform` | 274 | 2026-10-13 11:38:57 | 最小后端镜像 + telemetry 覆盖；公开业务 Service 不变 |
-| `nightingale/observability-ui` | 1 | 2026-10-09 16:41:49 | 本检查点尚未切换新 Grafana；旧目标仍可回退 |
+| `nightingale/observability-ui` | 2 | 2026-10-13 12:04:38 | `grafana.independent=true`，两个既有代理切新 Grafana；旧目标保留可回退 |
 
 ### 实际部署与身份边界
 
@@ -684,7 +684,7 @@ ClickHouse 两数据副本依次滚动，每次至少保留一个 Ready；Keeper
 
 后端 `2/2` 已运行新摘要。真实只读 API 请求在 VM tenant 1001 的 HTTP 计数读回（验收抽样值 642），两个后端 targets UP，logs/traces 导出失败计数为 0；现有 `spk-rayjob login-check` 通过。队列故障不阻塞业务 HTTP 的边界已在隔离测试验证，现场未人为停止生产 Collector 来制造故障。完整异步 Worker trace 不在此轮范围。随后真实管道验收中，28.3 秒窗口对两个 OTel Pod 各采样 15 次，生产队列峰值低于 4KiB、末值全 0；成功导出 log 增量 103、span 增量 104，failure/refused/drop 均 0。指定验收 Trace 在两个 CH 副本各读回 1 span、1 log、1 lookup，SpanId 与 lookup 时间覆盖一致，隐私白名单核验通过。双副本数据不相加计作逻辑事件数。
 
-Grafana 专用 PG 已完成 **primary 1 → 2 的受控 switchover，约 19.53 秒**，跨 Grafana 副本持久读写通过。两个 Grafana 的 Prometheus/VM/Loki/ClickHouse 四类数据源均健康 200，VM `vector(1)` 查询和官方 CH 插件查询通过。正在等待逻辑备份隔离恢复与浏览器切换结果，不能把内部数据源通过扩大为外部入口已切换。
+Grafana 专用 PG 已完成 **primary 1 → 2 的受控 switchover，约 19.53 秒**，跨 Grafana 副本持久读写通过。两个 Grafana 的 Prometheus/VM/Loki/ClickHouse 四类数据源均健康 200，VM `vector(1)` 查询和官方 CH 插件查询通过。随后完成下列恢复及真实入口验收。
 
 ### 资源与存量对比检查点
 
@@ -706,4 +706,21 @@ Grafana 专用 PG 已完成 **primary 1 → 2 的受控 switchover，约 19.53 �
 
 独立 Grafana 入口切换只修改 `observability-ui` 的 `grafana.independent`；旧 Grafana 保留，定向回退设置 `false`，不删除新 PG/PVC。后端可通过最小覆盖关闭 `backend.telemetry.enabled`；回退不会删除已写入 CH 数据或 schema。VM/OTel 回退需先停止新入口、确认队列，不拆原日志链路。
 
-尚未完成或另行建设：新 Grafana 最终恢复/入口验收；持续备份、WAL/PITR 与跨站恢复；完整异步任务追踪；夜莺真实通知（用户 UI 配置）、原生证书轮转自动化启用、Alloy 旧日志回读治理、ALB/Ingress/SSO 迁移。HA 和单次恢复演练不等同于已有长期备份策略。
+尚未完成或另行建设：持续备份、WAL/PITR 与跨站恢复；完整异步任务追踪；夜莺真实通知（用户 UI 配置）、原生证书轮转自动化启用、Alloy 旧日志回读治理、ALB/Ingress/SSO 迁移。HA 和单次恢复演练不等同于已有长期备份策略。
+
+
+### 最终恢复、入口与资源验收
+
+最终基础设施候选 **`059583287`** 的 **366 项合同测试通过**。ClickHouse 数据源修正候选 `dc8ff7d` 将 provisioned datasource 提高到 version 2，客户端 `queryTimeout=25`，两 Grafana API 实际读回与查询一致；官方驱动增加的执行余量不会突破只读 SQL 账号 30 秒上限，现场 `getSetting('max_execution_time')=29`。三张 production Distributed 表真实查询成功，越权 `system.users` 拒绝，证据为 `grafana-query-auth-evidence.json`。今后配置同一 provisioned datasource 必须提高 version 并从实际 API 读回，不能只检查 ConfigMap 文件。
+
+新 Grafana 专用库备份为私有 `credentials-new/recovery/grafana-0976e0ec6843.dump`，0600、274009 bytes，SHA256 `3c1c9a58c0e789a2ea13b3a0058bcfc3f920a808c9c8b7102fdb69b10766709f`；同 basename JSON 为恢复报告。独立临时 PG 容器使用 `network=none`，临时 Grafana 共享该无网络 namespace、无端口发布，通过 SQL/unified dashboard API、4 类数据源、原生管理员 Basic / cookie 和 VM 凭据解密检查。VM 检查证实恢复后能解出非空 Bearer，不代表核对全部数据源密码。验收不依靠 provisioning 重建看板替代真实恢复；临时容器已经精确清理，源集群与库保持不变。恢复对象仅本轮新 Grafana 数据库，**没有迁移原 SQLite 的用户、看板或 UI 配置**。
+
+`observability-ui` revision 2 于 12:04:38 北京时间上线，dry-run 仅包含预期 ConfigMap 与 Deployment 变化。两个节点的 31701 入口均在严格 CA/IP SAN 校验下通过：原生管理员 cookie 登录，`Secure/HttpOnly` 属性，4 类数据源健康，4 panel 生产看板，VM HTTP 请求真实计数（抽样 6213），ClickHouse 精确 Trace 查询；正确 Origin WebSocket 返回 101，错误 Origin 返回 403，匿名和伪造身份返回 401，公开 `/metrics` 返回 404。31700 夜莺登录入口仍为 200；本轮没有代用户配置验证码登录或正式通知。完整结果为 `ui-cutover-acceptance.json`。
+
+浏览器地址保持 `https://172.28.2.65:31701/` / `https://172.28.1.232:31701/`，但当前登录账号来自 **`grafana/grafana-admin`** 的新独立实例。旧 `monitoring/grafana-admin` 与旧 SQLite UI 内容没有被自动继承，原两实例保留回退。新入口上游 mTLS 已生效；旧 Prometheus/Loki 数据源仍是既有 HTTP 边界。
+
+最终资源核对：12:05:50 **79/79 常驻 Pod Ready，metrics 79/79 采样齐全，实际合计 1.305159 CPU / 20.211906Gi**；12:06:27 **32/32 PVC Bound，1130Gi**。requests 仍为 19.54 CPU / 43.15625Gi、GPU 0。瞬时 CPU/内存不是峰值或容量承诺。证据 `resource-usage-20261013T040550Z.json`；较早的 `resource-sample-20261013T035401Z.json` 保存卷归属和逐 Pod 元数据，其中 78/79 的局部 metrics 不作为最终全量用量。
+
+后端私有 9091 的现场负例也通过：无客户端证书返回 TLS `certificate required`，Grafana 查询角色证书返回 `bad certificate`；私钥只在原 Pod 挂载处使用，没有导出。证据为 `backend-metrics-negative.json`。Collector 故障隔离是 builder 的单元/运行测试证据，现场只做正常导出与队列只读观察，没有停止生产 Collector 制造故障。
+
+随后通过正式 NodePort 对生产 overview 的 4 个 panel 原始 targets 执行 `/api/ds/query`，均返回实际数据：API 请求 1 frame / 56 rows，GPU 9 frames / 1089 rows，HTTP log 1 frame / 500 rows，Trace 1 frame / 200 rows；验收输出只记录行数，没有输出用户日志正文。证据 `grafana-dashboard-panels-acceptance.json`。最终后端 / 独立 Grafana / UI 网关各 2 Pod 均 Ready、0 restart，imageID 与各自预期摘要一致；Grafana 汇总证据 `grafana-final-acceptance.json`。

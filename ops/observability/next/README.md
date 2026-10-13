@@ -4,11 +4,11 @@
 
 **日常维护先读 `OPERATIONS.md`。** 它集中列出实际 Helm release、Chart/values/Kustomize/清单位置、配置保存边界、升级与回滚顺序，以及本轮临时 NodePort 和资源盘点的发布记录。当前并非所有组件都有 Helm release；各产品 README 中仍有早期 namespace 与 bootstrap 示例，不能直接递归 apply 或照抄历史安装命令。生产 VM 已通过定向 patch 启用首波业务指标，下次 VM Helm 升级须显式保留 `businessScrape.enabled=true`；独立 Grafana 的数据库、数据源与临时入口切换按运维手册处理。
 
-**2026-10-13 业务接入进展：** 已新增 `grafana` 命名空间：独立 Grafana 2 副本、专用 PostgreSQL 3 实例和独立作用域 CNPG Operator 2 副本；新增 3 块 20Gi Retain 卷。VM release revision 2 已保留业务采集并新增独立 Grafana 只读身份；`victoriametrics/platform-telemetry` revision 1 管理后端私有 9091 mTLS 指标端点与采集声明。后端 `ray-platform` revision 274 的两副本已就绪，真实 HTTP 请求指标可从 VM tenant 1001 读回；正式 OTel → ClickHouse `raytrain_observability` 管道已部署，历史 canary 与原 Loki 链路保留。**Grafana 四类数据源已在两个实例通过；持久化恢复及用户入口仍在最后验收，31701 暂未切换。** 后续结果以[本轮记录](DEPLOYMENT_RUNBOOK.md#2026-10-13-后端-http-遥测与独立-grafana-ha)为准。
+**2026-10-13 业务接入进展：** 已新增 `grafana` 命名空间：独立 Grafana 2 副本、专用 PostgreSQL 3 实例和独立作用域 CNPG Operator 2 副本；新增 3 块 20Gi Retain 卷。VM release revision 2 已保留业务采集并新增独立 Grafana 只读身份；`victoriametrics/platform-telemetry` revision 1 管理后端私有 9091 mTLS 指标端点与采集声明。后端 `ray-platform` revision 274 的两副本已就绪，真实 HTTP 请求指标可从 VM tenant 1001 读回；正式 OTel → ClickHouse `raytrain_observability` 管道已部署，历史 canary 与原 Loki 链路保留。**Grafana 四类数据源、共享持久化、主备切换及隔离备份恢复均通过；`observability-ui` revision 2 已将 31701 切到新 Grafana，两个节点的登录、看板、查询和 WebSocket 验收通过。新实例使用独立原生账号，旧 SQLite 账号及手工 UI 配置未迁入。** 完整证据见[本轮记录](DEPLOYMENT_RUNBOOK.md#2026-10-13-后端-http-遥测与独立-grafana-ha)为准。
 
-当前只读资源快照（2026-10-13 11:43:32 北京时间）：八个观测 namespace 共 **79 个常驻 Pod / 79 Ready，32 PVC / 1130Gi，requests 19.54 CPU / 43.16Gi，GPU 申请 0**。旧原生组件有未设置 limits 的容器，不能将有限 limits 求和当作总上限；新增量仅 Grafana 组 7 Pod、2.3 CPU / 4.75Gi 和 60Gi。不包含平台后端、共享 DCGM 或 TOS 对象容量。该快照早于最终入口验收。
+最终只读资源核对（2026-10-13 12:05–12:06 北京时间）：八个观测 namespace 共 **79 个常驻 Pod / 79 Ready，32 PVC / 1130Gi，requests 19.54 CPU / 43.16Gi，GPU 申请 0**。旧原生组件有未设置 limits 的容器，不能将有限 limits 求和当作总上限；新增量仅 Grafana 组 7 Pod、2.3 CPU / 4.75Gi 和 60Gi。不包含平台后端、共享 DCGM 或 TOS 对象容量。完整 79 Pod 的 metrics 瞬时采样为 1.305 CPU / 20.21Gi，属于低负载时点，不是峰值容量。
 
-以下 2026-10-09 记录及架构图保留为历史检查点，尤其其中“数据源待接、后端 SDK 尚未实现、源码未同步 main”不能代表 10 月 13 日的最新状态；当前维护关系见 `OPERATIONS.md`。
+架构图已更新到 2026-10-13，文件名保留原链接以兼容已有文档。以下 2026-10-09 段落是历史检查点，其中“数据源待接、后端 SDK 尚未实现、源码未同步 main”不代表当前状态；当前维护关系见 `OPERATIONS.md`。
 
 展示与接入：[高清架构图](../../../docs/architecture/raytrain-observability-vke-20261009.png) · [可编辑 SVG](../../../docs/architecture/raytrain-observability-vke-20261009.svg) · [缩放展示页](../../../docs/architecture/raytrain-observability-vke-20261009.html) · [首波实施计划](../../../docs/superpowers/plans/2026-10-09-observability-business-wave1.md) · [应用指标与 Trace 接入合同](../../../docs/superpowers/specs/2026-10-09-platform-telemetry-integration.md)
 

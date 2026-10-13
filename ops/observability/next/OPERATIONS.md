@@ -2,7 +2,7 @@
 
 本文面向训练平台维护人员，说明当前组件由谁部署、在哪里修改配置、如何使用 UI，以及怎样升级和回退。范围仅为训练平台 VKE；原 Prometheus、Grafana、Alloy、Loki 继续运行，新 VictoriaMetrics、夜莺、OTel、ClickHouse 和独立 Grafana 是增量建设。
 
-**当前检查点：2026-10-13。** 后端 HTTP 遥测及正式 OTel/ClickHouse 管道已部署；独立 Grafana 与专用三实例 PostgreSQL 已运行。临时 31701 入口尚未从旧 Grafana 切到新实例，持久化恢复与全链路查询正在验收。这里将“已部署”与“已完成入口验收”分别记录。
+**当前检查点：2026-10-13。** 后端 HTTP 遥测及正式 OTel/ClickHouse 管道已部署；独立 Grafana 与专用三实例 PostgreSQL 已运行。临时 31701 已通过 `observability-ui` revision 2 切到新实例，登录、四类数据源、业务看板、WebSocket、共享持久化与隔离备份恢复均验收通过。新 Grafana 使用独立原生账号；旧 SQLite 账号和 UI 手工配置未迁入，旧实例保留回退。
 
 当前发布记录以 [DEPLOYMENT_RUNBOOK.md](DEPLOYMENT_RUNBOOK.md) 的 **2026-10-09 及后续章节**为准。各产品 README 和迁移方案中保留了早期 `observability-*` 命名空间、单副本 bootstrap 和“尚未部署”的历史描述；这些不是当前执行入口，不要照抄旧 namespace 或旧发布命令。原四个 `observability-*` 命名空间和专属云盘已经退场，原业务的 `monitoring` / `loki` 未删除。
 
@@ -50,7 +50,7 @@
 
 表中 `next/` 是 `ops/observability/next/` 的简写。完整镜像摘要见版本文件、values 和最终渲染结果，不能仅凭 Chart `appVersion` 推断实际运行镜像。标准镜像优先使用 Harbor `hub` 缓存；CNPG / 夜莺是专用派生镜像，Jetstack / PostgreSQL 的部分镜像因源站可达性使用保留源摘要的独立副本。
 
-2026-10-09 本轮核对的 release revision：`prometheus=4`、`alloy=7`、`loki-cpu=4`；旧零副本 `loki=3` 仍保留其三个 PVC。新 `cert-manager=2`，`cert-manager-approver-policy`、`victoriametrics-operator`、`victoriametrics-cluster`、`clickhouse-operator`、`cloudnative-pg-operator`、`nightingale-redis` 均为 revision 1；本轮独立安装 `observability-ui` revision 1。这是历史快照。2026-10-13 已更新 `victoriametrics-cluster=2`，新增 `victoriametrics/platform-telemetry=1`、`grafana/cloudnative-pg-operator=1`；后端 `ray-platform=274`。入口仍为 `observability-ui=1`，待新 Grafana 验收后切换。
+2026-10-09 本轮核对的 release revision：`prometheus=4`、`alloy=7`、`loki-cpu=4`；旧零副本 `loki=3` 仍保留其三个 PVC。新 `cert-manager=2`，`cert-manager-approver-policy`、`victoriametrics-operator`、`victoriametrics-cluster`、`clickhouse-operator`、`cloudnative-pg-operator`、`nightingale-redis` 均为 revision 1；本轮独立安装 `observability-ui` revision 1。这是历史快照。2026-10-13 已更新 `victoriametrics-cluster=2`，新增 `victoriametrics/platform-telemetry=1`、`grafana/cloudnative-pg-operator=1`；后端 `ray-platform=274`。入口已于 12:04:38 升为 `observability-ui=2`，`grafana.independent=true`。
 
 新体系四个外部 Chart 包已锁定并保留在构建机：
 
@@ -66,7 +66,7 @@ cert-manager 的仓库、Chart 名、版本与镜像摘要见 [cert-manager/vers
 
 ## 3. 当前架构与数据流
 
-10 月 9 日展示图：[PNG](../../../docs/architecture/raytrain-observability-vke-20261009.png) · [可编辑 SVG](../../../docs/architecture/raytrain-observability-vke-20261009.svg) · [缩放页面](../../../docs/architecture/raytrain-observability-vke-20261009.html)。图中“真实业务待接”是历史标注；当前数据流如下，入口切换仍单独验收：
+截至 2026-10-13 的展示图（保留原文件名）：[PNG](../../../docs/architecture/raytrain-observability-vke-20261009.png) · [可编辑 SVG](../../../docs/architecture/raytrain-observability-vke-20261009.svg) · [缩放页面](../../../docs/architecture/raytrain-observability-vke-20261009.html)。当前数据流如下；旧 Grafana 仅作为可选回退目标：
 
 ```mermaid
 flowchart LR
@@ -91,8 +91,8 @@ flowchart LR
   K -->|原 Loki 数据源| G
   P -->|备用数据源| G
   G --> GP[Grafana 专用 PostgreSQL<br/>一主两备 / 三块独立云盘]
-  U[31701 入口] -. 待验收切换 .-> G
-  U --> GO[旧 Grafana 保留回退]
+  U[31701 入口] -->|HTTPS / 上游 mTLS| G
+  U -. 定向回退选项 .-> GO[旧 Grafana 保留回退]
   CM[cert-manager + approver-policy] -. 精确叶证书 .-> G
   CM -. 精确叶证书 .-> B
   CM -. 精确叶证书 .-> O
@@ -102,7 +102,7 @@ flowchart LR
 - 后端公开 Service 仍只承载原业务 HTTP 端口；新指标在独立 ClusterIP `backend-metrics.ray-train-platform.svc:9091` 上，只接受 VMagent 精确身份。用户提交方式、训练任务源码和运行容器无需改动。
 - HTTP 中间件只输出有限 method、路由模板、状态和耗时，拒绝传播外部 baggage/请求身份与任意 URL 参数。异步有限队列隔离导出故障。**此次 HTTP trace 不代表提交→outbox→调度→Worker→训练的完整生命周期追踪。**
 - 原训练日志仍走 Alloy → Loki → 平台后端；不会被自动全量复制到 ClickHouse。新生产库保存受控 HTTP trace 和请求事件；旧 `observability_canary` 独立保留。Grafana Loki 数据源沿用旧 Loki 的访问边界，平台页面的租户/任务授权不等于 Grafana 自动拥有同一隔离。
-- 独立 Grafana 已声明 VM（默认）、原 Prometheus、Loki 和 ClickHouse 数据源。VM 与 CH 使用独立只读身份；ClickHouse 账号只读指定 Distributed 表，查询 2 threads / 1Gi / 30s 上限。四类数据源在两个新实例均返回健康 200，VM 查询与官方 ClickHouse 插件实际查询通过；入口切换与逻辑恢复仍单独验收。
+- 独立 Grafana 已声明 VM（默认）、原 Prometheus、Loki 和 ClickHouse 数据源。VM 与 CH 使用独立只读身份；ClickHouse 账号只读指定 Distributed 表，查询 2 threads / 1Gi / 30s 上限。四类数据源在两个新实例均返回健康 200，VM 查询与官方 ClickHouse 插件实际查询通过；入口切换、逻辑恢复及业务看板查询均已通过。ClickHouse 数据源 `queryTimeout=25`，服务端实测 `max_execution_time=29`，保留 30 秒硬上限；越权查询 `system.users` 被拒绝。
 - 夜莺承担正式告警，通知渠道由管理员在 UI 配置。新增 Alertmanager 仍为 `blackhole-canary`，原生证书轮转 Cron 保持暂停，未发送真实通知。
 - CNI 仍不执行 NetworkPolicy。新增组件依靠回环原生监听、精确身份 mTLS、路径权限和数据库权限；NetworkPolicy 只是后续配置草案。共享节点 CPU/内存/磁盘/网络开销仍需观察。
 
@@ -111,7 +111,7 @@ flowchart LR
 | UI / 产品 | 可以做什么 | 配置保存在哪里 | 当前维护边界 |
 |---|---|---|---|
 | **夜莺** | 数据源、业务组、成员、告警规则、通知渠道、订阅/屏蔽与告警事件 | 夜莺专用 PostgreSQL；Redis 保存会话/协调等状态 | 适合作为正式告警管理入口；本地账号/验证码/JWT 保留，目前未接 Portal SSO；通知由管理员配置后单独验收 |
-| **独立 Grafana** | 看板、PromQL、LogQL、ClickHouse 日志/trace 分析及用户管理 | 两副本共用专用 PostgreSQL；provisioning 仍由 Git / ConfigMap 管理 | 新实例已运行，完整数据源、恢复及 31701 入口切换正在验收；旧 Grafana 保留回退 |
+| **独立 Grafana** | 看板、PromQL、LogQL、ClickHouse 日志/trace 分析及用户管理 | 两副本共用专用 PostgreSQL；provisioning 仍由 Git / ConfigMap 管理 | 新实例数据源、恢复及 31701 入口验收通过；独立账号，旧 Grafana 保留回退 |
 | VMUI / VM 诊断页 | 指标查询、时序诊断；并非整个 VMCluster 的配置后台 | 查询本身不改集群部署配置 | 本轮未直接开放；当前受控 VMAuth 路由只开放指定 API，不能直接把 VMSelect 改 NodePort 绕过身份和租户边界 |
 | 原 Prometheus / Alertmanager | Target、规则、PromQL、告警/静默等排查 | CR / 配置及相应持久化 | 现有规则链路继续保留；正式新告警配置集中到夜莺，不为方便而同时维护两份重复通知 |
 | Alloy | 组件图、运行状态和采集排查 | 配置在 Helm values 中 | UI 不是完整配置编辑器；当前不直接开放无认证的 12345 端口 |
@@ -125,13 +125,13 @@ flowchart LR
 
 ### Grafana 配置与持久化
 
-新 `grafana` 命名空间的两实例共享 `grafana-postgres` 三实例数据库、稳定的 `GF_SECURITY_SECRET_KEY`、provisioning 配置和签名插件。UI 创建的用户、看板及数据源进入该共享库；配置恢复必须同时保留数据库和加密密钥，只有数据库备份不能保证数据源密码可解密。声明式数据源/看板仍以 Git 为准，UI 编辑需遵循 provisioning 的覆盖规则。
+新 `grafana` 命名空间的两实例共享 `grafana-postgres` 三实例数据库、稳定的 `GF_SECURITY_SECRET_KEY`、provisioning 配置和签名插件。UI 创建的用户、看板及数据源进入该共享库；配置恢复必须同时保留数据库和加密密钥，只有数据库备份不能保证数据源密码可解密。声明式数据源/看板仍以 Git 为准，UI 编辑需遵循 provisioning 的覆盖规则。**Provisioned 数据源有 `version` 保护**：修改受管数据源时提高该条目的版本，并从 Grafana 实际 API 读回；挂载文件更新不等于数据库中的数据源已更新。本轮 ClickHouse 数据源为 version 2 / queryTimeout 25 秒。
 
 新初始管理员 Secret 为 **`grafana/grafana-admin`**，键 `admin-user` / `admin-password`；加密键 `secret-key` 仅用于内部恢复，不交给浏览器。新独立数据库没有自动复制旧实例的 UI 用户、临时数据源或看板；本轮是新增可恢复的 provisioning 与专用管理账号，旧账号和配置迁移需要另行核对。初始化 Secret 并非 UI 当前密码的实时副本，不通过修改它重置已有账号。
 
-**旧 `monitoring` Grafana** 仍保留原 SQLite + emptyDir 两副本及 `monitoring/grafana-admin`。截至此检查点 31701 尚指向旧实例，其 ClientIP 粘连不是共享数据库或持久化保证。旧实例只作为入口切换前服务与回退目标；不要将新 PG 的可靠性描述套用到旧实例。
+**旧 `monitoring` Grafana** 仍保留原 SQLite + emptyDir 两副本及 `monitoring/grafana-admin`。31701 现已指向新实例，旧实例只作为定向回退目标。旧 ClientIP 粘连仍不是共享数据库或持久化保证；不要将新 PG 的可靠性描述套用到旧实例。
 
-新数据库已完成主库 1 → 2 受控切换（约 19.53 秒）及跨 Grafana 副本持久读写；隔离逻辑备份恢复仍在验收，不把主备切换当作备份证据。长期自动备份 / WAL 归档 / PITR 尚未部署，三副本和 Retain 均不替代备份。具体操作见 [grafana/README.md](grafana/README.md)。
+新数据库已完成主库 1 → 2 受控切换（约 19.53 秒）及跨 Grafana 副本持久读写；新库逻辑 dump 已在构建机无网络、无对外端口的临时 PG/Grafana 中恢复，通过 dashboard API、4 类数据源、原生管理员 Basic/cookie 及 VM Bearer 凭据解密检查，验证容器已清理。VM 解密检查证明恢复后能解出非空 Bearer，不等于逐个验证所有数据源密码。备份只包含新 Grafana 数据，不含旧 SQLite 迁移。长期自动备份 / WAL 归档 / PITR 尚未部署，三副本和 Retain 均不替代备份。具体操作见 [grafana/README.md](grafana/README.md)。
 
 ## 5. 临时 NodePort 与后续 Ingress
 
@@ -153,12 +153,12 @@ APIG 控制器虽已安装，但 `APIGInstance` 当前为空；没有 APISIX、N
 
 | 入口 | 临时访问地址 | 登录 / TLS | 发布状态 |
 |---|---|---|---|
-| Grafana | `https://172.28.2.65:31701/`，备用 `https://172.28.1.232:31701/` | 当前仍为旧 Grafana；`grafana.independent=true` 后改为新原生账号及上游 mTLS | 旧入口 10/09 验收通过；新实例入口切换待最后验收 |
+| Grafana | `https://172.28.2.65:31701/`，备用 `https://172.28.1.232:31701/` | **新独立 Grafana 原生账号**；初始凭据引用 `grafana/grafana-admin`；网关上游 mTLS | revision 2 已切换；两个节点登录、4 类数据源、生产看板、查询、WebSocket 与认证负例通过 |
 | 夜莺 | `https://172.28.2.65:31700/`，备用 `https://172.28.1.232:31700/` | 浏览器入口代理 → 夜莺 mTLS Service，继续要求夜莺验证码 / JWT 登录 | 已发布；页面 / JS / 验证码与未登录拒绝验证通过；本轮未执行该新入口的真人验证码登录 |
 
 10 月 9 日安装为独立 Helm release `nightingale/observability-ui` revision 1，新增 **11 个声明对象、2 个代理 Pod**，分别调度到 `172.28.1.229` / `172.28.1.232`，无 PVC。Deployment / ServiceAccount / ConfigMap 名为 `observability-ui`；两个入口 Service 为 `nightingale-ui`、`grafana-ui`，另有 `monitoring/grafana-ui-backend` 粘性后端 Service。NodePort 可由没有代理 Pod 的节点转发，入口 IP 不等于代理所在节点。
 
-浏览器 Certificate 为 `nightingale/obs-ui-browser-server`，由 cert-manager 使用现有内部 mesh CA 管理；IP SAN 为 `172.28.2.65` / `172.28.1.232`，不是浏览器默认信任的公网域名证书。应先经受信渠道核对并安装**公开 CA 证书**，再进行真实登录；[公开 CA 导出与信任指引](ui-access/README.md#首次使用信任公开-ca)不包含私钥。节点当前没有 ExternalIP，但 NodePort 本身不是来源 ACL，实际访问范围还取决于公司 VPN、路由和云安全组。旧目标上游为集群内 HTTP；切到 `grafana.independent=true` 后，网关经 mTLS 连接 `grafana.grafana.svc:8443` 并核验精确服务身份。切换前不能把新目标的 TLS 描述当作当前浏览器链路。
+浏览器 Certificate 为 `nightingale/obs-ui-browser-server`，由 cert-manager 使用现有内部 mesh CA 管理；IP SAN 为 `172.28.2.65` / `172.28.1.232`，不是浏览器默认信任的公网域名证书。应先经受信渠道核对并安装**公开 CA 证书**，再进行真实登录；[公开 CA 导出与信任指引](ui-access/README.md#首次使用信任公开-ca)不包含私钥。节点当前没有 ExternalIP，但 NodePort 本身不是来源 ACL，实际访问范围还取决于公司 VPN、路由和云安全组。当前网关经 mTLS 连接 `grafana.grafana.svc:8443` 并核验精确服务身份。仅回退至旧目标时上游恢复集群内 HTTP。Grafana 到原 Prometheus/Loki 的旧数据源仍沿用原 HTTP 边界，不能将所有数据源访问都描述为 mTLS。
 
 维护入口为 [ui-access/Chart.yaml](ui-access/Chart.yaml)、[values.yaml](ui-access/values.yaml)、[templates/](ui-access/templates/) 和 [UI 运维说明](ui-access/README.md)。本轮通过 Helm 实际安装，不是仅 `helm template` 后另行 apply。`values.yaml` 管理副本、资源、NodePort 与 IP SAN；此 Chart 已直接声明 filesystem SDS，不额外套用 VM/CNPG 的 post-renderer。
 
@@ -168,7 +168,7 @@ APIG 控制器虽已安装，但 `APIGInstance` 当前为空；没有 APISIX、N
 
 ## 6. 资源与存储账目
 
-本轮阶段快照为 **2026-10-13 11:43:32 北京时间（03:43:32 UTC）**。统计八个观测 namespace 的非删除中、非 Job 常驻 Pod；排除 schema / 验收 Job、训练平台后端、`kube-system` DCGM 和 TOS 对象容量。所有 79 个常驻 Pod Ready，32 PVC Bound。
+本轮阶段快照为 **2026-10-13 11:43:32 北京时间**，并在 **12:05–12:06** 完成入口切换后的复核。统计八个观测 namespace 的非删除中、非 Job 常驻 Pod；排除 schema / 验收 Job、训练平台后端、`kube-system` DCGM 和 TOS 对象容量。所有 79 个常驻 Pod Ready，32 PVC Bound。
 
 | namespace | 常驻 Pod / Ready | CPU requests | 内存 requests | PVC / 申请容量 |
 |---|---:|---:|---:|---:|
@@ -184,9 +184,9 @@ APIG 控制器虽已安装，但 `APIGInstance` 当前为空；没有 APISIX、N
 
 新 Grafana 组为 2 应用 + 2 独立 Operator + 3 PG，无 GPU；原观测 72 Pod 与 29 PVC / 1070Gi 的数量没有被新组件替换。两个既有 UI 代理仍包含在 `nightingale` 中，未再创建一组浏览器网关。活跃挂载卷 29 块 / 980Gi，旧 Loki 保留卷 3 块 / 150Gi。
 
-requests 按应用容器、restartable init、初始化峰值及 Pod overhead 计算。有限 limits 合计 81.95 CPU / 98.1875Gi，**不是整体硬上限**：`monitoring` 有 24、`loki` 有 3 个应用容器缺少 CPU 或内存 limits。GPU requests 合计 0。PVC 容量是申请值，不是实际占用量；本轮没有把 10 月 9 日旧瞬时 metrics 用量冒充当前 CPU/内存实际消耗。最新性能仍需从 metrics API / 看板实测。
+requests 按应用容器、restartable init、初始化峰值及 Pod overhead 计算。有限 limits 合计 81.95 CPU / 98.1875Gi，**不是整体硬上限**：`monitoring` 有 24、`loki` 有 3 个应用容器缺少 CPU 或内存 limits。GPU requests 合计 0。PVC 容量是申请值，不是实际占用量；12:05:50 的 metrics API 覆盖 79/79 Pod，实际瞬时合计 **1.305 CPU / 20.2119Gi**；这不是压测峰值或容量承诺，不能用此值下调数据库/队列资源保障。非敏感证据为 `resource-usage-20261013T040550Z.json`；12:06:27 另确认 32 PVC 均 Bound、1130Gi。
 
-对发布前 `baseline-public` 的只读对比中，119 个原 PVC/PV 的 UID/spec、12 个节点、11 个 DaemonSet 均保持不变，新增卷只有 Grafana 三块。期间有用户训练对象新增和消失，不能用总数或剩余对象一致宣称“所有训练 UID 未变”；部署记录列出待归因的生命周期差异。该资源快照早于入口最终切换与验收，后续以本轮记录更新为准。
+对发布前 `baseline-public` 的只读对比中，119 个原 PVC/PV 的 UID/spec、12 个节点、11 个 DaemonSet 均保持不变，新增卷只有 Grafana 三块。期间有用户训练对象新增和消失，不能用总数或剩余对象一致宣称“所有训练 UID 未变”；部署记录已列明两个已有取消请求和一个应用失败的清理记录，均早于后端本轮发布。
 
 新增体系不申请 GPU，可以使用普通 GPU 节点的 CPU/内存，负优先级且不可抢占；显式避让 algorithm 专属节点和已核对的高内存节点。它仍会消耗共享 CPU、内存、网络和磁盘，低负载采样不是峰值容量承诺。
 
@@ -259,4 +259,4 @@ kubectl --context "$obs_context" -n cert-manager get cronjob native-certificate-
 
 回退优先恢复本次最小配置差异：临时 UI 入口可关闭对应 NodePort/网关；采集改动恢复 selector 和本次声明；组件镜像/配置按其版本回退。UI release 的 `helm uninstall` 只针对该 Chart拥有的新增声明，不能删除现有 `obs-mtls-n9e-ui-gateway` Certificate / Secret、夜莺、Grafana或数据库；新 browser Certificate 生成的 Secret 依 cert-manager owner-reference 策略核对保留/回收，不盲删同 namespace 资源。Helm rollback **不会**回滚已经执行的 PostgreSQL迁移或 ClickHouse schema。删除 namespace、CR、PVC、PV或云盘不是通用回退步骤，尤其不能为处理 Pending / join / 拉镜像失败而删除有数据的卷或未知 Job。
 
-已知待完善项包括：新 Grafana 的最终恢复/入口验收；Alloy 旧日志回读拒收与持久队列加固；夜莺真实通知与原生证书轮转失败告警；异步调度/Worker 的全生命周期追踪；持续备份、WAL/PITR 与跨站恢复。HTTP 遥测已经上线，不应再列为“完全未接业务”，也不能扩大为全业务覆盖。
+已知待完善项包括：Alloy 旧日志回读拒收与持久队列加固；夜莺真实通知与原生证书轮转失败告警；异步调度/Worker 的全生命周期追踪；持续备份、WAL/PITR 与跨站恢复。HTTP 遥测已经上线，不应再列为“完全未接业务”，也不能扩大为全业务覆盖。
