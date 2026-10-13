@@ -2,6 +2,20 @@
 
 本目录是独立 Helm chart，release `observability-ui`、namespace `nightingale`。它只新增入口，不升级或重启原 Grafana、夜莺、Alloy、Loki、训练任务。当前是否已安装、实际 revision 和验收结果以 [部署记录](../DEPLOYMENT_RUNBOOK.md) 为准。
 
+## 2026-10-13 独立 Grafana 切换进展
+
+独立 `grafana` namespace 的 2 个 Grafana 和专用 3 实例 PostgreSQL 已部署，数据库共享与受控主备切换已开始验收。**本检查点 `observability-ui` 仍为 revision 1，31701 继续指向旧 Grafana；新入口尚未切换。** 完整数据源与隔离恢复通过后，发布负责人用最小覆盖 `grafana.independent: true` 更新此 release，保留两个现有代理和所有 NodePort，不新增一组入口 Pod。
+
+启用后的上游为 `https://grafana.grafana.svc:8443`，呈现既有网关叶证书并核验 `spiffe://observability.raytrain.local/grafana/grafana-server`。新 Grafana 使用 **`grafana/grafana-admin`** 的独立初始账号，不自动迁移旧 `monitoring/grafana-admin`、SQLite 用户或 UI 手工配置；公开浏览器入口仍要求 Grafana 原生登录。PG、备份与配置维护见 [独立 Grafana 说明](../grafana/README.md)。只有记录真实入口登录、VM/Loki/CH 查询和 WebSocket 后，才将入口切换列为完成。
+
+```yaml
+# 仅在新 Grafana 完整验收后使用；先 --reuse-values 做 server-side dry-run 和完整 diff。
+grafana:
+  independent: true
+```
+
+定向回退使用同一 release 的最小覆盖 `grafana.independent: false`，将入口切回保留的 `monitoring/grafana-ui-backend`。回退不会迁移新 PG 数据到旧 SQLite，也不删除新数据库、证书或 PVC。下面旧 HTTP / SQLite 说明特指默认 `independent=false` 分支；不要将它用于新独立 Grafana。
+
 ## 入口和边界
 
 | 用途 | 主地址 | 备用地址 | 原应用认证 |
@@ -46,12 +60,14 @@ CLI 检查可使用 `curl --cacert observability-ui-ca.crt https://172.28.2.65:3
 # 夜莺初始用户名 root；如果已在 UI 修改密码，以修改后的密码为准。
 kubectl --context="$VKE_CONTEXT" -n nightingale get secret n9e-bootstrap-admin \
   -o jsonpath='{.data.password}' | base64 -d
-# Grafana 用户名、密码分别读取；这不是平台统一认证账号。
+# 切换前旧 Grafana 的用户名、密码；这不是平台统一认证账号。
 kubectl --context="$VKE_CONTEXT" -n monitoring get secret grafana-admin \
   -o jsonpath='{.data.admin-user}' | base64 -d
 kubectl --context="$VKE_CONTEXT" -n monitoring get secret grafana-admin \
   -o jsonpath='{.data.admin-password}' | base64 -d
 ```
+
+切换到独立实例后，以上 Grafana 命令中的 namespace 应改为 **`grafana`**，Secret 名仍为 `grafana-admin`。只读取 `admin-user` / `admin-password`，不要输出其 `secret-key`。首次登录后当前密码以 Grafana 数据库为准。
 
 修改初始化 Secret 不会重置已存在的夜莺用户；不要为重置密码重跑 bootstrap。需要长期保存的夜莺配置位于专用 PostgreSQL，Grafana 则有下文所述的原有 SQLite 持久化限制。
 
@@ -120,7 +136,7 @@ Certificate 的两份叶证书 Secret 均整目录只读挂载，Envoy filesyste
 3. 完成 Ingress 正向/负向认证与证书测试后，用最小覆盖 `service.type: ClusterIP` 升级本 chart。模板会移除两个 NodePort 字段和 `externalTrafficPolicy`；确认节点上旧端口不可达后关闭对应安全组规则。
 4. 保留原应用登录和夜莺上游 mTLS。如果后续采用统一认证，由独立变更定义账号/角色映射，不能靠注入代理身份头跳过原认证。
 
-上面是保留专用代理的迁移路径。另一条路径是由统一 Ingress/API 网关直接承担上游 mTLS，验证同样的客户端身份、CA、服务器身份、转发头和原生登录后直接接夜莺；Grafana 可使用普通受控上游。此时可撤掉这两个临时代理，不需要永久在统一网关后再叠一层。现有火山 ALB 的前端双向认证配置不能作为已经支持上游客户端证书的证据，整合前需核实。
+上面是保留专用代理的迁移路径。另一条路径是由统一 Ingress/API 网关直接承担上游 mTLS，验证同样的客户端身份、CA、服务器身份、转发头和原生登录后直接接夜莺；独立 Grafana 同样要求指定客户端身份和上游 mTLS；仅旧回退目标保留普通 HTTP 上游。此时可撤掉这两个临时代理，不需要永久在统一网关后再叠一层。现有火山 ALB 的前端双向认证配置不能作为已经支持上游客户端证书的证据，整合前需核实。
 
 入口回滚使用 `helm rollback observability-ui <已验收revision> -n nightingale --kube-context "$VKE_CONTEXT" --wait`。只需暂停外部入口时优先改为 ClusterIP。完整移除此 release 不应删除既有夜莺/Grafana、原 client Certificate、数据库或存储；删除 Helm 所属新对象前核对所有权，证书 Secret 的保留/回收依 cert-manager owner-reference 配置单独确认，不盲删同 namespace 资源。
 

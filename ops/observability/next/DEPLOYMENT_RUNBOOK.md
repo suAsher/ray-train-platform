@@ -649,3 +649,61 @@ KSM/DCGM 的目标自身标签改存 `exporter_namespace/exporter_pod/exporter_n
 - 部署源：本地 managed worktree `codex/observability-additive`；构建机 `.../green-candidate` 为 `12a9866` detached候选。本轮未推两个远端main，未快进正式后端构建目录，不能宣称四端源码一致。
 
 后续Ingress和最小回退命令见UI README。关闭入口优先将该release的`service.type`改为ClusterIP；撤除临时代理也只能处理本release拥有的对象，不能删除原夜莺客户端身份、数据库、PVC或namespace。
+
+
+## 2026-10-13 后端 HTTP 遥测与独立 Grafana HA
+
+用户选择“独立 Grafana + 专用高可用 PostgreSQL”，并继续授权可观测性增量建设。范围仍为训练平台 VKE，CNI enforcement 保持关闭；不停止用户训练，不改变提交命令，不替换 Alloy/Loki，不发送正式告警。本节是阶段事实记录，入口和最终恢复结果尚在验收，不能把实现、部署与验收混写。
+
+### 源码、门禁和版本
+
+- 后端源码 **`2b2f38e0b20056761d64639bd23f392382cab6e3`** 已同步本地主目录 main、GitHub main、内部 GitLab main 和干净的正式构建目录 `/opt/guofeng/vke-cluster/ray-platform-main`；主目录原有 15 个 tracked 修改保持字节不变，126 个冲突 untracked 原件先保留到本机受控备份。Grafana 后续基础设施修正有独立提交，不能用后端 SHA 代替所有最终源码版本。
+- 固定 Go 1.25.10 builder 的格式检查、`go vet ./...` 与完整 `go test -mod=readonly -count=1 -p=1 -json -timeout=20m ./...` 通过：**5351 测试项、37 package，无失败**；真实 PostgreSQL 16.15 验证未 skip，9 个需要外部 MLflow/FSX/Ray 服务的可选 smoke 明确跳过。telemetry race 通过，包覆盖 86.5%，config 82.5%。串行包门禁解决共享测试库 advisory lock 干扰，没有降低测试断言。
+- 基础设施合同在 `2b2f38e` 为 357 项通过；Grafana migration-lock 修正后 `c035417` 为 358 项通过。Grafana TLS 上限修正 `c9abbe1` 后 **363 项基础设施合同及真实运行验证通过**。Grafana 查询故障的最终修复明确设置 TLS 1.3 上下限；此前 IPv4 DNS 配置本身不是最终成功证据。
+- 独立安全审阅覆盖本轮后端遥测、配置、平台 chart、Grafana 身份/权限与新凭据初始化，未发现已确认的阻断问题；不代表对整个历史仓库和所有生产 Secret 的全量审计。
+- 后端镜像：`harbor.wellspiking.ai/guofeng.su/ray-train-backend@sha256:33609d187e91dd470a090200eea747bd92fb702dc2b08e64bcb4c2d38b64ee89`。
+- 独立 Grafana 镜像：`harbor.wellspiking.ai/guofeng.su/grafana-observability:13.1.1-clickhouse-4.22.1-e5031e2@sha256:aced89b9f4d4a717aff919f713fcce9ad0a4499022102cc8c9b01462e3eb0bb6`。基础 Grafana 13.1.1，内置官方签名 ClickHouse 插件 4.22.1；签名验证和离线启动通过。
+
+| release | 当前 revision | 本轮更新时间（北京时间） | 作用 |
+|---|---:|---|---|
+| `grafana/cloudnative-pg-operator` | 1 | 2026-10-13 11:01:57 | 独立 watch `grafana`；共享 CRD 未重建 |
+| `victoriametrics/victoriametrics-cluster` | 2 | 2026-10-13 11:18:58 | 保留业务抓取，增加精确 Grafana 查询身份 |
+| `victoriametrics/platform-telemetry` | 1 | 2026-10-13 11:33:16 | 后端 Certificate/Policy、私有指标 Service、发现 RBAC 与 VMServiceScrape |
+| `ray-train-platform/ray-platform` | 274 | 2026-10-13 11:38:57 | 最小后端镜像 + telemetry 覆盖；公开业务 Service 不变 |
+| `nightingale/observability-ui` | 1 | 2026-10-09 16:41:49 | 本检查点尚未切换新 Grafana；旧目标仍可回退 |
+
+### 实际部署与身份边界
+
+新增 `grafana` namespace 7 个常驻 Pod：2 Grafana、2 独立 CNPG Operator、3 PostgreSQL，3 × 20Gi Retain。数据库分离服务端/客户端 CA，Grafana 共享数据库及稳定加密密钥。六张新叶证书与两个专用 ClusterIssuer Ready；增加精确 signer `approve` Role/Binding，未扩大既有 approver 的全局权限。原夜莺数据库/Operator 与旧 Grafana 未迁移或删除。
+
+新凭据在 root-only 目录生成并创建到预先确认不存在的 Secret。原 `clickhouse-auth` 只用 UID/resourceVersion 前置条件追加 3 个生产 hash key，旧 4 key 保留。自动审批曾拒绝原样导出旧生产 Secret，该操作未执行，改用非敏感基线和现有 Helm 历史继续；没有将旧私钥/密码转存构建机来绕过限制。
+
+VM `businessScrape.enabled=true` 与 `grafanaRead.enabled=true` 已进入 revision 2；VMAuth 2 副本正常。独立 Grafana / CNPG Operator / PostgreSQL 三组共 7 个指标目标在两 VMAgent 上均 UP；后端两个 mTLS 指标目标也 UP。后端 Certificate Ready，公开原 Service 未新增指标端口。
+
+ClickHouse 两数据副本依次滚动，每次至少保留一个 Ready；Keeper 三副本、原 5 PVC 与 OTel 两队列 PVC 的 UID 均不变。独立生产库 `raytrain_observability` 两副本均有 7 个对象，日志 TTL 7 天、trace / lookup TTL 30 天；10 条精确账号授权核对通过。旧 canary 每副本 2 log / 2 trace / 2 lookup 保留。OTel 两副本更新生产 14318 监听和独立 exporter，匿名/错误角色负例通过，4 类队列均为 0。一次性 schema Job 成功并保留 86400 秒 TTL；仅清理本轮拥有的检查 Job。
+
+后端 `2/2` 已运行新摘要。真实只读 API 请求在 VM tenant 1001 的 HTTP 计数读回（验收抽样值 642），两个后端 targets UP，logs/traces 导出失败计数为 0；现有 `spk-rayjob login-check` 通过。队列故障不阻塞业务 HTTP 的边界已在隔离测试验证，现场未人为停止生产 Collector 来制造故障。完整异步 Worker trace 不在此轮范围。随后真实管道验收中，28.3 秒窗口对两个 OTel Pod 各采样 15 次，生产队列峰值低于 4KiB、末值全 0；成功导出 log 增量 103、span 增量 104，failure/refused/drop 均 0。指定验收 Trace 在两个 CH 副本各读回 1 span、1 log、1 lookup，SpanId 与 lookup 时间覆盖一致，隐私白名单核验通过。双副本数据不相加计作逻辑事件数。
+
+Grafana 专用 PG 已完成 **primary 1 → 2 的受控 switchover，约 19.53 秒**，跨 Grafana 副本持久读写通过。两个 Grafana 的 Prometheus/VM/Loki/ClickHouse 四类数据源均健康 200，VM `vector(1)` 查询和官方 CH 插件查询通过。正在等待逻辑备份隔离恢复与浏览器切换结果，不能把内部数据源通过扩大为外部入口已切换。
+
+### 资源与存量对比检查点
+
+2026-10-13 **11:43:32 北京时间**，八个观测 namespace 共 **79 常驻 Pod / 79 Ready，32 PVC / 1130Gi，requests 19.54 CPU / 43.15625Gi，GPU 0**。相对原体系净增独立 Grafana 组 7 Pod、2.3 CPU / 4.75Gi、3 PVC / 60Gi。有限 limits 合计 81.95 CPU / 98.1875Gi，但原监控仍有 27 个容器缺少部分 limits，不能当作全部硬上限。schema Job 单列，不计常驻 Pod。12 节点 Ready，无 Memory/Disk/PIDPressure。
+
+对 `baseline-public` 比较：119 个既有 PVC/PV、12 节点、11 DaemonSet 的 UID/spec 保持不变；存留 **892 RayJob 和 4 RayCluster 的 UID/spec/generation** 未变。期间有任务生命周期变化，不能声称全体训练对象完全不变：
+
+| 原任务 | 已核对的生命周期记录（UTC） | 结论边界 |
+|---|---|---|
+| `job-1096d763ad9163db959fa8c1` | `TRAINING_JOB_CANCEL_REQUESTED` 03:21:57；`CANCELED` 03:22:41 | 已有明确取消请求后清理；未凭时间推断是谁取消 |
+| `job-ca07538251a2957f28f2975e` | 取消请求 03:25:46；`CANCELED` 03:26:21 | 同上 |
+| `job-15a0373a7109558699ed8b4a` | `ACTIVE/FAILED`，`AppFailed`；02:58:06 已终态 | 应用失败后的资源清理 |
+
+以上均早于本轮后端 revision 274 的 **03:38:57 UTC** 发布。调查只读数据库状态与生命周期记录，本轮没有执行任何训练停止操作。期间另有 5 个新 RayJob，与本轮验收资源区分；对现存 UID/spec 无变化的事实不扩展成无性能开销承诺。
+
+### 证据、回退与剩余范围
+
+构建机私有证据根目录：`/root/raytrain-observability-completion-20261013`。非敏感发布基线在 `baseline-public/`；管道部署验收为 `pipeline-release/result.json`，真实后端业务读回为 `pipeline-release/business-acceptance-result.json`；VM/平台 chart dry-run 和安装日志分别为 `vm-upgrade-dry-run.txt`、`vm-upgrade.log`、`platform-telemetry-dryrun.txt`、`platform-telemetry-install.log`。新凭据与恢复材料位于 `credentials-new/`，禁止纳入 Git、整体上传或输出。后端完整门禁日志 `/tmp/rtp-telemetry-full-gate-retry.log`，分项结果在对应候选结果目录。
+
+独立 Grafana 入口切换只修改 `observability-ui` 的 `grafana.independent`；旧 Grafana 保留，定向回退设置 `false`，不删除新 PG/PVC。后端可通过最小覆盖关闭 `backend.telemetry.enabled`；回退不会删除已写入 CH 数据或 schema。VM/OTel 回退需先停止新入口、确认队列，不拆原日志链路。
+
+尚未完成或另行建设：新 Grafana 最终恢复/入口验收；持续备份、WAL/PITR 与跨站恢复；完整异步任务追踪；夜莺真实通知（用户 UI 配置）、原生证书轮转自动化启用、Alloy 旧日志回读治理、ALB/Ingress/SSO 迁移。HA 和单次恢复演练不等同于已有长期备份策略。
