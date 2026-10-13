@@ -22,7 +22,7 @@ def render(values):
         source('clickhouse-platform', 'ClickHouse platform logs and traces', 'grafana-clickhouse-datasource',
                jsonData={'host': '127.0.0.1', 'port': 19000, 'protocol': 'native', 'secure': False,
                          'username': 'grafana_platform_query', 'defaultDatabase': 'raytrain_observability',
-                         'dialTimeout': 10, 'queryTimeout': 30, 'validateSql': True,
+                         'dialTimeout': 10, 'queryTimeout': 25, 'validateSql': True,
                          'logs': {'defaultDatabase': 'raytrain_observability', 'defaultTable': 'otel_logs_all',
                                   'otelEnabled': True, 'otelVersion': 'latest'},
                          'traces': {'defaultDatabase': 'raytrain_observability', 'defaultTable': 'otel_traces_all',

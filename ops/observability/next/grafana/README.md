@@ -77,7 +77,7 @@ python3 ops/observability/next/grafana/verify_runtime.py \
   --image grafana-observability:13.1.1-clickhouse-4.22.1-candidate
 ```
 
-It uses the same PostgreSQL 17.11 image, an internal Docker network, short-lived test-only certificates and credentials, and automatically removes its own containers/network/data. It checks TLS/SCRAM, negative authentication, plugin signature, provisioning, cross-replica persistence, loss of one Grafana replica and Envoy configuration. It does not replace real cluster CNPG failover or browser/CH/VM acceptance. The ClickHouse account retains `readonly=1`; only `max_execution_time` may change within 1–30 seconds, matching `queryTimeout=30`, as required by the [official plugin client](https://grafana.com/docs/plugins/grafana-clickhouse-datasource/latest/configure/). SQL grants remain the authorization boundary.
+It uses the same PostgreSQL 17.11 image, an internal Docker network, short-lived test-only certificates and credentials, and automatically removes its own containers/network/data. It checks TLS/SCRAM, negative authentication, plugin signature, provisioning, cross-replica persistence, loss of one Grafana replica and Envoy configuration. It does not replace real cluster CNPG failover or browser/CH/VM acceptance. The ClickHouse account retains `readonly=1`; only `max_execution_time` may change within 1–30 seconds, with `queryTimeout=25`: clickhouse-go adds five seconds to the remaining context deadline and truncates to integer seconds, keeping its emitted `max_execution_time` at or below the server limit of 30. See the [official native-driver deadline implementation](https://github.com/ClickHouse/clickhouse-go/blob/v2.48.0/context.go#L224) and [official plugin client](https://grafana.com/docs/plugins/grafana-clickhouse-datasource/latest/configure/). SQL grants remain the authorization boundary.
 
 ## Dedicated CA bootstrap and recovery checks
 
@@ -86,7 +86,7 @@ These are maintenance steps for the authorized publisher on the builder, not aut
 ```bash
 umask 077
 for role in client server; do
-  openssl req -x509 -newkey rsa:4096 -nodes -days 3650 \
+  openssl req -x509 -newkey rsa:4096 -nodes -days 1095 \
     -subj "/CN=RayTrain dedicated Grafana PostgreSQL ${role} CA" \
     -addext 'basicConstraints=critical,CA:TRUE' \
     -addext 'keyUsage=critical,keyCertSign,cRLSign' \
