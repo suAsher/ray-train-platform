@@ -153,7 +153,7 @@ def sql_client(sandbox, query, replica=0, role="query-admin", check=True):
                "--cpus", "0.25", "--memory", "256m", "--pids-limit", "64",
                "--tmpfs", "/tmp:rw,size=16m,uid=10001,gid=10001", "--env", "CLICKHOUSE_PASSWORD",
                "--mount", f"type=bind,src={path},dst=/client.xml,readonly",
-               "--mount", f"type=bind,src={sandbox.leaves["otel-gateway" if role == "platform-ingest" else role]},dst=/etc/obs-mtls,readonly",
+               "--mount", f"type=bind,src={sandbox.leaves['otel-gateway' if role == 'platform-ingest' else role]},dst=/etc/obs-mtls,readonly",
                "--entrypoint", "clickhouse-client", sandbox.images["clickhouse"],
                "--config-file", "/client.xml", *sql_timeout_args(role),
                "--multiquery", "--query", query]
