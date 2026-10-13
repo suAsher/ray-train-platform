@@ -62,6 +62,13 @@ class GrafanaHATests(unittest.TestCase):
         self.assertNotIn('nodePort', str(self.resource('Service', 'grafana')))
         self.assertEqual(1, self.resource('PodDisruptionBudget', 'grafana')['spec']['minAvailable'])
 
+    def test_concurrent_startup_waits_for_the_database_migration_lock(self):
+        import configparser
+        ini = configparser.ConfigParser()
+        ini.read_string(self.resource('ConfigMap', 'grafana-config')['data']['grafana.ini'])
+        self.assertTrue(ini.getboolean('database', 'migration_locking'))
+        self.assertEqual(120, ini.getint('database', 'locking_attempt_timeout_sec'))
+
     def test_provisioned_sources_do_not_embed_keys_or_runtime_download(self):
         sources = yaml.safe_load(self.resource('ConfigMap', 'grafana-provisioning')['data']['datasources.yaml'])['datasources']
         by_uid = {d['uid']: d for d in sources}
