@@ -203,5 +203,71 @@ class GrafanaHATests(unittest.TestCase):
         self.assertEqual([{'kind': 'ServiceAccount', 'name': 'vm-self-scraper', 'namespace': 'victoriametrics'}], binding['subjects'])
 
 
+class GrafanaLiveGuardTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.live = module('verify_live')
+
+    def cluster(self):
+        return {'apiVersion': 'postgresql.cnpg.io/v1', 'kind': 'Cluster',
+                'metadata': {'namespace': 'grafana', 'name': 'grafana-postgres', 'uid': 'reviewed', 'resourceVersion': '42'},
+                'spec': {'instances': 3, 'primaryUpdateStrategy': 'supervised', 'postgresql': {'synchronous': {
+                    'method': 'any', 'number': 1, 'dataDurability': 'required', 'failoverQuorum': True}}},
+                'status': {'phase': self.live.HEALTHY, 'instances': 3, 'readyInstances': 3,
+                    'currentPrimary': 'grafana-postgres-1', 'targetPrimary': 'grafana-postgres-1',
+                    'conditions': [{'type': 'Ready', 'status': 'True'}]}}
+
+    def states(self):
+        return {'grafana-postgres-1': {'recovery': False, 'read_only': 'off', 'sync_names': 'ANY 1 ("grafana-postgres-2", "grafana-postgres-3")',
+                'sync_commit': 'on', 'replication': [{'name': 'grafana-postgres-' + str(i), 'state': 'streaming',
+                    'sync_state': 'quorum', 'flush_lsn': '0/50', 'replay_lsn': '0/50'} for i in (2, 3)]},
+                **{'grafana-postgres-' + str(i): {'recovery': True, 'read_only': 'on', 'replay_paused': False, 'wal': '0/50'} for i in (2, 3)}}
+
+    def pod(self):
+        return {'metadata': {'namespace': 'grafana', 'name': 'grafana-postgres-2', 'uid': 'pod-2',
+            'labels': {'cnpg.io/cluster': 'grafana-postgres'}, 'ownerReferences': [{'kind': 'Cluster',
+                'apiVersion': 'postgresql.cnpg.io/v1', 'name': 'grafana-postgres', 'uid': 'reviewed', 'controller': True}]},
+            'spec': {'nodeName': 'cpu-node-2'}, 'status': {'phase': 'Running', 'conditions': [{'type': 'Ready', 'status': 'True'}]}}
+
+    def test_switchover_rejects_wrong_scope_uid_or_in_progress_cluster(self):
+        self.assertEqual('grafana-postgres-1', self.live.validate_cluster(self.cluster(), 'reviewed'))
+        for path, value in [('namespace', 'nightingale'), ('uid', 'other')]:
+            cluster = self.cluster(); cluster['metadata'][path] = value
+            with self.assertRaises(self.live.VerificationError):
+                self.live.validate_cluster(cluster, 'reviewed')
+        cluster = self.cluster(); cluster['status']['targetPrimary'] = 'grafana-postgres-2'
+        with self.assertRaises(self.live.VerificationError):
+            self.live.validate_cluster(cluster)
+
+    def test_switchover_requires_owned_ready_standby_and_replayed_write(self):
+        self.assertEqual('grafana-postgres-2', self.live.validate_target(self.cluster(), self.pod(), self.states(), '0/40'))
+        for key, value in [('uid', 'wrong-owner'), ('controller', False)]:
+            pod = self.pod(); pod['metadata']['ownerReferences'][0][key] = value
+            with self.assertRaises(self.live.VerificationError):
+                self.live.validate_target(self.cluster(), pod, self.states(), '0/40')
+        pod = self.pod(); pod['status']['conditions'][0]['status'] = 'False'
+        with self.assertRaises(self.live.VerificationError):
+            self.live.validate_target(self.cluster(), pod, self.states(), '0/40')
+        states = self.states(); states['grafana-postgres-2']['wal'] = '0/30'
+        with self.assertRaises(self.live.VerificationError):
+            self.live.validate_target(self.cluster(), self.pod(), states, '0/40')
+
+    def test_promotion_patch_preserves_spec_and_uses_concurrency_guards(self):
+        cluster = self.cluster(); original = copy.deepcopy(cluster)
+        patch = self.live.promotion_patch(cluster, 'grafana-postgres-2', '2026-10-13T00:00:00Z')
+        self.assertEqual(original, cluster)
+        tests = {item['path']: item['value'] for item in patch if item['op'] == 'test'}
+        self.assertEqual('reviewed', tests['/metadata/uid'])
+        self.assertEqual('42', tests['/metadata/resourceVersion'])
+        self.assertEqual('grafana-postgres-1', tests['/status/currentPrimary'])
+        self.assertEqual('grafana-postgres-1', tests['/status/targetPrimary'])
+        changes = {item['path']: item['value'] for item in patch if item['op'] != 'test'}
+        self.assertTrue(all(path.startswith('/status/') for path in changes))
+        self.assertNotIn('/status/currentPrimary', changes)
+        self.assertEqual('grafana-postgres-2', changes['/status/targetPrimary'])
+        with self.assertRaises(self.live.VerificationError):
+            self.live.promotion_patch(cluster, 'nightingale-postgres-2', '2026-10-13T00:00:00Z')
+
+
 if __name__ == '__main__':
     unittest.main()
