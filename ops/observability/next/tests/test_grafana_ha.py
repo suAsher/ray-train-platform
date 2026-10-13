@@ -81,6 +81,8 @@ class GrafanaHATests(unittest.TestCase):
         self.assertEqual('127.0.0.1', ch['jsonData']['host'])
         self.assertEqual(19000, ch['jsonData']['port'])
         self.assertEqual('native', ch['jsonData']['protocol'])
+        # clickhouse-go adds five seconds to the per-query context deadline.
+        self.assertEqual(25, ch['jsonData']['queryTimeout'])
         self.assertNotIn('tlsClientKey', str(sources))
         self.assertNotIn('GF_PLUGINS_PREINSTALL', str(self.docs))
         dockerfile = (ROOT / 'image' / 'Dockerfile').read_text()
