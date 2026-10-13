@@ -16,16 +16,16 @@ import (
 
 type WorkspaceRenderOptions struct {
 	WorkerNodeAffinityPreference []string
-	NodeSelector     map[string]string
-	DedicatedNodes   map[string][]string
-	Image            string
-	RayVersion       string
-	ServiceAccount   string
-	ImagePullSecrets []string
-	IDCExistingClaim string
-	IDCMountPath     string
-	JupyterBasePath  string
-	DataMounts       DataMountPlan
+	NodeSelector                 map[string]string
+	DedicatedNodes               map[string][]string
+	Image                        string
+	RayVersion                   string
+	ServiceAccount               string
+	ImagePullSecrets             []string
+	IDCExistingClaim             string
+	IDCMountPath                 string
+	JupyterBasePath              string
+	DataMounts                   DataMountPlan
 }
 
 func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderOptions) (*unstructured.Unstructured, error) {

@@ -31,39 +31,62 @@ func (h *Handler) currentSchedulingCapacity(c *gin.Context) {
 		capacity.Fit.CanFit = false
 		capacity.Fit.Reason = "team_quota_exceeded"
 	}
-	if !principal.HasRole(domain.RoleSuperAdmin) { capacity.Nodes = nil }
+	if !principal.HasRole(domain.RoleSuperAdmin) {
+		capacity.Nodes = nil
+	}
 	h.writeSuccess(c, http.StatusOK, capacity)
 }
 
 func parseSchedulingCapacityShape(c *gin.Context) (domain.Resources, error) {
 	shape := domain.Resources{WorkerReplicas: 1, GPUsPerWorker: 1, CPUPerWorker: 4, MemoryPerWorker: "16Gi"}
 	for key, values := range c.Request.URL.Query() {
-		if len(values) != 1 { return shape, fmt.Errorf("duplicate shape field") }
+		if len(values) != 1 {
+			return shape, fmt.Errorf("duplicate shape field")
+		}
 		switch key {
 		case "workerReplicas", "gpusPerWorker", "cpuPerWorker", "memoryPerWorker":
-		default: return shape, fmt.Errorf("unsupported shape field")
+		default:
+			return shape, fmt.Errorf("unsupported shape field")
 		}
 	}
 	parse := func(key string, current, maximum int64, allowZero bool) (int64, error) {
 		values, found := c.Request.URL.Query()[key]
-		if !found { return current, nil }
+		if !found {
+			return current, nil
+		}
 		text := values[0]
-		if text == "" { return 0, fmt.Errorf("empty shape field") }
-		for _, character := range text { if character < '0' || character > '9' { return 0, fmt.Errorf("shape must be unsigned decimal") } }
+		if text == "" {
+			return 0, fmt.Errorf("empty shape field")
+		}
+		for _, character := range text {
+			if character < '0' || character > '9' {
+				return 0, fmt.Errorf("shape must be unsigned decimal")
+			}
+		}
 		value, err := strconv.ParseInt(text, 10, 64)
-		if err != nil || value > maximum || value < 0 || (!allowZero && value == 0) { return 0, fmt.Errorf("shape out of range") }
+		if err != nil || value > maximum || value < 0 || (!allowZero && value == 0) {
+			return 0, fmt.Errorf("shape out of range")
+		}
 		return value, nil
 	}
 	workers, err := parse("workerReplicas", 1, 4096, false)
-	if err != nil { return shape, err }
+	if err != nil {
+		return shape, err
+	}
 	gpus, err := parse("gpusPerWorker", 1, 4096, true)
-	if err != nil { return shape, err }
+	if err != nil {
+		return shape, err
+	}
 	cpu, err := parse("cpuPerWorker", 4, 1_000_000, false)
-	if err != nil { return shape, err }
+	if err != nil {
+		return shape, err
+	}
 	shape.WorkerReplicas, shape.GPUsPerWorker, shape.CPUPerWorker = int(workers), int(gpus), cpu
-	if values, found := c.Request.URL.Query()["memoryPerWorker"]; found { shape.MemoryPerWorker = values[0] }
+	if values, found := c.Request.URL.Query()["memoryPerWorker"]; found {
+		shape.MemoryPerWorker = values[0]
+	}
 	memory, err := resource.ParseQuantity(shape.MemoryPerWorker)
-	if err != nil || memory.Sign() <= 0 || memory.Cmp(resource.MustParse("1Pi")) > 0 {
+	if err != nil || len(shape.MemoryPerWorker)>64 || memory.Sign() <= 0 || memory.Cmp(resource.MustParse("1Pi")) > 0 {
 		return shape, fmt.Errorf("memory out of range")
 	}
 	return shape, nil
@@ -78,13 +101,19 @@ func (h *Handler) schedulingCapacity(ctx context.Context, tenantID string, shape
 	unknown := domain.SchedulingCapacity{ObservedAt: time.Now().UTC(), AcceleratorClass: string(accelerator), UnavailableReason: "capacity_observation_unavailable", Fit: domain.SchedulingCapacityFit{WorkerReplicas: shape.WorkerReplicas, GPUsPerWorker: shape.GPUsPerWorker, CPUPerWorker: shape.CPUPerWorker, MemoryPerWorker: shape.MemoryPerWorker, Reason: "capacity_unknown"}}
 	if h.tenantScheduling != nil {
 		resolved, err := h.tenantScheduling.TenantAcceleratorClass(ctx, tenantID)
-		if err != nil { return unknown, fmt.Errorf("tenant scheduling unavailable") }
+		if err != nil {
+			return unknown, fmt.Errorf("tenant scheduling unavailable")
+		}
 		accelerator = resolved.Resolved()
 	}
 	unknown.AcceleratorClass = string(accelerator)
-	if err := accelerator.Validate(); err != nil { return unknown, fmt.Errorf("tenant scheduling invalid") }
+	if err := accelerator.Validate(); err != nil {
+		return unknown, fmt.Errorf("tenant scheduling invalid")
+	}
 	capacity, err := h.kubernetes.SchedulingCapacity(ctx, k8s.SchedulingCapacityRequest{TenantID: tenantID, AcceleratorClass: accelerator, NodeSelector: h.trainingNodeSelector, DedicatedNodes: h.trainingDedicatedNodes, Resources: shape, ExcludeJobID: excludeJobID})
-	if err != nil { capacity = unknown }
+	if err != nil {
+		capacity = unknown
+	}
 	if h.quota == nil {
 		capacity.Available = false
 		capacity.UnavailableReason = "quota_unavailable"

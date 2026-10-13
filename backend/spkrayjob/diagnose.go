@@ -104,6 +104,20 @@ func renderSchedulingCapacity(writer io.Writer, capacity *domain.SchedulingCapac
 		return err
 	}
 	message := "容量为瞬时参考，不保证排队顺序或准入；启动错误请以上方平台状态为准。"
+	switch fit.Reason {
+	case "insufficient_gpus":
+		message = "资源池当前空闲 GPU 不足，请等待资源释放。" + message
+	case "gpu_fragmentation":
+		message = "空闲 GPU 分散，无法满足本任务每 Worker 的 GPU 规格及数量。" + message
+	case "insufficient_cpu_or_memory":
+		message = "符合 GPU 条件的节点 CPU 或内存不足，无法容纳全部 Worker。" + message
+	case "team_quota_exceeded":
+		message = "团队可用额度不足以满足本任务请求，请检查团队额度和其他活动任务。" + message
+	case "no_eligible_nodes":
+		message = "没有符合团队资源池、节点约束和健康状态的可调度节点，请联系管理员检查。" + message
+	case "fits":
+		message = "当前容量快照可容纳本任务规格，仍需等待队列准入。" + message
+	}
 	if fit.Reason == "already_admitted_capacity_reference" {
 		message = "任务已准入，当前池容量仅供参考，不能据此判定该任务缺卡；请检查启动、镜像和挂载状态。"
 	} else if fit.Reason == "startup_status_capacity_reference" {

@@ -102,4 +102,3 @@ func TestSchedulingCapacityRejectsUnknownReservationAndFiltersConstraints(t *tes
 		t.Fatalf("unmapped reservation must be unknown: %+v %v", s, err)
 	}
 }
-

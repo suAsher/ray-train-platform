@@ -16,6 +16,7 @@ func (h *Handler) registerTrainingRoutes(group *gin.RouterGroup) {
 	read.GET("/jobs/:id/runtime", h.getJobRuntime)
 	read.GET("/jobs/:id/logs", h.getJobLogs)
 	read.GET("/jobs/:id/diagnosis", h.getJobDiagnosis)
+	read.GET("/jobs/:id/scheduling-capacity", h.getJobSchedulingCapacity)
 	read.GET("/jobs/:id/metrics", h.getJobMetrics)
 	read.GET("/jobs/:id/gpu-metrics", h.getJobGPUHistory)
 	read.GET("/jobs/:id/training-performance", h.getJobTrainingPerformance)
