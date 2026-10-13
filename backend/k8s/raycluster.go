@@ -15,6 +15,7 @@ import (
 )
 
 type WorkspaceRenderOptions struct {
+	WorkerNodeAffinityPreference []string
 	NodeSelector     map[string]string
 	DedicatedNodes   map[string][]string
 	Image            string
@@ -156,6 +157,9 @@ func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderO
 		if tolerations := dedicatedNodeTolerations(workspace.TenantID, options.DedicatedNodes); len(tolerations) > 0 {
 			spec["tolerations"] = tolerations
 		}
+	}
+	if workspace.GPUCount > 0 {
+		addPreferredNodeAffinity(worker["template"].(map[string]any), options.WorkerNodeAffinityPreference)
 	}
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": RayAPIVersion, "kind": "RayCluster",

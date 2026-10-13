@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -53,4 +54,46 @@ func TestSchedulingDiagnosisDoesNotAttachCapacityToRunningOrFinishedJobs(t *test
 			t.Fatalf("state %s received unrelated current scheduling snapshot", state)
 		}
 	}
+}
+
+func TestSchedulingDiagnosisQuotaExcludesOnlyOwnActiveReservation(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		desired domain.DesiredState
+		used, available, wantUsed, wantAvailable int
+		wantReason string
+	}{
+		{"active", domain.DesiredActive, 64, 0, 56, 8, "fits"},
+		{"over-limit", domain.DesiredActive, 70, 0, 62, 2, "team_quota_exceeded"},
+		{"cancel-requested", domain.DesiredCanceled, 60, 4, 60, 4, "team_quota_exceeded"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			quota := domain.TenantQuota{TenantID:"team-a", GPULimit:64, GPUUsed:test.used, GPUAvailable:test.available}
+			capacity := domain.SchedulingCapacity{Available:true, Quota:&quota, Fit:domain.SchedulingCapacityFit{CanFit:true, Reason:"fits"}}
+			job := diagnosisTestJob()
+			job.DesiredState = test.desired
+			job.Spec.Resources = domain.Resources{WorkerReplicas:2, GPUsPerWorker:4}
+			got := jobCapacityQuota(capacity, job)
+			if got.Quota.GPUUsed != test.wantUsed || got.Quota.GPUAvailable != test.wantAvailable || got.Fit.Reason != test.wantReason { t.Fatalf("quota: %+v fit: %+v", got.Quota, got.Fit) }
+			if quota.GPUUsed != test.used || quota.GPUAvailable != test.available { t.Fatal("diagnosis mutated shared quota") }
+		})
+	}
+}
+
+func TestSchedulingDiagnosisProvisioningCapacityIsReference(t *testing.T) {
+	job := diagnosisTestJob()
+	job.ObservedState = domain.StateProvisioning
+	job.StatusReason = ""
+	h := NewHandler(&fakeJobRepository{}, Options{})
+	got := h.jobSchedulingCapacity(context.Background(), job)
+	if got == nil || got.Fit.Reason != "already_admitted_capacity_reference" { t.Fatalf("startup must not be diagnosed as capacity wait: %+v", got) }
+}
+
+func TestSchedulingDiagnosisConcreteStartupErrorRemainsPrimary(t *testing.T) {
+	job := diagnosisTestJob()
+	job.ObservedState = domain.StateQueued
+	job.StatusReason = "ImagePullBackOff"
+	h := NewHandler(&fakeJobRepository{}, Options{})
+	got := h.jobSchedulingCapacity(context.Background(), job)
+	if got == nil || got.Fit.Reason != "startup_status_capacity_reference" || job.StatusReason != "ImagePullBackOff" { t.Fatalf("startup reason lost: %+v", got) }
 }

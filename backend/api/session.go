@@ -34,6 +34,7 @@ func (h *Handler) RegisterSessionRoutes(group *gin.RouterGroup) {
 	group.GET("/me/memberships", h.listOwnMemberships)
 	group.POST("/me/active-tenant", h.switchActiveTenant)
 	group.GET("/quota", h.currentQuota)
+	group.GET("/capacity", h.currentSchedulingCapacity)
 	// Deployment ceilings and governed mount paths belong next to identity: the
 	// Portal needs both before it can render a submit form the server accepts.
 	group.GET("/limits", h.platformLimits)

@@ -17,6 +17,7 @@ import (
  dynamicfake "k8s.io/client-go/dynamic/fake"
  k8sfake "k8s.io/client-go/kubernetes/fake"
  "ray-train-platform-backend/auth"
+ "ray-train-platform-backend/domain"
  "ray-train-platform-backend/k8s"
 )
 
@@ -65,4 +66,24 @@ func TestLaunchWorkspacePrefersGloballyOccupiedNode(t *testing.T) {
  response = httptest.NewRecorder()
  router.ServeHTTP(response,httptest.NewRequest(http.MethodPost,"/api/v1/dev-workspaces",strings.NewReader(`{"gpuCount":1}`)))
  if response.Code != http.StatusOK || len(dynamic.Actions()) != before { t.Fatalf("existing workspace was re-queried/re-rendered: status=%d",response.Code) }
+}
+
+func TestWorkspaceWorkerNodePreferenceSkipsZeroGPUAndExistingState(t *testing.T) {
+ for _,tc := range []struct{name string; gpu int; state domain.WorkspaceState}{
+  {"zero-gpu",0,domain.WorkspaceSubmitted}, {"running",1,domain.WorkspaceRunning}, {"stopping",1,domain.WorkspaceStopping},
+ } {
+  t.Run(tc.name,func(t *testing.T){
+   core := k8sfake.NewSimpleClientset()
+   dynamic := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
+   handler := NewHandler(&fakeJobRepository{},Options{Kubernetes:k8s.NewClientFromInterfaces(dynamic,core)})
+   nodes := handler.workspaceWorkerNodePreference(context.Background(),domain.DevWorkspace{ID:"ws-existing",TenantID:"team-a",GPUCount:tc.gpu,State:tc.state},domain.AcceleratorRTX4090,nil)
+   if len(nodes) != 0 || len(core.Actions()) != 0 || len(dynamic.Actions()) != 0 { t.Fatalf("workspace %s should not query or change GPU placement: %v",tc.name,nodes) }
+  })
+ }
+}
+
+func TestWorkspaceWorkerNodePreferenceDegradesWhenCapacityUnavailable(t *testing.T) {
+ handler := NewHandler(&fakeJobRepository{},Options{Kubernetes:k8s.NewClientFromInterfaces(nil,k8sfake.NewSimpleClientset(workspacePlacementNode("node-a")))})
+ nodes := handler.workspaceWorkerNodePreference(context.Background(),domain.DevWorkspace{ID:"ws-new",TenantID:"team-a",GPUCount:1,State:domain.WorkspaceSubmitted},domain.AcceleratorRTX4090,nil)
+ if len(nodes) != 0 { t.Fatalf("unreadable reservations must not create placement hints: %v",nodes) }
 }

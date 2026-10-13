@@ -141,6 +141,7 @@ func (r *Reconciler) withTeamNodeAffinity(ctx context.Context, job domain.Traini
 	defer cancel()
 	nodes, err := r.client.PreferredTeamWorkerNodes(queryCtx, TeamWorkerNodePreferenceRequest{
 		TenantID: job.TenantID, JobID: job.ID, AcceleratorClass: job.Spec.AcceleratorClass,
+		NodeSelector: options.NodeSelector, DedicatedNodes: options.DedicatedNodes, Resources: job.Spec.Resources,
 	})
 	if err != nil {
 		log.Printf("team node affinity skipped for job %s: %v", job.ID, err)

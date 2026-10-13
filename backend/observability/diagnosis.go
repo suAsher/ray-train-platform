@@ -3,6 +3,8 @@ package observability
 import (
 	"sort"
 	"time"
+
+	"ray-train-platform-backend/domain"
 )
 
 const (
@@ -17,6 +19,7 @@ const (
 // JobDiagnosis is shared by Portal and CLI. It describes a bounded sample of
 // retained log evidence, never a transition in the authoritative job state.
 type JobDiagnosis struct {
+	SchedulingCapacity *domain.SchedulingCapacity `json:"schedulingCapacity,omitempty"`
 	JobID              string              `json:"jobId"`
 	ObservedState      string              `json:"observedState"`
 	StatusReason       string              `json:"statusReason"`
