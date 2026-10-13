@@ -1,4 +1,6 @@
 {{- define "ui.validate" -}}
+{{- $grafana := .Values.grafana | default dict -}}
+{{- if and (hasKey $grafana "independent") (not (kindIs "bool" $grafana.independent)) }}{{ fail "grafana.independent must be boolean" }}{{ end -}}
 {{- if ne .Release.Namespace "nightingale" }}{{ fail "UI gateway must be installed in nightingale" }}{{ end -}}
 {{- if lt (int .Values.replicas) 2 }}{{ fail "UI gateway requires at least two replicas" }}{{ end -}}
 {{- if not (has .Values.service.type (list "NodePort" "ClusterIP")) }}{{ fail "service.type must be NodePort or ClusterIP" }}{{ end -}}

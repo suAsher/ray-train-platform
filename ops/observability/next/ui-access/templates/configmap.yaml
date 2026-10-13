@@ -130,7 +130,34 @@ data:
               - lb_endpoints:
                   - endpoint:
                       address:
+                        {{- if (.Values.grafana | default dict).independent }}
+                        socket_address: {address: grafana.grafana.svc, port_value: 8443}
+                        {{- else }}
                         socket_address: {address: grafana-ui-backend.monitoring.svc, port_value: 80}
+                        {{- end }}
+          {{- if (.Values.grafana | default dict).independent }}
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+              sni: grafana.grafana.svc
+              common_tls_context:
+                tls_params: {tls_minimum_protocol_version: TLSv1_3, tls_maximum_protocol_version: TLSv1_3}
+                tls_certificate_sds_secret_configs:
+                  - name: n9e-client
+                    sds_config:
+                      resource_api_version: V3
+                      path_config_source:
+                        path: /etc/ui-config/client-sds.yaml
+                        watched_directory: {path: /etc/ui-config}
+                validation_context_sds_secret_config:
+                  name: grafana-validation
+                  sds_config:
+                    resource_api_version: V3
+                    path_config_source:
+                      path: /etc/ui-config/grafana-validation-sds.yaml
+                      watched_directory: {path: /etc/ui-config}
+          {{- end }}
   secure-cookies.lua: |
     function envoy_on_response(handle)
       local headers = handle:headers()
@@ -178,3 +205,16 @@ data:
           match_typed_subject_alt_names:
             - san_type: URI
               matcher: {exact: spiffe://observability.raytrain.local/nightingale/nightingale}
+  {{- if (.Values.grafana | default dict).independent }}
+  grafana-validation-sds.yaml: |
+    version_info: "1"
+    resources:
+      - "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret
+        name: grafana-validation
+        validation_context:
+          trusted_ca: {filename: /etc/ui-client/ca.crt}
+          watched_directory: {path: /etc/ui-client}
+          match_typed_subject_alt_names:
+            - san_type: URI
+              matcher: {exact: spiffe://observability.raytrain.local/grafana/grafana-server}
+  {{- end }}

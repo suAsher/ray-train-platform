@@ -182,7 +182,8 @@ class ClickHouseMTLSTests(unittest.TestCase):
         self.assertEqual({role("analytics", "clickhouse")}, identities(public[9010]))
         self.assertEqual({role("metrics", "vmagent")}, identities(public[9363]))
         self.assertEqual({role("otel", "otel-gateway"), role("analytics", "clickhouse"),
-                          role("analytics", "schema-admin"), role("analytics", "query-admin")},
+                          role("analytics", "schema-admin"), role("analytics", "query-admin"),
+                          "spiffe://observability.raytrain.local/grafana/grafana-query"},
                          identities(public[9440]))
 
     def test_sql_application_permissions_remain_minimal(self):
