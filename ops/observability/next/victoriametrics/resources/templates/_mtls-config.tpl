@@ -40,6 +40,9 @@
 {{- $policies = append $policies (dict "name" (printf "%s_read" $name) "uri" (index $uris $name) "method" "GET|POST" "path" $readPath) -}}
 {{- end -}}
 {{- $policies = append $policies (dict "name" "n9e_read" "uri" $root.Values.mtls.readRoleURI "method" "GET|POST" "path" $readPath) -}}
+{{- if (default false (get (default (dict) $root.Values.grafanaRead) "enabled")) -}}
+{{- $policies = append $policies (dict "name" "grafana_read" "uri" "spiffe://observability.raytrain.local/grafana/grafana-query" "method" "GET|POST" "path" $readPath) -}}
+{{- end -}}
 {{- end -}}
 {{- if eq $role "alertmanager" -}}
 {{- $policies = append $policies (dict "name" "send_canary_alerts" "uri" (index $uris "vmalert") "method" "POST" "path" "/api/v2/alerts") -}}

@@ -41,10 +41,12 @@ class OTelMTLSTests(unittest.TestCase):
     def test_canary_cannot_scrape_metrics_and_vmagent_cannot_write_telemetry(self):
         config = yaml.safe_load((ROOT / "proxy-otel.yaml").read_text())
         public = public_listeners(config)
-        self.assertEqual({4317, 4318, 8888, 18080}, set(public))
+        self.assertEqual({4317, 4318, 8888, 14318, 18080}, set(public))
         for port in (4317, 4318):
             self.assertEqual({role("otel", "canary")}, identities(public[port]))
         self.assertEqual({role("metrics", "vmagent")}, identities(public[8888]))
+        self.assertEqual({"spiffe://observability.raytrain.local/ray-train-platform/backend-telemetry"},
+                         identities(public[14318]))
 
     def test_clickhouse_exporter_proves_gateway_identity_and_keeps_sql_secret(self):
         exporter = self.collector()["exporters"]["clickhouse/canary"]
@@ -66,7 +68,8 @@ class OTelMTLSTests(unittest.TestCase):
         exporter = config["exporters"]["clickhouse/canary"]
         self.assertEqual("file_storage/queue", exporter["sending_queue"]["storage"])
         self.assertEqual("1", exporter["connection_params"]["wait_for_async_insert"])
-        for pipeline in config["service"]["pipelines"].values():
+        for name in ("logs/canary", "traces/canary"):
+            pipeline = config["service"]["pipelines"][name]
             self.assertEqual(["otlp/canary"], pipeline["receivers"])
             self.assertNotIn("batch", pipeline["processors"])
             self.assertIn("transform/canary", pipeline["processors"])

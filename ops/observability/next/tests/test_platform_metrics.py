@@ -1,5 +1,6 @@
 """Render contracts for opt-in platform telemetry. Execute on builder only."""
 import json
+import importlib.util
 import os
 from pathlib import Path
 import subprocess
@@ -102,6 +103,19 @@ class GrafanaVMReadContract(unittest.TestCase):
         for denied in ["write", "delete", "admin", "export", "import"]:
             self.assertNotIn(denied, " ".join(paths))
         self.assertIn(GRAFANA_URI, json.dumps(docs))
+
+    def test_existing_validator_requires_explicit_grafana_mode(self):
+        spec = importlib.util.spec_from_file_location(
+            "vm_component_contract", NEXT / "victoriametrics/validate_component_contract.py")
+        contract = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(contract)
+        docs = render(NEXT / "victoriametrics/resources", "victoriametrics", "--set", "grafanaRead.enabled=true")
+        with self.assertRaises(ValueError):
+            contract.validate_auth(docs)
+        contract.validate_auth(docs, grafana_read=True)
+        one(docs, "VMUser", "grafana-read")["spec"]["targetRefs"][0]["paths"].append("/api/v1/write")
+        with self.assertRaises(ValueError):
+            contract.validate_auth(docs, grafana_read=True)
 
 
 if __name__ == "__main__":

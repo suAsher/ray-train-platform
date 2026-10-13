@@ -9,6 +9,8 @@ scrapeInterval: 30s
 dedupInterval: 30s
 businessScrape:
   enabled: false
+grafanaRead:
+  enabled: false
 retentionPeriod: 30d
 imagePullSecrets: []
 images:

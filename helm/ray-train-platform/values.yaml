@@ -67,6 +67,9 @@ assistant:
 
 backend:
   replicaCount: 2
+  telemetry:
+    enabled: false
+    certificateSecret: obs-mtls-backend-telemetry
   # Optional scheduling boundary for control-plane Pods. Production profiles
   # use the dedicated CPU node pool; the default remains portable.
   nodeSelector: {}

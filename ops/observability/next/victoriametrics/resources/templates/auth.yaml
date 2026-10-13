@@ -1,3 +1,5 @@
+{{- $grafanaRead := default (dict) .Values.grafanaRead -}}
+{{- if and (hasKey $grafanaRead "enabled") (not (kindIs "bool" $grafanaRead.enabled)) }}{{- fail "grafanaRead.enabled must be boolean" }}{{- end }}
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMAuth
 metadata:
@@ -72,3 +74,27 @@ spec:
         - /api/v1/label/[^/]+/values
         - /api/v1/series
         - /api/v1/metadata
+{{- if (default false (get (default (dict) .Values.grafanaRead) "enabled")) }}
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMUser
+metadata:
+  name: grafana-read
+  namespace: {{ .Release.Namespace }}
+  labels:
+    observability.raytrain.io/auth: self-only
+    {{- include "metrics.labels" . | nindent 4 }}
+spec:
+  tokenRef: {name: vm-grafana-read, key: token}
+  disable_secret_creation: true
+  targetRefs:
+    - static:
+        url: {{ printf "http://127.0.0.1:18481/select/%s/prometheus" (toString .Values.tenantID) | quote }}
+      paths:
+        - /api/v1/query
+        - /api/v1/query_range
+        - /api/v1/labels
+        - /api/v1/label/[^/]+/values
+        - /api/v1/series
+        - /api/v1/metadata
+{{- end }}

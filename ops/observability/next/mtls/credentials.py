@@ -19,6 +19,11 @@ import sys
 import tempfile
 
 NAMESPACES = frozenset(("victoriametrics", "clickhouse", "opentelemetry", "nightingale"))
+# Offline runtime acceptance needs these exact new client identities. Keep the
+# legacy Secret application scope unchanged: production issuance uses reviewed
+# cert-manager Policies, not this bootstrap helper.
+RUNTIME_CLIENTS = frozenset((("grafana", "grafana-query"),
+                            ("ray-train-platform", "backend-telemetry")))
 TRUST_DOMAINS = frozenset(("mesh", "am-gossip", "redis", "postgres-client"))
 URI_ROOT = "spiffe://observability.raytrain.local"
 LEAF_DAYS = 90
@@ -42,12 +47,16 @@ def validate_plan(entries):
         if not isinstance(item, dict) or set(item) - FIELDS:
             raise CredentialError("Unknown identity plan fields")
         ns, role = item.get("namespace"), item.get("role")
-        if ns not in NAMESPACES or not isinstance(role, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,48}", role):
+        runtime_client = isinstance(ns, str) and isinstance(role, str) and (ns, role) in RUNTIME_CLIENTS
+        if (ns not in NAMESPACES and not runtime_client) or not isinstance(role, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,48}", role):
             raise CredentialError("Identity is outside the allowed namespace/name scope")
         if (ns, role) in seen:
             raise CredentialError("Duplicate Secret identity")
         seen.add((ns, role))
         domain = item.get("trust_domain")
+        if runtime_client and (domain != "mesh" or item.get("usages") != ["clientAuth"]
+                               or item.get("dns_names") != [] or item.get("common_name", role) != role):
+            raise CredentialError("Runtime-only identities must be exact mesh clients without DNS aliases")
         if domain not in TRUST_DOMAINS:
             raise CredentialError("Unknown signing trust domain")
         if domain == "am-gossip" and (ns != "victoriametrics" or role != "alertmanager-gossip"):

@@ -1,0 +1,5 @@
+expectedNamespace: victoriametrics
+scrapeInterval: 30s
+scrapeTimeout: 10s
+# Identities, resource namespaces and RBAC are deliberately fixed in templates.
+# This chart creates no workloads, credentials or data volumes.

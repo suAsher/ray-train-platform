@@ -178,7 +178,7 @@ def reloader_bindings(objects, account):
     return bindings
 
 
-def validate_auth(objects):
+def validate_auth(objects, grafana_read=False):
     spec = one(objects, "VMAuth")["spec"]
     require(spec.get("selectAllByDefault") is False, "auth selects users by default")
     require(spec.get("userSelector") == {
@@ -188,7 +188,8 @@ def validate_auth(objects):
                 "configSecret", "userNamespaceSelector", "ingress", "httpRoute"]:
         require(key not in spec, f"unapproved auth configuration: {key}")
     users = {item["metadata"]["name"]: item["spec"] for item in objects if item.get("kind") == "VMUser"}
-    require(set(users) == {"self-read", "self-write"}, "unapproved VMUser")
+    expected_users = {"self-read", "self-write"} | ({"grafana-read"} if grafana_read else set())
+    require(set(users) == expected_users, "unapproved VMUser")
     read_paths = {"/api/v1/query", "/api/v1/query_range", "/api/v1/labels",
                   "/api/v1/label/[^/]+/values", "/api/v1/series", "/api/v1/metadata"}
     for name, user in users.items():
@@ -198,7 +199,7 @@ def validate_auth(objects):
                 "inline or alternate VMUser authentication")
         refs = user.get("targetRefs", [])
         require(len(refs) == 1, "unapproved extra route")
-        read = name == "self-read"
+        read = name in {"self-read", "grafana-read"}
         port, action = (18481, "select") if read else (18480, "insert")
         require(refs[0].get("static", {}).get("url") ==
                 f"http://127.0.0.1:{port}/{action}/1001/prometheus",
@@ -356,8 +357,11 @@ def validate_business_base_scrapes(objects):
 
 
 def main(paths):
-    business_wave1 = bool(paths and paths[0] == "--business-wave1")
-    filenames = paths[1:] if business_wave1 else paths
+    flags = {item for item in paths if item.startswith("--")}
+    require(flags <= {"--business-wave1", "--grafana-read"}, "unapproved validation mode")
+    business_wave1 = "--business-wave1" in flags
+    grafana_read = "--grafana-read" in flags
+    filenames = [item for item in paths if not item.startswith("--")]
     require(len(filenames) == (3 if business_wave1 else 2),
             "pass operator and metrics rendered YAML; --business-wave1 also requires its separate business YAML")
     objects = []
@@ -389,7 +393,7 @@ def main(paths):
     validate_operator(objects)
     validate_agent(objects, business_wave1=business_wave1)
     validate_reloader_rbac(objects)
-    validate_auth(objects)
+    validate_auth(objects, grafana_read=grafana_read)
     validate_rules(objects)
     mode = "business-wave1" if business_wave1 else "first-stage"
     print(f"VM {mode} component boundaries: PASS (rendered YAML only; live verification still required)")

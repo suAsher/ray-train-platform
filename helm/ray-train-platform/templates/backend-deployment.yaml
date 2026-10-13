@@ -12,6 +12,9 @@ OIDC issuer. Local-only development does not. */}}
 {{- if not (regexMatch `^[^@[:space:]]+@sha256:[0-9a-fA-F]{64}$` .Values.backend.sourceMaterializerImage) }}{{- fail "backend.sourceMaterializerImage must use @sha256:<64 hex>" }}{{- end }}
 {{- if not (regexMatch `^[^@[:space:]]+@sha256:[0-9a-fA-F]{64}$` .Values.backend.workspaceImage) }}{{- fail "backend.workspaceImage must use @sha256:<64 hex>" }}{{- end }}
 {{- $datasetPublisher := default (dict) .Values.datasetPublisher -}}
+{{- $telemetry := default (dict) .Values.backend.telemetry -}}
+{{- if and (hasKey $telemetry "enabled") (not (kindIs "bool" $telemetry.enabled)) }}{{- fail "backend.telemetry.enabled must be boolean" }}{{- end }}
+{{- $telemetryEnabled := default false $telemetry.enabled -}}
 {{- $assistant := default (dict) .Values.assistant -}}
 {{- if and (hasKey $assistant "idleNamespace") (not (kindIs "string" $assistant.idleNamespace)) }}{{- fail "assistant.idleNamespace must be a string" }}{{- end }}
 {{- $assistantIdleNamespace := default "" $assistant.idleNamespace -}}
@@ -176,6 +179,10 @@ spec:
           ports:
             - containerPort: 8080
               name: http
+            {{- if $telemetryEnabled }}
+            - containerPort: 9091
+              name: metrics
+            {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -187,6 +194,16 @@ spec:
                 name: {{ include "ray-train-platform.datasetPublisher.resourceName" (list . "") }}
           {{- end }}
           env:
+            {{- if $telemetryEnabled }}
+            - {name: TELEMETRY_ENABLED, value: "true"}
+            - {name: TELEMETRY_METRICS_ADDR, value: ":9091"}
+            - {name: TELEMETRY_CA_FILE, value: /etc/platform-telemetry/ca.crt}
+            - {name: TELEMETRY_METRICS_CERT_FILE, value: /etc/platform-telemetry/tls.crt}
+            - {name: TELEMETRY_METRICS_KEY_FILE, value: /etc/platform-telemetry/tls.key}
+            - {name: TELEMETRY_OTLP_CERT_FILE, value: /etc/platform-telemetry/tls.crt}
+            - {name: TELEMETRY_OTLP_KEY_FILE, value: /etc/platform-telemetry/tls.key}
+            - {name: TELEMETRY_OTLP_ENDPOINT, value: "https://otel-gateway.opentelemetry.svc:14318"}
+            {{- end }}
             {{- if $assistant.controllerCAExistingSecret }}
             - name: ASSISTANT_CONTROLLER_CA_FILE
               value: /var/run/secrets/raytrain-assistant-controller/ca.crt
@@ -526,6 +543,11 @@ spec:
             - name: TMPDIR
               value: "/var/lib/ray-platform/code-snapshots"
           volumeMounts:
+            {{- if $telemetryEnabled }}
+            - name: platform-telemetry
+              mountPath: /etc/platform-telemetry
+              readOnly: true
+            {{- end }}
             {{- if $assistant.controllerCAExistingSecret }}
             - name: assistant-controller-ca
               mountPath: /var/run/secrets/raytrain-assistant-controller
@@ -560,6 +582,12 @@ spec:
           resources:
             {{- toYaml .Values.backend.resources | nindent 12 }}
       volumes:
+        {{- if $telemetryEnabled }}
+        - name: platform-telemetry
+          secret:
+            secretName: {{ default "obs-mtls-backend-telemetry" $telemetry.certificateSecret | quote }}
+            defaultMode: 0440
+        {{- end }}
         {{- if $assistant.controllerCAExistingSecret }}
         - name: assistant-controller-ca
           secret:
