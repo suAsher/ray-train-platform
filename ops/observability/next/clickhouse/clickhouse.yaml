@@ -103,6 +103,8 @@ spec:
       readonly/max_threads: 2
       readonly/max_memory_usage: 1073741824
       readonly/max_execution_time: 30      grafana_query/readonly: 1
+      # Force the authenticated remote reader path even on the initiating replica.
+      grafana_query/prefer_localhost_replica: 0
       grafana_query/max_threads: 2
       grafana_query/max_memory_usage: 1073741824
       grafana_query/max_execution_time: 30
