@@ -7,26 +7,12 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"ray-train-platform-backend/domain"
 )
 
-func (c *Client) subtractCapacityReservations(ctx context.Context, request SchedulingCapacityRequest, pods []corev1.Pod, indices map[string]int, hostnames map[string]string, nodes []domain.SchedulingCapacityNode) error {
-	gvr := c.kueueGVR
-	if gvr.Version == "" {
-		gvr = localQueueGVR
-	}
-	gvr.Resource = "workloads"
-	// Pagination bounds each response even when the cluster retains completed
-	// Workloads. No historical workload identity leaves this function.
-	continuation := ""
-	for {
-		workloads, err := c.dynamic.Resource(gvr).List(ctx, metav1.ListOptions{Limit: 500, Continue: continuation})
-		if err != nil {
-			return fmt.Errorf("list admission reservations: %w", err)
-		}
-		for _, workload := range workloads.Items {
+func (c *Client) subtractCapacityReservations(ctx context.Context, request SchedulingCapacityRequest, pods []corev1.Pod, workloads []unstructured.Unstructured, indices map[string]int, hostnames map[string]string, nodes []domain.SchedulingCapacityNode) error {
+		for _, workload := range workloads {
 			if capacityWorkloadFinished(workload) {
 				continue
 			}
@@ -54,11 +40,6 @@ func (c *Client) subtractCapacityReservations(ctx context.Context, request Sched
 				}
 			}
 		}
-		continuation = workloads.GetContinue()
-		if continuation == "" {
-			break
-		}
-	}
 	return nil
 }
 

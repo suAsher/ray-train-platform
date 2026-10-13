@@ -9,7 +9,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"ray-train-platform-backend/domain"
 )
@@ -50,17 +49,14 @@ func (c *Client) SchedulingCapacity(ctx context.Context, request SchedulingCapac
 		selector[key] = value
 	}
 	selector["accelerator"] = request.AcceleratorClass.Resolved().NodeLabelValue()
-	nodes, err := c.kubernetes.CoreV1().Nodes().List(ctx, metav1.ListOptions{LabelSelector: labels.Set(selector).AsSelector().String()})
+	snapshot, err := c.schedulingCapacitySnapshot(ctx, labels.Set(selector).AsSelector().String())
 	if err != nil {
-		return unknown(fmt.Errorf("list capacity nodes: %w", err))
+		return unknown(err)
 	}
-	pods, err := c.kubernetes.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return unknown(fmt.Errorf("list capacity pods: %w", err))
-	}
+	result.ObservedAt = snapshot.observedAt
 	indices := map[string]int{}
 	hostnames := map[string]string{}
-	for _, node := range nodes.Items {
+	for _, node := range snapshot.nodes {
 		if !capacityNodeEligible(node, request) {
 			continue
 		}
@@ -79,7 +75,7 @@ func (c *Client) SchedulingCapacity(ctx context.Context, request SchedulingCapac
 		hostnames[hostname] = node.Name
 		result.Nodes = append(result.Nodes, domain.SchedulingCapacityNode{Name: node.Name, TotalGPUs: gpus, FreeGPUs: gpus, FreeCPUMillis: capacityResourceValue(node.Status.Allocatable, corev1.ResourceCPU), FreeMemoryBytes: capacityResourceValue(node.Status.Allocatable, corev1.ResourceMemory)})
 	}
-	for _, pod := range pods.Items {
+	for _, pod := range snapshot.pods {
 		index, found := indices[pod.Spec.NodeName]
 		if !found || !capacityPodActive(pod) {
 			continue
@@ -99,7 +95,7 @@ func (c *Client) SchedulingCapacity(ctx context.Context, request SchedulingCapac
 		finishSchedulingCapacity(&result, request.Resources, memory.Value())
 		return result, nil
 	}
-	if err := c.subtractCapacityReservations(ctx, request, pods.Items, indices, hostnames, result.Nodes); err != nil {
+	if err := c.subtractCapacityReservations(ctx, request, snapshot.pods, snapshot.workloads, indices, hostnames, result.Nodes); err != nil {
 		return unknown(err)
 	}
 	finishSchedulingCapacity(&result, request.Resources, memory.Value())

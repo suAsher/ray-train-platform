@@ -124,6 +124,32 @@ func TestSchedulingCapacityCacheEmptyPoolSkipsReservationRead(t *testing.T) {
 	if count.Load()!=0 {t.Fatalf("empty pool queried Workloads %d times",count.Load())}
 }
 
+func TestSchedulingCapacityCacheInitiatorCancellationDoesNotPoisonOtherWaiters(t *testing.T) {
+	c:=capacityTestClient([]runtime.Object{capacityTestNode("a")})
+	started,release:=make(chan struct{}),make(chan struct{})
+	var calls atomic.Int32
+	c.dynamic.(*dynamicfake.FakeDynamicClient).PrependReactor("list","workloads",func(ktesting.Action)(bool,runtime.Object,error){
+		if calls.Add(1)==1 {close(started);<-release}
+		return true,&unstructured.UnstructuredList{},nil
+	})
+	ctx,cancel:=context.WithCancel(context.Background())
+	first:=make(chan error,1)
+	go func(){_,err:=c.SchedulingCapacity(ctx,capacityTestRequest());first<-err}()
+	<-started
+	other:=make(chan error,1)
+	go func(){_,err:=c.SchedulingCapacity(context.Background(),capacityTestRequest());other<-err}()
+	cancel()
+	select {
+	case err:=<-first:
+		if !errors.Is(err,context.Canceled) {t.Errorf("initiator cancellation err=%v",err)}
+	case <-time.After(200*time.Millisecond):
+		t.Error("initiator cancellation blocked on shared read")
+	}
+	close(release)
+	if err:=<-other;err!=nil {t.Fatalf("remaining waiter was poisoned: %v",err)}
+	if calls.Load()!=1 {t.Fatalf("initiator cancellation started duplicate reads: %d",calls.Load())}
+}
+
 func TestSchedulingCapacityCacheSeparatesAcceleratorPools(t *testing.T) {
 	a100:=capacityTestNode("a100")
 	a100.Labels["accelerator"]="nvidia-a100"

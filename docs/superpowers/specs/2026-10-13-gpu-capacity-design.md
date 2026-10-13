@@ -8,6 +8,8 @@ Authenticated `GET /api/v1/capacity` accepts `workerReplicas`, `gpusPerWorker`, 
 
 Pool accounting includes training, debug and all other nonterminal bound Pods, including terminating Pods, init containers and overhead. Kueue topology reservations supplement only occupancy not already represented by Pods. An unavailable or unresolvable observation is explicitly unknown, never a fabricated zero. CPU and memory constrain fit alongside GPU. Ready, schedulability, labels, taints and dedicated-node policy constrain eligibility.
 
+Raw node/Pod/active-Workload observations are shared per effective selector and accelerator for five seconds, with single-flight collection. Tenant, dedicated-node policy, current-job exclusion, quota and request-shape calculations remain per request. Failed refreshes never return stale success. Observation time is collection start; cache age is bounded from collection completion. New training/debug placement allows five seconds for a cold observation; job diagnosis allows six seconds including its admission check.
+
 Job diagnosis adds the same scheduling-capacity contract for early states, without replacing log evidence or misclassifying image/storage startup failures. Both Portal and CLI render this backend result. Existing quota accounting already includes debug workspaces and is not decremented by Pod usage again.
 
 ## Placement

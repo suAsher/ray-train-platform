@@ -16,7 +16,9 @@ func (h *Handler) workspaceWorkerNodePreference(ctx context.Context, workspace d
 	if h == nil || h.kubernetes == nil || workspace.GPUCount <= 0 || workspace.State != domain.WorkspaceSubmitted {
 		return nil
 	}
-	queryCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	// Allow the first shared capacity observation to populate its cache
+	// before falling back to placement without a soft preference.
+	queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	nodes, err := h.kubernetes.PreferredTeamWorkerNodes(queryCtx, k8s.TeamWorkerNodePreferenceRequest{
 		TenantID: workspace.TenantID, AcceleratorClass: accelerator,

@@ -16,7 +16,8 @@ func (h *Handler) jobSchedulingCapacity(ctx context.Context, job domain.Training
 	default:
 		return nil
 	}
-	queryCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	// Allow a cold shared capacity observation plus the job's admission lookup.
+	queryCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
 	capacity, err := h.schedulingCapacity(queryCtx, job.TenantID, job.Spec.Resources, job.ID)
 	capacity.Nodes = nil // Per-job diagnosis never exposes a platform node inventory.

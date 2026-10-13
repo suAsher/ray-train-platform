@@ -137,7 +137,9 @@ func (r *Reconciler) withTeamNodeAffinity(ctx context.Context, job domain.Traini
 	if strings.TrimSpace(job.RayJobUID) != "" || job.Spec.Resources.GPUsPerWorker <= 0 {
 		return options
 	}
-	queryCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	// The first shared capacity observation may take several seconds before
+	// its short-lived cache is warm; keep that healthy cold path eligible.
+	queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	nodes, err := r.client.PreferredTeamWorkerNodes(queryCtx, TeamWorkerNodePreferenceRequest{
 		TenantID: job.TenantID, JobID: job.ID, AcceleratorClass: job.Spec.AcceleratorClass,

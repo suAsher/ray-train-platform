@@ -36,6 +36,7 @@ type Client struct {
 	discovery  discovery.DiscoveryInterface
 	restConfig *rest.Config
 	kueueGVR   schema.GroupVersionResource
+	capacityCache schedulingCapacityCache
 }
 
 func NewClient(cfg config.Config) (*Client, error) {
