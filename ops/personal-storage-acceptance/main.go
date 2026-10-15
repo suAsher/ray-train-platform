@@ -47,7 +47,8 @@ type markerFailure struct {
 	marker string
 }
 
-type diagnosticFailure struct { class string }
+type diagnosticFailure struct{ class string }
+
 func (e *diagnosticFailure) Error() string { return e.class }
 
 func (e *markerFailure) Error() string { return "personal acceptance failed" }
@@ -244,7 +245,9 @@ func main() {
 			v["markerDirectory"] = failure.marker
 		}
 		var diagnosis *diagnosticFailure
-		if errors.As(err, &diagnosis) { v["errorClass"] = diagnosis.class }
+		if errors.As(err, &diagnosis) {
+			v["errorClass"] = diagnosis.class
+		}
 		emit(v)
 		os.Exit(1)
 	}
@@ -270,7 +273,9 @@ func run(ctx context.Context, o options) (string, error) {
 		return "kubernetes-client", err
 	}
 	service := personalstorage.NewService(fileRepository{o.stateDir}, personalstorage.NewKubernetesVault(client, namespace), factory)
-	if o.action == "diagnose" { return diagnose(ctx, fileRepository{o.stateDir}, personalstorage.NewKubernetesVault(client, namespace)) }
+	if o.action == "diagnose" {
+		return diagnose(ctx, fileRepository{o.stateDir}, personalstorage.NewKubernetesVault(client, namespace))
+	}
 	if o.action == "enroll" {
 		v, err := service.Enroll(ctx, owner)
 		if err != nil {
@@ -297,79 +302,129 @@ func run(ctx context.Context, o options) (string, error) {
 // diagnose performs no SFTP writes, list operations, binding updates or
 // authentication fallback. It uses only the existing fixed owner's Secret.
 func diagnose(ctx context.Context, repo fileRepository, vault *personalstorage.KubernetesVault) (string, error) {
-	fail := func(stage string, err error) (string, error) { return stage, &diagnosticFailure{class: diagnosticClass(err)} }
+	fail := func(stage string, err error) (string, error) {
+		return stage, &diagnosticFailure{class: diagnosticClass(err)}
+	}
 	b, err := repo.Get(ctx, ownerID)
-	if err != nil { return fail("diagnose-binding", err) }
+	if err != nil {
+		return fail("diagnose-binding", err)
+	}
 	credential, err := vault.Load(ctx, b)
-	if err != nil { return fail("diagnose-secret", err) }
+	if err != nil {
+		return fail("diagnose-secret", err)
+	}
 	signer, err := ssh.ParsePrivateKey(credential.PrivateKey)
-	if err != nil { return fail("diagnose-private-key", personalstorage.ErrConflict) }
+	if err != nil {
+		return fail("diagnose-private-key", personalstorage.ErrConflict)
+	}
 	if string(ssh.MarshalAuthorizedKey(signer.PublicKey())) != b.PublicKey || ssh.FingerprintSHA256(signer.PublicKey()) != b.Fingerprint {
 		return fail("diagnose-private-key", personalstorage.ErrConflict)
 	}
 	address := net.JoinHostPort(host, "22")
-	conn, err := (&net.Dialer{Timeout: 15*time.Second}).DialContext(ctx, "tcp", address)
-	if err != nil { return fail("diagnose-tcp", err) }
+	conn, err := (&net.Dialer{Timeout: 15 * time.Second}).DialContext(ctx, "tcp", address)
+	if err != nil {
+		return fail("diagnose-tcp", err)
+	}
 	defer conn.Close()
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
-	if err := conn.SetDeadline(time.Now().Add(30*time.Second)); err != nil { return fail("diagnose-deadline", err) }
+	if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		return fail("diagnose-deadline", err)
+	}
 	emit(map[string]any{"ok": true, "stage": "diagnose-tcp"})
-	sshConfig := &ssh.ClientConfig{User: username, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyAlgorithms: []string{ssh.KeyAlgoED25519}, Timeout: 15*time.Second, HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+	sshConfig := &ssh.ClientConfig{User: username, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyAlgorithms: []string{ssh.KeyAlgoED25519}, Timeout: 15 * time.Second, HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
 		fingerprint := ssh.FingerprintSHA256(key)
 		matches := key.Type() == ssh.KeyAlgoED25519 && fingerprint == hostFingerprint
 		// SSH host-key metadata is public; no key material or private names.
 		emit(map[string]any{"stage": "diagnose-host-key", "algorithm": key.Type(), "fingerprint": fingerprint, "pinMatches": matches})
-		if !matches { return personalstorage.ErrForbidden }
+		if !matches {
+			return personalstorage.ErrForbidden
+		}
 		return nil
 	}}
 	sshConn, channels, requests, err := ssh.NewClientConn(conn, address, sshConfig)
-	if err != nil { return fail("diagnose-ssh-publickey", err) }
+	if err != nil {
+		return fail("diagnose-ssh-publickey", err)
+	}
 	sshClient := ssh.NewClient(sshConn, channels, requests)
 	defer sshClient.Close()
 	emit(map[string]any{"ok": true, "stage": "diagnose-ssh-publickey"})
 	session, err := sshClient.NewSession()
-	if err != nil { return fail("diagnose-session", err) }
+	if err != nil {
+		return fail("diagnose-session", err)
+	}
 	defer session.Close()
 	stdin, err := session.StdinPipe()
-	if err != nil { return fail("diagnose-stdin", err) }
+	if err != nil {
+		return fail("diagnose-stdin", err)
+	}
 	stdout, err := session.StdoutPipe()
-	if err != nil { return fail("diagnose-stdout", err) }
-	if err := session.RequestSubsystem("sftp"); err != nil { return fail("diagnose-sftp-subsystem", err) }
+	if err != nil {
+		return fail("diagnose-stdout", err)
+	}
+	if err := session.RequestSubsystem("sftp"); err != nil {
+		return fail("diagnose-sftp-subsystem", err)
+	}
 	emit(map[string]any{"ok": true, "stage": "diagnose-sftp-subsystem"})
 	client, err := sftp.NewClientPipe(stdout, stdin)
-	if err != nil { return fail("diagnose-sftp-initialize", err) }
+	if err != nil {
+		return fail("diagnose-sftp-initialize", err)
+	}
 	defer client.Close()
 	info, err := client.Lstat("/")
-	if err != nil { return fail("diagnose-root-lstat", err) }
+	if err != nil {
+		return fail("diagnose-root-lstat", err)
+	}
 	emit(map[string]any{"ok": true, "stage": "diagnose-root-lstat", "isDir": info.IsDir(), "isSymlink": info.Mode()&os.ModeSymlink != 0})
 	resolved, err := client.RealPath("/")
-	if err != nil { return fail("diagnose-root-realpath", err) }
+	if err != nil {
+		return fail("diagnose-root-realpath", err)
+	}
 	emit(map[string]any{"ok": true, "stage": "diagnose-root-realpath", "realPathEqualsRoot": resolved == "/"})
 	return "", nil
 }
 
 func diagnosticClass(err error) string {
-	if errors.Is(err, context.DeadlineExceeded) { return "timeout" }
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
 	var network net.Error
-	if errors.As(err, &network) && network.Timeout() { return "timeout" }
-	if errors.Is(err, io.EOF) { return "connection_closed" }
-	if errors.Is(err, personalstorage.ErrConflict) { return "credential_conflict" }
-	if errors.Is(err, personalstorage.ErrForbidden) { return "host_key_mismatch" }
-	if errors.Is(err, personalstorage.ErrNotFound) { return "not_found" }
+	if errors.As(err, &network) && network.Timeout() {
+		return "timeout"
+	}
+	if errors.Is(err, io.EOF) {
+		return "connection_closed"
+	}
+	if errors.Is(err, personalstorage.ErrConflict) {
+		return "credential_conflict"
+	}
+	if errors.Is(err, personalstorage.ErrForbidden) {
+		return "host_key_mismatch"
+	}
+	if errors.Is(err, personalstorage.ErrNotFound) {
+		return "not_found"
+	}
 	var status *sftp.StatusError
 	if errors.As(err, &status) {
 		switch status.Code {
-		case 2: return "not_found"
-		case 3: return "permission_denied"
-		case 8: return "operation_unsupported"
-		default: return "sftp_failure"
+		case 2:
+			return "not_found"
+		case 3:
+			return "permission_denied"
+		case 8:
+			return "operation_unsupported"
+		default:
+			return "sftp_failure"
 		}
 	}
 	// Client authentication errors are not exported as a typed error by x/crypto.
 	// Match only to select a fixed safe label; never output the original text.
-	if strings.Contains(err.Error(), "unable to authenticate") { return "publickey_authentication_failed" }
-	if strings.Contains(err.Error(), personalstorage.ErrForbidden.Error()) { return "host_key_mismatch" }
+	if strings.Contains(err.Error(), "unable to authenticate") {
+		return "publickey_authentication_failed"
+	}
+	if strings.Contains(err.Error(), personalstorage.ErrForbidden.Error()) {
+		return "host_key_mismatch"
+	}
 	return "transport_or_protocol_failure"
 }
 
@@ -439,13 +494,21 @@ func storeCheck(ctx context.Context, service *personalstorage.Service, keep bool
 	}
 	// Inspect names only in memory. Never log or persist the owner's entries.
 	rootEntries, err := store.List(ctx, "")
-	if err != nil { return "sftp-root-list", err }
+	if err != nil {
+		return "sftp-root-list", err
+	}
 	markerVisible, excludedHidden := false, true
 	for _, e := range rootEntries {
-		if e.Name == marker && e.IsDir() { markerVisible = true }
-		if excludedRoot(e.Name) { excludedHidden = false }
+		if e.Name == marker && e.IsDir() {
+			markerVisible = true
+		}
+		if excludedRoot(e.Name) {
+			excludedHidden = false
+		}
 	}
-	if !markerVisible || !excludedHidden { return "sftp-root-visibility", personalstorage.ErrForbidden }
+	if !markerVisible || !excludedHidden {
+		return "sftp-root-visibility", personalstorage.ErrForbidden
+	}
 	if err := store.Mkdir(ctx, marker+"/child"); err != nil {
 		return "sftp-mkdir", err
 	}
@@ -602,13 +665,21 @@ func mountCheck(ctx context.Context, service *personalstorage.Service, keep bool
 	}
 	// Exercise a genuine mounted-root readdir without exposing private names.
 	rootEntries, err := os.ReadDir(target)
-	if err != nil { return "fuse-root-readdir", err }
+	if err != nil {
+		return "fuse-root-readdir", err
+	}
 	markerVisible, excludedHidden := false, true
 	for _, e := range rootEntries {
-		if e.Name() == marker && e.IsDir() { markerVisible = true }
-		if excludedRoot(e.Name()) { excludedHidden = false }
+		if e.Name() == marker && e.IsDir() {
+			markerVisible = true
+		}
+		if excludedRoot(e.Name()) {
+			excludedHidden = false
+		}
 	}
-	if !markerVisible || !excludedHidden { return "fuse-root-visibility", personalstorage.ErrForbidden }
+	if !markerVisible || !excludedHidden {
+		return "fuse-root-visibility", personalstorage.ErrForbidden
+	}
 	if err := os.Mkdir(filepath.Join(dir, "child"), 0700); err != nil {
 		return "fuse-mkdir", err
 	}

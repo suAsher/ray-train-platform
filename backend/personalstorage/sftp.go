@@ -19,8 +19,8 @@ import (
 )
 
 type sftpFactory struct {
-	address string
-	keys    []ssh.PublicKey
+	address           string
+	keys              []ssh.PublicKey
 	hostKeyAlgorithms []string
 }
 

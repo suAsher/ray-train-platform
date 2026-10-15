@@ -4,8 +4,8 @@ package testfixture
 
 import (
 	"bytes"
-	"crypto/ed25519"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"

@@ -2,8 +2,8 @@ package personalstorage_test
 
 import (
 	"context"
-	"crypto/ecdsa"
 	"crypto/dsa"
+	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/pem"
