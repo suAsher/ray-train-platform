@@ -29,5 +29,5 @@ func (h *Handler) getJobSchedulingCapacity(c *gin.Context) {
 			UnavailableReason: "not_applicable", Fit: domain.SchedulingCapacityFit{Reason: "not_applicable"},
 		}
 	}
-	h.writeSuccess(c, http.StatusOK, capacity)
+	h.writeSuccess(c, http.StatusOK, schedulingCapacityResponse(*capacity))
 }

@@ -47,7 +47,7 @@ func (h *Handler) getJobDiagnosis(c *gin.Context) {
 	provider, available := h.logs.(diagnosisLogProvider)
 	if !available {
 		base.Coverage.LogUnavailable = true
-		h.writeSuccess(c, http.StatusOK, observability.AnalyzeDiagnosis(base, nil, nil, nil))
+		h.writeDiagnosisSuccess(c, observability.AnalyzeDiagnosis(base, nil, nil, nil))
 		return
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
@@ -55,13 +55,21 @@ func (h *Handler) getJobDiagnosis(c *gin.Context) {
 	candidates, err := provider.QueryJobDiagnosisCandidates(ctx, job.ID, observability.DiagnosisCandidateLimit, start, end)
 	if err != nil {
 		base.Coverage.LogUnavailable = true
-		h.writeSuccess(c, http.StatusOK, observability.AnalyzeDiagnosis(base, nil, nil, nil))
+		h.writeDiagnosisSuccess(c, observability.AnalyzeDiagnosis(base, nil, nil, nil))
 		return
 	}
 	diagnosis := observability.AnalyzeDiagnosis(base, candidates, nil, nil)
 	diagnosis, completions, followups := h.queryDiagnosisSupplement(ctx, diagnosis)
 	diagnosis = observability.AnalyzeDiagnosis(diagnosis, candidates, completions, followups)
 	diagnosis = h.queryDiagnosisContext(ctx, diagnosis)
+	h.writeDiagnosisSuccess(c, diagnosis)
+}
+
+func (h *Handler) writeDiagnosisSuccess(c *gin.Context, diagnosis observability.JobDiagnosis) {
+	if diagnosis.SchedulingCapacity != nil {
+		capacity := schedulingCapacityResponse(*diagnosis.SchedulingCapacity)
+		diagnosis.SchedulingCapacity = &capacity
+	}
 	h.writeSuccess(c, http.StatusOK, diagnosis)
 }
 

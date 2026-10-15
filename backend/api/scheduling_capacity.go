@@ -34,7 +34,16 @@ func (h *Handler) currentSchedulingCapacity(c *gin.Context) {
 	if !principal.HasRole(domain.RoleSuperAdmin) {
 		capacity.Nodes = nil
 	}
-	h.writeSuccess(c, http.StatusOK, capacity)
+	h.writeSuccess(c, http.StatusOK, schedulingCapacityResponse(capacity))
+}
+
+// Stamp a copy at the response boundary so clients can age the observation
+// without their wall clock. Collector snapshots retain ObservedAt and do not
+// acquire response-specific metadata.
+func schedulingCapacityResponse(capacity domain.SchedulingCapacity) domain.SchedulingCapacity {
+	serverTime := time.Now().UTC()
+	capacity.ServerTime = &serverTime
+	return capacity
 }
 
 func parseSchedulingCapacityShape(c *gin.Context) (domain.Resources, error) {

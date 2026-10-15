@@ -117,3 +117,17 @@ func assertCapacityServerTime(t *testing.T, started time.Time, response *httptes
 		t.Fatalf("serverTime must be UTC: %s", serverTime)
 	}
 }
+
+func TestSchedulingCapacityResponsePreservesCachedObservation(t *testing.T) {
+	observedAt := time.Now().UTC().Add(-2 * time.Minute)
+	previousResponseTime := observedAt.Add(time.Second)
+	snapshot := domain.SchedulingCapacity{ObservedAt: observedAt, ServerTime: &previousResponseTime, Available: true}
+	started := time.Now().UTC()
+	response := schedulingCapacityResponse(snapshot)
+	if response.ServerTime == nil || response.ServerTime.Before(started) || response.ServerTime.After(time.Now().UTC()) {
+		t.Fatalf("response clock was not refreshed: %+v", response)
+	}
+	if !response.ObservedAt.Equal(observedAt) || !snapshot.ObservedAt.Equal(observedAt) || !snapshot.ServerTime.Equal(previousResponseTime) || response.ServerTime == snapshot.ServerTime {
+		t.Fatal("response stamping must not freshen or mutate a cached observation")
+	}
+}

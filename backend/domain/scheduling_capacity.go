@@ -4,8 +4,10 @@ import "time"
 
 // SchedulingCapacity is a point-in-time observation, not an admission promise.
 // Available=false means callers must show unknown instead of interpreting zeros.
+// ServerTime is optional response metadata, never the collection timestamp.
 type SchedulingCapacity struct {
 	ObservedAt        time.Time                `json:"observedAt"`
+	ServerTime        *time.Time               `json:"serverTime,omitempty"`
 	AcceleratorClass  string                   `json:"acceleratorClass"`
 	Available         bool                     `json:"available"`
 	UnavailableReason string                   `json:"unavailableReason,omitempty"`

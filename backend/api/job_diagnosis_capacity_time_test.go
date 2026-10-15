@@ -58,3 +58,13 @@ func TestJobDiagnosisCapacityClockIsStampedAfterLogQuery(t *testing.T) {
 		})
 	}
 }
+
+func TestJobSchedulingCapacityDoesNotStampInternalObservation(t *testing.T) {
+	job := diagnosisTestJob()
+	job.ObservedState = domain.StateQueued
+	h := NewHandler(&fakeJobRepository{}, Options{})
+	capacity := h.jobSchedulingCapacity(context.Background(), job)
+	if capacity == nil || capacity.ServerTime != nil {
+		t.Fatalf("only HTTP responses may stamp a server clock: %+v", capacity)
+	}
+}
