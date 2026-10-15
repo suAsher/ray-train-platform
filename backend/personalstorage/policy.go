@@ -28,7 +28,11 @@ func ValidatePath(p string) (string, error) {
 			return "", ErrInvalid
 		}
 	}
-	if parts[0] == ".shared" || parts[0] == ".spiking-group-shared" {
+	// Wellspiking exposes virtual/shared and internal entries at the account
+	// root. Exclude only these exact root names; private hidden files and
+	// same-named directories inside a private subtree remain valid.
+	switch parts[0] {
+	case ".minio", ".original", ".wellspiking", ".spk-hybrid", ".spk-ssd", ".shared", ".spiking-group-shared":
 		return "", ErrInvalid
 	}
 	if path.Clean(p) != p {

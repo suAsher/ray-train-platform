@@ -16,13 +16,17 @@ ls -la /mnt/storage/wellspiking
 
 当前运行环境保持原模板；本人下次停止并新建环境时才接入。连接状态和当前实例的挂载状态独立显示。已绑定但尚未验证、凭据异常或驱动未就绪时，新建环境会明确失败，不使用本地空目录冒充远端数据。
 
-既有 `/workspace`、`/mnt/storage/me`、只读 `/mnt/.wellspiking` 各自保持原用途。个人根的 `.shared` 和 `.spiking-group-shared` 不在新视图中公开。
+既有 `/workspace`、`/mnt/storage/me`、只读 `/mnt/.wellspiking` 各自保持原用途。
+
+Wellspiking 账号根下的已知虚拟、共享或内部入口 `.minio`、`.original`、`.wellspiking`、`.spk-hybrid`、`.spk-ssd`、`.shared`、`.spiking-group-shared` 不在个人视图中显示，也不能通过此适配器直接读写。网页与调试挂载共用这条路径策略。排除仅针对这些精确的根层名称；本人的 `.config`、`.private.txt` 等隐藏文件，以及私人子目录中同名的普通目录仍可使用。上游增加新虚拟入口时，需要重新核对用途和访问边界，不能把所有点开头的文件都当作系统入口。
 
 ## 部署前提
 
 功能及 CSI 默认为关闭。启用包含数据库迁移 0059、后端镜像和新增可信 CSI 节点组件，必须作为单独的存储发布审阅；开发验证通过不表示生产已启用。
 
-启用前取得上游的实际权限证据：本人账号只能进入本人根，不能通过其他路径、链接或共享入口访问其他个人目录。SFTPv3 的客户端检查无法证明已有硬链接来源，也无法消除其他原生客户端替换路径的竞态。平台拒绝观察到的符号链接、特殊文件、路径穿越及共享入口，并禁止创建链接；这些检查不能代替上游账户隔离。`personalRootIsolationVerified` 是操作人员完成验证后的显式确认，不能凭该布尔值宣称已验证。
+启用前取得上游的实际权限证据：本人账号只能进入本人根，不能通过其他路径、链接或共享入口访问其他个人目录。SFTPv3 的客户端检查无法证明已有硬链接来源，也无法消除其他原生客户端替换路径的竞态。平台拒绝观察到的符号链接、特殊文件、路径穿越及上述已知根入口，并禁止创建链接；这些检查不能代替上游账户隔离。`personalRootIsolationVerified` 是操作人员完成验证后的显式确认，不能凭该布尔值宣称已验证。
+
+目录名称过滤不会改变上游账号或密钥的实际权限，也不构成上游 jail。将专用公钥登记到现有 Wellspiking 账号后，它仍继承该账号的有效权限；仅看到个人视图已经隐藏上述入口，不能据此将 `personalRootIsolationVerified` 设为真。启用前还须核对脱敏的有效 home、存储后端范围、组继承、虚拟目录与权限配置，并用获准的两个测试账户验证彼此专建标记不可访问。
 
 需核对合规区固定上游地址、端口与已验证的 SSH 主机公钥，准备只包含该主机公钥的 `known_hosts` Secret。禁止首次自动信任。确认编辑器可调度节点上的 CSI 注册、FUSE 挂载权限及网络连通性，后台使用的 CSI 镜像与节点组件必须为同一个摘要。
 
@@ -51,6 +55,6 @@ ls -la /mnt/storage/wellspiking
 
 ## 验证边界
 
-构建机夹具验证独立 SSH 密钥、两个独立 SFTP 根、实际内核 FUSE 的 `ls` 和读写、重命名删除、断线失败及卸载重建。夹具采用真实 SSH/SFTP 协议的独立测试服务，不是生产 Wellspiking 账号权限证明。生产另需本人登记公钥、上游隔离、合规区网络及实际调试实例验证。
+构建机夹具验证独立 SSH 密钥、两个独立 SFTP 根、实际内核 FUSE 的 `ls` 和读写、重命名删除、断线失败及卸载重建。夹具采用真实 SSH/SFTP 协议的独立测试服务，不是生产 Wellspiking 账号权限证明。生产另需本人登记公钥、上游隔离、合规区网络及实际调试实例验证。单个真实本人账号的浏览和挂载成功，只能证明该账号的功能连通；它不能替代上游配置证明或真实双账户隔离验证。
 
 参考：[存储概念](https://docs.wellspiking.ai/begin/storage/concepts.html)、[Linux 挂载](https://docs.wellspiking.ai/begin/storage/mount_linux.html)、[CSI 凭据传递](https://kubernetes-csi.github.io/docs/secrets-and-credentials.html)。
