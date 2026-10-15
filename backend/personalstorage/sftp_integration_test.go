@@ -307,3 +307,50 @@ func TestPersonalStorageRealSFTPFiltersUpstreamVirtualRoots(t *testing.T) {
 		t.Fatalf("private nested entry rejected: count=%d error=%v", len(nested), err)
 	}
 }
+
+func TestPersonalStorageHostKeyNegotiationUsesOnlyTrustedPinAlgorithms(t *testing.T) {
+	fixture, err := testfixture.StartWithECDSAHostKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fixture.Close()
+	_, _, pinned, _, _, err := ssh.ParseKnownHosts(fixture.Endpoint.KnownHosts)
+	if err != nil || pinned.Type() != ssh.KeyAlgoED25519 {
+		t.Fatal("fixture must pin only Ed25519 while also offering ECDSA")
+	}
+	t.Run("wrong Ed25519 pin remains rejected", func(t *testing.T) {
+		other, err := testfixture.Start()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer other.Close()
+		_, _, wrongKey, _, _, err := ssh.ParseKnownHosts(other.Endpoint.KnownHosts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		endpoint := fixture.Endpoint
+		endpoint.KnownHosts = []byte(knownhosts.Line([]string{net.JoinHostPort(endpoint.Host, strconv.Itoa(endpoint.Port))}, wrongKey) + "\n")
+		factory, err := ps.NewSFTPFactory(endpoint)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if store, err := factory.Open(context.Background(), fixture.Credentials[0]); err == nil {
+			store.Close()
+			t.Fatal("incorrect pinned Ed25519 key accepted")
+		}
+	})
+	t.Run("trusted Ed25519 negotiates successfully", func(t *testing.T) {
+		factory, err := ps.NewSFTPFactory(fixture.Endpoint)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store, err := factory.Open(context.Background(), fixture.Credentials[0])
+		if err != nil {
+			t.Fatalf("server offering ECDSA and Ed25519 rejected trusted Ed25519 pin: %v", err)
+		}
+		defer store.Close()
+		if _, err := store.Stat(context.Background(), ""); err != nil {
+			t.Fatal(err)
+		}
+	})
+}

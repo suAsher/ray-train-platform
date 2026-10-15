@@ -5,6 +5,8 @@ package testfixture
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/pem"
 	"errors"
@@ -28,6 +30,24 @@ type Fixture struct {
 }
 
 func Start() (*Fixture, error) {
+	return start(nil)
+}
+
+// StartWithECDSAHostKey offers ECDSA and Ed25519, while the trusted endpoint pin
+// contains only Ed25519. This mirrors servers supporting multiple host keys.
+func StartWithECDSAHostKey() (*Fixture, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	signer, err := ssh.NewSignerFromKey(key)
+	if err != nil {
+		return nil, err
+	}
+	return start([]ssh.Signer{signer})
+}
+
+func start(additionalHostKeys []ssh.Signer) (*Fixture, error) {
 	_, hostKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, err
@@ -66,6 +86,9 @@ func Start() (*Fixture, error) {
 		}
 		return nil, errors.New("fixture authentication denied")
 	}}
+	for _, additional := range additionalHostKeys {
+		config.AddHostKey(additional)
+	}
 	config.AddHostKey(host)
 	go func() {
 		for {
