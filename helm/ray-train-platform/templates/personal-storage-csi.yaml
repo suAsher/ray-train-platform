@@ -1,0 +1,154 @@
+{{- $personal := default (dict) .Values.personalStorage -}}
+{{- $csi := default (dict) $personal.csi -}}
+{{- if (default false $csi.enabled) -}}
+{{- if not (default false $personal.enabled) }}{{ fail "personalStorage.enabled is required for the CSI node driver" }}{{ end -}}
+{{- if or (ne (default "" $personal.host) "mount.wellspiking.ai") (ne (int (default 22 $personal.port)) 22) }}{{ fail "personal CSI supports only mount.wellspiking.ai:22" }}{{ end -}}
+{{- $image := default (dict) $csi.image -}}
+{{- if not (regexMatch `^sha256:[0-9a-f]{64}$` (default "" $image.digest)) }}{{ fail "personalStorage.csi.image.digest must be an actual sha256 digest" }}{{ end -}}
+{{- if not (regexMatch `^.+@sha256:[0-9a-f]{64}$` (default "" $csi.registrarImage)) }}{{ fail "personalStorage.csi.registrarImage must be pinned by actual sha256 digest" }}{{ end -}}
+{{- $knownHosts := required "personalStorage.existingKnownHostsSecret is required" $personal.existingKnownHostsSecret -}}
+{{- $kubeletRoot := default "/var/lib/kubelet" $csi.kubeletRoot -}}
+{{- if not (regexMatch `^/[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)*$` $kubeletRoot) }}{{ fail "personalStorage.csi.kubeletRoot must be a trusted absolute host directory" }}{{ end -}}
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: personalstorage.wellspiking.ai
+spec:
+  attachRequired: false
+  podInfoOnMount: false
+  fsGroupPolicy: None
+  volumeLifecycleModes: [Persistent]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: personal-storage-csi
+  namespace: {{ .Values.namespace }}
+automountServiceAccountToken: false
+{{- with .Values.global.imagePullSecrets }}
+imagePullSecrets:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: personal-storage-csi
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: personal-storage-csi
+spec:
+  selector:
+    matchLabels:
+      app: personal-storage-csi
+  updateStrategy:
+    type: OnDelete
+  template:
+    metadata:
+      labels:
+        app: personal-storage-csi
+    spec:
+      serviceAccountName: personal-storage-csi
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      nodeSelector:
+        kubernetes.io/os: linux
+        {{- with $csi.nodeSelector }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node.kubernetes.io/instance-type
+                    operator: NotIn
+                    values: ["virtual-node"]
+                  - key: type
+                    operator: NotIn
+                    values: ["virtual-kubelet"]
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: personal-storage-csi
+          image: {{ include "ray-train-platform.image" (list . $image) | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          args:
+            - --socket=/csi/csi.sock
+            - --kubelet-root={{ $kubeletRoot }}
+            - --known-hosts=/etc/personal-storage/known_hosts
+          env:
+            - name: NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          # Node mounting is trusted infrastructure. No workload Pod receives
+          # these privileges, device, CSI socket, or private credentials.
+          securityContext:
+            privileged: true
+            runAsUser: 0
+            readOnlyRootFilesystem: true
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: "2", memory: 512Mi}
+          readinessProbe:
+            exec:
+              command: [/personal-storage-csi, --probe, --socket=/csi/csi.sock]
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          volumeMounts:
+            - name: plugin
+              mountPath: /csi
+            - name: kubelet
+              mountPath: {{ $kubeletRoot }}
+              mountPropagation: Bidirectional
+            - name: fuse
+              mountPath: /dev/fuse
+            - name: known-hosts
+              mountPath: /etc/personal-storage
+              readOnly: true
+        - name: node-driver-registrar
+          image: {{ $csi.registrarImage | quote }}
+          args:
+            - --csi-address=/csi/csi.sock
+            - --kubelet-registration-path={{ $kubeletRoot }}/plugins/personalstorage.wellspiking.ai/csi.sock
+          securityContext:
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 100m, memory: 64Mi}
+          volumeMounts:
+            - name: plugin
+              mountPath: /csi
+            - name: registration
+              mountPath: /registration
+      volumes:
+        - name: plugin
+          hostPath:
+            path: {{ $kubeletRoot }}/plugins/personalstorage.wellspiking.ai
+            type: DirectoryOrCreate
+        - name: registration
+          hostPath:
+            path: {{ $kubeletRoot }}/plugins_registry
+            type: DirectoryOrCreate
+        - name: kubelet
+          hostPath:
+            path: {{ $kubeletRoot }}
+            type: Directory
+        - name: fuse
+          hostPath:
+            path: /dev/fuse
+            type: CharDevice
+        - name: known-hosts
+          secret:
+            secretName: {{ $knownHosts | quote }}
+            defaultMode: 0444
+            items:
+              - key: {{ default "known_hosts" $personal.knownHostsKey | quote }}
+                path: known_hosts
+{{- end }}

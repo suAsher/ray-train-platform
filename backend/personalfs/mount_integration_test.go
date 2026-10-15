@@ -2,26 +2,25 @@ package personalfs
 
 import (
  "context"
- "encoding/json"
  "os"
  "path/filepath"
  "testing"
 
  "github.com/google/uuid"
  "ray-train-platform-backend/personalstorage"
+ "ray-train-platform-backend/personalstorage/testfixture"
 )
 
-// This fixture is created on the builder only: two independently chrooted SFTP
-// accounts, a pinned host key, and private keys in a mode-0600 transient file.
-// No credentials appear in test output or process arguments. Skipping this test
-// is not evidence that real FUSE/SFTP isolation was verified.
+// The builder creates two separate server-enforced roots over real SSH/SFTP.
+// Keys stay in memory. Skipping this test is not FUSE isolation evidence.
 func TestPersonalStorageRealFUSEIsolation(t *testing.T) {
- fixturePath:=os.Getenv("PERSONAL_STORAGE_FIXTURE_FILE")
- if fixturePath=="" { t.Skip("requires builder /dev/fuse and two isolated SFTP fixture accounts") }
- raw,err:=os.ReadFile(fixturePath);if err!=nil { t.Fatal("cannot read FUSE fixture") }
- var fixture struct { Endpoint personalstorage.Endpoint; Credentials []personalstorage.Credential }
- if json.Unmarshal(raw,&fixture)!=nil || len(fixture.Credentials)!=2 { t.Fatal("invalid two-account FUSE fixture") }
- if fixture.Endpoint.Host!="127.0.0.1" && fixture.Endpoint.Host!="localhost" { t.Fatal("FUSE fixture must be builder loopback") }
+ if os.Getenv("PERSONAL_STORAGE_FUSE_TEST")!="1" { t.Skip("requires explicit builder FUSE integration gate") }
+ fixture,err:=testfixture.Start();if err!=nil { t.Fatal("cannot start isolated SSH/SFTP fixture") };defer fixture.Close()
+ for i:=range fixture.Credentials {
+  raw,err:=fixture.RawClient(i);if err!=nil { t.Fatal("cannot seed isolated fixture") }
+  for _,name:=range []string{".shared",".spiking-group-shared"} { if err:=raw.Mkdir("/"+name);err!=nil { t.Fatal("cannot seed shared fixture") } }
+  if err:=raw.Symlink("/.shared","/escape");err!=nil { t.Fatal("cannot seed escape fixture") };raw.Close()
+ }
  factory,err:=personalstorage.NewSFTPFactory(fixture.Endpoint);if err!=nil { t.Fatal("invalid pinned fixture endpoint") }
  ctx,cancel:=context.WithCancel(context.Background());defer cancel()
  stores:=make([]personalstorage.Store,2)
@@ -34,15 +33,6 @@ func TestPersonalStorageRealFUSEIsolation(t *testing.T) {
   defer mounts[i].Close()
  }
  names:=[]string{"rt-a-"+uuid.NewString(),"rt-b-"+uuid.NewString()}
- t.Cleanup(func(){
-  for i,name:=range names {
-   store,err:=factory.Open(context.Background(),fixture.Credentials[i]);if err!=nil { t.Error("fixture cleanup connection failed");continue }
-   for _,marker:=range []string{name+"-dir/old",name+"-dir/new",name+"-dir",name+"-link",name+"-hardlink",name} {
-    if err:=store.Remove(context.Background(),marker);err!=nil && !os.IsNotExist(err) { t.Error("fixture marker cleanup failed") }
-   }
-   store.Close()
-  }
- })
  for i:=range stores {
   if err=os.WriteFile(filepath.Join(targets[i],names[i]),[]byte("owner-private"),0600);err!=nil { t.Fatalf("write owner %d: %v",i,err) }
   if _,err=os.Stat(filepath.Join(targets[1-i],names[i]));!os.IsNotExist(err) { t.Fatalf("foreign owner file visible: %v",err) }
