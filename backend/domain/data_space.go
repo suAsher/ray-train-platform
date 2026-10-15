@@ -17,7 +17,8 @@ type DataSpaceID string
 const MaxDataSpaceUploadBytes int64 = DataSpaceMultipartThresholdBytes
 
 const (
-	DataSpaceWorkspace      DataSpaceID = "workspace"
+	DataSpaceWellspikingPersonal DataSpaceID = "wellspiking-personal"
+ DataSpaceWorkspace      DataSpaceID = "workspace"
 	DataSpaceMyStorage      DataSpaceID = "my-storage"
 	DataSpaceMyFiles        DataSpaceID = "my-files"
 	DataSpaceMyRuns         DataSpaceID = "my-runs"
@@ -36,7 +37,9 @@ const (
 )
 
 const (
-	WorkspaceMountPath      = "/workspace"
+	WellspikingPersonalMountPath = "/mnt/storage/wellspiking"
+ StorageProviderSFTP = "sftp"
+ WorkspaceMountPath      = "/workspace"
 	MyStorageMountPath      = "/mnt/storage/me"
 	MyFilesMountPath        = MyStorageMountPath + "/files"
 	TeamStorageMountPath    = "/mnt/storage/team"
@@ -261,7 +264,7 @@ func FindDataSpace(spaces []DataSpace, id DataSpaceID) (DataSpace, bool) {
 
 func IsKnownDataSpace(id DataSpaceID) bool {
 	for _, candidate := range []DataSpaceID{
-		DataSpaceWorkspace, DataSpaceMyStorage, DataSpaceMyFiles, DataSpaceMyRuns, DataSpaceTeamShared, DataSpacePublic,
+		DataSpaceWellspikingPersonal, DataSpaceWorkspace, DataSpaceMyStorage, DataSpaceMyFiles, DataSpaceMyRuns, DataSpaceTeamShared, DataSpacePublic,
 		DataSpaceIDCOriginal, DataSpaceIDCWellspiking, DataSpaceIDCShared, DataSpaceIDCSPKHybrid, DataSpaceIDCSPKSSD,
 	} {
 		if id == candidate {

@@ -4,6 +4,7 @@ import (
  "bufio"
  "context"
  "errors"
+ "io"
  "os"
  "strings"
  "sync"
@@ -23,14 +24,17 @@ func(m *FuseMounter)Mount(ctx context.Context,target,id string,store personalsto
 func unescapeMount(s string)string{return strings.NewReplacer(`\040`," ",`\011`,"\t",`\012`,"\n",`\134`,"\\").Replace(s)}
 func(m *FuseMounter)Inspect(target string)(string,bool,error) {
  file,err:=os.Open("/proc/self/mountinfo");if err!=nil{return "",false,err};defer file.Close()
- scanner:=bufio.NewScanner(file);scanner.Buffer(make([]byte,4096),1024*1024)
+ return inspectMountInfo(file,target)
+}
+func inspectMountInfo(reader io.Reader,target string)(string,bool,error) {
+ scanner:=bufio.NewScanner(reader);scanner.Buffer(make([]byte,4096),1024*1024)
  for scanner.Scan() {
   fields:=strings.Fields(scanner.Text());if len(fields)<10||unescapeMount(fields[4])!=target{continue}
   separator:=-1;for i,field:=range fields {if field=="-"{separator=i;break}}
   if separator<0||len(fields)<separator+4{return "",true,errors.New("malformed mount metadata")}
   if fields[separator+1]!="fuse.wellspiking"||!strings.HasPrefix(fields[separator+2],"personalstorage:personal-"){return "foreign",true,nil}
   id:=strings.TrimPrefix(fields[separator+2],"personalstorage:")
-  if len(id)!=49{return "foreign",true,nil}
+  if !volumeHandle.MatchString(id){return "foreign",true,nil}
   return id,true,nil
  }
  return "",false,scanner.Err()

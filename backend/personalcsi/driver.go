@@ -25,6 +25,7 @@ const DriverName="personalstorage.wellspiking.ai"
 var token=regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
 var podUID=regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 var dnsName=regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`)
+var volumeHandle=regexp.MustCompile(`^personal-[0-9a-f]{40}$`)
 func VolumeID(owner,binding,namespace string,generation int64)string {
  sum:=sha256.Sum256([]byte(owner+"\x00"+binding+"\x00"+namespace+"\x00"+strconv.FormatInt(generation,10)))
  return fmt.Sprintf("personal-%x",sum[:20])
@@ -59,14 +60,14 @@ func credential(r *csi.NodePublishVolumeRequest)(personalstorage.Credential,erro
  for _,key:=range []string{"ownerID","bindingID","username","generation"} {
   if a[key]==""||a[key]!=s[key]{return personalstorage.Credential{},status.Error(codes.PermissionDenied,"personal volume credential identity mismatch")}
  }
- if !token.MatchString(a["ownerID"])||!token.MatchString(a["bindingID"])||!token.MatchString(a["username"])||len(a["namespace"])>63||!dnsName.MatchString(a["namespace"]){return personalstorage.Credential{},status.Error(codes.PermissionDenied,"invalid personal volume identity")}
+ if personalstorage.ValidateOwner(personalstorage.Owner{ID:a["ownerID"],Username:a["username"]})!=nil||!token.MatchString(a["bindingID"])||len(a["namespace"])>63||!dnsName.MatchString(a["namespace"]){return personalstorage.Credential{},status.Error(codes.PermissionDenied,"invalid personal volume identity")}
  generation,err:=strconv.ParseInt(a["generation"],10,64)
  if err!=nil||generation!=1||strconv.FormatInt(generation,10)!=a["generation"]||len(s["privateKey"])==0||len(s["privateKey"])>16384{return personalstorage.Credential{},status.Error(codes.PermissionDenied,"invalid personal volume credential")}
  if r.VolumeId!=VolumeID(a["ownerID"],a["bindingID"],a["namespace"],generation){return personalstorage.Credential{},status.Error(codes.PermissionDenied,"personal volume identity mismatch")}
  for key:=range a {if key!="ownerID"&&key!="bindingID"&&key!="username"&&key!="generation"&&key!="namespace" {return personalstorage.Credential{},status.Error(codes.PermissionDenied,"unexpected personal volume attribute")}}
  return personalstorage.Credential{OwnerID:a["ownerID"],BindingID:a["bindingID"],Username:a["username"],Generation:generation,PrivateKey:[]byte(s["privateKey"])},nil
 }
-func(d *Driver)validateTarget(target string)error {
+func(d *Driver)validateTarget(target string,allowMissing bool)error {
  root:=d.kubeletRoot
  if !filepath.IsAbs(root)||filepath.Clean(root)!=root||!filepath.IsAbs(target)||filepath.Clean(target)!=target{return status.Error(codes.InvalidArgument,"invalid kubelet publish target")}
  relative,err:=filepath.Rel(root,target);if err!=nil{return status.Error(codes.InvalidArgument,"invalid kubelet publish target")}
@@ -77,6 +78,7 @@ func(d *Driver)validateTarget(target string)error {
  // The target itself may already be the synthetic uid1000 mounted root.
  for i:=0;i<len(parts);i++ {
   info,err:=os.Lstat(current)
+  if os.IsNotExist(err)&&allowMissing&&i>0{return nil}
   if err!=nil||!info.IsDir()||info.Mode()&os.ModeSymlink!=0||info.Mode().Perm()&0022!=0{return status.Error(codes.InvalidArgument,"untrusted kubelet target ancestry")}
   stat,ok:=info.Sys().(*syscall.Stat_t);if !ok||stat.Uid!=0{return status.Error(codes.InvalidArgument,"kubelet target ancestry must be root owned")}
   current=filepath.Join(current,parts[i])
@@ -92,7 +94,7 @@ func validateCapability(r *csi.NodePublishVolumeRequest)error {
 }
 func(d *Driver)NodePublishVolume(ctx context.Context,r *csi.NodePublishVolumeRequest)(*csi.NodePublishVolumeResponse,error) {
  if r==nil{return nil,status.Error(codes.InvalidArgument,"missing publish request")}
- c,err:=credential(r);if err!=nil{return nil,err};if err=validateCapability(r);err!=nil{return nil,err};if err=d.validateTarget(r.TargetPath);err!=nil{return nil,err}
+ c,err:=credential(r);if err!=nil{return nil,err};if err=validateCapability(r);err!=nil{return nil,err};if err=d.validateTarget(r.TargetPath,false);err!=nil{return nil,err}
  d.mu.Lock();defer d.mu.Unlock()
  actual,mounted,err:=d.mounter.Inspect(r.TargetPath);if err!=nil{return nil,status.Error(codes.Internal,"cannot inspect personal mount")}
  key:=sha256.Sum256(c.PrivateKey)
@@ -118,9 +120,10 @@ func(d *Driver)NodePublishVolume(ctx context.Context,r *csi.NodePublishVolumeReq
  return &csi.NodePublishVolumeResponse{},nil
 }
 func(d *Driver)NodeUnpublishVolume(_ context.Context,r *csi.NodeUnpublishVolumeRequest)(*csi.NodeUnpublishVolumeResponse,error) {
- if r==nil||r.VolumeId==""{return nil,status.Error(codes.InvalidArgument,"missing volume identity")};if err:=d.validateTarget(r.TargetPath);err!=nil{return nil,err}
+ if r==nil||!volumeHandle.MatchString(r.VolumeId){return nil,status.Error(codes.InvalidArgument,"invalid volume identity")};if err:=d.validateTarget(r.TargetPath,true);err!=nil{return nil,err}
  d.mu.Lock();defer d.mu.Unlock()
  actual,mounted,err:=d.mounter.Inspect(r.TargetPath);if err!=nil{return nil,status.Error(codes.Internal,"cannot inspect personal mount")}
+ if !mounted {info,err:=os.Lstat(r.TargetPath);if err!=nil&&!os.IsNotExist(err){return nil,status.Error(codes.Internal,"cannot inspect personal target")};if err==nil&&(!info.IsDir()||info.Mode()&os.ModeSymlink!=0){return nil,status.Error(codes.InvalidArgument,"personal target is not a real directory")}}
  existing,tracked:=d.volumes[r.TargetPath]
  if (mounted&&actual!=r.VolumeId)||(tracked&&existing.volumeID!=r.VolumeId){return nil,status.Error(codes.FailedPrecondition,"refusing to unmount a foreign volume")}
  if mounted {if err=d.mounter.Unmount(r.TargetPath);err!=nil{return nil,status.Error(codes.Internal,"personal filesystem unmount failed")}}

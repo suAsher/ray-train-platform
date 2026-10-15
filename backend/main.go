@@ -28,6 +28,7 @@ import (
 	"ray-train-platform-backend/httpapi"
 	"ray-train-platform-backend/idcsync"
 	"ray-train-platform-backend/k8s"
+ "ray-train-platform-backend/personalstorage"
 	"ray-train-platform-backend/mlflowtracking"
 	"ray-train-platform-backend/modellifecycle"
 	"ray-train-platform-backend/objectstore"
@@ -210,7 +211,19 @@ func main() {
 			jobOptions.TrackingArtifacts = trackingartifacts.New(repositories.NewTrackingArtifactStore(database), tosStore.TrackingArtifacts())
 		}
 	}
-	jobHandler := api.NewHandler(repository, jobOptions)
+	if cfg.PersonalStorage.Enabled {
+ knownHosts, readErr := os.ReadFile(cfg.PersonalStorage.KnownHostsFile)
+ if readErr != nil { log.Fatalf("read pinned personal storage host keys: %v",readErr) }
+ factory, factoryErr := personalstorage.NewSFTPFactory(personalstorage.Endpoint{Host:cfg.PersonalStorage.Host,Port:cfg.PersonalStorage.Port,KnownHosts:knownHosts})
+ if factoryErr != nil { log.Fatalf("initialize personal storage upstream: %v",factoryErr) }
+ vault, vaultErr := kubeClient.PersonalStorageVault(jobOptions.PlatformNamespace)
+ if vaultErr != nil { log.Fatalf("initialize personal storage vault: %v",vaultErr) }
+ jobOptions.PersonalStorage=personalstorage.NewService(repositories.NewPersonalStorageRepository(database),vault,factory)
+ jobOptions.PersonalStorageCSIImage=cfg.PersonalStorage.CSIImage
+ jobOptions.PersonalStorageMountCapacity=cfg.PersonalStorage.MountCapacity
+ jobOptions.PersonalStorageMaxUploadBytes=cfg.PersonalStorage.MaxUploadBytes
+ }
+ jobHandler := api.NewHandler(repository, jobOptions)
 	storageSyncMetadata, _ := directoryLister.(api.StorageSyncMetadataStore)
 	storageSyncManager, storageSyncHandler, err := newStorageSyncComponents(database, repository, kubeClient, cfg, storageSyncMetadata)
 	if err != nil {
@@ -301,7 +314,7 @@ func main() {
 		router.Use(cors.New(cors.Config{
 			AllowOrigins:     cfg.CORSOrigins,
 			AllowMethods:     []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions},
-			AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "Idempotency-Key", "X-Request-ID", "X-Part-SHA256"},
+			AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "Idempotency-Key", "X-Request-ID", "X-Part-SHA256", "X-RayTrain-Personal-Storage"},
 			ExposeHeaders:    []string{"X-Request-ID", "X-Trace-ID"},
 			AllowCredentials: true,
 		}))
@@ -310,7 +323,7 @@ func main() {
 	router.GET("/readyz", readinessHandler(database, kubeClient, cfg.AppEnv == "production"))
 	registerAPIRoutesWithLocalAuth(router, jobHandler, patHandler, sourceArtifactHandler, localAuthHandler, repository, validator, patAuthenticator, localSessionAuthenticator, kubeClient, rayHandler, cfg, environmentService)
 
-	server := &http.Server{Addr: cfg.HTTPAddr, Handler: router}
+	server := &http.Server{Addr: cfg.HTTPAddr, Handler: api.PersonalStorageHTTPHandler(router)}
 	shutdownDone := make(chan struct{})
 	go func() {
 		defer close(shutdownDone)
@@ -503,6 +516,7 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 		jobs.RegisterDatasetManagementRoutes(interactive)
 	}
 	jobs.RegisterDataSpaceRoutes(interactive)
+ jobs.RegisterPersonalStorageRoutes(interactive)
 	jobs.RegisterWorkspaceSnapshotRoutes(interactive)
 	jobs.RegisterGitCredentialRoutes(interactive)
 	oidcOnly.GET("/cluster/topology", clusterTopologyHandler(kubeClient))

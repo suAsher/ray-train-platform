@@ -14,6 +14,7 @@ import (
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
 	"ray-train-platform-backend/k8s"
+ "ray-train-platform-backend/personalstorage"
 	"ray-train-platform-backend/repositories"
 )
 
@@ -82,7 +83,12 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "WORKSPACE_IMAGE_REQUIRED", err.Error())
 		return
 	}
-	dataMounts, err := h.resolveWorkspaceDataMountPlan(c.Request.Context(), principal)
+	personalClaim, personalErr := h.resolveWorkspacePersonalStorage(c.Request.Context(), principal)
+ if personalErr != nil {
+ h.writeError(c,http.StatusConflict,"PERSONAL_STORAGE_MOUNT_NOT_READY","your Wellspiking personal directory is not ready; verify its connection and storage mount before starting a new workspace")
+ return
+ }
+ dataMounts, err := h.resolveWorkspaceDataMountPlan(c.Request.Context(), principal)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrSubmissionDataSpacesUnavailable):
@@ -154,7 +160,7 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 			return fail(http.StatusBadGateway, "WORKSPACE_RUNTIME_PREPARE_FAILED", "could not prepare the tenant workspace runtime", domain.WorkspaceFailed)
 		}
 		workerNodePreference := h.workspaceWorkerNodePreference(ctx, *locked, accelerator, nodeSelector)
-		manifest, err := k8s.RenderDevRayCluster(*locked, k8s.WorkspaceRenderOptions{WorkerNodeAffinityPreference: workerNodePreference, NodeSelector: nodeSelector, DedicatedNodes: h.trainingDedicatedNodes, Image: image.Reference, RayVersion: image.RayVersion, ServiceAccount: h.serviceAccount, ImagePullSecrets: h.imagePullSecrets, IDCExistingClaim: h.idcClaim, IDCMountPath: h.idcMountPath, JupyterBasePath: locked.JupyterURL, DataMounts: dataMounts})
+		manifest, err := k8s.RenderDevRayCluster(*locked, k8s.WorkspaceRenderOptions{PersonalStorageClaim:personalClaim,WorkerNodeAffinityPreference: workerNodePreference, NodeSelector: nodeSelector, DedicatedNodes: h.trainingDedicatedNodes, Image: image.Reference, RayVersion: image.RayVersion, ServiceAccount: h.serviceAccount, ImagePullSecrets: h.imagePullSecrets, IDCExistingClaim: h.idcClaim, IDCMountPath: h.idcMountPath, JupyterBasePath: locked.JupyterURL, DataMounts: dataMounts})
 		if err != nil {
 			return fail(http.StatusBadRequest, "WORKSPACE_SPEC_INVALID", err.Error(), domain.WorkspaceFailed)
 		}
@@ -614,4 +620,29 @@ func (h *Handler) exchangeWorkspaceAccess(c *gin.Context) {
 		location += "?" + encoded
 	}
 	c.Redirect(http.StatusFound, location)
+}
+
+// A binding follows the user through team migration. New namespace-local
+// claims are derived from the same immutable personal binding and generation.
+func (h *Handler) resolveWorkspacePersonalStorage(ctx context.Context,principal auth.Principal)(string,error) {
+ if h.personalStorage==nil{return "",nil}
+ owner,err:=personalStorageOwner(principal)
+ if err!=nil{return "",err}
+ view,err:=h.personalStorage.View(ctx,owner)
+ if err!=nil{return "",err}
+ if view.State==personalstorage.StateUnbound && view.BindingID==""{return "",nil}
+ if view.State!=personalstorage.StateReady{return "",fmt.Errorf("personal storage connection is not ready")}
+ reference,err:=h.personalStorage.MountReference(ctx,owner)
+ if err!=nil{return "",err}
+ if h.kubernetes==nil{return "",fmt.Errorf("personal storage Kubernetes integration unavailable")}
+ if h.repository==nil || h.repository.EnsureIdentity(ctx,principal)!=nil { return "",fmt.Errorf("personal storage identity unavailable") }
+ if err:=h.ensureTenantNamespaceAndPullSecrets(ctx,principal.TenantID,"tenant-"+sanitizeDNS(principal.TenantID));err!=nil{return "",err}
+ waitCtx,cancel:=context.WithTimeout(ctx,2*time.Second);defer cancel()
+ ticker:=time.NewTicker(200*time.Millisecond);defer ticker.Stop()
+ for {
+  claim,ready,err:=h.kubernetes.EnsurePersonalStorageMountResources(waitCtx,reference,"tenant-"+sanitizeDNS(principal.TenantID),h.platformNamespace,h.personalStorageCapacity,h.personalStorageCSIImage)
+  if err!=nil{return "",err}
+  if ready && claim!=""{return claim,nil}
+  select {case <-waitCtx.Done():return "",waitCtx.Err();case <-ticker.C:}
+ }
 }

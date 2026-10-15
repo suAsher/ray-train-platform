@@ -425,6 +425,23 @@ dataSpaces:
 # never gives a workload Pod an AK/SK. The SuperAdmin initializes the bucket
 # layout once from the Portal before accounts are provisioned with a quota.
 personalStorage:
+  # Independent per-user SFTP storage. Never a team credential or remote root.
+  enabled: false
+  personalRootIsolationVerified: false
+  host: ""
+  port: 22
+  existingKnownHostsSecret: ""
+  knownHostsKey: known_hosts
+  mountCapacity: 1Ti
+  maxUploadBytes: 67108864
+  csi:
+    enabled: false
+    image:
+      repository: ray-personal-storage-csi
+      tag: ""
+      digest: ""
+    registrarImage: ""
+    kubeletRoot: /var/lib/kubelet
   objectSetQuota:
     enabled: false
     defaultQuota: 100Gi

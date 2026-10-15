@@ -59,6 +59,16 @@ OIDC issuer. Local-only development does not. */}}
 {{- $dataSpaces := default (dict) .Values.dataSpaces }}
 {{- $personalStorage := default (dict) .Values.personalStorage }}
 {{- $objectSetQuota := default (dict) $personalStorage.objectSetQuota }}
+{{- $personalCSI := default (dict) $personalStorage.csi }}
+{{- $personalCSIImage := default (dict) $personalCSI.image }}
+{{- $wellspikingPersonalEnabled := default false $personalStorage.enabled }}
+{{- if $wellspikingPersonalEnabled }}
+{{- if not (default false $personalStorage.personalRootIsolationVerified) }}{{- fail "personalStorage.personalRootIsolationVerified must attest upstream personal root confinement" }}{{- end }}
+{{- if not (default false $personalCSI.enabled) }}{{- fail "personalStorage.csi.enabled is required for personal storage" }}{{- end }}
+{{- if not (default "" $personalStorage.host) }}{{- fail "personalStorage.host is required" }}{{- end }}
+{{- if not (default "" $personalStorage.existingKnownHostsSecret) }}{{- fail "personalStorage.existingKnownHostsSecret must pin the upstream host identity" }}{{- end }}
+{{- if not (regexMatch `^sha256:[0-9a-fA-F]{64}$` (default "" $personalCSIImage.digest)) }}{{- fail "personalStorage.csi.image.digest must pin the node driver" }}{{- end }}
+{{- end }}
 {{- $idcDataSpaces := default (dict) .Values.idcDataSpaces }}
 {{- $idcSync := default (dict) .Values.idcSync }}
 {{- $storageSync := default (dict) .Values.storageSync }}
@@ -226,6 +236,24 @@ spec:
               value: {{ .Values.backend.appEnv | quote }}
             - name: HTTP_ADDR
               value: ":8080"
+            - name: PERSONAL_STORAGE_ENABLED
+              value: {{ $wellspikingPersonalEnabled | quote }}
+            {{- if $wellspikingPersonalEnabled }}
+            - name: PERSONAL_STORAGE_PERSONAL_ROOT_ISOLATION_VERIFIED
+              value: {{ $personalStorage.personalRootIsolationVerified | quote }}
+            - name: PERSONAL_STORAGE_HOST
+              value: {{ $personalStorage.host | quote }}
+            - name: PERSONAL_STORAGE_PORT
+              value: {{ default 22 $personalStorage.port | int64 | quote }}
+            - name: PERSONAL_STORAGE_KNOWN_HOSTS_FILE
+              value: /etc/wellspiking-personal/known_hosts
+            - name: PERSONAL_STORAGE_CSI_IMAGE
+              value: {{ printf "%s/%s@%s" .Values.global.imageRegistry $personalCSIImage.repository $personalCSIImage.digest | quote }}
+            - name: PERSONAL_STORAGE_MOUNT_CAPACITY
+              value: {{ default "1Ti" $personalStorage.mountCapacity | quote }}
+            - name: PERSONAL_STORAGE_MAX_UPLOAD_BYTES
+              value: {{ default 67108864 $personalStorage.maxUploadBytes | int64 | quote }}
+            {{- end }}
             - name: PLATFORM_NAMESPACE
               valueFrom:
                 fieldRef:
@@ -543,6 +571,11 @@ spec:
             - name: TMPDIR
               value: "/var/lib/ray-platform/code-snapshots"
           volumeMounts:
+            {{- if $wellspikingPersonalEnabled }}
+            - name: wellspiking-personal-hostkeys
+              mountPath: /etc/wellspiking-personal
+              readOnly: true
+            {{- end }}
             {{- if $telemetryEnabled }}
             - name: platform-telemetry
               mountPath: /etc/platform-telemetry
@@ -582,6 +615,15 @@ spec:
           resources:
             {{- toYaml .Values.backend.resources | nindent 12 }}
       volumes:
+        {{- if $wellspikingPersonalEnabled }}
+        - name: wellspiking-personal-hostkeys
+          secret:
+            secretName: {{ $personalStorage.existingKnownHostsSecret | quote }}
+            defaultMode: 0444
+            items:
+              - key: {{ default "known_hosts" $personalStorage.knownHostsKey | quote }}
+                path: known_hosts
+        {{- end }}
         {{- if $telemetryEnabled }}
         - name: platform-telemetry
           secret:

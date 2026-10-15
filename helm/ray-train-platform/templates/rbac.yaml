@@ -15,6 +15,18 @@ metadata:
     {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: api
 rules:
+  {{- $personal := default (dict) .Values.personalStorage }}
+  {{- if (default false $personal.enabled) }}
+  # Observe only the approved CSI driver and per-node registration. The API
+  # cannot install, update, or remove node storage components.
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csidrivers"]
+    resourceNames: ["personalstorage.wellspiking.ai"]
+    verbs: ["get"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csinodes"]
+    verbs: ["get"]
+  {{- end }}
   # Retirement preflight inspects controllers as well as Pods. Read-only;
   # retiring a team never grants deletion of its workloads or storage.
   - apiGroups: ["apps"]

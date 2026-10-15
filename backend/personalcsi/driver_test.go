@@ -23,6 +23,7 @@ func (m *testMounter) Unmount(target string) error { m.unmounts++; delete(m.moun
 
 func publishFixture(t *testing.T) (*Driver,*testFactory,*testMounter,*csi.NodePublishVolumeRequest) {
  t.Helper()
+ if os.Geteuid()!=0 { t.Skip("CSI ancestry tests require a root-owned kubelet fixture; builder gate runs as root") }
  root:=t.TempDir()
  target:=filepath.Join(root,"pods","5c2f6ea8-2905-4f68-8ed5-0bad11111111","volumes","kubernetes.io~csi","personal-pv","mount")
  if err:=os.MkdirAll(target,0700); err!=nil { t.Fatal(err) }
@@ -84,7 +85,7 @@ func TestPersonalStoragePublishRejectsUnsafeTargetAndForeignMount(t *testing.T) 
 func TestPersonalStorageUnpublishOwnsTarget(t *testing.T) {
  d,_,m,r:=publishFixture(t)
  if _,err:=d.NodePublishVolume(context.Background(),r);err!=nil { t.Fatal(err) }
- _,err:=d.NodeUnpublishVolume(context.Background(),&csi.NodeUnpublishVolumeRequest{VolumeId:"foreign",TargetPath:r.TargetPath})
+ _,err:=d.NodeUnpublishVolume(context.Background(),&csi.NodeUnpublishVolumeRequest{VolumeId:VolumeID("owner-b","binding-b","tenant-b",1),TargetPath:r.TargetPath})
  if status.Code(err)!=codes.FailedPrecondition || m.unmounts!=0 { t.Fatalf("foreign unpublish: %v",err) }
  if _,err=d.NodeUnpublishVolume(context.Background(),&csi.NodeUnpublishVolumeRequest{VolumeId:r.VolumeId,TargetPath:r.TargetPath});err!=nil { t.Fatal(err) }
  if _,err=d.NodeUnpublishVolume(context.Background(),&csi.NodeUnpublishVolumeRequest{VolumeId:r.VolumeId,TargetPath:r.TargetPath});err!=nil { t.Fatal(err) }

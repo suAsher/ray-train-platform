@@ -30,6 +30,7 @@ func run()error {
  flag.Parse()
  if !filepath.IsAbs(*socket)||filepath.Clean(*socket)!=*socket||strings.HasPrefix(*socket,"//"){return errors.New("CSI requires an absolute Unix socket")}
  if *probe{return checkReady(*socket)}
+ if os.Geteuid()!=0{return errors.New("CSI node driver must run as host-trusted root")}
  if *nodeID==""{return errors.New("CSI node identity is required")}
  keys,err:=os.ReadFile(*knownHosts);if err!=nil{return errors.New("pinned Wellspiking host key file is required")}
  factory,err:=personalstorage.NewSFTPFactory(personalstorage.Endpoint{Host:"mount.wellspiking.ai",Port:22,KnownHosts:keys})
