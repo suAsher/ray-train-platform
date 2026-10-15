@@ -24,20 +24,26 @@ Wellspiking 账号根下的已知虚拟、共享或内部入口 `.minio`、`.ori
 
 功能及 CSI 默认为关闭。启用包含数据库迁移 0059、后端镜像和新增可信 CSI 节点组件，必须作为单独的存储发布审阅；开发验证通过不表示生产已启用。
 
-首轮上线采用指定测试账号范围：`personalRootIsolationVerified` 保持 `false`，`testOwnerIDs` 只填写已完成真实双账号目录隔离验收的两个稳定平台用户 ID。测试名单按本人身份生效，团队管理员、平台管理员和其他用户不会因此取得入口或挂载；团队变更沿用同一用户 ID。该模式只允许已核对账号的当前行为验证，不代表已经取得上游全员权限配置证明，也不应扩大到未验收账号。默认测试名单为空；在全局确认仍为 `false` 时，空名单、空字符串、重复或非法 ID 都不能绕过启用闸门。
+首轮发布使用指定测试账号范围，两个稳定个人账号完成了当前目录与实际 PVC 挂载的双账号验证。随后用户明确授权向全体平台用户开放，新增独立的 `allUsersEnabled` 开关控制开放范围；它不表示上游隔离配置已经核实。
 
-`testOwnerIDs` 是用户 ID 字符串列表，经 Helm 以 `PERSONAL_STORAGE_TEST_OWNER_IDS` 传入后端。不得填团队 ID、显示名称或用户名。测试模式切换或移除账号前，仍须遵循撤销流程处理本人现有挂载；仅移除名单不等于已撤销已建立的 SSH/FUSE 会话。全员启用需要另行取得下述上游配置与权限证明，再明确设置全局隔离确认；如果测试名单仍非空，访问范围继续受该名单限制。
+全员发布设置 `enabled: true`、`allUsersEnabled: true`、`testOwnerIDs: []`，`personalRootIsolationVerified` 继续保持 `false`。每个用户仍须独立生成本人公钥，在本人的 Wellspiking 账号登记并验证连接；全员开放不共享密钥、不按团队绑定，也不替未连接的用户建立挂载。已经运行的调试环境保持原模板，本人下次新建时才使用已验证的个人目录。管理员身份不增加选择他人目录的权限。
 
-启用前取得上游的实际权限证据：本人账号只能进入本人根，不能通过其他路径、链接或共享入口访问其他个人目录。SFTPv3 的客户端检查无法证明已有硬链接来源，也无法消除其他原生客户端替换路径的竞态。平台拒绝观察到的符号链接、特殊文件、路径穿越及上述已知根入口，并禁止创建链接；这些检查不能代替上游账户隔离。`personalRootIsolationVerified` 是操作人员完成验证后的显式确认，不能凭该布尔值宣称已验证。
+`allUsersEnabled` 与任何非空 `testOwnerIDs` 名单互斥，避免全员与部分账号范围混淆。默认 `allUsersEnabled: false`、测试名单为空，功能仍默认关闭。旧的指定账号模式和已取得全局证明的模式继续保留；未显式选择全员模式且全局确认仍为 `false` 时，必须给出非空、合法、无重复的测试名单。两个开关仅接受布尔值，不能用字符串或空名单绕过启用闸门。
 
-目录名称过滤不会改变上游账号或密钥的实际权限，也不构成上游 jail。将专用公钥登记到现有 Wellspiking 账号后，它仍继承该账号的有效权限；仅看到个人视图已经隐藏上述入口，不能据此将 `personalRootIsolationVerified` 设为真。启用前还须核对脱敏的有效 home、存储后端范围、组继承、虚拟目录与权限配置，并用获准的两个测试账户验证彼此专建标记不可访问。
+`testOwnerIDs` 是用户 ID 字符串列表，经 Helm 以 `PERSONAL_STORAGE_TEST_OWNER_IDS` 传入后端；全员开关通过 `PERSONAL_STORAGE_ALL_USERS_ENABLED` 传入。不得在名单中填团队 ID、显示名称或用户名。切换模式或移除名单前，仍须遵循撤销流程处理本人现有挂载；仅改变开放范围不等于已撤销已建立的 SSH/FUSE 会话。
+
+本轮证据证明两个真实账号的当前行为与挂载隔离，并已核对九个目标节点的网络和 CSI 注册；尚未取得覆盖所有 Wellspiking 账号的上游有效 home、存储后端范围、组继承、虚拟目录及权限配置证明。`personalRootIsolationVerified: false` 如实保留这一未完成项，不能因开启全员入口而设为 `true`。
+
+目录名称过滤不会改变上游账号或密钥的实际权限，也不构成上游 jail。将专用公钥登记到现有 Wellspiking 账号后，它仍继承该账号的有效权限。SFTPv3 客户端检查无法证明已有硬链接来源，也无法消除其他原生客户端替换路径的竞态。平台拒绝观察到的符号链接、特殊文件、路径穿越及已知根入口，并禁止创建链接；这些检查不能代替上游账户隔离。后续取得完整上游证明后，才可另行明确全局隔离确认。
 
 需核对合规区固定上游地址、端口与已验证的 SSH 主机公钥，准备只包含该主机公钥的 `known_hosts` Secret。禁止首次自动信任。确认编辑器可调度节点上的 CSI 注册、FUSE 挂载权限及网络连通性，后台使用的 CSI 镜像与节点组件必须为同一个摘要。
 
 配置入口为 `personalStorage`，已有 `personalStorage.objectSetQuota` 配置保持独立：
 
-- `enabled`、`personalRootIsolationVerified`：显式启用与已取得证据的全局上游隔离确认。
-- `testOwnerIDs`：默认 `[]`；全局确认仍为 `false` 时，只允许已实际验收的指定稳定个人用户 ID 进入测试。不是团队授权，也不是上游全员隔离确认。
+- `enabled`：显式启用个人存储功能。
+- `allUsersEnabled`：默认 `false`；经授权显式向全部平台用户开放个人连接入口，与非空 `testOwnerIDs` 互斥，不表示上游隔离配置已经证明。
+- `personalRootIsolationVerified`：只记录已取得证据的全局上游隔离确认。本轮全员发布保持 `false`。
+- `testOwnerIDs`：默认 `[]`；指定账号测试模式使用合法的稳定个人用户 ID，与全员模式互斥。不是团队授权，也不是上游全员隔离确认。
 - `host`、`port`、`existingKnownHostsSecret`、`knownHostsKey`：操作人员固定的合规区服务与主机公钥引用。
 - `maxUploadBytes`：1 至 67108864；`mountCapacity` 是 Kubernetes 静态卷声明容量，不是上游配额。
 - `csi.enabled`、`csi.image`、`csi.registrarImage`、`csi.kubeletRoot`：可信节点组件配置。镜像须固定摘要，kubelet 根须匹配集群实际配置。
@@ -47,7 +53,7 @@ Wellspiking 账号根下的已知虚拟、共享或内部入口 `.minio`、`.ori
 
 新增节点组件在每个选中节点申请 `60m` CPU、`80Mi` 内存，无 GPU 请求；9 节点总计 `540m` CPU、`720Mi` 内存。它使用独立 CSI 驱动名、socket 和插件目录，不替换既有存储驱动。server-side dry-run 必须确认没有改写既有训练/调试 RayCluster 模板；发布前后逐项比较活跃 RayJob、RayCluster、Pod UID、状态及重启数。
 
-仅按实际改动显式选择 `BUILD_TARGETS=backend,personal-storage-csi`。Portal 是独立仓库的 `dev` 候选，不能使用本仓库旧 `frontend/` 替代。
+首次交付后端和节点组件时显式选择 `BUILD_TARGETS=backend,personal-storage-csi`。本次只新增全员开放配置与后端门禁，单独重建 `backend`；现有 CSI 与 Portal 版本保持不变。Portal 是独立仓库的 `dev` 候选，不能使用本仓库旧 `frontend/` 替代。
 
 节点驱动接收 kubelet 交付的本人凭据。调试 Pod 仅引用静态 PVC，不获得私钥、`/dev/fuse` 或新增的挂载权限。卷身份含本人绑定、代次与 namespace，团队迁移会生成目标 namespace 的静态卷声明，保持同一远端个人账号。保留卷不会自动清理上游用户文件。
 

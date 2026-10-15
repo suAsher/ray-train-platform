@@ -24,8 +24,8 @@ func TestPersonalStorageAllUsersThirdInteractiveOwnerCanOnlyUseOwnStorage(t *tes
 		view: personalstorage.View{State: "READY", BindingID: "binding-charlie", PublicKey: "ssh-ed25519 charlie-public", Username: "charlie", Generation: 1},
 		stores: map[string]personalstorage.Store{
 			"stable-charlie": &personalHTTPStore{root: thirdRoot},
-			"stable-alice": &personalHTTPStore{root: aliceRoot},
-			"stable-bob": &personalHTTPStore{root: bobRoot},
+			"stable-alice":   &personalHTTPStore{root: aliceRoot},
+			"stable-bob":     &personalHTTPStore{root: bobRoot},
 		},
 	}
 	principal := auth.Principal{Subject: "stable-charlie", Username: "charlie", TenantID: "team-c", AuthType: auth.AuthTypeOIDC}

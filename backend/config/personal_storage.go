@@ -13,7 +13,9 @@ import (
 // PersonalStorageConfig is deployment-owned. HTTP callers never select a host,
 // remote root, username, key, or CSI implementation.
 type PersonalStorageConfig struct {
-	Enabled                       bool
+	Enabled bool
+	// AllUsersEnabled records explicit deployment authorization, not upstream isolation evidence.
+	AllUsersEnabled               bool
 	PersonalRootIsolationVerified bool
 	TestOwnerIDs                  []string
 	Host                          string
@@ -33,6 +35,10 @@ func loadPersonalStorageConfig() (PersonalStorageConfig, error) {
 	if !enabled {
 		return cfg, nil
 	}
+	cfg.AllUsersEnabled, err = parseBool("PERSONAL_STORAGE_ALL_USERS_ENABLED", false)
+	if err != nil {
+		return cfg, err
+	}
 	cfg.PersonalRootIsolationVerified, err = parseBool("PERSONAL_STORAGE_PERSONAL_ROOT_ISOLATION_VERIFIED", false)
 	if err != nil {
 		return cfg, err
@@ -41,8 +47,11 @@ func loadPersonalStorageConfig() (PersonalStorageConfig, error) {
 	if err != nil {
 		return cfg, err
 	}
-	if !cfg.PersonalRootIsolationVerified && len(cfg.TestOwnerIDs) == 0 {
-		return cfg, fmt.Errorf("personal storage requires upstream isolation attestation or explicit PERSONAL_STORAGE_TEST_OWNER_IDS")
+	if cfg.AllUsersEnabled && len(cfg.TestOwnerIDs) != 0 {
+		return cfg, fmt.Errorf("PERSONAL_STORAGE_ALL_USERS_ENABLED conflicts with nonempty PERSONAL_STORAGE_TEST_OWNER_IDS")
+	}
+	if !cfg.AllUsersEnabled && !cfg.PersonalRootIsolationVerified && len(cfg.TestOwnerIDs) == 0 {
+		return cfg, fmt.Errorf("personal storage requires explicit PERSONAL_STORAGE_ALL_USERS_ENABLED, upstream isolation attestation or explicit PERSONAL_STORAGE_TEST_OWNER_IDS")
 	}
 	cfg.Host = strings.TrimSpace(os.Getenv("PERSONAL_STORAGE_HOST"))
 	if cfg.Host != "mount.wellspiking.ai" {
@@ -75,7 +84,8 @@ func loadPersonalStorageConfig() (PersonalStorageConfig, error) {
 var personalStorageStableOwnerID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:._-]{0,255}$`)
 
 // Test scope is deployment-owned and never inferred from usernames or teams.
-// A blank list means global mode only when the separate attestation is true.
+// A blank list permits global mode only after explicit all-user authorization
+// or the separate upstream isolation attestation passes startup validation.
 func parsePersonalStorageTestOwnerIDs(raw string) ([]string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, nil

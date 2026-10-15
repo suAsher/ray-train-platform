@@ -71,8 +71,10 @@ func (h *Handler) personalStoragePrincipal(c *gin.Context) (auth.Principal, pers
 	return principal, owner, true
 }
 
-// Empty deployment scope preserves globally attested mode. A nonempty scope
-// is matched only against the stable authenticated subject, with no role bypass.
+// Startup validates an empty deployment scope through explicit all-user
+// authorization or the separate upstream isolation attestation. A nonempty scope
+// matches only the stable authenticated subject, with no role bypass. All modes
+// keep each storage operation bound to that subject through personalStorageOwner.
 func (h *Handler) personalStorageAllowed(principal auth.Principal) bool {
 	return h.personalStorage != nil && (len(h.personalStorageTestOwnerIDs) == 0 || h.personalStorageTestOwnerIDs[principal.Subject])
 }
