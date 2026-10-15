@@ -135,3 +135,34 @@ func TestPersonalStorageHelmTestOwnersDefaultEmptyAndReachBackend(t *testing.T) 
 		t.Fatal("explicit test owner IDs must be passed to backend unchanged")
 	}
 }
+
+func TestPersonalStorageHelmAllUsersRequiresExplicitModeWithoutOwnerList(t *testing.T) {
+ for _,tc:=range []struct{name string;all any;verified bool;owners []any;allowed bool}{
+  {name:"explicit all users without global attestation",all:true,owners:[]any{},allowed:true},
+  {name:"disabled all users and empty scope",all:false,owners:[]any{}},
+  {name:"absent all users retains empty-scope rejection",all:nil,owners:[]any{}},
+  {name:"explicit scoped mode preserved",all:false,owners:[]any{"stable-alice","stable-bob"},allowed:true},
+  {name:"attested global mode preserved",all:false,verified:true,owners:[]any{},allowed:true},
+  {name:"all users conflicts with one scoped owner",all:true,owners:[]any{"stable-alice"}},
+  {name:"all users conflicts with owner list even when attested",all:true,verified:true,owners:[]any{"stable-alice","stable-bob"}},
+  {name:"string true is not a boolean",all:"true",verified:true,owners:[]any{}},
+  {name:"string false is not a boolean",all:"false",verified:true,owners:[]any{}},
+  {name:"integer is not a boolean",all:1,verified:true,owners:[]any{}},
+ } {
+  t.Run(tc.name,func(t *testing.T){
+   personal:=map[string]any{"enabled":true,"personalRootIsolationVerified":tc.verified,"testOwnerIDs":tc.owners,"host":"mount.wellspiking.ai","existingKnownHostsSecret":"personal-hostkeys","csi":map[string]any{"enabled":true,"image":map[string]any{"digest":"sha256:"+strings.Repeat("a",64)}}}
+   if tc.all!=nil { personal["allUsersEnabled"]=tc.all }
+   err:=renderPersonalStorageActivation(t,personal)
+   if (err==nil)!=tc.allowed{t.Fatalf("all-users activation allowed=%v, want=%v: %v",err==nil,tc.allowed,err)}
+  })
+ }
+}
+func TestPersonalStorageHelmAllUsersDefaultFalseAndReachesBackend(t *testing.T) {
+ raw,err:=os.ReadFile("../../helm/ray-train-platform/values.yaml");if err!=nil{t.Fatal(err)}
+ var values map[string]any;if err=yaml.Unmarshal(raw,&values);err!=nil{t.Fatal(err)}
+ personal:=values["personalStorage"].(map[string]any)
+ value,exists:=personal["allUsersEnabled"]
+ if !exists||value!=false||personal["enabled"]!=false||personal["personalRootIsolationVerified"]!=false{t.Fatalf("all-users mode must explicitly default off without claiming isolation: %#v",personal)}
+ raw,err=os.ReadFile("../../helm/ray-train-platform/templates/backend-deployment.yaml");if err!=nil{t.Fatal(err)}
+ if !strings.Contains(string(raw),"- name: PERSONAL_STORAGE_ALL_USERS_ENABLED")||!strings.Contains(string(raw),"value: {{ $personalAllUsersEnabled | quote }}"){t.Fatal("strict all-users boolean must reach backend explicitly")}
+}
