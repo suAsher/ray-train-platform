@@ -1,9 +1,28 @@
 package personalcsi
 
 import (
+ "context"
+ "errors"
+ "io"
 	"strings"
 	"testing"
 )
+
+type unreadableMountInfo struct{}
+func(unreadableMountInfo)Read([]byte)(int,error){return 0,io.ErrUnexpectedEOF}
+func TestPersonalStorageUnknownKernelMetadataCannotAuthorizeUnmount(t *testing.T) {
+ target:="/fixture/mount"
+ for _,input:=range []string{
+  "52 21 0:99 / "+target+" rw\n",
+  "52 21 0:99 / "+target+" rw fake metadata missing separator\n",
+ } {
+  if _,mounted,err:=inspectMountInfo(strings.NewReader(input),target);err==nil||!mounted{t.Fatal("malformed metadata accepted")}
+ }
+ if _,_,err:=inspectMountInfo(unreadableMountInfo{},target);!errors.Is(err,io.ErrUnexpectedEOF){t.Fatalf("kernel metadata read error lost: %v",err)}
+ mounter:=NewFuseMounter();ctx,cancel:=context.WithCancel(context.Background());cancel()
+ if _,err:=mounter.Mount(ctx,t.TempDir(),VolumeID("a","a","a",1),nil);!errors.Is(err,context.Canceled){t.Fatalf("canceled node mount: %v",err)}
+ if len(mounter.mounts)!=0{t.Fatal("canceled node mount was registered")}
+}
 
 func TestPersonalStorageKernelMountIdentity(t *testing.T) {
 	target := "/var/lib/kubelet/pods/pod/volumes/kubernetes.io~csi/pv/mount"

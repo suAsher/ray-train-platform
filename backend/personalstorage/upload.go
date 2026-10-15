@@ -24,13 +24,10 @@ func Upload(ctx context.Context, store Store, name string, reader io.Reader, siz
 		return ErrUnavailable
 	}
 	tmp := path.Join(path.Dir(clean), ".raytrain-upload-"+hex.EncodeToString(token))
-	file, err := store.Open(ctx, tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY)
-	if err != nil {
-		return err
-	}
+	var file File
 	closed := false
 	defer func() {
-		if !closed {
+		if file != nil && !closed {
 			_ = file.Close()
 		}
 		if result != nil {
@@ -49,6 +46,10 @@ func Upload(ctx context.Context, store Store, name string, reader io.Reader, siz
 			}
 		}
 	}()
+	file, err = store.Open(ctx, tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY)
+	if err != nil {
+		return err
+	}
 	buf := make([]byte, 64*1024)
 	var offset int64
 	for offset < size {
