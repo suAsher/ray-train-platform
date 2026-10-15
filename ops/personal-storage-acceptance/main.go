@@ -316,7 +316,11 @@ func diagnose(ctx context.Context, repo fileRepository, vault *personalstorage.K
 	if err := conn.SetDeadline(time.Now().Add(30*time.Second)); err != nil { return fail("diagnose-deadline", err) }
 	emit(map[string]any{"ok": true, "stage": "diagnose-tcp"})
 	sshConfig := &ssh.ClientConfig{User: username, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, Timeout: 15*time.Second, HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
-		if key.Type() != ssh.KeyAlgoED25519 || ssh.FingerprintSHA256(key) != hostFingerprint { return personalstorage.ErrForbidden }
+		fingerprint := ssh.FingerprintSHA256(key)
+		matches := key.Type() == ssh.KeyAlgoED25519 && fingerprint == hostFingerprint
+		// SSH host-key metadata is public; no key material or private names.
+		emit(map[string]any{"stage": "diagnose-host-key", "algorithm": key.Type(), "fingerprint": fingerprint, "pinMatches": matches})
+		if !matches { return personalstorage.ErrForbidden }
 		return nil
 	}}
 	sshConn, channels, requests, err := ssh.NewClientConn(conn, address, sshConfig)
@@ -351,7 +355,7 @@ func diagnosticClass(err error) string {
 	if errors.As(err, &network) && network.Timeout() { return "timeout" }
 	if errors.Is(err, io.EOF) { return "connection_closed" }
 	if errors.Is(err, personalstorage.ErrConflict) { return "credential_conflict" }
-	if errors.Is(err, personalstorage.ErrForbidden) { return "permission_denied" }
+	if errors.Is(err, personalstorage.ErrForbidden) { return "host_key_mismatch" }
 	if errors.Is(err, personalstorage.ErrNotFound) { return "not_found" }
 	var status *sftp.StatusError
 	if errors.As(err, &status) {
