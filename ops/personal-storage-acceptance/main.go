@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -37,6 +38,20 @@ var owner = personalstorage.Owner{ID: ownerID, Username: username}
 type options struct {
 	action, kubeconfig, knownHosts, stateDir string
 	keep                                     bool
+}
+
+type markerFailure struct {
+	cause  error
+	marker string
+}
+
+func (e *markerFailure) Error() string { return "personal acceptance failed" }
+func (e *markerFailure) Unwrap() error { return e.cause }
+
+func tagMarkerFailure(marker string, err *error) {
+	if marker != "" && *err != nil {
+		*err = &markerFailure{cause: *err, marker: marker}
+	}
 }
 
 // Repository data is public binding metadata only. The command holds an
@@ -216,8 +231,14 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	if stage, err := run(ctx, o); err != nil {
-		// Never print upstream/Kubernetes error text, credentials or file names.
-		emit(map[string]any{"ok": false, "stage": stage})
+		// Only our newly generated marker name may be exposed for recovery.
+		// Never print upstream/Kubernetes error text or private file names.
+		v := map[string]any{"ok": false, "stage": stage}
+		var failure *markerFailure
+		if errors.As(err, &failure) {
+			v["markerDirectory"] = failure.marker
+		}
+		emit(v)
 		os.Exit(1)
 	}
 }
@@ -302,6 +323,7 @@ func evidence(action, marker string, keep bool) {
 
 func storeCheck(ctx context.Context, service *personalstorage.Service, keep bool) (stage string, retErr error) {
 	var marker string
+	defer func() { tagMarkerFailure(marker, &retErr) }()
 	defer func() {
 		if retErr == nil {
 			evidence("check", marker, keep)
@@ -316,28 +338,18 @@ func storeCheck(ctx context.Context, service *personalstorage.Service, keep bool
 	if err != nil {
 		return "marker", err
 	}
-	if err := store.Mkdir(ctx, marker); err != nil {
-		return "marker-mkdir", err
-	}
 	paths := []string{marker + "/probe.txt", marker + "/renamed.txt", marker + "/sacrificial.txt", marker + "/child", marker}
 	defer func() {
 		if keep && retErr == nil {
 			return
 		}
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-		defer cancel()
-		cleanup, err := service.OpenStore(cleanupCtx, owner)
-		if err != nil {
-			stage, retErr = "cleanup-connect", err
-			return
-		}
-		defer cleanup.Close()
-		for _, p := range paths {
-			if err := cleanup.Remove(cleanupCtx, p); err != nil && !errors.Is(err, personalstorage.ErrNotFound) {
-				stage, retErr = "cleanup", err
-			}
+		if err := cleanupMarker(service, marker); err != nil {
+			stage, retErr = "cleanup", err
 		}
 	}()
+	if err := store.Mkdir(ctx, marker); err != nil {
+		return "marker-mkdir", err
+	}
 	if err := store.Mkdir(ctx, marker+"/child"); err != nil {
 		return "sftp-mkdir", err
 	}
@@ -398,8 +410,32 @@ func hasEntry(entries []personalstorage.Entry, name string) bool {
 	return false
 }
 
+// A lost creation acknowledgment may still have created the directory. Install
+// this independent, bounded cleanup before attempting mkdir; do not rely on a
+// canceled SFTP session or disconnected FUSE mount to perform recovery.
+func cleanupMarker(service *personalstorage.Service, marker string) error {
+	if !strings.HasPrefix(marker, markerPrefix) || len(marker) != len(markerPrefix)+36 || strings.ContainsAny(marker, "/\\") {
+		return personalstorage.ErrForbidden
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	store, err := service.OpenStore(ctx, owner)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	var cleanupErr error
+	for _, suffix := range []string{"/probe.txt", "/renamed.txt", "/sacrificial.txt", "/child", ""} {
+		if err := store.Remove(ctx, marker+suffix); err != nil && !errors.Is(err, personalstorage.ErrNotFound) {
+			cleanupErr = err
+		}
+	}
+	return cleanupErr
+}
+
 func mountCheck(ctx context.Context, service *personalstorage.Service, keep bool) (stage string, retErr error) {
 	var marker string
+	defer func() { tagMarkerFailure(marker, &retErr) }()
 	defer func() {
 		if retErr == nil {
 			evidence("mount-check", marker, keep)
@@ -409,11 +445,26 @@ func mountCheck(ctx context.Context, service *personalstorage.Service, keep bool
 	if err := unix.Statfs("/run", &fs); err != nil || fs.Type != unix.TMPFS_MAGIC {
 		return "mount-requires-private-tmpfs-run", personalstorage.ErrForbidden
 	}
-	target, err := os.MkdirTemp("/run", markerPrefix+"mount-")
+	outer, err := os.MkdirTemp("/run", markerPrefix+"mount-")
 	if err != nil {
 		return "mount-target", err
 	}
-	defer os.Remove(target)
+	// The private outer directory keeps the mounted root inaccessible to other
+	// local users even if its upstream permission bits are permissive.
+	target := filepath.Join(outer, "mount")
+	defer func() {
+		// Remove only empty local directories, after the later unmount defer.
+		// Never recursively remove a target that might still be mounted.
+		if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+			stage, retErr = "mount-target-cleanup", err
+		}
+		if err := os.Remove(outer); err != nil && !os.IsNotExist(err) {
+			stage, retErr = "mount-parent-cleanup", err
+		}
+	}()
+	if err := os.Mkdir(target, 0700); err != nil {
+		return "mount-target", err
+	}
 	store, err := service.OpenStore(ctx, owner)
 	if err != nil {
 		return "mount-open", err
@@ -433,19 +484,17 @@ func mountCheck(ctx context.Context, service *personalstorage.Service, keep bool
 		return "marker", err
 	}
 	dir := filepath.Join(target, marker)
-	if err := os.Mkdir(dir, 0700); err != nil {
-		return "fuse-marker-mkdir", err
-	}
 	defer func() {
 		if keep && retErr == nil {
 			return
 		}
-		for _, p := range []string{"probe.txt", "renamed.txt", "sacrificial.txt", "child", ""} {
-			if err := os.Remove(filepath.Join(dir, p)); err != nil && !os.IsNotExist(err) {
-				stage, retErr = "fuse-cleanup", err
-			}
+		if err := cleanupMarker(service, marker); err != nil {
+			stage, retErr = "fuse-cleanup", err
 		}
 	}()
+	if err := os.Mkdir(dir, 0700); err != nil {
+		return "fuse-marker-mkdir", err
+	}
 	if err := os.Mkdir(filepath.Join(dir, "child"), 0700); err != nil {
 		return "fuse-mkdir", err
 	}
