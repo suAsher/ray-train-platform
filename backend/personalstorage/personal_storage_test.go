@@ -40,3 +40,43 @@ func TestPersonalStorageConcurrentEnrollment(t *testing.T){
 func TestPersonalStorageRejectSpecialEntries(t *testing.T){
  for _,m:=range []os.FileMode{os.ModeSymlink,os.ModeNamedPipe,os.ModeSocket,os.ModeDevice}{if err:=ValidateEntry(Entry{Name:"x",Mode:m});!errors.Is(err,ErrForbidden){t.Fatalf("accepted mode %v",m)}}
 }
+
+type recoveringRepo struct{*memoryRepo;fail bool}
+func(r *recoveringRepo)Create(ctx context.Context,b Binding)(Binding,error){if r.fail{r.fail=false;return Binding{},ErrUnavailable};return r.memoryRepo.Create(ctx,b)}
+func TestPersonalStorageEnrollmentRecoversSecretBeforeDatabase(t *testing.T){
+ repo:=&recoveringRepo{memoryRepo:&memoryRepo{rows:map[string]Binding{}},fail:true};vault:=&memoryVault{rows:map[string]Credential{}}
+ service:=NewService(repo,vault,denyingFactory{});owner:=Owner{ID:"durable-owner",Username:"guofeng.su"}
+ if _,err:=service.Enroll(context.Background(),owner);!errors.Is(err,ErrUnavailable){t.Fatal("fixture must fail metadata write")}
+ original:=append([]byte(nil),vault.rows[owner.ID].PrivateKey...)
+ enrolled,err:=service.Enroll(context.Background(),owner);if err!=nil{t.Fatal(err)};pub,_,err:=publicKey(original)
+ if err!=nil||enrolled.PublicKey!=pub{t.Fatal("retry replaced durable Secret winner")}
+}
+
+type readyStore struct{uploadStore}
+func(*readyStore)Stat(_ context.Context,name string)(Entry,error){if name!=""{return Entry{},ErrNotFound};return Entry{Name:"/",Mode:os.ModeDir|0700},nil}
+type readyFactory struct{seen Credential}
+func(f *readyFactory)Open(_ context.Context,c Credential)(Store,error){f.seen=c;return &readyStore{},nil}
+func TestPersonalStorageVerifiedAccessUsesImmutablePersonalIdentity(t *testing.T){
+ ctx:=context.Background();repo:=&memoryRepo{rows:map[string]Binding{}};vault:=&memoryVault{rows:map[string]Credential{}};factory:=&readyFactory{}
+ service:=NewService(repo,vault,factory);owner:=Owner{ID:"stable-personal-user",Username:"guofeng.su"}
+ unbound,err:=service.View(ctx,owner);if err!=nil||unbound.State!=StateUnbound||unbound.PublicKey!=""{t.Fatal("unbound state incorrect")}
+ if _,err=service.Enroll(ctx,owner);err!=nil{t.Fatal(err)};verified,err:=service.Verify(ctx,owner);if err!=nil||verified.State!=StateReady{t.Fatal("verify failed")}
+ c,err:=service.Credential(ctx,owner);if err!=nil||c.OwnerID!=owner.ID||c.Username!=owner.Username||len(c.PrivateKey)==0{t.Fatal("wrong credential")}
+ ref,err:=service.MountReference(ctx,owner);if err!=nil||ref.OwnerID!=owner.ID||ref.BindingID!=verified.BindingID||ref.Generation!=1||ref.SecretName==""{t.Fatal("wrong mount identity")}
+ store,err:=service.OpenStore(ctx,owner);if err!=nil{t.Fatal(err)};defer store.Close();if factory.seen.OwnerID!=owner.ID{t.Fatal("wrong remote owner")}
+ current,err:=service.View(ctx,owner);if err!=nil||current.PublicKey!=verified.PublicKey||current.MountPath!=MountPath{t.Fatal("verified view changed")}
+}
+func TestPersonalStorageRejectsSecretPublicKeyMismatch(t *testing.T){
+ service:=newTestService();ctx:=context.Background();a:=Owner{ID:"owner-a",Username:"user-a"};b:=Owner{ID:"owner-b",Username:"user-b"}
+ if _,err:=service.Enroll(ctx,a);err!=nil{t.Fatal(err)};if _,err:=service.Enroll(ctx,b);err!=nil{t.Fatal(err)}
+ vault:=service.vault.(*memoryVault);row:=vault.rows[a.ID];row.PrivateKey=append([]byte(nil),vault.rows[b.ID].PrivateKey...);vault.rows[a.ID]=row
+ if _,err:=service.Enroll(ctx,a);!errors.Is(err,ErrConflict){t.Fatal("Secret key mismatch accepted on enrollment")}
+ if _,err:=service.Verify(ctx,a);!errors.Is(err,ErrConflict){t.Fatal("Secret key mismatch accepted on verify")}
+}
+func TestPersonalStorageInvalidAndUnreadyOwnersFailClosed(t *testing.T){
+ ctx:=context.Background();service:=newTestService()
+ for _,o:=range []Owner{{},{ID:"a",Username:"../b"},{ID:"a",Username:"user\n"}}{if _,err:=service.Enroll(ctx,o);!errors.Is(err,ErrInvalid){t.Fatal("invalid owner accepted")}}
+ owner:=Owner{ID:"pending",Username:"user"};if _,err:=service.Enroll(ctx,owner);err!=nil{t.Fatal(err)}
+ if _,err:=service.MountReference(ctx,owner);!errors.Is(err,ErrNotReady){t.Fatal("unverified mount accepted")}
+ if _,err:=service.Credential(ctx,owner);!errors.Is(err,ErrNotReady){t.Fatal("unverified credentials accepted")}
+}

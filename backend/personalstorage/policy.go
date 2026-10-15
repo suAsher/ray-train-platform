@@ -14,5 +14,5 @@ func ValidateEntry(e Entry)error{
  if e.Mode&os.ModeType!=0&&!e.Mode.IsDir(){return ErrForbidden};return nil
 }
 func safeError(err error)error{
- if err==nil{return nil};if os.IsNotExist(err){return ErrNotFound};if os.IsPermission(err){return ErrForbidden};return ErrUnavailable
+ if err==nil{return nil};if os.IsNotExist(err){return ErrNotFound};if os.IsExist(err){return ErrConflict};if os.IsPermission(err){return ErrForbidden};return ErrUnavailable
 }

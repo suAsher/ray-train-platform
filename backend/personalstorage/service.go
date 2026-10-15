@@ -11,7 +11,7 @@ import(
 )
 type Service struct{repo Repository;vault Vault;factory Factory}
 func NewService(r Repository,v Vault,f Factory)*Service{return &Service{repo:r,vault:v,factory:f}}
-func publicKey(key []byte)(string,string,error){signer,err:=ssh.ParsePrivateKey(key);if err!=nil{return "","",ErrConflict};return string(ssh.MarshalAuthorizedKey(signer.PublicKey())),ssh.FingerprintSHA256(signer.PublicKey()),nil}
+func publicKey(key []byte)(string,string,error){signer,err:=ssh.ParsePrivateKey(key);if err!=nil||signer.PublicKey().Type()!=ssh.KeyAlgoED25519{return "","",ErrConflict};return string(ssh.MarshalAuthorizedKey(signer.PublicKey())),ssh.FingerprintSHA256(signer.PublicKey()),nil}
 func(s *Service) binding(ctx context.Context,o Owner)(Binding,error){
  if err:=ValidateOwner(o);err!=nil{return Binding{},err};if s==nil||s.repo==nil||s.vault==nil{return Binding{},ErrUnavailable}
  b,err:=s.repo.Get(ctx,o.ID);if err!=nil{return Binding{},err};if b.OwnerID!=o.ID||b.Username!=o.Username{return Binding{},ErrForbidden};return b,nil

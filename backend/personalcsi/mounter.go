@@ -28,16 +28,21 @@ func(m *FuseMounter)Inspect(target string)(string,bool,error) {
 }
 func inspectMountInfo(reader io.Reader,target string)(string,bool,error) {
  scanner:=bufio.NewScanner(reader);scanner.Buffer(make([]byte,4096),1024*1024)
+ result:="";mounted:=false
  for scanner.Scan() {
-  fields:=strings.Fields(scanner.Text());if len(fields)<10||unescapeMount(fields[4])!=target{continue}
+  fields:=strings.Fields(scanner.Text());if len(fields)<5||unescapeMount(fields[4])!=target{continue}
+  if mounted{return "",true,errors.New("ambiguous stacked mounts at personal publish target")}
+  mounted=true
+  if len(fields)<10{return "",true,errors.New("malformed mount metadata")}
   separator:=-1;for i,field:=range fields {if field=="-"{separator=i;break}}
   if separator<0||len(fields)<separator+4{return "",true,errors.New("malformed mount metadata")}
-  if fields[separator+1]!="fuse.wellspiking"||!strings.HasPrefix(fields[separator+2],"personalstorage:personal-"){return "foreign",true,nil}
+  if fields[separator+1]!="fuse.wellspiking"||!strings.HasPrefix(fields[separator+2],"personalstorage:personal-"){result="foreign";continue}
   id:=strings.TrimPrefix(fields[separator+2],"personalstorage:")
-  if !volumeHandle.MatchString(id){return "foreign",true,nil}
-  return id,true,nil
+  if !volumeHandle.MatchString(id){result="foreign";continue}
+  result=id
  }
- return "",false,scanner.Err()
+ if err:=scanner.Err();err!=nil{return "",mounted,err}
+ return result,mounted,nil
 }
 func(m *FuseMounter)Unmount(target string)error {
  m.mu.Lock();handle:=m.mounts[target];m.mu.Unlock()

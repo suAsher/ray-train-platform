@@ -27,7 +27,8 @@ func NewSFTPFactory(e Endpoint)(Factory,error){
 }
 func(f *sftpFactory)Open(ctx context.Context,c Credential)(Store,error){
  if ValidateOwner(Owner{ID:c.OwnerID,Username:c.Username})!=nil||c.BindingID==""||c.Generation!=1{return nil,ErrInvalid}
- signer,err:=ssh.ParsePrivateKey(c.PrivateKey);if err!=nil{return nil,ErrConflict}
+ signer,err:=ssh.ParsePrivateKey(c.PrivateKey);if err!=nil||signer.PublicKey().Type()!=ssh.KeyAlgoED25519{return nil,ErrConflict}
+ c.PrivateKey=append([]byte(nil),c.PrivateKey...)
  cfg:=&ssh.ClientConfig{User:c.Username,Auth:[]ssh.AuthMethod{ssh.PublicKeys(signer)},HostKeyCallback:func(_ string,_ net.Addr,key ssh.PublicKey)error{for _,pin:=range f.keys{if bytes.Equal(pin.Marshal(),key.Marshal()){return nil}};return ErrForbidden},Timeout:15*time.Second}
  conn,err:=(&net.Dialer{Timeout:15*time.Second}).DialContext(ctx,"tcp",f.address);if err!=nil{return nil,ErrUnavailable}
  stop:=context.AfterFunc(ctx,func(){_ = conn.Close()});defer stop()
@@ -41,7 +42,7 @@ func(f *sftpFactory)Open(ctx context.Context,c Credential)(Store,error){
  budget:=&responseBudget{reader:stdout,close:func(){_ = conn.Close()}}
  client,err:=sftp.NewClientPipe(budget,stdin);if err!=nil{_ = sshClient.Close();return nil,ErrUnavailable}
  _ = conn.SetDeadline(time.Time{})
- store:=&sftpStore{client:client,ssh:sshClient,conn:conn,budget:budget,session:session};store.mu.Lock();store.stop=context.AfterFunc(ctx,func(){_ = store.Close()});store.mu.Unlock()
+ store:=&sftpStore{client:client,ssh:sshClient,conn:conn,budget:budget,session:session,reconnect:func(cleanupCtx context.Context)(Store,error){return f.Open(cleanupCtx,c)}};store.mu.Lock();store.stop=context.AfterFunc(ctx,func(){_ = store.Close()});store.mu.Unlock()
  if _,err:=store.Stat(ctx,"");err!=nil{_ = store.Close();return nil,err};return store,nil
 }
 // responseBudget bounds bytes before pkg/sftp can allocate an unbounded directory
@@ -53,7 +54,7 @@ func(f *sftpFactory)Open(ctx context.Context,c Credential)(Store,error){
   if exceeded{b.close();return 0,ErrTooLarge};return n,err
  }
  func(b *responseBudget)set(limit int64){b.mu.Lock();b.remaining=limit;b.limited=limit>0;b.mu.Unlock()}
- type sftpStore struct{client *sftp.Client;ssh *ssh.Client;session *ssh.Session;conn net.Conn;once sync.Once;mu sync.Mutex;stop func()bool;budget *responseBudget;listMu sync.Mutex}
+ type sftpStore struct{client *sftp.Client;ssh *ssh.Client;session *ssh.Session;conn net.Conn;once sync.Once;mu sync.Mutex;stop func()bool;budget *responseBudget;listMu sync.Mutex;reconnect func(context.Context)(Store,error)}
 func(s *sftpStore)Close()error{s.once.Do(func(){s.mu.Lock();stop:=s.stop;s.mu.Unlock();if stop!=nil{stop()};_ = s.conn.Close();_ = s.client.Close();_ = s.session.Close();_ = s.ssh.Close()});return nil}
 func(s *sftpStore)operation(ctx context.Context)func(){stop:=context.AfterFunc(ctx,func(){_ = s.Close()});timer:=time.AfterFunc(30*time.Second,func(){_ = s.Close()});return func(){stop();timer.Stop()}}
 func entry(info os.FileInfo)Entry{return Entry{Name:info.Name(),Size:info.Size(),Mode:info.Mode(),ModTime:info.ModTime()}}
@@ -85,3 +86,9 @@ func(f *sftpFile)Stat()(os.FileInfo,error){done:=f.op();defer done();info,err:=f
 func(f *sftpFile)Sync()error{done:=f.op();defer done();return safeError(f.file.Sync())}
 func(f *sftpFile)Truncate(size int64)error{if size<0{return ErrInvalid};done:=f.op();defer done();return safeError(f.file.Truncate(size))}
 func(f *sftpFile)Close()error{done:=f.op();defer done();return safeError(f.file.Close())}
+
+// Cleanup uses a fresh owner-authorized session because request cancellation
+// closes the original connection. Its caller supplies a bounded cleanup context.
+func(s *sftpStore)Cleanup(ctx context.Context,name string)error{
+ if s.reconnect==nil{return ErrUnavailable};store,err:=s.reconnect(ctx);if err!=nil{return err};defer store.Close();err=store.Remove(ctx,name);if errors.Is(err,ErrNotFound){return nil};return err
+}

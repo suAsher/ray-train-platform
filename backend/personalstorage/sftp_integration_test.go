@@ -1,8 +1,17 @@
 package personalstorage_test
 import(
  "context"
+ "crypto/ecdsa"
+ "crypto/elliptic"
+ "crypto/rand"
+ "encoding/pem"
+ "io"
  "errors"
  "os"
+ "net"
+ "strconv"
+ "golang.org/x/crypto/ssh"
+ "golang.org/x/crypto/ssh/knownhosts"
  "strings"
  "testing"
  ps "ray-train-platform-backend/personalstorage"
@@ -26,4 +35,30 @@ func TestPersonalStorageHostKeyPinRequired(t *testing.T){
  fixture,err:=testfixture.Start();if err!=nil{t.Fatal(err)};defer fixture.Close();other,err:=testfixture.Start();if err!=nil{t.Fatal(err)};defer other.Close()
  if _,err:=ps.NewSFTPFactory(ps.Endpoint{Host:"localhost",Port:22});err==nil{t.Fatal("missing pin accepted")}
  endpoint:=fixture.Endpoint;endpoint.KnownHosts=other.Endpoint.KnownHosts;if _,err:=ps.NewSFTPFactory(endpoint);err==nil{t.Fatal("foreign endpoint pin accepted")}
+ _,_,wrongKey,_,_,err:=ssh.ParseKnownHosts(other.Endpoint.KnownHosts);if err!=nil{t.Fatal(err)}
+ endpoint.KnownHosts=[]byte(knownhosts.Line([]string{net.JoinHostPort(endpoint.Host,strconv.Itoa(endpoint.Port))},wrongKey)+"\n")
+ wrongFactory,err:=ps.NewSFTPFactory(endpoint);if err!=nil{t.Fatal(err)};if store,err:=wrongFactory.Open(context.Background(),fixture.Credentials[0]);err==nil{store.Close();t.Fatal("changed upstream host key accepted")}
+}
+func TestPersonalStorageSFTPCancellationAndDirectoryRemoval(t *testing.T){
+ fixture,err:=testfixture.Start();if err!=nil{t.Fatal(err)};defer fixture.Close();factory,err:=ps.NewSFTPFactory(fixture.Endpoint);if err!=nil{t.Fatal(err)}
+ ctx,cancel:=context.WithCancel(context.Background());store,err:=factory.Open(ctx,fixture.Credentials[0]);if err!=nil{t.Fatal(err)};defer store.Close()
+ if err=store.Mkdir(ctx,"empty");err!=nil{t.Fatal(err)};if err=store.Remove(ctx,"empty");err!=nil{t.Fatal(err)}
+ cancel();if _,err=store.Stat(ctx,"");err==nil{t.Fatal("canceled session still readable")}
+}
+
+type cancelUploadReader struct{cancel context.CancelFunc;sent bool}
+func(r *cancelUploadReader)Read(p []byte)(int,error){if !r.sent{r.sent=true;return copy(p,[]byte("ab")),nil};r.cancel();return 0,io.ErrUnexpectedEOF}
+func TestPersonalStorageCanceledUploadCleansThroughFreshOwnerSession(t *testing.T){
+ fixture,err:=testfixture.Start();if err!=nil{t.Fatal(err)};defer fixture.Close();factory,err:=ps.NewSFTPFactory(fixture.Endpoint);if err!=nil{t.Fatal(err)}
+ ctx,cancel:=context.WithCancel(context.Background());defer cancel();store,err:=factory.Open(ctx,fixture.Credentials[0]);if err!=nil{t.Fatal(err)};defer store.Close()
+ if err=ps.Upload(ctx,store,"incomplete",&cancelUploadReader{cancel:cancel},4,16);err==nil{t.Fatal("canceled upload succeeded")}
+ check,err:=factory.Open(context.Background(),fixture.Credentials[0]);if err!=nil{t.Fatal(err)};defer check.Close();entries,err:=check.List(context.Background(),"");if err!=nil{t.Fatal(err)}
+ for _,entry:=range entries{if strings.HasPrefix(entry.Name,".raytrain-upload-")||entry.Name=="incomplete"{t.Fatal("canceled upload leaked staging file")}}
+}
+
+func TestPersonalStorageFactoryRejectsNonEd25519Credential(t *testing.T){
+ fixture,err:=testfixture.Start();if err!=nil{t.Fatal(err)};defer fixture.Close();factory,err:=ps.NewSFTPFactory(fixture.Endpoint);if err!=nil{t.Fatal(err)}
+ key,err:=ecdsa.GenerateKey(elliptic.P256(),rand.Reader);if err!=nil{t.Fatal(err)};block,err:=ssh.MarshalPrivateKey(key,"");if err!=nil{t.Fatal(err)}
+ credential:=fixture.Credentials[0];credential.PrivateKey=pem.EncodeToMemory(block)
+ if _,err=factory.Open(context.Background(),credential);!errors.Is(err,ps.ErrConflict){t.Fatal("non-Ed25519 personal credential accepted")}
 }

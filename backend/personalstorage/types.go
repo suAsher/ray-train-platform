@@ -41,7 +41,7 @@ type View struct {
  VerifiedAt *time.Time `json:"verifiedAt,omitempty"`
 }
 type MountReference struct { OwnerID,BindingID,Username,SecretName string;Generation int64 }
-type Credential struct {OwnerID,BindingID,Username string;Generation int64;PrivateKey []byte}
+type Credential struct {OwnerID,BindingID,Username string;Generation int64;PrivateKey []byte `json:"-"`}
 type Endpoint struct {Host string;Port int;KnownHosts []byte}
 type Entry struct {Name string `json:"name"`;Size int64 `json:"size"`;Mode os.FileMode `json:"mode"`;ModTime time.Time `json:"modTime"`}
 func(e Entry)IsDir()bool{return e.Mode.IsDir()}

@@ -10,7 +10,7 @@ require (
 	github.com/google/go-containerregistry v0.22.1
 	github.com/google/uuid v1.6.0
 	github.com/hanwen/go-fuse/v2 v2.8.0
-	github.com/pkg/sftp v1.13.9
+	github.com/pkg/sftp v1.13.11
 	github.com/prometheus/client_golang v1.23.2
 	github.com/volcengine/ve-tos-golang-sdk/v2 v2.9.8
 	go.opentelemetry.io/otel v1.41.0
