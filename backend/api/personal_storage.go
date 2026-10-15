@@ -71,12 +71,32 @@ func (h *Handler) personalStoragePrincipal(c *gin.Context) (auth.Principal, pers
 	return principal, owner, true
 }
 
+// Empty deployment scope preserves globally attested mode. A nonempty scope
+// is matched only against the stable authenticated subject, with no role bypass.
+func (h *Handler) personalStorageAllowed(principal auth.Principal) bool {
+	return h.personalStorage != nil && (len(h.personalStorageTestOwnerIDs) == 0 || h.personalStorageTestOwnerIDs[principal.Subject])
+}
+
+func (h *Handler) rejectPersonalStorageScope(c *gin.Context, principal auth.Principal) bool {
+	if h.personalStorage != nil && !h.personalStorageAllowed(principal) {
+		h.writeError(c, http.StatusForbidden, "PERSONAL_STORAGE_TEST_SCOPE_REQUIRED", "Wellspiking personal storage is not enabled for your account")
+		return true
+	}
+	return false
+}
+
 func (h *Handler) personalStorageStatus(ctx context.Context, principal auth.Principal, view personalstorage.View) personalStorageResponse {
-	response := personalStorageResponse{Enabled: h.personalStorage != nil, Bound: view.BindingID != "", ConnectionStatus: view.State, BrowseEnabled: view.State == "READY", MountPath: domain.WellspikingPersonalMountPath, MountStatus: "not-mounted", PublicKey: view.PublicKey, Fingerprint: view.Fingerprint, Username: view.Username, Generation: view.Generation, MaxUploadBytes: h.personalStorageMaxUpload, RegistrationURL: "https://docs.wellspiking.ai/begin/storage/mount_linux.html"}
+	response := personalStorageResponse{Enabled: h.personalStorageAllowed(principal), ConnectionStatus: "DISABLED", MountPath: domain.WellspikingPersonalMountPath, MountStatus: "not-mounted", MaxUploadBytes: h.personalStorageMaxUpload, RegistrationURL: "https://docs.wellspiking.ai/begin/storage/mount_linux.html"}
 	if !response.Enabled {
-		response.ConnectionStatus = "DISABLED"
 		return response
 	}
+	response.Bound = view.BindingID != ""
+	response.ConnectionStatus = view.State
+	response.BrowseEnabled = view.State == "READY"
+	response.PublicKey = view.PublicKey
+	response.Fingerprint = view.Fingerprint
+	response.Username = view.Username
+	response.Generation = view.Generation
 	if h.workspaces == nil {
 		return response
 	}
@@ -115,7 +135,7 @@ func (h *Handler) getPersonalStorage(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if h.personalStorage == nil {
+	if !h.personalStorageAllowed(principal) {
 		h.writeSuccess(c, http.StatusOK, h.personalStorageStatus(c.Request.Context(), principal, personalstorage.View{}))
 		return
 	}
@@ -187,12 +207,15 @@ func (h *Handler) isPersonalStorageRequest(c *gin.Context) bool {
 	return c.Param("id") == string(domain.DataSpaceWellspikingPersonal)
 }
 func (h *Handler) openPersonalStorage(c *gin.Context) (personalstorage.Store, bool) {
-	_, owner, ok := h.personalStoragePrincipal(c)
+	principal, owner, ok := h.personalStoragePrincipal(c)
 	if !ok {
 		return nil, false
 	}
 	if h.personalStorage == nil {
 		h.writeError(c, http.StatusNotFound, "DATA_SPACE_NOT_FOUND", "data space was not found")
+		return nil, false
+	}
+	if h.rejectPersonalStorageScope(c, principal) {
 		return nil, false
 	}
 	store, err := h.personalStorage.OpenStore(c.Request.Context(), owner)
@@ -354,6 +377,10 @@ func (h *Handler) uploadPersonalStorage(c *gin.Context) {
 // A non-simple header makes cookie-authenticated cross-origin mutations pass
 // through the browser's CORS preflight. HTML forms cannot enroll or upload.
 func (h *Handler) authorizePersonalStorageMutation(c *gin.Context, jsonBody bool) bool {
+	principal, _, ok := h.personalStoragePrincipal(c)
+	if !ok || h.rejectPersonalStorageScope(c, principal) {
+		return false
+	}
 	if c.GetHeader("X-RayTrain-Personal-Storage") != "1" || c.GetHeader("Sec-Fetch-Site") == "cross-site" {
 		h.writeError(c, http.StatusForbidden, "PERSONAL_STORAGE_CSRF_REQUIRED", "personal storage changes require the authenticated Portal request")
 		return false

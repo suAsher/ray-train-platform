@@ -114,7 +114,7 @@ func (h *Handler) listDataSpaces(c *gin.Context) {
 		return
 	}
 	response := dataSpacesForResponse(spaces, bindings, principal, h.dataObjectStore != nil, h.dataSpacesEnabled, h.idcDataSpacesEnabled)
-	if h.personalStorage != nil {
+	if h.personalStorageAllowed(principal) {
 		if owner, ownerErr := personalStorageOwner(principal); ownerErr == nil {
 			view, viewErr := h.personalStorage.View(c.Request.Context(), owner)
 			ready := viewErr == nil && view.State == "READY"
@@ -611,6 +611,9 @@ func (h *Handler) authorizeWritableDataSpace(c *gin.Context) (auth.Principal, do
 
 func (h *Handler) dataSpaceForPrincipal(c *gin.Context, principal auth.Principal, id domain.DataSpaceID) (domain.DataSpace, bool) {
 	if id == domain.DataSpaceWellspikingPersonal {
+		if h.rejectPersonalStorageScope(c, principal) {
+			return domain.DataSpace{}, false
+		}
 		if _, err := personalStorageOwner(principal); err != nil || h.personalStorage == nil {
 			h.writeError(c, http.StatusNotFound, "DATA_SPACE_NOT_FOUND", "data space was not found")
 			return domain.DataSpace{}, false

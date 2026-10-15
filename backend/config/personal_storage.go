@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -14,6 +15,7 @@ import (
 type PersonalStorageConfig struct {
 	Enabled                       bool
 	PersonalRootIsolationVerified bool
+	TestOwnerIDs                  []string
 	Host                          string
 	Port                          int
 	KnownHostsFile                string
@@ -32,8 +34,15 @@ func loadPersonalStorageConfig() (PersonalStorageConfig, error) {
 		return cfg, nil
 	}
 	cfg.PersonalRootIsolationVerified, err = parseBool("PERSONAL_STORAGE_PERSONAL_ROOT_ISOLATION_VERIFIED", false)
-	if err != nil || !cfg.PersonalRootIsolationVerified {
-		return cfg, fmt.Errorf("PERSONAL_STORAGE_PERSONAL_ROOT_ISOLATION_VERIFIED must attest upstream per-account root confinement")
+	if err != nil {
+		return cfg, err
+	}
+	cfg.TestOwnerIDs, err = parsePersonalStorageTestOwnerIDs(os.Getenv("PERSONAL_STORAGE_TEST_OWNER_IDS"))
+	if err != nil {
+		return cfg, err
+	}
+	if !cfg.PersonalRootIsolationVerified && len(cfg.TestOwnerIDs) == 0 {
+		return cfg, fmt.Errorf("personal storage requires upstream isolation attestation or explicit PERSONAL_STORAGE_TEST_OWNER_IDS")
 	}
 	cfg.Host = strings.TrimSpace(os.Getenv("PERSONAL_STORAGE_HOST"))
 	if cfg.Host != "mount.wellspiking.ai" {
@@ -61,4 +70,29 @@ func loadPersonalStorageConfig() (PersonalStorageConfig, error) {
 		return cfg, fmt.Errorf("PERSONAL_STORAGE_MAX_UPLOAD_BYTES must be between 1 and 67108864")
 	}
 	return cfg, nil
+}
+
+var personalStorageStableOwnerID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:._-]{0,255}$`)
+
+// Test scope is deployment-owned and never inferred from usernames or teams.
+// A blank list means global mode only when the separate attestation is true.
+func parsePersonalStorageTestOwnerIDs(raw string) ([]string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	parts := strings.Split(raw, ",")
+	if len(parts) > 16 {
+		return nil, fmt.Errorf("PERSONAL_STORAGE_TEST_OWNER_IDS accepts at most 16 stable owner IDs")
+	}
+	seen := make(map[string]bool, len(parts))
+	ids := make([]string, 0, len(parts))
+	for _, part := range parts {
+		id := strings.TrimSpace(part)
+		if !personalStorageStableOwnerID.MatchString(id) || seen[id] {
+			return nil, fmt.Errorf("PERSONAL_STORAGE_TEST_OWNER_IDS requires distinct valid stable owner IDs")
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids, nil
 }

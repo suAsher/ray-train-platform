@@ -61,9 +61,19 @@ OIDC issuer. Local-only development does not. */}}
 {{- $objectSetQuota := default (dict) $personalStorage.objectSetQuota }}
 {{- $personalCSI := default (dict) $personalStorage.csi }}
 {{- $personalCSIImage := default (dict) $personalCSI.image }}
+{{- if and (hasKey $personalStorage "enabled") (not (kindIs "bool" $personalStorage.enabled)) }}{{- fail "personalStorage.enabled must be boolean" }}{{- end }}
+{{- if and (hasKey $personalStorage "personalRootIsolationVerified") (not (kindIs "bool" $personalStorage.personalRootIsolationVerified)) }}{{- fail "personalStorage.personalRootIsolationVerified must be boolean" }}{{- end }}
+{{- $personalTestOwnerIDs := list }}
+{{- if hasKey $personalStorage "testOwnerIDs" }}{{- $personalTestOwnerIDs = $personalStorage.testOwnerIDs }}{{- end }}
+{{- if not (kindIs "slice" $personalTestOwnerIDs) }}{{- fail "personalStorage.testOwnerIDs must be a list of stable user IDs" }}{{- end }}
+{{- range $ownerID := $personalTestOwnerIDs }}
+{{- if not (kindIs "string" $ownerID) }}{{- fail "personalStorage.testOwnerIDs must contain only stable user ID strings" }}{{- end }}
+{{- if not (regexMatch `^[A-Za-z0-9][A-Za-z0-9:._-]{0,255}$` $ownerID) }}{{- fail "personalStorage.testOwnerIDs contains an invalid stable user ID" }}{{- end }}
+{{- end }}
+{{- if ne (len (uniq $personalTestOwnerIDs)) (len $personalTestOwnerIDs) }}{{- fail "personalStorage.testOwnerIDs must not contain duplicates" }}{{- end }}
 {{- $wellspikingPersonalEnabled := default false $personalStorage.enabled }}
 {{- if $wellspikingPersonalEnabled }}
-{{- if not (default false $personalStorage.personalRootIsolationVerified) }}{{- fail "personalStorage.personalRootIsolationVerified must attest upstream personal root confinement" }}{{- end }}
+{{- if and (not (default false $personalStorage.personalRootIsolationVerified)) (eq (len $personalTestOwnerIDs) 0) }}{{- fail "personal storage requires attested upstream isolation or explicit validated testOwnerIDs" }}{{- end }}
 {{- if not (default false $personalCSI.enabled) }}{{- fail "personalStorage.csi.enabled is required for personal storage" }}{{- end }}
 {{- if not (default "" $personalStorage.host) }}{{- fail "personalStorage.host is required" }}{{- end }}
 {{- if not (default "" $personalStorage.existingKnownHostsSecret) }}{{- fail "personalStorage.existingKnownHostsSecret must pin the upstream host identity" }}{{- end }}
@@ -240,7 +250,9 @@ spec:
               value: {{ $wellspikingPersonalEnabled | quote }}
             {{- if $wellspikingPersonalEnabled }}
             - name: PERSONAL_STORAGE_PERSONAL_ROOT_ISOLATION_VERIFIED
-              value: {{ $personalStorage.personalRootIsolationVerified | quote }}
+              value: {{ default false $personalStorage.personalRootIsolationVerified | quote }}
+            - name: PERSONAL_STORAGE_TEST_OWNER_IDS
+              value: {{ join "," $personalTestOwnerIDs | quote }}
             - name: PERSONAL_STORAGE_HOST
               value: {{ $personalStorage.host | quote }}
             - name: PERSONAL_STORAGE_PORT

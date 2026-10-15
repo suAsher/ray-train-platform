@@ -428,6 +428,9 @@ personalStorage:
   # Independent per-user SFTP storage. Never a team credential or remote root.
   enabled: false
   personalRootIsolationVerified: false
+  # Temporary, explicitly validated personal accounts only. Stable platform
+  # user IDs; never usernames or tenant IDs. Empty does not enable test mode.
+  testOwnerIDs: []
   host: ""
   port: 22
   existingKnownHostsSecret: ""

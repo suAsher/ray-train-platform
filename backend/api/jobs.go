@@ -48,6 +48,7 @@ type globalJobReader interface {
 
 type Handler struct {
 	personalStorage               PersonalStorageService
+	personalStorageTestOwnerIDs    map[string]bool
 	personalStorageCSIImage       string
 	personalStorageCapacity       string
 	personalStorageMaxUpload      int64
@@ -180,6 +181,7 @@ type ExperimentProvider interface {
 
 type Options struct {
 	PersonalStorage               PersonalStorageService
+	PersonalStorageTestOwnerIDs    []string
 	PersonalStorageCSIImage       string
 	PersonalStorageMountCapacity  string
 	PersonalStorageMaxUploadBytes int64
@@ -284,6 +286,10 @@ func NewHandler(repository JobRepository, options Options) *Handler {
 	}
 	handler := &Handler{repository: repository, logs: options.Logs, metrics: options.Metrics, experiments: options.Experiments, mlflowTracking: options.MLflowTracking, trackingArtifacts: options.TrackingArtifacts, mlflowIntegrations: options.MLflowIntegrations, allowAnonymous: options.AllowAnonymous, imageAllowlist: append([]string(nil), options.ImageAllowlist...), gitAllowlist: append([]string(nil), options.GitAllowlist...), workspaces: options.Workspaces, kubernetes: options.Kubernetes, workspaceImage: options.WorkspaceImage, rayVersion: options.RayVersion, serviceAccount: options.ServiceAccount, imagePullSecrets: append([]string(nil), options.ImagePullSecrets...), platformNamespace: strings.TrimSpace(options.PlatformNamespace), idcClaim: options.IDCClaim, idcMountPath: options.IDCMountPath, clusterQueue: options.KueueClusterQueue, admin: options.Admin, gpuAllocations: options.GPUAllocations, quota: options.Quota, memberships: options.Memberships, workspacePepper: append([]byte(nil), options.WorkspacePepper...), trainingNodeSelector: options.TrainingNodeSelector, trainingDedicatedNodes: options.TrainingDedicatedNodes, images: options.Images, gitCredentials: options.GitCredentials, storageAssets: options.StorageAssets, datasets: options.Datasets, datasetPublications: options.DatasetPublications, datasetInternalPrefix: strings.TrimSuffix(strings.TrimSpace(options.DatasetInternalPrefix), "/"), datasetVersioningEnabled: options.DatasetVersioningEnabled, rayDataStreamingEnabled: options.RayDataStreamingEnabled, dataSpaces: options.DataSpaces, dataSpacesEnabled: options.DataSpacesEnabled, workspaceFSXCompatibleEnabled: options.WorkspaceFSXCompatibleEnabled, dataSpacesFSXAttrs: options.DataSpacesFSXAttributes, dataSpacesCapacity: options.DataSpacesMountCapacity, dataSpacesPublicRoot: strings.TrimSpace(options.DataSpacesPublicRoot), idcDataSpacesEnabled: options.IDCDataSpacesEnabled, idcDataSpacesCapacity: options.IDCDataSpacesMountCapacity, idcDataSpaceSources: idcSources, directoryLister: options.DirectoryLister, directoryInitializer: options.DirectoryInitializer, dataObjectStore: options.DataObjectStore, dataSpaceUploads: options.DataSpaceUploads, workspaceSnapshotStore: options.WorkspaceSnapshotStore, workspaceSnapshots: options.WorkspaceSnapshots, idcSyncCallbacks: options.IDCDataSyncCallbacks, idcSyncCallbackKey: append([]byte(nil), options.IDCDataSyncCallbackKey...), idcSyncManager: options.IDCDataSyncManager, artifactLister: options.ArtifactLister, artifactReader: options.ArtifactReader, gitCredentialTester: options.GitCredentialTester, gitRefResolver: options.GitRefResolver, newID: newJobID, mlflowDashboardEnabled: options.MLflowDashboardEnabled, mlflowDashboardPublicEnabled: options.MLflowDashboardPublicEnabled, mlflowNativePublicEnabled: options.MLflowNativePublicEnabled, mlflowDashboardStore: options.MLflowDashboardStore, mlflowTrackingURL: strings.TrimSpace(options.MLflowTrackingURL), mlflowPublicOrigin: strings.TrimSpace(options.MLflowPublicOrigin), mlflowDashboardPepper: append([]byte(nil), options.MLflowDashboardPepper...), mlflowDashboardTTL: options.MLflowDashboardSessionTTL, mlflowDashboardNow: options.MLflowDashboardNow, mlflowDashboardRandom: options.MLflowDashboardRandom, tenantScheduling: options.TenantScheduling, preemptionEnabled: options.PreemptionEnabled}
 	handler.personalStorage = options.PersonalStorage
+	handler.personalStorageTestOwnerIDs = make(map[string]bool, len(options.PersonalStorageTestOwnerIDs))
+	for _, ownerID := range options.PersonalStorageTestOwnerIDs {
+		handler.personalStorageTestOwnerIDs[ownerID] = true
+	}
 	handler.personalStorageCSIImage = options.PersonalStorageCSIImage
 	handler.personalStorageCapacity = options.PersonalStorageMountCapacity
 	handler.personalStorageMaxUpload = options.PersonalStorageMaxUploadBytes

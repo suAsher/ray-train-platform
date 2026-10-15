@@ -625,7 +625,7 @@ func (h *Handler) exchangeWorkspaceAccess(c *gin.Context) {
 // A binding follows the user through team migration. New namespace-local
 // claims are derived from the same immutable personal binding and generation.
 func (h *Handler) resolveWorkspacePersonalStorage(ctx context.Context, principal auth.Principal) (string, error) {
-	if h.personalStorage == nil {
+	if !h.personalStorageAllowed(principal) {
 		return "", nil
 	}
 	owner, err := personalStorageOwner(principal)

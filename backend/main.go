@@ -225,6 +225,7 @@ func main() {
 			log.Fatalf("initialize personal storage vault: %v", vaultErr)
 		}
 		jobOptions.PersonalStorage = personalstorage.NewService(repositories.NewPersonalStorageRepository(database), vault, factory)
+		jobOptions.PersonalStorageTestOwnerIDs = append([]string(nil), cfg.PersonalStorage.TestOwnerIDs...)
 		jobOptions.PersonalStorageCSIImage = cfg.PersonalStorage.CSIImage
 		jobOptions.PersonalStorageMountCapacity = cfg.PersonalStorage.MountCapacity
 		jobOptions.PersonalStorageMaxUploadBytes = cfg.PersonalStorage.MaxUploadBytes
