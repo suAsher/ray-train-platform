@@ -1,5 +1,5 @@
 // Operator-only acceptance for the two explicitly authorized storage accounts.
-// Build on the builder from backend/: go build ../ops/personal-storage-isolation-acceptance/main.go
+// Build on the builder from backend/: go build ../ops/personal-storage-isolation-acceptance/*.go
 // This tool never changes production database rows, Helm values or membership.
 package main
 
@@ -200,20 +200,29 @@ func pinnedFactory(p string) (personalstorage.Factory, error) {
 func emit(value any) { _ = json.NewEncoder(os.Stdout).Encode(value) }
 
 func main() {
-	var action, kubeconfig, knownHosts, stateDir string
-	flag.StringVar(&action, "action", "", "enroll-test")
+	var action, kubeconfig, knownHosts, stateDir, stateDirA string
+	var withFuse bool
+	flag.StringVar(&action, "action", "", "enroll-test or isolation")
 	flag.StringVar(&kubeconfig, "kubeconfig", "", "explicit operator kubeconfig")
 	flag.StringVar(&knownHosts, "known-hosts", "", "previously trusted fixed-origin known_hosts")
 	flag.StringVar(&stateDir, "state-dir", "", "absolute private raytrain-test operator state directory (0700)")
+	flag.StringVar(&stateDirA, "a-state-dir", "", "existing private guofeng.su operator state directory (isolation only)")
+	flag.BoolVar(&withFuse, "with-fuse", false, "also verify two private-container FUSE mounts")
 	flag.Parse()
-	if flag.NArg() != 0 || action != "enroll-test" || kubeconfig == "" || knownHosts == "" || stateDir == "" {
+	if flag.NArg() != 0 || (action != "enroll-test" && action != "isolation") || kubeconfig == "" || knownHosts == "" || stateDir == "" || (action == "isolation" && stateDirA == "") || (action == "enroll-test" && (stateDirA != "" || withFuse)) {
 		emit(map[string]any{"ok": false, "stage": "arguments"})
 		os.Exit(2)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	if stage, err := enrollTest(ctx, kubeconfig, knownHosts, stateDir); err != nil {
-		emit(map[string]any{"ok": false, "stage": stage})
+	var stage string
+	var err error
+	if action == "enroll-test" { stage, err = enrollTest(ctx, kubeconfig, knownHosts, stateDir) } else { stage, err = isolation(ctx, kubeconfig, knownHosts, stateDirA, stateDir, withFuse) }
+	if err != nil {
+		v := map[string]any{"ok": false, "stage": stage}
+		var failure *isolationFailure
+		if errors.As(err, &failure) { v["markerDirectories"] = failure.markers }
+		emit(v)
 		os.Exit(1)
 	}
 }
