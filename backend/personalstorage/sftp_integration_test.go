@@ -3,6 +3,7 @@ package personalstorage_test
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/dsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/pem"
@@ -353,4 +354,40 @@ func TestPersonalStorageHostKeyNegotiationUsesOnlyTrustedPinAlgorithms(t *testin
 			t.Fatal(err)
 		}
 	})
+}
+
+func TestPersonalStorageRSAHostPinNegotiatesSHA2(t *testing.T) {
+	fixture, err := testfixture.StartWithRSAHostKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fixture.Close()
+	factory, err := ps.NewSFTPFactory(fixture.Endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := factory.Open(context.Background(), fixture.Credentials[0])
+	if err != nil {
+		t.Fatalf("pinned RSA host supporting only SHA2 rejected: %v", err)
+	}
+	defer store.Close()
+}
+
+func TestPersonalStorageRejectsUnsupportedHostPinAlgorithm(t *testing.T) {
+	var parameters dsa.Parameters
+	if err := dsa.GenerateParameters(&parameters, rand.Reader, dsa.L1024N160); err != nil {
+		t.Fatal(err)
+	}
+	key := &dsa.PrivateKey{PublicKey: dsa.PublicKey{Parameters: parameters}}
+	if err := dsa.GenerateKey(key, rand.Reader); err != nil {
+		t.Fatal(err)
+	}
+	public, err := ssh.NewPublicKey(&key.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := ps.Endpoint{Host: "localhost", Port: 22, KnownHosts: []byte(knownhosts.Line([]string{"localhost"}, public) + "\n")}
+	if _, err := ps.NewSFTPFactory(endpoint); !errors.Is(err, ps.ErrInvalid) {
+		t.Fatalf("unsupported host pin algorithm accepted: %v", err)
+	}
 }

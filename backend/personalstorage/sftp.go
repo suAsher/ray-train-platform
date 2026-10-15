@@ -21,6 +21,7 @@ import (
 type sftpFactory struct {
 	address string
 	keys    []ssh.PublicKey
+	hostKeyAlgorithms []string
 }
 
 // NewSFTPFactory accepts only administrator-configured fixed origins and pinned keys.
@@ -53,7 +54,49 @@ func NewSFTPFactory(e Endpoint) (Factory, error) {
 	if len(keys) == 0 {
 		return nil, ErrInvalid
 	}
-	return &sftpFactory{address: address, keys: keys}, nil
+	algorithms, err := trustedHostKeyAlgorithms(keys)
+	if err != nil {
+		return nil, err
+	}
+	return &sftpFactory{address: address, keys: keys, hostKeyAlgorithms: algorithms}, nil
+}
+
+// Host public key formats and negotiated signature algorithms differ for RSA.
+// Intersect the trusted pin types with the library's safe algorithms so other
+// server keys cannot be selected, and SHA-1/DSA never become a fallback.
+func trustedHostKeyAlgorithms(keys []ssh.PublicKey) ([]string, error) {
+	keyType := func(algorithm string) string {
+		switch algorithm {
+		case ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSASHA512:
+			return ssh.KeyAlgoRSA
+		case ssh.CertAlgoRSASHA256v01, ssh.CertAlgoRSASHA512v01:
+			return ssh.CertAlgoRSAv01
+		default:
+			return algorithm
+		}
+	}
+	supported := ssh.SupportedAlgorithms().HostKeys
+	safeTypes := make(map[string]bool)
+	for _, algorithm := range supported {
+		safeTypes[keyType(algorithm)] = true
+	}
+	pinnedTypes := make(map[string]bool)
+	for _, key := range keys {
+		if !safeTypes[key.Type()] {
+			return nil, ErrInvalid
+		}
+		pinnedTypes[key.Type()] = true
+	}
+	var algorithms []string
+	for _, algorithm := range supported {
+		if pinnedTypes[keyType(algorithm)] {
+			algorithms = append(algorithms, algorithm)
+		}
+	}
+	if len(algorithms) == 0 {
+		return nil, ErrInvalid
+	}
+	return algorithms, nil
 }
 func (f *sftpFactory) Open(ctx context.Context, c Credential) (Store, error) {
 	if ValidateOwner(Owner{ID: c.OwnerID, Username: c.Username}) != nil || c.BindingID == "" || c.Generation != 1 {
@@ -64,7 +107,7 @@ func (f *sftpFactory) Open(ctx context.Context, c Credential) (Store, error) {
 		return nil, ErrConflict
 	}
 	c.PrivateKey = append([]byte(nil), c.PrivateKey...)
-	cfg := &ssh.ClientConfig{User: c.Username, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+	cfg := &ssh.ClientConfig{User: c.Username, HostKeyAlgorithms: append([]string(nil), f.hostKeyAlgorithms...), Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
 		for _, pin := range f.keys {
 			if bytes.Equal(pin.Marshal(), key.Marshal()) {
 				return nil

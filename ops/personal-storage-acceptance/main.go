@@ -315,7 +315,7 @@ func diagnose(ctx context.Context, repo fileRepository, vault *personalstorage.K
 	defer stop()
 	if err := conn.SetDeadline(time.Now().Add(30*time.Second)); err != nil { return fail("diagnose-deadline", err) }
 	emit(map[string]any{"ok": true, "stage": "diagnose-tcp"})
-	sshConfig := &ssh.ClientConfig{User: username, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, Timeout: 15*time.Second, HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+	sshConfig := &ssh.ClientConfig{User: username, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyAlgorithms: []string{ssh.KeyAlgoED25519}, Timeout: 15*time.Second, HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
 		fingerprint := ssh.FingerprintSHA256(key)
 		matches := key.Type() == ssh.KeyAlgoED25519 && fingerprint == hostFingerprint
 		// SSH host-key metadata is public; no key material or private names.
@@ -401,7 +401,7 @@ func markerID() (string, error) {
 }
 
 func evidence(action, marker string, keep bool) {
-	v := map[string]any{"ok": true, "action": action, "owner": username, "hostFingerprint": hostFingerprint, "policyRejected": true, "readWriteRenameRemove": true, "retained": keep, "crossAccountIsolationVerified": false, "productionEnabled": false}
+	v := map[string]any{"ok": true, "action": action, "owner": username, "hostFingerprint": hostFingerprint, "policyRejected": true, "rootMarkerVisible": true, "excludedRootsHidden": true, "readWriteRenameRemove": true, "retained": keep, "crossAccountIsolationVerified": false, "productionEnabled": false}
 	if keep {
 		v["markerDirectory"] = marker
 	}
@@ -437,6 +437,15 @@ func storeCheck(ctx context.Context, service *personalstorage.Service, keep bool
 	if err := store.Mkdir(ctx, marker); err != nil {
 		return "marker-mkdir", err
 	}
+	// Inspect names only in memory. Never log or persist the owner's entries.
+	rootEntries, err := store.List(ctx, "")
+	if err != nil { return "sftp-root-list", err }
+	markerVisible, excludedHidden := false, true
+	for _, e := range rootEntries {
+		if e.Name == marker && e.IsDir() { markerVisible = true }
+		if excludedRoot(e.Name) { excludedHidden = false }
+	}
+	if !markerVisible || !excludedHidden { return "sftp-root-visibility", personalstorage.ErrForbidden }
 	if err := store.Mkdir(ctx, marker+"/child"); err != nil {
 		return "sftp-mkdir", err
 	}
@@ -495,6 +504,15 @@ func hasEntry(entries []personalstorage.Entry, name string) bool {
 		}
 	}
 	return false
+}
+
+func excludedRoot(name string) bool {
+	switch name {
+	case ".minio", ".original", ".wellspiking", ".spk-hybrid", ".spk-ssd", ".shared", ".spiking-group-shared":
+		return true
+	default:
+		return false
+	}
 }
 
 // A lost creation acknowledgment may still have created the directory. Install
@@ -582,6 +600,15 @@ func mountCheck(ctx context.Context, service *personalstorage.Service, keep bool
 	if err := os.Mkdir(dir, 0700); err != nil {
 		return "fuse-marker-mkdir", err
 	}
+	// Exercise a genuine mounted-root readdir without exposing private names.
+	rootEntries, err := os.ReadDir(target)
+	if err != nil { return "fuse-root-readdir", err }
+	markerVisible, excludedHidden := false, true
+	for _, e := range rootEntries {
+		if e.Name() == marker && e.IsDir() { markerVisible = true }
+		if excludedRoot(e.Name()) { excludedHidden = false }
+	}
+	if !markerVisible || !excludedHidden { return "fuse-root-visibility", personalstorage.ErrForbidden }
 	if err := os.Mkdir(filepath.Join(dir, "child"), 0700); err != nil {
 		return "fuse-mkdir", err
 	}

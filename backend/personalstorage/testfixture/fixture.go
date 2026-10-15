@@ -8,6 +8,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/pem"
 	"errors"
 	"github.com/pkg/sftp"
@@ -47,6 +48,33 @@ func StartWithECDSAHostKey() (*Fixture, error) {
 	return start([]ssh.Signer{signer})
 }
 
+// StartWithRSAHostKey pins RSA, offers an additional Ed25519 key, and restricts
+// the RSA signer to SHA-2 signatures. A client must map the public key format
+// ssh-rsa to rsa-sha2 algorithms instead of enabling legacy SHA-1 signatures.
+func StartWithRSAHostKey() (*Fixture, error) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, err
+	}
+	signer, err := ssh.NewSignerFromKey(key)
+	if err != nil {
+		return nil, err
+	}
+	host, err := ssh.NewSignerWithAlgorithms(signer.(ssh.AlgorithmSigner), []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256})
+	if err != nil {
+		return nil, err
+	}
+	_, edKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	edHost, err := ssh.NewSignerFromKey(edKey)
+	if err != nil {
+		return nil, err
+	}
+	return startWithPinnedHostKey(host, []ssh.Signer{edHost})
+}
+
 func start(additionalHostKeys []ssh.Signer) (*Fixture, error) {
 	_, hostKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -56,6 +84,10 @@ func start(additionalHostKeys []ssh.Signer) (*Fixture, error) {
 	if err != nil {
 		return nil, err
 	}
+	return startWithPinnedHostKey(host, additionalHostKeys)
+}
+
+func startWithPinnedHostKey(host ssh.Signer, additionalHostKeys []ssh.Signer) (*Fixture, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
