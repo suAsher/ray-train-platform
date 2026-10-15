@@ -217,11 +217,17 @@ func main() {
 	defer cancel()
 	var stage string
 	var err error
-	if action == "enroll-test" { stage, err = enrollTest(ctx, kubeconfig, knownHosts, stateDir) } else { stage, err = isolation(ctx, kubeconfig, knownHosts, stateDirA, stateDir, withFuse) }
+	if action == "enroll-test" {
+		stage, err = enrollTest(ctx, kubeconfig, knownHosts, stateDir)
+	} else {
+		stage, err = isolation(ctx, kubeconfig, knownHosts, stateDirA, stateDir, withFuse)
+	}
 	if err != nil {
 		v := map[string]any{"ok": false, "stage": stage}
 		var failure *isolationFailure
-		if errors.As(err, &failure) { v["markerDirectories"] = failure.markers }
+		if errors.As(err, &failure) {
+			v["markerDirectories"] = failure.markers
+		}
 		emit(v)
 		os.Exit(1)
 	}
