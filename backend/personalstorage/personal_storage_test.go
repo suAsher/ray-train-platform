@@ -291,3 +291,22 @@ func TestPersonalStorageInvalidAndUnreadyOwnersFailClosed(t *testing.T) {
 		t.Fatal("unverified credentials accepted")
 	}
 }
+
+func TestPersonalStoragePathExcludesUpstreamVirtualRoots(t *testing.T) {
+	for _, root := range []string{".minio", ".original", ".wellspiking", ".spk-hybrid", ".spk-ssd", ".shared", ".spiking-group-shared"} {
+		for _, p := range []string{root, root + "/file.bin"} {
+			if _, err := ValidatePath(p); !errors.Is(err, ErrInvalid) {
+				t.Errorf("accepted upstream virtual or internal root %q", p)
+			}
+		}
+		p := "private/" + root + "/file.bin"
+		if got, err := ValidatePath(p); err != nil || got != p {
+			t.Errorf("private nested name rejected: %q %v", got, err)
+		}
+	}
+	for _, p := range []string{".private.txt", ".config/settings.json", ".minio-backup/file.bin", ".original-photos/photo.jpg"} {
+		if got, err := ValidatePath(p); err != nil || got != p {
+			t.Errorf("private hidden path rejected: %q %v", got, err)
+		}
+	}
+}

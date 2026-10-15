@@ -232,3 +232,78 @@ func TestPersonalStorageFactoryRejectsNonEd25519Credential(t *testing.T) {
 		t.Fatal("non-Ed25519 personal credential accepted")
 	}
 }
+
+func TestPersonalStorageRealSFTPFiltersUpstreamVirtualRoots(t *testing.T) {
+	fixture, err := testfixture.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fixture.Close()
+	raw, err := fixture.RawClient(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	roots := []string{".minio", ".original", ".wellspiking", ".spk-hybrid", ".spk-ssd", ".shared", ".spiking-group-shared"}
+	for _, root := range roots {
+		if err := raw.Mkdir("/" + root); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{".config", ".minio-backup", "private"} {
+		if err := raw.Mkdir("/" + name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := raw.Mkdir("/private/.minio"); err != nil {
+		t.Fatal(err)
+	}
+	file, err := raw.Create("/.private.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write([]byte("personal hidden file")); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	factory, err := ps.NewSFTPFactory(fixture.Endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	store, err := factory.Open(ctx, fixture.Credentials[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	entries, err := store.List(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible := make(map[string]bool)
+	for _, entry := range entries {
+		visible[entry.Name] = true
+	}
+	for _, root := range roots {
+		if visible[root] {
+			t.Errorf("upstream virtual or internal root listed: %s", root)
+		}
+		if _, err := store.Stat(ctx, root); !errors.Is(err, ps.ErrInvalid) {
+			t.Errorf("upstream virtual or internal root stat accepted: %s", root)
+		}
+		if _, err := store.Open(ctx, root+"/created", os.O_CREATE|os.O_WRONLY); !errors.Is(err, ps.ErrInvalid) {
+			t.Errorf("upstream virtual or internal root write accepted: %s", root)
+		}
+	}
+	for _, name := range []string{".config", ".minio-backup", ".private.txt", "private"} {
+		if !visible[name] {
+			t.Errorf("private hidden entry omitted: %s", name)
+		}
+	}
+	nested, err := store.List(ctx, "private")
+	if err != nil || len(nested) != 1 || nested[0].Name != ".minio" {
+		t.Fatalf("private nested entry rejected: count=%d error=%v", len(nested), err)
+	}
+}
