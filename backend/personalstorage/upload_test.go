@@ -63,11 +63,25 @@ func TestPersonalStorageUploadBoundsAndAtomicCompletion(t *testing.T) {
 	}
 }
 
-type lostOpenAcknowledgmentStore struct{uploadStore;staged bool}
-func(s *lostOpenAcknowledgmentStore)Open(context.Context,string,int)(File,error){s.staged=true;return nil,ErrUnavailable}
-func(s *lostOpenAcknowledgmentStore)Remove(context.Context,string)error{s.staged=false;return nil}
-func TestPersonalStorageUploadCleansAfterLostOpenAcknowledgment(t *testing.T){
- store:=&lostOpenAcknowledgmentStore{}
- if err:=Upload(context.Background(),store,"file",strings.NewReader("data"),4,4);!errors.Is(err,ErrUnavailable){t.Fatalf("unexpected failed-open result: %v",err)}
- if store.staged{t.Fatal("failed open left upstream staging file")}
+type lostOpenAcknowledgmentStore struct {
+	uploadStore
+	staged bool
+}
+
+func (s *lostOpenAcknowledgmentStore) Open(context.Context, string, int) (File, error) {
+	s.staged = true
+	return nil, ErrUnavailable
+}
+func (s *lostOpenAcknowledgmentStore) Remove(context.Context, string) error {
+	s.staged = false
+	return nil
+}
+func TestPersonalStorageUploadCleansAfterLostOpenAcknowledgment(t *testing.T) {
+	store := &lostOpenAcknowledgmentStore{}
+	if err := Upload(context.Background(), store, "file", strings.NewReader("data"), 4, 4); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("unexpected failed-open result: %v", err)
+	}
+	if store.staged {
+		t.Fatal("failed open left upstream staging file")
+	}
 }
