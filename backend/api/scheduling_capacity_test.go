@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -51,7 +52,9 @@ func TestSchedulingCapacityPATUsesOwnPoolAndRedactsNodeDetails(t *testing.T) {
 			p.Roles = []string{domain.RoleSuperAdmin}
 		}
 		r := httptest.NewRecorder()
+		started := time.Now().UTC()
 		sessionRouter(h, &p).ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/api/v1/capacity?workerReplicas=2&gpusPerWorker=8", nil))
+		assertCapacityServerTime(t, started, r)
 		var body struct {
 			Data domain.SchedulingCapacity `json:"data"`
 		}
@@ -74,7 +77,9 @@ func TestSchedulingCapacityUnavailableDoesNotInventQuota(t *testing.T) {
 	h := NewHandler(&fakeJobRepository{}, Options{})
 	p := auth.Principal{Subject: "member", TenantID: "team-a", AuthType: auth.AuthTypeOIDC}
 	r := httptest.NewRecorder()
+	started := time.Now().UTC()
 	sessionRouter(h, &p).ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/api/v1/capacity", nil))
+	assertCapacityServerTime(t, started, r)
 	var body struct {
 		Data domain.SchedulingCapacity `json:"data"`
 	}
@@ -83,5 +88,32 @@ func TestSchedulingCapacityUnavailableDoesNotInventQuota(t *testing.T) {
 	}
 	if r.Code != http.StatusOK || body.Data.Available || body.Data.Quota != nil || body.Data.UnavailableReason != "quota_unavailable" {
 		t.Fatalf("response=%d %s", r.Code, r.Body)
+	}
+}
+
+// Decode the wire contract independently so a missing domain field fails as a
+// behavioral assertion rather than a compilation error.
+func assertCapacityServerTime(t *testing.T, started time.Time, response *httptest.ResponseRecorder) {
+	t.Helper()
+	finished := time.Now().UTC()
+	var body struct {
+		Data struct {
+			ObservedAt time.Time  `json:"observedAt"`
+			ServerTime *time.Time `json:"serverTime"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	serverTime := body.Data.ServerTime
+	if serverTime == nil || serverTime.IsZero() {
+		t.Fatalf("capacity response must include serverTime: %s", response.Body)
+	}
+	if serverTime.Before(started) || serverTime.After(finished) || serverTime.Before(body.Data.ObservedAt) {
+		t.Fatalf("serverTime must identify this response after observation: start=%s observed=%s server=%s end=%s", started, body.Data.ObservedAt, serverTime, finished)
+	}
+	_, offset := serverTime.Zone()
+	if offset != 0 {
+		t.Fatalf("serverTime must be UTC: %s", serverTime)
 	}
 }

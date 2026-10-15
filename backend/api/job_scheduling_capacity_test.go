@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"ray-train-platform-backend/auth"
@@ -54,7 +55,9 @@ func TestJobSchedulingCapacityEarlyStatesDoNotQueryLogs(t *testing.T) {
 			logs := &diagnosisTestProvider{}
 			h := NewHandler(&fakeJobRepository{jobs: []domain.TrainingJob{job}}, Options{Logs: logs})
 			r := httptest.NewRecorder()
+			started := time.Now().UTC()
 			jobSchedulingCapacityRouter(h, principal).ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/api/v1/jobs/job-01/scheduling-capacity", nil))
+			assertCapacityServerTime(t, started, r)
 			var body struct {
 				Data domain.SchedulingCapacity `json:"data"`
 			}
@@ -80,7 +83,9 @@ func TestJobSchedulingCapacityRunningOrTerminalIsNotApplicable(t *testing.T) {
 			quota := &fakePlatformQuotaStore{quota: domain.TenantQuota{TenantID: "team-a", GPULimit: 24, GPUAvailable: 24}}
 			h := NewHandler(&fakeJobRepository{jobs: []domain.TrainingJob{job}}, Options{Quota: quota})
 			r := httptest.NewRecorder()
+			started := time.Now().UTC()
 			jobSchedulingCapacityRouter(h, principal).ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/api/v1/jobs/job-01/scheduling-capacity", nil))
+			assertCapacityServerTime(t, started, r)
 			var body struct {
 				Data domain.SchedulingCapacity `json:"data"`
 			}
