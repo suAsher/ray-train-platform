@@ -23,7 +23,7 @@ var (
 )
 
 type Config struct {
- PersonalStorage PersonalStorageConfig
+	PersonalStorage                          PersonalStorageConfig
 	AssistantControllerCAFile                string
 	AssistantIdleNamespace                   string
 	AssistantIdleDemandAuthKey               string
@@ -555,9 +555,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.PersonalStorage, err = loadPersonalStorageConfig(); err != nil {
- return Config{}, err
- }
- if cfg.StorageSync, err = loadStorageSyncConfig(); err != nil {
+		return Config{}, err
+	}
+	if cfg.StorageSync, err = loadStorageSyncConfig(); err != nil {
 		return Config{}, err
 	}
 	if cfg.Assistant, err = loadAssistantConfig(); err != nil {

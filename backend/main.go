@@ -28,11 +28,11 @@ import (
 	"ray-train-platform-backend/httpapi"
 	"ray-train-platform-backend/idcsync"
 	"ray-train-platform-backend/k8s"
- "ray-train-platform-backend/personalstorage"
 	"ray-train-platform-backend/mlflowtracking"
 	"ray-train-platform-backend/modellifecycle"
 	"ray-train-platform-backend/objectstore"
 	"ray-train-platform-backend/observability"
+	"ray-train-platform-backend/personalstorage"
 	"ray-train-platform-backend/rayapi"
 	"ray-train-platform-backend/repositories"
 	"ray-train-platform-backend/runtimecatalog"
@@ -212,18 +212,24 @@ func main() {
 		}
 	}
 	if cfg.PersonalStorage.Enabled {
- knownHosts, readErr := os.ReadFile(cfg.PersonalStorage.KnownHostsFile)
- if readErr != nil { log.Fatalf("read pinned personal storage host keys: %v",readErr) }
- factory, factoryErr := personalstorage.NewSFTPFactory(personalstorage.Endpoint{Host:cfg.PersonalStorage.Host,Port:cfg.PersonalStorage.Port,KnownHosts:knownHosts})
- if factoryErr != nil { log.Fatalf("initialize personal storage upstream: %v",factoryErr) }
- vault, vaultErr := kubeClient.PersonalStorageVault(jobOptions.PlatformNamespace)
- if vaultErr != nil { log.Fatalf("initialize personal storage vault: %v",vaultErr) }
- jobOptions.PersonalStorage=personalstorage.NewService(repositories.NewPersonalStorageRepository(database),vault,factory)
- jobOptions.PersonalStorageCSIImage=cfg.PersonalStorage.CSIImage
- jobOptions.PersonalStorageMountCapacity=cfg.PersonalStorage.MountCapacity
- jobOptions.PersonalStorageMaxUploadBytes=cfg.PersonalStorage.MaxUploadBytes
- }
- jobHandler := api.NewHandler(repository, jobOptions)
+		knownHosts, readErr := os.ReadFile(cfg.PersonalStorage.KnownHostsFile)
+		if readErr != nil {
+			log.Fatalf("read pinned personal storage host keys: %v", readErr)
+		}
+		factory, factoryErr := personalstorage.NewSFTPFactory(personalstorage.Endpoint{Host: cfg.PersonalStorage.Host, Port: cfg.PersonalStorage.Port, KnownHosts: knownHosts})
+		if factoryErr != nil {
+			log.Fatalf("initialize personal storage upstream: %v", factoryErr)
+		}
+		vault, vaultErr := kubeClient.PersonalStorageVault(jobOptions.PlatformNamespace)
+		if vaultErr != nil {
+			log.Fatalf("initialize personal storage vault: %v", vaultErr)
+		}
+		jobOptions.PersonalStorage = personalstorage.NewService(repositories.NewPersonalStorageRepository(database), vault, factory)
+		jobOptions.PersonalStorageCSIImage = cfg.PersonalStorage.CSIImage
+		jobOptions.PersonalStorageMountCapacity = cfg.PersonalStorage.MountCapacity
+		jobOptions.PersonalStorageMaxUploadBytes = cfg.PersonalStorage.MaxUploadBytes
+	}
+	jobHandler := api.NewHandler(repository, jobOptions)
 	storageSyncMetadata, _ := directoryLister.(api.StorageSyncMetadataStore)
 	storageSyncManager, storageSyncHandler, err := newStorageSyncComponents(database, repository, kubeClient, cfg, storageSyncMetadata)
 	if err != nil {
@@ -516,7 +522,7 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 		jobs.RegisterDatasetManagementRoutes(interactive)
 	}
 	jobs.RegisterDataSpaceRoutes(interactive)
- jobs.RegisterPersonalStorageRoutes(interactive)
+	jobs.RegisterPersonalStorageRoutes(interactive)
 	jobs.RegisterWorkspaceSnapshotRoutes(interactive)
 	jobs.RegisterGitCredentialRoutes(interactive)
 	oidcOnly.GET("/cluster/topology", clusterTopologyHandler(kubeClient))

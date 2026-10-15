@@ -18,17 +18,17 @@ const MaxDataSpaceUploadBytes int64 = DataSpaceMultipartThresholdBytes
 
 const (
 	DataSpaceWellspikingPersonal DataSpaceID = "wellspiking-personal"
- DataSpaceWorkspace      DataSpaceID = "workspace"
-	DataSpaceMyStorage      DataSpaceID = "my-storage"
-	DataSpaceMyFiles        DataSpaceID = "my-files"
-	DataSpaceMyRuns         DataSpaceID = "my-runs"
-	DataSpaceTeamShared     DataSpaceID = "team-shared"
-	DataSpacePublic         DataSpaceID = "public"
-	DataSpaceIDCOriginal    DataSpaceID = "idc-original"
-	DataSpaceIDCWellspiking DataSpaceID = "idc-wellspiking"
-	DataSpaceIDCShared      DataSpaceID = "idc-shared"
-	DataSpaceIDCSPKHybrid   DataSpaceID = "idc-spk-hybrid"
-	DataSpaceIDCSPKSSD      DataSpaceID = "idc-spk-ssd"
+	DataSpaceWorkspace           DataSpaceID = "workspace"
+	DataSpaceMyStorage           DataSpaceID = "my-storage"
+	DataSpaceMyFiles             DataSpaceID = "my-files"
+	DataSpaceMyRuns              DataSpaceID = "my-runs"
+	DataSpaceTeamShared          DataSpaceID = "team-shared"
+	DataSpacePublic              DataSpaceID = "public"
+	DataSpaceIDCOriginal         DataSpaceID = "idc-original"
+	DataSpaceIDCWellspiking      DataSpaceID = "idc-wellspiking"
+	DataSpaceIDCShared           DataSpaceID = "idc-shared"
+	DataSpaceIDCSPKHybrid        DataSpaceID = "idc-spk-hybrid"
+	DataSpaceIDCSPKSSD           DataSpaceID = "idc-spk-ssd"
 	// DataSpaceTenantStorageRoot is a control-plane-only adapter. It is never
 	// returned in the data-space catalogue and cannot be selected in a request.
 	// A single PVC rooted at ray-train/ is staged once and user-visible paths
@@ -38,17 +38,17 @@ const (
 
 const (
 	WellspikingPersonalMountPath = "/mnt/storage/wellspiking"
- StorageProviderSFTP = "sftp"
- WorkspaceMountPath      = "/workspace"
-	MyStorageMountPath      = "/mnt/storage/me"
-	MyFilesMountPath        = MyStorageMountPath + "/files"
-	TeamStorageMountPath    = "/mnt/storage/team"
-	PublicStorageMountPath  = "/mnt/storage/public"
-	IDCOriginalMountPath    = "/mnt/.original"
-	IDCWellspikingMountPath = "/mnt/.wellspiking"
-	IDCSharedMountPath      = "/mnt/.shared"
-	IDCSPKHybridMountPath   = "/mnt/.spk-hybrid"
-	IDCSPKSSDMountPath      = "/mnt/.spk-ssd"
+	StorageProviderSFTP          = "sftp"
+	WorkspaceMountPath           = "/workspace"
+	MyStorageMountPath           = "/mnt/storage/me"
+	MyFilesMountPath             = MyStorageMountPath + "/files"
+	TeamStorageMountPath         = "/mnt/storage/team"
+	PublicStorageMountPath       = "/mnt/storage/public"
+	IDCOriginalMountPath         = "/mnt/.original"
+	IDCWellspikingMountPath      = "/mnt/.wellspiking"
+	IDCSharedMountPath           = "/mnt/.shared"
+	IDCSPKHybridMountPath        = "/mnt/.spk-hybrid"
+	IDCSPKSSDMountPath           = "/mnt/.spk-ssd"
 	// DefaultPublicDataRoot is the stable production location for data made
 	// available to every tenant. A tenant-confined temporary root may be used
 	// only during an explicitly configured migration; see NormalizePublicDataRoot.

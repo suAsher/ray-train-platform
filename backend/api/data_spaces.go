@@ -46,18 +46,18 @@ type dataSpaceDirectoryInitializer interface {
 }
 
 type dataSpaceResponse struct {
- CanUseForTraining bool `json:"canUseForTraining"`
- Capabilities map[string]bool `json:"capabilities,omitempty"`
-	ID            domain.DataSpaceID `json:"id"`
-	Name          string             `json:"name"`
-	Description   string             `json:"description"`
-	Provider      string             `json:"provider"`
-	MountPath     string             `json:"mountPath"`
-	ReadOnly      bool               `json:"readOnly"`
-	CanWrite      bool               `json:"canWrite"`
-	BrowseEnabled bool               `json:"browseEnabled"`
-	StorageStatus string             `json:"storageStatus"`
-	MountStatus   string             `json:"mountStatus"`
+	CanUseForTraining bool               `json:"canUseForTraining"`
+	Capabilities      map[string]bool    `json:"capabilities,omitempty"`
+	ID                domain.DataSpaceID `json:"id"`
+	Name              string             `json:"name"`
+	Description       string             `json:"description"`
+	Provider          string             `json:"provider"`
+	MountPath         string             `json:"mountPath"`
+	ReadOnly          bool               `json:"readOnly"`
+	CanWrite          bool               `json:"canWrite"`
+	BrowseEnabled     bool               `json:"browseEnabled"`
+	StorageStatus     string             `json:"storageStatus"`
+	MountStatus       string             `json:"mountStatus"`
 }
 
 func (h *Handler) RegisterDataSpaceRoutes(group *gin.RouterGroup) {
@@ -114,18 +114,24 @@ func (h *Handler) listDataSpaces(c *gin.Context) {
 		return
 	}
 	response := dataSpacesForResponse(spaces, bindings, principal, h.dataObjectStore != nil, h.dataSpacesEnabled, h.idcDataSpacesEnabled)
- if h.personalStorage != nil {
- if owner, ownerErr := personalStorageOwner(principal); ownerErr == nil {
- view, viewErr := h.personalStorage.View(c.Request.Context(), owner)
- ready := viewErr == nil && view.State == "READY"
- storageStatus := "unbound"
- if viewErr != nil { storageStatus = "unavailable" } else if view.State != "" { storageStatus = strings.ToLower(view.State) }
- mountStatus := "not-mounted"
- if viewErr == nil { mountStatus = h.personalStorageStatus(c.Request.Context(), principal, view).MountStatus }
- response = append(response, dataSpaceResponse{ID:domain.DataSpaceWellspikingPersonal,Name:"Wellspiking 个人文件",Description:"仅本人可见的 Wellspiking 个人读写目录",Provider:domain.StorageProviderSFTP,MountPath:domain.WellspikingPersonalMountPath,CanWrite:ready,BrowseEnabled:ready,StorageStatus:storageStatus,MountStatus:mountStatus,CanUseForTraining:false,Capabilities:map[string]bool{"browse":ready,"upload":ready,"mkdir":ready,"download":false,"preview":false,"video":false,"snapshot":false,"training":false}})
- }
- }
- h.writeSuccess(c, http.StatusOK, response)
+	if h.personalStorage != nil {
+		if owner, ownerErr := personalStorageOwner(principal); ownerErr == nil {
+			view, viewErr := h.personalStorage.View(c.Request.Context(), owner)
+			ready := viewErr == nil && view.State == "READY"
+			storageStatus := "unbound"
+			if viewErr != nil {
+				storageStatus = "unavailable"
+			} else if view.State != "" {
+				storageStatus = strings.ToLower(view.State)
+			}
+			mountStatus := "not-mounted"
+			if viewErr == nil {
+				mountStatus = h.personalStorageStatus(c.Request.Context(), principal, view).MountStatus
+			}
+			response = append(response, dataSpaceResponse{ID: domain.DataSpaceWellspikingPersonal, Name: "Wellspiking 个人文件", Description: "仅本人可见的 Wellspiking 个人读写目录", Provider: domain.StorageProviderSFTP, MountPath: domain.WellspikingPersonalMountPath, CanWrite: ready, BrowseEnabled: ready, StorageStatus: storageStatus, MountStatus: mountStatus, CanUseForTraining: false, Capabilities: map[string]bool{"browse": ready, "upload": ready, "mkdir": ready, "download": false, "preview": false, "video": false, "snapshot": false, "training": false}})
+		}
+	}
+	h.writeSuccess(c, http.StatusOK, response)
 }
 
 var errDataSpaceIdentityPersist = errors.New("data-space identity persistence failed")
@@ -371,7 +377,10 @@ func (h *Handler) setPersonalDataMountStatus(ctx context.Context, bindingID stri
 }
 
 func (h *Handler) listDataSpaceDirectories(c *gin.Context) {
- if h.isPersonalStorageRequest(c) { h.listPersonalStorage(c, true); return }
+	if h.isPersonalStorageRequest(c) {
+		h.listPersonalStorage(c, true)
+		return
+	}
 	principal, ok := h.principal(c)
 	if !ok {
 		h.writeError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "authentication is required")
@@ -408,7 +417,10 @@ func (h *Handler) listDataSpaceDirectories(c *gin.Context) {
 }
 
 func (h *Handler) listDataSpaceEntries(c *gin.Context) {
- if h.isPersonalStorageRequest(c) { h.listPersonalStorage(c, false); return }
+	if h.isPersonalStorageRequest(c) {
+		h.listPersonalStorage(c, false)
+		return
+	}
 	principal, space, ok := h.authorizeDataSpace(c)
 	if !ok {
 		return
@@ -445,7 +457,10 @@ type createDataSpaceFolderRequest struct {
 }
 
 func (h *Handler) createDataSpaceFolder(c *gin.Context) {
- if h.isPersonalStorageRequest(c) { h.mkdirPersonalStorage(c); return }
+	if h.isPersonalStorageRequest(c) {
+		h.mkdirPersonalStorage(c)
+		return
+	}
 	_, space, ok := h.authorizeWritableDataSpace(c)
 	if !ok {
 		return
@@ -478,7 +493,10 @@ type createDataSpaceUploadRequest struct {
 }
 
 func (h *Handler) createDataSpaceUpload(c *gin.Context) {
- if h.isPersonalStorageRequest(c) { h.ticketPersonalStorage(c); return }
+	if h.isPersonalStorageRequest(c) {
+		h.ticketPersonalStorage(c)
+		return
+	}
 	_, space, ok := h.authorizeWritableDataSpace(c)
 	if !ok {
 		return
@@ -527,7 +545,10 @@ func (h *Handler) createDataSpaceUpload(c *gin.Context) {
 // length is capped at the single-request threshold before a single byte is
 // read. Larger files use the independently retryable multipart endpoints.
 func (h *Handler) uploadDataSpaceContent(c *gin.Context) {
- if h.isPersonalStorageRequest(c) { h.uploadPersonalStorage(c); return }
+	if h.isPersonalStorageRequest(c) {
+		h.uploadPersonalStorage(c)
+		return
+	}
 	_, space, ok := h.authorizeWritableDataSpace(c)
 	if !ok {
 		return
@@ -589,10 +610,13 @@ func (h *Handler) authorizeWritableDataSpace(c *gin.Context) (auth.Principal, do
 }
 
 func (h *Handler) dataSpaceForPrincipal(c *gin.Context, principal auth.Principal, id domain.DataSpaceID) (domain.DataSpace, bool) {
- if id == domain.DataSpaceWellspikingPersonal {
- if _,err := personalStorageOwner(principal); err != nil || h.personalStorage == nil { h.writeError(c,http.StatusNotFound,"DATA_SPACE_NOT_FOUND","data space was not found");return domain.DataSpace{},false }
- return domain.DataSpace{ID:id,Name:"Wellspiking 个人文件",Provider:domain.StorageProviderSFTP,MountPath:domain.WellspikingPersonalMountPath,BrowseEnabled:true},true
- }
+	if id == domain.DataSpaceWellspikingPersonal {
+		if _, err := personalStorageOwner(principal); err != nil || h.personalStorage == nil {
+			h.writeError(c, http.StatusNotFound, "DATA_SPACE_NOT_FOUND", "data space was not found")
+			return domain.DataSpace{}, false
+		}
+		return domain.DataSpace{ID: id, Name: "Wellspiking 个人文件", Provider: domain.StorageProviderSFTP, MountPath: domain.WellspikingPersonalMountPath, BrowseEnabled: true}, true
+	}
 	spaces, err := h.personalDataSpacesForPrincipal(c.Request.Context(), principal)
 	if err != nil {
 		h.writeError(c, http.StatusForbidden, "DATA_SPACE_IDENTITY_INVALID", "the authenticated identity cannot access data spaces")
@@ -684,7 +708,7 @@ func dataSpacesForResponse(spaces []domain.DataSpace, bindings []domain.DataMoun
 		}
 		response = append(response, dataSpaceResponse{
 			CanUseForTraining: true,
- ID: space.ID, Name: space.Name, Description: space.Description, Provider: space.Provider,
+			ID:                space.ID, Name: space.Name, Description: space.Description, Provider: space.Provider,
 			MountPath: space.MountPath, ReadOnly: space.ReadOnly, CanWrite: canWriteDataSpace(space, principal), BrowseEnabled: space.BrowseEnabled,
 			StorageStatus: dataSpaceStorageStatus(space, tosStorageAvailable),
 			MountStatus:   mountStatus,

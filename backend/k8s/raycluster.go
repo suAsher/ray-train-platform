@@ -15,7 +15,7 @@ import (
 )
 
 type WorkspaceRenderOptions struct {
- PersonalStorageClaim string
+	PersonalStorageClaim         string
 	WorkerNodeAffinityPreference []string
 	NodeSelector                 map[string]string
 	DedicatedNodes               map[string][]string
@@ -123,12 +123,14 @@ func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderO
 		delete(head["template"].(map[string]any)["spec"].(map[string]any), "serviceAccountName")
 	}
 	workerVolumes := append([]any(nil), volumesForPlan...)
- if options.PersonalStorageClaim != "" {
- if !isDNSLabel(options.PersonalStorageClaim) { return nil, fmt.Errorf("personal storage claim is invalid") }
- workerVolumes = append(workerVolumes, map[string]any{"name":"wellspiking-personal", "persistentVolumeClaim":map[string]any{"claimName":options.PersonalStorageClaim}})
- workerMounts = append(workerMounts, map[string]any{"name":"wellspiking-personal", "mountPath":domain.WellspikingPersonalMountPath, "readOnly":false})
- }
- worker := map[string]any{
+	if options.PersonalStorageClaim != "" {
+		if !isDNSLabel(options.PersonalStorageClaim) {
+			return nil, fmt.Errorf("personal storage claim is invalid")
+		}
+		workerVolumes = append(workerVolumes, map[string]any{"name": "wellspiking-personal", "persistentVolumeClaim": map[string]any{"claimName": options.PersonalStorageClaim}})
+		workerMounts = append(workerMounts, map[string]any{"name": "wellspiking-personal", "mountPath": domain.WellspikingPersonalMountPath, "readOnly": false})
+	}
+	worker := map[string]any{
 		"groupName": "dev-workers", "replicas": int64(1), "minReplicas": int64(1), "maxReplicas": int64(1),
 		"rayStartParams": map[string]any{"num-gpus": strconv.Itoa(workspace.GPUCount)},
 		"template": map[string]any{"spec": map[string]any{

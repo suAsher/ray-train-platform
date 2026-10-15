@@ -55,9 +55,9 @@ func validateLogicalDataLocations(spec JobSpec) error {
 			continue
 		}
 		if item.location.Space == DataSpaceWellspikingPersonal {
- return fmt.Errorf("%s: Wellspiking personal storage is available only in the data browser and debug workspace", item.field)
- }
- if err := item.location.Validate(); err != nil {
+			return fmt.Errorf("%s: Wellspiking personal storage is available only in the data browser and debug workspace", item.field)
+		}
+		if err := item.location.Validate(); err != nil {
 			return fmt.Errorf("%s: %w", item.field, err)
 		}
 		if item.isOutput {
