@@ -1,6 +1,12 @@
 package config
 
-import ("testing";"strings";"strconv";"fmt";"crypto/sha256")
+import (
+	"crypto/sha256"
+	"fmt"
+	"strconv"
+	"strings"
+	"testing"
+)
 
 func TestPersonalStorageDisabledByDefault(t *testing.T) {
 	t.Setenv("PERSONAL_STORAGE_ENABLED", "false")
@@ -29,10 +35,10 @@ func setValidPersonalStorageScopeConfig(t *testing.T) {
 
 func TestPersonalStorageScopeAllowsOnlyAttestedOrExplicitOwners(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		verified bool
-		owners string
-		wantError bool
+		name       string
+		verified   bool
+		owners     string
+		wantError  bool
 		wantOwners int
 	}{
 		{"unverified global rejected", false, "", true, 0},
@@ -56,7 +62,7 @@ func TestPersonalStorageScopeAllowsOnlyAttestedOrExplicitOwners(t *testing.T) {
 }
 
 func TestPersonalStorageScopeRejectsMalformedDeploymentOwners(t *testing.T) {
-	for _, owners := range []string{"*", "alice,*", "alice,", ",alice", "alice,,bob", "alice,alice", "../alice", "alice/bob", "alice?owner=bob", "alice\nbob", strings.Repeat("a", 257), strings.Join([]string{"a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q"}, ",")} {
+	for _, owners := range []string{"*", "alice,*", "alice,", ",alice", "alice,,bob", "alice,alice", "../alice", "alice/bob", "alice?owner=bob", "alice\nbob", strings.Repeat("a", 257), strings.Join([]string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q"}, ",")} {
 		t.Run(fmt.Sprintf("case-%x", sha256.Sum256([]byte(owners))), func(t *testing.T) {
 			setValidPersonalStorageScopeConfig(t)
 			t.Setenv("PERSONAL_STORAGE_PERSONAL_ROOT_ISOLATION_VERIFIED", "true")

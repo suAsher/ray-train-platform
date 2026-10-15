@@ -37,7 +37,7 @@ func main() {
 			fail("table-identifier")
 		}
 		var count int64
-		if database.Raw(`SELECT count(*) FROM "` + table + `"`).Scan(&count).Error != nil {
+		if database.Raw(`SELECT count(*) FROM "`+table+`"`).Scan(&count).Error != nil {
 			fail("before-count")
 		}
 		counts[table] = count
@@ -53,7 +53,7 @@ func main() {
 	}
 	for table, beforeCount := range counts {
 		var afterCount int64
-		if database.Raw(`SELECT count(*) FROM "` + table + `"`).Scan(&afterCount).Error != nil || afterCount != beforeCount {
+		if database.Raw(`SELECT count(*) FROM "`+table+`"`).Scan(&afterCount).Error != nil || afterCount != beforeCount {
 			fail("old-row-count-changed")
 		}
 	}

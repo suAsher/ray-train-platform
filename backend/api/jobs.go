@@ -48,7 +48,7 @@ type globalJobReader interface {
 
 type Handler struct {
 	personalStorage               PersonalStorageService
-	personalStorageTestOwnerIDs    map[string]bool
+	personalStorageTestOwnerIDs   map[string]bool
 	personalStorageCSIImage       string
 	personalStorageCapacity       string
 	personalStorageMaxUpload      int64
@@ -181,7 +181,7 @@ type ExperimentProvider interface {
 
 type Options struct {
 	PersonalStorage               PersonalStorageService
-	PersonalStorageTestOwnerIDs    []string
+	PersonalStorageTestOwnerIDs   []string
 	PersonalStorageCSIImage       string
 	PersonalStorageMountCapacity  string
 	PersonalStorageMaxUploadBytes int64
