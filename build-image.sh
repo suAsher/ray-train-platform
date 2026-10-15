@@ -90,7 +90,7 @@ Ray Training Platform image builder
 Environment variables:
   REGISTRY=harbor.wellspiking.ai/guofeng.su
   IMAGE_TAG=test-20260809
-  BUILD_TARGETS=all|backend,frontend,source-materializer,test-training,dataset-publisher,idc-sync,storage-sync,workspace,train-pytorch,pytorch-ray-ddp,pytorch-ray-train,workspace-ray256,workspace-bevfusion,bevfusion-runtime,bevfusion-ray258-canary,raytrain-base,tos-prefix-init,spk-rayjob
+  BUILD_TARGETS=all|backend,frontend,source-materializer,test-training,dataset-publisher,idc-sync,storage-sync,personal-storage-csi,workspace,train-pytorch,pytorch-ray-ddp,pytorch-ray-train,workspace-ray256,workspace-bevfusion,bevfusion-runtime,bevfusion-ray258-canary,raytrain-base,tos-prefix-init,spk-rayjob
   PUSH_IMAGE=false|true
   USE_BUILDX=true|false
   BUILD_PLATFORM=linux/amd64
@@ -127,6 +127,7 @@ Build targets:
   environment-prepare Dependency-only builder runtime for cluster Jobs
   idc-sync            CPU-only one-way IDC to TOS incremental sync worker
   storage-sync        Explicit-only governed IDC/TOS copy worker
+  personal-storage-csi Explicit-only personal Wellspiking SFTP mount driver
   workspace           Existing Ray 2.35 interactive workspace (rollback)
   train-pytorch       Existing Ray 2.35 PyTorch runtime (rollback)
   pytorch-ray-ddp     Ray 2.56.1 PyTorch runtime for Ray-orchestrated DDP
@@ -176,6 +177,9 @@ target_spec() {
       ;;
     storage-sync)
       printf '%s\n' 'images/storage-sync/Dockerfile|ray-storage-sync|images/storage-sync|-'
+      ;;
+    personal-storage-csi)
+      printf '%s\n' 'images/personal-storage-csi/Dockerfile|ray-personal-storage-csi|.|-'
       ;;
     tos-prefix-init)
       printf '%s\n' 'images/tos-prefix-init/Dockerfile|ray-tos-prefix-init|.|-'

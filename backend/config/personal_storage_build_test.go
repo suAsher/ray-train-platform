@@ -16,8 +16,11 @@ func TestPersonalStorageBuildIsExplicitOnly(t *testing.T) {
 		t.Fatal("missing standalone personal CSI build target")
 	}
 	start := strings.Index(script, "normalize_targets() {")
+	if start < 0 {
+		t.Fatal("missing default build target expansion")
+	}
 	end := strings.Index(script[start:], "IFS=','")
-	if start < 0 || end < 0 {
+	if end < 0 {
 		t.Fatal("missing default build target expansion")
 	}
 	if strings.Contains(script[start:start+end], "personal-storage-csi") {
