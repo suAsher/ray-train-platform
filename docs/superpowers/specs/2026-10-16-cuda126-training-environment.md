@@ -12,6 +12,8 @@
 
 capture 与 prepare 使用镜像构建时生成的 root 只读 profile，不能使用用户环境变量或 capture manifest 选择可信 Base。原有 wheel-only、指纹、bootstrap、体积、权限与来源校验继续生效。另建 venv、系统 apt 包、源码和凭据不属于环境保存内容。
 
+新 profile 保存层同时携带 baseline 生成的完整依赖约束，保证保存前后文件一致。导出前核对固定路径、普通文件、root:root、`0444`、64 KiB 上限，以及内容与可信 baseline 包列表排序生成结果完全一致。OCI 组装器仅对同层存在合法 profile 的约束文件开放该精确路径，不放宽其他文件规则；旧 CUDA 12.1 层保持原行为。
+
 ## 保存与版本展示
 
 持久化已有的 `Build.BaseImage`、`Build.WorkspaceImage`。最终登记时原子写入已有镜像目录 `environment_json`，版本来自可信配对，不从用户 capture 推断；不新增数据库迁移。保留个人/团队可见性与授权边界。
