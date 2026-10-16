@@ -39,6 +39,21 @@ class BuildContract(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('immutable sha256 digest', result.stderr)
 
+    def test_official_cuda_wheels_precede_mirrored_dependency_resolution(self):
+        dockerfile = (ROOT / 'images/cuda126-workspace/Dockerfile.base').read_text()
+        commands = dockerfile.replace('\\\n', ' ').split('\nRUN ')[1:]
+        wheel_stage = next(command for command in commands
+                           if '--index-url "${TORCH_INDEX_URL}"' in command)
+        self.assertIn('--no-deps', wheel_stage)
+        self.assertIn('torch==2.6.0+cu126 torchvision==0.21.0+cu126', wheel_stage)
+        self.assertNotIn('${PIP_INDEX_URL}', wheel_stage)
+        dependency_stage = next(command for command in commands
+                                if '--index-url "${PIP_INDEX_URL}"' in command
+                                and 'torch==2.6.0+cu126' in command)
+        self.assertNotIn('--no-deps', dependency_stage)
+        self.assertIn('torchvision==0.21.0+cu126', dependency_stage)
+        self.assertIn('python3.10 -m pip check', dependency_stage)
+
     def test_prepare_uses_matching_foundation_and_interpreter(self):
         for buildx in (True, False):
             result = self.build_plan('environment-prepare-cuda126', buildx)
