@@ -17,7 +17,7 @@ RUN (test -x /opt/raytrain/environment/bin/python || python3 -m venv --copies --
 RUN "${ENVIRONMENT_BASE_PYTHON}" -c "import pathlib, site; pathlib.Path(site.getsitepackages()[0], 'raytrain_environment.pth').write_text('/usr/local/lib/raytrain-environment\\n')" \
  && if [ "${ENVIRONMENT_BASE_PYTHON}" = /usr/bin/python3.10 ]; then \
       install -d -m 0755 /etc/raytrain \
-      && ENVIRONMENT_BASE_IMAGE="${ENVIRONMENT_BASE_IMAGE}" python3 -c "import json,os,pathlib; pathlib.Path('/etc/raytrain/environment-profile.json').write_text(json.dumps({'schemaVersion':1,'baseImage':os.environ['ENVIRONMENT_BASE_IMAGE'],'basePython':'/usr/bin/python3.10','versions':{'python':'3.10','pytorch':'2.6.0+cu126','cuda':'12.6','ray':'2.58.0'}},separators=(',',':'))+'\n')" \
+      && ENVIRONMENT_BASE_IMAGE="${ENVIRONMENT_BASE_IMAGE}" python3 -c "import json,os,pathlib; pathlib.Path('/etc/raytrain/environment-profile.json').write_text(json.dumps({'schemaVersion':1,'baseImage':os.environ['ENVIRONMENT_BASE_IMAGE'],'basePython':'/usr/bin/python3.10','versions':{'python':'3.10','pytorch':'2.13.0+cu126','cuda':'12.6','ray':'2.58.0'}},separators=(',',':'))+'\n')" \
       && chmod 0444 /etc/raytrain/environment-profile.json; \
     elif [ "${ENVIRONMENT_BASE_PYTHON}" != /home/ray/anaconda3/bin/python3 ]; then exit 1; fi \
  && raytrain-environment baseline \
