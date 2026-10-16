@@ -15,6 +15,48 @@ spec.loader.exec_module(runtime)
 
 
 class RuntimeContractTest(unittest.TestCase):
+    def profile(self):
+        return {'schemaVersion': 1, 'baseImage': 'harbor.wellspiking.ai/guofeng.su/cuda126-base@sha256:' + 'b' * 64,
+                'basePython': '/usr/bin/python3.10', 'versions': {'python': '3.10', 'pytorch': '2.6.0+cu126', 'cuda': '12.6', 'ray': '2.58.0'}}
+
+    def test_trusted_profile_selects_pinned_base_without_environment_override(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / 'profile.json'
+            path.write_text(json.dumps(self.profile()))
+            path.chmod(0o444)
+            with mock.patch.object(runtime, 'PROFILE', path), mock.patch.object(runtime, 'verify_profile_permissions'), mock.patch.dict('os.environ', {'RAYTRAIN_BASE_IMAGE': 'evil:latest'}):
+                self.assertEqual(runtime.load_profile(), self.profile())
+
+    def test_profile_rejects_unpinned_image_python_path_and_unknown_fields(self):
+        for field, value in [('baseImage', 'evil:latest'), ('basePython', '/workspace/python'), ('schemaVersion', 2), ('secret', 'x')]:
+            profile = self.profile()
+            profile[field] = value
+            with tempfile.TemporaryDirectory() as directory:
+                path = pathlib.Path(directory) / 'profile.json'
+                path.write_text(json.dumps(profile))
+                with mock.patch.object(runtime, 'PROFILE', path), mock.patch.object(runtime, 'verify_profile_permissions'):
+                    with self.assertRaises(runtime.CaptureError):
+                        runtime.load_profile()
+
+    def test_profile_rejects_writable_or_symlink_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / 'profile.json'
+            path.write_text(json.dumps(self.profile()))
+            with mock.patch.object(runtime, 'PROFILE', path):
+                with self.assertRaises(runtime.CaptureError):
+                    runtime.load_profile()
+                link = pathlib.Path(directory) / 'profile-link.json'
+                link.symlink_to(path)
+                with mock.patch.object(runtime, 'PROFILE', link):
+                    with self.assertRaises(runtime.CaptureError):
+                        runtime.load_profile()
+
+    def test_profile_change_after_bootstrap_is_rejected(self):
+        profile = self.profile()
+        with mock.patch.object(runtime, 'ACTIVE_PROFILE', profile), mock.patch.object(runtime, 'load_profile', return_value={**profile, 'baseImage': runtime.BASE_IMAGE}):
+            with self.assertRaises(runtime.CaptureError):
+                runtime.verify_active_profile()
+
     def manifest(self):
         return {'schemaVersion': 1, 'baseImage': runtime.BASE_IMAGE,
                 'pythonVersion': '3.10.16', 'packages': [

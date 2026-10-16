@@ -14,6 +14,22 @@ import build_layer
 
 
 class LayerTest(unittest.TestCase):
+    def test_profile_export_retains_root_read_only_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            profile = root / 'profile.json'
+            profile.write_text('{}')
+            with tarfile.open(root / 'layer.tar', 'w') as archive:
+                build_layer.add_path(archive, profile, 'etc/raytrain/environment-profile.json', mode=0o444)
+            with tarfile.open(root / 'layer.tar') as archive:
+                self.assertEqual(archive.next().mode, 0o444)
+
+    def test_builder_default_preserved_and_existing_venv_not_recreated(self):
+        dockerfile = (HERE / 'Dockerfile').read_text()
+        self.assertIn('ARG ENVIRONMENT_BASE_IMAGE=harbor.wellspiking.ai/guofeng.su/raytrain-base@sha256:', dockerfile)
+        self.assertIn('FROM ${ENVIRONMENT_BASE_IMAGE}', dockerfile)
+        self.assertIn('test -x /opt/raytrain/environment/bin/python ||', dockerfile)
+
     def test_symlink_stays_inside_managed_environment(self):
         build_layer.safe_venv_link('opt/raytrain/environment/lib64', 'lib')
         build_layer.safe_venv_link('opt/raytrain/environment/bin/tool', '../lib/tool')
