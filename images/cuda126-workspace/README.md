@@ -75,6 +75,14 @@ docker buildx build --platform linux/amd64 \
 三个目标均不包含在 `all` 中。后两个目标拒绝可变基础 tag；
 不提供从 cu126 下载失败后回退 CPU 或 cu121 的路径。
 
+固定版本在常用 PyPI 镜像缺失时，`official-wheels.json` 记录官方 PyPI
+元数据、确切 wheel URL 与 SHA256；`official-wheels` 阶段通过
+`ADD --checksum` 下载，安装再以 `--no-index --no-deps --require-hashes`
+核验。wheel 通过只读构建挂载提供，不复制进最终镜像层，也不增加全局
+备用索引。隔离验证可将逐文件核验过完整 SHA256 的同一组 wheel 放在
+独立目录的 `wheels/` 下，以 `--build-context official-wheels=/绝对路径`
+覆盖下载阶段；必须保留每个官方来源、长度与完整摘要校验的证据。
+
 镜像内 `raytrain-cuda126-selfcheck` 验证 CPU 导入、固定版本、解释器、
 nvcc 与 pip 依赖。独立 `actor_smoke.py` 验证真实本地 Ray Actor；
 Jupyter HTTP/kernel 和 VS Code HTTP 在 workspace 构建时验证。

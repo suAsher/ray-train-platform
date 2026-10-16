@@ -1,5 +1,21 @@
 # Code-free CUDA 12.6 foundation. Explicit-only build target, never a default.
 # NVIDIA CUDA 12.6.3 devel, Ubuntu 22.04, linux/amd64. Preserve driver guards.
+# Fixed wheels missing from the normal PyPI mirror. Official hashes are
+# checked by both BuildKit downloads and pip; never copied into final layers.
+FROM scratch AS official-wheels
+ADD --checksum=sha256:a4d6d5e9a3d1879a97c08ded0c797579b7965eafd0f0c26c30b45ccc06db939b https://files.pythonhosted.org/packages/57/5c/f8fc0eb2de03464a557d5a4d0c15e972d73362414696618833b771f7eddd/pyarrow-25.0.1-cp310-cp310-manylinux_2_28_x86_64.whl /wheels/pyarrow-25.0.1-cp310-cp310-manylinux_2_28_x86_64.whl
+ADD --checksum=sha256:cdf9c67e7ca2402d86ccbfde5f2503fc83e3cc3f58cc78456ae96cad24a6d2de https://files.pythonhosted.org/packages/bc/c1/a8a92ae1bc4b1a8f804c776d7d3f0c771b78a62c3ad4df1be41b3fd8c767/google_api_core-2.34.0-py3-none-any.whl /wheels/google_api_core-2.34.0-py3-none-any.whl
+ADD --checksum=sha256:6b83302f554ea93a0f48409c7fc2050f954bcbcddb7e3a9c76d4a823cb22920e https://files.pythonhosted.org/packages/47/5b/1c9e55363c3b1890a98cae813de5b4ea327845756cd8fb7ee690140c7eac/googleapis_common_protos-1.75.2-py3-none-any.whl /wheels/googleapis_common_protos-1.75.2-py3-none-any.whl
+ADD --checksum=sha256:94b98c893a91b88657eaac1e3ba89618cdb85be6918196705354f34728b2cdef https://files.pythonhosted.org/packages/ca/6f/a04e900f465ff3221ccc395522503e2d10e79fa21f2723c8e177aae1e0d1/opentelemetry_api-1.44.0-py3-none-any.whl /wheels/opentelemetry_api-1.44.0-py3-none-any.whl
+ADD --checksum=sha256:df081c4c6bcfdb1211e3e86140376792643128a25f8d72d1d27675936e7e96ad https://files.pythonhosted.org/packages/e7/23/ff077e61886ee020a17ce9c8b6fa11c601c8d8345b09ea24f605445df62a/opentelemetry_sdk-1.44.0-py3-none-any.whl /wheels/opentelemetry_sdk-1.44.0-py3-none-any.whl
+ADD --checksum=sha256:4a498fa8d8fd8be9e8e2d175fe5524a3fe581ccffadd8509db86526a5fb97051 https://files.pythonhosted.org/packages/18/c3/7b466a9463944e70b37b744072a0c1b88a425dade3fff0631adec66c9bcc/opentelemetry_exporter_otlp-1.44.0-py3-none-any.whl /wheels/opentelemetry_exporter_otlp-1.44.0-py3-none-any.whl
+ADD --checksum=sha256:9a9fe61bba73d802904bc989f1d6b4a7b1ee40f06c40e98d6f85af65aaebb694 https://files.pythonhosted.org/packages/5e/71/65fd9d54c10b860f87c045ccee1264cab7011268895d3528818a29c1172a/opentelemetry_exporter_otlp_proto_common-1.44.0-py3-none-any.whl /wheels/opentelemetry_exporter_otlp_proto_common-1.44.0-py3-none-any.whl
+ADD --checksum=sha256:6a1a645ea182a2f59440c51fa8301d309f3324a8f9d65f8395584b064b67ee4e https://files.pythonhosted.org/packages/54/29/6ae42ba32b153ae0a44ae125f0caff2188bbe62d99c82d1768da30864e72/opentelemetry_exporter_otlp_proto_grpc-1.44.0-py3-none-any.whl /wheels/opentelemetry_exporter_otlp_proto_grpc-1.44.0-py3-none-any.whl
+ADD --checksum=sha256:838592fce774c1c8bb7b9a0a7facbfa82e17be5a8a4e94cef10cb84ae026bae3 https://files.pythonhosted.org/packages/cd/d0/fdeb1a98d8d3a6205f5f297c51b4a9bfe65126ab60339669bbe3dd54c2e2/opentelemetry_exporter_otlp_proto_http-1.44.0-py3-none-any.whl /wheels/opentelemetry_exporter_otlp_proto_http-1.44.0-py3-none-any.whl
+ADD --checksum=sha256:3b3d24b586d0ad9712c7b52b7d19c8a9dfbb318b9b284121b5f95e90ed019367 https://files.pythonhosted.org/packages/82/0d/d7cdc030edeed0fea03448446b88f1a1f8c4a565bad30dac0f5477ebe290/opentelemetry_exporter_prometheus-0.65b0-py3-none-any.whl /wheels/opentelemetry_exporter_prometheus-0.65b0-py3-none-any.whl
+ADD --checksum=sha256:898b155a0e1557afd867478fb6158e8122a46329ca0bb8dc53cc55e98f017f56 https://files.pythonhosted.org/packages/d1/7c/8be563d68e93bbefa5c8affb82ddcff91b3ad858ce49957ba7b16fd3e0ab/opentelemetry_proto-1.44.0-py3-none-any.whl /wheels/opentelemetry_proto-1.44.0-py3-none-any.whl
+ADD --checksum=sha256:1cacde7b0ad306f84c5ef08c3dbe1bbaf20165bba6f8bff43b670e555a086bcb https://files.pythonhosted.org/packages/a6/0e/49df70d9b81fb5cbae4bbf2a49d865b09bcbcbc4eb53f5851b1027738d78/opentelemetry_semantic_conventions-0.65b0-py3-none-any.whl /wheels/opentelemetry_semantic_conventions-0.65b0-py3-none-any.whl
+
 FROM harbor.wellspiking.ai/hub/nvidia/cuda@sha256:1608a19a5d6f013d36abfb9ad50a42b4c0ef86f4ab48e351c6899f0280b946c1
 ARG APT_MIRROR=http://repo.wellspiking.ai/repository/ubuntu-jammy
 ARG PIP_INDEX_URL=https://mirrors.ivolces.com/pypi/simple/
@@ -27,6 +43,11 @@ RUN python3.10 -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
 RUN python3.10 -m pip install --no-cache-dir --no-deps \
       --index-url "${TORCH_INDEX_URL}" --constraint /opt/raytrain/environment-constraints.txt \
       torch==2.6.0+cu126 torchvision==0.21.0+cu126
+COPY images/cuda126-workspace/requirements-official.txt /opt/raytrain/requirements-official.txt
+RUN --mount=from=official-wheels,source=/wheels,target=/wheels,readonly \
+    python3.10 -m pip install --no-cache-dir \
+      --no-index --find-links /wheels --no-deps --require-hashes \
+      -r /opt/raytrain/requirements-official.txt
 # Resolve the installed official wheels' exact METADATA requirements through
 # the existing HTTPS PyPI mirror; a missing +cu126 wheel cannot become CPU/cu121.
 RUN python3.10 -m pip install --no-cache-dir \
