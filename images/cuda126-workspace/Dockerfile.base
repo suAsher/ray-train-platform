@@ -67,5 +67,6 @@ RUN chmod 0755 /usr/local/bin/raytrain-launch /usr/local/bin/raytrain-managed \
  && printf '\n. /opt/raytrain/environment-shell.sh\n' >> /home/ray/.profile
 USER ray
 WORKDIR /workspace
-# Offline CPU gate only; GPU and extension compilation require a GPU node.
+# Offline CPU gate only. Compile/link checks can also run on a CPU builder;
+# executing CUDA kernels requires separate GPU-node acceptance.
 RUN raytrain-cuda126-selfcheck

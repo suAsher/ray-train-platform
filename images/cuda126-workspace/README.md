@@ -78,7 +78,9 @@ docker buildx build --platform linux/amd64 \
 镜像内 `raytrain-cuda126-selfcheck` 验证 CPU 导入、固定版本、解释器、
 nvcc 与 pip 依赖。独立 `actor_smoke.py` 验证真实本地 Ray Actor；
 Jupyter HTTP/kernel 和 VS Code HTTP 在 workspace 构建时验证。
-这些均不宣称 GPU、驱动或多节点训练已通过。
+这些均不宣称 GPU、驱动或多节点训练已通过。nvcc 与 Torch CUDA extension
+可以在 CPU 构建机另行编译、检查 `sm_89` 目标并加载扩展；这仍不等于
+执行 GPU 二进制或 CUDA kernel，实际编译证据以本次报告为准。
 
 `gpu_smoke.py` 仅在获授权的新 GPU 测试资源运行：验证真实 CUDA forward/backward、
 nvcc 编译并执行 `sm_89` 二进制，以及 Torch CUDA extension 编译和执行。

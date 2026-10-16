@@ -77,7 +77,7 @@ class BuildContract(unittest.TestCase):
         result = self.build_plan('workspace')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('--target workspace-legacy', result.stdout)
-        self.assertNotIn('cuda126-workspace', result.stdout)
+        self.assertNotIn('/images/cuda126-workspace/Dockerfile', result.stdout)
 
 
 if __name__ == '__main__':

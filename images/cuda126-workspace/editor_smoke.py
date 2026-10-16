@@ -28,11 +28,15 @@ def main():
     with socket.socket() as listener:
         listener.bind(('127.0.0.1', 0))
         port = listener.getsockname()[1]
-    with tempfile.TemporaryDirectory() as state, tempfile.TemporaryFile(mode='w+') as log:
+    with tempfile.TemporaryDirectory() as config_directory, tempfile.TemporaryFile(mode='w+') as log:
+        # Keep the real default editor state path. A temporary explicit auth-none
+        # config prevents code-server generating a password in the image layer.
+        config = Path(config_directory) / 'config.yaml'
+        config.write_text('auth: none\n')
         process = subprocess.Popen(
             ['code-server', '--bind-addr', f'127.0.0.1:{port}', '--auth', 'none',
-             '--disable-telemetry', '--disable-update-check', '--user-data-dir',
-             state, '/workspace'], stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+             '--disable-telemetry', '--disable-update-check', '--config',
+             str(config), '/workspace'], stdin=subprocess.DEVNULL, stdout=log, stderr=log)
         try:
             deadline = time.monotonic() + 60
             while True:
@@ -49,6 +53,7 @@ def main():
                         raise TimeoutError('code-server did not become ready')
                     time.sleep(0.2)
             print(json.dumps({'codeServerHTTP': 'passed', 'version': '4.93.1',
+                              'defaultUserDataDirectory': '/home/ray/.local/share/code-server',
                               'pythonInterpreter': '/opt/raytrain/environment/bin/python'}))
         finally:
             if process.poll() is None:
