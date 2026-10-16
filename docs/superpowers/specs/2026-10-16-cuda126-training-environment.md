@@ -18,7 +18,7 @@ capture 与 prepare 使用镜像构建时生成的 root 只读 profile，不能�
 
 持久化已有的 `Build.BaseImage`、`Build.WorkspaceImage`。最终登记时原子写入已有镜像目录 `environment_json`，版本来自可信配对，不从用户 capture 推断；不新增数据库迁移。保留个人/团队可见性与授权边界。
 
-capabilities 保留旧字段，新增配对列表。Portal dev 根据固定摘要判断当前镜像是否支持保存，展示 Python、CUDA、PyTorch 版本，沿用现有默认选择规则。保存完成的镜像可以通过现有目录用于训练。CPU 拉取与依赖校验不等于 GPU 业务验证，仍明确标注验证范围。
+capabilities 保留旧字段，新增配对列表。本次不发布 Portal；现有页面沿用保存入口，镜像目录名称与 environment 标注版本。为兼容现有页面的安装说明，capabilities 可额外返回 `eligibleWorkspaceId`：仅根据交互登录的稳定用户与团队身份查询本人 RUNNING 工作区，二次核对归属与资源标识，并由运行时检查确认实际 Pod UID 与可信固定摘要配对。查询或检查失败时在两秒预算内省略提示、保留正常能力响应；仅记录不含身份和原始错误的调试阶段，不接受客户端指定工作区或 Base。该提示不构成保存授权，Create 的独立校验保持不变。保存完成的镜像可以通过现有目录用于训练。CPU 拉取与依赖校验不等于 GPU 业务验证，仍明确标注验证范围。
 
 ## 验证与交付边界
 

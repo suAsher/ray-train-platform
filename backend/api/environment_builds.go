@@ -27,7 +27,7 @@ type environmentBuildHandler struct {
 func RegisterEnvironmentBuildRoutes(group *gin.RouterGroup, service *eb.Service) {
 	h := environmentBuildHandler{service: service, limiter: newFixedWindowSourceArtifactLimiter(20, 120, 10000, time.Now)}
 	routes := group.Group("", h.authenticate)
-	routes.GET("/environment-build-capabilities", func(c *gin.Context) { h.success(c, service.Capabilities()) })
+	routes.GET("/environment-build-capabilities", h.capabilities)
 	routes.POST("/registry-authorizations", h.createAuthorization)
 	routes.GET("/registry-authorizations/:id/projects", h.projects)
 	routes.POST("/registry-authorizations/:id/check-target", h.checkTarget)
@@ -38,6 +38,9 @@ func RegisterEnvironmentBuildRoutes(group *gin.RouterGroup, service *eb.Service)
 	routes.POST("/environment-builds/:id/retry", h.retry)
 	routes.POST("/environment-builds/:id/cancel", h.cancel)
 	routes.GET("/environment-versions", h.versions)
+}
+func (h environmentBuildHandler) capabilities(c *gin.Context) {
+	h.success(c, h.service.CapabilitiesForOwner(c.Request.Context(), environmentOwner(c)))
 }
 func (h environmentBuildHandler) authenticate(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
