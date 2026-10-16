@@ -13,8 +13,9 @@ import unittest
 FOLDER = Path(__file__).resolve().parent
 SOURCE = json.loads((FOLDER / 'nvidia-guard-source.json').read_text())
 ORIGINAL = (FOLDER / 'nvidia-require-cuda-original.txt').read_text().strip()
-ADDITION = SOURCE['additionalOrClause']
-ENV_LINE = 'ENV NVIDIA_REQUIRE_CUDA="${NVIDIA_REQUIRE_CUDA} ' + ADDITION + '"'
+ADDITION = SOURCE['geforceMinorBranch']
+FINAL_GUARD = SOURCE['finalGuard']
+ENV_LINE = 'ENV NVIDIA_REQUIRE_CUDA="' + FINAL_GUARD + '"'
 
 
 def matches(expression, *, driver, cuda, brand='geforce', arch='8.9'):
@@ -44,30 +45,31 @@ class NvidiaGuardContract(unittest.TestCase):
             self.assertNotIn('NVIDIA_DISABLE_REQUIRE', environment)
             self.guard = environment['NVIDIA_REQUIRE_CUDA']
         else:
-            self.guard = ORIGINAL + (' ' + ADDITION if ENV_LINE in self.dockerfile else '')
+            matched = re.search(r'^ENV NVIDIA_REQUIRE_CUDA="([^"]+)"$', self.dockerfile, re.MULTILINE)
+            self.guard = matched.group(1).replace('${NVIDIA_REQUIRE_CUDA}', ORIGINAL) if matched else ORIGINAL
 
     def test_original_is_taken_from_pinned_official_parent_config(self):
         self.assertEqual(hashlib.sha256(ORIGINAL.encode()).hexdigest(), SOURCE['guardSHA256'])
         self.assertEqual(SOURCE['parentManifestDigest'],
                          'sha256:1608a19a5d6f013d36abfb9ad50a42b4c0ef86f4ab48e351c6899f0280b946c1')
 
-    def test_final_config_only_append_follows_every_rootfs_instruction(self):
+    def test_native_guard_is_the_final_configuration_instruction(self):
         self.assertEqual(self.dockerfile.strip().splitlines()[-1], ENV_LINE)
         self.assertNotIn('NVIDIA_DISABLE_REQUIRE', self.dockerfile)
         self.assertEqual(self.dockerfile.count('ENV NVIDIA_REQUIRE_CUDA='), 1)
 
-    def test_all_original_conditions_are_preserved_exactly_once(self):
-        self.assertEqual(self.guard, ORIGINAL + ' ' + ADDITION)
-        self.assertEqual(self.guard.split()[:-1], ORIGINAL.split())
+    def test_guard_has_only_native_cuda_and_bounded_geforce_paths(self):
+        self.assertEqual(self.guard, FINAL_GUARD)
+        self.assertEqual(self.guard.split(), ['cuda>=12.6', ADDITION])
 
     def test_new_branch_accepts_current_fleet_and_exact_lower_bound(self):
-        added = self.guard[len(ORIGINAL):].strip()
+        added = self.guard.split()[-1]
         for driver in ('550.127.05', '550.144.03'):
             with self.subTest(driver=driver):
                 self.assertTrue(matches(added, driver=driver, cuda='12.4'))
 
     def test_new_branch_does_not_accept_other_drivers_devices_or_apis(self):
-        added = self.guard[len(ORIGINAL):].strip()
+        added = self.guard.split()[-1]
         negative = [
             {'driver': '550.127.04'}, {'driver': '549.99'}, {'driver': '525.60.12'},
             {'driver': '551.0'}, {'cuda': '12.3'}, {'brand': 'tesla'},
@@ -77,9 +79,14 @@ class NvidiaGuardContract(unittest.TestCase):
             with self.subTest(changed=changed):
                 self.assertFalse(matches(added, **{'driver': '550.144.03', 'cuda': '12.4', **changed}))
 
-    def test_original_cuda126_path_and_original_brand_paths_remain(self):
+    def test_native_cuda126_path_remains_for_native_capable_drivers(self):
         self.assertTrue(matches(self.guard, driver='560.35.05', cuda='12.6', brand='geforce', arch='9.0'))
-        self.assertTrue(matches(self.guard, driver='550.144.03', cuda='12.4', brand='tesla', arch='8.6'))
+        self.assertTrue(matches(self.guard, driver='560.35.05', cuda='12.6', brand='tesla', arch='8.6'))
+
+    def test_old_forward_compatibility_driver_paths_fail_closed(self):
+        for driver, cuda in [('470.256.02', '11.4'), ('535.104.05', '12.2'), ('550.144.03', '12.4')]:
+            with self.subTest(driver=driver):
+                self.assertFalse(matches(self.guard, driver=driver, cuda=cuda, brand='tesla', arch='8.6'))
 
 
 if __name__ == '__main__':

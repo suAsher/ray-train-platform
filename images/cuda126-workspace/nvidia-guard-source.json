@@ -3,6 +3,8 @@
   "parentManifestDigest": "sha256:1608a19a5d6f013d36abfb9ad50a42b4c0ef86f4ab48e351c6899f0280b946c1",
   "parentConfigDigest": "sha256:feff5d69da26e2508144318c62441fa292c0131efe91d6ccccaed4e9d1533d9d",
   "guardSHA256": "8df7d1451b989b90fb168797655248ab1364e1fd4bdca3949d7ce1d1a733a04d",
-  "origin": "NVIDIA12.6.3 devel Ubuntu22.04 actual immutable OCI config.Env",
-  "additionalOrClause": "brand=geforce,driver>=550.127.05,driver<551,cuda>=12.4,arch=8.9"
+  "origin": "Historical NVIDIA12.6.3 devel Ubuntu22.04 actual immutable OCI config.Env",
+  "geforceMinorBranch": "brand=geforce,driver>=550.127.05,driver<551,cuda>=12.4,arch=8.9",
+  "finalGuard": "cuda>=12.6 brand=geforce,driver>=550.127.05,driver<551,cuda>=12.4,arch=8.9",
+  "driverPolicy": "Native host driver only; cuda-compat-12-6 removed and historical forward-compat brand/driver branches excluded"
 }
