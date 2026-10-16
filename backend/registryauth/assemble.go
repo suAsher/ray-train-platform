@@ -27,7 +27,7 @@ const environmentWrappers = "/opt/raytrain/environment-wrappers"
 const environmentProfilePath = "etc/raytrain/environment-profile.json"
 
 var environmentFiles = map[string]bool{
-	environmentProfilePath:                                    true,
+	environmentProfilePath:                                      true,
 	"opt/raytrain/environment-baseline.json":                    true,
 	"opt/raytrain/environment-materials/capture.json":           true,
 	"opt/raytrain/environment-materials/requirements.lock":      true,

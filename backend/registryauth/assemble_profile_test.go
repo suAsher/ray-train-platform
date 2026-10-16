@@ -12,7 +12,7 @@ func TestEnvironmentLayerAllowsOnlyReadOnlyRootProfile(t *testing.T) {
 		t.Fatalf("trusted runtime profile rejected: %v", err)
 	}
 	for _, test := range []struct {
-		name string
+		name   string
 		change func(*tar.Header)
 	}{
 		{"writable", func(h *tar.Header) { h.Mode = 0644 }},
