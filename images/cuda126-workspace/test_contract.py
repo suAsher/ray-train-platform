@@ -87,6 +87,14 @@ class BuildContract(unittest.TestCase):
         smoke = (ROOT / 'images/cuda126-workspace/editor_smoke.py').read_text()
         self.assertIn("version.startswith('4.99.4 '", smoke)
 
+    def test_cuda126_editor_arg_cannot_inherit_legacy_default(self):
+        fixed = 'harbor.wellspiking.ai/hub/codercom/code-server@sha256:80a8e4e472be2feb0f90724b564ddf81ff38fdc482aab4fb887ef53413891f95'
+        for buildx in (True, False):
+            cuda = self.build_plan('workspace-cuda126', buildx)
+            self.assertIn('CODE_SERVER_IMAGE=' + fixed, cuda.stdout)
+            legacy = self.build_plan('workspace', buildx)
+            self.assertIn('CODE_SERVER_IMAGE=harbor.wellspiking.ai/hub/codercom/code-server:4.93.1', legacy.stdout)
+
     def test_prepare_uses_matching_foundation_and_interpreter(self):
         for buildx in (True, False):
             result = self.build_plan('environment-prepare-cuda126', buildx)
