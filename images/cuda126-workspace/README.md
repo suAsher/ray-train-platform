@@ -29,19 +29,47 @@ Jupyter 服务位于独立 editor venv，训练镜像不包含编辑器或用户
 
 ## 构建与门禁
 
-只在既有构建机的隔离候选目录执行。先构建 `cuda126-base`，验证并取得
-其不可变仓库摘要，再把同一个摘要传给 workspace 和匹配的 dependency builder。
+只在既有构建机的隔离候选目录执行。先构建 `cuda126-base` 并验证。
+`PUSH_IMAGE=false` 仅将镜像载入构建机，**不会在 Harbor 生成可拉取的摘要**；
+本地 image ID / config digest 也不是仓库 manifest digest。
 
 ```bash
 BUILD_TARGETS=cuda126-base PUSH_IMAGE=false USE_BUILDX=true \
   IMAGE_TAG=cuda126-candidate bash build-image.sh
 
-CUDA126_BASE_IMAGE=harbor.wellspiking.ai/guofeng.su/raytrain-cuda126-base@sha256:实际摘要 \
-  BUILD_TARGETS=workspace-cuda126 PUSH_IMAGE=false USE_BUILDX=true \
-  IMAGE_TAG=cuda126-candidate bash build-image.sh
-
 python3 -m unittest discover -s images/cuda126-workspace -p 'test_*.py' -v
 ```
+
+未获推送授权时，隔离验证可导出同一候选的 OCI layout，取真实 manifest
+digest，再用 BuildKit named context 将规范 Harbor 引用映射到本机 OCI 内容。
+此操作不向仓库推送，profile 仍绑定同一个规范引用和 manifest digest。
+
+```bash
+docker buildx build --platform linux/amd64 --provenance=false \
+  --file images/cuda126-workspace/Dockerfile.base \
+  --output type=oci,dest=/tmp/cuda126-base.oci.tar .
+mkdir /tmp/cuda126-base-oci
+tar -xf /tmp/cuda126-base.oci.tar -C /tmp/cuda126-base-oci
+base_digest="$(python3 -c 'import json; print(json.load(open("/tmp/cuda126-base-oci/index.json"))["manifests"][0]["digest"])')"
+CUDA126_BASE_IMAGE="harbor.wellspiking.ai/guofeng.su/raytrain-cuda126-base@${base_digest}"
+
+docker buildx build --platform linux/amd64 \
+  --file images/cuda126-workspace/Dockerfile \
+  --build-arg "CUDA126_BASE_IMAGE=${CUDA126_BASE_IMAGE}" \
+  --build-context "${CUDA126_BASE_IMAGE}=oci-layout:///tmp/cuda126-base-oci@${base_digest}" \
+  --tag ray-workspace-cuda126:candidate --load .
+
+docker buildx build --platform linux/amd64 \
+  --file images/environment-builder/Dockerfile \
+  --build-arg "ENVIRONMENT_BASE_IMAGE=${CUDA126_BASE_IMAGE}" \
+  --build-arg ENVIRONMENT_BASE_PYTHON=/usr/bin/python3.10 \
+  --build-context "${CUDA126_BASE_IMAGE}=oci-layout:///tmp/cuda126-base-oci@${base_digest}" \
+  --tag raytrain-environment-prepare-cuda126:candidate --load .
+```
+
+只有获准发布并推送后，才从实际仓库检查权威摘要；正式构建通过
+`CUDA126_BASE_IMAGE=规范Harbor仓库@sha256:已发布manifest摘要` 显式选择
+`workspace-cuda126` 或 `environment-prepare-cuda126`，不使用本机 context 覆盖。
 
 `cuda126-base`、`workspace-cuda126` 和 `environment-prepare-cuda126`
 三个目标均不包含在 `all` 中。后两个目标拒绝可变基础 tag；
