@@ -62,10 +62,14 @@ class BuildContract(unittest.TestCase):
         sources = json.loads((folder / 'official-wheels.json').read_text())
         requirements = (folder / 'requirements-official.txt').read_text()
         constraints = (folder / 'constraints.txt').read_text()
-        self.assertEqual(len(sources), 12)
+        self.assertEqual(len(sources), 15)
+        bootstrap = {'pip': '26.2.1', 'setuptools': '84.0.0', 'wheel': '0.48.0'}
         for wheel in sources:
             pin = f"{wheel['name']}=={wheel['version']}"
-            self.assertIn(pin, constraints)
+            if wheel['name'] in bootstrap:
+                self.assertEqual(wheel['version'], bootstrap[wheel['name']])
+            else:
+                self.assertIn(pin, constraints)
             self.assertIn(f"{pin} --hash=sha256:{wheel['sha256']}", requirements)
             self.assertRegex(wheel['sha256'], r'^[0-9a-f]{64}$')
             self.assertTrue(wheel['url'].startswith('https://files.pythonhosted.org/packages/'))
@@ -74,6 +78,14 @@ class BuildContract(unittest.TestCase):
         self.assertIn('--no-index --find-links /wheels --no-deps --require-hashes', dockerfile)
         self.assertNotIn('COPY --from=official-wheels', dockerfile)
         self.assertNotIn('--extra-index-url', dockerfile)
+
+    def test_editor_uses_security_fixed_packages(self):
+        dockerfile = (ROOT / 'images/cuda126-workspace/Dockerfile').read_text()
+        self.assertIn('jupyterlab==4.5.11 jupyter_server==2.21.0', dockerfile)
+        self.assertNotIn('code-server:4.93.1', dockerfile)
+        self.assertIn('code-server@sha256:', dockerfile)
+        smoke = (ROOT / 'images/cuda126-workspace/editor_smoke.py').read_text()
+        self.assertIn("version.startswith('4.99.4 '", smoke)
 
     def test_prepare_uses_matching_foundation_and_interpreter(self):
         for buildx in (True, False):

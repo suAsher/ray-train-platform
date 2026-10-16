@@ -51,6 +51,9 @@ class SelfcheckContract(unittest.TestCase):
         self.assertFalse(result['cpuPassed'])
         self.assertIn('CUDA nvcc toolkit 12.6 required', result['errors'])
 
+    def test_rejects_ubuntu_seed_bootstrap(self):
+        self.assertFalse(self.report(versions={'setuptools': '59.6.0'})['cpuPassed'])
+
     def test_rejects_wrong_runtime_or_interpreter(self):
         for options in ({'cuda': '12.1'}, {'python': '3.11.9'},
                         {'prefix': '/usr'}, {'wrong_executable': 'ray'},
