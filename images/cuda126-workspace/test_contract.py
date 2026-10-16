@@ -95,6 +95,13 @@ class BuildContract(unittest.TestCase):
         self.assertIn("['code-server', '--version', '--config', str(config)]", smoke)
         self.assertIn("assert not Path('/home/ray/.config/code-server/config.yaml').exists()", smoke)
 
+    def test_platform_kernel_cannot_overwrite_baseline_ipykernel_files(self):
+        dockerfile = (ROOT / 'images/cuda126-workspace/Dockerfile').read_text()
+        self.assertIn('JUPYTER_PATH=/opt/raytrain/jupyter:/usr/local/share/jupyter', dockerfile)
+        self.assertIn('/opt/raytrain/jupyter/kernels/python3', dockerfile)
+        self.assertIn('> /opt/raytrain/jupyter/kernels/raytrain-environment/kernel.json', dockerfile)
+        self.assertNotIn('/usr/local/share/jupyter/kernels/', dockerfile)
+
     def test_cuda126_editor_arg_cannot_inherit_legacy_default(self):
         fixed = 'harbor.wellspiking.ai/hub/codercom/code-server@sha256:80a8e4e472be2feb0f90724b564ddf81ff38fdc482aab4fb887ef53413891f95'
         for buildx in (True, False):
