@@ -238,5 +238,15 @@
     "sha256": "1bea5af7463f59c4719db48fe739579a2a4f569c96f26c086edda85c96da9f59",
     "size": 5328680,
     "requiresPython": ">=3.9"
+  },
+  {
+    "name": "python-discovery",
+    "version": "1.6.3",
+    "metadata": "https://pypi.org/pypi/python-discovery/1.6.3/json",
+    "filename": "python_discovery-1.6.3-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/de/ec/643826e4d69b7bdce4213f221e8f5ed06d0a9dd69fa9b33342578d2cc8c8/python_discovery-1.6.3-py3-none-any.whl",
+    "sha256": "cb7654125e3dcb594269a6feb56ac693f1f13b7c654493a93eba72dc22d18034",
+    "size": 39386,
+    "requiresPython": ">=3.9"
   }
 ]

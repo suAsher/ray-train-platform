@@ -30,6 +30,8 @@ ADD --checksum=sha256:0cc0876a58eee9143476f24901b1b8eb4d52443283ade2b6bca650dd1d
 ADD --checksum=sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3 https://files.pythonhosted.org/packages/92/9d/c4e665119135114480843e7ab388fa94d8480650450e6f8e26b70d323a4c/urllib3-2.8.0-py3-none-any.whl /wheels/urllib3-2.8.0-py3-none-any.whl
 ADD --checksum=sha256:1bea5af7463f59c4719db48fe739579a2a4f569c96f26c086edda85c96da9f59 https://files.pythonhosted.org/packages/9a/ce/e74453531b0c49a58d0e8a4f9bab4495705859fee4a4f7de27d58f4a791a/virtualenv-21.7.13-py3-none-any.whl /wheels/virtualenv-21.7.13-py3-none-any.whl
 
+ADD --checksum=sha256:cb7654125e3dcb594269a6feb56ac693f1f13b7c654493a93eba72dc22d18034 https://files.pythonhosted.org/packages/de/ec/643826e4d69b7bdce4213f221e8f5ed06d0a9dd69fa9b33342578d2cc8c8/python_discovery-1.6.3-py3-none-any.whl /wheels/python_discovery-1.6.3-py3-none-any.whl
+
 FROM harbor.wellspiking.ai/hub/nvidia/cuda@sha256:1608a19a5d6f013d36abfb9ad50a42b4c0ef86f4ab48e351c6899f0280b946c1
 ARG APT_MIRROR=http://repo.wellspiking.ai/repository/ubuntu-jammy
 ARG PIP_INDEX_URL=https://mirrors.ivolces.com/pypi/simple/
