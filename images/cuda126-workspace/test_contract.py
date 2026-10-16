@@ -116,6 +116,7 @@ class BuildContract(unittest.TestCase):
         folder = ROOT / 'images/cuda126-workspace'
         dockerfile = (folder / 'Dockerfile').read_text()
         self.assertIn('--copies --system-site-packages --without-pip /opt/raytrain/editor', dockerfile)
+        self.assertIn('exec /opt/raytrain/editor/bin/python -m jupyter', dockerfile)
         self.assertIn('--constraint /opt/raytrain/environment-constraints.txt', dockerfile)
         self.assertIn('FROM scratch AS editor-wheels', dockerfile)
         sources = json.loads((folder / 'editor-official-wheels.json').read_text())
