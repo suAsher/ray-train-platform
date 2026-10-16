@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 from pathlib import Path, PurePosixPath
 import subprocess
 import sys
@@ -18,6 +19,8 @@ from prepare import prepare, pip_environment
 
 MAX_LAYER_BYTES = 8 * 1024 * 1024 * 1024
 RUNTIME_ROOT = Path('/usr/local/lib/raytrain-environment')
+CONSTRAINTS = Path('/opt/raytrain/environment-constraints.txt')
+MAX_CONSTRAINTS_BYTES = 64 * 1024
 # These destinations are a contract with the independent trusted OCI assembler.
 FIXED_FILES = {
     'environment_runtime.py': 'usr/local/lib/raytrain-environment/environment_runtime.py',
@@ -63,6 +66,25 @@ def add_path(archive, path, name, *, mode=None):
     return info.size
 
 
+def verified_constraints():
+    # This file is generated from the immutable baseline during the helper
+    # image build. Never export a user-supplied constraints file by path alone.
+    try:
+        info = CONSTRAINTS.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_gid != 0 or stat.S_IMODE(info.st_mode) != 0o444:
+            raise CaptureError('Fixed constraints must be a root-owned read-only regular file', 'PACKAGE_MODIFIED')
+        packages = json.loads(BASELINE.read_text(encoding='utf-8'))['packages']
+        expected = ''.join(name + '==' + entry['version'] + '\n' for name, entry in sorted(packages.items())).encode('utf-8')
+        if len(expected) > MAX_CONSTRAINTS_BYTES or info.st_size != len(expected):
+            raise CaptureError('Fixed constraints do not match the immutable baseline', 'PACKAGE_MODIFIED')
+        with CONSTRAINTS.open('rb') as stream:
+            if stream.read(MAX_CONSTRAINTS_BYTES + 1) != expected:
+                raise CaptureError('Fixed constraints do not match the immutable baseline', 'PACKAGE_MODIFIED')
+    except OSError as error:
+        raise CaptureError('Fixed constraints are unavailable', 'PACKAGE_MODIFIED') from error
+    return CONSTRAINTS
+
+
 def export_layer(destination, context):
     total = 0
     with tarfile.open(destination, 'w', format=tarfile.PAX_FORMAT, dereference=False) as archive:
@@ -92,6 +114,7 @@ def export_layer(destination, context):
         if runtime.ACTIVE_PROFILE is not None:
             runtime.verify_active_profile()
             total += add_path(archive, runtime.PROFILE, 'etc/raytrain/environment-profile.json', mode=0o444)
+            total += add_path(archive, verified_constraints(), 'opt/raytrain/environment-constraints.txt', mode=0o444)
         for name in ('capture.json', 'requirements.lock', 'materials.json'):
             total += add_path(archive, context / name, 'opt/raytrain/environment-materials/' + name)
     digest = hashlib.sha256()
