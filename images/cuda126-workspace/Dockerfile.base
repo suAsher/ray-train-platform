@@ -122,3 +122,6 @@ WORKDIR /workspace
 # Offline CPU gate only. Compile/link checks can also run on a CPU builder;
 # executing CUDA kernels requires separate GPU-node acceptance.
 RUN raytrain-cuda126-selfcheck
+# Preserve the official requirements and add only the bounded CUDA 12.x minor
+# compatibility path. This is metadata-only; no dependency or rootfs changes.
+ENV NVIDIA_REQUIRE_CUDA="${NVIDIA_REQUIRE_CUDA} brand=geforce,driver>=550.127.05,driver<551,cuda>=12.4,arch=8.9"

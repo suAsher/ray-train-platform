@@ -24,7 +24,7 @@ capabilities 保留旧字段，新增配对列表。本次不发布 Portal；现
 
 本机只编辑、审阅与 `git diff --check`。先在既有构建机隔离候选进行 RED/GREEN、完整 Go 回归、格式与 vet、真实 PostgreSQL 生命周期/目录元数据验证、Python capture/离线重建/verify、Portal 合同与 lint/build。
 
-CUDA 12.6 基础镜像为 NVIDIA 12.6.3 devel Ubuntu 22.04 的固定 amd64 摘要。保留 NVIDIA 镜像兼容要求，不改驱动或关闭检查。已核对节点为 GeForce RTX 4090 D、550 系列驱动、CUDA driver API 12.4，按原镜像条件不满足启动要求；这是条件核对，不是 GPU 容器启动失败证据。面向 sm_89 的 nvcc/Torch 扩展可以先在 CPU 构建机编译检查；实际 PyTorch GPU 运算、编译产物执行、保存后短训练另需兼容 GPU 条件与验收授权，未验证项不得宣称通过。
+CUDA 12.6 基础镜像为 NVIDIA 12.6.3 devel Ubuntu 22.04 的固定 amd64 摘要。实际受控 GPU 启动已观察到原 NVIDIA prestart hook 因 `cuda>=12.6` 拒绝，测试代码未执行。节点为 GeForce RTX 4090 D、550 系列驱动、CUDA driver API 12.4；550 满足 CUDA 12.x 小版本兼容最低驱动要求，但不等于完整支持新驱动功能。只在 Base 最后一条配置指令保留全部原要求并追加 `brand=geforce,driver>=550.127.05,driver<551,cuda>=12.4,arch=8.9` 这一窄 OR 分支，不改任何 rootfs、依赖、宿主驱动或检查开关。重建调试与助手镜像以绑定新的 Base 摘要，重新验证可信 profile、零增量 capture 与保存恢复。约束模型通过不等于实际 NVIDIA parser、GPU 运算或 550.127.05 补丁版本已验收；真实验收须记录加载的 `libcuda` 路径、API 版本、原生 sm_89 SASS/扩展执行和 forward/backward。新 PTX JIT、需要新驱动的功能与任意用户代码不在小版本兼容承诺内。未验证项不得宣称通过。
 
 原建议 PyTorch 2.6.0 经依赖审计确认受 CVE-2026-24747 影响，用户已选择 2.13.0 / TorchVision 0.28.0 重新审计与验证。新版本不等于全部漏洞报告已解决；保留完整依赖审计结果、适用条件与未确认项。隔离运行验证仅使用平台自有 fixture 和无敏感数据的测试依赖，不加载外部权重或漏洞利用样例。
 
