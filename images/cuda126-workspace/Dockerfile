@@ -3,6 +3,9 @@
 ARG CODE_SERVER_IMAGE=harbor.wellspiking.ai/hub/codercom/code-server@sha256:80a8e4e472be2feb0f90724b564ddf81ff38fdc482aab4fb887ef53413891f95
 ARG CUDA126_BASE_IMAGE
 FROM ${CODE_SERVER_IMAGE} AS code-server
+FROM scratch AS editor-wheels
+ADD --checksum=sha256:e23e3d76b92ad172b529fb6faf91e3edd264ffdff65b543949eb85daf7f8b113 https://files.pythonhosted.org/packages/0f/f2/a2f50a928fed0b8529dd80c4eb7d3aebe92f9658bfb3b63dce77fb5f1b95/jupyterlab-4.5.11-py3-none-any.whl /wheels/jupyterlab-4.5.11-py3-none-any.whl
+ADD --checksum=sha256:2ae2e5ce5e97268553e25aebe040197455673d925b5fc7995477153318160cf7 https://files.pythonhosted.org/packages/cb/8a/cb97c2b353cb46cced413be8f742fa8fcd3cb1659524f27314494aa94968/jupyter_server-2.21.0-py3-none-any.whl /wheels/jupyter_server-2.21.0-py3-none-any.whl
 FROM ${CUDA126_BASE_IMAGE}
 ARG CUDA126_BASE_IMAGE
 ARG PIP_INDEX_URL=https://mirrors.ivolces.com/pypi/simple/
@@ -11,14 +14,19 @@ USER root
 # image metadata, never an environment variable from a user request.
 COPY images/environment-workspace/environment_runtime.py /usr/local/lib/raytrain-environment/environment_runtime.py
 COPY images/environment-workspace/raytrain-environment /usr/local/bin/raytrain-environment
-RUN install -d -m 0755 /etc/raytrain \
+COPY images/cuda126-workspace/editor-requirements-official.txt /opt/raytrain/editor-requirements-official.txt
+RUN --mount=from=editor-wheels,source=/wheels,target=/wheels,readonly \
+    install -d -m 0755 /etc/raytrain \
  && printf '{"schemaVersion":1,"baseImage":"%s","basePython":"/usr/bin/python3.10","versions":{"python":"3.10","pytorch":"2.13.0+cu126","cuda":"12.6","ray":"2.58.0"}}\n' "${CUDA126_BASE_IMAGE}" > /etc/raytrain/environment-profile.json \
  && chmod 0444 /etc/raytrain/environment-profile.json \
  && chmod 0755 /usr/local/bin/raytrain-environment \
  && raytrain-environment baseline \
- && python3.10 -m venv --copies /opt/raytrain/editor \
+ && python3.10 -m venv --copies --system-site-packages --without-pip /opt/raytrain/editor \
  && /opt/raytrain/editor/bin/python -m pip install --no-cache-dir \
-      --index-url "${PIP_INDEX_URL}" jupyterlab==4.5.11 jupyter_server==2.21.0 ipykernel==6.29.5 \
+      --no-index --find-links /wheels --no-deps --require-hashes \
+      -r /opt/raytrain/editor-requirements-official.txt \
+ && /opt/raytrain/editor/bin/python -m pip install --no-cache-dir \
+      --index-url "${PIP_INDEX_URL}" --constraint /opt/raytrain/environment-constraints.txt jupyterlab==4.5.11 jupyter_server==2.21.0 ipykernel==6.29.5 \
  && /opt/raytrain/editor/bin/python -m pip check
 COPY --from=code-server /usr/lib/code-server /usr/lib/code-server
 COPY --from=code-server /usr/bin/code-server /usr/bin/code-server

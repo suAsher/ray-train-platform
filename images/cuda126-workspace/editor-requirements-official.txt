@@ -1,0 +1,3 @@
+# Official hashes for isolated editor core; dependencies resolve against Base.
+jupyterlab==4.5.11 --hash=sha256:e23e3d76b92ad172b529fb6faf91e3edd264ffdff65b543949eb85daf7f8b113
+jupyter-server==2.21.0 --hash=sha256:2ae2e5ce5e97268553e25aebe040197455673d925b5fc7995477153318160cf7

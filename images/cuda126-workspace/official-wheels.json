@@ -148,5 +148,95 @@
     "sha256": "3217dcc807155e45db462d7ef2431f5ddda0d7273b700d05a67b271ceb1287ab",
     "size": 33320,
     "requiresPython": ">=3.9"
+  },
+  {
+    "name": "anyio",
+    "version": "4.14.2",
+    "metadata": "https://pypi.org/pypi/anyio/4.14.2/json",
+    "filename": "anyio-4.14.2-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/da/35/f2287558c17e29fafc8ef3daf819bb9834061cfa43bff8014f7df7f63bdc/anyio-4.14.2-py3-none-any.whl",
+    "sha256": "9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494",
+    "size": 125813,
+    "requiresPython": ">=3.10"
+  },
+  {
+    "name": "cryptography",
+    "version": "50.0.0",
+    "metadata": "https://pypi.org/pypi/cryptography/50.0.0/json",
+    "filename": "cryptography-50.0.0-cp39-abi3-manylinux_2_28_x86_64.whl",
+    "url": "https://files.pythonhosted.org/packages/46/c9/f60aed34c013f317f92817b6c171c2d22a78270fa41109bd4b08af26b194/cryptography-50.0.0-cp39-abi3-manylinux_2_28_x86_64.whl",
+    "sha256": "105110f43a471dbd0060b9c9516cb8a6a79233631a04cc2ba16f28323ac6e025",
+    "size": 4762647,
+    "requiresPython": "!=3.9.0,!=3.9.1,>=3.9"
+  },
+  {
+    "name": "gitpython",
+    "version": "3.1.60",
+    "metadata": "https://pypi.org/pypi/gitpython/3.1.60/json",
+    "filename": "gitpython-3.1.60-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/71/63/ba28697918b7c190af9f3f21940d03e8814e25dd4ddd39d6929f3a553995/gitpython-3.1.60-py3-none-any.whl",
+    "sha256": "39548bffb8fa0f3a548133348868bb4838e79d73283052207dc97781a569b6b4",
+    "size": 221893,
+    "requiresPython": ">=3.7"
+  },
+  {
+    "name": "multidict",
+    "version": "6.9.1",
+    "metadata": "https://pypi.org/pypi/multidict/6.9.1/json",
+    "filename": "multidict-6.9.1-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+    "url": "https://files.pythonhosted.org/packages/bd/53/f65ed68b96eea2b4f6fa4f9031bdfccd8f3097c429e3d371c545d1c40ca4/multidict-6.9.1-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+    "sha256": "d3b6e6840421c83ccb60398e333b44f910b0907bb409597685ab2eedd1e22eab",
+    "size": 303685,
+    "requiresPython": ">=3.10"
+  },
+  {
+    "name": "pyasn1",
+    "version": "0.6.4",
+    "metadata": "https://pypi.org/pypi/pyasn1/0.6.4/json",
+    "filename": "pyasn1-0.6.4-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/9a/3b/6163796d69c3977d1e4287bea4a6979161cbbdd170ebb430511e8e1999ce/pyasn1-0.6.4-py3-none-any.whl",
+    "sha256": "deda9277cfd454080ec40b207fb6df82206a3a2688735233cdcd8d3d565f088b",
+    "size": 84410,
+    "requiresPython": ">=3.8"
+  },
+  {
+    "name": "sqlparse",
+    "version": "0.6.0",
+    "metadata": "https://pypi.org/pypi/sqlparse/0.6.0/json",
+    "filename": "sqlparse-0.6.0-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/d9/50/f00935da0ec7cbf325f8dc4f772ae46fbc7b672dd62876e73f0a94adda57/sqlparse-0.6.0-py3-none-any.whl",
+    "sha256": "b861c0288ce2fa56209a9a6412d2e066ac664b3873b89c26c9d8415e8e32996f",
+    "size": 50070,
+    "requiresPython": ">=3.10"
+  },
+  {
+    "name": "tornado",
+    "version": "6.5.9",
+    "metadata": "https://pypi.org/pypi/tornado/6.5.9/json",
+    "filename": "tornado-6.5.9-cp39-abi3-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl",
+    "url": "https://files.pythonhosted.org/packages/9e/0f/38f8d16011de3b1ce2babb4c3bcefb126d2dc47d04878ae3ad5c39a00caa/tornado-6.5.9-cp39-abi3-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl",
+    "sha256": "0cc0876a58eee9143476f24901b1b8eb4d52443283ade2b6bca650dd1da04f84",
+    "size": 465496,
+    "requiresPython": ">=3.9"
+  },
+  {
+    "name": "urllib3",
+    "version": "2.8.0",
+    "metadata": "https://pypi.org/pypi/urllib3/2.8.0/json",
+    "filename": "urllib3-2.8.0-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/92/9d/c4e665119135114480843e7ab388fa94d8480650450e6f8e26b70d323a4c/urllib3-2.8.0-py3-none-any.whl",
+    "sha256": "0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3",
+    "size": 135717,
+    "requiresPython": ">=3.10"
+  },
+  {
+    "name": "virtualenv",
+    "version": "21.7.13",
+    "metadata": "https://pypi.org/pypi/virtualenv/21.7.13/json",
+    "filename": "virtualenv-21.7.13-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/9a/ce/e74453531b0c49a58d0e8a4f9bab4495705859fee4a4f7de27d58f4a791a/virtualenv-21.7.13-py3-none-any.whl",
+    "sha256": "1bea5af7463f59c4719db48fe739579a2a4f569c96f26c086edda85c96da9f59",
+    "size": 5328680,
+    "requiresPython": ">=3.9"
   }
 ]

@@ -21,6 +21,9 @@ def main():
     with tempfile.NamedTemporaryFile(dir='/home/ray/.local/share/code-server',
                                      prefix='raytrain-editor-write-'):
         pass
+    subprocess.run(['/opt/raytrain/environment/bin/python', '-I', '-c',
+                    "import importlib.util; assert importlib.util.find_spec('jupyterlab') is None"],
+                   check=True, timeout=30)
     settings = Path('/home/ray/.local/share/code-server/User/settings.json')
     assert json.loads(settings.read_text())['python.defaultInterpreterPath'] == '/opt/raytrain/environment/bin/python'
     version = subprocess.check_output(['code-server', '--version'], text=True, timeout=30)
@@ -54,6 +57,7 @@ def main():
                     time.sleep(0.2)
             print(json.dumps({'codeServerHTTP': 'passed', 'version': '4.99.4',
                               'defaultUserDataDirectory': '/home/ray/.local/share/code-server',
+                              'managedCanImportJupyterLab': False,
                               'pythonInterpreter': '/opt/raytrain/environment/bin/python'}))
         finally:
             if process.poll() is None:

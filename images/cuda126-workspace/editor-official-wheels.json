@@ -1,0 +1,22 @@
+[
+  {
+    "name": "jupyterlab",
+    "version": "4.5.11",
+    "metadata": "https://pypi.org/pypi/jupyterlab/4.5.11/json",
+    "filename": "jupyterlab-4.5.11-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/0f/f2/a2f50a928fed0b8529dd80c4eb7d3aebe92f9658bfb3b63dce77fb5f1b95/jupyterlab-4.5.11-py3-none-any.whl",
+    "sha256": "e23e3d76b92ad172b529fb6faf91e3edd264ffdff65b543949eb85daf7f8b113",
+    "size": 12455673,
+    "requiresPython": ">=3.9"
+  },
+  {
+    "name": "jupyter-server",
+    "version": "2.21.0",
+    "metadata": "https://pypi.org/pypi/jupyter-server/2.21.0/json",
+    "filename": "jupyter_server-2.21.0-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/cb/8a/cb97c2b353cb46cced413be8f742fa8fcd3cb1659524f27314494aa94968/jupyter_server-2.21.0-py3-none-any.whl",
+    "sha256": "2ae2e5ce5e97268553e25aebe040197455673d925b5fc7995477153318160cf7",
+    "size": 393961,
+    "requiresPython": ">=3.10"
+  }
+]

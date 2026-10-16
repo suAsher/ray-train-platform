@@ -98,3 +98,5 @@ nvcc 编译并执行 `sm_89` 二进制，以及 Torch CUDA extension 编译和�
 也不降低 `NVIDIA_REQUIRE_CUDA`；实际节点驱动与应用扩展仍需实测。
 
 基础与可写 Python 使用同一套已审计 bootstrap：pip 26.2.1、setuptools 84.0.0、wheel 0.48.0。只在可写 venv 内保留这组小型基础包，Torch/CUDA 等仍继承系统 site-packages。
+
+新镜像的安全传递依赖固定在 `security-constraints.txt`，在官方 Torch wheel 层之后合并到同一约束路径。编辑器独立 venv 继承不可写 Base 的安全依赖与 bootstrap，不再播种旧 pip/setuptools；Jupyter 自身仅安装到 editor。managed Python、默认 kernel 与用户 shell 不继承 editor，构建验收检查 managed 不能导入 JupyterLab。
