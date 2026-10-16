@@ -22,15 +22,20 @@ COPY images/environment-workspace/pip.conf /etc/pip.conf
 # distro pip/setuptools remain below these fixed /usr/local distributions.
 RUN python3.10 -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
       pip==24.2 setuptools==75.1.0 wheel==0.44.0
-# No fallback index: runtime and nvcc must both be CUDA 12.6.
-RUN python3.10 -m pip install --no-cache-dir \
+# Only the official cu126 index supplies these fixed CUDA wheels. Keep their
+# download layer reusable if an unrelated dependency mirror has a timeout.
+RUN python3.10 -m pip install --no-cache-dir --no-deps \
       --index-url "${TORCH_INDEX_URL}" --constraint /opt/raytrain/environment-constraints.txt \
-      torch==2.6.0+cu126 torchvision==0.21.0+cu126 \
- && python3.10 -m pip install --no-cache-dir \
+      torch==2.6.0+cu126 torchvision==0.21.0+cu126
+# Resolve the installed official wheels' exact METADATA requirements through
+# the existing HTTPS PyPI mirror; a missing +cu126 wheel cannot become CPU/cu121.
+RUN python3.10 -m pip install --no-cache-dir \
       --index-url "${PIP_INDEX_URL}" --constraint /opt/raytrain/environment-constraints.txt \
+      torch==2.6.0+cu126 torchvision==0.21.0+cu126 \
       'ray[default,train,tune]==2.58.0' pyarrow==25.0.1 mlflow-skinny==3.14.0 \
       google-api-core==2.34.0 googleapis-common-protos==1.75.2 \
       opentelemetry-exporter-otlp==1.44.0 ipykernel==6.29.5 \
+ && python3.10 -m pip check \
  && python3.10 -m venv --copies --system-site-packages /opt/raytrain/environment \
  && python3.10 -c "import pathlib, site; pathlib.Path(site.getsitepackages()[0], 'raytrain_platform.pth').write_text('/usr/local/lib/raytrain-platform\\n', encoding='utf-8')"
 COPY images/workspace/raytrain-launch.py /usr/local/bin/raytrain-launch
