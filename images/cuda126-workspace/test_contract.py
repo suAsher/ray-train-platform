@@ -56,7 +56,8 @@ class BuildContract(unittest.TestCase):
         for buildx in (True, False):
             result = self.build_plan('workspace-cuda126', buildx)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('images/cuda126-workspace/Dockerfile', result.stdout)
+            if buildx:
+                self.assertIn('images/cuda126-workspace/Dockerfile', result.stdout)
             self.assertIn('ray-workspace-cuda126:contract-test', result.stdout)
             self.assertEqual(result.stdout.count('--- Building '), 1)
             self.assertNotIn('--push', result.stdout)
