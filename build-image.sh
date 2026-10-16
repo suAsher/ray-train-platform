@@ -50,6 +50,7 @@ RAY_CANARY_FOUNDATION_IMAGE_ARG="${RAY_CANARY_FOUNDATION_IMAGE:-harbor.wellspiki
 BEVFUSION_BASE_IMAGE_ARG="${BEVFUSION_BASE_IMAGE:-harbor.wellspiking.ai/guofeng.su/bevfusion@sha256:88e9c5045ced1b4b3dc49ddf1f2e22a8c9702574fd8103afcdff83577784a5ee}"
 BEVFUSION_WORKSPACE_BASE_IMAGE_ARG="${BEVFUSION_WORKSPACE_BASE_IMAGE:-harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion@sha256:66b906d062870131121b07e4455783dc5f2913e285b29fdbb2cf1decc100f553}"
 CODE_SERVER_IMAGE_ARG="${CODE_SERVER_IMAGE:-harbor.wellspiking.ai/hub/codercom/code-server:4.93.1}"
+CUDA126_CODE_SERVER_IMAGE_ARG="${CUDA126_CODE_SERVER_IMAGE:-harbor.wellspiking.ai/hub/codercom/code-server@sha256:80a8e4e472be2feb0f90724b564ddf81ff38fdc482aab4fb887ef53413891f95}"
 CUDA126_BASE_IMAGE_ARG="${CUDA126_BASE_IMAGE:-}"
 SPK_RAYJOB_VERSION_ARG="${SPK_RAYJOB_VERSION:-$IMAGE_TAG}"
 SPK_RAYJOB_MINIMUM_VERSION_ARG="${SPK_RAYJOB_MINIMUM_VERSION:-}"
@@ -131,7 +132,7 @@ Build targets:
   storage-sync        Explicit-only governed IDC/TOS copy worker
   personal-storage-csi Explicit-only personal Wellspiking SFTP mount driver
   workspace           Existing Ray 2.35 interactive workspace (rollback)
-  workspace-cuda126   Explicit-only Python 3.10 / Torch 2.6 / CUDA 12.6 devel workspace
+  workspace-cuda126   Explicit-only Python 3.10 / Torch 2.13 / CUDA 12.6 devel workspace
   cuda126-base        Explicit-only editor-free foundation for CUDA 12.6 environments
   environment-prepare-cuda126 Explicit-only CUDA 12.6 dependency-layer builder
   train-pytorch       Existing Ray 2.35 PyTorch runtime (rollback)
@@ -372,6 +373,10 @@ echo ''
 
 for target in "${BUILD_TARGETS_LIST[@]}"; do
   IFS='|' read -r dockerfile image_name context_dir docker_target <<< "$(target_spec "$target")"
+  code_server_image_arg="$CODE_SERVER_IMAGE_ARG"
+  if [ "$target" = "workspace-cuda126" ]; then
+    code_server_image_arg="$CUDA126_CODE_SERVER_IMAGE_ARG"
+  fi
   dockerfile_path="$SCRIPT_DIR/$dockerfile"
   context_path="$SCRIPT_DIR/$context_dir"
   case "$target" in
@@ -409,7 +414,7 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
       -e "s|^FROM \${BEVFUSION_BASE_IMAGE}|FROM $BEVFUSION_BASE_IMAGE_ARG|" \
       -e "s|^FROM \${BEVFUSION_WORKSPACE_BASE_IMAGE}|FROM $BEVFUSION_WORKSPACE_BASE_IMAGE_ARG|" \
       -e "s|^FROM \${RAY_CANARY_FOUNDATION_IMAGE}|FROM $RAY_CANARY_FOUNDATION_IMAGE_ARG|" \
-      -e "s|^FROM \${CODE_SERVER_IMAGE}|FROM $CODE_SERVER_IMAGE_ARG|" \
+      -e "s|^FROM \${CODE_SERVER_IMAGE}|FROM $code_server_image_arg|" \
       -e "s|^FROM \${CUDA126_BASE_IMAGE}|FROM $CUDA126_BASE_IMAGE_ARG|" \
       "$dockerfile_path" >"$tmp_dockerfile"
     dockerfile_path="$tmp_dockerfile"
@@ -435,7 +440,7 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
       --build-arg "RAY_CANARY_FOUNDATION_IMAGE=$RAY_CANARY_FOUNDATION_IMAGE_ARG"
       --build-arg "BEVFUSION_BASE_IMAGE=$BEVFUSION_BASE_IMAGE_ARG"
       --build-arg "BEVFUSION_WORKSPACE_BASE_IMAGE=$BEVFUSION_WORKSPACE_BASE_IMAGE_ARG"
-      --build-arg "CODE_SERVER_IMAGE=$CODE_SERVER_IMAGE_ARG"
+      --build-arg "CODE_SERVER_IMAGE=$code_server_image_arg"
       --build-arg "CUDA126_BASE_IMAGE=$CUDA126_BASE_IMAGE_ARG"
       --build-arg "SPK_RAYJOB_VERSION=$SPK_RAYJOB_VERSION_ARG"
       --build-arg "SPK_RAYJOB_MINIMUM_VERSION=$SPK_RAYJOB_MINIMUM_VERSION_ARG"
@@ -482,7 +487,7 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
       --build-arg "RAY_CANARY_FOUNDATION_IMAGE=$RAY_CANARY_FOUNDATION_IMAGE_ARG"
       --build-arg "BEVFUSION_BASE_IMAGE=$BEVFUSION_BASE_IMAGE_ARG"
       --build-arg "BEVFUSION_WORKSPACE_BASE_IMAGE=$BEVFUSION_WORKSPACE_BASE_IMAGE_ARG"
-      --build-arg "CODE_SERVER_IMAGE=$CODE_SERVER_IMAGE_ARG"
+      --build-arg "CODE_SERVER_IMAGE=$code_server_image_arg"
       --build-arg "CUDA126_BASE_IMAGE=$CUDA126_BASE_IMAGE_ARG"
       --build-arg "SPK_RAYJOB_VERSION=$SPK_RAYJOB_VERSION_ARG"
       --build-arg "SPK_RAYJOB_MINIMUM_VERSION=$SPK_RAYJOB_MINIMUM_VERSION_ARG"

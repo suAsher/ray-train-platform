@@ -9,8 +9,8 @@
 | PyTorch / TorchVision | 2.13.0+cu126 / 0.28.0+cu126 |
 | CUDA runtime / nvcc | 均为 12.6 |
 | Ray | 2.58.0 |
-| JupyterLab / Jupyter Server / IPykernel | 4.2.5 / 2.14.2 / 6.29.5 |
-| VS Code Server | code-server 4.93.1 |
+| JupyterLab / Jupyter Server / IPykernel | 4.5.11 / 2.21.0 / 6.29.5 |
+| VS Code Server | code-server 4.99.4 |
 
 终端、Ray Actor 与 Notebook kernel 都使用
 `/opt/raytrain/environment/bin/python`。固定依赖装在不可写系统基础层；
@@ -96,3 +96,5 @@ nvcc 编译并执行 `sm_89` 二进制，以及 Torch CUDA extension 编译和�
 避免把旧驱动无法 JIT 的新 PTX 当作完整兼容性。
 保留 NVIDIA 基础镜像的驱动保护，不设置 `NVIDIA_DISABLE_REQUIRE`，
 也不降低 `NVIDIA_REQUIRE_CUDA`；实际节点驱动与应用扩展仍需实测。
+
+基础与可写 Python 使用同一套已审计 bootstrap：pip 26.2.1、setuptools 84.0.0、wheel 0.48.0。只在可写 venv 内保留这组小型基础包，Torch/CUDA 等仍继承系统 site-packages。

@@ -16,6 +16,10 @@ ADD --checksum=sha256:3b3d24b586d0ad9712c7b52b7d19c8a9dfbb318b9b284121b5f95e90ed
 ADD --checksum=sha256:898b155a0e1557afd867478fb6158e8122a46329ca0bb8dc53cc55e98f017f56 https://files.pythonhosted.org/packages/d1/7c/8be563d68e93bbefa5c8affb82ddcff91b3ad858ce49957ba7b16fd3e0ab/opentelemetry_proto-1.44.0-py3-none-any.whl /wheels/opentelemetry_proto-1.44.0-py3-none-any.whl
 ADD --checksum=sha256:1cacde7b0ad306f84c5ef08c3dbe1bbaf20165bba6f8bff43b670e555a086bcb https://files.pythonhosted.org/packages/a6/0e/49df70d9b81fb5cbae4bbf2a49d865b09bcbcbc4eb53f5851b1027738d78/opentelemetry_semantic_conventions-0.65b0-py3-none-any.whl /wheels/opentelemetry_semantic_conventions-0.65b0-py3-none-any.whl
 
+ADD --checksum=sha256:71138adf1f4ca900cdb7d289c21b7494329f2332b6d85f0e1c42108c0384ed3e https://files.pythonhosted.org/packages/f3/6e/1736e5b4ae2b778ef2f81c47d797de9f891d4d8acb047a24ca37a60294dd/pip-26.2.1-py3-none-any.whl /wheels/pip-26.2.1-py3-none-any.whl
+ADD --checksum=sha256:51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670 https://files.pythonhosted.org/packages/95/9c/c510029fc6ef33a6275cd2c5d3cecd6613dfd6aa401d57c54f1c18852ccf/setuptools-84.0.0-py3-none-any.whl /wheels/setuptools-84.0.0-py3-none-any.whl
+ADD --checksum=sha256:3217dcc807155e45db462d7ef2431f5ddda0d7273b700d05a67b271ceb1287ab https://files.pythonhosted.org/packages/2e/29/69cfbb602cd91690c55d38ba9fe53e6a7e76a6fa647bf38f19c138d25449/wheel-0.48.0-py3-none-any.whl /wheels/wheel-0.48.0-py3-none-any.whl
+
 FROM harbor.wellspiking.ai/hub/nvidia/cuda@sha256:1608a19a5d6f013d36abfb9ad50a42b4c0ef86f4ab48e351c6899f0280b946c1
 ARG APT_MIRROR=http://repo.wellspiking.ai/repository/ubuntu-jammy
 ARG PIP_INDEX_URL=https://mirrors.ivolces.com/pypi/simple/
@@ -59,6 +63,14 @@ RUN python3.10 -m pip install --no-cache-dir \
  && python3.10 -m pip check \
  && python3.10 -m venv --copies --system-site-packages /opt/raytrain/environment \
  && python3.10 -c "import pathlib, site; pathlib.Path(site.getsitepackages()[0], 'raytrain_platform.pth').write_text('/usr/local/lib/raytrain-platform\\n', encoding='utf-8')"
+# Ubuntu ensurepip seeds old setuptools inside the venv. Replace only this
+# small bootstrap with the same audited global versions; keep raw pip managed.
+COPY images/cuda126-workspace/requirements-bootstrap.txt /opt/raytrain/requirements-bootstrap.txt
+RUN --mount=from=official-wheels,source=/wheels,target=/wheels,readonly \
+    /opt/raytrain/environment/bin/python -m pip install --no-cache-dir \
+      --no-index --find-links /wheels --no-deps --require-hashes \
+      -r /opt/raytrain/requirements-bootstrap.txt \
+ && /opt/raytrain/environment/bin/python -m pip check
 COPY images/workspace/raytrain-launch.py /usr/local/bin/raytrain-launch
 COPY images/workspace/raytrain-managed /usr/local/bin/raytrain-managed
 COPY images/workspace/raytrain_runtime /usr/local/lib/raytrain-platform/raytrain_runtime

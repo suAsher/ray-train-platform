@@ -24,7 +24,7 @@ def main():
     settings = Path('/home/ray/.local/share/code-server/User/settings.json')
     assert json.loads(settings.read_text())['python.defaultInterpreterPath'] == '/opt/raytrain/environment/bin/python'
     version = subprocess.check_output(['code-server', '--version'], text=True, timeout=30)
-    assert version.startswith('4.93.1 '), version
+    assert version.startswith('4.99.4 '), version
     with socket.socket() as listener:
         listener.bind(('127.0.0.1', 0))
         port = listener.getsockname()[1]
@@ -52,7 +52,7 @@ def main():
                     if time.monotonic() >= deadline:
                         raise TimeoutError('code-server did not become ready')
                     time.sleep(0.2)
-            print(json.dumps({'codeServerHTTP': 'passed', 'version': '4.93.1',
+            print(json.dumps({'codeServerHTTP': 'passed', 'version': '4.99.4',
                               'defaultUserDataDirectory': '/home/ray/.local/share/code-server',
                               'pythonInterpreter': '/opt/raytrain/environment/bin/python'}))
         finally:

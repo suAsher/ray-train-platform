@@ -1,6 +1,6 @@
 # Additional opt-in debug image. CUDA126_BASE_IMAGE must be an immutable digest
 # of the separately verified, editor-free Dockerfile.base foundation.
-ARG CODE_SERVER_IMAGE=harbor.wellspiking.ai/hub/codercom/code-server:4.93.1
+ARG CODE_SERVER_IMAGE=harbor.wellspiking.ai/hub/codercom/code-server@sha256:80a8e4e472be2feb0f90724b564ddf81ff38fdc482aab4fb887ef53413891f95
 ARG CUDA126_BASE_IMAGE
 FROM ${CODE_SERVER_IMAGE} AS code-server
 FROM ${CUDA126_BASE_IMAGE}
@@ -18,7 +18,7 @@ RUN install -d -m 0755 /etc/raytrain \
  && raytrain-environment baseline \
  && python3.10 -m venv --copies /opt/raytrain/editor \
  && /opt/raytrain/editor/bin/python -m pip install --no-cache-dir \
-      --index-url "${PIP_INDEX_URL}" jupyterlab==4.2.5 jupyter_server==2.14.2 ipykernel==6.29.5 \
+      --index-url "${PIP_INDEX_URL}" jupyterlab==4.5.11 jupyter_server==2.21.0 ipykernel==6.29.5 \
  && /opt/raytrain/editor/bin/python -m pip check
 COPY --from=code-server /usr/lib/code-server /usr/lib/code-server
 COPY --from=code-server /usr/bin/code-server /usr/bin/code-server
