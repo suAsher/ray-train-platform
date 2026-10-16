@@ -250,6 +250,22 @@ class RuntimeContractTest(unittest.TestCase):
         self.assertEqual(runtime.package_delta(baseline, current), [
             {'name': 'extra', 'version': '1', 'filesHash': 'b'}])
 
+    def test_managed_bootstrap_is_immutable_base_not_a_saved_dependency_delta(self):
+        # Venv seed packages are fixed platform materials even though they live
+        # inside the managed prefix. Only a user's added wheel is captured.
+        baseline = {name: {'version': '1.0', 'filesHash': digit * 64, 'managed': True}
+                    for name, digit in [('pip', 'a'), ('setuptools', 'b'), ('wheel', 'c')]}
+        current = {**baseline, 'humanize': {'version': '4.11.0', 'filesHash': 'd' * 64, 'managed': True}}
+        self.assertEqual(runtime.package_delta(baseline, current), [
+            {'name': 'humanize', 'version': '4.11.0', 'filesHash': 'd' * 64}])
+        for name in baseline:
+            for field, value in [('version', '0.9'), ('filesHash', 'e' * 64), ('managed', False)]:
+                with self.subTest(package=name, field=field):
+                    modified = {**current, name: {**baseline[name], field: value}}
+                    with self.assertRaises(runtime.CaptureError) as caught:
+                        runtime.package_delta(baseline, modified)
+                    self.assertEqual(caught.exception.code, 'PACKAGE_MODIFIED')
+
     def test_content_hash_stable_and_sensitive(self):
         one = [('demo/__init__.py', hashlib.sha256(b'x=1').hexdigest()),
                ('demo-1.dist-info/METADATA', hashlib.sha256(b'Name: demo').hexdigest())]
