@@ -53,3 +53,43 @@ func TestWorkspaceProfilesRejectAmbiguousOrUntrustedConfiguration(t *testing.T) 
   })
  }
 }
+
+func TestRevokedWorkspaceProfileFailsClosedButStillCleansResources(t *testing.T) {
+ service,store,_,runner:=multiRegistryFixture(t)
+ profile:=cudaWorkspaceProfile()
+ store.build.WorkspaceImage=profile.WorkspaceImage
+ store.build.BaseImage=profile.BaseImage
+ if err:=service.reconcileBuild(context.Background(),store.build);err!=nil { t.Fatal(err) }
+ if store.build.Status!=Failed || runner.steps!=0 { t.Fatal("revoked profile was executed") }
+ if err:=service.reconcileBuild(context.Background(),store.build);err!=nil { t.Fatal(err) }
+ if runner.cleanups!=1 || store.build.CleanedAt==nil || !store.revoked { t.Fatal("revoked profile blocked cleanup") }
+ if _,err:=service.Retry(context.Background(),Owner{TenantID:"team",UserID:"owner"},store.build.ID,"");!errors.Is(err,ErrConflict) || store.retried { t.Fatal("revoked profile retried") }
+}
+
+type profileFinalizingStore struct {
+ *multiRegistryStore
+ finalized Build
+}
+func (s *profileFinalizingStore) FinalizeEnvironmentBuild(_ context.Context,b Build,_ string) error {
+ s.finalized=b
+ return nil
+}
+func TestFinalizeUsesTrustedProfileMetadataInsteadOfCaptureOutput(t *testing.T) {
+ base,store,_,runner:=multiRegistryFixture(t)
+ profile:=cudaWorkspaceProfile()
+ cfg:=base.config
+ cfg.WorkspaceProfiles=[]WorkspaceProfile{profile}
+ finalizer:=&profileFinalizingStore{multiRegistryStore:store}
+ service,err:=NewService(finalizer,runner,base.registry,base.vault,cfg)
+ if err!=nil { t.Fatal(err) }
+ service.now=base.now
+ b:=store.build
+ b.Status=VerifyingPull
+ b.BaseImage,b.WorkspaceImage=profile.BaseImage,profile.WorkspaceImage
+ b.ImageDigest="sha256:"+strings.Repeat("8",64)
+ b.SnapshotJSON=`{"environment":{"cuda":"forged"}}`
+ b.TrustedEnvironment=domain.ImageEnvironment{CUDA:"forged"}
+ runner.result=StepResult{Done:true,ChecksJSON:`{"pullVerified":true}`}
+ if err:=service.reconcileBuild(context.Background(),b);err!=nil { t.Fatal(err) }
+ if finalizer.finalized.Status!=Ready || finalizer.finalized.TrustedEnvironment!=profile.Environment { t.Fatal("capture/client metadata replaced trusted versions") }
+}

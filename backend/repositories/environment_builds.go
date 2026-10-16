@@ -173,7 +173,7 @@ func (r *GormRepository) SaveEnvironmentBuild(ctx context.Context, b eb.Build, l
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", b.ID).First(&current).Error; err != nil {
 			return environmentError(err)
 		}
-		if current.LeaseOwner != leaseOwner || current.Host() != b.Host() {
+		if current.LeaseOwner != leaseOwner || current.Host() != b.Host() || current.BaseImage != b.BaseImage || current.WorkspaceImage != b.WorkspaceImage || current.OwnerID != b.OwnerID || current.TenantID != b.TenantID {
 			return eb.ErrConflict
 		}
 		b.RegistryHost = current.Host()

@@ -19,7 +19,7 @@ func (r *GormRepository) FinalizeEnvironmentBuild(ctx context.Context, b eb.Buil
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", b.ID).First(&current).Error; err != nil {
 			return environmentError(err)
 		}
-		if current.LeaseOwner != leaseOwner || current.Status != eb.VerifyingPull || current.Host() != b.Host() {
+		if current.LeaseOwner != leaseOwner || current.Status != eb.VerifyingPull || current.Host() != b.Host() || current.BaseImage != b.BaseImage || current.WorkspaceImage != b.WorkspaceImage || current.OwnerID != b.OwnerID || current.TenantID != b.TenantID {
 			return eb.ErrConflict
 		}
 		if b.ImageReference != current.Host()+"/"+current.Project+"/"+current.Repository+"@"+b.ImageDigest {
@@ -28,13 +28,15 @@ func (r *GormRepository) FinalizeEnvironmentBuild(ctx context.Context, b eb.Buil
 		b.RegistryHost = current.Host()
 		// The trusted builder and paired Base runtime are fixed to Ray 2.58.0;
 		// never derive runtime identity from the user's captured package manifest.
-		image := domain.PlatformImage{ID: b.ImageID, TenantID: b.TenantID, OwnerUserID: b.OwnerID, Visibility: b.Visibility, EnvironmentVersionID: b.ID, Name: b.Name, Description: b.Description, Reference: b.ImageReference, Kind: domain.ImageKindTraining, RayVersion: domain.RayVersionCanary, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayDDP, domain.TrainingEngineRayTrain}, CreatedBy: b.OwnerID}
+		image := domain.PlatformImage{ID: b.ImageID, TenantID: b.TenantID, OwnerUserID: b.OwnerID, Visibility: b.Visibility, EnvironmentVersionID: b.ID, Name: b.Name, Description: b.Description, Reference: b.ImageReference, Kind: domain.ImageKindTraining, RayVersion: domain.RayVersionCanary, Environment: b.TrustedEnvironment, SupportedEngines: []domain.TrainingEngine{domain.TrainingEngineRayDDP, domain.TrainingEngineRayTrain}, CreatedBy: b.OwnerID}
 		if err := image.Validate(); err != nil {
 			return err
 		}
 		engines, _ := json.Marshal(image.SupportedEngines)
+ environment,err:=json.Marshal(image.Environment)
+ if err!=nil { return err }
 		now := time.Now().UTC()
-		record := PlatformImageRecord{ID: image.ID, TenantID: optionalID(image.TenantID), OwnerUserID: image.OwnerUserID, Visibility: image.Visibility, EnvironmentVersionID: b.ID, Name: image.Name, Description: image.Description, Reference: image.Reference, Kind: image.Kind, RayVersion: image.RayVersion, SupportedEnginesJSON: string(engines), EnvironmentJSON: "{}", CreatedBy: b.OwnerID, CreatedAt: now, UpdatedAt: now}
+		record := PlatformImageRecord{ID: image.ID, TenantID: optionalID(image.TenantID), OwnerUserID: image.OwnerUserID, Visibility: image.Visibility, EnvironmentVersionID: b.ID, Name: image.Name, Description: image.Description, Reference: image.Reference, Kind: image.Kind, RayVersion: image.RayVersion, SupportedEnginesJSON: string(engines), EnvironmentJSON: string(environment), CreatedBy: b.OwnerID, CreatedAt: now, UpdatedAt: now}
 		if err := tx.Create(&record).Error; err != nil {
 			return err
 		}

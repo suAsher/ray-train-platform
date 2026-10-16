@@ -13,7 +13,9 @@ import (
 )
 
 func (r *EnvironmentRunner) renderJob(b environmentbuild.Build) (*batchv1.Job, error) {
-	host, err := registryauth.NormalizeHost(b.RegistryHost)
+	profile, err := r.profileForBuild(b)
+ if err != nil { return nil,err }
+ host, err := registryauth.NormalizeHost(b.RegistryHost)
 	if err != nil {
 		return nil, environmentbuild.ErrInvalid
 	}
@@ -46,7 +48,7 @@ func (r *EnvironmentRunner) renderJob(b environmentbuild.Build) (*batchv1.Job, e
 	}
 	switch b.Status {
 	case environmentbuild.Building:
-		container.Image = r.config.PrepareImage
+		container.Image = profile.PrepareImage
 		container.Command = []string{"/usr/local/bin/raytrain-environment-build"}
 		container.Args = []string{"--manifest", "/snapshot/capture.json", "--artifacts", "/artifacts", "--index-url", r.config.WheelIndexURL, "--result", "/dev/termination-log"}
 		pod.Volumes = append(pod.Volumes, corev1.Volume{Name: "snapshot", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: environmentResourceName("snapshot", b.ID)}, DefaultMode: &mode}}})
@@ -63,7 +65,7 @@ func (r *EnvironmentRunner) renderJob(b environmentbuild.Build) (*batchv1.Job, e
 		}
 		container.Image = r.config.PublisherImage
 		container.Command = []string{"/usr/local/bin/raytrain-environment-assembler"}
-		container.Args = []string{"--base", r.config.BaseImage, "--layer", "/artifacts/layer.tar", "--layer-digest", provenance.LayerDigest, "--layout", "/artifacts/oci", "--pull-config", "/pull/.dockerconfigjson", "--result", "/dev/termination-log"}
+		container.Args = []string{"--base", b.BaseImage, "--layer", "/artifacts/layer.tar", "--layer-digest", provenance.LayerDigest, "--layout", "/artifacts/oci", "--pull-config", "/pull/.dockerconfigjson", "--result", "/dev/termination-log"}
 		pod.Volumes = append(pod.Volumes, corev1.Volume{Name: "base-pull", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: r.config.PullSecretName, DefaultMode: &mode, Items: []corev1.KeyToPath{{Key: corev1.DockerConfigJsonKey, Path: corev1.DockerConfigJsonKey}}}}})
 		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{Name: "base-pull", MountPath: "/pull", ReadOnly: true})
 	case environmentbuild.Pushing:

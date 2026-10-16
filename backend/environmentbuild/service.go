@@ -36,6 +36,9 @@ func NewService(store Store, runner Runner, registry Registry, vault Vault, conf
 		return nil, err
 	}
 	config.CompatibleWorkspaceImages = compatibleImages
+ profiles, err := NormalizeWorkspaceProfiles(config.WorkspaceImage, compatibleImages, config.WorkspaceProfiles)
+ if err != nil { return nil, err }
+ config.WorkspaceProfiles = profiles
 	if config.Enabled && (store == nil || runner == nil || registry == nil || vault == nil || len(config.EncryptionKey) != 32 || !strings.Contains(config.BaseImage, "@sha256:") || !strings.Contains(config.WorkspaceImage, "@sha256:")) {
 		return nil, ErrInvalid
 	}
@@ -60,7 +63,7 @@ func (s *Service) Capabilities() map[string]any {
 	if s == nil {
 		return map[string]any{"enabled": false}
 	}
-	return map[string]any{"enabled": s.Enabled(), "registryHost": RegistryHost, "registries": s.registryCapabilities(), "baseImage": s.config.BaseImage, "workspaceImage": s.config.WorkspaceImage, "supportedCaptureVersion": 1}
+	return map[string]any{"enabled": s.Enabled(), "registryHost": RegistryHost, "registries": s.registryCapabilities(), "baseImage": s.config.BaseImage, "workspaceImage": s.config.WorkspaceImage, "supportedCaptureVersion": 1, "compatibleWorkspaceImages": append([]string(nil), s.config.CompatibleWorkspaceImages...), "workspaceProfiles": append([]WorkspaceProfile{}, s.config.WorkspaceProfiles...)}
 }
 
 type CreateRequest struct {
@@ -95,15 +98,8 @@ func normalizeCompatibleWorkspaceImages(primary string, images []string) ([]stri
 }
 
 func (s *Service) acceptsWorkspaceImage(image string) bool {
-	if image == s.config.WorkspaceImage {
-		return true
-	}
-	for _, compatible := range s.config.CompatibleWorkspaceImages {
-		if image == compatible {
-			return true
-		}
-	}
-	return false
+ _,ok:=s.workspaceProfile(image)
+ return ok
 }
 
 func validTarget(project, repository string) bool {
@@ -166,12 +162,13 @@ func (s *Service) Create(ctx context.Context, owner Owner, workspaceID string, r
 		}
 		return Build{}, ErrConflict
 	}
-	if snapshot.UID == "" || !s.acceptsWorkspaceImage(snapshot.Image) {
+	profile, allowed := s.workspaceProfile(snapshot.Image)
+ if snapshot.UID == "" || !allowed {
 		return Build{}, ErrConflict
 	}
 
 	now := s.now()
-	b := Build{ID: id, RegistryHost: host, TenantID: owner.TenantID, OwnerID: owner.UserID, WorkspaceID: workspaceID, Namespace: ws.Namespace, WorkspaceResourceName: ws.ResourceName, WorkspaceUID: snapshot.UID, BaseImage: s.config.BaseImage, WorkspaceImage: snapshot.Image, Name: req.Name, Description: req.Description, Visibility: req.Visibility, Project: req.Project, Repository: req.Repository, Tag: id, Status: Queued, AuthID: req.AuthorizationID, IdempotencyKey: req.IdempotencyKey, Attempt: 1, ArtifactExpiresAt: now.Add(24 * time.Hour), CreatedAt: now, UpdatedAt: now}
+	b := Build{ID: id, RegistryHost: host, TenantID: owner.TenantID, OwnerID: owner.UserID, WorkspaceID: workspaceID, Namespace: ws.Namespace, WorkspaceResourceName: ws.ResourceName, WorkspaceUID: snapshot.UID, BaseImage: profile.BaseImage, WorkspaceImage: snapshot.Image, Name: req.Name, Description: req.Description, Visibility: req.Visibility, Project: req.Project, Repository: req.Repository, Tag: id, Status: Queued, AuthID: req.AuthorizationID, IdempotencyKey: req.IdempotencyKey, Attempt: 1, ArtifactExpiresAt: now.Add(24 * time.Hour), CreatedAt: now, UpdatedAt: now}
 	// Reserve the authorization before queueing; no job can see unbound material.
 	if _, err = s.bindAuthorization(ctx, owner, req.AuthorizationID, b); err != nil {
 		return Build{}, err
@@ -212,6 +209,8 @@ func (s *Service) Retry(ctx context.Context, o Owner, id, authorizationID string
 	if _, err = s.registryHost(b.Host()); err != nil {
 		return Build{}, err
 	}
+ profile,allowed:=s.workspaceProfile(b.WorkspaceImage)
+ if !allowed || profile.BaseImage!=b.BaseImage { return Build{},ErrConflict }
 	if authorizationID == "" {
 		authorizationID = b.AuthID
 	}
@@ -294,7 +293,11 @@ func (s *Service) reconcileBuild(ctx context.Context, b Build) error {
 	if _, err := s.registryHost(b.Host()); err != nil {
 		return s.fail(ctx, b, Failed, "目标 Harbor 未启用或无效，请联系平台管理员")
 	}
-	if b.Status == Queued {
+	profile, allowed := s.workspaceProfile(b.WorkspaceImage)
+ if !allowed || profile.BaseImage != b.BaseImage {
+  return s.fail(ctx, b, Failed, "调试镜像与训练基础环境不匹配或已停用，请联系平台管理员")
+ }
+ if b.Status == Queued {
 		b.Status = Capturing
 		return s.store.SaveEnvironmentBuild(ctx, b, s.controllerID)
 	}
@@ -378,6 +381,7 @@ func (s *Service) reconcileBuild(ctx context.Context, b Build) error {
 		b.Status = Ready
 		b.ImageID = "image-" + b.ID
 		b.Message = "训练环境已就绪"
+ b.TrustedEnvironment = profile.Environment
 		return s.store.FinalizeEnvironmentBuild(ctx, b, s.controllerID)
 	default:
 		return ErrConflict

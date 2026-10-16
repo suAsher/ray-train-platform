@@ -23,6 +23,7 @@ func newEnvironmentBuildService(repository *repositories.GormRepository, client 
 	runner := k8s.NewEnvironmentRunner(client, k8s.EnvironmentRunnerConfig{
 		Namespace: runtimeNamespace(), BaseImage: settings.BaseImage, WorkspaceImage: settings.WorkspaceImage,
 		CompatibleWorkspaceImages: settings.CompatibleWorkspaceImages,
+ WorkspaceProfiles: settings.WorkspaceProfiles,
 		PrepareImage:              settings.PrepareImage, PublisherImage: settings.PublisherImage,
 		StorageClass: settings.StorageClass, StorageGiB: 60, WheelIndexURL: settings.WheelIndexURL,
 		ImagePullSecrets: cfg.ImagePullSecrets, PullSecretName: cfg.ImagePullSecrets[0], NodeSelector: settings.NodeSelector,
@@ -31,6 +32,7 @@ func newEnvironmentBuildService(repository *repositories.GormRepository, client 
 	return environmentbuild.NewService(repository, runner, environmentbuild.HarborRegistry{Client: registryauth.NewClient()}, k8s.NewEnvironmentVault(client, runtimeNamespace()), environmentbuild.Config{
 		Enabled: true, BaseImage: settings.BaseImage, WorkspaceImage: settings.WorkspaceImage,
 		CompatibleWorkspaceImages: settings.CompatibleWorkspaceImages,
+ WorkspaceProfiles: settings.WorkspaceProfiles,
 		RegistryHosts:             settings.RegistryHosts,
 		EncryptionKey:             settings.EncryptionKey, GlobalConcurrency: 2, UserConcurrency: 1, AuthorizationTTL: 24 * time.Hour,
 	})

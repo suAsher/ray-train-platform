@@ -177,6 +177,9 @@ backend:
     # Explicit previous debug digests using this same base/capture contract.
     # Keep during upgrades so existing workspaces can still save dependencies.
     compatibleWorkspaceImages: []
+    # Non-default runtime families: explicit workspace/base/prepare digest pairs
+    # with administrator-declared environment version metadata.
+    workspaceProfiles: []
     prepareImage: ""
     publisherImage: ""
     wheelIndexURL: ""

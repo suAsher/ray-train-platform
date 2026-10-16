@@ -2,6 +2,9 @@ package config
 
 import (
 	"encoding/base64"
+ "encoding/json"
+ "io"
+ "ray-train-platform-backend/environmentbuild"
 	"fmt"
 	"net/url"
 	"os"
@@ -12,6 +15,7 @@ import (
 // EnvironmentBuildConfig controls only newly requested environment builds.
 // It never replaces the existing training or workspace defaults.
 type EnvironmentBuildConfig struct {
+ WorkspaceProfiles []environmentbuild.WorkspaceProfile
 	Enabled                                                 bool
 	BaseImage, WorkspaceImage, PrepareImage, PublisherImage string
 	CompatibleWorkspaceImages                               []string
@@ -62,6 +66,15 @@ func loadEnvironmentBuildConfig() (EnvironmentBuildConfig, error) {
 			}
 		}
 	}
+ if raw:=strings.TrimSpace(os.Getenv("ENVIRONMENT_WORKSPACE_PROFILES"));raw!="" {
+  decoder:=json.NewDecoder(strings.NewReader(raw))
+  decoder.DisallowUnknownFields()
+  if len(raw)>65536 || decoder.Decode(&cfg.WorkspaceProfiles)!=nil || cfg.WorkspaceProfiles==nil { return EnvironmentBuildConfig{},fmt.Errorf("ENVIRONMENT_WORKSPACE_PROFILES must be a JSON array of trusted workspace profiles") }
+  var extra any
+  if decoder.Decode(&extra)!=io.EOF { return EnvironmentBuildConfig{},fmt.Errorf("ENVIRONMENT_WORKSPACE_PROFILES must contain one JSON array") }
+ }
+ cfg.WorkspaceProfiles,err=environmentbuild.NormalizeWorkspaceProfiles(cfg.WorkspaceImage,cfg.CompatibleWorkspaceImages,cfg.WorkspaceProfiles)
+ if err!=nil { return EnvironmentBuildConfig{},fmt.Errorf("ENVIRONMENT_WORKSPACE_PROFILES must contain unique pinned Harbor image profiles and valid version metadata") }
 	cfg.EncryptionKey, err = base64.StdEncoding.DecodeString(os.Getenv("ENVIRONMENT_AUTH_KEY"))
 	if err != nil || len(cfg.EncryptionKey) != 32 {
 		return EnvironmentBuildConfig{}, fmt.Errorf("ENVIRONMENT_AUTH_KEY must encode a separate 32-byte key")
