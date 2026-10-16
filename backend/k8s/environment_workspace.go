@@ -48,15 +48,21 @@ func environmentRuntimeImageVerified(imageID, image string) bool {
 }
 
 func (r *EnvironmentRunner) workspaceImageAllowed(image string) bool {
- if r.profilesError!=nil || !environmentPinnedImage(image) { return false }
- _,ok:=environmentbuild.ResolveWorkspaceProfile(image,r.config.WorkspaceImage,r.config.BaseImage,r.config.PrepareImage,r.config.CompatibleWorkspaceImages,r.config.WorkspaceProfiles)
- return ok
+	if r.profilesError != nil || !environmentPinnedImage(image) {
+		return false
+	}
+	_, ok := environmentbuild.ResolveWorkspaceProfile(image, r.config.WorkspaceImage, r.config.BaseImage, r.config.PrepareImage, r.config.CompatibleWorkspaceImages, r.config.WorkspaceProfiles)
+	return ok
 }
-func (r *EnvironmentRunner) profileForBuild(b environmentbuild.Build) (environmentbuild.WorkspaceProfile,error) {
- if r.profilesError!=nil || !r.workspaceImageAllowed(b.WorkspaceImage) { return environmentbuild.WorkspaceProfile{},environmentbuild.ErrInvalid }
- profile,ok:=environmentbuild.ResolveWorkspaceProfile(b.WorkspaceImage,r.config.WorkspaceImage,r.config.BaseImage,r.config.PrepareImage,r.config.CompatibleWorkspaceImages,r.config.WorkspaceProfiles)
- if !ok || b.BaseImage!=profile.BaseImage || !environmentPinnedImage(profile.BaseImage) || !environmentPinnedImage(profile.PrepareImage) { return environmentbuild.WorkspaceProfile{},environmentbuild.ErrInvalid }
- return profile,nil
+func (r *EnvironmentRunner) profileForBuild(b environmentbuild.Build) (environmentbuild.WorkspaceProfile, error) {
+	if r.profilesError != nil || !r.workspaceImageAllowed(b.WorkspaceImage) {
+		return environmentbuild.WorkspaceProfile{}, environmentbuild.ErrInvalid
+	}
+	profile, ok := environmentbuild.ResolveWorkspaceProfile(b.WorkspaceImage, r.config.WorkspaceImage, r.config.BaseImage, r.config.PrepareImage, r.config.CompatibleWorkspaceImages, r.config.WorkspaceProfiles)
+	if !ok || b.BaseImage != profile.BaseImage || !environmentPinnedImage(profile.BaseImage) || !environmentPinnedImage(profile.PrepareImage) {
+		return environmentbuild.WorkspaceProfile{}, environmentbuild.ErrInvalid
+	}
+	return profile, nil
 }
 
 func environmentWorkspacePodImage(pod *corev1.Pod) string {

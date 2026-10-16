@@ -14,8 +14,10 @@ import (
 
 func (r *EnvironmentRunner) renderJob(b environmentbuild.Build) (*batchv1.Job, error) {
 	profile, err := r.profileForBuild(b)
- if err != nil { return nil,err }
- host, err := registryauth.NormalizeHost(b.RegistryHost)
+	if err != nil {
+		return nil, err
+	}
+	host, err := registryauth.NormalizeHost(b.RegistryHost)
 	if err != nil {
 		return nil, environmentbuild.ErrInvalid
 	}

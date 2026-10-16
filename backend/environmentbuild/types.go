@@ -5,8 +5,8 @@ package environmentbuild
 import (
 	"context"
 	"errors"
+	"ray-train-platform-backend/domain"
 	"time"
- "ray-train-platform-backend/domain"
 )
 
 const RegistryHost = "harbor.wellspiking.ai"
@@ -82,8 +82,6 @@ type CredentialMaterial struct {
 func (CredentialMaterial) TableName() string { return "environment_credential_materials" }
 
 type Build struct {
- // TrustedEnvironment is derived from platform configuration at finalization, never persisted on the build or accepted from clients.
- TrustedEnvironment domain.ImageEnvironment `json:"-" gorm:"-"`
 	ID                    string     `json:"id" gorm:"primaryKey"`
 	RegistryHost          string     `json:"registryHost" gorm:"not null;default:harbor.wellspiking.ai"`
 	TenantID              string     `json:"-"`
@@ -118,6 +116,10 @@ type Build struct {
 	CleanedAt             *time.Time `json:"-"`
 	CreatedAt             time.Time  `json:"createdAt"`
 	UpdatedAt             time.Time  `json:"updatedAt"`
+
+	// TrustedEnvironment is derived from platform configuration at finalization,
+	// never persisted on the build or accepted from clients.
+	TrustedEnvironment domain.ImageEnvironment `json:"-" gorm:"-"`
 }
 
 func (Build) TableName() string { return "environment_builds" }
@@ -209,7 +211,7 @@ type Store interface {
 	FinalizeEnvironmentBuild(context.Context, Build, string) error
 }
 type Config struct {
- WorkspaceProfiles []WorkspaceProfile
+	WorkspaceProfiles         []WorkspaceProfile
 	Enabled                   bool
 	RegistryHosts             []string
 	BaseImage                 string

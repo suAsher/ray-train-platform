@@ -23,7 +23,7 @@ import (
 const environmentRegistryHostAnnotation = "platform.wellspiking.ai/environment-registry-host"
 
 type EnvironmentRunnerConfig struct {
- WorkspaceProfiles []environmentbuild.WorkspaceProfile
+	WorkspaceProfiles                                       []environmentbuild.WorkspaceProfile
 	Namespace                                               string
 	BaseImage, WorkspaceImage, PrepareImage, PublisherImage string
 	StorageClass, WheelIndexURL, PullSecretName             string
@@ -33,10 +33,10 @@ type EnvironmentRunnerConfig struct {
 	JobTimeout                                              time.Duration
 }
 type EnvironmentRunner struct {
- profilesError error
-	client      *Client
-	config      EnvironmentRunnerConfig
-	captureExec func(context.Context, string, string, io.Writer, io.Writer) error
+	profilesError error
+	client        *Client
+	config        EnvironmentRunnerConfig
+	captureExec   func(context.Context, string, string, io.Writer, io.Writer) error
 }
 
 var _ environmentbuild.Runner = (*EnvironmentRunner)(nil)
@@ -54,15 +54,17 @@ func NewEnvironmentRunner(client *Client, cfg EnvironmentRunnerConfig) *Environm
 	if cfg.JobTimeout == 0 {
 		cfg.JobTimeout = 30 * time.Minute
 	}
-	profiles,err:=environmentbuild.NormalizeWorkspaceProfiles(cfg.WorkspaceImage,cfg.CompatibleWorkspaceImages,cfg.WorkspaceProfiles)
- cfg.WorkspaceProfiles=profiles
- return &EnvironmentRunner{client: client, config: cfg, profilesError: err}
+	profiles, err := environmentbuild.NormalizeWorkspaceProfiles(cfg.WorkspaceImage, cfg.CompatibleWorkspaceImages, cfg.WorkspaceProfiles)
+	cfg.WorkspaceProfiles = profiles
+	return &EnvironmentRunner{client: client, config: cfg, profilesError: err}
 }
 func (r *EnvironmentRunner) Step(ctx context.Context, b environmentbuild.Build, credentials *environmentbuild.Credentials) (environmentbuild.StepResult, error) {
 	if r.client == nil || r.client.kubernetes == nil || !isDNSLabel(r.config.Namespace) || b.ID == "" || b.TenantID == "" || b.OwnerID == "" || b.Attempt < 0 {
 		return environmentbuild.StepResult{}, environmentbuild.ErrInvalid
 	}
- if _,err:=r.profileForBuild(b);err!=nil { return environmentbuild.StepResult{},err }
+	if _, err := r.profileForBuild(b); err != nil {
+		return environmentbuild.StepResult{}, err
+	}
 	if _, err := registryauth.NormalizeHost(b.RegistryHost); err != nil {
 		return environmentbuild.StepResult{}, environmentbuild.ErrInvalid
 	}

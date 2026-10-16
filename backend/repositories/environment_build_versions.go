@@ -33,8 +33,10 @@ func (r *GormRepository) FinalizeEnvironmentBuild(ctx context.Context, b eb.Buil
 			return err
 		}
 		engines, _ := json.Marshal(image.SupportedEngines)
- environment,err:=json.Marshal(image.Environment)
- if err!=nil { return err }
+		environment, err := json.Marshal(image.Environment)
+		if err != nil {
+			return err
+		}
 		now := time.Now().UTC()
 		record := PlatformImageRecord{ID: image.ID, TenantID: optionalID(image.TenantID), OwnerUserID: image.OwnerUserID, Visibility: image.Visibility, EnvironmentVersionID: b.ID, Name: image.Name, Description: image.Description, Reference: image.Reference, Kind: image.Kind, RayVersion: image.RayVersion, SupportedEnginesJSON: string(engines), EnvironmentJSON: string(environment), CreatedBy: b.OwnerID, CreatedAt: now, UpdatedAt: now}
 		if err := tx.Create(&record).Error; err != nil {

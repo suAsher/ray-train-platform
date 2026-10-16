@@ -124,8 +124,8 @@ func lifecycleFixture(t *testing.T) (*Service, *lifecycleStore, *lifecycleRunner
 		t.Fatal(err)
 	}
 	store.build.BaseImage = s.config.BaseImage
- store.build.WorkspaceImage = s.config.WorkspaceImage
- s.now = func() time.Time { return now }
+	store.build.WorkspaceImage = s.config.WorkspaceImage
+	s.now = func() time.Time { return now }
 	vault.sealed, err = s.encrypt(store.authorization, Credentials{Username: "harbor-user", Secret: "test-secret"})
 	if err != nil {
 		t.Fatal(err)
