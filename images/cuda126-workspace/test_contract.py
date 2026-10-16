@@ -62,7 +62,10 @@ class BuildContract(unittest.TestCase):
         sources = json.loads((folder / 'official-wheels.json').read_text())
         requirements = (folder / 'requirements-official.txt').read_text()
         constraints = (folder / 'constraints.txt').read_text()
-        self.assertEqual(len(sources), 15)
+        security = folder / 'security-constraints.txt'
+        if security.exists():
+            constraints += security.read_text()
+        self.assertEqual(len(sources), 24)
         bootstrap = {'pip': '26.2.1', 'setuptools': '84.0.0', 'wheel': '0.48.0'}
         for wheel in sources:
             pin = f"{wheel['name']}=={wheel['version']}"
@@ -94,6 +97,32 @@ class BuildContract(unittest.TestCase):
             self.assertIn('CODE_SERVER_IMAGE=' + fixed, cuda.stdout)
             legacy = self.build_plan('workspace', buildx)
             self.assertIn('CODE_SERVER_IMAGE=harbor.wellspiking.ai/hub/codercom/code-server:4.93.1', legacy.stdout)
+
+    def test_security_constraints_follow_cached_torch_layer(self):
+        folder = ROOT / 'images/cuda126-workspace'
+        dockerfile = (folder / 'Dockerfile.base').read_text()
+        marker = 'COPY images/cuda126-workspace/security-constraints.txt'
+        self.assertIn(marker, dockerfile)
+        self.assertLess(dockerfile.index('torch==2.13.0+cu126'), dockerfile.index(marker))
+        self.assertIn('cat /opt/raytrain/security-constraints.txt >> /opt/raytrain/environment-constraints.txt', dockerfile)
+        constraints = (folder / 'security-constraints.txt').read_text()
+        for pin in ('anyio==4.14.2', 'cryptography==50.0.0', 'gitpython==3.1.60',
+                    'multidict==6.9.1', 'pyasn1==0.6.4', 'sqlparse==0.6.0',
+                    'tornado==6.5.9', 'urllib3==2.8.0', 'virtualenv==21.7.13'):
+            self.assertIn(pin, constraints)
+
+    def test_editor_inherits_safe_base_without_leaking_into_managed_python(self):
+        folder = ROOT / 'images/cuda126-workspace'
+        dockerfile = (folder / 'Dockerfile').read_text()
+        self.assertIn('--copies --system-site-packages --without-pip /opt/raytrain/editor', dockerfile)
+        self.assertIn('--constraint /opt/raytrain/environment-constraints.txt', dockerfile)
+        self.assertIn('FROM scratch AS editor-wheels', dockerfile)
+        sources = json.loads((folder / 'editor-official-wheels.json').read_text())
+        self.assertEqual({w['name']: w['version'] for w in sources},
+                         {'jupyterlab': '4.5.11', 'jupyter-server': '2.21.0'})
+        for wheel in sources:
+            self.assertIn(f"ADD --checksum=sha256:{wheel['sha256']} {wheel['url']} /wheels/{wheel['filename']}", dockerfile)
+        self.assertIn("find_spec('jupyterlab') is None", (folder / 'editor_smoke.py').read_text())
 
     def test_prepare_uses_matching_foundation_and_interpreter(self):
         for buildx in (True, False):
