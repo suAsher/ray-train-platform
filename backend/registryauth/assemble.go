@@ -29,7 +29,7 @@ const environmentConstraintsPath = "opt/raytrain/environment-constraints.txt"
 
 var environmentFiles = map[string]bool{
 	environmentProfilePath:                                      true,
- environmentConstraintsPath: true,
+	environmentConstraintsPath:                                  true,
 	"opt/raytrain/environment-baseline.json":                    true,
 	"opt/raytrain/environment-materials/capture.json":           true,
 	"opt/raytrain/environment-materials/requirements.lock":      true,
@@ -120,8 +120,10 @@ func validateEnvironmentTar(ctx context.Context, filename string) error {
 					return ErrArtifact
 				}
 			} else if name == environmentConstraintsPath {
- if header.Mode != 0444 || header.Size > 64<<10 { return ErrArtifact }
- } else if header.Mode != 0644 && header.Mode != 0755 {
+				if header.Mode != 0444 || header.Size > 64<<10 {
+					return ErrArtifact
+				}
+			} else if header.Mode != 0644 && header.Mode != 0755 {
 				return ErrArtifact
 			}
 		case tar.TypeSymlink:
@@ -144,12 +146,14 @@ func validateEnvironmentTar(ctx context.Context, filename string) error {
 	if len(entries) == 0 {
 		return ErrArtifact
 	}
- // Constraints may only accompany an explicit immutable runtime profile.
- // The legacy single-base layer contract cannot overwrite this new file.
- if _,hasConstraints:=entries[environmentConstraintsPath];hasConstraints {
-  kind,present:=entries[environmentProfilePath]
-  if !present || (kind!=tar.TypeReg && kind!=tar.TypeRegA) { return ErrArtifact }
- }
+	// Constraints may only accompany an explicit immutable runtime profile.
+	// The legacy single-base layer contract cannot overwrite this new file.
+	if _, hasConstraints := entries[environmentConstraintsPath]; hasConstraints {
+		kind, present := entries[environmentProfilePath]
+		if !present || (kind != tar.TypeReg && kind != tar.TypeRegA) {
+			return ErrArtifact
+		}
+	}
 	for name := range entries {
 		for parent := path.Dir(name); parent != "."; parent = path.Dir(parent) {
 			if kind, exists := entries[parent]; exists && kind != tar.TypeDir {
