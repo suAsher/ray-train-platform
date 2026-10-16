@@ -1,5 +1,6 @@
 """CPU-only build routing contracts; run on the existing builder."""
 import os
+import json
 from pathlib import Path
 import subprocess
 import unittest
@@ -53,6 +54,26 @@ class BuildContract(unittest.TestCase):
         self.assertNotIn('--no-deps', dependency_stage)
         self.assertIn('torchvision==0.21.0+cu126', dependency_stage)
         self.assertIn('python3.10 -m pip check', dependency_stage)
+
+    def test_missing_fixed_packages_use_hash_checked_readonly_wheel_stage(self):
+        folder = ROOT / 'images/cuda126-workspace'
+        dockerfile = (folder / 'Dockerfile.base').read_text()
+        self.assertIn('FROM scratch AS official-wheels', dockerfile)
+        sources = json.loads((folder / 'official-wheels.json').read_text())
+        requirements = (folder / 'requirements-official.txt').read_text()
+        constraints = (folder / 'constraints.txt').read_text()
+        self.assertEqual(len(sources), 12)
+        for wheel in sources:
+            pin = f"{wheel['name']}=={wheel['version']}"
+            self.assertIn(pin, constraints)
+            self.assertIn(f"{pin} --hash=sha256:{wheel['sha256']}", requirements)
+            self.assertRegex(wheel['sha256'], r'^[0-9a-f]{64}$')
+            self.assertTrue(wheel['url'].startswith('https://files.pythonhosted.org/packages/'))
+            self.assertIn(f"ADD --checksum=sha256:{wheel['sha256']} {wheel['url']} /wheels/{wheel['filename']}", dockerfile)
+        self.assertIn('--mount=from=official-wheels,source=/wheels,target=/wheels,readonly', dockerfile)
+        self.assertIn('--no-index --find-links /wheels --no-deps --require-hashes', dockerfile)
+        self.assertNotIn('COPY --from=official-wheels', dockerfile)
+        self.assertNotIn('--extra-index-url', dockerfile)
 
     def test_prepare_uses_matching_foundation_and_interpreter(self):
         for buildx in (True, False):
