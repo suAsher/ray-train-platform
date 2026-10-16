@@ -126,10 +126,16 @@ class BuildContract(unittest.TestCase):
         self.assertIn('FROM scratch AS editor-wheels', dockerfile)
         sources = json.loads((folder / 'editor-official-wheels.json').read_text())
         self.assertEqual({w['name']: w['version'] for w in sources},
-                         {'jupyterlab': '4.5.11', 'jupyter-server': '2.21.0'})
+                         {'jupyterlab': '4.5.11', 'jupyter-server': '2.21.0',
+                          'bleach': '6.4.0', 'mistune': '3.3.3',
+                          'nbconvert': '7.17.1', 'soupsieve': '2.9.0'})
         for wheel in sources:
             self.assertIn(f"ADD --checksum=sha256:{wheel['sha256']} {wheel['url']} /wheels/{wheel['filename']}", dockerfile)
         self.assertIn("find_spec('jupyterlab') is None", (folder / 'editor_smoke.py').read_text())
+        base_names = {wheel['name'] for wheel in json.loads((folder / 'official-wheels.json').read_text())}
+        for name in ('bleach', 'mistune', 'nbconvert', 'soupsieve'):
+            self.assertNotIn(name, base_names)
+            self.assertNotIn(name + '==', (folder / 'security-constraints.txt').read_text())
 
     def test_prepare_uses_matching_foundation_and_interpreter(self):
         for buildx in (True, False):
