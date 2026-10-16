@@ -46,13 +46,13 @@ class BuildContract(unittest.TestCase):
         wheel_stage = next(command for command in commands
                            if '--index-url "${TORCH_INDEX_URL}"' in command)
         self.assertIn('--no-deps', wheel_stage)
-        self.assertIn('torch==2.6.0+cu126 torchvision==0.21.0+cu126', wheel_stage)
+        self.assertIn('torch==2.13.0+cu126 torchvision==0.28.0+cu126', wheel_stage)
         self.assertNotIn('${PIP_INDEX_URL}', wheel_stage)
         dependency_stage = next(command for command in commands
                                 if '--index-url "${PIP_INDEX_URL}"' in command
-                                and 'torch==2.6.0+cu126' in command)
+                                and 'torch==2.13.0+cu126' in command)
         self.assertNotIn('--no-deps', dependency_stage)
-        self.assertIn('torchvision==0.21.0+cu126', dependency_stage)
+        self.assertIn('torchvision==0.28.0+cu126', dependency_stage)
         self.assertIn('python3.10 -m pip check', dependency_stage)
 
     def test_missing_fixed_packages_use_hash_checked_readonly_wheel_stage(self):

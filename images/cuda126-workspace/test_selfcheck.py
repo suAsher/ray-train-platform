@@ -36,11 +36,13 @@ class SelfcheckContract(unittest.TestCase):
     def test_exact_stack_passes_without_claiming_gpu(self):
         result = self.report()
         self.assertTrue(result['cpuPassed'], result)
+        self.assertEqual(result['versions']['torch'], '2.13.0+cu126')
+        self.assertEqual(result['versions']['torchvision'], '0.28.0+cu126')
         self.assertEqual(result['gpuValidation'], 'not_run')
         self.assertEqual(result['multiNodeValidation'], 'not_run')
 
     def test_rejects_cpu_or_wrong_cuda_wheel(self):
-        for version in ('2.6.0+cpu', '2.6.0+cu121', '2.6.0'):
+        for version in ('2.13.0+cpu', '2.13.0+cu121', '2.13.0', '2.6.0+cu126'):
             result = self.report(versions={'torch': version})
             self.assertFalse(result['cpuPassed'], version)
 
