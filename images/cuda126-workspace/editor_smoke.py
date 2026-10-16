@@ -12,9 +12,17 @@ import urllib.request
 
 
 def check_editor_http(base_url):
+    # code-server intentionally excludes /healthz from its activity heartbeat.
+    # Exercise the actual workbench first, then require a live initialized heart.
+    with urllib.request.urlopen(base_url + '/', timeout=30) as response:
+        assert response.status == 200
+        assert response.headers['Content-Type'].startswith('text/html')
+        assert b'vscode-workbench-web-configuration' in response.read()
     with urllib.request.urlopen(base_url + '/healthz', timeout=5) as response:
         assert response.status == 200
-        assert json.load(response)['status'] == 'alive'
+        health = json.load(response)
+        assert health['status'] == 'alive'
+        assert isinstance(health['lastHeartbeat'], int) and health['lastHeartbeat'] > 0
 
 
 def main():
