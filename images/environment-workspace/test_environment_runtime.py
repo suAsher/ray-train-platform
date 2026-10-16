@@ -3,6 +3,7 @@ import hashlib
 import importlib.util
 import json
 import pathlib
+import stat
 import tempfile
 import unittest
 from unittest import mock
@@ -15,6 +16,32 @@ spec.loader.exec_module(runtime)
 
 
 class RuntimeContractTest(unittest.TestCase):
+    def test_profile_requires_trusted_file_and_every_parent(self):
+        def node(mode, owner=0):
+            value = mock.Mock()
+            value.lstat.return_value = mock.Mock(st_mode=mode, st_uid=owner)
+            return value
+        profile = node(stat.S_IFREG | 0o444)
+        profile.parents = [node(stat.S_IFDIR | 0o755) for _ in range(3)]
+        with mock.patch.object(runtime, 'PROFILE', profile):
+            runtime.verify_profile_permissions()
+            for parent in profile.parents:
+                parent.lstat.assert_called_once()
+            for mode, owner in [(stat.S_IFDIR | 0o775, 0), (stat.S_IFDIR | 0o757, 0),
+                                (stat.S_IFDIR | 0o755, 1000), (stat.S_IFLNK | 0o777, 0),
+                                (stat.S_IFREG | 0o444, 0)]:
+                with self.subTest(parentMode=mode, parentOwner=owner):
+                    profile.parents[1] = node(mode, owner)
+                    with self.assertRaises(runtime.CaptureError) as caught:
+                        runtime.verify_profile_permissions()
+                    self.assertEqual(caught.exception.code, 'PACKAGE_MODIFIED')
+            profile.parents = [node(stat.S_IFDIR | 0o755)]
+            for mode, owner in [(stat.S_IFREG | 0o444, 1000), (stat.S_IFREG | 0o644, 0),
+                                (stat.S_IFLNK | 0o777, 0), (stat.S_IFDIR | 0o444, 0)]:
+                profile.lstat.return_value = mock.Mock(st_mode=mode, st_uid=owner)
+                with self.assertRaises(runtime.CaptureError):
+                    runtime.verify_profile_permissions()
+
     def profile(self):
         return {'schemaVersion': 1, 'baseImage': 'harbor.wellspiking.ai/guofeng.su/cuda126-base@sha256:' + 'b' * 64,
                 'basePython': '/usr/bin/python3.10', 'versions': {'python': '3.10', 'pytorch': '2.6.0+cu126', 'cuda': '12.6', 'ray': '2.58.0'}}
@@ -60,6 +87,17 @@ class RuntimeContractTest(unittest.TestCase):
                 with self.assertRaises(runtime.CaptureError) as caught:
                     runtime.load_profile()
             self.assertEqual(runtime.safe_error(caught.exception), {'code': 'PACKAGE_MODIFIED'})
+
+    def test_profile_size_and_version_metadata_are_bounded(self):
+        malformed = self.profile()
+        malformed['versions']['cuda'] = '12.6 private value'
+        for raw in [' ' * 4097, json.dumps(malformed)]:
+            with tempfile.TemporaryDirectory() as directory:
+                path = pathlib.Path(directory) / 'profile.json'
+                path.write_text(raw)
+                with mock.patch.object(runtime, 'PROFILE', path), mock.patch.object(runtime, 'verify_profile_permissions'):
+                    with self.assertRaises(runtime.CaptureError):
+                        runtime.load_profile()
 
     def test_profile_change_after_bootstrap_is_rejected(self):
         profile = self.profile()
