@@ -6,6 +6,10 @@ FROM ${CODE_SERVER_IMAGE} AS code-server
 FROM scratch AS editor-wheels
 ADD --checksum=sha256:e23e3d76b92ad172b529fb6faf91e3edd264ffdff65b543949eb85daf7f8b113 https://files.pythonhosted.org/packages/0f/f2/a2f50a928fed0b8529dd80c4eb7d3aebe92f9658bfb3b63dce77fb5f1b95/jupyterlab-4.5.11-py3-none-any.whl /wheels/jupyterlab-4.5.11-py3-none-any.whl
 ADD --checksum=sha256:2ae2e5ce5e97268553e25aebe040197455673d925b5fc7995477153318160cf7 https://files.pythonhosted.org/packages/cb/8a/cb97c2b353cb46cced413be8f742fa8fcd3cb1659524f27314494aa94968/jupyter_server-2.21.0-py3-none-any.whl /wheels/jupyter_server-2.21.0-py3-none-any.whl
+ADD --checksum=sha256:4b6b6a54fff2e69a3dde9d21cc6301220bee3c3cb792187d11403fd795031081 https://files.pythonhosted.org/packages/58/9d/40b6267367182187139a4000b82a3b287d84d745bccd808e75d916920e9d/bleach-6.4.0-py3-none-any.whl /wheels/bleach-6.4.0-py3-none-any.whl
+ADD --checksum=sha256:99de1585e42dcbd826faa9e11a202727a5e202e4e4722a4c69ac1ff615793dd7 https://files.pythonhosted.org/packages/89/70/b1e4737b84163db5bb1dfde6f216dbfbf32783330a9989c965e121172830/mistune-3.3.3-py3-none-any.whl /wheels/mistune-3.3.3-py3-none-any.whl
+ADD --checksum=sha256:aa85c087b435e7bf1ffd03319f658e285f2b89eccab33bc1ba7025495ab3e7c8 https://files.pythonhosted.org/packages/67/f8/bb0a9d5f46819c821dc1f004aa2cc29b1d91453297dbf5ff20470f00f193/nbconvert-7.17.1-py3-none-any.whl /wheels/nbconvert-7.17.1-py3-none-any.whl
+ADD --checksum=sha256:a2b2c76d67df2382d245409fd71e321a571717e58463efa32ace87dcadac2c12 https://files.pythonhosted.org/packages/7b/d6/3185ab5ad1280319b31986898f3206dd7227cd75e293d4dba2a5e6bf27a0/soupsieve-2.9-py3-none-any.whl /wheels/soupsieve-2.9-py3-none-any.whl
 FROM ${CUDA126_BASE_IMAGE}
 ARG CUDA126_BASE_IMAGE
 ARG PIP_INDEX_URL=https://mirrors.ivolces.com/pypi/simple/

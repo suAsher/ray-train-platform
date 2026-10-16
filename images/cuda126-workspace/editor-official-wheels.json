@@ -18,5 +18,45 @@
     "sha256": "2ae2e5ce5e97268553e25aebe040197455673d925b5fc7995477153318160cf7",
     "size": 393961,
     "requiresPython": ">=3.10"
+  },
+  {
+    "name": "bleach",
+    "version": "6.4.0",
+    "metadata": "https://pypi.org/pypi/bleach/6.4.0/json",
+    "filename": "bleach-6.4.0-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/58/9d/40b6267367182187139a4000b82a3b287d84d745bccd808e75d916920e9d/bleach-6.4.0-py3-none-any.whl",
+    "sha256": "4b6b6a54fff2e69a3dde9d21cc6301220bee3c3cb792187d11403fd795031081",
+    "size": 165109,
+    "requiresPython": ">=3.10"
+  },
+  {
+    "name": "mistune",
+    "version": "3.3.3",
+    "metadata": "https://pypi.org/pypi/mistune/3.3.3/json",
+    "filename": "mistune-3.3.3-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/89/70/b1e4737b84163db5bb1dfde6f216dbfbf32783330a9989c965e121172830/mistune-3.3.3-py3-none-any.whl",
+    "sha256": "99de1585e42dcbd826faa9e11a202727a5e202e4e4722a4c69ac1ff615793dd7",
+    "size": 63569,
+    "requiresPython": ">=3.8"
+  },
+  {
+    "name": "nbconvert",
+    "version": "7.17.1",
+    "metadata": "https://pypi.org/pypi/nbconvert/7.17.1/json",
+    "filename": "nbconvert-7.17.1-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/67/f8/bb0a9d5f46819c821dc1f004aa2cc29b1d91453297dbf5ff20470f00f193/nbconvert-7.17.1-py3-none-any.whl",
+    "sha256": "aa85c087b435e7bf1ffd03319f658e285f2b89eccab33bc1ba7025495ab3e7c8",
+    "size": 261927,
+    "requiresPython": ">=3.9"
+  },
+  {
+    "name": "soupsieve",
+    "version": "2.9.0",
+    "metadata": "https://pypi.org/pypi/soupsieve/2.9.0/json",
+    "filename": "soupsieve-2.9-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/7b/d6/3185ab5ad1280319b31986898f3206dd7227cd75e293d4dba2a5e6bf27a0/soupsieve-2.9-py3-none-any.whl",
+    "sha256": "a2b2c76d67df2382d245409fd71e321a571717e58463efa32ace87dcadac2c12",
+    "size": 37387,
+    "requiresPython": ">=3.10"
   }
 ]
