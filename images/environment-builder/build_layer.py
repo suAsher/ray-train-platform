@@ -13,6 +13,7 @@ import sys
 import tarfile
 
 from environment_runtime import BASELINE, ENVIRONMENT, CaptureError, read_manifest, safe_error, verify_bootstrap
+import environment_runtime as runtime
 from prepare import prepare, pip_environment
 
 MAX_LAYER_BYTES = 8 * 1024 * 1024 * 1024
@@ -42,7 +43,7 @@ def safe_venv_link(archive_name, target):
         raise CaptureError('Environment link escapes the managed prefix')
 
 
-def add_path(archive, path, name):
+def add_path(archive, path, name, *, mode=None):
     info = archive.gettarinfo(str(path), arcname=name)
     if not (info.isfile() or info.isdir() or info.issym()):
         raise CaptureError('Environment contains unsupported special files')
@@ -52,6 +53,8 @@ def add_path(archive, path, name):
     info.uname = info.gname = ''
     info.mtime = 0
     info.mode = 0o777 if info.issym() else (0o755 if info.isdir() or (info.isfile() and info.mode & 0o111) else 0o644)
+    if mode is not None:
+        info.mode = mode
     if info.isfile():
         with path.open('rb') as stream:
             archive.addfile(info, stream)
@@ -86,6 +89,9 @@ def export_layer(destination, context):
             total += add_path(archive, RUNTIME_ROOT / source, name)
         total += add_path(archive, RUNTIME_ROOT / 'environment-shell.sh', 'etc/profile.d/raytrain-environment.sh')
         total += add_path(archive, BASELINE, 'opt/raytrain/environment-baseline.json')
+        if runtime.ACTIVE_PROFILE is not None:
+            runtime.verify_active_profile()
+            total += add_path(archive, runtime.PROFILE, 'etc/raytrain/environment-profile.json', mode=0o444)
         for name in ('capture.json', 'requirements.lock', 'materials.json'):
             total += add_path(archive, context / name, 'opt/raytrain/environment-materials/' + name)
     digest = hashlib.sha256()
@@ -149,6 +155,9 @@ def build(manifest_path, artifacts, index):
               'captureSha256': materials['captureSha256'], 'packageCount': len(manifest['packages']),
               'checks': {'wheelHashesVerified': True, 'rebuiltFilesVerified': True,
                          'pipCheck': True, 'platformCPU': True, 'gpuValidation': 'not_run'}}
+    versions = runtime.runtime_versions()
+    if versions:
+        result['checks']['runtimeVersions'] = versions
     (artifacts / 'build-result.json').write_text(json.dumps(result, sort_keys=True), encoding='utf-8')
     return result
 

@@ -16,7 +16,7 @@ import subprocess
 import sys
 from urllib.parse import urlsplit
 
-from environment_runtime import BASE_IMAGE, CaptureError, read_manifest, wheel_fingerprint, safe_error
+from environment_runtime import BASE_IMAGE, CaptureError, read_manifest, wheel_fingerprint, safe_error, runtime_versions
 
 MAX_CONTEXT_BYTES = 4 * 1024 * 1024 * 1024
 RUNTIME_ROOT = Path('/usr/local/lib/raytrain-environment')
@@ -78,6 +78,9 @@ def prepare(manifest_path, context, index):
         report = {'schemaVersion': 1, 'baseImage': BASE_IMAGE, 'wheels': materials,
                   'captureSha256': hashlib.sha256((context / 'capture.json').read_bytes()).hexdigest(),
                   'gpuValidation': 'not_run'}
+        versions = runtime_versions()
+        if versions:
+            report['runtimeVersions'] = versions
         (context / 'materials.json').write_text(json.dumps(report, sort_keys=True), encoding='utf-8')
         return report
     except Exception:

@@ -28,7 +28,8 @@ class RuntimeContractTest(unittest.TestCase):
                 self.assertEqual(runtime.load_profile(), self.profile())
 
     def test_profile_rejects_unpinned_image_python_path_and_unknown_fields(self):
-        for field, value in [('baseImage', 'evil:latest'), ('basePython', '/workspace/python'), ('schemaVersion', 2), ('secret', 'x')]:
+        for field, value in [('baseImage', 'evil:latest'), ('baseImage', 'harbor.wellspiking.ai/guofeng.su/../other@sha256:' + 'a' * 64),
+                             ('basePython', '/workspace/python'), ('schemaVersion', 2), ('secret', 'x')]:
             profile = self.profile()
             profile[field] = value
             with tempfile.TemporaryDirectory() as directory:
@@ -56,6 +57,35 @@ class RuntimeContractTest(unittest.TestCase):
         with mock.patch.object(runtime, 'ACTIVE_PROFILE', profile), mock.patch.object(runtime, 'load_profile', return_value={**profile, 'baseImage': runtime.BASE_IMAGE}):
             with self.assertRaises(runtime.CaptureError):
                 runtime.verify_active_profile()
+
+    def test_profile_base_accepts_matching_manifest_and_rejects_legacy_base(self):
+        profile = self.profile()
+        legacy = runtime.BASE_IMAGE
+        with mock.patch.object(runtime, 'ACTIVE_PROFILE', profile), mock.patch.object(runtime, 'load_profile', return_value=profile), mock.patch.object(runtime, 'BASE_IMAGE', profile['baseImage']):
+            value = self.manifest()
+            runtime.validate_manifest(value)
+            self.assertEqual(runtime.runtime_versions(), profile['versions'])
+            value['baseImage'] = legacy
+            with self.assertRaises(runtime.CaptureError):
+                runtime.validate_manifest(value)
+
+    def test_profile_hash_is_part_of_bootstrap_and_change_is_rejected(self):
+        profile = self.profile()
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            base, path, env = root / 'base-python', root / 'profile.json', root / 'environment'
+            base.write_bytes(b'python-binary')
+            path.write_text(json.dumps(profile))
+            (env / 'bin').mkdir(parents=True)
+            (env / 'pyvenv.cfg').write_text('include-system-site-packages = true')
+            for name in ('python', 'python3', 'python3.10'):
+                (env / 'bin' / name).write_bytes(base.read_bytes())
+            with mock.patch.object(runtime, 'PROFILE', path), mock.patch.object(runtime, 'ACTIVE_PROFILE', profile), mock.patch.object(runtime, 'load_profile', return_value=profile), mock.patch.object(runtime, 'ENVIRONMENT', env), mock.patch.object(runtime, 'BASE_PYTHON', base):
+                expected = runtime.bootstrap_inventory()
+                self.assertIn(str(path), expected)
+                path.write_text('{}')
+                with self.assertRaises(runtime.CaptureError):
+                    runtime.verify_bootstrap(expected)
 
     def manifest(self):
         return {'schemaVersion': 1, 'baseImage': runtime.BASE_IMAGE,

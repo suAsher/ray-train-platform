@@ -25,6 +25,7 @@ MAX_WHEEL_BYTES = 2 * 1024 * 1024 * 1024
 IGNORED_METADATA = {'RECORD', 'INSTALLER', 'REQUESTED', 'direct_url.json'}
 CHECKS = {'baseUnchanged', 'managedOnly', 'installedFilesVerified', 'stableCapture'}
 BASE_PYTHON = Path('/home/ray/anaconda3/bin/python3')
+PROFILE = Path('/etc/raytrain/environment-profile.json')
 ERROR_CODES = {'UNSUPPORTED_WORKSPACE', 'ENVIRONMENT_CHANGED', 'WHEEL_UNAVAILABLE',
                'PACKAGE_MODIFIED', 'BUILD_TIMEOUT', 'TEMP_STORAGE_FULL'}
 RESERVED_SCRIPTS = {'python', 'python3', 'python3.10', 'ray', 'torchrun',
@@ -37,6 +38,65 @@ class CaptureError(ValueError):
     def __init__(self, message, code='ENVIRONMENT_CHANGED'):
         super().__init__(message)
         self.code = code
+
+
+def verify_profile_permissions():
+    info = PROFILE.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o222:
+        raise CaptureError('Runtime profile must be a root-owned read-only image file', 'PACKAGE_MODIFIED')
+    for parent in PROFILE.parents:
+        info = parent.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            raise CaptureError('Runtime profile directory is not trusted', 'PACKAGE_MODIFIED')
+
+
+def load_profile():
+    # Only this fixed image path selects a base. Environment variables and
+    # capture manifests never select an interpreter or arbitrary image.
+    if not PROFILE.exists() and not PROFILE.is_symlink():
+        return None
+    verify_profile_permissions()
+    with PROFILE.open('rb') as stream:
+        raw = stream.read(4097)
+    if len(raw) > 4096:
+        raise CaptureError('Runtime profile exceeds limit', 'PACKAGE_MODIFIED')
+    value = json.loads(raw)
+    if not isinstance(value, dict) or set(value) != {'schemaVersion', 'baseImage', 'basePython', 'versions'}:
+        raise CaptureError('Invalid runtime profile fields', 'PACKAGE_MODIFIED')
+    if value['schemaVersion'] != 1 or not isinstance(value['baseImage'], str) or not re.fullmatch(
+            r'harbor\.wellspiking\.ai/guofeng\.su/[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*@sha256:[0-9a-f]{64}', value['baseImage']):
+        raise CaptureError('Runtime profile must identify an immutable platform base', 'PACKAGE_MODIFIED')
+    if value['basePython'] not in ('/home/ray/anaconda3/bin/python3', '/usr/bin/python3.10'):
+        raise CaptureError('Runtime profile selects an unsupported base interpreter', 'PACKAGE_MODIFIED')
+    versions = value['versions']
+    if not isinstance(versions, dict) or set(versions) != {'python', 'pytorch', 'cuda', 'ray'} or any(
+            not isinstance(version, str) or not re.fullmatch(r'[0-9][0-9a-zA-Z.+_-]{0,63}', version)
+            for version in versions.values()):
+        raise CaptureError('Invalid runtime version metadata', 'PACKAGE_MODIFIED')
+    return value
+
+
+PROFILE_ERROR = False
+try:
+    ACTIVE_PROFILE = load_profile()
+except Exception:
+    # Defer failure to the public command boundary so malformed JSON and paths
+    # cannot escape through an import traceback instead of a bounded error.
+    PROFILE_ERROR = True
+    ACTIVE_PROFILE = None
+if ACTIVE_PROFILE is not None:
+    BASE_IMAGE = ACTIVE_PROFILE['baseImage']
+    BASE_PYTHON = Path(ACTIVE_PROFILE['basePython'])
+
+
+def verify_active_profile():
+    if PROFILE_ERROR or load_profile() != ACTIVE_PROFILE:
+        raise CaptureError('Runtime profile changed after startup', 'PACKAGE_MODIFIED')
+
+
+def runtime_versions():
+    verify_active_profile()
+    return dict(ACTIVE_PROFILE['versions']) if ACTIVE_PROFILE is not None else {}
 
 
 def safe_error(error):
@@ -60,7 +120,10 @@ def verify_bootstrap(expected):
 
 
 def bootstrap_inventory():
+    verify_active_profile()
     paths = [BASE_PYTHON, ENVIRONMENT / 'pyvenv.cfg']
+    if ACTIVE_PROFILE is not None:
+        paths.append(PROFILE)
     paths.extend(sorted((ENVIRONMENT / 'bin').iterdir()))
     result = {}
     for path in paths:
@@ -212,6 +275,7 @@ def package_delta(baseline, current):
 
 
 def validate_manifest(value):
+    verify_active_profile()
     if not isinstance(value, dict) or set(value) != {'schemaVersion', 'baseImage', 'pythonVersion', 'packages', 'checks'}:
         raise CaptureError('Invalid capture manifest fields')
     if value['schemaVersion'] != 1 or value['baseImage'] != BASE_IMAGE:
