@@ -14,7 +14,7 @@ RUN (test -x /opt/raytrain/environment/bin/python || python3 -m venv --copies --
  && chmod 0755 /usr/local/bin/raytrain-environment /usr/local/bin/raytrain-environment-prepare /usr/local/bin/raytrain-environment-build \
  && chmod 0755 /usr/local/lib/raytrain-environment/raytrain-environment /usr/local/lib/raytrain-environment/ray /usr/local/lib/raytrain-environment/torchrun
 # -I omits script directory; put trusted helper imports on system site path.
-RUN python3 -c "import pathlib, site; pathlib.Path(site.getsitepackages()[0], 'raytrain_environment.pth').write_text('/usr/local/lib/raytrain-environment\\n')" \
+RUN "${ENVIRONMENT_BASE_PYTHON}" -c "import pathlib, site; pathlib.Path(site.getsitepackages()[0], 'raytrain_environment.pth').write_text('/usr/local/lib/raytrain-environment\\n')" \
  && if [ "${ENVIRONMENT_BASE_PYTHON}" = /usr/bin/python3.10 ]; then \
       install -d -m 0755 /etc/raytrain \
       && ENVIRONMENT_BASE_IMAGE="${ENVIRONMENT_BASE_IMAGE}" python3 -c "import json,os,pathlib; pathlib.Path('/etc/raytrain/environment-profile.json').write_text(json.dumps({'schemaVersion':1,'baseImage':os.environ['ENVIRONMENT_BASE_IMAGE'],'basePython':'/usr/bin/python3.10','versions':{'python':'3.10','pytorch':'2.6.0+cu126','cuda':'12.6','ray':'2.58.0'}},separators=(',',':'))+'\n')" \
