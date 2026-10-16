@@ -52,6 +52,15 @@ class RuntimeContractTest(unittest.TestCase):
                     with self.assertRaises(runtime.CaptureError):
                         runtime.load_profile()
 
+    def test_malformed_profile_uses_bounded_package_modified_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / 'profile.json'
+            path.write_text('{invalid-profile')
+            with mock.patch.object(runtime, 'PROFILE', path), mock.patch.object(runtime, 'verify_profile_permissions'):
+                with self.assertRaises(runtime.CaptureError) as caught:
+                    runtime.load_profile()
+            self.assertEqual(runtime.safe_error(caught.exception), {'code': 'PACKAGE_MODIFIED'})
+
     def test_profile_change_after_bootstrap_is_rejected(self):
         profile = self.profile()
         with mock.patch.object(runtime, 'ACTIVE_PROFILE', profile), mock.patch.object(runtime, 'load_profile', return_value={**profile, 'baseImage': runtime.BASE_IMAGE}):

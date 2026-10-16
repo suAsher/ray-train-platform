@@ -60,7 +60,10 @@ def load_profile():
         raw = stream.read(4097)
     if len(raw) > 4096:
         raise CaptureError('Runtime profile exceeds limit', 'PACKAGE_MODIFIED')
-    value = json.loads(raw)
+    try:
+        value = json.loads(raw)
+    except (ValueError, UnicodeError) as error:
+        raise CaptureError('Runtime profile is malformed', 'PACKAGE_MODIFIED') from error
     if not isinstance(value, dict) or set(value) != {'schemaVersion', 'baseImage', 'basePython', 'versions'}:
         raise CaptureError('Invalid runtime profile fields', 'PACKAGE_MODIFIED')
     if value['schemaVersion'] != 1 or not isinstance(value['baseImage'], str) or not re.fullmatch(
