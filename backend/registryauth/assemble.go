@@ -24,8 +24,10 @@ import (
 
 const environmentRoot = "opt/raytrain/environment"
 const environmentWrappers = "/opt/raytrain/environment-wrappers"
+const environmentProfilePath = "etc/raytrain/environment-profile.json"
 
 var environmentFiles = map[string]bool{
+	environmentProfilePath:                                    true,
 	"opt/raytrain/environment-baseline.json":                    true,
 	"opt/raytrain/environment-materials/capture.json":           true,
 	"opt/raytrain/environment-materials/requirements.lock":      true,
@@ -111,7 +113,11 @@ func validateEnvironmentTar(ctx context.Context, filename string) error {
 				return ErrArtifact
 			}
 		case tar.TypeReg, tar.TypeRegA:
-			if header.Mode != 0644 && header.Mode != 0755 {
+			if name == environmentProfilePath {
+				if header.Mode != 0444 || header.Size > 4096 {
+					return ErrArtifact
+				}
+			} else if header.Mode != 0644 && header.Mode != 0755 {
 				return ErrArtifact
 			}
 		case tar.TypeSymlink:
