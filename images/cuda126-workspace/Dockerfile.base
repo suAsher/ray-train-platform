@@ -122,6 +122,10 @@ WORKDIR /workspace
 # Offline CPU gate only. Compile/link checks can also run on a CPU builder;
 # executing CUDA kernels requires separate GPU-node acceptance.
 RUN raytrain-cuda126-selfcheck
-# Preserve the official requirements and add only the bounded CUDA 12.x minor
-# compatibility path. This is metadata-only; no dependency or rootfs changes.
-ENV NVIDIA_REQUIRE_CUDA="${NVIDIA_REQUIRE_CUDA} brand=geforce,driver>=550.127.05,driver<551,cuda>=12.4,arch=8.9"
+# Native host drivers only: the Toolkit may otherwise activate this image's
+# forward-compat driver on GeForce and make CUDA initialization fail with 804.
+# Keep the preceding filesystem layers and remove only the standalone package.
+USER root
+RUN --network=none apt-get purge --yes cuda-compat-12-6
+USER ray
+ENV NVIDIA_REQUIRE_CUDA="cuda>=12.6 brand=geforce,driver>=550.127.05,driver<551,cuda>=12.4,arch=8.9"

@@ -94,10 +94,14 @@ Jupyter HTTP/kernel 和 VS Code HTTP 在 workspace 构建时验证。
 nvcc 编译并执行 `sm_89` 二进制，以及 Torch CUDA extension 编译和执行。
 无 GPU 时直接失败，不会跳过后报告成功。RTX 4090 的测试显式编译 SASS，
 避免把旧驱动无法 JIT 的新 PTX 当作完整兼容性。
-保留 NVIDIA 基础镜像的全部原始驱动保护条件，不设置 `NVIDIA_DISABLE_REQUIRE`。
-在最后一条配置指令仅追加一个 CUDA 12.x 小版本兼容分支：
+新 Base 仅卸载原厂自带的独立 `cuda-compat-12-6` 包，避免 Toolkit 自动加载
+不适用于该 GeForce 场景的兼容驱动库。使用标准离线 purge，不 autoremove、
+不强制忽略依赖；nvcc、cudart 和 Python 依赖不变，宿主驱动与运行时配置不变。
+启动检查保持启用，不设置 `NVIDIA_DISABLE_REQUIRE`。允许条件收紧为
+`cuda>=12.6` 或同时满足
 `brand=geforce,driver>=550.127.05,driver<551,cuda>=12.4,arch=8.9`。
-该分支要求这些条件同时成立，不改变底座文件、驱动、依赖或其他条件。
+历史父镜像 guard 仅作为来源证据保留；其中依赖 forward-compat 的旧品牌/驱动
+分支不再启用，不能用它们在缺少原生驱动能力时启动该新镜像。
 实际验收仍须确认宿主驱动的 `libcuda` 加载路径、Driver API 与 runtime 版本，
 以及原生 SASS、扩展和 forward/backward 的 GPU 执行。低版本驱动不能保证支持
 新 PTX JIT 或需要新驱动的功能；不能据此承诺所有 `torch.compile`/Triton 代码。
