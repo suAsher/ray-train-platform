@@ -28,7 +28,7 @@ class BuildContract(unittest.TestCase):
         self.assertNotIn('code-server', dockerfile)
         self.assertNotIn('jupyterlab', dockerfile)
         self.assertNotIn('NVIDIA_DISABLE_REQUIRE', dockerfile)
-        self.assertNotIn('NVIDIA_REQUIRE_CUDA=', dockerfile)
+        # The dedicated guard contract permits only the final bounded append.
 
     def test_workspace_rejects_mutable_base(self):
         for base in ('', 'harbor.example/base:latest'):
