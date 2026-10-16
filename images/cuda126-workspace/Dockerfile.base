@@ -1,0 +1,71 @@
+# Code-free CUDA 12.6 foundation. Explicit-only build target, never a default.
+# NVIDIA CUDA 12.6.3 devel, Ubuntu 22.04, linux/amd64. Preserve driver guards.
+FROM harbor.wellspiking.ai/hub/nvidia/cuda@sha256:1608a19a5d6f013d36abfb9ad50a42b4c0ef86f4ab48e351c6899f0280b946c1
+ARG APT_MIRROR=http://repo.wellspiking.ai/repository/ubuntu-jammy
+ARG PIP_INDEX_URL=https://mirrors.ivolces.com/pypi/simple/
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126
+USER root
+RUN printf '%s\n' \
+      "deb ${APT_MIRROR} jammy main restricted universe multiverse" \
+      "deb ${APT_MIRROR} jammy-updates main restricted universe multiverse" \
+      "deb ${APT_MIRROR} jammy-security main restricted universe multiverse" \
+      > /etc/apt/sources.list \
+ && apt-get update -o Dir::Etc::sourceparts=- \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      python3.10 python3-pip python3.10-venv python3.10-dev build-essential ninja-build \
+      git curl vim less ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --create-home --uid 1000 --gid users --shell /bin/bash ray
+COPY images/cuda126-workspace/constraints.txt /opt/raytrain/environment-constraints.txt
+COPY images/environment-workspace/pip.conf /etc/pip.conf
+# Wheel-managed bootstrap metadata supports installed-file capture; Ubuntu's
+# distro pip/setuptools remain below these fixed /usr/local distributions.
+RUN python3.10 -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
+      pip==24.2 setuptools==75.1.0 wheel==0.44.0
+# No fallback index: runtime and nvcc must both be CUDA 12.6.
+RUN python3.10 -m pip install --no-cache-dir \
+      --index-url "${TORCH_INDEX_URL}" --constraint /opt/raytrain/environment-constraints.txt \
+      torch==2.6.0+cu126 torchvision==0.21.0+cu126 \
+ && python3.10 -m pip install --no-cache-dir \
+      --index-url "${PIP_INDEX_URL}" --constraint /opt/raytrain/environment-constraints.txt \
+      'ray[default,train,tune]==2.58.0' pyarrow==25.0.1 mlflow-skinny==3.14.0 \
+      google-api-core==2.34.0 googleapis-common-protos==1.75.2 \
+      opentelemetry-exporter-otlp==1.44.0 ipykernel==6.29.5 \
+ && python3.10 -m venv --copies --system-site-packages /opt/raytrain/environment \
+ && python3.10 -c "import pathlib, site; pathlib.Path(site.getsitepackages()[0], 'raytrain_platform.pth').write_text('/usr/local/lib/raytrain-platform\\n', encoding='utf-8')"
+COPY images/workspace/raytrain-launch.py /usr/local/bin/raytrain-launch
+COPY images/workspace/raytrain-managed /usr/local/bin/raytrain-managed
+COPY images/workspace/raytrain_runtime /usr/local/lib/raytrain-platform/raytrain_runtime
+COPY images/environment-workspace/ray /opt/raytrain/environment-wrappers/ray
+COPY images/environment-workspace/torchrun /opt/raytrain/environment-wrappers/torchrun
+COPY images/environment-workspace/environment-shell.sh /opt/raytrain/environment-shell.sh
+COPY images/environment-workspace/environment-shell.sh /etc/profile.d/raytrain-environment.sh
+COPY images/cuda126-workspace/selfcheck.py /usr/local/bin/raytrain-cuda126-selfcheck
+COPY images/cuda126-workspace/selfcheck.py /usr/local/bin/raytrain-selfcheck
+COPY images/cuda126-workspace/actor_smoke.py images/cuda126-workspace/gpu_smoke.py /usr/local/lib/raytrain-cuda126/
+ENV PATH=/opt/raytrain/environment-wrappers:/opt/raytrain/environment/bin:$PATH \
+    VIRTUAL_ENV=/opt/raytrain/environment \
+    PYTHONNOUSERSITE=1 \
+    PIP_REQUIRE_VIRTUALENV=1 \
+    PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_CONSTRAINT=/opt/raytrain/environment-constraints.txt \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_CACHE_DIR=/workspace/.cache/pip \
+    PYTHONPYCACHEPREFIX=/workspace/.cache/pycache \
+    BASH_ENV=/opt/raytrain/environment-shell.sh \
+    CUDA_HOME=/usr/local/cuda \
+    RAY_TRAIN_V2_ENABLED=1 \
+    PLATFORM_RAY_VERSION=2.58.0 \
+    RAY_USAGE_STATS_ENABLED=0
+RUN chmod 0755 /usr/local/bin/raytrain-launch /usr/local/bin/raytrain-managed \
+      /usr/local/bin/raytrain-cuda126-selfcheck /usr/local/bin/raytrain-selfcheck /opt/raytrain/environment-wrappers/* \
+ && python -m pip check \
+ && chown -R ray:users /opt/raytrain/environment \
+ && install -d -m 0755 -o ray -g users /workspace \
+ && chown -R ray:users /workspace \
+ && printf '\n. /opt/raytrain/environment-shell.sh\n' >> /home/ray/.bashrc \
+ && printf '\n. /opt/raytrain/environment-shell.sh\n' >> /home/ray/.profile
+USER ray
+WORKDIR /workspace
+# Offline CPU gate only; GPU and extension compilation require a GPU node.
+RUN raytrain-cuda126-selfcheck

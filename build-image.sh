@@ -50,6 +50,7 @@ RAY_CANARY_FOUNDATION_IMAGE_ARG="${RAY_CANARY_FOUNDATION_IMAGE:-harbor.wellspiki
 BEVFUSION_BASE_IMAGE_ARG="${BEVFUSION_BASE_IMAGE:-harbor.wellspiking.ai/guofeng.su/bevfusion@sha256:88e9c5045ced1b4b3dc49ddf1f2e22a8c9702574fd8103afcdff83577784a5ee}"
 BEVFUSION_WORKSPACE_BASE_IMAGE_ARG="${BEVFUSION_WORKSPACE_BASE_IMAGE:-harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion@sha256:66b906d062870131121b07e4455783dc5f2913e285b29fdbb2cf1decc100f553}"
 CODE_SERVER_IMAGE_ARG="${CODE_SERVER_IMAGE:-harbor.wellspiking.ai/hub/codercom/code-server:4.93.1}"
+CUDA126_BASE_IMAGE_ARG="${CUDA126_BASE_IMAGE:-}"
 SPK_RAYJOB_VERSION_ARG="${SPK_RAYJOB_VERSION:-$IMAGE_TAG}"
 SPK_RAYJOB_MINIMUM_VERSION_ARG="${SPK_RAYJOB_MINIMUM_VERSION:-}"
 SPK_RAYJOB_RELEASE_NOTES_ARG="${SPK_RAYJOB_RELEASE_NOTES:-}"
@@ -90,7 +91,7 @@ Ray Training Platform image builder
 Environment variables:
   REGISTRY=harbor.wellspiking.ai/guofeng.su
   IMAGE_TAG=test-20260809
-  BUILD_TARGETS=all|backend,frontend,source-materializer,test-training,dataset-publisher,idc-sync,storage-sync,personal-storage-csi,workspace,train-pytorch,pytorch-ray-ddp,pytorch-ray-train,workspace-ray256,workspace-bevfusion,bevfusion-runtime,bevfusion-ray258-canary,raytrain-base,tos-prefix-init,spk-rayjob
+  BUILD_TARGETS=all|backend,frontend,source-materializer,test-training,dataset-publisher,idc-sync,storage-sync,personal-storage-csi,workspace,workspace-cuda126,cuda126-base,environment-prepare-cuda126,train-pytorch,pytorch-ray-ddp,pytorch-ray-train,workspace-ray256,workspace-bevfusion,bevfusion-runtime,bevfusion-ray258-canary,raytrain-base,tos-prefix-init,spk-rayjob
   PUSH_IMAGE=false|true
   USE_BUILDX=true|false
   BUILD_PLATFORM=linux/amd64
@@ -112,6 +113,7 @@ Environment variables:
   BEVFUSION_BASE_IMAGE=harbor.wellspiking.ai/guofeng.su/bevfusion@sha256:...
   BEVFUSION_WORKSPACE_BASE_IMAGE=harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion@sha256:...
   CODE_SERVER_IMAGE=harbor.wellspiking.ai/hub/codercom/code-server:4.93.1
+  CUDA126_BASE_IMAGE=<immutable CUDA 12.6 foundation repository@sha256:digest>
   SPK_RAYJOB_VERSION=<release-version>
   SPK_RAYJOB_MINIMUM_VERSION=<optional-minimum-compatible-release>
   SPK_RAYJOB_RELEASE_NOTES=<optional-release-notes>
@@ -129,6 +131,9 @@ Build targets:
   storage-sync        Explicit-only governed IDC/TOS copy worker
   personal-storage-csi Explicit-only personal Wellspiking SFTP mount driver
   workspace           Existing Ray 2.35 interactive workspace (rollback)
+  workspace-cuda126   Explicit-only Python 3.10 / Torch 2.6 / CUDA 12.6 devel workspace
+  cuda126-base        Explicit-only editor-free foundation for CUDA 12.6 environments
+  environment-prepare-cuda126 Explicit-only CUDA 12.6 dependency-layer builder
   train-pytorch       Existing Ray 2.35 PyTorch runtime (rollback)
   pytorch-ray-ddp     Ray 2.56.1 PyTorch runtime for Ray-orchestrated DDP
   pytorch-ray-train   Explicit Task 9 target for managed Ray Train
@@ -187,6 +192,15 @@ target_spec() {
     workspace)
       printf '%s\n' 'images/workspace/Dockerfile|ray-workspace|images/workspace|workspace-legacy'
       ;;
+    workspace-cuda126)
+      printf '%s\n' 'images/cuda126-workspace/Dockerfile|ray-workspace-cuda126|.|-'
+      ;;
+    cuda126-base)
+      printf '%s\n' 'images/cuda126-workspace/Dockerfile.base|raytrain-cuda126-base|.|-'
+      ;;
+    environment-prepare-cuda126)
+      printf '%s\n' 'images/environment-builder/Dockerfile|raytrain-environment-prepare-cuda126|.|-'
+      ;;
     train-pytorch)
       # The default training runtime shares the tested Ray placement launcher
       # with the interactive workspace image, so its build context is images.
@@ -235,7 +249,7 @@ normalize_targets() {
     [ -n "$target" ] || continue
     target_spec "$target" >/dev/null || {
       echo "ERROR: unknown BUILD_TARGETS entry: $target" >&2
-      echo "       valid values: backend, frontend, source-materializer, test-training, dataset-publisher, idc-sync, workspace, train-pytorch, pytorch-ray-ddp, pytorch-ray-train, workspace-ray256, workspace-bevfusion, bevfusion-runtime,bevfusion-ray258-canary, raytrain-base, tos-prefix-init, spk-rayjob, all" >&2
+      echo "       valid values: backend, frontend, source-materializer, test-training, dataset-publisher, idc-sync, workspace, workspace-cuda126, cuda126-base, environment-prepare-cuda126, train-pytorch, pytorch-ray-ddp, pytorch-ray-train, workspace-ray256, workspace-bevfusion, bevfusion-runtime,bevfusion-ray258-canary, raytrain-base, tos-prefix-init, spk-rayjob, all" >&2
       exit 1
     }
     printf '%s\n' "$target"
@@ -299,6 +313,12 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
     done
   fi
   case "$target" in
+    workspace-cuda126|environment-prepare-cuda126)
+      [[ "$CUDA126_BASE_IMAGE_ARG" =~ ^[a-zA-Z0-9][a-zA-Z0-9._:/-]*@sha256:[a-f0-9]{64}$ ]] || {
+        echo "ERROR: $target requires CUDA126_BASE_IMAGE with an immutable sha256 digest" >&2
+        exit 1
+      }
+      ;;
     pytorch-ray-ddp|pytorch-ray-train|workspace-ray256)
       [ "$RAY_VERSION_ARG" = "$RAY_PRODUCTION_VERSION" ] || {
         echo "ERROR: production runtime variants require RAY_VERSION=$RAY_PRODUCTION_VERSION" >&2
@@ -390,6 +410,7 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
       -e "s|^FROM \${BEVFUSION_WORKSPACE_BASE_IMAGE}|FROM $BEVFUSION_WORKSPACE_BASE_IMAGE_ARG|" \
       -e "s|^FROM \${RAY_CANARY_FOUNDATION_IMAGE}|FROM $RAY_CANARY_FOUNDATION_IMAGE_ARG|" \
       -e "s|^FROM \${CODE_SERVER_IMAGE}|FROM $CODE_SERVER_IMAGE_ARG|" \
+      -e "s|^FROM \${CUDA126_BASE_IMAGE}|FROM $CUDA126_BASE_IMAGE_ARG|" \
       "$dockerfile_path" >"$tmp_dockerfile"
     dockerfile_path="$tmp_dockerfile"
   fi
@@ -415,6 +436,7 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
       --build-arg "BEVFUSION_BASE_IMAGE=$BEVFUSION_BASE_IMAGE_ARG"
       --build-arg "BEVFUSION_WORKSPACE_BASE_IMAGE=$BEVFUSION_WORKSPACE_BASE_IMAGE_ARG"
       --build-arg "CODE_SERVER_IMAGE=$CODE_SERVER_IMAGE_ARG"
+      --build-arg "CUDA126_BASE_IMAGE=$CUDA126_BASE_IMAGE_ARG"
       --build-arg "SPK_RAYJOB_VERSION=$SPK_RAYJOB_VERSION_ARG"
       --build-arg "SPK_RAYJOB_MINIMUM_VERSION=$SPK_RAYJOB_MINIMUM_VERSION_ARG"
       --build-arg "SPK_RAYJOB_RELEASE_NOTES=$SPK_RAYJOB_RELEASE_NOTES_ARG"
@@ -422,6 +444,10 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
     if [ "$target" = "environment-workspace" ]; then
       : "${PIP_INDEX_URL:?Set the package index for the platform debug image build}"
       build_cmd+=(--build-arg "PIP_INDEX_URL=$PIP_INDEX_URL")
+    fi
+    if [ "$target" = "environment-prepare-cuda126" ]; then
+      build_cmd+=(--build-arg "ENVIRONMENT_BASE_IMAGE=$CUDA126_BASE_IMAGE_ARG"
+                  --build-arg "ENVIRONMENT_BASE_PYTHON=/usr/bin/python3.10")
     fi
     [ "$docker_target" = "-" ] || build_cmd+=(--target "$docker_target")
     is_true "$NO_CACHE" && build_cmd+=(--no-cache)
@@ -457,10 +483,15 @@ for target in "${BUILD_TARGETS_LIST[@]}"; do
       --build-arg "BEVFUSION_BASE_IMAGE=$BEVFUSION_BASE_IMAGE_ARG"
       --build-arg "BEVFUSION_WORKSPACE_BASE_IMAGE=$BEVFUSION_WORKSPACE_BASE_IMAGE_ARG"
       --build-arg "CODE_SERVER_IMAGE=$CODE_SERVER_IMAGE_ARG"
+      --build-arg "CUDA126_BASE_IMAGE=$CUDA126_BASE_IMAGE_ARG"
       --build-arg "SPK_RAYJOB_VERSION=$SPK_RAYJOB_VERSION_ARG"
       --build-arg "SPK_RAYJOB_MINIMUM_VERSION=$SPK_RAYJOB_MINIMUM_VERSION_ARG"
       --build-arg "SPK_RAYJOB_RELEASE_NOTES=$SPK_RAYJOB_RELEASE_NOTES_ARG"
     )
+    if [ "$target" = "environment-prepare-cuda126" ]; then
+      build_cmd+=(--build-arg "ENVIRONMENT_BASE_IMAGE=$CUDA126_BASE_IMAGE_ARG"
+                  --build-arg "ENVIRONMENT_BASE_PYTHON=/usr/bin/python3.10")
+    fi
     [ "$docker_target" = "-" ] || build_cmd+=(--target "$docker_target")
     is_true "$NO_CACHE" && build_cmd+=(--no-cache)
     is_true "$PULL_BASE_IMAGES" && build_cmd+=(--pull)

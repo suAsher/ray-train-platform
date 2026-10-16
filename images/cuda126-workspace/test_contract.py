@@ -13,7 +13,44 @@ class BuildContract(unittest.TestCase):
             ['bash', str(ROOT / 'build-image.sh')], cwd=ROOT,
             env={**os.environ, 'BUILD_TARGETS': targets, 'DRY_RUN': 'true',
                  'PUSH_IMAGE': 'false', 'USE_BUILDX': str(buildx).lower(),
-                 'IMAGE_TAG': 'contract-test'}, capture_output=True, text=True)
+                 'IMAGE_TAG': 'contract-test',
+                 'CUDA126_BASE_IMAGE': 'harbor.example/base@sha256:' + 'a' * 64},
+            capture_output=True, text=True)
+
+    def test_explicit_base_is_editor_free(self):
+        result = self.build_plan('cuda126-base')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('images/cuda126-workspace/Dockerfile.base', result.stdout)
+        self.assertIn('raytrain-cuda126-base:contract-test', result.stdout)
+        self.assertEqual(result.stdout.count('--- Building '), 1)
+        dockerfile = (ROOT / 'images/cuda126-workspace/Dockerfile.base').read_text()
+        self.assertNotIn('code-server', dockerfile)
+        self.assertNotIn('jupyterlab', dockerfile)
+        self.assertNotIn('NVIDIA_DISABLE_REQUIRE', dockerfile)
+        self.assertNotIn('NVIDIA_REQUIRE_CUDA=', dockerfile)
+
+    def test_workspace_rejects_mutable_base(self):
+        for base in ('', 'harbor.example/base:latest'):
+            result = subprocess.run(
+                ['bash', str(ROOT / 'build-image.sh')], cwd=ROOT,
+                env={**os.environ, 'BUILD_TARGETS': 'workspace-cuda126',
+                     'DRY_RUN': 'true', 'CUDA126_BASE_IMAGE': base},
+                capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('immutable sha256 digest', result.stderr)
+
+    def test_prepare_uses_matching_foundation_and_interpreter(self):
+        for buildx in (True, False):
+            result = self.build_plan('environment-prepare-cuda126', buildx)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.count('--- Building '), 1)
+            self.assertIn('ENVIRONMENT_BASE_IMAGE=harbor.example/base@sha256:' + 'a' * 64,
+                          result.stdout)
+            self.assertIn('ENVIRONMENT_BASE_PYTHON=/usr/bin/python3.10', result.stdout)
+        legacy = self.build_plan('environment-prepare')
+        self.assertEqual(legacy.returncode, 0, legacy.stderr)
+        self.assertNotIn('ENVIRONMENT_BASE_IMAGE=', legacy.stdout)
+        self.assertNotIn('ENVIRONMENT_BASE_PYTHON=', legacy.stdout)
 
     def test_explicit_target_builds_only_cuda126(self):
         for buildx in (True, False):
