@@ -17,7 +17,7 @@ spec.loader.exec_module(prepare)
 
 class PrepareTest(unittest.TestCase):
     def test_materials_report_records_profile_versions_only_when_available(self):
-        versions = {'python': '3.10', 'pytorch': '2.6.0+cu126', 'cuda': '12.6', 'ray': '2.58.0'}
+        versions = {'python': '3.10', 'pytorch': '2.13.0+cu126', 'cuda': '12.6', 'ray': '2.58.0'}
         for labels in [versions, {}]:
             with self.subTest(profile=bool(labels)), tempfile.TemporaryDirectory() as directory:
                 root = pathlib.Path(directory)

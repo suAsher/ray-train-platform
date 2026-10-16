@@ -43,7 +43,7 @@ class LayerTest(unittest.TestCase):
                 self.assertIn('usr/local/lib/raytrain-environment/environment_runtime.py', archive.getnames())
 
     def test_build_result_labels_profile_versions_without_changing_capture_contract(self):
-        versions = {'python': '3.10', 'pytorch': '2.6.0+cu126', 'cuda': '12.6', 'ray': '2.58.0'}
+        versions = {'python': '3.10', 'pytorch': '2.13.0+cu126', 'cuda': '12.6', 'ray': '2.58.0'}
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             baseline = root / 'baseline.json'
@@ -73,6 +73,7 @@ class LayerTest(unittest.TestCase):
         self.assertIn('FROM ${ENVIRONMENT_BASE_IMAGE}', dockerfile)
         self.assertIn('test -x /opt/raytrain/environment/bin/python ||', dockerfile)
         self.assertIn('RUN "${ENVIRONMENT_BASE_PYTHON}" -c', dockerfile)
+        self.assertIn("'pytorch':'2.13.0+cu126'", dockerfile)
 
     def test_symlink_stays_inside_managed_environment(self):
         build_layer.safe_venv_link('opt/raytrain/environment/lib64', 'lib')

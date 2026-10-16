@@ -44,7 +44,7 @@ class RuntimeContractTest(unittest.TestCase):
 
     def profile(self):
         return {'schemaVersion': 1, 'baseImage': 'harbor.wellspiking.ai/guofeng.su/cuda126-base@sha256:' + 'b' * 64,
-                'basePython': '/usr/bin/python3.10', 'versions': {'python': '3.10', 'pytorch': '2.6.0+cu126', 'cuda': '12.6', 'ray': '2.58.0'}}
+                'basePython': '/usr/bin/python3.10', 'versions': {'python': '3.10', 'pytorch': '2.13.0+cu126', 'cuda': '12.6', 'ray': '2.58.0'}}
 
     def test_trusted_profile_selects_pinned_base_without_environment_override(self):
         with tempfile.TemporaryDirectory() as directory:
