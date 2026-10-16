@@ -13,6 +13,14 @@ import urllib.request
 
 def main():
     assert os.geteuid() == 1000
+    for directory in ('/home/ray/.local', '/home/ray/.local/share',
+                      '/home/ray/.local/share/code-server'):
+        assert Path(directory).stat().st_uid == os.geteuid(), directory
+    # Default editor extensions/state must work without a writable-directory
+    # override hiding broken ownership in the shipped image.
+    with tempfile.NamedTemporaryFile(dir='/home/ray/.local/share/code-server',
+                                     prefix='raytrain-editor-write-'):
+        pass
     settings = Path('/home/ray/.local/share/code-server/User/settings.json')
     assert json.loads(settings.read_text())['python.defaultInterpreterPath'] == '/opt/raytrain/environment/bin/python'
     version = subprocess.check_output(['code-server', '--version'], text=True, timeout=30)
