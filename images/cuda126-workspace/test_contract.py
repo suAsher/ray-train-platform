@@ -90,6 +90,11 @@ class BuildContract(unittest.TestCase):
         smoke = (ROOT / 'images/cuda126-workspace/editor_smoke.py').read_text()
         self.assertIn("version.startswith('4.99.4 '", smoke)
 
+    def test_editor_version_probe_cannot_generate_default_credentials(self):
+        smoke = (ROOT / 'images/cuda126-workspace/editor_smoke.py').read_text()
+        self.assertIn("['code-server', '--version', '--config', str(config)]", smoke)
+        self.assertIn("assert not Path('/home/ray/.config/code-server/config.yaml').exists()", smoke)
+
     def test_cuda126_editor_arg_cannot_inherit_legacy_default(self):
         fixed = 'harbor.wellspiking.ai/hub/codercom/code-server@sha256:80a8e4e472be2feb0f90724b564ddf81ff38fdc482aab4fb887ef53413891f95'
         for buildx in (True, False):
