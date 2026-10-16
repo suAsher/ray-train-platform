@@ -12,8 +12,8 @@ import subprocess
 import sys
 
 ENVIRONMENT = '/opt/raytrain/environment'
-EXPECTED = {'ray': '2.58.0', 'torch': '2.6.0+cu126',
-            'torchvision': '0.21.0+cu126', 'pyarrow': '25.0.1',
+EXPECTED = {'ray': '2.58.0', 'torch': '2.13.0+cu126',
+            'torchvision': '0.28.0+cu126', 'pyarrow': '25.0.1',
             'mlflow-skinny': '3.14.0', 'ipykernel': '6.29.5'}
 MODULES = ('ray', 'ray.train', 'ray.data', 'ray.train.torch', 'torch',
            'torchvision', 'pyarrow', 'mlflow', 'raytrain_runtime.managed_driver',

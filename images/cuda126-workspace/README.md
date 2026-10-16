@@ -6,7 +6,7 @@
 | --- | --- |
 | 系统 | NVIDIA CUDA 12.6.3 devel / Ubuntu 22.04，linux/amd64 |
 | Python | 3.10（系统补丁版本以构建证据为准） |
-| PyTorch / TorchVision | 2.6.0+cu126 / 0.21.0+cu126 |
+| PyTorch / TorchVision | 2.13.0+cu126 / 0.28.0+cu126 |
 | CUDA runtime / nvcc | 均为 12.6 |
 | Ray | 2.58.0 |
 | JupyterLab / Jupyter Server / IPykernel | 4.2.5 / 2.14.2 / 6.29.5 |

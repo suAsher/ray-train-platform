@@ -16,7 +16,7 @@ from torch.utils.cpp_extension import load_inline
 
 def main():
     assert os.geteuid() == 1000
-    assert torch.__version__ == '2.6.0+cu126'
+    assert torch.__version__ == '2.13.0+cu126'
     assert torch.version.cuda == '12.6'
     assert torch.cuda.is_available(), 'GPU is required for this acceptance'
     capability = torch.cuda.get_device_capability()

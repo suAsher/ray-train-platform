@@ -33,7 +33,7 @@ def main():
                         'cudaRuntime': torch.version.cuda, 'ray': ray.__version__}
         actor = Interpreter.remote()
         result = ray.get(actor.versions.remote(), timeout=120)
-        assert result == {'prefix': ENVIRONMENT, 'torch': '2.6.0+cu126',
+        assert result == {'prefix': ENVIRONMENT, 'torch': '2.13.0+cu126',
                           'cudaRuntime': '12.6', 'ray': '2.58.0'}, result
         print(json.dumps({'rayActor': 'passed', **result, 'gpuValidation': 'not_run'}))
     finally:

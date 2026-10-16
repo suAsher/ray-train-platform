@@ -42,7 +42,7 @@ RUN python3.10 -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
 # download layer reusable if an unrelated dependency mirror has a timeout.
 RUN python3.10 -m pip install --no-cache-dir --no-deps \
       --index-url "${TORCH_INDEX_URL}" --constraint /opt/raytrain/environment-constraints.txt \
-      torch==2.6.0+cu126 torchvision==0.21.0+cu126
+      torch==2.13.0+cu126 torchvision==0.28.0+cu126
 COPY images/cuda126-workspace/requirements-official.txt /opt/raytrain/requirements-official.txt
 RUN --mount=from=official-wheels,source=/wheels,target=/wheels,readonly \
     python3.10 -m pip install --no-cache-dir \
@@ -52,7 +52,7 @@ RUN --mount=from=official-wheels,source=/wheels,target=/wheels,readonly \
 # the existing HTTPS PyPI mirror; a missing +cu126 wheel cannot become CPU/cu121.
 RUN python3.10 -m pip install --no-cache-dir \
       --index-url "${PIP_INDEX_URL}" --constraint /opt/raytrain/environment-constraints.txt \
-      torch==2.6.0+cu126 torchvision==0.21.0+cu126 \
+      torch==2.13.0+cu126 torchvision==0.28.0+cu126 \
       'ray[default,train,tune]==2.58.0' pyarrow==25.0.1 mlflow-skinny==3.14.0 \
       google-api-core==2.34.0 googleapis-common-protos==1.75.2 \
       opentelemetry-exporter-otlp==1.44.0 ipykernel==6.29.5 \

@@ -12,7 +12,7 @@ USER root
 COPY images/environment-workspace/environment_runtime.py /usr/local/lib/raytrain-environment/environment_runtime.py
 COPY images/environment-workspace/raytrain-environment /usr/local/bin/raytrain-environment
 RUN install -d -m 0755 /etc/raytrain \
- && printf '{"schemaVersion":1,"baseImage":"%s","basePython":"/usr/bin/python3.10","versions":{"python":"3.10","pytorch":"2.6.0+cu126","cuda":"12.6","ray":"2.58.0"}}\n' "${CUDA126_BASE_IMAGE}" > /etc/raytrain/environment-profile.json \
+ && printf '{"schemaVersion":1,"baseImage":"%s","basePython":"/usr/bin/python3.10","versions":{"python":"3.10","pytorch":"2.13.0+cu126","cuda":"12.6","ray":"2.58.0"}}\n' "${CUDA126_BASE_IMAGE}" > /etc/raytrain/environment-profile.json \
  && chmod 0444 /etc/raytrain/environment-profile.json \
  && chmod 0755 /usr/local/bin/raytrain-environment \
  && raytrain-environment baseline \
