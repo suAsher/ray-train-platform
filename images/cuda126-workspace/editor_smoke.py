@@ -11,6 +11,12 @@ import urllib.error
 import urllib.request
 
 
+def check_editor_http(base_url):
+    with urllib.request.urlopen(base_url + '/healthz', timeout=5) as response:
+        assert response.status == 200
+        assert json.load(response)['status'] == 'alive'
+
+
 def main():
     assert os.geteuid() == 1000
     for directory in ('/home/ray/.local', '/home/ray/.local/share',
@@ -49,10 +55,8 @@ def main():
                     log.seek(0)
                     raise RuntimeError('code-server exited:\n' + log.read()[-6000:])
                 try:
-                    with urllib.request.urlopen(f'http://127.0.0.1:{port}/healthz', timeout=5) as response:
-                        assert response.status == 200
-                        assert json.load(response)['status'] == 'alive'
-                        break
+                    check_editor_http(f'http://127.0.0.1:{port}')
+                    break
                 except (urllib.error.URLError, OSError):
                     if time.monotonic() >= deadline:
                         raise TimeoutError('code-server did not become ready')
