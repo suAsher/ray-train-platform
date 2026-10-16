@@ -65,7 +65,7 @@ class BuildContract(unittest.TestCase):
         security = folder / 'security-constraints.txt'
         if security.exists():
             constraints += security.read_text()
-        self.assertEqual(len(sources), 24)
+        self.assertEqual(len(sources), 25)
         bootstrap = {'pip': '26.2.1', 'setuptools': '84.0.0', 'wheel': '0.48.0'}
         for wheel in sources:
             pin = f"{wheel['name']}=={wheel['version']}"
@@ -108,7 +108,8 @@ class BuildContract(unittest.TestCase):
         constraints = (folder / 'security-constraints.txt').read_text()
         for pin in ('anyio==4.14.2', 'cryptography==50.0.0', 'gitpython==3.1.60',
                     'multidict==6.9.1', 'pyasn1==0.6.4', 'sqlparse==0.6.0',
-                    'tornado==6.5.9', 'urllib3==2.8.0', 'virtualenv==21.7.13'):
+                    'tornado==6.5.9', 'urllib3==2.8.0', 'virtualenv==21.7.13',
+                    'python-discovery==1.6.3'):
             self.assertIn(pin, constraints)
 
     def test_editor_inherits_safe_base_without_leaking_into_managed_python(self):
