@@ -26,8 +26,6 @@ def main():
                    check=True, timeout=30)
     settings = Path('/home/ray/.local/share/code-server/User/settings.json')
     assert json.loads(settings.read_text())['python.defaultInterpreterPath'] == '/opt/raytrain/environment/bin/python'
-    version = subprocess.check_output(['code-server', '--version'], text=True, timeout=30)
-    assert version.startswith('4.99.4 '), version
     with socket.socket() as listener:
         listener.bind(('127.0.0.1', 0))
         port = listener.getsockname()[1]
@@ -36,6 +34,10 @@ def main():
         # config prevents code-server generating a password in the image layer.
         config = Path(config_directory) / 'config.yaml'
         config.write_text('auth: none\n')
+        version = subprocess.check_output(
+            ['code-server', '--version', '--config', str(config)], text=True, timeout=30)
+        assert version.startswith('4.99.4 '), version
+        assert not Path('/home/ray/.config/code-server/config.yaml').exists()
         process = subprocess.Popen(
             ['code-server', '--bind-addr', f'127.0.0.1:{port}', '--auth', 'none',
              '--disable-telemetry', '--disable-update-check', '--config',
@@ -55,6 +57,7 @@ def main():
                     if time.monotonic() >= deadline:
                         raise TimeoutError('code-server did not become ready')
                     time.sleep(0.2)
+            assert not Path('/home/ray/.config/code-server/config.yaml').exists()
             print(json.dumps({'codeServerHTTP': 'passed', 'version': '4.99.4',
                               'defaultUserDataDirectory': '/home/ray/.local/share/code-server',
                               'managedCanImportJupyterLab': False,
