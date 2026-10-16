@@ -101,4 +101,6 @@ nvcc 编译并执行 `sm_89` 二进制，以及 Torch CUDA extension 编译和�
 
 新镜像的安全传递依赖固定在 `security-constraints.txt`，在官方 Torch wheel 层之后合并到同一约束路径。编辑器独立 venv 继承不可写 Base 的安全依赖与 bootstrap，不再播种旧 pip/setuptools；Jupyter 自身仅安装到 editor。managed Python、默认 kernel 与用户 shell 不继承 editor，构建验收检查 managed 不能导入 JupyterLab。
 
+平台默认内核放在 `/opt/raytrain/jupyter/kernels/`，由 `JUPYTER_PATH` 优先查找，指向 managed Python。底座 `ipykernel` 自带的内核文件保持原始字节；workspace 构建最后实际执行一次零增量 capture，确认编辑器和内核配置没有修改可保存环境的底座包。
+
 编辑器专属 HTML/Markdown 转换依赖固定为 bleach 6.4.0、mistune 3.3.3、nbconvert 7.17.1、soupsieve 2.9.0；仅安装在 editor venv，不更改可保存训练环境的约束或 Base。审计通过仅表示当前数据库未命中；Bleach 非默认 `parse_email=True` 的未确认修复公告仍需按实际调用边界评估。

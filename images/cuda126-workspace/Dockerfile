@@ -40,15 +40,15 @@ COPY images/environment-workspace/jupyter /opt/raytrain/environment-wrappers/jup
 COPY images/environment-workspace/jupyter_smoke.py /usr/local/lib/raytrain-cuda126/jupyter_smoke.py
 COPY images/cuda126-workspace/editor_smoke.py /usr/local/lib/raytrain-cuda126/editor_smoke.py
 ENV JUPYTER_ALLOW_INSECURE_WRITES=1 \
-    JUPYTER_PATH=/usr/local/share/jupyter
+    JUPYTER_PATH=/opt/raytrain/jupyter:/usr/local/share/jupyter
 RUN chmod 0755 /opt/raytrain/environment-wrappers/jupyter \
  && install -d -m 0755 -o ray -g users /home/ray/.config \
       /home/ray/.local /home/ray/.local/share /home/ray/.local/share/jupyter \
       /home/ray/.local/share/code-server /home/ray/.local/share/code-server/User \
  && install -d -m 0700 -o ray -g users /home/ray/.local/share/jupyter/runtime \
- && mkdir -p /usr/local/share/jupyter/kernels/python3 /usr/local/share/jupyter/kernels/raytrain-environment \
- && printf '%s\n' '{"argv":["/opt/raytrain/environment/bin/python","-m","ipykernel_launcher","-f","{connection_file}"],"display_name":"RayTrain CUDA 12.6","language":"python"}' > /usr/local/share/jupyter/kernels/raytrain-environment/kernel.json \
- && cp /usr/local/share/jupyter/kernels/raytrain-environment/kernel.json /usr/local/share/jupyter/kernels/python3/kernel.json \
+ && mkdir -p /opt/raytrain/jupyter/kernels/python3 /opt/raytrain/jupyter/kernels/raytrain-environment \
+ && printf '%s\n' '{"argv":["/opt/raytrain/environment/bin/python","-m","ipykernel_launcher","-f","{connection_file}"],"display_name":"RayTrain CUDA 12.6","language":"python"}' > /opt/raytrain/jupyter/kernels/raytrain-environment/kernel.json \
+ && cp /opt/raytrain/jupyter/kernels/raytrain-environment/kernel.json /opt/raytrain/jupyter/kernels/python3/kernel.json \
  && printf '%s\n' '{"python.defaultInterpreterPath":"/opt/raytrain/environment/bin/python"}' > /home/ray/.local/share/code-server/User/settings.json \
  && chown ray:users /home/ray/.local/share/code-server/User/settings.json
 USER ray
@@ -58,4 +58,5 @@ EXPOSE 8888 8443
 RUN raytrain-cuda126-selfcheck \
  && python /usr/local/lib/raytrain-cuda126/jupyter_smoke.py \
  && python /usr/local/lib/raytrain-cuda126/editor_smoke.py \
+ && python -c "import json, subprocess; captured = json.loads(subprocess.check_output(['raytrain-environment', 'capture'], text=True)); assert not captured['packages']; print(json.dumps({'zeroDeltaCapture': 'passed'}))" \
  && rm -f /home/ray/.local/share/jupyter/runtime/jupyter_cookie_secret
