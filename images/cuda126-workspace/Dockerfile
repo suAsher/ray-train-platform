@@ -29,7 +29,8 @@ ENV JUPYTER_ALLOW_INSECURE_WRITES=1 \
     JUPYTER_PATH=/usr/local/share/jupyter
 RUN chmod 0755 /opt/raytrain/environment-wrappers/jupyter \
  && install -d -m 0755 -o ray -g users /home/ray/.config \
-      /home/ray/.local/share/jupyter /home/ray/.local/share/code-server/User \
+      /home/ray/.local /home/ray/.local/share /home/ray/.local/share/jupyter \
+      /home/ray/.local/share/code-server /home/ray/.local/share/code-server/User \
  && install -d -m 0700 -o ray -g users /home/ray/.local/share/jupyter/runtime \
  && mkdir -p /usr/local/share/jupyter/kernels/python3 /usr/local/share/jupyter/kernels/raytrain-environment \
  && printf '%s\n' '{"argv":["/opt/raytrain/environment/bin/python","-m","ipykernel_launcher","-f","{connection_file}"],"display_name":"RayTrain CUDA 12.6","language":"python"}' > /usr/local/share/jupyter/kernels/raytrain-environment/kernel.json \
