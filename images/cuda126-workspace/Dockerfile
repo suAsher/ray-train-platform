@@ -27,7 +27,9 @@ RUN --mount=from=editor-wheels,source=/wheels,target=/wheels,readonly \
       -r /opt/raytrain/editor-requirements-official.txt \
  && /opt/raytrain/editor/bin/python -m pip install --no-cache-dir \
       --index-url "${PIP_INDEX_URL}" --constraint /opt/raytrain/environment-constraints.txt jupyterlab==4.5.11 jupyter_server==2.21.0 ipykernel==6.29.5 \
- && /opt/raytrain/editor/bin/python -m pip check
+ && /opt/raytrain/editor/bin/python -m pip check \
+ && printf '#!/bin/sh\nexec /opt/raytrain/editor/bin/python -m jupyter "$@"\n' > /opt/raytrain/editor/bin/jupyter \
+ && chmod 0755 /opt/raytrain/editor/bin/jupyter
 COPY --from=code-server /usr/lib/code-server /usr/lib/code-server
 COPY --from=code-server /usr/bin/code-server /usr/bin/code-server
 COPY images/environment-workspace/jupyter /opt/raytrain/environment-wrappers/jupyter
