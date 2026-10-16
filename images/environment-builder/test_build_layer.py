@@ -2,6 +2,7 @@ import importlib.util
 import pathlib
 import json
 import hashlib
+import stat
 import sys
 import tarfile
 import tempfile
@@ -26,14 +27,17 @@ class LayerTest(unittest.TestCase):
             for name in build_layer.FIXED_FILES:
                 (helper / name).write_text('trusted helper')
             baseline, profile = root / 'baseline.json', root / 'profile.json'
+            constraints = root / 'constraints.txt'
             baseline.write_text('{}')
             profile.write_text('{"schemaVersion":1}')
+            constraints.write_text('pip==26.2.1\n')
             for name in ('capture.json', 'requirements.lock', 'materials.json'):
                 (context / name).write_text('{}')
             archive_path = root / 'layer.tar'
-            with mock.patch.object(build_layer, 'ENVIRONMENT', env), mock.patch.object(build_layer, 'RUNTIME_ROOT', helper), mock.patch.object(build_layer, 'BASELINE', baseline), mock.patch.object(runtime, 'ACTIVE_PROFILE', {'schemaVersion': 1}), mock.patch.object(runtime, 'PROFILE', profile), mock.patch.object(runtime, 'verify_active_profile') as verify:
+            with mock.patch.object(build_layer, 'ENVIRONMENT', env), mock.patch.object(build_layer, 'RUNTIME_ROOT', helper), mock.patch.object(build_layer, 'BASELINE', baseline), mock.patch.object(runtime, 'ACTIVE_PROFILE', {'schemaVersion': 1}), mock.patch.object(runtime, 'PROFILE', profile), mock.patch.object(runtime, 'verify_active_profile') as verify, mock.patch.object(build_layer, 'verified_constraints', return_value=constraints) as verify_constraints:
                 digest = build_layer.export_layer(archive_path, context)
             verify.assert_called_once()
+            verify_constraints.assert_called_once()
             self.assertEqual(digest, 'sha256:' + hashlib.sha256(archive_path.read_bytes()).hexdigest())
             with tarfile.open(archive_path) as archive:
                 member = archive.getmember('etc/raytrain/environment-profile.json')
@@ -41,6 +45,53 @@ class LayerTest(unittest.TestCase):
                 self.assertEqual(archive.extractfile(member).read(), profile.read_bytes())
                 self.assertIn('opt/raytrain/environment-baseline.json', archive.getnames())
                 self.assertIn('usr/local/lib/raytrain-environment/environment_runtime.py', archive.getnames())
+                constraints_member = archive.getmember('opt/raytrain/environment-constraints.txt')
+                self.assertEqual((constraints_member.uid, constraints_member.gid, constraints_member.mode), (0, 0, 0o444))
+                self.assertEqual(archive.extractfile(constraints_member).read(), constraints.read_bytes())
+            legacy_path = root / 'legacy-layer.tar'
+            with mock.patch.object(build_layer, 'ENVIRONMENT', env), mock.patch.object(build_layer, 'RUNTIME_ROOT', helper), mock.patch.object(build_layer, 'BASELINE', baseline), mock.patch.object(runtime, 'ACTIVE_PROFILE', None), mock.patch.object(build_layer, 'verified_constraints') as verify_constraints:
+                build_layer.export_layer(legacy_path, context)
+            verify_constraints.assert_not_called()
+            with tarfile.open(legacy_path) as archive:
+                self.assertNotIn('etc/raytrain/environment-profile.json', archive.getnames())
+                self.assertNotIn('opt/raytrain/environment-constraints.txt', archive.getnames())
+
+    def test_constraints_must_match_the_trusted_baseline_and_have_fixed_permissions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            baseline = pathlib.Path(directory) / 'baseline.json'
+            baseline.write_text(json.dumps({'packages': {'wheel': {'version': '0.48.0'}, 'pip': {'version': '26.2.1'}}}))
+            expected = b'pip==26.2.1\nwheel==0.48.0\n'
+            path = mock.MagicMock()
+            path.lstat.return_value = mock.Mock(st_mode=stat.S_IFREG | 0o444, st_uid=0, st_gid=0, st_size=len(expected))
+            path.open.return_value.__enter__.return_value.read.return_value = expected
+            with mock.patch.object(build_layer, 'BASELINE', baseline), mock.patch.object(build_layer, 'CONSTRAINTS', path):
+                self.assertIs(build_layer.verified_constraints(), path)
+                path.open.return_value.__enter__.return_value.read.assert_called_once_with(65537)
+                for mode, owner, group, raw in [(stat.S_IFREG | 0o444, 1000, 0, expected),
+                                                (stat.S_IFREG | 0o444, 0, 100, expected),
+                                                (stat.S_IFREG | 0o644, 0, 0, expected),
+                                                (stat.S_IFLNK | 0o444, 0, 0, expected),
+                                                (stat.S_IFREG | 0o444, 0, 0, expected.replace(b'26.2.1', b'25.2.1'))]:
+                    path.lstat.return_value = mock.Mock(st_mode=mode, st_uid=owner, st_gid=group, st_size=len(raw))
+                    path.open.return_value.__enter__.return_value.read.return_value = raw
+                    with self.subTest(mode=mode, owner=owner, group=group, changed=raw!=expected):
+                        with self.assertRaises(runtime.CaptureError) as caught:
+                            build_layer.verified_constraints()
+                        self.assertEqual(caught.exception.code, 'PACKAGE_MODIFIED')
+                path.lstat.side_effect = FileNotFoundError('fixed file missing')
+                with self.assertRaises(runtime.CaptureError):
+                    build_layer.verified_constraints()
+
+    def test_constraints_are_bounded_before_export(self):
+        with tempfile.TemporaryDirectory() as directory:
+            baseline = pathlib.Path(directory) / 'baseline.json'
+            baseline.write_text(json.dumps({'packages': {'example': {'version': '1' * 65536}}}))
+            path = mock.MagicMock()
+            path.lstat.return_value = mock.Mock(st_mode=stat.S_IFREG | 0o444, st_uid=0, st_gid=0)
+            with mock.patch.object(build_layer, 'BASELINE', baseline), mock.patch.object(build_layer, 'CONSTRAINTS', path):
+                with self.assertRaises(runtime.CaptureError):
+                    build_layer.verified_constraints()
+            path.open.assert_not_called()
 
     def test_build_result_labels_profile_versions_without_changing_capture_contract(self):
         versions = {'python': '3.10', 'pytorch': '2.13.0+cu126', 'cuda': '12.6', 'ray': '2.58.0'}
