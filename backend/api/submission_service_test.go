@@ -424,10 +424,10 @@ func TestRayDataSubmissionNormalizesRuntimeCacheAndResolvedInput(t *testing.T) {
 		Images:        &countingRuntimeImageStore{stubImageStore: stubImageStore{images: []domain.PlatformImage{image}}},
 		RuntimePolicy: runtimecatalog.Policy{ManagedEnabled: true},
 		LocalCache:    rayDataLocalCachePolicy(),
-		DataSpaces: &fakeDataSpaceStore{bindings: []domain.DataMountBinding{{
-			ID: "team", TenantID: "tenant-a", Scope: domain.DataMountScopeTenant,
-			SpaceID: domain.DataSpaceTeamShared, ClaimName: "data-team-a", ReadOnly: true, Status: domain.DataMountBindingReady,
-		}}},
+		DataSpaces: &fakeDataSpaceStore{bindings: []domain.DataMountBinding{
+			{ID: "root", TenantID: "tenant-a", Scope: domain.DataMountScopeTenant, SpaceID: domain.DataSpaceTenantStorageRoot, ClaimName: "data-tenant-a", RootPrefix: "ray-train/", Status: domain.DataMountBindingReady},
+			{ID: "team", TenantID: "tenant-a", Scope: domain.DataMountScopeTenant, SpaceID: domain.DataSpaceTeamShared, ClaimName: "data-team-a", RootPrefix: "ray-train/tenants/tenant-a/shared/", ReadOnly: true, Status: domain.DataMountBindingReady},
+		}},
 		DataSpacesEnabled: true,
 		EnsureTenantRuntime: func(context.Context, string, string, string, string) error {
 			tenantRuntimeEnsureCalls++
@@ -457,7 +457,7 @@ func TestRayDataSubmissionNormalizesRuntimeCacheAndResolvedInput(t *testing.T) {
 		t.Fatalf("ray-data cache was not normalized internally: %+v", job.Spec.Cache)
 	}
 	input := job.Spec.ResolvedDataMounts.Input
-	if input == nil || input.MountPath != domain.DataMountInputPath || !input.ReadOnly {
+	if input == nil || input.MountPath != domain.DataMountInputPath || !input.ReadOnly || input.ClaimName != "data-tenant-a" || input.SubPath != "tenants/tenant-a/shared/datasets/train" {
 		t.Fatalf("ray-data input did not resolve to the read-only governed path: %+v", input)
 	}
 	if tenantRuntimeEnsureCalls != 1 || dataSpaceEnsureCalls != 1 || repository.createCalls != 1 || repository.identityCalls != 1 || repository.created == nil || repository.created.Spec.Cache != job.Spec.Cache {
