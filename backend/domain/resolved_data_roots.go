@@ -29,6 +29,8 @@ type ResolvedDataSpaceRoots struct {
 	IDCSPKSSD      *ResolvedDataRoot `json:"idcSpkSsd,omitempty"`
 }
 
+// Team roots retain their task-time permission: legacy snapshots stay read-only,
+// while new submissions may use the writable tenant-root adapter.
 func (roots ResolvedDataSpaceRoots) Validate() error {
 	checks := []struct {
 		name     string
@@ -49,7 +51,7 @@ func (roots ResolvedDataSpaceRoots) Validate() error {
 		if check.root == nil {
 			continue
 		}
-		if check.root.Space != check.space || check.root.ReadOnly != check.readOnly || strings.TrimSpace(check.root.ClaimName) == "" || !dnsLabel.MatchString(check.root.ClaimName) {
+		if check.root.Space != check.space || (check.space != DataSpaceTeamShared && check.root.ReadOnly != check.readOnly) || strings.TrimSpace(check.root.ClaimName) == "" || !dnsLabel.MatchString(check.root.ClaimName) {
 			return fmt.Errorf("resolved %s data root has an invalid mount contract", check.name)
 		}
 		if check.root.SubPath != "" {

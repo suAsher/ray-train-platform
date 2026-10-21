@@ -177,8 +177,8 @@ func personalDataSpacesForRoot(tenantID, personalRoot, publicRoot string) ([]Dat
 			RootPrefix: personalRoot + "runs/",
 		},
 		{
-			ID: DataSpaceTeamShared, Name: "团队共享数据", Description: "租户内已发布的数据，只读",
-			Provider: StorageProviderTOS, MountPath: TeamStorageMountPath, ReadOnly: true, BrowseEnabled: true,
+			ID: DataSpaceTeamShared, Name: "团队共享数据", Description: "团队共享目录，团队成员可在容器内读写",
+			Provider: StorageProviderTOS, MountPath: TeamStorageMountPath, BrowseEnabled: true,
 			RootPrefix: "ray-train/tenants/" + tenantID + "/shared/",
 		},
 		{

@@ -201,6 +201,13 @@ func (h *Handler) resolveWorkspaceDataMountPlan(ctx context.Context, principal a
 		}
 	}
 	tenantRoot, hasTenantRoot := ready[domain.DataSpaceTenantStorageRoot]
+ // The historical team adapter is read-only. New writable aliases must use
+ // the existing writable tenant-root claim, never upgrade a live CSI volume.
+ if _, hasTeam := ready[domain.DataSpaceTeamShared]; hasTeam &&
+  (strings.TrimSpace(tenantRoot.ClaimName) == "" || tenantRoot.ReadOnly || tenantRoot.RootPrefix != "ray-train/") {
+  return k8s.DataMountPlan{}, ErrSubmissionDataMountNotReady
+ }
+
 	root := func(space domain.DataSpaceID, readOnly bool) *k8s.DataMountRoot {
 		binding, ok := ready[space]
 		if !ok || strings.TrimSpace(binding.ClaimName) == "" {
@@ -227,7 +234,7 @@ func (h *Handler) resolveWorkspaceDataMountPlan(ctx context.Context, principal a
 		return &k8s.DataMountRoot{ClaimName: binding.ClaimName, ReadOnly: readOnly}
 	}
 	plan := k8s.DataMountPlan{
-		Personal: root(domain.DataSpaceWorkspace, false), Team: root(domain.DataSpaceTeamShared, true), Public: root(domain.DataSpacePublic, true),
+		Personal: root(domain.DataSpaceWorkspace, false), Team: root(domain.DataSpaceTeamShared, false), Public: root(domain.DataSpacePublic, true),
 		IDCOriginal: root(domain.DataSpaceIDCOriginal, true), IDCWellspiking: root(domain.DataSpaceIDCWellspiking, true), IDCShared: root(domain.DataSpaceIDCShared, true), IDCSPKHybrid: root(domain.DataSpaceIDCSPKHybrid, true), IDCSPKSSD: root(domain.DataSpaceIDCSPKSSD, true),
 	}
 	if plan.Validate() != nil {

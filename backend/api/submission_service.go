@@ -788,6 +788,13 @@ func (service *SubmissionService) resolveLogicalDataMounts(ctx context.Context, 
 		ready[binding.SpaceID] = binding
 	}
 	tenantRoot := ready[domain.DataSpaceTenantStorageRoot]
+ // The historical team adapter is read-only. New writable aliases must use
+ // the existing writable tenant-root claim, never upgrade a live CSI volume.
+ if _, hasTeam := ready[domain.DataSpaceTeamShared]; hasTeam &&
+  (strings.TrimSpace(tenantRoot.ClaimName) == "" || tenantRoot.ReadOnly || tenantRoot.RootPrefix != "ray-train/") {
+  return domain.ResolvedDataSpaceRoots{}, ErrSubmissionDataMountNotReady
+ }
+
 	publicRoot, err := service.publicDataRootForTenant(principal.TenantID)
 	if err != nil {
 		return domain.ResolvedDataSpaceMounts{}, ErrSubmissionDataMountNotReady
@@ -938,7 +945,7 @@ func (service *SubmissionService) resolveDataSpaceRoots(ctx context.Context, pri
 		return &domain.ResolvedDataRoot{Space: space, ClaimName: binding.ClaimName, ReadOnly: readOnly}
 	}
 	roots := domain.ResolvedDataSpaceRoots{
-		Personal: root(domain.DataSpaceWorkspace, false), Team: root(domain.DataSpaceTeamShared, true), Public: root(domain.DataSpacePublic, true),
+		Personal: root(domain.DataSpaceWorkspace, false), Team: root(domain.DataSpaceTeamShared, false), Public: root(domain.DataSpacePublic, true),
 		IDCOriginal: root(domain.DataSpaceIDCOriginal, true), IDCWellspiking: root(domain.DataSpaceIDCWellspiking, true), IDCShared: root(domain.DataSpaceIDCShared, true), IDCSPKHybrid: root(domain.DataSpaceIDCSPKHybrid, true), IDCSPKSSD: root(domain.DataSpaceIDCSPKSSD, true),
 	}
 	if service.idcDataSpacesEnabled && (roots.IDCOriginal == nil || roots.IDCWellspiking == nil || roots.IDCShared == nil || roots.IDCSPKHybrid == nil || roots.IDCSPKSSD == nil) {
