@@ -916,12 +916,12 @@ func (service *SubmissionService) resolveDataSpaceRoots(ctx context.Context, pri
 		}
 	}
 	tenantRoot := ready[domain.DataSpaceTenantStorageRoot]
- // The historical team adapter is read-only. New writable aliases must use
- // the existing writable tenant-root claim, never upgrade a live CSI volume.
- if _, hasTeam := ready[domain.DataSpaceTeamShared]; hasTeam &&
-  (strings.TrimSpace(tenantRoot.ClaimName) == "" || tenantRoot.ReadOnly || tenantRoot.RootPrefix != "ray-train/") {
-  return domain.ResolvedDataSpaceRoots{}, ErrSubmissionDataMountNotReady
- }
+	// The historical team adapter is read-only. New writable aliases must use
+	// the existing writable tenant-root claim, never upgrade a live CSI volume.
+	if _, hasTeam := ready[domain.DataSpaceTeamShared]; hasTeam &&
+		(strings.TrimSpace(tenantRoot.ClaimName) == "" || tenantRoot.ReadOnly || tenantRoot.RootPrefix != "ray-train/") {
+		return domain.ResolvedDataSpaceRoots{}, ErrSubmissionDataMountNotReady
+	}
 
 	publicRoot, err := service.publicDataRootForTenant(principal.TenantID)
 	if err != nil {

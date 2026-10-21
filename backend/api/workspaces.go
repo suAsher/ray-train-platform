@@ -201,12 +201,12 @@ func (h *Handler) resolveWorkspaceDataMountPlan(ctx context.Context, principal a
 		}
 	}
 	tenantRoot, hasTenantRoot := ready[domain.DataSpaceTenantStorageRoot]
- // The historical team adapter is read-only. New writable aliases must use
- // the existing writable tenant-root claim, never upgrade a live CSI volume.
- if _, hasTeam := ready[domain.DataSpaceTeamShared]; hasTeam &&
-  (strings.TrimSpace(tenantRoot.ClaimName) == "" || tenantRoot.ReadOnly || tenantRoot.RootPrefix != "ray-train/") {
-  return k8s.DataMountPlan{}, ErrSubmissionDataMountNotReady
- }
+	// The historical team adapter is read-only. New writable aliases must use
+	// the existing writable tenant-root claim, never upgrade a live CSI volume.
+	if _, hasTeam := ready[domain.DataSpaceTeamShared]; hasTeam &&
+		(strings.TrimSpace(tenantRoot.ClaimName) == "" || tenantRoot.ReadOnly || tenantRoot.RootPrefix != "ray-train/") {
+		return k8s.DataMountPlan{}, ErrSubmissionDataMountNotReady
+	}
 
 	root := func(space domain.DataSpaceID, readOnly bool) *k8s.DataMountRoot {
 		binding, ok := ready[space]

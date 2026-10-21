@@ -245,15 +245,17 @@ func (plan DataMountPlan) Validate() error {
 			return err
 		}
 	}
- // Existing workspace/job snapshots may still name a read-only team root.
- // New plans use a writable alias; validate confinement without rewriting it.
- if plan.Team != nil {
-  if err := plan.Team.validate("team", plan.Team.ReadOnly); err != nil { return err }
- }
- for _, root := range []struct {
-  name string
-  root *DataMountRoot
- }{
+	// Existing workspace/job snapshots may still name a read-only team root.
+	// New plans use a writable alias; validate confinement without rewriting it.
+	if plan.Team != nil {
+		if err := plan.Team.validate("team", plan.Team.ReadOnly); err != nil {
+			return err
+		}
+	}
+	for _, root := range []struct {
+		name string
+		root *DataMountRoot
+	}{
 		{name: "public", root: plan.Public},
 		{name: "IDC original", root: plan.IDCOriginal},
 		{name: "IDC Wellspiking", root: plan.IDCWellspiking},
@@ -415,29 +417,37 @@ func pvcMount(volumeName, mountPath, subPath string, readOnly bool) map[string]a
 // share a tenant root.  The PVC itself stays writable when any mount needs to
 // write; read-only user-visible paths are enforced at the container mount.
 func ensurePVCVolume(volumes []any, preferredName, claimName string, readOnly bool) (string, []any) {
- if name := pvcVolumeName(volumes, claimName); name != "" {
-  if !readOnly {
-   // A source staged read-only cannot serve a later writable alias. Copy the
-   // maps rather than changing another mount plan's source; individual public
-   // and input volumeMounts retain their own readOnly flags.
-   for index, value := range volumes {
-    volume, ok := value.(map[string]any)
-    if !ok || volume["name"] != name { continue }
-    claim, ok := volume["persistentVolumeClaim"].(map[string]any)
-    if !ok || claim["readOnly"] != true { continue }
-    writableClaim := make(map[string]any, len(claim))
-    for key, value := range claim { writableClaim[key] = value }
-    writableClaim["readOnly"] = false
-    writableVolume := make(map[string]any, len(volume))
-    for key, value := range volume { writableVolume[key] = value }
-    writableVolume["persistentVolumeClaim"] = writableClaim
-    updated := append([]any(nil), volumes...)
-    updated[index] = writableVolume
-    return name, updated
-   }
-  }
-  return name, volumes
- }
+	if name := pvcVolumeName(volumes, claimName); name != "" {
+		if !readOnly {
+			// A source staged read-only cannot serve a later writable alias. Copy the
+			// maps rather than changing another mount plan's source; individual public
+			// and input volumeMounts retain their own readOnly flags.
+			for index, value := range volumes {
+				volume, ok := value.(map[string]any)
+				if !ok || volume["name"] != name {
+					continue
+				}
+				claim, ok := volume["persistentVolumeClaim"].(map[string]any)
+				if !ok || claim["readOnly"] != true {
+					continue
+				}
+				writableClaim := make(map[string]any, len(claim))
+				for key, value := range claim {
+					writableClaim[key] = value
+				}
+				writableClaim["readOnly"] = false
+				writableVolume := make(map[string]any, len(volume))
+				for key, value := range volume {
+					writableVolume[key] = value
+				}
+				writableVolume["persistentVolumeClaim"] = writableClaim
+				updated := append([]any(nil), volumes...)
+				updated[index] = writableVolume
+				return name, updated
+			}
+		}
+		return name, volumes
+	}
 	return preferredName, append(volumes, pvcVolume(preferredName, claimName, readOnly))
 }
 
