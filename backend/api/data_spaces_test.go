@@ -248,8 +248,8 @@ func TestDataSpacesListReportsPrincipalWriteCapabilityWithoutChangingMountSemant
 				if got, want := space.CanWrite, test.writable[space.ID]; got != want {
 					t.Errorf("space %s canWrite=%v want=%v", space.ID, got, want)
 				}
-				if space.ID == domain.DataSpaceTeamShared && !space.ReadOnly {
-					t.Error("team publishing capability must not make the Pod mount writable")
+				if space.ID == domain.DataSpaceTeamShared && space.ReadOnly {
+					t.Error("team mount must be writable independently of web publishing capability")
 				}
 				if space.Provider == domain.StorageProviderIDC && (space.CanWrite || !space.ReadOnly) {
 					t.Errorf("IDC space must remain read-only: %#v", space)

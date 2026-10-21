@@ -13,9 +13,9 @@ func TestResolvedDataSpaceRootsAcceptsPersonalAndReadonlyRoots(t *testing.T) {
 	}
 }
 
-func TestResolvedDataSpaceRootsRejectsWritableSharedRoot(t *testing.T) {
+func TestResolvedDataSpaceRootsRejectsWritablePublicRoot(t *testing.T) {
 	roots := ResolvedDataSpaceRoots{
-		Team: &ResolvedDataRoot{Space: DataSpaceTeamShared, ClaimName: "data-team-a"},
+		Public: &ResolvedDataRoot{Space: DataSpacePublic, ClaimName: "data-public"},
 	}
 	if err := roots.Validate(); err == nil {
 		t.Fatal("writable shared root was accepted")
