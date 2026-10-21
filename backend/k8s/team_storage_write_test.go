@@ -41,3 +41,12 @@ func TestTeamStorageRenderPreservesWritableAndLegacySnapshots(t *testing.T) {
   }
  }
 }
+
+func TestTeamStoragePVCSourceAllowsReadOnlyAndWritableAliases(t *testing.T) {
+ original := []any{pvcVolume("public-first", "data-tenant-a", true)}
+ name, updated := ensurePVCVolume(original, "team", "data-tenant-a", false)
+ if name != "public-first" || len(updated) != 1 { t.Fatalf("source duplicated: %s %#v", name, updated) }
+ before := original[0].(map[string]any)["persistentVolumeClaim"].(map[string]any)
+ after := updated[0].(map[string]any)["persistentVolumeClaim"].(map[string]any)
+ if before["readOnly"] != true || after["readOnly"] != false { t.Fatalf("source permissions or immutability broken: before=%#v after=%#v", before, after) }
+}
