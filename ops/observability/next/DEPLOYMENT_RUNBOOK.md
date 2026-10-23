@@ -1,8 +1,12 @@
 # 训练平台 VKE 可观测性：架构、部署流程与操作记录
 
-更新日期：2026-10-09，时间均为北京时间，另有标注除外。
+更新日期：2026-10-23，时间均为北京时间，另有标注除外。
 
-**最新推进：首波真实业务指标已上线。** 五组 27 个目标全部 UP，VM 中核对到 72 张 GPU、12 个节点和 2 个后端 Pod；原 Prometheus 的两个实例均 89/89 UP，新 Grafana 看板 22 个表达式查询成功。319 项回归、默认与业务模式边界校验及服务端 dry-run 通过。详见文末[首波业务接入记录](#2026-10-09-首波业务指标与日志自监控接入)。这不代表 SDK、正式 Trace/分析日志、外部夜莺入口和真实通知已经交付。
+**2026-10-23 最新变更：夜莺、独立 Grafana 及专用数据库/Redis/云盘整组退场完成。** 用户明确不保留两套专用数据库及 9 块共 180Gi 云盘；临时 UI 31700 / 31701 一并移除。原 monitoring Grafana、Prometheus、Alloy、Loki、VM、ClickHouse、OTel 和平台后端遥测保留。九块 PVC/PV 已消失，CSI EBS 驱动对精确对应的九块盘均返回 `Successful delete volume`（本次未另行查询云 API）；两个 namespace、专用 Operator、Redis/UI release 均已移除。完整范围和最终验收见 [退场记录](RETIREMENT_20261023.md)。两个专用 CNPG Operator 卸载后仍保留共享 CRD，避免把全局 API 定义误当专属数据库资源。
+
+**本文以下 10 月 8–13 日内容及架构图片为历史记录，不得照旧重部署已退场组件。** 原“夜莺统一告警”和临时 NodePort 入口仅描述当时状态，不能作为当前可用能力或访问方式。
+
+**历史推进：首波真实业务指标已上线。** 五组 27 个目标全部 UP，VM 中核对到 72 张 GPU、12 个节点和 2 个后端 Pod；原 Prometheus 的两个实例均 89/89 UP，新 Grafana 看板 22 个表达式查询成功。319 项回归、默认与业务模式边界校验及服务端 dry-run 通过。详见文末[首波业务接入记录](#2026-10-09-首波业务指标与日志自监控接入)。这不代表 SDK、正式 Trace/分析日志、外部夜莺入口和真实通知已经交付。
 
 展示资料：[高清架构图](../../../docs/architecture/raytrain-observability-vke-20261009.png) · [可编辑 SVG](../../../docs/architecture/raytrain-observability-vke-20261009.svg) · [缩放展示页](../../../docs/architecture/raytrain-observability-vke-20261009.html) · [下一批应用接入合同](../../../docs/superpowers/specs/2026-10-09-platform-telemetry-integration.md)。正式告警按用户确认统一由夜莺负责，通知渠道由用户后续 UI 配置。
 

@@ -1,10 +1,30 @@
 # VKE 可观测性部署与运维手册
 
-本文面向训练平台维护人员，说明当前组件由谁部署、在哪里修改配置、如何使用 UI，以及怎样升级和回退。范围仅为训练平台 VKE；原 Prometheus、Grafana、Alloy、Loki 继续运行，新 VictoriaMetrics、夜莺、OTel、ClickHouse 和独立 Grafana 是增量建设。
+本文面向训练平台维护人员。当前状态为 **2026-10-23 夜莺与独立 Grafana 整组卸载完成**；最终结果和逐盘释放证据见 [退场记录](RETIREMENT_20261023.md)。
 
-**当前检查点：2026-10-13。** 后端 HTTP 遥测及正式 OTel/ClickHouse 管道已部署；独立 Grafana 与专用三实例 PostgreSQL 已运行。临时 31701 已通过 `observability-ui` revision 2 切到新实例，登录、四类数据源、业务看板、WebSocket、共享持久化与隔离备份恢复均验收通过。新 Grafana 使用独立原生账号；旧 SQLite 账号和 UI 手工配置未迁入，旧实例保留回退。
+用户明确不保留夜莺、独立 Grafana 的专用数据库和云盘。退场范围包含两个应用、两套专用 PostgreSQL、夜莺 Redis/Sentinel、两个专用 CNPG Operator 及 `observability-ui`。临时 NodePort **31700 / 31701 已随 UI release 移除，不再作为运维入口**。原 `monitoring` Grafana、Prometheus、Alloy、Loki、VMCluster、OTel、ClickHouse 与平台 HTTP 遥测保留。原 Grafana不自动继承被删除独立实例的用户、看板、数据源或数据库内容。
 
-当前发布记录以 [DEPLOYMENT_RUNBOOK.md](DEPLOYMENT_RUNBOOK.md) 的 **2026-10-09 及后续章节**为准。各产品 README 和迁移方案中保留了早期 `observability-*` 命名空间、单副本 bootstrap 和“尚未部署”的历史描述；这些不是当前执行入口，不要照抄旧 namespace 或旧发布命令。原四个 `observability-*` 命名空间和专属云盘已经退场，原业务的 `monitoring` / `loki` 未删除。
+已释放的专属存储为 **9 PVC/PV、180Gi**：夜莺 PostgreSQL 3 × 20Gi、Redis 3 × 20Gi、Grafana PostgreSQL 3 × 20Gi。精确九块 PVC/PV 已消失，CSI EBS 驱动对对应九块云盘均返回 `Successful delete volume`，本次未另行查询云 API。`nightingale`、`grafana` 两个 namespace 已消失，两个专用 Operator、Redis/UI release 和三个 Grafana VMServiceScrape 均已移除。共享 CNPG CRD 保留；两个作用域独立的 Operator 及 webhook 随各自专用数据库退场。
+
+当前保留链路如下，实际验收见退场记录：
+
+```mermaid
+flowchart LR
+  E[GPU / 节点 / Kubernetes / 后端指标] --> P[原 Prometheus]
+  E --> A[VMAgent 双实例]
+  A --> W[VMAuth → VMInsert]
+  W --> S[VMStorage → VMSelect → VMAuth]
+  L[容器日志] --> AL[Alloy] --> K[Loki / TOS]
+  K --> B[平台后端授权查询]
+  B --> U[Portal / CLI 日志]
+  B --> O[OTel Gateway] --> C[ClickHouse / Keeper]
+  P --> G[原 monitoring Grafana]
+  P --> AM[原规则 / Alertmanager]
+```
+
+旧 Grafana 两副本健康，ClusterIP Service 为 `monitoring/prometheus-grafana`，`/api/health` 返回数据库正常、版本 13.1.1；本次没有新增对外入口。保留 VM、ClickHouse 和 OTel 的数据接入不等于旧 Grafana 已配置对应数据源。夜莺退场后不再提供夜莺规则管理或通知入口；现有 Prometheus/Alertmanager 保留，新告警治理方案尚未重新选定，不宣称已完成替代。后续不得直接照旧安装命令重建退场组件。
+
+**以下第 1–8 节保留 2026-10-13 的部署与维护历史。** 其中夜莺、独立 Grafana、31700/31701、79 Pod/1130Gi、专用数据库恢复和告警配置等描述只适用于当时；相关命令不是当前执行入口。旧架构图片也停留在 10 月 13 日。仍保留组件的配置源可参考下方表格，但每次变更必须重新核对实际运行配置、所有权与当次授权。
 
 ## 1. 从哪里维护
 

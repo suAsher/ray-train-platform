@@ -1,4 +1,8 @@
-# VKE 新可观测性体系：增量建设
+# VKE 可观测性体系
+
+**当前状态：2026-10-23 夜莺与独立 Grafana 整组退场完成。** 用户已明确要求删除夜莺、独立 Grafana 及其两套专用 PostgreSQL、Redis、PVC/PV 和专属云盘；不保留这两套数据库。临时 UI 31700 / 31701 随 `observability-ui` 移除。旧 `monitoring` Grafana、Prometheus、Alloy、Loki，以及 VM、ClickHouse、OTel 和平台后端遥测继续保留。9 块专属 PVC/PV 均已消失，CSI EBS 驱动对精确对应的 9 块云盘均返回 `Successful delete volume`，共释放申请容量 180Gi；本次未另行查询云 API。两个 namespace 及专用 Operator、Redis、UI release 均已移除。
+
+以 [2026-10-23 退场记录](RETIREMENT_20261023.md) 和 [运维手册当前状态](OPERATIONS.md) 为准。**下文 10 月 8–13 日安装、入口、资源统计及架构图均为历史记录；禁止照旧重部署夜莺、独立 Grafana 或临时 UI。** 10 月 13 日图中仍含退场组件，不代表当前拓扑。
 
 入口：[部署文件、配置 UI 与日常运维手册](OPERATIONS.md) · [架构、部署流程与实际操作记录](DEPLOYMENT_RUNBOOK.md) · [详细架构设计](../../../docs/superpowers/specs/2026-10-08-vke-observability-platform-design.md)
 
