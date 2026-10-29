@@ -1,183 +1,78 @@
-# Ray 分布式训练平台
+# RayTrain
 
-面向算法工程师与平台管理员的多租户 GPU 训练基础设施。平台同时提供兼容的 **Ray 编排 DDP**（`ray-ddp`）和受门禁保护的 **Ray Train 托管**（`ray-train`）双引擎。用户通过 Web Portal、`spk-rayjob` 或原生 Ray Jobs API 提交代码；平台负责身份鉴权、数据挂载、GPU 配额、Kueue 排队、RayCluster 生命周期、日志指标与训练产物。
+**A self-hosted, multi-tenant GPU training platform for Kubernetes.**
 
-训练代码随任务上传，镜像只提供固定的 CUDA、PyTorch、Ray 和系统依赖。修改 Python 或配置文件后可以直接重新提交，不需要为每次代码变更重建镜像。
+在一个 Web 控制台中管理团队、GPU 额度、训练任务、运行日志和调试环境。Go API 与 Vue UI 位于同一仓库，构建成一个镜像、一个服务入口；训练计算由 KubeRay 和 Kueue 承担。
 
-![Ray 分布式训练平台组件级生产架构](docs/architecture/ray-training-platform-production-architecture-v4.svg)
-
-## 平台解决什么问题
-
-一条训练任务从提交到结束会经过同一条受控链路：
-
-```text
-选择代码、镜像和数据
-        ↓
-交互式 GPU 调试
-        ↓
-Portal / spk-rayjob / Ray Jobs API
-        ↓
-身份、租户配额与 Kueue 准入
-        ↓
-KubeRay 创建任务专属 RayCluster
-        ↓
-单机多卡或多机多卡训练
-        ↓
-日志、GPU 指标、Loss、Checkpoint 与训练产物
+```mermaid
+flowchart LR
+  U[浏览器 / CLI] --> P[RayTrain
+Vue UI + Go API]
+  P --> DB[(PostgreSQL)]
+  P --> Q[Kueue
+配额准入 / 优先级 / TAS]
+  Q --> R[KubeRay
+任务独立 RayCluster]
+  R --> W[GPU Workers]
+  W --> S[(管理员登记的 PVC)]
+  P -. 可选 .-> O[Loki / Prometheus / MLflow]
 ```
 
-平台用户不需要 Kubernetes kubeconfig，也不接触对象存储 AK/SK。Kubernetes、TOS/CSI、镜像仓库和监控系统由平台控制面统一管理。
+## 能力
 
-## 核心能力
-
-| 能力 | 当前实现 |
+| 能力 | 设计 |
 | --- | --- |
-| 任务提交 | Web Portal、`spk-rayjob`、原生 Ray Jobs API；三种入口统一进入平台任务记录。 |
-| 分布式训练 | KubeRay 管理 RayJob/RayCluster；Ray 编排 DDP 保持既有 PyTorch DDP/NCCL 兼容性，Ray Train 托管提供受管 worker、checkpoint/resume 和性能诊断。 |
-| 调度与配额 | Kueue 负责队列和准入；平台按 Ready GPU 节点动态计算物理容量，团队配额由管理员单独分配。 |
-| 交互式调试 | JupyterLab、VS Code、Terminal 连接 GPU Worker；工作区、个人数据和 Python 虚拟环境持久化。 |
-| 数据治理 | TOS、FSX、已登记 IDC 数据源和任务级 NVMe 缓存使用稳定逻辑路径；训练 Pod 不持有对象存储长期凭据。 |
-| 代码与镜像 | 代码通过 working-dir、工作区快照或固定 Git commit 提交；训练镜像按不可变 digest 登记。 |
-| 可观测性 | Loki/Alloy 提供任务日志，Prometheus Operator/DCGM 提供 GPU 和集群指标，Grafana 提供仪表盘；平台实验中心提供受身份过滤的 MLflow 视图，原生 MLflow 提供完整管理界面。 |
-| 训练诊断 | 任务状态、排队时间、运行时间、Pod 日志流、Ray Dashboard 和 GPU 使用率统一关联到平台任务 ID；受管入口还自动关联训练产物。 |
-| 断点续训 | Checkpoint 写入个人结果空间；新任务可把历史任务结果只读挂载后显式 resume。 |
-| 多租户管理 | 用户、角色、租户、团队 GPU 配额、镜像、Git 凭据和数据发布均由管理员页面管理。 |
+| 多租户 | 平台成员与角色、租户命名空间、事务内 GPU 配额校验 |
+| GPU 调度 | 动态物理容量、Kueue 准入、可选 hostname TAS 与全局装箱偏好 |
+| 团队与节点 | 团队局部性作为装箱同分偏好；专属节点使用硬约束 |
+| 分布式训练 | 任务独立 RayCluster；Ray 编排 DDP；可选受管 Ray Train |
+| 可移植存储 | 管理员登记租户 PVC；输入/Checkpoint 只读、结果可写 |
+| 身份认证 | 内置账号与 PAT；可选 OIDC，无外部 Portal 强依赖 |
+| 调试与观测 | 工作区、JupyterLab、VS Code；可选 Loki、Prometheus、MLflow 接入 |
+| 交付 | 同仓前后端、单应用镜像、Helm、GitHub Actions |
 
-## 架构组成
+装箱用于减少新分配造成的碎片，不会移动运行中的任务，也不承诺碎片为零。优先级影响准入排序，默认关闭抢占。详见 [GPU 调度设计](docs/SCHEDULING.md)。
 
-平台分为六个边界清晰的层：
+## 开始使用
 
-1. **用户与入口**：Web Portal、CLI/SDK、本地账号与可选的 Keycloak OIDC。
-2. **平台控制面**：Vue 前端、Go API、任务控制器、PostgreSQL 元数据和 CLI 发布服务。
-3. **集群控制与调度**：Kubernetes、KubeRay、Kueue、RBAC、NetworkPolicy 和 GPU 节点选择策略。
-4. **Ray 运行时**：调试环境使用 Dev RayCluster；批量训练按任务选择 Ray 编排 DDP 或 Ray Train 托管，均使用任务专属 Ray head 与 GPU worker。
-5. **数据与存储**：TOS/FSX 上的个人、团队、公共空间，已登记 IDC 数据源，以及可回收 NVMe 缓存；持久存储是数据真相。
-6. **可观测性**：Loki 日志、Prometheus 指标、Grafana 看板、MLflow 实验和运行期 Ray Dashboard。
+需要具备 NVIDIA GPU 驱动与 device plugin、动态存储类、KubeRay 和 Kueue 的 Kubernetes 集群。平台 Chart 不安装这些集群前置组件。
 
-完整网络边界、资源所有权、数据契约和高可用说明见[生产架构](docs/ARCHITECTURE.md)。
+```bash
+git clone https://github.com/suAsher/ray-train-platform.git
+cd ray-train-platform
 
-## 数据目录契约
-
-用户代码只依赖稳定容器路径，不依赖桶名、PVC 名或节点目录：
-
-| 路径 | 权限 | 用途 |
-| --- | --- | --- |
-| `/workspace` | 读写 | 调试代码、配置、编辑器状态和用户虚拟环境。 |
-| `/mnt/storage/me` | 读写 | 个人文件、训练结果和 Checkpoint。 |
-| `/mnt/storage/team` | Pod 内只读 | 团队发布的数据集。TenantAdmin 可通过 Portal 发布内容。 |
-| `/mnt/storage/public` | Pod 内只读 | 平台管理员发布的公共训练数据。 |
-| `/mnt/.original`、`/mnt/.wellspiking`、`/mnt/.shared`、`/mnt/.spk-hybrid`、`/mnt/.spk-ssd` | 只读 | 平台登记的 IDC NFS 数据源；所有调试与训练 Pod 可见。 |
-
-训练入口会进一步注入：
-
-```text
-PLATFORM_DATASET_PATH     本任务选中的只读输入目录
-PLATFORM_OUTPUT_PATH      本任务独立的个人结果目录
-PLATFORM_CHECKPOINT_PATH  续训时挂载的历史结果目录（可选）
+# 替换为有权限推送且集群能拉取的仓库。
+REGISTRY=registry.example.com/your-project IMAGE_TAG=dev \
+  BUILD_TARGETS=platform,source-materializer,workspace,train-pytorch \
+  PUSH_IMAGE=true bash build-image.sh
 ```
 
-推荐训练代码优先读取这些环境变量；用户也可以在调试环境中直接浏览上述稳定路径。详细示例见[用户手册](docs/USER_GUIDE.md)和[新训练代码接入手册](docs/NEW_TRAINING_CODE_GUIDE.md)。
+然后按 [部署指南](docs/DEPLOYMENT.md) 创建 Secret、填写镜像摘要并安装 Helm。示例不是已经发布的镜像清单，不要直接拉取占位镜像。
 
-公共数据的唯一对象存储根是 `tos://shanghai-data-transfer/ray-train/public/`，在容器内映射为 `/mnt/storage/public`。当前全量原始数据主要发布在 `/mnt/storage/public/labeled/`，训练索引和版本化样例位于公共根的其他子目录。提交任务时选择某个子目录后，`PLATFORM_DATASET_PATH` 就指向该子目录；训练代码中的路径必须相对于这个选择结果，不能再重复拼接公共根或所选目录名。
+基础部署使用 **固定 Git commit + 管理员登记的 PVC + Web 提交**。无需公司服务、IDC 挂载或对象存储。调试工作区、working-dir 上传、快照及逻辑个人/团队/公共数据空间需要额外的存储配置，见 [存储指南](docs/STORAGE.md)。
 
-## 三种提交入口
+## 项目边界
 
-| 入口 | 适用场景 | 代码如何进入集群 |
-| --- | --- | --- |
-| Web Portal | 初次使用、需要目录选择和可视化配置 | 调试工作区快照或固定 Git commit。 |
-| `spk-rayjob` | 用户在电脑、服务器或集群外 GPU 节点频繁修改代码 | 每次提交自动打包当前 working directory。 |
-| 原生 Ray Jobs API | 已有 Ray 自动化或 SDK 集成 | `ray job submit --working-dir .` 上传当前代码。 |
+- 当前基础存储模式是 Kubernetes PVC；对象存储集成是可选的 TOS/FSX，实现尚未抽象成通用 S3 后端。
+- Helm quickstart 的单实例 PostgreSQL 用于开发与评估。生产配置要求外部 PostgreSQL、明确的备份策略和不可变镜像摘要。
+- TAS 默认关闭，需要配置兼容的 Kueue 控制器及拓扑资源后验收。
+- 公开版本移除了专属 Portal、功能仓同步、管理员数据同步以及自动 IDC 目录挂载。旧数据迁移文件保留用于识别既有 schema，不代表旧功能仍开放。
+- 一个集群按当前固定资源名部署一套 RayTrain。平台控制面拥有管理租户资源的集群权限，不是无需授权的普通 namespace 应用。
 
-每个任务都会自动创建独立 RayCluster。用户不需要编写 RayCluster YAML；任务进入终态后，RayCluster 按保留窗口回收，历史日志和状态继续从平台查看。Portal 与 `spk-rayjob` 自动把 checkpoint/产物绑定到任务；原生 Ray CLI 手工输出仍保存在个人目录，但不自动获得任务产物浏览和一键续训。
+## 文档与开发
 
-完整命令、参数和 BEVFusion 示例见[多方式提交手册](docs/SUBMIT_GUIDE.md)。
-
-生产集群现已部署 KubeRay 1.6.2，并向全部团队开放 Ray Train 2.56.1。新建任务可在“直接读取 / NVMe 预热 / Ray Data + NVMe”之间选择；既有 Ray DDP 任务与镜像保持兼容。入口、数据模式、代码适配、checkpoint/resume 与验收边界见 [Ray Train 托管指南](docs/RAY_TRAIN_MANAGED_GUIDE.md)。
-
-## 已验证基线
-
-当前交付基线已在真实双节点 GPU 资源池完成以下验证：
-
-- 两个 BEVFusion 分支分别通过 Web Portal、`spk-rayjob` 和原生 Ray Jobs API 提交。
-- 每个任务使用 2 个 Ray Worker、每个 Worker 8 GPU，两个 Worker 分布在不同节点。
-- 日志包含 NCCL 初始化、真实 forward/backward、Loss、验证和 Checkpoint。
-- 128 样本 smoke 验证了平台链路和代码兼容性；它不等同于全量数据的模型收敛验收。
-- 公共 FZ 合并数据已验证为 15,228 条训练样本、1,620 条验证样本，并通过挂载内路径抽查。
-- 全量 FZ 数据已完成 2 节点 × 8 GPU、16 rank、1 epoch 的长时执行复验：3,585/3,585 个训练 iteration、完整验证、Checkpoint、`mAP=0.6090`、`NDS=0.4909`，任务 `job-20c0affe64d0a638f1f348c8` 终态为 `SUCCEEDED`。该结果验证完整执行链路，不替代算法团队的多 epoch 收敛验收。
-- 2026-08-22 又从两个 Git 分支的全新 checkout 出发，分别以 Portal、`spk-rayjob`、原生 Ray Jobs API 完成 6 条 `2 × 8 GPU` smoke；所有任务成功、MLflow run 为 `FINISHED`，受管入口的产物目录可见 checkpoint、配置和拓扑文件。
-- 另以临时普通用户完成公共目录浏览、960 个文件路径预检、个人结果写入、租户隔离和账号停用验收；临时账号随后删除，存储按审计策略保留。
-
-具体验收命令、代码补丁和边界见 [BEVFusion 交付手册](docs/BEVFUSION_RUNBOOK.md)。
-
-## 当前能力边界
-
-为避免把规划能力写成已交付能力，当前状态明确如下：
-
-- Frontend、Backend 和 CLI 发布服务支持多副本；内置 PostgreSQL 当前为单实例。严格控制面高可用应迁移到外部 HA PostgreSQL。
-- 本地账号仍保留；Keycloak/OIDC 已作为架构接入点设计，但当前环境未强制启用。
-- GPU 节点双 NVMe 缓存基础设施、两套 StorageClass 与任务级预热已经完成交付；任务默认仍为 `off`，用户按需选择 `runtime` 或输入预热。缓存是可回收副本，Checkpoint 和结果仍写个人持久空间。
-- IDC 数据源可由管理员登记为受控只读挂载；IDC 与 TOS 的用户自助双向迁移尚未作为生产入口开放。
-- Ray Dashboard 只用于运行期诊断。任务集群回收后，历史分析使用平台任务详情、Loki、Prometheus/Grafana 和训练产物。
-- MLflow 独立运行于 `mlflow-system`，使用自己的 PostgreSQL；Artifact 存储是 `vke-cluster/ray-train/platform/mlflow-artifacts/` 专用前缀的 FSX CSI 静态 PV/PVC。MLflow Pod 只看到 `/mlflow-artifacts` 挂载根，不直连对象存储，也不注入 TOS/AWS AK/SK。实验中心是平台筛选视图，适合按当前用户或团队查看训练指标；登录后的原生 MLflow 是全平台共享的完整管理界面。
-- 原生 MLflow 全功能开放是当前明确策略：所有平台认证用户都能查看全平台实验，并可创建、修改、删除实验、Run 和模型注册条目，也可上传、下载 MLflow Artifact。共享管理操作会直接改变 MLflow 数据，使用前必须确认目标对象。
-- FSX CSI 的 `csi-fsx-node` DaemonSet 通过 IRSA 执行底层挂载：`CREDENTIALS_TYPE=IRSA`，且 `ROLE_NAME_FOR_IRSA` 非空。MLflow Pod、PV 和 PVC 都不包含 AK/SK 或 Secret 引用。部署前必须确认 `fsx.csi.volcengine.com` CSIDriver 存在，并且 `kube-system/csi-fsx-node` DaemonSet 全部可用。MLflow Artifact 与 `/mnt/storage/public` 治理数据隔离；开放 Artifact 上传下载不等于允许读取公共或团队训练数据。
-- 公共与团队数据在训练 Pod 中只读；写入和发布通过相应管理员权限完成。平台页面不提供数据下载入口。
-
-## 文档
-
-### 用户文档
-
-- [用户文档入口](docs/user/README.md)：按“数据 → 调试 → 提交 → 日志 → Checkpoint”完成第一次训练。
-- [用户使用手册](docs/USER_GUIDE.md)：账号、目录、调试环境、训练状态、日志和结果。
-- [多方式提交手册](docs/SUBMIT_GUIDE.md)：Portal、`spk-rayjob`、原生 Ray Jobs API。
-- [Ray Train 托管指南](docs/RAY_TRAIN_MANAGED_GUIDE.md)：双引擎选择、三种提交入口、MMCV 适配、恢复和性能诊断。
-- [S1H Ray Train + Ray Data 完整操作手册](docs/S1H_RAYTRAIN_RAYDATA_GUIDE.md)：从拉取代码到 `spk-rayjob` / 原生 Ray 提交、全量流式训练、NVMe 缓存和派生子集。
-- [新训练代码接入](docs/NEW_TRAINING_CODE_GUIDE.md)：PyTorch/DDP 项目如何读取数据、写结果和适配多机多卡。
-- [BEVFusion 代码改造](docs/BEVFUSION_CODE_CHANGES.md)：现有两个分支的逐文件补丁。
-- [BEVFusion 端到端操作手册](docs/BEVFUSION_END_TO_END_GUIDE.md)：从全新拉取代码、应用补丁、数据预检到 2×8 卡提交、日志和续训。
-- [BEVFusion 交付手册](docs/BEVFUSION_RUNBOOK.md)：真实验收流程、结果和常见错误。
-- [数据路径与读取性能基准](docs/DATA_IO_BENCHMARK.md)：输入别名、双节点实测方法、性能口径与 FSX 排障。
-
-### 管理与运维文档
-
-- [交接与入手手册](docs/HANDOVER_GUIDE.md)：源码基线、组件清单、第一小时、日常维护、发布、排障与交接验收。
-- [管理员手册](docs/ADMIN_GUIDE.md)：租户、用户、角色、GPU 配额、镜像、Git 凭据和数据发布。
-- [生产架构](docs/ARCHITECTURE.md)：网络、高可用、调度、存储、安全与可观测性。
-- [构建与部署](docs/BUILD_AND_DEPLOY.md)：安装、升级、回滚和迁移到新集群。
-- [生产运维手册](docs/OPERATIONS_GUIDE.md)：组件清单、巡检、发布、备份恢复和故障处置。
-- [开发指南](docs/DEVELOPMENT.md)：代码结构、测试和本地开发。
-- [完整文档目录](docs/README.md)：当前有效文档与历史归档边界。
-
-## 仓库结构
+[部署](docs/DEPLOYMENT.md) · [架构](docs/ARCHITECTURE.md) · [存储](docs/STORAGE.md) · [GPU 调度](docs/SCHEDULING.md) · [开发](docs/DEVELOPMENT.md) · [安全](SECURITY.md)
 
 ```text
-backend/                  Go API、任务编排、Kubernetes 与对象存储集成
-frontend/                 Vue 3 Web Portal
-helm/                     平台与可观测性 Helm Chart
-deploy/                   集群 Profile 和环境配置
-images/                   训练、调试与辅助镜像
-examples/                 smoke、分布式训练和 BEVFusion 接入示例
-scripts/                  构建、交付检查和端到端验证脚本
-ops/                      存储、监控与集群运维清单
-docs/                     用户、管理员、架构、部署与开发文档
+backend/     Go API、认证、任务控制器、CLI、嵌入式 UI
+frontend/    Vue 3 + Element Plus 控制台
+helm/        平台与可选基础设施 Chart
+deploy/      可移植安装示例
+images/      训练、调试和辅助镜像
+scripts/     验证与集成测试工具
+docs/        面向使用者和维护者的文档
 ```
 
-## 技术栈
+Go · Vue · PostgreSQL · Kubernetes · KubeRay · Kueue · PyTorch
 
-Go · Gin · GORM · PostgreSQL · Vue 3 · Element Plus · Kubernetes · Helm · KubeRay · Ray · Kueue · PyTorch · TOS/CSI · Loki · Alloy · Prometheus Operator · Grafana · DCGM Exporter
-
-## 开发与部署
-
-本 README 不复制环境相关命令，避免公开首页与实际交付参数分叉：
-
-- 本地开发、单元测试和前端构建从[开发指南](docs/DEVELOPMENT.md)开始。
-- 新集群安装、生产 Profile、升级和回滚从[构建与部署](docs/BUILD_AND_DEPLOY.md)开始。
-- 生产部署使用不可变镜像 digest；KubeRay、Kueue、CSI、对象存储身份和可观测性组件按部署文档作为显式前置条件管理。
-
-## 安全原则
-
-- 用户任务不获得 Kubernetes kubeconfig、节点 SSH 权限或 TOS 长期 AK/SK。
-- 平台只接受受控逻辑数据目录，不允许用户提交任意 bucket、PVC、hostPath 或其他用户前缀。
-- 私有 Git 凭据、平台 PAT 和登录会话用途分离，不写入代码、镜像、任务参数或日志。
-- 镜像按允许列表和不可变 digest 使用；用户代码与镜像环境独立版本化。
-- 控制面服务使用 ClusterIP，通过受控私网入口暴露，不依赖用户可访问的 NodePort。
+欢迎提交问题与改进，参见 [贡献指南](CONTRIBUTING.md)。CI 通过只代表对应自动化检查通过，不代替目标 GPU 集群的运行验收。

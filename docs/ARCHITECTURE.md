@@ -1,235 +1,49 @@
-# RayTrain 生产架构
+# 架构
 
-> 最新核查请看 [2026-09-11 现状与完整架构图](CURRENT_STATE_20260911.md)。下文保留早期设计和验收背景，其中节点容量、运行时版本、入口与功能状态不能替代最新只读核查。
+RayTrain 是 Kubernetes 上的多租户训练控制面。它管理身份、配额、任务与存储授权，KubeRay 管理计算集群，Kueue 管理训练准入。
 
-![RayTrain 组件级生产架构](architecture/ray-training-platform-production-architecture-v4.svg)
+## 单应用入口
 
-总图只表达稳定组件和责任边界，不展示环境 IP、机器规格或副本数量；灰色虚线卡片是明确规划，不代表已经上线。
+根目录 Dockerfile 先构建 Vue，再将静态文件复制到 Go 的 `backend/webui/dist` 并嵌入二进制。生产 UI 与 API 共享端口 8080 和同一个镜像版本。前端源码仍按常规放在 `frontend/`，开发时可使用 Vite 热更新；它不需要独立 Portal 仓库。
 
-本文描述当前生产基线和运行时边界。部署和升级请看 [构建与部署](BUILD_AND_DEPLOY.md)，用户操作请看 [用户使用手册](USER_GUIDE.md)，双引擎契约见 [Ray Train 托管指南](RAY_TRAIN_MANAGED_GUIDE.md)。生产集群已部署 KubeRay 1.6.2，并向全部团队开放 Ray Train 2.56.1；既有 Ray 编排 DDP 路径继续兼容。
+默认使用本地账号与 PAT。浏览器OIDC由`backend.webOIDCEnabled`显式开启，API的`backend.oidcRequired`单独配置。OIDC 是可选认证来源，平台成员表决定团队和权限；认证成功不等于管理员授权。PAT 只能用于已授予的身份和范围。
 
-## 一图读懂
+## 控制与计算
 
 ```mermaid
 flowchart TB
-  subgraph access[用户与私网入口]
-    portal[Web Portal]
-    cli[spk-rayjob CLI]
-    sso[Keycloak / LDAP 可选]
-    idc[IDC Nginx / 内网 DNS]
-    alb[VKE 私网 ALB]
-  end
-
-  subgraph control[平台控制面：3 个 CPU 节点]
-    fe[Frontend ×2]
-    api[Backend API ×2<br/>认证、目录、任务编排]
-    pg[(PostgreSQL StatefulSet)]
-    release[spk-rayjob 发布服务 ×2]
-    kr[KubeRay]
-    kueue[Kueue]
-  end
-
-  subgraph compute[弹性 GPU 训练池]
-    dev[GPU Workspace<br/>Jupyter / VS Code / Terminal]
-    job[RayJob<br/>Ray head + GPU worker]
-    gpu[RTX 4090 ×8 节点<br/>按需扩容]
-  end
-
-  subgraph data[受控数据层]
-    me[TOS 个人读写<br/>/mnt/storage/me]
-    shared[TOS 团队只读<br/>/mnt/storage/team]
-    public[TOS 公共只读<br/>/mnt/storage/public]
-    artifact[不可变代码包、checkpoint、训练产物]
-    nvme[GPU 节点 NVMe /data1、/data2<br/>临时缓存，不是数据真相]
-  end
-
-  subgraph obs[CPU 节点：可观测性]
-    alloy[Alloy]
-    loki[Loki]
-    prom[Prometheus Operator + DCGM]
-    grafana[Grafana]
-    mlflow[MLflow ×2<br/>独立 PostgreSQL<br/>原生 UI /mlflow/]
-    mlflowArtifact[MLflow Artifact<br/>FSX CSI 静态 PV/PVC<br/>/mlflow-artifacts]
-    ingest[MLflow 写入网关]
-  end
-
-  subgraph internal[内网集成]
-    gitlab[GitLab]
-    harbor[Harbor]
-  end
-
-  portal --> idc
-  cli --> idc
-  sso --> portal
-  idc --> alb --> fe --> api
-  cli --> release
-  release --> api
-  api <--> pg
-  api --> kr
-  api --> kueue
-  kr --> dev
-  kr --> job
-  kueue --> gpu
-  dev --> gpu
-  job --> gpu
-  dev --> me
-  dev --> shared
-  dev --> public
-  job --> me
-  job --> shared
-  job --> public
-  job --> artifact
-  gpu -. 可选临时缓存 .-> nvme
-  job -. 日志 .-> alloy --> loki
-  gpu -. GPU / 节点指标 .-> prom --> grafana
-  job -. 参数 / Loss / 评估指标 .-> ingest --> mlflow
-  mlflow --> mlflowArtifact
-  api -. 筛选查询 / 原生 UI 代理 .-> mlflow
-  portal -. 登录后完整管理界面 .-> api
-  job --> gitlab
-  job --> harbor
+  UI[Web UI / CLI / Ray API] --> API[认证与 API]
+  API --> PG[(PostgreSQL
+成员 / 任务 / 配额 / 审计)]
+  PG --> C[任务控制器]
+  C --> RJ[RayJob]
+  RJ --> KQ[Kueue admission]
+  KQ --> KR[KubeRay]
+  KR --> RC[每任务 RayCluster
+Head + GPU Workers]
+  RC --> PVC[(租户 PVC)]
+  API --> D[调试工作区 RayCluster]
+  API -.-> OBS[Loki / Prometheus / MLflow]
 ```
 
-## 访问与网络边界
+提交时校验角色、租户队列、镜像允许列表、资源形状和存储资产归属。配额检查与任务持久化在数据库事务内完成。控制器根据持久化期望状态生成 Kubernetes 资源，不依赖单次 HTTP 请求持续在线。
 
-| 层 | 当前实现 | 目的 |
-| --- | --- | --- |
-| 用户入口 | `https://raytrain.wellspiking.ai` | 浏览器与 spk-rayjob 使用同一域名与同一身份体系。 |
-| IDC 侧 | Nginx Ingress | IDC 内网 DNS 将 `raytrain.wellspiking.ai` 解析到统一入口；它反向代理到 VKE 私网 ALB。 |
-| VKE 侧 | 私网 ALB | TLS 终止、七层路由。ALB 通过 pass-through 后端访问 ClusterIP 服务。 |
-| 平台服务 | Frontend、Backend、spk-rayjob Release 都是 ClusterIP | 没有用户可访问的 NodePort；控制面不暴露节点端口。 |
-| MLflow 原生界面 | 同域 `/mlflow/` → Frontend → Backend → MLflow ClusterIP | 复用平台登录；不创建 MLflow NodePort 或独立 Ingress。 |
-| 工作负载 | `tenant-<tenant>` namespace | 每个租户独立队列、资源对象、数据绑定和权限边界。 |
+训练代码与镜像分离。基础模式通过固定 Git commit 获取源码，辅助镜像在 submitter 侧准备源码，Ray 再分发工作目录。镜像提供 CUDA、Python、Ray 和平台 launcher；任意上游 Ray 镜像并不保证包含这些入口。
 
-## 控制面与高可用
+## 数据边界
 
-![控制面、多租户与资源准入](architecture/ray-training-platform-control-plane-tenancy-v1.svg)
+基础模式中管理员先创建租户 namespace 内的 PVC，再登记资产。用户只提交资产 ID 和受控相对路径，后端解析为卷与挂载位置。数据集和初始 Checkpoint 只读，结果可写。平台不会从任意用户输入创建 hostPath，也不自动挂载公司网络共享盘。
 
-这张图解释认证主体如何贯穿 Portal、CLI、任务所有权、团队 namespace 和 Kueue 准入；不展开单个 API 的字段和数据库表结构。
+可选 TOS/FSX 数据空间保留个人、团队、公共空间和源码归档等能力，但需要部署者显式配置 CSI、对象存储身份和权限。PVC 基础模式不具有网页目录浏览及同等对象存储功能。见 [存储](STORAGE.md)。
 
-- Frontend、Backend、spk-rayjob 发布服务均为 2 副本，带 HPA、PDB 和 CPU 节点反亲和；滚动升级不会中断已经创建的 RayJob。
-- Backend 通过 PostgreSQL 持久化用户、目录、任务、代码包、审计与运行时状态；Kubernetes Reconciler 使用 Lease 选主，避免多副本重复创建 RayJob。
-- PostgreSQL 当前是单副本 StatefulSet，使用持久卷。它是控制面唯一单点；需要跨可用区数据库高可用时，迁移到托管 PostgreSQL 或 Patroni，而不是把训练数据放到数据库中。
-- KubeRay 负责 RayJob / RayCluster 生命周期；Kueue 以租户队列、GPU/CPU/内存配额控制准入。
+## 调度边界
 
-## 训练任务生命周期
+团队额度、集群物理容量、即时 Worker 槽位分别计量。TAS 和紧凑节点偏好降低碎片，专属节点映射提供硬隔离；当前没有自动跨可用区网络性能发现或运行任务迁移。默认不抢占。详见 [调度](SCHEDULING.md)。
 
-![训练任务生命周期与故障边界](architecture/ray-training-platform-job-lifecycle-v1.svg)
+## 可选服务与高可用
 
-生命周期图区分预检、排队、RayCluster 运行期、失败分支和持久保留边界。TTL 回收 Ray Head、Worker 与 Dashboard，但不会删除平台任务历史、Loki 日志、Prometheus 指标、MLflow Run、Checkpoint 或持久结果。
+Loki 提供历史日志，Prometheus 提供指标，MLflow 提供实验能力。这些服务独立部署并通过配置接入，基础 Helm 安装不自动创建整套可观测性系统。原生 MLflow 的共享权限与平台训练记录过滤是不同边界，启用前需要明确共享策略。
 
-## GPU 训练与调试
+应用可多副本部署，但可靠性还取决于 PostgreSQL、Kubernetes API、队列控制器、镜像仓库及持久存储。quickstart 的单实例 PostgreSQL不提供数据库高可用。生产使用外部 PostgreSQL并配置备份/恢复验证；Helm 回滚不会回滚已经提交的数据库迁移。
 
-平台是多租户双引擎架构：**Ray 编排 DDP** 保留现有项目兼容性，**Ray Train 托管**提供受管 worker、checkpoint/resume 与训练性能序列。两者复用认证、租户 namespace、Kueue 准入和任务级 RayCluster，但使用并行运行时镜像与显式 feature gate；平台绝不原地改变运行中 RayJob 的引擎或版本。
-
-| 工作流 | 实现 | 用户看到的行为 |
-| --- | --- | --- |
-| 交互式调试 | 一个 Ray head + 一个带 GPU 的 worker | JupyterLab、VS Code、Terminal 代理到 GPU worker；`/workspace` 与个人数据可持续使用。 |
-| 批量训练 | 一个 RayJob，包含 submitter、Ray head、按需数量的 worker | Submitter 提交 Ray runtime env；真正的训练命令只在 Ray 集群中运行。 |
-| 调度 | GPU Pod 只匹配 `accelerator=nvidia-rtx-4090` 与生产池标签 | 控制面与可观测性不会占用 GPU 节点；新增 GPU 节点打标签并 Ready 后自动进入物理容量。 |
-| 镜像 | Harbor 目录 + 不可变 digest | 用户只能选平台已登记的 digest 镜像；镜像拉取通过 `harbor-registry` Secret。 |
-
-## 动态容量与团队配额
-
-平台区分两个不能混为一谈的概念：
-
-- **物理容量**：当前 Ready、非虚拟且带生产训练标签节点的 `allocatable` GPU、CPU、内存和节点数。
-- **团队配额**：SuperAdmin 分配给某个租户的并发 GPU 预算，是管理策略，不会因扩容自动给所有团队增加。
-
-容量控制链路如下：
-
-1. Backend 每个协调周期读取与训练 Pod 完全相同的节点标签选择器。
-2. 对 Ready 真实节点汇总总 GPU、节点数、每节点最大 GPU、CPU 和内存；虚拟节点与 NotReady 节点不计入。
-3. 自动把物理总容量同步到 Kueue ClusterQueue，并更新 Portal/提交校验使用的集群能力。新增节点只需完成驱动、设备插件、健康检查和标签，不需要重建平台镜像或修改静态卡数。
-4. 如果 Kubernetes API 暂时不可用或没有节点匹配，保留最后一次有效容量，不把配额瞬间降为零；进程刚启动且尚未取得有效容量时才使用部署 Profile 的保守回退值。
-5. SuperAdmin 在“租户与配额”设置每个团队的 GPU 预算。新任务的有效提交上限为 `min(团队剩余可用额度, 当前物理总 GPU)`；租户额度不会反向扩大 ClusterQueue，已经占用的训练和调试 GPU 会从可提交上限中扣除。
-6. Engineer 和 TenantAdmin 的 `/limits`、提交表单与 CLI 只返回本团队有效上限和本团队已用量，不展示其他团队额度。SuperAdmin 管理页额外展示物理容量、各团队预算与用量。
-
-单任务 Worker 上限取当前可调度 Ready GPU 节点数；同构资源池的每 Worker GPU 上限就是节点卡数。若未来混入不同卡数节点，库存仍记录单节点最大卡数，但提交上限保守取所有计入节点都能满足的卡数，避免页面放出无法落盘的组合。同时总申请不得超过本团队剩余可用上限。例如 8 卡团队可以提交 `1×8` 或 `2×4`，但不能提交 `2×8`；当前 `local` 团队额度为 16，物理池也为 16，在无其他占用时可提交 `2×8`。运行中的任务在节点短暂失联时不会被平台主动终止，缩容只影响后续准入。
-
-## 身份、角色与提交归属
-
-- `Engineer`、`TenantAdmin`、`SuperAdmin` 是授权角色，不是任务提交人名称。
-- 每个任务永久记录实际认证主体的用户 ID；Portal 使用当前交互会话，`spk-rayjob` 可使用交互会话或 PAT，原生 Ray 网关使用 PAT。任何入口都不能用角色名、共享管理员账号或客户端传入的用户名覆盖主体。
-- 用户升级为 TenantAdmin 后，已有和新提交任务仍显示原用户名。例如 `guofeng.su` 升级后仍显示 `guofeng.su`，不会变成 `admin`。
-- 平台 PAT 在“账户与安全 → 个人访问令牌”创建，仅用于获准的任务 CLI/API；工作区上传和快照仍要求浏览器/本地账号建立的交互会话。GitLab Token 只在“个人 Git 凭据”中用于私有代码拉取。三者不得互换、写入代码、镜像、示例或日志。
-- 任何外部提交节点如果登录的是 `admin`，其任务显示 `admin` 是正确行为。交付验收中，`spk-rayjob` 与原生 Ray 必须使用 `guofeng.su` 的短期平台 PAT；Portal 快照入口必须使用 `guofeng.su` 的交互会话，不能拿管理员会话代替。
-
-## 训练交付验收矩阵
-
-两个 BEVFusion 分支都从 GitLab 的全新 clone 开始，不依赖任何既有本地目录或外部补丁文件。使用 `guofeng.su` 身份串行完成：
-
-| 分支 | spk-rayjob | 原生 Ray `--working-dir` | Portal/网页 |
-| --- | --- | --- | --- |
-| `bev_3dod@0c1dc9d` | `SUCCEEDED` · `job-0d368c1c99570c6cfd30a704` | `SUCCEEDED` · `job-5cd8dd759fa2a481b5a0178e` | `SUCCEEDED` · `job-12a730d45f0f83e4b4ae37c5` |
-| `bev_3dod_s1h@7931cee` | `SUCCEEDED` · `job-ec9a64a66c953efd346fefe8` | `SUCCEEDED` · `job-42b55a5447b7e93afe29bb87` | `SUCCEEDED` · `job-69993074d2ff5de4f2d30b17` |
-
-六个任务均使用 `guofeng.su`，自动创建独立 RayCluster；清单固定为两个 Worker、每个 8 GPU，Worker 分布在两台 GPU 节点。日志包含 NCCL、6 个 loss iteration、验证和 checkpoint，输入来自 `/mnt/storage/public`，输出写入个人结果目录；对应 MLflow run 均为 `FINISHED`。受管入口的产物接口返回 `epoch_1.pth`、配置与 `raytrain-topology.json`。RayJob 运行时已在留存证据后清理，平台历史记录、Loki 日志、MLflow 指标和 TOS 结果保留。
-
-最终 r9 运行镜像还以 `job-56fbc0b27e9a5b5bc4491023` 完成一条额外 `2×8` 回归任务，验证原子运行时准备锁在真实 16-rank 并发启动下可用。两个 Worker 分布在两台 GPU 节点，任务生成了 33,332,845 字节的个人 checkpoint。
-
-面向用户的最终交付只保留五个主入口：用户使用、多方式提交、最终架构与方案、当前 BEVFusion 代码改造、新项目接入改造。文档中的命令必须能在用户自己的电脑或外部调试节点直接执行，不得要求复制平台维护者机器上的文件。
-
-## 数据契约
-
-![存储、双 NVMe 缓存与可观测性](architecture/ray-training-platform-storage-observability-v1.svg)
-
-存储图说明用户稳定路径如何映射到 TOS/FSX、任务级双 NVMe 缓存如何按需启用，以及日志、资源指标和实验指标分别进入哪些持久系统；它不把缓存描述成数据真相。
-
-训练容器没有 TOS AK/SK。TOS 访问由 CSI/FSX 的 IRSA 身份完成，平台根据登录身份和任务配置生成受控挂载。
-
-| 逻辑空间 | Pod 路径 | 权限 | 用途 |
-| --- | --- | --- | --- |
-| 我的工作区 | `/workspace` | 读写 | 调试代码、虚拟环境、编辑器状态。 |
-| 我的数据与结果 | `/mnt/storage/me` | 读写 | 输入副本、checkpoint、最终产物。 |
-| 团队数据 | `/mnt/storage/team` | 只读 | 由 TenantAdmin 发布的数据集。 |
-| 公共数据 | `/mnt/storage/public` | 只读 | 由平台管理员发布的样例或公共数据。 |
-| IDC 数据（可选） | `/mnt/idc/*` | 只读 | 显式登记的 NFS 导出；当前不把个人 SSHFS 目录直接挂到每个 Pod。 |
-
-团队共享空间区分“Portal 发布权限”和“工作负载挂载权限”：TenantAdmin 可在 Portal 的团队共享页面新建目录、上传和覆盖对象，Engineer 只能浏览和选作训练输入；当前版本不提供网页删除和下载。无论操作者角色是什么，调试与训练 Pod 中的 `/mnt/storage/team` 始终只读。SuperAdmin 以平台管理员身份管理公共空间。API 同时返回挂载只读状态和当前主体的 Portal 写入能力，前端显示“管理员可发布 · Pod 只读”，不再把两者合并成一个“只读”标签。
-
-对象存储的正式物理布局是：
-
-| 空间 | TOS 前缀 | 说明 |
-| --- | --- | --- |
-| 公共 | `tos://shanghai-data-transfer/ray-train/public/` | 全平台只读，由 SuperAdmin 发布。 |
-| 团队 | `ray-train/tenants/<tenant>/shared/` | 租户内只读，由 TenantAdmin 发布。 |
-| 个人 | `ray-train/tenants/<tenant>/users/<username>/` | 本人读写，用户名是稳定存储键。 |
-
-当前 VKE Profile 已统一使用 `tos://shanghai-data-transfer/ray-train/public/` 作为全平台公共只读根。管理员将数据按 `<dataset>/<version>/` 发布到该前缀，用户只看到 `/mnt/storage/public/<dataset>/<version>`。
-
-当前全量原始数据主要位于公共根的 `labeled/`，索引位于 `0429_pkl/`、`0813_pkl/` 等目录。任务选择公共根时，`PLATFORM_DATASET_PATH=/mnt/data/input` 对应该根；任务选择某个子目录时，该变量只对应所选子目录。代码必须使用相对所选目录的路径，不能把逻辑空间、桶名或所选子目录重复拼接进去。
-
-数据真相在 TOS、FSX 或已登记 IDC 数据源。GPU 节点的 `/data1`、`/data2` NVMe 只能作为按任务隔离的可回收缓存；所有 checkpoint、模型和训练结果必须写入 `PLATFORM_OUTPUT_PATH`（个人 TOS 持久空间）。当前双盘供应器和两套 StorageClass 已通过生产验收；每个任务默认直接读取，只有用户显式选择 NVMe 预热或 Ray Data 分布式预热时才创建临时卷。缓存随 Pod 回收，不作为数据唯一副本。
-
-### NVMe 缓存生效时的链路
-
-1. 两块盘分别由 `ray-cache-local-data1`、`ray-cache-local-data2` 供应器管理，不做跨盘 RAID，也不向用户暴露宽泛 `hostPath`。
-2. 两套 StorageClass 都使用 `ReadWriteOnce`、`WaitForFirstConsumer` 和 `reclaimPolicy: Delete`，保证卷与消费它的 Worker 同节点。
-3. `runtime` 模式为 Worker 创建两个 generic ephemeral PVC，分别挂载为 `/mnt/cache` 与 `/mnt/cache2`，并配置 Ray 临时目录和 object spilling。
-4. 开启 `preload: input` 时，平台 initContainer 把所选输入预热到两块盘的缓存视图，再把 `PLATFORM_DATASET_PATH` 指向该视图；训练代码继续遵守同一个路径契约。
-5. 多机训练的每个 Worker 在所在节点拥有独立副本。任务结束后 Pod、PVC 和缓存一起回收；预热失败会显式失败，不把 NVMe 当作数据真相。
-
-缓存是否有收益取决于数据规模、文件数量、epoch 数和复用次数。短任务可能因为预热成本变慢；正式判断以相同代码、参数、数据和节点上的 off/preload A/B 为准。
-
-底层 FSX 的一个租户根目录只发布一次可写 PVC；任务的输入、checkpoint 和输出只通过不同的 `subPath` 映射为逻辑目录。即使公共输入来自同一租户根，也只在容器级别以只读方式挂载，避免同一 FSX 源同时被 Kubernetes 作为读写、只读卷发布而整体退化为只读。这是平台内部实现细节，用户始终只选择逻辑目录与上表中的稳定路径。
-
-## 可观测性
-
-- Loki 运行 3 个副本，网关 2 副本；用于容器日志检索。
-- Prometheus Operator、Prometheus 2 副本、Alertmanager 2 副本、Grafana 2 副本运行于 CPU 节点。
-- DCGM Exporter 采集 GPU 指标；Node Exporter、kube-state-metrics 采集节点和 Kubernetes 指标。
-- Alloy 当前为 2 个 CPU 节点副本。它通过 Kubernetes API 发现容器日志；若未来需要采集 GPU 节点宿主机文件或本地缓存指标，应将 Alloy 改为覆盖 GPU 节点的 DaemonSet，并保持其日志标签与现有 Loki 查询兼容。
-- MLflow 以 2 副本部署在独立 `mlflow-system` namespace，元数据使用独立 PostgreSQL。Artifact 存储通过 FSX CSI 静态 PV/PVC 将 `vke-cluster/ray-train/platform/mlflow-artifacts/` 这一专用前缀发布给 MLflow；`Retain` 的 `mlflow-artifacts-irsa-pv` PV 与 `mlflow-system/mlflow-artifacts-irsa` PVC 固定绑定，不与用户数据卷混用。
-- MLflow Pod 只看到 `/mlflow-artifacts` 挂载根，Artifact destination 是 `file:///mlflow-artifacts`；Pod 不直连对象存储，也不注入 TOS/AWS AK/SK。底层挂载由集群 `csi-fsx-node` DaemonSet 中的 `fsx-agent` 通过 IRSA 完成：`CREDENTIALS_TYPE=IRSA`，且 `ROLE_NAME_FOR_IRSA` 非空。MLflow Pod、PV 和 PVC 都不包含 AK/SK 或 Secret 引用。部署前必须确认 `fsx.csi.volcengine.com` CSIDriver 存在，并且 `kube-system/csi-fsx-node` DaemonSet 全部可用。训练 Pod 只访问写入网关，不能通过该网关搜索其他运行或下载 Artifact。
-- 实验中心是平台筛选视图：Backend 读取 MLflow 后再用平台数据库校验租户、任务和提交人，Engineer 只看到自己的运行，TenantAdmin/SuperAdmin 查看授权范围内的团队运行。Ray Dashboard 随任务集群回收，MLflow 指标和 Loki 日志独立持久保留。
-- 原生 MLflow 是登录后可访问的完整管理界面，通过同域 `https://raytrain.wellspiking.ai/mlflow/` 进入。所有平台认证用户都能看到全平台实验，并可创建、修改、删除实验、Run 和模型注册条目，也可上传、下载 MLflow Artifact。原生 MLflow 全功能开放是当前明确策略，平台只控制入口认证，不对进入后的 MLflow 功能做二次裁剪。
-- 原生界面由 Frontend 把 `/mlflow/` 转给 Backend，再由 Backend 代理到 MLflow ClusterIP；MLflow 不创建 NodePort、不创建独立 Ingress。一次性票据交换为仅限 `/mlflow/` 的安全 Cookie，修改类请求还必须通过同源校验。
-- MLflow Artifact 与 `/mnt/storage/public` 治理数据隔离。Artifact 上传下载只在 MLflow 的专用挂载根中执行，不等于允许下载公共数据，也不改变公共/团队目录只读策略。
-
-## 内网依赖与不做的事
-
-- GitLab：允许 `gitlab.wellspiking.ai`、`gitlab.qomolo.com`。私有 Git 凭据由用户或租户保存为 Secret 引用，不回显。
-- Harbor：训练镜像由用户团队推送至 `harbor.wellspiking.ai/<project>`，管理员登记 digest 后可选。
-- Keycloak / LDAP：本地账号和 OIDC 可以并行。LDAP 由 Keycloak federation 负责，Portal 不保存 LDAP 密码。
-- IDC ↔ TOS 双向迁移尚未作为生产入口开放；在此之前，公共/团队数据通过管理员受控发布，个人数据由个人空间上传或已验证的外部提交流程进入。
+平台需要管理租户 namespace、RayJob/RayCluster、Pod、服务和相关存储对象的权限。审阅 Chart RBAC 后再授权安装。训练容器执行用户代码，租户隔离不是面向完全不可信代码的完整虚拟机安全边界。

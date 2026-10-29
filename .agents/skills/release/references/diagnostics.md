@@ -1,50 +1,13 @@
-# 现网排障链路
+# Diagnostics
 
-## 顺序
+Start from the user's requested scope. Repository-only analysis does not authorize cluster access or mutation. For an authorized cluster, verify context and namespace before commands.
 
-始终自外向内、先只读后变更，每一层保留 request ID、JOB ID 和时间范围：
+- Login: separate local account credentials, PATs and optional OIDC claims. Platform membership determines authorization.
+- Submission: inspect API validation, allowed image/Git sources, team quota and stored desired state.
+- Queueing: inspect Kueue Workload admission, Flavor/topology support and available Worker shape. A team quota is not free physical capacity.
+- Pod startup: separate scheduling, image pull, PVC mount and container process failures.
+- Storage: PVC assets require Bound claims in tenant namespaces. Optional TOS/FSX paths require explicit CSI/identity configuration; no automatic IDC mounts exist.
+- Logs: verify configured Loki and current Pod logs separately. Missing historical logs do not prove the training never ran.
+- Upgrade: compare source SHA, application image digest and Helm manifests; they are different version identifiers.
 
-```text
-spk-rayjob / Portal
-  → DNS、TLS、Ingress、OAuth2 Proxy
-  → Backend 路由与身份/PAT
-  → 成员、团队、镜像、配额与数据合同
-  → Kueue Workload / ClusterQueue / ResourceFlavor / Topology
-  → RayJob / RayCluster / Head / Worker
-  → 节点、GPU、镜像、存储、NVMe
-  → 日志、指标、MLflow、Artifact
-```
-
-不要看到 Pending 就重启 Pod。先区分：提交前预检拒绝、Kueue `Suspended`、Pod `Pending`、镜像拉取、挂载或训练进程本身。
-
-## 快速判断
-
-| 现象 | 先查 | 含义/边界 |
-|---|---|---|
-| `INVALID_AUTHENTICATION` / 401 | `spk-rayjob login-check`、PAT 过期/团队绑定、OAuth2 issuer/audience | 401 不足以证明具体路由已注册；不要换成 GitLab token |
-| Portal 404 | 请求 URL 是否多/少 `/raytrain`，Ingress 是否误吞 SPA 路由 | 先分辨 SPA 404 还是 API `JOB_NOT_FOUND` |
-| `IMAGE_NOT_ALLOWED` | 镜像登记、团队可见性、engine 能力、tag/digest | 超级管理员可跨团队登记；训练用户只看当前团队/全平台镜像 |
-| `GPU_QUOTA_EXCEEDED` | 团队配额、已用 GPU、活跃调试环境 | 在 RayJob 创建前拦截；不是 Pod 调度故障 |
-| RayJob 长期 `Suspended` | Kueue admission reason、ClusterQueue、ResourceFlavor、Topology | 任务要求 hostname topology 但 flavor 没关联 topology 时永远不会准入 |
-| Pod Pending | events 中 insufficient GPU/CPU/memory、affinity/taint、PVC | 只在 Kueue 已准入后进入这一层 |
-| 小任务造成 GPU 碎片 | Worker 实际节点布局、TAS/bin-pack、团队节点池 | 多机训练需每个 Worker 整体可放置，不只看总空闲 GPU |
-| 上传 413 | 浏览器是否走分片路由、Ingress body size、单片大小 | 无上限指分片串行/可恢复，不是单 HTTP body 无限 |
-| `could not persist resumable upload state` | 上传状态库写入、upload ID、浏览器重试是否重用会话 | 先修状态持久化，不要反复重传已成功分片 |
-| 调试环境 Pod 正常但页面 401/404 | `/access` 票据、HttpOnly Cookie、代理路由是否被通用 auth 提前拦截 | 不向用户暴露 kubeconfig 或公共 shell |
-| MLflow 直链失败 | job 的 `run_id`、Portal `/raytrain/mlflow/` 前缀、Dashboard 会话/PAT API | Dashboard Cookie 与 MLflow API PAT 是两种通道；不用 Dashboard URL 充当程序 API |
-| UI loss/性能“暂无数据” | 训练是否写 MLflow metric、后端是否绑定 run/job、GPU sampler 是否有时序 | Ray Data 与 loss 上报无直接因果；先找缺数据的那一环 |
-
-## 队列与异构 GPU
-
-- 先核对 backend 的功能开关、实际 ClusterQueue/ResourceFlavor/Topology、团队策略和节点标签；文档或代码中出现 TAS/抢占不代表生产已启用。没有通过真实演练时，报告“已实现，未启用/未验收”，不要承诺已消除碎片。
-- 用户不显式选 GPU 型号；后端根据 PAT 所属团队的调度策略选择 accelerator class、ClusterQueue 和 ResourceFlavor。
-- 当前节点接入需真实 accelerator、平台 GPU pool 与 cache-ready；团队归属标签只有在对应的节点选择/队列隔离策略已实现并部署后才有效，不能只打标签就宣称物理隔离。A100/A800/H20/4090 不能混成一个 WorkerGroup。
-- 闲时任务的当前代码约束是单 Worker、单 GPU、`opportunistic` 且 `preemptible`，并能从 Checkpoint 恢复。团队正常/生产任务回收借用额度还依赖已启用的抢占策略和真实演练；开关关闭时提交会被拒绝。
-- 不用节点物理绑定代替配额。团队节点池与异构卡型隔离、Kueue 配额与抢占必须分别核实，不把设计目标当作生产事实。
-
-## 改动前后的安全检查
-
-1. 记录现有活跃 RayJob、RayCluster、Workload 和平台 Deployment Pod UID/restart count。
-2. 排障时默认只读；需要停任务、删资源、改队列或改节点标签时单独核对授权与精确目标。
-3. 发布后确认旧任务 Pod UID 没有变、restart count 没增加，新 backend imageID 等于候选 digest。
-4. 删除辅助 debug Pod/临时 worktree，保留 values 备份、Helm 覆盖、提交转录和最终版本核对证据。
+Use bounded read-only observations first. Never dump Secrets or kill an unknown process. Do not restart existing workloads as a diagnostic shortcut.

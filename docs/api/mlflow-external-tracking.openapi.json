@@ -3445,7 +3445,7 @@
   "servers": [
     {
       "description": "Use only an approved RayTrain API origin.",
-      "url": "https://raytrain.wellspiking.ai"
+      "url": "https://raytrain.example.com"
     }
   ],
   "tags": [

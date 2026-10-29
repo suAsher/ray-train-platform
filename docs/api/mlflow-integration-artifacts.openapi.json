@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "https://raytrain.wellspiking.ai/api/v1"
+      "url": "https://raytrain.example.com/api/v1"
     }
   ],
   "security": [

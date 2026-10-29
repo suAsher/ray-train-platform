@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "https://raytrain.wellspiking.ai",
+      "url": "https://raytrain.example.com",
       "description": "RayTrain production API"
     }
   ],
