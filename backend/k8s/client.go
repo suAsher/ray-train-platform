@@ -228,7 +228,6 @@ func ensureOwnedPersistentVolume(ctx context.Context, client corev1client.Persis
 	return nil
 }
 
-
 func ensureOwnedPersistentVolumeClaim(ctx context.Context, client corev1client.PersistentVolumeClaimInterface, desired *corev1.PersistentVolumeClaim, bindingID string) (*corev1.PersistentVolumeClaim, error) {
 	existing, err := client.Get(ctx, desired.Name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {

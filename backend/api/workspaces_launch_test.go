@@ -95,7 +95,6 @@ func TestResolveWorkspaceDataMountPlanUsesConfiguredTemporaryPublicSubPath(t *te
 	}
 }
 
-
 func TestLaunchWorkspaceReportsGPUQuotaExceeded(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	workspaces := &fakeWorkspaceStore{getErr: context.Canceled, createErr: &repositories.GPUQuotaExceededError{Quota: 24, Used: 24, Requested: 1}}

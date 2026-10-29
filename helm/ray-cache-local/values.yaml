@@ -9,9 +9,13 @@ fullnameOverride: ""
 # Use a literal DNS subdomain name (max 253 characters), never a template.
 existingConfigMap: ""
 
+# Resolve upstream images to verified repository@sha256 references before install.
+# Sources: docker.io/rancher/local-path-provisioner:v0.0.32,
+# docker.io/library/busybox:1.36.1, quay.io/prometheus/node-exporter:v1.9.1.
+# The chart rejects mutable tags; tests/image-fixture.yaml is never for installation.
 images:
-  provisioner: docker.io/rancher/local-path-provisioner:v0.0.32
-  helper: docker.io/library/busybox:1.36.1
+  provisioner: ""
+  helper: ""
   pullPolicy: IfNotPresent
 
 storageClass:
@@ -48,7 +52,7 @@ monitoring:
     accelerator: nvidia-rtx-4090
     raytrain.io/gpu-pool: production
   nodeExporter:
-    image: quay.io/prometheus/node-exporter:v1.9.1
+    image: ""
     resources:
       requests:
         cpu: 50m
@@ -57,7 +61,7 @@ monitoring:
         cpu: 200m
         memory: 128Mi
   collector:
-    image: docker.io/library/busybox:1.36.1
+    image: ""
     # Non-root UID with the trusted root-owned cache directory group. The
     # host mounts are exact cache roots and read-only.
     runAsUser: 65534

@@ -78,7 +78,6 @@ func TestEnsureDataMountResourcesRefusesLegacyFUSEPermissions(t *testing.T) {
 	}
 }
 
-
 func TestEnsureRayJobIsIdempotent(t *testing.T) {
 	client := &Client{dynamic: dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())}
 	job := validRenderJob()

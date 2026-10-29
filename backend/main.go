@@ -570,7 +570,6 @@ func newDatasetPublicationManager(
 	return manager, nil
 }
 
-
 func datasetPublicationControllerOptions(cfg config.Config) datasetpublisher.ControllerOptions {
 	return datasetpublisher.ControllerOptions{
 		Namespace:             runtimeNamespace(),

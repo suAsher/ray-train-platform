@@ -8,8 +8,6 @@ import (
 	"ray-train-platform-backend/domain"
 )
 
-
-
 func TestBuildDataMountResourcesCreatesSecretlessRetainedFSXVolume(t *testing.T) {
 	binding := domain.DataMountBinding{
 		ID: "mount-abc123", TenantID: "tenant-a", UserID: "user-a", Scope: domain.DataMountScopePersonal, SpaceID: domain.DataSpaceWorkspace,
@@ -76,9 +74,9 @@ func TestDevWorkspaceMountsPersonalAndReadonlyDataSpaces(t *testing.T) {
 		ID: "ws-01", TenantID: "tenant-a", UserID: "user-a", Name: "dev-user-a", Namespace: "tenant-a", GPUCount: 1,
 	}
 	plan := DataMountPlan{
-		Personal:    &DataMountRoot{ClaimName: "data-user-a"},
-		Team:        &DataMountRoot{ClaimName: "data-team-a", ReadOnly: true},
-		Public:      &DataMountRoot{ClaimName: "data-public", ReadOnly: true},
+		Personal: &DataMountRoot{ClaimName: "data-user-a"},
+		Team:     &DataMountRoot{ClaimName: "data-team-a", ReadOnly: true},
+		Public:   &DataMountRoot{ClaimName: "data-public", ReadOnly: true},
 	}
 	manifest, err := RenderDevRayCluster(workspace, WorkspaceRenderOptions{
 		Image: "registry.example/dev@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", DataMounts: plan,

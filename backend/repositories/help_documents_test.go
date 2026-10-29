@@ -322,10 +322,10 @@ func TestPublicHelpDocumentsFoldPublishedSeedContentIntoSevenGuides(t *testing.T
 	assertMarkdownContains(t, byID["data"].Markdown, []string{
 		"### 代码怎么进来",
 		"### 缺少环境？自定义训练镜像",
-		"已发布基础镜像",
+		"示例镜像名称（需自行构建并登记）",
 		"raytrain-base:ray2.58.0-py310-torch2.4.1-cu121-20260906",
 		"### 如何使用缓存加速",
-		"5,625 MiB/s",
+		"目标集群测量",
 		"### 五种数据模式怎么选",
 		"### 版本化数据集",
 		"### 大文件上传与恢复",

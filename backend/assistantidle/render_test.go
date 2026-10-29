@@ -23,7 +23,7 @@ func validRenderConfig() RenderConfig {
 		RequiredNodeLabels: map[string]string{
 			"raytrain.io/gpu-pool":    "production",
 			"raytrain.io/cache-ready": "true",
-			"accelerator":                         "nvidia-rtx-4090",
+			"accelerator":             "nvidia-rtx-4090",
 		},
 	}
 }

@@ -187,7 +187,6 @@ func TestRenderDevRayClusterStartsEditorsInPersistentWorkspace(t *testing.T) {
 	}
 }
 
-
 func hasVolumeOrMountNamed(podSpec map[string]any, name string) bool {
 	volumes, _, _ := nestedSlice(podSpec, "volumes")
 	for _, value := range volumes {

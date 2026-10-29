@@ -23,6 +23,7 @@ import (
 const environmentRegistryHostAnnotation = "raytrain.io/environment-registry-host"
 
 type EnvironmentRunnerConfig struct {
+	RegistryHosts []string
 	WorkspaceProfiles                                       []environmentbuild.WorkspaceProfile
 	Namespace                                               string
 	BaseImage, WorkspaceImage, PrepareImage, PublisherImage string
@@ -42,12 +43,10 @@ type EnvironmentRunner struct {
 var _ environmentbuild.Runner = (*EnvironmentRunner)(nil)
 
 func NewEnvironmentRunner(client *Client, cfg EnvironmentRunnerConfig) *EnvironmentRunner {
+	cfg.RegistryHosts = append([]string(nil), cfg.RegistryHosts...)
 	cfg.ImagePullSecrets = append([]string(nil), cfg.ImagePullSecrets...)
 	cfg.CompatibleWorkspaceImages = append([]string(nil), cfg.CompatibleWorkspaceImages...)
 	cfg.NodeSelector = maps.Clone(cfg.NodeSelector)
-	if cfg.StorageClass == "" {
-		cfg.StorageClass = "ebs-ssd"
-	}
 	if cfg.StorageGiB == 0 {
 		cfg.StorageGiB = 60
 	}
@@ -65,7 +64,7 @@ func (r *EnvironmentRunner) Step(ctx context.Context, b environmentbuild.Build, 
 	if _, err := r.profileForBuild(b); err != nil {
 		return environmentbuild.StepResult{}, err
 	}
-	if _, err := registryauth.NormalizeHost(b.RegistryHost); err != nil {
+	if _, err := registryauth.AllowedHost(b.RegistryHost, r.config.RegistryHosts); err != nil {
 		return environmentbuild.StepResult{}, environmentbuild.ErrInvalid
 	}
 	if b.Status == environmentbuild.Capturing {
@@ -131,7 +130,7 @@ func (r *EnvironmentRunner) ensureArtifacts(ctx context.Context, b environmentbu
 	name := environmentResourceName("oci", b.ID)
 	pvc, err := pvcs.Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
-		pvc, err = pvcs.Create(ctx, &corev1.PersistentVolumeClaim{ObjectMeta: r.metadata(name, b), Spec: corev1.PersistentVolumeClaimSpec{AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}, StorageClassName: &r.config.StorageClass, Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(strconv.Itoa(r.config.StorageGiB) + "Gi")}}}}, metav1.CreateOptions{})
+		pvc, err = pvcs.Create(ctx, &corev1.PersistentVolumeClaim{ObjectMeta: r.metadata(name, b), Spec: corev1.PersistentVolumeClaimSpec{AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}, StorageClassName: environmentStorageClass(r.config.StorageClass), Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(strconv.Itoa(r.config.StorageGiB) + "Gi")}}}}, metav1.CreateOptions{})
 		if apierrors.IsAlreadyExists(err) {
 			pvc, err = pvcs.Get(ctx, name, metav1.GetOptions{})
 		}
@@ -311,4 +310,11 @@ func environmentSafeFailure(data []byte) error {
 	default:
 		return nil
 	}
+}
+
+func environmentStorageClass(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }

@@ -150,53 +150,31 @@ func TestEnsureTenantRootDataBindingIsIdempotentAndNotUserScoped(t *testing.T) {
 	}
 }
 
-func TestEnsureIDCDataBindingsUsesTenantLocalReadOnlyClaims(t *testing.T) {
+func TestRetiredIDCBindingsCannotBeCreatedOrLoaded(t *testing.T) {
+	// Historical rows remain readable by migration tools, but cannot re-enable
+	// the removed runtime mount capability through repository entry points.
 	repo := dataBindingRepo(t)
 	ctx := context.Background()
 	ensureDataBindingIdentity(t, repo, "tenant-a", "user-a")
-	bindings := make([]domain.DataMountBinding, 0, 3)
-	for _, item := range []struct {
-		id    string
-		space domain.DataSpaceID
-	}{
-		{id: "idc-original-a", space: domain.DataSpaceIDCOriginal},
-		{id: "idc-wellspiking-a", space: domain.DataSpaceIDCWellspiking},
-		{id: "idc-shared-a", space: domain.DataSpaceIDCShared},
-	} {
-		binding, err := domain.NewIDCDataMountBinding(item.id, "tenant-a", item.space, item.id)
-		if err != nil {
-			t.Fatal(err)
+	for _, space := range []domain.DataSpaceID{domain.DataSpaceIDCOriginal, domain.DataSpaceIDCWellspiking, domain.DataSpaceIDCShared} {
+		binding := domain.DataMountBinding{
+			ID: string(space), TenantID: "tenant-a", Scope: domain.DataMountScopeIDC,
+			SpaceID: space, ClaimName: "retired-claim", ReadOnly: true, Status: domain.DataMountBindingReady,
 		}
-		bindings = append(bindings, binding)
+		if _, err := repo.EnsureIDCDataBindings(ctx, binding); err == nil {
+			t.Fatalf("retired binding %q was registered", space)
+		}
+		if err := repo.CreateDataMountBinding(ctx, binding); err == nil {
+			t.Fatalf("retired binding %q was persisted", space)
+		}
+		record := dataMountBindingRecordFromDomain(binding, time.Now())
+		if _, err := record.toDomain(); err == nil {
+			t.Fatalf("historical binding %q became a usable runtime mount", space)
+		}
 	}
-	created, err := repo.EnsureIDCDataBindings(ctx, bindings...)
-	if err != nil {
-		t.Fatalf("ensure IDC bindings: %v", err)
-	}
-	if len(created) != 3 || created[0].Scope != domain.DataMountScopeIDC || !created[0].ReadOnly {
-		t.Fatalf("unexpected IDC bindings: %#v", created)
-	}
-	repeated, err := repo.EnsureIDCDataBindings(ctx, bindings...)
-	if err != nil || repeated[0].ID != bindings[0].ID {
-		t.Fatalf("IDC bindings must be idempotent: bindings=%#v err=%v", repeated, err)
-	}
-}
-
-func TestIDCBindingUsesValidJSONStoragePlaceholderWithoutChangingDomainContract(t *testing.T) {
-	binding, err := domain.NewIDCDataMountBinding("idc-original-a", "tenant-a", domain.DataSpaceIDCOriginal, "idc-original-a")
-	if err != nil {
-		t.Fatal(err)
-	}
-	record := dataMountBindingRecordFromDomain(binding, time.Now())
-	if record.VolumeAttributesJSON != "{}" {
-		t.Fatalf("IDC binding must persist a valid JSON placeholder, got %q", record.VolumeAttributesJSON)
-	}
-	restored, err := record.toDomain()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if restored.VolumeAttributesJSON != "" || restored.Driver != "" || !restored.ReadOnly {
-		t.Fatalf("IDC domain contract must not expose JSON/driver implementation fields: %#v", restored)
+	var count int64
+	if err := repo.db.Model(&DataMountBindingRecord{}).Count(&count).Error; err != nil || count != 0 {
+		t.Fatalf("rejected bindings must not write rows: count=%d err=%v", count, err)
 	}
 }
 

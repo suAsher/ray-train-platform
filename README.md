@@ -76,3 +76,7 @@ docs/        面向使用者和维护者的文档
 Go · Vue · PostgreSQL · Kubernetes · KubeRay · Kueue · PyTorch
 
 欢迎提交问题与改进，参见 [贡献指南](CONTRIBUTING.md)。CI 通过只代表对应自动化检查通过，不代替目标 GPU 集群的运行验收。
+
+## 许可证
+
+本项目采用 [Apache License 2.0](LICENSE)。第三方依赖遵循其各自的许可证。

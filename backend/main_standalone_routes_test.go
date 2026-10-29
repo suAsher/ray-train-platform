@@ -35,7 +35,7 @@ func TestStandaloneAnonymousRequestsCannotAccessTrainingStorageOrAdministration(
 	router := gin.New()
 	jobs := api.NewHandler(&mainJobRepository{}, api.Options{})
 	registerAPIRoutes(router, jobs, nil, nil, nil, nil, nil, config.Config{LocalAuthEnabled: true, PATEnabled: true})
-	for _, path := range []string{"/api/v1/jobs", "/api/v1/storage-assets", "/api/v1/admin/tenants"} {
+	for _, path := range []string{"/api/v1/jobs", "/api/v1/storage-assets", "/api/v1/tenants"} {
 		for _, method := range []string{http.MethodGet, http.MethodPost} {
 			response := httptest.NewRecorder()
 			request := httptest.NewRequest(method, path, strings.NewReader(`{}`))

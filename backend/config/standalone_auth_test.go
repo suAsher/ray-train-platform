@@ -19,6 +19,33 @@ func TestProductionLocalAuthenticationDoesNotNeedExternalIdentityOrStorage(t *te
 	}
 }
 
+func TestGenericOIDCDoesNotEnableKeycloakBrowserIntegration(t *testing.T) {
+	setValidProductionConfig(t)
+	t.Setenv("OIDC_REQUIRED", "true")
+	t.Setenv("OIDC_ISSUER_URL", "https://identity.example.com/oauth2/default")
+	t.Setenv("WEB_OIDC_ENABLED", "")
+	cfg, err := Load()
+	if err != nil || cfg.WebOIDCEnabled {
+		t.Fatalf("generic OIDC must not implicitly enable Keycloak browser integration: %v", err)
+	}
+}
+
+func TestWebOIDCRequiresValidBooleanAndOIDCAuthentication(t *testing.T) {
+	for _, scenario := range []struct{ web, oidc, message string }{
+		{"invalid", "true", "WEB_OIDC_ENABLED"},
+		{"true", "false", "WEB_OIDC_ENABLED requires OIDC_REQUIRED"},
+	} {
+		t.Run(scenario.web+scenario.oidc, func(t *testing.T) {
+			setValidProductionConfig(t)
+			t.Setenv("OIDC_REQUIRED", scenario.oidc)
+			t.Setenv("WEB_OIDC_ENABLED", scenario.web)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), scenario.message) {
+				t.Fatalf("expected %s, got %v", scenario.message, err)
+			}
+		})
+	}
+}
+
 func TestProductionLocalAuthenticationRequiresPATAndStrongPepper(t *testing.T) {
 	for _, scenario := range []struct{ name, key, value, message string }{
 		{"no PAT", "PAT_ENABLED", "false", "production requires"},

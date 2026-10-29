@@ -549,10 +549,19 @@ test('JobDetail equivalent command omits cache flags for off and legacy jobs', (
 })
 
 test('portable PVC selections use authorized asset IDs without logical data spaces', () => {
-  const form = { ...baseForm(), input: {}, checkpoint: {}, output: {}, datasetStorage: { assetId: 'dataset-a' }, outputStorage: { assetId: 'results-a' } }
+  const form = { ...baseForm(), input: {}, checkpoint: {}, output: {}, datasetStorage: { assetId: 'dataset-a', relativePath: 'datasets/train' }, checkpointStorage: { assetId: 'checkpoint-a', relativePath: 'weights/base' }, outputStorage: { assetId: 'results-a' } }
+  const before = structuredClone(form)
   const spec = buildJobSpec(form)
-  assert.deepEqual(spec.datasetStorage, { assetId: 'dataset-a' })
+  assert.deepEqual(spec.datasetStorage, { assetId: 'dataset-a', relativePath: 'datasets/train' })
+  assert.deepEqual(spec.checkpointStorage, { assetId: 'checkpoint-a', relativePath: 'weights/base' })
   assert.deepEqual(spec.outputStorage, { assetId: 'results-a' })
   assert.deepEqual(spec.input, {})
-  assert.throws(() => buildJobSpec({ ...form, datasetStorage: { assetId: 'dataset-a', relativePath: '../private' } }), /路径不合法/)
+  assert.deepEqual(spec.checkpoint, {})
+  assert.deepEqual(spec.output, {})
+  assert.deepEqual(form, before)
+  for (const field of ['datasetStorage', 'checkpointStorage', 'outputStorage']) {
+    for (const relativePath of ['../private', 'nested/../private', '/absolute', 'a\\b', 'a//b', 'a/./b', 's3://bucket/key']) {
+      assert.throws(() => buildJobSpec({ ...form, [field]: { assetId: 'asset-a', relativePath } }), /路径不合法/)
+    }
+  }
 })

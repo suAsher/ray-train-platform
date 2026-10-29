@@ -31,4 +31,3 @@ func ensureIdentityTenantOwnership(tx *gorm.DB, identityID, tenantID string, now
 		CreatedAt:  now,
 	}).Error
 }
-

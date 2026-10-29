@@ -71,7 +71,7 @@ func TestDataMountBindingRejectsMismatchedPersonalRoot(t *testing.T) {
 	}
 }
 
-func TestDataMountBindingAcceptsRegisteredReadOnlyIDCClaim(t *testing.T) {
+func TestDataMountBindingRejectsRetiredIDCClaim(t *testing.T) {
 	binding := DataMountBinding{
 		ID:        "idc-original",
 		TenantID:  "local",
@@ -81,20 +81,16 @@ func TestDataMountBindingAcceptsRegisteredReadOnlyIDCClaim(t *testing.T) {
 		ReadOnly:  true,
 		Status:    DataMountBindingReady,
 	}
-	if err := binding.Validate(); err != nil {
-		t.Fatalf("registered IDC claim rejected: %v", err)
+	if err := binding.Validate(); err == nil {
+		t.Fatal("retired IDC claim was accepted")
 	}
 }
 
-func TestNewIDCDataMountBindingAcceptsOnlyGovernedIDCSpaces(t *testing.T) {
-	binding, err := NewIDCDataMountBinding("idc-original-a", "local", DataSpaceIDCOriginal, "idc-original-local")
-	if err != nil {
-		t.Fatalf("new IDC binding: %v", err)
-	}
-	if binding.Scope != DataMountScopeIDC || !binding.ReadOnly || binding.Status != DataMountBindingPending || binding.ClaimName != "idc-original-local" {
-		t.Fatalf("unexpected IDC binding: %#v", binding)
-	}
-	if _, err := NewIDCDataMountBinding("bad", "local", DataSpaceMyFiles, "idc-files-local"); err == nil {
-		t.Fatal("non-IDC logical space was accepted as an IDC mount")
+
+func TestNewIDCDataMountBindingCannotRestoreRetiredSpaces(t *testing.T) {
+	for _, space := range []DataSpaceID{DataSpaceIDCOriginal, DataSpaceIDCWellspiking, DataSpaceIDCShared, DataSpaceMyFiles} {
+		if _, err := NewIDCDataMountBinding("old-binding", "local", space, "old-claim"); err == nil {
+			t.Fatalf("retired IDC constructor accepted %q", space)
+		}
 	}
 }

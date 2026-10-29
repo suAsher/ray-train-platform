@@ -47,7 +47,7 @@ python -m pip install --only-binary=:all: -r requirements.txt
 python -m pip check
 ~~~
 
-如果 requirements.txt 在别处，给 -r 提供它的实际路径即可，不必为了保存环境而切换到特定目录。新增 Base 调试镜像默认使用火山内网源 https://mirrors.ivolces.com/pypi/simple/。保存时平台还需从配置的镜像源取得完全匹配的 wheel；仅在本机或私有地址可用的安装包不能通过此入口保存。
+如果 requirements.txt 在别处，给 -r 提供它的实际路径即可，不必为了保存环境而切换到特定目录。调试镜像默认使用 PyPI，管理员可在构建镜像时配置可访问的包索引。保存时平台还需从配置的镜像源取得完全匹配的 wheel；仅在本机或私有地址可用的安装包不能通过此入口保存。
 
 不要用 pip install --user、--target、--prefix 改变安装目录，也不要用 pip install -e、Git URL 或本地包路径安装需要保存的依赖。原 Base 的 Ray、PyTorch、CUDA 等核心依赖不能通过此入口替换。需要这些改动时，使用本文后续的手工 Docker 构建与登记指南准备专用镜像。
 
@@ -62,10 +62,9 @@ python -m pip check
 
 | 目标镜像仓库 | 使用的凭据 |
 | --- | --- |
-| registry.example.com | 镜像仓库签发的访问凭据 |
-| harbor.qomolo.com | 账号密码 |
+| 管理员配置的 Harbor 地址（例如 registry.example.com） | 镜像仓库签发的访问凭据，且具有目标项目的推送权限 |
 
-这两种凭据都不是平台 PAT。不要把凭据写入源码、终端命令或截图；切换仓库后需要重新授权。
+镜像仓库凭据不是平台 PAT。不要把凭据写入源码、终端命令或截图；切换仓库后需要重新授权。
 
 3. 选择自己有写权限的项目，填写镜像名称。完整地址为 <所选仓库>/<所选项目>/<镜像名称>:<自动版本>；项目和镜像名称由你填写，没有固定到某个人的项目。
 4. 点击「验证目标写权限」，通过后点击「构建并推送」。能登录 Harbor 或能看到项目，不代表有推送权限；验证失败时请项目管理员检查权限。

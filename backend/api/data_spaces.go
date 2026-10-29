@@ -37,7 +37,6 @@ type tenantRootDataBindingEnsurer interface {
 	EnsureTenantRootDataBinding(context.Context, domain.DataMountBinding) (domain.DataMountBinding, error)
 }
 
-
 type dataSpaceDirectoryInitializer interface {
 	EnsureDataDirectory(context.Context, string) error
 }
@@ -169,7 +168,6 @@ func (h *Handler) ensureDataSpacesForPrincipal(ctx context.Context, principal au
 	}
 	return nil
 }
-
 
 func (h *Handler) ensureTenantSharedDataMounts(ctx context.Context, principal auth.Principal) error {
 	if !h.dataSpacesEnabled || h.kubernetes == nil {

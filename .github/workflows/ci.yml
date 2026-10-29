@@ -1,7 +1,7 @@
 name: CI
 on:
   push:
-    branches: ['**']
+    branches: [main]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -26,6 +26,8 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
+      - name: Install CLI shell test dependency
+        run: sudo apt-get update && sudo apt-get install -y zsh
       - uses: actions/setup-go@v5
         with:
           go-version-file: backend/go.mod
@@ -51,11 +53,29 @@ jobs:
         working-directory: backend
         env:
           POSTGRES_TEST_DSN: postgres://raytrain:ci-only-password@localhost:5432/raytrain_test?sslmode=disable
-        run: go test -timeout=25m ./...
+        # Packages use the same throwaway database and test global migration locks.
+        run: go test -p 1 -timeout=25m ./...
+  runtime-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Environment runtime profiles
+        run: python -m unittest discover -s images/environment-workspace -p 'test_*.py' -v
+      - name: Environment builder boundaries
+        if: ${{ !cancelled() }}
+        run: python -m unittest discover -s images/environment-builder -p 'test_*.py' -v
+      - name: Runtime image profiles
+        if: ${{ !cancelled() }}
+        run: python -m unittest discover -s images/raytrain-base -p 'test_*.py' -v
   frontend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install shell syntax test dependency
+        run: sudo apt-get update && sudo apt-get install -y zsh
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -102,9 +122,27 @@ jobs:
           context: .
           file: Dockerfile
           push: false
+          load: true
+          tags: local/raytrain:ci
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+      - uses: helm/kind-action@v1
+        with:
+          version: v0.27.0
+          kubectl_version: v1.32.2
+          node_image: kindest/node:v1.32.2
+          cluster_name: raytrain-ci
+          wait: 120s
+          ignore_failed_clean: true
+      - name: Fresh cluster control-plane smoke
+        run: bash scripts/ci-kind-smoke.sh
+      - name: Remove disposable cluster
+        if: always()
+        run: kind delete cluster --name raytrain-ci
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [backend, frontend, helm-runtime, image]
+    needs: [backend, frontend, helm-runtime, image, runtime-python]
     runs-on: ubuntu-latest
     permissions:
       contents: read

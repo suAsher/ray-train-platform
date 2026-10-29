@@ -2,9 +2,9 @@ package domain
 
 import "testing"
 
-func TestPersonalStorageKnownButForbiddenForTraining(t *testing.T) {
-	if !IsKnownDataSpace(DataSpaceWellspikingPersonal) {
-		t.Fatal("personal browser space must be known")
+func TestRetiredPersonalStorageForbiddenForBrowsingAndTraining(t *testing.T) {
+	if IsKnownDataSpace(DataSpaceWellspikingPersonal) {
+		t.Fatal("retired personal browser space must not be known")
 	}
 	for _, location := range []DataLocation{{Space: DataSpaceWellspikingPersonal}, {Space: DataSpaceWellspikingPersonal, RelativePath: "data"}} {
 		for _, spec := range []JobSpec{{Input: location}, {Checkpoint: location}, {Output: location}} {

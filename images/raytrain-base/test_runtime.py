@@ -53,20 +53,29 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn('PyTorch CUDA runtime 12.1 required', report['errors'])
         self.assertIn('Site selection protocol 1 required', report['errors'])
 
-    def test_build_target_is_explicit_only(self):
-        import os
-        env = {**os.environ, 'DRY_RUN': 'true', 'USE_BUILDX': 'true', 'BUILD_TARGETS': 'raytrain-base'}
-        result = subprocess.run(['bash', str(ROOT / 'build-image.sh')], env=env, capture_output=True, text=True, errors='replace')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('images/raytrain-base/Dockerfile', result.stdout)
-        env['BUILD_TARGETS'] = 'all'
-        result = subprocess.run(['bash', str(ROOT / 'build-image.sh')], env=env, capture_output=True, text=True, errors='replace')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotIn('Building raytrain-base', result.stdout)
+    def test_optional_images_require_operator_selected_base(self):
+        for image, argument in [('raytrain-base', 'TRAINING_BASE_IMAGE'),
+                                ('environment-builder', 'ENVIRONMENT_BASE_IMAGE'),
+                                ('environment-workspace', 'ENVIRONMENT_BASE_IMAGE')]:
+            with self.subTest(image=image):
+                dockerfile = (ROOT / 'images' / image / 'Dockerfile').read_text()
+                self.assertIn(f'ARG {argument}\n', dockerfile)
+                self.assertNotIn(f'ARG {argument}=', dockerfile)
+                self.assertIn('FROM ${' + argument + '}', dockerfile)
+        writer = (ROOT / 'images/environment-workspace/write_profile.py').read_text()
+        self.assertIn('os.geteuid() != 0', writer)
+        self.assertIn('target.chmod(0o444)', writer)
+        self.assertIn('environment_runtime.load_profile()', writer)
+        for image in ['environment-builder', 'environment-workspace']:
+            dockerfile = (ROOT / 'images' / image / 'Dockerfile').read_text()
+            self.assertIn('USER root', dockerfile)
+            self.assertIn('ENVIRONMENT_BASE_IMAGE="${ENVIRONMENT_BASE_IMAGE}"', dockerfile)
+            self.assertIn('/usr/local/lib/raytrain-environment/write_profile.py', dockerfile)
 
     def test_code_free_templates(self):
         dockerfile = (HERE / 'Dockerfile').read_text()
-        self.assertIn('@sha256:5bfa41f', dockerfile)
+        self.assertIn('ARG TRAINING_BASE_IMAGE\n', dockerfile)
+        self.assertIn('FROM ${TRAINING_BASE_IMAGE}', dockerfile)
         self.assertNotIn('COPY examples/', dockerfile)
         self.assertNotIn('bevfusion', dockerfile.lower())
         self.assertIn('raytrain-selfcheck', dockerfile)

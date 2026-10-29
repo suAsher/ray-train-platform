@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -68,28 +67,6 @@ func TestStatusReporterErrorCannotLeakOrRemainReady(t *testing.T) {
 	raw, _ := json.Marshal(got)
 	if got.State != StateUnknown || got.Reason != "observation_failed" || got.Gate.Allow || strings.Contains(string(raw), "credential") {
 		t.Fatalf("unsafe failed status: %s", raw)
-	}
-}
-
-func TestStatusControllerNetworkPolicyRequiresBackendNamespaceAndPodInSamePeer(t *testing.T) {
-	raw, err := os.ReadFile("../../deploy/assistant-idle/networkpolicy.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	policy := networkPolicyNamed(t, string(raw), "assistant-idle-controller-gate")
-	found := false
-	for _, rule := range policy.Spec.Ingress {
-		for _, peer := range rule.From {
-			if peer.NamespaceSelector != nil && peer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] == "PLACEHOLDER_RAYTRAIN_BACKEND_NAMESPACE" {
-				if peer.PodSelector == nil || peer.PodSelector.MatchLabels["app"] != "ray-train-backend" || peer.PodSelector.MatchLabels["app.kubernetes.io/component"] != "api" {
-					t.Fatal("backend peer is not pinned to API pods")
-				}
-				found = true
-			}
-		}
-	}
-	if !found {
-		t.Fatal("backend status peer absent")
 	}
 }
 

@@ -399,9 +399,6 @@ func TestDataSpaceBrowserUsesConfiguredTemporaryPublicRoot(t *testing.T) {
 	}
 }
 
-
-
-
 func TestDataSpacesListReturnsUnavailableWhenStoreIsMissing(t *testing.T) {
 	handler := NewHandler(&fakeJobRepository{}, Options{})
 	router := dataSpaceRouter(handler, auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal})

@@ -937,8 +937,8 @@ func TestSubmissionUsesConfiguredTemporaryPublicDataRoot(t *testing.T) {
 
 func TestSubmissionInitializesDataSpacesBeforeResolvingLogicalLocations(t *testing.T) {
 	store := &fakeDataSpaceStore{bindings: []domain.DataMountBinding{
-  {ID: "personal", TenantID: "tenant-a", UserID: "user-a", Scope: domain.DataMountScopePersonal, SpaceID: domain.DataSpaceWorkspace, ClaimName: "personal-data", Driver: domain.FSXCSIDriver, RootPrefix: "ray-train/tenants/tenant-a/users/user-a/", Status: domain.DataMountBindingReady},
- }}
+		{ID: "personal", TenantID: "tenant-a", UserID: "user-a", Scope: domain.DataMountScopePersonal, SpaceID: domain.DataSpaceWorkspace, ClaimName: "personal-data", Driver: domain.FSXCSIDriver, RootPrefix: "ray-train/tenants/tenant-a/users/user-a/", Status: domain.DataMountBindingReady},
+	}}
 	initialized := 0
 	service := NewSubmissionService(&submissionServiceRepository{}, SubmissionServiceOptions{
 		DataSpaces: store, DataSpacesEnabled: true,
@@ -961,7 +961,6 @@ func TestSubmissionInitializesDataSpacesBeforeResolvingLogicalLocations(t *testi
 		t.Fatalf("submission did not initialize and resolve personal data: job=%#v initialized=%d err=%v", job, initialized, err)
 	}
 }
-
 
 func TestSubmissionPlacesOutputBelowSelectedPersonalRunsDirectory(t *testing.T) {
 	store := &fakeDataSpaceStore{bindings: []domain.DataMountBinding{

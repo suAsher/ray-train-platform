@@ -38,3 +38,15 @@ func TestPublisherRejectsInvalidRegistryBeforeReadingCredentials(t *testing.T) {
 		}
 	}
 }
+
+func TestPublisherAcceptsOnlyOperatorApprovedCustomRegistry(t *testing.T) {
+	const host = "harbor.custom.example"
+	_, err := run(context.Background(), registryauth.PublishRequest{}, t.TempDir(), host)
+	if !errors.Is(err, registryauth.ErrInvalidTarget) {
+		t.Fatalf("unapproved custom registry reached credentials: %v", err)
+	}
+	_, err = run(context.Background(), registryauth.PublishRequest{}, t.TempDir(), host, host)
+	if !errors.Is(err, registryauth.ErrCredentials) {
+		t.Fatalf("approved custom registry did not reach credential loading: %v", err)
+	}
+}

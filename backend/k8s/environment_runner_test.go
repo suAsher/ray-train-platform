@@ -25,7 +25,7 @@ import (
 
 func environmentTestRunner() *EnvironmentRunner {
 	image := "registry.example.com/platform/image@sha256:" + strings.Repeat("a", 64)
-	return NewEnvironmentRunner(NewClientFromInterfaces(nil, fake.NewSimpleClientset()), EnvironmentRunnerConfig{Namespace: "platform", BaseImage: image, WorkspaceImage: image, PrepareImage: image, PublisherImage: image, StorageClass: "ebs-ssd", PullSecretName: "pull-robot", ImagePullSecrets: []string{"pull-robot"}, WheelIndexURL: "https://packages.internal/simple", JobTimeout: time.Hour})
+	return NewEnvironmentRunner(NewClientFromInterfaces(nil, fake.NewSimpleClientset()), EnvironmentRunnerConfig{RegistryHosts: []string{"registry.example.com", "registry-secondary.example.com"}, Namespace: "platform", BaseImage: image, WorkspaceImage: image, PrepareImage: image, PublisherImage: image, StorageClass: "ebs-ssd", PullSecretName: "pull-robot", ImagePullSecrets: []string{"pull-robot"}, WheelIndexURL: "https://packages.internal/simple", JobTimeout: time.Hour})
 }
 func environmentTestBuild(r *EnvironmentRunner) environmentbuild.Build {
 	return environmentbuild.Build{ID: "build-one", TenantID: "tenant-a", OwnerID: "alice", BaseImage: r.config.BaseImage, WorkspaceImage: r.config.WorkspaceImage, Project: "public", Repository: "environment", Tag: "build-one", ArtifactDigest: "sha256:" + strings.Repeat("b", 64), ImageDigest: "sha256:" + strings.Repeat("b", 64), SnapshotJSON: `{"schemaVersion":1}`, ChecksJSON: `{"layerDigest":"sha256:` + strings.Repeat("b", 64) + `"}`, Attempt: 1}

@@ -62,7 +62,6 @@ func TestRenderDevRayClusterSudoKeepsPodAndStorageIsolation(t *testing.T) {
 					Personal:    &DataMountRoot{ClaimName: "data-user-a"},
 					Team:        &DataMountRoot{ClaimName: "data-team-a", ReadOnly: true},
 					Public:      &DataMountRoot{ClaimName: "data-public", ReadOnly: true},
-					IDCOriginal: &DataMountRoot{ClaimName: "idc-original-ro", ReadOnly: true},
 				},
 			})
 			if err != nil {
@@ -96,7 +95,6 @@ func TestRenderDevRayClusterSudoKeepsPodAndStorageIsolation(t *testing.T) {
 				assertStorageMount(t, pod, "platform-data-personal", "data-user-a", domain.MyStorageMountPath, false)
 				assertStorageMount(t, pod, "platform-data-team", "data-team-a", domain.TeamStorageMountPath, true)
 				assertStorageMount(t, pod, "platform-data-public", "data-public", domain.PublicStorageMountPath, true)
-				assertStorageMount(t, pod, "platform-data-idc-original", "idc-original-ro", domain.IDCOriginalMountPath, true)
 			}
 		})
 	}

@@ -81,7 +81,7 @@ func renderOnboardingChart(t *testing.T, overrides map[string]any, namespace str
 }
 
 func onboardingEnabledValues() map[string]any {
-	return map[string]any{"enabled": true, "activateController": true, "image": "registry.example/onboarding@sha256:" + strings.Repeat("a", 64), "nfs": map[string]any{"shares": []any{map[string]any{"server": "nfs.example", "path": "/datasets"}}}}
+	return map[string]any{"enabled": true, "activateController": true, "image": "registry.example/onboarding@sha256:" + strings.Repeat("a", 64), "helperImage": "registry.example/busybox@sha256:" + strings.Repeat("b", 64), "nfs": map[string]any{"shares": []any{map[string]any{"server": "nfs.example", "path": "/datasets"}}}}
 }
 
 func TestNodeOnboardingChartDisabledByDefault(t *testing.T) {
@@ -160,6 +160,8 @@ func TestNodeOnboardingChartRejectsUnsafeConfiguration(t *testing.T) {
 	}{
 		{"namespace", nil, "default"},
 		{"mutable image", map[string]any{"image": "registry.example/controller:latest"}, "ray-cache-local"},
+		{"mutable helper", map[string]any{"helperImage": "registry.example/busybox:latest"}, "ray-cache-local"},
+		{"missing helper", map[string]any{"helperImage": ""}, "ray-cache-local"},
 		{"no NFS", map[string]any{"nfs": map[string]any{"shares": []any{}}}, "ray-cache-local"},
 		{"NFS relative", map[string]any{"nfs": map[string]any{"shares": []any{map[string]any{"server": "nfs.example", "path": "relative"}}}}, "ray-cache-local"},
 		{"NFS traversal", map[string]any{"nfs": map[string]any{"shares": []any{map[string]any{"server": "nfs.example", "path": "/data/../root"}}}}, "ray-cache-local"},

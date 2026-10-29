@@ -24,9 +24,9 @@ func TestRenderRayJobMountsResolvedDataSpacesWithoutWorkloadCredentials(t *testi
 		},
 	}
 	job.Spec.ResolvedDataRoots = domain.ResolvedDataSpaceRoots{
-		Personal:    &domain.ResolvedDataRoot{Space: domain.DataSpaceWorkspace, ClaimName: "data-user-01"},
-		Team:        &domain.ResolvedDataRoot{Space: domain.DataSpaceTeamShared, ClaimName: "data-team-a", ReadOnly: true},
-		Public:      &domain.ResolvedDataRoot{Space: domain.DataSpacePublic, ClaimName: "data-public", ReadOnly: true},
+		Personal: &domain.ResolvedDataRoot{Space: domain.DataSpaceWorkspace, ClaimName: "data-user-01"},
+		Team:     &domain.ResolvedDataRoot{Space: domain.DataSpaceTeamShared, ClaimName: "data-team-a", ReadOnly: true},
+		Public:   &domain.ResolvedDataRoot{Space: domain.DataSpacePublic, ClaimName: "data-public", ReadOnly: true},
 	}
 
 	options := testRenderOptions()

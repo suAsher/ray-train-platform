@@ -8,10 +8,10 @@ readonly rendered1="$(mktemp)"
 readonly rendered2="$(mktemp)"
 trap 'rm -f -- "${rendered1}" "${rendered2}"' EXIT
 
-helm lint "${chart_dir}" --values "${data1_values}" >/dev/null
-helm lint "${chart_dir}" --values "${data2_values}" >/dev/null
-helm template ray-cache-local-data1 "${chart_dir}" --namespace ray-cache-local --values "${data1_values}" >"${rendered1}"
-helm template ray-cache-local-data2 "${chart_dir}" --namespace ray-cache-local --values "${data2_values}" >"${rendered2}"
+helm lint "${chart_dir}" --values "${chart_dir}/tests/image-fixture.yaml" --values "${data1_values}" >/dev/null
+helm lint "${chart_dir}" --values "${chart_dir}/tests/image-fixture.yaml" --values "${data2_values}" >/dev/null
+helm template ray-cache-local-data1 "${chart_dir}" --values "${chart_dir}/tests/image-fixture.yaml" --namespace ray-cache-local --values "${data1_values}" >"${rendered1}"
+helm template ray-cache-local-data2 "${chart_dir}" --values "${chart_dir}/tests/image-fixture.yaml" --namespace ray-cache-local --values "${data2_values}" >"${rendered2}"
 
 require() {
   grep -Fq -- "$2" "$1" || { echo "$1 missing: $2" >&2; exit 1; }

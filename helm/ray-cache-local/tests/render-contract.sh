@@ -12,10 +12,10 @@ production_rendered="$(mktemp)"
 helper_pod_rendered="$(mktemp)"
 trap 'rm -f "${default_rendered}" "${production_rendered}" "${helper_pod_rendered}"' EXIT
 
-helm lint "${chart_dir}" >/dev/null
-helm lint "${chart_dir}" --values "${production_values}" >/dev/null
-helm template ray-cache-local "${chart_dir}" --namespace ray-cache-local >"${default_rendered}"
-helm template ray-cache-local "${chart_dir}" --namespace ray-cache-local \
+helm lint "${chart_dir}" --values "${chart_dir}/tests/image-fixture.yaml" >/dev/null
+helm lint "${chart_dir}" --values "${chart_dir}/tests/image-fixture.yaml" --values "${production_values}" >/dev/null
+helm template ray-cache-local "${chart_dir}" --values "${chart_dir}/tests/image-fixture.yaml" --namespace ray-cache-local >"${default_rendered}"
+helm template ray-cache-local "${chart_dir}" --values "${chart_dir}/tests/image-fixture.yaml" --namespace ray-cache-local \
   --values "${production_values}" >"${production_rendered}"
 
 awk '
@@ -55,8 +55,8 @@ require "${production_rendered}" '/data1/ray-cache'
 require "${production_rendered}" '/data2/ray-cache'
 require "${production_rendered}" '"node": "DEFAULT_PATH_FOR_NON_LISTED_NODES"'
 require "${production_rendered}" '"paths": []'
-require "${production_rendered}" 'docker.io/rancher/local-path-provisioner:v0.0.32'
-require "${production_rendered}" 'docker.io/library/busybox:1.36.1'
+require "${production_rendered}" 'registry.example.test/local-path-provisioner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+require "${production_rendered}" 'registry.example.test/busybox@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
 require "${production_rendered}" '--configmap-name'
 require "${production_rendered}" 'ray-cache-local-config'
 require "${production_rendered}" '--helper-pod-file'
@@ -79,7 +79,7 @@ expected_nodes=$'gpu-node-a\ngpu-node-b\nDEFAULT_PATH_FOR_NON_LISTED_NODES'
   exit 1
 }
 
-reject "${production_rendered}" 'docker.io/'
+reject "${production_rendered}" ':latest'
 reject "${production_rendered}" 'quay.io/'
 reject "${production_rendered}" 'registry.k8s.io/'
 reject "${production_rendered}" ':latest'
@@ -100,7 +100,7 @@ require "${production_rendered}" 'resources: ["pods/log"]'
 # fields that safe-mode validation rejects.
 require "${helper_pod_rendered}" 'kind: Pod'
 require "${helper_pod_rendered}" 'name: helper-pod'
-require "${helper_pod_rendered}" 'docker.io/library/busybox:1.36.1'
+require "${helper_pod_rendered}" 'registry.example.test/busybox@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
 [[ "$(grep -Ec '^[[:space:]]{4}- name:' "${helper_pod_rendered}")" -eq 1 ]] || {
   echo 'helperPod.yaml must contain exactly one container' >&2
   exit 1
@@ -133,3 +133,7 @@ reject "${production_rendered}" 'resources: ["secrets"]'
 reject "${production_rendered}" 'resources: [secrets]'
 
 echo 'ray cache local render contract verified'
+
+if helm template ray-cache-local "${chart_dir}" --values "${chart_dir}/tests/image-fixture.yaml" --set images.provisioner=docker.io/rancher/local-path-provisioner:latest >/dev/null 2>&1; then
+  echo 'Mutable provisioner image was accepted' >&2; exit 1
+fi

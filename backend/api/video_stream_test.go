@@ -262,7 +262,7 @@ func TestVideoSharedSpaceAllowedButIDCNotBrowsable(t *testing.T) {
 	for _, tc := range []struct {
 		id, root string
 		code     int
-	}{{"team-shared", "ray-train/tenants/tenant-a/shared/", 200}, {"idc-original", "", 409}, {"unknown-space", "", 404}} {
+	}{{"team-shared", "ray-train/tenants/tenant-a/shared/", 200}, {"idc-original", "", 404}, {"unknown-space", "", 404}} {
 		s := &fakeVideoStore{info: objectstore.MediaInfo{SizeBytes: 10, ETag: "\"v1\""}}
 		h := NewHandler(&fakeJobRepository{}, Options{DataSpaces: &fakeDataSpaceStore{}, DataObjectStore: s})
 		router := dataSpaceRouter(h, auth.Principal{Subject: "a", TenantID: "tenant-a", AuthType: auth.AuthTypeLocal})

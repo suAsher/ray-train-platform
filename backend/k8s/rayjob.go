@@ -305,14 +305,14 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 		}},
 	}
 	labels := map[string]any{
-		"app.kubernetes.io/part-of":                 "ray-train-platform",
-		"app.kubernetes.io/managed-by":              "ray-train-platform",
-		"ray.io/job-id":                             job.ID,
-		"ray.io/tenant-id":                          job.TenantID,
-		"platform_job_id":                           job.ID,
-		"platform_tenant_id":                        job.TenantID,
-		"kueue.x-k8s.io/queue-name":                 job.Spec.Queue,
-		"kueue.x-k8s.io/priority-class":             domain.WorkloadPriority(job.Spec.Priority).KubernetesPriorityClass(),
+		"app.kubernetes.io/part-of":     "ray-train-platform",
+		"app.kubernetes.io/managed-by":  "ray-train-platform",
+		"ray.io/job-id":                 job.ID,
+		"ray.io/tenant-id":              job.TenantID,
+		"platform_job_id":               job.ID,
+		"platform_tenant_id":            job.TenantID,
+		"kueue.x-k8s.io/queue-name":     job.Spec.Queue,
+		"kueue.x-k8s.io/priority-class": domain.WorkloadPriority(job.Spec.Priority).KubernetesPriorityClass(),
 		"raytrain.io/accelerator-class": string(job.Spec.AcceleratorClass.Resolved()),
 	}
 	annotations := map[string]any{

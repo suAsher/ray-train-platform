@@ -328,7 +328,7 @@ type starterProject struct {
 	MemoryPerWorker  string                    `json:"memoryPerWorker,omitempty"`
 	ExecutionMode    string                    `json:"executionMode,omitempty"`
 	Cache            *projectCache             `json:"cache,omitempty"`
-	RayData          *projectRayData            `json:"rayData,omitempty"`
+	RayData          *projectRayData           `json:"rayData,omitempty"`
 	Input            *projectLocation          `json:"input,omitempty"`
 	Checkpoint       *projectLocation          `json:"checkpoint,omitempty"`
 	Output           *projectLocation          `json:"output,omitempty"`

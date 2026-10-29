@@ -247,9 +247,9 @@ func (spec PublicationJobSpec) MaxParallelism() int                       { retu
 
 func (spec PublicationJobSpec) Labels() map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/managed-by":                 "ray-train-platform",
-		"app.kubernetes.io/name":                       "dataset-publisher",
-		"kueue.x-k8s.io/queue-name":                    spec.queueName,
+		"app.kubernetes.io/managed-by":     "ray-train-platform",
+		"app.kubernetes.io/name":           "dataset-publisher",
+		"kueue.x-k8s.io/queue-name":        spec.queueName,
 		"raytrain.io/publication-job-name": spec.name,
 	}
 }

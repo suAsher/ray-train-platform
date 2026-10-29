@@ -3,13 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Ray AI Studio - 分布式 AI 训练控制台</title>
+    <title>RayTrain - 分布式 AI 训练控制台</title>
     <script src="/runtime-config.js"></script>
-    <!-- The portal is served over a private network where fonts.googleapis.com
-         does not resolve. A blocking stylesheet link there stalls first paint
-         until the request times out, so the webfonts are loaded
-         opportunistically and the local font stack in index.css renders
-         immediately. -->
+    <!-- Webfonts are optional: restricted-network installations render
+         immediately with the local font stack in index.css. -->
     <link
       rel="stylesheet"
       media="print"

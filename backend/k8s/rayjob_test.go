@@ -262,7 +262,6 @@ func TestRayDDPUsesPerJobRayVersionWithOptionsOnlyAsLegacyFallback(t *testing.T)
 	}
 }
 
-
 func TestRenderRayJobRejectsLegacyArtifactSource(t *testing.T) {
 	job := validRenderJob()
 	digest := strings.Repeat("a", 64)

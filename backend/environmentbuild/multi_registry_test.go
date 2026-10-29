@@ -127,7 +127,7 @@ func TestRegistryCapabilitiesAreExplicitAndDefaultCompatible(t *testing.T) {
 	if (Build{RegistryHost: secondaryTestHost, Project: "p", Repository: "r", Tag: "t"}).Target() != secondaryTestHost+"/p/r:t" {
 		t.Fatal("selected registry missing from target")
 	}
-	for _, hosts := range [][]string{ {"https://" + secondaryTestHost}, {secondaryTestHost + ":443"}, {RegistryHost, RegistryHost}, {""}} {
+	for _, hosts := range [][]string{{"https://" + secondaryTestHost}, {secondaryTestHost + ":443"}, {RegistryHost, RegistryHost}, {""}} {
 		config := s.config
 		config.RegistryHosts = hosts
 		if _, err := NewService(s.store, s.runner, s.registry, s.vault, config); !errors.Is(err, ErrInvalid) {
@@ -311,7 +311,7 @@ func TestPushReconcileKeepsRegistryBindingAndImageReference(t *testing.T) {
 
 func TestHarborRegistryClientSelectionKeepsLegacyClientBoundToItsHost(t *testing.T) {
 	legacy := registryauth.NewClient()
-	adapter := HarborRegistry{Client: legacy}
+	adapter := HarborRegistry{Client: legacy, RegistryHosts: []string{RegistryHost, secondaryTestHost}}
 	selected, err := adapter.clientForHost("")
 	if err != nil || selected != legacy || selected.Host() != RegistryHost {
 		t.Fatal("legacy injected client was not reused")

@@ -142,8 +142,9 @@ func TestEnvironmentImageGuideOrdersSaveAndTrainWorkflow(t *testing.T) {
 		previous = index
 	}
 	for _, text := range []string{
-		"registry.example.com | 镜像仓库签发的访问凭据",
-		"harbor.qomolo.com | 账号密码",
+		"管理员配置的 Harbor 地址（例如 registry.example.com）",
+		"镜像仓库签发的访问凭据，且具有目标项目的推送权限",
+		"镜像仓库凭据不是平台 PAT",
 		"没有固定到某个人的项目",
 		"仅本人", "当前团队", "Harbor 仓库自身",
 		"验证目标写权限", "构建并推送", "固定摘要",

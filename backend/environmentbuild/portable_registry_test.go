@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"ray-train-platform-backend/registryauth"
 )
 
 func TestCustomRegistryConfigurationStillRestrictsUserDestinations(t *testing.T) {
@@ -25,5 +26,15 @@ func TestCustomRegistryConfigurationStillRestrictsUserDestinations(t *testing.T)
 		if _, err := service.registryHost(request); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("user escaped registry allowlist: %q %v", request, err)
 		}
+	}
+}
+
+func TestRegistryAdapterCustomAllowlistCannotLeakCredentialsToAnotherHost(t *testing.T) {
+	adapter := HarborRegistry{Client: registryauth.NewClient(), RegistryHosts: []string{"harbor.custom.example"}}
+	if client, err := adapter.clientForHost("harbor.custom.example"); err != nil || client.Host() != "harbor.custom.example" {
+		t.Fatalf("approved custom host rejected: %v", err)
+	}
+	if _, err := adapter.clientForHost(RegistryHost); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unapproved legacy host accepted: %v", err)
 	}
 }

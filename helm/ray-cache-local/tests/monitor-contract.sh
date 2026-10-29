@@ -20,8 +20,8 @@ default_rendered="$(mktemp)"
 production_rendered="$(mktemp)"
 trap 'rm -f "${default_rendered}" "${production_rendered}"' EXIT
 
-helm template ray-cache-local "${chart_dir}" --namespace ray-cache-local >"${default_rendered}"
-helm template ray-cache-local "${chart_dir}" --namespace ray-cache-local \
+helm template ray-cache-local "${chart_dir}" --values "${chart_dir}/tests/image-fixture.yaml" --namespace ray-cache-local >"${default_rendered}"
+helm template ray-cache-local "${chart_dir}" --values "${chart_dir}/tests/image-fixture.yaml" --namespace ray-cache-local \
   --values "${production_values}" >"${production_rendered}"
 
 require() {
@@ -66,8 +66,8 @@ require 'cpu: 25m'
 require 'memory: 32Mi'
 require 'cpu: 50m'
 require 'memory: 64Mi'
-require 'quay.io/prometheus/node-exporter:v1.9.1'
-require 'docker.io/library/busybox:1.36.1'
+require 'registry.example.test/node-exporter@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+require 'registry.example.test/busybox@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
 require 'value: "30"'
 require 'sleep "${interval_seconds}"'
 require 'ray_cache_filesystem_size_bytes'
@@ -98,7 +98,7 @@ require '>= 0.92'
 reject "${production_rendered}" 'nvidia.com/gpu'
 reject "${production_rendered}" 'privileged: true'
 reject "${production_rendered}" 'automountServiceAccountToken: true'
-reject "${production_rendered}" 'docker.io/'
+reject "${production_rendered}" ':latest'
 reject "${production_rendered}" 'quay.io/'
 reject "${production_rendered}" 'kubectl delete'
 reject "${production_rendered}" 'kubectl cordon'

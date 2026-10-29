@@ -924,9 +924,9 @@ func assertPublicationIdentityMetadata(t *testing.T, job *batchv1.Job, spec fake
 	}
 	labels := job.Labels
 	for key, value := range map[string]string{
-		"app.kubernetes.io/managed-by":                 "ray-train-platform",
-		"app.kubernetes.io/name":                       "dataset-publisher",
-		"kueue.x-k8s.io/queue-name":                    spec.queueName,
+		"app.kubernetes.io/managed-by":     "ray-train-platform",
+		"app.kubernetes.io/name":           "dataset-publisher",
+		"kueue.x-k8s.io/queue-name":        spec.queueName,
 		"raytrain.io/publication-job-name": spec.name,
 	} {
 		if labels[key] != value {
@@ -1017,9 +1017,9 @@ func publicationJobSpecForTest() fakePublicationJobSpec {
 		cpuRequest: "500m", cpuLimit: "2", memoryRequest: "1Gi", memoryLimit: "4Gi",
 		backoffLimit: 2, activeDeadline: 7 * 24 * time.Hour, ttlAfterFinished: 24 * time.Hour,
 		labels: map[string]string{
-			"app.kubernetes.io/managed-by":                 "ray-train-platform",
-			"app.kubernetes.io/name":                       "dataset-publisher",
-			"kueue.x-k8s.io/queue-name":                    "dataset-publisher-low",
+			"app.kubernetes.io/managed-by":     "ray-train-platform",
+			"app.kubernetes.io/name":           "dataset-publisher",
+			"kueue.x-k8s.io/queue-name":        "dataset-publisher-low",
 			"raytrain.io/publication-job-name": name,
 		},
 	}

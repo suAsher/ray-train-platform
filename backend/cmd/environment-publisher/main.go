@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"strings"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/logs"
@@ -20,12 +21,14 @@ import (
 )
 
 type publisherOptions struct {
+	allowedRegistryHosts string
 	request                                        registryauth.PublishRequest
 	credentialsDirectory, resultPath, registryHost string
 }
 
 func publisherFlags(flags *flag.FlagSet) *publisherOptions {
 	options := &publisherOptions{}
+	flags.StringVar(&options.allowedRegistryHosts, "allowed-registry-hosts", registryauth.Host, "deployment-approved comma-separated registry hosts")
 	flags.StringVar(&options.request.LayoutPath, "layout", "/artifacts/oci", "sealed OCI layout directory")
 	flags.StringVar(&options.request.Digest, "digest", "", "frozen OCI image manifest digest")
 	flags.StringVar(&options.request.Project, "project", "", "Harbor project")
@@ -53,7 +56,7 @@ func main() {
 	ctx = registryauth.WithPublishDiagnostics(ctx, func(event registryauth.PublishDiagnostic) {
 		_ = diagnostics.Encode(event)
 	})
-	result, err := run(ctx, options.request, options.credentialsDirectory, options.registryHost)
+	result, err := run(ctx, options.request, options.credentialsDirectory, options.registryHost, strings.Split(options.allowedRegistryHosts, ",")...)
 	if err != nil {
 		result = registryauth.PublishResult{ErrorCode: errorCode(err)}
 	}
@@ -87,8 +90,12 @@ func readCredential(directory, name string, limit int64) (string, error) {
 	return string(data), nil
 }
 
-func run(ctx context.Context, request registryauth.PublishRequest, directory, registryHost string) (registryauth.PublishResult, error) {
-	client, err := registryauth.NewClientForHost(registryHost)
+func run(ctx context.Context, request registryauth.PublishRequest, directory, registryHost string, allowedHosts ...string) (registryauth.PublishResult, error) {
+	host, err := registryauth.AllowedHost(registryHost, allowedHosts)
+	if err != nil {
+		return registryauth.PublishResult{}, err
+	}
+	client, err := registryauth.NewClientForHost(host)
 	if err != nil {
 		return registryauth.PublishResult{}, err
 	}

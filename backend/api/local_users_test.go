@@ -260,6 +260,22 @@ func TestOnlySuperAdminCanInitializeTheBucketWideObjectSetLayout(t *testing.T) {
 	}
 }
 
+func TestAdminCreatesAccountWithoutOptionalObjectStorage(t *testing.T) {
+	store := newFakeLocalAuthStore()
+	initializer := NewPersonalDataSpaceInitializer(nil)
+	if initializer != nil {
+		t.Fatal("unconfigured object storage must not install an account creation hook")
+	}
+	response := postUser(localUserAdminRouter(localAuthHandlerWithInitializer(store, initializer), adminPrincipal()),
+		`{"username":"alice","password":"engineer-pass","roles":["Engineer"]}`)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("PVC-only account creation failed: %d %s", response.Code, response.Body.String())
+	}
+	if user, exists := store.users["alice"]; !exists || user.TenantID != "team-a" {
+		t.Fatal("PVC-only account was not persisted in the selected tenant")
+	}
+}
+
 func TestAdminCreatesAccountOnlyAfterPersonalDataSpaceIsInitialized(t *testing.T) {
 	store := newFakeLocalAuthStore()
 	initializer := &fakePersonalDataInitializer{}

@@ -21,8 +21,15 @@ import (
 
 var environmentDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
-func environmentPinnedImage(image string) bool {
-	return environmentPinnedRegistryImage(image, environmentbuild.RegistryHost)
+func (r *EnvironmentRunner) environmentPinnedImage(image string) bool {
+	host, _, ok := strings.Cut(image, "/")
+	if !ok {
+		return false
+	}
+	if _, err := registryauth.AllowedHost(host, r.config.RegistryHosts); err != nil {
+		return false
+	}
+	return environmentPinnedRegistryImage(image, host)
 }
 
 func environmentPinnedRegistryImage(image, host string) bool {
@@ -48,7 +55,7 @@ func environmentRuntimeImageVerified(imageID, image string) bool {
 }
 
 func (r *EnvironmentRunner) workspaceImageAllowed(image string) bool {
-	if r.profilesError != nil || !environmentPinnedImage(image) {
+	if r.profilesError != nil || !r.environmentPinnedImage(image) {
 		return false
 	}
 	_, ok := environmentbuild.ResolveWorkspaceProfile(image, r.config.WorkspaceImage, r.config.BaseImage, r.config.PrepareImage, r.config.CompatibleWorkspaceImages, r.config.WorkspaceProfiles)
@@ -59,7 +66,7 @@ func (r *EnvironmentRunner) profileForBuild(b environmentbuild.Build) (environme
 		return environmentbuild.WorkspaceProfile{}, environmentbuild.ErrInvalid
 	}
 	profile, ok := environmentbuild.ResolveWorkspaceProfile(b.WorkspaceImage, r.config.WorkspaceImage, r.config.BaseImage, r.config.PrepareImage, r.config.CompatibleWorkspaceImages, r.config.WorkspaceProfiles)
-	if !ok || b.BaseImage != profile.BaseImage || !environmentPinnedImage(profile.BaseImage) || !environmentPinnedImage(profile.PrepareImage) {
+	if !ok || b.BaseImage != profile.BaseImage || !r.environmentPinnedImage(profile.BaseImage) || !r.environmentPinnedImage(profile.PrepareImage) {
 		return environmentbuild.WorkspaceProfile{}, environmentbuild.ErrInvalid
 	}
 	return profile, nil
@@ -84,7 +91,7 @@ func (r *EnvironmentRunner) InspectWorkspace(ctx context.Context, w environmentb
 	return environmentbuild.WorkspaceSnapshot{UID: string(pod.UID), Image: environmentWorkspacePodImage(pod)}, nil
 }
 func (r *EnvironmentRunner) workspacePod(ctx context.Context, w environmentbuild.Workspace) (*corev1.Pod, error) {
-	if r.client == nil || r.client.dynamic == nil || r.client.kubernetes == nil || w.ID == "" || w.OwnerID == "" || w.TenantID == "" || !isDNSLabel(w.Namespace) || !isDNSLabel(w.ResourceName) || !environmentPinnedImage(r.config.WorkspaceImage) {
+	if r.client == nil || r.client.dynamic == nil || r.client.kubernetes == nil || w.ID == "" || w.OwnerID == "" || w.TenantID == "" || !isDNSLabel(w.Namespace) || !isDNSLabel(w.ResourceName) || !r.environmentPinnedImage(r.config.WorkspaceImage) {
 		return nil, environmentbuild.ErrInvalid
 	}
 	cluster, err := r.client.dynamic.Resource(rayClusterGVR).Namespace(w.Namespace).Get(ctx, w.ResourceName, metav1.GetOptions{})

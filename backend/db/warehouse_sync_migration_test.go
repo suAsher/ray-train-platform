@@ -47,7 +47,7 @@ func TestPostgresWarehouseSyncUpgradeFrom52PreservesExistingRows(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := database.Raw("SELECT MAX(version) FROM schema_migrations").Scan(&version).Error; err != nil || version != 59 {
+	if err := database.Raw("SELECT MAX(version) FROM schema_migrations").Scan(&version).Error; err != nil || version != 60 {
 		t.Fatalf("after schema %d %v", version, err)
 	}
 	var actualIdentity, actualModel string

@@ -14,16 +14,35 @@ test('individual help Markdown keeps walkthroughs, links and downloadable templa
   assert.ok(!markdown.includes('# RayTrain 平台使用说明'))
 })
 
-test('embedded seed faithfully contains every stable topic without overwriting metadata', () => {
+test('independently maintained server seed preserves frontend topic IDs and valid content', () => {
   const seed = JSON.parse(readFileSync(new URL('../../../backend/helpdocs/seed.json', import.meta.url), 'utf8'))
-  assert.equal(seed.length, content.helpSections.length)
   assert.equal(new Set(seed.map(item => item.id)).size, seed.length)
-  assert.deepEqual(seed, content.helpSections.map((section, index) => ({
-    id: section.id, title: section.title, category: section.group || '其他',
-    sortOrder: index * 10, markdown: content.renderHelpSectionMarkdown(section),
-  })))
+  // Server documents have their own reading categories, revisions and richer
+  // deployment guidance. The local authoring catalogue must not overwrite them.
+  assert.deepEqual(seed.map(item => item.id).sort(), [...content.helpSections.map(section => section.id), 'scheduling-topology'].sort())
   for (const item of seed) {
     assert.match(item.id, /^[a-z0-9][a-z0-9-]{0,79}$/)
+    assert.ok(item.title.trim() && item.category.trim() && item.markdown.trim())
+    assert.ok(Number.isInteger(item.sortOrder))
     assert.ok(Buffer.byteLength(item.markdown) < 512 * 1024)
+    assert.doesNotMatch(item.markdown, /wellspiking\.ai|\/mnt\/\.spk-hybrid|同步到功能仓/)
   }
+  assert.match(seed.find(item => item.id === 'storage').markdown, /PVC/)
+  assert.ok(!seed.some(item => item.id === 'idc-sync-lifecycle'))
+  assert.ok(!content.helpSections.some(item => item.id === 'idc-sync-lifecycle'))
+})
+
+test('published help is loaded from the API without client catalogue replacement', () => {
+  const view = readFileSync(new URL('../views/Help/index.vue', import.meta.url), 'utf8')
+  assert.match(view, /createDocumentLoader\(listHelpDocuments\)/)
+  assert.match(view, /downloadDocuments\(documents\.value/)
+  assert.doesNotMatch(view, /import.*(?:helpSections|cliOnboarding|renderHelpMarkdown)/)
+})
+
+test('standalone submission presents PVC assets and optional object storage separately', () => {
+  const view = readFileSync(new URL('../components/job/StepData.vue', import.meta.url), 'utf8')
+  assert.match(view, /StorageDirectoryPicker v-model="form\.datasetStorage"/)
+  assert.match(view, /StorageDirectoryPicker v-model="form\.outputStorage"/)
+  assert.match(view, /需要管理员配置/)
+  assert.doesNotMatch(view, /IDC|wellspiking/)
 })

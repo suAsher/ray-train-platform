@@ -7,10 +7,13 @@ import (
 )
 
 // HarborRegistry translates the selected trusted Harbor client's verified grants.
-type HarborRegistry struct{ Client *registryauth.Client }
+type HarborRegistry struct {
+	Client *registryauth.Client
+	RegistryHosts []string
+}
 
 func (h HarborRegistry) clientForHost(host string) (*registryauth.Client, error) {
-	resolved, err := registryauth.NormalizeHost(host)
+	resolved, err := registryauth.AllowedHost(host, h.RegistryHosts)
 	if err != nil {
 		return nil, ErrInvalid
 	}

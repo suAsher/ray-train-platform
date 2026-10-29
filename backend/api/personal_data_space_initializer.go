@@ -17,6 +17,11 @@ type personalDataSpaceInitializer struct {
 }
 
 func NewPersonalDataSpaceInitializer(directories objectstore.PersonalDataDirectoryInitializer) PersonalDataInitializer {
+	// PVC-only installations have no object-store directory service. Keep this
+	// optional hook absent instead of making every account creation fail.
+	if directories == nil {
+		return nil
+	}
 	return personalDataSpaceInitializer{directories: directories}
 }
 

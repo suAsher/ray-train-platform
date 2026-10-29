@@ -267,7 +267,6 @@ func (repository *managerRepository) ListDatasetVersionGCCandidates(context.Cont
 	return append([]domain.DatasetVersion(nil), repository.gc...), nil
 }
 
-
 type recordingPublicationController struct {
 	requests  []ReconcileRequest
 	failRunID string

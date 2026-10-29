@@ -158,9 +158,11 @@ func TestEnvironmentRunnerQomoloCredentialIsEphemeralAndNotPullAuth(t *testing.T
 	}
 }
 
-func TestEnvironmentSourceImagePolicyRemainsWellspikingOnly(t *testing.T) {
+func TestEnvironmentSourceImagePolicyRequiresOperatorAllowlistAndPinnedDigest(t *testing.T) {
+	r := environmentTestRunner()
+	r.config.RegistryHosts = []string{"registry.example.com"}
 	for _, image := range []string{"registry-secondary.example.com/platform/image@sha256:" + strings.Repeat("a", 64), "registry.example.com/platform/image:latest"} {
-		if environmentPinnedImage(image) {
+		if r.environmentPinnedImage(image) {
 			t.Fatal("source image policy accepted an unsupported source")
 		}
 	}

@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	validation "k8s.io/apimachinery/pkg/util/validation"
 	"net/url"
 	"os"
 	"ray-train-platform-backend/environmentbuild"
 	"ray-train-platform-backend/registryauth"
 	"strings"
-	validation "k8s.io/apimachinery/pkg/util/validation"
 )
 
 // EnvironmentBuildConfig controls only newly requested environment builds.
