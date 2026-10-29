@@ -8,7 +8,7 @@ import (
 
 // HarborRegistry translates the selected trusted Harbor client's verified grants.
 type HarborRegistry struct {
-	Client *registryauth.Client
+	Client        *registryauth.Client
 	RegistryHosts []string
 }
 

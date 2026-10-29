@@ -257,15 +257,18 @@ test('topics are grouped so the list stays scannable', async () => {
   }
 })
 
-// The manuals contain measured results and decision thresholds that took real
-// benchmark runs to produce. Restating them as "it may be faster" throws that
-// away and leaves the reader guessing, so the page carries the numbers.
-test('performance guidance carries measured evidence, not adjectives', async () => {
+// A portable installation must measure its own storage and GPU performance,
+// including warm-up costs, instead of presenting another cluster's results.
+test('performance guidance defines repeatable target-cluster measurements', async () => {
   const markdown = renderHelpMarkdown()
 
   // Whether warming the cache pays back depends on how many passes are made.
-  assert.match(markdown, /5,625 MiB\/s/, 'the NVMe read figure is missing')
-  assert.match(markdown, /13\.5%/, 'the single-pass payback is missing')
+  assert.match(markdown, /目标集群测量/)
+  assert.match(markdown, /文件数、总字节数、聚合吞吐、单文件 P95、最慢 Worker 耗时/)
+  assert.match(markdown, /保持同一数据集及 Worker 数/)
+  assert.match(markdown, /比较完整训练耗时时必须计入预热/)
+  assert.match(markdown, /不承诺固定吞吐或加速比/)
+  assert.doesNotMatch(markdown, /5,625 MiB\/s|13\.5%/)
   // A threshold, not a feeling, decides whether data reading is the bottleneck.
   assert.match(markdown, /30%/, 'the data-wait threshold is missing')
   assert.match(markdown, /数据等待占比/)

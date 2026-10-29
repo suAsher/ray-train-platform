@@ -59,9 +59,9 @@ func TestRenderDevRayClusterSudoKeepsPodAndStorageIsolation(t *testing.T) {
 			manifest, err := RenderDevRayCluster(workspace, WorkspaceRenderOptions{
 				Image: "registry.example/dev@sha256:" + strings.Repeat("a", 64), ServiceAccount: serviceAccount,
 				DataMounts: DataMountPlan{
-					Personal:    &DataMountRoot{ClaimName: "data-user-a"},
-					Team:        &DataMountRoot{ClaimName: "data-team-a", ReadOnly: true},
-					Public:      &DataMountRoot{ClaimName: "data-public", ReadOnly: true},
+					Personal: &DataMountRoot{ClaimName: "data-user-a"},
+					Team:     &DataMountRoot{ClaimName: "data-team-a", ReadOnly: true},
+					Public:   &DataMountRoot{ClaimName: "data-public", ReadOnly: true},
 				},
 			})
 			if err != nil {

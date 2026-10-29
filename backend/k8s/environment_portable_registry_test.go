@@ -34,7 +34,9 @@ func TestCustomRegistryWorkspaceCaptureAndAllExecutionPhases(t *testing.T) {
 	cfg := original.config
 	const host = "harbor.custom.example"
 	cfg.RegistryHosts = []string{host}
-	image := func(name, digest string) string { return host + "/platform/" + name + "@sha256:" + strings.Repeat(digest, 64) }
+	image := func(name, digest string) string {
+		return host + "/platform/" + name + "@sha256:" + strings.Repeat(digest, 64)
+	}
 	cfg.BaseImage = image("base", "1")
 	cfg.WorkspaceImage = image("workspace", "2")
 	cfg.PrepareImage = image("prepare", "3")
@@ -63,6 +65,12 @@ func TestCustomRegistryWorkspaceCaptureAndAllExecutionPhases(t *testing.T) {
 		job, err := runner.renderJob(build)
 		if err != nil || !strings.HasPrefix(job.Spec.Template.Spec.Containers[0].Image, host+"/") {
 			t.Fatalf("custom runtime phase %s: %v", phase, err)
+		}
+		if phase == environmentbuild.Validating {
+			args := strings.Join(job.Spec.Template.Spec.Containers[0].Args, " ")
+			if !strings.Contains(args, "--registry-host "+host+" --allowed-registry-hosts "+host) {
+				t.Fatal("assembler did not receive its approved base registry")
+			}
 		}
 		forged := build
 		forged.BaseImage = image("other-base", "5")

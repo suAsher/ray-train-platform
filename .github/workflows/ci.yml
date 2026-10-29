@@ -111,6 +111,17 @@ jobs:
           bash helm/ray-cache-local/tests/dual-render-contract.sh
           bash helm/ray-cache-local/tests/monitor-contract.sh
           helm lint helm/ray-observability
+  source-helper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build public source materializer image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: images/source-materializer/Dockerfile
+          push: false
   image:
     runs-on: ubuntu-latest
     steps:
@@ -142,7 +153,7 @@ jobs:
         run: kind delete cluster --name raytrain-ci
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [backend, frontend, helm-runtime, image, runtime-python]
+    needs: [backend, frontend, helm-runtime, image, source-helper, runtime-python]
     runs-on: ubuntu-latest
     permissions:
       contents: read

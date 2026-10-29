@@ -112,7 +112,34 @@ func preparedAssemblyRequest(t *testing.T) AssembleRequest {
 }
 
 func TestAssembleSelectsAMD64UsesOnlyPullAuthAndNeverExecutesLayer(t *testing.T) {
+	for _, host := range []string{Host, "harbor.custom.example"} {
+		t.Run(host, func(t *testing.T) { exerciseAssemblyAtHost(t, host) })
+	}
+}
+
+func TestCustomAssemblerNeverFallsBackToAnotherRegistryPullCredentials(t *testing.T) {
+	const host = "harbor.custom.example"
+	client := selectedTestClient(t, host, func(*http.Request) (*http.Response, error) {
+		t.Fatal("mismatched pull credentials reached network")
+		return nil, nil
+	})
 	request := preparedAssemblyRequest(t)
+	request.Base = host + "/fixtures/base@sha256:" + strings.Repeat("a", 64)
+	if _, err := client.Assemble(context.Background(), request); !errors.Is(err, ErrCredentials) {
+		t.Fatalf("another registry's pull credentials accepted: %v", err)
+	}
+}
+
+func exerciseAssemblyAtHost(t *testing.T, host string) {
+	t.Helper()
+	request := preparedAssemblyRequest(t)
+	credentials, err := os.ReadFile(request.PullConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(request.PullConfig, []byte(strings.ReplaceAll(string(credentials), Host, host)), 0600); err != nil {
+		t.Fatal(err)
+	}
 	handler := registry.New(registry.Logger(log.New(io.Discard, "", 0)))
 	seedTransport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		return serveRegistryRequest(handler, request), nil
@@ -120,7 +147,7 @@ func TestAssembleSelectsAMD64UsesOnlyPullAuthAndNeverExecutesLayer(t *testing.T)
 	index := mutate.AppendManifests(empty.Index,
 		mutate.IndexAddendum{Add: testBaseImage(t, "ray", "amd64"), Descriptor: v1.Descriptor{Platform: &v1.Platform{OS: "linux", Architecture: "amd64"}}},
 		mutate.IndexAddendum{Add: testBaseImage(t, "root", "arm64"), Descriptor: v1.Descriptor{Platform: &v1.Platform{OS: "linux", Architecture: "arm64"}}})
-	reference, err := name.NewTag(Host + "/fixtures/base:v1")
+	reference, err := name.NewTag(host + "/fixtures/base:v1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,13 +158,13 @@ func TestAssembleSelectsAMD64UsesOnlyPullAuthAndNeverExecutesLayer(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.Base = Host + "/fixtures/base@" + indexDigest.String()
+	request.Base = host + "/fixtures/base@" + indexDigest.String()
 	var authCalls, readCalls atomic.Int64
-	client := testClient(func(request *http.Request) (*http.Response, error) {
+	client := selectedTestClient(t, host, func(request *http.Request) (*http.Response, error) {
 		if request.Method != http.MethodGet && request.Method != http.MethodHead {
 			t.Fatalf("assembler attempted registry mutation: %s", request.Method)
 		}
-		if request.URL.Host != Host || request.URL.Scheme != "https" {
+		if request.URL.Host != host || request.URL.Scheme != "https" {
 			t.Fatal("registry credential left fixed origin")
 		}
 		if request.URL.Path == "/service/token" {
@@ -156,7 +183,7 @@ func TestAssembleSelectsAMD64UsesOnlyPullAuthAndNeverExecutesLayer(t *testing.T)
 		}
 		if !strings.HasPrefix(request.Header.Get("Authorization"), "Bearer ") {
 			response := reply(401, "")
-			response.Header.Set("WWW-Authenticate", `Bearer realm="https://registry.example.com/service/token",service="harbor-registry"`)
+			response.Header.Set("WWW-Authenticate", `Bearer realm="https://`+host+`/service/token",service="harbor-registry"`)
 			response.Request = request
 			return response, nil
 		}
@@ -229,7 +256,7 @@ func TestPullAuthenticatorOnlyAcceptsBoundedMatchingRegistryConfig(t *testing.T)
 		if err := os.WriteFile(filename, data, 0600); err != nil {
 			t.Fatal(err)
 		}
-		auth, err := pullAuthenticator(filename)
+		auth, err := pullAuthenticator(filename, Host)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -243,11 +270,11 @@ func TestPullAuthenticatorOnlyAcceptsBoundedMatchingRegistryConfig(t *testing.T)
 		if err := os.WriteFile(filename, []byte(body), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := pullAuthenticator(filename); !errors.Is(err, ErrCredentials) {
+		if _, err := pullAuthenticator(filename, Host); !errors.Is(err, ErrCredentials) {
 			t.Fatalf("unsafe configuration accepted: %v", err)
 		}
 	}
-	if _, err := pullAuthenticator(t.TempDir()); !errors.Is(err, ErrCredentials) {
+	if _, err := pullAuthenticator(t.TempDir(), Host); !errors.Is(err, ErrCredentials) {
 		t.Fatalf("directory treated as credential file: %v", err)
 	}
 }

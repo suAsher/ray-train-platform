@@ -433,7 +433,7 @@ func Load() (Config, error) {
 	}
 	cfg.BootstrapAdminPassword = os.Getenv("BOOTSTRAP_ADMIN_PASSWORD")
 	cfg.BootstrapAdminTenant = envOr("BOOTSTRAP_ADMIN_TENANT", "local")
-	if cfg.SourceArtifactsEnabled, err = parseBool("SOURCE_ARTIFACTS_ENABLED", cfg.AppEnv == "production"); err != nil {
+	if cfg.SourceArtifactsEnabled, err = parseBool("SOURCE_ARTIFACTS_ENABLED", false); err != nil {
 		return Config{}, err
 	}
 	if cfg.SourceArtifactMaxPending, err = parseInt("SOURCE_ARTIFACT_MAX_PENDING", 10); err != nil {

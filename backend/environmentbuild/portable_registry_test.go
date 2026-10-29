@@ -2,9 +2,9 @@ package environmentbuild
 
 import (
 	"errors"
+	"ray-train-platform-backend/registryauth"
 	"strings"
 	"testing"
-	"ray-train-platform-backend/registryauth"
 )
 
 func TestCustomRegistryConfigurationStillRestrictsUserDestinations(t *testing.T) {

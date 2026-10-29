@@ -10,6 +10,7 @@ import (
 	"maps"
 	"ray-train-platform-backend/environmentbuild"
 	"ray-train-platform-backend/registryauth"
+	"strings"
 )
 
 func (r *EnvironmentRunner) renderJob(b environmentbuild.Build) (*batchv1.Job, error) {
@@ -66,7 +67,8 @@ func (r *EnvironmentRunner) renderJob(b environmentbuild.Build) (*batchv1.Job, e
 		}
 		container.Image = r.config.PublisherImage
 		container.Command = []string{"/usr/local/bin/raytrain-environment-assembler"}
-		container.Args = []string{"--base", b.BaseImage, "--layer", "/artifacts/layer.tar", "--layer-digest", provenance.LayerDigest, "--layout", "/artifacts/oci", "--pull-config", "/pull/.dockerconfigjson", "--result", "/dev/termination-log"}
+		baseHost, _, _ := strings.Cut(profile.BaseImage, "/")
+		container.Args = []string{"--base", b.BaseImage, "--registry-host", baseHost, "--allowed-registry-hosts", baseHost, "--layer", "/artifacts/layer.tar", "--layer-digest", provenance.LayerDigest, "--layout", "/artifacts/oci", "--pull-config", "/pull/.dockerconfigjson", "--result", "/dev/termination-log"}
 		pod.Volumes = append(pod.Volumes, corev1.Volume{Name: "base-pull", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: r.config.PullSecretName, DefaultMode: &mode, Items: []corev1.KeyToPath{{Key: corev1.DockerConfigJsonKey, Path: corev1.DockerConfigJsonKey}}}}})
 		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{Name: "base-pull", MountPath: "/pull", ReadOnly: true})
 	case environmentbuild.Pushing:

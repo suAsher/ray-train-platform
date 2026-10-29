@@ -16,7 +16,7 @@ export const environmentTopic = {
     ] },
     { kind: 'steps', items: [
       { title: '先判断是否真的需要新镜像', body: '若目录已有符合版本要求的环境，直接复用。调试环境临时 pip 安装可验证依赖，但不会自动带入正式任务；验证后固定依赖版本。CUDA、Torch 或编译扩展不兼容，应选其他基础环境，不能靠随意升级 Ray 解决。' },
-      { title: '选择平台基础环境', body: '请管理员先构建、验证并登记基础镜像；上方地址仅为命名示例。版本约束在镜像内 /opt/raytrain/constraints.txt，自检命令为 raytrain-selfcheck。通用底座不包含业务训练代码。' },
+      { title: '选择平台基础环境', body: '请管理员先构建、验证并登记基础镜像；上方地址仅为未发布的命名示例。版本约束在镜像内 /opt/raytrain/constraints.txt，自检命令为 raytrain-selfcheck。通用底座不包含业务训练代码。' },
       { title: '单独建立环境构建目录', body: '目录只放 Dockerfile、requirements.txt 和 .dockerignore。禁止 COPY . .；不打包训练数据、权重、Git 凭据或 .env。只固定项目额外依赖，不覆盖平台约束中的 Ray、Torch、CUDA 等版本。自定义算子可作为版本化 wheel 安装，并记录代码兼容版本。' },
       { title: '构建并自检', body: '使用 linux/amd64 目标，先运行 pip check 和基础镜像配套 CPU 自检，再推送到你有权限的仓库。CPU 检查不能证明 CUDA 算子、单卡或多卡训练可用；GPU 验证必须另选空闲资源，不能占用或中断别人任务。' },
       { title: '提交管理员登记', body: '提供完整 tag 或 digest 地址、环境版本、额外依赖、适用项目、支持引擎、自检结果与尚未验证项目。团队管理员登记本团队镜像；全平台共享由超级管理员登记。私有仓库另通过安全渠道处理凭据，不粘贴密码到描述。' },

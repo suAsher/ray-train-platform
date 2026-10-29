@@ -1,9 +1,9 @@
 # Render-only fixtures. These are intentionally nonexistent digests, not install values.
 images:
   provisioner: registry.example.test/local-path-provisioner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  helper: registry.example.test/busybox@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  helper: &busybox registry.example.test/busybox@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 monitoring:
   nodeExporter:
     image: registry.example.test/node-exporter@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
   collector:
-    image: registry.example.test/busybox@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    image: *busybox

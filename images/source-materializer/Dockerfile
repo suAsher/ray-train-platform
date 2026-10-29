@@ -1,7 +1,7 @@
 ARG ALPINE_RUNTIME_IMAGE=alpine:3.20
 FROM ${ALPINE_RUNTIME_IMAGE}
 
-ARG APK_MIRROR=https://repo.huaweicloud.com/repository/alpine
+ARG APK_MIRROR=https://dl-cdn.alpinelinux.org/alpine
 
 RUN alpine_version="$(cut -d. -f1-2 /etc/alpine-release)" \
   && printf '%s/v%s/main\n%s/v%s/community\n' "$APK_MIRROR" "$alpine_version" "$APK_MIRROR" "$alpine_version" > /etc/apk/repositories \

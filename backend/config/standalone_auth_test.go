@@ -10,11 +10,11 @@ func TestProductionLocalAuthenticationDoesNotNeedExternalIdentityOrStorage(t *te
 	t.Setenv("OIDC_REQUIRED", "false")
 	t.Setenv("OAUTH2_PROXY_AUTH_ENABLED", "false")
 	t.Setenv("LOCAL_AUTH_ENABLED", "true")
-	t.Setenv("SOURCE_ARTIFACTS_ENABLED", "false")
+	t.Setenv("SOURCE_ARTIFACTS_ENABLED", "")
 	for _, name := range []string{"OIDC_ISSUER_URL", "OIDC_CLIENT_ID", "OIDC_AUDIENCE", "TOS_ENDPOINT", "TOS_REGION", "TOS_BUCKET", "TOS_ACCESS_KEY", "TOS_SECRET_KEY"} {
 		t.Setenv(name, "")
 	}
-	if _, err := Load(); err != nil {
+	if cfg, err := Load(); err != nil || cfg.SourceArtifactsEnabled || cfg.TOSEndpoint != "" || cfg.TOSRegion != "" {
 		t.Fatalf("standalone production rejected: %v", err)
 	}
 }

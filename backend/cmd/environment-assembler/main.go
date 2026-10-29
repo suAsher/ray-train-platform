@@ -8,6 +8,7 @@ import (
 	"flag"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -16,7 +17,9 @@ import (
 
 func main() {
 	var request registryauth.AssembleRequest
-	var resultPath string
+	var resultPath, registryHost, allowedRegistryHosts string
+	flag.StringVar(&registryHost, "registry-host", registryauth.Host, "administrator-configured base registry")
+	flag.StringVar(&allowedRegistryHosts, "allowed-registry-hosts", registryauth.Host, "administrator-approved registry allowlist")
 	flag.StringVar(&request.Base, "base", "", "server-configured immutable base image")
 	flag.StringVar(&request.LayerPath, "layer", "/artifacts/layer.tar", "validated environment layer")
 	flag.StringVar(&request.LayerDigest, "layer-digest", "", "frozen digest from the preparation Job result")
@@ -28,7 +31,7 @@ func main() {
 	defer cancel()
 	ctx, deadline := context.WithTimeout(ctx, 45*time.Minute)
 	defer deadline()
-	result, err := registryauth.NewClient().Assemble(ctx, request)
+	result, err := assemble(ctx, request, registryHost, strings.Split(allowedRegistryHosts, ","))
 	if err != nil {
 		result = registryauth.AssembleResult{ErrorCode: "OCI_ASSEMBLY_FAILED"}
 	}
@@ -43,4 +46,16 @@ func main() {
 	}
 	os.Stdout.Write(data)
 	os.Stdout.WriteString("\n")
+}
+
+func assemble(ctx context.Context, request registryauth.AssembleRequest, host string, allowed []string) (registryauth.AssembleResult, error) {
+	host, err := registryauth.AllowedHost(host, allowed)
+	if err != nil {
+		return registryauth.AssembleResult{}, err
+	}
+	client, err := registryauth.NewClientForHost(host)
+	if err != nil {
+		return registryauth.AssembleResult{}, err
+	}
+	return client.Assemble(ctx, request)
 }

@@ -484,8 +484,10 @@ monitoring:
     gpuDataStallUtilizationPercent: 70
 
 tos:
-  endpoint: "https://tos-cn-beijing.volces.com"
-  region: "cn-beijing"
+  # Optional: configure endpoint, region, bucket and credentials together.
+  # Empty defaults allow the local/PVC installation without an object store.
+  endpoint: ""
+  region: ""
   bucket: ""
   secretName: ""
 

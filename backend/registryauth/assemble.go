@@ -172,7 +172,7 @@ func validateEnvironmentTar(ctx context.Context, filename string) error {
 	return nil
 }
 
-func pullAuthenticator(filename string) (authn.Authenticator, error) {
+func pullAuthenticator(filename, host string) (authn.Authenticator, error) {
 	info, err := os.Stat(filename)
 	if err != nil || !info.Mode().IsRegular() || info.Size() > 1<<20 {
 		return nil, ErrCredentials
@@ -188,7 +188,7 @@ func pullAuthenticator(filename string) (authn.Authenticator, error) {
 	if json.NewDecoder(io.LimitReader(file, 1<<20)).Decode(&config) != nil {
 		return nil, ErrCredentials
 	}
-	for _, key := range []string{Host, Origin} {
+	for _, key := range []string{host, "https://" + host} {
 		if value, ok := config.Auths[key]; ok {
 			return authn.FromConfig(value), nil
 		}
@@ -197,13 +197,10 @@ func pullAuthenticator(filename string) (authn.Authenticator, error) {
 }
 
 func (c *Client) Assemble(ctx context.Context, request AssembleRequest) (AssembleResult, error) {
-	// Assembly has an independent source contract: platform pull credentials and
-	// immutable base images remain confined to Wellspiking.
-	if c.Host() != Host {
-		return AssembleResult{}, ErrInvalidTarget
-	}
+	// The caller freezes an administrator-approved base registry. Pull auth is
+	// selected for that exact origin; it never falls back to another registry.
 	reference, err := name.NewDigest(request.Base, name.StrictValidation)
-	if err != nil || reference.RegistryStr() != Host || !digestPattern.MatchString(reference.DigestStr()) {
+	if err != nil || reference.RegistryStr() != c.Host() || !digestPattern.MatchString(reference.DigestStr()) {
 		return AssembleResult{}, ErrInvalidTarget
 	}
 	repository := reference.RepositoryStr()
@@ -220,11 +217,11 @@ func (c *Client) Assemble(ctx context.Context, request AssembleRequest) (Assembl
 	if err := validateLayerMaterial(ctx, request.LayerPath, request.LayerDigest); err != nil {
 		return AssembleResult{}, err
 	}
-	auth, err := pullAuthenticator(request.PullConfig)
+	auth, err := pullAuthenticator(request.PullConfig, c.Host())
 	if err != nil {
 		return AssembleResult{}, err
 	}
-	base, err := remote.Image(reference, remote.WithContext(ctx), remote.WithAuth(auth), remote.WithPlatform(v1.Platform{OS: "linux", Architecture: "amd64"}), remote.WithTransport(&publishTransport{base: c.http.Transport, host: Host, repository: repository}))
+	base, err := remote.Image(reference, remote.WithContext(ctx), remote.WithAuth(auth), remote.WithPlatform(v1.Platform{OS: "linux", Architecture: "amd64"}), remote.WithTransport(&publishTransport{base: c.http.Transport, host: c.Host(), repository: repository}))
 	if err != nil {
 		return AssembleResult{}, publishError(err)
 	}

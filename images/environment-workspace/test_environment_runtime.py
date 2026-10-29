@@ -111,7 +111,7 @@ class RuntimeContractTest(unittest.TestCase):
                     with self.assertRaises(runtime.CaptureError):
                         runtime.load_profile()
 
-    def test_malformed_profile_uses_bounded_package_modified_error(self):
+    def test_profile_malformed_json_uses_bounded_package_modified_error(self):
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory) / 'profile.json'
             path.write_text('{invalid-profile')

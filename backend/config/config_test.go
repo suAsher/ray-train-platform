@@ -36,6 +36,7 @@ func TestLoadAcceptsDatasetPublisherCredentialSecretReference(t *testing.T) {
 
 func setValidProductionConfig(t *testing.T) {
 	t.Helper()
+	t.Setenv("SOURCE_ARTIFACTS_ENABLED", "true")
 	t.Setenv("APP_ENV", "production")
 	t.Setenv("DATABASE_URL", "postgres://platform@db/platform")
 	t.Setenv("OIDC_ISSUER_URL", "https://sso.example.com/realms/platform")

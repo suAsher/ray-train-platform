@@ -23,7 +23,7 @@ import (
 const environmentRegistryHostAnnotation = "raytrain.io/environment-registry-host"
 
 type EnvironmentRunnerConfig struct {
-	RegistryHosts []string
+	RegistryHosts                                           []string
 	WorkspaceProfiles                                       []environmentbuild.WorkspaceProfile
 	Namespace                                               string
 	BaseImage, WorkspaceImage, PrepareImage, PublisherImage string

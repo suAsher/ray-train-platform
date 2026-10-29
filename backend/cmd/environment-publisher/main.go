@@ -12,8 +12,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"syscall"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/logs"
@@ -21,7 +21,7 @@ import (
 )
 
 type publisherOptions struct {
-	allowedRegistryHosts string
+	allowedRegistryHosts                           string
 	request                                        registryauth.PublishRequest
 	credentialsDirectory, resultPath, registryHost string
 }

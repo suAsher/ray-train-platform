@@ -86,7 +86,6 @@ func TestDataMountBindingRejectsRetiredIDCClaim(t *testing.T) {
 	}
 }
 
-
 func TestNewIDCDataMountBindingCannotRestoreRetiredSpaces(t *testing.T) {
 	for _, space := range []DataSpaceID{DataSpaceIDCOriginal, DataSpaceIDCWellspiking, DataSpaceIDCShared, DataSpaceMyFiles} {
 		if _, err := NewIDCDataMountBinding("old-binding", "local", space, "old-claim"); err == nil {
