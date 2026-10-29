@@ -4,11 +4,15 @@ This chart provisions disposable per-PVC cache directories. Never use these
 volumes for checkpoints or the only copy of a dataset. It is not required by the
 base RayTrain installation.
 
+The helper template contract targets local-path-provisioner v0.0.36, including
+its [HelperPod template validation](https://github.com/rancher/local-path-provisioner/releases/tag/v0.0.36).
+Review that contract before substituting another provisioner version.
+
 Before installing, resolve and review the actual multi-architecture digest of
 each upstream image, for example:
 
 ```bash
-docker buildx imagetools inspect docker.io/rancher/local-path-provisioner:v0.0.32
+docker buildx imagetools inspect docker.io/rancher/local-path-provisioner:v0.0.36
 docker buildx imagetools inspect docker.io/library/busybox:1.36.1
 docker buildx imagetools inspect quay.io/prometheus/node-exporter:v1.9.1
 ```

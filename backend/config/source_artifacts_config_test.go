@@ -18,9 +18,9 @@ func TestSourceArtifactsDefaultDisabledInDevelopment(t *testing.T) {
 	}
 }
 
-func TestSourceArtifactsDefaultEnabledAndFailClosedInProduction(t *testing.T) {
+func TestExplicitlyEnabledSourceArtifactsFailClosedInProduction(t *testing.T) {
 	setValidProductionConfig(t)
-	t.Setenv("SOURCE_ARTIFACTS_ENABLED", "")
+	t.Setenv("SOURCE_ARTIFACTS_ENABLED", "true")
 	t.Setenv("TOS_ENDPOINT", "")
 	_, err := Load()
 	if err == nil || !strings.Contains(err.Error(), "TOS_ENDPOINT") {

@@ -103,14 +103,21 @@ jobs:
       - name: Public runtime image contract
         if: ${{ !cancelled() }}
         run: bash scripts/test-ray-runtime-images.sh --contract-only
-      - name: Optional chart contracts
+      - name: Optional node onboarding chart contract
         if: ${{ !cancelled() }}
-        run: |
-          bash helm/ray-node-onboarding/tests/render-contract.sh
-          bash helm/ray-cache-local/tests/render-contract.sh
-          bash helm/ray-cache-local/tests/dual-render-contract.sh
-          bash helm/ray-cache-local/tests/monitor-contract.sh
-          helm lint helm/ray-observability
+        run: bash helm/ray-node-onboarding/tests/render-contract.sh
+      - name: Optional cache chart contract
+        if: ${{ !cancelled() }}
+        run: bash helm/ray-cache-local/tests/render-contract.sh
+      - name: Optional dual cache chart contract
+        if: ${{ !cancelled() }}
+        run: bash helm/ray-cache-local/tests/dual-render-contract.sh
+      - name: Optional cache monitoring contract
+        if: ${{ !cancelled() }}
+        run: bash helm/ray-cache-local/tests/monitor-contract.sh
+      - name: Optional observability chart lint
+        if: ${{ !cancelled() }}
+        run: helm lint helm/ray-observability
   source-helper:
     runs-on: ubuntu-latest
     steps:

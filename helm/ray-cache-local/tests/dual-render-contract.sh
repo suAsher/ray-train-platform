@@ -28,6 +28,12 @@ for rendered in "${rendered1}" "${rendered2}"; do
   require "${rendered}" '"node": "gpu-node-b"'
   require "${rendered}" '"node": "DEFAULT_PATH_FOR_NON_LISTED_NODES"'
   require "${rendered}" '"paths": []'
+  map_nodes="$(grep -F '"node":' "${rendered}" | sed -E 's/^.*"node": "([^"]+)".*$/\1/' | LC_ALL=C sort -u)"
+  expected_nodes="$(printf '%s\n' gpu-node-a gpu-node-b DEFAULT_PATH_FOR_NON_LISTED_NODES | LC_ALL=C sort -u)"
+  [[ "${map_nodes}" == "${expected_nodes}" ]] || {
+    echo "unexpected nodePathMap allowlist in ${rendered}" >&2
+    exit 1
+  }
 done
 
 require "${rendered1}" 'name: ray-cache-local-data1'

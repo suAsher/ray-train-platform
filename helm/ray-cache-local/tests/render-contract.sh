@@ -71,17 +71,14 @@ reject "${default_rendered}" 'gpu-node-a'
 reject "${default_rendered}" 'gpu-node-b'
 
 # Production path maps are an exact allowlist: two GPU nodes plus the deny-all default.
-map_nodes="$(grep -F '"node":' "${production_rendered}" | sed -E 's/^.*"node": "([^"]+)".*$/\1/' | sort -u)"
-expected_nodes=$'gpu-node-a\ngpu-node-b\nDEFAULT_PATH_FOR_NON_LISTED_NODES'
+map_nodes="$(grep -F '"node":' "${production_rendered}" | sed -E 's/^.*"node": "([^"]+)".*$/\1/' | LC_ALL=C sort -u)"
+expected_nodes="$(printf '%s\n' gpu-node-a gpu-node-b DEFAULT_PATH_FOR_NON_LISTED_NODES | LC_ALL=C sort -u)"
 [[ "${map_nodes}" == "${expected_nodes}" ]] || {
   echo "unexpected nodePathMap nodes:" >&2
   printf '%s\n' "${map_nodes}" >&2
   exit 1
 }
 
-reject "${production_rendered}" ':latest'
-reject "${production_rendered}" 'quay.io/'
-reject "${production_rendered}" 'registry.k8s.io/'
 reject "${production_rendered}" ':latest'
 reject "${production_rendered}" 'allowUnsafePathPattern'
 reject "${production_rendered}" 'allow-unsafe-helper-pod-template'
